@@ -33,6 +33,7 @@
 #include <Windows.h>
 #endif
 
+bool waitForInput = false;
 asio::io_context ioCtx;
 
 asio::awaitable<void> test(asio::io_context &ioCtx) { co_return; }
@@ -83,11 +84,14 @@ int main(int argn, char **argv) {
   test_screen_capture();
 
   auto monitor = test_text_selection_monitor();
-
-  std::cout << "======= Test Done =======" << std::endl;
-
+  if (waitForInput) {
+    std::cout << "Press any key to continue..." << std::endl;
+    std::cin.get();
+  }
   if (nullptr != monitor) {
     monitor->stop();
   }
+
+  std::cout << "======= Test Done =======" << std::endl;
   return 0;
 }

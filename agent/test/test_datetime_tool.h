@@ -1,7 +1,7 @@
 #pragma once
 
 #include "agentxx/agent/context.h"
-#include "agentxx/tools/get_current_datetime.h"
+#include "agentxx/tools/system.h"
 #include "neograph/neograph.h"
 #include <asio/awaitable.hpp>
 #include <iostream>
