@@ -28,7 +28,7 @@ namespace tools {
 ///   - 子模型搜索可用的 tool和skill 时，可以预先加载可能需要的 skill
 /// 内容，然后对比后决定具体应当加载的 tool、skill 文件
 class ToolSkillSearchSubAgentTask : public ::agentxx::tools::SubAgentTaskBase {
-protected:
+public:
   inline static constexpr auto defSystemPromptTemplate = std::string_view{R"(
 You are an assistant that, based on user requirements, tries to find the appropriate tools and skills to load. 
 You can use filesystem tools to search for and read SKILL.md files, analyze the user's needs to determine usable tools and skills, 
@@ -54,6 +54,10 @@ If neither tools nor skills are suitable, output `{{"tool": [], "skill": []}}`.
 Remember: Output ONLY valid JSON, nothing else before or after.
 
 )"};
+  inline static constexpr auto graphDataKey_loadedTools =
+      std::string_view{"toolSkillSearch_loadedTools"};
+  inline static constexpr auto graphDataKey_loadedSkills =
+      std::string_view{"toolSkillSearch_loadedSkills"};
 
   struct DelayToolInfo {
     std::string name;
@@ -64,12 +68,6 @@ Remember: Output ONLY valid JSON, nothing else before or after.
   std::vector<std::string> skillDirPaths;
   std::weak_ptr<agentxx::agent::AgentContext> agentContext;
 
-  inline static constexpr auto graphDataKey_loadedTools =
-      std::string_view{"toolSkillSearch_loadedTools"};
-  inline static constexpr auto graphDataKey_loadedSkills =
-      std::string_view{"toolSkillSearch_loadedSkills"};
-
-public:
   ToolSkillSearchSubAgentTask(
       const neograph::graph::NodeContext &in_context,
       const std::vector<DelayToolInfo> &in_delayToolInfos,
