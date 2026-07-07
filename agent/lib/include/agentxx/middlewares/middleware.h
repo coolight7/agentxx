@@ -164,7 +164,8 @@ public:
       std::string tools;
       for (const auto &tool : msg.tool_calls) {
         tools += fmt::format(R"(  - {}/{}
-    {})",
+    {}
+)",
                              tool.name, tool.id, tool.arguments);
       }
       std::cout << fmt::format(R"(

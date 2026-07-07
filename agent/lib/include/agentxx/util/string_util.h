@@ -380,16 +380,6 @@ inline constexpr std::vector<std::string> strSplitCopid(std::string_view in_str,
   return result;
 }
 
-inline constexpr std::string_view strTrim(std::string_view sv) {
-  while (!sv.empty() && charIsSpace(sv.front())) {
-    sv.remove_prefix(1);
-  }
-  while (!sv.empty() && charIsSpace(sv.back())) {
-    sv.remove_suffix(1);
-  }
-  return sv;
-}
-
 inline void printStringToIntList(const char *str) {
   if (nullptr == str) {
     XX_LOGI("[]");

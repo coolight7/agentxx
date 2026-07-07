@@ -2,8 +2,9 @@
 #include "agentxx/util/log.h"
 #include "asio/steady_timer.hpp"
 #include "asio/use_awaitable.hpp"
-#include <map>
 #include <string>
+#include <string_view>
+#include <unordered_map>
 #include <vector>
 
 #if XX_IS_WIN_D
@@ -18,35 +19,127 @@
 namespace agentxx {
 namespace expand {
 
-struct LUIDLess {
-  bool operator()(const LUID &a, const LUID &b) const {
-    if (a.HighPart != b.HighPart) {
-      return a.HighPart < b.HighPart;
-    }
-    return a.LowPart < b.LowPart;
+struct LUIDHash {
+  size_t operator()(const LUID &luid) const {
+    uint64_t combined =
+        (static_cast<uint64_t>(static_cast<uint32_t>(luid.HighPart)) << 32) |
+        static_cast<uint32_t>(luid.LowPart);
+    return std::hash<uint64_t>{}(combined);
   }
 };
+
+struct LUIDEqual {
+  bool operator()(const LUID &a, const LUID &b) const {
+    return a.HighPart == b.HighPart && a.LowPart == b.LowPart;
+  }
+};
+
+struct CachedGpuAdapter {
+  std::string name;
+  LUID luid;
+  uint64_t dedicatedVramMB = 0;
+  uint64_t sharedVramMB = 0;
+};
+
+struct GpuAdapterCache {
+  std::vector<CachedGpuAdapter> adapters;
+  bool built = false;
+};
+
+static GpuAdapterCache &getGpuAdapterCache() {
+  static GpuAdapterCache cache;
+  return cache;
+}
+
+struct SharedPdhContext {
+  HQUERY query = nullptr;
+  HCOUNTER hEngineCounter = nullptr;
+  HCOUNTER hProcMemDedicated = nullptr;
+  HCOUNTER hProcMemShared = nullptr;
+  bool initialized = false;
+  bool initAttempted = false;
+
+  ~SharedPdhContext() {
+    if (hEngineCounter) {
+      PdhRemoveCounter(hEngineCounter);
+    }
+    if (hProcMemDedicated) {
+      PdhRemoveCounter(hProcMemDedicated);
+    }
+    if (hProcMemShared) {
+      PdhRemoveCounter(hProcMemShared);
+    }
+    if (query) {
+      PdhCloseQuery(query);
+    }
+  }
+
+  bool ensureInitialized() {
+    if (initAttempted) {
+      return initialized;
+    }
+    initAttempted = true;
+
+    PDH_STATUS status = PdhOpenQueryW(nullptr, 0, &query);
+    if (status != ERROR_SUCCESS) {
+      XX_LOGW("CpuGpuMonitor: PdhOpenQuery failed, status={}", status);
+      query = nullptr;
+      return false;
+    }
+
+    PDH_STATUS engStatus = PdhAddCounterW(
+        query, L"\\GPU Engine(*)\\Utilization Percentage", 0, &hEngineCounter);
+    PDH_STATUS dedStatus =
+        PdhAddCounterW(query, L"\\GPU Process Memory(*)\\Dedicated Usage", 0,
+                       &hProcMemDedicated);
+    PDH_STATUS shrStatus = PdhAddCounterW(
+        query, L"\\GPU Process Memory(*)\\Shared Usage", 0, &hProcMemShared);
+
+    initialized = (engStatus == ERROR_SUCCESS || dedStatus == ERROR_SUCCESS ||
+                   shrStatus == ERROR_SUCCESS);
+    return initialized;
+  }
+};
+
+static SharedPdhContext &getSharedPdh() {
+  static SharedPdhContext ctx;
+  return ctx;
+}
 
 class CpuGpuMonitor::Impl {
 public:
   Impl() {}
 
-  ~Impl() { cleanupPdhQuery(); }
+  ~Impl() = default;
 
   asio::awaitable<CpuGpuUsage> query() {
     CpuGpuUsage result;
 
     queryMemoryInfo(result);
-    co_await queryGpuInfo(result);
 
-    if (prevTotalTime_ == 0 || prevIdleTime_ == 0) {
-      // 间隔一段时间做差值计算，如果没有初始化需要先初始化一次
+    bool needCpuInit = (prevTotalTime_ == 0 || prevIdleTime_ == 0);
+    if (needCpuInit) {
       queryCpuUsage(result);
+    }
+
+    bool pdhAvailable = getSharedPdh().ensureInitialized();
+    if (pdhAvailable) {
+      PdhCollectQueryData(getSharedPdh().query);
+    }
+
+    if (needCpuInit || pdhAvailable) {
       asio::steady_timer timer(co_await asio::this_coro::executor,
                                std::chrono::milliseconds(100));
       co_await timer.async_wait(asio::use_awaitable);
     }
+
     queryCpuUsage(result);
+
+    if (pdhAvailable) {
+      co_await buildGpuCache();
+      PdhCollectQueryData(getSharedPdh().query);
+      collectPdhGpuData(result);
+    }
 
     co_return result;
   }
@@ -111,23 +204,20 @@ private:
     }
   }
 
-  asio::awaitable<void> queryGpuInfo(CpuGpuUsage &result) {
+  static asio::awaitable<void> buildGpuCache() {
+    auto &cache = getGpuAdapterCache();
+    if (cache.built) {
+      co_return;
+    }
+
     IDXGIFactory6 *factory = nullptr;
     HRESULT hr = CreateDXGIFactory1(__uuidof(IDXGIFactory6),
                                     reinterpret_cast<void **>(&factory));
     if (FAILED(hr) || !factory) {
       XX_LOGE("CpuGpuMonitor: CreateDXGIFactory1 failed, hr=0x{:08X}",
               static_cast<unsigned>(hr));
+      cache.built = true;
       co_return;
-    }
-
-    std::map<LUID, double, LUIDLess> gpuUsageMap;
-    std::map<LUID, uint64_t, LUIDLess> gpuDedicatedUsedMap;
-    std::map<LUID, uint64_t, LUIDLess> gpuSharedUsedMap;
-
-    if (initPdhQuery()) {
-      co_await collectPdhGpuData(gpuUsageMap, gpuDedicatedUsedMap,
-                                 gpuSharedUsedMap);
     }
 
     UINT adapterIndex = 0;
@@ -135,115 +225,83 @@ private:
 
     while (factory->EnumAdapters1(adapterIndex, &adapter) !=
            DXGI_ERROR_NOT_FOUND) {
-      GpuInfo info;
-
       DXGI_ADAPTER_DESC1 desc = {};
       hr = adapter->GetDesc1(&desc);
-      if (SUCCEEDED(hr)) {
+      if (SUCCEEDED(hr) && !(desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)) {
+        CachedGpuAdapter info;
+        info.luid = desc.AdapterLuid;
+        info.dedicatedVramMB = desc.DedicatedVideoMemory / (1024 * 1024);
+        info.sharedVramMB = desc.SharedSystemMemory / (1024 * 1024);
+
         int len = WideCharToMultiByte(CP_UTF8, 0, desc.Description, -1, nullptr,
                                       0, nullptr, nullptr);
         if (len > 0) {
-          std::vector<char> buf(len);
-          WideCharToMultiByte(CP_UTF8, 0, desc.Description, -1, buf.data(), len,
-                              nullptr, nullptr);
-          info.name = buf.data();
+          info.name.resize(static_cast<size_t>(len) - 1);
+          WideCharToMultiByte(CP_UTF8, 0, desc.Description, -1, &info.name[0],
+                              len, nullptr, nullptr);
         }
+
+        cache.adapters.push_back(std::move(info));
       }
-
-      if (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) {
-        adapter->Release();
-        adapterIndex++;
-        continue;
-      }
-
-      info.dedicatedVramMB = desc.DedicatedVideoMemory / (1024 * 1024);
-      info.sharedVramMB = desc.SharedSystemMemory / (1024 * 1024);
-
-      const LUID &luid = desc.AdapterLuid;
-
-      auto itDedicated = gpuDedicatedUsedMap.find(luid);
-      if (itDedicated != gpuDedicatedUsedMap.end()) {
-        info.dedicatedVramUsedMB = itDedicated->second / (1024 * 1024);
-      }
-
-      auto itShared = gpuSharedUsedMap.find(luid);
-      if (itShared != gpuSharedUsedMap.end()) {
-        info.sharedVramUsedMB = itShared->second / (1024 * 1024);
-      }
-
-      auto itUsage = gpuUsageMap.find(luid);
-      if (itUsage != gpuUsageMap.end()) {
-        info.usagePercent = itUsage->second;
-      }
-
-      result.gpus.push_back(std::move(info));
 
       adapter->Release();
       adapterIndex++;
     }
 
     factory->Release();
+    cache.built = true;
   }
 
-  asio::awaitable<void>
-  collectPdhGpuData(std::map<LUID, double, LUIDLess> &gpuUsageMap,
-                    std::map<LUID, uint64_t, LUIDLess> &dedicatedUsedMap,
-                    std::map<LUID, uint64_t, LUIDLess> &sharedUsedMap) {
-    HCOUNTER hEngineCounter = nullptr;
-    PDH_STATUS status =
-        PdhAddCounterW(pdhQuery_, L"\\GPU Engine(*)\\Utilization Percentage", 0,
-                       &hEngineCounter);
-
-    HCOUNTER hProcMemDedicated = nullptr;
-    PDH_STATUS memDedicatedStatus =
-        PdhAddCounterW(pdhQuery_, L"\\GPU Process Memory(*)\\Dedicated Usage",
-                       0, &hProcMemDedicated);
-
-    HCOUNTER hProcMemShared = nullptr;
-    PDH_STATUS memSharedStatus =
-        PdhAddCounterW(pdhQuery_, L"\\GPU Process Memory(*)\\Shared Usage", 0,
-                       &hProcMemShared);
-
-    if (status != ERROR_SUCCESS && memDedicatedStatus != ERROR_SUCCESS &&
-        memSharedStatus != ERROR_SUCCESS) {
-      if (hEngineCounter) {
-        PdhRemoveCounter(hEngineCounter);
-      }
-      if (hProcMemDedicated) {
-        PdhRemoveCounter(hProcMemDedicated);
-      }
-      if (hProcMemShared) {
-        PdhRemoveCounter(hProcMemShared);
-      }
-      co_return;
+  void collectPdhGpuData(CpuGpuUsage &result) {
+    auto &cache = getGpuAdapterCache();
+    if (!cache.built) {
+      return;
     }
 
-    PdhCollectQueryData(pdhQuery_);
+    auto &pdh = getSharedPdh();
 
-    asio::steady_timer timer(co_await asio::this_coro::executor,
-                             std::chrono::milliseconds(100));
-    co_await timer.async_wait(asio::use_awaitable);
+    std::unordered_map<LUID, double, LUIDHash, LUIDEqual> gpuUsageMap;
+    std::unordered_map<LUID, uint64_t, LUIDHash, LUIDEqual> gpuDedicatedUsedMap;
+    std::unordered_map<LUID, uint64_t, LUIDHash, LUIDEqual> gpuSharedUsedMap;
 
-    PdhCollectQueryData(pdhQuery_);
-
-    if (hEngineCounter && status == ERROR_SUCCESS) {
-      collectEngineUtilization(hEngineCounter, gpuUsageMap);
-      PdhRemoveCounter(hEngineCounter);
+    if (pdh.hEngineCounter) {
+      collectEngineUtilization(pdh.hEngineCounter, gpuUsageMap);
+    }
+    if (pdh.hProcMemDedicated) {
+      collectProcessMemory(pdh.hProcMemDedicated, gpuDedicatedUsedMap);
+    }
+    if (pdh.hProcMemShared) {
+      collectProcessMemory(pdh.hProcMemShared, gpuSharedUsedMap);
     }
 
-    if (hProcMemDedicated && memDedicatedStatus == ERROR_SUCCESS) {
-      collectProcessMemory(hProcMemDedicated, dedicatedUsedMap);
-      PdhRemoveCounter(hProcMemDedicated);
-    }
+    for (const auto &cached : cache.adapters) {
+      GpuInfo info;
+      info.name = cached.name;
+      info.dedicatedVramMB = cached.dedicatedVramMB;
+      info.sharedVramMB = cached.sharedVramMB;
 
-    if (hProcMemShared && memSharedStatus == ERROR_SUCCESS) {
-      collectProcessMemory(hProcMemShared, sharedUsedMap);
-      PdhRemoveCounter(hProcMemShared);
+      auto itDedicated = gpuDedicatedUsedMap.find(cached.luid);
+      if (itDedicated != gpuDedicatedUsedMap.end()) {
+        info.dedicatedVramUsedMB = itDedicated->second / (1024 * 1024);
+      }
+
+      auto itShared = gpuSharedUsedMap.find(cached.luid);
+      if (itShared != gpuSharedUsedMap.end()) {
+        info.sharedVramUsedMB = itShared->second / (1024 * 1024);
+      }
+
+      auto itUsage = gpuUsageMap.find(cached.luid);
+      if (itUsage != gpuUsageMap.end()) {
+        info.usagePercent = itUsage->second;
+      }
+
+      result.gpus.push_back(std::move(info));
     }
   }
 
-  void collectEngineUtilization(HCOUNTER hCounter,
-                                std::map<LUID, double, LUIDLess> &outMap) {
+  void collectEngineUtilization(
+      HCOUNTER hCounter,
+      std::unordered_map<LUID, double, LUIDHash, LUIDEqual> &outMap) {
     DWORD bufSize = 0;
     DWORD itemCount = 0;
     PDH_STATUS status = PdhGetFormattedCounterArrayW(
@@ -277,8 +335,9 @@ private:
     }
   }
 
-  void collectProcessMemory(HCOUNTER hCounter,
-                            std::map<LUID, uint64_t, LUIDLess> &outMap) {
+  void collectProcessMemory(
+      HCOUNTER hCounter,
+      std::unordered_map<LUID, uint64_t, LUIDHash, LUIDEqual> &outMap) {
     DWORD bufSize = 0;
     DWORD itemCount = 0;
     PDH_STATUS status = PdhGetFormattedCounterArrayW(
@@ -308,82 +367,62 @@ private:
     }
   }
 
-  bool parseEngineLuid(const wchar_t *instanceName, LUID &outLuid) {
-    std::wstring name(instanceName);
+  static bool parseEngineLuid(const wchar_t *instanceName, LUID &outLuid) {
+    std::wstring_view name(instanceName);
 
     auto luidPos = name.find(L"_luid_");
-    if (luidPos == std::wstring::npos) {
+    if (luidPos == std::wstring_view::npos) {
       return false;
     }
 
-    std::wstring luidStr = name.substr(luidPos + 6);
+    std::wstring_view luidStr = name.substr(luidPos + 6);
 
     auto physPos = luidStr.find(L"_phys_");
-    if (physPos == std::wstring::npos) {
+    if (physPos == std::wstring_view::npos) {
       return false;
     }
 
     luidStr = luidStr.substr(0, physPos);
 
     auto underscorePos = luidStr.find(L'_');
-    if (underscorePos == std::wstring::npos) {
+    if (underscorePos == std::wstring_view::npos) {
       return false;
     }
 
-    std::wstring highStr = luidStr.substr(0, underscorePos);
-    std::wstring lowStr = luidStr.substr(underscorePos + 1);
+    std::wstring highStr{luidStr.substr(0, underscorePos)};
+    std::wstring lowStr{luidStr.substr(underscorePos + 1)};
 
     outLuid.HighPart = static_cast<LONG>(wcstoul(highStr.c_str(), nullptr, 16));
     outLuid.LowPart = static_cast<LONG>(wcstoul(lowStr.c_str(), nullptr, 16));
     return true;
   }
 
-  bool parseProcessMemoryLuid(const wchar_t *instanceName, LUID &outLuid) {
-    std::wstring name(instanceName);
+  static bool parseProcessMemoryLuid(const wchar_t *instanceName,
+                                     LUID &outLuid) {
+    std::wstring_view name(instanceName);
 
     auto luidPos = name.find(L"_luid_");
-    if (luidPos == std::wstring::npos) {
+    if (luidPos == std::wstring_view::npos) {
       return false;
     }
 
-    std::wstring luidStr = name.substr(luidPos + 6);
+    std::wstring_view luidStr = name.substr(luidPos + 6);
 
     auto underscorePos = luidStr.find(L'_');
-    if (underscorePos == std::wstring::npos) {
+    if (underscorePos == std::wstring_view::npos) {
       return false;
     }
 
-    std::wstring highStr = luidStr.substr(0, underscorePos);
-    std::wstring lowStr = luidStr.substr(underscorePos + 1);
+    std::wstring highStr{luidStr.substr(0, underscorePos)};
+    std::wstring lowStr{luidStr.substr(underscorePos + 1)};
 
     outLuid.HighPart = static_cast<LONG>(wcstoul(highStr.c_str(), nullptr, 16));
     outLuid.LowPart = static_cast<LONG>(wcstoul(lowStr.c_str(), nullptr, 16));
     return true;
-  }
-
-  bool initPdhQuery() {
-    if (pdhQuery_) {
-      return true;
-    }
-    PDH_STATUS status = PdhOpenQueryW(nullptr, 0, &pdhQuery_);
-    if (status != ERROR_SUCCESS) {
-      XX_LOGW("CpuGpuMonitor: PdhOpenQuery failed, status={}", status);
-      pdhQuery_ = nullptr;
-      return false;
-    }
-    return true;
-  }
-
-  void cleanupPdhQuery() {
-    if (pdhQuery_) {
-      PdhCloseQuery(pdhQuery_);
-      pdhQuery_ = nullptr;
-    }
   }
 
   ULONGLONG prevIdleTime_ = 0;
   ULONGLONG prevTotalTime_ = 0;
-  HQUERY pdhQuery_ = nullptr;
 };
 
 CpuGpuMonitor::CpuGpuMonitor() : impl_(std::make_unique<Impl>()) {}
@@ -397,6 +436,16 @@ asio::awaitable<CpuGpuUsage> CpuGpuMonitor::query() {
 
 #elif XX_IS_LINUX_D
 
+#include "agentxx/util/log.h"
+#include "agentxx/util/string_util.h"
+#include "asio/random_access_file.hpp"
+#include "asio/read.hpp"
+#include "asio/read_at.hpp"
+#include "asio/read_until.hpp"
+#include "asio/redirect_error.hpp"
+#include "asio/registered_buffer.hpp"
+#include "asio/stream_file.hpp"
+#include "asio/use_awaitable.hpp"
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -410,21 +459,30 @@ asio::awaitable<CpuGpuUsage> CpuGpuMonitor::query() {
 #include <neograph/neograph.h>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <vector>
-
-// ---
-#include "agentxx/util/log.h"
-#include "asio/random_access_file.hpp"
-#include "asio/read.hpp"
-#include "asio/read_at.hpp"
-#include "asio/read_until.hpp"
-#include "asio/redirect_error.hpp"
-#include "asio/registered_buffer.hpp"
-#include "asio/stream_file.hpp"
-#include "asio/use_awaitable.hpp"
 
 namespace agentxx {
 namespace expand {
+
+struct LinuxGpuCacheEntry {
+  std::string devicePath;
+  uint32_t vendorId = 0;
+  std::string name;
+  uint64_t dedicatedVramMB = 0;
+  bool isAmd = false;
+  bool isNvidia = false;
+};
+
+struct LinuxGpuCache {
+  std::vector<LinuxGpuCacheEntry> entries;
+  bool built = false;
+};
+
+static LinuxGpuCache &getLinuxGpuCache() {
+  static LinuxGpuCache cache;
+  return cache;
+}
 
 class CpuGpuMonitor::Impl {
 public:
@@ -504,7 +562,6 @@ protected:
       co_return "";
     }
 
-    // 读取完整文件
     auto result = std::string{std::istreambuf_iterator<char>(stream),
                               std::istreambuf_iterator<char>()};
     stream.close();
@@ -564,10 +621,27 @@ protected:
   }
 
   asio::awaitable<void> queryGpuInfo(CpuGpuUsage &result) {
-    co_await queryGpuInfoSysfs(result);
+    auto &cache = getLinuxGpuCache();
+    if (!cache.built) {
+      co_await buildGpuCache();
+    }
+
+    for (const auto &entry : cache.entries) {
+      GpuInfo info;
+      info.name = entry.name;
+      info.dedicatedVramMB = entry.dedicatedVramMB;
+
+      if (entry.isAmd) {
+        co_await queryAmdGpuUsage(info, entry.devicePath);
+      }
+
+      result.gpus.push_back(std::move(info));
+    }
   }
 
-  asio::awaitable<void> queryGpuInfoSysfs(CpuGpuUsage &result) {
+  static asio::awaitable<void> buildGpuCache() {
+    auto &cache = getLinuxGpuCache();
+
     for (int cardIdx = 0;; ++cardIdx) {
       auto devicePath = fmt::format("/sys/class/drm/card{}/device", cardIdx);
 
@@ -577,32 +651,33 @@ protected:
         break;
       }
 
-      uint32_t vendorId = parseHexSysfs(vendorContent);
+      LinuxGpuCacheEntry entry;
+      entry.devicePath = devicePath;
+      entry.vendorId = parseHexSysfs(vendorContent);
 
-      GpuInfo info;
+      co_await readSysfsString(devicePath + "/product_name", entry.name);
 
-      co_await readSysfsString(devicePath + "/product_name", info.name);
-
-      if (vendorId == 0x1002) {
-        co_await queryAmdGpuSysfs(info, devicePath);
-      } else if (vendorId == 0x10de) {
-        co_await queryNvidiaProcfs(info);
+      if (entry.vendorId == 0x1002) {
+        entry.isAmd = true;
+        co_await readSysfsUint64(devicePath + "/mem_info_vram_total",
+                                 entry.dedicatedVramMB);
+        entry.dedicatedVramMB /= (1024 * 1024);
+      } else if (entry.vendorId == 0x10de) {
+        entry.isNvidia = true;
+        co_await readNvidiaInfo(entry);
       }
 
-      if (info.name.empty()) {
-        info.name = "GPU " + std::to_string(cardIdx);
+      if (entry.name.empty()) {
+        entry.name = "GPU " + std::to_string(cardIdx);
       }
 
-      result.gpus.push_back(std::move(info));
+      cache.entries.push_back(std::move(entry));
     }
+    cache.built = true;
   }
 
-  asio::awaitable<void> queryAmdGpuSysfs(GpuInfo &info,
-                                         const std::string &devicePath) {
-    co_await readSysfsUint64(devicePath + "/mem_info_vram_total",
-                             info.dedicatedVramMB);
-    info.dedicatedVramMB /= (1024 * 1024);
-
+  static asio::awaitable<void> queryAmdGpuUsage(GpuInfo &info,
+                                                const std::string &devicePath) {
     co_await readSysfsUint64(devicePath + "/mem_info_vram_used",
                              info.dedicatedVramUsedMB);
     info.dedicatedVramUsedMB /= (1024 * 1024);
@@ -617,7 +692,7 @@ protected:
     }
   }
 
-  asio::awaitable<void> queryNvidiaProcfs(GpuInfo &info) {
+  static asio::awaitable<void> readNvidiaInfo(LinuxGpuCacheEntry &entry) {
     std::string gpusDirContent =
         co_await readFileContent("/proc/driver/nvidia/gpus");
     if (gpusDirContent.empty()) {
@@ -629,14 +704,14 @@ protected:
       co_return;
     }
 
-    struct dirent *entry;
-    while ((entry = readdir(dir)) != nullptr) {
-      if (entry->d_name[0] == '.') {
+    struct dirent *ent;
+    while ((ent = readdir(dir)) != nullptr) {
+      if (ent->d_name[0] == '.') {
         continue;
       }
 
       std::string infoPath = std::string("/proc/driver/nvidia/gpus/") +
-                             entry->d_name + "/information";
+                             ent->d_name + "/information";
       std::string infoContent = co_await readFileContent(infoPath);
       if (infoContent.empty()) {
         continue;
@@ -648,15 +723,17 @@ protected:
         if (line.rfind("Model:", 0) == 0) {
           size_t pos = line.find(':');
           if (pos != std::string::npos) {
-            info.name = trim(line.substr(pos + 1));
+            entry.name = agentxx::util::removeBetweenSpace(
+                std::string_view{line}.substr(pos + 1));
           }
         } else if (line.rfind("Video Memory:", 0) == 0) {
           size_t pos = line.find(':');
           if (pos != std::string::npos) {
-            std::string memStr = trim(line.substr(pos + 1));
+            auto memStr = agentxx::util::removeBetweenSpace(
+                std::string_view{line}.substr(pos + 1));
             uint64_t totalMiB = 0;
             std::sscanf(memStr.c_str(), "%lu MiB", &totalMiB);
-            info.dedicatedVramMB = totalMiB;
+            entry.dedicatedVramMB = totalMiB;
           }
         }
       }
@@ -665,14 +742,15 @@ protected:
     closedir(dir);
   }
 
-  static uint32_t parseHexSysfs(const std::string &line) {
-    std::string hex = line;
-    if (hex.rfind("0x", 0) == 0) {
-      hex = hex.substr(2);
+  static uint32_t parseHexSysfs(std::string_view line) {
+    if (line.size() >= 2 && line[0] == '0' &&
+        (line[1] == 'x' || line[1] == 'X')) {
+      line = line.substr(2);
     }
-    while (!hex.empty() && (hex.back() == '\n' || hex.back() == '\r')) {
-      hex.pop_back();
+    while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) {
+      line = line.substr(0, line.size() - 1);
     }
+    std::string hex(line);
     uint32_t val = 0;
     std::sscanf(hex.c_str(), "%x", &val);
     return val;
@@ -681,8 +759,8 @@ protected:
   static asio::awaitable<void> readSysfsString(const std::string &path,
                                                std::string &out) {
     std::string content = co_await readFileContent(path);
-    if (!content.empty()) {
-      out = trim(content);
+    ` if (!content.empty()) {
+      out = agentxx::util::removeBetweenSpace(content);
     }
   }
 
@@ -693,20 +771,6 @@ protected:
       std::istringstream iss(content);
       iss >> out;
     }
-  }
-
-  static std::string trim(const std::string &s) {
-    size_t start = 0;
-    while (start < s.size() && (s[start] == ' ' || s[start] == '\t' ||
-                                s[start] == '\n' || s[start] == '\r')) {
-      ++start;
-    }
-    size_t end = s.size();
-    while (end > start && (s[end - 1] == ' ' || s[end - 1] == '\t' ||
-                           s[end - 1] == '\n' || s[end - 1] == '\r')) {
-      --end;
-    }
-    return s.substr(start, end - start);
   }
 };
 
