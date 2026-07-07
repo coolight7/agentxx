@@ -66,6 +66,7 @@
     - ✅RAGSearch
     - ⬜tool_skill_search (延迟加载 tool/skill)
     - ✅ui_control (windows 系统上控制鼠标键盘)
+    - ✅get_system_core_info 获取系统 CPU占用、内存、GPU占用、显存
     - ✅get_current_datetime 获取系统时间戳、本地时间、UTC时间
 - ✅**Tree-Messages**
     - share_store (允许存取变量，在 llm-messages、skill、tool 之间传递数据)
