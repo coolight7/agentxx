@@ -98,7 +98,7 @@ public:
       auto it =
           agentCtxPtr->permissionMiddleware->handles.find(tool->get_name());
       if (it != agentCtxPtr->permissionMiddleware->handles.end()) {
-        auto allow = co_await it->second(*tool);
+        auto allow = co_await it->second(*tool, args);
         if (false == allow) {
           co_return "[Permission denied]";
         }

@@ -72,7 +72,6 @@
         - 支持 `line_offset`/`line_limit` 文本分页读取
         - 压缩上下文时会将部分内容存储到 `share_store`
         - 自动拦截 tool/subagent 返回值，太长时存储原始内容到 `share_store`, 并留下摘要和 id
-    - ⬜消息摘要，支持存储原始消息到 `share_store` 后，能识别出 message content 是消息摘要
     - 消息分支，支持修改历史消息/模型重新生成消息
     - 多会话和历史会话
 - ✅**中断恢复**
@@ -82,7 +81,7 @@
     - Toolcall/LLM 节点支持自动重试，支持自定义重试次数
     - Toolcall/LLM 节点异常时自动添加消息到上下文，保持角色消息顺序正确
     - 保持 Middleware 拦截执行的顺序和异常处理正确
-    - ⬜触发异常时，保持上下文角色顺序正确、内容完整
+    - 触发异常时，保持上下文角色顺序正确、内容完整
     - ⬜轮次开始时，自动检查和修复上下文角色顺序和内容
 - ✅**Sub-Agent**
     - 借由 Tool 实现, 允许 llm/代码 异步启动 SubAgent
@@ -109,7 +108,7 @@
     - 自定义加载记忆消息
 - ✅**权限限制** `PermissionMiddleware`
     - ✅允许指定 tool 调用前拦截，决定 允许、拒绝 或 中断提示询问
-    - ⬜预设常见的权限限制
+    - ✅预设文件读写权限限制
     - ⬜沙盒执行 Shell/File RW
 - ⬜**事件通知**
     - ✅支持注册事件功能/订阅事件通知，事件触发时通知订阅者
@@ -133,38 +132,41 @@
 - ✅**自定义配置**
     - LLM Api (BaseUrl/ApiKey/ModelName/ExtraArgs)
     - System Prompt
-    - ⬜分离 System/Tool Prompt 到独立配置，以便支持自定义和`Self-upgrade`自动调整适配
-- ⬜**扩展**
-    - ✅CodeGraph
-        - ⬜根据 .gitignore/.gitmodules 等排序分析优先级，把 third_party/test 等目录排后
-    - ✅RAG
-        - 文本分割方式:
-            - ✅分块 + 默认20%相邻分块重叠
-            - ✅定长分割
-            - ✅字符分割
-            - ✅结构分割 (较长的再进行 字符分割/定长分割)
-            - ⬜语义分割
-    - PaddleOCR (图片转文本)
-    - SD.cpp 图片视频生成
-    - FunASR 语音识别
-    - Qwen3-TTS 文本转语音
-- ⬜**Server**
-    - Agent2App Api Server
-    - Openai Api Server
-    - ACP Server
-    - A2A Server
-- ⬜测试
-    - Agent 整体稳定性测试
-        - ✅在 llm/toolcall 等各种节点触发中断/异常时，保持上下文角色顺序正确、内容完整
-        - 程序突然终止、重启，启动后的自动修复
+    - 分离 System/Tool Prompt 到独立配置，以便支持自定义和`Self-upgrade`自动调整适配
+
+### 扩展
+- ✅支持读取windows系统的 CPU占用、内存占用、GPU占用、显存占用
+- ✅支持 DXGI/DGI 捕获屏幕帧
+- ⬜支持捕获系统输出音频、指定程序输出音频、麦克风
+- ✅支持接收各种程序、浏览器的选择文本事件
+- ✅CodeGraph
+    - ⬜根据 .gitignore/.gitmodules 等排序分析优先级，把 third_party/test 等目录排后
+- ✅RAG
+    - 文本分割方式:
+        - ✅分块 + 默认20%相邻分块重叠
+        - ✅定长分割
+        - ✅字符分割
+        - ✅结构分割 (较长的再进行 字符分割/定长分割)
+        - ⬜语义分割
+- PaddleOCR (图片转文本)
+- SD.cpp 图片视频生成
+- FunASR 语音识别
+- Qwen3-TTS 文本转语音
+
+### Server
+- Agent2App Api Server
+- Openai Api Server
+- ACP Server
+- A2A Server
+### 测试
+- Agent 整体稳定性测试
+    - ✅在 llm/toolcall 等各种节点触发中断/异常时，保持上下文角色顺序正确、内容完整
+    - 程序突然终止、重启，启动后的自动修复
 
 ### 功能
-- ✅**支持读取windows系统的 CPU占用、内存占用、GPU占用、显存占用**
-- ✅**支持 DXGI/DGI 捕获屏幕帧**
 - ✅**操作键鼠**
     - Tool/ui_control
 - ⬜**翻译/划词翻译**
-    - ✅支持接收各种程序、浏览器的选择文本事件
     - 截图识别屏幕文本，允许复制、分析、翻译
 - ⬜**根据图片内容，提取文本和提示并指定文本在图片上的位置**
     - 实现类似游戏中图片内容中的多个提示点，点击扩展到文本内容或提示信息

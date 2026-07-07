@@ -393,12 +393,11 @@ namespace expand {
 
 class CpuGpuMonitor::Impl {
 public:
-  Impl(asio::io_context &) {}
+  Impl() {}
   asio::awaitable<CpuGpuUsage> query() { co_return CpuGpuUsage{}; }
 };
 
-CpuGpuMonitor::CpuGpuMonitor(asio::io_context &ioCtx)
-    : impl_(std::make_unique<Impl>(ioCtx)) {}
+CpuGpuMonitor::CpuGpuMonitor() : impl_(std::make_unique<Impl>()) {}
 CpuGpuMonitor::~CpuGpuMonitor() = default;
 asio::awaitable<CpuGpuUsage> CpuGpuMonitor::query() { return impl_->query(); }
 

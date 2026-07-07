@@ -278,8 +278,8 @@ target_link_libraries(agentxx_static PUBLIC
   uchardet::libuchardet
 )
 if (XX_IS_WIN_D)
-  target_link_libraries(agentxx_shared PUBLIC oleacc winhttp ws2_32 d3d11 dxgi dxguid ole32 user32 uuid)
-  target_link_libraries(agentxx_static PUBLIC oleacc winhttp ws2_32 d3d11 dxgi dxguid ole32 user32 uuid)
+  target_link_libraries(agentxx_shared PUBLIC d3d11 dxgi dxguid winhttp ws2_32 oleacc ole32 user32 uuid)
+  target_link_libraries(agentxx_static PUBLIC d3d11 dxgi dxguid winhttp ws2_32 oleacc ole32 user32 uuid)
 endif()
 
 if (AGENTXX_LINUX_IO_URING_SUPPORTED)
