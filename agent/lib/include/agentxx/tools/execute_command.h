@@ -32,11 +32,10 @@ public:
 
   neograph::ChatTool get_definition() const override {
     auto agentPtr = agentContext.lock();
-    const auto &prompt =
-        agentPtr->agentConfig->prompt.toolPrompt["execute_linux_command"];
+    const auto &prompt = agentPtr->agentConfig->prompt.toolPrompt[get_name()];
 
     return {
-        "execute_linux_command",
+        get_name(),
         prompt.depict,
         neograph::json{
             {"type", "object"},
@@ -164,11 +163,10 @@ public:
 
   neograph::ChatTool get_definition() const override {
     auto agentPtr = agentContext.lock();
-    const auto &prompt =
-        agentPtr->agentConfig->prompt.toolPrompt["execute_windows_command"];
+    const auto &prompt = agentPtr->agentConfig->prompt.toolPrompt[get_name()];
 
     return {
-        "execute_windows_command",
+        get_name(),
         prompt.depict,
         neograph::json{
             {"type", "object"},
@@ -301,11 +299,10 @@ public:
 
   neograph::ChatTool get_definition() const override {
     auto agentPtr = agentContext.lock();
-    const auto &prompt =
-        agentPtr->agentConfig->prompt.toolPrompt["execute_python_command"];
+    const auto &prompt = agentPtr->agentConfig->prompt.toolPrompt[get_name()];
 
     return {
-        "execute_python_command",
+        get_name(),
         prompt.depict,
         neograph::json{
             {"type", "object"},
@@ -346,11 +343,10 @@ public:
 
   neograph::ChatTool get_definition() const override {
     auto agentPtr = agentContext.lock();
-    const auto &prompt =
-        agentPtr->agentConfig->prompt.toolPrompt["execute_javascript_command"];
+    const auto &prompt = agentPtr->agentConfig->prompt.toolPrompt[get_name()];
 
     return {
-        "execute_javascript_command",
+        get_name(),
         prompt.depict,
         neograph::json{
             {"type", "object"},

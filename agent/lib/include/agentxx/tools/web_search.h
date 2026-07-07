@@ -31,10 +31,10 @@ public:
 
   neograph::ChatTool get_definition() const override {
     auto agentPtr = agentContext.lock();
-    const auto &prompt = agentPtr->agentConfig->prompt.toolPrompt["web_search"];
+    const auto &prompt = agentPtr->agentConfig->prompt.toolPrompt[get_name()];
 
     return {
-        "web_search",
+        get_name(),
         prompt.depict,
         neograph::json{
             {"type", "object"},
@@ -109,11 +109,10 @@ public:
 
   neograph::ChatTool get_definition() const override {
     auto agentPtr = agentContext.lock();
-    const auto &prompt =
-        agentPtr->agentConfig->prompt.toolPrompt["web_fetch_url"];
+    const auto &prompt = agentPtr->agentConfig->prompt.toolPrompt[get_name()];
 
     return {
-        "web_fetch_url",
+        get_name(),
         prompt.depict,
         neograph::json{
             {"type", "object"},
@@ -177,11 +176,10 @@ public:
 
   neograph::ChatTool get_definition() const override {
     auto agentPtr = agentContext.lock();
-    const auto &prompt =
-        agentPtr->agentConfig->prompt.toolPrompt["web_fetch_url_markdown"];
+    const auto &prompt = agentPtr->agentConfig->prompt.toolPrompt[get_name()];
 
     return {
-        "web_fetch_url_markdown",
+        get_name(),
         prompt.depict,
         neograph::json{
             {"type", "object"},

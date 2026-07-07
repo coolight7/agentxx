@@ -23,11 +23,10 @@ public:
 
   neograph::ChatTool get_definition() const override {
     auto agentPtr = agentContext.lock();
-    const auto &prompt =
-        agentPtr->agentConfig->prompt.toolPrompt["get_current_datetime"];
+    const auto &prompt = agentPtr->agentConfig->prompt.toolPrompt[get_name()];
 
     return {
-        "get_current_datetime",
+        get_name(),
         prompt.depict,
         neograph::json{},
     };
@@ -49,18 +48,18 @@ UTC Time (24Hour): {})",
 };
 
 /// 获取系统核心信息：CPU占用、内存使用、多显卡信息
-class SystemCoreInfo : public XXToolBase {
+class GetSystemCoreInfoTool : public XXToolBase {
 public:
-  SystemCoreInfo(std::weak_ptr<agentxx::agent::AgentContext> in_agentContext)
-      : XXToolBase("system_core_info", in_agentContext, false, true) {}
+  GetSystemCoreInfoTool(
+      std::weak_ptr<agentxx::agent::AgentContext> in_agentContext)
+      : XXToolBase("get_system_core_info", in_agentContext, false, true) {}
 
   neograph::ChatTool get_definition() const override {
     auto agentPtr = agentContext.lock();
-    const auto &prompt =
-        agentPtr->agentConfig->prompt.toolPrompt["system_core_info"];
+    const auto &prompt = agentPtr->agentConfig->prompt.toolPrompt[get_name()];
 
     return {
-        "system_core_info",
+        get_name(),
         prompt.depict,
         neograph::json{},
     };

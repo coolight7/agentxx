@@ -222,6 +222,23 @@ public:
       tools.push_back(
           std::make_unique<agentxx::tools::StringRegexpTool>(agentContext));
 
+      tools.push_back(std::make_unique<agentxx::tools::GetCurrentDateTimeTool>(
+          agentContext));
+#if XX_IS_WIN_D || XX_IS_LINUX_D
+      tools.push_back(std::make_unique<agentxx::tools::GetSystemCoreInfoTool>(
+          agentContext));
+#endif
+
+      tools.push_back(
+          std::make_unique<agentxx::tools::WebFetchUrlTool>(agentContext));
+      tools.push_back(std::make_unique<agentxx::tools::WebFetchUrlMarkdownTool>(
+          agentContext));
+      if (false == config->websearchApiUrl.empty()) {
+        tools.push_back(std::make_unique<agentxx::tools::WebSearchTool>(
+            config->websearchApiUrl, config->websearchConvertHtml2markdown,
+            agentContext));
+      }
+
       if (false == config->ragDocsPaths.empty()) {
         auto client = std::make_shared<agentxx::tools::EmbeddingClient>(
             config->modelOpenAIBaseUrl, config->modelOpenAIApiKey,
@@ -240,19 +257,6 @@ public:
         tools.push_back(std::make_unique<agentxx::tools::RAGSearchTool>(
             docsStore, agentContext));
       }
-
-      if (false == config->websearchApiUrl.empty()) {
-        tools.push_back(std::make_unique<agentxx::tools::WebSearchTool>(
-            config->websearchApiUrl, config->websearchConvertHtml2markdown,
-            agentContext));
-      }
-      tools.push_back(
-          std::make_unique<agentxx::tools::WebFetchUrlTool>(agentContext));
-      tools.push_back(std::make_unique<agentxx::tools::WebFetchUrlMarkdownTool>(
-          agentContext));
-
-      tools.push_back(std::make_unique<agentxx::tools::GetCurrentDateTimeTool>(
-          agentContext));
 
 #if XX_IS_WIN_D
       tools.push_back(

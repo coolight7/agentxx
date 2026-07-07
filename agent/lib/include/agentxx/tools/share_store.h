@@ -53,11 +53,10 @@ public:
 
   neograph::ChatTool get_definition() const override {
     auto agentPtr = agentContext.lock();
-    const auto &prompt =
-        agentPtr->agentConfig->prompt.toolPrompt["share_store"];
+    const auto &prompt = agentPtr->agentConfig->prompt.toolPrompt[get_name()];
 
     return {
-        "share_store",
+        get_name(),
         prompt.depict,
         neograph::json{
             {"type", "object"},

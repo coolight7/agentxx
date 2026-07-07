@@ -24,11 +24,10 @@ public:
 
   neograph::ChatTool get_definition() const override {
     auto agentPtr = agentContext.lock();
-    const auto &prompt =
-        agentPtr->agentConfig->prompt.toolPrompt["codegraph_search"];
+    const auto &prompt = agentPtr->agentConfig->prompt.toolPrompt[get_name()];
 
     return {
-        "codegraph_search",
+        get_name(),
         prompt.depict,
         neograph::json{
             {"type", "object"},
@@ -97,11 +96,10 @@ public:
 
   neograph::ChatTool get_definition() const override {
     auto agentPtr = agentContext.lock();
-    const auto &prompt =
-        agentPtr->agentConfig->prompt.toolPrompt["codegraph_context"];
+    const auto &prompt = agentPtr->agentConfig->prompt.toolPrompt[get_name()];
 
     return {
-        "codegraph_context",
+        get_name(),
         prompt.depict,
         neograph::json{
             {"type", "object"},
@@ -167,11 +165,10 @@ public:
 
   neograph::ChatTool get_definition() const override {
     auto agentPtr = agentContext.lock();
-    const auto &prompt =
-        agentPtr->agentConfig->prompt.toolPrompt["codegraph_callers"];
+    const auto &prompt = agentPtr->agentConfig->prompt.toolPrompt[get_name()];
 
     return {
-        "codegraph_callers",
+        get_name(),
         prompt.depict,
         neograph::json{
             {"type", "object"},
@@ -228,11 +225,10 @@ public:
 
   neograph::ChatTool get_definition() const override {
     auto agentPtr = agentContext.lock();
-    const auto &prompt =
-        agentPtr->agentConfig->prompt.toolPrompt["codegraph_callees"];
+    const auto &prompt = agentPtr->agentConfig->prompt.toolPrompt[get_name()];
 
     return {
-        "codegraph_callees",
+        get_name(),
         prompt.depict,
         neograph::json{
             {"type", "object"},
@@ -289,11 +285,10 @@ public:
 
   neograph::ChatTool get_definition() const override {
     auto agentPtr = agentContext.lock();
-    const auto &prompt =
-        agentPtr->agentConfig->prompt.toolPrompt["codegraph_impact"];
+    const auto &prompt = agentPtr->agentConfig->prompt.toolPrompt[get_name()];
 
     return {
-        "codegraph_impact",
+        get_name(),
         prompt.depict,
         neograph::json{
             {"type", "object"},
@@ -350,11 +345,10 @@ public:
 
   neograph::ChatTool get_definition() const override {
     auto agentPtr = agentContext.lock();
-    const auto &prompt =
-        agentPtr->agentConfig->prompt.toolPrompt["codegraph_status"];
+    const auto &prompt = agentPtr->agentConfig->prompt.toolPrompt[get_name()];
 
     return {
-        "codegraph_status",
+        get_name(),
         prompt.depict,
         neograph::json{
             {"type", "object"},
@@ -390,11 +384,10 @@ public:
 
   neograph::ChatTool get_definition() const override {
     auto agentPtr = agentContext.lock();
-    const auto &prompt =
-        agentPtr->agentConfig->prompt.toolPrompt["codegraph_index"];
+    const auto &prompt = agentPtr->agentConfig->prompt.toolPrompt[get_name()];
 
     return {
-        "codegraph_index",
+        get_name(),
         prompt.depict,
         neograph::json{
             {"type", "object"},
@@ -456,11 +449,10 @@ public:
 
   neograph::ChatTool get_definition() const override {
     auto agentPtr = agentContext.lock();
-    const auto &prompt =
-        agentPtr->agentConfig->prompt.toolPrompt["codegraph_path"];
+    const auto &prompt = agentPtr->agentConfig->prompt.toolPrompt[get_name()];
 
     return {
-        "codegraph_path",
+        get_name(),
         prompt.depict,
         neograph::json{
             {"type", "object"},

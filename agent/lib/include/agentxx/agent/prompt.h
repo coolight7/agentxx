@@ -535,6 +535,14 @@ Insert text or get/set/delete text by unique id.)",
           },
       },
       {
+          "get_system_core_info",
+          ToolPrompt{
+              .depict =
+                  R"(Get system CPU usage, Memory usage, GPU usage, GPU memeory usage.)",
+              .args = {},
+          },
+      },
+      {
           "codegraph_search",
           ToolPrompt{
               .depict =

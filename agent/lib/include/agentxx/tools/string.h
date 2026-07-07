@@ -29,11 +29,10 @@ public:
 
   neograph::ChatTool get_definition() const override {
     auto agentPtr = agentContext.lock();
-    const auto &prompt =
-        agentPtr->agentConfig->prompt.toolPrompt["string_html_to_markdown"];
+    const auto &prompt = agentPtr->agentConfig->prompt.toolPrompt[get_name()];
 
     return {
-        "string_html_to_markdown",
+        get_name(),
         prompt.depict,
         neograph::json{
             {"type", "object"},
@@ -74,11 +73,10 @@ public:
 
   neograph::ChatTool get_definition() const override {
     auto agentPtr = agentContext.lock();
-    const auto &prompt =
-        agentPtr->agentConfig->prompt.toolPrompt["string_regexp"];
+    const auto &prompt = agentPtr->agentConfig->prompt.toolPrompt[get_name()];
 
     return {
-        "string_regexp",
+        get_name(),
         prompt.depict,
         neograph::json{
             {"type", "object"},

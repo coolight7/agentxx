@@ -80,11 +80,10 @@ public:
 
   neograph::ChatTool get_definition() const override {
     auto agentPtr = agentContext.lock();
-    const auto &prompt =
-        agentPtr->agentConfig->prompt.toolPrompt["filesystem_list_file"];
+    const auto &prompt = agentPtr->agentConfig->prompt.toolPrompt[get_name()];
 
     return {
-        "filesystem_list_file",
+        get_name(),
         prompt.depict,
         neograph::json{
             {"type", "object"},
@@ -190,11 +189,10 @@ public:
 
   neograph::ChatTool get_definition() const override {
     auto agentPtr = agentContext.lock();
-    const auto &prompt =
-        agentPtr->agentConfig->prompt.toolPrompt["filesystem_read_text_file"];
+    const auto &prompt = agentPtr->agentConfig->prompt.toolPrompt[get_name()];
 
     return {
-        "filesystem_read_text_file",
+        get_name(),
         prompt.depict,
         neograph::json{
             {"type", "object"},
@@ -390,11 +388,10 @@ public:
 
   neograph::ChatTool get_definition() const override {
     auto agentPtr = agentContext.lock();
-    const auto &prompt =
-        agentPtr->agentConfig->prompt.toolPrompt["filesystem_read_binary_file"];
+    const auto &prompt = agentPtr->agentConfig->prompt.toolPrompt[get_name()];
 
     return {
-        "filesystem_read_binary_file",
+        get_name(),
         prompt.depict,
         neograph::json{
             {"type", "object"},
@@ -606,11 +603,10 @@ public:
 
   neograph::ChatTool get_definition() const override {
     auto agentPtr = agentContext.lock();
-    const auto &prompt =
-        agentPtr->agentConfig->prompt.toolPrompt["filesystem_write_file"];
+    const auto &prompt = agentPtr->agentConfig->prompt.toolPrompt[get_name()];
 
     return {
-        "filesystem_write_file",
+        get_name(),
         prompt.depict,
         neograph::json{
             {"type", "object"},
@@ -783,11 +779,10 @@ public:
 
   neograph::ChatTool get_definition() const override {
     auto agentPtr = agentContext.lock();
-    const auto &prompt =
-        agentPtr->agentConfig->prompt.toolPrompt["filesystem_edit_text_file"];
+    const auto &prompt = agentPtr->agentConfig->prompt.toolPrompt[get_name()];
 
     return {
-        "filesystem_edit_text_file",
+        get_name(),
         prompt.depict,
         neograph::json{
             {"type", "object"},
@@ -990,11 +985,10 @@ public:
 
   neograph::ChatTool get_definition() const override {
     auto agentPtr = agentContext.lock();
-    const auto &prompt =
-        agentPtr->agentConfig->prompt.toolPrompt["filesystem_glob"];
+    const auto &prompt = agentPtr->agentConfig->prompt.toolPrompt[get_name()];
 
     return {
-        "filesystem_glob",
+        get_name(),
         prompt.depict,
         neograph::json{
             {"type", "object"},
@@ -1046,11 +1040,10 @@ public:
 
   neograph::ChatTool get_definition() const override {
     auto agentPtr = agentContext.lock();
-    const auto &prompt =
-        agentPtr->agentConfig->prompt.toolPrompt["filesystem_grep"];
+    const auto &prompt = agentPtr->agentConfig->prompt.toolPrompt[get_name()];
 
     return {
-        "filesystem_grep",
+        get_name(),
         prompt.depict,
         neograph::json{
             {"type", "object"},

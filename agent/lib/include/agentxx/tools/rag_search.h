@@ -639,10 +639,10 @@ public:
 
   neograph::ChatTool get_definition() const override {
     auto agentPtr = agentContext.lock();
-    const auto &prompt = agentPtr->agentConfig->prompt.toolPrompt["rag_search"];
+    const auto &prompt = agentPtr->agentConfig->prompt.toolPrompt[get_name()];
 
     return {
-        "rag_search",
+        get_name(),
         prompt.depict,
         neograph::json{
             {"type", "object"},
