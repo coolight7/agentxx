@@ -759,7 +759,7 @@ protected:
   static asio::awaitable<void> readSysfsString(const std::string &path,
                                                std::string &out) {
     std::string content = co_await readFileContent(path);
-    ` if (!content.empty()) {
+    if (!content.empty()) {
       out = agentxx::util::removeBetweenSpace(content);
     }
   }
