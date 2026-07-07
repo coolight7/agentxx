@@ -127,7 +127,7 @@ public:
   execute_async(const neograph::json &arguments) override {
     auto thread_id = arguments.value("thread_id", std::string{});
     if (thread_id.empty()) {
-      co_return R"({"error":"Toolcall inner exec failed, need `thread_id`"})";
+      co_return R"({"error":"Toolcall inner error, need `thread_id`"})";
     }
     size_t text_id = arguments.value<size_t>("id", 0);
     auto text_line_offset = arguments.value<int64_t>("line_offset", -1);
@@ -138,10 +138,10 @@ public:
       co_return R"({"error":"Arg `opt` is empty"})";
     }
 
-    if (text_line_offset >= 0 || text_line_limit >= 0) {
+    if (text_line_offset >= 0 || text_line_limit > 0) {
       const auto offset =
           (text_line_offset >= 0) ? size_t(text_line_offset) : 0;
-      const auto limit = (text_line_limit >= 0)
+      const auto limit = (text_line_limit > 0)
                              ? size_t(text_line_limit)
                              : std::numeric_limits<size_t>::max();
       auto stream = std::istringstream{text};

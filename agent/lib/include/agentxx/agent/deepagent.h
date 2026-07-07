@@ -464,22 +464,160 @@ public:
     co_return;
   }
 
-  static void onHandleEvent(const neograph::graph::GraphEvent &event) {
-    switch (event.type) {
-    case neograph::graph::GraphEvent::Type::NODE_START:
-    case neograph::graph::GraphEvent::Type::NODE_END:
-      break;
-    case neograph::graph::GraphEvent::Type::LLM_TOKEN: {
-      std::cout << event.data.get<std::string>() << std::flush;
-    } break;
-    case neograph::graph::GraphEvent::Type::CHANNEL_WRITE:
-    case neograph::graph::GraphEvent::Type::INTERRUPT:
-    case neograph::graph::GraphEvent::Type::ERROR:
-      break;
-    }
+  struct ConversationTurnResult {
+    neograph::json messages;
+    bool hasError = false;
+    std::string errorMessage;
+    bool interrupted = false;
   };
 
+  using InterruptCallback = std::function<asio::awaitable<void>(
+      const std::string &interruptNode, const std::string &interruptValue,
+      const std::string &interruptHandleName, bool interruptHandleFound)>;
+
+  asio::awaitable<ConversationTurnResult> runConversationTurnAsync(
+      const std::string &threadId, const std::string &userInput,
+      bool isFirstMsg, neograph::json messages,
+      std::function<void(const neograph::graph::GraphEvent &)> eventCallback,
+      InterruptCallback interruptCallback = nullptr) {
+    ConversationTurnResult turnResult;
+
+    try {
+      auto processedInput = userInput;
+      agentxx::util::autoConvertToUtf8(processedInput);
+      messages.push_back(neograph::json{
+          {"role", "user"},
+          {"content", processedInput},
+      });
+      auto cfg = neograph::graph::RunConfig{
+          .thread_id = threadId,
+          .input = {{"messages", messages}},
+          .max_steps = 100,
+          .stream_mode = neograph::graph::StreamMode::ALL,
+          .cancel_token = std::make_shared<neograph::graph::CancelToken>(),
+          .resume_if_exists = isFirstMsg,
+      };
+
+      std::optional<neograph::graph::RunResult> result =
+          co_await engine->run_stream_async(cfg, eventCallback);
+      if (result->interrupted) {
+        messages = result->channel_raw(
+            agentxx::middleware::BaseMiddlewareHandleInterface::
+                channelKey_interruptMessages);
+      } else {
+        messages = result->channel_raw("messages");
+      }
+
+      while (result.has_value() && result->interrupted) {
+        auto crudeResult = std::move(result);
+        result = std::nullopt;
+
+        turnResult.interrupted = true;
+        auto interruptNode = crudeResult->interrupt_node;
+        auto interruptValue = crudeResult->interrupt_value.dump();
+
+        std::string interruptHandleName;
+        bool interruptHandleFound = false;
+        std::optional<neograph::json> resumeValue;
+
+        auto interruptArg = agentxx::middleware::InterruptHandleArg::fromJson(
+            crudeResult->channel_raw(
+                agentxx::middleware::BaseMiddlewareHandleInterface::
+                    channelKey_interruptArg));
+        if (interruptArg.has_value()) {
+          interruptHandleName = interruptArg->name;
+          auto handleIt =
+              agentContext->middlewareHandleContext->interruptHandles.find(
+                  interruptArg->name);
+          interruptHandleFound =
+              (handleIt !=
+               agentContext->middlewareHandleContext->interruptHandles.end());
+        }
+
+        if (interruptCallback) {
+          co_await interruptCallback(interruptNode, interruptValue,
+                                     interruptHandleName, interruptHandleFound);
+        }
+
+        if (interruptArg.has_value() && interruptHandleFound) {
+          resumeValue = co_await agentContext->middlewareHandleContext
+                            ->execInterruptHandle(interruptArg->name,
+                                                  interruptArg.value());
+        }
+
+        if (resumeValue.has_value()) {
+          engine->update_state(
+              threadId, [&](neograph::graph::GraphState &state) {
+                state.overwrite(
+                    agentxx::middleware::BaseMiddlewareHandleInterface::
+                        channelKey_interruptResult,
+                    resumeValue.value());
+                state.overwrite("messages", std::move(messages));
+              });
+
+          result =
+              co_await engine->resume_async(threadId, nullptr, eventCallback);
+          if (result->interrupted) {
+            messages = result->channel_raw(
+                agentxx::middleware::BaseMiddlewareHandleInterface::
+                    channelKey_interruptMessages);
+          } else {
+            messages = result->channel_raw("messages");
+          }
+        }
+      }
+
+      turnResult.messages = std::move(messages);
+    } catch (const std::exception &e) {
+      turnResult.hasError = true;
+      turnResult.errorMessage = e.what();
+      XX_LOGE(R"({{"error": "Agent Response failed: {}"}})", e.what());
+    } catch (...) {
+      turnResult.hasError = true;
+      turnResult.errorMessage = "Unknown error";
+      XX_LOGE(R"({{"error": "Agent Response failed: Unknown error"}})");
+    }
+
+    co_return turnResult;
+  }
+
   asio::awaitable<void> runCliAsync() {
+    const auto cliEventCallback = [](const neograph::graph::GraphEvent &event) {
+      switch (event.type) {
+      case neograph::graph::GraphEvent::Type::NODE_START:
+      case neograph::graph::GraphEvent::Type::NODE_END:
+        break;
+      case neograph::graph::GraphEvent::Type::LLM_TOKEN: {
+        std::cout << event.data.get<std::string>() << std::flush;
+      } break;
+      case neograph::graph::GraphEvent::Type::CHANNEL_WRITE:
+      case neograph::graph::GraphEvent::Type::INTERRUPT:
+      case neograph::graph::GraphEvent::Type::ERROR:
+        break;
+      }
+    };
+    const auto cliInterruptCallback =
+        [](const std::string &interruptNode, const std::string &interruptValue,
+           const std::string &interruptHandleName,
+           bool interruptHandleFound) -> asio::awaitable<void> {
+      std::cout << "\n┏━━━━━━ Interrupted ━━━━━━┓" << std::endl;
+      std::cout << "┣━ Interrupted at: " << interruptNode << std::endl;
+      std::cout << "┣━ Value: " << interruptValue << std::endl;
+      if (false == interruptHandleName.empty()) {
+        if (interruptHandleFound) {
+          std::cout << "┣━ Interrupt Handle: " << interruptHandleName
+                    << std::endl;
+        } else {
+          std::cout << "┣━ Interrupt Handle Not Found for: "
+                    << interruptHandleName << std::endl;
+        }
+      } else {
+        std::cout << "┣━ Unknown InterruptHandleArg" << std::endl;
+      }
+      std::cout << "┗━━━━━━ Interrupted ━━━━━━┛\n" << std::endl;
+      co_return;
+    };
+
     bool isFirstMsg = true;
     const auto thread_id = "session";
     auto messages = neograph::json::array();
@@ -488,100 +626,14 @@ public:
 
     for (std::string line; std::getline(std::cin, line);) {
       if (false == line.empty()) {
-        try {
-          agentxx::util::autoConvertToUtf8(line);
-          messages.push_back(neograph::json{
-              {"role", "user"},
-              {"content", line},
-          });
-          auto cfg = neograph::graph::RunConfig{
-              .thread_id = thread_id,
-              .input = {{"messages", messages}},
-              .max_steps = 100,
-              .stream_mode = neograph::graph::StreamMode::ALL,
-              .cancel_token = std::make_shared<neograph::graph::CancelToken>(),
-              // - [resume_if_exists]=true 时, 会读取历史记录, 并将 input
-              // 追加进去
-              // - [resume_if_exists]=false 时, 消息被 input 覆盖
-              .resume_if_exists = isFirstMsg,
-          };
+        std::cout << agentContext->agentConfig->agentNameView << ": "
+                  << std::flush;
 
-          std::cout << agentContext->agentConfig->agentNameView << ": "
-                    << std::flush;
-          std::optional<neograph::graph::RunResult> result =
-              co_await engine->run_stream_async(cfg, onHandleEvent);
-          if (result->interrupted) {
-            messages = result->channel_raw(
-                agentxx::middleware::BaseMiddlewareHandleInterface::
-                    channelKey_interruptMessages);
-          } else {
-            messages = result->channel_raw("messages");
-          }
-          isFirstMsg = false;
-
-          while (result.has_value() && result->interrupted) {
-            auto crudeResult = std::move(result);
-            result = std::nullopt;
-
-            std::cout << "\n┏━━━━━━ Interrupted ━━━━━━┓" << std::endl;
-            std::cout << "┣━ Interrupted at: " << crudeResult->interrupt_node
-                      << std::endl;
-            std::cout << "┣━ Value: " << crudeResult->interrupt_value.dump()
-                      << std::endl;
-
-            std::optional<neograph::json> resumeValue;
-            auto interruptArg =
-                agentxx::middleware::InterruptHandleArg::fromJson(
-                    crudeResult->channel_raw(
-                        agentxx::middleware::BaseMiddlewareHandleInterface::
-                            channelKey_interruptArg));
-            if (false == interruptArg.has_value()) {
-              std::cout << "┣━ Unknown InterruptHanldeArg" << std::endl;
-            } else {
-              auto handleIt =
-                  agentContext->middlewareHandleContext->interruptHandles.find(
-                      interruptArg->name);
-              if (handleIt != agentContext->middlewareHandleContext
-                                  ->interruptHandles.end()) {
-                resumeValue = co_await agentContext->middlewareHandleContext
-                                  ->execInterruptHandle(interruptArg->name,
-                                                        interruptArg.value());
-              } else {
-                std::cout << "┣━ Interrupt Handle Not Found for: "
-                          << interruptArg->name << std::endl;
-              }
-            }
-            std::cout << "┗━━━━━━ Interrupted ━━━━━━┛\n" << std::endl;
-
-            if (resumeValue.has_value()) {
-              engine->update_state(
-                  thread_id, [&](neograph::graph::GraphState &state) {
-                    state.overwrite(
-                        agentxx::middleware::BaseMiddlewareHandleInterface::
-                            channelKey_interruptResult,
-                        resumeValue.value());
-                    state.overwrite("messages", std::move(messages));
-                  });
-              // [messages] 已清空
-
-              std::cout << agentContext->agentConfig->agentNameView
-                        << " [Resume]: " << std::flush;
-              result = co_await engine->resume_async(thread_id, nullptr,
-                                                     onHandleEvent);
-              if (result->interrupted) {
-                messages = result->channel_raw(
-                    agentxx::middleware::BaseMiddlewareHandleInterface::
-                        channelKey_interruptMessages);
-              } else {
-                messages = result->channel_raw("messages");
-              }
-            }
-          }
-        } catch (const std::exception &e) {
-          XX_LOGE(R"({{"error": "Agent Response failed: {}"}})", e.what());
-        } catch (...) {
-          XX_LOGE(R"({{"error": "Agent Response failed: Unknown error"}})");
-        }
+        auto turnResult = co_await runConversationTurnAsync(
+            thread_id, line, isFirstMsg, std::move(messages), cliEventCallback,
+            cliInterruptCallback);
+        messages = std::move(turnResult.messages);
+        isFirstMsg = false;
       }
       std::cout << "\n\n>>> ";
     }

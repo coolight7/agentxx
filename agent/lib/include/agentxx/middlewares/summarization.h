@@ -101,8 +101,12 @@ public:
            asciiCount / asciiCharsPerToken;
   }
 
-  size_t countTokens(const std::vector<neograph::ChatMessage> &messages) {
+  size_t countTokens(const std::vector<std::string> &systemMsgs,
+                     const std::vector<neograph::ChatMessage> &messages) {
     size_t count = 0;
+    for (const auto &msg : systemMsgs) {
+      count += extraTokensPerMessage + countTokensForUtf8Str(msg);
+    }
     for (const auto &item : messages) {
       count += extraTokensPerMessage + countTokensForUtf8Str(item.role) +
                countTokensForUtf8Str(item.content);
@@ -246,7 +250,14 @@ Output ONLY the summary text, no meta-commentary.
     if (apiTokenUsage < 0) {
       apiTokenUsage = 0;
     }
-    const auto countTokenUsage = countTokens(messages);
+
+    const auto &appendSystemMsgList =
+        agentCtxPtr->middlewareHandleContext->getGraphDataItemValue<
+            std::vector<std::string>>(
+            in.ctx.thread_id,
+            agentxx::middleware::MiddlewareContext::graphDataKey_systemMessage);
+
+    const auto countTokenUsage = countTokens(appendSystemMsgList, messages);
     const auto tokenUsage = std::max((size_t)apiTokenUsage, countTokenUsage);
 
     const auto &thread_id = in.ctx.thread_id;
@@ -343,7 +354,8 @@ Output ONLY the summary text, no meta-commentary.
 ┣━ Summary To: {}
 ┗━━━━━━ Summary ━━━━━━┛)_",
                      modelSupportMaxToken, apiTokenUsage, tokenUsage,
-                     countTokenUsage, countTokens(in.state.get_messages()));
+                     countTokenUsage,
+                     countTokens(appendSystemMsgList, in.state.get_messages()));
       }
     } else {
       if (agentCtxPtr->agentConfig->logPrintSummarizationResultTokenCount) {
@@ -355,7 +367,8 @@ Output ONLY the summary text, no meta-commentary.
 ┣━ Not Need Summary
 ┗━━━━━━ Summary ━━━━━━┛)_",
                      modelSupportMaxToken, apiTokenUsage, tokenUsage,
-                     countTokenUsage, countTokens(in.state.get_messages()));
+                     countTokenUsage,
+                     countTokens(appendSystemMsgList, in.state.get_messages()));
       }
     }
 

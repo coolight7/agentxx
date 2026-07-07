@@ -255,10 +255,10 @@ public:
             fmt::format(R"(Can not open file: {}")", errCode.message())};
       }
 
-      if (text_line_offset >= 0 || text_line_limit >= 0) {
+      if (text_line_offset >= 0 || text_line_limit > 0) {
         const auto offset =
             (text_line_offset >= 0) ? size_t(text_line_offset) : 0;
-        const auto limit = (text_line_limit >= 0)
+        const auto limit = (text_line_limit > 0)
                                ? size_t(text_line_limit)
                                : std::numeric_limits<size_t>::max();
         std::stringstream result{};
@@ -327,7 +327,7 @@ public:
             fmt::format(R"(Can not open file. Error: {})", ec.message())};
       }
 
-      if (text_line_offset >= 0 || text_line_limit >= 0) {
+      if (text_line_offset >= 0 || text_line_limit > 0) {
         // 读取部分文件
         const auto offset =
             (text_line_offset >= 0) ? size_t(text_line_offset) : 0;

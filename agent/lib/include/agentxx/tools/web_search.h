@@ -74,9 +74,10 @@ public:
           if (data.empty()) {
             co_return R"({"error": "Empty search result."})";
           }
-          const auto maxLength = 8000;
+          const size_t maxLength = 8000;
           if (data.size() > maxLength) {
             data.resize(maxLength);
+            data += "\n\n[Too long, truncated]";
           }
           co_return data;
         }
@@ -89,9 +90,10 @@ public:
         if (data.empty()) {
           co_return R"({"error": "Empty search result."})";
         }
-        const auto maxLength = 8000;
+        const size_t maxLength = 8000;
         if (data.size() > maxLength) {
           data.resize(maxLength);
+          data += "\n\n[Too long, truncated]";
         }
         co_return data;
       }
@@ -211,9 +213,10 @@ public:
       if (data.empty()) {
         co_return R"({"error": "Request Success, but got empty result."})";
       }
-      const auto maxLength = 5000;
+      const size_t maxLength = 8000;
       if (data.size() > maxLength) {
         data.resize(maxLength);
+        data += "\n\n[Too long, truncated]";
       }
       co_return data;
     }
