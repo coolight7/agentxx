@@ -32,7 +32,11 @@ public:
         .generateDeduplicationKey =
             [](const neograph::json &args) -> std::optional<std::string> {
           if (args.is_object() && args["id"].is_string()) {
-            return fmt::format("share_store:{}", args["id"].get<std::string>());
+            auto line_offset = args.value<int64_t>("line_offset", -1);
+            auto line_limit = args.value<int64_t>("line_limit", -1);
+            return fmt::format("share_store:{}:lo:{}:ll:{}",
+                               args["id"].get<std::string>(), line_offset,
+                               line_limit);
           }
           return std::nullopt;
         },
