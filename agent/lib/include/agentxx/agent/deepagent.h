@@ -27,9 +27,11 @@
 #include "neograph/llm/openai_provider.h"
 #include "neograph/mcp/client.h"
 #include "neograph/neograph.h"
+#include <chrono>
 #include <functional>
 #include <iostream>
 #include <memory>
+#include <sstream>
 
 namespace agentxx {
 namespace agent {
@@ -597,7 +599,124 @@ public:
   }
 
   ~DeepAgent() { engine = nullptr; }
+
+  // Get underlying engine
+  neograph::graph::GraphEngine *getEngine() { return engine.get(); }
+  const neograph::graph::GraphEngine *getEngine() const { return engine.get(); }
+
+  // Get agent context
+  std::shared_ptr<AgentContext> getContext() { return agentContext; }
+
+  /// Run agent with custom system prompt and user input, collect full output as
+  /// string
+  /// - threadId: unique thread ID for this execution
+  /// - messages: list of chat messages (system + user)
+  /// - callback: optional event callback, nullptr if not needed
+  /// - returns: full collected output content
+  asio::awaitable<std::string> runNonStreamAsync(
+      const std::string &threadId,
+      const std::vector<neograph::ChatMessage> &messages,
+      std::function<void(const neograph::graph::GraphEvent &)> callback =
+          nullptr) {
+    neograph::json inputMessages = neograph::json::array();
+    for (const auto &msg : messages) {
+      neograph::json msgJson;
+      neograph::to_json(msgJson, msg);
+      inputMessages.push_back(std::move(msgJson));
+    }
+
+    neograph::graph::RunConfig cfg{
+        .thread_id = threadId,
+        .input = {{"messages", std::move(inputMessages)}},
+        .resume_if_exists = false,
+    };
+
+    std::ostringstream oss;
+    auto wrappedCallback =
+        [&oss, callback](const neograph::graph::GraphEvent &event) {
+          switch (event.type) {
+          case neograph::graph::GraphEvent::Type::LLM_TOKEN: {
+            auto token = event.data.get<std::string>();
+            oss << token;
+            if (callback) {
+              callback(event);
+            }
+          } break;
+          default:
+            if (callback) {
+              callback(event);
+            }
+            break;
+          }
+        };
+
+    co_await engine->run_stream_async(cfg, wrappedCallback);
+    co_return oss.str();
+  }
+
+  /// Run agent with a single user input and optional custom system prompt
+  /// Convenience wrapper that builds messages automatically
+  asio::awaitable<std::string>
+  runSingleInputAsync(const std::string &threadId, const std::string &userInput,
+                      const std::string &systemPrompt = "") {
+    std::vector<neograph::ChatMessage> messages;
+
+    if (!systemPrompt.empty()) {
+      messages.push_back(neograph::ChatMessage{
+          .role = "system",
+          .content = systemPrompt,
+      });
+    }
+
+    messages.push_back(neograph::ChatMessage{
+        .role = "user",
+        .content = userInput,
+    });
+
+    co_return co_await runNonStreamAsync(threadId, messages);
+  }
+
+  /// Run a simple completion with just messages (for subagent
+  /// scoring/optimization) Returns the full content as a string (collects all
+  /// tokens)
+  struct SimpleRunResult {
+    std::string content;
+    neograph::graph::RunResult fullResult;
+  };
+
+  asio::awaitable<SimpleRunResult>
+  runStreamAsync(const std::vector<neograph::ChatMessage> &messages) {
+    neograph::json inputMessages = neograph::json::array();
+    for (const auto &msg : messages) {
+      neograph::json msgJson;
+      neograph::to_json(msgJson, msg);
+      inputMessages.push_back(std::move(msgJson));
+    }
+
+    auto threadId = fmt::format(
+        "subagent_{}",
+        std::chrono::system_clock::now().time_since_epoch().count());
+
+    neograph::graph::RunConfig cfg{
+        .thread_id = threadId,
+        .input = {{"messages", std::move(inputMessages)}},
+        .resume_if_exists = false,
+    };
+
+    std::ostringstream oss;
+    auto callback = [&oss](const neograph::graph::GraphEvent &event) {
+      if (event.type == neograph::graph::GraphEvent::Type::LLM_TOKEN) {
+        oss << event.data.get<std::string>();
+      }
+    };
+
+    auto result = co_await engine->run_stream_async(cfg, callback);
+    co_return SimpleRunResult{
+        .content = oss.str(),
+        .fullResult = std::move(result),
+    };
+  }
 };
 
 } // namespace agent
-}; // namespace agentxx
+} // namespace agentxx

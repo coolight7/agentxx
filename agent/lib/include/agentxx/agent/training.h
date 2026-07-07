@@ -5,63 +5,86 @@
 #include "neograph/llm/openai_provider.h"
 #include "neograph/neograph.h"
 #include <agentxx/util/log.h>
+#include <algorithm>
+#include <chrono>
 #include <fmt/core.h>
+#include <fstream>
 #include <functional>
 #include <iostream>
 #include <memory>
+#include <random>
+#include <sstream>
 
 namespace agentxx {
 namespace agent {
 
+// ======================== 数据结构 ========================
+
 /// 单个训练测试用例
 struct TrainingTestCase {
-  std::string name;           // 用例名称，用于日志
-  std::string input;          // 用户输入文本
-  std::string expectedOutput; // 可选：期望输出，供评分参考
-  neograph::json extra;       // 可选：额外上下文数据
+  std::string name;
+  std::string input;
+  std::string expectedOutput; // 描述预期的结果、评分标准等（供评分器参考）
+  std::string equalOutput; // 若不为空，则判断 agent 输出是否与此完全相等
+  neograph::json extra;
 };
 
 /// 评分结果
 struct TrainingScore {
-  double score = 0.0;   // 评分 0.0 ~ 1.0
-  std::string feedback; // 评分反馈文本
-  bool passed = false;  // 是否通过（score >= 阈值）
-  int iteration = 0;    // 当前迭代次数
-  neograph::json extra; // 可选：额外评分数据
+  double score = 0.0;
+  std::string feedback;
+  bool passed = false;
+  int iteration = 0;
+  neograph::json extra;
 };
 
-/// 训练调整回调：根据评分结果调整 agent 行为
-/// - score: 当前评分
-/// - testCase: 当前测试用例
-/// - systemPrompt: 可修改的 system prompt
-/// - extraMessages: 可追加的上下文消息（会注入到下一轮 agent 调用的 messages
-/// 前）
-using TrainingAdjustmentFunc = std::function<asio::awaitable<void>(
-    const TrainingScore &score, const TrainingTestCase &testCase,
-    std::string &systemPrompt,
-    std::vector<neograph::ChatMessage> &extraMessages)>;
+/// Prompt 变体：存储一组 prompt 配置及其评分
+struct PromptVariant {
+  std::string id;
+  std::string systemPrompt;
+  std::string systemPlanningPrompt;
+  std::string systemSkillPrompt;
+  double cumulativeScore = 0.0;
+  int testCount = 0;
+  int generation = 0;
+  std::string parentId;
+  neograph::json extra;
 
-/// 自定义评分回调：替代默认 subagent 评分器
-/// - agentOutput: agent 本轮输出文本
-/// - testCase: 当前测试用例
-/// - iteration: 当前迭代次数
+  double averageScore() const {
+    return testCount > 0 ? cumulativeScore / testCount : 0.0;
+  }
+};
+
+// ======================== 回调类型 ========================
+
+/// 自定义评分回调
 using TrainingScoringFunc = std::function<asio::awaitable<TrainingScore>(
     const std::string &agentOutput, const TrainingTestCase &testCase,
     int iteration)>;
 
-/// 迭代观察回调：每轮迭代结束后调用
-/// - score: 当前评分
-/// - agentOutput: agent 输出
+/// 迭代观察回调
 using TrainingIterationCallback = std::function<void(
     const TrainingScore &score, const std::string &agentOutput)>;
 
-/// 训练模式配置
-struct TrainingConfig {
+// ======================== 进化训练配置 ========================
+
+struct EvolutionTrainingConfig {
   /// 测试用例列表
   std::vector<TrainingTestCase> testCases;
 
-  /// 评分 subagent 的 system prompt（定义评分标准）
-  /// 默认为通用评分模板，会被填入 agent 输出和用例信息
+  /// 保存/加载 prompt 变体的文件路径
+  std::string saveFilePath = "./training_prompts.json";
+
+  /// 保留的 top N 个 prompt 变体
+  int topK = 100;
+
+  /// 每轮从 top 中选取多少个进行变异生成新变体
+  int mutateCount = 10;
+
+  /// 每个选中的变体生成几个子代
+  int childrenPerParent = 3;
+
+  /// 评分 subagent 的 system prompt
   std::string scoringPrompt = R"(
 You are an expert evaluator. Your task is to score the agent's response based on the test case.
 
@@ -83,108 +106,206 @@ Output ONLY a JSON object with the following schema:
   /// 评分模型名称（为空则使用主 agent 的模型）
   std::string scoringModelName;
 
-  /// 评分模型 API Key（为空则使用主 agent 的）
+  /// 评分模型 API Key
   std::string scoringModelApiKey;
 
-  /// 评分模型 Base URL（为空则使用主 agent 的）
+  /// 评分模型 Base URL
   std::string scoringModelBaseUrl;
 
-  /// 最大迭代次数（每个测试用例）
-  int maxIterations = 5;
+  /// prompt 优化器（调整 prompt）的 system prompt
+  std::string optimizerPrompt = R"(
+You are a prompt engineering expert. Your task is to improve a system prompt for an AI agent.
 
-  /// 收敛阈值：score >= 此值视为通过
+Given:
+1. The current system prompt that was used
+2. The test case the agent was given
+3. The agent's output
+4. The score and feedback the agent received
+
+Your job is to write an IMPROVED system prompt that will help the agent perform better on similar tasks.
+
+Output ONLY a JSON object:
+{
+  "systemPrompt": "<the improved system prompt>",
+  "analysis": "<brief analysis of what was wrong and how you fixed it>"
+}
+)";
+
+  /// 优化器模型名称
+  std::string optimizerModelName;
+
+  /// 优化器 API Key
+  std::string optimizerModelApiKey;
+
+  /// 优化器 Base URL
+  std::string optimizerModelBaseUrl;
+
+  /// 收敛阈值
   double convergenceThreshold = 0.8;
 
-  /// 自定义调整处理回调（为空则不做调整，仅迭代）
-  TrainingAdjustmentFunc adjustmentFunc;
-
-  /// 自定义评分回调（为空则使用默认 subagent 评分器）
+  /// 自定义评分回调
   TrainingScoringFunc scoringFunc;
 
   /// 每轮迭代观察回调
   TrainingIterationCallback onIteration;
 
-  /// 是否启用训练模式日志输出
+  /// 是否启用详细日志
   bool verbose = true;
 };
 
-// ======================== 训练模式 ========================
-class TrainingAgent {
+// ======================== 进化训练 Agent ========================
+
+class EvolutionTrainingAgent {
 protected:
   std::shared_ptr<agentxx::agent::DeepAgent> scoreAgent;
   std::shared_ptr<agentxx::agent::DeepAgent> trainAgent;
+  std::shared_ptr<agentxx::agent::DeepAgent> optimizerAgent;
 
-public:
-  TrainingAgent(std::shared_ptr<agentxx::agent::DeepAgent> in_scoreAgent,
-                std::shared_ptr<agentxx::agent::DeepAgent> in_trainAgent)
-      : scoreAgent(in_scoreAgent), trainAgent(in_trainAgent) {}
+  std::vector<PromptVariant> population;
+  std::mt19937 rng;
+  int generationCounter = 0;
 
-  /// 以单条用户输入运行 agent，返回完整输出文本（非流式）
-  /// - threadId: 会话线程 ID
-  /// - userInput: 用户输入文本
-  /// - systemPrompt: 可选的 system prompt（为空则使用默认）
-  /// - extraMessages: 可选的额外上下文消息
-  asio::awaitable<std::string> runSingleInputAsync(
-      const std::string &threadId, const std::string &userInput,
-      const std::string &systemPrompt = "",
-      const std::vector<neograph::ChatMessage> &extraMessages = {}) {
-    auto messages = neograph::json::array();
+  // ---- 文件 I/O ----
 
-    if (false == systemPrompt.empty()) {
-      messages.push_back({
-          {"role", "system"},
-          {"content", systemPrompt},
-      });
-    }
-
-    for (const auto &msg : extraMessages) {
-      neograph::json msgJson;
-      neograph::to_json(msgJson, msg);
-      messages.push_back(std::move(msgJson));
-    }
-
-    messages.push_back({
-        {"role", "user"},
-        {"content", userInput},
-    });
-
-    neograph::graph::RunConfig cfg{
-        .thread_id = threadId,
-        .input = {{"messages", std::move(messages)}},
-        .resume_if_exists = false,
+  neograph::json promptVariantToJson(const PromptVariant &v) const {
+    return {
+        {"id", v.id},
+        {"systemPrompt", v.systemPrompt},
+        {"systemPlanningPrompt", v.systemPlanningPrompt},
+        {"systemSkillPrompt", v.systemSkillPrompt},
+        {"cumulativeScore", v.cumulativeScore},
+        {"testCount", v.testCount},
+        {"generation", v.generation},
+        {"parentId", v.parentId},
+        {"extra", v.extra},
     };
-
-    std::ostringstream oss;
-    co_await trainAgent->run_stream_async(
-        cfg, [&oss](const neograph::graph::GraphEvent &event) {
-          switch (event.type) {
-          case neograph::graph::GraphEvent::Type::LLM_TOKEN: {
-            oss << event.data.get<std::string>();
-          } break;
-          default:
-            break;
-          }
-        });
-    co_return oss.str();
   }
 
-  // 默认评分器：使用 subagent 进行评分
+  PromptVariant promptVariantFromJson(const neograph::json &j) const {
+    PromptVariant v;
+    v.id = j.value("id", "");
+    v.systemPrompt = j.value("systemPrompt", "");
+    v.systemPlanningPrompt = j.value("systemPlanningPrompt", "");
+    v.systemSkillPrompt = j.value("systemSkillPrompt", "");
+    v.cumulativeScore = j.value("cumulativeScore", 0.0);
+    v.testCount = j.value("testCount", 0);
+    v.generation = j.value("generation", 0);
+    v.parentId = j.value("parentId", "");
+    v.extra = j.value("extra", neograph::json::object());
+    return v;
+  }
+
+  void savePopulationToFile(const std::string &filePath) {
+    try {
+      neograph::json j = neograph::json::array();
+      for (const auto &v : population) {
+        j.push_back(promptVariantToJson(v));
+      }
+
+      neograph::json root;
+      root["population"] = j;
+      root["generationCounter"] = generationCounter;
+      root["savedAt"] =
+          std::chrono::system_clock::now().time_since_epoch().count();
+
+      std::ofstream ofs(filePath, std::ios::out | std::ios::trunc);
+      if (ofs.is_open()) {
+        ofs << root.dump(2);
+        ofs.close();
+        XX_LOGD("[EvolutionTraining] Saved {} prompts to {}", population.size(),
+                filePath);
+      } else {
+        XX_LOGE("[EvolutionTraining] Failed to open file for writing: {}",
+                filePath);
+      }
+    } catch (const std::exception &e) {
+      XX_LOGE("[EvolutionTraining] Failed to save population: {}", e.what());
+    }
+  }
+
+  bool loadPopulationFromFile(const std::string &filePath) {
+    try {
+      std::ifstream ifs(filePath);
+      if (!ifs.is_open()) {
+        XX_LOGD("[EvolutionTraining] No existing save file found at {}, "
+                "starting fresh",
+                filePath);
+        return false;
+      }
+
+      std::string content((std::istreambuf_iterator<char>(ifs)),
+                          std::istreambuf_iterator<char>());
+      ifs.close();
+
+      if (content.empty()) {
+        return false;
+      }
+
+      auto root = neograph::json::parse(content);
+      if (root.contains("population") && root["population"].is_array()) {
+        population.clear();
+        for (const auto &j : root["population"]) {
+          population.push_back(promptVariantFromJson(j));
+        }
+        generationCounter = root.value("generationCounter", 0);
+
+        std::sort(population.begin(), population.end(),
+                  [](const PromptVariant &a, const PromptVariant &b) {
+                    return a.averageScore() > b.averageScore();
+                  });
+
+        XX_LOGD("[EvolutionTraining] Loaded {} prompts from {} (generation {})",
+                population.size(), filePath, generationCounter);
+        return true;
+      }
+    } catch (const std::exception &e) {
+      XX_LOGE("[EvolutionTraining] Failed to load population: {}", e.what());
+    }
+    return false;
+  }
+
+  // ---- Agent 运行 ----
+
+  asio::awaitable<std::string>
+  runSingleInputAsync(const std::string &threadId, const std::string &userInput,
+                      const std::string &systemPrompt) {
+    co_return co_await trainAgent->runSingleInputAsync(threadId, userInput,
+                                                       systemPrompt);
+  }
+
+  // ---- 评分 ----
+
   asio::awaitable<TrainingScore>
   defaultScoringWithSubAgent(std::string_view agentOutput,
                              const TrainingTestCase &testCase, int iteration,
-                             const TrainingConfig &trainCfg) {
+                             const EvolutionTrainingConfig &cfg) {
     TrainingScore result;
     result.iteration = iteration;
+
+    // 若设置了 equalOutput，则优先进行精确匹配判断
+    if (!testCase.equalOutput.empty()) {
+      if (agentOutput == testCase.equalOutput) {
+        result.score = 1.0;
+        result.feedback = "Output exactly matches equalOutput.";
+        result.passed = true;
+      } else {
+        result.score = 0.0;
+        result.feedback = "Output does not match equalOutput.";
+        result.passed = false;
+      }
+      co_return result;
+    }
 
     std::ostringstream scoringMessage;
     scoringMessage << "Test Case: " << testCase.name << "\n";
     scoringMessage << "User Input: " << testCase.input << "\n";
-    if (false == testCase.expectedOutput.empty()) {
-      scoringMessage << "Expected Output: " << testCase.expectedOutput << "\n";
+    if (!testCase.expectedOutput.empty()) {
+      scoringMessage << "Expected Output / Scoring Criteria: "
+                     << testCase.expectedOutput << "\n";
     }
     scoringMessage << "\nAgent Response:\n" << agentOutput << "\n";
-    scoringMessage << "\nScore threshold (score >= "
-                   << trainCfg.convergenceThreshold << " is passed)";
+    scoringMessage << "\nScore threshold (score >= " << cfg.convergenceThreshold
+                   << " is passed)";
 
     neograph::ChatMessage scoringMsg{
         .role = "user",
@@ -193,13 +314,12 @@ public:
 
     neograph::ChatMessage systemMsg{
         .role = "system",
-        .content = trainCfg.scoringPrompt,
+        .content = cfg.scoringPrompt,
     };
 
     try {
       std::vector<neograph::ChatMessage> messages = {systemMsg, scoringMsg};
-      auto response =
-          co_await scoreAgent->run_stream_async(messages, neograph::json{});
+      auto response = co_await scoreAgent->runStreamAsync(messages);
 
       const auto &content = response.content;
 
@@ -225,119 +345,351 @@ public:
     co_return result;
   }
 
-  // 训练模式主循环：对所有测试用例执行 输入→评分→调整→再评分 迭代
-  // 返回每个测试用例的最终评分历史
-  asio::awaitable<std::vector<std::vector<TrainingScore>>>
-  runTrainingMode(const TrainingConfig &trainCfg) {
-    std::vector<std::vector<TrainingScore>> allResults;
-    allResults.reserve(trainCfg.testCases.size());
+  // ---- Prompt 优化 ----
 
-    for (size_t caseIdx = 0; caseIdx < trainCfg.testCases.size(); ++caseIdx) {
-      const auto &testCase = trainCfg.testCases[caseIdx];
-
-      if (trainCfg.verbose) {
-        XX_LOGD("[Training] ====== Test Case [{}/{}]: {} ======", caseIdx + 1,
-                trainCfg.testCases.size(), testCase.name);
-      }
-
-      std::vector<TrainingScore> caseScores;
-      std::string currentSystemPrompt = config->systemPrompt;
-      std::vector<neograph::ChatMessage> extraMessages;
-      std::string lastOutput;
-
-      for (int iter = 0; iter < trainCfg.maxIterations; ++iter) {
-        const auto threadId =
-            fmt::format("training_{}_{}", caseIdx, testCase.name);
-
-        if (trainCfg.verbose) {
-          XX_LOGD("[Training] Case '{}' Iteration {}/{}", testCase.name,
-                  iter + 1, trainCfg.maxIterations);
-        }
-
-        // Step 1: Agent 运行
-        lastOutput = co_await runSingleInputAsync(
-            threadId, testCase.input, currentSystemPrompt, extraMessages);
-
-        if (trainCfg.verbose) {
-          XX_LOGD("[Training] Case '{}' Iter {} Output (len={}): {}",
-                  testCase.name, iter + 1, lastOutput.size(),
-                  lastOutput.size() > 200 ? lastOutput.substr(0, 200) + "..."
-                                          : lastOutput);
-        }
-
-        // Step 2: 评分
-        TrainingScore score;
-        if (trainCfg.scoringFunc) {
-          score = co_await trainCfg.scoringFunc(lastOutput, testCase, iter);
-        } else {
-          score = co_await defaultScoringWithSubAgent(lastOutput, testCase,
-                                                      iter, trainCfg);
-        }
-        score.iteration = iter;
-        caseScores.push_back(score);
-
-        if (trainCfg.verbose) {
-          XX_LOGD("[Training] Case '{}' Iter {} Score: {:.3f}, Passed: {},
-                  "
-                  "Feedback: {}",
-                  testCase.name, iter + 1, score.score, score.passed,
-                  score.feedback);
-        }
-
-        // 观察回调
-        if (trainCfg.onIteration) {
-          trainCfg.onIteration(score, lastOutput);
-        }
-
-        // Step 3: 检查是否收敛
-        if (score.passed || score.score >= trainCfg.convergenceThreshold) {
-          if (trainCfg.verbose) {
-            XX_LOGD("[Training] Case '{}' converged at iteration {} with "
-                    "score {:.3f}",
-                    testCase.name, iter + 1, score.score);
-          }
-          break;
-        }
-
-        // Step 4: 调整处理（如果还有下一轮迭代）
-        if (iter + 1 < trainCfg.maxIterations && trainCfg.adjustmentFunc) {
-          extraMessages.clear();
-          co_await trainCfg.adjustmentFunc(score, testCase, currentSystemPrompt,
-                                           extraMessages);
-          if (trainCfg.verbose) {
-            XX_LOGD("[Training] Case '{}' Iter {} adjustment applied, "
-                    "systemPrompt len={}, extraMessages count={}",
-                    testCase.name, iter + 1, currentSystemPrompt.size(),
-                    extraMessages.size());
-          }
-        }
-      }
-
-      allResults.push_back(std::move(caseScores));
+  asio::awaitable<std::string> optimizePromptWithLLM(
+      const std::string &currentSystemPrompt, const TrainingTestCase &testCase,
+      const std::string &agentOutput, const TrainingScore &score,
+      const EvolutionTrainingConfig &cfg) {
+    if (!optimizerAgent) {
+      co_return currentSystemPrompt;
     }
 
-    // 打印汇总
-    if (trainCfg.verbose) {
-      size_t totalPassed = 0;
-      for (size_t i = 0; i < allResults.size(); ++i) {
-        const auto &scores = allResults[i];
-        bool passed = false;
-        if (false == scores.empty()) {
-          passed = scores.back().passed;
+    std::ostringstream optimizerMsg;
+    optimizerMsg << "Current System Prompt:\n```\n"
+                 << currentSystemPrompt << "\n```\n\n";
+    optimizerMsg << "Test Case: " << testCase.name << "\n";
+    optimizerMsg << "User Input: " << testCase.input << "\n";
+    if (!testCase.expectedOutput.empty()) {
+      optimizerMsg << "Expected Output / Scoring Criteria: "
+                   << testCase.expectedOutput << "\n";
+    }
+    if (!testCase.equalOutput.empty()) {
+      optimizerMsg << "Required Exact Output: " << testCase.equalOutput << "\n";
+    }
+    optimizerMsg << "\nAgent Output:\n```\n" << agentOutput << "\n```\n\n";
+    optimizerMsg << "Score: " << score.score << "\n";
+    optimizerMsg << "Feedback: " << score.feedback << "\n";
+    optimizerMsg << "\nPlease provide an improved system prompt.";
+
+    neograph::ChatMessage userMsg{
+        .role = "user",
+        .content = optimizerMsg.str(),
+    };
+    neograph::ChatMessage systemMsg{
+        .role = "system",
+        .content = cfg.optimizerPrompt,
+    };
+
+    try {
+      std::vector<neograph::ChatMessage> messages = {systemMsg, userMsg};
+      auto response = co_await optimizerAgent->runStreamAsync(messages);
+
+      const auto &content = response.content;
+      auto parsed = neograph::json::parse(content);
+      if (parsed.is_object() && parsed.contains("systemPrompt")) {
+        auto improved = parsed["systemPrompt"].get<std::string>();
+        if (!improved.empty()) {
+          XX_LOGD("[EvolutionTraining] Optimizer produced new prompt (len={})",
+                  improved.size());
+          co_return improved;
         }
-        if (passed)
-          ++totalPassed;
-        XX_LOGD("[Training] Case '{}': {} iterations, final score={:.3f}, "
-                "{}",
-                trainCfg.testCases[i].name, scores.size(),
-                scores.empty() ? 0.0 : scores.back().score,
-                passed ? "PASSED" : "FAILED");
       }
-      XX_LOGD("[Training] Summary: {}/{} test cases passed", totalPassed,
-              allResults.size());
+
+      XX_LOGD(
+          "[EvolutionTraining] Optimizer returned non-JSON or empty prompt, "
+          "keeping original");
+      co_return currentSystemPrompt;
+    } catch (const std::exception &e) {
+      XX_LOGE("[EvolutionTraining] Optimizer error: {}", e.what());
+      co_return currentSystemPrompt;
+    }
+  }
+
+  // ---- 变异操作 ----
+
+  std::string generateId() {
+    auto now = std::chrono::system_clock::now().time_since_epoch().count();
+    return fmt::format("gen{}_{}", generationCounter, now);
+  }
+
+  PromptVariant createChildVariant(const PromptVariant &parent) {
+    PromptVariant child;
+    child.id = generateId();
+    child.systemPrompt = parent.systemPrompt;
+    child.systemPlanningPrompt = parent.systemPlanningPrompt;
+    child.systemSkillPrompt = parent.systemSkillPrompt;
+    child.generation = generationCounter;
+    child.parentId = parent.id;
+    child.cumulativeScore = 0.0;
+    child.testCount = 0;
+    return child;
+  }
+
+  // ---- 测试单个变体 ----
+
+  asio::awaitable<double> evaluateVariant(PromptVariant &variant,
+                                          const EvolutionTrainingConfig &cfg) {
+    double totalScore = 0.0;
+    int testCount = 0;
+
+    for (size_t caseIdx = 0; caseIdx < cfg.testCases.size(); ++caseIdx) {
+      const auto &testCase = cfg.testCases[caseIdx];
+      const auto threadId =
+          fmt::format("evotrain_{}_{}_{}", variant.id, caseIdx, testCase.name);
+
+      if (cfg.verbose) {
+        XX_LOGD(
+            "[EvolutionTraining] [{}] Testing case '{}/{}' with variant '{}'",
+            generationCounter, caseIdx + 1, cfg.testCases.size(), variant.id);
+      }
+
+      std::string agentOutput = co_await runSingleInputAsync(
+          threadId, testCase.input, variant.systemPrompt);
+
+      if (cfg.verbose) {
+        XX_LOGD("[EvolutionTraining] [{}] Output (len={}): {}",
+                generationCounter, agentOutput.size(),
+                agentOutput.size() > 200 ? agentOutput.substr(0, 200) + "..."
+                                         : agentOutput);
+      }
+
+      TrainingScore score;
+      if (cfg.scoringFunc) {
+        score = co_await cfg.scoringFunc(agentOutput, testCase, testCount);
+      } else {
+        score = co_await defaultScoringWithSubAgent(agentOutput, testCase,
+                                                    testCount, cfg);
+      }
+
+      totalScore += score.score;
+      testCount++;
+
+      if (cfg.verbose) {
+        XX_LOGD(
+            "[EvolutionTraining] [{}] Score: {:.3f}, Passed: {}, Feedback: {}",
+            generationCounter, score.score, score.passed, score.feedback);
+      }
+
+      if (cfg.onIteration) {
+        cfg.onIteration(score, agentOutput);
+      }
+
+      // 如果评分较低，尝试用优化器改进 prompt
+      if (score.score < cfg.convergenceThreshold && optimizerAgent) {
+        std::string improvedPrompt = co_await optimizePromptWithLLM(
+            variant.systemPrompt, testCase, agentOutput, score, cfg);
+
+        if (improvedPrompt != variant.systemPrompt) {
+          // 创建新变体用优化后的 prompt 再测一次
+          PromptVariant improvedVariant = createChildVariant(variant);
+          improvedVariant.systemPrompt = improvedPrompt;
+
+          if (cfg.verbose) {
+            XX_LOGD("[EvolutionTraining] [{}] Testing improved variant '{}'",
+                    generationCounter, improvedVariant.id);
+          }
+
+          const auto improvedThreadId = fmt::format(
+              "evotrain_improved_{}_{}", improvedVariant.id, caseIdx);
+
+          std::string improvedOutput = co_await runSingleInputAsync(
+              improvedThreadId, testCase.input, improvedVariant.systemPrompt);
+
+          TrainingScore improvedScore;
+          if (cfg.scoringFunc) {
+            improvedScore =
+                co_await cfg.scoringFunc(improvedOutput, testCase, testCount);
+          } else {
+            improvedScore = co_await defaultScoringWithSubAgent(
+                improvedOutput, testCase, testCount, cfg);
+          }
+
+          if (improvedScore.score > score.score) {
+            improvedVariant.cumulativeScore = improvedScore.score;
+            improvedVariant.testCount = 1;
+            population.push_back(std::move(improvedVariant));
+
+            if (cfg.verbose) {
+              XX_LOGD("[EvolutionTraining] [{}] Improved variant '{}' score "
+                      "{:.3f} > "
+                      "original {:.3f}, keeping it",
+                      generationCounter, improvedVariant.id,
+                      improvedScore.score, score.score);
+            }
+          }
+        }
+      }
     }
 
-    co_return allResults;
+    variant.cumulativeScore += totalScore;
+    variant.testCount += testCount;
+
+    co_return variant.averageScore();
+  }
+
+public:
+  EvolutionTrainingAgent(
+      std::shared_ptr<agentxx::agent::DeepAgent> in_scoreAgent,
+      std::shared_ptr<agentxx::agent::DeepAgent> in_trainAgent,
+      std::shared_ptr<agentxx::agent::DeepAgent> in_optimizerAgent = nullptr)
+      : scoreAgent(in_scoreAgent), trainAgent(in_trainAgent),
+        optimizerAgent(in_optimizerAgent),
+        rng(std::chrono::system_clock::now().time_since_epoch().count()) {}
+
+  // ---- 初始化种子 prompt ----
+
+  void seedInitialPopulation(const std::string &baseSystemPrompt) {
+    if (!population.empty()) {
+      return;
+    }
+
+    PromptVariant seed;
+    seed.id = generateId();
+    seed.systemPrompt = baseSystemPrompt;
+    seed.generation = 0;
+    seed.parentId = "seed";
+    seed.cumulativeScore = 0.0;
+    seed.testCount = 0;
+    population.push_back(std::move(seed));
+
+    XX_LOGD("[EvolutionTraining] Seeded initial population with 1 prompt");
+  }
+
+  // ---- 进化训练主循环 ----
+
+  asio::awaitable<void> runEvolutionLoop(const EvolutionTrainingConfig &cfg) {
+    // Step 1: 尝试从文件加载已有 population
+    bool loaded = loadPopulationFromFile(cfg.saveFilePath);
+
+    if (!loaded && population.empty()) {
+      XX_LOGE("[EvolutionTraining] No population loaded and no seed provided. "
+              "Call seedInitialPopulation() first or provide a save file.");
+      co_return;
+    }
+
+    if (!loaded && cfg.verbose) {
+      XX_LOGD("[EvolutionTraining] Starting fresh with {} seed prompts",
+              population.size());
+    }
+
+    // 确保 population 按评分排序
+    std::sort(population.begin(), population.end(),
+              [](const PromptVariant &a, const PromptVariant &b) {
+                return a.averageScore() > b.averageScore();
+              });
+
+    // Step 2: 无限循环训练
+    while (true) {
+      generationCounter++;
+
+      if (cfg.verbose) {
+        XX_LOGD(
+            "[EvolutionTraining] ====== Generation {} | Population: {} ======",
+            generationCounter, population.size());
+      }
+
+      // 2a. 从当前 population 中选取 top 变体进行变异
+      int mutateFrom = std::min(cfg.mutateCount, (int)population.size());
+
+      std::vector<PromptVariant> newGeneration;
+
+      for (int i = 0; i < mutateFrom; ++i) {
+        const auto &parent = population[i];
+
+        for (int c = 0; c < cfg.childrenPerParent; ++c) {
+          PromptVariant child = createChildVariant(parent);
+          newGeneration.push_back(std::move(child));
+        }
+      }
+
+      if (cfg.verbose) {
+        XX_LOGD("[EvolutionTraining] [{}] Created {} new variants from top {} "
+                "parents",
+                generationCounter, newGeneration.size(), mutateFrom);
+      }
+
+      // 2b. 测试所有新变体
+      for (auto &variant : newGeneration) {
+        co_await evaluateVariant(variant, cfg);
+      }
+
+      // 2c. 合并新旧 population
+      population.insert(population.end(),
+                        std::make_move_iterator(newGeneration.begin()),
+                        std::make_move_iterator(newGeneration.end()));
+
+      // 2d. 排序并保留 top K
+      std::sort(population.begin(), population.end(),
+                [](const PromptVariant &a, const PromptVariant &b) {
+                  return a.averageScore() > b.averageScore();
+                });
+
+      if ((int)population.size() > cfg.topK) {
+        if (cfg.verbose) {
+          XX_LOGD("[EvolutionTraining] [{}] Trimming population from {} to {}",
+                  generationCounter, population.size(), cfg.topK);
+        }
+        population.resize(cfg.topK);
+      }
+
+      // 2e. 打印 top 信息
+      if (cfg.verbose && !population.empty()) {
+        XX_LOGD("[EvolutionTraining] [{}] Top 5 prompts:", generationCounter);
+        for (size_t i = 0; i < std::min(population.size(), (size_t)5); ++i) {
+          const auto &v = population[i];
+          XX_LOGD("  [{}/{}] id={} avgScore={:.4f} tests={} gen={} parent={}",
+                  i + 1, population.size(), v.id, v.averageScore(), v.testCount,
+                  v.generation, v.parentId);
+        }
+
+        const auto &best = population[0];
+        XX_LOGD("[EvolutionTraining] [{}] Best prompt (score={:.4f}):\n{}",
+                generationCounter, best.averageScore(),
+                best.systemPrompt.size() > 300
+                    ? best.systemPrompt.substr(0, 300) + "..."
+                    : best.systemPrompt);
+      }
+
+      // 2f. 保存到文件
+      savePopulationToFile(cfg.saveFilePath);
+    }
+
+    co_return;
+  }
+
+  // ---- 获取当前 population ----
+
+  const std::vector<PromptVariant> &getPopulation() const { return population; }
+
+  const PromptVariant *getBestPrompt() const {
+    if (population.empty()) {
+      return nullptr;
+    }
+    return &population[0];
+  }
+
+  // ---- 将最优 prompt 应用到 AgentConfig ----
+
+  void applyBestPromptToConfig(std::shared_ptr<AgentConfig> config) {
+    const auto *best = getBestPrompt();
+    if (!best) {
+      return;
+    }
+
+    if (!best->systemPrompt.empty()) {
+      config->prompt.systemPrompt = best->systemPrompt;
+    }
+    if (!best->systemPlanningPrompt.empty()) {
+      config->prompt.systemPlanningPrompt = best->systemPlanningPrompt;
+    }
+    if (!best->systemSkillPrompt.empty()) {
+      config->prompt.systemSkillPrompt = best->systemSkillPrompt;
+    }
+
+    XX_LOGD("[EvolutionTraining] Applied best prompt (id={}, score={:.4f}) to "
+            "config",
+            best->id, best->averageScore());
   }
 };
 
