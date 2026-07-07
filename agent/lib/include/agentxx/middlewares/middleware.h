@@ -12,6 +12,7 @@
 #include <neograph/llm/rate_limited_provider.h>
 #include <neograph/llm/schema_provider.h>
 #include <neograph/neograph.h>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -511,14 +512,16 @@ public:
 
 class SummarizationToolHandle {
 public:
-  std::function<void(size_t index,
-                     std::map<std::string, size_t> &lastWriteIndex,
-                     neograph::json &, neograph::ToolCall &)>
-      requestHandle;
-  std::function<void(size_t index,
-                     std::map<std::string, size_t> &lastWriteIndex,
-                     neograph::json &, neograph::ChatMessage &)>
-      responseHandle;
+  /// 根据 tool call 参数生成去重 key。
+  /// 返回 std::nullopt 表示该次调用不需要去重。
+  std::function<std::optional<std::string>(const neograph::json &args)>
+      generateDeduplicationKey;
+
+  /// 当发现重复（旧数据已被新数据覆盖）时，截断旧的 toolcall request
+  std::function<void(neograph::ToolCall &)> truncateRequest;
+
+  /// 当发现重复（旧数据已被新数据覆盖）时，截断旧的 toolcall response
+  std::function<void(neograph::ChatMessage &)> truncateResponse;
 };
 
 class InterruptHandleArg {

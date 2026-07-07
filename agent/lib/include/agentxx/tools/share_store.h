@@ -29,35 +29,24 @@ public:
   std::optional<agentxx::middleware::SummarizationToolHandle>
   createSummarizationToolHandle() const override {
     return agentxx::middleware::SummarizationToolHandle{
-        .requestHandle =
-            [](size_t index, std::map<std::string, size_t> &lastWriteIndex,
-               neograph::json &args, neograph::ToolCall &toolcall) {
-              if (args.is_object() && args["id"].is_string()) {
-                auto argId = args["id"].get<std::string>();
-                const auto key = fmt::format("share_store:{}", argId);
-                if (lastWriteIndex.contains(key)) {
-                  // 裁剪 result
-                  args["text"] = "[Outdated Message Truncated]";
-                  toolcall.arguments = args.dump();
-                } else {
-                  lastWriteIndex[key] = index;
-                }
-              }
+        .generateDeduplicationKey =
+            [](const neograph::json &args) -> std::optional<std::string> {
+          if (args.is_object() && args["id"].is_string()) {
+            return fmt::format("share_store:{}", args["id"].get<std::string>());
+          }
+          return std::nullopt;
+        },
+        .truncateRequest =
+            [](neograph::ToolCall &toolcall) {
+              auto args = neograph::json::parse(toolcall.arguments);
+              args["text"] = "[Outdated Message Truncated]";
+              toolcall.arguments = args.dump();
             },
-        .responseHandle =
-            [](size_t index, std::map<std::string, size_t> &lastWriteIndex,
-               neograph::json &args, neograph::ChatMessage &msg) {
-              if (args.is_object() && args["id"].is_string()) {
-                auto argId = args["id"].get<std::string>();
-                const auto key = fmt::format("share_store:{}", argId);
-                if (lastWriteIndex.contains(key)) {
-                  msg.content = "[Outdated Content truncated]";
-                  msg.flags |= neograph::MessageFlag::ShareStoreTruncated |
-                               neograph::MessageFlag::Outdated;
-                } else {
-                  lastWriteIndex[key] = index;
-                }
-              }
+        .truncateResponse =
+            [](neograph::ChatMessage &msg) {
+              msg.content = "[Outdated Content truncated]";
+              msg.flags |= neograph::MessageFlag::ShareStoreTruncated |
+                           neograph::MessageFlag::Outdated;
             },
     };
   }

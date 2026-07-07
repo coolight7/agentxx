@@ -79,19 +79,13 @@ public:
   std::optional<agentxx::middleware::SummarizationToolHandle>
   createSummarizationToolHandle() const override {
     return agentxx::middleware::SummarizationToolHandle{
-        .requestHandle =
-            [](size_t index, std::map<std::string, size_t> &lastWriteIndex,
-               neograph::json &args, neograph::ToolCall &toolcall) {
-              const auto key = "planning_rw:";
-              if (lastWriteIndex.contains(key)) {
-                // 裁剪 result
-                toolcall.arguments =
-                    R"({"tip":"[Outdated Content Truncated]"})";
-              } else {
-                lastWriteIndex[key] = index;
-              }
+        .generateDeduplicationKey = [](const neograph::json &args)
+            -> std::optional<std::string> { return "planning_rw:"; },
+        .truncateRequest =
+            [](neograph::ToolCall &toolcall) {
+              toolcall.arguments = R"({"tip":"[Outdated Content Truncated]"})";
             },
-        .responseHandle = nullptr,
+        .truncateResponse = nullptr,
     };
   }
 

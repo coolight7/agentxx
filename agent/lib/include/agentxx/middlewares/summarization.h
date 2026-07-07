@@ -192,7 +192,8 @@ Output ONLY the summary text, no meta-commentary.
       if ("tool" == msg.role) {
         auto itemHandleIt = summarizationToolHandles.find(msg.tool_name);
         if (itemHandleIt != summarizationToolHandles.end() &&
-            nullptr != itemHandleIt->second.responseHandle) {
+            itemHandleIt->second.generateDeduplicationKey &&
+            itemHandleIt->second.truncateResponse) {
           // 寻找 llm toolcall message
           int lastMsgIndex = i - 1;
           int toolcallIndex = -1;
@@ -217,16 +218,31 @@ Output ONLY the summary text, no meta-commentary.
                 messages[lastMsgIndex].tool_calls[toolcallIndex].arguments);
           }
 
-          itemHandleIt->second.responseHandle(i, lastWriteIndex, args, msg);
+          auto key = itemHandleIt->second.generateDeduplicationKey(args);
+          if (key.has_value()) {
+            if (lastWriteIndex.contains(*key)) {
+              itemHandleIt->second.truncateResponse(msg);
+            } else {
+              lastWriteIndex[*key] = i;
+            }
+          }
         }
       } else {
         // assistant
         for (auto &tc : msg.tool_calls) {
           auto itemHandleIt = summarizationToolHandles.find(tc.name);
           if (itemHandleIt != summarizationToolHandles.end() &&
-              nullptr != itemHandleIt->second.requestHandle) {
+              itemHandleIt->second.generateDeduplicationKey &&
+              itemHandleIt->second.truncateRequest) {
             auto args = neograph::json::parse(tc.arguments);
-            itemHandleIt->second.requestHandle(i, lastWriteIndex, args, tc);
+            auto key = itemHandleIt->second.generateDeduplicationKey(args);
+            if (key.has_value()) {
+              if (lastWriteIndex.contains(*key)) {
+                itemHandleIt->second.truncateRequest(tc);
+              } else {
+                lastWriteIndex[*key] = i;
+              }
+            }
           }
         }
       }

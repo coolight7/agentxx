@@ -55,15 +55,18 @@ public:
   createSummarizationToolHandle() const {
     return std::nullopt;
     // return agentxx::middleware::SummarizationToolHandle{
-    //     .requestHandle =
-    //         [](size_t index, std::map<std::string, size_t> &lastWriteIndex,
-    //            neograph::json &args, neograph::ToolCall &toolcall) {
-
+    //     .generateDeduplicationKey =
+    //         [](const neograph::json &args) -> std::optional<std::string> {
+    //           return "tool_name:unique_key";
     //         },
-    //     .responseHandle =
-    //         [](size_t index, std::map<std::string, size_t> &lastWriteIndex,
-    //            neograph::json &args, neograph::ChatMessage &msg) {
-
+    //     .truncateRequest =
+    //         [](neograph::ToolCall &toolcall) {
+    //           toolcall.arguments =
+    //               R"({"tip":"[Outdated Message Truncated]"})";
+    //         },
+    //     .truncateResponse =
+    //         [](neograph::ChatMessage &msg) {
+    //           msg.content = "[Outdated Content truncated]";
     //         },
     // };
   }

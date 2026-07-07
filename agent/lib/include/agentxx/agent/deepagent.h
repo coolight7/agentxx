@@ -102,6 +102,8 @@ public:
     /// middleware
     agentContext->middlewareHandleContext =
         std::make_shared<agentxx::middleware::MiddlewareContext>();
+    std::shared_ptr<agentxx::middleware::SummarizationMiddlewareHandle>
+        summarizationMiddleware;
     auto subagentManagerTool =
         std::make_unique<agentxx::tools::SubAgentManagerTool>(
             "subagent_manager", agentContext);
@@ -124,7 +126,7 @@ public:
             skillMiddleware);
       }
       {
-        auto summarizationMiddleware = std::make_shared<
+        summarizationMiddleware = std::make_shared<
             agentxx::middleware::SummarizationMiddlewareHandle>(
             subagentManagerTool.get(), agentContext, 256 * 1024);
         agentContext->middlewareHandleContext->handles.push_back(
@@ -349,6 +351,13 @@ public:
         // }
 
         tools.push_back(std::move(subagentManagerTool));
+      }
+    }
+    for (const auto &tool : tools) {
+      auto handle = tool->createSummarizationToolHandle();
+      if (handle.has_value()) {
+        summarizationMiddleware->summarizationToolHandles[tool->get_name()] =
+            handle.value();
       }
     }
 

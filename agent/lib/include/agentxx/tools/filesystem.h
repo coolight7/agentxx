@@ -35,38 +35,42 @@ namespace asio = ::boost::asio;
 namespace agentxx {
 namespace tools {
 
-inline void _defFileRWSummarizationReqHandle(
-    size_t index, std::map<std::string, size_t> &lastWriteIndex,
-    neograph::json &args, neograph::ToolCall &toolcall) {
-  // 移除重复的 读写相同文件 toolcall
-  if (args.is_object() && args["path"].is_string()) {
-    auto argPath = args["path"].get<std::string>();
-    auto key = fmt::format("file_rw:{}", argPath);
-    if (lastWriteIndex.contains(key)) {
-      // 裁剪 result
-      toolcall.arguments = R"({"tip":"[Outdated Message Truncated]"})";
-    } else {
-      lastWriteIndex[key] = index;
-    }
+/// 文件读取 tool 的去重 key 生成（包含 path + offset/limit 等参数）
+inline std::optional<std::string>
+_defFileReadGenerateKey(const neograph::json &args) {
+  if (!args.is_object() || !args["path"].is_string()) {
+    return std::nullopt;
   }
-};
+  auto path = args["path"].get<std::string>();
+  auto line_offset = args.value<int64_t>("line_offset", -1);
+  auto line_limit = args.value<int64_t>("line_limit", -1);
+  auto byte_offset = args.value<double>("byte_offset", -1);
+  auto byte_limit = args.value<double>("byte_limit", -1);
+  auto recursive = args.value<bool>("recursive", false);
+  auto limit = args.value<int64_t>("limit", 100);
+  return fmt::format("filesystem:{}:lo={}:ll={}:bo={}:bl={}:r={}:l={}", path,
+                     line_offset, line_limit, byte_offset, byte_limit,
+                     recursive, limit);
+}
 
-inline void _defFileRWSummarizationRespHandle(
-    size_t index, std::map<std::string, size_t> &lastWriteIndex,
-    neograph::json &args, neograph::ChatMessage &msg) {
-  // 移除重复的 读写相同文件 toolcall
+/// 文件写入/编辑 tool 的去重 key 生成（仅用 path，最新写入覆盖旧写入）
+inline std::optional<std::string>
+_defFileWriteGenerateKey(const neograph::json &args) {
   if (args.is_object() && args["path"].is_string()) {
-    auto argPath = args["path"].get<std::string>();
-    auto key = fmt::format("file_rw:{}", argPath);
-    if (lastWriteIndex.contains(key)) {
-      msg.content = "[Outdated Content truncated]";
-      msg.flags |= neograph::MessageFlag::ShareStoreTruncated |
-                   neograph::MessageFlag::Outdated;
-    } else {
-      lastWriteIndex[key] = index;
-    }
+    return fmt::format("filesystem:{}", args["path"].get<std::string>());
   }
-};
+  return std::nullopt;
+}
+
+inline void _defTruncateToolcallRequest(neograph::ToolCall &toolcall) {
+  toolcall.arguments = R"({"tip":"[Outdated Message Truncated]"})";
+}
+
+inline void _defTruncateToolcallResponse(neograph::ChatMessage &msg) {
+  msg.content = "[Outdated Content truncated]";
+  msg.flags |= neograph::MessageFlag::ShareStoreTruncated |
+               neograph::MessageFlag::Outdated;
+}
 
 /// ls
 class FileSystemListFileTool : public XXToolBase {
@@ -119,8 +123,9 @@ public:
   std::optional<agentxx::middleware::SummarizationToolHandle>
   createSummarizationToolHandle() const override {
     return agentxx::middleware::SummarizationToolHandle{
-        .requestHandle = nullptr,
-        .responseHandle = _defFileRWSummarizationRespHandle,
+        .generateDeduplicationKey = _defFileReadGenerateKey,
+        .truncateRequest = nullptr,
+        .truncateResponse = _defTruncateToolcallResponse,
     };
   }
 
@@ -228,8 +233,9 @@ public:
   std::optional<agentxx::middleware::SummarizationToolHandle>
   createSummarizationToolHandle() const override {
     return agentxx::middleware::SummarizationToolHandle{
-        .requestHandle = nullptr,
-        .responseHandle = _defFileRWSummarizationRespHandle,
+        .generateDeduplicationKey = _defFileReadGenerateKey,
+        .truncateRequest = nullptr,
+        .truncateResponse = _defTruncateToolcallResponse,
     };
   }
 
@@ -427,8 +433,9 @@ public:
   std::optional<agentxx::middleware::SummarizationToolHandle>
   createSummarizationToolHandle() const override {
     return agentxx::middleware::SummarizationToolHandle{
-        .requestHandle = nullptr,
-        .responseHandle = _defFileRWSummarizationRespHandle,
+        .generateDeduplicationKey = _defFileReadGenerateKey,
+        .truncateRequest = nullptr,
+        .truncateResponse = _defTruncateToolcallResponse,
     };
   }
 
@@ -649,8 +656,9 @@ public:
   std::optional<agentxx::middleware::SummarizationToolHandle>
   createSummarizationToolHandle() const override {
     return agentxx::middleware::SummarizationToolHandle{
-        .requestHandle = _defFileRWSummarizationReqHandle,
-        .responseHandle = nullptr,
+        .generateDeduplicationKey = _defFileWriteGenerateKey,
+        .truncateRequest = _defTruncateToolcallRequest,
+        .truncateResponse = nullptr,
     };
   }
 
@@ -826,8 +834,9 @@ public:
   std::optional<agentxx::middleware::SummarizationToolHandle>
   createSummarizationToolHandle() const override {
     return agentxx::middleware::SummarizationToolHandle{
-        .requestHandle = _defFileRWSummarizationReqHandle,
-        .responseHandle = nullptr,
+        .generateDeduplicationKey = _defFileWriteGenerateKey,
+        .truncateRequest = _defTruncateToolcallRequest,
+        .truncateResponse = nullptr,
     };
   }
 
