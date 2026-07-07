@@ -19,7 +19,7 @@ inline asio::awaitable<void> test_cpu_gpu_use() {
 
   agentxx::expand::CpuGpuMonitor monitor{};
 
-  // co_await monitor.query();
+  co_await monitor.query();
   agentxx::expand::CpuGpuUsage usage = co_await monitor.query();
 
   std::cout << "[INFO] CPU 使用率: " << usage.cpuUsagePercent << "%"

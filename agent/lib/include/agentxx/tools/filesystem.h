@@ -5,19 +5,18 @@
 #include "agentxx/util/log.h"
 #include "agentxx/util/regex.h"
 #include "agentxx/util/string_util.h"
+#include "asio/as_tuple.hpp"
 #include "asio/random_access_file.hpp"
 #include "asio/read.hpp"
 #include "asio/read_at.hpp"
 #include "asio/read_until.hpp"
+#include "asio/redirect_error.hpp"
 #include "asio/registered_buffer.hpp"
 #include "asio/stream_file.hpp"
+#include "asio/use_awaitable.hpp"
+#include "asio/write.hpp"
 #include "fmt/format.h"
 #include "glob/glob.h"
-#include <asio/as_tuple.hpp>
-#include <asio/redirect_error.hpp>
-#include <asio/strand.hpp>
-#include <asio/use_awaitable.hpp>
-#include <asio/write.hpp>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
@@ -242,7 +241,7 @@ public:
     auto text_line_offset = arguments.value<int64_t>("line_offset", -1);
     auto text_line_limit = arguments.value<int64_t>("line_limit", -1);
 
-#if defined(ASIO_HAS_FILE)
+#if defined(ASIO_HAS_FILE) || defined(BOOST_ASIO_HAS_FILE)
     {
       auto currentIoCtx = co_await asio::this_coro::executor;
 
@@ -441,7 +440,7 @@ public:
     auto byte_offset = arguments.value<double>("byte_offset", -1);
     auto byte_limit = arguments.value<double>("byte_limit", -1);
 
-#if defined(ASIO_HAS_FILE)
+#if defined(ASIO_HAS_FILE) || defined(BOOST_ASIO_HAS_FILE)
     {
       auto currentIoCtx = co_await asio::this_coro::executor;
 
@@ -664,7 +663,7 @@ public:
     auto overwrite = arguments.value<bool>("overwrite", false);
     auto is_binary = arguments.value<bool>("is_binary", false);
 
-#if defined(ASIO_HAS_FILE)
+#if defined(ASIO_HAS_FILE) || defined(BOOST_ASIO_HAS_FILE)
     {
       auto currentIoCtx = co_await asio::this_coro::executor;
 
@@ -844,7 +843,7 @@ public:
     auto new_str = arguments.value<std::string>("new_str", std::string{});
     auto multi_replace = arguments.value<bool>("multi_replace", false);
 
-#if defined(ASIO_HAS_FILE)
+#if defined(ASIO_HAS_FILE) || defined(BOOST_ASIO_HAS_FILE)
     {
       auto currentIoCtx = co_await asio::this_coro::executor;
 
@@ -1094,7 +1093,7 @@ public:
   }
 
   asio::awaitable<std::string> readFileContent(const std::string &filepath) {
-#if defined(ASIO_HAS_FILE)
+#if defined(ASIO_HAS_FILE) || defined(BOOST_ASIO_HAS_FILE)
     {
       auto currentIoCtx = co_await asio::this_coro::executor;
 

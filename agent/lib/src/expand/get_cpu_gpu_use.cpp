@@ -1,6 +1,5 @@
 #include "agentxx/expand/get_cpu_gpu_use.h"
 #include "agentxx/util/log.h"
-#include "asio/io_context.hpp"
 #include "asio/steady_timer.hpp"
 #include "asio/use_awaitable.hpp"
 #include <map>
@@ -400,12 +399,29 @@ asio::awaitable<CpuGpuUsage> CpuGpuMonitor::query() {
 
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <dirent.h>
+#include <filesystem>
 #include <fstream>
+#include <iostream>
+#include <limits>
+#include <memory>
+#include <neograph/neograph.h>
 #include <sstream>
 #include <string>
-#include <thread>
+#include <vector>
+
+// ---
+#include "agentxx/util/log.h"
+#include "asio/random_access_file.hpp"
+#include "asio/read.hpp"
+#include "asio/read_at.hpp"
+#include "asio/read_until.hpp"
+#include "asio/redirect_error.hpp"
+#include "asio/registered_buffer.hpp"
+#include "asio/stream_file.hpp"
+#include "asio/use_awaitable.hpp"
 
 namespace agentxx {
 namespace expand {
@@ -426,33 +442,34 @@ public:
 
     CpuTimes oldSample = _sample;
     if (_sample.total == 0 || _sample.idle == 0) {
-      oldSample = readCpuStat();
+      oldSample = co_await readCpuStat();
       asio::steady_timer timer(co_await asio::this_coro::executor,
                                std::chrono::milliseconds(100));
       co_await timer.async_wait(asio::use_awaitable);
     }
 
-    _sample = readCpuStat();
+    co_await queryMemoryInfo(result);
+    co_await queryGpuInfo(result);
 
-    if (oldSample.total > _sample.total) {
-      uint64_t totalDelta = oldSample.total - _sample.total;
-      uint64_t idleDelta = oldSample.idle - _sample.idle;
+    {
+      _sample = co_await readCpuStat();
+      if (_sample.total > oldSample.total) {
+        uint64_t totalDelta = _sample.total - oldSample.total;
+        uint64_t idleDelta = _sample.idle - oldSample.idle;
 
-      if (totalDelta > 0) {
-        result.cpuUsagePercent = (1.0 - static_cast<double>(idleDelta) /
-                                            static_cast<double>(totalDelta)) *
-                                 100.0;
-        if (result.cpuUsagePercent < 0.0) {
-          result.cpuUsagePercent = 0.0;
-        }
-        if (result.cpuUsagePercent > 100.0) {
-          result.cpuUsagePercent = 100.0;
+        if (totalDelta > 0) {
+          result.cpuUsagePercent = (1.0 - static_cast<double>(idleDelta) /
+                                              static_cast<double>(totalDelta)) *
+                                   100.0;
+          if (result.cpuUsagePercent < 0.0) {
+            result.cpuUsagePercent = 0.0;
+          }
+          if (result.cpuUsagePercent > 100.0) {
+            result.cpuUsagePercent = 100.0;
+          }
         }
       }
     }
-
-    queryMemoryInfo(result);
-    queryGpuInfo(result);
 
     co_return result;
   }
@@ -460,19 +477,49 @@ public:
 protected:
   CpuTimes _sample;
 
-  static CpuTimes readCpuStat() {
+  static asio::awaitable<std::string> readFileContent(const std::string &path) {
+#if defined(ASIO_HAS_FILE) || defined(BOOST_ASIO_HAS_FILE)
+    {
+      auto executor = co_await asio::this_coro::executor;
+      asio::stream_file stream{executor};
+      neograph_asio_error_code errCode;
+      stream.open(path, asio::stream_file::read_only, errCode);
+      if (!stream.is_open()) {
+        co_return "";
+      }
+      std::string data;
+      co_await asio::async_read(
+          stream, asio::dynamic_buffer(data), asio::transfer_all(),
+          asio::redirect_error(asio::use_awaitable, errCode));
+      stream.close();
+      if (errCode && errCode != asio::error::eof) {
+        co_return "";
+      }
+      co_return data;
+    }
+#else
+    std::ifstream stream;
+    stream.open(path);
+    if (!stream) {
+      co_return "";
+    }
+
+    // 读取完整文件
+    auto result = std::string{std::istreambuf_iterator<char>(stream),
+                              std::istreambuf_iterator<char>()};
+    stream.close();
+    co_return result;
+#endif
+  }
+
+  static asio::awaitable<CpuTimes> readCpuStat() {
     CpuTimes times;
-    std::ifstream statFile("/proc/stat");
-    if (!statFile.is_open()) {
-      return times;
+    std::string content = co_await readFileContent("/proc/stat");
+    if (content.empty()) {
+      co_return times;
     }
 
-    std::string line;
-    if (!std::getline(statFile, line)) {
-      return times;
-    }
-
-    std::istringstream iss(line);
+    std::istringstream iss(content);
     std::string cpuLabel;
     uint64_t user = 0, nice = 0, system = 0, idle = 0, iowait = 0;
     uint64_t irq = 0, softirq = 0, steal = 0;
@@ -481,15 +528,16 @@ protected:
 
     times.total = user + nice + system + idle + iowait + irq + softirq + steal;
     times.idle = idle + iowait;
-    return times;
+    co_return times;
   }
 
-  void queryMemoryInfo(CpuGpuUsage &result) {
-    std::ifstream memFile("/proc/meminfo");
-    if (!memFile.is_open()) {
-      return;
+  asio::awaitable<void> queryMemoryInfo(CpuGpuUsage &result) {
+    std::string content = co_await readFileContent("/proc/meminfo");
+    if (content.empty()) {
+      co_return;
     }
 
+    std::istringstream memFile(content);
     std::string line;
     uint64_t memTotalKB = 0;
     uint64_t memAvailableKB = 0;
@@ -515,32 +563,30 @@ protected:
     }
   }
 
-  void queryGpuInfo(CpuGpuUsage &result) { queryGpuInfoSysfs(result); }
+  asio::awaitable<void> queryGpuInfo(CpuGpuUsage &result) {
+    co_await queryGpuInfoSysfs(result);
+  }
 
-  void queryGpuInfoSysfs(CpuGpuUsage &result) {
+  asio::awaitable<void> queryGpuInfoSysfs(CpuGpuUsage &result) {
     for (int cardIdx = 0;; ++cardIdx) {
-      std::string devicePath =
-          "/sys/class/drm/card" + std::to_string(cardIdx) + "/device";
+      auto devicePath = fmt::format("/sys/class/drm/card{}/device", cardIdx);
 
-      std::ifstream vendorFile(devicePath + "/vendor");
-      if (!vendorFile.is_open()) {
+      std::string vendorContent =
+          co_await readFileContent(devicePath + "/vendor");
+      if (vendorContent.empty()) {
         break;
       }
 
-      std::string vendorLine;
-      std::getline(vendorFile, vendorLine);
-      vendorFile.close();
-
-      uint32_t vendorId = parseHexSysfs(vendorLine);
+      uint32_t vendorId = parseHexSysfs(vendorContent);
 
       GpuInfo info;
 
-      readSysfsString(devicePath + "/product_name", info.name);
+      co_await readSysfsString(devicePath + "/product_name", info.name);
 
       if (vendorId == 0x1002) {
-        queryAmdGpuSysfs(info, devicePath);
+        co_await queryAmdGpuSysfs(info, devicePath);
       } else if (vendorId == 0x10de) {
-        queryNvidiaProcfs(info);
+        co_await queryNvidiaProcfs(info);
       }
 
       if (info.name.empty()) {
@@ -551,16 +597,18 @@ protected:
     }
   }
 
-  void queryAmdGpuSysfs(GpuInfo &info, const std::string &devicePath) {
-    readSysfsUint64(devicePath + "/mem_info_vram_total", info.dedicatedVramMB);
+  asio::awaitable<void> queryAmdGpuSysfs(GpuInfo &info,
+                                         const std::string &devicePath) {
+    co_await readSysfsUint64(devicePath + "/mem_info_vram_total",
+                             info.dedicatedVramMB);
     info.dedicatedVramMB /= (1024 * 1024);
 
-    readSysfsUint64(devicePath + "/mem_info_vram_used",
-                    info.dedicatedVramUsedMB);
+    co_await readSysfsUint64(devicePath + "/mem_info_vram_used",
+                             info.dedicatedVramUsedMB);
     info.dedicatedVramUsedMB /= (1024 * 1024);
 
     uint64_t gpuBusy = 0;
-    readSysfsUint64(devicePath + "/gpu_busy_percent", gpuBusy);
+    co_await readSysfsUint64(devicePath + "/gpu_busy_percent", gpuBusy);
     info.usagePercent = static_cast<double>(gpuBusy);
 
     if (info.usagePercent == 0.0 && info.dedicatedVramMB > 0) {
@@ -569,16 +617,16 @@ protected:
     }
   }
 
-  void queryNvidiaProcfs(GpuInfo &info) {
-    std::ifstream gpusDir("/proc/driver/nvidia/gpus");
-    if (!gpusDir.is_open()) {
-      return;
+  asio::awaitable<void> queryNvidiaProcfs(GpuInfo &info) {
+    std::string gpusDirContent =
+        co_await readFileContent("/proc/driver/nvidia/gpus");
+    if (gpusDirContent.empty()) {
+      co_return;
     }
-    gpusDir.close();
 
     DIR *dir = opendir("/proc/driver/nvidia/gpus");
     if (!dir) {
-      return;
+      co_return;
     }
 
     struct dirent *entry;
@@ -589,11 +637,12 @@ protected:
 
       std::string infoPath = std::string("/proc/driver/nvidia/gpus/") +
                              entry->d_name + "/information";
-      std::ifstream infoFile(infoPath);
-      if (!infoFile.is_open()) {
+      std::string infoContent = co_await readFileContent(infoPath);
+      if (infoContent.empty()) {
         continue;
       }
 
+      std::istringstream infoFile(infoContent);
       std::string line;
       while (std::getline(infoFile, line)) {
         if (line.rfind("Model:", 0) == 0) {
@@ -611,7 +660,6 @@ protected:
           }
         }
       }
-      infoFile.close();
       break;
     }
     closedir(dir);
@@ -630,23 +678,21 @@ protected:
     return val;
   }
 
-  static void readSysfsString(const std::string &path, std::string &out) {
-    std::ifstream file(path);
-    if (!file.is_open()) {
-      return;
-    }
-    std::string line;
-    if (std::getline(file, line)) {
-      out = trim(line);
+  static asio::awaitable<void> readSysfsString(const std::string &path,
+                                               std::string &out) {
+    std::string content = co_await readFileContent(path);
+    if (!content.empty()) {
+      out = trim(content);
     }
   }
 
-  static void readSysfsUint64(const std::string &path, uint64_t &out) {
-    std::ifstream file(path);
-    if (!file.is_open()) {
-      return;
+  static asio::awaitable<void> readSysfsUint64(const std::string &path,
+                                               uint64_t &out) {
+    std::string content = co_await readFileContent(path);
+    if (!content.empty()) {
+      std::istringstream iss(content);
+      iss >> out;
     }
-    file >> out;
   }
 
   static std::string trim(const std::string &s) {
