@@ -37,9 +37,17 @@ public:
   asio::awaitable<CpuGpuUsage> query() {
     CpuGpuUsage result;
 
-    queryCpuUsage(result);
     queryMemoryInfo(result);
     co_await queryGpuInfo(result);
+
+    if (prevTotalTime_ == 0 || prevIdleTime_ == 0) {
+      // 间隔一段时间做差值计算，如果没有初始化需要先初始化一次
+      queryCpuUsage(result);
+      asio::steady_timer timer(co_await asio::this_coro::executor,
+                               std::chrono::milliseconds(100));
+      co_await timer.async_wait(asio::use_awaitable);
+    }
+    queryCpuUsage(result);
 
     co_return result;
   }
@@ -408,20 +416,27 @@ public:
 
   ~Impl() {}
 
+  struct CpuTimes {
+    uint64_t total = 0;
+    uint64_t idle = 0;
+  };
+
   asio::awaitable<CpuGpuUsage> query() {
     CpuGpuUsage result;
 
-    CpuTimes sample1 = readCpuStat();
+    CpuTimes oldSample = _sample;
+    if (_sample.total == 0 || _sample.idle == 0) {
+      oldSample = readCpuStat();
+      asio::steady_timer timer(co_await asio::this_coro::executor,
+                               std::chrono::milliseconds(100));
+      co_await timer.async_wait(asio::use_awaitable);
+    }
 
-    auto timer = asio::steady_timer(co_await asio::this_coro::executor);
-    timer.expires_after(std::chrono::milliseconds(100));
-    co_await timer.async_wait(asio::use_awaitable);
+    _sample = readCpuStat();
 
-    CpuTimes sample2 = readCpuStat();
-
-    if (sample2.total > sample1.total) {
-      uint64_t totalDelta = sample2.total - sample1.total;
-      uint64_t idleDelta = sample2.idle - sample1.idle;
+    if (oldSample.total > _sample.total) {
+      uint64_t totalDelta = oldSample.total - _sample.total;
+      uint64_t idleDelta = oldSample.idle - _sample.idle;
 
       if (totalDelta > 0) {
         result.cpuUsagePercent = (1.0 - static_cast<double>(idleDelta) /
@@ -442,11 +457,8 @@ public:
     co_return result;
   }
 
-private:
-  struct CpuTimes {
-    uint64_t total = 0;
-    uint64_t idle = 0;
-  };
+protected:
+  CpuTimes _sample;
 
   static CpuTimes readCpuStat() {
     CpuTimes times;
