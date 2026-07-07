@@ -28,6 +28,8 @@
                 "_UNICODE",
                 "ASIO_HAS_IO_URING",
                 "ASIO_HAS_FILE",
+                "BOOST_ASIO_HAS_IO_URING",
+                "BOOST_ASIO_HAS_FILE",
                 "NEOGRAPH_USE_BOOST_ASIO",
                 "AGENTXX_ENABLE_VECTORSCAN"
             ],
@@ -65,6 +67,9 @@
                 "ASIO_HAS_IOCP",
                 "ASIO_HAS_WINDOWS_RANDOM_ACCESS_HANDLE",
                 "ASIO_HAS_FILE",
+                "BOOST_ASIO_HAS_IOCP",
+                "BOOST_ASIO_HAS_WINDOWS_RANDOM_ACCESS_HANDLE",
+                "BOOST_ASIO_HAS_FILE",
                 "NEOGRAPH_USE_BOOST_ASIO",
                 "AGENTXX_ENABLE_HYPERSCAN"
             ],
