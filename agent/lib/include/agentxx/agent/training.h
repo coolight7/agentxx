@@ -7,6 +7,7 @@
 #include <agentxx/util/log.h>
 #include <algorithm>
 #include <chrono>
+#include <filesystem>
 #include <fmt/core.h>
 #include <fstream>
 #include <functional>
@@ -28,6 +29,94 @@ struct TrainingTestCase {
   std::string equalOutput; // 若不为空，则判断 agent 输出是否与此完全相等
   neograph::json extra;
 };
+
+/// 从 JSON 文件中加载测试用例
+inline std::vector<TrainingTestCase>
+loadTestCasesFromFile(const std::string &filePath) {
+  std::vector<TrainingTestCase> cases;
+  try {
+    std::ifstream ifs(filePath);
+    if (!ifs.is_open()) {
+      XX_LOGE("[Training] Failed to open test case file: {}", filePath);
+      return cases;
+    }
+    std::string content((std::istreambuf_iterator<char>(ifs)),
+                        std::istreambuf_iterator<char>());
+    ifs.close();
+
+    auto j = neograph::json::parse(content);
+    if (!j.is_array()) {
+      XX_LOGE("[Training] Test case file is not a JSON array: {}", filePath);
+      return cases;
+    }
+    for (const auto &item : j) {
+      TrainingTestCase tc;
+      tc.name = item.value("name", "");
+      tc.input = item.value("input", "");
+      tc.expectedOutput = item.value("expectedOutput", "");
+      tc.equalOutput = item.value("equalOutput", "");
+      tc.extra = item.value("extra", neograph::json::object());
+      cases.push_back(std::move(tc));
+    }
+    XX_LOGD("[Training] Loaded {} test cases from {}", cases.size(), filePath);
+  } catch (const std::exception &e) {
+    XX_LOGE("[Training] Failed to parse test case file {}: {}", filePath,
+            e.what());
+  }
+  return cases;
+}
+
+/// 从目录中加载所有 JSON 测试用例文件
+inline std::vector<TrainingTestCase>
+loadTestCasesFromDirectory(const std::string &dirPath) {
+  std::vector<TrainingTestCase> allCases;
+  try {
+    for (const auto &entry : std::filesystem::directory_iterator(dirPath)) {
+      if (entry.is_regular_file() && entry.path().extension() == ".json") {
+        auto fileCases = loadTestCasesFromFile(entry.path().string());
+        allCases.insert(allCases.end(),
+                        std::make_move_iterator(fileCases.begin()),
+                        std::make_move_iterator(fileCases.end()));
+      }
+    }
+    XX_LOGD("[Training] Loaded {} total test cases from directory {}",
+            allCases.size(), dirPath);
+  } catch (const std::exception &e) {
+    XX_LOGE("[Training] Failed to load test cases from directory {}: {}",
+            dirPath, e.what());
+  }
+  return allCases;
+}
+
+/// 剥离 LLM 响应中可能存在的 Markdown 代码块标记
+inline std::string stripMarkdownCodeBlock(const std::string &content) {
+  std::string result = content;
+  // 去除首尾空白
+  auto start = result.find_first_not_of(" \t\n\r");
+  auto end = result.find_last_not_of(" \t\n\r");
+  if (start == std::string::npos) {
+    return result;
+  }
+  result = result.substr(start, end - start + 1);
+
+  // 检查是否以 ```json 或 ``` 开头
+  if (result.size() >= 3 && result.substr(0, 3) == "```") {
+    auto newlinePos = result.find('\n');
+    if (newlinePos != std::string::npos) {
+      result = result.substr(newlinePos + 1);
+    }
+    // 去除结尾的 ```
+    if (result.size() >= 3 && result.substr(result.size() - 3) == "```") {
+      result = result.substr(0, result.size() - 3);
+    }
+    // 去除尾部空白
+    start = result.find_last_not_of(" \t\n\r");
+    if (start != std::string::npos) {
+      result = result.substr(0, start + 1);
+    }
+  }
+  return result;
+}
 
 /// 评分结果
 struct TrainingScore {
@@ -140,8 +229,14 @@ Output ONLY a JSON object:
   /// 优化器 Base URL
   std::string optimizerModelBaseUrl;
 
-  /// 收敛阈值
+  /// 收敛阈值（评分达到此值视为通过）
   double convergenceThreshold = 0.8;
+
+  /// 连续 N 代最佳分数无提升则停止训练（0 表示不自动停止）
+  int maxGenerationsWithoutImprovement = 5;
+
+  /// 变异率：对 prompt 字符串中每个字符进行随机变异的概率（0.0-1.0）
+  double mutationRate = 0.01;
 
   /// 自定义评分回调
   TrainingScoringFunc scoringFunc;
@@ -322,8 +417,9 @@ protected:
       auto response = co_await scoreAgent->runStreamAsync(messages);
 
       const auto &content = response.content;
+      auto stripped = stripMarkdownCodeBlock(content);
 
-      auto parsed = neograph::json::parse(content);
+      auto parsed = neograph::json::parse(stripped);
       if (parsed.is_object()) {
         result.score = parsed.value("score", 0.0);
         result.feedback = parsed.value("feedback", std::string{});
@@ -386,8 +482,10 @@ protected:
       auto response = co_await optimizerAgent->runStreamAsync(messages);
 
       const auto &content = response.content;
-      auto parsed = neograph::json::parse(content);
-      if (parsed.is_object() && parsed.contains("systemPrompt")) {
+      auto stripped = stripMarkdownCodeBlock(content);
+      auto parsed = neograph::json::parse(stripped);
+      if (parsed.is_object() && parsed.contains("systemPrompt") &&
+          parsed["systemPrompt"].is_string()) {
         auto improved = parsed["systemPrompt"].get<std::string>();
         if (!improved.empty()) {
           XX_LOGD("[EvolutionTraining] Optimizer produced new prompt (len={})",
@@ -413,12 +511,61 @@ protected:
     return fmt::format("gen{}_{}", generationCounter, now);
   }
 
-  PromptVariant createChildVariant(const PromptVariant &parent) {
+  /// 对字符串进行随机变异：以 mutationRate 概率对每个字符进行插入/删除/替换
+  std::string mutateString(const std::string &input, double mutationRate) {
+    if (mutationRate <= 0.0 || input.empty()) {
+      return input;
+    }
+    std::string result;
+    result.reserve(input.size() * 2);
+    std::uniform_real_distribution<double> dist(0.0, 1.0);
+    // 可变异字符集
+    static const char mutationChars[] =
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 "
+        ".,;:!?-_()[]{}\n";
+    static const int mutationCharsLen =
+        static_cast<int>(sizeof(mutationChars) - 1);
+    std::uniform_int_distribution<int> charDist(0, mutationCharsLen - 1);
+    // 操作类型分布：0=替换, 1=插入, 2=删除
+    std::uniform_int_distribution<int> opDist(0, 2);
+
+    for (size_t i = 0; i < input.size(); ++i) {
+      if (dist(rng) < mutationRate) {
+        int op = opDist(rng);
+        switch (op) {
+        case 0:
+          // 替换
+          result.push_back(mutationChars[charDist(rng)]);
+          break;
+        case 1:
+          // 插入一个随机字符，然后保留原字符
+          result.push_back(mutationChars[charDist(rng)]);
+          result.push_back(input[i]);
+          break;
+        case 2:
+          // 删除（跳过当前字符）
+          break;
+        }
+      } else {
+        result.push_back(input[i]);
+      }
+    }
+    // 如果全部被删除了，至少保留原字符串
+    if (result.empty()) {
+      result = input;
+    }
+    return result;
+  }
+
+  PromptVariant createChildVariant(const PromptVariant &parent,
+                                   double mutationRate = 0.01) {
     PromptVariant child;
     child.id = generateId();
-    child.systemPrompt = parent.systemPrompt;
-    child.systemPlanningPrompt = parent.systemPlanningPrompt;
-    child.systemSkillPrompt = parent.systemSkillPrompt;
+    child.systemPrompt = mutateString(parent.systemPrompt, mutationRate);
+    child.systemPlanningPrompt =
+        mutateString(parent.systemPlanningPrompt, mutationRate);
+    child.systemSkillPrompt =
+        mutateString(parent.systemSkillPrompt, mutationRate);
     child.generation = generationCounter;
     child.parentId = parent.id;
     child.cumulativeScore = 0.0;
@@ -508,7 +655,6 @@ protected:
           if (improvedScore.score > score.score) {
             improvedVariant.cumulativeScore = improvedScore.score;
             improvedVariant.testCount = 1;
-            population.push_back(std::move(improvedVariant));
 
             if (cfg.verbose) {
               XX_LOGD("[EvolutionTraining] [{}] Improved variant '{}' score "
@@ -517,6 +663,8 @@ protected:
                       generationCounter, improvedVariant.id,
                       improvedScore.score, score.score);
             }
+
+            population.push_back(std::move(improvedVariant));
           }
         }
       }
@@ -579,7 +727,10 @@ public:
                 return a.averageScore() > b.averageScore();
               });
 
-    // Step 2: 无限循环训练
+    // Step 2: 进化训练主循环
+    double bestScoreEver = 0.0;
+    int generationsWithoutImprovement = 0;
+
     while (true) {
       generationCounter++;
 
@@ -598,15 +749,16 @@ public:
         const auto &parent = population[i];
 
         for (int c = 0; c < cfg.childrenPerParent; ++c) {
-          PromptVariant child = createChildVariant(parent);
+          PromptVariant child = createChildVariant(parent, cfg.mutationRate);
           newGeneration.push_back(std::move(child));
         }
       }
 
       if (cfg.verbose) {
         XX_LOGD("[EvolutionTraining] [{}] Created {} new variants from top {} "
-                "parents",
-                generationCounter, newGeneration.size(), mutateFrom);
+                "parents (mutationRate={})",
+                generationCounter, newGeneration.size(), mutateFrom,
+                cfg.mutationRate);
       }
 
       // 2b. 测试所有新变体
@@ -633,7 +785,17 @@ public:
         population.resize(cfg.topK);
       }
 
-      // 2e. 打印 top 信息
+      // 2e. 检查收敛
+      double currentBestScore =
+          population.empty() ? 0.0 : population[0].averageScore();
+      if (currentBestScore > bestScoreEver) {
+        bestScoreEver = currentBestScore;
+        generationsWithoutImprovement = 0;
+      } else {
+        generationsWithoutImprovement++;
+      }
+
+      // 2f. 打印 top 信息
       if (cfg.verbose && !population.empty()) {
         XX_LOGD("[EvolutionTraining] [{}] Top 5 prompts:", generationCounter);
         for (size_t i = 0; i < std::min(population.size(), (size_t)5); ++i) {
@@ -651,7 +813,17 @@ public:
                     : best.systemPrompt);
       }
 
-      // 2f. 保存到文件
+      // 2g. 收敛检查
+      if (cfg.maxGenerationsWithoutImprovement > 0 &&
+          generationsWithoutImprovement >=
+              cfg.maxGenerationsWithoutImprovement) {
+        XX_LOGD("[EvolutionTraining] Converged! Best score {:.4f} unchanged "
+                "for {} generations. Stopping training.",
+                bestScoreEver, generationsWithoutImprovement);
+        break;
+      }
+
+      // 2h. 保存到文件
       savePopulationToFile(cfg.saveFilePath);
     }
 
