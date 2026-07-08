@@ -1,5 +1,8 @@
 #pragma once
 
+// fix asio check [__cpp_lib_is_invocable]
+#include <type_traits>
+// ---
 #include "asio/awaitable.hpp"
 #include <cstdint>
 #include <memory>

@@ -8,6 +8,8 @@
 #include <sstream>
 #include <string>
 
+#if defined(AGENTXX_ENABLE_CODEGRAPH)
+
 namespace agentxx {
 namespace tools {
 
@@ -517,3 +519,5 @@ public:
 
 } // namespace tools
 } // namespace agentxx
+
+#endif

@@ -1,5 +1,6 @@
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/tools/tool.h"
+#include <charconv>
 
 agentxx::middleware::BaseMiddlewareHandleInterface::
     BaseMiddlewareHandleInterface(
