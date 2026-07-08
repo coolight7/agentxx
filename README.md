@@ -6,13 +6,13 @@
 ## 兼容性
 - 跨系统支持:
     - ✅可编译为独立可执行程序/动态库，摆脱额外的动态库依赖，仅依赖基本的系统库
-    - ✅Linux x86_64 + ✅WSL扩展功能
-    - ✅Windows 10+ x86_64
-    - ⬜支持Linux交叉编译 Windows/Android 可执行程序和库
-    - 未测试，理论上支持:
-        - ⬜Android Arm64 (计划验证兼容)
-        - Macos Arm64
-        - IOS Arm64
+    - ✅已验证支持
+        - Windows 10+ x86_64
+        - Linux x86_64 + WSL扩展功能
+        - Linux上交叉编译 Android 支持, 已验证 Arm64
+    - ⬜未测试，理论上支持:
+        - Macos
+        - IOS
     - ⬜编译优化，控制导出符号，裁剪体积
 - `libagentxx` Lang Binding:
     - ✅C++ (自身开发语言)
@@ -31,6 +31,7 @@
 | **Windows** | 11.9 MB | 5.14 MB | MSVC (Visual Studio 18 2026 MSVC 19.51.36247.0) x86_64 -O2 | 打包时建议带上msvc运行时 |
 | **Linux** | 28 MB | 11 MB | GCC 16.1.0 x86_64 -O3 | 打包时建议带上 libstdc++.so.6,libgcc_s.so.1 |
 | **Linux (-deps)** | 21 MB | 4.4 MB | - | 移除依赖 vectorScan/hyperscan |
+| **Android (-deps)** | - | 7.9 MB | - | 移除依赖 vectorScan/hyperscan/codegraph |
 
 ## 计划实现
 ### 基础模块

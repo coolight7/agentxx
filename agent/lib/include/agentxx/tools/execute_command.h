@@ -9,7 +9,6 @@
 #include "asio/readable_pipe.hpp"
 #include "asio/redirect_error.hpp"
 #include "asio/use_awaitable.hpp"
-#include "boost/process.hpp"
 #include "fmt/format.h"
 #include <cstdlib>
 #include <neograph/llm/rate_limited_provider.h>
@@ -18,6 +17,10 @@
 #include <sstream>
 #include <string>
 #include <vector>
+
+#if defined(AGENTXX_ENABLE_BOOST_PROCESS)
+#include "boost/process.hpp"
+#endif
 
 namespace asio = ::boost::asio;
 

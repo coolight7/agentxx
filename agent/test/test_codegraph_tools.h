@@ -11,6 +11,8 @@
 #include <iostream>
 #include <string>
 
+#if defined(AGENTXX_ENABLE_CODEGRAPH)
+
 namespace agentxx {
 namespace test {
 
@@ -1220,3 +1222,5 @@ inline asio::awaitable<void> run_codegraph_tools_tests(
 
 } // namespace test
 } // namespace agentxx
+
+#endif

@@ -1,7 +1,5 @@
 #pragma once
 
-#include "codegraph/core/json.hpp"
-#include "codegraph/core/types.h"
 #include <atomic>
 #include <filesystem>
 #include <functional>
@@ -11,6 +9,9 @@
 #include <thread>
 #include <vector>
 
+#if defined(AGENTXX_ENABLE_CODEGRAPH)
+#include "codegraph/core/json.hpp"
+#include "codegraph/core/types.h"
 
 namespace agentxx {
 namespace expand {
@@ -93,3 +94,5 @@ private:
 
 } // namespace expand
 } // namespace agentxx
+
+#endif

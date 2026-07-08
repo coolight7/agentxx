@@ -1,4 +1,5 @@
 #include "agentxx/util/regex.h"
+#include <algorithm>
 
 #if defined(AGENTXX_ENABLE_VECTORSCAN) || defined(AGENTXX_ENABLE_HYPERSCAN)
 #include <hs_compile.h>

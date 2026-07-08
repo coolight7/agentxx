@@ -35,8 +35,8 @@
             ],
             "compileCommands": "${workspaceFolder}/agent/build/debug/compile_commands.json",
             "compilerPath": "/usr/local/bin/g++",
-            "cStandard": "c23",
-            "cppStandard": "c++23"
+            "cStandard": "c17",
+            "cppStandard": "c++26"
         },
         {
             "name": "Win32",
@@ -75,8 +75,8 @@
             ],
             "windowsSdkVersion": "10.0.22000.0",
             "compilerPath": "cl.exe",
-            "cStandard": "c23",
-            "cppStandard": "c++23"
+            "cStandard": "c17",
+            "cppStandard": "c++26"
         },
         {
             "name": "Android",
@@ -96,8 +96,8 @@
                 "${workspaceFolder}/agent/third_party/neograph/deps/",
                 "${workspaceFolder}/agent/third_party/neograph/deps/cppdotenv/",
                 "${workspaceFolder}/agent/third_party/neograph/deps/yyjson/",
-                "${ANDROID_HOME}/ndk/27.3.13750724/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/include/",
-                "${ANDROID_HOME}/ndk/27.3.13750724/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/include/aarch64-linux-android/"
+                "${ANDROID_NDK_ROOT}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/",
+                "${ANDROID_NDK_ROOT}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/aarch64-linux-android/"
             ],
             "defines": [
                 "XX_IS_ANDROID_D",
@@ -106,10 +106,15 @@
                 "_DEBUG",
                 "UNICODE",
                 "_UNICODE",
+                "ASIO_HAS_IO_URING",
+                "ASIO_HAS_FILE",
+                "BOOST_ASIO_HAS_IO_URING",
+                "BOOST_ASIO_HAS_FILE",
                 "NEOGRAPH_USE_BOOST_ASIO"
             ],
-            "cStandard": "c23",
-            "cppStandard": "c++23"
+            "compilerPath": "${ANDROID_NDK_ROOT}/toolchains/llvm/prebuilt/linux-x86_64/bin/clang++",
+            "cStandard": "c17",
+            "cppStandard": "c++26"
         }
     ],
     "version": 4

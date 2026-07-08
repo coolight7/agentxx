@@ -1,13 +1,6 @@
 #include "agentxx/expand/codegraph_manager.h"
 #include "agentxx/agent/config_static.h"
 #include "agentxx/util/log.h"
-#include "codegraph/context/context_builder.h"
-#include "codegraph/core/types.h"
-#include "codegraph/db/database.h"
-#include "codegraph/extraction/extractor.h"
-#include "codegraph/graph/traverser.h"
-#include "codegraph/search/fts_search.h"
-#include "codegraph/sync/file_watcher.h"
 #include <algorithm>
 #include <atomic>
 #include <condition_variable>
@@ -19,6 +12,15 @@
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
+
+#if defined(AGENTXX_ENABLE_CODEGRAPH)
+#include "codegraph/context/context_builder.h"
+#include "codegraph/core/types.h"
+#include "codegraph/db/database.h"
+#include "codegraph/extraction/extractor.h"
+#include "codegraph/graph/traverser.h"
+#include "codegraph/search/fts_search.h"
+#include "codegraph/sync/file_watcher.h"
 
 namespace agentxx {
 namespace expand {
@@ -696,3 +698,5 @@ void CodeGraphManager::setProgressCallback(IndexProgressCallback callback) {
 
 } // namespace expand
 } // namespace agentxx
+
+#endif
