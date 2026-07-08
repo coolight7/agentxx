@@ -79,6 +79,11 @@ if (AGENTXX_ENABLE_CODEGRAPH)
   target_compile_definitions(agentxx_shared PUBLIC AGENTXX_ENABLE_CODEGRAPH=1)
   target_compile_definitions(agentxx_static PUBLIC AGENTXX_ENABLE_CODEGRAPH=1)
 endif()
+if (AGENTXX_ENABLE_BOOST_PROCESS)
+  target_compile_definitions(agentxx_shared PUBLIC AGENTXX_ENABLE_BOOST_PROCESS=1)
+  target_compile_definitions(agentxx_static PUBLIC AGENTXX_ENABLE_BOOST_PROCESS=1)
+endif()
+message("CMAKE_FIND_ROOT_PATH ${CMAKE_FIND_ROOT_PATH}")
 
 find_package(PkgConfig REQUIRED)
 # 添加依赖库后应当同步更新 [packageProject:DEPENDENCIES]
@@ -88,7 +93,7 @@ find_package(uchardet REQUIRED)
 find_package(fmt REQUIRED)
 find_package(simdjson REQUIRED)
 find_package(OpenSSL REQUIRED)
-find_package(Boost REQUIRED CONFIG COMPONENTS process)
+find_package(Boost REQUIRED)
 find_package(yaml-cpp REQUIRED)
 find_package(CURL REQUIRED)
 find_package(SQLite3 REQUIRED)
@@ -99,7 +104,7 @@ target_include_directories(agentxx_shared PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
   # 标记为 SYSTEM 防止 include 影响 warning 转 error 判断
-  ${CMAKE_PREFIX_PATH}/include/
+  ${AGENTXX_INSTALL_DIR}/include/
   ${neograph_SOURCE_DIR}/deps/yyjson/
   ${neograph_SOURCE_DIR}/deps/
 )
@@ -107,7 +112,7 @@ target_include_directories(agentxx_static PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
   # 标记为 SYSTEM 防止 include 影响 warning 转 error 判断
-  ${CMAKE_PREFIX_PATH}/include/
+  ${AGENTXX_INSTALL_DIR}/include/
   ${neograph_SOURCE_DIR}/deps/yyjson/
   ${neograph_SOURCE_DIR}/deps/
 )
@@ -148,13 +153,12 @@ set_target_properties(agentxx_static PROPERTIES
   LINK_LIBRARIES_STRATEGY "REORDER_MINIMALLY"
   VS_GLOBAL_VcpkgEnabled false
 )
-
-target_link_directories(agentxx_shared PUBLIC ${CMAKE_PREFIX_PATH}/lib/)
-target_link_directories(agentxx_static PUBLIC ${CMAKE_PREFIX_PATH}/lib/)
+target_link_directories(agentxx_shared PUBLIC ${AGENTXX_INSTALL_DIR}/lib/)
+target_link_directories(agentxx_static PUBLIC ${AGENTXX_INSTALL_DIR}/lib/)
 
 if (AGENTXX_ENABLE_CODEGRAPH)
-  target_include_directories(agentxx_shared PUBLIC ${CMAKE_PREFIX_PATH}/include/tree_sitter/)
-  target_include_directories(agentxx_static PUBLIC ${CMAKE_PREFIX_PATH}/include/tree_sitter/)
+  target_include_directories(agentxx_shared PUBLIC ${AGENTXX_INSTALL_DIR}/include/tree_sitter/)
+  target_include_directories(agentxx_static PUBLIC ${AGENTXX_INSTALL_DIR}/include/tree_sitter/)
   target_link_libraries(agentxx_shared PUBLIC 
     codegraph_core 
     tree_sitter
@@ -243,7 +247,6 @@ target_link_libraries(agentxx_shared PUBLIC
   SQLite::SQLite3
   CURL::libcurl
   yaml-cpp::yaml-cpp
-  Boost::process
   OpenSSL::SSL
   OpenSSL::Crypto
   simdjson::simdjson
@@ -267,7 +270,6 @@ target_link_libraries(agentxx_static PUBLIC
   SQLite::SQLite3
   CURL::libcurl
   yaml-cpp::yaml-cpp
-  Boost::process
   OpenSSL::SSL
   OpenSSL::Crypto
   simdjson::simdjson
@@ -277,6 +279,11 @@ target_link_libraries(agentxx_static PUBLIC
   charset
   uchardet::libuchardet
 )
+if (AGENTXX_ENABLE_BOOST_PROCESS)
+  find_package(Boost REQUIRED COMPONENTS process)
+  target_link_libraries(agentxx_shared PUBLIC Boost::process)
+  target_link_libraries(agentxx_static PUBLIC Boost::process)
+endif()
 if (XX_IS_WIN_D)
   target_link_libraries(agentxx_shared PUBLIC d3d11 dxgi dxguid winhttp ws2_32 oleacc ole32 user32 uuid)
   target_link_libraries(agentxx_static PUBLIC d3d11 dxgi dxguid winhttp ws2_32 oleacc ole32 user32 uuid)

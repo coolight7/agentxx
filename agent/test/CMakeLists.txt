@@ -46,15 +46,8 @@ find_package(Glob REQUIRED)
 find_package(agentxx_static REQUIRED)
 
 target_link_directories(agentxx_test PUBLIC
-  ${CMAKE_PREFIX_PATH}/lib/
+  ${AGENTXX_INSTALL_DIR}/lib/
 )
-if(Boost_FOUND)
-  target_include_directories(agentxx_test SYSTEM PRIVATE ${Boost_INCLUDE_DIRS}/)
-  target_include_directories(agentxx_test SYSTEM PRIVATE ${Boost_INCLUDE_DIRS}/boost/)
-  target_link_directories(agentxx_test PRIVATE 
-    ${BOOST_LIBRARY_DIR}
-  )
-endif()
 
 target_link_libraries(agentxx_test PRIVATE
   # === neograph vvv 链接顺序是必要的
