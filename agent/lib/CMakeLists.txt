@@ -3,6 +3,8 @@ cmake_minimum_required(VERSION 3.10)
 cmake_policy(SET CMP0074 NEW)
 # MSVC 运行时库标志由抽象层选择
 cmake_policy(SET CMP0091 NEW)
+# find_package 使用大写的 _ROOT 变量
+cmake_policy(SET CMP0144 NEW)
 # 移除 cmake 内置的 FindBoost 模块
 cmake_policy(SET CMP0167 NEW)
 
@@ -13,7 +15,7 @@ include(GNUInstallDirs) # CMAKE_INSTALL_*DIR
 set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_STANDARD_REQUIRED OFF)
 
-if(XX_IS_MSVC)
+if(XX_IS_MSVC_D)
   list(PREPEND CMAKE_FIND_LIBRARY_SUFFIXES .lib .a)
 else()
   list(PREPEND CMAKE_FIND_LIBRARY_SUFFIXES .a)
@@ -31,7 +33,7 @@ add_library(agentxx_static STATIC ${agentxx_SOURCES})
 # 动态库控制导出符号
 target_compile_definitions(agentxx_shared PUBLIC AGENTXX_EXPORTS)
 
-if (XX_IS_MSVC)
+if (XX_IS_MSVC_D)
   target_compile_definitions(agentxx_shared PUBLIC
     strdup=_strdup
     strcasecmp=_stricmp
@@ -98,7 +100,9 @@ find_package(uchardet REQUIRED)
 find_package(fmt REQUIRED)
 find_package(simdjson REQUIRED)
 find_package(OpenSSL REQUIRED)
-find_package(Boost REQUIRED)
+find_package(Boost REQUIRED CONFIG 
+  NO_DEFAULT_PATH PATHS "${BOOST_ROOT}"
+)
 find_package(yaml-cpp REQUIRED)
 find_package(CURL REQUIRED)
 find_package(SQLite3 REQUIRED)
@@ -285,7 +289,9 @@ target_link_libraries(agentxx_static PUBLIC
   uchardet::libuchardet
 )
 if (AGENTXX_ENABLE_BOOST_PROCESS)
-  find_package(Boost REQUIRED COMPONENTS process)
+  find_package(Boost REQUIRED CONFIG COMPONENTS process 
+    NO_DEFAULT_PATH PATHS "${BOOST_ROOT}"
+  )
   target_link_libraries(agentxx_shared PUBLIC Boost::process)
   target_link_libraries(agentxx_static PUBLIC Boost::process)
 endif()

@@ -76,16 +76,16 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 endif ()
 
 # compiler ID
-set(XX_IS_MSVC 0)
-set(XX_IS_GCC 0)
-set(XX_IS_CLANG 0)
+set(XX_IS_MSVC_D 0)
+set(XX_IS_GCC_D 0)
+set(XX_IS_CLANG_D 0)
 
 if (MSVC)
-  set(XX_IS_MSVC 1)
+  set(XX_IS_MSVC_D 1)
 elseif (CMAKE_C_COMPILER_ID MATCHES "GNU")
-  set(XX_IS_GCC 1)
+  set(XX_IS_GCC_D 1)
 elseif (CMAKE_C_COMPILER_ID MATCHES "Clang")
-  set(XX_IS_CLANG 1)
+  set(XX_IS_CLANG_D 1)
 else ()
   message("[agentxx] 不支持的编译器: ${CMAKE_C_COMPILER_ID}")
   return()
@@ -105,7 +105,7 @@ set(CMAKE_C_STANDARD 17)
 set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-if (XX_IS_MSVC)
+if (XX_IS_MSVC_D)
   set(_AGENTXX_C_FLAGS "/std:c17")
   set(_AGENTXX_CXX_FLAGS "/std:c++latest")
 else ()
@@ -115,7 +115,7 @@ endif()
 # msvc 时统一动态链接标准库 /MD /MDd
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
 # 优先链接静态库，不影响链接标准库
-if(XX_IS_MSVC)
+if(XX_IS_MSVC_D)
   list(PREPEND CMAKE_FIND_LIBRARY_SUFFIXES .lib .a)
 else()
   list(PREPEND CMAKE_FIND_LIBRARY_SUFFIXES .a)
@@ -126,7 +126,7 @@ include(CheckCXXSourceRuns)
 
 # /D_WIN32_WINNT=0x0A00 限制 win10 或更高:
 # - httplib 要求 >= win10
-if (XX_IS_MSVC) 
+if (XX_IS_MSVC_D) 
   set(_AGENTXX_COMMON_C_CXX_FLAGS "${_AGENTXX_COMMON_C_CXX_FLAGS} /D_WIN32_WINNT=0x0A00 /D__STDC_CONSTANT_MACROS=1 /DCPPHTTPLIB_OPENSSL_SUPPORT=1 /DBOOST_ASIO_STANDALONE=1 /DASIO_STANDALONE=1 /DBOOST_PROCESS_USE_STD_FS=1 /DBOOST_EXCEPTION_MINI_BOOST=1")
   if (AGENTXX_WINDOWS_IOCP_SUPPORTED)
     set(_AGENTXX_COMMON_C_CXX_FLAGS "${_AGENTXX_COMMON_C_CXX_FLAGS} /DASIO_HAS_IOCP=1 /DBOOST_ASIO_HAS_IOCP=1 /DASIO_HAS_WINDOWS_RANDOM_ACCESS_HANDLE=1 /DBOOST_ASIO_HAS_WINDOWS_RANDOM_ACCESS_HANDLE=1")
@@ -153,7 +153,7 @@ else ()
 endif()
 
 message("[agentxx] CMAKE_CXX_COMPILER_ID: ${CMAKE_CXX_COMPILER_ID}")
-if (XX_IS_MSVC)
+if (XX_IS_MSVC_D)
   set(_AGENTXX_C_FLAGS   "${_AGENTXX_COMMON_C_CXX_FLAGS} ${_AGENTXX_C_FLAGS} /bigobj /utf-8 /wd4200 /D_GNU_SOURCE")
   set(_AGENTXX_CXX_FLAGS "${_AGENTXX_COMMON_C_CXX_FLAGS} ${_AGENTXX_CXX_FLAGS} /bigobj /utf-8 /wd4200 /Zc:__cplusplus")
 
@@ -175,7 +175,7 @@ if (XX_IS_MSVC)
 
   # set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
 else ()
-  # XX_IS_CLANG OR XX_IS_GCC
+  # XX_IS_CLANG_D OR XX_IS_GCC_D
   set(_AGENTXX_C_FLAGS   "${_AGENTXX_COMMON_C_CXX_FLAGS} ${_AGENTXX_C_FLAGS}   -fvisibility=default -ffunction-sections -fdata-sections -Wall -fPIC -pipe -D_GNU_SOURCE")
   set(_AGENTXX_CXX_FLAGS "${_AGENTXX_COMMON_C_CXX_FLAGS} ${_AGENTXX_CXX_FLAGS} -fvisibility=default -ffunction-sections -fdata-sections -Wall -fPIC -pipe")
   
@@ -363,9 +363,9 @@ set(_AGENTXX_COMMON_CMAKE_ARGS
     -DXX_IS_ANDROID_D=${XX_IS_ANDROID_D}
     -DXX_IS_IOS_D=${XX_IS_IOS_D}
 
-    -DXX_IS_MSVC=${XX_IS_MSVC}
-    -DXX_IS_GCC=${XX_IS_GCC}
-    -DXX_IS_CLANG=${XX_IS_CLANG}
+    -DXX_IS_MSVC=${XX_IS_MSVC_D}
+    -DXX_IS_GCC=${XX_IS_GCC_D}
+    -DXX_IS_CLANG=${XX_IS_CLANG_D}
 
     "-DAGENTXX_INSTALL_DIR=${AGENTXX_INSTALL_DIR}"
     -DAGENTXX_ENABLE_VECTORSCAN=${AGENTXX_ENABLE_VECTORSCAN}
@@ -589,7 +589,7 @@ endif()
 
 if (AGENTXX_ENABLE_VECTORSCAN)
   # vectorscan
-  if (XX_IS_MSVC)
+  if (XX_IS_MSVC_D)
     check_cxx_compiler_flag("/arch:AVX512" COMPILER_SUPPORTS_AVX512F)
     check_cxx_source_runs("
       #include <immintrin.h>
