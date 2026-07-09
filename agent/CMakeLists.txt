@@ -212,7 +212,6 @@ set(AGENTXX_INSTALL_DIR "${CMAKE_BINARY_DIR}/agentxx-project-install/")
 set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY "ONLY")
 set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE "ONLY")
 set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE "ONLY")
-list (PREPEND CMAKE_FIND_ROOT_PATH "${AGENTXX_INSTALL_DIR}")
 
 # boost 系统安装库 或 自行编译
 # https://github.com/boostorg/boost
@@ -224,57 +223,47 @@ set (Boost_USE_DEBUG_LIBS ${XX_IS_DEBUG_D})
 set (Boost_USE_RELEASE_LIBS ${XX_IS_RELEASE_D})
 set (Boost_USE_DEBUG_RUNTIME ${XX_IS_DEBUG_D})
 set (Boost_USE_RELEASE_RUNTIME ${XX_IS_RELEASE_D})
-if (DEFINED BOOST_ROOT)
-  list (APPEND CMAKE_FIND_ROOT_PATH "${BOOST_ROOT}")
-  find_package(Boost REQUIRED)
-else ()
-  find_package(Boost QUIET)
-  if (NOT Boost_FOUND)
-    # 尝试预编译目录，按顺序:
-    #   - ${BOOST_ROOT}
-    #   - boost-build-debug / boost-build-release
-    #   - boost-build
-    if (XX_IS_WIN_D OR XX_IS_LINUX_D OR XX_IS_MACOS_D)
-      if (XX_IS_DEBUG_D)
-        set(_BOOST_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/boost-build-debug/")
-      else ()
-        set(_BOOST_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/boost-build-release/")
-      endif ()
-      if (NOT EXISTS ${_BOOST_ROOT})
-        set(_BOOST_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/boost-build/")
-      endif ()
-
-      if (EXISTS ${_BOOST_ROOT})
-        set(BOOST_ROOT ${_BOOST_ROOT} CACHE PATH "Boost root directory" FORCE)
-      endif ()
+if (NOT DEFINED BOOST_ROOT OR NOT EXISTS "${BOOST_ROOT}")
+  # 尝试预编译目录，按顺序:
+  #   - ${BOOST_ROOT}
+  #   - boost-build-debug / boost-build-release
+  #   - boost-build
+  if (XX_IS_WIN_D OR XX_IS_LINUX_D OR XX_IS_MACOS_D)
+    if (XX_IS_DEBUG_D)
+      set(_BOOST_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/boost-build-debug/")
+    else ()
+      set(_BOOST_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/boost-build-release/")
+    endif ()
+    if (NOT EXISTS ${_BOOST_ROOT})
+      set(_BOOST_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/boost-build/")
     endif ()
 
-    find_package(Boost REQUIRED)
-    unset(_BOOST_ROOT)
-  endif()
-  list (APPEND CMAKE_FIND_ROOT_PATH "${BOOST_ROOT}")
+    if (EXISTS ${_BOOST_ROOT})
+      set(BOOST_ROOT ${_BOOST_ROOT} CACHE PATH "Boost root directory" FORCE)
+    endif ()
+  endif ()
+
+  find_package(Boost REQUIRED)
+  unset(_BOOST_ROOT)
+  set(BOOST_ROOT ${BOOST_ROOT} CACHE PATH "Boost root directory" FORCE)
 endif()
+find_package(Boost REQUIRED)
 
 # openssl
 set (OPENSSL_USE_STATIC_LIBS ON)
-if (DEFINED OPENSSL_ROOT_DIR)
-  list (APPEND CMAKE_FIND_ROOT_PATH "${OPENSSL_ROOT_DIR}")
+if (NOT DEFINED OPENSSL_ROOT_DIR OR NOT EXISTS "${OPENSSL_ROOT_DIR}")
+  # 预编译目录
+  if (XX_IS_WIN_D OR XX_IS_LINUX_D OR XX_IS_MACOS_D)
+    set(_OPENSSL_ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/OpenSSL/")
+
+    if (EXISTS ${_OPENSSL_ROOT_DIR})
+      set(OPENSSL_ROOT_DIR ${_OPENSSL_ROOT_DIR} CACHE PATH "OpenSSL root directory" FORCE)
+    endif()
+  endif ()
+
   find_package(OpenSSL REQUIRED)
-else ()
-  find_package(OpenSSL QUIET)
-  if (NOT OpenSSL_FOUND)
-    # 预编译目录
-    if (XX_IS_WIN_D OR XX_IS_LINUX_D OR XX_IS_MACOS_D)
-      set(_OPENSSL_ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/OpenSSL/")
+  unset(_OPENSSL_ROOT_DIR)
 
-      if (EXISTS ${_OPENSSL_ROOT_DIR})
-        set(OPENSSL_ROOT_DIR ${_OPENSSL_ROOT_DIR} CACHE PATH "OpenSSL root directory" FORCE)
-      endif()
-    endif ()
-
-    find_package(OpenSSL REQUIRED)
-    unset(_OPENSSL_ROOT_DIR)
-  endif()
   if (XX_IS_WIN_D)
     # 动态链接标准库
     set(OPENSSL_INCLUDE_DIR "${OPENSSL_ROOT_DIR}/include/")
@@ -293,8 +282,17 @@ else ()
     set(OPENSSL_SSL_LIBRARY    "libssl.a")
     set(OPENSSL_CRYPTO_LIBRARY "libcrypto.a")
   endif()
-  list (APPEND CMAKE_FIND_ROOT_PATH "${OPENSSL_ROOT_DIR}")
+  set(OPENSSL_ROOT_DIR ${OPENSSL_ROOT_DIR} CACHE PATH "OpenSSL root directory" FORCE)
 endif()
+find_package(OpenSSL REQUIRED)
+
+if (CMAKE_CROSSCOMPILING)
+  list (PREPEND CMAKE_FIND_ROOT_PATH "${AGENTXX_INSTALL_DIR}")
+  list (APPEND CMAKE_FIND_ROOT_PATH 
+    "${BOOST_ROOT}" 
+    "${OPENSSL_ROOT_DIR}"
+  )
+endif ()
 
 set(_AGENTXX_COMMON_CMAKE_CACHE_ARGS
     "-DCMAKE_TOOLCHAIN_FILE:PATH=${CMAKE_TOOLCHAIN_FILE}"
@@ -555,6 +553,7 @@ if (AGENTXX_ENABLE_CUSTOM_CURL)
       -DBUILD_STATIC_LIBS=ON
     CMAKE_CACHE_ARGS
       ${_AGENTXX_COMMON_CMAKE_CACHE_ARGS}
+      "-DOPENSSL_ROOT_DIR:PATH=${OPENSSL_ROOT_DIR}"
     TEST_COMMAND ""
   )
 endif()
@@ -622,7 +621,8 @@ if (AGENTXX_ENABLE_VECTORSCAN)
       -DBUILD_STATIC_LIBS=ON
     CMAKE_CACHE_ARGS
       ${_AGENTXX_COMMON_CMAKE_CACHE_ARGS}
-      "-DBOOST_ROOT=${BOOST_ROOT}"
+      "-DBOOST_ROOT:PATH=${BOOST_ROOT}"
+      "-DOPENSSL_ROOT_DIR:PATH=${OPENSSL_ROOT_DIR}"
     TEST_COMMAND ""
   )
 elseif (AGENTXX_ENABLE_HYPERSCAN)
@@ -642,8 +642,9 @@ elseif (AGENTXX_ENABLE_HYPERSCAN)
       -DBUILD_STATIC_LIBS=ON
     CMAKE_CACHE_ARGS
       ${_AGENTXX_COMMON_CMAKE_CACHE_ARGS}
-      "-DCMAKE_POLICY_VERSION_MINIMUM=3.15"
-      "-DBOOST_ROOT=${BOOST_ROOT}"
+      "-DCMAKE_POLICY_VERSION_MINIMUM:STRING=3.15"
+      "-DBOOST_ROOT:PATH=${BOOST_ROOT}"
+      "-DOPENSSL_ROOT_DIR:PATH=${OPENSSL_ROOT_DIR}"
     TEST_COMMAND ""
   )
 else()
@@ -678,6 +679,8 @@ ExternalProject_Add(
     -DBUILD_STATIC_LIBS=ON
   CMAKE_CACHE_ARGS
     ${_AGENTXX_COMMON_CMAKE_CACHE_ARGS}
+      "-DBOOST_ROOT:PATH=${BOOST_ROOT}"
+      "-DOPENSSL_ROOT_DIR:PATH=${OPENSSL_ROOT_DIR}"
   TEST_COMMAND ""
 )
 if (AGENTXX_ENABLE_CUSTOM_CURL)

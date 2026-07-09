@@ -44,13 +44,13 @@ if %ERRORLEVEL% neq 0 (
     exit /b 1
 )
 
-cmake --build "%build_dir%" --config release
+cmake --build "%build_dir%" --config release --parallel
 if %ERRORLEVEL% neq 0 (
     echo cmake build failed!
     exit /b 1
 )
 
-cmake --install "%build_dir%" --config release
+cmake --install "%build_dir%" --config release --parallel
 if %ERRORLEVEL% neq 0 (
     echo cmake install failed!
     exit /b 1

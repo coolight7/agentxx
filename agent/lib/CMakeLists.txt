@@ -83,7 +83,6 @@ if (AGENTXX_ENABLE_BOOST_PROCESS)
   target_compile_definitions(agentxx_shared PUBLIC AGENTXX_ENABLE_BOOST_PROCESS=1)
   target_compile_definitions(agentxx_static PUBLIC AGENTXX_ENABLE_BOOST_PROCESS=1)
 endif()
-message("CMAKE_FIND_ROOT_PATH ${CMAKE_FIND_ROOT_PATH}")
 
 find_package(PkgConfig REQUIRED)
 # 添加依赖库后应当同步更新 [packageProject:DEPENDENCIES]
