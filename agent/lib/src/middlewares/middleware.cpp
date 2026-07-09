@@ -73,7 +73,7 @@ void agentxx::middleware::MiddlewareContext::registerInterruptHandles() {
               inputSuccess = false;
             }
           } else if ("int" == input.type) {
-            long long num;
+            int64_t num = 0;
             auto result =
                 std::from_chars(line.c_str(), line.c_str() + line.size(), num);
             inputSuccess = (result.ec == std::errc{});

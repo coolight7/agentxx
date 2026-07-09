@@ -1,4 +1,4 @@
-CMAKE_MINIMUM_REQUIRED(VERSION 3.30)
+cmake_minimum_required(VERSION 3.10)
 
 project(agentxx_cli VERSION 0.1.0 LANGUAGES C CXX)
 include(GNUInstallDirs)
@@ -7,10 +7,10 @@ include(GNUInstallDirs)
 set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_STANDARD_REQUIRED OFF)
 
-if (XX_IS_MSVC)
-  set(CMAKE_FIND_LIBRARY_SUFFIXES ".lib;${CMAKE_FIND_LIBRARY_SUFFIXES}")
-else ()
-  set(CMAKE_FIND_LIBRARY_SUFFIXES ".a;${CMAKE_FIND_LIBRARY_SUFFIXES}")
+if(XX_IS_MSVC)
+  list(PREPEND CMAKE_FIND_LIBRARY_SUFFIXES .lib .a)
+else()
+  list(PREPEND CMAKE_FIND_LIBRARY_SUFFIXES .a)
 endif()
 
 add_executable(agentxx_cli)

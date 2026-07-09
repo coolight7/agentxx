@@ -1,7 +1,7 @@
 # The Flutter tooling requires that developers have CMake 3.10 or later
 # installed. You should not increase this version, as doing so will cause
 # the plugin to fail to compile for some customers of the plugin.
-cmake_minimum_required(VERSION 3.30)
+cmake_minimum_required(VERSION 3.10)
 cmake_policy(SET CMP0091 NEW)
 
 project(agentxx_project 
@@ -16,6 +16,16 @@ if (CCACHE_PROGRAM)
   set(CMAKE_CXX_COMPILER_LAUNCHER ${CCACHE_PROGRAM})
 endif ()
 set(CMAKE_FIND_DEBUG_MODE OFF)
+
+# option ==========
+option(XX_BUILD_TYPE "Generate the client target." "RELEASE")
+option(AGENTXX_BUILD_CLIENT "Generate the client target." OFF)
+option(AGENTXX_BUILD_TEST "Generate the test target." OFF)
+option(AGENTXX_ENABLE_VECTORSCAN "Add VectorScan for regex support. Use [AGENTXX_ENABLE_HYPERSCAN] or std::regex if disable." ON)
+option(AGENTXX_ENABLE_HYPERSCAN "Add HyperScan for regex support. Use [AGENTXX_ENABLE_VECTORSCAN] or std::regex if disable." OFF)
+option(AGENTXX_ENABLE_CODEGRAPH "Add CodeGraph-CPP for code analysis." ON)
+option(AGENTXX_ENABLE_CUSTOM_CURL "Use custom curl." ON)
+option(AGENTXX_ENABLE_BOOST_PROCESS "Use Boost.process for execute command toolcall." ON)
 
 # 仅用于指示是否编译用于调试用途，不代表真实编译类型
 # - [XX_IS_DEBUG_D] == 1 时，启用大部分调试日志等信息，因此 profile 之类注重
@@ -35,11 +45,11 @@ set(XX_IS_MACOS_D    0)
 set(XX_IS_ANDROID_D  0)
 set(XX_IS_IOS_D      0)
 
-if (WIN32)
+if (CMAKE_SYSTEM_NAME STREQUAL "Windows")
   set(XX_IS_WIN_D 1)
 
   set(AGENTXX_WINDOWS_IOCP_SUPPORTED ON)
-elseif (ANDROID)
+elseif (CMAKE_SYSTEM_NAME STREQUAL "Android")
   set(XX_IS_ANDROID_D 1)
 elseif (APPLE AND CMAKE_SYSTEM_NAME STREQUAL "Darwin")
   set(XX_IS_MACOS_D 1)
@@ -79,16 +89,6 @@ message("[agentxx] Current Configure Type: ${CMAKE_CONFIGURATION_TYPES}")
 message("[agentxx] Current Build Type: ${CMAKE_BUILD_TYPE}")
 message("[agentxx] Current Compiler: ${CMAKE_C_COMPILER_ID}")
 
-# option ==========
-option(XX_BUILD_TYPE "Generate the client target." "RELEASE")
-option(AGENTXX_BUILD_CLIENT "Generate the client target." OFF)
-option(AGENTXX_BUILD_TEST "Generate the test target." OFF)
-option(AGENTXX_ENABLE_VECTORSCAN "Add VectorScan for regex support. Use [AGENTXX_ENABLE_HYPERSCAN] or std::regex if disable." ON)
-option(AGENTXX_ENABLE_HYPERSCAN "Add HyperScan for regex support. Use [AGENTXX_ENABLE_VECTORSCAN] or std::regex if disable." OFF)
-option(AGENTXX_ENABLE_CODEGRAPH "Add CodeGraph-CPP for code analysis." ON)
-option(AGENTXX_ENABLE_CUSTOM_CURL "Use custom curl." ON)
-option(AGENTXX_ENABLE_BOOST_PROCESS "Use Boost.process for execute command toolcall." ON)
-
 set(_AGENTXX_COMMON_C_CXX_FLAGS "")
 set(_AGENTXX_C_FLAGS "")
 set(_AGENTXX_CXX_FLAGS "")
@@ -102,21 +102,16 @@ if (XX_IS_MSVC)
   set(_AGENTXX_C_FLAGS "/std:c17")
   set(_AGENTXX_CXX_FLAGS "/std:c++latest")
 else ()
-  if (XX_IS_ANDROID_D)
-    set(_AGENTXX_C_FLAGS "-std=c17")
-    set(_AGENTXX_CXX_FLAGS "-std=c++23")
-  else ()
-    set(_AGENTXX_C_FLAGS "-std=c17")
-    set(_AGENTXX_CXX_FLAGS "-std=c++26")
-  endif()
-endif ()
+  set(_AGENTXX_C_FLAGS "-std=c17")
+  set(_AGENTXX_CXX_FLAGS "-std=c++26")
+endif()
 # msvc 时统一动态链接标准库 /MD /MDd
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
 # 优先链接静态库，不影响链接标准库
 if(XX_IS_MSVC)
-  set(CMAKE_FIND_LIBRARY_SUFFIXES .lib .a ${CMAKE_FIND_LIBRARY_SUFFIXES})
+  list(PREPEND CMAKE_FIND_LIBRARY_SUFFIXES .lib .a)
 else()
-  set(CMAKE_FIND_LIBRARY_SUFFIXES .a ${CMAKE_FIND_LIBRARY_SUFFIXES})
+  list(PREPEND CMAKE_FIND_LIBRARY_SUFFIXES .a)
 endif()
 
 include(CheckCXXCompilerFlag)
@@ -200,7 +195,6 @@ unset(_AGENTXX_CXX_FLAGS)
 # exe install dir
 set(AGENTXX_EXEC_INSTALL_PREFIX "${CMAKE_BINARY_DIR}/exec")
 message("[agentxx] AGENTXX_EXEC_INSTALL_PREFIX: ${AGENTXX_EXEC_INSTALL_PREFIX}")
-message("[agentxx] CMAKE_INSTALL_PREFIX: ${AGENTXX_INSTALL_DIR}")
 message("[agentxx] CMAKE_CURRENT_SOURCE_DIR: ${CMAKE_CURRENT_SOURCE_DIR}")
 
 # deps
@@ -209,9 +203,11 @@ set(AGENTXX_INSTALL_DIR "${CMAKE_BINARY_DIR}/agentxx-project-install/")
 
 # - 添加搜索根目录到 [CMAKE_FIND_ROOT_PATH]，以兼容交叉编译
 # - 搜索模式为 [ONLY] 隔离搜索，避免交叉编译时引用主机上的库导致各种异常
-set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY "ONLY")
-set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE "ONLY")
-set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE "ONLY")
+if (CMAKE_CROSSCOMPILING)
+  set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY "ONLY")
+  set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE "ONLY")
+  set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE "ONLY")
+endif()
 
 # boost 系统安装库 或 自行编译
 # https://github.com/boostorg/boost
@@ -243,11 +239,9 @@ if (NOT DEFINED BOOST_ROOT OR NOT EXISTS "${BOOST_ROOT}")
     endif ()
   endif ()
 
-  find_package(Boost REQUIRED)
   unset(_BOOST_ROOT)
   set(BOOST_ROOT ${BOOST_ROOT} CACHE PATH "Boost root directory" FORCE)
 endif()
-find_package(Boost REQUIRED)
 
 # openssl
 set (OPENSSL_USE_STATIC_LIBS ON)
@@ -261,7 +255,6 @@ if (NOT DEFINED OPENSSL_ROOT_DIR OR NOT EXISTS "${OPENSSL_ROOT_DIR}")
     endif()
   endif ()
 
-  find_package(OpenSSL REQUIRED)
   unset(_OPENSSL_ROOT_DIR)
 
   if (XX_IS_WIN_D)
@@ -284,25 +277,28 @@ if (NOT DEFINED OPENSSL_ROOT_DIR OR NOT EXISTS "${OPENSSL_ROOT_DIR}")
   endif()
   set(OPENSSL_ROOT_DIR ${OPENSSL_ROOT_DIR} CACHE PATH "OpenSSL root directory" FORCE)
 endif()
-find_package(OpenSSL REQUIRED)
 
 if (CMAKE_CROSSCOMPILING)
+  # 统一追加 [CMAKE_FIND_ROOT_PATH]，逐步添加可能导致自动补充搜索路径时 find_package 验证查找失败
   list (PREPEND CMAKE_FIND_ROOT_PATH "${AGENTXX_INSTALL_DIR}")
   list (APPEND CMAKE_FIND_ROOT_PATH 
     "${BOOST_ROOT}" 
     "${OPENSSL_ROOT_DIR}"
   )
 endif ()
+list (PREPEND CMAKE_PREFIX_PATH "${AGENTXX_INSTALL_DIR}")
 
 set(_AGENTXX_COMMON_CMAKE_CACHE_ARGS
-    "-DCMAKE_TOOLCHAIN_FILE:PATH=${CMAKE_TOOLCHAIN_FILE}"
-    "-DCMAKE_FIND_ROOT_PATH:STRING=${CMAKE_FIND_ROOT_PATH}"
+    "-DBOOST_ROOT:PATH=${BOOST_ROOT}"
+    "-DOPENSSL_ROOT_DIR:PATH=${OPENSSL_ROOT_DIR}"
 )
 set(_AGENTXX_COMMON_CMAKE_ARGS
     # "-DCMAKE_SYSTEM_NAME=${CMAKE_SYSTEM_NAME}" # 传递后会导致 sqlite 编译检查出错
     "-DCMAKE_CROSSCOMPILING=${CMAKE_CROSSCOMPILING}"
     "-DCMAKE_SYSTEM_PROCESSOR=${CMAKE_SYSTEM_PROCESSOR}"
     "-DCMAKE_GENERATOR_PLATFORM=${CMAKE_GENERATOR_PLATFORM}"
+    "-DCMAKE_TOOLCHAIN_FILE:PATH=${CMAKE_TOOLCHAIN_FILE}"
+    "-DCMAKE_FIND_ROOT_PATH:STRING=${CMAKE_FIND_ROOT_PATH}"
     -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=${CMAKE_FIND_ROOT_PATH_MODE_LIBRARY}
     -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=${CMAKE_FIND_ROOT_PATH_MODE_INCLUDE}
     -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=${CMAKE_FIND_ROOT_PATH_MODE_PACKAGE}
@@ -374,6 +370,9 @@ set(_AGENTXX_COMMON_CMAKE_ARGS
     -DAGENTXX_WINDOWS_IOCP_SUPPORTED=${AGENTXX_WINDOWS_IOCP_SUPPORTED}
 )
 if (ANDROID_PLATFORM)
+  if (NOT ANDROID_ABI)
+    set (ANDROID_ABI 21)
+  endif()
   list(APPEND _AGENTXX_COMMON_CMAKE_ARGS
     "-DCMAKE_SYSTEM_NAME=${CMAKE_SYSTEM_NAME}"
     -DANDROID_ABI=${ANDROID_ABI}
@@ -390,6 +389,10 @@ message("[agentxx] CMAKE_FIND_ROOT_PATH: ${CMAKE_FIND_ROOT_PATH}")
 
 include(ExternalProject)
 include(FetchContent)
+
+# 断言查找依赖
+find_package(Boost REQUIRED)
+find_package(OpenSSL REQUIRED)
 
 # liburing
 set(LIBURING_SOURCE_DIR "${AGENTXX_THIRD_PARTY_DIR}/liburing/")
@@ -412,7 +415,6 @@ if (AGENTXX_LINUX_IO_URING_SUPPORTED)
       cd ${LIBURING_SOURCE_DIR} && make install
     TEST_COMMAND ""
   )
-  include_directories(${LIBURING_INSTALL_DIR}/include/)
 endif()
 
 # simdjson

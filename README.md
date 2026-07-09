@@ -9,7 +9,7 @@
     - ✅已验证支持
         - Windows 10+ x86_64
         - Linux x86_64 + WSL扩展功能
-        - Linux上交叉编译 Android 支持, 已验证 Arm64
+        - Linux 交叉编译 Android 5.0+ 支持
     - ⬜未测试，理论上支持:
         - Macos
         - IOS
