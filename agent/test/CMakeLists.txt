@@ -44,13 +44,9 @@ find_package(uchardet REQUIRED)
 find_package(fmt REQUIRED)
 find_package(simdjson REQUIRED)
 find_package(OpenSSL REQUIRED)
-find_package(Boost REQUIRED CONFIG
-  NO_DEFAULT_PATH PATHS "${BOOST_ROOT}"
-)
+find_package(Boost REQUIRED)
 if (AGENTXX_ENABLE_BOOST_PROCESS)
-  find_package(Boost REQUIRED CONFIG COMPONENTS process
-    NO_DEFAULT_PATH PATHS "${BOOST_ROOT}"
-  )
+  find_package(Boost REQUIRED COMPONENTS process)
 endif()
 find_package(yaml-cpp REQUIRED)
 find_package(CURL REQUIRED)

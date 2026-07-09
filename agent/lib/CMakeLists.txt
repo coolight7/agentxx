@@ -5,8 +5,6 @@ cmake_policy(SET CMP0074 NEW)
 cmake_policy(SET CMP0091 NEW)
 # find_package 使用大写的 _ROOT 变量
 cmake_policy(SET CMP0144 NEW)
-# 移除 cmake 内置的 FindBoost 模块
-cmake_policy(SET CMP0167 NEW)
 
 project(agentxx VERSION 0.1.0 LANGUAGES C CXX)
 include(GNUInstallDirs) # CMAKE_INSTALL_*DIR
@@ -100,9 +98,7 @@ find_package(uchardet REQUIRED)
 find_package(fmt REQUIRED)
 find_package(simdjson REQUIRED)
 find_package(OpenSSL REQUIRED)
-find_package(Boost REQUIRED CONFIG 
-  NO_DEFAULT_PATH PATHS "${BOOST_ROOT}"
-)
+find_package(Boost REQUIRED)
 find_package(yaml-cpp REQUIRED)
 find_package(CURL REQUIRED)
 find_package(SQLite3 REQUIRED)
@@ -289,9 +285,7 @@ target_link_libraries(agentxx_static PUBLIC
   uchardet::libuchardet
 )
 if (AGENTXX_ENABLE_BOOST_PROCESS)
-  find_package(Boost REQUIRED CONFIG COMPONENTS process 
-    NO_DEFAULT_PATH PATHS "${BOOST_ROOT}"
-  )
+  find_package(Boost REQUIRED COMPONENTS process)
   target_link_libraries(agentxx_shared PUBLIC Boost::process)
   target_link_libraries(agentxx_static PUBLIC Boost::process)
 endif()
