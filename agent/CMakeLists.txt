@@ -8,6 +8,7 @@ cmake_policy(SET CMP0074 NEW)
 cmake_policy(SET CMP0091 NEW)
 # find_package 使用大写的 _ROOT 变量
 cmake_policy(SET CMP0144 NEW)
+cmake_policy(SET CMP0167 OLD)
 
 project(agentxx_project 
   VERSION 0.1.0 
