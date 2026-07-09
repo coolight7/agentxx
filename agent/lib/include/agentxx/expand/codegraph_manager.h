@@ -9,7 +9,7 @@
 #include <thread>
 #include <vector>
 
-#if defined(AGENTXX_ENABLE_CODEGRAPH)
+#if AGENTXX_ENABLE_CODEGRAPH
 #include "codegraph/core/json.hpp"
 #include "codegraph/core/types.h"
 

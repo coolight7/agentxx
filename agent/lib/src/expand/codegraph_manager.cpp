@@ -13,7 +13,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
-#if defined(AGENTXX_ENABLE_CODEGRAPH)
+#if AGENTXX_ENABLE_CODEGRAPH
 #include "codegraph/context/context_builder.h"
 #include "codegraph/core/types.h"
 #include "codegraph/db/database.h"

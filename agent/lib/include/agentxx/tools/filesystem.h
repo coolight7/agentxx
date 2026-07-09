@@ -245,7 +245,7 @@ public:
     auto text_line_offset = arguments.value<int64_t>("line_offset", -1);
     auto text_line_limit = arguments.value<int64_t>("line_limit", -1);
 
-#if defined(ASIO_HAS_FILE) || defined(BOOST_ASIO_HAS_FILE)
+#if ASIO_HAS_FILE || BOOST_ASIO_HAS_FILE
     {
       auto currentIoCtx = co_await asio::this_coro::executor;
 
@@ -444,7 +444,7 @@ public:
     auto byte_offset = arguments.value<double>("byte_offset", -1);
     auto byte_limit = arguments.value<double>("byte_limit", -1);
 
-#if defined(ASIO_HAS_FILE) || defined(BOOST_ASIO_HAS_FILE)
+#if ASIO_HAS_FILE || BOOST_ASIO_HAS_FILE
     {
       auto currentIoCtx = co_await asio::this_coro::executor;
 
@@ -667,7 +667,7 @@ public:
     auto overwrite = arguments.value<bool>("overwrite", false);
     auto is_binary = arguments.value<bool>("is_binary", false);
 
-#if defined(ASIO_HAS_FILE) || defined(BOOST_ASIO_HAS_FILE)
+#if ASIO_HAS_FILE || BOOST_ASIO_HAS_FILE
     {
       auto currentIoCtx = co_await asio::this_coro::executor;
 
@@ -847,7 +847,7 @@ public:
     auto new_str = arguments.value<std::string>("new_str", std::string{});
     auto multi_replace = arguments.value<bool>("multi_replace", false);
 
-#if defined(ASIO_HAS_FILE) || defined(BOOST_ASIO_HAS_FILE)
+#if ASIO_HAS_FILE || BOOST_ASIO_HAS_FILE
     {
       auto currentIoCtx = co_await asio::this_coro::executor;
 
@@ -1095,7 +1095,7 @@ public:
   }
 
   asio::awaitable<std::string> readFileContent(const std::string &filepath) {
-#if defined(ASIO_HAS_FILE) || defined(BOOST_ASIO_HAS_FILE)
+#if ASIO_HAS_FILE || BOOST_ASIO_HAS_FILE
     {
       auto currentIoCtx = co_await asio::this_coro::executor;
 

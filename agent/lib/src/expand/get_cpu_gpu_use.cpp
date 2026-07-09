@@ -536,7 +536,7 @@ protected:
   CpuTimes _sample;
 
   static asio::awaitable<std::string> readFileContent(const std::string &path) {
-#if defined(ASIO_HAS_FILE) || defined(BOOST_ASIO_HAS_FILE)
+#if ASIO_HAS_FILE || BOOST_ASIO_HAS_FILE
     {
       auto executor = co_await asio::this_coro::executor;
       asio::stream_file stream{executor};

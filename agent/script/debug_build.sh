@@ -20,7 +20,7 @@ if [[ $? -ne 0 ]]; then
     exit 1
 fi
 
-cmake --build "$build_dir" --config debug
+cmake --build "$build_dir" --config Debug
 
 if [[ $? -ne 0 ]]; then
     echo "cmake build failed!"

@@ -18,7 +18,7 @@
 #include <string>
 #include <vector>
 
-#if defined(AGENTXX_ENABLE_BOOST_PROCESS)
+#if AGENTXX_ENABLE_BOOST_PROCESS
 #include "boost/process.hpp"
 #endif
 

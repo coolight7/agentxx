@@ -1,7 +1,7 @@
 #include "agentxx/util/regex.h"
 #include <algorithm>
 
-#if defined(AGENTXX_ENABLE_VECTORSCAN) || defined(AGENTXX_ENABLE_HYPERSCAN)
+#if AGENTXX_ENABLE_VECTORSCAN || AGENTXX_ENABLE_HYPERSCAN
 #include <hs_compile.h>
 #include <hs_runtime.h>
 
@@ -55,9 +55,10 @@ public:
       reglist.push_back(reg.c_str());
     }
 
-    hs_error_t err = hs_compile_multi(reglist.data(), flagslist.data(), nullptr,
-                                      regstrs.size(), HS_MODE_BLOCK, nullptr,
-                                      &hs_db, &compile_err);
+    hs_error_t err =
+        hs_compile_multi(reglist.data(), flagslist.data(), nullptr,
+                         (unsigned int)(regstrs.size()), HS_MODE_BLOCK, nullptr,
+                         &hs_db, &compile_err);
 
     if (err != HS_SUCCESS) {
       XX_LOGE("Hyperscan编译正则失败: {} | {}", compile_err->message,
@@ -151,8 +152,9 @@ public:
     }
 
     // block模式、适合短文本
-    hs_error_t err = hs_scan(hs_db, input.data(), input.length(), 0, hs_scratch,
-                             xxregexMatchCallback, &results);
+    hs_error_t err =
+        hs_scan(hs_db, input.data(), (unsigned int)(input.length()), 0,
+                hs_scratch, xxregexMatchCallback, &results);
     if (err != HS_SUCCESS && err != HS_SCAN_TERMINATED) {
       XX_LOGE("Hyperscan扫描失败");
       return false;

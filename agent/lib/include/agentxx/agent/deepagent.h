@@ -58,7 +58,7 @@ public:
   }
 
   asio::awaitable<void> init() {
-#if defined(ASIO_HAS_FILE) || defined(BOOST_ASIO_HAS_FILE)
+#if ASIO_HAS_FILE || BOOST_ASIO_HAS_FILE
     XX_LOGD("Enable asio/async file RW");
 #else
     XX_LOGD("Disable asio/async file RW");

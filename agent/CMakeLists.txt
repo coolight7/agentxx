@@ -2,7 +2,14 @@
 # installed. You should not increase this version, as doing so will cause
 # the plugin to fail to compile for some customers of the plugin.
 cmake_minimum_required(VERSION 3.10)
+# find_package 使用 <PackageName>_ROOT 变量
+cmake_policy(SET CMP0074 NEW)
+# MSVC 运行时库标志由抽象层选择
 cmake_policy(SET CMP0091 NEW)
+# find_package 使用大写的 _ROOT 变量
+cmake_policy(SET CMP0144 NEW)
+# 移除 cmake 内置的 FindBoost 模块
+cmake_policy(SET CMP0167 NEW)
 
 project(agentxx_project 
   VERSION 0.1.0 
@@ -277,6 +284,7 @@ if (NOT DEFINED OPENSSL_ROOT_DIR OR NOT EXISTS "${OPENSSL_ROOT_DIR}")
   endif()
   set(OPENSSL_ROOT_DIR ${OPENSSL_ROOT_DIR} CACHE PATH "OpenSSL root directory" FORCE)
 endif()
+# set (OpenSSL_DIR ${OPENSSL_ROOT_DIR} CACHE PATH "OpenSSL root directory" FORCE)
 
 if (CMAKE_CROSSCOMPILING)
   # 统一追加 [CMAKE_FIND_ROOT_PATH]，逐步添加可能导致自动补充搜索路径时 find_package 验证查找失败
@@ -310,8 +318,10 @@ set(_AGENTXX_COMMON_CMAKE_ARGS
     -DCMAKE_POSITION_INDEPENDENT_CODE=ON
 
     "-DCMAKE_MSVC_RUNTIME_LIBRARY=${CMAKE_MSVC_RUNTIME_LIBRARY}"
+    -DCMAKE_POLICY_DEFAULT_CMP0074=NEW
     -DCMAKE_POLICY_DEFAULT_CMP0091=NEW
     -DCMAKE_POLICY_DEFAULT_CMP0144=NEW
+    -DCMAKE_POLICY_DEFAULT_CMP0167=NEW
 
     "-DCMAKE_CONFIGURATION_TYPES=${CMAKE_CONFIGURATION_TYPES}"
     "-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}"
@@ -391,7 +401,7 @@ include(ExternalProject)
 include(FetchContent)
 
 # 断言查找依赖
-find_package(Boost REQUIRED)
+find_package(Boost REQUIRED CONFIG)
 find_package(OpenSSL REQUIRED)
 
 # liburing

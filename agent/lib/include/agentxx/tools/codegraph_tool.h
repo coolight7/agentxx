@@ -8,7 +8,7 @@
 #include <sstream>
 #include <string>
 
-#if defined(AGENTXX_ENABLE_CODEGRAPH)
+#if AGENTXX_ENABLE_CODEGRAPH
 
 namespace agentxx {
 namespace tools {
