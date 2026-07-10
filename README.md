@@ -25,14 +25,13 @@
     - 默认编译提供 动态库`libagentxx`、静态库`libagentxx_static`, 且统一动态链接 libstdc++/libgcc/msvcrt(/MD|/MDd)
 ### 编译后的体积和依赖库
 - Agentxx 编译后输出的 可执行程序`agentxx_cli`、动态库`libagentxx` 都会尽量静态链接依赖库，保持编译结果对动态库的依赖尽量少
-- 以下是编译添加了所有支持的功能，如果需要进一步裁剪体积，可以移除 VectorScan/Hyperscan/codegraph/Boost.process 等可选库、采用 -Os 体积编译优化，可以大幅缩减体积
+- 以下是`仅编译agentxx，移除大部分不必要的扩展依赖库`时的体积和运行时内存占用，如果需要进一步裁剪体积，可以移除 VectorScan/Hyperscan/codegraph/Boost.process 等可选库、采用 -Os 体积编译优化，可以大幅缩减体积
 
 | System | agentxx_cli | agentxx_cli RAM | libagentxx | compiler | TIP |
 |---|---|---|---|---|---|
-| **Windows** | 12.2 M | 3.4 M | 5.14 M | MSVC 19.51.36247.0/Visual Studio 18 2026 · x86_64 · -O2 | 打包时建议带上msvc运行时 |
-| **Linux** | 28 M | - | 11 M | GCC 16.1.0 · x86_64 · -O3 | 打包时建议带上 libstdc++.so.6,libgcc_s.so.1 |
-| **Linux (-deps)** | 21 M | | 4.4 M | GCC 16.1.0 · x86_64 · -O3 | 移除 vectorScan/hyperscan |
-| **Android (-deps)** | - | - | 7.9 M | NDK-r29 · android-21-arm64-v8a · -O3 · --strip-all | 移除 vectorScan/hyperscan/codegraph |
+| **Windows** | 12.2 M | 任务管理器 3.4 M | 5.14 M | MSVC 19.51.36247.0/Visual Studio 18 2026 · x86_64 · -O2 | 打包时建议带上msvc运行时 |
+| **Linux** | 11 M | top/RES 10.5 M | 2.4 M | GCC 16.1.0 · x86_64 · -O3 · --strip-all | 打包时建议带上 libstdc++.so.6,libgcc_s.so.1 |
+| **Android (-deps)** | - | - | 1.9 M | NDK-r29 · android-21-arm64-v8a · -O3 · --strip-all | 打包建议带上 libc++.so |
 
 ## 计划实现
 ### 基础模块

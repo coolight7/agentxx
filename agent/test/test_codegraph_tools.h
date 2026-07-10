@@ -1223,4 +1223,17 @@ inline asio::awaitable<void> run_codegraph_tools_tests(
 } // namespace test
 } // namespace agentxx
 
+#else
+
+namespace agentxx {
+namespace test {
+
+inline asio::awaitable<void> run_codegraph_tools_tests(
+    std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+  co_return;
+}
+
+} // namespace test
+} // namespace agentxx
+
 #endif

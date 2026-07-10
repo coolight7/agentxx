@@ -77,6 +77,8 @@ if [[ $? -ne 0 ]]; then
     exit 1
 fi
 
+$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip --strip-all "$build_dir/exec/libagentxx.so"
+
 echo ""
 echo "============================================"
 echo "  编译完成!"
