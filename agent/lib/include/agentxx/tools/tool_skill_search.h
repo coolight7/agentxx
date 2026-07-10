@@ -180,10 +180,7 @@ Remember: Output ONLY valid JSON, nothing else before or after.
         {
             "channels",
             {
-                {
-                    "messages",
-                    {{"type", "list"}, {"reducer", "append"}},
-                },
+                {"messages", {{"reducer", "append"}}},
             },
         },
         {

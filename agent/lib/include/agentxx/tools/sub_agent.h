@@ -67,10 +67,7 @@ public:
         {
             "channels",
             {
-                {
-                    "messages",
-                    {{"type", "list"}, {"reducer", "append"}},
-                },
+                {"messages", {{"reducer", "append"}}},
             },
         },
         {
