@@ -2,9 +2,11 @@
 
 #include "agentxx/middlewares/permission.h"
 #include "agentxx/nodes/warp_handle.h"
+#include "agentxx/util/log.h"
 #include "asio/io_context.hpp"
 #include "fmt/base.h"
 #include "fmt/format.h"
+#include <charconv>
 #include <cstdlib>
 #include <functional>
 #include <iostream>
@@ -129,24 +131,26 @@ public:
       } catch (const neograph::graph::CancelledException &e) {
         isCancel = true;
         errorPtr = std::current_exception();
+      } catch (const neograph::graph::NodeInterrupt &e) {
+        isCancel = true;
+        errorPtr = std::current_exception();
       } catch (const std::exception &e) {
         errInfo = e.what();
         errorPtr = std::current_exception();
       } catch (const boost::exception &e) {
-        errorPtr = std::current_exception();
         errInfo = boost::diagnostic_information(e);
+        errorPtr = std::current_exception();
       } catch (...) {
         errorPtr = std::current_exception();
       }
 
       // 触发异常
-      XX_LOGD("ToolCallNode {} retry: {}/{} | {}", tool->get_name(), retry,
-              maxRetry, errInfo);
       if (retry >= maxRetry || isCancel) {
         std::rethrow_exception(errorPtr);
-      } else {
-        retry++;
       }
+      XX_LOGD("ToolCallNode {} retry: {}/{} | {}", tool->get_name(), retry,
+              maxRetry, errInfo);
+      retry++;
     } while (true);
 
     const size_t limitLength =
@@ -179,6 +183,141 @@ public:
       }
     }
     co_return result;
+  }
+
+  asio::awaitable<void>
+  baseRun(std::vector<std::shared_ptr<
+              agentxx::middleware::BaseMiddlewareHandleInterface>> &handles,
+          neograph::graph::NodeInput &in,
+          neograph::graph::NodeOutput &out) override {
+    auto toolcallsCache = std::map<std::string, std::string>{};
+    {
+      auto toolcallsCacheJson =
+          in.state.get(agentxx::middleware::BaseMiddlewareHandleInterface::
+                           channelKey_interruptToolcallCache);
+      in.state.remove(agentxx::middleware::BaseMiddlewareHandleInterface::
+                          channelKey_interruptToolcallCache);
+      if (false == toolcallsCacheJson.is_array()) {
+        for (const auto &item : toolcallsCacheJson) {
+          neograph::ChatMessage msg;
+          neograph::from_json(item, msg);
+          if (false == msg.tool_call_id.empty() &&
+              false == neograph::hasFlag(msg.flags,
+                                         neograph::MessageFlag::Interrupt)) {
+            // 添加缓存未中断的 toolcall 结果
+            toolcallsCache[msg.tool_call_id] = std::move(msg.content);
+          }
+        }
+      }
+    }
+
+    auto messages = in.state.get_messages();
+    if (messages.empty()) {
+      out = neograph::graph::NodeOutput{};
+      co_return;
+    }
+
+    // Find the last assistant message with tool_calls
+    const neograph::ChatMessage *assistant_msg = nullptr;
+    for (auto it = messages.rbegin(); it != messages.rend(); ++it) {
+      if (it->role == "assistant" && !it->tool_calls.empty()) {
+        assistant_msg = &(*it);
+        break;
+      }
+    }
+    if (!assistant_msg) {
+      out = neograph::graph::NodeOutput{};
+      co_return;
+    }
+
+    bool isInterrupt = false;
+    auto interruptArgs = std::map<std::string, neograph::json>{};
+    auto results = neograph::json::array();
+
+    auto onExecTool = [&](const neograph::ToolCall &tc)
+        -> asio::awaitable<neograph::ChatMessage> {
+      neograph::ChatMessage tool_msg;
+      tool_msg.role = "tool";
+      tool_msg.tool_call_id = tc.id;
+      tool_msg.tool_name = tc.name;
+      {
+        // 尝试缓存
+        auto cacheit = toolcallsCache.find(tc.id);
+        if (cacheit != toolcallsCache.end()) {
+          tool_msg.content = cacheit->second;
+          co_return tool_msg;
+        }
+      }
+
+      auto it =
+          std::find_if(tools_.begin(), tools_.end(), [&](neograph::Tool *t) {
+            return t->get_name() == tc.name;
+          });
+      if (it == tools_.end()) {
+        tool_msg.content = R"({"error": "Tool not found: )" + tc.name + "\"}";
+      } else {
+        try {
+          auto result =
+              agentxx::middleware::InterruptHandleArg::getInterruptResult(
+                  in.state, [&tc]() {
+                    return agentxx::middleware::InterruptHandleArg{
+                        .name = agentxx::middleware::MiddlewareContext::
+                            interruptHandleName_default,
+                        .inputs =
+                            {
+                                agentxx::middleware::InterruptHandleArg::
+                                    InterruptHandleInputItem{
+                                        .label = "hello",
+                                        .depict = "hello agentxx!",
+                                    },
+                            },
+                        .resultId = tc.id,
+                    };
+                  });
+
+          auto args = neograph::json::parse(tc.arguments);
+          if (args.is_object() && args["thread_id"].is_null()) {
+            // append arg `thread_id`
+            args["thread_id"] = in.ctx.thread_id;
+          }
+          tool_msg.content = co_await execTool(*it, args);
+        } catch (const neograph::graph::NodeInterrupt &e) {
+          // tool触发中断
+          // - 不应在这里提取中断参数，协程并发等 co_await
+          // 执行完成时可能参数数组已经不是单一值
+          isInterrupt = true;
+          tool_msg.flags |= neograph::MessageFlag::Interrupt;
+          tool_msg.content = "[Interrupt]";
+        } catch (const std::exception &e) {
+          tool_msg.content = std::string(R"({"error": ")") + e.what() + "\"}";
+        }
+      }
+      co_return tool_msg;
+    };
+
+    /// 并发执行 toolcall
+    std::vector<asio::awaitable<neograph::ChatMessage>> toolcallResults{};
+    for (const auto &tc : assistant_msg->tool_calls) {
+      toolcallResults.emplace_back(onExecTool(tc));
+    }
+    for (auto &item : toolcallResults) {
+      auto msg = co_await std::move(item);
+      neograph::json msg_json;
+      neograph::to_json(msg_json, msg);
+      results.push_back(msg_json);
+    }
+
+    if (isInterrupt) {
+      // 暂存 toolcall list 结果，重新执行时跳过执行成功的 tool
+      in.state.overwrite(agentxx::middleware::BaseMiddlewareHandleInterface::
+                             channelKey_interruptToolcallCache,
+                         results);
+      // 重新抛出异常
+      agentxx::middleware::InterruptHandleArg::throwNodeInterruptBase();
+    }
+
+    out.writes.push_back(neograph::graph::ChannelWrite{"messages", results});
+    co_return;
   }
 
   inline static asio::awaitable<void>

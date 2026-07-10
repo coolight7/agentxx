@@ -2,6 +2,7 @@
 [Github agentxx](https://github.com/coolight7/agentxx)
 
 - C++ 实现的 AI Agent，减少内存占用、程序包体积、摆脱复杂依赖，为普通性能的手机、电脑等设备上运行设计
+- 早期开发中...
 
 ## 兼容性
 - 跨系统支持:
@@ -24,19 +25,20 @@
     - 默认编译提供 动态库`libagentxx`、静态库`libagentxx_static`, 且统一动态链接 libstdc++/libgcc/msvcrt(/MD|/MDd)
 ### 编译后的体积和依赖库
 - Agentxx 编译后输出的 可执行程序`agentxx_cli`、动态库`libagentxx` 都会尽量静态链接依赖库，保持编译结果对动态库的依赖尽量少
-- 以下是编译添加了所有支持的功能，如果需要进一步裁剪体积，可以移除 VectorScan/Hyperscan 等可选库、采用 -Os 体积编译优化，可以大幅缩减体积
+- 以下是编译添加了所有支持的功能，如果需要进一步裁剪体积，可以移除 VectorScan/Hyperscan/codegraph/Boost.process 等可选库、采用 -Os 体积编译优化，可以大幅缩减体积
 
 | System | agentxx_cli | libagentxx | compiler | TIP |
 |---|---|---|---|---|
-| **Windows** | 11.9 MB | 5.14 MB | MSVC (Visual Studio 18 2026 MSVC 19.51.36247.0) x86_64 -O2 | 打包时建议带上msvc运行时 |
-| **Linux** | 28 MB | 11 MB | GCC 16.1.0 x86_64 -O3 | 打包时建议带上 libstdc++.so.6,libgcc_s.so.1 |
-| **Linux (-deps)** | 21 MB | 4.4 MB | - | 移除依赖 vectorScan/hyperscan |
-| **Android (-deps)** | - | 7.9 MB | - | 移除依赖 vectorScan/hyperscan/codegraph |
+| **Windows** | 11.9 MB | 5.14 MB | MSVC 19.51.36247.0/Visual Studio 18 2026 · x86_64 · -O2 | 打包时建议带上msvc运行时 |
+| **Linux** | 28 MB | 11 MB | GCC 16.1.0 · x86_64 · -O3 | 打包时建议带上 libstdc++.so.6,libgcc_s.so.1 |
+| **Linux (-deps)** | 21 MB | 4.4 MB | - | 移除 vectorScan/hyperscan |
+| **Android (-deps)** | - | 1.9 MB | NDK-r29 · android-21-arm64-v8a · -O3 · --strip-all | 移除 vectorScan/hyperscan/codegraph |
 
 ## 计划实现
 ### 基础模块
 - **Toolcall**
     - ✅返回值自动转换字符编码到 utf8
+    - ✅拦截输出，超过限制长度时自动压缩、截取摘要存储到 share_store
     - ✅filesystem (支持 `同步`/`asio io_uring/IOCP 协程异步` 文件读写)
         - ls (file/dir/recursive-dir/limit)
         - read_text (full / offset-limit)
@@ -52,8 +54,7 @@
         - ✅execute_windows_command (检测到 WSL 环境时，允许在 linux/wsl 直接执行 windows 命令)
         - ⬜execute_python_command
         - ⬜execute_javascript_command
-        - ✅拦截输出，超过限制长度时自动压缩、截取摘要存储到 share_store
-        - ✅自动转换输出字符编码到 Utf8
+        - ✅区分 stdout、stderr，自动转换输出字符编码到 Utf8
     - ✅web_search (支持 asio 协程异步网络请求)
         - web_search (内置 HTML 转 markdown, 支持直接使用普通网页搜索api)
         - web_fetch_url_markdown (html to markdown)
@@ -77,7 +78,7 @@
     - 消息分支，支持修改历史消息/模型重新生成消息
     - 多会话和历史会话
 - ✅**中断恢复**
-    - HITL支持，在 Node 暂停，等待用户响应，然后恢复执行
+    - HITL支持，在 Node或toolcall 暂停，等待用户响应，然后恢复执行；允许多个 toolcall 同时发起中断，允许一轮中反复 `中断-用户响应`
     - 支持用户取消执行
 - ✅**异常处理和自动重试**
     - Toolcall/LLM 节点支持自动重试，支持自定义重试次数
@@ -142,10 +143,12 @@
 - ⬜支持捕获系统输出音频、指定程序输出音频、麦克风
 - ✅支持接收各种程序、浏览器的选择文本事件
 - ✅CodeGraph
+    - 分析代码符号、查找定位
+    - 保存分析结果到 sqlite
     - ⬜根据 .gitignore/.gitmodules 等排序分析优先级，把 third_party/test 等目录排后
 - ✅RAG
+    - ✅文本分割分块 + 默认20%相邻分块重叠
     - 文本分割方式:
-        - ✅分块 + 默认20%相邻分块重叠
         - ✅定长分割
         - ✅字符分割
         - ✅结构分割 (较长的再进行 字符分割/定长分割)

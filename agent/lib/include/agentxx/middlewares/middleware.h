@@ -59,7 +59,9 @@ protected:
 public:
   inline static const std::string channelKey_interruptMessages{
       "xx_interruptMessages"};
-  inline static const std::string channelKey_interruptArg{"xx_interruptArg"};
+  inline static const std::string channelKey_interruptToolcallCache{
+      "xx_interruptToolcallCache"};
+  inline static const std::string channelKey_interruptArgs{"xx_interruptArg"};
   inline static const std::string channelKey_interruptResult{
       "xx_interruptResults"};
   /// 谨慎存储/修改 middleware 中的变量，
@@ -162,16 +164,18 @@ public:
         continue;
       }
       std::string tools;
-      for (const auto &tool : msg.tool_calls) {
-        tools += fmt::format(R"(  - {}/{}
+      if (false == msg.tool_calls.empty()) {
+        tools += "┣━ Toolcall: \n";
+        for (const auto &tool : msg.tool_calls) {
+          tools += fmt::format(R"(  - {}/{}
     {}
 )",
-                             tool.name, tool.id, tool.arguments);
+                               tool.name, tool.id, tool.arguments);
+        }
       }
       std::cout << fmt::format(R"(
 ┏━━━━━━ Message/{} ━━━━━━┓
 ┣━ Role: {}
-┣━ Toolcall: 
 {}
 ┣━ Content: {}
 ┗━━━━━━ Message/{} ━━━━━━┛
@@ -388,6 +392,7 @@ public:
   };
 
   inline static const std::string interruptHandleName_default = "default";
+
   inline static const std::string graphDataKey_systemMessage{"systemMessage"};
   inline static const std::string graphDataKey_tempLLMMessage{
       "xx_ModelCallWrap_tempLLMMessage"};
@@ -508,7 +513,7 @@ public:
 
   asio::awaitable<std::optional<neograph::json>>
   execInterruptHandle(std::string_view name,
-                      agentxx::middleware::InterruptHandleArg &arg);
+                      const agentxx::middleware::InterruptHandleArg &arg);
 };
 
 class SummarizationToolHandle {
@@ -574,20 +579,31 @@ public:
   std::string name;
   neograph::json arg;
   std::vector<InterruptHandleInputItem> inputs;
+  std::string resultId;
 
-  void throwInterrupt(neograph::graph::GraphState &state) {
-    std::cout << state.get("messages") << std::endl;
-    state.overwrite(BaseMiddlewareHandleInterface::channelKey_interruptMessages,
-                    state.get("messages"));
-    state.overwrite(BaseMiddlewareHandleInterface::channelKey_interruptResult,
-                    neograph::json{nullptr});
-    state.overwrite(BaseMiddlewareHandleInterface::channelKey_interruptArg,
-                    toJson());
-    throw neograph::graph::NodeInterrupt{fmt::format("xx-Interrupt: {}", name)};
+  /// 一般用于捕获到 NodeInterrupt 后重新抛出，而不能作为首次抛出使用
+  inline static void throwNodeInterruptBase() {
+    throw neograph::graph::NodeInterrupt{"xx-NodeInterrupt"};
   }
 
-  /// TODO: 支持 tool 内中断，支持多 tool 并发执行时正确中断恢复
-  /// - 一般应当在 Node 中触发,中断恢复会重新执行这个
+  inline static void throwInterrupt(
+      const std::vector<InterruptHandleArg> &args,
+      neograph::graph::GraphState &state,
+      const neograph::json &toolcallCache = neograph::json{nullptr}) {
+    state.overwrite(BaseMiddlewareHandleInterface::channelKey_interruptMessages,
+                    state.get("messages"));
+    auto arglist = neograph::json::array();
+    for (const auto &arg : args) {
+      arglist.push_back(arg.toJson());
+    }
+    // 添加，而非覆盖，以便支持多个 toolcall 中断
+    state.write(BaseMiddlewareHandleInterface::channelKey_interruptArgs,
+                arglist);
+    state.remove(BaseMiddlewareHandleInterface::channelKey_interruptResult);
+    throwNodeInterruptBase();
+  }
+
+  /// - 一般应当在 Node/toolcall 中触发,中断恢复会重新执行这个
   /// Node,中断前的代码会重复执行!
   inline static neograph::json
   getInterruptResult(neograph::graph::GraphState &state,
@@ -595,13 +611,11 @@ public:
     auto result =
         state.get(BaseMiddlewareHandleInterface::channelKey_interruptResult);
     state.remove(BaseMiddlewareHandleInterface::channelKey_interruptResult);
-    std::cout << "Interrup Result: " << result << " " << result.is_null()
-              << std::endl;
     if (false == result.is_null()) {
       return result;
     }
     auto arg = onCreateArg();
-    arg.throwInterrupt(state);
+    throwInterrupt({arg}, state);
     return result;
   }
 
@@ -620,6 +634,7 @@ public:
         result.name = data["name"].get<std::string>();
       }
       result.arg = data["arg"];
+      result.resultId = data["resultId"].get<std::string>();
       if (data["inputs"].is_array()) {
         for (const auto &input : data["inputs"]) {
           result.inputs.push_back(InterruptHandleInputItem::fromJson(input));
@@ -627,6 +642,20 @@ public:
       }
     }
     return result;
+  }
+
+  inline static std::vector<InterruptHandleArg>
+  listFromJson(const neograph::json &data) {
+    auto relist = std::vector<InterruptHandleArg>{};
+    if (data.is_array()) {
+      for (const auto &item : data) {
+        auto arg = fromJson(item);
+        if (arg.has_value()) {
+          relist.push_back(arg.value());
+        }
+      }
+    }
+    return relist;
   }
 
   neograph::json toJson() const {
@@ -638,6 +667,7 @@ public:
         {"name", name},
         {"arg", arg},
         {"inputs", inputsJson},
+        {"resultId", resultId},
     };
   }
 };

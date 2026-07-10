@@ -10,7 +10,7 @@ agentxx::middleware::BaseMiddlewareHandleInterface::
 
 asio::awaitable<std::optional<neograph::json>>
 agentxx::middleware::MiddlewareContext::execInterruptHandle(
-    std::string_view name, agentxx::middleware::InterruptHandleArg &arg) {
+    std::string_view name, const agentxx::middleware::InterruptHandleArg &arg) {
   auto handleIt = interruptHandles.find(arg.name);
   if (handleIt != interruptHandles.end()) {
     co_return co_await handleIt->second(arg);
