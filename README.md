@@ -77,14 +77,16 @@
     - 消息分支，支持修改历史消息/模型重新生成消息
     - 多会话和历史会话
 - ✅**中断恢复**
-    - HITL支持，在 Node或toolcall 暂停，等待用户响应，然后恢复执行；允许多个 toolcall 同时发起中断，允许一轮中反复 `中断-用户响应`
+    - 支持在 Node或toolcall 发起中断，等待用户响应，然后恢复执行，会重复执行 node 中断前的代码，但不会重复执行成功完成的 toolcall
+    - 支持多个 toolcall 同时发起中断，允许一轮中反复 `中断-用户响应`
+    - 支持HITL，中断处理可以自定义实现，内置实现支持用户确认信息、输入内容等
     - 支持用户取消执行
 - ✅**异常处理和自动重试**
     - Toolcall/LLM 节点支持自动重试，支持自定义重试次数
     - Toolcall/LLM 节点异常时自动添加消息到上下文，保持角色消息顺序正确
     - 保持 Middleware 拦截执行的顺序和异常处理正确
     - 触发异常时，保持上下文角色顺序正确、内容完整
-    - 轮次开始时，自动检查和修复上下文角色顺序和内容
+    - 轮次开始时，自动检查和修复消息上下文角色顺序和内容
 - ✅**Sub-Agent**
     - 借由 Tool 实现, 允许 llm/代码 异步启动 SubAgent
     - Toolcall 支持并发，因此支持同时启动运行多个 Subagent
@@ -117,6 +119,9 @@
     - 预设功能:
         - 定时通知
         - 定长延时循环通知
+    - llm启动任务后，异步得到结果
+    - 使任务结果支持分块流式输出
+    - 接入外部程序的消息通知、数据添加
 - ✅**Skill支持** `SkillMiddleware`
     - 文件夹扫描/metadata读取收集 + `filesystem`文件内容读取 + `execute_command`执行
 - ❌**MCP支持** (Neograph已实现，但暂时使用有问题)
@@ -162,6 +167,7 @@
 - Openai Api Server
 - ACP Server
 - A2A Server
+
 ### 测试
 - Agent 整体稳定性测试
     - ✅在 llm/toolcall 等各种节点触发中断/异常时，保持上下文角色顺序正确、内容完整
@@ -234,6 +240,7 @@ npm install --legacy-peer-deps
 ```
 - 接下来按希望输出的目标系统选择:
     - [Linux/WSL 可执行程序 / 动态库编译 .so / 静态库 .a](/docs/build/linux.md)
+    - [Android 动态库编译 .so / 静态库 .a](/docs/build/android.md)
     - [Windows 可执行程序 .exe / 动态库编译 .dll / 静态库 .lib](/docs/build/windows.md)
 
 ## LICENSE
