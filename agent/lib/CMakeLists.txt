@@ -140,24 +140,45 @@ endif()
 
 # 统一输出名称 libagentxx
 # - 不指定时，部分系统，如win可能编译输出缺少前缀 lib
-# 生成 libagentxx.so / agentxx.dll
-set_target_properties(agentxx_shared PROPERTIES
-  OUTPUT_NAME "agentxx"
-  PUBLIC_HEADER "include/agentxx/agentxx.h"
-  PREFIX "lib"
-  CXX_STANDARD 26
-  LINK_LIBRARIES_STRATEGY "REORDER_MINIMALLY"
-  VS_GLOBAL_VcpkgEnabled false
-)
-# 生成 libagentxx_static.a / agentxx_static.lib
-set_target_properties(agentxx_static PROPERTIES
-  OUTPUT_NAME "agentxx_static"
-  PUBLIC_HEADER "include/agentxx/agentxx.h"
-  PREFIX "lib"
-  CXX_STANDARD 26
-  LINK_LIBRARIES_STRATEGY "REORDER_MINIMALLY"
-  VS_GLOBAL_VcpkgEnabled false
-)
+if (XX_IS_DEBUG_D)
+  # 生成 libagentxxd.so
+  set_target_properties(agentxx_shared PROPERTIES
+    OUTPUT_NAME "agentxxd"
+    PUBLIC_HEADER "include/agentxx/agentxx.h"
+    PREFIX "lib"
+    CXX_STANDARD 26
+    LINK_LIBRARIES_STRATEGY "REORDER_MINIMALLY"
+    VS_GLOBAL_VcpkgEnabled false
+  )
+  # 生成 libagentxx_staticd.a
+  set_target_properties(agentxx_static PROPERTIES
+    OUTPUT_NAME "agentxx_staticd"
+    PUBLIC_HEADER "include/agentxx/agentxx.h"
+    PREFIX "lib"
+    CXX_STANDARD 26
+    LINK_LIBRARIES_STRATEGY "REORDER_MINIMALLY"
+    VS_GLOBAL_VcpkgEnabled false
+  )
+else()
+  # 生成 libagentxxd.so
+  set_target_properties(agentxx_shared PROPERTIES
+    OUTPUT_NAME "agentxx"
+    PUBLIC_HEADER "include/agentxx/agentxx.h"
+    PREFIX "lib"
+    CXX_STANDARD 26
+    LINK_LIBRARIES_STRATEGY "REORDER_MINIMALLY"
+    VS_GLOBAL_VcpkgEnabled false
+  )
+  # 生成 libagentxxd_static.a
+  set_target_properties(agentxx_static PROPERTIES
+    OUTPUT_NAME "agentxx_static"
+    PUBLIC_HEADER "include/agentxx/agentxx.h"
+    PREFIX "lib"
+    CXX_STANDARD 26
+    LINK_LIBRARIES_STRATEGY "REORDER_MINIMALLY"
+    VS_GLOBAL_VcpkgEnabled false
+  )
+endif()
 target_link_directories(agentxx_shared PUBLIC ${AGENTXX_INSTALL_DIR}/lib/)
 target_link_directories(agentxx_static PUBLIC ${AGENTXX_INSTALL_DIR}/lib/)
 

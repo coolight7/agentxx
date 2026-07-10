@@ -1,3 +1,4 @@
+#include "agentxx/agent/acp_server.h"
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/deepagent.h"
 #include "agentxx/agent/training.h"
@@ -33,7 +34,9 @@ static std::shared_ptr<agentxx::agent::AgentConfig> buildDefaultConfig() {
 3. 你需要总是用简体中文回复
 )",
   };
+  config->isSystemWSL = agentxx::util::isRunningInWSL();
   config->currentSystemName = "Ubuntu 22.04/Linux";
+  config->mcpServerUrls.push_back("http://172.29.48.1:17001");
   config->skillDirPaths = std::vector<std::string>{
       "/home/coolight/program/agentxx/isolation/skills/"};
   config->logPrintMessagesBeforeLLM = true;
@@ -61,7 +64,7 @@ makeSubAgentConfig(std::shared_ptr<agentxx::agent::AgentConfig> base,
 
 static void
 runTrainingMode(std::shared_ptr<agentxx::agent::AgentConfig> baseConfig) {
-  std::cout << "======= Agentxx Training Mode =======" << std::endl;
+  XX_OUT("======= Agentxx Training Mode =======");
 
   auto trainAgent = std::make_shared<agentxx::agent::DeepAgent>(baseConfig);
   auto scorerAgent =
@@ -130,8 +133,8 @@ runTrainingMode(std::shared_ptr<agentxx::agent::AgentConfig> baseConfig) {
               trainCfg.testCases.push_back(std::move(tc));
             }
           }
-          std::cout << "[Training] Loaded " << trainCfg.testCases.size()
-                    << " test cases from training_testcases.json" << std::endl;
+          XX_OUT("[Training] Loaded {} test cases from training_testcases.json",
+                 trainCfg.testCases.size());
         }
       } catch (const std::exception &e) {
         std::cerr << "[Training] Failed to parse training_testcases.json: "
@@ -145,11 +148,10 @@ runTrainingMode(std::shared_ptr<agentxx::agent::AgentConfig> baseConfig) {
     return;
   }
 
-  std::cout << "[Training] Test cases: " << trainCfg.testCases.size()
-            << std::endl;
-  std::cout << "[Training] Save path: " << trainCfg.saveFilePath << std::endl;
-  std::cout << "[Training] Top K: " << trainCfg.topK << std::endl;
-  std::cout << "[Training] Starting evolution loop..." << std::endl;
+  XX_OUT("[Training] Test cases: {}", trainCfg.testCases.size());
+  XX_OUT("[Training] Save path: {}", trainCfg.saveFilePath);
+  XX_OUT("[Training] Top K: {}", trainCfg.topK);
+  XX_OUT("[Training] Starting evolution loop...");
 
   // 使用 trainAgent 的 io_context 驱动整个训练循环
   asio::io_context trainIoCtx;
@@ -158,18 +160,18 @@ runTrainingMode(std::shared_ptr<agentxx::agent::AgentConfig> baseConfig) {
       trainIoCtx,
       [trainAgent, scorerAgent, optimizerAgent,
        trainCfg]() -> asio::awaitable<void> {
-        std::cout << "[Training] Initializing agents..." << std::endl;
+        XX_OUT("[Training] Initializing agents...");
         co_await trainAgent->init();
         co_await scorerAgent->init();
         co_await optimizerAgent->init();
-        std::cout << "[Training] All agents initialized." << std::endl;
+        XX_OUT("[Training] All agents initialized.");
 
         agentxx::agent::EvolutionTrainingAgent trainer(scorerAgent, trainAgent,
                                                        optimizerAgent);
         trainer.seedInitialPopulation(
             trainAgent->getContext()->agentConfig->prompt.systemPrompt);
 
-        std::cout << "[Training] Entering evolution loop..." << std::endl;
+        XX_OUT("[Training] Entering evolution loop...");
         co_await trainer.runEvolutionLoop(trainCfg);
       },
       asio::detached);
@@ -199,10 +201,22 @@ int main(int argn, char **argv) {
   if (mode == "train" || mode == "training") {
     runTrainingMode(config);
     return 0;
+  } else if (mode == "acp") {
+    auto agent = agentxx::agent::DeepAgent{config};
+    asio::co_spawn(
+        *agent.ioCtx,
+        [&]() -> asio::awaitable<void> {
+          co_await agent.init();
+          agentxx::server::AcpServer::run_server(agent.engine, true);
+          co_return;
+        },
+        asio::detached);
+    agent.ioCtx->run();
+    return 0;
   }
 
   // 默认 CLI 交互模式
-  std::cout << "======= Agentxx Client =======" << std::endl;
+  XX_OUT("======= Agentxx Client =======");
   auto agent = agentxx::agent::DeepAgent{config};
   agent.runCli();
   return 0;

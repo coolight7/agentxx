@@ -268,17 +268,22 @@ public:
         }
       }
 
-      std::cout << "\n┏━━━━━━ Skill Load ━━━━━━┓" << std::endl;
+      std::string content;
       for (const auto &item : skillCache.skillData) {
-        fmt::println("┣━ ✅ Load skill metadata success: `{}`({}): {}",
-                     item.second.name, item.second.dirpath,
-                     item.second.description);
+        content += fmt::format(
+            "┣━ ✅ Load skill metadata success: `{}`({}): {}\n",
+            item.second.name, item.second.dirpath, item.second.description);
       }
       for (const auto &item : skillCache.loadErrors) {
-        fmt::println("┣━ ❌ Load skill metadata failed: {} | {}", item.first,
-                     item.second);
+        content += fmt::format("┣━ ❌ Load skill metadata failed: {} | {}\n",
+                               item.first, item.second);
       }
-      std::cout << "┗━━━━━━ Skill Load ━━━━━━┛\n" << std::endl;
+      XX_LOGD(R"_(
+┏━━━━━━ Skill Load ━━━━━━┓
+{}
+┗━━━━━━ Skill Load ━━━━━━┛
+)_",
+              content);
     }
     co_return;
   }

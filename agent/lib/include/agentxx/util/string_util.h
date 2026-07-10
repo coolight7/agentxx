@@ -380,24 +380,6 @@ inline constexpr std::vector<std::string> strSplitCopid(std::string_view in_str,
   return result;
 }
 
-inline void printStringToIntList(const char *str) {
-  if (nullptr == str) {
-    XX_LOGI("[]");
-    return;
-  }
-  std::cout << "[";
-  for (int i = 0;; ++i) {
-    if (str[i] == '\0') {
-      break;
-    }
-    if (i > 0) {
-      std::cout << ", ";
-    }
-    std::cout << int(str[i]);
-  }
-  std::cout << "]" << std::endl;
-}
-
 inline constexpr std::string_view toStringNotNull(const char *str) {
   if (nullptr == str) {
     return std::string_view{""};

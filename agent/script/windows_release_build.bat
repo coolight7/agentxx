@@ -28,7 +28,7 @@ rem find Ragel
 set "PATH=%PATH%;%localappdata%\Microsoft\WinGet\Links\"
 
 set BOOST_ROOT="%src_dir%/third_party/boost-windows-build-release/"
-set OPENSSL_ROOT_DIR="%src_dir%/third_party/OpenSSL-windows/"
+set OPENSSL_ROOT_DIR="%src_dir%/third_party/OpenSSL-window-build/"
 
 cmake -DAGENTXX_BUILD_CLIENT=ON ^
     -DAGENTXX_BUILD_TEST=ON ^

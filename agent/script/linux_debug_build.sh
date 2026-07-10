@@ -5,7 +5,7 @@ src_dir="$script_dir/../"
 build_dir="$script_dir/../build/linux-debug"
 
 BOOST_ROOT=$(cd "$src_dir/third_party/boost-linux-build-debug/" && pwd)
-OPENSSL_ROOT_DIR=$(cd "$src_dir/third_party/OpenSSL-linux/" && pwd)
+OPENSSL_ROOT_DIR=$(cd "$src_dir/third_party/OpenSSL-linux-build/" && pwd)
 
 cmake -B "$build_dir" -S "$src_dir" \
     -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \

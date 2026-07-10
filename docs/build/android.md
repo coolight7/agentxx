@@ -2,7 +2,7 @@
 
 - 系统环境: Linux
 - C++ 标准: Requires C++26+.
-- 编译器推荐: Linux/NDK 29
+- 编译器推荐: Linux/NDK r29/Clang 21.0.0
 
 ## 开始
 - 自行编译 Boost 1.91.0 :
@@ -31,7 +31,7 @@ cd "$boost_source_dir"
     --prefix=$boost_install_release_dir \
     --toolchain=llvm \
     --layout=system \
-    --arch=arm64-v8a,armeabi-v7a,x86_64,x86 \
+    --arch=arm64-v8a,armeabi-v7a,x86,x86_64 \
     --target-version=21
 ```
 ### 源码编译 openssl
@@ -43,7 +43,7 @@ tar -xzvf openssl-4.0.1.tar.gz
 cd openssl-4.0.1
 
 openssl_source_dir=$PWD
-openssl_build_dir="$openssl_source_dir/../OpenSSL-android"
+openssl_build_dir="$openssl_source_dir/../OpenSSL-android-build"
 mkdir -p "$openssl_build_dir"
 openssl_build_dir=$(cd "$openssl_build_dir" && pwd)
 

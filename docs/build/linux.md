@@ -12,17 +12,16 @@
 # https://github.com/boostorg/boost/releases/
 # 下载 release/boost-xxx-cmake.tar.gz 解压到 agent/third_party/boost/
 cd boost/
-# 然后编译结果到 agent/third_party/boost-build/
 ./bootstrap.sh
 
-# 创建 third_party/boost-build-debug 和 third_party/boost-build-release 目录
+# 创建 third_party/boost-linux-build-debug 和 third_party/boost-linux-build-release 目录
 boost_source_dir=$PWD
 
-boost_install_debug_dir="${boost_source_dir}/../boost-build-debug/"
+boost_install_debug_dir="${boost_source_dir}/../boost-linux-build-debug/"
 mkdir -p "$boost_install_debug_dir"
 boost_install_debug_dir=$(cd "$boost_install_debug_dir" && pwd)
 
-boost_install_release_dir="${boost_source_dir}/../boost-build-release/"
+boost_install_release_dir="${boost_source_dir}/../boost-linux-build-release/"
 mkdir -p "$boost_install_release_dir"
 boost_install_release_dir=$(cd "$boost_install_release_dir" && pwd)
 
@@ -46,7 +45,7 @@ tar -xzvf openssl-4.0.1.tar.gz
 cd openssl-4.0.1
 
 openssl_source_dir=$PWD
-openssl_build_dir="$openssl_source_dir/../OpenSSL"
+openssl_build_dir="$openssl_source_dir/../OpenSSL-linux-build"
 mkdir -p "$openssl_build_dir"
 openssl_build_dir=$(cd "$openssl_build_dir" && pwd)
 

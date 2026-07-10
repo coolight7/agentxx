@@ -20,6 +20,9 @@
 #define XX_LOGE(str, ...)                                                      \
   (std::cerr << fmt::format(str, ##__VA_ARGS__) << std::endl);
 
+#define XX_OUT(str, ...)                                                       \
+  (std::cerr << fmt::format(str, ##__VA_ARGS__) << std::endl);
+
 #else
 
 #define XX_LOGD(str, ...) ;
@@ -29,6 +32,9 @@
 #define XX_LOGW(str, ...) ;
 
 #define XX_LOGE(str, ...) ;
+
+#define XX_OUT(str, ...)                                                       \
+  (std::cerr << fmt::format(str, ##__VA_ARGS__) << std::endl);
 
 #endif
 

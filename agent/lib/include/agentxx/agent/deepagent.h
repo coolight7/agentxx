@@ -37,7 +37,7 @@ namespace agentxx {
 namespace agent {
 
 class DeepAgent {
-protected:
+public:
   /// 主协程调度器
   /// - 不要在同线程中传递到 [runCliAsync]
   /// 内使用，因为[engine->run_stream_async]会启动其他 io_context， 交替 ioCtx
@@ -45,10 +45,9 @@ protected:
   /// - 某个异步函数需要 io_context 时，可以通过 `co_await
   /// asio::this_coro::executor` 获取当前异步函数运行时绑定的 io_context
   std::shared_ptr<asio::io_context> ioCtx = nullptr;
-  std::unique_ptr<neograph::graph::GraphEngine> engine = nullptr;
+  std::shared_ptr<neograph::graph::GraphEngine> engine = nullptr;
   std::shared_ptr<AgentContext> agentContext = nullptr;
 
-public:
   DeepAgent(std::shared_ptr<agentxx::agent::AgentConfig> in_config) {
     ioCtx = std::make_shared<asio::io_context>();
     agentContext = std::make_shared<AgentContext>();
@@ -247,13 +246,15 @@ public:
             std::make_shared<agentxx::tools::RAGSearchTool::VectorStore>(
                 client);
         auto docs = co_await docsStore->scanDocument(config->ragDocsPaths);
-        std::cout << "\n┏━━━━━━ RAG Embedding ━━━━━━┓" << std::endl;
-        if (co_await docsStore->addDocuments(std::move(docs))) {
-          fmt::println("┣━ ✅ success: append {} docs", docs.size());
-        } else {
-          std::cout << "┣━ ❌ failed" << std::endl;
-        }
-        std::cout << "┗━━━━━━ RAG Embedding ━━━━━━┛\n" << std::endl;
+        auto isAddSuccess = co_await docsStore->addDocuments(std::move(docs));
+        XX_LOGD(R"_(
+┏━━━━━━ RAG Embedding ━━━━━━┓
+{}
+┗━━━━━━ RAG Embedding ━━━━━━┛
+)_",
+                isAddSuccess
+                    ? fmt::format("┣━ ✅ success: append {} docs", docs.size())
+                    : "┣━ ❌ failed");
         tools.push_back(std::make_unique<agentxx::tools::RAGSearchTool>(
             docsStore, agentContext));
       }
@@ -475,8 +476,8 @@ public:
         },
     };
 
-    engine = neograph::graph::GraphEngine::compile(graphDefinition, nodeContext,
-                                                   store);
+    engine = std::move(neograph::graph::GraphEngine::compile(
+        graphDefinition, nodeContext, store));
     {
       auto crudeTools = std::vector<std::unique_ptr<neograph::Tool>>{};
       for (auto &tool : tools) {
@@ -631,21 +632,21 @@ public:
         [](const std::string &interruptNode, const std::string &interruptValue,
            const std::string &interruptHandleName,
            bool interruptHandleFound) -> asio::awaitable<void> {
-      std::cout << "\n┏━━━━━━ Interrupted ━━━━━━┓" << std::endl;
-      std::cout << "┣━ Interrupted at: " << interruptNode << std::endl;
-      std::cout << "┣━ Value: " << interruptValue << std::endl;
-      if (false == interruptHandleName.empty()) {
-        if (interruptHandleFound) {
-          std::cout << "┣━ Interrupt Handle: " << interruptHandleName
-                    << std::endl;
-        } else {
-          std::cout << "┣━ Interrupt Handle Not Found for: "
-                    << interruptHandleName << std::endl;
-        }
-      } else {
-        std::cout << "┣━ Unknown InterruptHandleArg" << std::endl;
-      }
-      std::cout << "┗━━━━━━ Interrupted ━━━━━━┛\n" << std::endl;
+      XX_OUT(R"_(
+┏━━━━━━ Interrupted ━━━━━━┓
+┣━ Interrupted at: {}
+┣━ Value: {}
+{}
+┗━━━━━━ Interrupted ━━━━━━┛
+)_",
+             interruptNode, interruptValue,
+             (false == interruptHandleName.empty())
+                 ? interruptHandleFound
+                       ? fmt::format("┣━ Interrupt Handle: {}",
+                                     interruptHandleName)
+                       : fmt::format("┣━ Interrupt Handle Not Found for: {}",
+                                     interruptHandleName)
+                 : "┣━ Unknown InterruptHandleArg");
       co_return;
     };
 

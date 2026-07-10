@@ -163,25 +163,24 @@ public:
       if (false == printSystemMsg && msg.role == "system") {
         continue;
       }
-      std::string tools;
+      std::string toollist;
       if (false == msg.tool_calls.empty()) {
-        tools += "┣━ Toolcall: \n";
+        toollist += "┣━ Toolcall: \n";
         for (const auto &tool : msg.tool_calls) {
-          tools += fmt::format(R"(  - {}/{}
+          toollist += fmt::format(R"(  - {}/{}
     {}
 )",
-                               tool.name, tool.id, tool.arguments);
+                                  tool.name, tool.id, tool.arguments);
         }
       }
-      std::cout << fmt::format(R"(
+      XX_OUT(R"(
 ┏━━━━━━ Message/{} ━━━━━━┓
 ┣━ Role: {}
 {}
 ┣━ Content: {}
 ┗━━━━━━ Message/{} ━━━━━━┛
 )",
-                               index, msg.role, tools, msg.content, index)
-                << std::endl;
+             index, msg.role, toollist, msg.content, index);
     }
   }
 };

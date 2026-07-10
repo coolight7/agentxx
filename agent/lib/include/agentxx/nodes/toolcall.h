@@ -257,23 +257,23 @@ public:
         tool_msg.content = R"({"error": "Tool not found: )" + tc.name + "\"}";
       } else {
         try {
-          auto result =
-              agentxx::middleware::InterruptHandleArg::getInterruptResult(
-                  in.state, [&tc]() {
-                    return agentxx::middleware::InterruptHandleArg{
-                        .name = agentxx::middleware::MiddlewareContext::
-                            interruptHandleName_default,
-                        .inputs =
-                            {
-                                agentxx::middleware::InterruptHandleArg::
-                                    InterruptHandleInputItem{
-                                        .label = "hello",
-                                        .depict = "hello agentxx!",
-                                    },
-                            },
-                        .resultId = tc.id,
-                    };
-                  });
+          // auto result =
+          //     agentxx::middleware::InterruptHandleArg::getInterruptResult(
+          //         in.state, [&tc]() {
+          //           return agentxx::middleware::InterruptHandleArg{
+          //               .name = agentxx::middleware::MiddlewareContext::
+          //                   interruptHandleName_default,
+          //               .inputs =
+          //                   {
+          //                       agentxx::middleware::InterruptHandleArg::
+          //                           InterruptHandleInputItem{
+          //                               .label = "hello",
+          //                               .depict = "hello agentxx!",
+          //                           },
+          //                   },
+          //               .resultId = tc.id,
+          //           };
+          //         });
 
           auto args = neograph::json::parse(tc.arguments);
           if (args.is_object() && args["thread_id"].is_null()) {

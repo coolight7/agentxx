@@ -523,29 +523,35 @@ public:
         return false;
       };
 
-      std::cout << "\n┏━━━━━━ RAG Docs Load ━━━━━━┓" << std::endl;
+      auto content = std::string{};
       for (const auto &itemPath : pathlist) {
-        std::cout << "try: " << itemPath << std::endl;
+        content += fmt::format("try: {}\n", itemPath);
         if (std::filesystem::is_directory(itemPath)) {
           for (const auto &entity :
                std::filesystem::recursive_directory_iterator(itemPath)) {
             if (entity.is_regular_file()) {
               if (onAppendItem(entity.path().generic_string())) {
                 auto &doc = result.back();
-                fmt::println("┣━ ✅ Load success: `{}`(Block {} | {} )",
-                             doc.title, doc.content.size(), itemPath);
+                content +=
+                    fmt::format("┣━ ✅ Load success: `{}`(Block {} | {} )\n",
+                                doc.title, doc.content.size(), itemPath);
               }
             }
           }
         } else if (std::filesystem::is_regular_file(itemPath)) {
           if (onAppendItem(itemPath)) {
             auto &doc = result.back();
-            fmt::println("┣━ ✅ Load success: `{}`(Block {} | {} )", doc.title,
-                         doc.content.size(), itemPath);
+            content += fmt::format("┣━ ✅ Load success: `{}`(Block {} | {} )\n",
+                                   doc.title, doc.content.size(), itemPath);
           }
         }
       }
-      std::cout << "┗━━━━━━ RAG Docs Load ━━━━━━┛\n" << std::endl;
+      XX_LOGD(R"_(
+┏━━━━━━ RAG Docs Load ━━━━━━┓
+{}
+┗━━━━━━ RAG Docs Load ━━━━━━┛
+)_",
+              content);
 
       co_return result;
     }

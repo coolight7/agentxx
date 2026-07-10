@@ -28,18 +28,17 @@ pkg-config --version
 # https://github.com/boostorg/boost/releases/
 # 下载 release/boost-xxx-cmake.7z 解压到 agent/third_party/boost/
 cd boost\
-# 然后编译结果到 agent/third_party/boost-build/
 .\bootstrap.bat
 
-# 创建 third_party/boost-build-debug 和 third_party/boost-build-release 目录，并回到 boost 目录
+# 创建 third_party/boost-windows-build-debug 和 third_party/boost-windows-build-release 目录，并回到 boost 目录
 set "boost_source_dir=%CD%"
 
-set "boost_install_debug_dir=%CD%/../boost-build-debug"
+set "boost_install_debug_dir=%CD%/../boost-windows-build-debug"
 mkdir "%boost_install_debug_dir%"
 cd "%boost_install_debug_dir%"
 set "boost_install_debug_dir=%CD%"
 
-set "boost_install_release_dir=%CD%/../boost-build-release"
+set "boost_install_release_dir=%CD%/../boost-windows-build-release"
 mkdir "%boost_install_release_dir%"
 cd "%boost_install_release_dir%"
 set "boost_install_release_dir=%CD%"
@@ -65,7 +64,7 @@ cd "%boost_source_dir%"
 .\b2.exe install --layout=system --prefix="$PWD/../boost-build-release" link=static runtime-link=shared runtime-debugging=off address-model=64 variant=release 
 ```
 ### 下载预编译的 openssl
-- 前往下载 `https://slproweb.com/products/Win32OpenSSL.html`, 进入网页后往下滑动，找到 `Win64 OpenSSL vx.x.x`，注意没有末尾 Light，下载其 `EXE` 或 `MSI` 都行，然后运行安装，安装目录选择到 `{项目根目录}/agent/third_party/OpenSSL/` 即可
+- 前往下载 `https://slproweb.com/products/Win32OpenSSL.html`, 进入网页后往下滑动，找到 `Win64 OpenSSL vx.x.x`，注意没有末尾 Light，下载其 `EXE` 或 `MSI` 都行，然后运行安装，安装目录选择到 `{项目根目录}/agent/third_party/OpenSSL-windows-build/` 即可
 ### 安装 Ragel
 - 编译高性能正则表达式库支持`vectorize`/`hyperscan`需要，不想安装也可以修改 [debug_build.bat](/agent/script/debug_build.bat)，更改 `-DAGENTXX_ENABLE_HYPERSCAN=OFF`关闭即可。
 - 打开 cmd，执行命令看看是否有 ragel:
