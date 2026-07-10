@@ -2,9 +2,9 @@
 
 script_dir=$(cd "$(dirname "$0")" && pwd)
 src_dir="$script_dir/../"
-build_dir="$script_dir/../build/debug"
+build_dir="$script_dir/../build/linux-debug"
 
-$script_dir/debug_build.sh
+$script_dir/linux_debug_build.sh
 
 if [[ $? -ne 0 ]]; then
     exit $?
