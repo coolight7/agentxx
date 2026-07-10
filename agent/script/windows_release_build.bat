@@ -27,8 +27,8 @@ set VCPKG_ROOT=
 rem find Ragel
 set "PATH=%PATH%;%localappdata%\Microsoft\WinGet\Links\"
 
-set BOOST_ROOT="%src_dir%/third_party/boost-build-release/"
-set OPENSSL_ROOT_DIR="%src_dir%/third_party/OpenSSL/"
+set BOOST_ROOT="%src_dir%/third_party/boost-windows-build-release/"
+set OPENSSL_ROOT_DIR="%src_dir%/third_party/OpenSSL-windows/"
 
 cmake -DAGENTXX_BUILD_CLIENT=ON ^
     -DAGENTXX_BUILD_TEST=ON ^

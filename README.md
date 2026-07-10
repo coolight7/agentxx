@@ -164,7 +164,6 @@
 
 ### Server
 - Agent2App Api Server
-- Openai Api Server
 - ACP Server
 - A2A Server
 
