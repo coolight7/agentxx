@@ -27,11 +27,16 @@ set VCPKG_ROOT=
 rem find Ragel
 set "PATH=%PATH%;%localappdata%\Microsoft\WinGet\Links\"
 
+set BOOST_ROOT="%src_dir%/third_party/boost-build-debug/"
+set OPENSSL_ROOT_DIR="%src_dir%/third_party/OpenSSL/"
+
 cmake -DAGENTXX_BUILD_CLIENT=ON ^
     -DAGENTXX_BUILD_TEST=ON ^
     -DAGENTXX_ENABLE_VECTORSCAN=OFF ^
     -DAGENTXX_ENABLE_HYPERSCAN=ON ^
     -DAGENTXX_ENABLE_CODEGRAPH=ON ^
+    -DBOOST_ROOT="%BOOST_ROOT%" ^
+    -DOPENSSL_ROOT_DIR="%OPENSSL_ROOT_DIR%" ^
     -DXX_BUILD_TYPE=DEBUG ^
     -DCMAKE_BUILD_TYPE=Debug ^
     -DCMAKE_CONFIGURATION_TYPES=Debug ^

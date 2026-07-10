@@ -225,70 +225,19 @@ set (Boost_USE_DEBUG_LIBS ${XX_IS_DEBUG_D})
 set (Boost_USE_RELEASE_LIBS ${XX_IS_RELEASE_D})
 set (Boost_USE_DEBUG_RUNTIME ${XX_IS_DEBUG_D})
 set (Boost_USE_RELEASE_RUNTIME ${XX_IS_RELEASE_D})
-if (NOT DEFINED BOOST_ROOT OR NOT EXISTS "${BOOST_ROOT}")
-  # 尝试预编译目录，按顺序:
-  #   - ${BOOST_ROOT}
-  #   - boost-build-debug / boost-build-release
-  #   - boost-build
-  if (XX_IS_WIN_D OR XX_IS_LINUX_D OR XX_IS_MACOS_D)
-    if (XX_IS_DEBUG_D)
-      set(_BOOST_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/boost-build-debug/")
-    else ()
-      set(_BOOST_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/boost-build-release/")
-    endif ()
-    if (NOT EXISTS ${_BOOST_ROOT})
-      set(_BOOST_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/boost-build/")
-    endif ()
-
-    if (EXISTS ${_BOOST_ROOT})
-      set(BOOST_ROOT ${_BOOST_ROOT} CACHE PATH "Boost root directory" FORCE)
-    endif ()
-  endif ()
-
-  unset(_BOOST_ROOT)
-  set(BOOST_ROOT ${BOOST_ROOT} CACHE PATH "Boost root directory" FORCE)
+if (NOT DEFINED BOOST_ROOT)
+  message(FATAL_ERROR "[agentxx] Need to set BOOST_ROOT to the path of your Boost installation")
+elseif (NOT EXISTS "${BOOST_ROOT}")
+  message(FATAL_ERROR "[agentxx] BOOST_ROOT not exists: ${BOOST_ROOT}")
 endif()
 
 # openssl
 set (OPENSSL_USE_STATIC_LIBS ON)
-if (NOT DEFINED OPENSSL_ROOT_DIR OR NOT EXISTS "${OPENSSL_ROOT_DIR}")
-  # 预编译目录
-  if (XX_IS_WIN_D OR XX_IS_LINUX_D OR XX_IS_MACOS_D)
-    set(_OPENSSL_ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/OpenSSL/")
-
-    if (EXISTS ${_OPENSSL_ROOT_DIR})
-      set(OPENSSL_ROOT_DIR ${_OPENSSL_ROOT_DIR} CACHE PATH "OpenSSL root directory" FORCE)
-    endif()
-  endif ()
-
-  unset(_OPENSSL_ROOT_DIR)
-
-  if (XX_IS_WIN_D)
-    # 动态链接标准库
-    set(OPENSSL_INCLUDE_DIR "${OPENSSL_ROOT_DIR}/include/")
-    if (XX_IS_DEBUG_D)
-      set(OPENSSL_LIB_DIR "${OPENSSL_ROOT_DIR}/lib/VC/MDd")
-      set(OPENSSL_SSL_LIBRARY "libssl_static.lib")
-      set(OPENSSL_CRYPTO_LIBRARY "libcrypto_static.lib")
-    else ()
-      set(OPENSSL_LIB_DIR "${OPENSSL_ROOT_DIR}/lib/VC/MD")
-      set(OPENSSL_SSL_LIBRARY "libssl_static.lib")
-      set(OPENSSL_CRYPTO_LIBRARY "libcrypto_static.lib")
-    endif()
-  elseif (XX_IS_LINUX_D)
-    set(OPENSSL_INCLUDE_DIR    "${OPENSSL_ROOT_DIR}/include/")
-    set(OPENSSL_LIB_DIR        "${OPENSSL_ROOT_DIR}/lib64/")
-    set(OPENSSL_SSL_LIBRARY    "libssl.a")
-    set(OPENSSL_CRYPTO_LIBRARY "libcrypto.a")
-  elseif (XX_IS_ANDROID_D)
-    set(OPENSSL_INCLUDE_DIR    "${OPENSSL_ROOT_DIR}/include/")
-    set(OPENSSL_LIB_DIR        "${OPENSSL_ROOT_DIR}/lib/")
-    set(OPENSSL_SSL_LIBRARY    "libssl.a")
-    set(OPENSSL_CRYPTO_LIBRARY "libcrypto.a")
-  endif()
-  set(OPENSSL_ROOT_DIR ${OPENSSL_ROOT_DIR} CACHE PATH "OpenSSL root directory" FORCE)
+if (NOT DEFINED OPENSSL_ROOT_DIR)
+  message(FATAL_ERROR "[agentxx] Need to set OPENSSL_ROOT_DIR to the path of your OpenSSL installation")
+elseif (NOT EXISTS "${OPENSSL_ROOT_DIR}")
+  message(FATAL_ERROR "[agentxx] OPENSSL_ROOT_DIR not exists: ${OPENSSL_ROOT_DIR}")
 endif()
-# set (OpenSSL_DIR ${OPENSSL_ROOT_DIR} CACHE PATH "OpenSSL root directory" FORCE)
 
 if (CMAKE_CROSSCOMPILING)
   # 统一追加 [CMAKE_FIND_ROOT_PATH]，逐步添加可能导致自动补充搜索路径时 find_package 验证查找失败
@@ -351,10 +300,6 @@ set(_AGENTXX_COMMON_CMAKE_ARGS
     -DBoost_USE_DEBUG_RUNTIME=${Boost_USE_DEBUG_RUNTIME}
     -DBoost_USE_RELEASE_RUNTIME=${Boost_USE_RELEASE_RUNTIME}
     "-DOPENSSL_ROOT_DIR:PATH=${OPENSSL_ROOT_DIR}"
-    "-DOPENSSL_INCLUDE_DIR:PATH=${OPENSSL_INCLUDE_DIR}"
-    "-DOPENSSL_LIB_DIR:PATH=${OPENSSL_LIB_DIR}"
-    "-DOPENSSL_SSL_LIBRARY=${OPENSSL_SSL_LIBRARY}"
-    "-DOPENSSL_CRYPTO_LIBRARY=${OPENSSL_CRYPTO_LIBRARY}"
     -DOPENSSL_USE_STATIC_LIBS=${OPENSSL_USE_STATIC_LIBS}
 
     -DXX_BUILD_TYPE=${XX_BUILD_TYPE}
@@ -386,6 +331,7 @@ set(_AGENTXX_COMMON_CMAKE_ARGS
 )
 if (ANDROID_PLATFORM)
   if (NOT ANDROID_ABI)
+    # 默认取 android SDK 21
     set (ANDROID_ABI 21)
   endif()
   list(APPEND _AGENTXX_COMMON_CMAKE_ARGS
@@ -410,24 +356,25 @@ find_package(Boost REQUIRED)
 find_package(OpenSSL REQUIRED)
 
 # liburing
-set(LIBURING_SOURCE_DIR "${AGENTXX_THIRD_PARTY_DIR}/liburing/")
 if (AGENTXX_LINUX_IO_URING_SUPPORTED)
+  set(LIBURING_SOURCE_DIR "${AGENTXX_THIRD_PARTY_DIR}/liburing")
   set(LIBURING_BINARY_DIR "${CMAKE_BINARY_DIR}/liburing-build")
   ExternalProject_Add(
     liburing_repo
-    SOURCE_DIR ${LIBURING_SOURCE_DIR}
-    BINARY_DIR ${LIBURING_BINARY_DIR}
-    INSTALL_DIR ${AGENTXX_INSTALL_DIR}
+    SOURCE_DIR "${LIBURING_SOURCE_DIR}"
+    BINARY_DIR "${LIBURING_BINARY_DIR}"
+    INSTALL_DIR "${AGENTXX_INSTALL_DIR}"
     CONFIGURE_COMMAND 
-        cd ${LIBURING_SOURCE_DIR} && 
-        ${LIBURING_SOURCE_DIR}/configure
+        cp -r "${LIBURING_SOURCE_DIR}" "${LIBURING_BINARY_DIR}/" && 
+        cd "${LIBURING_BINARY_DIR}/liburing" && 
+        "${LIBURING_BINARY_DIR}/liburing/configure"
         --prefix=${AGENTXX_INSTALL_DIR}
         --cc=${CMAKE_C_COMPILER}
         --cxx=${CMAKE_CXX_COMPILER}
     BUILD_COMMAND 
-      cd ${LIBURING_SOURCE_DIR} && make -j${CMAKE_BUILD_PARALLEL_LEVEL}
+      cd "${LIBURING_BINARY_DIR}/liburing/" && make -j${CMAKE_BUILD_PARALLEL_LEVEL}
     INSTALL_COMMAND 
-      cd ${LIBURING_SOURCE_DIR} && make install
+      cd "${LIBURING_BINARY_DIR}/liburing/" && make install
     TEST_COMMAND ""
   )
 endif()
@@ -436,7 +383,7 @@ endif()
 ExternalProject_Add(
   simdjson_repo
   SOURCE_DIR "${AGENTXX_THIRD_PARTY_DIR}/simdjson/"
-  INSTALL_DIR ${AGENTXX_INSTALL_DIR}
+  INSTALL_DIR "${AGENTXX_INSTALL_DIR}"
   CMAKE_ARGS
     ${_AGENTXX_COMMON_CMAKE_ARGS}
     -DSIMDJSON_BUILD_STATIC_LIB=ON
@@ -454,7 +401,7 @@ ExternalProject_Add(
 ExternalProject_Add(
   libiconv_repo
   SOURCE_DIR "${AGENTXX_THIRD_PARTY_DIR}/libiconv-native/"
-  INSTALL_DIR ${AGENTXX_INSTALL_DIR}
+  INSTALL_DIR "${AGENTXX_INSTALL_DIR}"
   CMAKE_ARGS
     ${_AGENTXX_COMMON_CMAKE_ARGS}
     -DICONV_ENABLE_EXTRA=OFF
@@ -472,7 +419,7 @@ ExternalProject_Add(
 ExternalProject_Add(
   sqlite3_repo
   SOURCE_DIR "${AGENTXX_THIRD_PARTY_DIR}/sqlite3-cmake/"
-  INSTALL_DIR ${AGENTXX_INSTALL_DIR}
+  INSTALL_DIR "${AGENTXX_INSTALL_DIR}"
   CMAKE_ARGS
     ${_AGENTXX_COMMON_CMAKE_ARGS}
     "-DSQLITE3_SOURCE_DIR="
@@ -500,7 +447,7 @@ ExternalProject_Add(
 ExternalProject_Add(
   fmt_repo
   SOURCE_DIR "${AGENTXX_THIRD_PARTY_DIR}/fmt/"
-  INSTALL_DIR ${AGENTXX_INSTALL_DIR}
+  INSTALL_DIR "${AGENTXX_INSTALL_DIR}"
   CMAKE_ARGS
     ${_AGENTXX_COMMON_CMAKE_ARGS}
     -DFMT_PEDANTIC=ON
@@ -521,7 +468,7 @@ ExternalProject_Add(
 ExternalProject_Add(
   uchardet_repo
   SOURCE_DIR "${AGENTXX_THIRD_PARTY_DIR}/uchardet/"
-  INSTALL_DIR ${AGENTXX_INSTALL_DIR}
+  INSTALL_DIR "${AGENTXX_INSTALL_DIR}"
   CMAKE_ARGS
     ${_AGENTXX_COMMON_CMAKE_ARGS}
     -DCHECK_SSE2=ON
@@ -538,7 +485,7 @@ if (AGENTXX_ENABLE_CUSTOM_CURL)
   ExternalProject_Add(
     curl_repo
     SOURCE_DIR "${AGENTXX_THIRD_PARTY_DIR}/curl/"
-    INSTALL_DIR ${AGENTXX_INSTALL_DIR}
+    INSTALL_DIR "${AGENTXX_INSTALL_DIR}"
     CMAKE_ARGS
       ${_AGENTXX_COMMON_CMAKE_ARGS}
       -DBUILD_CURL_EXE=OFF
@@ -582,7 +529,7 @@ if (AGENTXX_ENABLE_CODEGRAPH)
     codegraph_repo
     DEPENDS sqlite3_repo
     SOURCE_DIR "${AGENTXX_THIRD_PARTY_DIR}/codegraph-cpp/"
-    INSTALL_DIR ${AGENTXX_INSTALL_DIR}
+    INSTALL_DIR "${AGENTXX_INSTALL_DIR}"
     CMAKE_ARGS
       ${_AGENTXX_COMMON_CMAKE_ARGS}
       -DBUILD_SHARED_LIBS=OFF
@@ -620,7 +567,7 @@ if (AGENTXX_ENABLE_VECTORSCAN)
   ExternalProject_Add(
     vectorscan_repo
     SOURCE_DIR "${AGENTXX_THIRD_PARTY_DIR}/vectorscan/"
-    INSTALL_DIR ${AGENTXX_INSTALL_DIR}
+    INSTALL_DIR "${AGENTXX_INSTALL_DIR}"
     CMAKE_ARGS
       ${_AGENTXX_COMMON_CMAKE_ARGS}
       -DBUILD_UNIT=OFF
@@ -647,7 +594,7 @@ elseif (AGENTXX_ENABLE_HYPERSCAN)
   ExternalProject_Add(
     hyperscan_repo
     SOURCE_DIR "${AGENTXX_THIRD_PARTY_DIR}/hyperscan/"
-    INSTALL_DIR ${AGENTXX_INSTALL_DIR}
+    INSTALL_DIR "${AGENTXX_INSTALL_DIR}"
     CMAKE_ARGS
       ${_AGENTXX_COMMON_CMAKE_ARGS}
       -DBUILD_STATIC_AND_SHARED=OFF
@@ -675,7 +622,7 @@ ExternalProject_Add(
   neograph_repo
   DEPENDS sqlite3_repo
   SOURCE_DIR ${neograph_SOURCE_DIR}
-  INSTALL_DIR ${AGENTXX_INSTALL_DIR}
+  INSTALL_DIR "${AGENTXX_INSTALL_DIR}"
   CMAKE_ARGS
     ${_AGENTXX_COMMON_CMAKE_ARGS}
     -DNEOGRAPH_ENABLE_IO_URING=${AGENTXX_LINUX_IO_URING_SUPPORTED}
@@ -708,7 +655,7 @@ endif()
 ExternalProject_Add(
   html2md_repo
   SOURCE_DIR "${AGENTXX_THIRD_PARTY_DIR}/html2md/"
-  INSTALL_DIR ${AGENTXX_INSTALL_DIR}
+  INSTALL_DIR "${AGENTXX_INSTALL_DIR}"
   CMAKE_ARGS
     ${_AGENTXX_COMMON_CMAKE_ARGS}
     -DBUILD_EXE=OFF
@@ -726,7 +673,7 @@ ExternalProject_Add(
 ExternalProject_Add(
   yaml_cpp_repo
   SOURCE_DIR "${AGENTXX_THIRD_PARTY_DIR}/yaml-cpp/"
-  INSTALL_DIR ${AGENTXX_INSTALL_DIR}
+  INSTALL_DIR "${AGENTXX_INSTALL_DIR}"
   CMAKE_ARGS
     ${_AGENTXX_COMMON_CMAKE_ARGS}
     -DYAML_CPP_BUILD_CONTRIB=OFF
@@ -748,7 +695,7 @@ ExternalProject_Add(
 ExternalProject_Add(
   glob_repo
   SOURCE_DIR "${AGENTXX_THIRD_PARTY_DIR}/glob/"
-  INSTALL_DIR ${AGENTXX_INSTALL_DIR}
+  INSTALL_DIR "${AGENTXX_INSTALL_DIR}"
   CMAKE_ARGS
     ${_AGENTXX_COMMON_CMAKE_ARGS}
   CMAKE_CACHE_ARGS
@@ -769,7 +716,7 @@ ExternalProject_Add(
     yaml_cpp_repo
     glob_repo
   SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/lib/"
-  INSTALL_DIR ${AGENTXX_INSTALL_DIR}
+  INSTALL_DIR "${AGENTXX_INSTALL_DIR}"
   BUILD_ALWAYS TRUE
   INSTALL_ALWAYS TRUE 
   CMAKE_ARGS
@@ -796,7 +743,7 @@ if (AGENTXX_BUILD_CLIENT)
     agentxx_client_repo
     DEPENDS agentxx_lib_repo
     SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/client/"
-    INSTALL_DIR ${AGENTXX_INSTALL_DIR}
+    INSTALL_DIR "${AGENTXX_INSTALL_DIR}"
     BUILD_ALWAYS TRUE
     INSTALL_ALWAYS TRUE
     CMAKE_ARGS
@@ -811,7 +758,7 @@ if (AGENTXX_BUILD_TEST)
     agentxx_test_repo
     DEPENDS agentxx_lib_repo
     SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/test/"
-    INSTALL_DIR ${AGENTXX_INSTALL_DIR}
+    INSTALL_DIR "${AGENTXX_INSTALL_DIR}"
     BUILD_ALWAYS TRUE
     INSTALL_ALWAYS TRUE
     CMAKE_ARGS
