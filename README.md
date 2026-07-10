@@ -26,12 +26,12 @@
 - Agentxx 编译后输出的 可执行程序`agentxx_cli`、动态库`libagentxx` 都会尽量静态链接依赖库，保持编译结果对动态库的依赖尽量少
 - 以下是编译添加了所有支持的功能，如果需要进一步裁剪体积，可以移除 VectorScan/Hyperscan 等可选库、采用 -Os 体积编译优化，可以大幅缩减体积
 
-| System | agentxx_cli | libagentxx | compiler | TIP |
-|---|---|---|---|---|
-| **Windows** | 11.9 MB | 5.14 MB | MSVC (Visual Studio 18 2026 MSVC 19.51.36247.0) x86_64 -O2 | 打包时建议带上msvc运行时 |
-| **Linux** | 28 MB | 11 MB | GCC 16.1.0 x86_64 -O3 | 打包时建议带上 libstdc++.so.6,libgcc_s.so.1 |
-| **Linux (-deps)** | 21 MB | 4.4 MB | - | 移除依赖 vectorScan/hyperscan |
-| **Android (-deps)** | - | 7.9 MB | - | 移除依赖 vectorScan/hyperscan/codegraph |
+| System | agentxx_cli | agentxx_cli RAM | libagentxx | compiler | TIP |
+|---|---|---|---|---|---|
+| **Windows** | 12.2 M | 3.4 M | 5.14 M | MSVC (Visual Studio 18 2026 MSVC 19.51.36247.0) x86_64 -O2 | 打包时建议带上msvc运行时 |
+| **Linux** | 28 M | - | 11 M | GCC 16.1.0 x86_64 -O3 | 打包时建议带上 libstdc++.so.6,libgcc_s.so.1 |
+| **Linux (-deps)** | 21 M | | 4.4 M | - | 移除依赖 vectorScan/hyperscan |
+| **Android (-deps)** | - | - | 7.9 M | - | 移除依赖 vectorScan/hyperscan/codegraph |
 
 ## 计划实现
 ### 基础模块

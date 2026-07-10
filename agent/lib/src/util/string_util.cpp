@@ -107,11 +107,11 @@ agentxx::util::convertToUtf8(std::string_view src,
   // 编码转换
   const char *src_ptr = src.data();
   size_t src_remain = src_len;
-  int ret = iconv(cd, const_cast<char **>(&src_ptr), &src_remain, &dst_ptr,
-                  &dst_remain);
+  auto ret = iconv(cd, const_cast<char **>(&src_ptr), &src_remain, &dst_ptr,
+                   &dst_remain);
 
   std::string utf8Str;
-  if (ret != -1 && src_remain == 0) {
+  if (ret != (size_t)-1 && src_remain == 0) {
     utf8Str = std::string(dst_buf.data(), dst_buf_size - dst_remain);
   }
 
@@ -144,7 +144,7 @@ agentxx::util::autoConvertToUtf8(std::string_view str, std::string &encoding) {
   }
   uchardet_data_end(g_chardetHandle);
 
-  int n_candidates = uchardet_get_n_candidates(g_chardetHandle);
+  auto n_candidates = uchardet_get_n_candidates(g_chardetHandle);
   if (n_candidates <= 0) {
     return {false, std::nullopt};
   }
