@@ -409,8 +409,13 @@ public:
                 },
                 {
                     agentxx::middleware::BaseMiddlewareHandleInterface::
-                        channelKey_interruptArg,
+                        channelKey_interruptToolcallCache,
                     {{"reducer", "overwrite"}},
+                },
+                {
+                    agentxx::middleware::BaseMiddlewareHandleInterface::
+                        channelKey_interruptArgs,
+                    {{"reducer", "append"}},
                 },
                 {
                     agentxx::middleware::BaseMiddlewareHandleInterface::
@@ -535,43 +540,50 @@ public:
         auto interruptNode = crudeResult->interrupt_node;
         auto interruptValue = crudeResult->interrupt_value.dump();
 
-        std::string interruptHandleName;
-        bool interruptHandleFound = false;
-        std::optional<neograph::json> resumeValue;
+        auto resumeValues = neograph::json{};
 
-        auto interruptArg = agentxx::middleware::InterruptHandleArg::fromJson(
-            crudeResult->channel_raw(
-                agentxx::middleware::BaseMiddlewareHandleInterface::
-                    channelKey_interruptArg));
-        if (interruptArg.has_value()) {
-          interruptHandleName = interruptArg->name;
+        /// 提取中断参数，执行中断处理
+        const auto interruptArgs =
+            agentxx::middleware::InterruptHandleArg::listFromJson(
+                crudeResult->channel_raw(
+                    agentxx::middleware::BaseMiddlewareHandleInterface::
+                        channelKey_interruptArgs));
+        size_t argIndex = 0;
+        for (const auto &interruptArg : interruptArgs) {
+          ++argIndex;
           auto handleIt =
               agentContext->middlewareHandleContext->interruptHandles.find(
-                  interruptArg->name);
-          interruptHandleFound =
+                  interruptArg.name);
+          auto interruptHandleFound =
               (handleIt !=
                agentContext->middlewareHandleContext->interruptHandles.end());
+          if (interruptCallback) {
+            co_await interruptCallback(interruptNode, interruptValue,
+                                       interruptArg.name, interruptHandleFound);
+          }
+          auto interruptResult =
+              co_await agentContext->middlewareHandleContext
+                  ->execInterruptHandle(interruptArg.name, interruptArg);
+          if (interruptResult.has_value()) {
+            auto resultId = interruptArg.resultId;
+            if (resultId.empty()) {
+              resultId = std::to_string(argIndex);
+            }
+            resumeValues[resultId] = interruptResult.value();
+          }
         }
 
-        if (interruptCallback) {
-          co_await interruptCallback(interruptNode, interruptValue,
-                                     interruptHandleName, interruptHandleFound);
-        }
-
-        if (interruptArg.has_value() && interruptHandleFound) {
-          resumeValue = co_await agentContext->middlewareHandleContext
-                            ->execInterruptHandle(interruptArg->name,
-                                                  interruptArg.value());
-        }
-
-        if (resumeValue.has_value()) {
+        if (false == resumeValues.empty()) {
           engine->update_state(
               threadId, [&](neograph::graph::GraphState &state) {
                 state.overwrite(
                     agentxx::middleware::BaseMiddlewareHandleInterface::
                         channelKey_interruptResult,
-                    resumeValue.value());
+                    resumeValues);
                 state.overwrite("messages", std::move(messages));
+                state.remove(
+                    agentxx::middleware::BaseMiddlewareHandleInterface::
+                        channelKey_interruptArgs);
               });
 
           result =
