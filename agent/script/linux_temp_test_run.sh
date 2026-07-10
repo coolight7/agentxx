@@ -2,7 +2,7 @@
 
 script_dir=$(cd "$(dirname "$0")" && pwd)
 src_dir="$script_dir/../"
-build_dir="$script_dir/../build/temp/debug"
+build_dir="$script_dir/../build/temp/linux-debug"
 
 cmake -B "$build_dir" -S "$src_dir" -DAGENTXX_BUILD_CLIENT=ON -DAGENTXX_BUILD_TEST=ON -DXX_BUILD_TYPE=DEBUG -DCMAKE_BUILD_TYPE=Debug
 

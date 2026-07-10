@@ -6,7 +6,7 @@ set "crude_dir=%CD%"
 
 set "script_dir=%~dp0"
 set "src_dir=%script_dir%\..\"
-set "build_dir=%script_dir%\..\build\release"
+set "build_dir=%script_dir%\..\build\windows-release"
 
 cd %script_dir%
 set script_dir=%CD%
