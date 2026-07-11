@@ -3,6 +3,7 @@
 #include "agentxx/middlewares/permission.h"
 #include "agentxx/nodes/warp_handle.h"
 #include "agentxx/util/log.h"
+#include "agentxx/util/string_util.h"
 #include "asio/io_context.hpp"
 #include "fmt/base.h"
 #include "fmt/format.h"

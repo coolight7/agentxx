@@ -2,8 +2,12 @@
 
 // https://agentclientprotocol.com/protocol/schema.md
 
-#include <neograph/acp/server.h>
-#include <neograph/neograph.h>
+#include "agentxx/middlewares/middleware.h"
+#include "agentxx/nodes/agentcall.h"
+#include "agentxx/nodes/modelcall.h"
+#include "agentxx/nodes/toolcall.h"
+#include "neograph/acp/server.h"
+#include "neograph/neograph.h"
 
 #include <cctype>
 #include <chrono>
@@ -19,48 +23,71 @@
 namespace agentxx {
 namespace server {
 
-class UppercaseNode : public neograph::graph::GraphNode {
-public:
-  UppercaseNode(std::string n) : name_(std::move(n)) {}
-  asio::awaitable<neograph::graph::NodeOutput>
-  run(neograph::graph::NodeInput in) override {
-    auto raw = in.state.get("prompt");
-    std::string p = raw.is_string() ? raw.get<std::string>() : raw.dump();
-    std::string upper = "[neo-acp] ";
-    for (char c : p)
-      upper.push_back(
-          static_cast<char>(std::toupper(static_cast<unsigned char>(c))));
-    neograph::graph::NodeOutput out;
-    out.writes.push_back({"response", std::move(upper)});
-    co_return out;
-  }
-  std::string get_name() const override { return name_; }
-
-private:
-  std::string name_;
-};
-
 std::shared_ptr<neograph::graph::GraphEngine> build_engine() {
-  neograph::graph::NodeFactory::instance().register_type(
-      "uppercase", [](const std::string &n, const neograph::json &,
-                      const neograph::graph::NodeContext &) {
-        return std::make_unique<UppercaseNode>(n);
-      });
   neograph::json def = {
       {"name", "uppercase-acp-agent"},
-      {"channels",
-       {
-           {"prompt", {{"reducer", "overwrite"}}},
-           {"response", {{"reducer", "overwrite"}}},
-       }},
-      {"nodes",
-       {
-           {"uppercase", {{"type", "uppercase"}}},
-       }},
-      {"edges", neograph::json::array({
-                    neograph::json{{"from", "__start__"}, {"to", "uppercase"}},
-                    neograph::json{{"from", "uppercase"}, {"to", "__end__"}},
-                })},
+      {
+          "channels",
+          {
+              {"messages", {{"reducer", "append"}}},
+              {
+                  agentxx::middleware::BaseMiddlewareHandleInterface::
+                      channelKey_interruptMessages,
+                  {{"reducer", "overwrite"}},
+              },
+              {
+                  agentxx::middleware::BaseMiddlewareHandleInterface::
+                      channelKey_interruptToolcallCache,
+                  {{"reducer", "overwrite"}},
+              },
+              {
+                  agentxx::middleware::BaseMiddlewareHandleInterface::
+                      channelKey_interruptArgs,
+                  {{"reducer", "append"}},
+              },
+              {
+                  agentxx::middleware::BaseMiddlewareHandleInterface::
+                      channelKey_interruptResult,
+                  {{"reducer", "overwrite"}},
+              },
+          },
+      },
+      {
+          "nodes",
+          {
+              {
+                  "agent_start",
+                  {{
+                      "type",
+                      agentxx::nodes::AgentStartCallWrapNode::defNodeType,
+                  }},
+              },
+              {
+                  "agent_end",
+                  {{
+                      "type",
+                      agentxx::nodes::MiddlewareWrapAgentEndCallNode::
+                          defNodeType,
+                  }},
+              },
+              {
+                  "llm",
+                  {{
+                      "type",
+                      agentxx::nodes::ModelCallWrapNode::defNodeType,
+                  }},
+              },
+          },
+      },
+      {
+          "edges",
+          neograph::json::array({
+              {{"from", "__start__"}, {"to", "agent_start"}},
+              {{"from", "agent_start"}, {"to", "agent_end"}},
+              {{"from", "llm"}, {"to", "agent_end"}},
+              {{"from", "agent_end"}, {"to", "__end__"}},
+          }),
+      },
   };
   neograph::graph::NodeContext ctx;
   auto engine = neograph::graph::GraphEngine::compile(def, ctx);
@@ -139,10 +166,10 @@ public:
       }
     }
     if (notif_count == 0) {
-      std::cerr << "[!] expected at least one session/update notification\n";
+      std::cout << "[!] expected at least one session/update notification\n";
       return 1;
     }
-    std::cerr << "[*] OK — " << notif_count << " update(s) emitted, "
+    std::cout << "[*] OK — " << notif_count << " update(s) emitted, "
               << "response received\n";
     return 0;
   }
