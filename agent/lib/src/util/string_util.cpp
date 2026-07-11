@@ -152,7 +152,7 @@ agentxx::util::autoConvertToUtf8(std::string_view str, std::string &encoding) {
   //     n_candidates = 5;
   // }
   std::vector<std::string> detected_candidates;
-  for (int i = 0; i < n_candidates; ++i) {
+  for (size_t i = 0; i < n_candidates; ++i) {
     const char *enc = uchardet_get_encoding(g_chardetHandle, i);
     if (enc && std::strlen(enc) > 0) {
       detected_candidates.emplace_back(enc);
