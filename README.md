@@ -7,14 +7,15 @@
 ## 兼容性
 - 跨系统支持:
     - ✅可编译为独立可执行程序/动态库，摆脱额外的动态库依赖，仅依赖基本的系统库
-    - ✅已验证支持
-        - Windows 10+ x86_64
-        - Linux x86_64 + WSL扩展功能
-        - Linux 交叉编译 Android 5.0+ 支持
-    - ⬜未测试，理论上支持:
-        - Macos
-        - IOS
-    - ⬜编译优化，控制导出符号，裁剪体积
+    - 系统支持:
+
+| Status | System | TIP |
+|---|---|---|
+| ✅ | Windows 10+ x86_64 | - |
+| ✅ | Linux x86_64 | WSL扩展功能 |
+| ✅ | Android 5.0+ | Linux 交叉编译 |
+| ⬜ | Macos | 待测试兼容 |
+| ⬜ | IOS | 待测试兼容 |
 - `libagentxx` Lang Binding:
     - ✅C++ (自身开发语言)
     - ⬜Flutter/Dart
@@ -25,6 +26,7 @@
     - 默认编译提供 动态库`libagentxx`、静态库`libagentxx_static`, 且统一动态链接 libstdc++/libgcc/msvcrt(/MD|/MDd)
 ### 编译后的体积和依赖库
 - Agentxx 编译后输出的 可执行程序`agentxx_cli`、动态库`libagentxx` 都会尽量静态链接依赖库，保持编译结果对动态库的依赖尽量少
+- ⬜编译优化，控制导出符号，裁剪体积
 - 以下是`仅编译agentxx，移除大部分不必要的扩展依赖库`时的体积和运行时内存占用，如果需要进一步裁剪体积，可以移除 VectorScan/Hyperscan/codegraph/Boost.process 等可选库、采用 -Os 体积编译优化
 
 | System | agentxx_cli | agentxx_cli RAM | libagentxx | compiler | TIP |
@@ -243,5 +245,5 @@ npm install --legacy-peer-deps
     - [Windows 可执行程序 .exe / 动态库编译 .dll / 静态库 .lib](/docs/build/windows.md)
 
 ## LICENSE
-- MIT License
+- [MIT License](LICENSE)
 - 根据 动态链接、静态链接 库的不同，可能会携带他们的开源协议
