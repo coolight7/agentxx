@@ -274,7 +274,8 @@ Output ONLY the summary text, no meta-commentary.
             agentxx::middleware::MiddlewareContext::graphDataKey_systemMessage);
 
     const auto countTokenUsage = countTokens(appendSystemMsgList, messages);
-    const auto tokenUsage = std::max((size_t)apiTokenUsage, countTokenUsage);
+    const auto tokenUsage =
+        std::max(static_cast<size_t>(apiTokenUsage), countTokenUsage);
 
     const auto &thread_id = in.ctx.thread_id;
     neograph::json newMsgsJson;

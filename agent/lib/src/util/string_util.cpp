@@ -111,7 +111,7 @@ agentxx::util::convertToUtf8(std::string_view src,
                    &dst_remain);
 
   std::string utf8Str;
-  if (ret != (size_t)-1 && src_remain == 0) {
+  if (ret != static_cast<size_t>(-1) && src_remain == 0) {
     utf8Str = std::string(dst_buf.data(), dst_buf_size - dst_remain);
   }
 

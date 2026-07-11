@@ -474,7 +474,7 @@ public:
         if (bytesRead <= 0) {
           throw std::runtime_error{fmt::format(
               R"(Arg `byte_offset`({}) is out of range of file size({}).)",
-              offset, (size_t)fileSize)};
+              offset, static_cast<size_t>(fileSize))};
         }
 
         std::string result;

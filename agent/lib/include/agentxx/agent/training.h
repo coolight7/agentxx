@@ -741,7 +741,8 @@ public:
       }
 
       // 2a. 从当前 population 中选取 top 变体进行变异
-      int mutateFrom = std::min(cfg.mutateCount, (int)population.size());
+      int mutateFrom =
+          std::min(cfg.mutateCount, static_cast<int>(population.size()));
 
       std::vector<PromptVariant> newGeneration;
 
@@ -777,7 +778,7 @@ public:
                   return a.averageScore() > b.averageScore();
                 });
 
-      if ((int)population.size() > cfg.topK) {
+      if (population.size() > static_cast<size_t>(cfg.topK)) {
         if (cfg.verbose) {
           XX_LOGD("[EvolutionTraining] [{}] Trimming population from {} to {}",
                   generationCounter, population.size(), cfg.topK);
@@ -798,7 +799,8 @@ public:
       // 2f. 打印 top 信息
       if (cfg.verbose && !population.empty()) {
         XX_LOGD("[EvolutionTraining] [{}] Top 5 prompts:", generationCounter);
-        for (size_t i = 0; i < std::min(population.size(), (size_t)5); ++i) {
+        for (size_t i = 0;
+             i < std::min(population.size(), static_cast<size_t>(5)); ++i) {
           const auto &v = population[i];
           XX_LOGD("  [{}/{}] id={} avgScore={:.4f} tests={} gen={} parent={}",
                   i + 1, population.size(), v.id, v.averageScore(), v.testCount,

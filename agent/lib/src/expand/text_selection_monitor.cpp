@@ -7,6 +7,8 @@
 // include 顺序是必要的
 #include <winsock2.h>
 // ---
+#include <Ws2tcpip.h>
+// ---
 #include <UIAutomation.h>
 #include <oleacc.h>
 #include <windows.h>
@@ -670,7 +672,7 @@ private:
       sockaddr_in addr = {};
       addr.sin_family = AF_INET;
       addr.sin_port = htons(static_cast<u_short>(port));
-      addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+      inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
 
       if (tcpConnectWithTimeout(sock, addr, 200)) {
         closesocket(sock);
@@ -770,7 +772,7 @@ private:
     sockaddr_in addr = {};
     addr.sin_family = AF_INET;
     addr.sin_port = htons(static_cast<u_short>(port));
-    addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+    inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
 
     if (!tcpConnectWithTimeout(sock, addr, 3000)) {
       closesocket(sock);
@@ -1103,7 +1105,7 @@ private:
             wchar_t *pwszDst = static_cast<wchar_t *>(GlobalLock(hMem));
             if (pwszDst) {
               MultiByteToWideChar(CP_UTF8, 0, savedText.c_str(), -1, pwszDst,
-                                  wLen);
+                                  static_cast<int>(wLen));
               GlobalUnlock(hMem);
             }
             SetClipboardData(CF_UNICODETEXT, hMem);

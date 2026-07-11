@@ -36,7 +36,7 @@ static std::shared_ptr<agentxx::agent::AgentConfig> buildDefaultConfig() {
   };
   config->isSystemWSL = agentxx::util::isRunningInWSL();
   config->currentSystemName = "Ubuntu 22.04/Linux";
-  config->mcpServerUrls.push_back("http://172.29.48.1:17001");
+  // config->mcpServerUrls.push_back("http://172.29.48.1:17001");
   config->skillDirPaths = std::vector<std::string>{
       "/home/coolight/program/agentxx/isolation/skills/"};
   config->logPrintMessagesBeforeLLM = true;
