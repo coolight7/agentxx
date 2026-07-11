@@ -28,6 +28,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 option(XX_BUILD_TYPE "Generate the client target." "RELEASE")
 option(AGENTXX_BUILD_CLIENT "Generate the client target." OFF)
 option(AGENTXX_BUILD_TEST "Generate the test target." OFF)
+option(AGENTXX_BUILD_BENCHMARK "Generate the benchmark target." OFF)
 option(AGENTXX_ENABLE_VECTORSCAN "Add VectorScan for regex support. Use [AGENTXX_ENABLE_HYPERSCAN] or std::regex if disable." ON)
 option(AGENTXX_ENABLE_HYPERSCAN "Add HyperScan for regex support. Use [AGENTXX_ENABLE_VECTORSCAN] or std::regex if disable." OFF)
 option(AGENTXX_ENABLE_CODEGRAPH "Add CodeGraph-CPP for code analysis." ON)
@@ -819,6 +820,21 @@ if (AGENTXX_BUILD_TEST)
     agentxx_test_repo
     DEPENDS agentxx_lib_repo
     SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/test/"
+    INSTALL_DIR "${AGENTXX_INSTALL_DIR}"
+    BUILD_ALWAYS TRUE
+    INSTALL_ALWAYS TRUE
+    CMAKE_ARGS
+      ${_AGENTXX_COMMON_CMAKE_ARGS}
+    CMAKE_CACHE_ARGS
+      ${_AGENTXX_COMMON_CMAKE_CACHE_ARGS}
+    TEST_COMMAND ""
+  )
+endif()
+if (AGENTXX_BUILD_BENCHMARK)
+  ExternalProject_Add(
+    agentxx_benchmark_repo
+    DEPENDS agentxx_lib_repo
+    SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/benchmark/"
     INSTALL_DIR "${AGENTXX_INSTALL_DIR}"
     BUILD_ALWAYS TRUE
     INSTALL_ALWAYS TRUE

@@ -31,10 +31,6 @@ target_sources(agentxx_test PRIVATE
 	${test_SOURCES}
 )
 
-set_target_properties(agentxx_test PROPERTIES
-  VS_GLOBAL_VcpkgEnabled false
-)
-
 target_include_directories(agentxx_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 find_package(PkgConfig REQUIRED)

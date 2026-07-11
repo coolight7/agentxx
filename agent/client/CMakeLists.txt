@@ -29,10 +29,6 @@ target_sources(agentxx_cli PRIVATE
 	${client_SOURCES}
 )
 
-set_target_properties(agentxx_cli PROPERTIES
-  VS_GLOBAL_VcpkgEnabled false
-)
-
 target_include_directories(agentxx_cli PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 find_package(PkgConfig REQUIRED)

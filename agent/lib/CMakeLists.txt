@@ -150,7 +150,6 @@ if (XX_IS_DEBUG_D)
     PREFIX "lib"
     CXX_STANDARD 26
     LINK_LIBRARIES_STRATEGY "REORDER_MINIMALLY"
-    VS_GLOBAL_VcpkgEnabled false
   )
   # 生成 libagentxx_staticd.a
   set_target_properties(agentxx_static PROPERTIES
@@ -159,7 +158,6 @@ if (XX_IS_DEBUG_D)
     PREFIX "lib"
     CXX_STANDARD 26
     LINK_LIBRARIES_STRATEGY "REORDER_MINIMALLY"
-    VS_GLOBAL_VcpkgEnabled false
   )
 else()
   # 生成 libagentxx.so
@@ -169,7 +167,6 @@ else()
     PREFIX "lib"
     CXX_STANDARD 26
     LINK_LIBRARIES_STRATEGY "REORDER_MINIMALLY"
-    VS_GLOBAL_VcpkgEnabled false
   )
   # 生成 libagentxx_static.a
   set_target_properties(agentxx_static PROPERTIES
@@ -178,7 +175,6 @@ else()
     PREFIX "lib"
     CXX_STANDARD 26
     LINK_LIBRARIES_STRATEGY "REORDER_MINIMALLY"
-    VS_GLOBAL_VcpkgEnabled false
   )
 endif()
 target_link_directories(agentxx_shared PUBLIC ${AGENTXX_INSTALL_DIR}/lib/)

@@ -33,7 +33,7 @@
                 "NEOGRAPH_USE_BOOST_ASIO",
                 "AGENTXX_ENABLE_VECTORSCAN"
             ],
-            "compileCommands": "${workspaceFolder}/agent/build/debug/compile_commands.json",
+            "compileCommands": "${workspaceFolder}/agent/build/linux-debug/compile_commands.json",
             "compilerPath": "/usr/local/bin/g++",
             "cStandard": "c17",
             "cppStandard": "c++26"
