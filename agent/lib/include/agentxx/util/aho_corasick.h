@@ -3,6 +3,7 @@
 #include "agentxx/util/log.h"
 #include <algorithm>
 #include <cstring>
+#include <functional>
 #include <queue>
 #include <string>
 #include <string_view>
