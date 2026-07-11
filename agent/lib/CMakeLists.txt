@@ -92,16 +92,18 @@ endif()
 
 find_package(PkgConfig REQUIRED)
 # 添加依赖库后应当同步更新 [packageProject:DEPENDENCIES]
-set (agentxx_DEPENDENCIES "Iconv;uchardet;fmt;simdjson;OpenSSL;Boost;yaml-cpp;CURL;SQLite3;html2md;Glob")
+set (agentxx_DEPENDENCIES "Iconv;uchardet;fmt;simdjson;ZLIB;OpenSSL;Boost;yaml-cpp;CURL;SQLite3;hical;html2md;Glob")
 find_package(iconv REQUIRED)
 find_package(uchardet REQUIRED)
 find_package(fmt REQUIRED)
 find_package(simdjson REQUIRED)
+find_package(ZLIB REQUIRED)
 find_package(OpenSSL REQUIRED)
 find_package(Boost REQUIRED)
 find_package(yaml-cpp REQUIRED)
 find_package(CURL REQUIRED)
 find_package(SQLite3 REQUIRED)
+find_package(hical REQUIRED)
 find_package(html2md REQUIRED)
 find_package(Glob REQUIRED)
 
@@ -160,7 +162,7 @@ if (XX_IS_DEBUG_D)
     VS_GLOBAL_VcpkgEnabled false
   )
 else()
-  # 生成 libagentxxd.so
+  # 生成 libagentxx.so
   set_target_properties(agentxx_shared PROPERTIES
     OUTPUT_NAME "agentxx"
     PUBLIC_HEADER "include/agentxx/agentxx.h"
@@ -169,7 +171,7 @@ else()
     LINK_LIBRARIES_STRATEGY "REORDER_MINIMALLY"
     VS_GLOBAL_VcpkgEnabled false
   )
-  # 生成 libagentxxd_static.a
+  # 生成 libagentxx_static.a
   set_target_properties(agentxx_static PROPERTIES
     OUTPUT_NAME "agentxx_static"
     PUBLIC_HEADER "include/agentxx/agentxx.h"
@@ -270,6 +272,7 @@ target_link_libraries(agentxx_shared PUBLIC
   # === neograph ^^^
   html2md
   Glob
+  ZLIB::ZLIB
   SQLite::SQLite3
   CURL::libcurl
   yaml-cpp::yaml-cpp
@@ -277,6 +280,7 @@ target_link_libraries(agentxx_shared PUBLIC
   OpenSSL::Crypto
   simdjson::simdjson
   yyjson
+  # hical::hical_core
   fmt::fmt
   Iconv::Iconv
   charset
@@ -293,6 +297,7 @@ target_link_libraries(agentxx_static PUBLIC
   # === neograph ^^^
   html2md
   Glob
+  ZLIB::ZLIB
   SQLite::SQLite3
   CURL::libcurl
   yaml-cpp::yaml-cpp
@@ -300,6 +305,7 @@ target_link_libraries(agentxx_static PUBLIC
   OpenSSL::Crypto
   simdjson::simdjson
   yyjson
+  hical::hical_core
   fmt::fmt
   Iconv::Iconv
   charset

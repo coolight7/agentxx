@@ -2,7 +2,7 @@
 [Github agentxx](https://github.com/coolight7/agentxx)
 
 - C++ 实现的 AI Agent，减少内存占用、程序包体积、摆脱复杂依赖，为普通性能的手机、电脑等设备上运行设计
-- 早期开发中...
+> - 早期开发中...
 
 ## 兼容性
 - 跨系统支持:
@@ -11,8 +11,8 @@
 
 | Status | System | TIP |
 |---|---|---|
-| ✅ | Windows 10+ x86_64 | - |
-| ✅ | Linux x86_64 | WSL扩展功能 |
+| ✅ | Windows 10+ | - |
+| ✅ | Linux | WSL扩展功能 |
 | ✅ | Android 5.0+ | Linux 交叉编译 |
 | ⬜ | Macos | 待测试兼容 |
 | ⬜ | IOS | 待测试兼容 |
@@ -20,8 +20,8 @@
     - ✅C++ (自身开发语言)
     - ⬜Flutter/Dart
 - 生成库链接方式:
-    - ✅动态链接库`libagentxx`; 统一多平台名称，仅后缀区别`.so/.dll/.dylib`.
-    - ✅静态链接库`libagentxx_static`; 统一多平台名称，仅后缀区别`.a/.lib`. 支持静态链接所有依赖库，合并生成独立可运行的 `agentxx_cli`, 已在 linux/win 验证. 同理可静态链接`libagentxx_static`及其静态依赖库，即可得到让自己的程序也摆脱动态库依赖
+    - ✅动态链接库`libagentxx`; Debug编译时末尾添加d`libagentxxd`，统一多平台名称，仅后缀区别`.so/.dll/.dylib`.
+    - ✅静态链接库`libagentxx_static`; Debug编译时末尾添加d`libagentxx_staticd`，统一多平台名称，仅后缀区别`.a/.lib`. 支持静态链接所有依赖库，合并生成独立可运行的 `agentxx_cli`, 已在 linux/win 验证. 同理可静态链接`libagentxx_static`及其静态依赖库，即可得到让自己的程序也摆脱动态库依赖
     - 可修改[CMakeLists.txt](/agent/CMakeLists.txt)实现静态链接 `C++标准库 libstdc++`和`编译器运行时库 msvcrt/libgcc`, 但静态链接标准库和编译器运行时库有很大风险，谨慎考虑!
     - 默认编译提供 动态库`libagentxx`、静态库`libagentxx_static`, 且统一动态链接 libstdc++/libgcc/msvcrt(/MD|/MDd)
 ### 编译后的体积和依赖库
@@ -190,9 +190,11 @@
 - ⬜部分扩展功能独立编译为 exe，以便支持 WSL 连接扩展获取数据
 
 ## 目录结构
-- `agent`: 
+- `agent`:
     - C++ 实现 Agent
-    - 大部分手写，非AI实现，计划基础框架实现差不多后由AI完善和检查，以及补充测试
+    - 大部分手写实现，基础框架实现完善后由AI模块化添加功能和检查、补充测试
+- `agent/script`:
+    - 编译脚本，存放已经验证支持的系统上的编译脚本，使用前可以先参考 [对应的编译文档](/docs/build/)
 - `agent/lib`: libagentxx
     - 核心库，包含了内置实现的 toolcall、node、middleware 等，分离编译以便嵌入其他 app 开发使用
 - `agent/client`: agentxx_cli
