@@ -11,7 +11,7 @@
 # 下载 release/boost-xxx-cmake.tar.gz 解压到 agent/third_party/boost/
 
 cd agent/third_party/
-git clone https://github.com/moritz-wundke/Boost-for-Android boost-android
+git clone https://github.com/coolight7/Boost-for-Android boost-android
 cd boost-android
 
 # 创建 third_party/boost-android-build-debug 和 third_party/boost-android-build-release 目录
