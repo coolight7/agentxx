@@ -13,6 +13,7 @@
 namespace agentxx {
 namespace util {
 
+/// [CharType] 不局限于 char，可能使用更多字节的单字符表示
 template <typename CharType = char> class AhoCorasick {
 protected:
   using StringType = std::basic_string<CharType>;
