@@ -28,7 +28,7 @@ for abi in ${abi_list[@]}; do
     # NDK 工具链文件
     TOOLCHAIN_FILE="$ANDROID_NDK_ROOT/build/cmake/android.toolchain.cmake"
     BOOST_ROOT=$(cd "$src_dir/third_party/boost-android-build-release/$abi" && pwd)
-    OPENSSL_ROOT_DIR=$(cd "$src_dir/third_party/OpenSSL-android/$abi" && pwd)
+    OPENSSL_ROOT_DIR=$(cd "$src_dir/third_party/OpenSSL-android-build/$abi" && pwd)
 
     echo "============================================"
     echo "  Android 交叉编译动态库"
