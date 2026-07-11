@@ -46,12 +46,18 @@ bool agentxx::util::isRunningInWSL() {
 #elif XX_IS_WIN_D
 #include <windows.h>
 std::string agentxx::util::getSystemName() {
-  OSVERSIONINFOEX info{};
+  OSVERSIONINFOEXW info{};
   info.dwOSVersionInfoSize = sizeof(info);
-  if (GetVersionEx((LPOSVERSIONINFO)&info)) {
-    return "Windows " + std::to_string(info.dwMajorVersion) + "." +
-           std::to_string(info.dwMinorVersion) + " (build " +
-           std::to_string(info.dwBuildNumber) + ")";
+  HMODULE hNtDll = GetModuleHandleW(L"ntdll.dll");
+  if (hNtDll) {
+    typedef LONG(WINAPI * RtlGetVersionPtr)(PRTL_OSVERSIONINFOW);
+    auto RtlGetVersion =
+        (RtlGetVersionPtr)GetProcAddress(hNtDll, "RtlGetVersion");
+    if (RtlGetVersion && RtlGetVersion((PRTL_OSVERSIONINFOW)&info) == 0) {
+      return "Windows " + std::to_string(info.dwMajorVersion) + "." +
+             std::to_string(info.dwMinorVersion) + " (build " +
+             std::to_string(info.dwBuildNumber) + ")";
+    }
   }
   return "Windows";
 }
