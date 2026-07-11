@@ -26,6 +26,11 @@ target_sources(agentxx_benchmark PRIVATE
   ${bench_SOURCES}
 )
 
+set(AGENTXX_BENCH_OUTPUT_DIR "${AGENTXX_EXEC_INSTALL_PREFIX}/bench")
+target_compile_definitions(agentxx_benchmark PRIVATE
+  AGENTXX_BENCH_OUTPUT_DIR="${AGENTXX_BENCH_OUTPUT_DIR}"
+)
+
 target_include_directories(agentxx_benchmark PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 find_package(PkgConfig REQUIRED)

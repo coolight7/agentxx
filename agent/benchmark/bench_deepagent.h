@@ -120,6 +120,7 @@ benchDeepAgentRunConversationTurnAsync(const DeepAgentBenchConfig &config) {
   r.max_ns = max_ns;
   r.stddev_ns = stddev_ns;
   r.median_ns = median_ns;
+  BenchReporter::instance().addResult(r);
   printResult(r);
 }
 
@@ -207,6 +208,7 @@ inline void benchDeepAgentInit() {
   r.max_ns = max_ns;
   r.stddev_ns = stddev_ns;
   r.median_ns = median_ns;
+  BenchReporter::instance().addResult(r);
   printResult(r);
 }
 

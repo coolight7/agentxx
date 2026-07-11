@@ -3,6 +3,8 @@
 #include "fmt/format.h"
 #include <chrono>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <numeric>
@@ -23,19 +25,19 @@ struct BenchResult {
   double median_ns;
 };
 
-inline void printResult(const BenchResult &r) {
-  auto fmtNs = [](double ns) -> std::string {
-    if (ns < 1000.0) {
-      return fmt::format("{:.1f} ns", ns);
-    } else if (ns < 1'000'000.0) {
-      return fmt::format("{:.2f} us", ns / 1000.0);
-    } else if (ns < 1'000'000'000.0) {
-      return fmt::format("{:.2f} ms", ns / 1'000'000.0);
-    } else {
-      return fmt::format("{:.3f} s", ns / 1'000'000'000.0);
-    }
-  };
+inline std::string fmtNs(double ns) {
+  if (ns < 1000.0) {
+    return fmt::format("{:.1f} ns", ns);
+  } else if (ns < 1'000'000.0) {
+    return fmt::format("{:.2f} us", ns / 1000.0);
+  } else if (ns < 1'000'000'000.0) {
+    return fmt::format("{:.2f} ms", ns / 1'000'000.0);
+  } else {
+    return fmt::format("{:.3f} s", ns / 1'000'000'000.0);
+  }
+}
 
+inline void printResult(const BenchResult &r) {
   std::cout << "  [" << r.name << "]\n"
             << "    iterations : " << r.iterations << "\n"
             << "    total      : " << fmtNs(r.total_ns) << "\n"
@@ -45,6 +47,98 @@ inline void printResult(const BenchResult &r) {
             << "    max        : " << fmtNs(r.max_ns) << "\n"
             << "    stddev     : " << fmtNs(r.stddev_ns) << "\n";
 }
+
+class BenchReporter {
+public:
+  static BenchReporter &instance() {
+    static BenchReporter reporter;
+    return reporter;
+  }
+
+  void setOutputDir(const std::string &dir) { outputDir_ = dir; }
+
+  const std::string &getOutputDir() const { return outputDir_; }
+
+  void addResult(const BenchResult &r) { results_.push_back(r); }
+
+  void flushToFile() const {
+    if (outputDir_.empty()) {
+      std::cerr << "[BenchReporter] output dir not set, skip writing file"
+                << std::endl;
+      return;
+    }
+
+    namespace fs = std::filesystem;
+    fs::path dir(outputDir_);
+    if (!fs::exists(dir)) {
+      std::error_code ec;
+      fs::create_directories(dir, ec);
+      if (ec) {
+        std::cerr << "[BenchReporter] failed to create dir: " << dir
+                  << ", error: " << ec.message() << std::endl;
+        return;
+      }
+    }
+
+    auto now = std::chrono::system_clock::now();
+    auto time_t_val = std::chrono::system_clock::to_time_t(now);
+    std::tm tm_val{};
+    localtime_r(&time_t_val, &tm_val);
+    std::string timestamp =
+        fmt::format("{:04d}{:02d}{:02d}_{:02d}{:02d}{:02d}",
+                    tm_val.tm_year + 1900, tm_val.tm_mon + 1, tm_val.tm_mday,
+                    tm_val.tm_hour, tm_val.tm_min, tm_val.tm_sec);
+
+    fs::path filePath = dir / fmt::format("bench_{}.json", timestamp);
+
+    std::ofstream ofs(filePath, std::ios::out | std::ios::trunc);
+    if (!ofs.is_open()) {
+      std::cerr << "[BenchReporter] failed to open file: " << filePath
+                << std::endl;
+      return;
+    }
+
+    ofs << "{\n";
+    ofs << fmt::format("  \"timestamp\": \"{}\",\n", timestamp);
+    ofs << "  \"results\": [\n";
+    for (size_t i = 0; i < results_.size(); ++i) {
+      const auto &r = results_[i];
+      ofs << "    {\n";
+      ofs << fmt::format("      \"name\": \"{}\",\n", r.name);
+      ofs << fmt::format("      \"iterations\": {},\n", r.iterations);
+      ofs << fmt::format("      \"total_ns\": {:.2f},\n", r.total_ns);
+      ofs << fmt::format("      \"mean_ns\": {:.2f},\n", r.mean_ns);
+      ofs << fmt::format("      \"median_ns\": {:.2f},\n", r.median_ns);
+      ofs << fmt::format("      \"min_ns\": {:.2f},\n", r.min_ns);
+      ofs << fmt::format("      \"max_ns\": {:.2f},\n", r.max_ns);
+      ofs << fmt::format("      \"stddev_ns\": {:.2f},\n", r.stddev_ns);
+      ofs << fmt::format("      \"total_human\": \"{}\",\n", fmtNs(r.total_ns));
+      ofs << fmt::format("      \"mean_human\": \"{}\",\n", fmtNs(r.mean_ns));
+      ofs << fmt::format("      \"median_human\": \"{}\",\n",
+                         fmtNs(r.median_ns));
+      ofs << fmt::format("      \"min_human\": \"{}\",\n", fmtNs(r.min_ns));
+      ofs << fmt::format("      \"max_human\": \"{}\",\n", fmtNs(r.max_ns));
+      ofs << fmt::format("      \"stddev_human\": \"{}\"\n",
+                         fmtNs(r.stddev_ns));
+      ofs << "    }";
+      if (i + 1 < results_.size()) {
+        ofs << ",";
+      }
+      ofs << "\n";
+    }
+    ofs << "  ]\n";
+    ofs << "}\n";
+
+    ofs.close();
+    std::cout << "\n[BenchReporter] results written to: " << filePath
+              << std::endl;
+  }
+
+private:
+  BenchReporter() = default;
+  std::string outputDir_;
+  std::vector<BenchResult> results_;
+};
 
 template <typename Fn>
 BenchResult runBench(const std::string &name, size_t iterations, Fn &&fn) {
@@ -90,6 +184,7 @@ BenchResult runBench(const std::string &name, size_t iterations, Fn &&fn) {
   r.max_ns = max_ns;
   r.stddev_ns = stddev_ns;
   r.median_ns = median_ns;
+  BenchReporter::instance().addResult(r);
   return r;
 }
 
@@ -139,6 +234,7 @@ BenchResult runBenchWithSetup(const std::string &name, size_t iterations,
   r.max_ns = max_ns;
   r.stddev_ns = stddev_ns;
   r.median_ns = median_ns;
+  BenchReporter::instance().addResult(r);
   return r;
 }
 
