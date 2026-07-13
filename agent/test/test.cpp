@@ -18,6 +18,7 @@
 #include "test_cpu_gpu_use.h"
 #include "test_datetime_tool.h"
 #include "test_filesystem_tools.h"
+#include "test_http_client.h"
 #include "test_rag_search_tools.h"
 #include "test_regex.h"
 #include "test_screen_capture.h"
@@ -48,6 +49,8 @@ int main(int argn, char **argv) {
 #endif
   std::cout << "======= Test Start =======" << std::endl;
 
+  { agentxx::test::testStringUtil(); }
+  { agentxx::test::testRegex(); }
   asio::co_spawn(
       ioCtx,
       []() -> asio::awaitable<void> {
@@ -66,9 +69,6 @@ int main(int argn, char **argv) {
           }
         };
 
-        { agentxx::test::testStringUtil(); }
-        { agentxx::test::testRegex(); }
-
         co_await run(agentxx::test::run_string_tools_tests, agentContext);
         co_await run(agentxx::test::run_rag_search_tools_tests, agentContext);
         co_await run(agentxx::test::run_datetime_tool_tests, agentContext);
@@ -77,6 +77,7 @@ int main(int argn, char **argv) {
         co_await run(agentxx::test::run_web_search_tools_tests, agentContext);
         co_await run(agentxx::test::run_codegraph_tools_tests, agentContext);
         co_await agentxx::test::test_cpu_gpu_use();
+        co_await agentxx::test::run_http_client_tests();
       },
       asio::detached);
   ioCtx.run();

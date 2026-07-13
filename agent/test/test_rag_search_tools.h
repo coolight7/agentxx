@@ -1267,8 +1267,8 @@ inline asio::awaitable<void> test_chunks_overlap_all_modes() {
 // =========================================================================
 
 inline asio::awaitable<void> test_cosine_identical() {
-  std::vector<float> a = {1.0f, 2.0f, 3.0f};
-  std::vector<float> b = {1.0f, 2.0f, 3.0f};
+  std::vector<double> a = {1.0f, 2.0f, 3.0f};
+  std::vector<double> b = {1.0f, 2.0f, 3.0f};
   double sim = RAGSearchTool::cosineSimilarity(a, b);
   if (std::abs(sim - 1.0) < 0.0001) {
     std::cout << "[PASS] cosineSimilarity identical" << std::endl;
@@ -1279,8 +1279,8 @@ inline asio::awaitable<void> test_cosine_identical() {
 }
 
 inline asio::awaitable<void> test_cosine_orthogonal() {
-  std::vector<float> a = {1.0f, 0.0f, 0.0f};
-  std::vector<float> b = {0.0f, 1.0f, 0.0f};
+  std::vector<double> a = {1.0f, 0.0f, 0.0f};
+  std::vector<double> b = {0.0f, 1.0f, 0.0f};
   double sim = RAGSearchTool::cosineSimilarity(a, b);
   if (std::abs(sim - 0.0) < 0.0001) {
     std::cout << "[PASS] cosineSimilarity orthogonal" << std::endl;
@@ -1291,8 +1291,8 @@ inline asio::awaitable<void> test_cosine_orthogonal() {
 }
 
 inline asio::awaitable<void> test_cosine_empty() {
-  std::vector<float> a = {};
-  std::vector<float> b = {1.0f, 2.0f};
+  std::vector<double> a = {};
+  std::vector<double> b = {1.0f, 2.0f};
   double sim = RAGSearchTool::cosineSimilarity(a, b);
   if (std::abs(sim - 0.0) < 0.0001) {
     std::cout << "[PASS] cosineSimilarity empty" << std::endl;
@@ -1303,8 +1303,8 @@ inline asio::awaitable<void> test_cosine_empty() {
 }
 
 inline asio::awaitable<void> test_cosine_both_empty() {
-  std::vector<float> a = {};
-  std::vector<float> b = {};
+  std::vector<double> a = {};
+  std::vector<double> b = {};
   double sim = RAGSearchTool::cosineSimilarity(a, b);
   if (std::abs(sim - 0.0) < 0.0001) {
     std::cout << "[PASS] cosineSimilarity both empty" << std::endl;
@@ -1315,8 +1315,8 @@ inline asio::awaitable<void> test_cosine_both_empty() {
 }
 
 inline asio::awaitable<void> test_cosine_mismatched_size() {
-  std::vector<float> a = {1.0f, 2.0f, 3.0f};
-  std::vector<float> b = {1.0f, 2.0f};
+  std::vector<double> a = {1.0f, 2.0f, 3.0f};
+  std::vector<double> b = {1.0f, 2.0f};
   double sim = RAGSearchTool::cosineSimilarity(a, b);
   if (std::abs(sim - 0.0) < 0.0001) {
     std::cout << "[PASS] cosineSimilarity mismatched size" << std::endl;
@@ -1328,8 +1328,8 @@ inline asio::awaitable<void> test_cosine_mismatched_size() {
 }
 
 inline asio::awaitable<void> test_cosine_single_element() {
-  std::vector<float> a = {5.0f};
-  std::vector<float> b = {3.0f};
+  std::vector<double> a = {5.0f};
+  std::vector<double> b = {3.0f};
   double sim = RAGSearchTool::cosineSimilarity(a, b);
   if (std::abs(sim - 1.0) < 0.0001) {
     std::cout << "[PASS] cosineSimilarity single element" << std::endl;
@@ -1341,8 +1341,8 @@ inline asio::awaitable<void> test_cosine_single_element() {
 }
 
 inline asio::awaitable<void> test_cosine_negative_values() {
-  std::vector<float> a = {-1.0f, -2.0f, -3.0f};
-  std::vector<float> b = {1.0f, 2.0f, 3.0f};
+  std::vector<double> a = {-1.0f, -2.0f, -3.0f};
+  std::vector<double> b = {1.0f, 2.0f, 3.0f};
   double sim = RAGSearchTool::cosineSimilarity(a, b);
   if (std::abs(sim - (-1.0)) < 0.0001) {
     std::cout << "[PASS] cosineSimilarity negative values" << std::endl;
@@ -1354,8 +1354,8 @@ inline asio::awaitable<void> test_cosine_negative_values() {
 }
 
 inline asio::awaitable<void> test_cosine_partial_overlap() {
-  std::vector<float> a = {1.0f, 1.0f, 0.0f, 0.0f};
-  std::vector<float> b = {1.0f, 0.0f, 1.0f, 0.0f};
+  std::vector<double> a = {1.0f, 1.0f, 0.0f, 0.0f};
+  std::vector<double> b = {1.0f, 0.0f, 1.0f, 0.0f};
   double sim = RAGSearchTool::cosineSimilarity(a, b);
   double expected = 1.0 / (std::sqrt(2.0) * std::sqrt(2.0));
   if (std::abs(sim - expected) < 0.0001) {
@@ -1368,8 +1368,8 @@ inline asio::awaitable<void> test_cosine_partial_overlap() {
 }
 
 inline asio::awaitable<void> test_cosine_zero_vector() {
-  std::vector<float> a = {0.0f, 0.0f, 0.0f};
-  std::vector<float> b = {1.0f, 2.0f, 3.0f};
+  std::vector<double> a = {0.0f, 0.0f, 0.0f};
+  std::vector<double> b = {1.0f, 2.0f, 3.0f};
   double sim = RAGSearchTool::cosineSimilarity(a, b);
   if (std::abs(sim - 0.0) < 0.0001) {
     std::cout << "[PASS] cosineSimilarity zero vector" << std::endl;

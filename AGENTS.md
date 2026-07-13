@@ -20,11 +20,11 @@
 
 ## 编译
 - Linux:
-    - 使用 shell 脚本编译: [debug_build.sh](agent/script/debug_build.sh) 或 [release_build.sh](agent/script/release_build.sh)
-    - 运行测试 [test_run.sh](agent/script/test_run.sh)
+    - 使用 shell 脚本编译: [debug_build.sh](agent/script/linux_debug_build.sh) 或 [release_build.sh](agent/script/linux_release_build.sh)
+    - 运行测试 [test_run.sh](agent/script/linux_test_run.sh)
 - Windows:
-    - 使用 bat 脚本编译: [debug_build.bat](agent/script/debug_build.bat) 或 [release_build.bat](agent/script/release_build.bat)
-    - 运行测试 [test_run.bat](agent/script/test_run.bat)
+    - 使用 bat 脚本编译: [debug_build.bat](agent/script/windows_debug_build.bat) 或 [release_build.bat](agent/script/windows_release_build.bat)
+    - 运行测试 [test_run.bat](agent/script/windows_test_run.bat)
 - 编译脚本创建的 build 目录一般为:
-    - debug_build: `agent/build/debug/`
-    - release_build: `agent/build/release/`
+    - debug_build: `agent/build/linux-debug/` 或 `agent/build/windows-debug/`
+    - release_build: `agent/build/linux-release/` 或 `agent/build/windows-release/`

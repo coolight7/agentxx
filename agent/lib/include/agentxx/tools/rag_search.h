@@ -25,11 +25,11 @@ public:
       : baseUrl(in_baseUrl), apiKey(in_apiKey), model(in_model) {}
 
   // Embed multiple texts in one API call
-  asio::awaitable<std::expected<std::vector<std::vector<float>>, std::string>>
+  asio::awaitable<std::expected<std::vector<std::vector<double>>, std::string>>
   embed_batch(const std::vector<std::string> &texts) const {
     if (texts.empty()) {
-      co_return std::expected<std::vector<std::vector<float>>, std::string>{
-          std::vector<std::vector<float>>{}};
+      co_return std::expected<std::vector<std::vector<double>>, std::string>{
+          std::vector<std::vector<double>>{}};
     }
 
     auto body = neograph::json::object();
@@ -37,14 +37,14 @@ public:
     body["input"] = neograph::json(texts);
 
     auto resp = co_await agentxx::util::HttpClient::postAsync(
-        fmt::format("{}/v1/embeddings", baseUrl), body,
+        fmt::format("{}/v1/embeddings", baseUrl), body, {},
         std::chrono::seconds{15});
 
     if (false == resp.has_value() ||
         false == agentxx::util::HttpClient::respIsSucc(resp.value())) {
       std::string str;
       if (resp.has_value()) {
-        str = std::to_string(resp.value()->status);
+        str = std::to_string(resp.value().status);
       } else {
         str = resp.error();
       }
@@ -52,18 +52,18 @@ public:
       co_return std::unexpected{fmt::format("[embedding] API error: {}", str)};
     }
 
-    auto respBody = neograph::json::parse(resp.value()->body);
-    std::vector<std::vector<float>> embeddings;
+    auto respBody = neograph::json::parse(resp.value().body);
+    std::vector<std::vector<double>> embeddings;
 
     for (const auto &item : respBody["data"]) {
-      std::vector<float> vec;
+      std::vector<double> vec;
       for (const auto &v : item["embedding"]) {
-        vec.push_back(v.get<float>());
+        vec.push_back(v.get<double>());
       }
       embeddings.push_back(std::move(vec));
     }
 
-    co_return std::expected<std::vector<std::vector<float>>, std::string>{
+    co_return std::expected<std::vector<std::vector<double>>, std::string>{
         embeddings};
   }
 
@@ -83,11 +83,11 @@ public:
     std::string title;
     std::vector<std::string> content;
     std::string source;
-    std::vector<std::vector<float>> embedding;
+    std::vector<std::vector<double>> embedding;
   };
 
-  static double cosineSimilarity(const std::vector<float> &a,
-                                 const std::vector<float> &b) {
+  static double cosineSimilarity(const std::vector<double> &a,
+                                 const std::vector<double> &b) {
     if (a.size() != b.size() || a.empty())
       return 0.0;
     double dot = 0.0, norm_a = 0.0, norm_b = 0.0;
@@ -572,7 +572,7 @@ public:
       if (embeddings.has_value()) {
         auto start = embeddings.value().begin();
         for (size_t i = 0; i < appendDocs.size(); ++i) {
-          appendDocs[i].embedding = std::vector<std::vector<float>>{
+          appendDocs[i].embedding = std::vector<std::vector<double>>{
               start, start + appendDocs[i].content.size()};
           start += appendDocs[i].content.size();
           docs.push_back(std::move(appendDocs[i]));

@@ -114,6 +114,7 @@ target_include_directories(agentxx_shared PUBLIC
   ${AGENTXX_INSTALL_DIR}/include/
   ${neograph_SOURCE_DIR}/deps/yyjson/
   ${neograph_SOURCE_DIR}/deps/
+  ${hical_SOURCE_DIR}/src/third_party/picohttpparser/
 )
 target_include_directories(agentxx_static PUBLIC 
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -122,6 +123,7 @@ target_include_directories(agentxx_static PUBLIC
   ${AGENTXX_INSTALL_DIR}/include/
   ${neograph_SOURCE_DIR}/deps/yyjson/
   ${neograph_SOURCE_DIR}/deps/
+  ${hical_SOURCE_DIR}/src/third_party/picohttpparser/
 )
 if(Boost_FOUND)
   target_include_directories(agentxx_shared SYSTEM PUBLIC 
