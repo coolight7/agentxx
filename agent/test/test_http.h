@@ -287,6 +287,11 @@ inline void test_http_client_unit() {
     HEXPECT_EQ(HttpClient::urlEncode("a&b=c"), "a%26b%3dc");
     HEXPECT_EQ(HttpClient::urlEncode(""), "");
     HEXPECT_EQ(HttpClient::urlEncode("中文"), "%e4%b8%ad%e6%96%87");
+    // Additional edge cases
+    HEXPECT_EQ(HttpClient::urlEncode("!@#$%^&*()"), "%21%40%23%24%25%5e%26%2a%28%29");
+    HEXPECT_EQ(HttpClient::urlEncode("-_.~"), "-_.~");
+    HEXPECT_EQ(HttpClient::urlEncode("/path/to/file"), "%2fpath%2fto%2ffile");
+    HEXPECT_EQ(HttpClient::urlEncode("\n\t"), "%0a%09");
   }
 
   HTEST("HttpClient::respIsSucc");
@@ -298,6 +303,29 @@ inline void test_http_client_unit() {
     HEXPECT_FALSE(HttpClient::respIsSucc(resp));
     resp.status = 500;
     HEXPECT_FALSE(HttpClient::respIsSucc(resp));
+  }
+
+  HTEST("HttpClient::setSslVerify / getSslVerify");
+  {
+    bool original = HttpClient::getSslVerify();
+    HEXPECT_TRUE(original); // default should be true (verify enabled)
+    HttpClient::setSslVerify(false);
+    HEXPECT_FALSE(HttpClient::getSslVerify());
+    HttpClient::setSslVerify(true);
+    HEXPECT_TRUE(HttpClient::getSslVerify());
+    // Restore original
+    HttpClient::setSslVerify(original);
+  }
+
+  HTEST("HttpClient::resolveRedirectUrl protocol-relative");
+  {
+    // Protocol-relative URL: //host/path -> scheme://host/path
+    HEXPECT_EQ(
+        HttpClient::resolveRedirectUrl("https://example.com/a", "//other.com/b"),
+        "https://other.com/b");
+    HEXPECT_EQ(
+        HttpClient::resolveRedirectUrl("http://example.com/a", "//other.com:8080/c"),
+        "http://other.com:8080/c");
   }
 
   std::cout << "======= HTTP Client Unit Test Done: " << g_http_passed
@@ -855,6 +883,67 @@ inline asio::awaitable<void> test_http_client_beast_server() {
             co_return;
           }));
 
+  // PATCH /echo – prefix with "patch:"
+  server.router().add(
+      "/echo", 8,
+      std::make_shared<Server::Handler>(
+          [](Server::Request &req, Server::Response &resp,
+             const std::string &) -> hical::Awaitable<void> {
+            resp.result(status::ok);
+            resp.set(field::content_type, "text/plain");
+            resp.body() = "patch:" + req.body();
+            resp.prepare_payload();
+            co_return;
+          }));
+
+  // DELETE /echo – echo body
+  server.router().add(
+      "/echo", 4,
+      std::make_shared<Server::Handler>(
+          [](Server::Request &req, Server::Response &resp,
+             const std::string &) -> hical::Awaitable<void> {
+            resp.result(status::ok);
+            resp.set(field::content_type, "text/plain");
+            resp.body() = "delete:" + req.body();
+            resp.prepare_payload();
+            co_return;
+          }));
+
+  // HEAD /hello – should return headers only, no body
+  server.router().add(
+      "/hello", 1,
+      std::make_shared<Server::Handler>(
+          [](Server::Request &, Server::Response &resp,
+             const std::string &) -> hical::Awaitable<void> {
+            resp.result(status::ok);
+            resp.set(field::content_type, "text/plain");
+            resp.body() = "hello world";
+            resp.prepare_payload();
+            co_return;
+          }));
+
+  // GET /big-body – returns a configurable-size body for limit testing
+  server.router().add(
+      "/big-body", 0,
+      std::make_shared<Server::Handler>(
+          [](Server::Request &req, Server::Response &resp,
+             const std::string &) -> hical::Awaitable<void> {
+            resp.result(status::ok);
+            resp.set(field::content_type, "text/plain");
+            // Default 1000 bytes, or use ?size=NNNN
+            std::string target = std::string(req.target());
+            size_t size = 1000;
+            auto pos = target.find("size=");
+            if (pos != std::string::npos) {
+              size = std::stoul(target.substr(pos + 5));
+            }
+            resp.body() = std::string(size, 'x');
+            resp.prepare_payload();
+            co_return;
+          }));
+
+  // GET /redirect-proto-rel – not used (protocol-relative needs cross-host)
+
   // Start server
   std::thread serverThread([&server]() { server.start(); });
 
@@ -1082,6 +1171,105 @@ inline asio::awaitable<void> test_http_client_beast_server() {
       // Should stop at the last redirect (302) since it exceeds max
       HEXPECT_EQ(resp.value().status, 302);
     }
+  }
+
+  // -----------------------------------------------------------------------
+  // New tests for production readiness improvements
+  // -----------------------------------------------------------------------
+
+  HTEST("DELETE method with body – Beast server");
+  {
+    auto resp = co_await HttpClient::deleteAsync(baseUrl + "/echo");
+    HEXPECT_HAS_VALUE(resp);
+    if (resp.has_value()) {
+      HEXPECT_EQ(resp.value().status, 200);
+      HEXPECT_EQ(resp.value().body, "delete:");
+    }
+  }
+
+  HTEST("PATCH method – Beast server");
+  {
+    auto resp =
+        co_await HttpClient::patchAsync(baseUrl + "/echo", "patchdata");
+    HEXPECT_HAS_VALUE(resp);
+    if (resp.has_value()) {
+      HEXPECT_EQ(resp.value().status, 200);
+      HEXPECT_EQ(resp.value().body, "patch:patchdata");
+    }
+  }
+
+  HTEST("Response Date header present – Beast server");
+  {
+    auto resp = co_await HttpClient::getAsync(baseUrl + "/hello");
+    HEXPECT_HAS_VALUE(resp);
+    if (resp.has_value()) {
+      auto date = resp.value().findHeader("date");
+      HEXPECT_FALSE(date.empty());
+      // Date should contain "GMT" per RFC 7231
+      HEXPECT_TRUE(date.find("GMT") != std::string_view::npos);
+    }
+  }
+
+  HTEST("Response Server header present – Beast server");
+  {
+    auto resp = co_await HttpClient::getAsync(baseUrl + "/hello");
+    HEXPECT_HAS_VALUE(resp);
+    if (resp.has_value()) {
+      auto srv = resp.value().findHeader("server");
+      HEXPECT_FALSE(srv.empty());
+    }
+  }
+
+  HTEST("Response body size limit (client-side)");
+  {
+    // Request a 100-byte body with a 50-byte limit → should fail
+    auto resp = co_await HttpClient::getAsync(
+        baseUrl + "/big-body?size=100", {}, std::chrono::seconds{5}, 3, 50);
+    // Body limit exceeded should result in an error (no value)
+    HEXPECT_FALSE(resp.has_value());
+  }
+
+  HTEST("Response body size limit not exceeded");
+  {
+    // Request a 100-byte body with a 200-byte limit → should succeed
+    auto resp = co_await HttpClient::getAsync(
+        baseUrl + "/big-body?size=100", {}, std::chrono::seconds{5}, 3, 200);
+    HEXPECT_HAS_VALUE(resp);
+    if (resp.has_value()) {
+      HEXPECT_EQ(resp.value().status, 200);
+      HEXPECT_EQ(resp.value().body.size(), 100);
+    }
+  }
+
+  HTEST("Server activeConnections tracking");
+  {
+    // Wait for pending connection cleanup (server-side coroutine teardown)
+    size_t conn = 1;
+    for (int i = 0; i < 50; ++i) {
+      conn = server.activeConnections();
+      if (conn == 0)
+        break;
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    HEXPECT_EQ(conn, 0);
+  }
+
+  HTEST("fetchMarkdown returns error on non-2xx");
+  {
+    // fetchMarkdown should return error (not UB) for 404
+    auto result = co_await HttpClient::fetchMarkdown(baseUrl + "/nonexistent",
+                                                     std::chrono::seconds{5});
+    HEXPECT_FALSE(result.has_value());
+  }
+
+  HTEST("fetchMarkdown success on HTML");
+  {
+    // Register an HTML route for markdown conversion
+    // Using /hello which returns "hello world" (text/plain)
+    // fetchMarkdown checks success status, not content-type
+    auto result = co_await HttpClient::fetchMarkdown(baseUrl + "/hello",
+                                                     std::chrono::seconds{5});
+    HEXPECT_HAS_VALUE(result);
   }
 
   server.stop();

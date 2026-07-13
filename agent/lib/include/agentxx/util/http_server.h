@@ -11,6 +11,7 @@
 #include <boost/beast/version.hpp>
 #include <atomic>
 #include <chrono>
+#include <ctime>
 #include <functional>
 #include <memory>
 #include <string>
@@ -53,6 +54,22 @@ inline std::string_view requestPath(std::string_view target) noexcept {
   return q == std::string_view::npos ? target : target.substr(0, q);
 }
 
+/// Format a time_point as an RFC 7231 IMF-fixdate string
+/// (e.g. "Sun, 06 Nov 1994 08:49:37 GMT")
+inline std::string formatHttpDate(std::time_t t) noexcept {
+  char buf[64];
+#if defined(_WIN32)
+  std::tm tm;
+  gmtime_s(&tm, &t);
+  std::strftime(buf, sizeof(buf), "%a, %d %b %Y %H:%M:%S GMT", &tm);
+#else
+  std::tm tm;
+  gmtime_r(&t, &tm);
+  std::strftime(buf, sizeof(buf), "%a, %d %b %Y %H:%M:%S GMT", &tm);
+#endif
+  return buf;
+}
+
 // ---------------------------------------------------------------------------
 // HttpServer
 // ---------------------------------------------------------------------------
@@ -77,6 +94,13 @@ public:
     std::string sslKeyFile;
 
     size_t maxConnections = 8192;
+
+    // DoS protection: reject requests with oversized headers or bodies
+    uint32_t maxHeaderSize = 8192;       // default 8 KB header limit
+    uint64_t maxRequestBody = 8 * 1024 * 1024; // default 8 MB body limit
+
+    // Per-request access log (false = silent in release for performance)
+    bool accessLogEnabled = true;
   };
 
   explicit HttpServer(Config config)
@@ -102,6 +126,10 @@ public:
     return 0;
   }
 
+  size_t activeConnections() const noexcept {
+    return activeConnections_.load(std::memory_order_relaxed);
+  }
+
   // -----------------------------------------------------------------------
   // Start / Stop
   // -----------------------------------------------------------------------
@@ -121,14 +149,19 @@ public:
     acceptor_->open(endpoint.protocol());
     acceptor_->set_option(tcp::acceptor::reuse_address(true));
     acceptor_->bind(endpoint);
-    acceptor_->listen();
+    // Use max_listen_connections for the backlog to handle connection bursts
+    acceptor_->listen(boost::asio::socket_base::max_listen_connections);
 
     // Setup SSL context if configured
     if (!config_.sslCertFile.empty() && !config_.sslKeyFile.empty()) {
       sslCtx_ = std::make_unique<boost::asio::ssl::context>(
           boost::asio::ssl::context::tlsv12_server);
+      // Disable deprecated protocols (SSLv2, SSLv3, TLS 1.0, TLS 1.1)
       sslCtx_->set_options(boost::asio::ssl::context::default_workarounds |
                            boost::asio::ssl::context::no_sslv2 |
+                           boost::asio::ssl::context::no_sslv3 |
+                           boost::asio::ssl::context::no_tlsv1 |
+                           boost::asio::ssl::context::no_tlsv1_1 |
                            boost::asio::ssl::context::single_dh_use);
       sslCtx_->use_certificate_chain_file(config_.sslCertFile);
       sslCtx_->use_private_key_file(config_.sslKeyFile,
@@ -171,7 +204,7 @@ public:
     threads_.clear();
   }
 
-  /// Signal the server to stop.
+  /// Signal the server to stop. Safe to call from any thread.
   void stop() {
     bool expected = false;
     if (!stopped_.compare_exchange_strong(expected, true))
@@ -182,12 +215,26 @@ public:
       acceptor_->close(ec);
     }
     signals_.cancel(ec);
+    // Stop the io_context — pending async operations are cancelled,
+    // serve() loops catch operation_aborted and exit cleanly.
     ioContext_.stop();
   }
 
   bool isStopped() const noexcept { return stopped_; }
 
 private:
+  // -----------------------------------------------------------------------
+  // RAII guard for active connection counting — ensures decrement even
+  // if the session coroutine throws or is cancelled.
+  // -----------------------------------------------------------------------
+  struct ConnectionGuard {
+    std::atomic<size_t> &counter;
+    explicit ConnectionGuard(std::atomic<size_t> &c) : counter(c) {}
+    ~ConnectionGuard() { counter.fetch_sub(1, std::memory_order_relaxed); }
+    ConnectionGuard(const ConnectionGuard &) = delete;
+    ConnectionGuard &operator=(const ConnectionGuard &) = delete;
+  };
+
   // -----------------------------------------------------------------------
   // Accept loop
   // -----------------------------------------------------------------------
@@ -201,15 +248,36 @@ private:
       tcp::socket socket = co_await acceptor_->async_accept(
           boost::asio::redirect_error(boost::asio::use_awaitable, ec));
       if (ec) {
-        if (ec != boost::asio::error::operation_aborted &&
-            ec != boost::asio::error::connection_aborted) {
-          XX_LOGE("[server] Accept error: {}", ec.message());
+        if (ec == boost::asio::error::operation_aborted ||
+            ec == boost::asio::error::connection_aborted)
+          co_return;
+        // EMFILE (too many open files): wait briefly and retry rather
+        // than killing the accept loop — prevents fd exhaustion DoS.
+        if (ec == boost::asio::error::no_descriptors) {
+          XX_LOGW("[server] Accept: too many open files, retrying in 100ms");
+          boost::asio::steady_timer timer(executor,
+                                          std::chrono::milliseconds(100));
+          co_await timer.async_wait(
+              boost::asio::redirect_error(boost::asio::use_awaitable, ec));
+          continue;
         }
-        co_return;
+        XX_LOGE("[server] Accept error: {}", ec.message());
+        // Brief backoff on other errors to avoid tight error loop
+        boost::asio::steady_timer timer(executor, std::chrono::milliseconds(10));
+        co_await timer.async_wait(
+            boost::asio::redirect_error(boost::asio::use_awaitable, ec));
+        if (stopped_)
+          co_return;
+        continue;
       }
 
+      // Set TCP no_delay immediately for lowest latency (before SSL handshake)
+      boost::system::error_code tcpEc;
+      socket.set_option(boost::asio::ip::tcp::no_delay(true), tcpEc);
+
       // Enforce max connections
-      if (activeConnections_ >= config_.maxConnections) {
+      if (activeConnections_.load(std::memory_order_relaxed) >=
+          config_.maxConnections) {
         boost::system::error_code closeEc;
         socket.shutdown(tcp::socket::shutdown_both, closeEc);
         socket.close(closeEc);
@@ -217,24 +285,30 @@ private:
         continue;
       }
 
-      ++activeConnections_;
+      // Increment on accept loop thread (no race with the check above).
+      // The ConnectionGuard inside the coroutine ensures the decrement
+      // runs even if serve() throws or the coroutine is cancelled.
+      activeConnections_.fetch_add(1, std::memory_order_relaxed);
 
       if (sslCtx_) {
         // SSL session
         auto sslStream = std::make_shared<
             boost::beast::ssl_stream<boost::beast::tcp_stream>>(
             boost::beast::tcp_stream(std::move(socket)), *sslCtx_);
-        hical::coSpawn(executor, [this, sslStream]() -> hical::Awaitable<void> {
-          co_await sslHandshakeAndServe(sslStream);
-        });
+        hical::coSpawn(
+            executor, [this, sslStream]() -> hical::Awaitable<void> {
+              ConnectionGuard guard{activeConnections_};
+              co_await sslHandshakeAndServe(sslStream);
+            });
       } else {
         // Plain session
         auto stream =
             std::make_shared<boost::beast::tcp_stream>(std::move(socket));
-        hical::coSpawn(executor, [this, stream]() -> hical::Awaitable<void> {
-          co_await serve(std::move(*stream));
-          --activeConnections_;
-        });
+        hical::coSpawn(
+            executor, [this, stream]() -> hical::Awaitable<void> {
+              ConnectionGuard guard{activeConnections_};
+              co_await serve(std::move(*stream));
+            });
       }
     }
     co_return;
@@ -261,7 +335,7 @@ private:
     } catch (const std::exception &e) {
       XX_LOGE("[server] SSL handshake error: {}", e.what());
     }
-    --activeConnections_;
+    // activeConnections_ decrement handled by ConnectionGuard in caller
   }
 
   // -----------------------------------------------------------------------
@@ -271,41 +345,46 @@ private:
   template <typename Stream>
   hical::Awaitable<void> serve(Stream stream) {
     namespace http = boost::beast::http;
-    using tcp = boost::asio::ip::tcp;
     boost::system::error_code ec;
-
-    // Set socket options
-    boost::asio::ip::tcp::no_delay noDelay(true);
-    boost::beast::get_lowest_layer(stream).socket().set_option(noDelay, ec);
 
     boost::beast::flat_buffer buffer;
     bool keepAlive = false;
     bool readError = false;
     std::string readErrorMsg;
+    http::status readErrorStatus = http::status::bad_request;
 
     do {
-      // Read one request (co_await in catch block not supported on all GCC)
+      // Read one request with body/header size limits for DoS protection
       readError = false;
       Request req;
       try {
+        http::request_parser<http::string_body> parser;
+        parser.header_limit(config_.maxHeaderSize);
+        parser.body_limit(config_.maxRequestBody);
         co_await http::async_read(
-            stream, buffer, req,
+            stream, buffer, parser,
             boost::asio::cancel_after(config_.requestTimeout,
                                       boost::asio::use_awaitable));
+        req = parser.release();
       } catch (const boost::system::system_error &e) {
         if (e.code() == http::error::end_of_stream ||
-            e.code() == boost::asio::error::eof)
-          break;
-        if (e.code() == boost::asio::error::operation_aborted)
+            e.code() == boost::asio::error::eof ||
+            e.code() == boost::asio::error::operation_aborted)
           break;
         readError = true;
         readErrorMsg = e.what();
+        if (e.code() == http::error::body_limit)
+          readErrorStatus = http::status::payload_too_large;
+        else if (e.code() == http::error::header_limit)
+          readErrorStatus = http::status::request_header_fields_too_large;
+        else
+          readErrorStatus = http::status::bad_request;
       }
 
       if (readError) {
         Response errResp;
         errResp.version(11);
-        errResp.result(http::status::bad_request);
+        errResp.result(readErrorStatus);
         errResp.set(http::field::content_type, "text/plain");
         errResp.body() = "Bad Request: " + readErrorMsg;
         errResp.prepare_payload();
@@ -321,6 +400,8 @@ private:
       Response resp;
       resp.version(req.version());
       resp.set(http::field::server, "agentxx/1.0");
+      // RFC 7231: servers SHOULD include a Date header
+      resp.set(http::field::date, formatHttpDate(std::time(nullptr)));
 
       // Extract path (strip query string) and dispatch
       std::string path(requestPath(req.target()));
@@ -335,9 +416,10 @@ private:
             co_await (*handler)(req, resp, matchedPath);
             handled = true;
           } catch (const std::exception &e) {
-            XX_LOGE("[server] Handler error [{} {}]: {}", req.method_string(),
-                    req.target(), e.what());
-            fillError(resp, req.version(), http::status::internal_server_error,
+            XX_LOGE("[server] Handler error [{} {}]: {}",
+                    req.method_string(), req.target(), e.what());
+            fillError(resp, req.version(),
+                      http::status::internal_server_error,
                       "Internal Server Error");
           }
         }
@@ -357,7 +439,8 @@ private:
         if (hasAnyRoute) {
           fillError(resp, req.version(), http::status::method_not_allowed,
                     "Method Not Allowed");
-          resp.set(http::field::allow, "GET, HEAD, POST, PUT, DELETE, PATCH, OPTIONS");
+          resp.set(http::field::allow,
+                   "GET, HEAD, POST, PUT, DELETE, PATCH, OPTIONS");
         } else {
           fillError(resp, req.version(), http::status::not_found, "Not Found");
         }
@@ -379,13 +462,15 @@ private:
           boost::asio::cancel_after(config_.requestTimeout,
                                     boost::asio::use_awaitable));
 
-      // Log request
-      XX_OUT("{} {} -> {} ({})", req.method_string(), req.target(),
-             resp.result_int(), resp.body().size());
+      // Per-request access log (compiled out in release via XX_LOGI)
+      if (config_.accessLogEnabled) {
+        XX_LOGI("{} {} -> {} ({})", req.method_string(), req.target(),
+                resp.result_int(), resp.body().size());
+      }
 
     } while (keepAlive && !stopped_);
 
-    // Graceful close
+    // Graceful close: shutdown send side, ignore errors
     ec = {};
     boost::beast::get_lowest_layer(stream).socket().shutdown(
         boost::asio::ip::tcp::socket::shutdown_send, ec);

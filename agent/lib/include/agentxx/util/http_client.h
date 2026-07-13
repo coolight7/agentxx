@@ -6,8 +6,10 @@
 #include "hical/core/SslContext.h"
 #include "html2md/html2md.h"
 #include <algorithm>
+#include <array>
 #include <asio/cancel_after.hpp>
 #include <asio/this_coro.hpp>
+#include <atomic>
 #include <boost/beast/core.hpp>
 #include <boost/beast/http.hpp>
 #include <boost/beast/ssl.hpp>
@@ -15,10 +17,12 @@
 #include <cctype>
 #include <charconv>
 #include <expected>
+#include <memory>
+#include <mutex>
 #include <neograph/json.h>
 #include <openssl/ssl.h>
 #include <optional>
-#include <sstream>
+#include <string>
 
 namespace agentxx {
 namespace util {
@@ -112,24 +116,23 @@ public:
   }
 
   static inline std::string urlEncode(std::string_view s) {
-    std::ostringstream out;
-    out << std::hex;
+    static constexpr char kHex[] = "0123456789abcdef";
+    std::string out;
+    out.reserve(s.size() * 3);
     for (unsigned char c : s) {
       if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
           (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' ||
           c == '~') {
-        out << c;
+        out.push_back(static_cast<char>(c));
       } else if (c == ' ') {
-        out << '+';
+        out.push_back('+');
       } else {
-        out << '%';
-        if (c < 16)
-          out << '0';
-        out << (int)c;
-        out << std::dec << std::hex;
+        out.push_back('%');
+        out.push_back(kHex[c >> 4]);
+        out.push_back(kHex[c & 0xF]);
       }
     }
-    return out.str();
+    return out;
   }
 
   static inline bool respIsSucc(const HttpResponse &resp) {
@@ -152,8 +155,8 @@ public:
 
 public:
   static inline bool isRedirectStatus(int status) noexcept {
-    return status == 301 || status == 302 || status == 303 ||
-           status == 307 || status == 308;
+    return status == 301 || status == 302 || status == 303 || status == 307 ||
+           status == 308;
   }
 
   static inline bool redirectChangesToGet(int status) noexcept {
@@ -165,14 +168,21 @@ public:
                      std::string_view location) noexcept {
     if (location.find("://") != std::string_view::npos)
       return std::string(location);
+    // Protocol-relative URL: //host/path -> scheme://host/path
+    if (location.starts_with("//")) {
+      auto schemeEnd = originalUrl.find("://");
+      if (schemeEnd != std::string_view::npos)
+        return std::string(originalUrl.substr(0, schemeEnd)) + ":" +
+               std::string(location);
+      return std::string(location);
+    }
     auto [base, path] = splitUrl(originalUrl);
     if (location.starts_with('/'))
       return base + std::string(location);
     auto slashPos = path.rfind('/');
-    std::string basePath =
-        (slashPos != std::string_view::npos && slashPos > 0)
-            ? std::string(path.substr(0, slashPos + 1))
-            : "/";
+    std::string basePath = (slashPos != std::string_view::npos && slashPos > 0)
+                                ? std::string(path.substr(0, slashPos + 1))
+                                : "/";
     return base + basePath + std::string(location);
   }
 
@@ -193,6 +203,42 @@ private:
     uint16_t port;
     std::string path;
   };
+
+  // -----------------------------------------------------------------------
+  // Shared SSL context pool — avoids per-request OpenSSL context creation
+  // (SSL_CTX_new is expensive). Two lazily-initialized contexts: one with
+  // certificate verification enabled (production default), one without.
+  // -----------------------------------------------------------------------
+  static boost::asio::ssl::context &sharedSslCtx(bool verify) {
+    static std::unique_ptr<boost::asio::ssl::context> verifiedCtx;
+    static std::unique_ptr<boost::asio::ssl::context> unverifiedCtx;
+    static std::once_flag verifiedFlag;
+    static std::once_flag unverifiedFlag;
+
+    if (verify) {
+      std::call_once(verifiedFlag, [] {
+        auto ctx = std::make_unique<boost::asio::ssl::context>(
+            boost::asio::ssl::context::tlsv12_client);
+        ctx->set_verify_mode(boost::asio::ssl::verify_peer);
+        ctx->set_default_verify_paths();
+        verifiedCtx = std::move(ctx);
+      });
+      return *verifiedCtx;
+    } else {
+      std::call_once(unverifiedFlag, [] {
+        auto ctx = std::make_unique<boost::asio::ssl::context>(
+            boost::asio::ssl::context::tlsv12_client);
+        ctx->set_verify_mode(boost::asio::ssl::verify_none);
+        unverifiedCtx = std::move(ctx);
+      });
+      return *unverifiedCtx;
+    }
+  }
+
+  static inline std::atomic<bool> sslVerifyEnabled_{true};
+
+  /// Default max response body size (10 MB) to prevent memory exhaustion
+  static constexpr uint64_t kDefaultMaxResponseBody = 10 * 1024 * 1024;
 
   static inline std::optional<ParsedUrl> parseUrl(std::string_view url) {
     auto schemeEnd = url.find("://");
@@ -218,18 +264,24 @@ private:
         return std::nullopt;
       host = std::string{hostPort.substr(0, cb + 1)};
       if (cb + 1 < hostPort.size() && hostPort[cb + 1] == ':') {
+        auto portStart = hostPort.data() + cb + 2;
+        auto portEnd = hostPort.data() + hostPort.size();
         int p = 0;
-        std::from_chars(hostPort.data() + cb + 2,
-                        hostPort.data() + hostPort.size(), p);
+        auto [ptr, ec] = std::from_chars(portStart, portEnd, p);
+        if (ec != std::errc{} || ptr != portEnd || p <= 0 || p > 65535)
+          return std::nullopt;
         port = static_cast<uint16_t>(p);
       }
     } else {
       auto colon = hostPort.rfind(':');
       if (colon != std::string_view::npos) {
         host = std::string{hostPort.substr(0, colon)};
+        auto portStart = hostPort.data() + colon + 1;
+        auto portEnd = hostPort.data() + hostPort.size();
         int p = 0;
-        std::from_chars(hostPort.data() + colon + 1,
-                        hostPort.data() + hostPort.size(), p);
+        auto [ptr, ec] = std::from_chars(portStart, portEnd, p);
+        if (ec != std::errc{} || ptr != portEnd || p <= 0 || p > 65535)
+          return std::nullopt;
         port = static_cast<uint16_t>(p);
       } else {
         host = std::string{hostPort};
@@ -244,11 +296,13 @@ private:
   static hical::Awaitable<std::expected<HttpResponse, std::string>>
   exchange(Stream &stream,
            boost::beast::http::request<boost::beast::http::string_body> &req,
-           std::chrono::steady_clock::time_point deadline) {
+           std::chrono::steady_clock::time_point deadline,
+           uint64_t maxResponseBody) {
     namespace http = boost::beast::http;
     auto rem = [&] {
       auto d = deadline - std::chrono::steady_clock::now();
-      return std::chrono::duration_cast<std::chrono::milliseconds>(d);
+      return std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::max(d, std::chrono::steady_clock::duration::zero()));
     };
 
     co_await http::async_write(
@@ -256,11 +310,13 @@ private:
         boost::asio::cancel_after(rem(), boost::asio::use_awaitable));
 
     boost::beast::flat_buffer buffer;
-    http::response<http::string_body> res;
+    http::response_parser<http::string_body> parser;
+    parser.body_limit(maxResponseBody);
     co_await http::async_read(
-        stream, buffer, res,
+        stream, buffer, parser,
         boost::asio::cancel_after(rem(), boost::asio::use_awaitable));
 
+    auto res = parser.release();
     HttpResponse resp;
     resp.status = res.result_int();
     for (auto const &field : res) {
@@ -274,8 +330,8 @@ private:
   requestAsync(std::string_view method, const std::string &url,
                std::string_view body, std::string_view contentType,
                const hical::HeaderMap &extraHeaders,
-               std::chrono::milliseconds timeout,
-               size_t followRedirect = 0) {
+               std::chrono::milliseconds timeout, size_t followRedirect = 3,
+               uint64_t maxResponseBody = kDefaultMaxResponseBody) {
     namespace http = boost::beast::http;
     using boost::asio::ip::tcp;
 
@@ -284,14 +340,24 @@ private:
     std::string currentBody(body);
     std::string currentContentType(contentType);
 
+    // Total deadline across all redirect hops — prevents a redirect chain
+    // from exceeding the caller's timeout budget.
+    auto totalDeadline = std::chrono::steady_clock::now() + timeout;
+    auto rem = [&] {
+      auto d = totalDeadline - std::chrono::steady_clock::now();
+      return std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::max(d, std::chrono::steady_clock::duration::zero()));
+    };
+
     std::expected<HttpResponse, std::string> result;
     for (size_t redirectCount = 0;; ++redirectCount) {
       auto executor = co_await boost::asio::this_coro::executor;
-      auto deadline = std::chrono::steady_clock::now() + timeout;
-      auto rem = [&] {
-        auto d = deadline - std::chrono::steady_clock::now();
-        return std::chrono::duration_cast<std::chrono::milliseconds>(d);
-      };
+
+      // Check total timeout before each hop
+      if (rem().count() <= 0) {
+        result = std::unexpected{std::string{"timeout"}};
+        break;
+      }
 
       result = std::unexpected{std::string{"unknown error"}};
       try {
@@ -307,7 +373,9 @@ private:
 
         http::request<http::string_body> req{
             http::string_to_verb(currentMethod), parsed->path, 11};
-        if (!extraHeaders.contains("host"))
+        // Case-insensitive host header check via HeaderMap::iequals
+        bool hasHost = extraHeaders.contains("host");
+        if (!hasHost)
           req.set(http::field::host, hostHeader);
         req.set(http::field::user_agent,
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -317,7 +385,8 @@ private:
         req.set(http::field::accept_encoding, "identity");
         req.set(http::field::connection, "close");
         for (const auto &[k, v] : extraHeaders) {
-          if (k == "host" || k == "Host")
+          // Skip host — set explicitly above (case-insensitive)
+          if (hical::HeaderMap::iequals(k, "host"))
             continue;
           req.set(k, v);
         }
@@ -334,9 +403,8 @@ private:
             boost::asio::cancel_after(rem(), boost::asio::use_awaitable));
 
         if (isHttps) {
-          boost::asio::ssl::context sslCtx(
-              boost::asio::ssl::context::tlsv12_client);
-          sslCtx.set_verify_mode(boost::asio::ssl::verify_none);
+          bool verify = sslVerifyEnabled_.load(std::memory_order_relaxed);
+          auto &sslCtx = sharedSslCtx(verify);
           boost::asio::ssl::stream<tcp::socket> stream(executor, sslCtx);
           if (!parsed->host.empty())
             ::SSL_set_tlsext_host_name(stream.native_handle(),
@@ -344,16 +412,29 @@ private:
           co_await boost::asio::async_connect(
               stream.lowest_layer(), endpoints,
               boost::asio::cancel_after(rem(), boost::asio::use_awaitable));
+          // Set TCP no_delay before handshake for lower latency
+          boost::system::error_code tcpEc;
+          stream.lowest_layer().set_option(
+              boost::asio::ip::tcp::no_delay(true), tcpEc);
           co_await stream.async_handshake(
               boost::asio::ssl::stream_base::client,
               boost::asio::cancel_after(rem(), boost::asio::use_awaitable));
-          result = co_await exchange(stream, req, deadline);
+          result = co_await exchange(stream, req, totalDeadline,
+                                      maxResponseBody);
+          // Graceful SSL shutdown (ignore errors — peer may have closed)
+          boost::system::error_code sslEc;
+          co_await stream.async_shutdown(boost::asio::redirect_error(
+              boost::asio::use_awaitable, sslEc));
         } else {
           tcp::socket stream(executor);
           co_await boost::asio::async_connect(
               stream, endpoints,
               boost::asio::cancel_after(rem(), boost::asio::use_awaitable));
-          result = co_await exchange(stream, req, deadline);
+          // Set TCP no_delay
+          boost::system::error_code tcpEc;
+          stream.set_option(boost::asio::ip::tcp::no_delay(true), tcpEc);
+          result = co_await exchange(stream, req, totalDeadline,
+                                      maxResponseBody);
         }
       } catch (const boost::system::system_error &e) {
         if (e.code() == boost::asio::error::operation_aborted)
@@ -387,22 +468,43 @@ private:
   }
 
 public:
+  /// Enable/disable SSL certificate verification (default: enabled).
+  /// Disable only for testing with self-signed certificates.
+  static void setSslVerify(bool enable) noexcept {
+    sslVerifyEnabled_.store(enable, std::memory_order_relaxed);
+  }
+
+  static bool getSslVerify() noexcept {
+    return sslVerifyEnabled_.load(std::memory_order_relaxed);
+  }
+
   static inline hical::Awaitable<std::expected<HttpResponse, std::string>>
   getAsync(const std::string &url, const hical::HeaderMap &extraHeaders = {},
            std::chrono::milliseconds timeout = std::chrono::seconds{60},
-           size_t followRedirect = 0) {
+           size_t followRedirect = 3,
+           uint64_t maxResponseBody = kDefaultMaxResponseBody) {
     co_return co_await requestAsync("GET", url, {}, "", extraHeaders, timeout,
-                                    followRedirect);
+                                    followRedirect, maxResponseBody);
+  }
+
+  static inline hical::Awaitable<std::expected<HttpResponse, std::string>>
+  headAsync(const std::string &url, const hical::HeaderMap &extraHeaders = {},
+            std::chrono::milliseconds timeout = std::chrono::seconds{60},
+            size_t followRedirect = 3,
+            uint64_t maxResponseBody = kDefaultMaxResponseBody) {
+    co_return co_await requestAsync("HEAD", url, {}, "", extraHeaders, timeout,
+                                    followRedirect, maxResponseBody);
   }
 
   static inline hical::Awaitable<std::expected<HttpResponse, std::string>>
   postAsync(const std::string &url, const neograph::json &body,
             const hical::HeaderMap &extraHeaders = {},
             std::chrono::milliseconds timeout = std::chrono::seconds{60},
-            size_t followRedirect = 0) {
+            size_t followRedirect = 3,
+            uint64_t maxResponseBody = kDefaultMaxResponseBody) {
     co_return co_await requestAsync("POST", url, body.dump(),
                                     "application/json", extraHeaders, timeout,
-                                    followRedirect);
+                                    followRedirect, maxResponseBody);
   }
 
   static inline hical::Awaitable<std::expected<HttpResponse, std::string>>
@@ -410,9 +512,11 @@ public:
             std::string_view contentType = "text/plain",
             const hical::HeaderMap &extraHeaders = {},
             std::chrono::milliseconds timeout = std::chrono::seconds{60},
-            size_t followRedirect = 0) {
+            size_t followRedirect = 3,
+            uint64_t maxResponseBody = kDefaultMaxResponseBody) {
     co_return co_await requestAsync("POST", url, body, contentType,
-                                    extraHeaders, timeout, followRedirect);
+                                    extraHeaders, timeout, followRedirect,
+                                    maxResponseBody);
   }
 
   static inline hical::Awaitable<std::expected<HttpResponse, std::string>>
@@ -420,30 +524,63 @@ public:
            std::string_view contentType = "text/plain",
            const hical::HeaderMap &extraHeaders = {},
            std::chrono::milliseconds timeout = std::chrono::seconds{60},
-           size_t followRedirect = 0) {
+           size_t followRedirect = 3,
+           uint64_t maxResponseBody = kDefaultMaxResponseBody) {
     co_return co_await requestAsync("PUT", url, body, contentType, extraHeaders,
-                                    timeout, followRedirect);
+                                    timeout, followRedirect, maxResponseBody);
+  }
+
+  static inline hical::Awaitable<std::expected<HttpResponse, std::string>>
+  patchAsync(const std::string &url, std::string_view body,
+             std::string_view contentType = "text/plain",
+             const hical::HeaderMap &extraHeaders = {},
+             std::chrono::milliseconds timeout = std::chrono::seconds{60},
+             size_t followRedirect = 3,
+             uint64_t maxResponseBody = kDefaultMaxResponseBody) {
+    co_return co_await requestAsync("PATCH", url, body, contentType,
+                                    extraHeaders, timeout, followRedirect,
+                                    maxResponseBody);
+  }
+
+  static inline hical::Awaitable<std::expected<HttpResponse, std::string>>
+  deleteAsync(const std::string &url,
+              const hical::HeaderMap &extraHeaders = {},
+              std::chrono::milliseconds timeout = std::chrono::seconds{60},
+              size_t followRedirect = 3,
+              uint64_t maxResponseBody = kDefaultMaxResponseBody) {
+    co_return co_await requestAsync("DELETE", url, {}, "", extraHeaders,
+                                    timeout, followRedirect, maxResponseBody);
+  }
+
+  static inline hical::Awaitable<std::expected<HttpResponse, std::string>>
+  optionsAsync(const std::string &url,
+               const hical::HeaderMap &extraHeaders = {},
+               std::chrono::milliseconds timeout = std::chrono::seconds{60},
+               size_t followRedirect = 3,
+               uint64_t maxResponseBody = kDefaultMaxResponseBody) {
+    co_return co_await requestAsync("OPTIONS", url, {}, "", extraHeaders,
+                                    timeout, followRedirect, maxResponseBody);
   }
 
   static inline hical::Awaitable<std::expected<std::string, std::string>>
   fetchMarkdown(const std::string &url,
                 std::chrono::milliseconds timeout = std::chrono::seconds{15},
-                size_t followRedirect = 0) {
+                size_t followRedirect = 3) {
     auto resp = co_await getAsync(url, {}, timeout, followRedirect);
-    if (resp.has_value()) {
-      if (respIsSucc(resp.value())) {
-        auto options = html2md::Options{
-            .splitLines = false,
-        };
-        auto convert = html2md::Converter{resp.value().body, &options};
-        co_return std::expected<std::string, std::string>{convert.convert()};
-      } else {
-        XX_LOGE("fetchMarkdown resp failed: StatusCode {}",
-                resp.value().status);
-      }
+    if (!resp.has_value()) {
+      XX_LOGE("fetchMarkdown error: {}", resp.error());
+      co_return std::unexpected{resp.error()};
     }
-    XX_LOGE("fetchMarkdown error: {}", resp.error());
-    co_return std::unexpected{resp.error()};
+    auto &respVal = resp.value();
+    if (!respIsSucc(respVal)) {
+      XX_LOGE("fetchMarkdown resp failed: StatusCode {}", respVal.status);
+      co_return std::unexpected{std::to_string(respVal.status)};
+    }
+    auto options = html2md::Options{
+        .splitLines = false,
+    };
+    auto convert = html2md::Converter{respVal.body, &options};
+    co_return std::expected<std::string, std::string>{convert.convert()};
   }
 };
 } // namespace util
