@@ -58,10 +58,16 @@ int main(int argn, char **argv) {
     config.userInput = std::getenv("AGENTXX_BENCH_LLM_USER_INPUT")
                            ? std::getenv("AGENTXX_BENCH_LLM_USER_INPUT")
                            : "Hello, please respond briefly.";
+    // If no external LLM URL is configured, the individual benchmarks will
+    // auto-start a local sim server.
     config.iterations = 5;
 
     agentxx::bench::benchDeepAgentInit();
+    agentxx::bench::benchDeepAgentInitWarm();
     agentxx::bench::benchDeepAgentRunConversationTurnAsync(config);
+    agentxx::bench::benchDeepAgentSimpleCompletion(config);
+    agentxx::bench::benchDeepAgentMultiTurn(config);
+    agentxx::bench::benchDeepAgentLargeHistory(config);
   }
 
   reporter.flushToFile();
