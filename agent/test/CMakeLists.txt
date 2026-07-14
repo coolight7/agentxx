@@ -48,7 +48,6 @@ endif()
 find_package(yaml-cpp REQUIRED)
 find_package(CURL REQUIRED)
 find_package(SQLite3 REQUIRED)
-find_package(hical REQUIRED)
 find_package(html2md REQUIRED)
 find_package(Glob REQUIRED)
 

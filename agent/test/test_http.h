@@ -288,7 +288,8 @@ inline void test_http_client_unit() {
     HEXPECT_EQ(HttpClient::urlEncode(""), "");
     HEXPECT_EQ(HttpClient::urlEncode("中文"), "%e4%b8%ad%e6%96%87");
     // Additional edge cases
-    HEXPECT_EQ(HttpClient::urlEncode("!@#$%^&*()"), "%21%40%23%24%25%5e%26%2a%28%29");
+    HEXPECT_EQ(HttpClient::urlEncode("!@#$%^&*()"),
+               "%21%40%23%24%25%5e%26%2a%28%29");
     HEXPECT_EQ(HttpClient::urlEncode("-_.~"), "-_.~");
     HEXPECT_EQ(HttpClient::urlEncode("/path/to/file"), "%2fpath%2fto%2ffile");
     HEXPECT_EQ(HttpClient::urlEncode("\n\t"), "%0a%09");
@@ -320,12 +321,12 @@ inline void test_http_client_unit() {
   HTEST("HttpClient::resolveRedirectUrl protocol-relative");
   {
     // Protocol-relative URL: //host/path -> scheme://host/path
-    HEXPECT_EQ(
-        HttpClient::resolveRedirectUrl("https://example.com/a", "//other.com/b"),
-        "https://other.com/b");
-    HEXPECT_EQ(
-        HttpClient::resolveRedirectUrl("http://example.com/a", "//other.com:8080/c"),
-        "http://other.com:8080/c");
+    HEXPECT_EQ(HttpClient::resolveRedirectUrl("https://example.com/a",
+                                              "//other.com/b"),
+               "https://other.com/b");
+    HEXPECT_EQ(HttpClient::resolveRedirectUrl("http://example.com/a",
+                                              "//other.com:8080/c"),
+               "http://other.com:8080/c");
   }
 
   std::cout << "======= HTTP Client Unit Test Done: " << g_http_passed
@@ -333,327 +334,6 @@ inline void test_http_client_unit() {
 }
 
 inline asio::awaitable<void> test_http_client() { co_return; }
-
-inline asio::awaitable<void> test_http_client_server() {
-  std::cout << "======= Test: HTTP Client Server Integration ======="
-            << std::endl;
-
-  hical::HttpServer server(0);
-  auto &router = server.router();
-
-  router.get("/hello", [](const hical::HttpRequest &) -> hical::HttpResponse {
-    return hical::HttpResponse::ok("hello world");
-  });
-
-  router.get("/json", [](const hical::HttpRequest &) -> hical::HttpResponse {
-    hical::HttpResponse resp = hical::HttpResponse::ok(R"({"key":"value"})");
-    resp.setHeader("Content-Type", "application/json");
-    return resp;
-  });
-
-  router.get("/html", [](const hical::HttpRequest &) -> hical::HttpResponse {
-    hical::HttpResponse resp =
-        hical::HttpResponse::ok("<html><body>test</body></html>");
-    resp.setHeader("Content-Type", "text/html; charset=utf-8");
-    return resp;
-  });
-
-  router.get("/empty", [](const hical::HttpRequest &) -> hical::HttpResponse {
-    return hical::HttpResponse::ok("");
-  });
-
-  router.get("/status/201",
-             [](const hical::HttpRequest &) -> hical::HttpResponse {
-               hical::HttpResponse resp;
-               resp.setStatus(hical::HttpStatusCode::hCreated);
-               resp.setBody("created");
-               return resp;
-             });
-
-  router.get("/status/404",
-             [](const hical::HttpRequest &) -> hical::HttpResponse {
-               hical::HttpResponse resp;
-               resp.setStatus(hical::HttpStatusCode::hNotFound);
-               resp.setBody("not found");
-               return resp;
-             });
-
-  router.get("/status/500",
-             [](const hical::HttpRequest &) -> hical::HttpResponse {
-               hical::HttpResponse resp;
-               resp.setStatus(hical::HttpStatusCode::hInternalServerError);
-               resp.setBody("server error");
-               return resp;
-             });
-
-  router.get(
-      "/headers", [](const hical::HttpRequest &req) -> hical::HttpResponse {
-        auto val = req.header("X-Test-Header");
-        hical::HttpResponse resp = hical::HttpResponse::ok(std::string{val});
-        return resp;
-      });
-
-  router.post("/echo",
-              [](const hical::HttpRequest &req) -> hical::HttpResponse {
-                return hical::HttpResponse::ok(req.body());
-              });
-
-  router.post("/echo-json",
-              [](const hical::HttpRequest &req) -> hical::HttpResponse {
-                hical::HttpResponse resp = hical::HttpResponse::ok(req.body());
-                resp.setHeader("Content-Type", "application/json");
-                return resp;
-              });
-
-  router.put("/put-echo",
-             [](const hical::HttpRequest &req) -> hical::HttpResponse {
-               return hical::HttpResponse::ok("put:" + req.body());
-             });
-
-  router.del("/del-echo",
-             [](const hical::HttpRequest &) -> hical::HttpResponse {
-               return hical::HttpResponse::ok("deleted");
-             });
-
-  std::thread serverThread([&server]() { server.start(); });
-
-  uint16_t port = 0;
-  for (int i = 0; i < 100; ++i) {
-    port = server.port();
-    if (port != 0)
-      break;
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
-  }
-
-  if (port == 0) {
-    std::cerr << "    FAIL: Server failed to start" << std::endl;
-    g_http_failed++;
-    server.stop();
-    serverThread.join();
-    co_return;
-  }
-
-  for (int i = 0; i < 100; ++i) {
-    try {
-      boost::asio::io_context tmpCtx;
-      boost::asio::ip::tcp::socket sock(tmpCtx);
-      sock.connect(boost::asio::ip::tcp::endpoint(
-          boost::asio::ip::make_address("127.0.0.1"), port));
-      sock.close();
-      break;
-    } catch (...) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(20));
-    }
-  }
-
-  std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
-  std::cout << "Server URL: " << baseUrl << std::endl;
-
-  HTEST("getAsync basic");
-  {
-    auto resp = co_await HttpClient::getAsync(baseUrl + "/hello");
-    HEXPECT_HAS_VALUE(resp);
-    if (resp.has_value()) {
-      HEXPECT_EQ(resp.value().status, 200);
-      HEXPECT_EQ(resp.value().body, "hello world");
-      HEXPECT_TRUE(resp.value().isSuccess());
-    }
-  }
-
-  HTEST("getAsync JSON response");
-  {
-    auto resp = co_await HttpClient::getAsync(baseUrl + "/json");
-    HEXPECT_HAS_VALUE(resp);
-    if (resp.has_value()) {
-      HEXPECT_EQ(resp.value().status, 200);
-      auto jsonBody = resp.value().bodyJson();
-      HEXPECT_HAS_VALUE(jsonBody);
-      if (jsonBody.has_value()) {
-        HEXPECT_EQ(jsonBody.value()["key"].get<std::string>(), "value");
-      }
-    }
-  }
-
-  HTEST("getAsync HTML response bodyText");
-  {
-    auto resp = co_await HttpClient::getAsync(baseUrl + "/html");
-    HEXPECT_HAS_VALUE(resp);
-    if (resp.has_value()) {
-      auto textBody = resp.value().bodyText();
-      HEXPECT_HAS_VALUE(textBody);
-      if (textBody.has_value()) {
-        HEXPECT_EQ(textBody.value(), "<html><body>test</body></html>");
-      }
-      auto jsonBody = resp.value().bodyJson();
-      HEXPECT_NULLOPT(jsonBody);
-    }
-  }
-
-  HTEST("getAsync empty response");
-  {
-    auto resp = co_await HttpClient::getAsync(baseUrl + "/empty");
-    HEXPECT_HAS_VALUE(resp);
-    if (resp.has_value()) {
-      HEXPECT_EQ(resp.value().status, 200);
-      HEXPECT_EQ(resp.value().body, "");
-    }
-  }
-
-  HTEST("getAsync 404 status");
-  {
-    auto resp = co_await HttpClient::getAsync(baseUrl + "/status/404");
-    HEXPECT_HAS_VALUE(resp);
-    if (resp.has_value()) {
-      HEXPECT_EQ(resp.value().status, 404);
-      HEXPECT_FALSE(resp.value().isSuccess());
-    }
-  }
-
-  HTEST("getAsync 500 status");
-  {
-    auto resp = co_await HttpClient::getAsync(baseUrl + "/status/500");
-    HEXPECT_HAS_VALUE(resp);
-    if (resp.has_value()) {
-      HEXPECT_EQ(resp.value().status, 500);
-      HEXPECT_FALSE(resp.value().isSuccess());
-    }
-  }
-
-  HTEST("getAsync 201 status");
-  {
-    auto resp = co_await HttpClient::getAsync(baseUrl + "/status/201");
-    HEXPECT_HAS_VALUE(resp);
-    if (resp.has_value()) {
-      HEXPECT_EQ(resp.value().status, 201);
-      HEXPECT_TRUE(resp.value().isSuccess());
-    }
-  }
-
-  HTEST("getAsync with custom headers");
-  {
-    hical::HeaderMap extraHeaders;
-    extraHeaders.set("X-Test-Header", "my-test-value");
-    auto resp =
-        co_await HttpClient::getAsync(baseUrl + "/headers", extraHeaders);
-    HEXPECT_HAS_VALUE(resp);
-    if (resp.has_value()) {
-      HEXPECT_EQ(resp.value().status, 200);
-      HEXPECT_EQ(resp.value().body, "my-test-value");
-    }
-  }
-
-  HTEST("postAsync JSON body");
-  {
-    neograph::json body = {{"name", "test"}, {"value", 42}};
-    auto resp = co_await HttpClient::postAsync(baseUrl + "/echo-json", body);
-    HEXPECT_HAS_VALUE(resp);
-    if (resp.has_value()) {
-      HEXPECT_EQ(resp.value().status, 200);
-      auto jsonBody = resp.value().bodyJson();
-      HEXPECT_HAS_VALUE(jsonBody);
-      if (jsonBody.has_value()) {
-        HEXPECT_EQ(jsonBody.value()["name"].get<std::string>(), "test");
-        HEXPECT_EQ(jsonBody.value()["value"].get<int>(), 42);
-      }
-    }
-  }
-
-  HTEST("postAsync string body");
-  {
-    auto resp = co_await HttpClient::postAsync(baseUrl + "/echo",
-                                               "plain text body", "text/plain");
-    HEXPECT_HAS_VALUE(resp);
-    if (resp.has_value()) {
-      HEXPECT_EQ(resp.value().status, 200);
-      HEXPECT_EQ(resp.value().body, "plain text body");
-    }
-  }
-
-  HTEST("postAsync string body with custom contentType");
-  {
-    auto resp = co_await HttpClient::postAsync(baseUrl + "/echo", R"({"a":1})",
-                                               "application/json");
-    HEXPECT_HAS_VALUE(resp);
-    if (resp.has_value()) {
-      HEXPECT_EQ(resp.value().status, 200);
-      HEXPECT_EQ(resp.value().body, R"({"a":1})");
-    }
-  }
-
-  HTEST("postAsync string body with extra headers");
-  {
-    hical::HeaderMap extraHeaders;
-    extraHeaders.set("X-Custom", "custom-value");
-    auto resp = co_await HttpClient::postAsync(baseUrl + "/echo", "body text",
-                                               "text/plain", extraHeaders);
-    HEXPECT_HAS_VALUE(resp);
-    if (resp.has_value()) {
-      HEXPECT_EQ(resp.value().status, 200);
-      HEXPECT_EQ(resp.value().body, "body text");
-    }
-  }
-
-  HTEST("putAsync");
-  {
-    auto resp =
-        co_await HttpClient::putAsync(baseUrl + "/put-echo", "update data");
-    HEXPECT_HAS_VALUE(resp);
-    if (resp.has_value()) {
-      HEXPECT_EQ(resp.value().status, 200);
-      HEXPECT_EQ(resp.value().body, "put:update data");
-    }
-  }
-
-  HTEST("getAsync invalid URL");
-  {
-    auto resp = co_await HttpClient::getAsync("", {}, std::chrono::seconds{5});
-    HEXPECT_FALSE(resp.has_value());
-  }
-
-  HTEST("getAsync unsupported scheme");
-  {
-    auto resp = co_await HttpClient::getAsync("ftp://example.com", {},
-                                              std::chrono::seconds{5});
-    HEXPECT_FALSE(resp.has_value());
-  }
-
-  HTEST("getAsync invalid host");
-  {
-    auto resp =
-        co_await HttpClient::getAsync("http://", {}, std::chrono::seconds{5});
-    HEXPECT_FALSE(resp.has_value());
-  }
-
-  HTEST("getAsync nonexistent host");
-  {
-    auto resp = co_await HttpClient::getAsync(
-        "http://nonexistent.invalid.local", {}, std::chrono::seconds{3});
-    HEXPECT_FALSE(resp.has_value());
-  }
-
-  HTEST("getAsync defaultHeaders");
-  {
-    auto headers = HttpClient::defaultHeaders();
-    auto ua = headers.find("User-Agent");
-    HEXPECT_FALSE(ua.empty());
-    auto accept = headers.find("Accept");
-    HEXPECT_EQ(accept, "*/*");
-  }
-
-  HTEST("getAsync with short timeout");
-  {
-    auto resp = co_await HttpClient::getAsync(
-        "http://192.0.2.1:9999/nonexistent", {}, std::chrono::milliseconds{50});
-    HEXPECT_FALSE(resp.has_value());
-  }
-
-  server.stop();
-  serverThread.join();
-
-  std::cout << "======= HTTP Client Server Integration Test Done: "
-            << g_http_passed << " passed, " << g_http_failed
-            << " failed =======" << std::endl;
-}
 
 // -----------------------------------------------------------------------
 // Integration test: HttpClient + Beast-based HttpServer
@@ -716,21 +396,17 @@ inline void test_http_server_unit() {
                                               "http://other.com/b"),
                "http://other.com/b");
     // absolute path
-    HEXPECT_EQ(
-        HttpClient::resolveRedirectUrl("http://example.com/a", "/b/c"),
-        "http://example.com/b/c");
+    HEXPECT_EQ(HttpClient::resolveRedirectUrl("http://example.com/a", "/b/c"),
+               "http://example.com/b/c");
     // relative path
-    HEXPECT_EQ(
-        HttpClient::resolveRedirectUrl("http://example.com/a/b", "c"),
-        "http://example.com/a/c");
+    HEXPECT_EQ(HttpClient::resolveRedirectUrl("http://example.com/a/b", "c"),
+               "http://example.com/a/c");
     // relative path with no parent
-    HEXPECT_EQ(
-        HttpClient::resolveRedirectUrl("http://example.com/", "c"),
-        "http://example.com/c");
+    HEXPECT_EQ(HttpClient::resolveRedirectUrl("http://example.com/", "c"),
+               "http://example.com/c");
     // root path
-    HEXPECT_EQ(
-        HttpClient::resolveRedirectUrl("http://example.com/a/b/c", "/"),
-        "http://example.com/");
+    HEXPECT_EQ(HttpClient::resolveRedirectUrl("http://example.com/a/b/c", "/"),
+               "http://example.com/");
   }
 
   std::cout << "======= HTTP Server Unit Test Done: " << g_http_passed
@@ -746,11 +422,12 @@ inline asio::awaitable<void> test_http_client_beast_server() {
 
   // Build a handler helper: returns Handler for a simple string response
   auto strResp = [](const char *ct, std::string body,
-                    status st = status::ok) -> std::shared_ptr<Server::Handler> {
+                    status st =
+                        status::ok) -> std::shared_ptr<Server::Handler> {
     return std::make_shared<Server::Handler>(
-        [ct, body = std::move(body), st](
-            Server::Request &, Server::Response &resp,
-            const std::string &) -> hical::Awaitable<void> {
+        [ct, body = std::move(body),
+         st](Server::Request &, Server::Response &resp,
+             const std::string &) -> hical::Awaitable<void> {
           resp.result(st);
           resp.set(field::content_type, ct);
           resp.body() = std::move(body);
@@ -762,113 +439,99 @@ inline asio::awaitable<void> test_http_client_beast_server() {
   Server server({.address = "127.0.0.1", .port = 0, .ioThreads = 1});
 
   // GET /hello
-  server.router().add(
-      "/hello", 0,
-      strResp("text/plain", "hello world"));
+  server.router().add("/hello", 0, strResp("text/plain", "hello world"));
 
   // GET /json
-  server.router().add(
-      "/json", 0,
-      strResp("application/json", R"({"key":"value"})"));
+  server.router().add("/json", 0,
+                      strResp("application/json", R"({"key":"value"})"));
 
   // GET /empty
-  server.router().add(
-      "/empty", 0,
-      strResp("text/plain", ""));
+  server.router().add("/empty", 0, strResp("text/plain", ""));
 
   // GET /status/201
-  server.router().add(
-      "/status/201", 0,
-      strResp("text/plain", "created", status::created));
+  server.router().add("/status/201", 0,
+                      strResp("text/plain", "created", status::created));
 
   // GET /status/500
   server.router().add(
       "/status/500", 0,
-      strResp("text/plain", "server error",
-              status::internal_server_error));
+      strResp("text/plain", "server error", status::internal_server_error));
 
   // GET /headers – echo back X-Echo value
-  server.router().add(
-      "/headers", 0,
-      std::make_shared<Server::Handler>(
-          [](Server::Request &req, Server::Response &resp,
-             const std::string &) -> hical::Awaitable<void> {
-            resp.result(status::ok);
-            resp.set(field::content_type, "text/plain");
-            auto val = req[field::x_forwarded_for];
-            resp.body() = val.empty() ? "(none)" : std::string(val);
-            resp.prepare_payload();
-            co_return;
-          }));
+  server.router().add("/headers", 0,
+                      std::make_shared<Server::Handler>(
+                          [](Server::Request &req, Server::Response &resp,
+                             const std::string &) -> hical::Awaitable<void> {
+                            resp.result(status::ok);
+                            resp.set(field::content_type, "text/plain");
+                            auto val = req[field::x_forwarded_for];
+                            resp.body() =
+                                val.empty() ? "(none)" : std::string(val);
+                            resp.prepare_payload();
+                            co_return;
+                          }));
 
   // GET /search?q=xxx – use query params
-  server.router().add(
-      "/search", 0,
-      std::make_shared<Server::Handler>(
-          [](Server::Request &req, Server::Response &resp,
-             const std::string &) -> hical::Awaitable<void> {
-            resp.result(status::ok);
-            resp.set(field::content_type, "text/plain");
-            auto target = req.target();
-            resp.body() = std::string(target);
-            resp.prepare_payload();
-            co_return;
-          }));
+  server.router().add("/search", 0,
+                      std::make_shared<Server::Handler>(
+                          [](Server::Request &req, Server::Response &resp,
+                             const std::string &) -> hical::Awaitable<void> {
+                            resp.result(status::ok);
+                            resp.set(field::content_type, "text/plain");
+                            auto target = req.target();
+                            resp.body() = std::string(target);
+                            resp.prepare_payload();
+                            co_return;
+                          }));
 
   // POST /echo
-  server.router().add(
-      "/echo", 2,
-      std::make_shared<Server::Handler>(
-          [](Server::Request &req, Server::Response &resp,
-             const std::string &) -> hical::Awaitable<void> {
-            resp.result(status::ok);
-            resp.set(field::content_type, "text/plain");
-            resp.body() = req.body();
-            resp.prepare_payload();
-            co_return;
-          }));
+  server.router().add("/echo", 2,
+                      std::make_shared<Server::Handler>(
+                          [](Server::Request &req, Server::Response &resp,
+                             const std::string &) -> hical::Awaitable<void> {
+                            resp.result(status::ok);
+                            resp.set(field::content_type, "text/plain");
+                            resp.body() = req.body();
+                            resp.prepare_payload();
+                            co_return;
+                          }));
 
   // PUT /echo – prefix with "put:"
-  server.router().add(
-      "/echo", 3,
-      std::make_shared<Server::Handler>(
-          [](Server::Request &req, Server::Response &resp,
-             const std::string &) -> hical::Awaitable<void> {
-            resp.result(status::ok);
-            resp.set(field::content_type, "text/plain");
-            resp.body() = "put:" + req.body();
-            resp.prepare_payload();
-            co_return;
-          }));
+  server.router().add("/echo", 3,
+                      std::make_shared<Server::Handler>(
+                          [](Server::Request &req, Server::Response &resp,
+                             const std::string &) -> hical::Awaitable<void> {
+                            resp.result(status::ok);
+                            resp.set(field::content_type, "text/plain");
+                            resp.body() = "put:" + req.body();
+                            resp.prepare_payload();
+                            co_return;
+                          }));
 
   // DELETE /data
-  server.router().add(
-      "/data", 4,
-      strResp("text/plain", "deleted"));
+  server.router().add("/data", 4, strResp("text/plain", "deleted"));
 
   // Redirect: GET /redirect-me -> 302 Location: /hello
-  server.router().add(
-      "/redirect-me", 0,
-      std::make_shared<Server::Handler>(
-          [](Server::Request &, Server::Response &resp,
-             const std::string &) -> hical::Awaitable<void> {
-            resp.result(status::found);
-            resp.set(field::location, "/hello");
-            resp.prepare_payload();
-            co_return;
-          }));
+  server.router().add("/redirect-me", 0,
+                      std::make_shared<Server::Handler>(
+                          [](Server::Request &, Server::Response &resp,
+                             const std::string &) -> hical::Awaitable<void> {
+                            resp.result(status::found);
+                            resp.set(field::location, "/hello");
+                            resp.prepare_payload();
+                            co_return;
+                          }));
 
   // Redirect loop: GET /redirect-loop -> 302 Location: /redirect-loop
-  server.router().add(
-      "/redirect-loop", 0,
-      std::make_shared<Server::Handler>(
-          [](Server::Request &, Server::Response &resp,
-             const std::string &) -> hical::Awaitable<void> {
-            resp.result(status::found);
-            resp.set(field::location, "/redirect-loop");
-            resp.prepare_payload();
-            co_return;
-          }));
+  server.router().add("/redirect-loop", 0,
+                      std::make_shared<Server::Handler>(
+                          [](Server::Request &, Server::Response &resp,
+                             const std::string &) -> hical::Awaitable<void> {
+                            resp.result(status::found);
+                            resp.set(field::location, "/redirect-loop");
+                            resp.prepare_payload();
+                            co_return;
+                          }));
 
   // Wildcard: GET /wildcard/*
   server.router().add(
@@ -884,63 +547,59 @@ inline asio::awaitable<void> test_http_client_beast_server() {
           }));
 
   // PATCH /echo – prefix with "patch:"
-  server.router().add(
-      "/echo", 8,
-      std::make_shared<Server::Handler>(
-          [](Server::Request &req, Server::Response &resp,
-             const std::string &) -> hical::Awaitable<void> {
-            resp.result(status::ok);
-            resp.set(field::content_type, "text/plain");
-            resp.body() = "patch:" + req.body();
-            resp.prepare_payload();
-            co_return;
-          }));
+  server.router().add("/echo", 8,
+                      std::make_shared<Server::Handler>(
+                          [](Server::Request &req, Server::Response &resp,
+                             const std::string &) -> hical::Awaitable<void> {
+                            resp.result(status::ok);
+                            resp.set(field::content_type, "text/plain");
+                            resp.body() = "patch:" + req.body();
+                            resp.prepare_payload();
+                            co_return;
+                          }));
 
   // DELETE /echo – echo body
-  server.router().add(
-      "/echo", 4,
-      std::make_shared<Server::Handler>(
-          [](Server::Request &req, Server::Response &resp,
-             const std::string &) -> hical::Awaitable<void> {
-            resp.result(status::ok);
-            resp.set(field::content_type, "text/plain");
-            resp.body() = "delete:" + req.body();
-            resp.prepare_payload();
-            co_return;
-          }));
+  server.router().add("/echo", 4,
+                      std::make_shared<Server::Handler>(
+                          [](Server::Request &req, Server::Response &resp,
+                             const std::string &) -> hical::Awaitable<void> {
+                            resp.result(status::ok);
+                            resp.set(field::content_type, "text/plain");
+                            resp.body() = "delete:" + req.body();
+                            resp.prepare_payload();
+                            co_return;
+                          }));
 
   // HEAD /hello – should return headers only, no body
-  server.router().add(
-      "/hello", 1,
-      std::make_shared<Server::Handler>(
-          [](Server::Request &, Server::Response &resp,
-             const std::string &) -> hical::Awaitable<void> {
-            resp.result(status::ok);
-            resp.set(field::content_type, "text/plain");
-            resp.body() = "hello world";
-            resp.prepare_payload();
-            co_return;
-          }));
+  server.router().add("/hello", 1,
+                      std::make_shared<Server::Handler>(
+                          [](Server::Request &, Server::Response &resp,
+                             const std::string &) -> hical::Awaitable<void> {
+                            resp.result(status::ok);
+                            resp.set(field::content_type, "text/plain");
+                            resp.body() = "hello world";
+                            resp.prepare_payload();
+                            co_return;
+                          }));
 
   // GET /big-body – returns a configurable-size body for limit testing
-  server.router().add(
-      "/big-body", 0,
-      std::make_shared<Server::Handler>(
-          [](Server::Request &req, Server::Response &resp,
-             const std::string &) -> hical::Awaitable<void> {
-            resp.result(status::ok);
-            resp.set(field::content_type, "text/plain");
-            // Default 1000 bytes, or use ?size=NNNN
-            std::string target = std::string(req.target());
-            size_t size = 1000;
-            auto pos = target.find("size=");
-            if (pos != std::string::npos) {
-              size = std::stoul(target.substr(pos + 5));
-            }
-            resp.body() = std::string(size, 'x');
-            resp.prepare_payload();
-            co_return;
-          }));
+  server.router().add("/big-body", 0,
+                      std::make_shared<Server::Handler>(
+                          [](Server::Request &req, Server::Response &resp,
+                             const std::string &) -> hical::Awaitable<void> {
+                            resp.result(status::ok);
+                            resp.set(field::content_type, "text/plain");
+                            // Default 1000 bytes, or use ?size=NNNN
+                            std::string target = std::string(req.target());
+                            size_t size = 1000;
+                            auto pos = target.find("size=");
+                            if (pos != std::string::npos) {
+                              size = std::stoul(target.substr(pos + 5));
+                            }
+                            resp.body() = std::string(size, 'x');
+                            resp.prepare_payload();
+                            co_return;
+                          }));
 
   // GET /redirect-proto-rel – not used (protocol-relative needs cross-host)
 
@@ -1041,8 +700,8 @@ inline asio::awaitable<void> test_http_client_beast_server() {
 
   HTEST("postAsync – Beast server");
   {
-    auto resp =
-        co_await HttpClient::postAsync(baseUrl + "/echo", "body data", "text/plain");
+    auto resp = co_await HttpClient::postAsync(baseUrl + "/echo", "body data",
+                                               "text/plain");
     HEXPECT_HAS_VALUE(resp);
     if (resp.has_value()) {
       HEXPECT_EQ(resp.value().status, 200);
@@ -1104,7 +763,8 @@ inline asio::awaitable<void> test_http_client_beast_server() {
   HTEST("Method Not Allowed (405) – Beast server");
   {
     // POST to a GET-only route
-    auto resp = co_await HttpClient::postAsync(baseUrl + "/hello", "body", "text/plain");
+    auto resp = co_await HttpClient::postAsync(baseUrl + "/hello", "body",
+                                               "text/plain");
     HEXPECT_HAS_VALUE(resp);
     if (resp.has_value()) {
       HEXPECT_EQ(resp.value().status, 405);
@@ -1126,21 +786,17 @@ inline asio::awaitable<void> test_http_client_beast_server() {
   HTEST("getAsync timeout – Beast server");
   {
     auto resp = co_await HttpClient::getAsync(
-        "http://192.0.2.1:9999/nonexistent", {},
-        std::chrono::milliseconds{50});
+        "http://192.0.2.1:9999/nonexistent", {}, std::chrono::milliseconds{50});
     HEXPECT_FALSE(resp.has_value());
   }
 
   HTEST("Server stop and restart sanity");
-  {
-    HEXPECT_FALSE(server.isStopped());
-  }
+  { HEXPECT_FALSE(server.isStopped()); }
 
   HTEST("Redirect followRedirect=0 does not follow");
   {
-    auto resp =
-        co_await HttpClient::getAsync(baseUrl + "/redirect-me", {},
-                                      std::chrono::seconds{10}, 0);
+    auto resp = co_await HttpClient::getAsync(baseUrl + "/redirect-me", {},
+                                              std::chrono::seconds{10}, 0);
     HEXPECT_HAS_VALUE(resp);
     if (resp.has_value()) {
       HEXPECT_EQ(resp.value().status, 302);
@@ -1151,9 +807,8 @@ inline asio::awaitable<void> test_http_client_beast_server() {
 
   HTEST("Redirect followRedirect=1 follows to final");
   {
-    auto resp =
-        co_await HttpClient::getAsync(baseUrl + "/redirect-me", {},
-                                      std::chrono::seconds{10}, 1);
+    auto resp = co_await HttpClient::getAsync(baseUrl + "/redirect-me", {},
+                                              std::chrono::seconds{10}, 1);
     HEXPECT_HAS_VALUE(resp);
     if (resp.has_value()) {
       HEXPECT_EQ(resp.value().status, 200);
@@ -1163,9 +818,8 @@ inline asio::awaitable<void> test_http_client_beast_server() {
 
   HTEST("Redirect loop stops at max redirects");
   {
-    auto resp =
-        co_await HttpClient::getAsync(baseUrl + "/redirect-loop", {},
-                                      std::chrono::seconds{10}, 3);
+    auto resp = co_await HttpClient::getAsync(baseUrl + "/redirect-loop", {},
+                                              std::chrono::seconds{10}, 3);
     HEXPECT_HAS_VALUE(resp);
     if (resp.has_value()) {
       // Should stop at the last redirect (302) since it exceeds max
@@ -1189,8 +843,7 @@ inline asio::awaitable<void> test_http_client_beast_server() {
 
   HTEST("PATCH method – Beast server");
   {
-    auto resp =
-        co_await HttpClient::patchAsync(baseUrl + "/echo", "patchdata");
+    auto resp = co_await HttpClient::patchAsync(baseUrl + "/echo", "patchdata");
     HEXPECT_HAS_VALUE(resp);
     if (resp.has_value()) {
       HEXPECT_EQ(resp.value().status, 200);
@@ -1284,7 +937,6 @@ inline asio::awaitable<void> run_http_client_tests() {
   test_http_client_unit();
   test_http_server_unit();
   co_await test_http_client();
-  co_await test_http_client_server();
   co_await test_http_client_beast_server();
 }
 

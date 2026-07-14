@@ -13,7 +13,7 @@
 namespace agentxx {
 namespace test {
 
-inline asio::awaitable<void> test_cpu_gpu_use() {
+inline asio::awaitable<void> run_cpu_gpu_use_tests() {
 #if XX_IS_WIN_D || XX_IS_LINUX_D
   std::cout << "======= CpuGpuMonitor Test =======" << std::endl;
 

@@ -44,9 +44,6 @@
 [submodule "agent/third_party/hyperscan"]
 	path = agent/third_party/hyperscan
 	url = https://github.com/coolight7/hyperscan/
-[submodule "agent/third_party/hical"]
-	path = agent/third_party/hical
-	url = https://github.com/coolight7/Hical
 [submodule "agent/third_party/zlib-ng"]
 	path = agent/third_party/zlib-ng
 	url = https://github.com/zlib-ng/zlib-ng

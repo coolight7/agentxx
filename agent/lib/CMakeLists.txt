@@ -92,7 +92,7 @@ endif()
 
 find_package(PkgConfig REQUIRED)
 # 添加依赖库后应当同步更新 [packageProject:DEPENDENCIES]
-set (agentxx_DEPENDENCIES "Iconv;uchardet;fmt;simdjson;ZLIB;OpenSSL;Boost;yaml-cpp;CURL;SQLite3;hical;html2md;Glob")
+set (agentxx_DEPENDENCIES "Iconv;uchardet;fmt;simdjson;ZLIB;OpenSSL;Boost;yaml-cpp;CURL;SQLite3;html2md;Glob")
 find_package(iconv REQUIRED)
 find_package(uchardet REQUIRED)
 find_package(fmt REQUIRED)
@@ -103,7 +103,6 @@ find_package(Boost REQUIRED)
 find_package(yaml-cpp REQUIRED)
 find_package(CURL REQUIRED)
 find_package(SQLite3 REQUIRED)
-find_package(hical REQUIRED)
 find_package(html2md REQUIRED)
 find_package(Glob REQUIRED)
 
@@ -114,7 +113,6 @@ target_include_directories(agentxx_shared PUBLIC
   ${AGENTXX_INSTALL_DIR}/include/
   ${neograph_SOURCE_DIR}/deps/yyjson/
   ${neograph_SOURCE_DIR}/deps/
-  ${hical_SOURCE_DIR}/src/third_party/picohttpparser/
 )
 target_include_directories(agentxx_static PUBLIC 
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -123,7 +121,6 @@ target_include_directories(agentxx_static PUBLIC
   ${AGENTXX_INSTALL_DIR}/include/
   ${neograph_SOURCE_DIR}/deps/yyjson/
   ${neograph_SOURCE_DIR}/deps/
-  ${hical_SOURCE_DIR}/src/third_party/picohttpparser/
 )
 if(Boost_FOUND)
   target_include_directories(agentxx_shared SYSTEM PUBLIC 
@@ -278,7 +275,6 @@ target_link_libraries(agentxx_shared PUBLIC
   OpenSSL::Crypto
   simdjson::simdjson
   yyjson
-  # hical::hical_core
   fmt::fmt
   Iconv::Iconv
   charset
@@ -303,7 +299,6 @@ target_link_libraries(agentxx_static PUBLIC
   OpenSSL::Crypto
   simdjson::simdjson
   yyjson
-  hical::hical_core
   fmt::fmt
   Iconv::Iconv
   charset

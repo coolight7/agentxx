@@ -681,36 +681,6 @@ if (AGENTXX_ENABLE_CUSTOM_CURL)
   add_dependencies(neograph_repo curl_repo)
 endif()
 
-# hical
-ExternalProject_Add(
-  hical_repo
-  DEPENDS 
-    zlib_repo
-  SOURCE_DIR "${AGENTXX_THIRD_PARTY_DIR}/hical/"
-  INSTALL_DIR "${AGENTXX_INSTALL_DIR}"
-  CMAKE_ARGS
-    ${_AGENTXX_COMMON_CMAKE_ARGS}
-    -DHICAL_ENABLE_REFLECTION=OFF
-    -DHICAL_BUILD_TESTS=OFF
-    -DHICAL_BUILD_EXAMPLES=OFF
-    -DHICAL_ENABLE_MEMORY_TRACKING=${XX_IS_DEBUG_D}
-    -DHICAL_ENABLE_MIDDLEWARE_PROFILING=OFF
-    -DHICAL_WITH_DATABASE=OFF
-    -DHICAL_WITH_OPENAPI=ON
-    -DHICAL_WITH_MIMALLOC=OFF
-    -DHICAL_BUILD_BENCH=OFF
-    -DHICAL_BUILD_TFB=OFF
-    -DHICAL_BUILD_HTTPARENA=OFF
-    -DHICAL_BUILD_DEPLOY=OFF
-    -DBUILD_SHARED_LIBS=OFF
-    -DBUILD_STATIC_LIBS=ON
-  CMAKE_CACHE_ARGS
-    ${_AGENTXX_COMMON_CMAKE_CACHE_ARGS}
-    "-DBOOST_ROOT:PATH=${BOOST_ROOT}"
-    "-DOPENSSL_ROOT_DIR:PATH=${OPENSSL_ROOT_DIR}"
-  TEST_COMMAND ""
-)
-
 # html2md
 ExternalProject_Add(
   html2md_repo
@@ -773,7 +743,6 @@ ExternalProject_Add(
     fmt_repo
     uchardet_repo
     neograph_repo
-    hical_repo
     html2md_repo
     yaml_cpp_repo
     glob_repo
@@ -784,7 +753,6 @@ ExternalProject_Add(
   CMAKE_ARGS
     ${_AGENTXX_COMMON_CMAKE_ARGS}
     -Dneograph_SOURCE_DIR=${neograph_SOURCE_DIR}
-    -Dhical_SOURCE_DIR=${AGENTXX_THIRD_PARTY_DIR}/hical/
   CMAKE_CACHE_ARGS
     ${_AGENTXX_COMMON_CMAKE_CACHE_ARGS}
   TEST_COMMAND ""
