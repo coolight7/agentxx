@@ -12,8 +12,10 @@
 #include <fstream>
 #include <functional>
 #include <iostream>
+#include <map>
 #include <memory>
 #include <random>
+#include <set>
 #include <sstream>
 
 namespace agentxx {
@@ -91,7 +93,6 @@ loadTestCasesFromDirectory(const std::string &dirPath) {
 /// 剥离 LLM 响应中可能存在的 Markdown 代码块标记
 inline std::string stripMarkdownCodeBlock(const std::string &content) {
   std::string result = content;
-  // 去除首尾空白
   auto start = result.find_first_not_of(" \t\n\r");
   auto end = result.find_last_not_of(" \t\n\r");
   if (start == std::string::npos) {
@@ -99,23 +100,37 @@ inline std::string stripMarkdownCodeBlock(const std::string &content) {
   }
   result = result.substr(start, end - start + 1);
 
-  // 检查是否以 ```json 或 ``` 开头
   if (result.size() >= 3 && result.substr(0, 3) == "```") {
     auto newlinePos = result.find('\n');
     if (newlinePos != std::string::npos) {
       result = result.substr(newlinePos + 1);
     }
-    // 去除结尾的 ```
     if (result.size() >= 3 && result.substr(result.size() - 3) == "```") {
       result = result.substr(0, result.size() - 3);
     }
-    // 去除尾部空白
     start = result.find_last_not_of(" \t\n\r");
     if (start != std::string::npos) {
       result = result.substr(0, start + 1);
     }
   }
   return result;
+}
+
+/// 从 LLM 响应中解析 JSON：先剥离 markdown 代码块，失败则尝试提取首个 {...} 子串
+inline neograph::json parseJsonFromResponse(const std::string &content) {
+  auto stripped = stripMarkdownCodeBlock(content);
+  try {
+    return neograph::json::parse(stripped);
+  } catch (...) {
+    auto first = stripped.find('{');
+    auto last = stripped.rfind('}');
+    if (first != std::string::npos && last != std::string::npos &&
+        last > first) {
+      return neograph::json::parse(
+          stripped.substr(first, last - first + 1));
+    }
+    throw;
+  }
 }
 
 /// 评分结果
@@ -127,21 +142,32 @@ struct TrainingScore {
   neograph::json extra;
 };
 
-/// Prompt 变体：存储一组 prompt 配置及其评分
+/// 优化器/变异器输出的 prompt 修改 patch
+/// - patch 是一个 JSON，结构同 AgentPrompt::toJson，仅包含要修改的字段
+/// - 空 patch 表示无修改
+struct OptimizedPrompts {
+  neograph::json patch;
+  std::string analysis;
+};
+
+/// Prompt 变体：存储完整 AgentPrompt 及其评分
+/// 训练目标是 AgentPrompt 类内定义的全部提示词（含 toolPrompt）
 struct PromptVariant {
   std::string id;
-  std::string systemPrompt;
-  std::string systemPlanningPrompt;
-  std::string systemSkillPrompt;
+  AgentPrompt prompt;
   double cumulativeScore = 0.0;
   int testCount = 0;
   int generation = 0;
   std::string parentId;
+  std::map<std::string, double> perTestCaseScores;
   neograph::json extra;
 
   double averageScore() const {
     return testCount > 0 ? cumulativeScore / testCount : 0.0;
   }
+
+  /// 计算整个 prompt 的 hash，用于去重
+  size_t promptHash() const { return prompt.promptHash(); }
 };
 
 // ======================== 回调类型 ========================
@@ -173,22 +199,53 @@ struct EvolutionTrainingConfig {
   /// 每个选中的变体生成几个子代
   int childrenPerParent = 3;
 
+  /// 最大迭代代数（0 表示不限制，仅靠收敛检测停止）
+  int maxGenerations = 50;
+
+  /// 是否使用 LLM 进行语义变异；false 则使用字符级随机变异
+  bool useLLMMutation = true;
+
+  /// 每代最多尝试多少次 prompt 优化（针对低分变体）
+  int maxOptimizationsPerGen = 5;
+
+  /// 早终：已测试用例数达到 [earlyTerminationCheckAfter] 后，
+  /// 若平均分低于 [earlyTerminationScore] 则跳过剩余用例（剩余记 0 分）
+  int earlyTerminationCheckAfter = 2;
+  double earlyTerminationScore = 0.2;
+
+  /// 保存文件时保留的历史备份数（0 表示不备份）
+  int saveFileBackupCount = 3;
+
   /// 评分 subagent 的 system prompt
   std::string scoringPrompt = R"(
-You are an expert evaluator. Your task is to score the agent's response based on the test case.
+You are an expert evaluator for an AI agent. Score the agent's response against the test case criteria.
 
-Scoring criteria (0.0 to 1.0):
-- 1.0: Perfect response, fully satisfies the test case requirements
-- 0.8-0.9: Good response, minor issues
-- 0.6-0.7: Acceptable response, some issues
-- 0.4-0.5: Partially correct, significant issues
-- 0.0-0.3: Poor or incorrect response
+## Scoring Rubric (0.0 to 1.0)
+- 1.0: Excellent — fully satisfies all requirements, no issues
+- 0.8-0.9: Good — meets requirements with minor issues
+- 0.6-0.7: Acceptable — mostly correct, some gaps
+- 0.4-0.5: Weak — partially correct, significant issues
+- 0.2-0.3: Poor — mostly incorrect or missing
+- 0.0-0.1: Fail — incorrect, irrelevant, or no response
 
-Output ONLY a JSON object with the following schema:
+## Evaluation Dimensions
+1. Correctness: Is the answer factually/technically correct?
+2. Completeness: Does it address all parts of the request?
+3. Clarity: Is the response clear and well-structured?
+4. Format: Does it match any requested format (exact output, language, etc.)?
+
+## Output
+Output ONLY a JSON object (no markdown fences, no prose outside JSON):
 {
-  "score": <0.0-1.0>,
-  "feedback": "<detailed feedback explaining the score>",
-  "passed": <true if score >= threshold, false otherwise>
+  "score": <number 0.0-1.0>,
+  "feedback": "<concise: what was good, what was missing, how to improve>",
+  "passed": <true if score >= threshold given below, else false>,
+  "dimensions": {
+    "correctness": <0.0-1.0>,
+    "completeness": <0.0-1.0>,
+    "clarity": <0.0-1.0>,
+    "format": <0.0-1.0>
+  }
 }
 )";
 
@@ -203,21 +260,45 @@ Output ONLY a JSON object with the following schema:
 
   /// prompt 优化器（调整 prompt）的 system prompt
   std::string optimizerPrompt = R"(
-You are a prompt engineering expert. Your task is to improve a system prompt for an AI agent.
+You are a prompt engineering expert. Improve the prompts for an AI agent based on observed performance.
 
-Given:
-1. The current system prompt that was used
-2. The test case the agent was given
-3. The agent's output
-4. The score and feedback the agent received
+## Inputs
+You will receive:
+1. The current prompts (system, planning, skill, and tool prompts) used by the agent
+2. The test case and expected behavior
+3. The agent's actual output
+4. The score and feedback from evaluation
 
-Your job is to write an IMPROVED system prompt that will help the agent perform better on similar tasks.
+## Your Task
+Write IMPROVED prompts that will help the agent perform better on similar tasks.
 
-Output ONLY a JSON object:
+## Prompt Engineering Principles
+- Be specific and direct about expected behavior
+- Use structured sections (##) for clarity
+- Prefer positive guidance (what to do) over prohibitions (what not to do)
+- Add concrete examples where helpful
+- Keep prompts concise — avoid redundancy
+- Preserve working parts of the prompt; focus changes on weak areas
+
+## Output
+Output ONLY a JSON object (no markdown fences):
 {
-  "systemPrompt": "<the improved system prompt>",
-  "analysis": "<brief analysis of what was wrong and how you fixed it>"
+  "systemPrompt": "<improved main system prompt, or empty to keep current>",
+  "systemPlanningPrompt": "<improved planning prompt, or empty to keep current>",
+  "systemSkillPrompt": "<improved skill prompt, or empty to keep current>",
+  "toolPrompt": {
+    "<tool_name>": {
+      "depict": "<improved tool description, or empty to keep>",
+      "args": {
+        "<arg_name>": "<improved arg description, or empty to keep>"
+      }
+    }
+  },
+  "analysis": "<what was wrong and how you fixed it>"
 }
+
+Leave any field empty ("") to keep it unchanged. Only modify prompts that need improvement.
+Include the "toolPrompt" object only if you want to modify tool prompts.
 )";
 
   /// 优化器模型名称
@@ -229,13 +310,52 @@ Output ONLY a JSON object:
   /// 优化器 Base URL
   std::string optimizerModelBaseUrl;
 
+  /// LLM 变异 prompt：用于生成多样化的 prompt 变体（探索而非改进）
+  std::string mutationPrompt = R"(
+You are a prompt variation generator. Create a DIVERSE variation of the given AI agent prompts that explores different phrasings while preserving the core intent.
+
+## Goal
+Generate a meaningfully different version to explore the prompt space. The variation should:
+- Keep the core instructions and intent
+- Vary wording, structure, emphasis, or ordering
+- Potentially add helpful guidance or examples
+- NOT just paraphrase — make substantive structural changes
+
+## Variation Strategies (use one or more)
+- Reorganize sections for better logical flow
+- Add concrete examples or analogies
+- Change tone (formal / concise / explicit)
+- Emphasize different aspects of the task
+- Simplify verbose parts or expand terse parts
+
+## Output
+Output ONLY a JSON object (no markdown fences):
+{
+  "systemPrompt": "<varied main system prompt, or empty to keep current>",
+  "systemPlanningPrompt": "<varied planning prompt, or empty to keep current>",
+  "systemSkillPrompt": "<varied skill prompt, or empty to keep current>",
+  "toolPrompt": {
+    "<tool_name>": {
+      "depict": "<varied tool description, or empty to keep>",
+      "args": {
+        "<arg_name>": "<varied arg description, or empty to keep>"
+      }
+    }
+  },
+  "strategy": "<which variation strategy you used>"
+}
+
+Leave any field empty ("") to keep it unchanged.
+Include the "toolPrompt" object only if you want to vary tool prompts.
+)";
+
   /// 收敛阈值（评分达到此值视为通过）
   double convergenceThreshold = 0.8;
 
   /// 连续 N 代最佳分数无提升则停止训练（0 表示不自动停止）
   int maxGenerationsWithoutImprovement = 5;
 
-  /// 变异率：对 prompt 字符串中每个字符进行随机变异的概率（0.0-1.0）
+  /// 字符级变异率（仅当 useLLMMutation=false 时生效）
   double mutationRate = 0.01;
 
   /// 自定义评分回调
@@ -260,38 +380,109 @@ protected:
   std::mt19937 rng;
   int generationCounter = 0;
 
+  // ---- 通用 LLM 调用 ----
+
+  /// 设置 agent 的 system prompt 后发起一次非流式对话
+  /// 注意: ModelCallWrapNode 会用 agentConfig->prompt.systemPrompt 覆盖
+  /// 输入中的 system 消息，因此必须写入 config 而非通过消息传入
+  asio::awaitable<std::string>
+  runLLMAgent(std::shared_ptr<agentxx::agent::DeepAgent> agent,
+              const std::string &systemPrompt,
+              const std::string &userContent) {
+    agent->getContext()->agentConfig->prompt.systemPrompt = systemPrompt;
+    std::vector<neograph::ChatMessage> messages = {
+        neograph::ChatMessage{.role = "user", .content = userContent},
+    };
+    auto result = co_await agent->runStreamAsync(messages);
+    co_return result.content;
+  }
+
+  /// 将变体的完整 prompt 写入 trainAgent 的运行时配置
+  /// 这是让变体真正生效的关键：ModelCallWrapNode / 各 middleware / 各 tool
+  /// 均从 agentConfig->prompt 读取所有提示词
+  void applyVariantToTrainAgent(const PromptVariant &variant) {
+    auto cfg = trainAgent->getContext()->agentConfig;
+    cfg->prompt = variant.prompt;
+  }
+
   // ---- 文件 I/O ----
 
   neograph::json promptVariantToJson(const PromptVariant &v) const {
-    return {
-        {"id", v.id},
-        {"systemPrompt", v.systemPrompt},
-        {"systemPlanningPrompt", v.systemPlanningPrompt},
-        {"systemSkillPrompt", v.systemSkillPrompt},
-        {"cumulativeScore", v.cumulativeScore},
-        {"testCount", v.testCount},
-        {"generation", v.generation},
-        {"parentId", v.parentId},
-        {"extra", v.extra},
-    };
+    neograph::json j;
+    j["id"] = v.id;
+    j["prompt"] = v.prompt.toJson();
+    j["cumulativeScore"] = v.cumulativeScore;
+    j["testCount"] = v.testCount;
+    j["generation"] = v.generation;
+    j["parentId"] = v.parentId;
+    {
+      neograph::json scores = neograph::json::object();
+      for (const auto &kv : v.perTestCaseScores) {
+        scores[kv.first] = kv.second;
+      }
+      j["perTestCaseScores"] = scores;
+    }
+    j["extra"] = v.extra;
+    return j;
   }
 
   PromptVariant promptVariantFromJson(const neograph::json &j) const {
     PromptVariant v;
-    v.id = j.value("id", "");
-    v.systemPrompt = j.value("systemPrompt", "");
-    v.systemPlanningPrompt = j.value("systemPlanningPrompt", "");
-    v.systemSkillPrompt = j.value("systemSkillPrompt", "");
+    v.id = j.value("id", std::string{});
+    if (j.contains("prompt") && j["prompt"].is_object()) {
+      v.prompt.mergeFromJson(j["prompt"]);
+    } else {
+      // 兼容旧版只存了 3 个 system prompt 字段的格式
+      v.prompt.mergeFromJson(j);
+    }
     v.cumulativeScore = j.value("cumulativeScore", 0.0);
     v.testCount = j.value("testCount", 0);
     v.generation = j.value("generation", 0);
-    v.parentId = j.value("parentId", "");
+    v.parentId = j.value("parentId", std::string{});
+    if (j.contains("perTestCaseScores") && j["perTestCaseScores"].is_object()) {
+      auto scores = j["perTestCaseScores"];
+      for (const auto &item : scores.items()) {
+        v.perTestCaseScores[item.first] = item.second.get<double>();
+      }
+    }
     v.extra = j.value("extra", neograph::json::object());
     return v;
   }
 
-  void savePopulationToFile(const std::string &filePath) {
+  /// 轮转备份保存文件：file -> file.1 -> file.2 -> ... -> file.N
+  void rotateSaveFile(const std::string &path, int keepCount) {
+    if (keepCount <= 0) {
+      return;
+    }
+    namespace fs = std::filesystem;
     try {
+      fs::path oldest(path + "." + std::to_string(keepCount));
+      if (fs::exists(oldest)) {
+        fs::remove(oldest);
+      }
+      for (int i = keepCount - 1; i >= 1; --i) {
+        fs::path from(path + "." + std::to_string(i));
+        fs::path to(path + "." + std::to_string(i + 1));
+        if (fs::exists(from)) {
+          fs::rename(from, to);
+        }
+      }
+      fs::path cur(path);
+      if (fs::exists(cur)) {
+        fs::copy_file(cur, path + ".1",
+                      fs::copy_options::overwrite_existing);
+      }
+    } catch (const std::exception &e) {
+      XX_LOGD("[EvolutionTraining] Backup rotation skipped: {}", e.what());
+    }
+  }
+
+  void savePopulationToFile(const std::string &filePath, int backupCount = 0) {
+    try {
+      if (backupCount > 0) {
+        rotateSaveFile(filePath, backupCount);
+      }
+
       neograph::json j = neograph::json::array();
       for (const auto &v : population) {
         j.push_back(promptVariantToJson(v));
@@ -359,15 +550,6 @@ protected:
     return false;
   }
 
-  // ---- Agent 运行 ----
-
-  asio::awaitable<std::string>
-  runSingleInputAsync(const std::string &threadId, const std::string &userInput,
-                      const std::string &systemPrompt) {
-    co_return co_await trainAgent->runSingleInputAsync(threadId, userInput,
-                                                       systemPrompt);
-  }
-
   // ---- 评分 ----
 
   asio::awaitable<TrainingScore>
@@ -399,27 +581,17 @@ protected:
                      << testCase.expectedOutput << "\n";
     }
     scoringMessage << "\nAgent Response:\n" << agentOutput << "\n";
-    scoringMessage << "\nScore threshold (score >= " << cfg.convergenceThreshold
-                   << " is passed)";
-
-    neograph::ChatMessage scoringMsg{
-        .role = "user",
-        .content = scoringMessage.str(),
-    };
-
-    neograph::ChatMessage systemMsg{
-        .role = "system",
-        .content = cfg.scoringPrompt,
-    };
+    scoringMessage << "\nPass threshold: score >= "
+                   << cfg.convergenceThreshold << "\n";
+    if (testCase.extra.contains("language")) {
+      scoringMessage << "Required language: "
+                     << testCase.extra["language"].get<std::string>() << "\n";
+    }
 
     try {
-      std::vector<neograph::ChatMessage> messages = {systemMsg, scoringMsg};
-      auto response = co_await scoreAgent->runStreamAsync(messages);
-
-      const auto &content = response.content;
-      auto stripped = stripMarkdownCodeBlock(content);
-
-      auto parsed = neograph::json::parse(stripped);
+      auto content = co_await runLLMAgent(scoreAgent, cfg.scoringPrompt,
+                                          scoringMessage.str());
+      auto parsed = parseJsonFromResponse(content);
       if (parsed.is_object()) {
         result.score = parsed.value("score", 0.0);
         result.feedback = parsed.value("feedback", std::string{});
@@ -443,65 +615,89 @@ protected:
 
   // ---- Prompt 优化 ----
 
-  asio::awaitable<std::string> optimizePromptWithLLM(
-      const std::string &currentSystemPrompt, const TrainingTestCase &testCase,
-      const std::string &agentOutput, const TrainingScore &score,
-      const EvolutionTrainingConfig &cfg) {
+  /// 构建用于优化器/变异器的上下文消息：包含当前完整 prompt
+  std::string buildPromptContextMessage(const PromptVariant &variant) const {
+    std::ostringstream msg;
+    msg << "Current System Prompt:\n```\n"
+        << variant.prompt.systemPrompt << "\n```\n\n";
+    if (!variant.prompt.systemPlanningPrompt.empty()) {
+      msg << "Current Planning Prompt:\n```\n"
+          << variant.prompt.systemPlanningPrompt << "\n```\n\n";
+    }
+    if (!variant.prompt.systemSkillPrompt.empty()) {
+      msg << "Current Skill Prompt:\n```\n"
+          << variant.prompt.systemSkillPrompt << "\n```\n\n";
+    }
+    if (!variant.prompt.toolPrompt.empty()) {
+      msg << "Current Tool Prompts:\n";
+      for (const auto &kv : variant.prompt.toolPrompt) {
+        msg << "### " << kv.first << "\n";
+        msg << "  depict: " << kv.second.depict << "\n";
+        for (const auto &a : kv.second.args) {
+          msg << "  arg[" << a.first << "]: " << a.second << "\n";
+        }
+        msg << "\n";
+      }
+    }
+    return msg.str();
+  }
+
+  asio::awaitable<OptimizedPrompts>
+  optimizeVariantWithLLM(const PromptVariant &variant,
+                         const TrainingTestCase &testCase,
+                         const std::string &agentOutput,
+                         const TrainingScore &score,
+                         const EvolutionTrainingConfig &cfg) {
+    OptimizedPrompts result;
     if (!optimizerAgent) {
-      co_return currentSystemPrompt;
+      co_return result;
     }
 
-    std::ostringstream optimizerMsg;
-    optimizerMsg << "Current System Prompt:\n```\n"
-                 << currentSystemPrompt << "\n```\n\n";
-    optimizerMsg << "Test Case: " << testCase.name << "\n";
-    optimizerMsg << "User Input: " << testCase.input << "\n";
+    std::ostringstream msg;
+    msg << buildPromptContextMessage(variant);
+    msg << "Test Case: " << testCase.name << "\n";
+    msg << "User Input: " << testCase.input << "\n";
     if (!testCase.expectedOutput.empty()) {
-      optimizerMsg << "Expected Output / Scoring Criteria: "
-                   << testCase.expectedOutput << "\n";
+      msg << "Expected Output / Scoring Criteria: "
+          << testCase.expectedOutput << "\n";
     }
     if (!testCase.equalOutput.empty()) {
-      optimizerMsg << "Required Exact Output: " << testCase.equalOutput << "\n";
+      msg << "Required Exact Output: " << testCase.equalOutput << "\n";
     }
-    optimizerMsg << "\nAgent Output:\n```\n" << agentOutput << "\n```\n\n";
-    optimizerMsg << "Score: " << score.score << "\n";
-    optimizerMsg << "Feedback: " << score.feedback << "\n";
-    optimizerMsg << "\nPlease provide an improved system prompt.";
-
-    neograph::ChatMessage userMsg{
-        .role = "user",
-        .content = optimizerMsg.str(),
-    };
-    neograph::ChatMessage systemMsg{
-        .role = "system",
-        .content = cfg.optimizerPrompt,
-    };
+    msg << "\nAgent Output:\n```\n" << agentOutput << "\n```\n\n";
+    msg << "Score: " << score.score << "\n";
+    msg << "Feedback: " << score.feedback << "\n";
+    msg << "\nPlease provide improved prompts.";
 
     try {
-      std::vector<neograph::ChatMessage> messages = {systemMsg, userMsg};
-      auto response = co_await optimizerAgent->runStreamAsync(messages);
-
-      const auto &content = response.content;
-      auto stripped = stripMarkdownCodeBlock(content);
-      auto parsed = neograph::json::parse(stripped);
-      if (parsed.is_object() && parsed.contains("systemPrompt") &&
-          parsed["systemPrompt"].is_string()) {
-        auto improved = parsed["systemPrompt"].get<std::string>();
-        if (!improved.empty()) {
-          XX_LOGD("[EvolutionTraining] Optimizer produced new prompt (len={})",
-                  improved.size());
-          co_return improved;
+      auto content =
+          co_await runLLMAgent(optimizerAgent, cfg.optimizerPrompt, msg.str());
+      auto parsed = parseJsonFromResponse(content);
+      if (parsed.is_object()) {
+        // 提取 patch（移除非 prompt 字段）
+        neograph::json patch = neograph::json::object();
+        if (parsed.contains("systemPrompt")) {
+          patch["systemPrompt"] = parsed["systemPrompt"];
+        }
+        if (parsed.contains("systemPlanningPrompt")) {
+          patch["systemPlanningPrompt"] = parsed["systemPlanningPrompt"];
+        }
+        if (parsed.contains("systemSkillPrompt")) {
+          patch["systemSkillPrompt"] = parsed["systemSkillPrompt"];
+        }
+        if (parsed.contains("toolPrompt")) {
+          patch["toolPrompt"] = parsed["toolPrompt"];
+        }
+        result.patch = patch;
+        result.analysis = parsed.value("analysis", std::string{});
+        if (!patch.empty()) {
+          XX_LOGD("[EvolutionTraining] Optimizer produced prompt patch");
         }
       }
-
-      XX_LOGD(
-          "[EvolutionTraining] Optimizer returned non-JSON or empty prompt, "
-          "keeping original");
-      co_return currentSystemPrompt;
     } catch (const std::exception &e) {
       XX_LOGE("[EvolutionTraining] Optimizer error: {}", e.what());
-      co_return currentSystemPrompt;
     }
+    co_return result;
   }
 
   // ---- 变异操作 ----
@@ -512,6 +708,7 @@ protected:
   }
 
   /// 对字符串进行随机变异：以 mutationRate 概率对每个字符进行插入/删除/替换
+  /// 注意: 字符级变异会破坏 prompt 语义，仅作为 LLM 变异不可用时的降级手段
   std::string mutateString(const std::string &input, double mutationRate) {
     if (mutationRate <= 0.0 || input.empty()) {
       return input;
@@ -519,14 +716,12 @@ protected:
     std::string result;
     result.reserve(input.size() * 2);
     std::uniform_real_distribution<double> dist(0.0, 1.0);
-    // 可变异字符集
     static const char mutationChars[] =
         "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 "
         ".,;:!?-_()[]{}\n";
     static const int mutationCharsLen =
         static_cast<int>(sizeof(mutationChars) - 1);
     std::uniform_int_distribution<int> charDist(0, mutationCharsLen - 1);
-    // 操作类型分布：0=替换, 1=插入, 2=删除
     std::uniform_int_distribution<int> opDist(0, 2);
 
     for (size_t i = 0; i < input.size(); ++i) {
@@ -534,56 +729,100 @@ protected:
         int op = opDist(rng);
         switch (op) {
         case 0:
-          // 替换
           result.push_back(mutationChars[charDist(rng)]);
           break;
         case 1:
-          // 插入一个随机字符，然后保留原字符
           result.push_back(mutationChars[charDist(rng)]);
           result.push_back(input[i]);
           break;
         case 2:
-          // 删除（跳过当前字符）
           break;
         }
       } else {
         result.push_back(input[i]);
       }
     }
-    // 如果全部被删除了，至少保留原字符串
     if (result.empty()) {
       result = input;
     }
     return result;
   }
 
-  PromptVariant createChildVariant(const PromptVariant &parent,
-                                   double mutationRate = 0.01) {
+  PromptVariant
+  createChildVariantCharMut(const PromptVariant &parent, double mutationRate) {
     PromptVariant child;
     child.id = generateId();
-    child.systemPrompt = mutateString(parent.systemPrompt, mutationRate);
-    child.systemPlanningPrompt =
-        mutateString(parent.systemPlanningPrompt, mutationRate);
-    child.systemSkillPrompt =
-        mutateString(parent.systemSkillPrompt, mutationRate);
+    child.prompt = parent.prompt;
+    // 字符级变异仅作用于 3 个 system prompt，toolPrompt 保持不变
+    // （字符级变异会破坏语义，仅作为 LLM 变异不可用时的降级手段）
+    child.prompt.systemPrompt =
+        mutateString(parent.prompt.systemPrompt, mutationRate);
+    child.prompt.systemPlanningPrompt =
+        mutateString(parent.prompt.systemPlanningPrompt, mutationRate);
+    child.prompt.systemSkillPrompt =
+        mutateString(parent.prompt.systemSkillPrompt, mutationRate);
     child.generation = generationCounter;
     child.parentId = parent.id;
-    child.cumulativeScore = 0.0;
-    child.testCount = 0;
     return child;
   }
 
-  // ---- 测试单个变体 ----
+  /// 使用 LLM 对 prompt 进行语义级变异，生成多样化的探索变体
+  asio::awaitable<PromptVariant>
+  createChildVariantLLMMut(const PromptVariant &parent,
+                           const EvolutionTrainingConfig &cfg) {
+    PromptVariant child;
+    child.id = generateId();
+    child.prompt = parent.prompt;
+    child.generation = generationCounter;
+    child.parentId = parent.id;
 
-  asio::awaitable<double> evaluateVariant(PromptVariant &variant,
-                                          const EvolutionTrainingConfig &cfg) {
+    std::ostringstream msg;
+    msg << buildPromptContextMessage(parent);
+    msg << "\nGenerate a diverse variation of these prompts.";
+
+    try {
+      auto content =
+          co_await runLLMAgent(optimizerAgent, cfg.mutationPrompt, msg.str());
+      auto parsed = parseJsonFromResponse(content);
+      if (parsed.is_object()) {
+        // 以 patch 方式合并：只覆盖出现的字段
+        child.prompt.mergeFromJson(parsed);
+      } else {
+        child = createChildVariantCharMut(parent, cfg.mutationRate);
+      }
+    } catch (const std::exception &e) {
+      XX_LOGD("[EvolutionTraining] LLM mutation failed, fallback to char mut: "
+              "{}",
+              e.what());
+      child = createChildVariantCharMut(parent, cfg.mutationRate);
+    }
+    co_return child;
+  }
+
+  // ---- 评估单个变体 ----
+
+  /// 评估结果附带最差用例信息，供后续优化使用
+  struct EvaluationResult {
+    const TrainingTestCase *worstCase = nullptr;
+    std::string worstCaseOutput;
+    TrainingScore worstCaseScore;
+  };
+
+  asio::awaitable<EvaluationResult>
+  evaluateVariant(PromptVariant &variant,
+                  const EvolutionTrainingConfig &cfg) {
+    EvaluationResult evResult;
+    variant.perTestCaseScores.clear();
     double totalScore = 0.0;
     int testCount = 0;
+    bool earlyTerminated = false;
 
     for (size_t caseIdx = 0; caseIdx < cfg.testCases.size(); ++caseIdx) {
       const auto &testCase = cfg.testCases[caseIdx];
       const auto threadId =
           fmt::format("evotrain_{}_{}_{}", variant.id, caseIdx, testCase.name);
+
+      applyVariantToTrainAgent(variant);
 
       if (cfg.verbose) {
         XX_LOGD(
@@ -591,8 +830,9 @@ protected:
             generationCounter, caseIdx + 1, cfg.testCases.size(), variant.id);
       }
 
-      std::string agentOutput = co_await runSingleInputAsync(
-          threadId, testCase.input, variant.systemPrompt);
+      std::string agentOutput =
+          co_await trainAgent->runSingleInputAsync(threadId, testCase.input,
+                                                    "");
 
       if (cfg.verbose) {
         XX_LOGD("[EvolutionTraining] [{}] Output (len={}): {}",
@@ -603,14 +843,22 @@ protected:
 
       TrainingScore score;
       if (cfg.scoringFunc) {
-        score = co_await cfg.scoringFunc(agentOutput, testCase, testCount);
+        score = co_await cfg.scoringFunc(agentOutput, testCase,
+                                         generationCounter);
       } else {
         score = co_await defaultScoringWithSubAgent(agentOutput, testCase,
-                                                    testCount, cfg);
+                                                    generationCounter, cfg);
       }
 
+      variant.perTestCaseScores[testCase.name] = score.score;
       totalScore += score.score;
       testCount++;
+
+      if (evResult.worstCase == nullptr || score.score < evResult.worstCaseScore.score) {
+        evResult.worstCase = &testCase;
+        evResult.worstCaseOutput = agentOutput;
+        evResult.worstCaseScore = score;
+      }
 
       if (cfg.verbose) {
         XX_LOGD(
@@ -622,58 +870,55 @@ protected:
         cfg.onIteration(score, agentOutput);
       }
 
-      // 如果评分较低，尝试用优化器改进 prompt
-      if (score.score < cfg.convergenceThreshold && optimizerAgent) {
-        std::string improvedPrompt = co_await optimizePromptWithLLM(
-            variant.systemPrompt, testCase, agentOutput, score, cfg);
-
-        if (improvedPrompt != variant.systemPrompt) {
-          // 创建新变体用优化后的 prompt 再测一次
-          PromptVariant improvedVariant = createChildVariant(variant);
-          improvedVariant.systemPrompt = improvedPrompt;
-
+      // 早终检查
+      if (cfg.earlyTerminationCheckAfter > 0 &&
+          testCount >= cfg.earlyTerminationCheckAfter) {
+        double avg = totalScore / testCount;
+        if (avg < cfg.earlyTerminationScore) {
           if (cfg.verbose) {
-            XX_LOGD("[EvolutionTraining] [{}] Testing improved variant '{}'",
-                    generationCounter, improvedVariant.id);
+            XX_LOGD("[EvolutionTraining] [{}] Early-terminating variant '{}' "
+                    "avg={:.3f} < {:.3f}",
+                    generationCounter, variant.id, avg,
+                    cfg.earlyTerminationScore);
           }
-
-          const auto improvedThreadId = fmt::format(
-              "evotrain_improved_{}_{}", improvedVariant.id, caseIdx);
-
-          std::string improvedOutput = co_await runSingleInputAsync(
-              improvedThreadId, testCase.input, improvedVariant.systemPrompt);
-
-          TrainingScore improvedScore;
-          if (cfg.scoringFunc) {
-            improvedScore =
-                co_await cfg.scoringFunc(improvedOutput, testCase, testCount);
-          } else {
-            improvedScore = co_await defaultScoringWithSubAgent(
-                improvedOutput, testCase, testCount, cfg);
+          earlyTerminated = true;
+          for (size_t j = caseIdx + 1; j < cfg.testCases.size(); ++j) {
+            variant.perTestCaseScores[cfg.testCases[j].name] = 0.0;
           }
-
-          if (improvedScore.score > score.score) {
-            improvedVariant.cumulativeScore = improvedScore.score;
-            improvedVariant.testCount = 1;
-
-            if (cfg.verbose) {
-              XX_LOGD("[EvolutionTraining] [{}] Improved variant '{}' score "
-                      "{:.3f} > "
-                      "original {:.3f}, keeping it",
-                      generationCounter, improvedVariant.id,
-                      improvedScore.score, score.score);
-            }
-
-            population.push_back(std::move(improvedVariant));
-          }
+          break;
         }
       }
     }
 
-    variant.cumulativeScore += totalScore;
-    variant.testCount += testCount;
+    // 跳过的用例记 0 分，testCount 取总用例数以保证 averageScore 可比
+    variant.cumulativeScore = totalScore;
+    variant.testCount = static_cast<int>(cfg.testCases.size());
 
-    co_return variant.averageScore();
+    if (cfg.verbose) {
+      XX_LOGD("[EvolutionTraining] [{}] Variant '{}' avgScore={:.4f}{}",
+              generationCounter, variant.id, variant.averageScore(),
+              earlyTerminated ? " (early-terminated)" : "");
+    }
+    co_return evResult;
+  }
+
+  // ---- 去重 ----
+
+  void deduplicatePopulation() {
+    std::set<size_t> seen;
+    std::vector<PromptVariant> unique;
+    unique.reserve(population.size());
+    for (auto &v : population) {
+      auto h = v.promptHash();
+      if (seen.insert(h).second) {
+        unique.push_back(std::move(v));
+      }
+    }
+    if (unique.size() != population.size()) {
+      XX_LOGD("[EvolutionTraining] Deduplicated population: {} -> {}",
+              population.size(), unique.size());
+    }
+    population = std::move(unique);
   }
 
 public:
@@ -694,14 +939,40 @@ public:
 
     PromptVariant seed;
     seed.id = generateId();
-    seed.systemPrompt = baseSystemPrompt;
+    if (trainAgent) {
+      // 从 trainAgent 当前配置复制完整 prompt，再覆盖 systemPrompt
+      seed.prompt = trainAgent->getContext()->agentConfig->prompt;
+    }
+    seed.prompt.systemPrompt = baseSystemPrompt;
     seed.generation = 0;
     seed.parentId = "seed";
-    seed.cumulativeScore = 0.0;
-    seed.testCount = 0;
     population.push_back(std::move(seed));
 
     XX_LOGD("[EvolutionTraining] Seeded initial population with 1 prompt");
+  }
+
+  /// 从完整 AgentPrompt 初始化种子（包含 planning/skill/tool prompts）
+  void seedInitialPopulation(const AgentPrompt &prompt) {
+    if (!population.empty()) {
+      return;
+    }
+
+    PromptVariant seed;
+    seed.id = generateId();
+    seed.prompt = prompt;
+    seed.generation = 0;
+    seed.parentId = "seed";
+    population.push_back(std::move(seed));
+
+    XX_LOGD("[EvolutionTraining] Seeded initial population from AgentPrompt");
+  }
+
+  /// 从 trainAgent 当前完整 AgentPrompt 初始化种子
+  void seedInitialPopulationFromAgent() {
+    if (!population.empty() || !trainAgent) {
+      return;
+    }
+    seedInitialPopulation(trainAgent->getContext()->agentConfig->prompt);
   }
 
   // ---- 进化训练主循环 ----
@@ -721,14 +992,14 @@ public:
               population.size());
     }
 
-    // 确保 population 按评分排序
+    deduplicatePopulation();
     std::sort(population.begin(), population.end(),
               [](const PromptVariant &a, const PromptVariant &b) {
                 return a.averageScore() > b.averageScore();
               });
 
-    // Step 2: 进化训练主循环
-    double bestScoreEver = 0.0;
+    double bestScoreEver =
+        population.empty() ? 0.0 : population[0].averageScore();
     int generationsWithoutImprovement = 0;
 
     while (true) {
@@ -750,29 +1021,107 @@ public:
         const auto &parent = population[i];
 
         for (int c = 0; c < cfg.childrenPerParent; ++c) {
-          PromptVariant child = createChildVariant(parent, cfg.mutationRate);
-          newGeneration.push_back(std::move(child));
+          if (cfg.useLLMMutation && optimizerAgent) {
+            newGeneration.push_back(
+                co_await createChildVariantLLMMut(parent, cfg));
+          } else {
+            newGeneration.push_back(
+                createChildVariantCharMut(parent, cfg.mutationRate));
+          }
         }
       }
 
       if (cfg.verbose) {
         XX_LOGD("[EvolutionTraining] [{}] Created {} new variants from top {} "
-                "parents (mutationRate={})",
+                "parents (mutation={})",
                 generationCounter, newGeneration.size(), mutateFrom,
-                cfg.mutationRate);
+                cfg.useLLMMutation ? "LLM" : "char");
       }
 
-      // 2b. 测试所有新变体
+      // 2b. 测试所有新变体，并收集最差用例信息
+      std::vector<EvaluationResult> evalResults;
+      evalResults.reserve(newGeneration.size());
       for (auto &variant : newGeneration) {
+        auto ev = co_await evaluateVariant(variant, cfg);
+        evalResults.push_back(std::move(ev));
+      }
+
+      // 2c. 对低分变体使用优化器改进 prompt
+      std::vector<PromptVariant> optimizedVariants;
+      if (optimizerAgent && cfg.maxOptimizationsPerGen > 0) {
+        struct Cand {
+          size_t index;
+          double score;
+        };
+        std::vector<Cand> candidates;
+        for (size_t i = 0; i < newGeneration.size(); ++i) {
+          if (newGeneration[i].averageScore() < cfg.convergenceThreshold) {
+            candidates.push_back({i, newGeneration[i].averageScore()});
+          }
+        }
+        std::sort(candidates.begin(), candidates.end(),
+                  [](const Cand &a, const Cand &b) {
+                    return a.score < b.score;
+                  });
+
+        int optCount = std::min(cfg.maxOptimizationsPerGen,
+                                static_cast<int>(candidates.size()));
+        for (int i = 0; i < optCount; ++i) {
+          auto &variant = newGeneration[candidates[i].index];
+          const auto &ev = evalResults[candidates[i].index];
+          if (!ev.worstCase) {
+            continue;
+          }
+
+          if (cfg.verbose) {
+            XX_LOGD("[EvolutionTraining] [{}] Optimizing variant '{}' on "
+                    "worst case '{}'",
+                    generationCounter, variant.id, ev.worstCase->name);
+          }
+
+          auto optimized = co_await optimizeVariantWithLLM(
+              variant, *ev.worstCase, ev.worstCaseOutput,
+              ev.worstCaseScore, cfg);
+
+          // patch 为空对象表示无修改
+          bool hasChange = optimized.patch.is_object() &&
+                           !optimized.patch.empty();
+          if (!hasChange) {
+            continue;
+          }
+
+          PromptVariant improved = variant;
+          improved.id = generateId();
+          improved.parentId = variant.id;
+          improved.generation = generationCounter;
+          improved.cumulativeScore = 0.0;
+          improved.testCount = 0;
+          improved.perTestCaseScores.clear();
+          // 以 patch 方式合并优化结果
+          improved.prompt.mergeFromJson(optimized.patch);
+          optimizedVariants.push_back(std::move(improved));
+        }
+      }
+
+      // 2d. 测试优化后的变体（在全部用例上公平评估）
+      for (auto &variant : optimizedVariants) {
+        if (cfg.verbose) {
+          XX_LOGD("[EvolutionTraining] [{}] Evaluating optimized variant '{}'",
+                  generationCounter, variant.id);
+        }
         co_await evaluateVariant(variant, cfg);
       }
 
-      // 2c. 合并新旧 population
+      // 2e. 合并新旧 population
       population.insert(population.end(),
                         std::make_move_iterator(newGeneration.begin()),
                         std::make_move_iterator(newGeneration.end()));
+      population.insert(population.end(),
+                        std::make_move_iterator(optimizedVariants.begin()),
+                        std::make_move_iterator(optimizedVariants.end()));
 
-      // 2d. 排序并保留 top K
+      // 2f. 去重、排序并保留 top K
+      deduplicatePopulation();
       std::sort(population.begin(), population.end(),
                 [](const PromptVariant &a, const PromptVariant &b) {
                   return a.averageScore() > b.averageScore();
@@ -786,7 +1135,7 @@ public:
         population.resize(cfg.topK);
       }
 
-      // 2e. 检查收敛
+      // 2g. 检查收敛
       double currentBestScore =
           population.empty() ? 0.0 : population[0].averageScore();
       if (currentBestScore > bestScoreEver) {
@@ -796,37 +1145,46 @@ public:
         generationsWithoutImprovement++;
       }
 
-      // 2f. 打印 top 信息
+      // 2h. 打印 top 信息
       if (cfg.verbose && !population.empty()) {
         XX_LOGD("[EvolutionTraining] [{}] Top 5 prompts:", generationCounter);
         for (size_t i = 0;
              i < std::min(population.size(), static_cast<size_t>(5)); ++i) {
           const auto &v = population[i];
-          XX_LOGD("  [{}/{}] id={} avgScore={:.4f} tests={} gen={} parent={}",
-                  i + 1, population.size(), v.id, v.averageScore(), v.testCount,
-                  v.generation, v.parentId);
+          XX_LOGD(
+              "  [{}/{}] id={} avgScore={:.4f} tests={} gen={} parent={}",
+              i + 1, population.size(), v.id, v.averageScore(), v.testCount,
+              v.generation, v.parentId);
         }
 
         const auto &best = population[0];
+        const auto &sp = best.prompt.systemPrompt;
         XX_LOGD("[EvolutionTraining] [{}] Best prompt (score={:.4f}):\n{}",
                 generationCounter, best.averageScore(),
-                best.systemPrompt.size() > 300
-                    ? best.systemPrompt.substr(0, 300) + "..."
-                    : best.systemPrompt);
+                sp.size() > 300 ? sp.substr(0, 300) + "..." : sp);
       }
 
-      // 2g. 收敛检查
+      // 2i. 收敛检查
       if (cfg.maxGenerationsWithoutImprovement > 0 &&
           generationsWithoutImprovement >=
               cfg.maxGenerationsWithoutImprovement) {
         XX_LOGD("[EvolutionTraining] Converged! Best score {:.4f} unchanged "
                 "for {} generations. Stopping training.",
                 bestScoreEver, generationsWithoutImprovement);
+        savePopulationToFile(cfg.saveFilePath, cfg.saveFileBackupCount);
         break;
       }
 
-      // 2h. 保存到文件
-      savePopulationToFile(cfg.saveFilePath);
+      // 2j. 最大代数检查
+      if (cfg.maxGenerations > 0 && generationCounter >= cfg.maxGenerations) {
+        XX_LOGD("[EvolutionTraining] Reached maxGenerations {}. Stopping.",
+                cfg.maxGenerations);
+        savePopulationToFile(cfg.saveFilePath, cfg.saveFileBackupCount);
+        break;
+      }
+
+      // 2k. 保存到文件（带备份轮转）
+      savePopulationToFile(cfg.saveFilePath, cfg.saveFileBackupCount);
     }
 
     co_return;
@@ -850,17 +1208,7 @@ public:
     if (!best) {
       return;
     }
-
-    if (!best->systemPrompt.empty()) {
-      config->prompt.systemPrompt = best->systemPrompt;
-    }
-    if (!best->systemPlanningPrompt.empty()) {
-      config->prompt.systemPlanningPrompt = best->systemPlanningPrompt;
-    }
-    if (!best->systemSkillPrompt.empty()) {
-      config->prompt.systemSkillPrompt = best->systemSkillPrompt;
-    }
-
+    config->prompt = best->prompt;
     XX_LOGD("[EvolutionTraining] Applied best prompt (id={}, score={:.4f}) to "
             "config",
             best->id, best->averageScore());

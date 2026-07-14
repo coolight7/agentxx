@@ -4,6 +4,7 @@
 #include "fmt/format.h"
 #include <cassert>
 #include <map>
+#include <neograph/json.h>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -13,8 +14,10 @@ namespace agent {
 
 class ToolPrompt {
 public:
-  const std::string depict;
-  const std::map<std::string, std::string, std::less<>> args;
+  /// 工具描述。非 const 以便训练时修改
+  std::string depict;
+  /// 工具参数描述。非 const 以便训练时修改
+  std::map<std::string, std::string, std::less<>> args;
 
   const std::string &getArg(std::string_view name) const {
     const auto it = args.find(name);
@@ -27,7 +30,20 @@ public:
 /// - 将大部分 system prompt,tool prompt 汇集，方便自定义配置、自循环更新等功能
 class AgentPrompt {
 public:
-  std::string systemPrompt = "You are a helpful assistant.";
+  std::string systemPrompt = R"_(
+You are a helpful, knowledgeable AI assistant.
+
+## Core Behavior
+- Understand the user's intent before responding
+- Provide accurate, well-structured answers
+- Use available tools when needed to gather information or perform actions
+- Ask for clarification when the request is ambiguous
+
+## Response Style
+- Be concise and direct
+- Use clear formatting (headings, lists, code blocks) when it improves readability
+- Prefer concrete answers over vague generalities
+)_";
 
   std::string systemPlanningPrompt = R"_(
 ## Planning
@@ -702,6 +718,91 @@ Other: "printscreen", "pause", "apps"
           },
       },
   };
+
+  // ----- 训练用序列化辅助 -----
+  // 将整个 AgentPrompt（含 toolPrompt）序列化为 JSON，供训练保存/加载使用
+
+  neograph::json toJson() const {
+    neograph::json j;
+    j["systemPrompt"] = systemPrompt;
+    j["systemPlanningPrompt"] = systemPlanningPrompt;
+    j["systemSkillPrompt"] = systemSkillPrompt;
+    {
+      neograph::json tools = neograph::json::object();
+      for (const auto &kv : toolPrompt) {
+        neograph::json tp;
+        tp["depict"] = kv.second.depict;
+        neograph::json args = neograph::json::object();
+        for (const auto &a : kv.second.args) {
+          args[a.first] = a.second;
+        }
+        tp["args"] = args;
+        tools[kv.first] = tp;
+      }
+      j["toolPrompt"] = tools;
+    }
+    return j;
+  }
+
+  /// 从 JSON 整体覆盖当前 prompt（缺失字段保持不变）
+  void fromJson(const neograph::json &j) { mergeFromJson(j); }
+
+  /// 以 patch 方式合并：仅覆盖 JSON 中出现的字段，未出现的保持原样
+  /// - toolPrompt 中某工具若已存在，仅覆盖 JSON 中出现的 depict/args 子字段
+  /// - toolPrompt 中某工具若不存在，则插入新建
+  void mergeFromJson(const neograph::json &j) {
+    if (j.contains("systemPrompt") && j["systemPrompt"].is_string()) {
+      systemPrompt = j["systemPrompt"].get<std::string>();
+    }
+    if (j.contains("systemPlanningPrompt") &&
+        j["systemPlanningPrompt"].is_string()) {
+      systemPlanningPrompt = j["systemPlanningPrompt"].get<std::string>();
+    }
+    if (j.contains("systemSkillPrompt") && j["systemSkillPrompt"].is_string()) {
+      systemSkillPrompt = j["systemSkillPrompt"].get<std::string>();
+    }
+    if (j.contains("toolPrompt") && j["toolPrompt"].is_object()) {
+      auto tools = j["toolPrompt"];
+      for (const auto &item : tools.items()) {
+        const auto &name = item.first;
+        const auto &tp = item.second;
+        auto &target = toolPrompt[name]; // 不存在则默认构造插入
+        if (tp.contains("depict") && tp["depict"].is_string()) {
+          target.depict = tp["depict"].get<std::string>();
+        }
+        if (tp.contains("args") && tp["args"].is_object()) {
+          auto args = tp["args"];
+          for (const auto &a : args.items()) {
+            if (a.second.is_string()) {
+              target.args[a.first] = a.second.get<std::string>();
+            }
+          }
+        }
+      }
+    }
+  }
+
+  /// 计算整个 prompt 的 hash，用于训练种群去重
+  size_t promptHash() const {
+    size_t h = std::hash<std::string>{}(systemPrompt);
+    h ^= std::hash<std::string>{}(systemPlanningPrompt) + 0x9e3779b9 +
+         (h << 6) + (h >> 2);
+    h ^= std::hash<std::string>{}(systemSkillPrompt) + 0x9e3779b9 + (h << 6) +
+         (h >> 2);
+    for (const auto &kv : toolPrompt) {
+      h ^=
+          std::hash<std::string>{}(kv.first) + 0x9e3779b9 + (h << 6) + (h >> 2);
+      h ^= std::hash<std::string>{}(kv.second.depict) + 0x9e3779b9 + (h << 6) +
+           (h >> 2);
+      for (const auto &a : kv.second.args) {
+        h ^= std::hash<std::string>{}(a.first) + 0x9e3779b9 + (h << 6) +
+             (h >> 2);
+        h ^= std::hash<std::string>{}(a.second) + 0x9e3779b9 + (h << 6) +
+             (h >> 2);
+      }
+    }
+    return h;
+  }
 };
 
 } // namespace agent
