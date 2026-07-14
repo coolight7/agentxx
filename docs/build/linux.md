@@ -59,12 +59,12 @@ make install
 - 启动编译 agentxx，会自动下载其他依赖库，编译成功后自动运行 命令行 client:
 ```sh
 cd {项目根目录}/agent
-./script/client_run.sh
+./script/linux_client_run.sh
 ```
 - - release 编译可以运行:
 ```sh
 cd {项目根目录}/agent
-./script/release_build.sh
+./script/linux_release_build.sh
 ```
 
 ## 常见错误
