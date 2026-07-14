@@ -1,6 +1,7 @@
 #pragma once
 
 #include "agentxx/agent/config.h"
+#include "agentxx/agent/config_static.h"
 #include "agentxx/agent/deepagent.h"
 #include "neograph/llm/openai_provider.h"
 #include "neograph/neograph.h"
@@ -116,7 +117,8 @@ inline std::string stripMarkdownCodeBlock(const std::string &content) {
   return result;
 }
 
-/// 从 LLM 响应中解析 JSON：先剥离 markdown 代码块，失败则尝试提取首个 {...} 子串
+/// 从 LLM 响应中解析 JSON：先剥离 markdown 代码块，失败则尝试提取首个 {...}
+/// 子串
 inline neograph::json parseJsonFromResponse(const std::string &content) {
   auto stripped = stripMarkdownCodeBlock(content);
   try {
@@ -126,8 +128,7 @@ inline neograph::json parseJsonFromResponse(const std::string &content) {
     auto last = stripped.rfind('}');
     if (first != std::string::npos && last != std::string::npos &&
         last > first) {
-      return neograph::json::parse(
-          stripped.substr(first, last - first + 1));
+      return neograph::json::parse(stripped.substr(first, last - first + 1));
     }
     throw;
   }
@@ -188,7 +189,8 @@ struct EvolutionTrainingConfig {
   std::vector<TrainingTestCase> testCases;
 
   /// 保存/加载 prompt 变体的文件路径
-  std::string saveFilePath = "./training_prompts.json";
+  std::string saveFilePath = agentxx::agent::AgentConfigStatic::getResultPath(
+      "/train/training_prompts.json");
 
   /// 保留的 top N 个 prompt 变体
   int topK = 100;
@@ -387,8 +389,7 @@ protected:
   /// 输入中的 system 消息，因此必须写入 config 而非通过消息传入
   asio::awaitable<std::string>
   runLLMAgent(std::shared_ptr<agentxx::agent::DeepAgent> agent,
-              const std::string &systemPrompt,
-              const std::string &userContent) {
+              const std::string &systemPrompt, const std::string &userContent) {
     agent->getContext()->agentConfig->prompt.systemPrompt = systemPrompt;
     std::vector<neograph::ChatMessage> messages = {
         neograph::ChatMessage{.role = "user", .content = userContent},
@@ -469,8 +470,7 @@ protected:
       }
       fs::path cur(path);
       if (fs::exists(cur)) {
-        fs::copy_file(cur, path + ".1",
-                      fs::copy_options::overwrite_existing);
+        fs::copy_file(cur, path + ".1", fs::copy_options::overwrite_existing);
       }
     } catch (const std::exception &e) {
       XX_LOGD("[EvolutionTraining] Backup rotation skipped: {}", e.what());
@@ -581,8 +581,8 @@ protected:
                      << testCase.expectedOutput << "\n";
     }
     scoringMessage << "\nAgent Response:\n" << agentOutput << "\n";
-    scoringMessage << "\nPass threshold: score >= "
-                   << cfg.convergenceThreshold << "\n";
+    scoringMessage << "\nPass threshold: score >= " << cfg.convergenceThreshold
+                   << "\n";
     if (testCase.extra.contains("language")) {
       scoringMessage << "Required language: "
                      << testCase.extra["language"].get<std::string>() << "\n";
@@ -642,12 +642,10 @@ protected:
     return msg.str();
   }
 
-  asio::awaitable<OptimizedPrompts>
-  optimizeVariantWithLLM(const PromptVariant &variant,
-                         const TrainingTestCase &testCase,
-                         const std::string &agentOutput,
-                         const TrainingScore &score,
-                         const EvolutionTrainingConfig &cfg) {
+  asio::awaitable<OptimizedPrompts> optimizeVariantWithLLM(
+      const PromptVariant &variant, const TrainingTestCase &testCase,
+      const std::string &agentOutput, const TrainingScore &score,
+      const EvolutionTrainingConfig &cfg) {
     OptimizedPrompts result;
     if (!optimizerAgent) {
       co_return result;
@@ -658,8 +656,8 @@ protected:
     msg << "Test Case: " << testCase.name << "\n";
     msg << "User Input: " << testCase.input << "\n";
     if (!testCase.expectedOutput.empty()) {
-      msg << "Expected Output / Scoring Criteria: "
-          << testCase.expectedOutput << "\n";
+      msg << "Expected Output / Scoring Criteria: " << testCase.expectedOutput
+          << "\n";
     }
     if (!testCase.equalOutput.empty()) {
       msg << "Required Exact Output: " << testCase.equalOutput << "\n";
@@ -748,8 +746,8 @@ protected:
     return result;
   }
 
-  PromptVariant
-  createChildVariantCharMut(const PromptVariant &parent, double mutationRate) {
+  PromptVariant createChildVariantCharMut(const PromptVariant &parent,
+                                          double mutationRate) {
     PromptVariant child;
     child.id = generateId();
     child.prompt = parent.prompt;
@@ -809,8 +807,7 @@ protected:
   };
 
   asio::awaitable<EvaluationResult>
-  evaluateVariant(PromptVariant &variant,
-                  const EvolutionTrainingConfig &cfg) {
+  evaluateVariant(PromptVariant &variant, const EvolutionTrainingConfig &cfg) {
     EvaluationResult evResult;
     variant.perTestCaseScores.clear();
     double totalScore = 0.0;
@@ -830,9 +827,8 @@ protected:
             generationCounter, caseIdx + 1, cfg.testCases.size(), variant.id);
       }
 
-      std::string agentOutput =
-          co_await trainAgent->runSingleInputAsync(threadId, testCase.input,
-                                                    "");
+      std::string agentOutput = co_await trainAgent->runSingleInputAsync(
+          threadId, testCase.input, "");
 
       if (cfg.verbose) {
         XX_LOGD("[EvolutionTraining] [{}] Output (len={}): {}",
@@ -843,8 +839,8 @@ protected:
 
       TrainingScore score;
       if (cfg.scoringFunc) {
-        score = co_await cfg.scoringFunc(agentOutput, testCase,
-                                         generationCounter);
+        score =
+            co_await cfg.scoringFunc(agentOutput, testCase, generationCounter);
       } else {
         score = co_await defaultScoringWithSubAgent(agentOutput, testCase,
                                                     generationCounter, cfg);
@@ -854,7 +850,8 @@ protected:
       totalScore += score.score;
       testCount++;
 
-      if (evResult.worstCase == nullptr || score.score < evResult.worstCaseScore.score) {
+      if (evResult.worstCase == nullptr ||
+          score.score < evResult.worstCaseScore.score) {
         evResult.worstCase = &testCase;
         evResult.worstCaseOutput = agentOutput;
         evResult.worstCaseScore = score;
@@ -1059,10 +1056,9 @@ public:
             candidates.push_back({i, newGeneration[i].averageScore()});
           }
         }
-        std::sort(candidates.begin(), candidates.end(),
-                  [](const Cand &a, const Cand &b) {
-                    return a.score < b.score;
-                  });
+        std::sort(
+            candidates.begin(), candidates.end(),
+            [](const Cand &a, const Cand &b) { return a.score < b.score; });
 
         int optCount = std::min(cfg.maxOptimizationsPerGen,
                                 static_cast<int>(candidates.size()));
@@ -1080,12 +1076,12 @@ public:
           }
 
           auto optimized = co_await optimizeVariantWithLLM(
-              variant, *ev.worstCase, ev.worstCaseOutput,
-              ev.worstCaseScore, cfg);
+              variant, *ev.worstCase, ev.worstCaseOutput, ev.worstCaseScore,
+              cfg);
 
           // patch 为空对象表示无修改
-          bool hasChange = optimized.patch.is_object() &&
-                           !optimized.patch.empty();
+          bool hasChange =
+              optimized.patch.is_object() && !optimized.patch.empty();
           if (!hasChange) {
             continue;
           }
@@ -1151,10 +1147,9 @@ public:
         for (size_t i = 0;
              i < std::min(population.size(), static_cast<size_t>(5)); ++i) {
           const auto &v = population[i];
-          XX_LOGD(
-              "  [{}/{}] id={} avgScore={:.4f} tests={} gen={} parent={}",
-              i + 1, population.size(), v.id, v.averageScore(), v.testCount,
-              v.generation, v.parentId);
+          XX_LOGD("  [{}/{}] id={} avgScore={:.4f} tests={} gen={} parent={}",
+                  i + 1, population.size(), v.id, v.averageScore(), v.testCount,
+                  v.generation, v.parentId);
         }
 
         const auto &best = population[0];

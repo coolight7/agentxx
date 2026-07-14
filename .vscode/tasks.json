@@ -4,7 +4,7 @@
         {
             "label": "compileLinuxDebugCxx",
             "type": "shell",
-            "command": "${workspaceFolder}/agent/script/debug_build.sh",
+            "command": "${workspaceFolder}/agent/script/linux_debug_build.sh",
             "args": [],
             "group": {
                 "kind": "build",
@@ -15,7 +15,7 @@
         {
             "label": "compileWindowsDebugCxx",
             "type": "shell",
-            "command": "${workspaceFolder}/agent/script/debug_build.bat",
+            "command": "${workspaceFolder}/agent/script/windows_debug_build.bat",
             "args": [],
             "group": {
                 "kind": "build",

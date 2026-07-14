@@ -890,7 +890,7 @@ inline asio::awaitable<void> test_http_client_beast_server() {
     HEXPECT_HAS_VALUE(resp);
     if (resp.has_value()) {
       HEXPECT_EQ(resp.value().status, 200);
-      HEXPECT_EQ(resp.value().body.size(), 100);
+      HEXPECT_EQ(resp.value().body.size(), (size_t)100);
     }
   }
 
@@ -898,13 +898,13 @@ inline asio::awaitable<void> test_http_client_beast_server() {
   {
     // Wait for pending connection cleanup (server-side coroutine teardown)
     size_t conn = 1;
-    for (int i = 0; i < 50; ++i) {
+    for (size_t i = 0; i < 50; ++i) {
       conn = server.activeConnections();
       if (conn == 0)
         break;
       std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
-    HEXPECT_EQ(conn, 0);
+    HEXPECT_EQ(conn, (size_t)0);
   }
 
   HTEST("fetchMarkdown returns error on non-2xx");

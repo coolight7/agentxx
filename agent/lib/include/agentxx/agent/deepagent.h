@@ -183,15 +183,21 @@ public:
     }
     {
       /// MCP tool
-      for (auto &url : config->mcpServerUrls) {
-        auto mcpClient = neograph::mcp::MCPClient{url};
-        if (mcpClient.initialize(config->agentName)) {
-          auto mcpTools = mcpClient.get_tools();
-          XX_LOGD("append mcp tool size: {}", mcpTools.size());
-          for (auto &tool : mcpTools) {
-            tools.push_back(std::make_unique<agentxx::tools::XXToolWarp>(
-                std::move(tool), agentContext, false, true, 0));
+      for (const auto &url : config->mcpServerUrls) {
+        try {
+          auto mcpClient = neograph::mcp::MCPClient{url};
+          if (mcpClient.initialize(config->agentName)) {
+            auto mcpTools = co_await mcpClient.get_tools_async();
+            XX_LOGD("append mcp tool size: {}", mcpTools.size());
+            for (auto &tool : mcpTools) {
+              tools.push_back(std::make_unique<agentxx::tools::XXToolWarp>(
+                  std::move(tool), agentContext, false, true, 0));
+            }
           }
+        } catch (const std::system_error &e) {
+          XX_LOGE("[agentxx] Append mcp tool error: {} | ", url, e.what());
+        } catch (...) {
+          XX_LOGE("[agentxx] Append mcp tool error: {}", url);
         }
       }
     }
