@@ -176,8 +176,7 @@ public:
     });
 
     // Spawn listener coroutine
-    asio::co_spawn(ioContext_,
-                   [this]() -> asio::awaitable<void> { return acceptLoop(); });
+    asio::co_spawn(ioContext_, acceptLoop(), asio::detached);
 
     // Start IO threads
     unsigned threadCount = config_.ioThreads;
@@ -239,7 +238,7 @@ private:
 
   asio::awaitable<void> acceptLoop() {
     using tcp = boost::asio::ip::tcp;
-    auto executor = co_await boost::asio::this_coro::executor;
+    auto executor = co_await asio::this_coro::executor;
 
     while (!stopped_) {
       boost::system::error_code ec;
@@ -294,18 +293,22 @@ private:
         auto sslStream = std::make_shared<
             boost::beast::ssl_stream<boost::beast::tcp_stream>>(
             boost::beast::tcp_stream(std::move(socket)), *sslCtx_);
-        asio::co_spawn(executor, [this, sslStream]() -> asio::awaitable<void> {
-          ConnectionGuard guard{activeConnections_};
-          co_await sslHandshakeAndServe(sslStream);
-        });
+        asio::co_spawn(executor,
+            [this, sslStream]() -> asio::awaitable<void> {
+              ConnectionGuard guard{activeConnections_};
+              co_await sslHandshakeAndServe(sslStream);
+            }(),
+            asio::detached);
       } else {
         // Plain session
         auto stream =
             std::make_shared<boost::beast::tcp_stream>(std::move(socket));
-        asio::co_spawn(executor, [this, stream]() -> asio::awaitable<void> {
-          ConnectionGuard guard{activeConnections_};
-          co_await serve(std::move(*stream));
-        });
+        asio::co_spawn(executor,
+            [this, stream]() -> asio::awaitable<void> {
+              ConnectionGuard guard{activeConnections_};
+              co_await serve(std::move(*stream));
+            }(),
+            asio::detached);
       }
     }
     co_return;

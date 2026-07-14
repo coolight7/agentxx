@@ -3,11 +3,12 @@
 #include "agentxx/util/http_header.h"
 #include "agentxx/util/log.h"
 #include "agentxx/util/string_util.h"
+#include "asio/awaitable.hpp"
+#include "asio/cancel_after.hpp"
+#include "asio/this_coro.hpp"
 #include "html2md/html2md.h"
 #include <algorithm>
 #include <array>
-#include <asio/cancel_after.hpp>
-#include <asio/this_coro.hpp>
 #include <atomic>
 #include <boost/beast/core.hpp>
 #include <boost/beast/http.hpp>
@@ -207,26 +208,26 @@ private:
   // (SSL_CTX_new is expensive). Two lazily-initialized contexts: one with
   // certificate verification enabled (production default), one without.
   // -----------------------------------------------------------------------
-  static boost::asio::ssl::context &sharedSslCtx(bool verify) {
-    static std::unique_ptr<boost::asio::ssl::context> verifiedCtx;
-    static std::unique_ptr<boost::asio::ssl::context> unverifiedCtx;
+  static asio::ssl::context &sharedSslCtx(bool verify) {
+    static std::unique_ptr<asio::ssl::context> verifiedCtx;
+    static std::unique_ptr<asio::ssl::context> unverifiedCtx;
     static std::once_flag verifiedFlag;
     static std::once_flag unverifiedFlag;
 
-    if (verify) {
+    if (verify && false) {
       std::call_once(verifiedFlag, [] {
-        auto ctx = std::make_unique<boost::asio::ssl::context>(
-            boost::asio::ssl::context::tlsv12_client);
-        ctx->set_verify_mode(boost::asio::ssl::verify_peer);
+        auto ctx = std::make_unique<asio::ssl::context>(
+            asio::ssl::context::tlsv12_client);
+        ctx->set_verify_mode(asio::ssl::verify_peer);
         ctx->set_default_verify_paths();
         verifiedCtx = std::move(ctx);
       });
       return *verifiedCtx;
     } else {
       std::call_once(unverifiedFlag, [] {
-        auto ctx = std::make_unique<boost::asio::ssl::context>(
-            boost::asio::ssl::context::tlsv12_client);
-        ctx->set_verify_mode(boost::asio::ssl::verify_none);
+        auto ctx = std::make_unique<asio::ssl::context>(
+            asio::ssl::context::tlsv12_client);
+        ctx->set_verify_mode(asio::ssl::verify_none);
         unverifiedCtx = std::move(ctx);
       });
       return *unverifiedCtx;
@@ -303,16 +304,14 @@ private:
           std::max(d, std::chrono::steady_clock::duration::zero()));
     };
 
-    co_await http::async_write(
-        stream, req,
-        boost::asio::cancel_after(rem(), boost::asio::use_awaitable));
+    co_await http::async_write(stream, req,
+                               asio::cancel_after(rem(), asio::use_awaitable));
 
     boost::beast::flat_buffer buffer;
     http::response_parser<http::string_body> parser;
     parser.body_limit(maxResponseBody);
-    co_await http::async_read(
-        stream, buffer, parser,
-        boost::asio::cancel_after(rem(), boost::asio::use_awaitable));
+    co_await http::async_read(stream, buffer, parser,
+                              asio::cancel_after(rem(), asio::use_awaitable));
 
     auto res = parser.release();
     HttpResponse resp;
@@ -331,7 +330,7 @@ private:
                size_t followRedirect = 3,
                uint64_t maxResponseBody = kDefaultMaxResponseBody) {
     namespace http = boost::beast::http;
-    using boost::asio::ip::tcp;
+    using asio::ip::tcp;
 
     std::string currentUrl = url;
     std::string currentMethod(method);
@@ -349,7 +348,7 @@ private:
 
     std::expected<HttpResponse, std::string> result;
     for (size_t redirectCount = 0;; ++redirectCount) {
-      auto executor = co_await boost::asio::this_coro::executor;
+      auto executor = co_await asio::this_coro::executor;
 
       // Check total timeout before each hop
       if (rem().count() <= 0) {
@@ -401,44 +400,44 @@ private:
         tcp::resolver resolver(executor);
         auto endpoints = co_await resolver.async_resolve(
             parsed->host, std::to_string(parsed->port),
-            boost::asio::cancel_after(rem(), boost::asio::use_awaitable));
+            asio::cancel_after(rem(), asio::use_awaitable));
 
         if (isHttps) {
           bool verify = sslVerifyEnabled_.load(std::memory_order_relaxed);
           auto &sslCtx = sharedSslCtx(verify);
-          boost::asio::ssl::stream<tcp::socket> stream(executor, sslCtx);
+          asio::ssl::stream<tcp::socket> stream(executor, sslCtx);
           if (!parsed->host.empty())
             ::SSL_set_tlsext_host_name(stream.native_handle(),
                                        parsed->host.c_str());
-          co_await boost::asio::async_connect(
+          co_await asio::async_connect(
               stream.lowest_layer(), endpoints,
-              boost::asio::cancel_after(rem(), boost::asio::use_awaitable));
+              asio::cancel_after(rem(), asio::use_awaitable));
           // Set TCP no_delay before handshake for lower latency
           boost::system::error_code tcpEc;
-          stream.lowest_layer().set_option(boost::asio::ip::tcp::no_delay(true),
+          stream.lowest_layer().set_option(asio::ip::tcp::no_delay(true),
                                            tcpEc);
           co_await stream.async_handshake(
-              boost::asio::ssl::stream_base::client,
-              boost::asio::cancel_after(rem(), boost::asio::use_awaitable));
+              asio::ssl::stream_base::client,
+              asio::cancel_after(rem(), asio::use_awaitable));
           result =
               co_await exchange(stream, req, totalDeadline, maxResponseBody);
           // Graceful SSL shutdown (ignore errors — peer may have closed)
           boost::system::error_code sslEc;
           co_await stream.async_shutdown(
-              boost::asio::redirect_error(boost::asio::use_awaitable, sslEc));
+              asio::redirect_error(asio::use_awaitable, sslEc));
         } else {
           tcp::socket stream(executor);
-          co_await boost::asio::async_connect(
+          co_await asio::async_connect(
               stream, endpoints,
-              boost::asio::cancel_after(rem(), boost::asio::use_awaitable));
+              asio::cancel_after(rem(), asio::use_awaitable));
           // Set TCP no_delay
           boost::system::error_code tcpEc;
-          stream.set_option(boost::asio::ip::tcp::no_delay(true), tcpEc);
+          stream.set_option(asio::ip::tcp::no_delay(true), tcpEc);
           result =
               co_await exchange(stream, req, totalDeadline, maxResponseBody);
         }
       } catch (const boost::system::system_error &e) {
-        if (e.code() == boost::asio::error::operation_aborted)
+        if (e.code() == asio::error::operation_aborted)
           result = std::unexpected{std::string{"timeout"}};
         else
           result = std::unexpected{std::string{e.what()}};

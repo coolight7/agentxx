@@ -56,16 +56,25 @@ inline static int g_http_failed = 0;
     }                                                                          \
   } while (0)
 
-#define HEXPECT_HAS_VALUE(expr)                                                \
-  do {                                                                         \
-    if ((expr).has_value()) {                                                  \
-      g_http_passed++;                                                         \
-    } else {                                                                   \
-      g_http_failed++;                                                         \
-      std::cerr << "    FAIL at line " << __LINE__ << ": expected has_value"   \
-                << std::endl;                                                  \
-    }                                                                          \
-  } while (0)
+template <typename T>
+void expect_has_value_impl(T &&expr, const char *file, int line) {
+  auto &&tmp = std::forward<T>(expr); // 仅求值一次
+  if (tmp.has_value()) {
+    ++g_http_passed;
+  } else {
+    ++g_http_failed;
+    // 检测是否存在 error() 成员
+    if constexpr (requires { tmp.error(); }) {
+      std::cerr << "    FAIL at " << file << ":" << line
+                << ": expected has_value | " << tmp.error() << std::endl;
+    } else {
+      std::cerr << "    FAIL at " << file << ":" << line
+                << ": expected has_value" << std::endl;
+    }
+  }
+}
+
+#define HEXPECT_HAS_VALUE(expr) expect_has_value_impl(expr, __FILE__, __LINE__)
 
 #define HEXPECT_NULLOPT(expr)                                                  \
   do {                                                                         \
@@ -640,6 +649,16 @@ inline asio::awaitable<void> test_http_client_beast_server() {
   // -----------------------------------------------------------------------
   // Tests
   // -----------------------------------------------------------------------
+
+  HTEST("getAsync basic - bool.run");
+  {
+    auto resp = co_await HttpClient::getAsync("https://blog.music.bool.run/");
+    HEXPECT_HAS_VALUE(resp);
+    if (resp.has_value()) {
+      HEXPECT_EQ(resp.value().status, 200);
+      HEXPECT_TRUE(resp.value().isSuccess());
+    }
+  }
 
   HTEST("getAsync basic – Beast server");
   {
