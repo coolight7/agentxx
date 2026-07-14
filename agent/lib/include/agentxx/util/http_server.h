@@ -2,14 +2,13 @@
 
 #include "agentxx/util/log.h"
 #include "agentxx/util/router.h"
-#include "hical/core/Coroutine.h"
-#include <boost/asio.hpp>
-#include <boost/asio/signal_set.hpp>
+#include <asio.hpp>
+#include <asio/signal_set.hpp>
+#include <atomic>
 #include <boost/beast/core.hpp>
 #include <boost/beast/http.hpp>
 #include <boost/beast/ssl.hpp>
 #include <boost/beast/version.hpp>
-#include <atomic>
 #include <chrono>
 #include <ctime>
 #include <functional>
@@ -79,7 +78,7 @@ public:
   using Request = boost::beast::http::request<boost::beast::http::string_body>;
   using Response =
       boost::beast::http::response<boost::beast::http::string_body>;
-  using Handler = std::function<hical::Awaitable<void>(
+  using Handler = std::function<asio::awaitable<void>(
       Request &, Response &, const std::string &matched_path)>;
   using Router = XXRouter<Handler, 9>;
 
@@ -96,7 +95,7 @@ public:
     size_t maxConnections = 8192;
 
     // DoS protection: reject requests with oversized headers or bodies
-    uint32_t maxHeaderSize = 8192;       // default 8 KB header limit
+    uint32_t maxHeaderSize = 8192;             // default 8 KB header limit
     uint64_t maxRequestBody = 8 * 1024 * 1024; // default 8 MB body limit
 
     // Per-request access log (false = silent in release for performance)
@@ -165,7 +164,7 @@ public:
                            boost::asio::ssl::context::single_dh_use);
       sslCtx_->use_certificate_chain_file(config_.sslCertFile);
       sslCtx_->use_private_key_file(config_.sslKeyFile,
-                                     boost::asio::ssl::context::pem);
+                                    boost::asio::ssl::context::pem);
     }
 
     // Signal handlers for graceful shutdown
@@ -177,9 +176,8 @@ public:
     });
 
     // Spawn listener coroutine
-    hical::coSpawn(ioContext_, [this]() -> hical::Awaitable<void> {
-      return acceptLoop();
-    });
+    asio::co_spawn(ioContext_,
+                   [this]() -> asio::awaitable<void> { return acceptLoop(); });
 
     // Start IO threads
     unsigned threadCount = config_.ioThreads;
@@ -239,7 +237,7 @@ private:
   // Accept loop
   // -----------------------------------------------------------------------
 
-  hical::Awaitable<void> acceptLoop() {
+  asio::awaitable<void> acceptLoop() {
     using tcp = boost::asio::ip::tcp;
     auto executor = co_await boost::asio::this_coro::executor;
 
@@ -263,7 +261,8 @@ private:
         }
         XX_LOGE("[server] Accept error: {}", ec.message());
         // Brief backoff on other errors to avoid tight error loop
-        boost::asio::steady_timer timer(executor, std::chrono::milliseconds(10));
+        boost::asio::steady_timer timer(executor,
+                                        std::chrono::milliseconds(10));
         co_await timer.async_wait(
             boost::asio::redirect_error(boost::asio::use_awaitable, ec));
         if (stopped_)
@@ -295,20 +294,18 @@ private:
         auto sslStream = std::make_shared<
             boost::beast::ssl_stream<boost::beast::tcp_stream>>(
             boost::beast::tcp_stream(std::move(socket)), *sslCtx_);
-        hical::coSpawn(
-            executor, [this, sslStream]() -> hical::Awaitable<void> {
-              ConnectionGuard guard{activeConnections_};
-              co_await sslHandshakeAndServe(sslStream);
-            });
+        asio::co_spawn(executor, [this, sslStream]() -> asio::awaitable<void> {
+          ConnectionGuard guard{activeConnections_};
+          co_await sslHandshakeAndServe(sslStream);
+        });
       } else {
         // Plain session
         auto stream =
             std::make_shared<boost::beast::tcp_stream>(std::move(socket));
-        hical::coSpawn(
-            executor, [this, stream]() -> hical::Awaitable<void> {
-              ConnectionGuard guard{activeConnections_};
-              co_await serve(std::move(*stream));
-            });
+        asio::co_spawn(executor, [this, stream]() -> asio::awaitable<void> {
+          ConnectionGuard guard{activeConnections_};
+          co_await serve(std::move(*stream));
+        });
       }
     }
     co_return;
@@ -318,7 +315,7 @@ private:
   // SSL helper
   // -----------------------------------------------------------------------
 
-  hical::Awaitable<void> sslHandshakeAndServe(
+  asio::awaitable<void> sslHandshakeAndServe(
       std::shared_ptr<boost::beast::ssl_stream<boost::beast::tcp_stream>>
           stream) {
     try {
@@ -342,8 +339,7 @@ private:
   // Session handler (template – works with tcp_stream & ssl_stream)
   // -----------------------------------------------------------------------
 
-  template <typename Stream>
-  hical::Awaitable<void> serve(Stream stream) {
+  template <typename Stream> asio::awaitable<void> serve(Stream stream) {
     namespace http = boost::beast::http;
     boost::system::error_code ec;
 
@@ -416,10 +412,9 @@ private:
             co_await (*handler)(req, resp, matchedPath);
             handled = true;
           } catch (const std::exception &e) {
-            XX_LOGE("[server] Handler error [{} {}]: {}",
-                    req.method_string(), req.target(), e.what());
-            fillError(resp, req.version(),
-                      http::status::internal_server_error,
+            XX_LOGE("[server] Handler error [{} {}]: {}", req.method_string(),
+                    req.target(), e.what());
+            fillError(resp, req.version(), http::status::internal_server_error,
                       "Internal Server Error");
           }
         }
