@@ -1,9 +1,6 @@
 #pragma once
 
 #include "agentxx/util/log.h"
-#include "hical/core/Coroutine.h"
-#include "hical/core/HeaderMap.h"
-#include "hical/core/SslContext.h"
 #include "html2md/html2md.h"
 #include <algorithm>
 #include <array>
@@ -172,8 +169,7 @@ public:
     if (location.starts_with("//")) {
       auto schemeEnd = originalUrl.find("://");
       if (schemeEnd != std::string_view::npos)
-        return std::string(originalUrl.substr(0, schemeEnd)) + ":" +
-               std::string(location);
+        return fmt::format("{}:{}", originalUrl.substr(0, schemeEnd), location);
       return std::string(location);
     }
     auto [base, path] = splitUrl(originalUrl);
@@ -181,8 +177,8 @@ public:
       return base + std::string(location);
     auto slashPos = path.rfind('/');
     std::string basePath = (slashPos != std::string_view::npos && slashPos > 0)
-                                ? std::string(path.substr(0, slashPos + 1))
-                                : "/";
+                               ? std::string(path.substr(0, slashPos + 1))
+                               : "/";
     return base + basePath + std::string(location);
   }
 
@@ -414,17 +410,17 @@ private:
               boost::asio::cancel_after(rem(), boost::asio::use_awaitable));
           // Set TCP no_delay before handshake for lower latency
           boost::system::error_code tcpEc;
-          stream.lowest_layer().set_option(
-              boost::asio::ip::tcp::no_delay(true), tcpEc);
+          stream.lowest_layer().set_option(boost::asio::ip::tcp::no_delay(true),
+                                           tcpEc);
           co_await stream.async_handshake(
               boost::asio::ssl::stream_base::client,
               boost::asio::cancel_after(rem(), boost::asio::use_awaitable));
-          result = co_await exchange(stream, req, totalDeadline,
-                                      maxResponseBody);
+          result =
+              co_await exchange(stream, req, totalDeadline, maxResponseBody);
           // Graceful SSL shutdown (ignore errors — peer may have closed)
           boost::system::error_code sslEc;
-          co_await stream.async_shutdown(boost::asio::redirect_error(
-              boost::asio::use_awaitable, sslEc));
+          co_await stream.async_shutdown(
+              boost::asio::redirect_error(boost::asio::use_awaitable, sslEc));
         } else {
           tcp::socket stream(executor);
           co_await boost::asio::async_connect(
@@ -433,8 +429,8 @@ private:
           // Set TCP no_delay
           boost::system::error_code tcpEc;
           stream.set_option(boost::asio::ip::tcp::no_delay(true), tcpEc);
-          result = co_await exchange(stream, req, totalDeadline,
-                                      maxResponseBody);
+          result =
+              co_await exchange(stream, req, totalDeadline, maxResponseBody);
         }
       } catch (const boost::system::system_error &e) {
         if (e.code() == boost::asio::error::operation_aborted)
@@ -543,8 +539,7 @@ public:
   }
 
   static inline hical::Awaitable<std::expected<HttpResponse, std::string>>
-  deleteAsync(const std::string &url,
-              const hical::HeaderMap &extraHeaders = {},
+  deleteAsync(const std::string &url, const hical::HeaderMap &extraHeaders = {},
               std::chrono::milliseconds timeout = std::chrono::seconds{60},
               size_t followRedirect = 3,
               uint64_t maxResponseBody = kDefaultMaxResponseBody) {

@@ -2,9 +2,6 @@
 
 #include "agentxx/util/http_client.h"
 #include "agentxx/util/http_server.h"
-#include "hical/core/HttpRequest.h"
-#include "hical/core/HttpResponse.h"
-#include "hical/core/HttpServer.h"
 #include <asio/awaitable.hpp>
 #include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>
@@ -427,7 +424,7 @@ inline asio::awaitable<void> test_http_client_beast_server() {
     return std::make_shared<Server::Handler>(
         [ct, body = std::move(body),
          st](Server::Request &, Server::Response &resp,
-             const std::string &) -> hical::Awaitable<void> {
+             const std::string &) -> asio::awaitable<void> {
           resp.result(st);
           resp.set(field::content_type, ct);
           resp.body() = std::move(body);
@@ -461,7 +458,7 @@ inline asio::awaitable<void> test_http_client_beast_server() {
   server.router().add("/headers", 0,
                       std::make_shared<Server::Handler>(
                           [](Server::Request &req, Server::Response &resp,
-                             const std::string &) -> hical::Awaitable<void> {
+                             const std::string &) -> asio::awaitable<void> {
                             resp.result(status::ok);
                             resp.set(field::content_type, "text/plain");
                             auto val = req[field::x_forwarded_for];
@@ -475,7 +472,7 @@ inline asio::awaitable<void> test_http_client_beast_server() {
   server.router().add("/search", 0,
                       std::make_shared<Server::Handler>(
                           [](Server::Request &req, Server::Response &resp,
-                             const std::string &) -> hical::Awaitable<void> {
+                             const std::string &) -> asio::awaitable<void> {
                             resp.result(status::ok);
                             resp.set(field::content_type, "text/plain");
                             auto target = req.target();
@@ -488,7 +485,7 @@ inline asio::awaitable<void> test_http_client_beast_server() {
   server.router().add("/echo", 2,
                       std::make_shared<Server::Handler>(
                           [](Server::Request &req, Server::Response &resp,
-                             const std::string &) -> hical::Awaitable<void> {
+                             const std::string &) -> asio::awaitable<void> {
                             resp.result(status::ok);
                             resp.set(field::content_type, "text/plain");
                             resp.body() = req.body();
@@ -500,7 +497,7 @@ inline asio::awaitable<void> test_http_client_beast_server() {
   server.router().add("/echo", 3,
                       std::make_shared<Server::Handler>(
                           [](Server::Request &req, Server::Response &resp,
-                             const std::string &) -> hical::Awaitable<void> {
+                             const std::string &) -> asio::awaitable<void> {
                             resp.result(status::ok);
                             resp.set(field::content_type, "text/plain");
                             resp.body() = "put:" + req.body();
@@ -515,7 +512,7 @@ inline asio::awaitable<void> test_http_client_beast_server() {
   server.router().add("/redirect-me", 0,
                       std::make_shared<Server::Handler>(
                           [](Server::Request &, Server::Response &resp,
-                             const std::string &) -> hical::Awaitable<void> {
+                             const std::string &) -> asio::awaitable<void> {
                             resp.result(status::found);
                             resp.set(field::location, "/hello");
                             resp.prepare_payload();
@@ -526,7 +523,7 @@ inline asio::awaitable<void> test_http_client_beast_server() {
   server.router().add("/redirect-loop", 0,
                       std::make_shared<Server::Handler>(
                           [](Server::Request &, Server::Response &resp,
-                             const std::string &) -> hical::Awaitable<void> {
+                             const std::string &) -> asio::awaitable<void> {
                             resp.result(status::found);
                             resp.set(field::location, "/redirect-loop");
                             resp.prepare_payload();
@@ -538,7 +535,7 @@ inline asio::awaitable<void> test_http_client_beast_server() {
       "/wildcard/*", 0,
       std::make_shared<Server::Handler>(
           [](Server::Request &, Server::Response &resp,
-             const std::string &matched_path) -> hical::Awaitable<void> {
+             const std::string &matched_path) -> asio::awaitable<void> {
             resp.result(status::ok);
             resp.set(field::content_type, "text/plain");
             resp.body() = "matched:" + matched_path;
@@ -550,7 +547,7 @@ inline asio::awaitable<void> test_http_client_beast_server() {
   server.router().add("/echo", 8,
                       std::make_shared<Server::Handler>(
                           [](Server::Request &req, Server::Response &resp,
-                             const std::string &) -> hical::Awaitable<void> {
+                             const std::string &) -> asio::awaitable<void> {
                             resp.result(status::ok);
                             resp.set(field::content_type, "text/plain");
                             resp.body() = "patch:" + req.body();
@@ -562,7 +559,7 @@ inline asio::awaitable<void> test_http_client_beast_server() {
   server.router().add("/echo", 4,
                       std::make_shared<Server::Handler>(
                           [](Server::Request &req, Server::Response &resp,
-                             const std::string &) -> hical::Awaitable<void> {
+                             const std::string &) -> asio::awaitable<void> {
                             resp.result(status::ok);
                             resp.set(field::content_type, "text/plain");
                             resp.body() = "delete:" + req.body();
@@ -574,7 +571,7 @@ inline asio::awaitable<void> test_http_client_beast_server() {
   server.router().add("/hello", 1,
                       std::make_shared<Server::Handler>(
                           [](Server::Request &, Server::Response &resp,
-                             const std::string &) -> hical::Awaitable<void> {
+                             const std::string &) -> asio::awaitable<void> {
                             resp.result(status::ok);
                             resp.set(field::content_type, "text/plain");
                             resp.body() = "hello world";
@@ -586,7 +583,7 @@ inline asio::awaitable<void> test_http_client_beast_server() {
   server.router().add("/big-body", 0,
                       std::make_shared<Server::Handler>(
                           [](Server::Request &req, Server::Response &resp,
-                             const std::string &) -> hical::Awaitable<void> {
+                             const std::string &) -> asio::awaitable<void> {
                             resp.result(status::ok);
                             resp.set(field::content_type, "text/plain");
                             // Default 1000 bytes, or use ?size=NNNN

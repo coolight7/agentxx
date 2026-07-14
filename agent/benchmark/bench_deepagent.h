@@ -97,7 +97,7 @@ inline LlmSimServer startLlmSimServer() {
       std::make_shared<agentxx::util::HttpServer::Handler>(
           [](agentxx::util::HttpServer::Request &req,
              agentxx::util::HttpServer::Response &resp,
-             const std::string &) -> hical::Awaitable<void> {
+             const std::string &) -> asio::awaitable<void> {
             namespace http = boost::beast::http;
 
             auto j = neograph::json::parse(req.body());
@@ -226,8 +226,7 @@ namespace detail {
 
 inline std::shared_ptr<agentxx::agent::AgentConfig>
 makeAgentConfig(const std::string &baseUrl, const std::string &apiKey,
-                const std::string &modelName,
-                const std::string &systemPrompt) {
+                const std::string &modelName, const std::string &systemPrompt) {
   auto cfg = std::make_shared<agentxx::agent::AgentConfig>();
   cfg->modelOpenAIBaseUrl = baseUrl;
   cfg->modelOpenAIApiKey = apiKey;
@@ -514,8 +513,8 @@ inline void benchDeepAgentSimpleCompletion(const DeepAgentBenchConfig &cfg) {
               << simGuard.port << std::endl;
   }
 
-  auto agentConfig = detail::makeAgentConfig(baseUrl, apiKey, modelName,
-                                              cfg.systemPrompt);
+  auto agentConfig =
+      detail::makeAgentConfig(baseUrl, apiKey, modelName, cfg.systemPrompt);
   std::vector<double> durations;
   durations.reserve(cfg.iterations);
 
@@ -543,7 +542,8 @@ inline void benchDeepAgentSimpleCompletion(const DeepAgentBenchConfig &cfg) {
     ioCtx.run();
   }
 
-  detail::reportBenchResult("DeepAgent::runSingleInputAsync [completion]", durations);
+  detail::reportBenchResult("DeepAgent::runSingleInputAsync [completion]",
+                            durations);
 }
 
 // -----------------------------------------------------------------------
@@ -568,8 +568,8 @@ inline void benchDeepAgentMultiTurn(const DeepAgentBenchConfig &cfg) {
               << simGuard.port << std::endl;
   }
 
-  auto agentConfig = detail::makeAgentConfig(baseUrl, apiKey, modelName,
-                                              cfg.systemPrompt);
+  auto agentConfig =
+      detail::makeAgentConfig(baseUrl, apiKey, modelName, cfg.systemPrompt);
 
   constexpr size_t turnsPerIteration = 3;
   std::vector<double> durations;
@@ -606,17 +606,18 @@ inline void benchDeepAgentMultiTurn(const DeepAgentBenchConfig &cfg) {
           durations.push_back(ns);
 
           std::cout << "    [INFO] Iteration " << i << " completed ("
-                    << turnsPerIteration << " turns, "
-                    << messages.size() << " total messages)" << std::endl;
+                    << turnsPerIteration << " turns, " << messages.size()
+                    << " total messages)" << std::endl;
         },
         asio::detached);
 
     ioCtx.run();
   }
 
-  detail::reportBenchResult("DeepAgent::runConversationTurnAsync [multi-turn x"
-                                + std::to_string(turnsPerIteration) + "]",
-                            durations);
+  detail::reportBenchResult(
+      "DeepAgent::runConversationTurnAsync [multi-turn x" +
+          std::to_string(turnsPerIteration) + "]",
+      durations);
 }
 
 // -----------------------------------------------------------------------
@@ -641,8 +642,8 @@ inline void benchDeepAgentLargeHistory(const DeepAgentBenchConfig &cfg) {
               << simGuard.port << std::endl;
   }
 
-  auto agentConfig = detail::makeAgentConfig(baseUrl, apiKey, modelName,
-                                              cfg.systemPrompt);
+  auto agentConfig =
+      detail::makeAgentConfig(baseUrl, apiKey, modelName, cfg.systemPrompt);
 
   constexpr size_t historyMessages = 20; // 10 turns back-and-forth
   std::vector<double> durations;
@@ -672,8 +673,7 @@ inline void benchDeepAgentLargeHistory(const DeepAgentBenchConfig &cfg) {
           auto start = std::chrono::high_resolution_clock::now();
           auto turnResult = co_await agent.runConversationTurnAsync(
               "bench_history_" + std::to_string(i), cfg.userInput, true,
-              std::move(messages),
-              [](const neograph::graph::GraphEvent &) {});
+              std::move(messages), [](const neograph::graph::GraphEvent &) {});
           auto end = std::chrono::high_resolution_clock::now();
 
           double ns =
@@ -694,10 +694,9 @@ inline void benchDeepAgentLargeHistory(const DeepAgentBenchConfig &cfg) {
     ioCtx.run();
   }
 
-  detail::reportBenchResult(
-      "DeepAgent::runConversationTurnAsync [history="
-          + std::to_string(historyMessages) + "]",
-      durations);
+  detail::reportBenchResult("DeepAgent::runConversationTurnAsync [history=" +
+                                std::to_string(historyMessages) + "]",
+                            durations);
 }
 
 // -----------------------------------------------------------------------
@@ -732,11 +731,9 @@ inline void benchDeepAgentInitWarm() {
   {
     asio::io_context ioCtx;
     agentxx::agent::DeepAgent agent(agentConfig);
-    asio::co_spawn(ioCtx,
-                   [&]() -> asio::awaitable<void> {
-                     co_await agent.init();
-                   },
-                   asio::detached);
+    asio::co_spawn(
+        ioCtx, [&]() -> asio::awaitable<void> { co_await agent.init(); },
+        asio::detached);
     ioCtx.run();
   }
 
