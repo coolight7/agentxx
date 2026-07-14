@@ -135,6 +135,8 @@ inline constexpr std::string toLower(std::string_view str) {
 
 // 不区分大小写哈希
 struct IgnoreCaseHash {
+  using is_transparent = void;
+
   size_t operator()(const std::string &s) const {
     return std::hash<std::string>()(toLower(s));
   }
@@ -144,9 +146,11 @@ struct IgnoreCaseHash {
   }
 };
 
-// 不区分大小写相等判断（用于无序容器）
+// 不区分大小写相等判断
 struct IgnoreCaseEqual {
-  constexpr bool operator()(const std::string &a, const std::string &b) const {
+  using is_transparent = void;
+
+  inline static constexpr bool equal(std::string_view a, std::string_view b) {
     if (a.size() != b.size()) {
       return false;
     }
@@ -159,17 +163,9 @@ struct IgnoreCaseEqual {
     return true;
   }
 
-  constexpr bool operator()(std::string_view a, std::string_view b) const {
-    if (a.size() != b.size()) {
-      return false;
-    }
-    for (size_t i = 0; i < a.size(); ++i) {
-      if (charToLower(static_cast<char>(static_cast<unsigned char>(a[i]))) !=
-          charToLower(static_cast<char>(static_cast<unsigned char>(b[i])))) {
-        return false;
-      }
-    }
-    return true;
+  template <typename T1, typename T2>
+  constexpr bool operator()(const T1 &a, const T2 &b) const {
+    return equal(a, b);
   }
 };
 

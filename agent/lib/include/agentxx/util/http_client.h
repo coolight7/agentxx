@@ -1,9 +1,8 @@
 #pragma once
 
+#include "agentxx/util/http_header.h"
 #include "agentxx/util/log.h"
-#include "hical/core/Coroutine.h"
-#include "hical/core/HeaderMap.h"
-#include "hical/core/SslContext.h"
+#include "agentxx/util/string_util.h"
 #include "html2md/html2md.h"
 #include <algorithm>
 #include <array>
@@ -30,16 +29,16 @@ namespace util {
 struct HttpResponse {
   int status = 0;
   std::string body;
-  hical::HeaderMap headers;
+  HeaderMap headers;
 
   std::string_view findHeader(std::string_view name) const noexcept {
-    return headers.find(name);
+    return headers.getSingle(name);
   }
 
   bool isSuccess() const noexcept { return status / 100 == 2; }
 
   std::string contentType() const noexcept {
-    auto ct = headers.find("content-type");
+    auto ct = headers.getSingle("content-type");
     if (ct.empty())
       return {};
     auto semi = ct.find(';');
@@ -181,13 +180,13 @@ public:
       return base + std::string(location);
     auto slashPos = path.rfind('/');
     std::string basePath = (slashPos != std::string_view::npos && slashPos > 0)
-                                ? std::string(path.substr(0, slashPos + 1))
-                                : "/";
+                               ? std::string(path.substr(0, slashPos + 1))
+                               : "/";
     return base + basePath + std::string(location);
   }
 
-  static inline hical::HeaderMap defaultHeaders() {
-    hical::HeaderMap headers;
+  static inline HeaderMap defaultHeaders() {
+    HeaderMap headers;
     headers.set(
         "User-Agent",
         R"(Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.6045.160 Safari/537.36)");
@@ -293,7 +292,7 @@ private:
   }
 
   template <typename Stream>
-  static hical::Awaitable<std::expected<HttpResponse, std::string>>
+  static asio::awaitable<std::expected<HttpResponse, std::string>>
   exchange(Stream &stream,
            boost::beast::http::request<boost::beast::http::string_body> &req,
            std::chrono::steady_clock::time_point deadline,
@@ -326,11 +325,11 @@ private:
     co_return std::expected<HttpResponse, std::string>{std::move(resp)};
   }
 
-  static inline hical::Awaitable<std::expected<HttpResponse, std::string>>
+  static inline asio::awaitable<std::expected<HttpResponse, std::string>>
   requestAsync(std::string_view method, const std::string &url,
                std::string_view body, std::string_view contentType,
-               const hical::HeaderMap &extraHeaders,
-               std::chrono::milliseconds timeout, size_t followRedirect = 3,
+               const HeaderMap &extraHeaders, std::chrono::milliseconds timeout,
+               size_t followRedirect = 3,
                uint64_t maxResponseBody = kDefaultMaxResponseBody) {
     namespace http = boost::beast::http;
     using boost::asio::ip::tcp;
@@ -373,10 +372,10 @@ private:
 
         http::request<http::string_body> req{
             http::string_to_verb(currentMethod), parsed->path, 11};
-        // Case-insensitive host header check via HeaderMap::iequals
         bool hasHost = extraHeaders.contains("host");
-        if (!hasHost)
+        if (!hasHost) {
           req.set(http::field::host, hostHeader);
+        }
         req.set(http::field::user_agent,
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -384,15 +383,18 @@ private:
         req.set(http::field::accept, "*/*");
         req.set(http::field::accept_encoding, "identity");
         req.set(http::field::connection, "close");
-        for (const auto &[k, v] : extraHeaders) {
+
+        for (const auto &[k, v] : extraHeaders.data) {
           // Skip host — set explicitly above (case-insensitive)
-          if (hical::HeaderMap::iequals(k, "host"))
+          if (isIgnoreCaseEqual(k, "host")) {
             continue;
-          req.set(k, v);
+          }
+          req.set(k, stringVectorJoin(v, "; "));
         }
         if (!currentBody.empty()) {
-          if (!currentContentType.empty())
+          if (!currentContentType.empty()) {
             req.set(http::field::content_type, currentContentType);
+          }
           req.body() = currentBody;
           req.prepare_payload();
         }
@@ -414,17 +416,17 @@ private:
               boost::asio::cancel_after(rem(), boost::asio::use_awaitable));
           // Set TCP no_delay before handshake for lower latency
           boost::system::error_code tcpEc;
-          stream.lowest_layer().set_option(
-              boost::asio::ip::tcp::no_delay(true), tcpEc);
+          stream.lowest_layer().set_option(boost::asio::ip::tcp::no_delay(true),
+                                           tcpEc);
           co_await stream.async_handshake(
               boost::asio::ssl::stream_base::client,
               boost::asio::cancel_after(rem(), boost::asio::use_awaitable));
-          result = co_await exchange(stream, req, totalDeadline,
-                                      maxResponseBody);
+          result =
+              co_await exchange(stream, req, totalDeadline, maxResponseBody);
           // Graceful SSL shutdown (ignore errors — peer may have closed)
           boost::system::error_code sslEc;
-          co_await stream.async_shutdown(boost::asio::redirect_error(
-              boost::asio::use_awaitable, sslEc));
+          co_await stream.async_shutdown(
+              boost::asio::redirect_error(boost::asio::use_awaitable, sslEc));
         } else {
           tcp::socket stream(executor);
           co_await boost::asio::async_connect(
@@ -433,8 +435,8 @@ private:
           // Set TCP no_delay
           boost::system::error_code tcpEc;
           stream.set_option(boost::asio::ip::tcp::no_delay(true), tcpEc);
-          result = co_await exchange(stream, req, totalDeadline,
-                                      maxResponseBody);
+          result =
+              co_await exchange(stream, req, totalDeadline, maxResponseBody);
         }
       } catch (const boost::system::system_error &e) {
         if (e.code() == boost::asio::error::operation_aborted)
@@ -478,8 +480,8 @@ public:
     return sslVerifyEnabled_.load(std::memory_order_relaxed);
   }
 
-  static inline hical::Awaitable<std::expected<HttpResponse, std::string>>
-  getAsync(const std::string &url, const hical::HeaderMap &extraHeaders = {},
+  static inline asio::awaitable<std::expected<HttpResponse, std::string>>
+  getAsync(const std::string &url, const HeaderMap &extraHeaders = {},
            std::chrono::milliseconds timeout = std::chrono::seconds{60},
            size_t followRedirect = 3,
            uint64_t maxResponseBody = kDefaultMaxResponseBody) {
@@ -487,8 +489,8 @@ public:
                                     followRedirect, maxResponseBody);
   }
 
-  static inline hical::Awaitable<std::expected<HttpResponse, std::string>>
-  headAsync(const std::string &url, const hical::HeaderMap &extraHeaders = {},
+  static inline asio::awaitable<std::expected<HttpResponse, std::string>>
+  headAsync(const std::string &url, const HeaderMap &extraHeaders = {},
             std::chrono::milliseconds timeout = std::chrono::seconds{60},
             size_t followRedirect = 3,
             uint64_t maxResponseBody = kDefaultMaxResponseBody) {
@@ -496,9 +498,9 @@ public:
                                     followRedirect, maxResponseBody);
   }
 
-  static inline hical::Awaitable<std::expected<HttpResponse, std::string>>
+  static inline asio::awaitable<std::expected<HttpResponse, std::string>>
   postAsync(const std::string &url, const neograph::json &body,
-            const hical::HeaderMap &extraHeaders = {},
+            const HeaderMap &extraHeaders = {},
             std::chrono::milliseconds timeout = std::chrono::seconds{60},
             size_t followRedirect = 3,
             uint64_t maxResponseBody = kDefaultMaxResponseBody) {
@@ -507,10 +509,10 @@ public:
                                     followRedirect, maxResponseBody);
   }
 
-  static inline hical::Awaitable<std::expected<HttpResponse, std::string>>
+  static inline asio::awaitable<std::expected<HttpResponse, std::string>>
   postAsync(const std::string &url, std::string_view body,
             std::string_view contentType = "text/plain",
-            const hical::HeaderMap &extraHeaders = {},
+            const HeaderMap &extraHeaders = {},
             std::chrono::milliseconds timeout = std::chrono::seconds{60},
             size_t followRedirect = 3,
             uint64_t maxResponseBody = kDefaultMaxResponseBody) {
@@ -519,10 +521,10 @@ public:
                                     maxResponseBody);
   }
 
-  static inline hical::Awaitable<std::expected<HttpResponse, std::string>>
+  static inline asio::awaitable<std::expected<HttpResponse, std::string>>
   putAsync(const std::string &url, std::string_view body,
            std::string_view contentType = "text/plain",
-           const hical::HeaderMap &extraHeaders = {},
+           const HeaderMap &extraHeaders = {},
            std::chrono::milliseconds timeout = std::chrono::seconds{60},
            size_t followRedirect = 3,
            uint64_t maxResponseBody = kDefaultMaxResponseBody) {
@@ -530,10 +532,10 @@ public:
                                     timeout, followRedirect, maxResponseBody);
   }
 
-  static inline hical::Awaitable<std::expected<HttpResponse, std::string>>
+  static inline asio::awaitable<std::expected<HttpResponse, std::string>>
   patchAsync(const std::string &url, std::string_view body,
              std::string_view contentType = "text/plain",
-             const hical::HeaderMap &extraHeaders = {},
+             const HeaderMap &extraHeaders = {},
              std::chrono::milliseconds timeout = std::chrono::seconds{60},
              size_t followRedirect = 3,
              uint64_t maxResponseBody = kDefaultMaxResponseBody) {
@@ -542,9 +544,8 @@ public:
                                     maxResponseBody);
   }
 
-  static inline hical::Awaitable<std::expected<HttpResponse, std::string>>
-  deleteAsync(const std::string &url,
-              const hical::HeaderMap &extraHeaders = {},
+  static inline asio::awaitable<std::expected<HttpResponse, std::string>>
+  deleteAsync(const std::string &url, const HeaderMap &extraHeaders = {},
               std::chrono::milliseconds timeout = std::chrono::seconds{60},
               size_t followRedirect = 3,
               uint64_t maxResponseBody = kDefaultMaxResponseBody) {
@@ -552,9 +553,8 @@ public:
                                     timeout, followRedirect, maxResponseBody);
   }
 
-  static inline hical::Awaitable<std::expected<HttpResponse, std::string>>
-  optionsAsync(const std::string &url,
-               const hical::HeaderMap &extraHeaders = {},
+  static inline asio::awaitable<std::expected<HttpResponse, std::string>>
+  optionsAsync(const std::string &url, const HeaderMap &extraHeaders = {},
                std::chrono::milliseconds timeout = std::chrono::seconds{60},
                size_t followRedirect = 3,
                uint64_t maxResponseBody = kDefaultMaxResponseBody) {
@@ -562,7 +562,7 @@ public:
                                     timeout, followRedirect, maxResponseBody);
   }
 
-  static inline hical::Awaitable<std::expected<std::string, std::string>>
+  static inline asio::awaitable<std::expected<std::string, std::string>>
   fetchMarkdown(const std::string &url,
                 std::chrono::milliseconds timeout = std::chrono::seconds{15},
                 size_t followRedirect = 3) {
