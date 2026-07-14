@@ -194,8 +194,11 @@ public:
                   std::move(tool), agentContext, false, true, 0));
             }
           }
-        } catch (const std::system_error &e) {
+        } catch (const std::exception &e) {
           XX_LOGE("[agentxx] Append mcp tool error: {} | ", url, e.what());
+        } catch (const boost::exception &e) {
+          XX_LOGE("[agentxx] Append mcp tool error: {} | ", url,
+                  boost::diagnostic_information(e));
         } catch (...) {
           XX_LOGE("[agentxx] Append mcp tool error: {}", url);
         }

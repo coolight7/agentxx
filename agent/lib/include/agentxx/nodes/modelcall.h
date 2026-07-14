@@ -247,8 +247,8 @@ public:
         errorPtr = std::current_exception();
         errInfo = e.what();
       } catch (const boost::exception &e) {
-        errorPtr = std::current_exception();
         errInfo = boost::diagnostic_information(e);
+        errorPtr = std::current_exception();
       } catch (...) {
         errorPtr = std::current_exception();
       }
