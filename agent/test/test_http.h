@@ -650,8 +650,9 @@ inline asio::awaitable<void> test_http_client_beast_server() {
   // Tests
   // -----------------------------------------------------------------------
 
-  HTEST("getAsync basic - bool.run");
+  HTEST("getAsync basic - bool.run | ssl.verify");
   {
+    HttpClient::setSslVerify(false);
     auto resp = co_await HttpClient::getAsync("https://blog.music.bool.run/");
     HEXPECT_HAS_VALUE(resp);
     if (resp.has_value()) {

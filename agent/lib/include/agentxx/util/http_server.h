@@ -102,8 +102,7 @@ public:
     bool accessLogEnabled = true;
   };
 
-  explicit HttpServer(Config config)
-      : config_(std::move(config)), signals_(ioContext_, SIGINT, SIGTERM) {
+  explicit HttpServer(Config config) : config_(std::move(config)) {
     router_ = std::make_unique<Router>();
   }
 
@@ -140,22 +139,33 @@ public:
     stopped_ = false;
 
     using tcp = boost::asio::ip::tcp;
+
+    // Create workers (each has its own io_context — zero-lock isolation)
+    unsigned threadCount = config_.ioThreads;
+    if (threadCount == 0)
+      threadCount = std::thread::hardware_concurrency();
+    if (threadCount == 0)
+      threadCount = 1;
+
+    workers_.reserve(threadCount);
+    for (unsigned i = 0; i < threadCount; ++i)
+      workers_.push_back(std::make_unique<Worker>());
+
+    auto &mainCtx = workers_[0]->ioCtx;
+
+    // Acceptor — runs on the first worker's io_context
     auto const address = boost::asio::ip::make_address(config_.address);
     tcp::endpoint endpoint(address, config_.port);
-
-    // Acceptor
-    acceptor_ = std::make_unique<tcp::acceptor>(ioContext_);
+    acceptor_ = std::make_unique<tcp::acceptor>(mainCtx);
     acceptor_->open(endpoint.protocol());
     acceptor_->set_option(tcp::acceptor::reuse_address(true));
     acceptor_->bind(endpoint);
-    // Use max_listen_connections for the backlog to handle connection bursts
     acceptor_->listen(boost::asio::socket_base::max_listen_connections);
 
     // Setup SSL context if configured
     if (!config_.sslCertFile.empty() && !config_.sslKeyFile.empty()) {
       sslCtx_ = std::make_unique<boost::asio::ssl::context>(
           boost::asio::ssl::context::tlsv12_server);
-      // Disable deprecated protocols (SSLv2, SSLv3, TLS 1.0, TLS 1.1)
       sslCtx_->set_options(boost::asio::ssl::context::default_workarounds |
                            boost::asio::ssl::context::no_sslv2 |
                            boost::asio::ssl::context::no_sslv3 |
@@ -167,38 +177,33 @@ public:
                                     boost::asio::ssl::context::pem);
     }
 
-    // Signal handlers for graceful shutdown
-    signals_.async_wait([this](boost::system::error_code ec, int sig) {
+    // Signal handlers (on first worker)
+    signals_ = std::make_unique<boost::asio::signal_set>(mainCtx, SIGINT, SIGTERM);
+    signals_->async_wait([this](boost::system::error_code ec, int sig) {
       if (ec)
         return;
       XX_OUT("[server] Signal {} received, shutting down...", sig);
       stop();
     });
 
-    // Spawn listener coroutine
-    asio::co_spawn(ioContext_, acceptLoop(), asio::detached);
-
-    // Start IO threads
-    unsigned threadCount = config_.ioThreads;
-    if (threadCount == 0)
-      threadCount = std::thread::hardware_concurrency();
-    if (threadCount == 0)
-      threadCount = 1;
-
-    threads_.reserve(threadCount);
-    for (unsigned i = 0; i < threadCount; ++i) {
-      threads_.emplace_back([this] { ioContext_.run(); });
-    }
+    // Spawn listener coroutine on first worker's io_context
+    asio::co_spawn(mainCtx, acceptLoop(), asio::detached);
 
     XX_OUT("[server] Listening on {}:{}{}", config_.address, port(),
            sslCtx_ ? " (HTTPS)" : "");
 
-    // Block until all threads finish
-    for (auto &t : threads_) {
-      if (t.joinable())
-        t.join();
+    // Start worker threads — each runs its own io_context
+    for (unsigned i = 0; i < threadCount; ++i) {
+      workers_[i]->thread = std::thread([this, i]() {
+        workers_[i]->ioCtx.run();
+      });
     }
-    threads_.clear();
+
+    // Block until all threads finish
+    for (auto &w : workers_) {
+      if (w->thread.joinable())
+        w->thread.join();
+    }
   }
 
   /// Signal the server to stop. Safe to call from any thread.
@@ -211,10 +216,13 @@ public:
       acceptor_->cancel(ec);
       acceptor_->close(ec);
     }
-    signals_.cancel(ec);
-    // Stop the io_context — pending async operations are cancelled,
+    if (signals_)
+      signals_->cancel(ec);
+    // Stop all worker io_contexts — pending async operations are cancelled,
     // serve() loops catch operation_aborted and exit cleanly.
-    ioContext_.stop();
+    for (auto &w : workers_) {
+      w->ioCtx.stop();
+    }
   }
 
   bool isStopped() const noexcept { return stopped_; }
@@ -239,7 +247,6 @@ private:
   asio::awaitable<void> acceptLoop() {
     using tcp = boost::asio::ip::tcp;
     auto executor = co_await asio::this_coro::executor;
-
     while (!stopped_) {
       boost::system::error_code ec;
       tcp::socket socket = co_await acceptor_->async_accept(
@@ -248,8 +255,6 @@ private:
         if (ec == boost::asio::error::operation_aborted ||
             ec == boost::asio::error::connection_aborted)
           co_return;
-        // EMFILE (too many open files): wait briefly and retry rather
-        // than killing the accept loop — prevents fd exhaustion DoS.
         if (ec == boost::asio::error::no_descriptors) {
           XX_LOGW("[server] Accept: too many open files, retrying in 100ms");
           boost::asio::steady_timer timer(executor,
@@ -259,7 +264,6 @@ private:
           continue;
         }
         XX_LOGE("[server] Accept error: {}", ec.message());
-        // Brief backoff on other errors to avoid tight error loop
         boost::asio::steady_timer timer(executor,
                                         std::chrono::milliseconds(10));
         co_await timer.async_wait(
@@ -269,7 +273,7 @@ private:
         continue;
       }
 
-      // Set TCP no_delay immediately for lowest latency (before SSL handshake)
+      // Set TCP no_delay immediately for lowest latency
       boost::system::error_code tcpEc;
       socket.set_option(boost::asio::ip::tcp::no_delay(true), tcpEc);
 
@@ -283,27 +287,31 @@ private:
         continue;
       }
 
-      // Increment on accept loop thread (no race with the check above).
-      // The ConnectionGuard inside the coroutine ensures the decrement
-      // runs even if serve() throws or the coroutine is cancelled.
       activeConnections_.fetch_add(1, std::memory_order_relaxed);
 
+      // Round-robin dispatch to a per-thread worker io_context
+      size_t idx = nextWorker_++ % workers_.size();
+      auto &targetWorker = *workers_[idx];
+
+      // Transfer native handle to target worker's io_context (no locks)
+      auto protocol = acceptor_->local_endpoint().protocol();
+      tcp::socket workerSocket(targetWorker.ioCtx);
+      workerSocket.assign(protocol, socket.release());
+
       if (sslCtx_) {
-        // SSL session
         auto sslStream = std::make_shared<
             boost::beast::ssl_stream<boost::beast::tcp_stream>>(
-            boost::beast::tcp_stream(std::move(socket)), *sslCtx_);
-        asio::co_spawn(executor,
+            boost::beast::tcp_stream(std::move(workerSocket)), *sslCtx_);
+        asio::co_spawn(targetWorker.ioCtx,
             [this, sslStream]() -> asio::awaitable<void> {
               ConnectionGuard guard{activeConnections_};
               co_await sslHandshakeAndServe(sslStream);
             }(),
             asio::detached);
       } else {
-        // Plain session
         auto stream =
-            std::make_shared<boost::beast::tcp_stream>(std::move(socket));
-        asio::co_spawn(executor,
+            std::make_shared<boost::beast::tcp_stream>(std::move(workerSocket));
+        asio::co_spawn(targetWorker.ioCtx,
             [this, stream]() -> asio::awaitable<void> {
               ConnectionGuard guard{activeConnections_};
               co_await serve(std::move(*stream));
@@ -490,18 +498,26 @@ private:
   }
 
   // -----------------------------------------------------------------------
+  // Per-thread worker: each owns a private io_context — zero-lock isolation
+  // -----------------------------------------------------------------------
+  struct Worker {
+    boost::asio::io_context ioCtx;
+    std::thread thread;
+  };
+
+  // -----------------------------------------------------------------------
   // Members
   // -----------------------------------------------------------------------
 
   Config config_;
-  boost::asio::io_context ioContext_;
+  std::vector<std::unique_ptr<Worker>> workers_;
   std::unique_ptr<Router> router_;
   std::unique_ptr<boost::asio::ip::tcp::acceptor> acceptor_;
   std::unique_ptr<boost::asio::ssl::context> sslCtx_;
-  boost::asio::signal_set signals_;
+  std::unique_ptr<boost::asio::signal_set> signals_;
   std::atomic<bool> stopped_{false};
   std::atomic<size_t> activeConnections_{0};
-  std::vector<std::thread> threads_;
+  std::atomic<size_t> nextWorker_{0};
 };
 
 } // namespace util

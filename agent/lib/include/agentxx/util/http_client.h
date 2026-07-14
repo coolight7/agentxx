@@ -140,15 +140,17 @@ public:
   }
 
   static inline bool isValidUrl(std::string_view url) noexcept {
-    if (url.empty())
+    if (url.empty()) {
       return false;
+    }
     auto scheme_end = url.find("://");
     if (scheme_end == std::string::npos) {
-      return !url.empty();
+      return true;
     }
     auto scheme = url.substr(0, scheme_end);
-    if (scheme != "http" && scheme != "https")
+    if (scheme != "http" && scheme != "https") {
       return false;
+    }
     auto rest = url.substr(scheme_end + 3);
     return !rest.empty();
   }
@@ -185,13 +187,16 @@ public:
     return base + basePath + std::string(location);
   }
 
-  static inline HeaderMap defaultHeaders() {
-    HeaderMap headers;
-    headers.set(
-        "User-Agent",
-        R"(Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.6045.160 Safari/537.36)");
-    headers.set("Accept", "*/*");
-    headers.set("Accept-Language", "zh-CN,zh;q=0.9");
+  static const HeaderMap &defaultHeaders() {
+    static const HeaderMap headers = [] {
+      HeaderMap h;
+      h.set("User-Agent",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/119.0.6045.160 Safari/537.36");
+      h.set("Accept", "*/*");
+      h.set("Accept-Language", "zh-CN,zh;q=0.9");
+      return h;
+    }();
     return headers;
   }
 
@@ -214,7 +219,7 @@ private:
     static std::once_flag verifiedFlag;
     static std::once_flag unverifiedFlag;
 
-    if (verify && false) {
+    if (verify) {
       std::call_once(verifiedFlag, [] {
         auto ctx = std::make_unique<asio::ssl::context>(
             asio::ssl::context::tlsv12_client);
@@ -328,7 +333,8 @@ private:
                std::string_view body, std::string_view contentType,
                const HeaderMap &extraHeaders, std::chrono::milliseconds timeout,
                size_t followRedirect = 3,
-               uint64_t maxResponseBody = kDefaultMaxResponseBody) {
+               uint64_t maxResponseBody = kDefaultMaxResponseBody,
+               bool keepAlive = false) {
     namespace http = boost::beast::http;
     using asio::ip::tcp;
 
@@ -337,8 +343,6 @@ private:
     std::string currentBody(body);
     std::string currentContentType(contentType);
 
-    // Total deadline across all redirect hops — prevents a redirect chain
-    // from exceeding the caller's timeout budget.
     auto totalDeadline = std::chrono::steady_clock::now() + timeout;
     auto rem = [&] {
       auto d = totalDeadline - std::chrono::steady_clock::now();
@@ -346,11 +350,11 @@ private:
           std::max(d, std::chrono::steady_clock::duration::zero()));
     };
 
+    auto executor = co_await asio::this_coro::executor;
+    tcp::resolver resolver(executor);
+
     std::expected<HttpResponse, std::string> result;
     for (size_t redirectCount = 0;; ++redirectCount) {
-      auto executor = co_await asio::this_coro::executor;
-
-      // Check total timeout before each hop
       if (rem().count() <= 0) {
         result = std::unexpected{std::string{"timeout"}};
         break;
@@ -371,33 +375,29 @@ private:
         http::request<http::string_body> req{
             http::string_to_verb(currentMethod), parsed->path, 11};
         bool hasHost = extraHeaders.contains("host");
-        if (!hasHost) {
+        if (!hasHost)
           req.set(http::field::host, hostHeader);
-        }
         req.set(http::field::user_agent,
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
                 "Chrome/119.0.6045.160 Safari/537.36");
         req.set(http::field::accept, "*/*");
         req.set(http::field::accept_encoding, "identity");
-        req.set(http::field::connection, "close");
+        if (!keepAlive)
+          req.set(http::field::connection, "close");
 
         for (const auto &[k, v] : extraHeaders.data) {
-          // Skip host — set explicitly above (case-insensitive)
-          if (isIgnoreCaseEqual(k, "host")) {
+          if (isIgnoreCaseEqual(k, "host"))
             continue;
-          }
           req.set(k, stringVectorJoin(v, "; "));
         }
         if (!currentBody.empty()) {
-          if (!currentContentType.empty()) {
+          if (!currentContentType.empty())
             req.set(http::field::content_type, currentContentType);
-          }
           req.body() = currentBody;
           req.prepare_payload();
         }
 
-        tcp::resolver resolver(executor);
         auto endpoints = co_await resolver.async_resolve(
             parsed->host, std::to_string(parsed->port),
             asio::cancel_after(rem(), asio::use_awaitable));
@@ -412,7 +412,6 @@ private:
           co_await asio::async_connect(
               stream.lowest_layer(), endpoints,
               asio::cancel_after(rem(), asio::use_awaitable));
-          // Set TCP no_delay before handshake for lower latency
           boost::system::error_code tcpEc;
           stream.lowest_layer().set_option(asio::ip::tcp::no_delay(true),
                                            tcpEc);
@@ -421,7 +420,6 @@ private:
               asio::cancel_after(rem(), asio::use_awaitable));
           result =
               co_await exchange(stream, req, totalDeadline, maxResponseBody);
-          // Graceful SSL shutdown (ignore errors — peer may have closed)
           boost::system::error_code sslEc;
           co_await stream.async_shutdown(
               asio::redirect_error(asio::use_awaitable, sslEc));
@@ -430,7 +428,6 @@ private:
           co_await asio::async_connect(
               stream, endpoints,
               asio::cancel_after(rem(), asio::use_awaitable));
-          // Set TCP no_delay
           boost::system::error_code tcpEc;
           stream.set_option(asio::ip::tcp::no_delay(true), tcpEc);
           result =
@@ -445,7 +442,6 @@ private:
         result = std::unexpected{std::string{e.what()}};
       }
 
-      // Check if we should follow a redirect
       if (!result.has_value())
         break;
       if (redirectCount >= followRedirect)
@@ -482,18 +478,20 @@ public:
   getAsync(const std::string &url, const HeaderMap &extraHeaders = {},
            std::chrono::milliseconds timeout = std::chrono::seconds{60},
            size_t followRedirect = 3,
-           uint64_t maxResponseBody = kDefaultMaxResponseBody) {
+           uint64_t maxResponseBody = kDefaultMaxResponseBody,
+           bool keepAlive = false) {
     co_return co_await requestAsync("GET", url, {}, "", extraHeaders, timeout,
-                                    followRedirect, maxResponseBody);
+                                    followRedirect, maxResponseBody, keepAlive);
   }
 
   static inline asio::awaitable<std::expected<HttpResponse, std::string>>
   headAsync(const std::string &url, const HeaderMap &extraHeaders = {},
             std::chrono::milliseconds timeout = std::chrono::seconds{60},
             size_t followRedirect = 3,
-            uint64_t maxResponseBody = kDefaultMaxResponseBody) {
+            uint64_t maxResponseBody = kDefaultMaxResponseBody,
+            bool keepAlive = false) {
     co_return co_await requestAsync("HEAD", url, {}, "", extraHeaders, timeout,
-                                    followRedirect, maxResponseBody);
+                                    followRedirect, maxResponseBody, keepAlive);
   }
 
   static inline asio::awaitable<std::expected<HttpResponse, std::string>>
@@ -501,10 +499,11 @@ public:
             const HeaderMap &extraHeaders = {},
             std::chrono::milliseconds timeout = std::chrono::seconds{60},
             size_t followRedirect = 3,
-            uint64_t maxResponseBody = kDefaultMaxResponseBody) {
+            uint64_t maxResponseBody = kDefaultMaxResponseBody,
+            bool keepAlive = false) {
     co_return co_await requestAsync("POST", url, body.dump(),
                                     "application/json", extraHeaders, timeout,
-                                    followRedirect, maxResponseBody);
+                                    followRedirect, maxResponseBody, keepAlive);
   }
 
   static inline asio::awaitable<std::expected<HttpResponse, std::string>>
@@ -513,10 +512,11 @@ public:
             const HeaderMap &extraHeaders = {},
             std::chrono::milliseconds timeout = std::chrono::seconds{60},
             size_t followRedirect = 3,
-            uint64_t maxResponseBody = kDefaultMaxResponseBody) {
+            uint64_t maxResponseBody = kDefaultMaxResponseBody,
+            bool keepAlive = false) {
     co_return co_await requestAsync("POST", url, body, contentType,
                                     extraHeaders, timeout, followRedirect,
-                                    maxResponseBody);
+                                    maxResponseBody, keepAlive);
   }
 
   static inline asio::awaitable<std::expected<HttpResponse, std::string>>
@@ -525,9 +525,11 @@ public:
            const HeaderMap &extraHeaders = {},
            std::chrono::milliseconds timeout = std::chrono::seconds{60},
            size_t followRedirect = 3,
-           uint64_t maxResponseBody = kDefaultMaxResponseBody) {
+           uint64_t maxResponseBody = kDefaultMaxResponseBody,
+           bool keepAlive = false) {
     co_return co_await requestAsync("PUT", url, body, contentType, extraHeaders,
-                                    timeout, followRedirect, maxResponseBody);
+                                    timeout, followRedirect, maxResponseBody,
+                                    keepAlive);
   }
 
   static inline asio::awaitable<std::expected<HttpResponse, std::string>>
@@ -536,35 +538,41 @@ public:
              const HeaderMap &extraHeaders = {},
              std::chrono::milliseconds timeout = std::chrono::seconds{60},
              size_t followRedirect = 3,
-             uint64_t maxResponseBody = kDefaultMaxResponseBody) {
+             uint64_t maxResponseBody = kDefaultMaxResponseBody,
+             bool keepAlive = false) {
     co_return co_await requestAsync("PATCH", url, body, contentType,
                                     extraHeaders, timeout, followRedirect,
-                                    maxResponseBody);
+                                    maxResponseBody, keepAlive);
   }
 
   static inline asio::awaitable<std::expected<HttpResponse, std::string>>
   deleteAsync(const std::string &url, const HeaderMap &extraHeaders = {},
               std::chrono::milliseconds timeout = std::chrono::seconds{60},
               size_t followRedirect = 3,
-              uint64_t maxResponseBody = kDefaultMaxResponseBody) {
+              uint64_t maxResponseBody = kDefaultMaxResponseBody,
+              bool keepAlive = false) {
     co_return co_await requestAsync("DELETE", url, {}, "", extraHeaders,
-                                    timeout, followRedirect, maxResponseBody);
+                                    timeout, followRedirect, maxResponseBody,
+                                    keepAlive);
   }
 
   static inline asio::awaitable<std::expected<HttpResponse, std::string>>
   optionsAsync(const std::string &url, const HeaderMap &extraHeaders = {},
                std::chrono::milliseconds timeout = std::chrono::seconds{60},
                size_t followRedirect = 3,
-               uint64_t maxResponseBody = kDefaultMaxResponseBody) {
+               uint64_t maxResponseBody = kDefaultMaxResponseBody,
+               bool keepAlive = false) {
     co_return co_await requestAsync("OPTIONS", url, {}, "", extraHeaders,
-                                    timeout, followRedirect, maxResponseBody);
+                                    timeout, followRedirect, maxResponseBody,
+                                    keepAlive);
   }
 
   static inline asio::awaitable<std::expected<std::string, std::string>>
   fetchMarkdown(const std::string &url,
                 std::chrono::milliseconds timeout = std::chrono::seconds{15},
-                size_t followRedirect = 3) {
-    auto resp = co_await getAsync(url, {}, timeout, followRedirect);
+                size_t followRedirect = 3, bool keepAlive = false) {
+    auto resp = co_await getAsync(url, {}, timeout, followRedirect,
+                                  kDefaultMaxResponseBody, keepAlive);
     if (!resp.has_value()) {
       XX_LOGE("fetchMarkdown error: {}", resp.error());
       co_return std::unexpected{resp.error()};
