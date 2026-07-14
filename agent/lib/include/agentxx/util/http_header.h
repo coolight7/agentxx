@@ -20,7 +20,7 @@ public:
     return data.find(name) != data.end();
   }
 
-  _BaseMap::Iterator get(std::string_view name) {
+  _BaseMap::iterator get(std::string_view name) {
     auto it = data.find(name);
     if (it == data.end()) {
       // 插入新条目，key 由 string_view 构造为 string
