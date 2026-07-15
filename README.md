@@ -12,7 +12,7 @@
 | Status | System | TIP |
 |---|---|---|
 | ✅ | Windows 10+ | - |
-| ✅ | Linux | WSL扩展功能 |
+| ✅ | Linux | 在WSL时额外支持扩展功能 |
 | ✅ | Android 5.0+ | Linux 交叉编译 |
 | ⬜ | Macos | 待测试兼容 |
 | ⬜ | IOS | 待测试兼容 |

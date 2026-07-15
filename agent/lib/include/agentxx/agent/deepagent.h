@@ -195,10 +195,13 @@ public:
             }
           }
         } catch (const std::exception &e) {
-          XX_LOGE("[agentxx] Append mcp tool error: {} | ", url, e.what());
+          std::string errmsg = e.what();
+          agentxx::util::autoConvertToUtf8(errmsg);
+          XX_LOGE("[agentxx] Append mcp tool error: {} | {}", url, errmsg);
         } catch (const boost::exception &e) {
-          XX_LOGE("[agentxx] Append mcp tool error: {} | ", url,
-                  boost::diagnostic_information(e));
+          auto errmsg = boost::diagnostic_information(e);
+          agentxx::util::autoConvertToUtf8(errmsg);
+          XX_LOGE("[agentxx] Append mcp tool error: {} | {}", url, errmsg);
         } catch (...) {
           XX_LOGE("[agentxx] Append mcp tool error: {}", url);
         }

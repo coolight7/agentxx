@@ -63,4 +63,25 @@ std::string agentxx::util::getSystemName() {
 }
 
 bool agentxx::util::isRunningInWSL() { return false; }
+
+#else
+
+std::string agentxx::util::getSystemName() {
+#if XX_IS_WIN_D
+  return "Windows";
+#elif XX_IS_LINUX_D
+  return "Linux";
+#elif XX_IS_MACOS_D
+  return "macOS";
+#elif XX_IS_ANDROID_D
+  return "Android";
+#elif XX_IS_IOS_D
+  return "iOS";
+#else
+  return "Unknown";
+#endif
+}
+
+bool agentxx::util::isRunningInWSL() { return false; }
+
 #endif

@@ -94,7 +94,7 @@ public:
   }
 
   asio::awaitable<std::string> execTool(neograph::Tool *tool,
-                                        neograph::json &args) const override {
+                                        neograph::json &args) const {
     auto agentCtxPtr = agentContext.lock();
     {
       // 权限检查
