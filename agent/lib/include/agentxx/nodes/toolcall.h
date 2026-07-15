@@ -126,8 +126,7 @@ public:
       std::exception_ptr errorPtr;
 
       try {
-        result =
-            co_await neograph::graph::ToolDispatchNode::execTool(tool, args);
+        result = co_await tool->real_execute_async(args);
         break;
       } catch (const neograph::graph::CancelledException &e) {
         isCancel = true;
