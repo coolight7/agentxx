@@ -85,6 +85,7 @@
     - 支持多个 toolcall 同时发起中断，允许一轮中反复 `中断-用户响应`
     - 支持HITL，中断处理可以自定义实现，内置实现支持用户确认信息、输入内容等
     - 支持用户取消执行
+    - ⬜改造 toolcall 中断处理
 - ✅**异常处理和自动重试**
     - Toolcall/LLM 节点支持自动重试，支持自定义重试次数
     - Toolcall/LLM 节点异常时自动添加消息到上下文，保持角色消息顺序正确
@@ -118,7 +119,7 @@
     - ✅允许指定 tool 调用前拦截，决定 允许、拒绝 或 中断提示询问
     - ✅预设文件读写权限限制
     - ⬜沙盒执行 Shell/File RW
-- ⬜**事件通知**
+- ⬜**事件流**
     - ✅支持注册事件功能/订阅事件通知，事件触发时通知订阅者
     - 预设功能:
         - 定时通知
@@ -128,8 +129,8 @@
     - 接入外部程序的消息通知、数据添加
 - ✅**Skill支持** `SkillMiddleware`
     - 文件夹扫描/metadata读取收集 + `filesystem`文件内容读取 + `execute_command`执行
-- ❌**MCP支持** (Neograph已实现，但暂时使用有问题)
-    - MCP client
+- ⬜**MCP支持** (Neograph已实现，但暂时使用有问题)
+    - ✅MCP client
     - Mcp Server
         - CodeGraph
         - Websearch
