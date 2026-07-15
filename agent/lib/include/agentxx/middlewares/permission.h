@@ -89,7 +89,7 @@ public:
                                                FilesystemPermissionREAD);
     };
 
-    handles["filesystem_list_file"] = readHandle;
+    handles["filesystem_list"] = readHandle;
     handles["filesystem_read_text_file"] = readHandle;
     handles["filesystem_read_binary_file"] = readHandle;
     handles["filesystem_write_file"] =

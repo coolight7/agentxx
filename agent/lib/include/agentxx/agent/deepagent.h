@@ -210,8 +210,8 @@ public:
     {
       tools.push_back(
           std::make_unique<agentxx::tools::ThreadShareStoreTool>(agentContext));
-      tools.push_back(std::make_unique<agentxx::tools::FileSystemListFileTool>(
-          agentContext));
+      tools.push_back(
+          std::make_unique<agentxx::tools::FileSystemListTool>(agentContext));
       tools.push_back(
           std::make_unique<agentxx::tools::FilesystemReadTextFileTool>(
               agentContext));

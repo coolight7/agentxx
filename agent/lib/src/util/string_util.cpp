@@ -62,11 +62,13 @@ getIconvCandidateEncodings(const char *src_encoding) {
   }
   return candidates;
 }
+
 std::tuple<bool, std::optional<std::string>>
-agentxx::util::convertToUtf8(std::string_view src,
-                             std::string_view srcEncoding) {
-  // 已是UTF8/空字符串，直接返回
-  if ("UTF-8" == srcEncoding || "utf8" == srcEncoding) {
+agentxx::util::convertCharset(std::string_view src,
+                              std::string_view srcEncoding,
+                              std::string_view targetEncoding) {
+  // 已是目标编码/空字符串，直接返回
+  if (agentxx::util::isIgnoreCaseEqual(srcEncoding, targetEncoding)) {
     return {true, std::nullopt};
   }
   if (src.empty()) {
@@ -79,7 +81,8 @@ agentxx::util::convertToUtf8(std::string_view src,
   }
 
   // 遍历候选编码，逐个尝试
-  std::string target_enc = "UTF-8//TRANSLIT//IGNORE";
+  auto target_enc = fmt::format("{}//TRANSLIT//IGNORE",
+                                agentxx::util::toUpper(targetEncoding));
   iconv_t cd = (iconv_t)-1;
   // 记录实际使用的成功编码名
   std::string used_src_enc;
@@ -98,8 +101,8 @@ agentxx::util::convertToUtf8(std::string_view src,
 
   // 缓冲区
   size_t src_len = src.size();
-  // UTF8 单字符最大6字节
-  size_t dst_buf_size = src_len * 6;
+  // 最大预期，单字节转换为 8字节编码长度
+  size_t dst_buf_size = src_len * 8;
   std::vector<char> dst_buf(dst_buf_size);
   char *dst_ptr = dst_buf.data();
   size_t dst_remain = dst_buf_size;
@@ -110,18 +113,19 @@ agentxx::util::convertToUtf8(std::string_view src,
   auto ret = iconv(cd, const_cast<char **>(&src_ptr), &src_remain, &dst_ptr,
                    &dst_remain);
 
-  std::string utf8Str;
+  std::string targetStr;
   if (ret != static_cast<size_t>(-1) && src_remain == 0) {
-    utf8Str = std::string(dst_buf.data(), dst_buf_size - dst_remain);
+    targetStr = std::string(dst_buf.data(), dst_buf_size - dst_remain);
   }
 
   iconv_close(cd);
-  return {true, utf8Str};
+  return {true, targetStr};
 }
 
 /// <isSuccess, result>
 std::tuple<bool, std::optional<std::string>>
-agentxx::util::autoConvertToUtf8(std::string_view str, std::string &encoding) {
+agentxx::util::autoConvertCharset(std::string_view str, std::string &encoding,
+                                  std::string_view targetEncoding) {
   if (str.empty()) {
     return {true, std::nullopt};
   }
@@ -130,7 +134,8 @@ agentxx::util::autoConvertToUtf8(std::string_view str, std::string &encoding) {
   std::string bom_enc = detectUtfBom(str);
   if (!bom_enc.empty()) {
     encoding = bom_enc;
-    auto [isSuccess, result] = convertToUtf8(str, encoding.c_str());
+    auto [isSuccess, result] =
+        agentxx::util::convertCharset(str, encoding, targetEncoding);
     if (isSuccess) {
       return {true, result};
     }
@@ -206,13 +211,13 @@ agentxx::util::autoConvertToUtf8(std::string_view str, std::string &encoding) {
     encoding = "UTF-16LE";
   }
 
-  return convertToUtf8(str, encoding);
+  return agentxx::util::convertCharset(str, encoding, targetEncoding);
 }
 
 std::tuple<bool, std::optional<std::string>>
 agentxx::util::autoConvertToUtf8(std::string_view str, bool _) {
   std::string encoding;
-  return autoConvertToUtf8(str, encoding);
+  return autoConvertCharset(str, encoding, "UTF-8");
 }
 
 bool agentxx::util::autoConvertToUtf8(std::string &str) {
@@ -221,4 +226,19 @@ bool agentxx::util::autoConvertToUtf8(std::string &str) {
     str = std::move(result.value());
   }
   return isSuccess;
+}
+
+bool agentxx::util::autoConvertToSystemPath(std::string &str) {
+  // TODO: 适配windows转换字符编码
+  return true;
+#if XX_IS_WIN_D
+  std::string encoding;
+  auto [isSuccess, result] = autoConvertCharset(str, encoding, "GBK");
+  if (isSuccess && result.has_value()) {
+    str = std::move(result.value());
+  }
+  return isSuccess;
+#else
+  return autoConvertToUtf8(str);
+#endif
 }

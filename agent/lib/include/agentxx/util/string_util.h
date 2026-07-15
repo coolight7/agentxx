@@ -408,15 +408,22 @@ inline std::string base64Decode(std::string_view str) {
 }
 
 std::tuple<bool, std::optional<std::string>>
-convertToUtf8(std::string_view src, std::string_view srcEncoding);
+convertCharset(std::string_view src, std::string_view srcEncoding,
+               std::string_view targetEncoding);
 
 std::tuple<bool, std::optional<std::string>>
-autoConvertToUtf8(std::string_view str, std::string &encoding);
+autoConvertCharset(std::string_view str, std::string &encoding,
+                   std::string_view targetEncoding);
 
 std::tuple<bool, std::optional<std::string>>
 autoConvertToUtf8(std::string_view str, bool _);
 
 bool autoConvertToUtf8(std::string &str);
+
+/// 自动转换为系统路径编码
+/// - [windows] UTF-16LE
+/// - [其他系统] UTF-8
+bool autoConvertToSystemPath(std::string &str);
 
 inline PinyinCallback s_pinyinCallback = nullptr;
 

@@ -42,29 +42,28 @@ inline void cleanupTestDir() { std::filesystem::remove_all(testDir); }
 
 inline asio::awaitable<void> test_list_file_get_definition(
     std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
-  auto tool = agentxx::tools::FileSystemListFileTool{agentContext};
+  auto tool = agentxx::tools::FileSystemListTool{agentContext};
   auto def = tool.get_definition();
-  if (def.name == "filesystem_list_file") {
-    std::cout << "[PASS] FileSystemListFileTool::get_definition() name correct"
+  if (def.name == "filesystem_list") {
+    std::cout << "[PASS] FileSystemListTool::get_definition() name correct"
               << std::endl;
   } else {
-    std::cout
-        << "[FAIL] FileSystemListFileTool::get_definition() name incorrect"
-        << std::endl;
+    std::cout << "[FAIL] FileSystemListTool::get_definition() name incorrect"
+              << std::endl;
   }
   co_return;
 }
 
 inline asio::awaitable<void> test_list_file_empty_path(
     std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
-  auto tool = agentxx::tools::FileSystemListFileTool{agentContext};
+  auto tool = agentxx::tools::FileSystemListTool{agentContext};
   auto args = neograph::json{{"path", ""}};
   auto result = co_await tool.execute_async(args);
   if (result.find("\"error\"") != std::string::npos) {
-    std::cout << "[PASS] FileSystemListFileTool returns error for empty path"
+    std::cout << "[PASS] FileSystemListTool returns error for empty path"
               << std::endl;
   } else {
-    std::cout << "[FAIL] FileSystemListFileTool should return error for empty "
+    std::cout << "[FAIL] FileSystemListTool should return error for empty "
                  "path, got: "
               << result << std::endl;
   }
@@ -73,16 +72,16 @@ inline asio::awaitable<void> test_list_file_empty_path(
 
 inline asio::awaitable<void>
 test_list_file_basic(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
-  auto tool = agentxx::tools::FileSystemListFileTool{agentContext};
+  auto tool = agentxx::tools::FileSystemListTool{agentContext};
   auto args = neograph::json{{"path", testDir}};
   auto result = co_await tool.execute_async(args);
   if (result.find("test1.txt") != std::string::npos &&
       result.find("test2.txt") != std::string::npos &&
       result.find("subdir") != std::string::npos) {
-    std::cout << "[PASS] FileSystemListFileTool lists directory contents"
+    std::cout << "[PASS] FileSystemListTool lists directory contents"
               << std::endl;
   } else {
-    std::cout << "[FAIL] FileSystemListFileTool listing failed, got: " << result
+    std::cout << "[FAIL] FileSystemListTool listing failed, got: " << result
               << std::endl;
   }
   co_return;
@@ -90,17 +89,17 @@ test_list_file_basic(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
 
 inline asio::awaitable<void> test_list_file_recursive(
     std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
-  auto tool = agentxx::tools::FileSystemListFileTool{agentContext};
+  auto tool = agentxx::tools::FileSystemListTool{agentContext};
   auto args = neograph::json{
       {"path", testDir},
       {"recursive", true},
   };
   auto result = co_await tool.execute_async(args);
   if (result.find("subtest.txt") != std::string::npos) {
-    std::cout << "[PASS] FileSystemListFileTool recursive lists subdirectories"
+    std::cout << "[PASS] FileSystemListTool recursive lists subdirectories"
               << std::endl;
   } else {
-    std::cout << "[FAIL] FileSystemListFileTool recursive listing failed, got: "
+    std::cout << "[FAIL] FileSystemListTool recursive listing failed, got: "
               << result << std::endl;
   }
   co_return;
@@ -108,7 +107,7 @@ inline asio::awaitable<void> test_list_file_recursive(
 
 inline asio::awaitable<void>
 test_list_file_limit(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
-  auto tool = agentxx::tools::FileSystemListFileTool{agentContext};
+  auto tool = agentxx::tools::FileSystemListTool{agentContext};
   auto args = neograph::json{
       {"path", testDir},
       {"limit", 1},
@@ -116,10 +115,10 @@ test_list_file_limit(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
   auto result = co_await tool.execute_async(args);
   auto jsonResult = neograph::json::parse(result);
   if (jsonResult.is_array() && jsonResult.size() <= 1) {
-    std::cout << "[PASS] FileSystemListFileTool respects limit parameter"
+    std::cout << "[PASS] FileSystemListTool respects limit parameter"
               << std::endl;
   } else {
-    std::cout << "[FAIL] FileSystemListFileTool limit failed, got: " << result
+    std::cout << "[FAIL] FileSystemListTool limit failed, got: " << result
               << std::endl;
   }
   co_return;
@@ -127,7 +126,7 @@ test_list_file_limit(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
 
 inline asio::awaitable<void> test_list_file_info_fields(
     std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
-  auto tool = agentxx::tools::FileSystemListFileTool{agentContext};
+  auto tool = agentxx::tools::FileSystemListTool{agentContext};
   auto args = neograph::json{{"path", testDir}};
   auto result = co_await tool.execute_async(args);
   auto jsonResult = neograph::json::parse(result);
@@ -141,11 +140,10 @@ inline asio::awaitable<void> test_list_file_info_fields(
       }
     }
     if (hasAllFields) {
-      std::cout
-          << "[PASS] FileSystemListFileTool returns file info with all fields"
-          << std::endl;
+      std::cout << "[PASS] FileSystemListTool returns file info with all fields"
+                << std::endl;
     } else {
-      std::cout << "[FAIL] FileSystemListFileTool missing file info fields, "
+      std::cout << "[FAIL] FileSystemListTool missing file info fields, "
                    "first item keys: ";
       auto first = jsonResult[0];
       for (auto it = first.begin(); it != first.end(); ++it) {
@@ -154,7 +152,7 @@ inline asio::awaitable<void> test_list_file_info_fields(
       std::cout << std::endl;
     }
   } else {
-    std::cout << "[FAIL] FileSystemListFileTool expected array result, got: "
+    std::cout << "[FAIL] FileSystemListTool expected array result, got: "
               << result << std::endl;
   }
   co_return;

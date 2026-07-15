@@ -218,7 +218,7 @@ Windows Command must be executed through `cmd.exe`. Write arg command: `cmd.exe 
           },
       },
       {
-          "filesystem_list_file",
+          "filesystem_list",
           ToolPrompt{
               .depict =
                   R"(列出文件夹内的文件和文件夹信息，包含文件大小/Bytes, 类型, 最后写入时间(时间戳/nanoseconds)

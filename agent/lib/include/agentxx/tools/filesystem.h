@@ -72,11 +72,11 @@ inline void _defTruncateToolcallResponse(neograph::ChatMessage &msg) {
 }
 
 /// ls
-class FileSystemListFileTool : public XXToolBase {
+class FileSystemListTool : public XXToolBase {
 public:
-  FileSystemListFileTool(
+  FileSystemListTool(
       std::weak_ptr<agentxx::agent::AgentContext> in_agentContext)
-      : XXToolBase("filesystem_list_file", in_agentContext, false, false) {}
+      : XXToolBase("filesystem_list", in_agentContext, false, false) {}
 
   neograph::ChatTool get_definition() const override {
     auto agentPtr = agentContext.lock();
@@ -129,7 +129,8 @@ public:
 
   asio::awaitable<std::string>
   execute_async(const neograph::json &arguments) override {
-    auto targetPath = arguments.value("path", std::string{});
+    auto targetPath =
+        agentxx::util::toStandardPath(arguments.value("path", std::string{}));
     if (targetPath.empty()) {
       co_return R"({"error":"Arg `path` is empty"})";
     }
@@ -153,7 +154,9 @@ public:
       result.push_back(json);
     };
 
-    try {
+    if (std::filesystem::exists(targetPath)) {
+      result.push_back(neograph::json{"error", "Path not exist"});
+    } else if (std::filesystem::is_directory(targetPath)) {
       if (recursive) {
         for (const auto &entity :
              std::filesystem::recursive_directory_iterator(targetPath)) {
@@ -171,9 +174,13 @@ public:
           }
         }
       }
-    } catch (const std::exception &e) {
-      result.push_back(neograph::json{"error", e.what()});
+    } else if (std::filesystem::is_regular_file(targetPath)) {
+      onAppendItem(std::filesystem::directory_entry(targetPath));
+    } else {
+      result.push_back(neograph::json{
+          "error", "Path exist, but is not a directory or file"});
     }
+
     co_return result.dump();
   }
 };
@@ -238,10 +245,13 @@ public:
 
   asio::awaitable<std::string>
   execute_async(const neograph::json &arguments) override {
-    auto filepath = arguments.value("path", std::string{});
+    auto filepath =
+        agentxx::util::toStandardPath(arguments.value("path", std::string{}));
     if (filepath.empty()) {
       co_return R"({"error":"Arg `path` is empty"})";
     }
+    auto systemCharsetFilePath = filepath;
+    agentxx::util::autoConvertToSystemPath(systemCharsetFilePath);
     auto text_line_offset = arguments.value<int64_t>("line_offset", -1);
     auto text_line_limit = arguments.value<int64_t>("line_limit", -1);
 
@@ -252,7 +262,7 @@ public:
       /// 异步读取文件
       asio::stream_file stream{currentIoCtx};
       neograph_asio_error_code errCode;
-      stream.open(filepath, asio::stream_file::read_only, errCode);
+      stream.open(systemCharsetFilePath, asio::stream_file::read_only, errCode);
       if (false == stream.is_open()) {
         throw std::runtime_error{
             fmt::format(R"(Can not open file: {}")", errCode.message())};
@@ -323,7 +333,7 @@ public:
     {
       /// 同步阻塞读取文件
       std::ifstream stream;
-      stream.open(filepath);
+      stream.open(systemCharsetFilePath);
       if (!stream) {
         auto ec = std::error_code{errno, std::system_category()};
         throw std::runtime_error{
@@ -437,10 +447,13 @@ public:
 
   asio::awaitable<std::string>
   execute_async(const neograph::json &arguments) override {
-    auto filepath = arguments.value("path", std::string{});
+    auto filepath =
+        agentxx::util::toStandardPath(arguments.value("path", std::string{}));
     if (filepath.empty()) {
       co_return R"({"error":"Arg `path` is empty"})";
     }
+    auto systemCharsetFilePath = filepath;
+    agentxx::util::autoConvertToSystemPath(systemCharsetFilePath);
     auto byte_offset = arguments.value<double>("byte_offset", -1);
     auto byte_limit = arguments.value<double>("byte_limit", -1);
 
@@ -452,7 +465,8 @@ public:
       if (byte_offset >= 0 || byte_limit >= 0) {
         asio::random_access_file stream{currentIoCtx};
         neograph_asio_error_code errCode;
-        stream.open(filepath, asio::random_access_file::read_only, errCode);
+        stream.open(systemCharsetFilePath, asio::random_access_file::read_only,
+                    errCode);
         if (false == stream.is_open()) {
           throw std::runtime_error{
               fmt::format(R"(Can not open file: {}")", errCode.message())};
@@ -499,7 +513,7 @@ public:
       // 读取完整文件
       asio::stream_file stream{currentIoCtx};
       neograph_asio_error_code errCode;
-      stream.open(filepath, asio::stream_file::read_only, errCode);
+      stream.open(systemCharsetFilePath, asio::stream_file::read_only, errCode);
       if (false == stream.is_open()) {
         throw std::runtime_error{
             fmt::format(R"(Can not open file: {}")", errCode.message())};
@@ -528,7 +542,7 @@ public:
     {
       /// 同步读取
       std::ifstream stream;
-      stream.open(filepath, std::ios::binary);
+      stream.open(systemCharsetFilePath, std::ios::binary);
       if (!stream) {
         auto ec = std::error_code{errno, std::system_category()};
         throw std::runtime_error{
@@ -659,10 +673,13 @@ public:
 
   asio::awaitable<std::string>
   execute_async(const neograph::json &arguments) override {
-    auto filepath = arguments.value("path", std::string{});
+    auto filepath =
+        agentxx::util::toStandardPath(arguments.value("path", std::string{}));
     if (filepath.empty()) {
       co_return R"({"error":"Arg `path` is empty"})";
     }
+    auto systemCharsetFilePath = filepath;
+    agentxx::util::autoConvertToSystemPath(systemCharsetFilePath);
     auto content = arguments.value<std::string>("content", std::string{});
     auto overwrite = arguments.value<bool>("overwrite", false);
     auto is_binary = arguments.value<bool>("is_binary", false);
@@ -673,7 +690,7 @@ public:
 
       // 读取完整文件
       asio::stream_file stream{currentIoCtx};
-      auto path = std::filesystem::path{filepath};
+      auto path = std::filesystem::path(filepath);
       if (false == overwrite && std::filesystem::exists(path)) {
         throw std::runtime_error{"File already exist"};
       }
@@ -686,7 +703,7 @@ public:
       }
 
       neograph_asio_error_code errCode;
-      stream.open(filepath,
+      stream.open(systemCharsetFilePath,
                   asio::stream_file::write_only | asio::stream_file::create |
                       asio::stream_file::truncate,
                   errCode);
@@ -722,7 +739,7 @@ public:
 
     {
       std::ofstream stream;
-      auto path = std::filesystem::path{filepath};
+      auto path = std::filesystem::path(filepath);
       if (false == overwrite && std::filesystem::exists(path)) {
         throw std::runtime_error{"File already exist"};
       }
@@ -734,10 +751,10 @@ public:
                         path.parent_path().string())};
       }
 
-      stream.open(filepath, is_binary
-                                ? std::ios_base::out | std::ios_base::binary |
-                                      std::ios_base::trunc
-                                : std::ios_base::out | std::ios_base::trunc);
+      stream.open(systemCharsetFilePath,
+                  is_binary ? std::ios_base::out | std::ios_base::binary |
+                                  std::ios_base::trunc
+                            : std::ios_base::out | std::ios_base::trunc);
       if (!stream) {
         auto ec = std::error_code{errno, std::system_category()};
         throw std::runtime_error{fmt::format(
@@ -836,10 +853,13 @@ public:
 
   asio::awaitable<std::string>
   execute_async(const neograph::json &arguments) override {
-    auto filepath = arguments.value("path", std::string{});
+    auto filepath =
+        agentxx::util::toStandardPath(arguments.value("path", std::string{}));
     if (filepath.empty()) {
       co_return R"({"error":"Arg `path` is empty"})";
     }
+    auto systemCharsetFilePath = filepath;
+    agentxx::util::autoConvertToSystemPath(systemCharsetFilePath);
     auto old_str = arguments.value<std::string>("old_str", std::string{});
     if (old_str.empty()) {
       co_return R"({"error":"Arg `old_str` is empty"})";
@@ -853,13 +873,13 @@ public:
 
       // 读取完整文件
       asio::stream_file stream{currentIoCtx};
-      auto path = std::filesystem::path{filepath};
+      auto path = std::filesystem::path(filepath);
       if (false == std::filesystem::exists(path)) {
         throw std::runtime_error{"File not exist"};
       }
 
       neograph_asio_error_code errCode;
-      stream.open(filepath, asio::stream_file::read_only, errCode);
+      stream.open(systemCharsetFilePath, asio::stream_file::read_only, errCode);
       if (false == stream.is_open()) {
         throw std::runtime_error{
             fmt::format(R"(Can not open file: {}")", errCode.message())};
@@ -893,7 +913,7 @@ public:
       }
 
       // 覆盖写入文件内容
-      stream.open(filepath,
+      stream.open(systemCharsetFilePath,
                   asio::stream_file::write_only | asio::stream_file::create |
                       asio::stream_file::truncate,
                   errCode);
@@ -919,12 +939,12 @@ public:
 
     {
       std::fstream stream;
-      auto path = std::filesystem::path{filepath};
+      auto path = std::filesystem::path(filepath);
       if (false == std::filesystem::exists(path)) {
         throw std::runtime_error{"File not exist"};
       }
 
-      stream.open(filepath, std::ios_base::in);
+      stream.open(systemCharsetFilePath, std::ios_base::in);
       if (!stream) {
         auto ec = std::error_code{errno, std::system_category()};
         throw std::runtime_error{
@@ -954,7 +974,7 @@ public:
 
       // 写入文件内容
       stream.close();
-      stream.open(filepath, std::ios_base::out);
+      stream.open(systemCharsetFilePath, std::ios_base::out);
       if (!stream) {
         auto ec = std::error_code{errno, std::system_category()};
         throw std::runtime_error{fmt::format(
@@ -1095,6 +1115,9 @@ public:
   }
 
   asio::awaitable<std::string> readFileContent(const std::string &filepath) {
+    auto systemCharsetFilePath = agentxx::util::toStandardPath(filepath);
+    agentxx::util::autoConvertToSystemPath(systemCharsetFilePath);
+
 #if ASIO_HAS_FILE || BOOST_ASIO_HAS_FILE
     {
       auto currentIoCtx = co_await asio::this_coro::executor;
@@ -1102,7 +1125,7 @@ public:
       /// 异步读取文件
       asio::stream_file stream{currentIoCtx};
       neograph_asio_error_code errCode;
-      stream.open(filepath, asio::stream_file::read_only, errCode);
+      stream.open(systemCharsetFilePath, asio::stream_file::read_only, errCode);
       if (false == stream.is_open()) {
         throw std::runtime_error{
             fmt::format(R"(Can not open file. Error: {})", errCode.message())};
@@ -1124,7 +1147,7 @@ public:
     {
       /// 同步阻塞读取文件
       std::ifstream stream;
-      stream.open(filepath);
+      stream.open(systemCharsetFilePath);
       if (!stream) {
         auto ec = std::error_code{errno, std::system_category()};
         throw std::runtime_error{
