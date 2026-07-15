@@ -31,7 +31,10 @@
                 "BOOST_ASIO_HAS_IO_URING",
                 "BOOST_ASIO_HAS_FILE",
                 "NEOGRAPH_USE_BOOST_ASIO",
-                "AGENTXX_ENABLE_VECTORSCAN"
+                "AGENTXX_ENABLE_VECTORSCAN",
+                "AGENTXX_ENABLE_HYPERSCAN=0",
+                "AGENTXX_ENABLE_CODEGRAPH",
+                "AGENTXX_ENABLE_BOOST_PROCESS"
             ],
             "compileCommands": "${workspaceFolder}/agent/build/linux-debug/agentxx_lib_repo-prefix/src/agentxx_lib_repo-build/compile_commands.json",
             "compilerPath": "/usr/local/bin/g++",
@@ -71,7 +74,10 @@
                 "BOOST_ASIO_HAS_WINDOWS_RANDOM_ACCESS_HANDLE",
                 "BOOST_ASIO_HAS_FILE",
                 "NEOGRAPH_USE_BOOST_ASIO",
-                "AGENTXX_ENABLE_HYPERSCAN"
+                "AGENTXX_ENABLE_VECTORSCAN=0",
+                "AGENTXX_ENABLE_HYPERSCAN",
+                "AGENTXX_ENABLE_CODEGRAPH",
+                "AGENTXX_ENABLE_BOOST_PROCESS"
             ],
             "windowsSdkVersion": "10.0.22000.0",
             "compilerPath": "cl.exe",
@@ -110,7 +116,11 @@
                 "ASIO_HAS_FILE",
                 "BOOST_ASIO_HAS_IO_URING",
                 "BOOST_ASIO_HAS_FILE",
-                "NEOGRAPH_USE_BOOST_ASIO"
+                "NEOGRAPH_USE_BOOST_ASIO",
+                "AGENTXX_ENABLE_VECTORSCAN=0",
+                "AGENTXX_ENABLE_HYPERSCAN=0",
+                "AGENTXX_ENABLE_CODEGRAPH=0",
+                "AGENTXX_ENABLE_BOOST_PROCESS=0"
             ],
             "compilerPath": "${ANDROID_NDK_ROOT}/toolchains/llvm/prebuilt/linux-x86_64/bin/clang++",
             "cStandard": "c17",

@@ -56,7 +56,6 @@ for abi in ${abi_list[@]}; do
         -DAGENTXX_ENABLE_VECTORSCAN=OFF \
         -DAGENTXX_ENABLE_HYPERSCAN=OFF \
         -DAGENTXX_ENABLE_CODEGRAPH=OFF \
-        -DAGENTXX_ENABLE_CUSTOM_CURL=ON \
         -DAGENTXX_ENABLE_BOOST_PROCESS=OFF \
         -G Ninja
 

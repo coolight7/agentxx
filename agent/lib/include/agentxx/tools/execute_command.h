@@ -78,7 +78,7 @@ public:
     {
       auto ctx = co_await asio::this_coro::executor;
       asio::readable_pipe outpip{ctx}, errpip{ctx};
-      // 2. 创建管道，用于接收子进程的输出
+      // 创建管道，用于接收子进程的输出
       std::unordered_map<boost::process::environment::key,
                          boost::process::environment::value>
           procEnv;
