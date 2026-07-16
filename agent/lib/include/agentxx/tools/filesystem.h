@@ -154,7 +154,7 @@ public:
       result.push_back(json);
     };
 
-    if (std::filesystem::exists(targetPath)) {
+    if (false == std::filesystem::exists(targetPath)) {
       result.push_back(neograph::json{"error", "Path not exist"});
     } else if (std::filesystem::is_directory(targetPath)) {
       if (recursive) {
