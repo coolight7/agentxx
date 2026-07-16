@@ -82,7 +82,7 @@ test_list_file_basic(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
               << std::endl;
   } else {
     std::cout << "[FAIL] FileSystemListTool listing failed, got: " << result
-              << std::endl;
+              << " path: " << testDir << std::endl;
   }
   co_return;
 }
@@ -100,7 +100,7 @@ inline asio::awaitable<void> test_list_file_recursive(
               << std::endl;
   } else {
     std::cout << "[FAIL] FileSystemListTool recursive listing failed, got: "
-              << result << std::endl;
+              << result << " path: " << testDir << std::endl;
   }
   co_return;
 }
@@ -785,8 +785,8 @@ inline asio::awaitable<void> test_grep_content_mode(
 
 inline asio::awaitable<void> run_filesystem_tools_tests(
     std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
-  setupTestDir();
   std::cout << "======= Test: Filesystem Tools =======" << std::endl;
+  setupTestDir();
 
   auto run = [agentContext](auto testFn) -> asio::awaitable<void> {
     try {

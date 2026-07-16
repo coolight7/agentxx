@@ -51,8 +51,9 @@ public:
   static StdinReader &instance(asio::any_io_executor ex) {
     static std::shared_ptr<StdinReader> inst;
     static std::once_flag flag;
-    std::call_once(flag,
-                   [&]() { inst = std::shared_ptr<StdinReader>(new StdinReader(ex)); });
+    std::call_once(flag, [&]() {
+      inst = std::shared_ptr<StdinReader>(new StdinReader(ex));
+    });
     return *inst;
   }
 
@@ -62,13 +63,15 @@ public:
     if (eof_ && !channel_->ready()) {
       co_return std::nullopt;
     }
-    auto [ec, line] = co_await channel_->async_receive(
-        asio::as_tuple(asio::use_awaitable));
+    auto [ec, line] =
+        co_await channel_->async_receive(asio::as_tuple(asio::use_awaitable));
     if (ec) {
       co_return std::nullopt;
     }
     co_return std::optional<std::string>{std::move(line)};
   }
+
+  bool available() const { return std::cin.good(); }
 
   ~StdinReader() {
     running_ = false;

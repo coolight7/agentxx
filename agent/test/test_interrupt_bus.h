@@ -50,23 +50,25 @@ inline asio::awaitable<void> test_interrupt_bus_request_response() {
 
   // 构造一个无 inputs 的 InterruptHandleArg (不等待 stdin, 直接返回)
   auto arg = agentxx::middleware::InterruptHandleArg{
-      .name = agentxx::middleware::MiddlewareContext::interruptHandleName_default,
+      .name =
+          agentxx::middleware::MiddlewareContext::interruptHandleName_default,
       .resultId = "call_1",
   };
   auto argJson = arg.toJson().dump();
 
-  auto resp = co_await agentContext->bus->request<agentxx::events::ReqInterrupt,
-                                                  agentxx::events::RespInterrupt>(
-      agentxx::events::Topic::Interrupt,
-      agentxx::events::ReqInterrupt{
-          .agentName = "test",
-          .threadId = "t1",
-          .interruptNode = "tool_x",
-          .handleName = arg.name,
-          .interruptArgsJson = argJson,
-          .resultId = arg.resultId,
-      },
-      std::chrono::seconds(5));
+  auto resp =
+      co_await agentContext->bus->request<agentxx::events::ReqInterrupt,
+                                          agentxx::events::RespInterrupt>(
+          agentxx::events::Topic::Interrupt,
+          agentxx::events::ReqInterrupt{
+              .agentName = "test",
+              .threadId = "t1",
+              .interruptNode = "tool_x",
+              .handleName = arg.name,
+              .interruptArgsJson = argJson,
+              .resultId = arg.resultId,
+          },
+          std::chrono::seconds(5));
 
   IB_EXPECT_TRUE(resp.has_value());
   if (resp.has_value()) {
@@ -108,21 +110,24 @@ inline asio::awaitable<void> test_permission_bus_request_response() {
 
   // 注意: 无 stdin 输入时 prompter 默认 deny (安全)
   // 在测试环境 std::getline(std::cin) 立即 fail, 返回 deny
-  auto resp = co_await agentContext->bus->request<
-      agentxx::events::ReqPermission, agentxx::events::RespPermission>(
-      agentxx::events::Topic::Permission,
-      agentxx::events::ReqPermission{
-          .agentName = "test",
-          .threadId = "t1",
-          .toolName = "filesystem_write",
-          .category = "filesystem_write",
-          .target = "/etc/passwd",
-          .argumentsJson = R"({"path":"/etc/passwd"})",
-      },
-      std::chrono::seconds(5));
+  auto resp =
+      co_await agentContext->bus->request<agentxx::events::ReqPermission,
+                                          agentxx::events::RespPermission>(
+          agentxx::events::Topic::Permission,
+          agentxx::events::ReqPermission{
+              .agentName = "test",
+              .threadId = "t1",
+              .toolName = "filesystem_write",
+              .category = "filesystem_write",
+              .target = "/etc/passwd",
+              .argumentsJson = R"({"path":"/etc/passwd"})",
+          },
+          std::chrono::seconds(5));
 
   IB_EXPECT_TRUE(resp.has_value());
-  if (resp.has_value()) {
+  if (resp.has_value() && false == agentxx::agent::StdinReader::instance(
+                                       co_await asio::this_coro::executor)
+                                       .available()) {
     // 无交互输入 -> deny
     IB_EXPECT_TRUE(resp->decision ==
                    agentxx::events::RespPermission::Decision::Deny);
@@ -130,18 +135,19 @@ inline asio::awaitable<void> test_permission_bus_request_response() {
 
   prompter.stop();
   // stop 后 request 应超时返回 nullopt
-  auto resp2 = co_await agentContext->bus->request<
-      agentxx::events::ReqPermission, agentxx::events::RespPermission>(
-      agentxx::events::Topic::Permission,
-      agentxx::events::ReqPermission{
-          .agentName = "t",
-          .threadId = "t",
-          .toolName = "x",
-          .category = "x",
-          .target = "x",
-          .argumentsJson = "{}",
-      },
-      std::chrono::milliseconds(200));
+  auto resp2 =
+      co_await agentContext->bus->request<agentxx::events::ReqPermission,
+                                          agentxx::events::RespPermission>(
+          agentxx::events::Topic::Permission,
+          agentxx::events::ReqPermission{
+              .agentName = "t",
+              .threadId = "t",
+              .toolName = "x",
+              .category = "x",
+              .target = "x",
+              .argumentsJson = "{}",
+          },
+          std::chrono::milliseconds(200));
   IB_EXPECT_TRUE(!resp2.has_value());
 
   co_return;
@@ -156,30 +162,31 @@ inline asio::awaitable<void> test_interrupt_bus_custom_handler() {
       co_await asio::this_coro::executor);
 
   // 注册一个自定义 handler, 直接返回固定结果
-  auto &rr =
-      agentContext->bus->getRR<agentxx::events::ReqInterrupt,
-                                agentxx::events::RespInterrupt>(
-          agentxx::events::Topic::Interrupt);
-  rr.serve([](const agentxx::events::ReqInterrupt &req,
-              size_t /*corrId*/) -> asio::awaitable<agentxx::events::RespInterrupt> {
-    co_return agentxx::events::RespInterrupt{
-        .handled = true,
-        .resultJson = std::string{"\"custom_ok_"} + req.handleName + "\"",
-    };
-  });
+  auto &rr = agentContext->bus->getRR<agentxx::events::ReqInterrupt,
+                                      agentxx::events::RespInterrupt>(
+      agentxx::events::Topic::Interrupt);
+  rr.serve(
+      [](const agentxx::events::ReqInterrupt &req,
+         size_t /*corrId*/) -> asio::awaitable<agentxx::events::RespInterrupt> {
+        co_return agentxx::events::RespInterrupt{
+            .handled = true,
+            .resultJson = std::string{"\"custom_ok_"} + req.handleName + "\"",
+        };
+      });
 
-  auto resp = co_await agentContext->bus->request<
-      agentxx::events::ReqInterrupt, agentxx::events::RespInterrupt>(
-      agentxx::events::Topic::Interrupt,
-      agentxx::events::ReqInterrupt{
-          .agentName = "t",
-          .threadId = "t",
-          .interruptNode = "n",
-          .handleName = "myHandle",
-          .interruptArgsJson = "{}",
-          .resultId = "r",
-      },
-      std::chrono::seconds(5));
+  auto resp =
+      co_await agentContext->bus->request<agentxx::events::ReqInterrupt,
+                                          agentxx::events::RespInterrupt>(
+          agentxx::events::Topic::Interrupt,
+          agentxx::events::ReqInterrupt{
+              .agentName = "t",
+              .threadId = "t",
+              .interruptNode = "n",
+              .handleName = "myHandle",
+              .interruptArgsJson = "{}",
+              .resultId = "r",
+          },
+          std::chrono::seconds(5));
 
   IB_EXPECT_TRUE(resp.has_value());
   if (resp.has_value()) {

@@ -79,10 +79,13 @@ private:
                              req.toolName, req.category, req.target)
               << std::flush;
 
-    // 异步读取 stdin, 不阻塞 io_context (经 StdinReader 独立线程)
+    // 异步读取 stdin
     auto &stdinReader =
         StdinReader::instance(co_await asio::this_coro::executor);
     auto lineOpt = co_await stdinReader.readLine();
+
+    std::cout << "┗━━━━━━ Permission Request ━━━━━━┛\n" << std::endl;
+
     if (!lineOpt.has_value()) {
       // 无输入流 (非交互环境/EOF), 默认拒绝
       co_return events::RespPermission{

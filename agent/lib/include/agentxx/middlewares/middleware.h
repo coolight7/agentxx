@@ -420,14 +420,7 @@ public:
   /// 的话元素大小是 固定为基类大小，插入子类时内存会被截断，导致后续异常
   std::vector<std::shared_ptr<BaseMiddlewareHandleInterface>> handles{};
 
-  /// <name, handle>
-  std::map<std::string, std::function<asio::awaitable<neograph::json>(
-                            const InterruptHandleArg &)>>
-      interruptHandles{};
-
-  MiddlewareContext() { registerInterruptHandles(); }
-
-  void registerInterruptHandles();
+  MiddlewareContext() {}
 
   std::optional<std::string> getShareStoreItemValue(std::string_view thread_id,
                                                     const int id) {
@@ -513,10 +506,6 @@ public:
       modify(std::any_cast<T &>((it->second)));
     }
   }
-
-  asio::awaitable<std::optional<neograph::json>>
-  execInterruptHandle(std::string_view name,
-                      const agentxx::middleware::InterruptHandleArg &arg);
 };
 
 class SummarizationToolHandle {

@@ -518,7 +518,7 @@ public:
 
   using InterruptCallback = std::function<asio::awaitable<void>(
       const std::string &interruptNode, const std::string &interruptValue,
-      const std::string &interruptHandleName, bool interruptHandleFound)>;
+      const std::string &interruptHandleName)>;
 
   asio::awaitable<ConversationTurnResult> runConversationTurnAsync(
       const std::string &threadId, const std::string &userInput,
@@ -577,20 +577,15 @@ public:
         size_t argIndex = 0;
         for (const auto &interruptArg : interruptArgs) {
           ++argIndex;
-          auto handleIt =
-              agentContext->middlewareHandleContext->interruptHandles.find(
-                  interruptArg.name);
-          auto interruptHandleFound =
-              (handleIt !=
-               agentContext->middlewareHandleContext->interruptHandles.end());
           if (interruptCallback) {
             co_await interruptCallback(interruptNode, interruptValue,
-                                       interruptArg.name, interruptHandleFound);
+                                       interruptArg.name);
           }
 
           std::optional<neograph::json> interruptResult;
           {
-            if (interruptArg.name == "subagent" && agentContext->bus) {
+            assert(nullptr != agentContext->bus);
+            if (interruptArg.name == "subagent") {
               // subagent 委派: 经总线派发给 SubagentSupervisor
               // - 父 agent 已 checkpoint 暂停, supervisor 运行 subagent
               // - 结果注入 interruptResult, resume 后父 graph 继续
@@ -614,8 +609,7 @@ public:
               if (resp.has_value()) {
                 interruptResult = neograph::json{resp->content};
               }
-            } else if (interruptArg.name == "subagent_batch" &&
-                       agentContext->bus) {
+            } else if (interruptArg.name == "subagent_batch") {
               // 批量 subagent 委派: 并发运行多个 subagent
               // - interruptArg.arg 应为
               // {"tasks":[{subagent,system_prompt,message},...]}
@@ -654,32 +648,24 @@ public:
                 }
               }
             } else {
-              // HIL 中断: 优先经总线请求 InterruptHandler
-              // - 无 handler 注册时返回 nullopt, 回退到 execInterruptHandle
-              //   保持向后兼容 (MiddlewareContext 默认注册了 stdin handler)
-              if (agentContext->bus) {
-                auto resp = co_await agentContext->bus->request<
-                    events::ReqInterrupt, events::RespInterrupt>(
-                    events::Topic::Interrupt,
-                    events::ReqInterrupt{
-                        .agentName = agentContext->agentConfig
-                                         ? agentContext->agentConfig->agentName
-                                         : std::string{},
-                        .threadId = threadId,
-                        .interruptNode = interruptNode,
-                        .handleName = interruptArg.name,
-                        .interruptArgsJson = interruptArg.toJson().dump(),
-                        .resultId = interruptArg.resultId,
-                    });
-                if (resp.has_value() && resp->handled) {
-                  interruptResult = neograph::json::parse(resp->resultJson);
-                }
-              }
-              if (!interruptResult.has_value()) {
-                // 回退: 直接调用栈内 interrupt handle (兼容旧路径)
-                interruptResult =
-                    co_await agentContext->middlewareHandleContext
-                        ->execInterruptHandle(interruptArg.name, interruptArg);
+              // HIL 中断: 经总线请求 InterruptHandler
+              auto resp =
+                  co_await agentContext->bus
+                      ->request<events::ReqInterrupt, events::RespInterrupt>(
+                          events::Topic::Interrupt,
+                          events::ReqInterrupt{
+                              .agentName =
+                                  agentContext->agentConfig
+                                      ? agentContext->agentConfig->agentName
+                                      : std::string{},
+                              .threadId = threadId,
+                              .interruptNode = interruptNode,
+                              .handleName = interruptArg.name,
+                              .interruptArgsJson = interruptArg.toJson().dump(),
+                              .resultId = interruptArg.resultId,
+                          });
+              if (resp.has_value() && resp->handled) {
+                interruptResult = neograph::json::parse(resp->resultJson);
               }
             }
           }
@@ -753,8 +739,7 @@ public:
     };
     const auto cliInterruptCallback =
         [](const std::string &interruptNode, const std::string &interruptValue,
-           const std::string &interruptHandleName,
-           bool interruptHandleFound) -> asio::awaitable<void> {
+           const std::string &interruptHandleName) -> asio::awaitable<void> {
       XX_OUT(R"_(
 ┏━━━━━━ Interrupted ━━━━━━┓
 ┣━ Interrupted at: {}
@@ -764,11 +749,7 @@ public:
 )_",
              interruptNode, interruptValue,
              (false == interruptHandleName.empty())
-                 ? interruptHandleFound
-                       ? fmt::format("┣━ Interrupt Handle: {}",
-                                     interruptHandleName)
-                       : fmt::format("┣━ Interrupt Handle Not Found for: {}",
-                                     interruptHandleName)
+                 ? fmt::format("┣━ Interrupt Handle: {}", interruptHandleName)
                  : "┣━ Unknown InterruptHandleArg");
       co_return;
     };
