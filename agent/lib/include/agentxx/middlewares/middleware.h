@@ -397,6 +397,10 @@ public:
       "xx_ModelCallWrap_tempLLMMessage"};
   inline static const std::string graphDataKey_LLMTokenUsage{
       "xx_ModelCallWrap_LLMTokenUsage"};
+  /// 当前 toolcall 执行期间的 GraphState 指针, 供 tool 经
+  /// agentContext->middlewareHandleContext 取用 (如 subagent 中断)
+  inline static const std::string graphDataKey_currentState{
+      "xx_ToolcallWrap_currentState"};
 
   /// <thread_id, <id, value>>
   /// - 存储变量内容，留出 id 到 上下文中，llm 需要时可以通过

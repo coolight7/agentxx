@@ -504,7 +504,7 @@ public:
             {"bytes_read_len", bytesReadLen},
             {
                 "base64_data",
-                agentxx::util::base64Encode(readRange.data(), readRange.size()),
+                agentxx::util::base64Encode(readRange),
             },
         }
             .dump();
@@ -532,7 +532,7 @@ public:
           {"bytes_read_len", bytesReadLen},
           {
               "base64_data",
-              agentxx::util::base64Encode(readRange.data(), readRange.size()),
+              agentxx::util::base64Encode(readRange),
           },
       }
           .dump();
@@ -579,7 +579,7 @@ public:
                           ec.message())};
         }
 
-        std::vector<char> result{};
+        std::string result;
         result.resize(bytesRead);
         stream.read(result.data(), bytesRead);
         std::streamsize realBytesRead = stream.gcount();
@@ -587,8 +587,7 @@ public:
         stream.close();
         co_return neograph::json{
             {"bytes_read_len", realBytesRead},
-            {"base64_data",
-             agentxx::util::base64Encode(result.data(), result.size())},
+            {"base64_data", agentxx::util::base64Encode(result)},
         }
             .dump();
       }
@@ -600,8 +599,7 @@ public:
       stream.close();
       co_return neograph::json{
           {"bytes_read_len", bytesReadLen},
-          {"base64_data",
-           agentxx::util::base64Encode(result.data(), result.size())},
+          {"base64_data", agentxx::util::base64Encode(result)},
       }
           .dump();
     }

@@ -190,6 +190,14 @@ public:
               agentxx::middleware::BaseMiddlewareHandleInterface>> &handles,
           neograph::graph::NodeInput &in,
           neograph::graph::NodeOutput &out) override {
+    auto agentCtxPtr = agentContext.lock();
+    // 暴露当前 GraphState 指针供 tool (如 subagent_switch) 使用中断机制
+    agentCtxPtr->middlewareHandleContext
+        ->setGraphDataItemValue<neograph::graph::GraphState *>(
+            in.ctx.thread_id,
+            agentxx::middleware::MiddlewareContext::graphDataKey_currentState,
+            &in.state);
+
     auto toolcallsCache = std::map<std::string, std::string>{};
     {
       auto toolcallsCacheJson =
@@ -276,9 +284,12 @@ public:
           //         });
 
           auto args = neograph::json::parse(tc.arguments);
-          if (args.is_object() && args["thread_id"].is_null()) {
+          if (args.is_object()) {
             // append arg `thread_id`
             args["thread_id"] = in.ctx.thread_id;
+            // - 注入 tool_call_id 供 tool 使用 (如 subagent_switch 的中断
+            // resultId)
+            args["tool_call_id"] = tc.id;
           }
           tool_msg.content = co_await execTool(*it, args);
         } catch (const neograph::graph::NodeInterrupt &e) {
@@ -317,6 +328,12 @@ public:
     }
 
     out.writes.push_back(neograph::graph::ChannelWrite{"messages", results});
+    {
+      // 清理 GraphState 指针
+      agentCtxPtr->middlewareHandleContext->removeGraphDataItem(
+          in.ctx.thread_id,
+          agentxx::middleware::MiddlewareContext::graphDataKey_currentState);
+    }
     co_return;
   }
 

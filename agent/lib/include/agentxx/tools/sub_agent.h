@@ -190,8 +190,10 @@ public:
 
   asio::awaitable<std::string>
   execute_async(const neograph::json &arguments) override {
-    // 这里无法修改跳转到指定节点，因此只接收 llm 节点决定启用哪个 subagent
-    // 的参数，转由 [SubAgentMiddlewareHandle::onToolcallEndFunc] 处理
+    // 不直接运行 subgraph, 而是通过 NodeInterrupt 暂停父 agent
+    // - 首次调用: 抛出 subagent 中断, 父 graph checkpoint 暂停
+    // - Session 捕获中断后经总线派发给 SubagentSupervisor 运行 subagent
+    // - 结果注入 interruptResult channel, 父 graph resume 后此函数返回结果
     auto subagentName = arguments.value("subagent", std::string{});
     if (subagentName.empty()) {
       co_return R"({"error":"Arg `subagent` is empty"})";
@@ -200,6 +202,7 @@ public:
     if (message.empty()) {
       co_return R"({"error":"Arg `message` is empty"})";
     }
+    auto system_prompt = arguments.value("system_prompt", std::string{});
 
     auto subagentIt = subAgentList.find(subagentName);
     if (subagentIt == subAgentList.end() || nullptr == subagentIt->second) {
@@ -217,62 +220,62 @@ public:
           subagentNames.str());
     }
 
-    auto subagent = subagentIt->second;
-    assert(nullptr != subagent->getSubgraph());
-
-    std::string system_prompt = subagent->systemPrompt;
-    if (system_prompt.empty()) {
-      system_prompt = arguments.value(
-          "system_prompt", std::string{"你是一个专门处理用户请求的辅助助手."});
+    // 获取当前 GraphState (由 ToolcallWrapNode::baseRun 注入 graphData)
+    auto ctxPtr = agentContext.lock();
+    if (!ctxPtr || !ctxPtr->middlewareHandleContext) {
+      co_return R"({"error":"AgentContext not available"})";
+    }
+    auto thread_id = arguments.value("thread_id", std::string{});
+    neograph::graph::GraphState *statePtr = nullptr;
+    {
+      auto &graphData = ctxPtr->middlewareHandleContext->graphData;
+      auto it = graphData.find(thread_id);
+      if (it != graphData.end()) {
+        auto itemIt = it->second.find(
+            agentxx::middleware::MiddlewareContext::graphDataKey_currentState);
+        if (itemIt != it->second.end()) {
+          statePtr =
+              std::any_cast<neograph::graph::GraphState *>(itemIt->second);
+        }
+      }
+    }
+    if (nullptr == statePtr) {
+      co_return R"({"error":"GraphState not available for subagent interrupt"})";
     }
 
-    try {
-      neograph::graph::RunConfig cfg{
-          .thread_id = fmt::format("session_subagent_{}", subagentName),
-          .input = {{
-              "messages",
-              neograph::json::array({
-                  {
-                      {"role", "system"},
-                      {"content", system_prompt},
+    // 构造中断参数并触发/恢复
+    // - 首次: getInterruptResult 抛出 NodeInterrupt, 父 graph 暂停
+    // - 恢复: getInterruptResult 返回 interruptResult channel 的整个 map
+    //   {resultId: resultValue}, 需按自身 resultId 提取
+    auto resultId = arguments.value("tool_call_id", std::string{});
+    auto result = agentxx::middleware::InterruptHandleArg::getInterruptResult(
+        *statePtr, [&]() {
+          return agentxx::middleware::InterruptHandleArg{
+              .name = "subagent",
+              .arg =
+                  neograph::json{
+                      {"subagent", subagentName},
+                      {"system_prompt", system_prompt},
+                      {"message", message},
                   },
-                  {
-                      {"role", "user"},
-                      {"content", message},
-                  },
-              }),
-          }},
-          .resume_if_exists = false,
-      };
+              .resultId = resultId,
+          };
+        });
 
-      std::ostringstream oss;
-      XX_LOGD("    ## Subagent - {}", subagent->name);
-      co_await subagent->getSubgraph()->run_stream_async(
-          cfg, [&oss](const neograph::graph::GraphEvent &event) {
-            switch (event.type) {
-            case neograph::graph::GraphEvent::Type::NODE_START:
-            case neograph::graph::GraphEvent::Type::NODE_END:
-              break;
-            case neograph::graph::GraphEvent::Type::LLM_TOKEN: {
-              const auto token = event.data.get<std::string>();
-              oss << token;
-#if XX_IS_DEBUG_D
-              std::cout << token << std::flush;
-#endif
-            } break;
-            case neograph::graph::GraphEvent::Type::CHANNEL_WRITE:
-            case neograph::graph::GraphEvent::Type::INTERRUPT:
-            case neograph::graph::GraphEvent::Type::ERROR:
-              break;
-            }
-          });
-      auto result = oss.str();
-      co_await subagent->onSubagentEnd(result);
-      co_return result;
-    } catch (const std::exception &e) {
-      co_return fmt::format(R"({{"error": "Sub-agent Response failed: {}"}})",
-                            e.what());
+    // interruptResult channel 存储的是 {resultId: value} map (见 Session
+    // resumeValues 注入); 按自身 resultId 提取单个结果
+    if (result.is_object() && !resultId.empty() && result.contains(resultId)) {
+      auto val = result[resultId];
+      if (val.is_string()) {
+        co_return val.get<std::string>();
+      }
+      co_return val.dump();
     }
+    // result 本身是单个值 (非 map)
+    if (result.is_string()) {
+      co_return result.get<std::string>();
+    }
+    co_return result.dump();
   }
 };
 
