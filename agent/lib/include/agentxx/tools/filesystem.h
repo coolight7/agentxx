@@ -139,19 +139,27 @@ public:
 
     auto result = neograph::json::array();
     auto onAppendItem = [&](const std::filesystem::directory_entry &entity) {
-      auto json = neograph::json{
-          {"path", entity.path().generic_string()},
-          {"type", (entity.is_directory()      ? "dir"
-                    : entity.is_regular_file() ? "file"
-                    : entity.is_symlink()      ? "symlink"
-                                               : "other")},
-          {"last_write_time",
-           entity.last_write_time().time_since_epoch().count()},
-      };
-      if (entity.is_regular_file()) {
-        json["size"] = size_t(entity.file_size());
+      try {
+        auto json = neograph::json{
+            {"path", entity.path().generic_string()},
+            {"type", (entity.is_directory()      ? "dir"
+                      : entity.is_regular_file() ? "file"
+                      : entity.is_symlink()      ? "symlink"
+                                                 : "other")},
+            {"last_write_time",
+             static_cast<size_t>(
+                 entity.last_write_time().time_since_epoch().count())},
+        };
+        if (entity.is_regular_file()) {
+          json["size"] = static_cast<size_t>(entity.file_size());
+        }
+        result.push_back(json);
+      } catch (const std::exception &e) {
+        result.push_back(neograph::json{
+            {"path", entity.path().generic_string()},
+            {"error", e.what()},
+        });
       }
-      result.push_back(json);
     };
 
     if (false == std::filesystem::exists(targetPath)) {
@@ -270,9 +278,9 @@ public:
 
       if (text_line_offset >= 0 || text_line_limit > 0) {
         const auto offset =
-            (text_line_offset >= 0) ? size_t(text_line_offset) : 0;
+            (text_line_offset >= 0) ? static_cast<size_t>(text_line_offset) : 0;
         const auto limit = (text_line_limit > 0)
-                               ? size_t(text_line_limit)
+                               ? static_cast<size_t>(text_line_limit)
                                : std::numeric_limits<size_t>::max();
         std::stringstream result{};
         size_t lineNum = 0;
@@ -343,9 +351,9 @@ public:
       if (text_line_offset >= 0 || text_line_limit > 0) {
         // 读取部分文件
         const auto offset =
-            (text_line_offset >= 0) ? size_t(text_line_offset) : 0;
+            (text_line_offset >= 0) ? static_cast<size_t>(text_line_offset) : 0;
         const auto limit = (text_line_limit > 0)
-                               ? size_t(text_line_limit)
+                               ? static_cast<size_t>(text_line_limit)
                                : std::numeric_limits<size_t>::max();
         std::stringstream result{};
         size_t lineNum = 0;
@@ -473,9 +481,10 @@ public:
         }
 
         // 读取部分文件
-        const size_t offset = (byte_offset >= 0) ? size_t(byte_offset) : 0;
+        const size_t offset =
+            (byte_offset >= 0) ? static_cast<size_t>(byte_offset) : 0;
         const size_t limit = (byte_limit >= 0)
-                                 ? size_t(byte_limit)
+                                 ? static_cast<size_t>(byte_limit)
                                  : std::numeric_limits<size_t>::max();
 
         auto fileSize = stream.size();
@@ -551,9 +560,10 @@ public:
 
       if (byte_offset >= 0 || byte_limit >= 0) {
         // 读取部分文件
-        const size_t offset = (byte_offset >= 0) ? size_t(byte_offset) : 0;
+        const size_t offset =
+            (byte_offset >= 0) ? static_cast<size_t>(byte_offset) : 0;
         const size_t limit = (byte_limit >= 0)
-                                 ? size_t(byte_limit)
+                                 ? static_cast<size_t>(byte_limit)
                                  : std::numeric_limits<size_t>::max();
 
         // 计算实际需要读取的字节数

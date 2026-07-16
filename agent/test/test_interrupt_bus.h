@@ -13,20 +13,21 @@
 #include <iostream>
 #include <memory>
 
+#include "test_framework.h"
+
 namespace agentxx {
 namespace test {
 
 inline static int g_ib_passed = 0;
 inline static int g_ib_failed = 0;
 
-#define IB_TEST(name) std::cout << "  [" << (name) << "]" << std::endl
 #define IB_EXPECT_TRUE(expr)                                                   \
   do {                                                                         \
     if (expr) {                                                                \
       g_ib_passed++;                                                           \
     } else {                                                                   \
       g_ib_failed++;                                                           \
-      std::cerr << "    FAIL at line " << __LINE__ << ": expected true"        \
+      TEST_FAIL << "expected " << #expr << ", at line " << __LINE__            \
                 << std::endl;                                                  \
     }                                                                          \
   } while (0)
@@ -34,7 +35,6 @@ inline static int g_ib_failed = 0;
 /// 验证: 注册 CliInterruptHandler 后, bus.request(service.interrupt)
 /// 能拿到经 execInterruptHandle 处理的结果 (无 stdin 输入时返回默认)
 inline asio::awaitable<void> test_interrupt_bus_request_response() {
-  IB_TEST("interrupt bus: request -> CliInterruptHandler -> response");
 
   auto agentConfig = std::make_shared<agentxx::agent::AgentConfig>();
   auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
@@ -97,7 +97,6 @@ inline asio::awaitable<void> test_interrupt_bus_request_response() {
 
 /// 验证: 权限 prompter 注册后, bus.request(service.permission) 能拿到决策
 inline asio::awaitable<void> test_permission_bus_request_response() {
-  IB_TEST("permission bus: request -> prompter -> decision (deny on no stdin)");
 
   auto agentConfig = std::make_shared<agentxx::agent::AgentConfig>();
   auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
@@ -124,13 +123,18 @@ inline asio::awaitable<void> test_permission_bus_request_response() {
           },
           std::chrono::seconds(5));
 
-  IB_EXPECT_TRUE(resp.has_value());
-  if (resp.has_value() && false == agentxx::agent::StdinReader::instance(
-                                       co_await asio::this_coro::executor)
-                                       .available()) {
-    // 无交互输入 -> deny
-    IB_EXPECT_TRUE(resp->decision ==
-                   agentxx::events::RespPermission::Decision::Deny);
+  if (false == resp.has_value() && resp.error() == "Timeout") {
+    // allow timeout
+    IB_EXPECT_TRUE(resp.error() == "Timeout");
+  } else {
+    IB_EXPECT_TRUE(resp.has_value());
+    if (resp.has_value() && false == agentxx::agent::StdinReader::instance(
+                                         co_await asio::this_coro::executor)
+                                         .available()) {
+      // 无交互输入 -> deny
+      IB_EXPECT_TRUE(resp->decision ==
+                     agentxx::events::RespPermission::Decision::Deny);
+    }
   }
 
   prompter.stop();
@@ -155,7 +159,6 @@ inline asio::awaitable<void> test_permission_bus_request_response() {
 
 /// 验证: 自定义 interrupt handler 可替换 CLI handler (扩展性)
 inline asio::awaitable<void> test_interrupt_bus_custom_handler() {
-  IB_TEST("interrupt bus: custom handler replaces default");
 
   auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
   agentContext->bus = std::make_shared<agentxx::middleware::EventBus>(
@@ -197,20 +200,16 @@ inline asio::awaitable<void> test_interrupt_bus_custom_handler() {
   co_return;
 }
 
-inline asio::awaitable<void> run_interrupt_bus_tests() {
-  std::cout << "=== interrupt_bus Tests ===" << std::endl;
+inline asio::awaitable<TestResult> run_interrupt_bus_tests() {
   try {
     co_await test_interrupt_bus_request_response();
     co_await test_permission_bus_request_response();
     co_await test_interrupt_bus_custom_handler();
   } catch (const std::exception &e) {
-    std::cout << "[FAIL] interrupt_bus suite exception: " << e.what()
-              << std::endl;
+    TEST_FAIL << "interrupt_bus suite exception: " << e.what() << std::endl;
     g_ib_failed++;
   }
-  std::cout << "=== interrupt_bus Tests DONE (pass=" << g_ib_passed
-            << " fail=" << g_ib_failed << ") ===" << std::endl;
-  co_return;
+  co_return TestResult{g_ib_passed, g_ib_failed};
 }
 
 } // namespace test

@@ -363,37 +363,43 @@ private:
       result = std::unexpected{std::string{"unknown error"}};
       try {
         auto parsed = parseUrl(currentUrl);
-        if (!parsed)
+        if (!parsed) {
           throw std::runtime_error{"invalid url: " + currentUrl};
+        }
         bool isHttps = parsed->scheme == "https";
         bool defaultPort = (isHttps && parsed->port == 443) ||
                            (!isHttps && parsed->port == 80);
         std::string hostHeader = parsed->host;
-        if (!defaultPort)
+        if (!defaultPort) {
           hostHeader += ":" + std::to_string(parsed->port);
+        }
 
         http::request<http::string_body> req{
             http::string_to_verb(currentMethod), parsed->path, 11};
         bool hasHost = extraHeaders.contains("host");
-        if (!hasHost)
+        if (!hasHost) {
           req.set(http::field::host, hostHeader);
+        }
         req.set(http::field::user_agent,
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
                 "Chrome/119.0.6045.160 Safari/537.36");
         req.set(http::field::accept, "*/*");
         req.set(http::field::accept_encoding, "identity");
-        if (!keepAlive)
+        if (!keepAlive) {
           req.set(http::field::connection, "close");
+        }
 
         for (const auto &[k, v] : extraHeaders.data) {
-          if (isIgnoreCaseEqual(k, "host"))
+          if (isIgnoreCaseEqual(k, "host")) {
             continue;
+          }
           req.set(k, stringVectorJoin(v, "; "));
         }
         if (!currentBody.empty()) {
-          if (!currentContentType.empty())
+          if (!currentContentType.empty()) {
             req.set(http::field::content_type, currentContentType);
+          }
           req.body() = currentBody;
           req.prepare_payload();
         }
@@ -406,9 +412,10 @@ private:
           bool verify = sslVerifyEnabled_.load(std::memory_order_relaxed);
           auto &sslCtx = sharedSslCtx(verify);
           asio::ssl::stream<tcp::socket> stream(executor, sslCtx);
-          if (!parsed->host.empty())
+          if (!parsed->host.empty()) {
             ::SSL_set_tlsext_host_name(stream.native_handle(),
                                        parsed->host.c_str());
+          }
           co_await asio::async_connect(
               stream.lowest_layer(), endpoints,
               asio::cancel_after(rem(), asio::use_awaitable));
@@ -434,24 +441,29 @@ private:
               co_await exchange(stream, req, totalDeadline, maxResponseBody);
         }
       } catch (const boost::system::system_error &e) {
-        if (e.code() == asio::error::operation_aborted)
+        if (e.code() == asio::error::operation_aborted) {
           result = std::unexpected{std::string{"timeout"}};
-        else
+        } else {
           result = std::unexpected{std::string{e.what()}};
+        }
       } catch (const std::exception &e) {
         result = std::unexpected{std::string{e.what()}};
       }
 
-      if (!result.has_value())
+      if (!result.has_value()) {
         break;
-      if (redirectCount >= followRedirect)
+      }
+      if (redirectCount >= followRedirect) {
         break;
+      }
       auto &resp = result.value();
-      if (!isRedirectStatus(resp.status))
+      if (!isRedirectStatus(resp.status)) {
         break;
+      }
       auto location = resp.findHeader("location");
-      if (location.empty())
+      if (location.empty()) {
         break;
+      }
 
       currentUrl = resolveRedirectUrl(currentUrl, location);
       if (redirectChangesToGet(resp.status)) {

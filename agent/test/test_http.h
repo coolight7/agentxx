@@ -7,19 +7,18 @@
 #include <asio/detached.hpp>
 #include <asio/io_context.hpp>
 #include <asio/steady_timer.hpp>
-#include <cassert>
 #include <chrono>
 #include <iostream>
 #include <string>
 #include <string_view>
 #include <thread>
 
+#include "test_framework.h"
+
 using namespace agentxx::util;
 
 inline static int g_http_passed = 0;
 inline static int g_http_failed = 0;
-
-#define HTEST(name) std::cout << "  [" << (name) << "]" << std::endl;
 
 #define HEXPECT_EQ(expr, expected)                                             \
   do {                                                                         \
@@ -29,8 +28,8 @@ inline static int g_http_failed = 0;
       g_http_passed++;                                                         \
     } else {                                                                   \
       g_http_failed++;                                                         \
-      std::cerr << "    FAIL at line " << __LINE__ << ": expected "            \
-                << (_expected) << ", got " << (_result) << std::endl;          \
+      TEST_FAIL << "expected " << (_expected) << ", got " << (_result)         \
+                << " at line " << __LINE__ << std::endl;                       \
     }                                                                          \
   } while (0)
 
@@ -40,8 +39,7 @@ inline static int g_http_failed = 0;
       g_http_passed++;                                                         \
     } else {                                                                   \
       g_http_failed++;                                                         \
-      std::cerr << "    FAIL at line " << __LINE__ << ": expected true"        \
-                << std::endl;                                                  \
+      TEST_FAIL << "expected true at line " << __LINE__ << std::endl;          \
     }                                                                          \
   } while (0)
 
@@ -51,8 +49,7 @@ inline static int g_http_failed = 0;
       g_http_passed++;                                                         \
     } else {                                                                   \
       g_http_failed++;                                                         \
-      std::cerr << "    FAIL at line " << __LINE__ << ": expected false"       \
-                << std::endl;                                                  \
+      TEST_FAIL << "expected false at line " << __LINE__ << std::endl;         \
     }                                                                          \
   } while (0)
 
@@ -65,11 +62,10 @@ void expect_has_value_impl(T &&expr, const char *file, int line) {
     ++g_http_failed;
     // 检测是否存在 error() 成员
     if constexpr (requires { tmp.error(); }) {
-      std::cerr << "    FAIL at " << file << ":" << line
-                << ": expected has_value | " << tmp.error() << std::endl;
+      TEST_FAIL << "expected has_value at " << file << ":" << line << " | "
+                << tmp.error() << std::endl;
     } else {
-      std::cerr << "    FAIL at " << file << ":" << line
-                << ": expected has_value" << std::endl;
+      TEST_FAIL << "expected has_value at " << file << ":" << line << std::endl;
     }
   }
 }
@@ -82,8 +78,7 @@ void expect_has_value_impl(T &&expr, const char *file, int line) {
       g_http_passed++;                                                         \
     } else {                                                                   \
       g_http_failed++;                                                         \
-      std::cerr << "    FAIL at line " << __LINE__ << ": expected nullopt"     \
-                << std::endl;                                                  \
+      TEST_FAIL << "expected nullopt at line " << __LINE__ << std::endl;       \
     }                                                                          \
   } while (0)
 
@@ -91,9 +86,7 @@ namespace agentxx {
 namespace test {
 
 inline void test_http_client_unit() {
-  std::cout << "======= Test: HTTP Client Unit =======" << std::endl;
 
-  HTEST("HttpResponse::isSuccess");
   {
     HttpResponse resp;
     resp.status = 200;
@@ -112,7 +105,6 @@ inline void test_http_client_unit() {
     HEXPECT_FALSE(resp.isSuccess());
   }
 
-  HTEST("HttpResponse::contentType");
   {
     HttpResponse resp;
 
@@ -133,7 +125,6 @@ inline void test_http_client_unit() {
     HEXPECT_EQ(resp.contentType(), "application/octet-stream");
   }
 
-  HTEST("HttpResponse::isJsonContentType");
   {
     HEXPECT_TRUE(HttpResponse::isJsonContentType("application/json"));
     HEXPECT_TRUE(HttpResponse::isJsonContentType("application/ld+json"));
@@ -145,7 +136,6 @@ inline void test_http_client_unit() {
     HEXPECT_FALSE(HttpResponse::isJsonContentType("application/octet-stream"));
   }
 
-  HTEST("HttpResponse::isTextContentType");
   {
     HEXPECT_TRUE(HttpResponse::isTextContentType(""));
     HEXPECT_TRUE(HttpResponse::isTextContentType("text/plain"));
@@ -163,7 +153,6 @@ inline void test_http_client_unit() {
     HEXPECT_FALSE(HttpResponse::isTextContentType("audio/mpeg"));
   }
 
-  HTEST("HttpResponse::bodyJson");
   {
     HttpResponse resp;
 
@@ -199,7 +188,6 @@ inline void test_http_client_unit() {
     HEXPECT_NULLOPT(jsonResult5);
   }
 
-  HTEST("HttpResponse::bodyText");
   {
     HttpResponse resp;
 
@@ -235,7 +223,6 @@ inline void test_http_client_unit() {
     HEXPECT_NULLOPT(textResult5);
   }
 
-  HTEST("HttpResponse::findHeader");
   {
     HttpResponse resp;
     resp.headers.set("X-Custom", "value123");
@@ -247,7 +234,6 @@ inline void test_http_client_unit() {
     HEXPECT_EQ(resp.findHeader("Non-Existent"), "");
   }
 
-  HTEST("HttpClient::isValidUrl");
   {
     HEXPECT_FALSE(HttpClient::isValidUrl(""));
     HEXPECT_FALSE(HttpClient::isValidUrl("ftp://example.com"));
@@ -262,7 +248,6 @@ inline void test_http_client_unit() {
     HEXPECT_FALSE(HttpClient::isValidUrl("https://"));
   }
 
-  HTEST("HttpClient::splitUrl");
   {
     auto [base, path] = HttpClient::splitUrl("http://example.com/path");
     HEXPECT_EQ(base, "http://example.com");
@@ -285,7 +270,6 @@ inline void test_http_client_unit() {
     HEXPECT_EQ(path5, "/");
   }
 
-  HTEST("HttpClient::urlEncode");
   {
     HEXPECT_EQ(HttpClient::urlEncode("hello"), "hello");
     HEXPECT_EQ(HttpClient::urlEncode("hello world"), "hello+world");
@@ -301,7 +285,6 @@ inline void test_http_client_unit() {
     HEXPECT_EQ(HttpClient::urlEncode("\n\t"), "%0a%09");
   }
 
-  HTEST("HttpClient::respIsSucc");
   {
     HttpResponse resp;
     resp.status = 200;
@@ -312,7 +295,6 @@ inline void test_http_client_unit() {
     HEXPECT_FALSE(HttpClient::respIsSucc(resp));
   }
 
-  HTEST("HttpClient::setSslVerify / getSslVerify");
   {
     bool original = HttpClient::getSslVerify();
     HEXPECT_TRUE(original); // default should be true (verify enabled)
@@ -324,7 +306,6 @@ inline void test_http_client_unit() {
     HttpClient::setSslVerify(original);
   }
 
-  HTEST("HttpClient::resolveRedirectUrl protocol-relative");
   {
     // Protocol-relative URL: //host/path -> scheme://host/path
     HEXPECT_EQ(HttpClient::resolveRedirectUrl("https://example.com/a",
@@ -334,9 +315,6 @@ inline void test_http_client_unit() {
                                               "//other.com:8080/c"),
                "http://other.com:8080/c");
   }
-
-  std::cout << "======= HTTP Client Unit Test Done: " << g_http_passed
-            << " passed, " << g_http_failed << " failed =======" << std::endl;
 }
 
 inline asio::awaitable<void> test_http_client() { co_return; }
@@ -346,9 +324,7 @@ inline asio::awaitable<void> test_http_client() { co_return; }
 // -----------------------------------------------------------------------
 
 inline void test_http_server_unit() {
-  std::cout << "======= Test: HTTP Server Unit =======" << std::endl;
 
-  HTEST("httpMethodIndex");
   {
     HEXPECT_EQ(httpMethodIndex(boost::beast::http::verb::get), 0);
     HEXPECT_EQ(httpMethodIndex(boost::beast::http::verb::head), 1);
@@ -362,7 +338,6 @@ inline void test_http_server_unit() {
     HEXPECT_EQ(httpMethodIndex(static_cast<boost::beast::http::verb>(999)), -1);
   }
 
-  HTEST("requestPath");
   {
     HEXPECT_EQ(requestPath("/"), "/");
     HEXPECT_EQ(requestPath("/path"), "/path");
@@ -372,7 +347,6 @@ inline void test_http_server_unit() {
     HEXPECT_EQ(requestPath("?alone"), "");
   }
 
-  HTEST("isRedirectStatus");
   {
     HEXPECT_TRUE(HttpClient::isRedirectStatus(301));
     HEXPECT_TRUE(HttpClient::isRedirectStatus(302));
@@ -385,7 +359,6 @@ inline void test_http_server_unit() {
     HEXPECT_FALSE(HttpClient::isRedirectStatus(0));
   }
 
-  HTEST("redirectChangesToGet");
   {
     HEXPECT_TRUE(HttpClient::redirectChangesToGet(301));
     HEXPECT_TRUE(HttpClient::redirectChangesToGet(302));
@@ -395,7 +368,6 @@ inline void test_http_server_unit() {
     HEXPECT_FALSE(HttpClient::redirectChangesToGet(200));
   }
 
-  HTEST("resolveRedirectUrl");
   {
     // absolute URL
     HEXPECT_EQ(HttpClient::resolveRedirectUrl("http://example.com/a",
@@ -414,14 +386,9 @@ inline void test_http_server_unit() {
     HEXPECT_EQ(HttpClient::resolveRedirectUrl("http://example.com/a/b/c", "/"),
                "http://example.com/");
   }
-
-  std::cout << "======= HTTP Server Unit Test Done: " << g_http_passed
-            << " passed, " << g_http_failed << " failed =======" << std::endl;
 }
 
 inline asio::awaitable<void> test_http_client_beast_server() {
-  std::cout << "======= Test: HTTP Client + Beast Server Integration ======="
-            << std::endl;
 
   using Server = HttpServer;
   using namespace boost::beast::http;
@@ -622,7 +589,7 @@ inline asio::awaitable<void> test_http_client_beast_server() {
   }
 
   if (port == 0) {
-    std::cerr << "    FAIL: Server failed to start" << std::endl;
+    TEST_FAIL << "Server failed to start" << std::endl;
     g_http_failed++;
     server.stop();
     serverThread.join();
@@ -650,7 +617,6 @@ inline asio::awaitable<void> test_http_client_beast_server() {
   // Tests
   // -----------------------------------------------------------------------
 
-  HTEST("getAsync basic - bool.run | ssl.verify");
   {
     HttpClient::setSslVerify(false);
     auto resp = co_await HttpClient::getAsync("https://blog.music.bool.run/");
@@ -661,7 +627,6 @@ inline asio::awaitable<void> test_http_client_beast_server() {
     }
   }
 
-  HTEST("getAsync basic – Beast server");
   {
     auto resp = co_await HttpClient::getAsync(baseUrl + "/hello");
     HEXPECT_HAS_VALUE(resp);
@@ -672,7 +637,6 @@ inline asio::awaitable<void> test_http_client_beast_server() {
     }
   }
 
-  HTEST("getAsync JSON – Beast server");
   {
     auto resp = co_await HttpClient::getAsync(baseUrl + "/json");
     HEXPECT_HAS_VALUE(resp);
@@ -685,7 +649,6 @@ inline asio::awaitable<void> test_http_client_beast_server() {
     }
   }
 
-  HTEST("getAsync empty response – Beast server");
   {
     auto resp = co_await HttpClient::getAsync(baseUrl + "/empty");
     HEXPECT_HAS_VALUE(resp);
@@ -695,7 +658,6 @@ inline asio::awaitable<void> test_http_client_beast_server() {
     }
   }
 
-  HTEST("getAsync 201 – Beast server");
   {
     auto resp = co_await HttpClient::getAsync(baseUrl + "/status/201");
     HEXPECT_HAS_VALUE(resp);
@@ -705,7 +667,6 @@ inline asio::awaitable<void> test_http_client_beast_server() {
     }
   }
 
-  HTEST("getAsync 500 – Beast server");
   {
     auto resp = co_await HttpClient::getAsync(baseUrl + "/status/500");
     HEXPECT_HAS_VALUE(resp);
@@ -715,7 +676,6 @@ inline asio::awaitable<void> test_http_client_beast_server() {
     }
   }
 
-  HTEST("postAsync – Beast server");
   {
     auto resp = co_await HttpClient::postAsync(baseUrl + "/echo", "body data",
                                                "text/plain");
@@ -726,7 +686,6 @@ inline asio::awaitable<void> test_http_client_beast_server() {
     }
   }
 
-  HTEST("postAsync JSON body – Beast server");
   {
     neograph::json j = {{"msg", "hi"}};
     auto resp = co_await HttpClient::postAsync(baseUrl + "/echo", j);
@@ -737,7 +696,6 @@ inline asio::awaitable<void> test_http_client_beast_server() {
     }
   }
 
-  HTEST("putAsync – Beast server");
   {
     auto resp = co_await HttpClient::putAsync(baseUrl + "/echo", "update");
     HEXPECT_HAS_VALUE(resp);
@@ -746,7 +704,6 @@ inline asio::awaitable<void> test_http_client_beast_server() {
     }
   }
 
-  HTEST("DELETE route – 405 for wrong method");
   {
     // /data only has a DELETE handler; GET should return 405
     auto resp = co_await HttpClient::getAsync(baseUrl + "/data");
@@ -756,7 +713,6 @@ inline asio::awaitable<void> test_http_client_beast_server() {
     }
   }
 
-  HTEST("Wildcard route – Beast server");
   {
     auto resp = co_await HttpClient::getAsync(baseUrl + "/wildcard/foo/bar");
     HEXPECT_HAS_VALUE(resp);
@@ -767,7 +723,6 @@ inline asio::awaitable<void> test_http_client_beast_server() {
     }
   }
 
-  HTEST("Not Found (404) – Beast server");
   {
     auto resp = co_await HttpClient::getAsync(baseUrl + "/nonexistent");
     HEXPECT_HAS_VALUE(resp);
@@ -777,7 +732,6 @@ inline asio::awaitable<void> test_http_client_beast_server() {
     }
   }
 
-  HTEST("Method Not Allowed (405) – Beast server");
   {
     // POST to a GET-only route
     auto resp = co_await HttpClient::postAsync(baseUrl + "/hello", "body",
@@ -789,7 +743,6 @@ inline asio::awaitable<void> test_http_client_beast_server() {
     }
   }
 
-  HTEST("Query string stripped for routing – Beast server");
   {
     auto resp = co_await HttpClient::getAsync(baseUrl + "/search?q=hello");
     HEXPECT_HAS_VALUE(resp);
@@ -800,17 +753,14 @@ inline asio::awaitable<void> test_http_client_beast_server() {
     }
   }
 
-  HTEST("getAsync timeout – Beast server");
   {
     auto resp = co_await HttpClient::getAsync(
         "http://192.0.2.1:9999/nonexistent", {}, std::chrono::milliseconds{50});
     HEXPECT_FALSE(resp.has_value());
   }
 
-  HTEST("Server stop and restart sanity");
   { HEXPECT_FALSE(server.isStopped()); }
 
-  HTEST("Redirect followRedirect=0 does not follow");
   {
     auto resp = co_await HttpClient::getAsync(baseUrl + "/redirect-me", {},
                                               std::chrono::seconds{10}, 0);
@@ -822,7 +772,6 @@ inline asio::awaitable<void> test_http_client_beast_server() {
     }
   }
 
-  HTEST("Redirect followRedirect=1 follows to final");
   {
     auto resp = co_await HttpClient::getAsync(baseUrl + "/redirect-me", {},
                                               std::chrono::seconds{10}, 1);
@@ -833,7 +782,6 @@ inline asio::awaitable<void> test_http_client_beast_server() {
     }
   }
 
-  HTEST("Redirect loop stops at max redirects");
   {
     auto resp = co_await HttpClient::getAsync(baseUrl + "/redirect-loop", {},
                                               std::chrono::seconds{10}, 3);
@@ -848,7 +796,6 @@ inline asio::awaitable<void> test_http_client_beast_server() {
   // New tests for production readiness improvements
   // -----------------------------------------------------------------------
 
-  HTEST("DELETE method with body – Beast server");
   {
     auto resp = co_await HttpClient::deleteAsync(baseUrl + "/echo");
     HEXPECT_HAS_VALUE(resp);
@@ -858,7 +805,6 @@ inline asio::awaitable<void> test_http_client_beast_server() {
     }
   }
 
-  HTEST("PATCH method – Beast server");
   {
     auto resp = co_await HttpClient::patchAsync(baseUrl + "/echo", "patchdata");
     HEXPECT_HAS_VALUE(resp);
@@ -868,7 +814,6 @@ inline asio::awaitable<void> test_http_client_beast_server() {
     }
   }
 
-  HTEST("Response Date header present – Beast server");
   {
     auto resp = co_await HttpClient::getAsync(baseUrl + "/hello");
     HEXPECT_HAS_VALUE(resp);
@@ -880,7 +825,6 @@ inline asio::awaitable<void> test_http_client_beast_server() {
     }
   }
 
-  HTEST("Response Server header present – Beast server");
   {
     auto resp = co_await HttpClient::getAsync(baseUrl + "/hello");
     HEXPECT_HAS_VALUE(resp);
@@ -890,7 +834,6 @@ inline asio::awaitable<void> test_http_client_beast_server() {
     }
   }
 
-  HTEST("Response body size limit (client-side)");
   {
     // Request a 100-byte body with a 50-byte limit → should fail
     auto resp = co_await HttpClient::getAsync(
@@ -899,7 +842,6 @@ inline asio::awaitable<void> test_http_client_beast_server() {
     HEXPECT_FALSE(resp.has_value());
   }
 
-  HTEST("Response body size limit not exceeded");
   {
     // Request a 100-byte body with a 200-byte limit → should succeed
     auto resp = co_await HttpClient::getAsync(
@@ -911,7 +853,6 @@ inline asio::awaitable<void> test_http_client_beast_server() {
     }
   }
 
-  HTEST("Server activeConnections tracking");
   {
     // Wait for pending connection cleanup (server-side coroutine teardown)
     size_t conn = 1;
@@ -924,7 +865,6 @@ inline asio::awaitable<void> test_http_client_beast_server() {
     HEXPECT_EQ(conn, (size_t)0);
   }
 
-  HTEST("fetchMarkdown returns error on non-2xx");
   {
     // fetchMarkdown should return error (not UB) for 404
     auto result = co_await HttpClient::fetchMarkdown(baseUrl + "/nonexistent",
@@ -932,7 +872,6 @@ inline asio::awaitable<void> test_http_client_beast_server() {
     HEXPECT_FALSE(result.has_value());
   }
 
-  HTEST("fetchMarkdown success on HTML");
   {
     // Register an HTML route for markdown conversion
     // Using /hello which returns "hello world" (text/plain)
@@ -944,17 +883,14 @@ inline asio::awaitable<void> test_http_client_beast_server() {
 
   server.stop();
   serverThread.join();
-
-  std::cout << "======= HTTP Client + Beast Server Integration Test Done: "
-            << g_http_passed << " passed, " << g_http_failed
-            << " failed =======" << std::endl;
 }
 
-inline asio::awaitable<void> run_http_client_tests() {
+inline asio::awaitable<TestResult> run_http_client_tests() {
   test_http_client_unit();
   test_http_server_unit();
   co_await test_http_client();
   co_await test_http_client_beast_server();
+  co_return TestResult{g_http_passed, g_http_failed};
 }
 
 } // namespace test

@@ -14,10 +14,10 @@
 #include <atomic>
 #include <chrono>
 #include <cstddef>
+#include <expected>
 #include <functional>
 #include <map>
 #include <memory>
-#include <optional>
 #include <string>
 #include <string_view>
 #include <typeinfo>
@@ -178,12 +178,12 @@ public:
   /// 发起请求并等待响应
   /// - timeout 到期返回 nullopt, 并清理 pending 槽
   /// - 同一 io_context 单线程运行, pending_/servers_ 无需加锁
-  asio::awaitable<std::optional<RespType>>
+  asio::awaitable<std::expected<RespType, std::string>>
   request(ReqType req,
           std::chrono::milliseconds timeout = std::chrono::seconds(30)) {
     if (servers_.empty()) {
-      XX_LOGE("RequestResponseStream `{}` request: no server registered", name);
-      co_return std::nullopt;
+      co_return std::unexpected{fmt::format(
+          "RequestResponseStream `{}` request: no server registered", name)};
     }
 
     auto correlationId = ++correlationSeq_;
@@ -246,11 +246,14 @@ public:
       co_await timer.async_wait(asio::use_awaitable);
     };
 
-    std::optional<RespType> out;
+    std::expected<RespType, std::string> out;
     try {
       auto result = co_await (waitResp() || waitTimeout());
       if (result.index() == 0) {
-        out = std::move(std::get<0>(std::move(result)));
+        out = std::expected<RespType, std::string>{
+            std::move(std::get<0>(std::move(result)))};
+      } else {
+        out = std::unexpected{"Timeout"};
       }
       // index 1 = monostate = 超时
     } catch (const std::exception &e) {
@@ -416,7 +419,7 @@ public:
 
   /// 请求-响应
   template <typename _REQ_TYPE, typename _RESP_TYPE>
-  asio::awaitable<std::optional<_RESP_TYPE>>
+  asio::awaitable<std::expected<_RESP_TYPE, std::string>>
   request(std::string_view topic, _REQ_TYPE req,
           std::chrono::milliseconds timeout = std::chrono::seconds(30)) {
     co_return co_await getRR<_REQ_TYPE, _RESP_TYPE>(topic).request(

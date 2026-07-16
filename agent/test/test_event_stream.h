@@ -12,32 +12,31 @@
 #include <iostream>
 #include <string>
 
+#include "test_framework.h"
+
 namespace agentxx {
 namespace test {
 
 inline static int g_es_passed = 0;
 inline static int g_es_failed = 0;
 
-#define ES_TEST(name) std::cout << "  [" << (name) << "]" << std::endl;
-#define ES_EXPECT_TRUE(expr)                                                    \
-  do {                                                                          \
-    if (expr) {                                                                 \
-      g_es_passed++;                                                            \
-    } else {                                                                    \
-      g_es_failed++;                                                            \
-      std::cerr << "    FAIL at line " << __LINE__ << ": expected true"         \
-                << std::endl;                                                   \
-    }                                                                           \
+#define ES_EXPECT_TRUE(expr)                                                   \
+  do {                                                                         \
+    if (expr) {                                                                \
+      g_es_passed++;                                                           \
+    } else {                                                                   \
+      g_es_failed++;                                                           \
+      TEST_FAIL << "expected true at line " << __LINE__ << std::endl;          \
+    }                                                                          \
   } while (0)
-#define ES_EXPECT_FALSE(expr)                                                   \
-  do {                                                                          \
-    if (!(expr)) {                                                              \
-      g_es_passed++;                                                            \
-    } else {                                                                    \
-      g_es_failed++;                                                            \
-      std::cerr << "    FAIL at line " << __LINE__ << ": expected false"        \
-                << std::endl;                                                   \
-    }                                                                           \
+#define ES_EXPECT_FALSE(expr)                                                  \
+  do {                                                                         \
+    if (!(expr)) {                                                             \
+      g_es_passed++;                                                           \
+    } else {                                                                   \
+      g_es_failed++;                                                           \
+      TEST_FAIL << "expected false at line " << __LINE__ << std::endl;         \
+    }                                                                          \
   } while (0)
 
 struct TestEvent {
@@ -54,7 +53,6 @@ struct TestResp {
 
 /// 1. 单向事件流: 多订阅者派发 + execHit 自动移除 + 异常隔离
 inline asio::awaitable<void> test_eventstream_publish() {
-  ES_TEST("EventStream publish / multi-subscriber / execHit / exception-isolation");
 
   auto bus = agentxx::middleware::EventBus{co_await asio::this_coro::executor};
   auto &stream = bus.get<TestEvent>("test.ping");
@@ -128,20 +126,19 @@ inline asio::awaitable<void> test_eventstream_publish() {
 
 /// 2. 请求-响应: 正常响应 + correlationId 关联
 inline asio::awaitable<void> test_requestresponse_normal() {
-  ES_TEST("RequestResponseStream request / respond normal");
 
   auto bus = agentxx::middleware::EventBus{co_await asio::this_coro::executor};
   auto &rr = bus.getRR<TestReq, TestResp>("test.qa");
 
   auto serverId = rr.serve(
-      [](const TestReq &req,
-         size_t corrId) -> asio::awaitable<TestResp> {
+      [](const TestReq &req, size_t corrId) -> asio::awaitable<TestResp> {
         ES_EXPECT_TRUE(corrId > 0);
         co_return TestResp{.answer = "echo:" + req.question};
       });
   (void)serverId;
 
-  auto resp = co_await rr.request(TestReq{.question = "hello"}, std::chrono::seconds(5));
+  auto resp = co_await rr.request(TestReq{.question = "hello"},
+                                  std::chrono::seconds(5));
   ES_EXPECT_TRUE(resp.has_value());
   ES_EXPECT_TRUE(resp.value().answer == "echo:hello");
 
@@ -150,14 +147,12 @@ inline asio::awaitable<void> test_requestresponse_normal() {
 
 /// 3. 请求-响应: 超时返回 nullopt
 inline asio::awaitable<void> test_requestresponse_timeout() {
-  ES_TEST("RequestResponseStream request timeout");
 
   auto bus = agentxx::middleware::EventBus{co_await asio::this_coro::executor};
   auto &rr = bus.getRR<TestReq, TestResp>("test.qa.slow");
 
   // server 永不 respond (sleep 久于 timeout)
-  rr.serve([](const TestReq &,
-              size_t) -> asio::awaitable<TestResp> {
+  rr.serve([](const TestReq &, size_t) -> asio::awaitable<TestResp> {
     auto timer = asio::steady_timer(co_await asio::this_coro::executor,
                                     std::chrono::seconds(1));
     co_await timer.async_wait(asio::use_awaitable);
@@ -178,13 +173,12 @@ inline asio::awaitable<void> test_requestresponse_timeout() {
 
 /// 4. 请求-响应: 无 server 时返回 nullopt
 inline asio::awaitable<void> test_requestresponse_noserver() {
-  ES_TEST("RequestResponseStream request no-server");
 
   auto bus = agentxx::middleware::EventBus{co_await asio::this_coro::executor};
   auto &rr = bus.getRR<TestReq, TestResp>("test.qa.empty");
 
-  auto resp = co_await rr.request(TestReq{.question = "x"},
-                                  std::chrono::seconds(2));
+  auto resp =
+      co_await rr.request(TestReq{.question = "x"}, std::chrono::seconds(2));
   ES_EXPECT_FALSE(resp.has_value());
 
   co_return;
@@ -192,7 +186,6 @@ inline asio::awaitable<void> test_requestresponse_noserver() {
 
 /// 5. 定时器事件流: once 触发一次且不阻塞调用者
 inline asio::awaitable<void> test_timer_once() {
-  ES_TEST("TimerEventStream once");
 
   auto bus = agentxx::middleware::EventBus{co_await asio::this_coro::executor};
   std::atomic<int> fireCount{0};
@@ -218,7 +211,6 @@ inline asio::awaitable<void> test_timer_once() {
 
 /// 6. EventBus 便捷方法 publish/request 与复用同 topic
 inline asio::awaitable<void> test_eventbus_convenience() {
-  ES_TEST("EventBus convenience publish/request + topic reuse");
 
   auto bus = agentxx::middleware::EventBus{co_await asio::this_coro::executor};
 
@@ -229,15 +221,16 @@ inline asio::awaitable<void> test_eventbus_convenience() {
         co_return;
       });
 
-  co_await bus.publish<TestEvent>("conv.topic", TestEvent{.msg = "z", .value = 7});
+  co_await bus.publish<TestEvent>("conv.topic",
+                                  TestEvent{.msg = "z", .value = 7});
   ES_EXPECT_TRUE(seen.load() == 7);
   // 同 topic 复用, 应是同一个流
-  co_await bus.publish<TestEvent>("conv.topic", TestEvent{.msg = "z2", .value = 3});
+  co_await bus.publish<TestEvent>("conv.topic",
+                                  TestEvent{.msg = "z2", .value = 3});
   ES_EXPECT_TRUE(seen.load() == 10);
 
   auto &rr = bus.getRR<TestReq, TestResp>("conv.rr");
-  rr.serve([](const TestReq &req,
-              size_t) -> asio::awaitable<TestResp> {
+  rr.serve([](const TestReq &req, size_t) -> asio::awaitable<TestResp> {
     co_return TestResp{.answer = req.question + "!"};
   });
   auto resp = co_await bus.request<TestReq, TestResp>(
@@ -248,8 +241,7 @@ inline asio::awaitable<void> test_eventbus_convenience() {
   co_return;
 }
 
-inline asio::awaitable<void> run_event_stream_tests() {
-  std::cout << "=== event_stream Tests ===" << std::endl;
+inline asio::awaitable<TestResult> run_event_stream_tests() {
   try {
     co_await test_eventstream_publish();
     co_await test_requestresponse_normal();
@@ -258,13 +250,10 @@ inline asio::awaitable<void> run_event_stream_tests() {
     co_await test_timer_once();
     co_await test_eventbus_convenience();
   } catch (const std::exception &e) {
-    std::cout << "[FAIL] event_stream suite exception: " << e.what()
-              << std::endl;
+    TEST_FAIL << "event_stream suite exception: " << e.what() << std::endl;
     g_es_failed++;
   }
-  std::cout << "=== event_stream Tests DONE (pass=" << g_es_passed
-            << " fail=" << g_es_failed << ") ===" << std::endl;
-  co_return;
+  co_return TestResult{g_es_passed, g_es_failed};
 }
 
 } // namespace test

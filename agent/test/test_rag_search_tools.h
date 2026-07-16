@@ -2,12 +2,16 @@
 
 #include "agentxx/tools/rag_search.h"
 #include "agentxx/util/string_util.h"
+#include "test_framework.h"
 #include <asio/awaitable.hpp>
 #include <iostream>
 #include <string>
 
 namespace agentxx {
 namespace test {
+
+inline static int g_rag_passed = 0;
+inline static int g_rag_failed = 0;
 
 using RAGSearchTool = agentxx::tools::RAGSearchTool;
 using VectorStore = agentxx::tools::RAGSearchTool::VectorStore;
@@ -19,9 +23,11 @@ inline asio::awaitable<void> test_fixed_length_basic() {
   auto result = VectorStore::splitByFixedLength("Hello World", 5);
   if (result.size() == 3 && result[0] == "Hello" && result[1] == " Worl" &&
       result[2] == "d") {
-    std::cout << "[PASS] splitStringByFixedLength basic" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitStringByFixedLength basic" << std::endl;
   } else {
-    std::cout << "[FAIL] splitStringByFixedLength basic, got " << result.size()
+    g_rag_failed++;
+    TEST_FAIL << "splitStringByFixedLength basic, got " << result.size()
               << " chunks" << std::endl;
   }
   co_return;
@@ -30,9 +36,11 @@ inline asio::awaitable<void> test_fixed_length_basic() {
 inline asio::awaitable<void> test_fixed_length_empty() {
   auto result = VectorStore::splitByFixedLength("", 5);
   if (result.empty()) {
-    std::cout << "[PASS] splitStringByFixedLength empty" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitStringByFixedLength empty" << std::endl;
   } else {
-    std::cout << "[FAIL] splitStringByFixedLength empty should return empty"
+    g_rag_failed++;
+    TEST_FAIL << "splitStringByFixedLength empty should return empty"
               << std::endl;
   }
   co_return;
@@ -43,9 +51,11 @@ inline asio::awaitable<void> test_fixed_length_utf8() {
   auto result = VectorStore::splitByFixedLength(utf8Text, 4);
   if (result.size() == 3 && result[0] == "你好世界" && result[1] == "Hell" &&
       result[2] == "o") {
-    std::cout << "[PASS] splitStringByFixedLength utf8" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitStringByFixedLength utf8" << std::endl;
   } else {
-    std::cout << "[FAIL] splitStringByFixedLength utf8, got " << result.size()
+    g_rag_failed++;
+    TEST_FAIL << "splitStringByFixedLength utf8, got " << result.size()
               << " chunks:";
     for (auto &s : result) {
       std::cout << " [" << s << "]";
@@ -59,10 +69,11 @@ inline asio::awaitable<void> test_fixed_length_smaller_than_one_char() {
   std::string utf8Text = "你好";
   auto result = VectorStore::splitByFixedLength(utf8Text, 1);
   if (result.size() == 2 && result[0] == "你" && result[1] == "好") {
-    std::cout << "[PASS] splitStringByFixedLength single char boundary"
-              << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitStringByFixedLength single char boundary" << std::endl;
   } else {
-    std::cout << "[FAIL] splitStringByFixedLength single char boundary, got "
+    g_rag_failed++;
+    TEST_FAIL << "splitStringByFixedLength single char boundary, got "
               << result.size() << " chunks" << std::endl;
   }
   co_return;
@@ -71,10 +82,11 @@ inline asio::awaitable<void> test_fixed_length_smaller_than_one_char() {
 inline asio::awaitable<void> test_fixed_length_shorter_than_block() {
   auto result = VectorStore::splitByFixedLength("Hi", 100);
   if (result.size() == 1 && result[0] == "Hi") {
-    std::cout << "[PASS] splitStringByFixedLength shorter than block"
-              << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitStringByFixedLength shorter than block" << std::endl;
   } else {
-    std::cout << "[FAIL] splitStringByFixedLength shorter than block, got "
+    g_rag_failed++;
+    TEST_FAIL << "splitStringByFixedLength shorter than block, got "
               << result.size() << " chunks" << std::endl;
   }
   co_return;
@@ -83,9 +95,11 @@ inline asio::awaitable<void> test_fixed_length_shorter_than_block() {
 inline asio::awaitable<void> test_fixed_length_exact_boundary() {
   auto result = VectorStore::splitByFixedLength("ABCDE", 5);
   if (result.size() == 1 && result[0] == "ABCDE") {
-    std::cout << "[PASS] splitStringByFixedLength exact boundary" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitStringByFixedLength exact boundary" << std::endl;
   } else {
-    std::cout << "[FAIL] splitStringByFixedLength exact boundary, got "
+    g_rag_failed++;
+    TEST_FAIL << "splitStringByFixedLength exact boundary, got "
               << result.size() << " chunks" << std::endl;
   }
   co_return;
@@ -96,10 +110,11 @@ inline asio::awaitable<void> test_fixed_length_mixed_ascii_utf8() {
   auto result = VectorStore::splitByFixedLength(text, 3);
   if (result.size() == 3 && result[0] == "AB你" && result[1] == "好CD" &&
       result[2] == "世界") {
-    std::cout << "[PASS] splitStringByFixedLength mixed ascii utf8"
-              << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitStringByFixedLength mixed ascii utf8" << std::endl;
   } else {
-    std::cout << "[FAIL] splitStringByFixedLength mixed ascii utf8, got "
+    g_rag_failed++;
+    TEST_FAIL << "splitStringByFixedLength mixed ascii utf8, got "
               << result.size() << " chunks:";
     for (auto &s : result) {
       std::cout << " [" << s << "]";
@@ -112,10 +127,12 @@ inline asio::awaitable<void> test_fixed_length_mixed_ascii_utf8() {
 inline asio::awaitable<void> test_fixed_length_single_char() {
   auto result = VectorStore::splitByFixedLength("X", 5);
   if (result.size() == 1 && result[0] == "X") {
-    std::cout << "[PASS] splitStringByFixedLength single char" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitStringByFixedLength single char" << std::endl;
   } else {
-    std::cout << "[FAIL] splitStringByFixedLength single char, got "
-              << result.size() << " chunks" << std::endl;
+    g_rag_failed++;
+    TEST_FAIL << "splitStringByFixedLength single char, got " << result.size()
+              << " chunks" << std::endl;
   }
   co_return;
 }
@@ -131,11 +148,12 @@ inline asio::awaitable<void> test_fixed_length_very_long() {
     }
   }
   if (result.size() == 10 && allWithinLimit) {
-    std::cout << "[PASS] splitStringByFixedLength very long" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitStringByFixedLength very long" << std::endl;
   } else {
-    std::cout << "[FAIL] splitStringByFixedLength very long, got "
-              << result.size() << " chunks, allWithinLimit=" << allWithinLimit
-              << std::endl;
+    g_rag_failed++;
+    TEST_FAIL << "splitStringByFixedLength very long, got " << result.size()
+              << " chunks, allWithinLimit=" << allWithinLimit << std::endl;
   }
   co_return;
 }
@@ -148,10 +166,12 @@ inline asio::awaitable<void> test_delimiter_basic() {
   auto result = VectorStore::splitByDelimiter("a\n\nb\n\nc", "\n\n");
   if (result.size() == 3 && result[0] == "a" && result[1] == "b" &&
       result[2] == "c") {
-    std::cout << "[PASS] splitByDelimiter basic" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitByDelimiter basic" << std::endl;
   } else {
-    std::cout << "[FAIL] splitByDelimiter basic, got " << result.size()
-              << " chunks" << std::endl;
+    g_rag_failed++;
+    TEST_FAIL << "splitByDelimiter basic, got " << result.size() << " chunks"
+              << std::endl;
   }
   co_return;
 }
@@ -159,10 +179,11 @@ inline asio::awaitable<void> test_delimiter_basic() {
 inline asio::awaitable<void> test_delimiter_empty() {
   auto result = VectorStore::splitByDelimiter("", "\n\n");
   if (result.empty()) {
-    std::cout << "[PASS] splitByDelimiter empty" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitByDelimiter empty" << std::endl;
   } else {
-    std::cout << "[FAIL] splitByDelimiter empty should return empty"
-              << std::endl;
+    g_rag_failed++;
+    TEST_FAIL << "splitByDelimiter empty should return empty" << std::endl;
   }
   co_return;
 }
@@ -170,10 +191,12 @@ inline asio::awaitable<void> test_delimiter_empty() {
 inline asio::awaitable<void> test_delimiter_no_match() {
   auto result = VectorStore::splitByDelimiter("no delimiter here", "\n\n");
   if (result.size() == 1 && result[0] == "no delimiter here") {
-    std::cout << "[PASS] splitByDelimiter no match" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitByDelimiter no match" << std::endl;
   } else {
-    std::cout << "[FAIL] splitByDelimiter no match, got " << result.size()
-              << " chunks" << std::endl;
+    g_rag_failed++;
+    TEST_FAIL << "splitByDelimiter no match, got " << result.size() << " chunks"
+              << std::endl;
   }
   co_return;
 }
@@ -181,10 +204,12 @@ inline asio::awaitable<void> test_delimiter_no_match() {
 inline asio::awaitable<void> test_delimiter_empty_delim() {
   auto result = VectorStore::splitByDelimiter("hello world", "");
   if (result.size() == 1 && result[0] == "hello world") {
-    std::cout << "[PASS] splitByDelimiter empty delimiter" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitByDelimiter empty delimiter" << std::endl;
   } else {
-    std::cout << "[FAIL] splitByDelimiter empty delimiter, got "
-              << result.size() << " chunks" << std::endl;
+    g_rag_failed++;
+    TEST_FAIL << "splitByDelimiter empty delimiter, got " << result.size()
+              << " chunks" << std::endl;
   }
   co_return;
 }
@@ -193,9 +218,11 @@ inline asio::awaitable<void> test_delimiter_chinese_punctuation() {
   auto result = VectorStore::splitByDelimiter("第一句。第二句。第三句", "。");
   if (result.size() == 3 && result[0] == "第一句" && result[1] == "第二句" &&
       result[2] == "第三句") {
-    std::cout << "[PASS] splitByDelimiter Chinese period" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitByDelimiter Chinese period" << std::endl;
   } else {
-    std::cout << "[FAIL] splitByDelimiter Chinese period, got " << result.size()
+    g_rag_failed++;
+    TEST_FAIL << "splitByDelimiter Chinese period, got " << result.size()
               << " chunks" << std::endl;
   }
   co_return;
@@ -205,10 +232,12 @@ inline asio::awaitable<void> test_delimiter_comma() {
   auto result = VectorStore::splitByDelimiter("apple, banana, cherry", ", ");
   if (result.size() == 3 && result[0] == "apple" && result[1] == "banana" &&
       result[2] == "cherry") {
-    std::cout << "[PASS] splitByDelimiter comma" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitByDelimiter comma" << std::endl;
   } else {
-    std::cout << "[FAIL] splitByDelimiter comma, got " << result.size()
-              << " chunks" << std::endl;
+    g_rag_failed++;
+    TEST_FAIL << "splitByDelimiter comma, got " << result.size() << " chunks"
+              << std::endl;
   }
   co_return;
 }
@@ -216,10 +245,12 @@ inline asio::awaitable<void> test_delimiter_comma() {
 inline asio::awaitable<void> test_delimiter_at_start() {
   auto result = VectorStore::splitByDelimiter("\n\nstart", "\n\n");
   if (result.size() == 1 && result[0] == "start") {
-    std::cout << "[PASS] splitByDelimiter at start" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitByDelimiter at start" << std::endl;
   } else {
-    std::cout << "[FAIL] splitByDelimiter at start, got " << result.size()
-              << " chunks" << std::endl;
+    g_rag_failed++;
+    TEST_FAIL << "splitByDelimiter at start, got " << result.size() << " chunks"
+              << std::endl;
   }
   co_return;
 }
@@ -227,10 +258,12 @@ inline asio::awaitable<void> test_delimiter_at_start() {
 inline asio::awaitable<void> test_delimiter_at_end() {
   auto result = VectorStore::splitByDelimiter("end\n\n", "\n\n");
   if (result.size() == 1 && result[0] == "end") {
-    std::cout << "[PASS] splitByDelimiter at end" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitByDelimiter at end" << std::endl;
   } else {
-    std::cout << "[FAIL] splitByDelimiter at end, got " << result.size()
-              << " chunks" << std::endl;
+    g_rag_failed++;
+    TEST_FAIL << "splitByDelimiter at end, got " << result.size() << " chunks"
+              << std::endl;
   }
   co_return;
 }
@@ -238,9 +271,11 @@ inline asio::awaitable<void> test_delimiter_at_end() {
 inline asio::awaitable<void> test_delimiter_consecutive() {
   auto result = VectorStore::splitByDelimiter("a\n\n\n\nb", "\n\n");
   if (result.size() == 2 && result[0] == "a" && result[1] == "b") {
-    std::cout << "[PASS] splitByDelimiter consecutive" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitByDelimiter consecutive" << std::endl;
   } else {
-    std::cout << "[FAIL] splitByDelimiter consecutive, got " << result.size()
+    g_rag_failed++;
+    TEST_FAIL << "splitByDelimiter consecutive, got " << result.size()
               << " chunks" << std::endl;
   }
   co_return;
@@ -249,9 +284,11 @@ inline asio::awaitable<void> test_delimiter_consecutive() {
 inline asio::awaitable<void> test_delimiter_only_delim() {
   auto result = VectorStore::splitByDelimiter("\n\n", "\n\n");
   if (result.empty()) {
-    std::cout << "[PASS] splitByDelimiter only delimiter" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitByDelimiter only delimiter" << std::endl;
   } else {
-    std::cout << "[FAIL] splitByDelimiter only delimiter, got " << result.size()
+    g_rag_failed++;
+    TEST_FAIL << "splitByDelimiter only delimiter, got " << result.size()
               << " chunks" << std::endl;
   }
   co_return;
@@ -262,9 +299,11 @@ inline asio::awaitable<void> test_delimiter_multibyte_utf8() {
       VectorStore::splitByDelimiter("第一部分¶¶第二部分¶¶第三部分", "¶¶");
   if (result.size() == 3 && result[0] == "第一部分" &&
       result[1] == "第二部分" && result[2] == "第三部分") {
-    std::cout << "[PASS] splitByDelimiter multibyte utf8" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitByDelimiter multibyte utf8" << std::endl;
   } else {
-    std::cout << "[FAIL] splitByDelimiter multibyte utf8, got " << result.size()
+    g_rag_failed++;
+    TEST_FAIL << "splitByDelimiter multibyte utf8, got " << result.size()
               << " chunks" << std::endl;
   }
   co_return;
@@ -274,10 +313,12 @@ inline asio::awaitable<void> test_delimiter_multiple_chinese() {
   auto result = VectorStore::splitByDelimiter("你好！世界！测试", "！");
   if (result.size() == 3 && result[0] == "你好" && result[1] == "世界" &&
       result[2] == "测试") {
-    std::cout << "[PASS] splitByDelimiter multiple Chinese excl" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitByDelimiter multiple Chinese excl" << std::endl;
   } else {
-    std::cout << "[FAIL] splitByDelimiter multiple Chinese excl, got "
-              << result.size() << " chunks" << std::endl;
+    g_rag_failed++;
+    TEST_FAIL << "splitByDelimiter multiple Chinese excl, got " << result.size()
+              << " chunks" << std::endl;
   }
   co_return;
 }
@@ -290,10 +331,12 @@ inline asio::awaitable<void> test_structure_headings() {
   std::string text = "# Title\n\nSome content\n\n## Section 1\n\nMore content";
   auto result = VectorStore::splitByStructure(text);
   if (result.size() >= 2) {
-    std::cout << "[PASS] splitByStructure headings" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitByStructure headings" << std::endl;
   } else {
-    std::cout << "[FAIL] splitByStructure headings, got " << result.size()
-              << " blocks" << std::endl;
+    g_rag_failed++;
+    TEST_FAIL << "splitByStructure headings, got " << result.size() << " blocks"
+              << std::endl;
   }
   co_return;
 }
@@ -308,9 +351,11 @@ inline asio::awaitable<void> test_structure_code_block() {
     }
   }
   if (hasCodeBlock && result.size() >= 2) {
-    std::cout << "[PASS] splitByStructure code block" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitByStructure code block" << std::endl;
   } else {
-    std::cout << "[FAIL] splitByStructure code block, got " << result.size()
+    g_rag_failed++;
+    TEST_FAIL << "splitByStructure code block, got " << result.size()
               << " blocks" << std::endl;
   }
   co_return;
@@ -327,10 +372,12 @@ inline asio::awaitable<void> test_structure_list() {
     }
   }
   if (hasListBlock) {
-    std::cout << "[PASS] splitByStructure list" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitByStructure list" << std::endl;
   } else {
-    std::cout << "[FAIL] splitByStructure list, got " << result.size()
-              << " blocks" << std::endl;
+    g_rag_failed++;
+    TEST_FAIL << "splitByStructure list, got " << result.size() << " blocks"
+              << std::endl;
   }
   co_return;
 }
@@ -338,10 +385,11 @@ inline asio::awaitable<void> test_structure_list() {
 inline asio::awaitable<void> test_structure_empty() {
   auto result = VectorStore::splitByStructure("");
   if (result.empty()) {
-    std::cout << "[PASS] splitByStructure empty" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitByStructure empty" << std::endl;
   } else {
-    std::cout << "[FAIL] splitByStructure empty should return empty"
-              << std::endl;
+    g_rag_failed++;
+    TEST_FAIL << "splitByStructure empty should return empty" << std::endl;
   }
   co_return;
 }
@@ -357,9 +405,11 @@ inline asio::awaitable<void> test_structure_numbered_list() {
     }
   }
   if (hasListBlock) {
-    std::cout << "[PASS] splitByStructure numbered list" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitByStructure numbered list" << std::endl;
   } else {
-    std::cout << "[FAIL] splitByStructure numbered list, got " << result.size()
+    g_rag_failed++;
+    TEST_FAIL << "splitByStructure numbered list, got " << result.size()
               << " blocks" << std::endl;
   }
   co_return;
@@ -370,9 +420,11 @@ inline asio::awaitable<void> test_structure_mixed_headings() {
       "# H1\n\ncontent1\n\n## H2\n\ncontent2\n\n### H3\n\ncontent3";
   auto result = VectorStore::splitByStructure(text);
   if (result.size() >= 3) {
-    std::cout << "[PASS] splitByStructure mixed headings" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitByStructure mixed headings" << std::endl;
   } else {
-    std::cout << "[FAIL] splitByStructure mixed headings, got " << result.size()
+    g_rag_failed++;
+    TEST_FAIL << "splitByStructure mixed headings, got " << result.size()
               << " blocks" << std::endl;
   }
   co_return;
@@ -382,10 +434,12 @@ inline asio::awaitable<void> test_structure_single_paragraph() {
   std::string text = "Just a single paragraph without any structure.";
   auto result = VectorStore::splitByStructure(text);
   if (result.size() == 1 && result[0] == text) {
-    std::cout << "[PASS] splitByStructure single paragraph" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitByStructure single paragraph" << std::endl;
   } else {
-    std::cout << "[FAIL] splitByStructure single paragraph, got "
-              << result.size() << " blocks" << std::endl;
+    g_rag_failed++;
+    TEST_FAIL << "splitByStructure single paragraph, got " << result.size()
+              << " blocks" << std::endl;
   }
   co_return;
 }
@@ -394,10 +448,12 @@ inline asio::awaitable<void> test_structure_many_paragraphs() {
   std::string text = "p1\n\np2\n\np3\n\np4\n\np5";
   auto result = VectorStore::splitByStructure(text);
   if (result.size() == 5) {
-    std::cout << "[PASS] splitByStructure many paragraphs" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitByStructure many paragraphs" << std::endl;
   } else {
-    std::cout << "[FAIL] splitByStructure many paragraphs, got "
-              << result.size() << " blocks" << std::endl;
+    g_rag_failed++;
+    TEST_FAIL << "splitByStructure many paragraphs, got " << result.size()
+              << " blocks" << std::endl;
   }
   co_return;
 }
@@ -406,9 +462,11 @@ inline asio::awaitable<void> test_structure_blockquote() {
   std::string text = "> quoted line 1\n> quoted line 2\n\nnormal text";
   auto result = VectorStore::splitByStructure(text);
   if (result.size() >= 2) {
-    std::cout << "[PASS] splitByStructure blockquote" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitByStructure blockquote" << std::endl;
   } else {
-    std::cout << "[FAIL] splitByStructure blockquote, got " << result.size()
+    g_rag_failed++;
+    TEST_FAIL << "splitByStructure blockquote, got " << result.size()
               << " blocks" << std::endl;
   }
   co_return;
@@ -418,10 +476,12 @@ inline asio::awaitable<void> test_structure_table() {
   std::string text = "| A | B |\n|---|---|\n| 1 | 2 |\n\nAfter table";
   auto result = VectorStore::splitByStructure(text);
   if (result.size() >= 2) {
-    std::cout << "[PASS] splitByStructure table" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitByStructure table" << std::endl;
   } else {
-    std::cout << "[FAIL] splitByStructure table, got " << result.size()
-              << " blocks" << std::endl;
+    g_rag_failed++;
+    TEST_FAIL << "splitByStructure table, got " << result.size() << " blocks"
+              << std::endl;
   }
   co_return;
 }
@@ -437,9 +497,11 @@ inline asio::awaitable<void> test_structure_heading_merge() {
     }
   }
   if (headingMerged) {
-    std::cout << "[PASS] splitByStructure heading merge" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitByStructure heading merge" << std::endl;
   } else {
-    std::cout << "[FAIL] splitByStructure heading merge, got " << result.size()
+    g_rag_failed++;
+    TEST_FAIL << "splitByStructure heading merge, got " << result.size()
               << " blocks" << std::endl;
   }
   co_return;
@@ -454,10 +516,12 @@ inline asio::awaitable<void> test_delimiters_basic() {
   auto result =
       VectorStore::splitByDelimiters("para1\n\npara2\n\npara3", 256, delims);
   if (result.size() == 3) {
-    std::cout << "[PASS] splitByDelimiters basic" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitByDelimiters basic" << std::endl;
   } else {
-    std::cout << "[FAIL] splitByDelimiters basic, got " << result.size()
-              << " chunks" << std::endl;
+    g_rag_failed++;
+    TEST_FAIL << "splitByDelimiters basic, got " << result.size() << " chunks"
+              << std::endl;
   }
   co_return;
 }
@@ -467,10 +531,12 @@ inline asio::awaitable<void> test_delimiters_fallback_to_fixed() {
   std::vector<std::string> delims = {"\n\n"};
   auto result = VectorStore::splitByDelimiters(longText, 5, delims);
   if (result.size() >= 5) {
-    std::cout << "[PASS] splitByDelimiters fallback to fixed" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitByDelimiters fallback to fixed" << std::endl;
   } else {
-    std::cout << "[FAIL] splitByDelimiters fallback to fixed, got "
-              << result.size() << " chunks" << std::endl;
+    g_rag_failed++;
+    TEST_FAIL << "splitByDelimiters fallback to fixed, got " << result.size()
+              << " chunks" << std::endl;
   }
   co_return;
 }
@@ -479,9 +545,11 @@ inline asio::awaitable<void> test_delimiters_within_limit() {
   std::vector<std::string> delims = {"\n\n", "\n"};
   auto result = VectorStore::splitByDelimiters("short", 256, delims);
   if (result.size() == 1 && result[0] == "short") {
-    std::cout << "[PASS] splitByDelimiters within limit" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitByDelimiters within limit" << std::endl;
   } else {
-    std::cout << "[FAIL] splitByDelimiters within limit, got " << result.size()
+    g_rag_failed++;
+    TEST_FAIL << "splitByDelimiters within limit, got " << result.size()
               << " chunks" << std::endl;
   }
   co_return;
@@ -491,9 +559,11 @@ inline asio::awaitable<void> test_delimiters_empty_text() {
   std::vector<std::string> delims = {"\n\n", "\n"};
   auto result = VectorStore::splitByDelimiters("", 256, delims);
   if (result.empty()) {
-    std::cout << "[PASS] splitByDelimiters empty text" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitByDelimiters empty text" << std::endl;
   } else {
-    std::cout << "[FAIL] splitByDelimiters empty text, got " << result.size()
+    g_rag_failed++;
+    TEST_FAIL << "splitByDelimiters empty text, got " << result.size()
               << " chunks" << std::endl;
   }
   co_return;
@@ -503,10 +573,12 @@ inline asio::awaitable<void> test_delimiters_empty_delims() {
   std::vector<std::string> delims = {};
   auto result = VectorStore::splitByDelimiters("hello world", 256, delims);
   if (result.size() == 1 && result[0] == "hello world") {
-    std::cout << "[PASS] splitByDelimiters empty delimiters" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitByDelimiters empty delimiters" << std::endl;
   } else {
-    std::cout << "[FAIL] splitByDelimiters empty delimiters, got "
-              << result.size() << " chunks" << std::endl;
+    g_rag_failed++;
+    TEST_FAIL << "splitByDelimiters empty delimiters, got " << result.size()
+              << " chunks" << std::endl;
   }
   co_return;
 }
@@ -516,9 +588,11 @@ inline asio::awaitable<void> test_delimiters_priority() {
   auto result = VectorStore::splitByDelimiters("a\n\nb\nc\n\nd", 256, delims);
   if (result.size() == 3 && result[0] == "a" && result[1] == "b\nc" &&
       result[2] == "d") {
-    std::cout << "[PASS] splitByDelimiters priority" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitByDelimiters priority" << std::endl;
   } else {
-    std::cout << "[FAIL] splitByDelimiters priority, got " << result.size()
+    g_rag_failed++;
+    TEST_FAIL << "splitByDelimiters priority, got " << result.size()
               << " chunks" << std::endl;
   }
   co_return;
@@ -532,10 +606,12 @@ inline asio::awaitable<void> test_delimiters_chinese() {
   // one that produces chunks within the limit. "。" matches first, producing
   // 2 chunks.
   if (result.size() == 2) {
-    std::cout << "[PASS] splitByDelimiters Chinese" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitByDelimiters Chinese" << std::endl;
   } else {
-    std::cout << "[FAIL] splitByDelimiters Chinese, got " << result.size()
-              << " chunks" << std::endl;
+    g_rag_failed++;
+    TEST_FAIL << "splitByDelimiters Chinese, got " << result.size() << " chunks"
+              << std::endl;
   }
   co_return;
 }
@@ -553,11 +629,12 @@ inline asio::awaitable<void> test_delimiters_recursive_split() {
     }
   }
   if (result.size() > 1 && allWithinLimit) {
-    std::cout << "[PASS] splitByDelimiters recursive split" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitByDelimiters recursive split" << std::endl;
   } else {
-    std::cout << "[FAIL] splitByDelimiters recursive split, got "
-              << result.size() << " chunks, allWithinLimit=" << allWithinLimit
-              << std::endl;
+    g_rag_failed++;
+    TEST_FAIL << "splitByDelimiters recursive split, got " << result.size()
+              << " chunks, allWithinLimit=" << allWithinLimit << std::endl;
   }
   co_return;
 }
@@ -573,9 +650,11 @@ inline asio::awaitable<void> test_chunks_fixed_length() {
   auto result =
       VectorStore::splitTextToChunks("Hello World Hello World", config);
   if (result.size() == 3) {
-    std::cout << "[PASS] splitTextToChunks FixedLength" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitTextToChunks FixedLength" << std::endl;
   } else {
-    std::cout << "[FAIL] splitTextToChunks FixedLength, got " << result.size()
+    g_rag_failed++;
+    TEST_FAIL << "splitTextToChunks FixedLength, got " << result.size()
               << " chunks" << std::endl;
   }
   co_return;
@@ -592,9 +671,11 @@ inline asio::awaitable<void> test_chunks_character() {
   auto result =
       VectorStore::splitTextToChunks("para1\n\npara2\n\npara3", config);
   if (result.size() == 3) {
-    std::cout << "[PASS] splitTextToChunks Character" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitTextToChunks Character" << std::endl;
   } else {
-    std::cout << "[FAIL] splitTextToChunks Character, got " << result.size()
+    g_rag_failed++;
+    TEST_FAIL << "splitTextToChunks Character, got " << result.size()
               << " chunks" << std::endl;
   }
   co_return;
@@ -611,9 +692,11 @@ inline asio::awaitable<void> test_chunks_structural() {
   std::string text = "# Title\n\nParagraph\n\n## Section\n\nMore text";
   auto result = VectorStore::splitTextToChunks(text, config);
   if (result.size() >= 2) {
-    std::cout << "[PASS] splitTextToChunks Structural" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitTextToChunks Structural" << std::endl;
   } else {
-    std::cout << "[FAIL] splitTextToChunks Structural, got " << result.size()
+    g_rag_failed++;
+    TEST_FAIL << "splitTextToChunks Structural, got " << result.size()
               << " chunks" << std::endl;
   }
   co_return;
@@ -631,10 +714,12 @@ inline asio::awaitable<void> test_chunks_structural_then_char() {
       "# Title\n\nParagraph with\n\nbreaks\n\n## Section\n\nMore text";
   auto result = VectorStore::splitTextToChunks(text, config);
   if (result.size() >= 2) {
-    std::cout << "[PASS] splitTextToChunks StructuralThenChar" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitTextToChunks StructuralThenChar" << std::endl;
   } else {
-    std::cout << "[FAIL] splitTextToChunks StructuralThenChar, got "
-              << result.size() << " chunks" << std::endl;
+    g_rag_failed++;
+    TEST_FAIL << "splitTextToChunks StructuralThenChar, got " << result.size()
+              << " chunks" << std::endl;
   }
   co_return;
 }
@@ -652,10 +737,11 @@ inline asio::awaitable<void> test_chunks_structural_then_char_then_fixed() {
       "# Title\n\nParagraph with\n\nbreaks\n\n## Section\n\nMore text";
   auto result = VectorStore::splitTextToChunks(text, config);
   if (result.size() >= 2) {
-    std::cout << "[PASS] splitTextToChunks StructuralThenCharThenFixed"
-              << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitTextToChunks StructuralThenCharThenFixed" << std::endl;
   } else {
-    std::cout << "[FAIL] splitTextToChunks StructuralThenCharThenFixed, got "
+    g_rag_failed++;
+    TEST_FAIL << "splitTextToChunks StructuralThenCharThenFixed, got "
               << result.size() << " chunks" << std::endl;
   }
   co_return;
@@ -669,10 +755,11 @@ inline asio::awaitable<void> test_chunks_empty() {
   VectorStore::SplitConfig config;
   auto result = VectorStore::splitTextToChunks("", config);
   if (result.empty()) {
-    std::cout << "[PASS] splitTextToChunks empty" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitTextToChunks empty" << std::endl;
   } else {
-    std::cout << "[FAIL] splitTextToChunks empty should return empty"
-              << std::endl;
+    g_rag_failed++;
+    TEST_FAIL << "splitTextToChunks empty should return empty" << std::endl;
   }
   co_return;
 }
@@ -686,10 +773,12 @@ inline asio::awaitable<void> test_chunks_default_config() {
   auto result =
       VectorStore::splitTextToChunks("Hello World\n\nThis is a test", config);
   if (result.size() >= 1) {
-    std::cout << "[PASS] splitTextToChunks default config" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitTextToChunks default config" << std::endl;
   } else {
-    std::cout << "[FAIL] splitTextToChunks default config, got "
-              << result.size() << " chunks" << std::endl;
+    g_rag_failed++;
+    TEST_FAIL << "splitTextToChunks default config, got " << result.size()
+              << " chunks" << std::endl;
   }
   co_return;
 }
@@ -712,9 +801,11 @@ inline asio::awaitable<void> test_chunks_length_enforcement() {
     }
   }
   if (allWithinLimit && result.size() >= 6) {
-    std::cout << "[PASS] splitTextToChunks length enforcement" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitTextToChunks length enforcement" << std::endl;
   } else {
-    std::cout << "[FAIL] splitTextToChunks length enforcement" << std::endl;
+    g_rag_failed++;
+    TEST_FAIL << "splitTextToChunks length enforcement" << std::endl;
   }
   co_return;
 }
@@ -730,10 +821,12 @@ inline asio::awaitable<void> test_chunks_chinese_character() {
   std::string text = "第一段内容。第二段内容。第三段内容。";
   auto result = VectorStore::splitTextToChunks(text, config);
   if (result.size() == 3) {
-    std::cout << "[PASS] splitTextToChunks Chinese character" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitTextToChunks Chinese character" << std::endl;
   } else {
-    std::cout << "[FAIL] splitTextToChunks Chinese character, got "
-              << result.size() << " chunks" << std::endl;
+    g_rag_failed++;
+    TEST_FAIL << "splitTextToChunks Chinese character, got " << result.size()
+              << " chunks" << std::endl;
   }
   co_return;
 }
@@ -758,11 +851,12 @@ inline asio::awaitable<void> test_chunks_fallback_chain() {
     }
   }
   if (result.size() > 0 && allWithinLimit) {
-    std::cout << "[PASS] splitTextToChunks fallback chain" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitTextToChunks fallback chain" << std::endl;
   } else {
-    std::cout << "[FAIL] splitTextToChunks fallback chain, got "
-              << result.size() << " chunks, allWithinLimit=" << allWithinLimit
-              << std::endl;
+    g_rag_failed++;
+    TEST_FAIL << "splitTextToChunks fallback chain, got " << result.size()
+              << " chunks, allWithinLimit=" << allWithinLimit << std::endl;
   }
   co_return;
 }
@@ -786,9 +880,11 @@ inline asio::awaitable<void> test_chunks_markdown_code() {
     }
   }
   if (hasCodeBlock && result.size() >= 2) {
-    std::cout << "[PASS] splitTextToChunks markdown code" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitTextToChunks markdown code" << std::endl;
   } else {
-    std::cout << "[FAIL] splitTextToChunks markdown code, got " << result.size()
+    g_rag_failed++;
+    TEST_FAIL << "splitTextToChunks markdown code, got " << result.size()
               << " chunks" << std::endl;
   }
   co_return;
@@ -811,13 +907,15 @@ inline asio::awaitable<void> test_chunks_short_text_all_modes() {
     config.maxUtf8Length = 256;
     auto result = VectorStore::splitTextToChunks(shortText, config);
     if (result.size() != 1 || result[0] != "Hello") {
-      std::cout << "[FAIL] splitTextToChunks short text mode="
+      g_rag_failed++;
+      TEST_FAIL << "splitTextToChunks short text mode="
                 << static_cast<int>(mode) << ", got " << result.size()
                 << " chunks" << std::endl;
       co_return;
     }
   }
-  std::cout << "[PASS] splitTextToChunks short text all modes" << std::endl;
+  g_rag_passed++;
+  TEST_PASS << "splitTextToChunks short text all modes" << std::endl;
   co_return;
 }
 
@@ -833,10 +931,12 @@ inline asio::awaitable<void> test_chunks_custom_delimiters() {
   auto result = VectorStore::splitTextToChunks("apple|banana|cherry", config);
   if (result.size() == 3 && result[0] == "apple" && result[1] == "banana" &&
       result[2] == "cherry") {
-    std::cout << "[PASS] splitTextToChunks custom delimiters" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitTextToChunks custom delimiters" << std::endl;
   } else {
-    std::cout << "[FAIL] splitTextToChunks custom delimiters, got "
-              << result.size() << " chunks" << std::endl;
+    g_rag_failed++;
+    TEST_FAIL << "splitTextToChunks custom delimiters, got " << result.size()
+              << " chunks" << std::endl;
   }
   co_return;
 }
@@ -861,11 +961,12 @@ inline asio::awaitable<void> test_chunks_very_long_paragraph() {
     }
   }
   if (result.size() == 25 && allWithinLimit) {
-    std::cout << "[PASS] splitTextToChunks very long paragraph" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitTextToChunks very long paragraph" << std::endl;
   } else {
-    std::cout << "[FAIL] splitTextToChunks very long paragraph, got "
-              << result.size() << " chunks, allWithinLimit=" << allWithinLimit
-              << std::endl;
+    g_rag_failed++;
+    TEST_FAIL << "splitTextToChunks very long paragraph, got " << result.size()
+              << " chunks, allWithinLimit=" << allWithinLimit << std::endl;
   }
   co_return;
 }
@@ -881,10 +982,12 @@ inline asio::awaitable<void> test_chunks_chinese_structural() {
   std::string text = "# 标题\n\n内容段落\n\n## 第二节\n\n更多内容";
   auto result = VectorStore::splitTextToChunks(text, config);
   if (result.size() >= 2) {
-    std::cout << "[PASS] splitTextToChunks Chinese structural" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitTextToChunks Chinese structural" << std::endl;
   } else {
-    std::cout << "[FAIL] splitTextToChunks Chinese structural, got "
-              << result.size() << " chunks" << std::endl;
+    g_rag_failed++;
+    TEST_FAIL << "splitTextToChunks Chinese structural, got " << result.size()
+              << " chunks" << std::endl;
   }
   co_return;
 }
@@ -900,9 +1003,11 @@ inline asio::awaitable<void> test_chunks_numbered_list() {
   std::string text = "# Steps\n\n1. First step\n2. Second step\n3. Third step";
   auto result = VectorStore::splitTextToChunks(text, config);
   if (result.size() >= 1) {
-    std::cout << "[PASS] splitTextToChunks numbered list" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitTextToChunks numbered list" << std::endl;
   } else {
-    std::cout << "[FAIL] splitTextToChunks numbered list, got " << result.size()
+    g_rag_failed++;
+    TEST_FAIL << "splitTextToChunks numbered list, got " << result.size()
               << " chunks" << std::endl;
   }
   co_return;
@@ -920,9 +1025,11 @@ inline asio::awaitable<void> test_chunks_mixed_content() {
                      "- item 1\n- item 2\n\nFinal paragraph.";
   auto result = VectorStore::splitTextToChunks(text, config);
   if (result.size() >= 3) {
-    std::cout << "[PASS] splitTextToChunks mixed content" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitTextToChunks mixed content" << std::endl;
   } else {
-    std::cout << "[FAIL] splitTextToChunks mixed content, got " << result.size()
+    g_rag_failed++;
+    TEST_FAIL << "splitTextToChunks mixed content, got " << result.size()
               << " chunks" << std::endl;
   }
   co_return;
@@ -938,7 +1045,8 @@ inline asio::awaitable<void> test_chunks_whitespace_only() {
   config.maxUtf8Length = 256;
   auto result = VectorStore::splitTextToChunks("   \n\n   ", config);
   // Should not crash, result may be empty or contain whitespace chunks
-  std::cout << "[PASS] splitTextToChunks whitespace only" << std::endl;
+  g_rag_passed++;
+  TEST_PASS << "splitTextToChunks whitespace only" << std::endl;
   co_return;
 }
 
@@ -966,11 +1074,12 @@ inline asio::awaitable<void> test_fixed_length_overlap_basic() {
     }
   }
   if (result.size() >= 3 && hasOverlap) {
-    std::cout << "[PASS] splitByFixedLength overlap basic" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitByFixedLength overlap basic" << std::endl;
   } else {
-    std::cout << "[FAIL] splitByFixedLength overlap basic, got "
-              << result.size() << " chunks, hasOverlap=" << hasOverlap
-              << std::endl;
+    g_rag_failed++;
+    TEST_FAIL << "splitByFixedLength overlap basic, got " << result.size()
+              << " chunks, hasOverlap=" << hasOverlap << std::endl;
   }
   co_return;
 }
@@ -981,10 +1090,11 @@ inline asio::awaitable<void> test_fixed_length_overlap_zero() {
   auto resultOverlap = VectorStore::splitByFixedLength(text, 10, 0.0);
   if (resultNoOverlap.size() == resultOverlap.size() &&
       resultNoOverlap == resultOverlap) {
-    std::cout << "[PASS] splitByFixedLength overlap zero (disabled)"
-              << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitByFixedLength overlap zero (disabled)" << std::endl;
   } else {
-    std::cout << "[FAIL] splitByFixedLength overlap zero, sizes: "
+    g_rag_failed++;
+    TEST_FAIL << "splitByFixedLength overlap zero, sizes: "
               << resultNoOverlap.size() << " vs " << resultOverlap.size()
               << std::endl;
   }
@@ -995,9 +1105,11 @@ inline asio::awaitable<void> test_fixed_length_overlap_single_chunk() {
   std::string text = "Hello";
   auto result = VectorStore::splitByFixedLength(text, 100, 20.0);
   if (result.size() == 1 && result[0] == "Hello") {
-    std::cout << "[PASS] splitByFixedLength overlap single chunk" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitByFixedLength overlap single chunk" << std::endl;
   } else {
-    std::cout << "[FAIL] splitByFixedLength overlap single chunk, got "
+    g_rag_failed++;
+    TEST_FAIL << "splitByFixedLength overlap single chunk, got "
               << result.size() << " chunks" << std::endl;
   }
   co_return;
@@ -1011,9 +1123,11 @@ inline asio::awaitable<void> test_fixed_length_overlap_utf8() {
   // Chunk 1: 世界你好 (4 chars, overlap "界")
   // Chunk 2: 你好世界 (4 chars)
   if (result.size() >= 3) {
-    std::cout << "[PASS] splitByFixedLength overlap utf8" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitByFixedLength overlap utf8" << std::endl;
   } else {
-    std::cout << "[FAIL] splitByFixedLength overlap utf8, got " << result.size()
+    g_rag_failed++;
+    TEST_FAIL << "splitByFixedLength overlap utf8, got " << result.size()
               << " chunks" << std::endl;
   }
   co_return;
@@ -1036,11 +1150,12 @@ inline asio::awaitable<void> test_fixed_length_overlap_50_percent() {
     }
   }
   if (result.size() >= 5 && allWithinLimit) {
-    std::cout << "[PASS] splitByFixedLength overlap 50 percent" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitByFixedLength overlap 50 percent" << std::endl;
   } else {
-    std::cout << "[FAIL] splitByFixedLength overlap 50 percent, got "
-              << result.size() << " chunks, allWithinLimit=" << allWithinLimit
-              << std::endl;
+    g_rag_failed++;
+    TEST_FAIL << "splitByFixedLength overlap 50 percent, got " << result.size()
+              << " chunks, allWithinLimit=" << allWithinLimit << std::endl;
   }
   co_return;
 }
@@ -1056,10 +1171,11 @@ inline asio::awaitable<void> test_apply_chunk_overlap_basic() {
   // chunk 2 becomes "DD" + "EEEEEFFFFF" = "DDEEEEEFFFFF"
   if (result.size() == 3 && result[0] == "AAAAABBBBB" &&
       result[1] == "BBCCCCCDDDDD" && result[2] == "DDEEEEEFFFFF") {
-    std::cout << "[PASS] applyChunkOverlap basic" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "applyChunkOverlap basic" << std::endl;
   } else {
-    std::cout << "[FAIL] applyChunkOverlap basic, got " << result.size()
-              << " chunks:";
+    g_rag_failed++;
+    TEST_FAIL << "applyChunkOverlap basic, got " << result.size() << " chunks:";
     for (auto &s : result) {
       std::cout << " [" << s << "]";
     }
@@ -1072,9 +1188,11 @@ inline asio::awaitable<void> test_apply_chunk_overlap_zero() {
   std::vector<std::string> chunks = {"AAAAABBBBB", "CCCCCDDDDD", "EEEEEFFFFF"};
   auto result = VectorStore::applyChunkOverlap(chunks, 10, 0.0);
   if (result == chunks) {
-    std::cout << "[PASS] applyChunkOverlap zero (disabled)" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "applyChunkOverlap zero (disabled)" << std::endl;
   } else {
-    std::cout << "[FAIL] applyChunkOverlap zero, result differs" << std::endl;
+    g_rag_failed++;
+    TEST_FAIL << "applyChunkOverlap zero, result differs" << std::endl;
   }
   co_return;
 }
@@ -1083,9 +1201,11 @@ inline asio::awaitable<void> test_apply_chunk_overlap_single() {
   std::vector<std::string> chunks = {"HelloWorld"};
   auto result = VectorStore::applyChunkOverlap(chunks, 10, 20.0);
   if (result.size() == 1 && result[0] == "HelloWorld") {
-    std::cout << "[PASS] applyChunkOverlap single chunk" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "applyChunkOverlap single chunk" << std::endl;
   } else {
-    std::cout << "[FAIL] applyChunkOverlap single chunk, got " << result.size()
+    g_rag_failed++;
+    TEST_FAIL << "applyChunkOverlap single chunk, got " << result.size()
               << " chunks" << std::endl;
   }
   co_return;
@@ -1095,10 +1215,12 @@ inline asio::awaitable<void> test_apply_chunk_overlap_empty() {
   std::vector<std::string> chunks = {};
   auto result = VectorStore::applyChunkOverlap(chunks, 10, 20.0);
   if (result.empty()) {
-    std::cout << "[PASS] applyChunkOverlap empty" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "applyChunkOverlap empty" << std::endl;
   } else {
-    std::cout << "[FAIL] applyChunkOverlap empty, got " << result.size()
-              << " chunks" << std::endl;
+    g_rag_failed++;
+    TEST_FAIL << "applyChunkOverlap empty, got " << result.size() << " chunks"
+              << std::endl;
   }
   co_return;
 }
@@ -1109,9 +1231,11 @@ inline asio::awaitable<void> test_apply_chunk_overlap_short_prev() {
   // overlapChars=2, prev has only 2 chars, so no overlap applied
   if (result.size() == 3 && result[0] == "AB" && result[1] == "CCCCCDDDDD" &&
       result[2] == "DDEEEEEFFFFF") {
-    std::cout << "[PASS] applyChunkOverlap short prev" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "applyChunkOverlap short prev" << std::endl;
   } else {
-    std::cout << "[FAIL] applyChunkOverlap short prev, got " << result.size()
+    g_rag_failed++;
+    TEST_FAIL << "applyChunkOverlap short prev, got " << result.size()
               << " chunks:";
     for (auto &s : result) {
       std::cout << " [" << s << "]";
@@ -1128,10 +1252,12 @@ inline asio::awaitable<void> test_apply_chunk_overlap_utf8() {
   if (result.size() == 2 && result[0] == "你好世界甲乙丙丁" &&
       result[1].size() > chunks[1].size()) {
     // Just verify overlap was applied (result[1] is longer than original)
-    std::cout << "[PASS] applyChunkOverlap utf8" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "applyChunkOverlap utf8" << std::endl;
   } else {
-    std::cout << "[FAIL] applyChunkOverlap utf8, got " << result.size()
-              << " chunks" << std::endl;
+    g_rag_failed++;
+    TEST_FAIL << "applyChunkOverlap utf8, got " << result.size() << " chunks"
+              << std::endl;
   }
   co_return;
 }
@@ -1151,11 +1277,12 @@ inline asio::awaitable<void> test_chunks_overlap_fixed_length() {
   auto resultNoOverlap =
       VectorStore::splitByFixedLength(text, config.maxUtf8Length);
   if (result.size() > resultNoOverlap.size()) {
-    std::cout << "[PASS] splitTextToChunks overlap FixedLength" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitTextToChunks overlap FixedLength" << std::endl;
   } else {
-    std::cout << "[FAIL] splitTextToChunks overlap FixedLength, got "
-              << result.size() << " (no-overlap: " << resultNoOverlap.size()
-              << ")" << std::endl;
+    g_rag_failed++;
+    TEST_FAIL << "splitTextToChunks overlap FixedLength, got " << result.size()
+              << " (no-overlap: " << resultNoOverlap.size() << ")" << std::endl;
   }
   co_return;
 }
@@ -1168,10 +1295,12 @@ inline asio::awaitable<void> test_chunks_overlap_character() {
   std::string text = "para1\n\npara2\n\npara3\n\npara4";
   auto result = VectorStore::splitTextToChunks(text, config);
   if (result.size() >= 4) {
-    std::cout << "[PASS] splitTextToChunks overlap Character" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitTextToChunks overlap Character" << std::endl;
   } else {
-    std::cout << "[FAIL] splitTextToChunks overlap Character, got "
-              << result.size() << " chunks" << std::endl;
+    g_rag_failed++;
+    TEST_FAIL << "splitTextToChunks overlap Character, got " << result.size()
+              << " chunks" << std::endl;
   }
   co_return;
 }
@@ -1184,10 +1313,12 @@ inline asio::awaitable<void> test_chunks_overlap_structural() {
   std::string text = "# Title\n\nParagraph\n\n## Section\n\nMore text";
   auto result = VectorStore::splitTextToChunks(text, config);
   if (result.size() >= 2) {
-    std::cout << "[PASS] splitTextToChunks overlap Structural" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitTextToChunks overlap Structural" << std::endl;
   } else {
-    std::cout << "[FAIL] splitTextToChunks overlap Structural, got "
-              << result.size() << " chunks" << std::endl;
+    g_rag_failed++;
+    TEST_FAIL << "splitTextToChunks overlap Structural, got " << result.size()
+              << " chunks" << std::endl;
   }
   co_return;
 }
@@ -1201,9 +1332,11 @@ inline asio::awaitable<void> test_chunks_overlap_zero_disabled() {
   auto result = VectorStore::splitTextToChunks(text, config);
   auto resultDefault = VectorStore::splitByFixedLength(text, 10);
   if (result.size() == resultDefault.size() && result == resultDefault) {
-    std::cout << "[PASS] splitTextToChunks overlap zero disabled" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitTextToChunks overlap zero disabled" << std::endl;
   } else {
-    std::cout << "[FAIL] splitTextToChunks overlap zero disabled, sizes: "
+    g_rag_failed++;
+    TEST_FAIL << "splitTextToChunks overlap zero disabled, sizes: "
               << result.size() << " vs " << resultDefault.size() << std::endl;
   }
   co_return;
@@ -1216,9 +1349,11 @@ inline asio::awaitable<void> test_chunks_overlap_default_config() {
   auto result = VectorStore::splitTextToChunks(text, config);
   // Default overlapPercent=20.0, mode=StructuralThenCharThenFixed
   if (result.size() >= 1) {
-    std::cout << "[PASS] splitTextToChunks overlap default config" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitTextToChunks overlap default config" << std::endl;
   } else {
-    std::cout << "[FAIL] splitTextToChunks overlap default config, got "
+    g_rag_failed++;
+    TEST_FAIL << "splitTextToChunks overlap default config, got "
               << result.size() << " chunks" << std::endl;
   }
   co_return;
@@ -1232,10 +1367,12 @@ inline asio::awaitable<void> test_chunks_overlap_short_text() {
   std::string text = "Hello";
   auto result = VectorStore::splitTextToChunks(text, config);
   if (result.size() == 1 && result[0] == "Hello") {
-    std::cout << "[PASS] splitTextToChunks overlap short text" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "splitTextToChunks overlap short text" << std::endl;
   } else {
-    std::cout << "[FAIL] splitTextToChunks overlap short text, got "
-              << result.size() << " chunks" << std::endl;
+    g_rag_failed++;
+    TEST_FAIL << "splitTextToChunks overlap short text, got " << result.size()
+              << " chunks" << std::endl;
   }
   co_return;
 }
@@ -1253,12 +1390,14 @@ inline asio::awaitable<void> test_chunks_overlap_all_modes() {
     config.overlapPercent = 20.0;
     auto result = VectorStore::splitTextToChunks(text, config);
     if (result.empty()) {
-      std::cout << "[FAIL] splitTextToChunks overlap all modes, mode="
+      g_rag_failed++;
+      TEST_FAIL << "splitTextToChunks overlap all modes, mode="
                 << static_cast<int>(mode) << " returned empty" << std::endl;
       co_return;
     }
   }
-  std::cout << "[PASS] splitTextToChunks overlap all modes" << std::endl;
+  g_rag_passed++;
+  TEST_PASS << "splitTextToChunks overlap all modes" << std::endl;
   co_return;
 }
 
@@ -1271,9 +1410,11 @@ inline asio::awaitable<void> test_cosine_identical() {
   std::vector<double> b = {1.0f, 2.0f, 3.0f};
   double sim = RAGSearchTool::cosineSimilarity(a, b);
   if (std::abs(sim - 1.0) < 0.0001) {
-    std::cout << "[PASS] cosineSimilarity identical" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "cosineSimilarity identical" << std::endl;
   } else {
-    std::cout << "[FAIL] cosineSimilarity identical, sim=" << sim << std::endl;
+    g_rag_failed++;
+    TEST_FAIL << "cosineSimilarity identical, sim=" << sim << std::endl;
   }
   co_return;
 }
@@ -1283,9 +1424,11 @@ inline asio::awaitable<void> test_cosine_orthogonal() {
   std::vector<double> b = {0.0f, 1.0f, 0.0f};
   double sim = RAGSearchTool::cosineSimilarity(a, b);
   if (std::abs(sim - 0.0) < 0.0001) {
-    std::cout << "[PASS] cosineSimilarity orthogonal" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "cosineSimilarity orthogonal" << std::endl;
   } else {
-    std::cout << "[FAIL] cosineSimilarity orthogonal, sim=" << sim << std::endl;
+    g_rag_failed++;
+    TEST_FAIL << "cosineSimilarity orthogonal, sim=" << sim << std::endl;
   }
   co_return;
 }
@@ -1295,9 +1438,11 @@ inline asio::awaitable<void> test_cosine_empty() {
   std::vector<double> b = {1.0f, 2.0f};
   double sim = RAGSearchTool::cosineSimilarity(a, b);
   if (std::abs(sim - 0.0) < 0.0001) {
-    std::cout << "[PASS] cosineSimilarity empty" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "cosineSimilarity empty" << std::endl;
   } else {
-    std::cout << "[FAIL] cosineSimilarity empty, sim=" << sim << std::endl;
+    g_rag_failed++;
+    TEST_FAIL << "cosineSimilarity empty, sim=" << sim << std::endl;
   }
   co_return;
 }
@@ -1307,9 +1452,11 @@ inline asio::awaitable<void> test_cosine_both_empty() {
   std::vector<double> b = {};
   double sim = RAGSearchTool::cosineSimilarity(a, b);
   if (std::abs(sim - 0.0) < 0.0001) {
-    std::cout << "[PASS] cosineSimilarity both empty" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "cosineSimilarity both empty" << std::endl;
   } else {
-    std::cout << "[FAIL] cosineSimilarity both empty, sim=" << sim << std::endl;
+    g_rag_failed++;
+    TEST_FAIL << "cosineSimilarity both empty, sim=" << sim << std::endl;
   }
   co_return;
 }
@@ -1319,10 +1466,11 @@ inline asio::awaitable<void> test_cosine_mismatched_size() {
   std::vector<double> b = {1.0f, 2.0f};
   double sim = RAGSearchTool::cosineSimilarity(a, b);
   if (std::abs(sim - 0.0) < 0.0001) {
-    std::cout << "[PASS] cosineSimilarity mismatched size" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "cosineSimilarity mismatched size" << std::endl;
   } else {
-    std::cout << "[FAIL] cosineSimilarity mismatched size, sim=" << sim
-              << std::endl;
+    g_rag_failed++;
+    TEST_FAIL << "cosineSimilarity mismatched size, sim=" << sim << std::endl;
   }
   co_return;
 }
@@ -1332,10 +1480,11 @@ inline asio::awaitable<void> test_cosine_single_element() {
   std::vector<double> b = {3.0f};
   double sim = RAGSearchTool::cosineSimilarity(a, b);
   if (std::abs(sim - 1.0) < 0.0001) {
-    std::cout << "[PASS] cosineSimilarity single element" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "cosineSimilarity single element" << std::endl;
   } else {
-    std::cout << "[FAIL] cosineSimilarity single element, sim=" << sim
-              << std::endl;
+    g_rag_failed++;
+    TEST_FAIL << "cosineSimilarity single element, sim=" << sim << std::endl;
   }
   co_return;
 }
@@ -1345,10 +1494,11 @@ inline asio::awaitable<void> test_cosine_negative_values() {
   std::vector<double> b = {1.0f, 2.0f, 3.0f};
   double sim = RAGSearchTool::cosineSimilarity(a, b);
   if (std::abs(sim - (-1.0)) < 0.0001) {
-    std::cout << "[PASS] cosineSimilarity negative values" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "cosineSimilarity negative values" << std::endl;
   } else {
-    std::cout << "[FAIL] cosineSimilarity negative values, sim=" << sim
-              << std::endl;
+    g_rag_failed++;
+    TEST_FAIL << "cosineSimilarity negative values, sim=" << sim << std::endl;
   }
   co_return;
 }
@@ -1359,9 +1509,11 @@ inline asio::awaitable<void> test_cosine_partial_overlap() {
   double sim = RAGSearchTool::cosineSimilarity(a, b);
   double expected = 1.0 / (std::sqrt(2.0) * std::sqrt(2.0));
   if (std::abs(sim - expected) < 0.0001) {
-    std::cout << "[PASS] cosineSimilarity partial overlap" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "cosineSimilarity partial overlap" << std::endl;
   } else {
-    std::cout << "[FAIL] cosineSimilarity partial overlap, sim=" << sim
+    g_rag_failed++;
+    TEST_FAIL << "cosineSimilarity partial overlap, sim=" << sim
               << ", expected=" << expected << std::endl;
   }
   co_return;
@@ -1372,10 +1524,11 @@ inline asio::awaitable<void> test_cosine_zero_vector() {
   std::vector<double> b = {1.0f, 2.0f, 3.0f};
   double sim = RAGSearchTool::cosineSimilarity(a, b);
   if (std::abs(sim - 0.0) < 0.0001) {
-    std::cout << "[PASS] cosineSimilarity zero vector" << std::endl;
+    g_rag_passed++;
+    TEST_PASS << "cosineSimilarity zero vector" << std::endl;
   } else {
-    std::cout << "[FAIL] cosineSimilarity zero vector, sim=" << sim
-              << std::endl;
+    g_rag_failed++;
+    TEST_FAIL << "cosineSimilarity zero vector, sim=" << sim << std::endl;
   }
   co_return;
 }
@@ -1384,15 +1537,15 @@ inline asio::awaitable<void> test_cosine_zero_vector() {
 // Test runner
 // =========================================================================
 
-inline asio::awaitable<void> run_rag_search_tools_tests(
+inline asio::awaitable<TestResult> run_rag_search_tools_tests(
     std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
-  std::cout << "======= Test: RAG Search Tools =======" << std::endl;
 
   auto run = [](auto testFn) -> asio::awaitable<void> {
     try {
       co_await testFn();
     } catch (const std::exception &e) {
-      std::cout << "[FAIL] Exception in test: " << e.what() << std::endl;
+      g_rag_failed++;
+      TEST_FAIL << "Exception in test: " << e.what() << std::endl;
     }
   };
 
@@ -1499,7 +1652,7 @@ inline asio::awaitable<void> run_rag_search_tools_tests(
   co_await run(test_cosine_partial_overlap);
   co_await run(test_cosine_zero_vector);
 
-  std::cout << "======= Test Done =======" << std::endl;
+  co_return TestResult{g_rag_passed, g_rag_failed};
 }
 
 } // namespace test

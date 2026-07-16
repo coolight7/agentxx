@@ -3,6 +3,7 @@
 #include "agentxx/agent/context.h"
 #include "agentxx/tools/system.h"
 #include "neograph/neograph.h"
+#include "test_framework.h"
 #include <asio/awaitable.hpp>
 #include <iostream>
 #include <regex>
@@ -11,12 +12,16 @@
 namespace agentxx {
 namespace test {
 
+inline static int g_dt_passed = 0;
+inline static int g_dt_failed = 0;
+
 inline asio::awaitable<void> test_datetime_get_definition(
     std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
   auto tool = agentxx::tools::GetCurrentDateTimeTool{agentContext};
   auto def = tool.get_definition();
   if (def.name == "get_current_datetime") {
-    std::cout << "[PASS] GetCurrentDateTimeTool::get_definition() name correct"
+    g_dt_passed++;
+    TEST_PASS << "GetCurrentDateTimeTool::get_definition() name correct"
               << std::endl;
   } else {
     std::cout
@@ -36,11 +41,13 @@ inline asio::awaitable<void> test_datetime_execute(
   bool hasUtcTime = result.find("UTC Time (24Hour):") != std::string::npos;
 
   if (hasTimestamp && hasLocalTime && hasUtcTime) {
-    std::cout << "[PASS] GetCurrentDateTimeTool returns timestamp, local time "
+    g_dt_passed++;
+    TEST_PASS << "GetCurrentDateTimeTool returns timestamp, local time "
                  "and UTC time"
               << std::endl;
   } else {
-    std::cout << "[FAIL] GetCurrentDateTimeTool missing fields, got: " << result
+    g_dt_failed++;
+    TEST_FAIL << "GetCurrentDateTimeTool missing fields, got: " << result
               << std::endl;
   }
   co_return;
@@ -60,7 +67,8 @@ inline asio::awaitable<void> test_datetime_timestamp_format(
           << "[PASS] GetCurrentDateTimeTool timestamp is a positive number"
           << std::endl;
     } else {
-      std::cout << "[FAIL] GetCurrentDateTimeTool timestamp should be positive"
+      g_dt_failed++;
+      TEST_FAIL << "GetCurrentDateTimeTool timestamp should be positive"
                 << std::endl;
     }
   } else {
@@ -85,12 +93,14 @@ inline asio::awaitable<void> test_datetime_date_format(
   }
 
   if (count >= 2) {
-    std::cout << "[PASS] GetCurrentDateTimeTool contains both Local and UTC "
+    g_dt_passed++;
+    TEST_PASS << "GetCurrentDateTimeTool contains both Local and UTC "
                  "dates in YYYY-MM-DD format"
               << std::endl;
   } else {
-    std::cout << "[FAIL] GetCurrentDateTimeTool date format incorrect, got: "
-              << result << std::endl;
+    g_dt_failed++;
+    TEST_FAIL << "GetCurrentDateTimeTool date format incorrect, got: " << result
+              << std::endl;
   }
   co_return;
 }
@@ -109,25 +119,27 @@ inline asio::awaitable<void> test_datetime_time_format(
   }
 
   if (count >= 2) {
-    std::cout << "[PASS] GetCurrentDateTimeTool contains both Local and UTC "
+    g_dt_passed++;
+    TEST_PASS << "GetCurrentDateTimeTool contains both Local and UTC "
                  "times in HH:MM:SS format"
               << std::endl;
   } else {
-    std::cout << "[FAIL] GetCurrentDateTimeTool time format incorrect, got: "
-              << result << std::endl;
+    g_dt_failed++;
+    TEST_FAIL << "GetCurrentDateTimeTool time format incorrect, got: " << result
+              << std::endl;
   }
   co_return;
 }
 
-inline asio::awaitable<void> run_datetime_tool_tests(
+inline asio::awaitable<TestResult> run_datetime_tool_tests(
     std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
-  std::cout << "======= Test: DateTime Tool =======" << std::endl;
 
   auto run = [agentContext](auto testFn) -> asio::awaitable<void> {
     try {
       co_await testFn(agentContext);
     } catch (const std::exception &e) {
-      std::cout << "[FAIL] Exception in test: " << e.what() << std::endl;
+      g_dt_failed++;
+      TEST_FAIL << "Exception in test: " << e.what() << std::endl;
     }
   };
 
@@ -136,7 +148,7 @@ inline asio::awaitable<void> run_datetime_tool_tests(
   co_await run(test_datetime_timestamp_format);
   co_await run(test_datetime_date_format);
   co_await run(test_datetime_time_format);
-  std::cout << "======= Test Done =======" << std::endl;
+  co_return TestResult{g_dt_passed, g_dt_failed};
 }
 
 } // namespace test

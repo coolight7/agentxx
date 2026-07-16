@@ -9,12 +9,10 @@
 #if XX_IS_WIN_D
 #include <windows.h>
 #endif
-#include <assert.h>
 
 std::shared_ptr<agentxx::expand::TextSelectionMonitor>
 test_text_selection_monitor() {
 #if XX_IS_WIN_D
-  std::cout << "======= TextSelectionMonitor Test =======" << std::endl;
   std::cout << "请在浏览器或其他程序中选中一段文本，本程序将自动捕获并输出。"
             << std::endl;
 
@@ -26,7 +24,7 @@ test_text_selection_monitor() {
 
   if (!monitor->start()) {
     std::cerr << "[FAIL] 启动 TextSelectionMonitor 失败" << std::endl;
-    assert(false);
+    return nullptr;
   }
 
   std::cout << "[OK] TextSelectionMonitor 已启动，等待文本选中事件..."

@@ -1,69 +1,63 @@
 #include "agentxx/util/string_util.h"
+#include "test_framework.h"
 
 #include <cassert>
-#include <iostream>
 
 using namespace agentxx::util;
 
-inline static int g_passed = 0;
-inline static int g_failed = 0;
-
-#define TEST(name) std::cout << "  [" << (name) << "]" << std::endl;
+inline static int g_su_passed = 0;
+inline static int g_su_failed = 0;
 
 #define EXPECT_EQ(expr, expected)                                              \
   do {                                                                         \
     auto _result = (expr);                                                     \
     auto _expected = (expected);                                               \
     if (_result == _expected) {                                                \
-      g_passed++;                                                              \
+      g_su_passed++;                                                           \
     } else {                                                                   \
-      g_failed++;                                                              \
-      std::cerr << "    FAIL at line " << __LINE__ << ": expected "            \
-                << (_expected) << ", got " << (_result) << std::endl;          \
+      g_su_failed++;                                                           \
+      TEST_FAIL << "line " << __LINE__ << ": expected " << (_expected)         \
+                << ", got " << (_result) << std::endl;                         \
     }                                                                          \
   } while (0)
 
 #define EXPECT_TRUE(expr)                                                      \
   do {                                                                         \
     if (expr) {                                                                \
-      g_passed++;                                                              \
+      g_su_passed++;                                                           \
     } else {                                                                   \
-      g_failed++;                                                              \
-      std::cerr << "    FAIL at line " << __LINE__ << ": expected true"        \
-                << std::endl;                                                  \
+      g_su_failed++;                                                           \
+      TEST_FAIL << "line " << __LINE__ << ": expected true" << std::endl;      \
     }                                                                          \
   } while (0)
 
 #define EXPECT_FALSE(expr)                                                     \
   do {                                                                         \
     if (!(expr)) {                                                             \
-      g_passed++;                                                              \
+      g_su_passed++;                                                           \
     } else {                                                                   \
-      g_failed++;                                                              \
-      std::cerr << "    FAIL at line " << __LINE__ << ": expected false"       \
-                << std::endl;                                                  \
+      g_su_failed++;                                                           \
+      TEST_FAIL << "line " << __LINE__ << ": expected false" << std::endl;     \
     }                                                                          \
   } while (0)
 
 #define EXPECT_NULLOPT(expr)                                                   \
   do {                                                                         \
     if (!(expr).has_value()) {                                                 \
-      g_passed++;                                                              \
+      g_su_passed++;                                                           \
     } else {                                                                   \
-      g_failed++;                                                              \
-      std::cerr << "    FAIL at line " << __LINE__ << ": expected nullopt"     \
-                << std::endl;                                                  \
+      g_su_failed++;                                                           \
+      TEST_FAIL << "line " << __LINE__ << ": expected nullopt" << std::endl;   \
     }                                                                          \
   } while (0)
 
 #define EXPECT_HAS_VALUE(expr)                                                 \
   do {                                                                         \
     if ((expr).has_value()) {                                                  \
-      g_passed++;                                                              \
+      g_su_passed++;                                                           \
     } else {                                                                   \
-      g_failed++;                                                              \
-      std::cerr << "    FAIL at line " << __LINE__ << ": expected has_value"   \
-                << std::endl;                                                  \
+      g_su_failed++;                                                           \
+      TEST_FAIL << "line " << __LINE__ << ": expected has_value" << std::endl; \
     }                                                                          \
   } while (0)
 
@@ -72,7 +66,6 @@ inline static int g_failed = 0;
   EXPECT_EQ(agentxx::util::compareExtend(right, left), -(sub));
 
 void test_compareExtend() {
-  TEST("compareExtend");
 
   EXPECT_EQ(agentxx::util::compareExtend("", ""), 0);
   EXPECT_EQ(agentxx::util::compareExtend(" ", " "), 0);
@@ -100,7 +93,6 @@ void test_compareExtend() {
 }
 
 void test_toStandardPath() {
-  TEST("toStandardPath");
 
   EXPECT_EQ(agentxx::util::toStandardPath("//////"), "/");
   EXPECT_EQ(agentxx::util::toStandardPath("\\\\\\"), "\\");
@@ -118,7 +110,6 @@ void test_toStandardPath() {
 }
 
 void test_toUnixStandardPath() {
-  TEST("test_toUnixStandardPath");
 
   EXPECT_EQ(agentxx::util::toUnixStandardPath("\\\\\\\\\\"), "/");
   EXPECT_EQ(agentxx::util::toUnixStandardPath("\\\\\\\\\\//////\\/\\/\\/"),
@@ -132,7 +123,6 @@ void test_toUnixStandardPath() {
 }
 
 void test_DirFilePath() {
-  TEST("getFileName");
 
   EXPECT_EQ(agentxx::util::getFileName(""), "");
   EXPECT_EQ(agentxx::util::getFileName("."), ".");
@@ -162,8 +152,6 @@ void test_DirFilePath() {
             "///\\\\//\\\\/\\\\\\\\//");
   EXPECT_EQ(agentxx::util::getFileName(".///\\\\//\\\\/\\\\\\\\//"), ".");
 
-  TEST("getFileNameEXT");
-
   EXPECT_NULLOPT(agentxx::util::getFileNameEXT(""));
   EXPECT_NULLOPT(agentxx::util::getFileNameEXT("."));
   EXPECT_NULLOPT(agentxx::util::getFileNameEXT("..."));
@@ -183,8 +171,6 @@ void test_DirFilePath() {
   EXPECT_EQ(agentxx::util::replaceOrAppendExt(".hello", "wav"), ".hello.wav");
   EXPECT_EQ(agentxx::util::replaceOrAppendExt(".hello.", "wav"), ".hello.wav");
 
-  TEST("getParentDirPath");
-
   EXPECT_NULLOPT(agentxx::util::getParentDirPath(""));
   EXPECT_NULLOPT(agentxx::util::getParentDirPath("."));
   EXPECT_NULLOPT(agentxx::util::getParentDirPath("..."));
@@ -197,14 +183,11 @@ void test_DirFilePath() {
 }
 
 void test_removeSpace() {
-  TEST("removeAllSpace");
 
   EXPECT_EQ(agentxx::util::removeAllSpace(""), "");
   EXPECT_EQ(agentxx::util::removeAllSpace("  \t \t     "), "");
   EXPECT_EQ(agentxx::util::removeAllSpace("   1 2   3 "), "123");
   EXPECT_EQ(agentxx::util::removeAllSpace("\t   1\t  \t2   3 \t"), "123");
-
-  TEST("removeAllSpaceMayNull");
 
   EXPECT_NULLOPT(agentxx::util::removeAllSpaceMayNull(""));
   EXPECT_NULLOPT(agentxx::util::removeAllSpaceMayNull("     "));
@@ -213,8 +196,6 @@ void test_removeSpace() {
   EXPECT_EQ(
       agentxx::util::removeAllSpaceMayNull("\t   1\t  \t2   3 \t").value(),
       "123");
-
-  TEST("removeBetweenSpace");
 
   EXPECT_EQ(agentxx::util::removeBetweenSpace(""), "");
   EXPECT_EQ(agentxx::util::removeBetweenSpace("  "), "");
@@ -240,8 +221,6 @@ void test_removeSpace() {
                                               true, false),
             "1 2   3\n\r  ");
 
-  TEST("removeBetweenSpaceMayNull");
-
   EXPECT_NULLOPT(agentxx::util::removeBetweenSpaceMayNull(""));
   EXPECT_NULLOPT(agentxx::util::removeBetweenSpaceMayNull("  "));
   EXPECT_NULLOPT(agentxx::util::removeBetweenSpaceMayNull("\t\t\t"));
@@ -254,7 +233,6 @@ void test_removeSpace() {
 }
 
 void test_isIgnoreCaseEqual() {
-  TEST("isIgnoreCaseEqual");
 
   EXPECT_TRUE(agentxx::util::isIgnoreCaseEqual("", ""));
   EXPECT_TRUE(agentxx::util::isIgnoreCaseEqual(" ", " "));
@@ -268,7 +246,6 @@ void test_isIgnoreCaseEqual() {
 }
 
 void test_isIgnoreCaseContains() {
-  TEST("isIgnoreCaseContains");
 
   EXPECT_TRUE(agentxx::util::isIgnoreCaseContains("", ""));
   EXPECT_TRUE(agentxx::util::isIgnoreCaseContains(" ", " "));
@@ -286,8 +263,6 @@ void test_isIgnoreCaseContains() {
   EXPECT_FALSE(agentxx::util::isIgnoreCaseContains("", "     "));
   EXPECT_FALSE(agentxx::util::isIgnoreCaseContains("你 好abc\n\r", "不 好ABC"));
 
-  TEST("isIgnoreCaseContainsAny");
-
   EXPECT_TRUE(agentxx::util::isIgnoreCaseContainsAny("", ""));
   EXPECT_TRUE(agentxx::util::isIgnoreCaseContainsAny(" ", " "));
   EXPECT_TRUE(agentxx::util::isIgnoreCaseContainsAny("", "     "));
@@ -304,8 +279,6 @@ void test_isIgnoreCaseContains() {
   EXPECT_FALSE(agentxx::util::isIgnoreCaseContainsAny("你  好abc", "不 好ABC"));
   EXPECT_FALSE(
       agentxx::util::isIgnoreCaseContainsAny("你 好abc\n\r", "不 好ABC"));
-
-  TEST("isNotEmptyAndIgnoreCaseContainsAny");
 
   EXPECT_TRUE(agentxx::util::isNotEmptyAndIgnoreCaseContainsAny(" ", " "));
   EXPECT_TRUE(agentxx::util::isNotEmptyAndIgnoreCaseContainsAny("123abcABC",
@@ -331,7 +304,6 @@ void test_isIgnoreCaseContains() {
 }
 
 void test_toArgument() {
-  TEST("toArgument");
 
   EXPECT_EQ(agentxx::util::toArgument(""), "\"\"");
   EXPECT_EQ(agentxx::util::toArgument("\"\""), "\"\\\"\\\"\"");
@@ -349,9 +321,7 @@ void test_toArgument() {
 namespace agentxx {
 namespace test {
 
-void testStringUtil() {
-  std::cout << "=== string_util_xx C++ Tests ===" << std::endl;
-
+TestResult testStringUtil() {
   test_compareExtend();
   test_toStandardPath();
   test_toUnixStandardPath();
@@ -361,7 +331,7 @@ void testStringUtil() {
   test_isIgnoreCaseContains();
   test_toArgument();
 
-  std::cout << "=== string_util_xx C++ Tests DONE ===" << std::endl;
+  return TestResult{g_su_passed, g_su_failed};
 }
 
 } // namespace test

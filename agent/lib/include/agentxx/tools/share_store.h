@@ -132,9 +132,9 @@ public:
 
     if (text_line_offset >= 0 || text_line_limit > 0) {
       const auto offset =
-          (text_line_offset >= 0) ? size_t(text_line_offset) : 0;
+          (text_line_offset >= 0) ? static_cast<size_t>(text_line_offset) : 0;
       const auto limit = (text_line_limit > 0)
-                             ? size_t(text_line_limit)
+                             ? static_cast<size_t>(text_line_limit)
                              : std::numeric_limits<size_t>::max();
       auto stream = std::istringstream{text};
       std::stringstream result{};

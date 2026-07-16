@@ -17,6 +17,15 @@
     - 命令行可执行程序，计划用于启动服务、实现命令行用户交互
 - `agent/test`: 编译结果 {build}/exec/agentxx_test
     - 测试
+    - 运行测试示例:
+```bash
+# 当任意模块测试存在错误时立即终止测试，未指定时默认无论模块是否存在错误，都完成运行所有测试模块
+path/to/agentxx_test --fail-fast
+
+# 指定仅运行测试模块 `string_util` `regex`, 其他不运行，默认未指定时运行所有模块
+# 测试模块名称定义见 `agent/test/test.cpp`
+path/to/agentxx_test string_util regex
+```
 - `agent/benchmark`: 编译结果 {build}/exec/agentxx_benchmark
     - 性能测试（一般仅 release 启用编译该模块）
 - `agent/third_party`: 第三方库依赖

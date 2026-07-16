@@ -14,21 +14,21 @@
 #include <memory>
 #include <string>
 
+#include "test_framework.h"
+
 namespace agentxx {
 namespace test {
 
 inline static int g_sb_passed = 0;
 inline static int g_sb_failed = 0;
 
-#define SB_TEST(name) std::cout << "  [" << (name) << "]" << std::endl
 #define SB_EXPECT_TRUE(expr)                                                   \
   do {                                                                         \
     if (expr) {                                                                \
       g_sb_passed++;                                                           \
     } else {                                                                   \
       g_sb_failed++;                                                           \
-      std::cerr << "    FAIL at line " << __LINE__ << ": expected true"        \
-                << std::endl;                                                  \
+      TEST_FAIL << "expected true at line " << __LINE__ << std::endl;          \
     }                                                                          \
   } while (0)
 #define SB_EXPECT_EQ(a, b)                                                     \
@@ -39,25 +39,22 @@ inline static int g_sb_failed = 0;
       g_sb_passed++;                                                           \
     } else {                                                                   \
       g_sb_failed++;                                                           \
-      std::cerr << "    FAIL at line " << __LINE__ << ": expected " << _b      \
-                << ", got " << _a << std::endl;                                \
+      TEST_FAIL << "expected " << _b << ", got " << _a << " at line "          \
+                << __LINE__ << std::endl;                                      \
     }                                                                          \
   } while (0)
 
 /// 验证: bus.request<ReqSubagentStart, RespSubagentResult> 请求-响应闭环
 /// - 注册一个模拟 server, 验证请求参数传递与响应回填
 inline asio::awaitable<void> test_subagent_bus_request_response() {
-  SB_TEST("subagent bus: request -> mock server -> response");
-
   auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
   agentContext->bus = std::make_shared<agentxx::middleware::EventBus>(
       co_await asio::this_coro::executor);
 
   // 注册模拟 server
-  auto &rr =
-      agentContext->bus->getRR<events::ReqSubagentStart,
-                                events::RespSubagentResult>(
-          events::Topic::Subagent);
+  auto &rr = agentContext->bus
+                 ->getRR<events::ReqSubagentStart, events::RespSubagentResult>(
+                     events::Topic::Subagent);
   rr.serve([](const events::ReqSubagentStart &req,
               size_t corrId) -> asio::awaitable<events::RespSubagentResult> {
     SB_EXPECT_TRUE(corrId > 0);
@@ -70,18 +67,18 @@ inline asio::awaitable<void> test_subagent_bus_request_response() {
   });
 
   auto resp =
-      co_await agentContext->bus->request<events::ReqSubagentStart,
-                                           events::RespSubagentResult>(
-          events::Topic::Subagent,
-          events::ReqSubagentStart{
-              .parentAgentName = "parent",
-              .parentThreadId = "t1",
-              .subagentName = "research",
-              .systemPrompt = "",
-              .message = "find foo",
-              .resultId = "call_1",
-          },
-          std::chrono::seconds(5));
+      co_await agentContext->bus
+          ->request<events::ReqSubagentStart, events::RespSubagentResult>(
+              events::Topic::Subagent,
+              events::ReqSubagentStart{
+                  .parentAgentName = "parent",
+                  .parentThreadId = "t1",
+                  .subagentName = "research",
+                  .systemPrompt = "",
+                  .message = "find foo",
+                  .resultId = "call_1",
+              },
+              std::chrono::seconds(5));
 
   SB_EXPECT_TRUE(resp.has_value());
   if (resp.has_value()) {
@@ -94,8 +91,6 @@ inline asio::awaitable<void> test_subagent_bus_request_response() {
 
 /// 验证: SubagentProgress 事件发布与订阅
 inline asio::awaitable<void> test_subagent_progress_events() {
-  SB_TEST("subagent bus: SubagentProgress publish/subscribe");
-
   auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
   agentContext->bus = std::make_shared<agentxx::middleware::EventBus>(
       co_await asio::this_coro::executor);
@@ -104,35 +99,33 @@ inline asio::awaitable<void> test_subagent_progress_events() {
   std::string lastToken;
   std::string lastSubagentId;
 
-  agentContext->bus->get<events::EventSubagentProgress>(
-      events::Topic::SubagentProgress)
-      .subscribe([&](const events::EventSubagentProgress &e)
-                     -> asio::awaitable<void> {
-        if (e.kind == "token") {
-          tokenCount++;
-          lastToken = e.data;
-          lastSubagentId = e.subagentId;
-        }
-        co_return;
-      });
+  agentContext->bus
+      ->get<events::EventSubagentProgress>(events::Topic::SubagentProgress)
+      .subscribe(
+          [&](const events::EventSubagentProgress &e) -> asio::awaitable<void> {
+            if (e.kind == "token") {
+              tokenCount++;
+              lastToken = e.data;
+              lastSubagentId = e.subagentId;
+            }
+            co_return;
+          });
 
   // 发布几个 token 进度事件
   co_await agentContext->bus->publish<events::EventSubagentProgress>(
-      events::Topic::SubagentProgress,
-      events::EventSubagentProgress{
-          .subagentId = "subagent_research",
-          .agentName = "research",
-          .kind = "token",
-          .data = "Hello",
-      });
+      events::Topic::SubagentProgress, events::EventSubagentProgress{
+                                           .subagentId = "subagent_research",
+                                           .agentName = "research",
+                                           .kind = "token",
+                                           .data = "Hello",
+                                       });
   co_await agentContext->bus->publish<events::EventSubagentProgress>(
-      events::Topic::SubagentProgress,
-      events::EventSubagentProgress{
-          .subagentId = "subagent_research",
-          .agentName = "research",
-          .kind = "token",
-          .data = " World",
-      });
+      events::Topic::SubagentProgress, events::EventSubagentProgress{
+                                           .subagentId = "subagent_research",
+                                           .agentName = "research",
+                                           .kind = "token",
+                                           .data = " World",
+                                       });
 
   SB_EXPECT_EQ(tokenCount.load(), 2);
   SB_EXPECT_EQ(lastToken, std::string{" World"});
@@ -143,8 +136,6 @@ inline asio::awaitable<void> test_subagent_progress_events() {
 
 /// 验证: SubagentSupervisor 对不存在 subagent 的错误处理
 inline asio::awaitable<void> test_subagent_supervisor_notfound() {
-  SB_TEST("subagent supervisor: not-found error handling");
-
   auto agentConfig = std::make_shared<agentxx::agent::AgentConfig>();
   auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
   agentContext->agentConfig = agentConfig;
@@ -158,18 +149,18 @@ inline asio::awaitable<void> test_subagent_supervisor_notfound() {
   co_await supervisor.start();
 
   auto resp =
-      co_await agentContext->bus->request<events::ReqSubagentStart,
-                                           events::RespSubagentResult>(
-          events::Topic::Subagent,
-          events::ReqSubagentStart{
-              .parentAgentName = "parent",
-              .parentThreadId = "t1",
-              .subagentName = "nonexistent",
-              .systemPrompt = "",
-              .message = "test",
-              .resultId = "call_1",
-          },
-          std::chrono::seconds(5));
+      co_await agentContext->bus
+          ->request<events::ReqSubagentStart, events::RespSubagentResult>(
+              events::Topic::Subagent,
+              events::ReqSubagentStart{
+                  .parentAgentName = "parent",
+                  .parentThreadId = "t1",
+                  .subagentName = "nonexistent",
+                  .systemPrompt = "",
+                  .message = "test",
+                  .resultId = "call_1",
+              },
+              std::chrono::seconds(5));
 
   SB_EXPECT_TRUE(resp.has_value());
   if (resp.has_value()) {
@@ -182,17 +173,14 @@ inline asio::awaitable<void> test_subagent_supervisor_notfound() {
 
 /// 验证: subagent 总线超时返回 nullopt
 inline asio::awaitable<void> test_subagent_bus_timeout() {
-  SB_TEST("subagent bus: request timeout");
-
   auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
   agentContext->bus = std::make_shared<agentxx::middleware::EventBus>(
       co_await asio::this_coro::executor);
 
   // 注册一个永不响应的 server
-  auto &rr =
-      agentContext->bus->getRR<events::ReqSubagentStart,
-                                events::RespSubagentResult>(
-          events::Topic::Subagent);
+  auto &rr = agentContext->bus
+                 ->getRR<events::ReqSubagentStart, events::RespSubagentResult>(
+                     events::Topic::Subagent);
   rr.serve([](const events::ReqSubagentStart &,
               size_t) -> asio::awaitable<events::RespSubagentResult> {
     auto timer = asio::steady_timer(co_await asio::this_coro::executor,
@@ -202,39 +190,35 @@ inline asio::awaitable<void> test_subagent_bus_timeout() {
   });
 
   auto resp =
-      co_await agentContext->bus->request<events::ReqSubagentStart,
-                                           events::RespSubagentResult>(
-          events::Topic::Subagent,
-          events::ReqSubagentStart{
-              .parentAgentName = "p",
-              .parentThreadId = "t",
-              .subagentName = "x",
-              .systemPrompt = "",
-              .message = "m",
-              .resultId = "r",
-          },
-          std::chrono::milliseconds(200));
+      co_await agentContext->bus
+          ->request<events::ReqSubagentStart, events::RespSubagentResult>(
+              events::Topic::Subagent,
+              events::ReqSubagentStart{
+                  .parentAgentName = "p",
+                  .parentThreadId = "t",
+                  .subagentName = "x",
+                  .systemPrompt = "",
+                  .message = "m",
+                  .resultId = "r",
+              },
+              std::chrono::milliseconds(200));
 
   SB_EXPECT_TRUE(!resp.has_value());
 
   co_return;
 }
 
-inline asio::awaitable<void> run_subagent_bus_tests() {
-  std::cout << "=== subagent_bus Tests ===" << std::endl;
+inline asio::awaitable<TestResult> run_subagent_bus_tests() {
   try {
     co_await test_subagent_bus_request_response();
     co_await test_subagent_progress_events();
     co_await test_subagent_supervisor_notfound();
     co_await test_subagent_bus_timeout();
   } catch (const std::exception &e) {
-    std::cout << "[FAIL] subagent_bus suite exception: " << e.what()
-              << std::endl;
+    TEST_FAIL << "subagent_bus suite exception: " << e.what() << std::endl;
     g_sb_failed++;
   }
-  std::cout << "=== subagent_bus Tests DONE (pass=" << g_sb_passed
-            << " fail=" << g_sb_failed << ") ===" << std::endl;
-  co_return;
+  co_return TestResult{g_sb_passed, g_sb_failed};
 }
 
 } // namespace test

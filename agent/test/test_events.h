@@ -1,8 +1,8 @@
 #pragma once
 
 #include "agentxx/events.h"
+#include "test_framework.h"
 #include <cassert>
-#include <iostream>
 
 namespace agentxx {
 namespace test {
@@ -10,20 +10,17 @@ namespace test {
 inline static int g_ev_passed = 0;
 inline static int g_ev_failed = 0;
 
-#define EV_TEST(name) std::cout << "  [" << (name) << "]" << std::endl
 #define EV_EXPECT_TRUE(expr)                                                   \
   do {                                                                         \
     if (expr) {                                                                \
       g_ev_passed++;                                                           \
     } else {                                                                   \
       g_ev_failed++;                                                           \
-      std::cerr << "    FAIL at line " << __LINE__ << ": expected true"        \
-                << std::endl;                                                  \
+      TEST_FAIL << "line " << __LINE__ << ": expected true" << std::endl;      \
     }                                                                          \
   } while (0)
 
 inline void test_events_topics() {
-  EV_TEST("events::Topic constants present & non-empty");
   using namespace agentxx::events;
   EV_EXPECT_TRUE(!Topic::AgentTurnStart.empty());
   EV_EXPECT_TRUE(!Topic::AgentTurnEnd.empty());
@@ -43,7 +40,6 @@ inline void test_events_topics() {
 }
 
 inline void test_events_structs_defaultconstruct() {
-  EV_TEST("events structs default-construct & assign");
   using namespace agentxx::events;
   {
     EventAgentTurnStart e{};
@@ -90,12 +86,10 @@ inline void test_events_structs_defaultconstruct() {
   }
 }
 
-inline void test_events() {
-  std::cout << "=== events Tests ===" << std::endl;
+inline TestResult test_events() {
   test_events_topics();
   test_events_structs_defaultconstruct();
-  std::cout << "=== events Tests DONE (pass=" << g_ev_passed
-            << " fail=" << g_ev_failed << ") ===" << std::endl;
+  return TestResult{g_ev_passed, g_ev_failed};
 }
 
 } // namespace test

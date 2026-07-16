@@ -4,6 +4,7 @@
 #include "agentxx/expand/codegraph_manager.h"
 #include "agentxx/tools/codegraph_tool.h"
 #include "neograph/neograph.h"
+#include "test_framework.h"
 #include <asio/awaitable.hpp>
 #include <atomic>
 #include <filesystem>
@@ -11,10 +12,14 @@
 #include <iostream>
 #include <string>
 
+
 #if AGENTXX_ENABLE_CODEGRAPH
 
 namespace agentxx {
 namespace test {
+
+inline static int g_cg_passed = 0;
+inline static int g_cg_failed = 0;
 
 namespace fs = std::filesystem;
 
@@ -270,10 +275,11 @@ inline void test_codegraph_manager_init() {
 
   bool ok = manager.initialize(tmp_dir);
   if (ok) {
-    std::cout << "[PASS] CodeGraphManager::initialize creates index"
-              << std::endl;
+    g_cg_passed++;
+    TEST_PASS << "CodeGraphManager::initialize creates index" << std::endl;
   } else {
-    std::cout << "[FAIL] CodeGraphManager::initialize failed" << std::endl;
+    g_cg_failed++;
+    TEST_FAIL << "CodeGraphManager::initialize failed" << std::endl;
   }
 
   cleanup_temp_project(tmp_dir);
@@ -287,11 +293,11 @@ inline void test_codegraph_manager_init_twice() {
   bool ok2 = manager.initialize(tmp_dir);
 
   if (ok1 && ok2) {
-    std::cout << "[PASS] CodeGraphManager::initialize twice succeeds"
-              << std::endl;
+    g_cg_passed++;
+    TEST_PASS << "CodeGraphManager::initialize twice succeeds" << std::endl;
   } else {
-    std::cout << "[FAIL] CodeGraphManager::initialize twice failed"
-              << std::endl;
+    g_cg_failed++;
+    TEST_FAIL << "CodeGraphManager::initialize twice failed" << std::endl;
   }
 
   cleanup_temp_project(tmp_dir);
@@ -303,20 +309,24 @@ inline void test_codegraph_manager_not_initialized() {
   auto search_result = manager.searchSymbols("test", 10);
   if (!search_result.success &&
       search_result.error.find("not initialized") != std::string::npos) {
-    std::cout << "[PASS] CodeGraphManager rejects search when not initialized"
+    g_cg_passed++;
+    TEST_PASS << "CodeGraphManager rejects search when not initialized"
               << std::endl;
   } else {
-    std::cout << "[FAIL] CodeGraphManager should reject uninitialized search"
+    g_cg_failed++;
+    TEST_FAIL << "CodeGraphManager should reject uninitialized search"
               << std::endl;
   }
 
   auto status_result = manager.getStatus();
   if (!status_result.success &&
       status_result.error.find("not initialized") != std::string::npos) {
-    std::cout << "[PASS] CodeGraphManager rejects status when not initialized"
+    g_cg_passed++;
+    TEST_PASS << "CodeGraphManager rejects status when not initialized"
               << std::endl;
   } else {
-    std::cout << "[FAIL] CodeGraphManager should reject uninitialized status"
+    g_cg_failed++;
+    TEST_FAIL << "CodeGraphManager should reject uninitialized status"
               << std::endl;
   }
 }
@@ -329,10 +339,11 @@ inline void test_codegraph_manager_index() {
   bool ok = manager.indexDirectory(tmp_dir, false);
 
   if (ok) {
-    std::cout << "[PASS] CodeGraphManager::indexDirectory succeeds"
-              << std::endl;
+    g_cg_passed++;
+    TEST_PASS << "CodeGraphManager::indexDirectory succeeds" << std::endl;
   } else {
-    std::cout << "[FAIL] CodeGraphManager::indexDirectory failed" << std::endl;
+    g_cg_failed++;
+    TEST_FAIL << "CodeGraphManager::indexDirectory failed" << std::endl;
   }
 
   cleanup_temp_project(tmp_dir);
@@ -347,10 +358,12 @@ inline void test_codegraph_manager_incremental_index() {
 
   bool ok = manager.indexDirectory(tmp_dir, true);
   if (ok) {
-    std::cout << "[PASS] CodeGraphManager::indexDirectory incremental succeeds"
+    g_cg_passed++;
+    TEST_PASS << "CodeGraphManager::indexDirectory incremental succeeds"
               << std::endl;
   } else {
-    std::cout << "[FAIL] CodeGraphManager::indexDirectory incremental failed"
+    g_cg_failed++;
+    TEST_FAIL << "CodeGraphManager::indexDirectory incremental failed"
               << std::endl;
   }
 
@@ -367,15 +380,17 @@ inline void test_codegraph_manager_search() {
   auto result = manager.searchSymbols("add", 10);
   if (result.success) {
     if (!result.nodes.empty()) {
-      std::cout << "[PASS] CodeGraphManager::searchSymbols found "
+      g_cg_passed++;
+      TEST_PASS << "CodeGraphManager::searchSymbols found "
                 << result.nodes.size() << " results" << std::endl;
     } else {
-      std::cout << "[INFO] CodeGraphManager::searchSymbols returned empty "
+      TEST_INFO << "CodeGraphManager::searchSymbols returned empty "
                    "(FTS may not be populated)"
                 << std::endl;
     }
   } else {
-    std::cout << "[FAIL] CodeGraphManager::searchSymbols error: "
+    g_cg_failed++;
+    TEST_FAIL << "CodeGraphManager::searchSymbols error: "
               << (result.error.empty() ? "(empty)" : result.error) << std::endl;
   }
 
@@ -391,14 +406,17 @@ inline void test_codegraph_manager_search_no_results() {
 
   auto result = manager.searchSymbols("nonexistent_symbol_xyz", 10);
   if (result.success && result.nodes.empty()) {
-    std::cout << "[PASS] CodeGraphManager::searchSymbols returns empty for "
+    g_cg_passed++;
+    TEST_PASS << "CodeGraphManager::searchSymbols returns empty for "
                  "unknown symbol"
               << std::endl;
   } else if (!result.success) {
-    std::cout << "[FAIL] CodeGraphManager::searchSymbols error: "
+    g_cg_failed++;
+    TEST_FAIL << "CodeGraphManager::searchSymbols error: "
               << (result.error.empty() ? "(empty)" : result.error) << std::endl;
   } else {
-    std::cout << "[FAIL] CodeGraphManager::searchSymbols should return empty "
+    g_cg_failed++;
+    TEST_FAIL << "CodeGraphManager::searchSymbols should return empty "
                  "for unknown symbol"
               << std::endl;
   }
@@ -415,10 +433,11 @@ inline void test_codegraph_manager_context() {
 
   auto result = manager.getSymbolContext("add");
   if (result.success) {
-    std::cout << "[PASS] CodeGraphManager::getSymbolContext succeeds"
-              << std::endl;
+    g_cg_passed++;
+    TEST_PASS << "CodeGraphManager::getSymbolContext succeeds" << std::endl;
   } else {
-    std::cout << "[FAIL] CodeGraphManager::getSymbolContext failed: "
+    g_cg_failed++;
+    TEST_FAIL << "CodeGraphManager::getSymbolContext failed: "
               << (result.error.empty() ? "(empty)" : result.error) << std::endl;
   }
 
@@ -435,18 +454,20 @@ inline void test_codegraph_manager_status() {
   try {
     auto result = manager.getStatus();
     if (result.success) {
-      std::cout << "[PASS] CodeGraphManager::getStatus returns stats"
-                << std::endl;
+      g_cg_passed++;
+      TEST_PASS << "CodeGraphManager::getStatus returns stats" << std::endl;
     } else {
-      std::cout << "[FAIL] CodeGraphManager::getStatus failed: "
+      g_cg_failed++;
+      TEST_FAIL << "CodeGraphManager::getStatus failed: "
                 << (result.error.empty() ? "(empty)" : result.error)
                 << std::endl;
     }
   } catch (const std::exception &e) {
-    std::cout << "[FAIL] CodeGraphManager::getStatus threw: " << e.what()
-              << std::endl;
+    g_cg_failed++;
+    TEST_FAIL << "CodeGraphManager::getStatus threw: " << e.what() << std::endl;
   } catch (...) {
-    std::cout << "[FAIL] CodeGraphManager::getStatus threw unknown exception"
+    g_cg_failed++;
+    TEST_FAIL << "CodeGraphManager::getStatus threw unknown exception"
               << std::endl;
   }
 
@@ -462,9 +483,11 @@ inline void test_codegraph_manager_callers() {
 
   auto result = manager.getCallers("add");
   if (result.success) {
-    std::cout << "[PASS] CodeGraphManager::getCallers succeeds" << std::endl;
+    g_cg_passed++;
+    TEST_PASS << "CodeGraphManager::getCallers succeeds" << std::endl;
   } else {
-    std::cout << "[FAIL] CodeGraphManager::getCallers failed: "
+    g_cg_failed++;
+    TEST_FAIL << "CodeGraphManager::getCallers failed: "
               << (result.error.empty() ? "(empty)" : result.error) << std::endl;
   }
 
@@ -480,9 +503,11 @@ inline void test_codegraph_manager_callees() {
 
   auto result = manager.getCallees("main");
   if (result.success) {
-    std::cout << "[PASS] CodeGraphManager::getCallees succeeds" << std::endl;
+    g_cg_passed++;
+    TEST_PASS << "CodeGraphManager::getCallees succeeds" << std::endl;
   } else {
-    std::cout << "[FAIL] CodeGraphManager::getCallees failed: "
+    g_cg_failed++;
+    TEST_FAIL << "CodeGraphManager::getCallees failed: "
               << (result.error.empty() ? "(empty)" : result.error) << std::endl;
   }
 
@@ -498,9 +523,11 @@ inline void test_codegraph_manager_impact() {
 
   auto result = manager.getImpact("add");
   if (result.success) {
-    std::cout << "[PASS] CodeGraphManager::getImpact succeeds" << std::endl;
+    g_cg_passed++;
+    TEST_PASS << "CodeGraphManager::getImpact succeeds" << std::endl;
   } else {
-    std::cout << "[FAIL] CodeGraphManager::getImpact failed: "
+    g_cg_failed++;
+    TEST_FAIL << "CodeGraphManager::getImpact failed: "
               << (result.error.empty() ? "(empty)" : result.error) << std::endl;
   }
 
@@ -516,9 +543,10 @@ inline void test_codegraph_manager_path() {
 
   auto result = manager.findPath("main", "add_impl");
   if (result.success) {
-    std::cout << "[PASS] CodeGraphManager::findPath found path" << std::endl;
+    g_cg_passed++;
+    TEST_PASS << "CodeGraphManager::findPath found path" << std::endl;
   } else {
-    std::cout << "[INFO] CodeGraphManager::findPath result: "
+    TEST_INFO << "CodeGraphManager::findPath result: "
               << (result.error.empty() ? "(empty)" : result.error) << std::endl;
   }
 
@@ -536,10 +564,11 @@ inline void test_codegraph_manager_shutdown() {
   auto result = manager.searchSymbols("add", 10);
   if (!result.success &&
       result.error.find("not initialized") != std::string::npos) {
-    std::cout << "[PASS] CodeGraphManager::shutdown disables queries"
-              << std::endl;
+    g_cg_passed++;
+    TEST_PASS << "CodeGraphManager::shutdown disables queries" << std::endl;
   } else {
-    std::cout << "[FAIL] CodeGraphManager::shutdown should disable queries"
+    g_cg_failed++;
+    TEST_FAIL << "CodeGraphManager::shutdown should disable queries"
               << std::endl;
   }
 
@@ -555,9 +584,11 @@ inline void test_codegraph_manager_update_index() {
 
   bool ok = manager.updateIndex();
   if (ok) {
-    std::cout << "[PASS] CodeGraphManager::updateIndex succeeds" << std::endl;
+    g_cg_passed++;
+    TEST_PASS << "CodeGraphManager::updateIndex succeeds" << std::endl;
   } else {
-    std::cout << "[FAIL] CodeGraphManager::updateIndex failed" << std::endl;
+    g_cg_failed++;
+    TEST_FAIL << "CodeGraphManager::updateIndex failed" << std::endl;
   }
 
   cleanup_temp_project(tmp_dir);
@@ -572,11 +603,11 @@ inline void test_codegraph_manager_resolve() {
 
   auto result = manager.resolveReferences();
   if (result) {
-    std::cout << "[PASS] CodeGraphManager::resolveReferences succeeds"
-              << std::endl;
+    g_cg_passed++;
+    TEST_PASS << "CodeGraphManager::resolveReferences succeeds" << std::endl;
   } else {
-    std::cout << "[FAIL] CodeGraphManager::resolveReferences failed"
-              << std::endl;
+    g_cg_failed++;
+    TEST_FAIL << "CodeGraphManager::resolveReferences failed" << std::endl;
   }
 
   cleanup_temp_project(tmp_dir);
@@ -594,10 +625,11 @@ inline void test_codegraph_manager_multi_lang_index() {
   bool ok = manager.indexDirectory(tmp_dir, false);
 
   if (ok) {
-    std::cout << "[PASS] CodeGraphManager multi-lang index succeeds"
-              << std::endl;
+    g_cg_passed++;
+    TEST_PASS << "CodeGraphManager multi-lang index succeeds" << std::endl;
   } else {
-    std::cout << "[FAIL] CodeGraphManager multi-lang index failed" << std::endl;
+    g_cg_failed++;
+    TEST_FAIL << "CodeGraphManager multi-lang index failed" << std::endl;
   }
 
   cleanup_temp_project(tmp_dir);
@@ -612,11 +644,13 @@ inline void test_codegraph_manager_multi_lang_status() {
 
   auto result = manager.getStatus();
   if (result.success && result.total_files >= 6) {
-    std::cout << "[PASS] CodeGraphManager multi-lang status: "
-              << result.total_files << " files, " << result.total_nodes
-              << " nodes, " << result.total_edges << " edges" << std::endl;
+    g_cg_passed++;
+    TEST_PASS << "CodeGraphManager multi-lang status: " << result.total_files
+              << " files, " << result.total_nodes << " nodes, "
+              << result.total_edges << " edges" << std::endl;
   } else {
-    std::cout << "[FAIL] CodeGraphManager multi-lang status failed: "
+    g_cg_failed++;
+    TEST_FAIL << "CodeGraphManager multi-lang status failed: "
               << (result.error.empty() ? "too few files" : result.error)
               << std::endl;
   }
@@ -633,10 +667,12 @@ inline void test_codegraph_manager_python_search() {
 
   auto result = manager.searchSymbols("greet", 20);
   if (result.success) {
-    std::cout << "[PASS] CodeGraphManager Python search 'greet' found "
+    g_cg_passed++;
+    TEST_PASS << "CodeGraphManager Python search 'greet' found "
               << result.nodes.size() << " results" << std::endl;
   } else {
-    std::cout << "[FAIL] CodeGraphManager Python search failed: "
+    g_cg_failed++;
+    TEST_FAIL << "CodeGraphManager Python search failed: "
               << (result.error.empty() ? "(empty)" : result.error) << std::endl;
   }
 
@@ -660,14 +696,17 @@ inline void test_codegraph_manager_javascript_search() {
       }
     }
     if (found_js || result.nodes.empty()) {
-      std::cout << "[PASS] CodeGraphManager JavaScript search 'multiply' found "
+      g_cg_passed++;
+      TEST_PASS << "CodeGraphManager JavaScript search 'multiply' found "
                 << result.nodes.size() << " results" << std::endl;
     } else {
-      std::cout << "[FAIL] CodeGraphManager JavaScript search: no .js results"
+      g_cg_failed++;
+      TEST_FAIL << "CodeGraphManager JavaScript search: no .js results"
                 << std::endl;
     }
   } else {
-    std::cout << "[FAIL] CodeGraphManager JavaScript search failed: "
+    g_cg_failed++;
+    TEST_FAIL << "CodeGraphManager JavaScript search failed: "
               << (result.error.empty() ? "(empty)" : result.error) << std::endl;
   }
 
@@ -683,10 +722,12 @@ inline void test_codegraph_manager_typescript_search() {
 
   auto result = manager.searchSymbols("getUser", 20);
   if (result.success) {
-    std::cout << "[PASS] CodeGraphManager TypeScript search 'getUser' found "
+    g_cg_passed++;
+    TEST_PASS << "CodeGraphManager TypeScript search 'getUser' found "
               << result.nodes.size() << " results" << std::endl;
   } else {
-    std::cout << "[FAIL] CodeGraphManager TypeScript search failed: "
+    g_cg_failed++;
+    TEST_FAIL << "CodeGraphManager TypeScript search failed: "
               << (result.error.empty() ? "(empty)" : result.error) << std::endl;
   }
 
@@ -702,10 +743,12 @@ inline void test_codegraph_manager_rust_search() {
 
   auto result = manager.searchSymbols("factorial", 20);
   if (result.success) {
-    std::cout << "[PASS] CodeGraphManager Rust search 'factorial' found "
+    g_cg_passed++;
+    TEST_PASS << "CodeGraphManager Rust search 'factorial' found "
               << result.nodes.size() << " results" << std::endl;
   } else {
-    std::cout << "[FAIL] CodeGraphManager Rust search failed: "
+    g_cg_failed++;
+    TEST_FAIL << "CodeGraphManager Rust search failed: "
               << (result.error.empty() ? "(empty)" : result.error) << std::endl;
   }
 
@@ -729,14 +772,16 @@ inline void test_codegraph_manager_go_search() {
       }
     }
     if (found_go || result.nodes.empty()) {
-      std::cout << "[PASS] CodeGraphManager Go search 'greet' found "
+      g_cg_passed++;
+      TEST_PASS << "CodeGraphManager Go search 'greet' found "
                 << result.nodes.size() << " results" << std::endl;
     } else {
-      std::cout << "[FAIL] CodeGraphManager Go search: no .go results"
-                << std::endl;
+      g_cg_failed++;
+      TEST_FAIL << "CodeGraphManager Go search: no .go results" << std::endl;
     }
   } else {
-    std::cout << "[FAIL] CodeGraphManager Go search failed: "
+    g_cg_failed++;
+    TEST_FAIL << "CodeGraphManager Go search failed: "
               << (result.error.empty() ? "(empty)" : result.error) << std::endl;
   }
 
@@ -760,14 +805,17 @@ inline void test_codegraph_manager_java_search() {
       }
     }
     if (found_java || result.nodes.empty()) {
-      std::cout << "[PASS] CodeGraphManager Java search 'multiply' found "
+      g_cg_passed++;
+      TEST_PASS << "CodeGraphManager Java search 'multiply' found "
                 << result.nodes.size() << " results" << std::endl;
     } else {
-      std::cout << "[FAIL] CodeGraphManager Java search: no .java results"
+      g_cg_failed++;
+      TEST_FAIL << "CodeGraphManager Java search: no .java results"
                 << std::endl;
     }
   } else {
-    std::cout << "[FAIL] CodeGraphManager Java search failed: "
+    g_cg_failed++;
+    TEST_FAIL << "CodeGraphManager Java search failed: "
               << (result.error.empty() ? "(empty)" : result.error) << std::endl;
   }
 
@@ -783,11 +831,13 @@ inline void test_codegraph_manager_multi_lang_context() {
 
   auto result = manager.getSymbolContext("add");
   if (result.success) {
-    std::cout << "[PASS] CodeGraphManager multi-lang getSymbolContext 'add' "
+    g_cg_passed++;
+    TEST_PASS << "CodeGraphManager multi-lang getSymbolContext 'add' "
                  "succeeds"
               << std::endl;
   } else {
-    std::cout << "[FAIL] CodeGraphManager multi-lang getSymbolContext failed: "
+    g_cg_failed++;
+    TEST_FAIL << "CodeGraphManager multi-lang getSymbolContext failed: "
               << (result.error.empty() ? "(empty)" : result.error) << std::endl;
   }
 
@@ -804,11 +854,12 @@ inline void test_codegraph_manager_multi_lang_path() {
   auto result = manager.findPath("multiply", "add");
   if (result.success ||
       result.error.find("No path found") != std::string::npos) {
-    std::cout << "[PASS] CodeGraphManager multi-lang findPath multiply->add "
+    g_cg_passed++;
+    TEST_PASS << "CodeGraphManager multi-lang findPath multiply->add "
                  "returned"
               << std::endl;
   } else {
-    std::cout << "[INFO] CodeGraphManager multi-lang findPath: "
+    TEST_INFO << "CodeGraphManager multi-lang findPath: "
               << (result.error.empty() ? "(empty)" : result.error) << std::endl;
   }
 
@@ -826,10 +877,12 @@ inline asio::awaitable<void> test_codegraph_search_tool_definition(
 
   auto def = tool.get_definition();
   if (def.name == "codegraph_search") {
-    std::cout << "[PASS] CodeGraphSearchTool::get_definition name correct"
+    g_cg_passed++;
+    TEST_PASS << "CodeGraphSearchTool::get_definition name correct"
               << std::endl;
   } else {
-    std::cout << "[FAIL] CodeGraphSearchTool::get_definition name incorrect"
+    g_cg_failed++;
+    TEST_FAIL << "CodeGraphSearchTool::get_definition name incorrect"
               << std::endl;
   }
   co_return;
@@ -842,10 +895,12 @@ inline asio::awaitable<void> test_codegraph_context_tool_definition(
 
   auto def = tool.get_definition();
   if (def.name == "codegraph_context") {
-    std::cout << "[PASS] CodeGraphContextTool::get_definition name correct"
+    g_cg_passed++;
+    TEST_PASS << "CodeGraphContextTool::get_definition name correct"
               << std::endl;
   } else {
-    std::cout << "[FAIL] CodeGraphContextTool::get_definition name incorrect"
+    g_cg_failed++;
+    TEST_FAIL << "CodeGraphContextTool::get_definition name incorrect"
               << std::endl;
   }
   co_return;
@@ -858,10 +913,12 @@ inline asio::awaitable<void> test_codegraph_callers_tool_definition(
 
   auto def = tool.get_definition();
   if (def.name == "codegraph_callers") {
-    std::cout << "[PASS] CodeGraphCallersTool::get_definition name correct"
+    g_cg_passed++;
+    TEST_PASS << "CodeGraphCallersTool::get_definition name correct"
               << std::endl;
   } else {
-    std::cout << "[FAIL] CodeGraphCallersTool::get_definition name incorrect"
+    g_cg_failed++;
+    TEST_FAIL << "CodeGraphCallersTool::get_definition name incorrect"
               << std::endl;
   }
   co_return;
@@ -874,10 +931,12 @@ inline asio::awaitable<void> test_codegraph_callees_tool_definition(
 
   auto def = tool.get_definition();
   if (def.name == "codegraph_callees") {
-    std::cout << "[PASS] CodeGraphCalleesTool::get_definition name correct"
+    g_cg_passed++;
+    TEST_PASS << "CodeGraphCalleesTool::get_definition name correct"
               << std::endl;
   } else {
-    std::cout << "[FAIL] CodeGraphCalleesTool::get_definition name incorrect"
+    g_cg_failed++;
+    TEST_FAIL << "CodeGraphCalleesTool::get_definition name incorrect"
               << std::endl;
   }
   co_return;
@@ -890,10 +949,12 @@ inline asio::awaitable<void> test_codegraph_impact_tool_definition(
 
   auto def = tool.get_definition();
   if (def.name == "codegraph_impact") {
-    std::cout << "[PASS] CodeGraphImpactTool::get_definition name correct"
+    g_cg_passed++;
+    TEST_PASS << "CodeGraphImpactTool::get_definition name correct"
               << std::endl;
   } else {
-    std::cout << "[FAIL] CodeGraphImpactTool::get_definition name incorrect"
+    g_cg_failed++;
+    TEST_FAIL << "CodeGraphImpactTool::get_definition name incorrect"
               << std::endl;
   }
   co_return;
@@ -906,10 +967,12 @@ inline asio::awaitable<void> test_codegraph_status_tool_definition(
 
   auto def = tool.get_definition();
   if (def.name == "codegraph_status") {
-    std::cout << "[PASS] CodeGraphStatusTool::get_definition name correct"
+    g_cg_passed++;
+    TEST_PASS << "CodeGraphStatusTool::get_definition name correct"
               << std::endl;
   } else {
-    std::cout << "[FAIL] CodeGraphStatusTool::get_definition name incorrect"
+    g_cg_failed++;
+    TEST_FAIL << "CodeGraphStatusTool::get_definition name incorrect"
               << std::endl;
   }
   co_return;
@@ -922,10 +985,11 @@ inline asio::awaitable<void> test_codegraph_index_tool_definition(
 
   auto def = tool.get_definition();
   if (def.name == "codegraph_index") {
-    std::cout << "[PASS] CodeGraphIndexTool::get_definition name correct"
-              << std::endl;
+    g_cg_passed++;
+    TEST_PASS << "CodeGraphIndexTool::get_definition name correct" << std::endl;
   } else {
-    std::cout << "[FAIL] CodeGraphIndexTool::get_definition name incorrect"
+    g_cg_failed++;
+    TEST_FAIL << "CodeGraphIndexTool::get_definition name incorrect"
               << std::endl;
   }
   co_return;
@@ -938,10 +1002,11 @@ inline asio::awaitable<void> test_codegraph_path_tool_definition(
 
   auto def = tool.get_definition();
   if (def.name == "codegraph_path") {
-    std::cout << "[PASS] CodeGraphPathTool::get_definition name correct"
-              << std::endl;
+    g_cg_passed++;
+    TEST_PASS << "CodeGraphPathTool::get_definition name correct" << std::endl;
   } else {
-    std::cout << "[FAIL] CodeGraphPathTool::get_definition name incorrect"
+    g_cg_failed++;
+    TEST_FAIL << "CodeGraphPathTool::get_definition name incorrect"
               << std::endl;
   }
   co_return;
@@ -966,15 +1031,16 @@ inline asio::awaitable<void> test_codegraph_search_tool_execute(
   bool has_error = result.find("error") != std::string::npos;
 
   if (has_kind && has_name) {
-    std::cout << "[PASS] CodeGraphSearchTool returns valid search results"
+    g_cg_passed++;
+    TEST_PASS << "CodeGraphSearchTool returns valid search results"
               << std::endl;
   } else if (!has_error && result == "[]") {
-    std::cout << "[INFO] CodeGraphSearchTool returned empty (FTS may not be "
+    TEST_INFO << "CodeGraphSearchTool returned empty (FTS may not be "
                  "populated)"
               << std::endl;
   } else {
-    std::cout << "[FAIL] CodeGraphSearchTool invalid result: " << result
-              << std::endl;
+    g_cg_failed++;
+    TEST_FAIL << "CodeGraphSearchTool invalid result: " << result << std::endl;
   }
 
   cleanup_temp_project(tmp_dir);
@@ -987,9 +1053,11 @@ inline asio::awaitable<void> test_codegraph_search_tool_execute_empty_query(
 
   auto result = co_await tool.execute_async({{"query", ""}});
   if (result.find("error") != std::string::npos) {
-    std::cout << "[PASS] CodeGraphSearchTool rejects empty query" << std::endl;
+    g_cg_passed++;
+    TEST_PASS << "CodeGraphSearchTool rejects empty query" << std::endl;
   } else {
-    std::cout << "[FAIL] CodeGraphSearchTool should reject empty query, got: "
+    g_cg_failed++;
+    TEST_FAIL << "CodeGraphSearchTool should reject empty query, got: "
               << result << std::endl;
   }
 }
@@ -1005,9 +1073,11 @@ inline asio::awaitable<void> test_codegraph_context_tool_execute(
   auto result = co_await tool.execute_async({{"symbol", "add"}});
 
   if (result.find("symbol") != std::string::npos) {
-    std::cout << "[PASS] CodeGraphContextTool returns context" << std::endl;
+    g_cg_passed++;
+    TEST_PASS << "CodeGraphContextTool returns context" << std::endl;
   } else {
-    std::cout << "[FAIL] CodeGraphContextTool failed: " << result << std::endl;
+    g_cg_failed++;
+    TEST_FAIL << "CodeGraphContextTool failed: " << result << std::endl;
   }
 
   cleanup_temp_project(tmp_dir);
@@ -1028,10 +1098,11 @@ inline asio::awaitable<void> test_codegraph_status_tool_execute(
   bool has_files = result.find("total_files") != std::string::npos;
 
   if (has_nodes && has_edges && has_files) {
-    std::cout << "[PASS] CodeGraphStatusTool returns statistics" << std::endl;
+    g_cg_passed++;
+    TEST_PASS << "CodeGraphStatusTool returns statistics" << std::endl;
   } else {
-    std::cout << "[FAIL] CodeGraphStatusTool incomplete: " << result
-              << std::endl;
+    g_cg_failed++;
+    TEST_FAIL << "CodeGraphStatusTool incomplete: " << result << std::endl;
   }
 
   cleanup_temp_project(tmp_dir);
@@ -1048,9 +1119,11 @@ inline asio::awaitable<void> test_codegraph_index_tool_execute(
       co_await tool.execute_async({{"path", tmp_dir}, {"incremental", false}});
 
   if (result.find("success") != std::string::npos) {
-    std::cout << "[PASS] CodeGraphIndexTool indexes directory" << std::endl;
+    g_cg_passed++;
+    TEST_PASS << "CodeGraphIndexTool indexes directory" << std::endl;
   } else {
-    std::cout << "[FAIL] CodeGraphIndexTool failed: " << result << std::endl;
+    g_cg_failed++;
+    TEST_FAIL << "CodeGraphIndexTool failed: " << result << std::endl;
   }
 
   cleanup_temp_project(tmp_dir);
@@ -1063,10 +1136,12 @@ inline asio::awaitable<void> test_codegraph_index_tool_execute_empty_path(
 
   auto result = co_await tool.execute_async({{"path", ""}});
   if (result.find("error") != std::string::npos) {
-    std::cout << "[PASS] CodeGraphIndexTool rejects empty path" << std::endl;
+    g_cg_passed++;
+    TEST_PASS << "CodeGraphIndexTool rejects empty path" << std::endl;
   } else {
-    std::cout << "[FAIL] CodeGraphIndexTool should reject empty path, got: "
-              << result << std::endl;
+    g_cg_failed++;
+    TEST_FAIL << "CodeGraphIndexTool should reject empty path, got: " << result
+              << std::endl;
   }
 }
 
@@ -1081,9 +1156,11 @@ inline asio::awaitable<void> test_codegraph_callers_tool_execute(
   auto result = co_await tool.execute_async({{"symbol", "add"}});
 
   if (result.find("error") == std::string::npos) {
-    std::cout << "[PASS] CodeGraphCallersTool returns callers" << std::endl;
+    g_cg_passed++;
+    TEST_PASS << "CodeGraphCallersTool returns callers" << std::endl;
   } else {
-    std::cout << "[FAIL] CodeGraphCallersTool failed: " << result << std::endl;
+    g_cg_failed++;
+    TEST_FAIL << "CodeGraphCallersTool failed: " << result << std::endl;
   }
 
   cleanup_temp_project(tmp_dir);
@@ -1100,9 +1177,11 @@ inline asio::awaitable<void> test_codegraph_callees_tool_execute(
   auto result = co_await tool.execute_async({{"symbol", "main"}});
 
   if (result.find("error") == std::string::npos) {
-    std::cout << "[PASS] CodeGraphCalleesTool returns callees" << std::endl;
+    g_cg_passed++;
+    TEST_PASS << "CodeGraphCalleesTool returns callees" << std::endl;
   } else {
-    std::cout << "[FAIL] CodeGraphCalleesTool failed: " << result << std::endl;
+    g_cg_failed++;
+    TEST_FAIL << "CodeGraphCalleesTool failed: " << result << std::endl;
   }
 
   cleanup_temp_project(tmp_dir);
@@ -1119,9 +1198,11 @@ inline asio::awaitable<void> test_codegraph_impact_tool_execute(
   auto result = co_await tool.execute_async({{"symbol", "add"}});
 
   if (result.find("error") == std::string::npos) {
-    std::cout << "[PASS] CodeGraphImpactTool returns impact" << std::endl;
+    g_cg_passed++;
+    TEST_PASS << "CodeGraphImpactTool returns impact" << std::endl;
   } else {
-    std::cout << "[FAIL] CodeGraphImpactTool failed: " << result << std::endl;
+    g_cg_failed++;
+    TEST_FAIL << "CodeGraphImpactTool failed: " << result << std::endl;
   }
 
   cleanup_temp_project(tmp_dir);
@@ -1140,10 +1221,10 @@ inline asio::awaitable<void> test_codegraph_path_tool_execute(
 
   if (result.find("error") == std::string::npos ||
       result.find("No path found") != std::string::npos) {
-    std::cout << "[PASS] CodeGraphPathTool returns path or no-path-found"
-              << std::endl;
+    g_cg_passed++;
+    TEST_PASS << "CodeGraphPathTool returns path or no-path-found" << std::endl;
   } else {
-    std::cout << "[INFO] CodeGraphPathTool result: " << result << std::endl;
+    TEST_INFO << "CodeGraphPathTool result: " << result << std::endl;
   }
 
   cleanup_temp_project(tmp_dir);
@@ -1153,9 +1234,8 @@ inline asio::awaitable<void> test_codegraph_path_tool_execute(
 // Test Runner
 // =========================================================================
 
-inline asio::awaitable<void> run_codegraph_tools_tests(
+inline asio::awaitable<TestResult> run_codegraph_tools_tests(
     std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
-  std::cout << "======= Test: CodeGraph Manager =======" << std::endl;
 
   test_codegraph_manager_init();
   test_codegraph_manager_init_twice();
@@ -1174,8 +1254,6 @@ inline asio::awaitable<void> run_codegraph_tools_tests(
   test_codegraph_manager_update_index();
   test_codegraph_manager_resolve();
 
-  std::cout << "======= Test: Multi-Language CodeGraph =======" << std::endl;
-
   test_codegraph_manager_multi_lang_index();
   test_codegraph_manager_multi_lang_status();
   test_codegraph_manager_python_search();
@@ -1187,13 +1265,12 @@ inline asio::awaitable<void> run_codegraph_tools_tests(
   test_codegraph_manager_multi_lang_context();
   test_codegraph_manager_multi_lang_path();
 
-  std::cout << "======= Test: CodeGraph Tools =======" << std::endl;
-
   auto run = [agentContext](auto testFn) -> asio::awaitable<void> {
     try {
       co_await testFn(agentContext);
     } catch (const std::exception &e) {
-      std::cout << "[FAIL] Exception in test: " << e.what() << std::endl;
+      g_cg_failed++;
+      TEST_FAIL << "Exception in test: " << e.what() << std::endl;
     }
   };
 
@@ -1217,7 +1294,7 @@ inline asio::awaitable<void> run_codegraph_tools_tests(
   co_await run(test_codegraph_impact_tool_execute);
   co_await run(test_codegraph_path_tool_execute);
 
-  std::cout << "======= Test Done =======" << std::endl;
+  co_return TestResult{g_cg_passed, g_cg_failed};
 }
 
 } // namespace test
@@ -1228,9 +1305,9 @@ inline asio::awaitable<void> run_codegraph_tools_tests(
 namespace agentxx {
 namespace test {
 
-inline asio::awaitable<void> run_codegraph_tools_tests(
+inline asio::awaitable<TestResult> run_codegraph_tools_tests(
     std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
-  co_return;
+  co_return TestResult{0, 0};
 }
 
 } // namespace test

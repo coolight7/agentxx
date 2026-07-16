@@ -14,21 +14,21 @@
 #include <memory>
 #include <string>
 
+#include "test_framework.h"
+
 namespace agentxx {
 namespace test {
 
 inline static int g_ca_passed = 0;
 inline static int g_ca_failed = 0;
 
-#define CA_TEST(name) std::cout << "  [" << (name) << "]" << std::endl
 #define CA_EXPECT_TRUE(expr)                                                   \
   do {                                                                         \
     if (expr) {                                                                \
       g_ca_passed++;                                                           \
     } else {                                                                   \
       g_ca_failed++;                                                           \
-      std::cerr << "    FAIL at line " << __LINE__ << ": expected true"        \
-                << std::endl;                                                  \
+      TEST_FAIL << "expected true at line " << __LINE__ << std::endl;          \
     }                                                                          \
   } while (0)
 #define CA_EXPECT_EQ(a, b)                                                     \
@@ -39,14 +39,13 @@ inline static int g_ca_failed = 0;
       g_ca_passed++;                                                           \
     } else {                                                                   \
       g_ca_failed++;                                                           \
-      std::cerr << "    FAIL at line " << __LINE__ << ": expected " << _b      \
-                << ", got " << _a << std::endl;                                \
+      TEST_FAIL << "expected " << _b << ", got " << _a << " at line "          \
+                << __LINE__ << std::endl;                                      \
     }                                                                          \
   } while (0)
 
 /// 验证: 跨 agent 查询请求-响应闭环 (模拟 server)
 inline asio::awaitable<void> test_crossagent_request_response() {
-  CA_TEST("crossagent bus: request -> mock server -> response");
 
   auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
   agentContext->bus = std::make_shared<agentxx::middleware::EventBus>(
@@ -66,17 +65,16 @@ inline asio::awaitable<void> test_crossagent_request_response() {
     };
   });
 
-  auto resp =
-      co_await agentContext->bus->request<events::ReqCrossAgent,
-                                           events::RespCrossAgent>(
-          events::Topic::CrossAgent,
-          events::ReqCrossAgent{
-              .fromAgent = "coder",
-              .fromThreadId = "t1",
-              .toAgent = "research",
-              .message = "what is foo?",
-          },
-          std::chrono::seconds(5));
+  auto resp = co_await agentContext->bus
+                  ->request<events::ReqCrossAgent, events::RespCrossAgent>(
+                      events::Topic::CrossAgent,
+                      events::ReqCrossAgent{
+                          .fromAgent = "coder",
+                          .fromThreadId = "t1",
+                          .toAgent = "research",
+                          .message = "what is foo?",
+                      },
+                      std::chrono::seconds(5));
 
   CA_EXPECT_TRUE(resp.has_value());
   if (resp.has_value()) {
@@ -89,7 +87,6 @@ inline asio::awaitable<void> test_crossagent_request_response() {
 
 /// 验证: 跨 agent 查询无 server 时返回错误 (SubagentSupervisor 路由)
 inline asio::awaitable<void> test_crossagent_no_running_agent() {
-  CA_TEST("crossagent supervisor: no running agent -> error");
 
   auto agentConfig = std::make_shared<agentxx::agent::AgentConfig>();
   auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
@@ -101,17 +98,16 @@ inline asio::awaitable<void> test_crossagent_no_running_agent() {
   co_await supervisor.start();
 
   // 无 subagent 运行中, 查询应返回错误
-  auto resp =
-      co_await agentContext->bus->request<events::ReqCrossAgent,
-                                           events::RespCrossAgent>(
-          events::Topic::CrossAgent,
-          events::ReqCrossAgent{
-              .fromAgent = "coder",
-              .fromThreadId = "t1",
-              .toAgent = "nonexistent",
-              .message = "hello",
-          },
-          std::chrono::seconds(5));
+  auto resp = co_await agentContext->bus
+                  ->request<events::ReqCrossAgent, events::RespCrossAgent>(
+                      events::Topic::CrossAgent,
+                      events::ReqCrossAgent{
+                          .fromAgent = "coder",
+                          .fromThreadId = "t1",
+                          .toAgent = "nonexistent",
+                          .message = "hello",
+                      },
+                      std::chrono::seconds(5));
 
   CA_EXPECT_TRUE(resp.has_value());
   if (resp.has_value()) {
@@ -125,29 +121,27 @@ inline asio::awaitable<void> test_crossagent_no_running_agent() {
 
 /// 验证: 批量 subagent 请求-响应闭环 (模拟 server)
 inline asio::awaitable<void> test_subagent_batch_request_response() {
-  CA_TEST("subagent batch: request -> mock server -> multi-response");
 
   auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
   agentContext->bus = std::make_shared<agentxx::middleware::EventBus>(
       co_await asio::this_coro::executor);
 
   auto &batchRR =
-      agentContext->bus->getRR<events::ReqSubagentBatch,
-                                events::RespSubagentBatch>(
-          events::Topic::SubagentBatch);
-  batchRR.serve(
-      [](const events::ReqSubagentBatch &req,
-         size_t) -> asio::awaitable<events::RespSubagentBatch> {
-        events::RespSubagentBatch resp;
-        CA_EXPECT_EQ(req.tasks.size(), size_t{3});
-        for (const auto &t : req.tasks) {
-          resp.results.push_back(events::RespSubagentBatchItem{
-              .resultId = t.resultId,
-              .content = fmt::format("out_{}", t.subagentName),
-          });
-        }
-        co_return resp;
+      agentContext->bus
+          ->getRR<events::ReqSubagentBatch, events::RespSubagentBatch>(
+              events::Topic::SubagentBatch);
+  batchRR.serve([](const events::ReqSubagentBatch &req,
+                   size_t) -> asio::awaitable<events::RespSubagentBatch> {
+    events::RespSubagentBatch resp;
+    CA_EXPECT_EQ(req.tasks.size(), size_t{3});
+    for (const auto &t : req.tasks) {
+      resp.results.push_back(events::RespSubagentBatchItem{
+          .resultId = t.resultId,
+          .content = fmt::format("out_{}", t.subagentName),
       });
+    }
+    co_return resp;
+  });
 
   events::ReqSubagentBatch batchReq{
       .parentAgentName = "parent",
@@ -169,9 +163,11 @@ inline asio::awaitable<void> test_subagent_batch_request_response() {
       .resultId = "call_3",
   });
 
-  auto resp = co_await agentContext->bus->request<events::ReqSubagentBatch,
-                                                  events::RespSubagentBatch>(
-      events::Topic::SubagentBatch, std::move(batchReq), std::chrono::seconds(5));
+  auto resp =
+      co_await agentContext->bus
+          ->request<events::ReqSubagentBatch, events::RespSubagentBatch>(
+              events::Topic::SubagentBatch, std::move(batchReq),
+              std::chrono::seconds(5));
 
   CA_EXPECT_TRUE(resp.has_value());
   if (resp.has_value()) {
@@ -189,7 +185,6 @@ inline asio::awaitable<void> test_subagent_batch_request_response() {
 
 /// 验证: CrossAgentQueryTool 工具定义正确
 inline void test_crossagent_query_tool_definition() {
-  CA_TEST("CrossAgentQueryTool definition");
 
   auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
   agentxx::tools::CrossAgentQueryTool tool{agentContext};
@@ -205,7 +200,6 @@ inline void test_crossagent_query_tool_definition() {
 
 /// 验证: 批量 subagent 空任务返回空结果
 inline asio::awaitable<void> test_subagent_batch_empty() {
-  CA_TEST("subagent batch: empty tasks -> empty results");
 
   auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
   agentContext->bus = std::make_shared<agentxx::middleware::EventBus>(
@@ -215,14 +209,15 @@ inline asio::awaitable<void> test_subagent_batch_empty() {
   agentxx::agent::SubagentSupervisor supervisor{agentContext};
   co_await supervisor.start();
 
-  auto resp = co_await agentContext->bus->request<events::ReqSubagentBatch,
-                                                  events::RespSubagentBatch>(
-      events::Topic::SubagentBatch,
-      events::ReqSubagentBatch{
-          .parentAgentName = "p",
-          .parentThreadId = "t",
-      },
-      std::chrono::seconds(5));
+  auto resp =
+      co_await agentContext->bus
+          ->request<events::ReqSubagentBatch, events::RespSubagentBatch>(
+              events::Topic::SubagentBatch,
+              events::ReqSubagentBatch{
+                  .parentAgentName = "p",
+                  .parentThreadId = "t",
+              },
+              std::chrono::seconds(5));
 
   CA_EXPECT_TRUE(resp.has_value());
   if (resp.has_value()) {
@@ -233,8 +228,7 @@ inline asio::awaitable<void> test_subagent_batch_empty() {
   co_return;
 }
 
-inline asio::awaitable<void> run_crossagent_tests() {
-  std::cout << "=== crossagent Tests ===" << std::endl;
+inline asio::awaitable<TestResult> run_crossagent_tests() {
   try {
     co_await test_crossagent_request_response();
     co_await test_crossagent_no_running_agent();
@@ -242,13 +236,10 @@ inline asio::awaitable<void> run_crossagent_tests() {
     test_crossagent_query_tool_definition();
     co_await test_subagent_batch_empty();
   } catch (const std::exception &e) {
-    std::cout << "[FAIL] crossagent suite exception: " << e.what()
-              << std::endl;
+    TEST_FAIL << "crossagent suite exception: " << e.what() << std::endl;
     g_ca_failed++;
   }
-  std::cout << "=== crossagent Tests DONE (pass=" << g_ca_passed
-            << " fail=" << g_ca_failed << ") ===" << std::endl;
-  co_return;
+  co_return TestResult{g_ca_passed, g_ca_failed};
 }
 
 } // namespace test

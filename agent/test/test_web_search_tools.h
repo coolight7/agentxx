@@ -3,6 +3,7 @@
 #include "agentxx/agent/context.h"
 #include "agentxx/tools/web_search.h"
 #include "neograph/neograph.h"
+#include "test_framework.h"
 #include <asio/awaitable.hpp>
 #include <iostream>
 #include <string>
@@ -10,17 +11,20 @@
 namespace agentxx {
 namespace test {
 
+inline static int g_ws_passed = 0;
+inline static int g_ws_failed = 0;
+
 inline asio::awaitable<void> test_web_search_get_definition(
     std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
   auto tool = agentxx::tools::WebSearchTool{"https://example.com/search?q={}",
                                             false, agentContext};
   auto def = tool.get_definition();
   if (def.name == "web_search") {
-    std::cout << "[PASS] WebSearchTool::get_definition() name correct"
-              << std::endl;
+    g_ws_passed++;
+    TEST_PASS << "WebSearchTool::get_definition() name correct" << std::endl;
   } else {
-    std::cout << "[FAIL] WebSearchTool::get_definition() name incorrect"
-              << std::endl;
+    g_ws_failed++;
+    TEST_FAIL << "WebSearchTool::get_definition() name incorrect" << std::endl;
   }
   co_return;
 }
@@ -32,8 +36,8 @@ inline asio::awaitable<void> test_web_search_empty_query(
   auto args = neograph::json{{"query", ""}};
   auto result = co_await tool.execute_async(args);
   if (result.find("\"error\"") != std::string::npos) {
-    std::cout << "[PASS] WebSearchTool returns error for empty query"
-              << std::endl;
+    g_ws_passed++;
+    TEST_PASS << "WebSearchTool returns error for empty query" << std::endl;
   } else {
     std::cout
         << "[FAIL] WebSearchTool should return error for empty query, got: "
@@ -63,12 +67,13 @@ inline asio::awaitable<void> test_web_search_definition_has_required_query(
           << "[PASS] WebSearchTool definition has 'query' as required param"
           << std::endl;
     } else {
-      std::cout << "[FAIL] WebSearchTool definition missing 'query' in required"
+      g_ws_failed++;
+      TEST_FAIL << "WebSearchTool definition missing 'query' in required"
                 << std::endl;
     }
   } else {
-    std::cout << "[FAIL] WebSearchTool definition has no required params"
-              << std::endl;
+    g_ws_failed++;
+    TEST_FAIL << "WebSearchTool definition has no required params" << std::endl;
   }
   co_return;
 }
@@ -78,10 +83,11 @@ inline asio::awaitable<void> test_web_fetch_url_get_definition(
   auto tool = agentxx::tools::WebFetchUrlTool{agentContext};
   auto def = tool.get_definition();
   if (def.name == "web_fetch_url") {
-    std::cout << "[PASS] WebFetchUrlTool::get_definition() name correct"
-              << std::endl;
+    g_ws_passed++;
+    TEST_PASS << "WebFetchUrlTool::get_definition() name correct" << std::endl;
   } else {
-    std::cout << "[FAIL] WebFetchUrlTool::get_definition() name incorrect"
+    g_ws_failed++;
+    TEST_FAIL << "WebFetchUrlTool::get_definition() name incorrect"
               << std::endl;
   }
   co_return;
@@ -93,8 +99,8 @@ inline asio::awaitable<void> test_web_fetch_url_empty_url(
   auto args = neograph::json{{"url", ""}};
   auto result = co_await tool.execute_async(args);
   if (result.find("\"error\"") != std::string::npos) {
-    std::cout << "[PASS] WebFetchUrlTool returns error for empty url"
-              << std::endl;
+    g_ws_passed++;
+    TEST_PASS << "WebFetchUrlTool returns error for empty url" << std::endl;
   } else {
     std::cout
         << "[FAIL] WebFetchUrlTool should return error for empty url, got: "
@@ -112,10 +118,12 @@ inline asio::awaitable<void> test_web_fetch_url_default_timeout(
       params["properties"].is_object()) {
     auto props = params["properties"];
     if (props.contains("timeout") && props["timeout"].is_object()) {
-      std::cout << "[PASS] WebFetchUrlTool definition has timeout parameter"
+      g_ws_passed++;
+      TEST_PASS << "WebFetchUrlTool definition has timeout parameter"
                 << std::endl;
     } else {
-      std::cout << "[FAIL] WebFetchUrlTool definition missing timeout parameter"
+      g_ws_failed++;
+      TEST_FAIL << "WebFetchUrlTool definition missing timeout parameter"
                 << std::endl;
     }
   }
@@ -127,7 +135,8 @@ inline asio::awaitable<void> test_web_fetch_url_markdown_get_definition(
   auto tool = agentxx::tools::WebFetchUrlMarkdownTool{agentContext};
   auto def = tool.get_definition();
   if (def.name == "web_fetch_url_markdown") {
-    std::cout << "[PASS] WebFetchUrlMarkdownTool::get_definition() name correct"
+    g_ws_passed++;
+    TEST_PASS << "WebFetchUrlMarkdownTool::get_definition() name correct"
               << std::endl;
   } else {
     std::cout
@@ -143,10 +152,12 @@ inline asio::awaitable<void> test_web_fetch_url_markdown_empty_url(
   auto args = neograph::json{{"url", ""}};
   auto result = co_await tool.execute_async(args);
   if (result.find("\"error\"") != std::string::npos) {
-    std::cout << "[PASS] WebFetchUrlMarkdownTool returns error for empty url"
+    g_ws_passed++;
+    TEST_PASS << "WebFetchUrlMarkdownTool returns error for empty url"
               << std::endl;
   } else {
-    std::cout << "[FAIL] WebFetchUrlMarkdownTool should return error for empty "
+    g_ws_failed++;
+    TEST_FAIL << "WebFetchUrlMarkdownTool should return error for empty "
                  "url, got: "
               << result << std::endl;
   }
@@ -159,10 +170,12 @@ inline asio::awaitable<void> test_web_fetch_url_markdown_description(
   auto def = tool.get_definition();
   if (def.description.find("markdown") != std::string::npos ||
       def.description.find("Markdown") != std::string::npos) {
-    std::cout << "[PASS] WebFetchUrlMarkdownTool description mentions markdown"
+    g_ws_passed++;
+    TEST_PASS << "WebFetchUrlMarkdownTool description mentions markdown"
               << std::endl;
   } else {
-    std::cout << "[FAIL] WebFetchUrlMarkdownTool description should mention "
+    g_ws_failed++;
+    TEST_FAIL << "WebFetchUrlMarkdownTool description should mention "
                  "markdown"
               << std::endl;
   }
@@ -175,25 +188,27 @@ inline asio::awaitable<void> test_web_search_convert_html2markdown(
                                             true, agentContext};
   auto def = tool.get_definition();
   if (def.name == "web_search") {
-    std::cout << "[PASS] WebSearchTool with convertHtml2markdown=true created "
+    g_ws_passed++;
+    TEST_PASS << "WebSearchTool with convertHtml2markdown=true created "
                  "successfully"
               << std::endl;
   } else {
-    std::cout << "[FAIL] WebSearchTool with convertHtml2markdown=true failed"
+    g_ws_failed++;
+    TEST_FAIL << "WebSearchTool with convertHtml2markdown=true failed"
               << std::endl;
   }
   co_return;
 }
 
-inline asio::awaitable<void> run_web_search_tools_tests(
+inline asio::awaitable<TestResult> run_web_search_tools_tests(
     std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
-  std::cout << "======= Test: Web Search Tools =======" << std::endl;
 
   auto run = [agentContext](auto testFn) -> asio::awaitable<void> {
     try {
       co_await testFn(agentContext);
     } catch (const std::exception &e) {
-      std::cout << "[FAIL] Exception in test: " << e.what() << std::endl;
+      g_ws_failed++;
+      TEST_FAIL << "Exception in test: " << e.what() << std::endl;
     }
   };
 
@@ -207,7 +222,7 @@ inline asio::awaitable<void> run_web_search_tools_tests(
   co_await run(test_web_fetch_url_markdown_get_definition);
   co_await run(test_web_fetch_url_markdown_empty_url);
   co_await run(test_web_fetch_url_markdown_description);
-  std::cout << "======= Test Done =======" << std::endl;
+  co_return TestResult{g_ws_passed, g_ws_failed};
 }
 
 } // namespace test

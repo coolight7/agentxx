@@ -3,6 +3,7 @@
 #include "agentxx/agent/context.h"
 #include "agentxx/tools/filesystem.h"
 #include "neograph/neograph.h"
+#include "test_framework.h"
 #include <asio/awaitable.hpp>
 #include <cstdio>
 #include <filesystem>
@@ -12,6 +13,9 @@
 
 namespace agentxx {
 namespace test {
+
+inline static int g_fs_passed = 0;
+inline static int g_fs_failed = 0;
 
 const std::string testDir =
     (std::filesystem::temp_directory_path() / "agentxx_test_filesystem")
@@ -45,10 +49,12 @@ inline asio::awaitable<void> test_list_file_get_definition(
   auto tool = agentxx::tools::FileSystemListTool{agentContext};
   auto def = tool.get_definition();
   if (def.name == "filesystem_list") {
-    std::cout << "[PASS] FileSystemListTool::get_definition() name correct"
+    g_fs_passed++;
+    TEST_PASS << "FileSystemListTool::get_definition() name correct"
               << std::endl;
   } else {
-    std::cout << "[FAIL] FileSystemListTool::get_definition() name incorrect"
+    g_fs_failed++;
+    TEST_FAIL << "FileSystemListTool::get_definition() name incorrect"
               << std::endl;
   }
   co_return;
@@ -60,10 +66,11 @@ inline asio::awaitable<void> test_list_file_empty_path(
   auto args = neograph::json{{"path", ""}};
   auto result = co_await tool.execute_async(args);
   if (result.find("\"error\"") != std::string::npos) {
-    std::cout << "[PASS] FileSystemListTool returns error for empty path"
-              << std::endl;
+    g_fs_passed++;
+    TEST_PASS << "FileSystemListTool returns error for empty path" << std::endl;
   } else {
-    std::cout << "[FAIL] FileSystemListTool should return error for empty "
+    g_fs_failed++;
+    TEST_FAIL << "FileSystemListTool should return error for empty "
                  "path, got: "
               << result << std::endl;
   }
@@ -78,10 +85,11 @@ test_list_file_basic(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
   if (result.find("test1.txt") != std::string::npos &&
       result.find("test2.txt") != std::string::npos &&
       result.find("subdir") != std::string::npos) {
-    std::cout << "[PASS] FileSystemListTool lists directory contents"
-              << std::endl;
+    g_fs_passed++;
+    TEST_PASS << "FileSystemListTool lists directory contents" << std::endl;
   } else {
-    std::cout << "[FAIL] FileSystemListTool listing failed, got: " << result
+    g_fs_failed++;
+    TEST_FAIL << "FileSystemListTool listing failed, got: " << result
               << " path: " << testDir << std::endl;
   }
   co_return;
@@ -96,11 +104,13 @@ inline asio::awaitable<void> test_list_file_recursive(
   };
   auto result = co_await tool.execute_async(args);
   if (result.find("subtest.txt") != std::string::npos) {
-    std::cout << "[PASS] FileSystemListTool recursive lists subdirectories"
+    g_fs_passed++;
+    TEST_PASS << "FileSystemListTool recursive lists subdirectories"
               << std::endl;
   } else {
-    std::cout << "[FAIL] FileSystemListTool recursive listing failed, got: "
-              << result << " path: " << testDir << std::endl;
+    g_fs_failed++;
+    TEST_FAIL << "FileSystemListTool recursive listing failed, got: " << result
+              << " path: " << testDir << std::endl;
   }
   co_return;
 }
@@ -115,10 +125,11 @@ test_list_file_limit(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
   auto result = co_await tool.execute_async(args);
   auto jsonResult = neograph::json::parse(result);
   if (jsonResult.is_array() && jsonResult.size() <= 1) {
-    std::cout << "[PASS] FileSystemListTool respects limit parameter"
-              << std::endl;
+    g_fs_passed++;
+    TEST_PASS << "FileSystemListTool respects limit parameter" << std::endl;
   } else {
-    std::cout << "[FAIL] FileSystemListTool limit failed, got: " << result
+    g_fs_failed++;
+    TEST_FAIL << "FileSystemListTool limit failed, got: " << result
               << std::endl;
   }
   co_return;
@@ -140,10 +151,12 @@ inline asio::awaitable<void> test_list_file_info_fields(
       }
     }
     if (hasAllFields) {
-      std::cout << "[PASS] FileSystemListTool returns file info with all fields"
+      g_fs_passed++;
+      TEST_PASS << "FileSystemListTool returns file info with all fields"
                 << std::endl;
     } else {
-      std::cout << "[FAIL] FileSystemListTool missing file info fields, "
+      g_fs_failed++;
+      TEST_FAIL << "FileSystemListTool missing file info fields, "
                    "first item keys: ";
       auto first = jsonResult[0];
       for (auto it = first.begin(); it != first.end(); ++it) {
@@ -152,8 +165,9 @@ inline asio::awaitable<void> test_list_file_info_fields(
       std::cout << std::endl;
     }
   } else {
-    std::cout << "[FAIL] FileSystemListTool expected array result, got: "
-              << result << std::endl;
+    g_fs_failed++;
+    TEST_FAIL << "FileSystemListTool expected array result, got: " << result
+              << std::endl;
   }
   co_return;
 }
@@ -185,12 +199,14 @@ inline asio::awaitable<void> test_read_text_file_empty_path(
           << "[PASS] FilesystemReadTextFileTool returns error for empty path"
           << std::endl;
     } else {
-      std::cout << "[FAIL] FilesystemReadTextFileTool should return error for "
+      g_fs_failed++;
+      TEST_FAIL << "FilesystemReadTextFileTool should return error for "
                    "empty path, got: "
                 << result << std::endl;
     }
   } catch (const std::exception &e) {
-    std::cout << "[PASS] FilesystemReadTextFileTool throws for empty path: "
+    g_fs_passed++;
+    TEST_PASS << "FilesystemReadTextFileTool throws for empty path: "
               << e.what() << std::endl;
   }
   co_return;
@@ -202,10 +218,11 @@ inline asio::awaitable<void> test_read_text_file_not_exist(
   auto args = neograph::json{{"path", testDir + "/nonexistent.txt"}};
   try {
     auto result = co_await tool.execute_async(args);
-    std::cout << "[INFO] FilesystemReadTextFileTool non-existent file: "
-              << result << std::endl;
+    TEST_INFO << "FilesystemReadTextFileTool non-existent file: " << result
+              << std::endl;
   } catch (const std::exception &e) {
-    std::cout << "[PASS] FilesystemReadTextFileTool throws for non-existent "
+    g_fs_passed++;
+    TEST_PASS << "FilesystemReadTextFileTool throws for non-existent "
                  "file: "
               << e.what() << std::endl;
   }
@@ -219,11 +236,13 @@ inline asio::awaitable<void> test_read_text_file_full(
   auto result = co_await tool.execute_async(args);
   if (result.find("line1") != std::string::npos &&
       result.find("line5") != std::string::npos) {
-    std::cout << "[PASS] FilesystemReadTextFileTool reads full file content"
+    g_fs_passed++;
+    TEST_PASS << "FilesystemReadTextFileTool reads full file content"
               << std::endl;
   } else {
-    std::cout << "[FAIL] FilesystemReadTextFileTool full read failed, got: "
-              << result << std::endl;
+    g_fs_failed++;
+    TEST_FAIL << "FilesystemReadTextFileTool full read failed, got: " << result
+              << std::endl;
   }
   co_return;
 }
@@ -242,10 +261,12 @@ inline asio::awaitable<void> test_read_text_file_offset(
   };
   auto result = co_await tool.execute_async(args);
   if (result.find("aaaa") != std::string::npos) {
-    std::cout << "[PASS] FilesystemReadTextFileTool respects line_offset=0"
+    g_fs_passed++;
+    TEST_PASS << "FilesystemReadTextFileTool respects line_offset=0"
               << std::endl;
   } else {
-    std::cout << "[FAIL] FilesystemReadTextFileTool line_offset=0 failed, got: "
+    g_fs_failed++;
+    TEST_FAIL << "FilesystemReadTextFileTool line_offset=0 failed, got: "
               << result << std::endl;
   }
   co_return;
@@ -265,10 +286,11 @@ inline asio::awaitable<void> test_read_text_file_limit(
       lineCount++;
   }
   if (lineCount <= 3) {
-    std::cout << "[PASS] FilesystemReadTextFileTool respects line_limit"
-              << std::endl;
+    g_fs_passed++;
+    TEST_PASS << "FilesystemReadTextFileTool respects line_limit" << std::endl;
   } else {
-    std::cout << "[FAIL] FilesystemReadTextFileTool line_limit failed, got "
+    g_fs_failed++;
+    TEST_FAIL << "FilesystemReadTextFileTool line_limit failed, got "
               << lineCount << " lines" << std::endl;
   }
   co_return;
@@ -290,7 +312,8 @@ inline asio::awaitable<void> test_read_text_file_offset_and_limit(
         << "[PASS] FilesystemReadTextFileTool respects both offset and limit"
         << std::endl;
   } else {
-    std::cout << "[FAIL] FilesystemReadTextFileTool offset+limit failed, got: "
+    g_fs_failed++;
+    TEST_FAIL << "FilesystemReadTextFileTool offset+limit failed, got: "
               << result << std::endl;
   }
   co_return;
@@ -305,7 +328,8 @@ inline asio::awaitable<void> test_read_binary_file_get_definition(
         << "[PASS] FilesystemReadBinaryFileTool::get_definition() name correct"
         << std::endl;
   } else {
-    std::cout << "[FAIL] FilesystemReadBinaryFileTool::get_definition() name "
+    g_fs_failed++;
+    TEST_FAIL << "FilesystemReadBinaryFileTool::get_definition() name "
                  "incorrect"
               << std::endl;
   }
@@ -323,7 +347,8 @@ inline asio::awaitable<void> test_read_binary_file_full(
         << "[PASS] FilesystemReadBinaryFileTool returns base64 encoded data"
         << std::endl;
   } else {
-    std::cout << "[FAIL] FilesystemReadBinaryFileTool binary read failed, got: "
+    g_fs_failed++;
+    TEST_FAIL << "FilesystemReadBinaryFileTool binary read failed, got: "
               << result << std::endl;
   }
   co_return;
@@ -334,7 +359,8 @@ inline asio::awaitable<void> test_write_file_get_definition(
   auto tool = agentxx::tools::FilesystemWriteFileTool{agentContext};
   auto def = tool.get_definition();
   if (def.name == "filesystem_write_file") {
-    std::cout << "[PASS] FilesystemWriteFileTool::get_definition() name correct"
+    g_fs_passed++;
+    TEST_PASS << "FilesystemWriteFileTool::get_definition() name correct"
               << std::endl;
   } else {
     std::cout
@@ -350,10 +376,12 @@ inline asio::awaitable<void> test_write_file_empty_path(
   auto args = neograph::json{{"path", ""}};
   auto result = co_await tool.execute_async(args);
   if (result.find("\"error\"") != std::string::npos) {
-    std::cout << "[PASS] FilesystemWriteFileTool returns error for empty path"
+    g_fs_passed++;
+    TEST_PASS << "FilesystemWriteFileTool returns error for empty path"
               << std::endl;
   } else {
-    std::cout << "[FAIL] FilesystemWriteFileTool should return error for empty "
+    g_fs_failed++;
+    TEST_FAIL << "FilesystemWriteFileTool should return error for empty "
                  "path, got: "
               << result << std::endl;
   }
@@ -375,18 +403,21 @@ inline asio::awaitable<void> test_write_file_create(
       std::string content((std::istreambuf_iterator<char>(in)),
                           std::istreambuf_iterator<char>());
       if (content == "hello write test") {
-        std::cout << "[PASS] FilesystemWriteFileTool creates and writes file"
+        g_fs_passed++;
+        TEST_PASS << "FilesystemWriteFileTool creates and writes file"
                   << std::endl;
       } else {
-        std::cout << "[FAIL] FilesystemWriteFileTool wrote wrong content: '"
-                  << content << "'" << std::endl;
+        g_fs_failed++;
+        TEST_FAIL << "FilesystemWriteFileTool wrote wrong content: '" << content
+                  << "'" << std::endl;
       }
     } else {
-      std::cout << "[FAIL] FilesystemWriteFileTool file not created"
-                << std::endl;
+      g_fs_failed++;
+      TEST_FAIL << "FilesystemWriteFileTool file not created" << std::endl;
     }
   } else {
-    std::cout << "[FAIL] FilesystemWriteFileTool write failed: " << result
+    g_fs_failed++;
+    TEST_FAIL << "FilesystemWriteFileTool write failed: " << result
               << std::endl;
   }
   co_return;
@@ -403,10 +434,11 @@ inline asio::awaitable<void> test_write_file_no_overwrite_existing(
   };
   try {
     auto result = co_await tool.execute_async(args);
-    std::cout << "[INFO] FilesystemWriteFileTool no-overwrite result: "
-              << result << std::endl;
+    TEST_INFO << "FilesystemWriteFileTool no-overwrite result: " << result
+              << std::endl;
   } catch (const std::exception &e) {
-    std::cout << "[PASS] FilesystemWriteFileTool throws when file exists and "
+    g_fs_passed++;
+    TEST_PASS << "FilesystemWriteFileTool throws when file exists and "
                  "overwrite=false: "
               << e.what() << std::endl;
   }
@@ -432,15 +464,18 @@ inline asio::awaitable<void> test_write_file_overwrite(
     std::string content((std::istreambuf_iterator<char>(in)),
                         std::istreambuf_iterator<char>());
     if (content == "overwritten content") {
-      std::cout << "[PASS] FilesystemWriteFileTool overwrites file when "
+      g_fs_passed++;
+      TEST_PASS << "FilesystemWriteFileTool overwrites file when "
                    "overwrite=true"
                 << std::endl;
     } else {
-      std::cout << "[FAIL] FilesystemWriteFileTool overwrite wrong content: '"
+      g_fs_failed++;
+      TEST_FAIL << "FilesystemWriteFileTool overwrite wrong content: '"
                 << content << "'" << std::endl;
     }
   } else {
-    std::cout << "[FAIL] FilesystemWriteFileTool overwrite failed: " << result
+    g_fs_failed++;
+    TEST_FAIL << "FilesystemWriteFileTool overwrite failed: " << result
               << std::endl;
   }
   co_return;
@@ -476,7 +511,8 @@ inline asio::awaitable<void> test_edit_text_file_empty_path(
         << "[PASS] FilesystemEditTextFileTool returns error for empty path"
         << std::endl;
   } else {
-    std::cout << "[FAIL] FilesystemEditTextFileTool should return error for "
+    g_fs_failed++;
+    TEST_FAIL << "FilesystemEditTextFileTool should return error for "
                  "empty path, got: "
               << result << std::endl;
   }
@@ -497,7 +533,8 @@ inline asio::awaitable<void> test_edit_text_file_empty_old_str(
         << "[PASS] FilesystemEditTextFileTool returns error for empty old_str"
         << std::endl;
   } else {
-    std::cout << "[FAIL] FilesystemEditTextFileTool should return error for "
+    g_fs_failed++;
+    TEST_FAIL << "FilesystemEditTextFileTool should return error for "
                  "empty old_str, got: "
               << result << std::endl;
   }
@@ -525,16 +562,19 @@ inline asio::awaitable<void> test_edit_text_file_single_replace(
                         std::istreambuf_iterator<char>());
     if (content.find("hi universe") != std::string::npos &&
         content.find("hello world") == std::string::npos) {
-      std::cout << "[PASS] FilesystemEditTextFileTool single replace works"
+      g_fs_passed++;
+      TEST_PASS << "FilesystemEditTextFileTool single replace works"
                 << std::endl;
     } else {
-      std::cout << "[FAIL] FilesystemEditTextFileTool single replace wrong "
+      g_fs_failed++;
+      TEST_FAIL << "FilesystemEditTextFileTool single replace wrong "
                    "content: '"
                 << content << "'" << std::endl;
     }
   } else {
-    std::cout << "[FAIL] FilesystemEditTextFileTool single replace failed: "
-              << result << std::endl;
+    g_fs_failed++;
+    TEST_FAIL << "FilesystemEditTextFileTool single replace failed: " << result
+              << std::endl;
   }
   co_return;
 }
@@ -561,16 +601,19 @@ inline asio::awaitable<void> test_edit_text_file_multi_replace(
                         std::istreambuf_iterator<char>());
     if (content.find("foo") == std::string::npos &&
         content.find("baz baz baz") != std::string::npos) {
-      std::cout << "[PASS] FilesystemEditTextFileTool multi_replace works"
+      g_fs_passed++;
+      TEST_PASS << "FilesystemEditTextFileTool multi_replace works"
                 << std::endl;
     } else {
-      std::cout << "[FAIL] FilesystemEditTextFileTool multi_replace wrong "
+      g_fs_failed++;
+      TEST_FAIL << "FilesystemEditTextFileTool multi_replace wrong "
                    "content: '"
                 << content << "'" << std::endl;
     }
   } else {
-    std::cout << "[FAIL] FilesystemEditTextFileTool multi_replace failed: "
-              << result << std::endl;
+    g_fs_failed++;
+    TEST_FAIL << "FilesystemEditTextFileTool multi_replace failed: " << result
+              << std::endl;
   }
   co_return;
 }
@@ -586,7 +629,7 @@ inline asio::awaitable<void> test_edit_text_file_no_match(
   };
   try {
     auto result = co_await tool.execute_async(args);
-    std::cout << "[INFO] FilesystemEditTextFileTool no-match result: " << result
+    TEST_INFO << "FilesystemEditTextFileTool no-match result: " << result
               << std::endl;
   } catch (const std::exception &e) {
     std::cout
@@ -601,10 +644,12 @@ inline asio::awaitable<void> test_glob_get_definition(
   auto tool = agentxx::tools::FilesystemGlobTool{agentContext};
   auto def = tool.get_definition();
   if (def.name == "filesystem_glob") {
-    std::cout << "[PASS] FilesystemGlobTool::get_definition() name correct"
+    g_fs_passed++;
+    TEST_PASS << "FilesystemGlobTool::get_definition() name correct"
               << std::endl;
   } else {
-    std::cout << "[FAIL] FilesystemGlobTool::get_definition() name incorrect"
+    g_fs_failed++;
+    TEST_FAIL << "FilesystemGlobTool::get_definition() name incorrect"
               << std::endl;
   }
   co_return;
@@ -622,7 +667,8 @@ inline asio::awaitable<void> test_glob_empty_patterns(
         << "[PASS] FilesystemGlobTool returns error for empty file_patterns"
         << std::endl;
   } else {
-    std::cout << "[FAIL] FilesystemGlobTool should return error for empty "
+    g_fs_failed++;
+    TEST_FAIL << "FilesystemGlobTool should return error for empty "
                  "patterns, got: "
               << result << std::endl;
   }
@@ -638,11 +684,11 @@ test_glob_find_files(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
   auto result = co_await tool.execute_async(args);
   if (result.find("test1.txt") != std::string::npos ||
       result.find("test2.txt") != std::string::npos) {
-    std::cout << "[PASS] FilesystemGlobTool finds files by pattern"
-              << std::endl;
+    g_fs_passed++;
+    TEST_PASS << "FilesystemGlobTool finds files by pattern" << std::endl;
   } else {
-    std::cout << "[FAIL] FilesystemGlobTool glob failed, got: " << result
-              << std::endl;
+    g_fs_failed++;
+    TEST_FAIL << "FilesystemGlobTool glob failed, got: " << result << std::endl;
   }
   co_return;
 }
@@ -659,8 +705,9 @@ test_glob_recursive(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
         << "[PASS] FilesystemGlobTool recursive glob finds subdirectory files"
         << std::endl;
   } else {
-    std::cout << "[FAIL] FilesystemGlobTool recursive glob failed, got: "
-              << result << std::endl;
+    g_fs_failed++;
+    TEST_FAIL << "FilesystemGlobTool recursive glob failed, got: " << result
+              << std::endl;
   }
   co_return;
 }
@@ -670,10 +717,12 @@ inline asio::awaitable<void> test_grep_get_definition(
   auto tool = agentxx::tools::FilesystemGrepTool{agentContext};
   auto def = tool.get_definition();
   if (def.name == "filesystem_grep") {
-    std::cout << "[PASS] FilesystemGrepTool::get_definition() name correct"
+    g_fs_passed++;
+    TEST_PASS << "FilesystemGrepTool::get_definition() name correct"
               << std::endl;
   } else {
-    std::cout << "[FAIL] FilesystemGrepTool::get_definition() name incorrect"
+    g_fs_failed++;
+    TEST_FAIL << "FilesystemGrepTool::get_definition() name incorrect"
               << std::endl;
   }
   co_return;
@@ -693,7 +742,8 @@ inline asio::awaitable<void> test_grep_empty_text_patterns(
         << "[PASS] FilesystemGrepTool returns error for empty text_patterns"
         << std::endl;
   } else {
-    std::cout << "[FAIL] FilesystemGrepTool should return error for empty "
+    g_fs_failed++;
+    TEST_FAIL << "FilesystemGrepTool should return error for empty "
                  "text_patterns, got: "
               << result << std::endl;
   }
@@ -714,7 +764,8 @@ inline asio::awaitable<void> test_grep_empty_file_patterns(
         << "[PASS] FilesystemGrepTool returns error for empty file_patterns"
         << std::endl;
   } else {
-    std::cout << "[FAIL] FilesystemGrepTool should return error for empty "
+    g_fs_failed++;
+    TEST_FAIL << "FilesystemGrepTool should return error for empty "
                  "file_patterns, got: "
               << result << std::endl;
   }
@@ -732,10 +783,11 @@ inline asio::awaitable<void> test_grep_text_search(
   };
   auto result = co_await tool.execute_async(args);
   if (result.find("test2.txt") != std::string::npos) {
-    std::cout << "[PASS] FilesystemGrepTool finds files containing text"
-              << std::endl;
+    g_fs_passed++;
+    TEST_PASS << "FilesystemGrepTool finds files containing text" << std::endl;
   } else {
-    std::cout << "[FAIL] FilesystemGrepTool text search failed, got: " << result
+    g_fs_failed++;
+    TEST_FAIL << "FilesystemGrepTool text search failed, got: " << result
               << std::endl;
   }
   co_return;
@@ -752,11 +804,12 @@ inline asio::awaitable<void> test_grep_regex_search(
   };
   auto result = co_await tool.execute_async(args);
   if (result.find("test1.txt") != std::string::npos) {
-    std::cout << "[PASS] FilesystemGrepTool regex search finds matches"
-              << std::endl;
+    g_fs_passed++;
+    TEST_PASS << "FilesystemGrepTool regex search finds matches" << std::endl;
   } else {
-    std::cout << "[FAIL] FilesystemGrepTool regex search failed, got: "
-              << result << std::endl;
+    g_fs_failed++;
+    TEST_FAIL << "FilesystemGrepTool regex search failed, got: " << result
+              << std::endl;
   }
   co_return;
 }
@@ -777,22 +830,23 @@ inline asio::awaitable<void> test_grep_content_mode(
         << "[PASS] FilesystemGrepTool content mode returns structured JSON"
         << std::endl;
   } else {
-    std::cout << "[FAIL] FilesystemGrepTool content mode failed, got: "
-              << result << std::endl;
+    g_fs_failed++;
+    TEST_FAIL << "FilesystemGrepTool content mode failed, got: " << result
+              << std::endl;
   }
   co_return;
 }
 
-inline asio::awaitable<void> run_filesystem_tools_tests(
+inline asio::awaitable<TestResult> run_filesystem_tools_tests(
     std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
-  std::cout << "======= Test: Filesystem Tools =======" << std::endl;
   setupTestDir();
 
   auto run = [agentContext](auto testFn) -> asio::awaitable<void> {
     try {
       co_await testFn(agentContext);
     } catch (const std::exception &e) {
-      std::cout << "[FAIL] Exception in test: " << e.what() << std::endl;
+      g_fs_failed++;
+      TEST_FAIL << "Exception in test: " << e.what() << std::endl;
     }
   };
 
@@ -840,7 +894,7 @@ inline asio::awaitable<void> run_filesystem_tools_tests(
   co_await run(test_grep_content_mode);
 
   cleanupTestDir();
-  std::cout << "======= Test Done =======" << std::endl;
+  co_return TestResult{g_fs_passed, g_fs_failed};
 }
 
 } // namespace test

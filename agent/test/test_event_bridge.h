@@ -14,21 +14,21 @@
 #include <memory>
 #include <string>
 
+#include "test_framework.h"
+
 namespace agentxx {
 namespace test {
 
 inline static int g_eb_passed = 0;
 inline static int g_eb_failed = 0;
 
-#define EB_TEST(name) std::cout << "  [" << (name) << "]" << std::endl
 #define EB_EXPECT_TRUE(expr)                                                   \
   do {                                                                         \
     if (expr) {                                                                \
       g_eb_passed++;                                                           \
     } else {                                                                   \
       g_eb_failed++;                                                           \
-      std::cerr << "    FAIL at line " << __LINE__ << ": expected true"        \
-                << std::endl;                                                  \
+      TEST_FAIL << "expected true at line " << __LINE__ << std::endl;          \
     }                                                                          \
   } while (0)
 #define EB_EXPECT_EQ(a, b)                                                     \
@@ -39,15 +39,14 @@ inline static int g_eb_failed = 0;
       g_eb_passed++;                                                           \
     } else {                                                                   \
       g_eb_failed++;                                                           \
-      std::cerr << "    FAIL at line " << __LINE__ << ": expected " << _b      \
-                << ", got " << _a << std::endl;                                \
+      TEST_FAIL << "expected " << _b << ", got " << _a << " at line "          \
+                << __LINE__ << std::endl;                                      \
     }                                                                          \
   } while (0)
 
 /// 验证 EventBridge 把 GraphEvent::LLM_TOKEN 翻译成 EventModelToken 发布到 bus,
 /// 同时保留原始 callback 的转发行为
 inline asio::awaitable<void> test_eventbridge_token() {
-  EB_TEST("EventBridge LLM_TOKEN -> EventModelToken + origCb passthrough");
 
   auto agentConfig = std::make_shared<agentxx::agent::AgentConfig>();
   auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
@@ -60,8 +59,9 @@ inline asio::awaitable<void> test_eventbridge_token() {
   std::string lastToken;
   std::string lastAgentName;
   std::string lastThreadId;
-  agentContext->bus->get<agentxx::events::EventModelToken>(
-      agentxx::events::Topic::ModelToken)
+  agentContext->bus
+      ->get<agentxx::events::EventModelToken>(
+          agentxx::events::Topic::ModelToken)
       .subscribe([&](const agentxx::events::EventModelToken &e)
                      -> asio::awaitable<void> {
         tokenEventCount++;
@@ -80,13 +80,13 @@ inline asio::awaitable<void> test_eventbridge_token() {
         }
       };
 
-  auto bridgeCb = agentxx::agent::EventBridge::make(
-      "testAgent", "thread_42", agentContext, origCb);
+  auto bridgeCb = agentxx::agent::EventBridge::make("testAgent", "thread_42",
+                                                    agentContext, origCb);
 
   // 触发 LLM_TOKEN 事件
-  bridgeCb(neograph::graph::GraphEvent{
-      neograph::graph::GraphEvent::Type::LLM_TOKEN, "llm",
-      neograph::json(std::string{"Hello"})});
+  bridgeCb(
+      neograph::graph::GraphEvent{neograph::graph::GraphEvent::Type::LLM_TOKEN,
+                                  "llm", neograph::json(std::string{"Hello"})});
 
   // fire-and-forget co_spawn 异步发布; 让出一次让协程跑完
   auto timer = asio::steady_timer(co_await asio::this_coro::executor,
@@ -115,7 +115,6 @@ inline asio::awaitable<void> test_eventbridge_token() {
 
 /// 验证 bus 为空时, EventBridge 仍转发原始 callback
 inline asio::awaitable<void> test_eventbridge_nullbus_passthrough() {
-  EB_TEST("EventBridge null-bus passthrough");
 
   auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
   // 不设置 bus (bus == nullptr)
@@ -130,9 +129,9 @@ inline asio::awaitable<void> test_eventbridge_nullbus_passthrough() {
 
   auto bridgeCb =
       agentxx::agent::EventBridge::make("a", "t", agentContext, origCb);
-  bridgeCb(neograph::graph::GraphEvent{
-      neograph::graph::GraphEvent::Type::LLM_TOKEN, "llm",
-      neograph::json(std::string{"x"})});
+  bridgeCb(
+      neograph::graph::GraphEvent{neograph::graph::GraphEvent::Type::LLM_TOKEN,
+                                  "llm", neograph::json(std::string{"x"})});
   EB_EXPECT_EQ(origCbCount.load(), 1);
 
   co_return;
@@ -140,7 +139,6 @@ inline asio::awaitable<void> test_eventbridge_nullbus_passthrough() {
 
 /// 验证 ERROR 事件发布
 inline asio::awaitable<void> test_eventbridge_error() {
-  EB_TEST("EventBridge ERROR -> EventError");
 
   auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
   agentContext->bus = std::make_shared<agentxx::middleware::EventBus>(
@@ -149,21 +147,21 @@ inline asio::awaitable<void> test_eventbridge_error() {
   std::atomic<int> errCount{0};
   std::string lastMsg;
   std::string lastWhere;
-  agentContext->bus->get<agentxx::events::EventError>(
-      agentxx::events::Topic::Error)
-      .subscribe([&](const agentxx::events::EventError &e)
-                     -> asio::awaitable<void> {
-        errCount++;
-        lastMsg = e.message;
-        lastWhere = e.where;
-        co_return;
-      });
+  agentContext->bus
+      ->get<agentxx::events::EventError>(agentxx::events::Topic::Error)
+      .subscribe(
+          [&](const agentxx::events::EventError &e) -> asio::awaitable<void> {
+            errCount++;
+            lastMsg = e.message;
+            lastWhere = e.where;
+            co_return;
+          });
 
   auto bridgeCb =
       agentxx::agent::EventBridge::make("a", "t", agentContext, nullptr);
-  bridgeCb(neograph::graph::GraphEvent{
-      neograph::graph::GraphEvent::Type::ERROR, "tool_x",
-      neograph::json(std::string{"boom"})});
+  bridgeCb(neograph::graph::GraphEvent{neograph::graph::GraphEvent::Type::ERROR,
+                                       "tool_x",
+                                       neograph::json(std::string{"boom"})});
 
   co_await asio::steady_timer(co_await asio::this_coro::executor,
                               std::chrono::milliseconds(10))
@@ -175,20 +173,16 @@ inline asio::awaitable<void> test_eventbridge_error() {
   co_return;
 }
 
-inline asio::awaitable<void> run_event_bridge_tests() {
-  std::cout << "=== event_bridge Tests ===" << std::endl;
+inline asio::awaitable<TestResult> run_event_bridge_tests() {
   try {
     co_await test_eventbridge_token();
     co_await test_eventbridge_nullbus_passthrough();
     co_await test_eventbridge_error();
   } catch (const std::exception &e) {
-    std::cout << "[FAIL] event_bridge suite exception: " << e.what()
-              << std::endl;
+    TEST_FAIL << "event_bridge suite exception: " << e.what() << std::endl;
     g_eb_failed++;
   }
-  std::cout << "=== event_bridge Tests DONE (pass=" << g_eb_passed
-            << " fail=" << g_eb_failed << ") ===" << std::endl;
-  co_return;
+  co_return TestResult{g_eb_passed, g_eb_failed};
 }
 
 } // namespace test
