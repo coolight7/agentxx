@@ -48,7 +48,8 @@ public:
       XX_LOGE("SubagentSupervisor: AgentContext or bus is null");
       co_return;
     }
-    // 单个 subagent 委派
+
+    // 单个 subagent 处理服务 ===
     auto &rr =
         ctxPtr->bus
             ->getRR<events::ReqSubagentStart, events::RespSubagentResult>(
@@ -59,7 +60,8 @@ public:
           co_return co_await runSubagent(req.subagentName, req.systemPrompt,
                                          req.message);
         });
-    // 批量 subagent 委派
+
+    // 批量 subagent 处理服务 ===
     auto &batchRR =
         ctxPtr->bus->getRR<events::ReqSubagentBatch, events::RespSubagentBatch>(
             events::Topic::SubagentBatch);
@@ -68,7 +70,8 @@ public:
                size_t) -> asio::awaitable<events::RespSubagentBatch> {
           co_return co_await runBatch(req);
         });
-    // 跨 agent 查询路由
+
+    // 跨 agent 查询路由 ===
     auto &crossRR =
         ctxPtr->bus->getRR<events::ReqCrossAgent, events::RespCrossAgent>(
             events::Topic::CrossAgent);
@@ -77,6 +80,7 @@ public:
                size_t) -> asio::awaitable<events::RespCrossAgent> {
           co_return co_await handleCrossAgent(req);
         });
+
     registered = true;
     co_return;
   }

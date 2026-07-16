@@ -203,7 +203,7 @@ public:
       for (const auto &url : config->mcpServerUrls) {
         try {
           auto mcpClient = neograph::mcp::MCPClient{url};
-          if (mcpClient.initialize(config->agentName)) {
+          if (co_await mcpClient.initialize_async(config->agentName)) {
             auto mcpTools = co_await mcpClient.get_tools_async();
             XX_LOGD("append mcp tool size: {}", mcpTools.size());
             for (auto &tool : mcpTools) {
@@ -303,6 +303,9 @@ public:
             std::make_unique<agentxx::tools::ExecuteWindowsCommandTool>(
                 agentContext));
       }
+#elif XX_IS_MACOS_D
+      tools.push_back(std::make_unique<agentxx::tools::ExecuteLinuxCommandTool>(
+          agentContext));
 #endif
 
       {
@@ -378,24 +381,6 @@ public:
         //           middlewareHandleContext)));
         // }
 
-        // {
-        //   // training_scorer: 训练模式专用评分 subagent，无需工具
-        //   neograph::graph::NodeContext scorerCtx{};
-        //   scorerCtx.instructions = "";
-        //   scorerCtx.provider =
-        //       neograph::llm::OpenAIProvider::create_shared(provideConfig);
-
-        //   const auto scorerName = std::string{"training_scorer"};
-
-        //   subagentManagerTool->subAgentList.insert(std::make_pair(
-        //       scorerName,
-        //       std::make_shared<agentxx::tools::SubAgentNormalTask>(
-        //           scorerName,
-        //           "Scoring sub-agent for training mode: evaluates agent "
-        //           "responses against test case criteria",
-        //           scorerCtx)));
-        // }
-
         tools.push_back(std::move(subagentManagerTool));
       }
     }
@@ -407,7 +392,7 @@ public:
       }
     }
 
-    /// Main Agent
+    /// === Main Agent ===
     neograph::graph::NodeContext nodeContext{};
     nodeContext.instructions = config->prompt.systemPrompt;
     nodeContext.provider =
@@ -545,6 +530,7 @@ public:
     try {
       auto processedInput = userInput;
       agentxx::util::autoConvertToUtf8(processedInput);
+
       messages.push_back(neograph::json{
           {"role", "user"},
           {"content", processedInput},
@@ -552,7 +538,7 @@ public:
       auto cfg = neograph::graph::RunConfig{
           .thread_id = threadId,
           .input = {{"messages", messages}},
-          .max_steps = 100,
+          .max_steps = 1024,
           .stream_mode = neograph::graph::StreamMode::ALL,
           .cancel_token = std::make_shared<neograph::graph::CancelToken>(),
           .resume_if_exists = isFirstMsg,
@@ -560,7 +546,11 @@ public:
 
       std::optional<neograph::graph::RunResult> result =
           co_await engine->run_stream_async(cfg, eventCallback);
+
       if (result->interrupted) {
+        // - 触发中断，[messages] 内容是 [engine->run_stream_async]
+        // 执行前的，因此从 [channelKey_interruptMessages]
+        // 提取中断时保存的消息上下文
         messages = result->channel_raw(
             agentxx::middleware::BaseMiddlewareHandleInterface::
                 channelKey_interruptMessages);
@@ -578,7 +568,7 @@ public:
 
         auto resumeValues = neograph::json{};
 
-        /// 提取中断参数，执行中断处理
+        // 提取中断参数，执行中断处理
         const auto interruptArgs =
             agentxx::middleware::InterruptHandleArg::listFromJson(
                 crudeResult->channel_raw(
@@ -733,6 +723,10 @@ public:
       turnResult.hasError = true;
       turnResult.errorMessage = e.what();
       XX_LOGE(R"({{"error": "Agent Response failed: {}"}})", e.what());
+    } catch (const boost::exception &e) {
+      auto errmsg = boost::diagnostic_information(e);
+      agentxx::util::autoConvertToUtf8(errmsg);
+      XX_LOGE(R"({{"error": "Agent Response failed: {}"}})", errmsg);
     } catch (...) {
       turnResult.hasError = true;
       turnResult.errorMessage = "Unknown error";
