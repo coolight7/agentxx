@@ -2,6 +2,12 @@
 
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/context.h"
+#include "agentxx/agent/event_bridge.h"
+#include "agentxx/agent/interrupt_handler.h"
+#include "agentxx/agent/permission_prompter.h"
+#include "agentxx/agent/subagent_supervisor.h"
+#include "agentxx/events.h"
+#include "agentxx/middlewares/event_stream.h"
 #include "agentxx/middlewares/permission.h"
 #include "agentxx/middlewares/planning.h"
 #include "agentxx/middlewares/skill.h"
@@ -9,6 +15,7 @@
 #include "agentxx/nodes/agentcall.h"
 #include "agentxx/nodes/modelcall.h"
 #include "agentxx/nodes/toolcall.h"
+#include "agentxx/tools/cross_agent_query.h"
 #include "agentxx/tools/execute_command.h"
 #include "agentxx/tools/filesystem.h"
 #include "agentxx/tools/planning.h"
@@ -69,6 +76,16 @@ public:
         .base_url = config->modelOpenAIBaseUrl,
         .default_model = config->modelOpenAIModelName,
     };
+
+    {
+      /// 创建事件总线并注入 AgentContext
+      /// - executor 取自 DeepAgent::ioCtx, 与 graph 运行在同一 io_context,
+      ///   单线程协作式调度, 模块间无需加锁
+      /// - 所有节点/middleware/tool 经 weak_ptr<AgentContext> 取
+      /// agentContext->bus
+      agentContext->bus = std::make_shared<agentxx::middleware::EventBus>(
+          ioCtx->get_executor());
+    }
 
     {
       /// register Node
@@ -287,6 +304,12 @@ public:
                 agentContext));
       }
 #endif
+
+      {
+        // cross-agent query tool (供主 agent/subagent 互相查询)
+        tools.push_back(std::make_unique<agentxx::tools::CrossAgentQueryTool>(
+            agentContext));
+      }
 
       {
         // subagent
@@ -574,9 +597,103 @@ public:
             co_await interruptCallback(interruptNode, interruptValue,
                                        interruptArg.name, interruptHandleFound);
           }
-          auto interruptResult =
-              co_await agentContext->middlewareHandleContext
-                  ->execInterruptHandle(interruptArg.name, interruptArg);
+
+          std::optional<neograph::json> interruptResult;
+          {
+            if (interruptArg.name == "subagent" && agentContext->bus) {
+              // subagent 委派: 经总线派发给 SubagentSupervisor
+              // - 父 agent 已 checkpoint 暂停, supervisor 运行 subagent
+              // - 结果注入 interruptResult, resume 后父 graph 继续
+              auto subagentArg = interruptArg.arg;
+              auto resp = co_await agentContext->bus->request<
+                  events::ReqSubagentStart, events::RespSubagentResult>(
+                  events::Topic::Subagent,
+                  events::ReqSubagentStart{
+                      .parentAgentName =
+                          agentContext->agentConfig
+                              ? agentContext->agentConfig->agentName
+                              : std::string{},
+                      .parentThreadId = threadId,
+                      .subagentName =
+                          subagentArg.value("subagent", std::string{}),
+                      .systemPrompt =
+                          subagentArg.value("system_prompt", std::string{}),
+                      .message = subagentArg.value("message", std::string{}),
+                      .resultId = interruptArg.resultId,
+                  });
+              if (resp.has_value()) {
+                interruptResult = neograph::json{resp->content};
+              }
+            } else if (interruptArg.name == "subagent_batch" &&
+                       agentContext->bus) {
+              // 批量 subagent 委派: 并发运行多个 subagent
+              // - interruptArg.arg 应为
+              // {"tasks":[{subagent,system_prompt,message},...]}
+              // - 结果按 resultId 注入
+              auto batchArg = interruptArg.arg;
+              events::ReqSubagentBatch batchReq{
+                  .parentAgentName = agentContext->agentConfig
+                                         ? agentContext->agentConfig->agentName
+                                         : std::string{},
+                  .parentThreadId = threadId,
+              };
+              if (batchArg.contains("tasks") && batchArg["tasks"].is_array()) {
+                for (const auto &t : batchArg["tasks"]) {
+                  batchReq.tasks.push_back(events::SubagentBatchItem{
+                      .subagentName = t.value("subagent", std::string{}),
+                      .systemPrompt = t.value("system_prompt", std::string{}),
+                      .message = t.value("message", std::string{}),
+                      .resultId = t.value("result_id", std::string{}),
+                  });
+                }
+              }
+              auto batchResp = co_await agentContext->bus->request<
+                  events::ReqSubagentBatch, events::RespSubagentBatch>(
+                  events::Topic::SubagentBatch, std::move(batchReq));
+              if (batchResp.has_value()) {
+                // 批量结果按 resultId 写入 resumeValues (非单个
+                // interruptResult)
+                for (const auto &r : batchResp->results) {
+                  auto rid = r.resultId;
+                  if (rid.empty()) {
+                    rid = interruptArg.resultId;
+                  }
+                  resumeValues[rid] =
+                      r.hasError ? neograph::json{{"error", r.errorMessage}}
+                                 : neograph::json{r.content};
+                }
+              }
+            } else {
+              // HIL 中断: 优先经总线请求 InterruptHandler
+              // - 无 handler 注册时返回 nullopt, 回退到 execInterruptHandle
+              //   保持向后兼容 (MiddlewareContext 默认注册了 stdin handler)
+              if (agentContext->bus) {
+                auto resp = co_await agentContext->bus->request<
+                    events::ReqInterrupt, events::RespInterrupt>(
+                    events::Topic::Interrupt,
+                    events::ReqInterrupt{
+                        .agentName = agentContext->agentConfig
+                                         ? agentContext->agentConfig->agentName
+                                         : std::string{},
+                        .threadId = threadId,
+                        .interruptNode = interruptNode,
+                        .handleName = interruptArg.name,
+                        .interruptArgsJson = interruptArg.toJson().dump(),
+                        .resultId = interruptArg.resultId,
+                    });
+                if (resp.has_value() && resp->handled) {
+                  interruptResult = neograph::json::parse(resp->resultJson);
+                }
+              }
+              if (!interruptResult.has_value()) {
+                // 回退: 直接调用栈内 interrupt handle (兼容旧路径)
+                interruptResult =
+                    co_await agentContext->middlewareHandleContext
+                        ->execInterruptHandle(interruptArg.name, interruptArg);
+              }
+            }
+          }
+
           if (interruptResult.has_value()) {
             auto resultId = interruptArg.resultId;
             if (resultId.empty()) {
@@ -666,6 +783,15 @@ public:
     const auto thread_id = "session";
     auto messages = neograph::json::array();
 
+    // 注册 CLI 的中断/权限/subagent HIL 处理到总线
+    // - GUI/ACP 前端应注册各自的 handler 替换此处
+    CliInterruptHandler cliInterruptHandler{agentContext};
+    CliPermissionPrompter cliPermissionPrompter{agentContext};
+    SubagentSupervisor subagentSupervisor{agentContext};
+    co_await cliInterruptHandler.start();
+    co_await cliPermissionPrompter.start();
+    co_await subagentSupervisor.start();
+
     std::cout << ">>> " << std::flush;
 
     for (std::string line; std::getline(std::cin, line);) {
@@ -674,7 +800,9 @@ public:
                   << std::flush;
 
         auto turnResult = co_await runConversationTurnAsync(
-            thread_id, line, isFirstMsg, std::move(messages), cliEventCallback,
+            thread_id, line, isFirstMsg, std::move(messages),
+            EventBridge::make(agentContext->agentConfig->agentName, thread_id,
+                              agentContext, cliEventCallback),
             cliInterruptCallback);
         messages = std::move(turnResult.messages);
         isFirstMsg = false;

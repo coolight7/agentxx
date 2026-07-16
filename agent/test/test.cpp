@@ -16,14 +16,20 @@
 #include "test_codegraph_tools.h"
 #include "test_command_tools.h"
 #include "test_cpu_gpu_use.h"
+#include "test_crossagent.h"
 #include "test_datetime_tool.h"
+#include "test_event_bridge.h"
+#include "test_event_stream.h"
+#include "test_events.h"
 #include "test_filesystem_tools.h"
 #include "test_http.h"
+#include "test_interrupt_bus.h"
 #include "test_rag_search_tools.h"
 #include "test_regex.h"
 #include "test_screen_capture.h"
 #include "test_string_tools.h"
 #include "test_string_util.h"
+#include "test_subagent_bus.h"
 #include "test_text_selection_monitor.h"
 #include "test_web_search_tools.h"
 #include <fstream>
@@ -51,6 +57,7 @@ int main(int argn, char **argv) {
 
   { agentxx::test::testStringUtil(); }
   { agentxx::test::testRegex(); }
+  { agentxx::test::test_events(); }
   asio::co_spawn(
       ioCtx,
       []() -> asio::awaitable<void> {
@@ -70,6 +77,11 @@ int main(int argn, char **argv) {
         };
 
         co_await run(agentxx::test::run_string_tools_tests, agentContext);
+        co_await agentxx::test::run_event_stream_tests();
+        co_await agentxx::test::run_event_bridge_tests();
+        co_await agentxx::test::run_interrupt_bus_tests();
+        co_await agentxx::test::run_subagent_bus_tests();
+        co_await agentxx::test::run_crossagent_tests();
         co_await run(agentxx::test::run_rag_search_tools_tests, agentContext);
         co_await run(agentxx::test::run_datetime_tool_tests, agentContext);
         co_await run(agentxx::test::run_filesystem_tools_tests, agentContext);
@@ -78,6 +90,9 @@ int main(int argn, char **argv) {
         co_await run(agentxx::test::run_codegraph_tools_tests, agentContext);
         co_await agentxx::test::run_cpu_gpu_use_tests();
         co_await agentxx::test::run_http_client_tests();
+        // 所有异步测试完成, 停止 io_context 以避免 detached 残留协程
+        // (如超时测试中 sleep 的 server) 导致 ioCtx.run() 长时间挂起
+        ioCtx.stop();
       },
       asio::detached);
   ioCtx.run();
@@ -94,5 +109,8 @@ int main(int argn, char **argv) {
   }
 
   std::cout << "======= Test Done =======" << std::endl;
+  // 强制退出: 避免残留的 detached 协程/线程阻止进程退出
+  // (测试已完成, 无需等待异步清理)
+  std::_Exit(0);
   return 0;
 }

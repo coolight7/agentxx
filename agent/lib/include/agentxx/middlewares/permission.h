@@ -1,6 +1,8 @@
 #pragma once
 
 #include "agentxx/middlewares/middleware.h"
+#include "agentxx/events.h"
+#include "agentxx/middlewares/event_stream.h"
 #include "agentxx/util/router.h"
 #include "asio/io_context.hpp"
 #include "fmt/format.h"
@@ -75,11 +77,44 @@ public:
       case PermissionOperator::DENY:
         co_return false;
       case PermissionOperator::INTERRUPT:
-        // TODO: 发起询问
-        co_return true;
+        // 经总线询问外部授权者 (CLI/GUI/ACP 各注册自己的 prompter)
+        // - 无 prompter 注册时 request 返回 nullopt, 默认拒绝以保安全
+        co_return co_await requestPermission(
+            item, args,
+            index == FilesystemPermissionREAD ? "filesystem_read"
+                                              : "filesystem_write",
+            path);
       }
     }
     co_return true;
+  }
+
+  /// 经总线发起权限询问; 无 prompter 或被拒绝时返回 false
+  asio::awaitable<bool> requestPermission(const neograph::Tool &item,
+                                          neograph::json &args,
+                                          std::string category,
+                                          std::string target) {
+    auto ctxPtr = agentContext.lock();
+    if (!ctxPtr || !ctxPtr->bus) {
+      // 无总线, 默认拒绝以保安全
+      co_return false;
+    }
+    auto resp = co_await ctxPtr->bus->request<events::ReqPermission,
+                                              events::RespPermission>(
+        events::Topic::Permission,
+        events::ReqPermission{
+            .agentName = ctxPtr->agentConfig ? ctxPtr->agentConfig->agentName
+                                             : std::string{},
+            .threadId = args.value("thread_id", std::string{}),
+            .toolName = item.get_name(),
+            .category = std::move(category),
+            .target = std::move(target),
+            .argumentsJson = args.dump(),
+        });
+    if (!resp.has_value()) {
+      co_return false; // 无 prompter, 拒绝
+    }
+    co_return resp->decision == events::RespPermission::Decision::Allow;
   }
 
   void registerFilesystemHandles() {

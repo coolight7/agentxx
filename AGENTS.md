@@ -1,11 +1,12 @@
 # Agentxx
-- C++ 实现的 AI Agent
+- C++ 23 实现的 AI Agent；编译器启用标准 c++26/c17
 
 ## 兼容性
 - 跨系统支持:
     - 可编译为独立可执行程序/动态库，摆脱额外的动态库依赖，仅依赖基本的系统库
     - Linux x86_64 + WSL扩展功能
     - Windows 10+ x86_64
+    - Android 5.0+
 
 ## 代码结构
 - `agent`: 
@@ -16,6 +17,8 @@
     - 命令行可执行程序，计划用于启动服务、实现命令行用户交互
 - `agent/test`: 编译结果 {build}/exec/agentxx_test
     - 测试
+- `agent/benchmark`: 编译结果 {build}/exec/agentxx_benchmark
+    - 性能测试（一般仅 release 启用编译该模块）
 - `agent/third_party`: 第三方库依赖
 
 ## 编译
