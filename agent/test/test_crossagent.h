@@ -15,6 +15,11 @@
 #include <string>
 
 #include "test_framework.h"
+#undef XX_TEST_PASSED
+#undef XX_TEST_FAILED
+#define XX_TEST_PASSED g_ca_passed
+#define XX_TEST_FAILED g_ca_failed
+
 
 namespace agentxx {
 namespace test {
@@ -22,27 +27,6 @@ namespace test {
 inline static int g_ca_passed = 0;
 inline static int g_ca_failed = 0;
 
-#define CA_EXPECT_TRUE(expr)                                                   \
-  do {                                                                         \
-    if (expr) {                                                                \
-      g_ca_passed++;                                                           \
-    } else {                                                                   \
-      g_ca_failed++;                                                           \
-      TEST_FAIL << "expected true at line " << __LINE__ << std::endl;          \
-    }                                                                          \
-  } while (0)
-#define CA_EXPECT_EQ(a, b)                                                     \
-  do {                                                                         \
-    auto _a = (a);                                                             \
-    auto _b = (b);                                                             \
-    if (_a == _b) {                                                            \
-      g_ca_passed++;                                                           \
-    } else {                                                                   \
-      g_ca_failed++;                                                           \
-      TEST_FAIL << "expected " << _b << ", got " << _a << " at line "          \
-                << __LINE__ << std::endl;                                      \
-    }                                                                          \
-  } while (0)
 
 /// 验证: 跨 agent 查询请求-响应闭环 (模拟 server)
 inline asio::awaitable<void> test_crossagent_request_response() {
@@ -56,10 +40,10 @@ inline asio::awaitable<void> test_crossagent_request_response() {
           events::Topic::CrossAgent);
   rr.serve([](const events::ReqCrossAgent &req,
               size_t corrId) -> asio::awaitable<events::RespCrossAgent> {
-    CA_EXPECT_TRUE(corrId > 0);
-    CA_EXPECT_EQ(req.toAgent, std::string{"research"});
-    CA_EXPECT_EQ(req.fromAgent, std::string{"coder"});
-    CA_EXPECT_EQ(req.message, std::string{"what is foo?"});
+    XX_TEST_EXPECT_TRUE(corrId > 0);
+    XX_TEST_EXPECT_EQ(req.toAgent, std::string{"research"});
+    XX_TEST_EXPECT_EQ(req.fromAgent, std::string{"coder"});
+    XX_TEST_EXPECT_EQ(req.message, std::string{"what is foo?"});
     co_return events::RespCrossAgent{
         .content = fmt::format("answer from {}: foo is 42", req.toAgent),
     };
@@ -76,10 +60,10 @@ inline asio::awaitable<void> test_crossagent_request_response() {
                       },
                       std::chrono::seconds(5));
 
-  CA_EXPECT_TRUE(resp.has_value());
+  XX_TEST_EXPECT_TRUE(resp.has_value());
   if (resp.has_value()) {
-    CA_EXPECT_EQ(resp->content, std::string{"answer from research: foo is 42"});
-    CA_EXPECT_TRUE(!resp->hasError);
+    XX_TEST_EXPECT_EQ(resp->content, std::string{"answer from research: foo is 42"});
+    XX_TEST_EXPECT_TRUE(!resp->hasError);
   }
 
   co_return;
@@ -109,10 +93,10 @@ inline asio::awaitable<void> test_crossagent_no_running_agent() {
                       },
                       std::chrono::seconds(5));
 
-  CA_EXPECT_TRUE(resp.has_value());
+  XX_TEST_EXPECT_TRUE(resp.has_value());
   if (resp.has_value()) {
-    CA_EXPECT_TRUE(resp->hasError);
-    CA_EXPECT_TRUE(resp->errorMessage.find("not running") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(resp->hasError);
+    XX_TEST_EXPECT_TRUE(resp->errorMessage.find("not running") != std::string::npos);
   }
 
   supervisor.stop();
@@ -133,7 +117,7 @@ inline asio::awaitable<void> test_subagent_batch_request_response() {
   batchRR.serve([](const events::ReqSubagentBatch &req,
                    size_t) -> asio::awaitable<events::RespSubagentBatch> {
     events::RespSubagentBatch resp;
-    CA_EXPECT_EQ(req.tasks.size(), size_t{3});
+    XX_TEST_EXPECT_EQ(req.tasks.size(), size_t{3});
     for (const auto &t : req.tasks) {
       resp.results.push_back(events::RespSubagentBatchItem{
           .resultId = t.resultId,
@@ -169,14 +153,14 @@ inline asio::awaitable<void> test_subagent_batch_request_response() {
               events::Topic::SubagentBatch, std::move(batchReq),
               std::chrono::seconds(5));
 
-  CA_EXPECT_TRUE(resp.has_value());
+  XX_TEST_EXPECT_TRUE(resp.has_value());
   if (resp.has_value()) {
-    CA_EXPECT_EQ(resp->results.size(), size_t{3});
+    XX_TEST_EXPECT_EQ(resp->results.size(), size_t{3});
     if (resp->results.size() == 3) {
-      CA_EXPECT_EQ(resp->results[0].content, std::string{"out_a"});
-      CA_EXPECT_EQ(resp->results[0].resultId, std::string{"call_1"});
-      CA_EXPECT_EQ(resp->results[1].content, std::string{"out_b"});
-      CA_EXPECT_EQ(resp->results[2].content, std::string{"out_c"});
+      XX_TEST_EXPECT_EQ(resp->results[0].content, std::string{"out_a"});
+      XX_TEST_EXPECT_EQ(resp->results[0].resultId, std::string{"call_1"});
+      XX_TEST_EXPECT_EQ(resp->results[1].content, std::string{"out_b"});
+      XX_TEST_EXPECT_EQ(resp->results[2].content, std::string{"out_c"});
     }
   }
 
@@ -189,13 +173,13 @@ inline void test_crossagent_query_tool_definition() {
   auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
   agentxx::tools::CrossAgentQueryTool tool{agentContext};
 
-  CA_EXPECT_EQ(tool.get_name(), std::string{"cross_agent_query"});
+  XX_TEST_EXPECT_EQ(tool.get_name(), std::string{"cross_agent_query"});
   auto def = tool.get_definition();
-  CA_EXPECT_EQ(std::string{def.name}, std::string{"cross_agent_query"});
+  XX_TEST_EXPECT_EQ(std::string{def.name}, std::string{"cross_agent_query"});
   // definition schema 应包含 to_agent 和 message
   auto props = def.parameters["properties"];
-  CA_EXPECT_TRUE(props.contains("to_agent"));
-  CA_EXPECT_TRUE(props.contains("message"));
+  XX_TEST_EXPECT_TRUE(props.contains("to_agent"));
+  XX_TEST_EXPECT_TRUE(props.contains("message"));
 }
 
 /// 验证: 批量 subagent 空任务返回空结果
@@ -219,9 +203,9 @@ inline asio::awaitable<void> test_subagent_batch_empty() {
               },
               std::chrono::seconds(5));
 
-  CA_EXPECT_TRUE(resp.has_value());
+  XX_TEST_EXPECT_TRUE(resp.has_value());
   if (resp.has_value()) {
-    CA_EXPECT_EQ(resp->results.size(), size_t{0});
+    XX_TEST_EXPECT_EQ(resp->results.size(), size_t{0});
   }
 
   supervisor.stop();

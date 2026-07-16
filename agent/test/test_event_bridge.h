@@ -15,6 +15,11 @@
 #include <string>
 
 #include "test_framework.h"
+#undef XX_TEST_PASSED
+#undef XX_TEST_FAILED
+#define XX_TEST_PASSED g_eb_passed
+#define XX_TEST_FAILED g_eb_failed
+
 
 namespace agentxx {
 namespace test {
@@ -22,27 +27,6 @@ namespace test {
 inline static int g_eb_passed = 0;
 inline static int g_eb_failed = 0;
 
-#define EB_EXPECT_TRUE(expr)                                                   \
-  do {                                                                         \
-    if (expr) {                                                                \
-      g_eb_passed++;                                                           \
-    } else {                                                                   \
-      g_eb_failed++;                                                           \
-      TEST_FAIL << "expected true at line " << __LINE__ << std::endl;          \
-    }                                                                          \
-  } while (0)
-#define EB_EXPECT_EQ(a, b)                                                     \
-  do {                                                                         \
-    auto _a = (a);                                                             \
-    auto _b = (b);                                                             \
-    if (_a == _b) {                                                            \
-      g_eb_passed++;                                                           \
-    } else {                                                                   \
-      g_eb_failed++;                                                           \
-      TEST_FAIL << "expected " << _b << ", got " << _a << " at line "          \
-                << __LINE__ << std::endl;                                      \
-    }                                                                          \
-  } while (0)
 
 /// 验证 EventBridge 把 GraphEvent::LLM_TOKEN 翻译成 EventModelToken 发布到 bus,
 /// 同时保留原始 callback 的转发行为
@@ -93,11 +77,11 @@ inline asio::awaitable<void> test_eventbridge_token() {
                                   std::chrono::milliseconds(10));
   co_await timer.async_wait(asio::use_awaitable);
 
-  EB_EXPECT_EQ(origCbCount.load(), 1);
-  EB_EXPECT_EQ(tokenEventCount.load(), 1);
-  EB_EXPECT_EQ(lastToken, std::string{"Hello"});
-  EB_EXPECT_EQ(lastAgentName, std::string{"testAgent"});
-  EB_EXPECT_EQ(lastThreadId, std::string{"thread_42"});
+  XX_TEST_EXPECT_EQ(origCbCount.load(), 1);
+  XX_TEST_EXPECT_EQ(tokenEventCount.load(), 1);
+  XX_TEST_EXPECT_EQ(lastToken, std::string{"Hello"});
+  XX_TEST_EXPECT_EQ(lastAgentName, std::string{"testAgent"});
+  XX_TEST_EXPECT_EQ(lastThreadId, std::string{"thread_42"});
 
   // 再触发一次, 验证多次
   bridgeCb(neograph::graph::GraphEvent{
@@ -106,9 +90,9 @@ inline asio::awaitable<void> test_eventbridge_token() {
   co_await asio::steady_timer(co_await asio::this_coro::executor,
                               std::chrono::milliseconds(10))
       .async_wait(asio::use_awaitable);
-  EB_EXPECT_EQ(origCbCount.load(), 2);
-  EB_EXPECT_EQ(tokenEventCount.load(), 2);
-  EB_EXPECT_EQ(lastToken, std::string{" World"});
+  XX_TEST_EXPECT_EQ(origCbCount.load(), 2);
+  XX_TEST_EXPECT_EQ(tokenEventCount.load(), 2);
+  XX_TEST_EXPECT_EQ(lastToken, std::string{" World"});
 
   co_return;
 }
@@ -132,7 +116,7 @@ inline asio::awaitable<void> test_eventbridge_nullbus_passthrough() {
   bridgeCb(
       neograph::graph::GraphEvent{neograph::graph::GraphEvent::Type::LLM_TOKEN,
                                   "llm", neograph::json(std::string{"x"})});
-  EB_EXPECT_EQ(origCbCount.load(), 1);
+  XX_TEST_EXPECT_EQ(origCbCount.load(), 1);
 
   co_return;
 }
@@ -166,9 +150,9 @@ inline asio::awaitable<void> test_eventbridge_error() {
   co_await asio::steady_timer(co_await asio::this_coro::executor,
                               std::chrono::milliseconds(10))
       .async_wait(asio::use_awaitable);
-  EB_EXPECT_EQ(errCount.load(), 1);
-  EB_EXPECT_EQ(lastMsg, std::string{"boom"});
-  EB_EXPECT_EQ(lastWhere, std::string{"tool_x"});
+  XX_TEST_EXPECT_EQ(errCount.load(), 1);
+  XX_TEST_EXPECT_EQ(lastMsg, std::string{"boom"});
+  XX_TEST_EXPECT_EQ(lastWhere, std::string{"tool_x"});
 
   co_return;
 }

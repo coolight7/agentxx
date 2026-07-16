@@ -15,6 +15,11 @@
 #include <string>
 
 #include "test_framework.h"
+#undef XX_TEST_PASSED
+#undef XX_TEST_FAILED
+#define XX_TEST_PASSED g_sb_passed
+#define XX_TEST_FAILED g_sb_failed
+
 
 namespace agentxx {
 namespace test {
@@ -22,27 +27,6 @@ namespace test {
 inline static int g_sb_passed = 0;
 inline static int g_sb_failed = 0;
 
-#define SB_EXPECT_TRUE(expr)                                                   \
-  do {                                                                         \
-    if (expr) {                                                                \
-      g_sb_passed++;                                                           \
-    } else {                                                                   \
-      g_sb_failed++;                                                           \
-      TEST_FAIL << "expected true at line " << __LINE__ << std::endl;          \
-    }                                                                          \
-  } while (0)
-#define SB_EXPECT_EQ(a, b)                                                     \
-  do {                                                                         \
-    auto _a = (a);                                                             \
-    auto _b = (b);                                                             \
-    if (_a == _b) {                                                            \
-      g_sb_passed++;                                                           \
-    } else {                                                                   \
-      g_sb_failed++;                                                           \
-      TEST_FAIL << "expected " << _b << ", got " << _a << " at line "          \
-                << __LINE__ << std::endl;                                      \
-    }                                                                          \
-  } while (0)
 
 /// 验证: bus.request<ReqSubagentStart, RespSubagentResult> 请求-响应闭环
 /// - 注册一个模拟 server, 验证请求参数传递与响应回填
@@ -57,10 +41,10 @@ inline asio::awaitable<void> test_subagent_bus_request_response() {
                      events::Topic::Subagent);
   rr.serve([](const events::ReqSubagentStart &req,
               size_t corrId) -> asio::awaitable<events::RespSubagentResult> {
-    SB_EXPECT_TRUE(corrId > 0);
-    SB_EXPECT_EQ(req.subagentName, std::string{"research"});
-    SB_EXPECT_EQ(req.message, std::string{"find foo"});
-    SB_EXPECT_EQ(req.resultId, std::string{"call_1"});
+    XX_TEST_EXPECT_TRUE(corrId > 0);
+    XX_TEST_EXPECT_EQ(req.subagentName, std::string{"research"});
+    XX_TEST_EXPECT_EQ(req.message, std::string{"find foo"});
+    XX_TEST_EXPECT_EQ(req.resultId, std::string{"call_1"});
     co_return events::RespSubagentResult{
         .content = fmt::format("result_for_{}", req.subagentName),
     };
@@ -80,10 +64,10 @@ inline asio::awaitable<void> test_subagent_bus_request_response() {
               },
               std::chrono::seconds(5));
 
-  SB_EXPECT_TRUE(resp.has_value());
+  XX_TEST_EXPECT_TRUE(resp.has_value());
   if (resp.has_value()) {
-    SB_EXPECT_EQ(resp->content, std::string{"result_for_research"});
-    SB_EXPECT_TRUE(!resp->hasError);
+    XX_TEST_EXPECT_EQ(resp->content, std::string{"result_for_research"});
+    XX_TEST_EXPECT_TRUE(!resp->hasError);
   }
 
   co_return;
@@ -127,9 +111,9 @@ inline asio::awaitable<void> test_subagent_progress_events() {
                                            .data = " World",
                                        });
 
-  SB_EXPECT_EQ(tokenCount.load(), 2);
-  SB_EXPECT_EQ(lastToken, std::string{" World"});
-  SB_EXPECT_EQ(lastSubagentId, std::string{"subagent_research"});
+  XX_TEST_EXPECT_EQ(tokenCount.load(), 2);
+  XX_TEST_EXPECT_EQ(lastToken, std::string{" World"});
+  XX_TEST_EXPECT_EQ(lastSubagentId, std::string{"subagent_research"});
 
   co_return;
 }
@@ -162,9 +146,9 @@ inline asio::awaitable<void> test_subagent_supervisor_notfound() {
               },
               std::chrono::seconds(5));
 
-  SB_EXPECT_TRUE(resp.has_value());
+  XX_TEST_EXPECT_TRUE(resp.has_value());
   if (resp.has_value()) {
-    SB_EXPECT_TRUE(resp->hasError);
+    XX_TEST_EXPECT_TRUE(resp->hasError);
   }
 
   supervisor.stop();
@@ -203,7 +187,7 @@ inline asio::awaitable<void> test_subagent_bus_timeout() {
               },
               std::chrono::milliseconds(200));
 
-  SB_EXPECT_TRUE(!resp.has_value());
+  XX_TEST_EXPECT_TRUE(!resp.has_value());
 
   co_return;
 }

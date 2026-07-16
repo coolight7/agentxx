@@ -15,52 +15,23 @@
 
 #include "test_framework.h"
 
+#undef XX_TEST_PASSED
+#undef XX_TEST_FAILED
+#define XX_TEST_PASSED g_http_passed
+#define XX_TEST_FAILED g_http_failed
+
 using namespace agentxx::util;
 
 inline static int g_http_passed = 0;
 inline static int g_http_failed = 0;
 
-#define HEXPECT_EQ(expr, expected)                                             \
-  do {                                                                         \
-    auto _result = (expr);                                                     \
-    auto _expected = (expected);                                               \
-    if (_result == _expected) {                                                \
-      g_http_passed++;                                                         \
-    } else {                                                                   \
-      g_http_failed++;                                                         \
-      TEST_FAIL << "expected " << (_expected) << ", got " << (_result)         \
-                << " at line " << __LINE__ << std::endl;                       \
-    }                                                                          \
-  } while (0)
-
-#define HEXPECT_TRUE(expr)                                                     \
-  do {                                                                         \
-    if (expr) {                                                                \
-      g_http_passed++;                                                         \
-    } else {                                                                   \
-      g_http_failed++;                                                         \
-      TEST_FAIL << "expected true at line " << __LINE__ << std::endl;          \
-    }                                                                          \
-  } while (0)
-
-#define HEXPECT_FALSE(expr)                                                    \
-  do {                                                                         \
-    if (!(expr)) {                                                             \
-      g_http_passed++;                                                         \
-    } else {                                                                   \
-      g_http_failed++;                                                         \
-      TEST_FAIL << "expected false at line " << __LINE__ << std::endl;         \
-    }                                                                          \
-  } while (0)
-
 template <typename T>
 void expect_has_value_impl(T &&expr, const char *file, int line) {
-  auto &&tmp = std::forward<T>(expr); // 仅求值一次
+  auto &&tmp = std::forward<T>(expr);
   if (tmp.has_value()) {
-    ++g_http_passed;
+    ++XX_TEST_PASSED;
   } else {
-    ++g_http_failed;
-    // 检测是否存在 error() 成员
+    ++XX_TEST_FAILED;
     if constexpr (requires { tmp.error(); }) {
       TEST_FAIL << "expected has_value at " << file << ":" << line << " | "
                 << tmp.error() << std::endl;
@@ -70,17 +41,8 @@ void expect_has_value_impl(T &&expr, const char *file, int line) {
   }
 }
 
-#define HEXPECT_HAS_VALUE(expr) expect_has_value_impl(expr, __FILE__, __LINE__)
-
-#define HEXPECT_NULLOPT(expr)                                                  \
-  do {                                                                         \
-    if (!(expr).has_value()) {                                                 \
-      g_http_passed++;                                                         \
-    } else {                                                                   \
-      g_http_failed++;                                                         \
-      TEST_FAIL << "expected nullopt at line " << __LINE__ << std::endl;       \
-    }                                                                          \
-  } while (0)
+#undef XX_TEST_EXPECT_HAS_VALUE
+#define XX_TEST_EXPECT_HAS_VALUE(expr) expect_has_value_impl(expr, __FILE__, __LINE__)
 
 namespace agentxx {
 namespace test {
@@ -90,67 +52,67 @@ inline void test_http_client_unit() {
   {
     HttpResponse resp;
     resp.status = 200;
-    HEXPECT_TRUE(resp.isSuccess());
+    XX_TEST_EXPECT_TRUE(resp.isSuccess());
     resp.status = 201;
-    HEXPECT_TRUE(resp.isSuccess());
+    XX_TEST_EXPECT_TRUE(resp.isSuccess());
     resp.status = 299;
-    HEXPECT_TRUE(resp.isSuccess());
+    XX_TEST_EXPECT_TRUE(resp.isSuccess());
     resp.status = 301;
-    HEXPECT_FALSE(resp.isSuccess());
+    XX_TEST_EXPECT_FALSE(resp.isSuccess());
     resp.status = 404;
-    HEXPECT_FALSE(resp.isSuccess());
+    XX_TEST_EXPECT_FALSE(resp.isSuccess());
     resp.status = 500;
-    HEXPECT_FALSE(resp.isSuccess());
+    XX_TEST_EXPECT_FALSE(resp.isSuccess());
     resp.status = 0;
-    HEXPECT_FALSE(resp.isSuccess());
+    XX_TEST_EXPECT_FALSE(resp.isSuccess());
   }
 
   {
     HttpResponse resp;
 
-    HEXPECT_EQ(resp.contentType(), "");
+    XX_TEST_EXPECT_EQ(resp.contentType(), "");
     resp.headers.set("content-type", "application/json");
-    HEXPECT_EQ(resp.contentType(), "application/json");
+    XX_TEST_EXPECT_EQ(resp.contentType(), "application/json");
     resp.headers.set("content-type", "application/json; charset=utf-8");
-    HEXPECT_EQ(resp.contentType(), "application/json");
+    XX_TEST_EXPECT_EQ(resp.contentType(), "application/json");
     resp.headers.set("content-type", "text/html; charset=utf-8");
-    HEXPECT_EQ(resp.contentType(), "text/html");
+    XX_TEST_EXPECT_EQ(resp.contentType(), "text/html");
     resp.headers.set("content-type", "  Text/Plain  ");
-    HEXPECT_EQ(resp.contentType(), "text/plain");
+    XX_TEST_EXPECT_EQ(resp.contentType(), "text/plain");
     resp.headers.set("content-type", "application/ld+json");
-    HEXPECT_EQ(resp.contentType(), "application/ld+json");
+    XX_TEST_EXPECT_EQ(resp.contentType(), "application/ld+json");
     resp.headers.set("content-type", "application/xml");
-    HEXPECT_EQ(resp.contentType(), "application/xml");
+    XX_TEST_EXPECT_EQ(resp.contentType(), "application/xml");
     resp.headers.set("content-type", "application/octet-stream");
-    HEXPECT_EQ(resp.contentType(), "application/octet-stream");
+    XX_TEST_EXPECT_EQ(resp.contentType(), "application/octet-stream");
   }
 
   {
-    HEXPECT_TRUE(HttpResponse::isJsonContentType("application/json"));
-    HEXPECT_TRUE(HttpResponse::isJsonContentType("application/ld+json"));
-    HEXPECT_TRUE(HttpResponse::isJsonContentType("application/vnd.api+json"));
-    HEXPECT_FALSE(HttpResponse::isJsonContentType("text/plain"));
-    HEXPECT_FALSE(HttpResponse::isJsonContentType("text/html"));
-    HEXPECT_FALSE(HttpResponse::isJsonContentType("application/xml"));
-    HEXPECT_FALSE(HttpResponse::isJsonContentType(""));
-    HEXPECT_FALSE(HttpResponse::isJsonContentType("application/octet-stream"));
+    XX_TEST_EXPECT_TRUE(HttpResponse::isJsonContentType("application/json"));
+    XX_TEST_EXPECT_TRUE(HttpResponse::isJsonContentType("application/ld+json"));
+    XX_TEST_EXPECT_TRUE(HttpResponse::isJsonContentType("application/vnd.api+json"));
+    XX_TEST_EXPECT_FALSE(HttpResponse::isJsonContentType("text/plain"));
+    XX_TEST_EXPECT_FALSE(HttpResponse::isJsonContentType("text/html"));
+    XX_TEST_EXPECT_FALSE(HttpResponse::isJsonContentType("application/xml"));
+    XX_TEST_EXPECT_FALSE(HttpResponse::isJsonContentType(""));
+    XX_TEST_EXPECT_FALSE(HttpResponse::isJsonContentType("application/octet-stream"));
   }
 
   {
-    HEXPECT_TRUE(HttpResponse::isTextContentType(""));
-    HEXPECT_TRUE(HttpResponse::isTextContentType("text/plain"));
-    HEXPECT_TRUE(HttpResponse::isTextContentType("text/html"));
-    HEXPECT_TRUE(HttpResponse::isTextContentType("text/css"));
-    HEXPECT_TRUE(HttpResponse::isTextContentType("text/javascript"));
-    HEXPECT_TRUE(HttpResponse::isTextContentType("application/json"));
-    HEXPECT_TRUE(HttpResponse::isTextContentType("application/ld+json"));
-    HEXPECT_TRUE(HttpResponse::isTextContentType("application/xml"));
-    HEXPECT_TRUE(HttpResponse::isTextContentType("application/rss+xml"));
-    HEXPECT_TRUE(
+    XX_TEST_EXPECT_TRUE(HttpResponse::isTextContentType(""));
+    XX_TEST_EXPECT_TRUE(HttpResponse::isTextContentType("text/plain"));
+    XX_TEST_EXPECT_TRUE(HttpResponse::isTextContentType("text/html"));
+    XX_TEST_EXPECT_TRUE(HttpResponse::isTextContentType("text/css"));
+    XX_TEST_EXPECT_TRUE(HttpResponse::isTextContentType("text/javascript"));
+    XX_TEST_EXPECT_TRUE(HttpResponse::isTextContentType("application/json"));
+    XX_TEST_EXPECT_TRUE(HttpResponse::isTextContentType("application/ld+json"));
+    XX_TEST_EXPECT_TRUE(HttpResponse::isTextContentType("application/xml"));
+    XX_TEST_EXPECT_TRUE(HttpResponse::isTextContentType("application/rss+xml"));
+    XX_TEST_EXPECT_TRUE(
         HttpResponse::isTextContentType("application/x-www-form-urlencoded"));
-    HEXPECT_FALSE(HttpResponse::isTextContentType("application/octet-stream"));
-    HEXPECT_FALSE(HttpResponse::isTextContentType("image/png"));
-    HEXPECT_FALSE(HttpResponse::isTextContentType("audio/mpeg"));
+    XX_TEST_EXPECT_FALSE(HttpResponse::isTextContentType("application/octet-stream"));
+    XX_TEST_EXPECT_FALSE(HttpResponse::isTextContentType("image/png"));
+    XX_TEST_EXPECT_FALSE(HttpResponse::isTextContentType("audio/mpeg"));
   }
 
   {
@@ -159,33 +121,33 @@ inline void test_http_client_unit() {
     resp.body = R"({"key": "value"})";
     resp.headers.set("content-type", "application/json");
     auto jsonResult = resp.bodyJson();
-    HEXPECT_HAS_VALUE(jsonResult);
+    XX_TEST_EXPECT_HAS_VALUE(jsonResult);
     if (jsonResult.has_value()) {
-      HEXPECT_EQ(jsonResult.value()["key"].get<std::string>(), "value");
+      XX_TEST_EXPECT_EQ(jsonResult.value()["key"].get<std::string>(), "value");
     }
 
     resp.body = R"({"key": "value"})";
     resp.headers.set("content-type", "application/ld+json");
     auto jsonResult2 = resp.bodyJson();
-    HEXPECT_HAS_VALUE(jsonResult2);
+    XX_TEST_EXPECT_HAS_VALUE(jsonResult2);
     if (jsonResult2.has_value()) {
-      HEXPECT_EQ(jsonResult2.value()["key"].get<std::string>(), "value");
+      XX_TEST_EXPECT_EQ(jsonResult2.value()["key"].get<std::string>(), "value");
     }
 
     resp.body = R"({"key": "value"})";
     resp.headers.set("content-type", "text/html");
     auto jsonResult3 = resp.bodyJson();
-    HEXPECT_NULLOPT(jsonResult3);
+    XX_TEST_EXPECT_NULLOPT(jsonResult3);
 
     resp.body = "";
     resp.headers.set("content-type", "application/json");
     auto jsonResult4 = resp.bodyJson();
-    HEXPECT_NULLOPT(jsonResult4);
+    XX_TEST_EXPECT_NULLOPT(jsonResult4);
 
     resp.body = "not valid json";
     resp.headers.set("content-type", "application/json");
     auto jsonResult5 = resp.bodyJson();
-    HEXPECT_NULLOPT(jsonResult5);
+    XX_TEST_EXPECT_NULLOPT(jsonResult5);
   }
 
   {
@@ -194,33 +156,33 @@ inline void test_http_client_unit() {
     resp.body = "hello world";
     resp.headers.set("content-type", "text/plain");
     auto textResult = resp.bodyText();
-    HEXPECT_HAS_VALUE(textResult);
+    XX_TEST_EXPECT_HAS_VALUE(textResult);
     if (textResult.has_value()) {
-      HEXPECT_EQ(textResult.value(), "hello world");
+      XX_TEST_EXPECT_EQ(textResult.value(), "hello world");
     }
 
     resp.body = "<html></html>";
     resp.headers.set("content-type", "text/html; charset=utf-8");
     auto textResult2 = resp.bodyText();
-    HEXPECT_HAS_VALUE(textResult2);
+    XX_TEST_EXPECT_HAS_VALUE(textResult2);
     if (textResult2.has_value()) {
-      HEXPECT_EQ(textResult2.value(), "<html></html>");
+      XX_TEST_EXPECT_EQ(textResult2.value(), "<html></html>");
     }
 
     resp.body = "text content";
     resp.headers.set("content-type", "");
     auto textResult3 = resp.bodyText();
-    HEXPECT_HAS_VALUE(textResult3);
+    XX_TEST_EXPECT_HAS_VALUE(textResult3);
 
     resp.body = "binary data";
     resp.headers.set("content-type", "application/octet-stream");
     auto textResult4 = resp.bodyText();
-    HEXPECT_NULLOPT(textResult4);
+    XX_TEST_EXPECT_NULLOPT(textResult4);
 
     resp.body = "image data";
     resp.headers.set("content-type", "image/png");
     auto textResult5 = resp.bodyText();
-    HEXPECT_NULLOPT(textResult5);
+    XX_TEST_EXPECT_NULLOPT(textResult5);
   }
 
   {
@@ -228,90 +190,90 @@ inline void test_http_client_unit() {
     resp.headers.set("X-Custom", "value123");
     resp.headers.set("Content-Type", "application/json");
 
-    HEXPECT_EQ(resp.findHeader("X-Custom"), "value123");
-    HEXPECT_EQ(resp.findHeader("Content-Type"), "application/json");
-    HEXPECT_EQ(resp.findHeader("x-custom"), "value123");
-    HEXPECT_EQ(resp.findHeader("Non-Existent"), "");
+    XX_TEST_EXPECT_EQ(resp.findHeader("X-Custom"), "value123");
+    XX_TEST_EXPECT_EQ(resp.findHeader("Content-Type"), "application/json");
+    XX_TEST_EXPECT_EQ(resp.findHeader("x-custom"), "value123");
+    XX_TEST_EXPECT_EQ(resp.findHeader("Non-Existent"), "");
   }
 
   {
-    HEXPECT_FALSE(HttpClient::isValidUrl(""));
-    HEXPECT_FALSE(HttpClient::isValidUrl("ftp://example.com"));
-    HEXPECT_FALSE(HttpClient::isValidUrl("ws://example.com"));
-    HEXPECT_TRUE(HttpClient::isValidUrl("http://example.com"));
-    HEXPECT_TRUE(HttpClient::isValidUrl("https://example.com"));
-    HEXPECT_TRUE(HttpClient::isValidUrl("http://example.com/path"));
-    HEXPECT_TRUE(HttpClient::isValidUrl("https://example.com:8080/path"));
-    HEXPECT_TRUE(HttpClient::isValidUrl("example.com"));
-    HEXPECT_TRUE(HttpClient::isValidUrl("example.com/path"));
-    HEXPECT_FALSE(HttpClient::isValidUrl("http://"));
-    HEXPECT_FALSE(HttpClient::isValidUrl("https://"));
+    XX_TEST_EXPECT_FALSE(HttpClient::isValidUrl(""));
+    XX_TEST_EXPECT_FALSE(HttpClient::isValidUrl("ftp://example.com"));
+    XX_TEST_EXPECT_FALSE(HttpClient::isValidUrl("ws://example.com"));
+    XX_TEST_EXPECT_TRUE(HttpClient::isValidUrl("http://example.com"));
+    XX_TEST_EXPECT_TRUE(HttpClient::isValidUrl("https://example.com"));
+    XX_TEST_EXPECT_TRUE(HttpClient::isValidUrl("http://example.com/path"));
+    XX_TEST_EXPECT_TRUE(HttpClient::isValidUrl("https://example.com:8080/path"));
+    XX_TEST_EXPECT_TRUE(HttpClient::isValidUrl("example.com"));
+    XX_TEST_EXPECT_TRUE(HttpClient::isValidUrl("example.com/path"));
+    XX_TEST_EXPECT_FALSE(HttpClient::isValidUrl("http://"));
+    XX_TEST_EXPECT_FALSE(HttpClient::isValidUrl("https://"));
   }
 
   {
     auto [base, path] = HttpClient::splitUrl("http://example.com/path");
-    HEXPECT_EQ(base, "http://example.com");
-    HEXPECT_EQ(path, "/path");
+    XX_TEST_EXPECT_EQ(base, "http://example.com");
+    XX_TEST_EXPECT_EQ(path, "/path");
 
     auto [base2, path2] = HttpClient::splitUrl("https://example.com:8080/a/b");
-    HEXPECT_EQ(base2, "https://example.com:8080");
-    HEXPECT_EQ(path2, "/a/b");
+    XX_TEST_EXPECT_EQ(base2, "https://example.com:8080");
+    XX_TEST_EXPECT_EQ(path2, "/a/b");
 
     auto [base3, path3] = HttpClient::splitUrl("http://example.com");
-    HEXPECT_EQ(base3, "http://example.com");
-    HEXPECT_EQ(path3, "/");
+    XX_TEST_EXPECT_EQ(base3, "http://example.com");
+    XX_TEST_EXPECT_EQ(path3, "/");
 
     auto [base4, path4] = HttpClient::splitUrl("example.com/path");
-    HEXPECT_EQ(base4, "example.com/path");
-    HEXPECT_EQ(path4, "/");
+    XX_TEST_EXPECT_EQ(base4, "example.com/path");
+    XX_TEST_EXPECT_EQ(path4, "/");
 
     auto [base5, path5] = HttpClient::splitUrl("http://example.com/");
-    HEXPECT_EQ(base5, "http://example.com");
-    HEXPECT_EQ(path5, "/");
+    XX_TEST_EXPECT_EQ(base5, "http://example.com");
+    XX_TEST_EXPECT_EQ(path5, "/");
   }
 
   {
-    HEXPECT_EQ(HttpClient::urlEncode("hello"), "hello");
-    HEXPECT_EQ(HttpClient::urlEncode("hello world"), "hello+world");
-    HEXPECT_EQ(HttpClient::urlEncode("abc123"), "abc123");
-    HEXPECT_EQ(HttpClient::urlEncode("a&b=c"), "a%26b%3dc");
-    HEXPECT_EQ(HttpClient::urlEncode(""), "");
-    HEXPECT_EQ(HttpClient::urlEncode("中文"), "%e4%b8%ad%e6%96%87");
+    XX_TEST_EXPECT_EQ(HttpClient::urlEncode("hello"), "hello");
+    XX_TEST_EXPECT_EQ(HttpClient::urlEncode("hello world"), "hello+world");
+    XX_TEST_EXPECT_EQ(HttpClient::urlEncode("abc123"), "abc123");
+    XX_TEST_EXPECT_EQ(HttpClient::urlEncode("a&b=c"), "a%26b%3dc");
+    XX_TEST_EXPECT_EQ(HttpClient::urlEncode(""), "");
+    XX_TEST_EXPECT_EQ(HttpClient::urlEncode("中文"), "%e4%b8%ad%e6%96%87");
     // Additional edge cases
-    HEXPECT_EQ(HttpClient::urlEncode("!@#$%^&*()"),
+    XX_TEST_EXPECT_EQ(HttpClient::urlEncode("!@#$%^&*()"),
                "%21%40%23%24%25%5e%26%2a%28%29");
-    HEXPECT_EQ(HttpClient::urlEncode("-_.~"), "-_.~");
-    HEXPECT_EQ(HttpClient::urlEncode("/path/to/file"), "%2fpath%2fto%2ffile");
-    HEXPECT_EQ(HttpClient::urlEncode("\n\t"), "%0a%09");
+    XX_TEST_EXPECT_EQ(HttpClient::urlEncode("-_.~"), "-_.~");
+    XX_TEST_EXPECT_EQ(HttpClient::urlEncode("/path/to/file"), "%2fpath%2fto%2ffile");
+    XX_TEST_EXPECT_EQ(HttpClient::urlEncode("\n\t"), "%0a%09");
   }
 
   {
     HttpResponse resp;
     resp.status = 200;
-    HEXPECT_TRUE(HttpClient::respIsSucc(resp));
+    XX_TEST_EXPECT_TRUE(HttpClient::respIsSucc(resp));
     resp.status = 404;
-    HEXPECT_FALSE(HttpClient::respIsSucc(resp));
+    XX_TEST_EXPECT_FALSE(HttpClient::respIsSucc(resp));
     resp.status = 500;
-    HEXPECT_FALSE(HttpClient::respIsSucc(resp));
+    XX_TEST_EXPECT_FALSE(HttpClient::respIsSucc(resp));
   }
 
   {
     bool original = HttpClient::getSslVerify();
-    HEXPECT_TRUE(original); // default should be true (verify enabled)
+    XX_TEST_EXPECT_TRUE(original); // default should be true (verify enabled)
     HttpClient::setSslVerify(false);
-    HEXPECT_FALSE(HttpClient::getSslVerify());
+    XX_TEST_EXPECT_FALSE(HttpClient::getSslVerify());
     HttpClient::setSslVerify(true);
-    HEXPECT_TRUE(HttpClient::getSslVerify());
+    XX_TEST_EXPECT_TRUE(HttpClient::getSslVerify());
     // Restore original
     HttpClient::setSslVerify(original);
   }
 
   {
     // Protocol-relative URL: //host/path -> scheme://host/path
-    HEXPECT_EQ(HttpClient::resolveRedirectUrl("https://example.com/a",
+    XX_TEST_EXPECT_EQ(HttpClient::resolveRedirectUrl("https://example.com/a",
                                               "//other.com/b"),
                "https://other.com/b");
-    HEXPECT_EQ(HttpClient::resolveRedirectUrl("http://example.com/a",
+    XX_TEST_EXPECT_EQ(HttpClient::resolveRedirectUrl("http://example.com/a",
                                               "//other.com:8080/c"),
                "http://other.com:8080/c");
   }
@@ -326,64 +288,64 @@ inline asio::awaitable<void> test_http_client() { co_return; }
 inline void test_http_server_unit() {
 
   {
-    HEXPECT_EQ(httpMethodIndex(boost::beast::http::verb::get), 0);
-    HEXPECT_EQ(httpMethodIndex(boost::beast::http::verb::head), 1);
-    HEXPECT_EQ(httpMethodIndex(boost::beast::http::verb::post), 2);
-    HEXPECT_EQ(httpMethodIndex(boost::beast::http::verb::put), 3);
-    HEXPECT_EQ(httpMethodIndex(boost::beast::http::verb::delete_), 4);
-    HEXPECT_EQ(httpMethodIndex(boost::beast::http::verb::connect), 5);
-    HEXPECT_EQ(httpMethodIndex(boost::beast::http::verb::options), 6);
-    HEXPECT_EQ(httpMethodIndex(boost::beast::http::verb::trace), 7);
-    HEXPECT_EQ(httpMethodIndex(boost::beast::http::verb::patch), 8);
-    HEXPECT_EQ(httpMethodIndex(static_cast<boost::beast::http::verb>(999)), -1);
+    XX_TEST_EXPECT_EQ(httpMethodIndex(boost::beast::http::verb::get), 0);
+    XX_TEST_EXPECT_EQ(httpMethodIndex(boost::beast::http::verb::head), 1);
+    XX_TEST_EXPECT_EQ(httpMethodIndex(boost::beast::http::verb::post), 2);
+    XX_TEST_EXPECT_EQ(httpMethodIndex(boost::beast::http::verb::put), 3);
+    XX_TEST_EXPECT_EQ(httpMethodIndex(boost::beast::http::verb::delete_), 4);
+    XX_TEST_EXPECT_EQ(httpMethodIndex(boost::beast::http::verb::connect), 5);
+    XX_TEST_EXPECT_EQ(httpMethodIndex(boost::beast::http::verb::options), 6);
+    XX_TEST_EXPECT_EQ(httpMethodIndex(boost::beast::http::verb::trace), 7);
+    XX_TEST_EXPECT_EQ(httpMethodIndex(boost::beast::http::verb::patch), 8);
+    XX_TEST_EXPECT_EQ(httpMethodIndex(static_cast<boost::beast::http::verb>(999)), -1);
   }
 
   {
-    HEXPECT_EQ(requestPath("/"), "/");
-    HEXPECT_EQ(requestPath("/path"), "/path");
-    HEXPECT_EQ(requestPath("/path?q=1"), "/path");
-    HEXPECT_EQ(requestPath("/a/b/c?x=y&z=w"), "/a/b/c");
-    HEXPECT_EQ(requestPath(""), "");
-    HEXPECT_EQ(requestPath("?alone"), "");
+    XX_TEST_EXPECT_EQ(requestPath("/"), "/");
+    XX_TEST_EXPECT_EQ(requestPath("/path"), "/path");
+    XX_TEST_EXPECT_EQ(requestPath("/path?q=1"), "/path");
+    XX_TEST_EXPECT_EQ(requestPath("/a/b/c?x=y&z=w"), "/a/b/c");
+    XX_TEST_EXPECT_EQ(requestPath(""), "");
+    XX_TEST_EXPECT_EQ(requestPath("?alone"), "");
   }
 
   {
-    HEXPECT_TRUE(HttpClient::isRedirectStatus(301));
-    HEXPECT_TRUE(HttpClient::isRedirectStatus(302));
-    HEXPECT_TRUE(HttpClient::isRedirectStatus(303));
-    HEXPECT_TRUE(HttpClient::isRedirectStatus(307));
-    HEXPECT_TRUE(HttpClient::isRedirectStatus(308));
-    HEXPECT_FALSE(HttpClient::isRedirectStatus(200));
-    HEXPECT_FALSE(HttpClient::isRedirectStatus(404));
-    HEXPECT_FALSE(HttpClient::isRedirectStatus(500));
-    HEXPECT_FALSE(HttpClient::isRedirectStatus(0));
+    XX_TEST_EXPECT_TRUE(HttpClient::isRedirectStatus(301));
+    XX_TEST_EXPECT_TRUE(HttpClient::isRedirectStatus(302));
+    XX_TEST_EXPECT_TRUE(HttpClient::isRedirectStatus(303));
+    XX_TEST_EXPECT_TRUE(HttpClient::isRedirectStatus(307));
+    XX_TEST_EXPECT_TRUE(HttpClient::isRedirectStatus(308));
+    XX_TEST_EXPECT_FALSE(HttpClient::isRedirectStatus(200));
+    XX_TEST_EXPECT_FALSE(HttpClient::isRedirectStatus(404));
+    XX_TEST_EXPECT_FALSE(HttpClient::isRedirectStatus(500));
+    XX_TEST_EXPECT_FALSE(HttpClient::isRedirectStatus(0));
   }
 
   {
-    HEXPECT_TRUE(HttpClient::redirectChangesToGet(301));
-    HEXPECT_TRUE(HttpClient::redirectChangesToGet(302));
-    HEXPECT_TRUE(HttpClient::redirectChangesToGet(303));
-    HEXPECT_FALSE(HttpClient::redirectChangesToGet(307));
-    HEXPECT_FALSE(HttpClient::redirectChangesToGet(308));
-    HEXPECT_FALSE(HttpClient::redirectChangesToGet(200));
+    XX_TEST_EXPECT_TRUE(HttpClient::redirectChangesToGet(301));
+    XX_TEST_EXPECT_TRUE(HttpClient::redirectChangesToGet(302));
+    XX_TEST_EXPECT_TRUE(HttpClient::redirectChangesToGet(303));
+    XX_TEST_EXPECT_FALSE(HttpClient::redirectChangesToGet(307));
+    XX_TEST_EXPECT_FALSE(HttpClient::redirectChangesToGet(308));
+    XX_TEST_EXPECT_FALSE(HttpClient::redirectChangesToGet(200));
   }
 
   {
     // absolute URL
-    HEXPECT_EQ(HttpClient::resolveRedirectUrl("http://example.com/a",
+    XX_TEST_EXPECT_EQ(HttpClient::resolveRedirectUrl("http://example.com/a",
                                               "http://other.com/b"),
                "http://other.com/b");
     // absolute path
-    HEXPECT_EQ(HttpClient::resolveRedirectUrl("http://example.com/a", "/b/c"),
+    XX_TEST_EXPECT_EQ(HttpClient::resolveRedirectUrl("http://example.com/a", "/b/c"),
                "http://example.com/b/c");
     // relative path
-    HEXPECT_EQ(HttpClient::resolveRedirectUrl("http://example.com/a/b", "c"),
+    XX_TEST_EXPECT_EQ(HttpClient::resolveRedirectUrl("http://example.com/a/b", "c"),
                "http://example.com/a/c");
     // relative path with no parent
-    HEXPECT_EQ(HttpClient::resolveRedirectUrl("http://example.com/", "c"),
+    XX_TEST_EXPECT_EQ(HttpClient::resolveRedirectUrl("http://example.com/", "c"),
                "http://example.com/c");
     // root path
-    HEXPECT_EQ(HttpClient::resolveRedirectUrl("http://example.com/a/b/c", "/"),
+    XX_TEST_EXPECT_EQ(HttpClient::resolveRedirectUrl("http://example.com/a/b/c", "/"),
                "http://example.com/");
   }
 }
@@ -620,115 +582,115 @@ inline asio::awaitable<void> test_http_client_beast_server() {
   {
     HttpClient::setSslVerify(false);
     auto resp = co_await HttpClient::getAsync("https://blog.music.bool.run/");
-    HEXPECT_HAS_VALUE(resp);
+    XX_TEST_EXPECT_HAS_VALUE(resp);
     if (resp.has_value()) {
-      HEXPECT_EQ(resp.value().status, 200);
-      HEXPECT_TRUE(resp.value().isSuccess());
+      XX_TEST_EXPECT_EQ(resp.value().status, 200);
+      XX_TEST_EXPECT_TRUE(resp.value().isSuccess());
     }
   }
 
   {
     auto resp = co_await HttpClient::getAsync(baseUrl + "/hello");
-    HEXPECT_HAS_VALUE(resp);
+    XX_TEST_EXPECT_HAS_VALUE(resp);
     if (resp.has_value()) {
-      HEXPECT_EQ(resp.value().status, 200);
-      HEXPECT_EQ(resp.value().body, "hello world");
-      HEXPECT_TRUE(resp.value().isSuccess());
+      XX_TEST_EXPECT_EQ(resp.value().status, 200);
+      XX_TEST_EXPECT_EQ(resp.value().body, "hello world");
+      XX_TEST_EXPECT_TRUE(resp.value().isSuccess());
     }
   }
 
   {
     auto resp = co_await HttpClient::getAsync(baseUrl + "/json");
-    HEXPECT_HAS_VALUE(resp);
+    XX_TEST_EXPECT_HAS_VALUE(resp);
     if (resp.has_value()) {
-      HEXPECT_EQ(resp.value().status, 200);
+      XX_TEST_EXPECT_EQ(resp.value().status, 200);
       auto j = resp.value().bodyJson();
-      HEXPECT_HAS_VALUE(j);
+      XX_TEST_EXPECT_HAS_VALUE(j);
       if (j.has_value())
-        HEXPECT_EQ(j.value()["key"].get<std::string>(), "value");
+        XX_TEST_EXPECT_EQ(j.value()["key"].get<std::string>(), "value");
     }
   }
 
   {
     auto resp = co_await HttpClient::getAsync(baseUrl + "/empty");
-    HEXPECT_HAS_VALUE(resp);
+    XX_TEST_EXPECT_HAS_VALUE(resp);
     if (resp.has_value()) {
-      HEXPECT_EQ(resp.value().status, 200);
-      HEXPECT_EQ(resp.value().body, "");
+      XX_TEST_EXPECT_EQ(resp.value().status, 200);
+      XX_TEST_EXPECT_EQ(resp.value().body, "");
     }
   }
 
   {
     auto resp = co_await HttpClient::getAsync(baseUrl + "/status/201");
-    HEXPECT_HAS_VALUE(resp);
+    XX_TEST_EXPECT_HAS_VALUE(resp);
     if (resp.has_value()) {
-      HEXPECT_EQ(resp.value().status, 201);
-      HEXPECT_TRUE(resp.value().isSuccess());
+      XX_TEST_EXPECT_EQ(resp.value().status, 201);
+      XX_TEST_EXPECT_TRUE(resp.value().isSuccess());
     }
   }
 
   {
     auto resp = co_await HttpClient::getAsync(baseUrl + "/status/500");
-    HEXPECT_HAS_VALUE(resp);
+    XX_TEST_EXPECT_HAS_VALUE(resp);
     if (resp.has_value()) {
-      HEXPECT_EQ(resp.value().status, 500);
-      HEXPECT_FALSE(resp.value().isSuccess());
+      XX_TEST_EXPECT_EQ(resp.value().status, 500);
+      XX_TEST_EXPECT_FALSE(resp.value().isSuccess());
     }
   }
 
   {
     auto resp = co_await HttpClient::postAsync(baseUrl + "/echo", "body data",
                                                "text/plain");
-    HEXPECT_HAS_VALUE(resp);
+    XX_TEST_EXPECT_HAS_VALUE(resp);
     if (resp.has_value()) {
-      HEXPECT_EQ(resp.value().status, 200);
-      HEXPECT_EQ(resp.value().body, "body data");
+      XX_TEST_EXPECT_EQ(resp.value().status, 200);
+      XX_TEST_EXPECT_EQ(resp.value().body, "body data");
     }
   }
 
   {
     neograph::json j = {{"msg", "hi"}};
     auto resp = co_await HttpClient::postAsync(baseUrl + "/echo", j);
-    HEXPECT_HAS_VALUE(resp);
+    XX_TEST_EXPECT_HAS_VALUE(resp);
     if (resp.has_value()) {
-      HEXPECT_EQ(resp.value().status, 200);
-      HEXPECT_EQ(resp.value().body, R"({"msg":"hi"})");
+      XX_TEST_EXPECT_EQ(resp.value().status, 200);
+      XX_TEST_EXPECT_EQ(resp.value().body, R"({"msg":"hi"})");
     }
   }
 
   {
     auto resp = co_await HttpClient::putAsync(baseUrl + "/echo", "update");
-    HEXPECT_HAS_VALUE(resp);
+    XX_TEST_EXPECT_HAS_VALUE(resp);
     if (resp.has_value()) {
-      HEXPECT_EQ(resp.value().body, "put:update");
+      XX_TEST_EXPECT_EQ(resp.value().body, "put:update");
     }
   }
 
   {
     // /data only has a DELETE handler; GET should return 405
     auto resp = co_await HttpClient::getAsync(baseUrl + "/data");
-    HEXPECT_HAS_VALUE(resp);
+    XX_TEST_EXPECT_HAS_VALUE(resp);
     if (resp.has_value()) {
-      HEXPECT_EQ(resp.value().status, 405);
+      XX_TEST_EXPECT_EQ(resp.value().status, 405);
     }
   }
 
   {
     auto resp = co_await HttpClient::getAsync(baseUrl + "/wildcard/foo/bar");
-    HEXPECT_HAS_VALUE(resp);
+    XX_TEST_EXPECT_HAS_VALUE(resp);
     if (resp.has_value()) {
-      HEXPECT_EQ(resp.value().status, 200);
+      XX_TEST_EXPECT_EQ(resp.value().status, 200);
       // matched_path should contain the wildcard segment
-      HEXPECT_TRUE(resp.value().body.find("wildcard") != std::string::npos);
+      XX_TEST_EXPECT_TRUE(resp.value().body.find("wildcard") != std::string::npos);
     }
   }
 
   {
     auto resp = co_await HttpClient::getAsync(baseUrl + "/nonexistent");
-    HEXPECT_HAS_VALUE(resp);
+    XX_TEST_EXPECT_HAS_VALUE(resp);
     if (resp.has_value()) {
-      HEXPECT_EQ(resp.value().status, 404);
-      HEXPECT_FALSE(resp.value().isSuccess());
+      XX_TEST_EXPECT_EQ(resp.value().status, 404);
+      XX_TEST_EXPECT_FALSE(resp.value().isSuccess());
     }
   }
 
@@ -736,59 +698,59 @@ inline asio::awaitable<void> test_http_client_beast_server() {
     // POST to a GET-only route
     auto resp = co_await HttpClient::postAsync(baseUrl + "/hello", "body",
                                                "text/plain");
-    HEXPECT_HAS_VALUE(resp);
+    XX_TEST_EXPECT_HAS_VALUE(resp);
     if (resp.has_value()) {
-      HEXPECT_EQ(resp.value().status, 405);
-      HEXPECT_FALSE(resp.value().isSuccess());
+      XX_TEST_EXPECT_EQ(resp.value().status, 405);
+      XX_TEST_EXPECT_FALSE(resp.value().isSuccess());
     }
   }
 
   {
     auto resp = co_await HttpClient::getAsync(baseUrl + "/search?q=hello");
-    HEXPECT_HAS_VALUE(resp);
+    XX_TEST_EXPECT_HAS_VALUE(resp);
     if (resp.has_value()) {
-      HEXPECT_EQ(resp.value().status, 200);
+      XX_TEST_EXPECT_EQ(resp.value().status, 200);
       // The handler echoes the full target
-      HEXPECT_TRUE(resp.value().body.find("q=hello") != std::string::npos);
+      XX_TEST_EXPECT_TRUE(resp.value().body.find("q=hello") != std::string::npos);
     }
   }
 
   {
     auto resp = co_await HttpClient::getAsync(
         "http://192.0.2.1:9999/nonexistent", {}, std::chrono::milliseconds{50});
-    HEXPECT_FALSE(resp.has_value());
+    XX_TEST_EXPECT_FALSE(resp.has_value());
   }
 
-  { HEXPECT_FALSE(server.isStopped()); }
+  { XX_TEST_EXPECT_FALSE(server.isStopped()); }
 
   {
     auto resp = co_await HttpClient::getAsync(baseUrl + "/redirect-me", {},
                                               std::chrono::seconds{10}, 0);
-    HEXPECT_HAS_VALUE(resp);
+    XX_TEST_EXPECT_HAS_VALUE(resp);
     if (resp.has_value()) {
-      HEXPECT_EQ(resp.value().status, 302);
+      XX_TEST_EXPECT_EQ(resp.value().status, 302);
       auto loc = resp.value().findHeader("location");
-      HEXPECT_EQ(loc, "/hello");
+      XX_TEST_EXPECT_EQ(loc, "/hello");
     }
   }
 
   {
     auto resp = co_await HttpClient::getAsync(baseUrl + "/redirect-me", {},
                                               std::chrono::seconds{10}, 1);
-    HEXPECT_HAS_VALUE(resp);
+    XX_TEST_EXPECT_HAS_VALUE(resp);
     if (resp.has_value()) {
-      HEXPECT_EQ(resp.value().status, 200);
-      HEXPECT_EQ(resp.value().body, "hello world");
+      XX_TEST_EXPECT_EQ(resp.value().status, 200);
+      XX_TEST_EXPECT_EQ(resp.value().body, "hello world");
     }
   }
 
   {
     auto resp = co_await HttpClient::getAsync(baseUrl + "/redirect-loop", {},
                                               std::chrono::seconds{10}, 3);
-    HEXPECT_HAS_VALUE(resp);
+    XX_TEST_EXPECT_HAS_VALUE(resp);
     if (resp.has_value()) {
       // Should stop at the last redirect (302) since it exceeds max
-      HEXPECT_EQ(resp.value().status, 302);
+      XX_TEST_EXPECT_EQ(resp.value().status, 302);
     }
   }
 
@@ -798,39 +760,39 @@ inline asio::awaitable<void> test_http_client_beast_server() {
 
   {
     auto resp = co_await HttpClient::deleteAsync(baseUrl + "/echo");
-    HEXPECT_HAS_VALUE(resp);
+    XX_TEST_EXPECT_HAS_VALUE(resp);
     if (resp.has_value()) {
-      HEXPECT_EQ(resp.value().status, 200);
-      HEXPECT_EQ(resp.value().body, "delete:");
+      XX_TEST_EXPECT_EQ(resp.value().status, 200);
+      XX_TEST_EXPECT_EQ(resp.value().body, "delete:");
     }
   }
 
   {
     auto resp = co_await HttpClient::patchAsync(baseUrl + "/echo", "patchdata");
-    HEXPECT_HAS_VALUE(resp);
+    XX_TEST_EXPECT_HAS_VALUE(resp);
     if (resp.has_value()) {
-      HEXPECT_EQ(resp.value().status, 200);
-      HEXPECT_EQ(resp.value().body, "patch:patchdata");
+      XX_TEST_EXPECT_EQ(resp.value().status, 200);
+      XX_TEST_EXPECT_EQ(resp.value().body, "patch:patchdata");
     }
   }
 
   {
     auto resp = co_await HttpClient::getAsync(baseUrl + "/hello");
-    HEXPECT_HAS_VALUE(resp);
+    XX_TEST_EXPECT_HAS_VALUE(resp);
     if (resp.has_value()) {
       auto date = resp.value().findHeader("date");
-      HEXPECT_FALSE(date.empty());
+      XX_TEST_EXPECT_FALSE(date.empty());
       // Date should contain "GMT" per RFC 7231
-      HEXPECT_TRUE(date.find("GMT") != std::string_view::npos);
+      XX_TEST_EXPECT_TRUE(date.find("GMT") != std::string_view::npos);
     }
   }
 
   {
     auto resp = co_await HttpClient::getAsync(baseUrl + "/hello");
-    HEXPECT_HAS_VALUE(resp);
+    XX_TEST_EXPECT_HAS_VALUE(resp);
     if (resp.has_value()) {
       auto srv = resp.value().findHeader("server");
-      HEXPECT_FALSE(srv.empty());
+      XX_TEST_EXPECT_FALSE(srv.empty());
     }
   }
 
@@ -839,17 +801,17 @@ inline asio::awaitable<void> test_http_client_beast_server() {
     auto resp = co_await HttpClient::getAsync(
         baseUrl + "/big-body?size=100", {}, std::chrono::seconds{5}, 3, 50);
     // Body limit exceeded should result in an error (no value)
-    HEXPECT_FALSE(resp.has_value());
+    XX_TEST_EXPECT_FALSE(resp.has_value());
   }
 
   {
     // Request a 100-byte body with a 200-byte limit → should succeed
     auto resp = co_await HttpClient::getAsync(
         baseUrl + "/big-body?size=100", {}, std::chrono::seconds{5}, 3, 200);
-    HEXPECT_HAS_VALUE(resp);
+    XX_TEST_EXPECT_HAS_VALUE(resp);
     if (resp.has_value()) {
-      HEXPECT_EQ(resp.value().status, 200);
-      HEXPECT_EQ(resp.value().body.size(), (size_t)100);
+      XX_TEST_EXPECT_EQ(resp.value().status, 200);
+      XX_TEST_EXPECT_EQ(resp.value().body.size(), (size_t)100);
     }
   }
 
@@ -862,14 +824,14 @@ inline asio::awaitable<void> test_http_client_beast_server() {
         break;
       std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
-    HEXPECT_EQ(conn, (size_t)0);
+    XX_TEST_EXPECT_EQ(conn, (size_t)0);
   }
 
   {
     // fetchMarkdown should return error (not UB) for 404
     auto result = co_await HttpClient::fetchMarkdown(baseUrl + "/nonexistent",
                                                      std::chrono::seconds{5});
-    HEXPECT_FALSE(result.has_value());
+    XX_TEST_EXPECT_FALSE(result.has_value());
   }
 
   {
@@ -878,7 +840,7 @@ inline asio::awaitable<void> test_http_client_beast_server() {
     // fetchMarkdown checks success status, not content-type
     auto result = co_await HttpClient::fetchMarkdown(baseUrl + "/hello",
                                                      std::chrono::seconds{5});
-    HEXPECT_HAS_VALUE(result);
+    XX_TEST_EXPECT_HAS_VALUE(result);
   }
 
   server.stop();

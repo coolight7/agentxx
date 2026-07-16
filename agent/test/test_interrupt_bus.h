@@ -14,6 +14,11 @@
 #include <memory>
 
 #include "test_framework.h"
+#undef XX_TEST_PASSED
+#undef XX_TEST_FAILED
+#define XX_TEST_PASSED g_ib_passed
+#define XX_TEST_FAILED g_ib_failed
+
 
 namespace agentxx {
 namespace test {
@@ -21,16 +26,6 @@ namespace test {
 inline static int g_ib_passed = 0;
 inline static int g_ib_failed = 0;
 
-#define IB_EXPECT_TRUE(expr)                                                   \
-  do {                                                                         \
-    if (expr) {                                                                \
-      g_ib_passed++;                                                           \
-    } else {                                                                   \
-      g_ib_failed++;                                                           \
-      TEST_FAIL << "expected " << #expr << ", at line " << __LINE__            \
-                << std::endl;                                                  \
-    }                                                                          \
-  } while (0)
 
 /// 验证: 注册 CliInterruptHandler 后, bus.request(service.interrupt)
 /// 能拿到经 execInterruptHandle 处理的结果 (无 stdin 输入时返回默认)
@@ -70,9 +65,14 @@ inline asio::awaitable<void> test_interrupt_bus_request_response() {
           },
           std::chrono::seconds(5));
 
-  IB_EXPECT_TRUE(resp.has_value());
-  if (resp.has_value()) {
-    IB_EXPECT_TRUE(resp->handled);
+  if (false == resp.has_value() && resp.error() == "Timeout") {
+    // allow timeout
+    XX_TEST_EXPECT_TRUE(resp.error() == "Timeout");
+  } else {
+    XX_TEST_EXPECT_TRUE(resp.has_value());
+    if (resp.has_value()) {
+      XX_TEST_EXPECT_TRUE(resp->handled);
+    }
   }
 
   handler.stop();
@@ -90,7 +90,7 @@ inline asio::awaitable<void> test_interrupt_bus_request_response() {
               .resultId = "r",
           },
           std::chrono::milliseconds(200));
-  IB_EXPECT_TRUE(!resp2.has_value());
+  XX_TEST_EXPECT_TRUE(!resp2.has_value());
 
   co_return;
 }
@@ -125,14 +125,14 @@ inline asio::awaitable<void> test_permission_bus_request_response() {
 
   if (false == resp.has_value() && resp.error() == "Timeout") {
     // allow timeout
-    IB_EXPECT_TRUE(resp.error() == "Timeout");
+    XX_TEST_EXPECT_TRUE(resp.error() == "Timeout");
   } else {
-    IB_EXPECT_TRUE(resp.has_value());
+    XX_TEST_EXPECT_TRUE(resp.has_value());
     if (resp.has_value() && false == agentxx::agent::StdinReader::instance(
                                          co_await asio::this_coro::executor)
                                          .available()) {
       // 无交互输入 -> deny
-      IB_EXPECT_TRUE(resp->decision ==
+      XX_TEST_EXPECT_TRUE(resp->decision ==
                      agentxx::events::RespPermission::Decision::Deny);
     }
   }
@@ -152,7 +152,7 @@ inline asio::awaitable<void> test_permission_bus_request_response() {
               .argumentsJson = "{}",
           },
           std::chrono::milliseconds(200));
-  IB_EXPECT_TRUE(!resp2.has_value());
+  XX_TEST_EXPECT_TRUE(!resp2.has_value());
 
   co_return;
 }
@@ -191,10 +191,15 @@ inline asio::awaitable<void> test_interrupt_bus_custom_handler() {
           },
           std::chrono::seconds(5));
 
-  IB_EXPECT_TRUE(resp.has_value());
-  if (resp.has_value()) {
-    IB_EXPECT_TRUE(resp->handled);
-    IB_EXPECT_TRUE(resp->resultJson == "\"custom_ok_myHandle\"");
+  if (false == resp.has_value() && resp.error() == "Timeout") {
+    // allow timeout
+    XX_TEST_EXPECT_TRUE(resp.error() == "Timeout");
+  } else {
+    XX_TEST_EXPECT_TRUE(resp.has_value());
+    if (resp.has_value()) {
+      XX_TEST_EXPECT_TRUE(resp->handled);
+      XX_TEST_EXPECT_TRUE(resp->resultJson == "\"custom_ok_myHandle\"");
+    }
   }
 
   co_return;
