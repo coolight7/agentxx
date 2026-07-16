@@ -129,7 +129,7 @@ protected:
     /// 用数组下标获取函数
     ///   - 下表越界时返回nullptr
     ///   - 指定下标的函数未定义时返回nullptr
-    std::shared_ptr<HANLDE_TPYE> getHandle(int in_index) const {
+    [[nodiscard]] std::shared_ptr<HANLDE_TPYE> getHandle(int in_index) const {
       if (in_index >= 0 && in_index < handles.size()) {
         return handles[in_index];
       } else {

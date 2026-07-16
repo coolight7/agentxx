@@ -15,7 +15,7 @@ public:
   explicit LruCache(size_t capacity)[[expects:capacity > 0]]
       : capacity_(capacity) {}
 
-  std::optional<V> get(const K &key) {
+  [[nodiscard]] std::optional<V> get(const K &key) {
     auto it = map_.find(key);
     if (it == map_.end()) {
       return std::nullopt;
@@ -38,7 +38,9 @@ public:
     map_[key] = items_.begin();
   }
 
-  bool exists(const K &key) const { return map_.find(key) != map_.end(); }
+  [[nodiscard]] bool exists(const K &key) const {
+    return map_.find(key) != map_.end();
+  }
 
   bool erase(const K &key) {
     auto it = map_.find(key);
@@ -55,15 +57,16 @@ public:
     map_.clear();
   }
 
-  size_t size() const { return map_.size(); }
+  [[nodiscard]] size_t size() const { return map_.size(); }
 
-  size_t capacity() const { return capacity_; }
+  [[nodiscard]] size_t capacity() const { return capacity_; }
 
-  bool empty() const { return map_.empty(); }
+  [[nodiscard]] bool empty() const { return map_.empty(); }
 
   bool evict() {
-    if (items_.empty())
+    if (items_.empty()) {
       return false;
+    }
     evict_one();
     return true;
   }

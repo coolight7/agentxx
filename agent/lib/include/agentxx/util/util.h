@@ -6,9 +6,9 @@ namespace agentxx {
 
 namespace util {
 
-std::string getSystemName();
+[[nodiscard]] std::string getSystemName();
 
-bool isRunningInWSL();
+[[nodiscard]] bool isRunningInWSL();
 
 }; // namespace util
 }; // namespace agentxx

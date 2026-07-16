@@ -23,10 +23,10 @@ public:
   XXRegex(const XXRegex &) = delete;
   XXRegex &operator=(const XXRegex &) = delete;
 
-  static std::shared_ptr<agentxx::util::XXRegex>
+  [[nodiscard]] static std::shared_ptr<agentxx::util::XXRegex>
   createRegex(const std::string &regstr,
               unsigned int flags = defHSFlags_normal);
-  static std::shared_ptr<agentxx::util::XXRegex>
+  [[nodiscard]] static std::shared_ptr<agentxx::util::XXRegex>
   createRegex(const std::vector<std::string> &regstrs,
               unsigned int flags = defHSFlags_normal);
 
@@ -37,12 +37,12 @@ public:
                      std::vector<XXRegexMatchResult> &results) const = 0;
 
   // 移除匹配的子串
-  virtual std::string
+  [[nodiscard]] virtual std::string
   remove(std::string_view input,
          std::vector<XXRegexMatchResult> &results) const = 0;
 
   // 替换匹配的子串
-  virtual std::string
+  [[nodiscard]] virtual std::string
   replace(std::string_view input, std::string_view target,
           std::vector<XXRegexMatchResult> &results) const = 0;
   XXRegex &operator=(XXRegex &&other) = delete;

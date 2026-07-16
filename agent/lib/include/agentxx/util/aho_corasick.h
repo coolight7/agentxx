@@ -143,7 +143,7 @@ public:
   }
 
   // 搜索文本中的模式串
-  std::vector<AhoCorasick::AhoCorasickMatchInfo>
+  [[nodiscard]] std::vector<AhoCorasick::AhoCorasickMatchInfo>
   search(const StringViewType text, bool onlyContains = false) const {
     std::vector<AhoCorasick::AhoCorasickMatchInfo> matches;
     size_t current = 0;
@@ -191,11 +191,10 @@ public:
     return result;
   }
 
-  StringType
-  removeAll(const StringViewType text,
-            std::function<
-                void(const std::vector<AhoCorasick::AhoCorasickMatchInfo> &)>
-                onResults = nullptr) const {
+  [[nodiscard]] StringType removeAll(
+      const StringViewType text,
+      std::function<void(const std::vector<AhoCorasick::AhoCorasickMatchInfo>
+                             &)> onResults = nullptr) const {
     auto matches = search(text, false);
 
     if (nullptr != onResults) {
