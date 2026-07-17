@@ -62,6 +62,7 @@
         - edit_text
         - glob
         - grep (multi text/regex + multi-filepath)
+        - WSL 时自动转换 windows 文件路径
         - 读取文件内容时自动转换字符编码到 utf8
         - ⬜写入文件内容时保持文件原有字符编码
     - ✅execute_command (支持 `同步`/`Boost.process 协程异步`执行)

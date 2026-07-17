@@ -810,6 +810,20 @@ toUnixStandardDirPath(std::string_view path) {
   return normalized + "/";
 }
 
+[[nodiscard]] inline constexpr std::string
+toCurrentSystemStandardPath(std::string_view path) {
+#if XX_IS_WIN_D
+  return toWindowsStandardPath(path);
+#else
+  if (path.size() >= 2 && isCode_AZaz(path[0]) && path[1] == ':') {
+    std::string result = fmt::format(
+        "/mnt/{}/{}", static_cast<char>(toCode_az(path[0])), path.substr(2));
+    return toUnixStandardPath(result);
+  }
+  return toUnixStandardPath(path);
+#endif
+}
+
 [[nodiscard]] inline constexpr std::string_view
 getFileName(std::string_view in_path, bool removeEXT = false,
             bool useRigthDot = true) {

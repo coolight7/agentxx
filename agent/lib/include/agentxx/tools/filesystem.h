@@ -130,8 +130,9 @@ public:
 
   asio::awaitable<std::string>
   execute_async(const neograph::json &arguments) override {
-    auto targetPath =
-        agentxx::util::toStandardPath(arguments.value("path", std::string{}));
+    auto targetPath = agentxx::util::toCurrentSystemStandardPath(
+        arguments.value("path", std::string{}));
+    std::cout << targetPath << std::endl;
     if (targetPath.empty()) {
       co_return R"({"error":"Arg `path` is empty"})";
     }
@@ -265,8 +266,8 @@ public:
 
   asio::awaitable<std::string>
   execute_async(const neograph::json &arguments) override {
-    auto filepath =
-        agentxx::util::toStandardPath(arguments.value("path", std::string{}));
+    auto filepath = agentxx::util::toCurrentSystemStandardPath(
+        arguments.value("path", std::string{}));
     if (filepath.empty()) {
       co_return R"({"error":"Arg `path` is empty"})";
     }
@@ -467,8 +468,8 @@ public:
 
   asio::awaitable<std::string>
   execute_async(const neograph::json &arguments) override {
-    auto filepath =
-        agentxx::util::toStandardPath(arguments.value("path", std::string{}));
+    auto filepath = agentxx::util::toCurrentSystemStandardPath(
+        arguments.value("path", std::string{}));
     if (filepath.empty()) {
       co_return R"({"error":"Arg `path` is empty"})";
     }
@@ -693,8 +694,8 @@ public:
 
   asio::awaitable<std::string>
   execute_async(const neograph::json &arguments) override {
-    auto filepath =
-        agentxx::util::toStandardPath(arguments.value("path", std::string{}));
+    auto filepath = agentxx::util::toCurrentSystemStandardPath(
+        arguments.value("path", std::string{}));
     if (filepath.empty()) {
       co_return R"({"error":"Arg `path` is empty"})";
     }
@@ -873,8 +874,8 @@ public:
 
   asio::awaitable<std::string>
   execute_async(const neograph::json &arguments) override {
-    auto filepath =
-        agentxx::util::toStandardPath(arguments.value("path", std::string{}));
+    auto filepath = agentxx::util::toCurrentSystemStandardPath(
+        arguments.value("path", std::string{}));
     if (filepath.empty()) {
       co_return R"({"error":"Arg `path` is empty"})";
     }
@@ -1052,13 +1053,17 @@ public:
 
   asio::awaitable<std::string>
   execute_async(const neograph::json &arguments) override {
-    auto patterns =
+    auto file_patterns =
         arguments.value("file_patterns", std::vector<std::string>{});
-    if (patterns.empty()) {
+    if (file_patterns.empty()) {
       co_return R"({"error":"Arg `file_patterns` is empty"})";
     }
 
-    auto relist = glob::rglob(patterns);
+    for (auto &item : file_patterns) {
+      item = agentxx::util::toCurrentSystemStandardPath(item);
+    }
+
+    auto relist = glob::rglob(file_patterns);
     if (relist.empty()) {
       co_return R"({"error":"No match `file_patterns` found"})";
     }
@@ -1135,7 +1140,8 @@ public:
   }
 
   asio::awaitable<std::string> readFileContent(const std::string &filepath) {
-    auto systemCharsetFilePath = agentxx::util::toStandardPath(filepath);
+    auto systemCharsetFilePath =
+        agentxx::util::toCurrentSystemStandardPath(filepath);
     agentxx::util::autoConvertToSystemPath(systemCharsetFilePath);
 
 #if ASIO_HAS_FILE || BOOST_ASIO_HAS_FILE
@@ -1195,6 +1201,9 @@ public:
         arguments.value("file_patterns", std::vector<std::string>{});
     if (file_patterns.empty()) {
       co_return R"({"error":"Arg `file_patterns` is empty"})";
+    }
+    for (auto &item : file_patterns) {
+      item = agentxx::util::toCurrentSystemStandardPath(item);
     }
     auto output_mode =
         arguments.value("output_mode", std::string{"files_with_matches"});

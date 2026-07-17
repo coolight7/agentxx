@@ -118,11 +118,11 @@ Remember: Skills make you more capable and consistent. When in doubt, check if a
                   {
                       {
                           "command",
-                          fmt::format(R"(Command to execute.
+                          fmt::format(
+                              R"(Command to execute.
 Current System is {}{}, please use linux shell/bash commands.)",
-                                      agentxx::util::getSystemName(),
-                                      agentxx::util::isRunningInWSL() ? "/(WSL)"
-                                                                      : ""),
+                              agentxx::util::getSystemName(),
+                              agentxx::util::isRunningInWSL() ? "/(WSL)" : ""),
                       },
                       {
                           "all_output",
@@ -164,7 +164,8 @@ Current System is {}{}, please use linux shell/bash commands.)",
                               agentxx::util::isRunningInWSL()
                                   ? R"(Command to execute, run in Linux(WSL)/Shell.
 Current system is WSL, but can use this tool to execute windows command through cmd.exe.
-Arg `command` is actually runs inside the windows terminal.)"
+Arg `command` is actually runs inside the windows terminal.
+If the user enters a Windows file path (starting with drive letters such as `C:\` or `D:\\`), please convert it to a Linux file path (starting with `/mnt/c/` or `/mnt/d/`).)"
                                   : "Windows command to execute"),
                       },
                       {
@@ -190,7 +191,8 @@ Example:
 Windows Command must be executed through `cmd.exe`. Write arg command: `cmd.exe /c "win_cmd_str"`.
 - Current system is WSL, but can use this tool to execute windows command through cmd.exe, there are some notes:
     - Arg `command`(e.g. `cmd.exe /c "{win_cmd_str}"`) is executed in the Linux/WSL shell. However, the `win_cmd_str` actually runs inside the windows terminal.
-    - All win_cmd_str must be executed through cmd.exe (`cmd.exe /c "{win_cmd_str}"`).)"
+    - All win_cmd_str must be executed through cmd.exe (`cmd.exe /c "{win_cmd_str}"`).
+If the user enters a Windows file path (starting with drive letters such as `C:\` or `D:\\`), please convert it to a Linux file path (starting with `/mnt/c/` or `/mnt/d/`).)"
                                   : "Windows command to execute"),
                       },
                       {
