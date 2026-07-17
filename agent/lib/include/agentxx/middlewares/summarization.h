@@ -259,21 +259,27 @@ Output ONLY the summary text, no meta-commentary.
     // - 接口返回的 token usage，可能不准确，因为 llm node
     // 重试时可能会额外附加消息、也可能是上一轮的 api 返回的，本轮开始已经添加了
     // toolcall / userInput 等消息
-    auto apiTokenUsage =
-        agentCtxPtr->middlewareHandleContext->getGraphDataItemValue<int>(
-            in.ctx.thread_id,
-            agentxx::middleware::MiddlewareContext::graphDataKey_LLMTokenUsage);
-    if (apiTokenUsage < 0) {
-      apiTokenUsage = 0;
+    size_t apiTokenUsage = 0;
+    {
+      auto &apiTokenUsageJson =
+          agentCtxPtr->middlewareHandleContext
+              ->getGraphDataItemValue<neograph::json>(
+                  in.ctx.thread_id, agentxx::middleware::MiddlewareContext::
+                                        graphDataKey_LLMTokenUsage);
+      if (apiTokenUsageJson.is_number_integer()) {
+        apiTokenUsage = apiTokenUsageJson.get<size_t>();
+        apiTokenUsageJson = 0;
+      }
     }
 
-    const auto &appendSystemMsgList =
-        agentCtxPtr->middlewareHandleContext->getGraphDataItemValue<
-            std::vector<std::string>>(
-            in.ctx.thread_id,
-            agentxx::middleware::MiddlewareContext::graphDataKey_systemMessage);
+    const auto &appendSystemPromptList =
+        agentCtxPtr->middlewareHandleContext
+            ->getGraphDataItemValue<neograph::json>(
+                in.ctx.thread_id, agentxx::middleware::MiddlewareContext::
+                                      graphDataKey_systemMessage)
+            .get<std::vector<std::string>>();
 
-    const auto countTokenUsage = countTokens(appendSystemMsgList, messages);
+    const auto countTokenUsage = countTokens(appendSystemPromptList, messages);
     const auto tokenUsage =
         std::max(static_cast<size_t>(apiTokenUsage), countTokenUsage);
 
@@ -363,29 +369,29 @@ Output ONLY the summary text, no meta-commentary.
     if (newMsgsJson.is_array() && false == newMsgsJson.empty()) {
       in.state.overwrite("messages", std::move(newMsgsJson));
       if (agentCtxPtr->agentConfig->logPrintSummarizationResultTokenCount) {
-        fmt::println(R"_(
+        fmt::println(
+            R"_(
 ┏━━━━━━ Summary ━━━━━━┓
 ┣━ MAX Token Limit: {}
 ┣━ Api TokenUsage: {}
 ┣━ Count Messages Token: {}/{}
 ┣━ Summary To: {}
 ┗━━━━━━ Summary ━━━━━━┛)_",
-                     modelSupportMaxToken, apiTokenUsage, tokenUsage,
-                     countTokenUsage,
-                     countTokens(appendSystemMsgList, in.state.get_messages()));
+            modelSupportMaxToken, apiTokenUsage, tokenUsage, countTokenUsage,
+            countTokens(appendSystemPromptList, in.state.get_messages()));
       }
     } else {
       if (agentCtxPtr->agentConfig->logPrintSummarizationResultTokenCount) {
-        fmt::println(R"_(
+        fmt::println(
+            R"_(
 ┏━━━━━━ Summary ━━━━━━┓
 ┣━ MAX Token Limit: {}
 ┣━ Api TokenUsage: {}
 ┣━ Count Messages Token: {}/{}
 ┣━ Not Need Summary
 ┗━━━━━━ Summary ━━━━━━┛)_",
-                     modelSupportMaxToken, apiTokenUsage, tokenUsage,
-                     countTokenUsage,
-                     countTokens(appendSystemMsgList, in.state.get_messages()));
+            modelSupportMaxToken, apiTokenUsage, tokenUsage, countTokenUsage,
+            countTokens(appendSystemPromptList, in.state.get_messages()));
       }
     }
 

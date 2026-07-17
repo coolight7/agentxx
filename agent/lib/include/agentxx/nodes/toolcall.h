@@ -191,20 +191,17 @@ public:
           neograph::graph::NodeInput &in,
           neograph::graph::NodeOutput &out) override {
     auto agentCtxPtr = agentContext.lock();
-    // 暴露当前 GraphState 指针供 tool (如 subagent_switch) 使用中断机制
-    agentCtxPtr->middlewareHandleContext
-        ->setGraphDataItemValue<neograph::graph::GraphState *>(
-            in.ctx.thread_id,
-            agentxx::middleware::MiddlewareContext::graphDataKey_currentState,
-            &in.state);
 
     auto toolcallsCache = std::map<std::string, std::string>{};
     {
       auto toolcallsCacheJson =
-          in.state.get(agentxx::middleware::BaseMiddlewareHandleInterface::
-                           channelKey_interruptToolcallCache);
-      in.state.remove(agentxx::middleware::BaseMiddlewareHandleInterface::
-                          channelKey_interruptToolcallCache);
+          agentCtxPtr->middlewareHandleContext
+              ->getGraphDataItemValue<neograph::json>(
+                  in.ctx.thread_id, agentxx::middleware::MiddlewareContext::
+                                        graphDataKey_interruptToolcallCache);
+      agentCtxPtr->middlewareHandleContext->removeGraphDataItem(
+          in.ctx.thread_id, agentxx::middleware::MiddlewareContext::
+                                graphDataKey_interruptToolcallCache);
       if (false == toolcallsCacheJson.is_array()) {
         for (const auto &item : toolcallsCacheJson) {
           neograph::ChatMessage msg;
@@ -212,7 +209,6 @@ public:
           if (false == msg.tool_call_id.empty() &&
               false == neograph::hasFlag(msg.flags,
                                          neograph::MessageFlag::Interrupt)) {
-            // 添加缓存未中断的 toolcall 结果
             toolcallsCache[msg.tool_call_id] = std::move(msg.content);
           }
         }
@@ -265,24 +261,6 @@ public:
         tool_msg.content = R"({"error": "Tool not found: )" + tc.name + "\"}";
       } else {
         try {
-          // auto result =
-          //     agentxx::middleware::InterruptHandleArg::getInterruptResult(
-          //         in.state, [&tc]() {
-          //           return agentxx::middleware::InterruptHandleArg{
-          //               .name = agentxx::middleware::MiddlewareContext::
-          //                   interruptHandleName_default,
-          //               .inputs =
-          //                   {
-          //                       agentxx::middleware::InterruptHandleArg::
-          //                           InterruptHandleInputItem{
-          //                               .label = "hello",
-          //                               .depict = "hello agentxx!",
-          //                           },
-          //                   },
-          //               .resultId = tc.id,
-          //           };
-          //         });
-
           auto args = neograph::json::parse(tc.arguments);
           if (args.is_object()) {
             // append arg `thread_id`
@@ -319,21 +297,21 @@ public:
     }
 
     if (isInterrupt) {
-      // 暂存 toolcall list 结果，重新执行时跳过执行成功的 tool
-      in.state.overwrite(agentxx::middleware::BaseMiddlewareHandleInterface::
-                             channelKey_interruptToolcallCache,
-                         results);
+      // 暂存 toolcall list 结果到 graphData
+      agentCtxPtr->middlewareHandleContext
+          ->setGraphDataItemValue<neograph::json>(
+              in.ctx.thread_id,
+              agentxx::middleware::MiddlewareContext::
+                  graphDataKey_interruptToolcallCache,
+              results);
+      // 保存当前 messages，供 handler 恢复
+      auto messages = in.state.get("messages");
       // 重新抛出异常
-      agentxx::middleware::InterruptHandleArg::throwNodeInterruptBase();
+      agentCtxPtr->middlewareHandleContext->throwNodeInterruptBase(
+          in.ctx.thread_id, messages);
     }
 
     out.writes.push_back(neograph::graph::ChannelWrite{"messages", results});
-    {
-      // 清理 GraphState 指针
-      agentCtxPtr->middlewareHandleContext->removeGraphDataItem(
-          in.ctx.thread_id,
-          agentxx::middleware::MiddlewareContext::graphDataKey_currentState);
-    }
     co_return;
   }
 

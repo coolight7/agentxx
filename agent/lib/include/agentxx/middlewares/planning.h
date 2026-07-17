@@ -41,7 +41,7 @@ public:
   asio::awaitable<void>
   onModelcallStartFunc(neograph::graph::NodeInput &in) override {
     auto agentCtxPtr = agentContext.lock();
-    auto appendSystemPromptList =
+    auto &appendSystemPromptList =
         agentCtxPtr->middlewareHandleContext->getGraphDataItemValue<
             std::vector<std::string>>(
             in.ctx.thread_id,

@@ -57,13 +57,6 @@ concept BaseMiddlewareStateType = std::same_as<T, BaseMiddlewareState> ||
 class BaseMiddlewareHandleInterface {
 protected:
 public:
-  inline static const std::string channelKey_interruptMessages{
-      "xx_interruptMessages"};
-  inline static const std::string channelKey_interruptToolcallCache{
-      "xx_interruptToolcallCache"};
-  inline static const std::string channelKey_interruptArgs{"xx_interruptArg"};
-  inline static const std::string channelKey_interruptResult{
-      "xx_interruptResults"};
   /// 谨慎存储/修改 middleware 中的变量，
   /// 这是一个agent中所有会话共享的，单会话变量应该放 state 内
 
@@ -380,134 +373,6 @@ public:
   }
 };
 
-class MiddlewareContext {
-public:
-  class ThreadShareStore {
-  public:
-    std::map<size_t, std::string> store{};
-    size_t storeId = 1;
-
-    size_t getNextId() { return storeId++; }
-  };
-
-  inline static const std::string interruptHandleName_default = "default";
-
-  inline static const std::string graphDataKey_systemMessage{"systemMessage"};
-  inline static const std::string graphDataKey_tempLLMMessage{
-      "xx_ModelCallWrap_tempLLMMessage"};
-  inline static const std::string graphDataKey_LLMTokenUsage{
-      "xx_ModelCallWrap_LLMTokenUsage"};
-  /// 当前 toolcall 执行期间的 GraphState 指针, 供 tool 经
-  /// agentContext->middlewareHandleContext 取用 (如 subagent 中断)
-  inline static const std::string graphDataKey_currentState{
-      "xx_ToolcallWrap_currentState"};
-
-  /// <thread_id, <id, value>>
-  /// - 存储变量内容，留出 id 到 上下文中，llm 需要时可以通过
-  /// toolcall/share_store 读取
-  /// - 如: 压缩上下文时会将部分长文本存入这里替换为 id
-  std::map<std::string, ThreadShareStore, std::less<>> shareStore{};
-
-  /// <thread_id, itemData>
-  /// [会话独立] 每次执行的临时数据，在 [AgentStartCall] 时刷新，在
-  /// [AgentEndCall] 时清理
-  std::map<std::string, std::map<std::string, std::any, std::less<>>,
-           std::less<>>
-      graphData{};
-
-  /// 用基类声明类型，以便支持插入不同子类
-  /// - 中间的指针是必要的，直接写 std::vector<BaseMiddlewareHandleInterface>
-  /// 的话元素大小是 固定为基类大小，插入子类时内存会被截断，导致后续异常
-  std::vector<std::shared_ptr<BaseMiddlewareHandleInterface>> handles{};
-
-  MiddlewareContext() {}
-
-  std::optional<std::string> getShareStoreItemValue(std::string_view thread_id,
-                                                    const int id) {
-    auto it = shareStore.find(thread_id);
-    if (shareStore.end() != it) {
-      auto reslut = it->second.store.find(id);
-      if (it->second.store.end() != reslut) {
-        return reslut->second;
-      }
-    }
-    return std::nullopt;
-  }
-
-  void setShareStoreItemValue(const std::string &thread_id, const int id,
-                              std::string_view value) {
-    shareStore[thread_id].store[id] = value;
-  }
-
-  size_t addShareStoreItemValue(const std::string &thread_id,
-                                std::string_view value) {
-    auto store = shareStore[thread_id];
-    auto id = store.getNextId();
-    store.store[id] = value;
-    return id;
-  }
-
-  void removeShareStoreItemValue(std::string_view thread_id, const int id) {
-    auto it = shareStore.find(thread_id);
-    if (shareStore.end() != it) {
-      auto reslutIt = it->second.store.find(id);
-      if (it->second.store.end() != reslutIt) {
-        it->second.store.erase(reslutIt);
-      }
-    }
-  }
-
-  void removeGraphDataItem(const std::string &thread_id, std::string_view key) {
-    auto it = graphData.find(thread_id);
-    if (graphData.end() != it) {
-      auto reslutIt = it->second.find(key);
-      if (it->second.end() != reslutIt) {
-        it->second.erase(reslutIt);
-      }
-    }
-  }
-
-  template <typename T>
-  T &getGraphDataItemValue(const std::string &thread_id, std::string_view key) {
-    auto &itemGraphData = graphData[thread_id];
-    auto it = itemGraphData.find(key);
-    if (it == itemGraphData.end()) {
-      auto [insertIt, _] =
-          itemGraphData.insert(std::pair<std::string, std::any>{key, T{}});
-      it = insertIt;
-    }
-    return std::any_cast<T &>(it->second);
-  }
-
-  template <typename T>
-  void setGraphDataItemValue(const std::string &thread_id, std::string_view key,
-                             const T &value) {
-    auto &itemGraphData = graphData[thread_id];
-    auto it = itemGraphData.find(key);
-    if (it == itemGraphData.end()) {
-      itemGraphData.insert(std::pair<std::string, std::any>{key, value});
-    } else {
-      it->second = value;
-    }
-  }
-
-  template <typename T>
-  void modifyGraphDataItemValue(const std::string &thread_id,
-                                std::string_view key,
-                                std::function<void(T &)> &&modify) {
-    auto &itemGraphData = graphData[thread_id];
-    auto it = itemGraphData.find(key);
-    if (it == itemGraphData.end()) {
-      auto value = T{};
-      modify(value);
-      itemGraphData.insert(
-          std::pair<std::string, std::any>{key, std::move(value)});
-    } else {
-      modify(std::any_cast<T &>((it->second)));
-    }
-  }
-};
-
 class SummarizationToolHandle {
 public:
   /// 根据 tool call 参数生成去重 key。
@@ -573,44 +438,6 @@ public:
   std::vector<InterruptHandleInputItem> inputs;
   std::string resultId;
 
-  /// 一般用于捕获到 NodeInterrupt 后重新抛出，而不能作为首次抛出使用
-  inline static void throwNodeInterruptBase() {
-    throw neograph::graph::NodeInterrupt{"xx-NodeInterrupt"};
-  }
-
-  inline static void throwInterrupt(
-      const std::vector<InterruptHandleArg> &args,
-      neograph::graph::GraphState &state,
-      const neograph::json &toolcallCache = neograph::json{nullptr}) {
-    state.overwrite(BaseMiddlewareHandleInterface::channelKey_interruptMessages,
-                    state.get("messages"));
-    auto arglist = neograph::json::array();
-    for (const auto &arg : args) {
-      arglist.push_back(arg.toJson());
-    }
-    // 添加，而非覆盖，以便支持多个 toolcall 中断
-    state.write(BaseMiddlewareHandleInterface::channelKey_interruptArgs,
-                arglist);
-    state.remove(BaseMiddlewareHandleInterface::channelKey_interruptResult);
-    throwNodeInterruptBase();
-  }
-
-  /// - 一般应当在 Node/toolcall 中触发,中断恢复会重新执行这个
-  /// Node,中断前的代码会重复执行!
-  inline static neograph::json
-  getInterruptResult(neograph::graph::GraphState &state,
-                     std::function<InterruptHandleArg(void)> onCreateArg) {
-    auto result =
-        state.get(BaseMiddlewareHandleInterface::channelKey_interruptResult);
-    state.remove(BaseMiddlewareHandleInterface::channelKey_interruptResult);
-    if (false == result.is_null()) {
-      return result;
-    }
-    auto arg = onCreateArg();
-    throwInterrupt({arg}, state);
-    return result;
-  }
-
   inline static bool isAccordingFormat(const neograph::json &data) {
     return data.is_object() && data["name"].is_string();
   }
@@ -636,6 +463,19 @@ public:
     return result;
   }
 
+  neograph::json toJson() const {
+    auto inputsJson = neograph::json::array();
+    for (const auto &item : inputs) {
+      inputsJson.push_back(item.toJson());
+    }
+    return neograph::json{
+        {"name", name},
+        {"arg", arg},
+        {"inputs", inputsJson},
+        {"resultId", resultId},
+    };
+  }
+
   inline static std::vector<InterruptHandleArg>
   listFromJson(const neograph::json &data) {
     auto relist = std::vector<InterruptHandleArg>{};
@@ -650,17 +490,321 @@ public:
     return relist;
   }
 
-  neograph::json toJson() const {
-    auto inputsJson = neograph::json::array();
-    for (const auto &item : inputs) {
-      inputsJson.push_back(item.toJson());
+  inline static neograph::json
+  listToJson(const std::vector<InterruptHandleArg> &data) {
+    auto relist = neograph::json::array();
+    for (const auto &item : data) {
+      relist.push_back(item.toJson());
     }
-    return neograph::json{
-        {"name", name},
-        {"arg", arg},
-        {"inputs", inputsJson},
-        {"resultId", resultId},
-    };
+    return relist;
+  }
+};
+
+class MiddlewareContext {
+public:
+  class ThreadShareStore {
+  public:
+    std::map<size_t, std::string> store{};
+    size_t storeId = 1;
+
+    size_t getNextId() { return storeId++; }
+  };
+
+  inline static const std::string interruptHandleName_default = "default";
+  /// graphData 需要跨 checkpoint 存储时使用该 state channel key
+  inline static const std::string channel_savedGraphData{"xx_savedGraphData"};
+
+  inline static const std::string graphDataKey_systemMessage{"systemMessage"};
+  inline static const std::string graphDataKey_tempLLMMessage{
+      "xx_ModelCallWrap_tempLLMMessage"};
+  inline static const std::string graphDataKey_LLMTokenUsage{
+      "xx_ModelCallWrap_LLMTokenUsage"};
+  inline static const std::string graphDataKey_interruptMessages{
+      "xx_interruptMessages"};
+  inline static const std::string graphDataKey_interruptArgs{
+      "xx_interruptArgs"};
+  inline static const std::string graphDataKey_interruptResult{
+      "xx_interruptResult"};
+  inline static const std::string graphDataKey_interruptToolcallCache{
+      "xx_interruptToolcallCache"};
+
+  /// <thread_id, <id, value>>
+  /// - 存储变量内容，留出 id 到 上下文中，llm 需要时可以通过
+  /// toolcall/share_store 读取
+  /// - 如: 压缩上下文时会将部分长文本存入这里替换为 id
+  std::map<std::string, ThreadShareStore, std::less<>> shareStore{};
+
+  /// <thread_id, itemData>
+  /// [会话独立] 每次执行的临时数据，在 [AgentStartCall] 时刷新，在
+  /// [AgentEndCall] 时清理
+  std::map<std::string, std::map<std::string, std::any, std::less<>>,
+           std::less<>>
+      graphData{};
+
+  /// 用基类声明类型，以便支持插入不同子类
+  /// - 中间的指针是必要的，直接写 std::vector<BaseMiddlewareHandleInterface>
+  /// 的话元素大小是 固定为基类大小，插入子类时内存会被截断，导致后续异常
+  std::vector<std::shared_ptr<BaseMiddlewareHandleInterface>> handles{};
+
+  MiddlewareContext() {}
+
+  /// 将 std::any 转为 neograph::json（用于序列化到 state）
+  static neograph::json anyToJson(const std::any &val) {
+    if (!val.has_value())
+      return nullptr;
+    auto &t = val.type();
+    if (t == typeid(neograph::json))
+      return std::any_cast<neograph::json>(val);
+    if (t == typeid(std::nullptr_t))
+      return nullptr;
+    if (t == typeid(bool))
+      return std::any_cast<bool>(val);
+    if (t == typeid(int))
+      return std::any_cast<int>(val);
+    if (t == typeid(int64_t))
+      return std::any_cast<int64_t>(val);
+    if (t == typeid(uint64_t))
+      return std::any_cast<uint64_t>(val);
+    if (t == typeid(float))
+      return static_cast<double>(std::any_cast<float>(val));
+    if (t == typeid(double))
+      return std::any_cast<double>(val);
+    if (t == typeid(std::string))
+      return std::any_cast<std::string>(val);
+    if (t == typeid(const char *))
+      return std::string(std::any_cast<const char *>(val));
+    if (t == typeid(std::string_view))
+      return std::string(std::any_cast<std::string_view>(val));
+    if (t == typeid(std::vector<std::string>)) {
+      return std::any_cast<const std::vector<std::string> &>(val);
+    }
+    if (t == typeid(std::vector<neograph::ChatMessage>)) {
+      auto &msgs =
+          std::any_cast<const std::vector<neograph::ChatMessage> &>(val);
+      auto arr = neograph::json::array();
+      for (const auto &msg : msgs) {
+        neograph::json j;
+        neograph::to_json(j, msg);
+        arr.push_back(std::move(j));
+      }
+      return arr;
+    }
+    if (t == typeid(std::vector<InterruptHandleArg>)) {
+      return InterruptHandleArg::listToJson(
+          std::any_cast<const std::vector<InterruptHandleArg> &>(val));
+    }
+    return nullptr;
+  }
+
+  /// 将 neograph::json 转为 T（用于从 state 恢复后按需转换）
+  template <typename T> static T jsonToValue(const neograph::json &j) {
+    if constexpr (std::is_same_v<T, neograph::json>) {
+      return j;
+    } else if constexpr (std::is_same_v<T, std::string>) {
+      if (j.is_string())
+        return j.get<std::string>();
+      if (j.is_number())
+        return j.dump();
+      return {};
+    } else if constexpr (std::is_same_v<T, int>) {
+      if (j.is_number_integer())
+        return j.get<int>();
+      return {};
+    } else if constexpr (std::is_same_v<T, int64_t>) {
+      if (j.is_number_integer())
+        return j.get<int64_t>();
+      return {};
+    } else if constexpr (std::is_same_v<T, double>) {
+      if (j.is_number())
+        return j.get<double>();
+      return {};
+    } else if constexpr (std::is_same_v<T, bool>) {
+      if (j.is_boolean())
+        return j.get<bool>();
+      return {};
+    } else if constexpr (std::is_same_v<T, std::vector<std::string>>) {
+      if (j.is_array())
+        return j.get<std::vector<std::string>>();
+      return {};
+    } else if constexpr (std::is_same_v<T,
+                                        std::vector<neograph::ChatMessage>>) {
+      std::vector<neograph::ChatMessage> msgs;
+      if (j.is_array()) {
+        for (const auto &item : j) {
+          neograph::ChatMessage msg;
+          neograph::from_json(item, msg);
+          msgs.push_back(std::move(msg));
+        }
+      }
+      return msgs;
+    } else if constexpr (std::is_same_v<T, std::vector<InterruptHandleArg>>) {
+      std::vector<InterruptHandleArg> msgs;
+      if (j.is_array()) {
+        msgs = InterruptHandleArg::listFromJson(j);
+      }
+      return msgs;
+    } else {
+      static_assert(sizeof(T) == 0, "jsonToValue: unsupported type T");
+    }
+  }
+
+  /// 确保 std::any 中的值类型为 T，支持双向自动转换:
+  ///   - json → T  (从 state 恢复后按需转换回原始类型)
+  ///   - 任意类型 → json  (读为 json 格式)
+  template <typename T> static void ensureAnyType(std::any &val) {
+    if (!val.has_value() || val.type() == typeid(T)) {
+      return;
+    }
+    if (val.type() == typeid(neograph::json)) {
+      auto j = std::any_cast<neograph::json>(std::move(val));
+      val = jsonToValue<T>(j);
+      return;
+    }
+    if constexpr (std::is_same_v<T, neograph::json>) {
+      val = anyToJson(val);
+    }
+  }
+
+  std::optional<std::string> getShareStoreItemValue(std::string_view thread_id,
+                                                    const int id) {
+    auto it = shareStore.find(thread_id);
+    if (shareStore.end() != it) {
+      auto reslut = it->second.store.find(id);
+      if (it->second.store.end() != reslut) {
+        return reslut->second;
+      }
+    }
+    return std::nullopt;
+  }
+
+  void setShareStoreItemValue(const std::string &thread_id, const int id,
+                              std::string_view value) {
+    shareStore[thread_id].store[id] = value;
+  }
+
+  size_t addShareStoreItemValue(const std::string &thread_id,
+                                std::string_view value) {
+    auto store = shareStore[thread_id];
+    auto id = store.getNextId();
+    store.store[id] = value;
+    return id;
+  }
+
+  void removeShareStoreItemValue(std::string_view thread_id, const int id) {
+    auto it = shareStore.find(thread_id);
+    if (shareStore.end() != it) {
+      auto reslutIt = it->second.store.find(id);
+      if (it->second.store.end() != reslutIt) {
+        it->second.store.erase(reslutIt);
+      }
+    }
+  }
+
+  void removeGraphDataItem(const std::string &thread_id, std::string_view key) {
+    auto it = graphData.find(thread_id);
+    if (graphData.end() != it) {
+      auto reslutIt = it->second.find(key);
+      if (it->second.end() != reslutIt) {
+        it->second.erase(reslutIt);
+      }
+    }
+  }
+
+  template <typename T>
+  T &getGraphDataItemValue(const std::string &thread_id, std::string_view key) {
+    auto &itemGraphData = graphData[thread_id];
+    auto it = itemGraphData.find(key);
+    if (it == itemGraphData.end()) {
+      auto [insertIt, _] =
+          itemGraphData.insert(std::pair<std::string, std::any>{key, T{}});
+      it = insertIt;
+    } else {
+      ensureAnyType<T>(it->second);
+    }
+    return std::any_cast<T &>(it->second);
+  }
+
+  template <typename T>
+  void setGraphDataItemValue(const std::string &thread_id, std::string_view key,
+                             const T &value) {
+    graphData[thread_id][key] = value;
+  }
+
+  template <typename T>
+  void modifyGraphDataItemValue(const std::string &thread_id,
+                                std::string_view key,
+                                std::function<void(T &)> &&modify) {
+    auto &itemGraphData = graphData[thread_id];
+    auto it = itemGraphData.find(key);
+    if (it == itemGraphData.end()) {
+      auto value = T{};
+      modify(value);
+      itemGraphData.insert(
+          std::pair<std::string, std::any>{key, std::move(value)});
+    } else {
+      ensureAnyType<T>(it->second);
+      modify(std::any_cast<T &>((it->second)));
+    }
+  }
+
+  /// 一般用于捕获到 NodeInterrupt 后重新抛出，而不能作为首次抛出使用
+  void throwNodeInterruptBase(const std::string &thread_id,
+                              const neograph::json &msgs) {
+    if (msgs.is_array()) {
+      setGraphDataItemValue(
+          thread_id, MiddlewareContext::graphDataKey_interruptMessages, msgs);
+    }
+    throw neograph::graph::NodeInterrupt{"xx-NodeInterrupt"};
+  }
+
+  /// 工具请求中断：检查已有结果（resume 后）或存储参数并抛异常
+  asio::awaitable<neograph::json>
+  requestInterrupt(const std::string &thread_id,
+                   const std::function<InterruptHandleArg()> &onCreateArg,
+                   const neograph::json &msgs) {
+    auto &result = getGraphDataItemValue<neograph::json>(
+        thread_id, MiddlewareContext::graphDataKey_interruptResult);
+    removeGraphDataItem(thread_id,
+                        MiddlewareContext::graphDataKey_interruptResult);
+    if (false == result.is_null()) {
+      co_return result;
+    }
+
+    auto arg = onCreateArg();
+    modifyGraphDataItemValue<std::vector<InterruptHandleArg>>(
+        thread_id, MiddlewareContext::graphDataKey_interruptArgs,
+        [&](std::vector<InterruptHandleArg> &args) { args.push_back(arg); });
+    throwNodeInterruptBase(thread_id, msgs);
+  }
+
+  /// 将 graphData 中 JSON 兼容条目序列化到 state channel
+  inline neograph::json getGraphDataToState(neograph::graph::GraphState &state,
+                                            const std::string &thread_id) {
+    neograph::json saved = neograph::json::object();
+    auto it = graphData.find(thread_id);
+    if (it != graphData.end()) {
+      for (const auto &[key, val] : it->second) {
+        saved[key] = anyToJson(val);
+      }
+    }
+    return saved;
+  }
+
+  /// 从 state channel 恢复 graphData (用于中断 resume)
+  inline void setGraphDataFromState(neograph::graph::GraphState &state,
+                                    const std::string &thread_id) {
+    setGraphDataFromState(state.get(channel_savedGraphData), thread_id);
+  }
+
+  inline void setGraphDataFromState(const neograph::json &j,
+                                    const std::string &thread_id) {
+    if (j.is_object()) {
+      auto data = std::map<std::string, std::any, std::less<>>{};
+      for (auto it = j.begin(); it != j.end(); ++it) {
+        data[it.key()] = it.value();
+      }
+      graphData[thread_id] = std::move(data);
+    }
   }
 };
 

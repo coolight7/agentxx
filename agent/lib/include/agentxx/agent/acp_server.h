@@ -31,23 +31,8 @@ std::shared_ptr<neograph::graph::GraphEngine> build_engine() {
           {
               {"messages", {{"reducer", "append"}}},
               {
-                  agentxx::middleware::BaseMiddlewareHandleInterface::
-                      channelKey_interruptMessages,
-                  {{"reducer", "overwrite"}},
-              },
-              {
-                  agentxx::middleware::BaseMiddlewareHandleInterface::
-                      channelKey_interruptToolcallCache,
-                  {{"reducer", "overwrite"}},
-              },
-              {
-                  agentxx::middleware::BaseMiddlewareHandleInterface::
-                      channelKey_interruptArgs,
-                  {{"reducer", "append"}},
-              },
-              {
-                  agentxx::middleware::BaseMiddlewareHandleInterface::
-                      channelKey_interruptResult,
+                  agentxx::middleware::MiddlewareContext::
+                      channel_savedGraphData,
                   {{"reducer", "overwrite"}},
               },
           },

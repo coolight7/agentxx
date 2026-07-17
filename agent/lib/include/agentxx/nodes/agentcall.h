@@ -36,15 +36,6 @@ public:
       // 创建单次执行的临时数据
       auto ptr = agentContext.lock();
       ptr->middlewareHandleContext->graphData[in.ctx.thread_id].clear();
-      // 清理一些临时参数
-      in.state.remove(agentxx::middleware::BaseMiddlewareHandleInterface::
-                          channelKey_interruptMessages);
-      in.state.remove(agentxx::middleware::BaseMiddlewareHandleInterface::
-                          channelKey_interruptToolcallCache);
-      in.state.remove(agentxx::middleware::BaseMiddlewareHandleInterface::
-                          channelKey_interruptArgs);
-      in.state.remove(agentxx::middleware::BaseMiddlewareHandleInterface::
-                          channelKey_interruptResult);
     }
 
     co_await item.onAgentcallStartFunc(in);

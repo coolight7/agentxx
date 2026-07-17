@@ -220,50 +220,34 @@ public:
           subagentNames.str());
     }
 
-    // 获取当前 GraphState (由 ToolcallWrapNode::baseRun 注入 graphData)
-    auto ctxPtr = agentContext.lock();
-    if (!ctxPtr || !ctxPtr->middlewareHandleContext) {
+    auto agentCtxPtr = agentContext.lock();
+    if (!agentCtxPtr || !agentCtxPtr->middlewareHandleContext) {
       co_return R"({"error":"AgentContext not available"})";
     }
     auto thread_id = arguments.value("thread_id", std::string{});
-    neograph::graph::GraphState *statePtr = nullptr;
-    {
-      auto &graphData = ctxPtr->middlewareHandleContext->graphData;
-      auto it = graphData.find(thread_id);
-      if (it != graphData.end()) {
-        auto itemIt = it->second.find(
-            agentxx::middleware::MiddlewareContext::graphDataKey_currentState);
-        if (itemIt != it->second.end()) {
-          statePtr =
-              std::any_cast<neograph::graph::GraphState *>(itemIt->second);
-        }
-      }
-    }
-    if (nullptr == statePtr) {
-      co_return R"({"error":"GraphState not available for subagent interrupt"})";
-    }
-
-    // 构造中断参数并触发/恢复
-    // - 首次: getInterruptResult 抛出 NodeInterrupt, 父 graph 暂停
-    // - 恢复: getInterruptResult 返回 interruptResult channel 的整个 map
-    //   {resultId: resultValue}, 需按自身 resultId 提取
     auto resultId = arguments.value("tool_call_id", std::string{});
-    auto result = agentxx::middleware::InterruptHandleArg::getInterruptResult(
-        *statePtr, [&]() {
-          return agentxx::middleware::InterruptHandleArg{
-              .name = "subagent",
-              .arg =
-                  neograph::json{
-                      {"subagent", subagentName},
-                      {"system_prompt", system_prompt},
-                      {"message", message},
-                  },
-              .resultId = resultId,
-          };
-        });
 
-    // interruptResult channel 存储的是 {resultId: value} map (见 Session
-    // resumeValues 注入); 按自身 resultId 提取单个结果
+    // 通过 requestInterrupt 触发/恢复中断
+    // - 首次: 存储中断参数到 graphData, 抛出 NodeInterrupt
+    // - 恢复: 从 graphData 读取中断结果, 按 resultId 提取
+    auto result =
+        co_await agentCtxPtr->middlewareHandleContext->requestInterrupt(
+            thread_id,
+            [&]() {
+              return agentxx::middleware::InterruptHandleArg{
+                  .name = "subagent",
+                  .arg =
+                      neograph::json{
+                          {"subagent", subagentName},
+                          {"system_prompt", system_prompt},
+                          {"message", message},
+                      },
+                  .resultId = resultId,
+              };
+            },
+            nullptr);
+
+    // interruptResult 存储的是 {resultId: value} map; 按自身 resultId 提取
     if (result.is_object() && !resultId.empty() && result.contains(resultId)) {
       auto val = result[resultId];
       if (val.is_string()) {
@@ -271,7 +255,6 @@ public:
       }
       co_return val.dump();
     }
-    // result 本身是单个值 (非 map)
     if (result.is_string()) {
       co_return result.get<std::string>();
     }
