@@ -35,11 +35,14 @@ path/to/agentxx_test string_util regex
 
 ## 编译
 - Linux:
-    - 使用 shell 脚本编译: [debug_build.sh](agent/script/linux_debug_build.sh) 或 [release_build.sh](agent/script/linux_release_build.sh)
-    - 运行测试 [test_run.sh](agent/script/linux_test_run.sh)
+    - 使用 shell 脚本编译: [linux_debug_build.sh](agent/script/linux_debug_build.sh) 或 [linux_release_build.sh](agent/script/linux_release_build.sh)
+    - 运行测试 [linux_test_run.sh](agent/script/linux_test_run.sh)
 - Windows:
-    - 使用 bat 脚本编译: [debug_build.bat](agent/script/windows_debug_build.bat) 或 [release_build.bat](agent/script/windows_release_build.bat)
-    - 运行测试 [test_run.bat](agent/script/windows_test_run.bat)
+    - 使用 bat 脚本编译: [windows_debug_build.bat](agent/script/windows_debug_build.bat) 或 [windows_release_build.bat](agent/script/windows_release_build.bat)
+    - 运行测试 [windows_test_run.bat](agent/script/windows_test_run.bat)
+- Android:
+    - 在 Linux 上使用 shell 脚本交叉编译: [android_release_build.sh](agent/script/android_release_build.sh)
 - 编译脚本创建的 build 目录一般为:
     - debug_build: `agent/build/linux-debug/` 或 `agent/build/windows-debug/`
     - release_build: `agent/build/linux-release/` 或 `agent/build/windows-release/`
+    - android_release_build: `agent/build/android-release/`

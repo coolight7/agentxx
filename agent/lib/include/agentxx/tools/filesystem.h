@@ -19,6 +19,7 @@
 #include "glob/glob.h"
 #include <cstdlib>
 #include <filesystem>
+#include <format>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -140,15 +141,22 @@ public:
     auto result = neograph::json::array();
     auto onAppendItem = [&](const std::filesystem::directory_entry &entity) {
       try {
+        auto sys_time =
+            std::chrono::file_clock::to_sys(entity.last_write_time());
+
+        // 提取 Unix 秒数
+        auto unixtime = static_cast<size_t>(
+            std::chrono::duration_cast<std::chrono::seconds>(
+                sys_time.time_since_epoch())
+                .count());
         auto json = neograph::json{
             {"path", entity.path().generic_string()},
             {"type", (entity.is_directory()      ? "dir"
                       : entity.is_regular_file() ? "file"
                       : entity.is_symlink()      ? "symlink"
                                                  : "other")},
-            {"last_write_time",
-             static_cast<size_t>(
-                 entity.last_write_time().time_since_epoch().count())},
+            {"last_write_timestamp", unixtime},
+            {"last_write_time", std::format("{:%Y-%m-%d %H:%M:%S}", sys_time)},
         };
         if (entity.is_regular_file()) {
           json["size"] = static_cast<size_t>(entity.file_size());

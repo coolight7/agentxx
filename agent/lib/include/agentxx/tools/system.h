@@ -42,8 +42,8 @@ public:
 Local Time (24Hour): {}
 UTC Time (24Hour): {})",
         now.time_since_epoch().count() / 1000 / 1000,
-        std::format("{:%Y-%m-%d} {:%H:%M:%S}", local_time, local_time),
-        std::format("{:%Y-%m-%d} {:%H:%M:%S}", now, now));
+        std::format("{:%Y-%m-%d %H:%M:%S}", local_time),
+        std::format("{:%Y-%m-%d %H:%M:%S}", now));
   }
 };
 
