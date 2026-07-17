@@ -16,10 +16,11 @@
 namespace agentxx {
 namespace tools {
 
-/// 两层任务规划，提高模型在长流程中的注意力
+/// 两层任务规划 + 备忘录
+/// - 提高模型在长流程中的注意力
 /// - 目标层：Mermaid stateDiagram-v2 状态图描述整体工作流（大方向、依赖关系）
 /// - 执行层：近期 todo list 追踪当前及下一步任务（执行细节、经验总结）
-/// - 也可以作为备忘录使用
+/// - 备忘录：可记录一些需要留意、记住的信息
 // Two-level task planning to maintain focus in long workflows:
 //   - Strategic: Mermaid stateDiagram-v2 captures the overall workflow
 //     (high-level phases, dependencies, branching, recovery paths)
@@ -69,6 +70,13 @@ public:
                             {"description", prompt.getArg("todos")},
                         },
                     },
+                    {
+                        "notes",
+                        {
+                            {"type", "string"},
+                            {"description", prompt.getArg("notes")},
+                        },
+                    },
                 },
             },
         },
@@ -111,6 +119,9 @@ public:
     planStore["roadmap"] = roadmap;
     if (arguments.contains("todos")) {
       planStore["todos"] = arguments["todos"];
+    }
+    if (arguments.contains("notes")) {
+      planStore["notes"] = arguments["notes"];
     }
     state->plannings[thread_id] = planStore;
 

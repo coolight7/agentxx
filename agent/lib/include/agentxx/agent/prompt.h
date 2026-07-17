@@ -404,6 +404,9 @@ from the diagram — only the tasks you are actively working on or about to
 start. Each item records execution details, lessons learned, and issues
 encountered to help with re-planning.
 
+=== MEMO Layer: `notes` (optional) ===
+Record any important information, tips, reminders or Identity role-playing prompt.
+
 Example for a "fix a bug" workflow:
 - roadmap:
 ```mermaid
@@ -426,6 +429,9 @@ stateDiagram-v2
    "summary":"Found that it crashes on null pointer at line 342"},
   {"state":"pending", "content":"Locate root cause by tracing the null pointer source"}
 ]
+- notes:
+    - Follow user code style guide.
+    - Add unit tests after change.
 )",
               .args =
                   {
@@ -447,6 +453,10 @@ Item struct:
     "summary": ""         // execution notes: methods tried, issues encountered,
                           // optimization suggestions for re-planning
 }
+)"},
+                      {"notes",
+                       R"(MEMO LAYER: Any additional notes.
+Use this to record any important information, tips, reminders or Identity role-playing prompt.
 )"},
                   },
           },
