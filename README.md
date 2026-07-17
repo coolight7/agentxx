@@ -10,8 +10,8 @@
 - [计划实现](#计划实现)
     - [基础模块](#基础模块)
     - [扩展](#扩展)
-    - [测试](#测试)
     - [功能](#功能)
+    - [测试](#测试)
 - [目录结构](#目录结构)
 - [编译](#编译)
 
@@ -183,11 +183,6 @@
 - ACP Server
 - A2A Server
 
-### 测试
-- Agent 整体稳定性测试
-    - ✅在 llm/toolcall 等各种节点触发中断/异常时，保持上下文角色顺序正确、内容完整
-    - 程序突然终止、重启，启动后的自动修复
-
 ### 功能
 - ✅**操作键鼠**
     - Tool/ui_control
@@ -203,12 +198,17 @@
 - ⬜**操作live2d/3d模型动作**
 - ⬜部分扩展功能独立编译为 exe，以便支持 WSL 连接扩展获取数据
 
+### 测试
+- Agent 整体稳定性测试
+    - ✅在 llm/toolcall 等各种节点触发中断/异常时，保持上下文角色顺序正确、内容完整
+    - 程序突然终止、重启，启动后的自动修复
+
 ## 目录结构
 - `agent`:
     - C++ 实现 Agent
     - 大部分手写实现，基础框架实现完善后由AI模块化添加功能和检查、补充测试
 - `agent/script`:
-    - 编译脚本，存放已经验证支持的系统上的编译脚本，使用前可以先参考 [对应的编译文档](/docs/build/)
+    - 编译脚本，存放已经验证支持的系统上的编译脚本，使用前可以先参考 [对应的编译文档](/docs/zh-cn/build/)
 - `agent/lib`: libagentxx
     - 核心库，包含了内置实现的 toolcall、node、middleware 等，分离编译以便嵌入其他 app 开发使用
 - `agent/client`: agentxx_cli
@@ -256,9 +256,9 @@ cd {项目根目录}/agent/third_party/codegraph-cpp
 npm install --legacy-peer-deps
 ```
 - 接下来按希望输出的目标系统选择:
-    - [Linux/WSL 可执行程序 / 动态库编译 .so / 静态库 .a](/docs/build/linux.md)
-    - [Android 动态库编译 .so / 静态库 .a](/docs/build/android.md)
-    - [Windows 可执行程序 .exe / 动态库编译 .dll / 静态库 .lib](/docs/build/windows.md)
+    - [Linux/WSL 可执行程序 / 动态库编译 .so / 静态库 .a](/docs/zh-cn/build/linux.md)
+    - [Android 动态库编译 .so / 静态库 .a](/docs/zh-cn/build/android.md)
+    - [Windows 可执行程序 .exe / 动态库编译 .dll / 静态库 .lib](/docs/zh-cn/build/windows.md)
 
 ## LICENSE
 - [MIT License](LICENSE)
