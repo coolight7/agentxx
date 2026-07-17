@@ -431,6 +431,7 @@ asio::awaitable<TestResult> run_command_tools_tests(
     }
   };
 
+#if XX_IS_LINUX_D || XX_IS_MACOS_D
   co_await run(test_linux_command_get_definition);
   co_await run(test_linux_get_definition_properties);
   co_await run(test_linux_command_empty_command);
@@ -448,9 +449,14 @@ asio::awaitable<TestResult> run_command_tools_tests(
   co_await run(test_linux_nonzero_exit);
   co_await run(test_linux_special_chars);
   co_await run(test_linux_long_output);
+#endif
+
+#if XX_IS_WINDOWS_D
   co_await run(test_windows_command_get_definition);
   co_await run(test_windows_get_definition_properties);
   co_await run(test_windows_command_empty_command);
+#endif
+
   co_await run(test_python_command_get_definition);
   co_await run(test_python_get_definition_properties);
   co_await run(test_python_command_empty_command);

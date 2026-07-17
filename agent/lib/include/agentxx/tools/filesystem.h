@@ -141,8 +141,12 @@ public:
     auto result = neograph::json::array();
     auto onAppendItem = [&](const std::filesystem::directory_entry &entity) {
       try {
+        auto file_time = entity.last_write_time();
+
         auto sys_time =
-            std::chrono::file_clock::to_sys(entity.last_write_time());
+            std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+                file_time - std::filesystem::file_time_type::clock::now() +
+                std::chrono::system_clock::now());
 
         // 提取 Unix 秒数
         auto unixtime = static_cast<size_t>(

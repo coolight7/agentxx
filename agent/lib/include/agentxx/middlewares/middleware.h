@@ -727,7 +727,13 @@ public:
   template <typename T>
   void setGraphDataItemValue(const std::string &thread_id, std::string_view key,
                              const T &value) {
-    graphData[thread_id][key] = value;
+    auto &itemGraphData = graphData[thread_id];
+    auto it = itemGraphData.find(key);
+    if (it == itemGraphData.end()) {
+      itemGraphData.insert(std::pair<std::string, std::any>{key, value});
+    } else {
+      it->second = value;
+    }
   }
 
   template <typename T>
