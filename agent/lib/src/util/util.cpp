@@ -3,11 +3,18 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <optional>
 
 #if XX_IS_LINUX_D
 #include <sys/utsname.h>
 
+static std::optional<std::string> systemName_;
+static std::optional<bool> isRunningInWSL_;
+
 std::string agentxx::util::getSystemName() {
+  if (systemName_.has_value()) {
+    return *systemName_;
+  }
   std::ifstream f("/etc/os-release");
   std::string line, name;
   while (std::getline(f, line)) {
@@ -22,6 +29,7 @@ std::string agentxx::util::getSystemName() {
     }
   }
   f.close();
+  systemName_ = name;
   if (!name.empty()) {
     return name;
   }
@@ -29,15 +37,23 @@ std::string agentxx::util::getSystemName() {
   // 备选：uname 系统调用
   struct utsname buf;
   if (uname(&buf) == 0) {
-    return std::string(buf.sysname) + " " + buf.release;
+    systemName_ = std::string(buf.sysname) + " " + buf.release;
+    return *systemName_;
   }
-  return "Linux";
+  systemName_ = "Linux";
+  return *systemName_;
 }
 
 bool agentxx::util::isRunningInWSL() {
   try {
-    return std::filesystem::exists("/proc/sys/fs/binfmt_misc/WSLInterop");
+    if (isRunningInWSL_.has_value()) {
+      return *isRunningInWSL_;
+    }
+    isRunningInWSL_ =
+        std::filesystem::exists("/proc/sys/fs/binfmt_misc/WSLInterop");
+    return *isRunningInWSL_;
   } catch (const std::exception &e) {
+    isRunningInWSL_ = false;
     XX_LOGD("isRunningInWSL exception: {}", e.what());
   }
   return false;
@@ -46,6 +62,10 @@ bool agentxx::util::isRunningInWSL() {
 #elif XX_IS_WIN_D
 #include <windows.h>
 std::string agentxx::util::getSystemName() {
+  if (systemName_.has_value()) {
+    return *systemName_;
+  }
+
   OSVERSIONINFOEXW info{};
   info.dwOSVersionInfoSize = sizeof(info);
   HMODULE hNtDll = GetModuleHandleW(L"ntdll.dll");
@@ -54,12 +74,14 @@ std::string agentxx::util::getSystemName() {
     auto RtlGetVersion =
         (RtlGetVersionPtr)GetProcAddress(hNtDll, "RtlGetVersion");
     if (RtlGetVersion && RtlGetVersion((PRTL_OSVERSIONINFOW)&info) == 0) {
-      return "Windows " + std::to_string(info.dwMajorVersion) + "." +
-             std::to_string(info.dwMinorVersion) + " (build " +
-             std::to_string(info.dwBuildNumber) + ")";
+      systemName_ = "Windows " + std::to_string(info.dwMajorVersion) + "." +
+                    std::to_string(info.dwMinorVersion) + " (build " +
+                    std::to_string(info.dwBuildNumber) + ")";
+      return *systemName_;
     }
   }
-  return "Windows";
+  systemName_ = "Windows";
+  return *systemName_;
 }
 
 bool agentxx::util::isRunningInWSL() { return false; }
