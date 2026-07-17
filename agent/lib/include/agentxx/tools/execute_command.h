@@ -4,10 +4,12 @@
 #include "agentxx/util/string_util.h"
 #include "agentxx/util/util.h"
 #include "asio/dispatch.hpp"
+#include "asio/experimental/awaitable_operators.hpp"
 #include "asio/io_context.hpp"
 #include "asio/read.hpp"
 #include "asio/readable_pipe.hpp"
 #include "asio/redirect_error.hpp"
+#include "asio/steady_timer.hpp"
 #include "asio/use_awaitable.hpp"
 #include "fmt/format.h"
 #include <cstdlib>
@@ -59,6 +61,13 @@ public:
                             {"description", prompt.getArg("all_output")},
                         },
                     },
+                    {
+                        "timeout",
+                        {
+                            {"type", "integer"},
+                            {"description", prompt.getArg("timeout")},
+                        },
+                    },
                 },
             },
             {"required", neograph::json::array({"command"})},
@@ -73,6 +82,7 @@ public:
       co_return R"({"error":"Arg `command` is empty"})";
     }
     auto all_output = arguments.value("all_output", true);
+    auto timeout = arguments.value("timeout", 60);
 
 #if defined(BOOST_PROCESS_V2_PROCESS_HPP)
     {
@@ -93,10 +103,8 @@ public:
           boost::process::environment::find_executable("bash"),
           {"-c", command},
           boost::process::process_environment(procEnv),
-          boost::process::process_stdio {
-            .out = outpip,
-            .err = errpip
-          }};
+          boost::process::process_stdio{.out = outpip, .err = errpip},
+      };
 
       std::string strout, strerr;
       neograph_asio_error_code errCode;
@@ -107,30 +115,45 @@ public:
           errpip, asio::dynamic_buffer(strerr), asio::transfer_all(),
           asio::redirect_error(asio::use_awaitable, errCode));
       // assert(!ec || (ec == asio::error::eof));
-      co_await proc.async_wait();
-      co_await std::move(readStdOutFuture);
-      co_await std::move(readStdErrFuture);
+      if (timeout > 0) {
+        using namespace asio::experimental::awaitable_operators;
+        asio::steady_timer timer(ctx, std::chrono::seconds(timeout));
+        auto res =
+            co_await ((std::move(readStdOutFuture) &&
+                       std::move(readStdErrFuture) && proc.async_wait(asio::use_awaitable)) ||
+                      timer.async_wait(asio::use_awaitable));
+        if (res.index() == 1) {
+          boost::system::error_code ec;
+          proc.terminate(ec);
+          co_return fmt::format(
+              R"({{"error":"Command timed out after {} seconds","stdout":"{}","stderr":"{}"}})",
+              timeout, strout, strerr);
+        }
+      } else {
+        co_await std::move(readStdOutFuture);
+        co_await std::move(readStdErrFuture);
+        co_await proc.async_wait();
+      }
 
       const auto exitCode = proc.exit_code();
       std::ostringstream result;
-      result << "## ExitCode: " << exitCode << std::endl;
+      result << "## ExitCode: " << exitCode << "\n";
       if (all_output || 0 != exitCode) {
         // failed
         if (strout.empty() || agentxx::util::autoConvertToUtf8(strout)) {
-          result << "## StdOut:\n" << strout << std::endl;
+          result << "## StdOut:\n" << strout << "\n";
         } else {
-          result << "## StdOut convert to utf8 faild, truncated" << std::endl;
+          result << "## StdOut conversion to utf8 failed, truncated\n";
         }
         if (strerr.empty() || agentxx::util::autoConvertToUtf8(strerr)) {
-          result << "## StdErr:\n" << strerr << std::endl;
+          result << "## StdErr:\n" << strerr << "\n";
         } else {
-          result << "## StdErr convert to utf8 faild, truncated" << std::endl;
+          result << "## StdErr conversion to utf8 failed, truncated\n";
         }
       }
       co_return result.str();
     }
-#endif
-
+#else
 #if XX_IS_WIN_D
     auto pipe = std::unique_ptr<FILE, decltype(&_pclose)>{
         _popen(command.c_str(), "r"), _pclose};
@@ -153,6 +176,7 @@ public:
       result << buffer.data();
     }
     co_return result.str();
+#endif
   }
 };
 
@@ -199,12 +223,19 @@ public:
                             {"description", prompt.getArg("all_output")},
                         },
                     },
+                    {
+                        "timeout",
+                        {
+                            {"type", "integer"},
+                            {"description", prompt.getArg("timeout")},
+                        },
+                    },
                 },
             },
             {"required", neograph::json::array({"command"})},
         },
     };
-  } // namespace tools
+  }
 
   asio::awaitable<std::string>
   execute_async(const neograph::json &arguments) override {
@@ -213,6 +244,7 @@ public:
       co_return R"({"error":"Arg `command` is empty"})";
     }
     auto all_output = arguments.value("all_output", true);
+    auto timeout = arguments.value("timeout", 60);
 // TODO: UNC 路径不受支持。默认值设为 Windows 目录
 #if defined(BOOST_PROCESS_V2_PROCESS_HPP)
     {
@@ -244,30 +276,45 @@ public:
           errpip, asio::dynamic_buffer(strerr), asio::transfer_all(),
           asio::redirect_error(asio::use_awaitable, errCode));
       // assert(!ec || (ec == asio::error::eof));
-      co_await proc.async_wait();
-      co_await std::move(readStdOutFuture);
-      co_await std::move(readStdErrFuture);
+      if (timeout > 0) {
+        using namespace asio::experimental::awaitable_operators;
+        asio::steady_timer timer(ctx, std::chrono::seconds(timeout));
+        auto res = co_await(
+            (proc.async_wait(asio::use_awaitable) && std::move(readStdOutFuture) &&
+             std::move(readStdErrFuture)) ||
+            timer.async_wait(asio::use_awaitable));
+        if (res.index() == 1) {
+          boost::system::error_code ec;
+          proc.terminate(ec);
+          co_return fmt::format(
+              R"({{"error":"Command timed out after {} seconds","stdout":"{}","stderr":"{}"}})",
+              timeout, strout, strerr);
+        }
+      } else {
+        co_await proc.async_wait(asio::use_awaitable);
+        co_await std::move(readStdOutFuture);
+        co_await std::move(readStdErrFuture);
+      }
 
       const auto exitCode = proc.exit_code();
       std::ostringstream result;
-      result << "## ExitCode: " << exitCode << std::endl;
+      result << "## ExitCode: " << exitCode << "\n";
       if (all_output || 0 != exitCode) {
         // failed
         if (strout.empty() || agentxx::util::autoConvertToUtf8(strout)) {
-          result << "## StdOut:\n" << strout << std::endl;
+          result << "## StdOut:\n" << strout << "\n";
         } else {
-          result << "## StdOut convert to utf8 faild, truncated" << std::endl;
+          result << "## StdOut conversion to utf8 failed, truncated\n";
         }
         if (strerr.empty() || agentxx::util::autoConvertToUtf8(strerr)) {
-          result << "## StdErr:\n" << strerr << std::endl;
+          result << "## StdErr:\n" << strerr << "\n";
         } else {
-          result << "## StdErr convert to utf8 faild, truncated" << std::endl;
+          result << "## StdErr conversion to utf8 failed, truncated\n";
         }
       }
       co_return result.str();
     }
-#endif
-
+#else
 #if XX_IS_WIN_D
     auto pipe = std::unique_ptr<FILE, decltype(&_pclose)>{
         _popen(command.c_str(), "r"), _pclose};
@@ -287,13 +334,11 @@ public:
       out << buffer.data();
     }
     std::string result = out.str();
-    if (agentxx::util::autoConvertToUtf8(result)) {
-      // 转 utf8
-      co_return result;
-    }
+    agentxx::util::autoConvertToUtf8(result);
     co_return result;
+#endif
   }
-}; // namespace agentxx
+};
 
 class ExecutePythonTool : public XXToolBase {
 public:
@@ -319,6 +364,13 @@ public:
                             {"description", prompt.getArg("command")},
                         },
                     },
+                    {
+                        "timeout",
+                        {
+                            {"type", "integer"},
+                            {"description", prompt.getArg("timeout")},
+                        },
+                    },
                 },
             },
             {"required", neograph::json::array({"command"})},
@@ -332,6 +384,7 @@ public:
     if (command.empty()) {
       co_return R"({"error":"Arg `command` is empty"})";
     }
+    auto timeout = arguments.value("timeout", 60);
 
     co_return "";
   }
@@ -363,6 +416,13 @@ public:
                             {"description", prompt.getArg("command")},
                         },
                     },
+                    {
+                        "timeout",
+                        {
+                            {"type", "integer"},
+                            {"description", prompt.getArg("timeout")},
+                        },
+                    },
                 },
             },
             {"required", neograph::json::array({"command"})},
@@ -376,6 +436,7 @@ public:
     if (command.empty()) {
       co_return R"({"error":"Arg `command` is empty"})";
     }
+    auto timeout = arguments.value("timeout", 60);
 
     co_return "";
   }

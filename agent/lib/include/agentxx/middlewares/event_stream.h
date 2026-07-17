@@ -178,6 +178,7 @@ public:
   /// 发起请求并等待响应
   /// - timeout 到期返回 nullopt, 并清理 pending 槽
   /// - 同一 io_context 单线程运行, pending_/servers_ 无需加锁
+  /// - return (resp/error)
   asio::awaitable<std::expected<RespType, std::string>>
   request(ReqType req,
           std::chrono::milliseconds timeout = std::chrono::seconds(30)) {
@@ -273,7 +274,7 @@ public:
 
   /// 外部异步回填响应 (供 server 在 handler 之外、稍后回调用)
   /// - 内部 auto-respond 路径已直接通过 channel 回填, 不走这里
-  /// - 调用者须保证本流仍存活 (持有 bus 引用)
+  /// - 调用者须保证 stream 仍存活 (持有 bus 引用)
   void respond(size_t correlationId, RespType resp) {
     auto it = pending_.find(correlationId);
     if (it == pending_.end()) {

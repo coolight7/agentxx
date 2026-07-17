@@ -130,6 +130,11 @@ Current System is {}{}, please use linux shell/bash commands.)",
 `true`: Return all output.
 `false`: Truncate Output. Only return the stdout and stderr output when the command faild.)",
                       },
+                      {
+                          "timeout",
+                          R"(Default `60` seconds. 
+执行超时时间 (秒), 指定 0 表示不限时)",
+                      },
                   },
           },
       },
@@ -194,6 +199,11 @@ Windows Command must be executed through `cmd.exe`. Write arg command: `cmd.exe 
 `true`: Return all output.
 `false`: Truncate Output. Only return the stdout and stderr output when the command faild.)",
                       },
+                      {
+                          "timeout",
+                          R"(Default `60` seconds. 
+执行超时时间 (秒), 指定 0 表示不限时)",
+                      },
                   },
           },
       },
@@ -204,6 +214,11 @@ Windows Command must be executed through `cmd.exe`. Write arg command: `cmd.exe 
               .args =
                   {
                       {"command", "Command to execute"},
+                      {
+                          "timeout",
+                          R"(Default `60` seconds. 
+执行超时时间 (秒), 指定 0 表示不限时)",
+                      },
                   },
           },
       },
@@ -214,6 +229,11 @@ Windows Command must be executed through `cmd.exe`. Write arg command: `cmd.exe 
               .args =
                   {
                       {"command", "Command to execute"},
+                      {
+                          "timeout",
+                          R"(Default `60` seconds. 
+执行超时时间 (秒), 指定 0 表示不限时)",
+                      },
                   },
           },
       },

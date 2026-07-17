@@ -7,6 +7,11 @@
 #include <iostream>
 #include <string>
 
+#undef XX_TEST_PASSED
+#undef XX_TEST_FAILED
+#define XX_TEST_PASSED g_cmd_passed
+#define XX_TEST_FAILED g_cmd_failed
+
 namespace agentxx {
 namespace test {
 
@@ -213,6 +218,224 @@ inline asio::awaitable<void> test_javascript_command_empty_command(
   co_return;
 }
 
+// ---- get_definition 详细验证 ----
+
+inline asio::awaitable<void> test_linux_get_definition_properties(
+    std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+  auto tool = agentxx::tools::ExecuteLinuxCommandTool{agentContext};
+  auto def = tool.get_definition();
+
+  XX_TEST_EXPECT_EQ(def.name, "execute_linux_command");
+  auto params = def.parameters;
+
+  // properties
+  auto props = params["properties"];
+  XX_TEST_EXPECT_TRUE(props.contains("command"));
+  XX_TEST_EXPECT_TRUE(props.contains("all_output"));
+  XX_TEST_EXPECT_TRUE(props.contains("timeout"));
+  XX_TEST_EXPECT_EQ(props["timeout"]["type"].get<std::string>(), "integer");
+
+  // required: command is required, timeout is not
+  auto required = params["required"];
+  bool cmdReq = false, timeoutReq = true;
+  for (auto it = required.begin(); it != required.end(); ++it) {
+    auto val = *it;
+    auto name = val.get<std::string>();
+    if (name == "command")
+      cmdReq = true;
+    if (name == "timeout")
+      timeoutReq = false;
+  }
+  XX_TEST_EXPECT_TRUE(cmdReq);
+  XX_TEST_EXPECT_TRUE(timeoutReq);
+
+  co_return;
+}
+
+inline asio::awaitable<void> test_windows_get_definition_properties(
+    std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+  auto tool = agentxx::tools::ExecuteWindowsCommandTool{agentContext};
+  auto def = tool.get_definition();
+
+  XX_TEST_EXPECT_EQ(def.name, "execute_windows_command");
+  auto props = def.parameters["properties"];
+  XX_TEST_EXPECT_TRUE(props.contains("timeout"));
+  XX_TEST_EXPECT_EQ(props["timeout"]["type"].get<std::string>(), "integer");
+
+  co_return;
+}
+
+inline asio::awaitable<void> test_python_get_definition_properties(
+    std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+  auto tool = agentxx::tools::ExecutePythonTool{agentContext};
+  auto def = tool.get_definition();
+
+  XX_TEST_EXPECT_EQ(def.name, "execute_python_command");
+  auto props = def.parameters["properties"];
+  XX_TEST_EXPECT_TRUE(props.contains("timeout"));
+  XX_TEST_EXPECT_EQ(props["timeout"]["type"].get<std::string>(), "integer");
+
+  co_return;
+}
+
+inline asio::awaitable<void> test_javascript_get_definition_properties(
+    std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+  auto tool = agentxx::tools::ExecuteJavaScriptTool{agentContext};
+  auto def = tool.get_definition();
+
+  XX_TEST_EXPECT_EQ(def.name, "execute_javascript_command");
+  auto props = def.parameters["properties"];
+  XX_TEST_EXPECT_TRUE(props.contains("timeout"));
+  XX_TEST_EXPECT_EQ(props["timeout"]["type"].get<std::string>(), "integer");
+
+  co_return;
+}
+
+// ---- timeout 功能 ----
+
+inline asio::awaitable<void> test_linux_timeout_disabled(
+    std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+  auto tool = agentxx::tools::ExecuteLinuxCommandTool{agentContext};
+  auto args = neograph::json{
+      {"command", "echo timeout_disabled_test"},
+      {"timeout", 0},
+  };
+  auto result = co_await tool.execute_async(args);
+  XX_TEST_EXPECT_TRUE(result.find("timeout_disabled_test") !=
+                      std::string::npos);
+  co_return;
+}
+
+inline asio::awaitable<void> test_linux_timeout_triggers(
+    std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+  auto tool = agentxx::tools::ExecuteLinuxCommandTool{agentContext};
+  auto args = neograph::json{
+      {"command", "sleep 5"},
+      {"timeout", 1},
+  };
+  auto result = co_await tool.execute_async(args);
+  XX_TEST_EXPECT_TRUE(result.find("timed out") != std::string::npos);
+  co_return;
+}
+
+inline asio::awaitable<void> test_linux_timeout_partial_output(
+    std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+  auto tool = agentxx::tools::ExecuteLinuxCommandTool{agentContext};
+  auto args = neograph::json{
+      {"command", "echo 'before_sleep' && sleep 5"},
+      {"timeout", 1},
+  };
+  auto result = co_await tool.execute_async(args);
+  XX_TEST_EXPECT_TRUE(result.find("before_sleep") != std::string::npos);
+  co_return;
+}
+
+inline asio::awaitable<void> test_linux_timeout_default(
+    std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+  // 不传 timeout，默认 60 秒
+  auto tool = agentxx::tools::ExecuteLinuxCommandTool{agentContext};
+  auto args = neograph::json{{"command", "echo default_timeout_ok"}};
+  auto result = co_await tool.execute_async(args);
+  XX_TEST_EXPECT_TRUE(result.find("default_timeout_ok") != std::string::npos);
+  co_return;
+}
+
+// ---- all_output ----
+
+inline asio::awaitable<void> test_linux_all_output_false_success(
+    std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+  auto tool = agentxx::tools::ExecuteLinuxCommandTool{agentContext};
+  auto args = neograph::json{
+      {"command", "echo success_msg"},
+      {"all_output", false},
+  };
+  auto result = co_await tool.execute_async(args);
+  // all_output=false 且 exit code=0 时不输出 stdout/stderr
+  XX_TEST_EXPECT_TRUE(result.find("success_msg") == std::string::npos);
+  XX_TEST_EXPECT_TRUE(result.find("ExitCode: 0") != std::string::npos);
+  co_return;
+}
+
+inline asio::awaitable<void> test_linux_all_output_false_failure(
+    std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+  auto tool = agentxx::tools::ExecuteLinuxCommandTool{agentContext};
+  auto args = neograph::json{
+      {"command", "echo fail_msg && exit 1"},
+      {"all_output", false},
+  };
+  auto result = co_await tool.execute_async(args);
+  // all_output=false 但 exit code≠0 时仍输出详情
+  XX_TEST_EXPECT_TRUE(result.find("fail_msg") != std::string::npos);
+  XX_TEST_EXPECT_TRUE(result.find("ExitCode: 1") != std::string::npos);
+  co_return;
+}
+
+// ---- stderr & exit code ----
+
+inline asio::awaitable<void>
+test_linux_stderr(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+  auto tool = agentxx::tools::ExecuteLinuxCommandTool{agentContext};
+  auto args = neograph::json{{"command", "echo stderr_test_msg >&2"}};
+  auto result = co_await tool.execute_async(args);
+  XX_TEST_EXPECT_TRUE(result.find("stderr_test_msg") != std::string::npos);
+  co_return;
+}
+
+inline asio::awaitable<void> test_linux_nonzero_exit(
+    std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+  auto tool = agentxx::tools::ExecuteLinuxCommandTool{agentContext};
+  auto args = neograph::json{{"command", "exit 42"}};
+  auto result = co_await tool.execute_async(args);
+  XX_TEST_EXPECT_TRUE(result.find("ExitCode: 42") != std::string::npos);
+  co_return;
+}
+
+inline asio::awaitable<void> test_linux_special_chars(
+    std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+  auto tool = agentxx::tools::ExecuteLinuxCommandTool{agentContext};
+  auto args = neograph::json{
+      {"command", "echo 'hello with spaces and $pecial chars!'"}};
+  auto result = co_await tool.execute_async(args);
+  XX_TEST_EXPECT_TRUE(result.find("hello with spaces and $pecial chars!") !=
+                      std::string::npos);
+  co_return;
+}
+
+inline asio::awaitable<void> test_linux_long_output(
+    std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+  auto tool = agentxx::tools::ExecuteLinuxCommandTool{agentContext};
+  auto args = neograph::json{
+      {"command", "for i in $(seq 1 100); do echo \"line_$i\"; done"}};
+  auto result = co_await tool.execute_async(args);
+  XX_TEST_EXPECT_TRUE(result.find("line_1") != std::string::npos);
+  XX_TEST_EXPECT_TRUE(result.find("line_100") != std::string::npos);
+  co_return;
+}
+
+// ---- Python/JavaScript stub 验证 timeout 参数不报错 ----
+
+inline asio::awaitable<void> test_python_timeout_param(
+    std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+  auto tool = agentxx::tools::ExecutePythonTool{agentContext};
+  auto args = neograph::json{
+      {"command", "test"},
+      {"timeout", 30},
+  };
+  auto result = co_await tool.execute_async(args);
+  co_return;
+}
+
+inline asio::awaitable<void> test_javascript_timeout_param(
+    std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+  auto tool = agentxx::tools::ExecuteJavaScriptTool{agentContext};
+  auto args = neograph::json{
+      {"command", "test"},
+      {"timeout", 30},
+  };
+  auto result = co_await tool.execute_async(args);
+  co_return;
+}
+
 inline asio::awaitable<TestResult> run_command_tools_tests(
     std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
 
@@ -226,17 +449,33 @@ inline asio::awaitable<TestResult> run_command_tools_tests(
   };
 
   co_await run(test_linux_command_get_definition);
+  co_await run(test_linux_get_definition_properties);
   co_await run(test_linux_command_empty_command);
   co_await run(test_linux_command_echo);
   co_await run(test_linux_command_ls);
   co_await run(test_linux_command_pwd);
   co_await run(test_linux_command_whoami);
+  co_await run(test_linux_timeout_disabled);
+  co_await run(test_linux_timeout_triggers);
+  co_await run(test_linux_timeout_partial_output);
+  co_await run(test_linux_timeout_default);
+  co_await run(test_linux_all_output_false_success);
+  co_await run(test_linux_all_output_false_failure);
+  co_await run(test_linux_stderr);
+  co_await run(test_linux_nonzero_exit);
+  co_await run(test_linux_special_chars);
+  co_await run(test_linux_long_output);
   co_await run(test_windows_command_get_definition);
+  co_await run(test_windows_get_definition_properties);
   co_await run(test_windows_command_empty_command);
   co_await run(test_python_command_get_definition);
+  co_await run(test_python_get_definition_properties);
   co_await run(test_python_command_empty_command);
+  co_await run(test_python_timeout_param);
   co_await run(test_javascript_command_get_definition);
+  co_await run(test_javascript_get_definition_properties);
   co_await run(test_javascript_command_empty_command);
+  co_await run(test_javascript_timeout_param);
   co_return TestResult{g_cmd_passed, g_cmd_failed};
 }
 
