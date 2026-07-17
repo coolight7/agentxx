@@ -8,6 +8,10 @@
 #include <iostream>
 #include <regex>
 #include <string>
+#undef XX_TEST_PASSED
+#undef XX_TEST_FAILED
+#define XX_TEST_PASSED g_dt_passed
+#define XX_TEST_FAILED g_dt_failed
 
 namespace agentxx {
 namespace test {

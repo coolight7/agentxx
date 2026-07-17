@@ -2,19 +2,19 @@
 
 #include "agentxx/events.h"
 #include "test_framework.h"
+
+#include <cassert>
+
 #undef XX_TEST_PASSED
 #undef XX_TEST_FAILED
 #define XX_TEST_PASSED g_ev_passed
 #define XX_TEST_FAILED g_ev_failed
-
-#include <cassert>
 
 namespace agentxx {
 namespace test {
 
 inline static int g_ev_passed = 0;
 inline static int g_ev_failed = 0;
-
 
 inline void test_events_topics() {
   using namespace agentxx::events;

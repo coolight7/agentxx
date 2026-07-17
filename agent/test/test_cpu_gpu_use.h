@@ -10,6 +10,11 @@
 #include <windows.h>
 #endif
 
+#undef XX_TEST_PASSED
+#undef XX_TEST_FAILED
+#define XX_TEST_PASSED g_cpu_passed
+#define XX_TEST_FAILED g_cpu_failed
+
 namespace agentxx {
 namespace test {
 

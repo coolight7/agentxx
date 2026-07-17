@@ -18,13 +18,11 @@
 #define XX_TEST_PASSED g_es_passed
 #define XX_TEST_FAILED g_es_failed
 
-
 namespace agentxx {
 namespace test {
 
 inline static int g_es_passed = 0;
 inline static int g_es_failed = 0;
-
 
 struct TestEvent {
   std::string msg;

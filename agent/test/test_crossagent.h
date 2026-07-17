@@ -20,13 +20,11 @@
 #define XX_TEST_PASSED g_ca_passed
 #define XX_TEST_FAILED g_ca_failed
 
-
 namespace agentxx {
 namespace test {
 
 inline static int g_ca_passed = 0;
 inline static int g_ca_failed = 0;
-
 
 /// 验证: 跨 agent 查询请求-响应闭环 (模拟 server)
 inline asio::awaitable<void> test_crossagent_request_response() {
@@ -62,7 +60,8 @@ inline asio::awaitable<void> test_crossagent_request_response() {
 
   XX_TEST_EXPECT_TRUE(resp.has_value());
   if (resp.has_value()) {
-    XX_TEST_EXPECT_EQ(resp->content, std::string{"answer from research: foo is 42"});
+    XX_TEST_EXPECT_EQ(resp->content,
+                      std::string{"answer from research: foo is 42"});
     XX_TEST_EXPECT_TRUE(!resp->hasError);
   }
 
@@ -96,7 +95,8 @@ inline asio::awaitable<void> test_crossagent_no_running_agent() {
   XX_TEST_EXPECT_TRUE(resp.has_value());
   if (resp.has_value()) {
     XX_TEST_EXPECT_TRUE(resp->hasError);
-    XX_TEST_EXPECT_TRUE(resp->errorMessage.find("not running") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(resp->errorMessage.find("not running") !=
+                        std::string::npos);
   }
 
   supervisor.stop();

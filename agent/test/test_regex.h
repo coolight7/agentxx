@@ -1,23 +1,23 @@
 #include "agentxx/util/regex.h"
 #include "test_framework.h"
-#undef XX_TEST_PASSED
-#undef XX_TEST_FAILED
-#define XX_TEST_PASSED g_regex_passed
-#define XX_TEST_FAILED g_regex_failed
-
 
 #include <cassert>
 #include <memory>
 #include <string>
 #include <vector>
 
+#undef XX_TEST_PASSED
+#undef XX_TEST_FAILED
+#define XX_TEST_PASSED g_regex_passed
+#define XX_TEST_FAILED g_regex_failed
+
+namespace agentxx {
+namespace test {
+
 using namespace agentxx::util;
 
 inline static int g_regex_passed = 0;
 inline static int g_regex_failed = 0;
-
-
-
 
 void test_regex_create() {
 
@@ -320,9 +320,6 @@ void test_regex_end_anchor() {
   XX_TEST_EXPECT_FALSE(re->match("world hello", results));
   XX_TEST_EXPECT_EQ(results.size(), (size_t)0);
 }
-
-namespace agentxx {
-namespace test {
 
 TestResult testRegex() {
   test_regex_create();

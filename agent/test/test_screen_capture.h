@@ -12,6 +12,11 @@
 #include <windows.h>
 #endif
 
+#undef XX_TEST_PASSED
+#undef XX_TEST_FAILED
+#define XX_TEST_PASSED g_sc_passed
+#define XX_TEST_FAILED g_sc_failed
+
 inline agentxx::test::TestResult test_screen_capture() {
 #if XX_IS_WIN_D
   int g_sc_passed = 0;

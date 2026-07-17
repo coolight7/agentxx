@@ -12,8 +12,12 @@
 #include <iostream>
 #include <string>
 
-
 #if AGENTXX_ENABLE_CODEGRAPH
+
+#undef XX_TEST_PASSED
+#undef XX_TEST_FAILED
+#define XX_TEST_PASSED g_cg_passed
+#define XX_TEST_FAILED g_cg_failed
 
 namespace agentxx {
 namespace test {

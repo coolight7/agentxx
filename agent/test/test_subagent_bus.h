@@ -20,13 +20,11 @@
 #define XX_TEST_PASSED g_sb_passed
 #define XX_TEST_FAILED g_sb_failed
 
-
 namespace agentxx {
 namespace test {
 
 inline static int g_sb_passed = 0;
 inline static int g_sb_failed = 0;
-
 
 /// 验证: bus.request<ReqSubagentStart, RespSubagentResult> 请求-响应闭环
 /// - 注册一个模拟 server, 验证请求参数传递与响应回填

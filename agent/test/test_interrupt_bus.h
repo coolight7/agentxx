@@ -19,13 +19,11 @@
 #define XX_TEST_PASSED g_ib_passed
 #define XX_TEST_FAILED g_ib_failed
 
-
 namespace agentxx {
 namespace test {
 
 inline static int g_ib_passed = 0;
 inline static int g_ib_failed = 0;
-
 
 /// 验证: 注册 CliInterruptHandler 后, bus.request(service.interrupt)
 /// 能拿到经 execInterruptHandle 处理的结果 (无 stdin 输入时返回默认)
@@ -133,7 +131,7 @@ inline asio::awaitable<void> test_permission_bus_request_response() {
                                          .available()) {
       // 无交互输入 -> deny
       XX_TEST_EXPECT_TRUE(resp->decision ==
-                     agentxx::events::RespPermission::Decision::Deny);
+                          agentxx::events::RespPermission::Decision::Deny);
     }
   }
 

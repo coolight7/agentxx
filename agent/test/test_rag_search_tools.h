@@ -7,6 +7,11 @@
 #include <iostream>
 #include <string>
 
+#undef XX_TEST_PASSED
+#undef XX_TEST_FAILED
+#define XX_TEST_PASSED g_rag_passed
+#define XX_TEST_FAILED g_rag_failed
+
 namespace agentxx {
 namespace test {
 

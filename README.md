@@ -52,7 +52,8 @@
 - **Toolcall**
     - ✅返回值自动转换字符编码到 utf8
     - ✅拦截输出，超过限制长度时自动压缩、截取摘要存储到 share_store
-    - ⬜依托`事件流`实现异步获取结果、分块获取结果
+    - ⬜支持依托`事件流`实现异步获取结果、分块获取结果
+    - ⬜长时间运行时自动警告，并转由`事件流`异步获取结果
     - ✅filesystem (支持 `同步`/`asio io_uring/IOCP 协程异步` 文件读写)
         - ls (file/dir/recursive-dir/limit)
         - read_text (full / offset-limit)
@@ -68,7 +69,7 @@
         - ✅execute_windows_command (检测到 WSL 环境时，允许在 linux/wsl 直接执行 windows 命令)
         - ⬜execute_python_command
         - ⬜execute_javascript_command
-        - ⬜自动超时检查和警告
+        - ✅超时限制
         - ✅区分 stdout、stderr，自动转换输出字符编码到 Utf8
     - ✅web_search (支持 asio 协程异步网络请求)
         - web_search (内置 HTML 转 markdown, 支持直接使用普通网页搜索api)
@@ -76,9 +77,9 @@
         - web_fetch_url (raw resp body)
         - ⬜subagent 对接外部 llm agent 实现搜索
     - ✅planning
-        - 分为两层规划
+        - 目标规划 + 渐进任务细节 两层任务规划 + 备忘录
         - mermaid/stateDiagram-v2 状态图描述大方向的任务规划
-        - todo_list 描述近期需要实现的任务细节步骤
+        - todos 描述近期需要实现的任务细节步骤
     - ✅Sub-Agent (支持协程并发执行，并保证返回顺序正确)
     - ✅RAGSearch
     - ⬜tool_skill_search (延迟加载 tool/skill)

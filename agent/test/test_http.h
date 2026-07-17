@@ -20,10 +20,17 @@
 #define XX_TEST_PASSED g_http_passed
 #define XX_TEST_FAILED g_http_failed
 
-using namespace agentxx::util;
+#undef XX_TEST_EXPECT_HAS_VALUE
+#define XX_TEST_EXPECT_HAS_VALUE(expr)                                         \
+  expect_has_value_impl(expr, __FILE__, __LINE__)
+
+namespace agentxx {
+namespace test {
 
 inline static int g_http_passed = 0;
 inline static int g_http_failed = 0;
+
+using namespace agentxx::util;
 
 template <typename T>
 void expect_has_value_impl(T &&expr, const char *file, int line) {
@@ -40,12 +47,6 @@ void expect_has_value_impl(T &&expr, const char *file, int line) {
     }
   }
 }
-
-#undef XX_TEST_EXPECT_HAS_VALUE
-#define XX_TEST_EXPECT_HAS_VALUE(expr) expect_has_value_impl(expr, __FILE__, __LINE__)
-
-namespace agentxx {
-namespace test {
 
 inline void test_http_client_unit() {
 
@@ -90,12 +91,14 @@ inline void test_http_client_unit() {
   {
     XX_TEST_EXPECT_TRUE(HttpResponse::isJsonContentType("application/json"));
     XX_TEST_EXPECT_TRUE(HttpResponse::isJsonContentType("application/ld+json"));
-    XX_TEST_EXPECT_TRUE(HttpResponse::isJsonContentType("application/vnd.api+json"));
+    XX_TEST_EXPECT_TRUE(
+        HttpResponse::isJsonContentType("application/vnd.api+json"));
     XX_TEST_EXPECT_FALSE(HttpResponse::isJsonContentType("text/plain"));
     XX_TEST_EXPECT_FALSE(HttpResponse::isJsonContentType("text/html"));
     XX_TEST_EXPECT_FALSE(HttpResponse::isJsonContentType("application/xml"));
     XX_TEST_EXPECT_FALSE(HttpResponse::isJsonContentType(""));
-    XX_TEST_EXPECT_FALSE(HttpResponse::isJsonContentType("application/octet-stream"));
+    XX_TEST_EXPECT_FALSE(
+        HttpResponse::isJsonContentType("application/octet-stream"));
   }
 
   {
@@ -110,7 +113,8 @@ inline void test_http_client_unit() {
     XX_TEST_EXPECT_TRUE(HttpResponse::isTextContentType("application/rss+xml"));
     XX_TEST_EXPECT_TRUE(
         HttpResponse::isTextContentType("application/x-www-form-urlencoded"));
-    XX_TEST_EXPECT_FALSE(HttpResponse::isTextContentType("application/octet-stream"));
+    XX_TEST_EXPECT_FALSE(
+        HttpResponse::isTextContentType("application/octet-stream"));
     XX_TEST_EXPECT_FALSE(HttpResponse::isTextContentType("image/png"));
     XX_TEST_EXPECT_FALSE(HttpResponse::isTextContentType("audio/mpeg"));
   }
@@ -203,7 +207,8 @@ inline void test_http_client_unit() {
     XX_TEST_EXPECT_TRUE(HttpClient::isValidUrl("http://example.com"));
     XX_TEST_EXPECT_TRUE(HttpClient::isValidUrl("https://example.com"));
     XX_TEST_EXPECT_TRUE(HttpClient::isValidUrl("http://example.com/path"));
-    XX_TEST_EXPECT_TRUE(HttpClient::isValidUrl("https://example.com:8080/path"));
+    XX_TEST_EXPECT_TRUE(
+        HttpClient::isValidUrl("https://example.com:8080/path"));
     XX_TEST_EXPECT_TRUE(HttpClient::isValidUrl("example.com"));
     XX_TEST_EXPECT_TRUE(HttpClient::isValidUrl("example.com/path"));
     XX_TEST_EXPECT_FALSE(HttpClient::isValidUrl("http://"));
@@ -241,9 +246,10 @@ inline void test_http_client_unit() {
     XX_TEST_EXPECT_EQ(HttpClient::urlEncode("中文"), "%e4%b8%ad%e6%96%87");
     // Additional edge cases
     XX_TEST_EXPECT_EQ(HttpClient::urlEncode("!@#$%^&*()"),
-               "%21%40%23%24%25%5e%26%2a%28%29");
+                      "%21%40%23%24%25%5e%26%2a%28%29");
     XX_TEST_EXPECT_EQ(HttpClient::urlEncode("-_.~"), "-_.~");
-    XX_TEST_EXPECT_EQ(HttpClient::urlEncode("/path/to/file"), "%2fpath%2fto%2ffile");
+    XX_TEST_EXPECT_EQ(HttpClient::urlEncode("/path/to/file"),
+                      "%2fpath%2fto%2ffile");
     XX_TEST_EXPECT_EQ(HttpClient::urlEncode("\n\t"), "%0a%09");
   }
 
@@ -271,11 +277,11 @@ inline void test_http_client_unit() {
   {
     // Protocol-relative URL: //host/path -> scheme://host/path
     XX_TEST_EXPECT_EQ(HttpClient::resolveRedirectUrl("https://example.com/a",
-                                              "//other.com/b"),
-               "https://other.com/b");
+                                                     "//other.com/b"),
+                      "https://other.com/b");
     XX_TEST_EXPECT_EQ(HttpClient::resolveRedirectUrl("http://example.com/a",
-                                              "//other.com:8080/c"),
-               "http://other.com:8080/c");
+                                                     "//other.com:8080/c"),
+                      "http://other.com:8080/c");
   }
 }
 
@@ -297,7 +303,8 @@ inline void test_http_server_unit() {
     XX_TEST_EXPECT_EQ(httpMethodIndex(boost::beast::http::verb::options), 6);
     XX_TEST_EXPECT_EQ(httpMethodIndex(boost::beast::http::verb::trace), 7);
     XX_TEST_EXPECT_EQ(httpMethodIndex(boost::beast::http::verb::patch), 8);
-    XX_TEST_EXPECT_EQ(httpMethodIndex(static_cast<boost::beast::http::verb>(999)), -1);
+    XX_TEST_EXPECT_EQ(
+        httpMethodIndex(static_cast<boost::beast::http::verb>(999)), -1);
   }
 
   {
@@ -333,20 +340,24 @@ inline void test_http_server_unit() {
   {
     // absolute URL
     XX_TEST_EXPECT_EQ(HttpClient::resolveRedirectUrl("http://example.com/a",
-                                              "http://other.com/b"),
-               "http://other.com/b");
+                                                     "http://other.com/b"),
+                      "http://other.com/b");
     // absolute path
-    XX_TEST_EXPECT_EQ(HttpClient::resolveRedirectUrl("http://example.com/a", "/b/c"),
-               "http://example.com/b/c");
+    XX_TEST_EXPECT_EQ(
+        HttpClient::resolveRedirectUrl("http://example.com/a", "/b/c"),
+        "http://example.com/b/c");
     // relative path
-    XX_TEST_EXPECT_EQ(HttpClient::resolveRedirectUrl("http://example.com/a/b", "c"),
-               "http://example.com/a/c");
+    XX_TEST_EXPECT_EQ(
+        HttpClient::resolveRedirectUrl("http://example.com/a/b", "c"),
+        "http://example.com/a/c");
     // relative path with no parent
-    XX_TEST_EXPECT_EQ(HttpClient::resolveRedirectUrl("http://example.com/", "c"),
-               "http://example.com/c");
+    XX_TEST_EXPECT_EQ(
+        HttpClient::resolveRedirectUrl("http://example.com/", "c"),
+        "http://example.com/c");
     // root path
-    XX_TEST_EXPECT_EQ(HttpClient::resolveRedirectUrl("http://example.com/a/b/c", "/"),
-               "http://example.com/");
+    XX_TEST_EXPECT_EQ(
+        HttpClient::resolveRedirectUrl("http://example.com/a/b/c", "/"),
+        "http://example.com/");
   }
 }
 
@@ -681,7 +692,8 @@ inline asio::awaitable<void> test_http_client_beast_server() {
     if (resp.has_value()) {
       XX_TEST_EXPECT_EQ(resp.value().status, 200);
       // matched_path should contain the wildcard segment
-      XX_TEST_EXPECT_TRUE(resp.value().body.find("wildcard") != std::string::npos);
+      XX_TEST_EXPECT_TRUE(resp.value().body.find("wildcard") !=
+                          std::string::npos);
     }
   }
 
@@ -711,7 +723,8 @@ inline asio::awaitable<void> test_http_client_beast_server() {
     if (resp.has_value()) {
       XX_TEST_EXPECT_EQ(resp.value().status, 200);
       // The handler echoes the full target
-      XX_TEST_EXPECT_TRUE(resp.value().body.find("q=hello") != std::string::npos);
+      XX_TEST_EXPECT_TRUE(resp.value().body.find("q=hello") !=
+                          std::string::npos);
     }
   }
 

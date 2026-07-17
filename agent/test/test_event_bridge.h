@@ -20,13 +20,11 @@
 #define XX_TEST_PASSED g_eb_passed
 #define XX_TEST_FAILED g_eb_failed
 
-
 namespace agentxx {
 namespace test {
 
 inline static int g_eb_passed = 0;
 inline static int g_eb_failed = 0;
-
 
 /// 验证 EventBridge 把 GraphEvent::LLM_TOKEN 翻译成 EventModelToken 发布到 bus,
 /// 同时保留原始 callback 的转发行为

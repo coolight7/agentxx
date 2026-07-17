@@ -8,6 +8,11 @@
 #include <iostream>
 #include <string>
 
+#undef XX_TEST_PASSED
+#undef XX_TEST_FAILED
+#define XX_TEST_PASSED g_ws_passed
+#define XX_TEST_FAILED g_ws_failed
+
 namespace agentxx {
 namespace test {
 
