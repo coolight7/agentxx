@@ -177,15 +177,6 @@ public:
                                     boost::asio::ssl::context::pem);
     }
 
-    // Signal handlers (on first worker)
-    signals_ = std::make_unique<boost::asio::signal_set>(mainCtx, SIGINT, SIGTERM);
-    signals_->async_wait([this](boost::system::error_code ec, int sig) {
-      if (ec)
-        return;
-      XX_OUT("[server] Signal {} received, shutting down...", sig);
-      stop();
-    });
-
     // Spawn listener coroutine on first worker's io_context
     asio::co_spawn(mainCtx, acceptLoop(), asio::detached);
 
@@ -194,9 +185,8 @@ public:
 
     // Start worker threads — each runs its own io_context
     for (unsigned i = 0; i < threadCount; ++i) {
-      workers_[i]->thread = std::thread([this, i]() {
-        workers_[i]->ioCtx.run();
-      });
+      workers_[i]->thread =
+          std::thread([this, i]() { workers_[i]->ioCtx.run(); });
     }
 
     // Block until all threads finish
@@ -216,8 +206,6 @@ public:
       acceptor_->cancel(ec);
       acceptor_->close(ec);
     }
-    if (signals_)
-      signals_->cancel(ec);
     // Stop all worker io_contexts — pending async operations are cancelled,
     // serve() loops catch operation_aborted and exit cleanly.
     for (auto &w : workers_) {
@@ -302,7 +290,8 @@ private:
         auto sslStream = std::make_shared<
             boost::beast::ssl_stream<boost::beast::tcp_stream>>(
             boost::beast::tcp_stream(std::move(workerSocket)), *sslCtx_);
-        asio::co_spawn(targetWorker.ioCtx,
+        asio::co_spawn(
+            targetWorker.ioCtx,
             [this, sslStream]() -> asio::awaitable<void> {
               ConnectionGuard guard{activeConnections_};
               co_await sslHandshakeAndServe(sslStream);
@@ -311,7 +300,8 @@ private:
       } else {
         auto stream =
             std::make_shared<boost::beast::tcp_stream>(std::move(workerSocket));
-        asio::co_spawn(targetWorker.ioCtx,
+        asio::co_spawn(
+            targetWorker.ioCtx,
             [this, stream]() -> asio::awaitable<void> {
               ConnectionGuard guard{activeConnections_};
               co_await serve(std::move(*stream));
@@ -514,7 +504,6 @@ private:
   std::unique_ptr<Router> router_;
   std::unique_ptr<boost::asio::ip::tcp::acceptor> acceptor_;
   std::unique_ptr<boost::asio::ssl::context> sslCtx_;
-  std::unique_ptr<boost::asio::signal_set> signals_;
   std::atomic<bool> stopped_{false};
   std::atomic<size_t> activeConnections_{0};
   std::atomic<size_t> nextWorker_{0};

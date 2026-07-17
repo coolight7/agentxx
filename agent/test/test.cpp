@@ -11,6 +11,7 @@
 #include "test_cpu_gpu_use.h"
 #include "test_crossagent.h"
 #include "test_datetime_tool.h"
+#include "test_deepagent.h"
 #include "test_event_bridge.h"
 #include "test_event_stream.h"
 #include "test_events.h"
@@ -174,6 +175,7 @@ int main(int argn, char **argv) {
                         agentContext);
         co_await run("cpu_gpu", agentxx::test::run_cpu_gpu_use_tests);
         co_await run("http", agentxx::test::run_http_client_tests);
+        co_await run("deepagent", agentxx::test::run_deepagent_tests);
         ioCtx.stop();
       },
       asio::detached);
