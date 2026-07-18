@@ -48,9 +48,11 @@ class McpClient : public std::enable_shared_from_this<McpClient> {
 public:
   static constexpr std::string_view kProtocol2024_11_05 = "2024-11-05";
   static constexpr std::string_view kProtocol2025_03_26 = "2025-03-26";
+  static constexpr std::string_view kProtocol2025_06_18 = "2025-06-18";
   static constexpr std::string_view kProtocol2025_11_25 = "2025-11-25";
   static constexpr std::string_view kSupportedProtocols[] = {
       kProtocol2025_11_25,
+      kProtocol2025_06_18,
       kProtocol2025_03_26,
       kProtocol2024_11_05,
   };

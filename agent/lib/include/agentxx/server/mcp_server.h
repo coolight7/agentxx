@@ -124,9 +124,11 @@ struct McpPromptResult {
 // Supported MCP protocol versions (newest first for negotiation)
 inline constexpr std::string_view kMcpProtocol2024_11_05 = "2024-11-05";
 inline constexpr std::string_view kMcpProtocol2025_03_26 = "2025-03-26";
+inline constexpr std::string_view kMcpProtocol2025_06_18 = "2025-06-18";
 inline constexpr std::string_view kMcpProtocol2025_11_25 = "2025-11-25";
 inline constexpr std::string_view kMcpSupportedProtocols[] = {
     kMcpProtocol2025_11_25,
+    kMcpProtocol2025_06_18,
     kMcpProtocol2025_03_26,
     kMcpProtocol2024_11_05,
 };
@@ -524,12 +526,16 @@ private:
     json serverInfo;
     serverInfo["name"] = config_.serverName;
     serverInfo["version"] = config_.serverVersion;
+    // 2025-06-18: optional title for UI display
+    serverInfo["title"] = config_.serverName;
+    // 2025-06-18: declare elicitation support
+    capabilities["elicitation"] = json::object();
 
     json result;
     result["protocolVersion"] = negotiatedVersion;
     result["capabilities"] = std::move(capabilities);
     result["serverInfo"] = std::move(serverInfo);
-    // 2025-11-25: optional instructions field
+    // 2025-03-26+: optional instructions field
     result["instructions"] = "MCP server powered by agentxx";
 
     return jsonRpcResponse(id, std::move(result));

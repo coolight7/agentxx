@@ -16,6 +16,7 @@ void test_mcp_version_negotiation_unit() {
   auto testNegotiate = [](const std::string &clientVer) -> std::string {
     constexpr std::string_view supported[] = {
         "2025-11-25",
+        "2025-06-18",
         "2025-03-26",
         "2024-11-05",
     };
@@ -506,7 +507,7 @@ void test_mcp_server_version_negotiation() {
           "2024-11-05");
       // Future version 2026-01-01 matches newest supported
       XX_TEST_EXPECT_EQ(
-          responses[5]["result"]["protocolVersion"].get<std::string>(),
+          responses[6]["result"]["protocolVersion"].get<std::string>(),
           "2025-11-25");
     }
   }
@@ -1519,6 +1520,7 @@ test_mcp_server_cross_version_http() {
   std::string versions[] = {
       std::string{McpClient::kProtocol2024_11_05},
       std::string{McpClient::kProtocol2025_03_26},
+      std::string{McpClient::kProtocol2025_06_18},
       std::string{McpClient::kProtocol2025_11_25},
   };
 
@@ -1655,6 +1657,7 @@ asio::awaitable<TestResult> run_mcp_server_tests() {
   test_mcp_server_stdio_errors();
   test_mcp_server_2025_features();
   test_mcp_server_2025_03_features();
+  test_mcp_server_2025_06_features();
   test_mcp_server_cross_version_stdio();
   test_mcp_server_2025_03_26_stdio();
   co_await test_mcp_client_http();
