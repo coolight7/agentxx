@@ -1,13 +1,13 @@
 #pragma once
 
-#include <asio/awaitable.hpp>
-#include <asio/use_awaitable.hpp>
-#include <asio/redirect_error.hpp>
-#include <asio/detached.hpp>
-#include <asio/io_context.hpp>
-#include <asio/steady_timer.hpp>
 #include "agentxx/server/mcp_server.h"
 #include "agentxx/util/http_client.h"
+#include <asio/awaitable.hpp>
+#include <asio/detached.hpp>
+#include <asio/io_context.hpp>
+#include <asio/redirect_error.hpp>
+#include <asio/steady_timer.hpp>
+#include <asio/use_awaitable.hpp>
 #include <chrono>
 #include <iostream>
 #include <string>
@@ -26,7 +26,7 @@ namespace test {
 extern int g_mcp_passed;
 extern int g_mcp_failed;
 
-asio::awaitable<TestResult> run_mcp_server_tests();
+asio::awaitable<TestResult> run_mcp_tests();
 
 } // namespace test
 } // namespace agentxx

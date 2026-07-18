@@ -1,4 +1,4 @@
-#include "test_mcp_server.h"
+#include "test_mcp.h"
 #include "agentxx/server/mcp_client.h"
 
 namespace agentxx {
@@ -111,16 +111,14 @@ void test_mcp_server_unit() {
     def.description = "A test resource";
     def.mimeType = "text/plain";
 
-    server.addResource(def, [](const std::string &uri)
-                           -> std::optional<McpResourceContent> {
-      if (uri == "file:///test.txt") {
-        return McpResourceContent{
-            .uri = uri,
-            .mimeType = "text/plain",
-            .text = "hello world"};
-      }
-      return std::nullopt;
-    });
+    server.addResource(
+        def, [](const std::string &uri) -> std::optional<McpResourceContent> {
+          if (uri == "file:///test.txt") {
+            return McpResourceContent{
+                .uri = uri, .mimeType = "text/plain", .text = "hello world"};
+          }
+          return std::nullopt;
+        });
 
     auto resources = server.listResources();
     XX_TEST_EXPECT_EQ(resources.size(), (size_t)1);
@@ -143,18 +141,20 @@ void test_mcp_server_unit() {
     arg.required = true;
     def.arguments.push_back(std::move(arg));
 
-    server.addPrompt(def, [](const std::string &name,
-                             const json &args) -> std::optional<McpPromptResult> {
-      if (name != "greet")
-        return std::nullopt;
-      McpPromptResult result;
-      result.description = "A friendly greeting";
-      McpPromptMessage msg;
-      msg.role = "assistant";
-      msg.content = "Hello, " + args.value("name", "world") + "!";
-      result.messages.push_back(std::move(msg));
-      return result;
-    });
+    server.addPrompt(def,
+                     [](const std::string &name,
+                        const json &args) -> std::optional<McpPromptResult> {
+                       if (name != "greet")
+                         return std::nullopt;
+                       McpPromptResult result;
+                       result.description = "A friendly greeting";
+                       McpPromptMessage msg;
+                       msg.role = "assistant";
+                       msg.content =
+                           "Hello, " + args.value("name", "world") + "!";
+                       result.messages.push_back(std::move(msg));
+                       return result;
+                     });
 
     auto prompts = server.listPrompts();
     XX_TEST_EXPECT_EQ(prompts.size(), (size_t)1);
@@ -236,9 +236,10 @@ asio::awaitable<void> test_mcp_server_integration() {
     req["jsonrpc"] = "2.0";
     req["id"] = 1;
     req["method"] = "initialize";
-    req["params"] = {{"protocolVersion", "2024-11-05"},
-                     {"capabilities", json::object()},
-                     {"clientInfo", {{"name", "test-client"}, {"version", "1.0"}}}};
+    req["params"] = {
+        {"protocolVersion", "2024-11-05"},
+        {"capabilities", json::object()},
+        {"clientInfo", {{"name", "test-client"}, {"version", "1.0"}}}};
 
     auto resp = co_await HttpClient::postAsync(baseUrl + "/mcp", req);
     XX_TEST_EXPECT_HAS_VALUE(resp);
@@ -250,8 +251,9 @@ asio::awaitable<void> test_mcp_server_integration() {
         XX_TEST_EXPECT_EQ((*j)["jsonrpc"].get<std::string>(), "2.0");
         XX_TEST_EXPECT_TRUE((*j).contains("result"));
         XX_TEST_EXPECT_TRUE((*j)["result"].contains("serverInfo"));
-        XX_TEST_EXPECT_EQ((*j)["result"]["serverInfo"]["name"].get<std::string>(),
-                          "agentxx-mcp");
+        XX_TEST_EXPECT_EQ(
+            (*j)["result"]["serverInfo"]["name"].get<std::string>(),
+            "agentxx-mcp");
       }
     }
   }
@@ -363,9 +365,8 @@ asio::awaitable<void> test_mcp_server_integration() {
   {
     HeaderMap headers;
     headers.set("content-type", "application/json");
-    auto resp = co_await HttpClient::postAsync(baseUrl + "/mcp",
-                                               "not json", "application/json",
-                                               headers,
+    auto resp = co_await HttpClient::postAsync(baseUrl + "/mcp", "not json",
+                                               "application/json", headers,
                                                std::chrono::seconds{5});
     XX_TEST_EXPECT_HAS_VALUE(resp);
     if (resp.has_value()) {
@@ -393,8 +394,10 @@ asio::awaitable<void> test_mcp_server_integration() {
     if (resp.has_value()) {
       XX_TEST_EXPECT_EQ(resp.value().status, 200);
       auto ct = resp.value().findHeader("content-type");
-      XX_TEST_EXPECT_TRUE(ct.find("text/event-stream") != std::string_view::npos);
-      XX_TEST_EXPECT_TRUE(resp.value().body.find("endpoint") != std::string::npos);
+      XX_TEST_EXPECT_TRUE(ct.find("text/event-stream") !=
+                          std::string_view::npos);
+      XX_TEST_EXPECT_TRUE(resp.value().body.find("endpoint") !=
+                          std::string::npos);
     }
   }
 
@@ -454,13 +457,27 @@ void test_mcp_server_version_negotiation() {
   {
     McpServer server;
     std::string input;
-    input += R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test"}}})" "\n";
-    input += R"({"jsonrpc":"2.0","id":2,"method":"initialize","params":{"protocolVersion":"2025-03-26","clientInfo":{"name":"test"}}})" "\n";
-    input += R"({"jsonrpc":"2.0","id":3,"method":"initialize","params":{"protocolVersion":"2025-06-18","clientInfo":{"name":"test"}}})" "\n";
-    input += R"({"jsonrpc":"2.0","id":4,"method":"initialize","params":{"protocolVersion":"2025-11-25","clientInfo":{"name":"test"}}})" "\n";
-    input += R"({"jsonrpc":"2.0","id":5,"method":"initialize","params":{"protocolVersion":"2025-01-01","clientInfo":{"name":"test"}}})" "\n";
-    input += R"({"jsonrpc":"2.0","id":6,"method":"initialize","params":{"clientInfo":{"name":"test"}}})" "\n";
-    input += R"({"jsonrpc":"2.0","id":7,"method":"initialize","params":{"protocolVersion":"2026-01-01","clientInfo":{"name":"test"}}})" "\n";
+    input +=
+        R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test"}}})"
+        "\n";
+    input +=
+        R"({"jsonrpc":"2.0","id":2,"method":"initialize","params":{"protocolVersion":"2025-03-26","clientInfo":{"name":"test"}}})"
+        "\n";
+    input +=
+        R"({"jsonrpc":"2.0","id":3,"method":"initialize","params":{"protocolVersion":"2025-06-18","clientInfo":{"name":"test"}}})"
+        "\n";
+    input +=
+        R"({"jsonrpc":"2.0","id":4,"method":"initialize","params":{"protocolVersion":"2025-11-25","clientInfo":{"name":"test"}}})"
+        "\n";
+    input +=
+        R"({"jsonrpc":"2.0","id":5,"method":"initialize","params":{"protocolVersion":"2025-01-01","clientInfo":{"name":"test"}}})"
+        "\n";
+    input +=
+        R"({"jsonrpc":"2.0","id":6,"method":"initialize","params":{"clientInfo":{"name":"test"}}})"
+        "\n";
+    input +=
+        R"({"jsonrpc":"2.0","id":7,"method":"initialize","params":{"protocolVersion":"2026-01-01","clientInfo":{"name":"test"}}})"
+        "\n";
 
     auto oldCin = std::cin.rdbuf();
     auto oldCout = std::cout.rdbuf();
@@ -522,7 +539,9 @@ void test_mcp_server_2025_features() {
   {
     McpServer server;
     std::string input;
-    input += R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","clientInfo":{"name":"test"}}})" "\n";
+    input +=
+        R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","clientInfo":{"name":"test"}}})"
+        "\n";
 
     auto oldCin = std::cin.rdbuf();
     auto oldCout = std::cout.rdbuf();
@@ -558,8 +577,10 @@ void test_mcp_server_2025_features() {
     def.name = "advanced_tool";
     def.description = "A tool with all 2025-11-25 fields";
     def.title = "Advanced Tool";
-    def.inputSchema = json::parse(R"({"type":"object","properties":{"x":{"type":"number"}}})");
-    def.outputSchema = json::parse(R"({"type":"object","properties":{"result":{"type":"number"}}})");
+    def.inputSchema = json::parse(
+        R"({"type":"object","properties":{"x":{"type":"number"}}})");
+    def.outputSchema = json::parse(
+        R"({"type":"object","properties":{"result":{"type":"number"}}})");
     def.annotations = json::parse(R"({"title":"Advanced"})");
     def.execution = json::parse(R"({"taskSupport":"optional"})");
 
@@ -571,7 +592,8 @@ void test_mcp_server_2025_features() {
     });
 
     std::string input;
-    input += R"({"jsonrpc":"2.0","id":1,"method":"tools/list"})" "\n";
+    input += R"({"jsonrpc":"2.0","id":1,"method":"tools/list"})"
+             "\n";
 
     auto oldCin = std::cin.rdbuf();
     auto oldCout = std::cout.rdbuf();
@@ -622,8 +644,11 @@ void test_mcp_server_2025_features() {
     });
 
     std::string input;
-    input += R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test"}}})" "\n";
-    input += R"({"jsonrpc":"2.0","id":2,"method":"tools/list"})" "\n";
+    input +=
+        R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test"}}})"
+        "\n";
+    input += R"({"jsonrpc":"2.0","id":2,"method":"tools/list"})"
+             "\n";
 
     auto oldCin = std::cin.rdbuf();
     auto oldCout = std::cout.rdbuf();
@@ -645,8 +670,8 @@ void test_mcp_server_2025_features() {
     XX_TEST_EXPECT_EQ(responses.size(), (size_t)2);
     if (responses.size() >= 2) {
       // Initialize response should not have instructions for 2024-11-05
-      // Actually our server always includes them, which is fine (forward compat)
-      // Check tools/list response
+      // Actually our server always includes them, which is fine (forward
+      // compat) Check tools/list response
       json tools = responses[1]["result"]["tools"];
       if (tools.is_array() && tools.size() >= 1) {
         json t = tools[0];
@@ -675,7 +700,8 @@ asio::awaitable<void> test_mcp_client_2025_version() {
   McpToolDefinition def;
   def.name = "echo";
   def.description = "Echo";
-  def.inputSchema = json::parse(R"({"type":"object","properties":{"text":{"type":"string"}}})");
+  def.inputSchema = json::parse(
+      R"({"type":"object","properties":{"text":{"type":"string"}}})");
 
   server.addTool(def, [](const json &args) -> json {
     json content;
@@ -689,7 +715,8 @@ asio::awaitable<void> test_mcp_client_2025_version() {
   uint16_t port = 0;
   for (int i = 0; i < 100; ++i) {
     port = server.port();
-    if (port != 0) break;
+    if (port != 0)
+      break;
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
   if (port == 0) {
@@ -777,15 +804,20 @@ void test_mcp_server_lenient_parsing() {
 
   std::string input;
   // jsonrpc as number 2.0 (not string)
-  input += R"({"jsonrpc":2.0,"id":1,"method":"ping"})" "\n";
+  input += R"({"jsonrpc":2.0,"id":1,"method":"ping"})"
+           "\n";
   // missing jsonrpc field entirely
-  input += R"({"id":2,"method":"ping"})" "\n";
+  input += R"({"id":2,"method":"ping"})"
+           "\n";
   // params as null (not object)
-  input += R"({"jsonrpc":"2.0","id":3,"method":"ping","params":null})" "\n";
+  input += R"({"jsonrpc":"2.0","id":3,"method":"ping","params":null})"
+           "\n";
   // integer id
-  input += R"({"jsonrpc":"2.0","id":4,"method":"tools/list"})" "\n";
+  input += R"({"jsonrpc":"2.0","id":4,"method":"tools/list"})"
+           "\n";
   // string id
-  input += R"({"jsonrpc":"2.0","id":"req-5","method":"ping"})" "\n";
+  input += R"({"jsonrpc":"2.0","id":"req-5","method":"ping"})"
+           "\n";
 
   auto oldCin = std::cin.rdbuf();
   auto oldCout = std::cout.rdbuf();
@@ -811,8 +843,8 @@ void test_mcp_server_lenient_parsing() {
       XX_TEST_EXPECT_TRUE(responses[i].contains("result") ||
                           responses[i].contains("error"));
       if (responses[i].contains("error")) {
-        TEST_INFO << "Response " << i
-                  << " has error: " << responses[i].dump() << std::endl;
+        TEST_INFO << "Response " << i << " has error: " << responses[i].dump()
+                  << std::endl;
       }
     }
   }
@@ -830,12 +862,12 @@ void test_mcp_server_stdio_resources_prompts() {
   resDef.uri = "file:///test.txt";
   resDef.name = "Test File";
   resDef.mimeType = "text/plain";
-  server.addResource(resDef, [](const std::string &uri)
-                         -> std::optional<McpResourceContent> {
-    if (uri == "file:///test.txt")
-      return McpResourceContent{uri, "text/plain", "hello world"};
-    return std::nullopt;
-  });
+  server.addResource(
+      resDef, [](const std::string &uri) -> std::optional<McpResourceContent> {
+        if (uri == "file:///test.txt")
+          return McpResourceContent{uri, "text/plain", "hello world"};
+        return std::nullopt;
+      });
 
   // Add a prompt
   McpPromptDefinition promptDef;
@@ -845,28 +877,41 @@ void test_mcp_server_stdio_resources_prompts() {
   arg.name = "name";
   arg.required = true;
   promptDef.arguments.push_back(std::move(arg));
-  server.addPrompt(promptDef, [](const std::string &name,
-                                  const json &args)
-                       -> std::optional<McpPromptResult> {
-    if (name != "greet")
-      return std::nullopt;
-    McpPromptResult result;
-    result.description = "A friendly greeting";
-    McpPromptMessage msg;
-    msg.role = "assistant";
-    msg.content = "Hello, " + args.value("name", "world") + "!";
-    result.messages.push_back(std::move(msg));
-    return result;
-  });
+  server.addPrompt(promptDef,
+                   [](const std::string &name,
+                      const json &args) -> std::optional<McpPromptResult> {
+                     if (name != "greet")
+                       return std::nullopt;
+                     McpPromptResult result;
+                     result.description = "A friendly greeting";
+                     McpPromptMessage msg;
+                     msg.role = "assistant";
+                     msg.content =
+                         "Hello, " + args.value("name", "world") + "!";
+                     result.messages.push_back(std::move(msg));
+                     return result;
+                   });
 
   std::string input;
-  input += R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test"}}})" "\n";
-  input += R"({"jsonrpc":"2.0","id":2,"method":"resources/list"})" "\n";
-  input += R"({"jsonrpc":"2.0","id":3,"method":"resources/read","params":{"uri":"file:///test.txt"}})" "\n";
-  input += R"({"jsonrpc":"2.0","id":4,"method":"resources/read","params":{"uri":"file:///nonexistent.txt"}})" "\n";
-  input += R"({"jsonrpc":"2.0","id":5,"method":"prompts/list"})" "\n";
-  input += R"({"jsonrpc":"2.0","id":6,"method":"prompts/get","params":{"name":"greet","arguments":{"name":"World"}}})" "\n";
-  input += R"({"jsonrpc":"2.0","id":7,"method":"prompts/get","params":{"name":"nonexistent"}})" "\n";
+  input +=
+      R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test"}}})"
+      "\n";
+  input += R"({"jsonrpc":"2.0","id":2,"method":"resources/list"})"
+           "\n";
+  input +=
+      R"({"jsonrpc":"2.0","id":3,"method":"resources/read","params":{"uri":"file:///test.txt"}})"
+      "\n";
+  input +=
+      R"({"jsonrpc":"2.0","id":4,"method":"resources/read","params":{"uri":"file:///nonexistent.txt"}})"
+      "\n";
+  input += R"({"jsonrpc":"2.0","id":5,"method":"prompts/list"})"
+           "\n";
+  input +=
+      R"({"jsonrpc":"2.0","id":6,"method":"prompts/get","params":{"name":"greet","arguments":{"name":"World"}}})"
+      "\n";
+  input +=
+      R"({"jsonrpc":"2.0","id":7,"method":"prompts/get","params":{"name":"nonexistent"}})"
+      "\n";
 
   auto oldCin = std::cin.rdbuf();
   auto oldCout = std::cout.rdbuf();
@@ -1032,23 +1077,22 @@ asio::awaitable<void> test_mcp_client_http() {
     if (result.has_value()) {
       XX_TEST_EXPECT_TRUE(result->contains("content"));
       if (result->contains("content") && (*result)["content"].is_array()) {
-        XX_TEST_EXPECT_EQ(
-            (*result)["content"][0]["text"].get<std::string>(),
-            "hello client");
+        XX_TEST_EXPECT_EQ((*result)["content"][0]["text"].get<std::string>(),
+                          "hello client");
       }
     }
   }
 
   // Test callTool nonexistent
   {
-    auto result =
-        co_await client->callTool("nonexistent", json::object());
+    auto result = co_await client->callTool("nonexistent", json::object());
     XX_TEST_EXPECT_TRUE(result.has_value());
     if (result.has_value()) {
       // Should have error in the response envelope
       bool hasDirectError = result->contains("error");
       // Or isError flag in the result
-      bool hasIsError = result->contains("isError") && (*result)["isError"].get<bool>();
+      bool hasIsError =
+          result->contains("isError") && (*result)["isError"].get<bool>();
       XX_TEST_EXPECT_TRUE(hasDirectError || hasIsError);
     }
   }
@@ -1110,13 +1154,23 @@ void test_mcp_server_stdio_basic() {
   });
 
   std::string input;
-  input += R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}})" "\n";
-  input += R"({"jsonrpc":"2.0","id":2,"method":"ping"})" "\n";
-  input += R"({"jsonrpc":"2.0","id":3,"method":"tools/list"})" "\n";
-  input += R"({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"echo","arguments":{"text":"hello stdio"}}})" "\n";
-  input += R"({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"nonexistent","arguments":{}}})" "\n";
-  input += R"({"jsonrpc":"2.0","id":6,"method":"nonexistent/method"})" "\n";
-  input += R"({"jsonrpc":"2.0","method":"notifications/initialized"})" "\n";
+  input +=
+      R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}})"
+      "\n";
+  input += R"({"jsonrpc":"2.0","id":2,"method":"ping"})"
+           "\n";
+  input += R"({"jsonrpc":"2.0","id":3,"method":"tools/list"})"
+           "\n";
+  input +=
+      R"({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"echo","arguments":{"text":"hello stdio"}}})"
+      "\n";
+  input +=
+      R"({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"nonexistent","arguments":{}}})"
+      "\n";
+  input += R"({"jsonrpc":"2.0","id":6,"method":"nonexistent/method"})"
+           "\n";
+  input += R"({"jsonrpc":"2.0","method":"notifications/initialized"})"
+           "\n";
 
   auto oldCin = std::cin.rdbuf();
   auto oldCout = std::cout.rdbuf();
@@ -1188,9 +1242,11 @@ void test_mcp_server_stdio_errors() {
 
   std::string input;
   input += "not valid json\n";
-  input += R"({"jsonrpc":"3.0","id":1,"method":"ping"})" "\n";
+  input += R"({"jsonrpc":"3.0","id":1,"method":"ping"})"
+           "\n";
   input += "\n";
-  input += R"({"jsonrpc":"2.0"})" "\n";
+  input += R"({"jsonrpc":"2.0"})"
+           "\n";
 
   auto oldCin = std::cin.rdbuf();
   auto oldCout = std::cout.rdbuf();
@@ -1243,7 +1299,8 @@ void test_mcp_server_2025_03_features() {
   // Test resource templates list
   {
     std::string input;
-    input += R"({"jsonrpc":"2.0","id":1,"method":"resources/templates/list"})" "\n";
+    input += R"({"jsonrpc":"2.0","id":1,"method":"resources/templates/list"})"
+             "\n";
 
     auto oldCin = std::cin.rdbuf();
     auto oldCout = std::cout.rdbuf();
@@ -1266,14 +1323,17 @@ void test_mcp_server_2025_03_features() {
     if (!responses.empty()) {
       XX_TEST_EXPECT_TRUE(responses[0].contains("result"));
       XX_TEST_EXPECT_TRUE(responses[0]["result"].contains("resourceTemplates"));
-      XX_TEST_EXPECT_TRUE(responses[0]["result"]["resourceTemplates"].is_array());
+      XX_TEST_EXPECT_TRUE(
+          responses[0]["result"]["resourceTemplates"].is_array());
     }
   }
 
   // Test completion/complete
   {
     std::string input;
-    input += R"({"jsonrpc":"2.0","id":1,"method":"completion/complete","params":{"ref":{"type":"ref/prompt","name":"test"},"argument":{"name":"arg","value":"val"}}})" "\n";
+    input +=
+        R"({"jsonrpc":"2.0","id":1,"method":"completion/complete","params":{"ref":{"type":"ref/prompt","name":"test"},"argument":{"name":"arg","value":"val"}}})"
+        "\n";
 
     auto oldCin = std::cin.rdbuf();
     auto oldCout = std::cout.rdbuf();
@@ -1296,14 +1356,17 @@ void test_mcp_server_2025_03_features() {
     if (!responses.empty()) {
       XX_TEST_EXPECT_TRUE(responses[0].contains("result"));
       XX_TEST_EXPECT_TRUE(responses[0]["result"].contains("completion"));
-      XX_TEST_EXPECT_TRUE(responses[0]["result"]["completion"].contains("values"));
+      XX_TEST_EXPECT_TRUE(
+          responses[0]["result"]["completion"].contains("values"));
     }
   }
 
   // Test _meta passthrough on response
   {
     std::string input;
-    input += R"({"jsonrpc":"2.0","id":1,"method":"ping","params":{"_meta":{"progressToken":"tok-123"}}})" "\n";
+    input +=
+        R"({"jsonrpc":"2.0","id":1,"method":"ping","params":{"_meta":{"progressToken":"tok-123"}}})"
+        "\n";
 
     auto oldCin = std::cin.rdbuf();
     auto oldCout = std::cout.rdbuf();
@@ -1330,7 +1393,8 @@ void test_mcp_server_2025_03_features() {
             responses[0]["result"]["_meta"]["progressToken"].get<std::string>(),
             "tok-123");
       }
-      // Either way (passthrough or not), server should return a valid ping response
+      // Either way (passthrough or not), server should return a valid ping
+      // response
       XX_TEST_EXPECT_TRUE(responses[0].contains("result"));
     }
   }
@@ -1346,7 +1410,9 @@ void test_mcp_server_2025_06_features() {
   // Test that serverInfo includes title (2025-06-18 feature)
   {
     std::string input;
-    input += R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","clientInfo":{"name":"test","version":"1.0","title":"Test Client"},"capabilities":{}}})" "\n";
+    input +=
+        R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","clientInfo":{"name":"test","version":"1.0","title":"Test Client"},"capabilities":{}}})"
+        "\n";
 
     auto oldCin = std::cin.rdbuf();
     auto oldCout = std::cout.rdbuf();
@@ -1368,7 +1434,8 @@ void test_mcp_server_2025_06_features() {
     XX_TEST_EXPECT_EQ(responses.size(), (size_t)1);
     if (!responses.empty()) {
       // serverInfo should have title (2025-06-18)
-      XX_TEST_EXPECT_TRUE(responses[0]["result"]["serverInfo"].contains("title"));
+      XX_TEST_EXPECT_TRUE(
+          responses[0]["result"]["serverInfo"].contains("title"));
       // capabilities should have elicitation (2025-06-18)
       XX_TEST_EXPECT_TRUE(
           responses[0]["result"]["capabilities"].contains("elicitation"));
@@ -1388,23 +1455,24 @@ void test_mcp_server_cross_version_stdio() {
   };
 
   VersionPair pairs[] = {
-    // Client requests known version → server responds with same
-    {"2024-11-05", "2024-11-05"},
-    {"2025-03-26", "2025-03-26"},
-    {"2025-06-18", "2025-06-18"},
-    {"2025-11-25", "2025-11-25"},
-    // Client requests unknown 2025 version → server responds with newest 2025
-    {"2025-01-01", "2025-11-25"},
-    // Client requests future version → server responds with newest
-    {"2026-01-01", "2025-11-25"},
-    // Client requests older version → server responds with that version
-    {"2024-06-01", "2024-11-05"},
+      // Client requests known version → server responds with same
+      {"2024-11-05", "2024-11-05"},
+      {"2025-03-26", "2025-03-26"},
+      {"2025-06-18", "2025-06-18"},
+      {"2025-11-25", "2025-11-25"},
+      // Client requests unknown 2025 version → server responds with newest 2025
+      {"2025-01-01", "2025-11-25"},
+      // Client requests future version → server responds with newest
+      {"2026-01-01", "2025-11-25"},
+      // Client requests older version → server responds with that version
+      {"2024-06-01", "2024-11-05"},
   };
 
   for (const auto &pair : pairs) {
     McpServer server;
     std::string input;
-    input += "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{";
+    input +=
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{";
     input += "\"protocolVersion\":\"" + pair.clientVer + "\"";
     input += ",\"clientInfo\":{\"name\":\"test\",\"version\":\"1.0\"}";
     input += ",\"capabilities\":{}}}";
@@ -1427,13 +1495,14 @@ void test_mcp_server_cross_version_stdio() {
       if (!line.empty())
         responses.push_back(json::parse(line));
 
-    bool ok = responses.size() == 1 &&
-              responses[0].contains("result") &&
+    bool ok = responses.size() == 1 && responses[0].contains("result") &&
               responses[0]["result"].contains("protocolVersion");
 
     if (ok) {
-      std::string got = responses[0]["result"]["protocolVersion"].get<std::string>();
-      std::string expected = pair.expectedVer.empty() ? pair.clientVer : pair.expectedVer;
+      std::string got =
+          responses[0]["result"]["protocolVersion"].get<std::string>();
+      std::string expected =
+          pair.expectedVer.empty() ? pair.clientVer : pair.expectedVer;
       if (got == expected) {
         XX_TEST_PASSED++;
       } else {
@@ -1446,34 +1515,37 @@ void test_mcp_server_cross_version_stdio() {
         XX_TEST_PASSED++;
       else {
         XX_TEST_FAILED++;
-        TEST_FAIL << "line ~" << __LINE__ << ": missing serverInfo" << std::endl;
+        TEST_FAIL << "line ~" << __LINE__ << ": missing serverInfo"
+                  << std::endl;
       }
       // Verify capabilities is always present
       if (responses[0]["result"].contains("capabilities"))
         XX_TEST_PASSED++;
       else {
         XX_TEST_FAILED++;
-        TEST_FAIL << "line ~" << __LINE__ << ": missing capabilities" << std::endl;
+        TEST_FAIL << "line ~" << __LINE__ << ": missing capabilities"
+                  << std::endl;
       }
       // instructions field should be present for all versions (forward compat)
       if (responses[0]["result"].contains("instructions"))
         XX_TEST_PASSED++;
       else {
         XX_TEST_FAILED++;
-        TEST_FAIL << "line ~" << __LINE__ << ": missing instructions" << std::endl;
+        TEST_FAIL << "line ~" << __LINE__ << ": missing instructions"
+                  << std::endl;
       }
     } else {
       XX_TEST_FAILED++;
       TEST_FAIL << "line ~" << __LINE__ << ": client=" << pair.clientVer
-                << " bad response: " << (responses.empty() ? "empty" : responses[0].dump())
+                << " bad response: "
+                << (responses.empty() ? "empty" : responses[0].dump())
                 << std::endl;
     }
   }
 }
 
 // Test cross-version via HTTP transport (all 3 × 3 = 9 combinations)
-asio::awaitable<void>
-test_mcp_server_cross_version_http() {
+asio::awaitable<void> test_mcp_server_cross_version_http() {
   using Server = McpServer;
 
   Server::Config cfg;
@@ -1494,7 +1566,8 @@ test_mcp_server_cross_version_http() {
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
   if (port == 0) {
-    TEST_FAIL << "McpServer failed to start for cross-version test" << std::endl;
+    TEST_FAIL << "McpServer failed to start for cross-version test"
+              << std::endl;
     g_mcp_failed++;
     server.stop();
     serverThread.join();
@@ -1540,8 +1613,8 @@ test_mcp_server_cross_version_http() {
         XX_TEST_PASSED++;
       } else {
         XX_TEST_FAILED++;
-        TEST_FAIL << "client=" << clientVer
-                  << " empty protocolVersion" << std::endl;
+        TEST_FAIL << "client=" << clientVer << " empty protocolVersion"
+                  << std::endl;
       }
       // All versions should work for basic operations
       auto ping = co_await client->ping();
@@ -1549,8 +1622,8 @@ test_mcp_server_cross_version_http() {
         XX_TEST_PASSED++;
       } else {
         XX_TEST_FAILED++;
-        TEST_FAIL << "client=" << clientVer
-                  << " ping failed: " << ping.error() << std::endl;
+        TEST_FAIL << "client=" << clientVer << " ping failed: " << ping.error()
+                  << std::endl;
       }
       auto tools = co_await client->listTools();
       if (tools.has_value()) {
@@ -1581,7 +1654,8 @@ void test_mcp_server_2025_03_26_stdio() {
   McpToolDefinition def;
   def.name = "greeter";
   def.description = "Greets the user";
-  def.inputSchema = json::parse(R"({"type":"object","properties":{"name":{"type":"string"}}})");
+  def.inputSchema = json::parse(
+      R"({"type":"object","properties":{"name":{"type":"string"}}})");
   server.addTool(def, [](const json &args) -> json {
     json c;
     c["type"] = "text";
@@ -1591,14 +1665,24 @@ void test_mcp_server_2025_03_26_stdio() {
 
   // Simulate a 2025-03-26 client: initialize, then standard tool operations
   std::string input;
-  input += R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test-client","version":"1.0"}}})" "\n";
+  input +=
+      R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test-client","version":"1.0"}}})"
+      "\n";
   // Notification without id (per spec) → no response
-  input += R"({"jsonrpc":"2.0","method":"notifications/initialized"})" "\n";
-  input += R"({"jsonrpc":"2.0","id":2,"method":"tools/list"})" "\n";
-  input += R"({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"greeter","arguments":{"name":"MCP"}}})" "\n";
-  input += R"({"jsonrpc":"2.0","id":4,"method":"resources/templates/list"})" "\n";
-  input += R"({"jsonrpc":"2.0","id":5,"method":"completion/complete","params":{"ref":{"type":"ref/prompt","name":"test"},"argument":{"name":"a","value":"b"}}})" "\n";
-  input += R"({"jsonrpc":"2.0","id":6,"method":"ping"})" "\n";
+  input += R"({"jsonrpc":"2.0","method":"notifications/initialized"})"
+           "\n";
+  input += R"({"jsonrpc":"2.0","id":2,"method":"tools/list"})"
+           "\n";
+  input +=
+      R"({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"greeter","arguments":{"name":"MCP"}}})"
+      "\n";
+  input += R"({"jsonrpc":"2.0","id":4,"method":"resources/templates/list"})"
+           "\n";
+  input +=
+      R"({"jsonrpc":"2.0","id":5,"method":"completion/complete","params":{"ref":{"type":"ref/prompt","name":"test"},"argument":{"name":"a","value":"b"}}})"
+      "\n";
+  input += R"({"jsonrpc":"2.0","id":6,"method":"ping"})"
+           "\n";
 
   auto oldCin = std::cin.rdbuf();
   auto oldCout = std::cout.rdbuf();
@@ -1646,7 +1730,7 @@ void test_mcp_server_2025_03_26_stdio() {
   }
 }
 
-asio::awaitable<TestResult> run_mcp_server_tests() {
+asio::awaitable<TestResult> run_mcp_tests() {
   test_mcp_version_negotiation_unit();
   test_mcp_server_unit();
   co_await test_mcp_server_integration();

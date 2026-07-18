@@ -6,6 +6,7 @@
 #include "asio/detached.hpp"
 #include "asio/io_context.hpp"
 #include "asio/use_awaitable.hpp"
+#include "test_acp.h"
 #include "test_codegraph_tools.h"
 #include "test_command_tools.h"
 #include "test_cpu_gpu_use.h"
@@ -19,8 +20,7 @@
 #include "test_framework.h"
 #include "test_http.h"
 #include "test_interrupt_bus.h"
-#include "test_mcp_server.h"
-#include "test_acp_server.h"
+#include "test_mcp.h"
 #include "test_rag_search_tools.h"
 #include "test_regex.h"
 #include "test_screen_capture.h"
@@ -177,8 +177,8 @@ int main(int argn, char **argv) {
                         agentContext);
         co_await run("cpu_gpu", agentxx::test::run_cpu_gpu_use_tests);
         co_await run("http", agentxx::test::run_http_client_tests);
-        co_await run("mcp_server", agentxx::test::run_mcp_server_tests);
-        co_await run("acp_server", agentxx::test::run_acp_server_tests);
+        co_await run("mcp", agentxx::test::run_mcp_tests);
+        co_await run("acp", agentxx::test::run_acp_tests);
         co_await run("deepagent", agentxx::test::run_deepagent_tests);
         ioCtx.stop();
       },

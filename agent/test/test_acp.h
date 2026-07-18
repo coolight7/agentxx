@@ -1,17 +1,17 @@
 #pragma once
 
-#include "agentxx/tools/tool.h"
 #include "agentxx/server/acp_server.h"
+#include "agentxx/tools/tool.h"
 #include "agentxx/util/http_client.h"
-#include <neograph/graph/engine.h>
 #include <asio/awaitable.hpp>
-#include <asio/use_awaitable.hpp>
-#include <asio/redirect_error.hpp>
 #include <asio/detached.hpp>
 #include <asio/io_context.hpp>
+#include <asio/redirect_error.hpp>
 #include <asio/steady_timer.hpp>
+#include <asio/use_awaitable.hpp>
 #include <chrono>
 #include <iostream>
+#include <neograph/graph/engine.h>
 #include <string>
 #include <thread>
 
@@ -28,7 +28,7 @@ namespace test {
 extern int g_acp_passed;
 extern int g_acp_failed;
 
-asio::awaitable<TestResult> run_acp_server_tests();
+asio::awaitable<TestResult> run_acp_tests();
 
 } // namespace test
 } // namespace agentxx

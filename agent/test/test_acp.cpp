@@ -1,4 +1,4 @@
-#include "test_acp_server.h"
+#include "test_acp.h"
 
 namespace agentxx {
 namespace test {
@@ -17,15 +17,14 @@ asio::awaitable<void> test_acp_server_integration() {
   neograph::json def = {
       {"name", "minimal-acp-agent"},
       {"channels", {{"messages", {{"reducer", "append"}}}}},
-      {"nodes",
-       neograph::json::object()},
+      {"nodes", neograph::json::object()},
       {"edges",
        neograph::json::array({{{"from", "__start__"}, {"to", "__end__"}}})},
   };
   neograph::graph::NodeContext ctx;
   auto engine = neograph::graph::GraphEngine::compile(def, ctx);
-  auto sharedEngine = std::shared_ptr<neograph::graph::GraphEngine>(
-      std::move(engine));
+  auto sharedEngine =
+      std::shared_ptr<neograph::graph::GraphEngine>(std::move(engine));
   json info{
       {"name", "test-acp-server"},
       {"version", "0.1.0"},
@@ -82,8 +81,9 @@ asio::awaitable<void> test_acp_server_integration() {
     req["jsonrpc"] = "2.0";
     req["id"] = 1;
     req["method"] = "initialize";
-    req["params"] = {{"protocolVersion", 1},
-                     {"clientInfo", {{"name", "test-client"}, {"version", "1.0"}}}};
+    req["params"] = {
+        {"protocolVersion", 1},
+        {"clientInfo", {{"name", "test-client"}, {"version", "1.0"}}}};
 
     auto resp = co_await HttpClient::postAsync(baseUrl + "/acp", req);
     XX_TEST_EXPECT_HAS_VALUE(resp);
@@ -104,8 +104,7 @@ asio::awaitable<void> test_acp_server_integration() {
     req["jsonrpc"] = "2.0";
     req["id"] = 2;
     req["method"] = "session/new";
-    req["params"] = {{"cwd", "/tmp"},
-                     {"mcpServers", json::array()}};
+    req["params"] = {{"cwd", "/tmp"}, {"mcpServers", json::array()}};
 
     auto resp = co_await HttpClient::postAsync(baseUrl + "/acp", req);
     XX_TEST_EXPECT_HAS_VALUE(resp);
@@ -143,11 +142,9 @@ asio::awaitable<void> test_acp_server_integration() {
   {
     HeaderMap headers;
     headers.set("content-type", "application/json");
-    auto resp = co_await HttpClient::postAsync(baseUrl + "/acp",
-                                               "not valid json",
-                                               "application/json",
-                                               headers,
-                                               std::chrono::seconds{5});
+    auto resp = co_await HttpClient::postAsync(
+        baseUrl + "/acp", "not valid json", "application/json", headers,
+        std::chrono::seconds{5});
     XX_TEST_EXPECT_HAS_VALUE(resp);
     if (resp.has_value()) {
       XX_TEST_EXPECT_EQ(resp.value().status, 400);
@@ -161,8 +158,10 @@ asio::awaitable<void> test_acp_server_integration() {
     if (resp.has_value()) {
       XX_TEST_EXPECT_EQ(resp.value().status, 200);
       auto ct = resp.value().findHeader("content-type");
-      XX_TEST_EXPECT_TRUE(ct.find("text/event-stream") != std::string_view::npos);
-      XX_TEST_EXPECT_TRUE(resp.value().body.find("endpoint") != std::string::npos);
+      XX_TEST_EXPECT_TRUE(ct.find("text/event-stream") !=
+                          std::string_view::npos);
+      XX_TEST_EXPECT_TRUE(resp.value().body.find("endpoint") !=
+                          std::string::npos);
     }
   }
 
@@ -230,9 +229,14 @@ void test_acp_server_stdio() {
   StdioAcpServer server(sharedEngine, info);
 
   std::string input;
-  input += R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientInfo":{"name":"test","version":"1.0"}}})" "\n";
-  input += R"({"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":"/tmp","mcpServers":[]}})" "\n";
-  input += R"({"jsonrpc":"2.0","id":99,"method":"nonexistent/method"})" "\n";
+  input +=
+      R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientInfo":{"name":"test","version":"1.0"}}})"
+      "\n";
+  input +=
+      R"({"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":"/tmp","mcpServers":[]}})"
+      "\n";
+  input += R"({"jsonrpc":"2.0","id":99,"method":"nonexistent/method"})"
+           "\n";
 
   std::istringstream in(input);
   std::ostringstream out;
@@ -286,9 +290,11 @@ void test_acp_server_stdio_errors() {
 
   std::string input;
   input += "not valid json\n";
-  input += R"({"jsonrpc":"3.0","id":1,"method":"ping"})" "\n";
+  input += R"({"jsonrpc":"3.0","id":1,"method":"ping"})"
+           "\n";
   input += "\n";
-  input += R"({"jsonrpc":"2.0","method":"notifications/cancelled"})" "\n";
+  input += R"({"jsonrpc":"2.0","method":"notifications/cancelled"})"
+           "\n";
 
   std::istringstream in(input);
   std::ostringstream out;
@@ -447,7 +453,9 @@ void test_acp_server_stdio_more() {
     StdioAcpServer server(sharedEngine, info);
 
     std::string input;
-    input += R"({"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":"test"}})" "\n";
+    input +=
+        R"({"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":"test"}})"
+        "\n";
 
     std::istringstream in(input);
     std::ostringstream out;
@@ -462,8 +470,12 @@ void test_acp_server_stdio_more() {
     StdioAcpServer server(sharedEngine, info);
 
     std::string input;
-    input += R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientInfo":{"name":"test"}}})" "\n";
-    input += R"({"jsonrpc":"2.0","id":2,"method":"initialize","params":{"protocolVersion":1,"clientInfo":{"name":"test"}}})" "\n";
+    input +=
+        R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientInfo":{"name":"test"}}})"
+        "\n";
+    input +=
+        R"({"jsonrpc":"2.0","id":2,"method":"initialize","params":{"protocolVersion":1,"clientInfo":{"name":"test"}}})"
+        "\n";
 
     std::istringstream in(input);
     std::ostringstream out;
@@ -485,7 +497,9 @@ void test_acp_server_stdio_more() {
     StdioAcpServer server(sharedEngine, info);
 
     std::string input;
-    input += R"({"jsonrpc":2,"id":1,"method":"initialize","params":{"protocolVersion":1,"clientInfo":{"name":"test"}}})" "\n";
+    input +=
+        R"({"jsonrpc":2,"id":1,"method":"initialize","params":{"protocolVersion":1,"clientInfo":{"name":"test"}}})"
+        "\n";
 
     std::istringstream in(input);
     std::ostringstream out;
@@ -527,9 +541,15 @@ void test_acp_server_version_negotiation() {
 
     std::string input;
     // ACP uses integer protocol version
-    input += R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientInfo":{"name":"test"}}})" "\n";
-    input += R"({"jsonrpc":"2.0","id":2,"method":"initialize","params":{"protocolVersion":2,"clientInfo":{"name":"test"}}})" "\n";
-    input += R"({"jsonrpc":"2.0","id":3,"method":"initialize","params":{"clientInfo":{"name":"test"}}})" "\n";
+    input +=
+        R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientInfo":{"name":"test"}}})"
+        "\n";
+    input +=
+        R"({"jsonrpc":"2.0","id":2,"method":"initialize","params":{"protocolVersion":2,"clientInfo":{"name":"test"}}})"
+        "\n";
+    input +=
+        R"({"jsonrpc":"2.0","id":3,"method":"initialize","params":{"clientInfo":{"name":"test"}}})"
+        "\n";
 
     std::istringstream in(input);
     std::ostringstream out;
@@ -550,7 +570,7 @@ void test_acp_server_version_negotiation() {
   }
 }
 
-asio::awaitable<TestResult> run_acp_server_tests() {
+asio::awaitable<TestResult> run_acp_tests() {
   co_await test_acp_server_integration();
   co_await test_acp_server_http_errors();
   test_acp_server_stdio();
