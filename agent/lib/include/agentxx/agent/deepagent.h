@@ -207,6 +207,7 @@ public:
             auto mcpTools = co_await mcpClient.get_tools_async();
             XX_LOGD("append mcp tool size: {}", mcpTools.size());
             for (auto &tool : mcpTools) {
+              // TODO: 重名检查
               tools.push_back(std::make_unique<agentxx::tools::XXToolWarp>(
                   std::move(tool), agentContext, false, true, 0));
             }
