@@ -23,7 +23,7 @@
 namespace agentxx {
 namespace server {
 
-std::shared_ptr<neograph::graph::GraphEngine> build_engine() {
+inline std::shared_ptr<neograph::graph::GraphEngine> build_engine() {
   neograph::json def = {
       {"name", "uppercase-acp-agent"},
       {
