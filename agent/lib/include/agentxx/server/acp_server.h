@@ -45,8 +45,7 @@ public:
   };
 
   HttpAcpServer(std::shared_ptr<neograph::graph::GraphEngine> engine,
-                neograph::json info,
-                Config config)
+                neograph::json info, Config config)
       : config_(std::move(config)),
         neographServer_(std::move(engine), std::move(info)) {
     httpServer_ = std::make_unique<util::HttpServer>(config_.httpConfig);
@@ -63,9 +62,7 @@ public:
   // Lifecycle
   // -----------------------------------------------------------------------
 
-  void start() {
-    httpServer_->start();
-  }
+  void start() { httpServer_->start(); }
 
   void stop() {
     neographServer_.stop();
@@ -86,46 +83,44 @@ private:
   // Notification sink → SSE + pending response resolver
   // -----------------------------------------------------------------------
 
-
-
   void setupNotificationSink() {
-    neographServer_.set_notification_sink(
-        [this](const json &envelope) {
-          bool isResponse = !envelope.contains("method") &&
-                            envelope.contains("id") && !envelope["id"].is_null();
+    neographServer_.set_notification_sink([this](const json &envelope) {
+      bool isResponse = !envelope.contains("method") &&
+                        envelope.contains("id") && !envelope["id"].is_null();
 
-          if (isResponse) {
-            json id = envelope["id"];
-            int64_t idVal = id.is_number_integer() ? id.get<int64_t>() : -1;
+      if (isResponse) {
+        json id = envelope["id"];
+        int64_t idVal = id.is_number_integer() ? id.get<int64_t>() : -1;
 
-            std::unique_lock lock(pendingMutex_);
-            auto it = pendingResponses_.find(idVal);
-              if (it != pendingResponses_.end()) {
-                it->second->set_value(envelope);
-                pendingResponses_.erase(it);
-              }
-          }
+        std::unique_lock lock(pendingMutex_);
+        auto it = pendingResponses_.find(idVal);
+        if (it != pendingResponses_.end()) {
+          it->second->set_value(envelope);
+          pendingResponses_.erase(it);
+        }
+      }
 
-          // Broadcast to SSE clients
-          std::string sseData;
-          if (isResponse) {
-            sseData = "data: " + envelope.dump() + "\n\n";
-          } else {
-            std::string method = envelope.value("method", "");
-            std::string eventType = method;
-            if (!eventType.empty()) {
-              // Replace / with _ for SSE event name
-              for (auto &c : eventType)
-                if (c == '/') c = '_';
-              sseData = "event: " + eventType + "\ndata: " +
-                        envelope.dump() + "\n\n";
-            } else {
-              sseData = "data: " + envelope.dump() + "\n\n";
-            }
-          }
+      // Broadcast to SSE clients
+      std::string sseData;
+      if (isResponse) {
+        sseData = "data: " + envelope.dump() + "\n\n";
+      } else {
+        std::string method = envelope.value("method", "");
+        std::string eventType = method;
+        if (!eventType.empty()) {
+          // Replace / with _ for SSE event name
+          for (auto &c : eventType)
+            if (c == '/')
+              c = '_';
+          sseData =
+              "event: " + eventType + "\ndata: " + envelope.dump() + "\n\n";
+        } else {
+          sseData = "data: " + envelope.dump() + "\n\n";
+        }
+      }
 
-          broadcastSSE(sseData);
-        });
+      broadcastSSE(sseData);
+    });
   }
 
   // -----------------------------------------------------------------------
@@ -135,18 +130,16 @@ private:
   void setupRoutes() {
     using Handler = util::HttpServer::Handler;
 
-    auto acpHandler = std::make_shared<Handler>(
-        Handler([this](util::HttpServer::Request &req,
-                       util::HttpServer::Response &resp,
-                       const std::string &) -> asio::awaitable<void> {
+    auto acpHandler = std::make_shared<Handler>(Handler(
+        [this](util::HttpServer::Request &req, util::HttpServer::Response &resp,
+               const std::string &) -> asio::awaitable<void> {
           co_await handleAcpRequest(req, resp);
         }));
     httpServer_->router().add(config_.acpEndpoint, 2, acpHandler);
 
-    auto sseHandler = std::make_shared<Handler>(
-        Handler([this](util::HttpServer::Request &req,
-                       util::HttpServer::Response &resp,
-                       const std::string &) -> asio::awaitable<void> {
+    auto sseHandler = std::make_shared<Handler>(Handler(
+        [this](util::HttpServer::Request &req, util::HttpServer::Response &resp,
+               const std::string &) -> asio::awaitable<void> {
           co_await handleSseRequest(req, resp);
         }));
     httpServer_->router().add(config_.sseEndpoint, 0, sseHandler);
@@ -156,9 +149,8 @@ private:
   // ACP request handler
   // -----------------------------------------------------------------------
 
-  asio::awaitable<void>
-  handleAcpRequest(util::HttpServer::Request &req,
-                   util::HttpServer::Response &resp) {
+  asio::awaitable<void> handleAcpRequest(util::HttpServer::Request &req,
+                                         util::HttpServer::Response &resp) {
     namespace http = boost::beast::http;
 
     json requestJson;
@@ -170,8 +162,7 @@ private:
       co_return;
     }
 
-    if (!requestJson.is_object() ||
-        requestJson.value("jsonrpc", "") != "2.0") {
+    if (!requestJson.is_object() || requestJson.value("jsonrpc", "") != "2.0") {
       writeJsonResponse(resp, http::status::bad_request,
                         makeInvalidRequestResponse());
       co_return;
@@ -201,7 +192,8 @@ private:
     if (id.is_null()) {
       // Notification with no response expected
       writeJsonResponse(resp, http::status::accepted,
-                        json{{"jsonrpc", "2.0"}, {"id", json{nullptr}},
+                        json{{"jsonrpc", "2.0"},
+                             {"id", json{nullptr}},
                              {"result", json::object()}});
       co_return;
     }
@@ -219,11 +211,12 @@ private:
 
     {
       std::unique_lock lock(pendingMutex_);
-      auto [pendingIt, inserted] = pendingResponses_.try_emplace(
-          idVal, std::move(promise));
+      auto [pendingIt, inserted] =
+          pendingResponses_.try_emplace(idVal, std::move(promise));
       if (!inserted) {
-        writeJsonResponse(resp, http::status::internal_server_error,
-                          makeInternalErrorResponse(id, "Duplicate request ID"));
+        writeJsonResponse(
+            resp, http::status::internal_server_error,
+            makeInternalErrorResponse(id, "Duplicate request ID"));
         co_return;
       }
     }
@@ -234,9 +227,9 @@ private:
       std::unique_lock lock(pendingMutex_);
       pendingResponses_.erase(idVal);
 
-      writeJsonResponse(resp, http::status::gateway_timeout,
-                        jsonRpcErrorResponse(
-                            id, -32000, "Async request timed out"));
+      writeJsonResponse(
+          resp, http::status::gateway_timeout,
+          jsonRpcErrorResponse(id, -32000, "Async request timed out"));
       co_return;
     }
 
@@ -254,9 +247,8 @@ private:
   // SSE
   // -----------------------------------------------------------------------
 
-  asio::awaitable<void>
-  handleSseRequest(util::HttpServer::Request &req,
-                   util::HttpServer::Response &resp) {
+  asio::awaitable<void> handleSseRequest(util::HttpServer::Request &req,
+                                         util::HttpServer::Response &resp) {
     resp.version(req.version());
     resp.result(boost::beast::http::status::ok);
     resp.set(boost::beast::http::field::content_type, "text/event-stream");
@@ -284,8 +276,7 @@ private:
   // -----------------------------------------------------------------------
 
   void writeJsonResponse(util::HttpServer::Response &resp,
-                         boost::beast::http::status status,
-                         const json &body) {
+                         boost::beast::http::status status, const json &body) {
     resp.result(status);
     resp.set(boost::beast::http::field::content_type, "application/json");
     resp.body() = body.dump();
@@ -307,14 +298,11 @@ private:
   }
 
   json makeInvalidRequestResponse() {
-    return jsonRpcErrorResponse(json{nullptr}, -32600,
-                                "Invalid Request");
+    return jsonRpcErrorResponse(json{nullptr}, -32600, "Invalid Request");
   }
 
-  json makeInternalErrorResponse(const json &id,
-                                 const std::string &detail) {
-    return jsonRpcErrorResponse(id, -32603,
-                                "Internal error: " + detail);
+  json makeInternalErrorResponse(const json &id, const std::string &detail) {
+    return jsonRpcErrorResponse(id, -32603, "Internal error: " + detail);
   }
 
   // -----------------------------------------------------------------------

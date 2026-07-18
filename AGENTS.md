@@ -46,3 +46,4 @@ path/to/agentxx_test string_util regex
     - debug_build: `agent/build/linux-debug/` 或 `agent/build/windows-debug/`
     - release_build: `agent/build/linux-release/` 或 `agent/build/windows-release/`
     - android_release_build: `agent/build/android-release/`
+    - 注意，修改文件时不建议修改 build 目录内的文件，编译时可能被覆盖

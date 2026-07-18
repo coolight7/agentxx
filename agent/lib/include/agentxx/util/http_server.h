@@ -442,13 +442,17 @@ private:
         }
       }
 
-      // Ensure content-length is set
-      if (!resp.payload_size().has_value())
-        resp.prepare_payload();
+      // Ensure Content-Length is set. Always call prepare_payload() —
+      // payload_size() returns body_.size() for string_body (0 for empty),
+      // so the conditional check would skip it and leave no Content-Length.
+      resp.prepare_payload();
 
-      // Determine keep-alive
+      // Respect the client's Connection header: if client sent "close",
+      // don't keep the connection alive.
+      bool clientClose = req.find(http::field::connection) != req.end() &&
+          boost::beast::iequals(req[http::field::connection], "close");
       keepAlive = resp.keep_alive();
-      if (keepAlive && stopped_)
+      if (keepAlive && (stopped_ || clientClose))
         keepAlive = false;
       resp.set(http::field::connection, keepAlive ? "keep-alive" : "close");
 
