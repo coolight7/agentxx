@@ -2,8 +2,8 @@
 
 #include "agentxx/agent/context.h"
 #include "agentxx/agent/stdin_reader.h"
-#include "agentxx/events.h"
 #include "agentxx/middlewares/event_stream.h"
+#include "agentxx/middlewares/events.h"
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/util/log.h"
 #include "agentxx/util/string_util.h"
@@ -12,7 +12,7 @@
 #include <string>
 
 namespace agentxx {
-namespace agent {
+namespace middleware {
 
 /// 中断 HIL 处理器 (CLI 实现)
 /// - 注册为 EventBus 上 service.interrupt 的 server
@@ -21,11 +21,11 @@ namespace agent {
 /// - 把结果包装为 RespInterrupt 回填
 class CliInterruptHandler {
 public:
-  std::weak_ptr<AgentContext> agentContext;
+  std::weak_ptr<agentxx::agent::AgentContext> agentContext;
   size_t serverId = 0;
   bool registered = false;
 
-  explicit CliInterruptHandler(std::weak_ptr<AgentContext> ctx)
+  explicit CliInterruptHandler(std::weak_ptr<agentxx::agent::AgentContext> ctx)
       : agentContext(std::move(ctx)) {}
 
   /// 注册到总线
@@ -81,8 +81,8 @@ private:
       bool haveWaitInput = false;
 
       // 异步读取 stdin
-      auto &stdinReader =
-          StdinReader::instance(co_await asio::this_coro::executor);
+      auto &stdinReader = agentxx::agent::StdinReader::instance(
+          co_await asio::this_coro::executor);
 
       for (const auto &input : handleArg.inputs) {
         bool inputSuccess = false;
@@ -215,5 +215,5 @@ private:
       interruptHandles{};
 };
 
-} // namespace agent
+} // namespace middleware
 } // namespace agentxx

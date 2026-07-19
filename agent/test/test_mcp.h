@@ -1,7 +1,5 @@
 #pragma once
 
-#include "agentxx/server/mcp_server.h"
-#include "agentxx/util/http_client.h"
 #include <asio/awaitable.hpp>
 #include <asio/detached.hpp>
 #include <asio/io_context.hpp>
@@ -19,6 +17,8 @@
 #undef XX_TEST_FAILED
 #define XX_TEST_PASSED g_mcp_passed
 #define XX_TEST_FAILED g_mcp_failed
+
+namespace asio = ::boost::asio;
 
 namespace agentxx {
 namespace test {

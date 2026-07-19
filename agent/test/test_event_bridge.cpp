@@ -42,8 +42,8 @@ asio::awaitable<void> test_eventbridge_token() {
         }
       };
 
-  auto bridgeCb = agentxx::agent::EventBridge::make("testAgent", "thread_42",
-                                                    agentContext, origCb);
+  auto bridgeCb = agentxx::middleware::EventBridge::make(
+      "testAgent", "thread_42", agentContext, origCb);
 
   // 触发 LLM_TOKEN 事件
   bridgeCb(
@@ -90,7 +90,7 @@ asio::awaitable<void> test_eventbridge_nullbus_passthrough() {
       };
 
   auto bridgeCb =
-      agentxx::agent::EventBridge::make("a", "t", agentContext, origCb);
+      agentxx::middleware::EventBridge::make("a", "t", agentContext, origCb);
   bridgeCb(
       neograph::graph::GraphEvent{neograph::graph::GraphEvent::Type::LLM_TOKEN,
                                   "llm", neograph::json(std::string{"x"})});
@@ -120,7 +120,7 @@ asio::awaitable<void> test_eventbridge_error() {
           });
 
   auto bridgeCb =
-      agentxx::agent::EventBridge::make("a", "t", agentContext, nullptr);
+      agentxx::middleware::EventBridge::make("a", "t", agentContext, nullptr);
   bridgeCb(neograph::graph::GraphEvent{neograph::graph::GraphEvent::Type::ERROR,
                                        "tool_x",
                                        neograph::json(std::string{"boom"})});

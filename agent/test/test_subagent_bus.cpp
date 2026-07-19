@@ -107,7 +107,7 @@ asio::awaitable<void> test_subagent_supervisor_notfound() {
   // 不设置 subagentManagerToolPtr (或设为空)
   // SubagentSupervisor 应返回错误而非崩溃
 
-  agentxx::agent::SubagentSupervisor supervisor{agentContext};
+  agentxx::middleware::SubagentSupervisor supervisor{agentContext};
   co_await supervisor.start();
 
   auto resp =

@@ -1,4 +1,6 @@
 #include "test_interrupt_bus.h"
+#include "agentxx/middlewares/interrupt_handler.h"
+#include "agentxx/tools/tool.h"
 
 namespace agentxx {
 namespace test {
@@ -17,7 +19,7 @@ asio::awaitable<void> test_interrupt_bus_request_response() {
   agentContext->middlewareHandleContext =
       std::make_shared<agentxx::middleware::MiddlewareContext>();
 
-  agentxx::agent::CliInterruptHandler handler{agentContext};
+  agentxx::middleware::CliInterruptHandler handler{agentContext};
   co_await handler.start();
 
   // 构造一个无 inputs 的 InterruptHandleArg (不等待 stdin, 直接返回)
@@ -81,7 +83,7 @@ asio::awaitable<void> test_permission_bus_request_response() {
   agentContext->bus = std::make_shared<agentxx::middleware::EventBus>(
       co_await asio::this_coro::executor);
 
-  agentxx::agent::CliPermissionPrompter prompter{agentContext};
+  agentxx::middleware::CliPermissionPrompter prompter{agentContext};
   co_await prompter.start();
 
   // 注意: 无 stdin 输入时 prompter 默认 deny (安全)
@@ -107,7 +109,7 @@ asio::awaitable<void> test_permission_bus_request_response() {
     XX_TEST_EXPECT_TRUE(resp.has_value());
     if (resp.has_value() && false == agentxx::agent::StdinReader::instance(
                                          co_await asio::this_coro::executor)
-                                        .available()) {
+                                         .available()) {
       // 无交互输入 -> deny
       XX_TEST_EXPECT_TRUE(resp->decision ==
                           agentxx::events::RespPermission::Decision::Deny);

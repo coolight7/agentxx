@@ -1,17 +1,17 @@
 #pragma once
 
+#include "asio/as_tuple.hpp"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/io_context.hpp"
 #include "asio/use_awaitable.hpp"
-#include "asio/as_tuple.hpp"
 
 #include "agentxx/agent/context.h"
-#include "agentxx/agent/interrupt_handler.h"
-#include "agentxx/agent/permission_prompter.h"
-#include "agentxx/events.h"
 #include "agentxx/middlewares/event_stream.h"
+#include "agentxx/middlewares/events.h"
+#include "agentxx/middlewares/interrupt_handler.h"
 #include "agentxx/middlewares/middleware.h"
+#include "agentxx/middlewares/permission.h"
 #include <iostream>
 #include <memory>
 

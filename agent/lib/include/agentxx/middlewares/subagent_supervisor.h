@@ -1,8 +1,8 @@
 #pragma once
 
 #include "agentxx/agent/context.h"
-#include "agentxx/events.h"
 #include "agentxx/middlewares/event_stream.h"
+#include "agentxx/middlewares/events.h"
 #include "agentxx/tools/sub_agent.h"
 #include "agentxx/util/log.h"
 #include "neograph/neograph.h"
@@ -11,7 +11,7 @@
 #include <string>
 
 namespace agentxx {
-namespace agent {
+namespace middleware {
 
 /// Subagent
 /// - service.subagent: 单个 subagent 委派 (ReqSubagentStart ->
@@ -22,7 +22,7 @@ namespace agent {
 /// - 把 subagent 的 GraphEvent 转成 SubagentProgress 发布到总线
 class SubagentSupervisor {
 public:
-  std::weak_ptr<AgentContext> agentContext;
+  std::weak_ptr<agentxx::agent::AgentContext> agentContext;
   size_t serverId = 0;
   size_t batchServerId = 0;
   size_t crossAgentServerId = 0;
@@ -36,7 +36,7 @@ public:
   ///       此名单仅用于校验目标 agent 是否运行中
   std::map<std::string, bool> runningRegistry_;
 
-  explicit SubagentSupervisor(std::weak_ptr<AgentContext> ctx)
+  explicit SubagentSupervisor(std::weak_ptr<agentxx::agent::AgentContext> ctx)
       : agentContext(std::move(ctx)) {}
 
   asio::awaitable<void> start() {
@@ -297,5 +297,5 @@ private:
   }
 };
 
-} // namespace agent
+} // namespace middleware
 } // namespace agentxx

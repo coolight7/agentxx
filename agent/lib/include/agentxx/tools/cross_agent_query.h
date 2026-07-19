@@ -1,8 +1,8 @@
 #pragma once
 
 #include "agentxx/agent/context.h"
-#include "agentxx/events.h"
 #include "agentxx/middlewares/event_stream.h"
+#include "agentxx/middlewares/events.h"
 #include "agentxx/tools/tool.h"
 #include "agentxx/util/log.h"
 #include "neograph/neograph.h"
@@ -17,7 +17,8 @@ namespace tools {
 /// - 实现 agent 间 actor 式通信
 class CrossAgentQueryTool : public XXToolBase {
 public:
-  CrossAgentQueryTool(std::weak_ptr<agentxx::agent::AgentContext> in_agentContext)
+  CrossAgentQueryTool(
+      std::weak_ptr<agentxx::agent::AgentContext> in_agentContext)
       : XXToolBase("cross_agent_query", in_agentContext, true, false, 0) {}
 
   std::string get_name() const override { return "cross_agent_query"; }
@@ -75,21 +76,19 @@ public:
     }
 
     auto thread_id = arguments.value("thread_id", std::string{});
-    auto selfName = ctxPtr->agentConfig
-                        ? ctxPtr->agentConfig->agentName
-                        : std::string{"unknown"};
+    auto selfName = ctxPtr->agentConfig ? ctxPtr->agentConfig->agentName
+                                        : std::string{"unknown"};
 
-    auto resp =
-        co_await ctxPtr->bus->request<agentxx::events::ReqCrossAgent,
-                                      agentxx::events::RespCrossAgent>(
-            agentxx::events::Topic::CrossAgent,
-            agentxx::events::ReqCrossAgent{
-                .fromAgent = selfName,
-                .fromThreadId = thread_id,
-                .toAgent = toAgent,
-                .message = message,
-            },
-            std::chrono::seconds(60));
+    auto resp = co_await ctxPtr->bus->request<agentxx::events::ReqCrossAgent,
+                                              agentxx::events::RespCrossAgent>(
+        agentxx::events::Topic::CrossAgent,
+        agentxx::events::ReqCrossAgent{
+            .fromAgent = selfName,
+            .fromThreadId = thread_id,
+            .toAgent = toAgent,
+            .message = message,
+        },
+        std::chrono::seconds(60));
 
     if (!resp.has_value()) {
       co_return fmt::format(

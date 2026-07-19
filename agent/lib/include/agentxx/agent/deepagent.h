@@ -2,15 +2,13 @@
 
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/context.h"
-#include "agentxx/agent/event_bridge.h"
-#include "agentxx/agent/interrupt_handler.h"
-#include "agentxx/agent/permission_prompter.h"
-#include "agentxx/agent/subagent_supervisor.h"
-#include "agentxx/events.h"
 #include "agentxx/middlewares/event_stream.h"
+#include "agentxx/middlewares/events.h"
+#include "agentxx/middlewares/interrupt_handler.h"
 #include "agentxx/middlewares/permission.h"
 #include "agentxx/middlewares/planning.h"
 #include "agentxx/middlewares/skill.h"
+#include "agentxx/middlewares/subagent_supervisor.h"
 #include "agentxx/middlewares/summarization.h"
 #include "agentxx/nodes/agentcall.h"
 #include "agentxx/nodes/modelcall.h"
@@ -789,9 +787,10 @@ public:
 
     // 注册 CLI 的中断/权限/subagent HIL 处理到总线
     // - GUI/ACP 前端应注册各自的 handler 替换此处
-    CliInterruptHandler cliInterruptHandler{agentContext};
-    CliPermissionPrompter cliPermissionPrompter{agentContext};
-    SubagentSupervisor subagentSupervisor{agentContext};
+    agentxx::middleware::CliInterruptHandler cliInterruptHandler{agentContext};
+    agentxx::middleware::CliPermissionPrompter cliPermissionPrompter{
+        agentContext};
+    agentxx::middleware::SubagentSupervisor subagentSupervisor{agentContext};
     co_await cliInterruptHandler.start();
     co_await cliPermissionPrompter.start();
     co_await subagentSupervisor.start();
@@ -805,8 +804,9 @@ public:
 
         auto turnResult = co_await runConversationTurnAsync(
             thread_id, line, isFirstMsg, std::move(messages),
-            EventBridge::make(agentContext->agentConfig->agentName, thread_id,
-                              agentContext, cliEventCallback),
+            agentxx::middleware::EventBridge::make(
+                agentContext->agentConfig->agentName, thread_id, agentContext,
+                cliEventCallback),
             cliInterruptCallback);
         messages = std::move(turnResult.messages);
         isFirstMsg = false;

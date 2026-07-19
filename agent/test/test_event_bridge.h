@@ -2,9 +2,8 @@
 
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/context.h"
-#include "agentxx/agent/event_bridge.h"
-#include "agentxx/events.h"
 #include "agentxx/middlewares/event_stream.h"
+#include "agentxx/middlewares/events.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/io_context.hpp"

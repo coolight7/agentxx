@@ -1,5 +1,8 @@
 #include "test_mcp.h"
 #include "agentxx/server/mcp_client.h"
+#include "agentxx/server/mcp_server.h"
+#include "agentxx/tools/tool.h"
+#include "agentxx/util/http_client.h"
 
 namespace agentxx {
 namespace test {
