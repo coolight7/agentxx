@@ -301,14 +301,19 @@ public:
 
       if (skillState->cacheFormatSkillPrompt.empty()) {
         // 生成 skill 系统提示词
-        const auto &templateKey = agentCtxPtr->agentConfig->prompt
-                                      .systemSkillPromptSkillMetasInsertKey;
-        const auto &promptTemplate =
-            agentCtxPtr->agentConfig->prompt.systemSkillPrompt;
-        skillState->cacheFormatSkillPrompt = promptTemplate;
-        skillState->cacheFormatSkillPrompt.replace(
-            promptTemplate.find(templateKey), templateKey.size(),
-            formatSkillsMetadataList());
+        skillState->cacheFormatSkillPrompt = fmt::format(
+            R"_(## Skills System
+
+You have access to a skills library that provides specialized capabilities and domain knowledge.
+
+**Available Skills:**
+
+{}
+
+{}
+)_",
+            formatSkillsMetadataList(),
+            agentCtxPtr->agentConfig->prompt.systemSkillPrompt);
       }
 
       auto &appendSystemMsgList =
