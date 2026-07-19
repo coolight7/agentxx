@@ -46,11 +46,11 @@ class McpClientTool;
 
 class McpClient : public std::enable_shared_from_this<McpClient> {
 public:
-  static constexpr std::string_view kProtocol2024_11_05 = "2024-11-05";
-  static constexpr std::string_view kProtocol2025_03_26 = "2025-03-26";
-  static constexpr std::string_view kProtocol2025_06_18 = "2025-06-18";
-  static constexpr std::string_view kProtocol2025_11_25 = "2025-11-25";
-  static constexpr std::string_view kSupportedProtocols[] = {
+  inline static constexpr std::string_view kProtocol2024_11_05 = "2024-11-05";
+  inline static constexpr std::string_view kProtocol2025_03_26 = "2025-03-26";
+  inline static constexpr std::string_view kProtocol2025_06_18 = "2025-06-18";
+  inline static constexpr std::string_view kProtocol2025_11_25 = "2025-11-25";
+  inline static constexpr std::string_view kSupportedProtocols[] = {
       kProtocol2025_11_25,
       kProtocol2025_06_18,
       kProtocol2025_03_26,
@@ -90,8 +90,7 @@ public:
   // Lifecycle
   // -----------------------------------------------------------------------
 
-  asio::awaitable<std::expected<InitializeResult, std::string>>
-  initialize() {
+  asio::awaitable<std::expected<InitializeResult, std::string>> initialize() {
     if (initialized_.load()) {
       co_return std::unexpected{std::string{"already initialized"}};
     }
@@ -136,8 +135,7 @@ public:
     }
 
     // Negotiate protocol version — be lenient with the server
-    auto negotiated =
-        negotiateProtocolVersion(config_.protocolVersion, r);
+    auto negotiated = negotiateProtocolVersion(config_.protocolVersion, r);
     info.protocolVersion = std::move(negotiated);
 
     // Send initialized notification (fire-and-forget)
@@ -325,8 +323,7 @@ public:
   }
 
   asio::awaitable<std::expected<McpPromptResult, std::string>>
-  getPrompt(const std::string &name,
-            const json &arguments = json::object()) {
+  getPrompt(const std::string &name, const json &arguments = json::object()) {
     json params;
     params["name"] = name;
     params["arguments"] = arguments;
@@ -386,8 +383,8 @@ private:
     std::promise<json> promise;
   };
 
-  static json makeRequest(int64_t id, const std::string &method,
-                          const json &params) {
+  inline static json makeRequest(int64_t id, const std::string &method,
+                                 const json &params) {
     json req;
     req["jsonrpc"] = "2.0";
     req["id"] = id;
@@ -396,7 +393,7 @@ private:
     return req;
   }
 
-  static std::optional<std::string>
+  inline static std::optional<std::string>
   getErrorFromResponse(const json &response) {
     if (response.contains("error") && response["error"].is_object()) {
       json err = response["error"];
@@ -409,11 +406,10 @@ private:
     return std::nullopt;
   }
 
-  static std::string
+  inline static std::string
   negotiateProtocolVersion(const std::string &requested,
                            const json &serverResult) {
-    auto serverVersion =
-        serverResult.value("protocolVersion", std::string{});
+    auto serverVersion = serverResult.value("protocolVersion", std::string{});
     if (serverVersion.empty())
       return std::string(kProtocol2024_11_05);
 
@@ -472,15 +468,14 @@ private:
     }
     auto &httpResp = resp.value();
     if (httpResp.status / 100 != 2) {
-      co_return std::unexpected{
-          "HTTP " + std::to_string(httpResp.status) + ": " +
-          httpResp.body.substr(0, 256)};
+      co_return std::unexpected{"HTTP " + std::to_string(httpResp.status) +
+                                ": " + httpResp.body.substr(0, 256)};
     }
 
     auto bodyJson = httpResp.bodyJson();
     if (!bodyJson.has_value()) {
-      co_return std::unexpected{
-          "invalid JSON response: " + httpResp.body.substr(0, 256)};
+      co_return std::unexpected{"invalid JSON response: " +
+                                httpResp.body.substr(0, 256)};
     }
 
     json j = bodyJson.value();
@@ -567,8 +562,8 @@ private:
     co_return response;
   }
 
-  asio::awaitable<void>
-  sendRawNotification(const std::string &method, const json &params) {
+  asio::awaitable<void> sendRawNotification(const std::string &method,
+                                            const json &params) {
     json req;
     req["jsonrpc"] = "2.0";
     req["method"] = method;
@@ -577,8 +572,7 @@ private:
 
     if (config_.isHttp()) {
       [[maybe_unused]] auto resp = co_await util::HttpClient::postAsync(
-          config_.serverUrl, req, config_.extraHeaders,
-          config_.requestTimeout);
+          config_.serverUrl, req, config_.extraHeaders, config_.requestTimeout);
     } else if (config_.isStdio()) {
       auto reqStr = req.dump() + "\n";
       std::lock_guard lock(stdioWriteMutex_);
@@ -830,8 +824,7 @@ private:
 
     while (stdioRunning_) {
       DWORD read = 0;
-      if (!ReadFile(stdioStdoutHandle_, buf, sizeof(buf) - 1, &read,
-                    nullptr)) {
+      if (!ReadFile(stdioStdoutHandle_, buf, sizeof(buf) - 1, &read, nullptr)) {
         break;
       }
       if (read == 0)
@@ -958,15 +951,14 @@ public:
           // Reference only — actual data is handled externally
           if (!combined.empty())
             combined += "\n";
-          combined += "[content type: " + type + ", mimeType: " +
-                      c.value("mimeType", "") + "]";
+          combined += "[content type: " + type +
+                      ", mimeType: " + c.value("mimeType", "") + "]";
         } else if (type == "resource") {
           if (!combined.empty())
             combined += "\n";
-          combined += "[embedded resource: " +
-                      c.value("resource", json::object())
-                          .value("uri", "unknown") +
-                      "]";
+          combined +=
+              "[embedded resource: " +
+              c.value("resource", json::object()).value("uri", "unknown") + "]";
         } else if (type == "resource_link") {
           if (!combined.empty())
             combined += "\n";

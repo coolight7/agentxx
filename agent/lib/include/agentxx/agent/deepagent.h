@@ -13,6 +13,7 @@
 #include "agentxx/nodes/agentcall.h"
 #include "agentxx/nodes/modelcall.h"
 #include "agentxx/nodes/toolcall.h"
+#include "agentxx/server/mcp_client.h"
 #include "agentxx/tools/cross_agent_query.h"
 #include "agentxx/tools/execute_command.h"
 #include "agentxx/tools/filesystem.h"
@@ -200,16 +201,39 @@ public:
       /// MCP tool
       for (const auto &url : config->mcpServerUrls) {
         try {
-          auto mcpClient = neograph::mcp::MCPClient{url};
-          if (co_await mcpClient.initialize_async(config->agentName)) {
-            auto mcpTools = co_await mcpClient.get_tools_async();
-            XX_LOGD("append mcp tool size: {}", mcpTools.size());
-            for (auto &tool : mcpTools) {
-              // TODO: 重名检查
-              tools.push_back(std::make_unique<agentxx::tools::XXToolWarp>(
-                  std::move(tool), agentContext, false, true, 0));
+          XX_LOGD("load mcp tool: {}", url);
+          auto mcpClient = std::make_shared<agentxx::server::McpClient>(
+              agentxx::server::McpClient::Config{
+                  .serverUrl = url,
+                  .protocolVersion =
+                      std::string{
+                          agentxx::server::McpClient::kProtocol2025_11_25},
+              });
+          auto result = co_await mcpClient->initialize();
+          if (result.has_value()) {
+            auto mcpTools = co_await mcpClient->listTools();
+            if (mcpTools.has_value()) {
+              for (auto &tool : mcpTools.value()) {
+                // TODO: 重名检查
+                tools.push_back(
+                    mcpClient->createTool(std::move(tool), agentContext));
+              }
+            } else {
+              XX_LOGE("list mcp tool error: {} | {}", url, mcpTools.error());
             }
+          } else {
+            XX_LOGE("load mcp tool error: {} | {}", url, result.error());
           }
+          // auto mcpClient = neograph::mcp::MCPClient{url};
+          // if (co_await mcpClient.initialize_async(config->agentName)) {
+          //   auto mcpTools = co_await mcpClient.get_tools_async();
+          //   XX_LOGD("append mcp tool size: {}", mcpTools.size());
+          //   for (auto &tool : mcpTools) {
+          //     // TODO: 重名检查
+          //     tools.push_back(std::make_unique<agentxx::tools::XXToolWarp>(
+          //         std::move(tool), agentContext, false, true, 0));
+          //   }
+          // }
         } catch (const std::exception &e) {
           std::string errmsg = e.what();
           agentxx::util::autoConvertToUtf8(errmsg);
@@ -274,6 +298,7 @@ public:
             std::make_shared<agentxx::tools::RAGSearchTool::VectorStore>(
                 client);
         auto docs = co_await docsStore->scanDocument(config->ragDocsPaths);
+        auto docxSize = docs.size();
         auto isAddSuccess = co_await docsStore->addDocuments(std::move(docs));
         XX_LOGD(R"_(
 ┏━━━━━━ RAG Embedding ━━━━━━┓
@@ -281,7 +306,7 @@ public:
 ┗━━━━━━ RAG Embedding ━━━━━━┛
 )_",
                 isAddSuccess
-                    ? fmt::format("┣━ ✅ success: append {} docs", docs.size())
+                    ? fmt::format("┣━ ✅ success: append {} docs", docxSize)
                     : "┣━ ❌ failed");
         tools.push_back(std::make_unique<agentxx::tools::RAGSearchTool>(
             docsStore, agentContext));
