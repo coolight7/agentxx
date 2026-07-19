@@ -66,18 +66,7 @@ Writing roadmap and todos takes time and tokens, use it when it is helpful for m
 When you finish all work, write your final answer in the message AFTER your last `planning_write` call — not in the same turn as that call. Start the final message with the substantive content the user asked for — the data, computation, summary, or analysis. The user wants the result, not confirmation that the work is done.
 )_";
 
-  inline static constexpr std::string_view systemSkillPromptSkillMetasInsertKey{
-      "{Skill-Meta-Lists-Insert-Key}"};
-
   std::string systemSkillPrompt = R"_(
-## Skills System
-
-You have access to a skills library that provides specialized capabilities and domain knowledge.
-
-**Available Skills:**
-
-{Skill-Meta-Lists-Insert-Key}
-
 **How to Use Skills (Progressive Disclosure):**
 
 Skills follow a **progressive disclosure** pattern - you see their name and description above, but only read full instructions when needed:

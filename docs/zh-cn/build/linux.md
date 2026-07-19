@@ -69,3 +69,6 @@ cd {项目根目录}/agent
 
 ## 常见错误
 - [FAQ 更多问题](FAQ.md)
+
+### linux 上运行 网络相关的会卡很久?
+- 可能是 asio 版本问题，在某些 Boost 版本(如 1.91)的asio可能在启用 io_uring 后有 bug，可以更换其他 Boost 版本。
