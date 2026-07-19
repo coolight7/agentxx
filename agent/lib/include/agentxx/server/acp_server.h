@@ -60,15 +60,15 @@ public:
 
   ~AcpProtocolHandler() { stop(); }
 
-  bool initialized() const { return initialized_.load(std::memory_order_acquire); }
+  bool initialized() const {
+    return initialized_.load(std::memory_order_acquire);
+  }
 
   const json &agentInfo() const { return agentInfo_; }
 
   /// Set the notification sink used to deliver async responses and
   /// streaming updates. Must be set before processing messages.
-  void setNotificationSink(NotificationSink sink) {
-    sink_ = std::move(sink);
-  }
+  void setNotificationSink(NotificationSink sink) { sink_ = std::move(sink); }
 
   /// Stop all in-flight prompts, cancel pending requests.
   /// Check whether stop has been requested.
@@ -98,8 +98,7 @@ public:
     if (!hasMethod) {
       if (env.contains("id")) {
         auto idV = env["id"];
-        int64_t id =
-            idV.is_number_integer() ? idV.get<int64_t>() : -1;
+        int64_t id = idV.is_number_integer() ? idV.get<int64_t>() : -1;
         std::shared_ptr<std::promise<json>> p;
         {
           std::lock_guard lk(pendingMu_);
@@ -116,8 +115,7 @@ public:
     }
 
     auto method = env.value("method", std::string());
-    auto params =
-        env.contains("params") ? env["params"] : json::object();
+    auto params = env.contains("params") ? env["params"] : json::object();
     auto id = env.contains("id") ? env["id"] : json();
     bool isNotification = !env.contains("id");
 
@@ -150,8 +148,8 @@ public:
   /// Emit an outbound request (agent→client) and wait for the response.
   /// The notification sink must be set before calling this.
   json callClient(const std::string &method, json params,
-                  std::chrono::milliseconds timeout =
-                      std::chrono::seconds{30}) {
+                  std::chrono::milliseconds timeout = std::chrono::seconds{
+                      30}) {
     if (!sink_) {
       throw std::runtime_error(
           "AcpProtocolHandler::callClient: no notification sink set");
@@ -182,8 +180,8 @@ public:
     }
     auto resp = fut.get();
     if (resp.contains("error")) {
-      throw std::runtime_error(
-          "AcpProtocolHandler::callClient: error: " + resp["error"].dump());
+      throw std::runtime_error("AcpProtocolHandler::callClient: error: " +
+                               resp["error"].dump());
     }
     return resp.contains("result") ? resp["result"] : json::object();
   }
@@ -218,7 +216,6 @@ public:
     });
   }
 
-private:
   // -----------------------------------------------------------------------
   // JSON-RPC helpers
   // -----------------------------------------------------------------------
@@ -231,8 +228,7 @@ private:
     return j;
   }
 
-  static json jsonRpcError(const json &id, int code,
-                           const std::string &msg) {
+  static json jsonRpcError(const json &id, int code, const std::string &msg) {
     json j;
     j["jsonrpc"] = "2.0";
     j["id"] = id;
@@ -264,13 +260,12 @@ private:
 
   static std::string generateSessionId() {
     static std::atomic<uint64_t> counter{0};
-    static uint64_t seed = std::chrono::steady_clock::now()
-                               .time_since_epoch()
-                               .count();
+    static uint64_t seed =
+        std::chrono::steady_clock::now().time_since_epoch().count();
     auto c = counter.fetch_add(1, std::memory_order_relaxed);
     std::ostringstream oss;
-    oss << "sess-" << std::hex << (seed & 0xFFFFFFFF) << "-"
-        << std::setw(12) << std::setfill('0') << c;
+    oss << "sess-" << std::hex << (seed & 0xFFFFFFFF) << "-" << std::setw(12)
+        << std::setfill('0') << c;
     return oss.str();
   }
 
@@ -291,8 +286,7 @@ private:
     };
 
     auto result = json{
-        {"protocolVersion",
-         params.value("protocolVersion", 1)},
+        {"protocolVersion", params.value("protocolVersion", 1)},
         {"agentCapabilities", std::move(caps)},
         {"authMethods", json::array()},
         {"agentInfo", agentInfo_},
@@ -308,8 +302,7 @@ private:
       std::lock_guard lk(sessionsMu_);
       sessions_[sessionId] = cwd;
       // Pre-create cancel flag for this session
-      cancelFlags_[sessionId] =
-          std::make_shared<std::atomic<bool>>(false);
+      cancelFlags_[sessionId] = std::make_shared<std::atomic<bool>>(false);
     }
 
     XX_LOGI("[acp] session/new: {} (cwd={})", sessionId, cwd);
@@ -327,11 +320,11 @@ private:
     // Backpressure check
     if (inflightCount_.load(std::memory_order_acquire) >=
         config_.maxInflightPrompts) {
-      auto err = jsonRpcError(
-          id, -32000,
-          "ACP server overloaded: " +
-              std::to_string(config_.maxInflightPrompts) +
-              " concurrent prompts in flight; retry shortly");
+      auto err =
+          jsonRpcError(id, -32000,
+                       "ACP server overloaded: " +
+                           std::to_string(config_.maxInflightPrompts) +
+                           " concurrent prompts in flight; retry shortly");
       emit(err);
       return;
     }
@@ -346,8 +339,7 @@ private:
       auto it = cancelFlags_.find(sessionId);
       if (it == cancelFlags_.end()) {
         it = cancelFlags_
-                 .emplace(sessionId,
-                          std::make_shared<std::atomic<bool>>(false))
+                 .emplace(sessionId, std::make_shared<std::atomic<bool>>(false))
                  .first;
       }
       cancelFlag = it->second;
@@ -357,11 +349,10 @@ private:
     {
       std::lock_guard lk(inflightMu_);
       if (!inflightSessions_.insert(sessionId).second) {
-        auto err = jsonRpcError(
-            id, -32000,
-            "session_id " + sessionId +
-                " already has a prompt in flight; "
-                "ACP requires single-flight per session");
+        auto err = jsonRpcError(id, -32000,
+                                "session_id " + sessionId +
+                                    " already has a prompt in flight; "
+                                    "ACP requires single-flight per session");
         emit(err);
         return;
       }
@@ -379,8 +370,8 @@ private:
     worker.detach();
   }
 
-  void workerRunPrompt(const std::string &sessionId,
-                       const json &promptBlocks, const json &id,
+  void workerRunPrompt(const std::string &sessionId, const json &promptBlocks,
+                       const json &id,
                        std::shared_ptr<std::atomic<bool>> cancelFlag) {
     try {
       auto userText = extractUserText(promptBlocks);
@@ -402,8 +393,7 @@ private:
       cfg.thread_id = sessionId;
       cfg.input = std::move(state);
       cfg.stream_mode = neograph::graph::StreamMode::ALL;
-      cfg.cancel_token =
-          std::make_shared<neograph::graph::CancelToken>();
+      cfg.cancel_token = std::make_shared<neograph::graph::CancelToken>();
 
       // Run the engine synchronously on this worker thread
       auto result = engine->run(cfg);
@@ -417,19 +407,18 @@ private:
 
       // Extract agent text
       std::string agentText;
-      if (result.has_value()) {
-        auto channels = result->channel_raw("messages");
-        if (channels.is_array() && !channels.empty()) {
-          auto last = channels[channels.size() - 1];
-          if (last.contains("content"))
-            agentText = last["content"].get<std::string>();
-        }
-        // Fallback: try response channel
-        if (agentText.empty()) {
-          auto resp = result->channel_raw("response");
-          if (resp.is_string())
-            agentText = resp.get<std::string>();
-        }
+
+      auto channels = result.channel_raw("messages");
+      if (channels.is_array() && !channels.empty()) {
+        auto last = channels[channels.size() - 1];
+        if (last.contains("content"))
+          agentText = last["content"].get<std::string>();
+      }
+      // Fallback: try response channel
+      if (agentText.empty()) {
+        auto resp = result.channel_raw("response");
+        if (resp.is_string())
+          agentText = resp.get<std::string>();
       }
 
       if (!agentText.empty()) {
@@ -445,8 +434,8 @@ private:
       emit(jsonRpcResult(id, {{"stopReason", "end_turn"}}));
     } catch (const std::exception &e) {
       XX_LOGE("[acp] worker error: {}", e.what());
-      emitAgentMessageChunk(
-          sessionId, "(graph error: " + std::string(e.what()) + ")");
+      emitAgentMessageChunk(sessionId,
+                            "(graph error: " + std::string(e.what()) + ")");
       emit(jsonRpcResult(id, {{"stopReason", "end_turn"}}));
     }
 
@@ -476,8 +465,7 @@ private:
       it->second->store(true, std::memory_order_release);
       XX_LOGI("[acp] session/cancel: {}", sessionId);
     } else {
-      cancelFlags_[sessionId] =
-          std::make_shared<std::atomic<bool>>(true);
+      cancelFlags_[sessionId] = std::make_shared<std::atomic<bool>>(true);
     }
   }
 
@@ -503,12 +491,12 @@ private:
     json chunk;
     chunk["session_id"] = sessionId;
     chunk["update"]["session_update"] = "agent_message_chunk";
-    chunk["update"]["content"] =
-        json{{"type", "text"}, {"text", text}};
+    chunk["update"]["content"] = json{{"type", "text"}, {"text", text}};
     chunk["update"]["raw"] = chunk["update"];
     emitNotification("session/update", chunk);
   }
 
+private:
   // -----------------------------------------------------------------------
   // Members
   // -----------------------------------------------------------------------
@@ -560,8 +548,7 @@ public:
 
   HttpAcpServer(std::shared_ptr<agentxx::agent::DeepAgent> agent,
                 json agentInfo, Config config)
-      : config_(std::move(config)),
-        deepAgent_(std::move(agent)),
+      : config_(std::move(config)), deepAgent_(std::move(agent)),
         handler_(deepAgent_, std::move(agentInfo),
                  {.serverName = config_.serverName,
                   .serverVersion = config_.serverVersion}) {
@@ -596,11 +583,10 @@ private:
   void setupHandlerSink() {
     handler_.setNotificationSink([this](const json &envelope) {
       // Fulfill pending outbound promises
-      if (!envelope.contains("method") &&
-          envelope.contains("id") && !envelope["id"].is_null()) {
+      if (!envelope.contains("method") && envelope.contains("id") &&
+          !envelope["id"].is_null()) {
         json id = envelope["id"];
-        int64_t idVal =
-            id.is_number_integer() ? id.get<int64_t>() : -1;
+        int64_t idVal = id.is_number_integer() ? id.get<int64_t>() : -1;
 
         std::unique_lock lock(pendingMutex_);
         auto it = pendingResponses_.find(idVal);
@@ -613,8 +599,7 @@ private:
       // Broadcast to SSE clients (if any)
       std::string sseData;
       bool isResponse = !envelope.contains("method") &&
-                        envelope.contains("id") &&
-                        !envelope["id"].is_null();
+                        envelope.contains("id") && !envelope["id"].is_null();
       if (isResponse) {
         sseData = "data: " + envelope.dump() + "\n\n";
       } else {
@@ -624,8 +609,8 @@ private:
           for (auto &c : eventType)
             if (c == '/')
               c = '_';
-          sseData = "event: " + eventType +
-                    "\ndata: " + envelope.dump() + "\n\n";
+          sseData =
+              "event: " + eventType + "\ndata: " + envelope.dump() + "\n\n";
         } else {
           sseData = "data: " + envelope.dump() + "\n\n";
         }
@@ -643,16 +628,14 @@ private:
     using Handler = util::HttpServer::Handler;
 
     auto acpHandler = std::make_shared<Handler>(Handler(
-        [this](util::HttpServer::Request &req,
-               util::HttpServer::Response &resp,
+        [this](util::HttpServer::Request &req, util::HttpServer::Response &resp,
                const std::string &) -> asio::awaitable<void> {
           co_await handleAcpRequest(req, resp);
         }));
     httpServer_->router().add(config_.acpEndpoint, 2, acpHandler);
 
     auto sseHandler = std::make_shared<Handler>(Handler(
-        [this](util::HttpServer::Request &req,
-               util::HttpServer::Response &resp,
+        [this](util::HttpServer::Request &req, util::HttpServer::Response &resp,
                const std::string &) -> asio::awaitable<void> {
           co_await handleSseRequest(req, resp);
         }));
@@ -663,9 +646,8 @@ private:
   // ACP request handler (HTTP JSON-RPC)
   // -----------------------------------------------------------------------
 
-  asio::awaitable<void>
-  handleAcpRequest(util::HttpServer::Request &req,
-                   util::HttpServer::Response &resp) {
+  asio::awaitable<void> handleAcpRequest(util::HttpServer::Request &req,
+                                         util::HttpServer::Response &resp) {
     namespace http = boost::beast::http;
 
     json requestJson;
@@ -677,8 +659,7 @@ private:
       co_return;
     }
 
-    if (!requestJson.is_object() ||
-        requestJson.value("jsonrpc", "") != "2.0") {
+    if (!requestJson.is_object() || requestJson.value("jsonrpc", "") != "2.0") {
       writeJsonResponse(resp, http::status::bad_request,
                         AcpProtocolHandler::makeInvalidRequest());
       co_return;
@@ -691,10 +672,9 @@ private:
       response = handler_.handleMessage(requestJson);
     } catch (const std::exception &e) {
       XX_LOGE("[acp] handleMessage error: {}", e.what());
-      writeJsonResponse(resp, http::status::internal_server_error,
-                        jsonRpcError(id, -32603,
-                                     "Internal error: " +
-                                         std::string(e.what())));
+      writeJsonResponse(
+          resp, http::status::internal_server_error,
+          jsonRpcError(id, -32603, "Internal error: " + std::string(e.what())));
       co_return;
     }
 
@@ -725,12 +705,10 @@ private:
 
     {
       std::unique_lock lock(pendingMutex_);
-      auto [it, inserted] =
-          pendingResponses_.try_emplace(idVal, promise);
+      auto [it, inserted] = pendingResponses_.try_emplace(idVal, promise);
       if (!inserted) {
         writeJsonResponse(resp, http::status::internal_server_error,
-                          jsonRpcError(id, -32603,
-                                       "Duplicate request ID"));
+                          jsonRpcError(id, -32603, "Duplicate request ID"));
         co_return;
       }
     }
@@ -741,8 +719,7 @@ private:
       std::unique_lock lock(pendingMutex_);
       pendingResponses_.erase(idVal);
       writeJsonResponse(resp, http::status::gateway_timeout,
-                        jsonRpcError(id, -32000,
-                                     "Async request timed out"));
+                        jsonRpcError(id, -32000, "Async request timed out"));
       co_return;
     }
 
@@ -759,19 +736,16 @@ private:
   // SSE endpoint
   // -----------------------------------------------------------------------
 
-  asio::awaitable<void>
-  handleSseRequest(util::HttpServer::Request &req,
-                   util::HttpServer::Response &resp) {
+  asio::awaitable<void> handleSseRequest(util::HttpServer::Request &req,
+                                         util::HttpServer::Response &resp) {
     resp.version(req.version());
     resp.result(boost::beast::http::status::ok);
-    resp.set(boost::beast::http::field::content_type,
-             "text/event-stream");
+    resp.set(boost::beast::http::field::content_type, "text/event-stream");
     resp.set(boost::beast::http::field::cache_control, "no-cache");
     resp.set(boost::beast::http::field::connection, "keep-alive");
     resp.set("X-Accel-Buffering", "no");
 
-    resp.body() =
-        "event: endpoint\ndata: " + config_.acpEndpoint + "\n\n";
+    resp.body() = "event: endpoint\ndata: " + config_.acpEndpoint + "\n\n";
     resp.prepare_payload();
     co_return;
   }
@@ -791,11 +765,9 @@ private:
   // -----------------------------------------------------------------------
 
   void writeJsonResponse(util::HttpServer::Response &resp,
-                         boost::beast::http::status status,
-                         const json &body) {
+                         boost::beast::http::status status, const json &body) {
     resp.result(status);
-    resp.set(boost::beast::http::field::content_type,
-             "application/json");
+    resp.set(boost::beast::http::field::content_type, "application/json");
     resp.body() = body.dump();
     resp.prepare_payload();
   }
@@ -820,8 +792,7 @@ private:
 
   // Pending async response tracking (for HTTP transport)
   std::mutex pendingMutex_;
-  std::map<int64_t, std::shared_ptr<std::promise<json>>>
-      pendingResponses_;
+  std::map<int64_t, std::shared_ptr<std::promise<json>>> pendingResponses_;
 };
 
 // ===========================================================================
@@ -836,9 +807,9 @@ public:
   StdioAcpServer(std::shared_ptr<agentxx::agent::DeepAgent> agent,
                  json agentInfo)
       : deepAgent_(std::move(agent)),
-        handler_(deepAgent_, std::move(agentInfo),
-                 {.serverName = "agentxx-acp-stdio",
-                  .serverVersion = "0.1.0"}) {}
+        handler_(
+            deepAgent_, std::move(agentInfo),
+            {.serverName = "agentxx-acp-stdio", .serverVersion = "0.1.0"}) {}
 
   StdioAcpServer(const StdioAcpServer &) = delete;
   StdioAcpServer &operator=(const StdioAcpServer &) = delete;
@@ -863,13 +834,12 @@ public:
     auto outPtr = &out;
 
     // Install notification sink: write JSON-RPC envelopes as NDJSON lines
-    handler_.setNotificationSink(
-        [outPtr, outMu](const json &env) {
-          auto s = env.dump();
-          std::lock_guard lk(*outMu);
-          (*outPtr) << s << '\n';
-          outPtr->flush();
-        });
+    handler_.setNotificationSink([outPtr, outMu](const json &env) {
+      auto s = env.dump();
+      std::lock_guard lk(*outMu);
+      (*outPtr) << s << '\n';
+      outPtr->flush();
+    });
 
     std::string line;
     while (!handler_.stopRequested() && std::getline(in, line)) {
@@ -883,9 +853,8 @@ public:
         env = json::parse(line);
       } catch (const std::exception &) {
         std::lock_guard lk(*outMu);
-        (*outPtr)
-            << AcpProtocolHandler::makeParseError("invalid JSON").dump()
-            << '\n';
+        (*outPtr) << AcpProtocolHandler::makeParseError("invalid JSON").dump()
+                  << '\n';
         outPtr->flush();
         continue;
       }
@@ -905,13 +874,9 @@ public:
     handler_.setNotificationSink(nullptr);
   }
 
-  void stop() {
-    handler_.stop();
-  }
+  void stop() { handler_.stop(); }
 
-  bool isRunning() const {
-    return running_.load(std::memory_order_acquire);
-  }
+  bool isRunning() const { return running_.load(std::memory_order_acquire); }
 
   AcpProtocolHandler &handler() { return handler_; }
 
