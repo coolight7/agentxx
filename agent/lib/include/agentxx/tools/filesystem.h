@@ -720,7 +720,7 @@ public:
         // 创建父目录
         throw std::runtime_error{
             fmt::format(R"(Can not create `path`({})'s parent dirs.)",
-                        path.parent_path().string())};
+                        path.parent_path().generic_string())};
       }
 
       neograph_asio_error_code errCode;
@@ -769,7 +769,7 @@ public:
         // 创建父目录
         throw std::runtime_error{
             fmt::format(R"(Can not create `path`({})'s parent dirs.)",
-                        path.parent_path().string())};
+                        path.parent_path().generic_string())};
       }
 
       stream.open(systemCharsetFilePath,
@@ -1070,7 +1070,7 @@ public:
 
     auto result = std::ostringstream{};
     for (auto &item : relist) {
-      result << item.string() << std::endl;
+      result << item.generic_string() << std::endl;
     }
 
     co_return result.str();

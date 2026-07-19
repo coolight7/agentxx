@@ -511,7 +511,7 @@ public:
 
             result.push_back(Document{
                 .id = std::to_string(result.size()),
-                .title = filepath.filename().string(),
+                .title = filepath.filename().generic_string(),
                 .content = VectorStore::splitTextToChunks(content, splitConfig),
                 .source = std::string{path},
             });

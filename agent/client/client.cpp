@@ -6,6 +6,7 @@
 #include "agentxx/util/string_util.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <map>
@@ -64,6 +65,66 @@ makeSubAgentConfig(std::shared_ptr<agentxx::agent::AgentConfig> base,
 
 // ======================== 训练模式 ========================
 
+/// 递归加载目录中所有 JSON 测试用例（含子目录）
+static std::vector<agentxx::agent::TrainingTestCase>
+loadTestCasesRecursive(const std::string &dirPath) {
+  std::vector<agentxx::agent::TrainingTestCase> allCases;
+  try {
+    for (const auto &entry : std::filesystem::directory_iterator(dirPath)) {
+      if (entry.is_regular_file() && entry.path().extension() == ".json") {
+        auto fileCases =
+            agentxx::agent::loadTestCasesFromFile(entry.path().string());
+        allCases.insert(allCases.end(),
+                        std::make_move_iterator(fileCases.begin()),
+                        std::make_move_iterator(fileCases.end()));
+      } else if (entry.is_directory()) {
+        auto subCases = loadTestCasesRecursive(entry.path().string());
+        allCases.insert(allCases.end(),
+                        std::make_move_iterator(subCases.begin()),
+                        std::make_move_iterator(subCases.end()));
+      }
+    }
+  } catch (const std::exception &e) {
+    std::cerr << "[Training] Failed to load from directory " << dirPath << ": "
+              << e.what() << std::endl;
+  }
+  return allCases;
+}
+
+/// 获取项目根目录（agentxx 源码根目录）
+static std::string findProjectRoot() {
+  // 从可执行文件位置向上查找：build/linux-debug/exec/ -> agentxx root
+  auto exeDir = std::filesystem::current_path();
+  auto candidate = exeDir;
+  for (int i = 0; i < 6; ++i) {
+    // 项目根目录特征：有 agent/ 和 resource/ 子目录
+    if (std::filesystem::exists(candidate / "agent") &&
+        std::filesystem::exists(candidate / "resource")) {
+      return candidate.string();
+    }
+    candidate = candidate.parent_path();
+  }
+  // 回退到当前目录
+  return exeDir.string();
+}
+
+/// 替换输入中的 {agentxx_root} 占位符
+static void
+replacePlaceholders(std::vector<agentxx::agent::TrainingTestCase> &cases,
+                    const std::string &projectRoot) {
+  const std::string placeholder = "{agentxx_root}";
+  for (auto &tc : cases) {
+    auto pos = tc.input.find(placeholder);
+    if (pos != std::string::npos) {
+      tc.input.replace(pos, placeholder.size(), projectRoot);
+    }
+    pos = tc.expectedOutput.find(placeholder);
+    if (pos != std::string::npos) {
+      tc.expectedOutput.replace(pos, placeholder.size(), projectRoot);
+    }
+  }
+}
+
 static void
 runTrainingMode(std::shared_ptr<agentxx::agent::AgentConfig> baseConfig) {
   XX_OUT("======= Agentxx Training Mode =======");
@@ -77,45 +138,49 @@ runTrainingMode(std::shared_ptr<agentxx::agent::AgentConfig> baseConfig) {
           baseConfig,
           agentxx::agent::EvolutionTrainingConfig{}.optimizerPrompt));
 
+  std::string projectRoot = findProjectRoot();
+  std::string dataDir = projectRoot + "/resource/train/data";
+  std::string resultsDir = projectRoot + "/resource/train/results";
+
   agentxx::agent::EvolutionTrainingConfig trainCfg;
-  trainCfg.saveFilePath = "./training_prompts.json";
+
   trainCfg.topK = 100;
   trainCfg.mutateCount = 5;
   trainCfg.childrenPerParent = 2;
   trainCfg.convergenceThreshold = 0.7;
   trainCfg.verbose = true;
+  {
+    auto now = std::chrono::system_clock::now();
+    auto time_t_val = std::chrono::system_clock::to_time_t(now);
+    std::tm tm_val{};
+    localtime_r(&time_t_val, &tm_val);
+    std::string timestamp =
+        fmt::format("{:04d}{:02d}{:02d}_{:02d}{:02d}{:02d}",
+                    tm_val.tm_year + 1900, tm_val.tm_mon + 1, tm_val.tm_mday,
+                    tm_val.tm_hour, tm_val.tm_min, tm_val.tm_sec);
 
-  // ---- 内置测试用例 ----
-  trainCfg.testCases = {
-      {
-          .name = "hello_greeting",
-          .input = "你好，请做一下自我介绍",
-          .expectedOutput = "",
-      },
-      {
-          .name = "simple_math",
-          .input = "请计算 123 + 456 等于多少",
-          .expectedOutput = "579",
-      },
-      {
-          .name = "code_explain",
-          .input = "请解释一下 C++ 中的 RAII 是什么",
-          .expectedOutput = "",
-      },
-      {
-          .name = "translation",
-          .input = "请把 'Hello, how are you today?' 翻译成中文",
-          .expectedOutput = "",
-      },
-      {
-          .name = "reasoning",
-          .input = "如果所有的猫都是动物，而 Tom 是一只猫，那么 Tom "
-                   "是什么？请推理。",
-          .expectedOutput = "",
-      },
-  };
+    trainCfg.saveFilePath = (std::filesystem::path(resultsDir) /
+                             fmt::format("training_prompts_{}.json", timestamp))
+                                .generic_string();
+  }
 
-  // ---- 尝试从文件加载已有测试用例 ----
+  // ---- 从 resource/train/data 加载测试用例 ----
+  {
+    XX_OUT("[Training] Project root: {}", projectRoot);
+    XX_OUT("[Training] Loading test cases from: {}", dataDir);
+
+    if (std::filesystem::exists(dataDir)) {
+      trainCfg.testCases = loadTestCasesRecursive(dataDir);
+      replacePlaceholders(trainCfg.testCases, projectRoot);
+      XX_OUT("[Training] Loaded {} test cases from resource/train/data",
+             trainCfg.testCases.size());
+    } else {
+      std::cerr << "[Training] Data directory not found: " << dataDir
+                << std::endl;
+    }
+  }
+
+  // ---- 尝试从文件加载已有测试用例（覆盖） ----
   {
     std::ifstream tcFile("./training_testcases.json");
     if (tcFile.is_open()) {
@@ -130,6 +195,7 @@ runTrainingMode(std::shared_ptr<agentxx::agent::AgentConfig> baseConfig) {
             tc.name = item.value("name", "");
             tc.input = item.value("input", "");
             tc.expectedOutput = item.value("expectedOutput", "");
+            tc.equalOutput = item.value("equalOutput", "");
             tc.extra = item.value("extra", neograph::json::object());
             if (!tc.name.empty() && !tc.input.empty()) {
               trainCfg.testCases.push_back(std::move(tc));
