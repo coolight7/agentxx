@@ -239,7 +239,7 @@ private:
     }
   }
 
-  static inline std::atomic<bool> sslVerifyEnabled_{true};
+  static inline std::atomic<bool> sslVerifyEnabled_{false};
 
   /// Default max response body size (10 MB) to prevent memory exhaustion
   static constexpr uint64_t kDefaultMaxResponseBody = 10 * 1024 * 1024;
