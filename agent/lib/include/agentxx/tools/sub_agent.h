@@ -107,7 +107,7 @@ public:
         {
             "edges",
             neograph::json::array({
-                {{"from", "__start__"}, {"to", "llm"}},
+                {{"from", "__start__"}, {"to", "agent_start"}},
                 {{"from", "agent_start"}, {"to", "llm"}},
                 {
                     {"from", "llm"},
