@@ -684,7 +684,7 @@ public:
 
   size_t addShareStoreItemValue(const std::string &thread_id,
                                 std::string_view value) {
-    auto store = shareStore[thread_id];
+    auto &store = shareStore[thread_id];
     auto id = store.getNextId();
     store.store[id] = value;
     return id;
