@@ -276,13 +276,13 @@ public:
           }
         } catch (const boost::exception &e) {
           errInfo = boost::diagnostic_information(e);
-          onHandleEndError(errorRethrow, true, errInfo, in, out);
+          onHandleEndError(errorRethrow, true, errInfo, *item, in, out);
           if (false == errorRethrow) {
             errorPtr = std::current_exception();
           }
         } catch (...) {
           errInfo = "Unknown error";
-          onHandleEndError(errorRethrow, true, errInfo, in, out);
+          onHandleEndError(errorRethrow, true, errInfo, *item, in, out);
           if (false == errorRethrow) {
             errorPtr = std::current_exception();
           }
