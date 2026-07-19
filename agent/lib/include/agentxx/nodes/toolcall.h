@@ -202,7 +202,7 @@ public:
       agentCtxPtr->middlewareHandleContext->removeGraphDataItem(
           in.ctx.thread_id, agentxx::middleware::MiddlewareContext::
                                 graphDataKey_interruptToolcallCache);
-      if (false == toolcallsCacheJson.is_array()) {
+      if (toolcallsCacheJson.is_array()) {
         for (const auto &item : toolcallsCacheJson) {
           neograph::ChatMessage msg;
           neograph::from_json(item, msg);
