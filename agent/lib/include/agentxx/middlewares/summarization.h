@@ -187,7 +187,7 @@ Output ONLY the summary text, no meta-commentary.
   void doSummarizeToolcall(std::vector<neograph::ChatMessage> &messages) {
     auto agentCtxPtr = agentContext.lock();
     std::map<std::string, size_t> lastWriteIndex{};
-    for (size_t i = messages.size(); i > 0; --i) {
+    for (size_t i = messages.size() - 1; i > 0; --i) {
       auto &msg = messages[i];
       if ("tool" == msg.role) {
         auto itemHandleIt = summarizationToolHandles.find(msg.tool_name);
@@ -197,8 +197,7 @@ Output ONLY the summary text, no meta-commentary.
           // 寻找 llm toolcall message
           int lastMsgIndex = i - 1;
           int toolcallIndex = -1;
-          for (; lastMsgIndex > 0 &&
-                 false == messages[lastMsgIndex].tool_calls.empty();
+          for (; lastMsgIndex > 0 && messages[lastMsgIndex].tool_calls.empty();
                --lastMsgIndex) {
             for (size_t i = 0; i < messages[lastMsgIndex].tool_calls.size();
                  ++i) {
