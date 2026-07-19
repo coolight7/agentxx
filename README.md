@@ -263,6 +263,28 @@ npm install --legacy-peer-deps
     - [Android 动态库编译 .so / 静态库 .a](/docs/zh-cn/build/android.md)
     - [Windows 可执行程序 .exe / 动态库编译 .dll / 静态库 .lib](/docs/zh-cn/build/windows.md)
 
-## LICENSE
+## LICENSE & THIRD_PARTY
 - [MIT License](LICENSE)
 - 根据 动态链接、静态链接 库的不同，可能会携带他们的开源协议
+- 感谢这些依赖库的支持:
+    - [boost](https://github.com/boostorg/boost)
+        - asio
+        - beast
+        - process
+        - exception
+    - [codegraph-cpp](https://github.com/plutoaac/codegraph-cpp)
+    - [curl](https://github.com/curl/curl)
+    - [fmt](https://github.com/fmtlib/fmt)
+    - [glob](https://github.com/p-ranav/glob)
+    - [html2md](https://github.com/tim-gromeyer/html2md)
+    - [hyperscan](https://github.com/intel/hyperscan)
+    - [iconv](https://www.gnu.org/software/libiconv/) | [libiconv-native](https://github.com/hesphoros/libiconv-native)
+    - [liburing](https://github.com/axboe/liburing)
+    - [NeoGraph](https://github.com/fox1245/NeoGraph)
+    - [OpenSSL](https://www.openssl.org/)
+    - [simdjson](https://github.com/simdjson/simdjson/)
+    - [sqlite3](https://github.com/sqlite/sqlite) | [sqlite3-cmake](https://github.com/sjinks/sqlite3-cmake)
+    - [uchardet](https://www.freedesktop.org/wiki/Software/uchardet/)
+    - [vectorscan](https://github.com/VectorCamp/vectorscan)
+    - [yaml-cpp](https://github.com/jbeder/yaml-cpp)
+    - [zlib](https://github.com/madler/zlib) | [zlib-ng](https://github.com/zlib-ng/zlib-ng)
