@@ -17,6 +17,7 @@
 #include <neograph/acp/server.h>
 #include <neograph/json.h>
 
+#include "agentxx/agent/deepagent.h"
 #include "agentxx/util/http_server.h"
 #include "agentxx/util/log.h"
 
@@ -44,10 +45,11 @@ public:
     std::chrono::seconds asyncTimeout{120};
   };
 
-  HttpAcpServer(std::shared_ptr<neograph::graph::GraphEngine> engine,
+  HttpAcpServer(std::shared_ptr<agentxx::agent::DeepAgent> agent,
                 neograph::json info, Config config)
       : config_(std::move(config)),
-        neographServer_(std::move(engine), std::move(info)) {
+        deepAgent_(std::move(agent)),
+        neographServer_(deepAgent_->engine, std::move(info)) {
     httpServer_ = std::make_unique<util::HttpServer>(config_.httpConfig);
     setupNotificationSink();
     setupRoutes();
@@ -310,6 +312,7 @@ private:
   // -----------------------------------------------------------------------
 
   Config config_;
+  std::shared_ptr<agentxx::agent::DeepAgent> deepAgent_;
   std::unique_ptr<util::HttpServer> httpServer_;
   neograph::acp::ACPServer neographServer_;
 
@@ -326,9 +329,10 @@ private:
 
 class StdioAcpServer {
 public:
-  StdioAcpServer(std::shared_ptr<neograph::graph::GraphEngine> engine,
+  StdioAcpServer(std::shared_ptr<agentxx::agent::DeepAgent> agent,
                  neograph::json info)
-      : neographServer_(std::move(engine), std::move(info)) {}
+      : deepAgent_(std::move(agent)),
+        neographServer_(deepAgent_->engine, std::move(info)) {}
 
   StdioAcpServer(const StdioAcpServer &) = delete;
   StdioAcpServer &operator=(const StdioAcpServer &) = delete;
@@ -347,6 +351,7 @@ public:
   }
 
 private:
+  std::shared_ptr<agentxx::agent::DeepAgent> deepAgent_;
   neograph::acp::ACPServer neographServer_;
 };
 

@@ -9,22 +9,130 @@ using namespace agentxx::util;
 int g_acp_passed = 0;
 int g_acp_failed = 0;
 
-asio::awaitable<void> test_acp_server_integration() {
-  using Server = HttpAcpServer;
+// -------------------------------------------------------------------
+// Mock OpenAI-compatible HTTP server (minimal, for DeepAgent init)
+// -------------------------------------------------------------------
 
-  // Create a minimal engine without agent-specific node types.
-  // Use a simple passthrough graph.
+struct AcpMockServer {
+  std::unique_ptr<agentxx::util::HttpServer> svr;
+  std::thread thr;
+  uint16_t port = 0;
+
+  AcpMockServer() = default;
+  AcpMockServer(AcpMockServer &&o) noexcept
+      : svr(std::move(o.svr)), thr(std::move(o.thr)), port(o.port) {
+    o.port = 0;
+  }
+  AcpMockServer &operator=(AcpMockServer &&o) noexcept {
+    if (this != &o) {
+      stop();
+      svr = std::move(o.svr);
+      thr = std::move(o.thr);
+      port = o.port;
+      o.port = 0;
+    }
+    return *this;
+  }
+  AcpMockServer(const AcpMockServer &) = delete;
+  AcpMockServer &operator=(const AcpMockServer &) = delete;
+  ~AcpMockServer() { stop(); }
+
+  void stop() {
+    if (svr) svr->stop();
+    if (thr.joinable()) thr.join();
+    svr.reset();
+    port = 0;
+  }
+};
+
+static AcpMockServer startAcpMockServer() {
+  AcpMockServer sim;
+
+  agentxx::util::HttpServer::Config cfg;
+  cfg.address = "127.0.0.1";
+  cfg.port = 0;
+  cfg.ioThreads = 1;
+  cfg.accessLogEnabled = false;
+
+  sim.svr = std::make_unique<agentxx::util::HttpServer>(cfg);
+  auto *rawSvr = sim.svr.get();
+
+  rawSvr->router().add(
+      "/v1/chat/completions", 2,
+      std::make_shared<agentxx::util::HttpServer::Handler>(
+          [](agentxx::util::HttpServer::Request &req,
+             agentxx::util::HttpServer::Response &resp,
+             const std::string &) -> asio::awaitable<void> {
+            namespace http = boost::beast::http;
+
+            neograph::json::parse(req.body());
+
+            auto choice = neograph::json::object();
+            choice["index"] = 0;
+            choice["message"] = neograph::json{
+                {"role", "assistant"},
+                {"content", "mock response for ACP test"},
+            };
+            choice["finish_reason"] = "stop";
+
+            auto respBody = neograph::json::object();
+            respBody["id"] = "chatcmpl-acp-mock";
+            respBody["object"] = "chat.completion";
+            respBody["created"] = 1234567890;
+            respBody["model"] = "acp-test-mock";
+            respBody["choices"] = neograph::json::array({choice});
+            respBody["usage"] = neograph::json{
+                {"prompt_tokens", 10},
+                {"completion_tokens", 10},
+                {"total_tokens", 20},
+            };
+
+            resp.result(http::status::ok);
+            resp.set(http::field::content_type, "application/json");
+            resp.body() = respBody.dump();
+            resp.prepare_payload();
+            co_return;
+          }));
+
+  sim.thr = std::thread([rawSvr]() { rawSvr->start(); });
+
+  for (int i = 0; i < 100; ++i) {
+    sim.port = rawSvr->port();
+    if (sim.port != 0)
+      break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+
+  return sim;
+}
+
+/// Create a DeepAgent wrapping a minimal passthrough graph for testing.
+static std::shared_ptr<agentxx::agent::DeepAgent> makeTestAgent(
+    const std::string &name, uint16_t mockPort) {
+  auto config = std::make_shared<agentxx::agent::AgentConfig>();
+  config->modelOpenAIBaseUrl =
+      "http://127.0.0.1:" + std::to_string(mockPort);
+  config->modelOpenAIApiKey = "EMPTY";
+  config->modelOpenAIModelName = "acp-test-mock";
+  auto agent = std::make_shared<agentxx::agent::DeepAgent>(config);
+
   neograph::json def = {
-      {"name", "minimal-acp-agent"},
+      {"name", name},
       {"channels", {{"messages", {{"reducer", "append"}}}}},
       {"nodes", neograph::json::object()},
       {"edges",
        neograph::json::array({{{"from", "__start__"}, {"to", "__end__"}}})},
   };
   neograph::graph::NodeContext ctx;
-  auto engine = neograph::graph::GraphEngine::compile(def, ctx);
-  auto sharedEngine =
-      std::shared_ptr<neograph::graph::GraphEngine>(std::move(engine));
+  agent->engine = neograph::graph::GraphEngine::compile(def, ctx);
+  return agent;
+}
+
+asio::awaitable<void> test_acp_server_integration() {
+  auto sim = startAcpMockServer();
+  using Server = HttpAcpServer;
+
+  auto agent = makeTestAgent("test-acp-server", sim.port);
   json info{
       {"name", "test-acp-server"},
       {"version", "0.1.0"},
@@ -36,7 +144,7 @@ asio::awaitable<void> test_acp_server_integration() {
   config.httpConfig.ioThreads = 1;
   config.httpConfig.accessLogEnabled = false;
 
-  Server server(sharedEngine, info, config);
+  Server server(agent, info, config);
 
   // Start server
   std::thread serverThread([&server]() { server.start(); });
@@ -74,7 +182,6 @@ asio::awaitable<void> test_acp_server_integration() {
       std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
   }
-
   // Test initialize
   {
     json req;
@@ -212,21 +319,11 @@ asio::awaitable<void> test_acp_server_integration() {
 // -----------------------------------------------------------------------
 
 void test_acp_server_stdio() {
-  neograph::json def = {
-      {"name", "minimal-acp-agent"},
-      {"channels", {{"messages", {{"reducer", "append"}}}}},
-      {"nodes", neograph::json::object()},
-      {"edges",
-       neograph::json::array({{{"from", "__start__"}, {"to", "__end__"}}})},
-  };
-  neograph::graph::NodeContext ctx;
-  auto engine = neograph::graph::GraphEngine::compile(def, ctx);
-  auto sharedEngine =
-      std::shared_ptr<neograph::graph::GraphEngine>(std::move(engine));
-
+  auto sim = startAcpMockServer();
+  auto agent = makeTestAgent("test-acp-stdio", sim.port);
   json info{{"name", "test-acp-stdio"}, {"version", "0.1.0"}};
 
-  StdioAcpServer server(sharedEngine, info);
+  StdioAcpServer server(agent, info);
 
   std::string input;
   input +=
@@ -272,21 +369,11 @@ void test_acp_server_stdio() {
 }
 
 void test_acp_server_stdio_errors() {
-  neograph::json def = {
-      {"name", "minimal-acp-agent"},
-      {"channels", {{"messages", {{"reducer", "append"}}}}},
-      {"nodes", neograph::json::object()},
-      {"edges",
-       neograph::json::array({{{"from", "__start__"}, {"to", "__end__"}}})},
-  };
-  neograph::graph::NodeContext ctx;
-  auto engine = neograph::graph::GraphEngine::compile(def, ctx);
-  auto sharedEngine =
-      std::shared_ptr<neograph::graph::GraphEngine>(std::move(engine));
-
+  auto sim = startAcpMockServer();
+  auto agent = makeTestAgent("test-acp-stdio", sim.port);
   json info{{"name", "test-acp-stdio"}, {"version", "0.1.0"}};
 
-  StdioAcpServer server(sharedEngine, info);
+  StdioAcpServer server(agent, info);
 
   std::string input;
   input += "not valid json\n";
@@ -329,20 +416,11 @@ void test_acp_server_stdio_errors() {
 // -----------------------------------------------------------------------
 
 asio::awaitable<void> test_acp_server_http_errors() {
+  auto sim = startAcpMockServer();
   // Use shorter async timeout to avoid hanging
   using Server = HttpAcpServer;
 
-  neograph::json def = {
-      {"name", "minimal-acp-agent"},
-      {"channels", {{"messages", {{"reducer", "append"}}}}},
-      {"nodes", neograph::json::object()},
-      {"edges",
-       neograph::json::array({{{"from", "__start__"}, {"to", "__end__"}}})},
-  };
-  neograph::graph::NodeContext ctx;
-  auto engine = neograph::graph::GraphEngine::compile(def, ctx);
-  auto sharedEngine =
-      std::shared_ptr<neograph::graph::GraphEngine>(std::move(engine));
+  auto agent = makeTestAgent("test-acp-errors", sim.port);
   json info{{"name", "test-acp-errors"}, {"version", "0.1.0"}};
 
   Server::Config config;
@@ -352,7 +430,7 @@ asio::awaitable<void> test_acp_server_http_errors() {
   config.httpConfig.accessLogEnabled = false;
   config.asyncTimeout = std::chrono::seconds{5};
 
-  Server server(sharedEngine, info, config);
+  Server server(agent, info, config);
 
   std::thread serverThread([&server]() { server.start(); });
 
@@ -386,7 +464,6 @@ asio::awaitable<void> test_acp_server_http_errors() {
       std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
   }
-
   // Test initialize with protocol version 1 (standard)
   {
     json req;
@@ -434,23 +511,13 @@ asio::awaitable<void> test_acp_server_http_errors() {
 // -----------------------------------------------------------------------
 
 void test_acp_server_stdio_more() {
-  neograph::json def = {
-      {"name", "minimal-acp-agent"},
-      {"channels", {{"messages", {{"reducer", "append"}}}}},
-      {"nodes", neograph::json::object()},
-      {"edges",
-       neograph::json::array({{{"from", "__start__"}, {"to", "__end__"}}})},
-  };
-  neograph::graph::NodeContext ctx;
-  auto engine = neograph::graph::GraphEngine::compile(def, ctx);
-  auto sharedEngine =
-      std::shared_ptr<neograph::graph::GraphEngine>(std::move(engine));
-
+  auto sim = startAcpMockServer();
+  auto agent = makeTestAgent("test-acp-stdio-more", sim.port);
   json info{{"name", "test-acp-stdio-more"}, {"version", "0.1.0"}};
 
   // Test notification (no id) produces no response
   {
-    StdioAcpServer server(sharedEngine, info);
+    StdioAcpServer server(agent, info);
 
     std::string input;
     input +=
@@ -467,7 +534,7 @@ void test_acp_server_stdio_more() {
 
   // Test multiple initialization
   {
-    StdioAcpServer server(sharedEngine, info);
+    StdioAcpServer server(agent, info);
 
     std::string input;
     input +=
@@ -494,7 +561,7 @@ void test_acp_server_stdio_more() {
 
   // Test integer jsonrpc version
   {
-    StdioAcpServer server(sharedEngine, info);
+    StdioAcpServer server(agent, info);
 
     std::string input;
     input +=
@@ -522,22 +589,13 @@ void test_acp_server_stdio_more() {
 // -----------------------------------------------------------------------
 
 void test_acp_server_version_negotiation() {
-  neograph::json def = {
-      {"name", "minimal-acp-agent"},
-      {"channels", {{"messages", {{"reducer", "append"}}}}},
-      {"nodes", neograph::json::object()},
-      {"edges",
-       neograph::json::array({{{"from", "__start__"}, {"to", "__end__"}}})},
-  };
-  neograph::graph::NodeContext ctx;
-  auto engine = neograph::graph::GraphEngine::compile(def, ctx);
-  auto sharedEngine =
-      std::shared_ptr<neograph::graph::GraphEngine>(std::move(engine));
+  auto sim = startAcpMockServer();
+  auto agent = makeTestAgent("test-acp-ver", sim.port);
   json info{{"name", "test-acp-ver"}, {"version", "0.1.0"}};
 
   // Test with different protocol versions
   {
-    StdioAcpServer server(sharedEngine, info);
+    StdioAcpServer server(agent, info);
 
     std::string input;
     // ACP uses integer protocol version

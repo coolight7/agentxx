@@ -1,7 +1,7 @@
-#include "agentxx/agent/acp_server.h"
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/deepagent.h"
 #include "agentxx/agent/training.h"
+#include "agentxx/server/acp_server.h"
 #include "agentxx/util/log.h"
 #include "agentxx/util/string_util.h"
 #include "asio/co_spawn.hpp"
@@ -204,16 +204,20 @@ int main(int argn, char **argv) {
     runTrainingMode(config);
     return 0;
   } else if (mode == "acp") {
-    auto agent = agentxx::agent::DeepAgent{config};
+    config->logPrintMessagesBeforeLLM = false;
+    config->logPrintSummarizationResultTokenCount = false;
+    auto agent = std::make_shared<agentxx::agent::DeepAgent>(config);
     asio::co_spawn(
-        *agent.ioCtx,
-        [&]() -> asio::awaitable<void> {
-          co_await agent.init();
-          agentxx::server::AcpServer::run_server(agent.engine, true);
+        *agent->ioCtx,
+        [agent]() -> asio::awaitable<void> {
+          co_await agent->init();
+          agentxx::server::StdioAcpServer server(agent,
+                                                 neograph::json::object());
+          server.run();
           co_return;
         },
         asio::detached);
-    agent.ioCtx->run();
+    agent->ioCtx->run();
     return 0;
   }
 
