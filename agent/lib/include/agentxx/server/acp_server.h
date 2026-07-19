@@ -47,8 +47,7 @@ public:
 
   HttpAcpServer(std::shared_ptr<agentxx::agent::DeepAgent> agent,
                 neograph::json info, Config config)
-      : config_(std::move(config)),
-        deepAgent_(std::move(agent)),
+      : config_(std::move(config)), deepAgent_(std::move(agent)),
         neographServer_(deepAgent_->engine, std::move(info)) {
     httpServer_ = std::make_unique<util::HttpServer>(config_.httpConfig);
     setupNotificationSink();
@@ -111,9 +110,11 @@ private:
         std::string eventType = method;
         if (!eventType.empty()) {
           // Replace / with _ for SSE event name
-          for (auto &c : eventType)
-            if (c == '/')
+          for (auto &c : eventType) {
+            if (c == '/') {
               c = '_';
+            }
+          }
           sseData =
               "event: " + eventType + "\ndata: " + envelope.dump() + "\n\n";
         } else {
