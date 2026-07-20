@@ -228,9 +228,9 @@ inline std::shared_ptr<agentxx::agent::AgentConfig>
 makeAgentConfig(const std::string &baseUrl, const std::string &apiKey,
                 const std::string &modelName, const std::string &systemPrompt) {
   auto cfg = std::make_shared<agentxx::agent::AgentConfig>();
-  cfg->modelOpenAIBaseUrl = baseUrl;
-  cfg->modelOpenAIApiKey = apiKey;
-  cfg->modelOpenAIModelName = modelName;
+  cfg->model.baseUrl = baseUrl;
+  cfg->model.apiKey = apiKey;
+  cfg->model.modelName = modelName;
   cfg->prompt.systemPrompt = systemPrompt;
   return cfg;
 }
@@ -310,9 +310,9 @@ benchDeepAgentRunConversationTurnAsync(const DeepAgentBenchConfig &cfg) {
   }
 
   auto agentConfig = std::make_shared<agentxx::agent::AgentConfig>();
-  agentConfig->modelOpenAIBaseUrl = baseUrl;
-  agentConfig->modelOpenAIApiKey = apiKey;
-  agentConfig->modelOpenAIModelName = modelName;
+  agentConfig->model.baseUrl = baseUrl;
+  agentConfig->model.apiKey = apiKey;
+  agentConfig->model.modelName = modelName;
   agentConfig->prompt.systemPrompt = cfg.systemPrompt;
 
   std::vector<double> durations;
@@ -424,9 +424,9 @@ inline void benchDeepAgentInit() {
   }
 
   auto agentConfig = std::make_shared<agentxx::agent::AgentConfig>();
-  agentConfig->modelOpenAIBaseUrl = config.openAIBaseUrl;
-  agentConfig->modelOpenAIApiKey = config.openAIApiKey;
-  agentConfig->modelOpenAIModelName = config.openAIModelName;
+  agentConfig->model.baseUrl = config.openAIBaseUrl;
+  agentConfig->model.apiKey = config.openAIApiKey;
+  agentConfig->model.modelName = config.openAIModelName;
 
   constexpr size_t iterations = 10;
   std::vector<double> durations;

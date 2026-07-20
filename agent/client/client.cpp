@@ -152,6 +152,8 @@ struct ModelEntry {
 struct YamlAppConfig {
   std::map<std::string, ModelEntry> models;
   std::string useModelDefault;
+  std::string useModelSubagent;
+  std::string useModelWebSearch;
   std::string useModelAcp;
   std::string useModelTrain;
   std::string useModelTrainScorer;
@@ -187,6 +189,12 @@ loadYamlConfig(const std::string &path,
     cfg.useModelDefault =
         resolveEnvVars(root["use_model"]["default"].as<std::string>(""),
                        dotEnvVars, overrideEnvVars);
+    cfg.useModelSubagent =
+        resolveEnvVars(root["use_model"]["subagent"].as<std::string>(""),
+                       dotEnvVars, overrideEnvVars);
+    cfg.useModelWebSearch =
+        resolveEnvVars(root["use_model"]["web_search"].as<std::string>(""),
+                       dotEnvVars, overrideEnvVars);
     cfg.useModelAcp =
         resolveEnvVars(root["use_model"]["acp"].as<std::string>(""), dotEnvVars,
                        overrideEnvVars);
@@ -204,28 +212,61 @@ loadYamlConfig(const std::string &path,
   return cfg;
 }
 
-static void
-applyModelToConfig(std::shared_ptr<agentxx::agent::AgentConfig> agentConfig,
-                   const std::map<std::string, ModelEntry> &models,
+static agentxx::agent::ModelConfig
+resolveModelConfig(const std::map<std::string, ModelEntry> &models,
                    const std::string &modelName) {
+  agentxx::agent::ModelConfig mc;
   if (modelName.empty()) {
-    return;
+    return mc;
   }
   auto it = models.find(modelName);
   if (it == models.end()) {
     std::cerr << "[Config] Warning: model '" << modelName
               << "' not found in config" << std::endl;
-    return;
+    return mc;
   }
   const auto &entry = it->second;
   if (!entry.baseUrl.empty()) {
-    agentConfig->modelOpenAIBaseUrl = entry.baseUrl;
+    mc.baseUrl = entry.baseUrl;
   }
   if (!entry.key.empty()) {
-    agentConfig->modelOpenAIApiKey = entry.key;
+    mc.apiKey = entry.key;
   }
   if (!entry.modelname.empty()) {
-    agentConfig->modelOpenAIModelName = entry.modelname;
+    mc.modelName = entry.modelname;
+  }
+  return mc;
+}
+
+static void
+applyModelToConfig(std::shared_ptr<agentxx::agent::AgentConfig> agentConfig,
+                   const std::map<std::string, ModelEntry> &models,
+                   const std::string &modelName) {
+  auto mc = resolveModelConfig(models, modelName);
+  if (mc.isValid()) {
+    agentConfig->model = std::move(mc);
+  }
+}
+
+static void
+applySubagentModelToConfig(
+    std::shared_ptr<agentxx::agent::AgentConfig> agentConfig,
+    const std::map<std::string, ModelEntry> &models,
+    const std::string &modelName) {
+  auto mc = resolveModelConfig(models, modelName);
+  if (mc.isValid()) {
+    agentConfig->subagentModel = std::move(mc);
+  }
+}
+
+static void
+applyWebSearchModelToConfig(
+    std::shared_ptr<agentxx::agent::AgentConfig> agentConfig,
+    const std::map<std::string, ModelEntry> &models,
+    const std::string &modelName) {
+  auto mc = resolveModelConfig(models, modelName);
+  if (mc.isValid()) {
+    agentConfig->websearchModel = std::move(mc);
   }
 }
 
@@ -324,6 +365,10 @@ int main(int argn, char **argv) {
     config->logPrintMessagesBeforeLLM = false;
     config->logPrintSummarizationResultTokenCount = false;
     applyModelToConfig(config, yamlCfg.models, yamlCfg.useModelAcp);
+    applySubagentModelToConfig(config, yamlCfg.models,
+                               yamlCfg.useModelSubagent);
+    applyWebSearchModelToConfig(config, yamlCfg.models,
+                                yamlCfg.useModelWebSearch);
     auto agent = std::make_shared<agentxx::agent::DeepAgent>(config);
     asio::co_spawn(
         *agent->ioCtx,
@@ -343,6 +388,10 @@ int main(int argn, char **argv) {
   XX_OUT("======= Agentxx Client =======");
   auto config = buildDefaultConfig();
   applyModelToConfig(config, yamlCfg.models, yamlCfg.useModelDefault);
+  applySubagentModelToConfig(config, yamlCfg.models,
+                             yamlCfg.useModelSubagent);
+  applyWebSearchModelToConfig(config, yamlCfg.models,
+                              yamlCfg.useModelWebSearch);
   config->mcpServerUrls.push_back("http://172.29.48.1:17001/mcp");
   // config->mcpServerUrls.push_back("https://mcp.exa.ai");
   config->skillDirPaths = std::vector<std::string>{

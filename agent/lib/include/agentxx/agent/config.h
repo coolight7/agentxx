@@ -1,20 +1,43 @@
 #pragma once
 
 #include "prompt.h"
+#include "neograph/api.h"
+#include "neograph/json.h"
+#include <optional>
 #include <string>
 #include <vector>
 
 namespace agentxx {
 namespace agent {
 
+/// 模型连接配置
+/// - 用于主模型和 subagent 模型的统一描述
+class ModelConfig {
+public:
+  std::string baseUrl = "";
+  std::string apiKey = "EMPTY";
+  std::string modelName = "Agentxx";
+  neograph::json extra_config;
+
+  bool isValid() const { return !baseUrl.empty(); }
+};
+
 class AgentConfig {
 public:
   std::string agentName = "Agentxx";
   std::string agentNameView = "萝卜";
 
-  std::string modelOpenAIBaseUrl = "";
-  std::string modelOpenAIApiKey = "EMPTY";
-  std::string modelOpenAIModelName = "Agentxx";
+  /// 主模型配置
+  ModelConfig model;
+  /// subagent 模型配置
+  /// - 未指定时默认使用主模型 [model]
+  std::optional<ModelConfig> subagentModel;
+
+  /// 获取 subagent 实际使用的模型配置
+  /// - 如果指定了 subagentModel 则返回它，否则返回主模型
+  const ModelConfig &getSubagentModel() const {
+    return subagentModel.has_value() ? subagentModel.value() : model;
+  }
 
   std::string currentSystemName;
   bool isSystemWSL = false;
@@ -36,6 +59,10 @@ public:
   /// - [duckduckgo] `https://duckduckgo.com/html/?q={}` 国内连接不稳定
   std::string websearchApiUrl = "";
   bool websearchConvertHtml2markdown = true;
+  /// 使用模型进行网络搜索的配置
+  /// - 指定后将使用模型搜索替代传统 websearchApiUrl 方式
+  /// - 未指定时按 websearchApiUrl 判断是否启用传统搜索
+  std::optional<ModelConfig> websearchModel;
 
   bool checkMessagesUtf8BeforeLLM = true;
 

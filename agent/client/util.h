@@ -33,9 +33,7 @@ std::shared_ptr<agentxx::agent::AgentConfig>
 makeSubAgentConfig(std::shared_ptr<agentxx::agent::AgentConfig> base,
                    const std::string &systemPrompt) {
   auto cfg = std::make_shared<agentxx::agent::AgentConfig>();
-  cfg->modelOpenAIBaseUrl = base->modelOpenAIBaseUrl;
-  cfg->modelOpenAIApiKey = base->modelOpenAIApiKey;
-  cfg->modelOpenAIModelName = base->modelOpenAIModelName;
+  cfg->model = base->getSubagentModel();
   cfg->agentName = base->agentName + "_sub";
   cfg->agentNameView = base->agentNameView;
   cfg->prompt.systemPrompt = systemPrompt;
