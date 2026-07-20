@@ -22,7 +22,7 @@ choco install pkgconfiglite
 pkg-config --version
 ```
 ### Boost 编译
-- 安装或编译 Boost 1.91，推荐和我们的开发版本一致 `1.91`
+- 安装或编译 Boost 1.92，推荐和我们的开发版本一致 `1.92`
 - 自行编译, windows CMD:
 ```sh
 # https://github.com/boostorg/boost/releases/

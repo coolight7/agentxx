@@ -5,7 +5,7 @@
 - 编译器推荐: Linux/NDK r29/Clang 21.0.0
 
 ## 开始
-- 自行编译 Boost 1.91.0 :
+- 自行编译 Boost 1.92 :
 ```sh
 # https://github.com/boostorg/boost/releases/
 # 下载 release/boost-xxx-cmake.tar.gz 解压到 agent/third_party/boost/
