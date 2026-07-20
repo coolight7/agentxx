@@ -1743,6 +1743,358 @@ void test_mcp_server_2025_03_26_stdio() {
   }
 }
 
+// -----------------------------------------------------------------------
+// Accept header validation test
+// -----------------------------------------------------------------------
+
+asio::awaitable<void> test_mcp_client_accept_header() {
+  using Server = util::HttpServer;
+
+  Server::Config cfg;
+  cfg.address = "127.0.0.1";
+  cfg.port = 0;
+  cfg.ioThreads = 1;
+  cfg.accessLogEnabled = false;
+
+  auto server = std::make_shared<Server>(std::move(cfg));
+
+  using Handler = Server::Handler;
+  auto handler = std::make_shared<Handler>(
+      [](Server::Request &req, Server::Response &resp,
+         const std::string &) -> asio::awaitable<void> {
+        namespace http = boost::beast::http;
+
+        auto accept = req[http::field::accept];
+        bool valid =
+            (accept == "*/*") ||
+            (accept.find("application/json") != boost::string_view::npos &&
+             accept.find("text/event-stream") != boost::string_view::npos);
+
+        if (!valid) {
+          resp.version(req.version());
+          resp.result(http::status::not_acceptable);
+          resp.set(http::field::content_type, "application/json");
+          json error;
+          error["jsonrpc"] = "2.0";
+          error["error"]["code"] = -32000;
+          error["error"]["message"] =
+              "Not Acceptable: Client must accept both application/json "
+              "and text/event-stream";
+          resp.body() = error.dump();
+          resp.prepare_payload();
+          co_return;
+        }
+
+        json requestJson;
+        try {
+          requestJson = json::parse(req.body());
+        } catch (...) {
+          resp.version(req.version());
+          resp.result(http::status::bad_request);
+          resp.prepare_payload();
+          co_return;
+        }
+
+        json id = requestJson.value("id", json{});
+        std::string method = requestJson.value("method", "");
+        json response;
+        response["jsonrpc"] = "2.0";
+        response["id"] = id;
+
+        if (method == "initialize") {
+          response["result"]["protocolVersion"] = "2024-11-05";
+          response["result"]["serverInfo"]["name"] = "accept-test-server";
+          response["result"]["serverInfo"]["version"] = "1.0";
+          response["result"]["capabilities"] = json::object();
+        } else if (method == "ping") {
+          response["result"] = json::object();
+        } else if (method == "tools/list") {
+          response["result"]["tools"] = json::array();
+        } else {
+          response["error"]["code"] = -32601;
+          response["error"]["message"] = "Method not found";
+        }
+
+        resp.version(req.version());
+        resp.result(http::status::ok);
+        resp.set(http::field::content_type, "application/json");
+        resp.body() = response.dump();
+        resp.prepare_payload();
+      });
+
+  server->router().add("/mcp", 2, handler);
+
+  std::thread serverThread([server]() { server->start(); });
+
+  uint16_t port = 0;
+  for (int i = 0; i < 100; ++i) {
+    port = server->port();
+    if (port != 0)
+      break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+
+  if (port == 0) {
+    TEST_FAIL << "Accept header test server failed to start" << std::endl;
+    g_mcp_failed++;
+    server->stop();
+    serverThread.join();
+    co_return;
+  }
+
+  for (int i = 0; i < 100; ++i) {
+    try {
+      boost::asio::io_context tmpCtx;
+      boost::asio::ip::tcp::socket sock(tmpCtx);
+      sock.connect(boost::asio::ip::tcp::endpoint(
+          boost::asio::ip::make_address("127.0.0.1"), port));
+      sock.close();
+      break;
+    } catch (...) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+  }
+
+  std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
+
+  // Client with default Accept (application/json, text/event-stream) → must
+  // succeed
+  {
+    McpClient::Config clientCfg;
+    clientCfg.serverUrl = baseUrl + "/mcp";
+    clientCfg.protocolVersion = std::string{McpClient::kProtocol2024_11_05};
+    clientCfg.requestTimeout = std::chrono::seconds(5);
+
+    auto client = std::make_shared<McpClient>(std::move(clientCfg));
+    auto result = co_await client->initialize();
+    XX_TEST_EXPECT_TRUE(result.has_value());
+    if (result.has_value()) {
+      XX_TEST_EXPECT_EQ(result->serverName, "accept-test-server");
+    }
+
+    auto ping = co_await client->ping();
+    XX_TEST_EXPECT_TRUE(ping.has_value());
+
+    co_await client->close();
+  }
+
+  // Client with Accept: */* (via extraHeaders override) → also must succeed
+  {
+    McpClient::Config clientCfg;
+    clientCfg.serverUrl = baseUrl + "/mcp";
+    clientCfg.protocolVersion = std::string{McpClient::kProtocol2024_11_05};
+    clientCfg.requestTimeout = std::chrono::seconds(5);
+    clientCfg.extraHeaders.set("Accept", "*/*");
+
+    auto client = std::make_shared<McpClient>(std::move(clientCfg));
+    auto result = co_await client->initialize();
+    XX_TEST_EXPECT_TRUE(result.has_value());
+
+    co_await client->close();
+  }
+
+  // Client with a wrong Accept header in extraHeaders must still succeed
+  // because buildHttpHeaders() always overrides Accept with the correct value.
+  {
+    McpClient::Config clientCfg;
+    clientCfg.serverUrl = baseUrl + "/mcp";
+    clientCfg.protocolVersion = std::string{McpClient::kProtocol2024_11_05};
+    clientCfg.requestTimeout = std::chrono::seconds(5);
+    clientCfg.extraHeaders.set("Accept", "application/xml");
+
+    auto client = std::make_shared<McpClient>(std::move(clientCfg));
+    auto result = co_await client->initialize();
+    // The client always sends Accept: application/json, text/event-stream
+    // regardless of extraHeaders, so this must succeed
+    XX_TEST_EXPECT_TRUE(result.has_value());
+
+    co_await client->close();
+  }
+
+  server->stop();
+  serverThread.join();
+}
+
+// -----------------------------------------------------------------------
+// Server-side Accept header validation & SSE response mode tests
+// -----------------------------------------------------------------------
+
+asio::awaitable<void> test_mcp_server_accept_sse() {
+  using Server = McpServer;
+
+  Server::Config cfg;
+  cfg.httpConfig.address = "127.0.0.1";
+  cfg.httpConfig.port = 0;
+  cfg.httpConfig.ioThreads = 1;
+  cfg.httpConfig.accessLogEnabled = false;
+
+  Server server(std::move(cfg));
+  McpToolDefinition def;
+  def.name = "echo";
+  def.description = "Echo";
+  def.inputSchema = json::parse(R"({"type":"object","properties":{"text":{"type":"string"}}})");
+  server.addTool(def, [](const json &args) -> json {
+    json content;
+    content["type"] = "text";
+    content["text"] = args.value("text", "echo");
+    return content;
+  });
+
+  std::thread serverThread([&server]() { server.start(); });
+
+  uint16_t port = 0;
+  for (int i = 0; i < 100; ++i) {
+    port = server.port();
+    if (port != 0) break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  if (port == 0) {
+    TEST_FAIL << "Server failed to start" << std::endl;
+    g_mcp_failed++;
+    server.stop();
+    serverThread.join();
+    co_return;
+  }
+
+  std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
+
+  for (int i = 0; i < 100; ++i) {
+    try {
+      boost::asio::io_context tmpCtx;
+      boost::asio::ip::tcp::socket sock(tmpCtx);
+      sock.connect(boost::asio::ip::tcp::endpoint(
+          boost::asio::ip::make_address("127.0.0.1"), port));
+      sock.close();
+      break;
+    } catch (...) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+  }
+
+  // 1. Wrong Accept header → 406
+  {
+    HeaderMap headers;
+    headers.set("Accept", "application/xml");
+    headers.set("content-type", "application/json");
+    json req = {{"jsonrpc", "2.0"}, {"id", 1}, {"method", "ping"}};
+    auto resp = co_await HttpClient::postAsync(baseUrl + "/mcp", req,
+                                               headers, std::chrono::seconds{5});
+    XX_TEST_EXPECT_HAS_VALUE(resp);
+    if (resp.has_value()) {
+      XX_TEST_EXPECT_EQ(resp.value().status, 406);
+    }
+  }
+
+  // 2. Correct Accept header (both types) → 200 JSON
+  {
+    HeaderMap headers;
+    headers.set("Accept", "application/json, text/event-stream");
+    headers.set("content-type", "application/json");
+    json req = {{"jsonrpc", "2.0"}, {"id", 2}, {"method", "ping"}};
+    auto resp = co_await HttpClient::postAsync(baseUrl + "/mcp", req,
+                                               headers, std::chrono::seconds{5});
+    XX_TEST_EXPECT_HAS_VALUE(resp);
+    if (resp.has_value()) {
+      XX_TEST_EXPECT_EQ(resp.value().status, 200);
+      XX_TEST_EXPECT_EQ(resp.value().contentType(), "application/json");
+    }
+  }
+
+  // 3. */* Accept → 200 JSON (not SSE)
+  {
+    json req = {{"jsonrpc", "2.0"}, {"id", 3}, {"method", "ping"}};
+    auto resp = co_await HttpClient::postAsync(baseUrl + "/mcp", req);
+    XX_TEST_EXPECT_HAS_VALUE(resp);
+    if (resp.has_value()) {
+      XX_TEST_EXPECT_EQ(resp.value().status, 200);
+      XX_TEST_EXPECT_EQ(resp.value().contentType(), "application/json");
+    }
+  }
+
+  // 4. Accept: text/event-stream → 200 + SSE wrapping
+  {
+    HeaderMap headers;
+    headers.set("Accept", "text/event-stream");
+    headers.set("content-type", "application/json");
+    json req = {{"jsonrpc", "2.0"}, {"id", 4}, {"method", "ping"}};
+    auto resp = co_await HttpClient::postAsync(baseUrl + "/mcp", req,
+                                               headers, std::chrono::seconds{5});
+    XX_TEST_EXPECT_HAS_VALUE(resp);
+    if (resp.has_value()) {
+      XX_TEST_EXPECT_EQ(resp.value().status, 200);
+      // Content-Type should be text/event-stream
+      auto ct = resp.value().contentType();
+      XX_TEST_EXPECT_TRUE(ct.find("event-stream") != std::string::npos);
+      // Body should be SSE formatted
+      XX_TEST_EXPECT_TRUE(resp.value().body.find("event: message") !=
+                          std::string::npos);
+      XX_TEST_EXPECT_TRUE(resp.value().body.find("\"result\"") !=
+                          std::string::npos);
+    }
+  }
+
+  // 5. SSE endpoint (GET /mcp/sse) → text/event-stream
+  {
+    HeaderMap headers;
+    headers.set("Accept", "text/event-stream");
+    auto resp = co_await HttpClient::getAsync(baseUrl + "/mcp/sse", headers,
+                                              std::chrono::seconds{5});
+    XX_TEST_EXPECT_HAS_VALUE(resp);
+    if (resp.has_value()) {
+      XX_TEST_EXPECT_EQ(resp.value().status, 200);
+      auto ct = resp.value().contentType();
+      XX_TEST_EXPECT_TRUE(ct.find("event-stream") != std::string::npos);
+      // Should contain endpoint event
+      XX_TEST_EXPECT_TRUE(resp.value().body.find("event: endpoint") !=
+                          std::string::npos);
+      XX_TEST_EXPECT_TRUE(resp.value().body.find("/mcp") !=
+                          std::string::npos);
+    }
+  }
+
+  // 6. SSE endpoint with */* → also works
+  {
+    auto resp = co_await HttpClient::getAsync(baseUrl + "/mcp/sse");
+    XX_TEST_EXPECT_HAS_VALUE(resp);
+    if (resp.has_value()) {
+      XX_TEST_EXPECT_EQ(resp.value().status, 200);
+      auto ct = resp.value().contentType();
+      XX_TEST_EXPECT_TRUE(ct.find("event-stream") != std::string::npos);
+    }
+  }
+
+  // 7. SSE endpoint with wrong Accept → server closes connection
+  {
+    HeaderMap headers;
+    headers.set("Accept", "application/xml");
+    auto resp = co_await HttpClient::getAsync(baseUrl + "/mcp/sse", headers,
+                                              std::chrono::seconds{5});
+    // Connection is closed immediately by the server; the request may fail
+    // or return an incomplete response – either is acceptable.
+    if (resp.has_value()) {
+      // If we got a response, it should not be a success
+      XX_TEST_EXPECT_FALSE(resp.value().isSuccess());
+    }
+  }
+
+  // 8. Notification request with correct Accept → 202
+  {
+    HeaderMap headers;
+    headers.set("Accept", "application/json, text/event-stream");
+    headers.set("content-type", "application/json");
+    json req = {{"jsonrpc", "2.0"}, {"method", "notifications/initialized"}};
+    auto resp = co_await HttpClient::postAsync(baseUrl + "/mcp", req,
+                                               headers, std::chrono::seconds{5});
+    XX_TEST_EXPECT_HAS_VALUE(resp);
+    if (resp.has_value()) {
+      XX_TEST_EXPECT_EQ(resp.value().status, 202);
+    }
+  }
+
+  server.stop();
+  serverThread.join();
+}
+
 asio::awaitable<TestResult> run_mcp_tests() {
   test_mcp_version_negotiation_unit();
   test_mcp_server_unit();
@@ -1760,6 +2112,8 @@ asio::awaitable<TestResult> run_mcp_tests() {
   co_await test_mcp_client_http();
   co_await test_mcp_client_2025_version();
   co_await test_mcp_server_cross_version_http();
+  co_await test_mcp_client_accept_header();
+  co_await test_mcp_server_accept_sse();
   co_return TestResult{g_mcp_passed, g_mcp_failed};
 }
 

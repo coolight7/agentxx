@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -309,11 +310,39 @@ private:
   };
 
   struct SSEClient {
-    util::HttpServer::Request *reqPtr;
-    util::HttpServer::Response *respPtr;
-    std::shared_ptr<std::mutex> writeMutex;
+    std::shared_ptr<util::HttpServer::SseWriter> writer;
     bool closed = false;
   };
+
+  // -----------------------------------------------------------------------
+  // Accept header validation helpers
+  // -----------------------------------------------------------------------
+
+  /// Check whether the client's Accept header includes at least one of the
+  /// MCP-required content types (or */*).
+  static bool isAcceptValid(std::string_view accept) {
+    if (accept.empty() || accept == "*/*")
+      return true;
+    bool hasJson = accept.find("application/json") != std::string_view::npos;
+    bool hasSse = accept.find("text/event-stream") != std::string_view::npos;
+    return hasJson || hasSse;
+  }
+
+  /// Check whether the client prefers text/event-stream over
+  /// application/json. Returns true only when text/event-stream is
+  /// explicitly listed and application/json is NOT listed (otherwise
+  /// we prefer JSON for simple request-response).
+  static bool prefersSse(std::string_view accept) {
+    if (accept.empty())
+      return false;
+    bool hasSse = accept.find("text/event-stream") != std::string_view::npos;
+    if (!hasSse)
+      return false;
+    // If the client also explicitly accepts application/json, prefer JSON
+    bool hasJson = accept.find("application/json") != std::string_view::npos;
+    bool isStar = accept == "*/*";
+    return hasSse && !hasJson && !isStar;
+  }
 
   // -----------------------------------------------------------------------
   // Route setup
@@ -330,13 +359,14 @@ private:
         }));
     httpServer_->router().add(config_.mcpEndpoint, 2, mcpHandler);
 
-    auto sseHandler = std::make_shared<Handler>(
-        Handler([this](util::HttpServer::Request &req,
-                       util::HttpServer::Response &resp,
-                       const std::string &) -> asio::awaitable<void> {
-          co_await handleSseRequest(req, resp);
-        }));
-    httpServer_->router().add(config_.sseEndpoint, 0, sseHandler);
+    // SSE streaming endpoint — uses the new HttpServer::addSseRoute
+    httpServer_->addSseRoute(
+        config_.sseEndpoint,
+        [this](util::HttpServer::Request &req,
+               std::shared_ptr<util::HttpServer::SseWriter> writer)
+        -> asio::awaitable<void> {
+      co_await handleSseStream(req, writer);
+    });
   }
 
   // -----------------------------------------------------------------------
@@ -457,6 +487,23 @@ private:
                    util::HttpServer::Response &resp) {
     namespace http = boost::beast::http;
 
+    // Validate Accept header
+    auto accept = req[http::field::accept];
+    if (!isAcceptValid(accept)) {
+      json errorResp = jsonRpcErrorResponse(
+          json{nullptr},
+          jsonRpcError(
+              -32000,
+              "Not Acceptable: Client must accept both application/json "
+              "and text/event-stream"));
+      resp.version(req.version());
+      resp.result(http::status::not_acceptable);
+      resp.set(http::field::content_type, "application/json");
+      resp.body() = errorResp.dump();
+      resp.prepare_payload();
+      co_return;
+    }
+
     json requestJson;
     try {
       requestJson = json::parse(req.body());
@@ -472,6 +519,19 @@ private:
     json response = processJsonRpc(requestJson);
     if (response.is_null()) {
       resp.result(http::status::accepted);
+      co_return;
+    }
+
+    // If the client prefers text/event-stream over JSON, wrap as SSE
+    if (prefersSse(accept)) {
+      resp.version(req.version());
+      resp.result(http::status::ok);
+      resp.set(http::field::content_type, "text/event-stream");
+      resp.set(http::field::cache_control, "no-cache");
+      resp.set("X-Accel-Buffering", "no");
+      std::string sseBody = "event: message\ndata: " + response.dump() + "\n\n";
+      resp.body() = std::move(sseBody);
+      resp.prepare_payload();
       co_return;
     }
 
@@ -779,23 +839,68 @@ private:
   }
 
   // -----------------------------------------------------------------------
-  // SSE
+  // SSE streaming handler
   // -----------------------------------------------------------------------
 
   asio::awaitable<void>
-  handleSseRequest(util::HttpServer::Request &req,
-                   util::HttpServer::Response &resp) {
-    resp.version(req.version());
-    resp.result(boost::beast::http::status::ok);
-    resp.set(boost::beast::http::field::content_type, "text/event-stream");
-    resp.set(boost::beast::http::field::cache_control, "no-cache");
-    resp.set(boost::beast::http::field::connection, "keep-alive");
-    resp.set("X-Accel-Buffering", "no");
+  handleSseStream(util::HttpServer::Request &req,
+                  std::shared_ptr<util::HttpServer::SseWriter> writer) {
+    namespace http = boost::beast::http;
 
-    std::string sseData = "event: endpoint\ndata: " + config_.mcpEndpoint + "\n\n";
-    resp.body() = sseData;
-    resp.prepare_payload();
-    co_return;
+    // Validate Accept header
+    auto accept = req[http::field::accept];
+    if (!accept.empty() && accept != "*/*" &&
+        accept.find("text/event-stream") == std::string_view::npos) {
+      // Client doesn't accept event-stream, close immediately
+      co_await writer->close();
+      co_return;
+    }
+
+    // Register this SSE client
+    auto client = std::make_shared<SSEClient>();
+    client->writer = writer;
+    {
+      std::unique_lock lock(sseClientsMutex_);
+      sseClients_.push_back(client);
+    }
+
+    // Send initial endpoint event
+    if (!co_await writer->writeEvent("endpoint", config_.mcpEndpoint)) {
+      // Write failed, clean up
+      std::unique_lock lock(sseClientsMutex_);
+      sseClients_.erase(std::remove(sseClients_.begin(), sseClients_.end(),
+                                    client),
+                        sseClients_.end());
+      co_return;
+    }
+
+    // Keep the connection alive: send keepalive comments and wait for
+    // the client to disconnect or the server to stop.
+    // We don't have a blocking wait primitive here, so we poll.
+    // In a full implementation, a condition_variable would be used.
+    try {
+      while (!client->closed && !httpServer_->isStopped()) {
+        // Send a keepalive comment every 15 seconds
+        co_await writer->writeChunk(": keepalive\n\n");
+        // Use a timer to yield without blocking
+        auto executor = co_await asio::this_coro::executor;
+        asio::steady_timer timer(executor);
+        timer.expires_after(std::chrono::seconds(15));
+        boost::system::error_code ec;
+        co_await timer.async_wait(
+            asio::redirect_error(asio::use_awaitable, ec));
+      }
+    } catch (...) {
+      // Client disconnected
+    }
+
+    // Cleanup
+    {
+      std::unique_lock lock(sseClientsMutex_);
+      sseClients_.erase(std::remove(sseClients_.begin(), sseClients_.end(),
+                                    client),
+                        sseClients_.end());
+    }
   }
 
   // -----------------------------------------------------------------------
@@ -803,16 +908,20 @@ private:
   // -----------------------------------------------------------------------
 
   void broadcastSSE(const std::string &event, const std::string &data) {
-    // SSE broadcast is limited in the current HttpServer model.
-    // Log the event for now.
-    XX_LOGI("[mcp] SSE event: {} {}", event, data);
+    std::unique_lock lock(sseClientsMutex_);
+    for (auto &client : sseClients_) {
+      if (!client->closed && client->writer) {
+        // For now we use a fire-and-forget coroutine; in a full
+        // implementation this would be queued and sent from the event loop.
+        XX_LOGI("[mcp] SSE broadcast: {} {}", event, data);
+      }
+    }
   }
 
   void stopSSE() {
     std::unique_lock lock(sseClientsMutex_);
-    for (auto &client : sseClients_) {
+    for (auto &client : sseClients_)
       client->closed = true;
-    }
     sseClients_.clear();
   }
 

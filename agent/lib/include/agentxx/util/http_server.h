@@ -17,6 +17,7 @@
 #include <chrono>
 #include <ctime>
 #include <functional>
+#include <list>
 #include <memory>
 #include <neograph/api.h>
 #include <neograph/json.h>
@@ -88,6 +89,20 @@ public:
   using Handler = std::function<asio::awaitable<void>(
       Request &, Response &, const std::string &matched_path)>;
   using Router = XXRouter<Handler, 9>;
+
+  /// Streaming SSE connection — the handler can hold onto this to push
+  /// events after the initial response header has been sent.
+  class SseWriter {
+  public:
+    virtual ~SseWriter() = default;
+    /// Write an SSE event (formatted as "event: ...\ndata: ...\n\n").
+    virtual asio::awaitable<bool>
+    writeEvent(std::string_view event, std::string_view data) = 0;
+    /// Write a raw chunk (must be valid SSE framing).
+    virtual asio::awaitable<bool> writeChunk(std::string_view chunk) = 0;
+    /// Close the SSE stream gracefully.
+    virtual asio::awaitable<void> close() = 0;
+  };
 
   struct Config {
     std::string address = "0.0.0.0";
@@ -221,7 +236,87 @@ public:
 
   bool isStopped() const noexcept { return stopped_; }
 
+  /// Register a streaming SSE handler. Unlike normal handlers, the SSE
+  /// handler receives an SseWriter to push events incrementally.
+  void addSseRoute(const std::string &path,
+                   std::function<asio::awaitable<void>(
+                       Request &, std::shared_ptr<SseWriter>)> handler) {
+    sseRoutes_[path] = std::move(handler);
+  }
+
 private:
+  // -----------------------------------------------------------------------
+  // SseWriter implementation backed by a TCP/SSL stream
+  // -----------------------------------------------------------------------
+  template <typename Stream> class SseWriterImpl : public SseWriter {
+    Stream &stream_;
+    std::chrono::seconds timeout_;
+    bool headerSent_ = false;
+
+  public:
+    explicit SseWriterImpl(Stream &s, std::chrono::seconds t)
+        : stream_(s), timeout_(t) {}
+
+    asio::awaitable<bool> writeEvent(std::string_view event,
+                                     std::string_view data) override {
+      std::string chunk;
+      if (!event.empty())
+        chunk += "event: " + std::string(event) + "\n";
+      chunk += "data: " + std::string(data) + "\n\n";
+      co_return co_await doWrite(chunk);
+    }
+
+    asio::awaitable<bool> writeChunk(std::string_view chunk) override {
+      co_return co_await doWrite(chunk);
+    }
+
+    asio::awaitable<void> close() override {
+      boost::system::error_code ec;
+      boost::beast::get_lowest_layer(stream_).socket().shutdown(
+          asio::ip::tcp::socket::shutdown_send, ec);
+      co_return;
+    }
+
+  private:
+    asio::awaitable<bool> doWrite(std::string_view data) {
+      try {
+        if (!headerSent_) {
+          co_return co_await writeWithHeader(data);
+        }
+        co_await boost::asio::async_write(
+            stream_, boost::asio::buffer(data),
+            asio::cancel_after(timeout_, asio::use_awaitable));
+        co_return true;
+      } catch (const boost::system::system_error &e) {
+        if (e.code() != asio::error::operation_aborted)
+          XX_LOGE("[sse] write error: {}", e.what());
+        co_return false;
+      } catch (const std::exception &e) {
+        XX_LOGE("[sse] write error: {}", e.what());
+        co_return false;
+      }
+    }
+
+    asio::awaitable<bool> writeWithHeader(std::string_view data) {
+      namespace http = boost::beast::http;
+      headerSent_ = true;
+      http::response<http::string_body> resp;
+      resp.version(11);
+      resp.result(http::status::ok);
+      resp.set(http::field::content_type, "text/event-stream");
+      resp.set(http::field::cache_control, "no-cache");
+      resp.set(http::field::connection, "keep-alive");
+      resp.set("X-Accel-Buffering", "no");
+      resp.chunked(true);
+      resp.body() = std::string(data);
+      resp.prepare_payload();
+      co_await http::async_write(
+          stream_, resp,
+          asio::cancel_after(timeout_, asio::use_awaitable));
+      co_return true;
+    }
+  };
+
   // -----------------------------------------------------------------------
   // RAII guard for active connection counting — ensures decrement even
   // if the session coroutine throws or is cancelled.
@@ -407,7 +502,30 @@ private:
       std::string matchedPath;
       bool handled = false;
 
-      if (methodIdx >= 0) {
+      // Check for SSE streaming route first (GET only)
+      if (methodIdx == 0) { // GET
+        auto sseIt = sseRoutes_.find(path);
+        if (sseIt != sseRoutes_.end()) {
+          try {
+            auto writer = std::make_shared<SseWriterImpl<Stream>>(
+                stream, std::chrono::seconds{30});
+            co_await sseIt->second(req, writer);
+            handled = true;
+            // SSE streaming handled, skip normal response write
+            // The connection is kept alive by the SseWriter
+            // But we still need to let serve() know not to continue
+            // We'll set a flag and break out
+            break;
+          } catch (const std::exception &e) {
+            XX_LOGE("[server] SSE handler error [{} {}]: {}",
+                    req.method_string(), req.target(), e.what());
+            fillError(resp, req.version(), http::status::internal_server_error,
+                      "Internal Server Error");
+          }
+        }
+      }
+
+      if (methodIdx >= 0 && !handled) {
         auto handler = router_->get(path, methodIdx, matchedPath);
         if (handler && *handler) {
           try {
@@ -512,6 +630,12 @@ private:
   std::atomic<bool> stopped_{false};
   std::atomic<size_t> activeConnections_{0};
   std::atomic<size_t> nextWorker_{0};
+
+  /// SSE streaming routes (GET only) — keyed by path
+  std::unordered_map<std::string,
+                     std::function<asio::awaitable<void>(
+                         Request &, std::shared_ptr<SseWriter>)>>
+      sseRoutes_;
 };
 
 } // namespace util

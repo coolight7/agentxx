@@ -21,6 +21,7 @@
 #include <neograph/types.h>
 #include <optional>
 #include <queue>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -452,29 +453,211 @@ private:
     co_return std::unexpected{std::string{"no transport configured"}};
   }
 
-  asio::awaitable<std::expected<json, std::string>>
-  sendHttpRequest(int64_t id, const std::string &method, const json &params) {
-    auto req = makeRequest(id, method, params);
+  // -----------------------------------------------------------------------
+  // SSE endpoint discovery & event parsing
+  // -----------------------------------------------------------------------
 
-    // 2025-11-25: include MCP-Protocol-Version header for HTTP transport
+  /// Build the SSE endpoint URL from the server URL (append /sse)
+  static std::string buildSseUrl(std::string_view serverUrl) {
+    auto url = std::string(serverUrl);
+    while (!url.empty() && url.back() == '/')
+      url.pop_back();
+    return url + "/sse";
+  }
+
+  struct SseEvent {
+    std::string event;
+    std::string data;
+  };
+
+  /// Parse SSE text into a list of (event-type, data) pairs.
+  static std::vector<SseEvent> parseSseEvents(const std::string &body) {
+    std::vector<SseEvent> events;
+    std::string curEvent;
+    std::string curData;
+
+    std::istringstream stream(body);
+    std::string line;
+    while (std::getline(stream, line)) {
+      // Strip trailing \r if present
+      if (!line.empty() && line.back() == '\r')
+        line.pop_back();
+
+      if (line.empty()) {
+        if (!curEvent.empty() || !curData.empty()) {
+          events.push_back({std::move(curEvent), std::move(curData)});
+          curEvent.clear();
+          curData.clear();
+        }
+      } else if (line.starts_with("event: ")) {
+        curEvent = line.substr(7);
+      } else if (line.starts_with("data: ")) {
+        if (!curData.empty())
+          curData += "\n";
+        curData += line.substr(6);
+      }
+      // id:, retry: and other fields are ignored
+    }
+    if (!curEvent.empty() || !curData.empty())
+      events.push_back({std::move(curEvent), std::move(curData)});
+
+    return events;
+  }
+
+  /// Extract a value from a URL query string by key.
+  static std::string getQueryParam(std::string_view query,
+                                   std::string_view key) {
+    auto pos = query.find(key);
+    if (pos == std::string_view::npos)
+      return {};
+    pos += key.size();
+    if (pos >= query.size() || query[pos] != '=')
+      return {};
+    ++pos; // skip '='
+    auto end = query.find('&', pos);
+    if (end == std::string_view::npos)
+      end = query.size();
+    return std::string(query.substr(pos, end - pos));
+  }
+
+  /// Discover the message endpoint by connecting to the SSE URL.
+  asio::awaitable<void> discoverSseEndpoint() {
+    if (sseDiscovered_.load())
+      co_return;
+
+    std::string sseUrl = buildSseUrl(config_.serverUrl);
+
+    auto headers = util::HeaderMap{};
+    headers.set("Accept", "text/event-stream");
+
+    auto resp =
+        co_await util::HttpClient::getAsync(sseUrl, headers, config_.initTimeout);
+
+    if (!resp.has_value()) {
+      XX_LOGW("[McpClient] SSE discovery failed ({}), falling back to "
+              "direct POST", resp.error());
+      httpMessageUrl_ = config_.serverUrl;
+      sseDiscovered_.store(true);
+      co_return;
+    }
+
+    // Extract session ID from SSE response headers (Mcp-Session-Id)
+    auto sessionIdHdr = resp.value().findHeader("mcp-session-id");
+    if (!sessionIdHdr.empty())
+      mcpSessionId_ = sessionIdHdr;
+
+    auto events = parseSseEvents(resp.value().body);
+    for (const auto &ev : events) {
+      if (ev.event == "endpoint") {
+        std::string path = ev.data;
+        auto [base, _] = util::HttpClient::splitUrl(config_.serverUrl);
+
+        // Extract session ID from endpoint URL query params if present
+        auto qpos = path.find('?');
+        if (qpos != std::string::npos) {
+          auto query = path.substr(qpos + 1);
+          auto sid = getQueryParam(query, "sessionId");
+          if (sid.empty())
+            sid = getQueryParam(query, "session_id");
+          if (sid.empty())
+            sid = getQueryParam(query, "mcp-session-id");
+          if (!sid.empty())
+            mcpSessionId_ = sid;
+          // Keep query params in the URL
+        }
+
+        httpMessageUrl_ = base + path;
+        sseDiscovered_.store(true);
+        XX_LOGI("[McpClient] discovered message endpoint: {} (session={})",
+                httpMessageUrl_, mcpSessionId_);
+        co_return;
+      }
+    }
+
+    // No endpoint event: fall back to the original URL
+    httpMessageUrl_ = config_.serverUrl;
+    sseDiscovered_.store(true);
+    co_return;
+  }
+
+  /// Build common headers for MCP HTTP requests.
+  util::HeaderMap buildHttpHeaders() const {
     auto headers = config_.extraHeaders;
     if (config_.protocolVersion == kProtocol2025_11_25) {
       if (!headers.contains("MCP-Protocol-Version"))
         headers.set("MCP-Protocol-Version", std::string{kProtocol2025_11_25});
     }
+    headers.set("Accept", "application/json, text/event-stream");
+    if (!mcpSessionId_.empty())
+      headers.set("Mcp-Session-Id", mcpSessionId_);
+    return headers;
+  }
+
+  asio::awaitable<std::expected<json, std::string>>
+  sendHttpRequest(int64_t id, const std::string &method, const json &params) {
+    // Discover SSE endpoint on first request (non-fatal if it fails)
+    if (!sseDiscovered_.load())
+      co_await discoverSseEndpoint();
+
+    auto req = makeRequest(id, method, params);
+    auto headers = buildHttpHeaders();
 
     auto resp = co_await util::HttpClient::postAsync(
-        config_.serverUrl, req, headers, config_.requestTimeout);
+        httpMessageUrl_, req, headers, config_.requestTimeout);
 
     if (!resp.has_value()) {
       co_return std::unexpected{std::move(resp.error())};
     }
     auto &httpResp = resp.value();
+
+    // Capture session ID from POST response headers if present
+    if (mcpSessionId_.empty()) {
+      auto sid = httpResp.findHeader("mcp-session-id");
+      if (!sid.empty())
+        mcpSessionId_ = sid;
+    }
+
     if (httpResp.status / 100 != 2) {
       co_return std::unexpected{"HTTP " + std::to_string(httpResp.status) +
                                 ": " + httpResp.body.substr(0, 256)};
     }
 
+    // Handle SSE responses (Content-Type: text/event-stream)
+    auto ct = httpResp.contentType();
+    if (httpResp.isTextContentType(ct) &&
+        ct.find("event-stream") != std::string::npos) {
+      // Parse SSE events and look for a message with matching id
+      auto events = parseSseEvents(httpResp.body);
+      for (const auto &ev : events) {
+        if (ev.event == "message" || ev.event.empty()) {
+          try {
+            json j = json::parse(ev.data);
+            // Check if this message matches our request id
+            if (j.contains("id") && !j["id"].is_null()) {
+              auto respId = j["id"];
+              bool idMatch = false;
+              if (respId.is_number_integer())
+                idMatch = respId.get<int64_t>() == id;
+              else if (respId.is_string())
+                idMatch = respId.get<std::string>() == std::to_string(id);
+              if (idMatch) {
+                auto err = getErrorFromResponse(j);
+                if (err.has_value())
+                  co_return j;
+                co_return j;
+              }
+            }
+          } catch (const json::parse_error &) {
+            XX_LOGW("[McpClient] ignoring malformed SSE data: {}",
+                    ev.data.substr(0, 128));
+          }
+        }
+      }
+      co_return std::unexpected{
+          "no matching response in SSE stream for id " + std::to_string(id)};
+    }
+
+    // Normal JSON response
     auto bodyJson = httpResp.bodyJson();
     if (!bodyJson.has_value()) {
       co_return std::unexpected{"invalid JSON response: " +
@@ -484,8 +667,6 @@ private:
     json j = bodyJson.value();
     auto err = getErrorFromResponse(j);
     if (err.has_value()) {
-      // Return the error as a result with the error field
-      // The caller can check for "error" in the returned json
       co_return j;
     }
 
@@ -501,7 +682,6 @@ private:
       if (!idMatch) {
         XX_LOGW("[McpClient] response id mismatch: sent={}, got={}", id,
                 respId.dump());
-        // Continue anyway — be lenient
       }
     }
 
@@ -574,8 +754,9 @@ private:
       req["params"] = params;
 
     if (config_.isHttp()) {
+      auto url = httpMessageUrl_.empty() ? config_.serverUrl : httpMessageUrl_;
       [[maybe_unused]] auto resp = co_await util::HttpClient::postAsync(
-          config_.serverUrl, req, config_.extraHeaders, config_.requestTimeout);
+          url, req, buildHttpHeaders(), config_.requestTimeout);
     } else if (config_.isStdio()) {
       auto reqStr = req.dump() + "\n";
       std::lock_guard lock(stdioWriteMutex_);
@@ -723,6 +904,10 @@ private:
       return;
 
     initialized_.store(false);
+
+    httpMessageUrl_.clear();
+    mcpSessionId_.clear();
+    sseDiscovered_.store(false);
 
 #if XX_IS_LINUX_D || XX_IS_MACOS_D
     if (stdioChildPid_ > 0) {
@@ -894,6 +1079,11 @@ private:
   std::atomic<bool> closed_{false};
   InitializeResult serverInfo_;
   std::atomic<int64_t> nextId_{1};
+
+  // HTTP SSE transport state
+  std::atomic<bool> sseDiscovered_{false};
+  std::string httpMessageUrl_;
+  std::string mcpSessionId_;
 
   // Stdio transport state
 #if XX_IS_LINUX_D || XX_IS_MACOS_D

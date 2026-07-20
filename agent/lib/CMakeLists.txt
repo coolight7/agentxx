@@ -58,6 +58,7 @@ target_compile_definitions(agentxx_shared PUBLIC
 
   NEOGRAPH_STATIC_BUILD
   NEOGRAPH_USE_BOOST_ASIO
+  CPPHTTPLIB_OPENSSL_SUPPORT
 )
 target_compile_definitions(agentxx_static PUBLIC
   __STDC_CONSTANT_MACROS
@@ -73,6 +74,7 @@ target_compile_definitions(agentxx_static PUBLIC
 
   NEOGRAPH_STATIC_BUILD
   NEOGRAPH_USE_BOOST_ASIO
+  CPPHTTPLIB_OPENSSL_SUPPORT
 )
 if (AGENTXX_ENABLE_VECTORSCAN)
   target_compile_definitions(agentxx_shared PUBLIC AGENTXX_ENABLE_VECTORSCAN=1)
