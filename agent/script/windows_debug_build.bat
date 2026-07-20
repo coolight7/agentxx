@@ -51,7 +51,7 @@ if %ERRORLEVEL% neq 0 (
     exit /b 1
 )
 
-cmake --build "%build_dir%" --config Debug
+cmake --build "%build_dir%" --config Debug --parallel 4
 if %ERRORLEVEL% neq 0 (
     echo cmake build failed!
     exit /b 1

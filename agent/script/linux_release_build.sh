@@ -26,7 +26,8 @@ if [[ $? -ne 0 ]]; then
     exit 1
 fi
 
-cmake --build "$build_dir" --config Release
+# [parallel] 并行编译会大幅增加内存占用，内存不够可以降低或指定为 1
+cmake --build "$build_dir" --config Release --parallel 4
 
 if [[ $? -ne 0 ]]; then
     echo "cmake build failed!"
