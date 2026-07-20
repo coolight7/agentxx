@@ -1,4 +1,11 @@
 #include "test_web_search_tools.h"
+#include "agentxx/agent/context.h"
+#include "agentxx/tools/web_search.h"
+#include <asio/awaitable.hpp>
+#include <asio/redirect_error.hpp>
+#include <asio/use_awaitable.hpp>
+#include <iostream>
+#include <string>
 
 namespace agentxx {
 namespace test {

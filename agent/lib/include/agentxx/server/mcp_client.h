@@ -10,12 +10,15 @@
 #include "asio/steady_timer.hpp"
 #include "asio/this_coro.hpp"
 #include "asio/use_awaitable.hpp"
-
 #include <atomic>
 #include <chrono>
 #include <expected>
+#include <future>
 #include <memory>
 #include <mutex>
+#include <neograph/api.h>
+#include <neograph/json.h>
+#include <neograph/types.h>
 #include <optional>
 #include <queue>
 #include <string>

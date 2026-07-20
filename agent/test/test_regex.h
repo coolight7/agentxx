@@ -1,13 +1,12 @@
 #pragma once
 
 #include "agentxx/util/regex.h"
-#include "test_framework.h"
-
 #include <cassert>
 #include <memory>
 #include <string>
 #include <vector>
 
+#include "test_framework.h"
 #undef XX_TEST_PASSED
 #undef XX_TEST_FAILED
 #define XX_TEST_PASSED g_regex_passed

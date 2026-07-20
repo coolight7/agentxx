@@ -1,15 +1,7 @@
 #pragma once
 
-#include "agentxx/middlewares/event_stream.h"
-#include "agentxx/util/log.h"
-#include "asio/co_spawn.hpp"
-#include "asio/detached.hpp"
-#include "asio/io_context.hpp"
-#include "asio/this_coro.hpp"
-#include "asio/use_awaitable.hpp"
-#include <atomic>
-#include <chrono>
-#include <iostream>
+#include <asio/awaitable.hpp>
+#include <neograph/api.h>
 #include <string>
 
 #include "test_framework.h"

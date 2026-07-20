@@ -1,17 +1,7 @@
 #pragma once
 
-#include "agentxx/agent/context.h"
-#include "agentxx/middlewares/event_stream.h"
-#include "agentxx/middlewares/events.h"
-#include "agentxx/middlewares/subagent_supervisor.h"
-#include "agentxx/tools/sub_agent.h"
-#include "asio/co_spawn.hpp"
-#include "asio/detached.hpp"
-#include "asio/io_context.hpp"
-#include "asio/use_awaitable.hpp"
-#include <atomic>
-#include <iostream>
-#include <memory>
+#include <asio/awaitable.hpp>
+#include <neograph/api.h>
 #include <string>
 
 #include "test_framework.h"

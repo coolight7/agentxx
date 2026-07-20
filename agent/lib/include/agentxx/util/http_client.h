@@ -5,7 +5,9 @@
 #include "agentxx/util/string_util.h"
 #include "asio/awaitable.hpp"
 #include "asio/cancel_after.hpp"
+#include "asio/redirect_error.hpp"
 #include "asio/this_coro.hpp"
+#include "asio/use_awaitable.hpp"
 #include "html2md/html2md.h"
 #include <algorithm>
 #include <array>
@@ -19,6 +21,7 @@
 #include <expected>
 #include <memory>
 #include <mutex>
+#include <neograph/api.h>
 #include <neograph/json.h>
 #include <openssl/ssl.h>
 #include <optional>

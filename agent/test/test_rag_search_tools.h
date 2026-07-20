@@ -1,15 +1,11 @@
 #pragma once
 
+#include "agentxx/agent/context.h"
 #include <asio/awaitable.hpp>
-#include <asio/use_awaitable.hpp>
-#include <asio/redirect_error.hpp>
-
-#include "agentxx/tools/rag_search.h"
-#include "agentxx/util/string_util.h"
-#include "test_framework.h"
-#include <iostream>
+#include <neograph/api.h>
 #include <string>
 
+#include "test_framework.h"
 #undef XX_TEST_PASSED
 #undef XX_TEST_FAILED
 #define XX_TEST_PASSED g_rag_passed

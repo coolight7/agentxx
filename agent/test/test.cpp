@@ -17,7 +17,6 @@
 #include "test_event_stream.h"
 #include "test_events.h"
 #include "test_filesystem_tools.h"
-#include "test_framework.h"
 #include "test_http.h"
 #include "test_interrupt_bus.h"
 #include "test_mcp.h"
@@ -186,10 +185,10 @@ int main(int argn, char **argv) {
   ioCtx.run();
 
   // ---- 同步平台相关测试 ----
-  runSync("screen_capture", test_screen_capture);
+  runSync("screen_capture", agentxx::test::test_screen_capture);
 
   if (shouldRun("text_selection")) {
-    auto monitor = test_text_selection_monitor();
+    auto monitor = agentxx::test::test_text_selection_monitor();
     if (waitForInput) {
       std::cout << "Press any key to continue..." << std::endl;
       std::cin.get();

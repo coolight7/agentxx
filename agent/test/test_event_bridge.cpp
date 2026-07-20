@@ -1,4 +1,16 @@
 #include "test_event_bridge.h"
+#include "agentxx/agent/config.h"
+#include "agentxx/agent/context.h"
+#include "agentxx/middlewares/event_stream.h"
+#include "agentxx/middlewares/events.h"
+#include "asio/co_spawn.hpp"
+#include "asio/detached.hpp"
+#include "asio/io_context.hpp"
+#include "asio/use_awaitable.hpp"
+#include <atomic>
+#include <iostream>
+#include <memory>
+#include <string>
 
 namespace agentxx {
 namespace test {

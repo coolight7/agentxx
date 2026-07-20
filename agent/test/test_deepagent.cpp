@@ -1,4 +1,9 @@
 #include "test_deepagent.h"
+#include "agentxx/agent/deepagent.h"
+#include "asio/co_spawn.hpp"
+#include "asio/detached.hpp"
+#include "asio/io_context.hpp"
+#include "asio/use_awaitable.hpp"
 
 namespace agentxx {
 namespace test {

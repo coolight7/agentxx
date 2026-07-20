@@ -1,4 +1,5 @@
 #include "test_events.h"
+#include "agentxx/middlewares/events.h"
 
 namespace agentxx {
 namespace test {

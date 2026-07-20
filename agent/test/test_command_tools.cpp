@@ -1,4 +1,9 @@
 #include "test_command_tools.h"
+#include "agentxx/agent/context.h"
+#include "agentxx/tools/execute_command.h"
+#include "asio/dispatch.hpp"
+#include <iostream>
+#include <string>
 
 namespace agentxx {
 namespace test {

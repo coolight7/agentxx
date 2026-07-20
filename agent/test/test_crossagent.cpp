@@ -1,4 +1,17 @@
 #include "test_crossagent.h"
+#include "agentxx/agent/context.h"
+#include "agentxx/middlewares/event_stream.h"
+#include "agentxx/middlewares/events.h"
+#include "agentxx/middlewares/subagent_supervisor.h"
+#include "agentxx/tools/cross_agent_query.h"
+#include "asio/co_spawn.hpp"
+#include "asio/detached.hpp"
+#include "asio/io_context.hpp"
+#include "asio/use_awaitable.hpp"
+#include <atomic>
+#include <iostream>
+#include <memory>
+#include <string>
 
 namespace agentxx {
 namespace test {

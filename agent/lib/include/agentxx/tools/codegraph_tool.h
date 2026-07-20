@@ -3,10 +3,12 @@
 #include "agentxx/expand/codegraph_manager.h"
 #include "agentxx/tools/tool.h"
 #include "fmt/format.h"
-#include "neograph/neograph.h"
 #include <memory>
+#include <neograph/json.h>
+#include <neograph/types.h>
 #include <sstream>
 #include <string>
+
 
 #if AGENTXX_ENABLE_CODEGRAPH
 

@@ -1,4 +1,17 @@
 #include "test_http.h"
+#include "agentxx/util/http_client.h"
+#include "agentxx/util/http_server.h"
+#include <asio/awaitable.hpp>
+#include <asio/detached.hpp>
+#include <asio/io_context.hpp>
+#include <asio/redirect_error.hpp>
+#include <asio/steady_timer.hpp>
+#include <asio/use_awaitable.hpp>
+#include <chrono>
+#include <iostream>
+#include <string>
+#include <string_view>
+#include <thread>
 
 namespace agentxx {
 namespace test {

@@ -147,6 +147,28 @@ public:
     return tool_msg;
   }
 
+  inline static void printMessage(const neograph::ChatMessage &msg,
+                                  size_t index = 1) {
+    std::string toollist;
+    if (false == msg.tool_calls.empty()) {
+      toollist += "┣━ Toolcall: \n";
+      for (const auto &tool : msg.tool_calls) {
+        toollist += fmt::format(R"(  - {}/{}
+    {}
+)",
+                                tool.name, tool.id, tool.arguments);
+      }
+    }
+    XX_OUT(R"(
+┏━━━━━━ Message/{} ━━━━━━┓
+┣━ Role: {}
+{}
+┣━ Content: {}
+┗━━━━━━ Message/{} ━━━━━━┛
+)",
+           index, msg.role, toollist, msg.content, index);
+  }
+
   inline static void
   printMessages(const std::vector<neograph::ChatMessage> &messages,
                 bool printSystemMsg = true) {
@@ -156,24 +178,7 @@ public:
       if (false == printSystemMsg && msg.role == "system") {
         continue;
       }
-      std::string toollist;
-      if (false == msg.tool_calls.empty()) {
-        toollist += "┣━ Toolcall: \n";
-        for (const auto &tool : msg.tool_calls) {
-          toollist += fmt::format(R"(  - {}/{}
-    {}
-)",
-                                  tool.name, tool.id, tool.arguments);
-        }
-      }
-      XX_OUT(R"(
-┏━━━━━━ Message/{} ━━━━━━┓
-┣━ Role: {}
-{}
-┣━ Content: {}
-┗━━━━━━ Message/{} ━━━━━━┛
-)",
-             index, msg.role, toollist, msg.content, index);
+      printMessage(msg, index);
     }
   }
 };

@@ -1,4 +1,13 @@
 #include "test_codegraph_tools.h"
+#include "agentxx/agent/context.h"
+#include "agentxx/expand/codegraph_manager.h"
+#include "agentxx/tools/codegraph_tool.h"
+#include <asio/awaitable.hpp>
+#include <atomic>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <string>
 
 #if AGENTXX_ENABLE_CODEGRAPH
 

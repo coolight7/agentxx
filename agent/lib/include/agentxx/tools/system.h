@@ -3,10 +3,11 @@
 #include "agentxx/expand/get_cpu_gpu_use.h"
 #include "agentxx/tools/tool.h"
 #include "fmt/format.h"
-#include "neograph/neograph.h"
 #include <format>
 #include <iostream>
 #include <map>
+#include <neograph/api.h>
+#include <neograph/json.h>
 #include <sstream>
 #include <string>
 #include <vector>

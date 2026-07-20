@@ -144,7 +144,7 @@ public:
     if (url.empty()) {
       co_return R"({"error":"Arg `url` is empty"})";
     }
-    int timeout = int(arguments.value<double>("timeout", 60.0));
+    int timeout = int(arguments.value<double>("timeout", 30.0));
 
     auto resp = co_await agentxx::util::HttpClient::getAsync(
         url, {}, std::chrono::seconds(timeout));

@@ -1,6 +1,5 @@
 #pragma once
 
-#include "agentxx/middlewares/events.h"
 #include "test_framework.h"
 
 #include <cassert>

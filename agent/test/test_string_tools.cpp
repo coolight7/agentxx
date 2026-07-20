@@ -1,4 +1,9 @@
 #include "test_string_tools.h"
+#include "agentxx/agent/context.h"
+#include "agentxx/tools/string.h"
+#include <asio/awaitable.hpp>
+#include <iostream>
+#include <string>
 
 namespace agentxx {
 namespace test {

@@ -5,7 +5,8 @@
 #include "agentxx/middlewares/events.h"
 #include "agentxx/tools/tool.h"
 #include "agentxx/util/log.h"
-#include "neograph/neograph.h"
+#include <neograph/json.h>
+#include <neograph/types.h>
 #include <string>
 
 namespace agentxx {

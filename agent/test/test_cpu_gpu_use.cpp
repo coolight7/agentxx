@@ -1,4 +1,7 @@
 #include "test_cpu_gpu_use.h"
+#include "agentxx/expand/get_cpu_gpu_use.h"
+#include "asio/awaitable.hpp"
+#include <iostream>
 
 namespace agentxx {
 namespace test {

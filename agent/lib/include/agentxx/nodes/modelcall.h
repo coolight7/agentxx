@@ -3,6 +3,7 @@
 #include "agentxx/nodes/warp_handle.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/log.h"
+#include "agentxx/util/string_util.h"
 #include "asio/io_context.hpp"
 #include "asio/steady_timer.hpp"
 #include "asio/use_awaitable.hpp"
@@ -12,7 +13,6 @@
 #include <neograph/llm/rate_limited_provider.h>
 #include <neograph/llm/schema_provider.h>
 #include <neograph/neograph.h>
-#include <neograph/types.h>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -146,6 +146,30 @@ public:
       neograph::to_json(userMsgJson, userMsg);
       in.state.write("messages", userMsgJson);
     }
+
+#if XX_IS_DEBUG_D
+    {
+      // 检查是否符合 utf8
+      auto msgs = in.state.get_messages();
+      for (const auto &msg : msgs) {
+        bool doPrint = false;
+        if (false == agentxx::util::utf8IsAvail(msg.content)) {
+          XX_LOGE("  - Message.content is not utf8 available: ");
+          doPrint = true;
+        }
+        for (const auto &tool : msg.tool_calls) {
+          if (false == agentxx::util::utf8IsAvail(tool.arguments)) {
+            XX_LOGE("  - Message.toolcall is not utf8 available: {}/{}",
+                    tool.name, tool.id);
+            doPrint = true;
+          }
+        }
+        if (doPrint) {
+          agentxx::middleware::BaseMiddlewareHandleInterface::printMessage(msg);
+        }
+      }
+    }
+#endif
   }
 
   asio::awaitable<void>
@@ -170,7 +194,7 @@ public:
       }
 
       {
-        auto &appendSystemMsgList =
+        const auto &appendSystemMsgList =
             agentCtxPtr->middlewareHandleContext
                 ->getGraphDataItemValue<std::vector<std::string>>(
                     in.ctx.thread_id, agentxx::middleware::MiddlewareContext::
@@ -181,10 +205,8 @@ public:
         std::ostringstream oss;
         oss << agentCtxPtr->agentConfig->prompt.systemPrompt;
 
-        if (false == appendSystemMsgList.empty()) {
-          for (const auto &item : appendSystemMsgList) {
-            oss << item << "\n";
-          }
+        for (const auto &item : appendSystemMsgList) {
+          oss << item << "\n";
         }
 
         newSystemMsg.content = oss.str();
@@ -222,12 +244,6 @@ public:
         co_await handle->onModelcallRunFunc(in);
       }
 
-      if (agentCtxPtr->agentConfig->logPrintMessagesBeforeLLM) {
-        agentxx::middleware::BaseMiddlewareHandleInterface::printMessages(
-            in.state.get_messages(),
-            agentCtxPtr->agentConfig->logPrintMessagesBeforeLLMWithSystemMsg);
-      }
-
       bool isCancel = false;
       std::string errInfo;
       std::exception_ptr errorPtr;
@@ -239,13 +255,14 @@ public:
         co_return;
       } catch (const neograph::graph::CancelledException &e) {
         isCancel = true;
+        errInfo = "Cancel";
         errorPtr = std::current_exception();
         // } catch (const neograph::graph::NodeInterrupt &e) {
         // isCancel = true;
         // llm node 无 Interrupt
       } catch (const std::exception &e) {
-        errorPtr = std::current_exception();
         errInfo = e.what();
+        errorPtr = std::current_exception();
       } catch (const boost::exception &e) {
         errInfo = boost::diagnostic_information(e);
         errorPtr = std::current_exception();
@@ -287,5 +304,6 @@ public:
     } while (true);
   }
 };
+
 } // namespace nodes
 } // namespace agentxx

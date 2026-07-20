@@ -1,15 +1,8 @@
 #pragma once
 
 #include <asio/awaitable.hpp>
-#include <asio/detached.hpp>
-#include <asio/io_context.hpp>
-#include <asio/redirect_error.hpp>
-#include <asio/steady_timer.hpp>
-#include <asio/use_awaitable.hpp>
-#include <chrono>
-#include <iostream>
+#include <neograph/api.h>
 #include <string>
-#include <thread>
 
 #include "test_framework.h"
 

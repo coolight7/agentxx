@@ -1,4 +1,16 @@
 #include "test_screen_capture.h"
+#include "agentxx/expand/screen_capture.h"
+#include <iostream>
+#include <memory>
+#include <string>
+#include <thread>
+
+#if XX_IS_WIN_D
+#include <windows.h>
+#endif
+
+namespace agentxx {
+namespace test {
 
 agentxx::test::TestResult test_screen_capture() {
 #if XX_IS_WIN_D
@@ -155,3 +167,6 @@ agentxx::test::TestResult test_screen_capture() {
   return agentxx::test::TestResult{0, 0};
 #endif
 }
+
+} // namespace test
+} // namespace agentxx

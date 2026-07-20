@@ -1,12 +1,11 @@
 #pragma once
 
 #include "agentxx/agent/context.h"
-#include "agentxx/tools/execute_command.h"
-#include "asio/dispatch.hpp"
-#include "test_framework.h"
-#include <iostream>
+#include <asio/awaitable.hpp>
+#include <neograph/api.h>
 #include <string>
 
+#include "test_framework.h"
 #undef XX_TEST_PASSED
 #undef XX_TEST_FAILED
 #define XX_TEST_PASSED g_cmd_passed

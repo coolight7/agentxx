@@ -1,16 +1,14 @@
 #pragma once
 
-#include "agentxx/agent/deepagent.h"
 #include "agentxx/util/http_server.h"
-#include "asio/co_spawn.hpp"
-#include "asio/detached.hpp"
-#include "asio/io_context.hpp"
-#include "asio/use_awaitable.hpp"
-#include "test_framework.h"
+#include <asio/awaitable.hpp>
 #include <memory>
+#include <neograph/api.h>
+#include <neograph/json.h>
 #include <string>
 #include <thread>
 
+#include "test_framework.h"
 #undef XX_TEST_PASSED
 #undef XX_TEST_FAILED
 #define XX_TEST_PASSED g_da_passed

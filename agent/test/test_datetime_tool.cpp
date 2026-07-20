@@ -1,4 +1,11 @@
 #include "test_datetime_tool.h"
+#include "agentxx/agent/context.h"
+#include "agentxx/tools/system.h"
+#include <asio/awaitable.hpp>
+#include <iostream>
+#include <neograph/api.h>
+#include <regex>
+#include <string>
 
 namespace agentxx {
 namespace test {

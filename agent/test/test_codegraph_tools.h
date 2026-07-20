@@ -1,17 +1,11 @@
 #pragma once
 
 #include "agentxx/agent/context.h"
-#include "agentxx/expand/codegraph_manager.h"
-#include "agentxx/tools/codegraph_tool.h"
-#include "neograph/neograph.h"
-#include "test_framework.h"
 #include <asio/awaitable.hpp>
-#include <atomic>
-#include <filesystem>
-#include <fstream>
-#include <iostream>
+#include <neograph/api.h>
 #include <string>
 
+#include "test_framework.h"
 #if AGENTXX_ENABLE_CODEGRAPH
 
 #undef XX_TEST_PASSED

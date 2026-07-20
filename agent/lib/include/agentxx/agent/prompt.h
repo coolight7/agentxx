@@ -485,7 +485,7 @@ Returns the most relevant documents with their content, source, and similarity s
               .args =
                   {
                       {"url", "Absolute http/https URL."},
-                      {"timeout", "GET requiest timeout, default 60 seconds."},
+                      {"timeout", "Default 30 seconds. Requiest timeout."},
                   },
           },
       },

@@ -1,4 +1,11 @@
 #include "test_filesystem_tools.h"
+#include "agentxx/agent/context.h"
+#include "agentxx/tools/filesystem.h"
+#include <cstdio>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <string>
 
 namespace agentxx {
 namespace test {

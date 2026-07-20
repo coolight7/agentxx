@@ -5,9 +5,12 @@
 #include "agentxx/middlewares/events.h"
 #include "agentxx/tools/sub_agent.h"
 #include "agentxx/util/log.h"
-#include "neograph/neograph.h"
 #include <map>
 #include <memory>
+#include <neograph/graph/engine.h>
+#include <neograph/graph/types.h>
+#include <neograph/json.h>
+#include <neograph/types.h>
 #include <string>
 
 namespace agentxx {

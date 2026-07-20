@@ -3,8 +3,9 @@
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/config_static.h"
 #include "agentxx/agent/deepagent.h"
+#include "neograph/json.h"
 #include "neograph/llm/openai_provider.h"
-#include "neograph/neograph.h"
+#include "neograph/types.h"
 #include <agentxx/util/log.h>
 #include <algorithm>
 #include <chrono>

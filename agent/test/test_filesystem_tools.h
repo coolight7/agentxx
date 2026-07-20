@@ -1,16 +1,11 @@
 #pragma once
 
 #include "agentxx/agent/context.h"
-#include "agentxx/tools/filesystem.h"
-#include "neograph/neograph.h"
-#include "test_framework.h"
 #include <asio/awaitable.hpp>
-#include <cstdio>
-#include <filesystem>
-#include <fstream>
-#include <iostream>
+#include <neograph/api.h>
 #include <string>
 
+#include "test_framework.h"
 #undef XX_TEST_PASSED
 #undef XX_TEST_FAILED
 #define XX_TEST_PASSED g_fs_passed

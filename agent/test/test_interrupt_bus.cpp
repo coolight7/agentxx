@@ -1,6 +1,18 @@
 #include "test_interrupt_bus.h"
+#include "agentxx/agent/context.h"
+#include "agentxx/middlewares/event_stream.h"
+#include "agentxx/middlewares/events.h"
 #include "agentxx/middlewares/interrupt_handler.h"
+#include "agentxx/middlewares/middleware.h"
+#include "agentxx/middlewares/permission.h"
 #include "agentxx/tools/tool.h"
+#include "asio/as_tuple.hpp"
+#include "asio/co_spawn.hpp"
+#include "asio/detached.hpp"
+#include "asio/io_context.hpp"
+#include "asio/use_awaitable.hpp"
+#include <iostream>
+#include <memory>
 
 namespace agentxx {
 namespace test {

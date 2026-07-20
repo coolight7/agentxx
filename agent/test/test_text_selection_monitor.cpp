@@ -1,4 +1,15 @@
 #include "test_text_selection_monitor.h"
+#include <iostream>
+#include <memory>
+#include <string>
+#include <thread>
+
+#if XX_IS_WIN_D
+#include <windows.h>
+#endif
+
+namespace agentxx {
+namespace test {
 
 std::shared_ptr<agentxx::expand::TextSelectionMonitor>
 test_text_selection_monitor() {
@@ -23,3 +34,6 @@ test_text_selection_monitor() {
 #endif
   return nullptr;
 }
+
+} // namespace test
+} // namespace agentxx

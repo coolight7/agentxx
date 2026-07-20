@@ -7,8 +7,9 @@
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/util/log.h"
 #include "agentxx/util/string_util.h"
-#include "neograph/neograph.h"
 #include <memory>
+#include <neograph/json.h>
+#include <neograph/types.h>
 #include <string>
 
 namespace agentxx {

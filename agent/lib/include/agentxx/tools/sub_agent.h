@@ -6,10 +6,13 @@
 #include "agentxx/nodes/warp_handle.h"
 #include "agentxx/tools/tool.h"
 #include "fmt/format.h"
-#include "neograph/neograph.h"
 #include <ctime>
 #include <iostream>
 #include <map>
+#include <neograph/graph/engine.h>
+#include <neograph/graph/types.h>
+#include <neograph/json.h>
+#include <neograph/types.h>
 #include <sstream>
 #include <string>
 #include <vector>

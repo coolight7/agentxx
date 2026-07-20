@@ -1,4 +1,11 @@
 #include "test_rag_search_tools.h"
+#include "agentxx/tools/rag_search.h"
+#include "agentxx/util/string_util.h"
+#include <asio/awaitable.hpp>
+#include <asio/redirect_error.hpp>
+#include <asio/use_awaitable.hpp>
+#include <iostream>
+#include <string>
 
 namespace agentxx {
 namespace test {

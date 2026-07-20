@@ -2,8 +2,13 @@
 
 #include "agentxx/util/log.h"
 #include "agentxx/util/router.h"
-#include <asio.hpp>
-#include <asio/signal_set.hpp>
+#include "asio/awaitable.hpp"
+#include "asio/cancel_after.hpp"
+#include "asio/co_spawn.hpp"
+#include "asio/detached.hpp"
+#include "asio/redirect_error.hpp"
+#include "asio/signal_set.hpp"
+#include "asio/use_awaitable.hpp"
 #include <atomic>
 #include <boost/beast/core.hpp>
 #include <boost/beast/http.hpp>
@@ -13,6 +18,8 @@
 #include <ctime>
 #include <functional>
 #include <memory>
+#include <neograph/api.h>
+#include <neograph/json.h>
 #include <string>
 #include <thread>
 #include <type_traits>
@@ -138,7 +145,7 @@ public:
       return;
     stopped_ = false;
 
-    using tcp = boost::asio::ip::tcp;
+    using tcp = asio::ip::tcp;
 
     // Create workers (each has its own io_context — zero-lock isolation)
     unsigned threadCount = config_.ioThreads;
@@ -154,27 +161,26 @@ public:
     auto &mainCtx = workers_[0]->ioCtx;
 
     // Acceptor — runs on the first worker's io_context
-    auto const address = boost::asio::ip::make_address(config_.address);
+    auto const address = asio::ip::make_address(config_.address);
     tcp::endpoint endpoint(address, config_.port);
     acceptor_ = std::make_unique<tcp::acceptor>(mainCtx);
     acceptor_->open(endpoint.protocol());
     acceptor_->set_option(tcp::acceptor::reuse_address(true));
     acceptor_->bind(endpoint);
-    acceptor_->listen(boost::asio::socket_base::max_listen_connections);
+    acceptor_->listen(asio::socket_base::max_listen_connections);
 
     // Setup SSL context if configured
     if (!config_.sslCertFile.empty() && !config_.sslKeyFile.empty()) {
-      sslCtx_ = std::make_unique<boost::asio::ssl::context>(
-          boost::asio::ssl::context::tlsv12_server);
-      sslCtx_->set_options(boost::asio::ssl::context::default_workarounds |
-                           boost::asio::ssl::context::no_sslv2 |
-                           boost::asio::ssl::context::no_sslv3 |
-                           boost::asio::ssl::context::no_tlsv1 |
-                           boost::asio::ssl::context::no_tlsv1_1 |
-                           boost::asio::ssl::context::single_dh_use);
+      sslCtx_ = std::make_unique<asio::ssl::context>(
+          asio::ssl::context::tlsv12_server);
+      sslCtx_->set_options(
+          asio::ssl::context::default_workarounds |
+          asio::ssl::context::no_sslv2 | asio::ssl::context::no_sslv3 |
+          asio::ssl::context::no_tlsv1 | asio::ssl::context::no_tlsv1_1 |
+          asio::ssl::context::single_dh_use);
       sslCtx_->use_certificate_chain_file(config_.sslCertFile);
       sslCtx_->use_private_key_file(config_.sslKeyFile,
-                                    boost::asio::ssl::context::pem);
+                                    asio::ssl::context::pem);
     }
 
     // Spawn listener coroutine on first worker's io_context
@@ -233,29 +239,27 @@ private:
   // -----------------------------------------------------------------------
 
   asio::awaitable<void> acceptLoop() {
-    using tcp = boost::asio::ip::tcp;
+    using tcp = asio::ip::tcp;
     auto executor = co_await asio::this_coro::executor;
     while (!stopped_) {
       boost::system::error_code ec;
       tcp::socket socket = co_await acceptor_->async_accept(
-          boost::asio::redirect_error(boost::asio::use_awaitable, ec));
+          asio::redirect_error(asio::use_awaitable, ec));
       if (ec) {
-        if (ec == boost::asio::error::operation_aborted ||
-            ec == boost::asio::error::connection_aborted)
+        if (ec == asio::error::operation_aborted ||
+            ec == asio::error::connection_aborted)
           co_return;
-        if (ec == boost::asio::error::no_descriptors) {
+        if (ec == asio::error::no_descriptors) {
           XX_LOGW("[server] Accept: too many open files, retrying in 100ms");
-          boost::asio::steady_timer timer(executor,
-                                          std::chrono::milliseconds(100));
+          asio::steady_timer timer(executor, std::chrono::milliseconds(100));
           co_await timer.async_wait(
-              boost::asio::redirect_error(boost::asio::use_awaitable, ec));
+              asio::redirect_error(asio::use_awaitable, ec));
           continue;
         }
         XX_LOGE("[server] Accept error: {}", ec.message());
-        boost::asio::steady_timer timer(executor,
-                                        std::chrono::milliseconds(10));
+        asio::steady_timer timer(executor, std::chrono::milliseconds(10));
         co_await timer.async_wait(
-            boost::asio::redirect_error(boost::asio::use_awaitable, ec));
+            asio::redirect_error(asio::use_awaitable, ec));
         if (stopped_)
           co_return;
         continue;
@@ -263,7 +267,7 @@ private:
 
       // Set TCP no_delay immediately for lowest latency
       boost::system::error_code tcpEc;
-      socket.set_option(boost::asio::ip::tcp::no_delay(true), tcpEc);
+      socket.set_option(asio::ip::tcp::no_delay(true), tcpEc);
 
       // Enforce max connections
       if (activeConnections_.load(std::memory_order_relaxed) >=
@@ -321,13 +325,12 @@ private:
           stream) {
     try {
       co_await stream->async_handshake(
-          boost::asio::ssl::stream_base::server,
-          boost::asio::cancel_after(config_.requestTimeout,
-                                    boost::asio::use_awaitable));
+          asio::ssl::stream_base::server,
+          asio::cancel_after(config_.requestTimeout, asio::use_awaitable));
       co_await serve(std::move(*stream));
     } catch (const boost::system::system_error &e) {
-      if (e.code() != boost::asio::error::operation_aborted &&
-          e.code() != boost::asio::ssl::error::stream_truncated) {
+      if (e.code() != asio::error::operation_aborted &&
+          e.code() != asio::ssl::error::stream_truncated) {
         XX_LOGE("[server] SSL error: {}", e.what());
       }
     } catch (const std::exception &e) {
@@ -360,13 +363,12 @@ private:
         parser.body_limit(config_.maxRequestBody);
         co_await http::async_read(
             stream, buffer, parser,
-            boost::asio::cancel_after(config_.requestTimeout,
-                                      boost::asio::use_awaitable));
+            asio::cancel_after(config_.requestTimeout, asio::use_awaitable));
         req = parser.release();
       } catch (const boost::system::system_error &e) {
         if (e.code() == http::error::end_of_stream ||
-            e.code() == boost::asio::error::eof ||
-            e.code() == boost::asio::error::operation_aborted)
+            e.code() == asio::error::eof ||
+            e.code() == asio::error::operation_aborted)
           break;
         readError = true;
         readErrorMsg = e.what();
@@ -388,8 +390,7 @@ private:
         errResp.keep_alive(false);
         co_await http::async_write(
             stream, errResp,
-            boost::asio::cancel_after(std::chrono::seconds(5),
-                                      boost::asio::use_awaitable));
+            asio::cancel_after(std::chrono::seconds(5), asio::use_awaitable));
         break;
       }
 
@@ -449,7 +450,8 @@ private:
 
       // Respect the client's Connection header: if client sent "close",
       // don't keep the connection alive.
-      bool clientClose = req.find(http::field::connection) != req.end() &&
+      bool clientClose =
+          req.find(http::field::connection) != req.end() &&
           boost::beast::iequals(req[http::field::connection], "close");
       keepAlive = resp.keep_alive();
       if (keepAlive && (stopped_ || clientClose))
@@ -459,8 +461,7 @@ private:
       // Send response
       co_await http::async_write(
           stream, resp,
-          boost::asio::cancel_after(config_.requestTimeout,
-                                    boost::asio::use_awaitable));
+          asio::cancel_after(config_.requestTimeout, asio::use_awaitable));
 
       // Per-request access log (compiled out in release via XX_LOGI)
       if (config_.accessLogEnabled) {
@@ -473,7 +474,7 @@ private:
     // Graceful close: shutdown send side, ignore errors
     ec = {};
     boost::beast::get_lowest_layer(stream).socket().shutdown(
-        boost::asio::ip::tcp::socket::shutdown_send, ec);
+        asio::ip::tcp::socket::shutdown_send, ec);
   }
 
   // -----------------------------------------------------------------------
@@ -495,7 +496,7 @@ private:
   // Per-thread worker: each owns a private io_context — zero-lock isolation
   // -----------------------------------------------------------------------
   struct Worker {
-    boost::asio::io_context ioCtx;
+    asio::io_context ioCtx;
     std::thread thread;
   };
 
@@ -506,8 +507,8 @@ private:
   Config config_;
   std::vector<std::unique_ptr<Worker>> workers_;
   std::unique_ptr<Router> router_;
-  std::unique_ptr<boost::asio::ip::tcp::acceptor> acceptor_;
-  std::unique_ptr<boost::asio::ssl::context> sslCtx_;
+  std::unique_ptr<asio::ip::tcp::acceptor> acceptor_;
+  std::unique_ptr<asio::ssl::context> sslCtx_;
   std::atomic<bool> stopped_{false};
   std::atomic<size_t> activeConnections_{0};
   std::atomic<size_t> nextWorker_{0};

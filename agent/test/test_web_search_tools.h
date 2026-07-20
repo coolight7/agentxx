@@ -1,16 +1,12 @@
 #pragma once
 
-#include <asio/awaitable.hpp>
-#include <asio/use_awaitable.hpp>
-#include <asio/redirect_error.hpp>
-
 #include "agentxx/agent/context.h"
-#include "agentxx/tools/web_search.h"
-#include "neograph/neograph.h"
-#include "test_framework.h"
-#include <iostream>
+#include <asio/awaitable.hpp>
+#include <memory>
+#include <neograph/api.h>
 #include <string>
 
+#include "test_framework.h"
 #undef XX_TEST_PASSED
 #undef XX_TEST_FAILED
 #define XX_TEST_PASSED g_ws_passed

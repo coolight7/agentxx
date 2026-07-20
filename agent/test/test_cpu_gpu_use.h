@@ -1,11 +1,9 @@
 #pragma once
 
-#include "agentxx/expand/get_cpu_gpu_use.h"
-#include <iostream>
-
 #include "asio/awaitable.hpp"
-#include "test_framework.h"
+#include <neograph/api.h>
 
+#include "test_framework.h"
 #if XX_IS_WIN_D
 #include <windows.h>
 #endif
