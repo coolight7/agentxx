@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -81,13 +82,8 @@ public:
     }
 
     auto now = std::chrono::system_clock::now();
-    auto time_t_val = std::chrono::system_clock::to_time_t(now);
-    std::tm tm_val{};
-    localtime_r(&time_t_val, &tm_val);
-    std::string timestamp =
-        fmt::format("{:04d}{:02d}{:02d}_{:02d}{:02d}{:02d}",
-                    tm_val.tm_year + 1900, tm_val.tm_mon + 1, tm_val.tm_mday,
-                    tm_val.tm_hour, tm_val.tm_min, tm_val.tm_sec);
+    std::chrono::zoned_time local_time{std::chrono::current_zone(), now};
+    std::string timestamp = std::format("{:%Y%m%d_%H%M%S}", local_time);
 
     fs::path filePath = dir / fmt::format("bench_{}.json", timestamp);
 
