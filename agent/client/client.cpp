@@ -129,6 +129,8 @@ resolveEnvVars(const std::string &input,
       result.append(dotIt->second);
       continue;
     }
+    XX_LOGW("[config] model.key with `${{}}` but not value in .env: {}",
+            it->str());
     // 4) 保留原样
     result.append(it->str());
   }

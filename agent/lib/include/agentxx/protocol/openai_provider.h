@@ -160,7 +160,7 @@ private:
     headers.set("Authorization", "Bearer " + config_.api_key);
 
     auto resp = co_await HttpClient::postAsync(
-        config_.base_url + "/v1/chat/completions", bodyStr, "application/json",
+        config_.base_url + "/chat/completions", bodyStr, "application/json",
         headers, std::chrono::seconds{config_.timeout_seconds});
 
     if (!resp.has_value()) {
@@ -214,7 +214,7 @@ private:
     auto bodyStr = body.dump();
     auto executor = co_await asio::this_coro::executor;
     auto ep = parseEndpoint(config_.base_url);
-    auto target = ep.prefix + "/v1/chat/completions";
+    auto target = ep.prefix + "/chat/completions";
     bool isHttps = ep.scheme == "https";
 
     auto timeout = std::chrono::seconds{config_.timeout_seconds};

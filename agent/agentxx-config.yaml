@@ -9,16 +9,21 @@
 
 models:
   # 声明模型，[name] 取 [default] 仅是自定义名称，并不会被默认使用，应当在 [use_model] 中指定
-  - name: deepseek-v4-flash
+  - name: qwenai-qwen3.8-max-preview
     base_url: "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
     key: "${QWENAI_API_KEY}"
-    modelname: "deepseek-v4-flash"
+    modelname: "qwen3.8-max-preview"
     extra_api_config:
       max_tokens: 1000000
       enable_thinking: false
       stream: true
+  - name: opencode-ds-v4-flash
+    base_url: "https://opencode.ai/zen/go/v1"
+    key: "${OPENCODE_API_KEY}"
+    modelname: "deepseek-v4-flash"
+    extra_api_config:
   - name: local
-    base_url: "http://172.29.48.1:7070"
+    base_url: "http://172.29.48.1:7070/v1"
     key: "EMPTY"
     modelname: "Agentxx"
     extra_api_config:
@@ -55,7 +60,8 @@ models:
 # 指定各模式下使用的模型名称（对应上面 models 中的 name）
 use_model:
   # default: local
-  default: deepseek-v4-flash
+  default: qwenai-qwen3.8-max-preview
+  # default: opencode-ds-v4-flash
   acp: acp
   # train: train
   train: local
