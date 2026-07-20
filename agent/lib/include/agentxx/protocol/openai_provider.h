@@ -195,6 +195,25 @@ private:
     neograph::ChatCompletion completion;
     completion.message = neograph::parse_response_message(choice);
 
+    // Fallback: some providers embed thinking in <think> tags inside content
+    if (completion.message.reasoning_content.empty()) {
+      extractThinkTags(completion.message.content,
+                       completion.message.reasoning_content);
+    }
+
+    // Fallback: some providers put reasoning at choice level
+    if (completion.message.reasoning_content.empty()) {
+      if (choice.contains("reasoning_content") &&
+          !choice["reasoning_content"].is_null()) {
+        completion.message.reasoning_content =
+            choice["reasoning_content"].get<std::string>();
+      } else if (choice.contains("thinking") &&
+                 !choice["thinking"].is_null()) {
+        completion.message.reasoning_content =
+            choice["thinking"].get<std::string>();
+      }
+    }
+
     if (respJson.contains("usage")) {
       auto u = respJson["usage"];
       completion.usage.prompt_tokens = u.value("prompt_tokens", 0);
@@ -246,6 +265,7 @@ private:
     neograph::ChatCompletion completion;
     completion.message.role = "assistant";
     std::string fullContent;
+    std::string fullThinking;
     std::map<int, neograph::ToolCall> tcMap;
     std::string lineBuffer;
 
@@ -269,8 +289,8 @@ private:
       co_await http::async_write(
           stream, req, asio::cancel_after(rem(), asio::use_awaitable));
 
-      co_await readSseStream(stream, deadline, completion, fullContent, tcMap,
-                             lineBuffer, on_chunk);
+      co_await readSseStream(stream, deadline, completion, fullContent,
+                             fullThinking, tcMap, lineBuffer, on_chunk);
 
       boost::system::error_code shutEc;
       co_await stream.async_shutdown(
@@ -281,11 +301,16 @@ private:
       co_await http::async_write(
           stream, req, asio::cancel_after(rem(), asio::use_awaitable));
 
-      co_await readSseStream(stream, deadline, completion, fullContent, tcMap,
-                             lineBuffer, on_chunk);
+      co_await readSseStream(stream, deadline, completion, fullContent,
+                             fullThinking, tcMap, lineBuffer, on_chunk);
     }
 
+    // If the provider used <think> tags inside content, extract them
+    if (fullThinking.empty()) {
+      extractThinkTags(fullContent, fullThinking);
+    }
     completion.message.content = fullContent;
+    completion.message.reasoning_content = fullThinking;
     for (auto &[idx, tc] : tcMap) {
       completion.message.tool_calls.push_back(std::move(tc));
     }
@@ -297,6 +322,7 @@ private:
   asio::awaitable<void>
   readSseStream(Stream &stream, std::chrono::steady_clock::time_point deadline,
                 neograph::ChatCompletion &completion, std::string &fullContent,
+                std::string &fullThinking,
                 std::map<int, neograph::ToolCall> &tcMap,
                 std::string &lineBuffer, neograph::StreamCallback on_chunk) {
     namespace http = boost::beast::http;
@@ -339,12 +365,14 @@ private:
 
     // Parse all SSE events from the body
     lineBuffer = resp.body();
-    processSseBuffer(lineBuffer, completion, fullContent, tcMap, on_chunk);
+    processSseBuffer(lineBuffer, completion, fullContent, fullThinking, tcMap,
+                     on_chunk);
   }
 
   static void processSseBuffer(std::string &buf,
                                neograph::ChatCompletion &completion,
                                std::string &fullContent,
+                               std::string &fullThinking,
                                std::map<int, neograph::ToolCall> &tcMap,
                                neograph::StreamCallback on_chunk) {
     size_t pos;
@@ -390,6 +418,21 @@ private:
             on_chunk(token);
         }
 
+        // Reasoning / thinking content (e.g. DeepSeek reasoner, QwQ, etc.)
+        if (delta.contains("reasoning_content") &&
+            !delta["reasoning_content"].is_null()) {
+          auto token = delta["reasoning_content"].get<std::string>();
+          fullThinking += token;
+          if (on_chunk)
+            on_chunk(token);
+        } else if (delta.contains("thinking") &&
+                   !delta["thinking"].is_null()) {
+          auto token = delta["thinking"].get<std::string>();
+          fullThinking += token;
+          if (on_chunk)
+            on_chunk(token);
+        }
+
         // Tool calls (streamed incrementally)
         if (delta.contains("tool_calls")) {
           for (const auto &tc : delta["tool_calls"]) {
@@ -410,6 +453,29 @@ private:
         // Skip malformed chunks
       }
     }
+  }
+
+  static void extractThinkTags(std::string &content,
+                                std::string &thinking) {
+    std::string cleaned;
+    size_t pos = 0;
+    while (pos < content.size()) {
+      auto start = content.find("<think>", pos);
+      if (start == std::string::npos) {
+        cleaned += content.substr(pos);
+        break;
+      }
+      cleaned += content.substr(pos, start - pos);
+      auto end = content.find("</think>", start + 7);
+      if (end == std::string::npos) {
+        thinking += content.substr(start + 7);
+        content.erase(start);
+        return;
+      }
+      thinking += content.substr(start + 7, end - start - 7);
+      pos = end + 8;
+    }
+    content = cleaned;
   }
 
   static asio::ssl::context &sslContext() {
