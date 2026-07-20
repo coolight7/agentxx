@@ -20,6 +20,7 @@
 #include "test_http.h"
 #include "test_interrupt_bus.h"
 #include "test_mcp.h"
+#include "test_openai_provider.h"
 #include "test_rag_search_tools.h"
 #include "test_regex.h"
 #include "test_screen_capture.h"
@@ -178,6 +179,7 @@ int main(int argn, char **argv) {
         co_await run("http", agentxx::test::run_http_client_tests);
         co_await run("mcp", agentxx::test::run_mcp_tests);
         co_await run("acp", agentxx::test::run_acp_tests);
+        co_await run("openai_provider", agentxx::test::run_openai_provider_tests);
         co_await run("deepagent", agentxx::test::run_deepagent_tests);
         ioCtx.stop();
       },
