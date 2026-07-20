@@ -37,6 +37,8 @@ public:
   std::string websearchApiUrl = "";
   bool websearchConvertHtml2markdown = true;
 
+  bool checkMessagesUtf8BeforeLLM = true;
+
   bool logPringToolcall = false;
   bool logPrintMessagesBeforeLLM = false;
   bool logPrintMessagesBeforeLLMWithSystemMsg = false;

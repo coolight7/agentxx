@@ -246,9 +246,6 @@ runTrainingMode(std::shared_ptr<agentxx::agent::AgentConfig> baseConfig) {
   trainIoCtx.run();
 }
 
-// ======================== 主入口 ========================
-
-/// 运行可执行 ../script/client_run.sh
 int main(int argn, char **argv) {
 #if XX_IS_WIN_D
   SetConsoleOutputCP(CP_UTF8);
@@ -267,8 +264,8 @@ int main(int argn, char **argv) {
 
   if (mode == "train" || mode == "training") {
     config->logPringToolcall = false;
-    config->logPrintMessagesBeforeLLM = true;
-    config->logPrintMessagesBeforeLLMWithSystemMsg = true;
+    config->logPrintMessagesBeforeLLM = false;
+    config->logPrintMessagesBeforeLLMWithSystemMsg = false;
     config->logPrintSummarizationResultTokenCount = false;
     runTrainingMode(config);
     return 0;

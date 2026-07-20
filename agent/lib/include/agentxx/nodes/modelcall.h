@@ -147,8 +147,8 @@ public:
       in.state.write("messages", userMsgJson);
     }
 
-#if XX_IS_DEBUG_D
-    {
+    auto agentCtxPtr = agentContext.lock();
+    if (agentCtxPtr->agentConfig->checkMessagesUtf8BeforeLLM) {
       // 检查是否符合 utf8
       auto msgs = in.state.get_messages();
       for (const auto &msg : msgs) {
@@ -169,7 +169,6 @@ public:
         }
       }
     }
-#endif
   }
 
   asio::awaitable<void>
