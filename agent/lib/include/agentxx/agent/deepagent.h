@@ -30,9 +30,10 @@
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/io_context.hpp"
+#include "neograph/graph/engine.h"
+#include "neograph/graph/types.h"
 #include "neograph/llm/openai_provider.h"
 #include "neograph/mcp/client.h"
-#include "neograph/neograph.h"
 #include <chrono>
 #include <functional>
 #include <iostream>
@@ -164,24 +165,40 @@ public:
             planningMiddleware);
       }
 
-      /// Toolcall  应当作为最后一层
+      /// Toolcall  应当作为最后一层，输出的日志才会是最终的样子
       agentContext->middlewareHandleContext->handles.push_back(
           std::make_shared<agentxx::middleware::MiddlewareWarpHandle<
               agentxx::middleware::BaseMiddlewareState>>(
-              "toolcall_log", agentContext,
+              "LogPring", agentContext,
               (agentxx::middleware::onGraphNodeBeforeCallFunc) nullptr,
               (agentxx::middleware::onGraphNodeAfterCallFunc) nullptr,
               (agentxx::middleware::onGraphNodeBeforeCallFunc) nullptr,
-              (agentxx::middleware::onGraphNodeBeforeCallFunc) nullptr,
-              (agentxx::middleware::onGraphNodeAfterCallFunc) nullptr,
-              [](neograph::graph::NodeInput &in) -> asio::awaitable<void> {
-                return agentxx::nodes::ToolcallWrapNode::
-                    defStdoutLogOnToolcallStart(in);
+              [config = agentContext->agentConfig](
+                  neograph::graph::NodeInput &in) -> asio::awaitable<void> {
+                if (config->logPrintMessagesBeforeLLM) {
+                  agentxx::middleware::BaseMiddlewareHandleInterface::
+                      printMessages(
+                          in.state.get_messages(),
+                          config->logPrintMessagesBeforeLLMWithSystemMsg);
+                }
+                co_return;
               },
-              [](const neograph::graph::NodeInput &in,
-                 neograph::graph::NodeOutput &result) {
-                return agentxx::nodes::ToolcallWrapNode::
-                    defStdoutLogOnToolcallEnd(in, result);
+              (agentxx::middleware::onGraphNodeAfterCallFunc) nullptr,
+              [config = agentContext->agentConfig](
+                  neograph::graph::NodeInput &in) -> asio::awaitable<void> {
+                if (config->logPringToolcall) {
+                  co_await agentxx::nodes::ToolcallWrapNode::
+                      defStdoutLogOnToolcallStart(in);
+                }
+              },
+              [config = agentContext->agentConfig](
+                  const neograph::graph::NodeInput &in,
+                  neograph::graph::NodeOutput &result)
+                  -> asio::awaitable<void> {
+                if (config->logPringToolcall) {
+                  co_await agentxx::nodes::ToolcallWrapNode::
+                      defStdoutLogOnToolcallEnd(in, result);
+                }
               }));
     }
 

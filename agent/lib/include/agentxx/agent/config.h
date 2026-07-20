@@ -37,6 +37,7 @@ public:
   std::string websearchApiUrl = "";
   bool websearchConvertHtml2markdown = true;
 
+  bool logPringToolcall = false;
   bool logPrintMessagesBeforeLLM = false;
   bool logPrintMessagesBeforeLLMWithSystemMsg = false;
   bool logPrintSummarizationResultTokenCount = false;
