@@ -1,5 +1,5 @@
 #include "test_openai_provider.h"
-#include "agentxx/server/openai_provider.h"
+#include "agentxx/protocol/openai_provider.h"
 #include "agentxx/util/http_client.h"
 #include "agentxx/util/http_server.h"
 #include <asio/awaitable.hpp>

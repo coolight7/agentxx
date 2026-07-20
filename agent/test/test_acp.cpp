@@ -1,5 +1,5 @@
 #include "test_acp.h"
-#include "agentxx/server/acp_server.h"
+#include "agentxx/protocol/acp_server.h"
 #include "agentxx/tools/tool.h"
 #include "agentxx/util/http_client.h"
 #include <asio/awaitable.hpp>

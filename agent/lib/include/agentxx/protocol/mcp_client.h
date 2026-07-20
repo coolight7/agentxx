@@ -1,6 +1,6 @@
 #pragma once
 
-#include "agentxx/server/mcp_server.h"
+#include "agentxx/protocol/mcp_server.h"
 #include "agentxx/tools/tool.h"
 #include "agentxx/util/http_client.h"
 #include "agentxx/util/log.h"
@@ -530,12 +530,13 @@ private:
     auto headers = util::HeaderMap{};
     headers.set("Accept", "text/event-stream");
 
-    auto resp =
-        co_await util::HttpClient::getAsync(sseUrl, headers, config_.initTimeout);
+    auto resp = co_await util::HttpClient::getAsync(sseUrl, headers,
+                                                    config_.initTimeout);
 
     if (!resp.has_value()) {
       XX_LOGW("[McpClient] SSE discovery failed ({}), falling back to "
-              "direct POST", resp.error());
+              "direct POST",
+              resp.error());
       httpMessageUrl_ = config_.serverUrl;
       sseDiscovered_.store(true);
       co_return;
@@ -653,8 +654,8 @@ private:
           }
         }
       }
-      co_return std::unexpected{
-          "no matching response in SSE stream for id " + std::to_string(id)};
+      co_return std::unexpected{"no matching response in SSE stream for id " +
+                                std::to_string(id)};
     }
 
     // Normal JSON response

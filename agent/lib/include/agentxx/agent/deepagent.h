@@ -13,7 +13,7 @@
 #include "agentxx/nodes/agentcall.h"
 #include "agentxx/nodes/modelcall.h"
 #include "agentxx/nodes/toolcall.h"
-#include "agentxx/server/mcp_client.h"
+#include "agentxx/protocol/mcp_client.h"
 #include "agentxx/tools/cross_agent_query.h"
 #include "agentxx/tools/execute_command.h"
 #include "agentxx/tools/filesystem.h"

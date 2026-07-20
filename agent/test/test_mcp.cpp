@@ -1,6 +1,6 @@
 #include "test_mcp.h"
-#include "agentxx/server/mcp_client.h"
-#include "agentxx/server/mcp_server.h"
+#include "agentxx/protocol/mcp_client.h"
+#include "agentxx/protocol/mcp_server.h"
 #include "agentxx/tools/tool.h"
 #include "agentxx/util/http_client.h"
 #include <asio/awaitable.hpp>
@@ -1932,7 +1932,8 @@ asio::awaitable<void> test_mcp_server_accept_sse() {
   McpToolDefinition def;
   def.name = "echo";
   def.description = "Echo";
-  def.inputSchema = json::parse(R"({"type":"object","properties":{"text":{"type":"string"}}})");
+  def.inputSchema = json::parse(
+      R"({"type":"object","properties":{"text":{"type":"string"}}})");
   server.addTool(def, [](const json &args) -> json {
     json content;
     content["type"] = "text";
@@ -1945,7 +1946,8 @@ asio::awaitable<void> test_mcp_server_accept_sse() {
   uint16_t port = 0;
   for (int i = 0; i < 100; ++i) {
     port = server.port();
-    if (port != 0) break;
+    if (port != 0)
+      break;
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
   if (port == 0) {
@@ -1977,8 +1979,8 @@ asio::awaitable<void> test_mcp_server_accept_sse() {
     headers.set("Accept", "application/xml");
     headers.set("content-type", "application/json");
     json req = {{"jsonrpc", "2.0"}, {"id", 1}, {"method", "ping"}};
-    auto resp = co_await HttpClient::postAsync(baseUrl + "/mcp", req,
-                                               headers, std::chrono::seconds{5});
+    auto resp = co_await HttpClient::postAsync(baseUrl + "/mcp", req, headers,
+                                               std::chrono::seconds{5});
     XX_TEST_EXPECT_HAS_VALUE(resp);
     if (resp.has_value()) {
       XX_TEST_EXPECT_EQ(resp.value().status, 406);
@@ -1991,8 +1993,8 @@ asio::awaitable<void> test_mcp_server_accept_sse() {
     headers.set("Accept", "application/json, text/event-stream");
     headers.set("content-type", "application/json");
     json req = {{"jsonrpc", "2.0"}, {"id", 2}, {"method", "ping"}};
-    auto resp = co_await HttpClient::postAsync(baseUrl + "/mcp", req,
-                                               headers, std::chrono::seconds{5});
+    auto resp = co_await HttpClient::postAsync(baseUrl + "/mcp", req, headers,
+                                               std::chrono::seconds{5});
     XX_TEST_EXPECT_HAS_VALUE(resp);
     if (resp.has_value()) {
       XX_TEST_EXPECT_EQ(resp.value().status, 200);
@@ -2017,8 +2019,8 @@ asio::awaitable<void> test_mcp_server_accept_sse() {
     headers.set("Accept", "text/event-stream");
     headers.set("content-type", "application/json");
     json req = {{"jsonrpc", "2.0"}, {"id", 4}, {"method", "ping"}};
-    auto resp = co_await HttpClient::postAsync(baseUrl + "/mcp", req,
-                                               headers, std::chrono::seconds{5});
+    auto resp = co_await HttpClient::postAsync(baseUrl + "/mcp", req, headers,
+                                               std::chrono::seconds{5});
     XX_TEST_EXPECT_HAS_VALUE(resp);
     if (resp.has_value()) {
       XX_TEST_EXPECT_EQ(resp.value().status, 200);
@@ -2047,8 +2049,7 @@ asio::awaitable<void> test_mcp_server_accept_sse() {
       // Should contain endpoint event
       XX_TEST_EXPECT_TRUE(resp.value().body.find("event: endpoint") !=
                           std::string::npos);
-      XX_TEST_EXPECT_TRUE(resp.value().body.find("/mcp") !=
-                          std::string::npos);
+      XX_TEST_EXPECT_TRUE(resp.value().body.find("/mcp") != std::string::npos);
     }
   }
 
@@ -2083,8 +2084,8 @@ asio::awaitable<void> test_mcp_server_accept_sse() {
     headers.set("Accept", "application/json, text/event-stream");
     headers.set("content-type", "application/json");
     json req = {{"jsonrpc", "2.0"}, {"method", "notifications/initialized"}};
-    auto resp = co_await HttpClient::postAsync(baseUrl + "/mcp", req,
-                                               headers, std::chrono::seconds{5});
+    auto resp = co_await HttpClient::postAsync(baseUrl + "/mcp", req, headers,
+                                               std::chrono::seconds{5});
     XX_TEST_EXPECT_HAS_VALUE(resp);
     if (resp.has_value()) {
       XX_TEST_EXPECT_EQ(resp.value().status, 202);

@@ -2,7 +2,7 @@
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/deepagent.h"
 #include "agentxx/agent/training.h"
-#include "agentxx/server/acp_server.h"
+#include "agentxx/protocol/acp_server.h"
 #include "agentxx/util/log.h"
 #include "agentxx/util/string_util.h"
 #include "asio/co_spawn.hpp"
