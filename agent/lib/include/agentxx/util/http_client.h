@@ -448,10 +448,14 @@ public:
         if (e.code() == asio::error::operation_aborted) {
           result = std::unexpected{std::string{"timeout"}};
         } else {
-          result = std::unexpected{std::string{e.what()}};
+          auto errInfo = std::string{e.what()};
+          agentxx::util::autoConvertToUtf8(errInfo);
+          result = std::unexpected{errInfo};
         }
       } catch (const std::exception &e) {
-        result = std::unexpected{std::string{e.what()}};
+        auto errInfo = std::string{e.what()};
+        agentxx::util::autoConvertToUtf8(errInfo);
+        result = std::unexpected{errInfo};
       }
 
       if (!result.has_value()) {

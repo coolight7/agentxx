@@ -422,6 +422,8 @@ autoConvertToUtf8(std::string_view str, bool _);
 
 bool autoConvertToUtf8(std::string &str);
 
+std::string autoTryConvertToUtf8(std::string_view str);
+
 /// 自动转换为系统路径编码
 /// - [windows] UTF-16LE
 /// - [其他系统] UTF-8

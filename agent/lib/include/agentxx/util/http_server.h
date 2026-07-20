@@ -2,6 +2,7 @@
 
 #include "agentxx/util/log.h"
 #include "agentxx/util/router.h"
+#include "agentxx/util/string_util.h"
 #include "asio/awaitable.hpp"
 #include "asio/cancel_after.hpp"
 #include "asio/co_spawn.hpp"
@@ -288,11 +289,12 @@ private:
             asio::cancel_after(timeout_, asio::use_awaitable));
         co_return true;
       } catch (const boost::system::system_error &e) {
-        if (e.code() != asio::error::operation_aborted)
-          XX_LOGE("[sse] write error: {}", e.what());
+        if (e.code() != asio::error::operation_aborted) {
+          XX_LOGE("[sse] write error: {}", agentxx::util::autoTryConvertToUtf8(e.what()));
+        }
         co_return false;
       } catch (const std::exception &e) {
-        XX_LOGE("[sse] write error: {}", e.what());
+        XX_LOGE("[sse] write error: {}", agentxx::util::autoTryConvertToUtf8(e.what()));
         co_return false;
       }
     }
@@ -426,7 +428,7 @@ private:
     } catch (const boost::system::system_error &e) {
       if (e.code() != asio::error::operation_aborted &&
           e.code() != asio::ssl::error::stream_truncated) {
-        XX_LOGE("[server] SSL error: {}", e.what());
+        XX_LOGE("[server] SSL error: {}", agentxx::util::autoTryConvertToUtf8(e.what()));  
       }
     } catch (const std::exception &e) {
       XX_LOGE("[server] SSL handshake error: {}", e.what());
@@ -467,12 +469,13 @@ private:
           break;
         readError = true;
         readErrorMsg = e.what();
+        agentxx::util::autoConvertToUtf8(readErrorMsg);
         if (e.code() == http::error::body_limit)
-          readErrorStatus = http::status::payload_too_large;
+          {readErrorStatus = http::status::payload_too_large;}
         else if (e.code() == http::error::header_limit)
-          readErrorStatus = http::status::request_header_fields_too_large;
+          {readErrorStatus = http::status::request_header_fields_too_large;}
         else
-          readErrorStatus = http::status::bad_request;
+          {readErrorStatus = http::status::bad_request;}
       }
 
       if (readError) {

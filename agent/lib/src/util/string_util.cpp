@@ -228,6 +228,14 @@ bool agentxx::util::autoConvertToUtf8(std::string &str) {
   return isSuccess;
 }
 
+std::string agentxx::util::autoTryConvertToUtf8(std::string_view str) {
+  auto [isSuccess, result] = autoConvertToUtf8(str, true);
+  if (isSuccess && result.has_value()) {
+    return std::move(result.value());
+  }
+  return std::string{str};
+}
+
 bool agentxx::util::autoConvertToSystemPath(std::string &str) {
   // TODO: 适配windows转换字符编码
   return true;

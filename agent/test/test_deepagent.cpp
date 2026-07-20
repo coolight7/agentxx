@@ -191,9 +191,9 @@ asio::awaitable<void> test_deepagent_init() {
   auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
 
   auto cfg = std::make_shared<agentxx::agent::AgentConfig>();
-  cfg->modelOpenAIBaseUrl = baseUrl;
-  cfg->modelOpenAIApiKey = "EMPTY";
-  cfg->modelOpenAIModelName = "test-sim";
+  cfg->model.baseUrl = baseUrl;
+  cfg->model.apiKey = "EMPTY";
+  cfg->model.modelName = "test-sim";
 
   agentxx::agent::DeepAgent agent(cfg);
   co_await agent.init();
@@ -209,9 +209,9 @@ asio::awaitable<void> test_deepagent_single_input() {
   auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
 
   auto cfg = std::make_shared<agentxx::agent::AgentConfig>();
-  cfg->modelOpenAIBaseUrl = baseUrl;
-  cfg->modelOpenAIApiKey = "EMPTY";
-  cfg->modelOpenAIModelName = "test-sim";
+  cfg->model.baseUrl = baseUrl;
+  cfg->model.apiKey = "EMPTY";
+  cfg->model.modelName = "test-sim";
   cfg->prompt.systemPrompt = "You are a helpful assistant.";
 
   g_da_sim_response_content = "This is the test response content.";
@@ -233,9 +233,9 @@ asio::awaitable<void> test_deepagent_conversation_turn() {
   auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
 
   auto cfg = std::make_shared<agentxx::agent::AgentConfig>();
-  cfg->modelOpenAIBaseUrl = baseUrl;
-  cfg->modelOpenAIApiKey = "EMPTY";
-  cfg->modelOpenAIModelName = "test-sim";
+  cfg->model.baseUrl = baseUrl;
+  cfg->model.apiKey = "EMPTY";
+  cfg->model.modelName = "test-sim";
   cfg->prompt.systemPrompt = "You are a helpful assistant.";
 
   g_da_sim_response_content = "Hello from the simulated LLM!";
@@ -262,9 +262,9 @@ asio::awaitable<void> test_deepagent_tool_calls() {
   auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
 
   auto cfg = std::make_shared<agentxx::agent::AgentConfig>();
-  cfg->modelOpenAIBaseUrl = baseUrl;
-  cfg->modelOpenAIApiKey = "EMPTY";
-  cfg->modelOpenAIModelName = "test-sim";
+  cfg->model.baseUrl = baseUrl;
+  cfg->model.apiKey = "EMPTY";
+  cfg->model.modelName = "test-sim";
   cfg->prompt.systemPrompt = "You are a helpful assistant.";
 
   g_da_sim_response_content = "";
@@ -299,9 +299,9 @@ asio::awaitable<void> test_deepagent_multi_turn() {
   auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
 
   auto cfg = std::make_shared<agentxx::agent::AgentConfig>();
-  cfg->modelOpenAIBaseUrl = baseUrl;
-  cfg->modelOpenAIApiKey = "EMPTY";
-  cfg->modelOpenAIModelName = "test-sim";
+  cfg->model.baseUrl = baseUrl;
+  cfg->model.apiKey = "EMPTY";
+  cfg->model.modelName = "test-sim";
   cfg->prompt.systemPrompt = "You are a helpful assistant.";
 
   g_da_sim_response_content = "Response for turn ";
@@ -334,9 +334,9 @@ asio::awaitable<void> test_deepagent_large_history() {
   auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
 
   auto cfg = std::make_shared<agentxx::agent::AgentConfig>();
-  cfg->modelOpenAIBaseUrl = baseUrl;
-  cfg->modelOpenAIApiKey = "EMPTY";
-  cfg->modelOpenAIModelName = "test-sim";
+  cfg->model.baseUrl = baseUrl;
+  cfg->model.apiKey = "EMPTY";
+  cfg->model.modelName = "test-sim";
   cfg->prompt.systemPrompt = "You are a helpful assistant.";
 
   g_da_sim_response_content = "Final response after long history.";
@@ -368,9 +368,9 @@ asio::awaitable<void> test_deepagent_nonstream() {
   auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
 
   auto cfg = std::make_shared<agentxx::agent::AgentConfig>();
-  cfg->modelOpenAIBaseUrl = baseUrl;
-  cfg->modelOpenAIApiKey = "EMPTY";
-  cfg->modelOpenAIModelName = "test-sim";
+  cfg->model.baseUrl = baseUrl;
+  cfg->model.apiKey = "EMPTY";
+  cfg->model.modelName = "test-sim";
 
   g_da_sim_response_content = "Non-stream test response.";
   g_da_sim_tool_calls = neograph::json::array();

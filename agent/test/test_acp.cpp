@@ -40,9 +40,9 @@ static std::shared_ptr<agentxx::agent::DeepAgent>
 makeTestAgent(const std::string &name) {
   auto port = startMockTcpListener();
   auto config = std::make_shared<agentxx::agent::AgentConfig>();
-  config->modelOpenAIBaseUrl = "http://127.0.0.1:" + std::to_string(port);
-  config->modelOpenAIApiKey = "EMPTY";
-  config->modelOpenAIModelName = "acp-test-mock";
+  config->model.baseUrl = "http://127.0.0.1:" + std::to_string(port);
+  config->model.apiKey = "EMPTY";
+  config->model.modelName = "acp-test-mock";
   auto agent = std::make_shared<agentxx::agent::DeepAgent>(config);
 
   neograph::json def = {
