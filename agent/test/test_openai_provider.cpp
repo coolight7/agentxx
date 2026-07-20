@@ -74,7 +74,7 @@ void test_extra_body_with_custom_params() {
 }
 
 // ---------------------------------------------------------------------------
-// Mock server — single /v1/chat/completions handler with mode switching
+// Mock server — single /chat/completions handler with mode switching
 // ---------------------------------------------------------------------------
 
 /// Controls what the mock returns on the next request.
@@ -498,8 +498,7 @@ void test_extract_think_tags_unclosed() {
 }
 
 void test_extract_think_tags_multiple_blocks() {
-  std::string content =
-      "<think>First</think>Middle<think>Second</think>End";
+  std::string content = "<think>First</think>Middle<think>Second</think>End";
   std::string thinking;
   std::string cleaned;
   size_t pos = 0;
@@ -1016,8 +1015,7 @@ test_streaming_thinking_field_compat(MockOpenAIServer &mock, uint16_t port) {
     XX_TEST_EXPECT_EQ(result.message.reasoning_content,
                       "deep thought process...");
     // Callback should include thinking tokens too
-    XX_TEST_EXPECT_EQ(accumulated,
-                      "deep thought process...Final answer");
+    XX_TEST_EXPECT_EQ(accumulated, "deep thought process...Final answer");
   } catch (const std::exception &e) {
     XX_TEST_FAILED++;
     TEST_FAIL << "streaming thinking compat test failed: " << e.what()
@@ -1211,8 +1209,8 @@ test_non_streaming_think_tags_in_content(MockOpenAIServer &mock,
 
   neograph::CompletionParams params;
   params.model = "deepseek-r1-local";
-  params.messages = {neograph::ChatMessage{.role = "user",
-                                           .content = "Reason with think tags"}};
+  params.messages = {neograph::ChatMessage{
+      .role = "user", .content = "Reason with think tags"}};
 
   auto resp = mock.makeCompletionResponse(
       "<think>I need to calculate</think>The result is 42.");
@@ -1221,9 +1219,8 @@ test_non_streaming_think_tags_in_content(MockOpenAIServer &mock,
   try {
     auto result = co_await provider->invoke(params, nullptr);
     XX_TEST_EXPECT_EQ(result.message.content, "The result is 42.");
-    XX_TEST_EXPECT_TRUE(
-        result.message.reasoning_content.find("calculate") !=
-        std::string::npos);
+    XX_TEST_EXPECT_TRUE(result.message.reasoning_content.find("calculate") !=
+                        std::string::npos);
   } catch (const std::exception &e) {
     XX_TEST_FAILED++;
     TEST_FAIL << "non-streaming think tags test failed: " << e.what()
@@ -1232,8 +1229,8 @@ test_non_streaming_think_tags_in_content(MockOpenAIServer &mock,
 }
 
 asio::awaitable<void>
-test_non_streaming_think_tags_prefer_reasoning_field(
-    MockOpenAIServer &mock, uint16_t port) {
+test_non_streaming_think_tags_prefer_reasoning_field(MockOpenAIServer &mock,
+                                                     uint16_t port) {
   std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
   mock.mode = MockMode::Normal;
 
@@ -1247,8 +1244,7 @@ test_non_streaming_think_tags_prefer_reasoning_field(
 
   // When reasoning_content is already provided, don't parse <think> tags
   auto resp = mock.makeCompletionResponse(
-      "<think>tag thinking</think>Visible answer",
-      "field reasoning");
+      "<think>tag thinking</think>Visible answer", "field reasoning");
   mock.customResponse = resp;
 
   try {
@@ -1265,8 +1261,9 @@ test_non_streaming_think_tags_prefer_reasoning_field(
   }
 }
 
-asio::awaitable<void> test_streaming_think_tags_split_across_chunks(
-    MockOpenAIServer &mock, uint16_t port) {
+asio::awaitable<void>
+test_streaming_think_tags_split_across_chunks(MockOpenAIServer &mock,
+                                              uint16_t port) {
   std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
   mock.mode = MockMode::Streaming;
 

@@ -59,7 +59,7 @@ DaSimServer startDaSimServer() {
   auto *rawSvr = sim.svr.get();
 
   rawSvr->router().add(
-      "/v1/chat/completions", 2,
+      "/chat/completions", 2,
       std::make_shared<agentxx::util::HttpServer::Handler>(
           [](agentxx::util::HttpServer::Request &req,
              agentxx::util::HttpServer::Response &resp,

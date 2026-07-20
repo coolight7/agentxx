@@ -60,7 +60,9 @@ bool agentxx::util::isRunningInWSL() {
 }
 
 #elif XX_IS_WIN_D
+
 #include <windows.h>
+
 std::string agentxx::util::getSystemName() {
   if (systemName_.has_value()) {
     return *systemName_;

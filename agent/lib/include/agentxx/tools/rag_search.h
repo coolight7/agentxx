@@ -37,7 +37,7 @@ public:
     body["input"] = neograph::json(texts);
 
     auto resp = co_await agentxx::util::HttpClient::postAsync(
-        fmt::format("{}/v1/embeddings", baseUrl), body, {},
+        fmt::format("{}/embeddings", baseUrl), body, {},
         std::chrono::seconds{15});
 
     if (false == resp.has_value() ||
