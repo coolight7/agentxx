@@ -14,6 +14,7 @@
 #include "agentxx/nodes/modelcall.h"
 #include "agentxx/nodes/toolcall.h"
 #include "agentxx/protocol/mcp_client.h"
+#include "agentxx/protocol/openai_provider.h"
 #include "agentxx/tools/cross_agent_query.h"
 #include "agentxx/tools/execute_command.h"
 #include "agentxx/tools/filesystem.h"
@@ -71,7 +72,7 @@ public:
 #endif
 
     auto config = agentContext->agentConfig;
-    neograph::llm::OpenAIProvider::Config provideConfig{
+    agentxx::server::OpenAIProvider::Config provideConfig{
         .api_key = config->modelOpenAIApiKey,
         .base_url = config->modelOpenAIBaseUrl,
         .default_model = config->modelOpenAIModelName,
@@ -362,7 +363,7 @@ public:
           neograph::graph::NodeContext nodeContext{};
           nodeContext.instructions = "";
           nodeContext.provider =
-              neograph::llm::OpenAIProvider::create_shared(provideConfig);
+              agentxx::server::OpenAIProvider::create_shared(provideConfig);
 
           /// 复制 tool
           std::vector<neograph::Tool *> toolPtrs;
@@ -388,7 +389,7 @@ public:
         //   neograph::graph::NodeContext nodeContext{};
         //   nodeContext.instructions = "";
         //   nodeContext.provider =
-        //       neograph::llm::OpenAIProvider::create_shared(provideConfig);
+        //       agentxx::server::OpenAIProvider::create_shared(provideConfig);
 
         //   // 收集延迟加载的 tool 信息
         //   std::vector<agentxx::tools::ToolSkillSearchSubAgentTask::DelayToolInfo>
@@ -437,7 +438,7 @@ public:
     neograph::graph::NodeContext nodeContext{};
     nodeContext.instructions = config->prompt.systemPrompt;
     nodeContext.provider =
-        neograph::llm::OpenAIProvider::create_shared(provideConfig);
+        agentxx::server::OpenAIProvider::create_shared(provideConfig);
 
     std::vector<neograph::Tool *> toolPtrs;
     toolPtrs.reserve(tools.size());

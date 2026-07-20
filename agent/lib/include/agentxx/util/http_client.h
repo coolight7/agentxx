@@ -203,14 +203,6 @@ public:
     return headers;
   }
 
-private:
-  struct ParsedUrl {
-    std::string scheme;
-    std::string host;
-    uint16_t port;
-    std::string path;
-  };
-
   // -----------------------------------------------------------------------
   // Shared SSL context pool — avoids per-request OpenSSL context creation
   // (SSL_CTX_new is expensive). Two lazily-initialized contexts: one with
@@ -242,11 +234,20 @@ private:
     }
   }
 
+private:
+  struct ParsedUrl {
+    std::string scheme;
+    std::string host;
+    uint16_t port;
+    std::string path;
+  };
+
   static inline std::atomic<bool> sslVerifyEnabled_{false};
 
   /// Default max response body size (10 MB) to prevent memory exhaustion
   static constexpr uint64_t kDefaultMaxResponseBody = 10 * 1024 * 1024;
 
+public:
   static inline std::optional<ParsedUrl> parseUrl(std::string_view url) {
     auto schemeEnd = url.find("://");
     if (schemeEnd == std::string::npos)
@@ -478,7 +479,6 @@ private:
     co_return result;
   }
 
-public:
   /// Enable/disable SSL certificate verification (default: enabled).
   /// Disable only for testing with self-signed certificates.
   static void setSslVerify(bool enable) noexcept {

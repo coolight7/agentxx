@@ -15,7 +15,8 @@ models:
     modelname: "deepseek-v4-flash"
     extra_api_config:
       max_tokens: 1000000
-      temperature: 0.7
+      enable_thinking: false
+      stream: true
   - name: local
     base_url: "http://172.29.48.1:7070"
     key: "EMPTY"
@@ -53,8 +54,10 @@ models:
 
 # 指定各模式下使用的模型名称（对应上面 models 中的 name）
 use_model:
+  # default: local
   default: deepseek-v4-flash
   acp: acp
-  train: train
+  # train: train
+  train: local
   train_scorer: train_scorer
   train_optimizer: train_optimizer

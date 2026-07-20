@@ -8,8 +8,8 @@
 #include "asio/steady_timer.hpp"
 #include "asio/this_coro.hpp"
 #include "asio/use_awaitable.hpp"
-#include <boost/asio/read.hpp>
 #include <atomic>
+#include <boost/asio/read.hpp>
 #include <charconv>
 #include <chrono>
 #include <expected>
@@ -72,8 +72,7 @@ private:
 
   neograph::json buildBody(const neograph::CompletionParams &params) const {
     neograph::json body;
-    body["model"] =
-        params.model.empty() ? config_.default_model : params.model;
+    body["model"] = params.model.empty() ? config_.default_model : params.model;
     body["messages"] = neograph::messages_to_json(params.messages);
 
     if (!params.tools.empty()) {
@@ -129,11 +128,9 @@ private:
     ep.scheme = base_url.substr(0, schemeEnd);
     auto rest = base_url.substr(schemeEnd + 3);
     auto pathStart = rest.find('/');
-    std::string hostPort = (pathStart == std::string::npos)
-                               ? rest
-                               : rest.substr(0, pathStart);
-    ep.prefix =
-        (pathStart == std::string::npos) ? "" : rest.substr(pathStart);
+    std::string hostPort =
+        (pathStart == std::string::npos) ? rest : rest.substr(0, pathStart);
+    ep.prefix = (pathStart == std::string::npos) ? "" : rest.substr(pathStart);
 
     ep.port = (ep.scheme == "https") ? 443 : 80;
 
@@ -141,9 +138,8 @@ private:
     if (colon != std::string::npos) {
       ep.host = hostPort.substr(0, colon);
       int p = 0;
-      auto [ptr, ec] =
-          std::from_chars(hostPort.data() + colon + 1,
-                          hostPort.data() + hostPort.size(), p);
+      auto [ptr, ec] = std::from_chars(hostPort.data() + colon + 1,
+                                       hostPort.data() + hostPort.size(), p);
       if (ec == std::errc{} && p > 0 && p <= 65535) {
         ep.port = static_cast<uint16_t>(p);
       }
@@ -178,13 +174,14 @@ private:
       int retryAfter = -1;
       if (!raw.empty()) {
         int seconds = 0;
-        auto [ptr, ec] = std::from_chars(raw.data(), raw.data() + raw.size(), seconds);
+        auto [ptr, ec] =
+            std::from_chars(raw.data(), raw.data() + raw.size(), seconds);
         if (ec == std::errc{} && seconds >= 0) {
           retryAfter = seconds;
         }
       }
       throw neograph::RateLimitError("API error (HTTP 429): " + r.body,
-                                    retryAfter);
+                                     retryAfter);
     }
 
     if (r.status != 200) {
@@ -209,8 +206,8 @@ private:
   }
 
   asio::awaitable<neograph::ChatCompletion>
-  doStream(const neograph::CompletionParams &params,
-           const neograph::json &body, neograph::StreamCallback on_chunk) {
+  doStream(const neograph::CompletionParams &params, const neograph::json &body,
+           neograph::StreamCallback on_chunk) {
     namespace http = boost::beast::http;
     using asio::ip::tcp;
 
@@ -255,8 +252,7 @@ private:
     // Connect, send, stream SSE
     tcp::socket socket(executor);
     co_await asio::async_connect(
-        socket, endpoints,
-        asio::cancel_after(rem(), asio::use_awaitable));
+        socket, endpoints, asio::cancel_after(rem(), asio::use_awaitable));
     boost::system::error_code tcpEc;
     socket.set_option(asio::ip::tcp::no_delay(true), tcpEc);
 
@@ -264,16 +260,14 @@ private:
       auto &sslCtx = sslContext();
       boost::beast::ssl_stream<boost::beast::tcp_stream> stream(
           boost::beast::tcp_stream(std::move(socket)), sslCtx);
-      ::SSL_set_tlsext_host_name(
-          stream.native_handle(),
-          const_cast<char *>(ep.host.c_str()));
+      ::SSL_set_tlsext_host_name(stream.native_handle(),
+                                 const_cast<char *>(ep.host.c_str()));
       co_await stream.async_handshake(
           asio::ssl::stream_base::client,
           asio::cancel_after(rem(), asio::use_awaitable));
 
       co_await http::async_write(
-          stream, req,
-          asio::cancel_after(rem(), asio::use_awaitable));
+          stream, req, asio::cancel_after(rem(), asio::use_awaitable));
 
       co_await readSseStream(stream, deadline, completion, fullContent, tcMap,
                              lineBuffer, on_chunk);
@@ -285,8 +279,7 @@ private:
       boost::beast::tcp_stream stream(std::move(socket));
 
       co_await http::async_write(
-          stream, req,
-          asio::cancel_after(rem(), asio::use_awaitable));
+          stream, req, asio::cancel_after(rem(), asio::use_awaitable));
 
       co_await readSseStream(stream, deadline, completion, fullContent, tcMap,
                              lineBuffer, on_chunk);
@@ -302,13 +295,10 @@ private:
 
   template <typename Stream>
   asio::awaitable<void>
-  readSseStream(Stream &stream,
-                std::chrono::steady_clock::time_point deadline,
-                neograph::ChatCompletion &completion,
-                std::string &fullContent,
+  readSseStream(Stream &stream, std::chrono::steady_clock::time_point deadline,
+                neograph::ChatCompletion &completion, std::string &fullContent,
                 std::map<int, neograph::ToolCall> &tcMap,
-                std::string &lineBuffer,
-                neograph::StreamCallback on_chunk) {
+                std::string &lineBuffer, neograph::StreamCallback on_chunk) {
     namespace http = boost::beast::http;
 
     auto rem = [&] {
@@ -321,9 +311,8 @@ private:
     boost::beast::flat_buffer buf;
     http::response_parser<http::string_body> parser;
     parser.body_limit(std::numeric_limits<uint64_t>::max());
-    co_await http::async_read(
-        stream, buf, parser,
-        asio::cancel_after(rem(), asio::use_awaitable));
+    co_await http::async_read(stream, buf, parser,
+                              asio::cancel_after(rem(), asio::use_awaitable));
 
     auto resp = parser.release();
 
@@ -332,19 +321,20 @@ private:
       int retryAfter = -1;
       if (!raw.empty()) {
         int seconds = 0;
-        auto [ptr, ec] = std::from_chars(raw.data(), raw.data() + raw.size(), seconds);
+        auto [ptr, ec] =
+            std::from_chars(raw.data(), raw.data() + raw.size(), seconds);
         if (ec == std::errc{} && seconds >= 0) {
           retryAfter = seconds;
         }
       }
       throw neograph::RateLimitError("API error (HTTP 429): " + resp.body(),
-                                    retryAfter);
+                                     retryAfter);
     }
 
     if (resp.result_int() != 200) {
       throw std::runtime_error("API error (HTTP " +
-                               std::to_string(resp.result_int()) + "): " +
-                               resp.body());
+                               std::to_string(resp.result_int()) +
+                               "): " + resp.body());
     }
 
     // Parse all SSE events from the body
@@ -352,11 +342,11 @@ private:
     processSseBuffer(lineBuffer, completion, fullContent, tcMap, on_chunk);
   }
 
-  static void
-  processSseBuffer(std::string &buf, neograph::ChatCompletion &completion,
-                   std::string &fullContent,
-                   std::map<int, neograph::ToolCall> &tcMap,
-                   neograph::StreamCallback on_chunk) {
+  static void processSseBuffer(std::string &buf,
+                               neograph::ChatCompletion &completion,
+                               std::string &fullContent,
+                               std::map<int, neograph::ToolCall> &tcMap,
+                               neograph::StreamCallback on_chunk) {
     size_t pos;
     while ((pos = buf.find('\n')) != std::string::npos) {
       std::string line = buf.substr(0, pos);
@@ -380,11 +370,10 @@ private:
         if (j.contains("usage") && !j["usage"].is_null()) {
           auto u = j["usage"];
           completion.usage.prompt_tokens = u.value("prompt_tokens", 0);
-          completion.usage.completion_tokens =
-              u.value("completion_tokens", 0);
+          completion.usage.completion_tokens = u.value("completion_tokens", 0);
           completion.usage.total_tokens =
               u.value("total_tokens", completion.usage.prompt_tokens +
-                                           completion.usage.completion_tokens);
+                                          completion.usage.completion_tokens);
         }
 
         if (!j.contains("choices") || !j["choices"].is_array() ||
@@ -410,8 +399,7 @@ private:
             }
             if (tc.contains("function")) {
               if (tc["function"].contains("name"))
-                tcMap[idx].name +=
-                    tc["function"]["name"].get<std::string>();
+                tcMap[idx].name += tc["function"]["name"].get<std::string>();
               if (tc["function"].contains("arguments"))
                 tcMap[idx].arguments +=
                     tc["function"]["arguments"].get<std::string>();
@@ -425,13 +413,7 @@ private:
   }
 
   static asio::ssl::context &sslContext() {
-    static asio::ssl::context ctx(asio::ssl::context::tlsv12_client);
-    static std::once_flag flag;
-    std::call_once(flag, [&] {
-      ctx.set_verify_mode(asio::ssl::verify_peer);
-      ctx.set_default_verify_paths();
-    });
-    return ctx;
+    return agentxx::util::HttpClient::sharedSslCtx(false);
   }
 
   Config config_;

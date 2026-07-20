@@ -68,6 +68,87 @@ public:
     co_return completion.message;
   }
 
+  neograph::CompletionParams
+  build_params(const neograph::graph::GraphState &state) const {
+    auto messages = state.get_messages();
+
+    // Ensure exactly one system message, carrying `instructions_` (issue #93).
+    //
+    // The contract: when a node is configured with instructions, the model sees
+    // those instructions as its single system prompt. State that already holds
+    // a system message — seeded by the caller, or restored from a checkpoint
+    // written when instructions_ was different — is replaced, not stacked on
+    // top of. Two system messages is malformed for a single-system-prompt API
+    // such as Anthropic's, and undefined for the OpenAI family.
+    //
+    // Replacing (rather than deferring to the state's message) is also what the
+    // previous code effectively did: it inserted instructions_ at position 0,
+    // ahead of any existing system message, so instructions already won on
+    // precedence. Only the duplicate goes away.
+    if (!instructions_.empty()) {
+      // [@coolight] 当存在 system 消息时不再添加
+      bool has_system = !messages.empty() && messages[0].role == "system";
+      if (!has_system) {
+        neograph::ChatMessage sys;
+        sys.role = "system";
+        sys.content = instructions_;
+        messages.insert(messages.begin(), sys);
+      }
+    }
+
+    // Build tool definitions
+    std::vector<neograph::ChatTool> tool_defs;
+    tool_defs.reserve(tools_.size());
+    for (auto *tool : tools_) {
+      tool_defs.push_back(tool->get_definition());
+    }
+
+    neograph::CompletionParams params;
+    params.model = model_;
+    params.messages = std::move(messages);
+    params.tools = std::move(tool_defs);
+    return params;
+  }
+
+  asio::awaitable<neograph::graph::NodeOutput>
+  callLLM(neograph::graph::NodeInput &in) {
+    auto params = build_params(in.state);
+    // v0.4 PR 9a: explicit cancel propagation — no thread-local
+    // smuggling. The provider binds this token's slot to its inner
+    // ConnPool::async_post co_await, so a caller's cancel() aborts
+    // the in-flight HTTPS socket.
+    params.cancel_token = in.ctx.cancel_token;
+
+    // ROADMAP_v1.md Candidate 6 PR2: dispatch through Provider::invoke()
+    // — the v1.0 unified entry point. Same semantic as the previous
+    // `if (in.stream_cb) complete_stream_async else complete_async` pair,
+    // but the stream/non-stream branch lives inside the provider's own
+    // default invoke() body (or its native override), not at every call
+    // site. Native providers that override invoke() get one dispatch
+    // path; legacy 4-virtual subclasses get the chain via the additive
+    // default. See PR #40.
+    neograph::StreamCallback on_token;
+    if (in.stream_cb) {
+      const neograph::graph::GraphStreamCallback &cb = *in.stream_cb;
+      std::string node_name = name_;
+      on_token = [&cb, node_name](const std::string &token) {
+        cb(neograph::graph::GraphEvent{
+            neograph::graph::GraphEvent::Type::LLM_TOKEN, node_name,
+            neograph::json(token)});
+      };
+    }
+    auto completion = co_await provider_->invoke(params, on_token);
+    neograph::graph::record_usage(in.ctx, completion); // #88
+
+    neograph::json msg_json;
+    neograph::to_json(msg_json, completion.message);
+
+    neograph::graph::NodeOutput out;
+    out.writes.push_back(neograph::graph::ChannelWrite{
+        "messages", neograph::json::array({msg_json})});
+    co_return out;
+  }
+
   asio::awaitable<void>
   onHandleStart(agentxx::middleware::BaseMiddlewareHandleInterface &item,
                 neograph::graph::NodeInput &in) override {
@@ -249,8 +330,7 @@ public:
 
       try {
         // 触发异常时，本次 LLM 消息不会添加到 result 中，因此需要额外处理
-        co_await WrapHandleBaseNode<neograph::graph::LLMCallNode>::baseRun(
-            agentCtxPtr->middlewareHandleContext->handles, in, result);
+        result = co_await callLLM(in);
         co_return;
       } catch (const neograph::graph::CancelledException &e) {
         isCancel = true;
