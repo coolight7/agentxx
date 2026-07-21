@@ -1,7 +1,7 @@
-#include "agent_stdio.h"
+#include "agentxx-client/io/agent_stdio.h"
+#include "agentxx-client/train/train.h"
+#include "agentxx-client/util/util.h"
 #include "agentxx/middlewares/permission.h"
-#include "train.h"
-#include "util.h"
 #include "yaml-cpp/yaml.h"
 #include <cstdlib>
 #include <filesystem>

@@ -113,32 +113,32 @@ target_include_directories(agentxx_shared PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
   # 标记为 SYSTEM 防止 include 影响 warning 转 error 判断
-  ${AGENTXX_INSTALL_DIR}/include/
-  ${neograph_SOURCE_DIR}/deps/yyjson/
-  ${neograph_SOURCE_DIR}/deps/
+  "${AGENTXX_INSTALL_DIR}/include/"
+  "${neograph_SOURCE_DIR}/deps/yyjson/"
+  "${neograph_SOURCE_DIR}/deps/"
 )
 target_include_directories(agentxx_static PUBLIC 
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
   # 标记为 SYSTEM 防止 include 影响 warning 转 error 判断
-  ${AGENTXX_INSTALL_DIR}/include/
-  ${neograph_SOURCE_DIR}/deps/yyjson/
-  ${neograph_SOURCE_DIR}/deps/
+  "${AGENTXX_INSTALL_DIR}/include/"
+  "${neograph_SOURCE_DIR}/deps/yyjson/"
+  "${neograph_SOURCE_DIR}/deps/"
 )
 if(Boost_FOUND)
   target_include_directories(agentxx_shared SYSTEM PUBLIC 
-    ${Boost_INCLUDE_DIRS}
-    ${Boost_INCLUDE_DIRS}/boost/
+    "${Boost_INCLUDE_DIRS}"
+    "${Boost_INCLUDE_DIRS}/boost/"
   )
   target_include_directories(agentxx_static SYSTEM PUBLIC 
-    ${Boost_INCLUDE_DIRS}
-    ${Boost_INCLUDE_DIRS}/boost/
+    "${Boost_INCLUDE_DIRS}"
+    "${Boost_INCLUDE_DIRS}/boost/"
   )
   target_link_directories(agentxx_shared PUBLIC 
-    ${BOOST_LIBRARY_DIR}
+    "${BOOST_LIBRARY_DIR}"
   )
   target_link_directories(agentxx_static PUBLIC 
-    ${BOOST_LIBRARY_DIR}
+    "${BOOST_LIBRARY_DIR}"
   )
 endif()
 
@@ -179,12 +179,12 @@ else()
     LINK_LIBRARIES_STRATEGY "REORDER_MINIMALLY"
   )
 endif()
-target_link_directories(agentxx_shared PUBLIC ${AGENTXX_INSTALL_DIR}/lib/)
-target_link_directories(agentxx_static PUBLIC ${AGENTXX_INSTALL_DIR}/lib/)
+target_link_directories(agentxx_shared PUBLIC "${AGENTXX_INSTALL_DIR}/lib/")
+target_link_directories(agentxx_static PUBLIC "${AGENTXX_INSTALL_DIR}/lib/")
 
 if (AGENTXX_ENABLE_CODEGRAPH)
-  target_include_directories(agentxx_shared PUBLIC ${AGENTXX_INSTALL_DIR}/include/tree_sitter/)
-  target_include_directories(agentxx_static PUBLIC ${AGENTXX_INSTALL_DIR}/include/tree_sitter/)
+  target_include_directories(agentxx_shared PUBLIC "${AGENTXX_INSTALL_DIR}/include/tree_sitter/")
+  target_include_directories(agentxx_static PUBLIC "${AGENTXX_INSTALL_DIR}/include/tree_sitter/")
   target_link_libraries(agentxx_shared PUBLIC 
     codegraph_core 
     tree_sitter

@@ -27,11 +27,19 @@ file(GLOB test_SOURCES
 	CONFIGURE_DEPENDS
 	"*.cpp" "*.cc" "*.cxx"
 )
+set(AGENTXX_CLIENT_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../client/")
+file(GLOB_RECURSE client_SOURCES 
+	CONFIGURE_DEPENDS
+	"${AGENTXX_CLIENT_SOURCE_DIR}/*.cpp" "${AGENTXX_CLIENT_SOURCE_DIR}/*.cc" "${AGENTXX_CLIENT_SOURCE_DIR}/*.cxx"
+)
 target_sources(agentxx_test PRIVATE
 	${test_SOURCES}
 )
 
-target_include_directories(agentxx_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(agentxx_test PRIVATE 
+  "${CMAKE_CURRENT_SOURCE_DIR}"
+  "${AGENTXX_CLIENT_SOURCE_DIR}/include/"
+)
 
 find_package(PkgConfig REQUIRED)
 
@@ -54,7 +62,7 @@ find_package(Glob REQUIRED)
 find_package(agentxx_static REQUIRED)
 
 target_link_directories(agentxx_test PUBLIC
-  ${AGENTXX_INSTALL_DIR}/lib/
+  "${AGENTXX_INSTALL_DIR}/lib/"
 )
 
 target_link_libraries(agentxx_test PRIVATE

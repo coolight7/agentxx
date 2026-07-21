@@ -30,7 +30,7 @@ target_sources(agentxx_cli PRIVATE
 	${client_SOURCES}
 )
 
-target_include_directories(agentxx_cli PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(agentxx_cli PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include/")
 
 find_package(PkgConfig REQUIRED)
 
@@ -53,7 +53,7 @@ find_package(Glob REQUIRED)
 find_package(agentxx_static REQUIRED)
 
 target_link_directories(agentxx_cli PUBLIC
-  ${AGENTXX_INSTALL_DIR}/lib/
+  "${AGENTXX_INSTALL_DIR}/lib/"
 )
 
 target_link_libraries(agentxx_cli PUBLIC

@@ -31,7 +31,7 @@ target_compile_definitions(agentxx_benchmark PRIVATE
   AGENTXX_BENCH_OUTPUT_DIR="${AGENTXX_BENCH_OUTPUT_DIR}"
 )
 
-target_include_directories(agentxx_benchmark PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(agentxx_benchmark PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 
 find_package(PkgConfig REQUIRED)
 
@@ -53,7 +53,7 @@ find_package(Glob REQUIRED)
 find_package(agentxx_static REQUIRED)
 
 target_link_directories(agentxx_benchmark PUBLIC
-  ${AGENTXX_INSTALL_DIR}/lib/
+  "${AGENTXX_INSTALL_DIR}/lib/"
 )
 
 target_link_libraries(agentxx_benchmark PRIVATE

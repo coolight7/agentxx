@@ -7,6 +7,7 @@
 #include "agentxx/util/string_util.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
+#include "neograph/api.h"
 
 // ======================== 共享配置构建 ========================
 std::shared_ptr<agentxx::agent::AgentConfig> buildDefaultConfig() {
