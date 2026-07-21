@@ -1,10 +1,16 @@
 #include "agentxx-client/io/tui/agent_tui.h"
+#include "agentxx/agent/model_registry.h"
+#include "fmt/format.h"
 #include "ftxui/component/event.hpp"
+#include "neograph/graph/cancel.h"
 
 using namespace ftxui;
 
-AgentTUI::AgentTUI(asio::any_io_executor ex)
-    : inputChannel_(std::make_shared<LineChannel>(ex, 64)),
+AgentTUI::AgentTUI(asio::any_io_executor ex,
+                   std::shared_ptr<agentxx::agent::AgentContext> agentContext,
+                   TUITheme theme)
+    : agentContext_(std::move(agentContext)), theme_(theme),
+      inputChannel_(std::make_shared<LineChannel>(ex, 64)),
       permissionChannel_(std::make_shared<BoolChannel>(ex, 4)) {}
 
 AgentTUI::~AgentTUI() { stop(); }
@@ -52,18 +58,22 @@ void AgentTUI::start() {
                       yframe;
 
       auto input_bar = hbox({
-          text(">>> ") | color(Color::Green) | bold,
+          text(">>> ") | color(theme_.promptColor) | bold,
           input->Render() | flex,
       });
 
       auto main = vbox({
-                    messages,
-                    separator(),
+          messages,
+          separator(),
           input_bar,
+          renderStatusBar(),
       });
 
       if (pendingPermission_.has_value()) {
         return renderPermissionOverlay() | center;
+      }
+      if (showModelSelector_) {
+        return renderModelSelectorOverlay() | center;
       }
       return main;
     });
@@ -76,6 +86,7 @@ void AgentTUI::start() {
       }
 
       std::lock_guard<std::mutex> lock(mutex_);
+
       if (pendingPermission_.has_value()) {
         if (event == Event::Character('y') || event == Event::Character('Y')) {
           pendingPermission_.reset();
@@ -92,6 +103,45 @@ void AgentTUI::start() {
           postRedraw();
           return true;
         }
+        return true;
+      }
+
+      if (showModelSelector_) {
+        if (event == Event::ArrowUp) {
+          if (selectedModelIndex_ > 0) {
+            --selectedModelIndex_;
+          }
+          postRedraw();
+          return true;
+        }
+        if (event == Event::ArrowDown) {
+          if (selectedModelIndex_ + 1 < static_cast<int>(modelNames_.size())) {
+            ++selectedModelIndex_;
+          }
+          postRedraw();
+          return true;
+        }
+        if (event == Event::Return) {
+          confirmModelSelection();
+          postRedraw();
+          return true;
+        }
+        if (event == Event::Escape) {
+          showModelSelector_ = false;
+          postRedraw();
+          return true;
+        }
+        return true;
+      }
+
+      if (event == Event::F2) {
+        openModelSelector();
+        postRedraw();
+        return true;
+      }
+      if (event == Event::Escape && isStreaming_) {
+        cancelCurrentRun();
+        postRedraw();
         return true;
       }
       return false;
@@ -118,21 +168,21 @@ ftxui::Element AgentTUI::renderMessages() {
     switch (msg.role) {
     case Message::Role::User:
       elements.push_back(hbox({
-          text("> ") | color(Color::Cyan) | bold,
-          paragraph(msg.text) | color(Color::Cyan),
+          text("> ") | color(theme_.userColor) | bold,
+          paragraph(msg.text) | color(theme_.userColor),
       }));
       break;
     case Message::Role::Assistant:
-      elements.push_back(paragraph(msg.text));
+      elements.push_back(paragraph(msg.text) | color(theme_.assistantColor));
       break;
     case Message::Role::Thinking:
       elements.push_back(hbox({
-          text("[Thinking] ") | color(Color::Yellow) | dim,
-          paragraph(msg.text) | color(Color::Yellow) | dim,
+          text("[Thinking] ") | color(theme_.thinkingColor) | dim,
+          paragraph(msg.text) | color(theme_.thinkingColor) | dim,
       }));
       break;
     case Message::Role::System:
-      elements.push_back(paragraph(msg.text) | color(Color::Red));
+      elements.push_back(paragraph(msg.text) | color(theme_.systemColor));
       break;
     }
     elements.push_back(text(""));
@@ -141,23 +191,63 @@ ftxui::Element AgentTUI::renderMessages() {
   if (isStreaming_ && !currentToken_.empty()) {
     if (currentTokenRole_ == Message::Role::Thinking) {
       elements.push_back(hbox({
-          text("[Thinking] ") | color(Color::Yellow) | dim,
-          paragraph(currentToken_) | color(Color::Yellow) | dim,
+          text("[Thinking] ") | color(theme_.thinkingColor) | dim,
+          paragraph(currentToken_) | color(theme_.thinkingColor) | dim,
       }));
     } else {
-      elements.push_back(paragraph(currentToken_));
+      elements.push_back(paragraph(currentToken_) |
+                         color(theme_.assistantColor));
     }
   }
 
   if (elements.empty()) {
     return vbox({
         filler(),
-        text("Agentxx TUI") | bold | color(Color::Cyan) | center,
-        text("Type a message to start. Ctrl+C to quit.") | dim | center,
+        text("Agentxx TUI") | bold | color(theme_.accentColor) | center,
+        text("Type a message to start. [F2] switch model, [Esc] cancel, "
+             "[Ctrl+C] quit.") |
+            dim | center,
         filler(),
     });
   }
   return vbox(std::move(elements));
+}
+
+ftxui::Element AgentTUI::renderStatusBar() {
+  std::string modelName = "<none>";
+  if (agentContext_ && agentContext_->modelRegistry) {
+    auto name = agentContext_->modelRegistry->getCurrentModelName();
+    if (false == name.empty()) {
+      modelName = name;
+    }
+  }
+  auto modelInfo = hbox({
+      text(" model: ") | color(theme_.hintColor),
+      text(modelName) | color(theme_.accentColor) | bold,
+      text(" [F2] ") | color(theme_.hintColor),
+  });
+
+  size_t ctx = 0;
+  size_t maxCtx = 0;
+  if (agentContext_ && agentContext_->contextStats) {
+    ctx = agentContext_->contextStats->contextTokens.load();
+    maxCtx = agentContext_->contextStats->maxContextTokens.load();
+  }
+  std::string ctxText;
+  if (maxCtx > 0) {
+    const double pct = 100.0 * static_cast<double>(ctx) /
+                       static_cast<double>(maxCtx);
+    ctxText = fmt::format(" ctx: {}/{} ({:.1f}%) ", ctx, maxCtx, pct);
+  } else {
+    ctxText = fmt::format(" ctx: {} ", ctx);
+  }
+  auto ctxInfo = text(ctxText) | color(theme_.statusColor);
+
+  return hbox({
+      modelInfo,
+      filler(),
+      ctxInfo,
+  });
 }
 
 ftxui::Element AgentTUI::renderPermissionOverlay() {
@@ -171,8 +261,70 @@ ftxui::Element AgentTUI::renderPermissionOverlay() {
              separator(),
              text(" [y] Allow  [n/Esc] Deny ") | center,
          }) |
-         border | size(WIDTH, LESS_THAN, 60) |
-         color(Color::Red);
+         border | size(WIDTH, LESS_THAN, 60) | color(theme_.systemColor);
+}
+
+ftxui::Element AgentTUI::renderModelSelectorOverlay() {
+  Elements items;
+  items.push_back(text(" Select Model ") | bold | inverted);
+  items.push_back(separator());
+  if (modelNames_.empty()) {
+    items.push_back(text(" (no models available) ") | dim);
+  }
+  for (size_t i = 0; i < modelNames_.size(); ++i) {
+    auto entry = text(" " + modelNames_[i] + " ");
+    if (static_cast<int>(i) == selectedModelIndex_) {
+      entry = entry | inverted | color(theme_.accentColor) | bold;
+    }
+    items.push_back(entry);
+  }
+  items.push_back(separator());
+  items.push_back(text(" [Up/Down] Move  [Enter] Select  [Esc] Cancel ") |
+                  center | dim);
+  return vbox(std::move(items)) | border | size(WIDTH, LESS_THAN, 50) |
+         color(theme_.accentColor);
+}
+
+void AgentTUI::openModelSelector() {
+  modelNames_.clear();
+  selectedModelIndex_ = 0;
+  if (agentContext_ && agentContext_->modelRegistry) {
+    modelNames_ = agentContext_->modelRegistry->listModelNames();
+    const auto current = agentContext_->modelRegistry->getCurrentModelName();
+    for (size_t i = 0; i < modelNames_.size(); ++i) {
+      if (modelNames_[i] == current) {
+        selectedModelIndex_ = static_cast<int>(i);
+        break;
+      }
+    }
+  }
+  showModelSelector_ = true;
+}
+
+void AgentTUI::confirmModelSelection() {
+  if (selectedModelIndex_ >= 0 &&
+      selectedModelIndex_ < static_cast<int>(modelNames_.size())) {
+    if (agentContext_ && agentContext_->modelRegistry) {
+      agentContext_->modelRegistry->setCurrentModel(
+          modelNames_[selectedModelIndex_]);
+    }
+  }
+  showModelSelector_ = false;
+}
+
+void AgentTUI::cancelCurrentRun() {
+  if (agentContext_) {
+    auto token = agentContext_->getCancelToken();
+    if (token) {
+      token->cancel();
+    }
+  }
+  if (!currentToken_.empty()) {
+    messages_.push_back({currentTokenRole_, currentToken_});
+    currentToken_.clear();
+  }
+  messages_.push_back({Message::Role::System, "[Cancelled by user]"});
+  isStreaming_ = false;
 }
 
 void AgentTUI::onToken(const std::string &token, const std::string &kind) {
