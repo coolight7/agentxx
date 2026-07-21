@@ -598,6 +598,8 @@ public:
           .resume_if_exists = isFirstMsg,
       };
 
+      // - 存在值 [neograph::graph::RunResult], 声明 optional 类型用于后续赋值
+      // [nullopt]
       std::optional<neograph::graph::RunResult> result =
           co_await engine->run_stream_async(cfg, eventCallback);
 
