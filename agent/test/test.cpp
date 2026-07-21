@@ -7,6 +7,7 @@
 #include "asio/io_context.hpp"
 #include "asio/use_awaitable.hpp"
 #include "test_acp.h"
+#include "test_anthropic_provider.h"
 #include "test_codegraph_tools.h"
 #include "test_command_tools.h"
 #include "test_cpu_gpu_use.h"
@@ -180,6 +181,7 @@ int main(int argn, char **argv) {
         co_await run("mcp", agentxx::test::run_mcp_tests);
         co_await run("acp", agentxx::test::run_acp_tests);
         co_await run("openai_provider", agentxx::test::run_openai_provider_tests);
+        co_await run("anthropic_provider", agentxx::test::run_anthropic_provider_tests);
         co_await run("deepagent", agentxx::test::run_deepagent_tests);
         ioCtx.stop();
       },

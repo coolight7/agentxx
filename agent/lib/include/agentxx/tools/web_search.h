@@ -1,5 +1,6 @@
 #pragma once
 
+#include "agentxx/protocol/openai_provider.h"
 #include "agentxx/tools/tool.h"
 #include "agentxx/util/http_client.h"
 #include "agentxx/util/log.h"
@@ -221,5 +222,88 @@ public:
     throw std::runtime_error(resp.error_or("[unknown]"));
   }
 };
+/// 使用模型进行网络搜索的 Tool
+/// - 通过调用支持联网搜索的模型（如 OpenAI web_search 等）获取搜索结果
+/// - 由 [AgentConfig::websearchModel] 配置驱动
+class ModelWebSearchTool : public XXToolBase {
+protected:
+  std::shared_ptr<agentxx::server::OpenAIProvider> provider;
+
+public:
+  ModelWebSearchTool(const agentxx::agent::ModelConfig &modelCfg,
+                     std::weak_ptr<agentxx::agent::AgentContext> in_agentContext)
+      : XXToolBase("web_search", in_agentContext, true, true) {
+    agentxx::server::OpenAIProvider::Config cfg{
+        .api_key = modelCfg.apiKey,
+        .base_url = modelCfg.baseUrl,
+        .default_model = modelCfg.modelName,
+        .timeout_seconds = 60,
+    };
+    provider = agentxx::server::OpenAIProvider::create(cfg);
+  }
+
+  neograph::ChatTool get_definition() const override {
+    auto agentPtr = agentContext.lock();
+    const auto &prompt = agentPtr->agentConfig->prompt.toolPrompt[get_name()];
+
+    return {
+        get_name(),
+        prompt.depict,
+        neograph::json{
+            {"type", "object"},
+            {
+                "properties",
+                {{
+                    "query",
+                    {
+                        {"type", "string"},
+                        {"description", prompt.getArg("query")},
+                    },
+                }},
+            },
+            {"required", neograph::json::array({"query"})},
+        },
+    };
+  }
+
+  asio::awaitable<std::string>
+  execute_async(const neograph::json &arguments) override {
+    std::string query = arguments.value("query", std::string{});
+    if (query.empty()) {
+      co_return R"({"error":"Arg `query` is empty"})";
+    }
+
+    // 构造消息，请求模型进行网络搜索
+    neograph::CompletionParams params;
+    params.model = ""; // 使用 provider 默认模型
+    params.temperature = 0.0f;
+    params.messages = {
+        neograph::ChatMessage{
+            .role = "system",
+            .content = "You are a web search assistant. Search the internet "
+                       "for the user's query and provide comprehensive, "
+                       "accurate results with sources. Respond in the same "
+                       "language as the query.",
+        },
+        neograph::ChatMessage{
+            .role = "user",
+            .content = query,
+        },
+    };
+
+    auto completion = co_await provider->invoke(params, nullptr);
+    auto &content = completion.message.content;
+    if (content.empty()) {
+      co_return R"({"error": "Model web search returned empty result."})";
+    }
+    const size_t maxLength = 8000;
+    if (content.size() > maxLength) {
+      content.resize(maxLength);
+      content += "\n\n[Too long, truncated]";
+    }
+    co_return content;
+  }
+};
+
 } // namespace tools
 } // namespace agentxx

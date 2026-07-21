@@ -76,7 +76,7 @@
         - web_search (内置 HTML 转 markdown, 支持直接使用普通网页搜索api)
         - web_fetch_url_markdown (html to markdown)
         - web_fetch_url (raw resp body)
-        - ⬜subagent 对接外部 llm agent 实现搜索
+        - 支持 subagent 对接外部 llm api 实现搜索
     - ✅planning
         - 目标规划 + 渐进任务细节 两层任务规划 + 备忘录
         - mermaid/stateDiagram-v2 状态图描述大方向的任务规划
@@ -156,8 +156,8 @@
     - ✅Openai API
     - Anthropic API
 - ✅**自定义配置**
-    - LLM Api (BaseUrl/ApiKey/ModelName/ExtraArgs)
-    - System Prompt
+    - LLM Api (BaseUrl/ApiKey/ModelName/ExtraConfig)
+    - 支持启动时从 agentxx-config.yaml、.env 加载配置文件
     - 分离 System/Tool Prompt 到独立配置，以便支持自定义和`Self-upgrade`自动调整适配
 
 ### 扩展

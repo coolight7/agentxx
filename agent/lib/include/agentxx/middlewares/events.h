@@ -90,6 +90,7 @@ struct EventModelToken {
   std::string agentName;
   std::string threadId;
   std::string token; // 增量 token
+  std::string kind = "content"; // "content" | "thinking"
 };
 
 struct EventModelCallEnd {

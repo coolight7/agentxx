@@ -58,11 +58,27 @@ public:
   asio::awaitable<neograph::ChatCompletion>
   invoke(const neograph::CompletionParams &params,
          neograph::StreamCallback on_chunk = nullptr) override {
+    co_return co_await invoke_format_data(
+        params, [on_chunk](const neograph::ChatStreamChunk &chunk) {
+          switch (chunk.type) {
+          case neograph::ChatStreamChunk::TYPE_CONTENT:
+            on_chunk(chunk.data);
+            break;
+          case neograph::ChatStreamChunk::TYPE_THINKING:
+            break;
+          }
+        });
+  }
+
+  asio::awaitable<neograph::ChatCompletion> invoke_format_data(
+      const neograph::CompletionParams &params,
+      neograph::FormatDataStreamCallback on_chunk = nullptr) override {
     if (on_chunk) {
       auto body = buildBody(params);
       body["stream"] = true;
       body["stream_options"] = {{"include_usage", true}};
-      co_return co_await doStream(params, body, on_chunk);
+      auto result = co_await doStream(params, body, on_chunk);
+      co_return result;
     }
     co_return co_await completeAsync(params);
   }
@@ -207,8 +223,7 @@ private:
           !choice["reasoning_content"].is_null()) {
         completion.message.reasoning_content =
             choice["reasoning_content"].get<std::string>();
-      } else if (choice.contains("thinking") &&
-                 !choice["thinking"].is_null()) {
+      } else if (choice.contains("thinking") && !choice["thinking"].is_null()) {
         completion.message.reasoning_content =
             choice["thinking"].get<std::string>();
       }
@@ -226,7 +241,7 @@ private:
 
   asio::awaitable<neograph::ChatCompletion>
   doStream(const neograph::CompletionParams &params, const neograph::json &body,
-           neograph::StreamCallback on_chunk) {
+           neograph::FormatDataStreamCallback on_chunk) {
     namespace http = boost::beast::http;
     using asio::ip::tcp;
 
@@ -319,12 +334,11 @@ private:
   }
 
   template <typename Stream>
-  asio::awaitable<void>
-  readSseStream(Stream &stream, std::chrono::steady_clock::time_point deadline,
-                neograph::ChatCompletion &completion, std::string &fullContent,
-                std::string &fullThinking,
-                std::map<int, neograph::ToolCall> &tcMap,
-                std::string &lineBuffer, neograph::StreamCallback on_chunk) {
+  asio::awaitable<void> readSseStream(
+      Stream &stream, std::chrono::steady_clock::time_point deadline,
+      neograph::ChatCompletion &completion, std::string &fullContent,
+      std::string &fullThinking, std::map<int, neograph::ToolCall> &tcMap,
+      std::string &lineBuffer, neograph::FormatDataStreamCallback on_chunk) {
     namespace http = boost::beast::http;
 
     auto rem = [&] {
@@ -374,7 +388,7 @@ private:
                                std::string &fullContent,
                                std::string &fullThinking,
                                std::map<int, neograph::ToolCall> &tcMap,
-                               neograph::StreamCallback on_chunk) {
+                               neograph::FormatDataStreamCallback on_chunk) {
     size_t pos;
     while ((pos = buf.find('\n')) != std::string::npos) {
       std::string line = buf.substr(0, pos);
@@ -415,7 +429,8 @@ private:
           std::string token = delta["content"].get<std::string>();
           fullContent += token;
           if (on_chunk)
-            on_chunk(token);
+            on_chunk(neograph::ChatStreamChunk{
+                neograph::ChatStreamChunk::TYPE_CONTENT, token});
         }
 
         // Reasoning / thinking content (e.g. DeepSeek reasoner, QwQ, etc.)
@@ -424,13 +439,14 @@ private:
           auto token = delta["reasoning_content"].get<std::string>();
           fullThinking += token;
           if (on_chunk)
-            on_chunk(token);
-        } else if (delta.contains("thinking") &&
-                   !delta["thinking"].is_null()) {
+            on_chunk(neograph::ChatStreamChunk{
+                neograph::ChatStreamChunk::TYPE_THINKING, token});
+        } else if (delta.contains("thinking") && !delta["thinking"].is_null()) {
           auto token = delta["thinking"].get<std::string>();
           fullThinking += token;
           if (on_chunk)
-            on_chunk(token);
+            on_chunk(neograph::ChatStreamChunk{
+                neograph::ChatStreamChunk::TYPE_THINKING, token});
         }
 
         // Tool calls (streamed incrementally)
@@ -455,8 +471,7 @@ private:
     }
   }
 
-  static void extractThinkTags(std::string &content,
-                                std::string &thinking) {
+  static void extractThinkTags(std::string &content, std::string &thinking) {
     std::string cleaned;
     size_t pos = 0;
     while (pos < content.size()) {

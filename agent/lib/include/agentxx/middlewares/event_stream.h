@@ -468,8 +468,20 @@ public:
       using T = neograph::graph::GraphEvent::Type;
       switch (event.type) {
       case T::LLM_TOKEN: {
-        auto token = event.data.is_string() ? event.data.get<std::string>()
-                                            : event.data.dump();
+        // 支持结构化数据 {"kind":"content"|"thinking","token":"..."}
+        // 和旧的纯字符串格式
+        std::string token;
+        std::string kind = "content";
+        if (event.data.is_string()) {
+          token = event.data.get<std::string>();
+        } else if (event.data.is_object() && event.data.contains("token")) {
+          token = event.data["token"].get<std::string>();
+          if (event.data.contains("kind")) {
+            kind = event.data["kind"].get<std::string>();
+          }
+        } else {
+          token = event.data.dump();
+        }
         // fire-and-forget: GraphStreamCallback 是同步签名 void(...),
         // 无法 co_await, 只能 co_spawn 发布协程。
         // 单 io_context 下 co_spawn 帧轻量且按序完成 (publish 内部顺序派发
@@ -477,14 +489,15 @@ public:
         // 若未来订阅者变重或需跨线程, 可改为 post + 专用读取协程批处理
         asio::co_spawn(
             bus.executor(),
-            [busPtr, agentName, threadId,
-             token = std::move(token)]() -> asio::awaitable<void> {
+            [busPtr, agentName, threadId, token = std::move(token),
+             kind = std::move(kind)]() -> asio::awaitable<void> {
               co_await busPtr->publish<agentxx::events::EventModelToken>(
                   agentxx::events::Topic::ModelToken,
                   agentxx::events::EventModelToken{
                       .agentName = agentName,
                       .threadId = threadId,
                       .token = token,
+                      .kind = kind,
                   });
             },
             asio::detached);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "agentxx/nodes/warp_handle.h"
+#include "agentxx/protocol/openai_provider.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/log.h"
 #include "agentxx/util/string_util.h"
@@ -36,29 +37,40 @@ public:
 
   asio::awaitable<neograph::ChatCompletion>
   onReceiveToken(neograph::CompletionParams &params,
-                 neograph::graph::NodeInput input) override {
+                 neograph::graph::NodeInput &input) {
     auto ctxPtr = agentContext.lock()->middlewareHandleContext;
 
     auto callback = input.stream_cb;
-    std::function<void(const std::string &chunk)> onToken;
+    neograph::FormatDataStreamCallback onToken;
     if (nullptr != callback) {
-      onToken = [&input, callback, ctxPtr, this](const std::string &token) {
-        // 记录 本次请求的临时LLM消息，以便触发异常时处理
-        ctxPtr->modifyGraphDataItemValue<std::string>(
-            input.ctx.thread_id,
-            agentxx::middleware::MiddlewareContext::graphDataKey_tempLLMMessage,
-            [&token](std::string &msg) { msg += token; });
+      onToken = [&input, callback, ctxPtr,
+                 this](const neograph::ChatStreamChunk &token) {
+        switch (token.type) {
+        case neograph::ChatStreamChunk::TYPE_CONTENT: {
+          // 记录 本次请求的临时LLM消息，以便触发异常时处理
+          ctxPtr->modifyGraphDataItemValue<std::string>(
+              input.ctx.thread_id,
+              agentxx::middleware::MiddlewareContext::
+                  graphDataKey_tempLLMMessage,
+              [&token](std::string &msg) { msg += token.data; });
+        } break;
+        case neograph::ChatStreamChunk::TYPE_THINKING:
+          break;
+        }
 
         if (nullptr != callback) {
+          neograph::json json;
+          neograph::to_json(json, token);
           (*callback)(neograph::graph::GraphEvent{
               neograph::graph::GraphEvent::Type::LLM_TOKEN,
               nodeName,
-              neograph::json(token),
+              json,
           });
         }
       };
     }
-    auto completion = co_await provider_->invoke(params, onToken);
+
+    auto completion = co_await provider_->invoke_format_data(params, onToken);
 
     // 记录 token使用量
     ctxPtr->setGraphDataItemValue<int>(
@@ -119,25 +131,7 @@ public:
     // the in-flight HTTPS socket.
     params.cancel_token = in.ctx.cancel_token;
 
-    // ROADMAP_v1.md Candidate 6 PR2: dispatch through Provider::invoke()
-    // — the v1.0 unified entry point. Same semantic as the previous
-    // `if (in.stream_cb) complete_stream_async else complete_async` pair,
-    // but the stream/non-stream branch lives inside the provider's own
-    // default invoke() body (or its native override), not at every call
-    // site. Native providers that override invoke() get one dispatch
-    // path; legacy 4-virtual subclasses get the chain via the additive
-    // default. See PR #40.
-    neograph::StreamCallback on_token;
-    if (in.stream_cb) {
-      const neograph::graph::GraphStreamCallback &cb = *in.stream_cb;
-      std::string node_name = name_;
-      on_token = [&cb, node_name](const std::string &token) {
-        cb(neograph::graph::GraphEvent{
-            neograph::graph::GraphEvent::Type::LLM_TOKEN, node_name,
-            neograph::json(token)});
-      };
-    }
-    auto completion = co_await provider_->invoke(params, on_token);
+    auto completion = co_await onReceiveToken(params, in);
     neograph::graph::record_usage(in.ctx, completion); // #88
 
     neograph::json msg_json;

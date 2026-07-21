@@ -180,8 +180,22 @@ private:
             case neograph::graph::GraphEvent::Type::NODE_END:
               break;
             case neograph::graph::GraphEvent::Type::LLM_TOKEN: {
-              const auto token = event.data.get<std::string>();
-              oss << token;
+              // 支持结构化数据 {"kind":"content"|"thinking","token":"..."}
+              std::string token;
+              std::string kind = "content";
+              if (event.data.is_string()) {
+                token = event.data.get<std::string>();
+              } else if (event.data.is_object() &&
+                         event.data.contains("token")) {
+                token = event.data["token"].get<std::string>();
+                if (event.data.contains("kind")) {
+                  kind = event.data["kind"].get<std::string>();
+                }
+              }
+              // 仅累积 content token
+              if (kind == "content") {
+                oss << token;
+              }
 #if XX_IS_DEBUG_D
               std::cout << token << std::flush;
 #endif
@@ -189,13 +203,15 @@ private:
                 asio::co_spawn(
                     busPtr->executor(),
                     [busPtr, subagentId, agentName = subagentName,
-                     token]() -> asio::awaitable<void> {
+                     token = std::move(token),
+                     kind = std::move(kind)]() -> asio::awaitable<void> {
                       co_await busPtr->publish<events::EventSubagentProgress>(
                           events::Topic::SubagentProgress,
                           events::EventSubagentProgress{
                               .subagentId = subagentId,
                               .agentName = agentName,
-                              .kind = "token",
+                              .kind = kind == "thinking" ? "thinking"
+                                                         : "token",
                               .data = token,
                           });
                     },

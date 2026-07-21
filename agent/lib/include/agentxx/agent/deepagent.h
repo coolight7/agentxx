@@ -61,7 +61,7 @@ public:
     agentContext = std::make_shared<AgentContext>();
     agentContext->agentConfig = in_config;
     assert(nullptr != in_config);
-    assert(in_config->modelOpenAIBaseUrl.empty() == false);
+    assert(in_config->model.isValid());
   }
 
   asio::awaitable<void> init() {
@@ -73,9 +73,16 @@ public:
 
     auto config = agentContext->agentConfig;
     agentxx::server::OpenAIProvider::Config provideConfig{
-        .api_key = config->modelOpenAIApiKey,
-        .base_url = config->modelOpenAIBaseUrl,
-        .default_model = config->modelOpenAIModelName,
+        .api_key = config->model.apiKey,
+        .base_url = config->model.baseUrl,
+        .default_model = config->model.modelName,
+    };
+    // subagent 模型配置：未指定时默认取主模型
+    const auto &subagentModelCfg = config->getSubagentModel();
+    agentxx::server::OpenAIProvider::Config subagentProvideConfig{
+        .api_key = subagentModelCfg.apiKey,
+        .base_url = subagentModelCfg.baseUrl,
+        .default_model = subagentModelCfg.modelName,
     };
 
     {
@@ -302,7 +309,11 @@ public:
           std::make_unique<agentxx::tools::WebFetchUrlTool>(agentContext));
       tools.push_back(std::make_unique<agentxx::tools::WebFetchUrlMarkdownTool>(
           agentContext));
-      if (false == config->websearchApiUrl.empty()) {
+      if (config->websearchModel.has_value()) {
+        // 使用模型进行网络搜索
+        tools.push_back(std::make_unique<agentxx::tools::ModelWebSearchTool>(
+            config->websearchModel.value(), agentContext));
+      } else if (false == config->websearchApiUrl.empty()) {
         tools.push_back(std::make_unique<agentxx::tools::WebSearchTool>(
             config->websearchApiUrl, config->websearchConvertHtml2markdown,
             agentContext));
@@ -310,8 +321,8 @@ public:
 
       if (false == config->ragDocsPaths.empty()) {
         auto client = std::make_shared<agentxx::tools::EmbeddingClient>(
-            config->modelOpenAIBaseUrl, config->modelOpenAIApiKey,
-            config->modelOpenAIModelName);
+            config->model.baseUrl, config->model.apiKey,
+            config->model.modelName);
         auto docsStore =
             std::make_shared<agentxx::tools::RAGSearchTool::VectorStore>(
                 client);
@@ -362,8 +373,8 @@ public:
           // subagent_task
           neograph::graph::NodeContext nodeContext{};
           nodeContext.instructions = "";
-          nodeContext.provider =
-              agentxx::server::OpenAIProvider::create_shared(provideConfig);
+          nodeContext.provider = agentxx::server::OpenAIProvider::create_shared(
+              subagentProvideConfig);
 
           /// 复制 tool
           std::vector<neograph::Tool *> toolPtrs;
@@ -793,20 +804,44 @@ public:
   }
 
   asio::awaitable<void> runCliAsync() {
-    const auto cliEventCallback = [](const neograph::graph::GraphEvent &event) {
-      switch (event.type) {
-      case neograph::graph::GraphEvent::Type::NODE_START:
-      case neograph::graph::GraphEvent::Type::NODE_END:
-        break;
-      case neograph::graph::GraphEvent::Type::LLM_TOKEN: {
-        std::cout << event.data.get<std::string>() << std::flush;
-      } break;
-      case neograph::graph::GraphEvent::Type::CHANNEL_WRITE:
-      case neograph::graph::GraphEvent::Type::INTERRUPT:
-      case neograph::graph::GraphEvent::Type::ERROR:
-        break;
-      }
-    };
+    bool isThinking = false;
+    const auto cliEventCallback =
+        [&](const neograph::graph::GraphEvent &event) {
+          switch (event.type) {
+          case neograph::graph::GraphEvent::Type::NODE_START:
+          case neograph::graph::GraphEvent::Type::NODE_END:
+            break;
+          case neograph::graph::GraphEvent::Type::LLM_TOKEN: {
+            std::string token;
+            if (event.data.is_string()) {
+              token = event.data.get<std::string>();
+            } else if (event.data.is_object()) {
+              neograph::ChatStreamChunk chunk;
+              neograph::from_json(event.data, chunk);
+              switch (chunk.type) {
+              case neograph::ChatStreamChunk::TYPE_CONTENT:
+                if (isThinking) {
+                  std::cout << "[Content] ";
+                }
+                isThinking = false;
+                break;
+              case neograph::ChatStreamChunk::TYPE_THINKING:
+                if (false == isThinking) {
+                  std::cout << "[Thinking] ";
+                }
+                isThinking = true;
+                break;
+              }
+              token = std::move(chunk.data);
+            }
+            std::cout << token << std::flush;
+          } break;
+          case neograph::graph::GraphEvent::Type::CHANNEL_WRITE:
+          case neograph::graph::GraphEvent::Type::INTERRUPT:
+          case neograph::graph::GraphEvent::Type::ERROR:
+            break;
+          }
+        };
     const auto cliInterruptCallback =
         [](const std::string &interruptNode, const std::string &interruptValue,
            const std::string &interruptHandleName) -> asio::awaitable<void> {
@@ -842,6 +877,7 @@ public:
 
     for (std::string line; std::getline(std::cin, line);) {
       if (false == line.empty()) {
+        isThinking = false;
         std::cout << agentContext->agentConfig->agentNameView << ": "
                   << std::flush;
 
@@ -907,8 +943,21 @@ public:
         [&oss, callback](const neograph::graph::GraphEvent &event) {
           switch (event.type) {
           case neograph::graph::GraphEvent::Type::LLM_TOKEN: {
-            auto token = event.data.get<std::string>();
-            oss << token;
+            // 支持结构化数据 {"kind":"content"|"thinking","token":"..."}
+            std::string token;
+            std::string kind = "content";
+            if (event.data.is_string()) {
+              token = event.data.get<std::string>();
+            } else if (event.data.is_object() && event.data.contains("token")) {
+              token = event.data["token"].get<std::string>();
+              if (event.data.contains("kind")) {
+                kind = event.data["kind"].get<std::string>();
+              }
+            }
+            // 仅累积 content token 到最终结果
+            if (kind == "content") {
+              oss << token;
+            }
             if (callback) {
               callback(event);
             }
@@ -977,7 +1026,20 @@ public:
     std::ostringstream oss;
     auto callback = [&oss](const neograph::graph::GraphEvent &event) {
       if (event.type == neograph::graph::GraphEvent::Type::LLM_TOKEN) {
-        oss << event.data.get<std::string>();
+        // 支持结构化数据 {"kind":"content"|"thinking","token":"..."}
+        std::string token;
+        std::string kind = "content";
+        if (event.data.is_string()) {
+          token = event.data.get<std::string>();
+        } else if (event.data.is_object() && event.data.contains("token")) {
+          token = event.data["token"].get<std::string>();
+          if (event.data.contains("kind")) {
+            kind = event.data["kind"].get<std::string>();
+          }
+        }
+        if (kind == "content") {
+          oss << token;
+        }
       }
     };
 
