@@ -784,7 +784,9 @@ endif()
 if (AGENTXX_BUILD_TEST)
   ExternalProject_Add(
     agentxx_test_repo
-    DEPENDS agentxx_lib_repo
+    DEPENDS 
+      agentxx_lib_repo
+      agentxx_client_repo
     SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/test/"
     INSTALL_DIR "${AGENTXX_INSTALL_DIR}"
     BUILD_ALWAYS TRUE

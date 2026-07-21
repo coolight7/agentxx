@@ -1,12 +1,12 @@
 #pragma once
 
+#include "agentxx-client/io/stdin_reader.h"
 #include "agentxx/agent/agent_io.h"
 #include "agentxx/util/log.h"
 #include "asio/awaitable.hpp"
 #include "asio/this_coro.hpp"
 #include "fmt/format.h"
 #include "neograph/api.h"
-#include "stdin_reader.h"
 #include <iostream>
 #include <memory>
 #include <optional>
