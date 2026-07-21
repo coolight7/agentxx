@@ -1,8 +1,8 @@
 #pragma once
 
-#include "prompt.h"
 #include "neograph/api.h"
 #include "neograph/json.h"
+#include "prompt.h"
 #include <optional>
 #include <string>
 #include <vector>
@@ -48,8 +48,8 @@ public:
   std::vector<std::string> ragDocsPaths{};
 
   /// LLM 节点最大重试次数
-  /// - 最多执行 1 + 3(retry) = 4 次
-  size_t llmMaxRetry = 3;
+  /// - 最多执行 1 + 5(retry) = 6 次
+  size_t llmMaxRetry = 5;
   /// - 当 toolcall 启用了 [agentxx::tools::XXToolBase::autoSummaryOutput]
   /// 且输出超过限制值 [toolcallSummaryLimitOutputLength] 时进行压缩
   /// - 功能实现见 [agentxx::node::ToolcallWrapNode::execTool]
@@ -64,8 +64,10 @@ public:
   /// - 未指定时按 websearchApiUrl 判断是否启用传统搜索
   std::optional<ModelConfig> websearchModel;
 
+  /// 在向 llm api 发起请求之前，检查 [messages] 是否符合 utf-8 编码
   bool checkMessagesUtf8BeforeLLM = true;
 
+  /// 日志输出控制
   bool logPringToolcall = false;
   bool logPrintMessagesBeforeLLM = false;
   bool logPrintMessagesBeforeLLMWithSystemMsg = false;

@@ -367,12 +367,19 @@ public:
       if (isCancel || retry >= agentCtxPtr->agentConfig->llmMaxRetry) {
         std::rethrow_exception(errorPtr);
       }
+
       // 自动重试
       XX_LOGD("LLMCallNode retry: {}/{} | {}", retry,
               agentCtxPtr->agentConfig->llmMaxRetry, errInfo);
       retry++;
+      size_t appendDelay = 0;
+      if (agentxx::util::isIgnoreCaseContains(errInfo, "rate limit")) {
+        // 限速，增加延时
+        appendDelay = retry * 1000 * 5;
+      }
       // 逐渐延长延时等待
-      timer.expires_after(std::chrono::milliseconds(retry * 1000));
+      timer.expires_after(
+          std::chrono::milliseconds(retry * 1000 + appendDelay));
       co_await timer.async_wait(asio::use_awaitable);
     } while (true);
   }
