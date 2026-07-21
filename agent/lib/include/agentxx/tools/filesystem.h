@@ -513,6 +513,7 @@ public:
         }
 
         std::string result;
+        result.resize(bytesRead);
         auto bytesReadLen = co_await asio::async_read_at(
             stream, offset, asio::buffer(result, bytesRead),
             asio::redirect_error(asio::use_awaitable, errCode));
@@ -520,12 +521,12 @@ public:
           throw std::system_error{errCode};
         }
         stream.close();
-        auto readRange = std::string_view{result}.substr(0, bytesReadLen);
         co_return neograph::json{
             {"bytes_read_len", bytesReadLen},
             {
                 "base64_data",
-                agentxx::util::base64Encode(readRange),
+                agentxx::util::base64Encode(
+                    std::string_view{result}.substr(0, bytesReadLen)),
             },
         }
             .dump();
