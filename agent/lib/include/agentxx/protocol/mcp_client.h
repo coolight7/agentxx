@@ -543,8 +543,9 @@ private:
     auto headers = util::HeaderMap{};
     headers.set("Accept", "text/event-stream");
 
-    auto resp = co_await util::HttpClient::getAsync(sseUrl, headers,
-                                                    config_.initTimeout);
+    auto resp = co_await util::HttpClient::getAsync(
+        sseUrl, headers,
+        util::HttpClient::RequestConfig{.readTimeout = config_.initTimeout});
 
     if (!resp.has_value()) {
       XX_LOGW("[McpClient] SSE discovery failed ({}), falling back to "
@@ -617,7 +618,8 @@ private:
     auto headers = buildHttpHeaders();
 
     auto resp = co_await util::HttpClient::postAsync(
-        httpMessageUrl_, req, headers, config_.requestTimeout);
+        httpMessageUrl_, req, headers,
+        util::HttpClient::RequestConfig{.readTimeout = config_.requestTimeout});
 
     if (!resp.has_value()) {
       co_return std::unexpected{std::move(resp.error())};
@@ -782,7 +784,9 @@ private:
     if (config_.isHttp()) {
       auto url = httpMessageUrl_.empty() ? config_.serverUrl : httpMessageUrl_;
       [[maybe_unused]] auto resp = co_await util::HttpClient::postAsync(
-          url, req, buildHttpHeaders(), config_.requestTimeout);
+          url, req, buildHttpHeaders(),
+          util::HttpClient::RequestConfig{.readTimeout =
+                                              config_.requestTimeout});
     } else if (config_.isStdio()) {
       auto reqStr = req.dump() + "\n";
       std::lock_guard lock(stdioWriteMutex_);
