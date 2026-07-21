@@ -821,13 +821,13 @@ public:
               switch (chunk.type) {
               case neograph::ChatStreamChunk::TYPE_CONTENT: {
                 if (isThinking) {
-                  std::cout << "[Content] ";
+                  std::cout << std::endl << "[Content] ";
                 }
                 isThinking = false;
               } break;
               case neograph::ChatStreamChunk::TYPE_THINKING: {
                 if (false == isThinking) {
-                  std::cout << "[Thinking] ";
+                  std::cout << std::endl << "[Thinking] ";
                 }
                 isThinking = true;
               } break;

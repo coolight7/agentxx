@@ -9,14 +9,11 @@
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/read_until.hpp"
-#include "asio/readable_pipe.hpp"
 #include "asio/redirect_error.hpp"
 #include "asio/steady_timer.hpp"
 #include "asio/this_coro.hpp"
 #include "asio/use_awaitable.hpp"
 #include "asio/write.hpp"
-#include "asio/writable_pipe.hpp"
-#include "boost/process.hpp"
 #include <atomic>
 #include <chrono>
 #include <expected>
@@ -32,6 +29,25 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+
+#if AGENTXX_ENABLE_BOOST_PROCESS
+#include "asio/readable_pipe.hpp"
+#include "asio/writable_pipe.hpp"
+#include "boost/process.hpp"
+#else
+#include <thread>
+#if XX_IS_LINUX_D || XX_IS_MACOS_D
+#include <fcntl.h>
+#include <signal.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#elif XX_IS_WIN_D
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
+#endif
 
 namespace asio = ::boost::asio;
 
@@ -699,6 +715,7 @@ private:
       pending_[id] = std::move(promise);
     }
 
+#if defined(BOOST_PROCESS_V2_PROCESS_HPP)
     {
       std::lock_guard lock(stdioWriteMutex_);
       boost::system::error_code wec;
@@ -711,6 +728,26 @@ private:
                                   wec.message()};
       }
     }
+#else
+    {
+      std::lock_guard lock(stdioWriteMutex_);
+#if XX_IS_LINUX_D || XX_IS_MACOS_D
+      const char *buf = reqStr.data();
+      size_t remaining = reqStr.size();
+      while (remaining > 0) {
+        ssize_t n = ::write(stdioStdinFd_, buf, remaining);
+        if (n <= 0)
+          break;
+        buf += n;
+        remaining -= static_cast<size_t>(n);
+      }
+#elif XX_IS_WIN_D
+      DWORD written = 0;
+      WriteFile(stdioStdinHandle_, reqStr.data(),
+                static_cast<DWORD>(reqStr.size()), &written, nullptr);
+#endif
+    }
+#endif
 
     auto executor = co_await asio::this_coro::executor;
     json response;
@@ -749,9 +786,19 @@ private:
     } else if (config_.isStdio()) {
       auto reqStr = req.dump() + "\n";
       std::lock_guard lock(stdioWriteMutex_);
+#if defined(BOOST_PROCESS_V2_PROCESS_HPP)
       boost::system::error_code wec;
       co_await asio::async_write(*stdioStdinPipe_, asio::buffer(reqStr),
                                  asio::redirect_error(asio::use_awaitable, wec));
+#else
+#if XX_IS_LINUX_D || XX_IS_MACOS_D
+      ::write(stdioStdinFd_, reqStr.data(), reqStr.size());
+#elif XX_IS_WIN_D
+      DWORD written = 0;
+      WriteFile(stdioStdinHandle_, reqStr.data(),
+                static_cast<DWORD>(reqStr.size()), &written, nullptr);
+#endif
+#endif
     }
     co_return;
   }
@@ -760,6 +807,7 @@ private:
   // Stdio subprocess management
   // -----------------------------------------------------------------------
 
+#if defined(BOOST_PROCESS_V2_PROCESS_HPP)
   bool startStdioSubprocess(asio::any_io_executor executor) {
     if (config_.serverCommand.empty())
       return false;
@@ -797,6 +845,119 @@ private:
       return false;
     }
   }
+#else
+  bool startStdioSubprocess(asio::any_io_executor executor) {
+    if (config_.serverCommand.empty())
+      return false;
+
+#if XX_IS_LINUX_D || XX_IS_MACOS_D
+    int stdinPipe[2] = {-1, -1};
+    int stdoutPipe[2] = {-1, -1};
+
+    if (::pipe(stdinPipe) != 0 || ::pipe(stdoutPipe) != 0)
+      return false;
+
+    pid_t pid = ::fork();
+    if (pid < 0) {
+      ::close(stdinPipe[0]);
+      ::close(stdinPipe[1]);
+      ::close(stdoutPipe[0]);
+      ::close(stdoutPipe[1]);
+      return false;
+    }
+
+    if (pid == 0) {
+      ::close(stdinPipe[1]);
+      ::close(stdoutPipe[0]);
+      ::dup2(stdinPipe[0], STDIN_FILENO);
+      ::dup2(stdoutPipe[1], STDOUT_FILENO);
+
+      int maxFd = static_cast<int>(::sysconf(_SC_OPEN_MAX));
+      for (int i = 3; i < maxFd; i++) {
+        if (i != stdinPipe[0] && i != stdoutPipe[1])
+          ::close(i);
+      }
+
+      std::vector<char *> argv;
+      for (auto &arg : config_.serverCommand)
+        argv.push_back(const_cast<char *>(arg.data()));
+      argv.push_back(nullptr);
+
+      ::execvp(argv[0], argv.data());
+      ::_exit(127);
+    }
+
+    ::close(stdinPipe[0]);
+    ::close(stdoutPipe[1]);
+
+    stdioStdinFd_ = stdinPipe[1];
+    stdioStdoutFd_ = stdoutPipe[0];
+    stdioChildPid_ = static_cast<int>(pid);
+
+    int flags = ::fcntl(stdioStdoutFd_, F_GETFL, 0);
+    ::fcntl(stdioStdoutFd_, F_SETFL, flags | O_NONBLOCK);
+
+    stdioRunning_.store(true);
+    stdioReaderThread_ = std::thread([this]() { stdioReaderLoop(); });
+    return true;
+
+#elif XX_IS_WIN_D
+    SECURITY_ATTRIBUTES sa;
+    sa.nLength = sizeof(SECURITY_ATTRIBUTES);
+    sa.lpSecurityDescriptor = nullptr;
+    sa.bInheritHandle = TRUE;
+
+    HANDLE parentStdinRd = nullptr, childStdinWr = nullptr;
+    HANDLE childStdoutRd = nullptr, parentStdoutWr = nullptr;
+
+    if (!CreatePipe(&parentStdinRd, &childStdinWr, &sa, 0) ||
+        !CreatePipe(&childStdoutRd, &parentStdoutWr, &sa, 0))
+      return false;
+
+    SetHandleInformation(childStdinWr, HANDLE_FLAG_INHERIT, 0);
+    SetHandleInformation(childStdoutRd, HANDLE_FLAG_INHERIT, 0);
+
+    std::string cmdLine;
+    for (size_t i = 0; i < config_.serverCommand.size(); i++) {
+      if (i > 0)
+        cmdLine += " ";
+      cmdLine += config_.serverCommand[i];
+    }
+
+    PROCESS_INFORMATION pi;
+    STARTUPINFOA si;
+    ZeroMemory(&si, sizeof(si));
+    si.cb = sizeof(si);
+    si.hStdError = parentStdoutWr;
+    si.hStdOutput = parentStdoutWr;
+    si.hStdInput = parentStdinRd;
+    si.dwFlags |= STARTF_USESTDHANDLES;
+
+    if (!CreateProcessA(nullptr, cmdLine.data(), nullptr, nullptr, TRUE, 0,
+                        nullptr, nullptr, &si, &pi)) {
+      CloseHandle(parentStdinRd);
+      CloseHandle(childStdinWr);
+      CloseHandle(childStdoutRd);
+      CloseHandle(parentStdoutWr);
+      return false;
+    }
+
+    CloseHandle(pi.hThread);
+    CloseHandle(parentStdinRd);
+    CloseHandle(parentStdoutWr);
+
+    stdioStdinHandle_ = childStdinWr;
+    stdioStdoutHandle_ = childStdoutRd;
+    stdioChildProcess_ = pi.hProcess;
+
+    stdioRunning_.store(true);
+    stdioReaderThread_ = std::thread([this]() { stdioReaderLoop(); });
+    return true;
+#else
+    return false;
+#endif
+  }
+#endif
 
   void closeInternal() {
     bool expected = false;
@@ -809,6 +970,7 @@ private:
     mcpSessionId_.clear();
     sseDiscovered_.store(false);
 
+#if defined(BOOST_PROCESS_V2_PROCESS_HPP)
     if (stdioProcess_.has_value()) {
       stdioRunning_.store(false);
 
@@ -825,6 +987,41 @@ private:
       stdioStdoutPipe_.reset();
       stdioProcess_.reset();
     }
+#else
+#if XX_IS_LINUX_D || XX_IS_MACOS_D
+    if (stdioChildPid_ > 0) {
+      stdioRunning_.store(false);
+      ::kill(static_cast<pid_t>(stdioChildPid_), SIGTERM);
+
+      if (stdioReaderThread_.joinable())
+        stdioReaderThread_.join();
+
+      int status = 0;
+      ::waitpid(static_cast<pid_t>(stdioChildPid_), &status, WNOHANG);
+
+      if (stdioStdinFd_ >= 0)
+        ::close(stdioStdinFd_);
+      if (stdioStdoutFd_ >= 0)
+        ::close(stdioStdoutFd_);
+      stdioStdinFd_ = -1;
+      stdioStdoutFd_ = -1;
+      stdioChildPid_ = -1;
+    }
+#elif XX_IS_WIN_D
+    if (stdioChildProcess_ != nullptr) {
+      stdioRunning_.store(false);
+      TerminateProcess(stdioChildProcess_, 0);
+      if (stdioReaderThread_.joinable())
+        stdioReaderThread_.join();
+      CloseHandle(stdioChildProcess_);
+      CloseHandle(stdioStdinHandle_);
+      CloseHandle(stdioStdoutHandle_);
+      stdioChildProcess_ = nullptr;
+      stdioStdinHandle_ = nullptr;
+      stdioStdoutHandle_ = nullptr;
+    }
+#endif
+#endif
 
     std::lock_guard lock(pendingMutex_);
     for (auto &[id, req] : pending_) {
@@ -841,6 +1038,7 @@ private:
     pending_.clear();
   }
 
+#if defined(BOOST_PROCESS_V2_PROCESS_HPP)
   asio::awaitable<void> stdioReaderLoop() {
     std::string buffer;
 
@@ -882,6 +1080,81 @@ private:
     stdioRunning_.store(false);
     co_return;
   }
+#else
+  void stdioReaderLoop() {
+#if XX_IS_LINUX_D || XX_IS_MACOS_D
+    std::string buffer;
+    constexpr size_t kBufSize = 4096;
+
+    while (stdioRunning_.load()) {
+      char buf[kBufSize];
+      ssize_t n = ::read(stdioStdoutFd_, buf, kBufSize);
+      if (n < 0) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(5));
+          continue;
+        }
+        break;
+      }
+      if (n == 0)
+        break;
+
+      buffer.append(buf, static_cast<size_t>(n));
+
+      size_t pos;
+      while ((pos = buffer.find('\n')) != std::string::npos) {
+        std::string line = buffer.substr(0, pos);
+        buffer.erase(0, pos + 1);
+        if (line.empty())
+          continue;
+        try {
+          auto response = json::parse(line);
+          deliverResponse(response);
+        } catch (const json::parse_error &) {
+          XX_LOGW("[McpClient] ignoring malformed stdout line: {}",
+                  line.substr(0, 128));
+        }
+      }
+    }
+
+    if (!buffer.empty()) {
+      try {
+        auto response = json::parse(buffer);
+        deliverResponse(response);
+      } catch (...) {
+      }
+    }
+#elif XX_IS_WIN_D
+    std::string buffer;
+    char buf[4096];
+
+    while (stdioRunning_.load()) {
+      DWORD bytesRead = 0;
+      if (!ReadFile(stdioStdoutHandle_, buf, sizeof(buf) - 1, &bytesRead,
+                    nullptr))
+        break;
+      if (bytesRead == 0)
+        break;
+
+      buffer.append(buf, static_cast<size_t>(bytesRead));
+
+      size_t pos;
+      while ((pos = buffer.find('\n')) != std::string::npos) {
+        std::string line = buffer.substr(0, pos);
+        buffer.erase(0, pos + 1);
+        if (line.empty())
+          continue;
+        try {
+          auto response = json::parse(line);
+          deliverResponse(response);
+        } catch (...) {
+        }
+      }
+    }
+#endif
+    stdioRunning_.store(false);
+  }
+#endif
 
   void deliverResponse(const json &response) {
     if (!response.contains("id"))
@@ -932,9 +1205,22 @@ private:
   std::string mcpSessionId_;
 
   // Stdio transport state
+#if defined(BOOST_PROCESS_V2_PROCESS_HPP)
   std::optional<boost::process::process> stdioProcess_;
   std::optional<asio::writable_pipe> stdioStdinPipe_;
   std::optional<asio::readable_pipe> stdioStdoutPipe_;
+#else
+#if XX_IS_LINUX_D || XX_IS_MACOS_D
+  int stdioStdinFd_ = -1;
+  int stdioStdoutFd_ = -1;
+  int stdioChildPid_ = -1;
+#elif XX_IS_WIN_D
+  HANDLE stdioStdinHandle_ = nullptr;
+  HANDLE stdioStdoutHandle_ = nullptr;
+  HANDLE stdioChildProcess_ = nullptr;
+#endif
+  std::thread stdioReaderThread_;
+#endif
   std::atomic<bool> stdioRunning_{false};
   std::mutex stdioWriteMutex_;
   std::mutex pendingMutex_;

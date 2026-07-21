@@ -430,26 +430,33 @@ private:
         // Content token
         if (delta.contains("content") && !delta["content"].is_null()) {
           std::string token = delta["content"].get<std::string>();
-          fullContent += token;
-          if (on_chunk)
-            on_chunk(neograph::ChatStreamChunk{
-                neograph::ChatStreamChunk::TYPE_CONTENT, token});
+          if (!token.empty()) {
+            fullContent += token;
+            if (on_chunk)
+              on_chunk(neograph::ChatStreamChunk{
+                  neograph::ChatStreamChunk::TYPE_CONTENT, token});
+          }
         }
 
         // Reasoning / thinking content (e.g. DeepSeek reasoner, QwQ, etc.)
         if (delta.contains("reasoning_content") &&
-            !delta["reasoning_content"].is_null()) {
+            delta["reasoning_content"].is_string()) {
           auto token = delta["reasoning_content"].get<std::string>();
-          fullThinking += token;
-          if (on_chunk)
-            on_chunk(neograph::ChatStreamChunk{
-                neograph::ChatStreamChunk::TYPE_THINKING, token});
-        } else if (delta.contains("thinking") && !delta["thinking"].is_null()) {
+          if (!token.empty()) {
+            fullThinking += token;
+            if (on_chunk)
+              on_chunk(neograph::ChatStreamChunk{
+                  neograph::ChatStreamChunk::TYPE_THINKING, token});
+          }
+        } else if (delta.contains("thinking") &&
+                   delta["thinking"].is_string()) {
           auto token = delta["thinking"].get<std::string>();
-          fullThinking += token;
-          if (on_chunk)
-            on_chunk(neograph::ChatStreamChunk{
-                neograph::ChatStreamChunk::TYPE_THINKING, token});
+          if (!token.empty()) {
+            fullThinking += token;
+            if (on_chunk)
+              on_chunk(neograph::ChatStreamChunk{
+                  neograph::ChatStreamChunk::TYPE_THINKING, token});
+          }
         }
 
         // Tool calls (streamed incrementally)
