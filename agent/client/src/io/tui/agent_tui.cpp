@@ -11,7 +11,8 @@ AgentTUI::AgentTUI(asio::any_io_executor ex,
                    TUITheme theme)
     : agentContext_(std::move(agentContext)), theme_(theme),
       inputChannel_(std::make_shared<LineChannel>(ex, 64)),
-      permissionChannel_(std::make_shared<BoolChannel>(ex, 4)) {}
+      permissionChannel_(std::make_shared<BoolChannel>(ex, 4)),
+      logSink_(std::make_shared<TUILogSink>()) {}
 
 AgentTUI::~AgentTUI() { stop(); }
 
@@ -23,6 +24,16 @@ void AgentTUI::postRedraw() {
 
 void AgentTUI::start() {
   running_ = true;
+  if (logSink_) {
+    // 使用 weak_ptr 避免日志线程在 TUI 析构后回调到已销毁对象
+    std::weak_ptr<AgentTUI> weakSelf = shared_from_this();
+    logSink_->setOnNewLog([weakSelf]() {
+      if (auto self = weakSelf.lock()) {
+        self->postRedraw();
+      }
+    });
+    agentxx::util::LogDispatcher::instance().addSink(logSink_);
+  }
   uiThread_ = std::thread([this]() {
     auto screen = ScreenInteractive::Fullscreen();
     screen_ = &screen;
@@ -69,13 +80,21 @@ void AgentTUI::start() {
           renderStatusBar(),
       });
 
+      Element body = main;
+      if (false == sidebarTabs_.empty()) {
+        body = hbox({
+            main | flex,
+            renderSidebar(),
+        });
+      }
+
       if (pendingPermission_.has_value()) {
         return renderPermissionOverlay() | center;
       }
       if (showModelSelector_) {
         return renderModelSelectorOverlay() | center;
       }
-      return main;
+      return body;
     });
 
     auto event_handler = CatchEvent(layout, [&](Event event) -> bool {
@@ -139,6 +158,18 @@ void AgentTUI::start() {
         postRedraw();
         return true;
       }
+      if (event == Event::F12) {
+        toggleLogWindow();
+        postRedraw();
+        return true;
+      }
+      if (event.is_mouse()) {
+        if (handleSidebarMouse(event.mouse())) {
+          postRedraw();
+          return true;
+        }
+        return false;
+      }
       if (event == Event::Escape && isStreaming_) {
         cancelCurrentRun();
         postRedraw();
@@ -153,6 +184,10 @@ void AgentTUI::start() {
 }
 
 void AgentTUI::stop() {
+  if (logSink_) {
+    agentxx::util::LogDispatcher::instance().removeSink(logSink_);
+    logSink_->setOnNewLog(nullptr);
+  }
   running_ = false;
   if (screen_) {
     screen_->Exit();
@@ -283,6 +318,133 @@ ftxui::Element AgentTUI::renderModelSelectorOverlay() {
                   center | dim);
   return vbox(std::move(items)) | border | size(WIDTH, LESS_THAN, 50) |
          color(theme_.accentColor);
+}
+
+ftxui::Element AgentTUI::renderSidebar() {
+  // tab 栏: 每个 tab 标题经 reflect 记录渲染区域, 供鼠标点击检测
+  tabBoxes_.assign(sidebarTabs_.size(), ftxui::Box{});
+  Elements tabs;
+  for (size_t i = 0; i < sidebarTabs_.size(); ++i) {
+    auto label = text(" " + sidebarTabs_[i].title + " ");
+    if (static_cast<int>(i) == activeTabIndex_) {
+      label = label | inverted | color(theme_.accentColor) | bold;
+    } else {
+      label = label | color(theme_.statusColor);
+    }
+    tabs.push_back(label | reflect(tabBoxes_[i]));
+  }
+  auto tabBar = hbox(std::move(tabs)) | xframe;
+
+  Element content = text(" ");
+  if (activeTabIndex_ >= 0 &&
+      activeTabIndex_ < static_cast<int>(sidebarTabs_.size())) {
+    content = sidebarTabs_[activeTabIndex_].render();
+  }
+
+  return vbox({
+             tabBar,
+             separator(),
+             content | flex | vscroll_indicator | frame,
+         }) |
+         size(WIDTH, LESS_THAN, 56) | size(WIDTH, GREATER_THAN, 28) | border;
+}
+
+ftxui::Element AgentTUI::renderLogWindow() {
+  auto lines = logSink_ ? logSink_->snapshot()
+                        : std::vector<TUILogSink::Line>{};
+  Elements elements;
+  for (const auto &line : lines) {
+    ftxui::Color c = theme_.assistantColor;
+    std::string prefix;
+    switch (line.level) {
+    case agentxx::util::LogLevel::Debug:
+      c = theme_.hintColor;
+      prefix = "[D] ";
+      break;
+    case agentxx::util::LogLevel::Info:
+      c = theme_.statusColor;
+      prefix = "[I] ";
+      break;
+    case agentxx::util::LogLevel::Warn:
+      c = theme_.thinkingColor;
+      prefix = "[W] ";
+      break;
+    case agentxx::util::LogLevel::Error:
+      c = theme_.systemColor;
+      prefix = "[E] ";
+      break;
+    case agentxx::util::LogLevel::Out:
+      c = theme_.assistantColor;
+      prefix = "";
+      break;
+    }
+    elements.push_back(paragraph(prefix + line.text) | color(c));
+  }
+  if (elements.empty()) {
+    return text(" (no logs) ") | dim;
+  }
+  return vbox(std::move(elements));
+}
+
+void AgentTUI::addSidebarTab(const std::string &id, const std::string &title,
+                             std::function<ftxui::Element()> render) {
+  for (auto &tab : sidebarTabs_) {
+    if (tab.id == id) {
+      tab.title = title;
+      tab.render = std::move(render);
+      return;
+    }
+  }
+  sidebarTabs_.push_back(SidebarTab{id, title, std::move(render)});
+  activeTabIndex_ = static_cast<int>(sidebarTabs_.size()) - 1;
+}
+
+void AgentTUI::removeSidebarTab(const std::string &id) {
+  for (size_t i = 0; i < sidebarTabs_.size(); ++i) {
+    if (sidebarTabs_[i].id == id) {
+      sidebarTabs_.erase(sidebarTabs_.begin() + i);
+      if (activeTabIndex_ >= static_cast<int>(sidebarTabs_.size())) {
+        activeTabIndex_ = static_cast<int>(sidebarTabs_.size()) - 1;
+      }
+      return;
+    }
+  }
+}
+
+bool AgentTUI::hasSidebarTab(const std::string &id) const {
+  for (const auto &tab : sidebarTabs_) {
+    if (tab.id == id) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void AgentTUI::toggleLogWindow() {
+  if (hasSidebarTab(kLogTabId)) {
+    removeSidebarTab(kLogTabId);
+  } else {
+    addSidebarTab(kLogTabId, "Logs", [this]() { return renderLogWindow(); });
+  }
+}
+
+bool AgentTUI::handleSidebarMouse(const ftxui::Mouse &mouse) {
+  for (size_t i = 0; i < sidebarTabs_.size() && i < tabBoxes_.size(); ++i) {
+    if (false == tabBoxes_[i].Contain(mouse.x, mouse.y)) {
+      continue;
+    }
+    if (mouse.button == Mouse::Left && mouse.motion == Mouse::Released) {
+      // 左键点击: 切换到该 tab
+      activeTabIndex_ = static_cast<int>(i);
+      return true;
+    }
+    if (mouse.button == Mouse::Right && mouse.motion == Mouse::Released) {
+      // 右键点击: 关闭该 tab
+      removeSidebarTab(sidebarTabs_[i].id);
+      return true;
+    }
+  }
+  return false;
 }
 
 void AgentTUI::openModelSelector() {
