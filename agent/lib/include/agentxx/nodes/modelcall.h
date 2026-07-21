@@ -1,5 +1,6 @@
 #pragma once
 
+#include "agentxx/agent/model_registry.h"
 #include "agentxx/nodes/warp_handle.h"
 #include "agentxx/protocol/openai_provider.h"
 #include "agentxx/util/exception.h"
@@ -29,11 +30,59 @@ public:
   inline static constexpr auto defNodeType =
       std::string_view{"xx_ModelCallWrap"};
 
+  /// NodeContext.extra_config 中标记是否启用运行时动态模型切换的 key
+  /// - 仅主 agent 的 llm 节点启用; subagent 使用自身固定的 provider
+  inline static constexpr auto defUseModelRegistryKey =
+      std::string_view{"xx_useModelRegistry"};
+
+protected:
+  /// 是否启用运行时动态模型切换 (经 agentContext->modelRegistry 解析)
+  /// - false 时使用节点构造时 NodeContext 提供的固定 provider_/model_
+  bool useDynamicModel_ = false;
+
+public:
   ModelCallWrapNode(const std::string &name,
                     const neograph::graph::NodeContext &ctx,
                     std::weak_ptr<agentxx::agent::AgentContext> in_agentContext)
       : WrapHandleBaseNode<neograph::graph::LLMCallNode>(name, in_agentContext,
-                                                         ctx) {}
+                                                         ctx) {
+    if (ctx.extra_config.is_object() &&
+        ctx.extra_config.contains(std::string{defUseModelRegistryKey})) {
+      useDynamicModel_ =
+          ctx.extra_config.at(std::string{defUseModelRegistryKey}).get<bool>();
+    }
+  }
+
+  /// 解析当前使用的 Provider
+  /// - 启用动态切换时优先使用 agentContext->modelRegistry 的当前模型
+  /// - 否则回退到节点构造时的 provider_
+  std::shared_ptr<neograph::Provider> resolveCurrentProvider() {
+    if (useDynamicModel_) {
+      auto ctxPtr = agentContext.lock();
+      if (ctxPtr && ctxPtr->modelRegistry) {
+        auto provider = ctxPtr->modelRegistry->getCurrentProvider();
+        if (provider) {
+          return provider;
+        }
+      }
+    }
+    return provider_;
+  }
+
+  /// 解析当前使用的模型名 (发送给 LLM api 的 model 字段)
+  std::string resolveCurrentModelName() const {
+    if (useDynamicModel_) {
+      auto ctxPtr = agentContext.lock();
+      if (ctxPtr && ctxPtr->modelRegistry) {
+        auto modelName =
+            ctxPtr->modelRegistry->getCurrentModelConfig().modelName;
+        if (false == modelName.empty()) {
+          return modelName;
+        }
+      }
+    }
+    return model_;
+  }
 
   asio::awaitable<neograph::ChatCompletion>
   onReceiveToken(neograph::CompletionParams &params,
@@ -70,7 +119,8 @@ public:
       };
     }
 
-    auto completion = co_await provider_->invoke_format_data(params, onToken);
+    auto completion =
+        co_await resolveCurrentProvider()->invoke_format_data(params, onToken);
 
     // 记录 token使用量
     ctxPtr->setGraphDataItemValue<int>(
@@ -116,7 +166,7 @@ public:
     }
 
     neograph::CompletionParams params;
-    params.model = model_;
+    params.model = resolveCurrentModelName();
     params.messages = std::move(messages);
     params.tools = std::move(tool_defs);
     return params;
