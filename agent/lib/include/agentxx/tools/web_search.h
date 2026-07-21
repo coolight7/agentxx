@@ -66,7 +66,9 @@ public:
     std::optional<std::string> out_resp_err;
     if (convertHtml2markdown) {
       auto resp = co_await agentxx::util::HttpClient::getAsync(
-          search_url, {}, std::chrono::seconds{15});
+          search_url, {},
+          agentxx::util::HttpClient::RequestConfig{
+              .readTimeout = std::chrono::seconds{15}});
       out_resp_err = resp.error_or("unknown");
       if (resp.has_value()) {
         auto &respVal = resp.value();
@@ -148,7 +150,9 @@ public:
     int timeout = int(arguments.value<double>("timeout", 30.0));
 
     auto resp = co_await agentxx::util::HttpClient::getAsync(
-        url, {}, std::chrono::seconds(timeout));
+        url, {},
+        agentxx::util::HttpClient::RequestConfig{
+            .readTimeout = std::chrono::seconds(timeout)});
     if (resp.has_value()) {
       if (false == agentxx::util::HttpClient::respIsSucc(resp.value())) {
         co_return fmt::format(

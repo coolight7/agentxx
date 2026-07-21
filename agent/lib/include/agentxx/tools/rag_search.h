@@ -38,7 +38,8 @@ public:
 
     auto resp = co_await agentxx::util::HttpClient::postAsync(
         fmt::format("{}/embeddings", baseUrl), body, {},
-        std::chrono::seconds{15});
+        agentxx::util::HttpClient::RequestConfig{
+            .readTimeout = std::chrono::seconds{15}});
 
     if (false == resp.has_value() ||
         false == agentxx::util::HttpClient::respIsSucc(resp.value())) {

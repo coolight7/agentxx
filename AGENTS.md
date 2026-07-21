@@ -47,3 +47,6 @@ path/to/agentxx_test string_util regex
     - release_build: `agent/build/linux-release/` 或 `agent/build/windows-release/`
     - android_release_build: `agent/build/android-release/`
     - 注意，修改文件时不建议修改 build 目录内的文件，编译时可能被覆盖
+
+## 常见问题
+- 如果遇到编译器崩溃 (ICE)，直接重新运行编译尝试即可，如果多次运行都崩溃，则可能确实代码有问题，需要重新检查一下。

@@ -727,15 +727,19 @@ asio::awaitable<void> test_http_client_beast_server() {
 
   {
     auto resp = co_await HttpClient::getAsync(
-        "http://192.0.2.1:9999/nonexistent", {}, std::chrono::milliseconds{50});
+        "http://192.0.2.1:9999/nonexistent", {},
+        HttpClient::RequestConfig{.connectTimeout =
+                                      std::chrono::milliseconds{50}});
     XX_TEST_EXPECT_FALSE(resp.has_value());
   }
 
   { XX_TEST_EXPECT_FALSE(server.isStopped()); }
 
   {
-    auto resp = co_await HttpClient::getAsync(baseUrl + "/redirect-me", {},
-                                              std::chrono::seconds{10}, 0);
+    auto resp = co_await HttpClient::getAsync(
+        baseUrl + "/redirect-me", {},
+        HttpClient::RequestConfig{.readTimeout = std::chrono::seconds{10},
+                                  .followRedirect = 0});
     XX_TEST_EXPECT_HAS_VALUE(resp);
     if (resp.has_value()) {
       XX_TEST_EXPECT_EQ(resp.value().status, 302);
@@ -745,8 +749,10 @@ asio::awaitable<void> test_http_client_beast_server() {
   }
 
   {
-    auto resp = co_await HttpClient::getAsync(baseUrl + "/redirect-me", {},
-                                              std::chrono::seconds{10}, 1);
+    auto resp = co_await HttpClient::getAsync(
+        baseUrl + "/redirect-me", {},
+        HttpClient::RequestConfig{.readTimeout = std::chrono::seconds{10},
+                                  .followRedirect = 1});
     XX_TEST_EXPECT_HAS_VALUE(resp);
     if (resp.has_value()) {
       XX_TEST_EXPECT_EQ(resp.value().status, 200);
@@ -755,8 +761,10 @@ asio::awaitable<void> test_http_client_beast_server() {
   }
 
   {
-    auto resp = co_await HttpClient::getAsync(baseUrl + "/redirect-loop", {},
-                                              std::chrono::seconds{10}, 3);
+    auto resp = co_await HttpClient::getAsync(
+        baseUrl + "/redirect-loop", {},
+        HttpClient::RequestConfig{.readTimeout = std::chrono::seconds{10},
+                                  .followRedirect = 3});
     XX_TEST_EXPECT_HAS_VALUE(resp);
     if (resp.has_value()) {
       // Should stop at the last redirect (302) since it exceeds max
@@ -809,7 +817,10 @@ asio::awaitable<void> test_http_client_beast_server() {
   {
     // Request a 100-byte body with a 50-byte limit → should fail
     auto resp = co_await HttpClient::getAsync(
-        baseUrl + "/big-body?size=100", {}, std::chrono::seconds{5}, 3, 50);
+        baseUrl + "/big-body?size=100", {},
+        HttpClient::RequestConfig{.readTimeout = std::chrono::seconds{5},
+                                  .followRedirect = 3,
+                                  .maxResponseBody = 50});
     // Body limit exceeded should result in an error (no value)
     XX_TEST_EXPECT_FALSE(resp.has_value());
   }
@@ -817,7 +828,10 @@ asio::awaitable<void> test_http_client_beast_server() {
   {
     // Request a 100-byte body with a 200-byte limit → should succeed
     auto resp = co_await HttpClient::getAsync(
-        baseUrl + "/big-body?size=100", {}, std::chrono::seconds{5}, 3, 200);
+        baseUrl + "/big-body?size=100", {},
+        HttpClient::RequestConfig{.readTimeout = std::chrono::seconds{5},
+                                  .followRedirect = 3,
+                                  .maxResponseBody = 200});
     XX_TEST_EXPECT_HAS_VALUE(resp);
     if (resp.has_value()) {
       XX_TEST_EXPECT_EQ(resp.value().status, 200);
@@ -839,8 +853,9 @@ asio::awaitable<void> test_http_client_beast_server() {
 
   {
     // fetchMarkdown should return error (not UB) for 404
-    auto result = co_await HttpClient::fetchMarkdown(baseUrl + "/nonexistent",
-                                                     std::chrono::seconds{5});
+    auto result = co_await HttpClient::fetchMarkdown(
+        baseUrl + "/nonexistent",
+        HttpClient::RequestConfig{.readTimeout = std::chrono::seconds{5}});
     XX_TEST_EXPECT_FALSE(result.has_value());
   }
 
@@ -848,8 +863,9 @@ asio::awaitable<void> test_http_client_beast_server() {
     // Register an HTML route for markdown conversion
     // Using /hello which returns "hello world" (text/plain)
     // fetchMarkdown checks success status, not content-type
-    auto result = co_await HttpClient::fetchMarkdown(baseUrl + "/hello",
-                                                     std::chrono::seconds{5});
+    auto result = co_await HttpClient::fetchMarkdown(
+        baseUrl + "/hello",
+        HttpClient::RequestConfig{.readTimeout = std::chrono::seconds{5}});
     XX_TEST_EXPECT_HAS_VALUE(result);
   }
 

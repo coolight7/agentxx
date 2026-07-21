@@ -102,8 +102,29 @@ struct HttpResponse {
   }
 };
 
+/// Default max response body size (10 MB) to prevent memory exhaustion
+inline constexpr uint64_t kDefaultMaxResponseBody = 10 * 1024 * 1024;
+
+/// Per-request configuration for the less frequently customized options.
+/// - connectTimeout: bounds DNS resolve + TCP connect + TLS handshake.
+/// - sendTimeout: bounds writing the request; nullopt auto-derives it from the
+///   request body size (see HttpClient::calcSendTimeout).
+/// - readTimeout: bounds the gap between successive incoming data chunks; if no
+///   new data arrives within readTimeout the request is treated as timed out
+///   (the timer resets every time new data is received).
+struct RequestConfig {
+  std::chrono::milliseconds connectTimeout = std::chrono::seconds{30};
+  std::optional<std::chrono::milliseconds> sendTimeout = std::nullopt;
+  std::chrono::milliseconds readTimeout = std::chrono::seconds{60};
+  size_t followRedirect = 3;
+  bool keepAlive = false;
+  uint64_t maxResponseBody = kDefaultMaxResponseBody;
+};
+
 class HttpClient {
 public:
+  using RequestConfig = agentxx::util::RequestConfig;
+
   static inline std::pair<std::string, std::string>
   splitUrl(std::string_view url) {
     auto scheme_end = url.find("://");
@@ -234,7 +255,7 @@ public:
     }
   }
 
-private:
+ private:
   struct ParsedUrl {
     std::string scheme;
     std::string host;
@@ -244,10 +265,7 @@ private:
 
   static inline std::atomic<bool> sslVerifyEnabled_{false};
 
-  /// Default max response body size (10 MB) to prevent memory exhaustion
-  static constexpr uint64_t kDefaultMaxResponseBody = 10 * 1024 * 1024;
-
-public:
+ public:
   static inline std::optional<ParsedUrl> parseUrl(std::string_view url) {
     auto schemeEnd = url.find("://");
     if (schemeEnd == std::string::npos)
@@ -309,28 +327,22 @@ public:
   static asio::awaitable<std::expected<HttpResponse, std::string>>
   exchange(Stream &stream,
            boost::beast::http::request<boost::beast::http::string_body> &req,
-           std::chrono::steady_clock::time_point deadline,
-           uint64_t maxResponseBody) {
+           const RequestConfig &config) {
     namespace http = boost::beast::http;
-    auto rem = [&] {
-      auto d = deadline - std::chrono::steady_clock::now();
-      return std::chrono::duration_cast<std::chrono::milliseconds>(
-          std::max(d, std::chrono::steady_clock::duration::zero()));
-    };
 
-    auto sendTimeout = calcSendTimeout(req.body().size());
+    auto sendTimeout =
+        config.sendTimeout.value_or(calcSendTimeout(req.body().size()));
     co_await http::async_write(
-        stream, req,
-        asio::cancel_after(std::min(rem(), std::chrono::duration_cast<
-                                               std::chrono::milliseconds>(
-                                               sendTimeout)),
-                           asio::use_awaitable));
+        stream, req, asio::cancel_after(sendTimeout, asio::use_awaitable));
 
     boost::beast::flat_buffer buffer;
     http::response_parser<http::string_body> parser;
-    parser.body_limit(maxResponseBody);
-    co_await http::async_read(stream, buffer, parser,
-                              asio::cancel_after(rem(), asio::use_awaitable));
+    parser.body_limit(config.maxResponseBody);
+    while (!parser.is_done()) {
+      co_await http::async_read_some(stream, buffer, parser,
+                                     asio::cancel_after(config.readTimeout,
+                                                        asio::use_awaitable));
+    }
 
     auto res = parser.release();
     HttpResponse resp;
@@ -345,10 +357,8 @@ public:
   static inline asio::awaitable<std::expected<HttpResponse, std::string>>
   requestAsync(std::string_view method, const std::string &url,
                std::string_view body, std::string_view contentType,
-               const HeaderMap &extraHeaders, std::chrono::milliseconds timeout,
-               size_t followRedirect = 3,
-               uint64_t maxResponseBody = kDefaultMaxResponseBody,
-               bool keepAlive = false) {
+               const HeaderMap &extraHeaders,
+               const RequestConfig &config = {}) {
     namespace http = boost::beast::http;
     using asio::ip::tcp;
 
@@ -357,23 +367,11 @@ public:
     std::string currentBody(body);
     std::string currentContentType(contentType);
 
-    auto totalDeadline = std::chrono::steady_clock::now() + timeout;
-    auto rem = [&] {
-      auto d = totalDeadline - std::chrono::steady_clock::now();
-      return std::chrono::duration_cast<std::chrono::milliseconds>(
-          std::max(d, std::chrono::steady_clock::duration::zero()));
-    };
-
     auto executor = co_await asio::this_coro::executor;
     tcp::resolver resolver(executor);
 
     std::expected<HttpResponse, std::string> result;
     for (size_t redirectCount = 0;; ++redirectCount) {
-      if (rem().count() <= 0) {
-        result = std::unexpected{std::string{"timeout"}};
-        break;
-      }
-
       result = std::unexpected{std::string{"unknown error"}};
       try {
         auto parsed = parseUrl(currentUrl);
@@ -400,7 +398,7 @@ public:
                 "Chrome/119.0.6045.160 Safari/537.36");
         req.set(http::field::accept, "*/*");
         req.set(http::field::accept_encoding, "identity");
-        if (!keepAlive) {
+        if (!config.keepAlive) {
           req.set(http::field::connection, "close");
         }
 
@@ -420,7 +418,7 @@ public:
 
         auto endpoints = co_await resolver.async_resolve(
             parsed->host, std::to_string(parsed->port),
-            asio::cancel_after(rem(), asio::use_awaitable));
+            asio::cancel_after(config.connectTimeout, asio::use_awaitable));
 
         if (isHttps) {
           bool verify = sslVerifyEnabled_.load(std::memory_order_relaxed);
@@ -432,15 +430,14 @@ public:
           }
           co_await asio::async_connect(
               stream.lowest_layer(), endpoints,
-              asio::cancel_after(rem(), asio::use_awaitable));
+              asio::cancel_after(config.connectTimeout, asio::use_awaitable));
           boost::system::error_code tcpEc;
           stream.lowest_layer().set_option(asio::ip::tcp::no_delay(true),
                                            tcpEc);
           co_await stream.async_handshake(
               asio::ssl::stream_base::client,
-              asio::cancel_after(rem(), asio::use_awaitable));
-          result =
-              co_await exchange(stream, req, totalDeadline, maxResponseBody);
+              asio::cancel_after(config.connectTimeout, asio::use_awaitable));
+          result = co_await exchange(stream, req, config);
           boost::system::error_code sslEc;
           co_await stream.async_shutdown(
               asio::redirect_error(asio::use_awaitable, sslEc));
@@ -448,11 +445,10 @@ public:
           tcp::socket stream(executor);
           co_await asio::async_connect(
               stream, endpoints,
-              asio::cancel_after(rem(), asio::use_awaitable));
+              asio::cancel_after(config.connectTimeout, asio::use_awaitable));
           boost::system::error_code tcpEc;
           stream.set_option(asio::ip::tcp::no_delay(true), tcpEc);
-          result =
-              co_await exchange(stream, req, totalDeadline, maxResponseBody);
+          result = co_await exchange(stream, req, config);
         }
       } catch (const boost::system::system_error &e) {
         if (e.code() == asio::error::operation_aborted) {
@@ -471,7 +467,7 @@ public:
       if (!result.has_value()) {
         break;
       }
-      if (redirectCount >= followRedirect) {
+      if (redirectCount >= config.followRedirect) {
         break;
       }
       auto &resp = result.value();
@@ -505,103 +501,70 @@ public:
 
   static inline asio::awaitable<std::expected<HttpResponse, std::string>>
   getAsync(const std::string &url, const HeaderMap &extraHeaders = {},
-           std::chrono::milliseconds timeout = std::chrono::seconds{60},
-           size_t followRedirect = 3,
-           uint64_t maxResponseBody = kDefaultMaxResponseBody,
-           bool keepAlive = false) {
-    co_return co_await requestAsync("GET", url, {}, "", extraHeaders, timeout,
-                                    followRedirect, maxResponseBody, keepAlive);
+           const RequestConfig &config = {}) {
+    co_return co_await requestAsync("GET", url, {}, "", extraHeaders, config);
   }
 
   static inline asio::awaitable<std::expected<HttpResponse, std::string>>
   headAsync(const std::string &url, const HeaderMap &extraHeaders = {},
-            std::chrono::milliseconds timeout = std::chrono::seconds{60},
-            size_t followRedirect = 3,
-            uint64_t maxResponseBody = kDefaultMaxResponseBody,
-            bool keepAlive = false) {
-    co_return co_await requestAsync("HEAD", url, {}, "", extraHeaders, timeout,
-                                    followRedirect, maxResponseBody, keepAlive);
+            const RequestConfig &config = {}) {
+    co_return co_await requestAsync("HEAD", url, {}, "", extraHeaders, config);
   }
 
   static inline asio::awaitable<std::expected<HttpResponse, std::string>>
   postAsync(const std::string &url, const neograph::json &body,
             const HeaderMap &extraHeaders = {},
-            std::chrono::milliseconds timeout = std::chrono::seconds{60},
-            size_t followRedirect = 3,
-            uint64_t maxResponseBody = kDefaultMaxResponseBody,
-            bool keepAlive = false) {
-    co_return co_await requestAsync("POST", url, body.dump(),
-                                    "application/json", extraHeaders, timeout,
-                                    followRedirect, maxResponseBody, keepAlive);
+            const RequestConfig &config = {}) {
+    co_return co_await requestAsync("POST", url, body.dump(), "application/json",
+                                    extraHeaders, config);
   }
 
   static inline asio::awaitable<std::expected<HttpResponse, std::string>>
   postAsync(const std::string &url, std::string_view body,
             std::string_view contentType = "text/plain",
             const HeaderMap &extraHeaders = {},
-            std::chrono::milliseconds timeout = std::chrono::seconds{60},
-            size_t followRedirect = 3,
-            uint64_t maxResponseBody = kDefaultMaxResponseBody,
-            bool keepAlive = false) {
-    co_return co_await requestAsync("POST", url, body, contentType,
-                                    extraHeaders, timeout, followRedirect,
-                                    maxResponseBody, keepAlive);
+            const RequestConfig &config = {}) {
+    co_return co_await requestAsync("POST", url, body, contentType, extraHeaders,
+                                    config);
   }
 
   static inline asio::awaitable<std::expected<HttpResponse, std::string>>
   putAsync(const std::string &url, std::string_view body,
            std::string_view contentType = "text/plain",
            const HeaderMap &extraHeaders = {},
-           std::chrono::milliseconds timeout = std::chrono::seconds{60},
-           size_t followRedirect = 3,
-           uint64_t maxResponseBody = kDefaultMaxResponseBody,
-           bool keepAlive = false) {
+           const RequestConfig &config = {}) {
     co_return co_await requestAsync("PUT", url, body, contentType, extraHeaders,
-                                    timeout, followRedirect, maxResponseBody,
-                                    keepAlive);
+                                    config);
   }
 
   static inline asio::awaitable<std::expected<HttpResponse, std::string>>
   patchAsync(const std::string &url, std::string_view body,
              std::string_view contentType = "text/plain",
              const HeaderMap &extraHeaders = {},
-             std::chrono::milliseconds timeout = std::chrono::seconds{60},
-             size_t followRedirect = 3,
-             uint64_t maxResponseBody = kDefaultMaxResponseBody,
-             bool keepAlive = false) {
+             const RequestConfig &config = {}) {
     co_return co_await requestAsync("PATCH", url, body, contentType,
-                                    extraHeaders, timeout, followRedirect,
-                                    maxResponseBody, keepAlive);
+                                    extraHeaders, config);
   }
 
   static inline asio::awaitable<std::expected<HttpResponse, std::string>>
   deleteAsync(const std::string &url, const HeaderMap &extraHeaders = {},
-              std::chrono::milliseconds timeout = std::chrono::seconds{60},
-              size_t followRedirect = 3,
-              uint64_t maxResponseBody = kDefaultMaxResponseBody,
-              bool keepAlive = false) {
-    co_return co_await requestAsync("DELETE", url, {}, "", extraHeaders,
-                                    timeout, followRedirect, maxResponseBody,
-                                    keepAlive);
+              const RequestConfig &config = {}) {
+    co_return co_await requestAsync("DELETE", url, {}, "", extraHeaders, config);
   }
 
   static inline asio::awaitable<std::expected<HttpResponse, std::string>>
   optionsAsync(const std::string &url, const HeaderMap &extraHeaders = {},
-               std::chrono::milliseconds timeout = std::chrono::seconds{60},
-               size_t followRedirect = 3,
-               uint64_t maxResponseBody = kDefaultMaxResponseBody,
-               bool keepAlive = false) {
+               const RequestConfig &config = {}) {
     co_return co_await requestAsync("OPTIONS", url, {}, "", extraHeaders,
-                                    timeout, followRedirect, maxResponseBody,
-                                    keepAlive);
+                                    config);
   }
 
   static inline asio::awaitable<std::expected<std::string, std::string>>
   fetchMarkdown(const std::string &url,
-                std::chrono::milliseconds timeout = std::chrono::seconds{15},
-                size_t followRedirect = 3, bool keepAlive = false) {
-    auto resp = co_await getAsync(url, {}, timeout, followRedirect,
-                                  kDefaultMaxResponseBody, keepAlive);
+                const RequestConfig &config = RequestConfig{
+                    .connectTimeout = std::chrono::seconds{15},
+                    .readTimeout = std::chrono::seconds{15}}) {
+    auto resp = co_await getAsync(url, {}, config);
     if (!resp.has_value()) {
       XX_LOGE("fetchMarkdown error: {}", resp.error());
       co_return std::unexpected{resp.error()};

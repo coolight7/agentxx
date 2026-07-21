@@ -378,9 +378,9 @@ asio::awaitable<void> test_mcp_server_integration() {
   {
     HeaderMap headers;
     headers.set("content-type", "application/json");
-    auto resp = co_await HttpClient::postAsync(baseUrl + "/mcp", "not json",
-                                               "application/json", headers,
-                                               std::chrono::seconds{5});
+    auto resp = co_await HttpClient::postAsync(
+        baseUrl + "/mcp", "not json", "application/json", headers,
+        HttpClient::RequestConfig{.readTimeout = std::chrono::seconds{5}});
     XX_TEST_EXPECT_HAS_VALUE(resp);
     if (resp.has_value()) {
       XX_TEST_EXPECT_EQ(resp.value().status, 400);
@@ -1979,8 +1979,9 @@ asio::awaitable<void> test_mcp_server_accept_sse() {
     headers.set("Accept", "application/xml");
     headers.set("content-type", "application/json");
     json req = {{"jsonrpc", "2.0"}, {"id", 1}, {"method", "ping"}};
-    auto resp = co_await HttpClient::postAsync(baseUrl + "/mcp", req, headers,
-                                               std::chrono::seconds{5});
+    auto resp = co_await HttpClient::postAsync(
+        baseUrl + "/mcp", req, headers,
+        HttpClient::RequestConfig{.readTimeout = std::chrono::seconds{5}});
     XX_TEST_EXPECT_HAS_VALUE(resp);
     if (resp.has_value()) {
       XX_TEST_EXPECT_EQ(resp.value().status, 406);
@@ -1993,8 +1994,9 @@ asio::awaitable<void> test_mcp_server_accept_sse() {
     headers.set("Accept", "application/json, text/event-stream");
     headers.set("content-type", "application/json");
     json req = {{"jsonrpc", "2.0"}, {"id", 2}, {"method", "ping"}};
-    auto resp = co_await HttpClient::postAsync(baseUrl + "/mcp", req, headers,
-                                               std::chrono::seconds{5});
+    auto resp = co_await HttpClient::postAsync(
+        baseUrl + "/mcp", req, headers,
+        HttpClient::RequestConfig{.readTimeout = std::chrono::seconds{5}});
     XX_TEST_EXPECT_HAS_VALUE(resp);
     if (resp.has_value()) {
       XX_TEST_EXPECT_EQ(resp.value().status, 200);
@@ -2019,8 +2021,9 @@ asio::awaitable<void> test_mcp_server_accept_sse() {
     headers.set("Accept", "text/event-stream");
     headers.set("content-type", "application/json");
     json req = {{"jsonrpc", "2.0"}, {"id", 4}, {"method", "ping"}};
-    auto resp = co_await HttpClient::postAsync(baseUrl + "/mcp", req, headers,
-                                               std::chrono::seconds{5});
+    auto resp = co_await HttpClient::postAsync(
+        baseUrl + "/mcp", req, headers,
+        HttpClient::RequestConfig{.readTimeout = std::chrono::seconds{5}});
     XX_TEST_EXPECT_HAS_VALUE(resp);
     if (resp.has_value()) {
       XX_TEST_EXPECT_EQ(resp.value().status, 200);
@@ -2039,8 +2042,9 @@ asio::awaitable<void> test_mcp_server_accept_sse() {
   {
     HeaderMap headers;
     headers.set("Accept", "text/event-stream");
-    auto resp = co_await HttpClient::getAsync(baseUrl + "/mcp/sse", headers,
-                                              std::chrono::seconds{5});
+    auto resp = co_await HttpClient::getAsync(
+        baseUrl + "/mcp/sse", headers,
+        HttpClient::RequestConfig{.readTimeout = std::chrono::seconds{5}});
     XX_TEST_EXPECT_HAS_VALUE(resp);
     if (resp.has_value()) {
       XX_TEST_EXPECT_EQ(resp.value().status, 200);
@@ -2068,8 +2072,9 @@ asio::awaitable<void> test_mcp_server_accept_sse() {
   {
     HeaderMap headers;
     headers.set("Accept", "application/xml");
-    auto resp = co_await HttpClient::getAsync(baseUrl + "/mcp/sse", headers,
-                                              std::chrono::seconds{5});
+    auto resp = co_await HttpClient::getAsync(
+        baseUrl + "/mcp/sse", headers,
+        HttpClient::RequestConfig{.readTimeout = std::chrono::seconds{5}});
     // Connection is closed immediately by the server; the request may fail
     // or return an incomplete response – either is acceptable.
     if (resp.has_value()) {
@@ -2084,8 +2089,9 @@ asio::awaitable<void> test_mcp_server_accept_sse() {
     headers.set("Accept", "application/json, text/event-stream");
     headers.set("content-type", "application/json");
     json req = {{"jsonrpc", "2.0"}, {"method", "notifications/initialized"}};
-    auto resp = co_await HttpClient::postAsync(baseUrl + "/mcp", req, headers,
-                                               std::chrono::seconds{5});
+    auto resp = co_await HttpClient::postAsync(
+        baseUrl + "/mcp", req, headers,
+        HttpClient::RequestConfig{.readTimeout = std::chrono::seconds{5}});
     XX_TEST_EXPECT_HAS_VALUE(resp);
     if (resp.has_value()) {
       XX_TEST_EXPECT_EQ(resp.value().status, 202);

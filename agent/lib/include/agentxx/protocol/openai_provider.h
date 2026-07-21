@@ -181,8 +181,11 @@ private:
 
     auto resp = co_await HttpClient::postAsync(
         config_.base_url + "/chat/completions", bodyStr, "application/json",
-        headers, std::chrono::seconds{config_.connect_timeout_seconds +
-                                      config_.read_timeout_seconds});
+        headers,
+        HttpClient::RequestConfig{
+            .connectTimeout =
+                std::chrono::seconds{config_.connect_timeout_seconds},
+            .readTimeout = std::chrono::seconds{config_.read_timeout_seconds}});
 
     if (!resp.has_value()) {
       throw std::runtime_error("HTTP request failed: " + resp.error());
