@@ -67,7 +67,7 @@ public:
       double in_unicodeCharsPerToken = 1.1, double in_tokensPerImage = 400.0,
       double in_extraTokensPerMessage = 3.0)
       : BaseMiddlewareHandle<_SummarizationMiddlewareState>(
-            "SummarizationMiddlewareHandle", in_agentContext),
+            "SummarizationMiddlewareHandle", std::move(in_agentContext)),
         subagentManager(in_subagentManager),
         modelSupportMaxToken(in_modelSupportMaxToken),
         asciiCharsPerToken(in_asciiCharsPerToken),
@@ -162,6 +162,7 @@ Output ONLY the summary text, no meta-commentary.
            fmt::format("Summarize the following conversation messages:\n\n{}",
                        prompt)},
       };
+      // TODO: 剥离 tool /manager，避免直接调用 tool
       co_return co_await subagentManager->execute_async(args);
     } catch (const std::exception &e) {
       XX_LOGE("SummarizationMiddlewareHandle llm 压缩失败: {}", e.what());
@@ -187,7 +188,7 @@ Output ONLY the summary text, no meta-commentary.
   void doSummarizeToolcall(std::vector<neograph::ChatMessage> &messages) {
     auto agentCtxPtr = agentContext.lock();
     std::map<std::string, size_t> lastWriteIndex{};
-    for (size_t i = messages.size() - 1; i > 0; --i) {
+    for (int64_t i = static_cast<int64_t>(messages.size()) - 1; i > 0; --i) {
       auto &msg = messages[i];
       if ("tool" == msg.role) {
         auto itemHandleIt = summarizationToolHandles.find(msg.tool_name);
@@ -197,12 +198,11 @@ Output ONLY the summary text, no meta-commentary.
           // 寻找 llm toolcall message
           int lastMsgIndex = i - 1;
           int toolcallIndex = -1;
-          for (; lastMsgIndex > 0 && messages[lastMsgIndex].tool_calls.empty();
-               --lastMsgIndex) {
-            for (size_t i = 0; i < messages[lastMsgIndex].tool_calls.size();
-                 ++i) {
-              if (msg.tool_call_id == messages[lastMsgIndex].tool_calls[i].id) {
-                toolcallIndex = i;
+          for (; lastMsgIndex > 0; --lastMsgIndex) {
+            for (size_t j = 0; j < messages[lastMsgIndex].tool_calls.size();
+                 ++j) {
+              if (msg.tool_call_id == messages[lastMsgIndex].tool_calls[j].id) {
+                toolcallIndex = j;
                 break;
               }
             }
