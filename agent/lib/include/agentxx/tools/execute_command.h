@@ -107,21 +107,21 @@ public:
       };
 
       std::string strout, strerr;
-      neograph_asio_error_code errCode;
+      neograph_asio_error_code errCodeStdOut, errCodeStdErr;
       auto readStdOutFuture = asio::async_read(
           outpip, asio::dynamic_buffer(strout), asio::transfer_all(),
-          asio::redirect_error(asio::use_awaitable, errCode));
+          asio::redirect_error(asio::use_awaitable, errCodeStdOut));
       auto readStdErrFuture = asio::async_read(
           errpip, asio::dynamic_buffer(strerr), asio::transfer_all(),
-          asio::redirect_error(asio::use_awaitable, errCode));
+          asio::redirect_error(asio::use_awaitable, errCodeStdErr));
       // assert(!ec || (ec == asio::error::eof));
       if (timeout > 0) {
         using namespace asio::experimental::awaitable_operators;
         asio::steady_timer timer(ctx, std::chrono::seconds(timeout));
-        auto res =
-            co_await ((std::move(readStdOutFuture) &&
-                       std::move(readStdErrFuture) && proc.async_wait(asio::use_awaitable)) ||
-                      timer.async_wait(asio::use_awaitable));
+        auto res = co_await ((std::move(readStdOutFuture) &&
+                              std::move(readStdErrFuture) &&
+                              proc.async_wait(asio::use_awaitable)) ||
+                             timer.async_wait(asio::use_awaitable));
         if (res.index() == 1) {
           boost::system::error_code ec;
           proc.terminate(ec);
@@ -268,21 +268,21 @@ public:
           boost::process::process_stdio{.out = outpip, .err = errpip}};
 
       std::string strout, strerr;
-      neograph_asio_error_code errCode;
+      neograph_asio_error_code errCodeStdOut, errCodeStdErr;
       auto readStdOutFuture = asio::async_read(
           outpip, asio::dynamic_buffer(strout), asio::transfer_all(),
-          asio::redirect_error(asio::use_awaitable, errCode));
+          asio::redirect_error(asio::use_awaitable, errCodeStdOut));
       auto readStdErrFuture = asio::async_read(
           errpip, asio::dynamic_buffer(strerr), asio::transfer_all(),
-          asio::redirect_error(asio::use_awaitable, errCode));
+          asio::redirect_error(asio::use_awaitable, errCodeStdErr));
       // assert(!ec || (ec == asio::error::eof));
       if (timeout > 0) {
         using namespace asio::experimental::awaitable_operators;
         asio::steady_timer timer(ctx, std::chrono::seconds(timeout));
-        auto res = co_await(
-            (proc.async_wait(asio::use_awaitable) && std::move(readStdOutFuture) &&
-             std::move(readStdErrFuture)) ||
-            timer.async_wait(asio::use_awaitable));
+        auto res = co_await ((proc.async_wait(asio::use_awaitable) &&
+                              std::move(readStdOutFuture) &&
+                              std::move(readStdErrFuture)) ||
+                             timer.async_wait(asio::use_awaitable));
         if (res.index() == 1) {
           boost::system::error_code ec;
           proc.terminate(ec);
