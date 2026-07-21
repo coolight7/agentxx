@@ -5,7 +5,6 @@
 #include "agentxx/agent/context.h"
 #include "agentxx/middlewares/event_stream.h"
 #include "agentxx/middlewares/events.h"
-#include "agentxx/middlewares/interrupt_handler.h"
 #include "agentxx/middlewares/permission.h"
 #include "agentxx/middlewares/planning.h"
 #include "agentxx/middlewares/skill.h"

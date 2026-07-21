@@ -1,8 +1,9 @@
 #include "test_interrupt_bus.h"
+#include "agentxx-client/io/stdio/interrupt_handler.h"
+#include "agentxx-client/io/stdio/permission_handler.h"
 #include "agentxx/agent/context.h"
 #include "agentxx/middlewares/event_stream.h"
 #include "agentxx/middlewares/events.h"
-#include "agentxx/middlewares/interrupt_handler.h"
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/middlewares/permission.h"
 #include "agentxx/tools/tool.h"
@@ -31,7 +32,7 @@ asio::awaitable<void> test_interrupt_bus_request_response() {
   agentContext->middlewareHandleContext =
       std::make_shared<agentxx::middleware::MiddlewareContext>();
 
-  agentxx::middleware::CliInterruptHandler handler{agentContext};
+  StdioInterruptHandler handler{agentContext};
   co_await handler.start();
 
   // 构造一个无 inputs 的 InterruptHandleArg (不等待 stdin, 直接返回)
@@ -91,7 +92,7 @@ asio::awaitable<void> test_permission_bus_request_response() {
   agentContext->bus = std::make_shared<agentxx::middleware::EventBus>(
       co_await asio::this_coro::executor);
 
-  agentxx::middleware::CliPermissionPrompter prompter{agentContext};
+  StdioPermissionPrompter prompter{agentContext};
   co_await prompter.start();
 
   // 注意: 无 stdin 输入时 prompter 默认 deny (安全)

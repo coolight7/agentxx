@@ -1,4 +1,4 @@
-#include "agentxx-client/io/stdin_reader.h"
+#include "agentxx-client/io/stdio/stdin_reader.h"
 
 StdinReader &StdinReader::instance(asio::any_io_executor ex) {
   static std::shared_ptr<StdinReader> inst;

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "agentxx-client/io/stdin_reader.h"
+#include "agentxx-client/io/stdio/stdin_reader.h"
 #include "agentxx/agent/agent_io.h"
 #include "agentxx/util/log.h"
 #include "asio/awaitable.hpp"

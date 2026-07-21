@@ -48,3 +48,6 @@
 	path = agent/third_party/zlib-ng
 	url = https://github.com/zlib-ng/zlib-ng
 	branch = 2.3.3
+[submodule "agent/third_party/ftxui"]
+	path = agent/third_party/ftxui
+	url = https://github.com/ArthurSonzogni/FTXUI
