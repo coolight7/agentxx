@@ -300,6 +300,11 @@ public:
     return ParsedUrl{std::move(scheme), std::move(host), port, std::move(path)};
   }
 
+  static inline std::chrono::seconds calcSendTimeout(size_t bodyBytes) {
+    int64_t seconds = (static_cast<int64_t>(bodyBytes) + 65535) / 65536;
+    return std::chrono::seconds{std::max<int64_t>(30, seconds)};
+  }
+
   template <typename Stream>
   static asio::awaitable<std::expected<HttpResponse, std::string>>
   exchange(Stream &stream,
@@ -313,8 +318,13 @@ public:
           std::max(d, std::chrono::steady_clock::duration::zero()));
     };
 
-    co_await http::async_write(stream, req,
-                               asio::cancel_after(rem(), asio::use_awaitable));
+    auto sendTimeout = calcSendTimeout(req.body().size());
+    co_await http::async_write(
+        stream, req,
+        asio::cancel_after(std::min(rem(), std::chrono::duration_cast<
+                                               std::chrono::milliseconds>(
+                                               sendTimeout)),
+                           asio::use_awaitable));
 
     boost::beast::flat_buffer buffer;
     http::response_parser<http::string_body> parser;

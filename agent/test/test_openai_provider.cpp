@@ -3,13 +3,19 @@
 #include "agentxx/util/http_client.h"
 #include "agentxx/util/http_server.h"
 #include <asio/awaitable.hpp>
+#include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>
 #include <asio/io_context.hpp>
+#include <asio/ip/tcp.hpp>
+#include <asio/read.hpp>
 #include <asio/redirect_error.hpp>
 #include <asio/steady_timer.hpp>
 #include <asio/use_awaitable.hpp>
+#include <asio/write.hpp>
+#include <boost/beast/core.hpp>
+#include <boost/beast/http.hpp>
 #include <chrono>
-#include <format>
+#include <cstdio>
 #include <iostream>
 #include <memory>
 #include <thread>
@@ -39,7 +45,7 @@ void test_factory_and_name() {
         server::OpenAIProvider::create({.api_key = "sk-test",
                                         .base_url = "http://localhost:8080",
                                         .default_model = "my-model",
-                                        .timeout_seconds = 120});
+                                        .connect_timeout_seconds = 10, .read_timeout_seconds = 10});
     XX_TEST_EXPECT_TRUE(p != nullptr);
     XX_TEST_EXPECT_EQ(p->get_name(), "openai");
   }
@@ -583,7 +589,7 @@ asio::awaitable<void> test_non_streaming_completion(MockOpenAIServer &mock,
   mock.mode = MockMode::Normal;
 
   auto provider = server::OpenAIProvider::create(
-      {.api_key = "sk-test", .base_url = baseUrl, .timeout_seconds = 10});
+      {.api_key = "sk-test", .base_url = baseUrl, .connect_timeout_seconds = 10, .read_timeout_seconds = 10});
 
   neograph::CompletionParams params;
   params.model = "gpt-4o-mini";
@@ -616,7 +622,7 @@ asio::awaitable<void> test_non_streaming_tool_call(MockOpenAIServer &mock,
   mock.mode = MockMode::ToolCall;
 
   auto provider = server::OpenAIProvider::create(
-      {.api_key = "sk-test", .base_url = baseUrl, .timeout_seconds = 10});
+      {.api_key = "sk-test", .base_url = baseUrl, .connect_timeout_seconds = 10, .read_timeout_seconds = 10});
 
   neograph::CompletionParams params;
   params.model = "gpt-4o";
@@ -649,7 +655,7 @@ asio::awaitable<void> test_rate_limit_error(MockOpenAIServer &mock,
   mock.mode = MockMode::RateLimit;
 
   auto provider = server::OpenAIProvider::create(
-      {.api_key = "sk-test", .base_url = baseUrl, .timeout_seconds = 10});
+      {.api_key = "sk-test", .base_url = baseUrl, .connect_timeout_seconds = 10, .read_timeout_seconds = 10});
 
   neograph::CompletionParams params;
   params.model = "gpt-4o-mini";
@@ -681,7 +687,7 @@ asio::awaitable<void> test_server_error(MockOpenAIServer &mock, uint16_t port) {
   mock.mode = MockMode::ServerError;
 
   auto provider = server::OpenAIProvider::create(
-      {.api_key = "sk-test", .base_url = baseUrl, .timeout_seconds = 10});
+      {.api_key = "sk-test", .base_url = baseUrl, .connect_timeout_seconds = 10, .read_timeout_seconds = 10});
 
   neograph::CompletionParams params;
   params.model = "gpt-4o-mini";
@@ -718,7 +724,7 @@ asio::awaitable<void> test_extra_body_passthrough(MockOpenAIServer &mock,
   auto provider =
       server::OpenAIProvider::create({.api_key = "sk-test",
                                       .base_url = baseUrl,
-                                      .timeout_seconds = 10,
+                                      .connect_timeout_seconds = 10, .read_timeout_seconds = 10,
                                       .extra_body = std::move(extra)});
 
   neograph::CompletionParams params;
@@ -748,7 +754,7 @@ asio::awaitable<void> test_per_call_extra_fields(MockOpenAIServer &mock,
   mock.mode = MockMode::Normal;
 
   auto provider = server::OpenAIProvider::create(
-      {.api_key = "sk-test", .base_url = baseUrl, .timeout_seconds = 10});
+      {.api_key = "sk-test", .base_url = baseUrl, .connect_timeout_seconds = 10, .read_timeout_seconds = 10});
 
   neograph::CompletionParams params;
   params.model = "gpt-4o-mini";
@@ -775,7 +781,7 @@ asio::awaitable<void> test_streaming_completion(MockOpenAIServer &mock,
   mock.mode = MockMode::Streaming;
 
   auto provider = server::OpenAIProvider::create(
-      {.api_key = "sk-test", .base_url = baseUrl, .timeout_seconds = 10});
+      {.api_key = "sk-test", .base_url = baseUrl, .connect_timeout_seconds = 10, .read_timeout_seconds = 10});
 
   neograph::CompletionParams params;
   params.model = "gpt-4o-mini";
@@ -814,7 +820,7 @@ test_non_streaming_reasoning_content(MockOpenAIServer &mock, uint16_t port) {
   mock.mode = MockMode::Normal;
 
   auto provider = server::OpenAIProvider::create(
-      {.api_key = "sk-test", .base_url = baseUrl, .timeout_seconds = 10});
+      {.api_key = "sk-test", .base_url = baseUrl, .connect_timeout_seconds = 10, .read_timeout_seconds = 10});
 
   neograph::CompletionParams params;
   params.model = "deepseek-reasoner";
@@ -844,7 +850,7 @@ asio::awaitable<void> test_non_streaming_thinking_field(MockOpenAIServer &mock,
   mock.mode = MockMode::Normal;
 
   auto provider = server::OpenAIProvider::create(
-      {.api_key = "sk-test", .base_url = baseUrl, .timeout_seconds = 10});
+      {.api_key = "sk-test", .base_url = baseUrl, .connect_timeout_seconds = 10, .read_timeout_seconds = 10});
 
   neograph::CompletionParams params;
   params.model = "compat-model";
@@ -876,7 +882,7 @@ test_non_streaming_reasoning_at_choice_level(MockOpenAIServer &mock,
   mock.mode = MockMode::Normal;
 
   auto provider = server::OpenAIProvider::create(
-      {.api_key = "sk-test", .base_url = baseUrl, .timeout_seconds = 10});
+      {.api_key = "sk-test", .base_url = baseUrl, .connect_timeout_seconds = 10, .read_timeout_seconds = 10});
 
   neograph::CompletionParams params;
   params.model = "nonstandard-model";
@@ -908,7 +914,7 @@ test_non_streaming_thinking_at_choice_level(MockOpenAIServer &mock,
   mock.mode = MockMode::Normal;
 
   auto provider = server::OpenAIProvider::create(
-      {.api_key = "sk-test", .base_url = baseUrl, .timeout_seconds = 10});
+      {.api_key = "sk-test", .base_url = baseUrl, .connect_timeout_seconds = 10, .read_timeout_seconds = 10});
 
   neograph::CompletionParams params;
   params.model = "nonstandard-model";
@@ -937,7 +943,7 @@ asio::awaitable<void> test_streaming_reasoning_content(MockOpenAIServer &mock,
   mock.mode = MockMode::Streaming;
 
   auto provider = server::OpenAIProvider::create(
-      {.api_key = "sk-test", .base_url = baseUrl, .timeout_seconds = 10});
+      {.api_key = "sk-test", .base_url = baseUrl, .connect_timeout_seconds = 10, .read_timeout_seconds = 10});
 
   neograph::CompletionParams params;
   params.model = "deepseek-r1";
@@ -984,7 +990,7 @@ test_streaming_thinking_field_compat(MockOpenAIServer &mock, uint16_t port) {
   mock.mode = MockMode::Streaming;
 
   auto provider = server::OpenAIProvider::create(
-      {.api_key = "sk-test", .base_url = baseUrl, .timeout_seconds = 10});
+      {.api_key = "sk-test", .base_url = baseUrl, .connect_timeout_seconds = 10, .read_timeout_seconds = 10});
 
   neograph::CompletionParams params;
   params.model = "compat-model";
@@ -1031,7 +1037,7 @@ test_streaming_reasoning_with_null_skips(MockOpenAIServer &mock,
   mock.mode = MockMode::Streaming;
 
   auto provider = server::OpenAIProvider::create(
-      {.api_key = "sk-test", .base_url = baseUrl, .timeout_seconds = 10});
+      {.api_key = "sk-test", .base_url = baseUrl, .connect_timeout_seconds = 10, .read_timeout_seconds = 10});
 
   neograph::CompletionParams params;
   params.model = "deepseek-r1";
@@ -1075,7 +1081,7 @@ test_streaming_reasoning_preferred_over_thinking(MockOpenAIServer &mock,
   mock.mode = MockMode::Streaming;
 
   auto provider = server::OpenAIProvider::create(
-      {.api_key = "sk-test", .base_url = baseUrl, .timeout_seconds = 10});
+      {.api_key = "sk-test", .base_url = baseUrl, .connect_timeout_seconds = 10, .read_timeout_seconds = 10});
 
   neograph::CompletionParams params;
   params.model = "compat-model";
@@ -1117,7 +1123,7 @@ test_streaming_reasoning_only_no_content(MockOpenAIServer &mock,
   mock.mode = MockMode::Streaming;
 
   auto provider = server::OpenAIProvider::create(
-      {.api_key = "sk-test", .base_url = baseUrl, .timeout_seconds = 10});
+      {.api_key = "sk-test", .base_url = baseUrl, .connect_timeout_seconds = 10, .read_timeout_seconds = 10});
 
   neograph::CompletionParams params;
   params.model = "thinker-model";
@@ -1159,7 +1165,7 @@ test_streaming_malformed_chunk_skipped(MockOpenAIServer &mock, uint16_t port) {
   mock.mode = MockMode::Streaming;
 
   auto provider = server::OpenAIProvider::create(
-      {.api_key = "sk-test", .base_url = baseUrl, .timeout_seconds = 10});
+      {.api_key = "sk-test", .base_url = baseUrl, .connect_timeout_seconds = 10, .read_timeout_seconds = 10});
 
   neograph::CompletionParams params;
   params.model = "robust-model";
@@ -1206,7 +1212,7 @@ test_non_streaming_think_tags_in_content(MockOpenAIServer &mock,
   mock.mode = MockMode::Normal;
 
   auto provider = server::OpenAIProvider::create(
-      {.api_key = "sk-test", .base_url = baseUrl, .timeout_seconds = 10});
+      {.api_key = "sk-test", .base_url = baseUrl, .connect_timeout_seconds = 10, .read_timeout_seconds = 10});
 
   neograph::CompletionParams params;
   params.model = "deepseek-r1-local";
@@ -1236,7 +1242,7 @@ test_non_streaming_think_tags_prefer_reasoning_field(MockOpenAIServer &mock,
   mock.mode = MockMode::Normal;
 
   auto provider = server::OpenAIProvider::create(
-      {.api_key = "sk-test", .base_url = baseUrl, .timeout_seconds = 10});
+      {.api_key = "sk-test", .base_url = baseUrl, .connect_timeout_seconds = 10, .read_timeout_seconds = 10});
 
   neograph::CompletionParams params;
   params.model = "hybrid-model";
@@ -1269,7 +1275,7 @@ test_streaming_think_tags_split_across_chunks(MockOpenAIServer &mock,
   mock.mode = MockMode::Streaming;
 
   auto provider = server::OpenAIProvider::create(
-      {.api_key = "sk-test", .base_url = baseUrl, .timeout_seconds = 10});
+      {.api_key = "sk-test", .base_url = baseUrl, .connect_timeout_seconds = 10, .read_timeout_seconds = 10});
 
   neograph::CompletionParams params;
   params.model = "deepseek-r1-local";
@@ -1314,89 +1320,93 @@ test_streaming_think_tags_split_across_chunks(MockOpenAIServer &mock,
 // True streaming verification — server sends chunks with delays
 // ---------------------------------------------------------------------------
 
+static std::string chunkFrame(const std::string &data) {
+  char hexBuf[16];
+  snprintf(hexBuf, sizeof(hexBuf), "%zx\r\n", data.size());
+  return std::string(hexBuf) + data + "\r\n";
+}
+
 class DelayedStreamServer {
 public:
-  std::unique_ptr<asio::ip::tcp::acceptor> acceptor;
-  asio::io_context ioCtx;
   std::thread thread;
   uint16_t boundPort = 0;
   std::vector<std::string> chunks;
   std::chrono::milliseconds delay{80};
+  std::atomic<bool> stopped{false};
 
+private:
+  asio::io_context ioCtx;
+  std::unique_ptr<asio::ip::tcp::acceptor> acceptor;
+  asio::ip::tcp::endpoint ep;
+
+public:
   void start() {
     acceptor = std::make_unique<asio::ip::tcp::acceptor>(
         ioCtx, asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
-    boundPort = acceptor->local_endpoint().port();
+    ep = acceptor->local_endpoint();
+    boundPort = ep.port();
 
-    asio::co_spawn(ioCtx, acceptLoop(), asio::detached);
-    thread = std::thread([this]() { ioCtx.run(); });
+    thread = std::thread([this]() {
+      while (!stopped.load()) {
+        boost::system::error_code ec;
+        asio::ip::tcp::socket sock(ioCtx);
+        acceptor->accept(sock, ec);
+        if (ec)
+          break;
+        if (stopped.load())
+          break;
+        handleConn(sock);
+      }
+    });
   }
 
   void stop() {
-    boost::system::error_code ec;
-    if (acceptor)
+    stopped.store(true);
+    if (acceptor) {
+      boost::system::error_code ec;
+      asio::ip::tcp::socket dummy(ioCtx);
+      dummy.connect(ep, ec);
       acceptor->close(ec);
-    ioCtx.stop();
+    }
     if (thread.joinable())
       thread.join();
   }
 
 private:
-  asio::awaitable<void> acceptLoop() {
-    while (acceptor->is_open()) {
-      boost::system::error_code ec;
-      auto socket = co_await acceptor->async_accept(
-          asio::redirect_error(asio::use_awaitable, ec));
-      if (ec)
-        break;
-      asio::co_spawn(ioCtx, handleConnection(std::move(socket)),
-                     asio::detached);
-    }
-  }
-
-  asio::awaitable<void> handleConnection(asio::ip::tcp::socket socket) {
+  void handleConn(asio::ip::tcp::socket &sock) {
     namespace http = boost::beast::http;
     boost::system::error_code ec;
 
     boost::beast::flat_buffer buf;
     http::request<http::string_body> req;
-    co_await http::async_read(socket, buf, req,
-                              asio::redirect_error(asio::use_awaitable, ec));
+    http::read(sock, buf, req, ec);
     if (ec)
-      co_return;
+      return;
 
     std::string header = "HTTP/1.1 200 OK\r\n"
                          "Content-Type: text/event-stream\r\n"
                          "Cache-Control: no-cache\r\n"
                          "Transfer-Encoding: chunked\r\n"
                          "\r\n";
-    co_await asio::async_write(socket, asio::buffer(header),
-                               asio::redirect_error(asio::use_awaitable, ec));
+    asio::write(sock, asio::buffer(header), ec);
     if (ec)
-      co_return;
+      return;
 
     for (const auto &chunk : chunks) {
-      std::string framed =
-          std::format("{:x}\r\n{}\r\n", chunk.size(), chunk);
-      co_await asio::async_write(socket, asio::buffer(framed),
-                                 asio::redirect_error(asio::use_awaitable, ec));
+      auto framed = chunkFrame(chunk);
+      asio::write(sock, asio::buffer(framed), ec);
       if (ec)
-        co_return;
-
-      asio::steady_timer timer(socket.get_executor(), delay);
-      co_await timer.async_wait(
-          asio::redirect_error(asio::use_awaitable, ec));
+        return;
+      std::this_thread::sleep_for(delay);
     }
 
     std::string finalChunk = "0\r\n\r\n";
-    co_await asio::async_write(socket, asio::buffer(finalChunk),
-                               asio::redirect_error(asio::use_awaitable, ec));
-
-    socket.shutdown(asio::ip::tcp::socket::shutdown_send, ec);
+    asio::write(sock, asio::buffer(finalChunk), ec);
+    sock.shutdown(asio::ip::tcp::socket::shutdown_send, ec);
   }
 };
 
-asio::awaitable<void> test_true_streaming_incremental(uint16_t) {
+void test_true_streaming_incremental(uint16_t) {
   auto srv = std::make_unique<DelayedStreamServer>();
   srv->chunks = {
       "data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"\"}}]}\n\n",
@@ -1411,7 +1421,7 @@ asio::awaitable<void> test_true_streaming_incremental(uint16_t) {
 
   std::string baseUrl = "http://127.0.0.1:" + std::to_string(srv->boundPort);
   auto provider = server::OpenAIProvider::create(
-      {.api_key = "sk-test", .base_url = baseUrl, .timeout_seconds = 10});
+      {.api_key = "sk-test", .base_url = baseUrl, .connect_timeout_seconds = 10, .read_timeout_seconds = 10});
 
   neograph::CompletionParams params;
   params.model = "gpt-4o-mini";
@@ -1425,36 +1435,214 @@ asio::awaitable<void> test_true_streaming_incremental(uint16_t) {
     callbackTimes.push_back(std::chrono::steady_clock::now());
   };
 
-  try {
+  asio::io_context ctx;
+  asio::co_spawn(ctx, [&]() -> asio::awaitable<void> {
     auto result = co_await provider->invoke(params, onChunk);
     XX_TEST_EXPECT_EQ(result.message.content, "ABC");
+  }, asio::detached);
+  ctx.run();
 
-    XX_TEST_EXPECT_TRUE(callbackTimes.size() >= 3);
+  XX_TEST_EXPECT_TRUE(callbackTimes.size() >= 3);
 
-    if (callbackTimes.size() >= 3) {
-      auto firstOffset = std::chrono::duration_cast<std::chrono::milliseconds>(
-                             callbackTimes.front() - startTime)
-                             .count();
-      auto lastOffset = std::chrono::duration_cast<std::chrono::milliseconds>(
-                            callbackTimes.back() - startTime)
-                            .count();
-      auto spread = lastOffset - firstOffset;
+  if (callbackTimes.size() >= 3) {
+    auto firstOffset = std::chrono::duration_cast<std::chrono::milliseconds>(
+                           callbackTimes.front() - startTime)
+                           .count();
+    auto lastOffset = std::chrono::duration_cast<std::chrono::milliseconds>(
+                          callbackTimes.back() - startTime)
+                          .count();
+    auto spread = lastOffset - firstOffset;
 
-      // With 80ms delay between chunks, the spread between first and last
-      // callback should be >= 100ms if truly streaming (2 gaps * 80ms = 160ms
-      // ideal). Use 100ms as a conservative threshold.
-      XX_TEST_EXPECT_TRUE(spread >= 100);
-      if (spread < 100) {
-        TEST_FAIL << "streaming not incremental: spread=" << spread
-                  << "ms, callbacks=" << callbackTimes.size() << std::endl;
-      }
+    XX_TEST_EXPECT_TRUE(spread >= 100);
+    if (spread < 100) {
+      TEST_FAIL << "streaming not incremental: spread=" << spread
+                << "ms, callbacks=" << callbackTimes.size() << std::endl;
     }
-  } catch (const std::exception &e) {
-    XX_TEST_FAILED++;
-    TEST_FAIL << "true streaming test failed: " << e.what() << std::endl;
   }
 
   srv->stop();
+}
+
+// ---------------------------------------------------------------------------
+// Timeout tests — connect, send, read
+// ---------------------------------------------------------------------------
+
+class StallServer {
+public:
+  enum class Mode {
+    NeverReadBody,
+    PartialThenStall,
+  };
+
+  std::thread thread;
+  uint16_t boundPort = 0;
+  Mode mode = Mode::NeverReadBody;
+  std::vector<std::string> partialChunks;
+  std::atomic<bool> stopped{false};
+
+private:
+  asio::io_context ioCtx;
+  std::unique_ptr<asio::ip::tcp::acceptor> acceptor;
+  asio::ip::tcp::endpoint ep;
+
+public:
+  void start() {
+    acceptor = std::make_unique<asio::ip::tcp::acceptor>(
+        ioCtx, asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
+    ep = acceptor->local_endpoint();
+    boundPort = ep.port();
+
+    thread = std::thread([this]() {
+      while (!stopped.load()) {
+        boost::system::error_code ec;
+        asio::ip::tcp::socket sock(ioCtx);
+        acceptor->accept(sock, ec);
+        if (ec)
+          break;
+        if (stopped.load())
+          break;
+        handleConn(sock);
+      }
+    });
+  }
+
+  void stop() {
+    stopped.store(true);
+    if (acceptor) {
+      boost::system::error_code ec;
+      asio::ip::tcp::socket dummy(ioCtx);
+      dummy.connect(ep, ec);
+      acceptor->close(ec);
+    }
+    if (thread.joinable())
+      thread.join();
+  }
+
+private:
+  void handleConn(asio::ip::tcp::socket &sock) {
+    if (mode == Mode::NeverReadBody) {
+      for (int i = 0; i < 1200 && !stopped.load(); ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+      return;
+    }
+
+    namespace http = boost::beast::http;
+    boost::system::error_code ec;
+
+    boost::beast::flat_buffer buf;
+    http::request<http::string_body> req;
+    http::read(sock, buf, req, ec);
+    if (ec)
+      return;
+
+    std::string header = "HTTP/1.1 200 OK\r\n"
+                         "Content-Type: text/event-stream\r\n"
+                         "Transfer-Encoding: chunked\r\n"
+                         "\r\n";
+    asio::write(sock, asio::buffer(header), ec);
+    if (ec)
+      return;
+
+    for (const auto &chunk : partialChunks) {
+      auto framed = chunkFrame(chunk);
+      asio::write(sock, asio::buffer(framed), ec);
+      if (ec)
+        return;
+    }
+
+    for (int i = 0; i < 1200 && !stopped.load(); ++i)
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  }
+};
+
+void test_connect_timeout() {
+  auto provider = server::OpenAIProvider::create(
+      {.api_key = "sk-test",
+       .base_url = "http://192.0.2.1:12345",
+       .connect_timeout_seconds = 2,
+       .read_timeout_seconds = 2});
+
+  neograph::CompletionParams params;
+  params.model = "gpt-4o-mini";
+  params.messages = {
+      neograph::ChatMessage{.role = "user", .content = "hello"}};
+
+  auto start = std::chrono::steady_clock::now();
+  bool caught = false;
+  asio::io_context ctx;
+  asio::co_spawn(ctx, [&]() -> asio::awaitable<void> {
+    try {
+      co_await provider->invoke(params, nullptr);
+    } catch (const std::exception &) {
+      caught = true;
+    }
+  }, asio::detached);
+  ctx.run();
+  auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count();
+
+  XX_TEST_EXPECT_TRUE(caught);
+  XX_TEST_EXPECT_TRUE(elapsed < 5000);
+}
+
+void test_read_timeout_streaming() {
+  auto srv = std::make_unique<StallServer>();
+  srv->mode = StallServer::Mode::PartialThenStall;
+  srv->partialChunks = {
+      "data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"\"}}]}\n\n",
+      "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hi\"}}]}\n\n",
+  };
+  srv->start();
+
+  std::string baseUrl = "http://127.0.0.1:" + std::to_string(srv->boundPort);
+  auto provider = server::OpenAIProvider::create(
+      {.api_key = "sk-test",
+       .base_url = baseUrl,
+       .connect_timeout_seconds = 5,
+       .read_timeout_seconds = 2});
+
+  neograph::CompletionParams params;
+  params.model = "gpt-4o-mini";
+  params.messages = {
+      neograph::ChatMessage{.role = "user", .content = "Stream test"}};
+
+  std::string accumulated;
+  neograph::StreamCallback onChunk = [&](const std::string &chunk) {
+    accumulated += chunk;
+  };
+
+  auto start = std::chrono::steady_clock::now();
+  asio::io_context ctx;
+  asio::co_spawn(ctx, [&]() -> asio::awaitable<void> {
+    try {
+      auto result = co_await provider->invoke(params, onChunk);
+      XX_TEST_EXPECT_EQ(result.message.content, "Hi");
+    } catch (const std::exception &) {
+    }
+  }, asio::detached);
+  ctx.run();
+  auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count();
+
+  XX_TEST_EXPECT_EQ(accumulated, "Hi");
+  XX_TEST_EXPECT_TRUE(elapsed >= 1500);
+  XX_TEST_EXPECT_TRUE(elapsed < 8000);
+
+  srv->stop();
+}
+
+void test_send_timeout_calculation() {
+  XX_TEST_EXPECT_EQ(agentxx::util::HttpClient::calcSendTimeout(0).count(), 30);
+  XX_TEST_EXPECT_EQ(agentxx::util::HttpClient::calcSendTimeout(1024).count(),
+                    30);
+  XX_TEST_EXPECT_EQ(
+      agentxx::util::HttpClient::calcSendTimeout(65536 * 30).count(), 30);
+  XX_TEST_EXPECT_EQ(
+      agentxx::util::HttpClient::calcSendTimeout(65536 * 31).count(), 31);
+  XX_TEST_EXPECT_EQ(
+      agentxx::util::HttpClient::calcSendTimeout(65536 * 500).count(), 500);
 }
 
 // ---------------------------------------------------------------------------
@@ -1525,7 +1713,12 @@ asio::awaitable<TestResult> run_openai_provider_tests() {
   co_await test_streaming_think_tags_split_across_chunks(*mock, port);
 
   // True streaming incremental verification
-  co_await test_true_streaming_incremental(port);
+  test_true_streaming_incremental(port);
+
+  // Timeout tests
+  test_send_timeout_calculation();
+  test_connect_timeout();
+  test_read_timeout_streaming();
 
   mock->server->stop();
   mock->thread.join();

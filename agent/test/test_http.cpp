@@ -40,6 +40,17 @@ void expect_has_value_impl(T &&expr, const char *file, int line) {
 void test_http_client_unit() {
 
   {
+    XX_TEST_EXPECT_EQ(HttpClient::calcSendTimeout(0).count(), 30);
+    XX_TEST_EXPECT_EQ(HttpClient::calcSendTimeout(1).count(), 30);
+    XX_TEST_EXPECT_EQ(HttpClient::calcSendTimeout(65536).count(), 30);
+    XX_TEST_EXPECT_EQ(HttpClient::calcSendTimeout(65537).count(), 30);
+    XX_TEST_EXPECT_EQ(HttpClient::calcSendTimeout(65536 * 30).count(), 30);
+    XX_TEST_EXPECT_EQ(HttpClient::calcSendTimeout(65536 * 31).count(), 31);
+    XX_TEST_EXPECT_EQ(HttpClient::calcSendTimeout(65536 * 100).count(), 100);
+    XX_TEST_EXPECT_EQ(HttpClient::calcSendTimeout(65536 * 1024).count(), 1024);
+  }
+
+  {
     HttpResponse resp;
     resp.status = 200;
     XX_TEST_EXPECT_TRUE(resp.isSuccess());

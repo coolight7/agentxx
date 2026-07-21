@@ -33,7 +33,8 @@ public:
     std::string api_key;
     std::string base_url = "https://api.openai.com";
     std::string default_model = "gpt-4o-mini";
-    int timeout_seconds = 60;
+    int connect_timeout_seconds = 16;
+    int read_timeout_seconds = 24;
 
     /// Extra JSON fields merged into every request body.
     /// Use this to set top_k, top_p, frequency_penalty, presence_penalty,
@@ -180,7 +181,8 @@ private:
 
     auto resp = co_await HttpClient::postAsync(
         config_.base_url + "/chat/completions", bodyStr, "application/json",
-        headers, std::chrono::seconds{config_.timeout_seconds});
+        headers, std::chrono::seconds{config_.connect_timeout_seconds +
+                                      config_.read_timeout_seconds});
 
     if (!resp.has_value()) {
       throw std::runtime_error("HTTP request failed: " + resp.error());
@@ -254,8 +256,11 @@ private:
     auto target = ep.prefix + "/chat/completions";
     bool isHttps = ep.scheme == "https";
 
-    auto timeout = std::chrono::seconds{config_.timeout_seconds};
-    auto deadline = std::chrono::steady_clock::now() + timeout;
+    auto connectTimeout = std::chrono::seconds{config_.connect_timeout_seconds};
+    auto readTimeout = std::chrono::seconds{config_.read_timeout_seconds};
+    auto sendTimeout =
+        agentxx::util::HttpClient::calcSendTimeout(bodyStr.size());
+    auto deadline = std::chrono::steady_clock::now() + connectTimeout;
     auto rem = [&] {
       auto d = deadline - std::chrono::steady_clock::now();
       return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -305,10 +310,11 @@ private:
           asio::cancel_after(rem(), asio::use_awaitable));
 
       co_await http::async_write(
-          stream, req, asio::cancel_after(rem(), asio::use_awaitable));
+          stream, req, asio::cancel_after(sendTimeout, asio::use_awaitable));
 
-      co_await readSseStream(stream, deadline, completion, fullContent,
-                             fullThinking, tcMap, lineBuffer, on_chunk);
+      co_await readSseStream(stream, deadline, readTimeout, completion,
+                             fullContent, fullThinking, tcMap, lineBuffer,
+                             on_chunk);
 
       boost::system::error_code shutEc;
       co_await stream.async_shutdown(
@@ -317,10 +323,11 @@ private:
       boost::beast::tcp_stream stream(std::move(socket));
 
       co_await http::async_write(
-          stream, req, asio::cancel_after(rem(), asio::use_awaitable));
+          stream, req, asio::cancel_after(sendTimeout, asio::use_awaitable));
 
-      co_await readSseStream(stream, deadline, completion, fullContent,
-                             fullThinking, tcMap, lineBuffer, on_chunk);
+      co_await readSseStream(stream, deadline, readTimeout, completion,
+                             fullContent, fullThinking, tcMap, lineBuffer,
+                             on_chunk);
     }
 
     // If the provider used <think> tags inside content, extract them
@@ -339,9 +346,10 @@ private:
   template <typename Stream>
   asio::awaitable<void> readSseStream(
       Stream &stream, std::chrono::steady_clock::time_point deadline,
-      neograph::ChatCompletion &completion, std::string &fullContent,
-      std::string &fullThinking, std::map<int, neograph::ToolCall> &tcMap,
-      std::string &lineBuffer, neograph::FormatDataStreamCallback on_chunk) {
+      std::chrono::seconds readTimeout, neograph::ChatCompletion &completion,
+      std::string &fullContent, std::string &fullThinking,
+      std::map<int, neograph::ToolCall> &tcMap, std::string &lineBuffer,
+      neograph::FormatDataStreamCallback on_chunk) {
     namespace http = boost::beast::http;
 
     auto rem = [&] {
@@ -388,8 +396,10 @@ private:
     size_t processed = 0;
     boost::system::error_code ec;
     while (!parser.is_done()) {
-      co_await http::async_read_some(stream, buf, parser,
-                                     asio::redirect_error(asio::use_awaitable, ec));
+      co_await http::async_read_some(
+          stream, buf, parser,
+          asio::cancel_after(readTimeout,
+                             asio::redirect_error(asio::use_awaitable, ec)));
       if (ec) {
         break;
       }
