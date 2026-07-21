@@ -52,6 +52,10 @@ find_package(Glob REQUIRED)
 
 find_package(agentxx_static REQUIRED)
 
+if (AGENTXX_ENABLE_CLIENT_TUI)
+  find_package(ftxui REQUIRED)
+endif()
+
 target_link_directories(agentxx_cli PUBLIC
   "${AGENTXX_INSTALL_DIR}/lib/"
 )
@@ -80,6 +84,10 @@ if (AGENTXX_LINUX_IO_URING_SUPPORTED)
   target_link_libraries(agentxx_cli PRIVATE 
     PkgConfig::uring
   )
+endif()
+if (AGENTXX_ENABLE_CLIENT_TUI)
+  target_link_libraries(agentxx_cli PRIVATE ftxui::ftxui)
+  target_compile_definitions(agentxx_cli PRIVATE AGENTXX_ENABLE_CLIENT_TUI)
 endif()
 
 if (XX_IS_MSVC_D)
