@@ -107,6 +107,8 @@ inline constexpr uint64_t kDefaultMaxResponseBody = 10 * 1024 * 1024;
 
 /// Per-request configuration for the less frequently customized options.
 /// - connectTimeout: bounds DNS resolve + TCP connect + TLS handshake.
+/// - sslVerify: enables TLS certificate verification for this request; nullopt
+///   falls back to the global default (see HttpClient::setSslVerify).
 /// - sendTimeout: bounds writing the request; nullopt auto-derives it from the
 ///   request body size (see HttpClient::calcSendTimeout).
 /// - readTimeout: bounds the gap between successive incoming data chunks; if no
@@ -114,6 +116,7 @@ inline constexpr uint64_t kDefaultMaxResponseBody = 10 * 1024 * 1024;
 ///   (the timer resets every time new data is received).
 struct RequestConfig {
   std::chrono::milliseconds connectTimeout = std::chrono::seconds{30};
+  std::optional<bool> sslVerify = std::nullopt;
   std::optional<std::chrono::milliseconds> sendTimeout = std::nullopt;
   std::chrono::milliseconds readTimeout = std::chrono::seconds{60};
   size_t followRedirect = 3;
@@ -421,7 +424,8 @@ public:
             asio::cancel_after(config.connectTimeout, asio::use_awaitable));
 
         if (isHttps) {
-          bool verify = sslVerifyEnabled_.load(std::memory_order_relaxed);
+          bool verify = config.sslVerify.value_or(
+              sslVerifyEnabled_.load(std::memory_order_relaxed));
           auto &sslCtx = sharedSslCtx(verify);
           asio::ssl::stream<tcp::socket> stream(executor, sslCtx);
           if (!parsed->host.empty()) {
