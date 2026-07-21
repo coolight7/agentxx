@@ -1,7 +1,8 @@
-#include "agentxx-client/io/agent_stdio.h"
+#include "agentxx-client/io/stdio/agent_stdio.h"
+#include "agentxx-client/io/stdio/interrupt_handler.h"
+#include "agentxx-client/io/stdio/permission_handler.h"
 #include "agentxx-client/train/train.h"
 #include "agentxx-client/util/util.h"
-#include "agentxx/middlewares/permission.h"
 #include "yaml-cpp/yaml.h"
 #include <cstdlib>
 #include <filesystem>
@@ -311,10 +312,8 @@ asio::awaitable<void> runCliAsync(agentxx::agent::DeepAgent &agent) {
   const auto thread_id = "session";
   auto messages = neograph::json::array();
 
-  agentxx::middleware::CliInterruptHandler cliInterruptHandler{
-      agent.agentContext};
-  agentxx::middleware::CliPermissionPrompter cliPermissionPrompter{
-      agent.agentContext};
+  StdioInterruptHandler cliInterruptHandler{agent.agentContext};
+  StdioPermissionPrompter cliPermissionPrompter{agent.agentContext};
   agentxx::middleware::SubagentSupervisor subagentSupervisor{
       agent.agentContext};
   co_await cliInterruptHandler.start();

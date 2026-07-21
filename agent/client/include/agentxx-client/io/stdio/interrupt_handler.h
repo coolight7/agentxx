@@ -12,21 +12,19 @@
 #include <neograph/types.h>
 #include <string>
 
-namespace agentxx {
-namespace middleware {
-
 /// 中断 HIL 处理器 (CLI 实现)
 /// - 注册为 EventBus 上 service.interrupt 的 server
 /// - 收到 ReqInterrupt 后, 解析为 InterruptHandleArg, 然后由
 ///   execInterruptHandle 处理
 /// - 把结果包装为 RespInterrupt 回填
-class CliInterruptHandler {
+class StdioInterruptHandler {
 public:
   std::weak_ptr<agentxx::agent::AgentContext> agentContext;
   size_t serverId = 0;
   bool registered = false;
 
-  explicit CliInterruptHandler(std::weak_ptr<agentxx::agent::AgentContext> ctx)
+  explicit StdioInterruptHandler(
+      std::weak_ptr<agentxx::agent::AgentContext> ctx)
       : agentContext(std::move(ctx)) {}
 
   /// 注册到总线
@@ -36,17 +34,18 @@ public:
     }
     auto ctxPtr = agentContext.lock();
     if (!ctxPtr || !ctxPtr->bus) {
-      XX_LOGE("CliInterruptHandler: AgentContext or bus is null");
+      XX_LOGE("StdioInterruptHandler: AgentContext or bus is null");
       co_return;
     }
     interruptHandles.clear();
     registerInterruptHandles();
 
-    auto &rr = ctxPtr->bus->getRR<events::ReqInterrupt, events::RespInterrupt>(
-        events::Topic::Interrupt);
+    auto &rr = ctxPtr->bus->getRR<agentxx::events::ReqInterrupt,
+                                  agentxx::events::RespInterrupt>(
+        agentxx::events::Topic::Interrupt);
     serverId = rr.serve(
-        [this](const events::ReqInterrupt &req,
-               size_t /*corrId*/) -> asio::awaitable<events::RespInterrupt> {
+        [this](const agentxx::events::ReqInterrupt &req, size_t /*corrId*/)
+            -> asio::awaitable<agentxx::events::RespInterrupt> {
           co_return co_await handle(req);
         });
 
@@ -61,15 +60,15 @@ public:
     }
     auto ctxPtr = agentContext.lock();
     if (ctxPtr && ctxPtr->bus) {
-      auto &rr =
-          ctxPtr->bus->getRR<events::ReqInterrupt, events::RespInterrupt>(
-              events::Topic::Interrupt);
+      auto &rr = ctxPtr->bus->getRR<agentxx::events::ReqInterrupt,
+                                    agentxx::events::RespInterrupt>(
+          agentxx::events::Topic::Interrupt);
       rr.removeServer(serverId);
     }
     registered = false;
   }
 
-  ~CliInterruptHandler() { stop(); }
+  ~StdioInterruptHandler() { stop(); }
 
 private:
   void registerInterruptHandles() {
@@ -188,29 +187,32 @@ private:
     co_return std::nullopt;
   }
 
-  asio::awaitable<events::RespInterrupt>
-  handle(const events::ReqInterrupt &req) {
+  asio::awaitable<agentxx::events::RespInterrupt>
+  handle(const agentxx::events::ReqInterrupt &req) {
     auto ctxPtr = agentContext.lock();
     if (!ctxPtr || !ctxPtr->middlewareHandleContext) {
-      co_return events::RespInterrupt{.handled = false, .resultJson = "{}"};
+      co_return agentxx::events::RespInterrupt{.handled = false,
+                                               .resultJson = "{}"};
     }
 
     // 解析单个 InterruptHandleArg
-    auto argOpt = middleware::InterruptHandleArg::fromJson(
+    auto argOpt = agentxx::middleware::InterruptHandleArg::fromJson(
         neograph::json::parse(req.interruptArgsJson));
     if (!argOpt.has_value()) {
-      co_return events::RespInterrupt{.handled = false, .resultJson = "{}"};
+      co_return agentxx::events::RespInterrupt{.handled = false,
+                                               .resultJson = "{}"};
     }
 
     auto result = co_await execInterruptHandle(argOpt->name, argOpt.value());
     if (result.has_value()) {
-      co_return events::RespInterrupt{
+      co_return agentxx::events::RespInterrupt{
           .handled = true,
           .resultJson = result.value().dump(),
       };
     }
     // 无对应 handle, 未处理
-    co_return events::RespInterrupt{.handled = false, .resultJson = "{}"};
+    co_return agentxx::events::RespInterrupt{.handled = false,
+                                             .resultJson = "{}"};
   }
 
   /// <name, handle>
@@ -218,6 +220,3 @@ private:
                             const agentxx::middleware::InterruptHandleArg &)>>
       interruptHandles{};
 };
-
-} // namespace middleware
-} // namespace agentxx
