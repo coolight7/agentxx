@@ -452,7 +452,7 @@ public:
     return [agentName = std::move(agentName), threadId = std::move(threadId),
             ctx = std::move(ctx), origCb = std::move(origCb)](
                const neograph::graph::GraphEvent &event) {
-      // 先转发原始回调 (保留旧行为, 如 CLI 的 std::cout)
+      // 先转发原始回调
       if (origCb) {
         origCb(event);
       }
