@@ -20,6 +20,8 @@ class SubAgentManagerTool;
 
 namespace agent {
 
+class AgentIOBase;
+
 class AgentContext {
 public:
   std::shared_ptr<agentxx::agent::AgentConfig> agentConfig = nullptr;
@@ -33,6 +35,10 @@ public:
   ///   weak_ptr<AgentContext> 取用
   /// - 完整定义在使用点 (deepagent.h) 引入
   std::shared_ptr<agentxx::middleware::EventBus> bus = nullptr;
+  /// 当前轮次的 IO
+  /// - 由 runConversationTurnAsync 在每轮开始时设置
+  /// - 中断处理/权限询问/subagent 等经此统一输入输出
+  std::shared_ptr<AgentIOBase> io = nullptr;
 };
 
 } // namespace agent

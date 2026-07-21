@@ -1,3 +1,5 @@
+#include "agent_stdio.h"
+#include "agentxx/middlewares/permission.h"
 #include "train.h"
 #include "util.h"
 #include "yaml-cpp/yaml.h"
@@ -248,8 +250,7 @@ applyModelToConfig(std::shared_ptr<agentxx::agent::AgentConfig> agentConfig,
   }
 }
 
-static void
-applySubagentModelToConfig(
+static void applySubagentModelToConfig(
     std::shared_ptr<agentxx::agent::AgentConfig> agentConfig,
     const std::map<std::string, ModelEntry> &models,
     const std::string &modelName) {
@@ -259,8 +260,7 @@ applySubagentModelToConfig(
   }
 }
 
-static void
-applyWebSearchModelToConfig(
+static void applyWebSearchModelToConfig(
     std::shared_ptr<agentxx::agent::AgentConfig> agentConfig,
     const std::map<std::string, ModelEntry> &models,
     const std::string &modelName) {
@@ -268,6 +268,94 @@ applyWebSearchModelToConfig(
   if (mc.isValid()) {
     agentConfig->websearchModel = std::move(mc);
   }
+}
+
+asio::awaitable<void> runCliAsync(agentxx::agent::DeepAgent &agent) {
+  auto io = std::make_shared<AgentStdIO>();
+
+  const auto cliEventCallback =
+      [&io](const neograph::graph::GraphEvent &event) {
+        switch (event.type) {
+        case neograph::graph::GraphEvent::Type::NODE_START:
+        case neograph::graph::GraphEvent::Type::NODE_END:
+          break;
+        case neograph::graph::GraphEvent::Type::LLM_TOKEN: {
+          std::string token;
+          std::string kind = "content";
+          if (event.data.is_string()) {
+            token = event.data.get<std::string>();
+          } else if (event.data.is_object()) {
+            neograph::ChatStreamChunk chunk;
+            neograph::from_json(event.data, chunk);
+            token = std::move(chunk.data);
+            if (chunk.type == neograph::ChatStreamChunk::TYPE_THINKING) {
+              kind = "thinking";
+            }
+          }
+          io->onToken(token, kind);
+        } break;
+        case neograph::graph::GraphEvent::Type::CHANNEL_WRITE:
+        case neograph::graph::GraphEvent::Type::INTERRUPT:
+        case neograph::graph::GraphEvent::Type::ERROR:
+          break;
+        }
+      };
+  const auto cliInterruptCallback =
+      [&io](const std::string &interruptNode, const std::string &interruptValue,
+            const std::string &interruptHandleName) -> asio::awaitable<void> {
+    io->onInterrupt(interruptNode, interruptValue, interruptHandleName);
+    co_return;
+  };
+
+  bool isFirstMsg = true;
+  const auto thread_id = "session";
+  auto messages = neograph::json::array();
+
+  agentxx::middleware::CliInterruptHandler cliInterruptHandler{
+      agent.agentContext};
+  agentxx::middleware::CliPermissionPrompter cliPermissionPrompter{
+      agent.agentContext};
+  agentxx::middleware::SubagentSupervisor subagentSupervisor{
+      agent.agentContext};
+  co_await cliInterruptHandler.start();
+  co_await cliPermissionPrompter.start();
+  co_await subagentSupervisor.start();
+
+  std::cout << ">>> " << std::flush;
+
+  for (;;) {
+    auto inputOpt = co_await io->getInput();
+    if (!inputOpt.has_value()) {
+      break;
+    }
+    auto input = std::move(inputOpt.value());
+    if (!input.empty()) {
+      io->resetTokenState();
+      std::cout << agent.agentContext->agentConfig->agentNameView << ": "
+                << std::flush;
+
+      auto turnResult = co_await agent.runConversationTurnAsync(
+          thread_id, input, isFirstMsg, std::move(messages), io,
+          agentxx::middleware::EventBridge::make(
+              agent.agentContext->agentConfig->agentName, thread_id,
+              agent.agentContext, cliEventCallback),
+          cliInterruptCallback);
+      messages = std::move(turnResult.messages);
+      isFirstMsg = false;
+    }
+    std::cout << "\n\n>>> ";
+  }
+}
+
+void runCli(agentxx::agent::DeepAgent &agent) {
+  asio::co_spawn(
+      *agent.ioCtx,
+      [&]() -> asio::awaitable<void> {
+        co_await agent.init();
+        co_return co_await runCliAsync(agent);
+      },
+      asio::detached);
+  agent.ioCtx->run();
 }
 
 int main(int argn, char **argv) {
@@ -388,8 +476,7 @@ int main(int argn, char **argv) {
   XX_OUT("======= Agentxx Client =======");
   auto config = buildDefaultConfig();
   applyModelToConfig(config, yamlCfg.models, yamlCfg.useModelDefault);
-  applySubagentModelToConfig(config, yamlCfg.models,
-                             yamlCfg.useModelSubagent);
+  applySubagentModelToConfig(config, yamlCfg.models, yamlCfg.useModelSubagent);
   applyWebSearchModelToConfig(config, yamlCfg.models,
                               yamlCfg.useModelWebSearch);
   config->mcpServerUrls.push_back("http://172.29.48.1:17001/mcp");
@@ -400,6 +487,6 @@ int main(int argn, char **argv) {
   config->logPrintMessagesBeforeLLM = true;
   config->logPrintSummarizationResultTokenCount = true;
   auto agent = agentxx::agent::DeepAgent{config};
-  agent.runCli();
+  runCli(agent);
   return 0;
 }

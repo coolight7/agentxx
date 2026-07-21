@@ -1,6 +1,6 @@
 #pragma once
 
-#include "agentxx/agent/stdin_reader.h"
+#include "agentxx/agent/agent_io.h"
 #include "agentxx/middlewares/event_stream.h"
 #include "agentxx/middlewares/events.h"
 #include "agentxx/middlewares/middleware.h"
@@ -206,33 +206,18 @@ public:
 private:
   asio::awaitable<agentxx::events::RespPermission>
   handle(const agentxx::events::ReqPermission &req) {
-    // CLI: 在终端展示请求并读取 y/n
-    std::cout << fmt::format(R"(
-┏━━━━━━ Permission Request ━━━━━━┓
-┣━ Tool    : {}
-┣━ Category: {}
-┣━ Target  : {}
-┣━ Allow? [y/N]: )",
-                             req.toolName, req.category, req.target)
-              << std::flush;
-
-    // 异步读取 stdin
-    auto &stdinReader = agentxx::agent::StdinReader::instance(
-        co_await asio::this_coro::executor);
-    auto lineOpt = co_await stdinReader.readLine();
-
-    std::cout << "┗━━━━━━ Permission Request ━━━━━━┛\n" << std::endl;
-
-    if (!lineOpt.has_value()) {
-      // 无输入流 (非交互环境/EOF), 默认拒绝
+    auto ctxPtr = agentContext.lock();
+    auto io = ctxPtr ? ctxPtr->io : nullptr;
+    if (!io) {
       co_return agentxx::events::RespPermission{
           .decision = agentxx::events::RespPermission::Decision::Deny,
-          .reason = "no interactive input",
+          .reason = "no IO available",
       };
     }
-    auto line = std::move(lineOpt.value());
-    agentxx::util::toLowerSelf(line);
-    bool allow = (line == "y" || line == "yes");
+
+    bool allow = co_await io->promptPermission(req.toolName, req.category,
+                                               req.target);
+
     co_return agentxx::events::RespPermission{
         .decision = allow ? agentxx::events::RespPermission::Decision::Allow
                           : agentxx::events::RespPermission::Decision::Deny,

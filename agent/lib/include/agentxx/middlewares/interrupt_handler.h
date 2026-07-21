@@ -1,7 +1,7 @@
 #pragma once
 
+#include "agentxx/agent/agent_io.h"
 #include "agentxx/agent/context.h"
-#include "agentxx/agent/stdin_reader.h"
 #include "agentxx/middlewares/event_stream.h"
 #include "agentxx/middlewares/events.h"
 #include "agentxx/middlewares/middleware.h"
@@ -75,81 +75,83 @@ private:
   void registerInterruptHandles() {
     interruptHandles
         [agentxx::middleware::MiddlewareContext::interruptHandleName_default] =
-            [](const agentxx::middleware::InterruptHandleArg &handleArg)
+            [this](const agentxx::middleware::InterruptHandleArg &handleArg)
         -> asio::awaitable<neograph::json> {
-      auto result = neograph::json::array();
-      std::cout << "\n  ┏━━━━━━ Input ━━━━━━┓" << std::endl;
-      bool haveWaitInput = false;
+      auto ctxPtr = agentContext.lock();
+      auto io = ctxPtr ? ctxPtr->io : nullptr;
+      if (!io) {
+        co_return neograph::json::array();
+      }
 
-      // 异步读取 stdin
-      auto &stdinReader = agentxx::agent::StdinReader::instance(
-          co_await asio::this_coro::executor);
+      auto result = neograph::json::array();
+      io->onDisplay("interrupt", "\n  ┏━━━━━━ Input ━━━━━━┓\n");
+      bool haveWaitInput = false;
 
       for (const auto &input : handleArg.inputs) {
         bool inputSuccess = false;
         do {
-          std::cout << fmt::format("  ┣━ ## {} : {}", input.label, input.depict)
-                    << std::endl;
+          io->onDisplay("interrupt", fmt::format("  ┣━ ## {} : {}\n",
+                                                 input.label, input.depict));
 
           if (input.type.empty()) {
-            // 不需要输入
             inputSuccess = true;
           } else {
-            std::cout << "  ┣━ Type | " << input.type << " | ";
+            std::string typeHint;
             if ("bool" == input.type) {
-              std::cout << "`yes/y` or `no/n`";
-            } else if ("int" == input.type) {
-            } else if ("double" == input.type) {
-            } else if ("string" == input.type) {
+              typeHint = "  ┣━ Type | bool | `yes/y` or `no/n`\n";
             } else if ("enum" == input.type) {
-              std::cout << "value of [";
+              std::string vals;
               for (const auto &val : input.enumValues) {
-                std::cout << val << ", ";
+                vals += val + ", ";
               }
-              std::cout << "]";
+              typeHint =
+                  fmt::format("  ┣━ Type | enum | value of [{}]\n", vals);
+            } else {
+              typeHint = fmt::format("  ┣━ Type | {}\n", input.type);
             }
-            std::cout << std::endl;
-            std::cout << "  ┣━ Default Value: " << input.defaultValue
-                      << std::endl;
-            std::cout << "  ┣━ >>> " << std::flush;
+            io->onDisplay("interrupt", typeHint);
+            io->onDisplay("interrupt", fmt::format("  ┣━ Default Value: {}\n",
+                                                   input.defaultValue));
+            io->onDisplay("interrupt", "  ┣━ >>> ");
 
             haveWaitInput = true;
-            std::string line;
-            auto lineOpt = co_await stdinReader.readLine();
-            if (lineOpt.has_value()) {
-              line = lineOpt.value();
+            std::string inputValue;
+            auto inputValueOpt = co_await io->getInput();
+            if (inputValueOpt.has_value()) {
+              inputValue = inputValueOpt.value();
             }
-            if (line.empty()) {
-              // 未输入，补充默认值
-              line = input.defaultValue;
+            if (inputValue.empty()) {
+              inputValue = input.defaultValue;
             }
 
             if ("bool" == input.type) {
-              agentxx::util::toLowerSelf(line);
-              if (line == "yes" || line == "y") {
-                line = "true";
+              agentxx::util::toLowerSelf(inputValue);
+              if (inputValue == "yes" || inputValue == "y") {
+                inputValue = "true";
                 inputSuccess = true;
-              } else if (line == "no" || line == "n") {
-                line = "false";
+              } else if (inputValue == "no" || inputValue == "n") {
+                inputValue = "false";
                 inputSuccess = true;
               } else {
                 inputSuccess = false;
               }
             } else if ("int" == input.type) {
               int64_t num = 0;
-              auto result = std::from_chars(line.c_str(),
-                                            line.c_str() + line.size(), num);
-              inputSuccess = (result.ec == std::errc{});
+              auto r =
+                  std::from_chars(inputValue.c_str(),
+                                  inputValue.c_str() + inputValue.size(), num);
+              inputSuccess = (r.ec == std::errc{});
             } else if ("double" == input.type) {
               double num;
-              auto result = std::from_chars(line.c_str(),
-                                            line.c_str() + line.size(), num);
-              inputSuccess = (result.ec == std::errc{});
+              auto r =
+                  std::from_chars(inputValue.c_str(),
+                                  inputValue.c_str() + inputValue.size(), num);
+              inputSuccess = (r.ec == std::errc{});
             } else if ("string" == input.type) {
               inputSuccess = true;
             } else if ("enum" == input.type) {
               for (const auto &val : input.enumValues) {
-                if (val == line) {
+                if (val == inputValue) {
                   inputSuccess = true;
                   break;
                 }
@@ -157,20 +159,21 @@ private:
             }
 
             if (inputSuccess) {
-              result.push_back(line);
+              result.push_back(inputValue);
             } else {
-              std::cout << "  ┣━ Invalid Input, please try again." << std::endl;
+              io->onDisplay("interrupt",
+                            "  ┣━ Invalid Input, please try again.\n");
             }
           }
         } while (false == inputSuccess);
       }
       if (false == haveWaitInput) {
-        // 没有输入，等待用户确认
-        std::cout << "  ┣━ Wait user review, `Enter` to continue." << std::endl;
-        std::cout << "  ┣━ >>> " << std::flush;
-        co_await stdinReader.readLine();
+        io->onDisplay("interrupt",
+                      "  ┣━ Wait user review, `Enter` to continue.\n");
+        io->onDisplay("interrupt", "  ┣━ >>> ");
+        co_await io->getInput();
       }
-      std::cout << "  ┗━━━━━━ Input ━━━━━━┛\n" << std::endl;
+      io->onDisplay("interrupt", "  ┗━━━━━━ Input ━━━━━━┛\n\n");
       co_return result;
     };
   }
