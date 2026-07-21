@@ -1,6 +1,8 @@
 #pragma once
 
+#include "agentxx-client/io/tui/tui_theme.h"
 #include "agentxx/agent/agent_io.h"
+#include "agentxx/agent/context.h"
 #include "asio/as_tuple.hpp"
 #include "asio/awaitable.hpp"
 #include "asio/experimental/concurrent_channel.hpp"
@@ -46,6 +48,14 @@ private:
   std::string inputText_;
   std::optional<PermissionRequest> pendingPermission_;
 
+  /// 模型选择器状态
+  bool showModelSelector_ = false;
+  int selectedModelIndex_ = 0;
+  std::vector<std::string> modelNames_;
+
+  std::shared_ptr<agentxx::agent::AgentContext> agentContext_;
+  TUITheme theme_;
+
   ftxui::ScreenInteractive *screen_ = nullptr;
   std::thread uiThread_;
   std::atomic<bool> running_{false};
@@ -56,9 +66,21 @@ private:
   void postRedraw();
   ftxui::Element renderMessages();
   ftxui::Element renderPermissionOverlay();
+  ftxui::Element renderModelSelectorOverlay();
+  /// 输入框下方的状态栏: 左侧模型名, 右侧上下文占用
+  ftxui::Element renderStatusBar();
+
+  /// 打开模型选择器 (刷新可用模型列表)
+  void openModelSelector();
+  /// 确认选择当前高亮的模型
+  void confirmModelSelection();
+  /// 取消当前正在执行的轮次
+  void cancelCurrentRun();
 
 public:
-  explicit AgentTUI(asio::any_io_executor ex);
+  explicit AgentTUI(asio::any_io_executor ex,
+                    std::shared_ptr<agentxx::agent::AgentContext> agentContext,
+                    TUITheme theme = TUITheme::darkTheme());
   ~AgentTUI() override;
 
   void start();
