@@ -18,8 +18,8 @@
 #include <unordered_set>
 #include <vector>
 
-#include <neograph/json.h>
 #include <asio/awaitable.hpp>
+#include <neograph/json.h>
 
 #include "agentxx/util/http_server.h"
 #include "agentxx/util/log.h"
@@ -80,11 +80,11 @@ inline constexpr int kMcpPromptNotFound = -32003;
 struct McpToolDefinition {
   std::string name;
   std::string description;
-  std::string title;          // 2025-11-25: display name
+  std::string title; // 2025-11-25: display name
   json inputSchema = json::object();
-  json outputSchema = json::object();  // 2025-11-25: structured output schema
-  json annotations = json::object();   // 2025-11-25: tool behavior metadata
-  json execution = json::object();     // 2025-11-25: execution config
+  json outputSchema = json::object(); // 2025-11-25: structured output schema
+  json annotations = json::object();  // 2025-11-25: tool behavior metadata
+  json execution = json::object();    // 2025-11-25: execution config
 };
 
 struct McpResourceDefinition {
@@ -113,7 +113,7 @@ struct McpPromptDefinition {
 };
 
 struct McpPromptMessage {
-  std::string role;  // "user" | "assistant"
+  std::string role; // "user" | "assistant"
   json content;
 };
 
@@ -143,9 +143,8 @@ public:
   using ToolHandler = std::function<json(const json &arguments)>;
   using ResourceReader =
       std::function<std::optional<McpResourceContent>(const std::string &uri)>;
-  using PromptHandler =
-      std::function<std::optional<McpPromptResult>(
-          const std::string &name, const json &arguments)>;
+  using PromptHandler = std::function<std::optional<McpPromptResult>(
+      const std::string &name, const json &arguments)>;
 
   struct Config {
     util::HttpServer::Config httpConfig;
@@ -157,7 +156,9 @@ public:
     size_t maxMessageSize = 4 * 1024 * 1024; // 4 MB
   };
 
-  explicit McpServer() : config_(), httpServer_(std::make_unique<util::HttpServer>(util::HttpServer::Config{})) {
+  explicit McpServer()
+      : config_(), httpServer_(std::make_unique<util::HttpServer>(
+                       util::HttpServer::Config{})) {
     setupRoutes();
   }
 
@@ -187,8 +188,9 @@ public:
   void runStdio() {
     std::string line;
     while (std::getline(std::cin, line)) {
-      if (line.empty())
+      if (line.empty()) {
         continue;
+      }
 
       json requestJson;
       try {
@@ -198,7 +200,7 @@ public:
             json{nullptr},
             jsonRpcError(kJsonRpcParseError,
                          std::string("Parse error: ") + e.what()));
-        std::cout << errorResp.dump() << "\n" << std::flush;
+        XX_LOGE("[MCP Server] parse request json failed: {}", errorResp.dump());
         continue;
       }
 
@@ -351,10 +353,9 @@ private:
   void setupRoutes() {
     using Handler = util::HttpServer::Handler;
 
-    auto mcpHandler = std::make_shared<Handler>(
-        Handler([this](util::HttpServer::Request &req,
-                       util::HttpServer::Response &resp,
-                       const std::string &) -> asio::awaitable<void> {
+    auto mcpHandler = std::make_shared<Handler>(Handler(
+        [this](util::HttpServer::Request &req, util::HttpServer::Response &resp,
+               const std::string &) -> asio::awaitable<void> {
           co_await handleMcpRequest(req, resp);
         }));
     httpServer_->router().add(config_.mcpEndpoint, 2, mcpHandler);
@@ -364,9 +365,9 @@ private:
         config_.sseEndpoint,
         [this](util::HttpServer::Request &req,
                std::shared_ptr<util::HttpServer::SseWriter> writer)
-        -> asio::awaitable<void> {
-      co_await handleSseStream(req, writer);
-    });
+            -> asio::awaitable<void> {
+          co_await handleSseStream(req, writer);
+        });
   }
 
   // -----------------------------------------------------------------------
@@ -380,8 +381,8 @@ private:
     // Be lenient with jsonrpc field: accept "2.0", 2.0 (number), or missing
     if (!requestJson.is_object()) {
       return jsonRpcErrorResponse(
-          json{nullptr},
-          jsonRpcError(kJsonRpcInvalidRequest, "Request must be a JSON object"));
+          json{nullptr}, jsonRpcError(kJsonRpcInvalidRequest,
+                                      "Request must be a JSON object"));
     }
     auto jrpc = requestJson.value("jsonrpc", json{});
     bool validJsonRpc = false;
@@ -393,17 +394,14 @@ private:
     if (requestJson.contains("jsonrpc") && !validJsonRpc) {
       return jsonRpcErrorResponse(
           json{nullptr},
-          jsonRpcError(kJsonRpcInvalidRequest,
-                       "Unsupported JSON-RPC version"));
+          jsonRpcError(kJsonRpcInvalidRequest, "Unsupported JSON-RPC version"));
     }
 
     std::string method = requestJson.value("method", "");
-    bool hasId =
-        requestJson.contains("id") && !requestJson["id"].is_null();
+    bool hasId = requestJson.contains("id") && !requestJson["id"].is_null();
     json id = hasId ? requestJson["id"] : json{};
-    json params = requestJson.contains("params")
-                      ? requestJson["params"]
-                      : json::object();
+    json params =
+        requestJson.contains("params") ? requestJson["params"] : json::object();
 
     // Extract _meta for passthrough (2025-03-26+)
     json meta;
@@ -461,7 +459,8 @@ private:
                              std::string("Method not found: ") + method));
       }
       // Attach _meta passthrough if present in request (2025-03-26+)
-      if (!response.is_null() && !meta.is_null() && response.contains("result")) {
+      if (!response.is_null() && !meta.is_null() &&
+          response.contains("result")) {
         if (!response["result"].contains("_meta"))
           response["result"]["_meta"] = meta;
       }
@@ -482,9 +481,8 @@ private:
   // Main MCP request handler (HTTP)
   // -----------------------------------------------------------------------
 
-  asio::awaitable<void>
-  handleMcpRequest(util::HttpServer::Request &req,
-                   util::HttpServer::Response &resp) {
+  asio::awaitable<void> handleMcpRequest(util::HttpServer::Request &req,
+                                         util::HttpServer::Response &resp) {
     namespace http = boost::beast::http;
 
     // Validate Accept header
@@ -509,9 +507,8 @@ private:
       requestJson = json::parse(req.body());
     } catch (const json::parse_error &e) {
       auto errorResp = jsonRpcErrorResponse(
-          json{nullptr},
-          jsonRpcError(kJsonRpcParseError,
-                       std::string("Parse error: ") + e.what()));
+          json{nullptr}, jsonRpcError(kJsonRpcParseError,
+                                      std::string("Parse error: ") + e.what()));
       writeJsonResponse(resp, http::status::bad_request, errorResp);
       co_return;
     }
@@ -633,7 +630,8 @@ private:
 
   json handleToolsCall(const json &id, const json &params) {
     std::string name = params.value("name", "");
-    json arguments = params.contains("arguments") ? params["arguments"] : json::object();
+    json arguments =
+        params.contains("arguments") ? params["arguments"] : json::object();
 
     if (name.empty()) {
       return jsonRpcErrorResponse(
@@ -773,7 +771,8 @@ private:
 
   json handlePromptsGet(const json &id, const json &params) {
     std::string name = params.value("name", "");
-    json arguments = params.contains("arguments") ? params["arguments"] : json::object();
+    json arguments =
+        params.contains("arguments") ? params["arguments"] : json::object();
 
     if (name.empty()) {
       return jsonRpcErrorResponse(
@@ -834,9 +833,7 @@ private:
     return jsonRpcResponse(id, std::move(result));
   }
 
-  void handleInitialized(const json &) {
-    XX_LOGI("[mcp] Client initialized");
-  }
+  void handleInitialized(const json &) { XX_LOGI("[mcp] Client initialized"); }
 
   // -----------------------------------------------------------------------
   // SSE streaming handler
@@ -868,9 +865,9 @@ private:
     if (!co_await writer->writeEvent("endpoint", config_.mcpEndpoint)) {
       // Write failed, clean up
       std::unique_lock lock(sseClientsMutex_);
-      sseClients_.erase(std::remove(sseClients_.begin(), sseClients_.end(),
-                                    client),
-                        sseClients_.end());
+      sseClients_.erase(
+          std::remove(sseClients_.begin(), sseClients_.end(), client),
+          sseClients_.end());
       co_return;
     }
 
@@ -897,9 +894,9 @@ private:
     // Cleanup
     {
       std::unique_lock lock(sseClientsMutex_);
-      sseClients_.erase(std::remove(sseClients_.begin(), sseClients_.end(),
-                                    client),
-                        sseClients_.end());
+      sseClients_.erase(
+          std::remove(sseClients_.begin(), sseClients_.end(), client),
+          sseClients_.end());
     }
   }
 
@@ -978,7 +975,7 @@ private:
   std::unordered_set<std::string> subscribedResources_;
 
   std::mutex sseClientsMutex_;
-  std::vector<std::shared_ptr<SSEClient> > sseClients_;
+  std::vector<std::shared_ptr<SSEClient>> sseClients_;
 };
 
 } // namespace server

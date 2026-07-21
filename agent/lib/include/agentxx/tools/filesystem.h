@@ -132,7 +132,6 @@ public:
   execute_async(const neograph::json &arguments) override {
     auto targetPath = agentxx::util::toCurrentSystemStandardPath(
         arguments.value("path", std::string{}));
-    std::cout << targetPath << std::endl;
     if (targetPath.empty()) {
       co_return R"({"error":"Arg `path` is empty"})";
     }

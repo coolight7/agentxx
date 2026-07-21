@@ -33,7 +33,7 @@ struct Topic {
   inline static constexpr std::string_view SubagentProgress{
       "subagent.progress"};
 
-  /// 通用显示输出 (替代直接 std::cout): EventDisplay
+  /// 通用显示输出: EventDisplay
   inline static constexpr std::string_view Display{"io.display"};
 
   /// 用户输入 (前端发布): EventUserInput
@@ -56,7 +56,8 @@ struct Topic {
   inline static constexpr std::string_view Subagent{"service.subagent"};
 
   /// subagent 批量委派: ReqSubagentBatch / RespSubagentBatch
-  inline static constexpr std::string_view SubagentBatch{"service.subagent.batch"};
+  inline static constexpr std::string_view SubagentBatch{
+      "service.subagent.batch"};
 
   /// 跨 agent 查询: ReqCrossAgent / RespCrossAgent
   /// - 任一 agent (含 subagent) 可向指定 agentName 发起查询
@@ -89,7 +90,7 @@ struct EventModelCallStart {
 struct EventModelToken {
   std::string agentName;
   std::string threadId;
-  std::string token; // 增量 token
+  std::string token;            // 增量 token
   std::string kind = "content"; // "content" | "thinking"
 };
 

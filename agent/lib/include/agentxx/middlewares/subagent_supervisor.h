@@ -196,9 +196,6 @@ private:
               if (kind == "content") {
                 oss << token;
               }
-#if XX_IS_DEBUG_D
-              std::cout << token << std::flush;
-#endif
               if (busPtr) {
                 asio::co_spawn(
                     busPtr->executor(),
