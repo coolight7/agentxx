@@ -274,6 +274,20 @@ static void applyWebSearchModelToConfig(
   }
 }
 
+/// 填充可用模型列表 (供 TUI 运行时切换模型)
+static void applyAvailableModelsToConfig(
+    std::shared_ptr<agentxx::agent::AgentConfig> agentConfig,
+    const std::map<std::string, ModelEntry> &models,
+    const std::string &currentModelName) {
+  for (const auto &[name, entry] : models) {
+    auto mc = resolveModelConfig(models, name);
+    if (mc.isValid()) {
+      agentConfig->availableModels[name] = std::move(mc);
+    }
+  }
+  agentConfig->currentModelName = currentModelName;
+}
+
 asio::awaitable<void> runCliAsync(agentxx::agent::DeepAgent &agent) {
   auto io = std::make_shared<AgentStdIO>();
 
@@ -362,7 +376,8 @@ void runCli(agentxx::agent::DeepAgent &agent) {
 
 #ifdef AGENTXX_ENABLE_CLIENT_TUI
 asio::awaitable<void> runTuiAsync(agentxx::agent::DeepAgent &agent) {
-  auto io = std::make_shared<AgentTUI>(co_await asio::this_coro::executor);
+  auto io = std::make_shared<AgentTUI>(co_await asio::this_coro::executor,
+                                       agent.agentContext);
   io->start();
 
   const auto tuiEventCallback =
@@ -560,24 +575,24 @@ int main(int argn, char **argv) {
     return 0;
   }
 
-  // 默认 CLI 交互模式
-  XX_OUT("======= Agentxx Client =======");
   auto config = buildDefaultConfig();
   applyModelToConfig(config, yamlCfg.models, yamlCfg.useModelDefault);
   applySubagentModelToConfig(config, yamlCfg.models, yamlCfg.useModelSubagent);
   applyWebSearchModelToConfig(config, yamlCfg.models,
                               yamlCfg.useModelWebSearch);
+  applyAvailableModelsToConfig(config, yamlCfg.models, yamlCfg.useModelDefault);
   config->mcpServerUrls.push_back("http://172.29.48.1:17001/mcp");
   // config->mcpServerUrls.push_back("https://mcp.exa.ai");
   config->skillDirPaths = std::vector<std::string>{
       "/home/coolight/program/agentxx/isolation/skills/"};
-  config->logPringToolcall = true;
-  config->logPrintMessagesBeforeLLM = true;
-  config->logPrintSummarizationResultTokenCount = true;
-  auto agent = agentxx::agent::DeepAgent{config};
 
   if (mode == "tui") {
 #if AGENTXX_ENABLE_CLIENT_TUI
+    config->logPringToolcall = false;
+    config->logPrintMessagesBeforeLLM = false;
+    config->logPrintMessagesBeforeLLMWithSystemMsg = false;
+    config->logPrintSummarizationResultTokenCount = false;
+    auto agent = agentxx::agent::DeepAgent{config};
     runTui(agent);
 #else
     XX_LOGE(
@@ -586,6 +601,14 @@ int main(int argn, char **argv) {
     return 0;
   }
 
-  runCli(agent);
+  {
+    // 默认 CLI 交互模式
+    XX_OUT("======= Agentxx Client =======");
+    config->logPringToolcall = true;
+    config->logPrintMessagesBeforeLLM = true;
+    config->logPrintSummarizationResultTokenCount = true;
+    auto agent = agentxx::agent::DeepAgent{config};
+    runCli(agent);
+  }
   return 0;
 }

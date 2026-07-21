@@ -3,6 +3,7 @@
 #include "agentxx/agent/agent_io.h"
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/context.h"
+#include "agentxx/agent/model_registry.h"
 #include "agentxx/middlewares/event_stream.h"
 #include "agentxx/middlewares/events.h"
 #include "agentxx/middlewares/permission.h"
@@ -84,6 +85,24 @@ public:
         .base_url = subagentModelCfg.baseUrl,
         .default_model = subagentModelCfg.modelName,
     };
+
+    {
+      /// 创建模型 Provider 注册表并注入 AgentContext
+      /// - 注册可用模型, 支持运行时切换 modelcall 使用的模型
+      /// - 主模型兜底注册, 保证至少有一个可用模型
+      auto registry = std::make_shared<agentxx::agent::ModelProviderRegistry>();
+      for (const auto &[name, mc] : config->availableModels) {
+        registry->registerModel(name, mc);
+      }
+      if (config->availableModels.empty()) {
+        registry->registerModel(config->model.modelName, config->model);
+        registry->setCurrentModel(config->model.modelName);
+      } else if (false == config->currentModelName.empty() &&
+                 registry->hasModel(config->currentModelName)) {
+        registry->setCurrentModel(config->currentModelName);
+      }
+      agentContext->modelRegistry = std::move(registry);
+    }
 
     {
       /// 创建事件总线并注入 AgentContext
@@ -450,6 +469,11 @@ public:
     nodeContext.instructions = config->prompt.systemPrompt;
     nodeContext.provider =
         agentxx::server::OpenAIProvider::create_shared(provideConfig);
+    // 主 agent 的 llm 节点启用运行时动态模型切换 (经 modelRegistry)
+    nodeContext.extra_config = neograph::json{
+        {std::string{agentxx::nodes::ModelCallWrapNode::defUseModelRegistryKey},
+         true},
+    };
 
     std::vector<neograph::Tool *> toolPtrs;
     toolPtrs.reserve(tools.size());
@@ -558,13 +582,33 @@ public:
       const std::string &interruptNode, const std::string &interruptValue,
       const std::string &interruptHandleName)>;
 
+  /// 选择 modelcall 使用的模型 (运行时切换)
+  /// - modelName 为空或不存在时不改变当前选择
+  void selectModel(const std::string &modelName) {
+    if (false == modelName.empty() && agentContext->modelRegistry) {
+      agentContext->modelRegistry->setCurrentModel(modelName);
+    }
+  }
+
+  /// 当前使用的模型显示名称
+  std::string getCurrentModelName() const {
+    if (agentContext->modelRegistry) {
+      return agentContext->modelRegistry->getCurrentModelName();
+    }
+    return agentContext->agentConfig->model.modelName;
+  }
+
   asio::awaitable<ConversationTurnResult> runConversationTurnAsync(
       const std::string &threadId, const std::string &userInput,
       bool isFirstMsg, neograph::json messages, std::shared_ptr<AgentIOBase> io,
       std::function<void(const neograph::graph::GraphEvent &)> eventCallback,
-      InterruptCallback interruptCallback = nullptr) {
+      InterruptCallback interruptCallback = nullptr,
+      const std::string &modelName = "") {
     ConversationTurnResult turnResult;
     agentContext->io = std::move(io);
+
+    // 选择本轮使用的模型
+    selectModel(modelName);
 
     bool resumeInterrupt = false;
     if (false ==
@@ -589,12 +633,15 @@ public:
           {"role", "user"},
           {"content", processedInput},
       });
+      // 创建本轮取消令牌并注入 AgentContext, 供 UI 取消执行
+      auto cancelToken = std::make_shared<neograph::graph::CancelToken>();
+      agentContext->setCancelToken(cancelToken);
       auto cfg = neograph::graph::RunConfig{
           .thread_id = threadId,
           .input = {{"messages", messages}},
           .max_steps = 1024,
           .stream_mode = neograph::graph::StreamMode::ALL,
-          .cancel_token = std::make_shared<neograph::graph::CancelToken>(),
+          .cancel_token = cancelToken,
           .resume_if_exists = isFirstMsg,
       };
 
@@ -825,7 +872,9 @@ public:
       const std::string &threadId,
       const std::vector<neograph::ChatMessage> &messages,
       std::function<void(const neograph::graph::GraphEvent &)> callback =
-          nullptr) {
+          nullptr,
+      const std::string &modelName = "") {
+    selectModel(modelName);
     auto inputMessages = neograph::json::array();
     for (const auto &msg : messages) {
       neograph::json msgJson;
@@ -879,7 +928,8 @@ public:
   /// Convenience wrapper that builds messages automatically
   asio::awaitable<std::string>
   runSingleInputAsync(const std::string &threadId, const std::string &userInput,
-                      const std::string &systemPrompt = "") {
+                      const std::string &systemPrompt = "",
+                      const std::string &modelName = "") {
     std::vector<neograph::ChatMessage> messages;
 
     if (!systemPrompt.empty()) {
@@ -894,7 +944,7 @@ public:
         .content = userInput,
     });
 
-    co_return co_await runNonStreamAsync(threadId, messages);
+    co_return co_await runNonStreamAsync(threadId, messages, nullptr, modelName);
   }
 
   /// Run a simple completion with just messages (for subagent
@@ -906,7 +956,9 @@ public:
   };
 
   asio::awaitable<SimpleRunResult>
-  runStreamAsync(const std::vector<neograph::ChatMessage> &messages) {
+  runStreamAsync(const std::vector<neograph::ChatMessage> &messages,
+                 const std::string &modelName = "") {
+    selectModel(modelName);
     auto inputMessages = neograph::json::array();
     for (const auto &msg : messages) {
       neograph::json msgJson;

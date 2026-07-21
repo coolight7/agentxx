@@ -3,6 +3,7 @@
 #include "neograph/api.h"
 #include "neograph/json.h"
 #include "prompt.h"
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -32,6 +33,14 @@ public:
   /// subagent 模型配置
   /// - 未指定时默认使用主模型 [model]
   std::optional<ModelConfig> subagentModel;
+
+  /// 可用模型列表 (供运行时切换)
+  /// - key: 模型显示名称, value: 模型配置
+  /// - 由客户端从配置文件加载填充
+  std::map<std::string, ModelConfig> availableModels;
+  /// 当前选中的模型显示名称
+  /// - 应为 [availableModels] 的 key; 为空时使用 [model]
+  std::string currentModelName;
 
   /// 获取 subagent 实际使用的模型配置
   /// - 如果指定了 subagentModel 则返回它，否则返回主模型
