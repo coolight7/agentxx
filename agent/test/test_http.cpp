@@ -557,10 +557,10 @@ asio::awaitable<void> test_http_client_beast_server() {
   // Verify server is reachable
   for (int i = 0; i < 100; ++i) {
     try {
-      boost::asio::io_context tmpCtx;
-      boost::asio::ip::tcp::socket sock(tmpCtx);
-      sock.connect(boost::asio::ip::tcp::endpoint(
-          boost::asio::ip::make_address("127.0.0.1"), port));
+      asio::io_context tmpCtx;
+      asio::ip::tcp::socket sock(tmpCtx);
+      sock.connect(
+          asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), port));
       sock.close();
       break;
     } catch (...) {

@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-namespace asio = boost::asio;
+namespace asio = ::boost::asio;
 
 namespace agentxx {
 namespace expand {

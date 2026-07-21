@@ -97,8 +97,8 @@ public:
   public:
     virtual ~SseWriter() = default;
     /// Write an SSE event (formatted as "event: ...\ndata: ...\n\n").
-    virtual asio::awaitable<bool>
-    writeEvent(std::string_view event, std::string_view data) = 0;
+    virtual asio::awaitable<bool> writeEvent(std::string_view event,
+                                             std::string_view data) = 0;
     /// Write a raw chunk (must be valid SSE framing).
     virtual asio::awaitable<bool> writeChunk(std::string_view chunk) = 0;
     /// Close the SSE stream gracefully.
@@ -239,9 +239,11 @@ public:
 
   /// Register a streaming SSE handler. Unlike normal handlers, the SSE
   /// handler receives an SseWriter to push events incrementally.
-  void addSseRoute(const std::string &path,
-                   std::function<asio::awaitable<void>(
-                       Request &, std::shared_ptr<SseWriter>)> handler) {
+  void
+  addSseRoute(const std::string &path,
+              std::function<asio::awaitable<void>(Request &,
+                                                  std::shared_ptr<SseWriter>)>
+                  handler) {
     sseRoutes_[path] = std::move(handler);
   }
 
@@ -284,17 +286,19 @@ private:
         if (!headerSent_) {
           co_return co_await writeWithHeader(data);
         }
-        co_await boost::asio::async_write(
-            stream_, boost::asio::buffer(data),
+        co_await asio::async_write(
+            stream_, asio::buffer(data),
             asio::cancel_after(timeout_, asio::use_awaitable));
         co_return true;
       } catch (const boost::system::system_error &e) {
         if (e.code() != asio::error::operation_aborted) {
-          XX_LOGE("[sse] write error: {}", agentxx::util::autoTryConvertToUtf8(e.what()));
+          XX_LOGE("[sse] write error: {}",
+                  agentxx::util::autoTryConvertToUtf8(e.what()));
         }
         co_return false;
       } catch (const std::exception &e) {
-        XX_LOGE("[sse] write error: {}", agentxx::util::autoTryConvertToUtf8(e.what()));
+        XX_LOGE("[sse] write error: {}",
+                agentxx::util::autoTryConvertToUtf8(e.what()));
         co_return false;
       }
     }
@@ -313,8 +317,7 @@ private:
       resp.body() = std::string(data);
       resp.prepare_payload();
       co_await http::async_write(
-          stream_, resp,
-          asio::cancel_after(timeout_, asio::use_awaitable));
+          stream_, resp, asio::cancel_after(timeout_, asio::use_awaitable));
       co_return true;
     }
   };
@@ -428,7 +431,8 @@ private:
     } catch (const boost::system::system_error &e) {
       if (e.code() != asio::error::operation_aborted &&
           e.code() != asio::ssl::error::stream_truncated) {
-        XX_LOGE("[server] SSL error: {}", agentxx::util::autoTryConvertToUtf8(e.what()));  
+        XX_LOGE("[server] SSL error: {}",
+                agentxx::util::autoTryConvertToUtf8(e.what()));
       }
     } catch (const std::exception &e) {
       XX_LOGE("[server] SSL handshake error: {}", e.what());
@@ -470,12 +474,13 @@ private:
         readError = true;
         readErrorMsg = e.what();
         agentxx::util::autoConvertToUtf8(readErrorMsg);
-        if (e.code() == http::error::body_limit)
-          {readErrorStatus = http::status::payload_too_large;}
-        else if (e.code() == http::error::header_limit)
-          {readErrorStatus = http::status::request_header_fields_too_large;}
-        else
-          {readErrorStatus = http::status::bad_request;}
+        if (e.code() == http::error::body_limit) {
+          readErrorStatus = http::status::payload_too_large;
+        } else if (e.code() == http::error::header_limit) {
+          readErrorStatus = http::status::request_header_fields_too_large;
+        } else {
+          readErrorStatus = http::status::bad_request;
+        }
       }
 
       if (readError) {
@@ -635,9 +640,8 @@ private:
   std::atomic<size_t> nextWorker_{0};
 
   /// SSE streaming routes (GET only) — keyed by path
-  std::unordered_map<std::string,
-                     std::function<asio::awaitable<void>(
-                         Request &, std::shared_ptr<SseWriter>)>>
+  std::unordered_map<std::string, std::function<asio::awaitable<void>(
+                                      Request &, std::shared_ptr<SseWriter>)>>
       sseRoutes_;
 };
 

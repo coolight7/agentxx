@@ -819,18 +819,18 @@ public:
               neograph::ChatStreamChunk chunk;
               neograph::from_json(event.data, chunk);
               switch (chunk.type) {
-              case neograph::ChatStreamChunk::TYPE_CONTENT:
+              case neograph::ChatStreamChunk::TYPE_CONTENT: {
                 if (isThinking) {
                   std::cout << "[Content] ";
                 }
                 isThinking = false;
-                break;
-              case neograph::ChatStreamChunk::TYPE_THINKING:
+              } break;
+              case neograph::ChatStreamChunk::TYPE_THINKING: {
                 if (false == isThinking) {
                   std::cout << "[Thinking] ";
                 }
                 isThinking = true;
-                break;
+              } break;
               }
               token = std::move(chunk.data);
             }

@@ -19,6 +19,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include <neograph/api.h>
 #include <neograph/json.h>
 
 #include "agentxx/agent/deepagent.h"
@@ -523,7 +524,7 @@ private:
 
   // -- Outbound request tracking (agent→client) --
   mutable std::mutex pendingMu_;
-  std::map<int64_t, std::shared_ptr<std::promise<json>>> pending_;
+  std::map<int64_t, std::shared_ptr<std::promise<neograph::json>>> pending_;
   std::atomic<int64_t> nextOutboundId_{1};
 };
 
@@ -547,7 +548,7 @@ public:
   };
 
   HttpAcpServer(std::shared_ptr<agentxx::agent::DeepAgent> agent,
-                json agentInfo, Config config)
+                neograph::json agentInfo, Config config)
       : config_(std::move(config)), deepAgent_(std::move(agent)),
         handler_(deepAgent_, std::move(agentInfo),
                  {.serverName = config_.serverName,
@@ -581,11 +582,11 @@ private:
   // -----------------------------------------------------------------------
 
   void setupHandlerSink() {
-    handler_.setNotificationSink([this](const json &envelope) {
+    handler_.setNotificationSink([this](const neograph::json &envelope) {
       // Fulfill pending outbound promises
       if (!envelope.contains("method") && envelope.contains("id") &&
           !envelope["id"].is_null()) {
-        json id = envelope["id"];
+        neograph::json id = envelope["id"];
         int64_t idVal = id.is_number_integer() ? id.get<int64_t>() : -1;
 
         std::unique_lock lock(pendingMutex_);
@@ -650,24 +651,32 @@ private:
                                          util::HttpServer::Response &resp) {
     namespace http = boost::beast::http;
 
-    json requestJson;
+    bool isError = false;
+    neograph::json requestJson;
     try {
-      requestJson = json::parse(req.body());
-    } catch (const json::parse_error &e) {
+      requestJson = neograph::json::parse(req.body());
+    } catch (const neograph::json::parse_error &e) {
       writeJsonResponse(resp, http::status::bad_request,
                         AcpProtocolHandler::makeParseError(e.what()));
+      isError = true;
+    }
+    if (isError) {
       co_return;
     }
 
     if (!requestJson.is_object() || requestJson.value("jsonrpc", "") != "2.0") {
       writeJsonResponse(resp, http::status::bad_request,
                         AcpProtocolHandler::makeInvalidRequest());
+      isError = true;
+    }
+    if (isError) {
       co_return;
     }
 
-    json id = requestJson.contains("id") ? requestJson["id"] : json{};
+    neograph::json id =
+        requestJson.contains("id") ? requestJson["id"] : neograph::json{};
 
-    json response;
+    neograph::json response;
     try {
       response = handler_.handleMessage(requestJson);
     } catch (const std::exception &e) {
@@ -675,6 +684,9 @@ private:
       writeJsonResponse(
           resp, http::status::internal_server_error,
           jsonRpcError(id, -32603, "Internal error: " + std::string(e.what())));
+      isError = true;
+    }
+    if (isError) {
       co_return;
     }
 
@@ -687,9 +699,9 @@ private:
     // Notification (no response expected)
     if (id.is_null()) {
       writeJsonResponse(resp, http::status::accepted,
-                        json{{"jsonrpc", "2.0"},
-                             {"id", json{nullptr}},
-                             {"result", json::object()}});
+                        neograph::json{{"jsonrpc", "2.0"},
+                                       {"id", neograph::json{nullptr}},
+                                       {"result", neograph::json::object()}});
       co_return;
     }
 
@@ -700,7 +712,7 @@ private:
       idVal = static_cast<int64_t>(std::hash<std::string>{}(idStr));
     }
 
-    auto promise = std::make_shared<std::promise<json>>();
+    auto promise = std::make_shared<std::promise<neograph::json>>();
     auto future = promise->get_future().share();
 
     {
@@ -723,7 +735,7 @@ private:
       co_return;
     }
 
-    json asyncResponse = future.get();
+    neograph::json asyncResponse = future.get();
     {
       std::unique_lock lock(pendingMutex_);
       pendingResponses_.erase(idVal);
@@ -765,16 +777,17 @@ private:
   // -----------------------------------------------------------------------
 
   void writeJsonResponse(util::HttpServer::Response &resp,
-                         boost::beast::http::status status, const json &body) {
+                         boost::beast::http::status status,
+                         const neograph::json &body) {
     resp.result(status);
     resp.set(boost::beast::http::field::content_type, "application/json");
     resp.body() = body.dump();
     resp.prepare_payload();
   }
 
-  json jsonRpcError(const json &id, int code,
-                    const std::string &message) const {
-    json err;
+  neograph::json jsonRpcError(const neograph::json &id, int code,
+                              const std::string &message) const {
+    neograph::json err;
     err["jsonrpc"] = "2.0";
     err["id"] = id;
     err["error"] = {{"code", code}, {"message", message}};
@@ -792,7 +805,8 @@ private:
 
   // Pending async response tracking (for HTTP transport)
   std::mutex pendingMutex_;
-  std::map<int64_t, std::shared_ptr<std::promise<json>>> pendingResponses_;
+  std::map<int64_t, std::shared_ptr<std::promise<neograph::json>>>
+      pendingResponses_;
 };
 
 // ===========================================================================
@@ -805,7 +819,7 @@ private:
 class StdioAcpServer {
 public:
   StdioAcpServer(std::shared_ptr<agentxx::agent::DeepAgent> agent,
-                 json agentInfo)
+                 neograph::json agentInfo)
       : deepAgent_(std::move(agent)),
         handler_(
             deepAgent_, std::move(agentInfo),
@@ -834,7 +848,7 @@ public:
     auto outPtr = &out;
 
     // Install notification sink: write JSON-RPC envelopes as NDJSON lines
-    handler_.setNotificationSink([outPtr, outMu](const json &env) {
+    handler_.setNotificationSink([outPtr, outMu](const neograph::json &env) {
       auto s = env.dump();
       std::lock_guard lk(*outMu);
       (*outPtr) << s << '\n';
@@ -848,9 +862,9 @@ public:
       if (line.empty())
         continue;
 
-      json env;
+      neograph::json env;
       try {
-        env = json::parse(line);
+        env = neograph::json::parse(line);
       } catch (const std::exception &) {
         std::lock_guard lk(*outMu);
         (*outPtr) << AcpProtocolHandler::makeParseError("invalid JSON").dump()
