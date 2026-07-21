@@ -9,6 +9,7 @@
 #include <asio/steady_timer.hpp>
 #include <asio/use_awaitable.hpp>
 #include <chrono>
+#include <format>
 #include <iostream>
 #include <memory>
 #include <thread>
@@ -1310,6 +1311,153 @@ test_streaming_think_tags_split_across_chunks(MockOpenAIServer &mock,
 }
 
 // ---------------------------------------------------------------------------
+// True streaming verification — server sends chunks with delays
+// ---------------------------------------------------------------------------
+
+class DelayedStreamServer {
+public:
+  std::unique_ptr<asio::ip::tcp::acceptor> acceptor;
+  asio::io_context ioCtx;
+  std::thread thread;
+  uint16_t boundPort = 0;
+  std::vector<std::string> chunks;
+  std::chrono::milliseconds delay{80};
+
+  void start() {
+    acceptor = std::make_unique<asio::ip::tcp::acceptor>(
+        ioCtx, asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
+    boundPort = acceptor->local_endpoint().port();
+
+    asio::co_spawn(ioCtx, acceptLoop(), asio::detached);
+    thread = std::thread([this]() { ioCtx.run(); });
+  }
+
+  void stop() {
+    boost::system::error_code ec;
+    if (acceptor)
+      acceptor->close(ec);
+    ioCtx.stop();
+    if (thread.joinable())
+      thread.join();
+  }
+
+private:
+  asio::awaitable<void> acceptLoop() {
+    while (acceptor->is_open()) {
+      boost::system::error_code ec;
+      auto socket = co_await acceptor->async_accept(
+          asio::redirect_error(asio::use_awaitable, ec));
+      if (ec)
+        break;
+      asio::co_spawn(ioCtx, handleConnection(std::move(socket)),
+                     asio::detached);
+    }
+  }
+
+  asio::awaitable<void> handleConnection(asio::ip::tcp::socket socket) {
+    namespace http = boost::beast::http;
+    boost::system::error_code ec;
+
+    boost::beast::flat_buffer buf;
+    http::request<http::string_body> req;
+    co_await http::async_read(socket, buf, req,
+                              asio::redirect_error(asio::use_awaitable, ec));
+    if (ec)
+      co_return;
+
+    std::string header = "HTTP/1.1 200 OK\r\n"
+                         "Content-Type: text/event-stream\r\n"
+                         "Cache-Control: no-cache\r\n"
+                         "Transfer-Encoding: chunked\r\n"
+                         "\r\n";
+    co_await asio::async_write(socket, asio::buffer(header),
+                               asio::redirect_error(asio::use_awaitable, ec));
+    if (ec)
+      co_return;
+
+    for (const auto &chunk : chunks) {
+      std::string framed =
+          std::format("{:x}\r\n{}\r\n", chunk.size(), chunk);
+      co_await asio::async_write(socket, asio::buffer(framed),
+                                 asio::redirect_error(asio::use_awaitable, ec));
+      if (ec)
+        co_return;
+
+      asio::steady_timer timer(socket.get_executor(), delay);
+      co_await timer.async_wait(
+          asio::redirect_error(asio::use_awaitable, ec));
+    }
+
+    std::string finalChunk = "0\r\n\r\n";
+    co_await asio::async_write(socket, asio::buffer(finalChunk),
+                               asio::redirect_error(asio::use_awaitable, ec));
+
+    socket.shutdown(asio::ip::tcp::socket::shutdown_send, ec);
+  }
+};
+
+asio::awaitable<void> test_true_streaming_incremental(uint16_t) {
+  auto srv = std::make_unique<DelayedStreamServer>();
+  srv->chunks = {
+      "data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"\"}}]}\n\n",
+      "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"A\"}}]}\n\n",
+      "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"B\"}}]}\n\n",
+      "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"C\"}}]}\n\n",
+      "data: {\"choices\":[{\"index\":0,\"delta\":{}}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":3,\"total_tokens\":6}}\n\n",
+      "data: [DONE]\n\n",
+  };
+  srv->delay = std::chrono::milliseconds(80);
+  srv->start();
+
+  std::string baseUrl = "http://127.0.0.1:" + std::to_string(srv->boundPort);
+  auto provider = server::OpenAIProvider::create(
+      {.api_key = "sk-test", .base_url = baseUrl, .timeout_seconds = 10});
+
+  neograph::CompletionParams params;
+  params.model = "gpt-4o-mini";
+  params.messages = {
+      neograph::ChatMessage{.role = "user", .content = "Stream test"}};
+
+  std::vector<std::chrono::steady_clock::time_point> callbackTimes;
+  auto startTime = std::chrono::steady_clock::now();
+
+  neograph::StreamCallback onChunk = [&](const std::string &) {
+    callbackTimes.push_back(std::chrono::steady_clock::now());
+  };
+
+  try {
+    auto result = co_await provider->invoke(params, onChunk);
+    XX_TEST_EXPECT_EQ(result.message.content, "ABC");
+
+    XX_TEST_EXPECT_TRUE(callbackTimes.size() >= 3);
+
+    if (callbackTimes.size() >= 3) {
+      auto firstOffset = std::chrono::duration_cast<std::chrono::milliseconds>(
+                             callbackTimes.front() - startTime)
+                             .count();
+      auto lastOffset = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            callbackTimes.back() - startTime)
+                            .count();
+      auto spread = lastOffset - firstOffset;
+
+      // With 80ms delay between chunks, the spread between first and last
+      // callback should be >= 100ms if truly streaming (2 gaps * 80ms = 160ms
+      // ideal). Use 100ms as a conservative threshold.
+      XX_TEST_EXPECT_TRUE(spread >= 100);
+      if (spread < 100) {
+        TEST_FAIL << "streaming not incremental: spread=" << spread
+                  << "ms, callbacks=" << callbackTimes.size() << std::endl;
+      }
+    }
+  } catch (const std::exception &e) {
+    XX_TEST_FAILED++;
+    TEST_FAIL << "true streaming test failed: " << e.what() << std::endl;
+  }
+
+  srv->stop();
+}
+
+// ---------------------------------------------------------------------------
 // Test runner
 // ---------------------------------------------------------------------------
 
@@ -1375,6 +1523,9 @@ asio::awaitable<TestResult> run_openai_provider_tests() {
   co_await test_non_streaming_think_tags_in_content(*mock, port);
   co_await test_non_streaming_think_tags_prefer_reasoning_field(*mock, port);
   co_await test_streaming_think_tags_split_across_chunks(*mock, port);
+
+  // True streaming incremental verification
+  co_await test_true_streaming_incremental(port);
 
   mock->server->stop();
   mock->thread.join();

@@ -350,16 +350,18 @@ private:
           std::max(d, std::chrono::steady_clock::duration::zero()));
     };
 
-    // Read the complete HTTP response (header + body)
     boost::beast::flat_buffer buf;
     http::response_parser<http::string_body> parser;
     parser.body_limit(std::numeric_limits<uint64_t>::max());
-    co_await http::async_read(stream, buf, parser,
-                              asio::cancel_after(rem(), asio::use_awaitable));
+    parser.eager(true);
 
-    auto resp = parser.release();
+    co_await http::async_read_header(stream, buf, parser,
+                                     asio::cancel_after(rem(), asio::use_awaitable));
 
-    if (resp.result_int() == 429) {
+    if (parser.get().result_int() == 429) {
+      co_await http::async_read(stream, buf, parser,
+                                asio::cancel_after(rem(), asio::use_awaitable));
+      auto resp = parser.release();
       auto raw = resp[http::field::retry_after];
       int retryAfter = -1;
       if (!raw.empty()) {
@@ -374,16 +376,35 @@ private:
                                      retryAfter);
     }
 
-    if (resp.result_int() != 200) {
+    if (parser.get().result_int() != 200) {
+      co_await http::async_read(stream, buf, parser,
+                                asio::cancel_after(rem(), asio::use_awaitable));
+      auto resp = parser.release();
       throw std::runtime_error("API error (HTTP " +
                                std::to_string(resp.result_int()) +
                                "): " + resp.body());
     }
 
-    // Parse all SSE events from the body
-    lineBuffer = resp.body();
-    processSseBuffer(lineBuffer, completion, fullContent, fullThinking, tcMap,
-                     on_chunk);
+    size_t processed = 0;
+    boost::system::error_code ec;
+    while (!parser.is_done()) {
+      co_await http::async_read_some(stream, buf, parser,
+                                     asio::redirect_error(asio::use_awaitable, ec));
+      if (ec) {
+        break;
+      }
+      auto &body = parser.get().body();
+      if (body.size() > processed) {
+        lineBuffer += body.substr(processed);
+        processed = body.size();
+        processSseBuffer(lineBuffer, completion, fullContent, fullThinking,
+                         tcMap, on_chunk);
+      }
+    }
+    if (!lineBuffer.empty()) {
+      processSseBuffer(lineBuffer, completion, fullContent, fullThinking, tcMap,
+                       on_chunk);
+    }
   }
 
   static void processSseBuffer(std::string &buf,

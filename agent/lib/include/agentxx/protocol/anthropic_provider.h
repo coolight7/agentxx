@@ -206,30 +206,39 @@ public:
                                std::map<int, neograph::ToolCall> &tcMap,
                                std::map<int, std::string> &blockTypes,
                                neograph::FormatDataStreamCallback on_chunk) {
-    std::string currentEvent;
     size_t pos;
-    while ((pos = buf.find('\n')) != std::string::npos) {
-      std::string line = buf.substr(0, pos);
-      buf.erase(0, pos + 1);
+    while ((pos = buf.find("\n\n")) != std::string::npos) {
+      std::string block = buf.substr(0, pos);
+      buf.erase(0, pos + 2);
 
-      // Strip \r
-      if (!line.empty() && line.back() == '\r')
-        line.pop_back();
+      std::string currentEvent;
+      std::string payload;
 
-      if (line.rfind("event: ", 0) == 0) {
-        currentEvent = line.substr(7);
-        continue;
+      size_t lineStart = 0;
+      while (lineStart < block.size()) {
+        auto lineEnd = block.find('\n', lineStart);
+        std::string line = (lineEnd == std::string::npos)
+                               ? block.substr(lineStart)
+                               : block.substr(lineStart, lineEnd - lineStart);
+        lineStart = (lineEnd == std::string::npos) ? block.size() : lineEnd + 1;
+
+        if (!line.empty() && line.back() == '\r')
+          line.pop_back();
+
+        if (line.rfind("event: ", 0) == 0) {
+          currentEvent = line.substr(7);
+        } else if (line.rfind("data: ", 0) == 0) {
+          payload = line.substr(6);
+        }
       }
 
-      if (line.rfind("data: ", 0) != 0)
+      if (payload.empty())
         continue;
-      std::string payload = line.substr(6);
 
       try {
         auto j = neograph::json::parse(payload);
 
         if (currentEvent == "message_start") {
-          // Capture input usage
           if (j.contains("message") && j["message"].contains("usage")) {
             auto u = j["message"]["usage"];
             completion.usage.prompt_tokens = u.value("input_tokens", 0);
@@ -269,7 +278,6 @@ public:
             }
           }
         } else if (currentEvent == "message_delta") {
-          // Capture output usage and stop reason
           if (j.contains("usage")) {
             auto u = j["usage"];
             completion.usage.completion_tokens = u.value("output_tokens", 0);
@@ -277,12 +285,8 @@ public:
                                             completion.usage.completion_tokens;
           }
         }
-        // content_block_stop, message_stop, ping — no action needed
       } catch (...) {
-        // Skip malformed events
       }
-
-      currentEvent.clear();
     }
   }
 
@@ -527,16 +531,18 @@ private:
           std::max(d, std::chrono::steady_clock::duration::zero()));
     };
 
-    // Read the complete HTTP response (header + body)
     boost::beast::flat_buffer buf;
     http::response_parser<http::string_body> parser;
     parser.body_limit(std::numeric_limits<uint64_t>::max());
-    co_await http::async_read(stream, buf, parser,
-                              asio::cancel_after(rem(), asio::use_awaitable));
+    parser.eager(true);
 
-    auto resp = parser.release();
+    co_await http::async_read_header(stream, buf, parser,
+                                     asio::cancel_after(rem(), asio::use_awaitable));
 
-    if (resp.result_int() == 429) {
+    if (parser.get().result_int() == 429) {
+      co_await http::async_read(stream, buf, parser,
+                                asio::cancel_after(rem(), asio::use_awaitable));
+      auto resp = parser.release();
       auto raw = resp[http::field::retry_after];
       int retryAfter = -1;
       if (!raw.empty()) {
@@ -551,16 +557,35 @@ private:
                                      retryAfter);
     }
 
-    if (resp.result_int() != 200) {
+    if (parser.get().result_int() != 200) {
+      co_await http::async_read(stream, buf, parser,
+                                asio::cancel_after(rem(), asio::use_awaitable));
+      auto resp = parser.release();
       throw std::runtime_error("API error (HTTP " +
                                std::to_string(resp.result_int()) +
                                "): " + resp.body());
     }
 
-    // Parse all SSE events from the body
-    lineBuffer = resp.body();
-    processSseBuffer(lineBuffer, completion, fullContent, fullThinking, tcMap,
-                     blockTypes, on_chunk);
+    size_t processed = 0;
+    boost::system::error_code ec;
+    while (!parser.is_done()) {
+      co_await http::async_read_some(stream, buf, parser,
+                                     asio::redirect_error(asio::use_awaitable, ec));
+      if (ec) {
+        break;
+      }
+      auto &body = parser.get().body();
+      if (body.size() > processed) {
+        lineBuffer += body.substr(processed);
+        processed = body.size();
+        processSseBuffer(lineBuffer, completion, fullContent, fullThinking,
+                         tcMap, blockTypes, on_chunk);
+      }
+    }
+    if (!lineBuffer.empty()) {
+      processSseBuffer(lineBuffer, completion, fullContent, fullThinking, tcMap,
+                       blockTypes, on_chunk);
+    }
   }
 
   static asio::ssl::context &sslContext() {
