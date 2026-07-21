@@ -4,24 +4,116 @@
 #include "fmt/format.h"
 #include <ctime>
 #include <iostream>
+#include <memory>
+#include <mutex>
+#include <string>
 #include <string_view>
+#include <vector>
+
+namespace agentxx {
+namespace util {
+
+/// 日志级别
+enum class LogLevel {
+  Debug,
+  Info,
+  Warn,
+  Error,
+  Out,
+};
+
+/// 日志接收接口
+/// - 实现并注册到 LogDispatcher 以接收 XX_LOG 系列宏输出的日志
+/// - 例如 TUI 实现此接口将日志显示到日志窗口
+class LogSink {
+public:
+  virtual ~LogSink() = default;
+  virtual void onLog(LogLevel level, const std::string &message) = 0;
+};
+
+/// 全局日志分发器 (单例)
+/// - 线程安全
+/// - XX_LOG 宏在输出到 stderr 的同时, 将日志分发给所有已注册的 sink
+/// - sink 以 weak_ptr 持有, 注册方需自行持有 shared_ptr 以保持其有效
+class LogDispatcher {
+public:
+  static LogDispatcher &instance() {
+    static LogDispatcher inst;
+    return inst;
+  }
+
+  void addSink(std::shared_ptr<LogSink> sink) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    sinks_.push_back(std::move(sink));
+  }
+
+  void removeSink(const std::shared_ptr<LogSink> &sink) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (auto it = sinks_.begin(); it != sinks_.end();) {
+      auto sp = it->lock();
+      if (!sp || sp == sink) {
+        it = sinks_.erase(it);
+      } else {
+        ++it;
+      }
+    }
+  }
+
+  void dispatch(LogLevel level, const std::string &message) {
+    std::vector<std::shared_ptr<LogSink>> alive;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      // 顺带清理已释放的 sink
+      for (auto it = sinks_.begin(); it != sinks_.end();) {
+        if (auto sp = it->lock()) {
+          alive.push_back(sp);
+          ++it;
+        } else {
+          it = sinks_.erase(it);
+        }
+      }
+    }
+    for (auto &sink : alive) {
+      try {
+        sink->onLog(level, message);
+      } catch (...) {
+        // 忽略 sink 异常, 避免影响日志输出
+      }
+    }
+  }
+
+private:
+  LogDispatcher() = default;
+  std::mutex mutex_;
+  std::vector<std::weak_ptr<LogSink>> sinks_;
+};
+
+/// XX_LOG 宏统一入口: 输出到 stderr 并分发到已注册的 sink
+inline void xxLogPrint(LogLevel level, const std::string &message) {
+  std::cerr << message << std::endl;
+  LogDispatcher::instance().dispatch(level, message);
+}
+
+} // namespace util
+} // namespace agentxx
 
 #if XX_IS_DEBUG_D
 
 #define XX_LOGD(str, ...)                                                      \
-  (std::cerr << fmt::format(str, ##__VA_ARGS__) << std::endl);
+  (::agentxx::util::xxLogPrint(::agentxx::util::LogLevel::Debug,               \
+                               fmt::format(str, ##__VA_ARGS__)));
 
 #define XX_LOGI(str, ...)                                                      \
-  (std::cerr << fmt::format(str, ##__VA_ARGS__) << std::endl);
+  (::agentxx::util::xxLogPrint(::agentxx::util::LogLevel::Info,                \
+                               fmt::format(str, ##__VA_ARGS__)));
 
 #define XX_LOGW(str, ...)                                                      \
-  (std::cerr << fmt::format(str, ##__VA_ARGS__) << std::endl);
+  (::agentxx::util::xxLogPrint(::agentxx::util::LogLevel::Warn,                \
+                               fmt::format(str, ##__VA_ARGS__)));
 
 #define XX_LOGE(str, ...)                                                      \
-  (std::cerr << fmt::format(str, ##__VA_ARGS__) << std::endl);
-
-#define XX_OUT(str, ...)                                                       \
-  (std::cerr << fmt::format(str, ##__VA_ARGS__) << std::endl);
+  (::agentxx::util::xxLogPrint(::agentxx::util::LogLevel::Error,               \
+                               fmt::format(str, ##__VA_ARGS__)));
 
 #else
 
@@ -33,10 +125,11 @@
 
 #define XX_LOGE(str, ...) ;
 
-#define XX_OUT(str, ...)                                                       \
-  (std::cerr << fmt::format(str, ##__VA_ARGS__) << std::endl);
-
 #endif
+
+#define XX_OUT(str, ...)                                                       \
+  (::agentxx::util::xxLogPrint(::agentxx::util::LogLevel::Out,                 \
+                               fmt::format(str, ##__VA_ARGS__)));
 
 #if XX_IS_LINUX_D
 
