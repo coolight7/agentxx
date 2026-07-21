@@ -200,7 +200,7 @@ public:
             json{nullptr},
             jsonRpcError(kJsonRpcParseError,
                          std::string("Parse error: ") + e.what()));
-        XX_LOGE("[MCP Server] parse request json failed: {}", errorResp.dump());
+        std::cout << errorResp.dump() << "\n" << std::flush;
         continue;
       }
 
