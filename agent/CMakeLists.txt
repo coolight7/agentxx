@@ -33,6 +33,7 @@ option(AGENTXX_ENABLE_VECTORSCAN "Add VectorScan for regex support. Use [AGENTXX
 option(AGENTXX_ENABLE_HYPERSCAN "Add HyperScan for regex support. Use [AGENTXX_ENABLE_VECTORSCAN] or std::regex if disable." OFF)
 option(AGENTXX_ENABLE_CODEGRAPH "Add CodeGraph-CPP for code analysis." ON)
 option(AGENTXX_ENABLE_BOOST_PROCESS "Use Boost.process for execute command toolcall." ON)
+option(AGENTXX_ENABLE_CLIENT_TUI "Build TUI for agentxx-cli." ON)
 
 # 仅用于指示是否编译用于调试用途，不代表真实编译类型
 # - [XX_IS_DEBUG_D] == 1 时，启用大部分调试日志等信息，因此 profile 之类注重
@@ -334,6 +335,7 @@ set(_AGENTXX_COMMON_CMAKE_ARGS
     -DAGENTXX_ENABLE_HYPERSCAN=${AGENTXX_ENABLE_HYPERSCAN}
     -DAGENTXX_ENABLE_CODEGRAPH=${AGENTXX_ENABLE_CODEGRAPH}
     -DAGENTXX_ENABLE_BOOST_PROCESS=${AGENTXX_ENABLE_BOOST_PROCESS}
+    -DAGENTXX_ENABLE_CLIENT_TUI=${AGENTXX_ENABLE_CLIENT_TUI}
 
     "-DAGENTXX_EXEC_INSTALL_PREFIX=${AGENTXX_EXEC_INSTALL_PREFIX}"
     "-DAGENTXX_THIRD_PARTY_DIR=${AGENTXX_THIRD_PARTY_DIR}"
@@ -730,6 +732,30 @@ ExternalProject_Add(
   TEST_COMMAND ""
 )
 
+if (AGENTXX_ENABLE_CLIENT_TUI)
+  # FTXUI
+  ExternalProject_Add(
+    ftxui_repo
+    SOURCE_DIR "${AGENTXX_THIRD_PARTY_DIR}/ftxui/"
+    INSTALL_DIR "${AGENTXX_INSTALL_DIR}"
+    CMAKE_ARGS
+      ${_AGENTXX_COMMON_CMAKE_ARGS}
+      -DFTXUI_BUILD_DOCS=OFF
+      -DFTXUI_BUILD_EXAMPLES=OFF
+      -DFTXUI_BUILD_MODULES=OFF
+      -DFTXUI_BUILD_TESTS=OFF
+      -DFTXUI_BUILD_TESTS_FUZZER=OFF
+      -DFTXUI_CLANG_TIDY=OFF
+      -DFTXUI_DEV_WARNINGS=ON
+      -DFTXUI_ENABLE_COVERAGE=OFF
+      -DFTXUI_ENABLE_INSTALL=ON
+      -DFTXUI_QUIET=OFF
+    CMAKE_CACHE_ARGS
+      ${_AGENTXX_COMMON_CMAKE_CACHE_ARGS}
+    TEST_COMMAND ""
+  )
+endif()
+
 ExternalProject_Add(
   agentxx_lib_repo
   DEPENDS 
@@ -769,7 +795,8 @@ endif()
 if (AGENTXX_BUILD_CLIENT)
   ExternalProject_Add(
     agentxx_client_repo
-    DEPENDS agentxx_lib_repo
+    DEPENDS 
+      agentxx_lib_repo
     SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/client/"
     INSTALL_DIR "${AGENTXX_INSTALL_DIR}"
     BUILD_ALWAYS TRUE
@@ -780,6 +807,9 @@ if (AGENTXX_BUILD_CLIENT)
       ${_AGENTXX_COMMON_CMAKE_CACHE_ARGS}
     TEST_COMMAND ""
   )
+  if (AGENTXX_ENABLE_CLIENT_TUI)
+    add_dependencies(agentxx_client_repo ftxui_repo)
+  endif()
 endif()
 if (AGENTXX_BUILD_TEST)
   ExternalProject_Add(

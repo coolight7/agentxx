@@ -4,6 +4,9 @@
 #include "agentxx-client/train/train.h"
 #include "agentxx-client/util/util.h"
 #include "yaml-cpp/yaml.h"
+#ifdef AGENTXX_ENABLE_CLIENT_TUI
+#include "agentxx-client/io/tui/agent_tui.h"
+#endif
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -357,6 +360,90 @@ void runCli(agentxx::agent::DeepAgent &agent) {
   agent.ioCtx->run();
 }
 
+#ifdef AGENTXX_ENABLE_CLIENT_TUI
+asio::awaitable<void> runTuiAsync(agentxx::agent::DeepAgent &agent) {
+  auto io = std::make_shared<AgentTUI>(co_await asio::this_coro::executor);
+  io->start();
+
+  const auto tuiEventCallback =
+      [&io](const neograph::graph::GraphEvent &event) {
+        switch (event.type) {
+        case neograph::graph::GraphEvent::Type::NODE_START:
+        case neograph::graph::GraphEvent::Type::NODE_END:
+          break;
+        case neograph::graph::GraphEvent::Type::LLM_TOKEN: {
+          std::string token;
+          std::string kind = "content";
+          if (event.data.is_string()) {
+            token = event.data.get<std::string>();
+          } else if (event.data.is_object()) {
+            neograph::ChatStreamChunk chunk;
+            neograph::from_json(event.data, chunk);
+            token = std::move(chunk.data);
+            if (chunk.type == neograph::ChatStreamChunk::TYPE_THINKING) {
+              kind = "thinking";
+            }
+          }
+          io->onToken(token, kind);
+        } break;
+        case neograph::graph::GraphEvent::Type::CHANNEL_WRITE:
+        case neograph::graph::GraphEvent::Type::INTERRUPT:
+        case neograph::graph::GraphEvent::Type::ERROR:
+          break;
+        }
+      };
+  const auto tuiInterruptCallback =
+      [&io](const std::string &interruptNode, const std::string &interruptValue,
+            const std::string &interruptHandleName) -> asio::awaitable<void> {
+    io->onInterrupt(interruptNode, interruptValue, interruptHandleName);
+    co_return;
+  };
+
+  bool isFirstMsg = true;
+  const auto thread_id = "session";
+  auto messages = neograph::json::array();
+
+  StdioInterruptHandler tuiInterruptHandler{agent.agentContext};
+  StdioPermissionPrompter tuiPermissionPrompter{agent.agentContext};
+  agentxx::middleware::SubagentSupervisor subagentSupervisor{
+      agent.agentContext};
+  co_await tuiInterruptHandler.start();
+  co_await tuiPermissionPrompter.start();
+  co_await subagentSupervisor.start();
+
+  for (;;) {
+    auto inputOpt = co_await io->getInput();
+    if (!inputOpt.has_value()) {
+      break;
+    }
+    auto input = std::move(inputOpt.value());
+    if (!input.empty()) {
+      io->resetTokenState();
+      auto turnResult = co_await agent.runConversationTurnAsync(
+          thread_id, input, isFirstMsg, std::move(messages), io,
+          agentxx::middleware::EventBridge::make(
+              agent.agentContext->agentConfig->agentName, thread_id,
+              agent.agentContext, tuiEventCallback),
+          tuiInterruptCallback);
+      messages = std::move(turnResult.messages);
+      isFirstMsg = false;
+    }
+  }
+  io->stop();
+}
+
+void runTui(agentxx::agent::DeepAgent &agent) {
+  asio::co_spawn(
+      *agent.ioCtx,
+      [&]() -> asio::awaitable<void> {
+        co_await agent.init();
+        co_return co_await runTuiAsync(agent);
+      },
+      asio::detached);
+  agent.ioCtx->run();
+}
+#endif
+
 int main(int argn, char **argv) {
 #if XX_IS_WIN_D
   SetConsoleOutputCP(CP_UTF8);
@@ -369,13 +456,15 @@ int main(int argn, char **argv) {
   // 剩余第一个非选项参数为 mode
   std::string configPath = "agentxx-config.yaml";
   std::string overrideEnvPath;
-  std::string mode = "cli";
+  std::string mode = "tui";
   for (int i = 1; i < argn; ++i) {
     std::string arg(argv[i]);
     if (arg == "--config" && i + 1 < argn) {
       configPath = argv[++i];
     } else if (arg == "--env" && i + 1 < argn) {
       overrideEnvPath = argv[++i];
+    } else if (mode == "tui") {
+      mode = arg;
     } else if (mode == "cli") {
       mode = arg;
     }
@@ -486,6 +575,17 @@ int main(int argn, char **argv) {
   config->logPrintMessagesBeforeLLM = true;
   config->logPrintSummarizationResultTokenCount = true;
   auto agent = agentxx::agent::DeepAgent{config};
+
+  if (mode == "tui") {
+#if AGENTXX_ENABLE_CLIENT_TUI
+    runTui(agent);
+#else
+    XX_LOGE(
+        R"(TUI is not support! Please set `AGENTXX_ENABLE_CLIENT_TUI=1` and recomplie agentxx_cli)");
+#endif
+    return 0;
+  }
+
   runCli(agent);
   return 0;
 }

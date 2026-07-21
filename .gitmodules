@@ -51,3 +51,4 @@
 [submodule "agent/third_party/ftxui"]
 	path = agent/third_party/ftxui
 	url = https://github.com/ArthurSonzogni/FTXUI
+	branch = v7.0.1
