@@ -212,10 +212,10 @@ public:
       std::ostringstream subagentNames;
       bool isFirst = true;
       for (const auto &item : subAgentList) {
-        subagentNames << item.first;
         if (false == isFirst) {
           subagentNames << ",";
         }
+        subagentNames << item.first;
         isFirst = false;
       }
       co_return fmt::format(

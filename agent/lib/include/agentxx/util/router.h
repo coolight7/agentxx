@@ -162,6 +162,7 @@ protected:
     RouterTreePort *treeptr = nullptr;
   };
 
+  // TODO: LRU cache
   inline static thread_local std::unordered_map<std::string,
                                                 _RouterCacheValue_s>
       cacheMap{};
@@ -264,6 +265,7 @@ public:
       treep->setHandle(nullptr, in_index);
       return handles;
     }
+    return nullptr;
   }
 
   /// 清理缓存
