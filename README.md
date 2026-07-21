@@ -94,15 +94,15 @@
         - 自动拦截 tool/subagent 返回值，太长时存储原始内容到 `share_store`, 并留下摘要和 id
     - 消息分支，支持修改历史消息/模型重新生成消息
     - 多会话和历史会话
-- ⬜**事件流**
-    - ✅支持注册事件功能/订阅事件通知，事件触发时通知订阅者
+- ✅**事件流**
+    - 支持注册事件功能/订阅事件通知，事件触发时通知订阅者
     - 预设功能:
-        - ✅中断处理
-        - ✅定时通知
-        - ✅定长延时循环通知
-    - llm启动任务后，异步得到结果
-    - 使任务结果支持分块流式输出
-    - 接入外部程序的消息通知、数据添加
+        - 中断处理
+        - 定时通知
+        - 定长延时循环通知
+    - ⬜llm启动任务后，异步得到结果
+    - ⬜使任务结果支持分块流式输出
+    - ⬜接入外部程序的消息通知、数据添加
 - ✅**中断恢复**
     - 依托`事件流`实现，支持在 Node 或 toolcall 发起中断，等待用户响应，然后恢复执行，会重复执行 node 中断前的代码，但不会重复执行成功完成的 toolcall
     - 支持多个 toolcall 同时发起中断，允许一轮中反复 `中断-用户响应`
@@ -143,22 +143,29 @@
     - 自定义加载记忆消息
 - ✅**Skill支持** `SkillMiddleware`
     - 文件夹扫描/metadata读取收集 + `filesystem`文件内容读取 + `execute_command`执行
-- ⬜**MCP支持** (Neograph已实现，但暂时使用有问题)
-    - ✅MCP client
+- ✅**MCP支持**
+    - MCP client
     - Mcp Server
-        - CodeGraph
-        - Websearch
+        - ⬜CodeGraph
+        - ⬜Websearch
 - ⬜**Self-upgrade**
     - 自动循环调整系统提示词、工具提示词等，评估效果
     - 自动测试
     - 空闲时自动优化 skill、prompt
-- ⬜**LLM Api**
-    - ✅Openai API
+- ✅**LLM Api**
+    - Openai API
     - Anthropic API
+    - 自定义 (BaseUrl/ApiKey/ModelName/ExtraConfig)
 - ✅**自定义配置**
-    - LLM Api (BaseUrl/ApiKey/ModelName/ExtraConfig)
     - 支持启动时从 agentxx-config.yaml、.env 加载配置文件
     - 分离 System/Tool Prompt 到独立配置，以便支持自定义和`Self-upgrade`自动调整适配
+- ⬜队列输入
+
+### 提示词训练
+- 通过循环多轮 生成->评分->调整, 对常用的每一个模型针对性训练，各自得到较优的提示词，在运行时根据 ModelName 动态加载使用的提示词
+- ✅实现循环训练提示词流程
+- ⬜训练一套通用提示词+适配一些常见模型
+- ⬜根据 ModelName 动态加载，没有匹配的则取用默认提示词
 
 ### 扩展
 - ✅支持读取windows系统的 CPU占用、内存占用、GPU占用、显存占用
@@ -181,11 +188,6 @@
 - FunASR 语音识别
 - Qwen3-TTS 文本转语音
 
-### Server
-- Agent2App Api Server
-- ACP Server
-- A2A Server
-
 ### 功能
 - ✅**操作键鼠**
     - Tool/ui_control
@@ -200,6 +202,15 @@
 - ⬜**匹配歌词**
 - ⬜**操作live2d/3d模型动作**
 - ⬜部分扩展功能独立编译为 exe，以便支持 WSL 连接扩展获取数据
+
+### cli
+- ⬜TUI
+- ⬜GUI
+
+### Server
+- Agent2App Api Server
+- ACP Server
+- A2A Server
 
 ### 测试
 - Agent 整体稳定性测试
