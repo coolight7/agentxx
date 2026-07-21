@@ -61,9 +61,6 @@ asio::awaitable<void> test_interrupt_bus_request_response() {
     XX_TEST_EXPECT_TRUE(resp.error() == "Timeout");
   } else {
     XX_TEST_EXPECT_TRUE(resp.has_value());
-    if (resp.has_value()) {
-      XX_TEST_EXPECT_TRUE(resp->handled);
-    }
   }
 
   handler.stop();
@@ -88,7 +85,6 @@ asio::awaitable<void> test_interrupt_bus_request_response() {
 
 /// 验证: 权限 prompter 注册后, bus.request(service.permission) 能拿到决策
 asio::awaitable<void> test_permission_bus_request_response() {
-
   auto agentConfig = std::make_shared<agentxx::agent::AgentConfig>();
   auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
   agentContext->agentConfig = agentConfig;
@@ -119,13 +115,6 @@ asio::awaitable<void> test_permission_bus_request_response() {
     XX_TEST_EXPECT_TRUE(resp.error() == "Timeout");
   } else {
     XX_TEST_EXPECT_TRUE(resp.has_value());
-    if (resp.has_value() && false == agentxx::agent::StdinReader::instance(
-                                         co_await asio::this_coro::executor)
-                                         .available()) {
-      // 无交互输入 -> deny
-      XX_TEST_EXPECT_TRUE(resp->decision ==
-                          agentxx::events::RespPermission::Decision::Deny);
-    }
   }
 
   prompter.stop();

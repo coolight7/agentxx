@@ -1,5 +1,6 @@
 #pragma once
 
+#include "agentxx/agent/agent_io.h"
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/context.h"
 #include "agentxx/middlewares/event_stream.h"
@@ -560,10 +561,11 @@ public:
 
   asio::awaitable<ConversationTurnResult> runConversationTurnAsync(
       const std::string &threadId, const std::string &userInput,
-      bool isFirstMsg, neograph::json messages,
+      bool isFirstMsg, neograph::json messages, std::shared_ptr<AgentIOBase> io,
       std::function<void(const neograph::graph::GraphEvent &)> eventCallback,
       InterruptCallback interruptCallback = nullptr) {
     ConversationTurnResult turnResult;
+    agentContext->io = std::move(io);
 
     bool resumeInterrupt = false;
     if (false ==
@@ -801,108 +803,6 @@ public:
     }
 
     co_return turnResult;
-  }
-
-  asio::awaitable<void> runCliAsync() {
-    bool isThinking = false;
-    const auto cliEventCallback =
-        [&](const neograph::graph::GraphEvent &event) {
-          switch (event.type) {
-          case neograph::graph::GraphEvent::Type::NODE_START:
-          case neograph::graph::GraphEvent::Type::NODE_END:
-            break;
-          case neograph::graph::GraphEvent::Type::LLM_TOKEN: {
-            std::string token;
-            if (event.data.is_string()) {
-              token = event.data.get<std::string>();
-            } else if (event.data.is_object()) {
-              neograph::ChatStreamChunk chunk;
-              neograph::from_json(event.data, chunk);
-              switch (chunk.type) {
-              case neograph::ChatStreamChunk::TYPE_CONTENT: {
-                if (isThinking) {
-                  std::cout << std::endl << "[Content] ";
-                }
-                isThinking = false;
-              } break;
-              case neograph::ChatStreamChunk::TYPE_THINKING: {
-                if (false == isThinking) {
-                  std::cout << std::endl << "[Thinking] ";
-                }
-                isThinking = true;
-              } break;
-              }
-              token = std::move(chunk.data);
-            }
-            std::cout << token << std::flush;
-          } break;
-          case neograph::graph::GraphEvent::Type::CHANNEL_WRITE:
-          case neograph::graph::GraphEvent::Type::INTERRUPT:
-          case neograph::graph::GraphEvent::Type::ERROR:
-            break;
-          }
-        };
-    const auto cliInterruptCallback =
-        [](const std::string &interruptNode, const std::string &interruptValue,
-           const std::string &interruptHandleName) -> asio::awaitable<void> {
-      XX_OUT(R"_(
-┏━━━━━━ Interrupted ━━━━━━┓
-┣━ Interrupted at: {}
-┣━ Value: {}
-{}
-┗━━━━━━ Interrupted ━━━━━━┛
-)_",
-             interruptNode, interruptValue,
-             (false == interruptHandleName.empty())
-                 ? fmt::format("┣━ Interrupt Handle: {}", interruptHandleName)
-                 : "┣━ Unknown InterruptHandleArg");
-      co_return;
-    };
-
-    bool isFirstMsg = true;
-    const auto thread_id = "session";
-    auto messages = neograph::json::array();
-
-    // 注册 CLI 的中断/权限/subagent HIL 处理到总线
-    // - GUI/ACP 前端应注册各自的 handler 替换此处
-    agentxx::middleware::CliInterruptHandler cliInterruptHandler{agentContext};
-    agentxx::middleware::CliPermissionPrompter cliPermissionPrompter{
-        agentContext};
-    agentxx::middleware::SubagentSupervisor subagentSupervisor{agentContext};
-    co_await cliInterruptHandler.start();
-    co_await cliPermissionPrompter.start();
-    co_await subagentSupervisor.start();
-
-    std::cout << ">>> " << std::flush;
-
-    for (std::string line; std::getline(std::cin, line);) {
-      if (false == line.empty()) {
-        isThinking = false;
-        std::cout << agentContext->agentConfig->agentNameView << ": "
-                  << std::flush;
-
-        auto turnResult = co_await runConversationTurnAsync(
-            thread_id, line, isFirstMsg, std::move(messages),
-            agentxx::middleware::EventBridge::make(
-                agentContext->agentConfig->agentName, thread_id, agentContext,
-                cliEventCallback),
-            cliInterruptCallback);
-        messages = std::move(turnResult.messages);
-        isFirstMsg = false;
-      }
-      std::cout << "\n\n>>> ";
-    }
-  }
-
-  void runCli() {
-    asio::co_spawn(
-        *ioCtx,
-        [this]() -> asio::awaitable<void> {
-          co_await init();
-          co_return co_await runCliAsync();
-        },
-        asio::detached);
-    ioCtx->run();
   }
 
   ~DeepAgent() { engine = nullptr; }

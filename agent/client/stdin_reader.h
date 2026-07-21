@@ -1,15 +1,14 @@
 #pragma once
 
+#include "asio/as_tuple.hpp"
 #include "asio/experimental/concurrent_channel.hpp"
 #include "asio/use_awaitable.hpp"
+#include "neograph/api.h"
 #include <iostream>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
-
-namespace agentxx {
-namespace agent {
 
 /// 异步 stdin 读取器
 /// - 在独立线程上阻塞读取 std::cin, 通过 channel 提供行给 io_context 协程
@@ -48,14 +47,7 @@ private:
   }
 
 public:
-  static StdinReader &instance(asio::any_io_executor ex) {
-    static std::shared_ptr<StdinReader> inst;
-    static std::once_flag flag;
-    std::call_once(flag, [&]() {
-      inst = std::shared_ptr<StdinReader>(new StdinReader(ex));
-    });
-    return *inst;
-  }
+  static StdinReader &instance(asio::any_io_executor ex);
 
   /// 异步读取一行; EOF 时返回 nullopt
   asio::awaitable<std::optional<std::string>> readLine() {
@@ -68,7 +60,7 @@ public:
     if (ec) {
       co_return std::nullopt;
     }
-    co_return std::optional<std::string>{std::move(line)};
+    co_return std::optional<std::string>(std::move(line));
   }
 
   bool available() const { return std::cin.good(); }
@@ -81,6 +73,3 @@ public:
     }
   }
 };
-
-} // namespace agent
-} // namespace agentxx

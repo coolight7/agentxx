@@ -332,7 +332,7 @@ benchDeepAgentRunConversationTurnAsync(const DeepAgentBenchConfig &cfg) {
           neograph::json messages = neograph::json::array();
           auto turnResult = co_await agent.runConversationTurnAsync(
               "bench_session_" + std::to_string(i), cfg.userInput, true,
-              std::move(messages),
+              std::move(messages), nullptr,
               [](const neograph::graph::GraphEvent &event) {
                 switch (event.type) {
                 case neograph::graph::GraphEvent::Type::LLM_TOKEN:
@@ -590,7 +590,7 @@ inline void benchDeepAgentMultiTurn(const DeepAgentBenchConfig &cfg) {
           for (size_t turn = 0; turn < turnsPerIteration; ++turn) {
             auto turnResult = co_await agent.runConversationTurnAsync(
                 "bench_multi_" + std::to_string(i), cfg.userInput, true,
-                std::move(messages),
+                std::move(messages), nullptr,
                 [](const neograph::graph::GraphEvent &) {});
             if (turnResult.hasError) {
               std::cerr << "    [ERROR] Turn " << turn << " of iteration " << i
@@ -673,7 +673,8 @@ inline void benchDeepAgentLargeHistory(const DeepAgentBenchConfig &cfg) {
           auto start = std::chrono::high_resolution_clock::now();
           auto turnResult = co_await agent.runConversationTurnAsync(
               "bench_history_" + std::to_string(i), cfg.userInput, true,
-              std::move(messages), [](const neograph::graph::GraphEvent &) {});
+              std::move(messages), nullptr,
+              [](const neograph::graph::GraphEvent &) {});
           auto end = std::chrono::high_resolution_clock::now();
 
           double ns =
