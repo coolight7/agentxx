@@ -282,6 +282,12 @@ Output ONLY the summary text, no meta-commentary.
     const auto tokenUsage =
         std::max(static_cast<size_t>(apiTokenUsage), countTokenUsage);
 
+    // 发布上下文统计, 供 UI 显示上下文占用百分比
+    if (agentCtxPtr->contextStats) {
+      agentCtxPtr->contextStats->contextTokens.store(tokenUsage);
+      agentCtxPtr->contextStats->maxContextTokens.store(modelSupportMaxToken);
+    }
+
     const auto &thread_id = in.ctx.thread_id;
     neograph::json newMsgsJson;
     bool doSummary = false;
