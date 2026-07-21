@@ -58,6 +58,9 @@ public:
   asio::awaitable<neograph::ChatCompletion>
   invoke(const neograph::CompletionParams &params,
          neograph::StreamCallback on_chunk = nullptr) override {
+    if (!on_chunk) {
+      co_return co_await invoke_format_data(params, nullptr);
+    }
     co_return co_await invoke_format_data(
         params, [on_chunk](const neograph::ChatStreamChunk &chunk) {
           switch (chunk.type) {

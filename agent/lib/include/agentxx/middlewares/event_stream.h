@@ -468,16 +468,16 @@ public:
       using T = neograph::graph::GraphEvent::Type;
       switch (event.type) {
       case T::LLM_TOKEN: {
-        // 支持结构化数据 {"kind":"content"|"thinking","token":"..."}
-        // 和旧的纯字符串格式
         std::string token;
         std::string kind = "content";
         if (event.data.is_string()) {
           token = event.data.get<std::string>();
-        } else if (event.data.is_object() && event.data.contains("token")) {
-          token = event.data["token"].get<std::string>();
-          if (event.data.contains("kind")) {
-            kind = event.data["kind"].get<std::string>();
+        } else if (event.data.is_object()) {
+          neograph::ChatStreamChunk chunk;
+          neograph::from_json(event.data, chunk);
+          token = std::move(chunk.data);
+          if (chunk.type == neograph::ChatStreamChunk::TYPE_THINKING) {
+            kind = "thinking";
           }
         } else {
           token = event.data.dump();

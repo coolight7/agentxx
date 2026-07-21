@@ -889,9 +889,8 @@ asio::awaitable<void> test_streaming_thinking(MockAnthropicServer &mock,
     XX_TEST_EXPECT_EQ(result.message.content, "The answer is 42.");
     XX_TEST_EXPECT_EQ(result.message.reasoning_content,
                       "Let me think carefully...");
-    // Without thinking_callback, thinking goes to on_chunk too
-    XX_TEST_EXPECT_EQ(accumulated,
-                      "Let me think carefully...The answer is 42.");
+    // StreamCallback only receives content tokens; thinking is in reasoning_content
+    XX_TEST_EXPECT_EQ(accumulated, "The answer is 42.");
   } catch (const std::exception &e) {
     XX_TEST_FAILED++;
     TEST_FAIL << "streaming thinking failed: " << e.what() << std::endl;

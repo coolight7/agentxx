@@ -943,18 +943,18 @@ public:
         [&oss, callback](const neograph::graph::GraphEvent &event) {
           switch (event.type) {
           case neograph::graph::GraphEvent::Type::LLM_TOKEN: {
-            // 支持结构化数据 {"kind":"content"|"thinking","token":"..."}
             std::string token;
             std::string kind = "content";
             if (event.data.is_string()) {
               token = event.data.get<std::string>();
-            } else if (event.data.is_object() && event.data.contains("token")) {
-              token = event.data["token"].get<std::string>();
-              if (event.data.contains("kind")) {
-                kind = event.data["kind"].get<std::string>();
+            } else if (event.data.is_object()) {
+              neograph::ChatStreamChunk chunk;
+              neograph::from_json(event.data, chunk);
+              token = std::move(chunk.data);
+              if (chunk.type == neograph::ChatStreamChunk::TYPE_THINKING) {
+                kind = "thinking";
               }
             }
-            // 仅累积 content token 到最终结果
             if (kind == "content") {
               oss << token;
             }
@@ -1026,15 +1026,16 @@ public:
     std::ostringstream oss;
     auto callback = [&oss](const neograph::graph::GraphEvent &event) {
       if (event.type == neograph::graph::GraphEvent::Type::LLM_TOKEN) {
-        // 支持结构化数据 {"kind":"content"|"thinking","token":"..."}
         std::string token;
         std::string kind = "content";
         if (event.data.is_string()) {
           token = event.data.get<std::string>();
-        } else if (event.data.is_object() && event.data.contains("token")) {
-          token = event.data["token"].get<std::string>();
-          if (event.data.contains("kind")) {
-            kind = event.data["kind"].get<std::string>();
+        } else if (event.data.is_object()) {
+          neograph::ChatStreamChunk chunk;
+          neograph::from_json(event.data, chunk);
+          token = std::move(chunk.data);
+          if (chunk.type == neograph::ChatStreamChunk::TYPE_THINKING) {
+            kind = "thinking";
           }
         }
         if (kind == "content") {

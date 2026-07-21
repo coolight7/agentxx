@@ -968,8 +968,8 @@ asio::awaitable<void> test_streaming_reasoning_content(MockOpenAIServer &mock,
     XX_TEST_EXPECT_EQ(result.message.content, "The answer is 42");
     XX_TEST_EXPECT_EQ(result.message.reasoning_content,
                       "Let me think step by step");
-    // Callback should include both reasoning and content tokens
-    XX_TEST_EXPECT_EQ(accumulated, "Let me think step by stepThe answer is 42");
+    // StreamCallback only receives content tokens; thinking is in reasoning_content
+    XX_TEST_EXPECT_EQ(accumulated, "The answer is 42");
     XX_TEST_EXPECT_TRUE(result.usage.total_tokens > 0);
   } catch (const std::exception &e) {
     XX_TEST_FAILED++;
@@ -1014,8 +1014,8 @@ test_streaming_thinking_field_compat(MockOpenAIServer &mock, uint16_t port) {
     XX_TEST_EXPECT_EQ(result.message.content, "Final answer");
     XX_TEST_EXPECT_EQ(result.message.reasoning_content,
                       "deep thought process...");
-    // Callback should include thinking tokens too
-    XX_TEST_EXPECT_EQ(accumulated, "deep thought process...Final answer");
+    // StreamCallback only receives content tokens; thinking is in reasoning_content
+    XX_TEST_EXPECT_EQ(accumulated, "Final answer");
   } catch (const std::exception &e) {
     XX_TEST_FAILED++;
     TEST_FAIL << "streaming thinking compat test failed: " << e.what()
