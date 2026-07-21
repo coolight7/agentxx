@@ -237,7 +237,8 @@ public:
         .api_key = modelCfg.apiKey,
         .base_url = modelCfg.baseUrl,
         .default_model = modelCfg.modelName,
-        .timeout_seconds = 60,
+        .connect_timeout_seconds = 16,
+        .read_timeout_seconds = 24,
     };
     provider = agentxx::server::OpenAIProvider::create(cfg);
   }
