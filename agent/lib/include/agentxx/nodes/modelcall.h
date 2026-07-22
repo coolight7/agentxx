@@ -53,14 +53,19 @@ public:
     }
   }
 
-  /// 解析当前使用的 Provider
-  /// - 启用动态切换时优先使用 agentContext->modelRegistry 的当前模型
+  /// 解析指定会话使用的 Provider
+  /// - 启用动态切换时按会话 (thread_id) 选择的模型经 modelRegistry 解析
   /// - 否则回退到节点构造时的 provider_
-  std::shared_ptr<neograph::Provider> resolveCurrentProvider() {
+  std::shared_ptr<neograph::Provider>
+  resolveCurrentProvider(const std::string &threadId) {
     if (useDynamicModel_) {
       auto ctxPtr = agentContext.lock();
       if (ctxPtr && ctxPtr->modelRegistry) {
-        auto provider = ctxPtr->modelRegistry->getCurrentProvider();
+        std::string selected;
+        if (auto session = ctxPtr->sessions->get(threadId)) {
+          selected = session->getModelName();
+        }
+        auto provider = ctxPtr->modelRegistry->getProvider(selected);
         if (provider) {
           return provider;
         }
@@ -69,13 +74,17 @@ public:
     return provider_;
   }
 
-  /// 解析当前使用的模型名 (发送给 LLM api 的 model 字段)
-  std::string resolveCurrentModelName() const {
+  /// 解析指定会话使用的模型名 (发送给 LLM api 的 model 字段)
+  std::string resolveCurrentModelName(const std::string &threadId) const {
     if (useDynamicModel_) {
       auto ctxPtr = agentContext.lock();
       if (ctxPtr && ctxPtr->modelRegistry) {
+        std::string selected;
+        if (auto session = ctxPtr->sessions->get(threadId)) {
+          selected = session->getModelName();
+        }
         auto modelName =
-            ctxPtr->modelRegistry->getCurrentModelConfig().modelName;
+            ctxPtr->modelRegistry->getModelConfig(selected).modelName;
         if (false == modelName.empty()) {
           return modelName;
         }
@@ -119,8 +128,8 @@ public:
       };
     }
 
-    auto completion =
-        co_await resolveCurrentProvider()->invoke_format_data(params, onToken);
+    auto completion = co_await resolveCurrentProvider(input.ctx.thread_id)
+                           ->invoke_format_data(params, onToken);
 
     // 记录 token使用量
     ctxPtr->setGraphDataItemValue<int>(
@@ -131,7 +140,8 @@ public:
   }
 
   neograph::CompletionParams
-  build_params(const neograph::graph::GraphState &state) const {
+  build_params(const neograph::graph::GraphState &state,
+               const std::string &threadId) const {
     auto messages = state.get_messages();
 
     // Ensure exactly one system message, carrying `instructions_` (issue #93).
@@ -166,7 +176,7 @@ public:
     }
 
     neograph::CompletionParams params;
-    params.model = resolveCurrentModelName();
+    params.model = resolveCurrentModelName(threadId);
     params.messages = std::move(messages);
     params.tools = std::move(tool_defs);
     return params;
@@ -174,7 +184,7 @@ public:
 
   asio::awaitable<neograph::graph::NodeOutput>
   callLLM(neograph::graph::NodeInput &in) {
-    auto params = build_params(in.state);
+    auto params = build_params(in.state, in.ctx.thread_id);
     // v0.4 PR 9a: explicit cancel propagation — no thread-local
     // smuggling. The provider binds this token's slot to its inner
     // ConnPool::async_post co_await, so a caller's cancel() aborts

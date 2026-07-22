@@ -69,7 +69,8 @@ private:
   asio::awaitable<agentxx::events::RespPermission>
   handle(const agentxx::events::ReqPermission &req) {
     auto ctxPtr = agentContext.lock();
-    auto io = ctxPtr ? ctxPtr->io : nullptr;
+    auto session = ctxPtr ? ctxPtr->sessions->get(req.threadId) : nullptr;
+    auto io = session ? session->io : nullptr;
     if (!io) {
       co_return agentxx::events::RespPermission{
           .decision = agentxx::events::RespPermission::Decision::Deny,

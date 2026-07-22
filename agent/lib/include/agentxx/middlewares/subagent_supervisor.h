@@ -61,7 +61,7 @@ public:
         rr.serve([this](const events::ReqSubagentStart &req,
                         size_t) -> asio::awaitable<events::RespSubagentResult> {
           co_return co_await runSubagent(req.subagentName, req.systemPrompt,
-                                         req.message);
+                                         req.message, req.parentThreadId);
         });
 
     // 批量 subagent 处理服务 ===
@@ -116,7 +116,8 @@ private:
   /// 运行单个 subagent (单/批量共用)
   asio::awaitable<events::RespSubagentResult>
   runSubagent(const std::string &subagentName,
-              const std::string &systemPromptIn, const std::string &message) {
+              const std::string &systemPromptIn, const std::string &message,
+              const std::string &parentThreadId = "") {
     auto ctxPtr = agentContext.lock();
     if (!ctxPtr || !ctxPtr->subagentManagerToolPtr) {
       co_return events::RespSubagentResult{
@@ -168,6 +169,14 @@ private:
           }},
           .resume_if_exists = false,
       };
+
+      // subagent 会话继承父会话的 IO (供权限询问/中断交互使用)
+      if (false == parentThreadId.empty()) {
+        auto parentSession = ctxPtr->sessions->get(parentThreadId);
+        if (parentSession) {
+          ctxPtr->getSession(cfg.thread_id)->io = parentSession->io;
+        }
+      }
 
       XX_LOGD("    ## Subagent dispatched - {}", subagent->name);
 
@@ -258,9 +267,10 @@ private:
       const auto &task = req.tasks[i];
       asio::co_spawn(
           ex,
-          [this, task, &results, i, doneChannel]() -> asio::awaitable<void> {
+          [this, task, &results, i, doneChannel,
+           parentThreadId = req.parentThreadId]() -> asio::awaitable<void> {
             auto r = co_await runSubagent(task.subagentName, task.systemPrompt,
-                                          task.message);
+                                          task.message, parentThreadId);
             results[i] = ItemResult{
                 .resultId = task.resultId,
                 .content = r.content,

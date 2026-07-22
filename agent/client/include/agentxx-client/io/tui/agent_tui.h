@@ -123,6 +123,8 @@ private:
 
   std::shared_ptr<agentxx::agent::AgentContext> agentContext_;
   TUITheme theme_;
+  /// 本 TUI 绑定的会话 thread_id (按 thread_id 取会话状态)
+  std::string threadId_;
 
   ftxui::ScreenInteractive *screen_ = nullptr;
   std::thread uiThread_;
@@ -163,9 +165,15 @@ private:
   /// 处理侧边栏 tab 的鼠标点击; 返回是否消费了该事件
   bool handleSidebarMouse(const ftxui::Mouse &mouse);
 
+  /// 获取本 TUI 绑定的会话 (按 threadId_)
+  std::shared_ptr<agentxx::agent::Session> currentSession();
+  /// 解析本会话当前实际使用的模型显示名称
+  std::string currentModelName();
+
 public:
   explicit AgentTUI(asio::any_io_executor ex,
                     std::shared_ptr<agentxx::agent::AgentContext> agentContext,
+                    std::string threadId = "session",
                     TUITheme theme = TUITheme::darkTheme());
   ~AgentTUI() override;
 

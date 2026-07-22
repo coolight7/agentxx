@@ -376,8 +376,9 @@ void runCli(agentxx::agent::DeepAgent &agent) {
 
 #ifdef AGENTXX_ENABLE_CLIENT_TUI
 asio::awaitable<void> runTuiAsync(agentxx::agent::DeepAgent &agent) {
+  const auto thread_id = std::string{"session"};
   auto io = std::make_shared<AgentTUI>(co_await asio::this_coro::executor,
-                                       agent.agentContext);
+                                       agent.agentContext, thread_id);
   io->start();
 
   const auto tuiEventCallback =
@@ -415,7 +416,6 @@ asio::awaitable<void> runTuiAsync(agentxx::agent::DeepAgent &agent) {
   };
 
   bool isFirstMsg = true;
-  const auto thread_id = "session";
   auto messages = neograph::json::array();
 
   StdioInterruptHandler tuiInterruptHandler{agent.agentContext};
