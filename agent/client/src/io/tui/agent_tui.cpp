@@ -14,7 +14,8 @@ std::string oneLinePreview(const std::string &s, size_t max = 60) {
   const auto nl = s.find('\n');
   std::string line = (nl == std::string::npos) ? s : s.substr(0, nl);
   const auto idx = agentxx::util::findIndexByUtf8Length(line, max);
-  if (idx < line.size()) {
+  // findIndexByUtf8Length 在字符数不足 targetLen 时返回 0
+  if (idx > 0 && idx < line.size()) {
     line.resize(idx);
     line += "...";
   }
