@@ -76,6 +76,9 @@ void AgentTUI::start() {
           // 先冲刷上一轮未提交的流式 token, 保证 user 消息始终插入在末尾
           if (!currentToken_.empty()) {
             messages_.push_back({currentTokenRole_, currentToken_});
+            if (currentTokenRole_ == Message::Role::Thinking) {
+              messages_.back().collapsed = true;
+            }
             currentToken_.clear();
           }
           messages_.push_back({Message::Role::User, text});
@@ -213,7 +216,7 @@ void AgentTUI::start() {
           postRedraw();
           return true;
         }
-        if (handleToolMouse(mouse)) {
+        if (handleCollapsibleMouse(mouse)) {
           postRedraw();
           return true;
         }
@@ -268,18 +271,19 @@ ftxui::Element AgentTUI::renderMessages() {
                               : std::clamp(scrollAnchorIndex_, 0, count - 1);
   }
 
-  // 收集 Tool 消息索引并重置其点击区域 (渲染时经 reflect 填充), 供鼠标展开/折叠
-  toolMsgIndices_.clear();
+  // 收集可折叠消息 (Thinking/Tool) 索引并重置其点击区域
+  collapsibleMsgIndices_.clear();
   for (size_t i = 0; i < messages_.size(); ++i) {
-    if (messages_[i].role == Message::Role::Tool) {
-      toolMsgIndices_.push_back(i);
+    if (messages_[i].role == Message::Role::Thinking ||
+        messages_[i].role == Message::Role::Tool) {
+      collapsibleMsgIndices_.push_back(i);
     }
   }
-  toolBoxes_.assign(toolMsgIndices_.size(), ftxui::Box{});
+  collapsibleBoxes_.assign(collapsibleMsgIndices_.size(), ftxui::Box{});
 
   Elements elements;
   int idx = 0;
-  int toolOrdinal = 0;
+  int collapsibleOrdinal = 0;
   auto pushBlock = [&](Element block, bool spacer) {
     if (idx == focusIdx) {
       block = std::move(block) | focus;
@@ -303,18 +307,32 @@ ftxui::Element AgentTUI::renderMessages() {
     case Message::Role::Assistant:
       pushBlock(paragraph(msg.text) | color(theme_.assistantColor), true);
       break;
-    case Message::Role::Thinking:
-      pushBlock(hbox({
-                    text("[Thinking] ") | color(theme_.thinkingColor) | dim,
-                    paragraph(msg.text) | color(theme_.thinkingColor) | dim,
-                }),
-                true);
+    case Message::Role::Thinking: {
+      const bool expanded = !msg.collapsed;
+      Elements lines;
+      Elements header;
+      header.push_back(text(expanded ? "\xe2\x96\xbe " : "\xe2\x96\xb8 ") |
+                       color(theme_.hintColor));
+      header.push_back(text("[Thinking] ") | color(theme_.thinkingColor) | dim);
+      if (!expanded) {
+        header.push_back(text(oneLinePreview(msg.text)) |
+                         color(theme_.thinkingColor) | dim);
+      }
+      lines.push_back(hbox(std::move(header)));
+      if (expanded) {
+        lines.push_back(paragraph(msg.text) | color(theme_.thinkingColor) | dim);
+      }
+      Element block = vbox(std::move(lines)) |
+                      reflect(collapsibleBoxes_[collapsibleOrdinal]);
+      ++collapsibleOrdinal;
+      pushBlock(std::move(block), true);
       break;
+    }
     case Message::Role::System:
       pushBlock(paragraph(msg.text) | color(theme_.systemColor), true);
       break;
     case Message::Role::Tool: {
-      const bool expanded = msg.toolExpanded;
+      const bool expanded = !msg.collapsed;
       Elements lines;
       // 头部行: 折叠指示符 + [Tool] + 工具名 (+ 折叠态的单行预览)
       Elements header;
@@ -355,8 +373,9 @@ ftxui::Element AgentTUI::renderMessages() {
         }
       }
 
-      Element block = vbox(std::move(lines)) | reflect(toolBoxes_[toolOrdinal]);
-      ++toolOrdinal;
+      Element block =
+          vbox(std::move(lines)) | reflect(collapsibleBoxes_[collapsibleOrdinal]);
+      ++collapsibleOrdinal;
       pushBlock(std::move(block), true);
       break;
     }
@@ -596,18 +615,19 @@ bool AgentTUI::handleSidebarMouse(const ftxui::Mouse &mouse) {
   return false;
 }
 
-bool AgentTUI::handleToolMouse(const ftxui::Mouse &mouse) {
+bool AgentTUI::handleCollapsibleMouse(const ftxui::Mouse &mouse) {
   if (mouse.button != Mouse::Left || mouse.motion != Mouse::Released) {
     return false;
   }
-  for (size_t k = 0; k < toolBoxes_.size() && k < toolMsgIndices_.size(); ++k) {
-    if (false == toolBoxes_[k].Contain(mouse.x, mouse.y)) {
+  for (size_t k = 0; k < collapsibleBoxes_.size() &&
+                     k < collapsibleMsgIndices_.size();
+       ++k) {
+    if (false == collapsibleBoxes_[k].Contain(mouse.x, mouse.y)) {
       continue;
     }
-    const size_t mi = toolMsgIndices_[k];
-    if (mi < messages_.size() && messages_[mi].role == Message::Role::Tool) {
-      // 左键点击: 切换该 toolcall 块的展开/折叠
-      messages_[mi].toolExpanded = !messages_[mi].toolExpanded;
+    const size_t mi = collapsibleMsgIndices_[k];
+    if (mi < messages_.size()) {
+      messages_[mi].collapsed = !messages_[mi].collapsed;
       return true;
     }
   }
@@ -647,10 +667,13 @@ void AgentTUI::cancelCurrentRun() {
       token->cancel();
     }
   }
-  if (!currentToken_.empty()) {
-    messages_.push_back({currentTokenRole_, currentToken_});
-    currentToken_.clear();
-  }
+    if (!currentToken_.empty()) {
+      messages_.push_back({currentTokenRole_, currentToken_});
+      if (currentTokenRole_ == Message::Role::Thinking) {
+        messages_.back().collapsed = true;
+      }
+      currentToken_.clear();
+    }
   messages_.push_back({Message::Role::System, "[Cancelled by user]"});
   isStreaming_ = false;
 }
@@ -680,6 +703,9 @@ void AgentTUI::onToken(const std::string &token, const std::string &kind) {
                                      : Message::Role::Assistant;
     if (currentTokenRole_ != role && !currentToken_.empty()) {
       messages_.push_back({currentTokenRole_, currentToken_});
+      if (currentTokenRole_ == Message::Role::Thinking) {
+        messages_.back().collapsed = true;
+      }
       currentToken_.clear();
     }
     currentTokenRole_ = role;
@@ -745,6 +771,9 @@ void AgentTUI::onToolStart(const std::string &toolName,
     // 按时间顺序插入 (一轮内可能 thinking->toolcall->content 任意交替)
     if (!currentToken_.empty()) {
       messages_.push_back({currentTokenRole_, currentToken_});
+      if (currentTokenRole_ == Message::Role::Thinking) {
+        messages_.back().collapsed = true;
+      }
       currentToken_.clear();
     }
     Message m;
@@ -753,6 +782,7 @@ void AgentTUI::onToolStart(const std::string &toolName,
     m.toolCallId = toolCallId;
     m.text = arguments;
     m.toolFinished = false;
+    m.collapsed = false; // 执行中保持展开
     messages_.push_back(std::move(m));
   }
   postRedraw();
@@ -771,12 +801,12 @@ void AgentTUI::onToolEnd(const std::string &toolName,
         it->toolResult = result;
         it->toolFinished = true;
         it->toolHasError = hasError;
+        it->collapsed = true; // 完成自动折叠
         found = true;
         break;
       }
     }
     if (!found) {
-      // 未找到对应开始消息时直接追加一条已完成的消息
       Message m;
       m.role = Message::Role::Tool;
       m.toolName = toolName;
@@ -784,6 +814,7 @@ void AgentTUI::onToolEnd(const std::string &toolName,
       m.toolResult = result;
       m.toolFinished = true;
       m.toolHasError = hasError;
+      m.collapsed = true;
       messages_.push_back(std::move(m));
     }
   }
@@ -795,6 +826,9 @@ void AgentTUI::resetTokenState() {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!currentToken_.empty()) {
       messages_.push_back({currentTokenRole_, currentToken_});
+      if (currentTokenRole_ == Message::Role::Thinking) {
+        messages_.back().collapsed = true;
+      }
       currentToken_.clear();
     }
     isStreaming_ = false;

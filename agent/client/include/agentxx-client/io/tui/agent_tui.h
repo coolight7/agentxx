@@ -73,6 +73,10 @@ private:
   std::function<void()> onNewLog_;
 };
 
+/// TUI
+/// - [自动滚动] 靠近消息列表底部时，自动吸附到底部
+/// - [自动折叠] Thinking/Tool
+/// 的消息在末尾输出中时自动展开显示，输出完成后自动折叠
 class AgentTUI : public agentxx::agent::AgentIOBase,
                  public std::enable_shared_from_this<AgentTUI> {
 public:
@@ -92,7 +96,7 @@ private:
     std::string toolResult;
     bool toolFinished = false;
     bool toolHasError = false;
-    bool toolExpanded = false; // 折叠/展开 (默认折叠为一行)
+    bool collapsed = false; // 折叠/展开 (Thinking/Tool 默认折叠)
   };
 
   struct PermissionRequest {
@@ -133,10 +137,10 @@ private:
   /// 各 tab 标题的渲染区域, 用于鼠标点击检测 (渲染时经 reflect 填充)
   std::vector<ftxui::Box> tabBoxes_;
 
-  /// 各 Tool 消息块的渲染区域与对应 messages_ 索引 (渲染时经 reflect 填充),
-  /// 用于鼠标点击展开/折叠
-  std::vector<ftxui::Box> toolBoxes_;
-  std::vector<size_t> toolMsgIndices_;
+  /// 各可折叠消息块 (Thinking/Tool) 的渲染区域与对应 messages_ 索引,
+  /// 用于鼠标点击展开/折叠 (渲染时经 reflect 填充)
+  std::vector<ftxui::Box> collapsibleBoxes_;
+  std::vector<size_t> collapsibleMsgIndices_;
 
   std::shared_ptr<agentxx::agent::AgentContext> agentContext_;
   TUITheme theme_;
@@ -183,8 +187,9 @@ private:
   void toggleLogWindow();
   /// 处理侧边栏 tab 的鼠标点击; 返回是否消费了该事件
   bool handleSidebarMouse(const ftxui::Mouse &mouse);
-  /// 处理 Tool 消息块的鼠标点击 (展开/折叠); 返回是否消费了该事件
-  bool handleToolMouse(const ftxui::Mouse &mouse);
+  /// 处理可折叠消息块 (Thinking/Tool) 的鼠标点击 (展开/折叠);
+  /// 返回是否消费了该事件
+  bool handleCollapsibleMouse(const ftxui::Mouse &mouse);
 
   /// 获取本 TUI 绑定的会话 (按 threadId_)
   std::shared_ptr<agentxx::agent::Session> currentSession();
@@ -202,12 +207,11 @@ public:
   void stop();
 
   void onToken(const std::string &token, const std::string &kind) override;
-  void onDisplay(const std::string &level,
-                 const std::string &content) override;
+  void onDisplay(const std::string &level, const std::string &content) override;
   asio::awaitable<std::optional<std::string>> getInput() override;
-  asio::awaitable<bool>
-  promptPermission(const std::string &toolName, const std::string &category,
-                   const std::string &target) override;
+  asio::awaitable<bool> promptPermission(const std::string &toolName,
+                                         const std::string &category,
+                                         const std::string &target) override;
   void onInterrupt(const std::string &node, const std::string &value,
                    const std::string &handleName) override;
   void onToolStart(const std::string &toolName, const std::string &toolCallId,
