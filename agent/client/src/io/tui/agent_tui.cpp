@@ -1,5 +1,6 @@
 #include "agentxx-client/io/tui/agent_tui.h"
 #include "agentxx/agent/model_registry.h"
+#include "agentxx/util/string_util.h"
 #include "fmt/format.h"
 #include "ftxui/component/event.hpp"
 #include "neograph/graph/cancel.h"
@@ -8,12 +9,13 @@
 using namespace ftxui;
 
 namespace {
-/// 取首行并截断为单行预览 (仅用于折叠态显示, 不修改原始完整内容)
+/// 取首行并按 UTF-8 字符数截断为单行预览 (仅用于折叠态显示)
 std::string oneLinePreview(const std::string &s, size_t max = 60) {
   const auto nl = s.find('\n');
   std::string line = (nl == std::string::npos) ? s : s.substr(0, nl);
-  if (line.size() > max) {
-    line.resize(max);
+  const auto idx = agentxx::util::findIndexByUtf8Length(line, max);
+  if (idx < line.size()) {
+    line.resize(idx);
     line += "...";
   }
   return line;
