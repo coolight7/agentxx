@@ -3,6 +3,7 @@
 #include "agentxx/util/string_util.h"
 #include "fmt/format.h"
 #include "ftxui/component/event.hpp"
+#include "ftxui/screen/terminal.hpp"
 #include "neograph/graph/cancel.h"
 #include <algorithm>
 
@@ -52,12 +53,13 @@ void AgentTUI::start() {
     });
     agentxx::util::LogDispatcher::instance().addSink(logSink_);
   }
+
   uiThread_ = std::thread([this]() {
     auto screen = ScreenInteractive::Fullscreen();
     screen_ = &screen;
 
     auto input_option = InputOption();
-    input_option.multiline = false;
+    input_option.multiline = true;
     // 覆盖默认 transform: 默认会在聚焦时加 inverted (反转前景/背景), 会把
     // 输入框背景反成白色; 这里仅保留占位符弱化, 颜色改由外部 bgcolor/color 控制
     input_option.transform = [](InputState state) {
@@ -66,36 +68,13 @@ void AgentTUI::start() {
       }
       return state.element;
     };
-    input_option.on_enter = [&]() {
-      std::string text;
-      {
-        std::lock_guard<std::mutex> lock(mutex_);
-        text = inputText_;
-        inputText_.clear();
-      }
-      if (!text.empty()) {
-        {
-          std::lock_guard<std::mutex> lock(mutex_);
-          // 先冲刷上一轮未提交的流式 token, 保证 user 消息始终插入在末尾
-          if (!currentToken_.empty()) {
-            messages_.push_back({currentTokenRole_, currentToken_});
-            if (currentTokenRole_ == Message::Role::Thinking) {
-              messages_.back().collapsed = true;
-            }
-            currentToken_.clear();
-          }
-          messages_.push_back({Message::Role::User, text});
-          isStreaming_ = true;
-          stickToBottom_ = true;
-        }
-        inputChannel_->async_send(neograph_asio_error_code{}, std::move(text),
-                                  [](neograph_asio_error_code) {});
-      }
-      postRedraw();
-    };
+    // multiline 模式: Enter 插入换行 (不发送); 发送由事件处理器识别 Alt+Enter
+    // 完成. 不用 on_enter (其会在每次 Enter 含粘贴 \n 时触发).
+    input_option.on_enter = nullptr;
 
-    auto input =
-        Input(&inputText_, "Type a message... (Enter to send)", input_option);
+    auto input = Input(&inputText_,
+                       "Type a message... (Enter=newline, Alt+Enter=send)",
+                       input_option);
 
     auto layout = Renderer(input, [&]() -> Element {
       std::lock_guard<std::mutex> lock(mutex_);
@@ -115,20 +94,24 @@ void AgentTUI::start() {
         indicator = text(" > ") | color(theme_.promptColor) | bold;
       }
 
+      const int maxInputTotalLines =
+          std::max(3, ftxui::Terminal::Size().dimy / 2);
       auto input_bar = hbox({
-          text(" "),  // 外边距
+          text(" "), // 外边距
           vbox({
-              filler(),
+              text(" "), // 上边距
               hbox({
-                  text("  "),  // 内左边距
+                  text("  "), // 内左边距
                   indicator,
-                  text("  "),  // 间距
+                  text("  "), // 间距
                   input->Render() | color(theme_.inputTextColor) | flex,
-                  text("  "),  // 内右边距
+                  text("  "), // 内右边距
               }),
-              filler(),
-          }) | bgcolor(theme_.inputBgColor) | xflex | size(HEIGHT, EQUAL, 3),
-          text(" "),  // 外边距
+              text(" "), // 下边距
+          }) | bgcolor(theme_.inputBgColor) |
+              xflex | size(HEIGHT, GREATER_THAN, 3) |
+              size(HEIGHT, LESS_THAN, maxInputTotalLines),
+          text(" "), // 外边距
       });
 
       auto main = vbox({
@@ -209,6 +192,48 @@ void AgentTUI::start() {
           return true;
         }
         return true;
+      }
+
+      // Alt+Enter → 发送消息 (普通 Enter 不拦截, 交给 Input 插入换行).
+      // Alt+Enter 的标准终端编码为 ESC+Enter (\x1B\n / \x1B\r), 全终端可用.
+      {
+        const std::string &in = event.input();
+        const bool isSend = (in == "\x1B\n" || in == "\x1B\r"); // Alt+Enter
+        if (isSend) {
+          std::string text = inputText_;
+          // 去掉首尾换行符 (保留内部换行与缩进)
+          while (!text.empty() &&
+                 (text.back() == '\n' || text.back() == '\r')) {
+            text.pop_back();
+          }
+          size_t start = 0;
+          while (start < text.size() &&
+                 (text[start] == '\n' || text[start] == '\r')) {
+            ++start;
+          }
+          if (start > 0) {
+            text = text.substr(start);
+          }
+          if (!text.empty()) {
+            // 先冲刷上一轮未提交的流式 token, 保证 user 消息始终插入在末尾
+            if (!currentToken_.empty()) {
+              messages_.push_back({currentTokenRole_, currentToken_});
+              if (currentTokenRole_ == Message::Role::Thinking) {
+                messages_.back().collapsed = true;
+              }
+              currentToken_.clear();
+            }
+            messages_.push_back({Message::Role::User, text});
+            inputText_.clear();
+            isStreaming_ = true;
+            stickToBottom_ = true;
+            inputChannel_->async_send(neograph_asio_error_code{},
+                                      std::move(text),
+                                      [](neograph_asio_error_code) {});
+          }
+          postRedraw();
+          return true;
+        }
       }
 
       if (event == Event::F2) {
@@ -337,7 +362,8 @@ ftxui::Element AgentTUI::renderMessages() {
       Elements header;
       header.push_back(text(expanded ? "\xe2\x96\xbe " : "\xe2\x96\xb8 ") |
                        color(theme_.hintColor));
-      header.push_back(text("[Thinking] ") | color(theme_.thinkingColor) | bold);
+      header.push_back(text("[Thinking] ") | color(theme_.thinkingColor) |
+                       bold);
       if (!expanded) {
         header.push_back(text(oneLinePreview(msg.text)) |
                          color(theme_.thinkingColor));
@@ -397,8 +423,8 @@ ftxui::Element AgentTUI::renderMessages() {
         }
       }
 
-      Element block =
-          vbox(std::move(lines)) | reflect(collapsibleBoxes_[collapsibleOrdinal]);
+      Element block = vbox(std::move(lines)) |
+                      reflect(collapsibleBoxes_[collapsibleOrdinal]);
       ++collapsibleOrdinal;
       pushBlock(std::move(block), true);
       break;
@@ -408,12 +434,11 @@ ftxui::Element AgentTUI::renderMessages() {
 
   if (isStreaming_ && !currentToken_.empty()) {
     if (currentTokenRole_ == Message::Role::Thinking) {
-      pushBlock(
-          hbox({
-              text("[Thinking] ") | color(theme_.thinkingColor) | bold,
-              paragraph(currentToken_) | color(theme_.thinkingColor),
-          }),
-          false);
+      pushBlock(hbox({
+                    text("[Thinking] ") | color(theme_.thinkingColor) | bold,
+                    paragraph(currentToken_) | color(theme_.thinkingColor),
+                }),
+                false);
     } else {
       pushBlock(paragraph(currentToken_) | color(theme_.assistantColor), false);
     }
@@ -498,8 +523,8 @@ ftxui::Element AgentTUI::renderModelSelectorOverlay() {
       entry = entry | bgcolor(theme_.buttonActiveBgColor) |
               color(theme_.buttonActiveTextColor) | bold;
     } else {
-      entry = entry | bgcolor(theme_.buttonBgColor) |
-              color(theme_.buttonTextColor);
+      entry =
+          entry | bgcolor(theme_.buttonBgColor) | color(theme_.buttonTextColor);
     }
     items.push_back(entry);
   }
@@ -520,8 +545,8 @@ ftxui::Element AgentTUI::renderSidebar() {
       label = label | bgcolor(theme_.buttonActiveBgColor) |
               color(theme_.buttonActiveTextColor) | bold;
     } else {
-      label = label | bgcolor(theme_.buttonBgColor) |
-              color(theme_.buttonTextColor);
+      label =
+          label | bgcolor(theme_.buttonBgColor) | color(theme_.buttonTextColor);
     }
     tabs.push_back(label | reflect(tabBoxes_[i]));
   }
@@ -643,9 +668,8 @@ bool AgentTUI::handleCollapsibleMouse(const ftxui::Mouse &mouse) {
   if (mouse.button != Mouse::Left || mouse.motion != Mouse::Released) {
     return false;
   }
-  for (size_t k = 0; k < collapsibleBoxes_.size() &&
-                     k < collapsibleMsgIndices_.size();
-       ++k) {
+  for (size_t k = 0;
+       k < collapsibleBoxes_.size() && k < collapsibleMsgIndices_.size(); ++k) {
     if (false == collapsibleBoxes_[k].Contain(mouse.x, mouse.y)) {
       continue;
     }
@@ -691,13 +715,13 @@ void AgentTUI::cancelCurrentRun() {
       token->cancel();
     }
   }
-    if (!currentToken_.empty()) {
-      messages_.push_back({currentTokenRole_, currentToken_});
-      if (currentTokenRole_ == Message::Role::Thinking) {
-        messages_.back().collapsed = true;
-      }
-      currentToken_.clear();
+  if (!currentToken_.empty()) {
+    messages_.push_back({currentTokenRole_, currentToken_});
+    if (currentTokenRole_ == Message::Role::Thinking) {
+      messages_.back().collapsed = true;
     }
+    currentToken_.clear();
+  }
   messages_.push_back({Message::Role::System, "[Cancelled by user]"});
   isStreaming_ = false;
 }
