@@ -107,6 +107,11 @@ private:
   Message::Role currentTokenRole_ = Message::Role::Assistant;
   bool isStreaming_ = false;
 
+  /// 消息列表滚动: 是否吸附在底部 (吸附时新增消息自动滚动到底部)
+  bool stickToBottom_ = true;
+  /// 未吸附底部时的滚动锚点: 聚焦的消息块绝对索引 (消息仅追加, 索引稳定)
+  int scrollAnchorIndex_ = 0;
+
   std::string inputText_;
   std::optional<PermissionRequest> pendingPermission_;
 
@@ -139,6 +144,8 @@ private:
 
   void postRedraw();
   ftxui::Element renderMessages();
+  /// 当前可聚焦的消息块数量 (需在持有 mutex_ 时调用)
+  int focusBlockCount() const;
   ftxui::Element renderPermissionOverlay();
   ftxui::Element renderModelSelectorOverlay();
   /// 输入框下方的状态栏: 左侧模型名, 右侧上下文占用

@@ -359,7 +359,7 @@ asio::awaitable<void> runCliAsync(agentxx::agent::DeepAgent &agent) {
       messages = std::move(turnResult.messages);
       isFirstMsg = false;
     }
-    std::cout << "\n\n>>> ";
+    std::cout << "\n\n>>> " << std::flush;
   }
 }
 

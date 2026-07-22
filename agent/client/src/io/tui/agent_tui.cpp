@@ -3,6 +3,7 @@
 #include "fmt/format.h"
 #include "ftxui/component/event.hpp"
 #include "neograph/graph/cancel.h"
+#include <algorithm>
 
 using namespace ftxui;
 
@@ -51,8 +52,14 @@ void AgentTUI::start() {
       if (!text.empty()) {
         {
           std::lock_guard<std::mutex> lock(mutex_);
+          // 先冲刷上一轮未提交的流式 token, 保证 user 消息始终插入在末尾
+          if (!currentToken_.empty()) {
+            messages_.push_back({currentTokenRole_, currentToken_});
+            currentToken_.clear();
+          }
           messages_.push_back({Message::Role::User, text});
           isStreaming_ = true;
+          stickToBottom_ = true;
         }
         inputChannel_->async_send(neograph_asio_error_code{}, std::move(text),
                                   [](neograph_asio_error_code) {});
@@ -60,14 +67,13 @@ void AgentTUI::start() {
       postRedraw();
     };
 
-    auto input = Input(&inputText_, "Type a message... (Enter to send)",
-                       input_option);
+    auto input =
+        Input(&inputText_, "Type a message... (Enter to send)", input_option);
 
     auto layout = Renderer(input, [&]() -> Element {
       std::lock_guard<std::mutex> lock(mutex_);
 
-      auto messages = renderMessages() | flex | vscroll_indicator | frame |
-                      yframe;
+      auto messages = renderMessages() | flex | vscroll_indicator | frame;
 
       auto input_bar = hbox({
           text(">>> ") | color(theme_.promptColor) | bold,
@@ -165,7 +171,25 @@ void AgentTUI::start() {
         return true;
       }
       if (event.is_mouse()) {
-        if (handleSidebarMouse(event.mouse())) {
+        const auto &mouse = event.mouse();
+        if (mouse.button == Mouse::WheelUp ||
+            mouse.button == Mouse::WheelDown) {
+          // 鼠标滚轮: 滚动消息列表; 滚到底部时重新吸附底部
+          const int last = focusBlockCount() - 1;
+          if (last >= 0) {
+            int cur = stickToBottom_ ? last : scrollAnchorIndex_;
+            cur += (mouse.button == Mouse::WheelUp) ? -1 : +1;
+            if (cur >= last) {
+              stickToBottom_ = true;
+            } else {
+              stickToBottom_ = false;
+              scrollAnchorIndex_ = std::max(0, cur);
+            }
+          }
+          postRedraw();
+          return true;
+        }
+        if (handleSidebarMouse(mouse)) {
           postRedraw();
           return true;
         }
@@ -198,41 +222,72 @@ void AgentTUI::stop() {
   }
 }
 
+int AgentTUI::focusBlockCount() const {
+  int n = static_cast<int>(messages_.size());
+  if (isStreaming_ && !currentToken_.empty()) {
+    ++n;
+  }
+  return n;
+}
+
 ftxui::Element AgentTUI::renderMessages() {
+  // 计算滚动锚点: 吸附底部时聚焦最后一块 (yframe 会滚动到底部),
+  // 否则聚焦 scrollAnchorIndex_ 指向的块, 视图保持稳定不随新消息跳动
+  const int count = focusBlockCount();
+  int focusIdx = -1;
+  if (count > 0) {
+    focusIdx = stickToBottom_ ? (count - 1)
+                              : std::clamp(scrollAnchorIndex_, 0, count - 1);
+  }
+
   Elements elements;
+  int idx = 0;
+  auto pushBlock = [&](Element block, bool spacer) {
+    if (idx == focusIdx) {
+      block = std::move(block) | focus;
+    }
+    ++idx;
+    elements.push_back(std::move(block));
+    if (spacer) {
+      elements.push_back(text(""));
+    }
+  };
+
   for (const auto &msg : messages_) {
     switch (msg.role) {
     case Message::Role::User:
-      elements.push_back(hbox({
-          text("> ") | color(theme_.userColor) | bold,
-          paragraph(msg.text) | color(theme_.userColor),
-      }));
+      pushBlock(hbox({
+                    text("> ") | color(theme_.userColor) | bold,
+                    paragraph(msg.text) | color(theme_.userColor),
+                }),
+                true);
       break;
     case Message::Role::Assistant:
-      elements.push_back(paragraph(msg.text) | color(theme_.assistantColor));
+      pushBlock(paragraph(msg.text) | color(theme_.assistantColor), true);
       break;
     case Message::Role::Thinking:
-      elements.push_back(hbox({
-          text("[Thinking] ") | color(theme_.thinkingColor) | dim,
-          paragraph(msg.text) | color(theme_.thinkingColor) | dim,
-      }));
+      pushBlock(hbox({
+                    text("[Thinking] ") | color(theme_.thinkingColor) | dim,
+                    paragraph(msg.text) | color(theme_.thinkingColor) | dim,
+                }),
+                true);
       break;
     case Message::Role::System:
-      elements.push_back(paragraph(msg.text) | color(theme_.systemColor));
+      pushBlock(paragraph(msg.text) | color(theme_.systemColor), true);
       break;
     }
-    elements.push_back(text(""));
   }
 
   if (isStreaming_ && !currentToken_.empty()) {
     if (currentTokenRole_ == Message::Role::Thinking) {
-      elements.push_back(hbox({
-          text("[Thinking] ") | color(theme_.thinkingColor) | dim,
-          paragraph(currentToken_) | color(theme_.thinkingColor) | dim,
-      }));
+      pushBlock(
+          hbox({
+              text("[Thinking] ") | color(theme_.thinkingColor) | dim,
+              paragraph(currentToken_) | color(theme_.thinkingColor) | dim,
+          }),
+          false);
     } else {
-      elements.push_back(paragraph(currentToken_) |
-                         color(theme_.assistantColor));
+      pushBlock(paragraph(currentToken_) | color(theme_.assistantColor), false);
     }
   }
 
@@ -268,13 +323,16 @@ ftxui::Element AgentTUI::renderStatusBar() {
       maxCtx = session->contextStats->maxContextTokens.load();
     }
   }
+  const auto toK = [](size_t v) {
+    return fmt::format("{:.1f}k", static_cast<double>(v) / 1000.0);
+  };
   std::string ctxText;
   if (maxCtx > 0) {
-    const double pct = 100.0 * static_cast<double>(ctx) /
-                       static_cast<double>(maxCtx);
-    ctxText = fmt::format(" ctx: {}/{} ({:.1f}%) ", ctx, maxCtx, pct);
+    const double pct =
+        100.0 * static_cast<double>(ctx) / static_cast<double>(maxCtx);
+    ctxText = fmt::format(" {}/{} ({:.1f}%) ", toK(ctx), toK(maxCtx), pct);
   } else {
-    ctxText = fmt::format(" ctx: {} ", ctx);
+    ctxText = fmt::format(" {} ", toK(ctx));
   }
   auto ctxInfo = text(ctxText) | color(theme_.statusColor);
 
@@ -350,8 +408,8 @@ ftxui::Element AgentTUI::renderSidebar() {
 }
 
 ftxui::Element AgentTUI::renderLogWindow() {
-  auto lines = logSink_ ? logSink_->snapshot()
-                        : std::vector<TUILogSink::Line>{};
+  auto lines =
+      logSink_ ? logSink_->snapshot() : std::vector<TUILogSink::Line>{};
   Elements elements;
   for (const auto &line : lines) {
     ftxui::Color c = theme_.assistantColor;
@@ -522,8 +580,7 @@ void AgentTUI::onToken(const std::string &token, const std::string &kind) {
   postRedraw();
 }
 
-void AgentTUI::onDisplay(const std::string &level,
-                         const std::string &content) {
+void AgentTUI::onDisplay(const std::string &level, const std::string &content) {
   {
     std::lock_guard<std::mutex> lock(mutex_);
     messages_.push_back({Message::Role::System, content});
@@ -540,10 +597,9 @@ asio::awaitable<std::optional<std::string>> AgentTUI::getInput() {
   co_return std::optional<std::string>(std::move(line));
 }
 
-asio::awaitable<bool>
-AgentTUI::promptPermission(const std::string &toolName,
-                           const std::string &category,
-                           const std::string &target) {
+asio::awaitable<bool> AgentTUI::promptPermission(const std::string &toolName,
+                                                 const std::string &category,
+                                                 const std::string &target) {
   {
     std::lock_guard<std::mutex> lock(mutex_);
     pendingPermission_ = PermissionRequest{toolName, category, target};
