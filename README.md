@@ -44,7 +44,7 @@
 
 | System | agentxx_cli | agentxx_cli RAM | libagentxx | compiler | TIP |
 |---|---|---|---|---|---|
-| **Windows** | 8.89 M | 任务管理器 2.2 M | 1.21 M | MSVC 19.51.36247.0/Visual Studio 18 2026 · x86_64 · -O2 | 打包时建议带上msvc运行时 |
+| **Windows** | 10.6 M | 任务管理器 4.1 M (TUI) / 3.9 M (CLI) | 1.21 M | MSVC 19.51.36247.0/Visual Studio 18 2026 · x86_64 · -O2 | 打包时建议带上msvc运行时 |
 | **Linux** | 11 M | top/RES 10.5 M | 2.4 M | GCC 16.1.0 · x86_64 · -O3 · --strip-all | 打包时建议带上 libstdc++.so.6,libgcc_s.so.1 |
 | **Android (-deps)** | - | - | 1.9 M | NDK-r29 · Clang 21.0.0 · android-21-arm64-v8a · -O3 · --strip-all | 打包建议带上 libc++.so |
 
