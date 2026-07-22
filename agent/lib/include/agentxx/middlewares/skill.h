@@ -175,11 +175,11 @@ public:
                                      std::istreambuf_iterator<char>()};
       stream.close();
       const auto yamlDelimiter = std::string_view{"---"};
-      auto yamlStart =
-          filecontent.find_first_of(yamlDelimiter) + yamlDelimiter.size();
-      auto yamlEnd = filecontent.find_first_of(yamlDelimiter, yamlStart);
-      if (yamlStart >= 0 && yamlStart < yamlEnd &&
-          yamlEnd < filecontent.size()) {
+      auto yamlStart = filecontent.find(yamlDelimiter) + yamlDelimiter.size();
+      auto yamlEnd = filecontent.find(yamlDelimiter, yamlStart);
+      if (yamlStart >= 0 && yamlStart != filecontent.npos &&
+          yamlStart < yamlEnd && yamlEnd < filecontent.size() &&
+          yamlEnd != filecontent.npos) {
         // markdown
         data.mdText = filecontent.substr(yamlEnd + yamlDelimiter.size());
 

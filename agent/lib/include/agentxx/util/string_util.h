@@ -287,14 +287,14 @@ utf8GetLengthCheckAvail(std::string_view str) {
       // lenght 6、5 无效
       return 0;
     } else if (ch >= 0xF0) {
-      if (ch == 0xF0 &&
+      if (ch == 0xF0 && i + 1 < strLen &&
           (static_cast<unsigned char>(str[i + 1]) & 0xF0) == 0x80) {
         // 检查非最短编码长度，对应 0~0xFFFF
         return 0;
       }
       step = 4;
     } else if (ch >= 0xE0) {
-      if (ch == 0xE0 &&
+      if (ch == 0xE0 && i + 1 < strLen &&
           (static_cast<unsigned char>(str[i + 1]) & 0xE0) == 0x80) {
         // 0xE0 0x80~0x9F 对应 0~0x7FF
         return 0;
