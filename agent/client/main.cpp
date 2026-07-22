@@ -475,9 +475,11 @@ int main(int argn, char **argv) {
   for (int i = 1; i < argn; ++i) {
     std::string arg(argv[i]);
     if (arg == "--config" && i + 1 < argn) {
-      configPath = argv[++i];
+      ++i;
+      configPath = argv[i];
     } else if (arg == "--env" && i + 1 < argn) {
-      overrideEnvPath = argv[++i];
+      ++i;
+      overrideEnvPath = argv[i];
     } else if (mode == "tui") {
       mode = arg;
     } else if (mode == "cli") {

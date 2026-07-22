@@ -81,7 +81,9 @@ void AgentTUI::start() {
     auto layout = Renderer(input, [&]() -> Element {
       std::lock_guard<std::mutex> lock(mutex_);
 
-      auto messages = renderMessages() | flex | vscroll_indicator | frame;
+      // yframe 仅纵向滚动并约束宽度, 使 paragraph 能按屏幕宽度自动换行;
+      // 若用 frame (含横向) 会把内容撑到自然宽度导致不换行
+      auto messages = renderMessages() | flex | vscroll_indicator | yframe;
 
       auto input_bar = hbox({
           text(">>> ") | color(theme_.promptColor) | bold,
