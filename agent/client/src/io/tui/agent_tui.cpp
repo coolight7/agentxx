@@ -7,6 +7,19 @@
 
 using namespace ftxui;
 
+namespace {
+/// 取首行并截断为单行预览 (仅用于折叠态显示, 不修改原始完整内容)
+std::string oneLinePreview(const std::string &s, size_t max = 60) {
+  const auto nl = s.find('\n');
+  std::string line = (nl == std::string::npos) ? s : s.substr(0, nl);
+  if (line.size() > max) {
+    line.resize(max);
+    line += "...";
+  }
+  return line;
+}
+} // namespace
+
 AgentTUI::AgentTUI(asio::any_io_executor ex,
                    std::shared_ptr<agentxx::agent::AgentContext> agentContext,
                    std::string threadId, TUITheme theme)
@@ -200,6 +213,10 @@ void AgentTUI::start() {
           postRedraw();
           return true;
         }
+        if (handleToolMouse(mouse)) {
+          postRedraw();
+          return true;
+        }
         if (handleSidebarMouse(mouse)) {
           postRedraw();
           return true;
@@ -251,8 +268,18 @@ ftxui::Element AgentTUI::renderMessages() {
                               : std::clamp(scrollAnchorIndex_, 0, count - 1);
   }
 
+  // 收集 Tool 消息索引并重置其点击区域 (渲染时经 reflect 填充), 供鼠标展开/折叠
+  toolMsgIndices_.clear();
+  for (size_t i = 0; i < messages_.size(); ++i) {
+    if (messages_[i].role == Message::Role::Tool) {
+      toolMsgIndices_.push_back(i);
+    }
+  }
+  toolBoxes_.assign(toolMsgIndices_.size(), ftxui::Box{});
+
   Elements elements;
   int idx = 0;
+  int toolOrdinal = 0;
   auto pushBlock = [&](Element block, bool spacer) {
     if (idx == focusIdx) {
       block = std::move(block) | focus;
@@ -286,6 +313,53 @@ ftxui::Element AgentTUI::renderMessages() {
     case Message::Role::System:
       pushBlock(paragraph(msg.text) | color(theme_.systemColor), true);
       break;
+    case Message::Role::Tool: {
+      const bool expanded = msg.toolExpanded;
+      Elements lines;
+      // 头部行: 折叠指示符 + [Tool] + 工具名 (+ 折叠态的单行预览)
+      Elements header;
+      header.push_back(text(expanded ? "\xe2\x96\xbe " : "\xe2\x96\xb8 ") |
+                       color(theme_.hintColor));
+      header.push_back(text("[Tool] ") | color(theme_.accentColor) | bold);
+      header.push_back(text(msg.toolName) | color(theme_.accentColor) | bold);
+      if (!expanded) {
+        if (!msg.toolFinished) {
+          header.push_back(text("  running...") | color(theme_.hintColor) |
+                           dim);
+        } else if (msg.toolHasError) {
+          header.push_back(text("  error: ") | color(theme_.systemColor));
+          header.push_back(text(oneLinePreview(msg.toolResult)) |
+                           color(theme_.systemColor) | dim);
+        } else {
+          header.push_back(text("  " + oneLinePreview(msg.toolResult)) |
+                           color(theme_.statusColor) | dim);
+        }
+      }
+      lines.push_back(hbox(std::move(header)));
+
+      if (expanded) {
+        if (!msg.text.empty()) {
+          lines.push_back(hbox({
+              text("  args: ") | color(theme_.hintColor),
+              paragraph(msg.text) | color(theme_.hintColor),
+          }));
+        }
+        if (msg.toolFinished) {
+          auto rc = msg.toolHasError ? theme_.systemColor : theme_.statusColor;
+          lines.push_back(hbox({
+              text(msg.toolHasError ? "  error: " : "  result: ") | color(rc),
+              paragraph(msg.toolResult) | color(rc),
+          }));
+        } else {
+          lines.push_back(text("  running...") | color(theme_.hintColor) | dim);
+        }
+      }
+
+      Element block = vbox(std::move(lines)) | reflect(toolBoxes_[toolOrdinal]);
+      ++toolOrdinal;
+      pushBlock(std::move(block), true);
+      break;
+    }
     }
   }
 
@@ -522,6 +596,24 @@ bool AgentTUI::handleSidebarMouse(const ftxui::Mouse &mouse) {
   return false;
 }
 
+bool AgentTUI::handleToolMouse(const ftxui::Mouse &mouse) {
+  if (mouse.button != Mouse::Left || mouse.motion != Mouse::Released) {
+    return false;
+  }
+  for (size_t k = 0; k < toolBoxes_.size() && k < toolMsgIndices_.size(); ++k) {
+    if (false == toolBoxes_[k].Contain(mouse.x, mouse.y)) {
+      continue;
+    }
+    const size_t mi = toolMsgIndices_[k];
+    if (mi < messages_.size() && messages_[mi].role == Message::Role::Tool) {
+      // 左键点击: 切换该 toolcall 块的展开/折叠
+      messages_[mi].toolExpanded = !messages_[mi].toolExpanded;
+      return true;
+    }
+  }
+  return false;
+}
+
 void AgentTUI::openModelSelector() {
   modelNames_.clear();
   selectedModelIndex_ = 0;
@@ -640,6 +732,60 @@ void AgentTUI::onInterrupt(const std::string &node, const std::string &value,
       msg += "\nHandle: " + handleName;
     }
     messages_.push_back({Message::Role::System, msg});
+  }
+  postRedraw();
+}
+
+void AgentTUI::onToolStart(const std::string &toolName,
+                           const std::string &toolCallId,
+                           const std::string &arguments) {
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    // 先冲刷当前未提交的流式 token (thinking/content), 保证 toolcall 严格
+    // 按时间顺序插入 (一轮内可能 thinking->toolcall->content 任意交替)
+    if (!currentToken_.empty()) {
+      messages_.push_back({currentTokenRole_, currentToken_});
+      currentToken_.clear();
+    }
+    Message m;
+    m.role = Message::Role::Tool;
+    m.toolName = toolName;
+    m.toolCallId = toolCallId;
+    m.text = arguments;
+    m.toolFinished = false;
+    messages_.push_back(std::move(m));
+  }
+  postRedraw();
+}
+
+void AgentTUI::onToolEnd(const std::string &toolName,
+                         const std::string &toolCallId,
+                         const std::string &result, bool hasError) {
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    // 按 toolCallId 从后往前找对应的开始消息并填充结果
+    bool found = false;
+    for (auto it = messages_.rbegin(); it != messages_.rend(); ++it) {
+      if (it->role == Message::Role::Tool && it->toolCallId == toolCallId &&
+          !it->toolFinished) {
+        it->toolResult = result;
+        it->toolFinished = true;
+        it->toolHasError = hasError;
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      // 未找到对应开始消息时直接追加一条已完成的消息
+      Message m;
+      m.role = Message::Role::Tool;
+      m.toolName = toolName;
+      m.toolCallId = toolCallId;
+      m.toolResult = result;
+      m.toolFinished = true;
+      m.toolHasError = hasError;
+      messages_.push_back(std::move(m));
+    }
   }
   postRedraw();
 }
