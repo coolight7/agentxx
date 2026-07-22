@@ -291,6 +291,7 @@ npm install --legacy-peer-deps
     - [codegraph-cpp](https://github.com/plutoaac/codegraph-cpp)
     - [curl](https://github.com/curl/curl)
     - [fmt](https://github.com/fmtlib/fmt)
+    - [FTXUI](https://github.com/ArthurSonzogni/FTXUI)
     - [glob](https://github.com/p-ranav/glob)
     - [html2md](https://github.com/tim-gromeyer/html2md)
     - [hyperscan](https://github.com/intel/hyperscan)
