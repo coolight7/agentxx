@@ -88,7 +88,7 @@ public:
 
     {
       /// 创建模型 Provider 注册表并注入 AgentContext
-      /// - 注册可用模型, 支持运行时切换 modelcall 使用的模型
+      /// - 注册可用模型; 各会话的当前选择记录在 Session 中
       /// - 主模型兜底注册, 保证至少有一个可用模型
       auto registry = std::make_shared<agentxx::agent::ModelProviderRegistry>();
       for (const auto &[name, mc] : config->availableModels) {
@@ -96,10 +96,10 @@ public:
       }
       if (config->availableModels.empty()) {
         registry->registerModel(config->model.modelName, config->model);
-        registry->setCurrentModel(config->model.modelName);
+        registry->setDefaultModel(config->model.modelName);
       } else if (false == config->currentModelName.empty() &&
                  registry->hasModel(config->currentModelName)) {
-        registry->setCurrentModel(config->currentModelName);
+        registry->setDefaultModel(config->currentModelName);
       }
       agentContext->modelRegistry = std::move(registry);
     }
@@ -582,18 +582,23 @@ public:
       const std::string &interruptNode, const std::string &interruptValue,
       const std::string &interruptHandleName)>;
 
-  /// 选择 modelcall 使用的模型 (运行时切换)
-  /// - modelName 为空或不存在时不改变当前选择
-  void selectModel(const std::string &modelName) {
-    if (false == modelName.empty() && agentContext->modelRegistry) {
-      agentContext->modelRegistry->setCurrentModel(modelName);
+  /// 选择指定会话 modelcall 使用的模型 (运行时切换, 按 thread_id 隔离)
+  /// - modelName 为空或不存在时不改变该会话的选择
+  void selectModel(const std::string &threadId, const std::string &modelName) {
+    if (false == modelName.empty() && agentContext->modelRegistry &&
+        agentContext->modelRegistry->hasModel(modelName)) {
+      agentContext->getSession(threadId)->setModelName(modelName);
     }
   }
 
-  /// 当前使用的模型显示名称
-  std::string getCurrentModelName() const {
+  /// 指定会话当前实际使用的模型显示名称 (解析会话选择/默认模型)
+  std::string getCurrentModelName(const std::string &threadId) const {
+    std::string selected;
+    if (auto session = agentContext->sessions->get(threadId)) {
+      selected = session->getModelName();
+    }
     if (agentContext->modelRegistry) {
-      return agentContext->modelRegistry->getCurrentModelName();
+      return agentContext->modelRegistry->resolveModelName(selected);
     }
     return agentContext->agentConfig->model.modelName;
   }
@@ -605,10 +610,11 @@ public:
       InterruptCallback interruptCallback = nullptr,
       const std::string &modelName = "") {
     ConversationTurnResult turnResult;
-    agentContext->io = std::move(io);
+    auto session = agentContext->getSession(threadId);
+    session->io = std::move(io);
 
-    // 选择本轮使用的模型
-    selectModel(modelName);
+    // 选择本轮使用的模型 (按会话隔离)
+    selectModel(threadId, modelName);
 
     bool resumeInterrupt = false;
     if (false ==
@@ -633,9 +639,9 @@ public:
           {"role", "user"},
           {"content", processedInput},
       });
-      // 创建本轮取消令牌并注入 AgentContext, 供 UI 取消执行
+      // 创建本轮取消令牌并注入会话, 供 UI 取消执行
       auto cancelToken = std::make_shared<neograph::graph::CancelToken>();
-      agentContext->setCancelToken(cancelToken);
+      session->setCancelToken(cancelToken);
       auto cfg = neograph::graph::RunConfig{
           .thread_id = threadId,
           .input = {{"messages", messages}},
@@ -874,7 +880,7 @@ public:
       std::function<void(const neograph::graph::GraphEvent &)> callback =
           nullptr,
       const std::string &modelName = "") {
-    selectModel(modelName);
+    selectModel(threadId, modelName);
     auto inputMessages = neograph::json::array();
     for (const auto &msg : messages) {
       neograph::json msgJson;
@@ -958,17 +964,16 @@ public:
   asio::awaitable<SimpleRunResult>
   runStreamAsync(const std::vector<neograph::ChatMessage> &messages,
                  const std::string &modelName = "") {
-    selectModel(modelName);
+    auto threadId = fmt::format(
+        "subagent_{}",
+        std::chrono::system_clock::now().time_since_epoch().count());
+    selectModel(threadId, modelName);
     auto inputMessages = neograph::json::array();
     for (const auto &msg : messages) {
       neograph::json msgJson;
       neograph::to_json(msgJson, msg);
       inputMessages.push_back(std::move(msgJson));
     }
-
-    auto threadId = fmt::format(
-        "subagent_{}",
-        std::chrono::system_clock::now().time_since_epoch().count());
 
     neograph::graph::RunConfig cfg{
         .thread_id = threadId,

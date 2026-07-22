@@ -4,6 +4,7 @@
 #include <atomic>
 #include <functional>
 #include <iostream>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -38,6 +39,78 @@ struct ContextStats {
   std::atomic<size_t> maxContextTokens{0};
 };
 
+/// 单个会话的独立状态 (按 thread_id 区分)
+/// - 设计目标: 单线程/多协程交错执行多会话, 会话间状态彼此隔离
+/// - io/contextStats 在 agent 线程(io_context)上访问
+/// - cancelToken/modelName 可能被 UI 线程访问, 故加锁保护
+class Session {
+public:
+  /// 本会话的 IO
+  std::shared_ptr<AgentIOBase> io = nullptr;
+  /// 本会话的上下文统计 (内部原子, 跨线程安全)
+  std::shared_ptr<ContextStats> contextStats = std::make_shared<ContextStats>();
+
+  /// 设置本会话当前轮次的取消令牌 (线程安全)
+  void setCancelToken(std::shared_ptr<neograph::graph::CancelToken> token) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    cancelToken_ = std::move(token);
+  }
+  /// 获取本会话当前轮次的取消令牌 (线程安全)
+  std::shared_ptr<neograph::graph::CancelToken> getCancelToken() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return cancelToken_;
+  }
+
+  /// 设置本会话选择的模型名 (线程安全)
+  /// - 为空表示使用 ModelProviderRegistry 的默认模型
+  void setModelName(const std::string &name) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    modelName_ = name;
+  }
+  /// 获取本会话选择的模型名 (线程安全)
+  std::string getModelName() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return modelName_;
+  }
+
+private:
+  mutable std::mutex mutex_;
+  std::shared_ptr<neograph::graph::CancelToken> cancelToken_ = nullptr;
+  std::string modelName_;
+};
+
+/// 会话存储: 按 thread_id 取/建 Session (线程安全)
+class SessionStore {
+public:
+  /// 获取或创建指定 thread_id 的会话
+  std::shared_ptr<Session> getOrCreate(const std::string &threadId) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = sessions_.find(threadId);
+    if (it != sessions_.end()) {
+      return it->second;
+    }
+    auto session = std::make_shared<Session>();
+    sessions_[threadId] = session;
+    return session;
+  }
+
+  /// 获取指定 thread_id 的会话; 不存在时返回 nullptr
+  std::shared_ptr<Session> get(const std::string &threadId) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = sessions_.find(threadId);
+    return it == sessions_.end() ? nullptr : it->second;
+  }
+
+  void remove(const std::string &threadId) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    sessions_.erase(threadId);
+  }
+
+private:
+  std::mutex mutex_;
+  std::map<std::string, std::shared_ptr<Session>> sessions_;
+};
+
 class AgentContext {
 public:
   std::shared_ptr<agentxx::agent::AgentConfig> agentConfig = nullptr;
@@ -51,36 +124,19 @@ public:
   ///   weak_ptr<AgentContext> 取用
   /// - 完整定义在使用点 (deepagent.h) 引入
   std::shared_ptr<agentxx::middleware::EventBus> bus = nullptr;
-  /// 当前轮次的 IO
-  /// - 由 runConversationTurnAsync 在每轮开始时设置
-  /// - 中断处理/权限询问/subagent 等经此统一输入输出
-  std::shared_ptr<AgentIOBase> io = nullptr;
 
-  /// 模型 Provider 注册表
+  /// 模型 Provider 注册表 (共享)
   /// - 由 DeepAgent 在 init() 中创建并注入
-  /// - 支持运行时切换 modelcall 使用的模型
+  /// - 含可用模型与默认模型; 各会话的当前选择记录在 Session 中
   std::shared_ptr<ModelProviderRegistry> modelRegistry = nullptr;
 
-  /// 上下文统计; 供 UI 显示上下文占用百分比
-  std::shared_ptr<ContextStats> contextStats = std::make_shared<ContextStats>();
+  /// 会话存储: 按 thread_id 取/建 Session
+  std::shared_ptr<SessionStore> sessions = std::make_shared<SessionStore>();
 
-  /// 设置当前运行轮次的取消令牌 (线程安全)
-  /// - 由 runConversationTurnAsync 在每轮开始时设置
-  void setCancelToken(std::shared_ptr<neograph::graph::CancelToken> token) {
-    std::lock_guard<std::mutex> lock(cancelTokenMutex_);
-    cancelToken_ = std::move(token);
+  /// 便捷方法: 获取或创建指定 thread_id 的会话
+  std::shared_ptr<Session> getSession(const std::string &threadId) {
+    return sessions->getOrCreate(threadId);
   }
-
-  /// 获取当前运行轮次的取消令牌 (线程安全)
-  /// - UI 经此取消正在执行的轮次
-  std::shared_ptr<neograph::graph::CancelToken> getCancelToken() {
-    std::lock_guard<std::mutex> lock(cancelTokenMutex_);
-    return cancelToken_;
-  }
-
-private:
-  std::mutex cancelTokenMutex_;
-  std::shared_ptr<neograph::graph::CancelToken> cancelToken_ = nullptr;
 };
 
 } // namespace agent

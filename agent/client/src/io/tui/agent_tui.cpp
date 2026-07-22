@@ -8,8 +8,9 @@ using namespace ftxui;
 
 AgentTUI::AgentTUI(asio::any_io_executor ex,
                    std::shared_ptr<agentxx::agent::AgentContext> agentContext,
-                   TUITheme theme)
+                   std::string threadId, TUITheme theme)
     : agentContext_(std::move(agentContext)), theme_(theme),
+      threadId_(std::move(threadId)),
       inputChannel_(std::make_shared<LineChannel>(ex, 64)),
       permissionChannel_(std::make_shared<BoolChannel>(ex, 4)),
       logSink_(std::make_shared<TUILogSink>()) {}
@@ -249,12 +250,9 @@ ftxui::Element AgentTUI::renderMessages() {
 }
 
 ftxui::Element AgentTUI::renderStatusBar() {
-  std::string modelName = "<none>";
-  if (agentContext_ && agentContext_->modelRegistry) {
-    auto name = agentContext_->modelRegistry->getCurrentModelName();
-    if (false == name.empty()) {
-      modelName = name;
-    }
+  std::string modelName = currentModelName();
+  if (modelName.empty()) {
+    modelName = "<none>";
   }
   auto modelInfo = hbox({
       text(" model: ") | color(theme_.hintColor),
@@ -264,9 +262,11 @@ ftxui::Element AgentTUI::renderStatusBar() {
 
   size_t ctx = 0;
   size_t maxCtx = 0;
-  if (agentContext_ && agentContext_->contextStats) {
-    ctx = agentContext_->contextStats->contextTokens.load();
-    maxCtx = agentContext_->contextStats->maxContextTokens.load();
+  if (auto session = currentSession()) {
+    if (session->contextStats) {
+      ctx = session->contextStats->contextTokens.load();
+      maxCtx = session->contextStats->maxContextTokens.load();
+    }
   }
   std::string ctxText;
   if (maxCtx > 0) {
@@ -452,7 +452,7 @@ void AgentTUI::openModelSelector() {
   selectedModelIndex_ = 0;
   if (agentContext_ && agentContext_->modelRegistry) {
     modelNames_ = agentContext_->modelRegistry->listModelNames();
-    const auto current = agentContext_->modelRegistry->getCurrentModelName();
+    const auto current = currentModelName();
     for (size_t i = 0; i < modelNames_.size(); ++i) {
       if (modelNames_[i] == current) {
         selectedModelIndex_ = static_cast<int>(i);
@@ -466,17 +466,16 @@ void AgentTUI::openModelSelector() {
 void AgentTUI::confirmModelSelection() {
   if (selectedModelIndex_ >= 0 &&
       selectedModelIndex_ < static_cast<int>(modelNames_.size())) {
-    if (agentContext_ && agentContext_->modelRegistry) {
-      agentContext_->modelRegistry->setCurrentModel(
-          modelNames_[selectedModelIndex_]);
+    if (auto session = currentSession()) {
+      session->setModelName(modelNames_[selectedModelIndex_]);
     }
   }
   showModelSelector_ = false;
 }
 
 void AgentTUI::cancelCurrentRun() {
-  if (agentContext_) {
-    auto token = agentContext_->getCancelToken();
+  if (auto session = currentSession()) {
+    auto token = session->getCancelToken();
     if (token) {
       token->cancel();
     }
@@ -487,6 +486,24 @@ void AgentTUI::cancelCurrentRun() {
   }
   messages_.push_back({Message::Role::System, "[Cancelled by user]"});
   isStreaming_ = false;
+}
+
+std::shared_ptr<agentxx::agent::Session> AgentTUI::currentSession() {
+  if (agentContext_ && agentContext_->sessions) {
+    return agentContext_->sessions->getOrCreate(threadId_);
+  }
+  return nullptr;
+}
+
+std::string AgentTUI::currentModelName() {
+  std::string selected;
+  if (auto session = currentSession()) {
+    selected = session->getModelName();
+  }
+  if (agentContext_ && agentContext_->modelRegistry) {
+    return agentContext_->modelRegistry->resolveModelName(selected);
+  }
+  return selected;
 }
 
 void AgentTUI::onToken(const std::string &token, const std::string &kind) {

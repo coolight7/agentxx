@@ -74,10 +74,12 @@ private:
   void registerInterruptHandles() {
     interruptHandles
         [agentxx::middleware::MiddlewareContext::interruptHandleName_default] =
-            [this](const agentxx::middleware::InterruptHandleArg &handleArg)
+            [this](const agentxx::middleware::InterruptHandleArg &handleArg,
+                   const std::string &threadId)
         -> asio::awaitable<neograph::json> {
       auto ctxPtr = agentContext.lock();
-      auto io = ctxPtr ? ctxPtr->io : nullptr;
+      auto session = ctxPtr ? ctxPtr->sessions->get(threadId) : nullptr;
+      auto io = session ? session->io : nullptr;
       if (!io) {
         co_return neograph::json::array();
       }
@@ -179,10 +181,11 @@ private:
 
   asio::awaitable<std::optional<neograph::json>>
   execInterruptHandle(std::string_view name,
-                      const agentxx::middleware::InterruptHandleArg &arg) {
+                      const agentxx::middleware::InterruptHandleArg &arg,
+                      const std::string &threadId) {
     auto handleIt = interruptHandles.find(arg.name);
     if (handleIt != interruptHandles.end()) {
-      co_return co_await handleIt->second(arg);
+      co_return co_await handleIt->second(arg, threadId);
     }
     co_return std::nullopt;
   }
@@ -203,7 +206,8 @@ private:
                                                .resultJson = "{}"};
     }
 
-    auto result = co_await execInterruptHandle(argOpt->name, argOpt.value());
+    auto result =
+        co_await execInterruptHandle(argOpt->name, argOpt.value(), req.threadId);
     if (result.has_value()) {
       co_return agentxx::events::RespInterrupt{
           .handled = true,
@@ -216,7 +220,9 @@ private:
   }
 
   /// <name, handle>
-  std::map<std::string, std::function<asio::awaitable<neograph::json>(
-                            const agentxx::middleware::InterruptHandleArg &)>>
+  std::map<std::string,
+           std::function<asio::awaitable<neograph::json>(
+               const agentxx::middleware::InterruptHandleArg &,
+               const std::string &threadId)>>
       interruptHandles{};
 };
