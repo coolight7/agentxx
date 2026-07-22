@@ -82,7 +82,7 @@ public:
       return cacheIt->second;
     }
     auto provider = agentxx::server::OpenAIProvider::create_shared(
-        toProviderConfig(cfgIt->second));
+        cfgIt->second);
     providerCache_[effective] = provider;
     return provider;
   }
@@ -106,21 +106,6 @@ public:
   size_t size() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return models_.size();
-  }
-
-  /// ModelConfig -> OpenAIProvider::Config
-  static agentxx::server::OpenAIProvider::Config
-  toProviderConfig(const ModelConfig &mc) {
-    agentxx::server::OpenAIProvider::Config cfg{
-        .api_key = mc.apiKey,
-        .base_url = mc.baseUrl,
-        .default_model = mc.modelName,
-        .sendThinking = mc.sendThinking,
-    };
-    if (mc.extra_config.is_object()) {
-      cfg.extra_body = mc.extra_config;
-    }
-    return cfg;
   }
 
 private:

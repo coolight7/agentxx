@@ -26,6 +26,22 @@ namespace test {
 using namespace agentxx::util;
 namespace server = agentxx::server;
 
+namespace {
+agentxx::agent::ModelConfig makeAntCfg(const std::string &apiKey,
+                                       const std::string &baseUrl,
+                                       int connectTO = 10, int readTO = 10,
+                                       bool sendThinking = false) {
+  agentxx::agent::ModelConfig mc;
+  mc.name = "test";
+  mc.apiKey = apiKey;
+  mc.baseUrl = baseUrl;
+  mc.connectTimeoutSeconds = connectTO;
+  mc.readTimeoutSeconds = readTO;
+  mc.sendThinking = sendThinking;
+  return mc;
+}
+} // namespace
+
 int g_anthropic_passed = 0;
 int g_anthropic_failed = 0;
 
@@ -35,20 +51,22 @@ int g_anthropic_failed = 0;
 
 void test_anthropic_factory_and_name() {
   {
-    auto p = server::AnthropicProvider::create({.api_key = "sk-ant-test"});
+    agentxx::agent::ModelConfig mc; mc.name = "test"; mc.apiKey = "sk-ant-test"; auto p = server::AnthropicProvider::create(mc);
     XX_TEST_EXPECT_TRUE(p != nullptr);
     XX_TEST_EXPECT_EQ(p->get_name(), "anthropic");
   }
   {
-    auto p =
-        server::AnthropicProvider::create_shared({.api_key = "sk-ant-shared"});
+    agentxx::agent::ModelConfig mc; mc.name = "test"; mc.apiKey = "sk-ant-shared"; auto p = server::AnthropicProvider::create_shared(mc);
     XX_TEST_EXPECT_TRUE(p != nullptr);
     XX_TEST_EXPECT_EQ(p->get_name(), "anthropic");
   }
 }
 
 void test_anthropic_config_defaults() {
-  auto p = server::AnthropicProvider::create({.api_key = "sk-ant-defaults"});
+  agentxx::agent::ModelConfig mc;
+  mc.name = "test";
+  mc.apiKey = "sk-ant-defaults";
+  auto p = server::AnthropicProvider::create(mc);
   XX_TEST_EXPECT_TRUE(p != nullptr);
   XX_TEST_EXPECT_EQ(p->get_name(), "anthropic");
 }
@@ -701,8 +719,7 @@ asio::awaitable<void> test_non_streaming_completion(MockAnthropicServer &mock,
   std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
   mock.mode = AnthropicMockMode::Normal;
 
-  auto provider = server::AnthropicProvider::create(
-      {.api_key = "sk-ant-test", .base_url = baseUrl, .connect_timeout_seconds = 10, .read_timeout_seconds = 10});
+  auto provider = server::AnthropicProvider::create(makeAntCfg("sk-ant-test", baseUrl));
 
   neograph::CompletionParams params;
   params.model = "claude-sonnet-4-20250514";
@@ -732,8 +749,7 @@ asio::awaitable<void> test_non_streaming_tool_call(MockAnthropicServer &mock,
   std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
   mock.mode = AnthropicMockMode::ToolCall;
 
-  auto provider = server::AnthropicProvider::create(
-      {.api_key = "sk-ant-test", .base_url = baseUrl, .connect_timeout_seconds = 10, .read_timeout_seconds = 10});
+  auto provider = server::AnthropicProvider::create(makeAntCfg("sk-ant-test", baseUrl));
 
   neograph::CompletionParams params;
   params.model = "claude-sonnet-4-20250514";
@@ -765,8 +781,7 @@ asio::awaitable<void> test_non_streaming_thinking(MockAnthropicServer &mock,
   std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
   mock.mode = AnthropicMockMode::Thinking;
 
-  auto provider = server::AnthropicProvider::create(
-      {.api_key = "sk-ant-test", .base_url = baseUrl, .connect_timeout_seconds = 10, .read_timeout_seconds = 10});
+  auto provider = server::AnthropicProvider::create(makeAntCfg("sk-ant-test", baseUrl));
 
   neograph::CompletionParams params;
   params.model = "claude-sonnet-4-20250514";
@@ -790,8 +805,7 @@ asio::awaitable<void> test_rate_limit_error(MockAnthropicServer &mock,
   std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
   mock.mode = AnthropicMockMode::RateLimit;
 
-  auto provider = server::AnthropicProvider::create(
-      {.api_key = "sk-ant-test", .base_url = baseUrl, .connect_timeout_seconds = 10, .read_timeout_seconds = 10});
+  auto provider = server::AnthropicProvider::create(makeAntCfg("sk-ant-test", baseUrl));
 
   neograph::CompletionParams params;
   params.model = "claude-sonnet-4-20250514";
@@ -821,8 +835,7 @@ asio::awaitable<void> test_server_error(MockAnthropicServer &mock,
   std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
   mock.mode = AnthropicMockMode::ServerError;
 
-  auto provider = server::AnthropicProvider::create(
-      {.api_key = "sk-ant-test", .base_url = baseUrl, .connect_timeout_seconds = 10, .read_timeout_seconds = 10});
+  auto provider = server::AnthropicProvider::create(makeAntCfg("sk-ant-test", baseUrl));
 
   neograph::CompletionParams params;
   params.model = "claude-sonnet-4-20250514";
@@ -851,11 +864,7 @@ asio::awaitable<void> test_request_headers(MockAnthropicServer &mock,
   std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
   mock.mode = AnthropicMockMode::Normal;
 
-  auto provider =
-      server::AnthropicProvider::create({.api_key = "sk-ant-header-test",
-                                         .base_url = baseUrl,
-                                         .anthropic_version = "2023-06-01",
-                                         .connect_timeout_seconds = 10, .read_timeout_seconds = 10});
+  auto provider = server::AnthropicProvider::create(makeAntCfg("sk-ant-header-test", baseUrl));
 
   neograph::CompletionParams params;
   params.model = "claude-sonnet-4-20250514";
@@ -881,8 +890,7 @@ asio::awaitable<void> test_request_body_format(MockAnthropicServer &mock,
   std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
   mock.mode = AnthropicMockMode::Normal;
 
-  auto provider = server::AnthropicProvider::create(
-      {.api_key = "sk-ant-test", .base_url = baseUrl, .connect_timeout_seconds = 10, .read_timeout_seconds = 10});
+  auto provider = server::AnthropicProvider::create(makeAntCfg("sk-ant-test", baseUrl));
 
   neograph::CompletionParams params;
   params.model = "claude-sonnet-4-20250514";
@@ -927,12 +935,7 @@ test_sendthinking_in_request_body(MockAnthropicServer &mock,
   std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
   mock.mode = AnthropicMockMode::Normal;
 
-  auto provider = server::AnthropicProvider::create(
-      {.api_key = "sk-ant-test",
-       .base_url = baseUrl,
-       .connect_timeout_seconds = 10,
-       .read_timeout_seconds = 10,
-       .sendThinking = true});
+  auto provider = server::AnthropicProvider::create(makeAntCfg("sk-ant-test", baseUrl, 10, 10, true));
 
   neograph::CompletionParams params;
   params.model = "claude-sonnet-4-20250514";
@@ -996,8 +999,7 @@ asio::awaitable<void> test_streaming_completion(MockAnthropicServer &mock,
                                     R"({"type":"message_stop"})"),
   };
 
-  auto provider = server::AnthropicProvider::create(
-      {.api_key = "sk-ant-test", .base_url = baseUrl, .connect_timeout_seconds = 10, .read_timeout_seconds = 10});
+  auto provider = server::AnthropicProvider::create(makeAntCfg("sk-ant-test", baseUrl));
 
   neograph::CompletionParams params;
   params.model = "claude-sonnet-4-20250514";
@@ -1056,8 +1058,7 @@ asio::awaitable<void> test_streaming_thinking(MockAnthropicServer &mock,
                                     R"({"type":"message_stop"})"),
   };
 
-  auto provider = server::AnthropicProvider::create(
-      {.api_key = "sk-ant-test", .base_url = baseUrl, .connect_timeout_seconds = 10, .read_timeout_seconds = 10});
+  auto provider = server::AnthropicProvider::create(makeAntCfg("sk-ant-test", baseUrl));
 
   neograph::CompletionParams params;
   params.model = "claude-sonnet-4-20250514";
@@ -1109,8 +1110,7 @@ asio::awaitable<void> test_streaming_tool_call(MockAnthropicServer &mock,
                                     R"({"type":"message_stop"})"),
   };
 
-  auto provider = server::AnthropicProvider::create(
-      {.api_key = "sk-ant-test", .base_url = baseUrl, .connect_timeout_seconds = 10, .read_timeout_seconds = 10});
+  auto provider = server::AnthropicProvider::create(makeAntCfg("sk-ant-test", baseUrl));
 
   neograph::CompletionParams params;
   params.model = "claude-sonnet-4-20250514";
@@ -1172,8 +1172,7 @@ test_streaming_mixed_thinking_and_content(MockAnthropicServer &mock,
                                     R"({"type":"message_stop"})"),
   };
 
-  auto provider = server::AnthropicProvider::create(
-      {.api_key = "sk-ant-test", .base_url = baseUrl, .connect_timeout_seconds = 10, .read_timeout_seconds = 10});
+  auto provider = server::AnthropicProvider::create(makeAntCfg("sk-ant-test", baseUrl));
 
   neograph::CompletionParams params;
   params.model = "claude-sonnet-4-20250514";
@@ -1220,8 +1219,7 @@ asio::awaitable<void> test_streaming_usage(MockAnthropicServer &mock,
                                     R"({"type":"message_stop"})"),
   };
 
-  auto provider = server::AnthropicProvider::create(
-      {.api_key = "sk-ant-test", .base_url = baseUrl, .connect_timeout_seconds = 10, .read_timeout_seconds = 10});
+  auto provider = server::AnthropicProvider::create(makeAntCfg("sk-ant-test", baseUrl));
 
   neograph::CompletionParams params;
   params.model = "claude-sonnet-4-20250514";
@@ -1267,8 +1265,7 @@ test_streaming_malformed_event_skipped(MockAnthropicServer &mock,
                                     R"({"type":"message_stop"})"),
   };
 
-  auto provider = server::AnthropicProvider::create(
-      {.api_key = "sk-ant-test", .base_url = baseUrl, .connect_timeout_seconds = 10, .read_timeout_seconds = 10});
+  auto provider = server::AnthropicProvider::create(makeAntCfg("sk-ant-test", baseUrl));
 
   neograph::CompletionParams params;
   params.model = "claude-sonnet-4-20250514";
@@ -1318,8 +1315,7 @@ test_thinking_callback_separation(MockAnthropicServer &mock, uint16_t port) {
                                     R"({"type":"message_stop"})"),
   };
 
-  auto provider = server::AnthropicProvider::create(
-      {.api_key = "sk-ant-test", .base_url = baseUrl, .connect_timeout_seconds = 10, .read_timeout_seconds = 10});
+  auto provider = server::AnthropicProvider::create(makeAntCfg("sk-ant-test", baseUrl));
 
   neograph::CompletionParams params;
   params.model = "claude-sonnet-4-20250514";
@@ -1460,8 +1456,7 @@ void test_anthropic_true_streaming_incremental() {
   srv->start();
 
   std::string baseUrl = "http://127.0.0.1:" + std::to_string(srv->boundPort);
-  auto provider = server::AnthropicProvider::create(
-      {.api_key = "sk-ant-test", .base_url = baseUrl, .connect_timeout_seconds = 10, .read_timeout_seconds = 10});
+  auto provider = server::AnthropicProvider::create(makeAntCfg("sk-ant-test", baseUrl));
 
   neograph::CompletionParams params;
   params.model = "claude-sonnet-4-20250514";
@@ -1596,11 +1591,7 @@ private:
 };
 
 void test_anthropic_connect_timeout() {
-  auto provider = server::AnthropicProvider::create(
-      {.api_key = "sk-ant-test",
-       .base_url = "http://192.0.2.1:12345",
-       .connect_timeout_seconds = 2,
-       .read_timeout_seconds = 2});
+  auto provider = server::AnthropicProvider::create(makeAntCfg("sk-ant-test", "http://192.0.2.1:12345", 2, 2));
 
   neograph::CompletionParams params;
   params.model = "claude-sonnet-4-20250514";
@@ -1637,11 +1628,7 @@ void test_anthropic_read_timeout_streaming() {
   srv->start();
 
   std::string baseUrl = "http://127.0.0.1:" + std::to_string(srv->boundPort);
-  auto provider = server::AnthropicProvider::create(
-      {.api_key = "sk-ant-test",
-       .base_url = baseUrl,
-       .connect_timeout_seconds = 5,
-       .read_timeout_seconds = 2});
+  auto provider = server::AnthropicProvider::create(makeAntCfg("sk-ant-test", baseUrl, 5, 2));
 
   neograph::CompletionParams params;
   params.model = "claude-sonnet-4-20250514";

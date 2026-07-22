@@ -145,18 +145,50 @@ resolveEnvVars(const std::string &input,
   return result;
 }
 
+// ======================== YAML → JSON 转换 ========================
+
+/// 递归将 YAML::Node 转换为 neograph::json
+static neograph::json yamlToJson(const YAML::Node &node) {
+  if (!node.IsDefined() || node.IsNull())
+    return neograph::json{};
+  if (node.IsScalar()) {
+    int i;
+    double d;
+    if (node.as<std::string>() == "true")
+      return neograph::json{true};
+    if (node.as<std::string>() == "false")
+      return neograph::json{false};
+    if (std::from_chars(
+            node.as<std::string>().data(),
+            node.as<std::string>().data() + node.as<std::string>().size(), i)
+            .ec == std::errc{})
+      return neograph::json{i};
+    if (std::from_chars(
+            node.as<std::string>().data(),
+            node.as<std::string>().data() + node.as<std::string>().size(), d)
+            .ec == std::errc{})
+      return neograph::json{d};
+    return neograph::json{node.as<std::string>()};
+  }
+  if (node.IsSequence()) {
+    neograph::json arr = neograph::json::array();
+    for (const auto &item : node)
+      arr.push_back(yamlToJson(item));
+    return arr;
+  }
+  if (node.IsMap()) {
+    neograph::json obj = neograph::json::object();
+    for (const auto &kv : node)
+      obj[kv.first.as<std::string>()] = yamlToJson(kv.second);
+    return obj;
+  }
+  return neograph::json{};
+}
+
 // ======================== YAML 配置模型 ========================
 
-struct ModelEntry {
-  std::string name;
-  std::string baseUrl;
-  std::string key;
-  std::string modelname;
-  YAML::Node extraApiConfig;
-};
-
 struct YamlAppConfig {
-  std::map<std::string, ModelEntry> models;
+  std::map<std::string, agentxx::agent::ModelConfig> models;
   std::string useModelDefault;
   std::string useModelSubagent;
   std::string useModelWebSearch;
@@ -175,18 +207,35 @@ loadYamlConfig(const std::string &path,
 
   if (root["models"] && root["models"].IsSequence()) {
     for (const auto &node : root["models"]) {
-      ModelEntry me;
-      me.name = resolveEnvVars(node["name"].as<std::string>(""), dotEnvVars,
+      agentxx::agent::ModelConfig mc;
+      mc.name = resolveEnvVars(node["name"].as<std::string>(""), dotEnvVars,
                                overrideEnvVars);
-      me.baseUrl = resolveEnvVars(node["base_url"].as<std::string>(""),
+      mc.baseUrl = resolveEnvVars(node["base_url"].as<std::string>(""),
                                   dotEnvVars, overrideEnvVars);
-      me.key = resolveEnvVars(node["key"].as<std::string>(""), dotEnvVars,
-                              overrideEnvVars);
-      me.modelname = resolveEnvVars(node["modelname"].as<std::string>(""),
+      mc.apiKey = resolveEnvVars(node["api_key"].as<std::string>(""),
+                                 dotEnvVars, overrideEnvVars);
+      mc.modelName = resolveEnvVars(node["model_name"].as<std::string>(""),
                                     dotEnvVars, overrideEnvVars);
-      me.extraApiConfig = node["extra_api_config"];
-      if (!me.name.empty()) {
-        cfg.models[me.name] = std::move(me);
+      if (node["send_thinking"]) {
+        mc.sendThinking =
+            resolveEnvVars((node["send_thinking"]).as<std::string>("false"),
+                           dotEnvVars, overrideEnvVars) == "true";
+      }
+      if (node["connect_timeout"]) {
+        mc.connectTimeoutSeconds = std::stoi(
+            resolveEnvVars(node["connect_timeout"].as<std::string>("16"),
+                           dotEnvVars, overrideEnvVars));
+      }
+      if (node["read_timeout"]) {
+        mc.readTimeoutSeconds =
+            std::stoi(resolveEnvVars(node["read_timeout"].as<std::string>("24"),
+                                     dotEnvVars, overrideEnvVars));
+      }
+      if (node["extra_api_config"]) {
+        mc.extra_config = yamlToJson(node["extra_api_config"]);
+      }
+      if (!mc.name.empty()) {
+        cfg.models[mc.name] = std::move(mc);
       }
     }
   }
@@ -218,36 +267,25 @@ loadYamlConfig(const std::string &path,
   return cfg;
 }
 
-static agentxx::agent::ModelConfig
-resolveModelConfig(const std::map<std::string, ModelEntry> &models,
-                   const std::string &modelName) {
-  agentxx::agent::ModelConfig mc;
+static agentxx::agent::ModelConfig resolveModelConfig(
+    const std::map<std::string, agentxx::agent::ModelConfig> &models,
+    const std::string &modelName) {
   if (modelName.empty()) {
-    return mc;
+    return agentxx::agent::ModelConfig{};
   }
   auto it = models.find(modelName);
   if (it == models.end()) {
     std::cerr << "[Config] Warning: model '" << modelName
               << "' not found in config" << std::endl;
-    return mc;
+    return agentxx::agent::ModelConfig{};
   }
-  const auto &entry = it->second;
-  if (!entry.baseUrl.empty()) {
-    mc.baseUrl = entry.baseUrl;
-  }
-  if (!entry.key.empty()) {
-    mc.apiKey = entry.key;
-  }
-  if (!entry.modelname.empty()) {
-    mc.modelName = entry.modelname;
-  }
-  return mc;
+  return it->second;
 }
 
-static void
-applyModelToConfig(std::shared_ptr<agentxx::agent::AgentConfig> agentConfig,
-                   const std::map<std::string, ModelEntry> &models,
-                   const std::string &modelName) {
+static void applyModelToConfig(
+    std::shared_ptr<agentxx::agent::AgentConfig> agentConfig,
+    const std::map<std::string, agentxx::agent::ModelConfig> &models,
+    const std::string &modelName) {
   auto mc = resolveModelConfig(models, modelName);
   if (mc.isValid()) {
     agentConfig->model = std::move(mc);
@@ -256,7 +294,7 @@ applyModelToConfig(std::shared_ptr<agentxx::agent::AgentConfig> agentConfig,
 
 static void applySubagentModelToConfig(
     std::shared_ptr<agentxx::agent::AgentConfig> agentConfig,
-    const std::map<std::string, ModelEntry> &models,
+    const std::map<std::string, agentxx::agent::ModelConfig> &models,
     const std::string &modelName) {
   auto mc = resolveModelConfig(models, modelName);
   if (mc.isValid()) {
@@ -266,7 +304,7 @@ static void applySubagentModelToConfig(
 
 static void applyWebSearchModelToConfig(
     std::shared_ptr<agentxx::agent::AgentConfig> agentConfig,
-    const std::map<std::string, ModelEntry> &models,
+    const std::map<std::string, agentxx::agent::ModelConfig> &models,
     const std::string &modelName) {
   auto mc = resolveModelConfig(models, modelName);
   if (mc.isValid()) {
@@ -277,7 +315,7 @@ static void applyWebSearchModelToConfig(
 /// 填充可用模型列表 (供 TUI 运行时切换模型)
 static void applyAvailableModelsToConfig(
     std::shared_ptr<agentxx::agent::AgentConfig> agentConfig,
-    const std::map<std::string, ModelEntry> &models,
+    const std::map<std::string, agentxx::agent::ModelConfig> &models,
     const std::string &currentModelName) {
   for (const auto &[name, entry] : models) {
     auto mc = resolveModelConfig(models, name);

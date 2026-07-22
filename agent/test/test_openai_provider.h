@@ -1,5 +1,6 @@
 #pragma once
 
+#include "agentxx/agent/config.h"
 #include <asio/awaitable.hpp>
 #include <neograph/api.h>
 #include <string>
