@@ -442,6 +442,7 @@ asio::awaitable<void> runTuiAsync(agentxx::agent::DeepAgent &agent) {
           tuiInterruptCallback);
       messages = std::move(turnResult.messages);
       isFirstMsg = false;
+      io->resetTokenState();
     }
   }
   io->stop();
