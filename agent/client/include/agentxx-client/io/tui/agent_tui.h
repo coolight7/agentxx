@@ -83,9 +83,16 @@ public:
 
 private:
   struct Message {
-    enum class Role { User, Assistant, Thinking, System };
+    enum class Role { User, Assistant, Thinking, System, Tool };
     Role role;
-    std::string text;
+    std::string text; // 文本内容; Tool 角色时为 arguments
+    // 以下仅 Tool 角色使用
+    std::string toolName;
+    std::string toolCallId;
+    std::string toolResult;
+    bool toolFinished = false;
+    bool toolHasError = false;
+    bool toolExpanded = false; // 折叠/展开 (默认折叠为一行)
   };
 
   struct PermissionRequest {
@@ -125,6 +132,11 @@ private:
   int activeTabIndex_ = 0;
   /// 各 tab 标题的渲染区域, 用于鼠标点击检测 (渲染时经 reflect 填充)
   std::vector<ftxui::Box> tabBoxes_;
+
+  /// 各 Tool 消息块的渲染区域与对应 messages_ 索引 (渲染时经 reflect 填充),
+  /// 用于鼠标点击展开/折叠
+  std::vector<ftxui::Box> toolBoxes_;
+  std::vector<size_t> toolMsgIndices_;
 
   std::shared_ptr<agentxx::agent::AgentContext> agentContext_;
   TUITheme theme_;
@@ -171,6 +183,8 @@ private:
   void toggleLogWindow();
   /// 处理侧边栏 tab 的鼠标点击; 返回是否消费了该事件
   bool handleSidebarMouse(const ftxui::Mouse &mouse);
+  /// 处理 Tool 消息块的鼠标点击 (展开/折叠); 返回是否消费了该事件
+  bool handleToolMouse(const ftxui::Mouse &mouse);
 
   /// 获取本 TUI 绑定的会话 (按 threadId_)
   std::shared_ptr<agentxx::agent::Session> currentSession();
@@ -196,6 +210,10 @@ public:
                    const std::string &target) override;
   void onInterrupt(const std::string &node, const std::string &value,
                    const std::string &handleName) override;
+  void onToolStart(const std::string &toolName, const std::string &toolCallId,
+                   const std::string &arguments) override;
+  void onToolEnd(const std::string &toolName, const std::string &toolCallId,
+                 const std::string &result, bool hasError) override;
 
   void resetTokenState();
 };

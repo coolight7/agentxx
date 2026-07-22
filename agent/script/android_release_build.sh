@@ -53,10 +53,11 @@ for abi in ${abi_list[@]}; do
         -DXX_BUILD_TYPE=RELEASE \
         -DAGENTXX_BUILD_CLIENT=OFF \
         -DAGENTXX_BUILD_TEST=OFF \
+        -DAGENTXX_ENABLE_CLIENT_TUI=OFF \
         -DAGENTXX_ENABLE_VECTORSCAN=OFF \
         -DAGENTXX_ENABLE_HYPERSCAN=OFF \
         -DAGENTXX_ENABLE_CODEGRAPH=OFF \
-        -DAGENTXX_ENABLE_BOOST_PROCESS=OFF \
+        -DAGENTXX_ENABLE_BOOST_PROCESS=ON \
         -G Ninja
 
     if [[ $? -ne 0 ]]; then

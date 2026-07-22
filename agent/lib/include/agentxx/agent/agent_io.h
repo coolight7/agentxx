@@ -30,6 +30,16 @@ public:
 
   virtual void onInterrupt(const std::string &node, const std::string &value,
                            const std::string &handleName) = 0;
+
+  /// toolcall 开始 (每个 tool 调用一次); 默认空实现, 由具体 IO 决定如何展示
+  virtual void onToolStart(const std::string &toolName,
+                           const std::string &toolCallId,
+                           const std::string &arguments) {}
+
+  /// toolcall 结束 (每个 tool 调用一次); result 为执行结果, hasError 标记失败
+  virtual void onToolEnd(const std::string &toolName,
+                         const std::string &toolCallId,
+                         const std::string &result, bool hasError) {}
 };
 
 } // namespace agent
