@@ -27,14 +27,16 @@ boost_install_release_dir=$(cd "$boost_install_release_dir" && pwd)
 
 cd "$boost_source_dir"
 
-./b2 install --layout=system --prefix="${boost_install_debug_dir}" link=static runtime-link=shared runtime-debugging=on address-model=64 variant=debug
+export CXXFLAGS="-fPIC"
+export CFLAGS="-fPIC"
 
-./b2 --clean-all
+./b2 install --layout=system --prefix="${boost_install_debug_dir}" cflags=-fPIC cxxflags=-fPIC link=static runtime-link=shared runtime-debugging=on address-model=64 variant=debug 
 
-./b2 install --layout=system --prefix="${boost_install_release_dir}" link=static runtime-link=shared runtime-debugging=off address-model=64 variant=release
+./b2 install --layout=system --prefix="${boost_install_release_dir}" cflags=-fPIC cxxflags=-fPIC link=static runtime-link=shared runtime-debugging=off address-model=64 variant=release
 
-# 如果想重新构建，可以先执行清理:
+# 如果调整了一些参数想重新构建，可以先执行清理:
 # ./b2 --clean-all
+# rm -rf bin.v2
 ```
 ### 源码编译 openssl
 - 编译

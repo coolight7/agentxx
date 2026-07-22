@@ -1,12 +1,9 @@
 #pragma once
 
-#include <atomic>
-#include <filesystem>
+#include <cstdint>
 #include <functional>
 #include <memory>
-#include <mutex>
 #include <string>
-#include <thread>
 #include <vector>
 
 #if AGENTXX_ENABLE_CODEGRAPH
@@ -15,8 +12,6 @@
 
 namespace agentxx {
 namespace expand {
-
-namespace fs = std::filesystem;
 
 struct CodeGraphSearchResult {
   std::vector<codegraph::Node> nodes;

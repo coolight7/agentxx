@@ -32,7 +32,7 @@ public:
   /// 扩展 JSON 配置，合并到请求 body
   neograph::json extra_config;
 
-  bool isValid() const { return !baseUrl.empty() || apiKey != "EMPTY"; }
+  bool isValid() const;
 };
 
 class AgentConfig {
@@ -56,9 +56,7 @@ public:
 
   /// 获取 subagent 实际使用的模型配置
   /// - 如果指定了 subagentModel 则返回它，否则返回主模型
-  const ModelConfig &getSubagentModel() const {
-    return subagentModel.has_value() ? subagentModel.value() : model;
-  }
+  const ModelConfig &getSubagentModel() const;
 
   std::string currentSystemName;
   bool isSystemWSL = false;

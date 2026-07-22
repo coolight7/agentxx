@@ -30,14 +30,12 @@ protected:
   std::string name_;
 
 public:
-  WarpBaseNodeInterface(std::string_view name) : name_(name) {}
+  WarpBaseNodeInterface(std::string_view name);
 
   asio::awaitable<neograph::graph::NodeOutput>
-  run(neograph::graph::NodeInput in) override {
-    co_return neograph::graph::NodeOutput{};
-  }
+  run(neograph::graph::NodeInput in) override;
 
-  std::string get_name() const override { return name_; }
+  std::string get_name() const override;
 };
 
 template <BaseGraphNodeType T>

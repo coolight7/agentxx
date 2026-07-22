@@ -32,8 +32,13 @@ file(GLOB_RECURSE client_SOURCES
 	CONFIGURE_DEPENDS
 	"${AGENTXX_CLIENT_SOURCE_DIR}/src/*.cpp" "${AGENTXX_CLIENT_SOURCE_DIR}/src/*.cc" "${AGENTXX_CLIENT_SOURCE_DIR}/src/*.cxx"
 )
+# 测试不包含 TUI 源码 (依赖 ftxui，测试构建未链接 ftxui)
+list(FILTER client_SOURCES EXCLUDE REGEX "/tui/")
+# 测试仅链接其用到的 client stdio 源码 (StdioInterruptHandler/StdioPermissionPrompter)
+list(FILTER client_SOURCES INCLUDE REGEX "/io/stdio/(interrupt_handler|permission_handler)\\.(cpp|cc|cxx)$")
 target_sources(agentxx_test PRIVATE
 	${test_SOURCES}
+	${client_SOURCES}
 )
 
 target_include_directories(agentxx_test PRIVATE 

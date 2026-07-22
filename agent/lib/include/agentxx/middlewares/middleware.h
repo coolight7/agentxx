@@ -97,90 +97,24 @@ public:
   onToolcallEndFunc(const neograph::graph::NodeInput &in,
                     neograph::graph::NodeOutput &result) = 0;
 
-  virtual ~BaseMiddlewareHandleInterface() = default;
+  virtual ~BaseMiddlewareHandleInterface();
 
-  inline static neograph::json
-  getLastMessageJson(const neograph::graph::NodeInput &in) {
-    auto messages = in.state.get("messages");
-    if (messages.is_array() && messages.size() > 0) {
-      return messages.back();
-    }
-    return neograph::json(nullptr);
-  }
+  static neograph::json
+  getLastMessageJson(const neograph::graph::NodeInput &in);
 
-  inline static std::optional<neograph::ChatMessage>
-  getLastMessage(const neograph::graph::NodeInput &in) {
-    auto lastMsgJson = getLastMessageJson(in);
-    if (false == lastMsgJson.is_object()) {
-      return std::nullopt;
-    }
-    auto result = neograph::ChatMessage{};
-    neograph::from_json(lastMsgJson, result);
-    return result;
-  }
+  static std::optional<neograph::ChatMessage>
+  getLastMessage(const neograph::graph::NodeInput &in);
 
-  inline static const neograph::ChatMessage *getLastAssistantToolcallMessage(
-      std::vector<neograph::ChatMessage> &messages) {
-    const neograph::ChatMessage *assistant_msg = nullptr;
-    if (false == messages.empty()) {
-      for (auto it = messages.rbegin(); it != messages.rend(); ++it) {
-        if (it->role == "assistant" && !it->tool_calls.empty()) {
-          assistant_msg = &(*it);
-          break;
-        }
-      }
-    }
-    return assistant_msg;
-  }
+  static const neograph::ChatMessage *
+  getLastAssistantToolcallMessage(std::vector<neograph::ChatMessage> &messages);
 
-  inline static const neograph::ChatMessage *
-  getLastToolcallResultMessage(std::vector<neograph::ChatMessage> &messages) {
-    const neograph::ChatMessage *tool_msg = nullptr;
-    if (false == messages.empty()) {
-      for (auto it = messages.rbegin(); it != messages.rend(); ++it) {
-        if (it->role == "tool") {
-          tool_msg = &(*it);
-          break;
-        }
-      }
-    }
-    return tool_msg;
-  }
+  static const neograph::ChatMessage *
+  getLastToolcallResultMessage(std::vector<neograph::ChatMessage> &messages);
 
-  inline static void printMessage(const neograph::ChatMessage &msg,
-                                  size_t index = 1) {
-    std::string toollist;
-    if (false == msg.tool_calls.empty()) {
-      toollist += "┣━ Toolcall: \n";
-      for (const auto &tool : msg.tool_calls) {
-        toollist += fmt::format(R"(  - {}/{}
-    {}
-)",
-                                tool.name, tool.id, tool.arguments);
-      }
-    }
-    XX_OUT(R"(
-┏━━━━━━ Message/{} ━━━━━━┓
-┣━ Role: {}
-{}
-┣━ Content: {}
-┗━━━━━━ Message/{} ━━━━━━┛
-)",
-           index, msg.role, toollist, msg.content, index);
-  }
+  static void printMessage(const neograph::ChatMessage &msg, size_t index = 1);
 
-  inline static void
-  printMessages(const std::vector<neograph::ChatMessage> &messages,
-                bool printSystemMsg = true) {
-    size_t index = 0;
-    for (const auto &msg : messages) {
-      ++index;
-      if (false == printSystemMsg && msg.role == "system") {
-        continue;
-      }
-      printMessage(msg, index);
-    }
-  }
+  static void printMessages(const std::vector<neograph::ChatMessage> &messages,
+                            bool printSystemMsg = true);
 };
 
 template <BaseMiddlewareStateType T>
@@ -403,39 +337,9 @@ public:
     std::string defaultValue;
     std::vector<std::string> enumValues;
 
-    inline static InterruptHandleInputItem
-    fromJson(const neograph::json &data) {
-      auto result = InterruptHandleInputItem{};
-      if (data.is_object()) {
-        if (data["label"].is_string()) {
-          result.label = data["label"].get<std::string>();
-        }
-        if (data["depict"].is_string()) {
-          result.depict = data["depict"].get<std::string>();
-        }
-        if (data["type"].is_string()) {
-          result.type = data["type"].get<std::string>();
-        }
-        if (data["enumValues"].is_array()) {
-          result.enumValues =
-              data["enumValues"].get<std::vector<std::string>>();
-        }
-        if (data["defaultValue"].is_string()) {
-          result.defaultValue = data["defaultValue"].get<std::string>();
-        }
-      }
-      return result;
-    }
+    static InterruptHandleInputItem fromJson(const neograph::json &data);
 
-    neograph::json toJson() const {
-      return neograph::json{
-          {"label", label},
-          {"depict", depict},
-          {"type", type},
-          {"enumValues", enumValues},
-          {"defaultValue", defaultValue},
-      };
-    }
+    neograph::json toJson() const;
   };
 
   std::string name;
@@ -443,66 +347,15 @@ public:
   std::vector<InterruptHandleInputItem> inputs;
   std::string resultId;
 
-  inline static bool isAccordingFormat(const neograph::json &data) {
-    return data.is_object() && data["name"].is_string();
-  }
+  static bool isAccordingFormat(const neograph::json &data);
 
-  inline static std::optional<InterruptHandleArg>
-  fromJson(const neograph::json &data) {
-    if (false == isAccordingFormat(data)) {
-      return std::nullopt;
-    }
-    auto result = InterruptHandleArg{};
-    if (data.is_object()) {
-      if (data["name"].is_string()) {
-        result.name = data["name"].get<std::string>();
-      }
-      result.arg = data["arg"];
-      result.resultId = data["resultId"].get<std::string>();
-      if (data["inputs"].is_array()) {
-        for (const auto &input : data["inputs"]) {
-          result.inputs.push_back(InterruptHandleInputItem::fromJson(input));
-        }
-      }
-    }
-    return result;
-  }
+  static std::optional<InterruptHandleArg> fromJson(const neograph::json &data);
 
-  neograph::json toJson() const {
-    auto inputsJson = neograph::json::array();
-    for (const auto &item : inputs) {
-      inputsJson.push_back(item.toJson());
-    }
-    return neograph::json{
-        {"name", name},
-        {"arg", arg},
-        {"inputs", inputsJson},
-        {"resultId", resultId},
-    };
-  }
+  neograph::json toJson() const;
 
-  inline static std::vector<InterruptHandleArg>
-  listFromJson(const neograph::json &data) {
-    auto relist = std::vector<InterruptHandleArg>{};
-    if (data.is_array()) {
-      for (const auto &item : data) {
-        auto arg = fromJson(item);
-        if (arg.has_value()) {
-          relist.push_back(arg.value());
-        }
-      }
-    }
-    return relist;
-  }
+  static std::vector<InterruptHandleArg> listFromJson(const neograph::json &data);
 
-  inline static neograph::json
-  listToJson(const std::vector<InterruptHandleArg> &data) {
-    auto relist = neograph::json::array();
-    for (const auto &item : data) {
-      relist.push_back(item.toJson());
-    }
-    return relist;
-  }
+  static neograph::json listToJson(const std::vector<InterruptHandleArg> &data);
 };
 
 class MiddlewareContext {
@@ -554,52 +407,7 @@ public:
   MiddlewareContext() {}
 
   /// 将 std::any 转为 neograph::json（用于序列化到 state）
-  static neograph::json anyToJson(const std::any &val) {
-    if (!val.has_value())
-      return nullptr;
-    auto &t = val.type();
-    if (t == typeid(neograph::json))
-      return std::any_cast<neograph::json>(val);
-    if (t == typeid(std::nullptr_t))
-      return nullptr;
-    if (t == typeid(bool))
-      return std::any_cast<bool>(val);
-    if (t == typeid(int))
-      return std::any_cast<int>(val);
-    if (t == typeid(int64_t))
-      return std::any_cast<int64_t>(val);
-    if (t == typeid(uint64_t))
-      return std::any_cast<uint64_t>(val);
-    if (t == typeid(float))
-      return static_cast<double>(std::any_cast<float>(val));
-    if (t == typeid(double))
-      return std::any_cast<double>(val);
-    if (t == typeid(std::string))
-      return std::any_cast<std::string>(val);
-    if (t == typeid(const char *))
-      return std::string(std::any_cast<const char *>(val));
-    if (t == typeid(std::string_view))
-      return std::string(std::any_cast<std::string_view>(val));
-    if (t == typeid(std::vector<std::string>)) {
-      return std::any_cast<const std::vector<std::string> &>(val);
-    }
-    if (t == typeid(std::vector<neograph::ChatMessage>)) {
-      auto &msgs =
-          std::any_cast<const std::vector<neograph::ChatMessage> &>(val);
-      auto arr = neograph::json::array();
-      for (const auto &msg : msgs) {
-        neograph::json j;
-        neograph::to_json(j, msg);
-        arr.push_back(std::move(j));
-      }
-      return arr;
-    }
-    if (t == typeid(std::vector<InterruptHandleArg>)) {
-      return InterruptHandleArg::listToJson(
-          std::any_cast<const std::vector<InterruptHandleArg> &>(val));
-    }
-    return nullptr;
-  }
+  static neograph::json anyToJson(const std::any &val);
 
   /// 将 neograph::json 转为 T（用于从 state 恢复后按需转换）
   template <typename T> static T jsonToValue(const neograph::json &j) {
@@ -671,49 +479,17 @@ public:
   }
 
   std::optional<std::string> getShareStoreItemValue(std::string_view thread_id,
-                                                    const int id) {
-    auto it = shareStore.find(thread_id);
-    if (shareStore.end() != it) {
-      auto reslut = it->second.store.find(id);
-      if (it->second.store.end() != reslut) {
-        return reslut->second;
-      }
-    }
-    return std::nullopt;
-  }
+                                                    const int id);
 
   void setShareStoreItemValue(const std::string &thread_id, const int id,
-                              std::string_view value) {
-    shareStore[thread_id].store[id] = value;
-  }
+                              std::string_view value);
 
   size_t addShareStoreItemValue(const std::string &thread_id,
-                                std::string_view value) {
-    auto &store = shareStore[thread_id];
-    auto id = store.getNextId();
-    store.store[id] = value;
-    return id;
-  }
+                                std::string_view value);
 
-  void removeShareStoreItemValue(std::string_view thread_id, const int id) {
-    auto it = shareStore.find(thread_id);
-    if (shareStore.end() != it) {
-      auto reslutIt = it->second.store.find(id);
-      if (it->second.store.end() != reslutIt) {
-        it->second.store.erase(reslutIt);
-      }
-    }
-  }
+  void removeShareStoreItemValue(std::string_view thread_id, const int id);
 
-  void removeGraphDataItem(const std::string &thread_id, std::string_view key) {
-    auto it = graphData.find(thread_id);
-    if (graphData.end() != it) {
-      auto reslutIt = it->second.find(key);
-      if (it->second.end() != reslutIt) {
-        it->second.erase(reslutIt);
-      }
-    }
-  }
+  void removeGraphDataItem(const std::string &thread_id, std::string_view key);
 
   template <typename T>
   T &getGraphDataItemValue(const std::string &thread_id, std::string_view key) {
@@ -760,63 +536,24 @@ public:
 
   /// 一般用于捕获到 NodeInterrupt 后重新抛出，而不能作为首次抛出使用
   void throwNodeInterruptBase(const std::string &thread_id,
-                              const neograph::json &msgs) {
-    if (msgs.is_array()) {
-      setGraphDataItemValue(
-          thread_id, MiddlewareContext::graphDataKey_interruptMessages, msgs);
-    }
-    throw neograph::graph::NodeInterrupt{"xx-NodeInterrupt"};
-  }
+                              const neograph::json &msgs);
 
   /// 工具请求中断：检查已有结果（resume 后）或存储参数并抛异常
   asio::awaitable<neograph::json>
   requestInterrupt(const std::string &thread_id,
                    const std::function<InterruptHandleArg()> &onCreateArg,
-                   const neograph::json &msgs) {
-    auto &result = getGraphDataItemValue<neograph::json>(
-        thread_id, MiddlewareContext::graphDataKey_interruptResult);
-    removeGraphDataItem(thread_id,
-                        MiddlewareContext::graphDataKey_interruptResult);
-    if (false == result.is_null()) {
-      co_return result;
-    }
-
-    auto arg = onCreateArg();
-    modifyGraphDataItemValue<std::vector<InterruptHandleArg>>(
-        thread_id, MiddlewareContext::graphDataKey_interruptArgs,
-        [&](std::vector<InterruptHandleArg> &args) { args.push_back(arg); });
-    throwNodeInterruptBase(thread_id, msgs);
-  }
+                   const neograph::json &msgs);
 
   /// 将 graphData 中 JSON 兼容条目序列化到 state channel
-  inline neograph::json getGraphDataToState(neograph::graph::GraphState &state,
-                                            const std::string &thread_id) {
-    neograph::json saved = neograph::json::object();
-    auto it = graphData.find(thread_id);
-    if (it != graphData.end()) {
-      for (const auto &[key, val] : it->second) {
-        saved[key] = anyToJson(val);
-      }
-    }
-    return saved;
-  }
+  neograph::json getGraphDataToState(neograph::graph::GraphState &state,
+                                     const std::string &thread_id);
 
   /// 从 state channel 恢复 graphData (用于中断 resume)
-  inline void setGraphDataFromState(neograph::graph::GraphState &state,
-                                    const std::string &thread_id) {
-    setGraphDataFromState(state.get(channel_savedGraphData), thread_id);
-  }
+  void setGraphDataFromState(neograph::graph::GraphState &state,
+                             const std::string &thread_id);
 
-  inline void setGraphDataFromState(const neograph::json &j,
-                                    const std::string &thread_id) {
-    if (j.is_object()) {
-      auto data = std::map<std::string, std::any, std::less<>>{};
-      for (auto it = j.begin(); it != j.end(); ++it) {
-        data[it.key()] = it.value();
-      }
-      graphData[thread_id] = std::move(data);
-    }
-  }
+  void setGraphDataFromState(const neograph::json &j,
+                             const std::string &thread_id);
 };
 
 } // namespace middleware

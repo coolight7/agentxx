@@ -51,27 +51,15 @@ public:
   std::shared_ptr<ContextStats> contextStats = std::make_shared<ContextStats>();
 
   /// 设置本会话当前轮次的取消令牌 (线程安全)
-  void setCancelToken(std::shared_ptr<neograph::graph::CancelToken> token) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    cancelToken_ = std::move(token);
-  }
+  void setCancelToken(std::shared_ptr<neograph::graph::CancelToken> token);
   /// 获取本会话当前轮次的取消令牌 (线程安全)
-  std::shared_ptr<neograph::graph::CancelToken> getCancelToken() {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return cancelToken_;
-  }
+  std::shared_ptr<neograph::graph::CancelToken> getCancelToken();
 
   /// 设置本会话选择的模型名 (线程安全)
   /// - 为空表示使用 ModelProviderRegistry 的默认模型
-  void setModelName(const std::string &name) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    modelName_ = name;
-  }
+  void setModelName(const std::string &name);
   /// 获取本会话选择的模型名 (线程安全)
-  std::string getModelName() const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return modelName_;
-  }
+  std::string getModelName() const;
 
 private:
   mutable std::mutex mutex_;
@@ -83,28 +71,12 @@ private:
 class SessionStore {
 public:
   /// 获取或创建指定 thread_id 的会话
-  std::shared_ptr<Session> getOrCreate(const std::string &threadId) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    auto it = sessions_.find(threadId);
-    if (it != sessions_.end()) {
-      return it->second;
-    }
-    auto session = std::make_shared<Session>();
-    sessions_[threadId] = session;
-    return session;
-  }
+  std::shared_ptr<Session> getOrCreate(const std::string &threadId);
 
   /// 获取指定 thread_id 的会话; 不存在时返回 nullptr
-  std::shared_ptr<Session> get(const std::string &threadId) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    auto it = sessions_.find(threadId);
-    return it == sessions_.end() ? nullptr : it->second;
-  }
+  std::shared_ptr<Session> get(const std::string &threadId);
 
-  void remove(const std::string &threadId) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    sessions_.erase(threadId);
-  }
+  void remove(const std::string &threadId);
 
 private:
   std::mutex mutex_;
@@ -134,9 +106,7 @@ public:
   std::shared_ptr<SessionStore> sessions = std::make_shared<SessionStore>();
 
   /// 便捷方法: 获取或创建指定 thread_id 的会话
-  std::shared_ptr<Session> getSession(const std::string &threadId) {
-    return sessions->getOrCreate(threadId);
-  }
+  std::shared_ptr<Session> getSession(const std::string &threadId);
 };
 
 } // namespace agent

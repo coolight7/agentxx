@@ -1,8 +1,6 @@
 #pragma once
 
 #include "agentxx/agent/config.h"
-#include "agentxx/protocol/anthropic_provider.h"
-#include "agentxx/protocol/openai_provider.h"
 #include "neograph/provider.h"
 #include <map>
 #include <memory>
@@ -21,101 +19,34 @@ class ModelProviderRegistry {
 public:
   /// 注册一个命名模型配置; 同名覆盖
   /// - 首次注册时自动设为默认模型
-  void registerModel(const std::string &name, const ModelConfig &config) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    models_[name] = config;
-    if (defaultName_.empty()) {
-      defaultName_ = name;
-    }
-  }
+  void registerModel(const std::string &name, const ModelConfig &config);
 
   /// 设置默认模型名; 模型不存在时返回 false
-  bool setDefaultModel(const std::string &name) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (false == models_.contains(name)) {
-      return false;
-    }
-    defaultName_ = name;
-    return true;
-  }
+  bool setDefaultModel(const std::string &name);
 
   /// 默认模型名 (无注册模型时为空)
-  std::string getDefaultModelName() const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return defaultName_;
-  }
+  std::string getDefaultModelName() const;
 
   /// 解析有效模型名: name 为空或不存在时回退到默认模型
-  std::string resolveModelName(const std::string &name) const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (false == name.empty() && models_.contains(name)) {
-      return name;
-    }
-    return defaultName_;
-  }
+  std::string resolveModelName(const std::string &name) const;
 
   /// 指定模型的配置; name 为空/不存在时取默认模型
-  ModelConfig getModelConfig(const std::string &name) const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    auto effective = (false == name.empty() && models_.contains(name))
-                         ? name
-                         : defaultName_;
-    auto it = models_.find(effective);
-    if (it == models_.end()) {
-      return ModelConfig{};
-    }
-    return it->second;
-  }
+  ModelConfig getModelConfig(const std::string &name) const;
 
   /// 根据 ModelConfig::type 创建对应 Provider
   static std::shared_ptr<neograph::Provider>
-  createProvider(const ModelConfig &mc) {
-    if (mc.type == "anthropic") {
-      return agentxx::server::AnthropicProvider::create_shared(mc);
-    }
-    return agentxx::server::OpenAIProvider::create_shared(mc);
-  }
+  createProvider(const ModelConfig &mc);
 
   /// 指定模型的 Provider, 按需创建并缓存; name 为空/不存在时取默认模型
   /// - 无可用模型时返回 nullptr
-  std::shared_ptr<neograph::Provider> getProvider(const std::string &name) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    auto effective = (false == name.empty() && models_.contains(name))
-                         ? name
-                         : defaultName_;
-    auto cfgIt = models_.find(effective);
-    if (cfgIt == models_.end()) {
-      return nullptr;
-    }
-    auto cacheIt = providerCache_.find(effective);
-    if (cacheIt != providerCache_.end()) {
-      return cacheIt->second;
-    }
-    auto provider = createProvider(cfgIt->second);
-    providerCache_[effective] = provider;
-    return provider;
-  }
+  std::shared_ptr<neograph::Provider> getProvider(const std::string &name);
 
   /// 所有已注册模型的显示名称
-  std::vector<std::string> listModelNames() const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    std::vector<std::string> names;
-    names.reserve(models_.size());
-    for (const auto &kv : models_) {
-      names.push_back(kv.first);
-    }
-    return names;
-  }
+  std::vector<std::string> listModelNames() const;
 
-  bool hasModel(const std::string &name) const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return models_.contains(name);
-  }
+  bool hasModel(const std::string &name) const;
 
-  size_t size() const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return models_.size();
-  }
+  size_t size() const;
 
 private:
   mutable std::mutex mutex_;

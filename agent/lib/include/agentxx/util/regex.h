@@ -1,5 +1,4 @@
 #pragma once
-#include "agentxx/util/log.h"
 #include <memory>
 #include <string>
 #include <vector>

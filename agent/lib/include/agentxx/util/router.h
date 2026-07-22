@@ -119,7 +119,7 @@ protected:
     /// 使用类型下标设置处理函数
     /// - [in_index] 仅支持一个类型下标
     bool setHandle(std::shared_ptr<HANLDE_TPYE> in_fun, int in_index) {
-      if (in_index >= 0 && in_index < handles.size()) {
+      if (in_index >= 0 && static_cast<size_t>(in_index) < handles.size()) {
         handles[in_index] = in_fun;
         return true;
       } else {
@@ -131,7 +131,7 @@ protected:
     ///   - 下表越界时返回nullptr
     ///   - 指定下标的函数未定义时返回nullptr
     [[nodiscard]] std::shared_ptr<HANLDE_TPYE> getHandle(int in_index) const {
-      if (in_index >= 0 && in_index < handles.size()) {
+      if (in_index >= 0 && static_cast<size_t>(in_index) < handles.size()) {
         return handles[in_index];
       } else {
         return nullptr;

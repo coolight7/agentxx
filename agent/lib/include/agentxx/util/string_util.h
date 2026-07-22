@@ -1,11 +1,12 @@
 #pragma once
 
 #include "agentxx/util/log.h"
-#include "boost/beast/core/detail/base64.hpp"
 #include <algorithm>
+#include <cassert>
 #include <cstring>
 #include <functional>
 #include <iostream>
+#include <optional>
 #include <queue>
 #include <ranges>
 #include <regex>
@@ -385,29 +386,9 @@ toStringNotNull(const char *str) {
   return std::string_view{str};
 }
 
-[[nodiscard]] inline std::string base64Encode(std::string_view data) {
-  // 预分配
-  std::string result;
-  result.resize(boost::beast::detail::base64::encoded_size(data.size()));
+[[nodiscard]] std::string base64Encode(std::string_view data);
 
-  size_t bytes_written = boost::beast::detail::base64::encode(
-      result.data(), data.data(), data.size());
-
-  // 调整大小为实际写入的字节数
-  result.resize(bytes_written);
-  return result;
-}
-
-[[nodiscard]] inline std::string base64Decode(std::string_view str) {
-  std::string result;
-  result.resize(boost::beast::detail::base64::decoded_size(str.size()));
-
-  auto [bytes_written, _] = boost::beast::detail::base64::decode(
-      result.data(), str.data(), str.size());
-
-  result.resize(bytes_written);
-  return result;
-}
+[[nodiscard]] std::string base64Decode(std::string_view str);
 
 [[nodiscard]] std::tuple<bool, std::optional<std::string>>
 convertCharset(std::string_view src, std::string_view srcEncoding,
@@ -510,186 +491,21 @@ removeBetweenSpaceMayNull(std::string_view str, bool removeLine = true,
   return result;
 }
 
-[[nodiscard]] inline std::string getFirstWordPinyin(std::string_view str) {
-  if (s_pinyinCallback) {
-    return s_pinyinCallback(str);
-  }
-  return "";
-}
+[[nodiscard]] std::string getFirstWordPinyin(std::string_view str);
 
-[[nodiscard]] inline std::string getFirstCharPinyinFast(std::string_view str) {
-  if (str.empty())
-    return "";
+[[nodiscard]] std::string getFirstCharPinyinFast(std::string_view str);
 
-  int code = static_cast<unsigned char>(str[0]);
-  if (isCode_num(code))
-    return std::string(1, str[0]);
-  if (isCode_az(code))
-    return std::string(1, str[0]);
-  if (isCode_AZ(code))
-    return std::string(1, static_cast<char>(code + (CODE_a - CODE_A)));
+[[nodiscard]] std::optional<int> getComparableCode(std::string_view str,
+                                                   size_t index);
 
-  std::string result = getFirstWordPinyin(str);
-  if (!result.empty()) {
-    int firstCode = static_cast<unsigned char>(result[0]);
-    if (isCode_AZaz(firstCode)) {
-      toLowerSelf(result);
-      return result;
-    }
-  }
-  return "";
-}
-
-[[nodiscard]] inline std::optional<int> getComparableCode(std::string_view str,
-                                                          size_t index) {
-  int code = static_cast<unsigned char>(str[index]);
-
-  if (isCode_az(code))
-    return code;
-  if (isCode_AZ(code))
-    return code + (CODE_a - CODE_A);
-
-  if (code < 128)
-    return std::nullopt;
-
-  auto target = (index == 0) ? str : str.substr(index);
-  std::string pinyin = getFirstCharPinyinFast(target);
-  if (!pinyin.empty()) {
-    int pinyinCode = static_cast<unsigned char>(pinyin[0]);
-    if (isCode_AZ(pinyinCode))
-      return pinyinCode + (CODE_a - CODE_A);
-    if (isCode_az(pinyinCode))
-      return pinyinCode;
-  }
-  return std::nullopt;
-}
-
-[[nodiscard]] inline std::optional<std::string>
+[[nodiscard]] std::optional<std::string>
 getFirstCharPinyin(std::string_view str, bool enableAZ = true,
-                   bool enableNum = true) {
-  if (str.empty()) {
-    return std::nullopt;
-  }
+                   bool enableNum = true);
 
-  std::string trimmed = removeBetweenSpace(str, true, true, false);
-  if (trimmed.empty()) {
-    return std::nullopt;
-  }
+[[nodiscard]] std::optional<std::string>
+getFirstCharPinyinFirstChar(std::string_view str);
 
-  int code = static_cast<unsigned char>(trimmed[0]);
-
-  if (isCode_num(code)) {
-    if (enableNum) {
-      return std::string(1, trimmed[0]);
-    } else {
-      return std::nullopt;
-    }
-  } else if (isCode_az(code)) {
-    if (enableAZ) {
-      return std::string(1, trimmed[0]);
-    } else {
-      return std::nullopt;
-    }
-  } else if (isCode_AZ(code)) {
-    if (enableAZ) {
-      return std::string(1, static_cast<char>(code + (CODE_a - CODE_A)));
-    } else {
-      return std::nullopt;
-    }
-  } else {
-    std::string result = getFirstWordPinyin(trimmed);
-    if (!result.empty()) {
-      int firstCode = static_cast<unsigned char>(result[0]);
-      if (isCode_AZaz(firstCode)) {
-        toLowerSelf(result);
-        return result;
-      }
-    }
-    return std::nullopt;
-  }
-}
-
-[[nodiscard]] inline std::optional<std::string>
-getFirstCharPinyinFirstChar(std::string_view str) {
-  auto restr = getFirstCharPinyin(str);
-  if (restr.has_value() && !restr->empty()) {
-    return std::string(1, (*restr)[0]);
-  }
-  return std::nullopt;
-}
-
-[[nodiscard]] inline int compareExtend(std::string_view left,
-                                       std::string_view right) {
-  if (left.empty()) {
-    if (right.empty()) {
-      return 0;
-    }
-    return -1;
-  }
-  if (right.empty()) {
-    return 1;
-  }
-
-  size_t i = 0, j = 0;
-
-  while (i < left.size() && j < right.size()) {
-    int leftCode = static_cast<unsigned char>(left[i]);
-    int rightCode = static_cast<unsigned char>(right[j]);
-    bool leftIsNum = isCode_num(leftCode);
-    bool rightIsNum = isCode_num(rightCode);
-
-    if (leftIsNum != rightIsNum) {
-      return leftIsNum ? -1 : 1;
-    }
-
-    if (leftIsNum) {
-      int leftSum = 0;
-      while (i < left.size() &&
-             isCode_num(static_cast<unsigned char>(left[i]))) {
-        leftSum = leftSum * 10 + (static_cast<unsigned char>(left[i]) - CODE_0);
-        i++;
-      }
-      int rightSum = 0;
-      while (j < right.size() &&
-             isCode_num(static_cast<unsigned char>(right[j]))) {
-        rightSum =
-            rightSum * 10 + (static_cast<unsigned char>(right[j]) - CODE_0);
-        j++;
-      }
-      if (leftSum != rightSum) {
-        return leftSum - rightSum;
-      }
-      continue;
-    }
-
-    auto leftComp = getComparableCode(left, i);
-    auto rightComp = getComparableCode(right, j);
-
-    if (leftComp.has_value() && rightComp.has_value()) {
-      int result = leftComp.value() - rightComp.value();
-      if (result != 0)
-        return result;
-    } else if (leftComp.has_value()) {
-      return 1;
-    } else if (rightComp.has_value()) {
-      return -1;
-    } else {
-      int leftLower = toCode_tryaz(leftCode).value_or(leftCode);
-      int rightLower = toCode_tryaz(rightCode).value_or(rightCode);
-      int result = leftLower - rightLower;
-      if (result != 0)
-        return result;
-    }
-
-    i++;
-    j++;
-  }
-
-  if (i < left.size() || j < right.size()) {
-    return static_cast<int>(left.size() - right.size());
-  }
-  return 0;
-}
+[[nodiscard]] int compareExtend(std::string_view left, std::string_view right);
 
 [[nodiscard]] inline constexpr std::string
 collapseSlashes(std::string_view path) {
@@ -925,19 +741,8 @@ getFileNameEXT(std::string_view in_path) {
   return std::nullopt;
 }
 
-[[nodiscard]] inline std::string replaceOrAppendExt(std::string_view inpath,
-                                                    std::string_view newExt) {
-  auto ext = getFileNameEXT(inpath);
-  if (ext.has_value()) {
-    auto result = std::string{inpath};
-    result.replace(inpath.size() - ext->size(), ext->size(), newExt);
-    return result;
-  }
-  if (!inpath.empty() && inpath.back() == '.') {
-    return fmt::format("{}{}", inpath, newExt);
-  }
-  return fmt::format("{}.{}", inpath, newExt);
-}
+[[nodiscard]] std::string replaceOrAppendExt(std::string_view inpath,
+                                             std::string_view newExt);
 
 [[nodiscard]] inline constexpr std::optional<std::string_view>
 getParentDirPath(std::string_view in_path) {
@@ -1008,36 +813,7 @@ isNotEmptyAndIgnoreCaseContainsAny(std::string_view str1,
   return isIgnoreCaseContainsAny(str1, str2);
 }
 
-[[nodiscard]] inline std::string toArgument(std::string_view str,
-                                            char mark = '"') {
-  std::string result;
-  result.reserve(str.size() * 2);
-  size_t len = str.size();
-
-  for (size_t i = 0; i < len; ++i) {
-    if (str[i] == mark) {
-      bool shouldEscape = false;
-
-      if (i == 0) {
-        shouldEscape = true;
-      } else {
-        char prev = str[i - 1];
-        if (prev != '\\') {
-          shouldEscape = true;
-        }
-      }
-
-      if (shouldEscape) {
-        result += '\\';
-      }
-      result += mark;
-    } else {
-      result += str[i];
-    }
-  }
-
-  return fmt::format("{}{}{}", mark, result, mark);
-}
+[[nodiscard]] std::string toArgument(std::string_view str, char mark = '"');
 
 }; // namespace util
 }; // namespace agentxx
