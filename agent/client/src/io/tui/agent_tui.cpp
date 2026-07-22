@@ -104,10 +104,31 @@ void AgentTUI::start() {
       // 若用 frame (含横向) 会把内容撑到自然宽度导致不换行
       auto messages = renderMessages() | flex | vscroll_indicator | yframe;
 
+      // 状态指示器 (固定 3 字符宽度)
+      Element indicator;
+      if (pendingPermission_) {
+        indicator = text(" ! ") | bgcolor(Color::Red) | color(Color::White) |
+                    bold | blink;
+      } else if (isStreaming_) {
+        indicator = text("   ") | bgcolor(theme_.accentColor) | blink;
+      } else {
+        indicator = text(" > ") | color(theme_.promptColor) | bold;
+      }
+
       auto input_bar = hbox({
-          text(">>> ") | color(theme_.promptColor) | bold,
-          input->Render() | color(theme_.inputTextColor) |
-              bgcolor(theme_.inputBgColor) | flex,
+          text(" "),  // 外边距
+          vbox({
+              filler(),
+              hbox({
+                  text("  "),  // 内左边距
+                  indicator,
+                  text("  "),  // 间距
+                  input->Render() | color(theme_.inputTextColor) | flex,
+                  text("  "),  // 内右边距
+              }),
+              filler(),
+          }) | bgcolor(theme_.inputBgColor) | xflex | size(HEIGHT, EQUAL, 3),
+          text(" "),  // 外边距
       });
 
       auto main = vbox({
