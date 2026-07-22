@@ -40,36 +40,12 @@ public:
   XXToolBase(std::string_view in_name,
              std::weak_ptr<agentxx::agent::AgentContext> in_agentContext,
              bool in_autoSummaryOutput = false, bool in_canDelayLoad = true,
-             size_t in_maxRetry = 0)
-      : name(in_name), agentContext(in_agentContext),
-        autoSummaryOutput(in_autoSummaryOutput), canDelayLoad(in_canDelayLoad),
-        maxRetry(in_maxRetry) {
-    extra["autoSummaryOutput"] = autoSummaryOutput ? "true" : "false";
-    extra["canDelayLoad"] = canDelayLoad ? "true" : "false";
-    extra["maxRetry"] = std::to_string(maxRetry);
-  }
+             size_t in_maxRetry = 0);
 
-  std::string get_name() const override { return name; }
+  std::string get_name() const override;
 
   virtual std::optional<agentxx::middleware::SummarizationToolHandle>
-  createSummarizationToolHandle() const {
-    return std::nullopt;
-    // return agentxx::middleware::SummarizationToolHandle{
-    //     .generateDeduplicationKey =
-    //         [](const neograph::json &args) -> std::optional<std::string> {
-    //           return "tool_name:unique_key";
-    //         },
-    //     .truncateRequest =
-    //         [](neograph::ToolCall &toolcall) {
-    //           toolcall.arguments =
-    //               R"({"tip":"[Outdated Message Truncated]"})";
-    //         },
-    //     .truncateResponse =
-    //         [](neograph::ChatMessage &msg) {
-    //           msg.content = "[Outdated Content truncated]";
-    //         },
-    // };
-  }
+  createSummarizationToolHandle() const;
 };
 
 /// - 封装原始的 [neograph::Tool] 类型，添加额外功能
@@ -87,22 +63,14 @@ public:
              bool in_autoSummaryOutput = false, bool in_canDelayLoad = false,
              size_t in_maxRetry = 0,
              std::optional<agentxx::middleware::SummarizationToolHandle>
-                 in_summarizationHandle = std::nullopt)
-      : XXToolBase(in_inner->get_name(), in_agentContext, in_autoSummaryOutput,
-                   in_canDelayLoad, in_maxRetry),
-        inner(std::move(in_inner)),
-        summarizationHandle(in_summarizationHandle) {}
+                 in_summarizationHandle = std::nullopt);
 
-  std::string get_name() const override { return inner->get_name(); }
+  std::string get_name() const override;
 
-  neograph::ChatTool get_definition() const override {
-    return inner->get_definition();
-  }
+  neograph::ChatTool get_definition() const override;
 
   asio::awaitable<std::string>
-  execute_async(const neograph::json &arguments) override {
-    co_return co_await inner->real_execute_async(arguments);
-  }
+  execute_async(const neograph::json &arguments) override;
 };
 
 } // namespace tools

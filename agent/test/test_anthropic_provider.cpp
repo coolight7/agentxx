@@ -51,12 +51,18 @@ int g_anthropic_failed = 0;
 
 void test_anthropic_factory_and_name() {
   {
-    agentxx::agent::ModelConfig mc; mc.name = "test"; mc.apiKey = "sk-ant-test"; auto p = server::AnthropicProvider::create(mc);
+    agentxx::agent::ModelConfig mc;
+    mc.name = "test";
+    mc.apiKey = "sk-ant-test";
+    auto p = server::AnthropicProvider::create(mc);
     XX_TEST_EXPECT_TRUE(p != nullptr);
     XX_TEST_EXPECT_EQ(p->get_name(), "anthropic");
   }
   {
-    agentxx::agent::ModelConfig mc; mc.name = "test"; mc.apiKey = "sk-ant-shared"; auto p = server::AnthropicProvider::create_shared(mc);
+    agentxx::agent::ModelConfig mc;
+    mc.name = "test";
+    mc.apiKey = "sk-ant-shared";
+    auto p = server::AnthropicProvider::create_shared(mc);
     XX_TEST_EXPECT_TRUE(p != nullptr);
     XX_TEST_EXPECT_EQ(p->get_name(), "anthropic");
   }
@@ -164,22 +170,20 @@ void test_convert_messages_thinking_enabled() {
        .content = "Final answer",
        .reasoning_content = "Step by step..."},
   };
-  auto [system, arr] =
-      server::AnthropicProvider::convertMessages(msgs, true);
+  auto [system, arr] = server::AnthropicProvider::convertMessages(msgs, true);
   XX_TEST_EXPECT_TRUE(system.empty());
   XX_TEST_EXPECT_EQ(arr.size(), (size_t)1);
 
   // Content should be an array with thinking + text blocks
   XX_TEST_EXPECT_TRUE(arr[0]["content"].is_array());
   XX_TEST_EXPECT_EQ(arr[0]["content"].size(), (size_t)2);
-  XX_TEST_EXPECT_EQ(
-      arr[0]["content"][0]["type"].get<std::string>(), "thinking");
-  XX_TEST_EXPECT_EQ(
-      arr[0]["content"][0]["thinking"].get<std::string>(), "Step by step...");
-  XX_TEST_EXPECT_EQ(
-      arr[0]["content"][1]["type"].get<std::string>(), "text");
-  XX_TEST_EXPECT_EQ(
-      arr[0]["content"][1]["text"].get<std::string>(), "Final answer");
+  XX_TEST_EXPECT_EQ(arr[0]["content"][0]["type"].get<std::string>(),
+                    "thinking");
+  XX_TEST_EXPECT_EQ(arr[0]["content"][0]["thinking"].get<std::string>(),
+                    "Step by step...");
+  XX_TEST_EXPECT_EQ(arr[0]["content"][1]["type"].get<std::string>(), "text");
+  XX_TEST_EXPECT_EQ(arr[0]["content"][1]["text"].get<std::string>(),
+                    "Final answer");
 }
 
 void test_convert_messages_thinking_disabled() {
@@ -188,15 +192,13 @@ void test_convert_messages_thinking_disabled() {
        .content = "Final answer",
        .reasoning_content = "Step by step..."},
   };
-  auto [system, arr] =
-      server::AnthropicProvider::convertMessages(msgs, false);
+  auto [system, arr] = server::AnthropicProvider::convertMessages(msgs, false);
   XX_TEST_EXPECT_TRUE(system.empty());
   XX_TEST_EXPECT_EQ(arr.size(), (size_t)1);
 
   // Content should be a plain string, not an array
   XX_TEST_EXPECT_TRUE(arr[0]["content"].is_string());
-  XX_TEST_EXPECT_EQ(
-      arr[0]["content"].get<std::string>(), "Final answer");
+  XX_TEST_EXPECT_EQ(arr[0]["content"].get<std::string>(), "Final answer");
 }
 
 void test_convert_messages_thinking_default_disabled() {
@@ -208,8 +210,7 @@ void test_convert_messages_thinking_default_disabled() {
   auto [system, arr] =
       server::AnthropicProvider::convertMessages(msgs); // default false
   XX_TEST_EXPECT_TRUE(arr[0]["content"].is_string());
-  XX_TEST_EXPECT_EQ(
-      arr[0]["content"].get<std::string>(), "No thinking sent");
+  XX_TEST_EXPECT_EQ(arr[0]["content"].get<std::string>(), "No thinking sent");
 }
 
 void test_convert_messages_thinking_with_tool_calls() {
@@ -217,24 +218,19 @@ void test_convert_messages_thinking_with_tool_calls() {
   msg.role = "assistant";
   msg.content = "Let me check";
   msg.reasoning_content = "I need to search";
-  msg.tool_calls = {{.id = "call_1",
-                     .name = "search",
-                     .arguments = R"({"q":"test"})"}};
+  msg.tool_calls = {
+      {.id = "call_1", .name = "search", .arguments = R"({"q":"test"})"}};
   std::vector<neograph::ChatMessage> msgs = {msg};
-  auto [system, arr] =
-      server::AnthropicProvider::convertMessages(msgs, true);
+  auto [system, arr] = server::AnthropicProvider::convertMessages(msgs, true);
   XX_TEST_EXPECT_EQ(arr.size(), (size_t)1);
   const auto &blocks = arr[0]["content"];
   // order: thinking, text, tool_use
   XX_TEST_EXPECT_EQ(blocks.size(), (size_t)3);
-  XX_TEST_EXPECT_EQ(
-      blocks[0]["type"].get<std::string>(), "thinking");
-  XX_TEST_EXPECT_EQ(
-      blocks[0]["thinking"].get<std::string>(), "I need to search");
-  XX_TEST_EXPECT_EQ(
-      blocks[1]["type"].get<std::string>(), "text");
-  XX_TEST_EXPECT_EQ(
-      blocks[2]["type"].get<std::string>(), "tool_use");
+  XX_TEST_EXPECT_EQ(blocks[0]["type"].get<std::string>(), "thinking");
+  XX_TEST_EXPECT_EQ(blocks[0]["thinking"].get<std::string>(),
+                    "I need to search");
+  XX_TEST_EXPECT_EQ(blocks[1]["type"].get<std::string>(), "text");
+  XX_TEST_EXPECT_EQ(blocks[2]["type"].get<std::string>(), "tool_use");
 }
 
 void test_convert_messages_thinking_disabled_with_tool_calls() {
@@ -242,20 +238,16 @@ void test_convert_messages_thinking_disabled_with_tool_calls() {
   msg.role = "assistant";
   msg.content = "Let me check";
   msg.reasoning_content = "I need to search";
-  msg.tool_calls = {{.id = "call_1",
-                     .name = "search",
-                     .arguments = R"({"q":"test"})"}};
+  msg.tool_calls = {
+      {.id = "call_1", .name = "search", .arguments = R"({"q":"test"})"}};
   std::vector<neograph::ChatMessage> msgs = {msg};
-  auto [system, arr] =
-      server::AnthropicProvider::convertMessages(msgs, false);
+  auto [system, arr] = server::AnthropicProvider::convertMessages(msgs, false);
   XX_TEST_EXPECT_EQ(arr.size(), (size_t)1);
   const auto &blocks = arr[0]["content"];
   // Only text and tool_use, no thinking
   XX_TEST_EXPECT_EQ(blocks.size(), (size_t)2);
-  XX_TEST_EXPECT_EQ(
-      blocks[0]["type"].get<std::string>(), "text");
-  XX_TEST_EXPECT_EQ(
-      blocks[1]["type"].get<std::string>(), "tool_use");
+  XX_TEST_EXPECT_EQ(blocks[0]["type"].get<std::string>(), "text");
+  XX_TEST_EXPECT_EQ(blocks[1]["type"].get<std::string>(), "tool_use");
 }
 
 void test_convert_messages_thinking_only_reasoning_no_content() {
@@ -265,14 +257,13 @@ void test_convert_messages_thinking_only_reasoning_no_content() {
        .content = "",
        .reasoning_content = "Just thinking"},
   };
-  auto [system, arr] =
-      server::AnthropicProvider::convertMessages(msgs, true);
+  auto [system, arr] = server::AnthropicProvider::convertMessages(msgs, true);
   XX_TEST_EXPECT_TRUE(arr[0]["content"].is_array());
   XX_TEST_EXPECT_EQ(arr[0]["content"].size(), (size_t)1);
-  XX_TEST_EXPECT_EQ(
-      arr[0]["content"][0]["type"].get<std::string>(), "thinking");
-  XX_TEST_EXPECT_EQ(
-      arr[0]["content"][0]["thinking"].get<std::string>(), "Just thinking");
+  XX_TEST_EXPECT_EQ(arr[0]["content"][0]["type"].get<std::string>(),
+                    "thinking");
+  XX_TEST_EXPECT_EQ(arr[0]["content"][0]["thinking"].get<std::string>(),
+                    "Just thinking");
 }
 
 void test_convert_messages_thinking_user_no_effect() {
@@ -282,11 +273,9 @@ void test_convert_messages_thinking_user_no_effect() {
        .content = "Hello",
        .reasoning_content = "User thinking"},
   };
-  auto [system, arr] =
-      server::AnthropicProvider::convertMessages(msgs, true);
+  auto [system, arr] = server::AnthropicProvider::convertMessages(msgs, true);
   XX_TEST_EXPECT_TRUE(arr[0]["content"].is_string());
-  XX_TEST_EXPECT_EQ(
-      arr[0]["content"].get<std::string>(), "Hello");
+  XX_TEST_EXPECT_EQ(arr[0]["content"].get<std::string>(), "Hello");
 }
 
 void test_convert_tools() {
@@ -505,14 +494,9 @@ startAnthropicMockServer(uint16_t &outPort) {
   mock->server = std::make_unique<HttpServer>(
       HttpServer::Config{.address = "127.0.0.1", .port = 0, .ioThreads = 1});
 
-  mock->server->router().add("/v1/messages", 2,
-                             std::
-                                 make_shared<HttpServer::Handler>(
-                                     [mock =
-                                          mock.get()](HttpServer::Request &req,
-                                                      HttpServer::Response
-                                                          &resp,
-                                                      const std::string &) -> asio::
+  auto handle =
+      [mock = mock.get()](HttpServer::Request &req,
+                          HttpServer::Response &resp, const std::string &) -> asio::
                                                                                awaitable<
                                                                                    void> {
                                                                                  mock->lastRequestBody =
@@ -676,7 +660,10 @@ startAnthropicMockServer(uint16_t &outPort) {
                                                                                    break;
                                                                                  }
                                                                                  co_return;
-                                                                               }));
+                                                                               };
+
+  mock->server->router().add("/v1/messages", 2,
+                             std::make_shared<HttpServer::Handler>(handle));
 
   mock->thread = std::thread([s = mock->server.get()]() { s->start(); });
 
@@ -719,7 +706,8 @@ asio::awaitable<void> test_non_streaming_completion(MockAnthropicServer &mock,
   std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
   mock.mode = AnthropicMockMode::Normal;
 
-  auto provider = server::AnthropicProvider::create(makeAntCfg("sk-ant-test", baseUrl));
+  auto provider =
+      server::AnthropicProvider::create(makeAntCfg("sk-ant-test", baseUrl));
 
   neograph::CompletionParams params;
   params.model = "claude-sonnet-4-20250514";
@@ -749,7 +737,8 @@ asio::awaitable<void> test_non_streaming_tool_call(MockAnthropicServer &mock,
   std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
   mock.mode = AnthropicMockMode::ToolCall;
 
-  auto provider = server::AnthropicProvider::create(makeAntCfg("sk-ant-test", baseUrl));
+  auto provider =
+      server::AnthropicProvider::create(makeAntCfg("sk-ant-test", baseUrl));
 
   neograph::CompletionParams params;
   params.model = "claude-sonnet-4-20250514";
@@ -781,7 +770,8 @@ asio::awaitable<void> test_non_streaming_thinking(MockAnthropicServer &mock,
   std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
   mock.mode = AnthropicMockMode::Thinking;
 
-  auto provider = server::AnthropicProvider::create(makeAntCfg("sk-ant-test", baseUrl));
+  auto provider =
+      server::AnthropicProvider::create(makeAntCfg("sk-ant-test", baseUrl));
 
   neograph::CompletionParams params;
   params.model = "claude-sonnet-4-20250514";
@@ -805,7 +795,8 @@ asio::awaitable<void> test_rate_limit_error(MockAnthropicServer &mock,
   std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
   mock.mode = AnthropicMockMode::RateLimit;
 
-  auto provider = server::AnthropicProvider::create(makeAntCfg("sk-ant-test", baseUrl));
+  auto provider =
+      server::AnthropicProvider::create(makeAntCfg("sk-ant-test", baseUrl));
 
   neograph::CompletionParams params;
   params.model = "claude-sonnet-4-20250514";
@@ -835,7 +826,8 @@ asio::awaitable<void> test_server_error(MockAnthropicServer &mock,
   std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
   mock.mode = AnthropicMockMode::ServerError;
 
-  auto provider = server::AnthropicProvider::create(makeAntCfg("sk-ant-test", baseUrl));
+  auto provider =
+      server::AnthropicProvider::create(makeAntCfg("sk-ant-test", baseUrl));
 
   neograph::CompletionParams params;
   params.model = "claude-sonnet-4-20250514";
@@ -864,7 +856,8 @@ asio::awaitable<void> test_request_headers(MockAnthropicServer &mock,
   std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
   mock.mode = AnthropicMockMode::Normal;
 
-  auto provider = server::AnthropicProvider::create(makeAntCfg("sk-ant-header-test", baseUrl));
+  auto provider = server::AnthropicProvider::create(
+      makeAntCfg("sk-ant-header-test", baseUrl));
 
   neograph::CompletionParams params;
   params.model = "claude-sonnet-4-20250514";
@@ -890,7 +883,8 @@ asio::awaitable<void> test_request_body_format(MockAnthropicServer &mock,
   std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
   mock.mode = AnthropicMockMode::Normal;
 
-  auto provider = server::AnthropicProvider::create(makeAntCfg("sk-ant-test", baseUrl));
+  auto provider =
+      server::AnthropicProvider::create(makeAntCfg("sk-ant-test", baseUrl));
 
   neograph::CompletionParams params;
   params.model = "claude-sonnet-4-20250514";
@@ -930,12 +924,12 @@ asio::awaitable<void> test_request_body_format(MockAnthropicServer &mock,
 }
 
 asio::awaitable<void>
-test_sendthinking_in_request_body(MockAnthropicServer &mock,
-                                  uint16_t port) {
+test_sendthinking_in_request_body(MockAnthropicServer &mock, uint16_t port) {
   std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
   mock.mode = AnthropicMockMode::Normal;
 
-  auto provider = server::AnthropicProvider::create(makeAntCfg("sk-ant-test", baseUrl, 10, 10, true));
+  auto provider = server::AnthropicProvider::create(
+      makeAntCfg("sk-ant-test", baseUrl, 10, 10, true));
 
   neograph::CompletionParams params;
   params.model = "claude-sonnet-4-20250514";
@@ -959,8 +953,7 @@ test_sendthinking_in_request_body(MockAnthropicServer &mock,
         sent["messages"][0]["content"][0]["thinking"].get<std::string>(),
         "Deep thinking...");
     XX_TEST_EXPECT_EQ(
-        sent["messages"][0]["content"][1]["type"].get<std::string>(),
-        "text");
+        sent["messages"][0]["content"][1]["type"].get<std::string>(), "text");
     XX_TEST_EXPECT_EQ(
         sent["messages"][0]["content"][1]["text"].get<std::string>(),
         "Final answer");
@@ -999,7 +992,8 @@ asio::awaitable<void> test_streaming_completion(MockAnthropicServer &mock,
                                     R"({"type":"message_stop"})"),
   };
 
-  auto provider = server::AnthropicProvider::create(makeAntCfg("sk-ant-test", baseUrl));
+  auto provider =
+      server::AnthropicProvider::create(makeAntCfg("sk-ant-test", baseUrl));
 
   neograph::CompletionParams params;
   params.model = "claude-sonnet-4-20250514";
@@ -1058,7 +1052,8 @@ asio::awaitable<void> test_streaming_thinking(MockAnthropicServer &mock,
                                     R"({"type":"message_stop"})"),
   };
 
-  auto provider = server::AnthropicProvider::create(makeAntCfg("sk-ant-test", baseUrl));
+  auto provider =
+      server::AnthropicProvider::create(makeAntCfg("sk-ant-test", baseUrl));
 
   neograph::CompletionParams params;
   params.model = "claude-sonnet-4-20250514";
@@ -1075,7 +1070,8 @@ asio::awaitable<void> test_streaming_thinking(MockAnthropicServer &mock,
     XX_TEST_EXPECT_EQ(result.message.content, "The answer is 42.");
     XX_TEST_EXPECT_EQ(result.message.reasoning_content,
                       "Let me think carefully...");
-    // StreamCallback only receives content tokens; thinking is in reasoning_content
+    // StreamCallback only receives content tokens; thinking is in
+    // reasoning_content
     XX_TEST_EXPECT_EQ(accumulated, "The answer is 42.");
   } catch (const std::exception &e) {
     XX_TEST_FAILED++;
@@ -1110,7 +1106,8 @@ asio::awaitable<void> test_streaming_tool_call(MockAnthropicServer &mock,
                                     R"({"type":"message_stop"})"),
   };
 
-  auto provider = server::AnthropicProvider::create(makeAntCfg("sk-ant-test", baseUrl));
+  auto provider =
+      server::AnthropicProvider::create(makeAntCfg("sk-ant-test", baseUrl));
 
   neograph::CompletionParams params;
   params.model = "claude-sonnet-4-20250514";
@@ -1172,7 +1169,8 @@ test_streaming_mixed_thinking_and_content(MockAnthropicServer &mock,
                                     R"({"type":"message_stop"})"),
   };
 
-  auto provider = server::AnthropicProvider::create(makeAntCfg("sk-ant-test", baseUrl));
+  auto provider =
+      server::AnthropicProvider::create(makeAntCfg("sk-ant-test", baseUrl));
 
   neograph::CompletionParams params;
   params.model = "claude-sonnet-4-20250514";
@@ -1219,7 +1217,8 @@ asio::awaitable<void> test_streaming_usage(MockAnthropicServer &mock,
                                     R"({"type":"message_stop"})"),
   };
 
-  auto provider = server::AnthropicProvider::create(makeAntCfg("sk-ant-test", baseUrl));
+  auto provider =
+      server::AnthropicProvider::create(makeAntCfg("sk-ant-test", baseUrl));
 
   neograph::CompletionParams params;
   params.model = "claude-sonnet-4-20250514";
@@ -1265,7 +1264,8 @@ test_streaming_malformed_event_skipped(MockAnthropicServer &mock,
                                     R"({"type":"message_stop"})"),
   };
 
-  auto provider = server::AnthropicProvider::create(makeAntCfg("sk-ant-test", baseUrl));
+  auto provider =
+      server::AnthropicProvider::create(makeAntCfg("sk-ant-test", baseUrl));
 
   neograph::CompletionParams params;
   params.model = "claude-sonnet-4-20250514";
@@ -1315,7 +1315,8 @@ test_thinking_callback_separation(MockAnthropicServer &mock, uint16_t port) {
                                     R"({"type":"message_stop"})"),
   };
 
-  auto provider = server::AnthropicProvider::create(makeAntCfg("sk-ant-test", baseUrl));
+  auto provider =
+      server::AnthropicProvider::create(makeAntCfg("sk-ant-test", baseUrl));
 
   neograph::CompletionParams params;
   params.model = "claude-sonnet-4-20250514";
@@ -1443,20 +1444,34 @@ private:
 void test_anthropic_true_streaming_incremental() {
   auto srv = std::make_unique<AnthropicDelayedStreamServer>();
   srv->chunks = {
-      "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_ts\",\"type\":\"message\",\"role\":\"assistant\",\"usage\":{\"input_tokens\":5}}}\n\n",
-      "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
-      "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"X\"}}\n\n",
-      "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Y\"}}\n\n",
-      "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Z\"}}\n\n",
-      "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
-      "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":3}}\n\n",
+      "event: message_start\ndata: "
+      "{\"type\":\"message_start\",\"message\":{\"id\":\"msg_ts\",\"type\":"
+      "\"message\",\"role\":\"assistant\",\"usage\":{\"input_tokens\":5}}}\n\n",
+      "event: content_block_start\ndata: "
+      "{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{"
+      "\"type\":\"text\",\"text\":\"\"}}\n\n",
+      "event: content_block_delta\ndata: "
+      "{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":"
+      "\"text_delta\",\"text\":\"X\"}}\n\n",
+      "event: content_block_delta\ndata: "
+      "{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":"
+      "\"text_delta\",\"text\":\"Y\"}}\n\n",
+      "event: content_block_delta\ndata: "
+      "{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":"
+      "\"text_delta\",\"text\":\"Z\"}}\n\n",
+      "event: content_block_stop\ndata: "
+      "{\"type\":\"content_block_stop\",\"index\":0}\n\n",
+      "event: message_delta\ndata: "
+      "{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},"
+      "\"usage\":{\"output_tokens\":3}}\n\n",
       "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
   };
   srv->delay = std::chrono::milliseconds(80);
   srv->start();
 
   std::string baseUrl = "http://127.0.0.1:" + std::to_string(srv->boundPort);
-  auto provider = server::AnthropicProvider::create(makeAntCfg("sk-ant-test", baseUrl));
+  auto provider =
+      server::AnthropicProvider::create(makeAntCfg("sk-ant-test", baseUrl));
 
   neograph::CompletionParams params;
   params.model = "claude-sonnet-4-20250514";
@@ -1471,10 +1486,13 @@ void test_anthropic_true_streaming_incremental() {
   };
 
   asio::io_context ctx;
-  asio::co_spawn(ctx, [&]() -> asio::awaitable<void> {
-    auto result = co_await provider->invoke(params, onChunk);
-    XX_TEST_EXPECT_EQ(result.message.content, "XYZ");
-  }, asio::detached);
+  asio::co_spawn(
+      ctx,
+      [&]() -> asio::awaitable<void> {
+        auto result = co_await provider->invoke(params, onChunk);
+        XX_TEST_EXPECT_EQ(result.message.content, "XYZ");
+      },
+      asio::detached);
   ctx.run();
 
   XX_TEST_EXPECT_TRUE(callbackTimes.size() >= 3);
@@ -1591,23 +1609,26 @@ private:
 };
 
 void test_anthropic_connect_timeout() {
-  auto provider = server::AnthropicProvider::create(makeAntCfg("sk-ant-test", "http://192.0.2.1:12345", 2, 2));
+  auto provider = server::AnthropicProvider::create(
+      makeAntCfg("sk-ant-test", "http://192.0.2.1:12345", 2, 2));
 
   neograph::CompletionParams params;
   params.model = "claude-sonnet-4-20250514";
-  params.messages = {
-      neograph::ChatMessage{.role = "user", .content = "hello"}};
+  params.messages = {neograph::ChatMessage{.role = "user", .content = "hello"}};
 
   auto start = std::chrono::steady_clock::now();
   bool caught = false;
   asio::io_context ctx;
-  asio::co_spawn(ctx, [&]() -> asio::awaitable<void> {
-    try {
-      co_await provider->invoke(params, nullptr);
-    } catch (const std::exception &) {
-      caught = true;
-    }
-  }, asio::detached);
+  asio::co_spawn(
+      ctx,
+      [&]() -> asio::awaitable<void> {
+        try {
+          co_await provider->invoke(params, nullptr);
+        } catch (const std::exception &) {
+          caught = true;
+        }
+      },
+      asio::detached);
   ctx.run();
   auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                      std::chrono::steady_clock::now() - start)
@@ -1621,14 +1642,21 @@ void test_anthropic_read_timeout_streaming() {
   auto srv = std::make_unique<AnthropicStallServer>();
   srv->mode = AnthropicStallServer::Mode::PartialThenStall;
   srv->partialChunks = {
-      "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_t\",\"type\":\"message\",\"role\":\"assistant\",\"usage\":{\"input_tokens\":5}}}\n\n",
-      "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
-      "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Par\"}}\n\n",
+      "event: message_start\ndata: "
+      "{\"type\":\"message_start\",\"message\":{\"id\":\"msg_t\",\"type\":"
+      "\"message\",\"role\":\"assistant\",\"usage\":{\"input_tokens\":5}}}\n\n",
+      "event: content_block_start\ndata: "
+      "{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{"
+      "\"type\":\"text\",\"text\":\"\"}}\n\n",
+      "event: content_block_delta\ndata: "
+      "{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":"
+      "\"text_delta\",\"text\":\"Par\"}}\n\n",
   };
   srv->start();
 
   std::string baseUrl = "http://127.0.0.1:" + std::to_string(srv->boundPort);
-  auto provider = server::AnthropicProvider::create(makeAntCfg("sk-ant-test", baseUrl, 5, 2));
+  auto provider = server::AnthropicProvider::create(
+      makeAntCfg("sk-ant-test", baseUrl, 5, 2));
 
   neograph::CompletionParams params;
   params.model = "claude-sonnet-4-20250514";
@@ -1642,13 +1670,16 @@ void test_anthropic_read_timeout_streaming() {
 
   auto start = std::chrono::steady_clock::now();
   asio::io_context ctx;
-  asio::co_spawn(ctx, [&]() -> asio::awaitable<void> {
-    try {
-      auto result = co_await provider->invoke(params, onChunk);
-      XX_TEST_EXPECT_EQ(result.message.content, "Par");
-    } catch (const std::exception &) {
-    }
-  }, asio::detached);
+  asio::co_spawn(
+      ctx,
+      [&]() -> asio::awaitable<void> {
+        try {
+          auto result = co_await provider->invoke(params, onChunk);
+          XX_TEST_EXPECT_EQ(result.message.content, "Par");
+        } catch (const std::exception &) {
+        }
+      },
+      asio::detached);
   ctx.run();
   auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                      std::chrono::steady_clock::now() - start)

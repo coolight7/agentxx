@@ -1,6 +1,5 @@
 #pragma once
 
-#include "agentxx/util/log.h"
 #include <algorithm>
 #include <cstring>
 #include <functional>

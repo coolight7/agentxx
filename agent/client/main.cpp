@@ -3,6 +3,7 @@
 #include "agentxx-client/io/stdio/permission_handler.h"
 #include "agentxx-client/train/train.h"
 #include "agentxx-client/util/util.h"
+#include "agentxx/protocol/acp_server.h"
 #include "yaml-cpp/yaml.h"
 #ifdef AGENTXX_ENABLE_CLIENT_TUI
 #include "agentxx-client/io/tui/agent_tui.h"

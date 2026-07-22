@@ -1,17 +1,9 @@
 #pragma once
 
 #include "agentxx/tools/sub_agent.h"
-#include "agentxx/tools/tool.h"
-#include <filesystem>
-#include <fstream>
-#include <iostream>
-#include <map>
 #include <memory>
-#include <neograph/llm/rate_limited_provider.h>
-#include <neograph/llm/schema_provider.h>
-#include <neograph/neograph.h>
-#include <sstream>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace agentxx {
@@ -72,168 +64,15 @@ Remember: Output ONLY valid JSON, nothing else before or after.
       const neograph::graph::NodeContext &in_context,
       const std::vector<DelayToolInfo> &in_delayToolInfos,
       const std::vector<std::string> &in_skillDirPaths,
-      std::weak_ptr<agentxx::agent::AgentContext> in_agentContext)
-      : ::agentxx::tools::SubAgentTaskBase(
-            "tool_skill_search",
-            "Search available tool or skill for loading. "
-            "(already set system prompt)",
-            ""),
-        delayToolInfos(in_delayToolInfos), skillDirPaths(in_skillDirPaths),
-        agentContext(in_agentContext) {
-    createSubgraph(in_context);
-    createSystemPrompt();
-  }
+      std::weak_ptr<agentxx::agent::AgentContext> in_agentContext);
 
-  asio::awaitable<void> onSubagentEnd(std::string &result) override {
-    try {
-      auto jsonResult = neograph::json::parse(result);
-      if (!jsonResult.is_object()) {
-        co_return;
-      }
+  asio::awaitable<void> onSubagentEnd(std::string &result) override;
 
-      auto agentCtxPtr = agentContext.lock();
-      if (!agentCtxPtr) {
-        co_return;
-      }
+  void createSystemPrompt();
 
-      // if (jsonResult["tool"].is_array()) {
-      //   auto &loadedTools =
-      //       agentCtxPtr->getGraphDataItemValue<std::vector<std::string>>(
-      //           "session", graphDataKey_loadedTools);
-      //   for (const auto &item : jsonResult["tool"]) {
-      //     if (item.is_string()) {
-      //       loadedTools.push_back(item.get<std::string>());
-      //     }
-      //   }
-      // }
+  void createSubgraph(const neograph::graph::NodeContext &context);
 
-      // if (jsonResult["skill"].is_array()) {
-      //   auto &loadedSkills =
-      //       agentCtxPtr->getGraphDataItemValue<std::vector<std::string>>(
-      //           "session", graphDataKey_loadedSkills);
-      //   for (const auto &item : jsonResult["skill"]) {
-      //     if (item.is_string()) {
-      //       auto skillPath = item.get<std::string>();
-      //       loadedSkills.push_back(skillPath);
-
-      //       auto skillMdPath = skillPath + "/SKILL.md";
-      //       std::ifstream stream(skillMdPath);
-      //       if (stream) {
-      //         auto content =
-      //         std::string{std::istreambuf_iterator<char>(stream),
-      //                                    std::istreambuf_iterator<char>()};
-      //         stream.close();
-      //         if (!content.empty()) {
-      //           auto &systemMsgList =
-      //               agentCtxPtr
-      //                   ->getGraphDataItemValue<std::vector<std::string>>(
-      //                       "session",
-      //                       agentxx::middleware::MiddlewareContext::
-      //                           graphDataKey_systemMessage);
-      //           systemMsgList.push_back(fmt::format(
-      //               "\n## Loaded Skill: {}\n\n{}", skillPath, content));
-      //         }
-      //       }
-      //     }
-      //   }
-      // }
-    } catch (const std::exception &e) {
-      // 转json失败则不处理
-    }
-    co_return;
-  }
-
-  void createSystemPrompt() {
-    std::ostringstream toolsList;
-    if (delayToolInfos.empty()) {
-      toolsList << "(none)";
-    } else {
-      for (const auto &item : delayToolInfos) {
-        toolsList << fmt::format("- **{}**: {}\n", item.name, item.description);
-      }
-    }
-
-    std::ostringstream skillsDirs;
-    if (skillDirPaths.empty()) {
-      skillsDirs << "(none)";
-    } else {
-      for (const auto &dir : skillDirPaths) {
-        skillsDirs << fmt::format("- {}\n", dir);
-      }
-    }
-
-    systemPrompt =
-        fmt::format(defSystemPromptTemplate, toolsList.str(), skillsDirs.str());
-  }
-
-  void createSubgraph(const neograph::graph::NodeContext &context) {
-    if (nullptr == subgraph) {
-      auto inner = neograph::graph::GraphEngine::compile(
-          defCreateSubGraphDefine(), context);
-      subgraph = std::shared_ptr<neograph::graph::GraphEngine>(inner.release());
-    }
-  }
-
-  inline static neograph::json defCreateSubGraphDefine() {
-    return neograph::json{
-        {"name", "xx_ToolSkillSearch"},
-        {
-            "channels",
-            {
-                {"messages", {{"reducer", "append"}}},
-            },
-        },
-        {
-            "nodes",
-            {
-                {
-                    "agent_start",
-                    {{
-                        "type",
-                        agentxx::nodes::AgentStartCallWrapNode::defNodeType,
-                    }},
-                },
-                {
-                    "agent_end",
-                    {{
-                        "type",
-                        agentxx::nodes::MiddlewareWrapAgentEndCallNode::
-                            defNodeType,
-                    }},
-                },
-                {
-                    "tools",
-                    {{
-                        "type",
-                        agentxx::nodes::ToolcallWrapNode::defNodeType,
-                    }},
-                },
-                {
-                    "llm",
-                    {{
-                        "type",
-                        agentxx::nodes::ModelCallWrapNode::defNodeType,
-                    }},
-                },
-            },
-        },
-        {
-            "edges",
-            neograph::json::array({
-                {{"from", "__start__"}, {"to", "llm"}},
-                {{"from", "agent_start"}, {"to", "llm"}},
-                {
-                    {"from", "llm"},
-                    {"type", "conditional"},
-                    {"condition", "has_tool_calls"},
-                    {"routes", {{"true", "tools"}, {"false", "agent_end"}}},
-                },
-                {{"from", "tools"}, {"to", "llm"}},
-                {{"from", "agent_end"}, {"to", "__end__"}},
-            }),
-        },
-    };
-  }
+  inline static neograph::json defCreateSubGraphDefine();
 };
 } // namespace tools
 } // namespace agentxx

@@ -1,17 +1,8 @@
 #pragma once
 
 #include "agentxx/nodes/warp_handle.h"
-#include "asio/io_context.hpp"
-#include <cstdlib>
-#include <functional>
-#include <iostream>
-#include <neograph/llm/rate_limited_provider.h>
-#include <neograph/llm/schema_provider.h>
-#include <neograph/neograph.h>
-#include <sstream>
 #include <string>
 #include <string_view>
-#include <vector>
 
 namespace agentxx {
 namespace nodes {
@@ -25,28 +16,16 @@ public:
 
   AgentStartCallWrapNode(
       const std::string &name,
-      std::weak_ptr<agentxx::agent::AgentContext> in_agentContext)
-      : WrapHandleBaseNode<agentxx::nodes::WarpBaseNodeInterface>(
-            name, in_agentContext) {}
+      std::weak_ptr<agentxx::agent::AgentContext> in_agentContext);
 
   asio::awaitable<void>
   onHandleStart(agentxx::middleware::BaseMiddlewareHandleInterface &item,
-                neograph::graph::NodeInput &in) override {
-    {
-      // 创建单次执行的临时数据
-      auto ptr = agentContext.lock();
-      ptr->middlewareHandleContext->graphData[in.ctx.thread_id].clear();
-    }
-
-    co_await item.onAgentcallStartFunc(in);
-  }
+                neograph::graph::NodeInput &in) override;
 
   asio::awaitable<void>
   onHandleEnd(agentxx::middleware::BaseMiddlewareHandleInterface &item,
               const neograph::graph::NodeInput &in,
-              neograph::graph::NodeOutput &result) override {
-    co_return;
-  }
+              neograph::graph::NodeOutput &result) override;
 };
 
 class NEOGRAPH_API MiddlewareWrapAgentEndCallNode
@@ -58,47 +37,23 @@ public:
 
   MiddlewareWrapAgentEndCallNode(
       const std::string &name,
-      std::weak_ptr<agentxx::agent::AgentContext> in_agentContext)
-      : WrapHandleBaseNode<agentxx::nodes::WarpBaseNodeInterface>(
-            name, in_agentContext) {}
+      std::weak_ptr<agentxx::agent::AgentContext> in_agentContext);
 
   asio::awaitable<void>
   onHandleStart(agentxx::middleware::BaseMiddlewareHandleInterface &item,
-                neograph::graph::NodeInput &in) override {
-    co_return;
-  }
+                neograph::graph::NodeInput &in) override;
 
   asio::awaitable<void>
   onHandleEnd(agentxx::middleware::BaseMiddlewareHandleInterface &item,
               const neograph::graph::NodeInput &in,
-              neograph::graph::NodeOutput &result) override {
-    co_await item.onAgentcallEndFunc(in, result);
-
-    {
-      // 清理单次执行的临时数据
-      auto ptr = agentContext.lock();
-      auto it = ptr->middlewareHandleContext->graphData.find(in.ctx.thread_id);
-      if (it != ptr->middlewareHandleContext->graphData.end()) {
-        ptr->middlewareHandleContext->graphData.erase(it);
-      }
-    }
-  }
+              neograph::graph::NodeOutput &result) override;
 
   void
   onHandleEndError(bool errorRethrow, bool isCurrentError,
                    std::string_view exceptionStr,
                    agentxx::middleware::BaseMiddlewareHandleInterface &item,
                    const neograph::graph::NodeInput &in,
-                   neograph::graph::NodeOutput &result) noexcept override {
-    {
-      // 清理单次执行的临时数据
-      auto ptr = agentContext.lock();
-      auto it = ptr->middlewareHandleContext->graphData.find(in.ctx.thread_id);
-      if (it != ptr->middlewareHandleContext->graphData.end()) {
-        ptr->middlewareHandleContext->graphData.erase(it);
-      }
-    }
-  }
+                   neograph::graph::NodeOutput &result) noexcept override;
 };
 
 } // namespace nodes

@@ -874,6 +874,10 @@ uiControlExecuteOne(const neograph::json &cmd) {
 
 #endif // XX_IS_WIN_D
 
+UIControlKeyboardMouseTool::UIControlKeyboardMouseTool(
+    std::weak_ptr<agentxx::agent::AgentContext> in_agentContext)
+    : XXToolBase("ui_control_keyboard_mouse", in_agentContext, false, true) {}
+
 neograph::ChatTool UIControlKeyboardMouseTool::get_definition() const {
   auto agentPtr = agentContext.lock();
   const auto &prompt =

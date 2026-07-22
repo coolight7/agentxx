@@ -4,10 +4,8 @@
 #include "agentxx/agent/agent_io.h"
 #include "agentxx/agent/context.h"
 #include "agentxx/util/log.h"
-#include "asio/as_tuple.hpp"
 #include "asio/awaitable.hpp"
 #include "asio/experimental/concurrent_channel.hpp"
-#include "asio/use_awaitable.hpp"
 #include "ftxui/component/component.hpp"
 #include "ftxui/component/mouse.hpp"
 #include "ftxui/component/screen_interactive.hpp"
@@ -35,36 +33,14 @@ public:
   };
 
   void onLog(agentxx::util::LogLevel level,
-             const std::string &message) override {
-    std::function<void()> cb;
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      lines_.push_back(Line{level, message});
-      while (lines_.size() > maxLines_) {
-        lines_.pop_front();
-      }
-      cb = onNewLog_;
-    }
-    if (cb) {
-      cb();
-    }
-  }
+             const std::string &message) override;
 
   /// 拷贝当前缓存的日志行 (供渲染线程读取)
-  std::vector<Line> snapshot() const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return {lines_.begin(), lines_.end()};
-  }
+  std::vector<Line> snapshot() const;
 
-  void setOnNewLog(std::function<void()> cb) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    onNewLog_ = std::move(cb);
-  }
+  void setOnNewLog(std::function<void()> cb);
 
-  void clear() {
-    std::lock_guard<std::mutex> lock(mutex_);
-    lines_.clear();
-  }
+  void clear();
 
 private:
   mutable std::mutex mutex_;
