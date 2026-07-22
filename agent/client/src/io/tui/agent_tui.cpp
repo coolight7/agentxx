@@ -42,6 +42,14 @@ void AgentTUI::start() {
 
     auto input_option = InputOption();
     input_option.multiline = false;
+    // 覆盖默认 transform: 默认会在聚焦时加 inverted (反转前景/背景), 会把
+    // 输入框背景反成白色; 这里仅保留占位符弱化, 颜色改由外部 bgcolor/color 控制
+    input_option.transform = [](InputState state) {
+      if (state.is_placeholder) {
+        state.element |= dim;
+      }
+      return state.element;
+    };
     input_option.on_enter = [&]() {
       std::string text;
       {
@@ -77,7 +85,8 @@ void AgentTUI::start() {
 
       auto input_bar = hbox({
           text(">>> ") | color(theme_.promptColor) | bold,
-          input->Render() | flex,
+          input->Render() | color(theme_.inputTextColor) |
+              bgcolor(theme_.inputBgColor) | flex,
       });
 
       auto main = vbox({
@@ -95,13 +104,13 @@ void AgentTUI::start() {
         });
       }
 
+      Element result = body;
       if (pendingPermission_.has_value()) {
-        return renderPermissionOverlay() | center;
+        result = renderPermissionOverlay() | center;
+      } else if (showModelSelector_) {
+        result = renderModelSelectorOverlay() | center;
       }
-      if (showModelSelector_) {
-        return renderModelSelectorOverlay() | center;
-      }
-      return body;
+      return result | bgcolor(theme_.backgroundColor);
     });
 
     auto event_handler = CatchEvent(layout, [&](Event event) -> bool {
@@ -367,7 +376,11 @@ ftxui::Element AgentTUI::renderModelSelectorOverlay() {
   for (size_t i = 0; i < modelNames_.size(); ++i) {
     auto entry = text(" " + modelNames_[i] + " ");
     if (static_cast<int>(i) == selectedModelIndex_) {
-      entry = entry | inverted | color(theme_.accentColor) | bold;
+      entry = entry | bgcolor(theme_.buttonActiveBgColor) |
+              color(theme_.buttonActiveTextColor) | bold;
+    } else {
+      entry = entry | bgcolor(theme_.buttonBgColor) |
+              color(theme_.buttonTextColor);
     }
     items.push_back(entry);
   }
@@ -385,9 +398,11 @@ ftxui::Element AgentTUI::renderSidebar() {
   for (size_t i = 0; i < sidebarTabs_.size(); ++i) {
     auto label = text(" " + sidebarTabs_[i].title + " ");
     if (static_cast<int>(i) == activeTabIndex_) {
-      label = label | inverted | color(theme_.accentColor) | bold;
+      label = label | bgcolor(theme_.buttonActiveBgColor) |
+              color(theme_.buttonActiveTextColor) | bold;
     } else {
-      label = label | color(theme_.statusColor);
+      label = label | bgcolor(theme_.buttonBgColor) |
+              color(theme_.buttonTextColor);
     }
     tabs.push_back(label | reflect(tabBoxes_[i]));
   }
