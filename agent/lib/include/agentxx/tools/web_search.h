@@ -243,6 +243,7 @@ public:
         .default_model = modelCfg.modelName,
         .connect_timeout_seconds = 16,
         .read_timeout_seconds = 24,
+        .sendThinking = modelCfg.sendThinking,
     };
     provider = agentxx::server::OpenAIProvider::create(cfg);
   }

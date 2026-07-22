@@ -35,6 +35,8 @@ public:
     int connect_timeout_seconds = 16;
     int read_timeout_seconds = 24;
     int max_tokens = 8096; // Anthropic requires max_tokens
+    /// 是否在发送 LLM 请求时携带 thinking 内容
+    bool sendThinking = false;
 
     /// Extra JSON fields merged into every request body.
     /// Use this to set thinking, top_k, top_p, stop_sequences, etc.
@@ -88,8 +90,10 @@ public:
 
   /// Convert neograph messages to Anthropic format.
   /// Returns {system_string, messages_json_array}.
+  /// @param sendThinking 是否携带 thinking 内容块
   static std::pair<std::string, neograph::json>
-  convertMessages(const std::vector<neograph::ChatMessage> &messages) {
+  convertMessages(const std::vector<neograph::ChatMessage> &messages,
+                  bool sendThinking = false) {
     std::string system;
     neograph::json arr = neograph::json::array();
 
@@ -119,6 +123,10 @@ public:
         neograph::json j;
         j["role"] = "assistant";
         neograph::json content_arr = neograph::json::array();
+        if (sendThinking && !msg.reasoning_content.empty()) {
+          content_arr.push_back(
+              {{"type", "thinking"}, {"thinking", msg.reasoning_content}});
+        }
         if (!msg.content.empty()) {
           content_arr.push_back({{"type", "text"}, {"text", msg.content}});
         }
@@ -134,6 +142,19 @@ public:
             tool_use["input"] = neograph::json::object();
           }
           content_arr.push_back(std::move(tool_use));
+        }
+        j["content"] = std::move(content_arr);
+        arr.push_back(std::move(j));
+      } else if (sendThinking && msg.role == "assistant" &&
+                 !msg.reasoning_content.empty()) {
+        // Assistant message with thinking content -> content blocks array
+        neograph::json j;
+        j["role"] = "assistant";
+        neograph::json content_arr = neograph::json::array();
+        content_arr.push_back(
+            {{"type", "thinking"}, {"thinking", msg.reasoning_content}});
+        if (!msg.content.empty()) {
+          content_arr.push_back({{"type", "text"}, {"text", msg.content}});
         }
         j["content"] = std::move(content_arr);
         arr.push_back(std::move(j));
@@ -299,7 +320,7 @@ private:
     body["model"] = params.model.empty() ? config_.default_model : params.model;
     body["max_tokens"] = config_.max_tokens;
 
-    auto [system, messages] = convertMessages(params.messages);
+    auto [system, messages] = convertMessages(params.messages, config_.sendThinking);
     body["messages"] = std::move(messages);
     if (!system.empty()) {
       body["system"] = system;

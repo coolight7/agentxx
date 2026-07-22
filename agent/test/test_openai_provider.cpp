@@ -1317,6 +1317,112 @@ test_streaming_think_tags_split_across_chunks(MockOpenAIServer &mock,
 }
 
 // ---------------------------------------------------------------------------
+// Integration tests — sendThinking config flag
+// ---------------------------------------------------------------------------
+
+asio::awaitable<void> test_sendthinking_false_strips_reasoning(
+    MockOpenAIServer &mock, uint16_t port) {
+  std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
+  mock.mode = MockMode::Normal;
+
+  auto provider = server::OpenAIProvider::create(
+      {.api_key = "sk-test",
+       .base_url = baseUrl,
+       .connect_timeout_seconds = 10,
+       .read_timeout_seconds = 10,
+       .sendThinking = false});
+
+  neograph::CompletionParams params;
+  params.model = "gpt-4o-mini";
+  params.messages = {
+      neograph::ChatMessage{.role = "assistant",
+                            .content = "Previous answer",
+                            .reasoning_content = "Hidden reasoning trace"},
+      neograph::ChatMessage{.role = "user", .content = "Follow up"}};
+
+  try {
+    co_await provider->invoke(params, nullptr);
+    auto sent = neograph::json::parse(mock.lastRequestBody);
+    XX_TEST_EXPECT_FALSE(
+        sent["messages"][0].contains("reasoning_content"));
+    XX_TEST_EXPECT_EQ(
+        sent["messages"][0]["content"].get<std::string>(),
+        "Previous answer");
+  } catch (const std::exception &e) {
+    XX_TEST_FAILED++;
+    TEST_FAIL << "sendThinking=false test failed: " << e.what() << std::endl;
+  }
+}
+
+asio::awaitable<void> test_sendthinking_true_preserves_reasoning(
+    MockOpenAIServer &mock, uint16_t port) {
+  std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
+  mock.mode = MockMode::Normal;
+
+  auto provider = server::OpenAIProvider::create(
+      {.api_key = "sk-test",
+       .base_url = baseUrl,
+       .connect_timeout_seconds = 10,
+       .read_timeout_seconds = 10,
+       .sendThinking = true});
+
+  neograph::CompletionParams params;
+  params.model = "gpt-4o-mini";
+  params.messages = {
+      neograph::ChatMessage{.role = "assistant",
+                            .content = "Previous answer",
+                            .reasoning_content = "Reasoning to carry forward"},
+      neograph::ChatMessage{.role = "user", .content = "Follow up"}};
+
+  try {
+    co_await provider->invoke(params, nullptr);
+    auto sent = neograph::json::parse(mock.lastRequestBody);
+    XX_TEST_EXPECT_TRUE(sent["messages"][0].contains("reasoning_content"));
+    XX_TEST_EXPECT_EQ(
+        sent["messages"][0]["reasoning_content"].get<std::string>(),
+        "Reasoning to carry forward");
+    XX_TEST_EXPECT_EQ(
+        sent["messages"][0]["content"].get<std::string>(),
+        "Previous answer");
+  } catch (const std::exception &e) {
+    XX_TEST_FAILED++;
+    TEST_FAIL << "sendThinking=true test failed: " << e.what() << std::endl;
+  }
+}
+
+asio::awaitable<void> test_sendthinking_no_reasoning_has_no_effect(
+    MockOpenAIServer &mock, uint16_t port) {
+  std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
+  mock.mode = MockMode::Normal;
+
+  auto provider = server::OpenAIProvider::create(
+      {.api_key = "sk-test",
+       .base_url = baseUrl,
+       .connect_timeout_seconds = 10,
+       .read_timeout_seconds = 10,
+       .sendThinking = true});
+
+  neograph::CompletionParams params;
+  params.model = "gpt-4o-mini";
+  params.messages = {
+      neograph::ChatMessage{.role = "user", .content = "Hello"}};
+
+  try {
+    co_await provider->invoke(params, nullptr);
+    auto sent = neograph::json::parse(mock.lastRequestBody);
+    // No reasoning_content at all — sendThinking flag should not inject it
+    XX_TEST_EXPECT_FALSE(
+        sent["messages"][0].contains("reasoning_content"));
+    XX_TEST_EXPECT_EQ(
+        sent["messages"][0]["content"].get<std::string>(), "Hello");
+  } catch (const std::exception &e) {
+    XX_TEST_FAILED++;
+    TEST_FAIL << "sendThinking no-reasoning test failed: " << e.what()
+              << std::endl;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // True streaming verification — server sends chunks with delays
 // ---------------------------------------------------------------------------
 
@@ -1711,6 +1817,11 @@ asio::awaitable<TestResult> run_openai_provider_tests() {
   co_await test_non_streaming_think_tags_in_content(*mock, port);
   co_await test_non_streaming_think_tags_prefer_reasoning_field(*mock, port);
   co_await test_streaming_think_tags_split_across_chunks(*mock, port);
+
+  // sendThinking config tests
+  co_await test_sendthinking_false_strips_reasoning(*mock, port);
+  co_await test_sendthinking_true_preserves_reasoning(*mock, port);
+  co_await test_sendthinking_no_reasoning_has_no_effect(*mock, port);
 
   // True streaming incremental verification
   test_true_streaming_incremental(port);

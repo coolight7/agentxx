@@ -19,6 +19,8 @@ public:
   std::string apiKey = "EMPTY";
   std::string modelName = "Agentxx";
   neograph::json extra_config;
+  /// 是否在发送 LLM 请求时携带 thinking 内容
+  bool sendThinking = false;
 
   bool isValid() const { return !baseUrl.empty(); }
 };
