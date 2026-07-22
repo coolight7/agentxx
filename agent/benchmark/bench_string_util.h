@@ -159,7 +159,7 @@ inline void benchStringUtil() {
     std::string data =
         "Hello, World! This is a test string for base64 encoding.";
     auto r = runBench("base64Encode [60 bytes]", 100000, [&]() {
-      auto result = agentxx::util::base64Encode(data.data(), data.size());
+      auto result = agentxx::util::base64Encode(data);
       (void)result;
     });
     printResult(r);
@@ -168,7 +168,7 @@ inline void benchStringUtil() {
   {
     std::string data =
         "Hello, World! This is a test string for base64 encoding.";
-    auto encoded = agentxx::util::base64Encode(data.data(), data.size());
+    auto encoded = agentxx::util::base64Encode(data);
     auto r = runBench("base64Decode [80 bytes]", 100000, [&]() {
       auto result = agentxx::util::base64Decode(encoded);
       (void)result;
@@ -179,8 +179,7 @@ inline void benchStringUtil() {
   {
     std::string largeData(1024 * 100, 'X');
     auto r = runBench("base64Encode [100KB]", 1000, [&]() {
-      auto result =
-          agentxx::util::base64Encode(largeData.data(), largeData.size());
+      auto result = agentxx::util::base64Encode(largeData);
       (void)result;
     });
     printResult(r);
@@ -188,8 +187,7 @@ inline void benchStringUtil() {
 
   {
     std::string largeData(1024 * 100, 'X');
-    auto encoded =
-        agentxx::util::base64Encode(largeData.data(), largeData.size());
+    auto encoded = agentxx::util::base64Encode(largeData);
     auto r = runBench("base64Decode [100KB]", 1000, [&]() {
       auto result = agentxx::util::base64Decode(encoded);
       (void)result;
