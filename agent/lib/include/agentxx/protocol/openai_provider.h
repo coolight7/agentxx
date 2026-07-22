@@ -35,6 +35,8 @@ public:
     std::string default_model = "gpt-4o-mini";
     int connect_timeout_seconds = 16;
     int read_timeout_seconds = 24;
+    /// 是否在发送 LLM 请求时携带 thinking 内容
+    bool sendThinking = false;
 
     /// Extra JSON fields merged into every request body.
     /// Use this to set top_k, top_p, frequency_penalty, presence_penalty,
@@ -94,6 +96,21 @@ private:
     neograph::json body;
     body["model"] = params.model.empty() ? config_.default_model : params.model;
     body["messages"] = neograph::messages_to_json(params.messages);
+
+    if (!config_.sendThinking) {
+      neograph::json src = body["messages"];
+      neograph::json cleaned = neograph::json::array();
+      for (auto val : src) {
+        neograph::json obj = neograph::json::object();
+        for (auto [k, v] : val.items()) {
+          if (k != "reasoning_content") {
+            obj[k] = v;
+          }
+        }
+        cleaned.push_back(obj);
+      }
+      body["messages"] = cleaned;
+    }
 
     if (!params.tools.empty()) {
       body["tools"] = neograph::tools_to_json(params.tools);

@@ -115,6 +115,7 @@ public:
         .api_key = mc.apiKey,
         .base_url = mc.baseUrl,
         .default_model = mc.modelName,
+        .sendThinking = mc.sendThinking,
     };
     if (mc.extra_config.is_object()) {
       cfg.extra_body = mc.extra_config;

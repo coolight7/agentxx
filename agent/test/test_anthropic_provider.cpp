@@ -140,6 +140,137 @@ void test_convert_messages_assistant_with_text_and_tool() {
   XX_TEST_EXPECT_EQ(blocks[1]["type"].get<std::string>(), "tool_use");
 }
 
+void test_convert_messages_thinking_enabled() {
+  std::vector<neograph::ChatMessage> msgs = {
+      {.role = "assistant",
+       .content = "Final answer",
+       .reasoning_content = "Step by step..."},
+  };
+  auto [system, arr] =
+      server::AnthropicProvider::convertMessages(msgs, true);
+  XX_TEST_EXPECT_TRUE(system.empty());
+  XX_TEST_EXPECT_EQ(arr.size(), (size_t)1);
+
+  // Content should be an array with thinking + text blocks
+  XX_TEST_EXPECT_TRUE(arr[0]["content"].is_array());
+  XX_TEST_EXPECT_EQ(arr[0]["content"].size(), (size_t)2);
+  XX_TEST_EXPECT_EQ(
+      arr[0]["content"][0]["type"].get<std::string>(), "thinking");
+  XX_TEST_EXPECT_EQ(
+      arr[0]["content"][0]["thinking"].get<std::string>(), "Step by step...");
+  XX_TEST_EXPECT_EQ(
+      arr[0]["content"][1]["type"].get<std::string>(), "text");
+  XX_TEST_EXPECT_EQ(
+      arr[0]["content"][1]["text"].get<std::string>(), "Final answer");
+}
+
+void test_convert_messages_thinking_disabled() {
+  std::vector<neograph::ChatMessage> msgs = {
+      {.role = "assistant",
+       .content = "Final answer",
+       .reasoning_content = "Step by step..."},
+  };
+  auto [system, arr] =
+      server::AnthropicProvider::convertMessages(msgs, false);
+  XX_TEST_EXPECT_TRUE(system.empty());
+  XX_TEST_EXPECT_EQ(arr.size(), (size_t)1);
+
+  // Content should be a plain string, not an array
+  XX_TEST_EXPECT_TRUE(arr[0]["content"].is_string());
+  XX_TEST_EXPECT_EQ(
+      arr[0]["content"].get<std::string>(), "Final answer");
+}
+
+void test_convert_messages_thinking_default_disabled() {
+  std::vector<neograph::ChatMessage> msgs = {
+      {.role = "assistant",
+       .content = "No thinking sent",
+       .reasoning_content = "Hidden reasoning"},
+  };
+  auto [system, arr] =
+      server::AnthropicProvider::convertMessages(msgs); // default false
+  XX_TEST_EXPECT_TRUE(arr[0]["content"].is_string());
+  XX_TEST_EXPECT_EQ(
+      arr[0]["content"].get<std::string>(), "No thinking sent");
+}
+
+void test_convert_messages_thinking_with_tool_calls() {
+  neograph::ChatMessage msg;
+  msg.role = "assistant";
+  msg.content = "Let me check";
+  msg.reasoning_content = "I need to search";
+  msg.tool_calls = {{.id = "call_1",
+                     .name = "search",
+                     .arguments = R"({"q":"test"})"}};
+  std::vector<neograph::ChatMessage> msgs = {msg};
+  auto [system, arr] =
+      server::AnthropicProvider::convertMessages(msgs, true);
+  XX_TEST_EXPECT_EQ(arr.size(), (size_t)1);
+  const auto &blocks = arr[0]["content"];
+  // order: thinking, text, tool_use
+  XX_TEST_EXPECT_EQ(blocks.size(), (size_t)3);
+  XX_TEST_EXPECT_EQ(
+      blocks[0]["type"].get<std::string>(), "thinking");
+  XX_TEST_EXPECT_EQ(
+      blocks[0]["thinking"].get<std::string>(), "I need to search");
+  XX_TEST_EXPECT_EQ(
+      blocks[1]["type"].get<std::string>(), "text");
+  XX_TEST_EXPECT_EQ(
+      blocks[2]["type"].get<std::string>(), "tool_use");
+}
+
+void test_convert_messages_thinking_disabled_with_tool_calls() {
+  neograph::ChatMessage msg;
+  msg.role = "assistant";
+  msg.content = "Let me check";
+  msg.reasoning_content = "I need to search";
+  msg.tool_calls = {{.id = "call_1",
+                     .name = "search",
+                     .arguments = R"({"q":"test"})"}};
+  std::vector<neograph::ChatMessage> msgs = {msg};
+  auto [system, arr] =
+      server::AnthropicProvider::convertMessages(msgs, false);
+  XX_TEST_EXPECT_EQ(arr.size(), (size_t)1);
+  const auto &blocks = arr[0]["content"];
+  // Only text and tool_use, no thinking
+  XX_TEST_EXPECT_EQ(blocks.size(), (size_t)2);
+  XX_TEST_EXPECT_EQ(
+      blocks[0]["type"].get<std::string>(), "text");
+  XX_TEST_EXPECT_EQ(
+      blocks[1]["type"].get<std::string>(), "tool_use");
+}
+
+void test_convert_messages_thinking_only_reasoning_no_content() {
+  // Edge case: reasoning_content present but content is empty
+  std::vector<neograph::ChatMessage> msgs = {
+      {.role = "assistant",
+       .content = "",
+       .reasoning_content = "Just thinking"},
+  };
+  auto [system, arr] =
+      server::AnthropicProvider::convertMessages(msgs, true);
+  XX_TEST_EXPECT_TRUE(arr[0]["content"].is_array());
+  XX_TEST_EXPECT_EQ(arr[0]["content"].size(), (size_t)1);
+  XX_TEST_EXPECT_EQ(
+      arr[0]["content"][0]["type"].get<std::string>(), "thinking");
+  XX_TEST_EXPECT_EQ(
+      arr[0]["content"][0]["thinking"].get<std::string>(), "Just thinking");
+}
+
+void test_convert_messages_thinking_user_no_effect() {
+  // User messages with reasoning_content should not be affected
+  std::vector<neograph::ChatMessage> msgs = {
+      {.role = "user",
+       .content = "Hello",
+       .reasoning_content = "User thinking"},
+  };
+  auto [system, arr] =
+      server::AnthropicProvider::convertMessages(msgs, true);
+  XX_TEST_EXPECT_TRUE(arr[0]["content"].is_string());
+  XX_TEST_EXPECT_EQ(
+      arr[0]["content"].get<std::string>(), "Hello");
+}
+
 void test_convert_tools() {
   std::vector<neograph::ChatTool> tools = {
       {.name = "get_weather",
@@ -787,6 +918,53 @@ asio::awaitable<void> test_request_body_format(MockAnthropicServer &mock,
   } catch (const std::exception &e) {
     XX_TEST_FAILED++;
     TEST_FAIL << "request body format test failed: " << e.what() << std::endl;
+  }
+}
+
+asio::awaitable<void>
+test_sendthinking_in_request_body(MockAnthropicServer &mock,
+                                  uint16_t port) {
+  std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
+  mock.mode = AnthropicMockMode::Normal;
+
+  auto provider = server::AnthropicProvider::create(
+      {.api_key = "sk-ant-test",
+       .base_url = baseUrl,
+       .connect_timeout_seconds = 10,
+       .read_timeout_seconds = 10,
+       .sendThinking = true});
+
+  neograph::CompletionParams params;
+  params.model = "claude-sonnet-4-20250514";
+  params.messages = {
+      neograph::ChatMessage{.role = "assistant",
+                            .content = "Final answer",
+                            .reasoning_content = "Deep thinking..."},
+      neograph::ChatMessage{.role = "user", .content = "Continue"}};
+
+  try {
+    co_await provider->invoke(params, nullptr);
+    auto sent = neograph::json::parse(mock.lastRequestBody);
+
+    // First message should have thinking content block
+    XX_TEST_EXPECT_TRUE(sent["messages"][0]["content"].is_array());
+    XX_TEST_EXPECT_EQ(sent["messages"][0]["content"].size(), (size_t)2);
+    XX_TEST_EXPECT_EQ(
+        sent["messages"][0]["content"][0]["type"].get<std::string>(),
+        "thinking");
+    XX_TEST_EXPECT_EQ(
+        sent["messages"][0]["content"][0]["thinking"].get<std::string>(),
+        "Deep thinking...");
+    XX_TEST_EXPECT_EQ(
+        sent["messages"][0]["content"][1]["type"].get<std::string>(),
+        "text");
+    XX_TEST_EXPECT_EQ(
+        sent["messages"][0]["content"][1]["text"].get<std::string>(),
+        "Final answer");
+  } catch (const std::exception &e) {
+    XX_TEST_FAILED++;
+    TEST_FAIL << "sendThinking integration test failed: " << e.what()
+              << std::endl;
   }
 }
 
@@ -1524,6 +1702,13 @@ asio::awaitable<TestResult> run_anthropic_provider_tests() {
   test_convert_messages_multiple_system();
   test_convert_messages_tool_result();
   test_convert_messages_assistant_with_text_and_tool();
+  test_convert_messages_thinking_enabled();
+  test_convert_messages_thinking_disabled();
+  test_convert_messages_thinking_default_disabled();
+  test_convert_messages_thinking_with_tool_calls();
+  test_convert_messages_thinking_disabled_with_tool_calls();
+  test_convert_messages_thinking_only_reasoning_no_content();
+  test_convert_messages_thinking_user_no_effect();
   test_convert_tools();
   test_parse_response_text();
   test_parse_response_tool_use();
@@ -1555,6 +1740,7 @@ asio::awaitable<TestResult> run_anthropic_provider_tests() {
   co_await test_streaming_mixed_thinking_and_content(*mock, port);
   co_await test_streaming_usage(*mock, port);
   co_await test_streaming_malformed_event_skipped(*mock, port);
+  co_await test_sendthinking_in_request_body(*mock, port);
   co_await test_thinking_callback_separation(*mock, port);
 
   // True streaming incremental verification
