@@ -9,54 +9,74 @@
 
 models:
   # 声明模型，[name] 取 [default] 仅是自定义名称，并不会被默认使用，应当在 [use_model] 中指定
+  - name: full_example
+    type: "openai" # 模型类型，根据 api 类型选择 openai 或 anthropic
+    base_url: "https://api.openai.com/v1"
+    api_key: "${OPENAI_API_KEY}"
+    model_name: "qwen3.8-max-preview"
+    send_thinking: true
+    connect_timeout: 30 # seconds 建立连接时的超时限制 
+    read_timeout: 30 # seconds 接收数据时，超过该时长`未收到新数据`时判断为响应超时，即相邻数据间隔应当小于该时长
+    extra_api_config:
+      max_tokens: 1000000
+      stream: true
+
   - name: qwenai-qwen3.8-max-preview
+    type: "openai"
     base_url: "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
-    key: "${QWENAI_API_KEY}"
-    modelname: "qwen3.8-max-preview"
+    api_key: "${QWENAI_API_KEY}"
+    model_name: "qwen3.8-max-preview"
+    send_thinking: true
     extra_api_config:
       max_tokens: 1000000
       stream: true
   - name: opencode-ds-v4-flash
+    type: "openai"
     base_url: "https://opencode.ai/zen/go/v1"
-    key: "${OPENCODE_API_KEY}"
-    modelname: "deepseek-v4-flash"
+    api_key: "${OPENCODE_API_KEY}"
+    model_name: "deepseek-v4-flash"
     extra_api_config:
       max_tokens: 1000000
       stream: true
   - name: local
+    type: "openai"
     base_url: "http://172.29.48.1:7070/v1"
-    key: "EMPTY"
-    modelname: "Agentxx"
+    api_key: "EMPTY"
+    model_name: "Agentxx"
     extra_api_config:
       max_tokens: 256000
       stream: true
 
   # ACP 服务模型
   - name: acp
+    type: "openai"
     base_url: "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
-    key: "${QWENAI_API_KEY}"
-    modelname: "deepseek-v4-flash"
+    api_key: "${QWENAI_API_KEY}"
+    model_name: "deepseek-v4-flash"
     extra_api_config: {}
 
   # 训练主模型
   - name: train
+    type: "openai"
     base_url: "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
-    key: "${QWENAI_API_KEY}"
-    modelname: "deepseek-v4-flash"
+    api_key: "${QWENAI_API_KEY}"
+    model_name: "deepseek-v4-flash"
     extra_api_config: {}
 
   # 训练评分模型
   - name: train_scorer
+    type: "openai"
     base_url: "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
-    key: "${QWENAI_API_KEY}"
-    modelname: "deepseek-v4-flash"
+    api_key: "${QWENAI_API_KEY}"
+    model_name: "deepseek-v4-flash"
     extra_api_config: {}
 
   # 训练优化模型
   - name: train_optimizer
+    type: "openai"
     base_url: "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
-    key: "${QWENAI_API_KEY}"
-    modelname: "deepseek-v4-flash"
+    api_key: "${QWENAI_API_KEY}"
+    model_name: "deepseek-v4-flash"
     extra_api_config: {}
 
 # 指定各模式下使用的模型名称（对应上面 models 中的 name）
