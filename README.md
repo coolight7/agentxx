@@ -228,7 +228,9 @@
 - `agent/lib`: libagentxx
     - 核心库，包含了内置实现的 toolcall、node、middleware 等，分离编译以便嵌入其他 app 开发使用
 - `agent/client`: agentxx_cli
-    - 命令行可执行程序，计划用于启动服务、实现命令行用户交互
+    - 命令行可执行程序，计划用于启动服务、实现命令行用户交互、TUI
+    - `agent/client/include/agentxx-client/io` 实现了 stdio、TUI 方式的 DeepAgent 调用
+    - `agent/client/include/agentxx-client/train` 提示词训练
 - `agent/test`: agentxx_test
     - 测试
 - `agent/third_party`:
@@ -266,6 +268,7 @@ git clone https://github.com/coolight7/agentxx
 cd agentxx
 git submodule update --init
 ```
+- 执行后在 `{项目根目录}/agent/third_party/` 可以看到很多依赖库目录，没有的话需要重新执行 `git submodule update --init`
 - 安装 codegraph-cpp 依赖
 ```sh
 cd {项目根目录}/agent/third_party/codegraph-cpp

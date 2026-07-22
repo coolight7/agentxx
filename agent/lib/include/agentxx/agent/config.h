@@ -17,6 +17,7 @@ namespace agent {
 class ModelConfig {
 public:
   std::string name; ///< 模型标识名称（来自配置文件 key）
+  std::string type = "openai"; ///< 模型类型："openai" 或 "anthropic"
   std::string baseUrl; ///< API 地址，为空时使用 provider 默认官方地址
   std::string apiKey = "EMPTY";
   std::string modelName = "Agentxx"; ///< 发送请求时的 model 字段值

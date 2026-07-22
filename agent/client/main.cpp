@@ -210,6 +210,8 @@ loadYamlConfig(const std::string &path,
       agentxx::agent::ModelConfig mc;
       mc.name = resolveEnvVars(node["name"].as<std::string>(""), dotEnvVars,
                                overrideEnvVars);
+      mc.type = resolveEnvVars(node["type"].as<std::string>("openai"),
+                               dotEnvVars, overrideEnvVars);
       mc.baseUrl = resolveEnvVars(node["base_url"].as<std::string>(""),
                                   dotEnvVars, overrideEnvVars);
       mc.apiKey = resolveEnvVars(node["api_key"].as<std::string>(""),

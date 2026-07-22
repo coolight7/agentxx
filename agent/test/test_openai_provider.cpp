@@ -1,4 +1,5 @@
 #include "test_openai_provider.h"
+#include "agentxx/agent/model_registry.h"
 #include "agentxx/protocol/openai_provider.h"
 #include "agentxx/util/http_client.h"
 #include "agentxx/util/http_server.h"
@@ -101,6 +102,43 @@ void test_extra_body_with_custom_params() {
   mc.apiKey = "sk-extra";
   mc.extra_config = std::move(extra);
   auto p = server::OpenAIProvider::create(mc);
+  XX_TEST_EXPECT_TRUE(p != nullptr);
+  XX_TEST_EXPECT_EQ(p->get_name(), "openai");
+}
+
+// ---------------------------------------------------------------------------
+// Unit tests — ModelProviderRegistry::createProvider
+// ---------------------------------------------------------------------------
+
+void test_create_provider_openai() {
+  agentxx::agent::ModelConfig mc;
+  mc.name = "test";
+  mc.apiKey = "sk-test";
+  mc.baseUrl = "http://localhost:8080";
+  mc.type = "openai";
+  auto p = agentxx::agent::ModelProviderRegistry::createProvider(mc);
+  XX_TEST_EXPECT_TRUE(p != nullptr);
+  XX_TEST_EXPECT_EQ(p->get_name(), "openai");
+}
+
+void test_create_provider_anthropic() {
+  agentxx::agent::ModelConfig mc;
+  mc.name = "test";
+  mc.apiKey = "sk-ant-test";
+  mc.baseUrl = "http://localhost:8080";
+  mc.type = "anthropic";
+  auto p = agentxx::agent::ModelProviderRegistry::createProvider(mc);
+  XX_TEST_EXPECT_TRUE(p != nullptr);
+  XX_TEST_EXPECT_EQ(p->get_name(), "anthropic");
+}
+
+void test_create_provider_default_type() {
+  agentxx::agent::ModelConfig mc;
+  mc.name = "test";
+  mc.apiKey = "sk-test";
+  mc.baseUrl = "http://localhost:8080";
+  // type defaults to "openai"
+  auto p = agentxx::agent::ModelProviderRegistry::createProvider(mc);
   XX_TEST_EXPECT_TRUE(p != nullptr);
   XX_TEST_EXPECT_EQ(p->get_name(), "openai");
 }
@@ -1743,6 +1781,11 @@ asio::awaitable<TestResult> run_openai_provider_tests() {
   test_factory_and_name();
   test_config_defaults();
   test_extra_body_with_custom_params();
+
+  // ModelProviderRegistry::createProvider tests
+  test_create_provider_openai();
+  test_create_provider_anthropic();
+  test_create_provider_default_type();
 
   // Unit tests for reasoning/thinking parsing (no server needed)
   test_parse_response_message_with_reasoning();

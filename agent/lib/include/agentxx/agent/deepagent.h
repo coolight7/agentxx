@@ -434,8 +434,7 @@ public:
           // subagent_task
           neograph::graph::NodeContext nodeContext{};
           nodeContext.instructions = "";
-          nodeContext.provider = agentxx::server::OpenAIProvider::create_shared(
-              subagentModelCfg);
+          nodeContext.provider = ModelProviderRegistry::createProvider(subagentModelCfg);
 
           /// 复制 tool
           std::vector<neograph::Tool *> toolPtrs;
@@ -461,7 +460,7 @@ public:
         //   neograph::graph::NodeContext nodeContext{};
         //   nodeContext.instructions = "";
         //   nodeContext.provider =
-        //       agentxx::server::OpenAIProvider::create_shared(config->model);
+        //       ModelProviderRegistry::createProvider(config->model);
 
         //   // 收集延迟加载的 tool 信息
         //   std::vector<agentxx::tools::ToolSkillSearchSubAgentTask::DelayToolInfo>
@@ -509,8 +508,7 @@ public:
     /// === Main Agent ===
     neograph::graph::NodeContext nodeContext{};
     nodeContext.instructions = config->prompt.systemPrompt;
-    nodeContext.provider =
-        agentxx::server::OpenAIProvider::create_shared(config->model);
+    nodeContext.provider = ModelProviderRegistry::createProvider(config->model);
     // 主 agent 的 llm 节点启用运行时动态模型切换 (经 modelRegistry)
     nodeContext.extra_config = neograph::json{
         {std::string{agentxx::nodes::ModelCallWrapNode::defUseModelRegistryKey},

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "agentxx/agent/config.h"
+#include "agentxx/protocol/anthropic_provider.h"
 #include "agentxx/protocol/openai_provider.h"
 #include "neograph/provider.h"
 #include <map>
@@ -66,6 +67,15 @@ public:
     return it->second;
   }
 
+  /// 根据 ModelConfig::type 创建对应 Provider
+  static std::shared_ptr<neograph::Provider>
+  createProvider(const ModelConfig &mc) {
+    if (mc.type == "anthropic") {
+      return agentxx::server::AnthropicProvider::create_shared(mc);
+    }
+    return agentxx::server::OpenAIProvider::create_shared(mc);
+  }
+
   /// 指定模型的 Provider, 按需创建并缓存; name 为空/不存在时取默认模型
   /// - 无可用模型时返回 nullptr
   std::shared_ptr<neograph::Provider> getProvider(const std::string &name) {
@@ -81,8 +91,7 @@ public:
     if (cacheIt != providerCache_.end()) {
       return cacheIt->second;
     }
-    auto provider = agentxx::server::OpenAIProvider::create_shared(
-        cfgIt->second);
+    auto provider = createProvider(cfgIt->second);
     providerCache_[effective] = provider;
     return provider;
   }
