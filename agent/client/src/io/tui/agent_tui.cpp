@@ -313,14 +313,14 @@ ftxui::Element AgentTUI::renderMessages() {
       Elements header;
       header.push_back(text(expanded ? "\xe2\x96\xbe " : "\xe2\x96\xb8 ") |
                        color(theme_.hintColor));
-      header.push_back(text("[Thinking] ") | color(theme_.thinkingColor) | dim);
+      header.push_back(text("[Thinking] ") | color(theme_.thinkingColor) | bold);
       if (!expanded) {
         header.push_back(text(oneLinePreview(msg.text)) |
-                         color(theme_.thinkingColor) | dim);
+                         color(theme_.thinkingColor));
       }
       lines.push_back(hbox(std::move(header)));
       if (expanded) {
-        lines.push_back(paragraph(msg.text) | color(theme_.thinkingColor) | dim);
+        lines.push_back(paragraph(msg.text) | color(theme_.thinkingColor));
       }
       Element block = vbox(std::move(lines)) |
                       reflect(collapsibleBoxes_[collapsibleOrdinal]);
@@ -386,8 +386,8 @@ ftxui::Element AgentTUI::renderMessages() {
     if (currentTokenRole_ == Message::Role::Thinking) {
       pushBlock(
           hbox({
-              text("[Thinking] ") | color(theme_.thinkingColor) | dim,
-              paragraph(currentToken_) | color(theme_.thinkingColor) | dim,
+              text("[Thinking] ") | color(theme_.thinkingColor) | bold,
+              paragraph(currentToken_) | color(theme_.thinkingColor),
           }),
           false);
     } else {
