@@ -1,5 +1,6 @@
 #pragma once
 
+#include "agentxx/agent/config.h"
 #include "agentxx/util/http_client.h"
 #include "agentxx/util/log.h"
 #include "asio/awaitable.hpp"
@@ -27,28 +28,13 @@ namespace server {
 /// Supports non-streaming, streaming, tool_use, and extended thinking.
 class AnthropicProvider : public neograph::Provider {
 public:
-  struct Config {
-    std::string api_key;
-    std::string base_url = "https://api.anthropic.com";
-    std::string default_model = "claude-sonnet-4-20250514";
-    std::string anthropic_version = "2023-06-01";
-    int connect_timeout_seconds = 16;
-    int read_timeout_seconds = 24;
-    int max_tokens = 8096; // Anthropic requires max_tokens
-    /// 是否在发送 LLM 请求时携带 thinking 内容
-    bool sendThinking = false;
-
-    /// Extra JSON fields merged into every request body.
-    /// Use this to set thinking, top_k, top_p, stop_sequences, etc.
-    neograph::json extra_body = neograph::json::object();
-  };
-
-  static std::unique_ptr<AnthropicProvider> create(const Config &config) {
+  static std::unique_ptr<AnthropicProvider>
+  create(const agentxx::agent::ModelConfig &config) {
     return std::unique_ptr<AnthropicProvider>(new AnthropicProvider(config));
   }
 
   static std::shared_ptr<neograph::Provider>
-  create_shared(const Config &config) {
+  create_shared(const agentxx::agent::ModelConfig &config) {
     return std::shared_ptr<neograph::Provider>(new AnthropicProvider(config));
   }
 
@@ -313,14 +299,23 @@ public:
   }
 
 private:
-  explicit AnthropicProvider(Config config) : config_(std::move(config)) {}
+  static constexpr const char *kDefaultBaseUrl = "https://api.anthropic.com";
+
+  explicit AnthropicProvider(agentxx::agent::ModelConfig config)
+      : config_(std::move(config)) {
+    if (config_.baseUrl.empty()) {
+      config_.baseUrl = kDefaultBaseUrl;
+    }
+  }
 
   neograph::json buildBody(const neograph::CompletionParams &params) const {
     neograph::json body;
-    body["model"] = params.model.empty() ? config_.default_model : params.model;
-    body["max_tokens"] = config_.max_tokens;
+    body["model"] =
+        params.model.empty() ? config_.modelName : params.model;
+    body["max_tokens"] = config_.maxTokens;
 
-    auto [system, messages] = convertMessages(params.messages, config_.sendThinking);
+    auto [system, messages] =
+        convertMessages(params.messages, config_.sendThinking);
     body["messages"] = std::move(messages);
     if (!system.empty()) {
       body["system"] = system;
@@ -338,9 +333,9 @@ private:
       body["max_tokens"] = params.max_tokens;
     }
 
-    // Merge config-level extra body (lower priority)
-    if (!config_.extra_body.empty()) {
-      for (const auto &[key, val] : config_.extra_body.items()) {
+    // Merge config-level extra config (lower priority)
+    if (config_.extra_config.is_object()) {
+      for (const auto &[key, val] : config_.extra_config.items()) {
         if (!body.contains(key)) {
           body[key] = val;
         }
@@ -406,15 +401,16 @@ private:
     auto bodyStr = bodyJson.dump();
 
     HeaderMap headers;
-    headers.set("x-api-key", config_.api_key);
-    headers.set("anthropic-version", config_.anthropic_version);
+    headers.set("x-api-key", config_.apiKey);
+    headers.set("anthropic-version", config_.anthropicVersion);
 
     auto resp = co_await HttpClient::postAsync(
-        config_.base_url + "/v1/messages", bodyStr, "application/json", headers,
+        config_.baseUrl + "/v1/messages", bodyStr, "application/json", headers,
         HttpClient::RequestConfig{
             .connectTimeout =
-                std::chrono::seconds{config_.connect_timeout_seconds},
-            .readTimeout = std::chrono::seconds{config_.read_timeout_seconds}});
+                std::chrono::seconds{config_.connectTimeoutSeconds},
+            .readTimeout =
+                std::chrono::seconds{config_.readTimeoutSeconds}});
 
     if (!resp.has_value()) {
       throw std::runtime_error("HTTP request failed: " + resp.error());
@@ -454,12 +450,13 @@ private:
 
     auto bodyStr = body.dump();
     auto executor = co_await asio::this_coro::executor;
-    auto ep = parseEndpoint(config_.base_url);
+    auto ep = parseEndpoint(config_.baseUrl);
     auto target = ep.prefix + "/v1/messages";
     bool isHttps = ep.scheme == "https";
 
-    auto connectTimeout = std::chrono::seconds{config_.connect_timeout_seconds};
-    auto readTimeout = std::chrono::seconds{config_.read_timeout_seconds};
+    auto connectTimeout =
+        std::chrono::seconds{config_.connectTimeoutSeconds};
+    auto readTimeout = std::chrono::seconds{config_.readTimeoutSeconds};
     auto sendTimeout =
         agentxx::util::HttpClient::calcSendTimeout(bodyStr.size());
     auto deadline = std::chrono::steady_clock::now() + connectTimeout;
@@ -474,8 +471,8 @@ private:
     req.set(http::field::host, ep.host);
     req.set(http::field::user_agent, "agentxx/1.0");
     req.set(http::field::content_type, "application/json");
-    req.set("x-api-key", config_.api_key);
-    req.set("anthropic-version", config_.anthropic_version);
+    req.set("x-api-key", config_.apiKey);
+    req.set("anthropic-version", config_.anthropicVersion);
     req.set(http::field::accept, "text/event-stream");
     req.set(http::field::connection, "keep-alive");
     req.body() = bodyStr;
@@ -550,7 +547,8 @@ private:
                 neograph::ChatCompletion &completion, std::string &fullContent,
                 std::string &fullThinking,
                 std::map<int, neograph::ToolCall> &tcMap,
-                std::map<int, std::string> &blockTypes, std::string &lineBuffer,
+                std::map<int, std::string> &blockTypes,
+                std::string &lineBuffer,
                 neograph::FormatDataStreamCallback on_chunk) {
     namespace http = boost::beast::http;
 
@@ -565,8 +563,9 @@ private:
     parser.body_limit(std::numeric_limits<uint64_t>::max());
     parser.eager(true);
 
-    co_await http::async_read_header(stream, buf, parser,
-                                     asio::cancel_after(rem(), asio::use_awaitable));
+    co_await http::async_read_header(
+        stream, buf, parser,
+        asio::cancel_after(rem(), asio::use_awaitable));
 
     if (parser.get().result_int() == 429) {
       co_await http::async_read(stream, buf, parser,
@@ -623,7 +622,7 @@ private:
     return agentxx::util::HttpClient::sharedSslCtx(false);
   }
 
-  Config config_;
+  agentxx::agent::ModelConfig config_;
 };
 
 } // namespace server

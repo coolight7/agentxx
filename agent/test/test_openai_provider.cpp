@@ -26,6 +26,22 @@ namespace test {
 using namespace agentxx::util;
 namespace server = agentxx::server;
 
+namespace {
+agentxx::agent::ModelConfig makeOaiCfg(const std::string &apiKey,
+                                       const std::string &baseUrl,
+                                       int connectTO = 10, int readTO = 10,
+                                       bool sendThinking = false) {
+  agentxx::agent::ModelConfig mc;
+  mc.name = "test";
+  mc.apiKey = apiKey;
+  mc.baseUrl = baseUrl;
+  mc.connectTimeoutSeconds = connectTO;
+  mc.readTimeoutSeconds = readTO;
+  mc.sendThinking = sendThinking;
+  return mc;
+}
+} // namespace
+
 int g_openai_passed = 0;
 int g_openai_failed = 0;
 
@@ -35,33 +51,39 @@ int g_openai_failed = 0;
 
 void test_factory_and_name() {
   {
-    auto p = server::OpenAIProvider::create({.api_key = "sk-test-key"});
+    agentxx::agent::ModelConfig mc;
+    mc.name = "test";
+    mc.apiKey = "sk-test-key";
+    auto p = server::OpenAIProvider::create(mc);
     XX_TEST_EXPECT_TRUE(p != nullptr);
     XX_TEST_EXPECT_EQ(p->get_name(), "openai");
   }
 
   {
-    auto p =
-        server::OpenAIProvider::create({.api_key = "sk-test",
-                                        .base_url = "http://localhost:8080",
-                                        .default_model = "my-model",
-                                        .connect_timeout_seconds = 10, .read_timeout_seconds = 10});
+    agentxx::agent::ModelConfig mc = makeOaiCfg("sk-test", "http://localhost:8080");
+    mc.modelName = "my-model";
+    auto p = server::OpenAIProvider::create(mc);
     XX_TEST_EXPECT_TRUE(p != nullptr);
     XX_TEST_EXPECT_EQ(p->get_name(), "openai");
   }
 
   {
-    auto p = server::OpenAIProvider::create_shared({.api_key = "sk-shared"});
+    agentxx::agent::ModelConfig mc;
+    mc.name = "test";
+    mc.apiKey = "sk-shared";
+    auto p = server::OpenAIProvider::create_shared(mc);
     XX_TEST_EXPECT_TRUE(p != nullptr);
     XX_TEST_EXPECT_EQ(p->get_name(), "openai");
   }
 }
 
 void test_config_defaults() {
-  auto p = server::OpenAIProvider::create(
-      {.api_key = "sk-defaults-test",
-       .extra_body = neograph::json::parse(
-           R"({"top_p":0.9,"frequency_penalty":0.2,"seed":42})")});
+  agentxx::agent::ModelConfig mc;
+  mc.name = "test";
+  mc.apiKey = "sk-defaults-test";
+  mc.extra_config = neograph::json::parse(
+      R"({"top_p":0.9,"frequency_penalty":0.2,"seed":42})");
+  auto p = server::OpenAIProvider::create(mc);
   XX_TEST_EXPECT_TRUE(p != nullptr);
 }
 
@@ -74,8 +96,11 @@ void test_extra_body_with_custom_params() {
   extra["response_format"] = {{"type", "json_object"}};
   extra["stop"] = neograph::json::parse(R"(["\n\n","STOP"])");
 
-  auto p = server::OpenAIProvider::create(
-      {.api_key = "sk-extra", .extra_body = std::move(extra)});
+  agentxx::agent::ModelConfig mc;
+  mc.name = "test";
+  mc.apiKey = "sk-extra";
+  mc.extra_config = std::move(extra);
+  auto p = server::OpenAIProvider::create(mc);
   XX_TEST_EXPECT_TRUE(p != nullptr);
   XX_TEST_EXPECT_EQ(p->get_name(), "openai");
 }
@@ -588,8 +613,7 @@ asio::awaitable<void> test_non_streaming_completion(MockOpenAIServer &mock,
   std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
   mock.mode = MockMode::Normal;
 
-  auto provider = server::OpenAIProvider::create(
-      {.api_key = "sk-test", .base_url = baseUrl, .connect_timeout_seconds = 10, .read_timeout_seconds = 10});
+  auto provider = server::OpenAIProvider::create(makeOaiCfg("sk-test", baseUrl));
 
   neograph::CompletionParams params;
   params.model = "gpt-4o-mini";
@@ -621,8 +645,7 @@ asio::awaitable<void> test_non_streaming_tool_call(MockOpenAIServer &mock,
   std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
   mock.mode = MockMode::ToolCall;
 
-  auto provider = server::OpenAIProvider::create(
-      {.api_key = "sk-test", .base_url = baseUrl, .connect_timeout_seconds = 10, .read_timeout_seconds = 10});
+  auto provider = server::OpenAIProvider::create(makeOaiCfg("sk-test", baseUrl));
 
   neograph::CompletionParams params;
   params.model = "gpt-4o";
@@ -654,8 +677,7 @@ asio::awaitable<void> test_rate_limit_error(MockOpenAIServer &mock,
   std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
   mock.mode = MockMode::RateLimit;
 
-  auto provider = server::OpenAIProvider::create(
-      {.api_key = "sk-test", .base_url = baseUrl, .connect_timeout_seconds = 10, .read_timeout_seconds = 10});
+  auto provider = server::OpenAIProvider::create(makeOaiCfg("sk-test", baseUrl));
 
   neograph::CompletionParams params;
   params.model = "gpt-4o-mini";
@@ -686,8 +708,7 @@ asio::awaitable<void> test_server_error(MockOpenAIServer &mock, uint16_t port) {
   std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
   mock.mode = MockMode::ServerError;
 
-  auto provider = server::OpenAIProvider::create(
-      {.api_key = "sk-test", .base_url = baseUrl, .connect_timeout_seconds = 10, .read_timeout_seconds = 10});
+  auto provider = server::OpenAIProvider::create(makeOaiCfg("sk-test", baseUrl));
 
   neograph::CompletionParams params;
   params.model = "gpt-4o-mini";
@@ -721,11 +742,9 @@ asio::awaitable<void> test_extra_body_passthrough(MockOpenAIServer &mock,
   extra["top_p"] = 0.9;
   extra["seed"] = 12345;
 
-  auto provider =
-      server::OpenAIProvider::create({.api_key = "sk-test",
-                                      .base_url = baseUrl,
-                                      .connect_timeout_seconds = 10, .read_timeout_seconds = 10,
-                                      .extra_body = std::move(extra)});
+  agentxx::agent::ModelConfig mc = makeOaiCfg("sk-test", baseUrl);
+  mc.extra_config = std::move(extra);
+  auto provider = server::OpenAIProvider::create(mc);
 
   neograph::CompletionParams params;
   params.model = "gpt-4o-mini";
@@ -753,8 +772,7 @@ asio::awaitable<void> test_per_call_extra_fields(MockOpenAIServer &mock,
   std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
   mock.mode = MockMode::Normal;
 
-  auto provider = server::OpenAIProvider::create(
-      {.api_key = "sk-test", .base_url = baseUrl, .connect_timeout_seconds = 10, .read_timeout_seconds = 10});
+  auto provider = server::OpenAIProvider::create(makeOaiCfg("sk-test", baseUrl));
 
   neograph::CompletionParams params;
   params.model = "gpt-4o-mini";
@@ -780,8 +798,7 @@ asio::awaitable<void> test_streaming_completion(MockOpenAIServer &mock,
   std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
   mock.mode = MockMode::Streaming;
 
-  auto provider = server::OpenAIProvider::create(
-      {.api_key = "sk-test", .base_url = baseUrl, .connect_timeout_seconds = 10, .read_timeout_seconds = 10});
+  auto provider = server::OpenAIProvider::create(makeOaiCfg("sk-test", baseUrl));
 
   neograph::CompletionParams params;
   params.model = "gpt-4o-mini";
@@ -819,8 +836,7 @@ test_non_streaming_reasoning_content(MockOpenAIServer &mock, uint16_t port) {
   std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
   mock.mode = MockMode::Normal;
 
-  auto provider = server::OpenAIProvider::create(
-      {.api_key = "sk-test", .base_url = baseUrl, .connect_timeout_seconds = 10, .read_timeout_seconds = 10});
+  auto provider = server::OpenAIProvider::create(makeOaiCfg("sk-test", baseUrl));
 
   neograph::CompletionParams params;
   params.model = "deepseek-reasoner";
@@ -849,8 +865,7 @@ asio::awaitable<void> test_non_streaming_thinking_field(MockOpenAIServer &mock,
   std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
   mock.mode = MockMode::Normal;
 
-  auto provider = server::OpenAIProvider::create(
-      {.api_key = "sk-test", .base_url = baseUrl, .connect_timeout_seconds = 10, .read_timeout_seconds = 10});
+  auto provider = server::OpenAIProvider::create(makeOaiCfg("sk-test", baseUrl));
 
   neograph::CompletionParams params;
   params.model = "compat-model";
@@ -881,8 +896,7 @@ test_non_streaming_reasoning_at_choice_level(MockOpenAIServer &mock,
   std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
   mock.mode = MockMode::Normal;
 
-  auto provider = server::OpenAIProvider::create(
-      {.api_key = "sk-test", .base_url = baseUrl, .connect_timeout_seconds = 10, .read_timeout_seconds = 10});
+  auto provider = server::OpenAIProvider::create(makeOaiCfg("sk-test", baseUrl));
 
   neograph::CompletionParams params;
   params.model = "nonstandard-model";
@@ -913,8 +927,7 @@ test_non_streaming_thinking_at_choice_level(MockOpenAIServer &mock,
   std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
   mock.mode = MockMode::Normal;
 
-  auto provider = server::OpenAIProvider::create(
-      {.api_key = "sk-test", .base_url = baseUrl, .connect_timeout_seconds = 10, .read_timeout_seconds = 10});
+  auto provider = server::OpenAIProvider::create(makeOaiCfg("sk-test", baseUrl));
 
   neograph::CompletionParams params;
   params.model = "nonstandard-model";
@@ -942,8 +955,7 @@ asio::awaitable<void> test_streaming_reasoning_content(MockOpenAIServer &mock,
   std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
   mock.mode = MockMode::Streaming;
 
-  auto provider = server::OpenAIProvider::create(
-      {.api_key = "sk-test", .base_url = baseUrl, .connect_timeout_seconds = 10, .read_timeout_seconds = 10});
+  auto provider = server::OpenAIProvider::create(makeOaiCfg("sk-test", baseUrl));
 
   neograph::CompletionParams params;
   params.model = "deepseek-r1";
@@ -989,8 +1001,7 @@ test_streaming_thinking_field_compat(MockOpenAIServer &mock, uint16_t port) {
   std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
   mock.mode = MockMode::Streaming;
 
-  auto provider = server::OpenAIProvider::create(
-      {.api_key = "sk-test", .base_url = baseUrl, .connect_timeout_seconds = 10, .read_timeout_seconds = 10});
+  auto provider = server::OpenAIProvider::create(makeOaiCfg("sk-test", baseUrl));
 
   neograph::CompletionParams params;
   params.model = "compat-model";
@@ -1036,8 +1047,7 @@ test_streaming_reasoning_with_null_skips(MockOpenAIServer &mock,
   std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
   mock.mode = MockMode::Streaming;
 
-  auto provider = server::OpenAIProvider::create(
-      {.api_key = "sk-test", .base_url = baseUrl, .connect_timeout_seconds = 10, .read_timeout_seconds = 10});
+  auto provider = server::OpenAIProvider::create(makeOaiCfg("sk-test", baseUrl));
 
   neograph::CompletionParams params;
   params.model = "deepseek-r1";
@@ -1080,8 +1090,7 @@ test_streaming_reasoning_preferred_over_thinking(MockOpenAIServer &mock,
   std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
   mock.mode = MockMode::Streaming;
 
-  auto provider = server::OpenAIProvider::create(
-      {.api_key = "sk-test", .base_url = baseUrl, .connect_timeout_seconds = 10, .read_timeout_seconds = 10});
+  auto provider = server::OpenAIProvider::create(makeOaiCfg("sk-test", baseUrl));
 
   neograph::CompletionParams params;
   params.model = "compat-model";
@@ -1122,8 +1131,7 @@ test_streaming_reasoning_only_no_content(MockOpenAIServer &mock,
   std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
   mock.mode = MockMode::Streaming;
 
-  auto provider = server::OpenAIProvider::create(
-      {.api_key = "sk-test", .base_url = baseUrl, .connect_timeout_seconds = 10, .read_timeout_seconds = 10});
+  auto provider = server::OpenAIProvider::create(makeOaiCfg("sk-test", baseUrl));
 
   neograph::CompletionParams params;
   params.model = "thinker-model";
@@ -1164,8 +1172,7 @@ test_streaming_malformed_chunk_skipped(MockOpenAIServer &mock, uint16_t port) {
   std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
   mock.mode = MockMode::Streaming;
 
-  auto provider = server::OpenAIProvider::create(
-      {.api_key = "sk-test", .base_url = baseUrl, .connect_timeout_seconds = 10, .read_timeout_seconds = 10});
+  auto provider = server::OpenAIProvider::create(makeOaiCfg("sk-test", baseUrl));
 
   neograph::CompletionParams params;
   params.model = "robust-model";
@@ -1211,8 +1218,7 @@ test_non_streaming_think_tags_in_content(MockOpenAIServer &mock,
   std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
   mock.mode = MockMode::Normal;
 
-  auto provider = server::OpenAIProvider::create(
-      {.api_key = "sk-test", .base_url = baseUrl, .connect_timeout_seconds = 10, .read_timeout_seconds = 10});
+  auto provider = server::OpenAIProvider::create(makeOaiCfg("sk-test", baseUrl));
 
   neograph::CompletionParams params;
   params.model = "deepseek-r1-local";
@@ -1241,8 +1247,7 @@ test_non_streaming_think_tags_prefer_reasoning_field(MockOpenAIServer &mock,
   std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
   mock.mode = MockMode::Normal;
 
-  auto provider = server::OpenAIProvider::create(
-      {.api_key = "sk-test", .base_url = baseUrl, .connect_timeout_seconds = 10, .read_timeout_seconds = 10});
+  auto provider = server::OpenAIProvider::create(makeOaiCfg("sk-test", baseUrl));
 
   neograph::CompletionParams params;
   params.model = "hybrid-model";
@@ -1274,8 +1279,7 @@ test_streaming_think_tags_split_across_chunks(MockOpenAIServer &mock,
   std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
   mock.mode = MockMode::Streaming;
 
-  auto provider = server::OpenAIProvider::create(
-      {.api_key = "sk-test", .base_url = baseUrl, .connect_timeout_seconds = 10, .read_timeout_seconds = 10});
+  auto provider = server::OpenAIProvider::create(makeOaiCfg("sk-test", baseUrl));
 
   neograph::CompletionParams params;
   params.model = "deepseek-r1-local";
@@ -1325,12 +1329,7 @@ asio::awaitable<void> test_sendthinking_false_strips_reasoning(
   std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
   mock.mode = MockMode::Normal;
 
-  auto provider = server::OpenAIProvider::create(
-      {.api_key = "sk-test",
-       .base_url = baseUrl,
-       .connect_timeout_seconds = 10,
-       .read_timeout_seconds = 10,
-       .sendThinking = false});
+  auto provider = server::OpenAIProvider::create(makeOaiCfg("sk-test", baseUrl, 10, 10, false));
 
   neograph::CompletionParams params;
   params.model = "gpt-4o-mini";
@@ -1359,12 +1358,7 @@ asio::awaitable<void> test_sendthinking_true_preserves_reasoning(
   std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
   mock.mode = MockMode::Normal;
 
-  auto provider = server::OpenAIProvider::create(
-      {.api_key = "sk-test",
-       .base_url = baseUrl,
-       .connect_timeout_seconds = 10,
-       .read_timeout_seconds = 10,
-       .sendThinking = true});
+  auto provider = server::OpenAIProvider::create(makeOaiCfg("sk-test", baseUrl, 10, 10, true));
 
   neograph::CompletionParams params;
   params.model = "gpt-4o-mini";
@@ -1395,12 +1389,7 @@ asio::awaitable<void> test_sendthinking_no_reasoning_has_no_effect(
   std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
   mock.mode = MockMode::Normal;
 
-  auto provider = server::OpenAIProvider::create(
-      {.api_key = "sk-test",
-       .base_url = baseUrl,
-       .connect_timeout_seconds = 10,
-       .read_timeout_seconds = 10,
-       .sendThinking = true});
+  auto provider = server::OpenAIProvider::create(makeOaiCfg("sk-test", baseUrl, 10, 10, true));
 
   neograph::CompletionParams params;
   params.model = "gpt-4o-mini";
@@ -1526,8 +1515,7 @@ void test_true_streaming_incremental(uint16_t) {
   srv->start();
 
   std::string baseUrl = "http://127.0.0.1:" + std::to_string(srv->boundPort);
-  auto provider = server::OpenAIProvider::create(
-      {.api_key = "sk-test", .base_url = baseUrl, .connect_timeout_seconds = 10, .read_timeout_seconds = 10});
+  auto provider = server::OpenAIProvider::create(makeOaiCfg("sk-test", baseUrl));
 
   neograph::CompletionParams params;
   params.model = "gpt-4o-mini";
@@ -1662,11 +1650,7 @@ private:
 };
 
 void test_connect_timeout() {
-  auto provider = server::OpenAIProvider::create(
-      {.api_key = "sk-test",
-       .base_url = "http://192.0.2.1:12345",
-       .connect_timeout_seconds = 2,
-       .read_timeout_seconds = 2});
+  auto provider = server::OpenAIProvider::create(makeOaiCfg("sk-test", "http://192.0.2.1:12345", 2, 2));
 
   neograph::CompletionParams params;
   params.model = "gpt-4o-mini";
@@ -1702,11 +1686,7 @@ void test_read_timeout_streaming() {
   srv->start();
 
   std::string baseUrl = "http://127.0.0.1:" + std::to_string(srv->boundPort);
-  auto provider = server::OpenAIProvider::create(
-      {.api_key = "sk-test",
-       .base_url = baseUrl,
-       .connect_timeout_seconds = 5,
-       .read_timeout_seconds = 2});
+  auto provider = server::OpenAIProvider::create(makeOaiCfg("sk-test", baseUrl, 5, 2));
 
   neograph::CompletionParams params;
   params.model = "gpt-4o-mini";

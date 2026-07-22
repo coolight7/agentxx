@@ -13,16 +13,25 @@ namespace agent {
 
 /// 模型连接配置
 /// - 用于主模型和 subagent 模型的统一描述
+/// - 同时作为 OpenAIProvider / AnthropicProvider 的配置
 class ModelConfig {
 public:
-  std::string baseUrl = "";
+  std::string name; ///< 模型标识名称（来自配置文件 key）
+  std::string baseUrl; ///< API 地址，为空时使用 provider 默认官方地址
   std::string apiKey = "EMPTY";
-  std::string modelName = "Agentxx";
-  neograph::json extra_config;
+  std::string modelName = "Agentxx"; ///< 发送请求时的 model 字段值
+  int connectTimeoutSeconds = 16;
+  int readTimeoutSeconds = 24;
   /// 是否在发送 LLM 请求时携带 thinking 内容
   bool sendThinking = false;
+  /// Anthropic API version（仅 Anthropic 使用）
+  std::string anthropicVersion = "2023-06-01";
+  /// max_tokens
+  int maxTokens = 8096;
+  /// 扩展 JSON 配置，合并到请求 body
+  neograph::json extra_config;
 
-  bool isValid() const { return !baseUrl.empty(); }
+  bool isValid() const { return !baseUrl.empty() || apiKey != "EMPTY"; }
 };
 
 class AgentConfig {
