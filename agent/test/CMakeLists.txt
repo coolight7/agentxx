@@ -32,10 +32,6 @@ file(GLOB_RECURSE client_SOURCES
 	CONFIGURE_DEPENDS
 	"${AGENTXX_CLIENT_SOURCE_DIR}/src/*.cpp" "${AGENTXX_CLIENT_SOURCE_DIR}/src/*.cc" "${AGENTXX_CLIENT_SOURCE_DIR}/src/*.cxx"
 )
-# 测试不包含 TUI 源码 (依赖 ftxui，测试构建未链接 ftxui)
-list(FILTER client_SOURCES EXCLUDE REGEX "/tui/")
-# 测试仅链接其用到的 client stdio 源码 (StdioInterruptHandler/StdioPermissionPrompter)
-list(FILTER client_SOURCES INCLUDE REGEX "/io/stdio/(interrupt_handler|permission_handler)\\.(cpp|cc|cxx)$")
 target_sources(agentxx_test PRIVATE
 	${test_SOURCES}
 	${client_SOURCES}
@@ -63,6 +59,9 @@ find_package(CURL REQUIRED)
 find_package(SQLite3 REQUIRED)
 find_package(html2md REQUIRED)
 find_package(Glob REQUIRED)
+if (AGENTXX_ENABLE_CLIENT_TUI)
+  find_package(ftxui REQUIRED)
+endif()
 
 find_package(agentxx_static REQUIRED)
 
@@ -94,6 +93,10 @@ if (AGENTXX_LINUX_IO_URING_SUPPORTED)
   target_link_libraries(agentxx_test PRIVATE 
     PkgConfig::uring
   )
+endif()
+if (AGENTXX_ENABLE_CLIENT_TUI)
+  target_link_libraries(agentxx_test PRIVATE ftxui::ftxui)
+  target_compile_definitions(agentxx_test PRIVATE AGENTXX_ENABLE_CLIENT_TUI)
 endif()
 
 if (XX_IS_MSVC_D)
