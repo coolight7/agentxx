@@ -202,15 +202,11 @@ public:
 
     void onToken(const std::string& token, const std::string& kind) override;
     asio::awaitable<std::optional<std::string>> getInput() override;
-    asio::awaitable<bool>                       promptPermission(
-                              const std::string& toolName,
-                              const std::string& category,
-                              const std::string& target
-                          ) override;
-    void onInterrupt(
-        const std::string& node,
-        const std::string& value,
-        const std::string& handleName
+    asio::awaitable<neograph::json> handleInterrupt(
+        const std::string& threadId,
+        const std::string& interruptNode,
+        const std::string& interruptValue,
+        const std::string& interruptArgJson
     ) override;
     void onToolStart(
         const std::string& toolName,
