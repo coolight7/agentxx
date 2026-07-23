@@ -328,14 +328,16 @@ static YamlAppConfig loadYamlConfig(
             );
             auto url = resolveEnvVars(node["url"].as<std::string>(""), dotEnvVars, overrideEnvVars);
             if (ns.empty() || url.empty()) {
-                std::cerr << "[Config] Warning: mcp_servers entry missing `namespace` "
-                             "or `url`, skipped"
-                          << std::endl;
+                XX_LOGW(
+                    R"([Config] Warning: mcp_servers entry missing `namespace` or `url`, skipped)"
+                );
                 continue;
             }
             if (cfg.mcpServers.contains(ns)) {
-                std::cerr << "[Config] Warning: duplicate mcp namespace '" << ns
-                          << "', overriding its url" << std::endl;
+                XX_LOGW(
+                    R"([Config] Warning: duplicate mcp namespace '{}', overriding its url)",
+                    ns
+                );
             }
             cfg.mcpServers[ns] = url;
         }
@@ -353,8 +355,7 @@ static agentxx::agent::ModelConfig resolveModelConfig(
     }
     auto it = models.find(modelName);
     if (it == models.end()) {
-        std::cerr << "[Config] Warning: model '" << modelName << "' not found in config"
-                  << std::endl;
+        XX_LOGE("[Config] Warning: model '{}' not found in config", modelName);
         return agentxx::agent::ModelConfig{};
     }
     return it->second;
@@ -453,7 +454,6 @@ asio::awaitable<void> runCliAsync(agentxx::agent::DeepAgent& agent) {
         }
         auto input = std::move(inputOpt.value());
         if (!input.empty()) {
-            io->resetTokenState();
             std::cout << agent.agentContext->agentConfig->agentNameView << ": " << std::flush;
 
             auto turnResult = co_await agent.runConversationTurnAsync(
@@ -573,7 +573,7 @@ asio::awaitable<void> runTuiAsync(agentxx::agent::DeepAgent& agent) {
         }
         auto input = std::move(inputOpt.value());
         if (!input.empty()) {
-            io->resetTokenState();
+            // onUpdate() 由 deepagent 在 turn 入口调用, 负责设置 isStreaming_
             auto turnResult = co_await agent.runConversationTurnAsync(
                 thread_id,
                 input,
@@ -589,6 +589,7 @@ asio::awaitable<void> runTuiAsync(agentxx::agent::DeepAgent& agent) {
             );
             messages   = std::move(turnResult.messages);
             isFirstMsg = false;
+            // turn 结束, 冲刷残余 token 并重置状态
             io->resetTokenState();
         }
     }
@@ -671,7 +672,7 @@ int main(int argn, char** argv) {
             yamlCfg = loadYamlConfig(configPath, dotEnvVars, overrideEnvVars);
             XX_OUT("[Config] Loaded config from: {}", configPath);
         } catch (const std::exception& e) {
-            std::cerr << "[Config] Failed to load config: " << e.what() << std::endl;
+            XX_LOGE("[Config] Failed to load config: {}", e.what());
             return 1;
         }
     }

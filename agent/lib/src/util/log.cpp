@@ -52,7 +52,7 @@ void LogDispatcher::dispatch(LogLevel level, const std::string& message) {
 }
 
 void xxLogPrint(LogLevel level, const std::string& message) {
-    std::cerr << message << std::endl;
+    // std::cerr << message << std::endl;
     LogDispatcher::instance().dispatch(level, message);
 }
 
