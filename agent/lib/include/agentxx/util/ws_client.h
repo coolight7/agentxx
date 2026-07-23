@@ -1,0 +1,89 @@
+#pragma once
+
+#include "agentxx/util/log.h"
+#include "agentxx/util/string_util.h"
+#include "asio/awaitable.hpp"
+#include "asio/cancel_after.hpp"
+#include "asio/ip/tcp.hpp"
+#include "asio/ssl/context.hpp"
+#include "asio/ssl/stream.hpp"
+#include "asio/steady_timer.hpp"
+#include "asio/use_awaitable.hpp"
+#include <boost/beast/core.hpp>
+#include <boost/beast/websocket.hpp>
+#include <boost/beast/websocket/ssl.hpp>
+#include <chrono>
+#include <expected>
+#include <memory>
+#include <neograph/api.h>
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace agentxx {
+namespace util {
+
+struct WsMessage {
+    enum class Type : uint8_t {
+        Text,
+        Binary,
+        Close,
+    };
+
+    Type        type = Type::Text;
+    std::string payload;
+    uint16_t    closeCode = 0;
+};
+
+struct WsClientConfig {
+    std::chrono::milliseconds connectTimeout = std::chrono::seconds{10};
+    std::chrono::milliseconds recvTimeout    = std::chrono::seconds{60};
+    std::chrono::milliseconds sendTimeout    = std::chrono::seconds{30};
+    bool                      sslVerify      = false;
+    size_t                    maxMessageSize = 16 * 1024 * 1024;
+};
+
+class WsClient {
+public:
+
+    struct Impl;
+
+    ~WsClient();
+    WsClient(const WsClient&)            = delete;
+    WsClient& operator=(const WsClient&) = delete;
+    WsClient(WsClient&&) noexcept;
+    WsClient& operator=(WsClient&&) noexcept;
+
+    explicit WsClient(std::unique_ptr<Impl> impl);
+
+    asio::awaitable<std::expected<void, std::string>> sendText(std::string_view payload);
+
+    asio::awaitable<std::expected<void, std::string>> sendBinary(std::string_view payload);
+
+    asio::awaitable<std::expected<void, std::string>> sendPing(std::string_view payload = "");
+
+    asio::awaitable<std::expected<void, std::string>> sendClose(
+        uint16_t         code   = 1000,
+        std::string_view reason = ""
+    );
+
+    asio::awaitable<std::expected<WsMessage, std::string>> recv();
+
+    bool isOpen() const noexcept;
+
+    void setRecvTimeout(std::chrono::milliseconds timeout) noexcept;
+
+private:
+
+    std::unique_ptr<Impl> impl_;
+};
+
+asio::awaitable<std::expected<std::unique_ptr<WsClient>, std::string>> wsConnect(
+    asio::any_io_executor                    executor,
+    std::string_view                         url,
+    std::vector<std::pair<std::string, std::string>> headers = {},
+    WsClientConfig                           config          = {}
+);
+
+} // namespace util
+} // namespace agentxx

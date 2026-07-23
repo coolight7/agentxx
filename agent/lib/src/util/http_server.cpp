@@ -86,7 +86,9 @@ void HttpServer::start() {
 
     workers_.reserve(threadCount);
     for (unsigned i = 0; i < threadCount; ++i) {
-        workers_.push_back(std::make_unique<Worker>());
+        auto w = std::make_unique<Worker>();
+        w->workGuard.emplace(asio::make_work_guard(w->ioCtx));
+        workers_.push_back(std::move(w));
     }
 
     auto& mainCtx = workers_[0]->ioCtx;
@@ -142,10 +144,20 @@ void HttpServer::stop() {
         acceptor_->cancel(ec);
         acceptor_->close(ec);
     }
+    // Release work guards so io_context::run() can return
+    for (auto& w : workers_) {
+        if (w->workGuard) {
+            w->workGuard->reset();
+        }
+    }
     // Stop all worker io_contexts — pending async operations are cancelled,
     // serve() loops catch operation_aborted and exit cleanly.
     for (auto& w : workers_) {
         w->ioCtx.stop();
+    }
+    // Wait for all active connections to drain (coroutines finishing cleanup)
+    for (int i = 0; i < 500 && activeConnections_.load(std::memory_order_relaxed) > 0; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
 }
 
@@ -154,6 +166,61 @@ void HttpServer::addSseRoute(
     std::function<asio::awaitable<void>(Request&, std::shared_ptr<SseWriter>)> handler
 ) {
     sseRoutes_[path] = std::move(handler);
+}
+
+void HttpServer::enableWebSocket(const std::string& path, WsHandler handler) {
+    wsRoutes_[path] = std::move(handler);
+}
+
+void HttpServer::enableWebSocketSsl(const std::string& path, WssHandler handler) {
+    wsSslRoutes_[path] = std::move(handler);
+}
+
+void HttpServer::startAsync(asio::any_io_executor executor) {
+    if (stopped_) {
+        return;
+    }
+    stopped_   = false;
+    asyncMode_ = true;
+
+    using tcp = asio::ip::tcp;
+
+    auto const    address = asio::ip::make_address(config_.address);
+    tcp::endpoint endpoint(address, config_.port);
+    acceptor_ = std::make_unique<tcp::acceptor>(executor);
+    acceptor_->open(endpoint.protocol());
+    acceptor_->set_option(tcp::acceptor::reuse_address(true));
+    acceptor_->bind(endpoint);
+    acceptor_->listen(asio::socket_base::max_listen_connections);
+
+    if (!config_.sslCertFile.empty() && !config_.sslKeyFile.empty()) {
+        sslCtx_ = std::make_unique<asio::ssl::context>(asio::ssl::context::tlsv12_server);
+        sslCtx_->set_options(
+            asio::ssl::context::default_workarounds | asio::ssl::context::no_sslv2
+            | asio::ssl::context::no_sslv3 | asio::ssl::context::no_tlsv1
+            | asio::ssl::context::no_tlsv1_1 | asio::ssl::context::single_dh_use
+        );
+        sslCtx_->use_certificate_chain_file(config_.sslCertFile);
+        sslCtx_->use_private_key_file(config_.sslKeyFile, asio::ssl::context::pem);
+    }
+
+    asio::co_spawn(executor, acceptLoopAsync(), asio::detached);
+
+    XX_OUT("[server] Listening on {}:{} (async mode)", config_.address, port());
+}
+
+asio::awaitable<void> HttpServer::serveTcp(
+    std::shared_ptr<boost::beast::tcp_stream> stream
+) {
+    ConnectionGuard guard{activeConnections_};
+    co_await serve(std::move(*stream));
+}
+
+asio::awaitable<void> HttpServer::serveSsl(
+    std::shared_ptr<boost::beast::ssl_stream<boost::beast::tcp_stream>> stream
+) {
+    ConnectionGuard guard{activeConnections_};
+    co_await sslHandshakeAndServe(stream);
 }
 
 asio::awaitable<void> HttpServer::acceptLoop() {
@@ -182,11 +249,9 @@ asio::awaitable<void> HttpServer::acceptLoop() {
             continue;
         }
 
-        // Set TCP no_delay immediately for lowest latency
         boost::system::error_code tcpEc;
         socket.set_option(asio::ip::tcp::no_delay(true), tcpEc);
 
-        // Enforce max connections
         if (activeConnections_.load(std::memory_order_relaxed) >= config_.maxConnections) {
             boost::system::error_code closeEc;
             socket.shutdown(tcp::socket::shutdown_both, closeEc);
@@ -197,11 +262,9 @@ asio::awaitable<void> HttpServer::acceptLoop() {
 
         activeConnections_.fetch_add(1, std::memory_order_relaxed);
 
-        // Round-robin dispatch to a per-thread worker io_context
         size_t idx          = nextWorker_++ % workers_.size();
         auto&  targetWorker = *workers_[idx];
 
-        // Transfer native handle to target worker's io_context (no locks)
         auto        protocol = acceptor_->local_endpoint().protocol();
         tcp::socket workerSocket(targetWorker.ioCtx);
         workerSocket.assign(protocol, socket.release());
@@ -211,25 +274,56 @@ asio::awaitable<void> HttpServer::acceptLoop() {
                 boost::beast::tcp_stream(std::move(workerSocket)),
                 *sslCtx_
             );
-            asio::co_spawn(
-                targetWorker.ioCtx,
-                [this, sslStream]() -> asio::awaitable<void> {
-                    ConnectionGuard guard{activeConnections_};
-                    co_await sslHandshakeAndServe(sslStream);
-                }(),
-                asio::detached
-            );
+            asio::co_spawn(targetWorker.ioCtx, serveSsl(std::move(sslStream)), asio::detached);
         } else {
             auto stream = std::make_shared<boost::beast::tcp_stream>(std::move(workerSocket));
-            asio::co_spawn(
-                targetWorker.ioCtx,
-                [this, stream]() -> asio::awaitable<void> {
-                    ConnectionGuard guard{activeConnections_};
-                    co_await serve(std::move(*stream));
-                }(),
-                asio::detached
-            );
+            asio::co_spawn(targetWorker.ioCtx, serveTcp(std::move(stream)), asio::detached);
         }
+    }
+    co_return;
+}
+
+asio::awaitable<void> HttpServer::acceptLoopAsync() {
+    using tcp     = asio::ip::tcp;
+    auto executor = co_await asio::this_coro::executor;
+    while (!stopped_) {
+        boost::system::error_code ec;
+        tcp::socket               socket
+            = co_await acceptor_->async_accept(asio::redirect_error(asio::use_awaitable, ec));
+        if (ec) {
+            if (ec == asio::error::operation_aborted || ec == asio::error::connection_aborted) {
+                co_return;
+            }
+            if (ec == asio::error::no_descriptors) {
+                XX_LOGW("[server] Accept: too many open files, retrying in 100ms");
+                asio::steady_timer timer(executor, std::chrono::milliseconds(100));
+                co_await timer.async_wait(asio::redirect_error(asio::use_awaitable, ec));
+                continue;
+            }
+            XX_LOGE("[server] Accept error: {}", ec.message());
+            asio::steady_timer timer(executor, std::chrono::milliseconds(10));
+            co_await timer.async_wait(asio::redirect_error(asio::use_awaitable, ec));
+            if (stopped_) {
+                co_return;
+            }
+            continue;
+        }
+
+        boost::system::error_code tcpEc;
+        socket.set_option(asio::ip::tcp::no_delay(true), tcpEc);
+
+        if (activeConnections_.load(std::memory_order_relaxed) >= config_.maxConnections) {
+            boost::system::error_code closeEc;
+            socket.shutdown(tcp::socket::shutdown_both, closeEc);
+            socket.close(closeEc);
+            XX_LOGW("[server] Max connections reached, dropping client");
+            continue;
+        }
+
+        activeConnections_.fetch_add(1, std::memory_order_relaxed);
+
+        auto stream = std::make_shared<boost::beast::tcp_stream>(std::move(socket));
+        asio::co_spawn(executor, serveTcp(std::move(stream)), asio::detached);
     }
     co_return;
 }
