@@ -464,7 +464,7 @@ public:
     /// - agentName: 当前 agent 名 (事件 source)
     /// - threadId: 当前会话 id
     /// - ctx: AgentContext (取 bus; 若 bus 为空则只转发 origCb)
-    /// - origCb: 原始回调 (可空, 用于过渡期保留旧输出行为)
+    /// - origCb: 原始回调 (可空)
     static neograph::graph::GraphStreamCallback make(
         std::string                                 agentName,
         std::string                                 threadId,

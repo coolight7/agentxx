@@ -1,5 +1,6 @@
 #include "agentxx-client/io/tui/agent_tui.h"
 #include "agentxx/agent/model_registry.h"
+#include "agentxx/middlewares/middleware.h"
 #include "agentxx/util/string_util.h"
 #include "asio/as_tuple.hpp"
 #include "asio/use_awaitable.hpp"
@@ -8,6 +9,8 @@
 #include "ftxui/screen/terminal.hpp"
 #include "neograph/graph/cancel.h"
 #include <algorithm>
+#include <charconv>
+#include <cstdint>
 
 using namespace ftxui;
 
@@ -37,7 +40,16 @@ AgentTUI::AgentTUI(
     threadId_(std::move(threadId)),
     inputChannel_(std::make_shared<LineChannel>(ex, 64)),
     permissionChannel_(std::make_shared<BoolChannel>(ex, 4)),
-    logSink_(std::make_shared<TUILogSink>()) {}
+    logSink_(std::make_shared<TUILogSink>()) {
+    // 缓存本会话指针, 避免后续反复查找 SessionStore
+    if (agentContext_) {
+        session_ = agentContext_->getSession(threadId_);
+    }
+    // 缓存在线模型显示名, 供渲染热路径免锁读取
+    if (session_ && agentContext_ && agentContext_->modelRegistry) {
+        cachedModelName_ = agentContext_->modelRegistry->resolveModelName(session_->getModelName());
+    }
+}
 
 AgentTUI::~AgentTUI() {
     stop();
@@ -121,7 +133,6 @@ void AgentTUI::start() {
 
             auto main = vbox({
                 messages,
-                separator(),
                 input_bar,
                 renderStatusBar(),
             });
@@ -145,8 +156,14 @@ void AgentTUI::start() {
 
         auto event_handler = CatchEvent(layout, [&](Event event) -> bool {
             if (event == Event::CtrlC) {
-                running_ = false;
-                screen.Exit();
+                // 输入框有内容 → 清空; 否则 → 退出
+                if (!inputText_.empty()) {
+                    inputText_.clear();
+                    postRedraw();
+                } else {
+                    running_ = false;
+                    screen.Exit();
+                }
                 return true;
             }
 
@@ -260,6 +277,24 @@ void AgentTUI::start() {
             if (event.is_mouse()) {
                 const auto& mouse = event.mouse();
                 if (mouse.button == Mouse::WheelUp || mouse.button == Mouse::WheelDown) {
+                    // 若侧栏 (日志窗口) 可见且鼠标在其区域内, 手动控制日志滚动
+                    if (!sidebarTabs_.empty() && mouse.x >= ftxui::Terminal::Size().dimx - 56) {
+                        const int last
+                            = static_cast<int>(logSink_ ? logSink_->snapshot().size() : 0) - 1;
+                        if (last >= 0) {
+                            int cur  = logStickToBottom_ ? last : logFocusIndex_;
+                            cur     += (mouse.button == Mouse::WheelUp) ? -1 : +1;
+                            if (cur >= last) {
+                                logStickToBottom_ = true;
+                                logFocusIndex_    = -1;
+                            } else {
+                                logStickToBottom_ = false;
+                                logFocusIndex_    = std::max(0, cur);
+                            }
+                        }
+                        postRedraw();
+                        return true;
+                    }
                     // 鼠标滚轮: 滚动消息列表; 滚到底部时重新吸附底部
                     const int last = focusBlockCount() - 1;
                     if (last >= 0) {
@@ -473,7 +508,7 @@ ftxui::Element AgentTUI::renderMessages() {
 }
 
 ftxui::Element AgentTUI::renderStatusBar() {
-    std::string modelName = currentModelName();
+    std::string modelName = cachedModelName_;
     if (modelName.empty()) {
         modelName = "<none>";
     }
@@ -485,11 +520,9 @@ ftxui::Element AgentTUI::renderStatusBar() {
 
     size_t ctx    = 0;
     size_t maxCtx = 0;
-    if (auto session = currentSession()) {
-        if (session->contextStats) {
-            ctx    = session->contextStats->contextTokens.load();
-            maxCtx = session->contextStats->maxContextTokens.load();
-        }
+    if (session_ && session_->contextStats) {
+        ctx    = session_->contextStats->contextTokens.load();
+        maxCtx = session_->contextStats->maxContextTokens.load();
     }
     const auto toK = [](size_t v) {
         return fmt::format("{:.1f}k", static_cast<double>(v) / 1000.0);
@@ -570,7 +603,7 @@ ftxui::Element AgentTUI::renderSidebar() {
     return vbox({
                tabBar,
                separator(),
-               content | flex | vscroll_indicator | frame,
+               content | flex | vscroll_indicator | yframe,
            })
            | size(WIDTH, LESS_THAN, 56) | size(WIDTH, GREATER_THAN, 28) | border;
 }
@@ -608,6 +641,12 @@ ftxui::Element AgentTUI::renderLogWindow() {
     if (elements.empty()) {
         return text(" (no logs) ") | dim;
     }
+    int last = static_cast<int>(elements.size()) - 1;
+    if (logStickToBottom_ || logFocusIndex_ < 0) {
+        logFocusIndex_ = last;
+    }
+    logFocusIndex_           = std::clamp(logFocusIndex_, 0, last);
+    elements[logFocusIndex_] = elements[logFocusIndex_] | focus;
     return vbox(std::move(elements));
 }
 
@@ -698,10 +737,9 @@ void AgentTUI::openModelSelector() {
     modelNames_.clear();
     selectedModelIndex_ = 0;
     if (agentContext_ && agentContext_->modelRegistry) {
-        modelNames_        = agentContext_->modelRegistry->listModelNames();
-        const auto current = currentModelName();
+        modelNames_ = agentContext_->modelRegistry->listModelNames();
         for (size_t i = 0; i < modelNames_.size(); ++i) {
-            if (modelNames_[i] == current) {
+            if (modelNames_[i] == cachedModelName_) {
                 selectedModelIndex_ = static_cast<int>(i);
                 break;
             }
@@ -712,16 +750,17 @@ void AgentTUI::openModelSelector() {
 
 void AgentTUI::confirmModelSelection() {
     if (selectedModelIndex_ >= 0 && selectedModelIndex_ < static_cast<int>(modelNames_.size())) {
-        if (auto session = currentSession()) {
-            session->setModelName(modelNames_[selectedModelIndex_]);
+        cachedModelName_ = modelNames_[selectedModelIndex_];
+        if (session_) {
+            session_->setModelName(cachedModelName_);
         }
     }
     showModelSelector_ = false;
 }
 
 void AgentTUI::cancelCurrentRun() {
-    if (auto session = currentSession()) {
-        auto token = session->getCancelToken();
+    if (session_) {
+        auto token = session_->getCancelToken();
         if (token) {
             token->cancel();
         }
@@ -738,21 +777,7 @@ void AgentTUI::cancelCurrentRun() {
 }
 
 std::shared_ptr<agentxx::agent::Session> AgentTUI::currentSession() {
-    if (agentContext_ && agentContext_->sessions) {
-        return agentContext_->sessions->getOrCreate(threadId_);
-    }
-    return nullptr;
-}
-
-std::string AgentTUI::currentModelName() {
-    std::string selected;
-    if (auto session = currentSession()) {
-        selected = session->getModelName();
-    }
-    if (agentContext_ && agentContext_->modelRegistry) {
-        return agentContext_->modelRegistry->resolveModelName(selected);
-    }
-    return selected;
+    return session_;
 }
 
 void AgentTUI::onToken(const std::string& token, const std::string& kind) {
@@ -773,12 +798,116 @@ void AgentTUI::onToken(const std::string& token, const std::string& kind) {
     postRedraw();
 }
 
-void AgentTUI::onDisplay(const std::string& level, const std::string& content) {
+asio::awaitable<neograph::json> AgentTUI::handleInterrupt(
+    const std::string& threadId,
+    const std::string& interruptNode,
+    const std::string& interruptValue,
+    const std::string& interruptArgJson
+) {
+    // 解析中断参数
+    auto argOpt
+        = agentxx::middleware::InterruptHandleArg::fromJson(neograph::json::parse(interruptArgJson)
+        );
+    if (!argOpt.has_value()) {
+        co_return neograph::json::array();
+    }
+    const auto& handleArg = argOpt.value();
+
+    // 显示中断通知
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        messages_.push_back({Message::Role::System, content});
+        std::string msg = "Interrupted at: " + interruptNode + "\nValue: " + interruptValue;
+        if (!handleArg.name.empty()) {
+            msg += "\nHandle: " + handleArg.name;
+        }
+        messages_.push_back({Message::Role::System, msg});
     }
     postRedraw();
+
+    auto result = neograph::json::array();
+    for (const auto& input : handleArg.inputs) {
+        bool inputSuccess = false;
+        do {
+            std::string prompt = fmt::format(
+                "[Input] {}: {}\n{}",
+                input.label,
+                input.depict,
+                input.type.empty()
+                    ? ""
+                    : fmt::format("Type ({}), default: {}: ", input.type, input.defaultValue)
+            );
+
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                messages_.push_back({Message::Role::System, prompt});
+            }
+            postRedraw();
+
+            if (input.type.empty()) {
+                inputSuccess = true;
+            } else {
+                auto        inputValueOpt = co_await getInput();
+                std::string inputValue;
+                if (inputValueOpt.has_value()) {
+                    inputValue = inputValueOpt.value();
+                }
+                if (inputValue.empty()) {
+                    inputValue = input.defaultValue;
+                }
+
+                if ("bool" == input.type) {
+                    agentxx::util::toLowerSelf(inputValue);
+                    if (inputValue == "yes" || inputValue == "y") {
+                        inputValue   = "true";
+                        inputSuccess = true;
+                    } else if (inputValue == "no" || inputValue == "n") {
+                        inputValue   = "false";
+                        inputSuccess = true;
+                    } else {
+                        inputSuccess = false;
+                    }
+                } else if ("int" == input.type) {
+                    int64_t num = 0;
+                    auto    r   = std::from_chars(
+                        inputValue.c_str(),
+                        inputValue.c_str() + inputValue.size(),
+                        num
+                    );
+                    inputSuccess = (r.ec == std::errc{});
+                } else if ("double" == input.type) {
+                    double num;
+                    auto   r = std::from_chars(
+                        inputValue.c_str(),
+                        inputValue.c_str() + inputValue.size(),
+                        num
+                    );
+                    inputSuccess = (r.ec == std::errc{});
+                } else if ("string" == input.type) {
+                    inputSuccess = true;
+                } else if ("enum" == input.type) {
+                    for (const auto& val : input.enumValues) {
+                        if (val == inputValue) {
+                            inputSuccess = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (inputSuccess) {
+                    result.push_back(inputValue);
+                } else {
+                    {
+                        std::lock_guard<std::mutex> lock(mutex_);
+                        messages_.push_back(
+                            {Message::Role::System, "Invalid input, please try again."}
+                        );
+                    }
+                    postRedraw();
+                }
+            }
+        } while (false == inputSuccess);
+    }
+    co_return result;
 }
 
 asio::awaitable<std::optional<std::string>> AgentTUI::getInput() {
@@ -789,50 +918,13 @@ asio::awaitable<std::optional<std::string>> AgentTUI::getInput() {
     co_return std::optional<std::string>(std::move(line));
 }
 
-asio::awaitable<bool> AgentTUI::promptPermission(
-    const std::string& toolName,
-    const std::string& category,
-    const std::string& target
-) {
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        pendingPermission_ = PermissionRequest{toolName, category, target};
-    }
-    postRedraw();
-
-    auto [ec, allowed]
-        = co_await permissionChannel_->async_receive(asio::as_tuple(asio::use_awaitable));
-    if (ec) {
-        co_return false;
-    }
-    co_return allowed;
-}
-
-void AgentTUI::onInterrupt(
-    const std::string& node,
-    const std::string& value,
-    const std::string& handleName
-) {
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        std::string                 msg = "Interrupted at: " + node + "\nValue: " + value;
-        if (!handleName.empty()) {
-            msg += "\nHandle: " + handleName;
-        }
-        messages_.push_back({Message::Role::System, msg});
-    }
-    postRedraw();
-}
-
-void AgentTUI::onToolStart(
+void AgentTUI::handleToolStart(
     const std::string& toolName,
     const std::string& toolCallId,
     const std::string& arguments
 ) {
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        // 先冲刷当前未提交的流式 token (thinking/content), 保证 toolcall 严格
-        // 按时间顺序插入 (一轮内可能 thinking->toolcall->content 任意交替)
         if (!currentToken_.empty()) {
             messages_.push_back({currentTokenRole_, currentToken_});
             if (currentTokenRole_ == Message::Role::Thinking) {
@@ -846,13 +938,13 @@ void AgentTUI::onToolStart(
         m.toolCallId   = toolCallId;
         m.text         = arguments;
         m.toolFinished = false;
-        m.collapsed    = false; // 执行中保持展开
+        m.collapsed    = false;
         messages_.push_back(std::move(m));
     }
     postRedraw();
 }
 
-void AgentTUI::onToolEnd(
+void AgentTUI::handleToolEnd(
     const std::string& toolName,
     const std::string& toolCallId,
     const std::string& result,
@@ -860,15 +952,14 @@ void AgentTUI::onToolEnd(
 ) {
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        // 按 toolCallId 从后往前找对应的开始消息并填充结果
-        bool found = false;
+        bool                        found = false;
         for (auto it = messages_.rbegin(); it != messages_.rend(); ++it) {
             if (it->role == Message::Role::Tool && it->toolCallId == toolCallId
                 && !it->toolFinished) {
                 it->toolResult   = result;
                 it->toolFinished = true;
                 it->toolHasError = hasError;
-                it->collapsed    = true; // 完成自动折叠
+                it->collapsed    = true;
                 found            = true;
                 break;
             }
@@ -884,6 +975,15 @@ void AgentTUI::onToolEnd(
             m.collapsed    = true;
             messages_.push_back(std::move(m));
         }
+    }
+    postRedraw();
+}
+
+void AgentTUI::onUpdate() {
+    // 新轮次开始 (由 deepagent.cpp 在 runConversationTurnAsync 入口调用)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        isStreaming_ = true;
     }
     postRedraw();
 }

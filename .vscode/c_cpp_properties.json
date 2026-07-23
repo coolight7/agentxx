@@ -4,6 +4,7 @@
             "name": "Linux",
             "includePath": [
                 "${workspaceFolder}/agent/lib/include",
+                "${workspaceFolder}/agent/client/include",
                 "${workspaceFolder}/agent/build/linux-debug/agentxx-project-install/include/",
                 "${workspaceFolder}/agent/build/linux-debug/agentxx-project-install/include/Glob-1.0/",
                 "${workspaceFolder}/agent/third_party/fmt/include/",
@@ -45,6 +46,7 @@
             "name": "Win32",
             "includePath": [
                 "${workspaceFolder}/agent/lib/include",
+                "${workspaceFolder}/agent/client/include",
                 "${workspaceFolder}/agent/build/windows-debug/agentxx-project-install/include/",
                 "${workspaceFolder}/agent/build/windows-debug/agentxx-project-install/include/Glob-1.0/",
                 "${workspaceFolder}/agent/third_party/fmt/include/",
@@ -88,6 +90,7 @@
             "name": "Android",
             "includePath": [
                 "${workspaceFolder}/agent/lib/include",
+                "${workspaceFolder}/agent/client/include",
                 "${workspaceFolder}/agent/build/android-debug/agentxx-project-install/include/",
                 "${workspaceFolder}/agent/build/android-debug/agentxx-project-install/include/Glob-1.0/",
                 "${workspaceFolder}/agent/third_party/fmt/include/",

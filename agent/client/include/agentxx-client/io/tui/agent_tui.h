@@ -131,6 +131,8 @@ private:
     TUITheme                                      theme_;
     /// 本 TUI 绑定的会话 thread_id (按 thread_id 取会话状态)
     std::string threadId_;
+    /// 缓存的模型显示名称 (避免 render 热路径频繁加锁)
+    std::string cachedModelName_;
 
     ftxui::ScreenInteractive* screen_ = nullptr;
     std::thread               uiThread_;
@@ -142,6 +144,10 @@ private:
 
     /// 日志窗口 tab 的固定 id
     static constexpr const char* kLogTabId = "xx_logs";
+
+    /// 日志窗口滚动状态 (同消息区的 stickToBottom_ 模式)
+    bool logStickToBottom_ = true;
+    int  logFocusIndex_    = -1;
 
     void           postRedraw();
     ftxui::Element renderMessages();
@@ -155,6 +161,9 @@ private:
     ftxui::Element renderSidebar();
     /// 日志窗口内容
     ftxui::Element renderLogWindow();
+
+    /// 获取本 TUI 绑定的会话
+    std::shared_ptr<agentxx::agent::Session> currentSession();
 
     /// 打开模型选择器 (刷新可用模型列表)
     void openModelSelector();
@@ -179,10 +188,8 @@ private:
     /// 返回是否消费了该事件
     bool handleCollapsibleMouse(const ftxui::Mouse& mouse);
 
-    /// 获取本 TUI 绑定的会话 (按 threadId_)
-    std::shared_ptr<agentxx::agent::Session> currentSession();
-    /// 解析本会话当前实际使用的模型显示名称
-    std::string currentModelName();
+    /// 缓存的本会话指针 (构造时初始化, 避免反复查找 SessionStore)
+    std::shared_ptr<agentxx::agent::Session> session_;
 
 public:
 
@@ -198,29 +205,27 @@ public:
     void stop();
 
     void onToken(const std::string& token, const std::string& kind) override;
-    void onDisplay(const std::string& level, const std::string& content) override;
+    void onUpdate() override;
     asio::awaitable<std::optional<std::string>> getInput() override;
-    asio::awaitable<bool>                       promptPermission(
-                              const std::string& toolName,
-                              const std::string& category,
-                              const std::string& target
-                          ) override;
-    void onInterrupt(
-        const std::string& node,
-        const std::string& value,
-        const std::string& handleName
-    ) override;
-    void onToolStart(
+    asio::awaitable<neograph::json>             handleInterrupt(
+                    const std::string& threadId,
+                    const std::string& interruptNode,
+                    const std::string& interruptValue,
+                    const std::string& interruptArgJson
+                ) override;
+
+    /// 由事件回调 (CHANNEL_WRITE) 调用, 驱动 tool 卡片渲染
+    void handleToolStart(
         const std::string& toolName,
         const std::string& toolCallId,
         const std::string& arguments
-    ) override;
-    void onToolEnd(
+    );
+    void handleToolEnd(
         const std::string& toolName,
         const std::string& toolCallId,
         const std::string& result,
         bool               hasError
-    ) override;
+    );
 
     void resetTokenState();
 };

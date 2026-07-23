@@ -38,8 +38,7 @@ std::vector<agentxx::agent::TrainingTestCase> loadTestCasesRecursive(const std::
             }
         }
     } catch (const std::exception& e) {
-        std::cerr << "[Training] Failed to load from directory " << dirPath << ": " << e.what()
-                  << std::endl;
+        XX_LOGE("[Training] Failed to load from directory {}:{}", dirPath, e.what());
     }
     return allCases;
 }
@@ -121,7 +120,7 @@ void runTrainingMode(
                 trainCfg.testCases.size()
             );
         } else {
-            std::cerr << "[Training] Data directory not found: " << dataDir << std::endl;
+            XX_LOGE("[Training] Data directory not found: {}", dataDir);
         }
     }
 
@@ -153,14 +152,13 @@ void runTrainingMode(
                     );
                 }
             } catch (const std::exception& e) {
-                std::cerr << "[Training] Failed to parse training_testcases.json: " << e.what()
-                          << std::endl;
+                XX_LOGE("[Training] Failed to parse training_testcases.json: {}", e.what());
             }
         }
     }
 
     if (trainCfg.testCases.empty()) {
-        std::cerr << "[Training] No test cases available. Aborting." << std::endl;
+        XX_LOGE("[Training] No test cases available. Aborting.");
         return;
     }
 

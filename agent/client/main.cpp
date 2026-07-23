@@ -1,6 +1,4 @@
 #include "agentxx-client/io/stdio/agent_stdio.h"
-#include "agentxx-client/io/stdio/interrupt_handler.h"
-#include "agentxx-client/io/stdio/permission_handler.h"
 #include "agentxx-client/train/train.h"
 #include "agentxx-client/util/util.h"
 #include "agentxx/protocol/acp_server.h"
@@ -330,14 +328,16 @@ static YamlAppConfig loadYamlConfig(
             );
             auto url = resolveEnvVars(node["url"].as<std::string>(""), dotEnvVars, overrideEnvVars);
             if (ns.empty() || url.empty()) {
-                std::cerr << "[Config] Warning: mcp_servers entry missing `namespace` "
-                             "or `url`, skipped"
-                          << std::endl;
+                XX_LOGW(
+                    R"([Config] Warning: mcp_servers entry missing `namespace` or `url`, skipped)"
+                );
                 continue;
             }
             if (cfg.mcpServers.contains(ns)) {
-                std::cerr << "[Config] Warning: duplicate mcp namespace '" << ns
-                          << "', overriding its url" << std::endl;
+                XX_LOGW(
+                    R"([Config] Warning: duplicate mcp namespace '{}', overriding its url)",
+                    ns
+                );
             }
             cfg.mcpServers[ns] = url;
         }
@@ -355,8 +355,7 @@ static agentxx::agent::ModelConfig resolveModelConfig(
     }
     auto it = models.find(modelName);
     if (it == models.end()) {
-        std::cerr << "[Config] Warning: model '" << modelName << "' not found in config"
-                  << std::endl;
+        XX_LOGE("[Config] Warning: model '{}' not found in config", modelName);
         return agentxx::agent::ModelConfig{};
     }
     return it->second;
@@ -439,24 +438,11 @@ asio::awaitable<void> runCliAsync(agentxx::agent::DeepAgent& agent) {
                 break;
         }
     };
-    const auto cliInterruptCallback = [&io](
-                                          const std::string& interruptNode,
-                                          const std::string& interruptValue,
-                                          const std::string& interruptHandleName
-                                      ) -> asio::awaitable<void> {
-        io->onInterrupt(interruptNode, interruptValue, interruptHandleName);
-        co_return;
-    };
-
     bool       isFirstMsg = true;
     const auto thread_id  = "session";
     auto       messages   = neograph::json::array();
 
-    StdioInterruptHandler                   cliInterruptHandler{agent.agentContext};
-    StdioPermissionPrompter                 cliPermissionPrompter{agent.agentContext};
     agentxx::middleware::SubagentSupervisor subagentSupervisor{agent.agentContext};
-    co_await cliInterruptHandler.start();
-    co_await cliPermissionPrompter.start();
     co_await subagentSupervisor.start();
 
     std::cout << ">>> " << std::flush;
@@ -468,7 +454,6 @@ asio::awaitable<void> runCliAsync(agentxx::agent::DeepAgent& agent) {
         }
         auto input = std::move(inputOpt.value());
         if (!input.empty()) {
-            io->resetTokenState();
             std::cout << agent.agentContext->agentConfig->agentNameView << ": " << std::flush;
 
             auto turnResult = co_await agent.runConversationTurnAsync(
@@ -482,8 +467,7 @@ asio::awaitable<void> runCliAsync(agentxx::agent::DeepAgent& agent) {
                     thread_id,
                     agent.agentContext,
                     cliEventCallback
-                ),
-                cliInterruptCallback
+                )
             );
             messages   = std::move(turnResult.messages);
             isFirstMsg = false;
@@ -534,29 +518,52 @@ asio::awaitable<void> runTuiAsync(agentxx::agent::DeepAgent& agent) {
                 }
                 io->onToken(token, kind);
             } break;
-            case neograph::graph::GraphEvent::Type::CHANNEL_WRITE:
+            case neograph::graph::GraphEvent::Type::CHANNEL_WRITE: {
+                // 检测 tool call 消息, 提供给 TUI 渲染 tool 卡片
+                auto writes = event.data.value("writes", neograph::json::array());
+                for (const auto& w : writes) {
+                    auto chan  = w.value("channel", std::string{});
+                    auto value = w.value("value", neograph::json{});
+                    if (chan != "messages" || !value.is_array()) {
+                        continue;
+                    }
+                    for (const auto& jm : value) {
+                        auto role = jm.value("role", std::string{});
+                        if (role == "assistant" && jm.contains("tool_calls")) {
+                            for (const auto& tc : jm["tool_calls"]) {
+                                io->handleToolStart(
+                                    tc.value("name", std::string{}),
+                                    tc.value("id", std::string{}),
+                                    tc.value("arguments", std::string{})
+                                );
+                            }
+                        } else if (role == "tool") {
+                            std::string content  = jm.value("content", std::string{});
+                            bool        hasError = false;
+                            try {
+                                auto parsed = neograph::json::parse(content);
+                                hasError    = parsed.is_object() && parsed.contains("error");
+                            } catch (...) {
+                            }
+                            io->handleToolEnd(
+                                jm.value("tool_name", std::string{}),
+                                jm.value("tool_call_id", std::string{}),
+                                content,
+                                hasError
+                            );
+                        }
+                    }
+                }
+            } break;
             case neograph::graph::GraphEvent::Type::INTERRUPT:
             case neograph::graph::GraphEvent::Type::ERROR:
                 break;
         }
     };
-    const auto tuiInterruptCallback = [&io](
-                                          const std::string& interruptNode,
-                                          const std::string& interruptValue,
-                                          const std::string& interruptHandleName
-                                      ) -> asio::awaitable<void> {
-        io->onInterrupt(interruptNode, interruptValue, interruptHandleName);
-        co_return;
-    };
-
     bool isFirstMsg = true;
     auto messages   = neograph::json::array();
 
-    StdioInterruptHandler                   tuiInterruptHandler{agent.agentContext};
-    StdioPermissionPrompter                 tuiPermissionPrompter{agent.agentContext};
     agentxx::middleware::SubagentSupervisor subagentSupervisor{agent.agentContext};
-    co_await tuiInterruptHandler.start();
-    co_await tuiPermissionPrompter.start();
     co_await subagentSupervisor.start();
 
     for (;;) {
@@ -566,7 +573,7 @@ asio::awaitable<void> runTuiAsync(agentxx::agent::DeepAgent& agent) {
         }
         auto input = std::move(inputOpt.value());
         if (!input.empty()) {
-            io->resetTokenState();
+            // onUpdate() 由 deepagent 在 turn 入口调用, 负责设置 isStreaming_
             auto turnResult = co_await agent.runConversationTurnAsync(
                 thread_id,
                 input,
@@ -578,11 +585,11 @@ asio::awaitable<void> runTuiAsync(agentxx::agent::DeepAgent& agent) {
                     thread_id,
                     agent.agentContext,
                     tuiEventCallback
-                ),
-                tuiInterruptCallback
+                )
             );
             messages   = std::move(turnResult.messages);
             isFirstMsg = false;
+            // turn 结束, 冲刷残余 token 并重置状态
             io->resetTokenState();
         }
     }
@@ -665,7 +672,7 @@ int main(int argn, char** argv) {
             yamlCfg = loadYamlConfig(configPath, dotEnvVars, overrideEnvVars);
             XX_OUT("[Config] Loaded config from: {}", configPath);
         } catch (const std::exception& e) {
-            std::cerr << "[Config] Failed to load config: " << e.what() << std::endl;
+            XX_LOGE("[Config] Failed to load config: {}", e.what());
             return 1;
         }
     }
@@ -734,9 +741,9 @@ int main(int argn, char** argv) {
     if (mode == "tui") {
 #if AGENTXX_ENABLE_CLIENT_TUI
         config->logPringToolcall                       = false;
-        config->logPrintMessagesBeforeLLM              = false;
+        config->logPrintMessagesBeforeLLM              = true;
         config->logPrintMessagesBeforeLLMWithSystemMsg = false;
-        config->logPrintSummarizationResultTokenCount  = false;
+        config->logPrintSummarizationResultTokenCount  = true;
         auto agent                                     = agentxx::agent::DeepAgent{config};
         runTui(agent);
 #else

@@ -69,12 +69,6 @@ public:
         bool           interrupted = false;
     };
 
-    using InterruptCallback = std::function<asio::awaitable<void>(
-        const std::string& interruptNode,
-        const std::string& interruptValue,
-        const std::string& interruptHandleName
-    )>;
-
     /// 选择指定会话 modelcall 使用的模型 (运行时切换, 按 thread_id 隔离)
     /// - modelName 为空或不存在时不改变该会话的选择
     void selectModel(const std::string& threadId, const std::string& modelName);
@@ -89,8 +83,7 @@ public:
         neograph::json                                          messages,
         std::shared_ptr<AgentIOBase>                            io,
         std::function<void(const neograph::graph::GraphEvent&)> eventCallback,
-        InterruptCallback                                       interruptCallback = nullptr,
-        const std::string&                                      modelName         = ""
+        const std::string&                                      modelName = ""
     );
 
     ~DeepAgent();
