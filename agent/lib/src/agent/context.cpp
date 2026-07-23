@@ -1,7 +1,15 @@
 #include "agentxx/agent/context.h"
+#include <fmt/format.h>
 
 namespace agentxx {
 namespace agent {
+
+std::string Session::appendHistory(neograph::json msgData) {
+    auto id = fmt::format("msg_{:06d}", ++msgIdCounter_);
+    chainHash.append(msgData.dump());
+    fullHistory.push_back(HistoryMessage{id, std::move(msgData)});
+    return id;
+}
 
 void Session::setCancelToken(std::shared_ptr<neograph::graph::CancelToken> token) {
     std::lock_guard<std::mutex> lock(mutex_);

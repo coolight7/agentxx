@@ -1,6 +1,7 @@
 #pragma once
 
 #include "agentxx/agent/config.h"
+#include "agentxx/agent/conversation_types.h"
 #include <atomic>
 #include <functional>
 #include <iostream>
@@ -67,6 +68,18 @@ public:
     /// 当前活动状态 (IO 通过此字段感知状态变化)
     std::atomic<Activity> activity{Activity::Idle};
 
+    /// 完整历史消息 (append-only, 永不压缩, 用于 client 同步与展示)
+    std::vector<HistoryMessage> fullHistory;
+    /// LLM 上下文消息 (可压缩/裁剪, 仅用于调用 LLM API)
+    neograph::json llmMessages = neograph::json::array();
+    /// fullHistory 的链式哈希 (用于 client 校验一致性)
+    ChainHash chainHash;
+    /// Delta 流序号 (单调递增)
+    uint64_t deltaSeq = 0;
+
+    /// 向 fullHistory 追加一条消息并更新链式哈希, 返回分配的 msgId
+    std::string appendHistory(neograph::json msgData);
+
     /// 设置本会话当前轮次的取消令牌 (线程安全)
     void setCancelToken(std::shared_ptr<neograph::graph::CancelToken> token);
     /// 获取本会话当前轮次的取消令牌 (线程安全)
@@ -83,6 +96,7 @@ private:
     mutable std::mutex                            mutex_;
     std::shared_ptr<neograph::graph::CancelToken> cancelToken_ = nullptr;
     std::string                                   modelName_;
+    uint64_t                                      msgIdCounter_ = 0;
 };
 
 /// 会话存储: 按 thread_id 取/建 Session (线程安全)

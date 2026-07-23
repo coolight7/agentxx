@@ -14,22 +14,22 @@ namespace test {
 int g_da_passed = 0;
 int g_da_failed = 0;
 
-/// 测试用 IO: 记录 onToken/onUpdate/getInput 调用, 供验证使用
+/// 测试用 IO: 记录 onDelta/onSync/getInput 调用, 供验证使用
 class TestAgentIO : public agentxx::agent::AgentIOBase {
 public:
 
-    std::vector<std::string> tokens;
-    std::vector<std::string> tokenKinds;
-    std::atomic<int>         updateCount{0};
-    bool                     failGetInput = false;
+    std::vector<agentxx::agent::Delta> deltas;
+    std::atomic<int>                   deltaCount{0};
+    std::atomic<int>                   syncCount{0};
+    bool                               failGetInput = false;
 
-    void onToken(const std::string& token, const std::string& kind) override {
-        tokens.push_back(token);
-        tokenKinds.push_back(kind);
+    void onDelta(const agentxx::agent::Delta& delta) override {
+        deltas.push_back(delta);
+        deltaCount++;
     }
 
-    void onUpdate() override {
-        updateCount++;
+    void onSync(const agentxx::agent::SyncPayload& /*payload*/) override {
+        syncCount++;
     }
 
     asio::awaitable<std::optional<std::string>> getInput() override {
@@ -293,20 +293,15 @@ asio::awaitable<void> test_deepagent_conversation_turn() {
     agentxx::agent::DeepAgent agent(cfg);
     co_await agent.init();
 
-    neograph::json messages = neograph::json::array();
-    auto           result   = co_await agent.runConversationTurnAsync(
+    auto result = co_await agent.runConversationTurnAsync(
         "conv_test",
         "What is the weather?",
         true,
-        std::move(messages),
-        nullptr,
-        [](const neograph::graph::GraphEvent&) {}
+        nullptr
     );
 
     XX_TEST_EXPECT_FALSE(result.hasError);
     XX_TEST_EXPECT_FALSE(result.interrupted);
-    XX_TEST_EXPECT_TRUE(result.messages.is_array());
-    XX_TEST_EXPECT_TRUE(result.messages.size() > 0);
 
     co_return;
 }
@@ -338,14 +333,11 @@ asio::awaitable<void> test_deepagent_tool_calls() {
     agentxx::agent::DeepAgent agent(cfg);
     co_await agent.init();
 
-    neograph::json messages = neograph::json::array();
-    auto           result   = co_await agent.runConversationTurnAsync(
+    auto result = co_await agent.runConversationTurnAsync(
         "tool_test",
         "List files",
         true,
-        std::move(messages),
-        nullptr,
-        [](const neograph::graph::GraphEvent&) {}
+        nullptr
     );
 
     XX_TEST_EXPECT_FALSE(result.hasError);
@@ -369,25 +361,17 @@ asio::awaitable<void> test_deepagent_multi_turn() {
     agentxx::agent::DeepAgent agent(cfg);
     co_await agent.init();
 
-    neograph::json messages = neograph::json::array();
-
     for (int turn = 0; turn < 3; ++turn) {
         auto input  = "Turn " + std::to_string(turn) + " input";
         auto result = co_await agent.runConversationTurnAsync(
             "multi_turn_test",
             input,
             turn == 0,
-            std::move(messages),
-            nullptr,
-            [](const neograph::graph::GraphEvent&) {}
+            nullptr
         );
 
         XX_TEST_EXPECT_FALSE(result.hasError);
         XX_TEST_EXPECT_FALSE(result.interrupted);
-        XX_TEST_EXPECT_TRUE(result.messages.is_array());
-        XX_TEST_EXPECT_TRUE(result.messages.size() > 0);
-
-        messages = std::move(result.messages);
     }
 
     co_return;
@@ -409,25 +393,14 @@ asio::awaitable<void> test_deepagent_large_history() {
     agentxx::agent::DeepAgent agent(cfg);
     co_await agent.init();
 
-    neograph::json messages = neograph::json::array();
-    for (int h = 0; h < 20; ++h) {
-        messages.push_back(neograph::json{
-            {"role",    (h % 2 == 0) ? "user" : "assistant"      },
-            {"content", "Historical message " + std::to_string(h)},
-        });
-    }
-
     auto result = co_await agent.runConversationTurnAsync(
         "history_test",
         "Final question",
         true,
-        std::move(messages),
-        nullptr,
-        [](const neograph::graph::GraphEvent&) {}
+        nullptr
     );
 
     XX_TEST_EXPECT_FALSE(result.hasError);
-    XX_TEST_EXPECT_TRUE(result.messages.is_array());
 
     co_return;
 }
@@ -482,14 +455,11 @@ asio::awaitable<void> test_deepagent_io_session_bus() {
 
     auto io = std::make_shared<TestAgentIO>();
     // 首次调用, 应创建 session bus 并注册 IO
-    neograph::json messages = neograph::json::array();
-    auto           result   = co_await agent.runConversationTurnAsync(
+    auto result = co_await agent.runConversationTurnAsync(
         "io_session_test",
         "Hello",
         true,
-        std::move(messages),
-        io,
-        [](const neograph::graph::GraphEvent&) {}
+        io
     );
 
     XX_TEST_EXPECT_FALSE(result.hasError);
@@ -500,8 +470,8 @@ asio::awaitable<void> test_deepagent_io_session_bus() {
     // IO 应已注册到 session
     XX_TEST_EXPECT_TRUE(session->io != nullptr);
 
-    // onUpdate 应在 turn 开始时被调用
-    XX_TEST_EXPECT_TRUE(io->updateCount > 0);
+    // onDelta 应在 turn 开始时被调用 (TurnStart)
+    XX_TEST_EXPECT_TRUE(io->deltaCount > 0);
 
     co_return;
 }
@@ -521,18 +491,14 @@ asio::awaitable<void> test_deepagent_io_null() {
     co_await agent.init();
 
     // 传入 nullptr IO, 验证不崩溃
-    neograph::json messages = neograph::json::array();
-    auto           result   = co_await agent.runConversationTurnAsync(
+    auto result = co_await agent.runConversationTurnAsync(
         "null_io_test",
         "test",
         true,
-        std::move(messages),
-        nullptr,
-        [](const neograph::graph::GraphEvent&) {}
+        nullptr
     );
 
     XX_TEST_EXPECT_FALSE(result.hasError);
-    XX_TEST_EXPECT_FALSE(result.messages.empty());
 
     co_return;
 }
@@ -552,14 +518,11 @@ asio::awaitable<void> test_deepagent_session_activity_streaming() {
     co_await agent.init();
 
     auto           io       = std::make_shared<TestAgentIO>();
-    neograph::json messages = neograph::json::array();
     auto           result   = co_await agent.runConversationTurnAsync(
         "activity_stream_test",
         "Check",
         true,
-        std::move(messages),
-        io,
-        [](const neograph::graph::GraphEvent&) {}
+        io
     );
 
     XX_TEST_EXPECT_FALSE(result.hasError);
@@ -597,14 +560,11 @@ asio::awaitable<void> test_deepagent_session_activity_toolcall() {
     co_await agent.init();
 
     auto           io       = std::make_shared<TestAgentIO>();
-    neograph::json messages = neograph::json::array();
     auto           result   = co_await agent.runConversationTurnAsync(
         "activity_tool_test",
         "List",
         true,
-        std::move(messages),
-        io,
-        [](const neograph::graph::GraphEvent&) {}
+        io
     );
 
     XX_TEST_EXPECT_FALSE(result.hasError);
@@ -632,25 +592,19 @@ asio::awaitable<void> test_deepagent_multi_session_io() {
     auto ioA = std::make_shared<TestAgentIO>();
     auto ioB = std::make_shared<TestAgentIO>();
 
-    neograph::json msgA = neograph::json::array();
-    auto           resA = co_await agent.runConversationTurnAsync(
+    auto resA = co_await agent.runConversationTurnAsync(
         "session_a",
         "Hello A",
         true,
-        std::move(msgA),
-        ioA,
-        [](const neograph::graph::GraphEvent&) {}
+        ioA
     );
     XX_TEST_EXPECT_FALSE(resA.hasError);
 
-    neograph::json msgB = neograph::json::array();
-    auto           resB = co_await agent.runConversationTurnAsync(
+    auto resB = co_await agent.runConversationTurnAsync(
         "session_b",
         "Hello B",
         true,
-        std::move(msgB),
-        ioB,
-        [](const neograph::graph::GraphEvent&) {}
+        ioB
     );
     XX_TEST_EXPECT_FALSE(resB.hasError);
 
@@ -686,14 +640,11 @@ asio::awaitable<void> test_deepagent_reuse_session_bus() {
     auto io = std::make_shared<TestAgentIO>();
 
     // 多轮: 同一 session, bus 应只创建一次
-    neograph::json messages = neograph::json::array();
-    auto           r1       = co_await agent.runConversationTurnAsync(
+    auto r1 = co_await agent.runConversationTurnAsync(
         "reuse_test",
         "Turn 1",
         true,
-        std::move(messages),
-        io,
-        [](const neograph::graph::GraphEvent&) {}
+        io
     );
     XX_TEST_EXPECT_FALSE(r1.hasError);
 
@@ -704,9 +655,7 @@ asio::awaitable<void> test_deepagent_reuse_session_bus() {
         "reuse_test",
         "Turn 2",
         false,
-        std::move(r1.messages),
-        io,
-        [](const neograph::graph::GraphEvent&) {}
+        io
     );
     XX_TEST_EXPECT_FALSE(r2.hasError);
 

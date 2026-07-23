@@ -63,10 +63,9 @@ public:
     asio::awaitable<void> init();
 
     struct ConversationTurnResult {
-        neograph::json messages;
-        bool           hasError = false;
-        std::string    errorMessage;
-        bool           interrupted = false;
+        bool        hasError = false;
+        std::string errorMessage;
+        bool        interrupted = false;
     };
 
     /// 选择指定会话 modelcall 使用的模型 (运行时切换, 按 thread_id 隔离)
@@ -76,14 +75,15 @@ public:
     /// 指定会话当前实际使用的模型显示名称 (解析会话选择/默认模型)
     std::string getCurrentModelName(const std::string& threadId) const;
 
+    /// 执行一轮对话
+    /// - 消息由 Session 内部管理 (fullHistory + llmMessages 双消息集)
+    /// - 增量事件经 io->onDelta() 推送; 状态不一致时经 io->onSync() 校准
     asio::awaitable<ConversationTurnResult> runConversationTurnAsync(
-        const std::string&                                      threadId,
-        const std::string&                                      userInput,
-        bool                                                    isFirstMsg,
-        neograph::json                                          messages,
-        std::shared_ptr<AgentIOBase>                            io,
-        std::function<void(const neograph::graph::GraphEvent&)> eventCallback,
-        const std::string&                                      modelName = ""
+        const std::string&           threadId,
+        const std::string&           userInput,
+        bool                         isFirstMsg,
+        std::shared_ptr<AgentIOBase> io,
+        const std::string&           modelName = ""
     );
 
     ~DeepAgent();

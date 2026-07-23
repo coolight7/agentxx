@@ -204,8 +204,8 @@ public:
     void start();
     void stop();
 
-    void onToken(const std::string& token, const std::string& kind) override;
-    void onUpdate() override;
+    void onDelta(const agentxx::agent::Delta& delta) override;
+    void onSync(const agentxx::agent::SyncPayload& payload) override;
     asio::awaitable<std::optional<std::string>> getInput() override;
     asio::awaitable<neograph::json>             handleInterrupt(
                     const std::string& threadId,
@@ -213,19 +213,4 @@ public:
                     const std::string& interruptValue,
                     const std::string& interruptArgJson
                 ) override;
-
-    /// 由事件回调 (CHANNEL_WRITE) 调用, 驱动 tool 卡片渲染
-    void handleToolStart(
-        const std::string& toolName,
-        const std::string& toolCallId,
-        const std::string& arguments
-    );
-    void handleToolEnd(
-        const std::string& toolName,
-        const std::string& toolCallId,
-        const std::string& result,
-        bool               hasError
-    );
-
-    void resetTokenState();
 };

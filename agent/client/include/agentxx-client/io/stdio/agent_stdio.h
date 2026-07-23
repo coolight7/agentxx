@@ -15,9 +15,9 @@ public:
 
     AgentStdIO() = default;
 
-    void onToken(const std::string& token, const std::string& kind) override;
+    void onDelta(const agentxx::agent::Delta& delta) override;
 
-    void onUpdate() override;
+    void onSync(const agentxx::agent::SyncPayload& payload) override;
 
     asio::awaitable<std::optional<std::string>> getInput() override;
 
@@ -27,6 +27,4 @@ public:
         const std::string& interruptValue,
         const std::string& interruptArgJson
     ) override;
-
-    void resetTokenState();
 };

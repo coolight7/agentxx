@@ -163,25 +163,21 @@ asio::awaitable<void> DeepAgent::init() {
                 },
                 (agentxx::middleware::onGraphNodeAfterCallFunc) nullptr,
                 [ctx    = std::weak_ptr<AgentContext>(agentContext),
-                 config = agentContext->agentConfig](neograph::graph::NodeInput& in
-                ) -> asio::awaitable<void> {
+                  config = agentContext->agentConfig](neograph::graph::NodeInput& in
+                 ) -> asio::awaitable<void> {
                     if (config->logPringToolcall) {
                         co_await agentxx::nodes::ToolcallWrapNode::defStdoutLogOnToolcallStart(in);
                     }
-                    // 更新会话状态: 正在执行 tool
                     if (auto ctxPtr = ctx.lock()) {
                         auto session = ctxPtr->sessions->get(in.ctx.thread_id);
                         if (session) {
                             session->activity = Activity::ExecutingTool;
-                            if (auto io = session->io) {
-                                io->onUpdate();
-                            }
                         }
                     }
                     co_return;
                 },
                 [ctx    = std::weak_ptr<AgentContext>(agentContext),
-                 config = agentContext->agentConfig](
+                  config = agentContext->agentConfig](
                     const neograph::graph::NodeInput& in,
                     neograph::graph::NodeOutput&      result
                 ) -> asio::awaitable<void> {
@@ -191,14 +187,10 @@ asio::awaitable<void> DeepAgent::init() {
                             result
                         );
                     }
-                    // 恢复会话状态
                     if (auto ctxPtr = ctx.lock()) {
                         auto session = ctxPtr->sessions->get(in.ctx.thread_id);
                         if (session) {
                             session->activity = Activity::Idle;
-                            if (auto io = session->io) {
-                                io->onUpdate();
-                            }
                         }
                     }
                     co_return;
@@ -540,13 +532,11 @@ std::string DeepAgent::getCurrentModelName(const std::string& threadId) const {
 }
 
 asio::awaitable<DeepAgent::ConversationTurnResult> DeepAgent::runConversationTurnAsync(
-    const std::string&                                      threadId,
-    const std::string&                                      userInput,
-    bool                                                    isFirstMsg,
-    neograph::json                                          messages,
-    std::shared_ptr<AgentIOBase>                            io,
-    std::function<void(const neograph::graph::GraphEvent&)> eventCallback,
-    const std::string&                                      modelName
+    const std::string&           threadId,
+    const std::string&           userInput,
+    bool                         isFirstMsg,
+    std::shared_ptr<AgentIOBase> io,
+    const std::string&           modelName
 ) {
     ConversationTurnResult turnResult;
     auto                   session = agentContext->getSession(threadId);
@@ -559,23 +549,24 @@ asio::awaitable<DeepAgent::ConversationTurnResult> DeepAgent::runConversationTur
     }
     session->io = std::move(io);
 
-    // 通知 IO 新轮次开始 (重置流式状态)
-    if (auto ioPtr = session->io) {
-        ioPtr->onUpdate();
-    }
+    auto ioPtr = session->io;
 
-    // 选择本轮使用的模型 (按会话隔离)
+    auto emitDelta = [&](Delta delta) {
+        delta.seq = ++session->deltaSeq;
+        if (ioPtr) {
+            ioPtr->onDelta(delta);
+        }
+    };
+
+    emitDelta(Delta{.type = Delta::Type::TurnStart});
+
     selectModel(threadId, modelName);
 
     bool resumeInterrupt = false;
     if (false == agentContext->middlewareHandleContext->graphData.contains(threadId)) {
-        // - 程序启动后，如果存在 graphData，则从 state 恢复 graphData
-        // (被中断时保存的)
         auto data = engine->get_state(threadId).value_or(neograph::json{});
         if (data.is_object()
             && data.contains(agentxx::middleware::MiddlewareContext::channel_savedGraphData)) {
-            // 存在被中断时保存的 graphData: 标记 resumeInterrupt, 后续跳过
-            // [engine->run_stream_async], 重新处理可能未完成的中断并 [engine->resume_async]
             resumeInterrupt = true;
             agentContext->middlewareHandleContext->setGraphDataFromState(data, threadId);
         }
@@ -585,28 +576,100 @@ asio::awaitable<DeepAgent::ConversationTurnResult> DeepAgent::runConversationTur
         auto processedInput = userInput;
         agentxx::util::autoConvertToUtf8(processedInput);
 
-        messages.push_back(neograph::json{
+        auto userMsgJson = neograph::json{
             {"role",    "user"        },
             {"content", processedInput},
-        });
-        // 创建本轮取消令牌并注入会话, 供 UI 取消执行
+        };
+        session->appendHistory(userMsgJson);
+        session->llmMessages.push_back(std::move(userMsgJson));
+
         auto cancelToken = std::make_shared<neograph::graph::CancelToken>();
         session->setCancelToken(cancelToken);
+
+        auto internalEventCallback = [session, emitDelta](
+                                         const neograph::graph::GraphEvent& event
+                                     ) {
+            using T = neograph::graph::GraphEvent::Type;
+            switch (event.type) {
+                case T::LLM_TOKEN: {
+                    std::string token;
+                    bool        isThinking = false;
+                    if (event.data.is_string()) {
+                        token = event.data.get<std::string>();
+                    } else if (event.data.is_object()) {
+                        neograph::ChatStreamChunk chunk;
+                        neograph::from_json(event.data, chunk);
+                        token      = std::move(chunk.data);
+                        isThinking = (chunk.type == neograph::ChatStreamChunk::TYPE_THINKING);
+                    }
+                    emitDelta(Delta{
+                        .type = isThinking ? Delta::Type::ThinkingToken : Delta::Type::TextToken,
+                        .text = std::move(token),
+                    });
+                } break;
+                case T::CHANNEL_WRITE: {
+                    auto chan  = event.data.value("channel", std::string{});
+                    auto value = event.data.value("value", neograph::json{});
+                    if (chan != "messages" || !value.is_array()) {
+                        break;
+                    }
+                    for (const auto& jm : value) {
+                        auto role = jm.value("role", std::string{});
+                        if (role == "assistant" && jm.contains("tool_calls")) {
+                            auto msgId = session->appendHistory(jm);
+                            for (const auto& tc : jm["tool_calls"]) {
+                                emitDelta(Delta{
+                                    .type       = Delta::Type::ToolStart,
+                                    .msgId      = msgId,
+                                    .toolName   = tc.value("name", std::string{}),
+                                    .toolCallId = tc.value("id", std::string{}),
+                                    .arguments  = tc.value("arguments", std::string{}),
+                                });
+                            }
+                        } else if (role == "tool") {
+                            session->appendHistory(jm);
+                            auto         content  = jm.value("content", std::string{});
+                            bool         hasError = false;
+                            try {
+                                auto parsed = neograph::json::parse(content);
+                                hasError    = parsed.is_object() && parsed.contains("error");
+                            } catch (...) {
+                            }
+                            emitDelta(Delta{
+                                .type       = Delta::Type::ToolEnd,
+                                .toolName   = jm.value("tool_name", std::string{}),
+                                .toolCallId = jm.value("tool_call_id", std::string{}),
+                                .result     = content,
+                                .hasError   = hasError,
+                            });
+                        } else if (role == "assistant") {
+                            session->appendHistory(jm);
+                        }
+                    }
+                } break;
+                default:
+                    break;
+            }
+        };
+
+        auto eventCallback = agentxx::middleware::EventBridge::make(
+            agentContext->agentConfig->agentName,
+            threadId,
+            agentContext,
+            std::move(internalEventCallback)
+        );
+
         auto cfg = neograph::graph::RunConfig{
             .thread_id        = threadId,
-            .input            = {{"messages", messages}},
+            .input            = {{"messages", session->llmMessages}},
             .max_steps        = 1024,
             .stream_mode      = neograph::graph::StreamMode::ALL,
             .cancel_token     = cancelToken,
             .resume_if_exists = isFirstMsg,
         };
 
-        // - 存在值 [neograph::graph::RunResult], 声明 optional 类型用于后续赋值
-        // [nullopt]
         std::optional<neograph::graph::RunResult> result;
         if (resumeInterrupt) {
-            // 程序重启恢复中断: 跳过 [engine->run_stream_async], 从恢复的 graphData
-            // 重建中断结果, 直接进入中断处理循环, 重新处理可能未完成的中断并 resume
             neograph::graph::RunResult recovered;
             recovered.interrupted = true;
             recovered.interrupt_node
@@ -619,33 +682,16 @@ asio::awaitable<DeepAgent::ConversationTurnResult> DeepAgent::runConversationTur
                     threadId,
                     agentxx::middleware::MiddlewareContext::graphDataKey_interruptValue
                 );
-            result   = std::move(recovered);
-            auto& im = agentContext->middlewareHandleContext->getGraphDataItemValue<neograph::json>(
-                threadId,
-                agentxx::middleware::MiddlewareContext::graphDataKey_interruptMessages
-            );
-            if (im.is_array()) {
-                messages = im;
-            }
+            result = std::move(recovered);
         } else {
             result = co_await engine->run_stream_async(cfg, eventCallback);
 
-            if (result->interrupted) {
-                auto& im
-                    = agentContext->middlewareHandleContext->getGraphDataItemValue<neograph::json>(
-                        threadId,
-                        agentxx::middleware::MiddlewareContext::graphDataKey_interruptMessages
-                    );
-                if (im.is_array()) {
-                    messages = im;
-                }
-            } else {
-                messages = result->channel_raw("messages");
+            if (!result->interrupted) {
+                session->llmMessages = result->channel_raw("messages");
             }
         }
 
         while (result.has_value() && result->interrupted) {
-            // 记录中断节点信息到 graphData, 供程序重启恢复中断时复用
             agentContext->middlewareHandleContext->setGraphDataItemValue<std::string>(
                 threadId,
                 agentxx::middleware::MiddlewareContext::graphDataKey_interruptNode,
@@ -658,8 +704,6 @@ asio::awaitable<DeepAgent::ConversationTurnResult> DeepAgent::runConversationTur
             );
 
             engine->update_state(threadId, [&](neograph::graph::GraphState& state) {
-                // - 本轮 graph 还没有执行完成，序列化 graphData 到 state checkpoint
-                // 以防中断处理期间 程序 终止, 导致 graphData 丢失
                 auto data
                     = agentContext->middlewareHandleContext->getGraphDataToState(state, threadId);
                 state.overwrite(
@@ -677,7 +721,6 @@ asio::awaitable<DeepAgent::ConversationTurnResult> DeepAgent::runConversationTur
 
             auto resumeValues = neograph::json{};
 
-            // 从 xx_savedGraphData 提取中断参数
             const auto interruptArgs = agentxx::middleware::InterruptHandleArg::listFromJson(
                 agentContext->middlewareHandleContext->getGraphDataItemValue<neograph::json>(
                     threadId,
@@ -691,7 +734,6 @@ asio::awaitable<DeepAgent::ConversationTurnResult> DeepAgent::runConversationTur
                 std::optional<neograph::json> interruptResult;
                 {
                     if (interruptArg.name == "subagent") {
-                        // subagent 委派: 经全局总线派发给 SubagentSupervisor
                         auto subagentArg = interruptArg.arg;
                         auto resp
                             = co_await agentContext->bus
@@ -715,7 +757,6 @@ asio::awaitable<DeepAgent::ConversationTurnResult> DeepAgent::runConversationTur
                             interruptResult = neograph::json{resp->content};
                         }
                     } else if (interruptArg.name == "subagent_batch") {
-                        // 批量 subagent 委派: 经全局总线派发给 SubagentSupervisor
                         auto batchArg = interruptArg.arg;
                         auto batchReq = events::ReqSubagentBatch{
                             .parentAgentName = agentContext->agentConfig
@@ -751,11 +792,10 @@ asio::awaitable<DeepAgent::ConversationTurnResult> DeepAgent::runConversationTur
                             }
                         }
                     } else {
-                        // HIL 中断: 经会话总线请求 IO 处理器
-                        auto session = agentContext->sessions->get(threadId);
-                        if (session && session->bus) {
+                        auto sess = agentContext->sessions->get(threadId);
+                        if (sess && sess->bus) {
                             auto resp
-                                = co_await session->bus
+                                = co_await sess->bus
                                       ->request<events::ReqInterrupt, events::RespInterrupt>(
                                           events::Topic::Interrupt,
                                           events::ReqInterrupt{
@@ -795,34 +835,20 @@ asio::awaitable<DeepAgent::ConversationTurnResult> DeepAgent::runConversationTur
                 );
 
                 engine->update_state(threadId, [&](neograph::graph::GraphState& state) {
-                    // 更新 message
-                    state.overwrite("messages", std::move(messages));
+                    state.overwrite("messages", session->llmMessages);
                 });
 
                 result = co_await engine->resume_async(threadId, nullptr, eventCallback);
 
-                if (result->interrupted) {
-                    // 中断时 [result] 内的 messages 是旧的，应该取中断时保存的 messages
-                    auto& im = agentContext->middlewareHandleContext->getGraphDataItemValue<
-                        neograph::json>(
-                        threadId,
-                        agentxx::middleware::MiddlewareContext::graphDataKey_interruptMessages
-                    );
-                    if (im.is_array()) {
-                        messages = im;
-                    }
-                } else {
-                    messages = result->channel_raw("messages");
+                if (!result->interrupted) {
+                    session->llmMessages = result->channel_raw("messages");
                 }
             }
         }
 
         engine->update_state(threadId, [&](neograph::graph::GraphState& state) {
-            // 中断已经处理完成，清理 graphData
             state.remove(agentxx::middleware::MiddlewareContext::channel_savedGraphData);
         });
-
-        turnResult.messages = std::move(messages);
     } catch (const std::exception& e) {
         turnResult.hasError     = true;
         turnResult.errorMessage = e.what();
@@ -836,6 +862,12 @@ asio::awaitable<DeepAgent::ConversationTurnResult> DeepAgent::runConversationTur
         turnResult.errorMessage = "Unknown error";
         XX_LOGE(R"({{"error": "Agent Response failed: Unknown error"}})");
     }
+
+    emitDelta(Delta{
+        .type         = Delta::Type::TurnEnd,
+        .historyCount = session->chainHash.count(),
+        .tailHash     = session->chainHash.tailHex(),
+    });
 
     co_return turnResult;
 }
