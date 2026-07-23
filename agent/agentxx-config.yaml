@@ -89,3 +89,13 @@ use_model:
   train: local
   train_scorer: train_scorer
   train_optimizer: train_optimizer
+
+# MCP 服务器列表
+# - namespace: 该 MCP 的命名空间，应当唯一；会作为其所有 tool 的名称前缀 (格式 "namespace_toolName")
+#              命名空间重复时会告警，且后出现的 url 覆盖先前的
+# - url:       MCP 服务器地址
+mcp_servers:
+  # - namespace: local
+  #   url: "http://172.29.48.1:17001/mcp"
+  # - namespace: exa
+  #   url: "https://mcp.exa.ai"

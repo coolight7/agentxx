@@ -63,7 +63,10 @@ public:
 
   agentxx::agent::AgentPrompt prompt;
   std::vector<std::string> skillDirPaths{};
-  std::vector<std::string> mcpServerUrls{};
+  /// MCP 服务器配置
+  /// - key: MCP 命名空间 (每个 MCP 的命名空间应当唯一，作为该服务所有 tool 的名称前缀)
+  /// - value: MCP 服务器 URL
+  std::map<std::string, std::string> mcpServerUrls{};
   std::vector<std::string> ragDocsPaths{};
 
   /// LLM 节点最大重试次数

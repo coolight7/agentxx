@@ -2102,6 +2102,117 @@ asio::awaitable<void> test_mcp_server_accept_sse() {
   serverThread.join();
 }
 
+// -----------------------------------------------------------------------
+// McpClient tool namespace tests
+// -----------------------------------------------------------------------
+
+asio::awaitable<void> test_mcp_client_tool_namespace() {
+  using Server = McpServer;
+
+  Server::Config cfg;
+  cfg.httpConfig.address = "127.0.0.1";
+  cfg.httpConfig.port = 0;
+  cfg.httpConfig.ioThreads = 1;
+  cfg.httpConfig.accessLogEnabled = false;
+
+  Server server(std::move(cfg));
+  McpToolDefinition def;
+  def.name = "echo";
+  def.description = "Echo back the input";
+  def.inputSchema = json::parse(
+      R"({"type":"object","properties":{"text":{"type":"string"}}})");
+  server.addTool(def, [](const json &args) -> json {
+    json content;
+    content["type"] = "text";
+    content["text"] = args.value("text", "");
+    return content;
+  });
+
+  std::thread serverThread([&server]() { server.start(); });
+
+  uint16_t port = 0;
+  for (int i = 0; i < 100; ++i) {
+    port = server.port();
+    if (port != 0)
+      break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  if (port == 0) {
+    TEST_FAIL << "McpServer failed to start" << std::endl;
+    g_mcp_failed++;
+    server.stop();
+    serverThread.join();
+    co_return;
+  }
+
+  std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
+
+  for (int i = 0; i < 100; ++i) {
+    try {
+      asio::io_context tmpCtx;
+      asio::ip::tcp::socket sock(tmpCtx);
+      sock.connect(
+          asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), port));
+      sock.close();
+      break;
+    } catch (...) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+  }
+
+  // 1. 带命名空间的 client: 对外名称带前缀, 远程调用仍用原始名称
+  {
+    McpClient::Config clientCfg;
+    clientCfg.serverUrl = baseUrl + "/mcp";
+    clientCfg.protocolVersion = std::string{McpClient::kProtocol2024_11_05};
+    clientCfg.requestTimeout = std::chrono::seconds(5);
+    clientCfg.initTimeout = std::chrono::seconds(5);
+    clientCfg.toolNamespace = "myns";
+
+    auto client = std::make_shared<McpClient>(std::move(clientCfg));
+    auto init = co_await client->initialize();
+    XX_TEST_EXPECT_TRUE(init.has_value());
+
+    auto toolsList = co_await client->listTools();
+    XX_TEST_EXPECT_TRUE(toolsList.has_value());
+    if (toolsList.has_value() && !toolsList->empty()) {
+      auto tool = client->createTool((*toolsList)[0], {});
+      XX_TEST_EXPECT_EQ(tool->get_name(), "myns_echo");
+      XX_TEST_EXPECT_EQ(tool->namespacedName(), "myns_echo");
+      XX_TEST_EXPECT_EQ(tool->get_definition().name, "myns_echo");
+      // 远程调用使用原始名称 "echo", 应成功返回
+      auto result = co_await tool->execute_async({{"text", "hello ns"}});
+      XX_TEST_EXPECT_EQ(result, "hello ns");
+    }
+    co_await client->close();
+  }
+
+  // 2. 空命名空间: 名称保持原始名称
+  {
+    McpClient::Config clientCfg;
+    clientCfg.serverUrl = baseUrl + "/mcp";
+    clientCfg.protocolVersion = std::string{McpClient::kProtocol2024_11_05};
+    clientCfg.requestTimeout = std::chrono::seconds(5);
+    clientCfg.initTimeout = std::chrono::seconds(5);
+
+    auto client = std::make_shared<McpClient>(std::move(clientCfg));
+    auto init = co_await client->initialize();
+    XX_TEST_EXPECT_TRUE(init.has_value());
+
+    McpToolDefinition toolDef;
+    toolDef.name = "echo";
+    toolDef.description = "Echo back";
+    auto tool = client->createTool(std::move(toolDef), {});
+    XX_TEST_EXPECT_EQ(tool->get_name(), "echo");
+    XX_TEST_EXPECT_EQ(tool->namespacedName(), "echo");
+    XX_TEST_EXPECT_EQ(tool->get_definition().name, "echo");
+    co_await client->close();
+  }
+
+  server.stop();
+  serverThread.join();
+}
+
 asio::awaitable<TestResult> run_mcp_tests() {
   test_mcp_version_negotiation_unit();
   test_mcp_server_unit();
@@ -2117,6 +2228,7 @@ asio::awaitable<TestResult> run_mcp_tests() {
   test_mcp_server_cross_version_stdio();
   test_mcp_server_2025_03_26_stdio();
   co_await test_mcp_client_http();
+  co_await test_mcp_client_tool_namespace();
   co_await test_mcp_client_2025_version();
   co_await test_mcp_server_cross_version_http();
   co_await test_mcp_client_accept_header();

@@ -190,6 +190,8 @@ static neograph::json yamlToJson(const YAML::Node &node) {
 
 struct YamlAppConfig {
   std::map<std::string, agentxx::agent::ModelConfig> models;
+  /// MCP 服务器配置: key=命名空间(唯一), value=服务器 URL
+  std::map<std::string, std::string> mcpServers;
   std::string useModelDefault;
   std::string useModelSubagent;
   std::string useModelWebSearch;
@@ -265,6 +267,26 @@ loadYamlConfig(const std::string &path,
     cfg.useModelTrainOptimizer =
         resolveEnvVars(root["use_model"]["train_optimizer"].as<std::string>(""),
                        dotEnvVars, overrideEnvVars);
+  }
+
+  if (root["mcp_servers"] && root["mcp_servers"].IsSequence()) {
+    for (const auto &node : root["mcp_servers"]) {
+      auto ns = resolveEnvVars(node["namespace"].as<std::string>(""), dotEnvVars,
+                               overrideEnvVars);
+      auto url = resolveEnvVars(node["url"].as<std::string>(""), dotEnvVars,
+                                overrideEnvVars);
+      if (ns.empty() || url.empty()) {
+        std::cerr << "[Config] Warning: mcp_servers entry missing `namespace` "
+                     "or `url`, skipped"
+                  << std::endl;
+        continue;
+      }
+      if (cfg.mcpServers.contains(ns)) {
+        std::cerr << "[Config] Warning: duplicate mcp namespace '" << ns
+                  << "', overriding its url" << std::endl;
+      }
+      cfg.mcpServers[ns] = url;
+    }
   }
 
   return cfg;
@@ -625,8 +647,10 @@ int main(int argn, char **argv) {
   applyWebSearchModelToConfig(config, yamlCfg.models,
                               yamlCfg.useModelWebSearch);
   applyAvailableModelsToConfig(config, yamlCfg.models, yamlCfg.useModelDefault);
-  config->mcpServerUrls.push_back("http://172.29.48.1:17001/mcp");
-  // config->mcpServerUrls.push_back("https://mcp.exa.ai");
+  // MCP 服务器 (来自 config.yaml 的 mcp_servers, key 为命名空间)
+  config->mcpServerUrls = yamlCfg.mcpServers;
+  // config->mcpServerUrls["local"] = "http://172.29.48.1:17001/mcp";
+  // config->mcpServerUrls["exa"] = "https://mcp.exa.ai";
   config->skillDirPaths = std::vector<std::string>{
       "/home/coolight/program/agentxx/isolation/skills/"};
 

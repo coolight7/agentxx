@@ -67,6 +67,10 @@ public:
     std::string clientName = "agentxx-mcp-client";
     std::string clientVersion = "0.1.0";
     std::string protocolVersion{kProtocol2024_11_05};
+    /// MCP tool 命名空间
+    /// - 非空时作为该 client 所有 tool 对外名称的前缀 (格式: "namespace_toolName")
+    /// - 远程调用时仍使用 tool 的原始名称
+    std::string toolNamespace;
     std::chrono::milliseconds requestTimeout{60000};
     std::chrono::milliseconds initTimeout{10000};
     util::HeaderMap extraHeaders;
@@ -253,7 +257,8 @@ private:
 class McpClientTool : public agentxx::tools::XXToolBase {
 public:
   McpClientTool(std::shared_ptr<McpClient> client, McpToolDefinition def,
-                std::weak_ptr<agentxx::agent::AgentContext> ctx);
+                std::weak_ptr<agentxx::agent::AgentContext> ctx,
+                std::string toolNamespace = {});
 
   neograph::ChatTool get_definition() const override;
 
@@ -262,9 +267,13 @@ public:
 
   std::string get_name() const override;
 
+  /// 命名空间前缀后的对外 tool 名称 (namespace 非空时为 "namespace_toolName")
+  std::string namespacedName() const;
+
 private:
   std::shared_ptr<McpClient> client_;
   McpToolDefinition def_;
+  std::string toolNamespace_;
 };
 
 } // namespace server
