@@ -1,9 +1,9 @@
 #pragma once
+#include "agentxx/util/lru_cache.h"
 #include <array>
 #include <map>
 #include <memory>
 #include <string>
-#include <unordered_map>
 
 /// 路由
 /// 程序启动后基本固定，因此 map 不需要处理线程安全问题
@@ -162,10 +162,12 @@ protected:
     RouterTreePort *treeptr = nullptr;
   };
 
-  // TODO: LRU cache
-  inline static thread_local std::unordered_map<std::string,
-                                                _RouterCacheValue_s>
-      cacheMap{};
+  /// 路由查找缓存容量
+  static constexpr size_t routerCacheCapacity = 1024;
+  /// 路由查找 LRU 缓存
+  inline static thread_local agentxx::util::LruCache<std::string,
+                                                     _RouterCacheValue_s>
+      cacheMap{routerCacheCapacity};
 
   // 路由字典树
   RouterTreePort routerTree;
@@ -219,18 +221,18 @@ public:
   /// - 没有:	返回nullptr，re_path置空
   std::shared_ptr<HANLDE_TPYE> get(const std::string &in_path, int in_index,
                                    std::string &re_path) {
-    auto refind = this->cacheMap.find(in_path);
+    auto cached = this->cacheMap.get(in_path);
     XXRouter::RouterTreePort *treeptr = nullptr;
-    if (refind != this->cacheMap.end()) {
-      treeptr = refind->second.treeptr;
-      re_path = refind->second.path;
+    if (cached.has_value()) {
+      treeptr = cached->treeptr;
+      re_path = cached->path;
     } else {
       treeptr = this->getTreepNocache(in_path, re_path);
     }
     if (treeptr != nullptr) {
       auto handles = treeptr->getHandle(in_index);
       if (handles) {
-        this->cacheMap.insert({in_path, {re_path, treeptr}});
+        this->cacheMap.put(in_path, {re_path, treeptr});
       }
       return handles;
     }

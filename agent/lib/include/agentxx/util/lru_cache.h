@@ -11,9 +11,19 @@ namespace agentxx {
 namespace util {
 
 template <typename K, typename V> class LruCache {
+private:
+  const size_t capacity_;
+  std::list<std::pair<K, V>> items_;
+  std::unordered_map<K, typename std::list<std::pair<K, V>>::iterator> map_;
+
+  void evict_one() {
+    auto last = --items_.end();
+    map_.erase(last->first);
+    items_.pop_back();
+  }
+
 public:
-  explicit LruCache(size_t capacity)[[expects:capacity > 0]]
-      : capacity_(capacity) {}
+  explicit LruCache(size_t capacity) : capacity_(capacity) {}
 
   [[nodiscard]] std::optional<V> get(const K &key) {
     auto it = map_.find(key);
@@ -70,17 +80,6 @@ public:
     evict_one();
     return true;
   }
-
-private:
-  void evict_one() {
-    auto last = --items_.end();
-    map_.erase(last->first);
-    items_.pop_back();
-  }
-
-  const size_t capacity_;
-  std::list<std::pair<K, V>> items_;
-  std::unordered_map<K, std::list<std::pair<K, V>>::iterator> map_;
 };
 
 } // namespace util
