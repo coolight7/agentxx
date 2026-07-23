@@ -42,7 +42,15 @@ protected:
   static constexpr size_t longContentByteThreshold = 2000;
 
   agentxx::tools::SubAgentManagerTool *subagentManager;
-  const size_t modelSupportMaxToken;
+
+public:
+  /// 模型支持的最大 token 默认值 (256k)
+  /// - 当模型配置未指定 [agentxx::agent::ModelConfig::modelSupportMaxToken] 时使用
+  static constexpr size_t defaultModelSupportMaxToken = 256 * 1024;
+
+protected:
+  /// 模型支持的最大 token 默认值 (模型配置未指定时使用)
+  const size_t modelSupportMaxTokenDefault;
   /// 每个 token 大约为 [asciiCharsPerToken] 个 ascii 字符
   const double asciiCharsPerToken;
   /// 每个 token 大约为 [unicodeCharsPerToken] 个 unicode(除去 ascii) 字符
@@ -57,7 +65,8 @@ public:
   SummarizationMiddlewareHandle(
       agentxx::tools::SubAgentManagerTool *in_subagentManager,
       std::weak_ptr<agentxx::agent::AgentContext> in_agentContext,
-      size_t in_modelSupportMaxToken, double in_asciiCharsPerToken = 4.0,
+      size_t in_defaultModelSupportMaxToken = defaultModelSupportMaxToken,
+      double in_asciiCharsPerToken = 4.0,
       double in_unicodeCharsPerToken = 1.1, double in_tokensPerImage = 400.0,
       double in_extraTokensPerMessage = 3.0);
 

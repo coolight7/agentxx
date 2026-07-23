@@ -29,6 +29,10 @@ public:
   std::string anthropicVersion = "2023-06-01";
   /// max_tokens
   int maxTokens = 8096;
+  /// 模型支持的最大上下文 token 数
+  /// - 0 表示未指定, 此时上下文压缩中间件使用其默认值
+  ///   [agentxx::middleware::SummarizationMiddlewareHandle::defaultModelSupportMaxToken]
+  size_t modelSupportMaxToken = 0;
   /// 扩展 JSON 配置，合并到请求 body
   neograph::json extra_config;
 
