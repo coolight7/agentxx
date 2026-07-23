@@ -17,15 +17,16 @@ extern int g_es_passed;
 extern int g_es_failed;
 
 struct TestEvent {
-  std::string msg;
-  int value;
+    std::string msg;
+    int         value;
 };
 
 struct TestReq {
-  std::string question;
+    std::string question;
 };
+
 struct TestResp {
-  std::string answer;
+    std::string answer;
 };
 
 asio::awaitable<TestResult> run_event_stream_tests();

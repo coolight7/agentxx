@@ -19,8 +19,8 @@ namespace test {
 extern int g_cg_passed;
 extern int g_cg_failed;
 
-asio::awaitable<TestResult> run_codegraph_tools_tests(
-    std::weak_ptr<agentxx::agent::AgentContext> agentContext);
+asio::awaitable<TestResult>
+    run_codegraph_tools_tests(std::weak_ptr<agentxx::agent::AgentContext> agentContext);
 
 } // namespace test
 } // namespace agentxx
@@ -30,9 +30,9 @@ asio::awaitable<TestResult> run_codegraph_tools_tests(
 namespace agentxx {
 namespace test {
 
-inline asio::awaitable<TestResult> run_codegraph_tools_tests(
-    std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
-  co_return TestResult{0, 0};
+inline asio::awaitable<TestResult>
+    run_codegraph_tools_tests(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    co_return TestResult{0, 0};
 }
 
 } // namespace test

@@ -17,8 +17,8 @@ namespace test {
 extern int g_rag_passed;
 extern int g_rag_failed;
 
-asio::awaitable<TestResult> run_rag_search_tools_tests(
-    std::weak_ptr<agentxx::agent::AgentContext> agentContext);
+asio::awaitable<TestResult>
+    run_rag_search_tools_tests(std::weak_ptr<agentxx::agent::AgentContext> agentContext);
 
 } // namespace test
 } // namespace agentxx

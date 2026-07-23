@@ -6,96 +6,87 @@
 namespace agentxx {
 namespace agent {
 
-void ModelProviderRegistry::registerModel(const std::string &name,
-                                          const ModelConfig &config) {
-  std::lock_guard<std::mutex> lock(mutex_);
-  models_[name] = config;
-  if (defaultName_.empty()) {
-    defaultName_ = name;
-  }
+void ModelProviderRegistry::registerModel(const std::string& name, const ModelConfig& config) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    models_[name] = config;
+    if (defaultName_.empty()) {
+        defaultName_ = name;
+    }
 }
 
-bool ModelProviderRegistry::setDefaultModel(const std::string &name) {
-  std::lock_guard<std::mutex> lock(mutex_);
-  if (false == models_.contains(name)) {
-    return false;
-  }
-  defaultName_ = name;
-  return true;
+bool ModelProviderRegistry::setDefaultModel(const std::string& name) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (false == models_.contains(name)) {
+        return false;
+    }
+    defaultName_ = name;
+    return true;
 }
 
 std::string ModelProviderRegistry::getDefaultModelName() const {
-  std::lock_guard<std::mutex> lock(mutex_);
-  return defaultName_;
+    std::lock_guard<std::mutex> lock(mutex_);
+    return defaultName_;
 }
 
-std::string
-ModelProviderRegistry::resolveModelName(const std::string &name) const {
-  std::lock_guard<std::mutex> lock(mutex_);
-  if (false == name.empty() && models_.contains(name)) {
-    return name;
-  }
-  return defaultName_;
+std::string ModelProviderRegistry::resolveModelName(const std::string& name) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (false == name.empty() && models_.contains(name)) {
+        return name;
+    }
+    return defaultName_;
 }
 
-ModelConfig
-ModelProviderRegistry::getModelConfig(const std::string &name) const {
-  std::lock_guard<std::mutex> lock(mutex_);
-  auto effective = (false == name.empty() && models_.contains(name))
-                       ? name
-                       : defaultName_;
-  auto it = models_.find(effective);
-  if (it == models_.end()) {
-    return ModelConfig{};
-  }
-  return it->second;
+ModelConfig ModelProviderRegistry::getModelConfig(const std::string& name) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto effective = (false == name.empty() && models_.contains(name)) ? name : defaultName_;
+    auto it        = models_.find(effective);
+    if (it == models_.end()) {
+        return ModelConfig{};
+    }
+    return it->second;
 }
 
-std::shared_ptr<neograph::Provider>
-ModelProviderRegistry::createProvider(const ModelConfig &mc) {
-  if (mc.type == "anthropic") {
-    return agentxx::server::AnthropicProvider::create_shared(mc);
-  }
-  return agentxx::server::OpenAIProvider::create_shared(mc);
+std::shared_ptr<neograph::Provider> ModelProviderRegistry::createProvider(const ModelConfig& mc) {
+    if (mc.type == "anthropic") {
+        return agentxx::server::AnthropicProvider::create_shared(mc);
+    }
+    return agentxx::server::OpenAIProvider::create_shared(mc);
 }
 
-std::shared_ptr<neograph::Provider>
-ModelProviderRegistry::getProvider(const std::string &name) {
-  std::lock_guard<std::mutex> lock(mutex_);
-  auto effective = (false == name.empty() && models_.contains(name))
-                       ? name
-                       : defaultName_;
-  auto cfgIt = models_.find(effective);
-  if (cfgIt == models_.end()) {
-    return nullptr;
-  }
-  auto cacheIt = providerCache_.find(effective);
-  if (cacheIt != providerCache_.end()) {
-    return cacheIt->second;
-  }
-  auto provider = createProvider(cfgIt->second);
-  providerCache_[effective] = provider;
-  return provider;
+std::shared_ptr<neograph::Provider> ModelProviderRegistry::getProvider(const std::string& name) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto effective = (false == name.empty() && models_.contains(name)) ? name : defaultName_;
+    auto cfgIt     = models_.find(effective);
+    if (cfgIt == models_.end()) {
+        return nullptr;
+    }
+    auto cacheIt = providerCache_.find(effective);
+    if (cacheIt != providerCache_.end()) {
+        return cacheIt->second;
+    }
+    auto provider             = createProvider(cfgIt->second);
+    providerCache_[effective] = provider;
+    return provider;
 }
 
 std::vector<std::string> ModelProviderRegistry::listModelNames() const {
-  std::lock_guard<std::mutex> lock(mutex_);
-  std::vector<std::string> names;
-  names.reserve(models_.size());
-  for (const auto &kv : models_) {
-    names.push_back(kv.first);
-  }
-  return names;
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<std::string>    names;
+    names.reserve(models_.size());
+    for (const auto& kv : models_) {
+        names.push_back(kv.first);
+    }
+    return names;
 }
 
-bool ModelProviderRegistry::hasModel(const std::string &name) const {
-  std::lock_guard<std::mutex> lock(mutex_);
-  return models_.contains(name);
+bool ModelProviderRegistry::hasModel(const std::string& name) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return models_.contains(name);
 }
 
 size_t ModelProviderRegistry::size() const {
-  std::lock_guard<std::mutex> lock(mutex_);
-  return models_.size();
+    std::lock_guard<std::mutex> lock(mutex_);
+    return models_.size();
 }
 
 } // namespace agent

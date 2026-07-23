@@ -20,32 +20,35 @@ namespace tools {
 
 class XXToolBase : public neograph::AsyncTool {
 protected:
-  const std::string name;
-  std::weak_ptr<agentxx::agent::AgentContext> agentContext;
+
+    const std::string                           name;
+    std::weak_ptr<agentxx::agent::AgentContext> agentContext;
 
 public:
-  /// - 自动压缩 tool 输出，当长度超过限制值
-  /// [agentxx::agent::AgentConfig::toolcallSummaryLimitOutputLength] 时，且该
-  /// tool 启用 [autoSummaryOutput] 则进行压缩
-  const bool autoSummaryOutput;
-  /// - 延迟加载
-  /// - `true`: 该 tool 在初始时仅记录名称等简短信息在 system prompt，由
-  /// `tool_skill_search` 检索查找合适的 tool 后才加载全量信息并支持LLM调用
-  const bool canDelayLoad;
-  /// - 最大重试次数
-  /// - 如果 [maxRetry] > 0，当 tool 执行抛出异常时，进行重试
-  /// - 最多执行 1 + maxRetry(retry) 次
-  const size_t maxRetry;
 
-  XXToolBase(std::string_view in_name,
-             std::weak_ptr<agentxx::agent::AgentContext> in_agentContext,
-             bool in_autoSummaryOutput = false, bool in_canDelayLoad = true,
-             size_t in_maxRetry = 0);
+    /// - 自动压缩 tool 输出，当长度超过限制值
+    /// [agentxx::agent::AgentConfig::toolcallSummaryLimitOutputLength] 时，且该
+    /// tool 启用 [autoSummaryOutput] 则进行压缩
+    const bool autoSummaryOutput;
+    /// - 延迟加载
+    /// - `true`: 该 tool 在初始时仅记录名称等简短信息在 system prompt，由
+    /// `tool_skill_search` 检索查找合适的 tool 后才加载全量信息并支持LLM调用
+    const bool canDelayLoad;
+    /// - 最大重试次数
+    /// - 如果 [maxRetry] > 0，当 tool 执行抛出异常时，进行重试
+    /// - 最多执行 1 + maxRetry(retry) 次
+    const size_t maxRetry;
 
-  std::string get_name() const override;
+    XXToolBase(std::string_view                            in_name,
+               std::weak_ptr<agentxx::agent::AgentContext> in_agentContext,
+               bool                                        in_autoSummaryOutput = false,
+               bool                                        in_canDelayLoad      = true,
+               size_t                                      in_maxRetry          = 0);
 
-  virtual std::optional<agentxx::middleware::SummarizationToolHandle>
-  createSummarizationToolHandle() const;
+    std::string get_name() const override;
+
+    virtual std::optional<agentxx::middleware::SummarizationToolHandle>
+        createSummarizationToolHandle() const;
 };
 
 /// - 封装原始的 [neograph::Tool] 类型，添加额外功能
@@ -53,24 +56,25 @@ public:
 /// [XXToolWarp] 进行封装扩展功能
 class XXToolWarp : public XXToolBase {
 protected:
-  std::unique_ptr<neograph::Tool> inner;
-  std::optional<agentxx::middleware::SummarizationToolHandle>
-      summarizationHandle;
+
+    std::unique_ptr<neograph::Tool>                             inner;
+    std::optional<agentxx::middleware::SummarizationToolHandle> summarizationHandle;
 
 public:
-  XXToolWarp(std::unique_ptr<neograph::Tool> &&in_inner,
-             std::weak_ptr<agentxx::agent::AgentContext> in_agentContext,
-             bool in_autoSummaryOutput = false, bool in_canDelayLoad = false,
-             size_t in_maxRetry = 0,
-             std::optional<agentxx::middleware::SummarizationToolHandle>
-                 in_summarizationHandle = std::nullopt);
 
-  std::string get_name() const override;
+    XXToolWarp(std::unique_ptr<neograph::Tool>&&           in_inner,
+               std::weak_ptr<agentxx::agent::AgentContext> in_agentContext,
+               bool                                        in_autoSummaryOutput = false,
+               bool                                        in_canDelayLoad      = false,
+               size_t                                      in_maxRetry          = 0,
+               std::optional<agentxx::middleware::SummarizationToolHandle> in_summarizationHandle
+               = std::nullopt);
 
-  neograph::ChatTool get_definition() const override;
+    std::string get_name() const override;
 
-  asio::awaitable<std::string>
-  execute_async(const neograph::json &arguments) override;
+    neograph::ChatTool get_definition() const override;
+
+    asio::awaitable<std::string> execute_async(const neograph::json& arguments) override;
 };
 
 } // namespace tools

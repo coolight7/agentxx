@@ -7,13 +7,12 @@ namespace tools {
 
 class UIControlKeyboardMouseTool : public XXToolBase {
 public:
-  UIControlKeyboardMouseTool(
-      std::weak_ptr<agentxx::agent::AgentContext> in_agentContext);
 
-  neograph::ChatTool get_definition() const override;
+    UIControlKeyboardMouseTool(std::weak_ptr<agentxx::agent::AgentContext> in_agentContext);
 
-  asio::awaitable<std::string>
-  execute_async(const neograph::json &arguments) override;
+    neograph::ChatTool get_definition() const override;
+
+    asio::awaitable<std::string> execute_async(const neograph::json& arguments) override;
 };
 
 } // namespace tools

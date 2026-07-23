@@ -9,49 +9,50 @@ namespace agentxx {
 namespace expand {
 
 enum class TextSource {
-  Unknown,
-  TextPattern,
-  TextChildPattern,
-  ValuePattern,
-  EmGetSel,
-  AccessibleObject,
-  WmGetText,
-  DevTools,
-  FlutterAccessibility,
-  Clipboard,
+    Unknown,
+    TextPattern,
+    TextChildPattern,
+    ValuePattern,
+    EmGetSel,
+    AccessibleObject,
+    WmGetText,
+    DevTools,
+    FlutterAccessibility,
+    Clipboard,
 };
 
 struct TextSelectionEvent {
-  std::string text;
-  std::chrono::steady_clock::time_point timestamp;
-  TextSource source = TextSource::Unknown;
+    std::string                           text;
+    std::chrono::steady_clock::time_point timestamp;
+    TextSource                            source = TextSource::Unknown;
 };
 
-using TextSelectionListener =
-    std::function<void(const TextSelectionEvent &event)>;
+using TextSelectionListener = std::function<void(const TextSelectionEvent& event)>;
 
 /// 系统级 文本选择事件流
 class TextSelectionMonitor {
 public:
-  TextSelectionMonitor();
-  ~TextSelectionMonitor();
 
-  TextSelectionMonitor(const TextSelectionMonitor &) = delete;
-  TextSelectionMonitor &operator=(const TextSelectionMonitor &) = delete;
+    TextSelectionMonitor();
+    ~TextSelectionMonitor();
 
-  void addListener(TextSelectionListener listener);
-  void removeAllListeners();
+    TextSelectionMonitor(const TextSelectionMonitor&)            = delete;
+    TextSelectionMonitor& operator=(const TextSelectionMonitor&) = delete;
 
-  void setDebounceMs(int ms);
+    void addListener(TextSelectionListener listener);
+    void removeAllListeners();
 
-  bool start();
-  void stop();
+    void setDebounceMs(int ms);
 
-  bool isRunning() const;
+    bool start();
+    void stop();
+
+    bool isRunning() const;
 
 private:
-  class Impl;
-  std::unique_ptr<Impl> impl_;
+
+    class Impl;
+    std::unique_ptr<Impl> impl_;
 };
 
 } // namespace expand

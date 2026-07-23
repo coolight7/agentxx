@@ -33,120 +33,122 @@ using json = neograph::json;
 
 class AcpProtocolHandler {
 public:
-  struct Config {
-    std::string serverName = "agentxx-acp";
-    std::string serverVersion = "0.1.0";
-    int maxInflightPrompts = 32;
-  };
 
-  using NotificationSink = std::function<void(const json &)>;
+    struct Config {
+        std::string serverName         = "agentxx-acp";
+        std::string serverVersion      = "0.1.0";
+        int         maxInflightPrompts = 32;
+    };
 
-  AcpProtocolHandler(std::shared_ptr<agentxx::agent::DeepAgent> agent,
-                     json agentInfo, Config config);
+    using NotificationSink = std::function<void(const json&)>;
 
-  AcpProtocolHandler(const AcpProtocolHandler &) = delete;
-  AcpProtocolHandler &operator=(const AcpProtocolHandler &) = delete;
+    AcpProtocolHandler(std::shared_ptr<agentxx::agent::DeepAgent> agent,
+                       json                                       agentInfo,
+                       Config                                     config);
 
-  ~AcpProtocolHandler();
+    AcpProtocolHandler(const AcpProtocolHandler&)            = delete;
+    AcpProtocolHandler& operator=(const AcpProtocolHandler&) = delete;
 
-  bool initialized() const;
+    ~AcpProtocolHandler();
 
-  const json &agentInfo() const;
+    bool initialized() const;
 
-  /// Set the notification sink used to deliver async responses and
-  /// streaming updates. Must be set before processing messages.
-  void setNotificationSink(NotificationSink sink);
+    const json& agentInfo() const;
 
-  /// Stop all in-flight prompts, cancel pending requests.
-  /// Check whether stop has been requested.
-  bool stopRequested() const;
+    /// Set the notification sink used to deliver async responses and
+    /// streaming updates. Must be set before processing messages.
+    void setNotificationSink(NotificationSink sink);
 
-  void stop();
+    /// Stop all in-flight prompts, cancel pending requests.
+    /// Check whether stop has been requested.
+    bool stopRequested() const;
 
-  /// Process one JSON-RPC envelope. Returns the response envelope for
-  /// synchronous methods, or null json for notifications / async dispatch.
-  /// Async responses are delivered via the notification sink.
-  json handleMessage(const json &env);
+    void stop();
 
-  /// Emit an outbound request (agent→client) and wait for the response.
-  /// The notification sink must be set before calling this.
-  json callClient(const std::string &method, json params,
-                  std::chrono::milliseconds timeout = std::chrono::seconds{
-                      30});
+    /// Process one JSON-RPC envelope. Returns the response envelope for
+    /// synchronous methods, or null json for notifications / async dispatch.
+    /// Async responses are delivered via the notification sink.
+    json handleMessage(const json& env);
 
-  // -- Session queries (for tests / introspection) -----------------------
+    /// Emit an outbound request (agent→client) and wait for the response.
+    /// The notification sink must be set before calling this.
+    json callClient(const std::string&        method,
+                    json                      params,
+                    std::chrono::milliseconds timeout = std::chrono::seconds{30});
 
-  bool hasSession(const std::string &sessionId) const;
-  std::string sessionCwd(const std::string &sessionId) const;
-  bool isInFlight(const std::string &sessionId) const;
-  int inflightCount() const;
+    // -- Session queries (for tests / introspection) -----------------------
 
-  /// Drain in-flight workers (used by transports before shutdown).
-  void drainWorkers();
+    bool        hasSession(const std::string& sessionId) const;
+    std::string sessionCwd(const std::string& sessionId) const;
+    bool        isInFlight(const std::string& sessionId) const;
+    int         inflightCount() const;
 
-  // -----------------------------------------------------------------------
-  // JSON-RPC helpers
-  // -----------------------------------------------------------------------
+    /// Drain in-flight workers (used by transports before shutdown).
+    void drainWorkers();
 
-  static json jsonRpcResult(const json &id, json result);
-  static json jsonRpcError(const json &id, int code, const std::string &msg);
-  static json makeParseError(const std::string &detail);
-  static json makeInvalidRequest();
-  static std::string extractUserText(const json &prompt);
-  static std::string generateSessionId();
+    // -----------------------------------------------------------------------
+    // JSON-RPC helpers
+    // -----------------------------------------------------------------------
 
-  // -----------------------------------------------------------------------
-  // Method handlers
-  // -----------------------------------------------------------------------
+    static json        jsonRpcResult(const json& id, json result);
+    static json        jsonRpcError(const json& id, int code, const std::string& msg);
+    static json        makeParseError(const std::string& detail);
+    static json        makeInvalidRequest();
+    static std::string extractUserText(const json& prompt);
+    static std::string generateSessionId();
 
-  json handleInitialize(const json &params, const json &id);
-  json handleSessionNew(const json &params, const json &id);
-  void handleSessionPrompt(const json &env, const json &params,
-                           const json &id);
-  void workerRunPrompt(const std::string &sessionId, const json &promptBlocks,
-                       const json &id,
-                       std::shared_ptr<std::atomic<bool>> cancelFlag);
-  void workerCleanup(const std::string &sessionId);
-  void handleSessionCancel(const json &params);
+    // -----------------------------------------------------------------------
+    // Method handlers
+    // -----------------------------------------------------------------------
 
-  // -----------------------------------------------------------------------
-  // Notification / streaming helpers
-  // -----------------------------------------------------------------------
+    json handleInitialize(const json& params, const json& id);
+    json handleSessionNew(const json& params, const json& id);
+    void handleSessionPrompt(const json& env, const json& params, const json& id);
+    void workerRunPrompt(const std::string&                 sessionId,
+                         const json&                        promptBlocks,
+                         const json&                        id,
+                         std::shared_ptr<std::atomic<bool>> cancelFlag);
+    void workerCleanup(const std::string& sessionId);
+    void handleSessionCancel(const json& params);
 
-  void emit(const json &env);
-  void emitNotification(const std::string &method, const json &params);
-  void emitAgentMessageChunk(const std::string &sessionId,
-                             const std::string &text);
+    // -----------------------------------------------------------------------
+    // Notification / streaming helpers
+    // -----------------------------------------------------------------------
+
+    void emit(const json& env);
+    void emitNotification(const std::string& method, const json& params);
+    void emitAgentMessageChunk(const std::string& sessionId, const std::string& text);
 
 private:
-  // -----------------------------------------------------------------------
-  // Members
-  // -----------------------------------------------------------------------
 
-  Config config_;
-  std::shared_ptr<agentxx::agent::DeepAgent> deepAgent_;
-  json agentInfo_;
-  std::atomic<bool> initialized_{false};
-  std::atomic<bool> stopFlag_{false};
-  NotificationSink sink_;
+    // -----------------------------------------------------------------------
+    // Members
+    // -----------------------------------------------------------------------
 
-  // -- Sessions --
-  mutable std::mutex sessionsMu_;
-  std::map<std::string, std::string> sessions_; // sessionId → cwd
-  std::map<std::string, std::shared_ptr<std::atomic<bool>>> cancelFlags_;
+    Config                                     config_;
+    std::shared_ptr<agentxx::agent::DeepAgent> deepAgent_;
+    json                                       agentInfo_;
+    std::atomic<bool>                          initialized_{false};
+    std::atomic<bool>                          stopFlag_{false};
+    NotificationSink                           sink_;
 
-  // -- In-flight prompt tracking --
-  mutable std::mutex inflightMu_;
-  std::set<std::string> inflightSessions_;
-  std::atomic<int> inflightCount_{0};
+    // -- Sessions --
+    mutable std::mutex                                        sessionsMu_;
+    std::map<std::string, std::string>                        sessions_; // sessionId → cwd
+    std::map<std::string, std::shared_ptr<std::atomic<bool>>> cancelFlags_;
 
-  std::mutex workersMu_;
-  std::condition_variable workersCv_;
+    // -- In-flight prompt tracking --
+    mutable std::mutex    inflightMu_;
+    std::set<std::string> inflightSessions_;
+    std::atomic<int>      inflightCount_{0};
 
-  // -- Outbound request tracking (agent→client) --
-  mutable std::mutex pendingMu_;
-  std::map<int64_t, std::shared_ptr<std::promise<neograph::json>>> pending_;
-  std::atomic<int64_t> nextOutboundId_{1};
+    std::mutex              workersMu_;
+    std::condition_variable workersCv_;
+
+    // -- Outbound request tracking (agent→client) --
+    mutable std::mutex                                               pendingMu_;
+    std::map<int64_t, std::shared_ptr<std::promise<neograph::json>>> pending_;
+    std::atomic<int64_t>                                             nextOutboundId_{1};
 };
 
 // ===========================================================================
@@ -159,85 +161,87 @@ private:
 
 class HttpAcpServer {
 public:
-  struct Config {
-    util::HttpServer::Config httpConfig;
-    std::string acpEndpoint = "/acp";
-    std::string sseEndpoint = "/acp/sse";
-    std::string serverName = "agentxx-acp";
-    std::string serverVersion = "0.1.0";
-    std::chrono::seconds asyncTimeout{120};
-  };
 
-  HttpAcpServer(std::shared_ptr<agentxx::agent::DeepAgent> agent,
-                neograph::json agentInfo, Config config);
+    struct Config {
+        util::HttpServer::Config httpConfig;
+        std::string              acpEndpoint   = "/acp";
+        std::string              sseEndpoint   = "/acp/sse";
+        std::string              serverName    = "agentxx-acp";
+        std::string              serverVersion = "0.1.0";
+        std::chrono::seconds     asyncTimeout{120};
+    };
 
-  HttpAcpServer(const HttpAcpServer &) = delete;
-  HttpAcpServer &operator=(const HttpAcpServer &) = delete;
+    HttpAcpServer(std::shared_ptr<agentxx::agent::DeepAgent> agent,
+                  neograph::json                             agentInfo,
+                  Config                                     config);
 
-  ~HttpAcpServer();
+    HttpAcpServer(const HttpAcpServer&)            = delete;
+    HttpAcpServer& operator=(const HttpAcpServer&) = delete;
 
-  void start();
-  void stop();
+    ~HttpAcpServer();
 
-  uint16_t port() const;
-  bool isStopped() const;
+    void start();
+    void stop();
 
-  AcpProtocolHandler &handler();
+    uint16_t port() const;
+    bool     isStopped() const;
+
+    AcpProtocolHandler& handler();
 
 private:
-  // -----------------------------------------------------------------------
-  // Wire up the handler's notification sink → SSE + pending resolver
-  // -----------------------------------------------------------------------
 
-  void setupHandlerSink();
+    // -----------------------------------------------------------------------
+    // Wire up the handler's notification sink → SSE + pending resolver
+    // -----------------------------------------------------------------------
 
-  // -----------------------------------------------------------------------
-  // Route setup
-  // -----------------------------------------------------------------------
+    void setupHandlerSink();
 
-  void setupRoutes();
+    // -----------------------------------------------------------------------
+    // Route setup
+    // -----------------------------------------------------------------------
 
-  // -----------------------------------------------------------------------
-  // ACP request handler (HTTP JSON-RPC)
-  // -----------------------------------------------------------------------
+    void setupRoutes();
 
-  asio::awaitable<void> handleAcpRequest(util::HttpServer::Request &req,
-                                         util::HttpServer::Response &resp);
+    // -----------------------------------------------------------------------
+    // ACP request handler (HTTP JSON-RPC)
+    // -----------------------------------------------------------------------
 
-  // -----------------------------------------------------------------------
-  // SSE endpoint
-  // -----------------------------------------------------------------------
+    asio::awaitable<void> handleAcpRequest(util::HttpServer::Request&  req,
+                                           util::HttpServer::Response& resp);
 
-  asio::awaitable<void> handleSseRequest(util::HttpServer::Request &req,
-                                         util::HttpServer::Response &resp);
+    // -----------------------------------------------------------------------
+    // SSE endpoint
+    // -----------------------------------------------------------------------
 
-  void broadcastSSE(const std::string & /*data*/);
-  void stopSSE();
+    asio::awaitable<void> handleSseRequest(util::HttpServer::Request&  req,
+                                           util::HttpServer::Response& resp);
 
-  // -----------------------------------------------------------------------
-  // HTTP response helpers
-  // -----------------------------------------------------------------------
+    void broadcastSSE(const std::string& /*data*/);
+    void stopSSE();
 
-  void writeJsonResponse(util::HttpServer::Response &resp,
-                         boost::beast::http::status status,
-                         const neograph::json &body);
+    // -----------------------------------------------------------------------
+    // HTTP response helpers
+    // -----------------------------------------------------------------------
 
-  neograph::json jsonRpcError(const neograph::json &id, int code,
-                              const std::string &message) const;
+    void writeJsonResponse(util::HttpServer::Response& resp,
+                           boost::beast::http::status  status,
+                           const neograph::json&       body);
 
-  // -----------------------------------------------------------------------
-  // Members
-  // -----------------------------------------------------------------------
+    neograph::json
+        jsonRpcError(const neograph::json& id, int code, const std::string& message) const;
 
-  Config config_;
-  std::shared_ptr<agentxx::agent::DeepAgent> deepAgent_;
-  AcpProtocolHandler handler_;
-  std::unique_ptr<util::HttpServer> httpServer_;
+    // -----------------------------------------------------------------------
+    // Members
+    // -----------------------------------------------------------------------
 
-  // Pending async response tracking (for HTTP transport)
-  std::mutex pendingMutex_;
-  std::map<int64_t, std::shared_ptr<std::promise<neograph::json>>>
-      pendingResponses_;
+    Config                                     config_;
+    std::shared_ptr<agentxx::agent::DeepAgent> deepAgent_;
+    AcpProtocolHandler                         handler_;
+    std::unique_ptr<util::HttpServer>          httpServer_;
+
+    // Pending async response tracking (for HTTP transport)
+    std::mutex                                                       pendingMutex_;
+    std::map<int64_t, std::shared_ptr<std::promise<neograph::json>>> pendingResponses_;
 };
 
 // ===========================================================================
@@ -249,27 +253,28 @@ private:
 
 class StdioAcpServer {
 public:
-  StdioAcpServer(std::shared_ptr<agentxx::agent::DeepAgent> agent,
-                 neograph::json agentInfo);
 
-  StdioAcpServer(const StdioAcpServer &) = delete;
-  StdioAcpServer &operator=(const StdioAcpServer &) = delete;
+    StdioAcpServer(std::shared_ptr<agentxx::agent::DeepAgent> agent, neograph::json agentInfo);
 
-  ~StdioAcpServer();
+    StdioAcpServer(const StdioAcpServer&)            = delete;
+    StdioAcpServer& operator=(const StdioAcpServer&) = delete;
 
-  void run();
-  void run(std::istream &in, std::ostream &out);
+    ~StdioAcpServer();
 
-  void stop();
+    void run();
+    void run(std::istream& in, std::ostream& out);
 
-  bool isRunning() const;
+    void stop();
 
-  AcpProtocolHandler &handler();
+    bool isRunning() const;
+
+    AcpProtocolHandler& handler();
 
 private:
-  std::shared_ptr<agentxx::agent::DeepAgent> deepAgent_;
-  AcpProtocolHandler handler_;
-  std::atomic<bool> running_{false};
+
+    std::shared_ptr<agentxx::agent::DeepAgent> deepAgent_;
+    AcpProtocolHandler                         handler_;
+    std::atomic<bool>                          running_{false};
 };
 
 } // namespace server

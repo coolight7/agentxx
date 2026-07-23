@@ -8,8 +8,8 @@
 #endif
 
 #if _WIN32
-#define DllImport __declspec(dllimport)
-#define DllExport __declspec(dllexport)
+#define DllImport         __declspec(dllimport)
+#define DllExport         __declspec(dllexport)
 #define FFI_PLUGIN_EXPORT DllExport
 #else
 #define FFI_PLUGIN_EXPORT __attribute__((visibility("default")))
@@ -19,8 +19,8 @@
 extern "C" {
 #endif
 
-FFI_PLUGIN_EXPORT void *agentxx_malloc(size_t size);
-FFI_PLUGIN_EXPORT void agentxx_free(const void *ptr);
+FFI_PLUGIN_EXPORT void* agentxx_malloc(size_t size);
+FFI_PLUGIN_EXPORT void  agentxx_free(const void* ptr);
 
 #if __cplusplus
 }

@@ -13,49 +13,51 @@ namespace tools {
 
 class SubAgentTaskBase {
 protected:
-  std::shared_ptr<neograph::graph::GraphEngine> subgraph = nullptr;
+
+    std::shared_ptr<neograph::graph::GraphEngine> subgraph = nullptr;
 
 public:
-  const std::string name;
-  const std::string depict;
-  std::string systemPrompt;
 
-  SubAgentTaskBase(std::string_view in_subAgentName,
-                   std::string_view in_subAgentDepict,
-                   std::string_view in_systemPrompt);
+    const std::string name;
+    const std::string depict;
+    std::string       systemPrompt;
 
-  virtual std::shared_ptr<neograph::graph::GraphEngine> getSubgraph() const;
+    SubAgentTaskBase(std::string_view in_subAgentName,
+                     std::string_view in_subAgentDepict,
+                     std::string_view in_systemPrompt);
 
-  virtual asio::awaitable<void> onSubagentEnd(std::string &result);
+    virtual std::shared_ptr<neograph::graph::GraphEngine> getSubgraph() const;
 
-  virtual ~SubAgentTaskBase();
+    virtual asio::awaitable<void> onSubagentEnd(std::string& result);
+
+    virtual ~SubAgentTaskBase();
 };
 
 class SubAgentNormalTask : public SubAgentTaskBase {
 public:
-  SubAgentNormalTask(std::string_view in_subAgentName,
-                     std::string_view in_subAgentDepict,
-                     const neograph::graph::NodeContext &in_context);
 
-  void createSubgraph(const neograph::graph::NodeContext &context);
+    SubAgentNormalTask(std::string_view                    in_subAgentName,
+                       std::string_view                    in_subAgentDepict,
+                       const neograph::graph::NodeContext& in_context);
 
-  inline static neograph::json defCreateSubGraphDefine();
+    void createSubgraph(const neograph::graph::NodeContext& context);
+
+    inline static neograph::json defCreateSubGraphDefine();
 };
 
 class SubAgentManagerTool : public XXToolBase {
 public:
-  std::map<std::string, std::shared_ptr<SubAgentTaskBase>> subAgentList{};
 
-  SubAgentManagerTool(
-      std::string_view in_nodeName,
-      std::weak_ptr<agentxx::agent::AgentContext> in_agentContext);
+    std::map<std::string, std::shared_ptr<SubAgentTaskBase>> subAgentList{};
 
-  std::string get_name() const override;
+    SubAgentManagerTool(std::string_view                            in_nodeName,
+                        std::weak_ptr<agentxx::agent::AgentContext> in_agentContext);
 
-  neograph::ChatTool get_definition() const override;
+    std::string get_name() const override;
 
-  asio::awaitable<std::string>
-  execute_async(const neograph::json &arguments) override;
+    neograph::ChatTool get_definition() const override;
+
+    asio::awaitable<std::string> execute_async(const neograph::json& arguments) override;
 };
 
 }; // namespace tools

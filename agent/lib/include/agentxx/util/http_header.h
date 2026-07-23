@@ -7,23 +7,24 @@ namespace util {
 
 class HeaderMap {
 public:
-  using _BaseMap = agentxx::util::IgnoreCaseMap<std::vector<std::string>>;
-  _BaseMap data;
 
-  HeaderMap() = default;
-  HeaderMap(_BaseMap in_data);
+    using _BaseMap = agentxx::util::IgnoreCaseMap<std::vector<std::string>>;
+    _BaseMap data;
 
-  bool empty() const;
+    HeaderMap() = default;
+    HeaderMap(_BaseMap in_data);
 
-  bool contains(std::string_view name) const noexcept;
+    bool empty() const;
 
-  _BaseMap::iterator get(std::string_view name);
+    bool contains(std::string_view name) const noexcept;
 
-  std::string_view getSingle(std::string_view name) const noexcept;
+    _BaseMap::iterator get(std::string_view name);
 
-  void set(std::string_view name, const std::vector<std::string> &value);
+    std::string_view getSingle(std::string_view name) const noexcept;
 
-  void set(std::string_view name, const std::string &value);
+    void set(std::string_view name, const std::vector<std::string>& value);
+
+    void set(std::string_view name, const std::string& value);
 };
 
 } // namespace util

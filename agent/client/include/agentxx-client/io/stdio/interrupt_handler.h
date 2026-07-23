@@ -14,6 +14,7 @@ namespace agentxx {
 namespace agent {
 class AgentContext;
 }
+
 namespace middleware {
 class InterruptHandleArg;
 }
@@ -26,36 +27,37 @@ class InterruptHandleArg;
 /// - 把结果包装为 RespInterrupt 回填
 class StdioInterruptHandler {
 public:
-  std::weak_ptr<agentxx::agent::AgentContext> agentContext;
-  size_t serverId = 0;
-  bool registered = false;
 
-  explicit StdioInterruptHandler(
-      std::weak_ptr<agentxx::agent::AgentContext> ctx);
+    std::weak_ptr<agentxx::agent::AgentContext> agentContext;
+    size_t                                      serverId   = 0;
+    bool                                        registered = false;
 
-  /// 注册到总线
-  asio::awaitable<void> start();
+    explicit StdioInterruptHandler(std::weak_ptr<agentxx::agent::AgentContext> ctx);
 
-  /// 注销
-  void stop();
+    /// 注册到总线
+    asio::awaitable<void> start();
 
-  ~StdioInterruptHandler();
+    /// 注销
+    void stop();
+
+    ~StdioInterruptHandler();
 
 private:
-  void registerInterruptHandles();
 
-  asio::awaitable<std::optional<neograph::json>>
-  execInterruptHandle(std::string_view name,
-                      const agentxx::middleware::InterruptHandleArg &arg,
-                      const std::string &threadId);
+    void registerInterruptHandles();
 
-  asio::awaitable<agentxx::events::RespInterrupt>
-  handle(const agentxx::events::ReqInterrupt &req);
+    asio::awaitable<std::optional<neograph::json>>
+        execInterruptHandle(std::string_view                               name,
+                            const agentxx::middleware::InterruptHandleArg& arg,
+                            const std::string&                             threadId);
 
-  /// <name, handle>
-  std::map<std::string,
-           std::function<asio::awaitable<neograph::json>(
-               const agentxx::middleware::InterruptHandleArg &,
-               const std::string &threadId)>>
-      interruptHandles{};
+    asio::awaitable<agentxx::events::RespInterrupt>
+        handle(const agentxx::events::ReqInterrupt& req);
+
+    /// <name, handle>
+    std::map<std::string,
+             std::function<asio::awaitable<neograph::json>(
+                 const agentxx::middleware::InterruptHandleArg&,
+                 const std::string& threadId)>>
+        interruptHandles{};
 };

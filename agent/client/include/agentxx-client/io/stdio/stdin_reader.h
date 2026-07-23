@@ -15,24 +15,27 @@
 /// - 进程内单例, 多个 handler 共享同一读取线程与 channel
 class StdinReader {
 public:
-  using LineChannel = asio::experimental::concurrent_channel<void(
-      neograph_asio_error_code, std::string)>;
+
+    using LineChannel
+        = asio::experimental::concurrent_channel<void(neograph_asio_error_code, std::string)>;
 
 private:
-  std::shared_ptr<LineChannel> channel_;
-  std::thread readThread_;
-  std::atomic<bool> running_{false};
-  std::atomic<bool> eof_{false};
 
-  StdinReader(asio::any_io_executor ex);
+    std::shared_ptr<LineChannel> channel_;
+    std::thread                  readThread_;
+    std::atomic<bool>            running_{false};
+    std::atomic<bool>            eof_{false};
+
+    StdinReader(asio::any_io_executor ex);
 
 public:
-  static StdinReader &instance(asio::any_io_executor ex);
 
-  /// 异步读取一行; EOF 时返回 nullopt
-  asio::awaitable<std::optional<std::string>> readLine();
+    static StdinReader& instance(asio::any_io_executor ex);
 
-  bool available() const;
+    /// 异步读取一行; EOF 时返回 nullopt
+    asio::awaitable<std::optional<std::string>> readLine();
 
-  ~StdinReader();
+    bool available() const;
+
+    ~StdinReader();
 };

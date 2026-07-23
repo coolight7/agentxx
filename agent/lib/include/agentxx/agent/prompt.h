@@ -14,19 +14,21 @@ namespace agent {
 
 class ToolPrompt {
 public:
-  /// 工具描述。非 const 以便训练时修改
-  std::string depict;
-  /// 工具参数描述。非 const 以便训练时修改
-  std::map<std::string, std::string, std::less<>> args;
 
-  const std::string &getArg(std::string_view name) const;
+    /// 工具描述。非 const 以便训练时修改
+    std::string depict;
+    /// 工具参数描述。非 const 以便训练时修改
+    std::map<std::string, std::string, std::less<>> args;
+
+    const std::string& getArg(std::string_view name) const;
 };
 
 /// 提示词汇总
 /// - 将大部分 system prompt,tool prompt 汇集，方便自定义配置、自循环更新等功能
 class AgentPrompt {
 public:
-  std::string systemPrompt = R"_(
+
+    std::string systemPrompt = R"_(
 You are a helpful, knowledgeable AI assistant.
 
 ## Core Behavior
@@ -41,7 +43,7 @@ You are a helpful, knowledgeable AI assistant.
 - Prefer concrete answers over vague generalities
 )_";
 
-  std::string systemPlanningPrompt = R"_(
+    std::string systemPlanningPrompt = R"_(
 ## Planning
 
 You have access to the `planning_write` tool to help you manage and plan complex objectives.
@@ -62,7 +64,7 @@ Writing roadmap and todos takes time and tokens, use it when it is helpful for m
 When you finish all work, write your final answer in the message AFTER your last `planning_write` call — not in the same turn as that call. Start the final message with the substantive content the user asked for — the data, computation, summary, or analysis. The user wants the result, not confirmation that the work is done.
 )_";
 
-  std::string systemSkillPrompt = R"_(
+    std::string systemSkillPrompt = R"_(
 **How to Use Skills (Progressive Disclosure):**
 
 Skills follow a **progressive disclosure** pattern - you see their name and description above, but only read full instructions when needed:
@@ -93,8 +95,8 @@ User: "Can you analyse the latest developments in quantum computing?"
 Remember: Skills make you more capable and consistent. When in doubt, check if a skill exists for the task!
 )_";
 
-  /// toolcall
-  std::map<std::string, ToolPrompt, std::less<>> toolPrompt{
+    /// toolcall
+    std::map<std::string, ToolPrompt, std::less<>> toolPrompt{
       {
           "execute_linux_command",
           ToolPrompt{
@@ -736,21 +738,21 @@ Other: "printscreen", "pause", "apps"
       },
   };
 
-  // ----- 训练用序列化辅助 -----
-  // 将整个 AgentPrompt（含 toolPrompt）序列化为 JSON，供训练保存/加载使用
+    // ----- 训练用序列化辅助 -----
+    // 将整个 AgentPrompt（含 toolPrompt）序列化为 JSON，供训练保存/加载使用
 
-  neograph::json toJson() const;
+    neograph::json toJson() const;
 
-  /// 从 JSON 整体覆盖当前 prompt（缺失字段保持不变）
-  void fromJson(const neograph::json &j);
+    /// 从 JSON 整体覆盖当前 prompt（缺失字段保持不变）
+    void fromJson(const neograph::json& j);
 
-  /// 以 patch 方式合并：仅覆盖 JSON 中出现的字段，未出现的保持原样
-  /// - toolPrompt 中某工具若已存在，仅覆盖 JSON 中出现的 depict/args 子字段
-  /// - toolPrompt 中某工具若不存在，则插入新建
-  void mergeFromJson(const neograph::json &j);
+    /// 以 patch 方式合并：仅覆盖 JSON 中出现的字段，未出现的保持原样
+    /// - toolPrompt 中某工具若已存在，仅覆盖 JSON 中出现的 depict/args 子字段
+    /// - toolPrompt 中某工具若不存在，则插入新建
+    void mergeFromJson(const neograph::json& j);
 
-  /// 计算整个 prompt 的 hash，用于训练种群去重
-  size_t promptHash() const;
+    /// 计算整个 prompt 的 hash，用于训练种群去重
+    size_t promptHash() const;
 };
 
 } // namespace agent

@@ -8,8 +8,7 @@
 namespace agentxx {
 namespace test {
 
-std::shared_ptr<agentxx::expand::TextSelectionMonitor>
-test_text_selection_monitor();
+std::shared_ptr<agentxx::expand::TextSelectionMonitor> test_text_selection_monitor();
 
 }
 } // namespace agentxx

@@ -14,73 +14,75 @@ namespace middleware {
 
 class _SkillMetadata {
 public:
-  std::string dirpath;
 
-  /// Skill identifier.
-  ///   Constraints per Agent Skills specification:
-  ///   - 1-64 characters
-  ///   - Unicode lowercase alphanumeric and hyphens only (`a-z` and `-`).
-  ///   - Must not start or end with `-`
-  ///   - Must not contain consecutive `--`
-  ///   - Must match the parent directory name containing the `SKILL.md` file
-  std::string name;
+    std::string dirpath;
 
-  /// What the skill does.
-  ///     Constraints per Agent Skills specification:
-  ///     - 1-1024 characters
-  ///     - Should describe both what the skill does and when to use it
-  ///     - Should include specific keywords that help agents identify
-  ///     relevant tasks
-  std::string description;
+    /// Skill identifier.
+    ///   Constraints per Agent Skills specification:
+    ///   - 1-64 characters
+    ///   - Unicode lowercase alphanumeric and hyphens only (`a-z` and `-`).
+    ///   - Must not start or end with `-`
+    ///   - Must not contain consecutive `--`
+    ///   - Must match the parent directory name containing the `SKILL.md` file
+    std::string name;
 
-  /// License name or reference to bundled license file.
-  std::string license;
+    /// What the skill does.
+    ///     Constraints per Agent Skills specification:
+    ///     - 1-1024 characters
+    ///     - Should describe both what the skill does and when to use it
+    ///     - Should include specific keywords that help agents identify
+    ///     relevant tasks
+    std::string description;
 
-  /// Environment requirements.
-  ///   Constraints per Agent Skills specification:
-  ///   - 1-500 characters if provided
-  ///   - Should only be included if there are specific compatibility
-  ///   requirements
-  ///   - Can indicate intended product, required packages, etc.
-  std::string compatibility;
+    /// License name or reference to bundled license file.
+    std::string license;
 
-  /// Arbitrary key-value mapping for additional metadata.
-  /// Clients can use this to store additional properties not defined by the
-  /// spec. It is recommended to keep key names unique to avoid conflicts.
-  std::map<std::string, std::string> metadata;
+    /// Environment requirements.
+    ///   Constraints per Agent Skills specification:
+    ///   - 1-500 characters if provided
+    ///   - Should only be included if there are specific compatibility
+    ///   requirements
+    ///   - Can indicate intended product, required packages, etc.
+    std::string compatibility;
 
-  /// Tool names the skill recommends using.
-  /// Warning: this is experimental.
-  /// Constraints per Agent Skills specification:
-  /// - Space-delimited list of tool names
-  std::vector<std::string> allowed_tools;
+    /// Arbitrary key-value mapping for additional metadata.
+    /// Clients can use this to store additional properties not defined by the
+    /// spec. It is recommended to keep key names unique to avoid conflicts.
+    std::map<std::string, std::string> metadata;
 
-  /// SKILL.md text conetnt
-  std::string mdText;
+    /// Tool names the skill recommends using.
+    /// Warning: this is experimental.
+    /// Constraints per Agent Skills specification:
+    /// - Space-delimited list of tool names
+    std::vector<std::string> allowed_tools;
+
+    /// SKILL.md text conetnt
+    std::string mdText;
 };
 
 class _SkillContext {
 public:
-  /// <path, data>
-  std::map<std::string, _SkillMetadata> skillData{};
 
-  /// <path, error>
-  std::map<std::string, std::string> loadErrors{};
+    /// <path, data>
+    std::map<std::string, _SkillMetadata> skillData{};
+
+    /// <path, error>
+    std::map<std::string, std::string> loadErrors{};
 };
 
 class SkillMiddlewareState : public BaseMiddlewareState {
 public:
-  std::string cacheFormatSkillPrompt;
-  _SkillContext skillContext{};
 
-  SkillMiddlewareState() {}
+    std::string   cacheFormatSkillPrompt;
+    _SkillContext skillContext{};
+
+    SkillMiddlewareState() {}
 };
 
-class SkillMiddlewareHandle
-    : public BaseMiddlewareHandle<SkillMiddlewareState> {
+class SkillMiddlewareHandle : public BaseMiddlewareHandle<SkillMiddlewareState> {
 protected:
-  inline static constexpr std::string_view defSkillPromptTemplate =
-      std::string_view{R"_(
+
+    inline static constexpr std::string_view defSkillPromptTemplate = std::string_view{R"_(
 ## Skills System
 
 You have access to a skills library that provides specialized capabilities and domain knowledge.
@@ -119,31 +121,28 @@ User: "Can you analyse the latest developments in quantum computing?"
 Remember: Skills make you more capable and consistent. When in doubt, check if a skill exists for the task!
 )_"};
 
-  /// 初始化后固定，按指定的文件夹扫描 SKILL.md
-  const std::vector<std::string> initSkillDirPaths;
+    /// 初始化后固定，按指定的文件夹扫描 SKILL.md
+    const std::vector<std::string> initSkillDirPaths;
 
-  _SkillContext skillCache{};
-  bool haveLoadSkillMetadata = false;
+    _SkillContext skillCache{};
+    bool          haveLoadSkillMetadata = false;
 
 public:
-  SkillMiddlewareHandle(
-      const std::vector<std::string> &in_initSkillDirPaths,
-      std::weak_ptr<agentxx::agent::AgentContext> in_agentContext)
-      : BaseMiddlewareHandle<SkillMiddlewareState>("SkillMiddlewareHandle",
-                                                   in_agentContext),
+
+    SkillMiddlewareHandle(const std::vector<std::string>&             in_initSkillDirPaths,
+                          std::weak_ptr<agentxx::agent::AgentContext> in_agentContext) :
+        BaseMiddlewareHandle<SkillMiddlewareState>("SkillMiddlewareHandle", in_agentContext),
         initSkillDirPaths(in_initSkillDirPaths) {}
 
-  std::string formatSkillsMetadataList();
+    std::string formatSkillsMetadataList();
 
-  /// <error, metadata>
-  asio::awaitable<std::pair<std::string, agentxx::middleware::_SkillMetadata>>
-  readSkillFile(std::string_view dirpath);
+    /// <error, metadata>
+    asio::awaitable<std::pair<std::string, agentxx::middleware::_SkillMetadata>>
+        readSkillFile(std::string_view dirpath);
 
-  asio::awaitable<void>
-  onAgentcallStartFunc(neograph::graph::NodeInput &in) override;
+    asio::awaitable<void> onAgentcallStartFunc(neograph::graph::NodeInput& in) override;
 
-  asio::awaitable<void>
-  onModelcallStartFunc(neograph::graph::NodeInput &in) override;
+    asio::awaitable<void> onModelcallStartFunc(neograph::graph::NodeInput& in) override;
 };
 
 } // namespace middleware

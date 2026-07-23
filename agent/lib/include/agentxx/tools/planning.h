@@ -26,20 +26,21 @@ namespace tools {
 //   - Helps agent organize complex multi-step work
 class WritePlanningTool : public XXToolBase {
 protected:
-  std::weak_ptr<agentxx::middleware::PlanningMiddlewareHandle> planningContext;
+
+    std::weak_ptr<agentxx::middleware::PlanningMiddlewareHandle> planningContext;
 
 public:
-  WritePlanningTool(std::weak_ptr<agentxx::middleware::PlanningMiddlewareHandle>
-                        in_planningContext,
-                    std::weak_ptr<agentxx::agent::AgentContext> in_agentContext);
 
-  neograph::ChatTool get_definition() const override;
+    WritePlanningTool(
+        std::weak_ptr<agentxx::middleware::PlanningMiddlewareHandle> in_planningContext,
+        std::weak_ptr<agentxx::agent::AgentContext>                  in_agentContext);
 
-  std::optional<agentxx::middleware::SummarizationToolHandle>
-  createSummarizationToolHandle() const override;
+    neograph::ChatTool get_definition() const override;
 
-  asio::awaitable<std::string>
-  execute_async(const neograph::json &arguments) override;
+    std::optional<agentxx::middleware::SummarizationToolHandle>
+        createSummarizationToolHandle() const override;
+
+    asio::awaitable<std::string> execute_async(const neograph::json& arguments) override;
 };
 
 } // namespace tools

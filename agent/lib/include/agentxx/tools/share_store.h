@@ -10,16 +10,15 @@ namespace tools {
 /// TODO: 支持重启恢复
 class ThreadShareStoreTool : public XXToolBase {
 public:
-  ThreadShareStoreTool(
-      std::weak_ptr<agentxx::agent::AgentContext> in_agentContext);
 
-  std::optional<agentxx::middleware::SummarizationToolHandle>
-  createSummarizationToolHandle() const override;
+    ThreadShareStoreTool(std::weak_ptr<agentxx::agent::AgentContext> in_agentContext);
 
-  neograph::ChatTool get_definition() const override;
+    std::optional<agentxx::middleware::SummarizationToolHandle>
+        createSummarizationToolHandle() const override;
 
-  asio::awaitable<std::string>
-  execute_async(const neograph::json &arguments) override;
+    neograph::ChatTool get_definition() const override;
+
+    asio::awaitable<std::string> execute_async(const neograph::json& arguments) override;
 };
 } // namespace tools
 } // namespace agentxx
