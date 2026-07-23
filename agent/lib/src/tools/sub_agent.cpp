@@ -16,9 +16,11 @@
 namespace agentxx {
 namespace tools {
 
-SubAgentTaskBase::SubAgentTaskBase(std::string_view in_subAgentName,
-                                   std::string_view in_subAgentDepict,
-                                   std::string_view in_systemPrompt) :
+SubAgentTaskBase::SubAgentTaskBase(
+    std::string_view in_subAgentName,
+    std::string_view in_subAgentDepict,
+    std::string_view in_systemPrompt
+) :
     name(in_subAgentName),
     depict(in_subAgentDepict),
     systemPrompt(in_systemPrompt) {}
@@ -34,9 +36,11 @@ asio::awaitable<void> SubAgentTaskBase::onSubagentEnd(std::string& result) {
 
 SubAgentTaskBase::~SubAgentTaskBase() {}
 
-SubAgentNormalTask::SubAgentNormalTask(std::string_view                    in_subAgentName,
-                                       std::string_view                    in_subAgentDepict,
-                                       const neograph::graph::NodeContext& in_context) :
+SubAgentNormalTask::SubAgentNormalTask(
+    std::string_view                    in_subAgentName,
+    std::string_view                    in_subAgentDepict,
+    const neograph::graph::NodeContext& in_context
+) :
     SubAgentTaskBase(in_subAgentName, in_subAgentDepict, "") {
     createSubgraph(in_context);
 }
@@ -105,7 +109,8 @@ neograph::json SubAgentNormalTask::defCreateSubGraphDefine() {
 
 SubAgentManagerTool::SubAgentManagerTool(
     std::string_view                            in_nodeName,
-    std::weak_ptr<agentxx::agent::AgentContext> in_agentContext) :
+    std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
+) :
     XXToolBase(in_nodeName, in_agentContext, true, false) {}
 
 std::string SubAgentManagerTool::get_name() const {
@@ -187,8 +192,10 @@ asio::awaitable<std::string> SubAgentManagerTool::execute_async(const neograph::
             subagentNames << item.first;
             isFirst = false;
         }
-        co_return fmt::format(R"({{"error":"Arg `subagent` is not one of [{}]"}})",
-                              subagentNames.str());
+        co_return fmt::format(
+            R"({{"error":"Arg `subagent` is not one of [{}]"}})",
+            subagentNames.str()
+        );
     }
 
     auto agentCtxPtr = agentContext.lock();
@@ -215,7 +222,8 @@ asio::awaitable<std::string> SubAgentManagerTool::execute_async(const neograph::
                 .resultId = resultId,
             };
         },
-        nullptr);
+        nullptr
+    );
 
     // interruptResult 存储的是 {resultId: value} map; 按自身 resultId 提取
     if (result.is_object() && !resultId.empty() && result.contains(resultId)) {

@@ -40,14 +40,16 @@ std::optional<std::string> _defFileReadGenerateKey(const neograph::json& args) {
     auto byte_limit  = args.value<double>("byte_limit", -1);
     auto recursive   = args.value<bool>("recursive", false);
     auto limit       = args.value<int64_t>("limit", 100);
-    return fmt::format("filesystem:{}:lo={}:ll={}:bo={}:bl={}:r={}:l={}",
-                       path,
-                       line_offset,
-                       line_limit,
-                       byte_offset,
-                       byte_limit,
-                       recursive,
-                       limit);
+    return fmt::format(
+        "filesystem:{}:lo={}:ll={}:bo={}:bl={}:r={}:l={}",
+        path,
+        line_offset,
+        line_limit,
+        byte_offset,
+        byte_limit,
+        recursive,
+        limit
+    );
 }
 
 std::optional<std::string> _defFileWriteGenerateKey(const neograph::json& args) {
@@ -66,8 +68,8 @@ void _defTruncateToolcallResponse(neograph::ChatMessage& msg) {
     msg.flags   |= neograph::MessageFlag::ShareStoreTruncated | neograph::MessageFlag::Outdated;
 }
 
-FileSystemListTool::FileSystemListTool(
-    std::weak_ptr<agentxx::agent::AgentContext> in_agentContext) :
+FileSystemListTool::FileSystemListTool(std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
+) :
     XXToolBase("filesystem_list", in_agentContext, false, false) {}
 
 neograph::ChatTool FileSystemListTool::get_definition() const {
@@ -134,12 +136,14 @@ asio::awaitable<std::string> FileSystemListTool::execute_async(const neograph::j
 
             auto sys_time = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
                 file_time - std::filesystem::file_time_type::clock::now()
-                + std::chrono::system_clock::now());
+                + std::chrono::system_clock::now()
+            );
 
             // 提取 Unix 秒数
             auto unixtime = static_cast<size_t>(
                 std::chrono::duration_cast<std::chrono::seconds>(sys_time.time_since_epoch())
-                    .count());
+                    .count()
+            );
             auto json = neograph::json{
                 {"path", entity.path().generic_string()},
                 {"type",
@@ -190,7 +194,8 @@ asio::awaitable<std::string> FileSystemListTool::execute_async(const neograph::j
 }
 
 FilesystemReadTextFileTool::FilesystemReadTextFileTool(
-    std::weak_ptr<agentxx::agent::AgentContext> in_agentContext) :
+    std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
+) :
     XXToolBase("filesystem_read_text_file", in_agentContext, false, false) {}
 
 neograph::ChatTool FilesystemReadTextFileTool::get_definition() const {
@@ -277,7 +282,8 @@ asio::awaitable<std::string>
                     stream,
                     asio::dynamic_buffer(buf),
                     '\n',
-                    asio::redirect_error(asio::use_awaitable, errCode));
+                    asio::redirect_error(asio::use_awaitable, errCode)
+                );
 
                 if (errCode == asio::error::eof) {
                     if (lineNum >= offset) {
@@ -302,7 +308,8 @@ asio::awaitable<std::string>
                 throw std::runtime_error{fmt::format(
                     R"(Arg `line_offset`({} lines) is out of range of file lines({} lines).)",
                     offset,
-                    lineNum)};
+                    lineNum
+                )};
             }
 
             auto rawStr = result.str();
@@ -314,10 +321,12 @@ asio::awaitable<std::string>
 
         // 读取完整文件
         std::string data;
-        co_await asio::async_read(stream,
-                                  asio::dynamic_buffer(data),
-                                  asio::transfer_all(),
-                                  asio::redirect_error(asio::use_awaitable, errCode));
+        co_await asio::async_read(
+            stream,
+            asio::dynamic_buffer(data),
+            asio::transfer_all(),
+            asio::redirect_error(asio::use_awaitable, errCode)
+        );
         if (errCode && errCode != asio::error::eof) {
             throw std::system_error{errCode};
         }
@@ -362,7 +371,8 @@ asio::awaitable<std::string>
                 throw std::runtime_error{fmt::format(
                     R"(Arg `line_offset`({} lines) is out of range of file lines({} lines).)",
                     offset,
-                    lineNum)};
+                    lineNum
+                )};
             }
 
             auto rawStr = result.str();
@@ -384,7 +394,8 @@ asio::awaitable<std::string>
 }
 
 FilesystemReadBinaryFileTool::FilesystemReadBinaryFileTool(
-    std::weak_ptr<agentxx::agent::AgentContext> in_agentContext) :
+    std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
+) :
     XXToolBase("filesystem_read_binary_file", in_agentContext, false, false) {}
 
 neograph::ChatTool FilesystemReadBinaryFileTool::get_definition() const {
@@ -457,8 +468,8 @@ asio::awaitable<std::string>
             neograph_asio_error_code errCode;
             stream.open(systemCharsetFilePath, asio::random_access_file::read_only, errCode);
             if (false == stream.is_open()) {
-                throw std::runtime_error{
-                    fmt::format(R"(Can not open file: {}")", errCode.message())};
+                throw std::runtime_error{fmt::format(R"(Can not open file: {}")", errCode.message())
+                };
             }
 
             // 读取部分文件
@@ -468,24 +479,28 @@ asio::awaitable<std::string>
 
             auto fileSize       = stream.size();
             auto bytesAvailable = std::max((int64_t)fileSize - (int64_t)offset, (int64_t)0);
-            auto bytesRead      = std::min(static_cast<std::streamsize>(limit),
-                                      static_cast<std::streamsize>(bytesAvailable));
+            auto bytesRead      = std::min(
+                static_cast<std::streamsize>(limit),
+                static_cast<std::streamsize>(bytesAvailable)
+            );
 
             // 没有数据可读
             if (bytesRead <= 0) {
-                throw std::runtime_error{
-                    fmt::format(R"(Arg `byte_offset`({}) is out of range of file size({}).)",
-                                offset,
-                                static_cast<size_t>(fileSize))};
+                throw std::runtime_error{fmt::format(
+                    R"(Arg `byte_offset`({}) is out of range of file size({}).)",
+                    offset,
+                    static_cast<size_t>(fileSize)
+                )};
             }
 
             std::string result;
             result.resize(bytesRead);
-            auto bytesReadLen
-                = co_await asio::async_read_at(stream,
-                                               offset,
-                                               asio::buffer(result, bytesRead),
-                                               asio::redirect_error(asio::use_awaitable, errCode));
+            auto bytesReadLen = co_await asio::async_read_at(
+                stream,
+                offset,
+                asio::buffer(result, bytesRead),
+                asio::redirect_error(asio::use_awaitable, errCode)
+            );
             if (errCode && errCode != asio::error::eof) {
                 throw std::system_error{errCode};
             }
@@ -508,11 +523,12 @@ asio::awaitable<std::string>
         }
 
         std::string result;
-        auto        bytesReadLen
-            = co_await asio::async_read(stream,
-                                        asio::dynamic_buffer(result),
-                                        asio::transfer_all(),
-                                        asio::redirect_error(asio::use_awaitable, errCode));
+        auto        bytesReadLen = co_await asio::async_read(
+            stream,
+            asio::dynamic_buffer(result),
+            asio::transfer_all(),
+            asio::redirect_error(asio::use_awaitable, errCode)
+        );
         if (errCode && errCode != asio::error::eof) {
             throw std::system_error{errCode};
         }
@@ -546,22 +562,26 @@ asio::awaitable<std::string>
             // 计算实际需要读取的字节数
             size_t fileSize       = static_cast<size_t>(std::filesystem::file_size(filepath));
             auto   bytesAvailable = std::max((int64_t)fileSize - (int64_t)offset, (int64_t)0);
-            auto   bytesRead      = std::min(static_cast<std::streamsize>(limit),
-                                      static_cast<std::streamsize>(bytesAvailable));
+            auto   bytesRead      = std::min(
+                static_cast<std::streamsize>(limit),
+                static_cast<std::streamsize>(bytesAvailable)
+            );
 
             // 没有数据可读
             if (bytesRead <= 0) {
-                throw std::runtime_error{
-                    fmt::format(R"(Arg `byte_offset`({}) is out of range of file size({}).)",
-                                offset,
-                                fileSize)};
+                throw std::runtime_error{fmt::format(
+                    R"(Arg `byte_offset`({}) is out of range of file size({}).)",
+                    offset,
+                    fileSize
+                )};
             }
 
             stream.seekg(offset, std::ios::beg);
             if (!stream.good()) {
                 auto ec = std::error_code{errno, std::system_category()};
                 throw std::runtime_error{
-                    fmt::format(R"(Read offset {} bytes failed. Error: {})", offset, ec.message())};
+                    fmt::format(R"(Read offset {} bytes failed. Error: {})", offset, ec.message())
+                };
             }
 
             std::string result;
@@ -578,8 +598,10 @@ asio::awaitable<std::string>
         }
 
         // 读取完整文件
-        auto result       = std::string((std::istreambuf_iterator<char>(stream)),
-                                  std::istreambuf_iterator<char>());
+        auto result = std::string(
+            (std::istreambuf_iterator<char>(stream)),
+            std::istreambuf_iterator<char>()
+        );
         auto bytesReadLen = result.size();
         stream.close();
         co_return neograph::json{
@@ -591,7 +613,8 @@ asio::awaitable<std::string>
 }
 
 FilesystemWriteFileTool::FilesystemWriteFileTool(
-    std::weak_ptr<agentxx::agent::AgentContext> in_agentContext) :
+    std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
+) :
     XXToolBase("filesystem_write_file", in_agentContext, false, false) {}
 
 neograph::ChatTool FilesystemWriteFileTool::get_definition() const {
@@ -649,8 +672,8 @@ std::optional<agentxx::middleware::SummarizationToolHandle>
     };
 }
 
-asio::awaitable<std::string>
-    FilesystemWriteFileTool::execute_async(const neograph::json& arguments) {
+asio::awaitable<std::string> FilesystemWriteFileTool::execute_async(const neograph::json& arguments
+) {
     auto filepath
         = agentxx::util::toCurrentSystemStandardPath(arguments.value("path", std::string{}));
     if (filepath.empty()) {
@@ -675,15 +698,18 @@ asio::awaitable<std::string>
         if (false == std::filesystem::exists(path.parent_path())
             && false == std::filesystem::create_directories(path.parent_path())) {
             // 创建父目录
-            throw std::runtime_error{fmt::format(R"(Can not create `path`({})'s parent dirs.)",
-                                                 path.parent_path().generic_string())};
+            throw std::runtime_error{fmt::format(
+                R"(Can not create `path`({})'s parent dirs.)",
+                path.parent_path().generic_string()
+            )};
         }
 
         neograph_asio_error_code errCode;
-        stream.open(systemCharsetFilePath,
-                    asio::stream_file::write_only | asio::stream_file::create
-                        | asio::stream_file::truncate,
-                    errCode);
+        stream.open(
+            systemCharsetFilePath,
+            asio::stream_file::write_only | asio::stream_file::create | asio::stream_file::truncate,
+            errCode
+        );
         if (false == stream.is_open()) {
             throw std::runtime_error{fmt::format(R"(Can not open file: {}")", errCode.message())};
         }
@@ -695,13 +721,17 @@ asio::awaitable<std::string>
                 if (result.empty()) {
                     throw std::runtime_error{"base64 decode failed"};
                 }
-                co_await asio::async_write(stream,
-                                           asio::buffer(result),
-                                           asio::redirect_error(asio::use_awaitable, errCode));
+                co_await asio::async_write(
+                    stream,
+                    asio::buffer(result),
+                    asio::redirect_error(asio::use_awaitable, errCode)
+                );
             } else {
-                co_await asio::async_write(stream,
-                                           asio::buffer(content),
-                                           asio::redirect_error(asio::use_awaitable, errCode));
+                co_await asio::async_write(
+                    stream,
+                    asio::buffer(content),
+                    asio::redirect_error(asio::use_awaitable, errCode)
+                );
             }
             if (errCode) {
                 throw std::system_error{errCode};
@@ -722,17 +752,22 @@ asio::awaitable<std::string>
         if (false == std::filesystem::exists(path.parent_path())
             && false == std::filesystem::create_directories(path.parent_path())) {
             // 创建父目录
-            throw std::runtime_error{fmt::format(R"(Can not create `path`({})'s parent dirs.)",
-                                                 path.parent_path().generic_string())};
+            throw std::runtime_error{fmt::format(
+                R"(Can not create `path`({})'s parent dirs.)",
+                path.parent_path().generic_string()
+            )};
         }
 
-        stream.open(systemCharsetFilePath,
-                    is_binary ? std::ios_base::out | std::ios_base::binary | std::ios_base::trunc
-                              : std::ios_base::out | std::ios_base::trunc);
+        stream.open(
+            systemCharsetFilePath,
+            is_binary ? std::ios_base::out | std::ios_base::binary | std::ios_base::trunc
+                      : std::ios_base::out | std::ios_base::trunc
+        );
         if (!stream) {
             auto ec = std::error_code{errno, std::system_category()};
             throw std::runtime_error{
-                fmt::format(R"(Can not create or open file. Error: {})", ec.message())};
+                fmt::format(R"(Can not create or open file. Error: {})", ec.message())
+            };
         }
 
         if (false == content.empty()) {
@@ -748,9 +783,10 @@ asio::awaitable<std::string>
             }
             if (!stream) {
                 auto ec = std::error_code{errno, std::system_category()};
-                throw std::runtime_error{
-                    fmt::format(R"(File created success, but write failed. Error: {})",
-                                ec.message())};
+                throw std::runtime_error{fmt::format(
+                    R"(File created success, but write failed. Error: {})",
+                    ec.message()
+                )};
             }
         }
 
@@ -760,7 +796,8 @@ asio::awaitable<std::string>
 }
 
 FilesystemEditTextFileTool::FilesystemEditTextFileTool(
-    std::weak_ptr<agentxx::agent::AgentContext> in_agentContext) :
+    std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
+) :
     XXToolBase("filesystem_edit_text_file", in_agentContext, false, false) {}
 
 neograph::ChatTool FilesystemEditTextFileTool::get_definition() const {
@@ -854,10 +891,12 @@ asio::awaitable<std::string>
 
         std::string content;
         // 读出文件
-        co_await asio::async_read(stream,
-                                  asio::dynamic_buffer(content),
-                                  asio::transfer_all(),
-                                  asio::redirect_error(asio::use_awaitable, errCode));
+        co_await asio::async_read(
+            stream,
+            asio::dynamic_buffer(content),
+            asio::transfer_all(),
+            asio::redirect_error(asio::use_awaitable, errCode)
+        );
         if (errCode && errCode != asio::error::eof) {
             throw std::system_error{errCode};
         }
@@ -877,21 +916,26 @@ asio::awaitable<std::string>
 
         if (0 == replaceHit) {
             throw std::runtime_error{
-                R"(No match `old_str` found, Try re-reading to get the latest file content.)"};
+                R"(No match `old_str` found, Try re-reading to get the latest file content.)"
+            };
         }
 
         // 覆盖写入文件内容
-        stream.open(systemCharsetFilePath,
-                    asio::stream_file::write_only | asio::stream_file::create
-                        | asio::stream_file::truncate,
-                    errCode);
+        stream.open(
+            systemCharsetFilePath,
+            asio::stream_file::write_only | asio::stream_file::create | asio::stream_file::truncate,
+            errCode
+        );
         if (false == stream.is_open()) {
             throw std::runtime_error{
-                fmt::format(R"(Can not open file to write: {}")", errCode.message())};
+                fmt::format(R"(Can not open file to write: {}")", errCode.message())
+            };
         }
-        co_await asio::async_write(stream,
-                                   asio::buffer(content),
-                                   asio::redirect_error(asio::use_awaitable, errCode));
+        co_await asio::async_write(
+            stream,
+            asio::buffer(content),
+            asio::redirect_error(asio::use_awaitable, errCode)
+        );
         if (errCode) {
             throw std::system_error{errCode};
         }
@@ -936,7 +980,8 @@ asio::awaitable<std::string>
 
         if (0 == replaceHit) {
             throw std::runtime_error{
-                R"(No match `old_str` found, Try re-reading to get the latest file content.)"};
+                R"(No match `old_str` found, Try re-reading to get the latest file content.)"
+            };
         }
 
         // 写入文件内容
@@ -945,7 +990,8 @@ asio::awaitable<std::string>
         if (!stream) {
             auto ec = std::error_code{errno, std::system_category()};
             throw std::runtime_error{
-                fmt::format(R"(Can not open file to write. Error: {})", ec.message())};
+                fmt::format(R"(Can not open file to write. Error: {})", ec.message())
+            };
         }
         stream << content;
         if (!stream) {
@@ -962,8 +1008,8 @@ asio::awaitable<std::string>
     }
 }
 
-FilesystemGlobTool::FilesystemGlobTool(
-    std::weak_ptr<agentxx::agent::AgentContext> in_agentContext) :
+FilesystemGlobTool::FilesystemGlobTool(std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
+) :
     XXToolBase("filesystem_glob", in_agentContext, false, false) {}
 
 neograph::ChatTool FilesystemGlobTool::get_definition() const {
@@ -1015,8 +1061,8 @@ asio::awaitable<std::string> FilesystemGlobTool::execute_async(const neograph::j
     co_return result.str();
 }
 
-FilesystemGrepTool::FilesystemGrepTool(
-    std::weak_ptr<agentxx::agent::AgentContext> in_agentContext) :
+FilesystemGrepTool::FilesystemGrepTool(std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
+) :
     XXToolBase("filesystem_grep", in_agentContext, false, false) {}
 
 neograph::ChatTool FilesystemGrepTool::get_definition() const {
@@ -1087,15 +1133,18 @@ asio::awaitable<std::string> FilesystemGrepTool::readFileContent(const std::stri
         stream.open(systemCharsetFilePath, asio::stream_file::read_only, errCode);
         if (false == stream.is_open()) {
             throw std::runtime_error{
-                fmt::format(R"(Can not open file. Error: {})", errCode.message())};
+                fmt::format(R"(Can not open file. Error: {})", errCode.message())
+            };
         }
 
         // 读取完整文件
         std::string data;
-        co_await asio::async_read(stream,
-                                  asio::dynamic_buffer(data),
-                                  asio::transfer_all(),
-                                  asio::redirect_error(asio::use_awaitable, errCode));
+        co_await asio::async_read(
+            stream,
+            asio::dynamic_buffer(data),
+            asio::transfer_all(),
+            asio::redirect_error(asio::use_awaitable, errCode)
+        );
         if (errCode && errCode != asio::error::eof) {
             throw std::system_error{errCode};
         }
@@ -1141,9 +1190,11 @@ asio::awaitable<std::string> FilesystemGrepTool::execute_async(const neograph::j
 
     std::vector<std::filesystem::path> refilelist{};
     auto                               relist = glob::rglob(file_patterns);
-    refilelist.insert(refilelist.end(),
-                      std::make_move_iterator(relist.begin()),
-                      std::make_move_iterator(relist.end()));
+    refilelist.insert(
+        refilelist.end(),
+        std::make_move_iterator(relist.begin()),
+        std::make_move_iterator(relist.end())
+    );
     if (refilelist.empty()) {
         throw std::runtime_error{"No match `file_patterns` file found"};
     }
@@ -1177,8 +1228,8 @@ asio::awaitable<std::string> FilesystemGrepTool::execute_async(const neograph::j
 
                         matchsContent.push_back(neograph::json{
                             {"content",
-                             std::string_view{filetext}.substr(match.start,
-                             match.end - match.start)},
+                             std::string_view{filetext}.substr(match.start, match.end - match.start)
+                            },
                             {"line", lineCount},
                         });
                         index = match.start;
@@ -1235,19 +1286,21 @@ asio::awaitable<std::string> FilesystemGrepTool::execute_async(const neograph::j
         if (false == str.empty()) {
             co_return str;
         } else {
-            throw std::runtime_error{
-                fmt::format("Found {} files match `file_patterns`, but no match "
-                            "`text_patterns` file found.",
-                            refilelist.size())};
+            throw std::runtime_error{fmt::format(
+                "Found {} files match `file_patterns`, but no match "
+                "`text_patterns` file found.",
+                refilelist.size()
+            )};
         }
     } else {
         if (false == resultJson.empty()) {
             co_return resultJson.dump();
         } else {
-            throw std::runtime_error{
-                fmt::format("Found {} files match `file_patterns`, but no match "
-                            "`text_patterns` file found.",
-                            refilelist.size())};
+            throw std::runtime_error{fmt::format(
+                "Found {} files match `file_patterns`, but no match "
+                "`text_patterns` file found.",
+                refilelist.size()
+            )};
         }
     }
 }

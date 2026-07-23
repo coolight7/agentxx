@@ -76,12 +76,14 @@ public:
             return {};
         }
 
-        return doCaptureScreen(monitorInfo.rcMonitor.left,
-                               monitorInfo.rcMonitor.top,
-                               monitorInfo.rcMonitor.right - monitorInfo.rcMonitor.left,
-                               monitorInfo.rcMonitor.bottom - monitorInfo.rcMonitor.top,
-                               screenIndex,
-                               hMonitor);
+        return doCaptureScreen(
+            monitorInfo.rcMonitor.left,
+            monitorInfo.rcMonitor.top,
+            monitorInfo.rcMonitor.right - monitorInfo.rcMonitor.left,
+            monitorInfo.rcMonitor.bottom - monitorInfo.rcMonitor.top,
+            screenIndex,
+            hMonitor
+        );
     }
 
     ScreenFrame captureScreen(int screenIndex) {
@@ -104,20 +106,24 @@ public:
             return {};
         }
 
-        return doCaptureScreen(monitorInfo.rcMonitor.left,
-                               monitorInfo.rcMonitor.top,
-                               monitorInfo.rcMonitor.right - monitorInfo.rcMonitor.left,
-                               monitorInfo.rcMonitor.bottom - monitorInfo.rcMonitor.top,
-                               screenIndex,
-                               hMonitor);
+        return doCaptureScreen(
+            monitorInfo.rcMonitor.left,
+            monitorInfo.rcMonitor.top,
+            monitorInfo.rcMonitor.right - monitorInfo.rcMonitor.left,
+            monitorInfo.rcMonitor.bottom - monitorInfo.rcMonitor.top,
+            screenIndex,
+            hMonitor
+        );
     }
 
     int getScreenCount() const {
         int count = 0;
-        EnumDisplayMonitors(nullptr,
-                            nullptr,
-                            monitorCountEnumProc,
-                            reinterpret_cast<LPARAM>(&count));
+        EnumDisplayMonitors(
+            nullptr,
+            nullptr,
+            monitorCountEnumProc,
+            reinterpret_cast<LPARAM>(&count)
+        );
         return count;
     }
 
@@ -190,28 +196,32 @@ private:
         createFlags |= D3D11_CREATE_DEVICE_DEBUG;
 #endif
 
-        HRESULT hr = D3D11CreateDevice(nullptr,
-                                       D3D_DRIVER_TYPE_HARDWARE,
-                                       nullptr,
-                                       createFlags,
-                                       nullptr,
-                                       0,
-                                       D3D11_SDK_VERSION,
-                                       device.GetAddressOf(),
-                                       &featureLevel,
-                                       context.GetAddressOf());
+        HRESULT hr = D3D11CreateDevice(
+            nullptr,
+            D3D_DRIVER_TYPE_HARDWARE,
+            nullptr,
+            createFlags,
+            nullptr,
+            0,
+            D3D11_SDK_VERSION,
+            device.GetAddressOf(),
+            &featureLevel,
+            context.GetAddressOf()
+        );
 
         if (FAILED(hr)) {
-            hr = D3D11CreateDevice(nullptr,
-                                   D3D_DRIVER_TYPE_WARP,
-                                   nullptr,
-                                   createFlags,
-                                   nullptr,
-                                   0,
-                                   D3D11_SDK_VERSION,
-                                   device.GetAddressOf(),
-                                   &featureLevel,
-                                   context.GetAddressOf());
+            hr = D3D11CreateDevice(
+                nullptr,
+                D3D_DRIVER_TYPE_WARP,
+                nullptr,
+                createFlags,
+                nullptr,
+                0,
+                D3D11_SDK_VERSION,
+                device.GetAddressOf(),
+                &featureLevel,
+                context.GetAddressOf()
+            );
         }
 
         if (FAILED(hr)) {
@@ -264,9 +274,11 @@ private:
             ComPtr<IDXGIOutputDuplication> duplication;
             hr = dxgiOutput1->DuplicateOutput(device.Get(), duplication.GetAddressOf());
             if (FAILED(hr)) {
-                XX_LOGW("ScreenCapture: DuplicateOutput failed for screen {} (hr=0x{:08X})",
-                        screenIndex,
-                        static_cast<unsigned>(hr));
+                XX_LOGW(
+                    "ScreenCapture: DuplicateOutput failed for screen {} (hr=0x{:08X})",
+                    screenIndex,
+                    static_cast<unsigned>(hr)
+                );
                 dxgiMonitors_[screenIndex].duplicationFailed = true;
                 dxgiOutput.Reset();
                 continue;
@@ -332,9 +344,8 @@ private:
 
         ComPtr<IDXGIResource>   desktopResource;
         DXGI_OUTDUPL_FRAME_INFO frameInfo = {};
-        HRESULT                 hr        = dxgiState.duplication->AcquireNextFrame(100,
-                                                             &frameInfo,
-                                                             desktopResource.GetAddressOf());
+        HRESULT                 hr        = dxgiState.duplication
+                         ->AcquireNextFrame(100, &frameInfo, desktopResource.GetAddressOf());
 
         if (hr == DXGI_ERROR_WAIT_TIMEOUT) {
             return frame;
@@ -342,8 +353,10 @@ private:
 
         if (FAILED(hr)) {
             if (hr == DXGI_ERROR_ACCESS_LOST) {
-                XX_LOGW("ScreenCapture: DXGI access lost for screen {}, reinitializing",
-                        screenIndex);
+                XX_LOGW(
+                    "ScreenCapture: DXGI access lost for screen {}, reinitializing",
+                    screenIndex
+                );
                 dxgiState.duplication.Reset();
                 dxgiState.stagingTexture.Reset();
             }
@@ -364,7 +377,6 @@ private:
 
         if (!dxgiState.stagingTexture || dxgiState.lastWidth != static_cast<int>(texDesc.Width)
             || dxgiState.lastHeight != static_cast<int>(texDesc.Height)) {
-
             D3D11_TEXTURE2D_DESC stagingDesc = {};
             stagingDesc.Width                = texDesc.Width;
             stagingDesc.Height               = texDesc.Height;
@@ -376,9 +388,11 @@ private:
             stagingDesc.CPUAccessFlags       = D3D11_CPU_ACCESS_READ;
 
             dxgiState.stagingTexture.Reset();
-            hr = d3dDevice_->CreateTexture2D(&stagingDesc,
-                                             nullptr,
-                                             dxgiState.stagingTexture.GetAddressOf());
+            hr = d3dDevice_->CreateTexture2D(
+                &stagingDesc,
+                nullptr,
+                dxgiState.stagingTexture.GetAddressOf()
+            );
             if (FAILED(hr)) {
                 dxgiState.duplication->ReleaseFrame();
                 frame.width = 0;
@@ -408,9 +422,11 @@ private:
         int            destRowPitch = width * 4;
 
         for (int row = 0; row < height; ++row) {
-            memcpy(frame.pixelData.data() + row * destRowPitch,
-                   src + row * srcRowPitch,
-                   destRowPitch);
+            memcpy(
+                frame.pixelData.data() + row * destRowPitch,
+                src + row * srcRowPitch,
+                destRowPitch
+            );
         }
 
         d3dContext_->Unmap(dxgiState.stagingTexture.Get(), 0);
@@ -499,13 +515,15 @@ private:
         int pixelDataSize = width * height * 4;
         frame.pixelData.resize(pixelDataSize);
 
-        if (!GetDIBits(gdiCache_.memDC,
-                       gdiCache_.bitmap,
-                       0,
-                       height,
-                       frame.pixelData.data(),
-                       &bmi,
-                       DIB_RGB_COLORS)) {
+        if (!GetDIBits(
+                gdiCache_.memDC,
+                gdiCache_.bitmap,
+                0,
+                height,
+                frame.pixelData.data(),
+                &bmi,
+                DIB_RGB_COLORS
+            )) {
             XX_LOGE("ScreenCapture: GetDIBits failed");
             frame.pixelData.clear();
         }
@@ -535,10 +553,12 @@ private:
         }
     }
 
-    static BOOL CALLBACK monitorCountEnumProc(HMONITOR /*hMonitor*/,
-                                              HDC /*hdcMonitor*/,
-                                              LPRECT /*lprcMonitor*/,
-                                              LPARAM dwData) {
+    static BOOL CALLBACK monitorCountEnumProc(
+        HMONITOR /*hMonitor*/,
+        HDC /*hdcMonitor*/,
+        LPRECT /*lprcMonitor*/,
+        LPARAM dwData
+    ) {
         int* count = reinterpret_cast<int*>(dwData);
         (*count)++;
         return TRUE;
@@ -550,10 +570,12 @@ private:
         HMONITOR result;
     };
 
-    static BOOL CALLBACK monitorEnumProc(HMONITOR hMonitor,
-                                         HDC /*hdcMonitor*/,
-                                         LPRECT /*lprcMonitor*/,
-                                         LPARAM dwData) {
+    static BOOL CALLBACK monitorEnumProc(
+        HMONITOR hMonitor,
+        HDC /*hdcMonitor*/,
+        LPRECT /*lprcMonitor*/,
+        LPARAM dwData
+    ) {
         MonitorEnumData* data = reinterpret_cast<MonitorEnumData*>(dwData);
         if (data->currentIndex == data->targetIndex) {
             data->result = hMonitor;
@@ -575,10 +597,12 @@ private:
         int      result;
     };
 
-    static BOOL CALLBACK monitorIndexEnumProc(HMONITOR hMonitor,
-                                              HDC /*hdcMonitor*/,
-                                              LPRECT /*lprcMonitor*/,
-                                              LPARAM dwData) {
+    static BOOL CALLBACK monitorIndexEnumProc(
+        HMONITOR hMonitor,
+        HDC /*hdcMonitor*/,
+        LPRECT /*lprcMonitor*/,
+        LPARAM dwData
+    ) {
         MonitorIndexData* data = reinterpret_cast<MonitorIndexData*>(dwData);
         if (hMonitor == data->target) {
             data->result = data->currentIndex;
@@ -590,10 +614,12 @@ private:
 
     int getMonitorIndex(HMONITOR hMonitor) const {
         MonitorIndexData data = {hMonitor, 0, -1};
-        EnumDisplayMonitors(nullptr,
-                            nullptr,
-                            monitorIndexEnumProc,
-                            reinterpret_cast<LPARAM>(&data));
+        EnumDisplayMonitors(
+            nullptr,
+            nullptr,
+            monitorIndexEnumProc,
+            reinterpret_cast<LPARAM>(&data)
+        );
         return data.result;
     }
 

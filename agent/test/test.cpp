@@ -178,7 +178,8 @@ int main(int argn, char** argv) {
             co_await run("deepagent", agentxx::test::run_deepagent_tests);
             ioCtx.stop();
         },
-        asio::detached);
+        asio::detached
+    );
     ioCtx.run();
 
     // ---- 同步平台相关测试 ----

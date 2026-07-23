@@ -33,22 +33,25 @@ public:
 
     std::string get_name() const override;
 
-    asio::awaitable<neograph::ChatCompletion> invoke(const neograph::CompletionParams& params,
-                                                     neograph::StreamCallback          on_chunk
-                                                     = nullptr) override;
+    asio::awaitable<neograph::ChatCompletion> invoke(
+        const neograph::CompletionParams& params,
+        neograph::StreamCallback          on_chunk = nullptr
+    ) override;
 
-    asio::awaitable<neograph::ChatCompletion>
-        invoke_format_data(const neograph::CompletionParams&  params,
-                           neograph::FormatDataStreamCallback on_chunk = nullptr) override;
+    asio::awaitable<neograph::ChatCompletion> invoke_format_data(
+        const neograph::CompletionParams&  params,
+        neograph::FormatDataStreamCallback on_chunk = nullptr
+    ) override;
 
     // --- Public static helpers (exposed for unit testing) ---
 
     /// Convert neograph messages to Anthropic format.
     /// Returns {system_string, messages_json_array}.
     /// @param sendThinking 是否携带 thinking 内容块
-    static std::pair<std::string, neograph::json>
-        convertMessages(const std::vector<neograph::ChatMessage>& messages,
-                        bool                                      sendThinking = false);
+    static std::pair<std::string, neograph::json> convertMessages(
+        const std::vector<neograph::ChatMessage>& messages,
+        bool                                      sendThinking = false
+    );
 
     /// Convert neograph tools to Anthropic format.
     static neograph::json convertTools(const std::vector<neograph::ChatTool>& tools);
@@ -57,13 +60,15 @@ public:
     static neograph::ChatCompletion parseResponse(const neograph::json& resp);
 
     /// Process Anthropic SSE buffer.
-    static void processSseBuffer(std::string&                       buf,
-                                 neograph::ChatCompletion&          completion,
-                                 std::string&                       fullContent,
-                                 std::string&                       fullThinking,
-                                 std::map<int, neograph::ToolCall>& tcMap,
-                                 std::map<int, std::string>&        blockTypes,
-                                 neograph::FormatDataStreamCallback on_chunk) {
+    static void processSseBuffer(
+        std::string&                       buf,
+        neograph::ChatCompletion&          completion,
+        std::string&                       fullContent,
+        std::string&                       fullThinking,
+        std::map<int, neograph::ToolCall>& tcMap,
+        std::map<int, std::string>&        blockTypes,
+        neograph::FormatDataStreamCallback on_chunk
+    ) {
         size_t pos;
         while ((pos = buf.find("\n\n")) != std::string::npos) {
             std::string block = buf.substr(0, pos);
@@ -123,7 +128,8 @@ public:
                             if (on_chunk) {
                                 on_chunk(neograph::ChatStreamChunk{
                                     neograph::ChatStreamChunk::TYPE_CONTENT,
-                                    text});
+                                    text
+                                });
                             }
                         } else if (deltaType == "thinking_delta") {
                             auto thinking  = j["delta"].value("thinking", std::string{});
@@ -131,7 +137,8 @@ public:
                             if (on_chunk) {
                                 on_chunk(neograph::ChatStreamChunk{
                                     neograph::ChatStreamChunk::TYPE_THINKING,
-                                    thinking});
+                                    thinking
+                                });
                             }
                         } else if (deltaType == "input_json_delta") {
                             auto partialJson      = j["delta"].value("partial_json", std::string{});
@@ -168,30 +175,35 @@ private:
 
     static ParsedEndpoint parseEndpoint(const std::string& base_url);
 
-    asio::awaitable<neograph::ChatCompletion>
-        completeAsync(const neograph::CompletionParams& params);
+    asio::awaitable<neograph::ChatCompletion> completeAsync(const neograph::CompletionParams& params
+    );
 
-    asio::awaitable<neograph::ChatCompletion> doStream(const neograph::CompletionParams&  params,
-                                                       const neograph::json&              body,
-                                                       neograph::FormatDataStreamCallback on_chunk);
+    asio::awaitable<neograph::ChatCompletion> doStream(
+        const neograph::CompletionParams&  params,
+        const neograph::json&              body,
+        neograph::FormatDataStreamCallback on_chunk
+    );
 
     template<typename Stream>
-    asio::awaitable<void> readSseStream(Stream&                               stream,
-                                        std::chrono::steady_clock::time_point deadline,
-                                        std::chrono::seconds                  readTimeout,
-                                        neograph::ChatCompletion&             completion,
-                                        std::string&                          fullContent,
-                                        std::string&                          fullThinking,
-                                        std::map<int, neograph::ToolCall>&    tcMap,
-                                        std::map<int, std::string>&           blockTypes,
-                                        std::string&                          lineBuffer,
-                                        neograph::FormatDataStreamCallback    on_chunk) {
+    asio::awaitable<void> readSseStream(
+        Stream&                               stream,
+        std::chrono::steady_clock::time_point deadline,
+        std::chrono::seconds                  readTimeout,
+        neograph::ChatCompletion&             completion,
+        std::string&                          fullContent,
+        std::string&                          fullThinking,
+        std::map<int, neograph::ToolCall>&    tcMap,
+        std::map<int, std::string>&           blockTypes,
+        std::string&                          lineBuffer,
+        neograph::FormatDataStreamCallback    on_chunk
+    ) {
         namespace http = boost::beast::http;
 
         auto rem = [&] {
             auto d = deadline - std::chrono::steady_clock::now();
             return std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::max(d, std::chrono::steady_clock::duration::zero()));
+                std::max(d, std::chrono::steady_clock::duration::zero())
+            );
         };
 
         boost::beast::flat_buffer                buf;
@@ -199,16 +211,20 @@ private:
         parser.body_limit(std::numeric_limits<uint64_t>::max());
         parser.eager(true);
 
-        co_await http::async_read_header(stream,
-                                         buf,
-                                         parser,
-                                         asio::cancel_after(rem(), asio::use_awaitable));
+        co_await http::async_read_header(
+            stream,
+            buf,
+            parser,
+            asio::cancel_after(rem(), asio::use_awaitable)
+        );
 
         if (parser.get().result_int() == 429) {
-            co_await http::async_read(stream,
-                                      buf,
-                                      parser,
-                                      asio::cancel_after(rem(), asio::use_awaitable));
+            co_await http::async_read(
+                stream,
+                buf,
+                parser,
+                asio::cancel_after(rem(), asio::use_awaitable)
+            );
             auto resp       = parser.release();
             auto raw        = resp[http::field::retry_after];
             int  retryAfter = -1;
@@ -223,13 +239,16 @@ private:
         }
 
         if (parser.get().result_int() != 200) {
-            co_await http::async_read(stream,
-                                      buf,
-                                      parser,
-                                      asio::cancel_after(rem(), asio::use_awaitable));
+            co_await http::async_read(
+                stream,
+                buf,
+                parser,
+                asio::cancel_after(rem(), asio::use_awaitable)
+            );
             auto resp = parser.release();
-            throw std::runtime_error("API error (HTTP " + std::to_string(resp.result_int())
-                                     + "): " + resp.body());
+            throw std::runtime_error(
+                "API error (HTTP " + std::to_string(resp.result_int()) + "): " + resp.body()
+            );
         }
 
         size_t                    processed = 0;
@@ -239,7 +258,8 @@ private:
                 stream,
                 buf,
                 parser,
-                asio::cancel_after(readTimeout, asio::redirect_error(asio::use_awaitable, ec)));
+                asio::cancel_after(readTimeout, asio::redirect_error(asio::use_awaitable, ec))
+            );
             if (ec) {
                 break;
             }
@@ -247,23 +267,27 @@ private:
             if (body.size() > processed) {
                 lineBuffer += body.substr(processed);
                 processed   = body.size();
-                processSseBuffer(lineBuffer,
-                                 completion,
-                                 fullContent,
-                                 fullThinking,
-                                 tcMap,
-                                 blockTypes,
-                                 on_chunk);
+                processSseBuffer(
+                    lineBuffer,
+                    completion,
+                    fullContent,
+                    fullThinking,
+                    tcMap,
+                    blockTypes,
+                    on_chunk
+                );
             }
         }
         if (!lineBuffer.empty()) {
-            processSseBuffer(lineBuffer,
-                             completion,
-                             fullContent,
-                             fullThinking,
-                             tcMap,
-                             blockTypes,
-                             on_chunk);
+            processSseBuffer(
+                lineBuffer,
+                completion,
+                fullContent,
+                fullThinking,
+                tcMap,
+                blockTypes,
+                on_chunk
+            );
         }
     }
 

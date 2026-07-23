@@ -69,10 +69,11 @@ public:
         bool           interrupted = false;
     };
 
-    using InterruptCallback
-        = std::function<asio::awaitable<void>(const std::string& interruptNode,
-                                              const std::string& interruptValue,
-                                              const std::string& interruptHandleName)>;
+    using InterruptCallback = std::function<asio::awaitable<void>(
+        const std::string& interruptNode,
+        const std::string& interruptValue,
+        const std::string& interruptHandleName
+    )>;
 
     /// 选择指定会话 modelcall 使用的模型 (运行时切换, 按 thread_id 隔离)
     /// - modelName 为空或不存在时不改变该会话的选择
@@ -89,7 +90,8 @@ public:
         std::shared_ptr<AgentIOBase>                            io,
         std::function<void(const neograph::graph::GraphEvent&)> eventCallback,
         InterruptCallback                                       interruptCallback = nullptr,
-        const std::string&                                      modelName         = "");
+        const std::string&                                      modelName         = ""
+    );
 
     ~DeepAgent();
 
@@ -106,19 +108,21 @@ public:
     /// - messages: list of chat messages (system + user)
     /// - callback: optional event callback, nullptr if not needed
     /// - returns: full collected output content
-    asio::awaitable<std::string>
-        runNonStreamAsync(const std::string&                                      threadId,
-                          const std::vector<neograph::ChatMessage>&               messages,
-                          std::function<void(const neograph::graph::GraphEvent&)> callback
-                          = nullptr,
-                          const std::string& modelName = "");
+    asio::awaitable<std::string> runNonStreamAsync(
+        const std::string&                                      threadId,
+        const std::vector<neograph::ChatMessage>&               messages,
+        std::function<void(const neograph::graph::GraphEvent&)> callback  = nullptr,
+        const std::string&                                      modelName = ""
+    );
 
     /// Run agent with a single user input and optional custom system prompt
     /// Convenience wrapper that builds messages automatically
-    asio::awaitable<std::string> runSingleInputAsync(const std::string& threadId,
-                                                     const std::string& userInput,
-                                                     const std::string& systemPrompt = "",
-                                                     const std::string& modelName    = "");
+    asio::awaitable<std::string> runSingleInputAsync(
+        const std::string& threadId,
+        const std::string& userInput,
+        const std::string& systemPrompt = "",
+        const std::string& modelName    = ""
+    );
 
     /// Run a simple completion with just messages (for subagent
     /// scoring/optimization) Returns the full content as a string (collects all
@@ -128,9 +132,10 @@ public:
         neograph::graph::RunResult fullResult;
     };
 
-    asio::awaitable<SimpleRunResult>
-        runStreamAsync(const std::vector<neograph::ChatMessage>& messages,
-                       const std::string&                        modelName = "");
+    asio::awaitable<SimpleRunResult> runStreamAsync(
+        const std::vector<neograph::ChatMessage>& messages,
+        const std::string&                        modelName = ""
+    );
 };
 
 } // namespace agent

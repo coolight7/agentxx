@@ -13,15 +13,19 @@ StdinReader::StdinReader(asio::any_io_executor ex) :
         std::string line;
         while (running_) {
             if (std::getline(std::cin, line)) {
-                channel_->async_send(neograph_asio_error_code{},
-                                     std::move(line),
-                                     [](neograph_asio_error_code) {});
+                channel_->async_send(
+                    neograph_asio_error_code{},
+                    std::move(line),
+                    [](neograph_asio_error_code) {}
+                );
             } else {
                 // EOF 或错误: 标记 eof, 并发一个 cancel 消息唤醒等待中的 readLine
                 eof_ = true;
-                channel_->async_send(asio::experimental::channel_errc::channel_cancelled,
-                                     std::string{},
-                                     [](neograph_asio_error_code) {});
+                channel_->async_send(
+                    asio::experimental::channel_errc::channel_cancelled,
+                    std::string{},
+                    [](neograph_asio_error_code) {}
+                );
                 break;
             }
         }

@@ -33,7 +33,8 @@ public:
 
     WritePlanningTool(
         std::weak_ptr<agentxx::middleware::PlanningMiddlewareHandle> in_planningContext,
-        std::weak_ptr<agentxx::agent::AgentContext>                  in_agentContext);
+        std::weak_ptr<agentxx::agent::AgentContext>                  in_agentContext
+    );
 
     neograph::ChatTool get_definition() const override;
 

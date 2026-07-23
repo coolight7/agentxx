@@ -28,17 +28,20 @@ asio::awaitable<void> test_subagent_bus_request_response() {
 
     // 注册模拟 server
     auto& rr = agentContext->bus->getRR<events::ReqSubagentStart, events::RespSubagentResult>(
-        events::Topic::Subagent);
-    rr.serve([](const events::ReqSubagentStart& req,
-                size_t corrId) -> asio::awaitable<events::RespSubagentResult> {
-        XX_TEST_EXPECT_TRUE(corrId > 0);
-        XX_TEST_EXPECT_EQ(req.subagentName, std::string{"research"});
-        XX_TEST_EXPECT_EQ(req.message, std::string{"find foo"});
-        XX_TEST_EXPECT_EQ(req.resultId, std::string{"call_1"});
-        co_return events::RespSubagentResult{
-            .content = fmt::format("result_for_{}", req.subagentName),
-        };
-    });
+        events::Topic::Subagent
+    );
+    rr.serve(
+        [](const events::ReqSubagentStart& req,
+           size_t                          corrId) -> asio::awaitable<events::RespSubagentResult> {
+            XX_TEST_EXPECT_TRUE(corrId > 0);
+            XX_TEST_EXPECT_EQ(req.subagentName, std::string{"research"});
+            XX_TEST_EXPECT_EQ(req.message, std::string{"find foo"});
+            XX_TEST_EXPECT_EQ(req.resultId, std::string{"call_1"});
+            co_return events::RespSubagentResult{
+                .content = fmt::format("result_for_{}", req.subagentName),
+            };
+        }
+    );
 
     auto resp
         = co_await agentContext->bus->request<events::ReqSubagentStart, events::RespSubagentResult>(
@@ -51,7 +54,8 @@ asio::awaitable<void> test_subagent_bus_request_response() {
                 .message         = "find foo",
                 .resultId        = "call_1",
             },
-            std::chrono::seconds(5));
+            std::chrono::seconds(5)
+        );
 
     XX_TEST_EXPECT_TRUE(resp.has_value());
     if (resp.has_value()) {
@@ -90,7 +94,8 @@ asio::awaitable<void> test_subagent_progress_events() {
             .agentName  = "research",
             .kind       = "token",
             .data       = "Hello",
-        });
+        }
+    );
     co_await agentContext->bus->publish<events::EventSubagentProgress>(
         events::Topic::SubagentProgress,
         events::EventSubagentProgress{
@@ -98,7 +103,8 @@ asio::awaitable<void> test_subagent_progress_events() {
             .agentName  = "research",
             .kind       = "token",
             .data       = " World",
-        });
+        }
+    );
 
     XX_TEST_EXPECT_EQ(tokenCount.load(), 2);
     XX_TEST_EXPECT_EQ(lastToken, std::string{" World"});
@@ -132,7 +138,8 @@ asio::awaitable<void> test_subagent_supervisor_notfound() {
                 .message         = "test",
                 .resultId        = "call_1",
             },
-            std::chrono::seconds(5));
+            std::chrono::seconds(5)
+        );
 
     XX_TEST_EXPECT_TRUE(resp.has_value());
     if (resp.has_value()) {
@@ -151,14 +158,16 @@ asio::awaitable<void> test_subagent_bus_timeout() {
 
     // 注册一个永不响应的 server
     auto& rr = agentContext->bus->getRR<events::ReqSubagentStart, events::RespSubagentResult>(
-        events::Topic::Subagent);
+        events::Topic::Subagent
+    );
     rr.serve(
         [](const events::ReqSubagentStart&, size_t) -> asio::awaitable<events::RespSubagentResult> {
             auto timer
                 = asio::steady_timer(co_await asio::this_coro::executor, std::chrono::seconds(1));
             co_await timer.async_wait(asio::use_awaitable);
             co_return events::RespSubagentResult{.content = "too late"};
-        });
+        }
+    );
 
     auto resp
         = co_await agentContext->bus->request<events::ReqSubagentStart, events::RespSubagentResult>(
@@ -171,7 +180,8 @@ asio::awaitable<void> test_subagent_bus_timeout() {
                 .message         = "m",
                 .resultId        = "r",
             },
-            std::chrono::milliseconds(200));
+            std::chrono::milliseconds(200)
+        );
 
     XX_TEST_EXPECT_TRUE(!resp.has_value());
 

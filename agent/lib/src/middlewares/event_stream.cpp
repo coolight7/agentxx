@@ -3,8 +3,10 @@
 namespace agentxx {
 namespace middleware {
 
-EventStreamInterface::EventStreamInterface(std::string_view      in_name,
-                                           const std::type_info& elementType) :
+EventStreamInterface::EventStreamInterface(
+    std::string_view      in_name,
+    const std::type_info& elementType
+) :
     name(in_name),
     elementType_(elementType) {}
 
@@ -20,11 +22,12 @@ bool EventBus::remove(std::string_view topic) {
     return true;
 }
 
-neograph::graph::GraphStreamCallback
-    EventBridge::make(std::string                                 agentName,
-                      std::string                                 threadId,
-                      std::weak_ptr<agentxx::agent::AgentContext> ctx,
-                      neograph::graph::GraphStreamCallback        origCb) {
+neograph::graph::GraphStreamCallback EventBridge::make(
+    std::string                                 agentName,
+    std::string                                 threadId,
+    std::weak_ptr<agentxx::agent::AgentContext> ctx,
+    neograph::graph::GraphStreamCallback        origCb
+) {
     return [agentName = std::move(agentName),
             threadId  = std::move(threadId),
             ctx       = std::move(ctx),
@@ -44,8 +47,7 @@ neograph::graph::GraphStreamCallback
 
         using T = neograph::graph::GraphEvent::Type;
         switch (event.type) {
-        case T::LLM_TOKEN:
-            {
+            case T::LLM_TOKEN: {
                 std::string token;
                 std::string kind = "content";
                 if (event.data.is_string()) {
@@ -67,11 +69,8 @@ neograph::graph::GraphStreamCallback
                 // 若未来订阅者变重或需跨线程, 可改为 post + 专用读取协程批处理
                 asio::co_spawn(
                     bus.executor(),
-                    [busPtr,
-                     agentName,
-                     threadId,
-                     token = std::move(token),
-                     kind  = std::move(kind)]() -> asio::awaitable<void> {
+                    [busPtr, agentName, threadId, token = std::move(token), kind = std::move(kind)](
+                    ) -> asio::awaitable<void> {
                         co_await busPtr->publish<agentxx::events::EventModelToken>(
                             agentxx::events::Topic::ModelToken,
                             agentxx::events::EventModelToken{
@@ -79,28 +78,28 @@ neograph::graph::GraphStreamCallback
                                 .threadId  = threadId,
                                 .token     = token,
                                 .kind      = kind,
-                            });
+                            }
+                        );
                     },
-                    asio::detached);
-            }
-            break;
-        case T::NODE_START:
-            // 暂不发布细粒度节点事件; 后续按需扩展 ModelCallStart/ToolCallStart
-            break;
-        case T::NODE_END:
-            break;
-        case T::CHANNEL_WRITE:
-            break;
-        case T::INTERRUPT:
-            break;
-        case T::ERROR:
-            {
+                    asio::detached
+                );
+            } break;
+            case T::NODE_START:
+                // 暂不发布细粒度节点事件; 后续按需扩展 ModelCallStart/ToolCallStart
+                break;
+            case T::NODE_END:
+                break;
+            case T::CHANNEL_WRITE:
+                break;
+            case T::INTERRUPT:
+                break;
+            case T::ERROR: {
                 auto msg
                     = event.data.is_string() ? event.data.get<std::string>() : event.data.dump();
                 asio::co_spawn(
                     bus.executor(),
-                    [busPtr, agentName, threadId, msg = std::move(msg), where = event.node_name]()
-                        -> asio::awaitable<void> {
+                    [busPtr, agentName, threadId, msg = std::move(msg), where = event.node_name](
+                    ) -> asio::awaitable<void> {
                         co_await busPtr->publish<agentxx::events::EventError>(
                             agentxx::events::Topic::Error,
                             agentxx::events::EventError{
@@ -108,11 +107,12 @@ neograph::graph::GraphStreamCallback
                                 .threadId  = threadId,
                                 .message   = msg,
                                 .where     = where,
-                            });
+                            }
+                        );
                     },
-                    asio::detached);
-            }
-            break;
+                    asio::detached
+                );
+            } break;
         }
     };
 }

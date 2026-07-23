@@ -74,8 +74,8 @@ asio::awaitable<void>
     co_return;
 }
 
-asio::awaitable<void>
-    test_list_file_basic(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+asio::awaitable<void> test_list_file_basic(std::weak_ptr<agentxx::agent::AgentContext> agentContext
+) {
     auto tool = agentxx::tools::FileSystemListTool{agentContext};
     auto args = neograph::json{
         {"path", testDir}
@@ -113,8 +113,8 @@ asio::awaitable<void>
     co_return;
 }
 
-asio::awaitable<void>
-    test_list_file_limit(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+asio::awaitable<void> test_list_file_limit(std::weak_ptr<agentxx::agent::AgentContext> agentContext
+) {
     auto tool = agentxx::tools::FileSystemListTool{agentContext};
     auto args = neograph::json{
         {"path",  testDir},
@@ -389,8 +389,10 @@ asio::awaitable<void>
     if (result == "success") {
         if (std::filesystem::exists(filePath)) {
             std::ifstream in(filePath);
-            std::string   content((std::istreambuf_iterator<char>(in)),
-                                std::istreambuf_iterator<char>());
+            std::string   content(
+                (std::istreambuf_iterator<char>(in)),
+                std::istreambuf_iterator<char>()
+            );
             if (content == "hello write test") {
                 g_fs_passed++;
                 TEST_PASS << "FilesystemWriteFileTool creates and writes file" << std::endl;
@@ -410,8 +412,9 @@ asio::awaitable<void>
     co_return;
 }
 
-asio::awaitable<void> test_write_file_no_overwrite_existing(
-    std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+asio::awaitable<void>
+    test_write_file_no_overwrite_existing(std::weak_ptr<agentxx::agent::AgentContext> agentContext
+    ) {
     auto tool     = agentxx::tools::FilesystemWriteFileTool{agentContext};
     auto filePath = testDir + "/test1.txt";
     auto args     = neograph::json{
@@ -642,8 +645,8 @@ asio::awaitable<void>
     co_return;
 }
 
-asio::awaitable<void>
-    test_glob_find_files(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+asio::awaitable<void> test_glob_find_files(std::weak_ptr<agentxx::agent::AgentContext> agentContext
+) {
     auto tool = agentxx::tools::FilesystemGlobTool{agentContext};
     auto args = neograph::json{
         {"file_patterns", neograph::json::array({testDir + "/*.txt"})},
@@ -660,8 +663,8 @@ asio::awaitable<void>
     co_return;
 }
 
-asio::awaitable<void>
-    test_glob_recursive(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+asio::awaitable<void> test_glob_recursive(std::weak_ptr<agentxx::agent::AgentContext> agentContext
+) {
     auto tool = agentxx::tools::FilesystemGlobTool{agentContext};
     auto args = neograph::json{
         {"file_patterns", neograph::json::array({testDir + "/**/*.txt"})},
@@ -731,8 +734,8 @@ asio::awaitable<void>
     co_return;
 }
 
-asio::awaitable<void>
-    test_grep_text_search(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+asio::awaitable<void> test_grep_text_search(std::weak_ptr<agentxx::agent::AgentContext> agentContext
+) {
     auto tool = agentxx::tools::FilesystemGrepTool{agentContext};
     auto args = neograph::json{
         {"text_patterns_is_regex", false                                      },

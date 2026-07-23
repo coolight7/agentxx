@@ -126,7 +126,8 @@ public:
     /// handler receives an SseWriter to push events incrementally.
     void addSseRoute(
         const std::string&                                                         path,
-        std::function<asio::awaitable<void>(Request&, std::shared_ptr<SseWriter>)> handler);
+        std::function<asio::awaitable<void>(Request&, std::shared_ptr<SseWriter>)> handler
+    );
 
 private:
 
@@ -162,7 +163,8 @@ private:
             boost::system::error_code ec;
             boost::beast::get_lowest_layer(stream_).socket().shutdown(
                 asio::ip::tcp::socket::shutdown_send,
-                ec);
+                ec
+            );
             co_return;
         }
 
@@ -173,9 +175,11 @@ private:
                 if (!headerSent_) {
                     co_return co_await writeWithHeader(data);
                 }
-                co_await asio::async_write(stream_,
-                                           asio::buffer(data),
-                                           asio::cancel_after(timeout_, asio::use_awaitable));
+                co_await asio::async_write(
+                    stream_,
+                    asio::buffer(data),
+                    asio::cancel_after(timeout_, asio::use_awaitable)
+                );
                 co_return true;
             } catch (const boost::system::system_error& e) {
                 if (e.code() != asio::error::operation_aborted) {
@@ -201,9 +205,11 @@ private:
             resp.chunked(true);
             resp.body() = std::string(data);
             resp.prepare_payload();
-            co_await http::async_write(stream_,
-                                       resp,
-                                       asio::cancel_after(timeout_, asio::use_awaitable));
+            co_await http::async_write(
+                stream_,
+                resp,
+                asio::cancel_after(timeout_, asio::use_awaitable)
+            );
             co_return true;
         }
     };
@@ -237,7 +243,8 @@ private:
     // -----------------------------------------------------------------------
 
     asio::awaitable<void> sslHandshakeAndServe(
-        std::shared_ptr<boost::beast::ssl_stream<boost::beast::tcp_stream>> stream);
+        std::shared_ptr<boost::beast::ssl_stream<boost::beast::tcp_stream>> stream
+    );
 
     // -----------------------------------------------------------------------
     // Session handler (template – works with tcp_stream & ssl_stream)
@@ -266,7 +273,8 @@ private:
                     stream,
                     buffer,
                     parser,
-                    asio::cancel_after(config_.requestTimeout, asio::use_awaitable));
+                    asio::cancel_after(config_.requestTimeout, asio::use_awaitable)
+                );
                 req = parser.release();
             } catch (const boost::system::system_error& e) {
                 if (e.code() == http::error::end_of_stream || e.code() == asio::error::eof
@@ -296,7 +304,8 @@ private:
                 co_await http::async_write(
                     stream,
                     errResp,
-                    asio::cancel_after(std::chrono::seconds(5), asio::use_awaitable));
+                    asio::cancel_after(std::chrono::seconds(5), asio::use_awaitable)
+                );
                 break;
             }
 
@@ -318,9 +327,10 @@ private:
                 auto sseIt = sseRoutes_.find(path);
                 if (sseIt != sseRoutes_.end()) {
                     try {
-                        auto writer
-                            = std::make_shared<SseWriterImpl<Stream>>(stream,
-                                                                      std::chrono::seconds{30});
+                        auto writer = std::make_shared<SseWriterImpl<Stream>>(
+                            stream,
+                            std::chrono::seconds{30}
+                        );
                         co_await sseIt->second(req, writer);
                         handled = true;
                         // SSE streaming handled, skip normal response write
@@ -329,14 +339,18 @@ private:
                         // We'll set a flag and break out
                         break;
                     } catch (const std::exception& e) {
-                        XX_LOGE("[server] SSE handler error [{} {}]: {}",
-                                req.method_string(),
-                                req.target(),
-                                e.what());
-                        fillError(resp,
-                                  req.version(),
-                                  http::status::internal_server_error,
-                                  "Internal Server Error");
+                        XX_LOGE(
+                            "[server] SSE handler error [{} {}]: {}",
+                            req.method_string(),
+                            req.target(),
+                            e.what()
+                        );
+                        fillError(
+                            resp,
+                            req.version(),
+                            http::status::internal_server_error,
+                            "Internal Server Error"
+                        );
                     }
                 }
             }
@@ -348,14 +362,18 @@ private:
                         co_await (*handler)(req, resp, matchedPath);
                         handled = true;
                     } catch (const std::exception& e) {
-                        XX_LOGE("[server] Handler error [{} {}]: {}",
-                                req.method_string(),
-                                req.target(),
-                                e.what());
-                        fillError(resp,
-                                  req.version(),
-                                  http::status::internal_server_error,
-                                  "Internal Server Error");
+                        XX_LOGE(
+                            "[server] Handler error [{} {}]: {}",
+                            req.method_string(),
+                            req.target(),
+                            e.what()
+                        );
+                        fillError(
+                            resp,
+                            req.version(),
+                            http::status::internal_server_error,
+                            "Internal Server Error"
+                        );
                     }
                 }
             }
@@ -373,10 +391,12 @@ private:
                     }
                 }
                 if (hasAnyRoute) {
-                    fillError(resp,
-                              req.version(),
-                              http::status::method_not_allowed,
-                              "Method Not Allowed");
+                    fillError(
+                        resp,
+                        req.version(),
+                        http::status::method_not_allowed,
+                        "Method Not Allowed"
+                    );
                     resp.set(http::field::allow, "GET, HEAD, POST, PUT, DELETE, PATCH, OPTIONS");
                 } else {
                     fillError(resp, req.version(), http::status::not_found, "Not Found");
@@ -402,15 +422,18 @@ private:
             co_await http::async_write(
                 stream,
                 resp,
-                asio::cancel_after(config_.requestTimeout, asio::use_awaitable));
+                asio::cancel_after(config_.requestTimeout, asio::use_awaitable)
+            );
 
             // Per-request access log (compiled out in release via XX_LOGI)
             if (config_.accessLogEnabled) {
-                XX_LOGI("{} {} -> {} ({})",
-                        req.method_string(),
-                        req.target(),
-                        resp.result_int(),
-                        resp.body().size());
+                XX_LOGI(
+                    "{} {} -> {} ({})",
+                    req.method_string(),
+                    req.target(),
+                    resp.result_int(),
+                    resp.body().size()
+                );
             }
 
         } while (keepAlive && !stopped_);
@@ -419,17 +442,20 @@ private:
         ec = {};
         boost::beast::get_lowest_layer(stream).socket().shutdown(
             asio::ip::tcp::socket::shutdown_send,
-            ec);
+            ec
+        );
     }
 
     // -----------------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------------
 
-    static void fillError(Response&                  resp,
-                          unsigned                   version,
-                          boost::beast::http::status status,
-                          std::string_view           message);
+    static void fillError(
+        Response&                  resp,
+        unsigned                   version,
+        boost::beast::http::status status,
+        std::string_view           message
+    );
 
     // -----------------------------------------------------------------------
     // Per-thread worker: each owns a private io_context — zero-lock isolation
@@ -453,8 +479,9 @@ private:
     std::atomic<size_t>                      nextWorker_{0};
 
     /// SSE streaming routes (GET only) — keyed by path
-    std::unordered_map<std::string,
-                       std::function<asio::awaitable<void>(Request&, std::shared_ptr<SseWriter>)>>
+    std::unordered_map<
+        std::string,
+        std::function<asio::awaitable<void>(Request&, std::shared_ptr<SseWriter>)>>
         sseRoutes_;
 };
 

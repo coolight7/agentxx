@@ -55,34 +55,47 @@ asio::awaitable<void> DeepAgent::init() {
         /// register Node
         neograph::graph::NodeFactory::instance().register_type(
             std::string{agentxx::nodes::AgentStartCallWrapNode::defNodeType},
-            [this](const std::string& name,
-                   const neograph::json&,
-                   const neograph::graph::NodeContext& ctx) {
+            [this](
+                const std::string& name,
+                const neograph::json&,
+                const neograph::graph::NodeContext& ctx
+            ) {
                 return std::make_unique<agentxx::nodes::AgentStartCallWrapNode>(name, agentContext);
-            });
+            }
+        );
         neograph::graph::NodeFactory::instance().register_type(
             std::string{agentxx::nodes::MiddlewareWrapAgentEndCallNode::defNodeType},
-            [this](const std::string& name,
-                   const neograph::json&,
-                   const neograph::graph::NodeContext& ctx) {
+            [this](
+                const std::string& name,
+                const neograph::json&,
+                const neograph::graph::NodeContext& ctx
+            ) {
                 return std::make_unique<agentxx::nodes::MiddlewareWrapAgentEndCallNode>(
                     name,
-                    agentContext);
-            });
+                    agentContext
+                );
+            }
+        );
         neograph::graph::NodeFactory::instance().register_type(
             std::string{agentxx::nodes::ModelCallWrapNode::defNodeType},
-            [this](const std::string& name,
-                   const neograph::json&,
-                   const neograph::graph::NodeContext& ctx) {
+            [this](
+                const std::string& name,
+                const neograph::json&,
+                const neograph::graph::NodeContext& ctx
+            ) {
                 return std::make_unique<agentxx::nodes::ModelCallWrapNode>(name, ctx, agentContext);
-            });
+            }
+        );
         neograph::graph::NodeFactory::instance().register_type(
             std::string{agentxx::nodes::ToolcallWrapNode::defNodeType},
-            [this](const std::string& name,
-                   const neograph::json&,
-                   const neograph::graph::NodeContext& ctx) {
+            [this](
+                const std::string& name,
+                const neograph::json&,
+                const neograph::graph::NodeContext& ctx
+            ) {
                 return std::make_unique<agentxx::nodes::ToolcallWrapNode>(name, ctx, agentContext);
-            });
+            }
+        );
     }
 
     /// middleware
@@ -97,12 +110,14 @@ asio::awaitable<void> DeepAgent::init() {
             agentContext->permissionMiddleware
                 = std::make_shared<agentxx::middleware::PermissionMiddlewareHandle>(agentContext);
             agentContext->middlewareHandleContext->handles.push_back(
-                agentContext->permissionMiddleware);
+                agentContext->permissionMiddleware
+            );
         }
         {
             auto skillMiddleware = std::make_shared<agentxx::middleware::SkillMiddlewareHandle>(
                 config->skillDirPaths,
-                agentContext);
+                agentContext
+            );
             // skillMiddleware->toolcalls.push_back(
             //     std::make_unique<agentxx::tools::SkillTool>(agentContext));
             agentContext->middlewareHandleContext->handles.push_back(skillMiddleware);
@@ -111,15 +126,19 @@ asio::awaitable<void> DeepAgent::init() {
             summarizationMiddleware
                 = std::make_shared<agentxx::middleware::SummarizationMiddlewareHandle>(
                     subagentManagerTool.get(),
-                    agentContext);
+                    agentContext
+                );
             agentContext->middlewareHandleContext->handles.push_back(summarizationMiddleware);
         }
         {
             auto planningMiddleware
                 = std::make_shared<agentxx::middleware::PlanningMiddlewareHandle>(agentContext);
             planningMiddleware->toolcalls.push_back(
-                std::make_unique<agentxx::tools::WritePlanningTool>(planningMiddleware,
-                                                                    agentContext));
+                std::make_unique<agentxx::tools::WritePlanningTool>(
+                    planningMiddleware,
+                    agentContext
+                )
+            );
             agentContext->middlewareHandleContext->handles.push_back(planningMiddleware);
         }
 
@@ -132,19 +151,20 @@ asio::awaitable<void> DeepAgent::init() {
                 (agentxx::middleware::onGraphNodeBeforeCallFunc) nullptr,
                 (agentxx::middleware::onGraphNodeAfterCallFunc) nullptr,
                 (agentxx::middleware::onGraphNodeBeforeCallFunc) nullptr,
-                [config = agentContext->agentConfig](
-                    neograph::graph::NodeInput& in) -> asio::awaitable<void> {
+                [config = agentContext->agentConfig](neograph::graph::NodeInput& in
+                ) -> asio::awaitable<void> {
                     if (config->logPrintMessagesBeforeLLM) {
                         agentxx::middleware::BaseMiddlewareHandleInterface::printMessages(
                             in.state.get_messages(),
-                            config->logPrintMessagesBeforeLLMWithSystemMsg);
+                            config->logPrintMessagesBeforeLLMWithSystemMsg
+                        );
                     }
                     co_return;
                 },
                 (agentxx::middleware::onGraphNodeAfterCallFunc) nullptr,
                 [ctx    = std::weak_ptr<AgentContext>(agentContext),
-                 config = agentContext->agentConfig](
-                    neograph::graph::NodeInput& in) -> asio::awaitable<void> {
+                 config = agentContext->agentConfig](neograph::graph::NodeInput& in
+                ) -> asio::awaitable<void> {
                     if (config->logPringToolcall) {
                         co_await agentxx::nodes::ToolcallWrapNode::defStdoutLogOnToolcallStart(in);
                     }
@@ -168,11 +188,13 @@ asio::awaitable<void> DeepAgent::init() {
                 [ctx    = std::weak_ptr<AgentContext>(agentContext),
                  config = agentContext->agentConfig](
                     const neograph::graph::NodeInput& in,
-                    neograph::graph::NodeOutput&      result) -> asio::awaitable<void> {
+                    neograph::graph::NodeOutput&      result
+                ) -> asio::awaitable<void> {
                     if (config->logPringToolcall) {
                         co_await agentxx::nodes::ToolcallWrapNode::defStdoutLogOnToolcallEnd(
                             in,
-                            result);
+                            result
+                        );
                     }
                     // 转发 toolcall 结果到会话 IO (供 TUI 等展示)
                     if (auto ctxPtr = ctx.lock()) {
@@ -198,16 +220,20 @@ asio::awaitable<void> DeepAgent::init() {
                                     } catch (...) {
                                         // 非 JSON 结果, 不视为错误
                                     }
-                                    io->onToolEnd(jm.value("tool_name", std::string{}),
-                                                  jm.value("tool_call_id", std::string{}),
-                                                  content,
-                                                  hasError);
+                                    io->onToolEnd(
+                                        jm.value("tool_name", std::string{}),
+                                        jm.value("tool_call_id", std::string{}),
+                                        content,
+                                        hasError
+                                    );
                                 }
                             }
                         }
                     }
                     co_return;
-                }));
+                }
+            )
+        );
     }
 
     /// Toolcall
@@ -216,9 +242,11 @@ asio::awaitable<void> DeepAgent::init() {
         /// middleware tools
         for (auto& item : agentContext->middlewareHandleContext->handles) {
             if (false == item->toolcalls.empty()) {
-                tools.insert(tools.end(),
-                             std::make_move_iterator(item->toolcalls.begin()),
-                             std::make_move_iterator(item->toolcalls.end()));
+                tools.insert(
+                    tools.end(),
+                    std::make_move_iterator(item->toolcalls.begin()),
+                    std::make_move_iterator(item->toolcalls.end())
+                );
             }
         }
     }
@@ -233,20 +261,22 @@ asio::awaitable<void> DeepAgent::init() {
                         .protocolVersion
                         = std::string{agentxx::server::McpClient::kProtocol2025_11_25},
                         .toolNamespace = mcpNamespace,
-                    });
+                    }
+                );
                 auto result = co_await mcpClient->initialize();
                 if (result.has_value()) {
                     auto mcpTools = co_await mcpClient->listTools();
                     if (mcpTools.has_value()) {
                         for (auto& tool : mcpTools.value()) {
-                            // TODO: 重名检查
                             tools.push_back(mcpClient->createTool(std::move(tool), agentContext));
                         }
                     } else {
-                        XX_LOGE("list mcp tool error: {} | {} | {}",
-                                mcpNamespace,
-                                url,
-                                mcpTools.error());
+                        XX_LOGE(
+                            "list mcp tool error: {} | {} | {}",
+                            mcpNamespace,
+                            url,
+                            mcpTools.error()
+                        );
                     }
                 } else {
                     XX_LOGE("load mcp tool error: {} | {} | {}", mcpNamespace, url, result.error());
@@ -268,8 +298,8 @@ asio::awaitable<void> DeepAgent::init() {
         tools.push_back(std::make_unique<agentxx::tools::ThreadShareStoreTool>(agentContext));
         tools.push_back(std::make_unique<agentxx::tools::FileSystemListTool>(agentContext));
         tools.push_back(std::make_unique<agentxx::tools::FilesystemReadTextFileTool>(agentContext));
-        tools.push_back(
-            std::make_unique<agentxx::tools::FilesystemReadBinaryFileTool>(agentContext));
+        tools.push_back(std::make_unique<agentxx::tools::FilesystemReadBinaryFileTool>(agentContext)
+        );
         tools.push_back(std::make_unique<agentxx::tools::FilesystemWriteFileTool>(agentContext));
         tools.push_back(std::make_unique<agentxx::tools::FilesystemEditTextFileTool>(agentContext));
         tools.push_back(std::make_unique<agentxx::tools::FilesystemGlobTool>(agentContext));
@@ -287,34 +317,39 @@ asio::awaitable<void> DeepAgent::init() {
         tools.push_back(std::make_unique<agentxx::tools::WebFetchUrlMarkdownTool>(agentContext));
         if (config->websearchModel.has_value()) {
             // 使用模型进行网络搜索
-            tools.push_back(
-                std::make_unique<agentxx::tools::ModelWebSearchTool>(config->websearchModel.value(),
-                                                                     agentContext));
+            tools.push_back(std::make_unique<agentxx::tools::ModelWebSearchTool>(
+                config->websearchModel.value(),
+                agentContext
+            ));
         } else if (false == config->websearchApiUrl.empty()) {
             tools.push_back(std::make_unique<agentxx::tools::WebSearchTool>(
                 config->websearchApiUrl,
                 config->websearchConvertHtml2markdown,
-                agentContext));
+                agentContext
+            ));
         }
 
         if (false == config->ragDocsPaths.empty()) {
-            auto client
-                = std::make_shared<agentxx::tools::EmbeddingClient>(config->model.baseUrl,
-                                                                    config->model.apiKey,
-                                                                    config->model.modelName);
+            auto client = std::make_shared<agentxx::tools::EmbeddingClient>(
+                config->model.baseUrl,
+                config->model.apiKey,
+                config->model.modelName
+            );
             auto docsStore = std::make_shared<agentxx::tools::RAGSearchTool::VectorStore>(client);
             auto docs      = co_await docsStore->scanDocument(config->ragDocsPaths);
             auto docxSize  = docs.size();
             auto isAddSuccess = co_await docsStore->addDocuments(std::move(docs));
-            XX_LOGD(R"_(
+            XX_LOGD(
+                R"_(
 ┏━━━━━━ RAG Embedding ━━━━━━┓
 {}
 ┗━━━━━━ RAG Embedding ━━━━━━┛
 )_",
-                    isAddSuccess ? fmt::format("┣━ ✅ success: append {} docs", docxSize)
-                                 : "┣━ ❌ failed");
-            tools.push_back(
-                std::make_unique<agentxx::tools::RAGSearchTool>(docsStore, agentContext));
+                isAddSuccess ? fmt::format("┣━ ✅ success: append {} docs", docxSize)
+                             : "┣━ ❌ failed"
+            );
+            tools.push_back(std::make_unique<agentxx::tools::RAGSearchTool>(docsStore, agentContext)
+            );
         }
 
 #if XX_IS_WIN_D
@@ -323,8 +358,8 @@ asio::awaitable<void> DeepAgent::init() {
 #elif XX_IS_LINUX_D
         tools.push_back(std::make_unique<agentxx::tools::ExecuteLinuxCommandTool>(agentContext));
         if (agentxx::util::isRunningInWSL()) {
-            tools.push_back(
-                std::make_unique<agentxx::tools::ExecuteWindowsCommandTool>(agentContext));
+            tools.push_back(std::make_unique<agentxx::tools::ExecuteWindowsCommandTool>(agentContext
+            ));
         }
 #elif XX_IS_MACOS_D
         tools.push_back(std::make_unique<agentxx::tools::ExecuteLinuxCommandTool>(agentContext));
@@ -358,7 +393,9 @@ asio::awaitable<void> DeepAgent::init() {
                     std::make_shared<agentxx::tools::SubAgentNormalTask>(
                         nodeName,
                         R"(Create a isolation messages context sub agent to exec. (need system prompt))",
-                        nodeContext)));
+                        nodeContext
+                    )
+                ));
             }
             // {
             //   // tool_skill_search
@@ -439,18 +476,21 @@ asio::awaitable<void> DeepAgent::init() {
     //                               |
     //                               v
     //                            __end__
+
+    // clang-format off
     auto graphDefinition = neograph::json{
         {"name", config->agentName},
         {
-         "channels", {
+            "channels", {
                 {"messages", {{"reducer", "append"}}},
                 {
                     agentxx::middleware::MiddlewareContext::channel_savedGraphData,
                     {{"reducer", "overwrite"}},
                 },
-            }, },
+            }, 
+        },
         {
-         "nodes", {
+            "nodes", {
                 {
                     "agent_start",
                     {{
@@ -479,9 +519,10 @@ asio::awaitable<void> DeepAgent::init() {
                         agentxx::nodes::ModelCallWrapNode::defNodeType,
                     }},
                 },
-            }, },
+            }, 
+        },
         {
-         "edges", neograph::json::array({
+            "edges", neograph::json::array({
                 {{"from", "__start__"}, {"to", "agent_start"}},
                 {{"from", "agent_start"}, {"to", "llm"}},
                 {
@@ -495,6 +536,7 @@ asio::awaitable<void> DeepAgent::init() {
             }),
          },
     };
+    // clang-format on
 
     engine = std::move(neograph::graph::GraphEngine::compile(graphDefinition, nodeContext, store));
     {
@@ -534,7 +576,8 @@ asio::awaitable<DeepAgent::ConversationTurnResult> DeepAgent::runConversationTur
     std::shared_ptr<AgentIOBase>                            io,
     std::function<void(const neograph::graph::GraphEvent&)> eventCallback,
     InterruptCallback                                       interruptCallback,
-    const std::string&                                      modelName) {
+    const std::string&                                      modelName
+) {
     ConversationTurnResult turnResult;
     auto                   session = agentContext->getSession(threadId);
     session->io                    = std::move(io);
@@ -587,15 +630,18 @@ asio::awaitable<DeepAgent::ConversationTurnResult> DeepAgent::runConversationTur
             recovered.interrupt_node
                 = agentContext->middlewareHandleContext->getGraphDataItemValue<std::string>(
                     threadId,
-                    agentxx::middleware::MiddlewareContext::graphDataKey_interruptNode);
+                    agentxx::middleware::MiddlewareContext::graphDataKey_interruptNode
+                );
             recovered.interrupt_value
                 = agentContext->middlewareHandleContext->getGraphDataItemValue<neograph::json>(
                     threadId,
-                    agentxx::middleware::MiddlewareContext::graphDataKey_interruptValue);
+                    agentxx::middleware::MiddlewareContext::graphDataKey_interruptValue
+                );
             result   = std::move(recovered);
             auto& im = agentContext->middlewareHandleContext->getGraphDataItemValue<neograph::json>(
                 threadId,
-                agentxx::middleware::MiddlewareContext::graphDataKey_interruptMessages);
+                agentxx::middleware::MiddlewareContext::graphDataKey_interruptMessages
+            );
             if (im.is_array()) {
                 messages = im;
             }
@@ -606,7 +652,8 @@ asio::awaitable<DeepAgent::ConversationTurnResult> DeepAgent::runConversationTur
                 auto& im
                     = agentContext->middlewareHandleContext->getGraphDataItemValue<neograph::json>(
                         threadId,
-                        agentxx::middleware::MiddlewareContext::graphDataKey_interruptMessages);
+                        agentxx::middleware::MiddlewareContext::graphDataKey_interruptMessages
+                    );
                 if (im.is_array()) {
                     messages = im;
                 }
@@ -620,19 +667,23 @@ asio::awaitable<DeepAgent::ConversationTurnResult> DeepAgent::runConversationTur
             agentContext->middlewareHandleContext->setGraphDataItemValue<std::string>(
                 threadId,
                 agentxx::middleware::MiddlewareContext::graphDataKey_interruptNode,
-                result->interrupt_node);
+                result->interrupt_node
+            );
             agentContext->middlewareHandleContext->setGraphDataItemValue<neograph::json>(
                 threadId,
                 agentxx::middleware::MiddlewareContext::graphDataKey_interruptValue,
-                result->interrupt_value);
+                result->interrupt_value
+            );
 
             engine->update_state(threadId, [&](neograph::graph::GraphState& state) {
                 // - 本轮 graph 还没有执行完成，序列化 graphData 到 state checkpoint
                 // 以防中断处理期间 程序 终止, 导致 graphData 丢失
                 auto data
                     = agentContext->middlewareHandleContext->getGraphDataToState(state, threadId);
-                state.overwrite(agentxx::middleware::MiddlewareContext::channel_savedGraphData,
-                                data);
+                state.overwrite(
+                    agentxx::middleware::MiddlewareContext::channel_savedGraphData,
+                    data
+                );
             });
 
             auto crudeResult = std::move(result);
@@ -648,7 +699,9 @@ asio::awaitable<DeepAgent::ConversationTurnResult> DeepAgent::runConversationTur
             const auto interruptArgs = agentxx::middleware::InterruptHandleArg::listFromJson(
                 agentContext->middlewareHandleContext->getGraphDataItemValue<neograph::json>(
                     threadId,
-                    agentxx::middleware::MiddlewareContext::graphDataKey_interruptArgs));
+                    agentxx::middleware::MiddlewareContext::graphDataKey_interruptArgs
+                )
+            );
             size_t argIndex = 0;
             for (const auto& interruptArg : interruptArgs) {
                 ++argIndex;
@@ -664,19 +717,24 @@ asio::awaitable<DeepAgent::ConversationTurnResult> DeepAgent::runConversationTur
                         // - 父 agent 已 checkpoint 暂停, supervisor 运行 subagent
                         // - 结果注入 interruptResult, resume 后父 graph 继续
                         auto subagentArg = interruptArg.arg;
-                        auto resp = co_await agentContext->bus->request<events::ReqSubagentStart,
-                                                                        events::RespSubagentResult>(
-                            events::Topic::Subagent,
-                            events::ReqSubagentStart{
-                                .parentAgentName = agentContext->agentConfig
-                                                       ? agentContext->agentConfig->agentName
-                                                       : std::string{},
-                                .parentThreadId  = threadId,
-                                .subagentName    = subagentArg.value("subagent", std::string{}),
-                                .systemPrompt = subagentArg.value("system_prompt", std::string{}),
-                                .message      = subagentArg.value("message", std::string{}),
-                                .resultId     = interruptArg.resultId,
-                            });
+                        auto resp
+                            = co_await agentContext->bus
+                                  ->request<events::ReqSubagentStart, events::RespSubagentResult>(
+                                      events::Topic::Subagent,
+                                      events::ReqSubagentStart{
+                                          .parentAgentName
+                                          = agentContext->agentConfig
+                                                ? agentContext->agentConfig->agentName
+                                                : std::string{},
+                                          .parentThreadId = threadId,
+                                          .subagentName
+                                          = subagentArg.value("subagent", std::string{}),
+                                          .systemPrompt
+                                          = subagentArg.value("system_prompt", std::string{}),
+                                          .message  = subagentArg.value("message", std::string{}),
+                                          .resultId = interruptArg.resultId,
+                                      }
+                                  );
                         if (resp.has_value()) {
                             interruptResult = neograph::json{resp->content};
                         }
@@ -706,7 +764,8 @@ asio::awaitable<DeepAgent::ConversationTurnResult> DeepAgent::runConversationTur
                             = co_await agentContext->bus
                                   ->request<events::ReqSubagentBatch, events::RespSubagentBatch>(
                                       events::Topic::SubagentBatch,
-                                      std::move(batchReq));
+                                      std::move(batchReq)
+                                  );
                         if (batchResp.has_value()) {
                             // 批量结果按 resultId 写入 resumeValues (非单个
                             // interruptResult)
@@ -735,7 +794,8 @@ asio::awaitable<DeepAgent::ConversationTurnResult> DeepAgent::runConversationTur
                                           .handleName        = interruptArg.name,
                                           .interruptArgsJson = interruptArg.toJson().dump(),
                                           .resultId          = interruptArg.resultId,
-                                      });
+                                      }
+                                  );
                         if (resp.has_value() && resp->handled) {
                             interruptResult = neograph::json::parse(resp->resultJson);
                         }
@@ -755,7 +815,8 @@ asio::awaitable<DeepAgent::ConversationTurnResult> DeepAgent::runConversationTur
                 agentContext->middlewareHandleContext->setGraphDataItemValue<neograph::json>(
                     threadId,
                     agentxx::middleware::MiddlewareContext::graphDataKey_interruptResult,
-                    resumeValues);
+                    resumeValues
+                );
 
                 engine->update_state(threadId, [&](neograph::graph::GraphState& state) {
                     // 更新 message
@@ -769,7 +830,8 @@ asio::awaitable<DeepAgent::ConversationTurnResult> DeepAgent::runConversationTur
                     auto& im = agentContext->middlewareHandleContext->getGraphDataItemValue<
                         neograph::json>(
                         threadId,
-                        agentxx::middleware::MiddlewareContext::graphDataKey_interruptMessages);
+                        agentxx::middleware::MiddlewareContext::graphDataKey_interruptMessages
+                    );
                     if (im.is_array()) {
                         messages = im;
                     }
@@ -818,11 +880,12 @@ std::shared_ptr<AgentContext> DeepAgent::getContext() {
     return agentContext;
 }
 
-asio::awaitable<std::string>
-    DeepAgent::runNonStreamAsync(const std::string&                                      threadId,
-                                 const std::vector<neograph::ChatMessage>&               messages,
-                                 std::function<void(const neograph::graph::GraphEvent&)> callback,
-                                 const std::string& modelName) {
+asio::awaitable<std::string> DeepAgent::runNonStreamAsync(
+    const std::string&                                      threadId,
+    const std::vector<neograph::ChatMessage>&               messages,
+    std::function<void(const neograph::graph::GraphEvent&)> callback,
+    const std::string&                                      modelName
+) {
     selectModel(threadId, modelName);
     auto inputMessages = neograph::json::array();
     for (const auto& msg : messages) {
@@ -840,8 +903,7 @@ asio::awaitable<std::string>
     std::ostringstream oss;
     auto wrappedCallback = [&oss, callback](const neograph::graph::GraphEvent& event) {
         switch (event.type) {
-        case neograph::graph::GraphEvent::Type::LLM_TOKEN:
-            {
+            case neograph::graph::GraphEvent::Type::LLM_TOKEN: {
                 std::string token;
                 std::string kind = "content";
                 if (event.data.is_string()) {
@@ -860,13 +922,12 @@ asio::awaitable<std::string>
                 if (callback) {
                     callback(event);
                 }
-            }
-            break;
-        default:
-            if (callback) {
-                callback(event);
-            }
-            break;
+            } break;
+            default:
+                if (callback) {
+                    callback(event);
+                }
+                break;
         }
     };
 
@@ -874,10 +935,12 @@ asio::awaitable<std::string>
     co_return oss.str();
 }
 
-asio::awaitable<std::string> DeepAgent::runSingleInputAsync(const std::string& threadId,
-                                                            const std::string& userInput,
-                                                            const std::string& systemPrompt,
-                                                            const std::string& modelName) {
+asio::awaitable<std::string> DeepAgent::runSingleInputAsync(
+    const std::string& threadId,
+    const std::string& userInput,
+    const std::string& systemPrompt,
+    const std::string& modelName
+) {
     std::vector<neograph::ChatMessage> messages;
 
     if (!systemPrompt.empty()) {
@@ -895,9 +958,10 @@ asio::awaitable<std::string> DeepAgent::runSingleInputAsync(const std::string& t
     co_return co_await runNonStreamAsync(threadId, messages, nullptr, modelName);
 }
 
-asio::awaitable<DeepAgent::SimpleRunResult>
-    DeepAgent::runStreamAsync(const std::vector<neograph::ChatMessage>& messages,
-                              const std::string&                        modelName) {
+asio::awaitable<DeepAgent::SimpleRunResult> DeepAgent::runStreamAsync(
+    const std::vector<neograph::ChatMessage>& messages,
+    const std::string&                        modelName
+) {
     auto threadId
         = fmt::format("subagent_{}", std::chrono::system_clock::now().time_since_epoch().count());
     selectModel(threadId, modelName);

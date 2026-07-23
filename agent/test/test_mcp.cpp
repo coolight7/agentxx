@@ -74,10 +74,12 @@ void test_mcp_server_unit() {
     }
 
     {
-        auto resp = jsonRpcResponse(1,
-                                    {
-                                        {"ok", true}
-        });
+        auto resp = jsonRpcResponse(
+            1,
+            {
+                {"ok", true}
+        }
+        );
         XX_TEST_EXPECT_EQ(resp["jsonrpc"].get<std::string>(), "2.0");
         XX_TEST_EXPECT_EQ(resp["id"].get<int>(), 1);
         XX_TEST_EXPECT_TRUE(resp["result"]["ok"].get<bool>());
@@ -129,9 +131,11 @@ void test_mcp_server_unit() {
 
         server.addResource(def, [](const std::string& uri) -> std::optional<McpResourceContent> {
             if (uri == "file:///test.txt") {
-                return McpResourceContent{.uri      = uri,
-                                          .mimeType = "text/plain",
-                                          .text     = "hello world"};
+                return McpResourceContent{
+                    .uri      = uri,
+                    .mimeType = "text/plain",
+                    .text     = "hello world"
+                };
             }
             return std::nullopt;
         });
@@ -170,7 +174,8 @@ void test_mcp_server_unit() {
                 msg.content = "Hello, " + args.value("name", "world") + "!";
                 result.messages.push_back(std::move(msg));
                 return result;
-            });
+            }
+        );
 
         auto prompts = server.listPrompts();
         XX_TEST_EXPECT_EQ(prompts.size(), (size_t)1);
@@ -270,8 +275,10 @@ asio::awaitable<void> test_mcp_server_integration() {
                 XX_TEST_EXPECT_EQ((*j)["jsonrpc"].get<std::string>(), "2.0");
                 XX_TEST_EXPECT_TRUE((*j).contains("result"));
                 XX_TEST_EXPECT_TRUE((*j)["result"].contains("serverInfo"));
-                XX_TEST_EXPECT_EQ((*j)["result"]["serverInfo"]["name"].get<std::string>(),
-                                  "agentxx-mcp");
+                XX_TEST_EXPECT_EQ(
+                    (*j)["result"]["serverInfo"]["name"].get<std::string>(),
+                    "agentxx-mcp"
+                );
             }
         }
     }
@@ -394,7 +401,8 @@ asio::awaitable<void> test_mcp_server_integration() {
             "not json",
             "application/json",
             headers,
-            HttpClient::RequestConfig{.readTimeout = std::chrono::seconds{5}});
+            HttpClient::RequestConfig{.readTimeout = std::chrono::seconds{5}}
+        );
         XX_TEST_EXPECT_HAS_VALUE(resp);
         if (resp.has_value()) {
             XX_TEST_EXPECT_EQ(resp.value().status, 400);
@@ -526,26 +534,40 @@ void test_mcp_server_version_negotiation() {
         XX_TEST_EXPECT_EQ(responses.size(), (size_t)7);
         if (responses.size() >= 7) {
             // Exact match 2024-11-05
-            XX_TEST_EXPECT_EQ(responses[0]["result"]["protocolVersion"].get<std::string>(),
-                              "2024-11-05");
+            XX_TEST_EXPECT_EQ(
+                responses[0]["result"]["protocolVersion"].get<std::string>(),
+                "2024-11-05"
+            );
             // Exact match 2025-03-26
-            XX_TEST_EXPECT_EQ(responses[1]["result"]["protocolVersion"].get<std::string>(),
-                              "2025-03-26");
+            XX_TEST_EXPECT_EQ(
+                responses[1]["result"]["protocolVersion"].get<std::string>(),
+                "2025-03-26"
+            );
             // Exact match 2025-06-18
-            XX_TEST_EXPECT_EQ(responses[2]["result"]["protocolVersion"].get<std::string>(),
-                              "2025-06-18");
+            XX_TEST_EXPECT_EQ(
+                responses[2]["result"]["protocolVersion"].get<std::string>(),
+                "2025-06-18"
+            );
             // Exact match 2025-11-25
-            XX_TEST_EXPECT_EQ(responses[3]["result"]["protocolVersion"].get<std::string>(),
-                              "2025-11-25");
+            XX_TEST_EXPECT_EQ(
+                responses[3]["result"]["protocolVersion"].get<std::string>(),
+                "2025-11-25"
+            );
             // Unknown version 2025-01-01 matches newest 2025
-            XX_TEST_EXPECT_EQ(responses[4]["result"]["protocolVersion"].get<std::string>(),
-                              "2025-11-25");
+            XX_TEST_EXPECT_EQ(
+                responses[4]["result"]["protocolVersion"].get<std::string>(),
+                "2025-11-25"
+            );
             // Missing version defaults to oldest-supported (max compat)
-            XX_TEST_EXPECT_EQ(responses[5]["result"]["protocolVersion"].get<std::string>(),
-                              "2024-11-05");
+            XX_TEST_EXPECT_EQ(
+                responses[5]["result"]["protocolVersion"].get<std::string>(),
+                "2024-11-05"
+            );
             // Future version 2026-01-01 matches newest supported
-            XX_TEST_EXPECT_EQ(responses[6]["result"]["protocolVersion"].get<std::string>(),
-                              "2025-11-25");
+            XX_TEST_EXPECT_EQ(
+                responses[6]["result"]["protocolVersion"].get<std::string>(),
+                "2025-11-25"
+            );
         }
     }
 }
@@ -790,10 +812,12 @@ asio::awaitable<void> test_mcp_client_2025_version() {
         auto tools = co_await client->listTools();
         XX_TEST_EXPECT_TRUE(tools.has_value());
 
-        auto echo = co_await client->callTool("echo",
-                                              {
-                                                  {"text", "hello 2025"}
-        });
+        auto echo = co_await client->callTool(
+            "echo",
+            {
+                {"text", "hello 2025"}
+        }
+        );
         XX_TEST_EXPECT_TRUE(echo.has_value());
 
         co_await client->close();
@@ -918,7 +942,8 @@ void test_mcp_server_stdio_resources_prompts() {
             msg.content = "Hello, " + args.value("name", "world") + "!";
             result.messages.push_back(std::move(msg));
             return result;
-        });
+        }
+    );
 
     std::string input;
     input
@@ -971,8 +996,10 @@ void test_mcp_server_stdio_resources_prompts() {
         // Resp 2: resources/read success
         XX_TEST_EXPECT_EQ(responses[2]["id"].get<int>(), 3);
         XX_TEST_EXPECT_TRUE(responses[2].contains("result"));
-        XX_TEST_EXPECT_EQ(responses[2]["result"]["contents"][0]["text"].get<std::string>(),
-                          "hello world");
+        XX_TEST_EXPECT_EQ(
+            responses[2]["result"]["contents"][0]["text"].get<std::string>(),
+            "hello world"
+        );
 
         // Resp 3: resources/read nonexistent
         XX_TEST_EXPECT_EQ(responses[3]["id"].get<int>(), 4);
@@ -986,8 +1013,10 @@ void test_mcp_server_stdio_resources_prompts() {
         // Resp 5: prompts/get success
         XX_TEST_EXPECT_EQ(responses[5]["id"].get<int>(), 6);
         XX_TEST_EXPECT_TRUE(responses[5].contains("result"));
-        XX_TEST_EXPECT_EQ(responses[5]["result"]["messages"][0]["content"].get<std::string>(),
-                          "Hello, World!");
+        XX_TEST_EXPECT_EQ(
+            responses[5]["result"]["messages"][0]["content"].get<std::string>(),
+            "Hello, World!"
+        );
 
         // Resp 6: prompts/get nonexistent
         XX_TEST_EXPECT_EQ(responses[6]["id"].get<int>(), 7);
@@ -1103,16 +1132,20 @@ asio::awaitable<void> test_mcp_client_http() {
 
     // Test callTool
     {
-        auto result = co_await client->callTool("echo",
-                                                {
-                                                    {"text", "hello client"}
-        });
+        auto result = co_await client->callTool(
+            "echo",
+            {
+                {"text", "hello client"}
+        }
+        );
         XX_TEST_EXPECT_TRUE(result.has_value());
         if (result.has_value()) {
             XX_TEST_EXPECT_TRUE(result->contains("content"));
             if (result->contains("content") && (*result)["content"].is_array()) {
-                XX_TEST_EXPECT_EQ((*result)["content"][0]["text"].get<std::string>(),
-                                  "hello client");
+                XX_TEST_EXPECT_EQ(
+                    (*result)["content"][0]["text"].get<std::string>(),
+                    "hello client"
+                );
             }
         }
     }
@@ -1239,8 +1272,10 @@ void test_mcp_server_stdio_basic() {
         // Resp 0: initialize
         XX_TEST_EXPECT_EQ(responses[0]["id"].get<int>(), 1);
         XX_TEST_EXPECT_TRUE(responses[0].contains("result"));
-        XX_TEST_EXPECT_EQ(responses[0]["result"]["serverInfo"]["name"].get<std::string>(),
-                          "agentxx-mcp");
+        XX_TEST_EXPECT_EQ(
+            responses[0]["result"]["serverInfo"]["name"].get<std::string>(),
+            "agentxx-mcp"
+        );
 
         // Resp 1: ping
         XX_TEST_EXPECT_EQ(responses[1]["id"].get<int>(), 2);
@@ -1255,8 +1290,10 @@ void test_mcp_server_stdio_basic() {
         // Resp 3: tools/call echo
         XX_TEST_EXPECT_EQ(responses[3]["id"].get<int>(), 4);
         XX_TEST_EXPECT_TRUE(responses[3].contains("result"));
-        XX_TEST_EXPECT_EQ(responses[3]["result"]["content"][0]["text"].get<std::string>(),
-                          "hello stdio");
+        XX_TEST_EXPECT_EQ(
+            responses[3]["result"]["content"][0]["text"].get<std::string>(),
+            "hello stdio"
+        );
 
         // Resp 4: tools/call nonexistent
         XX_TEST_EXPECT_EQ(responses[4]["id"].get<int>(), 5);
@@ -1429,7 +1466,8 @@ void test_mcp_server_2025_03_features() {
             if (responses[0]["result"].contains("_meta")) {
                 XX_TEST_EXPECT_EQ(
                     responses[0]["result"]["_meta"]["progressToken"].get<std::string>(),
-                    "tok-123");
+                    "tok-123"
+                );
             }
             // Either way (passthrough or not), server should return a valid ping
             // response
@@ -1741,15 +1779,19 @@ void test_mcp_server_2025_03_26_stdio() {
         // initialize
         XX_TEST_EXPECT_EQ(responses[0]["id"].get<int>(), 1);
         XX_TEST_EXPECT_TRUE(responses[0]["result"].contains("instructions"));
-        XX_TEST_EXPECT_EQ(responses[0]["result"]["protocolVersion"].get<std::string>(),
-                          "2025-03-26");
+        XX_TEST_EXPECT_EQ(
+            responses[0]["result"]["protocolVersion"].get<std::string>(),
+            "2025-03-26"
+        );
         // tools/list
         XX_TEST_EXPECT_EQ(responses[1]["id"].get<int>(), 2);
         XX_TEST_EXPECT_EQ(responses[1]["result"]["tools"].size(), (size_t)1);
         // tools/call
         XX_TEST_EXPECT_EQ(responses[2]["id"].get<int>(), 3);
-        XX_TEST_EXPECT_EQ(responses[2]["result"]["content"][0]["text"].get<std::string>(),
-                          "Hello, MCP!");
+        XX_TEST_EXPECT_EQ(
+            responses[2]["result"]["content"][0]["text"].get<std::string>(),
+            "Hello, MCP!"
+        );
         // resources/templates/list
         XX_TEST_EXPECT_EQ(responses[3]["id"].get<int>(), 4);
         XX_TEST_EXPECT_TRUE(responses[3]["result"].contains("resourceTemplates"));
@@ -1778,66 +1820,69 @@ asio::awaitable<void> test_mcp_client_accept_header() {
     auto server = std::make_shared<Server>(std::move(cfg));
 
     using Handler = Server::Handler;
-    auto handler  = std::make_shared<Handler>([](Server::Request&  req,
-                                                Server::Response& resp,
-                                                const std::string&) -> asio::awaitable<void> {
-        namespace http = boost::beast::http;
+    auto handler  = std::make_shared<Handler>(
+        [](Server::Request&  req,
+           Server::Response& resp,
+           const std::string&) -> asio::awaitable<void> {
+            namespace http = boost::beast::http;
 
-        auto accept = req[http::field::accept];
-        bool valid  = (accept == "*/*")
-                     || (accept.find("application/json") != boost::string_view::npos
-                         && accept.find("text/event-stream") != boost::string_view::npos);
+            auto accept = req[http::field::accept];
+            bool valid  = (accept == "*/*")
+                         || (accept.find("application/json") != boost::string_view::npos
+                             && accept.find("text/event-stream") != boost::string_view::npos);
 
-        if (!valid) {
+            if (!valid) {
+                resp.version(req.version());
+                resp.result(http::status::not_acceptable);
+                resp.set(http::field::content_type, "application/json");
+                json error;
+                error["jsonrpc"]       = "2.0";
+                error["error"]["code"] = -32000;
+                error["error"]["message"]
+                    = "Not Acceptable: Client must accept both application/json "
+                       "and text/event-stream";
+                resp.body() = error.dump();
+                resp.prepare_payload();
+                co_return;
+            }
+
+            json requestJson;
+            try {
+                requestJson = json::parse(req.body());
+            } catch (...) {
+                resp.version(req.version());
+                resp.result(http::status::bad_request);
+                resp.prepare_payload();
+                co_return;
+            }
+
+            json        id     = requestJson.value("id", json{});
+            std::string method = requestJson.value("method", "");
+            json        response;
+            response["jsonrpc"] = "2.0";
+            response["id"]      = id;
+
+            if (method == "initialize") {
+                response["result"]["protocolVersion"]       = "2024-11-05";
+                response["result"]["serverInfo"]["name"]    = "accept-test-server";
+                response["result"]["serverInfo"]["version"] = "1.0";
+                response["result"]["capabilities"]          = json::object();
+            } else if (method == "ping") {
+                response["result"] = json::object();
+            } else if (method == "tools/list") {
+                response["result"]["tools"] = json::array();
+            } else {
+                response["error"]["code"]    = -32601;
+                response["error"]["message"] = "Method not found";
+            }
+
             resp.version(req.version());
-            resp.result(http::status::not_acceptable);
+            resp.result(http::status::ok);
             resp.set(http::field::content_type, "application/json");
-            json error;
-            error["jsonrpc"]          = "2.0";
-            error["error"]["code"]    = -32000;
-            error["error"]["message"] = "Not Acceptable: Client must accept both application/json "
-                                         "and text/event-stream";
-            resp.body()               = error.dump();
+            resp.body() = response.dump();
             resp.prepare_payload();
-            co_return;
         }
-
-        json requestJson;
-        try {
-            requestJson = json::parse(req.body());
-        } catch (...) {
-            resp.version(req.version());
-            resp.result(http::status::bad_request);
-            resp.prepare_payload();
-            co_return;
-        }
-
-        json        id     = requestJson.value("id", json{});
-        std::string method = requestJson.value("method", "");
-        json        response;
-        response["jsonrpc"] = "2.0";
-        response["id"]      = id;
-
-        if (method == "initialize") {
-            response["result"]["protocolVersion"]       = "2024-11-05";
-            response["result"]["serverInfo"]["name"]    = "accept-test-server";
-            response["result"]["serverInfo"]["version"] = "1.0";
-            response["result"]["capabilities"]          = json::object();
-        } else if (method == "ping") {
-            response["result"] = json::object();
-        } else if (method == "tools/list") {
-            response["result"]["tools"] = json::array();
-        } else {
-            response["error"]["code"]    = -32601;
-            response["error"]["message"] = "Method not found";
-        }
-
-        resp.version(req.version());
-        resp.result(http::status::ok);
-        resp.set(http::field::content_type, "application/json");
-        resp.body() = response.dump();
-        resp.prepare_payload();
-    });
+    );
 
     server->router().add("/mcp", 2, handler);
 
@@ -2007,7 +2052,8 @@ asio::awaitable<void> test_mcp_server_accept_sse() {
             baseUrl + "/mcp",
             req,
             headers,
-            HttpClient::RequestConfig{.readTimeout = std::chrono::seconds{5}});
+            HttpClient::RequestConfig{.readTimeout = std::chrono::seconds{5}}
+        );
         XX_TEST_EXPECT_HAS_VALUE(resp);
         if (resp.has_value()) {
             XX_TEST_EXPECT_EQ(resp.value().status, 406);
@@ -2028,7 +2074,8 @@ asio::awaitable<void> test_mcp_server_accept_sse() {
             baseUrl + "/mcp",
             req,
             headers,
-            HttpClient::RequestConfig{.readTimeout = std::chrono::seconds{5}});
+            HttpClient::RequestConfig{.readTimeout = std::chrono::seconds{5}}
+        );
         XX_TEST_EXPECT_HAS_VALUE(resp);
         if (resp.has_value()) {
             XX_TEST_EXPECT_EQ(resp.value().status, 200);
@@ -2065,7 +2112,8 @@ asio::awaitable<void> test_mcp_server_accept_sse() {
             baseUrl + "/mcp",
             req,
             headers,
-            HttpClient::RequestConfig{.readTimeout = std::chrono::seconds{5}});
+            HttpClient::RequestConfig{.readTimeout = std::chrono::seconds{5}}
+        );
         XX_TEST_EXPECT_HAS_VALUE(resp);
         if (resp.has_value()) {
             XX_TEST_EXPECT_EQ(resp.value().status, 200);
@@ -2085,7 +2133,8 @@ asio::awaitable<void> test_mcp_server_accept_sse() {
         auto resp = co_await HttpClient::getAsync(
             baseUrl + "/mcp/sse",
             headers,
-            HttpClient::RequestConfig{.readTimeout = std::chrono::seconds{5}});
+            HttpClient::RequestConfig{.readTimeout = std::chrono::seconds{5}}
+        );
         XX_TEST_EXPECT_HAS_VALUE(resp);
         if (resp.has_value()) {
             XX_TEST_EXPECT_EQ(resp.value().status, 200);
@@ -2115,7 +2164,8 @@ asio::awaitable<void> test_mcp_server_accept_sse() {
         auto resp = co_await HttpClient::getAsync(
             baseUrl + "/mcp/sse",
             headers,
-            HttpClient::RequestConfig{.readTimeout = std::chrono::seconds{5}});
+            HttpClient::RequestConfig{.readTimeout = std::chrono::seconds{5}}
+        );
         // Connection is closed immediately by the server; the request may fail
         // or return an incomplete response – either is acceptable.
         if (resp.has_value()) {
@@ -2137,7 +2187,8 @@ asio::awaitable<void> test_mcp_server_accept_sse() {
             baseUrl + "/mcp",
             req,
             headers,
-            HttpClient::RequestConfig{.readTimeout = std::chrono::seconds{5}});
+            HttpClient::RequestConfig{.readTimeout = std::chrono::seconds{5}}
+        );
         XX_TEST_EXPECT_HAS_VALUE(resp);
         if (resp.has_value()) {
             XX_TEST_EXPECT_EQ(resp.value().status, 202);

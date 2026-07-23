@@ -24,9 +24,11 @@ protected:
 
 public:
 
-    WebSearchTool(std::string_view                            in_searchApiUrl,
-                  bool                                        in_convertHtml2markdown,
-                  std::weak_ptr<agentxx::agent::AgentContext> in_agentContext);
+    WebSearchTool(
+        std::string_view                            in_searchApiUrl,
+        bool                                        in_convertHtml2markdown,
+        std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
+    );
 
     neograph::ChatTool get_definition() const override;
 
@@ -63,8 +65,10 @@ protected:
 
 public:
 
-    ModelWebSearchTool(const agentxx::agent::ModelConfig&          modelCfg,
-                       std::weak_ptr<agentxx::agent::AgentContext> in_agentContext);
+    ModelWebSearchTool(
+        const agentxx::agent::ModelConfig&          modelCfg,
+        std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
+    );
 
     neograph::ChatTool get_definition() const override;
 

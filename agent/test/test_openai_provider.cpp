@@ -28,11 +28,13 @@ using namespace agentxx::util;
 namespace server = agentxx::server;
 
 namespace {
-agentxx::agent::ModelConfig makeOaiCfg(const std::string& apiKey,
-                                       const std::string& baseUrl,
-                                       int                connectTO    = 10,
-                                       int                readTO       = 10,
-                                       bool               sendThinking = false) {
+agentxx::agent::ModelConfig makeOaiCfg(
+    const std::string& apiKey,
+    const std::string& baseUrl,
+    int                connectTO    = 10,
+    int                readTO       = 10,
+    bool               sendThinking = false
+) {
     agentxx::agent::ModelConfig mc;
     mc.name                  = "test";
     mc.apiKey                = apiKey;
@@ -181,9 +183,9 @@ public:
         return "data: [DONE]\n\n";
     }
 
-    neograph::json makeCompletionResponse(std::string_view content,
-                                          int              prompt     = 10,
-                                          int              completion = 5) const {
+    neograph::json
+        makeCompletionResponse(std::string_view content, int prompt = 10, int completion = 5)
+            const {
         neograph::json resp;
         resp["id"]                            = "chatcmpl-mock";
         resp["object"]                        = "chat.completion";
@@ -200,10 +202,12 @@ public:
         return resp;
     }
 
-    neograph::json makeCompletionResponse(std::string_view content,
-                                          std::string_view reasoning,
-                                          int              prompt     = 10,
-                                          int              completion = 5) const {
+    neograph::json makeCompletionResponse(
+        std::string_view content,
+        std::string_view reasoning,
+        int              prompt     = 10,
+        int              completion = 5
+    ) const {
         auto resp = makeCompletionResponse(content, prompt, completion);
         resp["choices"][0]["message"]["reasoning_content"] = std::string(reasoning);
         return resp;
@@ -244,56 +248,61 @@ std::unique_ptr<MockOpenAIServer> startMockServer(uint16_t& outPort) {
 
     mock->sseChunks.clear();
     mock->sseChunks.push_back(MockOpenAIServer::sseData(
-        R"({"choices":[{"index":0,"delta":{"role":"assistant","content":""}}]})"));
+        R"({"choices":[{"index":0,"delta":{"role":"assistant","content":""}}]})"
+    ));
     mock->sseChunks.push_back(
-        MockOpenAIServer::sseData(R"({"choices":[{"index":0,"delta":{"content":"Hello"}}]})"));
+        MockOpenAIServer::sseData(R"({"choices":[{"index":0,"delta":{"content":"Hello"}}]})")
+    );
     mock->sseChunks.push_back(
-        MockOpenAIServer::sseData(R"({"choices":[{"index":0,"delta":{"content":" "}}]})"));
+        MockOpenAIServer::sseData(R"({"choices":[{"index":0,"delta":{"content":" "}}]})")
+    );
     mock->sseChunks.push_back(
-        MockOpenAIServer::sseData(R"({"choices":[{"index":0,"delta":{"content":"world"}}]})"));
+        MockOpenAIServer::sseData(R"({"choices":[{"index":0,"delta":{"content":"world"}}]})")
+    );
     mock->sseChunks.push_back(MockOpenAIServer::sseData(
-        R"({"choices":[{"index":0,"delta":{}}],"usage":{"prompt_tokens":5,"completion_tokens":3,"total_tokens":8}})"));
+        R"({"choices":[{"index":0,"delta":{}}],"usage":{"prompt_tokens":5,"completion_tokens":3,"total_tokens":8}})"
+    ));
     mock->sseChunks.push_back(MockOpenAIServer::sseDone());
 
     mock->server = std::make_unique<HttpServer>(
-        HttpServer::Config{.address = "127.0.0.1", .port = 0, .ioThreads = 1});
+        HttpServer::Config{.address = "127.0.0.1", .port = 0, .ioThreads = 1}
+    );
 
     // Single handler for /chat/completions that dispatches by mode
     mock->server->router().add(
         "/chat/completions",
         2,
         std::make_shared<HttpServer::Handler>(
-            [mock = mock.get()](HttpServer::Request&  req,
-                                HttpServer::Response& resp,
-                                const std::string&) -> asio::awaitable<void> {
+            [mock
+             = mock.get()](HttpServer::Request& req, HttpServer::Response& resp, const std::string&)
+                -> asio::awaitable<void> {
                 mock->lastRequestBody = req.body();
 
                 switch (mock->mode) {
-                case MockMode::RateLimit:
-                    resp.result(boost::beast::http::status::too_many_requests);
-                    resp.set(boost::beast::http::field::content_type, "application/json");
-                    resp.set(boost::beast::http::field::retry_after, "5");
-                    resp.body() = R"({"error":{"message":"Rate limit exceeded"}})";
-                    resp.prepare_payload();
-                    break;
+                    case MockMode::RateLimit:
+                        resp.result(boost::beast::http::status::too_many_requests);
+                        resp.set(boost::beast::http::field::content_type, "application/json");
+                        resp.set(boost::beast::http::field::retry_after, "5");
+                        resp.body() = R"({"error":{"message":"Rate limit exceeded"}})";
+                        resp.prepare_payload();
+                        break;
 
-                case MockMode::ServerError:
-                    resp.result(boost::beast::http::status::internal_server_error);
-                    resp.set(boost::beast::http::field::content_type, "application/json");
-                    resp.body() = R"({"error":{"message":"Internal server error"}})";
-                    resp.prepare_payload();
-                    break;
+                    case MockMode::ServerError:
+                        resp.result(boost::beast::http::status::internal_server_error);
+                        resp.set(boost::beast::http::field::content_type, "application/json");
+                        resp.body() = R"({"error":{"message":"Internal server error"}})";
+                        resp.prepare_payload();
+                        break;
 
-                case MockMode::ToolCall:
-                    resp.result(boost::beast::http::status::ok);
-                    resp.set(boost::beast::http::field::content_type, "application/json");
-                    resp.body() = mock->makeToolCallResponse().dump();
-                    resp.prepare_payload();
-                    break;
+                    case MockMode::ToolCall:
+                        resp.result(boost::beast::http::status::ok);
+                        resp.set(boost::beast::http::field::content_type, "application/json");
+                        resp.body() = mock->makeToolCallResponse().dump();
+                        resp.prepare_payload();
+                        break;
 
-                case MockMode::Streaming:
-                case MockMode::StreamingToolCall:
-                    {
+                    case MockMode::Streaming:
+                    case MockMode::StreamingToolCall: {
                         resp.result(boost::beast::http::status::ok);
                         resp.set(boost::beast::http::field::content_type, "text/event-stream");
                         resp.set(boost::beast::http::field::cache_control, "no-cache");
@@ -307,21 +316,23 @@ std::unique_ptr<MockOpenAIServer> startMockServer(uint16_t& outPort) {
                         break;
                     }
 
-                case MockMode::Normal:
-                default:
-                    resp.result(boost::beast::http::status::ok);
-                    resp.set(boost::beast::http::field::content_type, "application/json");
-                    if (mock->customResponse.has_value()) {
-                        resp.body() = mock->customResponse->dump();
-                        mock->customResponse.reset();
-                    } else {
-                        resp.body() = mock->makeCompletionResponse("Hello from mock!").dump();
-                    }
-                    resp.prepare_payload();
-                    break;
+                    case MockMode::Normal:
+                    default:
+                        resp.result(boost::beast::http::status::ok);
+                        resp.set(boost::beast::http::field::content_type, "application/json");
+                        if (mock->customResponse.has_value()) {
+                            resp.body() = mock->customResponse->dump();
+                            mock->customResponse.reset();
+                        } else {
+                            resp.body() = mock->makeCompletionResponse("Hello from mock!").dump();
+                        }
+                        resp.prepare_payload();
+                        break;
                 }
                 co_return;
-            }));
+            }
+        )
+    );
 
     // Start server
     mock->thread = std::thread([s = mock->server.get()]() {
@@ -374,7 +385,8 @@ void test_parse_response_message_with_reasoning() {
           "reasoning_content": "Step-by-step reasoning..."
         },
         "finish_reason": "stop"
-      })");
+      })"
+    );
 
     auto msg = neograph::parse_response_message(choice);
     XX_TEST_EXPECT_EQ(msg.role, "assistant");
@@ -393,7 +405,8 @@ void test_parse_response_message_with_thinking_field() {
           "thinking": " cogito ergo sum"
         },
         "finish_reason": "stop"
-      })");
+      })"
+    );
 
     auto msg = neograph::parse_response_message(choice);
     XX_TEST_EXPECT_EQ(msg.role, "assistant");
@@ -410,7 +423,8 @@ void test_parse_response_message_without_reasoning() {
           "content": "Just answer"
         },
         "finish_reason": "stop"
-      })");
+      })"
+    );
 
     auto msg = neograph::parse_response_message(choice);
     XX_TEST_EXPECT_EQ(msg.reasoning_content, "");
@@ -428,7 +442,8 @@ void test_parse_response_message_null_reasoning() {
           "reasoning_content": null
         },
         "finish_reason": "stop"
-      })");
+      })"
+    );
 
     auto msg = neograph::parse_response_message(choice);
     XX_TEST_EXPECT_EQ(msg.reasoning_content, "");
@@ -447,7 +462,8 @@ void test_parse_response_message_reasoning_preferred_over_thinking() {
           "thinking": "secondary thinking"
         },
         "finish_reason": "stop"
-      })");
+      })"
+    );
 
     auto msg = neograph::parse_response_message(choice);
     XX_TEST_EXPECT_EQ(msg.reasoning_content, "primary reasoning");
@@ -487,8 +503,9 @@ void test_messages_to_json_reasoning_roundtrip() {
     auto jsonStr = arr[0].dump();
 
     // Now simulate what a provider would receive and how it would be parsed
-    auto choice = neograph::json::parse(R"({"index":0,"message":)" + jsonStr
-                                        + R"(,"finish_reason":"stop"})");
+    auto choice = neograph::json::parse(
+        R"({"index":0,"message":)" + jsonStr + R"(,"finish_reason":"stop"})"
+    );
     auto parsed = neograph::parse_response_message(choice);
     XX_TEST_EXPECT_EQ(parsed.content, original.content);
     XX_TEST_EXPECT_EQ(parsed.reasoning_content, original.reasoning_content);
@@ -699,7 +716,9 @@ asio::awaitable<void> test_non_streaming_tool_call(MockOpenAIServer& mock, uint1
                            .name        = "get_weather",
                            .description = "Get weather for a location",
                            .parameters  = neograph::json::parse(
-                R"({"type":"object","properties":{"location":{"type":"string"}}})")}
+                R"({"type":"object","properties":{"location":{"type":"string"}}})"
+            )
+        }
     };
 
     try {
@@ -708,8 +727,9 @@ asio::awaitable<void> test_non_streaming_tool_call(MockOpenAIServer& mock, uint1
         XX_TEST_EXPECT_FALSE(result.message.tool_calls.empty());
         if (!result.message.tool_calls.empty()) {
             XX_TEST_EXPECT_EQ(result.message.tool_calls[0].name, "get_weather");
-            XX_TEST_EXPECT_TRUE(result.message.tool_calls[0].arguments.find("Tokyo")
-                                != std::string::npos);
+            XX_TEST_EXPECT_TRUE(
+                result.message.tool_calls[0].arguments.find("Tokyo") != std::string::npos
+            );
         }
     } catch (const std::exception& e) {
         XX_TEST_FAILED++;
@@ -858,8 +878,10 @@ asio::awaitable<void> test_streaming_completion(MockOpenAIServer& mock, uint16_t
     try {
         auto result = co_await provider->invoke(params, onChunk);
         XX_TEST_EXPECT_EQ(result.message.role, "assistant");
-        XX_TEST_EXPECT_TRUE(result.message.content.find("Hello") != std::string::npos
-                            || result.message.content.find("world") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(
+            result.message.content.find("Hello") != std::string::npos
+            || result.message.content.find("world") != std::string::npos
+        );
 
         // onChunk should have been called incrementally
         XX_TEST_EXPECT_FALSE(accumulated.empty());
@@ -894,8 +916,9 @@ asio::awaitable<void> test_non_streaming_reasoning_content(MockOpenAIServer& moc
         XX_TEST_EXPECT_EQ(result.message.role, "assistant");
         XX_TEST_EXPECT_EQ(result.message.content, "42");
         XX_TEST_EXPECT_TRUE(!result.message.reasoning_content.empty());
-        XX_TEST_EXPECT_TRUE(result.message.reasoning_content.find("calculate")
-                            != std::string::npos);
+        XX_TEST_EXPECT_TRUE(
+            result.message.reasoning_content.find("calculate") != std::string::npos
+        );
     } catch (const std::exception& e) {
         XX_TEST_FAILED++;
         TEST_FAIL << "non-streaming reasoning test failed: " << e.what() << std::endl;
@@ -930,8 +953,8 @@ asio::awaitable<void> test_non_streaming_thinking_field(MockOpenAIServer& mock, 
     }
 }
 
-asio::awaitable<void> test_non_streaming_reasoning_at_choice_level(MockOpenAIServer& mock,
-                                                                   uint16_t          port) {
+asio::awaitable<void>
+    test_non_streaming_reasoning_at_choice_level(MockOpenAIServer& mock, uint16_t port) {
     std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
     mock.mode           = MockMode::Normal;
 
@@ -952,16 +975,17 @@ asio::awaitable<void> test_non_streaming_reasoning_at_choice_level(MockOpenAISer
         auto result = co_await provider->invoke(params, nullptr);
         XX_TEST_EXPECT_EQ(result.message.content, "Answer text");
         XX_TEST_EXPECT_TRUE(!result.message.reasoning_content.empty());
-        XX_TEST_EXPECT_TRUE(result.message.reasoning_content.find("choice-level")
-                            != std::string::npos);
+        XX_TEST_EXPECT_TRUE(
+            result.message.reasoning_content.find("choice-level") != std::string::npos
+        );
     } catch (const std::exception& e) {
         XX_TEST_FAILED++;
         TEST_FAIL << "choice-level reasoning test failed: " << e.what() << std::endl;
     }
 }
 
-asio::awaitable<void> test_non_streaming_thinking_at_choice_level(MockOpenAIServer& mock,
-                                                                  uint16_t          port) {
+asio::awaitable<void>
+    test_non_streaming_thinking_at_choice_level(MockOpenAIServer& mock, uint16_t port) {
     std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
     mock.mode           = MockMode::Normal;
 
@@ -981,8 +1005,9 @@ asio::awaitable<void> test_non_streaming_thinking_at_choice_level(MockOpenAIServ
         auto result = co_await provider->invoke(params, nullptr);
         XX_TEST_EXPECT_EQ(result.message.content, "Answer text");
         XX_TEST_EXPECT_TRUE(!result.message.reasoning_content.empty());
-        XX_TEST_EXPECT_TRUE(result.message.reasoning_content.find("choice-level")
-                            != std::string::npos);
+        XX_TEST_EXPECT_TRUE(
+            result.message.reasoning_content.find("choice-level") != std::string::npos
+        );
     } catch (const std::exception& e) {
         XX_TEST_FAILED++;
         TEST_FAIL << "choice-level thinking test failed: " << e.what() << std::endl;
@@ -1003,16 +1028,21 @@ asio::awaitable<void> test_streaming_reasoning_content(MockOpenAIServer& mock, u
 
     mock.sseChunks = {
         MockOpenAIServer::sseData(
-            R"({"choices":[{"index":0,"delta":{"role":"assistant","content":""}}]})"),
+            R"({"choices":[{"index":0,"delta":{"role":"assistant","content":""}}]})"
+        ),
         MockOpenAIServer::sseData(
-            R"({"choices":[{"index":0,"delta":{"reasoning_content":"Let me think"}}]})"),
+            R"({"choices":[{"index":0,"delta":{"reasoning_content":"Let me think"}}]})"
+        ),
         MockOpenAIServer::sseData(
-            R"({"choices":[{"index":0,"delta":{"reasoning_content":" step by step"}}]})"),
+            R"({"choices":[{"index":0,"delta":{"reasoning_content":" step by step"}}]})"
+        ),
         MockOpenAIServer::sseData(R"({"choices":[{"index":0,"delta":{"content":"The answer"}}]})"),
         MockOpenAIServer::sseData(R"({"choices":[{"index":0,"delta":{"content":" is 42"}}]})"),
         MockOpenAIServer::sseData(
-            R"({"choices":[{"index":0,"delta":{}}],"usage":{"prompt_tokens":8,"completion_tokens":6,"total_tokens":14}})"),
-        MockOpenAIServer::sseDone()};
+            R"({"choices":[{"index":0,"delta":{}}],"usage":{"prompt_tokens":8,"completion_tokens":6,"total_tokens":14}})"
+        ),
+        MockOpenAIServer::sseDone()
+    };
 
     std::string              accumulated;
     neograph::StreamCallback onChunk = [&](const std::string& chunk) {
@@ -1047,16 +1077,19 @@ asio::awaitable<void> test_streaming_thinking_field_compat(MockOpenAIServer& moc
     // Some providers use "thinking" in delta instead of "reasoning_content"
     mock.sseChunks = {
         MockOpenAIServer::sseData(
-            R"({"choices":[{"index":0,"delta":{"role":"assistant","content":""}}]})"),
+            R"({"choices":[{"index":0,"delta":{"role":"assistant","content":""}}]})"
+        ),
+        MockOpenAIServer::sseData(R"({"choices":[{"index":0,"delta":{"thinking":"deep thought"}}]})"
+        ),
+        MockOpenAIServer::sseData(R"({"choices":[{"index":0,"delta":{"thinking":" process..."}}]})"
+        ),
+        MockOpenAIServer::sseData(R"({"choices":[{"index":0,"delta":{"content":"Final answer"}}]})"
+        ),
         MockOpenAIServer::sseData(
-            R"({"choices":[{"index":0,"delta":{"thinking":"deep thought"}}]})"),
-        MockOpenAIServer::sseData(
-            R"({"choices":[{"index":0,"delta":{"thinking":" process..."}}]})"),
-        MockOpenAIServer::sseData(
-            R"({"choices":[{"index":0,"delta":{"content":"Final answer"}}]})"),
-        MockOpenAIServer::sseData(
-            R"({"choices":[{"index":0,"delta":{}}],"usage":{"prompt_tokens":5,"completion_tokens":4,"total_tokens":9}})"),
-        MockOpenAIServer::sseDone()};
+            R"({"choices":[{"index":0,"delta":{}}],"usage":{"prompt_tokens":5,"completion_tokens":4,"total_tokens":9}})"
+        ),
+        MockOpenAIServer::sseDone()
+    };
 
     std::string              accumulated;
     neograph::StreamCallback onChunk = [&](const std::string& chunk) {
@@ -1075,8 +1108,8 @@ asio::awaitable<void> test_streaming_thinking_field_compat(MockOpenAIServer& moc
     }
 }
 
-asio::awaitable<void> test_streaming_reasoning_with_null_skips(MockOpenAIServer& mock,
-                                                               uint16_t          port) {
+asio::awaitable<void>
+    test_streaming_reasoning_with_null_skips(MockOpenAIServer& mock, uint16_t port) {
     std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
     mock.mode           = MockMode::Streaming;
 
@@ -1091,15 +1124,19 @@ asio::awaitable<void> test_streaming_reasoning_with_null_skips(MockOpenAIServer&
     // When "reasoning_content" is explicitly null in a chunk, skip it
     mock.sseChunks = {
         MockOpenAIServer::sseData(
-            R"({"choices":[{"index":0,"delta":{"role":"assistant","content":""}}]})"),
+            R"({"choices":[{"index":0,"delta":{"role":"assistant","content":""}}]})"
+        ),
+        MockOpenAIServer::sseData(R"({"choices":[{"index":0,"delta":{"reasoning_content":null}}]})"
+        ),
         MockOpenAIServer::sseData(
-            R"({"choices":[{"index":0,"delta":{"reasoning_content":null}}]})"),
-        MockOpenAIServer::sseData(
-            R"({"choices":[{"index":0,"delta":{"reasoning_content":"real thinking"}}]})"),
+            R"({"choices":[{"index":0,"delta":{"reasoning_content":"real thinking"}}]})"
+        ),
         MockOpenAIServer::sseData(R"({"choices":[{"index":0,"delta":{"content":"Done"}}]})"),
         MockOpenAIServer::sseData(
-            R"({"choices":[{"index":0,"delta":{}}],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}})"),
-        MockOpenAIServer::sseDone()};
+            R"({"choices":[{"index":0,"delta":{}}],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}})"
+        ),
+        MockOpenAIServer::sseDone()
+    };
 
     std::string              accumulated;
     neograph::StreamCallback onChunk = [&](const std::string& chunk) {
@@ -1116,8 +1153,8 @@ asio::awaitable<void> test_streaming_reasoning_with_null_skips(MockOpenAIServer&
     }
 }
 
-asio::awaitable<void> test_streaming_reasoning_preferred_over_thinking(MockOpenAIServer& mock,
-                                                                       uint16_t          port) {
+asio::awaitable<void>
+    test_streaming_reasoning_preferred_over_thinking(MockOpenAIServer& mock, uint16_t port) {
     std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
     mock.mode           = MockMode::Streaming;
 
@@ -1132,13 +1169,17 @@ asio::awaitable<void> test_streaming_reasoning_preferred_over_thinking(MockOpenA
     // When both fields appear in delta, reasoning_content takes priority
     mock.sseChunks = {
         MockOpenAIServer::sseData(
-            R"({"choices":[{"index":0,"delta":{"role":"assistant","content":""}}]})"),
+            R"({"choices":[{"index":0,"delta":{"role":"assistant","content":""}}]})"
+        ),
         MockOpenAIServer::sseData(
-            R"({"choices":[{"index":0,"delta":{"reasoning_content":"primary","thinking":"secondary"}}]})"),
+            R"({"choices":[{"index":0,"delta":{"reasoning_content":"primary","thinking":"secondary"}}]})"
+        ),
         MockOpenAIServer::sseData(R"({"choices":[{"index":0,"delta":{"content":"Done"}}]})"),
         MockOpenAIServer::sseData(
-            R"({"choices":[{"index":0,"delta":{}}],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}})"),
-        MockOpenAIServer::sseDone()};
+            R"({"choices":[{"index":0,"delta":{}}],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}})"
+        ),
+        MockOpenAIServer::sseDone()
+    };
 
     std::string              accumulated;
     neograph::StreamCallback onChunk = [&](const std::string& chunk) {
@@ -1155,8 +1196,8 @@ asio::awaitable<void> test_streaming_reasoning_preferred_over_thinking(MockOpenA
     }
 }
 
-asio::awaitable<void> test_streaming_reasoning_only_no_content(MockOpenAIServer& mock,
-                                                               uint16_t          port) {
+asio::awaitable<void>
+    test_streaming_reasoning_only_no_content(MockOpenAIServer& mock, uint16_t port) {
     std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
     mock.mode           = MockMode::Streaming;
 
@@ -1171,14 +1212,19 @@ asio::awaitable<void> test_streaming_reasoning_only_no_content(MockOpenAIServer&
     // Some models emit reasoning without any content at all
     mock.sseChunks = {
         MockOpenAIServer::sseData(
-            R"({"choices":[{"index":0,"delta":{"role":"assistant","content":""}}]})"),
+            R"({"choices":[{"index":0,"delta":{"role":"assistant","content":""}}]})"
+        ),
         MockOpenAIServer::sseData(
-            R"({"choices":[{"index":0,"delta":{"reasoning_content":"Just thinking"}}]})"),
+            R"({"choices":[{"index":0,"delta":{"reasoning_content":"Just thinking"}}]})"
+        ),
         MockOpenAIServer::sseData(
-            R"({"choices":[{"index":0,"delta":{"reasoning_content":" out loud"}}]})"),
+            R"({"choices":[{"index":0,"delta":{"reasoning_content":" out loud"}}]})"
+        ),
         MockOpenAIServer::sseData(
-            R"({"choices":[{"index":0,"delta":{}}],"usage":{"prompt_tokens":2,"completion_tokens":3,"total_tokens":5}})"),
-        MockOpenAIServer::sseDone()};
+            R"({"choices":[{"index":0,"delta":{}}],"usage":{"prompt_tokens":2,"completion_tokens":3,"total_tokens":5}})"
+        ),
+        MockOpenAIServer::sseDone()
+    };
 
     std::string              accumulated;
     neograph::StreamCallback onChunk = [&](const std::string& chunk) {
@@ -1195,8 +1241,8 @@ asio::awaitable<void> test_streaming_reasoning_only_no_content(MockOpenAIServer&
     }
 }
 
-asio::awaitable<void> test_streaming_malformed_chunk_skipped(MockOpenAIServer& mock,
-                                                             uint16_t          port) {
+asio::awaitable<void>
+    test_streaming_malformed_chunk_skipped(MockOpenAIServer& mock, uint16_t port) {
     std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
     mock.mode           = MockMode::Streaming;
 
@@ -1211,14 +1257,18 @@ asio::awaitable<void> test_streaming_malformed_chunk_skipped(MockOpenAIServer& m
     // Malformed chunks between valid ones should be skipped gracefully
     mock.sseChunks = {
         MockOpenAIServer::sseData(
-            R"({"choices":[{"index":0,"delta":{"role":"assistant","content":""}}]})"),
+            R"({"choices":[{"index":0,"delta":{"role":"assistant","content":""}}]})"
+        ),
         MockOpenAIServer::sseData(
-            R"({"choices":[{"index":0,"delta":{"reasoning_content":"Thinking"}}]})"),
+            R"({"choices":[{"index":0,"delta":{"reasoning_content":"Thinking"}}]})"
+        ),
         "data: not-json\n\n",
         MockOpenAIServer::sseData(R"({"choices":[{"index":0,"delta":{"content":"Result"}}]})"),
         MockOpenAIServer::sseData(
-            R"({"choices":[{"index":0,"delta":{}}],"usage":{"prompt_tokens":2,"completion_tokens":2,"total_tokens":4}})"),
-        MockOpenAIServer::sseDone()};
+            R"({"choices":[{"index":0,"delta":{}}],"usage":{"prompt_tokens":2,"completion_tokens":2,"total_tokens":4}})"
+        ),
+        MockOpenAIServer::sseDone()
+    };
 
     std::string              accumulated;
     neograph::StreamCallback onChunk = [&](const std::string& chunk) {
@@ -1239,8 +1289,8 @@ asio::awaitable<void> test_streaming_malformed_chunk_skipped(MockOpenAIServer& m
 // Integration tests — <think> tag in content field
 // ---------------------------------------------------------------------------
 
-asio::awaitable<void> test_non_streaming_think_tags_in_content(MockOpenAIServer& mock,
-                                                               uint16_t          port) {
+asio::awaitable<void>
+    test_non_streaming_think_tags_in_content(MockOpenAIServer& mock, uint16_t port) {
     std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
     mock.mode           = MockMode::Normal;
 
@@ -1258,16 +1308,17 @@ asio::awaitable<void> test_non_streaming_think_tags_in_content(MockOpenAIServer&
     try {
         auto result = co_await provider->invoke(params, nullptr);
         XX_TEST_EXPECT_EQ(result.message.content, "The result is 42.");
-        XX_TEST_EXPECT_TRUE(result.message.reasoning_content.find("calculate")
-                            != std::string::npos);
+        XX_TEST_EXPECT_TRUE(
+            result.message.reasoning_content.find("calculate") != std::string::npos
+        );
     } catch (const std::exception& e) {
         XX_TEST_FAILED++;
         TEST_FAIL << "non-streaming think tags test failed: " << e.what() << std::endl;
     }
 }
 
-asio::awaitable<void> test_non_streaming_think_tags_prefer_reasoning_field(MockOpenAIServer& mock,
-                                                                           uint16_t          port) {
+asio::awaitable<void>
+    test_non_streaming_think_tags_prefer_reasoning_field(MockOpenAIServer& mock, uint16_t port) {
     std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
     mock.mode           = MockMode::Normal;
 
@@ -1280,8 +1331,10 @@ asio::awaitable<void> test_non_streaming_think_tags_prefer_reasoning_field(MockO
     };
 
     // When reasoning_content is already provided, don't parse <think> tags
-    auto resp           = mock.makeCompletionResponse("<think>tag thinking</think>Visible answer",
-                                            "field reasoning");
+    auto resp = mock.makeCompletionResponse(
+        "<think>tag thinking</think>Visible answer",
+        "field reasoning"
+    );
     mock.customResponse = resp;
 
     try {
@@ -1296,8 +1349,8 @@ asio::awaitable<void> test_non_streaming_think_tags_prefer_reasoning_field(MockO
     }
 }
 
-asio::awaitable<void> test_streaming_think_tags_split_across_chunks(MockOpenAIServer& mock,
-                                                                    uint16_t          port) {
+asio::awaitable<void>
+    test_streaming_think_tags_split_across_chunks(MockOpenAIServer& mock, uint16_t port) {
     std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
     mock.mode           = MockMode::Streaming;
 
@@ -1312,16 +1365,20 @@ asio::awaitable<void> test_streaming_think_tags_split_across_chunks(MockOpenAISe
     // <think> tag split across chunks
     mock.sseChunks = {
         MockOpenAIServer::sseData(
-            R"({"choices":[{"index":0,"delta":{"role":"assistant","content":""}}]})"),
-        MockOpenAIServer::sseData(
-            R"({"choices":[{"index":0,"delta":{"content":"<think>Think"}}]})"),
+            R"({"choices":[{"index":0,"delta":{"role":"assistant","content":""}}]})"
+        ),
+        MockOpenAIServer::sseData(R"({"choices":[{"index":0,"delta":{"content":"<think>Think"}}]})"
+        ),
         MockOpenAIServer::sseData(R"({"choices":[{"index":0,"delta":{"content":"ing step"}}]})"),
         MockOpenAIServer::sseData(
-            R"({"choices":[{"index":0,"delta":{"content":" by step</think>"}}]})"),
+            R"({"choices":[{"index":0,"delta":{"content":" by step</think>"}}]})"
+        ),
         MockOpenAIServer::sseData(R"({"choices":[{"index":0,"delta":{"content":"Result."}}]})"),
         MockOpenAIServer::sseData(
-            R"({"choices":[{"index":0,"delta":{}}],"usage":{"prompt_tokens":5,"completion_tokens":4,"total_tokens":9}})"),
-        MockOpenAIServer::sseDone()};
+            R"({"choices":[{"index":0,"delta":{}}],"usage":{"prompt_tokens":5,"completion_tokens":4,"total_tokens":9}})"
+        ),
+        MockOpenAIServer::sseDone()
+    };
 
     std::string              accumulated;
     neograph::StreamCallback onChunk = [&](const std::string& chunk) {
@@ -1343,8 +1400,8 @@ asio::awaitable<void> test_streaming_think_tags_split_across_chunks(MockOpenAISe
 // Integration tests — sendThinking config flag
 // ---------------------------------------------------------------------------
 
-asio::awaitable<void> test_sendthinking_false_strips_reasoning(MockOpenAIServer& mock,
-                                                               uint16_t          port) {
+asio::awaitable<void>
+    test_sendthinking_false_strips_reasoning(MockOpenAIServer& mock, uint16_t port) {
     std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
     mock.mode           = MockMode::Normal;
 
@@ -1353,9 +1410,11 @@ asio::awaitable<void> test_sendthinking_false_strips_reasoning(MockOpenAIServer&
     neograph::CompletionParams params;
     params.model    = "gpt-4o-mini";
     params.messages = {
-        neograph::ChatMessage{.role              = "assistant",
+        neograph::ChatMessage{
+                              .role              = "assistant",
                               .content           = "Previous answer",
-                              .reasoning_content = "Hidden reasoning trace"},
+                              .reasoning_content = "Hidden reasoning trace"
+        },
         neograph::ChatMessage{.role = "user", .content = "Follow up"}
     };
 
@@ -1370,8 +1429,8 @@ asio::awaitable<void> test_sendthinking_false_strips_reasoning(MockOpenAIServer&
     }
 }
 
-asio::awaitable<void> test_sendthinking_true_preserves_reasoning(MockOpenAIServer& mock,
-                                                                 uint16_t          port) {
+asio::awaitable<void>
+    test_sendthinking_true_preserves_reasoning(MockOpenAIServer& mock, uint16_t port) {
     std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
     mock.mode           = MockMode::Normal;
 
@@ -1380,9 +1439,11 @@ asio::awaitable<void> test_sendthinking_true_preserves_reasoning(MockOpenAIServe
     neograph::CompletionParams params;
     params.model    = "gpt-4o-mini";
     params.messages = {
-        neograph::ChatMessage{.role              = "assistant",
+        neograph::ChatMessage{
+                              .role              = "assistant",
                               .content           = "Previous answer",
-                              .reasoning_content = "Reasoning to carry forward"},
+                              .reasoning_content = "Reasoning to carry forward"
+        },
         neograph::ChatMessage{.role = "user", .content = "Follow up"}
     };
 
@@ -1390,8 +1451,10 @@ asio::awaitable<void> test_sendthinking_true_preserves_reasoning(MockOpenAIServe
         co_await provider->invoke(params, nullptr);
         auto sent = neograph::json::parse(mock.lastRequestBody);
         XX_TEST_EXPECT_TRUE(sent["messages"][0].contains("reasoning_content"));
-        XX_TEST_EXPECT_EQ(sent["messages"][0]["reasoning_content"].get<std::string>(),
-                          "Reasoning to carry forward");
+        XX_TEST_EXPECT_EQ(
+            sent["messages"][0]["reasoning_content"].get<std::string>(),
+            "Reasoning to carry forward"
+        );
         XX_TEST_EXPECT_EQ(sent["messages"][0]["content"].get<std::string>(), "Previous answer");
     } catch (const std::exception& e) {
         XX_TEST_FAILED++;
@@ -1399,8 +1462,8 @@ asio::awaitable<void> test_sendthinking_true_preserves_reasoning(MockOpenAIServe
     }
 }
 
-asio::awaitable<void> test_sendthinking_no_reasoning_has_no_effect(MockOpenAIServer& mock,
-                                                                   uint16_t          port) {
+asio::awaitable<void>
+    test_sendthinking_no_reasoning_has_no_effect(MockOpenAIServer& mock, uint16_t port) {
     std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
     mock.mode           = MockMode::Normal;
 
@@ -1454,7 +1517,8 @@ public:
     void start() {
         acceptor = std::make_unique<asio::ip::tcp::acceptor>(
             ioCtx,
-            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
+            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0)
+        );
         ep        = acceptor->local_endpoint();
         boundPort = ep.port();
 
@@ -1561,17 +1625,20 @@ void test_true_streaming_incremental(uint16_t) {
             auto result = co_await provider->invoke(params, onChunk);
             XX_TEST_EXPECT_EQ(result.message.content, "ABC");
         },
-        asio::detached);
+        asio::detached
+    );
     ctx.run();
 
     XX_TEST_EXPECT_TRUE(callbackTimes.size() >= 3);
 
     if (callbackTimes.size() >= 3) {
         auto firstOffset = std::chrono::duration_cast<std::chrono::milliseconds>(
-                               callbackTimes.front() - startTime)
+                               callbackTimes.front() - startTime
+        )
                                .count();
-        auto lastOffset = std::chrono::duration_cast<std::chrono::milliseconds>(callbackTimes.back()
-                                                                                - startTime)
+        auto lastOffset = std::chrono::duration_cast<std::chrono::milliseconds>(
+                              callbackTimes.back() - startTime
+        )
                               .count();
         auto spread = lastOffset - firstOffset;
 
@@ -1614,7 +1681,8 @@ public:
     void start() {
         acceptor = std::make_unique<asio::ip::tcp::acceptor>(
             ioCtx,
-            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
+            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0)
+        );
         ep        = acceptor->local_endpoint();
         boundPort = ep.port();
 
@@ -1712,10 +1780,12 @@ void test_connect_timeout() {
                 caught = true;
             }
         },
-        asio::detached);
+        asio::detached
+    );
     ctx.run();
     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                       std::chrono::steady_clock::now() - start)
+                       std::chrono::steady_clock::now() - start
+    )
                        .count();
 
     XX_TEST_EXPECT_TRUE(caught);
@@ -1756,10 +1826,12 @@ void test_read_timeout_streaming() {
             } catch (const std::exception&) {
             }
         },
-        asio::detached);
+        asio::detached
+    );
     ctx.run();
     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                       std::chrono::steady_clock::now() - start)
+                       std::chrono::steady_clock::now() - start
+    )
                        .count();
 
     XX_TEST_EXPECT_EQ(accumulated, "Hi");

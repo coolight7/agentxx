@@ -89,8 +89,8 @@ public:
 
     static bool redirectChangesToGet(int status) noexcept;
 
-    static std::string resolveRedirectUrl(std::string_view originalUrl,
-                                          std::string_view location) noexcept;
+    static std::string
+        resolveRedirectUrl(std::string_view originalUrl, std::string_view location) noexcept;
 
     static const HeaderMap& defaultHeaders();
 
@@ -119,16 +119,19 @@ public:
     static std::chrono::seconds calcSendTimeout(size_t bodyBytes);
 
     template<typename Stream>
-    static asio::awaitable<std::expected<HttpResponse, std::string>>
-        exchange(Stream&                                                       stream,
-                 boost::beast::http::request<boost::beast::http::string_body>& req,
-                 const RequestConfig&                                          config) {
+    static asio::awaitable<std::expected<HttpResponse, std::string>> exchange(
+        Stream&                                                       stream,
+        boost::beast::http::request<boost::beast::http::string_body>& req,
+        const RequestConfig&                                          config
+    ) {
         namespace http = boost::beast::http;
 
         auto sendTimeout = config.sendTimeout.value_or(calcSendTimeout(req.body().size()));
-        co_await http::async_write(stream,
-                                   req,
-                                   asio::cancel_after(sendTimeout, asio::use_awaitable));
+        co_await http::async_write(
+            stream,
+            req,
+            asio::cancel_after(sendTimeout, asio::use_awaitable)
+        );
 
         boost::beast::flat_buffer                buffer;
         http::response_parser<http::string_body> parser;
@@ -138,7 +141,8 @@ public:
                 stream,
                 buffer,
                 parser,
-                asio::cancel_after(config.readTimeout, asio::use_awaitable));
+                asio::cancel_after(config.readTimeout, asio::use_awaitable)
+            );
         }
 
         auto         res = parser.release();
@@ -151,13 +155,14 @@ public:
         co_return std::expected<HttpResponse, std::string>{std::move(resp)};
     }
 
-    static asio::awaitable<std::expected<HttpResponse, std::string>>
-        requestAsync(std::string_view     method,
-                     const std::string&   url,
-                     std::string_view     body,
-                     std::string_view     contentType,
-                     const HeaderMap&     extraHeaders,
-                     const RequestConfig& config = {});
+    static asio::awaitable<std::expected<HttpResponse, std::string>> requestAsync(
+        std::string_view     method,
+        const std::string&   url,
+        std::string_view     body,
+        std::string_view     contentType,
+        const HeaderMap&     extraHeaders,
+        const RequestConfig& config = {}
+    );
 
     /// Enable/disable SSL certificate verification (default: enabled).
     /// Disable only for testing with self-signed certificates.
@@ -165,58 +170,66 @@ public:
 
     static bool getSslVerify() noexcept;
 
-    static asio::awaitable<std::expected<HttpResponse, std::string>>
-        getAsync(const std::string&   url,
-                 const HeaderMap&     extraHeaders = {},
-                 const RequestConfig& config       = {});
+    static asio::awaitable<std::expected<HttpResponse, std::string>> getAsync(
+        const std::string&   url,
+        const HeaderMap&     extraHeaders = {},
+        const RequestConfig& config       = {}
+    );
 
-    static asio::awaitable<std::expected<HttpResponse, std::string>>
-        headAsync(const std::string&   url,
-                  const HeaderMap&     extraHeaders = {},
-                  const RequestConfig& config       = {});
+    static asio::awaitable<std::expected<HttpResponse, std::string>> headAsync(
+        const std::string&   url,
+        const HeaderMap&     extraHeaders = {},
+        const RequestConfig& config       = {}
+    );
 
-    static asio::awaitable<std::expected<HttpResponse, std::string>>
-        postAsync(const std::string&    url,
-                  const neograph::json& body,
-                  const HeaderMap&      extraHeaders = {},
-                  const RequestConfig&  config       = {});
+    static asio::awaitable<std::expected<HttpResponse, std::string>> postAsync(
+        const std::string&    url,
+        const neograph::json& body,
+        const HeaderMap&      extraHeaders = {},
+        const RequestConfig&  config       = {}
+    );
 
-    static asio::awaitable<std::expected<HttpResponse, std::string>>
-        postAsync(const std::string&   url,
-                  std::string_view     body,
-                  std::string_view     contentType  = "text/plain",
-                  const HeaderMap&     extraHeaders = {},
-                  const RequestConfig& config       = {});
+    static asio::awaitable<std::expected<HttpResponse, std::string>> postAsync(
+        const std::string&   url,
+        std::string_view     body,
+        std::string_view     contentType  = "text/plain",
+        const HeaderMap&     extraHeaders = {},
+        const RequestConfig& config       = {}
+    );
 
-    static asio::awaitable<std::expected<HttpResponse, std::string>>
-        putAsync(const std::string&   url,
-                 std::string_view     body,
-                 std::string_view     contentType  = "text/plain",
-                 const HeaderMap&     extraHeaders = {},
-                 const RequestConfig& config       = {});
+    static asio::awaitable<std::expected<HttpResponse, std::string>> putAsync(
+        const std::string&   url,
+        std::string_view     body,
+        std::string_view     contentType  = "text/plain",
+        const HeaderMap&     extraHeaders = {},
+        const RequestConfig& config       = {}
+    );
 
-    static asio::awaitable<std::expected<HttpResponse, std::string>>
-        patchAsync(const std::string&   url,
-                   std::string_view     body,
-                   std::string_view     contentType  = "text/plain",
-                   const HeaderMap&     extraHeaders = {},
-                   const RequestConfig& config       = {});
+    static asio::awaitable<std::expected<HttpResponse, std::string>> patchAsync(
+        const std::string&   url,
+        std::string_view     body,
+        std::string_view     contentType  = "text/plain",
+        const HeaderMap&     extraHeaders = {},
+        const RequestConfig& config       = {}
+    );
 
-    static asio::awaitable<std::expected<HttpResponse, std::string>>
-        deleteAsync(const std::string&   url,
-                    const HeaderMap&     extraHeaders = {},
-                    const RequestConfig& config       = {});
+    static asio::awaitable<std::expected<HttpResponse, std::string>> deleteAsync(
+        const std::string&   url,
+        const HeaderMap&     extraHeaders = {},
+        const RequestConfig& config       = {}
+    );
 
-    static asio::awaitable<std::expected<HttpResponse, std::string>>
-        optionsAsync(const std::string&   url,
-                     const HeaderMap&     extraHeaders = {},
-                     const RequestConfig& config       = {});
+    static asio::awaitable<std::expected<HttpResponse, std::string>> optionsAsync(
+        const std::string&   url,
+        const HeaderMap&     extraHeaders = {},
+        const RequestConfig& config       = {}
+    );
 
-    static asio::awaitable<std::expected<std::string, std::string>>
-        fetchMarkdown(const std::string&   url,
-                      const RequestConfig& config
-                      = RequestConfig{.connectTimeout = std::chrono::seconds{15},
-                                      .readTimeout    = std::chrono::seconds{15}});
+    static asio::awaitable<std::expected<std::string, std::string>> fetchMarkdown(
+        const std::string&   url,
+        const RequestConfig& config
+        = RequestConfig{.connectTimeout = std::chrono::seconds{15}, .readTimeout = std::chrono::seconds{15}}
+    );
 };
 } // namespace util
 } // namespace agentxx

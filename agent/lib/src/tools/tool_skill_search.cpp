@@ -17,11 +17,14 @@ ToolSkillSearchSubAgentTask::ToolSkillSearchSubAgentTask(
     const neograph::graph::NodeContext&         in_context,
     const std::vector<DelayToolInfo>&           in_delayToolInfos,
     const std::vector<std::string>&             in_skillDirPaths,
-    std::weak_ptr<agentxx::agent::AgentContext> in_agentContext) :
-    ::agentxx::tools::SubAgentTaskBase("tool_skill_search",
-                                       "Search available tool or skill for loading. "
-                                       "(already set system prompt)",
-                                       ""),
+    std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
+) :
+    ::agentxx::tools::SubAgentTaskBase(
+        "tool_skill_search",
+        "Search available tool or skill for loading. "
+        "(already set system prompt)",
+        ""
+    ),
     delayToolInfos(in_delayToolInfos),
     skillDirPaths(in_skillDirPaths),
     agentContext(in_agentContext) {

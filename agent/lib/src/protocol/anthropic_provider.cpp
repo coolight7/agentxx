@@ -17,27 +17,31 @@ std::string AnthropicProvider::get_name() const {
     return "anthropic";
 }
 
-asio::awaitable<neograph::ChatCompletion>
-    AnthropicProvider::invoke(const neograph::CompletionParams& params,
-                              neograph::StreamCallback          on_chunk) {
+asio::awaitable<neograph::ChatCompletion> AnthropicProvider::invoke(
+    const neograph::CompletionParams& params,
+    neograph::StreamCallback          on_chunk
+) {
     if (!on_chunk) {
         co_return co_await invoke_format_data(params, nullptr);
     }
-    co_return co_await invoke_format_data(params,
-                                          [on_chunk](const neograph::ChatStreamChunk& chunk) {
-                                              switch (chunk.type) {
-                                              case neograph::ChatStreamChunk::TYPE_CONTENT:
-                                                  on_chunk(chunk.data);
-                                                  break;
-                                              case neograph::ChatStreamChunk::TYPE_THINKING:
-                                                  break;
-                                              }
-                                          });
+    co_return co_await invoke_format_data(
+        params,
+        [on_chunk](const neograph::ChatStreamChunk& chunk) {
+            switch (chunk.type) {
+                case neograph::ChatStreamChunk::TYPE_CONTENT:
+                    on_chunk(chunk.data);
+                    break;
+                case neograph::ChatStreamChunk::TYPE_THINKING:
+                    break;
+            }
+        }
+    );
 }
 
-asio::awaitable<neograph::ChatCompletion>
-    AnthropicProvider::invoke_format_data(const neograph::CompletionParams&  params,
-                                          neograph::FormatDataStreamCallback on_chunk) {
+asio::awaitable<neograph::ChatCompletion> AnthropicProvider::invoke_format_data(
+    const neograph::CompletionParams&  params,
+    neograph::FormatDataStreamCallback on_chunk
+) {
     if (on_chunk) {
         auto body      = buildBody(params);
         body["stream"] = true;
@@ -47,9 +51,10 @@ asio::awaitable<neograph::ChatCompletion>
     co_return co_await completeAsync(params);
 }
 
-std::pair<std::string, neograph::json>
-    AnthropicProvider::convertMessages(const std::vector<neograph::ChatMessage>& messages,
-                                       bool                                      sendThinking) {
+std::pair<std::string, neograph::json> AnthropicProvider::convertMessages(
+    const std::vector<neograph::ChatMessage>& messages,
+    bool                                      sendThinking
+) {
     std::string    system;
     neograph::json arr = neograph::json::array();
 
@@ -272,9 +277,11 @@ asio::awaitable<neograph::ChatCompletion>
         bodyStr,
         "application/json",
         headers,
-        HttpClient::RequestConfig{.connectTimeout
-                                  = std::chrono::seconds{config_.connectTimeoutSeconds},
-                                  .readTimeout = std::chrono::seconds{config_.readTimeoutSeconds}});
+        HttpClient::RequestConfig{
+            .connectTimeout = std::chrono::seconds{config_.connectTimeoutSeconds},
+            .readTimeout    = std::chrono::seconds{config_.readTimeoutSeconds}
+        }
+    );
 
     if (!resp.has_value()) {
         throw std::runtime_error("HTTP request failed: " + resp.error());
@@ -303,10 +310,11 @@ asio::awaitable<neograph::ChatCompletion>
     co_return parseResponse(respJson);
 }
 
-asio::awaitable<neograph::ChatCompletion>
-    AnthropicProvider::doStream(const neograph::CompletionParams&  params,
-                                const neograph::json&              body,
-                                neograph::FormatDataStreamCallback on_chunk) {
+asio::awaitable<neograph::ChatCompletion> AnthropicProvider::doStream(
+    const neograph::CompletionParams&  params,
+    const neograph::json&              body,
+    neograph::FormatDataStreamCallback on_chunk
+) {
     namespace http = boost::beast::http;
     using asio::ip::tcp;
 
@@ -323,7 +331,8 @@ asio::awaitable<neograph::ChatCompletion>
     auto rem            = [&] {
         auto d = deadline - std::chrono::steady_clock::now();
         return std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::max(d, std::chrono::steady_clock::duration::zero()));
+            std::max(d, std::chrono::steady_clock::duration::zero())
+        );
     };
 
     http::request<http::string_body> req{http::verb::post, target, 11};
@@ -338,10 +347,11 @@ asio::awaitable<neograph::ChatCompletion>
     req.prepare_payload();
 
     tcp::resolver resolver(executor);
-    auto          endpoints
-        = co_await resolver.async_resolve(ep.host,
-                                          std::to_string(ep.port),
-                                          asio::cancel_after(rem(), asio::use_awaitable));
+    auto          endpoints = co_await resolver.async_resolve(
+        ep.host,
+        std::to_string(ep.port),
+        asio::cancel_after(rem(), asio::use_awaitable)
+    );
 
     neograph::ChatCompletion completion;
     completion.message.role = "assistant";
@@ -360,45 +370,56 @@ asio::awaitable<neograph::ChatCompletion>
         auto&                                              sslCtx = sslContext();
         boost::beast::ssl_stream<boost::beast::tcp_stream> stream(
             boost::beast::tcp_stream(std::move(socket)),
-            sslCtx);
+            sslCtx
+        );
         ::SSL_set_tlsext_host_name(stream.native_handle(), const_cast<char*>(ep.host.c_str()));
-        co_await stream.async_handshake(asio::ssl::stream_base::client,
-                                        asio::cancel_after(rem(), asio::use_awaitable));
+        co_await stream.async_handshake(
+            asio::ssl::stream_base::client,
+            asio::cancel_after(rem(), asio::use_awaitable)
+        );
 
-        co_await http::async_write(stream,
-                                   req,
-                                   asio::cancel_after(sendTimeout, asio::use_awaitable));
+        co_await http::async_write(
+            stream,
+            req,
+            asio::cancel_after(sendTimeout, asio::use_awaitable)
+        );
 
-        co_await readSseStream(stream,
-                               deadline,
-                               readTimeout,
-                               completion,
-                               fullContent,
-                               fullThinking,
-                               tcMap,
-                               blockTypes,
-                               lineBuffer,
-                               on_chunk);
+        co_await readSseStream(
+            stream,
+            deadline,
+            readTimeout,
+            completion,
+            fullContent,
+            fullThinking,
+            tcMap,
+            blockTypes,
+            lineBuffer,
+            on_chunk
+        );
 
         boost::system::error_code shutEc;
         co_await stream.async_shutdown(asio::redirect_error(asio::use_awaitable, shutEc));
     } else {
         boost::beast::tcp_stream stream(std::move(socket));
 
-        co_await http::async_write(stream,
-                                   req,
-                                   asio::cancel_after(sendTimeout, asio::use_awaitable));
+        co_await http::async_write(
+            stream,
+            req,
+            asio::cancel_after(sendTimeout, asio::use_awaitable)
+        );
 
-        co_await readSseStream(stream,
-                               deadline,
-                               readTimeout,
-                               completion,
-                               fullContent,
-                               fullThinking,
-                               tcMap,
-                               blockTypes,
-                               lineBuffer,
-                               on_chunk);
+        co_await readSseStream(
+            stream,
+            deadline,
+            readTimeout,
+            completion,
+            fullContent,
+            fullThinking,
+            tcMap,
+            blockTypes,
+            lineBuffer,
+            on_chunk
+        );
     }
 
     completion.message.content           = fullContent;

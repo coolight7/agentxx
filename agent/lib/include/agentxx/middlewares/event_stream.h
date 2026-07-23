@@ -81,9 +81,11 @@ public:
         assert(handle);
         assert(execHit >= 0);
         auto id        = ++insertId_;
-        listeners_[id] = EventSubscription<_DATA_TYPE>{.id      = id,
-                                                       .execHit = execHit,
-                                                       .handle  = std::move(handle)};
+        listeners_[id] = EventSubscription<_DATA_TYPE>{
+            .id      = id,
+            .execHit = execHit,
+            .handle  = std::move(handle)
+        };
         return id;
     }
 
@@ -191,7 +193,8 @@ public:
         request(ReqType req, std::chrono::milliseconds timeout = std::chrono::seconds(30)) {
         if (servers_.empty()) {
             co_return std::unexpected{
-                fmt::format("RequestResponseStream `{}` request: no server registered", name)};
+                fmt::format("RequestResponseStream `{}` request: no server registered", name)
+            };
         }
 
         auto correlationId = ++correlationSeq_;
@@ -217,26 +220,35 @@ public:
              channel]() -> asio::awaitable<void> {
                 try {
                     auto resp = co_await handler(req, correlationId);
-                    channel->async_send(neograph_asio_error_code{},
-                                        std::move(resp),
-                                        [](neograph_asio_error_code) {});
+                    channel->async_send(
+                        neograph_asio_error_code{},
+                        std::move(resp),
+                        [](neograph_asio_error_code) {}
+                    );
                 } catch (const neograph::graph::CancelledException& e) {
                     // 超时取消, 不必发错误到 channel (请求方已超时返回)
                 } catch (const std::exception& e) {
-                    XX_LOGE("RequestResponseStream `{}` server exception: {}",
-                            streamName,
-                            e.what());
-                    channel->async_send(asio::experimental::channel_errc::channel_cancelled,
-                                        RespType{},
-                                        [](neograph_asio_error_code) {});
+                    XX_LOGE(
+                        "RequestResponseStream `{}` server exception: {}",
+                        streamName,
+                        e.what()
+                    );
+                    channel->async_send(
+                        asio::experimental::channel_errc::channel_cancelled,
+                        RespType{},
+                        [](neograph_asio_error_code) {}
+                    );
                 } catch (...) {
                     XX_LOGE("RequestResponseStream `{}` server unknown exception", streamName);
-                    channel->async_send(asio::experimental::channel_errc::channel_cancelled,
-                                        RespType{},
-                                        [](neograph_asio_error_code) {});
+                    channel->async_send(
+                        asio::experimental::channel_errc::channel_cancelled,
+                        RespType{},
+                        [](neograph_asio_error_code) {}
+                    );
                 }
             },
-            asio::detached);
+            asio::detached
+        );
 
         // 等待响应或超时
         // - operator|| (wait_for_one_success): 先成功者胜, 取消另一者
@@ -259,8 +271,8 @@ public:
         try {
             auto result = co_await (waitResp() || waitTimeout());
             if (result.index() == 0) {
-                out = std::expected<RespType, std::string>{
-                    std::move(std::get<0>(std::move(result)))};
+                out = std::expected<RespType, std::string>{std::move(std::get<0>(std::move(result)))
+                };
             } else {
                 out = std::unexpected{"Timeout"};
             }
@@ -289,9 +301,11 @@ public:
         }
         auto channel = it->second.channel;
         pending_.erase(it);
-        channel->async_send(neograph_asio_error_code{},
-                            std::move(resp),
-                            [](neograph_asio_error_code) {});
+        channel->async_send(
+            neograph_asio_error_code{},
+            std::move(resp),
+            [](neograph_asio_error_code) {}
+        );
     }
 
     void failRequest(size_t correlationId) {
@@ -301,9 +315,11 @@ public:
         }
         auto channel = it->second.channel;
         pending_.erase(it);
-        channel->async_send(asio::experimental::channel_errc::channel_cancelled,
-                            RespType{},
-                            [](neograph_asio_error_code) {});
+        channel->async_send(
+            asio::experimental::channel_errc::channel_cancelled,
+            RespType{},
+            [](neograph_asio_error_code) {}
+        );
     }
 };
 
@@ -338,8 +354,8 @@ public:
         auto streamName = name_;
         asio::co_spawn(
             ex,
-            [id, delay, handle = std::move(handle), data = std::move(data), streamName]()
-                -> asio::awaitable<void> {
+            [id, delay, handle = std::move(handle), data = std::move(data), streamName](
+            ) -> asio::awaitable<void> {
                 auto timer = asio::steady_timer(co_await asio::this_coro::executor, delay);
                 co_await timer.async_wait(asio::use_awaitable);
                 try {
@@ -350,7 +366,8 @@ public:
                     XX_LOGE("TimerEventStream `{}` id={} unknown exception", streamName, id);
                 }
             },
-            asio::detached);
+            asio::detached
+        );
         return id;
     }
 };
@@ -378,9 +395,11 @@ public:
                      .first;
         } else {
             // 类型校验: 同 topic 必须用同一 _DATA_TYPE, 否则 static_cast 是 UB
-            assert(it->second->elementType_ == typeid(_DATA_TYPE)
-                   && "EventBus topic type mismatch: same topic used with different "
-                      "EventStream<T> payload type");
+            assert(
+                it->second->elementType_ == typeid(_DATA_TYPE)
+                && "EventBus topic type mismatch: same topic used with different "
+                   "EventStream<T> payload type"
+            );
         }
         return static_cast<EventStream<_DATA_TYPE>&>(*it->second);
     }
@@ -395,9 +414,11 @@ public:
             it = streams_.emplace(key, std::static_pointer_cast<EventStreamInterface>(stream))
                      .first;
         } else {
-            assert(it->second->elementType_ == typeid(std::pair<_REQ_TYPE, _RESP_TYPE>)
-                   && "EventBus topic type mismatch: same topic used with different "
-                      "RequestResponseStream<Req,Resp> types");
+            assert(
+                it->second->elementType_ == typeid(std::pair<_REQ_TYPE, _RESP_TYPE>)
+                && "EventBus topic type mismatch: same topic used with different "
+                   "RequestResponseStream<Req,Resp> types"
+            );
         }
         return static_cast<RequestResponseStream<_REQ_TYPE, _RESP_TYPE>&>(*it->second);
     }
@@ -418,10 +439,11 @@ public:
 
     /// 请求-响应
     template<typename _REQ_TYPE, typename _RESP_TYPE>
-    asio::awaitable<std::expected<_RESP_TYPE, std::string>>
-        request(std::string_view          topic,
-                _REQ_TYPE                 req,
-                std::chrono::milliseconds timeout = std::chrono::seconds(30)) {
+    asio::awaitable<std::expected<_RESP_TYPE, std::string>> request(
+        std::string_view          topic,
+        _REQ_TYPE                 req,
+        std::chrono::milliseconds timeout = std::chrono::seconds(30)
+    ) {
         co_return co_await getRR<_REQ_TYPE, _RESP_TYPE>(topic).request(std::move(req), timeout);
     }
 
@@ -443,11 +465,12 @@ public:
     /// - threadId: 当前会话 id
     /// - ctx: AgentContext (取 bus; 若 bus 为空则只转发 origCb)
     /// - origCb: 原始回调 (可空, 用于过渡期保留旧输出行为)
-    static neograph::graph::GraphStreamCallback
-        make(std::string                                 agentName,
-             std::string                                 threadId,
-             std::weak_ptr<agentxx::agent::AgentContext> ctx,
-             neograph::graph::GraphStreamCallback        origCb = nullptr);
+    static neograph::graph::GraphStreamCallback make(
+        std::string                                 agentName,
+        std::string                                 threadId,
+        std::weak_ptr<agentxx::agent::AgentContext> ctx,
+        neograph::graph::GraphStreamCallback        origCb = nullptr
+    );
 };
 
 } // namespace middleware

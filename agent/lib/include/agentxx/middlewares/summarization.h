@@ -67,29 +67,34 @@ public:
     /// 压缩 tool 时处理函数
     std::map<std::string, SummarizationToolHandle> summarizationToolHandles{};
 
-    SummarizationMiddlewareHandle(agentxx::tools::SubAgentManagerTool*        in_subagentManager,
-                                  std::weak_ptr<agentxx::agent::AgentContext> in_agentContext,
-                                  size_t in_defaultModelSupportMaxToken
-                                  = defaultModelSupportMaxToken,
-                                  double in_asciiCharsPerToken    = 4.0,
-                                  double in_unicodeCharsPerToken  = 1.1,
-                                  double in_tokensPerImage        = 400.0,
-                                  double in_extraTokensPerMessage = 3.0);
+    SummarizationMiddlewareHandle(
+        agentxx::tools::SubAgentManagerTool*        in_subagentManager,
+        std::weak_ptr<agentxx::agent::AgentContext> in_agentContext,
+        size_t in_defaultModelSupportMaxToken = defaultModelSupportMaxToken,
+        double in_asciiCharsPerToken          = 4.0,
+        double in_unicodeCharsPerToken        = 1.1,
+        double in_tokensPerImage              = 400.0,
+        double in_extraTokensPerMessage       = 3.0
+    );
 
     size_t countTokensForUtf8Str(std::string_view in_str);
 
-    size_t countTokens(const std::vector<std::string>&           systemMsgs,
-                       const std::vector<neograph::ChatMessage>& messages);
+    size_t countTokens(
+        const std::vector<std::string>&           systemMsgs,
+        const std::vector<neograph::ChatMessage>& messages
+    );
 
-    std::string messagesToText(const std::vector<neograph::ChatMessage>& msgs,
-                               bool                                      includeSystem = false);
+    std::string
+        messagesToText(const std::vector<neograph::ChatMessage>& msgs, bool includeSystem = false);
 
     asio::awaitable<std::string>
         doSummarizeWithLLM(const std::vector<neograph::ChatMessage>& messages);
 
-    void offloadLongContentToTempStore(neograph::ChatMessage&                    msg,
-                                       const std::shared_ptr<MiddlewareContext>& ctx,
-                                       const std::string&                        thread_id);
+    void offloadLongContentToTempStore(
+        neograph::ChatMessage&                    msg,
+        const std::shared_ptr<MiddlewareContext>& ctx,
+        const std::string&                        thread_id
+    );
 
     void doSummarizeToolcall(std::vector<neograph::ChatMessage>& messages);
 

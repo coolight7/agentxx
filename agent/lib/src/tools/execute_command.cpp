@@ -26,7 +26,8 @@ namespace agentxx {
 namespace tools {
 
 ExecuteLinuxCommandTool::ExecuteLinuxCommandTool(
-    std::weak_ptr<agentxx::agent::AgentContext> in_agentContext) :
+    std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
+) :
     XXToolBase("execute_linux_command", in_agentContext, true, false) {}
 
 neograph::ChatTool ExecuteLinuxCommandTool::get_definition() const {
@@ -68,8 +69,8 @@ neograph::ChatTool ExecuteLinuxCommandTool::get_definition() const {
     };
 }
 
-asio::awaitable<std::string>
-    ExecuteLinuxCommandTool::execute_async(const neograph::json& arguments) {
+asio::awaitable<std::string> ExecuteLinuxCommandTool::execute_async(const neograph::json& arguments
+) {
     auto command = arguments.value("command", std::string{});
     if (command.empty()) {
         co_return R"({"error":"Arg `command` is empty"})";
@@ -100,23 +101,27 @@ asio::awaitable<std::string>
 
         std::string              strout, strerr;
         neograph_asio_error_code errCodeStdOut, errCodeStdErr;
-        auto                     readStdOutFuture
-            = asio::async_read(outpip,
-                               asio::dynamic_buffer(strout),
-                               asio::transfer_all(),
-                               asio::redirect_error(asio::use_awaitable, errCodeStdOut));
-        auto readStdErrFuture
-            = asio::async_read(errpip,
-                               asio::dynamic_buffer(strerr),
-                               asio::transfer_all(),
-                               asio::redirect_error(asio::use_awaitable, errCodeStdErr));
+        auto                     readStdOutFuture = asio::async_read(
+            outpip,
+            asio::dynamic_buffer(strout),
+            asio::transfer_all(),
+            asio::redirect_error(asio::use_awaitable, errCodeStdOut)
+        );
+        auto readStdErrFuture = asio::async_read(
+            errpip,
+            asio::dynamic_buffer(strerr),
+            asio::transfer_all(),
+            asio::redirect_error(asio::use_awaitable, errCodeStdErr)
+        );
         // assert(!ec || (ec == asio::error::eof));
         if (timeout > 0) {
             using namespace asio::experimental::awaitable_operators;
             asio::steady_timer timer(ctx, std::chrono::seconds(timeout));
-            auto res = co_await ((std::move(readStdOutFuture) && std::move(readStdErrFuture)
-                                  && proc.async_wait(asio::use_awaitable))
-                                 || timer.async_wait(asio::use_awaitable));
+            auto               res = co_await (
+                (std::move(readStdOutFuture) && std::move(readStdErrFuture)
+                 && proc.async_wait(asio::use_awaitable))
+                || timer.async_wait(asio::use_awaitable)
+            );
             if (res.index() == 1) {
                 boost::system::error_code ec;
                 proc.terminate(ec);
@@ -124,7 +129,8 @@ asio::awaitable<std::string>
                     R"({{"error":"Command timed out after {} seconds","stdout":"{}","stderr":"{}"}})",
                     timeout,
                     strout,
-                    strerr);
+                    strerr
+                );
             }
         } else {
             co_await std::move(readStdOutFuture);
@@ -174,7 +180,8 @@ asio::awaitable<std::string>
 }
 
 ExecuteWindowsCommandTool::ExecuteWindowsCommandTool(
-    std::weak_ptr<agentxx::agent::AgentContext> in_agentContext) :
+    std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
+) :
     XXToolBase("execute_windows_command", in_agentContext, true, false) {}
 
 neograph::ChatTool ExecuteWindowsCommandTool::get_definition() const {
@@ -257,23 +264,27 @@ asio::awaitable<std::string>
 
         std::string              strout, strerr;
         neograph_asio_error_code errCodeStdOut, errCodeStdErr;
-        auto                     readStdOutFuture
-            = asio::async_read(outpip,
-                               asio::dynamic_buffer(strout),
-                               asio::transfer_all(),
-                               asio::redirect_error(asio::use_awaitable, errCodeStdOut));
-        auto readStdErrFuture
-            = asio::async_read(errpip,
-                               asio::dynamic_buffer(strerr),
-                               asio::transfer_all(),
-                               asio::redirect_error(asio::use_awaitable, errCodeStdErr));
+        auto                     readStdOutFuture = asio::async_read(
+            outpip,
+            asio::dynamic_buffer(strout),
+            asio::transfer_all(),
+            asio::redirect_error(asio::use_awaitable, errCodeStdOut)
+        );
+        auto readStdErrFuture = asio::async_read(
+            errpip,
+            asio::dynamic_buffer(strerr),
+            asio::transfer_all(),
+            asio::redirect_error(asio::use_awaitable, errCodeStdErr)
+        );
         // assert(!ec || (ec == asio::error::eof));
         if (timeout > 0) {
             using namespace asio::experimental::awaitable_operators;
             asio::steady_timer timer(ctx, std::chrono::seconds(timeout));
-            auto               res = co_await ((proc.async_wait(asio::use_awaitable)
-                                  && std::move(readStdOutFuture) && std::move(readStdErrFuture))
-                                 || timer.async_wait(asio::use_awaitable));
+            auto               res = co_await (
+                (proc.async_wait(asio::use_awaitable) && std::move(readStdOutFuture)
+                 && std::move(readStdErrFuture))
+                || timer.async_wait(asio::use_awaitable)
+            );
             if (res.index() == 1) {
                 boost::system::error_code ec;
                 proc.terminate(ec);
@@ -281,7 +292,8 @@ asio::awaitable<std::string>
                     R"({{"error":"Command timed out after {} seconds","stdout":"{}","stderr":"{}"}})",
                     timeout,
                     strout,
-                    strerr);
+                    strerr
+                );
             }
         } else {
             co_await proc.async_wait(asio::use_awaitable);
@@ -375,7 +387,8 @@ asio::awaitable<std::string> ExecutePythonTool::execute_async(const neograph::js
 }
 
 ExecuteJavaScriptTool::ExecuteJavaScriptTool(
-    std::weak_ptr<agentxx::agent::AgentContext> in_agentContext) :
+    std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
+) :
     XXToolBase("execute_javascript_command", in_agentContext, true, false) {}
 
 neograph::ChatTool ExecuteJavaScriptTool::get_definition() const {

@@ -49,9 +49,10 @@ static bool should_skip(const std::string& file_path) {
 static std::vector<std::string> collect_source_files(const std::string& root_path) {
     std::vector<std::string> files;
     try {
-        for (const auto& entry :
-             fs::recursive_directory_iterator(root_path,
-                                              fs::directory_options::skip_permission_denied)) {
+        for (const auto& entry : fs::recursive_directory_iterator(
+                 root_path,
+                 fs::directory_options::skip_permission_denied
+             )) {
             if (!entry.is_regular_file()) {
                 continue;
             }
@@ -71,9 +72,11 @@ static std::vector<std::string> collect_source_files(const std::string& root_pat
     return files;
 }
 
-static bool is_changed(codegraph::Database&       db,
-                       const fs::directory_entry& entry,
-                       const std::string&         file_path) {
+static bool is_changed(
+    codegraph::Database&       db,
+    const fs::directory_entry& entry,
+    const std::string&         file_path
+) {
     auto existing = db.get_file(file_path);
     if (!existing.has_value()) {
         return true;
@@ -239,14 +242,18 @@ public:
                 XX_LOGW("CodeGraphManager: cannot open file {}", file_path);
                 continue;
             }
-            std::string source((std::istreambuf_iterator<char>(ifs)),
-                               std::istreambuf_iterator<char>());
+            std::string source(
+                (std::istreambuf_iterator<char>(ifs)),
+                std::istreambuf_iterator<char>()
+            );
 
             auto result = extractor->extract(file_path, source);
-            XX_LOGI("CodeGraphManager: extracted {} nodes, {} unresolved refs from {}",
-                    result.nodes.size(),
-                    result.unresolved.size(),
-                    file_path);
+            XX_LOGI(
+                "CodeGraphManager: extracted {} nodes, {} unresolved refs from {}",
+                result.nodes.size(),
+                result.unresolved.size(),
+                file_path
+            );
 
             writeExtractionResult(file_path, lang, result);
 
@@ -520,8 +527,8 @@ public:
             file_watcher_ = codegraph::FileWatcher::create(project_root_, &running_);
             file_watcher_->add_watch_recursive(project_root_);
 
-            file_watcher_->set_callback([this, auto_reindex](const std::string& path,
-                                                             uint32_t           mask) {
+            file_watcher_->set_callback([this,
+                                         auto_reindex](const std::string& path, uint32_t mask) {
                 if (auto_reindex
                     && (mask & (codegraph::FILE_EVENT_MODIFIED | codegraph::FILE_EVENT_CREATED))) {
                     std::string lang = codegraph::detect_language(path);
@@ -565,9 +572,11 @@ public:
         return running_.load();
     }
 
-    void writeExtractionResult(const std::string&           file_path,
-                               const std::string&           lang,
-                               codegraph::ExtractionResult& result) {
+    void writeExtractionResult(
+        const std::string&           file_path,
+        const std::string&           lang,
+        codegraph::ExtractionResult& result
+    ) {
         db_->begin_transaction();
         try {
             db_->delete_edges_for_file_nodes(file_path);

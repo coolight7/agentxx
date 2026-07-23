@@ -576,9 +576,11 @@ asio::awaitable<void> test_delimiters_priority() {
 
 asio::awaitable<void> test_delimiters_chinese() {
     std::vector<std::string> delims = {"。", "！", "？", "；", "，"};
-    auto result = VectorStore::splitByDelimiters("第一句。第二句！第三句？第四句；第五句，第六句",
-                                                 256,
-                                                 delims);
+    auto                     result = VectorStore::splitByDelimiters(
+        "第一句。第二句！第三句？第四句；第五句，第六句",
+        256,
+        delims
+    );
     if (result.size() == 2) {
         g_rag_passed++;
         TEST_PASS << "splitByDelimiters Chinese" << std::endl;
@@ -862,11 +864,12 @@ asio::awaitable<void> test_chunks_markdown_code() {
 asio::awaitable<void> test_chunks_short_text_all_modes() {
     std::string shortText = "Hello";
 
-    for (auto mode : {VectorStore::SplitMode::FixedLength,
-                      VectorStore::SplitMode::Character,
-                      VectorStore::SplitMode::Structural,
-                      VectorStore::SplitMode::StructuralThenChar,
-                      VectorStore::SplitMode::StructuralThenCharThenFixed}) {
+    for (auto mode :
+         {VectorStore::SplitMode::FixedLength,
+          VectorStore::SplitMode::Character,
+          VectorStore::SplitMode::Structural,
+          VectorStore::SplitMode::StructuralThenChar,
+          VectorStore::SplitMode::StructuralThenCharThenFixed}) {
         VectorStore::SplitConfig config;
         config.mode          = mode;
         config.maxUtf8Length = 256;
@@ -1313,11 +1316,12 @@ asio::awaitable<void> test_chunks_overlap_short_text() {
 
 asio::awaitable<void> test_chunks_overlap_all_modes() {
     std::string text = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-    for (auto mode : {VectorStore::SplitMode::FixedLength,
-                      VectorStore::SplitMode::Character,
-                      VectorStore::SplitMode::Structural,
-                      VectorStore::SplitMode::StructuralThenChar,
-                      VectorStore::SplitMode::StructuralThenCharThenFixed}) {
+    for (auto mode :
+         {VectorStore::SplitMode::FixedLength,
+          VectorStore::SplitMode::Character,
+          VectorStore::SplitMode::Structural,
+          VectorStore::SplitMode::StructuralThenChar,
+          VectorStore::SplitMode::StructuralThenCharThenFixed}) {
         VectorStore::SplitConfig config;
         config.mode           = mode;
         config.maxUtf8Length  = 10;
@@ -1473,7 +1477,6 @@ asio::awaitable<void> test_cosine_zero_vector() {
 
 asio::awaitable<TestResult>
     run_rag_search_tools_tests(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
-
     auto run = [](auto testFn) -> asio::awaitable<void> {
         try {
             co_await testFn();

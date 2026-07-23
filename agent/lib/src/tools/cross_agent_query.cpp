@@ -11,8 +11,8 @@
 namespace agentxx {
 namespace tools {
 
-CrossAgentQueryTool::CrossAgentQueryTool(
-    std::weak_ptr<agentxx::agent::AgentContext> in_agentContext) :
+CrossAgentQueryTool::CrossAgentQueryTool(std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
+) :
     XXToolBase("cross_agent_query", in_agentContext, true, false, 0) {}
 
 std::string CrossAgentQueryTool::get_name() const {
@@ -79,11 +79,14 @@ asio::awaitable<std::string> CrossAgentQueryTool::execute_async(const neograph::
                             .toAgent      = toAgent,
                             .message      = message,
                         },
-                        std::chrono::seconds(60));
+                        std::chrono::seconds(60)
+                    );
 
     if (!resp.has_value()) {
-        co_return fmt::format(R"({{"error":"Cross-agent query to `{}` timed out or no server"}})",
-                              toAgent);
+        co_return fmt::format(
+            R"({{"error":"Cross-agent query to `{}` timed out or no server"}})",
+            toAgent
+        );
     }
     if (resp->hasError) {
         co_return fmt::format(R"({{"error":"{}"}})", resp->errorMessage);

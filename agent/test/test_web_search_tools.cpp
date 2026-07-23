@@ -47,7 +47,8 @@ asio::awaitable<void>
 }
 
 asio::awaitable<void> test_web_search_definition_has_required_query(
-    std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    std::weak_ptr<agentxx::agent::AgentContext> agentContext
+) {
     auto tool
         = agentxx::tools::WebSearchTool{"https://example.com/search?q={}", false, agentContext};
     auto  def    = tool.get_definition();
@@ -125,7 +126,8 @@ asio::awaitable<void>
 }
 
 asio::awaitable<void> test_web_fetch_url_markdown_get_definition(
-    std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    std::weak_ptr<agentxx::agent::AgentContext> agentContext
+) {
     auto tool = agentxx::tools::WebFetchUrlMarkdownTool{agentContext};
     auto def  = tool.get_definition();
     if (def.name == "web_fetch_url_markdown") {
@@ -137,8 +139,9 @@ asio::awaitable<void> test_web_fetch_url_markdown_get_definition(
     co_return;
 }
 
-asio::awaitable<void> test_web_fetch_url_markdown_empty_url(
-    std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+asio::awaitable<void>
+    test_web_fetch_url_markdown_empty_url(std::weak_ptr<agentxx::agent::AgentContext> agentContext
+    ) {
     auto tool = agentxx::tools::WebFetchUrlMarkdownTool{agentContext};
     auto args = neograph::json{
         {"url", ""}
@@ -156,8 +159,9 @@ asio::awaitable<void> test_web_fetch_url_markdown_empty_url(
     co_return;
 }
 
-asio::awaitable<void> test_web_fetch_url_markdown_description(
-    std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+asio::awaitable<void>
+    test_web_fetch_url_markdown_description(std::weak_ptr<agentxx::agent::AgentContext> agentContext
+    ) {
     auto tool = agentxx::tools::WebFetchUrlMarkdownTool{agentContext};
     auto def  = tool.get_definition();
     if (def.description.find("markdown") != std::string::npos
@@ -173,8 +177,9 @@ asio::awaitable<void> test_web_fetch_url_markdown_description(
     co_return;
 }
 
-asio::awaitable<void> test_web_search_convert_html2markdown(
-    std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+asio::awaitable<void>
+    test_web_search_convert_html2markdown(std::weak_ptr<agentxx::agent::AgentContext> agentContext
+    ) {
     auto tool
         = agentxx::tools::WebSearchTool{"https://example.com/search?q={}", true, agentContext};
     auto def = tool.get_definition();
@@ -192,7 +197,6 @@ asio::awaitable<void> test_web_search_convert_html2markdown(
 
 asio::awaitable<TestResult>
     run_web_search_tools_tests(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
-
     auto run = [agentContext](auto testFn) -> asio::awaitable<void> {
         try {
             co_await testFn(agentContext);

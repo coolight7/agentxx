@@ -27,9 +27,11 @@ protected:
 
 public:
 
-    ModelCallWrapNode(const std::string&                          name,
-                      const neograph::graph::NodeContext&         ctx,
-                      std::weak_ptr<agentxx::agent::AgentContext> in_agentContext);
+    ModelCallWrapNode(
+        const std::string&                          name,
+        const neograph::graph::NodeContext&         ctx,
+        std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
+    );
 
     /// 解析指定会话使用的 Provider
     /// - 启用动态切换时按会话 (thread_id) 选择的模型经 modelRegistry 解析
@@ -39,40 +41,49 @@ public:
     /// 解析指定会话使用的模型名 (发送给 LLM api 的 model 字段)
     std::string resolveCurrentModelName(const std::string& threadId) const;
 
-    asio::awaitable<neograph::ChatCompletion> onReceiveToken(neograph::CompletionParams& params,
-                                                             neograph::graph::NodeInput& input);
+    asio::awaitable<neograph::ChatCompletion>
+        onReceiveToken(neograph::CompletionParams& params, neograph::graph::NodeInput& input);
 
-    neograph::CompletionParams build_params(const neograph::graph::GraphState& state,
-                                            const std::string&                 threadId) const;
+    neograph::CompletionParams
+        build_params(const neograph::graph::GraphState& state, const std::string& threadId) const;
 
     asio::awaitable<neograph::graph::NodeOutput> callLLM(neograph::graph::NodeInput& in);
 
-    asio::awaitable<void> onHandleStart(agentxx::middleware::BaseMiddlewareHandleInterface& item,
-                                        neograph::graph::NodeInput& in) override;
+    asio::awaitable<void> onHandleStart(
+        agentxx::middleware::BaseMiddlewareHandleInterface& item,
+        neograph::graph::NodeInput&                         in
+    ) override;
 
-    asio::awaitable<void> onHandleEnd(agentxx::middleware::BaseMiddlewareHandleInterface& item,
-                                      const neograph::graph::NodeInput&                   in,
-                                      neograph::graph::NodeOutput& result) override;
+    asio::awaitable<void> onHandleEnd(
+        agentxx::middleware::BaseMiddlewareHandleInterface& item,
+        const neograph::graph::NodeInput&                   in,
+        neograph::graph::NodeOutput&                        result
+    ) override;
 
-    void onHandleStartError(bool                                                errorRethrow,
-                            bool                                                isCurrentError,
-                            std::string_view                                    exceptionStr,
-                            agentxx::middleware::BaseMiddlewareHandleInterface& item,
-                            neograph::graph::NodeInput&                         in,
-                            neograph::graph::NodeOutput& result) noexcept override;
+    void onHandleStartError(
+        bool                                                errorRethrow,
+        bool                                                isCurrentError,
+        std::string_view                                    exceptionStr,
+        agentxx::middleware::BaseMiddlewareHandleInterface& item,
+        neograph::graph::NodeInput&                         in,
+        neograph::graph::NodeOutput&                        result
+    ) noexcept override;
 
-    void onHandleBaseRunError(bool                         errorRethrow,
-                              bool                         isCurrentError,
-                              std::string_view             exceptionStr,
-                              neograph::graph::NodeInput&  in,
-                              neograph::graph::NodeOutput& result) noexcept override;
+    void onHandleBaseRunError(
+        bool                         errorRethrow,
+        bool                         isCurrentError,
+        std::string_view             exceptionStr,
+        neograph::graph::NodeInput&  in,
+        neograph::graph::NodeOutput& result
+    ) noexcept override;
 
     void repairMessages(neograph::graph::NodeInput& in);
 
     asio::awaitable<void> baseRun(
         std::vector<std::shared_ptr<agentxx::middleware::BaseMiddlewareHandleInterface>>& handles,
         neograph::graph::NodeInput&                                                       in,
-        neograph::graph::NodeOutput& result) override;
+        neograph::graph::NodeOutput&                                                      result
+    ) override;
 };
 
 } // namespace nodes

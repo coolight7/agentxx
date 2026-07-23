@@ -88,15 +88,18 @@ struct SharedPdhContext {
 
         PDH_STATUS engStatus
             = PdhAddCounterW(query, L"\\GPU Engine(*)\\Utilization Percentage", 0, &hEngineCounter);
-        PDH_STATUS dedStatus = PdhAddCounterW(query,
-                                              L"\\GPU Process Memory(*)\\Dedicated Usage",
-                                              0,
-                                              &hProcMemDedicated);
+        PDH_STATUS dedStatus = PdhAddCounterW(
+            query,
+            L"\\GPU Process Memory(*)\\Dedicated Usage",
+            0,
+            &hProcMemDedicated
+        );
         PDH_STATUS shrStatus
             = PdhAddCounterW(query, L"\\GPU Process Memory(*)\\Shared Usage", 0, &hProcMemShared);
 
-        initialized = (engStatus == ERROR_SUCCESS || dedStatus == ERROR_SUCCESS
-                       || shrStatus == ERROR_SUCCESS);
+        initialized
+            = (engStatus == ERROR_SUCCESS || dedStatus == ERROR_SUCCESS
+               || shrStatus == ERROR_SUCCESS);
         return initialized;
     }
 };
@@ -129,8 +132,10 @@ public:
         }
 
         if (needCpuInit || pdhAvailable) {
-            asio::steady_timer timer(co_await asio::this_coro::executor,
-                                     std::chrono::milliseconds(100));
+            asio::steady_timer timer(
+                co_await asio::this_coro::executor,
+                std::chrono::milliseconds(100)
+            );
             co_await timer.async_wait(asio::use_awaitable);
         }
 
@@ -215,8 +220,10 @@ private:
         HRESULT        hr
             = CreateDXGIFactory1(__uuidof(IDXGIFactory6), reinterpret_cast<void**>(&factory));
         if (FAILED(hr) || !factory) {
-            XX_LOGE("CpuGpuMonitor: CreateDXGIFactory1 failed, hr=0x{:08X}",
-                    static_cast<unsigned>(hr));
+            XX_LOGE(
+                "CpuGpuMonitor: CreateDXGIFactory1 failed, hr=0x{:08X}",
+                static_cast<unsigned>(hr)
+            );
             cache.built = true;
             co_return;
         }
@@ -233,24 +240,28 @@ private:
                 info.dedicatedVramMB = desc.DedicatedVideoMemory / (1024 * 1024);
                 info.sharedVramMB    = desc.SharedSystemMemory / (1024 * 1024);
 
-                int len = WideCharToMultiByte(CP_UTF8,
-                                              0,
-                                              desc.Description,
-                                              -1,
-                                              nullptr,
-                                              0,
-                                              nullptr,
-                                              nullptr);
+                int len = WideCharToMultiByte(
+                    CP_UTF8,
+                    0,
+                    desc.Description,
+                    -1,
+                    nullptr,
+                    0,
+                    nullptr,
+                    nullptr
+                );
                 if (len > 0) {
                     info.name.resize(static_cast<size_t>(len) - 1);
-                    WideCharToMultiByte(CP_UTF8,
-                                        0,
-                                        desc.Description,
-                                        -1,
-                                        &info.name[0],
-                                        len,
-                                        nullptr,
-                                        nullptr);
+                    WideCharToMultiByte(
+                        CP_UTF8,
+                        0,
+                        desc.Description,
+                        -1,
+                        &info.name[0],
+                        len,
+                        nullptr,
+                        nullptr
+                    );
                 }
 
                 cache.adapters.push_back(std::move(info));
@@ -311,8 +322,10 @@ private:
         }
     }
 
-    void collectEngineUtilization(HCOUNTER                                               hCounter,
-                                  std::unordered_map<LUID, double, LUIDHash, LUIDEqual>& outMap) {
+    void collectEngineUtilization(
+        HCOUNTER                                               hCounter,
+        std::unordered_map<LUID, double, LUIDHash, LUIDEqual>& outMap
+    ) {
         DWORD      bufSize   = 0;
         DWORD      itemCount = 0;
         PDH_STATUS status
@@ -346,8 +359,10 @@ private:
         }
     }
 
-    void collectProcessMemory(HCOUNTER                                                 hCounter,
-                              std::unordered_map<LUID, uint64_t, LUIDHash, LUIDEqual>& outMap) {
+    void collectProcessMemory(
+        HCOUNTER                                                 hCounter,
+        std::unordered_map<LUID, uint64_t, LUIDHash, LUIDEqual>& outMap
+    ) {
         DWORD      bufSize   = 0;
         DWORD      itemCount = 0;
         PDH_STATUS status
@@ -514,8 +529,10 @@ public:
         CpuTimes oldSample = _sample;
         if (_sample.total == 0 || _sample.idle == 0) {
             oldSample = co_await readCpuStat();
-            asio::steady_timer timer(co_await asio::this_coro::executor,
-                                     std::chrono::milliseconds(100));
+            asio::steady_timer timer(
+                co_await asio::this_coro::executor,
+                std::chrono::milliseconds(100)
+            );
             co_await timer.async_wait(asio::use_awaitable);
         }
 
@@ -560,10 +577,12 @@ protected:
                 co_return "";
             }
             std::string data;
-            co_await asio::async_read(stream,
-                                      asio::dynamic_buffer(data),
-                                      asio::transfer_all(),
-                                      asio::redirect_error(asio::use_awaitable, errCode));
+            co_await asio::async_read(
+                stream,
+                asio::dynamic_buffer(data),
+                asio::transfer_all(),
+                asio::redirect_error(asio::use_awaitable, errCode)
+            );
             stream.close();
             if (errCode && errCode != asio::error::eof) {
                 co_return "";
@@ -672,8 +691,10 @@ protected:
 
             if (entry.vendorId == 0x1002) {
                 entry.isAmd = true;
-                co_await readSysfsUint64(devicePath + "/mem_info_vram_total",
-                                         entry.dedicatedVramMB);
+                co_await readSysfsUint64(
+                    devicePath + "/mem_info_vram_total",
+                    entry.dedicatedVramMB
+                );
                 entry.dedicatedVramMB /= (1024 * 1024);
             } else if (entry.vendorId == 0x10de) {
                 entry.isNvidia = true;
@@ -734,13 +755,15 @@ protected:
                     size_t pos = line.find(':');
                     if (pos != std::string::npos) {
                         entry.name = agentxx::util::removeBetweenSpace(
-                            std::string_view{line}.substr(pos + 1));
+                            std::string_view{line}.substr(pos + 1)
+                        );
                     }
                 } else if (line.rfind("Video Memory:", 0) == 0) {
                     size_t pos = line.find(':');
                     if (pos != std::string::npos) {
                         auto memStr = agentxx::util::removeBetweenSpace(
-                            std::string_view{line}.substr(pos + 1));
+                            std::string_view{line}.substr(pos + 1)
+                        );
                         uint64_t totalMiB = 0;
                         std::sscanf(memStr.c_str(), "%lu MiB", &totalMiB);
                         entry.dedicatedVramMB = totalMiB;

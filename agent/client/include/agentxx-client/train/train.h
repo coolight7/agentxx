@@ -13,9 +13,13 @@ std::vector<agentxx::agent::TrainingTestCase> loadTestCasesRecursive(const std::
 std::string findProjectRoot();
 
 /// 替换输入中的 {agentxx_root} 占位符
-void replacePlaceholders(std::vector<agentxx::agent::TrainingTestCase>& cases,
-                         const std::string&                             projectRoot);
+void replacePlaceholders(
+    std::vector<agentxx::agent::TrainingTestCase>& cases,
+    const std::string&                             projectRoot
+);
 
-void runTrainingMode(std::shared_ptr<agentxx::agent::AgentConfig> baseConfig,
-                     std::shared_ptr<agentxx::agent::AgentConfig> scorerConfig,
-                     std::shared_ptr<agentxx::agent::AgentConfig> optimizerConfig);
+void runTrainingMode(
+    std::shared_ptr<agentxx::agent::AgentConfig> baseConfig,
+    std::shared_ptr<agentxx::agent::AgentConfig> scorerConfig,
+    std::shared_ptr<agentxx::agent::AgentConfig> optimizerConfig
+);

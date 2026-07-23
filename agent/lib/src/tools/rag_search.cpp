@@ -17,9 +17,11 @@
 namespace agentxx {
 namespace tools {
 
-EmbeddingClient::EmbeddingClient(std::string_view in_baseUrl,
-                                 std::string_view in_apiKey,
-                                 std::string_view in_model) :
+EmbeddingClient::EmbeddingClient(
+    std::string_view in_baseUrl,
+    std::string_view in_apiKey,
+    std::string_view in_model
+) :
     baseUrl(in_baseUrl),
     apiKey(in_apiKey),
     model(in_model) {}
@@ -28,7 +30,8 @@ asio::awaitable<std::expected<std::vector<std::vector<double>>, std::string>>
     EmbeddingClient::embed_batch(const std::vector<std::string>& texts) const {
     if (texts.empty()) {
         co_return std::expected<std::vector<std::vector<double>>, std::string>{
-            std::vector<std::vector<double>>{}};
+            std::vector<std::vector<double>>{}
+        };
     }
 
     auto body     = neograph::json::object();
@@ -39,7 +42,8 @@ asio::awaitable<std::expected<std::vector<std::vector<double>>, std::string>>
         fmt::format("{}/embeddings", baseUrl),
         body,
         {},
-        agentxx::util::HttpClient::RequestConfig{.readTimeout = std::chrono::seconds{15}});
+        agentxx::util::HttpClient::RequestConfig{.readTimeout = std::chrono::seconds{15}}
+    );
 
     if (false == resp.has_value() || false == agentxx::util::HttpClient::respIsSucc(resp.value())) {
         std::string str;
@@ -83,14 +87,18 @@ double RAGSearchTool::cosineSimilarity(const std::vector<double>& a, const std::
 RAGSearchTool::VectorStore::VectorStore(std::shared_ptr<EmbeddingClient> in_embedder) :
     embedder(std::move(in_embedder)) {}
 
-RAGSearchTool::VectorStore::VectorStore(std::shared_ptr<EmbeddingClient> in_embedder,
-                                        const SplitConfig&               in_splitCfg) :
+RAGSearchTool::VectorStore::VectorStore(
+    std::shared_ptr<EmbeddingClient> in_embedder,
+    const SplitConfig&               in_splitCfg
+) :
     splitConfig(in_splitCfg),
     embedder(std::move(in_embedder)) {}
 
-std::vector<std::string> RAGSearchTool::VectorStore::splitByFixedLength(std::string_view text,
-                                                                        size_t           blockSize,
-                                                                        double overlapPercent) {
+std::vector<std::string> RAGSearchTool::VectorStore::splitByFixedLength(
+    std::string_view text,
+    size_t           blockSize,
+    double           overlapPercent
+) {
     if (overlapPercent <= 0.0 || overlapPercent >= 100.0) {
         auto result = std::vector<std::string>{};
         for (size_t index = 0; index < text.size();) {
@@ -131,8 +139,10 @@ std::vector<std::string> RAGSearchTool::VectorStore::splitByFixedLength(std::str
     return result;
 }
 
-std::vector<std::string> RAGSearchTool::VectorStore::splitByDelimiter(std::string_view text,
-                                                                      std::string_view delimiter) {
+std::vector<std::string> RAGSearchTool::VectorStore::splitByDelimiter(
+    std::string_view text,
+    std::string_view delimiter
+) {
     auto result = std::vector<std::string>{};
     if (delimiter.empty()) {
         if (!text.empty()) {
@@ -272,10 +282,11 @@ std::vector<std::string> RAGSearchTool::VectorStore::splitByStructure(std::strin
     return merged;
 }
 
-std::vector<std::string>
-    RAGSearchTool::VectorStore::splitByDelimiters(std::string_view                text,
-                                                  size_t                          maxUtf8Length,
-                                                  const std::vector<std::string>& delimiters) {
+std::vector<std::string> RAGSearchTool::VectorStore::splitByDelimiters(
+    std::string_view                text,
+    size_t                          maxUtf8Length,
+    const std::vector<std::string>& delimiters
+) {
     if (text.empty()) {
         return {};
     }
@@ -311,10 +322,11 @@ std::vector<std::string>
     return splitByFixedLength(text, maxUtf8Length);
 }
 
-std::vector<std::string>
-    RAGSearchTool::VectorStore::applyChunkOverlap(const std::vector<std::string>& chunks,
-                                                  size_t                          maxUtf8Length,
-                                                  double                          overlapPercent) {
+std::vector<std::string> RAGSearchTool::VectorStore::applyChunkOverlap(
+    const std::vector<std::string>& chunks,
+    size_t                          maxUtf8Length,
+    double                          overlapPercent
+) {
     if (overlapPercent <= 0.0 || chunks.size() <= 1) {
         return chunks;
     }
@@ -350,8 +362,10 @@ std::vector<std::string>
     return result;
 }
 
-std::vector<std::string> RAGSearchTool::VectorStore::splitTextToChunks(std::string_view   text,
-                                                                       const SplitConfig& config) {
+std::vector<std::string> RAGSearchTool::VectorStore::splitTextToChunks(
+    std::string_view   text,
+    const SplitConfig& config
+) {
     if (text.empty()) {
         return {};
     }
@@ -360,14 +374,15 @@ std::vector<std::string> RAGSearchTool::VectorStore::splitTextToChunks(std::stri
     double overlapPct = config.overlapPercent;
 
     switch (config.mode) {
-    case SplitMode::FixedLength:
-        return splitByFixedLength(text, maxLen, overlapPct);
-    case SplitMode::Character:
-        return applyChunkOverlap(splitByDelimiters(text, maxLen, config.delimiters),
-                                 maxLen,
-                                 overlapPct);
-    case SplitMode::Structural:
-        {
+        case SplitMode::FixedLength:
+            return splitByFixedLength(text, maxLen, overlapPct);
+        case SplitMode::Character:
+            return applyChunkOverlap(
+                splitByDelimiters(text, maxLen, config.delimiters),
+                maxLen,
+                overlapPct
+            );
+        case SplitMode::Structural: {
             auto                     blocks = splitByStructure(text);
             std::vector<std::string> result;
             for (auto& block : blocks) {
@@ -382,8 +397,7 @@ std::vector<std::string> RAGSearchTool::VectorStore::splitTextToChunks(std::stri
             }
             return applyChunkOverlap(result, maxLen, overlapPct);
         }
-    case SplitMode::StructuralThenChar:
-        {
+        case SplitMode::StructuralThenChar: {
             auto                     blocks = splitByStructure(text);
             std::vector<std::string> result;
             for (auto& block : blocks) {
@@ -398,8 +412,7 @@ std::vector<std::string> RAGSearchTool::VectorStore::splitTextToChunks(std::stri
             }
             return applyChunkOverlap(result, maxLen, overlapPct);
         }
-    case SplitMode::StructuralThenCharThenFixed:
-        {
+        case SplitMode::StructuralThenCharThenFixed: {
             auto                     blocks = splitByStructure(text);
             std::vector<std::string> result;
             for (auto& block : blocks) {
@@ -439,10 +452,13 @@ asio::awaitable<std::vector<RAGSearchTool::Document>>
                 if (!stream) {
                     auto ec = std::error_code{errno, std::system_category()};
                     throw std::runtime_error{
-                        fmt::format(R"(Can not open file. Error: {})", ec.message())};
+                        fmt::format(R"(Can not open file. Error: {})", ec.message())
+                    };
                 }
-                auto content = std::string{std::istreambuf_iterator<char>(stream),
-                                           std::istreambuf_iterator<char>()};
+                auto content = std::string{
+                    std::istreambuf_iterator<char>(stream),
+                    std::istreambuf_iterator<char>()
+                };
                 stream.close();
 
                 result.push_back(Document{
@@ -467,29 +483,35 @@ asio::awaitable<std::vector<RAGSearchTool::Document>>
                 if (entity.is_regular_file()) {
                     if (onAppendItem(entity.path().generic_string())) {
                         auto& doc  = result.back();
-                        content   += fmt::format("┣━ ✅ Load success: `{}`(Block {} | {} )\n",
-                                               doc.title,
-                                               doc.content.size(),
-                                               itemPath);
+                        content   += fmt::format(
+                            "┣━ ✅ Load success: `{}`(Block {} | {} )\n",
+                            doc.title,
+                            doc.content.size(),
+                            itemPath
+                        );
                     }
                 }
             }
         } else if (std::filesystem::is_regular_file(itemPath)) {
             if (onAppendItem(itemPath)) {
                 auto& doc  = result.back();
-                content   += fmt::format("┣━ ✅ Load success: `{}`(Block {} | {} )\n",
-                                       doc.title,
-                                       doc.content.size(),
-                                       itemPath);
+                content   += fmt::format(
+                    "┣━ ✅ Load success: `{}`(Block {} | {} )\n",
+                    doc.title,
+                    doc.content.size(),
+                    itemPath
+                );
             }
         }
     }
-    XX_LOGD(R"_(
+    XX_LOGD(
+        R"_(
 ┏━━━━━━ RAG Docs Load ━━━━━━┓
 {}
 ┗━━━━━━ RAG Docs Load ━━━━━━┛
 )_",
-            content);
+        content
+    );
 
     co_return result;
 }
@@ -519,9 +541,9 @@ asio::awaitable<bool> RAGSearchTool::VectorStore::addDocuments(std::vector<Docum
     co_return false;
 }
 
-asio::awaitable<
-    std::expected<std::vector<std::tuple<const RAGSearchTool::Document&, size_t, double>>,
-                  std::string>>
+asio::awaitable<std::expected<
+    std::vector<std::tuple<const RAGSearchTool::Document&, size_t, double>>,
+    std::string>>
     RAGSearchTool::VectorStore::search(std::string_view query, size_t top_k) const {
     auto queryVec
         = co_await embedder->embed_batch(VectorStore::splitTextToChunks(query, splitConfig));
@@ -529,8 +551,8 @@ asio::awaitable<
         co_return std::unexpected{queryVec.error()};
     }
     if (queryVec.value().empty()) {
-        co_return std::expected<std::vector<std::tuple<const Document&, size_t, double>>,
-                                std::string>{};
+        co_return std::
+            expected<std::vector<std::tuple<const Document&, size_t, double>>, std::string>{};
     }
 
     /// <docIndex, contentIndex, sim>
@@ -547,14 +569,16 @@ asio::awaitable<
         }
     }
 
-    std::sort(scores.begin(),
-              scores.end(),
-              [](const std::tuple<size_t, size_t, double>& a,
-                 const std::tuple<size_t, size_t, double>& b) {
-                  const auto& [_a1, _a2, aSim] = a;
-                  const auto& [_b1, _b2, bSim] = b;
-                  return aSim > bSim;
-              });
+    std::sort(
+        scores.begin(),
+        scores.end(),
+        [](const std::tuple<size_t, size_t, double>& a,
+           const std::tuple<size_t, size_t, double>& b) {
+            const auto& [_a1, _a2, aSim] = a;
+            const auto& [_b1, _b2, bSim] = b;
+            return aSim > bSim;
+        }
+    );
 
     auto results = std::vector<std::tuple<const Document&, size_t, double>>{};
     for (size_t i = 0; i < top_k && i < scores.size(); ++i) {
@@ -562,11 +586,14 @@ asio::awaitable<
         results.push_back({docs[docIndex], contentIndex, sim});
     }
     co_return std::expected<std::vector<std::tuple<const Document&, size_t, double>>, std::string>{
-        std::move(results)};
+        std::move(results)
+    };
 }
 
-RAGSearchTool::RAGSearchTool(std::shared_ptr<VectorStore>                in_store,
-                             std::weak_ptr<agentxx::agent::AgentContext> in_agentContext) :
+RAGSearchTool::RAGSearchTool(
+    std::shared_ptr<VectorStore>                in_store,
+    std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
+) :
     XXToolBase("rag_search", in_agentContext, false, true),
     store(in_store) {}
 

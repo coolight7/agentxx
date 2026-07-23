@@ -31,19 +31,22 @@ asio::awaitable<std::optional<std::string>> AgentStdIO::getInput() {
     co_return co_await stdinReader.readLine();
 }
 
-asio::awaitable<bool> AgentStdIO::promptPermission(const std::string& toolName,
-                                                   const std::string& category,
-                                                   const std::string& target) {
-    std::cout << fmt::format(R"(
+asio::awaitable<bool> AgentStdIO::promptPermission(
+    const std::string& toolName,
+    const std::string& category,
+    const std::string& target
+) {
+    std::cout << fmt::format(
+        R"(
 ┏━━━━━━ Permission Request ━━━━━━┓
 ┣━ Tool    : {}
 ┣━ Category: {}
 ┣━ Target  : {}
 ┣━ Allow? [y/N]: )",
-                             toolName,
-                             category,
-                             target)
-              << std::flush;
+        toolName,
+        category,
+        target
+    ) << std::flush;
 
     auto lineOpt = co_await getInput();
 
@@ -59,9 +62,11 @@ asio::awaitable<bool> AgentStdIO::promptPermission(const std::string& toolName,
     co_return (line == "y" || line == "yes");
 }
 
-void AgentStdIO::onInterrupt(const std::string& node,
-                             const std::string& value,
-                             const std::string& handleName) {
+void AgentStdIO::onInterrupt(
+    const std::string& node,
+    const std::string& value,
+    const std::string& handleName
+) {
     std::cout << fmt::format(
         R"(
 ┏━━━━━━ Interrupted ━━━━━━┓
@@ -73,8 +78,8 @@ void AgentStdIO::onInterrupt(const std::string& node,
         node,
         value,
         (!handleName.empty()) ? fmt::format("┣━ Interrupt Handle: {}", handleName)
-                              : "┣━ Unknown InterruptHandleArg")
-              << std::endl;
+                              : "┣━ Unknown InterruptHandleArg"
+    ) << std::endl;
 }
 
 void AgentStdIO::resetTokenState() {

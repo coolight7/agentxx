@@ -120,7 +120,8 @@ agentxx::test::TestResult test_screen_capture() {
             5,
             [&frame_count](const std::vector<agentxx::expand::ScreenFrame>&) {
                 frame_count++;
-            });
+            }
+        );
 
         if (!streaming_started) {
             g_sc_failed++;

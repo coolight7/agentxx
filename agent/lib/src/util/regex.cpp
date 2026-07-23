@@ -21,8 +21,10 @@ public:
     XXRegexHP& operator=(const XXRegexHP&) = delete;
 
     // 初始化Hyperscan数据库
-    XXRegexHP(const std::string& regstr,
-              unsigned int       flags = agentxx::util::XXRegex::defHSFlags_normal) :
+    XXRegexHP(
+        const std::string& regstr,
+        unsigned int       flags = agentxx::util::XXRegex::defHSFlags_normal
+    ) :
         hs_db(nullptr),
         hs_scratch(nullptr) {
         // 编译正则表达式到Hyperscan数据库
@@ -45,8 +47,10 @@ public:
         }
     }
 
-    XXRegexHP(const std::vector<std::string>& regstrs,
-              unsigned int                    flags = agentxx::util::XXRegex::defHSFlags_normal) :
+    XXRegexHP(
+        const std::vector<std::string>& regstrs,
+        unsigned int                    flags = agentxx::util::XXRegex::defHSFlags_normal
+    ) :
         hs_db(nullptr),
         hs_scratch(nullptr) {
         // 编译正则表达式到Hyperscan数据库
@@ -58,14 +62,16 @@ public:
             reglist.push_back(reg.c_str());
         }
 
-        hs_error_t err = hs_compile_multi(reglist.data(),
-                                          flagslist.data(),
-                                          nullptr,
-                                          (unsigned int)(regstrs.size()),
-                                          HS_MODE_BLOCK,
-                                          nullptr,
-                                          &hs_db,
-                                          &compile_err);
+        hs_error_t err = hs_compile_multi(
+            reglist.data(),
+            flagslist.data(),
+            nullptr,
+            (unsigned int)(regstrs.size()),
+            HS_MODE_BLOCK,
+            nullptr,
+            &hs_db,
+            &compile_err
+        );
 
         if (err != HS_SUCCESS) {
             XX_LOGE("Hyperscan编译正则失败: {} | {}", compile_err->message, regstrs.size());
@@ -93,11 +99,13 @@ public:
     }
 
     // Hyperscan匹配回调函数
-    inline static int xxregexMatchCallback(unsigned int       id,
-                                           unsigned long long from,
-                                           unsigned long long to,
-                                           unsigned int       flags,
-                                           void*              context) {
+    inline static int xxregexMatchCallback(
+        unsigned int       id,
+        unsigned long long from,
+        unsigned long long to,
+        unsigned int       flags,
+        void*              context
+    ) {
         std::vector<agentxx::util::XXRegexMatchResult>* results
             = static_cast<std::vector<agentxx::util::XXRegexMatchResult>*>(context);
         if (results == nullptr) {
@@ -147,21 +155,23 @@ public:
     }
 
     // 匹配
-    bool match(std::string_view                                input,
-               std::vector<agentxx::util::XXRegexMatchResult>& results) const override {
+    bool match(std::string_view input, std::vector<agentxx::util::XXRegexMatchResult>& results)
+        const override {
         results.clear();
         if (hs_db == nullptr || hs_scratch == nullptr) {
             return false;
         }
 
         // block模式、适合短文本
-        hs_error_t err = hs_scan(hs_db,
-                                 input.data(),
-                                 (unsigned int)(input.length()),
-                                 0,
-                                 hs_scratch,
-                                 xxregexMatchCallback,
-                                 &results);
+        hs_error_t err = hs_scan(
+            hs_db,
+            input.data(),
+            (unsigned int)(input.length()),
+            0,
+            hs_scratch,
+            xxregexMatchCallback,
+            &results
+        );
         if (err != HS_SUCCESS && err != HS_SCAN_TERMINATED) {
             XX_LOGE("Hyperscan扫描失败");
             return false;
@@ -171,8 +181,10 @@ public:
     }
 
     // 移除匹配的子串
-    std::string remove(std::string_view                                input,
-                       std::vector<agentxx::util::XXRegexMatchResult>& results) const override {
+    std::string remove(
+        std::string_view                                input,
+        std::vector<agentxx::util::XXRegexMatchResult>& results
+    ) const override {
         std::string result;
         if (match(input, results)) {
             size_t index = 0;
@@ -190,9 +202,11 @@ public:
     }
 
     // 替换匹配的子串
-    std::string replace(std::string_view                                input,
-                        std::string_view                                target,
-                        std::vector<agentxx::util::XXRegexMatchResult>& results) const override {
+    std::string replace(
+        std::string_view                                input,
+        std::string_view                                target,
+        std::vector<agentxx::util::XXRegexMatchResult>& results
+    ) const override {
         std::string result;
         if (match(input, results)) {
             size_t index = 0;
@@ -221,9 +235,10 @@ std::shared_ptr<agentxx::util::XXRegex>
     return std::make_shared<XXRegexHP>(regstr, flags);
 }
 
-std::shared_ptr<agentxx::util::XXRegex>
-    agentxx::util::XXRegex::createRegex(const std::vector<std::string>& regstrs,
-                                        unsigned int                    flags) {
+std::shared_ptr<agentxx::util::XXRegex> agentxx::util::XXRegex::createRegex(
+    const std::vector<std::string>& regstrs,
+    unsigned int                    flags
+) {
     return std::make_shared<XXRegexHP>(regstrs, flags);
 }
 
@@ -241,8 +256,10 @@ public:
     XXRegexStdRegex& operator=(const XXRegexStdRegex&) = delete;
 
     // 单模式构造函数
-    XXRegexStdRegex(const std::string& regstr,
-                    unsigned int       flags = agentxx::util::XXRegex::defHSFlags_normal) :
+    XXRegexStdRegex(
+        const std::string& regstr,
+        unsigned int       flags = agentxx::util::XXRegex::defHSFlags_normal
+    ) :
         valid_(false),
         multi_mode_(false) {
         try {
@@ -254,8 +271,10 @@ public:
     }
 
     // 多模式构造函数
-    XXRegexStdRegex(const std::vector<std::string>& regstrs,
-                    unsigned int flags = agentxx::util::XXRegex::defHSFlags_normal) :
+    XXRegexStdRegex(
+        const std::vector<std::string>& regstrs,
+        unsigned int                    flags = agentxx::util::XXRegex::defHSFlags_normal
+    ) :
         valid_(false),
         multi_mode_(true) {
         regexes_.reserve(regstrs.size());
@@ -283,8 +302,8 @@ public:
     ~XXRegexStdRegex() = default;
 
     // 匹配：返回所有合并后的非重叠区间
-    bool match(std::string_view                                input,
-               std::vector<agentxx::util::XXRegexMatchResult>& results) const override {
+    bool match(std::string_view input, std::vector<agentxx::util::XXRegexMatchResult>& results)
+        const override {
         results.clear();
         if (!valid_) {
             return false;
@@ -334,8 +353,10 @@ public:
     }
 
     // 移除匹配子串
-    std::string remove(std::string_view                                input,
-                       std::vector<agentxx::util::XXRegexMatchResult>& results) const override {
+    std::string remove(
+        std::string_view                                input,
+        std::vector<agentxx::util::XXRegexMatchResult>& results
+    ) const override {
         std::string result;
         if (match(input, results)) {
             size_t index = 0;
@@ -353,9 +374,11 @@ public:
     }
 
     // 替换匹配子串
-    std::string replace(std::string_view                                input,
-                        std::string_view                                target,
-                        std::vector<agentxx::util::XXRegexMatchResult>& results) const override {
+    std::string replace(
+        std::string_view                                input,
+        std::string_view                                target,
+        std::vector<agentxx::util::XXRegexMatchResult>& results
+    ) const override {
         std::string result;
         if (match(input, results)) {
             size_t index = 0;
@@ -386,9 +409,10 @@ std::shared_ptr<agentxx::util::XXRegex>
     return std::make_shared<XXRegexStdRegex>(regstr, flags);
 }
 
-std::shared_ptr<agentxx::util::XXRegex>
-    agentxx::util::XXRegex::createRegex(const std::vector<std::string>& regstrs,
-                                        unsigned int                    flags) {
+std::shared_ptr<agentxx::util::XXRegex> agentxx::util::XXRegex::createRegex(
+    const std::vector<std::string>& regstrs,
+    unsigned int                    flags
+) {
     return std::make_shared<XXRegexStdRegex>(regstrs, flags);
 }
 

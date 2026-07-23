@@ -129,8 +129,10 @@ Remember: Skills make you more capable and consistent. When in doubt, check if a
 
 public:
 
-    SkillMiddlewareHandle(const std::vector<std::string>&             in_initSkillDirPaths,
-                          std::weak_ptr<agentxx::agent::AgentContext> in_agentContext) :
+    SkillMiddlewareHandle(
+        const std::vector<std::string>&             in_initSkillDirPaths,
+        std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
+    ) :
         BaseMiddlewareHandle<SkillMiddlewareState>("SkillMiddlewareHandle", in_agentContext),
         initSkillDirPaths(in_initSkillDirPaths) {}
 

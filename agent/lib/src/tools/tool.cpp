@@ -6,11 +6,13 @@
 namespace agentxx {
 namespace tools {
 
-XXToolBase::XXToolBase(std::string_view                            in_name,
-                       std::weak_ptr<agentxx::agent::AgentContext> in_agentContext,
-                       bool                                        in_autoSummaryOutput,
-                       bool                                        in_canDelayLoad,
-                       size_t                                      in_maxRetry) :
+XXToolBase::XXToolBase(
+    std::string_view                            in_name,
+    std::weak_ptr<agentxx::agent::AgentContext> in_agentContext,
+    bool                                        in_autoSummaryOutput,
+    bool                                        in_canDelayLoad,
+    size_t                                      in_maxRetry
+) :
     name(in_name),
     agentContext(in_agentContext),
     autoSummaryOutput(in_autoSummaryOutput),
@@ -51,12 +53,15 @@ XXToolWarp::XXToolWarp(
     bool                                                        in_autoSummaryOutput,
     bool                                                        in_canDelayLoad,
     size_t                                                      in_maxRetry,
-    std::optional<agentxx::middleware::SummarizationToolHandle> in_summarizationHandle) :
-    XXToolBase(in_inner->get_name(),
-               in_agentContext,
-               in_autoSummaryOutput,
-               in_canDelayLoad,
-               in_maxRetry),
+    std::optional<agentxx::middleware::SummarizationToolHandle> in_summarizationHandle
+) :
+    XXToolBase(
+        in_inner->get_name(),
+        in_agentContext,
+        in_autoSummaryOutput,
+        in_canDelayLoad,
+        in_maxRetry
+    ),
     inner(std::move(in_inner)),
     summarizationHandle(in_summarizationHandle) {}
 

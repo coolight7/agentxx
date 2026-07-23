@@ -41,7 +41,6 @@ public:
 
 template<BaseGraphNodeType T>
 class NEOGRAPH_API MiddlewareWrapBaseNode : public T {
-
 protected:
 
     std::string                                    name;
@@ -50,12 +49,12 @@ protected:
 
 public:
 
-    MiddlewareWrapBaseNode(std::string_view                                      in_name,
-                           const neograph::graph::NodeContext&                   ctx,
-                           const agentxx::middleware::onGraphNodeBeforeCallFunc& in_onBeforeCall
-                           = nullptr,
-                           const agentxx::middleware::onGraphNodeAfterCallFunc& in_onAfterCall
-                           = nullptr) :
+    MiddlewareWrapBaseNode(
+        std::string_view                                      in_name,
+        const neograph::graph::NodeContext&                   ctx,
+        const agentxx::middleware::onGraphNodeBeforeCallFunc& in_onBeforeCall = nullptr,
+        const agentxx::middleware::onGraphNodeAfterCallFunc&  in_onAfterCall  = nullptr
+    ) :
         name(in_name),
         onBeforeCall(in_onBeforeCall),
         onAfterCall(in_onAfterCall) {}
@@ -66,8 +65,8 @@ public:
         }
     }
 
-    virtual asio::awaitable<void> onAfterCallFunc(const neograph::graph::NodeInput& in,
-                                                  neograph::graph::NodeOutput&      result) {
+    virtual asio::awaitable<void>
+        onAfterCallFunc(const neograph::graph::NodeInput& in, neograph::graph::NodeOutput& result) {
         if (nullptr != onAfterCall) {
             co_return onAfterCall(in, result);
         }
@@ -115,50 +114,59 @@ protected:
 public:
 
     template<typename... Args>
-    WrapHandleBaseNode(const std::string&                          name,
-                       std::weak_ptr<agentxx::agent::AgentContext> in_agentContext,
-                       Args&&... args) :
+    WrapHandleBaseNode(
+        const std::string&                          name,
+        std::weak_ptr<agentxx::agent::AgentContext> in_agentContext,
+        Args&&... args
+    ) :
         T(name, std::forward<Args>(args)...),
         nodeName(name),
         agentContext(in_agentContext) {}
 
-    virtual asio::awaitable<void>
-        onHandleStart(agentxx::middleware::BaseMiddlewareHandleInterface& item,
-                      neograph::graph::NodeInput&                         in)
-        = 0;
+    virtual asio::awaitable<void> onHandleStart(
+        agentxx::middleware::BaseMiddlewareHandleInterface& item,
+        neograph::graph::NodeInput&                         in
+    ) = 0;
 
-    virtual asio::awaitable<void>
-        onHandleEnd(agentxx::middleware::BaseMiddlewareHandleInterface& item,
-                    const neograph::graph::NodeInput&                   in,
-                    neograph::graph::NodeOutput&                        result)
-        = 0;
+    virtual asio::awaitable<void> onHandleEnd(
+        agentxx::middleware::BaseMiddlewareHandleInterface& item,
+        const neograph::graph::NodeInput&                   in,
+        neograph::graph::NodeOutput&                        result
+    ) = 0;
 
     // 如果是消息节点，应当添加消息，后续不执行 BaseRun
-    virtual void onHandleStartError(bool             errorRethrow,
-                                    bool             isCurrentError,
-                                    std::string_view exceptionStr,
-                                    agentxx::middleware::BaseMiddlewareHandleInterface& item,
-                                    neograph::graph::NodeInput&                         in,
-                                    neograph::graph::NodeOutput& result) noexcept {}
+    virtual void onHandleStartError(
+        bool                                                errorRethrow,
+        bool                                                isCurrentError,
+        std::string_view                                    exceptionStr,
+        agentxx::middleware::BaseMiddlewareHandleInterface& item,
+        neograph::graph::NodeInput&                         in,
+        neograph::graph::NodeOutput&                        result
+    ) noexcept {}
 
-    virtual void onHandleBaseRunError(bool                         errorRethrow,
-                                      bool                         isCurrentError,
-                                      std::string_view             exceptionStr,
-                                      neograph::graph::NodeInput&  in,
-                                      neograph::graph::NodeOutput& result) noexcept {}
+    virtual void onHandleBaseRunError(
+        bool                         errorRethrow,
+        bool                         isCurrentError,
+        std::string_view             exceptionStr,
+        neograph::graph::NodeInput&  in,
+        neograph::graph::NodeOutput& result
+    ) noexcept {}
 
     // 一般不修改 [result]，消息已经由前面的 start/baseRun 添加
-    virtual void onHandleEndError(bool             errorRethrow,
-                                  bool             isCurrentError,
-                                  std::string_view exceptionStr,
-                                  agentxx::middleware::BaseMiddlewareHandleInterface& item,
-                                  const neograph::graph::NodeInput&                   in,
-                                  neograph::graph::NodeOutput& result) noexcept {}
+    virtual void onHandleEndError(
+        bool                                                errorRethrow,
+        bool                                                isCurrentError,
+        std::string_view                                    exceptionStr,
+        agentxx::middleware::BaseMiddlewareHandleInterface& item,
+        const neograph::graph::NodeInput&                   in,
+        neograph::graph::NodeOutput&                        result
+    ) noexcept {}
 
     virtual asio::awaitable<void> baseRun(
         std::vector<std::shared_ptr<agentxx::middleware::BaseMiddlewareHandleInterface>>& handles,
         neograph::graph::NodeInput&                                                       in,
-        neograph::graph::NodeOutput&                                                      result) {
+        neograph::graph::NodeOutput&                                                      result
+    ) {
         result = co_await T::run(in);
     }
 
@@ -245,7 +253,8 @@ public:
             } else {
                 XX_LOGE(
                     R"_({}/run, Before `baseRun` should exec all `onStart` or catch exception)_",
-                    nodeName);
+                    nodeName
+                );
                 assert(false);
             }
         } while (false);

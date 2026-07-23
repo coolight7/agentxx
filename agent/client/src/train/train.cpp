@@ -23,14 +23,18 @@ std::vector<agentxx::agent::TrainingTestCase> loadTestCasesRecursive(const std::
         for (const auto& entry : std::filesystem::directory_iterator(dirPath)) {
             if (entry.is_regular_file() && entry.path().extension() == ".json") {
                 auto fileCases = agentxx::agent::loadTestCasesFromFile(entry.path().string());
-                allCases.insert(allCases.end(),
-                                std::make_move_iterator(fileCases.begin()),
-                                std::make_move_iterator(fileCases.end()));
+                allCases.insert(
+                    allCases.end(),
+                    std::make_move_iterator(fileCases.begin()),
+                    std::make_move_iterator(fileCases.end())
+                );
             } else if (entry.is_directory()) {
                 auto subCases = loadTestCasesRecursive(entry.path().string());
-                allCases.insert(allCases.end(),
-                                std::make_move_iterator(subCases.begin()),
-                                std::make_move_iterator(subCases.end()));
+                allCases.insert(
+                    allCases.end(),
+                    std::make_move_iterator(subCases.begin()),
+                    std::make_move_iterator(subCases.end())
+                );
             }
         }
     } catch (const std::exception& e) {
@@ -53,8 +57,10 @@ std::string findProjectRoot() {
     return exeDir.string();
 }
 
-void replacePlaceholders(std::vector<agentxx::agent::TrainingTestCase>& cases,
-                         const std::string&                             projectRoot) {
+void replacePlaceholders(
+    std::vector<agentxx::agent::TrainingTestCase>& cases,
+    const std::string&                             projectRoot
+) {
     const std::string placeholder = "{agentxx_root}";
     for (auto& tc : cases) {
         auto pos = tc.input.find(placeholder);
@@ -68,9 +74,11 @@ void replacePlaceholders(std::vector<agentxx::agent::TrainingTestCase>& cases,
     }
 }
 
-void runTrainingMode(std::shared_ptr<agentxx::agent::AgentConfig> baseConfig,
-                     std::shared_ptr<agentxx::agent::AgentConfig> scorerConfig,
-                     std::shared_ptr<agentxx::agent::AgentConfig> optimizerConfig) {
+void runTrainingMode(
+    std::shared_ptr<agentxx::agent::AgentConfig> baseConfig,
+    std::shared_ptr<agentxx::agent::AgentConfig> scorerConfig,
+    std::shared_ptr<agentxx::agent::AgentConfig> optimizerConfig
+) {
     XX_OUT("======= Agentxx Training Mode =======");
 
     auto trainAgent                   = std::make_shared<agentxx::agent::DeepAgent>(baseConfig);
@@ -108,8 +116,10 @@ void runTrainingMode(std::shared_ptr<agentxx::agent::AgentConfig> baseConfig,
         if (std::filesystem::exists(dataDir)) {
             trainCfg.testCases = loadTestCasesRecursive(dataDir);
             replacePlaceholders(trainCfg.testCases, projectRoot);
-            XX_OUT("[Training] Loaded {} test cases from resource/train/data",
-                   trainCfg.testCases.size());
+            XX_OUT(
+                "[Training] Loaded {} test cases from resource/train/data",
+                trainCfg.testCases.size()
+            );
         } else {
             std::cerr << "[Training] Data directory not found: " << dataDir << std::endl;
         }
@@ -119,9 +129,11 @@ void runTrainingMode(std::shared_ptr<agentxx::agent::AgentConfig> baseConfig,
         std::ifstream tcFile("./training_testcases.json");
         if (tcFile.is_open()) {
             try {
-                std::string content((std::istreambuf_iterator<char>(tcFile)),
-                                    std::istreambuf_iterator<char>());
-                auto        j = neograph::json::parse(content);
+                std::string content(
+                    (std::istreambuf_iterator<char>(tcFile)),
+                    std::istreambuf_iterator<char>()
+                );
+                auto j = neograph::json::parse(content);
                 if (j.is_array()) {
                     trainCfg.testCases.clear();
                     for (const auto& item : j) {
@@ -135,8 +147,10 @@ void runTrainingMode(std::shared_ptr<agentxx::agent::AgentConfig> baseConfig,
                             trainCfg.testCases.push_back(std::move(tc));
                         }
                     }
-                    XX_OUT("[Training] Loaded {} test cases from training_testcases.json",
-                           trainCfg.testCases.size());
+                    XX_OUT(
+                        "[Training] Loaded {} test cases from training_testcases.json",
+                        trainCfg.testCases.size()
+                    );
                 }
             } catch (const std::exception& e) {
                 std::cerr << "[Training] Failed to parse training_testcases.json: " << e.what()
@@ -167,13 +181,14 @@ void runTrainingMode(std::shared_ptr<agentxx::agent::AgentConfig> baseConfig,
             XX_OUT("[Training] All agents initialized.");
 
             agentxx::agent::EvolutionTrainingAgent trainer(scorerAgent, trainAgent, optimizerAgent);
-            trainer.seedInitialPopulation(
-                trainAgent->getContext()->agentConfig->prompt.systemPrompt);
+            trainer.seedInitialPopulation(trainAgent->getContext()->agentConfig->prompt.systemPrompt
+            );
 
             XX_OUT("[Training] Entering evolution loop...");
             co_await trainer.runEvolutionLoop(trainCfg);
         },
-        asio::detached);
+        asio::detached
+    );
 
     trainIoCtx.run();
 }

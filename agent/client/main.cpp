@@ -46,8 +46,8 @@ static bool parseEnvLine(std::string& line, std::string& key, std::string& value
     trim(value);
 
     if (value.size() >= 2
-        && ((value[0] == '"' && value.back() == '"')
-            || (value[0] == '\'' && value.back() == '\''))) {
+        && ((value[0] == '"' && value.back() == '"') || (value[0] == '\'' && value.back() == '\'')
+        )) {
         value = value.substr(1, value.size() - 2);
     }
     return !key.empty();
@@ -107,9 +107,11 @@ static std::map<std::string, std::string> loadDotEnv(const std::vector<std::stri
 
 /// 替换字符串中的 ${VAR} 占位符
 /// 查找顺序：--env 文件变量 > 真实环境变量 > .env 文件变量 > 保留原样
-static std::string resolveEnvVars(const std::string&                        input,
-                                  const std::map<std::string, std::string>& dotEnvVars,
-                                  const std::map<std::string, std::string>& overrideEnvVars) {
+static std::string resolveEnvVars(
+    const std::string&                        input,
+    const std::map<std::string, std::string>& dotEnvVars,
+    const std::map<std::string, std::string>& overrideEnvVars
+) {
     static const std::regex pattern(R"(\$\{([^}]+)\})");
     std::string             result;
     std::sregex_iterator    it(input.begin(), input.end(), pattern);
@@ -165,16 +167,20 @@ static neograph::json yamlToJson(const YAML::Node& node) {
         if (node.as<std::string>() == "false") {
             return neograph::json{false};
         }
-        if (std::from_chars(node.as<std::string>().data(),
-                            node.as<std::string>().data() + node.as<std::string>().size(),
-                            i)
+        if (std::from_chars(
+                node.as<std::string>().data(),
+                node.as<std::string>().data() + node.as<std::string>().size(),
+                i
+            )
                 .ec
             == std::errc{}) {
             return neograph::json{i};
         }
-        if (std::from_chars(node.as<std::string>().data(),
-                            node.as<std::string>().data() + node.as<std::string>().size(),
-                            d)
+        if (std::from_chars(
+                node.as<std::string>().data(),
+                node.as<std::string>().data() + node.as<std::string>().size(),
+                d
+            )
                 .ec
             == std::errc{}) {
             return neograph::json{d};
@@ -213,9 +219,11 @@ struct YamlAppConfig {
     std::string                        useModelTrainOptimizer;
 };
 
-static YamlAppConfig loadYamlConfig(const std::string&                        path,
-                                    const std::map<std::string, std::string>& dotEnvVars,
-                                    const std::map<std::string, std::string>& overrideEnvVars) {
+static YamlAppConfig loadYamlConfig(
+    const std::string&                        path,
+    const std::map<std::string, std::string>& dotEnvVars,
+    const std::map<std::string, std::string>& overrideEnvVars
+) {
     YamlAppConfig cfg;
     auto          root = YAML::LoadFile(path);
 
@@ -223,39 +231,48 @@ static YamlAppConfig loadYamlConfig(const std::string&                        pa
         for (const auto& node : root["models"]) {
             agentxx::agent::ModelConfig mc;
             mc.name = resolveEnvVars(node["name"].as<std::string>(""), dotEnvVars, overrideEnvVars);
-            mc.type = resolveEnvVars(node["type"].as<std::string>("openai"),
-                                     dotEnvVars,
-                                     overrideEnvVars);
+            mc.type = resolveEnvVars(
+                node["type"].as<std::string>("openai"),
+                dotEnvVars,
+                overrideEnvVars
+            );
             mc.baseUrl
                 = resolveEnvVars(node["base_url"].as<std::string>(""), dotEnvVars, overrideEnvVars);
             mc.apiKey
                 = resolveEnvVars(node["api_key"].as<std::string>(""), dotEnvVars, overrideEnvVars);
-            mc.modelName = resolveEnvVars(node["model_name"].as<std::string>(""),
-                                          dotEnvVars,
-                                          overrideEnvVars);
+            mc.modelName = resolveEnvVars(
+                node["model_name"].as<std::string>(""),
+                dotEnvVars,
+                overrideEnvVars
+            );
             if (node["send_thinking"]) {
-                mc.sendThinking = resolveEnvVars((node["send_thinking"]).as<std::string>("false"),
-                                                 dotEnvVars,
-                                                 overrideEnvVars)
+                mc.sendThinking = resolveEnvVars(
+                                      (node["send_thinking"]).as<std::string>("false"),
+                                      dotEnvVars,
+                                      overrideEnvVars
+                                  )
                                   == "true";
             }
             if (node["connect_timeout"]) {
-                mc.connectTimeoutSeconds
-                    = std::stoi(resolveEnvVars(node["connect_timeout"].as<std::string>("16"),
-                                               dotEnvVars,
-                                               overrideEnvVars));
+                mc.connectTimeoutSeconds = std::stoi(resolveEnvVars(
+                    node["connect_timeout"].as<std::string>("16"),
+                    dotEnvVars,
+                    overrideEnvVars
+                ));
             }
             if (node["read_timeout"]) {
-                mc.readTimeoutSeconds
-                    = std::stoi(resolveEnvVars(node["read_timeout"].as<std::string>("24"),
-                                               dotEnvVars,
-                                               overrideEnvVars));
+                mc.readTimeoutSeconds = std::stoi(resolveEnvVars(
+                    node["read_timeout"].as<std::string>("24"),
+                    dotEnvVars,
+                    overrideEnvVars
+                ));
             }
             if (node["model_support_max_token"]) {
-                mc.modelSupportMaxToken = static_cast<size_t>(
-                    std::stoull(resolveEnvVars(node["model_support_max_token"].as<std::string>("0"),
-                                               dotEnvVars,
-                                               overrideEnvVars)));
+                mc.modelSupportMaxToken = static_cast<size_t>(std::stoull(resolveEnvVars(
+                    node["model_support_max_token"].as<std::string>("0"),
+                    dotEnvVars,
+                    overrideEnvVars
+                )));
             }
             if (node["extra_api_config"]) {
                 mc.extra_config = yamlToJson(node["extra_api_config"]);
@@ -267,36 +284,50 @@ static YamlAppConfig loadYamlConfig(const std::string&                        pa
     }
 
     if (root["use_model"]) {
-        cfg.useModelDefault   = resolveEnvVars(root["use_model"]["default"].as<std::string>(""),
-                                             dotEnvVars,
-                                             overrideEnvVars);
-        cfg.useModelSubagent  = resolveEnvVars(root["use_model"]["subagent"].as<std::string>(""),
-                                              dotEnvVars,
-                                              overrideEnvVars);
-        cfg.useModelWebSearch = resolveEnvVars(root["use_model"]["web_search"].as<std::string>(""),
-                                               dotEnvVars,
-                                               overrideEnvVars);
-        cfg.useModelAcp       = resolveEnvVars(root["use_model"]["acp"].as<std::string>(""),
-                                         dotEnvVars,
-                                         overrideEnvVars);
-        cfg.useModelTrain     = resolveEnvVars(root["use_model"]["train"].as<std::string>(""),
-                                           dotEnvVars,
-                                           overrideEnvVars);
-        cfg.useModelTrainScorer
-            = resolveEnvVars(root["use_model"]["train_scorer"].as<std::string>(""),
-                             dotEnvVars,
-                             overrideEnvVars);
-        cfg.useModelTrainOptimizer
-            = resolveEnvVars(root["use_model"]["train_optimizer"].as<std::string>(""),
-                             dotEnvVars,
-                             overrideEnvVars);
+        cfg.useModelDefault = resolveEnvVars(
+            root["use_model"]["default"].as<std::string>(""),
+            dotEnvVars,
+            overrideEnvVars
+        );
+        cfg.useModelSubagent = resolveEnvVars(
+            root["use_model"]["subagent"].as<std::string>(""),
+            dotEnvVars,
+            overrideEnvVars
+        );
+        cfg.useModelWebSearch = resolveEnvVars(
+            root["use_model"]["web_search"].as<std::string>(""),
+            dotEnvVars,
+            overrideEnvVars
+        );
+        cfg.useModelAcp = resolveEnvVars(
+            root["use_model"]["acp"].as<std::string>(""),
+            dotEnvVars,
+            overrideEnvVars
+        );
+        cfg.useModelTrain = resolveEnvVars(
+            root["use_model"]["train"].as<std::string>(""),
+            dotEnvVars,
+            overrideEnvVars
+        );
+        cfg.useModelTrainScorer = resolveEnvVars(
+            root["use_model"]["train_scorer"].as<std::string>(""),
+            dotEnvVars,
+            overrideEnvVars
+        );
+        cfg.useModelTrainOptimizer = resolveEnvVars(
+            root["use_model"]["train_optimizer"].as<std::string>(""),
+            dotEnvVars,
+            overrideEnvVars
+        );
     }
 
     if (root["mcp_servers"] && root["mcp_servers"].IsSequence()) {
         for (const auto& node : root["mcp_servers"]) {
-            auto ns  = resolveEnvVars(node["namespace"].as<std::string>(""),
-                                     dotEnvVars,
-                                     overrideEnvVars);
+            auto ns = resolveEnvVars(
+                node["namespace"].as<std::string>(""),
+                dotEnvVars,
+                overrideEnvVars
+            );
             auto url = resolveEnvVars(node["url"].as<std::string>(""), dotEnvVars, overrideEnvVars);
             if (ns.empty() || url.empty()) {
                 std::cerr << "[Config] Warning: mcp_servers entry missing `namespace` "
@@ -315,9 +346,10 @@ static YamlAppConfig loadYamlConfig(const std::string&                        pa
     return cfg;
 }
 
-static agentxx::agent::ModelConfig
-    resolveModelConfig(const std::map<std::string, agentxx::agent::ModelConfig>& models,
-                       const std::string&                                        modelName) {
+static agentxx::agent::ModelConfig resolveModelConfig(
+    const std::map<std::string, agentxx::agent::ModelConfig>& models,
+    const std::string&                                        modelName
+) {
     if (modelName.empty()) {
         return agentxx::agent::ModelConfig{};
     }
@@ -330,29 +362,33 @@ static agentxx::agent::ModelConfig
     return it->second;
 }
 
-static void applyModelToConfig(std::shared_ptr<agentxx::agent::AgentConfig> agentConfig,
-                               const std::map<std::string, agentxx::agent::ModelConfig>& models,
-                               const std::string& modelName) {
+static void applyModelToConfig(
+    std::shared_ptr<agentxx::agent::AgentConfig>              agentConfig,
+    const std::map<std::string, agentxx::agent::ModelConfig>& models,
+    const std::string&                                        modelName
+) {
     auto mc = resolveModelConfig(models, modelName);
     if (mc.isValid()) {
         agentConfig->model = std::move(mc);
     }
 }
 
-static void
-    applySubagentModelToConfig(std::shared_ptr<agentxx::agent::AgentConfig> agentConfig,
-                               const std::map<std::string, agentxx::agent::ModelConfig>& models,
-                               const std::string& modelName) {
+static void applySubagentModelToConfig(
+    std::shared_ptr<agentxx::agent::AgentConfig>              agentConfig,
+    const std::map<std::string, agentxx::agent::ModelConfig>& models,
+    const std::string&                                        modelName
+) {
     auto mc = resolveModelConfig(models, modelName);
     if (mc.isValid()) {
         agentConfig->subagentModel = std::move(mc);
     }
 }
 
-static void
-    applyWebSearchModelToConfig(std::shared_ptr<agentxx::agent::AgentConfig> agentConfig,
-                                const std::map<std::string, agentxx::agent::ModelConfig>& models,
-                                const std::string& modelName) {
+static void applyWebSearchModelToConfig(
+    std::shared_ptr<agentxx::agent::AgentConfig>              agentConfig,
+    const std::map<std::string, agentxx::agent::ModelConfig>& models,
+    const std::string&                                        modelName
+) {
     auto mc = resolveModelConfig(models, modelName);
     if (mc.isValid()) {
         agentConfig->websearchModel = std::move(mc);
@@ -360,10 +396,11 @@ static void
 }
 
 /// 填充可用模型列表 (供 TUI 运行时切换模型)
-static void
-    applyAvailableModelsToConfig(std::shared_ptr<agentxx::agent::AgentConfig> agentConfig,
-                                 const std::map<std::string, agentxx::agent::ModelConfig>& models,
-                                 const std::string& currentModelName) {
+static void applyAvailableModelsToConfig(
+    std::shared_ptr<agentxx::agent::AgentConfig>              agentConfig,
+    const std::map<std::string, agentxx::agent::ModelConfig>& models,
+    const std::string&                                        currentModelName
+) {
     for (const auto& [name, entry] : models) {
         auto mc = resolveModelConfig(models, name);
         if (mc.isValid()) {
@@ -378,11 +415,10 @@ asio::awaitable<void> runCliAsync(agentxx::agent::DeepAgent& agent) {
 
     const auto cliEventCallback = [&io](const neograph::graph::GraphEvent& event) {
         switch (event.type) {
-        case neograph::graph::GraphEvent::Type::NODE_START:
-        case neograph::graph::GraphEvent::Type::NODE_END:
-            break;
-        case neograph::graph::GraphEvent::Type::LLM_TOKEN:
-            {
+            case neograph::graph::GraphEvent::Type::NODE_START:
+            case neograph::graph::GraphEvent::Type::NODE_END:
+                break;
+            case neograph::graph::GraphEvent::Type::LLM_TOKEN: {
                 std::string token;
                 std::string kind = "content";
                 if (event.data.is_string()) {
@@ -396,18 +432,18 @@ asio::awaitable<void> runCliAsync(agentxx::agent::DeepAgent& agent) {
                     }
                 }
                 io->onToken(token, kind);
-            }
-            break;
-        case neograph::graph::GraphEvent::Type::CHANNEL_WRITE:
-        case neograph::graph::GraphEvent::Type::INTERRUPT:
-        case neograph::graph::GraphEvent::Type::ERROR:
-            break;
+            } break;
+            case neograph::graph::GraphEvent::Type::CHANNEL_WRITE:
+            case neograph::graph::GraphEvent::Type::INTERRUPT:
+            case neograph::graph::GraphEvent::Type::ERROR:
+                break;
         }
     };
-    const auto cliInterruptCallback
-        = [&io](const std::string& interruptNode,
-                const std::string& interruptValue,
-                const std::string& interruptHandleName) -> asio::awaitable<void> {
+    const auto cliInterruptCallback = [&io](
+                                          const std::string& interruptNode,
+                                          const std::string& interruptValue,
+                                          const std::string& interruptHandleName
+                                      ) -> asio::awaitable<void> {
         io->onInterrupt(interruptNode, interruptValue, interruptHandleName);
         co_return;
     };
@@ -441,11 +477,14 @@ asio::awaitable<void> runCliAsync(agentxx::agent::DeepAgent& agent) {
                 isFirstMsg,
                 std::move(messages),
                 io,
-                agentxx::middleware::EventBridge::make(agent.agentContext->agentConfig->agentName,
-                                                       thread_id,
-                                                       agent.agentContext,
-                                                       cliEventCallback),
-                cliInterruptCallback);
+                agentxx::middleware::EventBridge::make(
+                    agent.agentContext->agentConfig->agentName,
+                    thread_id,
+                    agent.agentContext,
+                    cliEventCallback
+                ),
+                cliInterruptCallback
+            );
             messages   = std::move(turnResult.messages);
             isFirstMsg = false;
         }
@@ -460,25 +499,27 @@ void runCli(agentxx::agent::DeepAgent& agent) {
             co_await agent.init();
             co_return co_await runCliAsync(agent);
         },
-        asio::detached);
+        asio::detached
+    );
     agent.ioCtx->run();
 }
 
 #ifdef AGENTXX_ENABLE_CLIENT_TUI
 asio::awaitable<void> runTuiAsync(agentxx::agent::DeepAgent& agent) {
     const auto thread_id = std::string{"session"};
-    auto       io        = std::make_shared<AgentTUI>(co_await asio::this_coro::executor,
-                                         agent.agentContext,
-                                         thread_id);
+    auto       io        = std::make_shared<AgentTUI>(
+        co_await asio::this_coro::executor,
+        agent.agentContext,
+        thread_id
+    );
     io->start();
 
     const auto tuiEventCallback = [&io](const neograph::graph::GraphEvent& event) {
         switch (event.type) {
-        case neograph::graph::GraphEvent::Type::NODE_START:
-        case neograph::graph::GraphEvent::Type::NODE_END:
-            break;
-        case neograph::graph::GraphEvent::Type::LLM_TOKEN:
-            {
+            case neograph::graph::GraphEvent::Type::NODE_START:
+            case neograph::graph::GraphEvent::Type::NODE_END:
+                break;
+            case neograph::graph::GraphEvent::Type::LLM_TOKEN: {
                 std::string token;
                 std::string kind = "content";
                 if (event.data.is_string()) {
@@ -492,18 +533,18 @@ asio::awaitable<void> runTuiAsync(agentxx::agent::DeepAgent& agent) {
                     }
                 }
                 io->onToken(token, kind);
-            }
-            break;
-        case neograph::graph::GraphEvent::Type::CHANNEL_WRITE:
-        case neograph::graph::GraphEvent::Type::INTERRUPT:
-        case neograph::graph::GraphEvent::Type::ERROR:
-            break;
+            } break;
+            case neograph::graph::GraphEvent::Type::CHANNEL_WRITE:
+            case neograph::graph::GraphEvent::Type::INTERRUPT:
+            case neograph::graph::GraphEvent::Type::ERROR:
+                break;
         }
     };
-    const auto tuiInterruptCallback
-        = [&io](const std::string& interruptNode,
-                const std::string& interruptValue,
-                const std::string& interruptHandleName) -> asio::awaitable<void> {
+    const auto tuiInterruptCallback = [&io](
+                                          const std::string& interruptNode,
+                                          const std::string& interruptValue,
+                                          const std::string& interruptHandleName
+                                      ) -> asio::awaitable<void> {
         io->onInterrupt(interruptNode, interruptValue, interruptHandleName);
         co_return;
     };
@@ -532,11 +573,14 @@ asio::awaitable<void> runTuiAsync(agentxx::agent::DeepAgent& agent) {
                 isFirstMsg,
                 std::move(messages),
                 io,
-                agentxx::middleware::EventBridge::make(agent.agentContext->agentConfig->agentName,
-                                                       thread_id,
-                                                       agent.agentContext,
-                                                       tuiEventCallback),
-                tuiInterruptCallback);
+                agentxx::middleware::EventBridge::make(
+                    agent.agentContext->agentConfig->agentName,
+                    thread_id,
+                    agent.agentContext,
+                    tuiEventCallback
+                ),
+                tuiInterruptCallback
+            );
             messages   = std::move(turnResult.messages);
             isFirstMsg = false;
             io->resetTokenState();
@@ -552,7 +596,8 @@ void runTui(agentxx::agent::DeepAgent& agent) {
             co_await agent.init();
             co_return co_await runTuiAsync(agent);
         },
-        asio::detached);
+        asio::detached
+    );
     agent.ioCtx->run();
 }
 #endif
@@ -589,9 +634,11 @@ int main(int argn, char** argv) {
     std::map<std::string, std::string> overrideEnvVars;
     if (!overrideEnvPath.empty()) {
         overrideEnvVars = loadOverrideEnv(overrideEnvPath);
-        XX_OUT("[Config] Loaded {} override variables from: {}",
-               overrideEnvVars.size(),
-               overrideEnvPath);
+        XX_OUT(
+            "[Config] Loaded {} override variables from: {}",
+            overrideEnvVars.size(),
+            overrideEnvPath
+        );
     }
 
     // 加载 .env 文件（从当前目录和配置文件所在目录，优先级低于系统环境变量）
@@ -666,7 +713,8 @@ int main(int argn, char** argv) {
                 server.run();
                 co_return;
             },
-            asio::detached);
+            asio::detached
+        );
         agent->ioCtx->run();
         return 0;
     }
@@ -693,7 +741,8 @@ int main(int argn, char** argv) {
         runTui(agent);
 #else
         XX_LOGE(
-            R"(TUI is not support! Please set `AGENTXX_ENABLE_CLIENT_TUI=1` and recomplie agentxx_cli)");
+            R"(TUI is not support! Please set `AGENTXX_ENABLE_CLIENT_TUI=1` and recomplie agentxx_cli)"
+        );
 #endif
         return 0;
     }

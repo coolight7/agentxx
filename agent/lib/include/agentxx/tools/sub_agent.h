@@ -22,9 +22,11 @@ public:
     const std::string depict;
     std::string       systemPrompt;
 
-    SubAgentTaskBase(std::string_view in_subAgentName,
-                     std::string_view in_subAgentDepict,
-                     std::string_view in_systemPrompt);
+    SubAgentTaskBase(
+        std::string_view in_subAgentName,
+        std::string_view in_subAgentDepict,
+        std::string_view in_systemPrompt
+    );
 
     virtual std::shared_ptr<neograph::graph::GraphEngine> getSubgraph() const;
 
@@ -36,9 +38,11 @@ public:
 class SubAgentNormalTask : public SubAgentTaskBase {
 public:
 
-    SubAgentNormalTask(std::string_view                    in_subAgentName,
-                       std::string_view                    in_subAgentDepict,
-                       const neograph::graph::NodeContext& in_context);
+    SubAgentNormalTask(
+        std::string_view                    in_subAgentName,
+        std::string_view                    in_subAgentDepict,
+        const neograph::graph::NodeContext& in_context
+    );
 
     void createSubgraph(const neograph::graph::NodeContext& context);
 
@@ -50,8 +54,10 @@ public:
 
     std::map<std::string, std::shared_ptr<SubAgentTaskBase>> subAgentList{};
 
-    SubAgentManagerTool(std::string_view                            in_nodeName,
-                        std::weak_ptr<agentxx::agent::AgentContext> in_agentContext);
+    SubAgentManagerTool(
+        std::string_view                            in_nodeName,
+        std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
+    );
 
     std::string get_name() const override;
 

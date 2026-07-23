@@ -38,7 +38,6 @@ void expect_has_value_impl(T&& expr, const char* file, int line) {
 }
 
 void test_http_client_unit() {
-
     {
         XX_TEST_EXPECT_EQ(HttpClient::calcSendTimeout(0).count(), 30);
         XX_TEST_EXPECT_EQ(HttpClient::calcSendTimeout(1).count(), 30);
@@ -269,11 +268,14 @@ void test_http_client_unit() {
 
     {
         // Protocol-relative URL: //host/path -> scheme://host/path
-        XX_TEST_EXPECT_EQ(HttpClient::resolveRedirectUrl("https://example.com/a", "//other.com/b"),
-                          "https://other.com/b");
+        XX_TEST_EXPECT_EQ(
+            HttpClient::resolveRedirectUrl("https://example.com/a", "//other.com/b"),
+            "https://other.com/b"
+        );
         XX_TEST_EXPECT_EQ(
             HttpClient::resolveRedirectUrl("http://example.com/a", "//other.com:8080/c"),
-            "http://other.com:8080/c");
+            "http://other.com:8080/c"
+        );
     }
 }
 
@@ -282,7 +284,6 @@ asio::awaitable<void> test_http_client() {
 }
 
 void test_http_server_unit() {
-
     {
         XX_TEST_EXPECT_EQ(httpMethodIndex(boost::beast::http::verb::get), 0);
         XX_TEST_EXPECT_EQ(httpMethodIndex(boost::beast::http::verb::head), 1);
@@ -330,41 +331,50 @@ void test_http_server_unit() {
         // absolute URL
         XX_TEST_EXPECT_EQ(
             HttpClient::resolveRedirectUrl("http://example.com/a", "http://other.com/b"),
-            "http://other.com/b");
+            "http://other.com/b"
+        );
         // absolute path
-        XX_TEST_EXPECT_EQ(HttpClient::resolveRedirectUrl("http://example.com/a", "/b/c"),
-                          "http://example.com/b/c");
+        XX_TEST_EXPECT_EQ(
+            HttpClient::resolveRedirectUrl("http://example.com/a", "/b/c"),
+            "http://example.com/b/c"
+        );
         // relative path
-        XX_TEST_EXPECT_EQ(HttpClient::resolveRedirectUrl("http://example.com/a/b", "c"),
-                          "http://example.com/a/c");
+        XX_TEST_EXPECT_EQ(
+            HttpClient::resolveRedirectUrl("http://example.com/a/b", "c"),
+            "http://example.com/a/c"
+        );
         // relative path with no parent
-        XX_TEST_EXPECT_EQ(HttpClient::resolveRedirectUrl("http://example.com/", "c"),
-                          "http://example.com/c");
+        XX_TEST_EXPECT_EQ(
+            HttpClient::resolveRedirectUrl("http://example.com/", "c"),
+            "http://example.com/c"
+        );
         // root path
-        XX_TEST_EXPECT_EQ(HttpClient::resolveRedirectUrl("http://example.com/a/b/c", "/"),
-                          "http://example.com/");
+        XX_TEST_EXPECT_EQ(
+            HttpClient::resolveRedirectUrl("http://example.com/a/b/c", "/"),
+            "http://example.com/"
+        );
     }
 }
 
 asio::awaitable<void> test_http_client_beast_server() {
-
     using Server = HttpServer;
     using namespace boost::beast::http;
 
     // Build a handler helper: returns Handler for a simple string response
-    auto strResp = [](const char* ct,
-                      std::string body,
-                      status      st = status::ok) -> std::shared_ptr<Server::Handler> {
+    auto strResp = [](const char* ct, std::string body, status st = status::ok
+                   ) -> std::shared_ptr<Server::Handler> {
         return std::make_shared<Server::Handler>(
-            [ct, body = std::move(body), st](Server::Request&,
-                                             Server::Response& resp,
-                                             const std::string&) -> asio::awaitable<void> {
+            [ct,
+             body = std::move(body),
+             st](Server::Request&, Server::Response& resp, const std::string&)
+                -> asio::awaitable<void> {
                 resp.result(st);
                 resp.set(field::content_type, ct);
                 resp.body() = std::move(body);
                 resp.prepare_payload();
                 co_return;
-            });
+            }
+        );
     };
 
     Server server({.address = "127.0.0.1", .port = 0, .ioThreads = 1});
@@ -382,67 +392,81 @@ asio::awaitable<void> test_http_client_beast_server() {
     server.router().add("/status/201", 0, strResp("text/plain", "created", status::created));
 
     // GET /status/500
-    server.router().add("/status/500",
-                        0,
-                        strResp("text/plain", "server error", status::internal_server_error));
+    server.router().add(
+        "/status/500",
+        0,
+        strResp("text/plain", "server error", status::internal_server_error)
+    );
 
     // GET /headers – echo back X-Echo value
     server.router().add(
         "/headers",
         0,
-        std::make_shared<Server::Handler>([](Server::Request&  req,
-                                             Server::Response& resp,
-                                             const std::string&) -> asio::awaitable<void> {
-            resp.result(status::ok);
-            resp.set(field::content_type, "text/plain");
-            auto val    = req[field::x_forwarded_for];
-            resp.body() = val.empty() ? "(none)" : std::string(val);
-            resp.prepare_payload();
-            co_return;
-        }));
+        std::make_shared<Server::Handler>(
+            [](Server::Request&  req,
+               Server::Response& resp,
+               const std::string&) -> asio::awaitable<void> {
+                resp.result(status::ok);
+                resp.set(field::content_type, "text/plain");
+                auto val    = req[field::x_forwarded_for];
+                resp.body() = val.empty() ? "(none)" : std::string(val);
+                resp.prepare_payload();
+                co_return;
+            }
+        )
+    );
 
     // GET /search?q=xxx – use query params
     server.router().add(
         "/search",
         0,
-        std::make_shared<Server::Handler>([](Server::Request&  req,
-                                             Server::Response& resp,
-                                             const std::string&) -> asio::awaitable<void> {
-            resp.result(status::ok);
-            resp.set(field::content_type, "text/plain");
-            auto target = req.target();
-            resp.body() = std::string(target);
-            resp.prepare_payload();
-            co_return;
-        }));
+        std::make_shared<Server::Handler>(
+            [](Server::Request&  req,
+               Server::Response& resp,
+               const std::string&) -> asio::awaitable<void> {
+                resp.result(status::ok);
+                resp.set(field::content_type, "text/plain");
+                auto target = req.target();
+                resp.body() = std::string(target);
+                resp.prepare_payload();
+                co_return;
+            }
+        )
+    );
 
     // POST /echo
     server.router().add(
         "/echo",
         2,
-        std::make_shared<Server::Handler>([](Server::Request&  req,
-                                             Server::Response& resp,
-                                             const std::string&) -> asio::awaitable<void> {
-            resp.result(status::ok);
-            resp.set(field::content_type, "text/plain");
-            resp.body() = req.body();
-            resp.prepare_payload();
-            co_return;
-        }));
+        std::make_shared<Server::Handler>(
+            [](Server::Request&  req,
+               Server::Response& resp,
+               const std::string&) -> asio::awaitable<void> {
+                resp.result(status::ok);
+                resp.set(field::content_type, "text/plain");
+                resp.body() = req.body();
+                resp.prepare_payload();
+                co_return;
+            }
+        )
+    );
 
     // PUT /echo – prefix with "put:"
     server.router().add(
         "/echo",
         3,
-        std::make_shared<Server::Handler>([](Server::Request&  req,
-                                             Server::Response& resp,
-                                             const std::string&) -> asio::awaitable<void> {
-            resp.result(status::ok);
-            resp.set(field::content_type, "text/plain");
-            resp.body() = "put:" + req.body();
-            resp.prepare_payload();
-            co_return;
-        }));
+        std::make_shared<Server::Handler>(
+            [](Server::Request&  req,
+               Server::Response& resp,
+               const std::string&) -> asio::awaitable<void> {
+                resp.result(status::ok);
+                resp.set(field::content_type, "text/plain");
+                resp.body() = "put:" + req.body();
+                resp.prepare_payload();
+                co_return;
+            }
+        )
+    );
 
     // DELETE /data
     server.router().add("/data", 4, strResp("text/plain", "deleted"));
@@ -451,104 +475,124 @@ asio::awaitable<void> test_http_client_beast_server() {
     server.router().add(
         "/redirect-me",
         0,
-        std::make_shared<Server::Handler>([](Server::Request&,
-                                             Server::Response& resp,
-                                             const std::string&) -> asio::awaitable<void> {
-            resp.result(status::found);
-            resp.set(field::location, "/hello");
-            resp.prepare_payload();
-            co_return;
-        }));
+        std::make_shared<Server::Handler>(
+            [](Server::Request&,
+               Server::Response& resp,
+               const std::string&) -> asio::awaitable<void> {
+                resp.result(status::found);
+                resp.set(field::location, "/hello");
+                resp.prepare_payload();
+                co_return;
+            }
+        )
+    );
 
     // Redirect loop: GET /redirect-loop -> 302 Location: /redirect-loop
     server.router().add(
         "/redirect-loop",
         0,
-        std::make_shared<Server::Handler>([](Server::Request&,
-                                             Server::Response& resp,
-                                             const std::string&) -> asio::awaitable<void> {
-            resp.result(status::found);
-            resp.set(field::location, "/redirect-loop");
-            resp.prepare_payload();
-            co_return;
-        }));
+        std::make_shared<Server::Handler>(
+            [](Server::Request&,
+               Server::Response& resp,
+               const std::string&) -> asio::awaitable<void> {
+                resp.result(status::found);
+                resp.set(field::location, "/redirect-loop");
+                resp.prepare_payload();
+                co_return;
+            }
+        )
+    );
 
     // Wildcard: GET /wildcard/*
-    server.router().add("/wildcard/*",
-                        0,
-                        std::make_shared<Server::Handler>(
-                            [](Server::Request&,
-                               Server::Response&  resp,
-                               const std::string& matched_path) -> asio::awaitable<void> {
-                                resp.result(status::ok);
-                                resp.set(field::content_type, "text/plain");
-                                resp.body() = "matched:" + matched_path;
-                                resp.prepare_payload();
-                                co_return;
-                            }));
+    server.router().add(
+        "/wildcard/*",
+        0,
+        std::make_shared<Server::Handler>(
+            [](Server::Request&, Server::Response& resp, const std::string& matched_path
+            ) -> asio::awaitable<void> {
+                resp.result(status::ok);
+                resp.set(field::content_type, "text/plain");
+                resp.body() = "matched:" + matched_path;
+                resp.prepare_payload();
+                co_return;
+            }
+        )
+    );
 
     // PATCH /echo – prefix with "patch:"
     server.router().add(
         "/echo",
         8,
-        std::make_shared<Server::Handler>([](Server::Request&  req,
-                                             Server::Response& resp,
-                                             const std::string&) -> asio::awaitable<void> {
-            resp.result(status::ok);
-            resp.set(field::content_type, "text/plain");
-            resp.body() = "patch:" + req.body();
-            resp.prepare_payload();
-            co_return;
-        }));
+        std::make_shared<Server::Handler>(
+            [](Server::Request&  req,
+               Server::Response& resp,
+               const std::string&) -> asio::awaitable<void> {
+                resp.result(status::ok);
+                resp.set(field::content_type, "text/plain");
+                resp.body() = "patch:" + req.body();
+                resp.prepare_payload();
+                co_return;
+            }
+        )
+    );
 
     // DELETE /echo – echo body
     server.router().add(
         "/echo",
         4,
-        std::make_shared<Server::Handler>([](Server::Request&  req,
-                                             Server::Response& resp,
-                                             const std::string&) -> asio::awaitable<void> {
-            resp.result(status::ok);
-            resp.set(field::content_type, "text/plain");
-            resp.body() = "delete:" + req.body();
-            resp.prepare_payload();
-            co_return;
-        }));
+        std::make_shared<Server::Handler>(
+            [](Server::Request&  req,
+               Server::Response& resp,
+               const std::string&) -> asio::awaitable<void> {
+                resp.result(status::ok);
+                resp.set(field::content_type, "text/plain");
+                resp.body() = "delete:" + req.body();
+                resp.prepare_payload();
+                co_return;
+            }
+        )
+    );
 
     // HEAD /hello – should return headers only, no body
     server.router().add(
         "/hello",
         1,
-        std::make_shared<Server::Handler>([](Server::Request&,
-                                             Server::Response& resp,
-                                             const std::string&) -> asio::awaitable<void> {
-            resp.result(status::ok);
-            resp.set(field::content_type, "text/plain");
-            resp.body() = "hello world";
-            resp.prepare_payload();
-            co_return;
-        }));
+        std::make_shared<Server::Handler>(
+            [](Server::Request&,
+               Server::Response& resp,
+               const std::string&) -> asio::awaitable<void> {
+                resp.result(status::ok);
+                resp.set(field::content_type, "text/plain");
+                resp.body() = "hello world";
+                resp.prepare_payload();
+                co_return;
+            }
+        )
+    );
 
     // GET /big-body – returns a configurable-size body for limit testing
     server.router().add(
         "/big-body",
         0,
-        std::make_shared<Server::Handler>([](Server::Request&  req,
-                                             Server::Response& resp,
-                                             const std::string&) -> asio::awaitable<void> {
-            resp.result(status::ok);
-            resp.set(field::content_type, "text/plain");
-            // Default 1000 bytes, or use ?size=NNNN
-            std::string target = std::string(req.target());
-            size_t      size   = 1000;
-            auto        pos    = target.find("size=");
-            if (pos != std::string::npos) {
-                size = std::stoul(target.substr(pos + 5));
+        std::make_shared<Server::Handler>(
+            [](Server::Request&  req,
+               Server::Response& resp,
+               const std::string&) -> asio::awaitable<void> {
+                resp.result(status::ok);
+                resp.set(field::content_type, "text/plain");
+                // Default 1000 bytes, or use ?size=NNNN
+                std::string target = std::string(req.target());
+                size_t      size   = 1000;
+                auto        pos    = target.find("size=");
+                if (pos != std::string::npos) {
+                    size = std::stoul(target.substr(pos + 5));
+                }
+                resp.body() = std::string(size, 'x');
+                resp.prepare_payload();
+                co_return;
             }
-            resp.body() = std::string(size, 'x');
-            resp.prepare_payload();
-            co_return;
-        }));
+        )
+    );
 
     // GET /redirect-proto-rel – not used (protocol-relative needs cross-host)
 
@@ -737,7 +781,8 @@ asio::awaitable<void> test_http_client_beast_server() {
         auto resp = co_await HttpClient::getAsync(
             "http://192.0.2.1:9999/nonexistent",
             {},
-            HttpClient::RequestConfig{.connectTimeout = std::chrono::milliseconds{50}});
+            HttpClient::RequestConfig{.connectTimeout = std::chrono::milliseconds{50}}
+        );
         XX_TEST_EXPECT_FALSE(resp.has_value());
     }
 
@@ -747,8 +792,8 @@ asio::awaitable<void> test_http_client_beast_server() {
         auto resp = co_await HttpClient::getAsync(
             baseUrl + "/redirect-me",
             {},
-            HttpClient::RequestConfig{.readTimeout    = std::chrono::seconds{10},
-                                      .followRedirect = 0});
+            HttpClient::RequestConfig{.readTimeout = std::chrono::seconds{10}, .followRedirect = 0}
+        );
         XX_TEST_EXPECT_HAS_VALUE(resp);
         if (resp.has_value()) {
             XX_TEST_EXPECT_EQ(resp.value().status, 302);
@@ -761,8 +806,8 @@ asio::awaitable<void> test_http_client_beast_server() {
         auto resp = co_await HttpClient::getAsync(
             baseUrl + "/redirect-me",
             {},
-            HttpClient::RequestConfig{.readTimeout    = std::chrono::seconds{10},
-                                      .followRedirect = 1});
+            HttpClient::RequestConfig{.readTimeout = std::chrono::seconds{10}, .followRedirect = 1}
+        );
         XX_TEST_EXPECT_HAS_VALUE(resp);
         if (resp.has_value()) {
             XX_TEST_EXPECT_EQ(resp.value().status, 200);
@@ -774,8 +819,8 @@ asio::awaitable<void> test_http_client_beast_server() {
         auto resp = co_await HttpClient::getAsync(
             baseUrl + "/redirect-loop",
             {},
-            HttpClient::RequestConfig{.readTimeout    = std::chrono::seconds{10},
-                                      .followRedirect = 3});
+            HttpClient::RequestConfig{.readTimeout = std::chrono::seconds{10}, .followRedirect = 3}
+        );
         XX_TEST_EXPECT_HAS_VALUE(resp);
         if (resp.has_value()) {
             // Should stop at the last redirect (302) since it exceeds max
@@ -830,9 +875,12 @@ asio::awaitable<void> test_http_client_beast_server() {
         auto resp = co_await HttpClient::getAsync(
             baseUrl + "/big-body?size=100",
             {},
-            HttpClient::RequestConfig{.readTimeout     = std::chrono::seconds{5},
-                                      .followRedirect  = 3,
-                                      .maxResponseBody = 50});
+            HttpClient::RequestConfig{
+                .readTimeout     = std::chrono::seconds{5},
+                .followRedirect  = 3,
+                .maxResponseBody = 50
+            }
+        );
         // Body limit exceeded should result in an error (no value)
         XX_TEST_EXPECT_FALSE(resp.has_value());
     }
@@ -842,9 +890,12 @@ asio::awaitable<void> test_http_client_beast_server() {
         auto resp = co_await HttpClient::getAsync(
             baseUrl + "/big-body?size=100",
             {},
-            HttpClient::RequestConfig{.readTimeout     = std::chrono::seconds{5},
-                                      .followRedirect  = 3,
-                                      .maxResponseBody = 200});
+            HttpClient::RequestConfig{
+                .readTimeout     = std::chrono::seconds{5},
+                .followRedirect  = 3,
+                .maxResponseBody = 200
+            }
+        );
         XX_TEST_EXPECT_HAS_VALUE(resp);
         if (resp.has_value()) {
             XX_TEST_EXPECT_EQ(resp.value().status, 200);
@@ -869,7 +920,8 @@ asio::awaitable<void> test_http_client_beast_server() {
         // fetchMarkdown should return error (not UB) for 404
         auto result = co_await HttpClient::fetchMarkdown(
             baseUrl + "/nonexistent",
-            HttpClient::RequestConfig{.readTimeout = std::chrono::seconds{5}});
+            HttpClient::RequestConfig{.readTimeout = std::chrono::seconds{5}}
+        );
         XX_TEST_EXPECT_FALSE(result.has_value());
     }
 
@@ -879,7 +931,8 @@ asio::awaitable<void> test_http_client_beast_server() {
         // fetchMarkdown checks success status, not content-type
         auto result = co_await HttpClient::fetchMarkdown(
             baseUrl + "/hello",
-            HttpClient::RequestConfig{.readTimeout = std::chrono::seconds{5}});
+            HttpClient::RequestConfig{.readTimeout = std::chrono::seconds{5}}
+        );
         XX_TEST_EXPECT_HAS_VALUE(result);
     }
 

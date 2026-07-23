@@ -178,7 +178,9 @@ DaSimServer startDaSimServer() {
 
                 g_da_sim_tool_calls = neograph::json::array();
                 co_return;
-            }));
+            }
+        )
+    );
 
     sim.thr = std::thread([rawSvr]() {
         rawSvr->start();
@@ -254,13 +256,14 @@ asio::awaitable<void> test_deepagent_conversation_turn() {
     co_await agent.init();
 
     neograph::json messages = neograph::json::array();
-    auto           result
-        = co_await agent.runConversationTurnAsync("conv_test",
-                                                  "What is the weather?",
-                                                  true,
-                                                  std::move(messages),
-                                                  nullptr,
-                                                  [](const neograph::graph::GraphEvent&) {});
+    auto           result   = co_await agent.runConversationTurnAsync(
+        "conv_test",
+        "What is the weather?",
+        true,
+        std::move(messages),
+        nullptr,
+        [](const neograph::graph::GraphEvent&) {}
+    );
 
     XX_TEST_EXPECT_FALSE(result.hasError);
     XX_TEST_EXPECT_FALSE(result.interrupted);
@@ -298,13 +301,14 @@ asio::awaitable<void> test_deepagent_tool_calls() {
     co_await agent.init();
 
     neograph::json messages = neograph::json::array();
-    auto           result
-        = co_await agent.runConversationTurnAsync("tool_test",
-                                                  "List files",
-                                                  true,
-                                                  std::move(messages),
-                                                  nullptr,
-                                                  [](const neograph::graph::GraphEvent&) {});
+    auto           result   = co_await agent.runConversationTurnAsync(
+        "tool_test",
+        "List files",
+        true,
+        std::move(messages),
+        nullptr,
+        [](const neograph::graph::GraphEvent&) {}
+    );
 
     XX_TEST_EXPECT_FALSE(result.hasError);
 
@@ -330,14 +334,15 @@ asio::awaitable<void> test_deepagent_multi_turn() {
     neograph::json messages = neograph::json::array();
 
     for (int turn = 0; turn < 3; ++turn) {
-        auto input = "Turn " + std::to_string(turn) + " input";
-        auto result
-            = co_await agent.runConversationTurnAsync("multi_turn_test",
-                                                      input,
-                                                      turn == 0,
-                                                      std::move(messages),
-                                                      nullptr,
-                                                      [](const neograph::graph::GraphEvent&) {});
+        auto input  = "Turn " + std::to_string(turn) + " input";
+        auto result = co_await agent.runConversationTurnAsync(
+            "multi_turn_test",
+            input,
+            turn == 0,
+            std::move(messages),
+            nullptr,
+            [](const neograph::graph::GraphEvent&) {}
+        );
 
         XX_TEST_EXPECT_FALSE(result.hasError);
         XX_TEST_EXPECT_FALSE(result.interrupted);
@@ -374,13 +379,14 @@ asio::awaitable<void> test_deepagent_large_history() {
         });
     }
 
-    auto result
-        = co_await agent.runConversationTurnAsync("history_test",
-                                                  "Final question",
-                                                  true,
-                                                  std::move(messages),
-                                                  nullptr,
-                                                  [](const neograph::graph::GraphEvent&) {});
+    auto result = co_await agent.runConversationTurnAsync(
+        "history_test",
+        "Final question",
+        true,
+        std::move(messages),
+        nullptr,
+        [](const neograph::graph::GraphEvent&) {}
+    );
 
     XX_TEST_EXPECT_FALSE(result.hasError);
     XX_TEST_EXPECT_TRUE(result.messages.is_array());

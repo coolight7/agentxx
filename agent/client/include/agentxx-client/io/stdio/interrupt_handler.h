@@ -46,18 +46,21 @@ private:
 
     void registerInterruptHandles();
 
-    asio::awaitable<std::optional<neograph::json>>
-        execInterruptHandle(std::string_view                               name,
-                            const agentxx::middleware::InterruptHandleArg& arg,
-                            const std::string&                             threadId);
+    asio::awaitable<std::optional<neograph::json>> execInterruptHandle(
+        std::string_view                               name,
+        const agentxx::middleware::InterruptHandleArg& arg,
+        const std::string&                             threadId
+    );
 
-    asio::awaitable<agentxx::events::RespInterrupt>
-        handle(const agentxx::events::ReqInterrupt& req);
+    asio::awaitable<agentxx::events::RespInterrupt> handle(const agentxx::events::ReqInterrupt& req
+    );
 
     /// <name, handle>
-    std::map<std::string,
-             std::function<asio::awaitable<neograph::json>(
-                 const agentxx::middleware::InterruptHandleArg&,
-                 const std::string& threadId)>>
+    std::map<
+        std::string,
+        std::function<asio::awaitable<neograph::json>(
+            const agentxx::middleware::InterruptHandleArg&,
+            const std::string& threadId
+        )>>
         interruptHandles{};
 };

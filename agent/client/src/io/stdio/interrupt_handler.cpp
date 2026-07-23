@@ -27,12 +27,14 @@ asio::awaitable<void> StdioInterruptHandler::start() {
     registerInterruptHandles();
 
     auto& rr = ctxPtr->bus->getRR<agentxx::events::ReqInterrupt, agentxx::events::RespInterrupt>(
-        agentxx::events::Topic::Interrupt);
-    serverId
-        = rr.serve([this](const agentxx::events::ReqInterrupt& req,
-                          size_t /*corrId*/) -> asio::awaitable<agentxx::events::RespInterrupt> {
-              co_return co_await handle(req);
-          });
+        agentxx::events::Topic::Interrupt
+    );
+    serverId = rr.serve(
+        [this](const agentxx::events::ReqInterrupt& req, size_t /*corrId*/)
+            -> asio::awaitable<agentxx::events::RespInterrupt> {
+            co_return co_await handle(req);
+        }
+    );
 
     registered = true;
     co_return;
@@ -46,7 +48,8 @@ void StdioInterruptHandler::stop() {
     if (ctxPtr && ctxPtr->bus) {
         auto& rr
             = ctxPtr->bus->getRR<agentxx::events::ReqInterrupt, agentxx::events::RespInterrupt>(
-                agentxx::events::Topic::Interrupt);
+                agentxx::events::Topic::Interrupt
+            );
         rr.removeServer(serverId);
     }
     registered = false;
@@ -58,8 +61,10 @@ StdioInterruptHandler::~StdioInterruptHandler() {
 
 void StdioInterruptHandler::registerInterruptHandles() {
     interruptHandles[agentxx::middleware::MiddlewareContext::interruptHandleName_default]
-        = [this](const agentxx::middleware::InterruptHandleArg& handleArg,
-                 const std::string& threadId) -> asio::awaitable<neograph::json> {
+        = [this](
+              const agentxx::middleware::InterruptHandleArg& handleArg,
+              const std::string&                             threadId
+          ) -> asio::awaitable<neograph::json> {
         auto ctxPtr  = agentContext.lock();
         auto session = ctxPtr ? ctxPtr->sessions->get(threadId) : nullptr;
         auto io      = session ? session->io : nullptr;
@@ -74,8 +79,10 @@ void StdioInterruptHandler::registerInterruptHandles() {
         for (const auto& input : handleArg.inputs) {
             bool inputSuccess = false;
             do {
-                io->onDisplay("interrupt",
-                              fmt::format("  ┣━ ## {} : {}\n", input.label, input.depict));
+                io->onDisplay(
+                    "interrupt",
+                    fmt::format("  ┣━ ## {} : {}\n", input.label, input.depict)
+                );
 
                 if (input.type.empty()) {
                     inputSuccess = true;
@@ -93,8 +100,10 @@ void StdioInterruptHandler::registerInterruptHandles() {
                         typeHint = fmt::format("  ┣━ Type | {}\n", input.type);
                     }
                     io->onDisplay("interrupt", typeHint);
-                    io->onDisplay("interrupt",
-                                  fmt::format("  ┣━ Default Value: {}\n", input.defaultValue));
+                    io->onDisplay(
+                        "interrupt",
+                        fmt::format("  ┣━ Default Value: {}\n", input.defaultValue)
+                    );
                     io->onDisplay("interrupt", "  ┣━ >>> ");
 
                     haveWaitInput = true;
@@ -119,16 +128,20 @@ void StdioInterruptHandler::registerInterruptHandles() {
                             inputSuccess = false;
                         }
                     } else if ("int" == input.type) {
-                        int64_t num  = 0;
-                        auto    r    = std::from_chars(inputValue.c_str(),
-                                                 inputValue.c_str() + inputValue.size(),
-                                                 num);
+                        int64_t num = 0;
+                        auto    r   = std::from_chars(
+                            inputValue.c_str(),
+                            inputValue.c_str() + inputValue.size(),
+                            num
+                        );
                         inputSuccess = (r.ec == std::errc{});
                     } else if ("double" == input.type) {
                         double num;
-                        auto   r     = std::from_chars(inputValue.c_str(),
-                                                 inputValue.c_str() + inputValue.size(),
-                                                 num);
+                        auto   r = std::from_chars(
+                            inputValue.c_str(),
+                            inputValue.c_str() + inputValue.size(),
+                            num
+                        );
                         inputSuccess = (r.ec == std::errc{});
                     } else if ("string" == input.type) {
                         inputSuccess = true;
@@ -159,10 +172,11 @@ void StdioInterruptHandler::registerInterruptHandles() {
     };
 }
 
-asio::awaitable<std::optional<neograph::json>>
-    StdioInterruptHandler::execInterruptHandle(std::string_view                               name,
-                                               const agentxx::middleware::InterruptHandleArg& arg,
-                                               const std::string& threadId) {
+asio::awaitable<std::optional<neograph::json>> StdioInterruptHandler::execInterruptHandle(
+    std::string_view                               name,
+    const agentxx::middleware::InterruptHandleArg& arg,
+    const std::string&                             threadId
+) {
     auto handleIt = interruptHandles.find(arg.name);
     if (handleIt != interruptHandles.end()) {
         co_return co_await handleIt->second(arg, threadId);
@@ -179,7 +193,8 @@ asio::awaitable<agentxx::events::RespInterrupt>
 
     // 解析单个 InterruptHandleArg
     auto argOpt = agentxx::middleware::InterruptHandleArg::fromJson(
-        neograph::json::parse(req.interruptArgsJson));
+        neograph::json::parse(req.interruptArgsJson)
+    );
     if (!argOpt.has_value()) {
         co_return agentxx::events::RespInterrupt{.handled = false, .resultJson = "{}"};
     }

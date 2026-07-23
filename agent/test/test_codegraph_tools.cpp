@@ -850,8 +850,9 @@ void test_codegraph_manager_multi_lang_path() {
 // Tool Definition Tests
 // =========================================================================
 
-asio::awaitable<void> test_codegraph_search_tool_definition(
-    std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+asio::awaitable<void>
+    test_codegraph_search_tool_definition(std::weak_ptr<agentxx::agent::AgentContext> agentContext
+    ) {
     auto codegraph = std::make_shared<agentxx::expand::CodeGraphManager>();
     auto tool      = agentxx::tools::CodeGraphSearchTool{codegraph, agentContext};
 
@@ -866,8 +867,9 @@ asio::awaitable<void> test_codegraph_search_tool_definition(
     co_return;
 }
 
-asio::awaitable<void> test_codegraph_context_tool_definition(
-    std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+asio::awaitable<void>
+    test_codegraph_context_tool_definition(std::weak_ptr<agentxx::agent::AgentContext> agentContext
+    ) {
     auto codegraph = std::make_shared<agentxx::expand::CodeGraphManager>();
     auto tool      = agentxx::tools::CodeGraphContextTool{codegraph, agentContext};
 
@@ -882,8 +884,9 @@ asio::awaitable<void> test_codegraph_context_tool_definition(
     co_return;
 }
 
-asio::awaitable<void> test_codegraph_callers_tool_definition(
-    std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+asio::awaitable<void>
+    test_codegraph_callers_tool_definition(std::weak_ptr<agentxx::agent::AgentContext> agentContext
+    ) {
     auto codegraph = std::make_shared<agentxx::expand::CodeGraphManager>();
     auto tool      = agentxx::tools::CodeGraphCallersTool{codegraph, agentContext};
 
@@ -898,8 +901,9 @@ asio::awaitable<void> test_codegraph_callers_tool_definition(
     co_return;
 }
 
-asio::awaitable<void> test_codegraph_callees_tool_definition(
-    std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+asio::awaitable<void>
+    test_codegraph_callees_tool_definition(std::weak_ptr<agentxx::agent::AgentContext> agentContext
+    ) {
     auto codegraph = std::make_shared<agentxx::expand::CodeGraphManager>();
     auto tool      = agentxx::tools::CodeGraphCalleesTool{codegraph, agentContext};
 
@@ -914,8 +918,9 @@ asio::awaitable<void> test_codegraph_callees_tool_definition(
     co_return;
 }
 
-asio::awaitable<void> test_codegraph_impact_tool_definition(
-    std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+asio::awaitable<void>
+    test_codegraph_impact_tool_definition(std::weak_ptr<agentxx::agent::AgentContext> agentContext
+    ) {
     auto codegraph = std::make_shared<agentxx::expand::CodeGraphManager>();
     auto tool      = agentxx::tools::CodeGraphImpactTool{codegraph, agentContext};
 
@@ -930,8 +935,9 @@ asio::awaitable<void> test_codegraph_impact_tool_definition(
     co_return;
 }
 
-asio::awaitable<void> test_codegraph_status_tool_definition(
-    std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+asio::awaitable<void>
+    test_codegraph_status_tool_definition(std::weak_ptr<agentxx::agent::AgentContext> agentContext
+    ) {
     auto codegraph = std::make_shared<agentxx::expand::CodeGraphManager>();
     auto tool      = agentxx::tools::CodeGraphStatusTool{codegraph, agentContext};
 
@@ -1014,7 +1020,8 @@ asio::awaitable<void>
 }
 
 asio::awaitable<void> test_codegraph_search_tool_execute_empty_query(
-    std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    std::weak_ptr<agentxx::agent::AgentContext> agentContext
+) {
     auto codegraph = std::make_shared<agentxx::expand::CodeGraphManager>();
     auto tool      = agentxx::tools::CodeGraphSearchTool{codegraph, agentContext};
 
@@ -1102,7 +1109,8 @@ asio::awaitable<void>
 }
 
 asio::awaitable<void> test_codegraph_index_tool_execute_empty_path(
-    std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    std::weak_ptr<agentxx::agent::AgentContext> agentContext
+) {
     auto codegraph = std::make_shared<agentxx::expand::CodeGraphManager>();
     auto tool      = agentxx::tools::CodeGraphIndexTool{codegraph, agentContext};
 
@@ -1217,7 +1225,6 @@ asio::awaitable<void>
 
 asio::awaitable<TestResult>
     run_codegraph_tools_tests(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
-
     test_codegraph_manager_init();
     test_codegraph_manager_init_twice();
     test_codegraph_manager_not_initialized();

@@ -92,22 +92,28 @@ public:
 
         HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
         if (FAILED(hr) && hr != RPC_E_CHANGED_MODE) {
-            XX_LOGE("TextSelectionMonitor: CoInitializeEx failed, hr=0x{:08X}",
-                    static_cast<unsigned>(hr));
+            XX_LOGE(
+                "TextSelectionMonitor: CoInitializeEx failed, hr=0x{:08X}",
+                static_cast<unsigned>(hr)
+            );
             return false;
         }
 
         com_initialized_ = (SUCCEEDED(hr));
 
-        hr = CoCreateInstance(CLSID_CUIAutomation,
-                              nullptr,
-                              CLSCTX_INPROC_SERVER,
-                              IID_IUIAutomation,
-                              reinterpret_cast<void**>(&automation_));
+        hr = CoCreateInstance(
+            CLSID_CUIAutomation,
+            nullptr,
+            CLSCTX_INPROC_SERVER,
+            IID_IUIAutomation,
+            reinterpret_cast<void**>(&automation_)
+        );
         if (FAILED(hr) || !automation_) {
-            XX_LOGE("TextSelectionMonitor: CoCreateInstance CUIAutomation failed, "
-                    "hr=0x{:08X}",
-                    static_cast<unsigned>(hr));
+            XX_LOGE(
+                "TextSelectionMonitor: CoCreateInstance CUIAutomation failed, "
+                "hr=0x{:08X}",
+                static_cast<unsigned>(hr)
+            );
             if (com_initialized_) {
                 CoUninitialize();
                 com_initialized_ = false;
@@ -121,11 +127,13 @@ public:
         IUIAutomationElement* desktop = nullptr;
         hr                            = automation_->GetRootElement(&desktop);
         if (SUCCEEDED(hr) && desktop) {
-            automation_->AddAutomationEventHandler(UIA_Text_TextSelectionChangedEventId,
-                                                   desktop,
-                                                   TreeScope_Descendants,
-                                                   nullptr,
-                                                   static_cast<IUIAutomationEventHandler*>(this));
+            automation_->AddAutomationEventHandler(
+                UIA_Text_TextSelectionChangedEventId,
+                desktop,
+                TreeScope_Descendants,
+                nullptr,
+                static_cast<IUIAutomationEventHandler*>(this)
+            );
             desktop->Release();
         }
 
@@ -181,13 +189,15 @@ public:
 private:
 
     void workerLoop() {
-        hook_ = SetWinEventHook(EVENT_OBJECT_TEXTSELECTIONCHANGED,
-                                EVENT_OBJECT_TEXTSELECTIONCHANGED,
-                                nullptr,
-                                WinEventProc,
-                                0,
-                                0,
-                                WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+        hook_ = SetWinEventHook(
+            EVENT_OBJECT_TEXTSELECTIONCHANGED,
+            EVENT_OBJECT_TEXTSELECTIONCHANGED,
+            nullptr,
+            WinEventProc,
+            0,
+            0,
+            WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS
+        );
 
         if (!hook_) {
             XX_LOGE("TextSelectionMonitor: SetWinEventHook failed");
@@ -237,12 +247,11 @@ private:
             MSLLHOOKSTRUCT* pMouseStruct = (MSLLHOOKSTRUCT*)lParam;
 
             switch (wParam) {
-            case WM_LBUTTONDOWN:
-                self->mouseDownPos_ = pMouseStruct->pt;
-                break;
+                case WM_LBUTTONDOWN:
+                    self->mouseDownPos_ = pMouseStruct->pt;
+                    break;
 
-            case WM_LBUTTONUP:
-                {
+                case WM_LBUTTONUP: {
                     if (self->selectionPending_.load(std::memory_order_acquire)) {
                         PostThreadMessageW(GetCurrentThreadId(), WM_SELECTION_COMPLETE, 0, 0);
                     } else {
@@ -252,7 +261,8 @@ private:
 
                         auto now          = std::chrono::steady_clock::now();
                         auto clickElapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                            now - self->lastClickTime_);
+                            now - self->lastClickTime_
+                        );
                         int  cdx = abs(pMouseStruct->pt.x - self->lastClickPos_.x);
                         int  cdy = abs(pMouseStruct->pt.y - self->lastClickPos_.y);
                         bool wasDoubleClick
@@ -266,10 +276,12 @@ private:
                                 self->lastSelectionHwnd_       = rootHwnd;
                                 self->lastSelectionChangeTime_ = now;
                                 self->selectionPending_.store(true, std::memory_order_release);
-                                PostThreadMessageW(GetCurrentThreadId(),
-                                                   WM_SELECTION_COMPLETE,
-                                                   0,
-                                                   0);
+                                PostThreadMessageW(
+                                    GetCurrentThreadId(),
+                                    WM_SELECTION_COMPLETE,
+                                    0,
+                                    0
+                                );
                             }
                         }
                         self->lastClickTime_ = now;
@@ -282,13 +294,15 @@ private:
         return CallNextHookEx(nullptr, nCode, wParam, lParam);
     }
 
-    static void CALLBACK WinEventProc(HWINEVENTHOOK /*hWinEventHook*/,
-                                      DWORD event,
-                                      HWND  hwnd,
-                                      LONG  idObject,
-                                      LONG /*idChild*/,
-                                      DWORD /*dwEventThread*/,
-                                      DWORD /*dwmsEventTime*/) {
+    static void CALLBACK WinEventProc(
+        HWINEVENTHOOK /*hWinEventHook*/,
+        DWORD event,
+        HWND  hwnd,
+        LONG  idObject,
+        LONG /*idChild*/,
+        DWORD /*dwEventThread*/,
+        DWORD /*dwmsEventTime*/
+    ) {
         if (event != EVENT_OBJECT_TEXTSELECTIONCHANGED) {
             return;
         }
@@ -311,8 +325,8 @@ private:
         self->selectionPending_.store(true, std::memory_order_release);
     }
 
-    HRESULT STDMETHODCALLTYPE HandleAutomationEvent(IUIAutomationElement* sender,
-                                                    EVENTID               eventId) override {
+    HRESULT STDMETHODCALLTYPE
+        HandleAutomationEvent(IUIAutomationElement* sender, EVENTID eventId) override {
         if (eventId != UIA_Text_TextSelectionChangedEventId) {
             return S_OK;
         }
@@ -321,9 +335,11 @@ private:
         }
 
         IUIAutomationTextPattern* textPattern = nullptr;
-        HRESULT                   hr          = sender->GetCurrentPatternAs(UIA_TextPatternId,
-                                                 IID_IUIAutomationTextPattern,
-                                                 reinterpret_cast<void**>(&textPattern));
+        HRESULT                   hr          = sender->GetCurrentPatternAs(
+            UIA_TextPatternId,
+            IID_IUIAutomationTextPattern,
+            reinterpret_cast<void**>(&textPattern)
+        );
 
         std::string extractedText;
         if (SUCCEEDED(hr) && textPattern) {
@@ -399,13 +415,15 @@ private:
 
         DWORD_PTR msgResult = 0;
         DWORD     selStart = 0, selEnd = 0;
-        LRESULT   lr = SendMessageTimeoutW(targetHwnd,
-                                         EM_GETSEL,
-                                         reinterpret_cast<WPARAM>(&selStart),
-                                         reinterpret_cast<LPARAM>(&selEnd),
-                                         SMTO_ABORTIFHUNG,
-                                         200,
-                                         &msgResult);
+        LRESULT   lr = SendMessageTimeoutW(
+            targetHwnd,
+            EM_GETSEL,
+            reinterpret_cast<WPARAM>(&selStart),
+            reinterpret_cast<LPARAM>(&selEnd),
+            SMTO_ABORTIFHUNG,
+            200,
+            &msgResult
+        );
         if (!lr || selStart >= selEnd) {
             return {};
         }
@@ -425,43 +443,51 @@ private:
 
         std::wstring selText = fullText.substr(selStart, selEnd - selStart);
 
-        int utf8Len = WideCharToMultiByte(CP_UTF8,
-                                          0,
-                                          selText.data(),
-                                          static_cast<int>(selText.size()),
-                                          nullptr,
-                                          0,
-                                          nullptr,
-                                          nullptr);
+        int utf8Len = WideCharToMultiByte(
+            CP_UTF8,
+            0,
+            selText.data(),
+            static_cast<int>(selText.size()),
+            nullptr,
+            0,
+            nullptr,
+            nullptr
+        );
         if (utf8Len <= 0) {
             return {};
         }
 
         std::string result;
         result.resize(utf8Len);
-        WideCharToMultiByte(CP_UTF8,
-                            0,
-                            selText.data(),
-                            static_cast<int>(selText.size()),
-                            &result[0],
-                            utf8Len,
-                            nullptr,
-                            nullptr);
+        WideCharToMultiByte(
+            CP_UTF8,
+            0,
+            selText.data(),
+            static_cast<int>(selText.size()),
+            &result[0],
+            utf8Len,
+            nullptr,
+            nullptr
+        );
 
         return {result, TextSource::EmGetSel};
     }
 
     std::pair<std::string, TextSource> getSelectedTextByAccessible(HWND hwnd) {
         IAccessible* acc = nullptr;
-        HRESULT      hr  = AccessibleObjectFromWindow(hwnd,
-                                                OBJID_CLIENT,
-                                                IID_IAccessible,
-                                                reinterpret_cast<void**>(&acc));
+        HRESULT      hr  = AccessibleObjectFromWindow(
+            hwnd,
+            OBJID_CLIENT,
+            IID_IAccessible,
+            reinterpret_cast<void**>(&acc)
+        );
         if (FAILED(hr) || !acc) {
-            hr = AccessibleObjectFromWindow(hwnd,
-                                            OBJID_WINDOW,
-                                            IID_IAccessible,
-                                            reinterpret_cast<void**>(&acc));
+            hr = AccessibleObjectFromWindow(
+                hwnd,
+                OBJID_WINDOW,
+                IID_IAccessible,
+                reinterpret_cast<void**>(&acc)
+            );
             if (FAILED(hr) || !acc) {
                 return {};
             }
@@ -485,8 +511,10 @@ private:
             }
         } else if (SUCCEEDED(hr) && varSel.vt == VT_DISPATCH && varSel.pdispVal) {
             IEnumVARIANT* enumVar = nullptr;
-            hr                    = varSel.pdispVal->QueryInterface(IID_IEnumVARIANT,
-                                                 reinterpret_cast<void**>(&enumVar));
+            hr                    = varSel.pdispVal->QueryInterface(
+                IID_IEnumVARIANT,
+                reinterpret_cast<void**>(&enumVar)
+            );
             if (SUCCEEDED(hr) && enumVar) {
                 VARIANT childVar;
                 VariantInit(&childVar);
@@ -495,8 +523,10 @@ private:
                 while (enumVar->Next(1, &childVar, &fetched) == S_OK && fetched == 1) {
                     if (childVar.vt == VT_DISPATCH && childVar.pdispVal) {
                         IAccessible* childAcc = nullptr;
-                        hr                    = childVar.pdispVal->QueryInterface(IID_IAccessible,
-                                                               reinterpret_cast<void**>(&childAcc));
+                        hr                    = childVar.pdispVal->QueryInterface(
+                            IID_IAccessible,
+                            reinterpret_cast<void**>(&childAcc)
+                        );
                         if (SUCCEEDED(hr) && childAcc) {
                             VARIANT varChildId;
                             varChildId.vt   = VT_I4;
@@ -540,28 +570,32 @@ private:
             return {};
         }
 
-        int utf8Len = WideCharToMultiByte(CP_UTF8,
-                                          0,
-                                          text.data(),
-                                          static_cast<int>(text.size()),
-                                          nullptr,
-                                          0,
-                                          nullptr,
-                                          nullptr);
+        int utf8Len = WideCharToMultiByte(
+            CP_UTF8,
+            0,
+            text.data(),
+            static_cast<int>(text.size()),
+            nullptr,
+            0,
+            nullptr,
+            nullptr
+        );
         if (utf8Len <= 0) {
             return {};
         }
 
         std::string result;
         result.resize(utf8Len);
-        WideCharToMultiByte(CP_UTF8,
-                            0,
-                            text.data(),
-                            static_cast<int>(text.size()),
-                            &result[0],
-                            utf8Len,
-                            nullptr,
-                            nullptr);
+        WideCharToMultiByte(
+            CP_UTF8,
+            0,
+            text.data(),
+            static_cast<int>(text.size()),
+            &result[0],
+            utf8Len,
+            nullptr,
+            nullptr
+        );
 
         return {result, TextSource::WmGetText};
     }
@@ -597,25 +631,27 @@ private:
                 ++fileName;
             }
             _wcslwr_s(fileName, wcslen(fileName) + 1);
-            static constexpr auto browserKeywords = std::array<const wchar_t*, 19>{L"chrome",
-                                                                                   L"chromium",
-                                                                                   L"firefox",
-                                                                                   L"msedge",
-                                                                                   L"edge",
-                                                                                   L"opera",
-                                                                                   L"brave",
-                                                                                   L"vivaldi",
-                                                                                   L"arc",
-                                                                                   L"360chrome",
-                                                                                   L"360se",
-                                                                                   L"sogouexplorer",
-                                                                                   L"qqbrowser",
-                                                                                   L"maxthon",
-                                                                                   L"liebao",
-                                                                                   L"browser",
-                                                                                   L"2345explorer",
-                                                                                   L"baidubrowser",
-                                                                                   L"ucbrowser"};
+            static constexpr auto browserKeywords = std::array<const wchar_t*, 19>{
+                L"chrome",
+                L"chromium",
+                L"firefox",
+                L"msedge",
+                L"edge",
+                L"opera",
+                L"brave",
+                L"vivaldi",
+                L"arc",
+                L"360chrome",
+                L"360se",
+                L"sogouexplorer",
+                L"qqbrowser",
+                L"maxthon",
+                L"liebao",
+                L"browser",
+                L"2345explorer",
+                L"baidubrowser",
+                L"ucbrowser"
+            };
             for (const auto& kw : browserKeywords) {
                 if (wcsstr(fileName, kw)) {
                     isBrowser = true;
@@ -714,7 +750,8 @@ private:
 
         if (cachedPort != 0) {
             auto age = std::chrono::duration_cast<std::chrono::seconds>(
-                std::chrono::steady_clock::now() - cacheTime);
+                std::chrono::steady_clock::now() - cacheTime
+            );
             if (age < kCacheTtl) {
                 return (cachedPort > 0) ? cachedPort : 0;
             }
@@ -735,11 +772,13 @@ private:
             if (tcpConnectWithTimeout(sock, addr, 200)) {
                 closesocket(sock);
 
-                HINTERNET hSession = WinHttpOpen(L"AgentXX/CDP",
-                                                 WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
-                                                 WINHTTP_NO_PROXY_NAME,
-                                                 WINHTTP_NO_PROXY_BYPASS,
-                                                 0);
+                HINTERNET hSession = WinHttpOpen(
+                    L"AgentXX/CDP",
+                    WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+                    WINHTTP_NO_PROXY_NAME,
+                    WINHTTP_NO_PROXY_BYPASS,
+                    0
+                );
                 if (!hSession) {
                     continue;
                 }
@@ -748,21 +787,25 @@ private:
                 HINTERNET    hConnect
                     = WinHttpConnect(hSession, server.c_str(), static_cast<INTERNET_PORT>(port), 0);
                 if (hConnect) {
-                    HINTERNET hRequest = WinHttpOpenRequest(hConnect,
-                                                            L"GET",
-                                                            L"/json/version",
-                                                            nullptr,
-                                                            WINHTTP_NO_REFERER,
-                                                            WINHTTP_DEFAULT_ACCEPT_TYPES,
-                                                            0);
+                    HINTERNET hRequest = WinHttpOpenRequest(
+                        hConnect,
+                        L"GET",
+                        L"/json/version",
+                        nullptr,
+                        WINHTTP_NO_REFERER,
+                        WINHTTP_DEFAULT_ACCEPT_TYPES,
+                        0
+                    );
                     if (hRequest) {
-                        if (WinHttpSendRequest(hRequest,
-                                               WINHTTP_NO_ADDITIONAL_HEADERS,
-                                               0,
-                                               WINHTTP_NO_REQUEST_DATA,
-                                               0,
-                                               0,
-                                               0)
+                        if (WinHttpSendRequest(
+                                hRequest,
+                                WINHTTP_NO_ADDITIONAL_HEADERS,
+                                0,
+                                WINHTTP_NO_REQUEST_DATA,
+                                0,
+                                0,
+                                0
+                            )
                             && WinHttpReceiveResponse(hRequest, nullptr)) {
                             cachedPort = port;
                             cacheTime  = std::chrono::steady_clock::now();
@@ -787,11 +830,13 @@ private:
     }
 
     static std::string httpGet(int port, const std::wstring& path) {
-        HINTERNET hSession = WinHttpOpen(L"AgentXX/CDP",
-                                         WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
-                                         WINHTTP_NO_PROXY_NAME,
-                                         WINHTTP_NO_PROXY_BYPASS,
-                                         0);
+        HINTERNET hSession = WinHttpOpen(
+            L"AgentXX/CDP",
+            WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+            WINHTTP_NO_PROXY_NAME,
+            WINHTTP_NO_PROXY_BYPASS,
+            0
+        );
         if (!hSession) {
             return {};
         }
@@ -803,13 +848,15 @@ private:
             return {};
         }
 
-        HINTERNET hRequest = WinHttpOpenRequest(hConnect,
-                                                L"GET",
-                                                path.c_str(),
-                                                nullptr,
-                                                WINHTTP_NO_REFERER,
-                                                WINHTTP_DEFAULT_ACCEPT_TYPES,
-                                                0);
+        HINTERNET hRequest = WinHttpOpenRequest(
+            hConnect,
+            L"GET",
+            path.c_str(),
+            nullptr,
+            WINHTTP_NO_REFERER,
+            WINHTTP_DEFAULT_ACCEPT_TYPES,
+            0
+        );
         if (!hRequest) {
             WinHttpCloseHandle(hConnect);
             WinHttpCloseHandle(hSession);
@@ -817,13 +864,15 @@ private:
         }
 
         std::string result;
-        if (WinHttpSendRequest(hRequest,
-                               WINHTTP_NO_ADDITIONAL_HEADERS,
-                               0,
-                               WINHTTP_NO_REQUEST_DATA,
-                               0,
-                               0,
-                               0)
+        if (WinHttpSendRequest(
+                hRequest,
+                WINHTTP_NO_ADDITIONAL_HEADERS,
+                0,
+                WINHTTP_NO_REQUEST_DATA,
+                0,
+                0,
+                0
+            )
             && WinHttpReceiveResponse(hRequest, nullptr)) {
             DWORD bytesRead = 0;
             char  buffer[4096];
@@ -896,11 +945,13 @@ private:
 
     static bool wsSetRecvTimeout(SOCKET sock, int timeoutMs) {
         DWORD tv = static_cast<DWORD>(timeoutMs);
-        return setsockopt(sock,
-                          SOL_SOCKET,
-                          SO_RCVTIMEO,
-                          reinterpret_cast<const char*>(&tv),
-                          sizeof(tv))
+        return setsockopt(
+                   sock,
+                   SOL_SOCKET,
+                   SO_RCVTIMEO,
+                   reinterpret_cast<const char*>(&tv),
+                   sizeof(tv)
+               )
                == 0;
     }
 
@@ -928,10 +979,12 @@ private:
             frame.push_back(static_cast<unsigned char>(message[i]) ^ mask[i % 4]);
         }
 
-        return send(sock,
-                    reinterpret_cast<const char*>(frame.data()),
-                    static_cast<int>(frame.size()),
-                    0)
+        return send(
+                   sock,
+                   reinterpret_cast<const char*>(frame.data()),
+                   static_cast<int>(frame.size()),
+                   0
+               )
                > 0;
     }
 
@@ -967,10 +1020,12 @@ private:
         std::vector<char> payload(payloadLen);
         size_t            totalRecv = 0;
         while (totalRecv < payloadLen) {
-            int n = recv(sock,
-                         payload.data() + totalRecv,
-                         static_cast<int>(payloadLen - totalRecv),
-                         0);
+            int n = recv(
+                sock,
+                payload.data() + totalRecv,
+                static_cast<int>(payloadLen - totalRecv),
+                0
+            );
             if (n <= 0) {
                 return {};
             }
@@ -1055,20 +1110,24 @@ private:
                         continue;
                     }
 
-                    int titleLen = MultiByteToWideChar(CP_UTF8,
-                                                       0,
-                                                       title.data(),
-                                                       static_cast<int>(title.size()),
-                                                       nullptr,
-                                                       0);
+                    int titleLen = MultiByteToWideChar(
+                        CP_UTF8,
+                        0,
+                        title.data(),
+                        static_cast<int>(title.size()),
+                        nullptr,
+                        0
+                    );
                     if (titleLen > 0) {
                         std::vector<wchar_t> wTitleBuf(titleLen);
-                        MultiByteToWideChar(CP_UTF8,
-                                            0,
-                                            title.data(),
-                                            static_cast<int>(title.size()),
-                                            wTitleBuf.data(),
-                                            titleLen);
+                        MultiByteToWideChar(
+                            CP_UTF8,
+                            0,
+                            title.data(),
+                            static_cast<int>(title.size()),
+                            wTitleBuf.data(),
+                            titleLen
+                        );
                         if (wTitle.find(wTitleBuf.data()) != std::wstring::npos) {
                             targetId    = std::string(id);
                             targetTitle = std::string(title);
@@ -1154,14 +1213,16 @@ private:
                         = WideCharToMultiByte(CP_UTF8, 0, pwsz, -1, nullptr, 0, nullptr, nullptr);
                     if (utf8Len > 1) {
                         savedText.resize(utf8Len - 1);
-                        WideCharToMultiByte(CP_UTF8,
-                                            0,
-                                            pwsz,
-                                            -1,
-                                            &savedText[0],
-                                            utf8Len,
-                                            nullptr,
-                                            nullptr);
+                        WideCharToMultiByte(
+                            CP_UTF8,
+                            0,
+                            pwsz,
+                            -1,
+                            &savedText[0],
+                            utf8Len,
+                            nullptr,
+                            nullptr
+                        );
                     }
                     GlobalUnlock(hData);
                 }
@@ -1186,14 +1247,16 @@ private:
                         = WideCharToMultiByte(CP_UTF8, 0, pwsz, -1, nullptr, 0, nullptr, nullptr);
                     if (utf8Len > 1) {
                         result.resize(utf8Len - 1);
-                        WideCharToMultiByte(CP_UTF8,
-                                            0,
-                                            pwsz,
-                                            -1,
-                                            &result[0],
-                                            utf8Len,
-                                            nullptr,
-                                            nullptr);
+                        WideCharToMultiByte(
+                            CP_UTF8,
+                            0,
+                            pwsz,
+                            -1,
+                            &result[0],
+                            utf8Len,
+                            nullptr,
+                            nullptr
+                        );
                     }
                     GlobalUnlock(hData);
                 }
@@ -1206,12 +1269,14 @@ private:
                     if (hMem) {
                         wchar_t* pwszDst = static_cast<wchar_t*>(GlobalLock(hMem));
                         if (pwszDst) {
-                            MultiByteToWideChar(CP_UTF8,
-                                                0,
-                                                savedText.c_str(),
-                                                -1,
-                                                pwszDst,
-                                                static_cast<int>(wLen));
+                            MultiByteToWideChar(
+                                CP_UTF8,
+                                0,
+                                savedText.c_str(),
+                                -1,
+                                pwszDst,
+                                static_cast<int>(wLen)
+                            );
                             GlobalUnlock(hMem);
                         }
                         SetClipboardData(CF_UNICODETEXT, hMem);
@@ -1248,11 +1313,13 @@ private:
 
         {
             IUIAutomation* localAutomation = nullptr;
-            HRESULT        hr              = CoCreateInstance(CLSID_CUIAutomation,
-                                          nullptr,
-                                          CLSCTX_INPROC_SERVER,
-                                          IID_IUIAutomation,
-                                          reinterpret_cast<void**>(&localAutomation));
+            HRESULT        hr              = CoCreateInstance(
+                CLSID_CUIAutomation,
+                nullptr,
+                CLSCTX_INPROC_SERVER,
+                IID_IUIAutomation,
+                reinterpret_cast<void**>(&localAutomation)
+            );
             if (FAILED(hr) || !localAutomation) {
                 return {};
             }
@@ -1266,32 +1333,40 @@ private:
 
             IUIAutomationTextPattern* textPattern = nullptr;
             TextSource                source      = TextSource::TextPattern;
-            hr                                    = element->GetCurrentPatternAs(UIA_TextPatternId,
-                                              IID_IUIAutomationTextPattern,
-                                              reinterpret_cast<void**>(&textPattern));
+            hr                                    = element->GetCurrentPatternAs(
+                UIA_TextPatternId,
+                IID_IUIAutomationTextPattern,
+                reinterpret_cast<void**>(&textPattern)
+            );
             if (FAILED(hr) || !textPattern) {
                 IUIAutomationElement* focused = nullptr;
                 hr                            = localAutomation->GetFocusedElement(&focused);
                 if (SUCCEEDED(hr) && focused) {
-                    hr = focused->GetCurrentPatternAs(UIA_TextPatternId,
-                                                      IID_IUIAutomationTextPattern,
-                                                      reinterpret_cast<void**>(&textPattern));
+                    hr = focused->GetCurrentPatternAs(
+                        UIA_TextPatternId,
+                        IID_IUIAutomationTextPattern,
+                        reinterpret_cast<void**>(&textPattern)
+                    );
                     focused->Release();
                 }
             }
 
             if (!textPattern) {
                 IUIAutomationTextChildPattern* textChildPattern = nullptr;
-                hr = element->GetCurrentPatternAs(UIA_TextChildPatternId,
-                                                  IID_IUIAutomationTextChildPattern,
-                                                  reinterpret_cast<void**>(&textChildPattern));
+                hr                                              = element->GetCurrentPatternAs(
+                    UIA_TextChildPatternId,
+                    IID_IUIAutomationTextChildPattern,
+                    reinterpret_cast<void**>(&textChildPattern)
+                );
                 if (SUCCEEDED(hr) && textChildPattern) {
                     IUIAutomationElement* container = nullptr;
                     hr = textChildPattern->get_TextContainer(&container);
                     if (SUCCEEDED(hr) && container) {
-                        hr = container->GetCurrentPatternAs(UIA_TextPatternId,
-                                                            IID_IUIAutomationTextPattern,
-                                                            reinterpret_cast<void**>(&textPattern));
+                        hr = container->GetCurrentPatternAs(
+                            UIA_TextPatternId,
+                            IID_IUIAutomationTextPattern,
+                            reinterpret_cast<void**>(&textPattern)
+                        );
                         container->Release();
                     }
                     textChildPattern->Release();
@@ -1341,9 +1416,11 @@ private:
                 hr = localAutomation->ElementFromHandle(hwnd, &elemForValue);
                 if (SUCCEEDED(hr) && elemForValue) {
                     IUIAutomationValuePattern* valuePattern = nullptr;
-                    hr = elemForValue->GetCurrentPatternAs(UIA_ValuePatternId,
-                                                           IID_IUIAutomationValuePattern,
-                                                           reinterpret_cast<void**>(&valuePattern));
+                    hr                                      = elemForValue->GetCurrentPatternAs(
+                        UIA_ValuePatternId,
+                        IID_IUIAutomationValuePattern,
+                        reinterpret_cast<void**>(&valuePattern)
+                    );
                     if (SUCCEEDED(hr) && valuePattern) {
                         BSTR value = nullptr;
                         hr         = valuePattern->get_CurrentValue(&value);
@@ -1383,10 +1460,12 @@ private:
 
     void processPendingSelection() {
         bool expected = true;
-        if (!selectionPending_.compare_exchange_strong(expected,
-                                                       false,
-                                                       std::memory_order_acquire,
-                                                       std::memory_order_relaxed)) {
+        if (!selectionPending_.compare_exchange_strong(
+                expected,
+                false,
+                std::memory_order_acquire,
+                std::memory_order_relaxed
+            )) {
             return;
         }
 
@@ -1453,7 +1532,8 @@ private:
         }
 
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - lastTime);
+            std::chrono::steady_clock::now() - lastTime
+        );
         if (elapsed.count() >= debounceMs_) {
             processPendingSelection();
         }

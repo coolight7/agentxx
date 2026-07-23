@@ -142,8 +142,8 @@ public:
         createTools(std::weak_ptr<agentxx::agent::AgentContext> ctx);
 
     /// Create a single tool adapter from a tool definition
-    std::unique_ptr<McpClientTool> createTool(McpToolDefinition                           def,
-                                              std::weak_ptr<agentxx::agent::AgentContext> ctx);
+    std::unique_ptr<McpClientTool>
+        createTool(McpToolDefinition def, std::weak_ptr<agentxx::agent::AgentContext> ctx);
 
     // -----------------------------------------------------------------------
     // Internal: JSON-RPC request/response
@@ -161,11 +161,11 @@ private:
 
     static std::optional<std::string> getErrorFromResponse(const json& response);
 
-    static std::string negotiateProtocolVersion(const std::string& requested,
-                                                const json&        serverResult);
+    static std::string
+        negotiateProtocolVersion(const std::string& requested, const json& serverResult);
 
-    asio::awaitable<std::expected<json, std::string>> sendRequest(const std::string& method,
-                                                                  const json&        params);
+    asio::awaitable<std::expected<json, std::string>>
+        sendRequest(const std::string& method, const json& params);
 
     // -----------------------------------------------------------------------
     // SSE endpoint discovery & event parsing
@@ -257,10 +257,12 @@ private:
 class McpClientTool : public agentxx::tools::XXToolBase {
 public:
 
-    McpClientTool(std::shared_ptr<McpClient>                  client,
-                  McpToolDefinition                           def,
-                  std::weak_ptr<agentxx::agent::AgentContext> ctx,
-                  std::string                                 toolNamespace = {});
+    McpClientTool(
+        std::shared_ptr<McpClient>                  client,
+        McpToolDefinition                           def,
+        std::weak_ptr<agentxx::agent::AgentContext> ctx,
+        std::string                                 toolNamespace = {}
+    );
 
     neograph::ChatTool get_definition() const override;
 

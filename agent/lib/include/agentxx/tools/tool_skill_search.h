@@ -61,10 +61,12 @@ Remember: Output ONLY valid JSON, nothing else before or after.
     std::vector<std::string>                    skillDirPaths;
     std::weak_ptr<agentxx::agent::AgentContext> agentContext;
 
-    ToolSkillSearchSubAgentTask(const neograph::graph::NodeContext&         in_context,
-                                const std::vector<DelayToolInfo>&           in_delayToolInfos,
-                                const std::vector<std::string>&             in_skillDirPaths,
-                                std::weak_ptr<agentxx::agent::AgentContext> in_agentContext);
+    ToolSkillSearchSubAgentTask(
+        const neograph::graph::NodeContext&         in_context,
+        const std::vector<DelayToolInfo>&           in_delayToolInfos,
+        const std::vector<std::string>&             in_skillDirPaths,
+        std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
+    );
 
     asio::awaitable<void> onSubagentEnd(std::string& result) override;
 
