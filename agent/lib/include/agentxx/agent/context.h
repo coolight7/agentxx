@@ -10,6 +10,10 @@
 #include <string>
 #include <vector>
 
+namespace agentxx::middleware {
+class EventBus;
+} // namespace agentxx::middleware
+
 namespace neograph::graph {
 class CancelToken;
 }
@@ -48,6 +52,8 @@ public:
 
     /// 本会话的 IO
     std::shared_ptr<AgentIOBase> io = nullptr;
+    /// 本会话的事件总线 (会话级事件: interrupt/permission/tool 等)
+    std::shared_ptr<agentxx::middleware::EventBus> bus = nullptr;
     /// 本会话的上下文统计 (内部原子, 跨线程安全)
     std::shared_ptr<ContextStats> contextStats = std::make_shared<ContextStats>();
 

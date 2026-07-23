@@ -575,12 +575,19 @@ asio::awaitable<DeepAgent::ConversationTurnResult> DeepAgent::runConversationTur
     neograph::json                                          messages,
     std::shared_ptr<AgentIOBase>                            io,
     std::function<void(const neograph::graph::GraphEvent&)> eventCallback,
-    InterruptCallback                                       interruptCallback,
     const std::string&                                      modelName
 ) {
     ConversationTurnResult turnResult;
     auto                   session = agentContext->getSession(threadId);
-    session->io                    = std::move(io);
+    if (!session->bus) {
+        session->bus = std::make_shared<agentxx::middleware::EventBus>(
+            co_await asio::this_coro::executor
+        );
+    }
+    if (io) {
+        io->registerOnBus(session->bus);
+    }
+    session->io = std::move(io);
 
     // 选择本轮使用的模型 (按会话隔离)
     selectModel(threadId, modelName);
@@ -705,17 +712,11 @@ asio::awaitable<DeepAgent::ConversationTurnResult> DeepAgent::runConversationTur
             size_t argIndex = 0;
             for (const auto& interruptArg : interruptArgs) {
                 ++argIndex;
-                if (interruptCallback) {
-                    co_await interruptCallback(interruptNode, interruptValue, interruptArg.name);
-                }
 
                 std::optional<neograph::json> interruptResult;
                 {
-                    assert(nullptr != agentContext->bus);
                     if (interruptArg.name == "subagent") {
-                        // subagent 委派: 经总线派发给 SubagentSupervisor
-                        // - 父 agent 已 checkpoint 暂停, supervisor 运行 subagent
-                        // - 结果注入 interruptResult, resume 后父 graph 继续
+                        // subagent 委派: 经全局总线派发给 SubagentSupervisor
                         auto subagentArg = interruptArg.arg;
                         auto resp
                             = co_await agentContext->bus
@@ -739,10 +740,7 @@ asio::awaitable<DeepAgent::ConversationTurnResult> DeepAgent::runConversationTur
                             interruptResult = neograph::json{resp->content};
                         }
                     } else if (interruptArg.name == "subagent_batch") {
-                        // 批量 subagent 委派: 并发运行多个 subagent
-                        // - interruptArg.arg 应为
-                        // {"tasks":[{subagent,system_prompt,message},...]}
-                        // - 结果按 resultId 注入
+                        // 批量 subagent 委派: 经全局总线派发给 SubagentSupervisor
                         auto batchArg = interruptArg.arg;
                         auto batchReq = events::ReqSubagentBatch{
                             .parentAgentName = agentContext->agentConfig
@@ -767,8 +765,6 @@ asio::awaitable<DeepAgent::ConversationTurnResult> DeepAgent::runConversationTur
                                       std::move(batchReq)
                                   );
                         if (batchResp.has_value()) {
-                            // 批量结果按 resultId 写入 resumeValues (非单个
-                            // interruptResult)
                             for (const auto& r : batchResp->results) {
                                 auto rid = r.resultId;
                                 if (rid.empty()) {
@@ -780,24 +776,28 @@ asio::awaitable<DeepAgent::ConversationTurnResult> DeepAgent::runConversationTur
                             }
                         }
                     } else {
-                        // HIL 中断: 经总线请求 InterruptHandler
-                        auto resp
-                            = co_await agentContext->bus
-                                  ->request<events::ReqInterrupt, events::RespInterrupt>(
-                                      events::Topic::Interrupt,
-                                      events::ReqInterrupt{
-                                          .agentName         = agentContext->agentConfig
-                                                                   ? agentContext->agentConfig->agentName
-                                                                   : std::string{},
-                                          .threadId          = threadId,
-                                          .interruptNode     = interruptNode,
-                                          .handleName        = interruptArg.name,
-                                          .interruptArgsJson = interruptArg.toJson().dump(),
-                                          .resultId          = interruptArg.resultId,
-                                      }
-                                  );
-                        if (resp.has_value() && resp->handled) {
-                            interruptResult = neograph::json::parse(resp->resultJson);
+                        // HIL 中断: 经会话总线请求 IO 处理器
+                        auto session = agentContext->sessions->get(threadId);
+                        if (session && session->bus) {
+                            auto resp = co_await session->bus->request<
+                                events::ReqInterrupt,
+                                events::RespInterrupt>(
+                                events::Topic::Interrupt,
+                                events::ReqInterrupt{
+                                    .agentName         = agentContext->agentConfig
+                                                             ? agentContext->agentConfig->agentName
+                                                             : std::string{},
+                                    .threadId          = threadId,
+                                    .interruptNode     = interruptNode,
+                                    .interruptValue    = interruptValue,
+                                    .handleName        = interruptArg.name,
+                                    .interruptArgsJson = interruptArg.toJson().dump(),
+                                    .resultId          = interruptArg.resultId,
+                                }
+                            );
+                            if (resp.has_value() && resp->handled) {
+                                interruptResult = neograph::json::parse(resp->resultJson);
+                            }
                         }
                     }
                 }

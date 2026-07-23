@@ -1,5 +1,6 @@
 #include "agentxx-client/io/tui/agent_tui.h"
 #include "agentxx/agent/model_registry.h"
+#include "agentxx/middlewares/middleware.h"
 #include "agentxx/util/string_util.h"
 #include "asio/as_tuple.hpp"
 #include "asio/use_awaitable.hpp"
@@ -8,6 +9,8 @@
 #include "ftxui/screen/terminal.hpp"
 #include "neograph/graph/cancel.h"
 #include <algorithm>
+#include <charconv>
+#include <cstdint>
 
 using namespace ftxui;
 
@@ -766,47 +769,128 @@ void AgentTUI::onToken(const std::string& token, const std::string& kind) {
     postRedraw();
 }
 
+asio::awaitable<neograph::json> AgentTUI::handleInterrupt(
+    const std::string& threadId,
+    const std::string& interruptNode,
+    const std::string& interruptValue,
+    const std::string& interruptArgJson
+) {
+    // 解析中断参数
+    auto argOpt = agentxx::middleware::InterruptHandleArg::fromJson(
+        neograph::json::parse(interruptArgJson)
+    );
+    if (!argOpt.has_value()) {
+        co_return neograph::json::array();
+    }
+    const auto& handleArg = argOpt.value();
+
+    // 显示中断通知
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::string                 msg = "Interrupted at: " + interruptNode + "\nValue: " + interruptValue;
+        if (!handleArg.name.empty()) {
+            msg += "\nHandle: " + handleArg.name;
+        }
+        messages_.push_back({Message::Role::System, msg});
+    }
+    postRedraw();
+
+    auto result = neograph::json::array();
+    for (const auto& input : handleArg.inputs) {
+        bool inputSuccess = false;
+        do {
+            std::string prompt = fmt::format(
+                "[Input] {}: {}\n{}",
+                input.label,
+                input.depict,
+                input.type.empty()
+                    ? ""
+                    : fmt::format(
+                        "Type ({}), default: {}: ",
+                        input.type,
+                        input.defaultValue
+                    )
+            );
+
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                messages_.push_back({Message::Role::System, prompt});
+            }
+            postRedraw();
+
+            if (input.type.empty()) {
+                inputSuccess = true;
+            } else {
+                auto inputValueOpt = co_await getInput();
+                std::string inputValue;
+                if (inputValueOpt.has_value()) {
+                    inputValue = inputValueOpt.value();
+                }
+                if (inputValue.empty()) {
+                    inputValue = input.defaultValue;
+                }
+
+                if ("bool" == input.type) {
+                    agentxx::util::toLowerSelf(inputValue);
+                    if (inputValue == "yes" || inputValue == "y") {
+                        inputValue   = "true";
+                        inputSuccess = true;
+                    } else if (inputValue == "no" || inputValue == "n") {
+                        inputValue   = "false";
+                        inputSuccess = true;
+                    } else {
+                        inputSuccess = false;
+                    }
+                } else if ("int" == input.type) {
+                    int64_t num = 0;
+                    auto    r   = std::from_chars(
+                        inputValue.c_str(),
+                        inputValue.c_str() + inputValue.size(),
+                        num
+                    );
+                    inputSuccess = (r.ec == std::errc{});
+                } else if ("double" == input.type) {
+                    double num;
+                    auto   r = std::from_chars(
+                        inputValue.c_str(),
+                        inputValue.c_str() + inputValue.size(),
+                        num
+                    );
+                    inputSuccess = (r.ec == std::errc{});
+                } else if ("string" == input.type) {
+                    inputSuccess = true;
+                } else if ("enum" == input.type) {
+                    for (const auto& val : input.enumValues) {
+                        if (val == inputValue) {
+                            inputSuccess = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (inputSuccess) {
+                    result.push_back(inputValue);
+                } else {
+                    {
+                        std::lock_guard<std::mutex> lock(mutex_);
+                        messages_.push_back(
+                            {Message::Role::System, "Invalid input, please try again."}
+                        );
+                    }
+                    postRedraw();
+                }
+            }
+        } while (false == inputSuccess);
+    }
+    co_return result;
+}
+
 asio::awaitable<std::optional<std::string>> AgentTUI::getInput() {
     auto [ec, line] = co_await inputChannel_->async_receive(asio::as_tuple(asio::use_awaitable));
     if (ec) {
         co_return std::nullopt;
     }
     co_return std::optional<std::string>(std::move(line));
-}
-
-asio::awaitable<bool> AgentTUI::promptPermission(
-    const std::string& toolName,
-    const std::string& category,
-    const std::string& target
-) {
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        pendingPermission_ = PermissionRequest{toolName, category, target};
-    }
-    postRedraw();
-
-    auto [ec, allowed]
-        = co_await permissionChannel_->async_receive(asio::as_tuple(asio::use_awaitable));
-    if (ec) {
-        co_return false;
-    }
-    co_return allowed;
-}
-
-void AgentTUI::onInterrupt(
-    const std::string& node,
-    const std::string& value,
-    const std::string& handleName
-) {
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        std::string                 msg = "Interrupted at: " + node + "\nValue: " + value;
-        if (!handleName.empty()) {
-            msg += "\nHandle: " + handleName;
-        }
-        messages_.push_back({Message::Role::System, msg});
-    }
-    postRedraw();
 }
 
 void AgentTUI::onToolStart(

@@ -1,6 +1,4 @@
 #include "agentxx-client/io/stdio/agent_stdio.h"
-#include "agentxx-client/io/stdio/interrupt_handler.h"
-#include "agentxx-client/io/stdio/permission_handler.h"
 #include "agentxx-client/train/train.h"
 #include "agentxx-client/util/util.h"
 #include "agentxx/protocol/acp_server.h"
@@ -439,24 +437,11 @@ asio::awaitable<void> runCliAsync(agentxx::agent::DeepAgent& agent) {
                 break;
         }
     };
-    const auto cliInterruptCallback = [&io](
-                                          const std::string& interruptNode,
-                                          const std::string& interruptValue,
-                                          const std::string& interruptHandleName
-                                      ) -> asio::awaitable<void> {
-        io->onInterrupt(interruptNode, interruptValue, interruptHandleName);
-        co_return;
-    };
-
     bool       isFirstMsg = true;
     const auto thread_id  = "session";
     auto       messages   = neograph::json::array();
 
-    StdioInterruptHandler                   cliInterruptHandler{agent.agentContext};
-    StdioPermissionPrompter                 cliPermissionPrompter{agent.agentContext};
     agentxx::middleware::SubagentSupervisor subagentSupervisor{agent.agentContext};
-    co_await cliInterruptHandler.start();
-    co_await cliPermissionPrompter.start();
     co_await subagentSupervisor.start();
 
     std::cout << ">>> " << std::flush;
@@ -482,8 +467,7 @@ asio::awaitable<void> runCliAsync(agentxx::agent::DeepAgent& agent) {
                     thread_id,
                     agent.agentContext,
                     cliEventCallback
-                ),
-                cliInterruptCallback
+                )
             );
             messages   = std::move(turnResult.messages);
             isFirstMsg = false;
@@ -540,23 +524,10 @@ asio::awaitable<void> runTuiAsync(agentxx::agent::DeepAgent& agent) {
                 break;
         }
     };
-    const auto tuiInterruptCallback = [&io](
-                                          const std::string& interruptNode,
-                                          const std::string& interruptValue,
-                                          const std::string& interruptHandleName
-                                      ) -> asio::awaitable<void> {
-        io->onInterrupt(interruptNode, interruptValue, interruptHandleName);
-        co_return;
-    };
-
     bool isFirstMsg = true;
     auto messages   = neograph::json::array();
 
-    StdioInterruptHandler                   tuiInterruptHandler{agent.agentContext};
-    StdioPermissionPrompter                 tuiPermissionPrompter{agent.agentContext};
     agentxx::middleware::SubagentSupervisor subagentSupervisor{agent.agentContext};
-    co_await tuiInterruptHandler.start();
-    co_await tuiPermissionPrompter.start();
     co_await subagentSupervisor.start();
 
     for (;;) {
@@ -578,8 +549,7 @@ asio::awaitable<void> runTuiAsync(agentxx::agent::DeepAgent& agent) {
                     thread_id,
                     agent.agentContext,
                     tuiEventCallback
-                ),
-                tuiInterruptCallback
+                )
             );
             messages   = std::move(turnResult.messages);
             isFirstMsg = false;

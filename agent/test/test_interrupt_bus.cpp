@@ -1,6 +1,5 @@
 #include "test_interrupt_bus.h"
-#include "agentxx-client/io/stdio/interrupt_handler.h"
-#include "agentxx-client/io/stdio/permission_handler.h"
+#include "agentxx-client/io/stdio/agent_stdio.h"
 #include "agentxx/agent/context.h"
 #include "agentxx/middlewares/event_stream.h"
 #include "agentxx/middlewares/events.h"
@@ -22,115 +21,104 @@ int g_ib_passed = 0;
 int g_ib_failed = 0;
 
 asio::awaitable<void> test_interrupt_bus_request_response() {
-    auto agentConfig          = std::make_shared<agentxx::agent::AgentConfig>();
-    auto agentContext         = std::make_shared<agentxx::agent::AgentContext>();
-    agentContext->agentConfig = agentConfig;
-    agentContext->bus
+    auto sessionBus
         = std::make_shared<agentxx::middleware::EventBus>(co_await asio::this_coro::executor);
-    // MiddlewareContext 构造时会注册默认 stdin interrupt handle
-    agentContext->middlewareHandleContext
-        = std::make_shared<agentxx::middleware::MiddlewareContext>();
 
-    StdioInterruptHandler handler{agentContext};
-    co_await handler.start();
+    auto io = std::make_shared<AgentStdIO>();
+    io->registerOnBus(sessionBus);
 
-    // 构造一个无 inputs 的 InterruptHandleArg (不等待 stdin, 直接返回)
+    // 构造一个无 inputs 的 InterruptHandleArg
     auto arg = agentxx::middleware::InterruptHandleArg{
-        .name     = agentxx::middleware::MiddlewareContext::interruptHandleName_default,
+        .name     = "default",
         .resultId = "call_1",
     };
     auto argJson = arg.toJson().dump();
 
-    auto resp = co_await agentContext->bus
-                    ->request<agentxx::events::ReqInterrupt, agentxx::events::RespInterrupt>(
-                        agentxx::events::Topic::Interrupt,
-                        agentxx::events::ReqInterrupt{
-                            .agentName         = "test",
-                            .threadId          = "t1",
-                            .interruptNode     = "tool_x",
-                            .handleName        = arg.name,
-                            .interruptArgsJson = argJson,
-                            .resultId          = arg.resultId,
-                        },
-                        std::chrono::seconds(5)
-                    );
+    auto resp = co_await sessionBus->request<
+        agentxx::events::ReqInterrupt, agentxx::events::RespInterrupt>(
+        agentxx::events::Topic::Interrupt,
+        agentxx::events::ReqInterrupt{
+            .agentName         = "test",
+            .threadId          = "t1",
+            .interruptNode     = "tool_x",
+            .handleName        = arg.name,
+            .interruptArgsJson = argJson,
+            .resultId          = arg.resultId,
+        },
+        std::chrono::seconds(5)
+    );
 
     if (false == resp.has_value() && resp.error() == "Timeout") {
-        // allow timeout
         XX_TEST_EXPECT_TRUE(resp.error() == "Timeout");
     } else {
         XX_TEST_EXPECT_TRUE(resp.has_value());
     }
 
-    handler.stop();
-    // stop 后再 request 应返回 nullopt (无 server)
-    auto resp2 = co_await agentContext->bus
-                     ->request<agentxx::events::ReqInterrupt, agentxx::events::RespInterrupt>(
-                         agentxx::events::Topic::Interrupt,
-                         agentxx::events::ReqInterrupt{
-                             .agentName         = "test",
-                             .threadId          = "t1",
-                             .interruptNode     = "n",
-                             .handleName        = "x",
-                             .interruptArgsJson = "{}",
-                             .resultId          = "r",
-                         },
-                         std::chrono::milliseconds(200)
-                     );
+    // 新总线 (无任何 server) 上 request 应超时返回 nullopt
+    auto deadBus
+        = std::make_shared<agentxx::middleware::EventBus>(co_await asio::this_coro::executor);
+    auto resp2 = co_await deadBus->request<
+        agentxx::events::ReqInterrupt, agentxx::events::RespInterrupt>(
+        agentxx::events::Topic::Interrupt,
+        agentxx::events::ReqInterrupt{
+            .agentName         = "test",
+            .threadId          = "t1",
+            .interruptNode     = "n",
+            .handleName        = "x",
+            .interruptArgsJson = "{}",
+            .resultId          = "r",
+        },
+        std::chrono::milliseconds(200)
+    );
     XX_TEST_EXPECT_TRUE(!resp2.has_value());
 
     co_return;
 }
 
-/// 验证: 权限 prompter 注册后, bus.request(service.permission) 能拿到决策
+/// 验证: IO 在 session bus 注册后, bus.request(service.permission) 能拿到决策
 asio::awaitable<void> test_permission_bus_request_response() {
-    auto agentConfig          = std::make_shared<agentxx::agent::AgentConfig>();
-    auto agentContext         = std::make_shared<agentxx::agent::AgentContext>();
-    agentContext->agentConfig = agentConfig;
-    agentContext->bus
+    auto sessionBus
         = std::make_shared<agentxx::middleware::EventBus>(co_await asio::this_coro::executor);
 
-    StdioPermissionPrompter prompter{agentContext};
-    co_await prompter.start();
+    auto io = std::make_shared<AgentStdIO>();
+    io->registerOnBus(sessionBus);
 
-    // 注意: 无 stdin 输入时 prompter 默认 deny (安全)
-    // 在测试环境 std::getline(std::cin) 立即 fail, 返回 deny
-    auto resp = co_await agentContext->bus
-                    ->request<agentxx::events::ReqPermission, agentxx::events::RespPermission>(
-                        agentxx::events::Topic::Permission,
-                        agentxx::events::ReqPermission{
-                            .agentName     = "test",
-                            .threadId      = "t1",
-                            .toolName      = "filesystem_write",
-                            .category      = "filesystem_write",
-                            .target        = "/etc/passwd",
-                            .argumentsJson = R"({"path":"/etc/passwd"})",
-                        },
-                        std::chrono::seconds(5)
-                    );
+    // 注意: 无 stdin 输入时 handleInterrupt 调用 getInput() 会超时
+    auto resp = co_await sessionBus->request<
+        agentxx::events::ReqPermission, agentxx::events::RespPermission>(
+        agentxx::events::Topic::Permission,
+        agentxx::events::ReqPermission{
+            .agentName     = "test",
+            .threadId      = "t1",
+            .toolName      = "filesystem_write",
+            .category      = "filesystem_write",
+            .target        = "/etc/passwd",
+            .argumentsJson = R"({"path":"/etc/passwd"})",
+        },
+        std::chrono::seconds(5)
+    );
 
     if (false == resp.has_value() && resp.error() == "Timeout") {
-        // allow timeout
         XX_TEST_EXPECT_TRUE(resp.error() == "Timeout");
     } else {
         XX_TEST_EXPECT_TRUE(resp.has_value());
     }
 
-    prompter.stop();
-    // stop 后 request 应超时返回 nullopt
-    auto resp2 = co_await agentContext->bus
-                     ->request<agentxx::events::ReqPermission, agentxx::events::RespPermission>(
-                         agentxx::events::Topic::Permission,
-                         agentxx::events::ReqPermission{
-                             .agentName     = "t",
-                             .threadId      = "t",
-                             .toolName      = "x",
-                             .category      = "x",
-                             .target        = "x",
-                             .argumentsJson = "{}",
-                         },
-                         std::chrono::milliseconds(200)
-                     );
+    auto deadBus
+        = std::make_shared<agentxx::middleware::EventBus>(co_await asio::this_coro::executor);
+    auto resp2 = co_await deadBus->request<
+        agentxx::events::ReqPermission, agentxx::events::RespPermission>(
+        agentxx::events::Topic::Permission,
+        agentxx::events::ReqPermission{
+            .agentName     = "t",
+            .threadId      = "t",
+            .toolName      = "x",
+            .category      = "x",
+            .target        = "x",
+            .argumentsJson = "{}",
+        },
+        std::chrono::milliseconds(200)
+    );
     XX_TEST_EXPECT_TRUE(!resp2.has_value());
 
     co_return;
