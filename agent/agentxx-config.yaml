@@ -17,6 +17,7 @@ models:
     send_thinking: true
     connect_timeout: 30 # seconds 建立连接时的超时限制 
     read_timeout: 30 # seconds 接收数据时，超过该时长`未收到新数据`时判断为响应超时，即相邻数据间隔应当小于该时长
+    # model_support_max_token: 262144 # 模型支持的最大上下文 token 数；不指定时上下文压缩使用默认值 256k
     extra_api_config:
       max_tokens: 1000000
       stream: true

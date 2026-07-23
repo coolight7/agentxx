@@ -1,6 +1,7 @@
 {
     "python.analysis.autoImportCompletions": true,
-    "editor.formatOnSave": true,
     "python-envs.defaultEnvManager": "ms-python.python:system",
+    "editor.defaultFormatter": "ms-vscode.cpptools",
+    "editor.formatOnSave": true,
     "git.detectSubmodulesLimit": 1000
 }
