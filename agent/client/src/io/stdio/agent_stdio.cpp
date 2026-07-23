@@ -1,5 +1,4 @@
 #include "agentxx-client/io/stdio/agent_stdio.h"
-
 #include "agentxx-client/io/stdio/stdin_reader.h"
 #include "asio/this_coro.hpp"
 #include "fmt/format.h"
@@ -20,10 +19,6 @@ void AgentStdIO::onToken(const std::string& token, const std::string& kind) {
         isThinking_ = false;
     }
     std::cout << token << std::flush;
-}
-
-void AgentStdIO::onDisplay(const std::string& level, const std::string& content) {
-    std::cout << content << std::flush;
 }
 
 asio::awaitable<std::optional<std::string>> AgentStdIO::getInput() {

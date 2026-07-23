@@ -37,7 +37,16 @@ AgentTUI::AgentTUI(
     threadId_(std::move(threadId)),
     inputChannel_(std::make_shared<LineChannel>(ex, 64)),
     permissionChannel_(std::make_shared<BoolChannel>(ex, 4)),
-    logSink_(std::make_shared<TUILogSink>()) {}
+    logSink_(std::make_shared<TUILogSink>()) {
+    // 缓存本会话指针, 避免后续反复查找 SessionStore
+    if (agentContext_) {
+        session_ = agentContext_->getSession(threadId_);
+    }
+    // 缓存在线模型显示名, 供渲染热路径免锁读取
+    if (session_ && agentContext_ && agentContext_->modelRegistry) {
+        cachedModelName_ = agentContext_->modelRegistry->resolveModelName(session_->getModelName());
+    }
+}
 
 AgentTUI::~AgentTUI() {
     stop();
@@ -473,7 +482,7 @@ ftxui::Element AgentTUI::renderMessages() {
 }
 
 ftxui::Element AgentTUI::renderStatusBar() {
-    std::string modelName = currentModelName();
+    std::string modelName = cachedModelName_;
     if (modelName.empty()) {
         modelName = "<none>";
     }
@@ -485,11 +494,9 @@ ftxui::Element AgentTUI::renderStatusBar() {
 
     size_t ctx    = 0;
     size_t maxCtx = 0;
-    if (auto session = currentSession()) {
-        if (session->contextStats) {
-            ctx    = session->contextStats->contextTokens.load();
-            maxCtx = session->contextStats->maxContextTokens.load();
-        }
+    if (session_ && session_->contextStats) {
+        ctx    = session_->contextStats->contextTokens.load();
+        maxCtx = session_->contextStats->maxContextTokens.load();
     }
     const auto toK = [](size_t v) {
         return fmt::format("{:.1f}k", static_cast<double>(v) / 1000.0);
@@ -698,10 +705,9 @@ void AgentTUI::openModelSelector() {
     modelNames_.clear();
     selectedModelIndex_ = 0;
     if (agentContext_ && agentContext_->modelRegistry) {
-        modelNames_        = agentContext_->modelRegistry->listModelNames();
-        const auto current = currentModelName();
+        modelNames_ = agentContext_->modelRegistry->listModelNames();
         for (size_t i = 0; i < modelNames_.size(); ++i) {
-            if (modelNames_[i] == current) {
+            if (modelNames_[i] == cachedModelName_) {
                 selectedModelIndex_ = static_cast<int>(i);
                 break;
             }
@@ -712,16 +718,17 @@ void AgentTUI::openModelSelector() {
 
 void AgentTUI::confirmModelSelection() {
     if (selectedModelIndex_ >= 0 && selectedModelIndex_ < static_cast<int>(modelNames_.size())) {
-        if (auto session = currentSession()) {
-            session->setModelName(modelNames_[selectedModelIndex_]);
+        cachedModelName_ = modelNames_[selectedModelIndex_];
+        if (session_) {
+            session_->setModelName(cachedModelName_);
         }
     }
     showModelSelector_ = false;
 }
 
 void AgentTUI::cancelCurrentRun() {
-    if (auto session = currentSession()) {
-        auto token = session->getCancelToken();
+    if (session_) {
+        auto token = session_->getCancelToken();
         if (token) {
             token->cancel();
         }
@@ -738,21 +745,7 @@ void AgentTUI::cancelCurrentRun() {
 }
 
 std::shared_ptr<agentxx::agent::Session> AgentTUI::currentSession() {
-    if (agentContext_ && agentContext_->sessions) {
-        return agentContext_->sessions->getOrCreate(threadId_);
-    }
-    return nullptr;
-}
-
-std::string AgentTUI::currentModelName() {
-    std::string selected;
-    if (auto session = currentSession()) {
-        selected = session->getModelName();
-    }
-    if (agentContext_ && agentContext_->modelRegistry) {
-        return agentContext_->modelRegistry->resolveModelName(selected);
-    }
-    return selected;
+    return session_;
 }
 
 void AgentTUI::onToken(const std::string& token, const std::string& kind) {
@@ -769,14 +762,6 @@ void AgentTUI::onToken(const std::string& token, const std::string& kind) {
         currentTokenRole_  = role;
         currentToken_     += token;
         isStreaming_       = true;
-    }
-    postRedraw();
-}
-
-void AgentTUI::onDisplay(const std::string& level, const std::string& content) {
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        messages_.push_back({Message::Role::System, content});
     }
     postRedraw();
 }
