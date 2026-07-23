@@ -156,8 +156,14 @@ void AgentTUI::start() {
 
         auto event_handler = CatchEvent(layout, [&](Event event) -> bool {
             if (event == Event::CtrlC) {
-                running_ = false;
-                screen.Exit();
+                // 输入框有内容 → 清空; 否则 → 退出
+                if (!inputText_.empty()) {
+                    inputText_.clear();
+                    postRedraw();
+                } else {
+                    running_ = false;
+                    screen.Exit();
+                }
                 return true;
             }
 
