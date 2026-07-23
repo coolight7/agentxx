@@ -7,47 +7,55 @@ namespace agentxx {
 namespace middleware {
 
 PermissionMiddlewareHandle::PermissionMiddlewareHandle(
-    std::weak_ptr<agentxx::agent::AgentContext> in_agentContext) :
+    std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
+) :
     BaseMiddlewareHandle<PermissionMiddlewareState>("PermissionMiddlewareHandle", in_agentContext) {
 }
 
-void PermissionMiddlewareHandle::setFilesystemPermission(std::string_view   path,
-                                                         PermissionOperator op,
-                                                         size_t             index) {
+void PermissionMiddlewareHandle::setFilesystemPermission(
+    std::string_view   path,
+    PermissionOperator op,
+    size_t             index
+) {
     assert(index == 0 || index == 1);
     filesystemPermission.add(path, index, std::make_shared<PermissionOperator>(op));
 }
 
-asio::awaitable<bool> PermissionMiddlewareHandle::defOnFilesystemHandle(const neograph::Tool& item,
-                                                                        neograph::json&       args,
-                                                                        size_t index) {
+asio::awaitable<bool> PermissionMiddlewareHandle::defOnFilesystemHandle(
+    const neograph::Tool& item,
+    neograph::json&       args,
+    size_t                index
+) {
     auto        path = args.value<std::string>("path", "");
     std::string re_path;
     auto        handle = filesystemPermission.get(path, index, re_path);
     if (nullptr != handle) {
         auto permission = *handle;
         switch (permission) {
-        case PermissionOperator::ALLOW:
-            co_return true;
-        case PermissionOperator::DENY:
-            co_return false;
-        case PermissionOperator::INTERRUPT:
-            // 经总线询问外部授权者 (CLI/GUI/ACP 各注册自己的 prompter)
-            // - 无 prompter 注册时 request 返回 nullopt, 默认拒绝以保安全
-            co_return co_await requestPermission(
-                item,
-                args,
-                index == FilesystemPermissionREAD ? "filesystem_read" : "filesystem_write",
-                path);
+            case PermissionOperator::ALLOW:
+                co_return true;
+            case PermissionOperator::DENY:
+                co_return false;
+            case PermissionOperator::INTERRUPT:
+                // 经总线询问外部授权者 (CLI/GUI/ACP 各注册自己的 prompter)
+                // - 无 prompter 注册时 request 返回 nullopt, 默认拒绝以保安全
+                co_return co_await requestPermission(
+                    item,
+                    args,
+                    index == FilesystemPermissionREAD ? "filesystem_read" : "filesystem_write",
+                    path
+                );
         }
     }
     co_return true;
 }
 
-asio::awaitable<bool> PermissionMiddlewareHandle::requestPermission(const neograph::Tool& item,
-                                                                    neograph::json&       args,
-                                                                    std::string           category,
-                                                                    std::string           target) {
+asio::awaitable<bool> PermissionMiddlewareHandle::requestPermission(
+    const neograph::Tool& item,
+    neograph::json&       args,
+    std::string           category,
+    std::string           target
+) {
     auto ctxPtr = agentContext.lock();
     if (!ctxPtr || !ctxPtr->bus) {
         // 无总线, 默认拒绝以保安全
@@ -62,7 +70,8 @@ asio::awaitable<bool> PermissionMiddlewareHandle::requestPermission(const neogra
             .category      = std::move(category),
             .target        = std::move(target),
             .argumentsJson = args.dump(),
-        });
+        }
+    );
     if (!resp.has_value()) {
         co_return false; // 无 prompter, 拒绝
     }

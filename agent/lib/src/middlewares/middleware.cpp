@@ -4,7 +4,8 @@
 
 agentxx::middleware::BaseMiddlewareHandleInterface::BaseMiddlewareHandleInterface(
     std::string_view                            in_name,
-    std::weak_ptr<agentxx::agent::AgentContext> in_agentContext) :
+    std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
+) :
     name(in_name),
     agentContext(in_agentContext) {}
 
@@ -34,7 +35,8 @@ std::optional<neograph::ChatMessage>
 }
 
 const neograph::ChatMessage* BaseMiddlewareHandleInterface::getLastAssistantToolcallMessage(
-    std::vector<neograph::ChatMessage>& messages) {
+    std::vector<neograph::ChatMessage>& messages
+) {
     const neograph::ChatMessage* assistant_msg = nullptr;
     if (false == messages.empty()) {
         for (auto it = messages.rbegin(); it != messages.rend(); ++it) {
@@ -48,7 +50,8 @@ const neograph::ChatMessage* BaseMiddlewareHandleInterface::getLastAssistantTool
 }
 
 const neograph::ChatMessage* BaseMiddlewareHandleInterface::getLastToolcallResultMessage(
-    std::vector<neograph::ChatMessage>& messages) {
+    std::vector<neograph::ChatMessage>& messages
+) {
     const neograph::ChatMessage* tool_msg = nullptr;
     if (false == messages.empty()) {
         for (auto it = messages.rbegin(); it != messages.rend(); ++it) {
@@ -66,31 +69,36 @@ void BaseMiddlewareHandleInterface::printMessage(const neograph::ChatMessage& ms
     if (false == msg.tool_calls.empty()) {
         toollist += "┣━ Toolcall: \n";
         for (const auto& tool : msg.tool_calls) {
-            toollist += fmt::format(R"(  - {}/{}
+            toollist += fmt::format(
+                R"(  - {}/{}
     {}
 )",
-                                    tool.name,
-                                    tool.id,
-                                    tool.arguments);
+                tool.name,
+                tool.id,
+                tool.arguments
+            );
         }
     }
-    XX_OUT(R"(
+    XX_OUT(
+        R"(
 ┏━━━━━━ Message/{} ━━━━━━┓
 ┣━ Role: {}
 {}
 ┣━ Content: {}
 ┗━━━━━━ Message/{} ━━━━━━┛
 )",
-           index,
-           msg.role,
-           toollist,
-           msg.content,
-           index);
+        index,
+        msg.role,
+        toollist,
+        msg.content,
+        index
+    );
 }
 
 void BaseMiddlewareHandleInterface::printMessages(
     const std::vector<neograph::ChatMessage>& messages,
-    bool                                      printSystemMsg) {
+    bool                                      printSystemMsg
+) {
     size_t index = 0;
     for (const auto& msg : messages) {
         ++index;
@@ -245,13 +253,14 @@ neograph::json MiddlewareContext::anyToJson(const std::any& val) {
     }
     if (t == typeid(std::vector<InterruptHandleArg>)) {
         return InterruptHandleArg::listToJson(
-            std::any_cast<const std::vector<InterruptHandleArg>&>(val));
+            std::any_cast<const std::vector<InterruptHandleArg>&>(val)
+        );
     }
     return nullptr;
 }
 
-std::optional<std::string> MiddlewareContext::getShareStoreItemValue(std::string_view thread_id,
-                                                                     const int        id) {
+std::optional<std::string>
+    MiddlewareContext::getShareStoreItemValue(std::string_view thread_id, const int id) {
     auto it = shareStore.find(thread_id);
     if (shareStore.end() != it) {
         auto reslut = it->second.store.find(id);
@@ -262,14 +271,18 @@ std::optional<std::string> MiddlewareContext::getShareStoreItemValue(std::string
     return std::nullopt;
 }
 
-void MiddlewareContext::setShareStoreItemValue(const std::string& thread_id,
-                                               const int          id,
-                                               std::string_view   value) {
+void MiddlewareContext::setShareStoreItemValue(
+    const std::string& thread_id,
+    const int          id,
+    std::string_view   value
+) {
     shareStore[thread_id].store[id] = value;
 }
 
-size_t MiddlewareContext::addShareStoreItemValue(const std::string& thread_id,
-                                                 std::string_view   value) {
+size_t MiddlewareContext::addShareStoreItemValue(
+    const std::string& thread_id,
+    std::string_view   value
+) {
     auto& store     = shareStore[thread_id];
     auto  id        = store.getNextId();
     store.store[id] = value;
@@ -296,21 +309,25 @@ void MiddlewareContext::removeGraphDataItem(const std::string& thread_id, std::s
     }
 }
 
-void MiddlewareContext::throwNodeInterruptBase(const std::string&    thread_id,
-                                               const neograph::json& msgs) {
+void MiddlewareContext::throwNodeInterruptBase(
+    const std::string&    thread_id,
+    const neograph::json& msgs
+) {
     if (msgs.is_array()) {
         setGraphDataItemValue(thread_id, MiddlewareContext::graphDataKey_interruptMessages, msgs);
     }
     throw neograph::graph::NodeInterrupt{"xx-NodeInterrupt"};
 }
 
-asio::awaitable<neograph::json>
-    MiddlewareContext::requestInterrupt(const std::string&                         thread_id,
-                                        const std::function<InterruptHandleArg()>& onCreateArg,
-                                        const neograph::json&                      msgs) {
-    auto& result
-        = getGraphDataItemValue<neograph::json>(thread_id,
-                                                MiddlewareContext::graphDataKey_interruptResult);
+asio::awaitable<neograph::json> MiddlewareContext::requestInterrupt(
+    const std::string&                         thread_id,
+    const std::function<InterruptHandleArg()>& onCreateArg,
+    const neograph::json&                      msgs
+) {
+    auto& result = getGraphDataItemValue<neograph::json>(
+        thread_id,
+        MiddlewareContext::graphDataKey_interruptResult
+    );
     removeGraphDataItem(thread_id, MiddlewareContext::graphDataKey_interruptResult);
     if (false == result.is_null()) {
         co_return result;
@@ -322,12 +339,15 @@ asio::awaitable<neograph::json>
         MiddlewareContext::graphDataKey_interruptArgs,
         [&](std::vector<InterruptHandleArg>& args) {
             args.push_back(arg);
-        });
+        }
+    );
     throwNodeInterruptBase(thread_id, msgs);
 }
 
-neograph::json MiddlewareContext::getGraphDataToState(neograph::graph::GraphState& state,
-                                                      const std::string&           thread_id) {
+neograph::json MiddlewareContext::getGraphDataToState(
+    neograph::graph::GraphState& state,
+    const std::string&           thread_id
+) {
     neograph::json saved = neograph::json::object();
     auto           it    = graphData.find(thread_id);
     if (it != graphData.end()) {
@@ -338,13 +358,17 @@ neograph::json MiddlewareContext::getGraphDataToState(neograph::graph::GraphStat
     return saved;
 }
 
-void MiddlewareContext::setGraphDataFromState(neograph::graph::GraphState& state,
-                                              const std::string&           thread_id) {
+void MiddlewareContext::setGraphDataFromState(
+    neograph::graph::GraphState& state,
+    const std::string&           thread_id
+) {
     setGraphDataFromState(state.get(channel_savedGraphData), thread_id);
 }
 
-void MiddlewareContext::setGraphDataFromState(const neograph::json& j,
-                                              const std::string&    thread_id) {
+void MiddlewareContext::setGraphDataFromState(
+    const neograph::json& j,
+    const std::string&    thread_id
+) {
     if (j.is_object()) {
         auto data = std::map<std::string, std::any, std::less<>>{};
         for (auto it = j.begin(); it != j.end(); ++it) {

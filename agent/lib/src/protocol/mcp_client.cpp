@@ -159,8 +159,8 @@ asio::awaitable<std::expected<std::vector<McpToolDefinition>, std::string>> McpC
     co_return tools;
 }
 
-asio::awaitable<std::expected<json, std::string>> McpClient::callTool(const std::string& name,
-                                                                      const json& arguments) {
+asio::awaitable<std::expected<json, std::string>>
+    McpClient::callTool(const std::string& name, const json& arguments) {
     json params;
     params["name"]      = name;
     params["arguments"] = arguments;
@@ -325,10 +325,12 @@ std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>
 
 std::unique_ptr<McpClientTool>
     McpClient::createTool(McpToolDefinition def, std::weak_ptr<agentxx::agent::AgentContext> ctx) {
-    return std::make_unique<McpClientTool>(shared_from_this(),
-                                           std::move(def),
-                                           std::move(ctx),
-                                           config_.toolNamespace);
+    return std::make_unique<McpClientTool>(
+        shared_from_this(),
+        std::move(def),
+        std::move(ctx),
+        config_.toolNamespace
+    );
 }
 
 json McpClient::makeRequest(int64_t id, const std::string& method, const json& params) {
@@ -353,8 +355,8 @@ std::optional<std::string> McpClient::getErrorFromResponse(const json& response)
     return std::nullopt;
 }
 
-std::string McpClient::negotiateProtocolVersion(const std::string& requested,
-                                                const json&        serverResult) {
+std::string
+    McpClient::negotiateProtocolVersion(const std::string& requested, const json& serverResult) {
     auto serverVersion = serverResult.value("protocolVersion", std::string{});
     if (serverVersion.empty()) {
         return std::string(kProtocol2024_11_05);
@@ -378,8 +380,8 @@ std::string McpClient::negotiateProtocolVersion(const std::string& requested,
     return requested;
 }
 
-asio::awaitable<std::expected<json, std::string>> McpClient::sendRequest(const std::string& method,
-                                                                         const json& params) {
+asio::awaitable<std::expected<json, std::string>>
+    McpClient::sendRequest(const std::string& method, const json& params) {
     if (closed_.load()) {
         co_return std::unexpected{std::string{"client is closed"}};
     }
@@ -468,12 +470,15 @@ asio::awaitable<void> McpClient::discoverSseEndpoint() {
     auto resp = co_await util::HttpClient::getAsync(
         sseUrl,
         headers,
-        util::HttpClient::RequestConfig{.readTimeout = config_.initTimeout});
+        util::HttpClient::RequestConfig{.readTimeout = config_.initTimeout}
+    );
 
     if (!resp.has_value()) {
-        XX_LOGW("[McpClient] SSE discovery failed ({}), falling back to "
-                "direct POST",
-                resp.error());
+        XX_LOGW(
+            "[McpClient] SSE discovery failed ({}), falling back to "
+            "direct POST",
+            resp.error()
+        );
         httpMessageUrl_ = config_.serverUrl;
         sseDiscovered_.store(true);
         co_return;
@@ -507,9 +512,11 @@ asio::awaitable<void> McpClient::discoverSseEndpoint() {
 
             httpMessageUrl_ = base + path;
             sseDiscovered_.store(true);
-            XX_LOGI("[McpClient] discovered message endpoint: {} (session={})",
-                    httpMessageUrl_,
-                    mcpSessionId_);
+            XX_LOGI(
+                "[McpClient] discovered message endpoint: {} (session={})",
+                httpMessageUrl_,
+                mcpSessionId_
+            );
             co_return;
         }
     }
@@ -546,7 +553,8 @@ asio::awaitable<std::expected<json, std::string>>
         httpMessageUrl_,
         req,
         headers,
-        util::HttpClient::RequestConfig{.readTimeout = config_.requestTimeout});
+        util::HttpClient::RequestConfig{.readTimeout = config_.requestTimeout}
+    );
 
     if (!resp.has_value()) {
         co_return std::unexpected{std::move(resp.error())};
@@ -561,8 +569,9 @@ asio::awaitable<std::expected<json, std::string>>
     }
 
     if (httpResp.status / 100 != 2) {
-        co_return std::unexpected{"HTTP " + std::to_string(httpResp.status) + ": "
-                                  + httpResp.body.substr(0, 256)};
+        co_return std::unexpected{
+            "HTTP " + std::to_string(httpResp.status) + ": " + httpResp.body.substr(0, 256)
+        };
     }
 
     auto ct = httpResp.contentType();
@@ -593,8 +602,9 @@ asio::awaitable<std::expected<json, std::string>>
                 }
             }
         }
-        co_return std::unexpected{"no matching response in SSE stream for id "
-                                  + std::to_string(id)};
+        co_return std::unexpected{
+            "no matching response in SSE stream for id " + std::to_string(id)
+        };
     }
 
     auto bodyJson = httpResp.bodyJson();
@@ -642,9 +652,11 @@ asio::awaitable<std::expected<json, std::string>>
     {
         std::lock_guard           lock(stdioWriteMutex_);
         boost::system::error_code wec;
-        co_await asio::async_write(*stdioStdinPipe_,
-                                   asio::buffer(reqStr),
-                                   asio::redirect_error(asio::use_awaitable, wec));
+        co_await asio::async_write(
+            *stdioStdinPipe_,
+            asio::buffer(reqStr),
+            asio::redirect_error(asio::use_awaitable, wec)
+        );
         if (wec) {
             std::lock_guard lock2(pendingMutex_);
             pending_.erase(id);
@@ -667,11 +679,13 @@ asio::awaitable<std::expected<json, std::string>>
         }
 #elif XX_IS_WIN_D
         DWORD written = 0;
-        WriteFile(stdioStdinHandle_,
-                  reqStr.data(),
-                  static_cast<DWORD>(reqStr.size()),
-                  &written,
-                  nullptr);
+        WriteFile(
+            stdioStdinHandle_,
+            reqStr.data(),
+            static_cast<DWORD>(reqStr.size()),
+            &written,
+            nullptr
+        );
 #endif
     }
 #endif
@@ -696,8 +710,8 @@ asio::awaitable<std::expected<json, std::string>>
     co_return response;
 }
 
-asio::awaitable<void> McpClient::sendRawNotification(const std::string& method,
-                                                     const json&        params) {
+asio::awaitable<void>
+    McpClient::sendRawNotification(const std::string& method, const json& params) {
     json req;
     req["jsonrpc"] = "2.0";
     req["method"]  = method;
@@ -711,25 +725,30 @@ asio::awaitable<void> McpClient::sendRawNotification(const std::string& method,
             url,
             req,
             buildHttpHeaders(),
-            util::HttpClient::RequestConfig{.readTimeout = config_.requestTimeout});
+            util::HttpClient::RequestConfig{.readTimeout = config_.requestTimeout}
+        );
     } else if (config_.isStdio()) {
         auto            reqStr = req.dump() + "\n";
         std::lock_guard lock(stdioWriteMutex_);
 #if defined(BOOST_PROCESS_V2_PROCESS_HPP)
         boost::system::error_code wec;
-        co_await asio::async_write(*stdioStdinPipe_,
-                                   asio::buffer(reqStr),
-                                   asio::redirect_error(asio::use_awaitable, wec));
+        co_await asio::async_write(
+            *stdioStdinPipe_,
+            asio::buffer(reqStr),
+            asio::redirect_error(asio::use_awaitable, wec)
+        );
 #else
 #if XX_IS_LINUX_D || XX_IS_MACOS_D
         ::write(stdioStdinFd_, reqStr.data(), reqStr.size());
 #elif XX_IS_WIN_D
         DWORD written = 0;
-        WriteFile(stdioStdinHandle_,
-                  reqStr.data(),
-                  static_cast<DWORD>(reqStr.size()),
-                  &written,
-                  nullptr);
+        WriteFile(
+            stdioStdinHandle_,
+            reqStr.data(),
+            static_cast<DWORD>(reqStr.size()),
+            &written,
+            nullptr
+        );
 #endif
 #endif
     }
@@ -748,16 +767,20 @@ bool McpClient::startStdioSubprocess(asio::any_io_executor executor) {
 
         auto exe = boost::process::environment::find_executable(config_.serverCommand[0]);
 
-        std::vector<std::string> args(config_.serverCommand.begin() + 1,
-                                      config_.serverCommand.end());
+        std::vector<std::string> args(
+            config_.serverCommand.begin() + 1,
+            config_.serverCommand.end()
+        );
 
-        stdioProcess_.emplace(executor,
-                              exe,
-                              args,
-                              boost::process::process_stdio{
-                                  .in  = *stdioStdinPipe_,
-                                  .out = *stdioStdoutPipe_,
-                              });
+        stdioProcess_.emplace(
+            executor,
+            exe,
+            args,
+            boost::process::process_stdio{
+                .in  = *stdioStdinPipe_,
+                .out = *stdioStdoutPipe_,
+            }
+        );
 
         stdioRunning_.store(true);
 
@@ -766,7 +789,8 @@ bool McpClient::startStdioSubprocess(asio::any_io_executor executor) {
             [self = shared_from_this()]() -> asio::awaitable<void> {
                 co_await self->stdioReaderLoop();
             },
-            asio::detached);
+            asio::detached
+        );
 
         return true;
     } catch (const std::exception& e) {
@@ -873,16 +897,18 @@ bool McpClient::startStdioSubprocess(asio::any_io_executor executor) {
     si.hStdInput   = parentStdinRd;
     si.dwFlags    |= STARTF_USESTDHANDLES;
 
-    if (!CreateProcessA(nullptr,
-                        cmdLine.data(),
-                        nullptr,
-                        nullptr,
-                        TRUE,
-                        0,
-                        nullptr,
-                        nullptr,
-                        &si,
-                        &pi)) {
+    if (!CreateProcessA(
+            nullptr,
+            cmdLine.data(),
+            nullptr,
+            nullptr,
+            TRUE,
+            0,
+            nullptr,
+            nullptr,
+            &si,
+            &pi
+        )) {
         CloseHandle(parentStdinRd);
         CloseHandle(childStdinWr);
         CloseHandle(childStdoutRd);
@@ -1000,11 +1026,12 @@ asio::awaitable<void> McpClient::stdioReaderLoop() {
 
     while (stdioRunning_.load()) {
         boost::system::error_code ec;
-        std::size_t               n
-            = co_await asio::async_read_until(*stdioStdoutPipe_,
-                                              asio::dynamic_buffer(buffer, 4096),
-                                              '\n',
-                                              asio::redirect_error(asio::use_awaitable, ec));
+        std::size_t               n = co_await asio::async_read_until(
+            *stdioStdoutPipe_,
+            asio::dynamic_buffer(buffer, 4096),
+            '\n',
+            asio::redirect_error(asio::use_awaitable, ec)
+        );
 
         if (ec || n == 0) {
             if (ec && ec != asio::error::eof && ec != asio::error::operation_aborted) {
@@ -1163,10 +1190,12 @@ void McpClient::deliverResponse(const json& response) {
 // McpClientTool
 // ---------------------------------------------------------------------------
 
-McpClientTool::McpClientTool(std::shared_ptr<McpClient>                  client,
-                             McpToolDefinition                           def,
-                             std::weak_ptr<agentxx::agent::AgentContext> ctx,
-                             std::string                                 toolNamespace) :
+McpClientTool::McpClientTool(
+    std::shared_ptr<McpClient>                  client,
+    McpToolDefinition                           def,
+    std::weak_ptr<agentxx::agent::AgentContext> ctx,
+    std::string                                 toolNamespace
+) :
     agentxx::tools::XXToolBase(makeNamespacedName(toolNamespace, def.name), std::move(ctx)),
     client_(std::move(client)),
     def_(std::move(def)),

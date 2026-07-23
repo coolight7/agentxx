@@ -20,13 +20,17 @@ public:
 
     asio::awaitable<std::optional<std::string>> getInput() override;
 
-    asio::awaitable<bool> promptPermission(const std::string& toolName,
-                                           const std::string& category,
-                                           const std::string& target) override;
+    asio::awaitable<bool> promptPermission(
+        const std::string& toolName,
+        const std::string& category,
+        const std::string& target
+    ) override;
 
-    void onInterrupt(const std::string& node,
-                     const std::string& value,
-                     const std::string& handleName) override;
+    void onInterrupt(
+        const std::string& node,
+        const std::string& value,
+        const std::string& handleName
+    ) override;
 
     void resetTokenState();
 };

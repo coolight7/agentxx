@@ -31,13 +31,15 @@ public:
 
     std::string get_name() const override;
 
-    asio::awaitable<neograph::ChatCompletion> invoke(const neograph::CompletionParams& params,
-                                                     neograph::StreamCallback          on_chunk
-                                                     = nullptr) override;
+    asio::awaitable<neograph::ChatCompletion> invoke(
+        const neograph::CompletionParams& params,
+        neograph::StreamCallback          on_chunk = nullptr
+    ) override;
 
-    asio::awaitable<neograph::ChatCompletion>
-        invoke_format_data(const neograph::CompletionParams&  params,
-                           neograph::FormatDataStreamCallback on_chunk = nullptr) override;
+    asio::awaitable<neograph::ChatCompletion> invoke_format_data(
+        const neograph::CompletionParams&  params,
+        neograph::FormatDataStreamCallback on_chunk = nullptr
+    ) override;
 
 private:
 
@@ -56,29 +58,34 @@ private:
 
     static ParsedEndpoint parseEndpoint(const std::string& base_url);
 
-    asio::awaitable<neograph::ChatCompletion>
-        completeAsync(const neograph::CompletionParams& params);
+    asio::awaitable<neograph::ChatCompletion> completeAsync(const neograph::CompletionParams& params
+    );
 
-    asio::awaitable<neograph::ChatCompletion> doStream(const neograph::CompletionParams&  params,
-                                                       const neograph::json&              body,
-                                                       neograph::FormatDataStreamCallback on_chunk);
+    asio::awaitable<neograph::ChatCompletion> doStream(
+        const neograph::CompletionParams&  params,
+        const neograph::json&              body,
+        neograph::FormatDataStreamCallback on_chunk
+    );
 
     template<typename Stream>
-    asio::awaitable<void> readSseStream(Stream&                               stream,
-                                        std::chrono::steady_clock::time_point deadline,
-                                        std::chrono::seconds                  readTimeout,
-                                        neograph::ChatCompletion&             completion,
-                                        std::string&                          fullContent,
-                                        std::string&                          fullThinking,
-                                        std::map<int, neograph::ToolCall>&    tcMap,
-                                        std::string&                          lineBuffer,
-                                        neograph::FormatDataStreamCallback    on_chunk) {
+    asio::awaitable<void> readSseStream(
+        Stream&                               stream,
+        std::chrono::steady_clock::time_point deadline,
+        std::chrono::seconds                  readTimeout,
+        neograph::ChatCompletion&             completion,
+        std::string&                          fullContent,
+        std::string&                          fullThinking,
+        std::map<int, neograph::ToolCall>&    tcMap,
+        std::string&                          lineBuffer,
+        neograph::FormatDataStreamCallback    on_chunk
+    ) {
         namespace http = boost::beast::http;
 
         auto rem = [&] {
             auto d = deadline - std::chrono::steady_clock::now();
             return std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::max(d, std::chrono::steady_clock::duration::zero()));
+                std::max(d, std::chrono::steady_clock::duration::zero())
+            );
         };
 
         boost::beast::flat_buffer                buf;
@@ -86,16 +93,20 @@ private:
         parser.body_limit(std::numeric_limits<uint64_t>::max());
         parser.eager(true);
 
-        co_await http::async_read_header(stream,
-                                         buf,
-                                         parser,
-                                         asio::cancel_after(rem(), asio::use_awaitable));
+        co_await http::async_read_header(
+            stream,
+            buf,
+            parser,
+            asio::cancel_after(rem(), asio::use_awaitable)
+        );
 
         if (parser.get().result_int() == 429) {
-            co_await http::async_read(stream,
-                                      buf,
-                                      parser,
-                                      asio::cancel_after(rem(), asio::use_awaitable));
+            co_await http::async_read(
+                stream,
+                buf,
+                parser,
+                asio::cancel_after(rem(), asio::use_awaitable)
+            );
             auto resp       = parser.release();
             auto raw        = resp[http::field::retry_after];
             int  retryAfter = -1;
@@ -110,13 +121,16 @@ private:
         }
 
         if (parser.get().result_int() != 200) {
-            co_await http::async_read(stream,
-                                      buf,
-                                      parser,
-                                      asio::cancel_after(rem(), asio::use_awaitable));
+            co_await http::async_read(
+                stream,
+                buf,
+                parser,
+                asio::cancel_after(rem(), asio::use_awaitable)
+            );
             auto resp = parser.release();
-            throw std::runtime_error("API error (HTTP " + std::to_string(resp.result_int())
-                                     + "): " + resp.body());
+            throw std::runtime_error(
+                "API error (HTTP " + std::to_string(resp.result_int()) + "): " + resp.body()
+            );
         }
 
         size_t                    processed = 0;
@@ -126,7 +140,8 @@ private:
                 stream,
                 buf,
                 parser,
-                asio::cancel_after(readTimeout, asio::redirect_error(asio::use_awaitable, ec)));
+                asio::cancel_after(readTimeout, asio::redirect_error(asio::use_awaitable, ec))
+            );
             if (ec) {
                 break;
             }
@@ -134,12 +149,14 @@ private:
             if (body.size() > processed) {
                 lineBuffer += body.substr(processed);
                 processed   = body.size();
-                processSseBuffer(lineBuffer,
-                                 completion,
-                                 fullContent,
-                                 fullThinking,
-                                 tcMap,
-                                 on_chunk);
+                processSseBuffer(
+                    lineBuffer,
+                    completion,
+                    fullContent,
+                    fullThinking,
+                    tcMap,
+                    on_chunk
+                );
             }
         }
         if (!lineBuffer.empty()) {
@@ -147,12 +164,14 @@ private:
         }
     }
 
-    static void processSseBuffer(std::string&                       buf,
-                                 neograph::ChatCompletion&          completion,
-                                 std::string&                       fullContent,
-                                 std::string&                       fullThinking,
-                                 std::map<int, neograph::ToolCall>& tcMap,
-                                 neograph::FormatDataStreamCallback on_chunk) {
+    static void processSseBuffer(
+        std::string&                       buf,
+        neograph::ChatCompletion&          completion,
+        std::string&                       fullContent,
+        std::string&                       fullThinking,
+        std::map<int, neograph::ToolCall>& tcMap,
+        neograph::FormatDataStreamCallback on_chunk
+    ) {
         size_t pos;
         while ((pos = buf.find('\n')) != std::string::npos) {
             std::string line = buf.substr(0, pos);
@@ -180,7 +199,8 @@ private:
                     completion.usage.completion_tokens = u.value("completion_tokens", 0);
                     completion.usage.total_tokens      = u.value(
                         "total_tokens",
-                        completion.usage.prompt_tokens + completion.usage.completion_tokens);
+                        completion.usage.prompt_tokens + completion.usage.completion_tokens
+                    );
                 }
 
                 if (!j.contains("choices") || !j["choices"].is_array() || j["choices"].empty()) {
@@ -193,9 +213,10 @@ private:
                     if (!token.empty()) {
                         fullContent += token;
                         if (on_chunk) {
-                            on_chunk(
-                                neograph::ChatStreamChunk{neograph::ChatStreamChunk::TYPE_CONTENT,
-                                                          token});
+                            on_chunk(neograph::ChatStreamChunk{
+                                neograph::ChatStreamChunk::TYPE_CONTENT,
+                                token
+                            });
                         }
                     }
                 }
@@ -205,9 +226,10 @@ private:
                     if (!token.empty()) {
                         fullThinking += token;
                         if (on_chunk) {
-                            on_chunk(
-                                neograph::ChatStreamChunk{neograph::ChatStreamChunk::TYPE_THINKING,
-                                                          token});
+                            on_chunk(neograph::ChatStreamChunk{
+                                neograph::ChatStreamChunk::TYPE_THINKING,
+                                token
+                            });
                         }
                     }
                 } else if (delta.contains("thinking") && delta["thinking"].is_string()) {
@@ -215,9 +237,10 @@ private:
                     if (!token.empty()) {
                         fullThinking += token;
                         if (on_chunk) {
-                            on_chunk(
-                                neograph::ChatStreamChunk{neograph::ChatStreamChunk::TYPE_THINKING,
-                                                          token});
+                            on_chunk(neograph::ChatStreamChunk{
+                                neograph::ChatStreamChunk::TYPE_THINKING,
+                                token
+                            });
                         }
                     }
                 }

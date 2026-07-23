@@ -5,26 +5,26 @@ namespace util {
 
 int httpMethodIndex(boost::beast::http::verb v) noexcept {
     switch (v) {
-    case boost::beast::http::verb::get:
-        return 0;
-    case boost::beast::http::verb::head:
-        return 1;
-    case boost::beast::http::verb::post:
-        return 2;
-    case boost::beast::http::verb::put:
-        return 3;
-    case boost::beast::http::verb::delete_:
-        return 4;
-    case boost::beast::http::verb::connect:
-        return 5;
-    case boost::beast::http::verb::options:
-        return 6;
-    case boost::beast::http::verb::trace:
-        return 7;
-    case boost::beast::http::verb::patch:
-        return 8;
-    default:
-        return -1;
+        case boost::beast::http::verb::get:
+            return 0;
+        case boost::beast::http::verb::head:
+            return 1;
+        case boost::beast::http::verb::post:
+            return 2;
+        case boost::beast::http::verb::put:
+            return 3;
+        case boost::beast::http::verb::delete_:
+            return 4;
+        case boost::beast::http::verb::connect:
+            return 5;
+        case boost::beast::http::verb::options:
+            return 6;
+        case boost::beast::http::verb::trace:
+            return 7;
+        case boost::beast::http::verb::patch:
+            return 8;
+        default:
+            return -1;
     }
 }
 
@@ -103,9 +103,11 @@ void HttpServer::start() {
     // Setup SSL context if configured
     if (!config_.sslCertFile.empty() && !config_.sslKeyFile.empty()) {
         sslCtx_ = std::make_unique<asio::ssl::context>(asio::ssl::context::tlsv12_server);
-        sslCtx_->set_options(asio::ssl::context::default_workarounds | asio::ssl::context::no_sslv2
-                             | asio::ssl::context::no_sslv3 | asio::ssl::context::no_tlsv1
-                             | asio::ssl::context::no_tlsv1_1 | asio::ssl::context::single_dh_use);
+        sslCtx_->set_options(
+            asio::ssl::context::default_workarounds | asio::ssl::context::no_sslv2
+            | asio::ssl::context::no_sslv3 | asio::ssl::context::no_tlsv1
+            | asio::ssl::context::no_tlsv1_1 | asio::ssl::context::single_dh_use
+        );
         sslCtx_->use_certificate_chain_file(config_.sslCertFile);
         sslCtx_->use_private_key_file(config_.sslKeyFile, asio::ssl::context::pem);
     }
@@ -149,7 +151,8 @@ void HttpServer::stop() {
 
 void HttpServer::addSseRoute(
     const std::string&                                                         path,
-    std::function<asio::awaitable<void>(Request&, std::shared_ptr<SseWriter>)> handler) {
+    std::function<asio::awaitable<void>(Request&, std::shared_ptr<SseWriter>)> handler
+) {
     sseRoutes_[path] = std::move(handler);
 }
 
@@ -206,14 +209,16 @@ asio::awaitable<void> HttpServer::acceptLoop() {
         if (sslCtx_) {
             auto sslStream = std::make_shared<boost::beast::ssl_stream<boost::beast::tcp_stream>>(
                 boost::beast::tcp_stream(std::move(workerSocket)),
-                *sslCtx_);
+                *sslCtx_
+            );
             asio::co_spawn(
                 targetWorker.ioCtx,
                 [this, sslStream]() -> asio::awaitable<void> {
                     ConnectionGuard guard{activeConnections_};
                     co_await sslHandshakeAndServe(sslStream);
                 }(),
-                asio::detached);
+                asio::detached
+            );
         } else {
             auto stream = std::make_shared<boost::beast::tcp_stream>(std::move(workerSocket));
             asio::co_spawn(
@@ -222,18 +227,21 @@ asio::awaitable<void> HttpServer::acceptLoop() {
                     ConnectionGuard guard{activeConnections_};
                     co_await serve(std::move(*stream));
                 }(),
-                asio::detached);
+                asio::detached
+            );
         }
     }
     co_return;
 }
 
 asio::awaitable<void> HttpServer::sslHandshakeAndServe(
-    std::shared_ptr<boost::beast::ssl_stream<boost::beast::tcp_stream>> stream) {
+    std::shared_ptr<boost::beast::ssl_stream<boost::beast::tcp_stream>> stream
+) {
     try {
         co_await stream->async_handshake(
             asio::ssl::stream_base::server,
-            asio::cancel_after(config_.requestTimeout, asio::use_awaitable));
+            asio::cancel_after(config_.requestTimeout, asio::use_awaitable)
+        );
         co_await serve(std::move(*stream));
     } catch (const boost::system::system_error& e) {
         if (e.code() != asio::error::operation_aborted
@@ -246,10 +254,12 @@ asio::awaitable<void> HttpServer::sslHandshakeAndServe(
     // activeConnections_ decrement handled by ConnectionGuard in caller
 }
 
-void HttpServer::fillError(Response&                  resp,
-                           unsigned                   version,
-                           boost::beast::http::status status,
-                           std::string_view           message) {
+void HttpServer::fillError(
+    Response&                  resp,
+    unsigned                   version,
+    boost::beast::http::status status,
+    std::string_view           message
+) {
     resp.version(version);
     resp.result(status);
     resp.set(boost::beast::http::field::content_type, "text/plain");

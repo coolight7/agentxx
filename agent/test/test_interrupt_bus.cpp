@@ -22,7 +22,6 @@ int g_ib_passed = 0;
 int g_ib_failed = 0;
 
 asio::awaitable<void> test_interrupt_bus_request_response() {
-
     auto agentConfig          = std::make_shared<agentxx::agent::AgentConfig>();
     auto agentContext         = std::make_shared<agentxx::agent::AgentContext>();
     agentContext->agentConfig = agentConfig;
@@ -53,7 +52,8 @@ asio::awaitable<void> test_interrupt_bus_request_response() {
                             .interruptArgsJson = argJson,
                             .resultId          = arg.resultId,
                         },
-                        std::chrono::seconds(5));
+                        std::chrono::seconds(5)
+                    );
 
     if (false == resp.has_value() && resp.error() == "Timeout") {
         // allow timeout
@@ -75,7 +75,8 @@ asio::awaitable<void> test_interrupt_bus_request_response() {
                              .interruptArgsJson = "{}",
                              .resultId          = "r",
                          },
-                         std::chrono::milliseconds(200));
+                         std::chrono::milliseconds(200)
+                     );
     XX_TEST_EXPECT_TRUE(!resp2.has_value());
 
     co_return;
@@ -105,7 +106,8 @@ asio::awaitable<void> test_permission_bus_request_response() {
                             .target        = "/etc/passwd",
                             .argumentsJson = R"({"path":"/etc/passwd"})",
                         },
-                        std::chrono::seconds(5));
+                        std::chrono::seconds(5)
+                    );
 
     if (false == resp.has_value() && resp.error() == "Timeout") {
         // allow timeout
@@ -127,7 +129,8 @@ asio::awaitable<void> test_permission_bus_request_response() {
                              .target        = "x",
                              .argumentsJson = "{}",
                          },
-                         std::chrono::milliseconds(200));
+                         std::chrono::milliseconds(200)
+                     );
     XX_TEST_EXPECT_TRUE(!resp2.has_value());
 
     co_return;
@@ -135,7 +138,6 @@ asio::awaitable<void> test_permission_bus_request_response() {
 
 /// 验证: 自定义 interrupt handler 可替换 CLI handler (扩展性)
 asio::awaitable<void> test_interrupt_bus_custom_handler() {
-
     auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
     agentContext->bus
         = std::make_shared<agentxx::middleware::EventBus>(co_await asio::this_coro::executor);
@@ -143,14 +145,17 @@ asio::awaitable<void> test_interrupt_bus_custom_handler() {
     // 注册一个自定义 handler, 直接返回固定结果
     auto& rr
         = agentContext->bus->getRR<agentxx::events::ReqInterrupt, agentxx::events::RespInterrupt>(
-            agentxx::events::Topic::Interrupt);
-    rr.serve([](const agentxx::events::ReqInterrupt& req,
-                size_t /*corrId*/) -> asio::awaitable<agentxx::events::RespInterrupt> {
-        co_return agentxx::events::RespInterrupt{
-            .handled    = true,
-            .resultJson = std::string{"\"custom_ok_"} + req.handleName + "\"",
-        };
-    });
+            agentxx::events::Topic::Interrupt
+        );
+    rr.serve(
+        [](const agentxx::events::ReqInterrupt& req,
+           size_t /*corrId*/) -> asio::awaitable<agentxx::events::RespInterrupt> {
+            co_return agentxx::events::RespInterrupt{
+                .handled    = true,
+                .resultJson = std::string{"\"custom_ok_"} + req.handleName + "\"",
+            };
+        }
+    );
 
     auto resp = co_await agentContext->bus
                     ->request<agentxx::events::ReqInterrupt, agentxx::events::RespInterrupt>(
@@ -163,7 +168,8 @@ asio::awaitable<void> test_interrupt_bus_custom_handler() {
                             .interruptArgsJson = "{}",
                             .resultId          = "r",
                         },
-                        std::chrono::seconds(5));
+                        std::chrono::seconds(5)
+                    );
 
     if (false == resp.has_value() && resp.error() == "Timeout") {
         // allow timeout

@@ -15,26 +15,32 @@
 namespace agentxx {
 namespace nodes {
 
-ToolcallWrapNode::ToolcallWrapNode(const std::string&                          in_name,
-                                   const neograph::graph::NodeContext&         in_ctx,
-                                   std::weak_ptr<agentxx::agent::AgentContext> in_agentContext) :
+ToolcallWrapNode::ToolcallWrapNode(
+    const std::string&                          in_name,
+    const neograph::graph::NodeContext&         in_ctx,
+    std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
+) :
     WrapHandleBaseNode<neograph::graph::ToolDispatchNode>(in_name, in_agentContext, in_ctx) {}
 
-void ToolcallWrapNode::onHandleStartError(bool             errorRethrow,
-                                          bool             isCurrentError,
-                                          std::string_view exceptionStr,
-                                          agentxx::middleware::BaseMiddlewareHandleInterface& item,
-                                          neograph::graph::NodeInput&                         in,
-                                          neograph::graph::NodeOutput& result) noexcept {
+void ToolcallWrapNode::onHandleStartError(
+    bool                                                errorRethrow,
+    bool                                                isCurrentError,
+    std::string_view                                    exceptionStr,
+    agentxx::middleware::BaseMiddlewareHandleInterface& item,
+    neograph::graph::NodeInput&                         in,
+    neograph::graph::NodeOutput&                        result
+) noexcept {
     // 插入消息，保证消息顺序正确
     if (false == errorRethrow) {
         auto msg = neograph::ChatMessage{
             .role    = "tool",
-            .content = fmt::format(R"({{"error": "{}/Start call `{}` exception: {}"}})",
-                                   nodeName,
-                                   item.name,
-                                   exceptionStr),
-            .flags   = neograph::MessageFlag::AutoInserted,
+            .content = fmt::format(
+                R"({{"error": "{}/Start call `{}` exception: {}"}})",
+                nodeName,
+                item.name,
+                exceptionStr
+            ),
+            .flags = neograph::MessageFlag::AutoInserted,
         };
         auto msgJson = neograph::json{};
         neograph::to_json(msgJson, msg);
@@ -45,11 +51,13 @@ void ToolcallWrapNode::onHandleStartError(bool             errorRethrow,
     }
 }
 
-void ToolcallWrapNode::onHandleBaseRunError(bool                         errorRethrow,
-                                            bool                         isCurrentError,
-                                            std::string_view             exceptionStr,
-                                            neograph::graph::NodeInput&  in,
-                                            neograph::graph::NodeOutput& result) noexcept {
+void ToolcallWrapNode::onHandleBaseRunError(
+    bool                         errorRethrow,
+    bool                         isCurrentError,
+    std::string_view             exceptionStr,
+    neograph::graph::NodeInput&  in,
+    neograph::graph::NodeOutput& result
+) noexcept {
     // 插入消息，保证消息顺序正确
     if (false == errorRethrow && isCurrentError) {
         auto msg = neograph::ChatMessage{
@@ -67,21 +75,23 @@ void ToolcallWrapNode::onHandleBaseRunError(bool                         errorRe
     }
 }
 
-asio::awaitable<void>
-    ToolcallWrapNode::onHandleStart(agentxx::middleware::BaseMiddlewareHandleInterface& item,
-                                    neograph::graph::NodeInput&                         in) {
+asio::awaitable<void> ToolcallWrapNode::onHandleStart(
+    agentxx::middleware::BaseMiddlewareHandleInterface& item,
+    neograph::graph::NodeInput&                         in
+) {
     co_await item.onToolcallStartFunc(in);
 }
 
-asio::awaitable<void>
-    ToolcallWrapNode::onHandleEnd(agentxx::middleware::BaseMiddlewareHandleInterface& item,
-                                  const neograph::graph::NodeInput&                   in,
-                                  neograph::graph::NodeOutput&                        result) {
+asio::awaitable<void> ToolcallWrapNode::onHandleEnd(
+    agentxx::middleware::BaseMiddlewareHandleInterface& item,
+    const neograph::graph::NodeInput&                   in,
+    neograph::graph::NodeOutput&                        result
+) {
     co_await item.onToolcallEndFunc(in, result);
 }
 
-asio::awaitable<std::string> ToolcallWrapNode::execTool(neograph::Tool* tool,
-                                                        neograph::json& args) const {
+asio::awaitable<std::string>
+    ToolcallWrapNode::execTool(neograph::Tool* tool, neograph::json& args) const {
     auto agentCtxPtr = agentContext.lock();
     {
         // 权限检查
@@ -155,12 +165,14 @@ asio::awaitable<std::string> ToolcallWrapNode::execTool(neograph::Tool* tool,
                     R"([Content offloaded to `share_store`, id={}; Summary {} lines:] {}...)",
                     storeId,
                     lineCount,
-                    std::string_view{result}.substr(0, lastLineIndex));
+                    std::string_view{result}.substr(0, lastLineIndex)
+                );
             } else {
                 co_return fmt::format(
                     R"([Content offloaded to `share_store`, id={}; Summary:] {}...)",
                     storeId,
-                    std::string_view{result}.substr(0, targetIndex));
+                    std::string_view{result}.substr(0, targetIndex)
+                );
             }
         }
     }
@@ -170,7 +182,8 @@ asio::awaitable<std::string> ToolcallWrapNode::execTool(neograph::Tool* tool,
 asio::awaitable<void> ToolcallWrapNode::baseRun(
     std::vector<std::shared_ptr<agentxx::middleware::BaseMiddlewareHandleInterface>>& handles,
     neograph::graph::NodeInput&                                                       in,
-    neograph::graph::NodeOutput&                                                      out) {
+    neograph::graph::NodeOutput&                                                      out
+) {
     auto agentCtxPtr = agentContext.lock();
 
     auto toolcallsCache = std::map<std::string, std::string>{};
@@ -178,10 +191,12 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
         auto toolcallsCacheJson
             = agentCtxPtr->middlewareHandleContext->getGraphDataItemValue<neograph::json>(
                 in.ctx.thread_id,
-                agentxx::middleware::MiddlewareContext::graphDataKey_interruptToolcallCache);
+                agentxx::middleware::MiddlewareContext::graphDataKey_interruptToolcallCache
+            );
         agentCtxPtr->middlewareHandleContext->removeGraphDataItem(
             in.ctx.thread_id,
-            agentxx::middleware::MiddlewareContext::graphDataKey_interruptToolcallCache);
+            agentxx::middleware::MiddlewareContext::graphDataKey_interruptToolcallCache
+        );
         if (toolcallsCacheJson.is_array()) {
             for (const auto& item : toolcallsCacheJson) {
                 neograph::ChatMessage msg;
@@ -278,7 +293,8 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
         agentCtxPtr->middlewareHandleContext->setGraphDataItemValue<neograph::json>(
             in.ctx.thread_id,
             agentxx::middleware::MiddlewareContext::graphDataKey_interruptToolcallCache,
-            results);
+            results
+        );
         // 保存当前 messages，供 handler 恢复
         auto messages = in.state.get("messages");
         // 重新抛出异常
@@ -289,12 +305,15 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
     co_return;
 }
 
-asio::awaitable<void> ToolcallWrapNode::defStdoutLogOnToolcallStart(neograph::graph::NodeInput& in,
-                                                                    size_t limitOutput) {
+asio::awaitable<void> ToolcallWrapNode::defStdoutLogOnToolcallStart(
+    neograph::graph::NodeInput& in,
+    size_t                      limitOutput
+) {
     auto messages = in.state.get_messages();
     auto assistant_msg
         = agentxx::middleware::BaseMiddlewareHandleInterface::getLastAssistantToolcallMessage(
-            messages);
+            messages
+        );
 
     std::ostringstream out{};
     if (assistant_msg) {
@@ -311,18 +330,21 @@ asio::awaitable<void> ToolcallWrapNode::defStdoutLogOnToolcallStart(neograph::gr
         out << "┣━ Empty Argument List\n";
     }
 
-    fmt::print(R"(
+    fmt::print(
+        R"(
 ┏━━━━━━ Toolcall ━━━━━━┓
 {}
 )",
-               out.str());
+        out.str()
+    );
     co_return;
 }
 
-asio::awaitable<void>
-    ToolcallWrapNode::defStdoutLogOnToolcallEnd(const neograph::graph::NodeInput& in,
-                                                neograph::graph::NodeOutput&      result,
-                                                size_t                            limitOutput) {
+asio::awaitable<void> ToolcallWrapNode::defStdoutLogOnToolcallEnd(
+    const neograph::graph::NodeInput& in,
+    neograph::graph::NodeOutput&      result,
+    size_t                            limitOutput
+) {
     std::ostringstream out{};
     if (false == result.writes.empty()) {
         size_t index = 0;
@@ -337,12 +359,14 @@ asio::awaitable<void>
         out << "┣━ Empty Result List\n";
     }
 
-    fmt::print(R"(
+    fmt::print(
+        R"(
 {}
 ┗━━━━━━ Toolcall ━━━━━━┛
 
 )",
-               out.str());
+        out.str()
+    );
     co_return;
 }
 

@@ -19,12 +19,14 @@ asio::awaitable<void> StdioPermissionPrompter::start() {
         co_return;
     }
     auto& rr = ctxPtr->bus->getRR<agentxx::events::ReqPermission, agentxx::events::RespPermission>(
-        agentxx::events::Topic::Permission);
-    serverId
-        = rr.serve([this](const agentxx::events::ReqPermission& req,
-                          size_t /*corrId*/) -> asio::awaitable<agentxx::events::RespPermission> {
-              co_return co_await handle(req);
-          });
+        agentxx::events::Topic::Permission
+    );
+    serverId = rr.serve(
+        [this](const agentxx::events::ReqPermission& req, size_t /*corrId*/)
+            -> asio::awaitable<agentxx::events::RespPermission> {
+            co_return co_await handle(req);
+        }
+    );
     registered = true;
     co_return;
 }
@@ -37,7 +39,8 @@ void StdioPermissionPrompter::stop() {
     if (ctxPtr && ctxPtr->bus) {
         auto& rr
             = ctxPtr->bus->getRR<agentxx::events::ReqPermission, agentxx::events::RespPermission>(
-                agentxx::events::Topic::Permission);
+                agentxx::events::Topic::Permission
+            );
         rr.removeServer(serverId);
     }
     registered = false;

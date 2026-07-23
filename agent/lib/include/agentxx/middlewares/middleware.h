@@ -30,9 +30,8 @@ namespace middleware {
 
 using onGraphNodeBeforeCallFunc
     = std::function<asio::awaitable<void>(neograph::graph::NodeInput& in)>;
-using onGraphNodeAfterCallFunc
-    = std::function<asio::awaitable<void>(const neograph::graph::NodeInput& in,
-                                          neograph::graph::NodeOutput&      result)>;
+using onGraphNodeAfterCallFunc = std::function<asio::awaitable<
+    void>(const neograph::graph::NodeInput& in, neograph::graph::NodeOutput& result)>;
 
 class MiddlewareContext;
 class InterruptHandleArg;
@@ -71,36 +70,40 @@ public:
     /// 每个 [Middleware] 全局共享，按会话ID 取值 <thread_id, state>
     std::map<std::string, std::shared_ptr<BaseMiddlewareState>> states{};
 
-    BaseMiddlewareHandleInterface(std::string_view                            in_name,
-                                  std::weak_ptr<agentxx::agent::AgentContext> in_agentContext);
+    BaseMiddlewareHandleInterface(
+        std::string_view                            in_name,
+        std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
+    );
 
     /// ================ warp call ================
     virtual asio::awaitable<void> onAgentcallStartFunc(neograph::graph::NodeInput& in) = 0;
 
-    virtual asio::awaitable<void> onAgentcallEndFunc(const neograph::graph::NodeInput& in,
-                                                     neograph::graph::NodeOutput&      result)
-        = 0;
+    virtual asio::awaitable<void> onAgentcallEndFunc(
+        const neograph::graph::NodeInput& in,
+        neograph::graph::NodeOutput&      result
+    ) = 0;
 
     virtual asio::awaitable<void> onModelcallStartFunc(neograph::graph::NodeInput& in) = 0;
 
     virtual asio::awaitable<void> onModelcallRunFunc(neograph::graph::NodeInput& in) = 0;
 
-    virtual asio::awaitable<void> onModelcallEndFunc(const neograph::graph::NodeInput& in,
-                                                     neograph::graph::NodeOutput&      result)
-        = 0;
+    virtual asio::awaitable<void> onModelcallEndFunc(
+        const neograph::graph::NodeInput& in,
+        neograph::graph::NodeOutput&      result
+    ) = 0;
 
     virtual asio::awaitable<void> onToolcallStartFunc(neograph::graph::NodeInput& in) = 0;
 
-    virtual asio::awaitable<void> onToolcallEndFunc(const neograph::graph::NodeInput& in,
-                                                    neograph::graph::NodeOutput&      result)
+    virtual asio::awaitable<void>
+        onToolcallEndFunc(const neograph::graph::NodeInput& in, neograph::graph::NodeOutput& result)
         = 0;
 
     virtual ~BaseMiddlewareHandleInterface();
 
     static neograph::json getLastMessageJson(const neograph::graph::NodeInput& in);
 
-    static std::optional<neograph::ChatMessage>
-        getLastMessage(const neograph::graph::NodeInput& in);
+    static std::optional<neograph::ChatMessage> getLastMessage(const neograph::graph::NodeInput& in
+    );
 
     static const neograph::ChatMessage*
         getLastAssistantToolcallMessage(std::vector<neograph::ChatMessage>& messages);
@@ -110,8 +113,10 @@ public:
 
     static void printMessage(const neograph::ChatMessage& msg, size_t index = 1);
 
-    static void printMessages(const std::vector<neograph::ChatMessage>& messages,
-                              bool                                      printSystemMsg = true);
+    static void printMessages(
+        const std::vector<neograph::ChatMessage>& messages,
+        bool                                      printSystemMsg = true
+    );
 };
 
 template<BaseMiddlewareStateType T>
@@ -119,16 +124,20 @@ class BaseMiddlewareHandle : public BaseMiddlewareHandleInterface {
 protected:
 public:
 
-    BaseMiddlewareHandle(std::string_view                            in_name,
-                         std::weak_ptr<agentxx::agent::AgentContext> in_agentContext) :
+    BaseMiddlewareHandle(
+        std::string_view                            in_name,
+        std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
+    ) :
         BaseMiddlewareHandleInterface(in_name, in_agentContext) {}
 
     asio::awaitable<void> onAgentcallStartFunc(neograph::graph::NodeInput& in) override {
         co_return;
     }
 
-    asio::awaitable<void> onAgentcallEndFunc(const neograph::graph::NodeInput& in,
-                                             neograph::graph::NodeOutput&      result) override {
+    asio::awaitable<void> onAgentcallEndFunc(
+        const neograph::graph::NodeInput& in,
+        neograph::graph::NodeOutput&      result
+    ) override {
         co_return;
     }
 
@@ -140,8 +149,10 @@ public:
         co_return;
     }
 
-    asio::awaitable<void> onModelcallEndFunc(const neograph::graph::NodeInput& in,
-                                             neograph::graph::NodeOutput&      result) override {
+    asio::awaitable<void> onModelcallEndFunc(
+        const neograph::graph::NodeInput& in,
+        neograph::graph::NodeOutput&      result
+    ) override {
         co_return;
     }
 
@@ -149,21 +160,23 @@ public:
         co_return;
     }
 
-    asio::awaitable<void> onToolcallEndFunc(const neograph::graph::NodeInput& in,
-                                            neograph::graph::NodeOutput&      result) override {
+    asio::awaitable<void> onToolcallEndFunc(
+        const neograph::graph::NodeInput& in,
+        neograph::graph::NodeOutput&      result
+    ) override {
         co_return;
     }
 
     /// ================ state ================
-    virtual asio::awaitable<void>
-        stateReadBlock(const std::function<asio::awaitable<void>()>& func) {
+    virtual asio::awaitable<void> stateReadBlock(const std::function<asio::awaitable<void>()>& func
+    ) {
         if (nullptr != func) {
             co_await func();
         }
     }
 
-    virtual asio::awaitable<void>
-        stateWriteBlock(const std::function<asio::awaitable<void>()>& func) {
+    virtual asio::awaitable<void> stateWriteBlock(const std::function<asio::awaitable<void>()>& func
+    ) {
         if (nullptr != func) {
             co_await func();
         }
@@ -229,15 +242,17 @@ public:
     onGraphNodeBeforeCallFunc onToolcallStart;
     onGraphNodeAfterCallFunc  onToolcallEnd;
 
-    MiddlewareWarpHandle(std::string_view                            in_name,
-                         std::weak_ptr<agentxx::agent::AgentContext> in_agentContext,
-                         const onGraphNodeBeforeCallFunc&            in_onAgentcallStart = nullptr,
-                         const onGraphNodeAfterCallFunc&             in_onAgentcallEnd   = nullptr,
-                         const onGraphNodeBeforeCallFunc&            in_onModelcallStart = nullptr,
-                         const onGraphNodeBeforeCallFunc&            in_onModelcallRun   = nullptr,
-                         const onGraphNodeAfterCallFunc&             in_onModelcallEnd   = nullptr,
-                         const onGraphNodeBeforeCallFunc&            in_onToolcallStart  = nullptr,
-                         const onGraphNodeAfterCallFunc&             in_onToolcallEnd = nullptr) :
+    MiddlewareWarpHandle(
+        std::string_view                            in_name,
+        std::weak_ptr<agentxx::agent::AgentContext> in_agentContext,
+        const onGraphNodeBeforeCallFunc&            in_onAgentcallStart = nullptr,
+        const onGraphNodeAfterCallFunc&             in_onAgentcallEnd   = nullptr,
+        const onGraphNodeBeforeCallFunc&            in_onModelcallStart = nullptr,
+        const onGraphNodeBeforeCallFunc&            in_onModelcallRun   = nullptr,
+        const onGraphNodeAfterCallFunc&             in_onModelcallEnd   = nullptr,
+        const onGraphNodeBeforeCallFunc&            in_onToolcallStart  = nullptr,
+        const onGraphNodeAfterCallFunc&             in_onToolcallEnd    = nullptr
+    ) :
         BaseMiddlewareHandle<T>(in_name, in_agentContext),
         onAgentcallStart(in_onAgentcallStart),
         onAgentcallEnd(in_onAgentcallEnd),
@@ -253,8 +268,10 @@ public:
         }
     }
 
-    asio::awaitable<void> onAgentcallEndFunc(const neograph::graph::NodeInput& in,
-                                             neograph::graph::NodeOutput&      result) override {
+    asio::awaitable<void> onAgentcallEndFunc(
+        const neograph::graph::NodeInput& in,
+        neograph::graph::NodeOutput&      result
+    ) override {
         if (nullptr != onAgentcallEnd) {
             co_await onAgentcallEnd(in, result);
         }
@@ -272,8 +289,10 @@ public:
         }
     }
 
-    asio::awaitable<void> onModelcallEndFunc(const neograph::graph::NodeInput& in,
-                                             neograph::graph::NodeOutput&      result) override {
+    asio::awaitable<void> onModelcallEndFunc(
+        const neograph::graph::NodeInput& in,
+        neograph::graph::NodeOutput&      result
+    ) override {
         if (nullptr != onModelcallEnd) {
             co_await onModelcallEnd(in, result);
         }
@@ -285,8 +304,10 @@ public:
         }
     }
 
-    asio::awaitable<void> onToolcallEndFunc(const neograph::graph::NodeInput& in,
-                                            neograph::graph::NodeOutput&      result) override {
+    asio::awaitable<void> onToolcallEndFunc(
+        const neograph::graph::NodeInput& in,
+        neograph::graph::NodeOutput&      result
+    ) override {
         if (nullptr != onToolcallEnd) {
             co_await onToolcallEnd(in, result);
         }
@@ -369,8 +390,8 @@ public:
     inline static const std::string graphDataKey_interruptNode{"xx_interruptNode"};
     /// 中断携带的值 (供程序重启恢复中断时复用)
     inline static const std::string graphDataKey_interruptValue{"xx_interruptValue"};
-    inline static const std::string graphDataKey_interruptToolcallCache{
-        "xx_interruptToolcallCache"};
+    inline static const std::string graphDataKey_interruptToolcallCache{"xx_interruptToolcallCache"
+    };
 
     /// <thread_id, <id, value>>
     /// - 存储变量内容，留出 id 到 上下文中，llm 需要时可以通过
@@ -505,9 +526,11 @@ public:
     }
 
     template<typename T>
-    void modifyGraphDataItemValue(const std::string&        thread_id,
-                                  std::string_view          key,
-                                  std::function<void(T&)>&& modify) {
+    void modifyGraphDataItemValue(
+        const std::string&        thread_id,
+        std::string_view          key,
+        std::function<void(T&)>&& modify
+    ) {
         auto& itemGraphData = graphData[thread_id];
         auto  it            = itemGraphData.find(key);
         if (it == itemGraphData.end()) {
@@ -524,14 +547,15 @@ public:
     void throwNodeInterruptBase(const std::string& thread_id, const neograph::json& msgs);
 
     /// 工具请求中断：检查已有结果（resume 后）或存储参数并抛异常
-    asio::awaitable<neograph::json>
-        requestInterrupt(const std::string&                         thread_id,
-                         const std::function<InterruptHandleArg()>& onCreateArg,
-                         const neograph::json&                      msgs);
+    asio::awaitable<neograph::json> requestInterrupt(
+        const std::string&                         thread_id,
+        const std::function<InterruptHandleArg()>& onCreateArg,
+        const neograph::json&                      msgs
+    );
 
     /// 将 graphData 中 JSON 兼容条目序列化到 state channel
-    neograph::json getGraphDataToState(neograph::graph::GraphState& state,
-                                       const std::string&           thread_id);
+    neograph::json
+        getGraphDataToState(neograph::graph::GraphState& state, const std::string& thread_id);
 
     /// 从 state channel 恢复 graphData (用于中断 resume)
     void setGraphDataFromState(neograph::graph::GraphState& state, const std::string& thread_id);

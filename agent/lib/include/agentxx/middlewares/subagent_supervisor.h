@@ -44,10 +44,12 @@ public:
 private:
 
     /// 运行单个 subagent (单/批量共用)
-    asio::awaitable<events::RespSubagentResult> runSubagent(const std::string& subagentName,
-                                                            const std::string& systemPromptIn,
-                                                            const std::string& message,
-                                                            const std::string& parentThreadId = "");
+    asio::awaitable<events::RespSubagentResult> runSubagent(
+        const std::string& subagentName,
+        const std::string& systemPromptIn,
+        const std::string& message,
+        const std::string& parentThreadId = ""
+    );
 
     /// 批量并发运行多个 subagent (真并发: co_spawn + channel wait_for_all)
     /// - 单 io_context 协作式调度: 各 subagent 协程在 co_await 挂起点交替推进

@@ -31,111 +31,111 @@ static WORD uiControlCharToVk(char ch) {
         return static_cast<WORD>(ch);
     }
     switch (ch) {
-    case ' ':
-        return VK_SPACE;
-    case '\n':
-        return VK_RETURN;
-    case '\t':
-        return VK_TAB;
-    case '\b':
-        return VK_BACK;
-    case '\x1b':
-        return VK_ESCAPE;
-    case '!':
-        return '1';
-    case '@':
-        return '2';
-    case '#':
-        return '3';
-    case '$':
-        return '4';
-    case '%':
-        return '5';
-    case '^':
-        return '6';
-    case '&':
-        return '7';
-    case '*':
-        return '8';
-    case '(':
-        return '9';
-    case ')':
-        return '0';
-    case '-':
-        return VK_OEM_MINUS;
-    case '=':
-        return VK_OEM_PLUS;
-    case '[':
-        return VK_OEM_4;
-    case ']':
-        return VK_OEM_6;
-    case '\\':
-        return VK_OEM_5;
-    case ';':
-        return VK_OEM_1;
-    case '\'':
-        return VK_OEM_7;
-    case ',':
-        return VK_OEM_COMMA;
-    case '.':
-        return VK_OEM_PERIOD;
-    case '/':
-        return VK_OEM_2;
-    case '`':
-        return VK_OEM_3;
-    case '_':
-        return VK_OEM_MINUS;
-    case '+':
-        return VK_OEM_PLUS;
-    case '{':
-        return VK_OEM_4;
-    case '}':
-        return VK_OEM_6;
-    case '|':
-        return VK_OEM_5;
-    case ':':
-        return VK_OEM_1;
-    case '"':
-        return VK_OEM_7;
-    case '<':
-        return VK_OEM_COMMA;
-    case '>':
-        return VK_OEM_PERIOD;
-    case '?':
-        return VK_OEM_2;
-    case '~':
-        return VK_OEM_3;
-    default:
-        return VkKeyScanA(ch) & 0xFF;
+        case ' ':
+            return VK_SPACE;
+        case '\n':
+            return VK_RETURN;
+        case '\t':
+            return VK_TAB;
+        case '\b':
+            return VK_BACK;
+        case '\x1b':
+            return VK_ESCAPE;
+        case '!':
+            return '1';
+        case '@':
+            return '2';
+        case '#':
+            return '3';
+        case '$':
+            return '4';
+        case '%':
+            return '5';
+        case '^':
+            return '6';
+        case '&':
+            return '7';
+        case '*':
+            return '8';
+        case '(':
+            return '9';
+        case ')':
+            return '0';
+        case '-':
+            return VK_OEM_MINUS;
+        case '=':
+            return VK_OEM_PLUS;
+        case '[':
+            return VK_OEM_4;
+        case ']':
+            return VK_OEM_6;
+        case '\\':
+            return VK_OEM_5;
+        case ';':
+            return VK_OEM_1;
+        case '\'':
+            return VK_OEM_7;
+        case ',':
+            return VK_OEM_COMMA;
+        case '.':
+            return VK_OEM_PERIOD;
+        case '/':
+            return VK_OEM_2;
+        case '`':
+            return VK_OEM_3;
+        case '_':
+            return VK_OEM_MINUS;
+        case '+':
+            return VK_OEM_PLUS;
+        case '{':
+            return VK_OEM_4;
+        case '}':
+            return VK_OEM_6;
+        case '|':
+            return VK_OEM_5;
+        case ':':
+            return VK_OEM_1;
+        case '"':
+            return VK_OEM_7;
+        case '<':
+            return VK_OEM_COMMA;
+        case '>':
+            return VK_OEM_PERIOD;
+        case '?':
+            return VK_OEM_2;
+        case '~':
+            return VK_OEM_3;
+        default:
+            return VkKeyScanA(ch) & 0xFF;
     }
 }
 
 static bool uiControlNeedsShift(char ch) {
     switch (ch) {
-    case '!':
-    case '@':
-    case '#':
-    case '$':
-    case '%':
-    case '^':
-    case '&':
-    case '*':
-    case '(':
-    case ')':
-    case '_':
-    case '+':
-    case '{':
-    case '}':
-    case '|':
-    case ':':
-    case '"':
-    case '<':
-    case '>':
-    case '?':
-    case '~':
-        return true;
-    default:
-        return false;
+        case '!':
+        case '@':
+        case '#':
+        case '$':
+        case '%':
+        case '^':
+        case '&':
+        case '*':
+        case '(':
+        case ')':
+        case '_':
+        case '+':
+        case '{':
+        case '}':
+        case '|':
+        case ':':
+        case '"':
+        case '<':
+        case '>':
+        case '?':
+        case '~':
+            return true;
+        default:
+            return false;
     }
 }
 
@@ -317,61 +317,61 @@ static WORD uiControlKeyNameToVk(std::string_view key) {
 
 static std::string uiControlVkToKeyName(WORD vk) {
     switch (vk) {
-    case VK_RETURN:
-        return "Enter";
-    case VK_TAB:
-        return "Tab";
-    case VK_ESCAPE:
-        return "Escape";
-    case VK_BACK:
-        return "Backspace";
-    case VK_DELETE:
-        return "Delete";
-    case VK_INSERT:
-        return "Insert";
-    case VK_HOME:
-        return "Home";
-    case VK_END:
-        return "End";
-    case VK_PRIOR:
-        return "PageUp";
-    case VK_NEXT:
-        return "PageDown";
-    case VK_UP:
-        return "Up";
-    case VK_DOWN:
-        return "Down";
-    case VK_LEFT:
-        return "Left";
-    case VK_RIGHT:
-        return "Right";
-    case VK_SPACE:
-        return "Space";
-    case VK_LSHIFT:
-    case VK_RSHIFT:
-        return "Shift";
-    case VK_LCONTROL:
-    case VK_RCONTROL:
-        return "Ctrl";
-    case VK_LMENU:
-    case VK_RMENU:
-        return "Alt";
-    case VK_LWIN:
-    case VK_RWIN:
-        return "Win";
-    case VK_CAPITAL:
-        return "CapsLock";
-    default:
-        if (vk >= VK_F1 && vk <= VK_F12) {
-            return fmt::format("F{}", vk - VK_F1 + 1);
-        }
-        if (vk >= 'A' && vk <= 'Z') {
-            return std::string(1, static_cast<char>(vk));
-        }
-        if (vk >= '0' && vk <= '9') {
-            return std::string(1, static_cast<char>(vk));
-        }
-        return fmt::format("Vk({})", vk);
+        case VK_RETURN:
+            return "Enter";
+        case VK_TAB:
+            return "Tab";
+        case VK_ESCAPE:
+            return "Escape";
+        case VK_BACK:
+            return "Backspace";
+        case VK_DELETE:
+            return "Delete";
+        case VK_INSERT:
+            return "Insert";
+        case VK_HOME:
+            return "Home";
+        case VK_END:
+            return "End";
+        case VK_PRIOR:
+            return "PageUp";
+        case VK_NEXT:
+            return "PageDown";
+        case VK_UP:
+            return "Up";
+        case VK_DOWN:
+            return "Down";
+        case VK_LEFT:
+            return "Left";
+        case VK_RIGHT:
+            return "Right";
+        case VK_SPACE:
+            return "Space";
+        case VK_LSHIFT:
+        case VK_RSHIFT:
+            return "Shift";
+        case VK_LCONTROL:
+        case VK_RCONTROL:
+            return "Ctrl";
+        case VK_LMENU:
+        case VK_RMENU:
+            return "Alt";
+        case VK_LWIN:
+        case VK_RWIN:
+            return "Win";
+        case VK_CAPITAL:
+            return "CapsLock";
+        default:
+            if (vk >= VK_F1 && vk <= VK_F12) {
+                return fmt::format("F{}", vk - VK_F1 + 1);
+            }
+            if (vk >= 'A' && vk <= 'Z') {
+                return std::string(1, static_cast<char>(vk));
+            }
+            if (vk >= '0' && vk <= '9') {
+                return std::string(1, static_cast<char>(vk));
+            }
+            return fmt::format("Vk({})", vk);
     }
 }
 
@@ -413,27 +413,27 @@ static asio::awaitable<UINT> uiControlSendInputAsync(UINT cInputs, LPINPUT pInpu
 
 static bool uiControlIsExtendedKey(WORD vk) {
     switch (vk) {
-    case VK_INSERT:
-    case VK_DELETE:
-    case VK_HOME:
-    case VK_END:
-    case VK_PRIOR:
-    case VK_NEXT:
-    case VK_LEFT:
-    case VK_RIGHT:
-    case VK_UP:
-    case VK_DOWN:
-    case VK_LWIN:
-    case VK_RWIN:
-    case VK_APPS:
-    case VK_RCONTROL:
-    case VK_RMENU:
-    case VK_DIVIDE:
-    case VK_NUMLOCK:
-    case VK_SNAPSHOT:
-        return true;
-    default:
-        return false;
+        case VK_INSERT:
+        case VK_DELETE:
+        case VK_HOME:
+        case VK_END:
+        case VK_PRIOR:
+        case VK_NEXT:
+        case VK_LEFT:
+        case VK_RIGHT:
+        case VK_UP:
+        case VK_DOWN:
+        case VK_LWIN:
+        case VK_RWIN:
+        case VK_APPS:
+        case VK_RCONTROL:
+        case VK_RMENU:
+        case VK_DIVIDE:
+        case VK_NUMLOCK:
+        case VK_SNAPSHOT:
+            return true;
+        default:
+            return false;
     }
 }
 
@@ -607,7 +607,8 @@ static asio::awaitable<UICmdResult>
 
     co_return UICmdResult{
         true,
-        fmt::format("mouse_drag ({}, {}) -> ({}, {}) [{}]", x1, y1, x2, y2, button)};
+        fmt::format("mouse_drag ({}, {}) -> ({}, {}) [{}]", x1, y1, x2, y2, button)
+    };
 }
 
 static asio::awaitable<UICmdResult> uiControlKeyDown(WORD vk) {
@@ -681,9 +682,11 @@ static asio::awaitable<UICmdResult> uiControlKeyType(std::string_view text) {
     for (char ch : text) {
         if (ch == '\n' || ch == '\r') {
             if (!inputs.empty()) {
-                co_await uiControlSendInputAsync(static_cast<UINT>(inputs.size()),
-                                                 inputs.data(),
-                                                 sizeof(INPUT));
+                co_await uiControlSendInputAsync(
+                    static_cast<UINT>(inputs.size()),
+                    inputs.data(),
+                    sizeof(INPUT)
+                );
                 inputs.clear();
                 co_await uiControlDelay(5);
             }
@@ -700,9 +703,11 @@ static asio::awaitable<UICmdResult> uiControlKeyType(std::string_view text) {
 
         if (ch == '\t') {
             if (!inputs.empty()) {
-                co_await uiControlSendInputAsync(static_cast<UINT>(inputs.size()),
-                                                 inputs.data(),
-                                                 sizeof(INPUT));
+                co_await uiControlSendInputAsync(
+                    static_cast<UINT>(inputs.size()),
+                    inputs.data(),
+                    sizeof(INPUT)
+                );
                 inputs.clear();
                 co_await uiControlDelay(5);
             }
@@ -719,9 +724,11 @@ static asio::awaitable<UICmdResult> uiControlKeyType(std::string_view text) {
 
         if (ch == '\b') {
             if (!inputs.empty()) {
-                co_await uiControlSendInputAsync(static_cast<UINT>(inputs.size()),
-                                                 inputs.data(),
-                                                 sizeof(INPUT));
+                co_await uiControlSendInputAsync(
+                    static_cast<UINT>(inputs.size()),
+                    inputs.data(),
+                    sizeof(INPUT)
+                );
                 inputs.clear();
                 co_await uiControlDelay(5);
             }
@@ -738,9 +745,11 @@ static asio::awaitable<UICmdResult> uiControlKeyType(std::string_view text) {
 
         if (ch == '\x1b') {
             if (!inputs.empty()) {
-                co_await uiControlSendInputAsync(static_cast<UINT>(inputs.size()),
-                                                 inputs.data(),
-                                                 sizeof(INPUT));
+                co_await uiControlSendInputAsync(
+                    static_cast<UINT>(inputs.size()),
+                    inputs.data(),
+                    sizeof(INPUT)
+                );
                 inputs.clear();
                 co_await uiControlDelay(5);
             }
@@ -780,9 +789,11 @@ static asio::awaitable<UICmdResult> uiControlKeyType(std::string_view text) {
     }
 
     if (!inputs.empty()) {
-        co_await uiControlSendInputAsync(static_cast<UINT>(inputs.size()),
-                                         inputs.data(),
-                                         sizeof(INPUT));
+        co_await uiControlSendInputAsync(
+            static_cast<UINT>(inputs.size()),
+            inputs.data(),
+            sizeof(INPUT)
+        );
     }
 
     co_return UICmdResult{true, fmt::format("key_type [{} chars]", text.size())};
@@ -843,12 +854,14 @@ static asio::awaitable<UICmdResult> uiControlExecuteOne(const neograph::json& cm
         }
         auto button   = cmd.value("button", std::string{"left"});
         int  duration = cmd.value<int>("duration_ms", 200);
-        co_return co_await uiControlMouseDrag(cmd.value<int>("x1", 0),
-                                              cmd.value<int>("y1", 0),
-                                              cmd.value<int>("x2", 0),
-                                              cmd.value<int>("y2", 0),
-                                              button,
-                                              duration);
+        co_return co_await uiControlMouseDrag(
+            cmd.value<int>("x1", 0),
+            cmd.value<int>("y1", 0),
+            cmd.value<int>("x2", 0),
+            cmd.value<int>("y2", 0),
+            button,
+            duration
+        );
     }
 
     if (action == "key_press") {
@@ -931,7 +944,8 @@ static asio::awaitable<UICmdResult> uiControlExecuteOne(const neograph::json& cm
 #endif // XX_IS_WIN_D
 
 UIControlKeyboardMouseTool::UIControlKeyboardMouseTool(
-    std::weak_ptr<agentxx::agent::AgentContext> in_agentContext) :
+    std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
+) :
     XXToolBase("ui_control_keyboard_mouse", in_agentContext, false, true) {}
 
 neograph::ChatTool UIControlKeyboardMouseTool::get_definition() const {

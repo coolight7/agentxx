@@ -59,8 +59,8 @@ asio::awaitable<void>
     co_return;
 }
 
-asio::awaitable<void>
-    test_linux_command_ls(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+asio::awaitable<void> test_linux_command_ls(std::weak_ptr<agentxx::agent::AgentContext> agentContext
+) {
     auto tool = agentxx::tools::ExecuteLinuxCommandTool{agentContext};
     auto args = neograph::json{
         {"command", "ls /tmp"}
@@ -173,8 +173,9 @@ asio::awaitable<void>
     co_return;
 }
 
-asio::awaitable<void> test_javascript_command_get_definition(
-    std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+asio::awaitable<void>
+    test_javascript_command_get_definition(std::weak_ptr<agentxx::agent::AgentContext> agentContext
+    ) {
     auto tool = agentxx::tools::ExecuteJavaScriptTool{agentContext};
     auto def  = tool.get_definition();
     if (def.name == "execute_javascript_command") {
@@ -187,8 +188,9 @@ asio::awaitable<void> test_javascript_command_get_definition(
     co_return;
 }
 
-asio::awaitable<void> test_javascript_command_empty_command(
-    std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+asio::awaitable<void>
+    test_javascript_command_empty_command(std::weak_ptr<agentxx::agent::AgentContext> agentContext
+    ) {
     auto tool = agentxx::tools::ExecuteJavaScriptTool{agentContext};
     auto args = neograph::json{
         {"command", ""}
@@ -240,8 +242,9 @@ asio::awaitable<void>
     co_return;
 }
 
-asio::awaitable<void> test_windows_get_definition_properties(
-    std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+asio::awaitable<void>
+    test_windows_get_definition_properties(std::weak_ptr<agentxx::agent::AgentContext> agentContext
+    ) {
     auto tool = agentxx::tools::ExecuteWindowsCommandTool{agentContext};
     auto def  = tool.get_definition();
 
@@ -253,8 +256,9 @@ asio::awaitable<void> test_windows_get_definition_properties(
     co_return;
 }
 
-asio::awaitable<void> test_python_get_definition_properties(
-    std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+asio::awaitable<void>
+    test_python_get_definition_properties(std::weak_ptr<agentxx::agent::AgentContext> agentContext
+    ) {
     auto tool = agentxx::tools::ExecutePythonTool{agentContext};
     auto def  = tool.get_definition();
 
@@ -267,7 +271,8 @@ asio::awaitable<void> test_python_get_definition_properties(
 }
 
 asio::awaitable<void> test_javascript_get_definition_properties(
-    std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    std::weak_ptr<agentxx::agent::AgentContext> agentContext
+) {
     auto tool = agentxx::tools::ExecuteJavaScriptTool{agentContext};
     auto def  = tool.get_definition();
 
@@ -428,7 +433,6 @@ asio::awaitable<void>
 
 asio::awaitable<TestResult>
     run_command_tools_tests(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
-
     auto run = [agentContext](auto testFn) -> asio::awaitable<void> {
         try {
             co_await testFn(agentContext);

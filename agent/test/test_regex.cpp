@@ -9,7 +9,6 @@ int g_regex_passed = 0;
 int g_regex_failed = 0;
 
 void test_regex_create() {
-
     auto re = XXRegex::createRegex("hello");
     XX_TEST_EXPECT_TRUE(re != nullptr);
 
@@ -24,7 +23,6 @@ void test_regex_create() {
 }
 
 void test_regex_match_basic() {
-
     auto                            re = XXRegex::createRegex("hello");
     std::vector<XXRegexMatchResult> results;
 
@@ -38,7 +36,6 @@ void test_regex_match_basic() {
 }
 
 void test_regex_match_multi() {
-
     auto                            re = XXRegex::createRegex("ab");
     std::vector<XXRegexMatchResult> results;
 
@@ -53,7 +50,6 @@ void test_regex_match_multi() {
 }
 
 void test_regex_match_overlap_merge() {
-
     // 多模式场景：不同模式产生重叠匹配，应合并 [1,3) [2,4) -> [1,4)
     auto                            re = XXRegex::createRegex(std::vector<std::string>{"ab", "bc"});
     std::vector<XXRegexMatchResult> results;
@@ -65,7 +61,6 @@ void test_regex_match_overlap_merge() {
 }
 
 void test_regex_match_adjacent_no_merge() {
-
     // 相邻区间 [0,2) [2,4) 不应合并
     auto                            re = XXRegex::createRegex("ab");
     std::vector<XXRegexMatchResult> results;
@@ -79,7 +74,6 @@ void test_regex_match_adjacent_no_merge() {
 }
 
 void test_regex_match_empty_input() {
-
     auto                            re = XXRegex::createRegex("hello");
     std::vector<XXRegexMatchResult> results;
 
@@ -88,7 +82,6 @@ void test_regex_match_empty_input() {
 }
 
 void test_regex_match_dot_star() {
-
     auto                            re = XXRegex::createRegex("a.*b");
     std::vector<XXRegexMatchResult> results;
 
@@ -104,7 +97,6 @@ void test_regex_match_dot_star() {
 }
 
 void test_regex_match_multi_pattern() {
-
     auto re = XXRegex::createRegex(std::vector<std::string>{"foo", "bar"});
     std::vector<XXRegexMatchResult> results;
 
@@ -122,7 +114,6 @@ void test_regex_match_multi_pattern() {
 }
 
 void test_regex_remove_basic() {
-
     auto                            re = XXRegex::createRegex("abc");
     std::vector<XXRegexMatchResult> results;
 
@@ -134,7 +125,6 @@ void test_regex_remove_basic() {
 }
 
 void test_regex_remove_no_match() {
-
     auto                            re = XXRegex::createRegex("xyz");
     std::vector<XXRegexMatchResult> results;
 
@@ -144,7 +134,6 @@ void test_regex_remove_no_match() {
 }
 
 void test_regex_remove_multi() {
-
     auto                            re = XXRegex::createRegex("XX");
     std::vector<XXRegexMatchResult> results;
 
@@ -154,7 +143,6 @@ void test_regex_remove_multi() {
 }
 
 void test_regex_remove_all() {
-
     auto                            re = XXRegex::createRegex(".+");
     std::vector<XXRegexMatchResult> results;
 
@@ -164,7 +152,6 @@ void test_regex_remove_all() {
 }
 
 void test_regex_replace_basic() {
-
     auto                            re = XXRegex::createRegex("cat");
     std::vector<XXRegexMatchResult> results;
 
@@ -176,7 +163,6 @@ void test_regex_replace_basic() {
 }
 
 void test_regex_replace_no_match() {
-
     auto                            re = XXRegex::createRegex("xyz");
     std::vector<XXRegexMatchResult> results;
 
@@ -186,7 +172,6 @@ void test_regex_replace_no_match() {
 }
 
 void test_regex_replace_multi() {
-
     auto                            re = XXRegex::createRegex("XX");
     std::vector<XXRegexMatchResult> results;
 
@@ -196,7 +181,6 @@ void test_regex_replace_multi() {
 }
 
 void test_regex_replace_with_empty() {
-
     auto                            re = XXRegex::createRegex("XX");
     std::vector<XXRegexMatchResult> results;
 
@@ -206,7 +190,6 @@ void test_regex_replace_with_empty() {
 }
 
 void test_regex_digit_match() {
-
     auto                            re = XXRegex::createRegex("\\d+");
     std::vector<XXRegexMatchResult> results;
 
@@ -219,7 +202,6 @@ void test_regex_digit_match() {
 }
 
 void test_regex_alternation() {
-
     auto                            re = XXRegex::createRegex("cat|dog");
     std::vector<XXRegexMatchResult> results;
 
@@ -234,7 +216,6 @@ void test_regex_alternation() {
 }
 
 void test_regex_chinese() {
-
     auto                            re = XXRegex::createRegex("你好");
     std::vector<XXRegexMatchResult> results;
 
@@ -243,7 +224,6 @@ void test_regex_chinese() {
 }
 
 void test_regex_case_sensitive() {
-
     auto                            re = XXRegex::createRegex("hello");
     std::vector<XXRegexMatchResult> results;
 
@@ -255,7 +235,6 @@ void test_regex_case_sensitive() {
 }
 
 void test_regex_only_contains() {
-
     auto re = XXRegex::createRegex("hello", XXRegex::defHSFlags_onlyContains);
     std::vector<XXRegexMatchResult> results;
 
@@ -264,7 +243,6 @@ void test_regex_only_contains() {
 }
 
 void test_regex_invalid_pattern() {
-
     auto                            re = XXRegex::createRegex("[unclosed");
     std::vector<XXRegexMatchResult> results;
 
@@ -272,7 +250,6 @@ void test_regex_invalid_pattern() {
 }
 
 void test_regex_exact_match() {
-
     auto                            re = XXRegex::createRegex("^hello$");
     std::vector<XXRegexMatchResult> results;
 
@@ -286,7 +263,6 @@ void test_regex_exact_match() {
 }
 
 void test_regex_start_anchor() {
-
     auto                            re = XXRegex::createRegex("^hello");
     std::vector<XXRegexMatchResult> results;
 
@@ -298,7 +274,6 @@ void test_regex_start_anchor() {
 }
 
 void test_regex_end_anchor() {
-
     auto                            re = XXRegex::createRegex("world$");
     std::vector<XXRegexMatchResult> results;
 
@@ -310,7 +285,6 @@ void test_regex_end_anchor() {
 }
 
 void test_regex_word_no_newline() {
-
     // \w 不应匹配换行符 \n / \r
     auto                            re = XXRegex::createRegex("\\w");
     std::vector<XXRegexMatchResult> results;

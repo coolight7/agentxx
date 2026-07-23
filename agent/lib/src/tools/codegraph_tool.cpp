@@ -13,7 +13,8 @@ namespace tools {
 
 CodeGraphSearchTool::CodeGraphSearchTool(
     std::shared_ptr<agentxx::expand::CodeGraphManager> in_codegraph,
-    std::weak_ptr<agentxx::agent::AgentContext>        in_agentContext) :
+    std::weak_ptr<agentxx::agent::AgentContext>        in_agentContext
+) :
     XXToolBase("codegraph_search", in_agentContext, true, true),
     codegraph(std::move(in_codegraph)) {}
 
@@ -77,7 +78,8 @@ asio::awaitable<std::string> CodeGraphSearchTool::execute_async(const neograph::
 
 CodeGraphContextTool::CodeGraphContextTool(
     std::shared_ptr<agentxx::expand::CodeGraphManager> in_codegraph,
-    std::weak_ptr<agentxx::agent::AgentContext>        in_agentContext) :
+    std::weak_ptr<agentxx::agent::AgentContext>        in_agentContext
+) :
     XXToolBase("codegraph_context", in_agentContext, true, true),
     codegraph(std::move(in_codegraph)) {}
 
@@ -138,7 +140,8 @@ asio::awaitable<std::string> CodeGraphContextTool::execute_async(const neograph:
 
 CodeGraphCallersTool::CodeGraphCallersTool(
     std::shared_ptr<agentxx::expand::CodeGraphManager> in_codegraph,
-    std::weak_ptr<agentxx::agent::AgentContext>        in_agentContext) :
+    std::weak_ptr<agentxx::agent::AgentContext>        in_agentContext
+) :
     XXToolBase("codegraph_callers", in_agentContext, true, true),
     codegraph(std::move(in_codegraph)) {}
 
@@ -190,7 +193,8 @@ asio::awaitable<std::string> CodeGraphCallersTool::execute_async(const neograph:
 
 CodeGraphCalleesTool::CodeGraphCalleesTool(
     std::shared_ptr<agentxx::expand::CodeGraphManager> in_codegraph,
-    std::weak_ptr<agentxx::agent::AgentContext>        in_agentContext) :
+    std::weak_ptr<agentxx::agent::AgentContext>        in_agentContext
+) :
     XXToolBase("codegraph_callees", in_agentContext, true, true),
     codegraph(std::move(in_codegraph)) {}
 
@@ -242,7 +246,8 @@ asio::awaitable<std::string> CodeGraphCalleesTool::execute_async(const neograph:
 
 CodeGraphImpactTool::CodeGraphImpactTool(
     std::shared_ptr<agentxx::expand::CodeGraphManager> in_codegraph,
-    std::weak_ptr<agentxx::agent::AgentContext>        in_agentContext) :
+    std::weak_ptr<agentxx::agent::AgentContext>        in_agentContext
+) :
     XXToolBase("codegraph_impact", in_agentContext, true, true),
     codegraph(std::move(in_codegraph)) {}
 
@@ -294,7 +299,8 @@ asio::awaitable<std::string> CodeGraphImpactTool::execute_async(const neograph::
 
 CodeGraphStatusTool::CodeGraphStatusTool(
     std::shared_ptr<agentxx::expand::CodeGraphManager> in_codegraph,
-    std::weak_ptr<agentxx::agent::AgentContext>        in_agentContext) :
+    std::weak_ptr<agentxx::agent::AgentContext>        in_agentContext
+) :
     XXToolBase("codegraph_status", in_agentContext, false, true),
     codegraph(std::move(in_codegraph)) {}
 
@@ -323,12 +329,14 @@ asio::awaitable<std::string> CodeGraphStatusTool::execute_async(const neograph::
         result.total_nodes,
         result.total_edges,
         result.total_files,
-        result.circular_deps);
+        result.circular_deps
+    );
 }
 
 CodeGraphIndexTool::CodeGraphIndexTool(
     std::shared_ptr<agentxx::expand::CodeGraphManager> in_codegraph,
-    std::weak_ptr<agentxx::agent::AgentContext>        in_agentContext) :
+    std::weak_ptr<agentxx::agent::AgentContext>        in_agentContext
+) :
     XXToolBase("codegraph_index", in_agentContext, false, false),
     codegraph(std::move(in_codegraph)) {}
 
@@ -379,7 +387,8 @@ asio::awaitable<std::string> CodeGraphIndexTool::execute_async(const neograph::j
             R"({{"success":true,"total_nodes":{},"total_edges":{},"total_files":{}}})",
             status.total_nodes,
             status.total_edges,
-            status.total_files);
+            status.total_files
+        );
     } else {
         co_return R"({"error":"Indexing failed"})";
     }
@@ -387,7 +396,8 @@ asio::awaitable<std::string> CodeGraphIndexTool::execute_async(const neograph::j
 
 CodeGraphPathTool::CodeGraphPathTool(
     std::shared_ptr<agentxx::expand::CodeGraphManager> in_codegraph,
-    std::weak_ptr<agentxx::agent::AgentContext>        in_agentContext) :
+    std::weak_ptr<agentxx::agent::AgentContext>        in_agentContext
+) :
     XXToolBase("codegraph_path", in_agentContext, true, true),
     codegraph(std::move(in_codegraph)) {}
 

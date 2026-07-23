@@ -5,12 +5,14 @@ namespace nodes {
 
 AgentStartCallWrapNode::AgentStartCallWrapNode(
     const std::string&                          name,
-    std::weak_ptr<agentxx::agent::AgentContext> in_agentContext) :
+    std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
+) :
     WrapHandleBaseNode<agentxx::nodes::WarpBaseNodeInterface>(name, in_agentContext) {}
 
-asio::awaitable<void>
-    AgentStartCallWrapNode::onHandleStart(agentxx::middleware::BaseMiddlewareHandleInterface& item,
-                                          neograph::graph::NodeInput&                         in) {
+asio::awaitable<void> AgentStartCallWrapNode::onHandleStart(
+    agentxx::middleware::BaseMiddlewareHandleInterface& item,
+    neograph::graph::NodeInput&                         in
+) {
     {
         // 创建单次执行的临时数据
         auto ptr = agentContext.lock();
@@ -20,28 +22,32 @@ asio::awaitable<void>
     co_await item.onAgentcallStartFunc(in);
 }
 
-asio::awaitable<void>
-    AgentStartCallWrapNode::onHandleEnd(agentxx::middleware::BaseMiddlewareHandleInterface& item,
-                                        const neograph::graph::NodeInput&                   in,
-                                        neograph::graph::NodeOutput& result) {
+asio::awaitable<void> AgentStartCallWrapNode::onHandleEnd(
+    agentxx::middleware::BaseMiddlewareHandleInterface& item,
+    const neograph::graph::NodeInput&                   in,
+    neograph::graph::NodeOutput&                        result
+) {
     co_return;
 }
 
 MiddlewareWrapAgentEndCallNode::MiddlewareWrapAgentEndCallNode(
     const std::string&                          name,
-    std::weak_ptr<agentxx::agent::AgentContext> in_agentContext) :
+    std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
+) :
     WrapHandleBaseNode<agentxx::nodes::WarpBaseNodeInterface>(name, in_agentContext) {}
 
 asio::awaitable<void> MiddlewareWrapAgentEndCallNode::onHandleStart(
     agentxx::middleware::BaseMiddlewareHandleInterface& item,
-    neograph::graph::NodeInput&                         in) {
+    neograph::graph::NodeInput&                         in
+) {
     co_return;
 }
 
 asio::awaitable<void> MiddlewareWrapAgentEndCallNode::onHandleEnd(
     agentxx::middleware::BaseMiddlewareHandleInterface& item,
     const neograph::graph::NodeInput&                   in,
-    neograph::graph::NodeOutput&                        result) {
+    neograph::graph::NodeOutput&                        result
+) {
     co_await item.onAgentcallEndFunc(in, result);
 
     {
@@ -60,7 +66,8 @@ void MiddlewareWrapAgentEndCallNode::onHandleEndError(
     std::string_view                                    exceptionStr,
     agentxx::middleware::BaseMiddlewareHandleInterface& item,
     const neograph::graph::NodeInput&                   in,
-    neograph::graph::NodeOutput&                        result) noexcept {
+    neograph::graph::NodeOutput&                        result
+) noexcept {
     {
         // 清理单次执行的临时数据
         auto ptr = agentContext.lock();

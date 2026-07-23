@@ -216,7 +216,8 @@ public:
     [[nodiscard]] StringType removeAll(
         const StringViewType                                                       text,
         std::function<void(const std::vector<AhoCorasick::AhoCorasickMatchInfo>&)> onResults
-        = nullptr) const {
+        = nullptr
+    ) const {
         auto matches = search(text, false);
 
         if (nullptr != onResults) {

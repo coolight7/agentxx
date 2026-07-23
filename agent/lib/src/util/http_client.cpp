@@ -143,8 +143,10 @@ bool HttpClient::redirectChangesToGet(int status) noexcept {
     return status == 301 || status == 302 || status == 303;
 }
 
-std::string HttpClient::resolveRedirectUrl(std::string_view originalUrl,
-                                           std::string_view location) noexcept {
+std::string HttpClient::resolveRedirectUrl(
+    std::string_view originalUrl,
+    std::string_view location
+) noexcept {
     if (location.find("://") != std::string_view::npos) {
         return std::string(location);
     }
@@ -170,9 +172,11 @@ std::string HttpClient::resolveRedirectUrl(std::string_view originalUrl,
 const HeaderMap& HttpClient::defaultHeaders() {
     static const HeaderMap headers = [] {
         HeaderMap h;
-        h.set("User-Agent",
-              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-              "(KHTML, like Gecko) Chrome/119.0.6045.160 Safari/537.36");
+        h.set(
+            "User-Agent",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/119.0.6045.160 Safari/537.36"
+        );
         h.set("Accept", "*/*");
         h.set("Accept-Language", "zh-CN,zh;q=0.9");
         return h;
@@ -265,13 +269,14 @@ std::chrono::seconds HttpClient::calcSendTimeout(size_t bodyBytes) {
     return std::chrono::seconds{std::max<int64_t>(30, seconds)};
 }
 
-asio::awaitable<std::expected<HttpResponse, std::string>>
-    HttpClient::requestAsync(std::string_view     method,
-                             const std::string&   url,
-                             std::string_view     body,
-                             std::string_view     contentType,
-                             const HeaderMap&     extraHeaders,
-                             const RequestConfig& config) {
+asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::requestAsync(
+    std::string_view     method,
+    const std::string&   url,
+    std::string_view     body,
+    std::string_view     contentType,
+    const HeaderMap&     extraHeaders,
+    const RequestConfig& config
+) {
     namespace http = boost::beast::http;
     using asio::ip::tcp;
 
@@ -298,17 +303,21 @@ asio::awaitable<std::expected<HttpResponse, std::string>>
                 hostHeader += ":" + std::to_string(parsed->port);
             }
 
-            http::request<http::string_body> req{http::string_to_verb(currentMethod),
-                                                 parsed->path,
-                                                 11};
-            bool                             hasHost = extraHeaders.contains("host");
+            http::request<http::string_body> req{
+                http::string_to_verb(currentMethod),
+                parsed->path,
+                11
+            };
+            bool hasHost = extraHeaders.contains("host");
             if (!hasHost) {
                 req.set(http::field::host, hostHeader);
             }
-            req.set(http::field::user_agent,
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/119.0.6045.160 Safari/537.36");
+            req.set(
+                http::field::user_agent,
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/119.0.6045.160 Safari/537.36"
+            );
             req.set(http::field::accept, "*/*");
             req.set(http::field::accept_encoding, "identity");
             if (!config.keepAlive) {
@@ -332,7 +341,8 @@ asio::awaitable<std::expected<HttpResponse, std::string>>
             auto endpoints = co_await resolver.async_resolve(
                 parsed->host,
                 std::to_string(parsed->port),
-                asio::cancel_after(config.connectTimeout, asio::use_awaitable));
+                asio::cancel_after(config.connectTimeout, asio::use_awaitable)
+            );
 
             if (isHttps) {
                 bool verify
@@ -345,12 +355,14 @@ asio::awaitable<std::expected<HttpResponse, std::string>>
                 co_await asio::async_connect(
                     stream.lowest_layer(),
                     endpoints,
-                    asio::cancel_after(config.connectTimeout, asio::use_awaitable));
+                    asio::cancel_after(config.connectTimeout, asio::use_awaitable)
+                );
                 boost::system::error_code tcpEc;
                 stream.lowest_layer().set_option(asio::ip::tcp::no_delay(true), tcpEc);
                 co_await stream.async_handshake(
                     asio::ssl::stream_base::client,
-                    asio::cancel_after(config.connectTimeout, asio::use_awaitable));
+                    asio::cancel_after(config.connectTimeout, asio::use_awaitable)
+                );
                 result = co_await exchange(stream, req, config);
                 boost::system::error_code sslEc;
                 co_await stream.async_shutdown(asio::redirect_error(asio::use_awaitable, sslEc));
@@ -359,7 +371,8 @@ asio::awaitable<std::expected<HttpResponse, std::string>>
                 co_await asio::async_connect(
                     stream,
                     endpoints,
-                    asio::cancel_after(config.connectTimeout, asio::use_awaitable));
+                    asio::cancel_after(config.connectTimeout, asio::use_awaitable)
+                );
                 boost::system::error_code tcpEc;
                 stream.set_option(asio::ip::tcp::no_delay(true), tcpEc);
                 result = co_await exchange(stream, req, config);
@@ -411,71 +424,81 @@ bool HttpClient::getSslVerify() noexcept {
     return sslVerifyEnabled_.load(std::memory_order_relaxed);
 }
 
-asio::awaitable<std::expected<HttpResponse, std::string>>
-    HttpClient::getAsync(const std::string&   url,
-                         const HeaderMap&     extraHeaders,
-                         const RequestConfig& config) {
+asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::getAsync(
+    const std::string&   url,
+    const HeaderMap&     extraHeaders,
+    const RequestConfig& config
+) {
     co_return co_await requestAsync("GET", url, {}, "", extraHeaders, config);
 }
 
-asio::awaitable<std::expected<HttpResponse, std::string>>
-    HttpClient::headAsync(const std::string&   url,
-                          const HeaderMap&     extraHeaders,
-                          const RequestConfig& config) {
+asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::headAsync(
+    const std::string&   url,
+    const HeaderMap&     extraHeaders,
+    const RequestConfig& config
+) {
     co_return co_await requestAsync("HEAD", url, {}, "", extraHeaders, config);
 }
 
-asio::awaitable<std::expected<HttpResponse, std::string>>
-    HttpClient::postAsync(const std::string&    url,
-                          const neograph::json& body,
-                          const HeaderMap&      extraHeaders,
-                          const RequestConfig&  config) {
-    co_return co_await requestAsync("POST",
-                                    url,
-                                    body.dump(),
-                                    "application/json",
-                                    extraHeaders,
-                                    config);
+asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::postAsync(
+    const std::string&    url,
+    const neograph::json& body,
+    const HeaderMap&      extraHeaders,
+    const RequestConfig&  config
+) {
+    co_return co_await requestAsync(
+        "POST",
+        url,
+        body.dump(),
+        "application/json",
+        extraHeaders,
+        config
+    );
 }
 
-asio::awaitable<std::expected<HttpResponse, std::string>>
-    HttpClient::postAsync(const std::string&   url,
-                          std::string_view     body,
-                          std::string_view     contentType,
-                          const HeaderMap&     extraHeaders,
-                          const RequestConfig& config) {
+asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::postAsync(
+    const std::string&   url,
+    std::string_view     body,
+    std::string_view     contentType,
+    const HeaderMap&     extraHeaders,
+    const RequestConfig& config
+) {
     co_return co_await requestAsync("POST", url, body, contentType, extraHeaders, config);
 }
 
-asio::awaitable<std::expected<HttpResponse, std::string>>
-    HttpClient::putAsync(const std::string&   url,
-                         std::string_view     body,
-                         std::string_view     contentType,
-                         const HeaderMap&     extraHeaders,
-                         const RequestConfig& config) {
+asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::putAsync(
+    const std::string&   url,
+    std::string_view     body,
+    std::string_view     contentType,
+    const HeaderMap&     extraHeaders,
+    const RequestConfig& config
+) {
     co_return co_await requestAsync("PUT", url, body, contentType, extraHeaders, config);
 }
 
-asio::awaitable<std::expected<HttpResponse, std::string>>
-    HttpClient::patchAsync(const std::string&   url,
-                           std::string_view     body,
-                           std::string_view     contentType,
-                           const HeaderMap&     extraHeaders,
-                           const RequestConfig& config) {
+asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::patchAsync(
+    const std::string&   url,
+    std::string_view     body,
+    std::string_view     contentType,
+    const HeaderMap&     extraHeaders,
+    const RequestConfig& config
+) {
     co_return co_await requestAsync("PATCH", url, body, contentType, extraHeaders, config);
 }
 
-asio::awaitable<std::expected<HttpResponse, std::string>>
-    HttpClient::deleteAsync(const std::string&   url,
-                            const HeaderMap&     extraHeaders,
-                            const RequestConfig& config) {
+asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::deleteAsync(
+    const std::string&   url,
+    const HeaderMap&     extraHeaders,
+    const RequestConfig& config
+) {
     co_return co_await requestAsync("DELETE", url, {}, "", extraHeaders, config);
 }
 
-asio::awaitable<std::expected<HttpResponse, std::string>>
-    HttpClient::optionsAsync(const std::string&   url,
-                             const HeaderMap&     extraHeaders,
-                             const RequestConfig& config) {
+asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::optionsAsync(
+    const std::string&   url,
+    const HeaderMap&     extraHeaders,
+    const RequestConfig& config
+) {
     co_return co_await requestAsync("OPTIONS", url, {}, "", extraHeaders, config);
 }
 

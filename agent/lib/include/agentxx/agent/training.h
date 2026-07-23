@@ -39,8 +39,10 @@ inline std::vector<TrainingTestCase> loadTestCasesFromFile(const std::string& fi
             XX_LOGE("[Training] Failed to open test case file: {}", filePath);
             return cases;
         }
-        std::string content((std::istreambuf_iterator<char>(ifs)),
-                            std::istreambuf_iterator<char>());
+        std::string content(
+            (std::istreambuf_iterator<char>(ifs)),
+            std::istreambuf_iterator<char>()
+        );
         ifs.close();
 
         auto j = neograph::json::parse(content);
@@ -71,14 +73,18 @@ inline std::vector<TrainingTestCase> loadTestCasesFromDirectory(const std::strin
         for (const auto& entry : std::filesystem::directory_iterator(dirPath)) {
             if (entry.is_regular_file() && entry.path().extension() == ".json") {
                 auto fileCases = loadTestCasesFromFile(entry.path().string());
-                allCases.insert(allCases.end(),
-                                std::make_move_iterator(fileCases.begin()),
-                                std::make_move_iterator(fileCases.end()));
+                allCases.insert(
+                    allCases.end(),
+                    std::make_move_iterator(fileCases.begin()),
+                    std::make_move_iterator(fileCases.end())
+                );
             }
         }
-        XX_LOGD("[Training] Loaded {} total test cases from directory {}",
-                allCases.size(),
-                dirPath);
+        XX_LOGD(
+            "[Training] Loaded {} total test cases from directory {}",
+            allCases.size(),
+            dirPath
+        );
     } catch (const std::exception& e) {
         XX_LOGE("[Training] Failed to load test cases from directory {}: {}", dirPath, e.what());
     }
@@ -165,10 +171,11 @@ struct PromptVariant {
 // ======================== 回调类型 ========================
 
 /// 自定义评分回调
-using TrainingScoringFunc
-    = std::function<asio::awaitable<TrainingScore>(const std::string&      agentOutput,
-                                                   const TrainingTestCase& testCase,
-                                                   int                     iteration)>;
+using TrainingScoringFunc = std::function<asio::awaitable<TrainingScore>(
+    const std::string&      agentOutput,
+    const TrainingTestCase& testCase,
+    int                     iteration
+)>;
 
 /// 迭代观察回调
 using TrainingIterationCallback
@@ -380,9 +387,11 @@ protected:
     /// 设置 agent 的 system prompt 后发起一次非流式对话
     /// 注意: ModelCallWrapNode 会用 agentConfig->prompt.systemPrompt 覆盖
     /// 输入中的 system 消息，因此必须写入 config 而非通过消息传入
-    asio::awaitable<std::string> runLLMAgent(std::shared_ptr<agentxx::agent::DeepAgent> agent,
-                                             const std::string& systemPrompt,
-                                             const std::string& userContent);
+    asio::awaitable<std::string> runLLMAgent(
+        std::shared_ptr<agentxx::agent::DeepAgent> agent,
+        const std::string&                         systemPrompt,
+        const std::string&                         userContent
+    );
 
     /// 将变体的完整 prompt 写入 trainAgent 的运行时配置
     /// 这是让变体真正生效的关键：ModelCallWrapNode / 各 middleware / 各 tool
@@ -404,21 +413,25 @@ protected:
 
     // ---- 评分 ----
 
-    asio::awaitable<TrainingScore> defaultScoringWithSubAgent(std::string_view        agentOutput,
-                                                              const TrainingTestCase& testCase,
-                                                              int                     iteration,
-                                                              const EvolutionTrainingConfig& cfg);
+    asio::awaitable<TrainingScore> defaultScoringWithSubAgent(
+        std::string_view               agentOutput,
+        const TrainingTestCase&        testCase,
+        int                            iteration,
+        const EvolutionTrainingConfig& cfg
+    );
 
     // ---- Prompt 优化 ----
 
     /// 构建用于优化器/变异器的上下文消息：包含当前完整 prompt
     std::string buildPromptContextMessage(const PromptVariant& variant) const;
 
-    asio::awaitable<OptimizedPrompts> optimizeVariantWithLLM(const PromptVariant&    variant,
-                                                             const TrainingTestCase& testCase,
-                                                             const std::string&      agentOutput,
-                                                             const TrainingScore&    score,
-                                                             const EvolutionTrainingConfig& cfg);
+    asio::awaitable<OptimizedPrompts> optimizeVariantWithLLM(
+        const PromptVariant&           variant,
+        const TrainingTestCase&        testCase,
+        const std::string&             agentOutput,
+        const TrainingScore&           score,
+        const EvolutionTrainingConfig& cfg
+    );
 
     // ---- 变异操作 ----
 
@@ -431,8 +444,8 @@ protected:
     PromptVariant createChildVariantCharMut(const PromptVariant& parent, double mutationRate);
 
     /// 使用 LLM 对 prompt 进行语义级变异，生成多样化的探索变体
-    asio::awaitable<PromptVariant> createChildVariantLLMMut(const PromptVariant&           parent,
-                                                            const EvolutionTrainingConfig& cfg);
+    asio::awaitable<PromptVariant>
+        createChildVariantLLMMut(const PromptVariant& parent, const EvolutionTrainingConfig& cfg);
 
     // ---- 评估单个变体 ----
 
@@ -443,8 +456,8 @@ protected:
         TrainingScore           worstCaseScore;
     };
 
-    asio::awaitable<EvaluationResult> evaluateVariant(PromptVariant&                 variant,
-                                                      const EvolutionTrainingConfig& cfg);
+    asio::awaitable<EvaluationResult>
+        evaluateVariant(PromptVariant& variant, const EvolutionTrainingConfig& cfg);
 
     // ---- 去重 ----
 
@@ -452,9 +465,11 @@ protected:
 
 public:
 
-    EvolutionTrainingAgent(std::shared_ptr<agentxx::agent::DeepAgent> in_scoreAgent,
-                           std::shared_ptr<agentxx::agent::DeepAgent> in_trainAgent,
-                           std::shared_ptr<agentxx::agent::DeepAgent> in_optimizerAgent = nullptr);
+    EvolutionTrainingAgent(
+        std::shared_ptr<agentxx::agent::DeepAgent> in_scoreAgent,
+        std::shared_ptr<agentxx::agent::DeepAgent> in_trainAgent,
+        std::shared_ptr<agentxx::agent::DeepAgent> in_optimizerAgent = nullptr
+    );
 
     // ---- 初始化种子 prompt ----
 

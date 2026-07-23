@@ -26,8 +26,8 @@ asio::awaitable<void>
     co_return;
 }
 
-asio::awaitable<void>
-    test_datetime_execute(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+asio::awaitable<void> test_datetime_execute(std::weak_ptr<agentxx::agent::AgentContext> agentContext
+) {
     auto tool   = agentxx::tools::GetCurrentDateTimeTool{agentContext};
     auto result = co_await tool.execute_async(neograph::json{});
 
@@ -122,7 +122,6 @@ asio::awaitable<void>
 
 asio::awaitable<TestResult>
     run_datetime_tool_tests(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
-
     auto run = [agentContext](auto testFn) -> asio::awaitable<void> {
         try {
             co_await testFn(agentContext);

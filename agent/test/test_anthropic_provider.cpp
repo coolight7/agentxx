@@ -27,11 +27,13 @@ using namespace agentxx::util;
 namespace server = agentxx::server;
 
 namespace {
-agentxx::agent::ModelConfig makeAntCfg(const std::string& apiKey,
-                                       const std::string& baseUrl,
-                                       int                connectTO    = 10,
-                                       int                readTO       = 10,
-                                       bool               sendThinking = false) {
+agentxx::agent::ModelConfig makeAntCfg(
+    const std::string& apiKey,
+    const std::string& baseUrl,
+    int                connectTO    = 10,
+    int                readTO       = 10,
+    bool               sendThinking = false
+) {
     agentxx::agent::ModelConfig mc;
     mc.name                  = "test";
     mc.apiKey                = apiKey;
@@ -194,9 +196,8 @@ void test_convert_messages_thinking_disabled() {
 
 void test_convert_messages_thinking_default_disabled() {
     std::vector<neograph::ChatMessage> msgs = {
-        {.role              = "assistant",
-         .content           = "No thinking sent",
-         .reasoning_content = "Hidden reasoning"},
+        {.role = "assistant", .content = "No thinking sent", .reasoning_content = "Hidden reasoning"
+        },
     };
     auto [system, arr] = server::AnthropicProvider::convertMessages(msgs); // default false
     XX_TEST_EXPECT_TRUE(arr[0]["content"].is_string());
@@ -267,8 +268,9 @@ void test_convert_tools() {
     std::vector<neograph::ChatTool> tools = {
         {.name        = "get_weather",
          .description = "Get weather",
-         .parameters  = neograph::json::parse(
-             R"({"type":"object","properties":{"location":{"type":"string"}}})")},
+         .parameters
+         = neograph::json::parse(R"({"type":"object","properties":{"location":{"type":"string"}}})")
+        },
     };
     auto arr = server::AnthropicProvider::convertTools(tools);
     XX_TEST_EXPECT_EQ(arr.size(), (size_t)1);
@@ -315,8 +317,9 @@ void test_parse_response_tool_use() {
     XX_TEST_EXPECT_EQ(completion.message.tool_calls.size(), (size_t)1);
     XX_TEST_EXPECT_EQ(completion.message.tool_calls[0].id, "toolu_01");
     XX_TEST_EXPECT_EQ(completion.message.tool_calls[0].name, "get_weather");
-    XX_TEST_EXPECT_TRUE(completion.message.tool_calls[0].arguments.find("Tokyo")
-                        != std::string::npos);
+    XX_TEST_EXPECT_TRUE(
+        completion.message.tool_calls[0].arguments.find("Tokyo") != std::string::npos
+    );
 }
 
 void test_parse_response_thinking() {
@@ -415,7 +418,8 @@ public:
       "usage": {"input_tokens": )"
             + std::to_string(inputTok) + R"(, "output_tokens": )" + std::to_string(outputTok)
             + R"(}
-    })");
+    })"
+        );
     }
 
     neograph::json makeToolCallResponse() const {
@@ -454,30 +458,39 @@ std::unique_ptr<MockAnthropicServer> startAnthropicMockServer(uint16_t& outPort)
     mock->sseChunks = {
         MockAnthropicServer::sseEvent(
             "message_start",
-            R"({"type":"message_start","message":{"id":"msg_stream","type":"message","role":"assistant","usage":{"input_tokens":5}}})"),
+            R"({"type":"message_start","message":{"id":"msg_stream","type":"message","role":"assistant","usage":{"input_tokens":5}}})"
+        ),
         MockAnthropicServer::sseEvent(
             "content_block_start",
-            R"({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}})"),
+            R"({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}})"
+        ),
         MockAnthropicServer::sseEvent(
             "content_block_delta",
-            R"({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}})"),
+            R"({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}})"
+        ),
         MockAnthropicServer::sseEvent(
             "content_block_delta",
-            R"({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" world"}})"),
-        MockAnthropicServer::sseEvent("content_block_stop",
-                                      R"({"type":"content_block_stop","index":0})"),
+            R"({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" world"}})"
+        ),
+        MockAnthropicServer::sseEvent(
+            "content_block_stop",
+            R"({"type":"content_block_stop","index":0})"
+        ),
         MockAnthropicServer::sseEvent(
             "message_delta",
-            R"({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}})"),
+            R"({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}})"
+        ),
         MockAnthropicServer::sseEvent("message_stop", R"({"type":"message_stop"})"),
     };
 
     mock->server = std::make_unique<HttpServer>(
-        HttpServer::Config{.address = "127.0.0.1", .port = 0, .ioThreads = 1});
+        HttpServer::Config{.address = "127.0.0.1", .port = 0, .ioThreads = 1}
+    );
 
-    auto handle = [mock = mock.get()](HttpServer::Request&  req,
-                                      HttpServer::Response& resp,
-                                      const std::string&) -> asio::awaitable<void> {
+    auto handle = [mock = mock.get(
+                   )](HttpServer::Request&  req,
+                      HttpServer::Response& resp,
+                      const std::string&) -> asio::awaitable<void> {
         mock->lastRequestBody = req.body();
         // Capture headers for verification
         std::string headers;
@@ -487,41 +500,40 @@ std::unique_ptr<MockAnthropicServer> startAnthropicMockServer(uint16_t& outPort)
         mock->lastRequestHeaders = headers;
 
         switch (mock->mode) {
-        case AnthropicMockMode::RateLimit:
-            resp.result(boost::beast::http::status::too_many_requests);
-            resp.set(boost::beast::http::field::content_type, "application/json");
-            resp.set(boost::beast::http::field::retry_after, "7");
-            resp.body()
-                = R"({"type":"error","error":{"type":"rate_limit_error","message":"Rate limit exceeded"}})";
-            resp.prepare_payload();
-            break;
+            case AnthropicMockMode::RateLimit:
+                resp.result(boost::beast::http::status::too_many_requests);
+                resp.set(boost::beast::http::field::content_type, "application/json");
+                resp.set(boost::beast::http::field::retry_after, "7");
+                resp.body(
+                ) = R"({"type":"error","error":{"type":"rate_limit_error","message":"Rate limit exceeded"}})";
+                resp.prepare_payload();
+                break;
 
-        case AnthropicMockMode::ServerError:
-            resp.result(boost::beast::http::status::internal_server_error);
-            resp.set(boost::beast::http::field::content_type, "application/json");
-            resp.body()
-                = R"({"type":"error","error":{"type":"api_error","message":"Internal error"}})";
-            resp.prepare_payload();
-            break;
+            case AnthropicMockMode::ServerError:
+                resp.result(boost::beast::http::status::internal_server_error);
+                resp.set(boost::beast::http::field::content_type, "application/json");
+                resp.body()
+                    = R"({"type":"error","error":{"type":"api_error","message":"Internal error"}})";
+                resp.prepare_payload();
+                break;
 
-        case AnthropicMockMode::ToolCall:
-            resp.result(boost::beast::http::status::ok);
-            resp.set(boost::beast::http::field::content_type, "application/json");
-            resp.body() = mock->makeToolCallResponse().dump();
-            resp.prepare_payload();
-            break;
+            case AnthropicMockMode::ToolCall:
+                resp.result(boost::beast::http::status::ok);
+                resp.set(boost::beast::http::field::content_type, "application/json");
+                resp.body() = mock->makeToolCallResponse().dump();
+                resp.prepare_payload();
+                break;
 
-        case AnthropicMockMode::Thinking:
-            resp.result(boost::beast::http::status::ok);
-            resp.set(boost::beast::http::field::content_type, "application/json");
-            resp.body() = mock->makeThinkingResponse().dump();
-            resp.prepare_payload();
-            break;
+            case AnthropicMockMode::Thinking:
+                resp.result(boost::beast::http::status::ok);
+                resp.set(boost::beast::http::field::content_type, "application/json");
+                resp.body() = mock->makeThinkingResponse().dump();
+                resp.prepare_payload();
+                break;
 
-        case AnthropicMockMode::Streaming:
-        case AnthropicMockMode::StreamingThinking:
-        case AnthropicMockMode::StreamingToolCall:
-            {
+            case AnthropicMockMode::Streaming:
+            case AnthropicMockMode::StreamingThinking:
+            case AnthropicMockMode::StreamingToolCall: {
                 resp.result(boost::beast::http::status::ok);
                 resp.set(boost::beast::http::field::content_type, "text/event-stream");
                 resp.set(boost::beast::http::field::cache_control, "no-cache");
@@ -535,18 +547,18 @@ std::unique_ptr<MockAnthropicServer> startAnthropicMockServer(uint16_t& outPort)
                 break;
             }
 
-        case AnthropicMockMode::Normal:
-        default:
-            resp.result(boost::beast::http::status::ok);
-            resp.set(boost::beast::http::field::content_type, "application/json");
-            if (mock->customResponse.has_value()) {
-                resp.body() = mock->customResponse->dump();
-                mock->customResponse.reset();
-            } else {
-                resp.body() = mock->makeTextResponse("Hello from Claude!").dump();
-            }
-            resp.prepare_payload();
-            break;
+            case AnthropicMockMode::Normal:
+            default:
+                resp.result(boost::beast::http::status::ok);
+                resp.set(boost::beast::http::field::content_type, "application/json");
+                if (mock->customResponse.has_value()) {
+                    resp.body() = mock->customResponse->dump();
+                    mock->customResponse.reset();
+                } else {
+                    resp.body() = mock->makeTextResponse("Hello from Claude!").dump();
+                }
+                resp.prepare_payload();
+                break;
         }
         co_return;
     };
@@ -636,7 +648,9 @@ asio::awaitable<void> test_non_streaming_tool_call(MockAnthropicServer& mock, ui
                            .name        = "get_weather",
                            .description = "Get weather",
                            .parameters  = neograph::json::parse(
-                R"({"type":"object","properties":{"location":{"type":"string"}}})")}
+                R"({"type":"object","properties":{"location":{"type":"string"}}})"
+            )
+        }
     };
 
     try {
@@ -645,8 +659,9 @@ asio::awaitable<void> test_non_streaming_tool_call(MockAnthropicServer& mock, ui
         XX_TEST_EXPECT_FALSE(result.message.tool_calls.empty());
         if (!result.message.tool_calls.empty()) {
             XX_TEST_EXPECT_EQ(result.message.tool_calls[0].name, "get_weather");
-            XX_TEST_EXPECT_TRUE(result.message.tool_calls[0].arguments.find("Tokyo")
-                                != std::string::npos);
+            XX_TEST_EXPECT_TRUE(
+                result.message.tool_calls[0].arguments.find("Tokyo") != std::string::npos
+            );
         }
     } catch (const std::exception& e) {
         XX_TEST_FAILED++;
@@ -670,8 +685,9 @@ asio::awaitable<void> test_non_streaming_thinking(MockAnthropicServer& mock, uin
         auto result = co_await provider->invoke(params, nullptr);
         XX_TEST_EXPECT_EQ(result.message.content, "The answer is 42.");
         XX_TEST_EXPECT_TRUE(!result.message.reasoning_content.empty());
-        XX_TEST_EXPECT_TRUE(result.message.reasoning_content.find("reasoning")
-                            != std::string::npos);
+        XX_TEST_EXPECT_TRUE(
+            result.message.reasoning_content.find("reasoning") != std::string::npos
+        );
     } catch (const std::exception& e) {
         XX_TEST_FAILED++;
         TEST_FAIL << "thinking test failed: " << e.what() << std::endl;
@@ -752,10 +768,12 @@ asio::awaitable<void> test_request_headers(MockAnthropicServer& mock, uint16_t p
 
     try {
         co_await provider->invoke(params, nullptr);
-        XX_TEST_EXPECT_TRUE(mock.lastRequestHeaders.find("x-api-key: sk-ant-header-test")
-                            != std::string::npos);
-        XX_TEST_EXPECT_TRUE(mock.lastRequestHeaders.find("anthropic-version: 2023-06-01")
-                            != std::string::npos);
+        XX_TEST_EXPECT_TRUE(
+            mock.lastRequestHeaders.find("x-api-key: sk-ant-header-test") != std::string::npos
+        );
+        XX_TEST_EXPECT_TRUE(
+            mock.lastRequestHeaders.find("anthropic-version: 2023-06-01") != std::string::npos
+        );
     } catch (const std::exception& e) {
         XX_TEST_FAILED++;
         TEST_FAIL << "request headers test failed: " << e.what() << std::endl;
@@ -775,10 +793,11 @@ asio::awaitable<void> test_request_body_format(MockAnthropicServer& mock, uint16
         neograph::ChatMessage{.role = "user",   .content = "Hi"         },
     };
     params.tools = {
-        neograph::ChatTool{.name        = "search",
+        neograph::ChatTool{
+                           .name        = "search",
                            .description = "Search the web",
-                           .parameters
-                           = neograph::json::parse(R"({"type":"object","properties":{}})")}
+                           .parameters  = neograph::json::parse(R"({"type":"object","properties":{}})")
+        }
     };
 
     try {
@@ -816,9 +835,11 @@ asio::awaitable<void> test_sendthinking_in_request_body(MockAnthropicServer& moc
     neograph::CompletionParams params;
     params.model    = "claude-sonnet-4-20250514";
     params.messages = {
-        neograph::ChatMessage{.role              = "assistant",
+        neograph::ChatMessage{
+                              .role              = "assistant",
                               .content           = "Final answer",
-                              .reasoning_content = "Deep thinking..."},
+                              .reasoning_content = "Deep thinking..."
+        },
         neograph::ChatMessage{.role = "user", .content = "Continue"}
     };
 
@@ -830,11 +851,15 @@ asio::awaitable<void> test_sendthinking_in_request_body(MockAnthropicServer& moc
         XX_TEST_EXPECT_TRUE(sent["messages"][0]["content"].is_array());
         XX_TEST_EXPECT_EQ(sent["messages"][0]["content"].size(), (size_t)2);
         XX_TEST_EXPECT_EQ(sent["messages"][0]["content"][0]["type"].get<std::string>(), "thinking");
-        XX_TEST_EXPECT_EQ(sent["messages"][0]["content"][0]["thinking"].get<std::string>(),
-                          "Deep thinking...");
+        XX_TEST_EXPECT_EQ(
+            sent["messages"][0]["content"][0]["thinking"].get<std::string>(),
+            "Deep thinking..."
+        );
         XX_TEST_EXPECT_EQ(sent["messages"][0]["content"][1]["type"].get<std::string>(), "text");
-        XX_TEST_EXPECT_EQ(sent["messages"][0]["content"][1]["text"].get<std::string>(),
-                          "Final answer");
+        XX_TEST_EXPECT_EQ(
+            sent["messages"][0]["content"][1]["text"].get<std::string>(),
+            "Final answer"
+        );
     } catch (const std::exception& e) {
         XX_TEST_FAILED++;
         TEST_FAIL << "sendThinking integration test failed: " << e.what() << std::endl;
@@ -849,21 +874,28 @@ asio::awaitable<void> test_streaming_completion(MockAnthropicServer& mock, uint1
     mock.sseChunks = {
         MockAnthropicServer::sseEvent(
             "message_start",
-            R"({"type":"message_start","message":{"id":"msg_s","type":"message","role":"assistant","usage":{"input_tokens":5}}})"),
+            R"({"type":"message_start","message":{"id":"msg_s","type":"message","role":"assistant","usage":{"input_tokens":5}}})"
+        ),
         MockAnthropicServer::sseEvent(
             "content_block_start",
-            R"({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}})"),
+            R"({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}})"
+        ),
         MockAnthropicServer::sseEvent(
             "content_block_delta",
-            R"({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}})"),
+            R"({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}})"
+        ),
         MockAnthropicServer::sseEvent(
             "content_block_delta",
-            R"({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" world"}})"),
-        MockAnthropicServer::sseEvent("content_block_stop",
-                                      R"({"type":"content_block_stop","index":0})"),
+            R"({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" world"}})"
+        ),
+        MockAnthropicServer::sseEvent(
+            "content_block_stop",
+            R"({"type":"content_block_stop","index":0})"
+        ),
         MockAnthropicServer::sseEvent(
             "message_delta",
-            R"({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}})"),
+            R"({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}})"
+        ),
         MockAnthropicServer::sseEvent("message_stop", R"({"type":"message_stop"})"),
     };
 
@@ -899,29 +931,40 @@ asio::awaitable<void> test_streaming_thinking(MockAnthropicServer& mock, uint16_
     mock.sseChunks = {
         MockAnthropicServer::sseEvent(
             "message_start",
-            R"({"type":"message_start","message":{"id":"msg_t","type":"message","role":"assistant","usage":{"input_tokens":5}}})"),
+            R"({"type":"message_start","message":{"id":"msg_t","type":"message","role":"assistant","usage":{"input_tokens":5}}})"
+        ),
         MockAnthropicServer::sseEvent(
             "content_block_start",
-            R"({"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}})"),
+            R"({"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}})"
+        ),
         MockAnthropicServer::sseEvent(
             "content_block_delta",
-            R"({"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Let me think"}})"),
+            R"({"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Let me think"}})"
+        ),
         MockAnthropicServer::sseEvent(
             "content_block_delta",
-            R"({"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":" carefully..."}})"),
-        MockAnthropicServer::sseEvent("content_block_stop",
-                                      R"({"type":"content_block_stop","index":0})"),
+            R"({"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":" carefully..."}})"
+        ),
+        MockAnthropicServer::sseEvent(
+            "content_block_stop",
+            R"({"type":"content_block_stop","index":0})"
+        ),
         MockAnthropicServer::sseEvent(
             "content_block_start",
-            R"({"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}})"),
+            R"({"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}})"
+        ),
         MockAnthropicServer::sseEvent(
             "content_block_delta",
-            R"({"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"The answer is 42."}})"),
-        MockAnthropicServer::sseEvent("content_block_stop",
-                                      R"({"type":"content_block_stop","index":1})"),
+            R"({"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"The answer is 42."}})"
+        ),
+        MockAnthropicServer::sseEvent(
+            "content_block_stop",
+            R"({"type":"content_block_stop","index":1})"
+        ),
         MockAnthropicServer::sseEvent(
             "message_delta",
-            R"({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":10}})"),
+            R"({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":10}})"
+        ),
         MockAnthropicServer::sseEvent("message_stop", R"({"type":"message_stop"})"),
     };
 
@@ -958,21 +1001,28 @@ asio::awaitable<void> test_streaming_tool_call(MockAnthropicServer& mock, uint16
     mock.sseChunks = {
         MockAnthropicServer::sseEvent(
             "message_start",
-            R"({"type":"message_start","message":{"id":"msg_tc","type":"message","role":"assistant","usage":{"input_tokens":10}}})"),
+            R"({"type":"message_start","message":{"id":"msg_tc","type":"message","role":"assistant","usage":{"input_tokens":10}}})"
+        ),
         MockAnthropicServer::sseEvent(
             "content_block_start",
-            R"({"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_stream","name":"get_weather"}})"),
+            R"({"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_stream","name":"get_weather"}})"
+        ),
         MockAnthropicServer::sseEvent(
             "content_block_delta",
-            R"({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"location\":"}})"),
+            R"({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"location\":"}})"
+        ),
         MockAnthropicServer::sseEvent(
             "content_block_delta",
-            R"({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"\"Tokyo\"}"}})"),
-        MockAnthropicServer::sseEvent("content_block_stop",
-                                      R"({"type":"content_block_stop","index":0})"),
+            R"({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"\"Tokyo\"}"}})"
+        ),
+        MockAnthropicServer::sseEvent(
+            "content_block_stop",
+            R"({"type":"content_block_stop","index":0})"
+        ),
         MockAnthropicServer::sseEvent(
             "message_delta",
-            R"({"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":8}})"),
+            R"({"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":8}})"
+        ),
         MockAnthropicServer::sseEvent("message_stop", R"({"type":"message_stop"})"),
     };
 
@@ -988,7 +1038,9 @@ asio::awaitable<void> test_streaming_tool_call(MockAnthropicServer& mock, uint16
                            .name        = "get_weather",
                            .description = "Get weather",
                            .parameters  = neograph::json::parse(
-                R"({"type":"object","properties":{"location":{"type":"string"}}})")}
+                R"({"type":"object","properties":{"location":{"type":"string"}}})"
+            )
+        }
     };
 
     neograph::StreamCallback noop = [](const std::string&) {};
@@ -999,8 +1051,9 @@ asio::awaitable<void> test_streaming_tool_call(MockAnthropicServer& mock, uint16
         if (!result.message.tool_calls.empty()) {
             XX_TEST_EXPECT_EQ(result.message.tool_calls[0].id, "toolu_stream");
             XX_TEST_EXPECT_EQ(result.message.tool_calls[0].name, "get_weather");
-            XX_TEST_EXPECT_TRUE(result.message.tool_calls[0].arguments.find("Tokyo")
-                                != std::string::npos);
+            XX_TEST_EXPECT_TRUE(
+                result.message.tool_calls[0].arguments.find("Tokyo") != std::string::npos
+            );
         }
     } catch (const std::exception& e) {
         XX_TEST_FAILED++;
@@ -1008,34 +1061,44 @@ asio::awaitable<void> test_streaming_tool_call(MockAnthropicServer& mock, uint16
     }
 }
 
-asio::awaitable<void> test_streaming_mixed_thinking_and_content(MockAnthropicServer& mock,
-                                                                uint16_t             port) {
+asio::awaitable<void>
+    test_streaming_mixed_thinking_and_content(MockAnthropicServer& mock, uint16_t port) {
     std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
     mock.mode           = AnthropicMockMode::StreamingThinking;
 
     mock.sseChunks = {
         MockAnthropicServer::sseEvent(
             "message_start",
-            R"({"type":"message_start","message":{"id":"msg_mix","type":"message","role":"assistant","usage":{"input_tokens":5}}})"),
+            R"({"type":"message_start","message":{"id":"msg_mix","type":"message","role":"assistant","usage":{"input_tokens":5}}})"
+        ),
         MockAnthropicServer::sseEvent(
             "content_block_start",
-            R"({"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}})"),
+            R"({"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}})"
+        ),
         MockAnthropicServer::sseEvent(
             "content_block_delta",
-            R"({"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Hmm..."}})"),
-        MockAnthropicServer::sseEvent("content_block_stop",
-                                      R"({"type":"content_block_stop","index":0})"),
+            R"({"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Hmm..."}})"
+        ),
+        MockAnthropicServer::sseEvent(
+            "content_block_stop",
+            R"({"type":"content_block_stop","index":0})"
+        ),
         MockAnthropicServer::sseEvent(
             "content_block_start",
-            R"({"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}})"),
+            R"({"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}})"
+        ),
         MockAnthropicServer::sseEvent(
             "content_block_delta",
-            R"({"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Result."}})"),
-        MockAnthropicServer::sseEvent("content_block_stop",
-                                      R"({"type":"content_block_stop","index":1})"),
+            R"({"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Result."}})"
+        ),
+        MockAnthropicServer::sseEvent(
+            "content_block_stop",
+            R"({"type":"content_block_stop","index":1})"
+        ),
         MockAnthropicServer::sseEvent(
             "message_delta",
-            R"({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":6}})"),
+            R"({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":6}})"
+        ),
         MockAnthropicServer::sseEvent("message_stop", R"({"type":"message_stop"})"),
     };
 
@@ -1070,18 +1133,24 @@ asio::awaitable<void> test_streaming_usage(MockAnthropicServer& mock, uint16_t p
     mock.sseChunks = {
         MockAnthropicServer::sseEvent(
             "message_start",
-            R"({"type":"message_start","message":{"id":"msg_u","type":"message","role":"assistant","usage":{"input_tokens":42}}})"),
+            R"({"type":"message_start","message":{"id":"msg_u","type":"message","role":"assistant","usage":{"input_tokens":42}}})"
+        ),
         MockAnthropicServer::sseEvent(
             "content_block_start",
-            R"({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}})"),
+            R"({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}})"
+        ),
         MockAnthropicServer::sseEvent(
             "content_block_delta",
-            R"({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hi"}})"),
-        MockAnthropicServer::sseEvent("content_block_stop",
-                                      R"({"type":"content_block_stop","index":0})"),
+            R"({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hi"}})"
+        ),
+        MockAnthropicServer::sseEvent(
+            "content_block_stop",
+            R"({"type":"content_block_stop","index":0})"
+        ),
         MockAnthropicServer::sseEvent(
             "message_delta",
-            R"({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":7}})"),
+            R"({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":7}})"
+        ),
         MockAnthropicServer::sseEvent("message_stop", R"({"type":"message_stop"})"),
     };
 
@@ -1106,27 +1175,33 @@ asio::awaitable<void> test_streaming_usage(MockAnthropicServer& mock, uint16_t p
     }
 }
 
-asio::awaitable<void> test_streaming_malformed_event_skipped(MockAnthropicServer& mock,
-                                                             uint16_t             port) {
+asio::awaitable<void>
+    test_streaming_malformed_event_skipped(MockAnthropicServer& mock, uint16_t port) {
     std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
     mock.mode           = AnthropicMockMode::Streaming;
 
     mock.sseChunks = {
         MockAnthropicServer::sseEvent(
             "message_start",
-            R"({"type":"message_start","message":{"id":"msg_m","type":"message","role":"assistant","usage":{"input_tokens":3}}})"),
+            R"({"type":"message_start","message":{"id":"msg_m","type":"message","role":"assistant","usage":{"input_tokens":3}}})"
+        ),
         MockAnthropicServer::sseEvent(
             "content_block_start",
-            R"({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}})"),
+            R"({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}})"
+        ),
         "event: content_block_delta\ndata: not-valid-json\n\n",
         MockAnthropicServer::sseEvent(
             "content_block_delta",
-            R"({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"OK"}})"),
-        MockAnthropicServer::sseEvent("content_block_stop",
-                                      R"({"type":"content_block_stop","index":0})"),
+            R"({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"OK"}})"
+        ),
+        MockAnthropicServer::sseEvent(
+            "content_block_stop",
+            R"({"type":"content_block_stop","index":0})"
+        ),
         MockAnthropicServer::sseEvent(
             "message_delta",
-            R"({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}})"),
+            R"({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}})"
+        ),
         MockAnthropicServer::sseEvent("message_stop", R"({"type":"message_stop"})"),
     };
 
@@ -1156,26 +1231,36 @@ asio::awaitable<void> test_thinking_callback_separation(MockAnthropicServer& moc
     mock.sseChunks = {
         MockAnthropicServer::sseEvent(
             "message_start",
-            R"({"type":"message_start","message":{"id":"msg_sep","type":"message","role":"assistant","usage":{"input_tokens":5}}})"),
+            R"({"type":"message_start","message":{"id":"msg_sep","type":"message","role":"assistant","usage":{"input_tokens":5}}})"
+        ),
         MockAnthropicServer::sseEvent(
             "content_block_start",
-            R"({"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}})"),
+            R"({"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}})"
+        ),
         MockAnthropicServer::sseEvent(
             "content_block_delta",
-            R"({"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Deep thought"}})"),
-        MockAnthropicServer::sseEvent("content_block_stop",
-                                      R"({"type":"content_block_stop","index":0})"),
+            R"({"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Deep thought"}})"
+        ),
+        MockAnthropicServer::sseEvent(
+            "content_block_stop",
+            R"({"type":"content_block_stop","index":0})"
+        ),
         MockAnthropicServer::sseEvent(
             "content_block_start",
-            R"({"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}})"),
+            R"({"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}})"
+        ),
         MockAnthropicServer::sseEvent(
             "content_block_delta",
-            R"({"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Answer"}})"),
-        MockAnthropicServer::sseEvent("content_block_stop",
-                                      R"({"type":"content_block_stop","index":1})"),
+            R"({"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Answer"}})"
+        ),
+        MockAnthropicServer::sseEvent(
+            "content_block_stop",
+            R"({"type":"content_block_stop","index":1})"
+        ),
         MockAnthropicServer::sseEvent(
             "message_delta",
-            R"({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":5}})"),
+            R"({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":5}})"
+        ),
         MockAnthropicServer::sseEvent("message_stop", R"({"type":"message_stop"})"),
     };
 
@@ -1196,18 +1281,15 @@ asio::awaitable<void> test_thinking_callback_separation(MockAnthropicServer& moc
             params,
             [&](const neograph::ChatStreamChunk& chunk) {
                 switch (chunk.type) {
-                case neograph::ChatStreamChunk::TYPE_CONTENT:
-                    {
+                    case neograph::ChatStreamChunk::TYPE_CONTENT: {
                         contentAccum += chunk.data;
-                    }
-                    break;
-                case neograph::ChatStreamChunk::TYPE_THINKING:
-                    {
+                    } break;
+                    case neograph::ChatStreamChunk::TYPE_THINKING: {
                         thinkingAccum += chunk.data;
-                    }
-                    break;
+                    } break;
                 }
-            });
+            }
+        );
         XX_TEST_EXPECT_EQ(result.message.content, "Answer");
         XX_TEST_EXPECT_EQ(result.message.reasoning_content, "Deep thought");
         // With thinking_callback set, on_chunk should only get content
@@ -1249,7 +1331,8 @@ public:
     void start() {
         acceptor = std::make_unique<asio::ip::tcp::acceptor>(
             ioCtx,
-            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
+            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0)
+        );
         ep        = acceptor->local_endpoint();
         boundPort = ep.port();
 
@@ -1371,17 +1454,20 @@ void test_anthropic_true_streaming_incremental() {
             auto result = co_await provider->invoke(params, onChunk);
             XX_TEST_EXPECT_EQ(result.message.content, "XYZ");
         },
-        asio::detached);
+        asio::detached
+    );
     ctx.run();
 
     XX_TEST_EXPECT_TRUE(callbackTimes.size() >= 3);
 
     if (callbackTimes.size() >= 3) {
         auto firstOffset = std::chrono::duration_cast<std::chrono::milliseconds>(
-                               callbackTimes.front() - startTime)
+                               callbackTimes.front() - startTime
+        )
                                .count();
-        auto lastOffset = std::chrono::duration_cast<std::chrono::milliseconds>(callbackTimes.back()
-                                                                                - startTime)
+        auto lastOffset = std::chrono::duration_cast<std::chrono::milliseconds>(
+                              callbackTimes.back() - startTime
+        )
                               .count();
         auto spread = lastOffset - firstOffset;
 
@@ -1424,7 +1510,8 @@ public:
     void start() {
         acceptor = std::make_unique<asio::ip::tcp::acceptor>(
             ioCtx,
-            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
+            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0)
+        );
         ep        = acceptor->local_endpoint();
         boundPort = ep.port();
 
@@ -1502,7 +1589,8 @@ private:
 
 void test_anthropic_connect_timeout() {
     auto provider = server::AnthropicProvider::create(
-        makeAntCfg("sk-ant-test", "http://192.0.2.1:12345", 2, 2));
+        makeAntCfg("sk-ant-test", "http://192.0.2.1:12345", 2, 2)
+    );
 
     neograph::CompletionParams params;
     params.model    = "claude-sonnet-4-20250514";
@@ -1522,10 +1610,12 @@ void test_anthropic_connect_timeout() {
                 caught = true;
             }
         },
-        asio::detached);
+        asio::detached
+    );
     ctx.run();
     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                       std::chrono::steady_clock::now() - start)
+                       std::chrono::steady_clock::now() - start
+    )
                        .count();
 
     XX_TEST_EXPECT_TRUE(caught);
@@ -1573,10 +1663,12 @@ void test_anthropic_read_timeout_streaming() {
             } catch (const std::exception&) {
             }
         },
-        asio::detached);
+        asio::detached
+    );
     ctx.run();
     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                       std::chrono::steady_clock::now() - start)
+                       std::chrono::steady_clock::now() - start
+    )
                        .count();
 
     XX_TEST_EXPECT_EQ(accumulated, "Par");

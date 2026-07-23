@@ -20,8 +20,10 @@ protected:
 
 public:
 
-    CodeGraphSearchTool(std::shared_ptr<agentxx::expand::CodeGraphManager> in_codegraph,
-                        std::weak_ptr<agentxx::agent::AgentContext>        in_agentContext);
+    CodeGraphSearchTool(
+        std::shared_ptr<agentxx::expand::CodeGraphManager> in_codegraph,
+        std::weak_ptr<agentxx::agent::AgentContext>        in_agentContext
+    );
 
     neograph::ChatTool get_definition() const override;
 
@@ -35,8 +37,10 @@ protected:
 
 public:
 
-    CodeGraphContextTool(std::shared_ptr<agentxx::expand::CodeGraphManager> in_codegraph,
-                         std::weak_ptr<agentxx::agent::AgentContext>        in_agentContext);
+    CodeGraphContextTool(
+        std::shared_ptr<agentxx::expand::CodeGraphManager> in_codegraph,
+        std::weak_ptr<agentxx::agent::AgentContext>        in_agentContext
+    );
 
     neograph::ChatTool get_definition() const override;
 
@@ -50,8 +54,10 @@ protected:
 
 public:
 
-    CodeGraphCallersTool(std::shared_ptr<agentxx::expand::CodeGraphManager> in_codegraph,
-                         std::weak_ptr<agentxx::agent::AgentContext>        in_agentContext);
+    CodeGraphCallersTool(
+        std::shared_ptr<agentxx::expand::CodeGraphManager> in_codegraph,
+        std::weak_ptr<agentxx::agent::AgentContext>        in_agentContext
+    );
 
     neograph::ChatTool get_definition() const override;
 
@@ -65,8 +71,10 @@ protected:
 
 public:
 
-    CodeGraphCalleesTool(std::shared_ptr<agentxx::expand::CodeGraphManager> in_codegraph,
-                         std::weak_ptr<agentxx::agent::AgentContext>        in_agentContext);
+    CodeGraphCalleesTool(
+        std::shared_ptr<agentxx::expand::CodeGraphManager> in_codegraph,
+        std::weak_ptr<agentxx::agent::AgentContext>        in_agentContext
+    );
 
     neograph::ChatTool get_definition() const override;
 
@@ -80,8 +88,10 @@ protected:
 
 public:
 
-    CodeGraphImpactTool(std::shared_ptr<agentxx::expand::CodeGraphManager> in_codegraph,
-                        std::weak_ptr<agentxx::agent::AgentContext>        in_agentContext);
+    CodeGraphImpactTool(
+        std::shared_ptr<agentxx::expand::CodeGraphManager> in_codegraph,
+        std::weak_ptr<agentxx::agent::AgentContext>        in_agentContext
+    );
 
     neograph::ChatTool get_definition() const override;
 
@@ -95,8 +105,10 @@ protected:
 
 public:
 
-    CodeGraphStatusTool(std::shared_ptr<agentxx::expand::CodeGraphManager> in_codegraph,
-                        std::weak_ptr<agentxx::agent::AgentContext>        in_agentContext);
+    CodeGraphStatusTool(
+        std::shared_ptr<agentxx::expand::CodeGraphManager> in_codegraph,
+        std::weak_ptr<agentxx::agent::AgentContext>        in_agentContext
+    );
 
     neograph::ChatTool get_definition() const override;
 
@@ -110,8 +122,10 @@ protected:
 
 public:
 
-    CodeGraphIndexTool(std::shared_ptr<agentxx::expand::CodeGraphManager> in_codegraph,
-                       std::weak_ptr<agentxx::agent::AgentContext>        in_agentContext);
+    CodeGraphIndexTool(
+        std::shared_ptr<agentxx::expand::CodeGraphManager> in_codegraph,
+        std::weak_ptr<agentxx::agent::AgentContext>        in_agentContext
+    );
 
     neograph::ChatTool get_definition() const override;
 
@@ -125,8 +139,10 @@ protected:
 
 public:
 
-    CodeGraphPathTool(std::shared_ptr<agentxx::expand::CodeGraphManager> in_codegraph,
-                      std::weak_ptr<agentxx::agent::AgentContext>        in_agentContext);
+    CodeGraphPathTool(
+        std::shared_ptr<agentxx::expand::CodeGraphManager> in_codegraph,
+        std::weak_ptr<agentxx::agent::AgentContext>        in_agentContext
+    );
 
     neograph::ChatTool get_definition() const override;
 

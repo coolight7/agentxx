@@ -337,8 +337,8 @@ using IgnoreCaseSet = std::unordered_set<std::string, IgnoreCaseHash, IgnoreCase
 }
 
 template<typename T>
-[[nodiscard]] inline std::string stringVectorJoin(const std::vector<T>& list,
-                                                  std::string_view      sep = ", ") {
+[[nodiscard]] inline std::string
+    stringVectorJoin(const std::vector<T>& list, std::string_view sep = ", ") {
     std::ostringstream oss;
     auto               len = list.size();
     for (size_t i = 0; i < len; ++i) {
@@ -350,8 +350,8 @@ template<typename T>
     return oss.str();
 }
 
-[[nodiscard]] inline constexpr std::vector<std::string_view> strSplit(std::string_view in_str,
-                                                                      char             delim) {
+[[nodiscard]] inline constexpr std::vector<std::string_view>
+    strSplit(std::string_view in_str, char delim) {
     auto                          split = in_str | std::views::split(delim);
     std::vector<std::string_view> result;
     result.reserve(std::ranges::distance(split));
@@ -361,8 +361,8 @@ template<typename T>
     return result;
 }
 
-[[nodiscard]] inline constexpr std::vector<std::string> strSplitCopid(std::string_view in_str,
-                                                                      char             delim) {
+[[nodiscard]] inline constexpr std::vector<std::string>
+    strSplitCopid(std::string_view in_str, char delim) {
     auto                     split_view = in_str | std::views::split(delim);
     std::vector<std::string> result;
     result.reserve(std::ranges::distance(split_view));
@@ -383,18 +383,20 @@ template<typename T>
 
 [[nodiscard]] std::string base64Decode(std::string_view str);
 
-[[nodiscard]] std::tuple<bool, std::optional<std::string>>
-    convertCharset(std::string_view src,
-                   std::string_view srcEncoding,
-                   std::string_view targetEncoding);
+[[nodiscard]] std::tuple<bool, std::optional<std::string>> convertCharset(
+    std::string_view src,
+    std::string_view srcEncoding,
+    std::string_view targetEncoding
+);
+
+[[nodiscard]] std::tuple<bool, std::optional<std::string>> autoConvertCharset(
+    std::string_view str,
+    std::string&     encoding,
+    std::string_view targetEncoding
+);
 
 [[nodiscard]] std::tuple<bool, std::optional<std::string>>
-    autoConvertCharset(std::string_view str,
-                       std::string&     encoding,
-                       std::string_view targetEncoding);
-
-[[nodiscard]] std::tuple<bool, std::optional<std::string>> autoConvertToUtf8(std::string_view str,
-                                                                             bool             _);
+    autoConvertToUtf8(std::string_view str, bool _);
 
 bool autoConvertToUtf8(std::string& str);
 
@@ -418,8 +420,8 @@ inline PinyinCallback s_pinyinCallback = nullptr;
     return result;
 }
 
-[[nodiscard]] inline constexpr std::optional<std::string>
-    removeAllSpaceMayNull(std::string_view str) {
+[[nodiscard]] inline constexpr std::optional<std::string> removeAllSpaceMayNull(std::string_view str
+) {
     if (str.empty()) {
         return std::nullopt;
     }
@@ -430,11 +432,12 @@ inline PinyinCallback s_pinyinCallback = nullptr;
     return result;
 }
 
-[[nodiscard]] inline constexpr std::string removeBetweenSpace(std::string_view str,
-                                                              bool             removeLine = true,
-                                                              bool             subLeft    = true,
-                                                              bool             subRight   = true) {
-
+[[nodiscard]] inline constexpr std::string removeBetweenSpace(
+    std::string_view str,
+    bool             removeLine = true,
+    bool             subLeft    = true,
+    bool             subRight   = true
+) {
     if (!std::is_constant_evaluated()) {
         assert(subLeft || subRight);
     }
@@ -471,12 +474,12 @@ inline PinyinCallback s_pinyinCallback = nullptr;
     }
 }
 
-[[nodiscard]] inline constexpr std::optional<std::string>
-    removeBetweenSpaceMayNull(std::string_view str,
-                              bool             removeLine = true,
-                              bool             subLeft    = true,
-                              bool             subRight   = true) {
-
+[[nodiscard]] inline constexpr std::optional<std::string> removeBetweenSpaceMayNull(
+    std::string_view str,
+    bool             removeLine = true,
+    bool             subLeft    = true,
+    bool             subRight   = true
+) {
     if (str.empty()) {
         return std::nullopt;
     }
@@ -630,7 +633,6 @@ inline PinyinCallback s_pinyinCallback = nullptr;
 
 [[nodiscard]] inline constexpr std::string_view
     getFileName(std::string_view in_path, bool removeEXT = false, bool useRigthDot = true) {
-
     if (in_path.empty()) {
         return "";
     }
@@ -759,37 +761,37 @@ inline PinyinCallback s_pinyinCallback = nullptr;
     return std::nullopt;
 }
 
-[[nodiscard]] inline constexpr bool isIgnoreCaseEqual(std::string_view left,
-                                                      std::string_view right) {
+[[nodiscard]] inline constexpr bool
+    isIgnoreCaseEqual(std::string_view left, std::string_view right) {
     if (left.size() == right.size()) {
         return toLower(left) == toLower(right);
     }
     return false;
 }
 
-[[nodiscard]] inline constexpr bool isIgnoreCaseContains(std::string_view longStr,
-                                                         std::string_view shortStr) {
+[[nodiscard]] inline constexpr bool
+    isIgnoreCaseContains(std::string_view longStr, std::string_view shortStr) {
     std::string lowerLong  = toLower(longStr);
     std::string lowerShort = toLower(shortStr);
     return lowerLong.find(lowerShort) != std::string::npos;
 }
 
-[[nodiscard]] inline constexpr bool isIgnoreCaseContainsAny(std::string_view str1,
-                                                            std::string_view str2) {
+[[nodiscard]] inline constexpr bool
+    isIgnoreCaseContainsAny(std::string_view str1, std::string_view str2) {
     return (str1.size() >= str2.size()) ? isIgnoreCaseContains(str1, str2)
                                         : isIgnoreCaseContains(str2, str1);
 }
 
-[[nodiscard]] inline constexpr bool isNotEmptyAndIgnoreCaseContains(std::string_view str1,
-                                                                    std::string_view str2) {
+[[nodiscard]] inline constexpr bool
+    isNotEmptyAndIgnoreCaseContains(std::string_view str1, std::string_view str2) {
     if (str1.empty() || str2.empty()) {
         return false;
     }
     return isIgnoreCaseContains(str1, str2);
 }
 
-[[nodiscard]] inline constexpr bool isNotEmptyAndIgnoreCaseContainsAny(std::string_view str1,
-                                                                       std::string_view str2) {
+[[nodiscard]] inline constexpr bool
+    isNotEmptyAndIgnoreCaseContainsAny(std::string_view str1, std::string_view str2) {
     if (str1.empty() || str2.empty()) {
         return false;
     }

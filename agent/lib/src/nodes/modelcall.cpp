@@ -12,9 +12,11 @@
 namespace agentxx {
 namespace nodes {
 
-ModelCallWrapNode::ModelCallWrapNode(const std::string&                          name,
-                                     const neograph::graph::NodeContext&         ctx,
-                                     std::weak_ptr<agentxx::agent::AgentContext> in_agentContext) :
+ModelCallWrapNode::ModelCallWrapNode(
+    const std::string&                          name,
+    const neograph::graph::NodeContext&         ctx,
+    std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
+) :
     WrapHandleBaseNode<neograph::graph::LLMCallNode>(name, in_agentContext, ctx) {
     if (ctx.extra_config.is_object()
         && ctx.extra_config.contains(std::string{defUseModelRegistryKey})) {
@@ -57,9 +59,10 @@ std::string ModelCallWrapNode::resolveCurrentModelName(const std::string& thread
     return model_;
 }
 
-asio::awaitable<neograph::ChatCompletion>
-    ModelCallWrapNode::onReceiveToken(neograph::CompletionParams& params,
-                                      neograph::graph::NodeInput& input) {
+asio::awaitable<neograph::ChatCompletion> ModelCallWrapNode::onReceiveToken(
+    neograph::CompletionParams& params,
+    neograph::graph::NodeInput& input
+) {
     auto ctxPtr = agentContext.lock()->middlewareHandleContext;
 
     auto                               callback = input.stream_cb;
@@ -67,19 +70,18 @@ asio::awaitable<neograph::ChatCompletion>
     if (nullptr != callback) {
         onToken = [&input, callback, ctxPtr, this](const neograph::ChatStreamChunk& token) {
             switch (token.type) {
-            case neograph::ChatStreamChunk::TYPE_CONTENT:
-                {
+                case neograph::ChatStreamChunk::TYPE_CONTENT: {
                     // 记录 本次请求的临时LLM消息，以便触发异常时处理
                     ctxPtr->modifyGraphDataItemValue<std::string>(
                         input.ctx.thread_id,
                         agentxx::middleware::MiddlewareContext::graphDataKey_tempLLMMessage,
                         [&token](std::string& msg) {
                             msg += token.data;
-                        });
-                }
-                break;
-            case neograph::ChatStreamChunk::TYPE_THINKING:
-                break;
+                        }
+                    );
+                } break;
+                case neograph::ChatStreamChunk::TYPE_THINKING:
+                    break;
             }
 
             if (nullptr != callback) {
@@ -101,12 +103,15 @@ asio::awaitable<neograph::ChatCompletion>
     ctxPtr->setGraphDataItemValue<int>(
         input.ctx.thread_id,
         agentxx::middleware::MiddlewareContext::graphDataKey_LLMTokenUsage,
-        completion.usage.total_tokens);
+        completion.usage.total_tokens
+    );
     co_return completion.message;
 }
 
-neograph::CompletionParams ModelCallWrapNode::build_params(const neograph::graph::GraphState& state,
-                                                           const std::string& threadId) const {
+neograph::CompletionParams ModelCallWrapNode::build_params(
+    const neograph::graph::GraphState& state,
+    const std::string&                 threadId
+) const {
     auto messages = state.get_messages();
 
     // Ensure exactly one system message, carrying `instructions_` (issue #93).
@@ -164,38 +169,45 @@ asio::awaitable<neograph::graph::NodeOutput>
 
     neograph::graph::NodeOutput out;
     out.writes.push_back(
-        neograph::graph::ChannelWrite{"messages", neograph::json::array({msg_json})});
+        neograph::graph::ChannelWrite{"messages", neograph::json::array({msg_json})}
+    );
     co_return out;
 }
 
-asio::awaitable<void>
-    ModelCallWrapNode::onHandleStart(agentxx::middleware::BaseMiddlewareHandleInterface& item,
-                                     neograph::graph::NodeInput&                         in) {
+asio::awaitable<void> ModelCallWrapNode::onHandleStart(
+    agentxx::middleware::BaseMiddlewareHandleInterface& item,
+    neograph::graph::NodeInput&                         in
+) {
     co_await item.onModelcallStartFunc(in);
 }
 
-asio::awaitable<void>
-    ModelCallWrapNode::onHandleEnd(agentxx::middleware::BaseMiddlewareHandleInterface& item,
-                                   const neograph::graph::NodeInput&                   in,
-                                   neograph::graph::NodeOutput&                        result) {
+asio::awaitable<void> ModelCallWrapNode::onHandleEnd(
+    agentxx::middleware::BaseMiddlewareHandleInterface& item,
+    const neograph::graph::NodeInput&                   in,
+    neograph::graph::NodeOutput&                        result
+) {
     co_await item.onModelcallEndFunc(in, result);
 }
 
-void ModelCallWrapNode::onHandleStartError(bool             errorRethrow,
-                                           bool             isCurrentError,
-                                           std::string_view exceptionStr,
-                                           agentxx::middleware::BaseMiddlewareHandleInterface& item,
-                                           neograph::graph::NodeInput&                         in,
-                                           neograph::graph::NodeOutput& result) noexcept {
+void ModelCallWrapNode::onHandleStartError(
+    bool                                                errorRethrow,
+    bool                                                isCurrentError,
+    std::string_view                                    exceptionStr,
+    agentxx::middleware::BaseMiddlewareHandleInterface& item,
+    neograph::graph::NodeInput&                         in,
+    neograph::graph::NodeOutput&                        result
+) noexcept {
     // 插入消息，保证消息顺序正确
     // 不会记录 toolcall
     if (false == errorRethrow) {
         auto msg = neograph::ChatMessage{
             .role    = "assistant",
-            .content = fmt::format(R"({{"error": "{}/Start call `{}` exception: {}"}})",
-                                   nodeName,
-                                   item.name,
-                                   exceptionStr),
+            .content = fmt::format(
+                R"({{"error": "{}/Start call `{}` exception: {}"}})",
+                nodeName,
+                item.name,
+                exceptionStr
+            ),
         };
         auto msgJson = neograph::json{};
         neograph::to_json(msgJson, msg);
@@ -206,11 +218,13 @@ void ModelCallWrapNode::onHandleStartError(bool             errorRethrow,
     }
 }
 
-void ModelCallWrapNode::onHandleBaseRunError(bool                         errorRethrow,
-                                             bool                         isCurrentError,
-                                             std::string_view             exceptionStr,
-                                             neograph::graph::NodeInput&  in,
-                                             neograph::graph::NodeOutput& result) noexcept {
+void ModelCallWrapNode::onHandleBaseRunError(
+    bool                         errorRethrow,
+    bool                         isCurrentError,
+    std::string_view             exceptionStr,
+    neograph::graph::NodeInput&  in,
+    neograph::graph::NodeOutput& result
+) noexcept {
     // 插入消息，保证消息顺序正确
     if (false == errorRethrow && isCurrentError) {
         auto msg = neograph::ChatMessage{
@@ -259,9 +273,11 @@ void ModelCallWrapNode::repairMessages(neograph::graph::NodeInput& in) {
             }
             for (const auto& tool : msg.tool_calls) {
                 if (false == agentxx::util::utf8IsAvail(tool.arguments)) {
-                    XX_LOGE("  - Message.toolcall is not utf8 available: {}/{}",
-                            tool.name,
-                            tool.id);
+                    XX_LOGE(
+                        "  - Message.toolcall is not utf8 available: {}/{}",
+                        tool.name,
+                        tool.id
+                    );
                     doPrint = true;
                 }
             }
@@ -275,7 +291,8 @@ void ModelCallWrapNode::repairMessages(neograph::graph::NodeInput& in) {
 asio::awaitable<void> ModelCallWrapNode::baseRun(
     std::vector<std::shared_ptr<agentxx::middleware::BaseMiddlewareHandleInterface>>& handles,
     neograph::graph::NodeInput&                                                       in,
-    neograph::graph::NodeOutput&                                                      result) {
+    neograph::graph::NodeOutput&                                                      result
+) {
     auto agentCtxPtr = agentContext.lock();
 
     {
@@ -297,7 +314,8 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
                 = agentCtxPtr->middlewareHandleContext
                       ->getGraphDataItemValue<std::vector<std::string>>(
                           in.ctx.thread_id,
-                          agentxx::middleware::MiddlewareContext::graphDataKey_systemMessage);
+                          agentxx::middleware::MiddlewareContext::graphDataKey_systemMessage
+                      );
 
             // 清空原本的 content
             newSystemMsg.content = "";
@@ -335,7 +353,8 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
         // 清理过时的 临时 LLM 消息
         ctxPtr->removeGraphDataItem(
             in.ctx.thread_id,
-            agentxx::middleware::MiddlewareContext::graphDataKey_tempLLMMessage);
+            agentxx::middleware::MiddlewareContext::graphDataKey_tempLLMMessage
+        );
         // 修正上下文角色顺序
         repairMessages(in);
 
@@ -371,7 +390,8 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
         // 触发异常
         auto lastMsg = ctxPtr->getGraphDataItemValue<std::string>(
             in.ctx.thread_id,
-            agentxx::middleware::MiddlewareContext::graphDataKey_tempLLMMessage);
+            agentxx::middleware::MiddlewareContext::graphDataKey_tempLLMMessage
+        );
         if (lastMsg.size() >= 512) {
             // - 保留已有的 llm 消息，而不是丢弃
             // - 插入 assistant 消息，此时末尾消息未 assistant, 将在下一次进入
@@ -379,10 +399,12 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
             // TODO: 修正消息上下文，应当与客户端同步信息
             auto msg = neograph::ChatMessage{
                 .role    = "assistant",
-                .content = fmt::format("{}\n{}",
-                                       nodeName,
-                                       isCancel ? "[User cancelled]" : "[Exception aborted]"),
-                .flags   = neograph::MessageFlag::AutoInserted,
+                .content = fmt::format(
+                    "{}\n{}",
+                    nodeName,
+                    isCancel ? "[User cancelled]" : "[Exception aborted]"
+                ),
+                .flags = neograph::MessageFlag::AutoInserted,
             };
             auto msgJson = neograph::json{};
             neograph::to_json(msgJson, msg);
@@ -394,10 +416,12 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
         }
 
         // 自动重试
-        XX_LOGD("LLMCallNode retry: {}/{} | {}",
-                retry,
-                agentCtxPtr->agentConfig->llmMaxRetry,
-                errInfo);
+        XX_LOGD(
+            "LLMCallNode retry: {}/{} | {}",
+            retry,
+            agentCtxPtr->agentConfig->llmMaxRetry,
+            errInfo
+        );
         retry++;
         size_t appendDelay = 0;
         if (agentxx::util::isIgnoreCaseContains(errInfo, "rate limit")) {

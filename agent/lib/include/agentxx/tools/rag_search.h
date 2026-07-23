@@ -14,9 +14,11 @@ namespace tools {
 class EmbeddingClient {
 public:
 
-    EmbeddingClient(std::string_view in_baseUrl,
-                    std::string_view in_apiKey,
-                    std::string_view in_model);
+    EmbeddingClient(
+        std::string_view in_baseUrl,
+        std::string_view in_apiKey,
+        std::string_view in_model
+    );
 
     // Embed multiple texts in one API call
     asio::awaitable<std::expected<std::vector<std::vector<double>>, std::string>>
@@ -90,40 +92,44 @@ public:
 
         VectorStore(std::shared_ptr<EmbeddingClient> in_embedder, const SplitConfig& in_splitCfg);
 
-        inline static std::vector<std::string> splitByFixedLength(std::string_view text,
-                                                                  size_t           blockSize = 256,
-                                                                  double overlapPercent      = 0.0);
+        inline static std::vector<std::string> splitByFixedLength(
+            std::string_view text,
+            size_t           blockSize      = 256,
+            double           overlapPercent = 0.0
+        );
 
         // Split text by a single delimiter string
-        inline static std::vector<std::string> splitByDelimiter(std::string_view text,
-                                                                std::string_view delimiter);
+        inline static std::vector<std::string>
+            splitByDelimiter(std::string_view text, std::string_view delimiter);
 
         // Split by markdown structure: headings, code blocks, lists, paragraphs
         inline static std::vector<std::string> splitByStructure(std::string_view text);
 
         // Split by character delimiters with length limit, falling back to
         // fixed-length if no delimiter produces small-enough chunks
-        inline static std::vector<std::string>
-            splitByDelimiters(std::string_view                text,
-                              size_t                          maxUtf8Length,
-                              const std::vector<std::string>& delimiters);
+        inline static std::vector<std::string> splitByDelimiters(
+            std::string_view                text,
+            size_t                          maxUtf8Length,
+            const std::vector<std::string>& delimiters
+        );
 
         // Apply overlap between adjacent chunks by prepending the tail of the
         // previous chunk to the current chunk. overlapPercent=0 disables overlap.
-        inline static std::vector<std::string>
-            applyChunkOverlap(const std::vector<std::string>& chunks,
-                              size_t                          maxUtf8Length,
-                              double                          overlapPercent);
+        inline static std::vector<std::string> applyChunkOverlap(
+            const std::vector<std::string>& chunks,
+            size_t                          maxUtf8Length,
+            double                          overlapPercent
+        );
 
         // Main entry: split text into chunks according to config, guaranteeing
         // every chunk is within maxUtf8Length (UTF-8 characters).
         // When overlapPercent > 0, adjacent chunks will overlap by the given
         // percentage of maxUtf8Length.
-        inline static std::vector<std::string> splitTextToChunks(std::string_view   text,
-                                                                 const SplitConfig& config);
+        inline static std::vector<std::string>
+            splitTextToChunks(std::string_view text, const SplitConfig& config);
 
-        asio::awaitable<std::vector<Document>>
-            scanDocument(const std::vector<std::string>& pathlist);
+        asio::awaitable<std::vector<Document>> scanDocument(const std::vector<std::string>& pathlist
+        );
 
         // Add documents and compute their embeddings
         asio::awaitable<bool> addDocuments(std::vector<Document>&& appendDocs);
@@ -142,8 +148,10 @@ public:
 
     std::shared_ptr<VectorStore> store;
 
-    RAGSearchTool(std::shared_ptr<VectorStore>                in_store,
-                  std::weak_ptr<agentxx::agent::AgentContext> in_agentContext);
+    RAGSearchTool(
+        std::shared_ptr<VectorStore>                in_store,
+        std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
+    );
 
     neograph::ChatTool get_definition() const override;
 

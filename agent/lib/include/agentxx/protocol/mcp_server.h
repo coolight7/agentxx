@@ -136,8 +136,8 @@ public:
 
     using ToolHandler    = std::function<json(const json& arguments)>;
     using ResourceReader = std::function<std::optional<McpResourceContent>(const std::string& uri)>;
-    using PromptHandler  = std::function<std::optional<McpPromptResult>(const std::string& name,
-                                                                       const json& arguments)>;
+    using PromptHandler  = std::function<
+         std::optional<McpPromptResult>(const std::string& name, const json& arguments)>;
 
     struct Config {
         util::HttpServer::Config httpConfig;
@@ -251,8 +251,8 @@ private:
     // Main MCP request handler (HTTP)
     // -----------------------------------------------------------------------
 
-    asio::awaitable<void> handleMcpRequest(util::HttpServer::Request&  req,
-                                           util::HttpServer::Response& resp);
+    asio::awaitable<void>
+        handleMcpRequest(util::HttpServer::Request& req, util::HttpServer::Response& resp);
 
     // -----------------------------------------------------------------------
     // Method handlers
@@ -277,8 +277,10 @@ private:
     // SSE streaming handler
     // -----------------------------------------------------------------------
 
-    asio::awaitable<void> handleSseStream(util::HttpServer::Request&                   req,
-                                          std::shared_ptr<util::HttpServer::SseWriter> writer);
+    asio::awaitable<void> handleSseStream(
+        util::HttpServer::Request&                   req,
+        std::shared_ptr<util::HttpServer::SseWriter> writer
+    );
 
     // -----------------------------------------------------------------------
     // SSE notification broadcast
@@ -299,9 +301,11 @@ private:
     // Response helper
     // -----------------------------------------------------------------------
 
-    void writeJsonResponse(util::HttpServer::Response& resp,
-                           boost::beast::http::status  status,
-                           const json&                 body);
+    void writeJsonResponse(
+        util::HttpServer::Response& resp,
+        boost::beast::http::status  status,
+        const json&                 body
+    );
 
     // -----------------------------------------------------------------------
     // Members

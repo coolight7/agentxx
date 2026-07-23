@@ -18,10 +18,11 @@ size_t PromptVariant::promptHash() const {
     return prompt.promptHash();
 }
 
-asio::awaitable<std::string>
-    EvolutionTrainingAgent::runLLMAgent(std::shared_ptr<agentxx::agent::DeepAgent> agent,
-                                        const std::string&                         systemPrompt,
-                                        const std::string&                         userContent) {
+asio::awaitable<std::string> EvolutionTrainingAgent::runLLMAgent(
+    std::shared_ptr<agentxx::agent::DeepAgent> agent,
+    const std::string&                         systemPrompt,
+    const std::string&                         userContent
+) {
     agent->getContext()->agentConfig->prompt.systemPrompt = systemPrompt;
     std::vector<neograph::ChatMessage> messages           = {
         neograph::ChatMessage{.role = "user", .content = userContent},
@@ -136,14 +137,18 @@ bool EvolutionTrainingAgent::loadPopulationFromFile(const std::string& filePath)
     try {
         std::ifstream ifs(filePath);
         if (!ifs.is_open()) {
-            XX_LOGD("[EvolutionTraining] No existing save file found at {}, "
-                    "starting fresh",
-                    filePath);
+            XX_LOGD(
+                "[EvolutionTraining] No existing save file found at {}, "
+                "starting fresh",
+                filePath
+            );
             return false;
         }
 
-        std::string content((std::istreambuf_iterator<char>(ifs)),
-                            std::istreambuf_iterator<char>());
+        std::string content(
+            (std::istreambuf_iterator<char>(ifs)),
+            std::istreambuf_iterator<char>()
+        );
         ifs.close();
 
         if (content.empty()) {
@@ -158,16 +163,20 @@ bool EvolutionTrainingAgent::loadPopulationFromFile(const std::string& filePath)
             }
             generationCounter = root.value("generationCounter", 0);
 
-            std::sort(population.begin(),
-                      population.end(),
-                      [](const PromptVariant& a, const PromptVariant& b) {
-                          return a.averageScore() > b.averageScore();
-                      });
+            std::sort(
+                population.begin(),
+                population.end(),
+                [](const PromptVariant& a, const PromptVariant& b) {
+                    return a.averageScore() > b.averageScore();
+                }
+            );
 
-            XX_LOGD("[EvolutionTraining] Loaded {} prompts from {} (generation {})",
-                    population.size(),
-                    filePath,
-                    generationCounter);
+            XX_LOGD(
+                "[EvolutionTraining] Loaded {} prompts from {} (generation {})",
+                population.size(),
+                filePath,
+                generationCounter
+            );
             return true;
         }
     } catch (const std::exception& e) {
@@ -176,11 +185,12 @@ bool EvolutionTrainingAgent::loadPopulationFromFile(const std::string& filePath)
     return false;
 }
 
-asio::awaitable<TrainingScore>
-    EvolutionTrainingAgent::defaultScoringWithSubAgent(std::string_view               agentOutput,
-                                                       const TrainingTestCase&        testCase,
-                                                       int                            iteration,
-                                                       const EvolutionTrainingConfig& cfg) {
+asio::awaitable<TrainingScore> EvolutionTrainingAgent::defaultScoringWithSubAgent(
+    std::string_view               agentOutput,
+    const TrainingTestCase&        testCase,
+    int                            iteration,
+    const EvolutionTrainingConfig& cfg
+) {
     TrainingScore result;
     result.iteration = iteration;
 
@@ -259,12 +269,13 @@ std::string EvolutionTrainingAgent::buildPromptContextMessage(const PromptVarian
     return msg.str();
 }
 
-asio::awaitable<OptimizedPrompts>
-    EvolutionTrainingAgent::optimizeVariantWithLLM(const PromptVariant&           variant,
-                                                   const TrainingTestCase&        testCase,
-                                                   const std::string&             agentOutput,
-                                                   const TrainingScore&           score,
-                                                   const EvolutionTrainingConfig& cfg) {
+asio::awaitable<OptimizedPrompts> EvolutionTrainingAgent::optimizeVariantWithLLM(
+    const PromptVariant&           variant,
+    const TrainingTestCase&        testCase,
+    const std::string&             agentOutput,
+    const TrainingScore&           score,
+    const EvolutionTrainingConfig& cfg
+) {
     OptimizedPrompts result;
     if (!optimizerAgent) {
         co_return result;
@@ -338,15 +349,15 @@ std::string EvolutionTrainingAgent::mutateString(const std::string& input, doubl
         if (dist(rng) < mutationRate) {
             int op = opDist(rng);
             switch (op) {
-            case 0:
-                result.push_back(mutationChars[charDist(rng)]);
-                break;
-            case 1:
-                result.push_back(mutationChars[charDist(rng)]);
-                result.push_back(input[i]);
-                break;
-            case 2:
-                break;
+                case 0:
+                    result.push_back(mutationChars[charDist(rng)]);
+                    break;
+                case 1:
+                    result.push_back(mutationChars[charDist(rng)]);
+                    result.push_back(input[i]);
+                    break;
+                case 2:
+                    break;
             }
         } else {
             result.push_back(input[i]);
@@ -358,8 +369,10 @@ std::string EvolutionTrainingAgent::mutateString(const std::string& input, doubl
     return result;
 }
 
-PromptVariant EvolutionTrainingAgent::createChildVariantCharMut(const PromptVariant& parent,
-                                                                double               mutationRate) {
+PromptVariant EvolutionTrainingAgent::createChildVariantCharMut(
+    const PromptVariant& parent,
+    double               mutationRate
+) {
     PromptVariant child;
     child.id     = generateId();
     child.prompt = parent.prompt;
@@ -374,9 +387,10 @@ PromptVariant EvolutionTrainingAgent::createChildVariantCharMut(const PromptVari
     return child;
 }
 
-asio::awaitable<PromptVariant>
-    EvolutionTrainingAgent::createChildVariantLLMMut(const PromptVariant&           parent,
-                                                     const EvolutionTrainingConfig& cfg) {
+asio::awaitable<PromptVariant> EvolutionTrainingAgent::createChildVariantLLMMut(
+    const PromptVariant&           parent,
+    const EvolutionTrainingConfig& cfg
+) {
     PromptVariant child;
     child.id         = generateId();
     child.prompt     = parent.prompt;
@@ -397,17 +411,20 @@ asio::awaitable<PromptVariant>
             child = createChildVariantCharMut(parent, cfg.mutationRate);
         }
     } catch (const std::exception& e) {
-        XX_LOGD("[EvolutionTraining] LLM mutation failed, fallback to char mut: "
-                "{}",
-                e.what());
+        XX_LOGD(
+            "[EvolutionTraining] LLM mutation failed, fallback to char mut: "
+            "{}",
+            e.what()
+        );
         child = createChildVariantCharMut(parent, cfg.mutationRate);
     }
     co_return child;
 }
 
-asio::awaitable<EvolutionTrainingAgent::EvaluationResult>
-    EvolutionTrainingAgent::evaluateVariant(PromptVariant&                 variant,
-                                            const EvolutionTrainingConfig& cfg) {
+asio::awaitable<EvolutionTrainingAgent::EvaluationResult> EvolutionTrainingAgent::evaluateVariant(
+    PromptVariant&                 variant,
+    const EvolutionTrainingConfig& cfg
+) {
     EvaluationResult evResult;
     variant.perTestCaseScores.clear();
     double totalScore      = 0.0;
@@ -421,31 +438,37 @@ asio::awaitable<EvolutionTrainingAgent::EvaluationResult>
         applyVariantToTrainAgent(variant);
 
         if (cfg.verbose) {
-            XX_LOGD("[EvolutionTraining] [{}] Testing case '{}/{}' with variant '{}'",
-                    generationCounter,
-                    caseIdx + 1,
-                    cfg.testCases.size(),
-                    variant.id);
+            XX_LOGD(
+                "[EvolutionTraining] [{}] Testing case '{}/{}' with variant '{}'",
+                generationCounter,
+                caseIdx + 1,
+                cfg.testCases.size(),
+                variant.id
+            );
         }
 
         std::string agentOutput
             = co_await trainAgent->runSingleInputAsync(threadId, testCase.input, "");
 
         if (cfg.verbose) {
-            XX_LOGD("[EvolutionTraining] [{}] Output (len={}): {}",
-                    generationCounter,
-                    agentOutput.size(),
-                    agentOutput.size() > 200 ? agentOutput.substr(0, 200) + "..." : agentOutput);
+            XX_LOGD(
+                "[EvolutionTraining] [{}] Output (len={}): {}",
+                generationCounter,
+                agentOutput.size(),
+                agentOutput.size() > 200 ? agentOutput.substr(0, 200) + "..." : agentOutput
+            );
         }
 
         TrainingScore score;
         if (cfg.scoringFunc) {
             score = co_await cfg.scoringFunc(agentOutput, testCase, generationCounter);
         } else {
-            score = co_await defaultScoringWithSubAgent(agentOutput,
-                                                        testCase,
-                                                        generationCounter,
-                                                        cfg);
+            score = co_await defaultScoringWithSubAgent(
+                agentOutput,
+                testCase,
+                generationCounter,
+                cfg
+            );
         }
 
         variant.perTestCaseScores[testCase.name]  = score.score;
@@ -459,11 +482,13 @@ asio::awaitable<EvolutionTrainingAgent::EvaluationResult>
         }
 
         if (cfg.verbose) {
-            XX_LOGD("[EvolutionTraining] [{}] Score: {:.3f}, Passed: {}, Feedback: {}",
-                    generationCounter,
-                    score.score,
-                    score.passed,
-                    score.feedback);
+            XX_LOGD(
+                "[EvolutionTraining] [{}] Score: {:.3f}, Passed: {}, Feedback: {}",
+                generationCounter,
+                score.score,
+                score.passed,
+                score.feedback
+            );
         }
 
         if (cfg.onIteration) {
@@ -475,12 +500,14 @@ asio::awaitable<EvolutionTrainingAgent::EvaluationResult>
             double avg = totalScore / testCount;
             if (avg < cfg.earlyTerminationScore) {
                 if (cfg.verbose) {
-                    XX_LOGD("[EvolutionTraining] [{}] Early-terminating variant '{}' "
-                            "avg={:.3f} < {:.3f}",
-                            generationCounter,
-                            variant.id,
-                            avg,
-                            cfg.earlyTerminationScore);
+                    XX_LOGD(
+                        "[EvolutionTraining] [{}] Early-terminating variant '{}' "
+                        "avg={:.3f} < {:.3f}",
+                        generationCounter,
+                        variant.id,
+                        avg,
+                        cfg.earlyTerminationScore
+                    );
                 }
                 earlyTerminated = true;
                 for (size_t j = caseIdx + 1; j < cfg.testCases.size(); ++j) {
@@ -496,11 +523,13 @@ asio::awaitable<EvolutionTrainingAgent::EvaluationResult>
     variant.testCount       = static_cast<int>(cfg.testCases.size());
 
     if (cfg.verbose) {
-        XX_LOGD("[EvolutionTraining] [{}] Variant '{}' avgScore={:.4f}{}",
-                generationCounter,
-                variant.id,
-                variant.averageScore(),
-                earlyTerminated ? " (early-terminated)" : "");
+        XX_LOGD(
+            "[EvolutionTraining] [{}] Variant '{}' avgScore={:.4f}{}",
+            generationCounter,
+            variant.id,
+            variant.averageScore(),
+            earlyTerminated ? " (early-terminated)" : ""
+        );
     }
     co_return evResult;
 }
@@ -516,9 +545,11 @@ void EvolutionTrainingAgent::deduplicatePopulation() {
         }
     }
     if (unique.size() != population.size()) {
-        XX_LOGD("[EvolutionTraining] Deduplicated population: {} -> {}",
-                population.size(),
-                unique.size());
+        XX_LOGD(
+            "[EvolutionTraining] Deduplicated population: {} -> {}",
+            population.size(),
+            unique.size()
+        );
     }
     population = std::move(unique);
 }
@@ -526,7 +557,8 @@ void EvolutionTrainingAgent::deduplicatePopulation() {
 EvolutionTrainingAgent::EvolutionTrainingAgent(
     std::shared_ptr<agentxx::agent::DeepAgent> in_scoreAgent,
     std::shared_ptr<agentxx::agent::DeepAgent> in_trainAgent,
-    std::shared_ptr<agentxx::agent::DeepAgent> in_optimizerAgent) :
+    std::shared_ptr<agentxx::agent::DeepAgent> in_optimizerAgent
+) :
     scoreAgent(in_scoreAgent),
     trainAgent(in_trainAgent),
     optimizerAgent(in_optimizerAgent),
@@ -588,11 +620,13 @@ asio::awaitable<void> EvolutionTrainingAgent::runEvolutionLoop(const EvolutionTr
     }
 
     deduplicatePopulation();
-    std::sort(population.begin(),
-              population.end(),
-              [](const PromptVariant& a, const PromptVariant& b) {
-                  return a.averageScore() > b.averageScore();
-              });
+    std::sort(
+        population.begin(),
+        population.end(),
+        [](const PromptVariant& a, const PromptVariant& b) {
+            return a.averageScore() > b.averageScore();
+        }
+    );
 
     double bestScoreEver                 = population.empty() ? 0.0 : population[0].averageScore();
     int    generationsWithoutImprovement = 0;
@@ -601,9 +635,11 @@ asio::awaitable<void> EvolutionTrainingAgent::runEvolutionLoop(const EvolutionTr
         generationCounter++;
 
         if (cfg.verbose) {
-            XX_LOGD("[EvolutionTraining] ====== Generation {} | Population: {} ======",
-                    generationCounter,
-                    population.size());
+            XX_LOGD(
+                "[EvolutionTraining] ====== Generation {} | Population: {} ======",
+                generationCounter,
+                population.size()
+            );
         }
 
         // 2a. 从当前 population 中选取 top 变体进行变异
@@ -624,12 +660,14 @@ asio::awaitable<void> EvolutionTrainingAgent::runEvolutionLoop(const EvolutionTr
         }
 
         if (cfg.verbose) {
-            XX_LOGD("[EvolutionTraining] [{}] Created {} new variants from top {} "
-                    "parents (mutation={})",
-                    generationCounter,
-                    newGeneration.size(),
-                    mutateFrom,
-                    cfg.useLLMMutation ? "LLM" : "char");
+            XX_LOGD(
+                "[EvolutionTraining] [{}] Created {} new variants from top {} "
+                "parents (mutation={})",
+                generationCounter,
+                newGeneration.size(),
+                mutateFrom,
+                cfg.useLLMMutation ? "LLM" : "char"
+            );
         }
 
         // 2b. 测试所有新变体，并收集最差用例信息
@@ -668,18 +706,22 @@ asio::awaitable<void> EvolutionTrainingAgent::runEvolutionLoop(const EvolutionTr
                 }
 
                 if (cfg.verbose) {
-                    XX_LOGD("[EvolutionTraining] [{}] Optimizing variant '{}' on "
-                            "worst case '{}'",
-                            generationCounter,
-                            variant.id,
-                            ev.worstCase->name);
+                    XX_LOGD(
+                        "[EvolutionTraining] [{}] Optimizing variant '{}' on "
+                        "worst case '{}'",
+                        generationCounter,
+                        variant.id,
+                        ev.worstCase->name
+                    );
                 }
 
-                auto optimized = co_await optimizeVariantWithLLM(variant,
-                                                                 *ev.worstCase,
-                                                                 ev.worstCaseOutput,
-                                                                 ev.worstCaseScore,
-                                                                 cfg);
+                auto optimized = co_await optimizeVariantWithLLM(
+                    variant,
+                    *ev.worstCase,
+                    ev.worstCaseOutput,
+                    ev.worstCaseScore,
+                    cfg
+                );
 
                 // patch 为空对象表示无修改
                 bool hasChange = optimized.patch.is_object() && !optimized.patch.empty();
@@ -703,35 +745,45 @@ asio::awaitable<void> EvolutionTrainingAgent::runEvolutionLoop(const EvolutionTr
         // 2d. 测试优化后的变体（在全部用例上公平评估）
         for (auto& variant : optimizedVariants) {
             if (cfg.verbose) {
-                XX_LOGD("[EvolutionTraining] [{}] Evaluating optimized variant '{}'",
-                        generationCounter,
-                        variant.id);
+                XX_LOGD(
+                    "[EvolutionTraining] [{}] Evaluating optimized variant '{}'",
+                    generationCounter,
+                    variant.id
+                );
             }
             co_await evaluateVariant(variant, cfg);
         }
 
         // 2e. 合并新旧 population
-        population.insert(population.end(),
-                          std::make_move_iterator(newGeneration.begin()),
-                          std::make_move_iterator(newGeneration.end()));
-        population.insert(population.end(),
-                          std::make_move_iterator(optimizedVariants.begin()),
-                          std::make_move_iterator(optimizedVariants.end()));
+        population.insert(
+            population.end(),
+            std::make_move_iterator(newGeneration.begin()),
+            std::make_move_iterator(newGeneration.end())
+        );
+        population.insert(
+            population.end(),
+            std::make_move_iterator(optimizedVariants.begin()),
+            std::make_move_iterator(optimizedVariants.end())
+        );
 
         // 2f. 去重、排序并保留 top K
         deduplicatePopulation();
-        std::sort(population.begin(),
-                  population.end(),
-                  [](const PromptVariant& a, const PromptVariant& b) {
-                      return a.averageScore() > b.averageScore();
-                  });
+        std::sort(
+            population.begin(),
+            population.end(),
+            [](const PromptVariant& a, const PromptVariant& b) {
+                return a.averageScore() > b.averageScore();
+            }
+        );
 
         if (population.size() > static_cast<size_t>(cfg.topK)) {
             if (cfg.verbose) {
-                XX_LOGD("[EvolutionTraining] [{}] Trimming population from {} to {}",
-                        generationCounter,
-                        population.size(),
-                        cfg.topK);
+                XX_LOGD(
+                    "[EvolutionTraining] [{}] Trimming population from {} to {}",
+                    generationCounter,
+                    population.size(),
+                    cfg.topK
+                );
             }
             population.resize(cfg.topK);
         }
@@ -750,31 +802,37 @@ asio::awaitable<void> EvolutionTrainingAgent::runEvolutionLoop(const EvolutionTr
             XX_LOGD("[EvolutionTraining] [{}] Top 5 prompts:", generationCounter);
             for (size_t i = 0; i < std::min(population.size(), static_cast<size_t>(5)); ++i) {
                 const auto& v = population[i];
-                XX_LOGD("  [{}/{}] id={} avgScore={:.4f} tests={} gen={} parent={}",
-                        i + 1,
-                        population.size(),
-                        v.id,
-                        v.averageScore(),
-                        v.testCount,
-                        v.generation,
-                        v.parentId);
+                XX_LOGD(
+                    "  [{}/{}] id={} avgScore={:.4f} tests={} gen={} parent={}",
+                    i + 1,
+                    population.size(),
+                    v.id,
+                    v.averageScore(),
+                    v.testCount,
+                    v.generation,
+                    v.parentId
+                );
             }
 
             const auto& best = population[0];
             const auto& sp   = best.prompt.systemPrompt;
-            XX_LOGD("[EvolutionTraining] [{}] Best prompt (score={:.4f}):\n{}",
-                    generationCounter,
-                    best.averageScore(),
-                    sp.size() > 300 ? sp.substr(0, 300) + "..." : sp);
+            XX_LOGD(
+                "[EvolutionTraining] [{}] Best prompt (score={:.4f}):\n{}",
+                generationCounter,
+                best.averageScore(),
+                sp.size() > 300 ? sp.substr(0, 300) + "..." : sp
+            );
         }
 
         // 2i. 收敛检查
         if (cfg.maxGenerationsWithoutImprovement > 0
             && generationsWithoutImprovement >= cfg.maxGenerationsWithoutImprovement) {
-            XX_LOGD("[EvolutionTraining] Converged! Best score {:.4f} unchanged "
-                    "for {} generations. Stopping training.",
-                    bestScoreEver,
-                    generationsWithoutImprovement);
+            XX_LOGD(
+                "[EvolutionTraining] Converged! Best score {:.4f} unchanged "
+                "for {} generations. Stopping training.",
+                bestScoreEver,
+                generationsWithoutImprovement
+            );
             savePopulationToFile(cfg.saveFilePath, cfg.saveFileBackupCount);
             break;
         }
@@ -810,10 +868,12 @@ void EvolutionTrainingAgent::applyBestPromptToConfig(std::shared_ptr<AgentConfig
         return;
     }
     config->prompt = best->prompt;
-    XX_LOGD("[EvolutionTraining] Applied best prompt (id={}, score={:.4f}) to "
-            "config",
-            best->id,
-            best->averageScore());
+    XX_LOGD(
+        "[EvolutionTraining] Applied best prompt (id={}, score={:.4f}) to "
+        "config",
+        best->id,
+        best->averageScore()
+    );
 }
 
 } // namespace agent

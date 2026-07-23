@@ -25,30 +25,41 @@ asio::awaitable<void> SubagentSupervisor::start() {
 
     // 单个 subagent 处理服务 ===
     auto& rr = ctxPtr->bus->getRR<events::ReqSubagentStart, events::RespSubagentResult>(
-        events::Topic::Subagent);
-    serverId = rr.serve([this](const events::ReqSubagentStart& req,
-                               size_t) -> asio::awaitable<events::RespSubagentResult> {
-        co_return co_await runSubagent(req.subagentName,
-                                       req.systemPrompt,
-                                       req.message,
-                                       req.parentThreadId);
-    });
+        events::Topic::Subagent
+    );
+    serverId = rr.serve(
+        [this](const events::ReqSubagentStart& req, size_t)
+            -> asio::awaitable<events::RespSubagentResult> {
+            co_return co_await runSubagent(
+                req.subagentName,
+                req.systemPrompt,
+                req.message,
+                req.parentThreadId
+            );
+        }
+    );
 
     // 批量 subagent 处理服务 ===
     auto& batchRR = ctxPtr->bus->getRR<events::ReqSubagentBatch, events::RespSubagentBatch>(
-        events::Topic::SubagentBatch);
-    batchServerId = batchRR.serve([this](const events::ReqSubagentBatch& req,
-                                         size_t) -> asio::awaitable<events::RespSubagentBatch> {
-        co_return co_await runBatch(req);
-    });
+        events::Topic::SubagentBatch
+    );
+    batchServerId = batchRR.serve(
+        [this](const events::ReqSubagentBatch& req, size_t)
+            -> asio::awaitable<events::RespSubagentBatch> {
+            co_return co_await runBatch(req);
+        }
+    );
 
     // 跨 agent 查询路由 ===
     auto& crossRR = ctxPtr->bus->getRR<events::ReqCrossAgent, events::RespCrossAgent>(
-        events::Topic::CrossAgent);
-    crossAgentServerId = crossRR.serve([this](const events::ReqCrossAgent& req,
-                                              size_t) -> asio::awaitable<events::RespCrossAgent> {
-        co_return co_await handleCrossAgent(req);
-    });
+        events::Topic::CrossAgent
+    );
+    crossAgentServerId = crossRR.serve(
+        [this](const events::ReqCrossAgent& req, size_t)
+            -> asio::awaitable<events::RespCrossAgent> {
+            co_return co_await handleCrossAgent(req);
+        }
+    );
 
     registered = true;
     co_return;
@@ -65,7 +76,8 @@ void SubagentSupervisor::stop() {
             .removeServer(serverId);
         ctxPtr->bus
             ->getRR<events::ReqSubagentBatch, events::RespSubagentBatch>(
-                events::Topic::SubagentBatch)
+                events::Topic::SubagentBatch
+            )
             .removeServer(batchServerId);
         ctxPtr->bus->getRR<events::ReqCrossAgent, events::RespCrossAgent>(events::Topic::CrossAgent)
             .removeServer(crossAgentServerId);
@@ -77,11 +89,12 @@ SubagentSupervisor::~SubagentSupervisor() {
     stop();
 }
 
-asio::awaitable<events::RespSubagentResult>
-    SubagentSupervisor::runSubagent(const std::string& subagentName,
-                                    const std::string& systemPromptIn,
-                                    const std::string& message,
-                                    const std::string& parentThreadId) {
+asio::awaitable<events::RespSubagentResult> SubagentSupervisor::runSubagent(
+    const std::string& subagentName,
+    const std::string& systemPromptIn,
+    const std::string& message,
+    const std::string& parentThreadId
+) {
     auto ctxPtr = agentContext.lock();
     if (!ctxPtr || !ctxPtr->subagentManagerToolPtr) {
         co_return events::RespSubagentResult{
@@ -149,11 +162,10 @@ asio::awaitable<events::RespSubagentResult>
             cfg,
             [&oss, &busPtr, &subagentName, &subagentId](const neograph::graph::GraphEvent& event) {
                 switch (event.type) {
-                case neograph::graph::GraphEvent::Type::NODE_START:
-                case neograph::graph::GraphEvent::Type::NODE_END:
-                    break;
-                case neograph::graph::GraphEvent::Type::LLM_TOKEN:
-                    {
+                    case neograph::graph::GraphEvent::Type::NODE_START:
+                    case neograph::graph::GraphEvent::Type::NODE_END:
+                        break;
+                    case neograph::graph::GraphEvent::Type::LLM_TOKEN: {
                         std::string token;
                         std::string kind = "content";
                         if (event.data.is_string()) {
@@ -185,18 +197,20 @@ asio::awaitable<events::RespSubagentResult>
                                             .agentName  = agentName,
                                             .kind       = kind == "thinking" ? "thinking" : "token",
                                             .data       = token,
-                                        });
+                                        }
+                                    );
                                 },
-                                asio::detached);
+                                asio::detached
+                            );
                         }
-                    }
-                    break;
-                case neograph::graph::GraphEvent::Type::CHANNEL_WRITE:
-                case neograph::graph::GraphEvent::Type::INTERRUPT:
-                case neograph::graph::GraphEvent::Type::ERROR:
-                    break;
+                    } break;
+                    case neograph::graph::GraphEvent::Type::CHANNEL_WRITE:
+                    case neograph::graph::GraphEvent::Type::INTERRUPT:
+                    case neograph::graph::GraphEvent::Type::ERROR:
+                        break;
                 }
-            });
+            }
+        );
 
         auto result = oss.str();
         co_await subagent->onSubagentEnd(result);
@@ -227,29 +241,32 @@ asio::awaitable<events::RespSubagentBatch>
     auto doneChannel
         = std::make_shared<asio::experimental::channel<void(neograph_asio_error_code, size_t)>>(
             ex,
-            static_cast<unsigned>(n));
+            static_cast<unsigned>(n)
+        );
 
     for (size_t i = 0; i < n; ++i) {
         const auto& task = req.tasks[i];
         asio::co_spawn(
             ex,
-            [this, task, &results, i, doneChannel, parentThreadId = req.parentThreadId]()
-                -> asio::awaitable<void> {
-                auto r     = co_await runSubagent(task.subagentName,
-                                              task.systemPrompt,
-                                              task.message,
-                                              parentThreadId);
+            [this, task, &results, i, doneChannel, parentThreadId = req.parentThreadId](
+            ) -> asio::awaitable<void> {
+                auto r = co_await runSubagent(
+                    task.subagentName,
+                    task.systemPrompt,
+                    task.message,
+                    parentThreadId
+                );
                 results[i] = ItemResult{
                     .resultId     = task.resultId,
                     .content      = r.content,
                     .hasError     = r.hasError,
                     .errorMessage = r.errorMessage,
                 };
-                doneChannel->async_send(neograph_asio_error_code{},
-                                        i,
-                                        [](neograph_asio_error_code) {});
+                doneChannel
+                    ->async_send(neograph_asio_error_code{}, i, [](neograph_asio_error_code) {});
             },
-            asio::detached);
+            asio::detached
+        );
     }
 
     // 等待全部完成 (接收 n 次)
@@ -276,10 +293,12 @@ asio::awaitable<events::RespCrossAgent>
     //  不支持运行中追加消息, 后续需扩展为持久会话模式)
     co_return events::RespCrossAgent{
         .hasError     = true,
-        .errorMessage = fmt::format("Cross-agent query to `{}`: not implemented "
-                                    "(passive message injection requires persistent "
-                                    "subagent sessions)",
-                                    req.toAgent),
+        .errorMessage = fmt::format(
+            "Cross-agent query to `{}`: not implemented "
+            "(passive message injection requires persistent "
+            "subagent sessions)",
+            req.toAgent
+        ),
     };
 }
 

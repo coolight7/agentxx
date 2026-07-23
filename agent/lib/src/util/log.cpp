@@ -72,7 +72,6 @@ namespace util {
 static std::string _exe_path{};
 
 void printStack() {
-
 #define innerPrintToConsoleAndFile_d(str, ...) printf(str, ##__VA_ARGS__);
 
     {

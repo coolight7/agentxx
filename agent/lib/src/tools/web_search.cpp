@@ -12,9 +12,11 @@
 namespace agentxx {
 namespace tools {
 
-WebSearchTool::WebSearchTool(std::string_view                            in_searchApiUrl,
-                             bool                                        in_convertHtml2markdown,
-                             std::weak_ptr<agentxx::agent::AgentContext> in_agentContext) :
+WebSearchTool::WebSearchTool(
+    std::string_view                            in_searchApiUrl,
+    bool                                        in_convertHtml2markdown,
+    std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
+) :
     XXToolBase("web_search", in_agentContext, true, true),
     searchApiUrl(in_searchApiUrl),
     convertHtml2markdown(in_convertHtml2markdown) {}
@@ -55,7 +57,8 @@ asio::awaitable<std::string> WebSearchTool::execute_async(const neograph::json& 
         auto resp = co_await agentxx::util::HttpClient::getAsync(
             search_url,
             {},
-            agentxx::util::HttpClient::RequestConfig{.readTimeout = std::chrono::seconds{15}});
+            agentxx::util::HttpClient::RequestConfig{.readTimeout = std::chrono::seconds{15}}
+        );
         out_resp_err = resp.error_or("unknown");
         if (resp.has_value()) {
             auto& respVal = resp.value();
@@ -134,12 +137,15 @@ asio::awaitable<std::string> WebFetchUrlTool::execute_async(const neograph::json
     auto resp = co_await agentxx::util::HttpClient::getAsync(
         url,
         {},
-        agentxx::util::HttpClient::RequestConfig{.readTimeout = std::chrono::seconds(timeout)});
+        agentxx::util::HttpClient::RequestConfig{.readTimeout = std::chrono::seconds(timeout)}
+    );
     if (resp.has_value()) {
         if (false == agentxx::util::HttpClient::respIsSucc(resp.value())) {
-            co_return fmt::format(R"({{"error":"web_fetch_url failed, status {}, error: {}"}})",
-                                  resp.value().status,
-                                  resp.error_or("[unknown]"));
+            co_return fmt::format(
+                R"({{"error":"web_fetch_url failed, status {}, error: {}"}})",
+                resp.value().status,
+                resp.error_or("[unknown]")
+            );
         }
 
         auto& data = resp.value().body;
@@ -155,7 +161,8 @@ asio::awaitable<std::string> WebFetchUrlTool::execute_async(const neograph::json
 }
 
 WebFetchUrlMarkdownTool::WebFetchUrlMarkdownTool(
-    std::weak_ptr<agentxx::agent::AgentContext> in_agentContext) :
+    std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
+) :
     XXToolBase("web_fetch_url_markdown", in_agentContext, true, true) {}
 
 neograph::ChatTool WebFetchUrlMarkdownTool::get_definition() const {
@@ -181,8 +188,8 @@ neograph::ChatTool WebFetchUrlMarkdownTool::get_definition() const {
     };
 }
 
-asio::awaitable<std::string>
-    WebFetchUrlMarkdownTool::execute_async(const neograph::json& arguments) {
+asio::awaitable<std::string> WebFetchUrlMarkdownTool::execute_async(const neograph::json& arguments
+) {
     std::string url = arguments.value("url", std::string{});
     if (url.empty()) {
         co_return R"({"error":"Arg `url` is empty"})";
@@ -206,7 +213,8 @@ asio::awaitable<std::string>
 
 ModelWebSearchTool::ModelWebSearchTool(
     const agentxx::agent::ModelConfig&          modelCfg,
-    std::weak_ptr<agentxx::agent::AgentContext> in_agentContext) :
+    std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
+) :
     XXToolBase("web_search", in_agentContext, true, true) {
     provider = agentxx::server::OpenAIProvider::create(modelCfg);
 }

@@ -75,15 +75,15 @@ public:
 
         const char* sourceName = "Unknown";
         switch (source_) {
-        case AudioDataSource::SystemOutput:
-            sourceName = "SystemOutput";
-            break;
-        case AudioDataSource::ProgramOutput:
-            sourceName = "ProgramOutput";
-            break;
-        case AudioDataSource::MicrophoneInput:
-            sourceName = "MicrophoneInput";
-            break;
+            case AudioDataSource::SystemOutput:
+                sourceName = "SystemOutput";
+                break;
+            case AudioDataSource::ProgramOutput:
+                sourceName = "ProgramOutput";
+                break;
+            case AudioDataSource::MicrophoneInput:
+                sourceName = "MicrophoneInput";
+                break;
         }
         XX_LOGI("AudioStream: started (source={}, pid={})", sourceName, targetProcessId);
         return true;
@@ -121,15 +121,19 @@ public:
 private:
 
     HRESULT activateDevice() {
-        HRESULT hr = CoCreateInstance(CLSID_MMDeviceEnumerator,
-                                      nullptr,
-                                      CLSCTX_ALL,
-                                      IID_IMMDeviceEnumerator,
-                                      reinterpret_cast<void**>(enumerator_.GetAddressOf()));
+        HRESULT hr = CoCreateInstance(
+            CLSID_MMDeviceEnumerator,
+            nullptr,
+            CLSCTX_ALL,
+            IID_IMMDeviceEnumerator,
+            reinterpret_cast<void**>(enumerator_.GetAddressOf())
+        );
         if (FAILED(hr)) {
-            XX_LOGE("AudioStream: CoCreateInstance MMDeviceEnumerator failed, "
-                    "hr=0x{:08X}",
-                    static_cast<unsigned>(hr));
+            XX_LOGE(
+                "AudioStream: CoCreateInstance MMDeviceEnumerator failed, "
+                "hr=0x{:08X}",
+                static_cast<unsigned>(hr)
+            );
             return hr;
         }
 
@@ -146,18 +150,24 @@ private:
 
         hr = enumerator_->GetDefaultAudioEndpoint(dataFlow, eConsole, device_.GetAddressOf());
         if (FAILED(hr)) {
-            XX_LOGE("AudioStream: GetDefaultAudioEndpoint failed, hr=0x{:08X}",
-                    static_cast<unsigned>(hr));
+            XX_LOGE(
+                "AudioStream: GetDefaultAudioEndpoint failed, hr=0x{:08X}",
+                static_cast<unsigned>(hr)
+            );
             return hr;
         }
 
-        hr = device_->Activate(IID_IAudioClient,
-                               CLSCTX_ALL,
-                               nullptr,
-                               reinterpret_cast<void**>(audioClient_.GetAddressOf()));
+        hr = device_->Activate(
+            IID_IAudioClient,
+            CLSCTX_ALL,
+            nullptr,
+            reinterpret_cast<void**>(audioClient_.GetAddressOf())
+        );
         if (FAILED(hr)) {
-            XX_LOGE("AudioStream: Activate IAudioClient failed, hr=0x{:08X}",
-                    static_cast<unsigned>(hr));
+            XX_LOGE(
+                "AudioStream: Activate IAudioClient failed, hr=0x{:08X}",
+                static_cast<unsigned>(hr)
+            );
             return hr;
         }
 
@@ -183,33 +193,41 @@ private:
             streamFlags |= AUDCLNT_STREAMFLAGS_LOOPBACK;
         }
 
-        hr = audioClient_->Initialize(AUDCLNT_SHAREMODE_SHARED,
-                                      streamFlags,
-                                      bufferDuration,
-                                      0,
-                                      mixFormat,
-                                      nullptr);
+        hr = audioClient_->Initialize(
+            AUDCLNT_SHAREMODE_SHARED,
+            streamFlags,
+            bufferDuration,
+            0,
+            mixFormat,
+            nullptr
+        );
         if (FAILED(hr)) {
             XX_LOGE("AudioStream: Initialize failed, hr=0x{:08X}", static_cast<unsigned>(hr));
             CoTaskMemFree(mixFormat);
             return hr;
         }
 
-        hr = audioClient_->GetService(IID_IAudioCaptureClient,
-                                      reinterpret_cast<void**>(captureClient_.GetAddressOf()));
+        hr = audioClient_->GetService(
+            IID_IAudioCaptureClient,
+            reinterpret_cast<void**>(captureClient_.GetAddressOf())
+        );
         if (FAILED(hr)) {
-            XX_LOGE("AudioStream: GetService IAudioCaptureClient failed, hr=0x{:08X}",
-                    static_cast<unsigned>(hr));
+            XX_LOGE(
+                "AudioStream: GetService IAudioCaptureClient failed, hr=0x{:08X}",
+                static_cast<unsigned>(hr)
+            );
             CoTaskMemFree(mixFormat);
             return hr;
         }
 
         if (source_ == AudioDataSource::ProgramOutput && targetProcessId_ != 0) {
             ComPtr<IAudioSessionManager2> sessionManager;
-            hr = device_->Activate(IID_IAudioSessionManager2,
-                                   CLSCTX_ALL,
-                                   nullptr,
-                                   reinterpret_cast<void**>(sessionManager.GetAddressOf()));
+            hr = device_->Activate(
+                IID_IAudioSessionManager2,
+                CLSCTX_ALL,
+                nullptr,
+                reinterpret_cast<void**>(sessionManager.GetAddressOf())
+            );
             if (SUCCEEDED(hr)) {
                 sessionManager_ = std::move(sessionManager);
             }
@@ -236,8 +254,10 @@ private:
     void captureLoop() {
         HRESULT hr = audioClient_->Start();
         if (FAILED(hr)) {
-            XX_LOGE("AudioStream: audioClient Start failed, hr=0x{:08X}",
-                    static_cast<unsigned>(hr));
+            XX_LOGE(
+                "AudioStream: audioClient Start failed, hr=0x{:08X}",
+                static_cast<unsigned>(hr)
+            );
             running_.store(false);
             return;
         }
@@ -250,8 +270,10 @@ private:
 
             hr = readCaptureBuffer();
             if (FAILED(hr)) {
-                XX_LOGE("AudioStream: readCaptureBuffer failed, hr=0x{:08X}",
-                        static_cast<unsigned>(hr));
+                XX_LOGE(
+                    "AudioStream: readCaptureBuffer failed, hr=0x{:08X}",
+                    static_cast<unsigned>(hr)
+                );
                 break;
             }
         }
@@ -352,7 +374,8 @@ private:
             ComPtr<IAudioSessionControl2> sessionControl2;
             hr = sessionControl->QueryInterface(
                 IID_IAudioSessionControl2,
-                reinterpret_cast<void**>(sessionControl2.GetAddressOf()));
+                reinterpret_cast<void**>(sessionControl2.GetAddressOf())
+            );
             if (FAILED(hr)) {
                 continue;
             }
@@ -388,14 +411,16 @@ private:
                 = WideCharToMultiByte(CP_UTF8, 0, wname.c_str(), -1, nullptr, 0, nullptr, nullptr);
             if (size > 0) {
                 std::string result(size - 1, '\0');
-                WideCharToMultiByte(CP_UTF8,
-                                    0,
-                                    wname.c_str(),
-                                    -1,
-                                    result.data(),
-                                    size,
-                                    nullptr,
-                                    nullptr);
+                WideCharToMultiByte(
+                    CP_UTF8,
+                    0,
+                    wname.c_str(),
+                    -1,
+                    result.data(),
+                    size,
+                    nullptr,
+                    nullptr
+                );
                 return result;
             }
         }

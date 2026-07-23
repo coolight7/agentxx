@@ -42,9 +42,11 @@ public:
 
     using NotificationSink = std::function<void(const json&)>;
 
-    AcpProtocolHandler(std::shared_ptr<agentxx::agent::DeepAgent> agent,
-                       json                                       agentInfo,
-                       Config                                     config);
+    AcpProtocolHandler(
+        std::shared_ptr<agentxx::agent::DeepAgent> agent,
+        json                                       agentInfo,
+        Config                                     config
+    );
 
     AcpProtocolHandler(const AcpProtocolHandler&)            = delete;
     AcpProtocolHandler& operator=(const AcpProtocolHandler&) = delete;
@@ -72,9 +74,11 @@ public:
 
     /// Emit an outbound request (agent→client) and wait for the response.
     /// The notification sink must be set before calling this.
-    json callClient(const std::string&        method,
-                    json                      params,
-                    std::chrono::milliseconds timeout = std::chrono::seconds{30});
+    json callClient(
+        const std::string&        method,
+        json                      params,
+        std::chrono::milliseconds timeout = std::chrono::seconds{30}
+    );
 
     // -- Session queries (for tests / introspection) -----------------------
 
@@ -104,10 +108,12 @@ public:
     json handleInitialize(const json& params, const json& id);
     json handleSessionNew(const json& params, const json& id);
     void handleSessionPrompt(const json& env, const json& params, const json& id);
-    void workerRunPrompt(const std::string&                 sessionId,
-                         const json&                        promptBlocks,
-                         const json&                        id,
-                         std::shared_ptr<std::atomic<bool>> cancelFlag);
+    void workerRunPrompt(
+        const std::string&                 sessionId,
+        const json&                        promptBlocks,
+        const json&                        id,
+        std::shared_ptr<std::atomic<bool>> cancelFlag
+    );
     void workerCleanup(const std::string& sessionId);
     void handleSessionCancel(const json& params);
 
@@ -171,9 +177,11 @@ public:
         std::chrono::seconds     asyncTimeout{120};
     };
 
-    HttpAcpServer(std::shared_ptr<agentxx::agent::DeepAgent> agent,
-                  neograph::json                             agentInfo,
-                  Config                                     config);
+    HttpAcpServer(
+        std::shared_ptr<agentxx::agent::DeepAgent> agent,
+        neograph::json                             agentInfo,
+        Config                                     config
+    );
 
     HttpAcpServer(const HttpAcpServer&)            = delete;
     HttpAcpServer& operator=(const HttpAcpServer&) = delete;
@@ -206,15 +214,15 @@ private:
     // ACP request handler (HTTP JSON-RPC)
     // -----------------------------------------------------------------------
 
-    asio::awaitable<void> handleAcpRequest(util::HttpServer::Request&  req,
-                                           util::HttpServer::Response& resp);
+    asio::awaitable<void>
+        handleAcpRequest(util::HttpServer::Request& req, util::HttpServer::Response& resp);
 
     // -----------------------------------------------------------------------
     // SSE endpoint
     // -----------------------------------------------------------------------
 
-    asio::awaitable<void> handleSseRequest(util::HttpServer::Request&  req,
-                                           util::HttpServer::Response& resp);
+    asio::awaitable<void>
+        handleSseRequest(util::HttpServer::Request& req, util::HttpServer::Response& resp);
 
     void broadcastSSE(const std::string& /*data*/);
     void stopSSE();
@@ -223,9 +231,11 @@ private:
     // HTTP response helpers
     // -----------------------------------------------------------------------
 
-    void writeJsonResponse(util::HttpServer::Response& resp,
-                           boost::beast::http::status  status,
-                           const neograph::json&       body);
+    void writeJsonResponse(
+        util::HttpServer::Response& resp,
+        boost::beast::http::status  status,
+        const neograph::json&       body
+    );
 
     neograph::json
         jsonRpcError(const neograph::json& id, int code, const std::string& message) const;

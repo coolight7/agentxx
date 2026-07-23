@@ -11,7 +11,8 @@ namespace agentxx {
 namespace tools {
 
 ThreadShareStoreTool::ThreadShareStoreTool(
-    std::weak_ptr<agentxx::agent::AgentContext> in_agentContext) :
+    std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
+) :
     XXToolBase("share_store", in_agentContext, false, false) {}
 
 std::optional<agentxx::middleware::SummarizationToolHandle>
@@ -21,10 +22,12 @@ std::optional<agentxx::middleware::SummarizationToolHandle>
             if (args.is_object() && args["id"].is_string()) {
                 auto line_offset = args.value<int64_t>("line_offset", -1);
                 auto line_limit  = args.value<int64_t>("line_limit", -1);
-                return fmt::format("share_store:{}:lo:{}:ll:{}",
-                                   args["id"].get<std::string>(),
-                                   line_offset,
-                                   line_limit);
+                return fmt::format(
+                    "share_store:{}:lo:{}:ll:{}",
+                    args["id"].get<std::string>(),
+                    line_offset,
+                    line_limit
+                );
             }
             return std::nullopt;
         },
@@ -145,7 +148,8 @@ asio::awaitable<std::string> ThreadShareStoreTool::execute_async(const neograph:
             throw std::runtime_error{fmt::format(
                 R"(Arg `line_offset`({} lines) is out of range of file lines({} lines).)",
                 offset,
-                lineNum)};
+                lineNum
+            )};
         }
 
         text = result.str();

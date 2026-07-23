@@ -19,7 +19,6 @@ int g_es_failed = 0;
 
 /// 1. 单向事件流: 多订阅者派发 + execHit 自动移除 + 异常隔离
 asio::awaitable<void> test_eventstream_publish() {
-
     auto  bus    = agentxx::middleware::EventBus{co_await asio::this_coro::executor};
     auto& stream = bus.get<TestEvent>("test.ping");
 
@@ -33,26 +32,30 @@ asio::awaitable<void> test_eventstream_publish() {
             permanentCount += e.value;
             co_return;
         },
-        0);
+        0
+    );
     auto idOnce = stream.subscribe(
         [&](const TestEvent& e) -> asio::awaitable<void> {
             onceCount += e.value;
             co_return;
         },
-        1);
+        1
+    );
     auto idTwice = stream.subscribe(
         [&](const TestEvent& e) -> asio::awaitable<void> {
             twiceCount += e.value;
             co_return;
         },
-        2);
+        2
+    );
     auto idThrower = stream.subscribe(
         [&](const TestEvent&) -> asio::awaitable<void> {
             throwerCount++;
             throw std::runtime_error("intentional listener failure");
             co_return;
         },
-        0);
+        0
+    );
     (void)idPermanent;
     (void)idOnce;
     (void)idTwice;
@@ -92,7 +95,6 @@ asio::awaitable<void> test_eventstream_publish() {
 
 /// 2. 请求-响应: 正常响应 + correlationId 关联
 asio::awaitable<void> test_requestresponse_normal() {
-
     auto  bus = agentxx::middleware::EventBus{co_await asio::this_coro::executor};
     auto& rr  = bus.getRR<TestReq, TestResp>("test.qa");
 
@@ -111,7 +113,6 @@ asio::awaitable<void> test_requestresponse_normal() {
 
 /// 3. 请求-响应: 超时返回 nullopt
 asio::awaitable<void> test_requestresponse_timeout() {
-
     auto  bus = agentxx::middleware::EventBus{co_await asio::this_coro::executor};
     auto& rr  = bus.getRR<TestReq, TestResp>("test.qa.slow");
 
@@ -126,7 +127,8 @@ asio::awaitable<void> test_requestresponse_timeout() {
     auto start   = std::chrono::steady_clock::now();
     auto resp    = co_await rr.request(TestReq{.question = "ping"}, std::chrono::milliseconds(200));
     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                       std::chrono::steady_clock::now() - start)
+                       std::chrono::steady_clock::now() - start
+    )
                        .count();
     XX_TEST_EXPECT_FALSE(resp.has_value());
     XX_TEST_EXPECT_TRUE(elapsed >= 180 && elapsed < 2000);
@@ -136,7 +138,6 @@ asio::awaitable<void> test_requestresponse_timeout() {
 
 /// 4. 请求-响应: 无 server 时返回 nullopt
 asio::awaitable<void> test_requestresponse_noserver() {
-
     auto  bus = agentxx::middleware::EventBus{co_await asio::this_coro::executor};
     auto& rr  = bus.getRR<TestReq, TestResp>("test.qa.empty");
 
@@ -148,7 +149,6 @@ asio::awaitable<void> test_requestresponse_noserver() {
 
 /// 5. 定时器事件流: once 触发一次且不阻塞调用者
 asio::awaitable<void> test_timer_once() {
-
     auto             bus = agentxx::middleware::EventBus{co_await asio::this_coro::executor};
     std::atomic<int> fireCount{0};
 
@@ -158,7 +158,8 @@ asio::awaitable<void> test_timer_once() {
             fireCount++;
             co_return;
         },
-        TestEvent{.msg = "tick", .value = 1});
+        TestEvent{.msg = "tick", .value = 1}
+    );
     XX_TEST_EXPECT_TRUE(id > 0);
 
     XX_TEST_EXPECT_TRUE(fireCount.load() == 0); // 立即返回, 未触发
@@ -173,7 +174,6 @@ asio::awaitable<void> test_timer_once() {
 
 /// 6. EventBus 便捷方法 publish/request 与复用同 topic
 asio::awaitable<void> test_eventbus_convenience() {
-
     auto bus = agentxx::middleware::EventBus{co_await asio::this_coro::executor};
 
     std::atomic<int> seen{0};
@@ -192,9 +192,11 @@ asio::awaitable<void> test_eventbus_convenience() {
     rr.serve([](const TestReq& req, size_t) -> asio::awaitable<TestResp> {
         co_return TestResp{.answer = req.question + "!"};
     });
-    auto resp = co_await bus.request<TestReq, TestResp>("conv.rr",
-                                                        TestReq{.question = "hi"},
-                                                        std::chrono::seconds(5));
+    auto resp = co_await bus.request<TestReq, TestResp>(
+        "conv.rr",
+        TestReq{.question = "hi"},
+        std::chrono::seconds(5)
+    );
     XX_TEST_EXPECT_TRUE(resp.has_value());
     XX_TEST_EXPECT_TRUE(resp.value().answer == "hi!");
 

@@ -65,10 +65,11 @@ static std::vector<std::string> getIconvCandidateEncodings(const char* src_encod
     return candidates;
 }
 
-std::tuple<bool, std::optional<std::string>>
-    agentxx::util::convertCharset(std::string_view src,
-                                  std::string_view srcEncoding,
-                                  std::string_view targetEncoding) {
+std::tuple<bool, std::optional<std::string>> agentxx::util::convertCharset(
+    std::string_view src,
+    std::string_view srcEncoding,
+    std::string_view targetEncoding
+) {
     // 已是目标编码/空字符串，直接返回
     if (agentxx::util::isIgnoreCaseEqual(srcEncoding, targetEncoding)) {
         return {true, std::nullopt};
@@ -123,10 +124,11 @@ std::tuple<bool, std::optional<std::string>>
 }
 
 /// <isSuccess, result>
-std::tuple<bool, std::optional<std::string>>
-    agentxx::util::autoConvertCharset(std::string_view str,
-                                      std::string&     encoding,
-                                      std::string_view targetEncoding) {
+std::tuple<bool, std::optional<std::string>> agentxx::util::autoConvertCharset(
+    std::string_view str,
+    std::string&     encoding,
+    std::string_view targetEncoding
+) {
     if (str.empty()) {
         return {true, std::nullopt};
     }
@@ -214,8 +216,8 @@ std::tuple<bool, std::optional<std::string>>
     return agentxx::util::convertCharset(str, encoding, targetEncoding);
 }
 
-std::tuple<bool, std::optional<std::string>> agentxx::util::autoConvertToUtf8(std::string_view str,
-                                                                              bool             _) {
+std::tuple<bool, std::optional<std::string>>
+    agentxx::util::autoConvertToUtf8(std::string_view str, bool _) {
     std::string encoding;
     return autoConvertCharset(str, encoding, "UTF-8");
 }

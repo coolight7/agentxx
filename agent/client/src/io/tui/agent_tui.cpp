@@ -26,10 +26,12 @@ std::string oneLinePreview(const std::string& s, size_t max = 60) {
 }
 } // namespace
 
-AgentTUI::AgentTUI(asio::any_io_executor                         ex,
-                   std::shared_ptr<agentxx::agent::AgentContext> agentContext,
-                   std::string                                   threadId,
-                   TUITheme                                      theme) :
+AgentTUI::AgentTUI(
+    asio::any_io_executor                         ex,
+    std::shared_ptr<agentxx::agent::AgentContext> agentContext,
+    std::string                                   threadId,
+    TUITheme                                      theme
+) :
     agentContext_(std::move(agentContext)),
     theme_(theme),
     threadId_(std::move(threadId)),
@@ -153,18 +155,22 @@ void AgentTUI::start() {
             if (pendingPermission_.has_value()) {
                 if (event == Event::Character('y') || event == Event::Character('Y')) {
                     pendingPermission_.reset();
-                    permissionChannel_->async_send(neograph_asio_error_code{},
-                                                   true,
-                                                   [](neograph_asio_error_code) {});
+                    permissionChannel_->async_send(
+                        neograph_asio_error_code{},
+                        true,
+                        [](neograph_asio_error_code) {}
+                    );
                     postRedraw();
                     return true;
                 }
                 if (event == Event::Character('n') || event == Event::Character('N')
                     || event == Event::Escape) {
                     pendingPermission_.reset();
-                    permissionChannel_->async_send(neograph_asio_error_code{},
-                                                   false,
-                                                   [](neograph_asio_error_code) {});
+                    permissionChannel_->async_send(
+                        neograph_asio_error_code{},
+                        false,
+                        [](neograph_asio_error_code) {}
+                    );
                     postRedraw();
                     return true;
                 }
@@ -230,9 +236,11 @@ void AgentTUI::start() {
                         inputText_.clear();
                         isStreaming_   = true;
                         stickToBottom_ = true;
-                        inputChannel_->async_send(neograph_asio_error_code{},
-                                                  std::move(text),
-                                                  [](neograph_asio_error_code) {});
+                        inputChannel_->async_send(
+                            neograph_asio_error_code{},
+                            std::move(text),
+                            [](neograph_asio_error_code) {}
+                        );
                     }
                     postRedraw();
                     return true;
@@ -347,23 +355,25 @@ ftxui::Element AgentTUI::renderMessages() {
 
     for (const auto& msg : messages_) {
         switch (msg.role) {
-        case Message::Role::User:
-            pushBlock(hbox({
-                          text("> ") | color(theme_.userColor) | bold,
-                          paragraph(msg.text) | color(theme_.userColor),
-                      }),
-                      true);
-            break;
-        case Message::Role::Assistant:
-            pushBlock(paragraph(msg.text) | color(theme_.assistantColor), true);
-            break;
-        case Message::Role::Thinking:
-            {
+            case Message::Role::User:
+                pushBlock(
+                    hbox({
+                        text("> ") | color(theme_.userColor) | bold,
+                        paragraph(msg.text) | color(theme_.userColor),
+                    }),
+                    true
+                );
+                break;
+            case Message::Role::Assistant:
+                pushBlock(paragraph(msg.text) | color(theme_.assistantColor), true);
+                break;
+            case Message::Role::Thinking: {
                 const bool expanded = !msg.collapsed;
                 Elements   lines;
                 Elements   header;
-                header.push_back(text(expanded ? "\xe2\x96\xbe " : "\xe2\x96\xb8 ")
-                                 | color(theme_.hintColor));
+                header.push_back(
+                    text(expanded ? "\xe2\x96\xbe " : "\xe2\x96\xb8 ") | color(theme_.hintColor)
+                );
                 header.push_back(text("[Thinking] ") | color(theme_.thinkingColor) | bold);
                 if (!expanded) {
                     header.push_back(text(oneLinePreview(msg.text)) | color(theme_.thinkingColor));
@@ -378,17 +388,17 @@ ftxui::Element AgentTUI::renderMessages() {
                 pushBlock(std::move(block), true);
                 break;
             }
-        case Message::Role::System:
-            pushBlock(paragraph(msg.text) | color(theme_.systemColor), true);
-            break;
-        case Message::Role::Tool:
-            {
+            case Message::Role::System:
+                pushBlock(paragraph(msg.text) | color(theme_.systemColor), true);
+                break;
+            case Message::Role::Tool: {
                 const bool expanded = !msg.collapsed;
                 Elements   lines;
                 // 头部行: 折叠指示符 + [Tool] + 工具名 (+ 折叠态的单行预览)
                 Elements header;
-                header.push_back(text(expanded ? "\xe2\x96\xbe " : "\xe2\x96\xb8 ")
-                                 | color(theme_.hintColor));
+                header.push_back(
+                    text(expanded ? "\xe2\x96\xbe " : "\xe2\x96\xb8 ") | color(theme_.hintColor)
+                );
                 header.push_back(text("[Tool] ") | color(theme_.accentColor) | bold);
                 header.push_back(text(msg.toolName) | color(theme_.accentColor) | bold);
                 if (!expanded) {
@@ -396,11 +406,14 @@ ftxui::Element AgentTUI::renderMessages() {
                         header.push_back(text("  running...") | color(theme_.hintColor) | dim);
                     } else if (msg.toolHasError) {
                         header.push_back(text("  error: ") | color(theme_.systemColor));
-                        header.push_back(text(oneLinePreview(msg.toolResult))
-                                         | color(theme_.systemColor) | dim);
+                        header.push_back(
+                            text(oneLinePreview(msg.toolResult)) | color(theme_.systemColor) | dim
+                        );
                     } else {
-                        header.push_back(text("  " + oneLinePreview(msg.toolResult))
-                                         | color(theme_.statusColor) | dim);
+                        header.push_back(
+                            text("  " + oneLinePreview(msg.toolResult)) | color(theme_.statusColor)
+                            | dim
+                        );
                     }
                 }
                 lines.push_back(hbox(std::move(header)));
@@ -434,11 +447,13 @@ ftxui::Element AgentTUI::renderMessages() {
 
     if (isStreaming_ && !currentToken_.empty()) {
         if (currentTokenRole_ == Message::Role::Thinking) {
-            pushBlock(hbox({
-                          text("[Thinking] ") | color(theme_.thinkingColor) | bold,
-                          paragraph(currentToken_) | color(theme_.thinkingColor),
-                      }),
-                      false);
+            pushBlock(
+                hbox({
+                    text("[Thinking] ") | color(theme_.thinkingColor) | bold,
+                    paragraph(currentToken_) | color(theme_.thinkingColor),
+                }),
+                false
+            );
         } else {
             pushBlock(paragraph(currentToken_) | color(theme_.assistantColor), false);
         }
@@ -567,26 +582,26 @@ ftxui::Element AgentTUI::renderLogWindow() {
         ftxui::Color c = theme_.assistantColor;
         std::string  prefix;
         switch (line.level) {
-        case agentxx::util::LogLevel::Debug:
-            c      = theme_.hintColor;
-            prefix = "[D] ";
-            break;
-        case agentxx::util::LogLevel::Info:
-            c      = theme_.statusColor;
-            prefix = "[I] ";
-            break;
-        case agentxx::util::LogLevel::Warn:
-            c      = theme_.thinkingColor;
-            prefix = "[W] ";
-            break;
-        case agentxx::util::LogLevel::Error:
-            c      = theme_.systemColor;
-            prefix = "[E] ";
-            break;
-        case agentxx::util::LogLevel::Out:
-            c      = theme_.assistantColor;
-            prefix = "";
-            break;
+            case agentxx::util::LogLevel::Debug:
+                c      = theme_.hintColor;
+                prefix = "[D] ";
+                break;
+            case agentxx::util::LogLevel::Info:
+                c      = theme_.statusColor;
+                prefix = "[I] ";
+                break;
+            case agentxx::util::LogLevel::Warn:
+                c      = theme_.thinkingColor;
+                prefix = "[W] ";
+                break;
+            case agentxx::util::LogLevel::Error:
+                c      = theme_.systemColor;
+                prefix = "[E] ";
+                break;
+            case agentxx::util::LogLevel::Out:
+                c      = theme_.assistantColor;
+                prefix = "";
+                break;
         }
         elements.push_back(paragraph(prefix + line.text) | color(c));
     }
@@ -596,9 +611,11 @@ ftxui::Element AgentTUI::renderLogWindow() {
     return vbox(std::move(elements));
 }
 
-void AgentTUI::addSidebarTab(const std::string&              id,
-                             const std::string&              title,
-                             std::function<ftxui::Element()> render) {
+void AgentTUI::addSidebarTab(
+    const std::string&              id,
+    const std::string&              title,
+    std::function<ftxui::Element()> render
+) {
     for (auto& tab : sidebarTabs_) {
         if (tab.id == id) {
             tab.title  = title;
@@ -772,9 +789,11 @@ asio::awaitable<std::optional<std::string>> AgentTUI::getInput() {
     co_return std::optional<std::string>(std::move(line));
 }
 
-asio::awaitable<bool> AgentTUI::promptPermission(const std::string& toolName,
-                                                 const std::string& category,
-                                                 const std::string& target) {
+asio::awaitable<bool> AgentTUI::promptPermission(
+    const std::string& toolName,
+    const std::string& category,
+    const std::string& target
+) {
     {
         std::lock_guard<std::mutex> lock(mutex_);
         pendingPermission_ = PermissionRequest{toolName, category, target};
@@ -789,9 +808,11 @@ asio::awaitable<bool> AgentTUI::promptPermission(const std::string& toolName,
     co_return allowed;
 }
 
-void AgentTUI::onInterrupt(const std::string& node,
-                           const std::string& value,
-                           const std::string& handleName) {
+void AgentTUI::onInterrupt(
+    const std::string& node,
+    const std::string& value,
+    const std::string& handleName
+) {
     {
         std::lock_guard<std::mutex> lock(mutex_);
         std::string                 msg = "Interrupted at: " + node + "\nValue: " + value;
@@ -803,9 +824,11 @@ void AgentTUI::onInterrupt(const std::string& node,
     postRedraw();
 }
 
-void AgentTUI::onToolStart(const std::string& toolName,
-                           const std::string& toolCallId,
-                           const std::string& arguments) {
+void AgentTUI::onToolStart(
+    const std::string& toolName,
+    const std::string& toolCallId,
+    const std::string& arguments
+) {
     {
         std::lock_guard<std::mutex> lock(mutex_);
         // 先冲刷当前未提交的流式 token (thinking/content), 保证 toolcall 严格
@@ -829,10 +852,12 @@ void AgentTUI::onToolStart(const std::string& toolName,
     postRedraw();
 }
 
-void AgentTUI::onToolEnd(const std::string& toolName,
-                         const std::string& toolCallId,
-                         const std::string& result,
-                         bool               hasError) {
+void AgentTUI::onToolEnd(
+    const std::string& toolName,
+    const std::string& toolCallId,
+    const std::string& result,
+    bool               hasError
+) {
     {
         std::lock_guard<std::mutex> lock(mutex_);
         // 按 toolCallId 从后往前找对应的开始消息并填充结果

@@ -135,8 +135,8 @@ asio::awaitable<void>
     co_return;
 }
 
-asio::awaitable<void>
-    test_regexp_empty_opt(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+asio::awaitable<void> test_regexp_empty_opt(std::weak_ptr<agentxx::agent::AgentContext> agentContext
+) {
     auto tool = agentxx::tools::StringRegexpTool{agentContext};
     auto args = neograph::json{
         {"content", "some text"                    },
@@ -221,8 +221,8 @@ asio::awaitable<void>
     co_return;
 }
 
-asio::awaitable<void>
-    test_regexp_replace(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+asio::awaitable<void> test_regexp_replace(std::weak_ptr<agentxx::agent::AgentContext> agentContext
+) {
     auto tool = agentxx::tools::StringRegexpTool{agentContext};
     auto args = neograph::json{
         {"content",     "hello world"                   },

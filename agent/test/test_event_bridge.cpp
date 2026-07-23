@@ -21,7 +21,6 @@ int g_eb_failed = 0;
 /// 验证 EventBridge 把 GraphEvent::LLM_TOKEN 翻译成 EventModelToken 发布到 bus,
 /// 同时保留原始 callback 的转发行为
 asio::awaitable<void> test_eventbridge_token() {
-
     auto agentConfig          = std::make_shared<agentxx::agent::AgentConfig>();
     auto agentContext         = std::make_shared<agentxx::agent::AgentContext>();
     agentContext->agentConfig = agentConfig;
@@ -54,9 +53,11 @@ asio::awaitable<void> test_eventbridge_token() {
         = agentxx::middleware::EventBridge::make("testAgent", "thread_42", agentContext, origCb);
 
     // 触发 LLM_TOKEN 事件
-    bridgeCb(neograph::graph::GraphEvent{neograph::graph::GraphEvent::Type::LLM_TOKEN,
-                                         "llm",
-                                         neograph::json(std::string{"Hello"})});
+    bridgeCb(neograph::graph::GraphEvent{
+        neograph::graph::GraphEvent::Type::LLM_TOKEN,
+        "llm",
+        neograph::json(std::string{"Hello"})
+    });
 
     // fire-and-forget co_spawn 异步发布; 让出一次让协程跑完
     auto timer
@@ -70,9 +71,11 @@ asio::awaitable<void> test_eventbridge_token() {
     XX_TEST_EXPECT_EQ(lastThreadId, std::string{"thread_42"});
 
     // 再触发一次, 验证多次
-    bridgeCb(neograph::graph::GraphEvent{neograph::graph::GraphEvent::Type::LLM_TOKEN,
-                                         "llm",
-                                         neograph::json(std::string{" World"})});
+    bridgeCb(neograph::graph::GraphEvent{
+        neograph::graph::GraphEvent::Type::LLM_TOKEN,
+        "llm",
+        neograph::json(std::string{" World"})
+    });
     co_await asio::steady_timer(co_await asio::this_coro::executor, std::chrono::milliseconds(10))
         .async_wait(asio::use_awaitable);
     XX_TEST_EXPECT_EQ(origCbCount.load(), 2);
@@ -84,7 +87,6 @@ asio::awaitable<void> test_eventbridge_token() {
 
 /// 验证 bus 为空时, EventBridge 仍转发原始 callback
 asio::awaitable<void> test_eventbridge_nullbus_passthrough() {
-
     auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
     // 不设置 bus (bus == nullptr)
 
@@ -96,9 +98,11 @@ asio::awaitable<void> test_eventbridge_nullbus_passthrough() {
     };
 
     auto bridgeCb = agentxx::middleware::EventBridge::make("a", "t", agentContext, origCb);
-    bridgeCb(neograph::graph::GraphEvent{neograph::graph::GraphEvent::Type::LLM_TOKEN,
-                                         "llm",
-                                         neograph::json(std::string{"x"})});
+    bridgeCb(neograph::graph::GraphEvent{
+        neograph::graph::GraphEvent::Type::LLM_TOKEN,
+        "llm",
+        neograph::json(std::string{"x"})
+    });
     XX_TEST_EXPECT_EQ(origCbCount.load(), 1);
 
     co_return;
@@ -106,7 +110,6 @@ asio::awaitable<void> test_eventbridge_nullbus_passthrough() {
 
 /// 验证 ERROR 事件发布
 asio::awaitable<void> test_eventbridge_error() {
-
     auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
     agentContext->bus
         = std::make_shared<agentxx::middleware::EventBus>(co_await asio::this_coro::executor);
@@ -123,9 +126,11 @@ asio::awaitable<void> test_eventbridge_error() {
         });
 
     auto bridgeCb = agentxx::middleware::EventBridge::make("a", "t", agentContext, nullptr);
-    bridgeCb(neograph::graph::GraphEvent{neograph::graph::GraphEvent::Type::ERROR,
-                                         "tool_x",
-                                         neograph::json(std::string{"boom"})});
+    bridgeCb(neograph::graph::GraphEvent{
+        neograph::graph::GraphEvent::Type::ERROR,
+        "tool_x",
+        neograph::json(std::string{"boom"})
+    });
 
     co_await asio::steady_timer(co_await asio::this_coro::executor, std::chrono::milliseconds(10))
         .async_wait(asio::use_awaitable);

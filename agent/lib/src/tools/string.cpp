@@ -12,7 +12,8 @@ namespace agentxx {
 namespace tools {
 
 StringHtml2MarkdownTool::StringHtml2MarkdownTool(
-    std::weak_ptr<agentxx::agent::AgentContext> in_agentContext) :
+    std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
+) :
     XXToolBase("string_html_to_markdown", in_agentContext, true, true) {}
 
 neograph::ChatTool StringHtml2MarkdownTool::get_definition() const {
@@ -38,8 +39,8 @@ neograph::ChatTool StringHtml2MarkdownTool::get_definition() const {
     };
 }
 
-asio::awaitable<std::string>
-    StringHtml2MarkdownTool::execute_async(const neograph::json& arguments) {
+asio::awaitable<std::string> StringHtml2MarkdownTool::execute_async(const neograph::json& arguments
+) {
     auto content = arguments.value("content", std::string{});
     if (content.empty()) {
         co_return R"({"error":"Arg `content` is empty"})";

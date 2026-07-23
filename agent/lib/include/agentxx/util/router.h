@@ -171,7 +171,8 @@ protected:
     static constexpr size_t routerCacheCapacity = 1024;
     /// 路由查找 LRU 缓存
     inline static thread_local agentxx::util::LruCache<std::string, _RouterCacheValue_s> cacheMap{
-        routerCacheCapacity};
+        routerCacheCapacity
+    };
 
     // 路由字典树
     RouterTreePort routerTree;

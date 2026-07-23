@@ -6,7 +6,6 @@ int g_su_passed = 0;
 int g_su_failed = 0;
 
 void test_compareExtend() {
-
     XX_TEST_EXPECT_EQ(agentxx::util::compareExtend("", ""), 0);
     XX_TEST_EXPECT_EQ(agentxx::util::compareExtend(" ", " "), 0);
     XX_TEST_EXPECT_EQ(agentxx::util::compareExtend("123", "123"), 0);
@@ -32,7 +31,6 @@ void test_compareExtend() {
 }
 
 void test_toStandardPath() {
-
     XX_TEST_EXPECT_EQ(agentxx::util::toStandardPath("//////"), "/");
     XX_TEST_EXPECT_EQ(agentxx::util::toStandardPath("\\\\\\"), "\\");
     XX_TEST_EXPECT_EQ(agentxx::util::toStandardPath("\\\\\\/\\/\\////\\/"), "\\");
@@ -47,7 +45,6 @@ void test_toStandardPath() {
 }
 
 void test_toUnixStandardPath() {
-
     XX_TEST_EXPECT_EQ(agentxx::util::toUnixStandardPath("\\\\\\\\\\"), "/");
     XX_TEST_EXPECT_EQ(agentxx::util::toUnixStandardPath("\\\\\\\\\\//////\\/\\/\\/"), "/");
     XX_TEST_EXPECT_EQ(agentxx::util::toUnixStandardPath("a/b/d"), "a/b/d");
@@ -55,11 +52,11 @@ void test_toUnixStandardPath() {
     XX_TEST_EXPECT_EQ(agentxx::util::toUnixStandardPath("\\a\\b/d\\"), "/a/b/d/");
     XX_TEST_EXPECT_EQ(
         agentxx::util::toUnixStandardPath("\\\\\\/\\/\\a/\\\\b\\\\\\/\\/d\\//\\/\\\\\\"),
-        "/a/b/d/");
+        "/a/b/d/"
+    );
 }
 
 void test_DirFilePath() {
-
     XX_TEST_EXPECT_EQ(agentxx::util::getFileName(""), "");
     XX_TEST_EXPECT_EQ(agentxx::util::getFileName("."), ".");
     XX_TEST_EXPECT_EQ(agentxx::util::getFileName("..."), "...");
@@ -82,8 +79,10 @@ void test_DirFilePath() {
     XX_TEST_EXPECT_EQ(agentxx::util::getFileName("./123.456/", true), "123.456");
     XX_TEST_EXPECT_EQ(agentxx::util::getFileName("\\//455//\\\\123/\\\\//\\/\\\\\\\\"), "123");
     XX_TEST_EXPECT_EQ(agentxx::util::getFileName(".///\\\\//\\\\/\\\\123"), "123");
-    XX_TEST_EXPECT_EQ(agentxx::util::getFileName("///\\\\//\\\\/\\\\\\\\//"),
-                      "///\\\\//\\\\/\\\\\\\\//");
+    XX_TEST_EXPECT_EQ(
+        agentxx::util::getFileName("///\\\\//\\\\/\\\\\\\\//"),
+        "///\\\\//\\\\/\\\\\\\\//"
+    );
     XX_TEST_EXPECT_EQ(agentxx::util::getFileName(".///\\\\//\\\\/\\\\\\\\//"), ".");
 
     XX_TEST_EXPECT_NULLOPT(agentxx::util::getFileNameEXT(""));
@@ -116,7 +115,6 @@ void test_DirFilePath() {
 }
 
 void test_removeSpace() {
-
     XX_TEST_EXPECT_EQ(agentxx::util::removeAllSpace(""), "");
     XX_TEST_EXPECT_EQ(agentxx::util::removeAllSpace("  \t \t     "), "");
     XX_TEST_EXPECT_EQ(agentxx::util::removeAllSpace("   1 2   3 "), "123");
@@ -134,30 +132,41 @@ void test_removeSpace() {
     XX_TEST_EXPECT_EQ(agentxx::util::removeBetweenSpace("\t   \t      \t"), "");
     XX_TEST_EXPECT_EQ(agentxx::util::removeBetweenSpace("   1 2   3 "), "1 2   3");
     XX_TEST_EXPECT_EQ(agentxx::util::removeBetweenSpace("\t   1\t  \t2   3 \t"), "1\t  \t2   3");
-    XX_TEST_EXPECT_EQ(agentxx::util::removeBetweenSpace(" \n \r  1 2   3 \n\r", false),
-                      "\n \r  1 2   3 \n\r");
-    XX_TEST_EXPECT_EQ(agentxx::util::removeBetweenSpace("\n \r  1 2   3\n\r", false),
-                      "\n \r  1 2   3\n\r");
-    XX_TEST_EXPECT_EQ(agentxx::util::removeBetweenSpace("\n \r  1 2   3\n\r  ", false),
-                      "\n \r  1 2   3\n\r");
+    XX_TEST_EXPECT_EQ(
+        agentxx::util::removeBetweenSpace(" \n \r  1 2   3 \n\r", false),
+        "\n \r  1 2   3 \n\r"
+    );
+    XX_TEST_EXPECT_EQ(
+        agentxx::util::removeBetweenSpace("\n \r  1 2   3\n\r", false),
+        "\n \r  1 2   3\n\r"
+    );
+    XX_TEST_EXPECT_EQ(
+        agentxx::util::removeBetweenSpace("\n \r  1 2   3\n\r  ", false),
+        "\n \r  1 2   3\n\r"
+    );
     XX_TEST_EXPECT_EQ(agentxx::util::removeBetweenSpace(" \n \r  1 2   3 \n\r"), "1 2   3");
     XX_TEST_EXPECT_EQ(agentxx::util::removeBetweenSpace("\n \r  1 2   3\n\r  "), "1 2   3");
-    XX_TEST_EXPECT_EQ(agentxx::util::removeBetweenSpace("\n \r  1 2   3\n\r  ", true, false, true),
-                      "\n \r  1 2   3");
-    XX_TEST_EXPECT_EQ(agentxx::util::removeBetweenSpace("\n \r  1 2   3\n\r  ", true, true, false),
-                      "1 2   3\n\r  ");
+    XX_TEST_EXPECT_EQ(
+        agentxx::util::removeBetweenSpace("\n \r  1 2   3\n\r  ", true, false, true),
+        "\n \r  1 2   3"
+    );
+    XX_TEST_EXPECT_EQ(
+        agentxx::util::removeBetweenSpace("\n \r  1 2   3\n\r  ", true, true, false),
+        "1 2   3\n\r  "
+    );
 
     XX_TEST_EXPECT_NULLOPT(agentxx::util::removeBetweenSpaceMayNull(""));
     XX_TEST_EXPECT_NULLOPT(agentxx::util::removeBetweenSpaceMayNull("  "));
     XX_TEST_EXPECT_NULLOPT(agentxx::util::removeBetweenSpaceMayNull("\t\t\t"));
     XX_TEST_EXPECT_NULLOPT(agentxx::util::removeBetweenSpaceMayNull("\t   \t      \t"));
     XX_TEST_EXPECT_EQ(agentxx::util::removeBetweenSpaceMayNull("   1 2   3 ").value(), "1 2   3");
-    XX_TEST_EXPECT_EQ(agentxx::util::removeBetweenSpaceMayNull("\t   1\t  \t2   3 \t").value(),
-                      "1\t  \t2   3");
+    XX_TEST_EXPECT_EQ(
+        agentxx::util::removeBetweenSpaceMayNull("\t   1\t  \t2   3 \t").value(),
+        "1\t  \t2   3"
+    );
 }
 
 void test_isIgnoreCaseEqual() {
-
     XX_TEST_EXPECT_TRUE(agentxx::util::isIgnoreCaseEqual("", ""));
     XX_TEST_EXPECT_TRUE(agentxx::util::isIgnoreCaseEqual(" ", " "));
     XX_TEST_EXPECT_TRUE(agentxx::util::isIgnoreCaseEqual("123abcABC", "123abcABC"));
@@ -170,7 +179,6 @@ void test_isIgnoreCaseEqual() {
 }
 
 void test_isIgnoreCaseContains() {
-
     XX_TEST_EXPECT_TRUE(agentxx::util::isIgnoreCaseContains("", ""));
     XX_TEST_EXPECT_TRUE(agentxx::util::isIgnoreCaseContains(" ", " "));
     XX_TEST_EXPECT_TRUE(agentxx::util::isIgnoreCaseContains("   ", ""));
@@ -179,7 +187,8 @@ void test_isIgnoreCaseContains() {
     XX_TEST_EXPECT_TRUE(agentxx::util::isIgnoreCaseContains("AbCabc", "AbC"));
     XX_TEST_EXPECT_TRUE(agentxx::util::isIgnoreCaseContains("abc\n1fdfaf56as", "AbC\n"));
     XX_TEST_EXPECT_TRUE(
-        agentxx::util::isIgnoreCaseContains("  你 好 你 好AbC\n1fdfaf56as", "你 好AbC\n"));
+        agentxx::util::isIgnoreCaseContains("  你 好 你 好AbC\n1fdfaf56as", "你 好AbC\n")
+    );
 
     XX_TEST_EXPECT_FALSE(agentxx::util::isIgnoreCaseContains("123abcABC", "123abcABC +++ "));
     XX_TEST_EXPECT_FALSE(agentxx::util::isIgnoreCaseContains("", "     "));
@@ -194,38 +203,43 @@ void test_isIgnoreCaseContains() {
     XX_TEST_EXPECT_TRUE(agentxx::util::isIgnoreCaseContainsAny("ABCddd ", "AbC"));
     XX_TEST_EXPECT_TRUE(agentxx::util::isIgnoreCaseContainsAny("AbC", "ABCddd "));
     XX_TEST_EXPECT_TRUE(
-        agentxx::util::isIgnoreCaseContainsAny("  你 好 你 好aBc\n1fdfaf56as", "你 好AbC\n"));
+        agentxx::util::isIgnoreCaseContainsAny("  你 好 你 好aBc\n1fdfaf56as", "你 好AbC\n")
+    );
     XX_TEST_EXPECT_TRUE(
-        agentxx::util::isIgnoreCaseContainsAny("你 好AbC\n", "  你 好 你 好aBc\n1fdfaf56as"));
+        agentxx::util::isIgnoreCaseContainsAny("你 好AbC\n", "  你 好 你 好aBc\n1fdfaf56as")
+    );
 
     XX_TEST_EXPECT_FALSE(agentxx::util::isIgnoreCaseContainsAny("你  好abc", "不 好ABC"));
     XX_TEST_EXPECT_FALSE(agentxx::util::isIgnoreCaseContainsAny("你 好abc\n\r", "不 好ABC"));
 
     XX_TEST_EXPECT_TRUE(agentxx::util::isNotEmptyAndIgnoreCaseContainsAny(" ", " "));
-    XX_TEST_EXPECT_TRUE(
-        agentxx::util::isNotEmptyAndIgnoreCaseContainsAny("123abcABC", "123abcABC"));
+    XX_TEST_EXPECT_TRUE(agentxx::util::isNotEmptyAndIgnoreCaseContainsAny("123abcABC", "123abcABC")
+    );
     XX_TEST_EXPECT_TRUE(agentxx::util::isNotEmptyAndIgnoreCaseContainsAny(" dddabc", "AbC"));
     XX_TEST_EXPECT_TRUE(agentxx::util::isNotEmptyAndIgnoreCaseContainsAny("AbC", " dddabc"));
     XX_TEST_EXPECT_TRUE(agentxx::util::isNotEmptyAndIgnoreCaseContainsAny("ABCddd ", "AbC"));
     XX_TEST_EXPECT_TRUE(agentxx::util::isNotEmptyAndIgnoreCaseContainsAny("AbC", "ABCddd "));
     XX_TEST_EXPECT_TRUE(
-        agentxx::util::isNotEmptyAndIgnoreCaseContainsAny("AbC\n1fdfaf56as", "AbC\n"));
+        agentxx::util::isNotEmptyAndIgnoreCaseContainsAny("AbC\n1fdfaf56as", "AbC\n")
+    );
 
     XX_TEST_EXPECT_FALSE(agentxx::util::isNotEmptyAndIgnoreCaseContainsAny("", ""));
     XX_TEST_EXPECT_FALSE(agentxx::util::isNotEmptyAndIgnoreCaseContainsAny("   ", ""));
     XX_TEST_EXPECT_FALSE(agentxx::util::isNotEmptyAndIgnoreCaseContainsAny("", "     "));
+    XX_TEST_EXPECT_FALSE(agentxx::util::isNotEmptyAndIgnoreCaseContainsAny("你  好abc", "不 好ABC")
+    );
     XX_TEST_EXPECT_FALSE(
-        agentxx::util::isNotEmptyAndIgnoreCaseContainsAny("你  好abc", "不 好ABC"));
-    XX_TEST_EXPECT_FALSE(
-        agentxx::util::isNotEmptyAndIgnoreCaseContainsAny("你 好abc\n\r", "不 好ABC"));
+        agentxx::util::isNotEmptyAndIgnoreCaseContainsAny("你 好abc\n\r", "不 好ABC")
+    );
 }
 
 void test_toArgument() {
-
     XX_TEST_EXPECT_EQ(agentxx::util::toArgument(""), "\"\"");
     XX_TEST_EXPECT_EQ(agentxx::util::toArgument("\"\""), "\"\\\"\\\"\"");
-    XX_TEST_EXPECT_EQ(agentxx::util::toArgument("{\"enable_thinking\": false}"),
-                      "\"{\\\"enable_thinking\\\": false}\"");
+    XX_TEST_EXPECT_EQ(
+        agentxx::util::toArgument("{\"enable_thinking\": false}"),
+        "\"{\\\"enable_thinking\\\": false}\""
+    );
     XX_TEST_EXPECT_EQ(agentxx::util::toArgument("\"hh\", --"), "\"\\\"hh\\\", --\"");
     XX_TEST_EXPECT_EQ(agentxx::util::toArgument("\"\"\", --"), "\"\\\"\\\"\\\", --\"");
     XX_TEST_EXPECT_EQ(agentxx::util::toArgument("\\\"\"\\\", --"), "\"\\\"\\\"\\\", --\"");

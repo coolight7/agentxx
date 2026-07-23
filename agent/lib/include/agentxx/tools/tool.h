@@ -39,11 +39,13 @@ public:
     /// - 最多执行 1 + maxRetry(retry) 次
     const size_t maxRetry;
 
-    XXToolBase(std::string_view                            in_name,
-               std::weak_ptr<agentxx::agent::AgentContext> in_agentContext,
-               bool                                        in_autoSummaryOutput = false,
-               bool                                        in_canDelayLoad      = true,
-               size_t                                      in_maxRetry          = 0);
+    XXToolBase(
+        std::string_view                            in_name,
+        std::weak_ptr<agentxx::agent::AgentContext> in_agentContext,
+        bool                                        in_autoSummaryOutput = false,
+        bool                                        in_canDelayLoad      = true,
+        size_t                                      in_maxRetry          = 0
+    );
 
     std::string get_name() const override;
 
@@ -62,13 +64,15 @@ protected:
 
 public:
 
-    XXToolWarp(std::unique_ptr<neograph::Tool>&&           in_inner,
-               std::weak_ptr<agentxx::agent::AgentContext> in_agentContext,
-               bool                                        in_autoSummaryOutput = false,
-               bool                                        in_canDelayLoad      = false,
-               size_t                                      in_maxRetry          = 0,
-               std::optional<agentxx::middleware::SummarizationToolHandle> in_summarizationHandle
-               = std::nullopt);
+    XXToolWarp(
+        std::unique_ptr<neograph::Tool>&&                           in_inner,
+        std::weak_ptr<agentxx::agent::AgentContext>                 in_agentContext,
+        bool                                                        in_autoSummaryOutput = false,
+        bool                                                        in_canDelayLoad      = false,
+        size_t                                                      in_maxRetry          = 0,
+        std::optional<agentxx::middleware::SummarizationToolHandle> in_summarizationHandle
+        = std::nullopt
+    );
 
     std::string get_name() const override;
 

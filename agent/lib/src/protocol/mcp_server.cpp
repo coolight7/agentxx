@@ -45,7 +45,8 @@ void McpServer::runStdio() {
         } catch (const json::parse_error& e) {
             json errorResp = jsonRpcErrorResponse(
                 json{nullptr},
-                jsonRpcError(kJsonRpcParseError, std::string("Parse error: ") + e.what()));
+                jsonRpcError(kJsonRpcParseError, std::string("Parse error: ") + e.what())
+            );
             std::cout << errorResp.dump() << "\n" << std::flush;
             continue;
         }
@@ -162,27 +163,29 @@ bool McpServer::prefersSse(std::string_view accept) {
 void McpServer::setupRoutes() {
     using Handler = util::HttpServer::Handler;
 
-    auto mcpHandler
-        = std::make_shared<Handler>(Handler([this](util::HttpServer::Request&  req,
-                                                   util::HttpServer::Response& resp,
-                                                   const std::string&) -> asio::awaitable<void> {
-              co_await handleMcpRequest(req, resp);
-          }));
+    auto mcpHandler = std::make_shared<Handler>(Handler(
+        [this](util::HttpServer::Request& req, util::HttpServer::Response& resp, const std::string&)
+            -> asio::awaitable<void> {
+            co_await handleMcpRequest(req, resp);
+        }
+    ));
     httpServer_->router().add(config_.mcpEndpoint, 2, mcpHandler);
 
     httpServer_->addSseRoute(
         config_.sseEndpoint,
-        [this](util::HttpServer::Request&                   req,
-               std::shared_ptr<util::HttpServer::SseWriter> writer) -> asio::awaitable<void> {
+        [this](util::HttpServer::Request& req, std::shared_ptr<util::HttpServer::SseWriter> writer)
+            -> asio::awaitable<void> {
             co_await handleSseStream(req, writer);
-        });
+        }
+    );
 }
 
 json McpServer::processJsonRpc(const json& requestJson) {
     if (!requestJson.is_object()) {
         return jsonRpcErrorResponse(
             json{nullptr},
-            jsonRpcError(kJsonRpcInvalidRequest, "Request must be a JSON object"));
+            jsonRpcError(kJsonRpcInvalidRequest, "Request must be a JSON object")
+        );
     }
     auto jrpc         = requestJson.value("jsonrpc", json{});
     bool validJsonRpc = false;
@@ -194,7 +197,8 @@ json McpServer::processJsonRpc(const json& requestJson) {
     if (requestJson.contains("jsonrpc") && !validJsonRpc) {
         return jsonRpcErrorResponse(
             json{nullptr},
-            jsonRpcError(kJsonRpcInvalidRequest, "Unsupported JSON-RPC version"));
+            jsonRpcError(kJsonRpcInvalidRequest, "Unsupported JSON-RPC version")
+        );
     }
 
     std::string method = requestJson.value("method", "");
@@ -218,8 +222,10 @@ json McpServer::processJsonRpc(const json& requestJson) {
         return json{};
     }
     if (method.empty()) {
-        return jsonRpcErrorResponse(json{nullptr},
-                                    jsonRpcError(kJsonRpcInvalidRequest, "Missing method"));
+        return jsonRpcErrorResponse(
+            json{nullptr},
+            jsonRpcError(kJsonRpcInvalidRequest, "Missing method")
+        );
     }
 
     json response;
@@ -253,7 +259,8 @@ json McpServer::processJsonRpc(const json& requestJson) {
         } else {
             response = jsonRpcErrorResponse(
                 id,
-                jsonRpcError(kJsonRpcMethodNotFound, std::string("Method not found: ") + method));
+                jsonRpcError(kJsonRpcMethodNotFound, std::string("Method not found: ") + method)
+            );
         }
         if (!response.is_null() && !meta.is_null() && response.contains("result")) {
             if (!response["result"].contains("_meta")) {
@@ -264,7 +271,8 @@ json McpServer::processJsonRpc(const json& requestJson) {
         XX_LOGE("[mcp] Handler error [{}]: {}", method, e.what());
         response = jsonRpcErrorResponse(
             id,
-            jsonRpcError(kJsonRpcInternalError, std::string("Internal error: ") + e.what()));
+            jsonRpcError(kJsonRpcInternalError, std::string("Internal error: ") + e.what())
+        );
     }
 
     if (!hasId) {
@@ -273,17 +281,20 @@ json McpServer::processJsonRpc(const json& requestJson) {
     return response;
 }
 
-asio::awaitable<void> McpServer::handleMcpRequest(util::HttpServer::Request&  req,
-                                                  util::HttpServer::Response& resp) {
+asio::awaitable<void>
+    McpServer::handleMcpRequest(util::HttpServer::Request& req, util::HttpServer::Response& resp) {
     namespace http = boost::beast::http;
 
     auto accept = req[http::field::accept];
     if (!isAcceptValid(accept)) {
         json errorResp = jsonRpcErrorResponse(
             json{nullptr},
-            jsonRpcError(-32000,
-                         "Not Acceptable: Client must accept both application/json "
-                         "and text/event-stream"));
+            jsonRpcError(
+                -32000,
+                "Not Acceptable: Client must accept both application/json "
+                "and text/event-stream"
+            )
+        );
         resp.version(req.version());
         resp.result(http::status::not_acceptable);
         resp.set(http::field::content_type, "application/json");
@@ -298,7 +309,8 @@ asio::awaitable<void> McpServer::handleMcpRequest(util::HttpServer::Request&  re
     } catch (const json::parse_error& e) {
         auto errorResp = jsonRpcErrorResponse(
             json{nullptr},
-            jsonRpcError(kJsonRpcParseError, std::string("Parse error: ") + e.what()));
+            jsonRpcError(kJsonRpcParseError, std::string("Parse error: ") + e.what())
+        );
         writeJsonResponse(resp, http::status::bad_request, errorResp);
         co_return;
     }
@@ -425,7 +437,8 @@ json McpServer::handleToolsCall(const json& id, const json& params) {
         if (it == toolsByName_.end()) {
             return jsonRpcErrorResponse(
                 id,
-                jsonRpcError(kMcpToolNotFound, std::string("Tool not found: ") + name));
+                jsonRpcError(kMcpToolNotFound, std::string("Tool not found: ") + name)
+            );
         }
         handler = it->second.handler;
     }
@@ -468,8 +481,10 @@ json McpServer::handleResourcesList(const json& id, const json&) {
 json McpServer::handleResourcesRead(const json& id, const json& params) {
     std::string uri = params.value("uri", "");
     if (uri.empty()) {
-        return jsonRpcErrorResponse(id,
-                                    jsonRpcError(kJsonRpcInvalidParams, "Missing resource URI"));
+        return jsonRpcErrorResponse(
+            id,
+            jsonRpcError(kJsonRpcInvalidParams, "Missing resource URI")
+        );
     }
 
     ResourceReader reader;
@@ -479,7 +494,8 @@ json McpServer::handleResourcesRead(const json& id, const json& params) {
         if (it == resourcesByUri_.end()) {
             return jsonRpcErrorResponse(
                 id,
-                jsonRpcError(kMcpResourceNotFound, std::string("Resource not found: ") + uri));
+                jsonRpcError(kMcpResourceNotFound, std::string("Resource not found: ") + uri)
+            );
         }
         reader = it->second.reader;
     }
@@ -488,7 +504,8 @@ json McpServer::handleResourcesRead(const json& id, const json& params) {
     if (!content.has_value()) {
         return jsonRpcErrorResponse(
             id,
-            jsonRpcError(kMcpResourceNotFound, std::string("Failed to read resource: ") + uri));
+            jsonRpcError(kMcpResourceNotFound, std::string("Failed to read resource: ") + uri)
+        );
     }
 
     json result;
@@ -505,8 +522,10 @@ json McpServer::handleResourcesRead(const json& id, const json& params) {
 json McpServer::handleResourcesSubscribe(const json& id, const json& params) {
     std::string uri = params.value("uri", "");
     if (uri.empty()) {
-        return jsonRpcErrorResponse(id,
-                                    jsonRpcError(kJsonRpcInvalidParams, "Missing resource URI"));
+        return jsonRpcErrorResponse(
+            id,
+            jsonRpcError(kJsonRpcInvalidParams, "Missing resource URI")
+        );
     }
     {
         std::unique_lock lock(subscribedResourcesMutex_);
@@ -562,7 +581,8 @@ json McpServer::handlePromptsGet(const json& id, const json& params) {
         if (it == promptsByName_.end()) {
             return jsonRpcErrorResponse(
                 id,
-                jsonRpcError(kMcpPromptNotFound, std::string("Prompt not found: ") + name));
+                jsonRpcError(kMcpPromptNotFound, std::string("Prompt not found: ") + name)
+            );
         }
         handler = it->second.handler;
     }
@@ -571,7 +591,8 @@ json McpServer::handlePromptsGet(const json& id, const json& params) {
     if (!result.has_value()) {
         return jsonRpcErrorResponse(
             id,
-            jsonRpcError(kMcpPromptNotFound, std::string("Failed to get prompt: ") + name));
+            jsonRpcError(kMcpPromptNotFound, std::string("Failed to get prompt: ") + name)
+        );
     }
 
     json rj;
@@ -610,9 +631,10 @@ void McpServer::handleInitialized(const json&) {
     XX_LOGI("[mcp] Client initialized");
 }
 
-asio::awaitable<void>
-    McpServer::handleSseStream(util::HttpServer::Request&                   req,
-                               std::shared_ptr<util::HttpServer::SseWriter> writer) {
+asio::awaitable<void> McpServer::handleSseStream(
+    util::HttpServer::Request&                   req,
+    std::shared_ptr<util::HttpServer::SseWriter> writer
+) {
     namespace http = boost::beast::http;
 
     auto accept = req[http::field::accept];
@@ -631,8 +653,10 @@ asio::awaitable<void>
 
     if (!co_await writer->writeEvent("endpoint", config_.mcpEndpoint)) {
         std::unique_lock lock(sseClientsMutex_);
-        sseClients_.erase(std::remove(sseClients_.begin(), sseClients_.end(), client),
-                          sseClients_.end());
+        sseClients_.erase(
+            std::remove(sseClients_.begin(), sseClients_.end(), client),
+            sseClients_.end()
+        );
         co_return;
     }
 
@@ -650,8 +674,10 @@ asio::awaitable<void>
 
     {
         std::unique_lock lock(sseClientsMutex_);
-        sseClients_.erase(std::remove(sseClients_.begin(), sseClients_.end(), client),
-                          sseClients_.end());
+        sseClients_.erase(
+            std::remove(sseClients_.begin(), sseClients_.end(), client),
+            sseClients_.end()
+        );
     }
 }
 
@@ -678,9 +704,11 @@ void McpServer::notifyResourcesChanged() {}
 
 void McpServer::notifyPromptsChanged() {}
 
-void McpServer::writeJsonResponse(util::HttpServer::Response& resp,
-                                  boost::beast::http::status  status,
-                                  const json&                 body) {
+void McpServer::writeJsonResponse(
+    util::HttpServer::Response& resp,
+    boost::beast::http::status  status,
+    const json&                 body
+) {
     resp.result(status);
     resp.set(boost::beast::http::field::content_type, "application/json");
     resp.body() = body.dump();

@@ -16,9 +16,12 @@ SummarizationMiddlewareHandle::SummarizationMiddlewareHandle(
     double                                      in_asciiCharsPerToken,
     double                                      in_unicodeCharsPerToken,
     double                                      in_tokensPerImage,
-    double                                      in_extraTokensPerMessage) :
-    BaseMiddlewareHandle<_SummarizationMiddlewareState>("SummarizationMiddlewareHandle",
-                                                        std::move(in_agentContext)),
+    double                                      in_extraTokensPerMessage
+) :
+    BaseMiddlewareHandle<_SummarizationMiddlewareState>(
+        "SummarizationMiddlewareHandle",
+        std::move(in_agentContext)
+    ),
     subagentManager(in_subagentManager),
     modelSupportMaxTokenDefault(in_defaultModelSupportMaxToken),
     asciiCharsPerToken(in_asciiCharsPerToken),
@@ -51,9 +54,10 @@ size_t SummarizationMiddlewareHandle::countTokensForUtf8Str(std::string_view in_
     return unicodeCount / unicodeCharsPerToken + asciiCount / asciiCharsPerToken;
 }
 
-size_t
-    SummarizationMiddlewareHandle::countTokens(const std::vector<std::string>&           systemMsgs,
-                                               const std::vector<neograph::ChatMessage>& messages) {
+size_t SummarizationMiddlewareHandle::countTokens(
+    const std::vector<std::string>&           systemMsgs,
+    const std::vector<neograph::ChatMessage>& messages
+) {
     size_t count = 0;
     for (const auto& msg : systemMsgs) {
         count += extraTokensPerMessage + countTokensForUtf8Str(msg);
@@ -70,9 +74,10 @@ size_t
     return count;
 }
 
-std::string
-    SummarizationMiddlewareHandle::messagesToText(const std::vector<neograph::ChatMessage>& msgs,
-                                                  bool includeSystem) {
+std::string SummarizationMiddlewareHandle::messagesToText(
+    const std::vector<neograph::ChatMessage>& msgs,
+    bool                                      includeSystem
+) {
     std::ostringstream oss;
     for (const auto& m : msgs) {
         if (!includeSystem && m.role == "system") {
@@ -89,7 +94,8 @@ std::string
 }
 
 asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
-    const std::vector<neograph::ChatMessage>& messages) {
+    const std::vector<neograph::ChatMessage>& messages
+) {
     if (nullptr == subagentManager) {
         co_return std::string{};
     }
@@ -108,8 +114,8 @@ Summarize the following conversation messages into a concise summary.
 Preserve key decisions, action items, file paths, and important context. 
 Output ONLY the summary text, no meta-commentary.
 )"},
-            {"message",
-             fmt::format("Summarize the following conversation messages:\n\n{}", prompt)},
+            {"message", fmt::format("Summarize the following conversation messages:\n\n{}", prompt)
+            },
         };
         // TODO: 剥离 tool /manager，避免直接调用 tool
         co_return co_await subagentManager->execute_async(args);
@@ -122,7 +128,8 @@ Output ONLY the summary text, no meta-commentary.
 void SummarizationMiddlewareHandle::offloadLongContentToTempStore(
     neograph::ChatMessage&                    msg,
     const std::shared_ptr<MiddlewareContext>& ctx,
-    const std::string&                        thread_id) {
+    const std::string&                        thread_id
+) {
     if (msg.content.size() <= longContentByteThreshold) {
         return;
     }
@@ -133,8 +140,8 @@ void SummarizationMiddlewareHandle::offloadLongContentToTempStore(
     msg.extra["offload_id"]  = id;
 }
 
-void SummarizationMiddlewareHandle::doSummarizeToolcall(
-    std::vector<neograph::ChatMessage>& messages) {
+void SummarizationMiddlewareHandle::doSummarizeToolcall(std::vector<neograph::ChatMessage>& messages
+) {
     auto                          agentCtxPtr = agentContext.lock();
     std::map<std::string, size_t> lastWriteIndex{};
     for (int64_t i = static_cast<int64_t>(messages.size()) - 1; i > 0; --i) {
@@ -162,7 +169,8 @@ void SummarizationMiddlewareHandle::doSummarizeToolcall(
                 neograph::json args;
                 if (toolcallIndex >= 0) {
                     args = neograph::json::parse(
-                        messages[lastMsgIndex].tool_calls[toolcallIndex].arguments);
+                        messages[lastMsgIndex].tool_calls[toolcallIndex].arguments
+                    );
                 }
 
                 auto key = itemHandleIt->second.generateDeduplicationKey(args);
@@ -211,7 +219,8 @@ asio::awaitable<void>
         auto& apiTokenUsageJson
             = agentCtxPtr->middlewareHandleContext->getGraphDataItemValue<neograph::json>(
                 in.ctx.thread_id,
-                agentxx::middleware::MiddlewareContext::graphDataKey_LLMTokenUsage);
+                agentxx::middleware::MiddlewareContext::graphDataKey_LLMTokenUsage
+            );
         if (apiTokenUsageJson.is_number_integer()) {
             apiTokenUsage     = apiTokenUsageJson.get<size_t>();
             apiTokenUsageJson = 0;
@@ -222,7 +231,8 @@ asio::awaitable<void>
         = agentCtxPtr->middlewareHandleContext
               ->getGraphDataItemValue<neograph::json>(
                   in.ctx.thread_id,
-                  agentxx::middleware::MiddlewareContext::graphDataKey_systemMessage)
+                  agentxx::middleware::MiddlewareContext::graphDataKey_systemMessage
+              )
               .get<std::vector<std::string>>();
 
     const auto countTokenUsage = countTokens(appendSystemPromptList, messages);
@@ -282,8 +292,10 @@ asio::awaitable<void>
             const size_t oldStart = systemCount;
             const size_t oldCount = oldEnd - oldStart;
             if (oldCount > 0) {
-                auto oldMessages = std::vector<neograph::ChatMessage>{messages.begin() + oldStart,
-                                                                      messages.begin() + oldEnd};
+                auto oldMessages = std::vector<neograph::ChatMessage>{
+                    messages.begin() + oldStart,
+                    messages.begin() + oldEnd
+                };
                 auto recentMessages
                     = std::vector<neograph::ChatMessage>{messages.begin() + oldEnd, messages.end()};
 
@@ -316,15 +328,19 @@ asio::awaitable<void>
                     });
                 } else {
                     // system | oldMessages | recentMessages
-                    newMessages.insert(newMessages.end(),
-                                       std::move_iterator(oldMessages.begin()),
-                                       std::move_iterator(oldMessages.end()));
+                    newMessages.insert(
+                        newMessages.end(),
+                        std::move_iterator(oldMessages.begin()),
+                        std::move_iterator(oldMessages.end())
+                    );
                 }
 
                 // 添加最近消息
-                newMessages.insert(newMessages.end(),
-                                   std::move_iterator(recentMessages.begin()),
-                                   std::move_iterator(recentMessages.end()));
+                newMessages.insert(
+                    newMessages.end(),
+                    std::move_iterator(recentMessages.begin()),
+                    std::move_iterator(recentMessages.end())
+                );
 
                 neograph::to_json(newMsgsJson, newMessages);
             }
@@ -346,7 +362,8 @@ asio::awaitable<void>
                 apiTokenUsage,
                 tokenUsage,
                 countTokenUsage,
-                countTokens(appendSystemPromptList, in.state.get_messages()));
+                countTokens(appendSystemPromptList, in.state.get_messages())
+            );
         }
     } else {
         if (agentCtxPtr->agentConfig->logPrintSummarizationResultTokenCount) {
@@ -362,7 +379,8 @@ asio::awaitable<void>
                 apiTokenUsage,
                 tokenUsage,
                 countTokenUsage,
-                countTokens(appendSystemPromptList, in.state.get_messages()));
+                countTokens(appendSystemPromptList, in.state.get_messages())
+            );
         }
     }
 

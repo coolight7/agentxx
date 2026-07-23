@@ -40,8 +40,9 @@ public:
     /// 遵循最长路径匹配，支持 * 通配符
     XXRouter<PermissionOperator, 2> filesystemPermission{};
     /// <name, handle>
-    std::map<std::string,
-             std::function<asio::awaitable<bool>(const neograph::Tool& item, neograph::json& args)>>
+    std::map<
+        std::string,
+        std::function<asio::awaitable<bool>(const neograph::Tool& item, neograph::json& args)>>
         handles{};
 
     PermissionMiddlewareHandle(std::weak_ptr<agentxx::agent::AgentContext> in_agentContext);
@@ -52,10 +53,12 @@ public:
         defOnFilesystemHandle(const neograph::Tool& item, neograph::json& args, size_t index);
 
     /// 经总线发起权限询问; 无 prompter 或被拒绝时返回 false
-    asio::awaitable<bool> requestPermission(const neograph::Tool& item,
-                                            neograph::json&       args,
-                                            std::string           category,
-                                            std::string           target);
+    asio::awaitable<bool> requestPermission(
+        const neograph::Tool& item,
+        neograph::json&       args,
+        std::string           category,
+        std::string           target
+    );
 
     void registerFilesystemHandles();
 

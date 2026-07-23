@@ -24,7 +24,8 @@ std::string SkillMiddlewareHandle::formatSkillsMetadataList() {
             item.second.description,
             item.second.compatibility,
             agentxx::util::stringVectorJoin(item.second.allowed_tools),
-            item.first + "/SKILL.md");
+            item.first + "/SKILL.md"
+        );
     }
     return oss.str();
 }
@@ -75,9 +76,10 @@ asio::awaitable<std::pair<std::string, agentxx::middleware::_SkillMetadata>>
                 data.compatibility = metadata["compatibility"].as<std::string>();
             }
             if (metadata["allowed-tools"].IsScalar()) {
-                data.allowed_tools
-                    = agentxx::util::strSplitCopid(metadata["allowed-tools"].as<std::string>(),
-                                                   ' ');
+                data.allowed_tools = agentxx::util::strSplitCopid(
+                    metadata["allowed-tools"].as<std::string>(),
+                    ' '
+                );
             }
             if (metadata["metadata"].IsMap()) {
                 for (const auto& item : metadata["metadata"]) {
@@ -88,7 +90,8 @@ asio::awaitable<std::pair<std::string, agentxx::middleware::_SkillMetadata>>
         }
         co_return std::make_pair(
             "load skill metadata failed, can not found metadata in SKILL.md file",
-            data);
+            data
+        );
     } catch (const std::exception& e) {
         co_return std::make_pair(e.what(), data);
     }
@@ -135,22 +138,28 @@ asio::awaitable<void> SkillMiddlewareHandle::onAgentcallStartFunc(neograph::grap
 
         std::string content;
         for (const auto& item : skillCache.skillData) {
-            content += fmt::format("┣━ ✅ Load skill metadata success: `{}`({}): {}\n",
-                                   item.second.name,
-                                   item.second.dirpath,
-                                   item.second.description);
+            content += fmt::format(
+                "┣━ ✅ Load skill metadata success: `{}`({}): {}\n",
+                item.second.name,
+                item.second.dirpath,
+                item.second.description
+            );
         }
         for (const auto& item : skillCache.loadErrors) {
-            content += fmt::format("┣━ ❌ Load skill metadata failed: {} | {}\n",
-                                   item.first,
-                                   item.second);
+            content += fmt::format(
+                "┣━ ❌ Load skill metadata failed: {} | {}\n",
+                item.first,
+                item.second
+            );
         }
-        XX_LOGD(R"_(
+        XX_LOGD(
+            R"_(
 ┏━━━━━━ Skill Load ━━━━━━┓
 {}
 ┗━━━━━━ Skill Load ━━━━━━┛
 )_",
-                content);
+            content
+        );
     }
     co_return;
 }
@@ -179,13 +188,15 @@ You have access to a skills library that provides specialized capabilities and d
 {}
 )_",
                 formatSkillsMetadataList(),
-                agentCtxPtr->agentConfig->prompt.systemSkillPrompt);
+                agentCtxPtr->agentConfig->prompt.systemSkillPrompt
+            );
         }
 
         auto& appendSystemMsgList
             = agentCtxPtr->middlewareHandleContext->getGraphDataItemValue<std::vector<std::string>>(
                 in.ctx.thread_id,
-                agentxx::middleware::MiddlewareContext::graphDataKey_systemMessage);
+                agentxx::middleware::MiddlewareContext::graphDataKey_systemMessage
+            );
         appendSystemMsgList.push_back(skillState->cacheFormatSkillPrompt);
     }
     co_return;

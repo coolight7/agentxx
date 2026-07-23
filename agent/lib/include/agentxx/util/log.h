@@ -60,9 +60,11 @@ void xxLogPrint(LogLevel level, const std::string& message);
 
 #if XX_IS_DEBUG_D
 
-#define XX_LOGD(str, ...)                                          \
-    (::agentxx::util::xxLogPrint(::agentxx::util::LogLevel::Debug, \
-                                 fmt::format(str, ##__VA_ARGS__)));
+#define XX_LOGD(str, ...)                 \
+    (::agentxx::util::xxLogPrint(         \
+        ::agentxx::util::LogLevel::Debug, \
+        fmt::format(str, ##__VA_ARGS__)   \
+    ));
 
 #define XX_LOGI(str, ...) \
     (::agentxx::util::xxLogPrint(::agentxx::util::LogLevel::Info, fmt::format(str, ##__VA_ARGS__)));
@@ -70,9 +72,11 @@ void xxLogPrint(LogLevel level, const std::string& message);
 #define XX_LOGW(str, ...) \
     (::agentxx::util::xxLogPrint(::agentxx::util::LogLevel::Warn, fmt::format(str, ##__VA_ARGS__)));
 
-#define XX_LOGE(str, ...)                                          \
-    (::agentxx::util::xxLogPrint(::agentxx::util::LogLevel::Error, \
-                                 fmt::format(str, ##__VA_ARGS__)));
+#define XX_LOGE(str, ...)                 \
+    (::agentxx::util::xxLogPrint(         \
+        ::agentxx::util::LogLevel::Error, \
+        fmt::format(str, ##__VA_ARGS__)   \
+    ));
 
 #else
 
