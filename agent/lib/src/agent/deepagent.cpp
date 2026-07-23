@@ -231,15 +231,16 @@ asio::awaitable<void> DeepAgent::init() {
   }
   {
     /// MCP tool
-    for (const auto &url : config->mcpServerUrls) {
+    for (const auto &[mcpNamespace, url] : config->mcpServerUrls) {
       try {
-        XX_LOGD("load mcp tool: {}", url);
+        XX_LOGD("load mcp tool: {} | {}", mcpNamespace, url);
         auto mcpClient = std::make_shared<agentxx::server::McpClient>(
             agentxx::server::McpClient::Config{
                 .serverUrl = url,
                 .protocolVersion =
                     std::string{
                         agentxx::server::McpClient::kProtocol2025_11_25},
+                .toolNamespace = mcpNamespace,
             });
         auto result = co_await mcpClient->initialize();
         if (result.has_value()) {
@@ -251,31 +252,25 @@ asio::awaitable<void> DeepAgent::init() {
                   mcpClient->createTool(std::move(tool), agentContext));
             }
           } else {
-            XX_LOGE("list mcp tool error: {} | {}", url, mcpTools.error());
+            XX_LOGE("list mcp tool error: {} | {} | {}", mcpNamespace, url,
+                    mcpTools.error());
           }
         } else {
-          XX_LOGE("load mcp tool error: {} | {}", url, result.error());
+          XX_LOGE("load mcp tool error: {} | {} | {}", mcpNamespace, url,
+                  result.error());
         }
-        // auto mcpClient = neograph::mcp::MCPClient{url};
-        // if (co_await mcpClient.initialize_async(config->agentName)) {
-        //   auto mcpTools = co_await mcpClient.get_tools_async();
-        //   XX_LOGD("append mcp tool size: {}", mcpTools.size());
-        //   for (auto &tool : mcpTools) {
-        //     // TODO: 重名检查
-        //     tools.push_back(std::make_unique<agentxx::tools::XXToolWarp>(
-        //         std::move(tool), agentContext, false, true, 0));
-        //   }
-        // }
       } catch (const std::exception &e) {
         std::string errmsg = e.what();
         agentxx::util::autoConvertToUtf8(errmsg);
-        XX_LOGE("[agentxx] Append mcp tool error: {} | {}", url, errmsg);
+        XX_LOGE("[agentxx] Append mcp tool error: {} | {} | {}", mcpNamespace,
+                url, errmsg);
       } catch (const boost::exception &e) {
         auto errmsg = boost::diagnostic_information(e);
         agentxx::util::autoConvertToUtf8(errmsg);
-        XX_LOGE("[agentxx] Append mcp tool error: {} | {}", url, errmsg);
+        XX_LOGE("[agentxx] Append mcp tool error: {} | {} | {}", mcpNamespace,
+                url, errmsg);
       } catch (...) {
-        XX_LOGE("[agentxx] Append mcp tool error: {}", url);
+        XX_LOGE("[agentxx] Append mcp tool error: {} | {}", mcpNamespace, url);
       }
     }
   }

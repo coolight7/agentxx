@@ -15,6 +15,14 @@
 namespace agentxx {
 namespace server {
 
+namespace {
+/// 计算命名空间前缀后的对外 tool 名称 (namespace 非空时为 "namespace_name")
+std::string makeNamespacedName(const std::string &toolNamespace,
+                               const std::string &name) {
+  return toolNamespace.empty() ? name : toolNamespace + "_" + name;
+}
+} // namespace
+
 // ---------------------------------------------------------------------------
 // McpClient
 // ---------------------------------------------------------------------------
@@ -288,7 +296,7 @@ std::unique_ptr<McpClientTool>
 McpClient::createTool(McpToolDefinition def,
                       std::weak_ptr<agentxx::agent::AgentContext> ctx) {
   return std::make_unique<McpClientTool>(shared_from_this(), std::move(def),
-                                         std::move(ctx));
+                                         std::move(ctx), config_.toolNamespace);
 }
 
 json McpClient::makeRequest(int64_t id, const std::string &method,
@@ -1061,13 +1069,16 @@ void McpClient::deliverResponse(const json &response) {
 
 McpClientTool::McpClientTool(std::shared_ptr<McpClient> client,
                              McpToolDefinition def,
-                             std::weak_ptr<agentxx::agent::AgentContext> ctx)
-    : agentxx::tools::XXToolBase(def.name, std::move(ctx)),
-      client_(std::move(client)), def_(std::move(def)) {}
+                             std::weak_ptr<agentxx::agent::AgentContext> ctx,
+                             std::string toolNamespace)
+    : agentxx::tools::XXToolBase(makeNamespacedName(toolNamespace, def.name),
+                                 std::move(ctx)),
+      client_(std::move(client)), def_(std::move(def)),
+      toolNamespace_(std::move(toolNamespace)) {}
 
 neograph::ChatTool McpClientTool::get_definition() const {
   neograph::ChatTool tool;
-  tool.name = def_.name;
+  tool.name = namespacedName();
   tool.description = def_.description;
   tool.parameters = def_.inputSchema;
   return tool;
@@ -1119,7 +1130,11 @@ McpClientTool::execute_async(const neograph::json &arguments) {
   co_return resp.dump();
 }
 
-std::string McpClientTool::get_name() const { return def_.name; }
+std::string McpClientTool::get_name() const { return namespacedName(); }
+
+std::string McpClientTool::namespacedName() const {
+  return makeNamespacedName(toolNamespace_, def_.name);
+}
 
 } // namespace server
 } // namespace agentxx
