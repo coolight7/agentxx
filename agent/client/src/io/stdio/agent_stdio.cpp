@@ -11,19 +11,55 @@
 #include <iostream>
 #include <utility>
 
-void AgentStdIO::onToken(const std::string& token, const std::string& kind) {
-    if (kind == "thinking") {
-        if (!isThinking_) {
-            std::cout << std::endl << "[Thinking] ";
-        }
-        isThinking_ = true;
-    } else {
-        if (isThinking_) {
-            std::cout << std::endl << "[Content] ";
-        }
-        isThinking_ = false;
+void AgentStdIO::onDelta(const agentxx::agent::Delta& delta) {
+    using Type = agentxx::agent::Delta::Type;
+    switch (delta.type) {
+        case Type::TextToken:
+            if (isThinking_) {
+                std::cout << std::endl << "[Content] ";
+            }
+            isThinking_ = false;
+            std::cout << delta.text << std::flush;
+            break;
+        case Type::ThinkingToken:
+            if (!isThinking_) {
+                std::cout << std::endl << "[Thinking] ";
+            }
+            isThinking_ = true;
+            std::cout << delta.text << std::flush;
+            break;
+        case Type::ToolStart:
+            std::cout << std::endl
+                      << fmt::format("[Tool] {} running...", delta.toolName) << std::flush;
+            break;
+        case Type::ToolEnd:
+            std::cout << std::endl
+                      << fmt::format(
+                             "[Tool] {} {}",
+                             delta.toolName,
+                             delta.hasError ? "error" : "done"
+                         )
+                      << std::flush;
+            break;
+        case Type::TurnStart:
+            isThinking_ = false;
+            break;
+        case Type::TurnEnd:
+            isThinking_ = false;
+            break;
     }
-    std::cout << token << std::flush;
+}
+
+void AgentStdIO::onSync(const agentxx::agent::SyncPayload& payload) {
+    for (const auto& hm : payload.messages) {
+        auto role    = hm.data.value("role", std::string{});
+        auto content = hm.data.value("content", std::string{});
+        if (role == "user") {
+            std::cout << "> " << content << std::endl;
+        } else if (role == "assistant") {
+            std::cout << content << std::endl;
+        }
+    }
 }
 
 asio::awaitable<std::optional<std::string>> AgentStdIO::getInput() {
@@ -154,10 +190,3 @@ asio::awaitable<neograph::json> AgentStdIO::handleInterrupt(
     co_return result;
 }
 
-void AgentStdIO::onUpdate() {
-    // StdIO 无需特殊处理 — token 流由 onToken 驱动
-}
-
-void AgentStdIO::resetTokenState() {
-    isThinking_ = false;
-}

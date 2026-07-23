@@ -1,5 +1,6 @@
 #pragma once
 
+#include "agentxx/agent/conversation_types.h"
 #include "agentxx/util/log.h"
 #include "asio/awaitable.hpp"
 #include "asio/this_coro.hpp"
@@ -22,11 +23,11 @@ public:
 
     virtual ~AgentIOBase() = default;
 
-    /// 流式 token 输出 (高频增量推送)
-    virtual void onToken(const std::string& token, const std::string& kind) = 0;
+    /// 增量事件推送 (流式 token、tool 生命周期、轮次边界)
+    virtual void onDelta(const Delta& delta) = 0;
 
-    /// 会话状态/activity 有更新时通知 (IO 应从 session->activity 重新读取)
-    virtual void onUpdate() = 0;
+    /// 全量/部分同步 (从 fullHistory 校准 client 状态)
+    virtual void onSync(const SyncPayload& payload) = 0;
 
     virtual asio::awaitable<std::optional<std::string>> getInput() = 0;
 

@@ -412,35 +412,8 @@ static void applyAvailableModelsToConfig(
 asio::awaitable<void> runCliAsync(agentxx::agent::DeepAgent& agent) {
     auto io = std::make_shared<AgentStdIO>();
 
-    const auto cliEventCallback = [&io](const neograph::graph::GraphEvent& event) {
-        switch (event.type) {
-            case neograph::graph::GraphEvent::Type::NODE_START:
-            case neograph::graph::GraphEvent::Type::NODE_END:
-                break;
-            case neograph::graph::GraphEvent::Type::LLM_TOKEN: {
-                std::string token;
-                std::string kind = "content";
-                if (event.data.is_string()) {
-                    token = event.data.get<std::string>();
-                } else if (event.data.is_object()) {
-                    neograph::ChatStreamChunk chunk;
-                    neograph::from_json(event.data, chunk);
-                    token = std::move(chunk.data);
-                    if (chunk.type == neograph::ChatStreamChunk::TYPE_THINKING) {
-                        kind = "thinking";
-                    }
-                }
-                io->onToken(token, kind);
-            } break;
-            case neograph::graph::GraphEvent::Type::CHANNEL_WRITE:
-            case neograph::graph::GraphEvent::Type::INTERRUPT:
-            case neograph::graph::GraphEvent::Type::ERROR:
-                break;
-        }
-    };
     bool       isFirstMsg = true;
     const auto thread_id  = "session";
-    auto       messages   = neograph::json::array();
 
     agentxx::middleware::SubagentSupervisor subagentSupervisor{agent.agentContext};
     co_await subagentSupervisor.start();
@@ -456,20 +429,12 @@ asio::awaitable<void> runCliAsync(agentxx::agent::DeepAgent& agent) {
         if (!input.empty()) {
             std::cout << agent.agentContext->agentConfig->agentNameView << ": " << std::flush;
 
-            auto turnResult = co_await agent.runConversationTurnAsync(
+            co_await agent.runConversationTurnAsync(
                 thread_id,
                 input,
                 isFirstMsg,
-                std::move(messages),
-                io,
-                agentxx::middleware::EventBridge::make(
-                    agent.agentContext->agentConfig->agentName,
-                    thread_id,
-                    agent.agentContext,
-                    cliEventCallback
-                )
+                io
             );
-            messages   = std::move(turnResult.messages);
             isFirstMsg = false;
         }
         std::cout << "\n\n>>> " << std::flush;
@@ -498,70 +463,7 @@ asio::awaitable<void> runTuiAsync(agentxx::agent::DeepAgent& agent) {
     );
     io->start();
 
-    const auto tuiEventCallback = [&io](const neograph::graph::GraphEvent& event) {
-        switch (event.type) {
-            case neograph::graph::GraphEvent::Type::NODE_START:
-            case neograph::graph::GraphEvent::Type::NODE_END:
-                break;
-            case neograph::graph::GraphEvent::Type::LLM_TOKEN: {
-                std::string token;
-                std::string kind = "content";
-                if (event.data.is_string()) {
-                    token = event.data.get<std::string>();
-                } else if (event.data.is_object()) {
-                    neograph::ChatStreamChunk chunk;
-                    neograph::from_json(event.data, chunk);
-                    token = std::move(chunk.data);
-                    if (chunk.type == neograph::ChatStreamChunk::TYPE_THINKING) {
-                        kind = "thinking";
-                    }
-                }
-                io->onToken(token, kind);
-            } break;
-            case neograph::graph::GraphEvent::Type::CHANNEL_WRITE: {
-                // 检测 tool call 消息, 提供给 TUI 渲染 tool 卡片
-                auto writes = event.data.value("writes", neograph::json::array());
-                for (const auto& w : writes) {
-                    auto chan  = w.value("channel", std::string{});
-                    auto value = w.value("value", neograph::json{});
-                    if (chan != "messages" || !value.is_array()) {
-                        continue;
-                    }
-                    for (const auto& jm : value) {
-                        auto role = jm.value("role", std::string{});
-                        if (role == "assistant" && jm.contains("tool_calls")) {
-                            for (const auto& tc : jm["tool_calls"]) {
-                                io->handleToolStart(
-                                    tc.value("name", std::string{}),
-                                    tc.value("id", std::string{}),
-                                    tc.value("arguments", std::string{})
-                                );
-                            }
-                        } else if (role == "tool") {
-                            std::string content  = jm.value("content", std::string{});
-                            bool        hasError = false;
-                            try {
-                                auto parsed = neograph::json::parse(content);
-                                hasError    = parsed.is_object() && parsed.contains("error");
-                            } catch (...) {
-                            }
-                            io->handleToolEnd(
-                                jm.value("tool_name", std::string{}),
-                                jm.value("tool_call_id", std::string{}),
-                                content,
-                                hasError
-                            );
-                        }
-                    }
-                }
-            } break;
-            case neograph::graph::GraphEvent::Type::INTERRUPT:
-            case neograph::graph::GraphEvent::Type::ERROR:
-                break;
-        }
-    };
     bool isFirstMsg = true;
-    auto messages   = neograph::json::array();
 
     agentxx::middleware::SubagentSupervisor subagentSupervisor{agent.agentContext};
     co_await subagentSupervisor.start();
@@ -573,24 +475,13 @@ asio::awaitable<void> runTuiAsync(agentxx::agent::DeepAgent& agent) {
         }
         auto input = std::move(inputOpt.value());
         if (!input.empty()) {
-            // onUpdate() 由 deepagent 在 turn 入口调用, 负责设置 isStreaming_
-            auto turnResult = co_await agent.runConversationTurnAsync(
+            co_await agent.runConversationTurnAsync(
                 thread_id,
                 input,
                 isFirstMsg,
-                std::move(messages),
-                io,
-                agentxx::middleware::EventBridge::make(
-                    agent.agentContext->agentConfig->agentName,
-                    thread_id,
-                    agent.agentContext,
-                    tuiEventCallback
-                )
+                io
             );
-            messages   = std::move(turnResult.messages);
             isFirstMsg = false;
-            // turn 结束, 冲刷残余 token 并重置状态
-            io->resetTokenState();
         }
     }
     io->stop();

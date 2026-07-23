@@ -780,20 +780,163 @@ std::shared_ptr<agentxx::agent::Session> AgentTUI::currentSession() {
     return session_;
 }
 
-void AgentTUI::onToken(const std::string& token, const std::string& kind) {
+void AgentTUI::onDelta(const agentxx::agent::Delta& delta) {
+    using Type = agentxx::agent::Delta::Type;
+    switch (delta.type) {
+        case Type::TextToken:
+        case Type::ThinkingToken: {
+            std::lock_guard<std::mutex> lock(mutex_);
+            auto role = (delta.type == Type::ThinkingToken) ? Message::Role::Thinking
+                                                            : Message::Role::Assistant;
+            if (currentTokenRole_ != role && !currentToken_.empty()) {
+                messages_.push_back({currentTokenRole_, currentToken_});
+                if (currentTokenRole_ == Message::Role::Thinking) {
+                    messages_.back().collapsed = true;
+                }
+                currentToken_.clear();
+            }
+            currentTokenRole_ = role;
+            currentToken_    += delta.text;
+            isStreaming_      = true;
+        } break;
+        case Type::ToolStart: {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (!currentToken_.empty()) {
+                messages_.push_back({currentTokenRole_, currentToken_});
+                if (currentTokenRole_ == Message::Role::Thinking) {
+                    messages_.back().collapsed = true;
+                }
+                currentToken_.clear();
+            }
+            Message m;
+            m.role         = Message::Role::Tool;
+            m.toolName     = delta.toolName;
+            m.toolCallId   = delta.toolCallId;
+            m.text         = delta.arguments;
+            m.toolFinished = false;
+            m.collapsed    = false;
+            messages_.push_back(std::move(m));
+            isStreaming_ = true;
+        } break;
+        case Type::ToolEnd: {
+            std::lock_guard<std::mutex> lock(mutex_);
+            bool found = false;
+            for (auto it = messages_.rbegin(); it != messages_.rend(); ++it) {
+                if (it->role == Message::Role::Tool && it->toolCallId == delta.toolCallId
+                    && !it->toolFinished) {
+                    it->toolResult   = delta.result;
+                    it->toolFinished = true;
+                    it->toolHasError = delta.hasError;
+                    it->collapsed    = true;
+                    found            = true;
+                    break;
+                }
+            }
+            if (!found) {
+                Message m;
+                m.role         = Message::Role::Tool;
+                m.toolName     = delta.toolName;
+                m.toolCallId   = delta.toolCallId;
+                m.toolResult   = delta.result;
+                m.toolFinished = true;
+                m.toolHasError = delta.hasError;
+                m.collapsed    = true;
+                messages_.push_back(std::move(m));
+            }
+        } break;
+        case Type::TurnStart: {
+            std::lock_guard<std::mutex> lock(mutex_);
+            isStreaming_ = true;
+        } break;
+        case Type::TurnEnd: {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (!currentToken_.empty()) {
+                messages_.push_back({currentTokenRole_, currentToken_});
+                if (currentTokenRole_ == Message::Role::Thinking) {
+                    messages_.back().collapsed = true;
+                }
+                currentToken_.clear();
+            }
+            isStreaming_ = false;
+        } break;
+    }
+    postRedraw();
+}
+
+void AgentTUI::onSync(const agentxx::agent::SyncPayload& payload) {
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        auto role = (kind == "thinking") ? Message::Role::Thinking : Message::Role::Assistant;
-        if (currentTokenRole_ != role && !currentToken_.empty()) {
-            messages_.push_back({currentTokenRole_, currentToken_});
-            if (currentTokenRole_ == Message::Role::Thinking) {
-                messages_.back().collapsed = true;
+        messages_.clear();
+        currentToken_.clear();
+        isStreaming_ = false;
+        for (const auto& hm : payload.messages) {
+            const auto& d    = hm.data;
+            auto        role = d.value("role", std::string{});
+            Message     m;
+            if (role == "user") {
+                m.role = Message::Role::User;
+                m.text = d.value("content", std::string{});
+            } else if (role == "assistant") {
+                if (d.contains("tool_calls")) {
+                    for (const auto& tc : d["tool_calls"]) {
+                        Message tm;
+                        tm.role         = Message::Role::Tool;
+                        tm.toolName     = tc.value("name", std::string{});
+                        tm.toolCallId   = tc.value("id", std::string{});
+                        tm.text         = tc.value("arguments", std::string{});
+                        tm.toolFinished = false;
+                        tm.collapsed    = true;
+                        messages_.push_back(std::move(tm));
+                    }
+                    auto content = d.value("content", std::string{});
+                    if (!content.empty()) {
+                        m.role = Message::Role::Assistant;
+                        m.text = content;
+                    } else {
+                        continue;
+                    }
+                } else {
+                    m.role = Message::Role::Assistant;
+                    m.text = d.value("content", std::string{});
+                    auto reasoning = d.value("reasoning_content", std::string{});
+                    if (!reasoning.empty()) {
+                        Message thinkMsg;
+                        thinkMsg.role      = Message::Role::Thinking;
+                        thinkMsg.text      = reasoning;
+                        thinkMsg.collapsed = true;
+                        messages_.push_back(std::move(thinkMsg));
+                    }
+                }
+            } else if (role == "tool") {
+                m.role         = Message::Role::Tool;
+                m.toolName     = d.value("tool_name", std::string{});
+                m.toolCallId   = d.value("tool_call_id", std::string{});
+                m.toolResult   = d.value("content", std::string{});
+                m.toolFinished = true;
+                m.collapsed    = true;
+                try {
+                    auto parsed = neograph::json::parse(m.toolResult);
+                    m.toolHasError = parsed.is_object() && parsed.contains("error");
+                } catch (...) {
+                }
+                for (auto it = messages_.rbegin(); it != messages_.rend(); ++it) {
+                    if (it->role == Message::Role::Tool && it->toolCallId == m.toolCallId
+                        && !it->toolFinished) {
+                        it->toolResult   = m.toolResult;
+                        it->toolFinished = true;
+                        it->toolHasError = m.toolHasError;
+                        it->collapsed    = true;
+                        goto skip_push;
+                    }
+                }
+            } else {
+                m.role = Message::Role::System;
+                m.text = d.value("content", std::string{});
             }
-            currentToken_.clear();
+            messages_.push_back(std::move(m));
+            skip_push:;
         }
-        currentTokenRole_  = role;
-        currentToken_     += token;
-        isStreaming_       = true;
+        stickToBottom_ = true;
     }
     postRedraw();
 }
@@ -918,90 +1061,7 @@ asio::awaitable<std::optional<std::string>> AgentTUI::getInput() {
     co_return std::optional<std::string>(std::move(line));
 }
 
-void AgentTUI::handleToolStart(
-    const std::string& toolName,
-    const std::string& toolCallId,
-    const std::string& arguments
-) {
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (!currentToken_.empty()) {
-            messages_.push_back({currentTokenRole_, currentToken_});
-            if (currentTokenRole_ == Message::Role::Thinking) {
-                messages_.back().collapsed = true;
-            }
-            currentToken_.clear();
-        }
-        Message m;
-        m.role         = Message::Role::Tool;
-        m.toolName     = toolName;
-        m.toolCallId   = toolCallId;
-        m.text         = arguments;
-        m.toolFinished = false;
-        m.collapsed    = false;
-        messages_.push_back(std::move(m));
-    }
-    postRedraw();
-}
 
-void AgentTUI::handleToolEnd(
-    const std::string& toolName,
-    const std::string& toolCallId,
-    const std::string& result,
-    bool               hasError
-) {
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        bool                        found = false;
-        for (auto it = messages_.rbegin(); it != messages_.rend(); ++it) {
-            if (it->role == Message::Role::Tool && it->toolCallId == toolCallId
-                && !it->toolFinished) {
-                it->toolResult   = result;
-                it->toolFinished = true;
-                it->toolHasError = hasError;
-                it->collapsed    = true;
-                found            = true;
-                break;
-            }
-        }
-        if (!found) {
-            Message m;
-            m.role         = Message::Role::Tool;
-            m.toolName     = toolName;
-            m.toolCallId   = toolCallId;
-            m.toolResult   = result;
-            m.toolFinished = true;
-            m.toolHasError = hasError;
-            m.collapsed    = true;
-            messages_.push_back(std::move(m));
-        }
-    }
-    postRedraw();
-}
-
-void AgentTUI::onUpdate() {
-    // 新轮次开始 (由 deepagent.cpp 在 runConversationTurnAsync 入口调用)
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        isStreaming_ = true;
-    }
-    postRedraw();
-}
-
-void AgentTUI::resetTokenState() {
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (!currentToken_.empty()) {
-            messages_.push_back({currentTokenRole_, currentToken_});
-            if (currentTokenRole_ == Message::Role::Thinking) {
-                messages_.back().collapsed = true;
-            }
-            currentToken_.clear();
-        }
-        isStreaming_ = false;
-    }
-    postRedraw();
-}
 
 void TUILogSink::onLog(agentxx::util::LogLevel level, const std::string& message) {
     std::function<void()> cb;

@@ -329,18 +329,9 @@ benchDeepAgentRunConversationTurnAsync(const DeepAgentBenchConfig &cfg) {
 
           auto start = std::chrono::high_resolution_clock::now();
 
-          neograph::json messages = neograph::json::array();
           auto turnResult = co_await agent.runConversationTurnAsync(
               "bench_session_" + std::to_string(i), cfg.userInput, true,
-              std::move(messages), nullptr,
-              [](const neograph::graph::GraphEvent &event) {
-                switch (event.type) {
-                case neograph::graph::GraphEvent::Type::LLM_TOKEN:
-                  break;
-                default:
-                  break;
-                }
-              });
+              nullptr);
 
           auto end = std::chrono::high_resolution_clock::now();
           double ns =
@@ -351,8 +342,8 @@ benchDeepAgentRunConversationTurnAsync(const DeepAgentBenchConfig &cfg) {
             std::cerr << "    [ERROR] Iteration " << i
                       << " failed: " << turnResult.errorMessage << std::endl;
           } else {
-            std::cout << "    [INFO] Iteration " << i << " completed, "
-                      << turnResult.messages.size() << " messages" << std::endl;
+            std::cout << "    [INFO] Iteration " << i << " completed"
+                      << std::endl;
           }
         },
         asio::detached);
@@ -584,20 +575,17 @@ inline void benchDeepAgentMultiTurn(const DeepAgentBenchConfig &cfg) {
         [&]() -> asio::awaitable<void> {
           co_await agent.init();
 
-          neograph::json messages = neograph::json::array();
           auto start = std::chrono::high_resolution_clock::now();
 
           for (size_t turn = 0; turn < turnsPerIteration; ++turn) {
             auto turnResult = co_await agent.runConversationTurnAsync(
-                "bench_multi_" + std::to_string(i), cfg.userInput, true,
-                std::move(messages), nullptr,
-                [](const neograph::graph::GraphEvent &) {});
+                "bench_multi_" + std::to_string(i), cfg.userInput, turn == 0,
+                nullptr);
             if (turnResult.hasError) {
               std::cerr << "    [ERROR] Turn " << turn << " of iteration " << i
                         << " failed: " << turnResult.errorMessage << std::endl;
               co_return;
             }
-            messages = std::move(turnResult.messages);
           }
 
           auto end = std::chrono::high_resolution_clock::now();
@@ -606,8 +594,7 @@ inline void benchDeepAgentMultiTurn(const DeepAgentBenchConfig &cfg) {
           durations.push_back(ns);
 
           std::cout << "    [INFO] Iteration " << i << " completed ("
-                    << turnsPerIteration << " turns, " << messages.size()
-                    << " total messages)" << std::endl;
+                    << turnsPerIteration << " turns)" << std::endl;
         },
         asio::detached);
 
