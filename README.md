@@ -44,7 +44,7 @@
 
 | System | agentxx_cli | agentxx_cli RAM | libagentxx | compiler | TIP |
 |---|---|---|---|---|---|
-| **Windows** | 10.6 M | 任务管理器 4.1 M (TUI) / 3.9 M (CLI) | 1.21 M | MSVC 19.51.36247.0/Visual Studio 18 2026 · x86_64 · -O2 | 打包时建议带上msvc运行时 |
+| **Windows** | 10.6 M | 任务管理器 3.1 M (TUI) / 3.9 M (CLI) | 1.21 M | MSVC 19.51.36247.0/Visual Studio 18 2026 · x86_64 · -O2 | 打包时建议带上msvc运行时 |
 | **Linux** | 13.1 M | top RES 11.6 M / RES - SHR 1.5 M | 2.35 M | GCC 16.1.0 · x86_64 · -O3 · --strip-all | 打包时建议带上 libstdc++.so.6,libgcc_s.so.1 |
 | **Android (-deps)** | - | - | 1.9 M | NDK-r29 · Clang 21.0.0 · android-21-arm64-v8a · -O3 · --strip-all | 打包建议带上 libc++.so |
 
@@ -67,12 +67,12 @@
         - 读取文件内容时自动转换字符编码到 utf8
         - ⬜写入文件内容时保持文件原有字符编码
     - ✅execute_command (支持 `同步`/`Boost.process 协程异步`执行)
-        - ✅execute_linux_command
-        - ✅execute_windows_command (检测到 WSL 环境时，允许在 linux/wsl 直接执行 windows 命令)
+        - execute_linux_command
+        - execute_windows_command (检测到 WSL 环境时，允许在 linux/wsl 直接执行 windows 命令)
         - ⬜execute_python_command
         - ⬜execute_javascript_command
-        - ✅超时限制
-        - ✅区分 stdout、stderr，自动转换输出字符编码到 Utf8
+        - 超时限制
+        - 区分 stdout、stderr，自动转换输出字符编码到 Utf8
     - ✅web_search (支持 asio 协程异步网络请求)
         - web_search (内置 HTML 转 markdown, 支持直接使用普通网页搜索api)
         - web_fetch_url_markdown (html to markdown)
@@ -110,8 +110,8 @@
     - 支持HITL，中断处理可以自定义实现，内置实现支持用户确认信息、输入内容等
     - 支持用户取消执行
 - ✅**权限限制** `PermissionMiddleware`
-    - ✅依托`中断恢复`实现，允许指定 tool 调用前拦截，决定 允许、拒绝 或 中断提示询问
-    - ✅预设文件读写权限限制
+    - 依托`中断恢复`实现，允许指定 tool 调用前拦截，决定 允许、拒绝 或 中断提示询问
+    - 预设文件读写权限限制
     - ⬜沙盒执行 Shell/File RW
 - ✅**异常处理和自动重试**
     - Toolcall/LLM 节点支持自动重试，支持自定义重试次数
@@ -180,10 +180,10 @@
     - ⬜根据 .gitignore/.gitmodules 等排序分析优先级，把 third_party/test 等目录排后
 - ✅RAG
     - ✅文本分割分块 + 默认20%相邻分块重叠
-    - 文本分割方式:
-        - ✅定长分割
-        - ✅字符分割
-        - ✅结构分割 (较长的再进行 字符分割/定长分割)
+    - ✅文本分割方式:
+        - 定长分割
+        - 字符分割
+        - 结构分割 (较长的再进行 字符分割/定长分割)
         - ⬜语义分割
 - PaddleOCR (图片转文本)
 - SD.cpp 图片视频生成
