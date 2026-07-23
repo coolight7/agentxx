@@ -133,7 +133,6 @@ void AgentTUI::start() {
 
             auto main = vbox({
                 messages,
-                separator(),
                 input_bar,
                 renderStatusBar(),
             });
@@ -975,7 +974,12 @@ void AgentTUI::handleToolEnd(
 }
 
 void AgentTUI::onUpdate() {
-    // 暂不处理 — TUI 通过事件回调 + onToken 驱动渲染
+    // 新轮次开始 (由 deepagent.cpp 在 runConversationTurnAsync 入口调用)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        isStreaming_ = true;
+    }
+    postRedraw();
 }
 
 void AgentTUI::resetTokenState() {
