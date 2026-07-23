@@ -114,7 +114,7 @@ asio::awaitable<void> DeepAgent::init() {
     {
       summarizationMiddleware =
           std::make_shared<agentxx::middleware::SummarizationMiddlewareHandle>(
-              subagentManagerTool.get(), agentContext, 256 * 1024);
+              subagentManagerTool.get(), agentContext);
       agentContext->middlewareHandleContext->handles.push_back(
           summarizationMiddleware);
     }
@@ -591,8 +591,8 @@ DeepAgent::runConversationTurnAsync(
     if (data.is_object() &&
         data.contains(
             agentxx::middleware::MiddlewareContext::channel_savedGraphData)) {
-      // TODO: 跳过运行 [engine->run_stream_async]，直接执行
-      // [engine->resume_async]
+      // 存在被中断时保存的 graphData: 标记 resumeInterrupt, 后续跳过
+      // [engine->run_stream_async], 重新处理可能未完成的中断并 [engine->resume_async]
       resumeInterrupt = true;
       agentContext->middlewareHandleContext->setGraphDataFromState(data,
                                                                    threadId);
@@ -621,10 +621,23 @@ DeepAgent::runConversationTurnAsync(
 
     // - 存在值 [neograph::graph::RunResult], 声明 optional 类型用于后续赋值
     // [nullopt]
-    std::optional<neograph::graph::RunResult> result =
-        co_await engine->run_stream_async(cfg, eventCallback);
-
-    if (result->interrupted) {
+    std::optional<neograph::graph::RunResult> result;
+    if (resumeInterrupt) {
+      // 程序重启恢复中断: 跳过 [engine->run_stream_async], 从恢复的 graphData
+      // 重建中断结果, 直接进入中断处理循环, 重新处理可能未完成的中断并 resume
+      neograph::graph::RunResult recovered;
+      recovered.interrupted = true;
+      recovered.interrupt_node =
+          agentContext->middlewareHandleContext
+              ->getGraphDataItemValue<std::string>(
+                  threadId, agentxx::middleware::MiddlewareContext::
+                                graphDataKey_interruptNode);
+      recovered.interrupt_value =
+          agentContext->middlewareHandleContext
+              ->getGraphDataItemValue<neograph::json>(
+                  threadId, agentxx::middleware::MiddlewareContext::
+                                graphDataKey_interruptValue);
+      result = std::move(recovered);
       auto &im = agentContext->middlewareHandleContext
                      ->getGraphDataItemValue<neograph::json>(
                          threadId, agentxx::middleware::MiddlewareContext::
@@ -633,10 +646,34 @@ DeepAgent::runConversationTurnAsync(
         messages = im;
       }
     } else {
-      messages = result->channel_raw("messages");
+      result = co_await engine->run_stream_async(cfg, eventCallback);
+
+      if (result->interrupted) {
+        auto &im = agentContext->middlewareHandleContext
+                       ->getGraphDataItemValue<neograph::json>(
+                           threadId, agentxx::middleware::MiddlewareContext::
+                                         graphDataKey_interruptMessages);
+        if (im.is_array()) {
+          messages = im;
+        }
+      } else {
+        messages = result->channel_raw("messages");
+      }
     }
 
     while (result.has_value() && result->interrupted) {
+      // 记录中断节点信息到 graphData, 供程序重启恢复中断时复用
+      agentContext->middlewareHandleContext
+          ->setGraphDataItemValue<std::string>(
+              threadId,
+              agentxx::middleware::MiddlewareContext::graphDataKey_interruptNode,
+              result->interrupt_node);
+      agentContext->middlewareHandleContext
+          ->setGraphDataItemValue<neograph::json>(
+              threadId, agentxx::middleware::MiddlewareContext::
+                            graphDataKey_interruptValue,
+              result->interrupt_value);
+
       engine->update_state(threadId, [&](neograph::graph::GraphState &state) {
         // - 本轮 graph 还没有执行完成，序列化 graphData 到 state checkpoint
         // 以防中断处理期间 程序 终止, 导致 graphData 丢失

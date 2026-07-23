@@ -236,6 +236,11 @@ loadYamlConfig(const std::string &path,
             std::stoi(resolveEnvVars(node["read_timeout"].as<std::string>("24"),
                                      dotEnvVars, overrideEnvVars));
       }
+      if (node["model_support_max_token"]) {
+        mc.modelSupportMaxToken = static_cast<size_t>(std::stoull(
+            resolveEnvVars(node["model_support_max_token"].as<std::string>("0"),
+                           dotEnvVars, overrideEnvVars)));
+      }
       if (node["extra_api_config"]) {
         mc.extra_config = yamlToJson(node["extra_api_config"]);
       }

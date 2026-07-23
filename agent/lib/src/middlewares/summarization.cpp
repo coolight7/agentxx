@@ -1,5 +1,6 @@
 #include "agentxx/middlewares/summarization.h"
 
+#include "agentxx/agent/model_registry.h"
 #include "agentxx/tools/sub_agent.h"
 #include "fmt/format.h"
 #include <algorithm>
@@ -11,13 +12,13 @@ namespace middleware {
 SummarizationMiddlewareHandle::SummarizationMiddlewareHandle(
     agentxx::tools::SubAgentManagerTool *in_subagentManager,
     std::weak_ptr<agentxx::agent::AgentContext> in_agentContext,
-    size_t in_modelSupportMaxToken, double in_asciiCharsPerToken,
+    size_t in_defaultModelSupportMaxToken, double in_asciiCharsPerToken,
     double in_unicodeCharsPerToken, double in_tokensPerImage,
     double in_extraTokensPerMessage)
     : BaseMiddlewareHandle<_SummarizationMiddlewareState>(
           "SummarizationMiddlewareHandle", std::move(in_agentContext)),
       subagentManager(in_subagentManager),
-      modelSupportMaxToken(in_modelSupportMaxToken),
+      modelSupportMaxTokenDefault(in_defaultModelSupportMaxToken),
       asciiCharsPerToken(in_asciiCharsPerToken),
       unicodeCharsPerToken(in_unicodeCharsPerToken),
       tokensPerImage(in_tokensPerImage),
@@ -232,11 +233,25 @@ asio::awaitable<void> SummarizationMiddlewareHandle::onModelcallRunFunc(
 
   const auto &thread_id = in.ctx.thread_id;
 
+  // 从会话的模型配置提取模型支持的最大 token, 模型配置未指定时使用默认值
+  const size_t modelSupportMaxToken = [&]() {
+    if (agentCtxPtr->modelRegistry) {
+      std::string modelName;
+      if (auto session = agentCtxPtr->sessions->get(thread_id)) {
+        modelName = session->getModelName();
+      }
+      auto mc = agentCtxPtr->modelRegistry->getModelConfig(modelName);
+      if (mc.modelSupportMaxToken > 0) {
+        return mc.modelSupportMaxToken;
+      }
+    }
+    return modelSupportMaxTokenDefault;
+  }();
+
   // 发布上下文统计到对应会话, 供 UI 显示上下文占用百分比
   if (auto session = agentCtxPtr->sessions->get(thread_id)) {
     if (session->contextStats) {
       session->contextStats->contextTokens.store(tokenUsage);
-      // TODO: 应当使用 session 的 modelSupportMaxToken
       session->contextStats->maxContextTokens.store(modelSupportMaxToken);
     }
   }
