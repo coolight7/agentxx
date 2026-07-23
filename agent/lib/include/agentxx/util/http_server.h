@@ -15,6 +15,7 @@
 #include <boost/beast/http.hpp>
 #include <boost/beast/ssl.hpp>
 #include <boost/beast/version.hpp>
+#include <boost/beast/websocket.hpp>
 #include <chrono>
 #include <ctime>
 #include <functional>
@@ -22,6 +23,7 @@
 #include <memory>
 #include <neograph/api.h>
 #include <neograph/json.h>
+#include <optional>
 #include <string>
 #include <thread>
 #include <type_traits>
@@ -52,6 +54,13 @@ public:
     using Handler  = std::function<
          asio::awaitable<void>(Request&, Response&, const std::string& matched_path)>;
     using Router = XXRouter<Handler, 9>;
+
+    using WsStream  = boost::beast::websocket::stream<boost::beast::tcp_stream>;
+    using WsHandler = std::function<asio::awaitable<void>(WsStream&)>;
+
+    using WssStream = boost::beast::websocket::stream<
+        boost::beast::ssl_stream<boost::beast::tcp_stream>>;
+    using WssHandler = std::function<asio::awaitable<void>(WssStream&)>;
 
     /// Streaming SSE connection — the handler can hold onto this to push
     /// events after the initial response header has been sent.
@@ -128,6 +137,19 @@ public:
         const std::string&                                                         path,
         std::function<asio::awaitable<void>(Request&, std::shared_ptr<SseWriter>)> handler
     );
+
+    /// Register a WebSocket endpoint. When a client sends an HTTP GET with
+    /// Upgrade: websocket to the given path, the connection is upgraded and
+    /// the handler is invoked with the websocket stream.
+    void enableWebSocket(const std::string& path, WsHandler handler);
+
+    /// Register a WebSocket endpoint for SSL (wss://) connections.
+    void enableWebSocketSsl(const std::string& path, WssHandler handler);
+
+    /// Start the accept loop on the given executor without creating threads.
+    /// The caller is responsible for running the io_context.
+    /// Suitable for single-threaded server mode (e.g. deepagent service).
+    void startAsync(asio::any_io_executor executor);
 
 private:
 
@@ -237,6 +259,17 @@ private:
     // -----------------------------------------------------------------------
 
     asio::awaitable<void> acceptLoop();
+
+    /// Accept loop for startAsync mode — all connections served on the same executor
+    asio::awaitable<void> acceptLoopAsync();
+
+    /// Serve a TCP connection (member coroutine — avoids dangling lambda captures)
+    asio::awaitable<void> serveTcp(std::shared_ptr<boost::beast::tcp_stream> stream);
+
+    /// Serve an SSL connection (member coroutine)
+    asio::awaitable<void> serveSsl(
+        std::shared_ptr<boost::beast::ssl_stream<boost::beast::tcp_stream>> stream
+    );
 
     // -----------------------------------------------------------------------
     // SSL helper
@@ -355,6 +388,73 @@ private:
                 }
             }
 
+            // Check for WebSocket upgrade (GET + Upgrade: websocket)
+            if (methodIdx == 0 && !handled && (!wsRoutes_.empty() || !wsSslRoutes_.empty())) {
+                auto upgradeIt = req.find(http::field::upgrade);
+                if (upgradeIt != req.end()
+                    && boost::beast::iequals(upgradeIt->value(), "websocket")) {
+                    try {
+                        if constexpr (std::is_same_v<Stream, boost::beast::tcp_stream>) {
+                            auto wsIt = wsRoutes_.find(path);
+                            if (wsIt != wsRoutes_.end()) {
+                                boost::beast::websocket::stream<boost::beast::tcp_stream> ws(
+                                    std::move(stream)
+                                );
+                                ws.set_option(
+                                    boost::beast::websocket::stream_base::timeout::suggested(
+                                        boost::beast::role_type::server
+                                    )
+                                );
+                                co_await ws.async_accept(
+                                    req,
+                                    asio::cancel_after(
+                                        std::chrono::seconds{10},
+                                        asio::use_awaitable
+                                    )
+                                );
+                                co_await wsIt->second(ws);
+                                handled = true;
+                                break;
+                            }
+                        } else {
+                            auto wsIt = wsSslRoutes_.find(path);
+                            if (wsIt != wsSslRoutes_.end()) {
+                                boost::beast::websocket::stream<
+                                    boost::beast::ssl_stream<boost::beast::tcp_stream>>
+                                    ws(std::move(stream));
+                                ws.set_option(
+                                    boost::beast::websocket::stream_base::timeout::suggested(
+                                        boost::beast::role_type::server
+                                    )
+                                );
+                                co_await ws.async_accept(
+                                    req,
+                                    asio::cancel_after(
+                                        std::chrono::seconds{10},
+                                        asio::use_awaitable
+                                    )
+                                );
+                                co_await wsIt->second(ws);
+                                handled = true;
+                                break;
+                            }
+                        }
+                    } catch (const std::exception& e) {
+                        XX_LOGE(
+                            "[server] WS upgrade error [{}]: {}",
+                            req.target(),
+                            e.what()
+                        );
+                        fillError(
+                            resp,
+                            req.version(),
+                            http::status::internal_server_error,
+                            "WebSocket Error"
+                        );
+                    }
+                }
+            }
+
             if (methodIdx >= 0 && !handled) {
                 auto handler = router_->get(path, methodIdx, matchedPath);
                 if (handler && *handler) {
@@ -462,6 +562,7 @@ private:
     // -----------------------------------------------------------------------
     struct Worker {
         asio::io_context ioCtx;
+        std::optional<asio::executor_work_guard<asio::io_context::executor_type>> workGuard;
         std::thread      thread;
     };
 
@@ -483,6 +584,15 @@ private:
         std::string,
         std::function<asio::awaitable<void>(Request&, std::shared_ptr<SseWriter>)>>
         sseRoutes_;
+
+    /// WebSocket routes (GET + Upgrade) — keyed by path
+    std::unordered_map<std::string, WsHandler> wsRoutes_;
+
+    /// WebSocket SSL routes (GET + Upgrade over TLS) — keyed by path
+    std::unordered_map<std::string, WssHandler> wsSslRoutes_;
+
+    /// Whether startAsync mode is active (single executor, no worker threads)
+    bool asyncMode_ = false;
 };
 
 } // namespace util

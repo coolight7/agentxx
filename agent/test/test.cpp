@@ -30,6 +30,7 @@
 #include "test_subagent_bus.h"
 #include "test_text_selection_monitor.h"
 #include "test_web_search_tools.h"
+#include "test_websocket.h"
 #include <cstring>
 #include <iostream>
 #include <map>
@@ -171,6 +172,7 @@ int main(int argn, char** argv) {
             co_await runCtx("codegraph", agentxx::test::run_codegraph_tools_tests, agentContext);
             co_await run("cpu_gpu", agentxx::test::run_cpu_gpu_use_tests);
             co_await run("http", agentxx::test::run_http_client_tests);
+            co_await run("websocket", agentxx::test::run_websocket_tests);
             co_await run("mcp", agentxx::test::run_mcp_tests);
             co_await run("acp", agentxx::test::run_acp_tests);
             co_await run("openai_provider", agentxx::test::run_openai_provider_tests);
