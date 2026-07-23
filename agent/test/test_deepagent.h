@@ -23,24 +23,24 @@ extern int g_da_failed;
 // ===========================================================================
 // Local LLM Simulator — an OpenAI-compatible HTTP server
 // ===========================================================================
-extern std::string g_da_sim_response_content;
-extern int g_da_sim_prompt_tokens;
-extern int g_da_sim_completion_tokens;
+extern std::string    g_da_sim_response_content;
+extern int            g_da_sim_prompt_tokens;
+extern int            g_da_sim_completion_tokens;
 extern neograph::json g_da_sim_tool_calls;
 
 struct DaSimServer {
-  std::unique_ptr<agentxx::util::HttpServer> svr;
-  std::thread thr;
-  uint16_t port = 0;
+    std::unique_ptr<agentxx::util::HttpServer> svr;
+    std::thread                                thr;
+    uint16_t                                   port = 0;
 
-  DaSimServer() = default;
-  DaSimServer(DaSimServer &&o) noexcept;
-  DaSimServer &operator=(DaSimServer &&o) noexcept;
-  DaSimServer(const DaSimServer &) = delete;
-  DaSimServer &operator=(const DaSimServer &) = delete;
-  ~DaSimServer();
+    DaSimServer() = default;
+    DaSimServer(DaSimServer&& o) noexcept;
+    DaSimServer& operator=(DaSimServer&& o) noexcept;
+    DaSimServer(const DaSimServer&)            = delete;
+    DaSimServer& operator=(const DaSimServer&) = delete;
+    ~DaSimServer();
 
-  void stop();
+    void stop();
 };
 
 asio::awaitable<TestResult> run_deepagent_tests();

@@ -4,9 +4,9 @@
 #include <thread>
 
 #if XX_IS_WIN_D
-#include <windows.h>
 #include <d3d11.h>
 #include <dxgi1_2.h>
+#include <windows.h>
 #include <wrl/client.h>
 
 using Microsoft::WRL::ComPtr;
@@ -19,675 +19,700 @@ namespace expand {
 
 class ScreenCapture::Impl {
 public:
-  Impl() : running_(false), frame_rate_(0) {
-    dxgiAvailable_ = initDxgi();
-    if (dxgiAvailable_) {
-      XX_LOGI("ScreenCapture: DXGI Desktop Duplication initialized");
-    } else {
-      XX_LOGI("ScreenCapture: DXGI unavailable, falling back to GDI");
-    }
-  }
 
-  ~Impl() {
-    stopStreaming();
-    cleanupGdiCache();
-    cleanupDxgi();
-  }
-
-  std::vector<ScreenFrame> captureAllScreens() {
-    std::vector<ScreenFrame> frames;
-    int screenCount = getScreenCount();
-
-    for (int i = 0; i < screenCount; ++i) {
-      auto frame = captureScreen(i);
-      if (frame.width > 0 && frame.height > 0) {
-        frames.push_back(std::move(frame));
-      }
+    Impl() :
+        running_(false),
+        frame_rate_(0) {
+        dxgiAvailable_ = initDxgi();
+        if (dxgiAvailable_) {
+            XX_LOGI("ScreenCapture: DXGI Desktop Duplication initialized");
+        } else {
+            XX_LOGI("ScreenCapture: DXGI unavailable, falling back to GDI");
+        }
     }
 
-    return frames;
-  }
-
-  ScreenFrame captureMouseScreen() {
-    POINT cursorPos;
-    if (!GetCursorPos(&cursorPos)) {
-      XX_LOGE("ScreenCapture: GetCursorPos failed");
-      return {};
+    ~Impl() {
+        stopStreaming();
+        cleanupGdiCache();
+        cleanupDxgi();
     }
 
-    HMONITOR hMonitor = MonitorFromPoint(cursorPos, MONITOR_DEFAULTTONULL);
-    if (!hMonitor) {
-      XX_LOGE("ScreenCapture: MonitorFromPoint failed");
-      return {};
+    std::vector<ScreenFrame> captureAllScreens() {
+        std::vector<ScreenFrame> frames;
+        int                      screenCount = getScreenCount();
+
+        for (int i = 0; i < screenCount; ++i) {
+            auto frame = captureScreen(i);
+            if (frame.width > 0 && frame.height > 0) {
+                frames.push_back(std::move(frame));
+            }
+        }
+
+        return frames;
     }
 
-    MONITORINFOEXW monitorInfo = {};
-    monitorInfo.cbSize = sizeof(monitorInfo);
-    if (!GetMonitorInfoW(hMonitor, &monitorInfo)) {
-      XX_LOGE("ScreenCapture: GetMonitorInfoW failed");
-      return {};
+    ScreenFrame captureMouseScreen() {
+        POINT cursorPos;
+        if (!GetCursorPos(&cursorPos)) {
+            XX_LOGE("ScreenCapture: GetCursorPos failed");
+            return {};
+        }
+
+        HMONITOR hMonitor = MonitorFromPoint(cursorPos, MONITOR_DEFAULTTONULL);
+        if (!hMonitor) {
+            XX_LOGE("ScreenCapture: MonitorFromPoint failed");
+            return {};
+        }
+
+        MONITORINFOEXW monitorInfo = {};
+        monitorInfo.cbSize         = sizeof(monitorInfo);
+        if (!GetMonitorInfoW(hMonitor, &monitorInfo)) {
+            XX_LOGE("ScreenCapture: GetMonitorInfoW failed");
+            return {};
+        }
+
+        int screenIndex = getMonitorIndex(hMonitor);
+        if (screenIndex < 0) {
+            return {};
+        }
+
+        return doCaptureScreen(monitorInfo.rcMonitor.left,
+                               monitorInfo.rcMonitor.top,
+                               monitorInfo.rcMonitor.right - monitorInfo.rcMonitor.left,
+                               monitorInfo.rcMonitor.bottom - monitorInfo.rcMonitor.top,
+                               screenIndex,
+                               hMonitor);
     }
 
-    int screenIndex = getMonitorIndex(hMonitor);
-    if (screenIndex < 0) {
-      return {};
+    ScreenFrame captureScreen(int screenIndex) {
+        int screenCount = getScreenCount();
+        if (screenIndex < 0 || screenIndex >= screenCount) {
+            XX_LOGE("ScreenCapture: invalid screen index {}", screenIndex);
+            return {};
+        }
+
+        HMONITOR hMonitor = getMonitorByIndex(screenIndex);
+        if (!hMonitor) {
+            XX_LOGE("ScreenCapture: monitor not found for index {}", screenIndex);
+            return {};
+        }
+
+        MONITORINFOEXW monitorInfo = {};
+        monitorInfo.cbSize         = sizeof(monitorInfo);
+        if (!GetMonitorInfoW(hMonitor, &monitorInfo)) {
+            XX_LOGE("ScreenCapture: GetMonitorInfoW failed for index {}", screenIndex);
+            return {};
+        }
+
+        return doCaptureScreen(monitorInfo.rcMonitor.left,
+                               monitorInfo.rcMonitor.top,
+                               monitorInfo.rcMonitor.right - monitorInfo.rcMonitor.left,
+                               monitorInfo.rcMonitor.bottom - monitorInfo.rcMonitor.top,
+                               screenIndex,
+                               hMonitor);
     }
 
-    return doCaptureScreen(
-        monitorInfo.rcMonitor.left, monitorInfo.rcMonitor.top,
-        monitorInfo.rcMonitor.right - monitorInfo.rcMonitor.left,
-        monitorInfo.rcMonitor.bottom - monitorInfo.rcMonitor.top,
-        screenIndex, hMonitor);
-  }
-
-  ScreenFrame captureScreen(int screenIndex) {
-    int screenCount = getScreenCount();
-    if (screenIndex < 0 || screenIndex >= screenCount) {
-      XX_LOGE("ScreenCapture: invalid screen index {}", screenIndex);
-      return {};
+    int getScreenCount() const {
+        int count = 0;
+        EnumDisplayMonitors(nullptr,
+                            nullptr,
+                            monitorCountEnumProc,
+                            reinterpret_cast<LPARAM>(&count));
+        return count;
     }
 
-    HMONITOR hMonitor = getMonitorByIndex(screenIndex);
-    if (!hMonitor) {
-      XX_LOGE("ScreenCapture: monitor not found for index {}", screenIndex);
-      return {};
+    bool startStreaming(int frameRate, ScreenFrameListener listener) {
+        if (running_.load()) {
+            XX_LOGW("ScreenCapture: streaming already running");
+            return false;
+        }
+
+        if (frameRate <= 0) {
+            XX_LOGE("ScreenCapture: invalid frame rate {}", frameRate);
+            return false;
+        }
+
+        if (!listener) {
+            XX_LOGE("ScreenCapture: listener is null");
+            return false;
+        }
+
+        frame_rate_ = frameRate;
+        listener_   = std::move(listener);
+        running_.store(true);
+
+        stream_thread_ = std::thread(&Impl::streamLoop, this);
+        XX_LOGI("ScreenCapture: streaming started at {} fps (DXGI: {})", frameRate, dxgiAvailable_);
+        return true;
     }
 
-    MONITORINFOEXW monitorInfo = {};
-    monitorInfo.cbSize = sizeof(monitorInfo);
-    if (!GetMonitorInfoW(hMonitor, &monitorInfo)) {
-      XX_LOGE("ScreenCapture: GetMonitorInfoW failed for index {}",
-              screenIndex);
-      return {};
+    void stopStreaming() {
+        if (!running_.load()) {
+            return;
+        }
+
+        running_.store(false);
+        if (stream_thread_.joinable()) {
+            stream_thread_.join();
+        }
+        listener_ = nullptr;
+        XX_LOGI("ScreenCapture: streaming stopped");
     }
 
-    return doCaptureScreen(
-        monitorInfo.rcMonitor.left, monitorInfo.rcMonitor.top,
-        monitorInfo.rcMonitor.right - monitorInfo.rcMonitor.left,
-        monitorInfo.rcMonitor.bottom - monitorInfo.rcMonitor.top,
-        screenIndex, hMonitor);
-  }
-
-  int getScreenCount() const {
-    int count = 0;
-    EnumDisplayMonitors(nullptr, nullptr, monitorCountEnumProc,
-                        reinterpret_cast<LPARAM>(&count));
-    return count;
-  }
-
-  bool startStreaming(int frameRate, ScreenFrameListener listener) {
-    if (running_.load()) {
-      XX_LOGW("ScreenCapture: streaming already running");
-      return false;
+    bool isStreaming() const {
+        return running_.load();
     }
-
-    if (frameRate <= 0) {
-      XX_LOGE("ScreenCapture: invalid frame rate {}", frameRate);
-      return false;
-    }
-
-    if (!listener) {
-      XX_LOGE("ScreenCapture: listener is null");
-      return false;
-    }
-
-    frame_rate_ = frameRate;
-    listener_ = std::move(listener);
-    running_.store(true);
-
-    stream_thread_ = std::thread(&Impl::streamLoop, this);
-    XX_LOGI("ScreenCapture: streaming started at {} fps (DXGI: {})",
-            frameRate, dxgiAvailable_);
-    return true;
-  }
-
-  void stopStreaming() {
-    if (!running_.load()) {
-      return;
-    }
-
-    running_.store(false);
-    if (stream_thread_.joinable()) {
-      stream_thread_.join();
-    }
-    listener_ = nullptr;
-    XX_LOGI("ScreenCapture: streaming stopped");
-  }
-
-  bool isStreaming() const { return running_.load(); }
 
 private:
-  ScreenFrame doCaptureScreen(int x, int y, int width, int height,
-                              int screenIndex, HMONITOR hMonitor) {
-    if (dxgiAvailable_ && screenIndex >= 0 &&
-        screenIndex < static_cast<int>(dxgiMonitors_.size()) &&
-        dxgiMonitors_[screenIndex].duplication) {
-      auto frame = captureScreenDxgi(screenIndex, hMonitor, x, y, width, height);
-      if (frame.width > 0 && frame.height > 0) {
-        return frame;
-      }
-      XX_LOGW("ScreenCapture: DXGI error for screen {}, falling back to GDI",
-              screenIndex);
+
+    ScreenFrame
+        doCaptureScreen(int x, int y, int width, int height, int screenIndex, HMONITOR hMonitor) {
+        if (dxgiAvailable_ && screenIndex >= 0
+            && screenIndex < static_cast<int>(dxgiMonitors_.size())
+            && dxgiMonitors_[screenIndex].duplication) {
+            auto frame = captureScreenDxgi(screenIndex, hMonitor, x, y, width, height);
+            if (frame.width > 0 && frame.height > 0) {
+                return frame;
+            }
+            XX_LOGW("ScreenCapture: DXGI error for screen {}, falling back to GDI", screenIndex);
+        }
+
+        return captureScreenGdi(x, y, width, height, screenIndex, hMonitor);
     }
 
-    return captureScreenGdi(x, y, width, height, screenIndex, hMonitor);
-  }
+    bool initDxgi() {
+        ComPtr<ID3D11Device>        device;
+        ComPtr<ID3D11DeviceContext> context;
+        D3D_FEATURE_LEVEL           featureLevel;
 
-  bool initDxgi() {
-    ComPtr<ID3D11Device> device;
-    ComPtr<ID3D11DeviceContext> context;
-    D3D_FEATURE_LEVEL featureLevel;
-
-    UINT createFlags = 0;
+        UINT createFlags = 0;
 #ifdef _DEBUG
-    createFlags |= D3D11_CREATE_DEVICE_DEBUG;
+        createFlags |= D3D11_CREATE_DEVICE_DEBUG;
 #endif
 
-    HRESULT hr = D3D11CreateDevice(
-        nullptr,
-        D3D_DRIVER_TYPE_HARDWARE,
-        nullptr,
-        createFlags,
-        nullptr, 0,
-        D3D11_SDK_VERSION,
-        device.GetAddressOf(),
-        &featureLevel,
-        context.GetAddressOf());
+        HRESULT hr = D3D11CreateDevice(nullptr,
+                                       D3D_DRIVER_TYPE_HARDWARE,
+                                       nullptr,
+                                       createFlags,
+                                       nullptr,
+                                       0,
+                                       D3D11_SDK_VERSION,
+                                       device.GetAddressOf(),
+                                       &featureLevel,
+                                       context.GetAddressOf());
 
-    if (FAILED(hr)) {
-      hr = D3D11CreateDevice(
-          nullptr,
-          D3D_DRIVER_TYPE_WARP,
-          nullptr,
-          createFlags,
-          nullptr, 0,
-          D3D11_SDK_VERSION,
-          device.GetAddressOf(),
-          &featureLevel,
-          context.GetAddressOf());
+        if (FAILED(hr)) {
+            hr = D3D11CreateDevice(nullptr,
+                                   D3D_DRIVER_TYPE_WARP,
+                                   nullptr,
+                                   createFlags,
+                                   nullptr,
+                                   0,
+                                   D3D11_SDK_VERSION,
+                                   device.GetAddressOf(),
+                                   &featureLevel,
+                                   context.GetAddressOf());
+        }
+
+        if (FAILED(hr)) {
+            return false;
+        }
+
+        ComPtr<IDXGIDevice> dxgiDevice;
+        hr = device.As(&dxgiDevice);
+        if (FAILED(hr)) {
+            return false;
+        }
+
+        ComPtr<IDXGIAdapter> dxgiAdapter;
+        hr = dxgiDevice->GetAdapter(dxgiAdapter.GetAddressOf());
+        if (FAILED(hr)) {
+            return false;
+        }
+
+        int monitorCount = getScreenCount();
+        dxgiMonitors_.resize(monitorCount);
+
+        ComPtr<IDXGIOutput> dxgiOutput;
+        for (UINT i = 0;; ++i) {
+            hr = dxgiAdapter->EnumOutputs(i, dxgiOutput.GetAddressOf());
+            if (FAILED(hr)) {
+                break;
+            }
+
+            ComPtr<IDXGIOutput1> dxgiOutput1;
+            hr = dxgiOutput.As(&dxgiOutput1);
+            if (FAILED(hr)) {
+                dxgiOutput.Reset();
+                continue;
+            }
+
+            DXGI_OUTPUT_DESC outputDesc;
+            hr = dxgiOutput->GetDesc(&outputDesc);
+            if (FAILED(hr)) {
+                dxgiOutput.Reset();
+                continue;
+            }
+
+            HMONITOR outputMonitor = outputDesc.Monitor;
+            int      screenIndex   = getMonitorIndex(outputMonitor);
+            if (screenIndex < 0 || screenIndex >= monitorCount) {
+                dxgiOutput.Reset();
+                continue;
+            }
+
+            ComPtr<IDXGIOutputDuplication> duplication;
+            hr = dxgiOutput1->DuplicateOutput(device.Get(), duplication.GetAddressOf());
+            if (FAILED(hr)) {
+                XX_LOGW("ScreenCapture: DuplicateOutput failed for screen {} (hr=0x{:08X})",
+                        screenIndex,
+                        static_cast<unsigned>(hr));
+                dxgiMonitors_[screenIndex].duplicationFailed = true;
+                dxgiOutput.Reset();
+                continue;
+            }
+
+            dxgiMonitors_[screenIndex].duplication       = std::move(duplication);
+            dxgiMonitors_[screenIndex].duplicationFailed = false;
+
+            dxgiOutput.Reset();
+        }
+
+        d3dDevice_  = std::move(device);
+        d3dContext_ = std::move(context);
+
+        bool anyAvailable = false;
+        for (const auto& m : dxgiMonitors_) {
+            if (m.duplication) {
+                anyAvailable = true;
+                break;
+            }
+        }
+
+        if (!anyAvailable) {
+            cleanupDxgi();
+            return false;
+        }
+
+        return true;
     }
 
-    if (FAILED(hr)) {
-      return false;
+    void cleanupDxgi() {
+        for (auto& m : dxgiMonitors_) {
+            m.duplication.Reset();
+            m.stagingTexture.Reset();
+        }
+        dxgiMonitors_.clear();
+        d3dContext_.Reset();
+        d3dDevice_.Reset();
     }
 
-    ComPtr<IDXGIDevice> dxgiDevice;
-    hr = device.As(&dxgiDevice);
-    if (FAILED(hr)) {
-      return false;
-    }
+    ScreenFrame
+        captureScreenDxgi(int screenIndex, HMONITOR hMonitor, int x, int y, int width, int height) {
+        ScreenFrame frame;
+        frame.width       = width;
+        frame.height      = height;
+        frame.offsetX     = x;
+        frame.offsetY     = y;
+        frame.screenIndex = screenIndex;
+        frame.timestamp   = std::chrono::steady_clock::now();
 
-    ComPtr<IDXGIAdapter> dxgiAdapter;
-    hr = dxgiDevice->GetAdapter(dxgiAdapter.GetAddressOf());
-    if (FAILED(hr)) {
-      return false;
-    }
+        MONITORINFOEXW monitorInfo = {};
+        monitorInfo.cbSize         = sizeof(monitorInfo);
+        if (GetMonitorInfoW(hMonitor, &monitorInfo)) {
+            frame.screenName = wcharToUtf8(monitorInfo.szDevice);
+            frame.isPrimary  = (monitorInfo.dwFlags & MONITORINFOF_PRIMARY) != 0;
+        }
 
-    int monitorCount = getScreenCount();
-    dxgiMonitors_.resize(monitorCount);
+        auto& dxgiState = dxgiMonitors_[screenIndex];
+        if (!dxgiState.duplication) {
+            frame.width = 0;
+            return frame;
+        }
 
-    ComPtr<IDXGIOutput> dxgiOutput;
-    for (UINT i = 0; ; ++i) {
-      hr = dxgiAdapter->EnumOutputs(i, dxgiOutput.GetAddressOf());
-      if (FAILED(hr)) {
-        break;
-      }
+        ComPtr<IDXGIResource>   desktopResource;
+        DXGI_OUTDUPL_FRAME_INFO frameInfo = {};
+        HRESULT                 hr        = dxgiState.duplication->AcquireNextFrame(100,
+                                                             &frameInfo,
+                                                             desktopResource.GetAddressOf());
 
-      ComPtr<IDXGIOutput1> dxgiOutput1;
-      hr = dxgiOutput.As(&dxgiOutput1);
-      if (FAILED(hr)) {
-        dxgiOutput.Reset();
-        continue;
-      }
+        if (hr == DXGI_ERROR_WAIT_TIMEOUT) {
+            return frame;
+        }
 
-      DXGI_OUTPUT_DESC outputDesc;
-      hr = dxgiOutput->GetDesc(&outputDesc);
-      if (FAILED(hr)) {
-        dxgiOutput.Reset();
-        continue;
-      }
+        if (FAILED(hr)) {
+            if (hr == DXGI_ERROR_ACCESS_LOST) {
+                XX_LOGW("ScreenCapture: DXGI access lost for screen {}, reinitializing",
+                        screenIndex);
+                dxgiState.duplication.Reset();
+                dxgiState.stagingTexture.Reset();
+            }
+            frame.width = 0;
+            return frame;
+        }
 
-      HMONITOR outputMonitor = outputDesc.Monitor;
-      int screenIndex = getMonitorIndex(outputMonitor);
-      if (screenIndex < 0 || screenIndex >= monitorCount) {
-        dxgiOutput.Reset();
-        continue;
-      }
+        ComPtr<ID3D11Texture2D> desktopTexture;
+        hr = desktopResource.As(&desktopTexture);
+        if (FAILED(hr)) {
+            dxgiState.duplication->ReleaseFrame();
+            frame.width = 0;
+            return frame;
+        }
 
-      ComPtr<IDXGIOutputDuplication> duplication;
-      hr = dxgiOutput1->DuplicateOutput(device.Get(), duplication.GetAddressOf());
-      if (FAILED(hr)) {
-        XX_LOGW("ScreenCapture: DuplicateOutput failed for screen {} (hr=0x{:08X})",
-                screenIndex, static_cast<unsigned>(hr));
-        dxgiMonitors_[screenIndex].duplicationFailed = true;
-        dxgiOutput.Reset();
-        continue;
-      }
+        D3D11_TEXTURE2D_DESC texDesc;
+        desktopTexture->GetDesc(&texDesc);
 
-      dxgiMonitors_[screenIndex].duplication = std::move(duplication);
-      dxgiMonitors_[screenIndex].duplicationFailed = false;
+        if (!dxgiState.stagingTexture || dxgiState.lastWidth != static_cast<int>(texDesc.Width)
+            || dxgiState.lastHeight != static_cast<int>(texDesc.Height)) {
 
-      dxgiOutput.Reset();
-    }
+            D3D11_TEXTURE2D_DESC stagingDesc = {};
+            stagingDesc.Width                = texDesc.Width;
+            stagingDesc.Height               = texDesc.Height;
+            stagingDesc.MipLevels            = 1;
+            stagingDesc.ArraySize            = 1;
+            stagingDesc.Format               = texDesc.Format;
+            stagingDesc.SampleDesc.Count     = 1;
+            stagingDesc.Usage                = D3D11_USAGE_STAGING;
+            stagingDesc.CPUAccessFlags       = D3D11_CPU_ACCESS_READ;
 
-    d3dDevice_ = std::move(device);
-    d3dContext_ = std::move(context);
+            dxgiState.stagingTexture.Reset();
+            hr = d3dDevice_->CreateTexture2D(&stagingDesc,
+                                             nullptr,
+                                             dxgiState.stagingTexture.GetAddressOf());
+            if (FAILED(hr)) {
+                dxgiState.duplication->ReleaseFrame();
+                frame.width = 0;
+                return frame;
+            }
 
-    bool anyAvailable = false;
-    for (const auto& m : dxgiMonitors_) {
-      if (m.duplication) {
-        anyAvailable = true;
-        break;
-      }
-    }
+            dxgiState.lastWidth  = texDesc.Width;
+            dxgiState.lastHeight = texDesc.Height;
+        }
 
-    if (!anyAvailable) {
-      cleanupDxgi();
-      return false;
-    }
+        d3dContext_->CopyResource(dxgiState.stagingTexture.Get(), desktopTexture.Get());
 
-    return true;
-  }
-
-  void cleanupDxgi() {
-    for (auto& m : dxgiMonitors_) {
-      m.duplication.Reset();
-      m.stagingTexture.Reset();
-    }
-    dxgiMonitors_.clear();
-    d3dContext_.Reset();
-    d3dDevice_.Reset();
-  }
-
-  ScreenFrame captureScreenDxgi(int screenIndex, HMONITOR hMonitor,
-                                int x, int y, int width, int height) {
-    ScreenFrame frame;
-    frame.width = width;
-    frame.height = height;
-    frame.offsetX = x;
-    frame.offsetY = y;
-    frame.screenIndex = screenIndex;
-    frame.timestamp = std::chrono::steady_clock::now();
-
-    MONITORINFOEXW monitorInfo = {};
-    monitorInfo.cbSize = sizeof(monitorInfo);
-    if (GetMonitorInfoW(hMonitor, &monitorInfo)) {
-      frame.screenName = wcharToUtf8(monitorInfo.szDevice);
-      frame.isPrimary = (monitorInfo.dwFlags & MONITORINFOF_PRIMARY) != 0;
-    }
-
-    auto& dxgiState = dxgiMonitors_[screenIndex];
-    if (!dxgiState.duplication) {
-      frame.width = 0;
-      return frame;
-    }
-
-    ComPtr<IDXGIResource> desktopResource;
-    DXGI_OUTDUPL_FRAME_INFO frameInfo = {};
-    HRESULT hr = dxgiState.duplication->AcquireNextFrame(
-        100, &frameInfo, desktopResource.GetAddressOf());
-
-    if (hr == DXGI_ERROR_WAIT_TIMEOUT) {
-      return frame;
-    }
-
-    if (FAILED(hr)) {
-      if (hr == DXGI_ERROR_ACCESS_LOST) {
-        XX_LOGW("ScreenCapture: DXGI access lost for screen {}, reinitializing",
-                screenIndex);
-        dxgiState.duplication.Reset();
-        dxgiState.stagingTexture.Reset();
-      }
-      frame.width = 0;
-      return frame;
-    }
-
-    ComPtr<ID3D11Texture2D> desktopTexture;
-    hr = desktopResource.As(&desktopTexture);
-    if (FAILED(hr)) {
-      dxgiState.duplication->ReleaseFrame();
-      frame.width = 0;
-      return frame;
-    }
-
-    D3D11_TEXTURE2D_DESC texDesc;
-    desktopTexture->GetDesc(&texDesc);
-
-    if (!dxgiState.stagingTexture ||
-        dxgiState.lastWidth != static_cast<int>(texDesc.Width) ||
-        dxgiState.lastHeight != static_cast<int>(texDesc.Height)) {
-
-      D3D11_TEXTURE2D_DESC stagingDesc = {};
-      stagingDesc.Width = texDesc.Width;
-      stagingDesc.Height = texDesc.Height;
-      stagingDesc.MipLevels = 1;
-      stagingDesc.ArraySize = 1;
-      stagingDesc.Format = texDesc.Format;
-      stagingDesc.SampleDesc.Count = 1;
-      stagingDesc.Usage = D3D11_USAGE_STAGING;
-      stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-
-      dxgiState.stagingTexture.Reset();
-      hr = d3dDevice_->CreateTexture2D(&stagingDesc, nullptr,
-                                       dxgiState.stagingTexture.GetAddressOf());
-      if (FAILED(hr)) {
         dxgiState.duplication->ReleaseFrame();
-        frame.width = 0;
+
+        D3D11_MAPPED_SUBRESOURCE mapped = {};
+        hr = d3dContext_->Map(dxgiState.stagingTexture.Get(), 0, D3D11_MAP_READ, 0, &mapped);
+        if (FAILED(hr)) {
+            frame.width = 0;
+            return frame;
+        }
+
+        int pixelDataSize = width * height * 4;
+        frame.pixelData.resize(pixelDataSize);
+
+        const uint8_t* src          = static_cast<const uint8_t*>(mapped.pData);
+        int            srcRowPitch  = static_cast<int>(mapped.RowPitch);
+        int            destRowPitch = width * 4;
+
+        for (int row = 0; row < height; ++row) {
+            memcpy(frame.pixelData.data() + row * destRowPitch,
+                   src + row * srcRowPitch,
+                   destRowPitch);
+        }
+
+        d3dContext_->Unmap(dxgiState.stagingTexture.Get(), 0);
+
         return frame;
-      }
-
-      dxgiState.lastWidth = texDesc.Width;
-      dxgiState.lastHeight = texDesc.Height;
     }
 
-    d3dContext_->CopyResource(dxgiState.stagingTexture.Get(), desktopTexture.Get());
-
-    dxgiState.duplication->ReleaseFrame();
-
-    D3D11_MAPPED_SUBRESOURCE mapped = {};
-    hr = d3dContext_->Map(dxgiState.stagingTexture.Get(), 0,
-                          D3D11_MAP_READ, 0, &mapped);
-    if (FAILED(hr)) {
-      frame.width = 0;
-      return frame;
+    void cleanupGdiCache() {
+        if (gdiCache_.oldObj && gdiCache_.memDC) {
+            SelectObject(gdiCache_.memDC, gdiCache_.oldObj);
+            gdiCache_.oldObj = nullptr;
+        }
+        if (gdiCache_.bitmap) {
+            DeleteObject(gdiCache_.bitmap);
+            gdiCache_.bitmap = nullptr;
+        }
+        if (gdiCache_.memDC) {
+            DeleteDC(gdiCache_.memDC);
+            gdiCache_.memDC = nullptr;
+        }
+        gdiCache_.width  = 0;
+        gdiCache_.height = 0;
     }
 
-    int pixelDataSize = width * height * 4;
-    frame.pixelData.resize(pixelDataSize);
+    ScreenFrame
+        captureScreenGdi(int x, int y, int width, int height, int screenIndex, HMONITOR hMonitor) {
+        ScreenFrame frame;
+        frame.width       = width;
+        frame.height      = height;
+        frame.offsetX     = x;
+        frame.offsetY     = y;
+        frame.screenIndex = screenIndex;
+        frame.timestamp   = std::chrono::steady_clock::now();
 
-    const uint8_t* src = static_cast<const uint8_t*>(mapped.pData);
-    int srcRowPitch = static_cast<int>(mapped.RowPitch);
-    int destRowPitch = width * 4;
+        MONITORINFOEXW monitorInfo = {};
+        monitorInfo.cbSize         = sizeof(monitorInfo);
+        if (GetMonitorInfoW(hMonitor, &monitorInfo)) {
+            frame.screenName = wcharToUtf8(monitorInfo.szDevice);
+            frame.isPrimary  = (monitorInfo.dwFlags & MONITORINFOF_PRIMARY) != 0;
+        }
 
-    for (int row = 0; row < height; ++row) {
-      memcpy(frame.pixelData.data() + row * destRowPitch,
-             src + row * srcRowPitch,
-             destRowPitch);
-    }
+        HDC hdcScreen = GetDC(nullptr);
+        if (!hdcScreen) {
+            XX_LOGE("ScreenCapture: GetDC failed");
+            return frame;
+        }
 
-    d3dContext_->Unmap(dxgiState.stagingTexture.Get(), 0);
+        if (gdiCache_.width != width || gdiCache_.height != height) {
+            cleanupGdiCache();
 
-    return frame;
-  }
+            gdiCache_.memDC = CreateCompatibleDC(hdcScreen);
+            if (!gdiCache_.memDC) {
+                XX_LOGE("ScreenCapture: CreateCompatibleDC failed");
+                ReleaseDC(nullptr, hdcScreen);
+                return frame;
+            }
 
-  void cleanupGdiCache() {
-    if (gdiCache_.oldObj && gdiCache_.memDC) {
-      SelectObject(gdiCache_.memDC, gdiCache_.oldObj);
-      gdiCache_.oldObj = nullptr;
-    }
-    if (gdiCache_.bitmap) {
-      DeleteObject(gdiCache_.bitmap);
-      gdiCache_.bitmap = nullptr;
-    }
-    if (gdiCache_.memDC) {
-      DeleteDC(gdiCache_.memDC);
-      gdiCache_.memDC = nullptr;
-    }
-    gdiCache_.width = 0;
-    gdiCache_.height = 0;
-  }
+            gdiCache_.bitmap = CreateCompatibleBitmap(hdcScreen, width, height);
+            if (!gdiCache_.bitmap) {
+                XX_LOGE("ScreenCapture: CreateCompatibleBitmap failed");
+                DeleteDC(gdiCache_.memDC);
+                gdiCache_.memDC = nullptr;
+                ReleaseDC(nullptr, hdcScreen);
+                return frame;
+            }
 
-  ScreenFrame captureScreenGdi(int x, int y, int width, int height,
-                               int screenIndex, HMONITOR hMonitor) {
-    ScreenFrame frame;
-    frame.width = width;
-    frame.height = height;
-    frame.offsetX = x;
-    frame.offsetY = y;
-    frame.screenIndex = screenIndex;
-    frame.timestamp = std::chrono::steady_clock::now();
+            gdiCache_.oldObj = SelectObject(gdiCache_.memDC, gdiCache_.bitmap);
+            gdiCache_.width  = width;
+            gdiCache_.height = height;
+        }
 
-    MONITORINFOEXW monitorInfo = {};
-    monitorInfo.cbSize = sizeof(monitorInfo);
-    if (GetMonitorInfoW(hMonitor, &monitorInfo)) {
-      frame.screenName = wcharToUtf8(monitorInfo.szDevice);
-      frame.isPrimary = (monitorInfo.dwFlags & MONITORINFOF_PRIMARY) != 0;
-    }
+        if (!BitBlt(gdiCache_.memDC, 0, 0, width, height, hdcScreen, x, y, SRCCOPY | CAPTUREBLT)) {
+            XX_LOGE("ScreenCapture: BitBlt failed");
+            ReleaseDC(nullptr, hdcScreen);
+            return frame;
+        }
 
-    HDC hdcScreen = GetDC(nullptr);
-    if (!hdcScreen) {
-      XX_LOGE("ScreenCapture: GetDC failed");
-      return frame;
-    }
+        BITMAPINFO bmi              = {};
+        bmi.bmiHeader.biSize        = sizeof(BITMAPINFOHEADER);
+        bmi.bmiHeader.biWidth       = width;
+        bmi.bmiHeader.biHeight      = -height;
+        bmi.bmiHeader.biPlanes      = 1;
+        bmi.bmiHeader.biBitCount    = 32;
+        bmi.bmiHeader.biCompression = BI_RGB;
 
-    if (gdiCache_.width != width || gdiCache_.height != height) {
-      cleanupGdiCache();
+        int pixelDataSize = width * height * 4;
+        frame.pixelData.resize(pixelDataSize);
 
-      gdiCache_.memDC = CreateCompatibleDC(hdcScreen);
-      if (!gdiCache_.memDC) {
-        XX_LOGE("ScreenCapture: CreateCompatibleDC failed");
+        if (!GetDIBits(gdiCache_.memDC,
+                       gdiCache_.bitmap,
+                       0,
+                       height,
+                       frame.pixelData.data(),
+                       &bmi,
+                       DIB_RGB_COLORS)) {
+            XX_LOGE("ScreenCapture: GetDIBits failed");
+            frame.pixelData.clear();
+        }
+
         ReleaseDC(nullptr, hdcScreen);
+
         return frame;
-      }
-
-      gdiCache_.bitmap = CreateCompatibleBitmap(hdcScreen, width, height);
-      if (!gdiCache_.bitmap) {
-        XX_LOGE("ScreenCapture: CreateCompatibleBitmap failed");
-        DeleteDC(gdiCache_.memDC);
-        gdiCache_.memDC = nullptr;
-        ReleaseDC(nullptr, hdcScreen);
-        return frame;
-      }
-
-      gdiCache_.oldObj = SelectObject(gdiCache_.memDC, gdiCache_.bitmap);
-      gdiCache_.width = width;
-      gdiCache_.height = height;
     }
 
-    if (!BitBlt(gdiCache_.memDC, 0, 0, width, height, hdcScreen, x, y,
-                SRCCOPY | CAPTUREBLT)) {
-      XX_LOGE("ScreenCapture: BitBlt failed");
-      ReleaseDC(nullptr, hdcScreen);
-      return frame;
+    void streamLoop() {
+        auto frameInterval = std::chrono::milliseconds(1000 / frame_rate_);
+
+        while (running_.load()) {
+            auto start = std::chrono::steady_clock::now();
+
+            auto frames = captureAllScreens();
+            if (listener_) {
+                listener_(frames);
+            }
+
+            auto elapsed   = std::chrono::steady_clock::now() - start;
+            auto sleepTime = frameInterval - elapsed;
+
+            if (sleepTime > std::chrono::milliseconds(0)) {
+                std::this_thread::sleep_for(sleepTime);
+            }
+        }
     }
 
-    BITMAPINFO bmi = {};
-    bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-    bmi.bmiHeader.biWidth = width;
-    bmi.bmiHeader.biHeight = -height;
-    bmi.bmiHeader.biPlanes = 1;
-    bmi.bmiHeader.biBitCount = 32;
-    bmi.bmiHeader.biCompression = BI_RGB;
-
-    int pixelDataSize = width * height * 4;
-    frame.pixelData.resize(pixelDataSize);
-
-    if (!GetDIBits(gdiCache_.memDC, gdiCache_.bitmap, 0, height,
-                   frame.pixelData.data(), &bmi, DIB_RGB_COLORS)) {
-      XX_LOGE("ScreenCapture: GetDIBits failed");
-      frame.pixelData.clear();
+    static BOOL CALLBACK monitorCountEnumProc(HMONITOR /*hMonitor*/,
+                                              HDC /*hdcMonitor*/,
+                                              LPRECT /*lprcMonitor*/,
+                                              LPARAM dwData) {
+        int* count = reinterpret_cast<int*>(dwData);
+        (*count)++;
+        return TRUE;
     }
 
-    ReleaseDC(nullptr, hdcScreen);
+    struct MonitorEnumData {
+        int      targetIndex;
+        int      currentIndex;
+        HMONITOR result;
+    };
 
-    return frame;
-  }
-
-  void streamLoop() {
-    auto frameInterval = std::chrono::milliseconds(1000 / frame_rate_);
-
-    while (running_.load()) {
-      auto start = std::chrono::steady_clock::now();
-
-      auto frames = captureAllScreens();
-      if (listener_) {
-        listener_(frames);
-      }
-
-      auto elapsed = std::chrono::steady_clock::now() - start;
-      auto sleepTime = frameInterval - elapsed;
-
-      if (sleepTime > std::chrono::milliseconds(0)) {
-        std::this_thread::sleep_for(sleepTime);
-      }
+    static BOOL CALLBACK monitorEnumProc(HMONITOR hMonitor,
+                                         HDC /*hdcMonitor*/,
+                                         LPRECT /*lprcMonitor*/,
+                                         LPARAM dwData) {
+        MonitorEnumData* data = reinterpret_cast<MonitorEnumData*>(dwData);
+        if (data->currentIndex == data->targetIndex) {
+            data->result = hMonitor;
+            return FALSE;
+        }
+        data->currentIndex++;
+        return TRUE;
     }
-  }
 
-  static BOOL CALLBACK monitorCountEnumProc(HMONITOR /*hMonitor*/,
-                                            HDC /*hdcMonitor*/,
-                                            LPRECT /*lprcMonitor*/,
-                                            LPARAM dwData) {
-    int* count = reinterpret_cast<int*>(dwData);
-    (*count)++;
-    return TRUE;
-  }
-
-  struct MonitorEnumData {
-    int targetIndex;
-    int currentIndex;
-    HMONITOR result;
-  };
-
-  static BOOL CALLBACK monitorEnumProc(HMONITOR hMonitor, HDC /*hdcMonitor*/,
-                                       LPRECT /*lprcMonitor*/,
-                                       LPARAM dwData) {
-    MonitorEnumData* data = reinterpret_cast<MonitorEnumData*>(dwData);
-    if (data->currentIndex == data->targetIndex) {
-      data->result = hMonitor;
-      return FALSE;
+    HMONITOR getMonitorByIndex(int index) const {
+        MonitorEnumData data = {index, 0, nullptr};
+        EnumDisplayMonitors(nullptr, nullptr, monitorEnumProc, reinterpret_cast<LPARAM>(&data));
+        return data.result;
     }
-    data->currentIndex++;
-    return TRUE;
-  }
 
-  HMONITOR getMonitorByIndex(int index) const {
-    MonitorEnumData data = {index, 0, nullptr};
-    EnumDisplayMonitors(nullptr, nullptr, monitorEnumProc,
-                        reinterpret_cast<LPARAM>(&data));
-    return data.result;
-  }
+    struct MonitorIndexData {
+        HMONITOR target;
+        int      currentIndex;
+        int      result;
+    };
 
-  struct MonitorIndexData {
-    HMONITOR target;
-    int currentIndex;
-    int result;
-  };
-
-  static BOOL CALLBACK monitorIndexEnumProc(HMONITOR hMonitor,
-                                            HDC /*hdcMonitor*/,
-                                            LPRECT /*lprcMonitor*/,
-                                            LPARAM dwData) {
-    MonitorIndexData* data = reinterpret_cast<MonitorIndexData*>(dwData);
-    if (hMonitor == data->target) {
-      data->result = data->currentIndex;
-      return FALSE;
+    static BOOL CALLBACK monitorIndexEnumProc(HMONITOR hMonitor,
+                                              HDC /*hdcMonitor*/,
+                                              LPRECT /*lprcMonitor*/,
+                                              LPARAM dwData) {
+        MonitorIndexData* data = reinterpret_cast<MonitorIndexData*>(dwData);
+        if (hMonitor == data->target) {
+            data->result = data->currentIndex;
+            return FALSE;
+        }
+        data->currentIndex++;
+        return TRUE;
     }
-    data->currentIndex++;
-    return TRUE;
-  }
 
-  int getMonitorIndex(HMONITOR hMonitor) const {
-    MonitorIndexData data = {hMonitor, 0, -1};
-    EnumDisplayMonitors(nullptr, nullptr, monitorIndexEnumProc,
-                        reinterpret_cast<LPARAM>(&data));
-    return data.result;
-  }
-
-  static std::string wcharToUtf8(const WCHAR* wstr) {
-    if (!wstr) {
-      return {};
+    int getMonitorIndex(HMONITOR hMonitor) const {
+        MonitorIndexData data = {hMonitor, 0, -1};
+        EnumDisplayMonitors(nullptr,
+                            nullptr,
+                            monitorIndexEnumProc,
+                            reinterpret_cast<LPARAM>(&data));
+        return data.result;
     }
-    int len =
-        WideCharToMultiByte(CP_UTF8, 0, wstr, -1, nullptr, 0, nullptr, nullptr);
-    if (len <= 0) {
-      return {};
+
+    static std::string wcharToUtf8(const WCHAR* wstr) {
+        if (!wstr) {
+            return {};
+        }
+        int len = WideCharToMultiByte(CP_UTF8, 0, wstr, -1, nullptr, 0, nullptr, nullptr);
+        if (len <= 0) {
+            return {};
+        }
+        std::string result(len - 1, '\0');
+        WideCharToMultiByte(CP_UTF8, 0, wstr, -1, result.data(), len, nullptr, nullptr);
+        return result;
     }
-    std::string result(len - 1, '\0');
-    WideCharToMultiByte(CP_UTF8, 0, wstr, -1, result.data(), len, nullptr,
-                        nullptr);
-    return result;
-  }
 
-  std::atomic<bool> running_;
-  std::thread stream_thread_;
-  int frame_rate_;
-  ScreenFrameListener listener_;
+    std::atomic<bool>   running_;
+    std::thread         stream_thread_;
+    int                 frame_rate_;
+    ScreenFrameListener listener_;
 
-  bool dxgiAvailable_ = false;
-  ComPtr<ID3D11Device> d3dDevice_;
-  ComPtr<ID3D11DeviceContext> d3dContext_;
+    bool                        dxgiAvailable_ = false;
+    ComPtr<ID3D11Device>        d3dDevice_;
+    ComPtr<ID3D11DeviceContext> d3dContext_;
 
-  struct DxgiMonitorState {
-    ComPtr<IDXGIOutputDuplication> duplication;
-    ComPtr<ID3D11Texture2D> stagingTexture;
-    int lastWidth = 0;
-    int lastHeight = 0;
-    bool duplicationFailed = false;
-  };
-  std::vector<DxgiMonitorState> dxgiMonitors_;
+    struct DxgiMonitorState {
+        ComPtr<IDXGIOutputDuplication> duplication;
+        ComPtr<ID3D11Texture2D>        stagingTexture;
+        int                            lastWidth         = 0;
+        int                            lastHeight        = 0;
+        bool                           duplicationFailed = false;
+    };
 
-  struct GdiCache {
-    HDC memDC = nullptr;
-    HBITMAP bitmap = nullptr;
-    HGDIOBJ oldObj = nullptr;
-    int width = 0;
-    int height = 0;
-  };
-  GdiCache gdiCache_;
+    std::vector<DxgiMonitorState> dxgiMonitors_;
+
+    struct GdiCache {
+        HDC     memDC  = nullptr;
+        HBITMAP bitmap = nullptr;
+        HGDIOBJ oldObj = nullptr;
+        int     width  = 0;
+        int     height = 0;
+    };
+
+    GdiCache gdiCache_;
 };
 
 #else
 
 class ScreenCapture::Impl {
 public:
-  Impl() = default;
-  ~Impl() = default;
 
-  std::vector<ScreenFrame> captureAllScreens() {
-    XX_LOGW("ScreenCapture: not supported on this platform");
-    return {};
-  }
+    Impl()  = default;
+    ~Impl() = default;
 
-  ScreenFrame captureMouseScreen() {
-    XX_LOGW("ScreenCapture: not supported on this platform");
-    return {};
-  }
+    std::vector<ScreenFrame> captureAllScreens() {
+        XX_LOGW("ScreenCapture: not supported on this platform");
+        return {};
+    }
 
-  ScreenFrame captureScreen(int /*screenIndex*/) {
-    XX_LOGW("ScreenCapture: not supported on this platform");
-    return {};
-  }
+    ScreenFrame captureMouseScreen() {
+        XX_LOGW("ScreenCapture: not supported on this platform");
+        return {};
+    }
 
-  int getScreenCount() const { return 0; }
+    ScreenFrame captureScreen(int /*screenIndex*/) {
+        XX_LOGW("ScreenCapture: not supported on this platform");
+        return {};
+    }
 
-  bool startStreaming(int /*frameRate*/, ScreenFrameListener /*listener*/) {
-    XX_LOGW("ScreenCapture: not supported on this platform");
-    return false;
-  }
+    int getScreenCount() const {
+        return 0;
+    }
 
-  void stopStreaming() {}
+    bool startStreaming(int /*frameRate*/, ScreenFrameListener /*listener*/) {
+        XX_LOGW("ScreenCapture: not supported on this platform");
+        return false;
+    }
 
-  bool isStreaming() const { return false; }
+    void stopStreaming() {}
+
+    bool isStreaming() const {
+        return false;
+    }
 };
 
 #endif
 
-ScreenCapture::ScreenCapture() : impl_(std::make_unique<Impl>()) {}
+ScreenCapture::ScreenCapture() :
+    impl_(std::make_unique<Impl>()) {}
 
 ScreenCapture::~ScreenCapture() = default;
 
 std::vector<ScreenFrame> ScreenCapture::captureAllScreens() {
-  return impl_->captureAllScreens();
+    return impl_->captureAllScreens();
 }
 
 ScreenFrame ScreenCapture::captureMouseScreen() {
-  return impl_->captureMouseScreen();
+    return impl_->captureMouseScreen();
 }
 
 ScreenFrame ScreenCapture::captureScreen(int screenIndex) {
-  return impl_->captureScreen(screenIndex);
+    return impl_->captureScreen(screenIndex);
 }
 
-int ScreenCapture::getScreenCount() const { return impl_->getScreenCount(); }
-
-bool ScreenCapture::startStreaming(int frameRate,
-                                   ScreenFrameListener listener) {
-  return impl_->startStreaming(frameRate, std::move(listener));
+int ScreenCapture::getScreenCount() const {
+    return impl_->getScreenCount();
 }
 
-void ScreenCapture::stopStreaming() { impl_->stopStreaming(); }
+bool ScreenCapture::startStreaming(int frameRate, ScreenFrameListener listener) {
+    return impl_->startStreaming(frameRate, std::move(listener));
+}
 
-bool ScreenCapture::isStreaming() const { return impl_->isStreaming(); }
+void ScreenCapture::stopStreaming() {
+    impl_->stopStreaming();
+}
+
+bool ScreenCapture::isStreaming() const {
+    return impl_->isStreaming();
+}
 
 } // namespace expand
 } // namespace agentxx

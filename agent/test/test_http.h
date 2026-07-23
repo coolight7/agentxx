@@ -12,8 +12,7 @@
 #define XX_TEST_FAILED g_http_failed
 
 #undef XX_TEST_EXPECT_HAS_VALUE
-#define XX_TEST_EXPECT_HAS_VALUE(expr)                                         \
-  expect_has_value_impl(expr, __FILE__, __LINE__)
+#define XX_TEST_EXPECT_HAS_VALUE(expr) expect_has_value_impl(expr, __FILE__, __LINE__)
 
 namespace agentxx {
 namespace test {
@@ -21,8 +20,8 @@ namespace test {
 extern int g_http_passed;
 extern int g_http_failed;
 
-template <typename T>
-void expect_has_value_impl(T &&expr, const char *file, int line);
+template<typename T>
+void expect_has_value_impl(T&& expr, const char* file, int line);
 
 asio::awaitable<TestResult> run_http_client_tests();
 

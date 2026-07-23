@@ -17,8 +17,8 @@ namespace test {
 extern int g_dt_passed;
 extern int g_dt_failed;
 
-asio::awaitable<TestResult> run_datetime_tool_tests(
-    std::weak_ptr<agentxx::agent::AgentContext> agentContext);
+asio::awaitable<TestResult>
+    run_datetime_tool_tests(std::weak_ptr<agentxx::agent::AgentContext> agentContext);
 
 } // namespace test
 } // namespace agentxx

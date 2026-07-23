@@ -20,20 +20,21 @@ class AgentContext;
 ///   仅当策略为 INTERRUPT 时走总线询问, 实现策略/机制分离
 class StdioPermissionPrompter {
 public:
-  std::weak_ptr<agentxx::agent::AgentContext> agentContext;
-  size_t serverId = 0;
-  bool registered = false;
 
-  explicit StdioPermissionPrompter(
-      std::weak_ptr<agentxx::agent::AgentContext> ctx);
+    std::weak_ptr<agentxx::agent::AgentContext> agentContext;
+    size_t                                      serverId   = 0;
+    bool                                        registered = false;
 
-  asio::awaitable<void> start();
+    explicit StdioPermissionPrompter(std::weak_ptr<agentxx::agent::AgentContext> ctx);
 
-  void stop();
+    asio::awaitable<void> start();
 
-  ~StdioPermissionPrompter();
+    void stop();
+
+    ~StdioPermissionPrompter();
 
 private:
-  asio::awaitable<agentxx::events::RespPermission>
-  handle(const agentxx::events::ReqPermission &req);
+
+    asio::awaitable<agentxx::events::RespPermission>
+        handle(const agentxx::events::ReqPermission& req);
 };

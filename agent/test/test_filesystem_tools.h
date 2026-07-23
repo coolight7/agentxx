@@ -17,8 +17,8 @@ namespace test {
 extern int g_fs_passed;
 extern int g_fs_failed;
 
-asio::awaitable<TestResult> run_filesystem_tools_tests(
-    std::weak_ptr<agentxx::agent::AgentContext> agentContext);
+asio::awaitable<TestResult>
+    run_filesystem_tools_tests(std::weak_ptr<agentxx::agent::AgentContext> agentContext);
 
 } // namespace test
 } // namespace agentxx

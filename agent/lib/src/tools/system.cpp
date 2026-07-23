@@ -11,85 +11,91 @@ namespace agentxx {
 namespace tools {
 
 GetCurrentDateTimeTool::GetCurrentDateTimeTool(
-    std::weak_ptr<agentxx::agent::AgentContext> in_agentContext)
-    : XXToolBase("get_current_datetime", in_agentContext, false, true) {}
+    std::weak_ptr<agentxx::agent::AgentContext> in_agentContext) :
+    XXToolBase("get_current_datetime", in_agentContext, false, true) {}
 
 neograph::ChatTool GetCurrentDateTimeTool::get_definition() const {
-  auto agentPtr = agentContext.lock();
-  const auto &prompt = agentPtr->agentConfig->prompt.toolPrompt[get_name()];
+    auto        agentPtr = agentContext.lock();
+    const auto& prompt   = agentPtr->agentConfig->prompt.toolPrompt[get_name()];
 
-  return {
-      get_name(),
-      prompt.depict,
-      neograph::json{},
-  };
+    return {
+        get_name(),
+        prompt.depict,
+        neograph::json{},
+    };
 }
 
 asio::awaitable<std::string>
-GetCurrentDateTimeTool::execute_async(const neograph::json &arguments) {
-  auto now = std::chrono::system_clock::now();
-  std::chrono::zoned_time local_time{std::chrono::current_zone(), now};
+    GetCurrentDateTimeTool::execute_async(const neograph::json& arguments) {
+    auto                    now = std::chrono::system_clock::now();
+    std::chrono::zoned_time local_time{std::chrono::current_zone(), now};
 
-  co_return fmt::format(
-      R"(Timestamp: {} millisecond
+    co_return fmt::format(
+        R"(Timestamp: {} millisecond
 Local Time (24Hour): {}
 UTC Time (24Hour): {})",
-      now.time_since_epoch().count() / 1000 / 1000,
-      std::format("{:%Y-%m-%d %H:%M:%S}", local_time),
-      std::format("{:%Y-%m-%d %H:%M:%S}", now));
+        now.time_since_epoch().count() / 1000 / 1000,
+        std::format("{:%Y-%m-%d %H:%M:%S}", local_time),
+        std::format("{:%Y-%m-%d %H:%M:%S}", now));
 }
 
 GetSystemCoreInfoTool::GetSystemCoreInfoTool(
-    std::weak_ptr<agentxx::agent::AgentContext> in_agentContext)
-    : XXToolBase("get_system_core_info", in_agentContext, false, true) {}
+    std::weak_ptr<agentxx::agent::AgentContext> in_agentContext) :
+    XXToolBase("get_system_core_info", in_agentContext, false, true) {}
 
 neograph::ChatTool GetSystemCoreInfoTool::get_definition() const {
-  auto agentPtr = agentContext.lock();
-  const auto &prompt = agentPtr->agentConfig->prompt.toolPrompt[get_name()];
+    auto        agentPtr = agentContext.lock();
+    const auto& prompt   = agentPtr->agentConfig->prompt.toolPrompt[get_name()];
 
-  return {
-      get_name(),
-      prompt.depict,
-      neograph::json{},
-  };
+    return {
+        get_name(),
+        prompt.depict,
+        neograph::json{},
+    };
 }
 
-asio::awaitable<std::string>
-GetSystemCoreInfoTool::execute_async(const neograph::json &arguments) {
-  expand::CpuGpuMonitor monitor;
-  auto usage = co_await monitor.query();
+asio::awaitable<std::string> GetSystemCoreInfoTool::execute_async(const neograph::json& arguments) {
+    expand::CpuGpuMonitor monitor;
+    auto                  usage = co_await monitor.query();
 
-  std::stringstream ss;
-  ss << fmt::format("CPU Usage: {:.1f}%\n", usage.cpuUsagePercent);
-  ss << fmt::format("Memory: {:.1f}% (Used: {}MB / Total: {}MB)\n",
-                    usage.memory.usagePercent, usage.memory.usedPhysicalMB,
-                    usage.memory.totalPhysicalMB);
+    std::stringstream ss;
+    ss << fmt::format("CPU Usage: {:.1f}%\n", usage.cpuUsagePercent);
+    ss << fmt::format("Memory: {:.1f}% (Used: {}MB / Total: {}MB)\n",
+                      usage.memory.usagePercent,
+                      usage.memory.usedPhysicalMB,
+                      usage.memory.totalPhysicalMB);
 
-  for (size_t i = 0; i < usage.gpus.size(); ++i) {
-    const auto &gpu = usage.gpus[i];
-    if (!gpu.name.empty()) {
-      ss << fmt::format("GPU {} [{}]: GPU Usage: {:.1f}%, "
-                        "VRAM: {}MB Used / {}MB Total",
-                        i, gpu.name, gpu.usagePercent,
-                        gpu.dedicatedVramUsedMB, gpu.dedicatedVramMB);
-    } else {
-      ss << fmt::format("GPU {}: GPU Usage: {:.1f}%, "
-                        "VRAM: {}MB Used / {}MB Total",
-                        i, gpu.usagePercent, gpu.dedicatedVramUsedMB,
-                        gpu.dedicatedVramMB);
+    for (size_t i = 0; i < usage.gpus.size(); ++i) {
+        const auto& gpu = usage.gpus[i];
+        if (!gpu.name.empty()) {
+            ss << fmt::format("GPU {} [{}]: GPU Usage: {:.1f}%, "
+                              "VRAM: {}MB Used / {}MB Total",
+                              i,
+                              gpu.name,
+                              gpu.usagePercent,
+                              gpu.dedicatedVramUsedMB,
+                              gpu.dedicatedVramMB);
+        } else {
+            ss << fmt::format("GPU {}: GPU Usage: {:.1f}%, "
+                              "VRAM: {}MB Used / {}MB Total",
+                              i,
+                              gpu.usagePercent,
+                              gpu.dedicatedVramUsedMB,
+                              gpu.dedicatedVramMB);
+        }
+        if (gpu.sharedVramMB > 0) {
+            ss << fmt::format(" (Shared: {}MB Used / {}MB Total)",
+                              gpu.sharedVramUsedMB,
+                              gpu.sharedVramMB);
+        }
+        ss << "\n";
     }
-    if (gpu.sharedVramMB > 0) {
-      ss << fmt::format(" (Shared: {}MB Used / {}MB Total)",
-                        gpu.sharedVramUsedMB, gpu.sharedVramMB);
+
+    if (usage.gpus.empty()) {
+        ss << "GPU: No GPU detected\n";
     }
-    ss << "\n";
-  }
 
-  if (usage.gpus.empty()) {
-    ss << "GPU: No GPU detected\n";
-  }
-
-  co_return ss.str();
+    co_return ss.str();
 }
 
 }; // namespace tools

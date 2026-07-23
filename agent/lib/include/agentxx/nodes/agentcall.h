@@ -11,49 +11,43 @@ class NEOGRAPH_API AgentStartCallWrapNode
     : public WrapHandleBaseNode<agentxx::nodes::WarpBaseNodeInterface> {
 protected:
 public:
-  inline static constexpr auto defNodeType =
-      std::string_view{"xx_MiddlewareWrapAgentStartCall"};
 
-  AgentStartCallWrapNode(
-      const std::string &name,
-      std::weak_ptr<agentxx::agent::AgentContext> in_agentContext);
+    inline static constexpr auto defNodeType = std::string_view{"xx_MiddlewareWrapAgentStartCall"};
 
-  asio::awaitable<void>
-  onHandleStart(agentxx::middleware::BaseMiddlewareHandleInterface &item,
-                neograph::graph::NodeInput &in) override;
+    AgentStartCallWrapNode(const std::string&                          name,
+                           std::weak_ptr<agentxx::agent::AgentContext> in_agentContext);
 
-  asio::awaitable<void>
-  onHandleEnd(agentxx::middleware::BaseMiddlewareHandleInterface &item,
-              const neograph::graph::NodeInput &in,
-              neograph::graph::NodeOutput &result) override;
+    asio::awaitable<void> onHandleStart(agentxx::middleware::BaseMiddlewareHandleInterface& item,
+                                        neograph::graph::NodeInput& in) override;
+
+    asio::awaitable<void> onHandleEnd(agentxx::middleware::BaseMiddlewareHandleInterface& item,
+                                      const neograph::graph::NodeInput&                   in,
+                                      neograph::graph::NodeOutput& result) override;
 };
 
 class NEOGRAPH_API MiddlewareWrapAgentEndCallNode
     : public WrapHandleBaseNode<agentxx::nodes::WarpBaseNodeInterface> {
 protected:
 public:
-  inline static constexpr auto defNodeType =
-      std::string_view{"xx_MiddlewareWrapAgentEndCall"};
 
-  MiddlewareWrapAgentEndCallNode(
-      const std::string &name,
-      std::weak_ptr<agentxx::agent::AgentContext> in_agentContext);
+    inline static constexpr auto defNodeType = std::string_view{"xx_MiddlewareWrapAgentEndCall"};
 
-  asio::awaitable<void>
-  onHandleStart(agentxx::middleware::BaseMiddlewareHandleInterface &item,
-                neograph::graph::NodeInput &in) override;
+    MiddlewareWrapAgentEndCallNode(const std::string&                          name,
+                                   std::weak_ptr<agentxx::agent::AgentContext> in_agentContext);
 
-  asio::awaitable<void>
-  onHandleEnd(agentxx::middleware::BaseMiddlewareHandleInterface &item,
-              const neograph::graph::NodeInput &in,
-              neograph::graph::NodeOutput &result) override;
+    asio::awaitable<void> onHandleStart(agentxx::middleware::BaseMiddlewareHandleInterface& item,
+                                        neograph::graph::NodeInput& in) override;
 
-  void
-  onHandleEndError(bool errorRethrow, bool isCurrentError,
-                   std::string_view exceptionStr,
-                   agentxx::middleware::BaseMiddlewareHandleInterface &item,
-                   const neograph::graph::NodeInput &in,
-                   neograph::graph::NodeOutput &result) noexcept override;
+    asio::awaitable<void> onHandleEnd(agentxx::middleware::BaseMiddlewareHandleInterface& item,
+                                      const neograph::graph::NodeInput&                   in,
+                                      neograph::graph::NodeOutput& result) override;
+
+    void onHandleEndError(bool                                                errorRethrow,
+                          bool                                                isCurrentError,
+                          std::string_view                                    exceptionStr,
+                          agentxx::middleware::BaseMiddlewareHandleInterface& item,
+                          const neograph::graph::NodeInput&                   in,
+                          neograph::graph::NodeOutput& result) noexcept override;
 };
 
 } // namespace nodes

@@ -21,7 +21,8 @@ namespace tools {
 /// 内容，然后对比后决定具体应当加载的 tool、skill 文件
 class ToolSkillSearchSubAgentTask : public ::agentxx::tools::SubAgentTaskBase {
 public:
-  inline static constexpr auto defSystemPromptTemplate = std::string_view{R"(
+
+    inline static constexpr auto defSystemPromptTemplate = std::string_view{R"(
 You are an assistant that, based on user requirements, tries to find the appropriate tools and skills to load. 
 You can use filesystem tools to search for and read SKILL.md files, analyze the user's needs to determine usable tools and skills, 
 and then output a JSON object in the format: `{{"tool": ["tool_name_1", "tool_name_2"], "skill": ["/absolute/path/to/skill"]}}`.
@@ -46,33 +47,32 @@ If neither tools nor skills are suitable, output `{{"tool": [], "skill": []}}`.
 Remember: Output ONLY valid JSON, nothing else before or after.
 
 )"};
-  inline static constexpr auto graphDataKey_loadedTools =
-      std::string_view{"toolSkillSearch_loadedTools"};
-  inline static constexpr auto graphDataKey_loadedSkills =
-      std::string_view{"toolSkillSearch_loadedSkills"};
+    inline static constexpr auto graphDataKey_loadedTools
+        = std::string_view{"toolSkillSearch_loadedTools"};
+    inline static constexpr auto graphDataKey_loadedSkills
+        = std::string_view{"toolSkillSearch_loadedSkills"};
 
-  struct DelayToolInfo {
-    std::string name;
-    std::string description;
-  };
+    struct DelayToolInfo {
+        std::string name;
+        std::string description;
+    };
 
-  std::vector<DelayToolInfo> delayToolInfos;
-  std::vector<std::string> skillDirPaths;
-  std::weak_ptr<agentxx::agent::AgentContext> agentContext;
+    std::vector<DelayToolInfo>                  delayToolInfos;
+    std::vector<std::string>                    skillDirPaths;
+    std::weak_ptr<agentxx::agent::AgentContext> agentContext;
 
-  ToolSkillSearchSubAgentTask(
-      const neograph::graph::NodeContext &in_context,
-      const std::vector<DelayToolInfo> &in_delayToolInfos,
-      const std::vector<std::string> &in_skillDirPaths,
-      std::weak_ptr<agentxx::agent::AgentContext> in_agentContext);
+    ToolSkillSearchSubAgentTask(const neograph::graph::NodeContext&         in_context,
+                                const std::vector<DelayToolInfo>&           in_delayToolInfos,
+                                const std::vector<std::string>&             in_skillDirPaths,
+                                std::weak_ptr<agentxx::agent::AgentContext> in_agentContext);
 
-  asio::awaitable<void> onSubagentEnd(std::string &result) override;
+    asio::awaitable<void> onSubagentEnd(std::string& result) override;
 
-  void createSystemPrompt();
+    void createSystemPrompt();
 
-  void createSubgraph(const neograph::graph::NodeContext &context);
+    void createSubgraph(const neograph::graph::NodeContext& context);
 
-  inline static neograph::json defCreateSubGraphDefine();
+    inline static neograph::json defCreateSubGraphDefine();
 };
 } // namespace tools
 } // namespace agentxx

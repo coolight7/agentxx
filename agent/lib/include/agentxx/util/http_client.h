@@ -29,23 +29,23 @@ namespace agentxx {
 namespace util {
 
 struct HttpResponse {
-  int status = 0;
-  std::string body;
-  HeaderMap headers;
+    int         status = 0;
+    std::string body;
+    HeaderMap   headers;
 
-  std::string_view findHeader(std::string_view name) const noexcept;
+    std::string_view findHeader(std::string_view name) const noexcept;
 
-  bool isSuccess() const noexcept;
+    bool isSuccess() const noexcept;
 
-  std::string contentType() const noexcept;
+    std::string contentType() const noexcept;
 
-  static bool isJsonContentType(std::string_view contentType) noexcept;
+    static bool isJsonContentType(std::string_view contentType) noexcept;
 
-  static bool isTextContentType(std::string_view contentType) noexcept;
+    static bool isTextContentType(std::string_view contentType) noexcept;
 
-  std::optional<neograph::json> bodyJson() const;
+    std::optional<neograph::json> bodyJson() const;
 
-  std::optional<std::string> bodyText() const;
+    std::optional<std::string> bodyText() const;
 };
 
 /// Default max response body size (10 MB) to prevent memory exhaustion
@@ -61,147 +61,162 @@ inline constexpr uint64_t kDefaultMaxResponseBody = 10 * 1024 * 1024;
 ///   new data arrives within readTimeout the request is treated as timed out
 ///   (the timer resets every time new data is received).
 struct RequestConfig {
-  std::chrono::milliseconds connectTimeout = std::chrono::seconds{30};
-  std::optional<bool> sslVerify = std::nullopt;
-  std::optional<std::chrono::milliseconds> sendTimeout = std::nullopt;
-  std::chrono::milliseconds readTimeout = std::chrono::seconds{60};
-  size_t followRedirect = 3;
-  bool keepAlive = false;
-  uint64_t maxResponseBody = kDefaultMaxResponseBody;
+    std::chrono::milliseconds                connectTimeout  = std::chrono::seconds{30};
+    std::optional<bool>                      sslVerify       = std::nullopt;
+    std::optional<std::chrono::milliseconds> sendTimeout     = std::nullopt;
+    std::chrono::milliseconds                readTimeout     = std::chrono::seconds{60};
+    size_t                                   followRedirect  = 3;
+    bool                                     keepAlive       = false;
+    uint64_t                                 maxResponseBody = kDefaultMaxResponseBody;
 };
 
 class HttpClient {
 public:
-  using RequestConfig = agentxx::util::RequestConfig;
 
-  static std::pair<std::string, std::string> splitUrl(std::string_view url);
+    using RequestConfig = agentxx::util::RequestConfig;
 
-  static std::string urlEncode(std::string_view s);
+    static std::pair<std::string, std::string> splitUrl(std::string_view url);
 
-  static bool respIsSucc(const HttpResponse &resp);
+    static std::string urlEncode(std::string_view s);
 
-  static bool isValidUrl(std::string_view url) noexcept;
+    static bool respIsSucc(const HttpResponse& resp);
+
+    static bool isValidUrl(std::string_view url) noexcept;
 
 public:
-  static bool isRedirectStatus(int status) noexcept;
 
-  static bool redirectChangesToGet(int status) noexcept;
+    static bool isRedirectStatus(int status) noexcept;
 
-  static std::string
-  resolveRedirectUrl(std::string_view originalUrl,
-                     std::string_view location) noexcept;
+    static bool redirectChangesToGet(int status) noexcept;
 
-  static const HeaderMap &defaultHeaders();
+    static std::string resolveRedirectUrl(std::string_view originalUrl,
+                                          std::string_view location) noexcept;
 
-  // -----------------------------------------------------------------------
-  // Shared SSL context pool — avoids per-request OpenSSL context creation
-  // (SSL_CTX_new is expensive). Two lazily-initialized contexts: one with
-  // certificate verification enabled (production default), one without.
-  // -----------------------------------------------------------------------
-  static asio::ssl::context &sharedSslCtx(bool verify);
+    static const HeaderMap& defaultHeaders();
 
- private:
-  struct ParsedUrl {
-    std::string scheme;
-    std::string host;
-    uint16_t port;
-    std::string path;
-  };
+    // -----------------------------------------------------------------------
+    // Shared SSL context pool — avoids per-request OpenSSL context creation
+    // (SSL_CTX_new is expensive). Two lazily-initialized contexts: one with
+    // certificate verification enabled (production default), one without.
+    // -----------------------------------------------------------------------
+    static asio::ssl::context& sharedSslCtx(bool verify);
 
-  static inline std::atomic<bool> sslVerifyEnabled_{false};
+private:
 
- public:
-  static std::optional<ParsedUrl> parseUrl(std::string_view url);
+    struct ParsedUrl {
+        std::string scheme;
+        std::string host;
+        uint16_t    port;
+        std::string path;
+    };
 
-  static std::chrono::seconds calcSendTimeout(size_t bodyBytes);
+    static inline std::atomic<bool> sslVerifyEnabled_{false};
 
-  template <typename Stream>
-  static asio::awaitable<std::expected<HttpResponse, std::string>>
-  exchange(Stream &stream,
-           boost::beast::http::request<boost::beast::http::string_body> &req,
-           const RequestConfig &config) {
-    namespace http = boost::beast::http;
+public:
 
-    auto sendTimeout =
-        config.sendTimeout.value_or(calcSendTimeout(req.body().size()));
-    co_await http::async_write(
-        stream, req, asio::cancel_after(sendTimeout, asio::use_awaitable));
+    static std::optional<ParsedUrl> parseUrl(std::string_view url);
 
-    boost::beast::flat_buffer buffer;
-    http::response_parser<http::string_body> parser;
-    parser.body_limit(config.maxResponseBody);
-    while (!parser.is_done()) {
-      co_await http::async_read_some(stream, buffer, parser,
-                                     asio::cancel_after(config.readTimeout,
-                                                        asio::use_awaitable));
+    static std::chrono::seconds calcSendTimeout(size_t bodyBytes);
+
+    template<typename Stream>
+    static asio::awaitable<std::expected<HttpResponse, std::string>>
+        exchange(Stream&                                                       stream,
+                 boost::beast::http::request<boost::beast::http::string_body>& req,
+                 const RequestConfig&                                          config) {
+        namespace http = boost::beast::http;
+
+        auto sendTimeout = config.sendTimeout.value_or(calcSendTimeout(req.body().size()));
+        co_await http::async_write(stream,
+                                   req,
+                                   asio::cancel_after(sendTimeout, asio::use_awaitable));
+
+        boost::beast::flat_buffer                buffer;
+        http::response_parser<http::string_body> parser;
+        parser.body_limit(config.maxResponseBody);
+        while (!parser.is_done()) {
+            co_await http::async_read_some(
+                stream,
+                buffer,
+                parser,
+                asio::cancel_after(config.readTimeout, asio::use_awaitable));
+        }
+
+        auto         res = parser.release();
+        HttpResponse resp;
+        resp.status = res.result_int();
+        for (auto const& field : res) {
+            resp.headers.set(field.name_string(), field.value());
+        }
+        resp.body = std::move(res.body());
+        co_return std::expected<HttpResponse, std::string>{std::move(resp)};
     }
 
-    auto res = parser.release();
-    HttpResponse resp;
-    resp.status = res.result_int();
-    for (auto const &field : res) {
-      resp.headers.set(field.name_string(), field.value());
-    }
-    resp.body = std::move(res.body());
-    co_return std::expected<HttpResponse, std::string>{std::move(resp)};
-  }
+    static asio::awaitable<std::expected<HttpResponse, std::string>>
+        requestAsync(std::string_view     method,
+                     const std::string&   url,
+                     std::string_view     body,
+                     std::string_view     contentType,
+                     const HeaderMap&     extraHeaders,
+                     const RequestConfig& config = {});
 
-  static asio::awaitable<std::expected<HttpResponse, std::string>>
-  requestAsync(std::string_view method, const std::string &url,
-               std::string_view body, std::string_view contentType,
-               const HeaderMap &extraHeaders,
-               const RequestConfig &config = {});
+    /// Enable/disable SSL certificate verification (default: enabled).
+    /// Disable only for testing with self-signed certificates.
+    static void setSslVerify(bool enable) noexcept;
 
-  /// Enable/disable SSL certificate verification (default: enabled).
-  /// Disable only for testing with self-signed certificates.
-  static void setSslVerify(bool enable) noexcept;
+    static bool getSslVerify() noexcept;
 
-  static bool getSslVerify() noexcept;
+    static asio::awaitable<std::expected<HttpResponse, std::string>>
+        getAsync(const std::string&   url,
+                 const HeaderMap&     extraHeaders = {},
+                 const RequestConfig& config       = {});
 
-  static asio::awaitable<std::expected<HttpResponse, std::string>>
-  getAsync(const std::string &url, const HeaderMap &extraHeaders = {},
-           const RequestConfig &config = {});
+    static asio::awaitable<std::expected<HttpResponse, std::string>>
+        headAsync(const std::string&   url,
+                  const HeaderMap&     extraHeaders = {},
+                  const RequestConfig& config       = {});
 
-  static asio::awaitable<std::expected<HttpResponse, std::string>>
-  headAsync(const std::string &url, const HeaderMap &extraHeaders = {},
-            const RequestConfig &config = {});
+    static asio::awaitable<std::expected<HttpResponse, std::string>>
+        postAsync(const std::string&    url,
+                  const neograph::json& body,
+                  const HeaderMap&      extraHeaders = {},
+                  const RequestConfig&  config       = {});
 
-  static asio::awaitable<std::expected<HttpResponse, std::string>>
-  postAsync(const std::string &url, const neograph::json &body,
-            const HeaderMap &extraHeaders = {},
-            const RequestConfig &config = {});
+    static asio::awaitable<std::expected<HttpResponse, std::string>>
+        postAsync(const std::string&   url,
+                  std::string_view     body,
+                  std::string_view     contentType  = "text/plain",
+                  const HeaderMap&     extraHeaders = {},
+                  const RequestConfig& config       = {});
 
-  static asio::awaitable<std::expected<HttpResponse, std::string>>
-  postAsync(const std::string &url, std::string_view body,
-            std::string_view contentType = "text/plain",
-            const HeaderMap &extraHeaders = {},
-            const RequestConfig &config = {});
+    static asio::awaitable<std::expected<HttpResponse, std::string>>
+        putAsync(const std::string&   url,
+                 std::string_view     body,
+                 std::string_view     contentType  = "text/plain",
+                 const HeaderMap&     extraHeaders = {},
+                 const RequestConfig& config       = {});
 
-  static asio::awaitable<std::expected<HttpResponse, std::string>>
-  putAsync(const std::string &url, std::string_view body,
-           std::string_view contentType = "text/plain",
-           const HeaderMap &extraHeaders = {},
-           const RequestConfig &config = {});
+    static asio::awaitable<std::expected<HttpResponse, std::string>>
+        patchAsync(const std::string&   url,
+                   std::string_view     body,
+                   std::string_view     contentType  = "text/plain",
+                   const HeaderMap&     extraHeaders = {},
+                   const RequestConfig& config       = {});
 
-  static asio::awaitable<std::expected<HttpResponse, std::string>>
-  patchAsync(const std::string &url, std::string_view body,
-             std::string_view contentType = "text/plain",
-             const HeaderMap &extraHeaders = {},
-             const RequestConfig &config = {});
+    static asio::awaitable<std::expected<HttpResponse, std::string>>
+        deleteAsync(const std::string&   url,
+                    const HeaderMap&     extraHeaders = {},
+                    const RequestConfig& config       = {});
 
-  static asio::awaitable<std::expected<HttpResponse, std::string>>
-  deleteAsync(const std::string &url, const HeaderMap &extraHeaders = {},
-              const RequestConfig &config = {});
+    static asio::awaitable<std::expected<HttpResponse, std::string>>
+        optionsAsync(const std::string&   url,
+                     const HeaderMap&     extraHeaders = {},
+                     const RequestConfig& config       = {});
 
-  static asio::awaitable<std::expected<HttpResponse, std::string>>
-  optionsAsync(const std::string &url, const HeaderMap &extraHeaders = {},
-               const RequestConfig &config = {});
-
-  static asio::awaitable<std::expected<std::string, std::string>>
-  fetchMarkdown(const std::string &url,
-                const RequestConfig &config = RequestConfig{
-                    .connectTimeout = std::chrono::seconds{15},
-                    .readTimeout = std::chrono::seconds{15}});
+    static asio::awaitable<std::expected<std::string, std::string>>
+        fetchMarkdown(const std::string&   url,
+                      const RequestConfig& config
+                      = RequestConfig{.connectTimeout = std::chrono::seconds{15},
+                                      .readTimeout    = std::chrono::seconds{15}});
 };
 } // namespace util
 } // namespace agentxx

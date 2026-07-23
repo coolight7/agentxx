@@ -15,9 +15,9 @@ using namespace agentxx::util;
 extern int g_su_passed;
 extern int g_su_failed;
 
-#define shiftCompareExtend(left, right, sub)                                   \
-  XX_TEST_EXPECT_EQ(agentxx::util::compareExtend(left, right), sub);           \
-  XX_TEST_EXPECT_EQ(agentxx::util::compareExtend(right, left), -(sub));
+#define shiftCompareExtend(left, right, sub)                           \
+    XX_TEST_EXPECT_EQ(agentxx::util::compareExtend(left, right), sub); \
+    XX_TEST_EXPECT_EQ(agentxx::util::compareExtend(right, left), -(sub));
 
 namespace agentxx {
 namespace test {

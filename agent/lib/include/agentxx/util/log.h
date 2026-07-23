@@ -13,11 +13,11 @@ namespace util {
 
 /// 日志级别
 enum class LogLevel {
-  Debug,
-  Info,
-  Warn,
-  Error,
-  Out,
+    Debug,
+    Info,
+    Warn,
+    Error,
+    Out,
 };
 
 /// 日志接收接口
@@ -25,8 +25,9 @@ enum class LogLevel {
 /// - 例如 TUI 实现此接口将日志显示到日志窗口
 class LogSink {
 public:
-  virtual ~LogSink() = default;
-  virtual void onLog(LogLevel level, const std::string &message) = 0;
+
+    virtual ~LogSink()                                             = default;
+    virtual void onLog(LogLevel level, const std::string& message) = 0;
 };
 
 /// 全局日志分发器 (单例)
@@ -35,43 +36,43 @@ public:
 /// - sink 以 weak_ptr 持有, 注册方需自行持有 shared_ptr 以保持其有效
 class LogDispatcher {
 public:
-  static LogDispatcher &instance();
 
-  void addSink(std::shared_ptr<LogSink> sink);
+    static LogDispatcher& instance();
 
-  void removeSink(const std::shared_ptr<LogSink> &sink);
+    void addSink(std::shared_ptr<LogSink> sink);
 
-  void dispatch(LogLevel level, const std::string &message);
+    void removeSink(const std::shared_ptr<LogSink>& sink);
+
+    void dispatch(LogLevel level, const std::string& message);
 
 private:
-  LogDispatcher() = default;
-  std::mutex mutex_;
-  std::vector<std::weak_ptr<LogSink>> sinks_;
+
+    LogDispatcher() = default;
+    std::mutex                          mutex_;
+    std::vector<std::weak_ptr<LogSink>> sinks_;
 };
 
 /// XX_LOG 宏统一入口: 输出到 stderr 并分发到已注册的 sink
-void xxLogPrint(LogLevel level, const std::string &message);
+void xxLogPrint(LogLevel level, const std::string& message);
 
 } // namespace util
 } // namespace agentxx
 
 #if XX_IS_DEBUG_D
 
-#define XX_LOGD(str, ...)                                                      \
-  (::agentxx::util::xxLogPrint(::agentxx::util::LogLevel::Debug,               \
-                               fmt::format(str, ##__VA_ARGS__)));
+#define XX_LOGD(str, ...)                                          \
+    (::agentxx::util::xxLogPrint(::agentxx::util::LogLevel::Debug, \
+                                 fmt::format(str, ##__VA_ARGS__)));
 
-#define XX_LOGI(str, ...)                                                      \
-  (::agentxx::util::xxLogPrint(::agentxx::util::LogLevel::Info,                \
-                               fmt::format(str, ##__VA_ARGS__)));
+#define XX_LOGI(str, ...) \
+    (::agentxx::util::xxLogPrint(::agentxx::util::LogLevel::Info, fmt::format(str, ##__VA_ARGS__)));
 
-#define XX_LOGW(str, ...)                                                      \
-  (::agentxx::util::xxLogPrint(::agentxx::util::LogLevel::Warn,                \
-                               fmt::format(str, ##__VA_ARGS__)));
+#define XX_LOGW(str, ...) \
+    (::agentxx::util::xxLogPrint(::agentxx::util::LogLevel::Warn, fmt::format(str, ##__VA_ARGS__)));
 
-#define XX_LOGE(str, ...)                                                      \
-  (::agentxx::util::xxLogPrint(::agentxx::util::LogLevel::Error,               \
-                               fmt::format(str, ##__VA_ARGS__)));
+#define XX_LOGE(str, ...)                                          \
+    (::agentxx::util::xxLogPrint(::agentxx::util::LogLevel::Error, \
+                                 fmt::format(str, ##__VA_ARGS__)));
 
 #else
 
@@ -85,9 +86,8 @@ void xxLogPrint(LogLevel level, const std::string &message);
 
 #endif
 
-#define XX_OUT(str, ...)                                                       \
-  (::agentxx::util::xxLogPrint(::agentxx::util::LogLevel::Out,                 \
-                               fmt::format(str, ##__VA_ARGS__)));
+#define XX_OUT(str, ...) \
+    (::agentxx::util::xxLogPrint(::agentxx::util::LogLevel::Out, fmt::format(str, ##__VA_ARGS__)));
 
 #if XX_IS_LINUX_D
 

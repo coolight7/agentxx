@@ -4,11 +4,11 @@ namespace agentxx {
 namespace agent {
 
 bool ModelConfig::isValid() const {
-  return !baseUrl.empty() || apiKey != "EMPTY";
+    return !baseUrl.empty() || apiKey != "EMPTY";
 }
 
-const ModelConfig &AgentConfig::getSubagentModel() const {
-  return subagentModel.has_value() ? subagentModel.value() : model;
+const ModelConfig& AgentConfig::getSubagentModel() const {
+    return subagentModel.has_value() ? subagentModel.value() : model;
 }
 
 } // namespace agent

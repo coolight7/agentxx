@@ -18,8 +18,8 @@ namespace test {
 extern int g_ws_passed;
 extern int g_ws_failed;
 
-asio::awaitable<TestResult> run_web_search_tools_tests(
-    std::weak_ptr<agentxx::agent::AgentContext> agentContext);
+asio::awaitable<TestResult>
+    run_web_search_tools_tests(std::weak_ptr<agentxx::agent::AgentContext> agentContext);
 
 } // namespace test
 } // namespace agentxx

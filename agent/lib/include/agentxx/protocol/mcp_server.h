@@ -27,99 +27,99 @@ using json = neograph::json;
 // JSON-RPC helpers
 // ---------------------------------------------------------------------------
 
-inline json jsonRpcError(int code, std::string_view message,
-                         std::optional<json> data = {}) {
-  json err;
-  err["code"] = code;
-  err["message"] = std::string(message);
-  if (data.has_value())
-    err["data"] = std::move(*data);
-  return err;
+inline json jsonRpcError(int code, std::string_view message, std::optional<json> data = {}) {
+    json err;
+    err["code"]    = code;
+    err["message"] = std::string(message);
+    if (data.has_value()) {
+        err["data"] = std::move(*data);
+    }
+    return err;
 }
 
 inline json jsonRpcResponse(json id, json result) {
-  json resp;
-  resp["jsonrpc"] = "2.0";
-  resp["id"] = std::move(id);
-  resp["result"] = std::move(result);
-  return resp;
+    json resp;
+    resp["jsonrpc"] = "2.0";
+    resp["id"]      = std::move(id);
+    resp["result"]  = std::move(result);
+    return resp;
 }
 
 inline json jsonRpcErrorResponse(json id, json error) {
-  json resp;
-  resp["jsonrpc"] = "2.0";
-  resp["id"] = std::move(id);
-  resp["error"] = std::move(error);
-  return resp;
+    json resp;
+    resp["jsonrpc"] = "2.0";
+    resp["id"]      = std::move(id);
+    resp["error"]   = std::move(error);
+    return resp;
 }
 
 // Standard JSON-RPC error codes
-inline constexpr int kJsonRpcParseError = -32700;
+inline constexpr int kJsonRpcParseError     = -32700;
 inline constexpr int kJsonRpcInvalidRequest = -32600;
 inline constexpr int kJsonRpcMethodNotFound = -32601;
-inline constexpr int kJsonRpcInvalidParams = -32602;
-inline constexpr int kJsonRpcInternalError = -32603;
+inline constexpr int kJsonRpcInvalidParams  = -32602;
+inline constexpr int kJsonRpcInternalError  = -32603;
 
 // MCP-specific error codes
-inline constexpr int kMcpToolNotFound = -32000;
+inline constexpr int kMcpToolNotFound       = -32000;
 inline constexpr int kMcpToolExecutionError = -32001;
-inline constexpr int kMcpResourceNotFound = -32002;
-inline constexpr int kMcpPromptNotFound = -32003;
+inline constexpr int kMcpResourceNotFound   = -32002;
+inline constexpr int kMcpPromptNotFound     = -32003;
 
 // ---------------------------------------------------------------------------
 // Data types
 // ---------------------------------------------------------------------------
 
 struct McpToolDefinition {
-  std::string name;
-  std::string description;
-  std::string title; // 2025-11-25: display name
-  json inputSchema = json::object();
-  json outputSchema = json::object(); // 2025-11-25: structured output schema
-  json annotations = json::object();  // 2025-11-25: tool behavior metadata
-  json execution = json::object();    // 2025-11-25: execution config
+    std::string name;
+    std::string description;
+    std::string title; // 2025-11-25: display name
+    json        inputSchema  = json::object();
+    json        outputSchema = json::object(); // 2025-11-25: structured output schema
+    json        annotations  = json::object(); // 2025-11-25: tool behavior metadata
+    json        execution    = json::object(); // 2025-11-25: execution config
 };
 
 struct McpResourceDefinition {
-  std::string uri;
-  std::string name;
-  std::string description;
-  std::string mimeType;
+    std::string uri;
+    std::string name;
+    std::string description;
+    std::string mimeType;
 };
 
 struct McpResourceContent {
-  std::string uri;
-  std::string mimeType;
-  std::string text;
+    std::string uri;
+    std::string mimeType;
+    std::string text;
 };
 
 struct McpPromptArgument {
-  std::string name;
-  std::string description;
-  bool required = false;
+    std::string name;
+    std::string description;
+    bool        required = false;
 };
 
 struct McpPromptDefinition {
-  std::string name;
-  std::string description;
-  std::vector<McpPromptArgument> arguments;
+    std::string                    name;
+    std::string                    description;
+    std::vector<McpPromptArgument> arguments;
 };
 
 struct McpPromptMessage {
-  std::string role; // "user" | "assistant"
-  json content;
+    std::string role; // "user" | "assistant"
+    json        content;
 };
 
 struct McpPromptResult {
-  std::string description;
-  std::vector<McpPromptMessage> messages;
+    std::string                   description;
+    std::vector<McpPromptMessage> messages;
 };
 
 // Supported MCP protocol versions (newest first for negotiation)
-inline constexpr std::string_view kMcpProtocol2024_11_05 = "2024-11-05";
-inline constexpr std::string_view kMcpProtocol2025_03_26 = "2025-03-26";
-inline constexpr std::string_view kMcpProtocol2025_06_18 = "2025-06-18";
-inline constexpr std::string_view kMcpProtocol2025_11_25 = "2025-11-25";
+inline constexpr std::string_view kMcpProtocol2024_11_05   = "2024-11-05";
+inline constexpr std::string_view kMcpProtocol2025_03_26   = "2025-03-26";
+inline constexpr std::string_view kMcpProtocol2025_06_18   = "2025-06-18";
+inline constexpr std::string_view kMcpProtocol2025_11_25   = "2025-11-25";
 inline constexpr std::string_view kMcpSupportedProtocols[] = {
     kMcpProtocol2025_11_25,
     kMcpProtocol2025_06_18,
@@ -133,200 +133,201 @@ inline constexpr std::string_view kMcpSupportedProtocols[] = {
 
 class McpServer {
 public:
-  using ToolHandler = std::function<json(const json &arguments)>;
-  using ResourceReader =
-      std::function<std::optional<McpResourceContent>(const std::string &uri)>;
-  using PromptHandler = std::function<std::optional<McpPromptResult>(
-      const std::string &name, const json &arguments)>;
 
-  struct Config {
-    util::HttpServer::Config httpConfig;
-    std::string mcpEndpoint = "/mcp";
-    std::string sseEndpoint = "/mcp/sse";
-    std::string serverName = "agentxx-mcp";
-    std::string serverVersion = "0.1.0";
-    std::chrono::seconds toolTimeout{60};
-    size_t maxMessageSize = 4 * 1024 * 1024; // 4 MB
-  };
+    using ToolHandler    = std::function<json(const json& arguments)>;
+    using ResourceReader = std::function<std::optional<McpResourceContent>(const std::string& uri)>;
+    using PromptHandler  = std::function<std::optional<McpPromptResult>(const std::string& name,
+                                                                       const json& arguments)>;
 
-  explicit McpServer();
-  explicit McpServer(Config config);
+    struct Config {
+        util::HttpServer::Config httpConfig;
+        std::string              mcpEndpoint   = "/mcp";
+        std::string              sseEndpoint   = "/mcp/sse";
+        std::string              serverName    = "agentxx-mcp";
+        std::string              serverVersion = "0.1.0";
+        std::chrono::seconds     toolTimeout{60};
+        size_t                   maxMessageSize = 4 * 1024 * 1024; // 4 MB
+    };
 
-  McpServer(const McpServer &) = delete;
-  McpServer &operator=(const McpServer &) = delete;
+    explicit McpServer();
+    explicit McpServer(Config config);
 
-  ~McpServer();
+    McpServer(const McpServer&)            = delete;
+    McpServer& operator=(const McpServer&) = delete;
 
-  // -----------------------------------------------------------------------
-  // Lifecycle
-  // -----------------------------------------------------------------------
+    ~McpServer();
 
-  void start();
-  void stop();
+    // -----------------------------------------------------------------------
+    // Lifecycle
+    // -----------------------------------------------------------------------
 
-  /// Run the server over stdin/stdout using newline-delimited JSON.
-  /// Blocks until stdin is closed (EOF / Ctrl-D).
-  void runStdio();
+    void start();
+    void stop();
 
-  uint16_t port() const;
-  size_t activeConnections() const;
-  bool isStopped() const;
+    /// Run the server over stdin/stdout using newline-delimited JSON.
+    /// Blocks until stdin is closed (EOF / Ctrl-D).
+    void runStdio();
 
-  // -----------------------------------------------------------------------
-  // Tool registration
-  // -----------------------------------------------------------------------
+    uint16_t port() const;
+    size_t   activeConnections() const;
+    bool     isStopped() const;
 
-  void addTool(McpToolDefinition def, ToolHandler handler);
-  void removeTool(const std::string &name);
-  std::vector<McpToolDefinition> listTools() const;
+    // -----------------------------------------------------------------------
+    // Tool registration
+    // -----------------------------------------------------------------------
 
-  void addResource(McpResourceDefinition def, ResourceReader reader);
-  void removeResource(const std::string &uri);
-  std::vector<McpResourceDefinition> listResources() const;
+    void                           addTool(McpToolDefinition def, ToolHandler handler);
+    void                           removeTool(const std::string& name);
+    std::vector<McpToolDefinition> listTools() const;
 
-  // -----------------------------------------------------------------------
-  // Prompt registration
-  // -----------------------------------------------------------------------
+    void addResource(McpResourceDefinition def, ResourceReader reader);
+    void removeResource(const std::string& uri);
+    std::vector<McpResourceDefinition> listResources() const;
 
-  void addPrompt(McpPromptDefinition def, PromptHandler handler);
-  void removePrompt(const std::string &name);
-  std::vector<McpPromptDefinition> listPrompts() const;
+    // -----------------------------------------------------------------------
+    // Prompt registration
+    // -----------------------------------------------------------------------
 
-  // -----------------------------------------------------------------------
-  // Capabilities
-  // -----------------------------------------------------------------------
+    void                             addPrompt(McpPromptDefinition def, PromptHandler handler);
+    void                             removePrompt(const std::string& name);
+    std::vector<McpPromptDefinition> listPrompts() const;
 
-  struct Capabilities {
-    bool tools = true;
-    bool resources = false;
-    bool prompts = false;
-    bool logging = false;
-  };
+    // -----------------------------------------------------------------------
+    // Capabilities
+    // -----------------------------------------------------------------------
 
-  void setCapabilities(Capabilities caps);
-  const Capabilities &capabilities() const;
+    struct Capabilities {
+        bool tools     = true;
+        bool resources = false;
+        bool prompts   = false;
+        bool logging   = false;
+    };
+
+    void                setCapabilities(Capabilities caps);
+    const Capabilities& capabilities() const;
 
 private:
-  struct ToolEntry {
-    McpToolDefinition def;
-    ToolHandler handler;
-  };
 
-  struct ResourceEntry {
-    McpResourceDefinition def;
-    ResourceReader reader;
-  };
+    struct ToolEntry {
+        McpToolDefinition def;
+        ToolHandler       handler;
+    };
 
-  struct PromptEntry {
-    McpPromptDefinition def;
-    PromptHandler handler;
-  };
+    struct ResourceEntry {
+        McpResourceDefinition def;
+        ResourceReader        reader;
+    };
 
-  struct SSEClient {
-    std::shared_ptr<util::HttpServer::SseWriter> writer;
-    bool closed = false;
-  };
+    struct PromptEntry {
+        McpPromptDefinition def;
+        PromptHandler       handler;
+    };
 
-  // -----------------------------------------------------------------------
-  // Accept header validation helpers
-  // -----------------------------------------------------------------------
+    struct SSEClient {
+        std::shared_ptr<util::HttpServer::SseWriter> writer;
+        bool                                         closed = false;
+    };
 
-  static bool isAcceptValid(std::string_view accept);
-  static bool prefersSse(std::string_view accept);
+    // -----------------------------------------------------------------------
+    // Accept header validation helpers
+    // -----------------------------------------------------------------------
 
-  // -----------------------------------------------------------------------
-  // Route setup
-  // -----------------------------------------------------------------------
+    static bool isAcceptValid(std::string_view accept);
+    static bool prefersSse(std::string_view accept);
 
-  void setupRoutes();
+    // -----------------------------------------------------------------------
+    // Route setup
+    // -----------------------------------------------------------------------
 
-  // -----------------------------------------------------------------------
-  // JSON-RPC request processing (transport-agnostic)
-  // -----------------------------------------------------------------------
+    void setupRoutes();
 
-  json processJsonRpc(const json &requestJson);
+    // -----------------------------------------------------------------------
+    // JSON-RPC request processing (transport-agnostic)
+    // -----------------------------------------------------------------------
 
-  // -----------------------------------------------------------------------
-  // Main MCP request handler (HTTP)
-  // -----------------------------------------------------------------------
+    json processJsonRpc(const json& requestJson);
 
-  asio::awaitable<void> handleMcpRequest(util::HttpServer::Request &req,
-                                         util::HttpServer::Response &resp);
+    // -----------------------------------------------------------------------
+    // Main MCP request handler (HTTP)
+    // -----------------------------------------------------------------------
 
-  // -----------------------------------------------------------------------
-  // Method handlers
-  // -----------------------------------------------------------------------
+    asio::awaitable<void> handleMcpRequest(util::HttpServer::Request&  req,
+                                           util::HttpServer::Response& resp);
 
-  json handleInitialize(const json &id, const json &params);
-  json handlePing(const json &id);
-  json handleToolsList(const json &id, const json &);
-  json handleToolsCall(const json &id, const json &params);
-  json handleResourcesList(const json &id, const json &);
-  json handleResourcesRead(const json &id, const json &params);
-  json handleResourcesSubscribe(const json &id, const json &params);
-  json handleResourcesUnsubscribe(const json &id, const json &params);
-  json handlePromptsList(const json &id, const json &);
-  json handlePromptsGet(const json &id, const json &params);
-  json handleLoggingSetLevel(const json &id, const json &params);
-  json handleResourceTemplatesList(const json &id, const json &);
-  json handleComplete(const json &id, const json &);
-  void handleInitialized(const json &);
+    // -----------------------------------------------------------------------
+    // Method handlers
+    // -----------------------------------------------------------------------
 
-  // -----------------------------------------------------------------------
-  // SSE streaming handler
-  // -----------------------------------------------------------------------
+    json handleInitialize(const json& id, const json& params);
+    json handlePing(const json& id);
+    json handleToolsList(const json& id, const json&);
+    json handleToolsCall(const json& id, const json& params);
+    json handleResourcesList(const json& id, const json&);
+    json handleResourcesRead(const json& id, const json& params);
+    json handleResourcesSubscribe(const json& id, const json& params);
+    json handleResourcesUnsubscribe(const json& id, const json& params);
+    json handlePromptsList(const json& id, const json&);
+    json handlePromptsGet(const json& id, const json& params);
+    json handleLoggingSetLevel(const json& id, const json& params);
+    json handleResourceTemplatesList(const json& id, const json&);
+    json handleComplete(const json& id, const json&);
+    void handleInitialized(const json&);
 
-  asio::awaitable<void>
-  handleSseStream(util::HttpServer::Request &req,
-                  std::shared_ptr<util::HttpServer::SseWriter> writer);
+    // -----------------------------------------------------------------------
+    // SSE streaming handler
+    // -----------------------------------------------------------------------
 
-  // -----------------------------------------------------------------------
-  // SSE notification broadcast
-  // -----------------------------------------------------------------------
+    asio::awaitable<void> handleSseStream(util::HttpServer::Request&                   req,
+                                          std::shared_ptr<util::HttpServer::SseWriter> writer);
 
-  void broadcastSSE(const std::string &event, const std::string &data);
-  void stopSSE();
+    // -----------------------------------------------------------------------
+    // SSE notification broadcast
+    // -----------------------------------------------------------------------
 
-  // -----------------------------------------------------------------------
-  // Notification events
-  // -----------------------------------------------------------------------
+    void broadcastSSE(const std::string& event, const std::string& data);
+    void stopSSE();
 
-  void notifyToolsChanged();
-  void notifyResourcesChanged();
-  void notifyPromptsChanged();
+    // -----------------------------------------------------------------------
+    // Notification events
+    // -----------------------------------------------------------------------
 
-  // -----------------------------------------------------------------------
-  // Response helper
-  // -----------------------------------------------------------------------
+    void notifyToolsChanged();
+    void notifyResourcesChanged();
+    void notifyPromptsChanged();
 
-  void writeJsonResponse(util::HttpServer::Response &resp,
-                         boost::beast::http::status status, const json &body);
+    // -----------------------------------------------------------------------
+    // Response helper
+    // -----------------------------------------------------------------------
 
-  // -----------------------------------------------------------------------
-  // Members
-  // -----------------------------------------------------------------------
+    void writeJsonResponse(util::HttpServer::Response& resp,
+                           boost::beast::http::status  status,
+                           const json&                 body);
 
-  Config config_;
-  std::unique_ptr<util::HttpServer> httpServer_;
-  Capabilities capabilities_;
+    // -----------------------------------------------------------------------
+    // Members
+    // -----------------------------------------------------------------------
 
-  mutable std::shared_mutex toolsMutex_;
-  std::unordered_map<std::string, ToolEntry> toolsByName_;
-  std::atomic<bool> toolsListChanged_ = false;
+    Config                            config_;
+    std::unique_ptr<util::HttpServer> httpServer_;
+    Capabilities                      capabilities_;
 
-  mutable std::shared_mutex resourcesMutex_;
-  std::unordered_map<std::string, ResourceEntry> resourcesByUri_;
-  std::atomic<bool> resourcesListChanged_ = false;
+    mutable std::shared_mutex                  toolsMutex_;
+    std::unordered_map<std::string, ToolEntry> toolsByName_;
+    std::atomic<bool>                          toolsListChanged_ = false;
 
-  mutable std::shared_mutex promptsMutex_;
-  std::unordered_map<std::string, PromptEntry> promptsByName_;
-  std::atomic<bool> promptsListChanged_ = false;
+    mutable std::shared_mutex                      resourcesMutex_;
+    std::unordered_map<std::string, ResourceEntry> resourcesByUri_;
+    std::atomic<bool>                              resourcesListChanged_ = false;
 
-  std::mutex subscribedResourcesMutex_;
-  std::unordered_set<std::string> subscribedResources_;
+    mutable std::shared_mutex                    promptsMutex_;
+    std::unordered_map<std::string, PromptEntry> promptsByName_;
+    std::atomic<bool>                            promptsListChanged_ = false;
 
-  std::mutex sseClientsMutex_;
-  std::vector<std::shared_ptr<SSEClient>> sseClients_;
+    std::mutex                      subscribedResourcesMutex_;
+    std::unordered_set<std::string> subscribedResources_;
+
+    std::mutex                              sseClientsMutex_;
+    std::vector<std::shared_ptr<SSEClient>> sseClients_;
 };
 
 } // namespace server

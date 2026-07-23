@@ -11,15 +11,14 @@ namespace tools {
 /// - 实现 agent 间 actor 式通信
 class CrossAgentQueryTool : public XXToolBase {
 public:
-  CrossAgentQueryTool(
-      std::weak_ptr<agentxx::agent::AgentContext> in_agentContext);
 
-  std::string get_name() const override;
+    CrossAgentQueryTool(std::weak_ptr<agentxx::agent::AgentContext> in_agentContext);
 
-  neograph::ChatTool get_definition() const override;
+    std::string get_name() const override;
 
-  asio::awaitable<std::string>
-  execute_async(const neograph::json &arguments) override;
+    neograph::ChatTool get_definition() const override;
+
+    asio::awaitable<std::string> execute_async(const neograph::json& arguments) override;
 };
 
 } // namespace tools

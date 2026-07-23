@@ -7,23 +7,26 @@
 
 class AgentStdIO : public agentxx::agent::AgentIOBase {
 private:
-  bool isThinking_ = false;
+
+    bool isThinking_ = false;
 
 public:
-  AgentStdIO() = default;
 
-  void onToken(const std::string &token, const std::string &kind) override;
+    AgentStdIO() = default;
 
-  void onDisplay(const std::string &level, const std::string &content) override;
+    void onToken(const std::string& token, const std::string& kind) override;
 
-  asio::awaitable<std::optional<std::string>> getInput() override;
+    void onDisplay(const std::string& level, const std::string& content) override;
 
-  asio::awaitable<bool> promptPermission(const std::string &toolName,
-                                         const std::string &category,
-                                         const std::string &target) override;
+    asio::awaitable<std::optional<std::string>> getInput() override;
 
-  void onInterrupt(const std::string &node, const std::string &value,
-                   const std::string &handleName) override;
+    asio::awaitable<bool> promptPermission(const std::string& toolName,
+                                           const std::string& category,
+                                           const std::string& target) override;
 
-  void resetTokenState();
+    void onInterrupt(const std::string& node,
+                     const std::string& value,
+                     const std::string& handleName) override;
+
+    void resetTokenState();
 };
