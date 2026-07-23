@@ -383,6 +383,12 @@ public:
       "xx_interruptArgs"};
   inline static const std::string graphDataKey_interruptResult{
       "xx_interruptResult"};
+  /// 中断发生的节点名 (供程序重启恢复中断时复用)
+  inline static const std::string graphDataKey_interruptNode{
+      "xx_interruptNode"};
+  /// 中断携带的值 (供程序重启恢复中断时复用)
+  inline static const std::string graphDataKey_interruptValue{
+      "xx_interruptValue"};
   inline static const std::string graphDataKey_interruptToolcallCache{
       "xx_interruptToolcallCache"};
 

@@ -310,6 +310,33 @@ void test_regex_end_anchor() {
   XX_TEST_EXPECT_EQ(results.size(), (size_t)0);
 }
 
+void test_regex_word_no_newline() {
+
+  // \w 不应匹配换行符 \n / \r
+  auto re = XXRegex::createRegex("\\w");
+  std::vector<XXRegexMatchResult> results;
+
+  // 单个换行符不应被 \w 匹配
+  XX_TEST_EXPECT_FALSE(re->match("\n", results));
+  XX_TEST_EXPECT_EQ(results.size(), (size_t)0);
+  XX_TEST_EXPECT_FALSE(re->match("\r", results));
+  XX_TEST_EXPECT_EQ(results.size(), (size_t)0);
+
+  // \w 匹配 "a\nb" 中的 a 和 b, 不包含/跨越换行符
+  XX_TEST_EXPECT_TRUE(re->match("a\nb", results));
+  XX_TEST_EXPECT_EQ(results.size(), (size_t)2);
+  XX_TEST_EXPECT_EQ(results[0].start, (size_t)0);
+  XX_TEST_EXPECT_EQ(results[0].end, (size_t)1);
+  XX_TEST_EXPECT_EQ(results[1].start, (size_t)2);
+  XX_TEST_EXPECT_EQ(results[1].end, (size_t)3);
+
+  // \w 仍可匹配普通单词字符
+  XX_TEST_EXPECT_TRUE(re->match("A", results));
+  XX_TEST_EXPECT_EQ(results.size(), (size_t)1);
+  XX_TEST_EXPECT_TRUE(re->match("_", results));
+  XX_TEST_EXPECT_EQ(results.size(), (size_t)1);
+}
+
 TestResult testRegex() {
   test_regex_create();
   test_regex_match_basic();
@@ -336,6 +363,7 @@ TestResult testRegex() {
   test_regex_exact_match();
   test_regex_start_anchor();
   test_regex_end_anchor();
+  test_regex_word_no_newline();
 
   return TestResult{g_regex_passed, g_regex_failed};
 }
