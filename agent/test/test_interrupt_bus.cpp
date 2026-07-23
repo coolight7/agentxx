@@ -34,19 +34,19 @@ asio::awaitable<void> test_interrupt_bus_request_response() {
     };
     auto argJson = arg.toJson().dump();
 
-    auto resp = co_await sessionBus->request<
-        agentxx::events::ReqInterrupt, agentxx::events::RespInterrupt>(
-        agentxx::events::Topic::Interrupt,
-        agentxx::events::ReqInterrupt{
-            .agentName         = "test",
-            .threadId          = "t1",
-            .interruptNode     = "tool_x",
-            .handleName        = arg.name,
-            .interruptArgsJson = argJson,
-            .resultId          = arg.resultId,
-        },
-        std::chrono::seconds(5)
-    );
+    auto resp = co_await sessionBus
+                    ->request<agentxx::events::ReqInterrupt, agentxx::events::RespInterrupt>(
+                        agentxx::events::Topic::Interrupt,
+                        agentxx::events::ReqInterrupt{
+                            .agentName         = "test",
+                            .threadId          = "t1",
+                            .interruptNode     = "tool_x",
+                            .handleName        = arg.name,
+                            .interruptArgsJson = argJson,
+                            .resultId          = arg.resultId,
+                        },
+                        std::chrono::seconds(5)
+                    );
 
     if (false == resp.has_value() && resp.error() == "Timeout") {
         XX_TEST_EXPECT_TRUE(resp.error() == "Timeout");
@@ -57,19 +57,19 @@ asio::awaitable<void> test_interrupt_bus_request_response() {
     // 新总线 (无任何 server) 上 request 应超时返回 nullopt
     auto deadBus
         = std::make_shared<agentxx::middleware::EventBus>(co_await asio::this_coro::executor);
-    auto resp2 = co_await deadBus->request<
-        agentxx::events::ReqInterrupt, agentxx::events::RespInterrupt>(
-        agentxx::events::Topic::Interrupt,
-        agentxx::events::ReqInterrupt{
-            .agentName         = "test",
-            .threadId          = "t1",
-            .interruptNode     = "n",
-            .handleName        = "x",
-            .interruptArgsJson = "{}",
-            .resultId          = "r",
-        },
-        std::chrono::milliseconds(200)
-    );
+    auto resp2
+        = co_await deadBus->request<agentxx::events::ReqInterrupt, agentxx::events::RespInterrupt>(
+            agentxx::events::Topic::Interrupt,
+            agentxx::events::ReqInterrupt{
+                .agentName         = "test",
+                .threadId          = "t1",
+                .interruptNode     = "n",
+                .handleName        = "x",
+                .interruptArgsJson = "{}",
+                .resultId          = "r",
+            },
+            std::chrono::milliseconds(200)
+        );
     XX_TEST_EXPECT_TRUE(!resp2.has_value());
 
     co_return;
@@ -84,19 +84,19 @@ asio::awaitable<void> test_permission_bus_request_response() {
     io->registerOnBus(sessionBus);
 
     // 注意: 无 stdin 输入时 handleInterrupt 调用 getInput() 会超时
-    auto resp = co_await sessionBus->request<
-        agentxx::events::ReqPermission, agentxx::events::RespPermission>(
-        agentxx::events::Topic::Permission,
-        agentxx::events::ReqPermission{
-            .agentName     = "test",
-            .threadId      = "t1",
-            .toolName      = "filesystem_write",
-            .category      = "filesystem_write",
-            .target        = "/etc/passwd",
-            .argumentsJson = R"({"path":"/etc/passwd"})",
-        },
-        std::chrono::seconds(5)
-    );
+    auto resp = co_await sessionBus
+                    ->request<agentxx::events::ReqPermission, agentxx::events::RespPermission>(
+                        agentxx::events::Topic::Permission,
+                        agentxx::events::ReqPermission{
+                            .agentName     = "test",
+                            .threadId      = "t1",
+                            .toolName      = "filesystem_write",
+                            .category      = "filesystem_write",
+                            .target        = "/etc/passwd",
+                            .argumentsJson = R"({"path":"/etc/passwd"})",
+                        },
+                        std::chrono::seconds(5)
+                    );
 
     if (false == resp.has_value() && resp.error() == "Timeout") {
         XX_TEST_EXPECT_TRUE(resp.error() == "Timeout");
@@ -106,19 +106,19 @@ asio::awaitable<void> test_permission_bus_request_response() {
 
     auto deadBus
         = std::make_shared<agentxx::middleware::EventBus>(co_await asio::this_coro::executor);
-    auto resp2 = co_await deadBus->request<
-        agentxx::events::ReqPermission, agentxx::events::RespPermission>(
-        agentxx::events::Topic::Permission,
-        agentxx::events::ReqPermission{
-            .agentName     = "t",
-            .threadId      = "t",
-            .toolName      = "x",
-            .category      = "x",
-            .target        = "x",
-            .argumentsJson = "{}",
-        },
-        std::chrono::milliseconds(200)
-    );
+    auto resp2 = co_await deadBus
+                     ->request<agentxx::events::ReqPermission, agentxx::events::RespPermission>(
+                         agentxx::events::Topic::Permission,
+                         agentxx::events::ReqPermission{
+                             .agentName     = "t",
+                             .threadId      = "t",
+                             .toolName      = "x",
+                             .category      = "x",
+                             .target        = "x",
+                             .argumentsJson = "{}",
+                         },
+                         std::chrono::milliseconds(200)
+                     );
     XX_TEST_EXPECT_TRUE(!resp2.has_value());
 
     co_return;

@@ -17,6 +17,8 @@ public:
 
     void onToken(const std::string& token, const std::string& kind) override;
 
+    void onUpdate() override;
+
     asio::awaitable<std::optional<std::string>> getInput() override;
 
     asio::awaitable<neograph::json> handleInterrupt(
