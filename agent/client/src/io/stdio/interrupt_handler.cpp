@@ -6,9 +6,11 @@
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/util/log.h"
 #include "agentxx/util/string_util.h"
+#include "fmt/core.h"
 #include "fmt/format.h"
 #include <charconv>
 #include <cstdint>
+#include <iostream>
 #include <utility>
 
 StdioInterruptHandler::StdioInterruptHandler(std::weak_ptr<agentxx::agent::AgentContext> ctx) :
@@ -73,16 +75,19 @@ void StdioInterruptHandler::registerInterruptHandles() {
         }
 
         auto result = neograph::json::array();
-        io->onDisplay("interrupt", "\n  ┏━━━━━━ Input ━━━━━━┓\n");
+        std::cout << "\n  ┏━━━━━━ Input ━━━━━━┓\n" << std::flush;
         bool haveWaitInput = false;
 
         for (const auto& input : handleArg.inputs) {
             bool inputSuccess = false;
             do {
-                io->onDisplay(
-                    "interrupt",
-                    fmt::format("  ┣━ ## {} : {}\n", input.label, input.depict)
+                fmt::print(
+                    std::cout,
+                    "  ┣━ ## {} : {}\n",
+                    input.label,
+                    input.depict
                 );
+                std::cout << std::flush;
 
                 if (input.type.empty()) {
                     inputSuccess = true;
@@ -99,12 +104,14 @@ void StdioInterruptHandler::registerInterruptHandles() {
                     } else {
                         typeHint = fmt::format("  ┣━ Type | {}\n", input.type);
                     }
-                    io->onDisplay("interrupt", typeHint);
-                    io->onDisplay(
-                        "interrupt",
-                        fmt::format("  ┣━ Default Value: {}\n", input.defaultValue)
+                    std::cout << typeHint << std::flush;
+                    fmt::print(
+                        std::cout,
+                        "  ┣━ Default Value: {}\n",
+                        input.defaultValue
                     );
-                    io->onDisplay("interrupt", "  ┣━ >>> ");
+                    std::cout << std::flush;
+                    std::cout << "  ┣━ >>> " << std::flush;
 
                     haveWaitInput = true;
                     std::string inputValue;
@@ -157,17 +164,17 @@ void StdioInterruptHandler::registerInterruptHandles() {
                     if (inputSuccess) {
                         result.push_back(inputValue);
                     } else {
-                        io->onDisplay("interrupt", "  ┣━ Invalid Input, please try again.\n");
+                        std::cout << "  ┣━ Invalid Input, please try again.\n" << std::flush;
                     }
                 }
             } while (false == inputSuccess);
         }
         if (false == haveWaitInput) {
-            io->onDisplay("interrupt", "  ┣━ Wait user review, `Enter` to continue.\n");
-            io->onDisplay("interrupt", "  ┣━ >>> ");
+            std::cout << "  ┣━ Wait user review, `Enter` to continue.\n" << std::flush;
+            std::cout << "  ┣━ >>> " << std::flush;
             co_await io->getInput();
         }
-        io->onDisplay("interrupt", "  ┗━━━━━━ Input ━━━━━━┛\n\n");
+        std::cout << "  ┗━━━━━━ Input ━━━━━━┛\n\n" << std::flush;
         co_return result;
     };
 }

@@ -40,12 +40,12 @@
 ### 编译后的体积和依赖库
 - Agentxx 编译后输出的 可执行程序`agentxx_cli`、动态库`libagentxx` 都会尽量静态链接依赖库，保持编译结果对动态库的依赖尽量少
 - ⬜编译优化，控制导出符号，裁剪体积
-- 以下是`仅编译agentxx，移除大部分不必要的扩展依赖库`时的体积和运行时内存占用，如果需要进一步裁剪体积，可以移除 VectorScan/Hyperscan/codegraph/Boost.process 等可选库、采用 -Os 体积编译优化 (commit: 0521a234a0e3375c1b2bae2f4130b2f8333055f9)
+- 以下是`仅编译agentxx，移除大部分不必要的扩展依赖库`时的体积和运行时内存占用，如果需要进一步裁剪体积，可以移除 VectorScan/Hyperscan/codegraph/Boost.process 等可选库、采用 -Os/-Oz 体积编译优化 (commit: 0252b3eafacf400de4528832d14762529b001d1b)
 
 | System | agentxx_cli | agentxx_cli RAM | libagentxx | compiler | TIP |
 |---|---|---|---|---|---|
-| **Windows** | 10.6 M | 任务管理器 4.1 M (TUI) / 3.9 M (CLI) | 1.21 M | MSVC 19.51.36247.0/Visual Studio 18 2026 · x86_64 · -O2 | 打包时建议带上msvc运行时 |
-| **Linux** | 13.1 M | top RES 11.3 M / RES - SHR 1.36 M | 13.3 M | GCC 16.1.0 · x86_64 · -O3 · --strip-all | 打包时建议带上 libstdc++.so.6,libgcc_s.so.1 |
+| **Windows** | 10.7 M | 任务管理器 1.7 M (TUI) / 1.6 M (CLI) | 5.9 M | MSVC 19.51.36247.0/Visual Studio 18 2026 · x86_64 · -O2 | 打包时建议带上msvc运行时 |
+| **Linux** | 13.3 M | top RES 7.7 M / RES - SHR 0.5 M | 17.8 M | GCC 16.1.0 · x86_64 · -O3 · --strip-all | 打包时建议带上 libstdc++.so.6,libgcc_s.so.1 |
 | **Android (-deps)** | - | - | 1.9 M | NDK-r29 · Clang 21.0.0 · android-21-arm64-v8a · -O3 · --strip-all | 打包建议带上 libc++.so |
 
 ## 计划实现

@@ -20,8 +20,6 @@ public:
 
     virtual void onToken(const std::string& token, const std::string& kind) = 0;
 
-    virtual void onDisplay(const std::string& level, const std::string& content) = 0;
-
     virtual asio::awaitable<std::optional<std::string>> getInput() = 0;
 
     virtual asio::awaitable<bool> promptPermission(

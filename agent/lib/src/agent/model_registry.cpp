@@ -7,7 +7,7 @@ namespace agentxx {
 namespace agent {
 
 void ModelProviderRegistry::registerModel(const std::string& name, const ModelConfig& config) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock<std::shared_mutex> lock(mutex_);
     models_[name] = config;
     if (defaultName_.empty()) {
         defaultName_ = name;
@@ -15,7 +15,7 @@ void ModelProviderRegistry::registerModel(const std::string& name, const ModelCo
 }
 
 bool ModelProviderRegistry::setDefaultModel(const std::string& name) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock<std::shared_mutex> lock(mutex_);
     if (false == models_.contains(name)) {
         return false;
     }
@@ -24,12 +24,12 @@ bool ModelProviderRegistry::setDefaultModel(const std::string& name) {
 }
 
 std::string ModelProviderRegistry::getDefaultModelName() const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::shared_lock<std::shared_mutex> lock(mutex_);
     return defaultName_;
 }
 
 std::string ModelProviderRegistry::resolveModelName(const std::string& name) const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::shared_lock<std::shared_mutex> lock(mutex_);
     if (false == name.empty() && models_.contains(name)) {
         return name;
     }
@@ -37,7 +37,7 @@ std::string ModelProviderRegistry::resolveModelName(const std::string& name) con
 }
 
 ModelConfig ModelProviderRegistry::getModelConfig(const std::string& name) const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::shared_lock<std::shared_mutex> lock(mutex_);
     auto effective = (false == name.empty() && models_.contains(name)) ? name : defaultName_;
     auto it        = models_.find(effective);
     if (it == models_.end()) {
@@ -54,7 +54,7 @@ std::shared_ptr<neograph::Provider> ModelProviderRegistry::createProvider(const 
 }
 
 std::shared_ptr<neograph::Provider> ModelProviderRegistry::getProvider(const std::string& name) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::shared_lock<std::shared_mutex> lock(mutex_);
     auto effective = (false == name.empty() && models_.contains(name)) ? name : defaultName_;
     auto cfgIt     = models_.find(effective);
     if (cfgIt == models_.end()) {
@@ -64,14 +64,18 @@ std::shared_ptr<neograph::Provider> ModelProviderRegistry::getProvider(const std
     if (cacheIt != providerCache_.end()) {
         return cacheIt->second;
     }
-    auto provider             = createProvider(cfgIt->second);
-    providerCache_[effective] = provider;
+    lock.unlock();
+    auto provider = createProvider(cfgIt->second);
+    {
+        std::unique_lock<std::shared_mutex> ulock(mutex_);
+        providerCache_[effective] = provider;
+    }
     return provider;
 }
 
 std::vector<std::string> ModelProviderRegistry::listModelNames() const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    std::vector<std::string>    names;
+    std::shared_lock<std::shared_mutex> lock(mutex_);
+    std::vector<std::string>            names;
     names.reserve(models_.size());
     for (const auto& kv : models_) {
         names.push_back(kv.first);
@@ -80,12 +84,12 @@ std::vector<std::string> ModelProviderRegistry::listModelNames() const {
 }
 
 bool ModelProviderRegistry::hasModel(const std::string& name) const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::shared_lock<std::shared_mutex> lock(mutex_);
     return models_.contains(name);
 }
 
 size_t ModelProviderRegistry::size() const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::shared_lock<std::shared_mutex> lock(mutex_);
     return models_.size();
 }
 
