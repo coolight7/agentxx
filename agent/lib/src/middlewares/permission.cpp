@@ -57,15 +57,21 @@ asio::awaitable<bool> PermissionMiddlewareHandle::requestPermission(
     std::string           target
 ) {
     auto ctxPtr = agentContext.lock();
-    if (!ctxPtr || !ctxPtr->bus) {
-        // 无总线, 默认拒绝以保安全
+    if (!ctxPtr) {
         co_return false;
     }
-    auto resp = co_await ctxPtr->bus->request<events::ReqPermission, events::RespPermission>(
+    auto threadId = args.value("thread_id", std::string{});
+    auto session  = ctxPtr->sessions->get(threadId);
+    auto bus      = session ? session->bus : nullptr;
+    if (!bus) {
+        // 无会话总线, 默认拒绝以保安全
+        co_return false;
+    }
+    auto resp = co_await bus->request<events::ReqPermission, events::RespPermission>(
         events::Topic::Permission,
         events::ReqPermission{
             .agentName     = ctxPtr->agentConfig ? ctxPtr->agentConfig->agentName : std::string{},
-            .threadId      = args.value("thread_id", std::string{}),
+            .threadId      = std::move(threadId),
             .toolName      = item.get_name(),
             .category      = std::move(category),
             .target        = std::move(target),

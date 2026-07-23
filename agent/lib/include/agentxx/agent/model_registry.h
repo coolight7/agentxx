@@ -5,6 +5,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <shared_mutex>
 #include <string>
 #include <vector>
 
@@ -50,7 +51,7 @@ public:
 
 private:
 
-    mutable std::mutex                                         mutex_;
+    mutable std::shared_mutex                                  mutex_;
     std::map<std::string, ModelConfig>                         models_;
     std::map<std::string, std::shared_ptr<neograph::Provider>> providerCache_;
     std::string                                                defaultName_;

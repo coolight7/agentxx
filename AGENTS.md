@@ -12,7 +12,7 @@
 - `agent`: 
     - C++ 实现 Agent
 - `agent/lib`: libagentxx
-    - 核心库，包含了内置实现的 toolcall、node、middleware 等，分离编译以便嵌入其他 app 开发使用
+    - 核心库，包含了内置实现的 DeepAgent、toolcall、node、middleware 等，分离编译以便嵌入其他 app 开发使用
 - `agent/client`: 编译结果 {build}/exec/agentxx_cli
     - 命令行可执行程序，计划用于启动服务、实现命令行用户交互、TUI
 - `agent/test`: 编译结果 {build}/exec/agentxx_test
@@ -38,6 +38,7 @@ path/to/agentxx_test string_util regex
 - Agent 的预期设计计划支持:
     - 并发多会话，单线程/多协程交错执行会话，不需要线程锁
     - `会话 Agent_IO`、`CancelToken`、`上下文统计`、`模型选择`也应当独立记录，按 `thread_id` 取值
+- 应当使用 [XX_LOG](agent/lib/include/agentxx/util/log.h) 输出日志，而不是 std::cout/cerr，避免影响 TUI 显示
 
 ## 编译
 - Linux:

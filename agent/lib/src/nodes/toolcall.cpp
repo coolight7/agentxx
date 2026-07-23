@@ -330,7 +330,7 @@ asio::awaitable<void> ToolcallWrapNode::defStdoutLogOnToolcallStart(
         out << "┣━ Empty Argument List\n";
     }
 
-    fmt::print(
+    XX_LOGD(
         R"(
 ┏━━━━━━ Toolcall ━━━━━━┓
 {}
@@ -359,7 +359,7 @@ asio::awaitable<void> ToolcallWrapNode::defStdoutLogOnToolcallEnd(
         out << "┣━ Empty Result List\n";
     }
 
-    fmt::print(
+    XX_LOGD(
         R"(
 {}
 ┗━━━━━━ Toolcall ━━━━━━┛

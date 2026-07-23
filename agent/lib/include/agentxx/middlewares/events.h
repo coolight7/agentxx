@@ -169,9 +169,11 @@ struct ReqInterrupt {
     std::string threadId;
     /// 中断源节点名
     std::string interruptNode;
+    /// 中断源节点值 (原始值, 供 UI 展示)
+    std::string interruptValue;
     /// 中断处理句柄名 (对应 InterruptHandleArg.name), 如 "default"/"subagent"
     std::string handleName;
-    /// 中断参数原始 json (InterruptHandleArg 列表)
+    /// 中断参数原始 json (单个 InterruptHandleArg 的序列化)
     std::string interruptArgsJson;
     /// 中断结果回填的 resultId (对应 InterruptHandleArg.resultId)
     std::string resultId;
