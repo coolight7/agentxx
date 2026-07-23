@@ -5,8 +5,8 @@
 #include "agentxx/util/string_util.h"
 #include "asio/this_coro.hpp"
 #include "fmt/format.h"
-#include <charconv>
 #include <cctype>
+#include <charconv>
 #include <cstdint>
 #include <iostream>
 #include <utility>
@@ -37,9 +37,9 @@ asio::awaitable<neograph::json> AgentStdIO::handleInterrupt(
     const std::string& interruptValue,
     const std::string& interruptArgJson
 ) {
-    auto argOpt = agentxx::middleware::InterruptHandleArg::fromJson(
-        neograph::json::parse(interruptArgJson)
-    );
+    auto argOpt
+        = agentxx::middleware::InterruptHandleArg::fromJson(neograph::json::parse(interruptArgJson)
+        );
     if (!argOpt.has_value()) {
         co_return neograph::json::array();
     }
@@ -67,7 +67,7 @@ asio::awaitable<neograph::json> AgentStdIO::handleInterrupt(
     for (const auto& input : handleArg.inputs) {
         bool inputSuccess = false;
         do {
-                std::cout << fmt::format("  ┣━ ## {} : {}\n", input.label, input.depict) << std::flush;
+            std::cout << fmt::format("  ┣━ ## {} : {}\n", input.label, input.depict) << std::flush;
 
             if (input.type.empty()) {
                 inputSuccess = true;
@@ -85,12 +85,13 @@ asio::awaitable<neograph::json> AgentStdIO::handleInterrupt(
                     typeHint = fmt::format("  ┣━ Type | {}\n", input.type);
                 }
                 std::cout << typeHint << std::flush;
-                std::cout << fmt::format("  ┣━ Default Value: {}\n", input.defaultValue) << std::flush;
+                std::cout << fmt::format("  ┣━ Default Value: {}\n", input.defaultValue)
+                          << std::flush;
                 std::cout << "  ┣━ >>> " << std::flush;
 
-                haveWaitInput   = true;
+                haveWaitInput = true;
                 std::string inputValue;
-                auto inputValueOpt = co_await getInput();
+                auto        inputValueOpt = co_await getInput();
                 if (inputValueOpt.has_value()) {
                     inputValue = inputValueOpt.value();
                 }
@@ -151,6 +152,10 @@ asio::awaitable<neograph::json> AgentStdIO::handleInterrupt(
     }
     std::cout << "  ┗━━━━━━ Input ━━━━━━┛\n\n" << std::flush;
     co_return result;
+}
+
+void AgentStdIO::onUpdate() {
+    // StdIO 无需特殊处理 — token 流由 onToken 驱动
 }
 
 void AgentStdIO::resetTokenState() {

@@ -7,19 +7,6 @@
 namespace agentxx {
 namespace agent {
 
-void AgentIOBase::onToolStart(
-    const std::string& toolName,
-    const std::string& toolCallId,
-    const std::string& arguments
-) {}
-
-void AgentIOBase::onToolEnd(
-    const std::string& toolName,
-    const std::string& toolCallId,
-    const std::string& result,
-    bool               hasError
-) {}
-
 void AgentIOBase::registerOnBus(std::shared_ptr<agentxx::middleware::EventBus> sessionBus) {
     if (!sessionBus) {
         return;
@@ -46,19 +33,19 @@ void AgentIOBase::registerOnBus(std::shared_ptr<agentxx::middleware::EventBus> s
     );
 
     // 注册 permission 处理器
-    auto& permRR = sessionBus->getRR<events::ReqPermission, events::RespPermission>(
-        events::Topic::Permission
-    );
+    auto& permRR
+        = sessionBus->getRR<events::ReqPermission, events::RespPermission>(events::Topic::Permission
+        );
     permRR.serve(
         [this](const events::ReqPermission& req, size_t /*corrId*/)
             -> asio::awaitable<events::RespPermission> {
-            auto inputItem       = agentxx::middleware::InterruptHandleArg::InterruptHandleInputItem{};
-            inputItem.label      = req.toolName + " " + req.category;
-            inputItem.depict     = req.target;
-            inputItem.type       = "bool";
+            auto inputItem   = agentxx::middleware::InterruptHandleArg::InterruptHandleInputItem{};
+            inputItem.label  = req.toolName + " " + req.category;
+            inputItem.depict = req.target;
+            inputItem.type   = "bool";
             inputItem.defaultValue = "no";
 
-            auto arg      = agentxx::middleware::InterruptHandleArg{};
+            auto arg     = agentxx::middleware::InterruptHandleArg{};
             arg.name     = "permission";
             arg.inputs   = {std::move(inputItem)};
             arg.resultId = "";

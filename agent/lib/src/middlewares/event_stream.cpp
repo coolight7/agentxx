@@ -41,7 +41,6 @@ neograph::graph::GraphStreamCallback EventBridge::make(
         if (!ctxPtr || !ctxPtr->bus) {
             return; // 无 bus, 仅转发
         }
-        // 捕获 bus shared_ptr 以保证发布协程期间总线存活
         auto  busPtr = ctxPtr->bus;
         auto& bus    = *busPtr;
 
@@ -62,11 +61,6 @@ neograph::graph::GraphStreamCallback EventBridge::make(
                 } else {
                     token = event.data.dump();
                 }
-                // fire-and-forget: GraphStreamCallback 是同步签名 void(...),
-                // 无法 co_await, 只能 co_spawn 发布协程。
-                // 单 io_context 下 co_spawn 帧轻量且按序完成 (publish 内部顺序派发
-                // 订阅者, 无阻塞), 高频 token 流下可接受;
-                // 若未来订阅者变重或需跨线程, 可改为 post + 专用读取协程批处理
                 asio::co_spawn(
                     bus.executor(),
                     [busPtr, agentName, threadId, token = std::move(token), kind = std::move(kind)](
@@ -85,8 +79,6 @@ neograph::graph::GraphStreamCallback EventBridge::make(
                 );
             } break;
             case T::NODE_START:
-                // 暂不发布细粒度节点事件; 后续按需扩展 ModelCallStart/ToolCallStart
-                break;
             case T::NODE_END:
                 break;
             case T::CHANNEL_WRITE:

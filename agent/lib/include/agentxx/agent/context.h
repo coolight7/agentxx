@@ -43,6 +43,14 @@ struct ContextStats {
     std::atomic<size_t> maxContextTokens{0};
 };
 
+/// 会话当前活动状态
+enum class Activity : uint8_t {
+    Idle,
+    Streaming,     /// LLM 正在输出 token
+    ExecutingTool, /// 工具正在执行
+    WaitingInput,  /// 等待用户输入 (中断/权限)
+};
+
 /// 单个会话的独立状态 (按 thread_id 区分)
 /// - 设计目标: 单线程/多协程交错执行多会话, 会话间状态彼此隔离
 /// - io/contextStats 在 agent 线程(io_context)上访问
@@ -56,6 +64,8 @@ public:
     std::shared_ptr<agentxx::middleware::EventBus> bus = nullptr;
     /// 本会话的上下文统计 (内部原子, 跨线程安全)
     std::shared_ptr<ContextStats> contextStats = std::make_shared<ContextStats>();
+    /// 当前活动状态 (IO 通过此字段感知状态变化)
+    std::atomic<Activity> activity{Activity::Idle};
 
     /// 设置本会话当前轮次的取消令牌 (线程安全)
     void setCancelToken(std::shared_ptr<neograph::graph::CancelToken> token);

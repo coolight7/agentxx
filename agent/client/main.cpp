@@ -518,7 +518,43 @@ asio::awaitable<void> runTuiAsync(agentxx::agent::DeepAgent& agent) {
                 }
                 io->onToken(token, kind);
             } break;
-            case neograph::graph::GraphEvent::Type::CHANNEL_WRITE:
+            case neograph::graph::GraphEvent::Type::CHANNEL_WRITE: {
+                // 检测 tool call 消息, 提供给 TUI 渲染 tool 卡片
+                auto writes = event.data.value("writes", neograph::json::array());
+                for (const auto& w : writes) {
+                    auto chan  = w.value("channel", std::string{});
+                    auto value = w.value("value", neograph::json{});
+                    if (chan != "messages" || !value.is_array()) {
+                        continue;
+                    }
+                    for (const auto& jm : value) {
+                        auto role = jm.value("role", std::string{});
+                        if (role == "assistant" && jm.contains("tool_calls")) {
+                            for (const auto& tc : jm["tool_calls"]) {
+                                io->handleToolStart(
+                                    tc.value("name", std::string{}),
+                                    tc.value("id", std::string{}),
+                                    tc.value("arguments", std::string{})
+                                );
+                            }
+                        } else if (role == "tool") {
+                            std::string content  = jm.value("content", std::string{});
+                            bool        hasError = false;
+                            try {
+                                auto parsed = neograph::json::parse(content);
+                                hasError    = parsed.is_object() && parsed.contains("error");
+                            } catch (...) {
+                            }
+                            io->handleToolEnd(
+                                jm.value("tool_name", std::string{}),
+                                jm.value("tool_call_id", std::string{}),
+                                content,
+                                hasError
+                            );
+                        }
+                    }
+                }
+            } break;
             case neograph::graph::GraphEvent::Type::INTERRUPT:
             case neograph::graph::GraphEvent::Type::ERROR:
                 break;
@@ -704,9 +740,9 @@ int main(int argn, char** argv) {
     if (mode == "tui") {
 #if AGENTXX_ENABLE_CLIENT_TUI
         config->logPringToolcall                       = false;
-        config->logPrintMessagesBeforeLLM              = false;
+        config->logPrintMessagesBeforeLLM              = true;
         config->logPrintMessagesBeforeLLMWithSystemMsg = false;
-        config->logPrintSummarizationResultTokenCount  = false;
+        config->logPrintSummarizationResultTokenCount  = true;
         auto agent                                     = agentxx::agent::DeepAgent{config};
         runTui(agent);
 #else

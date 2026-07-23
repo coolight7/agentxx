@@ -4,12 +4,50 @@
 #include "asio/detached.hpp"
 #include "asio/io_context.hpp"
 #include "asio/use_awaitable.hpp"
+#include <atomic>
+#include <string>
+#include <vector>
 
 namespace agentxx {
 namespace test {
 
 int g_da_passed = 0;
 int g_da_failed = 0;
+
+/// 测试用 IO: 记录 onToken/onUpdate/getInput 调用, 供验证使用
+class TestAgentIO : public agentxx::agent::AgentIOBase {
+public:
+
+    std::vector<std::string> tokens;
+    std::vector<std::string> tokenKinds;
+    std::atomic<int>         updateCount{0};
+    bool                     failGetInput = false;
+
+    void onToken(const std::string& token, const std::string& kind) override {
+        tokens.push_back(token);
+        tokenKinds.push_back(kind);
+    }
+
+    void onUpdate() override {
+        updateCount++;
+    }
+
+    asio::awaitable<std::optional<std::string>> getInput() override {
+        if (failGetInput) {
+            co_return std::nullopt;
+        }
+        co_return std::string{"test_input"};
+    }
+
+    asio::awaitable<neograph::json> handleInterrupt(
+        const std::string& /*threadId*/,
+        const std::string& /*interruptNode*/,
+        const std::string& /*interruptValue*/,
+        const std::string& /*interruptArgJson*/
+    ) override {
+        co_return neograph::json::array();
+    }
+};
 
 std::string    g_da_sim_response_content  = "Hello! I am a simulated LLM response for testing.";
 int            g_da_sim_prompt_tokens     = 100;
@@ -427,6 +465,257 @@ asio::awaitable<void> test_deepagent_nonstream() {
     co_return;
 }
 
+asio::awaitable<void> test_deepagent_io_session_bus() {
+    auto sim     = startDaSimServer();
+    auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
+
+    auto cfg                  = std::make_shared<agentxx::agent::AgentConfig>();
+    cfg->model.baseUrl        = baseUrl;
+    cfg->model.apiKey         = "EMPTY";
+    cfg->model.modelName      = "test-sim";
+    cfg->prompt.systemPrompt  = "You are a helpful assistant.";
+    g_da_sim_response_content = "Hello from IO session bus test!";
+    g_da_sim_tool_calls       = neograph::json::array();
+
+    agentxx::agent::DeepAgent agent(cfg);
+    co_await agent.init();
+
+    auto io = std::make_shared<TestAgentIO>();
+    // 首次调用, 应创建 session bus 并注册 IO
+    neograph::json messages = neograph::json::array();
+    auto           result   = co_await agent.runConversationTurnAsync(
+        "io_session_test",
+        "Hello",
+        true,
+        std::move(messages),
+        io,
+        [](const neograph::graph::GraphEvent&) {}
+    );
+
+    XX_TEST_EXPECT_FALSE(result.hasError);
+    // session bus 应已创建
+    auto session = agent.agentContext->sessions->get("io_session_test");
+    XX_TEST_EXPECT_TRUE(session != nullptr);
+    XX_TEST_EXPECT_TRUE(session->bus != nullptr);
+    // IO 应已注册到 session
+    XX_TEST_EXPECT_TRUE(session->io != nullptr);
+
+    // onUpdate 应在 turn 开始时被调用
+    XX_TEST_EXPECT_TRUE(io->updateCount > 0);
+
+    co_return;
+}
+
+asio::awaitable<void> test_deepagent_io_null() {
+    auto sim     = startDaSimServer();
+    auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
+
+    auto cfg                  = std::make_shared<agentxx::agent::AgentConfig>();
+    cfg->model.baseUrl        = baseUrl;
+    cfg->model.apiKey         = "EMPTY";
+    cfg->model.modelName      = "test-sim";
+    g_da_sim_response_content = "Null IO test.";
+    g_da_sim_tool_calls       = neograph::json::array();
+
+    agentxx::agent::DeepAgent agent(cfg);
+    co_await agent.init();
+
+    // 传入 nullptr IO, 验证不崩溃
+    neograph::json messages = neograph::json::array();
+    auto           result   = co_await agent.runConversationTurnAsync(
+        "null_io_test",
+        "test",
+        true,
+        std::move(messages),
+        nullptr,
+        [](const neograph::graph::GraphEvent&) {}
+    );
+
+    XX_TEST_EXPECT_FALSE(result.hasError);
+    XX_TEST_EXPECT_FALSE(result.messages.empty());
+
+    co_return;
+}
+
+asio::awaitable<void> test_deepagent_session_activity_streaming() {
+    auto sim     = startDaSimServer();
+    auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
+
+    auto cfg                  = std::make_shared<agentxx::agent::AgentConfig>();
+    cfg->model.baseUrl        = baseUrl;
+    cfg->model.apiKey         = "EMPTY";
+    cfg->model.modelName      = "test-sim";
+    g_da_sim_response_content = "Activity check response.";
+    g_da_sim_tool_calls       = neograph::json::array();
+
+    agentxx::agent::DeepAgent agent(cfg);
+    co_await agent.init();
+
+    auto           io       = std::make_shared<TestAgentIO>();
+    neograph::json messages = neograph::json::array();
+    auto           result   = co_await agent.runConversationTurnAsync(
+        "activity_stream_test",
+        "Check",
+        true,
+        std::move(messages),
+        io,
+        [](const neograph::graph::GraphEvent&) {}
+    );
+
+    XX_TEST_EXPECT_FALSE(result.hasError);
+    auto session = agent.agentContext->sessions->get("activity_stream_test");
+    XX_TEST_EXPECT_TRUE(session != nullptr);
+    // 流结束后 activity 应为 Idle
+    XX_TEST_EXPECT_TRUE(session->activity == agentxx::agent::Activity::Idle);
+
+    co_return;
+}
+
+asio::awaitable<void> test_deepagent_session_activity_toolcall() {
+    auto sim     = startDaSimServer();
+    auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
+
+    auto cfg                  = std::make_shared<agentxx::agent::AgentConfig>();
+    cfg->model.baseUrl        = baseUrl;
+    cfg->model.apiKey         = "EMPTY";
+    cfg->model.modelName      = "test-sim";
+    g_da_sim_response_content = "";
+    g_da_sim_tool_calls       = neograph::json::array({
+        neograph::json{
+                       {"index", 0},
+                       {"id", "call_act_1"},
+                       {"type", "function"},
+                       {"function",
+                   neograph::json{
+                       {"name", "filesystem_list"},
+                       {"arguments", "{}"},
+             }},
+                       },
+    });
+
+    agentxx::agent::DeepAgent agent(cfg);
+    co_await agent.init();
+
+    auto           io       = std::make_shared<TestAgentIO>();
+    neograph::json messages = neograph::json::array();
+    auto           result   = co_await agent.runConversationTurnAsync(
+        "activity_tool_test",
+        "List",
+        true,
+        std::move(messages),
+        io,
+        [](const neograph::graph::GraphEvent&) {}
+    );
+
+    XX_TEST_EXPECT_FALSE(result.hasError);
+    auto session = agent.agentContext->sessions->get("activity_tool_test");
+    // tool 执行结束后 activity 恢复 Idle
+    XX_TEST_EXPECT_TRUE(session->activity == agentxx::agent::Activity::Idle);
+
+    co_return;
+}
+
+asio::awaitable<void> test_deepagent_multi_session_io() {
+    auto sim     = startDaSimServer();
+    auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
+
+    auto cfg                  = std::make_shared<agentxx::agent::AgentConfig>();
+    cfg->model.baseUrl        = baseUrl;
+    cfg->model.apiKey         = "EMPTY";
+    cfg->model.modelName      = "test-sim";
+    g_da_sim_response_content = "Multi-session response.";
+    g_da_sim_tool_calls       = neograph::json::array();
+
+    agentxx::agent::DeepAgent agent(cfg);
+    co_await agent.init();
+
+    auto ioA = std::make_shared<TestAgentIO>();
+    auto ioB = std::make_shared<TestAgentIO>();
+
+    neograph::json msgA = neograph::json::array();
+    auto           resA = co_await agent.runConversationTurnAsync(
+        "session_a",
+        "Hello A",
+        true,
+        std::move(msgA),
+        ioA,
+        [](const neograph::graph::GraphEvent&) {}
+    );
+    XX_TEST_EXPECT_FALSE(resA.hasError);
+
+    neograph::json msgB = neograph::json::array();
+    auto           resB = co_await agent.runConversationTurnAsync(
+        "session_b",
+        "Hello B",
+        true,
+        std::move(msgB),
+        ioB,
+        [](const neograph::graph::GraphEvent&) {}
+    );
+    XX_TEST_EXPECT_FALSE(resB.hasError);
+
+    // 两个 session 应独立, 都有自己的 bus
+    auto sA = agent.agentContext->sessions->get("session_a");
+    auto sB = agent.agentContext->sessions->get("session_b");
+    XX_TEST_EXPECT_TRUE(sA->bus != nullptr);
+    XX_TEST_EXPECT_TRUE(sB->bus != nullptr);
+    XX_TEST_EXPECT_TRUE(sA->bus != sB->bus); // 不同 session 不同 bus
+    XX_TEST_EXPECT_TRUE(sA->io != nullptr);
+    XX_TEST_EXPECT_TRUE(sB->io != nullptr);
+    // 各自 activity 独立
+    XX_TEST_EXPECT_TRUE(sA->activity == agentxx::agent::Activity::Idle);
+    XX_TEST_EXPECT_TRUE(sB->activity == agentxx::agent::Activity::Idle);
+
+    co_return;
+}
+
+asio::awaitable<void> test_deepagent_reuse_session_bus() {
+    auto sim     = startDaSimServer();
+    auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
+
+    auto cfg                  = std::make_shared<agentxx::agent::AgentConfig>();
+    cfg->model.baseUrl        = baseUrl;
+    cfg->model.apiKey         = "EMPTY";
+    cfg->model.modelName      = "test-sim";
+    g_da_sim_response_content = "Reuse session bus test.";
+    g_da_sim_tool_calls       = neograph::json::array();
+
+    agentxx::agent::DeepAgent agent(cfg);
+    co_await agent.init();
+
+    auto io = std::make_shared<TestAgentIO>();
+
+    // 多轮: 同一 session, bus 应只创建一次
+    neograph::json messages = neograph::json::array();
+    auto           r1       = co_await agent.runConversationTurnAsync(
+        "reuse_test",
+        "Turn 1",
+        true,
+        std::move(messages),
+        io,
+        [](const neograph::graph::GraphEvent&) {}
+    );
+    XX_TEST_EXPECT_FALSE(r1.hasError);
+
+    auto session = agent.agentContext->sessions->get("reuse_test");
+    auto busPtr  = session->bus.get();
+
+    auto r2 = co_await agent.runConversationTurnAsync(
+        "reuse_test",
+        "Turn 2",
+        false,
+        std::move(r1.messages),
+        io,
+        [](const neograph::graph::GraphEvent&) {}
+    );
+    XX_TEST_EXPECT_FALSE(r2.hasError);
+
+    // 同一 session 应复用同一个 bus (指针不变)
+    XX_TEST_EXPECT_TRUE(session->bus.get() == busPtr);
+
+    co_return;
+}
+
 asio::awaitable<TestResult> run_deepagent_tests() {
     g_da_passed = 0;
     g_da_failed = 0;
@@ -439,6 +728,12 @@ asio::awaitable<TestResult> run_deepagent_tests() {
         co_await test_deepagent_multi_turn();
         co_await test_deepagent_large_history();
         co_await test_deepagent_nonstream();
+        co_await test_deepagent_io_session_bus();
+        co_await test_deepagent_io_null();
+        co_await test_deepagent_session_activity_streaming();
+        co_await test_deepagent_session_activity_toolcall();
+        co_await test_deepagent_multi_session_io();
+        co_await test_deepagent_reuse_session_bus();
     } catch (const std::exception& e) {
         TEST_FAIL << "deepagent suite exception: " << e.what() << std::endl;
         g_da_failed++;

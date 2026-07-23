@@ -272,6 +272,24 @@ void AgentTUI::start() {
             if (event.is_mouse()) {
                 const auto& mouse = event.mouse();
                 if (mouse.button == Mouse::WheelUp || mouse.button == Mouse::WheelDown) {
+                    // 若侧栏 (日志窗口) 可见且鼠标在其区域内, 手动控制日志滚动
+                    if (!sidebarTabs_.empty() && mouse.x >= ftxui::Terminal::Size().dimx - 56) {
+                        const int last
+                            = static_cast<int>(logSink_ ? logSink_->snapshot().size() : 0) - 1;
+                        if (last >= 0) {
+                            int cur  = logStickToBottom_ ? last : logFocusIndex_;
+                            cur     += (mouse.button == Mouse::WheelUp) ? -1 : +1;
+                            if (cur >= last) {
+                                logStickToBottom_ = true;
+                                logFocusIndex_    = -1;
+                            } else {
+                                logStickToBottom_ = false;
+                                logFocusIndex_    = std::max(0, cur);
+                            }
+                        }
+                        postRedraw();
+                        return true;
+                    }
                     // 鼠标滚轮: 滚动消息列表; 滚到底部时重新吸附底部
                     const int last = focusBlockCount() - 1;
                     if (last >= 0) {
@@ -580,7 +598,7 @@ ftxui::Element AgentTUI::renderSidebar() {
     return vbox({
                tabBar,
                separator(),
-               content | flex | vscroll_indicator | frame,
+               content | flex | vscroll_indicator | yframe,
            })
            | size(WIDTH, LESS_THAN, 56) | size(WIDTH, GREATER_THAN, 28) | border;
 }
@@ -618,6 +636,12 @@ ftxui::Element AgentTUI::renderLogWindow() {
     if (elements.empty()) {
         return text(" (no logs) ") | dim;
     }
+    int last = static_cast<int>(elements.size()) - 1;
+    if (logStickToBottom_ || logFocusIndex_ < 0) {
+        logFocusIndex_ = last;
+    }
+    logFocusIndex_           = std::clamp(logFocusIndex_, 0, last);
+    elements[logFocusIndex_] = elements[logFocusIndex_] | focus;
     return vbox(std::move(elements));
 }
 
@@ -776,9 +800,9 @@ asio::awaitable<neograph::json> AgentTUI::handleInterrupt(
     const std::string& interruptArgJson
 ) {
     // 解析中断参数
-    auto argOpt = agentxx::middleware::InterruptHandleArg::fromJson(
-        neograph::json::parse(interruptArgJson)
-    );
+    auto argOpt
+        = agentxx::middleware::InterruptHandleArg::fromJson(neograph::json::parse(interruptArgJson)
+        );
     if (!argOpt.has_value()) {
         co_return neograph::json::array();
     }
@@ -787,7 +811,7 @@ asio::awaitable<neograph::json> AgentTUI::handleInterrupt(
     // 显示中断通知
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        std::string                 msg = "Interrupted at: " + interruptNode + "\nValue: " + interruptValue;
+        std::string msg = "Interrupted at: " + interruptNode + "\nValue: " + interruptValue;
         if (!handleArg.name.empty()) {
             msg += "\nHandle: " + handleArg.name;
         }
@@ -805,11 +829,7 @@ asio::awaitable<neograph::json> AgentTUI::handleInterrupt(
                 input.depict,
                 input.type.empty()
                     ? ""
-                    : fmt::format(
-                        "Type ({}), default: {}: ",
-                        input.type,
-                        input.defaultValue
-                    )
+                    : fmt::format("Type ({}), default: {}: ", input.type, input.defaultValue)
             );
 
             {
@@ -821,7 +841,7 @@ asio::awaitable<neograph::json> AgentTUI::handleInterrupt(
             if (input.type.empty()) {
                 inputSuccess = true;
             } else {
-                auto inputValueOpt = co_await getInput();
+                auto        inputValueOpt = co_await getInput();
                 std::string inputValue;
                 if (inputValueOpt.has_value()) {
                     inputValue = inputValueOpt.value();
@@ -893,15 +913,13 @@ asio::awaitable<std::optional<std::string>> AgentTUI::getInput() {
     co_return std::optional<std::string>(std::move(line));
 }
 
-void AgentTUI::onToolStart(
+void AgentTUI::handleToolStart(
     const std::string& toolName,
     const std::string& toolCallId,
     const std::string& arguments
 ) {
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        // 先冲刷当前未提交的流式 token (thinking/content), 保证 toolcall 严格
-        // 按时间顺序插入 (一轮内可能 thinking->toolcall->content 任意交替)
         if (!currentToken_.empty()) {
             messages_.push_back({currentTokenRole_, currentToken_});
             if (currentTokenRole_ == Message::Role::Thinking) {
@@ -915,13 +933,13 @@ void AgentTUI::onToolStart(
         m.toolCallId   = toolCallId;
         m.text         = arguments;
         m.toolFinished = false;
-        m.collapsed    = false; // 执行中保持展开
+        m.collapsed    = false;
         messages_.push_back(std::move(m));
     }
     postRedraw();
 }
 
-void AgentTUI::onToolEnd(
+void AgentTUI::handleToolEnd(
     const std::string& toolName,
     const std::string& toolCallId,
     const std::string& result,
@@ -929,15 +947,14 @@ void AgentTUI::onToolEnd(
 ) {
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        // 按 toolCallId 从后往前找对应的开始消息并填充结果
-        bool found = false;
+        bool                        found = false;
         for (auto it = messages_.rbegin(); it != messages_.rend(); ++it) {
             if (it->role == Message::Role::Tool && it->toolCallId == toolCallId
                 && !it->toolFinished) {
                 it->toolResult   = result;
                 it->toolFinished = true;
                 it->toolHasError = hasError;
-                it->collapsed    = true; // 完成自动折叠
+                it->collapsed    = true;
                 found            = true;
                 break;
             }
@@ -955,6 +972,10 @@ void AgentTUI::onToolEnd(
         }
     }
     postRedraw();
+}
+
+void AgentTUI::onUpdate() {
+    // 暂不处理 — TUI 通过事件回调 + onToken 驱动渲染
 }
 
 void AgentTUI::resetTokenState() {
