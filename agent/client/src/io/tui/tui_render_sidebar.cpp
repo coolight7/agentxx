@@ -1,0 +1,154 @@
+#include "agentxx-client/io/tui/agent_tui.h"
+
+using namespace ftxui;
+
+ftxui::Element AgentTUI::renderSidebar() {
+    tabBoxes_.assign(sidebarTabs_.size(), ftxui::Box{});
+    Elements tabs;
+    for (size_t i = 0; i < sidebarTabs_.size(); ++i) {
+        auto label = text(" " + sidebarTabs_[i].title + " ");
+        if (static_cast<int>(i) == activeTabIndex_) {
+            label = label | bgcolor(theme_.buttonActiveBgColor)
+                    | color(theme_.buttonActiveTextColor) | bold;
+        } else {
+            label = label | bgcolor(theme_.buttonBgColor) | color(theme_.buttonTextColor);
+        }
+        tabs.push_back(label | reflect(tabBoxes_[i]));
+    }
+    auto tabBar = hbox(std::move(tabs)) | xframe;
+
+    Element content = text(" ");
+    if (activeTabIndex_ >= 0 && activeTabIndex_ < static_cast<int>(sidebarTabs_.size())) {
+        content = sidebarTabs_[activeTabIndex_].render();
+    }
+
+    return vbox({
+               tabBar,
+               separator(),
+               content | flex | vscroll_indicator | yframe,
+           })
+           | size(WIDTH, LESS_THAN, 56) | size(WIDTH, GREATER_THAN, 28) | border;
+}
+
+ftxui::Element AgentTUI::renderLogWindow() {
+    auto     lines = logSink_ ? logSink_->snapshot() : std::vector<TUILogSink::Line>{};
+    Elements elements;
+    for (const auto& line : lines) {
+        ftxui::Color c = theme_.assistantColor;
+        std::string  prefix;
+        switch (line.level) {
+            case agentxx::util::LogLevel::Debug:
+                c      = theme_.hintColor;
+                prefix = "[D] ";
+                break;
+            case agentxx::util::LogLevel::Info:
+                c      = theme_.statusColor;
+                prefix = "[I] ";
+                break;
+            case agentxx::util::LogLevel::Warn:
+                c      = theme_.thinkingColor;
+                prefix = "[W] ";
+                break;
+            case agentxx::util::LogLevel::Error:
+                c      = theme_.systemColor;
+                prefix = "[E] ";
+                break;
+            case agentxx::util::LogLevel::Out:
+                c      = theme_.assistantColor;
+                prefix = "";
+                break;
+        }
+        elements.push_back(paragraph(prefix + line.text) | color(c));
+    }
+    if (elements.empty()) {
+        return text(" (no logs) ") | dim;
+    }
+    int last = static_cast<int>(elements.size()) - 1;
+    if (logStickToBottom_ || logFocusIndex_ < 0) {
+        logFocusIndex_ = last;
+    }
+    logFocusIndex_           = std::clamp(logFocusIndex_, 0, last);
+    elements[logFocusIndex_] = elements[logFocusIndex_] | focus;
+    return vbox(std::move(elements));
+}
+
+void AgentTUI::addSidebarTab(
+    const std::string&              id,
+    const std::string&              title,
+    std::function<ftxui::Element()> render
+) {
+    for (auto& tab : sidebarTabs_) {
+        if (tab.id == id) {
+            tab.title  = title;
+            tab.render = std::move(render);
+            return;
+        }
+    }
+    sidebarTabs_.push_back(SidebarTab{id, title, std::move(render)});
+    activeTabIndex_ = static_cast<int>(sidebarTabs_.size()) - 1;
+}
+
+void AgentTUI::removeSidebarTab(const std::string& id) {
+    for (size_t i = 0; i < sidebarTabs_.size(); ++i) {
+        if (sidebarTabs_[i].id == id) {
+            sidebarTabs_.erase(sidebarTabs_.begin() + i);
+            if (activeTabIndex_ >= static_cast<int>(sidebarTabs_.size())) {
+                activeTabIndex_ = static_cast<int>(sidebarTabs_.size()) - 1;
+            }
+            return;
+        }
+    }
+}
+
+bool AgentTUI::hasSidebarTab(const std::string& id) const {
+    for (const auto& tab : sidebarTabs_) {
+        if (tab.id == id) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void AgentTUI::toggleLogWindow() {
+    if (hasSidebarTab(kLogTabId)) {
+        removeSidebarTab(kLogTabId);
+    } else {
+        addSidebarTab(kLogTabId, "Logs", [this]() {
+            return renderLogWindow();
+        });
+    }
+}
+
+bool AgentTUI::handleSidebarMouse(const ftxui::Mouse& mouse) {
+    for (size_t i = 0; i < sidebarTabs_.size() && i < tabBoxes_.size(); ++i) {
+        if (false == tabBoxes_[i].Contain(mouse.x, mouse.y)) {
+            continue;
+        }
+        if (mouse.button == Mouse::Left && mouse.motion == Mouse::Released) {
+            activeTabIndex_ = static_cast<int>(i);
+            return true;
+        }
+        if (mouse.button == Mouse::Right && mouse.motion == Mouse::Released) {
+            removeSidebarTab(sidebarTabs_[i].id);
+            return true;
+        }
+    }
+    return false;
+}
+
+bool AgentTUI::handleCollapsibleMouse(const ftxui::Mouse& mouse) {
+    if (mouse.button != Mouse::Left || mouse.motion != Mouse::Released) {
+        return false;
+    }
+    for (size_t k = 0; k < collapsibleBoxes_.size() && k < collapsibleMsgIndices_.size(); ++k) {
+        if (false == collapsibleBoxes_[k].Contain(mouse.x, mouse.y)) {
+            continue;
+        }
+        const size_t mi = collapsibleMsgIndices_[k];
+        if (mi < messages_.size()) {
+            messages_[mi].collapsed = !messages_[mi].collapsed;
+            return true;
+        }
+    }
+    return false;
+}
