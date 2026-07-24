@@ -36,8 +36,8 @@ std::optional<std::string> _defFileReadGenerateKey(const neograph::json& args) {
     auto path        = args["path"].get<std::string>();
     auto line_offset = args.value<int64_t>("line_offset", -1);
     auto line_limit  = args.value<int64_t>("line_limit", -1);
-    auto byte_offset = args.value<double>("byte_offset", -1);
-    auto byte_limit  = args.value<double>("byte_limit", -1);
+    auto byte_offset = args.value<int64_t>("byte_offset", -1);
+    auto byte_limit  = args.value<int64_t>("byte_limit", -1);
     auto recursive   = args.value<bool>("recursive", false);
     auto limit       = args.value<int64_t>("limit", 100);
     return fmt::format(
@@ -167,7 +167,9 @@ asio::awaitable<std::string> FileSystemListTool::execute_async(const neograph::j
     };
 
     if (false == std::filesystem::exists(targetPath)) {
-        result.push_back(neograph::json{"error", "Path not exist"});
+        result.push_back(neograph::json{
+            {"error", "Path not exist"}
+        });
     } else if (std::filesystem::is_directory(targetPath)) {
         if (recursive) {
             for (const auto& entity : std::filesystem::recursive_directory_iterator(targetPath)) {
@@ -187,7 +189,9 @@ asio::awaitable<std::string> FileSystemListTool::execute_async(const neograph::j
     } else if (std::filesystem::is_regular_file(targetPath)) {
         onAppendItem(std::filesystem::directory_entry(targetPath));
     } else {
-        result.push_back(neograph::json{"error", "Path exist, but is not a directory or file"});
+        result.push_back(neograph::json{
+            {"error", "Path exist, but is not a directory or file"}
+        });
     }
 
     co_return result.dump();
@@ -276,8 +280,15 @@ asio::awaitable<std::string>
                                                       : std::numeric_limits<size_t>::max();
             std::stringstream result{};
             size_t            lineNum = 0;
+            size_t            endLine = offset;
+            if (offset < std::numeric_limits<size_t>::max() - limit) {
+                // 防止相加溢出回绕
+                endLine = offset + limit;
+            } else {
+                endLine = std::numeric_limits<size_t>::max();
+            }
 
-            for (std::string buf; lineNum < offset + limit; lineNum++) {
+            for (std::string buf; lineNum < endLine; lineNum++) {
                 auto readlen = co_await asio::async_read_until(
                     stream,
                     asio::dynamic_buffer(buf),
@@ -354,9 +365,16 @@ asio::awaitable<std::string>
                                                       : std::numeric_limits<size_t>::max();
             std::stringstream result{};
             size_t            lineNum = 0;
+            size_t            endLine = offset;
 
-            for (std::string line; std::getline(stream, line) && lineNum < offset + limit;
-                 lineNum++) {
+            if (offset < std::numeric_limits<size_t>::max() - limit) {
+                // 防止相加溢出回绕
+                endLine = offset + limit;
+            } else {
+                endLine = std::numeric_limits<size_t>::max();
+            }
+
+            for (std::string line; std::getline(stream, line) && lineNum < endLine; lineNum++) {
                 // 跳过偏移行
                 if (lineNum < offset) {
                     continue;
@@ -455,8 +473,8 @@ asio::awaitable<std::string>
     }
     auto systemCharsetFilePath = filepath;
     agentxx::util::autoConvertToSystemPath(systemCharsetFilePath);
-    auto byte_offset = arguments.value<double>("byte_offset", -1);
-    auto byte_limit  = arguments.value<double>("byte_limit", -1);
+    auto byte_offset = arguments.value<int64_t>("byte_offset", -1);
+    auto byte_limit  = arguments.value<int64_t>("byte_limit", -1);
 
 #if ASIO_HAS_FILE || BOOST_ASIO_HAS_FILE
     {

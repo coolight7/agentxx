@@ -127,8 +127,15 @@ asio::awaitable<std::string> ThreadShareStoreTool::execute_async(const neograph:
         auto       stream = std::istringstream{text};
         std::stringstream result{};
         size_t            lineNum = 0;
+        size_t            endLine = offset;
+        if (offset < std::numeric_limits<size_t>::max() - limit) {
+            // 防止相加溢出回绕
+            endLine = offset + limit;
+        } else {
+            endLine = std::numeric_limits<size_t>::max();
+        }
 
-        for (std::string buf; lineNum < offset + limit; lineNum++) {
+        for (std::string buf; lineNum < endLine; lineNum++) {
             if (!std::getline(stream, buf)) {
                 if (lineNum >= offset) {
                     result << buf;
