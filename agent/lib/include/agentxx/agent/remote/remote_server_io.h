@@ -26,8 +26,8 @@ class RemoteServerAgentIO : public IConnectionSink,
 public:
 
     struct Config {
-        std::string              token;             // 鉴权 token (空则不校验, 仅开发用)
-        std::vector<std::string> models;            // hello_ack 可用模型列表
+        std::string              token;  // 鉴权 token (空则不校验, 仅开发用)
+        std::vector<std::string> models; // hello_ack 可用模型列表
         std::string              defaultThreadId = "session";
         size_t                   writeQueueCap   = 4096;
     };
@@ -70,8 +70,8 @@ public:
 
 private:
 
-    using ErrorCode  = boost::system::error_code;
-    using WriteQueue = asio::experimental::concurrent_channel<void(ErrorCode, std::string)>;
+    using ErrorCode   = boost::system::error_code;
+    using WriteQueue  = asio::experimental::concurrent_channel<void(ErrorCode, std::string)>;
     using JoinChannel = asio::experimental::concurrent_channel<void(ErrorCode)>;
 
     asio::awaitable<void> readLoop();
@@ -92,11 +92,11 @@ private:
     Config                            config_;
     std::string                       threadId_;
 
-    std::shared_ptr<WriteQueue> writeQueue_;
+    std::shared_ptr<WriteQueue>  writeQueue_;
     std::shared_ptr<JoinChannel> joinChannel_;
 
-    std::shared_ptr<SessionController> controller_;
-    AuthHandler                        authHandler_;
+    std::shared_ptr<SessionController>      controller_;
+    AuthHandler                             authHandler_;
     std::function<void(const std::string&)> onSelectModel_;
 
     std::atomic<bool> stopped_{false};

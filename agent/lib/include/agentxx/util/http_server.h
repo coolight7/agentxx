@@ -58,8 +58,8 @@ public:
     using WsStream  = boost::beast::websocket::stream<boost::beast::tcp_stream>;
     using WsHandler = std::function<asio::awaitable<void>(WsStream&)>;
 
-    using WssStream = boost::beast::websocket::stream<
-        boost::beast::ssl_stream<boost::beast::tcp_stream>>;
+    using WssStream
+        = boost::beast::websocket::stream<boost::beast::ssl_stream<boost::beast::tcp_stream>>;
     using WssHandler = std::function<asio::awaitable<void>(WssStream&)>;
 
     /// Streaming SSE connection — the handler can hold onto this to push
@@ -267,9 +267,8 @@ private:
     asio::awaitable<void> serveTcp(std::shared_ptr<boost::beast::tcp_stream> stream);
 
     /// Serve an SSL connection (member coroutine)
-    asio::awaitable<void> serveSsl(
-        std::shared_ptr<boost::beast::ssl_stream<boost::beast::tcp_stream>> stream
-    );
+    asio::awaitable<void>
+        serveSsl(std::shared_ptr<boost::beast::ssl_stream<boost::beast::tcp_stream>> stream);
 
     // -----------------------------------------------------------------------
     // SSL helper
@@ -440,11 +439,7 @@ private:
                             }
                         }
                     } catch (const std::exception& e) {
-                        XX_LOGE(
-                            "[server] WS upgrade error [{}]: {}",
-                            req.target(),
-                            e.what()
-                        );
+                        XX_LOGE("[server] WS upgrade error [{}]: {}", req.target(), e.what());
                         fillError(
                             resp,
                             req.version(),
@@ -561,9 +556,9 @@ private:
     // Per-thread worker: each owns a private io_context — zero-lock isolation
     // -----------------------------------------------------------------------
     struct Worker {
-        asio::io_context ioCtx;
+        asio::io_context                                                          ioCtx;
         std::optional<asio::executor_work_guard<asio::io_context::executor_type>> workGuard;
-        std::thread      thread;
+        std::thread                                                               thread;
     };
 
     // -----------------------------------------------------------------------

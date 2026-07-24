@@ -163,8 +163,8 @@ asio::awaitable<void> DeepAgent::init() {
                 },
                 (agentxx::middleware::onGraphNodeAfterCallFunc) nullptr,
                 [ctx    = std::weak_ptr<AgentContext>(agentContext),
-                  config = agentContext->agentConfig](neograph::graph::NodeInput& in
-                 ) -> asio::awaitable<void> {
+                 config = agentContext->agentConfig](neograph::graph::NodeInput& in
+                ) -> asio::awaitable<void> {
                     if (config->logPringToolcall) {
                         co_await agentxx::nodes::ToolcallWrapNode::defStdoutLogOnToolcallStart(in);
                     }
@@ -177,7 +177,7 @@ asio::awaitable<void> DeepAgent::init() {
                     co_return;
                 },
                 [ctx    = std::weak_ptr<AgentContext>(agentContext),
-                  config = agentContext->agentConfig](
+                 config = agentContext->agentConfig](
                     const neograph::graph::NodeInput& in,
                     neograph::graph::NodeOutput&      result
                 ) -> asio::awaitable<void> {
@@ -216,45 +216,53 @@ asio::awaitable<void> DeepAgent::init() {
     {
         /// MCP tool
         for (const auto& [mcpNamespace, url] : config->mcpServerUrls) {
-            try {
-                XX_LOGD("load mcp tool: {} | {}", mcpNamespace, url);
-                auto mcpClient = std::make_shared<agentxx::server::McpClient>(
-                    agentxx::server::McpClient::Config{
-                        .serverUrl = url,
-                        .protocolVersion
-                        = std::string{agentxx::server::McpClient::kProtocol2025_11_25},
-                        .toolNamespace = mcpNamespace,
-                    }
-                );
-                auto result = co_await mcpClient->initialize();
-                if (result.has_value()) {
-                    auto mcpTools = co_await mcpClient->listTools();
-                    if (mcpTools.has_value()) {
-                        for (auto& tool : mcpTools.value()) {
-                            tools.push_back(mcpClient->createTool(std::move(tool), agentContext));
+            co_await agentxx::util::catchErrorAsync<void>(
+                [&]() -> asio::awaitable<void> {
+                    XX_LOGD("load mcp tool: {} | {}", mcpNamespace, url);
+                    auto mcpClient = std::make_shared<agentxx::server::McpClient>(
+                        agentxx::server::McpClient::Config{
+                            .serverUrl = url,
+                            .protocolVersion
+                            = std::string{agentxx::server::McpClient::kProtocol2025_11_25},
+                            .toolNamespace = mcpNamespace,
+                        }
+                    );
+                    auto result = co_await mcpClient->initialize();
+                    if (result.has_value()) {
+                        auto mcpTools = co_await mcpClient->listTools();
+                        if (mcpTools.has_value()) {
+                            for (auto& tool : mcpTools.value()) {
+                                tools.push_back(mcpClient->createTool(std::move(tool), agentContext)
+                                );
+                            }
+                        } else {
+                            XX_LOGE(
+                                "list mcp tool error: {} | {} | {}",
+                                mcpNamespace,
+                                url,
+                                mcpTools.error()
+                            );
                         }
                     } else {
                         XX_LOGE(
-                            "list mcp tool error: {} | {} | {}",
+                            "load mcp tool error: {} | {} | {}",
                             mcpNamespace,
                             url,
-                            mcpTools.error()
+                            result.error()
                         );
                     }
-                } else {
-                    XX_LOGE("load mcp tool error: {} | {} | {}", mcpNamespace, url, result.error());
+                    co_return;
+                },
+                [&](std::string errmsg) -> asio::awaitable<void> {
+                    XX_LOGE(
+                        "[agentxx] Append mcp tool error: {} | {} | {}",
+                        mcpNamespace,
+                        url,
+                        errmsg
+                    );
+                    co_return;
                 }
-            } catch (const std::exception& e) {
-                std::string errmsg = e.what();
-                agentxx::util::autoConvertToUtf8(errmsg);
-                XX_LOGE("[agentxx] Append mcp tool error: {} | {} | {}", mcpNamespace, url, errmsg);
-            } catch (const boost::exception& e) {
-                auto errmsg = boost::diagnostic_information(e);
-                agentxx::util::autoConvertToUtf8(errmsg);
-                XX_LOGE("[agentxx] Append mcp tool error: {} | {} | {}", mcpNamespace, url, errmsg);
-            } catch (...) {
-                XX_LOGE("[agentxx] Append mcp tool error: {} | {}", mcpNamespace, url);
-            }
+            );
         }
     }
     {
@@ -502,6 +510,7 @@ asio::awaitable<void> DeepAgent::init() {
     // clang-format on
 
     engine = std::move(neograph::graph::GraphEngine::compile(graphDefinition, nodeContext, store));
+    assert(nullptr != engine);
     {
         auto crudeTools = std::vector<std::unique_ptr<neograph::Tool>>{};
         for (auto& tool : tools) {
@@ -572,296 +581,293 @@ asio::awaitable<DeepAgent::ConversationTurnResult> DeepAgent::runConversationTur
         }
     }
 
-    try {
-        auto processedInput = userInput;
-        agentxx::util::autoConvertToUtf8(processedInput);
+    co_await agentxx::util::catchErrorAsync<void>(
+        [&]() -> asio::awaitable<void> {
+            auto processedInput = userInput;
+            agentxx::util::autoConvertToUtf8(processedInput);
 
-        auto userMsgJson = neograph::json{
-            {"role",    "user"        },
-            {"content", processedInput},
-        };
-        session->appendHistory(userMsgJson);
-        session->llmMessages.push_back(std::move(userMsgJson));
+            auto userMsgJson = neograph::json{
+                {"role",    "user"        },
+                {"content", processedInput},
+            };
+            session->appendHistory(userMsgJson);
+            session->llmMessages.push_back(std::move(userMsgJson));
 
-        auto cancelToken = std::make_shared<neograph::graph::CancelToken>();
-        session->setCancelToken(cancelToken);
+            auto cancelToken = std::make_shared<neograph::graph::CancelToken>();
+            session->setCancelToken(cancelToken);
 
-        auto internalEventCallback = [session, emitDelta](
-                                         const neograph::graph::GraphEvent& event
-                                     ) {
-            using T = neograph::graph::GraphEvent::Type;
-            switch (event.type) {
-                case T::LLM_TOKEN: {
-                    std::string token;
-                    bool        isThinking = false;
-                    if (event.data.is_string()) {
-                        token = event.data.get<std::string>();
-                    } else if (event.data.is_object()) {
-                        neograph::ChatStreamChunk chunk;
-                        neograph::from_json(event.data, chunk);
-                        token      = std::move(chunk.data);
-                        isThinking = (chunk.type == neograph::ChatStreamChunk::TYPE_THINKING);
-                    }
-                    emitDelta(Delta{
-                        .type = isThinking ? Delta::Type::ThinkingToken : Delta::Type::TextToken,
-                        .text = std::move(token),
-                    });
-                } break;
-                case T::CHANNEL_WRITE: {
-                    auto chan  = event.data.value("channel", std::string{});
-                    auto value = event.data.value("value", neograph::json{});
-                    if (chan != "messages" || !value.is_array()) {
-                        break;
-                    }
-                    for (const auto& jm : value) {
-                        auto role = jm.value("role", std::string{});
-                        if (role == "assistant" && jm.contains("tool_calls")) {
-                            auto msgId = session->appendHistory(jm);
-                            for (const auto& tc : jm["tool_calls"]) {
-                                emitDelta(Delta{
-                                    .type       = Delta::Type::ToolStart,
-                                    .msgId      = msgId,
-                                    .toolName   = tc.value("name", std::string{}),
-                                    .toolCallId = tc.value("id", std::string{}),
-                                    .arguments  = tc.value("arguments", std::string{}),
-                                });
-                            }
-                        } else if (role == "tool") {
-                            session->appendHistory(jm);
-                            auto         content  = jm.value("content", std::string{});
-                            bool         hasError = false;
-                            try {
-                                auto parsed = neograph::json::parse(content);
-                                hasError    = parsed.is_object() && parsed.contains("error");
-                            } catch (...) {
-                            }
-                            emitDelta(Delta{
-                                .type       = Delta::Type::ToolEnd,
-                                .toolName   = jm.value("tool_name", std::string{}),
-                                .toolCallId = jm.value("tool_call_id", std::string{}),
-                                .result     = content,
-                                .hasError   = hasError,
-                            });
-                        } else if (role == "assistant") {
-                            session->appendHistory(jm);
+            auto internalEventCallback = [session,
+                                          emitDelta](const neograph::graph::GraphEvent& event) {
+                using T = neograph::graph::GraphEvent::Type;
+                switch (event.type) {
+                    case T::LLM_TOKEN: {
+                        std::string token;
+                        bool        isThinking = false;
+                        if (event.data.is_string()) {
+                            token = event.data.get<std::string>();
+                        } else if (event.data.is_object()) {
+                            neograph::ChatStreamChunk chunk;
+                            neograph::from_json(event.data, chunk);
+                            token      = std::move(chunk.data);
+                            isThinking = (chunk.type == neograph::ChatStreamChunk::TYPE_THINKING);
                         }
-                    }
-                } break;
-                default:
-                    break;
-            }
-        };
-
-        auto eventCallback = agentxx::middleware::EventBridge::make(
-            agentContext->agentConfig->agentName,
-            threadId,
-            agentContext,
-            std::move(internalEventCallback)
-        );
-
-        auto cfg = neograph::graph::RunConfig{
-            .thread_id        = threadId,
-            .input            = {{"messages", session->llmMessages}},
-            .max_steps        = 1024,
-            .stream_mode      = neograph::graph::StreamMode::ALL,
-            .cancel_token     = cancelToken,
-            .resume_if_exists = isFirstMsg,
-        };
-
-        std::optional<neograph::graph::RunResult> result;
-        if (resumeInterrupt) {
-            neograph::graph::RunResult recovered;
-            recovered.interrupted = true;
-            recovered.interrupt_node
-                = agentContext->middlewareHandleContext->getGraphDataItemValue<std::string>(
-                    threadId,
-                    agentxx::middleware::MiddlewareContext::graphDataKey_interruptNode
-                );
-            recovered.interrupt_value
-                = agentContext->middlewareHandleContext->getGraphDataItemValue<neograph::json>(
-                    threadId,
-                    agentxx::middleware::MiddlewareContext::graphDataKey_interruptValue
-                );
-            result = std::move(recovered);
-        } else {
-            result = co_await engine->run_stream_async(cfg, eventCallback);
-
-            if (!result->interrupted) {
-                session->llmMessages = result->channel_raw("messages");
-            }
-        }
-
-        while (result.has_value() && result->interrupted) {
-            agentContext->middlewareHandleContext->setGraphDataItemValue<std::string>(
-                threadId,
-                agentxx::middleware::MiddlewareContext::graphDataKey_interruptNode,
-                result->interrupt_node
-            );
-            agentContext->middlewareHandleContext->setGraphDataItemValue<neograph::json>(
-                threadId,
-                agentxx::middleware::MiddlewareContext::graphDataKey_interruptValue,
-                result->interrupt_value
-            );
-
-            engine->update_state(threadId, [&](neograph::graph::GraphState& state) {
-                auto data
-                    = agentContext->middlewareHandleContext->getGraphDataToState(state, threadId);
-                state.overwrite(
-                    agentxx::middleware::MiddlewareContext::channel_savedGraphData,
-                    data
-                );
-            });
-
-            auto crudeResult = std::move(result);
-            result           = std::nullopt;
-
-            turnResult.interrupted = true;
-            auto interruptNode     = crudeResult->interrupt_node;
-            auto interruptValue    = crudeResult->interrupt_value.dump();
-
-            auto resumeValues = neograph::json{};
-
-            const auto interruptArgs = agentxx::middleware::InterruptHandleArg::listFromJson(
-                agentContext->middlewareHandleContext->getGraphDataItemValue<neograph::json>(
-                    threadId,
-                    agentxx::middleware::MiddlewareContext::graphDataKey_interruptArgs
-                )
-            );
-            size_t argIndex = 0;
-            for (const auto& interruptArg : interruptArgs) {
-                ++argIndex;
-
-                std::optional<neograph::json> interruptResult;
-                {
-                    if (interruptArg.name == "subagent") {
-                        auto subagentArg = interruptArg.arg;
-                        auto resp
-                            = co_await agentContext->bus
-                                  ->request<events::ReqSubagentStart, events::RespSubagentResult>(
-                                      events::Topic::Subagent,
-                                      events::ReqSubagentStart{
-                                          .parentAgentName
-                                          = agentContext->agentConfig
-                                                ? agentContext->agentConfig->agentName
-                                                : std::string{},
-                                          .parentThreadId = threadId,
-                                          .subagentName
-                                          = subagentArg.value("subagent", std::string{}),
-                                          .systemPrompt
-                                          = subagentArg.value("system_prompt", std::string{}),
-                                          .message  = subagentArg.value("message", std::string{}),
-                                          .resultId = interruptArg.resultId,
-                                      }
-                                  );
-                        if (resp.has_value()) {
-                            interruptResult = neograph::json{resp->content};
+                        emitDelta(Delta{
+                            .type
+                            = isThinking ? Delta::Type::ThinkingToken : Delta::Type::TextToken,
+                            .text = std::move(token),
+                        });
+                    } break;
+                    case T::CHANNEL_WRITE: {
+                        auto chan  = event.data.value("channel", std::string{});
+                        auto value = event.data.value("value", neograph::json{});
+                        if (chan != "messages" || !value.is_array()) {
+                            break;
                         }
-                    } else if (interruptArg.name == "subagent_batch") {
-                        auto batchArg = interruptArg.arg;
-                        auto batchReq = events::ReqSubagentBatch{
-                            .parentAgentName = agentContext->agentConfig
-                                                   ? agentContext->agentConfig->agentName
-                                                   : std::string{},
-                            .parentThreadId  = threadId,
-                        };
-                        if (batchArg.contains("tasks") && batchArg["tasks"].is_array()) {
-                            for (const auto& t : batchArg["tasks"]) {
-                                batchReq.tasks.push_back(events::SubagentBatchItem{
-                                    .subagentName = t.value("subagent", std::string{}),
-                                    .systemPrompt = t.value("system_prompt", std::string{}),
-                                    .message      = t.value("message", std::string{}),
-                                    .resultId     = t.value("result_id", std::string{}),
-                                });
-                            }
-                        }
-                        auto batchResp
-                            = co_await agentContext->bus
-                                  ->request<events::ReqSubagentBatch, events::RespSubagentBatch>(
-                                      events::Topic::SubagentBatch,
-                                      std::move(batchReq)
-                                  );
-                        if (batchResp.has_value()) {
-                            for (const auto& r : batchResp->results) {
-                                auto rid = r.resultId;
-                                if (rid.empty()) {
-                                    rid = interruptArg.resultId;
+                        for (const auto& jm : value) {
+                            auto role = jm.value("role", std::string{});
+                            if (role == "assistant" && jm.contains("tool_calls")) {
+                                auto msgId = session->appendHistory(jm);
+                                for (const auto& tc : jm["tool_calls"]) {
+                                    emitDelta(Delta{
+                                        .type       = Delta::Type::ToolStart,
+                                        .msgId      = msgId,
+                                        .toolName   = tc.value("name", std::string{}),
+                                        .toolCallId = tc.value("id", std::string{}),
+                                        .arguments  = tc.value("arguments", std::string{}),
+                                    });
                                 }
-                                resumeValues[rid] =
-                    r.hasError ? neograph::json{{"error", r.errorMessage}}
-                               : neograph::json{r.content};
+                            } else if (role == "tool") {
+                                session->appendHistory(jm);
+                                auto content  = jm.value("content", std::string{});
+                                bool hasError = false;
+                                try {
+                                    auto parsed = neograph::json::parse(content);
+                                    hasError    = parsed.is_object() && parsed.contains("error");
+                                } catch (...) {
+                                }
+                                emitDelta(Delta{
+                                    .type       = Delta::Type::ToolEnd,
+                                    .toolName   = jm.value("tool_name", std::string{}),
+                                    .toolCallId = jm.value("tool_call_id", std::string{}),
+                                    .result     = content,
+                                    .hasError   = hasError,
+                                });
+                            } else if (role == "assistant") {
+                                session->appendHistory(jm);
                             }
                         }
-                    } else {
-                        auto sess = agentContext->sessions->get(threadId);
-                        if (sess && sess->bus) {
-                            auto resp
-                                = co_await sess->bus
-                                      ->request<events::ReqInterrupt, events::RespInterrupt>(
-                                          events::Topic::Interrupt,
-                                          events::ReqInterrupt{
-                                              .agentName
-                                              = agentContext->agentConfig
-                                                    ? agentContext->agentConfig->agentName
-                                                    : std::string{},
-                                              .threadId          = threadId,
-                                              .interruptNode     = interruptNode,
-                                              .interruptValue    = interruptValue,
-                                              .handleName        = interruptArg.name,
-                                              .interruptArgsJson = interruptArg.toJson().dump(),
-                                              .resultId          = interruptArg.resultId,
-                                          }
-                                      );
-                            if (resp.has_value() && resp->handled) {
-                                interruptResult = neograph::json::parse(resp->resultJson);
-                            }
-                        }
-                    }
+                    } break;
+                    default:
+                        break;
                 }
+            };
 
-                if (interruptResult.has_value()) {
-                    auto resultId = interruptArg.resultId;
-                    if (resultId.empty()) {
-                        resultId = std::to_string(argIndex);
-                    }
-                    resumeValues[resultId] = interruptResult.value();
-                }
-            }
+            auto eventCallback = agentxx::middleware::EventBridge::make(
+                agentContext->agentConfig->agentName,
+                threadId,
+                agentContext,
+                std::move(internalEventCallback)
+            );
 
-            if (false == resumeValues.empty()) {
-                agentContext->middlewareHandleContext->setGraphDataItemValue<neograph::json>(
-                    threadId,
-                    agentxx::middleware::MiddlewareContext::graphDataKey_interruptResult,
-                    resumeValues
-                );
+            auto cfg = neograph::graph::RunConfig{
+                .thread_id        = threadId,
+                .input            = {{"messages", session->llmMessages}},
+                .max_steps        = 1024,
+                .stream_mode      = neograph::graph::StreamMode::ALL,
+                .cancel_token     = cancelToken,
+                .resume_if_exists = isFirstMsg,
+            };
 
-                engine->update_state(threadId, [&](neograph::graph::GraphState& state) {
-                    state.overwrite("messages", session->llmMessages);
-                });
-
-                result = co_await engine->resume_async(threadId, nullptr, eventCallback);
+            std::optional<neograph::graph::RunResult> result;
+            if (resumeInterrupt) {
+                neograph::graph::RunResult recovered;
+                recovered.interrupted = true;
+                recovered.interrupt_node
+                    = agentContext->middlewareHandleContext->getGraphDataItemValue<std::string>(
+                        threadId,
+                        agentxx::middleware::MiddlewareContext::graphDataKey_interruptNode
+                    );
+                recovered.interrupt_value
+                    = agentContext->middlewareHandleContext->getGraphDataItemValue<neograph::json>(
+                        threadId,
+                        agentxx::middleware::MiddlewareContext::graphDataKey_interruptValue
+                    );
+                result = std::move(recovered);
+            } else {
+                result = co_await engine->run_stream_async(cfg, eventCallback);
 
                 if (!result->interrupted) {
                     session->llmMessages = result->channel_raw("messages");
                 }
             }
-        }
 
-        engine->update_state(threadId, [&](neograph::graph::GraphState& state) {
-            state.remove(agentxx::middleware::MiddlewareContext::channel_savedGraphData);
-        });
-    } catch (const std::exception& e) {
-        turnResult.hasError     = true;
-        turnResult.errorMessage = e.what();
-        XX_LOGE(R"({{"error": "Agent Response failed: {}"}})", e.what());
-    } catch (const boost::exception& e) {
-        auto errmsg = boost::diagnostic_information(e);
-        agentxx::util::autoConvertToUtf8(errmsg);
-        XX_LOGE(R"({{"error": "Agent Response failed: {}"}})", errmsg);
-    } catch (...) {
-        turnResult.hasError     = true;
-        turnResult.errorMessage = "Unknown error";
-        XX_LOGE(R"({{"error": "Agent Response failed: Unknown error"}})");
-    }
+            while (result.has_value() && result->interrupted) {
+                agentContext->middlewareHandleContext->setGraphDataItemValue<std::string>(
+                    threadId,
+                    agentxx::middleware::MiddlewareContext::graphDataKey_interruptNode,
+                    result->interrupt_node
+                );
+                agentContext->middlewareHandleContext->setGraphDataItemValue<neograph::json>(
+                    threadId,
+                    agentxx::middleware::MiddlewareContext::graphDataKey_interruptValue,
+                    result->interrupt_value
+                );
+
+                engine->update_state(threadId, [&](neograph::graph::GraphState& state) {
+                    auto data = agentContext->middlewareHandleContext->getGraphDataToState(
+                        state,
+                        threadId
+                    );
+                    state.overwrite(
+                        agentxx::middleware::MiddlewareContext::channel_savedGraphData,
+                        data
+                    );
+                });
+
+                auto crudeResult = std::move(result);
+                result           = std::nullopt;
+
+                turnResult.interrupted = true;
+                auto interruptNode     = crudeResult->interrupt_node;
+                auto interruptValue    = crudeResult->interrupt_value.dump();
+
+                auto resumeValues = neograph::json{};
+
+                const auto interruptArgs = agentxx::middleware::InterruptHandleArg::listFromJson(
+                    agentContext->middlewareHandleContext->getGraphDataItemValue<neograph::json>(
+                        threadId,
+                        agentxx::middleware::MiddlewareContext::graphDataKey_interruptArgs
+                    )
+                );
+                size_t argIndex = 0;
+                for (const auto& interruptArg : interruptArgs) {
+                    ++argIndex;
+
+                    std::optional<neograph::json> interruptResult;
+                    {
+                        if (interruptArg.name == "subagent") {
+                            auto subagentArg = interruptArg.arg;
+                            auto resp        = co_await agentContext->bus->request<
+                                       events::ReqSubagentStart,
+                                       events::RespSubagentResult>(
+                                events::Topic::Subagent,
+                                events::ReqSubagentStart{
+                                    .parentAgentName = agentContext->agentConfig
+                                                           ? agentContext->agentConfig->agentName
+                                                           : std::string{},
+                                    .parentThreadId  = threadId,
+                                    .subagentName    = subagentArg.value("subagent", std::string{}),
+                                    .systemPrompt
+                                    = subagentArg.value("system_prompt", std::string{}),
+                                    .message  = subagentArg.value("message", std::string{}),
+                                    .resultId = interruptArg.resultId,
+                                }
+                            );
+                            if (resp.has_value()) {
+                                interruptResult = neograph::json{resp->content};
+                            }
+                        } else if (interruptArg.name == "subagent_batch") {
+                            auto batchArg = interruptArg.arg;
+                            auto batchReq = events::ReqSubagentBatch{
+                                .parentAgentName = agentContext->agentConfig
+                                                       ? agentContext->agentConfig->agentName
+                                                       : std::string{},
+                                .parentThreadId  = threadId,
+                            };
+                            if (batchArg.contains("tasks") && batchArg["tasks"].is_array()) {
+                                for (const auto& t : batchArg["tasks"]) {
+                                    batchReq.tasks.push_back(events::SubagentBatchItem{
+                                        .subagentName = t.value("subagent", std::string{}),
+                                        .systemPrompt = t.value("system_prompt", std::string{}),
+                                        .message      = t.value("message", std::string{}),
+                                        .resultId     = t.value("result_id", std::string{}),
+                                    });
+                                }
+                            }
+                            auto batchResp = co_await agentContext->bus->request<
+                                events::ReqSubagentBatch,
+                                events::RespSubagentBatch>(
+                                events::Topic::SubagentBatch,
+                                std::move(batchReq)
+                            );
+                            if (batchResp.has_value()) {
+                                for (const auto& r : batchResp->results) {
+                                    auto rid = r.resultId;
+                                    if (rid.empty()) {
+                                        rid = interruptArg.resultId;
+                                    }
+                                    resumeValues[rid] =
+                    r.hasError ? neograph::json{{"error", r.errorMessage}}
+                               : neograph::json{r.content};
+                                }
+                            }
+                        } else {
+                            auto sess = agentContext->sessions->get(threadId);
+                            if (sess && sess->bus) {
+                                auto resp
+                                    = co_await sess->bus
+                                          ->request<events::ReqInterrupt, events::RespInterrupt>(
+                                              events::Topic::Interrupt,
+                                              events::ReqInterrupt{
+                                                  .agentName
+                                                  = agentContext->agentConfig
+                                                        ? agentContext->agentConfig->agentName
+                                                        : std::string{},
+                                                  .threadId          = threadId,
+                                                  .interruptNode     = interruptNode,
+                                                  .interruptValue    = interruptValue,
+                                                  .handleName        = interruptArg.name,
+                                                  .interruptArgsJson = interruptArg.toJson().dump(),
+                                                  .resultId          = interruptArg.resultId,
+                                              }
+                                          );
+                                if (resp.has_value() && resp->handled) {
+                                    interruptResult = neograph::json::parse(resp->resultJson);
+                                }
+                            }
+                        }
+                    }
+
+                    if (interruptResult.has_value()) {
+                        auto resultId = interruptArg.resultId;
+                        if (resultId.empty()) {
+                            resultId = std::to_string(argIndex);
+                        }
+                        resumeValues[resultId] = interruptResult.value();
+                    }
+                }
+
+                if (false == resumeValues.empty()) {
+                    agentContext->middlewareHandleContext->setGraphDataItemValue<neograph::json>(
+                        threadId,
+                        agentxx::middleware::MiddlewareContext::graphDataKey_interruptResult,
+                        resumeValues
+                    );
+
+                    engine->update_state(threadId, [&](neograph::graph::GraphState& state) {
+                        state.overwrite("messages", session->llmMessages);
+                    });
+
+                    result = co_await engine->resume_async(threadId, nullptr, eventCallback);
+
+                    if (!result->interrupted) {
+                        session->llmMessages = result->channel_raw("messages");
+                    }
+                }
+            }
+
+            engine->update_state(threadId, [&](neograph::graph::GraphState& state) {
+                state.remove(agentxx::middleware::MiddlewareContext::channel_savedGraphData);
+            });
+            co_return;
+        },
+        [&](std::string errmsg) -> asio::awaitable<void> {
+            turnResult.hasError = true;
+            XX_LOGE(R"({{"error": "Agent Response failed: {}"}})", errmsg);
+            turnResult.errorMessage = std::move(errmsg);
+            co_return;
+        }
+    );
 
     emitDelta(Delta{
         .type         = Delta::Type::TurnEnd,

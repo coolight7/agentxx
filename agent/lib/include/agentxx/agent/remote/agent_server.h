@@ -29,13 +29,13 @@ public:
     struct Config {
         util::HttpServer::Config http; // address 缺省 "0.0.0.0" 时改为 "127.0.0.1"
         std::string              wsPath = "/agent";
-        std::string              token;                       // 空且 autoGenerateToken 时自动生成
+        std::string              token; // 空且 autoGenerateToken 时自动生成
         /// 进程内可信连接可关闭鉴权 (token 留空即不校验)
-        bool                     autoGenerateToken = true;
-        std::chrono::seconds     interruptTimeout{300};
-        std::chrono::seconds     permissionTimeout{300};
-        std::chrono::seconds     gracePeriod{30};             // 断线重挂宽限期
-        size_t                   deltaBufferCap = 4096;
+        bool                 autoGenerateToken = true;
+        std::chrono::seconds interruptTimeout{300};
+        std::chrono::seconds permissionTimeout{300};
+        std::chrono::seconds gracePeriod{30}; // 断线重挂宽限期
+        size_t               deltaBufferCap = 4096;
     };
 
     AgentServer(std::shared_ptr<DeepAgent> agent, Config config);
@@ -81,8 +81,8 @@ private:
     std::unique_ptr<util::HttpServer> http_;
     asio::any_io_executor             ex_;
 
-    std::mutex                                                  controllersMutex_;
-    std::map<std::string, std::shared_ptr<SessionController>>   controllers_;
+    std::mutex                                                controllersMutex_;
+    std::map<std::string, std::shared_ptr<SessionController>> controllers_;
 };
 
 } // namespace remote

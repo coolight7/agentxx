@@ -57,9 +57,9 @@ struct Delta {
 };
 
 struct SyncPayload {
-    uint64_t                   fromIndex = 0;
+    uint64_t                    fromIndex = 0;
     std::vector<HistoryMessage> messages;
-    std::string                tailHash;
+    std::string                 tailHash;
 };
 
 } // namespace agent

@@ -24,6 +24,7 @@
 #include "test_openai_provider.h"
 #include "test_rag_search_tools.h"
 #include "test_regex.h"
+#include "test_remote_agent.h"
 #include "test_screen_capture.h"
 #include "test_string_tools.h"
 #include "test_string_util.h"
@@ -31,7 +32,6 @@
 #include "test_text_selection_monitor.h"
 #include "test_web_search_tools.h"
 #include "test_websocket.h"
-#include "test_remote_agent.h"
 #include <cstring>
 #include <iostream>
 #include <map>

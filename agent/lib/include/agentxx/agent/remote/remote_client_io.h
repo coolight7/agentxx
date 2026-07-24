@@ -36,11 +36,11 @@ public:
 
     struct Config {
         std::chrono::milliseconds authTimeout       = std::chrono::seconds{15};
-        std::chrono::seconds heartbeatInterval = std::chrono::seconds{20};
+        std::chrono::seconds      heartbeatInterval = std::chrono::seconds{20};
         std::chrono::milliseconds reconnectBackoff  = std::chrono::seconds{2};
         /// 最大重连次数; <=0 表示无限重连
-        int                  maxReconnectAttempts = 0;
-        size_t               writeQueueCap        = 4096;
+        int    maxReconnectAttempts = 0;
+        size_t writeQueueCap        = 4096;
     };
 
     /// 手动传输模式 (测试/自定义传输): 由调用方提供已建立的 transport
@@ -64,15 +64,15 @@ public:
     ~RemoteClientAgentIO() override;
 
     // ----- AgentIOBase (转发到 inner_) -----
-    void onDelta(const Delta& delta) override;
-    void onSync(const SyncPayload& payload) override;
+    void                                        onDelta(const Delta& delta) override;
+    void                                        onSync(const SyncPayload& payload) override;
     asio::awaitable<std::optional<std::string>> getInput() override;
-    asio::awaitable<neograph::json> handleInterrupt(
-        const std::string& threadId,
-        const std::string& interruptNode,
-        const std::string& interruptValue,
-        const std::string& interruptArgJson
-    ) override;
+    asio::awaitable<neograph::json>             handleInterrupt(
+                    const std::string& threadId,
+                    const std::string& interruptNode,
+                    const std::string& interruptValue,
+                    const std::string& interruptArgJson
+                ) override;
 
     // ----- 手动模式: 调用方驱动输入循环 -----
 
@@ -93,7 +93,9 @@ public:
     void cancel(const std::string& threadId);
 
     /// 设置上下文统计更新回调 (server 推送 context_stats 时调用; 供更新本地 TUI 显示)
-    using ContextStatsCallback = std::function<void(uint64_t contextTokens, uint64_t maxContextTokens)>;
+    using ContextStatsCallback
+        = std::function<void(uint64_t contextTokens, uint64_t maxContextTokens)>;
+
     void setContextStatsCallback(ContextStatsCallback cb) {
         contextStatsCallback_ = std::move(cb);
     }
@@ -103,7 +105,8 @@ public:
 
     // ----- 自动模式: 内置重连 + 输入泵 -----
 
-    /// 连接(可重连)并循环: 取本地输入 -> 发送 -> 等待轮次; 断线自动重连, 本地输入结束(nullopt)时退出
+    /// 连接(可重连)并循环: 取本地输入 -> 发送 -> 等待轮次; 断线自动重连,
+    /// 本地输入结束(nullopt)时退出
     asio::awaitable<void> runSession(const std::string& threadId, const std::string& model = "");
 
     bool disconnected() const noexcept {
@@ -118,10 +121,10 @@ private:
 
     using ErrorCode = boost::system::error_code;
 
-    using WriteQueue       = asio::experimental::concurrent_channel<void(ErrorCode, std::string)>;
-    using AuthChannel      = asio::experimental::concurrent_channel<void(ErrorCode, bool)>;
-    using TurnChannel      = asio::experimental::concurrent_channel<void(ErrorCode, TurnResult)>;
-    using JoinChannel      = asio::experimental::concurrent_channel<void(ErrorCode)>;
+    using WriteQueue        = asio::experimental::concurrent_channel<void(ErrorCode, std::string)>;
+    using AuthChannel       = asio::experimental::concurrent_channel<void(ErrorCode, bool)>;
+    using TurnChannel       = asio::experimental::concurrent_channel<void(ErrorCode, TurnResult)>;
+    using JoinChannel       = asio::experimental::concurrent_channel<void(ErrorCode)>;
     using DisconnectChannel = asio::experimental::concurrent_channel<void(ErrorCode, bool)>;
 
     asio::awaitable<void> readLoop();
@@ -145,8 +148,8 @@ private:
     asio::awaitable<bool>                       waitDisconnect();
     asio::awaitable<void>                       sleepFor(std::chrono::milliseconds d);
 
-    void resetConnState();
-    void spawnLoops();
+    void                  resetConnState();
+    void                  spawnLoops();
     asio::awaitable<void> shutdownLoops();
 
     void enqueue(neograph::json msg);
@@ -166,11 +169,11 @@ private:
 
     std::unique_ptr<MessageTransport> transport_;
 
-    std::shared_ptr<WriteQueue>        writeQueue_;
-    std::shared_ptr<AuthChannel>       authChannel_;
-    std::shared_ptr<TurnChannel>       turnChannel_;
-    std::shared_ptr<JoinChannel>       joinChannel_;
-    std::shared_ptr<DisconnectChannel> disconnectChannel_;
+    std::shared_ptr<WriteQueue>         writeQueue_;
+    std::shared_ptr<AuthChannel>        authChannel_;
+    std::shared_ptr<TurnChannel>        turnChannel_;
+    std::shared_ptr<JoinChannel>        joinChannel_;
+    std::shared_ptr<DisconnectChannel>  disconnectChannel_;
     std::shared_ptr<asio::steady_timer> heartbeatTimer_;
 
     // 重连状态跟踪

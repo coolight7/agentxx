@@ -85,6 +85,7 @@ asio::awaitable<std::string> ExecuteLinuxCommandTool::execute_async(const neogra
         // 创建管道，用于接收子进程的输出
         std::unordered_map<boost::process::environment::key, boost::process::environment::value>
             procEnv;
+        // TODO: 缓存环境变量
         for (const auto& kv : boost::process::environment::current()) {
             if (kv.key().string() != "SECRET") {
                 procEnv[kv.key()] = kv.value();

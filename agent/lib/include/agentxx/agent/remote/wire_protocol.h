@@ -24,21 +24,21 @@ struct MsgType {
     inline static constexpr std::string_view Ping              = "ping";
 
     // ===== Server -> Client =====
-    inline static constexpr std::string_view HelloAck          = "hello_ack";
-    inline static constexpr std::string_view DeltaMsg          = "delta";
-    inline static constexpr std::string_view SyncMsg           = "sync";
-    inline static constexpr std::string_view InterruptRequest  = "interrupt_request";
-    inline static constexpr std::string_view TurnResult        = "turn_result";
-    inline static constexpr std::string_view ContextStats      = "context_stats";
-    inline static constexpr std::string_view ErrorMsg          = "error";
-    inline static constexpr std::string_view Pong              = "pong";
+    inline static constexpr std::string_view HelloAck         = "hello_ack";
+    inline static constexpr std::string_view DeltaMsg         = "delta";
+    inline static constexpr std::string_view SyncMsg          = "sync";
+    inline static constexpr std::string_view InterruptRequest = "interrupt_request";
+    inline static constexpr std::string_view TurnResult       = "turn_result";
+    inline static constexpr std::string_view ContextStats     = "context_stats";
+    inline static constexpr std::string_view ErrorMsg         = "error";
+    inline static constexpr std::string_view Pong             = "pong";
 };
 
 /// 中断/取消原因 (供 DeepAgent 区分中断来源)
 struct CloseReason {
-    inline static constexpr std::string_view UserCancel        = "user_cancel";
+    inline static constexpr std::string_view UserCancel         = "user_cancel";
     inline static constexpr std::string_view ClientDisconnected = "client_disconnected";
-    inline static constexpr std::string_view Timeout           = "timeout";
+    inline static constexpr std::string_view Timeout            = "timeout";
 };
 
 // ---------------------------------------------------------------------------
@@ -48,24 +48,42 @@ struct CloseReason {
 inline std::string_view deltaTypeToString(Delta::Type t) noexcept {
     using T = Delta::Type;
     switch (t) {
-        case T::TextToken:     return "text_token";
-        case T::ThinkingToken: return "thinking_token";
-        case T::ToolStart:     return "tool_start";
-        case T::ToolEnd:       return "tool_end";
-        case T::TurnStart:     return "turn_start";
-        case T::TurnEnd:       return "turn_end";
+        case T::TextToken:
+            return "text_token";
+        case T::ThinkingToken:
+            return "thinking_token";
+        case T::ToolStart:
+            return "tool_start";
+        case T::ToolEnd:
+            return "tool_end";
+        case T::TurnStart:
+            return "turn_start";
+        case T::TurnEnd:
+            return "turn_end";
     }
     return "text_token";
 }
 
 inline std::optional<Delta::Type> deltaTypeFromString(std::string_view s) noexcept {
     using T = Delta::Type;
-    if (s == "text_token") return T::TextToken;
-    if (s == "thinking_token") return T::ThinkingToken;
-    if (s == "tool_start") return T::ToolStart;
-    if (s == "tool_end") return T::ToolEnd;
-    if (s == "turn_start") return T::TurnStart;
-    if (s == "turn_end") return T::TurnEnd;
+    if (s == "text_token") {
+        return T::TextToken;
+    }
+    if (s == "thinking_token") {
+        return T::ThinkingToken;
+    }
+    if (s == "tool_start") {
+        return T::ToolStart;
+    }
+    if (s == "tool_end") {
+        return T::ToolEnd;
+    }
+    if (s == "turn_start") {
+        return T::TurnStart;
+    }
+    if (s == "turn_end") {
+        return T::TurnEnd;
+    }
     return std::nullopt;
 }
 
@@ -73,15 +91,33 @@ inline neograph::json deltaToJson(const Delta& d) {
     neograph::json j = neograph::json::object();
     j["type"]        = std::string(deltaTypeToString(d.type));
     j["seq"]         = d.seq;
-    if (!d.text.empty()) j["text"]               = d.text;
-    if (!d.msgId.empty()) j["msg_id"]            = d.msgId;
-    if (!d.toolName.empty()) j["tool_name"]      = d.toolName;
-    if (!d.toolCallId.empty()) j["tool_call_id"] = d.toolCallId;
-    if (!d.arguments.empty()) j["arguments"]     = d.arguments;
-    if (!d.result.empty()) j["result"]           = d.result;
-    if (d.hasError) j["has_error"]               = d.hasError;
-    if (d.historyCount > 0) j["history_count"]   = d.historyCount;
-    if (!d.tailHash.empty()) j["tail_hash"]      = d.tailHash;
+    if (!d.text.empty()) {
+        j["text"] = d.text;
+    }
+    if (!d.msgId.empty()) {
+        j["msg_id"] = d.msgId;
+    }
+    if (!d.toolName.empty()) {
+        j["tool_name"] = d.toolName;
+    }
+    if (!d.toolCallId.empty()) {
+        j["tool_call_id"] = d.toolCallId;
+    }
+    if (!d.arguments.empty()) {
+        j["arguments"] = d.arguments;
+    }
+    if (!d.result.empty()) {
+        j["result"] = d.result;
+    }
+    if (d.hasError) {
+        j["has_error"] = d.hasError;
+    }
+    if (d.historyCount > 0) {
+        j["history_count"] = d.historyCount;
+    }
+    if (!d.tailHash.empty()) {
+        j["tail_hash"] = d.tailHash;
+    }
     return j;
 }
 
@@ -118,7 +154,10 @@ inline neograph::json syncToJson(const SyncPayload& p) {
     j["tail_hash"]     = p.tailHash;
     neograph::json arr = neograph::json::array();
     for (const auto& hm : p.messages) {
-        arr.push_back(neograph::json{{"id", hm.id}, {"data", hm.data}});
+        arr.push_back(neograph::json{
+            {"id",   hm.id  },
+            {"data", hm.data}
+        });
     }
     j["messages"] = std::move(arr);
     return j;
@@ -154,12 +193,16 @@ inline neograph::json makeHello(
     const std::string& tailHash = ""
 ) {
     neograph::json j = {
-            {"type",   MsgType::Hello},
-            {"thread", threadId      },
-            {"token",  token         },
+        {"type",   MsgType::Hello},
+        {"thread", threadId      },
+        {"token",  token         },
     };
-    if (lastSeq > 0) j["last_seq"] = lastSeq;
-    if (!tailHash.empty()) j["tail_hash"] = tailHash;
+    if (lastSeq > 0) {
+        j["last_seq"] = lastSeq;
+    }
+    if (!tailHash.empty()) {
+        j["tail_hash"] = tailHash;
+    }
     return j;
 }
 
@@ -170,12 +213,14 @@ inline neograph::json makeUserInput(
     const std::string& model = ""
 ) {
     neograph::json j = {
-            {"type",        MsgType::UserInput},
-            {"thread",      threadId          },
-            {"text",        text              },
-            {"is_first_msg", isFirstMsg       },
+        {"type",         MsgType::UserInput},
+        {"thread",       threadId          },
+        {"text",         text              },
+        {"is_first_msg", isFirstMsg        },
     };
-    if (!model.empty()) j["model"] = model;
+    if (!model.empty()) {
+        j["model"] = model;
+    }
     return j;
 }
 
@@ -220,11 +265,13 @@ inline neograph::json makeHelloAck(
     const std::vector<std::string>& models
 ) {
     neograph::json j = {
-            {"type",   MsgType::HelloAck},
-            {"ok",     ok               },
-            {"thread", threadId         },
+        {"type",   MsgType::HelloAck},
+        {"ok",     ok               },
+        {"thread", threadId         },
     };
-    if (!tailHash.empty()) j["tail_hash"] = tailHash;
+    if (!tailHash.empty()) {
+        j["tail_hash"] = tailHash;
+    }
     if (!models.empty()) {
         j["models"] = models;
     }
@@ -244,7 +291,7 @@ inline std::optional<Delta> deltaMsgFromJson(const neograph::json& j) {
     if (!j.is_object()) {
         return std::nullopt;
     }
-    auto patched = j;
+    auto patched    = j;
     patched["type"] = j.value("kind", std::string{});
     return deltaFromJson(patched);
 }
@@ -270,12 +317,12 @@ inline neograph::json makeInterruptRequest(
     const std::string& argJson
 ) {
     return neograph::json{
-            {"type",      MsgType::InterruptRequest},
-            {"id",        id                       },
-            {"thread",    threadId                 },
-            {"node",      node                     },
-            {"value",     value                    },
-            {"arg_json",  argJson                  },
+        {"type",     MsgType::InterruptRequest},
+        {"id",       id                       },
+        {"thread",   threadId                 },
+        {"node",     node                     },
+        {"value",    value                    },
+        {"arg_json", argJson                  },
     };
 }
 
@@ -286,20 +333,22 @@ inline neograph::json makeTurnResult(
     bool               interrupted
 ) {
     neograph::json j = {
-            {"type",        MsgType::TurnResult},
-            {"thread",      threadId           },
-            {"has_error",   hasError           },
-            {"interrupted", interrupted        },
+        {"type",        MsgType::TurnResult},
+        {"thread",      threadId           },
+        {"has_error",   hasError           },
+        {"interrupted", interrupted        },
     };
-    if (!errorMessage.empty()) j["error_message"] = errorMessage;
+    if (!errorMessage.empty()) {
+        j["error_message"] = errorMessage;
+    }
     return j;
 }
 
 inline neograph::json makeContextStats(uint64_t contextTokens, uint64_t maxContextTokens) {
     return neograph::json{
-            {"type",              MsgType::ContextStats},
-            {"context_tokens",    contextTokens        },
-            {"max_context_tokens", maxContextTokens    },
+        {"type",               MsgType::ContextStats},
+        {"context_tokens",     contextTokens        },
+        {"max_context_tokens", maxContextTokens     },
     };
 }
 

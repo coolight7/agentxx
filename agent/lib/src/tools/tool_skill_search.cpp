@@ -116,7 +116,8 @@ void ToolSkillSearchSubAgentTask::createSystemPrompt() {
 void ToolSkillSearchSubAgentTask::createSubgraph(const neograph::graph::NodeContext& context) {
     if (nullptr == subgraph) {
         auto inner = neograph::graph::GraphEngine::compile(defCreateSubGraphDefine(), context);
-        subgraph   = std::shared_ptr<neograph::graph::GraphEngine>(inner.release());
+        assert(nullptr != inner);
+        subgraph = std::shared_ptr<neograph::graph::GraphEngine>(inner.release());
     }
 }
 

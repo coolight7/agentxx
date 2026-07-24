@@ -11,8 +11,8 @@ namespace remote {
 ClientWsTransport::ClientWsTransport(std::unique_ptr<util::WsClient> client) :
     client_(std::move(client)) {}
 
-asio::awaitable<std::expected<void, std::string>>
-ClientWsTransport::send(std::string_view jsonText) {
+asio::awaitable<std::expected<void, std::string>> ClientWsTransport::send(std::string_view jsonText
+) {
     if (!client_) {
         co_return std::unexpected<std::string>("client transport closed");
     }
