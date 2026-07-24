@@ -3,6 +3,13 @@
 #include <ctime>
 #include <iostream>
 
+#if XX_IS_LINUX_D
+#include <csignal>
+#include <cstdio>
+#include <cstdlib>
+#include <execinfo.h>
+#endif
+
 namespace agentxx {
 namespace util {
 
@@ -56,18 +63,7 @@ void xxLogPrint(LogLevel level, const std::string& message) {
     LogDispatcher::instance().dispatch(level, message);
 }
 
-} // namespace util
-} // namespace agentxx
-
 #if XX_IS_LINUX_D
-
-#include <csignal>
-#include <cstdio>
-#include <cstdlib>
-#include <execinfo.h>
-
-namespace agentxx {
-namespace util {
 
 static std::string _exe_path{};
 
@@ -175,19 +171,13 @@ void signalError(std::string_view exepath) {
     signal(SIGSEGV, signal_handler);
 }
 
-}; // namespace util
-}; // namespace agentxx
-
 #else
-
-namespace agentxx {
-namespace util {
 
 void printStack() {}
 
 void signalError(std::string_view exepath) {}
 
-}; // namespace util
-}; // namespace agentxx
-
 #endif
+
+} // namespace util
+} // namespace agentxx
