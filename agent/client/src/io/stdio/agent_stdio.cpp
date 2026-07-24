@@ -33,13 +33,10 @@ void AgentStdIO::onDelta(const agentxx::agent::Delta& delta) {
                       << fmt::format("[Tool] {} running...", delta.toolName) << std::flush;
             break;
         case Type::ToolEnd:
-            std::cout << std::endl
-                      << fmt::format(
-                             "[Tool] {} {}",
-                             delta.toolName,
-                             delta.hasError ? "error" : "done"
-                         )
-                      << std::flush;
+            std::cout
+                << std::endl
+                << fmt::format("[Tool] {} {}", delta.toolName, delta.hasError ? "error" : "done")
+                << std::flush;
             break;
         case Type::TurnStart:
             isThinking_ = false;
@@ -147,20 +144,12 @@ asio::awaitable<neograph::json> AgentStdIO::handleInterrupt(
                         inputSuccess = false;
                     }
                 } else if ("int" == input.type) {
-                    int64_t num = 0;
-                    auto    r   = std::from_chars(
-                        inputValue.c_str(),
-                        inputValue.c_str() + inputValue.size(),
-                        num
-                    );
+                    int64_t num  = 0;
+                    auto    r    = agentxx::util::parseNumberFromString(inputValue, num);
                     inputSuccess = (r.ec == std::errc{});
                 } else if ("double" == input.type) {
                     double num;
-                    auto   r = std::from_chars(
-                        inputValue.c_str(),
-                        inputValue.c_str() + inputValue.size(),
-                        num
-                    );
+                    auto   r     = agentxx::util::parseNumberFromString(inputValue, num);
                     inputSuccess = (r.ec == std::errc{});
                 } else if ("string" == input.type) {
                     inputSuccess = true;
@@ -189,4 +178,3 @@ asio::awaitable<neograph::json> AgentStdIO::handleInterrupt(
     std::cout << "  ┗━━━━━━ Input ━━━━━━┛\n\n" << std::flush;
     co_return result;
 }
-
