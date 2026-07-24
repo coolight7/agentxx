@@ -2,9 +2,11 @@
 
 #include "agentxx/agent/remote/wire_protocol.h"
 #include "agentxx/util/log.h"
-#include "asio/cancel_after.hpp"
+#include "asio/as_tuple.hpp"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
+#include "asio/experimental/awaitable_operators.hpp"
+#include "asio/steady_timer.hpp"
 #include "asio/use_awaitable.hpp"
 
 namespace agentxx {
@@ -269,30 +271,33 @@ asio::awaitable<void> RemoteServerAgentIO::run() {
     asio::co_spawn(ex_, writeLoop(), guard("writeLoop"));
     asio::co_spawn(ex_, readLoop(), guard("readLoop"));
 
-    // 等待读/写协程退出 (断线后); 各 10s 安全上限
+    using asio::experimental::awaitable_operators::operator||;
+
+    // 等待第一个协程退出 (即断线发生), 无超时
     int received = 0;
-    for (int i = 0; i < 2; ++i) {
-        try {
-            co_await joinChannel_->async_receive(
-                asio::cancel_after(std::chrono::seconds{10}, asio::use_awaitable)
-            );
+    {
+        auto [ec] = co_await joinChannel_->async_receive(asio::as_tuple(asio::use_awaitable));
+        if (!ec) {
             received++;
-        } catch (const boost::system::system_error&) {
-            break;
+        }
+    }
+    // 等待第二个协程退出, 10s 安全上限
+    if (received < 2) {
+        asio::steady_timer timer(ex_);
+        timer.expires_after(std::chrono::seconds{10});
+        auto res = co_await (
+            joinChannel_->async_receive(asio::as_tuple(asio::use_awaitable))
+            || timer.async_wait(asio::as_tuple(asio::use_awaitable))
+        );
+        if (res.index() == 0 && !std::get<0>(std::get<0>(res))) {
+            received++;
         }
     }
     if (received < 2) {
         // 有协程未退出 (如 send 被慢客户端阻塞): 强制关闭传输使其退出, 再等待
         requestStop();
-        for (int i = received; i < 2; ++i) {
-            try {
-                co_await joinChannel_->async_receive(
-                    asio::cancel_after(std::chrono::seconds{5}, asio::use_awaitable)
-                );
-            } catch (const boost::system::system_error&) {
-                break;
-            }
-        }
+        auto [ec] = co_await joinChannel_->async_receive(asio::as_tuple(asio::use_awaitable));
+        (void)ec;
     }
 }
 
