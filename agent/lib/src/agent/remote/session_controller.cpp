@@ -34,8 +34,21 @@ SessionController::~SessionController() {
 // ---------------------------------------------------------------------------
 
 void SessionController::onDelta(const Delta& delta) {
-    recordDelta(delta);
-    pushToActive(makeDeltaMsg(delta));
+    // onDelta 可能来自 engine 线程; 在 bufferMutex_ 下完成"记录+推送",
+    // 与 attach 的重放串行化, 保证 delta 到达顺序与 seq 一致 (避免 grace 重挂时乱序)
+    std::lock_guard<std::mutex> lock(bufferMutex_);
+    deltaBuffer_.push_back(delta);
+    while (deltaBuffer_.size() > config_.deltaBufferCap) {
+        deltaBuffer_.pop_front();
+    }
+    std::shared_ptr<IConnectionSink> conn;
+    {
+        std::lock_guard<std::mutex> lock2(connMutex_);
+        conn = activeConn_.lock();
+    }
+    if (conn && conn->alive()) {
+        conn->pushMessage(makeDeltaMsg(delta));
+    }
 }
 
 void SessionController::onSync(const SyncPayload& payload) {
@@ -166,34 +179,35 @@ void SessionController::attach(
     const std::string&                      /*tailHash*/
 ) {
     cancelGraceTimer();
+    // 在 bufferMutex_ 下设置活动连接并重放, 与 onDelta 的实时推送串行化 (保证顺序)
     {
-        std::lock_guard<std::mutex> lock(connMutex_);
-        activeConn_ = conn;
-    }
+        std::lock_guard<std::mutex> lock(bufferMutex_);
+        {
+            std::lock_guard<std::mutex> lock2(connMutex_);
+            activeConn_ = conn;
+        }
 
-    // 重放策略: lastSeq>0 且缓冲覆盖 -> 增量重放; 否则全量 sync
-    auto sess = session();
-    uint64_t curSeq = sess ? sess->deltaSeq : 0;
-    if (lastSeq > 0) {
-        auto deltas = deltasSince(lastSeq);
-        if (deltas.has_value()) {
-            for (const auto& d : deltas.value()) {
-                conn->pushMessage(makeDeltaMsg(d));
+        auto     sess   = session();
+        uint64_t curSeq = sess ? sess->deltaSeq : 0;
+        if (lastSeq > 0) {
+            auto deltas = deltasSinceLocked(lastSeq);
+            if (deltas.has_value()) {
+                for (const auto& d : deltas.value()) {
+                    conn->pushMessage(makeDeltaMsg(d));
+                }
+            } else {
+                conn->pushMessage(makeSyncMsg(buildFullSync(), curSeq));
             }
         } else {
-            conn->pushMessage(makeSyncMsg(buildFullSync(), curSeq));
-        }
-    } else {
-        // 新连接到已有历史的会话 -> 全量 sync 供客户端展示
-        if (sess && !sess->fullHistory.empty()) {
-            conn->pushMessage(makeSyncMsg(buildFullSync(), curSeq));
+            // 新连接到已有历史的会话 -> 全量 sync 供客户端展示
+            if (sess && !sess->fullHistory.empty()) {
+                conn->pushMessage(makeSyncMsg(buildFullSync(), curSeq));
+            }
         }
     }
 
-    // 同步当前上下文统计供客户端展示
+    // 非 delta 消息 (统计/挂起中断) 无需与 delta 严格有序, 在 bufferMutex_ 外推送
     sendContextStats();
-
-    // 重连时重发挂起的中断请求 (如权限询问中断线重连)
     resendPendingInterrupts(conn);
 }
 
@@ -259,18 +273,10 @@ void SessionController::pushToActive(neograph::json msg) {
     }
 }
 
-void SessionController::recordDelta(const Delta& d) {
-    std::lock_guard<std::mutex> lock(bufferMutex_);
-    deltaBuffer_.push_back(d);
-    while (deltaBuffer_.size() > config_.deltaBufferCap) {
-        deltaBuffer_.pop_front();
-    }
-}
-
-std::optional<std::vector<Delta>> SessionController::deltasSince(uint64_t seq) {
-    std::lock_guard<std::mutex> lock(bufferMutex_);
+std::optional<std::vector<Delta>> SessionController::deltasSinceLocked(uint64_t seq) {
+    // 调用方已持有 bufferMutex_
     if (deltaBuffer_.empty()) {
-        return std::vector<Delta>{};
+        return std::nullopt; // 空缓冲无法确认连续性 -> 回退全量 sync
     }
     uint64_t oldest = deltaBuffer_.front().seq;
     if (seq + 1 < oldest) {
