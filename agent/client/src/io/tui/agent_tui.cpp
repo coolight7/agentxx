@@ -14,21 +14,6 @@
 
 using namespace ftxui;
 
-namespace {
-/// 取首行并按 UTF-8 字符数截断为单行预览 (仅用于折叠态显示)
-std::string oneLinePreview(const std::string& s, size_t max = 60) {
-    const auto  nl   = s.find('\n');
-    std::string line = (nl == std::string::npos) ? s : s.substr(0, nl);
-    const auto  idx  = agentxx::util::findIndexByUtf8Length(line, max);
-    // findIndexByUtf8Length 在字符数不足 targetLen 时返回 0
-    if (idx > 0 && idx < line.size()) {
-        line.resize(idx);
-        line += "...";
-    }
-    return line;
-}
-} // namespace
-
 AgentTUI::AgentTUI(
     asio::any_io_executor                         ex,
     std::shared_ptr<agentxx::agent::AgentContext> agentContext,
@@ -41,11 +26,9 @@ AgentTUI::AgentTUI(
     inputChannel_(std::make_shared<LineChannel>(ex, 64)),
     permissionChannel_(std::make_shared<BoolChannel>(ex, 4)),
     logSink_(std::make_shared<TUILogSink>()) {
-    // 缓存本会话指针, 避免后续反复查找 SessionStore
     if (agentContext_) {
         session_ = agentContext_->getSession(threadId_);
     }
-    // 缓存在线模型显示名, 供渲染热路径免锁读取
     if (session_ && agentContext_ && agentContext_->modelRegistry) {
         cachedModelName_ = agentContext_->modelRegistry->resolveModelName(session_->getModelName());
     }
@@ -64,7 +47,6 @@ void AgentTUI::postRedraw() {
 void AgentTUI::start() {
     running_ = true;
     if (logSink_) {
-        // 使用 weak_ptr 避免日志线程在 TUI 析构后回调到已销毁对象
         std::weak_ptr<AgentTUI> weakSelf = shared_from_this();
         logSink_->setOnNewLog([weakSelf]() {
             if (auto self = weakSelf.lock()) {
@@ -80,16 +62,12 @@ void AgentTUI::start() {
 
         auto input_option      = InputOption();
         input_option.multiline = true;
-        // 覆盖默认 transform: 默认会在聚焦时加 inverted (反转前景/背景), 会把
-        // 输入框背景反成白色; 这里仅保留占位符弱化, 颜色改由外部 bgcolor/color 控制
         input_option.transform = [](InputState state) {
             if (state.is_placeholder) {
                 state.element |= dim;
             }
             return state.element;
         };
-        // multiline 模式: Enter 插入换行 (不发送); 发送由事件处理器识别 Alt+Enter
-        // 完成. 不用 on_enter (其会在每次 Enter 含粘贴 \n 时触发).
         input_option.on_enter = nullptr;
 
         auto input
@@ -98,11 +76,8 @@ void AgentTUI::start() {
         auto layout = Renderer(input, [&]() -> Element {
             std::lock_guard<std::mutex> lock(mutex_);
 
-            // yframe 仅纵向滚动并约束宽度, 使 paragraph 能按屏幕宽度自动换行;
-            // 若用 frame (含横向) 会把内容撑到自然宽度导致不换行
             auto messages = renderMessages() | flex | vscroll_indicator | yframe;
 
-            // 状态指示器 (固定 3 字符宽度)
             Element indicator;
             if (pendingPermission_) {
                 indicator = text(" ! ") | bgcolor(Color::Red) | color(Color::White) | bold | blink;
@@ -114,21 +89,21 @@ void AgentTUI::start() {
 
             const int maxInputTotalLines = std::max(3, ftxui::Terminal::Size().dimy / 2);
             auto      input_bar          = hbox({
-                text(" "), // 外边距
+                text(" "),
                 vbox({
-                    text(" "), // 上边距
+                    text(" "),
                     hbox({
-                        text("  "), // 内左边距
+                        text("  "),
                         indicator,
-                        text("  "), // 间距
+                        text("  "),
                         input->Render() | color(theme_.inputTextColor) | flex,
-                        text("  "), // 内右边距
+                        text("  "),
                     }),
-                    text(" "), // 下边距
+                    text(" "),
                 }) | bgcolor(theme_.inputBgColor)
                     | xflex | size(HEIGHT, GREATER_THAN, 3)
                     | size(HEIGHT, LESS_THAN, maxInputTotalLines),
-                text(" "), // 外边距
+                text(" "),
             });
 
             auto main = vbox({
@@ -156,7 +131,6 @@ void AgentTUI::start() {
 
         auto event_handler = CatchEvent(layout, [&](Event event) -> bool {
             if (event == Event::CtrlC) {
-                // 输入框有内容 → 清空; 否则 → 退出
                 if (!inputText_.empty()) {
                     inputText_.clear();
                     postRedraw();
@@ -222,14 +196,11 @@ void AgentTUI::start() {
                 return true;
             }
 
-            // Alt+Enter → 发送消息 (普通 Enter 不拦截, 交给 Input 插入换行).
-            // Alt+Enter 的标准终端编码为 ESC+Enter (\x1B\n / \x1B\r), 全终端可用.
             {
                 const std::string& in     = event.input();
-                const bool         isSend = (in == "\x1B\n" || in == "\x1B\r"); // Alt+Enter
+                const bool         isSend = (in == "\x1B\n" || in == "\x1B\r");
                 if (isSend) {
                     std::string text = inputText_;
-                    // 去掉首尾换行符 (保留内部换行与缩进)
                     while (!text.empty() && (text.back() == '\n' || text.back() == '\r')) {
                         text.pop_back();
                     }
@@ -241,7 +212,6 @@ void AgentTUI::start() {
                         text = text.substr(start);
                     }
                     if (!text.empty()) {
-                        // 先冲刷上一轮未提交的流式 token, 保证 user 消息始终插入在末尾
                         if (!currentToken_.empty()) {
                             messages_.push_back({currentTokenRole_, currentToken_});
                             if (currentTokenRole_ == Message::Role::Thinking) {
@@ -277,7 +247,6 @@ void AgentTUI::start() {
             if (event.is_mouse()) {
                 const auto& mouse = event.mouse();
                 if (mouse.button == Mouse::WheelUp || mouse.button == Mouse::WheelDown) {
-                    // 若侧栏 (日志窗口) 可见且鼠标在其区域内, 手动控制日志滚动
                     if (!sidebarTabs_.empty() && mouse.x >= ftxui::Terminal::Size().dimx - 56) {
                         const int last
                             = static_cast<int>(logSink_ ? logSink_->snapshot().size() : 0) - 1;
@@ -295,7 +264,6 @@ void AgentTUI::start() {
                         postRedraw();
                         return true;
                     }
-                    // 鼠标滚轮: 滚动消息列表; 滚到底部时重新吸附底部
                     const int last = focusBlockCount() - 1;
                     if (last >= 0) {
                         int cur  = stickToBottom_ ? last : scrollAnchorIndex_;
@@ -347,558 +315,8 @@ void AgentTUI::stop() {
     }
 }
 
-int AgentTUI::focusBlockCount() const {
-    int n = static_cast<int>(messages_.size());
-    if (isStreaming_ && !currentToken_.empty()) {
-        ++n;
-    }
-    return n;
-}
-
-ftxui::Element AgentTUI::renderMessages() {
-    // 计算滚动锚点: 吸附底部时聚焦最后一块 (yframe 会滚动到底部),
-    // 否则聚焦 scrollAnchorIndex_ 指向的块, 视图保持稳定不随新消息跳动
-    const int count    = focusBlockCount();
-    int       focusIdx = -1;
-    if (count > 0) {
-        focusIdx = stickToBottom_ ? (count - 1) : std::clamp(scrollAnchorIndex_, 0, count - 1);
-    }
-
-    // 收集可折叠消息 (Thinking/Tool) 索引并重置其点击区域
-    collapsibleMsgIndices_.clear();
-    for (size_t i = 0; i < messages_.size(); ++i) {
-        if (messages_[i].role == Message::Role::Thinking
-            || messages_[i].role == Message::Role::Tool) {
-            collapsibleMsgIndices_.push_back(i);
-        }
-    }
-    collapsibleBoxes_.assign(collapsibleMsgIndices_.size(), ftxui::Box{});
-
-    Elements elements;
-    int      idx                = 0;
-    int      collapsibleOrdinal = 0;
-    auto     pushBlock          = [&](Element block, bool spacer) {
-        if (idx == focusIdx) {
-            block = std::move(block) | focus;
-        }
-        ++idx;
-        elements.push_back(std::move(block));
-        if (spacer) {
-            elements.push_back(text(""));
-        }
-    };
-
-    for (const auto& msg : messages_) {
-        switch (msg.role) {
-            case Message::Role::User:
-                pushBlock(
-                    hbox({
-                        text("> ") | color(theme_.userColor) | bold,
-                        paragraph(msg.text) | color(theme_.userColor),
-                    }),
-                    true
-                );
-                break;
-            case Message::Role::Assistant:
-                pushBlock(paragraph(msg.text) | color(theme_.assistantColor), true);
-                break;
-            case Message::Role::Thinking: {
-                const bool expanded = !msg.collapsed;
-                Elements   lines;
-                Elements   header;
-                header.push_back(
-                    text(expanded ? "\xe2\x96\xbe " : "\xe2\x96\xb8 ") | color(theme_.hintColor)
-                );
-                header.push_back(text("[Thinking] ") | color(theme_.thinkingColor) | bold);
-                if (!expanded) {
-                    header.push_back(text(oneLinePreview(msg.text)) | color(theme_.thinkingColor));
-                }
-                lines.push_back(hbox(std::move(header)));
-                if (expanded) {
-                    lines.push_back(paragraph(msg.text) | color(theme_.thinkingColor));
-                }
-                Element block
-                    = vbox(std::move(lines)) | reflect(collapsibleBoxes_[collapsibleOrdinal]);
-                ++collapsibleOrdinal;
-                pushBlock(std::move(block), true);
-                break;
-            }
-            case Message::Role::System:
-                pushBlock(paragraph(msg.text) | color(theme_.systemColor), true);
-                break;
-            case Message::Role::Tool: {
-                const bool expanded   = !msg.collapsed;
-                const bool isEditTool = (msg.toolName == "filesystem_edit_text_file");
-                Elements   lines;
-                // 头部行: 折叠指示符 + [Tool] + 工具名 (+ 折叠态的单行预览)
-                Elements header;
-                header.push_back(
-                    text(expanded ? "\xe2\x96\xbe " : "\xe2\x96\xb8 ") | color(theme_.hintColor)
-                );
-                header.push_back(text("[Tool] ") | color(theme_.toolColor) | bold);
-                header.push_back(text(msg.toolName) | color(theme_.toolColor) | bold);
-                if (!expanded) {
-                    if (!msg.toolFinished) {
-                        header.push_back(text("  running...") | color(theme_.hintColor) | dim);
-                    } else if (msg.toolHasError) {
-                        header.push_back(text("  error: ") | color(theme_.systemColor));
-                        header.push_back(
-                            text(oneLinePreview(msg.toolResult)) | color(theme_.systemColor) | dim
-                        );
-                    } else if (isEditTool) {
-                        // 折叠态: 显示被编辑的文件路径
-                        std::string path;
-                        try {
-                            path = neograph::json::parse(msg.text).value("path", std::string{});
-                        } catch (...) {
-                        }
-                        if (!path.empty()) {
-                            header.push_back(text("  " + path) | color(theme_.toolColor) | dim);
-                        }
-                    } else {
-                        header.push_back(
-                            text("  " + oneLinePreview(msg.toolResult)) | color(theme_.toolColor)
-                            | dim
-                        );
-                    }
-                }
-                lines.push_back(hbox(std::move(header)));
-
-                if (expanded) {
-                    if (isEditTool) {
-                        // 特化渲染: git diff 对比
-                        std::string path;
-                        std::string oldStr;
-                        std::string newStr;
-                        try {
-                            auto args = neograph::json::parse(msg.text);
-                            path      = args.value("path", std::string{});
-                            oldStr    = args.value("old_str", std::string{});
-                            newStr    = args.value("new_str", std::string{});
-                        } catch (...) {
-                        }
-                        if (!path.empty()) {
-                            lines.push_back(hbox({
-                                text("  file: ") | color(theme_.hintColor),
-                                text(path) | color(theme_.toolColor),
-                            }));
-                        }
-                        lines.push_back(renderEditToolDiff(oldStr, newStr));
-                        if (msg.toolFinished && msg.toolHasError) {
-                            lines.push_back(hbox({
-                                text("  error: ") | color(theme_.systemColor),
-                                paragraph(msg.toolResult) | color(theme_.systemColor),
-                            }));
-                        }
-                    } else {
-                        if (!msg.text.empty()) {
-                            lines.push_back(hbox({
-                                text("  args: ") | color(theme_.hintColor),
-                                paragraph(msg.text) | color(theme_.toolColor),
-                            }));
-                        }
-                        if (msg.toolFinished) {
-                            auto rc = msg.toolHasError ? theme_.systemColor : theme_.toolColor;
-                            lines.push_back(hbox({
-                                text(msg.toolHasError ? "  error: " : "  result: ") | color(rc),
-                                paragraph(msg.toolResult) | color(rc),
-                            }));
-                        } else {
-                            lines.push_back(text("  running...") | color(theme_.hintColor) | dim);
-                        }
-                    }
-                }
-
-                Element block
-                    = vbox(std::move(lines)) | reflect(collapsibleBoxes_[collapsibleOrdinal]);
-                ++collapsibleOrdinal;
-                pushBlock(std::move(block), true);
-                break;
-            }
-        }
-    }
-
-    if (isStreaming_ && !currentToken_.empty()) {
-        if (currentTokenRole_ == Message::Role::Thinking) {
-            pushBlock(
-                hbox({
-                    text("[Thinking] ") | color(theme_.thinkingColor) | bold,
-                    paragraph(currentToken_) | color(theme_.thinkingColor),
-                }),
-                false
-            );
-        } else {
-            pushBlock(paragraph(currentToken_) | color(theme_.assistantColor), false);
-        }
-    }
-
-    if (elements.empty()) {
-        return vbox({
-            filler(),
-            text("Agentxx TUI") | bold | color(theme_.accentColor) | center,
-            text("Type a message to start. [F2] switch model, [Esc] cancel, "
-                 "[Ctrl+C] quit.")
-                | dim | center,
-            filler(),
-        });
-    }
-    return vbox(std::move(elements));
-}
-
-ftxui::Element AgentTUI::renderEditToolDiff(const std::string& oldStr, const std::string& newStr) {
-    using agentxx::util::DiffLineType;
-    auto diff = agentxx::util::computeLineDiff(oldStr, newStr);
-    if (diff.empty()) {
-        return text("  (no changes)") | color(theme_.hintColor);
-    }
-
-    const int  screenW    = ftxui::Terminal::Size().dimx;
-    const bool sideBySide = screenW >= 100;
-
-    // 按 UTF-8 字符数截断单行, 保证左右对比时各行行高一致
-    auto trunc = [](const std::string& s, size_t maxChars) {
-        const auto idx = agentxx::util::findIndexByUtf8Length(s, maxChars);
-        if (idx > 0 && idx < s.size()) {
-            return s.substr(0, idx) + "...";
-        }
-        return s;
-    };
-
-    if (!sideBySide) {
-        // 屏幕宽度不足: 单文本块内对比 (前缀 ' '/'-'/'+')
-        Elements lines;
-        for (const auto& l : diff) {
-            ftxui::Color c      = theme_.toolColor;
-            std::string  prefix = " ";
-            if (l.type == DiffLineType::Add) {
-                c      = theme_.promptColor;
-                prefix = "+";
-            } else if (l.type == DiffLineType::Delete) {
-                c      = theme_.systemColor;
-                prefix = "-";
-            }
-            lines.push_back(hbox({
-                text(prefix) | color(c) | bold,
-                text(" ") | color(theme_.hintColor),
-                text(l.text) | color(c),
-            }));
-        }
-        return vbox(std::move(lines));
-    }
-
-    // 屏幕宽度足够: 左右对比 (将连续 delete/add 配对到同一行)
-    const int colW  = std::max(20, (screenW - 3) / 2);
-    const int textW = std::max(8, colW - 6); // 预留 符号+行号 槽位
-
-    Elements leftLines;
-    Elements rightLines;
-    auto     emptyCell = [&]() {
-        return text(" ") | color(theme_.hintColor);
-    };
-    auto makeCell = [&](const std::string& sign, int no, const std::string& txt, ftxui::Color c) {
-        std::string noStr = (no > 0) ? std::to_string(no) : std::string{};
-        return hbox({
-            text(sign) | color(c) | bold,
-            text(noStr) | color(theme_.hintColor) | size(WIDTH, EQUAL, 4),
-            text(" ") | color(theme_.hintColor),
-            text(trunc(txt, static_cast<size_t>(textW))) | color(c),
-        });
-    };
-
-    size_t i = 0;
-    while (i < diff.size()) {
-        if (diff[i].type == DiffLineType::Context) {
-            leftLines.push_back(makeCell(" ", diff[i].oldLineNo, diff[i].text, theme_.toolColor));
-            rightLines.push_back(makeCell(" ", diff[i].newLineNo, diff[i].text, theme_.toolColor));
-            ++i;
-            continue;
-        }
-        std::vector<const agentxx::util::DiffLine*> dels;
-        std::vector<const agentxx::util::DiffLine*> adds;
-        while (i < diff.size() && diff[i].type == DiffLineType::Delete) {
-            dels.push_back(&diff[i]);
-            ++i;
-        }
-        while (i < diff.size() && diff[i].type == DiffLineType::Add) {
-            adds.push_back(&diff[i]);
-            ++i;
-        }
-        const size_t maxk = std::max(dels.size(), adds.size());
-        for (size_t k = 0; k < maxk; ++k) {
-            leftLines.push_back(
-                (k < dels.size())
-                    ? makeCell("-", dels[k]->oldLineNo, dels[k]->text, theme_.systemColor)
-                    : emptyCell()
-            );
-            rightLines.push_back(
-                (k < adds.size())
-                    ? makeCell("+", adds[k]->newLineNo, adds[k]->text, theme_.promptColor)
-                    : emptyCell()
-            );
-        }
-    }
-
-    return hbox({
-        vbox(std::move(leftLines)) | flex,
-        separator(),
-        vbox(std::move(rightLines)) | flex,
-    });
-}
-
-ftxui::Element AgentTUI::renderStatusBar() {
-    std::string modelName = cachedModelName_;
-    if (modelName.empty()) {
-        modelName = "<none>";
-    }
-    auto modelInfo = hbox({
-        text(" model: ") | color(theme_.hintColor),
-        text(modelName) | color(theme_.accentColor) | bold,
-        text(" [F2] ") | color(theme_.hintColor),
-    });
-
-    size_t ctx    = 0;
-    size_t maxCtx = 0;
-    if (session_ && session_->contextStats) {
-        ctx    = session_->contextStats->contextTokens.load();
-        maxCtx = session_->contextStats->maxContextTokens.load();
-    }
-    const auto toK = [](size_t v) {
-        return fmt::format("{:.1f}k", static_cast<double>(v) / 1000.0);
-    };
-    std::string ctxText;
-    if (maxCtx > 0) {
-        const double pct = 100.0 * static_cast<double>(ctx) / static_cast<double>(maxCtx);
-        ctxText          = fmt::format(" {}/{} ({:.1f}%) ", toK(ctx), toK(maxCtx), pct);
-    } else {
-        ctxText = fmt::format(" {} ", toK(ctx));
-    }
-    auto ctxInfo = text(ctxText) | color(theme_.statusColor);
-
-    return hbox({
-        modelInfo,
-        filler(),
-        ctxInfo,
-    });
-}
-
-ftxui::Element AgentTUI::renderPermissionOverlay() {
-    const auto& req = pendingPermission_.value();
-    return vbox({
-               text(" Permission Request ") | bold | inverted,
-               separator(),
-               hbox({text(" Tool    : ") | bold, text(req.toolName)}),
-               hbox({text(" Category: ") | bold, text(req.category)}),
-               hbox({text(" Target  : ") | bold, text(req.target)}),
-               separator(),
-               text(" [y] Allow  [n/Esc] Deny ") | center,
-           })
-           | border | size(WIDTH, LESS_THAN, 60) | color(theme_.systemColor);
-}
-
-ftxui::Element AgentTUI::renderModelSelectorOverlay() {
-    Elements items;
-    items.push_back(text(" Select Model ") | bold | inverted);
-    items.push_back(separator());
-    if (modelNames_.empty()) {
-        items.push_back(text(" (no models available) ") | dim);
-    }
-    for (size_t i = 0; i < modelNames_.size(); ++i) {
-        auto entry = text(" " + modelNames_[i] + " ");
-        if (static_cast<int>(i) == selectedModelIndex_) {
-            entry = entry | bgcolor(theme_.buttonActiveBgColor)
-                    | color(theme_.buttonActiveTextColor) | bold;
-        } else {
-            entry = entry | bgcolor(theme_.buttonBgColor) | color(theme_.buttonTextColor);
-        }
-        items.push_back(entry);
-    }
-    items.push_back(separator());
-    items.push_back(text(" [Up/Down] Move  [Enter] Select  [Esc] Cancel ") | center | dim);
-    return vbox(std::move(items)) | border | size(WIDTH, LESS_THAN, 50) | color(theme_.accentColor);
-}
-
-ftxui::Element AgentTUI::renderSidebar() {
-    // tab 栏: 每个 tab 标题经 reflect 记录渲染区域, 供鼠标点击检测
-    tabBoxes_.assign(sidebarTabs_.size(), ftxui::Box{});
-    Elements tabs;
-    for (size_t i = 0; i < sidebarTabs_.size(); ++i) {
-        auto label = text(" " + sidebarTabs_[i].title + " ");
-        if (static_cast<int>(i) == activeTabIndex_) {
-            label = label | bgcolor(theme_.buttonActiveBgColor)
-                    | color(theme_.buttonActiveTextColor) | bold;
-        } else {
-            label = label | bgcolor(theme_.buttonBgColor) | color(theme_.buttonTextColor);
-        }
-        tabs.push_back(label | reflect(tabBoxes_[i]));
-    }
-    auto tabBar = hbox(std::move(tabs)) | xframe;
-
-    Element content = text(" ");
-    if (activeTabIndex_ >= 0 && activeTabIndex_ < static_cast<int>(sidebarTabs_.size())) {
-        content = sidebarTabs_[activeTabIndex_].render();
-    }
-
-    return vbox({
-               tabBar,
-               separator(),
-               content | flex | vscroll_indicator | yframe,
-           })
-           | size(WIDTH, LESS_THAN, 56) | size(WIDTH, GREATER_THAN, 28) | border;
-}
-
-ftxui::Element AgentTUI::renderLogWindow() {
-    auto     lines = logSink_ ? logSink_->snapshot() : std::vector<TUILogSink::Line>{};
-    Elements elements;
-    for (const auto& line : lines) {
-        ftxui::Color c = theme_.assistantColor;
-        std::string  prefix;
-        switch (line.level) {
-            case agentxx::util::LogLevel::Debug:
-                c      = theme_.hintColor;
-                prefix = "[D] ";
-                break;
-            case agentxx::util::LogLevel::Info:
-                c      = theme_.statusColor;
-                prefix = "[I] ";
-                break;
-            case agentxx::util::LogLevel::Warn:
-                c      = theme_.thinkingColor;
-                prefix = "[W] ";
-                break;
-            case agentxx::util::LogLevel::Error:
-                c      = theme_.systemColor;
-                prefix = "[E] ";
-                break;
-            case agentxx::util::LogLevel::Out:
-                c      = theme_.assistantColor;
-                prefix = "";
-                break;
-        }
-        elements.push_back(paragraph(prefix + line.text) | color(c));
-    }
-    if (elements.empty()) {
-        return text(" (no logs) ") | dim;
-    }
-    int last = static_cast<int>(elements.size()) - 1;
-    if (logStickToBottom_ || logFocusIndex_ < 0) {
-        logFocusIndex_ = last;
-    }
-    logFocusIndex_           = std::clamp(logFocusIndex_, 0, last);
-    elements[logFocusIndex_] = elements[logFocusIndex_] | focus;
-    return vbox(std::move(elements));
-}
-
-void AgentTUI::addSidebarTab(
-    const std::string&              id,
-    const std::string&              title,
-    std::function<ftxui::Element()> render
-) {
-    for (auto& tab : sidebarTabs_) {
-        if (tab.id == id) {
-            tab.title  = title;
-            tab.render = std::move(render);
-            return;
-        }
-    }
-    sidebarTabs_.push_back(SidebarTab{id, title, std::move(render)});
-    activeTabIndex_ = static_cast<int>(sidebarTabs_.size()) - 1;
-}
-
-void AgentTUI::removeSidebarTab(const std::string& id) {
-    for (size_t i = 0; i < sidebarTabs_.size(); ++i) {
-        if (sidebarTabs_[i].id == id) {
-            sidebarTabs_.erase(sidebarTabs_.begin() + i);
-            if (activeTabIndex_ >= static_cast<int>(sidebarTabs_.size())) {
-                activeTabIndex_ = static_cast<int>(sidebarTabs_.size()) - 1;
-            }
-            return;
-        }
-    }
-}
-
-bool AgentTUI::hasSidebarTab(const std::string& id) const {
-    for (const auto& tab : sidebarTabs_) {
-        if (tab.id == id) {
-            return true;
-        }
-    }
-    return false;
-}
-
-void AgentTUI::toggleLogWindow() {
-    if (hasSidebarTab(kLogTabId)) {
-        removeSidebarTab(kLogTabId);
-    } else {
-        addSidebarTab(kLogTabId, "Logs", [this]() {
-            return renderLogWindow();
-        });
-    }
-}
-
-bool AgentTUI::handleSidebarMouse(const ftxui::Mouse& mouse) {
-    for (size_t i = 0; i < sidebarTabs_.size() && i < tabBoxes_.size(); ++i) {
-        if (false == tabBoxes_[i].Contain(mouse.x, mouse.y)) {
-            continue;
-        }
-        if (mouse.button == Mouse::Left && mouse.motion == Mouse::Released) {
-            // 左键点击: 切换到该 tab
-            activeTabIndex_ = static_cast<int>(i);
-            return true;
-        }
-        if (mouse.button == Mouse::Right && mouse.motion == Mouse::Released) {
-            // 右键点击: 关闭该 tab
-            removeSidebarTab(sidebarTabs_[i].id);
-            return true;
-        }
-    }
-    return false;
-}
-
-bool AgentTUI::handleCollapsibleMouse(const ftxui::Mouse& mouse) {
-    if (mouse.button != Mouse::Left || mouse.motion != Mouse::Released) {
-        return false;
-    }
-    for (size_t k = 0; k < collapsibleBoxes_.size() && k < collapsibleMsgIndices_.size(); ++k) {
-        if (false == collapsibleBoxes_[k].Contain(mouse.x, mouse.y)) {
-            continue;
-        }
-        const size_t mi = collapsibleMsgIndices_[k];
-        if (mi < messages_.size()) {
-            messages_[mi].collapsed = !messages_[mi].collapsed;
-            return true;
-        }
-    }
-    return false;
-}
-
-void AgentTUI::openModelSelector() {
-    modelNames_.clear();
-    selectedModelIndex_ = 0;
-    if (agentContext_ && agentContext_->modelRegistry) {
-        modelNames_ = agentContext_->modelRegistry->listModelNames();
-        for (size_t i = 0; i < modelNames_.size(); ++i) {
-            if (modelNames_[i] == cachedModelName_) {
-                selectedModelIndex_ = static_cast<int>(i);
-                break;
-            }
-        }
-    }
-    showModelSelector_ = true;
-}
-
-void AgentTUI::confirmModelSelection() {
-    if (selectedModelIndex_ >= 0 && selectedModelIndex_ < static_cast<int>(modelNames_.size())) {
-        cachedModelName_ = modelNames_[selectedModelIndex_];
-        if (session_) {
-            session_->setModelName(cachedModelName_);
-        }
-    }
-    showModelSelector_ = false;
-}
-
 void AgentTUI::cancelCurrentRun() {
     if (cancelCallback_) {
-        // 远程模式: 路由到 server (发送 cancel 消息)
         cancelCallback_();
     } else if (session_) {
         auto token = session_->getCancelToken();
@@ -1091,7 +509,6 @@ asio::awaitable<neograph::json> AgentTUI::handleInterrupt(
     const std::string& interruptValue,
     const std::string& interruptArgJson
 ) {
-    // 解析中断参数
     auto argOpt
         = agentxx::middleware::InterruptHandleArg::fromJson(neograph::json::parse(interruptArgJson)
         );
@@ -1100,7 +517,6 @@ asio::awaitable<neograph::json> AgentTUI::handleInterrupt(
     }
     const auto& handleArg = argOpt.value();
 
-    // 显示中断通知
     {
         std::lock_guard<std::mutex> lock(mutex_);
         std::string msg = "Interrupted at: " + interruptNode + "\nValue: " + interruptValue;
@@ -1195,34 +611,4 @@ asio::awaitable<std::optional<std::string>> AgentTUI::getInput() {
         co_return std::nullopt;
     }
     co_return std::optional<std::string>(std::move(line));
-}
-
-void TUILogSink::onLog(agentxx::util::LogLevel level, const std::string& message) {
-    std::function<void()> cb;
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        lines_.push_back(Line{level, message});
-        while (lines_.size() > maxLines_) {
-            lines_.pop_front();
-        }
-        cb = onNewLog_;
-    }
-    if (cb) {
-        cb();
-    }
-}
-
-std::vector<TUILogSink::Line> TUILogSink::snapshot() const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return {lines_.begin(), lines_.end()};
-}
-
-void TUILogSink::setOnNewLog(std::function<void()> cb) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    onNewLog_ = std::move(cb);
-}
-
-void TUILogSink::clear() {
-    std::lock_guard<std::mutex> lock(mutex_);
-    lines_.clear();
 }
