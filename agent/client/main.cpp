@@ -506,72 +506,25 @@ void runTui(agentxx::agent::DeepAgent& agent) {
 
 // ======================== 远程客户端 (连接 deepagent WS 服务) ========================
 
-/// 建立 WS 连接并包裹为 RemoteClientAgentIO; 失败返回 nullptr
-static asio::awaitable<std::shared_ptr<agentxx::agent::remote::RemoteClientAgentIO>>
-makeRemoteClient(
-    asio::any_io_executor                    ex,
-    const std::string&                       url,
-    const std::string&                       token,
-    std::shared_ptr<agentxx::agent::AgentIOBase> io
-) {
-    agentxx::util::WsClientConfig wsCfg;
-    // recv 超时用于检测 server 断线 (心跳 20s, server 回 pong 重置)
-    wsCfg.recvTimeout = std::chrono::seconds{60};
-    auto client = co_await agentxx::util::wsConnect(ex, url, {}, wsCfg);
-    if (!client) {
-        XX_LOGE("[remote] connect failed: {}", client.error());
-        co_return nullptr;
-    }
-    auto transport = std::make_unique<agentxx::agent::remote::ClientWsTransport>(
-        std::move(client.value())
-    );
-    co_return std::make_shared<agentxx::agent::remote::RemoteClientAgentIO>(
-        ex,
-        std::move(transport),
-        std::move(io),
-        agentxx::agent::remote::RemoteClientAgentIO::Config{}
-    );
-}
-
 asio::awaitable<void> runRemoteCliAsync(std::string url, std::string token, std::string model) {
-    auto              ex       = co_await asio::this_coro::executor;
-    const std::string threadId = "session";
-    auto              io       = std::make_shared<AgentStdIO>();
+    auto ex = co_await asio::this_coro::executor;
+    auto io = std::make_shared<AgentStdIO>();
 
-    auto remote = co_await makeRemoteClient(ex, url, token, io);
-    if (!remote) {
-        co_return;
-    }
-    bool ok = co_await remote->start(threadId, token);
-    if (!ok) {
-        XX_LOGE("[remote] handshake/auth failed");
-        co_return;
-    }
+    agentxx::agent::remote::RemoteClientAgentIO::Config cfg;
+    agentxx::util::WsClientConfig                       wsCfg;
+    wsCfg.recvTimeout = std::chrono::seconds{60};
 
-    XX_OUT("======= Agentxx Remote Client (CLI) =======");
-    std::cout << ">>> " << std::flush;
-    bool first = true;
-    for (;;) {
-        auto inputOpt = co_await io->getInput();
-        if (!inputOpt.has_value()) {
-            break;
-        }
-        auto input = std::move(inputOpt.value());
-        if (!input.empty()) {
-            remote->sendUserInput(threadId, input, first, model);
-            first = false;
-            try {
-                auto r = co_await remote->awaitTurnResult();
-                if (r.hasError) {
-                    XX_LOGW("[remote] turn error: {}", r.errorMessage);
-                }
-            } catch (const std::exception& e) {
-                XX_LOGW("[remote] disconnected: {}", e.what());
-                break;
-            }
-        }
-        std::cout << "\n\n>>> " << std::flush;
-    }
+    auto remote = std::make_shared<agentxx::agent::remote::RemoteClientAgentIO>(
+        ex,
+        io,
+        std::move(url),
+        std::move(token),
+        cfg,
+        wsCfg
+    );
+
+    XX_OUT("======= Agentxx Remote Client (CLI, auto-reconnect) =======");
+    co_await remote->runSession("session", model);
     co_await remote->shutdown();
 }
 
@@ -588,44 +541,28 @@ asio::awaitable<void> runRemoteTuiAsync(
     std::string                                  token,
     std::string                                  model
 ) {
-    auto              ex       = co_await asio::this_coro::executor;
-    const std::string threadId = "session";
+    auto ex = co_await asio::this_coro::executor;
 
     // 最小 AgentContext (仅供 TUI 渲染状态; 不启动本地引擎/MCP)
-    auto ctx           = std::make_shared<agentxx::agent::AgentContext>();
-    ctx->agentConfig   = config;
-    auto io            = std::make_shared<AgentTUI>(ex, ctx, threadId);
+    auto ctx         = std::make_shared<agentxx::agent::AgentContext>();
+    ctx->agentConfig = config;
+    auto io          = std::make_shared<AgentTUI>(ex, ctx, "session");
     io->start();
 
-    auto remote = co_await makeRemoteClient(ex, url, token, io);
-    if (!remote) {
-        io->stop();
-        co_return;
-    }
-    bool ok = co_await remote->start(threadId, token);
-    if (!ok) {
-        XX_LOGE("[remote] handshake/auth failed");
-        io->stop();
-        co_return;
-    }
+    agentxx::agent::remote::RemoteClientAgentIO::Config cfg;
+    agentxx::util::WsClientConfig                       wsCfg;
+    wsCfg.recvTimeout = std::chrono::seconds{60};
 
-    bool first = true;
-    for (;;) {
-        auto inputOpt = co_await io->getInput();
-        if (!inputOpt.has_value()) {
-            break;
-        }
-        auto input = std::move(inputOpt.value());
-        if (!input.empty()) {
-            remote->sendUserInput(threadId, input, first, model);
-            first = false;
-            try {
-                co_await remote->awaitTurnResult();
-            } catch (const std::exception&) {
-                break; // 断线
-            }
-        }
-    }
+    auto remote = std::make_shared<agentxx::agent::remote::RemoteClientAgentIO>(
+        ex,
+        io,
+        std::move(url),
+        std::move(token),
+        cfg,
+        wsCfg
+    );
+
+    co_await remote->runSession("session", model);
     co_await remote->shutdown();
     io->stop();
 }

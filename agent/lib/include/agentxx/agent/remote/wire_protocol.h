@@ -248,9 +248,12 @@ inline std::optional<Delta> deltaMsgFromJson(const neograph::json& j) {
     return deltaFromJson(patched);
 }
 
-inline neograph::json makeSyncMsg(const SyncPayload& p) {
+inline neograph::json makeSyncMsg(const SyncPayload& p, uint64_t deltaSeq = 0) {
     neograph::json j = syncToJson(p);
     j["type"]        = MsgType::SyncMsg;
+    if (deltaSeq > 0) {
+        j["delta_seq"] = deltaSeq;
+    }
     return j;
 }
 
