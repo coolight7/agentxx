@@ -82,7 +82,7 @@ void AgentTUI::start() {
             if (pendingPermission_) {
                 indicator = text(" ! ") | bgcolor(Color::Red) | color(Color::White) | bold | blink;
             } else if (isStreaming_) {
-                indicator = text("   ") | bgcolor(theme_.accentColor) | blink;
+                indicator = text(" \xe2\x97\x8f ") | color(theme_.accentColor) | bold;
             } else {
                 indicator = text(" > ") | color(theme_.promptColor) | bold;
             }
