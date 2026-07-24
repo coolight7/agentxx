@@ -107,7 +107,7 @@ asio::awaitable<std::string>
     size_t maxRetry = 0;
     {
         auto str    = tool->extra["maxRetry"];
-        auto result = std::from_chars(str.c_str(), str.c_str() + str.size(), maxRetry);
+        auto result = agentxx::util::parseNumberFromString(str, maxRetry);
         if (result.ec != std::errc{}) {
             maxRetry = 0;
         }

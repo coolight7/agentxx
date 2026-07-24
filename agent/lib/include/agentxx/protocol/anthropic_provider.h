@@ -2,6 +2,7 @@
 
 #include "agentxx/agent/config.h"
 #include "agentxx/util/http_client.h"
+#include "agentxx/util/string_util.h"
 #include "asio/awaitable.hpp"
 #include "asio/cancel_after.hpp"
 #include "asio/redirect_error.hpp"
@@ -230,7 +231,7 @@ private:
             int  retryAfter = -1;
             if (!raw.empty()) {
                 int seconds    = 0;
-                auto [ptr, ec] = std::from_chars(raw.data(), raw.data() + raw.size(), seconds);
+                auto [ptr, ec] = agentxx::util::parseNumberFromString(raw, seconds);
                 if (ec == std::errc{} && seconds >= 0) {
                     retryAfter = seconds;
                 }

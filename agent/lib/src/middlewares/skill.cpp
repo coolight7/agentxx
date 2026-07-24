@@ -44,10 +44,11 @@ asio::awaitable<std::pair<std::string, agentxx::middleware::_SkillMetadata>>
             = std::string{std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>()};
         stream.close();
         const auto yamlDelimiter = std::string_view{"---"};
-        auto       yamlStart     = filecontent.find(yamlDelimiter) + yamlDelimiter.size();
+        auto       yamlStart     = filecontent.find(yamlDelimiter);
         auto       yamlEnd       = filecontent.find(yamlDelimiter, yamlStart);
-        if (yamlStart >= 0 && yamlStart != filecontent.npos && yamlStart < yamlEnd
-            && yamlEnd < filecontent.size() && yamlEnd != filecontent.npos) {
+        if (yamlStart >= 0 && yamlStart != filecontent.npos && yamlEnd < filecontent.size()
+            && yamlEnd != filecontent.npos && yamlStart + yamlDelimiter.size() < yamlEnd) {
+            yamlStart += yamlDelimiter.size();
             // markdown
             data.mdText = filecontent.substr(yamlEnd + yamlDelimiter.size());
 
