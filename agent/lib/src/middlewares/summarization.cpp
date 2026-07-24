@@ -350,7 +350,7 @@ asio::awaitable<void>
     if (newMsgsJson.is_array() && false == newMsgsJson.empty()) {
         in.state.overwrite("messages", std::move(newMsgsJson));
         if (agentCtxPtr->agentConfig->logPrintSummarizationResultTokenCount) {
-            fmt::println(
+            XX_OUT(
                 R"_(
 ┏━━━━━━ Summary ━━━━━━┓
 ┣━ MAX Token Limit: {}
@@ -367,7 +367,7 @@ asio::awaitable<void>
         }
     } else {
         if (agentCtxPtr->agentConfig->logPrintSummarizationResultTokenCount) {
-            fmt::println(
+            XX_OUT(
                 R"_(
 ┏━━━━━━ Summary ━━━━━━┓
 ┣━ MAX Token Limit: {}
