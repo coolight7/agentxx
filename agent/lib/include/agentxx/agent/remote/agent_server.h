@@ -1,11 +1,14 @@
 #pragma once
 
 #include "agentxx/agent/deepagent.h"
+#include "agentxx/agent/remote/session_controller.h"
 #include "agentxx/util/http_server.h"
 #include "asio/any_io_executor.hpp"
 #include "asio/awaitable.hpp"
 #include <chrono>
+#include <map>
 #include <memory>
+#include <mutex>
 #include <string>
 
 namespace agentxx {
@@ -14,8 +17,9 @@ namespace remote {
 
 /// DeepAgent WS 服务
 /// - 单 io_context/单线程多协程: 复用 DeepAgent.ioCtx, 经 HttpServer::startAsync 启动
-/// - 每个 WS 连接 -> 一个 RemoteServerAgentIO -> 驱动对话轮次
-/// - 安全: 默认仅监听 127.0.0.1; 强制 token 鉴权 (未提供则自动生成); 可选 wss
+/// - 每个 threadId 一个 SessionController (与连接解耦, 支持断线 grace 重挂 + 增量重放)
+/// - 每个 WS 连接 -> 一个 RemoteServerAgentIO (瘦 WS 泵) 绑定到 SessionController
+/// - 安全: 默认仅监听 127.0.0.1; 强制 token 鉴权; 配置 SSL 证书则启用 wss
 class AgentServer {
 public:
 
@@ -24,7 +28,9 @@ public:
         std::string              wsPath = "/agent";
         std::string              token;                       // 空则自动生成
         std::chrono::seconds     interruptTimeout{300};
-        std::chrono::seconds     authTimeout{15};
+        std::chrono::seconds     permissionTimeout{300};
+        std::chrono::seconds     gracePeriod{30};             // 断线重挂宽限期
+        size_t                   deltaBufferCap = 4096;
     };
 
     AgentServer(std::shared_ptr<DeepAgent> agent, Config config);
@@ -52,10 +58,22 @@ public:
 private:
 
     asio::awaitable<void> handleWs(util::HttpServer::WsStream& ws);
+    asio::awaitable<void> handleWss(util::HttpServer::WssStream& ws);
 
-    std::shared_ptr<DeepAgent>      agent_;
-    Config                          config_;
+    /// 模板: 在已升级的 WS stream 上建立连接泵并绑定 SessionController
+    template<typename WsStream>
+    asio::awaitable<void> serveConnection(WsStream& ws);
+
+    /// 取/建指定 threadId 的 SessionController (并启动其驱动循环)
+    std::shared_ptr<SessionController> getOrCreateController(const std::string& threadId);
+
+    std::shared_ptr<DeepAgent>        agent_;
+    Config                            config_;
     std::unique_ptr<util::HttpServer> http_;
+    asio::any_io_executor             ex_;
+
+    std::mutex                                                  controllersMutex_;
+    std::map<std::string, std::shared_ptr<SessionController>>   controllers_;
 };
 
 } // namespace remote

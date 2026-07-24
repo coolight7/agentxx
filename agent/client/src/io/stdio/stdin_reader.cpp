@@ -33,11 +33,10 @@ StdinReader::StdinReader(asio::any_io_executor ex) :
 }
 
 StdinReader& StdinReader::instance(asio::any_io_executor ex) {
-    static std::shared_ptr<StdinReader> inst;
-    static std::once_flag               flag;
-    std::call_once(flag, [&]() {
-        inst = std::shared_ptr<StdinReader>(new StdinReader{ex});
-    });
+    // 有意泄漏单例 (leaky singleton): 其 channel_ 绑定到调用方的 io_context,
+    // 若用 static shared_ptr 会在程序退出时(io_context 已析构后)析构 channel -> UAF.
+    // 泄漏后由 OS 在进程退出时回收, 读取线程随进程终止, 避免静态析构顺序问题.
+    static StdinReader* inst = new StdinReader{ex};
     return *inst;
 }
 

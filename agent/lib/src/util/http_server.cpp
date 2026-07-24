@@ -322,8 +322,16 @@ asio::awaitable<void> HttpServer::acceptLoopAsync() {
 
         activeConnections_.fetch_add(1, std::memory_order_relaxed);
 
-        auto stream = std::make_shared<boost::beast::tcp_stream>(std::move(socket));
-        asio::co_spawn(executor, serveTcp(std::move(stream)), asio::detached);
+        if (sslCtx_) {
+            auto sslStream = std::make_shared<boost::beast::ssl_stream<boost::beast::tcp_stream>>(
+                boost::beast::tcp_stream(std::move(socket)),
+                *sslCtx_
+            );
+            asio::co_spawn(executor, serveSsl(std::move(sslStream)), asio::detached);
+        } else {
+            auto stream = std::make_shared<boost::beast::tcp_stream>(std::move(socket));
+            asio::co_spawn(executor, serveTcp(std::move(stream)), asio::detached);
+        }
     }
     co_return;
 }
