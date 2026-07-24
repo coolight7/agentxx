@@ -9,6 +9,8 @@
 #include "asio/steady_timer.hpp"
 #include <atomic>
 #include <chrono>
+#include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -33,7 +35,7 @@ public:
     };
 
     struct Config {
-        std::chrono::seconds authTimeout       = std::chrono::seconds{15};
+        std::chrono::milliseconds authTimeout       = std::chrono::seconds{15};
         std::chrono::seconds heartbeatInterval = std::chrono::seconds{20};
         std::chrono::milliseconds reconnectBackoff  = std::chrono::seconds{2};
         /// 最大重连次数; <=0 表示无限重连
@@ -90,6 +92,12 @@ public:
     void selectModel(const std::string& threadId, const std::string& model);
     void cancel(const std::string& threadId);
 
+    /// 设置上下文统计更新回调 (server 推送 context_stats 时调用; 供更新本地 TUI 显示)
+    using ContextStatsCallback = std::function<void(uint64_t contextTokens, uint64_t maxContextTokens)>;
+    void setContextStatsCallback(ContextStatsCallback cb) {
+        contextStatsCallback_ = std::move(cb);
+    }
+
     /// 停止读/写/心跳协程并关闭连接
     asio::awaitable<void> shutdown();
 
@@ -129,6 +137,9 @@ private:
     );
 
     asio::awaitable<bool> connect(const std::string& threadId, const std::string& token);
+
+    /// 单次连接会话: 启动协程 -> 握手 -> 输入泵 -> 关闭; 返回握手是否成功
+    asio::awaitable<bool> runOnce();
 
     asio::awaitable<std::optional<std::string>> waitInnerInput();
     asio::awaitable<bool>                       waitDisconnect();
@@ -171,6 +182,8 @@ private:
 
     std::atomic<bool> stopped_{false};
     std::atomic<bool> disconnected_{false};
+
+    ContextStatsCallback contextStatsCallback_;
 };
 
 } // namespace remote

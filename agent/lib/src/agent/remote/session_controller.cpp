@@ -130,6 +130,7 @@ asio::awaitable<void> SessionController::run() {
                 result.errorMessage,
                 result.interrupted
             ));
+            sendContextStats();
         } catch (const std::exception& e) {
             XX_LOGE("[session_ctrl] turn error: {}", e.what());
             pushToActive(makeTurnResult(config_.threadId, true, e.what(), false));
@@ -188,6 +189,9 @@ void SessionController::attach(
             conn->pushMessage(makeSyncMsg(buildFullSync(), curSeq));
         }
     }
+
+    // 同步当前上下文统计供客户端展示
+    sendContextStats();
 
     // 重连时重发挂起的中断请求 (如权限询问中断线重连)
     resendPendingInterrupts(conn);
@@ -295,6 +299,17 @@ SyncPayload SessionController::buildFullSync() {
 std::string SessionController::currentTailHash() {
     auto sess = session();
     return sess ? sess->chainHash.tailHex() : std::string{};
+}
+
+void SessionController::sendContextStats() {
+    auto sess = session();
+    if (!sess || !sess->contextStats) {
+        return;
+    }
+    pushToActive(makeContextStats(
+        sess->contextStats->contextTokens.load(std::memory_order_relaxed),
+        sess->contextStats->maxContextTokens.load(std::memory_order_relaxed)
+    ));
 }
 
 std::shared_ptr<Session> SessionController::session() {

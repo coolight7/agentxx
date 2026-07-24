@@ -2,10 +2,12 @@
 #include "agentxx-client/train/train.h"
 #include "agentxx-client/util/util.h"
 #include "agentxx/agent/remote/agent_server.h"
+#include "agentxx/agent/remote/channel_transport.h"
 #include "agentxx/agent/remote/remote_client_io.h"
 #include "agentxx/agent/remote/ws_transport.h"
 #include "agentxx/protocol/acp_server.h"
 #include "agentxx/util/ws_client.h"
+#include "asio/executor_work_guard.hpp"
 #include "yaml-cpp/yaml.h"
 #ifdef AGENTXX_ENABLE_CLIENT_TUI
 #include "agentxx-client/io/tui/agent_tui.h"
@@ -18,6 +20,7 @@
 #include <memory>
 #include <regex>
 #include <string>
+#include <thread>
 #include <vector>
 
 // ======================== .env 文件加载 ========================
@@ -504,6 +507,124 @@ void runTui(agentxx::agent::DeepAgent& agent) {
 }
 #endif
 
+// ======================== 本地统一模式 (进程内 ChannelTransport, 与远程同路径) ========================
+
+/// 建立进程内统一会话: 创建 channel 对 + 服务端协程 + 客户端; 返回客户端供调用方接线并 runSession
+static std::shared_ptr<agentxx::agent::remote::RemoteClientAgentIO> setupLocalUnified(
+    asio::any_io_executor                          clientEx,
+    std::shared_ptr<agentxx::agent::DeepAgent>     agent,
+    std::shared_ptr<agentxx::agent::AgentIOBase>   io
+) {
+    auto agentEx = agent->ioCtx->get_executor();
+    auto pair    = agentxx::agent::remote::ChannelTransport::makePair(clientEx, agentEx);
+    auto clientTransport = std::move(pair.first);
+    auto serverTransport = std::move(pair.second);
+
+    // 进程内可信连接: 关闭鉴权
+    agentxx::agent::remote::AgentServer::Config srvCfg;
+    srvCfg.autoGenerateToken = false;
+    srvCfg.token             = "";
+    auto server = std::make_shared<agentxx::agent::remote::AgentServer>(agent, srvCfg);
+
+    // 服务端在 agent 的 io_context 上: init -> 启动 subagent supervisor -> 服务该传输
+    asio::co_spawn(
+        *agent->ioCtx,
+        [agent, server, st = std::move(serverTransport)]() mutable -> asio::awaitable<void> {
+            co_await agent->init();
+            agentxx::middleware::SubagentSupervisor supervisor{agent->agentContext};
+            co_await supervisor.start();
+            co_await server->serveTransport(std::move(st));
+            co_return;
+        },
+        asio::detached
+    );
+
+    agentxx::agent::remote::RemoteClientAgentIO::Config cliCfg;
+    return std::make_shared<agentxx::agent::remote::RemoteClientAgentIO>(
+        clientEx,
+        std::move(clientTransport),
+        std::move(io),
+        cliCfg
+    );
+}
+
+/// 在独立线程运行 agent 的 io_context, 主线程运行客户端会话
+template<typename Coro>
+static void runLocalUnifiedMain(std::shared_ptr<agentxx::agent::DeepAgent> agent, Coro coro) {
+    auto work = asio::make_work_guard(*agent->ioCtx);
+    std::thread agentThread([&agent]() {
+        agent->ioCtx->run();
+    });
+
+    asio::io_context clientCtx;
+    asio::co_spawn(clientCtx, std::move(coro), asio::detached);
+    clientCtx.run();
+
+    work.reset();
+    agent->ioCtx->stop();
+    if (agentThread.joinable()) {
+        agentThread.join();
+    }
+}
+
+asio::awaitable<void> runLocalCliUnifiedAsync(std::shared_ptr<agentxx::agent::DeepAgent> agent) {
+    auto clientEx = co_await asio::this_coro::executor;
+    auto io       = std::make_shared<AgentStdIO>();
+    auto remote   = setupLocalUnified(clientEx, agent, io);
+    XX_OUT("======= Agentxx Client (CLI, in-process unified) =======");
+    co_await remote->runSession("session", "");
+    co_await remote->shutdown();
+}
+
+void runLocalCliUnified(std::shared_ptr<agentxx::agent::DeepAgent> agent) {
+    runLocalUnifiedMain(agent, runLocalCliUnifiedAsync(agent));
+}
+
+#ifdef AGENTXX_ENABLE_CLIENT_TUI
+asio::awaitable<void> runLocalTuiUnifiedAsync(
+    std::shared_ptr<agentxx::agent::DeepAgent>     agent,
+    std::shared_ptr<agentxx::agent::AgentConfig>   config
+) {
+    auto              clientEx = co_await asio::this_coro::executor;
+    const std::string threadId = "session";
+
+    // 最小 AgentContext 供 TUI 渲染 (会话实际状态在 server 侧, 经 delta/sync/统计推送)
+    auto ctx           = std::make_shared<agentxx::agent::AgentContext>();
+    ctx->agentConfig   = config;
+    auto tui           = std::make_shared<AgentTUI>(clientEx, ctx, threadId);
+    tui->start();
+
+    auto remote = setupLocalUnified(clientEx, agent, tui);
+
+    // 取消键路由到远程 (发送 cancel 消息)
+    std::weak_ptr<agentxx::agent::remote::RemoteClientAgentIO> weakRemote = remote;
+    tui->setCancelCallback([weakRemote, threadId]() {
+        if (auto r = weakRemote.lock()) {
+            r->cancel(threadId);
+        }
+    });
+    // 远程上下文统计 -> 更新 TUI 会话显示
+    remote->setContextStatsCallback([ctx, threadId](uint64_t c, uint64_t m) {
+        auto s = ctx->getSession(threadId);
+        if (s && s->contextStats) {
+            s->contextStats->contextTokens.store(c, std::memory_order_relaxed);
+            s->contextStats->maxContextTokens.store(m, std::memory_order_relaxed);
+        }
+    });
+
+    co_await remote->runSession(threadId, "");
+    co_await remote->shutdown();
+    tui->stop();
+}
+
+void runLocalTuiUnified(
+    std::shared_ptr<agentxx::agent::DeepAgent>   agent,
+    std::shared_ptr<agentxx::agent::AgentConfig> config
+) {
+    runLocalUnifiedMain(agent, runLocalTuiUnifiedAsync(agent, config));
+}
+#endif
+
 // ======================== 远程客户端 (连接 deepagent WS 服务) ========================
 
 asio::awaitable<void> runRemoteCliAsync(std::string url, std::string token, std::string model) {
@@ -839,8 +960,8 @@ int main(int argn, char** argv) {
         config->logPrintMessagesBeforeLLM              = true;
         config->logPrintMessagesBeforeLLMWithSystemMsg = false;
         config->logPrintSummarizationResultTokenCount  = true;
-        auto agent                                     = agentxx::agent::DeepAgent{config};
-        runTui(agent);
+        auto agent = std::make_shared<agentxx::agent::DeepAgent>(config);
+        runLocalTuiUnified(agent, config);
 #else
         XX_LOGE(
             R"(TUI is not support! Please set `AGENTXX_ENABLE_CLIENT_TUI=1` and recomplie agentxx_cli)"
@@ -850,13 +971,12 @@ int main(int argn, char** argv) {
     }
 
     {
-        // 默认 CLI 交互模式
-        XX_OUT("======= Agentxx Client =======");
+        // 默认 CLI 交互模式 (进程内统一路径)
         config->logPringToolcall                      = true;
         config->logPrintMessagesBeforeLLM             = true;
         config->logPrintSummarizationResultTokenCount = true;
-        auto agent                                    = agentxx::agent::DeepAgent{config};
-        runCli(agent);
+        auto agent = std::make_shared<agentxx::agent::DeepAgent>(config);
+        runLocalCliUnified(agent);
     }
     return 0;
 }

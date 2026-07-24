@@ -8,7 +8,9 @@
 #include <atomic>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace agentxx {
@@ -75,7 +77,13 @@ private:
     asio::awaitable<void> readLoop();
     asio::awaitable<void> writeLoop();
 
+    /// 机会性合并相邻同类 token delta 以降低 WS 帧数 (不增加延迟: 仅合并已入队的)
+    /// - 返回 {合并后的消息, 被取出但不可合并的剩余消息(留待下次发送)}
+    std::pair<std::string, std::optional<std::string>> coalesceTokenDeltas(std::string first);
+
     void enqueue(neograph::json msg);
+    /// 入队关闭哨兵(空串): 写协程发完已入队消息后关闭传输 (用于鉴权失败等需冲刷响应的场景)
+    void enqueueCloseSentinel();
     void requestStop();
     void onDisconnected();
 

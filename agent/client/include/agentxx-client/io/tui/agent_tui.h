@@ -142,6 +142,9 @@ private:
     std::shared_ptr<BoolChannel> permissionChannel_;
     std::shared_ptr<TUILogSink>  logSink_;
 
+    /// 远程模式取消回调 (未设置则用本地 cancelToken)
+    std::function<void()> cancelCallback_;
+
     /// 日志窗口 tab 的固定 id
     static constexpr const char* kLogTabId = "xx_logs";
 
@@ -203,6 +206,12 @@ public:
 
     void start();
     void stop();
+
+    /// 设置取消当前轮次的回调 (远程模式下路由为发送 cancel 消息到 server)
+    /// - 未设置时使用本地 session cancelToken
+    void setCancelCallback(std::function<void()> cb) {
+        cancelCallback_ = std::move(cb);
+    }
 
     void onDelta(const agentxx::agent::Delta& delta) override;
     void onSync(const agentxx::agent::SyncPayload& payload) override;
