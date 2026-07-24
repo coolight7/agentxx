@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cassert>
 #include <cstddef>
 #include <list>
 #include <optional>
@@ -27,7 +28,9 @@ private:
 public:
 
     explicit LruCache(size_t capacity) :
-        capacity_(capacity) {}
+        capacity_(capacity) {
+        assert(capacity_ > 0);
+    }
 
     [[nodiscard]] std::optional<V> get(const K& key) {
         auto it = map_.find(key);
