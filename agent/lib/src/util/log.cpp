@@ -20,40 +20,43 @@ LogDispatcher& LogDispatcher::instance() {
 
 void LogDispatcher::addSink(std::shared_ptr<LogSink> sink) {
     std::lock_guard<std::mutex> lock(mutex_);
-    sinks_.push_back(std::move(sink));
+    auto cur  = sinks_.load(std::memory_order_acquire);
+    auto next = std::make_shared<SinkList>();
+    next->reserve(cur->size() + 1);
+    // 顺带清理已释放的 sink
+    for (const auto& wp : *cur) {
+        if (!wp.expired()) {
+            next->push_back(wp);
+        }
+    }
+    next->push_back(std::move(sink));
+    sinks_.store(std::move(next), std::memory_order_release);
 }
 
 void LogDispatcher::removeSink(const std::shared_ptr<LogSink>& sink) {
     std::lock_guard<std::mutex> lock(mutex_);
-    for (auto it = sinks_.begin(); it != sinks_.end();) {
-        auto sp = it->lock();
-        if (!sp || sp == sink) {
-            it = sinks_.erase(it);
-        } else {
-            ++it;
+    auto cur  = sinks_.load(std::memory_order_acquire);
+    auto next = std::make_shared<SinkList>();
+    next->reserve(cur->size());
+    for (const auto& wp : *cur) {
+        auto sp = wp.lock();
+        if (sp && sp != sink) {
+            next->push_back(wp);
         }
     }
+    sinks_.store(std::move(next), std::memory_order_release);
 }
 
 void LogDispatcher::dispatch(LogLevel level, const std::string& message) {
-    std::vector<std::shared_ptr<LogSink>> alive;
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        // 顺带清理已释放的 sink
-        for (auto it = sinks_.begin(); it != sinks_.end();) {
-            if (auto sp = it->lock()) {
-                alive.push_back(sp);
-                ++it;
-            } else {
-                it = sinks_.erase(it);
+    // 无锁加载快照 (copy-on-write); 多线程并发 dispatch 互不阻塞, 且不持锁回调 sink
+    auto snapshot = sinks_.load(std::memory_order_acquire);
+    for (const auto& wp : *snapshot) {
+        if (auto sp = wp.lock()) {
+            try {
+                sp->onLog(level, message);
+            } catch (...) {
+                // 忽略 sink 异常, 避免影响日志输出
             }
-        }
-    }
-    for (auto& sink : alive) {
-        try {
-            sink->onLog(level, message);
-        } catch (...) {
-            // 忽略 sink 异常, 避免影响日志输出
         }
     }
 }

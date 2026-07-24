@@ -40,6 +40,9 @@
 namespace asio = ::boost::asio;
 
 namespace agentxx {
+namespace util {
+class AsyncMutex;
+} // namespace util
 namespace server {
 
 // ---------------------------------------------------------------------------
@@ -244,7 +247,8 @@ private:
     std::thread stdioReaderThread_;
 #endif
     std::atomic<bool>                                            stdioRunning_{false};
-    std::mutex                                                   stdioWriteMutex_;
+    /// stdio 写序列化: 协程感知锁, 持锁跨越 co_await async_write 也不死锁 (见 AsyncMutex)
+    std::unique_ptr<util::AsyncMutex>                            stdioWriteMutex_;
     std::mutex                                                   pendingMutex_;
     std::unordered_map<int64_t, std::shared_ptr<PendingRequest>> pending_;
     boost::system::error_code                                    ignoreEc_;

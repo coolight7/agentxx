@@ -71,17 +71,20 @@ bool McpServer::isStopped() const {
 }
 
 void McpServer::addTool(McpToolDefinition def, ToolHandler handler) {
-    const auto name    = def.name;
+    const auto name = def.name;
+    std::unique_lock lock(toolsMutex_);
     toolsByName_[name] = ToolEntry{std::move(def), std::move(handler)};
     toolsListChanged_  = true;
 }
 
 void McpServer::removeTool(const std::string& name) {
+    std::unique_lock lock(toolsMutex_);
     toolsByName_.erase(name);
     toolsListChanged_ = true;
 }
 
 std::vector<McpToolDefinition> McpServer::listTools() const {
+    std::shared_lock lock(toolsMutex_);
     std::vector<McpToolDefinition> result;
     result.reserve(toolsByName_.size());
     for (const auto& [key, entry] : toolsByName_) {
@@ -91,17 +94,20 @@ std::vector<McpToolDefinition> McpServer::listTools() const {
 }
 
 void McpServer::addResource(McpResourceDefinition def, ResourceReader reader) {
-    const auto uri        = def.uri;
+    const auto uri = def.uri;
+    std::unique_lock lock(resourcesMutex_);
     resourcesByUri_[uri]  = ResourceEntry{std::move(def), std::move(reader)};
     resourcesListChanged_ = true;
 }
 
 void McpServer::removeResource(const std::string& uri) {
+    std::unique_lock lock(resourcesMutex_);
     resourcesByUri_.erase(uri);
     resourcesListChanged_ = true;
 }
 
 std::vector<McpResourceDefinition> McpServer::listResources() const {
+    std::shared_lock lock(resourcesMutex_);
     std::vector<McpResourceDefinition> result;
     result.reserve(resourcesByUri_.size());
     for (const auto& [key, entry] : resourcesByUri_) {
@@ -111,17 +117,20 @@ std::vector<McpResourceDefinition> McpServer::listResources() const {
 }
 
 void McpServer::addPrompt(McpPromptDefinition def, PromptHandler handler) {
-    const auto name      = def.name;
+    const auto name = def.name;
+    std::unique_lock lock(promptsMutex_);
     promptsByName_[name] = PromptEntry{std::move(def), std::move(handler)};
     promptsListChanged_  = true;
 }
 
 void McpServer::removePrompt(const std::string& name) {
+    std::unique_lock lock(promptsMutex_);
     promptsByName_.erase(name);
     promptsListChanged_ = true;
 }
 
 std::vector<McpPromptDefinition> McpServer::listPrompts() const {
+    std::shared_lock lock(promptsMutex_);
     std::vector<McpPromptDefinition> result;
     result.reserve(promptsByName_.size());
     for (const auto& [key, entry] : promptsByName_) {
