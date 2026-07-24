@@ -8,19 +8,27 @@
 #include <functional>
 #include <string>
 
-#define AGENTXX_CATCH_EXCEPTION_D(errInfo, code)           \
-    catch (const std::exception& e) {                      \
-        {code} errInfo = e.what();                         \
-    }                                                      \
-    catch (const boost::exception& e) {                    \
-        {code} errInfo = boost::diagnostic_information(e); \
-    }                                                      \
-    catch (...) {                                          \
-        code                                               \
-    }
-
 namespace agentxx {
 namespace util {
+
+template<typename T>
+T catchError(std::function<T()> func, std::function<T(std::string)> onError) {
+    std::string errmsg;
+    try {
+        return func();
+    } catch (const std::exception& e) {
+        // - 部分系统上，系统函数返回的
+        // 异常消息字符编码是系统环境的字符编码 (windows)，而非总是utf8，因此这里需要转换
+        errmsg = e.what();
+        agentxx::util::autoConvertToUtf8(errmsg);
+    } catch (const boost::exception& e) {
+        errmsg = boost::diagnostic_information(e);
+        agentxx::util::autoConvertToUtf8(errmsg);
+    } catch (...) {
+        errmsg = "unknown exception";
+    }
+    return onError(std::move(errmsg));
+}
 
 template<typename T>
 asio::awaitable<T> catchErrorAsync(
