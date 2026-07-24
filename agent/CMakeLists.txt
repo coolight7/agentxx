@@ -33,7 +33,6 @@ option(AGENTXX_ENABLE_VECTORSCAN "Add VectorScan for regex support. Use [AGENTXX
 option(AGENTXX_ENABLE_HYPERSCAN "Add HyperScan for regex support. Use [AGENTXX_ENABLE_VECTORSCAN] or std::regex if disable." OFF)
 option(AGENTXX_ENABLE_CODEGRAPH "Add CodeGraph-CPP for code analysis." ON)
 option(AGENTXX_ENABLE_BOOST_PROCESS "Use Boost.process for execute command toolcall." ON)
-option(AGENTXX_ENABLE_CLIENT_TUI "Build TUI for agentxx-cli." ON)
 
 # 仅用于指示是否编译用于调试用途，不代表真实编译类型
 # - [XX_IS_DEBUG_D] == 1 时，启用大部分调试日志等信息，因此 profile 之类注重
@@ -335,7 +334,6 @@ set(_AGENTXX_COMMON_CMAKE_ARGS
     -DAGENTXX_ENABLE_HYPERSCAN=${AGENTXX_ENABLE_HYPERSCAN}
     -DAGENTXX_ENABLE_CODEGRAPH=${AGENTXX_ENABLE_CODEGRAPH}
     -DAGENTXX_ENABLE_BOOST_PROCESS=${AGENTXX_ENABLE_BOOST_PROCESS}
-    -DAGENTXX_ENABLE_CLIENT_TUI=${AGENTXX_ENABLE_CLIENT_TUI}
 
     "-DAGENTXX_EXEC_INSTALL_PREFIX=${AGENTXX_EXEC_INSTALL_PREFIX}"
     "-DAGENTXX_THIRD_PARTY_DIR=${AGENTXX_THIRD_PARTY_DIR}"
@@ -732,7 +730,7 @@ ExternalProject_Add(
   TEST_COMMAND ""
 )
 
-if (AGENTXX_ENABLE_CLIENT_TUI)
+if (AGENTXX_BUILD_CLIENT)
   # FTXUI
   ExternalProject_Add(
     ftxui_repo
@@ -807,9 +805,7 @@ if (AGENTXX_BUILD_CLIENT)
       ${_AGENTXX_COMMON_CMAKE_CACHE_ARGS}
     TEST_COMMAND ""
   )
-  if (AGENTXX_ENABLE_CLIENT_TUI)
-    add_dependencies(agentxx_client_repo ftxui_repo)
-  endif()
+  add_dependencies(agentxx_client_repo ftxui_repo)
 endif()
 if (AGENTXX_BUILD_TEST)
   ExternalProject_Add(
@@ -823,6 +819,7 @@ if (AGENTXX_BUILD_TEST)
     INSTALL_ALWAYS TRUE
     CMAKE_ARGS
       ${_AGENTXX_COMMON_CMAKE_ARGS}
+      -DAGENTXX_BUILD_CLIENT=${AGENTXX_BUILD_CLIENT}
     CMAKE_CACHE_ARGS
       ${_AGENTXX_COMMON_CMAKE_CACHE_ARGS}
     TEST_COMMAND ""

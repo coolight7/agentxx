@@ -27,20 +27,27 @@ file(GLOB test_SOURCES
 	CONFIGURE_DEPENDS
 	"*.cpp" "*.cc" "*.cxx"
 )
-set(AGENTXX_CLIENT_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../client/")
-file(GLOB_RECURSE client_SOURCES 
-	CONFIGURE_DEPENDS
-	"${AGENTXX_CLIENT_SOURCE_DIR}/src/*.cpp" "${AGENTXX_CLIENT_SOURCE_DIR}/src/*.cc" "${AGENTXX_CLIENT_SOURCE_DIR}/src/*.cxx"
-)
 target_sources(agentxx_test PRIVATE
 	${test_SOURCES}
-	${client_SOURCES}
 )
-
 target_include_directories(agentxx_test PRIVATE 
   "${CMAKE_CURRENT_SOURCE_DIR}"
-  "${AGENTXX_CLIENT_SOURCE_DIR}/include/"
 )
+
+if (AGENTXX_BUILD_CLIENT)
+  # build client test
+  set(AGENTXX_CLIENT_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../client/")
+  file(GLOB_RECURSE client_SOURCES 
+    CONFIGURE_DEPENDS
+    "${AGENTXX_CLIENT_SOURCE_DIR}/src/*.cpp" "${AGENTXX_CLIENT_SOURCE_DIR}/src/*.cc" "${AGENTXX_CLIENT_SOURCE_DIR}/src/*.cxx"
+  )
+  target_sources(agentxx_test PRIVATE
+    ${client_SOURCES}
+  )
+  target_include_directories(agentxx_test PRIVATE 
+    "${AGENTXX_CLIENT_SOURCE_DIR}/include/"
+  )
+endif()
 
 find_package(PkgConfig REQUIRED)
 
@@ -59,7 +66,7 @@ find_package(CURL REQUIRED)
 find_package(SQLite3 REQUIRED)
 find_package(html2md REQUIRED)
 find_package(Glob REQUIRED)
-if (AGENTXX_ENABLE_CLIENT_TUI)
+if (AGENTXX_BUILD_CLIENT)
   find_package(ftxui REQUIRED)
 endif()
 
@@ -94,9 +101,8 @@ if (AGENTXX_LINUX_IO_URING_SUPPORTED)
     PkgConfig::uring
   )
 endif()
-if (AGENTXX_ENABLE_CLIENT_TUI)
+if (AGENTXX_BUILD_CLIENT)
   target_link_libraries(agentxx_test PRIVATE ftxui::ftxui)
-  target_compile_definitions(agentxx_test PRIVATE AGENTXX_ENABLE_CLIENT_TUI)
 endif()
 
 if (XX_IS_MSVC_D)
