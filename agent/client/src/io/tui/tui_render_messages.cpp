@@ -1,6 +1,5 @@
 #include "agentxx-client/io/tui/agent_tui.h"
 #include "agentxx/util/string_util.h"
-#include "ftxui/screen/terminal.hpp"
 
 using namespace ftxui;
 
@@ -108,14 +107,7 @@ ftxui::Element AgentTUI::renderMessages() {
                             text(oneLinePreview(msg.toolResult)) | color(theme_.systemColor) | dim
                         );
                     } else if (isEditTool) {
-                        std::string path;
-                        try {
-                            path = neograph::json::parse(msg.text).value("path", std::string{});
-                        } catch (...) {
-                        }
-                        if (!path.empty()) {
-                            header.push_back(text("  " + path) | color(theme_.toolColor) | dim);
-                        }
+                        appendEditToolHeader(msg, header);
                     } else {
                         header.push_back(
                             text("  " + oneLinePreview(msg.toolResult)) | color(theme_.toolColor)
@@ -127,29 +119,7 @@ ftxui::Element AgentTUI::renderMessages() {
 
                 if (expanded) {
                     if (isEditTool) {
-                        std::string path;
-                        std::string oldStr;
-                        std::string newStr;
-                        try {
-                            auto args = neograph::json::parse(msg.text);
-                            path      = args.value("path", std::string{});
-                            oldStr    = args.value("old_str", std::string{});
-                            newStr    = args.value("new_str", std::string{});
-                        } catch (...) {
-                        }
-                        if (!path.empty()) {
-                            lines.push_back(hbox({
-                                text("  file: ") | color(theme_.hintColor),
-                                text(path) | color(theme_.toolColor),
-                            }));
-                        }
-                        lines.push_back(renderEditToolDiff(oldStr, newStr));
-                        if (msg.toolFinished && msg.toolHasError) {
-                            lines.push_back(hbox({
-                                text("  error: ") | color(theme_.systemColor),
-                                paragraph(msg.toolResult) | color(theme_.systemColor),
-                            }));
-                        }
+                        appendEditToolBody(msg, lines);
                     } else {
                         if (!msg.text.empty()) {
                             lines.push_back(hbox({
@@ -202,101 +172,4 @@ ftxui::Element AgentTUI::renderMessages() {
         });
     }
     return vbox(std::move(elements));
-}
-
-ftxui::Element AgentTUI::renderEditToolDiff(const std::string& oldStr, const std::string& newStr) {
-    using agentxx::util::DiffLineType;
-    auto diff = agentxx::util::computeLineDiff(oldStr, newStr);
-    if (diff.empty()) {
-        return text("  (no changes)") | color(theme_.hintColor);
-    }
-
-    const int  screenW    = ftxui::Terminal::Size().dimx;
-    const bool sideBySide = screenW >= 100;
-
-    auto trunc = [](const std::string& s, size_t maxChars) {
-        const auto idx = agentxx::util::findIndexByUtf8Length(s, maxChars);
-        if (idx > 0 && idx < s.size()) {
-            return s.substr(0, idx) + "...";
-        }
-        return s;
-    };
-
-    if (!sideBySide) {
-        Elements lines;
-        for (const auto& l : diff) {
-            ftxui::Color c      = theme_.toolColor;
-            std::string  prefix = " ";
-            if (l.type == DiffLineType::Add) {
-                c      = theme_.promptColor;
-                prefix = "+";
-            } else if (l.type == DiffLineType::Delete) {
-                c      = theme_.systemColor;
-                prefix = "-";
-            }
-            lines.push_back(hbox({
-                text(prefix) | color(c),
-                text(" ") | color(theme_.hintColor),
-                text(l.text) | color(c),
-            }));
-        }
-        return vbox(std::move(lines));
-    }
-
-    const int colW  = std::max(20, (screenW - 3) / 2);
-    const int textW = std::max(8, colW - 6);
-
-    Elements leftLines;
-    Elements rightLines;
-    auto     emptyCell = [&]() {
-        return text(" ") | color(theme_.hintColor);
-    };
-    auto makeCell = [&](const std::string& sign, int no, const std::string& txt, ftxui::Color c) {
-        std::string noStr = (no > 0) ? std::to_string(no) : std::string{};
-        return hbox({
-            text(sign) | color(c) | bold,
-            text(noStr) | color(theme_.hintColor) | size(WIDTH, EQUAL, 4),
-            text(" ") | color(theme_.hintColor),
-            text(trunc(txt, static_cast<size_t>(textW))) | color(c),
-        });
-    };
-
-    size_t i = 0;
-    while (i < diff.size()) {
-        if (diff[i].type == DiffLineType::Context) {
-            leftLines.push_back(makeCell(" ", diff[i].oldLineNo, diff[i].text, theme_.toolColor));
-            rightLines.push_back(makeCell(" ", diff[i].newLineNo, diff[i].text, theme_.toolColor));
-            ++i;
-            continue;
-        }
-        std::vector<const agentxx::util::DiffLine*> dels;
-        std::vector<const agentxx::util::DiffLine*> adds;
-        while (i < diff.size() && diff[i].type == DiffLineType::Delete) {
-            dels.push_back(&diff[i]);
-            ++i;
-        }
-        while (i < diff.size() && diff[i].type == DiffLineType::Add) {
-            adds.push_back(&diff[i]);
-            ++i;
-        }
-        const size_t maxk = std::max(dels.size(), adds.size());
-        for (size_t k = 0; k < maxk; ++k) {
-            leftLines.push_back(
-                (k < dels.size())
-                    ? makeCell("-", dels[k]->oldLineNo, dels[k]->text, theme_.systemColor)
-                    : emptyCell()
-            );
-            rightLines.push_back(
-                (k < adds.size())
-                    ? makeCell("+", adds[k]->newLineNo, adds[k]->text, theme_.promptColor)
-                    : emptyCell()
-            );
-        }
-    }
-
-    return hbox({
-        vbox(std::move(leftLines)) | flex,
-        separator(),
-        vbox(std::move(rightLines)) | flex,
-    });
 }

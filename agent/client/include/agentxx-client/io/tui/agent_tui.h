@@ -3,7 +3,6 @@
 #include "agentxx-client/io/tui/tui_theme.h"
 #include "agentxx/agent/agent_io.h"
 #include "agentxx/agent/context.h"
-#include "agentxx/util/diff_util.h"
 #include "agentxx/util/log.h"
 #include "asio/awaitable.hpp"
 #include "asio/experimental/concurrent_channel.hpp"
@@ -159,8 +158,12 @@ private:
 
     void           postRedraw();
     ftxui::Element renderMessages();
-    /// 特化渲染 filesystem_edit_text_file 的展开内容 (git diff 对比)
-    /// - 屏幕宽度足够时左右对比, 不足时单块内对比
+    /// 特化渲染 filesystem_edit_text_file (git diff 对比), 实现见 tui_render_edittool.cpp
+    /// - 折叠态: 在 header 追加文件路径预览
+    void           appendEditToolHeader(const Message& msg, ftxui::Elements& header);
+    /// - 展开态: 渲染文件路径 + diff 对比 + 错误
+    void           appendEditToolBody(const Message& msg, ftxui::Elements& lines);
+    /// - diff 对比块 (屏幕足够宽时左右对比, 不足时单块内对比)
     ftxui::Element renderEditToolDiff(const std::string& oldStr, const std::string& newStr);
     /// 当前可聚焦的消息块数量 (需在持有 mutex_ 时调用)
     int            focusBlockCount() const;
