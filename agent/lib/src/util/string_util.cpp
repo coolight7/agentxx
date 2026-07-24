@@ -24,7 +24,18 @@ const agentxx::util::IgnoreCaseMap<std::string> g_encoding_shift = {
 };
 const size_t defShortStringLength = 30;
 
-static const thread_local uchardet_t g_chardetHandle = uchardet_new();
+static const thread_local struct ChardetHolder {
+    uchardet_t handle;
+
+    ChardetHolder() :
+        handle(uchardet_new()) {}
+
+    ~ChardetHolder() {
+        if (handle) {
+            uchardet_delete(handle);
+        }
+    }
+} g_chardetHandle;
 
 // BOM 判断UTF16编码
 static std::string detectUtfBom(std::string_view str) {
@@ -144,14 +155,14 @@ std::tuple<bool, std::optional<std::string>> agentxx::util::autoConvertCharset(
     }
 
     // uchardet检测
-    uchardet_reset(g_chardetHandle);
-    int ret = uchardet_handle_data(g_chardetHandle, str.data(), str.size());
+    uchardet_reset(g_chardetHandle.handle);
+    int ret = uchardet_handle_data(g_chardetHandle.handle, str.data(), str.size());
     if (ret != 0) {
         return {false, std::nullopt};
     }
-    uchardet_data_end(g_chardetHandle);
+    uchardet_data_end(g_chardetHandle.handle);
 
-    auto n_candidates = uchardet_get_n_candidates(g_chardetHandle);
+    auto n_candidates = uchardet_get_n_candidates(g_chardetHandle.handle);
     if (n_candidates <= 0) {
         return {false, std::nullopt};
     }
@@ -160,7 +171,7 @@ std::tuple<bool, std::optional<std::string>> agentxx::util::autoConvertCharset(
     // }
     std::vector<std::string> detected_candidates;
     for (size_t i = 0; i < n_candidates; ++i) {
-        const char* enc = uchardet_get_encoding(g_chardetHandle, i);
+        const char* enc = uchardet_get_encoding(g_chardetHandle.handle, i);
         if (enc && std::strlen(enc) > 0) {
             detected_candidates.emplace_back(enc);
         }
