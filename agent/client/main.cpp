@@ -2,6 +2,7 @@
 #include "agentxx-client/io/tui/agent_tui.h"
 #include "agentxx-client/train/train.h"
 #include "agentxx-client/util/util.h"
+#include "agentxx/agent/model_registry.h"
 #include "agentxx/agent/remote/agent_server.h"
 #include "agentxx/agent/remote/channel_transport.h"
 #include "agentxx/agent/remote/remote_client_io.h"
@@ -486,6 +487,19 @@ asio::awaitable<void> runLocalTuiUnifiedAsync(
     // 最小 AgentContext 供 TUI 渲染 (会话实际状态在 server 侧, 经 delta/sync/统计推送)
     auto ctx         = std::make_shared<agentxx::agent::AgentContext>();
     ctx->agentConfig = config;
+    {
+        auto registry = std::make_shared<agentxx::agent::ModelProviderRegistry>();
+        for (const auto& [name, mc] : config->availableModels) {
+            registry->registerModel(name, mc);
+        }
+        if (config->availableModels.empty()) {
+            registry->registerModel(config->model.modelName, config->model);
+            registry->setDefaultModel(config->model.modelName);
+        } else if (!config->currentModelName.empty() && registry->hasModel(config->currentModelName)) {
+            registry->setDefaultModel(config->currentModelName);
+        }
+        ctx->modelRegistry = std::move(registry);
+    }
     auto tui         = std::make_shared<AgentTUI>(clientEx, ctx, threadId);
     tui->start();
 
@@ -838,7 +852,7 @@ int main(int argn, char** argv) {
         return 0;
     }
 
-    // ======================== 远程客户端模式 (--agent) ========================
+    // ======================== 远程 client + agent server模式 (--agent) ========================
     // client 和 agent 不在同一个进程中，使用网络交互
     if (!agentUrl.empty()) {
         if (mode == "tui") {
@@ -849,7 +863,7 @@ int main(int argn, char** argv) {
         return 0;
     }
 
-    // ======================== 合并客户端/agent模式 ========================
+    // ======================== 同一进程内 client + agent 模式 ========================
     // client 和 agent 在同一个进程中，使用线程间数据交互
     if (mode == "tui") {
         config->logPringToolcall                       = false;
