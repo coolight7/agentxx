@@ -19,6 +19,7 @@ public:
     ftxui::Color hintColor;      // 弱化提示文字
 
     ftxui::Color backgroundColor;       // 整体背景
+    ftxui::Color blockColor;            // 分块背景 (侧边栏等)
     ftxui::Color inputBgColor;          // 输入框背景
     ftxui::Color inputTextColor;        // 输入框文字
     ftxui::Color buttonBgColor;         // 非高亮按钮背景

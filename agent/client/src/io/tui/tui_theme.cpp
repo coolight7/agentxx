@@ -12,12 +12,13 @@ TUITheme TUITheme::darkTheme() {
         .statusColor           = ftxui::Color::GrayLight,
         .hintColor             = ftxui::Color::GrayDark,
         .backgroundColor       = ftxui::Color::RGB(0, 0, 0),       // #000
-        .inputBgColor          = ftxui::Color::RGB(35, 40, 45),    // #23282d
+        .blockColor            = ftxui::Color::RGB(18, 18, 18),    // #121212
+        .inputBgColor          = ftxui::Color::RGB(24, 26, 30),    //
         .inputTextColor        = ftxui::Color::RGB(255, 255, 255), // #fff
         .buttonBgColor         = ftxui::Color::RGB(42, 49, 56),    // #2a3138
         .buttonTextColor       = ftxui::Color::RGB(255, 255, 255), // #fff
         .buttonActiveBgColor   = ftxui::Color::RGB(102, 204, 255), // #66ccff
-        .buttonActiveTextColor = ftxui::Color::RGB(255, 255, 255), // #fff
+        .buttonActiveTextColor = ftxui::Color::RGB(0, 0, 0),       // #000
     };
 }
 
@@ -33,6 +34,7 @@ TUITheme TUITheme::lightTheme() {
         .statusColor           = ftxui::Color::Grey37,
         .hintColor             = ftxui::Color::Grey53,
         .backgroundColor       = ftxui::Color::RGB(255, 255, 255),
+        .blockColor            = ftxui::Color::RGB(246, 247, 252),
         .inputBgColor          = ftxui::Color::RGB(235, 238, 240),
         .inputTextColor        = ftxui::Color::Black,
         .buttonBgColor         = ftxui::Color::RGB(220, 224, 228),

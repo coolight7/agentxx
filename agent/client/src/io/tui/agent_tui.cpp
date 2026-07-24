@@ -76,15 +76,20 @@ void AgentTUI::start() {
         auto layout = Renderer(input, [&]() -> Element {
             std::lock_guard<std::mutex> lock(mutex_);
 
-            auto messages = renderMessages() | flex | vscroll_indicator | yframe;
+            auto messages = hbox({
+                                text("   "),
+                                renderMessages() | flex | vscroll_indicator | yframe,
+                                text("   "),
+                            })
+                            | flex | yframe;
 
             Element indicator;
             if (pendingPermission_) {
-                indicator = text(" ! ") | bgcolor(Color::Red) | color(Color::White) | bold | blink;
+                indicator = text("!") | bgcolor(Color::Red) | color(Color::White) | bold | blink;
             } else if (isStreaming_) {
-                indicator = text(" \xe2\x97\x8f ") | color(theme_.accentColor) | bold;
+                indicator = text("\xe2\x97\x8f") | color(theme_.accentColor) | bold;
             } else {
-                indicator = text(" > ") | color(theme_.promptColor) | bold;
+                indicator = text(">") | color(theme_.promptColor) | bold;
             }
 
             const int maxInputTotalLines = std::max(3, ftxui::Terminal::Size().dimy / 2);
@@ -93,11 +98,11 @@ void AgentTUI::start() {
                 vbox({
                     text(" "),
                     hbox({
-                        text("  "),
+                        text(" "),
                         indicator,
-                        text("  "),
+                        text(" "),
                         input->Render() | color(theme_.inputTextColor) | flex,
-                        text("  "),
+                        text(" "),
                     }),
                     text(" "),
                 }) | bgcolor(theme_.inputBgColor)
@@ -110,6 +115,7 @@ void AgentTUI::start() {
                 messages,
                 input_bar,
                 renderStatusBar(),
+                text(" "),
             });
 
             Element body = main;
@@ -128,7 +134,7 @@ void AgentTUI::start() {
             } else if (showSettings_) {
                 result = renderSettingsOverlay() | center;
             }
-            return result | bgcolor(theme_.backgroundColor);
+            return result | bold | bgcolor(theme_.backgroundColor);
         });
 
         auto event_handler = CatchEvent(layout, [&](Event event) -> bool {

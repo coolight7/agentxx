@@ -57,26 +57,24 @@ ftxui::Element AgentTUI::renderMessages() {
 
     for (const auto& msg : messages_) {
         switch (msg.role) {
-            case Message::Role::User:
+            case Message::Role::User: {
                 pushBlock(
                     hbox({
-                        text("> ") | color(theme_.userColor) | bold,
+                        text("> ") | color(theme_.userColor),
                         paragraph(msg.text) | color(theme_.userColor),
                     }),
                     true
                 );
-                break;
-            case Message::Role::Assistant:
+            } break;
+            case Message::Role::Assistant: {
                 pushBlock(paragraph(msg.text) | color(theme_.assistantColor), true);
-                break;
+            } break;
             case Message::Role::Thinking: {
                 const bool expanded = !msg.collapsed;
                 Elements   lines;
                 Elements   header;
-                header.push_back(
-                    text(expanded ? "\xe2\x96\xbe " : "\xe2\x96\xb8 ") | color(theme_.hintColor)
-                );
-                header.push_back(text("[Thinking] ") | color(theme_.thinkingColor) | bold);
+                header.push_back(text(expanded ? "- " : "+ ") | color(theme_.hintColor));
+                header.push_back(text("[Thinking] ") | color(theme_.thinkingColor));
                 if (!expanded) {
                     header.push_back(text(oneLinePreview(msg.text)) | color(theme_.thinkingColor));
                 }
@@ -90,19 +88,17 @@ ftxui::Element AgentTUI::renderMessages() {
                 pushBlock(std::move(block), true);
                 break;
             }
-            case Message::Role::System:
+            case Message::Role::System: {
                 pushBlock(paragraph(msg.text) | color(theme_.systemColor), true);
-                break;
+            } break;
             case Message::Role::Tool: {
                 const bool expanded   = !msg.collapsed;
                 const bool isEditTool = (msg.toolName == "filesystem_edit_text_file");
                 Elements   lines;
                 Elements   header;
-                header.push_back(
-                    text(expanded ? "\xe2\x96\xbe " : "\xe2\x96\xb8 ") | color(theme_.hintColor)
-                );
-                header.push_back(text("[Tool] ") | color(theme_.toolColor) | bold);
-                header.push_back(text(msg.toolName) | color(theme_.toolColor) | bold);
+                header.push_back(text(expanded ? "- " : "+ ") | color(theme_.hintColor));
+                header.push_back(text("[Tool] ") | color(theme_.toolColor));
+                header.push_back(text(msg.toolName) | color(theme_.toolColor));
                 if (!expanded) {
                     if (!msg.toolFinished) {
                         header.push_back(text("  running...") | color(theme_.hintColor) | dim);
@@ -177,8 +173,7 @@ ftxui::Element AgentTUI::renderMessages() {
                     = vbox(std::move(lines)) | reflect(collapsibleBoxes_[collapsibleOrdinal]);
                 ++collapsibleOrdinal;
                 pushBlock(std::move(block), true);
-                break;
-            }
+            } break;
         }
     }
 
@@ -186,7 +181,7 @@ ftxui::Element AgentTUI::renderMessages() {
         if (currentTokenRole_ == Message::Role::Thinking) {
             pushBlock(
                 hbox({
-                    text("[Thinking] ") | color(theme_.thinkingColor) | bold,
+                    text("[Thinking] ") | color(theme_.thinkingColor),
                     paragraph(currentToken_) | color(theme_.thinkingColor),
                 }),
                 false
@@ -240,7 +235,7 @@ ftxui::Element AgentTUI::renderEditToolDiff(const std::string& oldStr, const std
                 prefix = "-";
             }
             lines.push_back(hbox({
-                text(prefix) | color(c) | bold,
+                text(prefix) | color(c),
                 text(" ") | color(theme_.hintColor),
                 text(l.text) | color(c),
             }));
