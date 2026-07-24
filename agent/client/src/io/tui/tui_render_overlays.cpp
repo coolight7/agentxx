@@ -25,7 +25,7 @@ ftxui::Element AgentTUI::renderModelSelectorOverlay() {
         list = text(" (no models available) ") | dim;
     } else {
         list = vbox(std::move(items)) | yframe | vscroll_indicator
-             | size(HEIGHT, LESS_THAN, maxVisible);
+               | size(HEIGHT, LESS_THAN, maxVisible);
     }
 
     return vbox({
@@ -58,9 +58,8 @@ ftxui::Element AgentTUI::renderStatusBar() {
         modelName = "<none>";
     }
     auto modelInfo = hbox({
-        text(" model: ") | color(theme_.hintColor),
-        text(modelName) | color(theme_.accentColor) | bold,
         text(" [F2] ") | color(theme_.hintColor),
+        text(modelName) | color(theme_.accentColor) | bold,
     });
 
     size_t ctx    = 0;
@@ -85,7 +84,7 @@ ftxui::Element AgentTUI::renderStatusBar() {
         modelInfo,
         filler(),
         ctxInfo,
-        text(" [Ctrl+I] ") | color(theme_.hintColor),
+        text(" [Ctrl+I] Settings ") | color(theme_.hintColor),
     });
 }
 

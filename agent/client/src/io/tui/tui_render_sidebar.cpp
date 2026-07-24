@@ -11,7 +11,7 @@ ftxui::Element AgentTUI::renderSidebar() {
             label = label | bgcolor(theme_.buttonActiveBgColor)
                     | color(theme_.buttonActiveTextColor) | bold;
         } else {
-            label = label | bgcolor(theme_.buttonBgColor) | color(theme_.buttonTextColor);
+            label = label | color(theme_.hintColor);
         }
         tabs.push_back(label | reflect(tabBoxes_[i]));
     }
@@ -24,10 +24,12 @@ ftxui::Element AgentTUI::renderSidebar() {
 
     return vbox({
                tabBar,
-               separator(),
-               content | flex | vscroll_indicator | yframe,
+               text(" "),
+               hbox({text(" "), content | flex | vscroll_indicator | yframe, text(" ")}) | flex
+                   | yframe,
            })
-           | size(WIDTH, LESS_THAN, 56) | size(WIDTH, GREATER_THAN, 28) | border;
+           | size(WIDTH, LESS_THAN, 56) | size(WIDTH, GREATER_THAN, 28)
+           | bgcolor(theme_.blockColor);
 }
 
 ftxui::Element AgentTUI::renderLogWindow() {
