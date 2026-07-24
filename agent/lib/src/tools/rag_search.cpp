@@ -531,10 +531,12 @@ asio::awaitable<bool> RAGSearchTool::VectorStore::addDocuments(std::vector<Docum
     if (embeddings.has_value()) {
         auto start = embeddings.value().begin();
         for (size_t i = 0; i < appendDocs.size(); ++i) {
-            appendDocs[i].embedding
-                = std::vector<std::vector<double>>{start, start + appendDocs[i].content.size()};
-            start += appendDocs[i].content.size();
-            docs.push_back(std::move(appendDocs[i]));
+            if (false == appendDocs[i].content.empty()) {
+                appendDocs[i].embedding
+                    = std::vector<std::vector<double>>{start, start + appendDocs[i].content.size()};
+                start += appendDocs[i].content.size();
+                docs.push_back(std::move(appendDocs[i]));
+            }
         }
         co_return true;
     }
