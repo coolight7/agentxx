@@ -45,52 +45,53 @@ asio::awaitable<std::pair<std::string, agentxx::middleware::_SkillMetadata>>
         stream.close();
         const auto yamlDelimiter = std::string_view{"---"};
         auto       yamlStart     = filecontent.find(yamlDelimiter);
-        auto       yamlEnd       = filecontent.find(yamlDelimiter, yamlStart);
-        if (yamlStart >= 0 && yamlStart != filecontent.npos && yamlEnd < filecontent.size()
-            && yamlEnd != filecontent.npos && yamlStart + yamlDelimiter.size() < yamlEnd) {
-            yamlStart += yamlDelimiter.size();
-            // markdown
-            data.mdText = filecontent.substr(yamlEnd + yamlDelimiter.size());
+        if (yamlStart != filecontent.npos) {
+            auto yamlEnd = filecontent.find(yamlDelimiter, yamlStart + yamlDelimiter.size());
+            if (yamlEnd != filecontent.npos && yamlStart + yamlDelimiter.size() < yamlEnd) {
+                yamlStart += yamlDelimiter.size();
+                // markdown
+                data.mdText = filecontent.substr(yamlEnd + yamlDelimiter.size());
 
-            while (yamlStart < yamlEnd
-                   && (filecontent[yamlStart] == '\r' || filecontent[yamlStart] == '\n')) {
-                yamlStart++;
-            }
-            while (yamlStart < yamlEnd
-                   && (filecontent[yamlEnd] == '\r' || filecontent[yamlEnd] == '\n')) {
-                yamlEnd--;
-            }
-
-            auto yamlContent = filecontent.substr(yamlStart, yamlEnd - yamlStart);
-            auto metadata    = YAML::Load(yamlContent);
-
-            if (metadata["name"]) {
-                data.name = metadata["name"].as<std::string>();
-            }
-            if (metadata["description"]) {
-                data.description = metadata["description"].as<std::string>();
-            }
-            if (metadata["license"]) {
-                data.license = metadata["license"].as<std::string>();
-            }
-            if (metadata["compatibility"]) {
-                data.compatibility = metadata["compatibility"].as<std::string>();
-            }
-            if (metadata["allowed-tools"].IsScalar()) {
-                data.allowed_tools = agentxx::util::strSplitCopid(
-                    metadata["allowed-tools"].as<std::string>(),
-                    ' '
-                );
-            }
-            if (metadata["metadata"].IsMap()) {
-                for (const auto& item : metadata["metadata"]) {
-                    data.metadata[item.first.as<std::string>()] = item.second.as<std::string>();
+                while (yamlStart < yamlEnd
+                       && (filecontent[yamlStart] == '\r' || filecontent[yamlStart] == '\n')) {
+                    yamlStart++;
                 }
+                while (yamlStart < yamlEnd
+                       && (filecontent[yamlEnd] == '\r' || filecontent[yamlEnd] == '\n')) {
+                    yamlEnd--;
+                }
+
+                auto yamlContent = filecontent.substr(yamlStart, yamlEnd - yamlStart);
+                auto metadata    = YAML::Load(yamlContent);
+
+                if (metadata["name"]) {
+                    data.name = metadata["name"].as<std::string>();
+                }
+                if (metadata["description"]) {
+                    data.description = metadata["description"].as<std::string>();
+                }
+                if (metadata["license"]) {
+                    data.license = metadata["license"].as<std::string>();
+                }
+                if (metadata["compatibility"]) {
+                    data.compatibility = metadata["compatibility"].as<std::string>();
+                }
+                if (metadata["allowed-tools"].IsScalar()) {
+                    data.allowed_tools = agentxx::util::strSplitCopid(
+                        metadata["allowed-tools"].as<std::string>(),
+                        ' '
+                    );
+                }
+                if (metadata["metadata"].IsMap()) {
+                    for (const auto& item : metadata["metadata"]) {
+                        data.metadata[item.first.as<std::string>()] = item.second.as<std::string>();
+                    }
+                }
+                co_return std::make_pair("", data);
             }
-            co_return std::make_pair("", data);
         }
         co_return std::make_pair(
-            "load skill metadata failed, can not found metadata in SKILL.md file",
+            "load skill metadata failed, can not find `metadata` in SKILL.md file",
             data
         );
     } catch (const std::exception& e) {
