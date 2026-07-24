@@ -14,6 +14,7 @@
 #include "test_crossagent.h"
 #include "test_datetime_tool.h"
 #include "test_deepagent.h"
+#include "test_diff_util.h"
 #include "test_event_bridge.h"
 #include "test_event_stream.h"
 #include "test_events.h"
@@ -98,6 +99,7 @@ int main(int argn, char** argv) {
 
     runSync("string_util", agentxx::test::testStringUtil);
     runSync("regex", agentxx::test::testRegex);
+    runSync("diff_util", agentxx::test::testDiffUtil);
     runSync("events", agentxx::test::test_events);
 
     // ---- 异步测试模块 ----
