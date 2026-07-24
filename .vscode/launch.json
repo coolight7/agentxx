@@ -10,7 +10,7 @@
                 "cli"
             ],
             "stopAtEntry": false,
-            "cwd": "${workspaceFolder}",
+            "cwd": "${workspaceFolder}/agent",
             "environment": [
                 {
                     "name": "ASAN_OPTIONS",
@@ -29,7 +29,7 @@
             "preLaunchTask": "compileWindowsDebugCxx",
             "args": [],
             "stopAtEntry": false,
-            "cwd": "${fileDirname}",
+            "cwd": "${workspaceFolder}/agent",
             "environment": [],
             "console": "internalConsole"
         },
@@ -41,7 +41,7 @@
             "preLaunchTask": "compileWindowsDebugCxx",
             "args": [],
             "stopAtEntry": false,
-            "cwd": "${fileDirname}",
+            "cwd": "${workspaceFolder}/agent",
             "environment": [],
             "console": "internalConsole"
         }

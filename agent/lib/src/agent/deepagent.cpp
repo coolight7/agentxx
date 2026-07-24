@@ -1,5 +1,6 @@
 #include "agentxx/agent/deepagent.h"
 
+#include "agentxx/util/diff_util.h"
 #include <cassert>
 
 namespace agentxx {
@@ -637,7 +638,6 @@ asio::awaitable<DeepAgent::ConversationTurnResult> DeepAgent::runConversationTur
                                     });
                                 }
                             } else if (role == "tool") {
-                                session->appendHistory(jm);
                                 auto content  = jm.value("content", std::string{});
                                 bool hasError = false;
                                 try {
@@ -645,10 +645,49 @@ asio::awaitable<DeepAgent::ConversationTurnResult> DeepAgent::runConversationTur
                                     hasError    = parsed.is_object() && parsed.contains("error");
                                 } catch (...) {
                                 }
+                                auto toolName   = jm.value("tool_name", std::string{});
+                                auto toolCallId = jm.value("tool_call_id", std::string{});
+                                // 文本编辑工具: 向 fullHistory 额外记录 git diff 对比信息
+                                // (仅写入 fullHistory 副本, 不影响 LLM 上下文)
+                                auto historyMsg = jm;
+                                if (false == hasError && toolName == "filesystem_edit_text_file") {
+                                    for (auto it = session->fullHistory.rbegin();
+                                         it != session->fullHistory.rend();
+                                         ++it) {
+                                        const auto& hd = it->data;
+                                        if (hd.value("role", std::string{}) != "assistant"
+                                            || !hd.contains("tool_calls")) {
+                                            continue;
+                                        }
+                                        bool foundArgs = false;
+                                        for (const auto& tc : hd["tool_calls"]) {
+                                            if (tc.value("id", std::string{}) != toolCallId) {
+                                                continue;
+                                            }
+                                            foundArgs = true;
+                                            try {
+                                                auto args = neograph::json::parse(
+                                                    tc.value("arguments", std::string{})
+                                                );
+                                                historyMsg["diff"] = agentxx::util::makeUnifiedDiff(
+                                                    args.value("old_str", std::string{}),
+                                                    args.value("new_str", std::string{}),
+                                                    args.value("path", std::string{})
+                                                );
+                                            } catch (...) {
+                                            }
+                                            break;
+                                        }
+                                        if (foundArgs) {
+                                            break;
+                                        }
+                                    }
+                                }
+                                session->appendHistory(historyMsg);
                                 emitDelta(Delta{
                                     .type       = Delta::Type::ToolEnd,
-                                    .toolName   = jm.value("tool_name", std::string{}),
-                                    .toolCallId = jm.value("tool_call_id", std::string{}),
+                                    .toolName   = toolName,
+                                    .toolCallId = toolCallId,
                                     .result     = content,
                                     .hasError   = hasError,
                                 });

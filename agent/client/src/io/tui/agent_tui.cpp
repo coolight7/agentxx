@@ -427,15 +427,16 @@ ftxui::Element AgentTUI::renderMessages() {
                 pushBlock(paragraph(msg.text) | color(theme_.systemColor), true);
                 break;
             case Message::Role::Tool: {
-                const bool expanded = !msg.collapsed;
+                const bool expanded   = !msg.collapsed;
+                const bool isEditTool = (msg.toolName == "filesystem_edit_text_file");
                 Elements   lines;
                 // 头部行: 折叠指示符 + [Tool] + 工具名 (+ 折叠态的单行预览)
                 Elements header;
                 header.push_back(
                     text(expanded ? "\xe2\x96\xbe " : "\xe2\x96\xb8 ") | color(theme_.hintColor)
                 );
-                header.push_back(text("[Tool] ") | color(theme_.accentColor) | bold);
-                header.push_back(text(msg.toolName) | color(theme_.accentColor) | bold);
+                header.push_back(text("[Tool] ") | color(theme_.toolColor) | bold);
+                header.push_back(text(msg.toolName) | color(theme_.toolColor) | bold);
                 if (!expanded) {
                     if (!msg.toolFinished) {
                         header.push_back(text("  running...") | color(theme_.hintColor) | dim);
@@ -444,9 +445,19 @@ ftxui::Element AgentTUI::renderMessages() {
                         header.push_back(
                             text(oneLinePreview(msg.toolResult)) | color(theme_.systemColor) | dim
                         );
+                    } else if (isEditTool) {
+                        // 折叠态: 显示被编辑的文件路径
+                        std::string path;
+                        try {
+                            path = neograph::json::parse(msg.text).value("path", std::string{});
+                        } catch (...) {
+                        }
+                        if (!path.empty()) {
+                            header.push_back(text("  " + path) | color(theme_.toolColor) | dim);
+                        }
                     } else {
                         header.push_back(
-                            text("  " + oneLinePreview(msg.toolResult)) | color(theme_.statusColor)
+                            text("  " + oneLinePreview(msg.toolResult)) | color(theme_.toolColor)
                             | dim
                         );
                     }
@@ -454,20 +465,47 @@ ftxui::Element AgentTUI::renderMessages() {
                 lines.push_back(hbox(std::move(header)));
 
                 if (expanded) {
-                    if (!msg.text.empty()) {
-                        lines.push_back(hbox({
-                            text("  args: ") | color(theme_.hintColor),
-                            paragraph(msg.text) | color(theme_.hintColor),
-                        }));
-                    }
-                    if (msg.toolFinished) {
-                        auto rc = msg.toolHasError ? theme_.systemColor : theme_.statusColor;
-                        lines.push_back(hbox({
-                            text(msg.toolHasError ? "  error: " : "  result: ") | color(rc),
-                            paragraph(msg.toolResult) | color(rc),
-                        }));
+                    if (isEditTool) {
+                        // 特化渲染: git diff 对比
+                        std::string path;
+                        std::string oldStr;
+                        std::string newStr;
+                        try {
+                            auto args = neograph::json::parse(msg.text);
+                            path      = args.value("path", std::string{});
+                            oldStr    = args.value("old_str", std::string{});
+                            newStr    = args.value("new_str", std::string{});
+                        } catch (...) {
+                        }
+                        if (!path.empty()) {
+                            lines.push_back(hbox({
+                                text("  file: ") | color(theme_.hintColor),
+                                text(path) | color(theme_.toolColor),
+                            }));
+                        }
+                        lines.push_back(renderEditToolDiff(oldStr, newStr));
+                        if (msg.toolFinished && msg.toolHasError) {
+                            lines.push_back(hbox({
+                                text("  error: ") | color(theme_.systemColor),
+                                paragraph(msg.toolResult) | color(theme_.systemColor),
+                            }));
+                        }
                     } else {
-                        lines.push_back(text("  running...") | color(theme_.hintColor) | dim);
+                        if (!msg.text.empty()) {
+                            lines.push_back(hbox({
+                                text("  args: ") | color(theme_.hintColor),
+                                paragraph(msg.text) | color(theme_.toolColor),
+                            }));
+                        }
+                        if (msg.toolFinished) {
+                            auto rc = msg.toolHasError ? theme_.systemColor : theme_.toolColor;
+                            lines.push_back(hbox({
+                                text(msg.toolHasError ? "  error: " : "  result: ") | color(rc),
+                                paragraph(msg.toolResult) | color(rc),
+                            }));
+                        } else {
+                            lines.push_back(text("  running...") | color(theme_.hintColor) | dim);
+                        }
                     }
                 }
 
@@ -505,6 +543,106 @@ ftxui::Element AgentTUI::renderMessages() {
         });
     }
     return vbox(std::move(elements));
+}
+
+ftxui::Element AgentTUI::renderEditToolDiff(const std::string& oldStr, const std::string& newStr) {
+    using agentxx::util::DiffLineType;
+    auto diff = agentxx::util::computeLineDiff(oldStr, newStr);
+    if (diff.empty()) {
+        return text("  (no changes)") | color(theme_.hintColor);
+    }
+
+    const int  screenW    = ftxui::Terminal::Size().dimx;
+    const bool sideBySide = screenW >= 100;
+
+    // 按 UTF-8 字符数截断单行, 保证左右对比时各行行高一致
+    auto trunc = [](const std::string& s, size_t maxChars) {
+        const auto idx = agentxx::util::findIndexByUtf8Length(s, maxChars);
+        if (idx > 0 && idx < s.size()) {
+            return s.substr(0, idx) + "...";
+        }
+        return s;
+    };
+
+    if (!sideBySide) {
+        // 屏幕宽度不足: 单文本块内对比 (前缀 ' '/'-'/'+')
+        Elements lines;
+        for (const auto& l : diff) {
+            ftxui::Color c      = theme_.toolColor;
+            std::string  prefix = " ";
+            if (l.type == DiffLineType::Add) {
+                c      = theme_.promptColor;
+                prefix = "+";
+            } else if (l.type == DiffLineType::Delete) {
+                c      = theme_.systemColor;
+                prefix = "-";
+            }
+            lines.push_back(hbox({
+                text(prefix) | color(c) | bold,
+                text(" ") | color(theme_.hintColor),
+                text(l.text) | color(c),
+            }));
+        }
+        return vbox(std::move(lines));
+    }
+
+    // 屏幕宽度足够: 左右对比 (将连续 delete/add 配对到同一行)
+    const int colW  = std::max(20, (screenW - 3) / 2);
+    const int textW = std::max(8, colW - 6); // 预留 符号+行号 槽位
+
+    Elements leftLines;
+    Elements rightLines;
+    auto     emptyCell = [&]() {
+        return text(" ") | color(theme_.hintColor);
+    };
+    auto makeCell = [&](const std::string& sign, int no, const std::string& txt, ftxui::Color c) {
+        std::string noStr = (no > 0) ? std::to_string(no) : std::string{};
+        return hbox({
+            text(sign) | color(c) | bold,
+            text(noStr) | color(theme_.hintColor) | size(WIDTH, EQUAL, 4),
+            text(" ") | color(theme_.hintColor),
+            text(trunc(txt, static_cast<size_t>(textW))) | color(c),
+        });
+    };
+
+    size_t i = 0;
+    while (i < diff.size()) {
+        if (diff[i].type == DiffLineType::Context) {
+            leftLines.push_back(makeCell(" ", diff[i].oldLineNo, diff[i].text, theme_.toolColor));
+            rightLines.push_back(makeCell(" ", diff[i].newLineNo, diff[i].text, theme_.toolColor));
+            ++i;
+            continue;
+        }
+        std::vector<const agentxx::util::DiffLine*> dels;
+        std::vector<const agentxx::util::DiffLine*> adds;
+        while (i < diff.size() && diff[i].type == DiffLineType::Delete) {
+            dels.push_back(&diff[i]);
+            ++i;
+        }
+        while (i < diff.size() && diff[i].type == DiffLineType::Add) {
+            adds.push_back(&diff[i]);
+            ++i;
+        }
+        const size_t maxk = std::max(dels.size(), adds.size());
+        for (size_t k = 0; k < maxk; ++k) {
+            leftLines.push_back(
+                (k < dels.size())
+                    ? makeCell("-", dels[k]->oldLineNo, dels[k]->text, theme_.systemColor)
+                    : emptyCell()
+            );
+            rightLines.push_back(
+                (k < adds.size())
+                    ? makeCell("+", adds[k]->newLineNo, adds[k]->text, theme_.promptColor)
+                    : emptyCell()
+            );
+        }
+    }
+
+    return hbox({
+        vbox(std::move(leftLines)) | flex,
+        separator(),
+        vbox(std::move(rightLines)) | flex,
+    });
 }
 
 ftxui::Element AgentTUI::renderStatusBar() {

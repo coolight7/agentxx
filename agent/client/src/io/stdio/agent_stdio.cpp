@@ -11,6 +11,17 @@
 #include <iostream>
 #include <utility>
 
+AgentStdIO::AgentStdIO() :
+    logSink_(std::make_shared<StderrLogSink>()) {
+    agentxx::util::LogDispatcher::instance().addSink(logSink_);
+}
+
+AgentStdIO::~AgentStdIO() {
+    if (logSink_) {
+        agentxx::util::LogDispatcher::instance().removeSink(logSink_);
+    }
+}
+
 void AgentStdIO::onDelta(const agentxx::agent::Delta& delta) {
     using Type = agentxx::agent::Delta::Type;
     switch (delta.type) {
