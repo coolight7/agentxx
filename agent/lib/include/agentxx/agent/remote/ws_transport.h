@@ -1,17 +1,20 @@
 #pragma once
 
 #include "agentxx/agent/remote/message_transport.h"
+#include "agentxx/util/exception.h"
 #include "agentxx/util/log.h"
 #include "agentxx/util/string_util.h"
 #include "agentxx/util/ws_client.h"
-#include "asio/buffer.hpp"
 #include "asio/awaitable.hpp"
+#include "asio/buffer.hpp"
 #include "asio/cancel_after.hpp"
 #include "asio/redirect_error.hpp"
 #include "asio/use_awaitable.hpp"
+#include "boost/exception/diagnostic_information.hpp"
+#include "boost/exception/exception.hpp"
 #include <boost/beast/core.hpp>
-#include <boost/beast/websocket.hpp>
 #include <boost/beast/ssl.hpp>
+#include <boost/beast/websocket.hpp>
 #include <chrono>
 #include <expected>
 #include <memory>
@@ -46,18 +49,16 @@ public:
 
     asio::awaitable<std::expected<void, std::string>> send(std::string_view jsonText) override {
         ws_->text(true);
-        try {
-            // 发送超时: 慢/卡客户端不会无限阻塞写协程 (超时后写协程判定断线)
-            co_await ws_->async_write(
-                asio::buffer(jsonText),
-                asio::cancel_after(sendTimeout_, asio::use_awaitable)
-            );
-            co_return std::expected<void, std::string>{};
-        } catch (const boost::system::system_error& e) {
-            co_return std::unexpected<std::string>(
-                agentxx::util::autoTryConvertToUtf8(e.what())
-            );
-        }
+        co_return co_await agentxx::util::catchErrorToUnexpectedAsync<void>(
+            [&]() -> asio::awaitable<std::expected<void, std::string>> {
+                // 发送超时: 慢/卡客户端不会无限阻塞写协程 (超时后写协程判定断线)
+                co_await ws_->async_write(
+                    asio::buffer(jsonText),
+                    asio::cancel_after(sendTimeout_, asio::use_awaitable)
+                );
+                co_return std::expected<void, std::string>{};
+            }
+        );
     }
 
     asio::awaitable<std::expected<util::WsMessage, std::string>> recv() override {
@@ -71,8 +72,7 @@ public:
                 msg.closeCode = ws_->reason().code;
                 co_return msg;
             }
-            co_return std::unexpected<std::string>(
-                agentxx::util::autoTryConvertToUtf8(ec.message())
+            co_return std::unexpected<std::string>(agentxx::util::autoTryConvertToUtf8(ec.message())
             );
         }
         util::WsMessage msg;
@@ -102,8 +102,8 @@ private:
 };
 
 /// 明文 WS (ws://)
-using ServerWsTransport = ServerWsTransportT<
-    boost::beast::websocket::stream<boost::beast::tcp_stream>>;
+using ServerWsTransport
+    = ServerWsTransportT<boost::beast::websocket::stream<boost::beast::tcp_stream>>;
 
 /// TLS WS (wss://)
 using ServerWssTransport = ServerWsTransportT<
