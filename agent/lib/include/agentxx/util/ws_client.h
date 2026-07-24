@@ -73,6 +73,11 @@ public:
 
     void setRecvTimeout(std::chrono::milliseconds timeout) noexcept;
 
+    /// 关闭底层 socket, 使挂起的 recv/send 以错误返回
+    /// - 须在 WsClient 绑定的 executor 上调用 (与 recv/send 同线程)
+    /// - 调用后 recv 会立即以错误返回, 此后方可安全析构 WsClient
+    void abort() noexcept;
+
 private:
 
     std::unique_ptr<Impl> impl_;

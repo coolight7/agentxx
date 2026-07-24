@@ -1,7 +1,11 @@
 #include "agentxx-client/io/stdio/agent_stdio.h"
 #include "agentxx-client/train/train.h"
 #include "agentxx-client/util/util.h"
+#include "agentxx/agent/remote/agent_server.h"
+#include "agentxx/agent/remote/remote_client_io.h"
+#include "agentxx/agent/remote/ws_transport.h"
 #include "agentxx/protocol/acp_server.h"
+#include "agentxx/util/ws_client.h"
 #include "yaml-cpp/yaml.h"
 #ifdef AGENTXX_ENABLE_CLIENT_TUI
 #include "agentxx-client/io/tui/agent_tui.h"
@@ -500,6 +504,169 @@ void runTui(agentxx::agent::DeepAgent& agent) {
 }
 #endif
 
+// ======================== 远程客户端 (连接 deepagent WS 服务) ========================
+
+/// 建立 WS 连接并包裹为 RemoteClientAgentIO; 失败返回 nullptr
+static asio::awaitable<std::shared_ptr<agentxx::agent::remote::RemoteClientAgentIO>>
+makeRemoteClient(
+    asio::any_io_executor                    ex,
+    const std::string&                       url,
+    const std::string&                       token,
+    std::shared_ptr<agentxx::agent::AgentIOBase> io
+) {
+    agentxx::util::WsClientConfig wsCfg;
+    // recv 超时用于检测 server 断线 (心跳 20s, server 回 pong 重置)
+    wsCfg.recvTimeout = std::chrono::seconds{60};
+    auto client = co_await agentxx::util::wsConnect(ex, url, {}, wsCfg);
+    if (!client) {
+        XX_LOGE("[remote] connect failed: {}", client.error());
+        co_return nullptr;
+    }
+    auto transport = std::make_unique<agentxx::agent::remote::ClientWsTransport>(
+        std::move(client.value())
+    );
+    co_return std::make_shared<agentxx::agent::remote::RemoteClientAgentIO>(
+        ex,
+        std::move(transport),
+        std::move(io),
+        agentxx::agent::remote::RemoteClientAgentIO::Config{}
+    );
+}
+
+asio::awaitable<void> runRemoteCliAsync(std::string url, std::string token, std::string model) {
+    auto              ex       = co_await asio::this_coro::executor;
+    const std::string threadId = "session";
+    auto              io       = std::make_shared<AgentStdIO>();
+
+    auto remote = co_await makeRemoteClient(ex, url, token, io);
+    if (!remote) {
+        co_return;
+    }
+    bool ok = co_await remote->start(threadId, token);
+    if (!ok) {
+        XX_LOGE("[remote] handshake/auth failed");
+        co_return;
+    }
+
+    XX_OUT("======= Agentxx Remote Client (CLI) =======");
+    std::cout << ">>> " << std::flush;
+    bool first = true;
+    for (;;) {
+        auto inputOpt = co_await io->getInput();
+        if (!inputOpt.has_value()) {
+            break;
+        }
+        auto input = std::move(inputOpt.value());
+        if (!input.empty()) {
+            remote->sendUserInput(threadId, input, first, model);
+            first = false;
+            try {
+                auto r = co_await remote->awaitTurnResult();
+                if (r.hasError) {
+                    XX_LOGW("[remote] turn error: {}", r.errorMessage);
+                }
+            } catch (const std::exception& e) {
+                XX_LOGW("[remote] disconnected: {}", e.what());
+                break;
+            }
+        }
+        std::cout << "\n\n>>> " << std::flush;
+    }
+    co_await remote->shutdown();
+}
+
+void runRemoteCli(const std::string& url, const std::string& token, const std::string& model) {
+    asio::io_context ctx;
+    asio::co_spawn(ctx, runRemoteCliAsync(url, token, model), asio::detached);
+    ctx.run();
+}
+
+#ifdef AGENTXX_ENABLE_CLIENT_TUI
+asio::awaitable<void> runRemoteTuiAsync(
+    std::shared_ptr<agentxx::agent::AgentConfig> config,
+    std::string                                  url,
+    std::string                                  token,
+    std::string                                  model
+) {
+    auto              ex       = co_await asio::this_coro::executor;
+    const std::string threadId = "session";
+
+    // 最小 AgentContext (仅供 TUI 渲染状态; 不启动本地引擎/MCP)
+    auto ctx           = std::make_shared<agentxx::agent::AgentContext>();
+    ctx->agentConfig   = config;
+    auto io            = std::make_shared<AgentTUI>(ex, ctx, threadId);
+    io->start();
+
+    auto remote = co_await makeRemoteClient(ex, url, token, io);
+    if (!remote) {
+        io->stop();
+        co_return;
+    }
+    bool ok = co_await remote->start(threadId, token);
+    if (!ok) {
+        XX_LOGE("[remote] handshake/auth failed");
+        io->stop();
+        co_return;
+    }
+
+    bool first = true;
+    for (;;) {
+        auto inputOpt = co_await io->getInput();
+        if (!inputOpt.has_value()) {
+            break;
+        }
+        auto input = std::move(inputOpt.value());
+        if (!input.empty()) {
+            remote->sendUserInput(threadId, input, first, model);
+            first = false;
+            try {
+                co_await remote->awaitTurnResult();
+            } catch (const std::exception&) {
+                break; // 断线
+            }
+        }
+    }
+    co_await remote->shutdown();
+    io->stop();
+}
+
+void runRemoteTui(
+    std::shared_ptr<agentxx::agent::AgentConfig> config,
+    const std::string&                           url,
+    const std::string&                           token,
+    const std::string&                           model
+) {
+    asio::io_context ctx;
+    asio::co_spawn(ctx, runRemoteTuiAsync(config, url, token, model), asio::detached);
+    ctx.run();
+}
+#endif
+
+/// 从 url 查询串提取并移除 token (ws://host:port/path?token=xxx)
+static std::string extractTokenFromUrl(std::string& url) {
+    auto q = url.find('?');
+    if (q == std::string::npos) {
+        return "";
+    }
+    std::string query = url.substr(q + 1);
+    url               = url.substr(0, q);
+    std::string token;
+    size_t      pos = 0;
+    while (pos < query.size()) {
+        auto        amp = query.find('&', pos);
+        std::string kv  = query.substr(pos, amp == std::string::npos ? std::string::npos : amp - pos);
+        auto        eq  = kv.find('=');
+        if (eq != std::string::npos && kv.substr(0, eq) == "token") {
+            token = kv.substr(eq + 1);
+        }
+        if (amp == std::string::npos) {
+            break;
+        }
+        pos = amp + 1;
+    }
+    return token;
+}
+
 int main(int argn, char** argv) {
 #if XX_IS_WIN_D
     SetConsoleOutputCP(CP_UTF8);
@@ -513,6 +680,16 @@ int main(int argn, char** argv) {
     std::string configPath = "agentxx-config.yaml";
     std::string overrideEnvPath;
     std::string mode = "tui";
+    // 远程客户端: --agent ws://host:port/path 连接远程 deepagent 服务
+    std::string agentUrl;
+    std::string agentToken;
+    std::string remoteModel;
+    // deepagent 服务: 监听地址/端口/路径
+    std::string srvHost   = "127.0.0.1";
+    std::string wsPath    = "/agent";
+    uint16_t    srvPort   = 17000;
+    std::string sslCertFile;
+    std::string sslKeyFile;
     for (int i = 1; i < argn; ++i) {
         std::string arg(argv[i]);
         if (arg == "--config" && i + 1 < argn) {
@@ -521,11 +698,40 @@ int main(int argn, char** argv) {
         } else if (arg == "--env" && i + 1 < argn) {
             ++i;
             overrideEnvPath = argv[i];
+        } else if (arg == "--agent" && i + 1 < argn) {
+            ++i;
+            agentUrl = argv[i];
+        } else if (arg == "--token" && i + 1 < argn) {
+            ++i;
+            agentToken = argv[i];
+        } else if (arg == "--model" && i + 1 < argn) {
+            ++i;
+            remoteModel = argv[i];
+        } else if (arg == "--host" && i + 1 < argn) {
+            ++i;
+            srvHost = argv[i];
+        } else if (arg == "--port" && i + 1 < argn) {
+            ++i;
+            srvPort = static_cast<uint16_t>(std::stoi(argv[i]));
+        } else if (arg == "--ws-path" && i + 1 < argn) {
+            ++i;
+            wsPath = argv[i];
+        } else if (arg == "--ssl-cert" && i + 1 < argn) {
+            ++i;
+            sslCertFile = argv[i];
+        } else if (arg == "--ssl-key" && i + 1 < argn) {
+            ++i;
+            sslKeyFile = argv[i];
         } else if (mode == "tui") {
             mode = arg;
         } else if (mode == "cli") {
             mode = arg;
         }
+    }
+
+    // token 亦可经 url 查询串携带: ws://host:port/path?token=xxx
+    if (!agentUrl.empty() && agentToken.empty()) {
+        agentToken = extractTokenFromUrl(agentUrl);
     }
 
     // 加载覆盖式 env 文件（--env，最高优先级）
@@ -628,6 +834,67 @@ int main(int argn, char** argv) {
     // config->mcpServerUrls["exa"] = "https://mcp.exa.ai";
     config->skillDirPaths
         = std::vector<std::string>{"/home/coolight/program/agentxx/isolation/skills/"};
+
+    // ======================== deepagent WS 服务模式 ========================
+    if (mode == "deepagent") {
+        config->logPringToolcall                       = false;
+        config->logPrintMessagesBeforeLLM              = true;
+        config->logPrintMessagesBeforeLLMWithSystemMsg = false;
+        config->logPrintSummarizationResultTokenCount  = true;
+
+        auto agent = std::make_shared<agentxx::agent::DeepAgent>(config);
+
+        agentxx::agent::remote::AgentServer::Config srvCfg;
+        srvCfg.http.address     = srvHost;
+        srvCfg.http.port        = srvPort;
+        srvCfg.http.sslCertFile = sslCertFile;
+        srvCfg.http.sslKeyFile  = sslKeyFile;
+        srvCfg.wsPath           = wsPath;
+        srvCfg.token            = agentToken; // 空则自动生成
+        auto server = std::make_shared<agentxx::agent::remote::AgentServer>(agent, srvCfg);
+
+        asio::co_spawn(
+            *agent->ioCtx,
+            [agent, server]() -> asio::awaitable<void> {
+                co_await agent->init();
+                server->start(co_await asio::this_coro::executor);
+                co_return;
+            },
+            asio::detached
+        );
+        // 优雅退出: SIGINT/SIGTERM -> 停止 accept 并退出 io_context
+        asio::co_spawn(
+            *agent->ioCtx,
+            [agent, server]() -> asio::awaitable<void> {
+                asio::signal_set signals(*agent->ioCtx, SIGINT, SIGTERM);
+                boost::system::error_code ec;
+                co_await signals.async_wait(asio::redirect_error(asio::use_awaitable, ec));
+                XX_OUT("[agent_server] signal received, shutting down...");
+                server->stop();
+                agent->ioCtx->stop();
+                co_return;
+            },
+            asio::detached
+        );
+        agent->ioCtx->run();
+        return 0;
+    }
+
+    // ======================== 远程客户端模式 (--agent) ========================
+    if (!agentUrl.empty()) {
+        if (mode == "tui") {
+#if AGENTXX_ENABLE_CLIENT_TUI
+            runRemoteTui(config, agentUrl, agentToken, remoteModel);
+#else
+            XX_LOGE(
+                R"(TUI not supported; recompile with `AGENTXX_ENABLE_CLIENT_TUI=1` or use cli mode)"
+            );
+#endif
+        } else {
+            runRemoteCli(agentUrl, agentToken, remoteModel);
+        }
+        return 0;
+    }
 
     if (mode == "tui") {
 #if AGENTXX_ENABLE_CLIENT_TUI
