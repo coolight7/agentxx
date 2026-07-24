@@ -73,6 +73,23 @@ void WsClient::setRecvTimeout(std::chrono::milliseconds timeout) noexcept {
     }
 }
 
+void WsClient::abort() noexcept {
+    if (!impl_) {
+        return;
+    }
+    impl_->closed_ = true;
+    boost::system::error_code ec;
+    if (impl_->isSsl && impl_->wss) {
+        auto& lowest = boost::beast::get_lowest_layer(*impl_->wss);
+        lowest.socket().shutdown(asio::ip::tcp::socket::shutdown_both, ec);
+        lowest.socket().close(ec);
+    } else if (impl_->ws) {
+        auto& lowest = boost::beast::get_lowest_layer(*impl_->ws);
+        lowest.socket().shutdown(asio::ip::tcp::socket::shutdown_both, ec);
+        lowest.socket().close(ec);
+    }
+}
+
 asio::awaitable<std::expected<void, std::string>> WsClient::sendText(std::string_view payload) {
     if (!impl_ || impl_->closed_) {
         co_return std::unexpected{std::string{"connection closed"}};
