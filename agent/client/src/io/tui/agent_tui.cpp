@@ -125,6 +125,8 @@ void AgentTUI::start() {
                 result = renderPermissionOverlay() | center;
             } else if (showModelSelector_) {
                 result = renderModelSelectorOverlay() | center;
+            } else if (showSettings_) {
+                result = renderSettingsOverlay() | center;
             }
             return result | bgcolor(theme_.backgroundColor);
         });
@@ -196,6 +198,34 @@ void AgentTUI::start() {
                 return true;
             }
 
+            if (showSettings_) {
+                if (event == Event::ArrowUp) {
+                    if (selectedSettingIndex_ > 0) {
+                        --selectedSettingIndex_;
+                    }
+                    postRedraw();
+                    return true;
+                }
+                if (event == Event::ArrowDown) {
+                    if (selectedSettingIndex_ < 1) {
+                        ++selectedSettingIndex_;
+                    }
+                    postRedraw();
+                    return true;
+                }
+                if (event == Event::Return) {
+                    applyThemeSelection();
+                    postRedraw();
+                    return true;
+                }
+                if (event == Event::Escape) {
+                    showSettings_ = false;
+                    postRedraw();
+                    return true;
+                }
+                return true;
+            }
+
             {
                 const std::string& in     = event.input();
                 const bool         isSend = (in == "\x1B\n" || in == "\x1B\r");
@@ -236,6 +266,12 @@ void AgentTUI::start() {
 
             if (event == Event::F2) {
                 openModelSelector();
+                postRedraw();
+                return true;
+            }
+            if (event == Event::CtrlI) {
+                selectedSettingIndex_ = 0;
+                showSettings_         = true;
                 postRedraw();
                 return true;
             }

@@ -85,6 +85,7 @@ ftxui::Element AgentTUI::renderStatusBar() {
         modelInfo,
         filler(),
         ctxInfo,
+        text(" [Ctrl+I] ") | color(theme_.hintColor),
     });
 }
 
@@ -111,4 +112,40 @@ void AgentTUI::confirmModelSelection() {
         }
     }
     showModelSelector_ = false;
+}
+
+ftxui::Element AgentTUI::renderSettingsOverlay() {
+    static constexpr const char* themeNames[] = {"Dark", "Light"};
+    const int                    themeCount   = 2;
+
+    Elements items;
+    items.push_back(text(" Theme ") | color(theme_.hintColor));
+    for (int i = 0; i < themeCount; ++i) {
+        auto entry = text(" " + std::string(themeNames[i]) + " ");
+        if (i == selectedSettingIndex_) {
+            entry = entry | bgcolor(theme_.buttonActiveBgColor)
+                    | color(theme_.buttonActiveTextColor) | bold | focus;
+        } else {
+            entry = entry | bgcolor(theme_.buttonBgColor) | color(theme_.buttonTextColor);
+        }
+        items.push_back(entry);
+    }
+
+    return vbox({
+               text(" Settings ") | bold | inverted,
+               separator(),
+               vbox(std::move(items)),
+               separator(),
+               text(" [Up/Down] Move  [Enter] Apply  [Esc] Close ") | center | dim,
+           })
+           | border | size(WIDTH, LESS_THAN, 40) | color(theme_.accentColor);
+}
+
+void AgentTUI::applyThemeSelection() {
+    if (selectedSettingIndex_ == 0) {
+        theme_ = TUITheme::darkTheme();
+    } else if (selectedSettingIndex_ == 1) {
+        theme_ = TUITheme::lightTheme();
+    }
+    showSettings_ = false;
 }

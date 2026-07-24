@@ -117,6 +117,10 @@ private:
     int                      selectedModelIndex_ = 0;
     std::vector<std::string> modelNames_;
 
+    /// 设置弹窗状态
+    bool showSettings_        = false;
+    int  selectedSettingIndex_ = 0;
+
     /// 右侧边栏状态
     std::vector<SidebarTab> sidebarTabs_;
     int                     activeTabIndex_ = 0;
@@ -162,6 +166,7 @@ private:
     int            focusBlockCount() const;
     ftxui::Element renderPermissionOverlay();
     ftxui::Element renderModelSelectorOverlay();
+    ftxui::Element renderSettingsOverlay();
     /// 输入框下方的状态栏: 左侧模型名, 右侧上下文占用
     ftxui::Element renderStatusBar();
     /// 右侧边栏: 顶部 tab 栏 + 当前 tab 内容; 无 tab 时不应调用
@@ -176,6 +181,8 @@ private:
     void openModelSelector();
     /// 确认选择当前高亮的模型
     void confirmModelSelection();
+    /// 应用设置中的主题选择
+    void applyThemeSelection();
     /// 取消当前正在执行的轮次
     void cancelCurrentRun();
 
