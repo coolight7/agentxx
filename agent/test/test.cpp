@@ -10,6 +10,7 @@
 #include "test_anthropic_provider.h"
 #include "test_codegraph_tools.h"
 #include "test_command_tools.h"
+#include "test_concurrency.h"
 #include "test_cpu_gpu_use.h"
 #include "test_crossagent.h"
 #include "test_datetime_tool.h"
@@ -101,6 +102,7 @@ int main(int argn, char** argv) {
     runSync("regex", agentxx::test::testRegex);
     runSync("diff_util", agentxx::test::testDiffUtil);
     runSync("events", agentxx::test::test_events);
+    runSync("concurrency", agentxx::test::testConcurrency);
 
     // ---- 异步测试模块 ----
     asio::co_spawn(

@@ -54,20 +54,30 @@ std::shared_ptr<neograph::Provider> ModelProviderRegistry::createProvider(const 
 }
 
 std::shared_ptr<neograph::Provider> ModelProviderRegistry::getProvider(const std::string& name) {
-    std::shared_lock<std::shared_mutex> lock(mutex_);
-    auto effective = (false == name.empty() && models_.contains(name)) ? name : defaultName_;
-    auto cfgIt     = models_.find(effective);
-    if (cfgIt == models_.end()) {
-        return nullptr;
+    std::string effective;
+    ModelConfig cfg;
+    {
+        std::shared_lock<std::shared_mutex> lock(mutex_);
+        effective = (false == name.empty() && models_.contains(name)) ? name : defaultName_;
+        auto cfgIt = models_.find(effective);
+        if (cfgIt == models_.end()) {
+            return nullptr;
+        }
+        auto cacheIt = providerCache_.find(effective);
+        if (cacheIt != providerCache_.end()) {
+            return cacheIt->second;
+        }
+        // 复制配置, 避免解锁后再使用迭代器 (可能被并发 registerModel 失效)
+        cfg = cfgIt->second;
     }
-    auto cacheIt = providerCache_.find(effective);
-    if (cacheIt != providerCache_.end()) {
-        return cacheIt->second;
-    }
-    lock.unlock();
-    auto provider = createProvider(cfgIt->second);
+    auto provider = createProvider(cfg);
     {
         std::unique_lock<std::shared_mutex> ulock(mutex_);
+        // 双重检查: 另一线程可能已创建并缓存, 复用以避免重复构造
+        auto cacheIt = providerCache_.find(effective);
+        if (cacheIt != providerCache_.end()) {
+            return cacheIt->second;
+        }
         providerCache_[effective] = provider;
     }
     return provider;

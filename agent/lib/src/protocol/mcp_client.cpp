@@ -1,5 +1,6 @@
 #include "agentxx/protocol/mcp_client.h"
 
+#include "agentxx/util/async_mutex.h"
 #include "agentxx/util/log.h"
 #include "asio/cancel_after.hpp"
 #include "asio/co_spawn.hpp"
@@ -650,7 +651,7 @@ asio::awaitable<std::expected<json, std::string>>
 
 #if defined(BOOST_PROCESS_V2_PROCESS_HPP)
     {
-        std::lock_guard           lock(stdioWriteMutex_);
+        auto                      wguard = co_await stdioWriteMutex_->lock();
         boost::system::error_code wec;
         co_await asio::async_write(
             *stdioStdinPipe_,
@@ -665,7 +666,7 @@ asio::awaitable<std::expected<json, std::string>>
     }
 #else
     {
-        std::lock_guard lock(stdioWriteMutex_);
+        auto wguard = co_await stdioWriteMutex_->lock();
 #if XX_IS_LINUX_D || XX_IS_MACOS_D
         const char* buf       = reqStr.data();
         size_t      remaining = reqStr.size();
@@ -728,8 +729,8 @@ asio::awaitable<void>
             util::HttpClient::RequestConfig{.readTimeout = config_.requestTimeout}
         );
     } else if (config_.isStdio()) {
-        auto            reqStr = req.dump() + "\n";
-        std::lock_guard lock(stdioWriteMutex_);
+        auto reqStr  = req.dump() + "\n";
+        auto wguard  = co_await stdioWriteMutex_->lock();
 #if defined(BOOST_PROCESS_V2_PROCESS_HPP)
         boost::system::error_code wec;
         co_await asio::async_write(
@@ -760,6 +761,8 @@ bool McpClient::startStdioSubprocess(asio::any_io_executor executor) {
     if (config_.serverCommand.empty()) {
         return false;
     }
+
+    stdioWriteMutex_ = std::make_unique<util::AsyncMutex>(executor);
 
     try {
         stdioStdinPipe_.emplace(executor);
@@ -806,6 +809,8 @@ bool McpClient::startStdioSubprocess(asio::any_io_executor executor) {
     if (config_.serverCommand.empty()) {
         return false;
     }
+
+    stdioWriteMutex_ = std::make_unique<util::AsyncMutex>(executor);
 
 #if XX_IS_LINUX_D || XX_IS_MACOS_D
     int stdinPipe[2]  = {-1, -1};

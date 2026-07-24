@@ -6,6 +6,7 @@
 #include "boost/exception/exception.hpp"
 #include "fmt/format.h"
 #include "neograph/api.h"
+#include <atomic>
 #include <exception>
 #include <expected>
 #include <functional>
@@ -41,6 +42,8 @@ public:
 /// - 线程安全
 /// - XX_LOG 宏在输出到 stderr 的同时, 将日志分发给所有已注册的 sink
 /// - sink 以 weak_ptr 持有, 注册方需自行持有 shared_ptr 以保持其有效
+/// - 性能: dispatch 为最热路径 (每条日志一次), 采用 copy-on-write 快照实现无锁读取;
+///   仅 addSink/removeSink (罕见) 在 mutex_ 下复制并原子替换快照
 class LogDispatcher {
 public:
 
@@ -54,9 +57,15 @@ public:
 
 private:
 
-    LogDispatcher() = default;
-    std::mutex                          mutex_;
-    std::vector<std::weak_ptr<LogSink>> sinks_;
+    using SinkList = std::vector<std::weak_ptr<LogSink>>;
+
+    LogDispatcher() :
+        sinks_(std::make_shared<const SinkList>()) {}
+
+    /// 仅用于序列化 add/remove 的 copy-on-write (注册罕见, 不在热路径)
+    std::mutex mutex_;
+    /// sink 快照: dispatch 无锁 load, add/remove 复制后原子 store
+    std::atomic<std::shared_ptr<const SinkList>> sinks_;
 };
 
 /// XX_LOG 宏统一入口: 输出到 stderr 并分发到已注册的 sink
