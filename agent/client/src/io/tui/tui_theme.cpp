@@ -5,6 +5,7 @@ TUITheme TUITheme::darkTheme() {
         .userColor             = ftxui::Color::Cyan,
         .assistantColor        = ftxui::Color::RGB(255, 255, 255), // #fff
         .thinkingColor         = ftxui::Color::RGB(255, 175, 95),  // #ffaf5f
+        .toolColor             = ftxui::Color::RGB(117, 125, 138), // #757d8a
         .systemColor           = ftxui::Color::RedLight,
         .promptColor           = ftxui::Color::Green,
         .accentColor           = ftxui::Color::RGB(102, 204, 255), // #66ccff
@@ -25,6 +26,7 @@ TUITheme TUITheme::lightTheme() {
         .userColor             = ftxui::Color::Blue3,
         .assistantColor        = ftxui::Color::Black,
         .thinkingColor         = ftxui::Color::Yellow4,
+        .toolColor             = ftxui::Color::RGB(135, 136, 137), // #878889
         .systemColor           = ftxui::Color::DarkRed,
         .promptColor           = ftxui::Color::DarkGreen,
         .accentColor           = ftxui::Color::Blue3,

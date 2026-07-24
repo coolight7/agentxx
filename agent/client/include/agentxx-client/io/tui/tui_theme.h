@@ -11,6 +11,7 @@ public:
     ftxui::Color userColor;      // 用户消息
     ftxui::Color assistantColor; // 助手消息 (content)
     ftxui::Color thinkingColor;  // 思考消息
+    ftxui::Color toolColor;      // toolcall 消息
     ftxui::Color systemColor;    // 系统/错误消息
     ftxui::Color promptColor;    // 输入提示符 ">>>"
     ftxui::Color accentColor;    // 强调 (边框/标题/高亮)
