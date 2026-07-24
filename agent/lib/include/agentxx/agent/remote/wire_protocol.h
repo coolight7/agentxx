@@ -29,6 +29,7 @@ struct MsgType {
     inline static constexpr std::string_view SyncMsg           = "sync";
     inline static constexpr std::string_view InterruptRequest  = "interrupt_request";
     inline static constexpr std::string_view TurnResult        = "turn_result";
+    inline static constexpr std::string_view ContextStats      = "context_stats";
     inline static constexpr std::string_view ErrorMsg          = "error";
     inline static constexpr std::string_view Pong              = "pong";
 };
@@ -292,6 +293,14 @@ inline neograph::json makeTurnResult(
     };
     if (!errorMessage.empty()) j["error_message"] = errorMessage;
     return j;
+}
+
+inline neograph::json makeContextStats(uint64_t contextTokens, uint64_t maxContextTokens) {
+    return neograph::json{
+            {"type",              MsgType::ContextStats},
+            {"context_tokens",    contextTokens        },
+            {"max_context_tokens", maxContextTokens    },
+    };
 }
 
 inline neograph::json makeError(int code, const std::string& message) {

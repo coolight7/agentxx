@@ -19,10 +19,10 @@ AgentServer::AgentServer(std::shared_ptr<DeepAgent> agent, Config config) :
     if (config_.http.address == "0.0.0.0") {
         config_.http.address = "127.0.0.1";
     }
-    if (config_.token.empty()) {
+    if (config_.token.empty() && config_.autoGenerateToken) {
         config_.token = generateToken();
     }
-    http_ = std::make_unique<util::HttpServer>(config_.http);
+    // HttpServer 延迟到 start() 创建 (进程内模式无需 HttpServer)
 }
 
 AgentServer::~AgentServer() {
@@ -44,6 +44,7 @@ std::string AgentServer::generateToken(size_t bytes) {
 
 void AgentServer::start(asio::any_io_executor ex) {
     ex_      = ex;
+    http_    = std::make_unique<util::HttpServer>(config_.http);
     bool ssl = !config_.http.sslCertFile.empty() && !config_.http.sslKeyFile.empty();
     if (ssl) {
         http_->enableWebSocketSsl(config_.wsPath, [this](util::HttpServer::WssStream& ws) {
@@ -122,11 +123,9 @@ asio::awaitable<void> AgentServer::handleWss(util::HttpServer::WssStream& ws) {
     co_await serveConnection(ws);
 }
 
-template<typename WsStream>
-asio::awaitable<void> AgentServer::serveConnection(WsStream& ws) {
+asio::awaitable<void> AgentServer::serveTransport(std::unique_ptr<MessageTransport> transport) {
     auto ex = co_await asio::this_coro::executor;
-
-    auto transport = std::make_unique<ServerWsTransportT<WsStream>>(ws);
+    ex_     = ex;
 
     RemoteServerAgentIO::Config ioCfg;
     ioCfg.token = config_.token;
@@ -167,6 +166,12 @@ asio::awaitable<void> AgentServer::serveConnection(WsStream& ws) {
     });
 
     co_await io->run();
+}
+
+template<typename WsStream>
+asio::awaitable<void> AgentServer::serveConnection(WsStream& ws) {
+    auto transport = std::make_unique<ServerWsTransportT<WsStream>>(ws);
+    co_await serveTransport(std::move(transport));
 }
 
 // 显式实例化两种 WS stream 类型

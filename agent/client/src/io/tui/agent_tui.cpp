@@ -759,7 +759,10 @@ void AgentTUI::confirmModelSelection() {
 }
 
 void AgentTUI::cancelCurrentRun() {
-    if (session_) {
+    if (cancelCallback_) {
+        // 远程模式: 路由到 server (发送 cancel 消息)
+        cancelCallback_();
+    } else if (session_) {
         auto token = session_->getCancelToken();
         if (token) {
             token->cancel();

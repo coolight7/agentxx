@@ -296,6 +296,13 @@ asio::awaitable<void> RemoteClientAgentIO::readLoop() {
             if (authChannel_) {
                 authChannel_->try_send(ErrorCode{}, j.value("ok", false));
             }
+        } else if (t == MsgType::ContextStats) {
+            if (contextStatsCallback_) {
+                contextStatsCallback_(
+                    j.value("context_tokens", uint64_t{0}),
+                    j.value("max_context_tokens", uint64_t{0})
+                );
+            }
         } else if (t == MsgType::Pong) {
             // 心跳回应; recv 已因此重置超时
         } else if (t == MsgType::ErrorMsg) {
@@ -427,23 +434,75 @@ asio::awaitable<void> RemoteClientAgentIO::sleepFor(std::chrono::milliseconds d)
     co_await timer.async_wait(asio::redirect_error(asio::use_awaitable, ec));
 }
 
+asio::awaitable<bool> RemoteClientAgentIO::runOnce() {
+    using asio::experimental::awaitable_operators::operator||;
+
+    resetConnState();
+    spawnLoops();
+
+    bool ok = co_await connect(threadId_, token_);
+    if (!ok) {
+        XX_LOGW("[remote_client] handshake/auth failed");
+        co_await shutdownLoops();
+        co_return false;
+    }
+    XX_OUT("[remote_client] connected (thread={})", threadId_);
+
+    // 输入泵: 竞态 本地输入 vs 断线信号
+    bool disconnected = false;
+    while (!disconnected && !stopped_.load(std::memory_order_acquire)) {
+        auto res = co_await (waitInnerInput() || waitDisconnect());
+        if (res.index() == 1) {
+            disconnected = true; // 断线
+            break;
+        }
+        const auto& inputOpt = std::get<0>(res);
+        if (!inputOpt.has_value()) {
+            stopped_.store(true, std::memory_order_release); // 本地输入结束 (EOF/退出)
+            break;
+        }
+        if (inputOpt->empty()) {
+            continue;
+        }
+        sendUserInput(threadId_, *inputOpt, first_, model_);
+        first_ = false;
+
+        bool turnDisconnected = false;
+        try {
+            co_await awaitTurnResult();
+        } catch (const boost::system::system_error&) {
+            turnDisconnected = true;
+        }
+        if (turnDisconnected) {
+            disconnected = true;
+            break;
+        }
+    }
+
+    co_await shutdownLoops();
+    co_return true;
+}
+
 asio::awaitable<void> RemoteClientAgentIO::runSession(
     const std::string& threadId,
     const std::string& model
 ) {
-    using asio::experimental::awaitable_operators::operator||;
-
     threadId_ = threadId;
     model_    = model;
     first_    = true;
-    int attempts = 0;
 
+    // 进程内/手动传输模式: 单连接, 不重连
+    if (!autoReconnect_) {
+        co_await runOnce();
+        co_return;
+    }
+
+    // 自动重连模式 (WS url)
+    int attempts = 0;
     for (;;) {
         if (stopped_.load(std::memory_order_acquire)) {
             co_return;
         }
-
-        // 建立连接
         auto client = co_await util::wsConnect(ex_, url_, {}, wsConfig_);
         if (!client) {
             if (stopped_.load(std::memory_order_acquire)) {
@@ -461,56 +520,16 @@ asio::awaitable<void> RemoteClientAgentIO::runSession(
         attempts   = 0;
         transport_ = std::make_unique<ClientWsTransport>(std::move(client.value()));
 
-        resetConnState();
-        spawnLoops();
-
-        bool ok = co_await connect(threadId_, token_);
-        if (!ok) {
-            XX_LOGW("[remote_client] handshake/auth failed");
-            co_await shutdownLoops();
-            if (stopped_.load(std::memory_order_acquire)) {
-                co_return;
-            }
-            co_await sleepFor(config_.reconnectBackoff);
-            continue;
-        }
-        XX_OUT("[remote_client] connected (thread={})", threadId_);
-
-        // 输入泵: 竞态 本地输入 vs 断线信号
-        bool disconnected = false;
-        while (!disconnected && !stopped_.load(std::memory_order_acquire)) {
-            auto res = co_await (waitInnerInput() || waitDisconnect());
-            if (res.index() == 1) {
-                disconnected = true; // 断线
-                break;
-            }
-            const auto& inputOpt = std::get<0>(res);
-            if (!inputOpt.has_value()) {
-                stopped_.store(true, std::memory_order_release); // 本地输入结束 (EOF/退出)
-                break;
-            }
-            if (inputOpt->empty()) {
-                continue;
-            }
-            sendUserInput(threadId_, *inputOpt, first_, model_);
-            first_ = false;
-
-            bool turnDisconnected = false;
-            try {
-                co_await awaitTurnResult();
-            } catch (const boost::system::system_error&) {
-                turnDisconnected = true;
-            }
-            if (turnDisconnected) {
-                disconnected = true;
-                break;
-            }
-        }
-
-        co_await shutdownLoops();
+        bool ok = co_await runOnce();
         if (stopped_.load(std::memory_order_acquire)) {
             co_return;
         }
+        if (!ok) {
+            // 握手失败 -> 退避重试
+            co_await sleepFor(config_.reconnectBackoff);
+            continue;
+        }
+        //  runOnce 因断线返回 -> 重连
         XX_LOGW("[remote_client] disconnected, reconnecting...");
         co_await sleepFor(config_.reconnectBackoff);
     }

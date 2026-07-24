@@ -54,6 +54,14 @@ void RemoteServerAgentIO::enqueue(neograph::json msg) {
     }
 }
 
+void RemoteServerAgentIO::enqueueCloseSentinel() {
+    if (stopped_.load(std::memory_order_acquire)) {
+        return;
+    }
+    // 空串作为关闭哨兵 (合法 JSON 消息均非空)
+    writeQueue_->try_send(ErrorCode{}, std::string{});
+}
+
 void RemoteServerAgentIO::requestStop() {
     bool expected = false;
     if (!stopped_.compare_exchange_strong(expected, true)) {
@@ -80,19 +88,85 @@ void RemoteServerAgentIO::onDisconnected() {
 // ---------------------------------------------------------------------------
 
 asio::awaitable<void> RemoteServerAgentIO::writeLoop() {
+    std::optional<std::string> leftover;
     for (;;) {
         std::string text;
-        try {
-            text = co_await writeQueue_->async_receive(asio::use_awaitable);
-        } catch (const boost::system::system_error&) {
+        if (leftover.has_value()) {
+            text = std::move(leftover.value());
+            leftover.reset();
+        } else {
+            try {
+                text = co_await writeQueue_->async_receive(asio::use_awaitable);
+            } catch (const boost::system::system_error&) {
+                break;
+            }
+        }
+        // 空串关闭哨兵: 此前的消息已发出, 现在关闭传输
+        if (text.empty()) {
+            transport_->close();
             break;
         }
-        auto res = co_await transport_->send(text);
+        // 机会性合并相邻同类 token delta 降帧
+        auto merged = coalesceTokenDeltas(std::move(text));
+        leftover    = std::move(merged.second);
+        auto res    = co_await transport_->send(merged.first);
         if (!res) {
             onDisconnected();
             break;
         }
     }
+}
+
+std::pair<std::string, std::optional<std::string>>
+RemoteServerAgentIO::coalesceTokenDeltas(std::string first) {
+    neograph::json j;
+    try {
+        j = neograph::json::parse(first);
+    } catch (const std::exception&) {
+        return {std::move(first), std::nullopt};
+    }
+    if (j.value("type", std::string{}) != std::string(MsgType::DeltaMsg)) {
+        return {std::move(first), std::nullopt};
+    }
+    auto kind = j.value("kind", std::string{});
+    if (kind != "text_token" && kind != "thinking_token") {
+        return {std::move(first), std::nullopt};
+    }
+
+    // 是 token delta: 非阻塞 drain 后续同类 token delta 并合并文本
+    std::string                accText = j.value("text", std::string{});
+    std::optional<std::string> leftover;
+    for (;;) {
+        std::string next;
+        bool        got = writeQueue_->try_receive([&](ErrorCode ec, std::string m) {
+            if (!ec) {
+                next = std::move(m);
+            }
+        });
+        if (!got || next.empty()) {
+            break;
+        }
+        neograph::json nj;
+        bool           parsed = true;
+        try {
+            nj = neograph::json::parse(next);
+        } catch (const std::exception&) {
+            parsed = false;
+        }
+        if (parsed && nj.value("type", std::string{}) == std::string(MsgType::DeltaMsg)
+            && nj.value("kind", std::string{}) == kind) {
+            accText += nj.value("text", std::string{});
+            if (nj.contains("seq")) {
+                j["seq"] = nj["seq"]; // 保留最新 seq (重连增量基线)
+            }
+        } else {
+            // 不可合并: 留待下次发送
+            leftover = std::move(next);
+            break;
+        }
+    }
+    j["text"] = accText;
+    return {j.dump(), std::move(leftover)};
 }
 
 asio::awaitable<void> RemoteServerAgentIO::readLoop() {
@@ -142,7 +216,8 @@ asio::awaitable<void> RemoteServerAgentIO::readLoop() {
                 }
                 enqueue(makeHelloAck(ok, thread, curTail, config_.models));
                 if (!ok) {
-                    requestStop();
+                    // 冲刷 hello_ack 后再关闭: 入队关闭哨兵, 写协程发完即关闭传输
+                    enqueueCloseSentinel();
                     break;
                 }
             } else {

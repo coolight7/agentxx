@@ -26,5 +26,5 @@ Server 侧线程模型：单 io_context, 单线程，多协程执行，需要 ht
 仔细思考检查方案没有问题的话可以开始写代码实现了，且应当添加足量的常规使用方式测试+各种边缘情况测试
 
 - Phase 2（增强）：delta 环形缓冲 + 增量重放 + grace period 重挂 + 请求级超时细化 + wss。
-- Phase 3（统一）：进程内传输 ChannelTransport（统一本地/远程路径）、远程上下文统计同步、TUI 取消键路由到远程、token delta 合并降帧
+- Phase 3：进程内传输 ChannelTransport（统一本地/远程路径）、远程上下文统计同步、TUI 取消键路由到远程、token delta 合并降帧
 - 测试：扩展 test_websocket.cpp 风格，新增 test_remote_agent.cpp：echo/并发写/断线取消/重连 sync/超时/鉴权失败。

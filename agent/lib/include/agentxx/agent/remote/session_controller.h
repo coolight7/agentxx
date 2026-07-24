@@ -143,6 +143,9 @@ private:
     SyncPayload buildFullSync();
     std::shared_ptr<Session> session();
 
+    /// 向活动连接推送当前上下文统计 (轮次结束/重连同步时)
+    void sendContextStats();
+
     void startGraceTimer();
     void cancelGraceTimer();
     void failAllPending();
