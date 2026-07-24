@@ -17,6 +17,7 @@
 #include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace agentxx {
@@ -406,6 +407,11 @@ std::string autoTryConvertToUtf8(std::string_view str);
 /// - [windows] UTF-16LE
 /// - [其他系统] UTF-8
 bool autoConvertToSystemPath(std::string& str);
+
+template<typename T>
+inline constexpr std::from_chars_result parseNumberFromString(std::string_view str, T& num) {
+    return std::from_chars(str.data(), str.data() + str.size(), num);
+}
 
 inline PinyinCallback s_pinyinCallback = nullptr;
 

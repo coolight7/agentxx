@@ -171,7 +171,7 @@ asio::awaitable<neograph::ChatCompletion>
         int  retryAfter = -1;
         if (!raw.empty()) {
             int seconds    = 0;
-            auto [ptr, ec] = std::from_chars(raw.data(), raw.data() + raw.size(), seconds);
+            auto [ptr, ec] = agentxx::util::parseNumberFromString(raw, seconds);
             if (ec == std::errc{} && seconds >= 0) {
                 retryAfter = seconds;
             }

@@ -172,22 +172,10 @@ static neograph::json yamlToJson(const YAML::Node& node) {
         if (node.as<std::string>() == "false") {
             return neograph::json{false};
         }
-        if (std::from_chars(
-                node.as<std::string>().data(),
-                node.as<std::string>().data() + node.as<std::string>().size(),
-                i
-            )
-                .ec
-            == std::errc{}) {
+        if (agentxx::util::parseNumberFromString(node.as<std::string>(), i).ec == std::errc{}) {
             return neograph::json{i};
         }
-        if (std::from_chars(
-                node.as<std::string>().data(),
-                node.as<std::string>().data() + node.as<std::string>().size(),
-                d
-            )
-                .ec
-            == std::errc{}) {
+        if (agentxx::util::parseNumberFromString(node.as<std::string>(), d).ec == std::errc{}) {
             return neograph::json{d};
         }
         return neograph::json{node.as<std::string>()};

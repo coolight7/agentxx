@@ -798,9 +798,9 @@ void AgentTUI::onDelta(const agentxx::agent::Delta& delta) {
                 }
                 currentToken_.clear();
             }
-            currentTokenRole_ = role;
-            currentToken_    += delta.text;
-            isStreaming_      = true;
+            currentTokenRole_  = role;
+            currentToken_     += delta.text;
+            isStreaming_       = true;
         } break;
         case Type::ToolStart: {
             std::lock_guard<std::mutex> lock(mutex_);
@@ -823,7 +823,7 @@ void AgentTUI::onDelta(const agentxx::agent::Delta& delta) {
         } break;
         case Type::ToolEnd: {
             std::lock_guard<std::mutex> lock(mutex_);
-            bool found = false;
+            bool                        found = false;
             for (auto it = messages_.rbegin(); it != messages_.rend(); ++it) {
                 if (it->role == Message::Role::Tool && it->toolCallId == delta.toolCallId
                     && !it->toolFinished) {
@@ -876,6 +876,7 @@ void AgentTUI::onSync(const agentxx::agent::SyncPayload& payload) {
             const auto& d    = hm.data;
             auto        role = d.value("role", std::string{});
             Message     m;
+            bool        skipPush = false;
             if (role == "user") {
                 m.role = Message::Role::User;
                 m.text = d.value("content", std::string{});
@@ -899,8 +900,8 @@ void AgentTUI::onSync(const agentxx::agent::SyncPayload& payload) {
                         continue;
                     }
                 } else {
-                    m.role = Message::Role::Assistant;
-                    m.text = d.value("content", std::string{});
+                    m.role         = Message::Role::Assistant;
+                    m.text         = d.value("content", std::string{});
                     auto reasoning = d.value("reasoning_content", std::string{});
                     if (!reasoning.empty()) {
                         Message thinkMsg;
@@ -918,7 +919,7 @@ void AgentTUI::onSync(const agentxx::agent::SyncPayload& payload) {
                 m.toolFinished = true;
                 m.collapsed    = true;
                 try {
-                    auto parsed = neograph::json::parse(m.toolResult);
+                    auto parsed    = neograph::json::parse(m.toolResult);
                     m.toolHasError = parsed.is_object() && parsed.contains("error");
                 } catch (...) {
                 }
@@ -929,15 +930,17 @@ void AgentTUI::onSync(const agentxx::agent::SyncPayload& payload) {
                         it->toolFinished = true;
                         it->toolHasError = m.toolHasError;
                         it->collapsed    = true;
-                        goto skip_push;
+                        skipPush         = true;
+                        break;
                     }
                 }
             } else {
                 m.role = Message::Role::System;
                 m.text = d.value("content", std::string{});
             }
-            messages_.push_back(std::move(m));
-            skip_push:;
+            if (false == skipPush) {
+                messages_.push_back(std::move(m));
+            }
         }
         stickToBottom_ = true;
     }
@@ -1013,20 +1016,12 @@ asio::awaitable<neograph::json> AgentTUI::handleInterrupt(
                         inputSuccess = false;
                     }
                 } else if ("int" == input.type) {
-                    int64_t num = 0;
-                    auto    r   = std::from_chars(
-                        inputValue.c_str(),
-                        inputValue.c_str() + inputValue.size(),
-                        num
-                    );
+                    int64_t num  = 0;
+                    auto    r    = agentxx::util::parseNumberFromString(inputValue, num);
                     inputSuccess = (r.ec == std::errc{});
                 } else if ("double" == input.type) {
                     double num;
-                    auto   r = std::from_chars(
-                        inputValue.c_str(),
-                        inputValue.c_str() + inputValue.size(),
-                        num
-                    );
+                    auto   r     = agentxx::util::parseNumberFromString(inputValue, num);
                     inputSuccess = (r.ec == std::errc{});
                 } else if ("string" == input.type) {
                     inputSuccess = true;
@@ -1063,8 +1058,6 @@ asio::awaitable<std::optional<std::string>> AgentTUI::getInput() {
     }
     co_return std::optional<std::string>(std::move(line));
 }
-
-
 
 void TUILogSink::onLog(agentxx::util::LogLevel level, const std::string& message) {
     std::function<void()> cb;
