@@ -6,10 +6,17 @@
             "request": "launch",
             "program": "${workspaceFolder}/agent/build/linux-debug/exec/agentxx_cli",
             "preLaunchTask": "compileLinuxDebugCxx",
-            "args": [],
+            "args": [
+                "cli"
+            ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
-            "environment": [],
+            "environment": [
+                {
+                    "name": "ASAN_OPTIONS",
+                    "value": "detect_leaks=0"
+                }
+            ],
             "externalConsole": false,
             "MIMode": "gdb",
             "setupCommands": []

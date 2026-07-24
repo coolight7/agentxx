@@ -5,11 +5,11 @@
 #include <iostream>
 #include <optional>
 
-static std::optional<std::string> systemName_;
-static std::optional<bool>        isRunningInWSL_;
-
 #if XX_IS_LINUX_D
 #include <sys/utsname.h>
+
+static std::optional<std::string> systemName_;
+static std::optional<bool>        isRunningInWSL_;
 
 std::string agentxx::util::getSystemName() {
     if (systemName_.has_value()) {
@@ -63,6 +63,8 @@ bool agentxx::util::isRunningInWSL() {
 #elif XX_IS_WIN_D
 
 #include <windows.h>
+
+static std::optional<std::string> systemName_;
 
 std::string agentxx::util::getSystemName() {
     if (systemName_.has_value()) {
