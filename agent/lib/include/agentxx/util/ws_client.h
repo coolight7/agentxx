@@ -62,10 +62,8 @@ public:
 
     asio::awaitable<std::expected<void, std::string>> sendPing(std::string_view payload = "");
 
-    asio::awaitable<std::expected<void, std::string>> sendClose(
-        uint16_t         code   = 1000,
-        std::string_view reason = ""
-    );
+    asio::awaitable<std::expected<void, std::string>>
+        sendClose(uint16_t code = 1000, std::string_view reason = "");
 
     asio::awaitable<std::expected<WsMessage, std::string>> recv();
 
@@ -84,10 +82,10 @@ private:
 };
 
 asio::awaitable<std::expected<std::unique_ptr<WsClient>, std::string>> wsConnect(
-    asio::any_io_executor                    executor,
-    std::string_view                         url,
+    asio::any_io_executor                            executor,
+    std::string_view                                 url,
     std::vector<std::pair<std::string, std::string>> headers = {},
-    WsClientConfig                           config          = {}
+    WsClientConfig                                   config  = {}
 );
 
 } // namespace util

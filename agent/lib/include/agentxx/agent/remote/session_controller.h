@@ -50,13 +50,13 @@ class SessionController : public AgentIOBase,
 public:
 
     struct Config {
-        std::string              threadId          = "session";
+        std::string               threadId          = "session";
         std::chrono::milliseconds interruptTimeout  = std::chrono::seconds{300};
         std::chrono::milliseconds permissionTimeout = std::chrono::seconds{300};
         /// 断线后保持运行中轮次的宽限期; <=0 表示断线立即取消轮次
-        std::chrono::milliseconds gracePeriod       = std::chrono::seconds{30};
+        std::chrono::milliseconds gracePeriod = std::chrono::seconds{30};
         /// delta 环形缓冲容量 (按消息数)
-        size_t                   deltaBufferCap    = 4096;
+        size_t deltaBufferCap = 4096;
     };
 
     SessionController(asio::any_io_executor ex, std::weak_ptr<DeepAgent> agent, Config config);
@@ -64,15 +64,15 @@ public:
     ~SessionController() override;
 
     // ----- AgentIOBase (由 DeepAgent 驱动) -----
-    void onDelta(const Delta& delta) override;
-    void onSync(const SyncPayload& payload) override;
+    void                                        onDelta(const Delta& delta) override;
+    void                                        onSync(const SyncPayload& payload) override;
     asio::awaitable<std::optional<std::string>> getInput() override;
-    asio::awaitable<neograph::json> handleInterrupt(
-        const std::string& threadId,
-        const std::string& interruptNode,
-        const std::string& interruptValue,
-        const std::string& interruptArgJson
-    ) override;
+    asio::awaitable<neograph::json>             handleInterrupt(
+                    const std::string& threadId,
+                    const std::string& interruptNode,
+                    const std::string& interruptValue,
+                    const std::string& interruptArgJson
+                ) override;
 
     // ----- 生命周期 -----
 
@@ -121,8 +121,7 @@ private:
     using ErrorCode = boost::system::error_code;
 
     struct PendingInterrupt {
-        std::shared_ptr<asio::experimental::concurrent_channel<void(ErrorCode, neograph::json)>>
-                    ch;
+        std::shared_ptr<asio::experimental::concurrent_channel<void(ErrorCode, neograph::json)>> ch;
         std::string node;
         std::string value;
         std::string argJson;
@@ -138,7 +137,7 @@ private:
     /// 取 seq 之后的 delta (调用方须持有 bufferMutex_); nullopt 表示需全量 sync
     std::optional<std::vector<Delta>> deltasSinceLocked(uint64_t seq);
 
-    SyncPayload buildFullSync();
+    SyncPayload              buildFullSync();
     std::shared_ptr<Session> session();
 
     /// 向活动连接推送当前上下文统计 (轮次结束/重连同步时)
@@ -158,20 +157,20 @@ private:
     std::deque<Delta>  deltaBuffer_;
 
     // 活动连接 (跨线程: onDelta 读, attach/detach 写)
-    mutable std::mutex           connMutex_;
+    mutable std::mutex             connMutex_;
     std::weak_ptr<IConnectionSink> activeConn_;
 
     // 输入 channel
     std::shared_ptr<InputChannel> inputChannel_;
 
     // pending interrupt (pendingMutex_ 保护; 不在持锁期间 co_await)
-    std::mutex                       pendingMutex_;
+    std::mutex                          pendingMutex_;
     std::map<int64_t, PendingInterrupt> pending_;
-    int64_t                           nextReqId_ = 1;
+    int64_t                             nextReqId_ = 1;
 
     // grace 定时器
-    std::mutex                            graceMutex_;
-    std::shared_ptr<asio::steady_timer>   graceTimer_;
+    std::mutex                          graceMutex_;
+    std::shared_ptr<asio::steady_timer> graceTimer_;
 
     // 当前轮次取消令牌
     std::mutex                                    cancelMutex_;

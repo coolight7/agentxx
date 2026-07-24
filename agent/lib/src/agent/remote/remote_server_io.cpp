@@ -118,7 +118,7 @@ asio::awaitable<void> RemoteServerAgentIO::writeLoop() {
 }
 
 std::pair<std::string, std::optional<std::string>>
-RemoteServerAgentIO::coalesceTokenDeltas(std::string first) {
+    RemoteServerAgentIO::coalesceTokenDeltas(std::string first) {
     neograph::json j;
     try {
         j = neograph::json::parse(first);
@@ -197,9 +197,9 @@ asio::awaitable<void> RemoteServerAgentIO::readLoop() {
         // ----- 鉴权握手 (绑定到 SessionController, 含增量重放) -----
         if (!controller_) {
             if (t == MsgType::Hello) {
-                auto tok      = j.value("token", std::string{});
-                bool tokenOk  = config_.token.empty() ? true : (tok == config_.token);
-                auto thread   = j.value("thread", config_.defaultThreadId);
+                auto tok     = j.value("token", std::string{});
+                bool tokenOk = config_.token.empty() ? true : (tok == config_.token);
+                auto thread  = j.value("thread", config_.defaultThreadId);
                 std::shared_ptr<SessionController> ctrl;
                 std::string                        curTail;
                 if (tokenOk && authHandler_) {

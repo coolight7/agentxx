@@ -74,18 +74,19 @@ asio::awaitable<neograph::json> SessionController::handleInterrupt(
     const std::string& interruptArgJson
 ) {
     // 请求级超时: 权限询问与一般中断分别配置
-    auto timeout = (interruptNode == "permission") ? config_.permissionTimeout
-                                                   : config_.interruptTimeout;
+    auto timeout
+        = (interruptNode == "permission") ? config_.permissionTimeout : config_.interruptTimeout;
 
-    auto ch = std::make_shared<RespChannel>(ex_, 1);
+    auto    ch = std::make_shared<RespChannel>(ex_, 1);
     int64_t id;
     {
         std::lock_guard<std::mutex> lock(pendingMutex_);
-        id          = nextReqId_++;
+        id           = nextReqId_++;
         pending_[id] = PendingInterrupt{ch, interruptNode, interruptValue, interruptArgJson};
     }
 
-    pushToActive(makeInterruptRequest(id, config_.threadId, interruptNode, interruptValue, interruptArgJson)
+    pushToActive(
+        makeInterruptRequest(id, config_.threadId, interruptNode, interruptValue, interruptArgJson)
     );
 
     neograph::json result = neograph::json::array();
@@ -176,7 +177,7 @@ void SessionController::stop() {
 void SessionController::attach(
     const std::shared_ptr<IConnectionSink>& conn,
     uint64_t                                lastSeq,
-    const std::string&                      /*tailHash*/
+    const std::string& /*tailHash*/
 ) {
     cancelGraceTimer();
     // 在 bufferMutex_ 下设置活动连接并重放, 与 onDelta 的实时推送串行化 (保证顺序)
@@ -215,7 +216,7 @@ void SessionController::detach(IConnectionSink* conn) {
     bool wasActive = false;
     {
         std::lock_guard<std::mutex> lock(connMutex_);
-        auto active = activeConn_.lock();
+        auto                        active = activeConn_.lock();
         if (active.get() == conn) {
             activeConn_.reset();
             wasActive = true;
@@ -237,7 +238,7 @@ void SessionController::resolveInterrupt(int64_t id, neograph::json result) {
     std::shared_ptr<RespChannel> ch;
     {
         std::lock_guard<std::mutex> lock(pendingMutex_);
-        auto it = pending_.find(id);
+        auto                        it = pending_.find(id);
         if (it != pending_.end()) {
             ch = it->second.ch;
         }

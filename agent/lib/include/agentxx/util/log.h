@@ -1,7 +1,14 @@
 #pragma once
 
 #include "agentxx/util/util.h"
+#include "asio/awaitable.hpp"
+#include "boost/exception/diagnostic_information.hpp"
+#include "boost/exception/exception.hpp"
 #include "fmt/format.h"
+#include "neograph/api.h"
+#include <exception>
+#include <expected>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -55,6 +62,22 @@ private:
 /// XX_LOG 宏统一入口: 输出到 stderr 并分发到已注册的 sink
 void xxLogPrint(LogLevel level, const std::string& message);
 
+#if XX_IS_LINUX_D
+
+void printStack();
+
+void signal_handler(int signo);
+
+void signalError(std::string_view exepath);
+
+#else
+
+void printStack();
+
+void signalError(std::string_view exepath);
+
+#endif
+
 } // namespace util
 } // namespace agentxx
 
@@ -92,31 +115,3 @@ void xxLogPrint(LogLevel level, const std::string& message);
 
 #define XX_OUT(str, ...) \
     (::agentxx::util::xxLogPrint(::agentxx::util::LogLevel::Out, fmt::format(str, ##__VA_ARGS__)));
-
-#if XX_IS_LINUX_D
-
-namespace agentxx {
-namespace util {
-
-void printStack();
-
-void signal_handler(int signo);
-
-void signalError(std::string_view exepath);
-
-}; // namespace util
-}; // namespace agentxx
-
-#else
-
-namespace agentxx {
-namespace util {
-
-void printStack();
-
-void signalError(std::string_view exepath);
-
-}; // namespace util
-}; // namespace agentxx
-
-#endif

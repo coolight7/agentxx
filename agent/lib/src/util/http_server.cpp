@@ -209,16 +209,14 @@ void HttpServer::startAsync(asio::any_io_executor executor) {
     XX_OUT("[server] Listening on {}:{} (async mode)", config_.address, port());
 }
 
-asio::awaitable<void> HttpServer::serveTcp(
-    std::shared_ptr<boost::beast::tcp_stream> stream
-) {
+asio::awaitable<void> HttpServer::serveTcp(std::shared_ptr<boost::beast::tcp_stream> stream) {
     ConnectionGuard guard{activeConnections_};
     co_await serve(std::move(*stream));
 }
 
-asio::awaitable<void> HttpServer::serveSsl(
-    std::shared_ptr<boost::beast::ssl_stream<boost::beast::tcp_stream>> stream
-) {
+asio::awaitable<void>
+    HttpServer::serveSsl(std::shared_ptr<boost::beast::ssl_stream<boost::beast::tcp_stream>> stream
+    ) {
     ConnectionGuard guard{activeConnections_};
     co_await sslHandshakeAndServe(stream);
 }

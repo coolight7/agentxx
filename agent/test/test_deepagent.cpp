@@ -293,12 +293,8 @@ asio::awaitable<void> test_deepagent_conversation_turn() {
     agentxx::agent::DeepAgent agent(cfg);
     co_await agent.init();
 
-    auto result = co_await agent.runConversationTurnAsync(
-        "conv_test",
-        "What is the weather?",
-        true,
-        nullptr
-    );
+    auto result = co_await agent
+                      .runConversationTurnAsync("conv_test", "What is the weather?", true, nullptr);
 
     XX_TEST_EXPECT_FALSE(result.hasError);
     XX_TEST_EXPECT_FALSE(result.interrupted);
@@ -333,12 +329,7 @@ asio::awaitable<void> test_deepagent_tool_calls() {
     agentxx::agent::DeepAgent agent(cfg);
     co_await agent.init();
 
-    auto result = co_await agent.runConversationTurnAsync(
-        "tool_test",
-        "List files",
-        true,
-        nullptr
-    );
+    auto result = co_await agent.runConversationTurnAsync("tool_test", "List files", true, nullptr);
 
     XX_TEST_EXPECT_FALSE(result.hasError);
 
@@ -362,13 +353,9 @@ asio::awaitable<void> test_deepagent_multi_turn() {
     co_await agent.init();
 
     for (int turn = 0; turn < 3; ++turn) {
-        auto input  = "Turn " + std::to_string(turn) + " input";
-        auto result = co_await agent.runConversationTurnAsync(
-            "multi_turn_test",
-            input,
-            turn == 0,
-            nullptr
-        );
+        auto input = "Turn " + std::to_string(turn) + " input";
+        auto result
+            = co_await agent.runConversationTurnAsync("multi_turn_test", input, turn == 0, nullptr);
 
         XX_TEST_EXPECT_FALSE(result.hasError);
         XX_TEST_EXPECT_FALSE(result.interrupted);
@@ -393,12 +380,8 @@ asio::awaitable<void> test_deepagent_large_history() {
     agentxx::agent::DeepAgent agent(cfg);
     co_await agent.init();
 
-    auto result = co_await agent.runConversationTurnAsync(
-        "history_test",
-        "Final question",
-        true,
-        nullptr
-    );
+    auto result
+        = co_await agent.runConversationTurnAsync("history_test", "Final question", true, nullptr);
 
     XX_TEST_EXPECT_FALSE(result.hasError);
 
@@ -455,12 +438,7 @@ asio::awaitable<void> test_deepagent_io_session_bus() {
 
     auto io = std::make_shared<TestAgentIO>();
     // 首次调用, 应创建 session bus 并注册 IO
-    auto result = co_await agent.runConversationTurnAsync(
-        "io_session_test",
-        "Hello",
-        true,
-        io
-    );
+    auto result = co_await agent.runConversationTurnAsync("io_session_test", "Hello", true, io);
 
     XX_TEST_EXPECT_FALSE(result.hasError);
     // session bus 应已创建
@@ -491,12 +469,7 @@ asio::awaitable<void> test_deepagent_io_null() {
     co_await agent.init();
 
     // 传入 nullptr IO, 验证不崩溃
-    auto result = co_await agent.runConversationTurnAsync(
-        "null_io_test",
-        "test",
-        true,
-        nullptr
-    );
+    auto result = co_await agent.runConversationTurnAsync("null_io_test", "test", true, nullptr);
 
     XX_TEST_EXPECT_FALSE(result.hasError);
 
@@ -517,13 +490,9 @@ asio::awaitable<void> test_deepagent_session_activity_streaming() {
     agentxx::agent::DeepAgent agent(cfg);
     co_await agent.init();
 
-    auto           io       = std::make_shared<TestAgentIO>();
-    auto           result   = co_await agent.runConversationTurnAsync(
-        "activity_stream_test",
-        "Check",
-        true,
-        io
-    );
+    auto io = std::make_shared<TestAgentIO>();
+    auto result
+        = co_await agent.runConversationTurnAsync("activity_stream_test", "Check", true, io);
 
     XX_TEST_EXPECT_FALSE(result.hasError);
     auto session = agent.agentContext->sessions->get("activity_stream_test");
@@ -559,13 +528,8 @@ asio::awaitable<void> test_deepagent_session_activity_toolcall() {
     agentxx::agent::DeepAgent agent(cfg);
     co_await agent.init();
 
-    auto           io       = std::make_shared<TestAgentIO>();
-    auto           result   = co_await agent.runConversationTurnAsync(
-        "activity_tool_test",
-        "List",
-        true,
-        io
-    );
+    auto io     = std::make_shared<TestAgentIO>();
+    auto result = co_await agent.runConversationTurnAsync("activity_tool_test", "List", true, io);
 
     XX_TEST_EXPECT_FALSE(result.hasError);
     auto session = agent.agentContext->sessions->get("activity_tool_test");
@@ -592,20 +556,10 @@ asio::awaitable<void> test_deepagent_multi_session_io() {
     auto ioA = std::make_shared<TestAgentIO>();
     auto ioB = std::make_shared<TestAgentIO>();
 
-    auto resA = co_await agent.runConversationTurnAsync(
-        "session_a",
-        "Hello A",
-        true,
-        ioA
-    );
+    auto resA = co_await agent.runConversationTurnAsync("session_a", "Hello A", true, ioA);
     XX_TEST_EXPECT_FALSE(resA.hasError);
 
-    auto resB = co_await agent.runConversationTurnAsync(
-        "session_b",
-        "Hello B",
-        true,
-        ioB
-    );
+    auto resB = co_await agent.runConversationTurnAsync("session_b", "Hello B", true, ioB);
     XX_TEST_EXPECT_FALSE(resB.hasError);
 
     // 两个 session 应独立, 都有自己的 bus
@@ -640,23 +594,13 @@ asio::awaitable<void> test_deepagent_reuse_session_bus() {
     auto io = std::make_shared<TestAgentIO>();
 
     // 多轮: 同一 session, bus 应只创建一次
-    auto r1 = co_await agent.runConversationTurnAsync(
-        "reuse_test",
-        "Turn 1",
-        true,
-        io
-    );
+    auto r1 = co_await agent.runConversationTurnAsync("reuse_test", "Turn 1", true, io);
     XX_TEST_EXPECT_FALSE(r1.hasError);
 
     auto session = agent.agentContext->sessions->get("reuse_test");
     auto busPtr  = session->bus.get();
 
-    auto r2 = co_await agent.runConversationTurnAsync(
-        "reuse_test",
-        "Turn 2",
-        false,
-        io
-    );
+    auto r2 = co_await agent.runConversationTurnAsync("reuse_test", "Turn 2", false, io);
     XX_TEST_EXPECT_FALSE(r2.hasError);
 
     // 同一 session 应复用同一个 bus (指针不变)

@@ -25,29 +25,23 @@ int g_websocket_failed = 0;
 static asio::awaitable<void> test_ws_echo() {
     HttpServer server({.address = "127.0.0.1", .port = 0, .ioThreads = 1});
 
-    server.enableWebSocket(
-        "/ws",
-        [](HttpServer::WsStream& ws) -> asio::awaitable<void> {
-            boost::beast::flat_buffer buf;
-            for (;;) {
-                buf.clear();
-                boost::system::error_code ec;
-                co_await ws.async_read(buf, asio::redirect_error(asio::use_awaitable, ec));
-                if (ec) {
-                    co_return;
-                }
-                bool isText = ws.got_text();
-                ws.text(isText);
-                co_await ws.async_write(
-                    buf.data(),
-                    asio::redirect_error(asio::use_awaitable, ec)
-                );
-                if (ec) {
-                    co_return;
-                }
+    server.enableWebSocket("/ws", [](HttpServer::WsStream& ws) -> asio::awaitable<void> {
+        boost::beast::flat_buffer buf;
+        for (;;) {
+            buf.clear();
+            boost::system::error_code ec;
+            co_await ws.async_read(buf, asio::redirect_error(asio::use_awaitable, ec));
+            if (ec) {
+                co_return;
+            }
+            bool isText = ws.got_text();
+            ws.text(isText);
+            co_await ws.async_write(buf.data(), asio::redirect_error(asio::use_awaitable, ec));
+            if (ec) {
+                co_return;
             }
         }
-    );
+    });
 
     std::thread serverThread([&server]() {
         server.start();
@@ -56,7 +50,9 @@ static asio::awaitable<void> test_ws_echo() {
     uint16_t port = 0;
     for (int i = 0; i < 100; ++i) {
         port = server.port();
-        if (port != 0) break;
+        if (port != 0) {
+            break;
+        }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     if (port == 0) {
@@ -70,10 +66,7 @@ static asio::awaitable<void> test_ws_echo() {
     std::string wsUrl = "ws://127.0.0.1:" + std::to_string(port) + "/ws";
 
     {
-        auto result = co_await wsConnect(
-            co_await asio::this_coro::executor,
-            wsUrl
-        );
+        auto result = co_await wsConnect(co_await asio::this_coro::executor, wsUrl);
         XX_TEST_EXPECT_TRUE(result.has_value());
         if (result.has_value()) {
             auto& client = result.value();
@@ -100,27 +93,32 @@ static asio::awaitable<void> test_ws_echo() {
 static asio::awaitable<void> test_ws_multiple_messages() {
     HttpServer server({.address = "127.0.0.1", .port = 0, .ioThreads = 1});
 
-    server.enableWebSocket(
-        "/ws",
-        [](HttpServer::WsStream& ws) -> asio::awaitable<void> {
-            boost::beast::flat_buffer buf;
-            for (;;) {
-                buf.clear();
-                boost::system::error_code ec;
-                co_await ws.async_read(buf, asio::redirect_error(asio::use_awaitable, ec));
-                if (ec) co_return;
-                ws.text(ws.got_text());
-                co_await ws.async_write(buf.data(), asio::redirect_error(asio::use_awaitable, ec));
-                if (ec) co_return;
+    server.enableWebSocket("/ws", [](HttpServer::WsStream& ws) -> asio::awaitable<void> {
+        boost::beast::flat_buffer buf;
+        for (;;) {
+            buf.clear();
+            boost::system::error_code ec;
+            co_await ws.async_read(buf, asio::redirect_error(asio::use_awaitable, ec));
+            if (ec) {
+                co_return;
+            }
+            ws.text(ws.got_text());
+            co_await ws.async_write(buf.data(), asio::redirect_error(asio::use_awaitable, ec));
+            if (ec) {
+                co_return;
             }
         }
-    );
+    });
 
-    std::thread serverThread([&server]() { server.start(); });
+    std::thread serverThread([&server]() {
+        server.start();
+    });
     uint16_t    port = 0;
     for (int i = 0; i < 100; ++i) {
         port = server.port();
-        if (port != 0) break;
+        if (port != 0) {
+            break;
+        }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     if (port == 0) {
@@ -160,27 +158,32 @@ static asio::awaitable<void> test_ws_multiple_messages() {
 static asio::awaitable<void> test_ws_binary() {
     HttpServer server({.address = "127.0.0.1", .port = 0, .ioThreads = 1});
 
-    server.enableWebSocket(
-        "/ws",
-        [](HttpServer::WsStream& ws) -> asio::awaitable<void> {
-            boost::beast::flat_buffer buf;
-            for (;;) {
-                buf.clear();
-                boost::system::error_code ec;
-                co_await ws.async_read(buf, asio::redirect_error(asio::use_awaitable, ec));
-                if (ec) co_return;
-                ws.binary(true);
-                co_await ws.async_write(buf.data(), asio::redirect_error(asio::use_awaitable, ec));
-                if (ec) co_return;
+    server.enableWebSocket("/ws", [](HttpServer::WsStream& ws) -> asio::awaitable<void> {
+        boost::beast::flat_buffer buf;
+        for (;;) {
+            buf.clear();
+            boost::system::error_code ec;
+            co_await ws.async_read(buf, asio::redirect_error(asio::use_awaitable, ec));
+            if (ec) {
+                co_return;
+            }
+            ws.binary(true);
+            co_await ws.async_write(buf.data(), asio::redirect_error(asio::use_awaitable, ec));
+            if (ec) {
+                co_return;
             }
         }
-    );
+    });
 
-    std::thread serverThread([&server]() { server.start(); });
+    std::thread serverThread([&server]() {
+        server.start();
+    });
     uint16_t    port = 0;
     for (int i = 0; i < 100; ++i) {
         port = server.port();
-        if (port != 0) break;
+        if (port != 0) {
+            break;
+        }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     if (port == 0) {
@@ -225,28 +228,33 @@ static asio::awaitable<void> test_ws_binary() {
 static asio::awaitable<void> test_ws_large_message() {
     HttpServer server({.address = "127.0.0.1", .port = 0, .ioThreads = 1});
 
-    server.enableWebSocket(
-        "/ws",
-        [](HttpServer::WsStream& ws) -> asio::awaitable<void> {
-            ws.read_message_max(64 * 1024 * 1024);
-            boost::beast::flat_buffer buf;
-            for (;;) {
-                buf.clear();
-                boost::system::error_code ec;
-                co_await ws.async_read(buf, asio::redirect_error(asio::use_awaitable, ec));
-                if (ec) co_return;
-                ws.text(ws.got_text());
-                co_await ws.async_write(buf.data(), asio::redirect_error(asio::use_awaitable, ec));
-                if (ec) co_return;
+    server.enableWebSocket("/ws", [](HttpServer::WsStream& ws) -> asio::awaitable<void> {
+        ws.read_message_max(64 * 1024 * 1024);
+        boost::beast::flat_buffer buf;
+        for (;;) {
+            buf.clear();
+            boost::system::error_code ec;
+            co_await ws.async_read(buf, asio::redirect_error(asio::use_awaitable, ec));
+            if (ec) {
+                co_return;
+            }
+            ws.text(ws.got_text());
+            co_await ws.async_write(buf.data(), asio::redirect_error(asio::use_awaitable, ec));
+            if (ec) {
+                co_return;
             }
         }
-    );
+    });
 
-    std::thread serverThread([&server]() { server.start(); });
+    std::thread serverThread([&server]() {
+        server.start();
+    });
     uint16_t    port = 0;
     for (int i = 0; i < 100; ++i) {
         port = server.port();
-        if (port != 0) break;
+        if (port != 0) {
+            break;
+        }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     if (port == 0) {
@@ -285,27 +293,32 @@ static asio::awaitable<void> test_ws_large_message() {
 static asio::awaitable<void> test_ws_ping_pong() {
     HttpServer server({.address = "127.0.0.1", .port = 0, .ioThreads = 1});
 
-    server.enableWebSocket(
-        "/ws",
-        [](HttpServer::WsStream& ws) -> asio::awaitable<void> {
-            boost::beast::flat_buffer buf;
-            for (;;) {
-                buf.clear();
-                boost::system::error_code ec;
-                co_await ws.async_read(buf, asio::redirect_error(asio::use_awaitable, ec));
-                if (ec) co_return;
-                ws.text(ws.got_text());
-                co_await ws.async_write(buf.data(), asio::redirect_error(asio::use_awaitable, ec));
-                if (ec) co_return;
+    server.enableWebSocket("/ws", [](HttpServer::WsStream& ws) -> asio::awaitable<void> {
+        boost::beast::flat_buffer buf;
+        for (;;) {
+            buf.clear();
+            boost::system::error_code ec;
+            co_await ws.async_read(buf, asio::redirect_error(asio::use_awaitable, ec));
+            if (ec) {
+                co_return;
+            }
+            ws.text(ws.got_text());
+            co_await ws.async_write(buf.data(), asio::redirect_error(asio::use_awaitable, ec));
+            if (ec) {
+                co_return;
             }
         }
-    );
+    });
 
-    std::thread serverThread([&server]() { server.start(); });
+    std::thread serverThread([&server]() {
+        server.start();
+    });
     uint16_t    port = 0;
     for (int i = 0; i < 100; ++i) {
         port = server.port();
-        if (port != 0) break;
+        if (port != 0) {
+            break;
+        }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     if (port == 0) {
@@ -345,25 +358,28 @@ static asio::awaitable<void> test_ws_ping_pong() {
 static asio::awaitable<void> test_ws_server_close() {
     HttpServer server({.address = "127.0.0.1", .port = 0, .ioThreads = 1});
 
-    server.enableWebSocket(
-        "/ws",
-        [](HttpServer::WsStream& ws) -> asio::awaitable<void> {
-            boost::beast::flat_buffer buf;
-            boost::system::error_code ec;
-            co_await ws.async_read(buf, asio::redirect_error(asio::use_awaitable, ec));
-            if (ec) co_return;
-            co_await ws.async_close(
-                boost::beast::websocket::close_code::normal,
-                asio::redirect_error(asio::use_awaitable, ec)
-            );
+    server.enableWebSocket("/ws", [](HttpServer::WsStream& ws) -> asio::awaitable<void> {
+        boost::beast::flat_buffer buf;
+        boost::system::error_code ec;
+        co_await ws.async_read(buf, asio::redirect_error(asio::use_awaitable, ec));
+        if (ec) {
+            co_return;
         }
-    );
+        co_await ws.async_close(
+            boost::beast::websocket::close_code::normal,
+            asio::redirect_error(asio::use_awaitable, ec)
+        );
+    });
 
-    std::thread serverThread([&server]() { server.start(); });
+    std::thread serverThread([&server]() {
+        server.start();
+    });
     uint16_t    port = 0;
     for (int i = 0; i < 100; ++i) {
         port = server.port();
-        if (port != 0) break;
+        if (port != 0) {
+            break;
+        }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     if (port == 0) {
@@ -400,20 +416,21 @@ static asio::awaitable<void> test_ws_server_close() {
 static asio::awaitable<void> test_ws_invalid_path() {
     HttpServer server({.address = "127.0.0.1", .port = 0, .ioThreads = 1});
 
-    server.enableWebSocket(
-        "/ws",
-        [](HttpServer::WsStream& ws) -> asio::awaitable<void> {
-            boost::beast::flat_buffer buf;
-            boost::system::error_code ec;
-            co_await ws.async_read(buf, asio::redirect_error(asio::use_awaitable, ec));
-        }
-    );
+    server.enableWebSocket("/ws", [](HttpServer::WsStream& ws) -> asio::awaitable<void> {
+        boost::beast::flat_buffer buf;
+        boost::system::error_code ec;
+        co_await ws.async_read(buf, asio::redirect_error(asio::use_awaitable, ec));
+    });
 
-    std::thread serverThread([&server]() { server.start(); });
+    std::thread serverThread([&server]() {
+        server.start();
+    });
     uint16_t    port = 0;
     for (int i = 0; i < 100; ++i) {
         port = server.port();
-        if (port != 0) break;
+        if (port != 0) {
+            break;
+        }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     if (port == 0) {
@@ -452,17 +469,12 @@ static asio::awaitable<void> test_ws_connect_refused() {
 
 static asio::awaitable<void> test_ws_invalid_url() {
     {
-        auto result = co_await wsConnect(
-            co_await asio::this_coro::executor,
-            "http://127.0.0.1:8080/ws"
-        );
+        auto result
+            = co_await wsConnect(co_await asio::this_coro::executor, "http://127.0.0.1:8080/ws");
         XX_TEST_EXPECT_FALSE(result.has_value());
     }
     {
-        auto result = co_await wsConnect(
-            co_await asio::this_coro::executor,
-            "ws://"
-        );
+        auto result = co_await wsConnect(co_await asio::this_coro::executor, "ws://");
         XX_TEST_EXPECT_FALSE(result.has_value());
     }
 }
@@ -470,27 +482,32 @@ static asio::awaitable<void> test_ws_invalid_url() {
 static asio::awaitable<void> test_ws_concurrent_clients() {
     HttpServer server({.address = "127.0.0.1", .port = 0, .ioThreads = 2});
 
-    server.enableWebSocket(
-        "/ws",
-        [](HttpServer::WsStream& ws) -> asio::awaitable<void> {
-            boost::beast::flat_buffer buf;
-            for (;;) {
-                buf.clear();
-                boost::system::error_code ec;
-                co_await ws.async_read(buf, asio::redirect_error(asio::use_awaitable, ec));
-                if (ec) co_return;
-                ws.text(ws.got_text());
-                co_await ws.async_write(buf.data(), asio::redirect_error(asio::use_awaitable, ec));
-                if (ec) co_return;
+    server.enableWebSocket("/ws", [](HttpServer::WsStream& ws) -> asio::awaitable<void> {
+        boost::beast::flat_buffer buf;
+        for (;;) {
+            buf.clear();
+            boost::system::error_code ec;
+            co_await ws.async_read(buf, asio::redirect_error(asio::use_awaitable, ec));
+            if (ec) {
+                co_return;
+            }
+            ws.text(ws.got_text());
+            co_await ws.async_write(buf.data(), asio::redirect_error(asio::use_awaitable, ec));
+            if (ec) {
+                co_return;
             }
         }
-    );
+    });
 
-    std::thread serverThread([&server]() { server.start(); });
+    std::thread serverThread([&server]() {
+        server.start();
+    });
     uint16_t    port = 0;
     for (int i = 0; i < 100; ++i) {
         port = server.port();
-        if (port != 0) break;
+        if (port != 0) {
+            break;
+        }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
@@ -501,18 +518,22 @@ static asio::awaitable<void> test_ws_concurrent_clients() {
         co_return;
     }
 
-    std::string wsUrl = "ws://127.0.0.1:" + std::to_string(port) + "/ws";
+    std::string wsUrl    = "ws://127.0.0.1:" + std::to_string(port) + "/ws";
     auto        executor = co_await asio::this_coro::executor;
 
-    constexpr int kNumClients = 5;
+    constexpr int kNumClients  = 5;
     int           successCount = 0;
 
     for (int c = 0; c < kNumClients; ++c) {
-        auto result = co_await wsConnect(executor, wsUrl, {},
-            WsClientConfig{.connectTimeout = std::chrono::milliseconds{5000}});
+        auto result = co_await wsConnect(
+            executor,
+            wsUrl,
+            {},
+            WsClientConfig{.connectTimeout = std::chrono::milliseconds{5000}}
+        );
         if (result.has_value()) {
-            auto& client = result.value();
-            std::string msg = "client_" + std::to_string(c);
+            auto&       client = result.value();
+            std::string msg    = "client_" + std::to_string(c);
             co_await client->sendText(msg);
             auto rr = co_await client->recv();
             if (rr.has_value() && rr.value().payload == msg) {
@@ -525,7 +546,7 @@ static asio::awaitable<void> test_ws_concurrent_clients() {
             TEST_FAIL << "ws concurrent client " << c << ": connect failed: " << result.error()
                       << std::endl;
         }
-        asio::steady_timer delay(executor, std::chrono::milliseconds(100));
+        asio::steady_timer        delay(executor, std::chrono::milliseconds(100));
         boost::system::error_code dec;
         co_await delay.async_wait(asio::redirect_error(asio::use_awaitable, dec));
     }
@@ -549,8 +570,7 @@ static asio::awaitable<void> test_ws_client_disconnect() {
                 boost::system::error_code ec;
                 co_await ws.async_read(buf, asio::redirect_error(asio::use_awaitable, ec));
                 if (ec) {
-                    if (ec == boost::beast::websocket::error::closed
-                        || ec == asio::error::eof
+                    if (ec == boost::beast::websocket::error::closed || ec == asio::error::eof
                         || ec == boost::beast::error::timeout) {
                         serverDetectedClose = true;
                     }
@@ -560,11 +580,15 @@ static asio::awaitable<void> test_ws_client_disconnect() {
         }
     );
 
-    std::thread serverThread([&server]() { server.start(); });
+    std::thread serverThread([&server]() {
+        server.start();
+    });
     uint16_t    port = 0;
     for (int i = 0; i < 100; ++i) {
         port = server.port();
-        if (port != 0) break;
+        if (port != 0) {
+            break;
+        }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     if (port == 0) {
@@ -586,10 +610,7 @@ static asio::awaitable<void> test_ws_client_disconnect() {
         }
     }
 
-    asio::steady_timer timer(
-        co_await asio::this_coro::executor,
-        std::chrono::milliseconds(200)
-    );
+    asio::steady_timer timer(co_await asio::this_coro::executor, std::chrono::milliseconds(200));
     boost::system::error_code tec;
     co_await timer.async_wait(asio::redirect_error(asio::use_awaitable, tec));
 
@@ -603,21 +624,22 @@ static asio::awaitable<void> test_ws_start_async_mode() {
     asio::io_context serverCtx;
     HttpServer       server({.address = "127.0.0.1", .port = 0, .ioThreads = 1});
 
-    server.enableWebSocket(
-        "/ws",
-        [](HttpServer::WsStream& ws) -> asio::awaitable<void> {
-            boost::beast::flat_buffer buf;
-            for (;;) {
-                buf.clear();
-                boost::system::error_code ec;
-                co_await ws.async_read(buf, asio::redirect_error(asio::use_awaitable, ec));
-                if (ec) co_return;
-                ws.text(ws.got_text());
-                co_await ws.async_write(buf.data(), asio::redirect_error(asio::use_awaitable, ec));
-                if (ec) co_return;
+    server.enableWebSocket("/ws", [](HttpServer::WsStream& ws) -> asio::awaitable<void> {
+        boost::beast::flat_buffer buf;
+        for (;;) {
+            buf.clear();
+            boost::system::error_code ec;
+            co_await ws.async_read(buf, asio::redirect_error(asio::use_awaitable, ec));
+            if (ec) {
+                co_return;
+            }
+            ws.text(ws.got_text());
+            co_await ws.async_write(buf.data(), asio::redirect_error(asio::use_awaitable, ec));
+            if (ec) {
+                co_return;
             }
         }
-    );
+    });
 
     server.router().add(
         "/health",
@@ -644,7 +666,9 @@ static asio::awaitable<void> test_ws_start_async_mode() {
     uint16_t port = 0;
     for (int i = 0; i < 100; ++i) {
         port = server.port();
-        if (port != 0) break;
+        if (port != 0) {
+            break;
+        }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     if (port == 0) {
@@ -655,9 +679,8 @@ static asio::awaitable<void> test_ws_start_async_mode() {
     }
 
     {
-        auto resp = co_await HttpClient::getAsync(
-            "http://127.0.0.1:" + std::to_string(port) + "/health"
-        );
+        auto resp
+            = co_await HttpClient::getAsync("http://127.0.0.1:" + std::to_string(port) + "/health");
         XX_TEST_EXPECT_TRUE(resp.has_value());
         if (resp.has_value()) {
             XX_TEST_EXPECT_EQ(resp.value().body, "ok");
@@ -665,7 +688,7 @@ static asio::awaitable<void> test_ws_start_async_mode() {
     }
 
     {
-        std::string wsUrl = "ws://127.0.0.1:" + std::to_string(port) + "/ws";
+        std::string wsUrl  = "ws://127.0.0.1:" + std::to_string(port) + "/ws";
         auto        result = co_await wsConnect(co_await asio::this_coro::executor, wsUrl);
         XX_TEST_EXPECT_TRUE(result.has_value());
         if (result.has_value()) {
@@ -687,23 +710,21 @@ static asio::awaitable<void> test_ws_start_async_mode() {
 static asio::awaitable<void> test_ws_recv_timeout() {
     HttpServer server({.address = "127.0.0.1", .port = 0, .ioThreads = 1});
 
-    server.enableWebSocket(
-        "/ws",
-        [](HttpServer::WsStream& ws) -> asio::awaitable<void> {
-            asio::steady_timer timer(
-                co_await asio::this_coro::executor,
-                std::chrono::seconds{30}
-            );
-            boost::system::error_code ec;
-            co_await timer.async_wait(asio::redirect_error(asio::use_awaitable, ec));
-        }
-    );
+    server.enableWebSocket("/ws", [](HttpServer::WsStream& ws) -> asio::awaitable<void> {
+        asio::steady_timer timer(co_await asio::this_coro::executor, std::chrono::seconds{30});
+        boost::system::error_code ec;
+        co_await timer.async_wait(asio::redirect_error(asio::use_awaitable, ec));
+    });
 
-    std::thread serverThread([&server]() { server.start(); });
+    std::thread serverThread([&server]() {
+        server.start();
+    });
     uint16_t    port = 0;
     for (int i = 0; i < 100; ++i) {
         port = server.port();
-        if (port != 0) break;
+        if (port != 0) {
+            break;
+        }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     if (port == 0) {
@@ -741,27 +762,32 @@ static asio::awaitable<void> test_ws_recv_timeout() {
 static asio::awaitable<void> test_ws_empty_message() {
     HttpServer server({.address = "127.0.0.1", .port = 0, .ioThreads = 1});
 
-    server.enableWebSocket(
-        "/ws",
-        [](HttpServer::WsStream& ws) -> asio::awaitable<void> {
-            boost::beast::flat_buffer buf;
-            for (;;) {
-                buf.clear();
-                boost::system::error_code ec;
-                co_await ws.async_read(buf, asio::redirect_error(asio::use_awaitable, ec));
-                if (ec) co_return;
-                ws.text(ws.got_text());
-                co_await ws.async_write(buf.data(), asio::redirect_error(asio::use_awaitable, ec));
-                if (ec) co_return;
+    server.enableWebSocket("/ws", [](HttpServer::WsStream& ws) -> asio::awaitable<void> {
+        boost::beast::flat_buffer buf;
+        for (;;) {
+            buf.clear();
+            boost::system::error_code ec;
+            co_await ws.async_read(buf, asio::redirect_error(asio::use_awaitable, ec));
+            if (ec) {
+                co_return;
+            }
+            ws.text(ws.got_text());
+            co_await ws.async_write(buf.data(), asio::redirect_error(asio::use_awaitable, ec));
+            if (ec) {
+                co_return;
             }
         }
-    );
+    });
 
-    std::thread serverThread([&server]() { server.start(); });
+    std::thread serverThread([&server]() {
+        server.start();
+    });
     uint16_t    port = 0;
     for (int i = 0; i < 100; ++i) {
         port = server.port();
-        if (port != 0) break;
+        if (port != 0) {
+            break;
+        }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     if (port == 0) {
@@ -798,27 +824,32 @@ static asio::awaitable<void> test_ws_empty_message() {
 static asio::awaitable<void> test_ws_unicode() {
     HttpServer server({.address = "127.0.0.1", .port = 0, .ioThreads = 1});
 
-    server.enableWebSocket(
-        "/ws",
-        [](HttpServer::WsStream& ws) -> asio::awaitable<void> {
-            boost::beast::flat_buffer buf;
-            for (;;) {
-                buf.clear();
-                boost::system::error_code ec;
-                co_await ws.async_read(buf, asio::redirect_error(asio::use_awaitable, ec));
-                if (ec) co_return;
-                ws.text(ws.got_text());
-                co_await ws.async_write(buf.data(), asio::redirect_error(asio::use_awaitable, ec));
-                if (ec) co_return;
+    server.enableWebSocket("/ws", [](HttpServer::WsStream& ws) -> asio::awaitable<void> {
+        boost::beast::flat_buffer buf;
+        for (;;) {
+            buf.clear();
+            boost::system::error_code ec;
+            co_await ws.async_read(buf, asio::redirect_error(asio::use_awaitable, ec));
+            if (ec) {
+                co_return;
+            }
+            ws.text(ws.got_text());
+            co_await ws.async_write(buf.data(), asio::redirect_error(asio::use_awaitable, ec));
+            if (ec) {
+                co_return;
             }
         }
-    );
+    });
 
-    std::thread serverThread([&server]() { server.start(); });
+    std::thread serverThread([&server]() {
+        server.start();
+    });
     uint16_t    port = 0;
     for (int i = 0; i < 100; ++i) {
         port = server.port();
-        if (port != 0) break;
+        if (port != 0) {
+            break;
+        }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     if (port == 0) {
@@ -872,31 +903,36 @@ static asio::awaitable<void> test_ws_http_and_ws_coexist() {
         )
     );
 
-    server.enableWebSocket(
-        "/ws",
-        [](HttpServer::WsStream& ws) -> asio::awaitable<void> {
-            boost::beast::flat_buffer buf;
-            for (;;) {
-                buf.clear();
-                boost::system::error_code ec;
-                co_await ws.async_read(buf, asio::redirect_error(asio::use_awaitable, ec));
-                if (ec) co_return;
-                ws.text(true);
-                std::string reply = "ws:" + boost::beast::buffers_to_string(buf.data());
-                co_await ws.async_write(
-                    asio::buffer(reply),
-                    asio::redirect_error(asio::use_awaitable, ec)
-                );
-                if (ec) co_return;
+    server.enableWebSocket("/ws", [](HttpServer::WsStream& ws) -> asio::awaitable<void> {
+        boost::beast::flat_buffer buf;
+        for (;;) {
+            buf.clear();
+            boost::system::error_code ec;
+            co_await ws.async_read(buf, asio::redirect_error(asio::use_awaitable, ec));
+            if (ec) {
+                co_return;
+            }
+            ws.text(true);
+            std::string reply = "ws:" + boost::beast::buffers_to_string(buf.data());
+            co_await ws.async_write(
+                asio::buffer(reply),
+                asio::redirect_error(asio::use_awaitable, ec)
+            );
+            if (ec) {
+                co_return;
             }
         }
-    );
+    });
 
-    std::thread serverThread([&server]() { server.start(); });
+    std::thread serverThread([&server]() {
+        server.start();
+    });
     uint16_t    port = 0;
     for (int i = 0; i < 100; ++i) {
         port = server.port();
-        if (port != 0) break;
+        if (port != 0) {
+            break;
+        }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     if (port == 0) {
@@ -948,20 +984,21 @@ static asio::awaitable<void> test_ws_http_and_ws_coexist() {
 static asio::awaitable<void> test_ws_send_after_close() {
     HttpServer server({.address = "127.0.0.1", .port = 0, .ioThreads = 1});
 
-    server.enableWebSocket(
-        "/ws",
-        [](HttpServer::WsStream& ws) -> asio::awaitable<void> {
-            boost::beast::flat_buffer buf;
-            boost::system::error_code ec;
-            co_await ws.async_read(buf, asio::redirect_error(asio::use_awaitable, ec));
-        }
-    );
+    server.enableWebSocket("/ws", [](HttpServer::WsStream& ws) -> asio::awaitable<void> {
+        boost::beast::flat_buffer buf;
+        boost::system::error_code ec;
+        co_await ws.async_read(buf, asio::redirect_error(asio::use_awaitable, ec));
+    });
 
-    std::thread serverThread([&server]() { server.start(); });
+    std::thread serverThread([&server]() {
+        server.start();
+    });
     uint16_t    port = 0;
     for (int i = 0; i < 100; ++i) {
         port = server.port();
-        if (port != 0) break;
+        if (port != 0) {
+            break;
+        }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     if (port == 0) {

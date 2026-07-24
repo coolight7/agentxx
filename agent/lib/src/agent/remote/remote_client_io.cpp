@@ -83,12 +83,8 @@ asio::awaitable<neograph::json> RemoteClientAgentIO::handleInterrupt(
     if (!inner_) {
         co_return neograph::json::array();
     }
-    co_return co_await inner_->handleInterrupt(
-        threadId,
-        interruptNode,
-        interruptValue,
-        interruptArgJson
-    );
+    co_return co_await inner_
+        ->handleInterrupt(threadId, interruptNode, interruptValue, interruptArgJson);
 }
 
 // ---------------------------------------------------------------------------
@@ -112,11 +108,21 @@ void RemoteClientAgentIO::breakConnection() {
     if (heartbeatTimer_) {
         heartbeatTimer_->cancel();
     }
-    if (writeQueue_) writeQueue_->close();
-    if (authChannel_) authChannel_->close();
-    if (turnChannel_) turnChannel_->close();
-    if (disconnectChannel_) disconnectChannel_->try_send(ErrorCode{}, true);
-    if (transport_) transport_->close();
+    if (writeQueue_) {
+        writeQueue_->close();
+    }
+    if (authChannel_) {
+        authChannel_->close();
+    }
+    if (turnChannel_) {
+        turnChannel_->close();
+    }
+    if (disconnectChannel_) {
+        disconnectChannel_->try_send(ErrorCode{}, true);
+    }
+    if (transport_) {
+        transport_->close();
+    }
 }
 
 void RemoteClientAgentIO::onDisconnected() {
@@ -250,7 +256,8 @@ asio::awaitable<void> RemoteClientAgentIO::readLoop() {
                 uint64_t seq = d->seq;
                 uint64_t cur = lastDeltaSeq_.load(std::memory_order_acquire);
                 while (seq > cur
-                       && !lastDeltaSeq_.compare_exchange_weak(cur, seq, std::memory_order_acq_rel)) {
+                       && !lastDeltaSeq_.compare_exchange_weak(cur, seq, std::memory_order_acq_rel)
+                ) {
                 }
                 onDelta(d.value());
             }
@@ -260,7 +267,10 @@ asio::awaitable<void> RemoteClientAgentIO::readLoop() {
                 lastTailHash_ = s->tailHash;
                 // 全量 sync 后以 server 的 deltaSeq 校准增量基线
                 if (j.contains("delta_seq")) {
-                    lastDeltaSeq_.store(j.value("delta_seq", uint64_t{0}), std::memory_order_release);
+                    lastDeltaSeq_.store(
+                        j.value("delta_seq", uint64_t{0}),
+                        std::memory_order_release
+                    );
                 }
                 onSync(s.value());
             }
@@ -341,15 +351,13 @@ asio::awaitable<void> RemoteClientAgentIO::heartbeat() {
 // 握手
 // ---------------------------------------------------------------------------
 
-asio::awaitable<bool> RemoteClientAgentIO::connect(
-    const std::string& threadId,
-    const std::string& token
-) {
+asio::awaitable<bool>
+    RemoteClientAgentIO::connect(const std::string& threadId, const std::string& token) {
     // 重连时携带 lastSeq/tailHash 供 server 增量重放
     enqueue(makeHello(threadId, token, lastDeltaSeq_.load(std::memory_order_acquire), lastTailHash_)
     );
-    bool ok        = false;
-    bool gotReply  = false;
+    bool ok       = false;
+    bool gotReply = false;
     try {
         ok = co_await authChannel_->async_receive(
             asio::cancel_after(config_.authTimeout, asio::use_awaitable)
@@ -357,17 +365,15 @@ asio::awaitable<bool> RemoteClientAgentIO::connect(
         gotReply = true;
     } catch (const boost::system::system_error&) {
     }
-    co_return gotReply && ok;
+    co_return gotReply&& ok;
 }
 
 // ---------------------------------------------------------------------------
 // 手动模式
 // ---------------------------------------------------------------------------
 
-asio::awaitable<bool> RemoteClientAgentIO::start(
-    const std::string& threadId,
-    const std::string& token
-) {
+asio::awaitable<bool>
+    RemoteClientAgentIO::start(const std::string& threadId, const std::string& token) {
     threadId_ = threadId;
     resetConnState();
     spawnLoops();
@@ -485,10 +491,8 @@ asio::awaitable<bool> RemoteClientAgentIO::runOnce() {
     co_return true;
 }
 
-asio::awaitable<void> RemoteClientAgentIO::runSession(
-    const std::string& threadId,
-    const std::string& model
-) {
+asio::awaitable<void>
+    RemoteClientAgentIO::runSession(const std::string& threadId, const std::string& model) {
     threadId_ = threadId;
     model_    = model;
     first_    = true;

@@ -11,9 +11,9 @@ struct WsClient::Impl {
     asio::any_io_executor executor;
     WsClientConfig        config;
 
-    using WsStream  = boost::beast::websocket::stream<boost::beast::tcp_stream>;
-    using WssStream = boost::beast::websocket::stream<
-        boost::beast::ssl_stream<boost::beast::tcp_stream>>;
+    using WsStream = boost::beast::websocket::stream<boost::beast::tcp_stream>;
+    using WssStream
+        = boost::beast::websocket::stream<boost::beast::ssl_stream<boost::beast::tcp_stream>>;
 
     std::unique_ptr<WsStream>  ws;
     std::unique_ptr<WssStream> wss;
@@ -28,11 +28,9 @@ struct WsClient::Impl {
 
     void configureStream() {
         if (isSsl) {
-            wss->set_option(
-                boost::beast::websocket::stream_base::timeout::suggested(
-                    boost::beast::role_type::client
-                )
-            );
+            wss->set_option(boost::beast::websocket::stream_base::timeout::suggested(
+                boost::beast::role_type::client
+            ));
             wss->set_option(boost::beast::websocket::stream_base::decorator(
                 [](boost::beast::websocket::request_type& req) {
                     req.set(boost::beast::http::field::user_agent, "agentxx-ws/1.0");
@@ -40,11 +38,9 @@ struct WsClient::Impl {
             ));
             wss->read_message_max(config.maxMessageSize);
         } else {
-            ws->set_option(
-                boost::beast::websocket::stream_base::timeout::suggested(
-                    boost::beast::role_type::client
-                )
-            );
+            ws->set_option(boost::beast::websocket::stream_base::timeout::suggested(
+                boost::beast::role_type::client
+            ));
             ws->set_option(boost::beast::websocket::stream_base::decorator(
                 [](boost::beast::websocket::request_type& req) {
                     req.set(boost::beast::http::field::user_agent, "agentxx-ws/1.0");
@@ -163,17 +159,15 @@ asio::awaitable<std::expected<void, std::string>> WsClient::sendPing(std::string
     }
 }
 
-asio::awaitable<std::expected<void, std::string>> WsClient::sendClose(
-    uint16_t         code,
-    std::string_view reason
-) {
+asio::awaitable<std::expected<void, std::string>>
+    WsClient::sendClose(uint16_t code, std::string_view reason) {
     if (!impl_ || impl_->closed_) {
         co_return std::expected<void, std::string>{};
     }
     impl_->closed_ = true;
     try {
         boost::beast::websocket::close_reason cr;
-        cr.code = code;
+        cr.code   = code;
         cr.reason = std::string(reason);
         if (impl_->isSsl) {
             co_await impl_->wss->async_close(
@@ -212,8 +206,8 @@ asio::awaitable<std::expected<WsMessage, std::string>> WsClient::recv() {
 
         WsMessage msg;
         bool      isText = impl_->isSsl ? impl_->wss->got_text() : impl_->ws->got_text();
-        msg.type    = isText ? WsMessage::Type::Text : WsMessage::Type::Binary;
-        msg.payload = boost::beast::buffers_to_string(impl_->readBuffer.data());
+        msg.type         = isText ? WsMessage::Type::Text : WsMessage::Type::Binary;
+        msg.payload      = boost::beast::buffers_to_string(impl_->readBuffer.data());
         impl_->readBuffer.consume(impl_->readBuffer.size());
         co_return std::expected<WsMessage, std::string>{std::move(msg)};
     } catch (const boost::system::system_error& e) {
@@ -232,10 +226,10 @@ asio::awaitable<std::expected<WsMessage, std::string>> WsClient::recv() {
 }
 
 asio::awaitable<std::expected<std::unique_ptr<WsClient>, std::string>> wsConnect(
-    asio::any_io_executor                    executor,
-    std::string_view                         url,
+    asio::any_io_executor                            executor,
+    std::string_view                                 url,
     std::vector<std::pair<std::string, std::string>> headers,
-    WsClientConfig                           config
+    WsClientConfig                                   config
 ) {
     namespace beast = boost::beast;
     namespace ws    = beast::websocket;
@@ -248,7 +242,7 @@ asio::awaitable<std::expected<std::unique_ptr<WsClient>, std::string>> wsConnect
     std::string path;
 
     if (urlStr.starts_with("wss://")) {
-        isSsl = true;
+        isSsl  = true;
         urlStr = urlStr.substr(6);
     } else if (urlStr.starts_with("ws://")) {
         urlStr = urlStr.substr(5);
@@ -256,7 +250,7 @@ asio::awaitable<std::expected<std::unique_ptr<WsClient>, std::string>> wsConnect
         co_return std::unexpected<std::string>{"invalid ws url, must start with ws:// or wss://"};
     }
 
-    auto pathStart = urlStr.find('/');
+    auto        pathStart = urlStr.find('/');
     std::string hostPort;
     if (pathStart == std::string::npos) {
         hostPort = urlStr;
@@ -279,26 +273,22 @@ asio::awaitable<std::expected<std::unique_ptr<WsClient>, std::string>> wsConnect
         co_return std::unexpected<std::string>{"empty host in ws url"};
     }
 
-    auto impl = std::make_unique<WsClient::Impl>(executor, config);
+    auto impl   = std::make_unique<WsClient::Impl>(executor, config);
     impl->isSsl = isSsl;
 
     try {
         tcp::resolver resolver(executor);
-        auto endpoints = co_await resolver.async_resolve(
+        auto          endpoints = co_await resolver.async_resolve(
             host,
             port,
             asio::cancel_after(config.connectTimeout, asio::use_awaitable)
         );
 
         if (isSsl) {
-            auto& sslCtx = HttpClient::sharedSslCtx(config.sslVerify);
+            auto& sslCtx    = HttpClient::sharedSslCtx(config.sslVerify);
             auto  sslStream = beast::ssl_stream<beast::tcp_stream>(executor, sslCtx);
             if (!config.sslVerify) {
-                ::SSL_set_verify(
-                    sslStream.native_handle(),
-                    SSL_VERIFY_NONE,
-                    nullptr
-                );
+                ::SSL_set_verify(sslStream.native_handle(), SSL_VERIFY_NONE, nullptr);
             } else {
                 ::SSL_set_tlsext_host_name(sslStream.native_handle(), host.c_str());
             }
@@ -309,10 +299,7 @@ asio::awaitable<std::expected<std::unique_ptr<WsClient>, std::string>> wsConnect
             );
 
             boost::system::error_code tcpEc;
-            beast::get_lowest_layer(sslStream).socket().set_option(
-                tcp::no_delay(true),
-                tcpEc
-            );
+            beast::get_lowest_layer(sslStream).socket().set_option(tcp::no_delay(true), tcpEc);
 
             co_await sslStream.async_handshake(
                 asio::ssl::stream_base::client,
@@ -327,13 +314,13 @@ asio::awaitable<std::expected<std::unique_ptr<WsClient>, std::string>> wsConnect
                 hostHeader += ":" + port;
             }
 
-            for (auto& [k, v] : headers) {
-                impl->wss->set_option(ws::stream_base::decorator(
-                    [&k, &v](ws::request_type& req) {
+            impl->ws->set_option(
+                beast::websocket::stream_base::decorator([&headers](ws::request_type& req) {
+                    for (const auto& [k, v] : headers) {
                         req.set(k, v);
                     }
-                ));
-            }
+                })
+            );
 
             co_await impl->wss->async_handshake(
                 hostHeader,
@@ -359,13 +346,13 @@ asio::awaitable<std::expected<std::unique_ptr<WsClient>, std::string>> wsConnect
                 hostHeader += ":" + port;
             }
 
-            for (auto& [k, v] : headers) {
-                impl->ws->set_option(ws::stream_base::decorator(
-                    [&k, &v](ws::request_type& req) {
+            impl->ws->set_option(
+                beast::websocket::stream_base::decorator([&headers](ws::request_type& req) {
+                    for (const auto& [k, v] : headers) {
                         req.set(k, v);
                     }
-                ));
-            }
+                })
+            );
 
             co_await impl->ws->async_handshake(
                 hostHeader,

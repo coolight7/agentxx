@@ -21,14 +21,15 @@ namespace remote {
 class ChannelTransport : public MessageTransport {
 public:
 
-    using Chan = asio::experimental::concurrent_channel<void(boost::system::error_code, std::string)>;
+    using Chan
+        = asio::experimental::concurrent_channel<void(boost::system::error_code, std::string)>;
 
     ChannelTransport(std::shared_ptr<Chan> outgoing, std::shared_ptr<Chan> incoming);
 
     /// 创建互连的一对传输: first=client 端, second=server 端
     /// - clientEx: client 端接收方 executor; serverEx: server 端接收方 executor
     static std::pair<std::unique_ptr<ChannelTransport>, std::unique_ptr<ChannelTransport>>
-    makePair(asio::any_io_executor clientEx, asio::any_io_executor serverEx, size_t cap = 4096);
+        makePair(asio::any_io_executor clientEx, asio::any_io_executor serverEx, size_t cap = 4096);
 
     asio::awaitable<std::expected<void, std::string>> send(std::string_view jsonText) override;
 

@@ -30,9 +30,9 @@ AgentServer::~AgentServer() {
 }
 
 std::string AgentServer::generateToken(size_t bytes) {
-    static const char* hex = "0123456789abcdef";
-    std::random_device rd;
-    std::mt19937_64    gen(rd());
+    static const char*                 hex = "0123456789abcdef";
+    std::random_device                 rd;
+    std::mt19937_64                    gen(rd());
     std::uniform_int_distribution<int> dist(0, 15);
     std::string                        token;
     token.reserve(bytes * 2);
@@ -95,23 +95,19 @@ std::shared_ptr<SessionController> AgentServer::getOrCreateController(const std:
     cfg.gracePeriod       = config_.gracePeriod;
     cfg.deltaBufferCap    = config_.deltaBufferCap;
 
-    auto ctrl            = std::make_shared<SessionController>(ex_, agent_, cfg);
+    auto ctrl              = std::make_shared<SessionController>(ex_, agent_, cfg);
     controllers_[threadId] = ctrl;
 
     // 启动会话驱动循环 (独立于连接存在)
-    asio::co_spawn(
-        ex_,
-        ctrl->run(),
-        [ctrl, threadId](std::exception_ptr ep) {
-            if (ep) {
-                try {
-                    std::rethrow_exception(ep);
-                } catch (const std::exception& e) {
-                    XX_LOGE("[agent_server] controller '{}' error: {}", threadId, e.what());
-                }
+    asio::co_spawn(ex_, ctrl->run(), [ctrl, threadId](std::exception_ptr ep) {
+        if (ep) {
+            try {
+                std::rethrow_exception(ep);
+            } catch (const std::exception& e) {
+                XX_LOGE("[agent_server] controller '{}' error: {}", threadId, e.what());
             }
         }
-    );
+    });
     return ctrl;
 }
 
