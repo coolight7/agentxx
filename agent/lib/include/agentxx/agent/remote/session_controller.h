@@ -135,10 +135,8 @@ private:
 
     /// 线程安全: 取活动连接并推送
     void pushToActive(neograph::json msg);
-    /// 线程安全: 记录 delta 到环形缓冲
-    void recordDelta(const Delta& d);
-    /// 线程安全: 取 seq 之后的 delta; nullopt 表示缓冲已不覆盖 (需全量 sync)
-    std::optional<std::vector<Delta>> deltasSince(uint64_t seq);
+    /// 取 seq 之后的 delta (调用方须持有 bufferMutex_); nullopt 表示需全量 sync
+    std::optional<std::vector<Delta>> deltasSinceLocked(uint64_t seq);
 
     SyncPayload buildFullSync();
     std::shared_ptr<Session> session();

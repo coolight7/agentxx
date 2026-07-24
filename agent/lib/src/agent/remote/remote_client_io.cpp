@@ -148,8 +148,10 @@ void RemoteClientAgentIO::resetConnState() {
 
 void RemoteClientAgentIO::spawnLoops() {
     auto join = joinChannel_;
-    auto guard = [join](const char* name) {
-        return [join, name](std::exception_ptr ep) {
+    auto self = shared_from_this();
+    // 完成回调捕获 self: 保证协程退出前对象不被析构 (避免 join 超时后 UAF)
+    auto guard = [join, self](const char* name) {
+        return [join, self, name](std::exception_ptr ep) {
             if (ep) {
                 try {
                     std::rethrow_exception(ep);

@@ -252,39 +252,46 @@ asio::awaitable<void> RemoteServerAgentIO::readLoop() {
 
 asio::awaitable<void> RemoteServerAgentIO::run() {
     auto join = joinChannel_;
-    asio::co_spawn(ex_, writeLoop(), [join](std::exception_ptr ep) {
-        if (ep) {
-            try {
-                std::rethrow_exception(ep);
-            } catch (const std::exception& e) {
-                XX_LOGE("[remote_server] writeLoop error: {}", e.what());
+    auto self = shared_from_this();
+    // 完成回调捕获 self: 保证协程退出前对象不被析构 (避免 join 超时后 UAF)
+    auto guard = [join, self](const char* name) {
+        return [join, self, name](std::exception_ptr ep) {
+            if (ep) {
+                try {
+                    std::rethrow_exception(ep);
+                } catch (const std::exception& e) {
+                    XX_LOGE("[remote_server] {} error: {}", name, e.what());
+                }
             }
-        }
-        join->try_send(ErrorCode{});
-    });
-    asio::co_spawn(ex_, readLoop(), [join](std::exception_ptr ep) {
-        if (ep) {
-            try {
-                std::rethrow_exception(ep);
-            } catch (const std::exception& e) {
-                XX_LOGE("[remote_server] readLoop error: {}", e.what());
-            }
-        }
-        join->try_send(ErrorCode{});
-    });
+            join->try_send(ErrorCode{});
+        };
+    };
+    asio::co_spawn(ex_, writeLoop(), guard("writeLoop"));
+    asio::co_spawn(ex_, readLoop(), guard("readLoop"));
 
     // 等待读/写协程退出 (断线后); 各 10s 安全上限
+    int received = 0;
     for (int i = 0; i < 2; ++i) {
-        bool done = false;
         try {
             co_await joinChannel_->async_receive(
                 asio::cancel_after(std::chrono::seconds{10}, asio::use_awaitable)
             );
-            done = true;
+            received++;
         } catch (const boost::system::system_error&) {
-        }
-        if (!done) {
             break;
+        }
+    }
+    if (received < 2) {
+        // 有协程未退出 (如 send 被慢客户端阻塞): 强制关闭传输使其退出, 再等待
+        requestStop();
+        for (int i = received; i < 2; ++i) {
+            try {
+                co_await joinChannel_->async_receive(
+                    asio::cancel_after(std::chrono::seconds{5}, asio::use_awaitable)
+                );
+            } catch (const boost::system::system_error&) {
+                break;
+            }
         }
     }
 }

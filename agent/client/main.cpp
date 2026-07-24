@@ -436,12 +436,7 @@ asio::awaitable<void> runCliAsync(agentxx::agent::DeepAgent& agent) {
         if (!input.empty()) {
             std::cout << agent.agentContext->agentConfig->agentNameView << ": " << std::flush;
 
-            co_await agent.runConversationTurnAsync(
-                thread_id,
-                input,
-                isFirstMsg,
-                io
-            );
+            co_await agent.runConversationTurnAsync(thread_id, input, isFirstMsg, io);
             isFirstMsg = false;
         }
         std::cout << "\n\n>>> " << std::flush;
@@ -482,12 +477,7 @@ asio::awaitable<void> runTuiAsync(agentxx::agent::DeepAgent& agent) {
         }
         auto input = std::move(inputOpt.value());
         if (!input.empty()) {
-            co_await agent.runConversationTurnAsync(
-                thread_id,
-                input,
-                isFirstMsg,
-                io
-            );
+            co_await agent.runConversationTurnAsync(thread_id, input, isFirstMsg, io);
             isFirstMsg = false;
         }
     }
@@ -507,16 +497,17 @@ void runTui(agentxx::agent::DeepAgent& agent) {
 }
 #endif
 
-// ======================== 本地统一模式 (进程内 ChannelTransport, 与远程同路径) ========================
+// ======================== 本地统一模式 (进程内 ChannelTransport, 与远程同路径)
+// ========================
 
 /// 建立进程内统一会话: 创建 channel 对 + 服务端协程 + 客户端; 返回客户端供调用方接线并 runSession
 static std::shared_ptr<agentxx::agent::remote::RemoteClientAgentIO> setupLocalUnified(
-    asio::any_io_executor                          clientEx,
-    std::shared_ptr<agentxx::agent::DeepAgent>     agent,
-    std::shared_ptr<agentxx::agent::AgentIOBase>   io
+    asio::any_io_executor                        clientEx,
+    std::shared_ptr<agentxx::agent::DeepAgent>   agent,
+    std::shared_ptr<agentxx::agent::AgentIOBase> io
 ) {
-    auto agentEx = agent->ioCtx->get_executor();
-    auto pair    = agentxx::agent::remote::ChannelTransport::makePair(clientEx, agentEx);
+    auto agentEx         = agent->ioCtx->get_executor();
+    auto pair            = agentxx::agent::remote::ChannelTransport::makePair(clientEx, agentEx);
     auto clientTransport = std::move(pair.first);
     auto serverTransport = std::move(pair.second);
 
@@ -524,7 +515,7 @@ static std::shared_ptr<agentxx::agent::remote::RemoteClientAgentIO> setupLocalUn
     agentxx::agent::remote::AgentServer::Config srvCfg;
     srvCfg.autoGenerateToken = false;
     srvCfg.token             = "";
-    auto server = std::make_shared<agentxx::agent::remote::AgentServer>(agent, srvCfg);
+    auto server              = std::make_shared<agentxx::agent::remote::AgentServer>(agent, srvCfg);
 
     // 服务端在 agent 的 io_context 上: init -> 启动 subagent supervisor -> 服务该传输
     asio::co_spawn(
@@ -551,7 +542,7 @@ static std::shared_ptr<agentxx::agent::remote::RemoteClientAgentIO> setupLocalUn
 /// 在独立线程运行 agent 的 io_context, 主线程运行客户端会话
 template<typename Coro>
 static void runLocalUnifiedMain(std::shared_ptr<agentxx::agent::DeepAgent> agent, Coro coro) {
-    auto work = asio::make_work_guard(*agent->ioCtx);
+    auto        work = asio::make_work_guard(*agent->ioCtx);
     std::thread agentThread([&agent]() {
         agent->ioCtx->run();
     });
@@ -582,16 +573,16 @@ void runLocalCliUnified(std::shared_ptr<agentxx::agent::DeepAgent> agent) {
 
 #ifdef AGENTXX_ENABLE_CLIENT_TUI
 asio::awaitable<void> runLocalTuiUnifiedAsync(
-    std::shared_ptr<agentxx::agent::DeepAgent>     agent,
-    std::shared_ptr<agentxx::agent::AgentConfig>   config
+    std::shared_ptr<agentxx::agent::DeepAgent>   agent,
+    std::shared_ptr<agentxx::agent::AgentConfig> config
 ) {
     auto              clientEx = co_await asio::this_coro::executor;
     const std::string threadId = "session";
 
     // 最小 AgentContext 供 TUI 渲染 (会话实际状态在 server 侧, 经 delta/sync/统计推送)
-    auto ctx           = std::make_shared<agentxx::agent::AgentContext>();
-    ctx->agentConfig   = config;
-    auto tui           = std::make_shared<AgentTUI>(clientEx, ctx, threadId);
+    auto ctx         = std::make_shared<agentxx::agent::AgentContext>();
+    ctx->agentConfig = config;
+    auto tui         = std::make_shared<AgentTUI>(clientEx, ctx, threadId);
     tui->start();
 
     auto remote = setupLocalUnified(clientEx, agent, tui);
@@ -712,8 +703,9 @@ static std::string extractTokenFromUrl(std::string& url) {
     size_t      pos = 0;
     while (pos < query.size()) {
         auto        amp = query.find('&', pos);
-        std::string kv  = query.substr(pos, amp == std::string::npos ? std::string::npos : amp - pos);
-        auto        eq  = kv.find('=');
+        std::string kv
+            = query.substr(pos, amp == std::string::npos ? std::string::npos : amp - pos);
+        auto eq = kv.find('=');
         if (eq != std::string::npos && kv.substr(0, eq) == "token") {
             token = kv.substr(eq + 1);
         }
@@ -743,9 +735,9 @@ int main(int argn, char** argv) {
     std::string agentToken;
     std::string remoteModel;
     // deepagent 服务: 监听地址/端口/路径
-    std::string srvHost   = "127.0.0.1";
-    std::string wsPath    = "/agent";
-    uint16_t    srvPort   = 17000;
+    std::string srvHost = "127.0.0.1";
+    std::string wsPath  = "/agent";
+    uint16_t    srvPort = 17000;
     std::string sslCertFile;
     std::string sslKeyFile;
     for (int i = 1; i < argn; ++i) {
@@ -924,7 +916,7 @@ int main(int argn, char** argv) {
         asio::co_spawn(
             *agent->ioCtx,
             [agent, server]() -> asio::awaitable<void> {
-                asio::signal_set signals(*agent->ioCtx, SIGINT, SIGTERM);
+                asio::signal_set          signals(*agent->ioCtx, SIGINT, SIGTERM);
                 boost::system::error_code ec;
                 co_await signals.async_wait(asio::redirect_error(asio::use_awaitable, ec));
                 XX_OUT("[agent_server] signal received, shutting down...");

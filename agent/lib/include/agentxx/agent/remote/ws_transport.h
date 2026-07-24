@@ -6,6 +6,7 @@
 #include "agentxx/util/ws_client.h"
 #include "asio/buffer.hpp"
 #include "asio/awaitable.hpp"
+#include "asio/cancel_after.hpp"
 #include "asio/redirect_error.hpp"
 #include "asio/use_awaitable.hpp"
 #include <boost/beast/core.hpp>
@@ -30,9 +31,11 @@ public:
 
     explicit ServerWsTransportT(
         WsStream&            ws,
-        std::chrono::seconds keepAliveInterval = std::chrono::seconds{30}
+        std::chrono::seconds keepAliveInterval = std::chrono::seconds{30},
+        std::chrono::seconds sendTimeout       = std::chrono::seconds{30}
     ) :
-        ws_(&ws) {
+        ws_(&ws),
+        sendTimeout_(sendTimeout) {
         // 断线检测: 空闲 keepAliveInterval*2 无数据 -> 自动发 ping; 再无响应 -> 关闭
         boost::beast::websocket::stream_base::timeout opt{};
         opt.handshake_timeout = std::chrono::seconds(30);
@@ -43,17 +46,18 @@ public:
 
     asio::awaitable<std::expected<void, std::string>> send(std::string_view jsonText) override {
         ws_->text(true);
-        boost::system::error_code ec;
-        co_await ws_->async_write(
-            asio::buffer(jsonText),
-            asio::redirect_error(asio::use_awaitable, ec)
-        );
-        if (ec) {
+        try {
+            // 发送超时: 慢/卡客户端不会无限阻塞写协程 (超时后写协程判定断线)
+            co_await ws_->async_write(
+                asio::buffer(jsonText),
+                asio::cancel_after(sendTimeout_, asio::use_awaitable)
+            );
+            co_return std::expected<void, std::string>{};
+        } catch (const boost::system::system_error& e) {
             co_return std::unexpected<std::string>(
-                agentxx::util::autoTryConvertToUtf8(ec.message())
+                agentxx::util::autoTryConvertToUtf8(e.what())
             );
         }
-        co_return std::expected<void, std::string>{};
     }
 
     asio::awaitable<std::expected<util::WsMessage, std::string>> recv() override {
@@ -93,7 +97,8 @@ public:
 
 private:
 
-    WsStream* ws_;
+    WsStream*            ws_;
+    std::chrono::seconds sendTimeout_;
 };
 
 /// 明文 WS (ws://)
