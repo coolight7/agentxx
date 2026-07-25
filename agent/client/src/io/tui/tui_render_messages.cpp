@@ -21,6 +21,9 @@ int AgentTUI::focusBlockCount() const {
     if (isStreaming_ && !currentToken_.empty()) {
         ++n;
     }
+    if (n > 0) {
+        ++n; // bottom anchor
+    }
     return n;
 }
 
@@ -159,6 +162,16 @@ ftxui::Element AgentTUI::renderMessages() {
         } else {
             pushBlock(paragraph(currentToken_) | color(theme_.assistantColor), false);
         }
+    }
+
+    /// 底部锚点: stickToBottom_ 时聚焦此元素确保滚动到真正底部
+    if (!elements.empty()) {
+        Element anchor = text("");
+        if (idx == focusIdx) {
+            anchor = anchor | focus;
+        }
+        ++idx;
+        elements.push_back(std::move(anchor));
     }
 
     if (elements.empty()) {

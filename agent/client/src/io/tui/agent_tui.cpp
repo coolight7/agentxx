@@ -336,13 +336,19 @@ void AgentTUI::start() {
                     }
                     const int last = focusBlockCount() - 1;
                     if (last >= 0) {
-                        int cur  = stickToBottom_ ? last : scrollAnchorIndex_;
-                        cur     += (mouse.button == Mouse::WheelUp) ? -1 : +1;
-                        if (cur >= last) {
-                            stickToBottom_ = true;
-                        } else {
-                            stickToBottom_     = false;
-                            scrollAnchorIndex_ = std::max(0, cur);
+                        int cur = stickToBottom_ ? last : scrollAnchorIndex_;
+                        scrollAccum_ += (mouse.button == Mouse::WheelUp) ? -kScrollStep : +kScrollStep;
+                        int move = static_cast<int>(scrollAccum_);
+                        if (move != 0) {
+                            scrollAccum_ -= static_cast<float>(move);
+                            cur += move;
+                            if (cur >= last) {
+                                stickToBottom_ = true;
+                                scrollAccum_   = 0.0f;
+                            } else {
+                                stickToBottom_     = false;
+                                scrollAnchorIndex_ = std::max(0, cur);
+                            }
                         }
                     }
                     postRedraw();

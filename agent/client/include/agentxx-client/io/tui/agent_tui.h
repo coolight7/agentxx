@@ -112,7 +112,10 @@ private:
     /// 消息列表滚动: 是否吸附在底部 (吸附时新增消息自动滚动到底部)
     bool stickToBottom_ = true;
     /// 未吸附底部时的滚动锚点: 聚焦的消息块绝对索引 (消息仅追加, 索引稳定)
-    int scrollAnchorIndex_ = 0;
+    int   scrollAnchorIndex_ = 0;
+    /// 滚轮累加器: 用于降低滚动速度, 每次滚轮事件累加 0.5f, 达到 ±1.0f 时移动一个块
+    float scrollAccum_ = 0.0f;
+    static constexpr float kScrollStep = 0.5f;
 
     std::string                      inputText_;
     std::optional<PermissionRequest> pendingPermission_;

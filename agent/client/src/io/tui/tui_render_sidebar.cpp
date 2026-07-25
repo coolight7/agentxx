@@ -224,9 +224,8 @@ ftxui::Element AgentTUI::renderInfoSidebar() {
 
     // 顶部: planning 特化渲染 (存在 planning_write toolcall 时)
     if (auto planning = renderPlanningInfo()) {
-        elements.push_back(std::move(*planning));
+        elements.push_back(std::move(*planning) | vscroll_indicator | yframe);
         elements.push_back(text(" "));
-        elements.push_back(separator());
     }
 
     elements.push_back(filler());
@@ -238,7 +237,7 @@ ftxui::Element AgentTUI::renderInfoSidebar() {
     } catch (...) {
         cwd = "(Unknown Work Dir)";
     }
-    elements.push_back(paragraph(cwd) | color(theme_.hintColor));
+    elements.push_back(text(cwd) | color(theme_.hintColor));
 
     // 底部: Agentxx 版本 + 运行模式 (内置 / 远程 http[s]://ip:port)
     std::string mode;
@@ -248,7 +247,12 @@ ftxui::Element AgentTUI::renderInfoSidebar() {
         mode = "" + remoteUrl_;
     }
     elements.push_back(
-        paragraph(fmt::format("Agentxx {} {}", kAgentxxVersion, mode)) | color(theme_.hintColor)
+        hbox({
+            text(fmt::format("Agentxx {}", kAgentxxVersion, mode)),
+            filler(),
+            text(mode),
+        })
+        | color(theme_.hintColor)
     );
     elements.push_back(text(" "));
 
