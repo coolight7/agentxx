@@ -12,21 +12,19 @@
 #undef max
 #undef min
 
-// ---
-#include "agentxx/util/log.h"
-#include "neograph/api.h"
-#include "simdjson.h"
-#include <asio/io_context.hpp>
-#include <asio/steady_timer.hpp>
-#include <optional>
-
 #pragma comment(lib, "ws2_32.lib")
 #pragma comment(lib, "winhttp.lib")
 
 #endif
 
 #include "agentxx/expand/text_selection_monitor.h"
+#include "agentxx/util/log.h"
+#include "neograph/api.h"
+#include "simdjson.h"
+#include <asio/io_context.hpp>
+#include <asio/steady_timer.hpp>
 #include <mutex>
+#include <optional>
 #include <thread>
 
 namespace agentxx {

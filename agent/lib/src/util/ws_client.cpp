@@ -314,7 +314,7 @@ asio::awaitable<std::expected<std::unique_ptr<WsClient>, std::string>> wsConnect
                 hostHeader += ":" + port;
             }
 
-            impl->ws->set_option(
+            impl->wss->set_option(
                 beast::websocket::stream_base::decorator([&headers](ws::request_type& req) {
                     for (const auto& [k, v] : headers) {
                         req.set(k, v);
