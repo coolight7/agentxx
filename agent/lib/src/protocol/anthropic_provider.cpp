@@ -1,4 +1,5 @@
 #include "agentxx/protocol/anthropic_provider.h"
+#include "agentxx/protocol/openai_provider.h"
 
 namespace agentxx {
 namespace server {
@@ -306,8 +307,16 @@ asio::awaitable<neograph::ChatCompletion>
         throw std::runtime_error("API error (HTTP " + std::to_string(r.status) + "): " + r.body);
     }
 
-    auto respJson = neograph::json::parse(r.body);
-    co_return parseResponse(respJson);
+    auto respJson   = neograph::json::parse(r.body);
+    auto completion = parseResponse(respJson);
+    if (config_.extractToolCallsFromContent && completion.message.tool_calls.empty()) {
+        OpenAIProvider::extractToolCalls(
+            completion.message.reasoning_content,
+            completion.message.tool_calls
+        );
+        OpenAIProvider::extractToolCalls(completion.message.content, completion.message.tool_calls);
+    }
+    co_return completion;
 }
 
 asio::awaitable<neograph::ChatCompletion> AnthropicProvider::doStream(
@@ -426,6 +435,13 @@ asio::awaitable<neograph::ChatCompletion> AnthropicProvider::doStream(
     completion.message.reasoning_content = fullThinking;
     for (auto& [idx, tc] : tcMap) {
         completion.message.tool_calls.push_back(std::move(tc));
+    }
+    if (config_.extractToolCallsFromContent && completion.message.tool_calls.empty()) {
+        OpenAIProvider::extractToolCalls(completion.message.content, completion.message.tool_calls);
+        OpenAIProvider::extractToolCalls(
+            completion.message.reasoning_content,
+            completion.message.tool_calls
+        );
     }
 
     co_return completion;
