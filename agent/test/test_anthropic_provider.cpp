@@ -1690,6 +1690,66 @@ void test_anthropic_send_timeout_calculation() {
 // Test runner
 // ---------------------------------------------------------------------------
 
+/// 直接单测 SSE 解析: 多 data: 行拼接 / 冒号后无空格 / 末尾无 "\n\n" 的事件
+void test_anthropic_sse_parsing_edge_cases() {
+    using server::AnthropicProvider;
+
+    // B2: "data:" / "event:" 冒号后无单个空格也必须解析
+    {
+        std::string buf
+            = "event:content_block_delta\n"
+              "data:{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_"
+              "delta\",\"text\":\"Hi\"}}\n\n";
+        neograph::ChatCompletion          completion;
+        std::string                       content, thinking;
+        std::map<int, neograph::ToolCall> tcMap;
+        std::map<int, std::string>        blockTypes;
+        AnthropicProvider::processSseBuffer(
+            buf, completion, content, thinking, tcMap, blockTypes, nullptr
+        );
+        XX_TEST_EXPECT_EQ(content, "Hi");
+    }
+
+    // B1: 同一事件的多个 data: 行应按 SSE 规范以 "\n" 拼接后再解析
+    {
+        std::string buf
+            = "event: content_block_delta\n"
+              "data: {\"type\":\"content_block_delta\",\"index\":0,\n"
+              "data: \"delta\":{\"type\":\"text_delta\",\"text\":\"AB\"}}\n\n";
+        neograph::ChatCompletion          completion;
+        std::string                       content, thinking;
+        std::map<int, neograph::ToolCall> tcMap;
+        std::map<int, std::string>        blockTypes;
+        AnthropicProvider::processSseBuffer(
+            buf, completion, content, thinking, tcMap, blockTypes, nullptr
+        );
+        // 修复前仅保留最后一个 data: 行 -> 非法 JSON -> content 为空
+        XX_TEST_EXPECT_EQ(content, "AB");
+    }
+
+    // B3: 连接关闭时末尾未以 "\n\n" 结尾的事件, finalFlush=true 时应补解析
+    {
+        std::string buf
+            = "event: content_block_delta\n"
+              "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_"
+              "delta\",\"text\":\"End\"}}"; // 无 trailing "\n\n"
+        neograph::ChatCompletion          completion;
+        std::string                       content, thinking;
+        std::map<int, neograph::ToolCall> tcMap;
+        std::map<int, std::string>        blockTypes;
+        // finalFlush=false: 事件不完整, 暂不解析
+        AnthropicProvider::processSseBuffer(
+            buf, completion, content, thinking, tcMap, blockTypes, nullptr, /*finalFlush=*/false
+        );
+        XX_TEST_EXPECT_EQ(content, "");
+        // finalFlush=true: 解析末尾块
+        AnthropicProvider::processSseBuffer(
+            buf, completion, content, thinking, tcMap, blockTypes, nullptr, /*finalFlush=*/true
+        );
+        XX_TEST_EXPECT_EQ(content, "End");
+    }
+}
+
 asio::awaitable<TestResult> run_anthropic_provider_tests() {
     g_anthropic_passed = 0;
     g_anthropic_failed = 0;
@@ -1715,6 +1775,7 @@ asio::awaitable<TestResult> run_anthropic_provider_tests() {
     test_parse_response_thinking();
     test_parse_response_mixed();
     test_parse_response_usage();
+    test_anthropic_sse_parsing_edge_cases();
 
     // Integration tests
     uint16_t port = 0;

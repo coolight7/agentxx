@@ -2,6 +2,9 @@
 #include "agentxx/agent/context.h"
 #include "agentxx/tools/execute_command.h"
 #include "asio/dispatch.hpp"
+#include "asio/steady_timer.hpp"
+#include "asio/use_awaitable.hpp"
+#include <chrono>
 #include <iostream>
 #include <string>
 
@@ -417,6 +420,9 @@ asio::awaitable<void>
         {"timeout", 30    },
     };
     auto result = co_await tool.execute_async(args);
+    // 修复: 未实现必须返回明确错误, 不能返回空串让 LLM 误以为执行成功
+    XX_TEST_EXPECT_TRUE(result.find("\"error\"") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(result.find("not implemented") != std::string::npos);
     co_return;
 }
 
@@ -428,11 +434,79 @@ asio::awaitable<void>
         {"timeout", 30    },
     };
     auto result = co_await tool.execute_async(args);
+    // 修复: 未实现必须返回明确错误, 不能返回空串让 LLM 误以为执行成功
+    XX_TEST_EXPECT_TRUE(result.find("\"error\"") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(result.find("not implemented") != std::string::npos);
+    co_return;
+}
+
+// ---- #5: 超时错误 JSON 转义 ----
+
+asio::awaitable<void>
+    test_linux_timeout_json_escaping(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    auto tool = agentxx::tools::ExecuteLinuxCommandTool{agentContext};
+    // 输出含双引号/反斜杠/换行后超时; 修复前 fmt 拼接会产生非法 JSON
+    auto args = neograph::json{
+        {"command", R"(printf 'has "quotes" and \\backslash\n'; sleep 5)"},
+        {"timeout", 1                                                    },
+    };
+    auto result = co_await tool.execute_async(args);
+
+    bool parsed = false;
+    try {
+        auto j = neograph::json::parse(result);
+        parsed = j.is_object() && j.contains("error");
+        if (parsed) {
+            auto stdoutStr = j.value("stdout", std::string{});
+            XX_TEST_EXPECT_TRUE(stdoutStr.find("\"quotes\"") != std::string::npos);
+            XX_TEST_EXPECT_TRUE(stdoutStr.find("\\backslash") != std::string::npos);
+        }
+    } catch (...) {
+        parsed = false;
+    }
+    XX_TEST_EXPECT_TRUE(parsed);
+    co_return;
+}
+
+// ---- #6: 超时清理子孙进程 ----
+
+asio::awaitable<void>
+    test_linux_timeout_kills_descendants(std::weak_ptr<agentxx::agent::AgentContext> agentContext
+    ) {
+    auto tool = agentxx::tools::ExecuteLinuxCommandTool{agentContext};
+    // bash 派生后台 sleep 子孙进程并持有 stdout 管道; 修复后经 setsid+killpg 整组清理
+    auto args = neograph::json{
+        {"command", "bash -c '(sleep 31.7 &) ; echo started; sleep 31.7'"},
+        {"timeout", 1                                                    },
+    };
+    auto start  = std::chrono::steady_clock::now();
+    auto result = co_await tool.execute_async(args);
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                       std::chrono::steady_clock::now() - start
+    )
+                       .count();
+    XX_TEST_EXPECT_TRUE(result.find("timed out") != std::string::npos);
+    // 应及时返回 (远小于后台 sleep 的 31.7s), 不因孤儿进程持有管道而挂起
+    XX_TEST_EXPECT_TRUE(elapsed < 10000);
+
+    // 检测后台 sleep 是否仍存活 (孤儿); 用拼接 pattern 避免 pgrep 匹配到自身命令行
+    asio::steady_timer delay(co_await asio::this_coro::executor, std::chrono::milliseconds(300));
+    co_await delay.async_wait(asio::use_awaitable);
+    auto checkArgs = neograph::json{
+        {"command",
+         R"(A="sleep 31"; B=".7"; pgrep -f "$A$B" >/dev/null 2>&1 && echo ORPHAN_ALIVE || echo NO_ORPHAN)"},
+        {"timeout", 5},
+    };
+    auto check = co_await tool.execute_async(checkArgs);
+    XX_TEST_EXPECT_TRUE(check.find("NO_ORPHAN") != std::string::npos);
     co_return;
 }
 
 asio::awaitable<TestResult>
     run_command_tools_tests(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    g_cmd_passed = 0;
+    g_cmd_failed = 0;
+
     auto run = [agentContext](auto testFn) -> asio::awaitable<void> {
         try {
             co_await testFn(agentContext);
@@ -454,6 +528,8 @@ asio::awaitable<TestResult>
     co_await run(test_linux_timeout_triggers);
     co_await run(test_linux_timeout_partial_output);
     co_await run(test_linux_timeout_default);
+    co_await run(test_linux_timeout_json_escaping);
+    co_await run(test_linux_timeout_kills_descendants);
     co_await run(test_linux_all_output_false_success);
     co_await run(test_linux_all_output_false_failure);
     co_await run(test_linux_stderr);

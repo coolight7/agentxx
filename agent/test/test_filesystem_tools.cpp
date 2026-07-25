@@ -785,11 +785,35 @@ asio::awaitable<void>
     };
     auto result     = co_await tool.execute_async(args);
     auto jsonResult = neograph::json::parse(result);
-    if (jsonResult.is_array() && jsonResult.size() > 0) {
-        std::cout << "[PASS] FilesystemGrepTool content mode returns structured JSON" << std::endl;
-    } else {
+    if (false == (jsonResult.is_array() && jsonResult.size() > 0)) {
         g_fs_failed++;
         TEST_FAIL << "FilesystemGrepTool content mode failed, got: " << result << std::endl;
+        co_return;
+    }
+    g_fs_passed++;
+
+    // #3: content 字段必须是匹配到的子串 (字符串), 而非整个 patterns 数组
+    bool contentOk = true;
+    for (const auto& fileEntry : jsonResult) {
+        if (!fileEntry.contains("matchs") || !fileEntry["matchs"].is_array()) {
+            contentOk = false;
+            break;
+        }
+        for (const auto& match : fileEntry["matchs"]) {
+            if (!match.contains("content") || !match["content"].is_string()
+                || match["content"].get<std::string>() != "hello") {
+                contentOk = false;
+                break;
+            }
+        }
+    }
+    if (contentOk) {
+        g_fs_passed++;
+        TEST_PASS << "FilesystemGrepTool content mode returns matched substring" << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "FilesystemGrepTool content field is not the matched substring, got: "
+                  << result << std::endl;
     }
     co_return;
 }
