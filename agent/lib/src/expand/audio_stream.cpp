@@ -1,11 +1,3 @@
-#include "agentxx/expand/audio_stream.h"
-#include "agentxx/util/log.h"
-#include <atomic>
-#include <chrono>
-#include <mutex>
-#include <thread>
-#include <vector>
-
 #if XX_IS_WIN_D
 #define INITGUID
 #include <audioclient.h>
@@ -16,12 +8,23 @@
 #include <windows.h>
 #include <wrl/client.h>
 
-using Microsoft::WRL::ComPtr;
+#undef max
+#undef min
 
 #pragma comment(lib, "mmdevapi.lib")
 #pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "psapi.lib")
+
+using Microsoft::WRL::ComPtr;
 #endif
+
+#include "agentxx/expand/audio_stream.h"
+#include "agentxx/util/log.h"
+#include <atomic>
+#include <chrono>
+#include <mutex>
+#include <thread>
+#include <vector>
 
 namespace agentxx {
 namespace expand {

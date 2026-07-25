@@ -16,6 +16,9 @@
 #pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "pdh.lib")
 
+#undef max
+#undef min
+
 namespace agentxx {
 namespace expand {
 

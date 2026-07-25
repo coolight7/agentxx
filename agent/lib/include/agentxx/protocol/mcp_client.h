@@ -19,10 +19,13 @@
 #include <vector>
 
 #if AGENTXX_ENABLE_BOOST_PROCESS
+
 #include "asio/readable_pipe.hpp"
 #include "asio/writable_pipe.hpp"
 #include "boost/process.hpp"
+
 #else
+
 #include <thread>
 #if XX_IS_LINUX_D || XX_IS_MACOS_D
 #include <fcntl.h>
@@ -35,6 +38,7 @@
 #endif
 #include <windows.h>
 #endif
+
 #endif
 
 namespace asio = ::boost::asio;
@@ -43,6 +47,7 @@ namespace agentxx {
 namespace util {
 class AsyncMutex;
 } // namespace util
+
 namespace server {
 
 // ---------------------------------------------------------------------------
@@ -246,7 +251,7 @@ private:
 #endif
     std::thread stdioReaderThread_;
 #endif
-    std::atomic<bool>                                            stdioRunning_{false};
+    std::atomic<bool> stdioRunning_{false};
     /// stdio 写序列化: 协程感知锁, 持锁跨越 co_await async_write 也不死锁 (见 AsyncMutex)
     std::unique_ptr<util::AsyncMutex>                            stdioWriteMutex_;
     std::mutex                                                   pendingMutex_;

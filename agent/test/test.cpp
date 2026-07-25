@@ -38,10 +38,6 @@
 #include <iostream>
 #include <map>
 
-#if XX_IS_WIN_D
-#include <Windows.h>
-#endif
-
 bool             waitForInput = false;
 asio::io_context ioCtx;
 
