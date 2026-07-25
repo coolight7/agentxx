@@ -5,10 +5,6 @@
 #include <string>
 #include <thread>
 
-#if XX_IS_WIN_D
-#include <windows.h>
-#endif
-
 namespace agentxx {
 namespace test {
 

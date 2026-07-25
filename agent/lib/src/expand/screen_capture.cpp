@@ -1,16 +1,20 @@
-#include "agentxx/expand/screen_capture.h"
-#include "agentxx/util/log.h"
-#include <atomic>
-#include <thread>
-
 #if XX_IS_WIN_D
+// 顺序是必要的，否则可能编译失败
+// 在 windows.h 系列之前不要 include asio 相关的头文件
+#include <windows.h>
+// ---
 #include <d3d11.h>
 #include <dxgi1_2.h>
-#include <windows.h>
 #include <wrl/client.h>
 
 using Microsoft::WRL::ComPtr;
 #endif
+
+#include "agentxx/expand/screen_capture.h"
+#include <atomic>
+#include <thread>
+
+#include "agentxx/util/log.h"
 
 namespace agentxx {
 namespace expand {

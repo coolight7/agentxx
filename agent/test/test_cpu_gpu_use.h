@@ -4,9 +4,6 @@
 #include <neograph/api.h>
 
 #include "test_framework.h"
-#if XX_IS_WIN_D
-#include <windows.h>
-#endif
 
 #undef XX_TEST_PASSED
 #undef XX_TEST_FAILED

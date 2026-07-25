@@ -1,8 +1,3 @@
-#include "agentxx/expand/text_selection_monitor.h"
-#include "agentxx/util/log.h"
-#include <mutex>
-#include <thread>
-
 #if XX_IS_WIN_D
 // include 顺序是必要的
 #include <winsock2.h>
@@ -14,7 +9,12 @@
 #include <windows.h>
 #include <winhttp.h>
 
+#undef max
+#undef min
+
 // ---
+#include "agentxx/util/log.h"
+#include "neograph/api.h"
 #include "simdjson.h"
 #include <asio/io_context.hpp>
 #include <asio/steady_timer.hpp>
@@ -23,9 +23,11 @@
 #pragma comment(lib, "ws2_32.lib")
 #pragma comment(lib, "winhttp.lib")
 
-namespace asio = boost::asio;
-
 #endif
+
+#include "agentxx/expand/text_selection_monitor.h"
+#include <mutex>
+#include <thread>
 
 namespace agentxx {
 namespace expand {

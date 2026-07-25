@@ -20,8 +20,8 @@ LogDispatcher& LogDispatcher::instance() {
 
 void LogDispatcher::addSink(std::shared_ptr<LogSink> sink) {
     std::lock_guard<std::mutex> lock(mutex_);
-    auto cur  = sinks_.load(std::memory_order_acquire);
-    auto next = std::make_shared<SinkList>();
+    auto                        cur  = sinks_.load(std::memory_order_acquire);
+    auto                        next = std::make_shared<SinkList>();
     next->reserve(cur->size() + 1);
     // 顺带清理已释放的 sink
     for (const auto& wp : *cur) {
@@ -35,8 +35,8 @@ void LogDispatcher::addSink(std::shared_ptr<LogSink> sink) {
 
 void LogDispatcher::removeSink(const std::shared_ptr<LogSink>& sink) {
     std::lock_guard<std::mutex> lock(mutex_);
-    auto cur  = sinks_.load(std::memory_order_acquire);
-    auto next = std::make_shared<SinkList>();
+    auto                        cur  = sinks_.load(std::memory_order_acquire);
+    auto                        next = std::make_shared<SinkList>();
     next->reserve(cur->size());
     for (const auto& wp : *cur) {
         auto sp = wp.lock();

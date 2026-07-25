@@ -13,6 +13,8 @@
 
 #if XX_IS_WIN_D
 #include <windows.h>
+#undef max
+#undef min
 #endif
 
 namespace agentxx {
