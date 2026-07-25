@@ -7,7 +7,11 @@ namespace agent {
 
 const std::string& ToolPrompt::getArg(std::string_view name) const {
     const auto it = args.find(name);
-    assert(it != args.end());
+    if (it == args.end()) {
+        assert(false);
+        static const std::string empty;
+        return empty;
+    }
     return it->second;
 }
 

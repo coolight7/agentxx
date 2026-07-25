@@ -4,10 +4,13 @@
 #include <iostream>
 
 #if XX_IS_LINUX_D
+#include <cerrno>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <execinfo.h>
+#include <fcntl.h>
+#include <unistd.h>
 #endif
 
 namespace agentxx {
@@ -71,106 +74,205 @@ void xxLogPrint(LogLevel level, const std::string& message) {
 static std::string _exe_path{};
 
 void printStack() {
-#define innerPrintToConsoleAndFile_d(str, ...) printf(str, ##__VA_ARGS__);
+    // 常规上下文 (非信号处理器), 可使用 printf/backtrace_symbols/popen
+    char*  buffer[64];
+    char** strings = nullptr;
 
-    {
-        char*  buffer[64];
-        char** strings = nullptr;
+    auto size = backtrace((void**)buffer, 64);
 
-        auto size = backtrace((void**)buffer, 64);
-
-        innerPrintToConsoleAndFile_d("======= Dump stack start =======\n");
-        {
-            strings = backtrace_symbols((void**)buffer, size);
-            if (strings == nullptr) {
-                innerPrintToConsoleAndFile_d("backtrace_symbols return nullptr");
-            }
+    printf("======= Dump stack start =======\n");
+    strings = backtrace_symbols((void**)buffer, size);
+    if (strings == nullptr) {
+        printf("backtrace_symbols return nullptr\n");
+    }
+    for (int i = 0; i < size; i++) {
+        if (nullptr == strings || nullptr == strings[i]) {
+            printf("[%02d] %p\n", i, buffer[i]);
+        } else {
+            printf("[%02d] %s\n", i, strings[i]);
         }
-        for (int i = 0; i < size; i++) {
-            if (nullptr == strings[i]) {
-                innerPrintToConsoleAndFile_d("[%02d] %p\n", i, buffer[i]);
-            } else {
-                innerPrintToConsoleAndFile_d("[%02d] %s\n", i, strings[i]);
-            }
-            if (buffer[i] != NULL) {
-                char addr2line_cmd[256];
-                sprintf(addr2line_cmd, "addr2line -f -e %s %p", _exe_path.c_str(), buffer[i]);
+        if (buffer[i] != NULL) {
+            // 用 snprintf 限定长度, 并对 exe 路径加引号, 避免溢出与路径含空格/特殊字符的注入
+            char addr2line_cmd[512];
+            int  n = snprintf(
+                addr2line_cmd,
+                sizeof(addr2line_cmd),
+                "addr2line -f -e '%s' %p",
+                _exe_path.c_str(),
+                buffer[i]
+            );
+            if (n > 0 && n < static_cast<int>(sizeof(addr2line_cmd))) {
                 FILE* addr2line_fp = popen(addr2line_cmd, "r");
                 if (addr2line_fp != NULL) {
                     char line[256]{};
                     while (fgets(line, sizeof(line), addr2line_fp) != NULL) {
-                        innerPrintToConsoleAndFile_d("%s", line);
+                        printf("%s", line);
                     }
                     pclose(addr2line_fp);
                 }
-            } else {
-                innerPrintToConsoleAndFile_d("(unknown)\n");
             }
+        } else {
+            printf("(unknown)\n");
         }
-        innerPrintToConsoleAndFile_d("======= Dump stack end =======\n");
-        free(strings);
     }
-#undef innerPrintToConsoleAndFile_d
+    printf("======= Dump stack end =======\n");
+    free(strings);
+}
+
+// ---- async-signal-safe 输出辅助: 信号处理器中只能用此类函数, 不能用 malloc/printf/fmt/fopen/popen
+// ----
+
+static void sigSafeWriteBuf(int fd, const char* buf, size_t len) {
+    if (fd < 0 || buf == nullptr) {
+        return;
+    }
+    size_t off = 0;
+    while (off < len) {
+        ssize_t r = write(fd, buf + off, len - off);
+        if (r < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            break;
+        }
+        off += static_cast<size_t>(r);
+    }
+}
+
+static void sigSafeWriteStr(int fd, const char* s) {
+    if (s == nullptr) {
+        return;
+    }
+    size_t len = 0;
+    while (s[len] != '\0') {
+        ++len;
+    }
+    sigSafeWriteBuf(fd, s, len);
+}
+
+static void sigSafeWriteUInt(int fd, unsigned long long v) {
+    char tmp[24];
+    int  n = 0;
+    if (v == 0) {
+        tmp[n++] = '0';
+    } else {
+        while (v != 0) {
+            tmp[n++]  = static_cast<char>('0' + static_cast<int>(v % 10));
+            v        /= 10;
+        }
+    }
+    char buf[24];
+    for (int i = 0; i < n; ++i) {
+        buf[i] = tmp[n - 1 - i];
+    }
+    sigSafeWriteBuf(fd, buf, static_cast<size_t>(n));
+}
+
+static void sigSafeWriteHex(int fd, const void* ptr) {
+    uintptr_t v = reinterpret_cast<uintptr_t>(ptr);
+    char      tmp[sizeof(uintptr_t) * 2];
+    int       n = 0;
+    if (v == 0) {
+        tmp[n++] = '0';
+    } else {
+        while (v != 0) {
+            int d      = static_cast<int>(v & 0xFu);
+            tmp[n++]   = static_cast<char>(d < 10 ? ('0' + d) : ('a' + (d - 10)));
+            v        >>= 4;
+        }
+    }
+    char buf[2 + sizeof(uintptr_t) * 2];
+    int  pos   = 0;
+    buf[pos++] = '0';
+    buf[pos++] = 'x';
+    for (int i = n - 1; i >= 0; --i) {
+        buf[pos++] = tmp[i];
+    }
+    sigSafeWriteBuf(fd, buf, static_cast<size_t>(pos));
+}
+
+/// 将栈帧地址写入两个 fd (异步信号安全); 不做符号化 (符号化需 malloc/popen, 非信号安全),
+/// 可事后用 addr2line 依据这些地址离线解析
+static void sigSafeDumpStack(int consoleFd, int fileFd, void** frames, int size) {
+    sigSafeWriteStr(consoleFd, "======= Dump stack start =======\n");
+    sigSafeWriteStr(fileFd, "======= Dump stack start =======\n");
+    for (int i = 0; i < size; i++) {
+        for (int fd : {consoleFd, fileFd}) {
+            sigSafeWriteStr(fd, "[");
+            sigSafeWriteUInt(fd, static_cast<unsigned long long>(i));
+            sigSafeWriteStr(fd, "] ");
+            sigSafeWriteHex(fd, frames[i]);
+            sigSafeWriteStr(fd, "\n");
+        }
+    }
+    sigSafeWriteStr(consoleFd, "======= Dump stack end =======\n");
+    sigSafeWriteStr(fileFd, "======= Dump stack end =======\n");
 }
 
 void signal_handler(int signo) {
-    const std::string filename = fmt::format("crash-{}.log", std::time(nullptr));
+    // 仅使用 async-signal-safe 函数: backtrace/open/write/close/_exit 等
+    void* buffer[64];
+    auto  size = backtrace(buffer, 64);
 
-#define innerPrintToConsoleAndFile_d(fp, str, ...) \
-    printf(str, ##__VA_ARGS__);                    \
-    fprintf(fp, str, ##__VA_ARGS__);
-
+    // 文件名: crash-<pid>.log (getpid 信号安全), 避免使用 fmt/time 格式化
+    char filename[64];
     {
-        char*  buffer[64];
-        char** strings = nullptr;
-
-        auto size = backtrace((void**)buffer, 64);
-
-        FILE* fp = fopen(filename.c_str(), "w");
-        if (fp != NULL) {
-            innerPrintToConsoleAndFile_d(fp, "\n======= xx catch signal %d =======\n", signo);
-            innerPrintToConsoleAndFile_d(fp, "======= Dump stack start =======\n");
-            {
-                strings = backtrace_symbols((void**)buffer, size);
-                if (strings == nullptr) {
-                    innerPrintToConsoleAndFile_d(fp, "backtrace_symbols return nullptr");
-                }
-            }
-            for (int i = 0; i < size; i++) {
-                if (nullptr == strings[i]) {
-                    innerPrintToConsoleAndFile_d(fp, "[%02d] %p\n", i, buffer[i]);
-                } else {
-                    innerPrintToConsoleAndFile_d(fp, "[%02d] %s\n", i, strings[i]);
-                }
-                if (buffer[i] != NULL) {
-                    char addr2line_cmd[256];
-                    sprintf(addr2line_cmd, "addr2line -f -e %s %p", _exe_path.c_str(), buffer[i]);
-                    FILE* addr2line_fp = popen(addr2line_cmd, "r");
-                    if (addr2line_fp != NULL) {
-                        char line[256]{};
-                        while (fgets(line, sizeof(line), addr2line_fp) != NULL) {
-                            innerPrintToConsoleAndFile_d(fp, "%s", line);
-                        }
-                        pclose(addr2line_fp);
-                    }
-                } else {
-                    innerPrintToConsoleAndFile_d(fp, "(unknown)\n");
-                }
-            }
-            innerPrintToConsoleAndFile_d(fp, "======= Dump stack end =======\n");
-            fclose(fp);
-            free(strings);
+        const char* prefix = "crash-";
+        const char* suffix = ".log";
+        int         pos    = 0;
+        for (const char* p = prefix; *p != '\0'; ++p) {
+            filename[pos++] = *p;
         }
+        // pid 转字符串
+        char pidbuf[24];
+        int  pn  = 0;
+        auto pid = static_cast<unsigned long long>(getpid());
+        if (pid == 0) {
+            pidbuf[pn++] = '0';
+        } else {
+            while (pid != 0) {
+                pidbuf[pn++]  = static_cast<char>('0' + static_cast<int>(pid % 10));
+                pid          /= 10;
+            }
+        }
+        for (int i = pn - 1; i >= 0 && pos < static_cast<int>(sizeof(filename)) - 1; --i) {
+            filename[pos++] = pidbuf[i];
+        }
+        for (const char* p = suffix; *p != '\0' && pos < static_cast<int>(sizeof(filename)) - 1;
+             ++p) {
+            filename[pos++] = *p;
+        }
+        filename[pos] = '\0';
     }
-    printf("\n# See file: %s\n", filename.c_str());
+
+    int fileFd = open(filename, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+
+    sigSafeWriteStr(STDERR_FILENO, "\n======= xx catch signal ");
+    sigSafeWriteUInt(STDERR_FILENO, static_cast<unsigned long long>(signo));
+    sigSafeWriteStr(STDERR_FILENO, " =======\n");
+    if (fileFd >= 0) {
+        sigSafeWriteStr(fileFd, "\n======= xx catch signal ");
+        sigSafeWriteUInt(fileFd, static_cast<unsigned long long>(signo));
+        sigSafeWriteStr(fileFd, " =======\n");
+    }
+
+    sigSafeDumpStack(STDERR_FILENO, fileFd, buffer, size);
+
+    if (fileFd >= 0) {
+        close(fileFd);
+    }
+
+    sigSafeWriteStr(STDERR_FILENO, "\n# See file: ");
+    sigSafeWriteStr(STDERR_FILENO, filename);
+    sigSafeWriteStr(STDERR_FILENO, "\n");
+
     signal(signo, SIG_DFL);
     raise(signo);
-#undef innerPrintToConsoleAndFile_d
 }
 
 void signalError(std::string_view exepath) {
     _exe_path = exepath;
-    printf("# Signal error handler: %s\n", exepath.data());
+    XX_LOGI("# Signal error handler: {}", exepath.data());
     signal(SIGSEGV, signal_handler);
 }
 

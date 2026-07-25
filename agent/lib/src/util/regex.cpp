@@ -32,7 +32,12 @@ public:
         hs_error_t          err
             = hs_compile(regstr.c_str(), flags, HS_MODE_BLOCK, nullptr, &hs_db, &compile_err);
         if (err != HS_SUCCESS) {
-            XX_LOGE("Hyperscan编译正则失败: {} | {}", compile_err->message, regstr);
+            // compile_err 仅在 HS_COMPILER_ERROR 时非空, 其余错误需判空避免空指针解引用
+            XX_LOGE(
+                "Hyperscan编译正则失败: {} | {}",
+                compile_err ? compile_err->message : "(unknown error)",
+                regstr
+            );
             hs_free_compile_error(compile_err);
             return;
         }
@@ -74,7 +79,12 @@ public:
         );
 
         if (err != HS_SUCCESS) {
-            XX_LOGE("Hyperscan编译正则失败: {} | {}", compile_err->message, regstrs.size());
+            // compile_err 仅在 HS_COMPILER_ERROR 时非空, 其余错误需判空避免空指针解引用
+            XX_LOGE(
+                "Hyperscan编译正则失败: {} | {}",
+                compile_err ? compile_err->message : "(unknown error)",
+                regstrs.size()
+            );
             hs_free_compile_error(compile_err);
             return;
         }

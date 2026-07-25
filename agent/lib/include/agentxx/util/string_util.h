@@ -382,7 +382,10 @@ template<typename T>
 
 [[nodiscard]] std::string base64Encode(std::string_view data);
 
-[[nodiscard]] std::string base64Decode(std::string_view str);
+/// base64 解码
+/// - 返回 nullopt 表示输入不是合法 base64; 合法但解码为空时返回 optional("")
+///   (用以区分 "非法输入" 与 "空结果", 例如写入空二进制文件)
+[[nodiscard]] std::optional<std::string> base64Decode(std::string_view str);
 
 [[nodiscard]] std::tuple<bool, std::optional<std::string>> convertCharset(
     std::string_view src,

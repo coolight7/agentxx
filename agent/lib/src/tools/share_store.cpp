@@ -137,17 +137,13 @@ asio::awaitable<std::string> ThreadShareStoreTool::execute_async(const neograph:
 
         for (std::string buf; lineNum < endLine; lineNum++) {
             if (!std::getline(stream, buf)) {
-                if (lineNum >= offset) {
-                    result << buf << "\n";
-                }
+                // EOF/错误: getline 会先清空 buf, 此处 buf 必为空, 无需再追加
                 break;
             }
 
             if (lineNum >= offset) {
                 result << buf << "\n";
             }
-
-            buf.clear();
         }
 
         if (lineNum <= offset) {

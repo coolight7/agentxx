@@ -2,6 +2,7 @@
 #include "boost/beast/core/detail/base64.hpp"
 #include "uchardet/uchardet.h"
 #include <algorithm>
+#include <cerrno>
 #include <cstring>
 #include <iconv.h>
 #include <map>
@@ -57,12 +58,12 @@ static std::string detectUtfBom(std::string_view str) {
     return "";
 }
 
-static std::vector<std::string> getIconvCandidateEncodings(const char* src_encoding) {
+static std::vector<std::string> getIconvCandidateEncodings(std::string_view src_encoding) {
     std::vector<std::string> candidates;
-    if (src_encoding == nullptr) {
+    if (src_encoding.empty()) {
         return candidates;
     }
-    std::string enc = src_encoding;
+    std::string enc{src_encoding};
     // UTF-16LE，Windows默认
     if (enc == "UTF-16LE" || enc == "UTF16LE" || enc == "UTF-16") {
         candidates = {"UTF-16LE", "UCS-2LE", "UTF16LE"};
@@ -89,7 +90,7 @@ std::tuple<bool, std::optional<std::string>> agentxx::util::convertCharset(
         return {false, std::nullopt};
     }
 
-    auto candidate_encs = getIconvCandidateEncodings(srcEncoding.data());
+    auto candidate_encs = getIconvCandidateEncodings(srcEncoding);
     if (candidate_encs.empty()) {
         return {false, std::nullopt};
     }
@@ -112,25 +113,39 @@ std::tuple<bool, std::optional<std::string>> agentxx::util::convertCharset(
         return {false, std::nullopt};
     }
 
-    // 缓冲区
-    size_t src_len = src.size();
-    // 最大预期，单字节转换为 8字节编码长度
-    size_t            dst_buf_size = src_len * 8;
-    std::vector<char> dst_buf(dst_buf_size);
-    char*             dst_ptr    = dst_buf.data();
-    size_t            dst_remain = dst_buf_size;
+    // 缓冲区: 初始按单字节转换为 8 字节编码预估, 不足 (E2BIG) 时自动扩容重试
+    size_t      src_len    = src.size();
+    size_t      dst_offset = 0;
+    std::string targetStr;
+    targetStr.resize(src_len * 8);
 
-    // 编码转换
     const char* src_ptr    = src.data();
     size_t      src_remain = src_len;
-    auto        ret = iconv(cd, const_cast<char**>(&src_ptr), &src_remain, &dst_ptr, &dst_remain);
-
-    std::string targetStr;
-    if (ret != static_cast<size_t>(-1) && src_remain == 0) {
-        targetStr = std::string(dst_buf.data(), dst_buf_size - dst_remain);
+    bool        ok         = false;
+    while (true) {
+        char*  dst_ptr    = targetStr.data() + dst_offset;
+        size_t dst_remain = targetStr.size() - dst_offset;
+        auto   ret = iconv(cd, const_cast<char**>(&src_ptr), &src_remain, &dst_ptr, &dst_remain);
+        dst_offset = targetStr.size() - dst_remain;
+        if (ret != static_cast<size_t>(-1)) {
+            // 转换结束, 仅当输入完全消耗才算成功
+            ok = (src_remain == 0);
+            break;
+        }
+        if (errno == E2BIG) {
+            // 输出缓冲区不足, 扩容后继续
+            targetStr.resize(targetStr.size() * 2);
+            continue;
+        }
+        // EILSEQ / EINVAL 等不可恢复错误
+        break;
     }
 
     iconv_close(cd);
+    if (!ok) {
+        return {false, std::nullopt};
+    }
+    targetStr.resize(dst_offset);
     return {true, targetStr};
 }
 
@@ -196,8 +211,7 @@ std::tuple<bool, std::optional<std::string>> agentxx::util::autoConvertCharset(
                 if (str.size() < defShortStringLength) {
                     // 短字符串容易不准确，需要检查utf8有效性
                     if (*item_ptr == std::string_view{"UTF-8"}) {
-                        if (haveCheckUtf8
-                            || false == agentxx::util::utf8GetLengthCheckAvail(str.data())) {
+                        if (haveCheckUtf8 || false == agentxx::util::utf8GetLengthCheckAvail(str)) {
                             haveCheckUtf8 = true;
                             continue;
                         }
@@ -277,12 +291,50 @@ std::string agentxx::util::base64Encode(std::string_view data) {
     return result;
 }
 
-std::string agentxx::util::base64Decode(std::string_view str) {
-    std::string result;
-    result.resize(boost::beast::detail::base64::decoded_size(str.size()));
+std::optional<std::string> agentxx::util::base64Decode(std::string_view str) {
+    if (str.empty()) {
+        // 空输入合法, 解码为空结果
+        return std::string{};
+    }
 
-    auto [bytes_written, _]
+#if XX_IS_DEBUG_D
+    // 校验 base64 格式: 仅含合法字符, '=' 仅在结尾 (最多 2 个), 数据长度 mod 4 不为 1
+    size_t padCount = 0;
+    for (size_t i = 0; i < str.size(); ++i) {
+        unsigned char c = static_cast<unsigned char>(str[i]);
+        if (c == '=') {
+            if (i < str.size() - 2) {
+                return std::nullopt; // '=' 只能出现在结尾最多 2 个
+            }
+            ++padCount;
+        } else {
+            bool valid = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
+                         || c == '+' || c == '/';
+            if (!valid) {
+                return std::nullopt;
+            }
+            if (padCount > 0) {
+                return std::nullopt; // padding 之后不应再出现数据字符
+            }
+        }
+    }
+    if ((str.size() - padCount) % 4 == 1) {
+        return std::nullopt; // 非法 base64 长度
+    }
+#endif
+
+    std::string result;
+    // decoded_size(n) 要求 n 为 4 的倍数, 对未补齐 padding 的输入 (长度 mod4 ∈ {2,3})
+    // 会分配不足导致越界写; 故先向上取整到 4 的倍数再计算最大解码长度
+    result.resize(boost::beast::detail::base64::decoded_size((str.size() + 3) / 4 * 4));
+
+    auto [bytes_written, chars_read]
         = boost::beast::detail::base64::decode(result.data(), str.data(), str.size());
+
+    if (chars_read < str.size() - padCount) {
+        // 解码提前终止 (理论上校验后不会发生, 防御性返回失败)
+        return std::nullopt;
+    }
 
     result.resize(bytes_written);
     return result;

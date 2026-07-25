@@ -30,14 +30,15 @@ AgentServer::~AgentServer() {
 }
 
 std::string AgentServer::generateToken(size_t bytes) {
-    static const char*                 hex = "0123456789abcdef";
-    std::random_device                 rd;
-    std::mt19937_64                    gen(rd());
-    std::uniform_int_distribution<int> dist(0, 15);
-    std::string                        token;
+    static const char* hex = "0123456789abcdef";
+    // 直接使用 random_device 逐字节生成, 避免用单一 64 位种子驱动 mt19937 导致 token 可预测
+    std::random_device rd;
+    std::string        token;
     token.reserve(bytes * 2);
-    for (size_t i = 0; i < bytes * 2; ++i) {
-        token.push_back(hex[dist(gen)]);
+    for (size_t i = 0; i < bytes; ++i) {
+        unsigned r = rd();
+        token.push_back(hex[(r >> 4) & 0xFu]);
+        token.push_back(hex[r & 0xFu]);
     }
     return token;
 }

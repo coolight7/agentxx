@@ -35,7 +35,8 @@ asio::awaitable<std::string> GetCurrentDateTimeTool::execute_async(const neograp
         R"(Timestamp: {} millisecond
 Local Time (24Hour): {}
 UTC Time (24Hour): {})",
-        now.time_since_epoch().count() / 1000 / 1000,
+        // 用 duration_cast 保证跨平台正确 (system_clock 周期在 Windows/Android 上非纳秒)
+        std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count(),
         std::format("{:%Y-%m-%d %H:%M:%S}", local_time),
         std::format("{:%Y-%m-%d %H:%M:%S}", now)
     );
