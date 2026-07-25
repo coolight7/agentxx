@@ -1,5 +1,24 @@
 #include "agentxx/protocol/mcp_client.h"
 
+#include <thread>
+#if AGENTXX_ENABLE_BOOST_PROCESS
+#include "asio/readable_pipe.hpp"
+#include "asio/writable_pipe.hpp"
+#include "boost/process.hpp"
+#else
+#if XX_IS_LINUX_D || XX_IS_MACOS_D
+#include <fcntl.h>
+#include <signal.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#elif XX_IS_WIN_D
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
+#endif
+
 #include "agentxx/util/async_mutex.h"
 #include "agentxx/util/log.h"
 #include "asio/cancel_after.hpp"
@@ -22,6 +41,313 @@ std::string makeNamespacedName(const std::string& toolNamespace, const std::stri
     return toolNamespace.empty() ? name : toolNamespace + "_" + name;
 }
 } // namespace
+
+// ---------------------------------------------------------------------------
+// StdioTransport — platform-specific subprocess transport state (PIMPL)
+// ---------------------------------------------------------------------------
+
+struct McpClient::StdioTransport {
+#if defined(BOOST_PROCESS_V2_PROCESS_HPP)
+    std::optional<boost::process::process> process;
+    std::optional<asio::writable_pipe>     stdinPipe;
+    std::optional<asio::readable_pipe>     stdoutPipe;
+    std::atomic<bool>                      running{false};
+
+    bool start(asio::any_io_executor executor,
+               const std::vector<std::string>& cmd,
+               std::shared_ptr<McpClient> client) {
+        stdinPipe.emplace(executor);
+        stdoutPipe.emplace(executor);
+
+        auto exe = boost::process::environment::find_executable(cmd[0]);
+        std::vector<std::string> args(cmd.begin() + 1, cmd.end());
+
+        process.emplace(
+            executor,
+            exe,
+            args,
+            boost::process::process_stdio{
+                .in  = *stdinPipe,
+                .out = *stdoutPipe,
+            }
+        );
+
+        running.store(true);
+
+        asio::co_spawn(
+            executor,
+            [this, client]() -> asio::awaitable<void> {
+                co_await readerLoop(client);
+            },
+            asio::detached
+        );
+
+        return true;
+    }
+
+    asio::awaitable<void> readerLoop(std::shared_ptr<McpClient> client) {
+        std::string buffer;
+        while (running.load()) {
+            boost::system::error_code ec;
+            std::size_t n = co_await asio::async_read_until(
+                *stdoutPipe,
+                asio::dynamic_buffer(buffer, 4096),
+                '\n',
+                asio::redirect_error(asio::use_awaitable, ec)
+            );
+            if (ec || n == 0) {
+                if (ec && ec != asio::error::eof && ec != asio::error::operation_aborted) {
+                    XX_LOGW("[McpClient] stdio reader error: {}", ec.message());
+                }
+                break;
+            }
+            std::string line = buffer.substr(0, n - 1);
+            buffer.erase(0, n);
+            if (line.empty()) continue;
+            try {
+                auto response = json::parse(line);
+                client->deliverResponse(response);
+            } catch (const json::parse_error&) {
+                XX_LOGW("[McpClient] ignoring malformed stdout line: {}", line.substr(0, 128));
+            }
+        }
+        if (!buffer.empty()) {
+            try {
+                auto response = json::parse(buffer);
+                client->deliverResponse(response);
+            } catch (...) {}
+        }
+        running.store(false);
+    }
+
+    void close() {
+        if (!process.has_value()) return;
+        running.store(false);
+        boost::system::error_code ec;
+        if (stdinPipe.has_value()) stdinPipe->close(ec);
+        if (stdoutPipe.has_value()) stdoutPipe->close(ec);
+        process->terminate(ec);
+        process->wait(ec);
+        stdinPipe.reset();
+        stdoutPipe.reset();
+        process.reset();
+    }
+
+    ~StdioTransport() {
+        close();
+    }
+
+#else
+    std::atomic<bool> running{false};
+#if XX_IS_LINUX_D || XX_IS_MACOS_D
+    int stdinFd  = -1;
+    int stdoutFd = -1;
+    int childPid = -1;
+#elif XX_IS_WIN_D
+    HANDLE stdinHandle  = nullptr;
+    HANDLE stdoutHandle = nullptr;
+    HANDLE childProcess = nullptr;
+#endif
+    std::thread readerThread;
+
+    bool start(asio::any_io_executor /*executor*/,
+               const std::vector<std::string>& cmd,
+               std::shared_ptr<McpClient> client) {
+#if XX_IS_LINUX_D || XX_IS_MACOS_D
+        int stdinPipe[2]  = {-1, -1};
+        int stdoutPipe[2] = {-1, -1};
+
+        if (::pipe(stdinPipe) != 0 || ::pipe(stdoutPipe) != 0) {
+            return false;
+        }
+
+        pid_t pid = ::fork();
+        if (pid < 0) {
+            ::close(stdinPipe[0]); ::close(stdinPipe[1]);
+            ::close(stdoutPipe[0]); ::close(stdoutPipe[1]);
+            return false;
+        }
+
+        if (pid == 0) {
+            ::close(stdinPipe[1]); ::close(stdoutPipe[0]);
+            ::dup2(stdinPipe[0], STDIN_FILENO);
+            ::dup2(stdoutPipe[1], STDOUT_FILENO);
+            int maxFd = static_cast<int>(::sysconf(_SC_OPEN_MAX));
+            for (int i = 3; i < maxFd; i++) {
+                if (i != stdinPipe[0] && i != stdoutPipe[1]) {
+                    ::close(i);
+                }
+            }
+            std::vector<char*> argv;
+            for (const auto& arg : cmd) {
+                argv.push_back(const_cast<char*>(arg.data()));
+            }
+            argv.push_back(nullptr);
+            ::execvp(argv[0], argv.data());
+            ::_exit(127);
+        }
+
+        ::close(stdinPipe[0]); ::close(stdoutPipe[1]);
+        stdinFd  = stdinPipe[1];
+        stdoutFd = stdoutPipe[0];
+        childPid = static_cast<int>(pid);
+
+        int flags = ::fcntl(stdoutFd, F_GETFL, 0);
+        ::fcntl(stdoutFd, F_SETFL, flags | O_NONBLOCK);
+
+        running.store(true);
+        readerThread = std::thread([this, client]() { readerLoop(client); });
+        return true;
+
+#elif XX_IS_WIN_D
+        SECURITY_ATTRIBUTES sa;
+        sa.nLength              = sizeof(SECURITY_ATTRIBUTES);
+        sa.lpSecurityDescriptor = nullptr;
+        sa.bInheritHandle       = TRUE;
+
+        HANDLE parentStdinRd = nullptr, childStdinWr = nullptr;
+        HANDLE childStdoutRd = nullptr, parentStdoutWr = nullptr;
+
+        if (!CreatePipe(&parentStdinRd, &childStdinWr, &sa, 0)
+            || !CreatePipe(&childStdoutRd, &parentStdoutWr, &sa, 0)) {
+            return false;
+        }
+
+        SetHandleInformation(childStdinWr, HANDLE_FLAG_INHERIT, 0);
+        SetHandleInformation(childStdoutRd, HANDLE_FLAG_INHERIT, 0);
+
+        std::string cmdLine;
+        for (size_t i = 0; i < cmd.size(); i++) {
+            if (i > 0) cmdLine += " ";
+            cmdLine += cmd[i];
+        }
+
+        PROCESS_INFORMATION pi;
+        STARTUPINFOA        si;
+        ZeroMemory(&si, sizeof(si));
+        si.cb          = sizeof(si);
+        si.hStdError   = parentStdoutWr;
+        si.hStdOutput  = parentStdoutWr;
+        si.hStdInput   = parentStdinRd;
+        si.dwFlags    |= STARTF_USESTDHANDLES;
+
+        if (!CreateProcessA(
+                nullptr, cmdLine.data(), nullptr, nullptr,
+                TRUE, 0, nullptr, nullptr, &si, &pi
+            )) {
+            CloseHandle(parentStdinRd); CloseHandle(childStdinWr);
+            CloseHandle(childStdoutRd); CloseHandle(parentStdoutWr);
+            return false;
+        }
+
+        CloseHandle(pi.hThread);
+        CloseHandle(parentStdinRd);
+        CloseHandle(parentStdoutWr);
+
+        stdinHandle  = childStdinWr;
+        stdoutHandle = childStdoutRd;
+        childProcess = pi.hProcess;
+
+        running.store(true);
+        readerThread = std::thread([this, client]() { readerLoop(client); });
+        return true;
+#else
+        return false;
+#endif
+    }
+
+    void readerLoop(std::shared_ptr<McpClient> client) {
+#if XX_IS_LINUX_D || XX_IS_MACOS_D
+        std::string      buffer;
+        constexpr size_t kBufSize = 4096;
+
+        while (running.load()) {
+            char    buf[kBufSize];
+            ssize_t n = ::read(stdoutFd, buf, kBufSize);
+            if (n < 0) {
+                if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                    continue;
+                }
+                break;
+            }
+            if (n == 0) break;
+
+            buffer.append(buf, static_cast<size_t>(n));
+
+            size_t pos;
+            while ((pos = buffer.find('\n')) != std::string::npos) {
+                std::string line = buffer.substr(0, pos);
+                buffer.erase(0, pos + 1);
+                if (line.empty()) continue;
+                try {
+                    auto response = json::parse(line);
+                    client->deliverResponse(response);
+                } catch (const json::parse_error&) {
+                    XX_LOGW("[McpClient] ignoring malformed stdout line: {}", line.substr(0, 128));
+                }
+            }
+        }
+        if (!buffer.empty()) {
+            try {
+                auto response = json::parse(buffer);
+                client->deliverResponse(response);
+            } catch (...) {}
+        }
+#elif XX_IS_WIN_D
+        std::string buffer;
+        char        buf[4096];
+
+        while (running.load()) {
+            DWORD bytesRead = 0;
+            if (!ReadFile(stdoutHandle, buf, sizeof(buf) - 1, &bytesRead, nullptr)) break;
+            if (bytesRead == 0) break;
+            buffer.append(buf, static_cast<size_t>(bytesRead));
+            size_t pos;
+            while ((pos = buffer.find('\n')) != std::string::npos) {
+                std::string line = buffer.substr(0, pos);
+                buffer.erase(0, pos + 1);
+                if (line.empty()) continue;
+                try {
+                    auto response = json::parse(line);
+                    client->deliverResponse(response);
+                } catch (...) {}
+            }
+        }
+#endif
+        running.store(false);
+    }
+
+    void close() {
+#if XX_IS_LINUX_D || XX_IS_MACOS_D
+        if (childPid <= 0) return;
+        running.store(false);
+        ::kill(static_cast<pid_t>(childPid), SIGTERM);
+        if (readerThread.joinable()) readerThread.join();
+        int status = 0;
+        ::waitpid(static_cast<pid_t>(childPid), &status, WNOHANG);
+        if (stdinFd >= 0) ::close(stdinFd);
+        if (stdoutFd >= 0) ::close(stdoutFd);
+        stdinFd = -1; stdoutFd = -1; childPid = -1;
+#elif XX_IS_WIN_D
+        if (childProcess == nullptr) return;
+        running.store(false);
+        TerminateProcess(childProcess, 0);
+        if (readerThread.joinable()) readerThread.join();
+        CloseHandle(childProcess);
+        CloseHandle(stdinHandle);
+        CloseHandle(stdoutHandle);
+        childProcess = nullptr;
+        stdinHandle  = nullptr;
+        stdoutHandle = nullptr;
+#endif
+    }
+
+    ~StdioTransport() {
+        close();
+    }
+#endif
+};
 
 // ---------------------------------------------------------------------------
 // McpClient
@@ -654,7 +980,7 @@ asio::awaitable<std::expected<json, std::string>>
         auto                      wguard = co_await stdioWriteMutex_->lock();
         boost::system::error_code wec;
         co_await asio::async_write(
-            *stdioStdinPipe_,
+            *stdio_->stdinPipe,
             asio::buffer(reqStr),
             asio::redirect_error(asio::use_awaitable, wec)
         );
@@ -671,7 +997,7 @@ asio::awaitable<std::expected<json, std::string>>
         const char* buf       = reqStr.data();
         size_t      remaining = reqStr.size();
         while (remaining > 0) {
-            ssize_t n = ::write(stdioStdinFd_, buf, remaining);
+            ssize_t n = ::write(stdio_->stdinFd, buf, remaining);
             if (n <= 0) {
                 break;
             }
@@ -681,7 +1007,7 @@ asio::awaitable<std::expected<json, std::string>>
 #elif XX_IS_WIN_D
         DWORD written = 0;
         WriteFile(
-            stdioStdinHandle_,
+            stdio_->stdinHandle,
             reqStr.data(),
             static_cast<DWORD>(reqStr.size()),
             &written,
@@ -734,17 +1060,17 @@ asio::awaitable<void>
 #if defined(BOOST_PROCESS_V2_PROCESS_HPP)
         boost::system::error_code wec;
         co_await asio::async_write(
-            *stdioStdinPipe_,
+            *stdio_->stdinPipe,
             asio::buffer(reqStr),
             asio::redirect_error(asio::use_awaitable, wec)
         );
 #else
 #if XX_IS_LINUX_D || XX_IS_MACOS_D
-        ::write(stdioStdinFd_, reqStr.data(), reqStr.size());
+        ::write(stdio_->stdinFd, reqStr.data(), reqStr.size());
 #elif XX_IS_WIN_D
         DWORD written = 0;
         WriteFile(
-            stdioStdinHandle_,
+            stdio_->stdinHandle,
             reqStr.data(),
             static_cast<DWORD>(reqStr.size()),
             &written,
@@ -756,7 +1082,6 @@ asio::awaitable<void>
     co_return;
 }
 
-#if defined(BOOST_PROCESS_V2_PROCESS_HPP)
 bool McpClient::startStdioSubprocess(asio::any_io_executor executor) {
     if (config_.serverCommand.empty()) {
         return false;
@@ -765,180 +1090,18 @@ bool McpClient::startStdioSubprocess(asio::any_io_executor executor) {
     stdioWriteMutex_ = std::make_unique<util::AsyncMutex>(executor);
 
     try {
-        stdioStdinPipe_.emplace(executor);
-        stdioStdoutPipe_.emplace(executor);
-
-        auto exe = boost::process::environment::find_executable(config_.serverCommand[0]);
-
-        std::vector<std::string> args(
-            config_.serverCommand.begin() + 1,
-            config_.serverCommand.end()
-        );
-
-        stdioProcess_.emplace(
-            executor,
-            exe,
-            args,
-            boost::process::process_stdio{
-                .in  = *stdioStdinPipe_,
-                .out = *stdioStdoutPipe_,
-            }
-        );
-
-        stdioRunning_.store(true);
-
-        asio::co_spawn(
-            executor,
-            [self = shared_from_this()]() -> asio::awaitable<void> {
-                co_await self->stdioReaderLoop();
-            },
-            asio::detached
-        );
-
+        stdio_ = std::make_unique<StdioTransport>();
+        if (!stdio_->start(executor, config_.serverCommand, shared_from_this())) {
+            stdio_.reset();
+            return false;
+        }
         return true;
     } catch (const std::exception& e) {
         XX_LOGW("[McpClient] failed to start subprocess: {}", e.what());
-        stdioStdinPipe_.reset();
-        stdioStdoutPipe_.reset();
-        stdioProcess_.reset();
+        stdio_.reset();
         return false;
     }
 }
-#else
-bool McpClient::startStdioSubprocess(asio::any_io_executor executor) {
-    if (config_.serverCommand.empty()) {
-        return false;
-    }
-
-    stdioWriteMutex_ = std::make_unique<util::AsyncMutex>(executor);
-
-#if XX_IS_LINUX_D || XX_IS_MACOS_D
-    int stdinPipe[2]  = {-1, -1};
-    int stdoutPipe[2] = {-1, -1};
-
-    if (::pipe(stdinPipe) != 0 || ::pipe(stdoutPipe) != 0) {
-        return false;
-    }
-
-    pid_t pid = ::fork();
-    if (pid < 0) {
-        ::close(stdinPipe[0]);
-        ::close(stdinPipe[1]);
-        ::close(stdoutPipe[0]);
-        ::close(stdoutPipe[1]);
-        return false;
-    }
-
-    if (pid == 0) {
-        ::close(stdinPipe[1]);
-        ::close(stdoutPipe[0]);
-        ::dup2(stdinPipe[0], STDIN_FILENO);
-        ::dup2(stdoutPipe[1], STDOUT_FILENO);
-
-        int maxFd = static_cast<int>(::sysconf(_SC_OPEN_MAX));
-        for (int i = 3; i < maxFd; i++) {
-            if (i != stdinPipe[0] && i != stdoutPipe[1]) {
-                ::close(i);
-            }
-        }
-
-        std::vector<char*> argv;
-        for (auto& arg : config_.serverCommand) {
-            argv.push_back(const_cast<char*>(arg.data()));
-        }
-        argv.push_back(nullptr);
-
-        ::execvp(argv[0], argv.data());
-        ::_exit(127);
-    }
-
-    ::close(stdinPipe[0]);
-    ::close(stdoutPipe[1]);
-
-    stdioStdinFd_  = stdinPipe[1];
-    stdioStdoutFd_ = stdoutPipe[0];
-    stdioChildPid_ = static_cast<int>(pid);
-
-    int flags = ::fcntl(stdioStdoutFd_, F_GETFL, 0);
-    ::fcntl(stdioStdoutFd_, F_SETFL, flags | O_NONBLOCK);
-
-    stdioRunning_.store(true);
-    stdioReaderThread_ = std::thread([this]() {
-        stdioReaderLoop();
-    });
-    return true;
-
-#elif XX_IS_WIN_D
-    SECURITY_ATTRIBUTES sa;
-    sa.nLength              = sizeof(SECURITY_ATTRIBUTES);
-    sa.lpSecurityDescriptor = nullptr;
-    sa.bInheritHandle       = TRUE;
-
-    HANDLE parentStdinRd = nullptr, childStdinWr = nullptr;
-    HANDLE childStdoutRd = nullptr, parentStdoutWr = nullptr;
-
-    if (!CreatePipe(&parentStdinRd, &childStdinWr, &sa, 0)
-        || !CreatePipe(&childStdoutRd, &parentStdoutWr, &sa, 0)) {
-        return false;
-    }
-
-    SetHandleInformation(childStdinWr, HANDLE_FLAG_INHERIT, 0);
-    SetHandleInformation(childStdoutRd, HANDLE_FLAG_INHERIT, 0);
-
-    std::string cmdLine;
-    for (size_t i = 0; i < config_.serverCommand.size(); i++) {
-        if (i > 0) {
-            cmdLine += " ";
-        }
-        cmdLine += config_.serverCommand[i];
-    }
-
-    PROCESS_INFORMATION pi;
-    STARTUPINFOA        si;
-    ZeroMemory(&si, sizeof(si));
-    si.cb          = sizeof(si);
-    si.hStdError   = parentStdoutWr;
-    si.hStdOutput  = parentStdoutWr;
-    si.hStdInput   = parentStdinRd;
-    si.dwFlags    |= STARTF_USESTDHANDLES;
-
-    if (!CreateProcessA(
-            nullptr,
-            cmdLine.data(),
-            nullptr,
-            nullptr,
-            TRUE,
-            0,
-            nullptr,
-            nullptr,
-            &si,
-            &pi
-        )) {
-        CloseHandle(parentStdinRd);
-        CloseHandle(childStdinWr);
-        CloseHandle(childStdoutRd);
-        CloseHandle(parentStdoutWr);
-        return false;
-    }
-
-    CloseHandle(pi.hThread);
-    CloseHandle(parentStdinRd);
-    CloseHandle(parentStdoutWr);
-
-    stdioStdinHandle_  = childStdinWr;
-    stdioStdoutHandle_ = childStdoutRd;
-    stdioChildProcess_ = pi.hProcess;
-
-    stdioRunning_.store(true);
-    stdioReaderThread_ = std::thread([this]() {
-        stdioReaderLoop();
-    });
-    return true;
-#else
-    return false;
-#endif
-}
-#endif
 
 void McpClient::closeInternal() {
     bool expected = false;
@@ -952,64 +1115,9 @@ void McpClient::closeInternal() {
     mcpSessionId_.clear();
     sseDiscovered_.store(false);
 
-#if defined(BOOST_PROCESS_V2_PROCESS_HPP)
-    if (stdioProcess_.has_value()) {
-        stdioRunning_.store(false);
-
-        boost::system::error_code ec;
-        if (stdioStdinPipe_.has_value()) {
-            stdioStdinPipe_->close(ec);
-        }
-        if (stdioStdoutPipe_.has_value()) {
-            stdioStdoutPipe_->close(ec);
-        }
-
-        stdioProcess_->terminate(ec);
-        stdioProcess_->wait(ec);
-
-        stdioStdinPipe_.reset();
-        stdioStdoutPipe_.reset();
-        stdioProcess_.reset();
+    if (stdio_) {
+        stdio_->close();
     }
-#else
-#if XX_IS_LINUX_D || XX_IS_MACOS_D
-    if (stdioChildPid_ > 0) {
-        stdioRunning_.store(false);
-        ::kill(static_cast<pid_t>(stdioChildPid_), SIGTERM);
-
-        if (stdioReaderThread_.joinable()) {
-            stdioReaderThread_.join();
-        }
-
-        int status = 0;
-        ::waitpid(static_cast<pid_t>(stdioChildPid_), &status, WNOHANG);
-
-        if (stdioStdinFd_ >= 0) {
-            ::close(stdioStdinFd_);
-        }
-        if (stdioStdoutFd_ >= 0) {
-            ::close(stdioStdoutFd_);
-        }
-        stdioStdinFd_  = -1;
-        stdioStdoutFd_ = -1;
-        stdioChildPid_ = -1;
-    }
-#elif XX_IS_WIN_D
-    if (stdioChildProcess_ != nullptr) {
-        stdioRunning_.store(false);
-        TerminateProcess(stdioChildProcess_, 0);
-        if (stdioReaderThread_.joinable()) {
-            stdioReaderThread_.join();
-        }
-        CloseHandle(stdioChildProcess_);
-        CloseHandle(stdioStdinHandle_);
-        CloseHandle(stdioStdoutHandle_);
-        stdioChildProcess_ = nullptr;
-        stdioStdinHandle_  = nullptr;
-        stdioStdoutHandle_ = nullptr;
-    }
-#endif
-#endif
 
     std::lock_guard lock(pendingMutex_);
     for (auto& [id, req] : pending_) {
@@ -1025,130 +1133,7 @@ void McpClient::closeInternal() {
     pending_.clear();
 }
 
-#if defined(BOOST_PROCESS_V2_PROCESS_HPP)
-asio::awaitable<void> McpClient::stdioReaderLoop() {
-    std::string buffer;
 
-    while (stdioRunning_.load()) {
-        boost::system::error_code ec;
-        std::size_t               n = co_await asio::async_read_until(
-            *stdioStdoutPipe_,
-            asio::dynamic_buffer(buffer, 4096),
-            '\n',
-            asio::redirect_error(asio::use_awaitable, ec)
-        );
-
-        if (ec || n == 0) {
-            if (ec && ec != asio::error::eof && ec != asio::error::operation_aborted) {
-                XX_LOGW("[McpClient] stdio reader error: {}", ec.message());
-            }
-            break;
-        }
-
-        std::string line = buffer.substr(0, n - 1);
-        buffer.erase(0, n);
-
-        if (line.empty()) {
-            continue;
-        }
-
-        try {
-            auto response = json::parse(line);
-            deliverResponse(response);
-        } catch (const json::parse_error&) {
-            XX_LOGW("[McpClient] ignoring malformed stdout line: {}", line.substr(0, 128));
-        }
-    }
-
-    if (!buffer.empty()) {
-        try {
-            auto response = json::parse(buffer);
-            deliverResponse(response);
-        } catch (...) {
-        }
-    }
-
-    stdioRunning_.store(false);
-    co_return;
-}
-#else
-void McpClient::stdioReaderLoop() {
-#if XX_IS_LINUX_D || XX_IS_MACOS_D
-    std::string      buffer;
-    constexpr size_t kBufSize = 4096;
-
-    while (stdioRunning_.load()) {
-        char    buf[kBufSize];
-        ssize_t n = ::read(stdioStdoutFd_, buf, kBufSize);
-        if (n < 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(5));
-                continue;
-            }
-            break;
-        }
-        if (n == 0) {
-            break;
-        }
-
-        buffer.append(buf, static_cast<size_t>(n));
-
-        size_t pos;
-        while ((pos = buffer.find('\n')) != std::string::npos) {
-            std::string line = buffer.substr(0, pos);
-            buffer.erase(0, pos + 1);
-            if (line.empty()) {
-                continue;
-            }
-            try {
-                auto response = json::parse(line);
-                deliverResponse(response);
-            } catch (const json::parse_error&) {
-                XX_LOGW("[McpClient] ignoring malformed stdout line: {}", line.substr(0, 128));
-            }
-        }
-    }
-
-    if (!buffer.empty()) {
-        try {
-            auto response = json::parse(buffer);
-            deliverResponse(response);
-        } catch (...) {
-        }
-    }
-#elif XX_IS_WIN_D
-    std::string buffer;
-    char        buf[4096];
-
-    while (stdioRunning_.load()) {
-        DWORD bytesRead = 0;
-        if (!ReadFile(stdioStdoutHandle_, buf, sizeof(buf) - 1, &bytesRead, nullptr)) {
-            break;
-        }
-        if (bytesRead == 0) {
-            break;
-        }
-
-        buffer.append(buf, static_cast<size_t>(bytesRead));
-
-        size_t pos;
-        while ((pos = buffer.find('\n')) != std::string::npos) {
-            std::string line = buffer.substr(0, pos);
-            buffer.erase(0, pos + 1);
-            if (line.empty()) {
-                continue;
-            }
-            try {
-                auto response = json::parse(line);
-                deliverResponse(response);
-            } catch (...) {
-            }
-        }
-    }
-#endif
-    stdioRunning_.store(false);
-}
-#endif
 
 void McpClient::deliverResponse(const json& response) {
     if (!response.contains("id")) {

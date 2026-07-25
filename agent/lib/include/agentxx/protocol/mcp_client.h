@@ -18,29 +18,6 @@
 #include <unordered_map>
 #include <vector>
 
-#if AGENTXX_ENABLE_BOOST_PROCESS
-
-#include "asio/readable_pipe.hpp"
-#include "asio/writable_pipe.hpp"
-#include "boost/process.hpp"
-
-#else
-
-#include <thread>
-#if XX_IS_LINUX_D || XX_IS_MACOS_D
-#include <fcntl.h>
-#include <signal.h>
-#include <sys/wait.h>
-#include <unistd.h>
-#elif XX_IS_WIN_D
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#include <windows.h>
-#endif
-
-#endif
-
 namespace asio = ::boost::asio;
 
 namespace agentxx {
@@ -215,13 +192,11 @@ private:
 
     void closeInternal();
 
-#if defined(BOOST_PROCESS_V2_PROCESS_HPP)
-    asio::awaitable<void> stdioReaderLoop();
-#else
-    void stdioReaderLoop();
-#endif
-
     void deliverResponse(const json& response);
+
+    // -----------------------------------------------------------------------
+    // Members
+    // -----------------------------------------------------------------------
 
     Config               config_;
     std::atomic<bool>    initialized_{false};
@@ -234,24 +209,9 @@ private:
     std::string       httpMessageUrl_;
     std::string       mcpSessionId_;
 
-    // Stdio transport state
-#if defined(BOOST_PROCESS_V2_PROCESS_HPP)
-    std::optional<boost::process::process> stdioProcess_;
-    std::optional<asio::writable_pipe>     stdioStdinPipe_;
-    std::optional<asio::readable_pipe>     stdioStdoutPipe_;
-#else
-#if XX_IS_LINUX_D || XX_IS_MACOS_D
-    int stdioStdinFd_  = -1;
-    int stdioStdoutFd_ = -1;
-    int stdioChildPid_ = -1;
-#elif XX_IS_WIN_D
-    HANDLE stdioStdinHandle_  = nullptr;
-    HANDLE stdioStdoutHandle_ = nullptr;
-    HANDLE stdioChildProcess_ = nullptr;
-#endif
-    std::thread stdioReaderThread_;
-#endif
-    std::atomic<bool> stdioRunning_{false};
+    // Stdio transport state (platform-specific details hidden in .cpp)
+    struct StdioTransport;
+    std::unique_ptr<StdioTransport> stdio_;
     /// stdio 写序列化: 协程感知锁, 持锁跨越 co_await async_write 也不死锁 (见 AsyncMutex)
     std::unique_ptr<util::AsyncMutex>                            stdioWriteMutex_;
     std::mutex                                                   pendingMutex_;
