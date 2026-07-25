@@ -39,8 +39,8 @@ AgentTUI::~AgentTUI() {
 }
 
 void AgentTUI::postRedraw() {
-    if (screen_) {
-        screen_->PostEvent(Event::Custom);
+    if (auto* s = screen_.load(std::memory_order_acquire)) {
+        s->PostEvent(Event::Custom);
     }
 }
 
@@ -58,7 +58,7 @@ void AgentTUI::start() {
 
     uiThread_ = std::thread([this]() {
         auto screen = ScreenInteractive::Fullscreen();
-        screen_     = &screen;
+        screen_.store(&screen, std::memory_order_release);
 
         // 屏幕足够宽时默认显示信息侧边栏
         {
@@ -98,7 +98,7 @@ void AgentTUI::start() {
             if (pendingPermission_) {
                 indicator = text("!") | bgcolor(Color::Red) | color(Color::White) | bold | blink;
             } else if (isStreaming_) {
-                indicator = text("\xe2\x97\x8f") | color(theme_.accentColor) | bold;
+                indicator = text("⏹") | color(theme_.accentColor) | bold;
             } else {
                 indicator = text(">") | color(theme_.promptColor) | bold;
             }
@@ -285,7 +285,25 @@ void AgentTUI::start() {
                         text = text.substr(start);
                     }
                     if (!text.empty()) {
-                        if (isStreaming_) {
+                        if (awaitingInterruptInput_.load(std::memory_order_acquire)) {
+                            // 中断等待输入: 直接送入 inputChannel_ 供 handleInterrupt 的
+                            // getInput() 接收; 不能走 isStreaming_ 待发送队列, 否则 getInput
+                            // 永久阻塞导致死锁
+                            if (!currentToken_.empty()) {
+                                messages_.push_back({currentTokenRole_, currentToken_});
+                                if (currentTokenRole_ == Message::Role::Thinking) {
+                                    messages_.back().collapsed = true;
+                                }
+                                currentToken_.clear();
+                            }
+                            messages_.push_back({Message::Role::User, text});
+                            stickToBottom_ = true;
+                            inputChannel_->async_send(
+                                neograph_asio_error_code{},
+                                std::move(text),
+                                [](neograph_asio_error_code) {}
+                            );
+                        } else if (isStreaming_) {
                             // DeepAgent 执行中 -> 加入待发送队列, 轮次结束后自动发送
                             pendingInputs_.push_back(PendingInput{std::move(text), false});
                         } else {
@@ -381,7 +399,7 @@ void AgentTUI::start() {
         });
 
         screen.Loop(event_handler);
-        screen_ = nullptr;
+        screen_.store(nullptr, std::memory_order_release);
     });
 }
 
@@ -391,8 +409,8 @@ void AgentTUI::stop() {
         logSink_->setOnNewLog(nullptr);
     }
     running_ = false;
-    if (screen_) {
-        screen_->Exit();
+    if (auto* s = screen_.load(std::memory_order_acquire)) {
+        s->Exit();
     }
     if (uiThread_.joinable()) {
         uiThread_.join();
@@ -628,6 +646,9 @@ asio::awaitable<neograph::json> AgentTUI::handleInterrupt(
     }
     const auto& handleArg = argOpt.value();
 
+    // 标记进入中断输入等待: 使 Alt+Enter 把用户输入直接送入 inputChannel_ (避免死锁)
+    awaitingInterruptInput_.store(true, std::memory_order_release);
+
     {
         std::lock_guard<std::mutex> lock(mutex_);
         std::string msg = "Interrupted at: " + interruptNode + "\nValue: " + interruptValue;
@@ -713,6 +734,7 @@ asio::awaitable<neograph::json> AgentTUI::handleInterrupt(
             }
         } while (false == inputSuccess);
     }
+    awaitingInterruptInput_.store(false, std::memory_order_release);
     co_return result;
 }
 

@@ -157,9 +157,17 @@ private:
     /// 缓存的模型显示名称 (避免 render 热路径频繁加锁)
     std::string cachedModelName_;
 
-    ftxui::ScreenInteractive* screen_ = nullptr;
-    std::thread               uiThread_;
-    std::atomic<bool>         running_{false};
+    ftxui::ScreenInteractive* screen() const {
+        return screen_.load(std::memory_order_acquire);
+    }
+    // screen_ 由 UI 线程写、agent/日志线程经 postRedraw 读, 必须原子化避免数据竞争与 UAF
+    std::atomic<ftxui::ScreenInteractive*> screen_{nullptr};
+    std::thread                            uiThread_;
+    std::atomic<bool>                      running_{false};
+
+    /// handleInterrupt 正在等待用户输入时为 true;
+    /// 此时 Alt+Enter 须把输入直接送入 inputChannel_ (而非 isStreaming_ 待发送队列), 否则死锁
+    std::atomic<bool> awaitingInterruptInput_{false};
 
     std::shared_ptr<LineChannel> inputChannel_;
     std::shared_ptr<BoolChannel> permissionChannel_;
