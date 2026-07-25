@@ -185,6 +185,11 @@ public:
         return true;
     }
 
+    /// 当前注册的 server 数量 (主要用于测试: 验证重注册不累积 handler)
+    size_t serverCount() const {
+        return servers_.size();
+    }
+
     /// 发起请求并等待响应
     /// - timeout 到期返回 nullopt, 并清理 pending 槽
     /// - 同一 io_context 单线程运行, pending_/servers_ 无需加锁

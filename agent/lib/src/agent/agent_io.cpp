@@ -7,16 +7,41 @@
 namespace agentxx {
 namespace agent {
 
+AgentIOBase::~AgentIOBase() {
+    // IO 销毁前移除总线上的处理器, 避免 handler 持有悬空 this
+    unregisterFromBus();
+}
+
+void AgentIOBase::unregisterFromBus() {
+    auto bus = registeredBus_.lock();
+    if (!bus) {
+        return;
+    }
+    if (interruptServerId_ != 0) {
+        bus->getRR<events::ReqInterrupt, events::RespInterrupt>(events::Topic::Interrupt)
+            .removeServer(interruptServerId_);
+        interruptServerId_ = 0;
+    }
+    if (permissionServerId_ != 0) {
+        bus->getRR<events::ReqPermission, events::RespPermission>(events::Topic::Permission)
+            .removeServer(permissionServerId_);
+        permissionServerId_ = 0;
+    }
+}
+
 void AgentIOBase::registerOnBus(std::shared_ptr<agentxx::middleware::EventBus> sessionBus) {
     if (!sessionBus) {
         return;
     }
 
+    // 重复注册时先移除旧处理器, 避免 handler 累积/泄漏, 以及旧 IO 销毁后悬空 this
+    unregisterFromBus();
+    registeredBus_ = sessionBus;
+
     // 注册 interrupt 处理器
-    // 注意: 调用者须保证 IO 对象存活时间长于 sessionBus (Session 中 io 在 bus 之后销毁)
     auto& interruptRR
         = sessionBus->getRR<events::ReqInterrupt, events::RespInterrupt>(events::Topic::Interrupt);
-    interruptRR.serve(
+    interruptServerId_ = interruptRR.serve(
         [this](const events::ReqInterrupt& req, size_t /*corrId*/)
             -> asio::awaitable<events::RespInterrupt> {
             auto result = co_await this->handleInterrupt(
@@ -36,7 +61,7 @@ void AgentIOBase::registerOnBus(std::shared_ptr<agentxx::middleware::EventBus> s
     auto& permRR
         = sessionBus->getRR<events::ReqPermission, events::RespPermission>(events::Topic::Permission
         );
-    permRR.serve(
+    permissionServerId_ = permRR.serve(
         [this](const events::ReqPermission& req, size_t /*corrId*/)
             -> asio::awaitable<events::RespPermission> {
             auto inputItem   = agentxx::middleware::InterruptHandleArg::InterruptHandleInputItem{};
