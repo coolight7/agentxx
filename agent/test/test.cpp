@@ -23,11 +23,13 @@
 #include "test_http.h"
 #include "test_interrupt_bus.h"
 #include "test_mcp.h"
+#include "test_misc_fixes.h"
 #include "test_openai_provider.h"
 #include "test_rag_search_tools.h"
 #include "test_regex.h"
 #include "test_remote_agent.h"
 #include "test_screen_capture.h"
+#include "test_share_store.h"
 #include "test_string_tools.h"
 #include "test_string_util.h"
 #include "test_subagent_bus.h"
@@ -99,6 +101,7 @@ int main(int argn, char** argv) {
     runSync("diff_util", agentxx::test::testDiffUtil);
     runSync("events", agentxx::test::test_events);
     runSync("concurrency", agentxx::test::testConcurrency);
+    runSync("misc_fixes", agentxx::test::testMiscFixes);
 
     // ---- 异步测试模块 ----
     asio::co_spawn(
@@ -165,6 +168,7 @@ int main(int argn, char** argv) {
             co_await run("subagent_bus", agentxx::test::run_subagent_bus_tests);
             co_await run("crossagent", agentxx::test::run_crossagent_tests);
             co_await runCtx("string_tools", agentxx::test::run_string_tools_tests, agentContext);
+            co_await run("share_store", agentxx::test::run_share_store_tests);
             co_await runCtx("rag_search", agentxx::test::run_rag_search_tools_tests, agentContext);
             co_await runCtx("datetime", agentxx::test::run_datetime_tool_tests, agentContext);
             co_await runCtx("filesystem", agentxx::test::run_filesystem_tools_tests, agentContext);
@@ -203,9 +207,6 @@ int main(int argn, char** argv) {
     std::cout << "======= Test Done =======" << std::endl;
     std::cout << "Total: passed=" << total.passed << " failed=" << total.failed << std::endl;
 
-    if (total.failed > 0) {
-        std::_Exit(1);
-    }
-    std::_Exit(0);
-    return 0;
+    // 正常退出: 从 main 返回以刷新 stdout 并运行析构 (避免 _Exit 丢失末尾输出/掩盖资源泄漏)
+    return total.failed > 0 ? 1 : 0;
 }

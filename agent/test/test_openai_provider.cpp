@@ -1853,6 +1853,37 @@ void test_send_timeout_calculation() {
 // Test runner
 // ---------------------------------------------------------------------------
 
+/// 直接单测 SSE 解析: 冒号后无空格 / 末尾无 "\n" 的行
+void test_openai_sse_parsing_edge_cases() {
+    using server::OpenAIProvider;
+
+    // B2: "data:" 冒号后无单个空格也必须解析
+    {
+        std::string buf = "data:{\"choices\":[{\"delta\":{\"content\":\"Hi\"}}]}\n\n";
+        neograph::ChatCompletion          completion;
+        std::string                       content, thinking;
+        std::map<int, neograph::ToolCall> tcMap;
+        OpenAIProvider::processSseBuffer(buf, completion, content, thinking, tcMap, nullptr);
+        XX_TEST_EXPECT_EQ(content, "Hi");
+    }
+
+    // B3: 连接关闭时末尾未以 "\n" 结尾的行, finalFlush=true 时应补解析
+    {
+        std::string buf = "data: {\"choices\":[{\"delta\":{\"content\":\"End\"}}]}"; // 无 trailing \n
+        neograph::ChatCompletion          completion;
+        std::string                       content, thinking;
+        std::map<int, neograph::ToolCall> tcMap;
+        OpenAIProvider::processSseBuffer(
+            buf, completion, content, thinking, tcMap, nullptr, /*finalFlush=*/false
+        );
+        XX_TEST_EXPECT_EQ(content, "");
+        OpenAIProvider::processSseBuffer(
+            buf, completion, content, thinking, tcMap, nullptr, /*finalFlush=*/true
+        );
+        XX_TEST_EXPECT_EQ(content, "End");
+    }
+}
+
 asio::awaitable<TestResult> run_openai_provider_tests() {
     g_openai_passed = 0;
     g_openai_failed = 0;
@@ -1861,6 +1892,7 @@ asio::awaitable<TestResult> run_openai_provider_tests() {
     test_factory_and_name();
     test_config_defaults();
     test_extra_body_with_custom_params();
+    test_openai_sse_parsing_edge_cases();
 
     // ModelProviderRegistry::createProvider tests
     test_create_provider_openai();

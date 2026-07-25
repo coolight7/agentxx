@@ -20,19 +20,44 @@ namespace test {
 int g_ib_passed = 0;
 int g_ib_failed = 0;
 
+/// 确定性 Mock IO: handleInterrupt 不依赖 stdin, 返回可控结果, 供总线往返测试
+class MockIO : public agentxx::agent::AgentIOBase {
+public:
+
+    std::string interruptTag    = "answered";
+    bool        permissionAllow = true;
+    int         interruptCalls  = 0;
+
+    void onDelta(const agentxx::agent::Delta&) override {}
+
+    void onSync(const agentxx::agent::SyncPayload&) override {}
+
+    asio::awaitable<std::optional<std::string>> getInput() override {
+        co_return std::nullopt;
+    }
+
+    asio::awaitable<neograph::json> handleInterrupt(
+        const std::string& /*threadId*/,
+        const std::string& interruptNode,
+        const std::string& /*interruptValue*/,
+        const std::string& /*interruptArgJson*/
+    ) override {
+        ++interruptCalls;
+        if (interruptNode == "permission") {
+            co_return neograph::json::array({permissionAllow ? "true" : "false"});
+        }
+        co_return neograph::json::array({interruptTag});
+    }
+};
+
+/// 中断总线往返: MockIO 注册后, request 应确定性拿到结果 (不依赖 stdin/不超时)
 asio::awaitable<void> test_interrupt_bus_request_response() {
     auto sessionBus
         = std::make_shared<agentxx::middleware::EventBus>(co_await asio::this_coro::executor);
 
-    auto io = std::make_shared<AgentStdIO>();
+    auto io  = std::make_shared<MockIO>();
+    io->interruptTag = "answered";
     io->registerOnBus(sessionBus);
-
-    // 构造一个无 inputs 的 InterruptHandleArg
-    auto arg = agentxx::middleware::InterruptHandleArg{
-        .name     = "default",
-        .resultId = "call_1",
-    };
-    auto argJson = arg.toJson().dump();
 
     auto resp = co_await sessionBus
                     ->request<agentxx::events::ReqInterrupt, agentxx::events::RespInterrupt>(
@@ -41,18 +66,19 @@ asio::awaitable<void> test_interrupt_bus_request_response() {
                             .agentName         = "test",
                             .threadId          = "t1",
                             .interruptNode     = "tool_x",
-                            .handleName        = arg.name,
-                            .interruptArgsJson = argJson,
-                            .resultId          = arg.resultId,
+                            .handleName        = "default",
+                            .interruptArgsJson = "{}",
+                            .resultId          = "call_1",
                         },
                         std::chrono::seconds(5)
                     );
 
-    if (false == resp.has_value() && resp.error() == "Timeout") {
-        XX_TEST_EXPECT_TRUE(resp.error() == "Timeout");
-    } else {
-        XX_TEST_EXPECT_TRUE(resp.has_value());
+    XX_TEST_EXPECT_TRUE(resp.has_value());
+    if (resp.has_value()) {
+        XX_TEST_EXPECT_TRUE(resp->handled);
+        XX_TEST_EXPECT_EQ(resp->resultJson, "[\"answered\"]");
     }
+    XX_TEST_EXPECT_EQ(io->interruptCalls, 1);
 
     // 新总线 (无任何 server) 上 request 应超时返回 nullopt
     auto deadBus
@@ -75,51 +101,109 @@ asio::awaitable<void> test_interrupt_bus_request_response() {
     co_return;
 }
 
-/// 验证: IO 在 session bus 注册后, bus.request(service.permission) 能拿到决策
+/// 权限总线往返: MockIO 注册后, request 应确定性拿到 Allow/Deny 决策
 asio::awaitable<void> test_permission_bus_request_response() {
     auto sessionBus
         = std::make_shared<agentxx::middleware::EventBus>(co_await asio::this_coro::executor);
 
-    auto io = std::make_shared<AgentStdIO>();
+    auto io  = std::make_shared<MockIO>();
+    io->permissionAllow = true;
     io->registerOnBus(sessionBus);
 
-    // 注意: 无 stdin 输入时 handleInterrupt 调用 getInput() 会超时
+    auto reqAllow = agentxx::events::ReqPermission{
+        .agentName     = "test",
+        .threadId      = "t1",
+        .toolName      = "filesystem_write",
+        .category      = "filesystem_write",
+        .target        = "/etc/passwd",
+        .argumentsJson = R"({"path":"/etc/passwd"})",
+    };
+
     auto resp = co_await sessionBus
                     ->request<agentxx::events::ReqPermission, agentxx::events::RespPermission>(
                         agentxx::events::Topic::Permission,
-                        agentxx::events::ReqPermission{
-                            .agentName     = "test",
-                            .threadId      = "t1",
-                            .toolName      = "filesystem_write",
-                            .category      = "filesystem_write",
-                            .target        = "/etc/passwd",
-                            .argumentsJson = R"({"path":"/etc/passwd"})",
-                        },
+                        reqAllow,
                         std::chrono::seconds(5)
                     );
-
-    if (false == resp.has_value() && resp.error() == "Timeout") {
-        XX_TEST_EXPECT_TRUE(resp.error() == "Timeout");
-    } else {
-        XX_TEST_EXPECT_TRUE(resp.has_value());
+    XX_TEST_EXPECT_TRUE(resp.has_value());
+    if (resp.has_value()) {
+        XX_TEST_EXPECT_TRUE(resp->decision == agentxx::events::RespPermission::Decision::Allow);
     }
 
+    // 切换为拒绝
+    io->permissionAllow = false;
+    auto respDeny       = co_await sessionBus
+                    ->request<agentxx::events::ReqPermission, agentxx::events::RespPermission>(
+                        agentxx::events::Topic::Permission,
+                        reqAllow,
+                        std::chrono::seconds(5)
+                    );
+    XX_TEST_EXPECT_TRUE(respDeny.has_value());
+    if (respDeny.has_value()) {
+        XX_TEST_EXPECT_TRUE(respDeny->decision == agentxx::events::RespPermission::Decision::Deny);
+    }
+
+    // 无 server 的总线应超时
     auto deadBus
         = std::make_shared<agentxx::middleware::EventBus>(co_await asio::this_coro::executor);
     auto resp2 = co_await deadBus
                      ->request<agentxx::events::ReqPermission, agentxx::events::RespPermission>(
                          agentxx::events::Topic::Permission,
-                         agentxx::events::ReqPermission{
-                             .agentName     = "t",
-                             .threadId      = "t",
-                             .toolName      = "x",
-                             .category      = "x",
-                             .target        = "x",
-                             .argumentsJson = "{}",
-                         },
+                         reqAllow,
                          std::chrono::milliseconds(200)
                      );
     XX_TEST_EXPECT_TRUE(!resp2.has_value());
+
+    co_return;
+}
+
+/// #4: 同一 IO 重复 registerOnBus 不应累积 handler (泄漏) 且最新 handler 生效
+asio::awaitable<void> test_registerOnBus_no_accumulation() {
+    auto sessionBus
+        = std::make_shared<agentxx::middleware::EventBus>(co_await asio::this_coro::executor);
+
+    auto& interruptRR
+        = sessionBus->getRR<agentxx::events::ReqInterrupt, agentxx::events::RespInterrupt>(
+            agentxx::events::Topic::Interrupt
+        );
+    auto& permRR
+        = sessionBus->getRR<agentxx::events::ReqPermission, agentxx::events::RespPermission>(
+            agentxx::events::Topic::Permission
+        );
+
+    auto io  = std::make_shared<MockIO>();
+    io->interruptTag = "v1";
+
+    // 模拟每个会话轮次都调用 registerOnBus (同一 IO 对象)
+    io->registerOnBus(sessionBus);
+    XX_TEST_EXPECT_EQ(interruptRR.serverCount(), 1u);
+    XX_TEST_EXPECT_EQ(permRR.serverCount(), 1u);
+
+    io->registerOnBus(sessionBus);
+    io->registerOnBus(sessionBus);
+    // 修复 #4: 重注册先移除旧 handler, server 数量保持为 1 (不累积/不泄漏)
+    XX_TEST_EXPECT_EQ(interruptRR.serverCount(), 1u);
+    XX_TEST_EXPECT_EQ(permRR.serverCount(), 1u);
+
+    // 重注册后 handler 仍可用, 且反映 IO 当前状态 (最新)
+    io->interruptTag = "v2";
+    auto resp        = co_await sessionBus
+                    ->request<agentxx::events::ReqInterrupt, agentxx::events::RespInterrupt>(
+                        agentxx::events::Topic::Interrupt,
+                        agentxx::events::ReqInterrupt{
+                            .agentName         = "t",
+                            .threadId          = "t",
+                            .interruptNode     = "n",
+                            .handleName        = "default",
+                            .interruptArgsJson = "{}",
+                            .resultId          = "r",
+                        },
+                        std::chrono::seconds(5)
+                    );
+    XX_TEST_EXPECT_TRUE(resp.has_value());
+    if (resp.has_value()) {
+        XX_TEST_EXPECT_EQ(resp->resultJson, "[\"v2\"]");
+    }
 
     co_return;
 }
@@ -159,24 +243,22 @@ asio::awaitable<void> test_interrupt_bus_custom_handler() {
                         std::chrono::seconds(5)
                     );
 
-    if (false == resp.has_value() && resp.error() == "Timeout") {
-        // allow timeout
-        XX_TEST_EXPECT_TRUE(resp.error() == "Timeout");
-    } else {
-        XX_TEST_EXPECT_TRUE(resp.has_value());
-        if (resp.has_value()) {
-            XX_TEST_EXPECT_TRUE(resp->handled);
-            XX_TEST_EXPECT_TRUE(resp->resultJson == "\"custom_ok_myHandle\"");
-        }
+    XX_TEST_EXPECT_TRUE(resp.has_value());
+    if (resp.has_value()) {
+        XX_TEST_EXPECT_TRUE(resp->handled);
+        XX_TEST_EXPECT_TRUE(resp->resultJson == "\"custom_ok_myHandle\"");
     }
 
     co_return;
 }
 
 asio::awaitable<TestResult> run_interrupt_bus_tests() {
+    g_ib_passed = 0;
+    g_ib_failed = 0;
     try {
         co_await test_interrupt_bus_request_response();
         co_await test_permission_bus_request_response();
+        co_await test_registerOnBus_no_accumulation();
         co_await test_interrupt_bus_custom_handler();
     } catch (const std::exception& e) {
         TEST_FAIL << "interrupt_bus suite exception: " << e.what() << std::endl;
