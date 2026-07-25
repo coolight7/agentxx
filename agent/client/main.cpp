@@ -575,6 +575,7 @@ asio::awaitable<void> runRemoteTuiAsync(
     auto ctx         = std::make_shared<agentxx::agent::AgentContext>();
     ctx->agentConfig = config;
     auto io          = std::make_shared<AgentTUI>(ex, ctx, "session");
+    io->setRemoteUrl(url); // 供信息侧边栏显示运行模式 (远程 Agentxx 地址)
     io->start();
 
     agentxx::agent::remote::RemoteClientAgentIO::Config cfg;

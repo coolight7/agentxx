@@ -60,6 +60,17 @@ void AgentTUI::start() {
         auto screen = ScreenInteractive::Fullscreen();
         screen_     = &screen;
 
+        // 屏幕足够宽时默认显示信息侧边栏
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (ftxui::Terminal::Size().dimx >= kInfoSidebarMinWidth
+                && !hasSidebarTab(kInfoTabId)) {
+                addSidebarTab(kInfoTabId, "信息", [this]() {
+                    return renderInfoSidebar();
+                });
+            }
+        }
+
         auto input_option      = InputOption();
         input_option.multiline = true;
         input_option.transform = [](InputState state) {
@@ -111,8 +122,19 @@ void AgentTUI::start() {
                 text(" "),
             });
 
+            Element pendingBar = text("");
+            if (!pendingInputs_.empty()) {
+                pendingBar = hbox({
+                    text(" "),
+                    text("待发送消息: " + std::to_string(pendingInputs_.size()))
+                        | color(theme_.accentColor) | bold | reflect(pendingInputCounterBox_),
+                    filler(),
+                });
+            }
+
             auto main = vbox({
                 messages,
+                pendingBar,
                 input_bar,
                 renderStatusBar(),
                 text(" "),
@@ -133,6 +155,8 @@ void AgentTUI::start() {
                 result = renderModelSelectorOverlay() | center;
             } else if (showSettings_) {
                 result = renderSettingsOverlay() | center;
+            } else if (showPendingInputs_) {
+                result = renderPendingInputsOverlay() | center;
             }
             return result | bold | bgcolor(theme_.backgroundColor);
         });
@@ -232,6 +256,19 @@ void AgentTUI::start() {
                 return true;
             }
 
+            if (showPendingInputs_) {
+                if (event == Event::Escape) {
+                    showPendingInputs_ = false;
+                    postRedraw();
+                    return true;
+                }
+                if (event.is_mouse() && handlePendingInputsMouse(event.mouse())) {
+                    postRedraw();
+                    return true;
+                }
+                return true; // 弹窗打开时屏蔽其余输入
+            }
+
             {
                 const std::string& in     = event.input();
                 const bool         isSend = (in == "\x1B\n" || in == "\x1B\r");
@@ -248,22 +285,13 @@ void AgentTUI::start() {
                         text = text.substr(start);
                     }
                     if (!text.empty()) {
-                        if (!currentToken_.empty()) {
-                            messages_.push_back({currentTokenRole_, currentToken_});
-                            if (currentTokenRole_ == Message::Role::Thinking) {
-                                messages_.back().collapsed = true;
-                            }
-                            currentToken_.clear();
+                        if (isStreaming_) {
+                            // DeepAgent 执行中 -> 加入待发送队列, 轮次结束后自动发送
+                            pendingInputs_.push_back(PendingInput{std::move(text), false});
+                        } else {
+                            sendUserInputLocked(std::move(text));
                         }
-                        messages_.push_back({Message::Role::User, text});
                         inputText_.clear();
-                        isStreaming_   = true;
-                        stickToBottom_ = true;
-                        inputChannel_->async_send(
-                            neograph_asio_error_code{},
-                            std::move(text),
-                            [](neograph_asio_error_code) {}
-                        );
                     }
                     postRedraw();
                     return true;
@@ -317,6 +345,13 @@ void AgentTUI::start() {
                             scrollAnchorIndex_ = std::max(0, cur);
                         }
                     }
+                    postRedraw();
+                    return true;
+                }
+                if (mouse.button == Mouse::Left && mouse.motion == Mouse::Released
+                    && !pendingInputs_.empty()
+                    && pendingInputCounterBox_.Contain(mouse.x, mouse.y)) {
+                    showPendingInputs_ = true;
                     postRedraw();
                     return true;
                 }
@@ -375,6 +410,34 @@ void AgentTUI::cancelCurrentRun() {
     }
     messages_.push_back({Message::Role::System, "[Cancelled by user]"});
     isStreaming_ = false;
+    dispatchNextPendingInput();
+}
+
+void AgentTUI::sendUserInputLocked(std::string text) {
+    if (!currentToken_.empty()) {
+        messages_.push_back({currentTokenRole_, currentToken_});
+        if (currentTokenRole_ == Message::Role::Thinking) {
+            messages_.back().collapsed = true;
+        }
+        currentToken_.clear();
+    }
+    messages_.push_back({Message::Role::User, text});
+    isStreaming_   = true;
+    stickToBottom_ = true;
+    inputChannel_->async_send(
+        neograph_asio_error_code{},
+        std::move(text),
+        [](neograph_asio_error_code) {}
+    );
+}
+
+void AgentTUI::dispatchNextPendingInput() {
+    if (isStreaming_ || pendingInputs_.empty()) {
+        return;
+    }
+    std::string next = std::move(pendingInputs_.front().text);
+    pendingInputs_.pop_front();
+    sendUserInputLocked(std::move(next));
 }
 
 std::shared_ptr<agentxx::agent::Session> AgentTUI::currentSession() {
@@ -459,6 +522,8 @@ void AgentTUI::onDelta(const agentxx::agent::Delta& delta) {
                 currentToken_.clear();
             }
             isStreaming_ = false;
+            // 轮次结束 -> 自动派发下一个排队输入
+            dispatchNextPendingInput();
         } break;
     }
     postRedraw();

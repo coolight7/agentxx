@@ -1,9 +1,24 @@
 #include "agentxx-client/io/tui/agent_tui.h"
 #include "agentxx/agent/model_registry.h"
+#include "agentxx/util/string_util.h"
 #include "fmt/format.h"
 #include "ftxui/screen/terminal.hpp"
 
 using namespace ftxui;
+
+namespace {
+/// 取首行并按 utf8 长度截断 (用于待发送消息折叠为一行)
+std::string oneLine(const std::string& s, size_t max = 60) {
+    const auto  nl   = s.find('\n');
+    std::string line = (nl == std::string::npos) ? s : s.substr(0, nl);
+    const auto  idx  = agentxx::util::findIndexByUtf8Length(line, max);
+    if (idx > 0 && idx < line.size()) {
+        line.resize(idx);
+        line += "...";
+    }
+    return line;
+}
+} // namespace
 
 ftxui::Element AgentTUI::renderModelSelectorOverlay() {
     const int maxVisible = std::max(5, ftxui::Terminal::Size().dimy / 2);
@@ -147,4 +162,83 @@ void AgentTUI::applyThemeSelection() {
         theme_ = TUITheme::lightTheme();
     }
     showSettings_ = false;
+}
+
+ftxui::Element AgentTUI::renderPendingInputsOverlay() {
+    pendingInputBoxes_.assign(pendingInputs_.size(), ftxui::Box{});
+    pendingInputDelBoxes_.assign(pendingInputs_.size(), ftxui::Box{});
+
+    // 顶部: 两端对齐 "待发送消息队列" ... [清空]
+    auto clearBtn = text(" 清空 ") | bgcolor(theme_.buttonBgColor)
+                    | color(theme_.buttonTextColor) | bold | reflect(pendingInputClearBox_);
+    auto header   = hbox({
+        text(" 待发送消息队列 ") | bold,
+        filler(),
+        clearBtn,
+        text(" "),
+    });
+
+    Elements items;
+    if (pendingInputs_.empty()) {
+        items.push_back(text(" (空) ") | dim);
+    }
+    for (size_t i = 0; i < pendingInputs_.size(); ++i) {
+        const auto& pi     = pendingInputs_[i];
+        auto        delBtn = text(" ✕ ") | bgcolor(theme_.buttonBgColor)
+                      | color(theme_.systemColor) | reflect(pendingInputDelBoxes_[i]);
+        Element row;
+        if (pi.expanded) {
+            row = hbox({
+                text("- ") | color(theme_.hintColor),
+                paragraph(pi.text) | flex,
+                delBtn,
+            });
+        } else {
+            row = hbox({
+                text("+ ") | color(theme_.hintColor),
+                text(oneLine(pi.text)) | color(theme_.assistantColor) | flex,
+                delBtn,
+            });
+        }
+        items.push_back(row | reflect(pendingInputBoxes_[i]));
+    }
+
+    const int maxVisible = std::max(5, ftxui::Terminal::Size().dimy / 2);
+    return vbox({
+               header,
+               separator(),
+               vbox(std::move(items)) | yframe | vscroll_indicator
+                   | size(HEIGHT, LESS_THAN, maxVisible),
+               separator(),
+               text(" 点击消息展开/折叠  点击 ✕ 删除  [Esc] 关闭 ") | center | dim,
+           })
+           | border | size(WIDTH, LESS_THAN, 70) | size(WIDTH, GREATER_THAN, 40)
+           | color(theme_.accentColor);
+}
+
+bool AgentTUI::handlePendingInputsMouse(const ftxui::Mouse& mouse) {
+    if (mouse.button != Mouse::Left || mouse.motion != Mouse::Released) {
+        return false;
+    }
+    // 清空按钮: 清空队列并关闭弹窗
+    if (pendingInputClearBox_.Contain(mouse.x, mouse.y)) {
+        pendingInputs_.clear();
+        showPendingInputs_ = false;
+        return true;
+    }
+    // 删除按钮 (优先于行展开判定)
+    for (size_t i = 0; i < pendingInputDelBoxes_.size() && i < pendingInputs_.size(); ++i) {
+        if (pendingInputDelBoxes_[i].Contain(mouse.x, mouse.y)) {
+            pendingInputs_.erase(pendingInputs_.begin() + static_cast<std::ptrdiff_t>(i));
+            return true;
+        }
+    }
+    // 消息行: 展开/折叠
+    for (size_t i = 0; i < pendingInputBoxes_.size() && i < pendingInputs_.size(); ++i) {
+        if (pendingInputBoxes_[i].Contain(mouse.x, mouse.y)) {
+            pendingInputs_[i].expanded = !pendingInputs_[i].expanded;
+            return true;
+        }
+    }
+    return false;
 }
