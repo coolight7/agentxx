@@ -239,7 +239,6 @@ ftxui::Element AgentTUI::renderInfoSidebar() {
         cwd = "(Unknown Work Dir)";
     }
     elements.push_back(paragraph(cwd) | color(theme_.hintColor));
-    elements.push_back(text(" "));
 
     // 底部: Agentxx 版本 + 运行模式 (内置 / 远程 http[s]://ip:port)
     std::string mode;
