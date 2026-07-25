@@ -175,6 +175,8 @@ private:
 
     /// 远程模式取消回调 (未设置则用本地 cancelToken)
     std::function<void()> cancelCallback_;
+    /// 模型切换回调 (通知远程 server 切换模型)
+    std::function<void(const std::string&)> selectModelCallback_;
     /// 远程 Agentxx 地址 (空表示内置 Agentxx; 非空为远程 http[s]://ip:port)
     std::string remoteUrl_;
 
@@ -275,6 +277,11 @@ public:
     /// - 未设置时使用本地 session cancelToken
     void setCancelCallback(std::function<void()> cb) {
         cancelCallback_ = std::move(cb);
+    }
+
+    /// 设置模型切换回调 (通知远程 server 切换模型)
+    void setSelectModelCallback(std::function<void(const std::string&)> cb) {
+        selectModelCallback_ = std::move(cb);
     }
 
     /// 设置远程 Agentxx 地址 (供信息侧边栏显示运行模式; 不调用则为内置 Agentxx)

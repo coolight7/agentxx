@@ -124,6 +124,9 @@ void AgentTUI::confirmModelSelection() {
         if (session_) {
             session_->setModelName(cachedModelName_);
         }
+        if (selectModelCallback_) {
+            selectModelCallback_(cachedModelName_);
+        }
     }
     showModelSelector_ = false;
 }
