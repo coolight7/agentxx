@@ -90,6 +90,12 @@ private:
         std::string target;
     };
 
+    /// 排队等待发送的用户输入 (DeepAgent 执行中收到, 轮次结束后自动逐个发送)
+    struct PendingInput {
+        std::string text;
+        bool        expanded = false; // 弹窗中是否展开为多行 (默认折叠为一行)
+    };
+
     /// 右侧边栏 tab (类似浏览器 tab)
     struct SidebarTab {
         std::string                     id;
@@ -120,6 +126,16 @@ private:
     bool showSettings_        = false;
     int  selectedSettingIndex_ = 0;
 
+    /// 用户输入队列: DeepAgent 执行中收到的用户输入排队, 轮次结束后自动逐个发送
+    std::deque<PendingInput> pendingInputs_;
+    /// 待发送消息队列弹窗开关
+    bool showPendingInputs_ = false;
+    /// 弹窗内各消息行 / 删除按钮 / 清空按钮 及输入框上方计数行的渲染区域 (鼠标点击检测)
+    std::vector<ftxui::Box> pendingInputBoxes_;
+    std::vector<ftxui::Box> pendingInputDelBoxes_;
+    ftxui::Box              pendingInputClearBox_;
+    ftxui::Box              pendingInputCounterBox_;
+
     /// 右侧边栏状态
     std::vector<SidebarTab> sidebarTabs_;
     int                     activeTabIndex_ = 0;
@@ -148,9 +164,17 @@ private:
 
     /// 远程模式取消回调 (未设置则用本地 cancelToken)
     std::function<void()> cancelCallback_;
+    /// 远程 Agentxx 地址 (空表示内置 Agentxx; 非空为远程 http[s]://ip:port)
+    std::string remoteUrl_;
 
     /// 日志窗口 tab 的固定 id
     static constexpr const char* kLogTabId = "xx_logs";
+    /// 信息侧边栏 tab 的固定 id
+    static constexpr const char* kInfoTabId = "xx_info";
+    /// 屏幕宽度达到此值时默认显示信息侧边栏
+    static constexpr int kInfoSidebarMinWidth = 120;
+    /// 程序版本号 (与 CMake project VERSION 保持一致)
+    static constexpr const char* kAgentxxVersion = "0.1.0";
 
     /// 日志窗口滚动状态 (同消息区的 stickToBottom_ 模式)
     bool logStickToBottom_ = true;
@@ -170,12 +194,18 @@ private:
     ftxui::Element renderPermissionOverlay();
     ftxui::Element renderModelSelectorOverlay();
     ftxui::Element renderSettingsOverlay();
+    /// 待发送消息队列弹窗 (顶部清空按钮, 每条消息折叠为一行 + 删除按钮)
+    ftxui::Element renderPendingInputsOverlay();
     /// 输入框下方的状态栏: 左侧模型名, 右侧上下文占用
     ftxui::Element renderStatusBar();
     /// 右侧边栏: 顶部 tab 栏 + 当前 tab 内容; 无 tab 时不应调用
     ftxui::Element renderSidebar();
     /// 日志窗口内容
     ftxui::Element renderLogWindow();
+    /// 信息侧边栏内容: 顶部 planning 特化渲染 + 底部工作目录/版本/运行模式
+    ftxui::Element renderInfoSidebar();
+    /// planning 特化渲染 (取最新 planning_write toolcall 的 todos/notes); 无规划时返回空
+    std::optional<ftxui::Element> renderPlanningInfo();
 
     /// 获取本 TUI 绑定的会话
     std::shared_ptr<agentxx::agent::Session> currentSession();
@@ -188,6 +218,12 @@ private:
     void applyThemeSelection();
     /// 取消当前正在执行的轮次
     void cancelCurrentRun();
+
+    /// 发送一条用户输入到 DeepAgent (刷新 currentToken / 追加 User 消息 / 置 streaming / 入 channel)
+    /// - 调用方须持有 mutex_
+    void sendUserInputLocked(std::string text);
+    /// 若空闲且输入队列非空, 取队首发送 (轮次结束自动派发); 调用方须持有 mutex_
+    void dispatchNextPendingInput();
 
     /// 侧边栏 tab 管理
     void addSidebarTab(
@@ -204,6 +240,8 @@ private:
     /// 处理可折叠消息块 (Thinking/Tool) 的鼠标点击 (展开/折叠);
     /// 返回是否消费了该事件
     bool handleCollapsibleMouse(const ftxui::Mouse& mouse);
+    /// 处理待发送消息队列弹窗的鼠标点击 (清空/删除/展开折叠); 返回是否消费了该事件
+    bool handlePendingInputsMouse(const ftxui::Mouse& mouse);
 
     /// 缓存的本会话指针 (构造时初始化, 避免反复查找 SessionStore)
     std::shared_ptr<agentxx::agent::Session> session_;
@@ -225,6 +263,11 @@ public:
     /// - 未设置时使用本地 session cancelToken
     void setCancelCallback(std::function<void()> cb) {
         cancelCallback_ = std::move(cb);
+    }
+
+    /// 设置远程 Agentxx 地址 (供信息侧边栏显示运行模式; 不调用则为内置 Agentxx)
+    void setRemoteUrl(std::string url) {
+        remoteUrl_ = std::move(url);
     }
 
     void onDelta(const agentxx::agent::Delta& delta) override;
