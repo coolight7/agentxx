@@ -495,12 +495,13 @@ asio::awaitable<void> runLocalTuiUnifiedAsync(
         if (config->availableModels.empty()) {
             registry->registerModel(config->model.modelName, config->model);
             registry->setDefaultModel(config->model.modelName);
-        } else if (!config->currentModelName.empty() && registry->hasModel(config->currentModelName)) {
+        } else if (!config->currentModelName.empty()
+                   && registry->hasModel(config->currentModelName)) {
             registry->setDefaultModel(config->currentModelName);
         }
         ctx->modelRegistry = std::move(registry);
     }
-    auto tui         = std::make_shared<AgentTUI>(clientEx, ctx, threadId);
+    auto tui = std::make_shared<AgentTUI>(clientEx, ctx, threadId);
     tui->start();
 
     auto remote = setupLocalUnified(clientEx, agent, tui);

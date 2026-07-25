@@ -169,9 +169,9 @@ ftxui::Element AgentTUI::renderPendingInputsOverlay() {
     pendingInputDelBoxes_.assign(pendingInputs_.size(), ftxui::Box{});
 
     // 顶部: 两端对齐 "待发送消息队列" ... [清空]
-    auto clearBtn = text(" 清空 ") | bgcolor(theme_.buttonBgColor)
-                    | color(theme_.buttonTextColor) | bold | reflect(pendingInputClearBox_);
-    auto header   = hbox({
+    auto clearBtn = text(" 清空 ") | bgcolor(theme_.buttonBgColor) | color(theme_.buttonTextColor)
+                    | bold | reflect(pendingInputClearBox_);
+    auto header = hbox({
         text(" 待发送消息队列 ") | bold,
         filler(),
         clearBtn,
@@ -183,9 +183,9 @@ ftxui::Element AgentTUI::renderPendingInputsOverlay() {
         items.push_back(text(" (空) ") | dim);
     }
     for (size_t i = 0; i < pendingInputs_.size(); ++i) {
-        const auto& pi     = pendingInputs_[i];
-        auto        delBtn = text(" ✕ ") | bgcolor(theme_.buttonBgColor)
-                      | color(theme_.systemColor) | reflect(pendingInputDelBoxes_[i]);
+        const auto& pi = pendingInputs_[i];
+        auto delBtn    = text(" ✕ ") | bgcolor(theme_.buttonBgColor) | color(theme_.systemColor)
+                      | reflect(pendingInputDelBoxes_[i]);
         Element row;
         if (pi.expanded) {
             row = hbox({

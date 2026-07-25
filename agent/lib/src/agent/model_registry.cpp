@@ -58,7 +58,7 @@ std::shared_ptr<neograph::Provider> ModelProviderRegistry::getProvider(const std
     ModelConfig cfg;
     {
         std::shared_lock<std::shared_mutex> lock(mutex_);
-        effective = (false == name.empty() && models_.contains(name)) ? name : defaultName_;
+        effective  = (false == name.empty() && models_.contains(name)) ? name : defaultName_;
         auto cfgIt = models_.find(effective);
         if (cfgIt == models_.end()) {
             return nullptr;

@@ -53,13 +53,15 @@ struct McpClient::StdioTransport {
     std::optional<asio::readable_pipe>     stdoutPipe;
     std::atomic<bool>                      running{false};
 
-    bool start(asio::any_io_executor executor,
-               const std::vector<std::string>& cmd,
-               std::shared_ptr<McpClient> client) {
+    bool start(
+        asio::any_io_executor           executor,
+        const std::vector<std::string>& cmd,
+        std::shared_ptr<McpClient>      client
+    ) {
         stdinPipe.emplace(executor);
         stdoutPipe.emplace(executor);
 
-        auto exe = boost::process::environment::find_executable(cmd[0]);
+        auto                     exe = boost::process::environment::find_executable(cmd[0]);
         std::vector<std::string> args(cmd.begin() + 1, cmd.end());
 
         process.emplace(
@@ -89,7 +91,7 @@ struct McpClient::StdioTransport {
         std::string buffer;
         while (running.load()) {
             boost::system::error_code ec;
-            std::size_t n = co_await asio::async_read_until(
+            std::size_t               n = co_await asio::async_read_until(
                 *stdoutPipe,
                 asio::dynamic_buffer(buffer, 4096),
                 '\n',
@@ -103,7 +105,9 @@ struct McpClient::StdioTransport {
             }
             std::string line = buffer.substr(0, n - 1);
             buffer.erase(0, n);
-            if (line.empty()) continue;
+            if (line.empty()) {
+                continue;
+            }
             try {
                 auto response = json::parse(line);
                 client->deliverResponse(response);
@@ -115,17 +119,24 @@ struct McpClient::StdioTransport {
             try {
                 auto response = json::parse(buffer);
                 client->deliverResponse(response);
-            } catch (...) {}
+            } catch (...) {
+            }
         }
         running.store(false);
     }
 
     void close() {
-        if (!process.has_value()) return;
+        if (!process.has_value()) {
+            return;
+        }
         running.store(false);
         boost::system::error_code ec;
-        if (stdinPipe.has_value()) stdinPipe->close(ec);
-        if (stdoutPipe.has_value()) stdoutPipe->close(ec);
+        if (stdinPipe.has_value()) {
+            stdinPipe->close(ec);
+        }
+        if (stdoutPipe.has_value()) {
+            stdoutPipe->close(ec);
+        }
         process->terminate(ec);
         process->wait(ec);
         stdinPipe.reset();
@@ -150,9 +161,11 @@ struct McpClient::StdioTransport {
 #endif
     std::thread readerThread;
 
-    bool start(asio::any_io_executor /*executor*/,
-               const std::vector<std::string>& cmd,
-               std::shared_ptr<McpClient> client) {
+    bool start(
+        asio::any_io_executor /*executor*/,
+        const std::vector<std::string>& cmd,
+        std::shared_ptr<McpClient>      client
+    ) {
 #if XX_IS_LINUX_D || XX_IS_MACOS_D
         int stdinPipe[2]  = {-1, -1};
         int stdoutPipe[2] = {-1, -1};
@@ -163,13 +176,16 @@ struct McpClient::StdioTransport {
 
         pid_t pid = ::fork();
         if (pid < 0) {
-            ::close(stdinPipe[0]); ::close(stdinPipe[1]);
-            ::close(stdoutPipe[0]); ::close(stdoutPipe[1]);
+            ::close(stdinPipe[0]);
+            ::close(stdinPipe[1]);
+            ::close(stdoutPipe[0]);
+            ::close(stdoutPipe[1]);
             return false;
         }
 
         if (pid == 0) {
-            ::close(stdinPipe[1]); ::close(stdoutPipe[0]);
+            ::close(stdinPipe[1]);
+            ::close(stdoutPipe[0]);
             ::dup2(stdinPipe[0], STDIN_FILENO);
             ::dup2(stdoutPipe[1], STDOUT_FILENO);
             int maxFd = static_cast<int>(::sysconf(_SC_OPEN_MAX));
@@ -187,7 +203,8 @@ struct McpClient::StdioTransport {
             ::_exit(127);
         }
 
-        ::close(stdinPipe[0]); ::close(stdoutPipe[1]);
+        ::close(stdinPipe[0]);
+        ::close(stdoutPipe[1]);
         stdinFd  = stdinPipe[1];
         stdoutFd = stdoutPipe[0];
         childPid = static_cast<int>(pid);
@@ -196,7 +213,9 @@ struct McpClient::StdioTransport {
         ::fcntl(stdoutFd, F_SETFL, flags | O_NONBLOCK);
 
         running.store(true);
-        readerThread = std::thread([this, client]() { readerLoop(client); });
+        readerThread = std::thread([this, client]() {
+            readerLoop(client);
+        });
         return true;
 
 #elif XX_IS_WIN_D
@@ -218,7 +237,9 @@ struct McpClient::StdioTransport {
 
         std::string cmdLine;
         for (size_t i = 0; i < cmd.size(); i++) {
-            if (i > 0) cmdLine += " ";
+            if (i > 0) {
+                cmdLine += " ";
+            }
             cmdLine += cmd[i];
         }
 
@@ -232,11 +253,21 @@ struct McpClient::StdioTransport {
         si.dwFlags    |= STARTF_USESTDHANDLES;
 
         if (!CreateProcessA(
-                nullptr, cmdLine.data(), nullptr, nullptr,
-                TRUE, 0, nullptr, nullptr, &si, &pi
+                nullptr,
+                cmdLine.data(),
+                nullptr,
+                nullptr,
+                TRUE,
+                0,
+                nullptr,
+                nullptr,
+                &si,
+                &pi
             )) {
-            CloseHandle(parentStdinRd); CloseHandle(childStdinWr);
-            CloseHandle(childStdoutRd); CloseHandle(parentStdoutWr);
+            CloseHandle(parentStdinRd);
+            CloseHandle(childStdinWr);
+            CloseHandle(childStdoutRd);
+            CloseHandle(parentStdoutWr);
             return false;
         }
 
@@ -249,7 +280,9 @@ struct McpClient::StdioTransport {
         childProcess = pi.hProcess;
 
         running.store(true);
-        readerThread = std::thread([this, client]() { readerLoop(client); });
+        readerThread = std::thread([this, client]() {
+            readerLoop(client);
+        });
         return true;
 #else
         return false;
@@ -271,7 +304,9 @@ struct McpClient::StdioTransport {
                 }
                 break;
             }
-            if (n == 0) break;
+            if (n == 0) {
+                break;
+            }
 
             buffer.append(buf, static_cast<size_t>(n));
 
@@ -279,7 +314,9 @@ struct McpClient::StdioTransport {
             while ((pos = buffer.find('\n')) != std::string::npos) {
                 std::string line = buffer.substr(0, pos);
                 buffer.erase(0, pos + 1);
-                if (line.empty()) continue;
+                if (line.empty()) {
+                    continue;
+                }
                 try {
                     auto response = json::parse(line);
                     client->deliverResponse(response);
@@ -292,7 +329,8 @@ struct McpClient::StdioTransport {
             try {
                 auto response = json::parse(buffer);
                 client->deliverResponse(response);
-            } catch (...) {}
+            } catch (...) {
+            }
         }
 #elif XX_IS_WIN_D
         std::string buffer;
@@ -300,18 +338,25 @@ struct McpClient::StdioTransport {
 
         while (running.load()) {
             DWORD bytesRead = 0;
-            if (!ReadFile(stdoutHandle, buf, sizeof(buf) - 1, &bytesRead, nullptr)) break;
-            if (bytesRead == 0) break;
+            if (!ReadFile(stdoutHandle, buf, sizeof(buf) - 1, &bytesRead, nullptr)) {
+                break;
+            }
+            if (bytesRead == 0) {
+                break;
+            }
             buffer.append(buf, static_cast<size_t>(bytesRead));
             size_t pos;
             while ((pos = buffer.find('\n')) != std::string::npos) {
                 std::string line = buffer.substr(0, pos);
                 buffer.erase(0, pos + 1);
-                if (line.empty()) continue;
+                if (line.empty()) {
+                    continue;
+                }
                 try {
                     auto response = json::parse(line);
                     client->deliverResponse(response);
-                } catch (...) {}
+                } catch (...) {
+                }
             }
         }
 #endif
@@ -320,20 +365,34 @@ struct McpClient::StdioTransport {
 
     void close() {
 #if XX_IS_LINUX_D || XX_IS_MACOS_D
-        if (childPid <= 0) return;
+        if (childPid <= 0) {
+            return;
+        }
         running.store(false);
         ::kill(static_cast<pid_t>(childPid), SIGTERM);
-        if (readerThread.joinable()) readerThread.join();
+        if (readerThread.joinable()) {
+            readerThread.join();
+        }
         int status = 0;
         ::waitpid(static_cast<pid_t>(childPid), &status, WNOHANG);
-        if (stdinFd >= 0) ::close(stdinFd);
-        if (stdoutFd >= 0) ::close(stdoutFd);
-        stdinFd = -1; stdoutFd = -1; childPid = -1;
+        if (stdinFd >= 0) {
+            ::close(stdinFd);
+        }
+        if (stdoutFd >= 0) {
+            ::close(stdoutFd);
+        }
+        stdinFd  = -1;
+        stdoutFd = -1;
+        childPid = -1;
 #elif XX_IS_WIN_D
-        if (childProcess == nullptr) return;
+        if (childProcess == nullptr) {
+            return;
+        }
         running.store(false);
         TerminateProcess(childProcess, 0);
-        if (readerThread.joinable()) readerThread.join();
+        if (readerThread.joinable()) {
+            readerThread.join();
+        }
         CloseHandle(childProcess);
         CloseHandle(stdinHandle);
         CloseHandle(stdoutHandle);
@@ -1055,8 +1114,8 @@ asio::awaitable<void>
             util::HttpClient::RequestConfig{.readTimeout = config_.requestTimeout}
         );
     } else if (config_.isStdio()) {
-        auto reqStr  = req.dump() + "\n";
-        auto wguard  = co_await stdioWriteMutex_->lock();
+        auto reqStr = req.dump() + "\n";
+        auto wguard = co_await stdioWriteMutex_->lock();
 #if defined(BOOST_PROCESS_V2_PROCESS_HPP)
         boost::system::error_code wec;
         co_await asio::async_write(
@@ -1132,8 +1191,6 @@ void McpClient::closeInternal() {
     }
     pending_.clear();
 }
-
-
 
 void McpClient::deliverResponse(const json& response) {
     if (!response.contains("id")) {

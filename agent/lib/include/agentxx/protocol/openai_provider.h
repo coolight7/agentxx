@@ -46,10 +46,7 @@ public:
     /// - 支持 ```json 代码块和行内 JSON 两种格式
     /// - 匹配模式: {"name":"...","arguments":...} 或 {"function":{"name":"...","arguments":...}}
     /// - 成功提取后从 content 中移除匹配的文本
-    static void extractToolCalls(
-        std::string& content,
-        std::vector<neograph::ToolCall>& toolCalls
-    );
+    static void extractToolCalls(std::string& content, std::vector<neograph::ToolCall>& toolCalls);
 
 private:
 
