@@ -1,4 +1,5 @@
 #include "agentxx-client/io/tui/agent_tui.h"
+#include <filesystem>
 
 using namespace ftxui;
 
@@ -153,4 +154,103 @@ bool AgentTUI::handleCollapsibleMouse(const ftxui::Mouse& mouse) {
         }
     }
     return false;
+}
+
+std::optional<ftxui::Element> AgentTUI::renderPlanningInfo() {
+    // 取最新的 planning_write toolcall
+    const Message* plan = nullptr;
+    for (auto it = messages_.rbegin(); it != messages_.rend(); ++it) {
+        if (it->role == Message::Role::Tool && it->toolName == "planning_write") {
+            plan = &(*it);
+            break;
+        }
+    }
+    if (plan == nullptr) {
+        return std::nullopt;
+    }
+
+    neograph::json args;
+    try {
+        args = neograph::json::parse(plan->text);
+    } catch (...) {
+        return std::nullopt;
+    }
+
+    Elements lines;
+
+    Elements title;
+    title.push_back(text("规划") | bold | color(theme_.accentColor));
+    if (!plan->toolFinished) {
+        title.push_back(text("  规划中...") | color(theme_.hintColor) | dim);
+    }
+    lines.push_back(hbox(std::move(title)));
+
+    // todos 清单 (state: pending/in_progress/completed/failed)
+    if (args.contains("todos") && args["todos"].is_array()) {
+        for (const auto& td : args["todos"]) {
+            const auto   state   = td.value("state", std::string{});
+            const auto   content = td.value("content", std::string{});
+            std::string  icon    = "[ ]";
+            ftxui::Color c       = theme_.assistantColor;
+            if (state == "in_progress") {
+                icon = "[~]";
+                c    = theme_.thinkingColor;
+            } else if (state == "completed") {
+                icon = "[x]";
+                c    = theme_.promptColor;
+            } else if (state == "failed") {
+                icon = "[!]";
+                c    = theme_.systemColor;
+            }
+            lines.push_back(hbox({
+                text(icon + " ") | color(c),
+                paragraph(content) | color(c),
+            }));
+        }
+    }
+
+    const auto notes = args.value("notes", std::string{});
+    if (!notes.empty()) {
+        lines.push_back(text("备注") | color(theme_.hintColor));
+        lines.push_back(paragraph(notes) | color(theme_.assistantColor));
+    }
+
+    return vbox(std::move(lines));
+}
+
+ftxui::Element AgentTUI::renderInfoSidebar() {
+    Elements elements;
+
+    // 顶部: planning 特化渲染 (存在 planning_write toolcall 时)
+    if (auto planning = renderPlanningInfo()) {
+        elements.push_back(std::move(*planning));
+        elements.push_back(text(" "));
+        elements.push_back(separator());
+    }
+
+    elements.push_back(filler());
+
+    // 底部: 当前工作目录
+    std::string cwd;
+    try {
+        cwd = std::filesystem::current_path().string();
+    } catch (...) {
+        cwd = "(Unknown Work Dir)";
+    }
+    elements.push_back(paragraph(cwd) | color(theme_.hintColor));
+    elements.push_back(text(" "));
+
+    // 底部: Agentxx 版本 + 运行模式 (内置 / 远程 http[s]://ip:port)
+    std::string mode;
+    if (remoteUrl_.empty()) {
+        mode = "内置服务";
+    } else {
+        mode = "" + remoteUrl_;
+    }
+    elements.push_back(
+        paragraph(fmt::format("Agentxx {} {}", kAgentxxVersion, mode)) | color(theme_.hintColor)
+    );
+    elements.push_back(text(" "));
+
+    return vbox(std::move(elements));
 }
