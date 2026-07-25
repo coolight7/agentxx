@@ -61,10 +61,12 @@ void ToolcallWrapNode::onHandleBaseRunError(
     // 插入消息，保证消息顺序正确
     if (false == errorRethrow && isCurrentError) {
         auto msg = neograph::ChatMessage{
-            .role = "tool",
-            .content
-            = fmt::format(R"({{"error": "{}/run exception: {}"}})", nodeName, exceptionStr),
-            .flags = neograph::MessageFlag::AutoInserted,
+            .role    = "tool",
+            .content = neograph::json{
+                           {"error", fmt::format("{}/run exception: {}", nodeName, exceptionStr)},
+            }
+                           .dump(),
+            .flags   = neograph::MessageFlag::AutoInserted,
         };
         auto msgJson = neograph::json{};
         neograph::to_json(msgJson, msg);
@@ -270,18 +272,21 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
                 tool_msg.flags   |= neograph::MessageFlag::Interrupt;
                 tool_msg.content  = "[Interrupt]";
             } catch (const std::exception& e) {
-                tool_msg.content = std::string(R"({"error": ")") + e.what() + "\"}";
+                tool_msg.content = neograph::json{
+                    {"error", std::string(e.what())}
+                }.dump();
             }
         }
         co_return tool_msg;
     };
 
-    /// 并发执行 toolcall
+    /// 执行 toolcall
     std::vector<asio::awaitable<neograph::ChatMessage>> toolcallResults{};
     for (const auto& tc : assistant_msg->tool_calls) {
         toolcallResults.emplace_back(onExecTool(tc));
     }
     for (auto& item : toolcallResults) {
+        // TODO: 真正并行
         auto           msg = co_await std::move(item);
         neograph::json msg_json;
         neograph::to_json(msg_json, msg);

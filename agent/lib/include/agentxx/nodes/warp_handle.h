@@ -91,7 +91,10 @@ public:
         neograph::graph::NodeOutput out;
         out.writes.push_back(neograph::graph::ChannelWrite{
             "messages",
-            fmt::format(R"({{"error": "Middleware Wrap `{}` exception: {}"}})", name, errInfo),
+            neograph::json{
+                {"error", fmt::format("Middleware Wrap `{}` exception: {}", name, errInfo)},
+            }
+                .dump(),
         });
         co_return out;
     }

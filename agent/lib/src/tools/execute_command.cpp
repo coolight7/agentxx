@@ -25,6 +25,24 @@
 namespace agentxx {
 namespace tools {
 
+/// 构造超时错误结果 JSON
+/// - 子进程输出可能含引号/反斜杠/换行或非 UTF-8 字节, 必须经 neograph::json 转义,
+///   不能直接用 fmt 拼接进手写 JSON (会产生非法 JSON / JSON 注入)
+static std::string makeTimeoutResult(int timeout, std::string strout, std::string strerr) {
+    if (!(strout.empty() || agentxx::util::autoConvertToUtf8(strout))) {
+        strout = "[stdout conversion to utf8 failed]";
+    }
+    if (!(strerr.empty() || agentxx::util::autoConvertToUtf8(strerr))) {
+        strerr = "[stderr conversion to utf8 failed]";
+    }
+    return neograph::json{
+        {"error", fmt::format("Command timed out after {} seconds", timeout)},
+        {"stdout", strout},
+        {"stderr", strerr},
+    }
+        .dump();
+}
+
 ExecuteLinuxCommandTool::ExecuteLinuxCommandTool(
     std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
 ) :
@@ -92,10 +110,12 @@ asio::awaitable<std::string> ExecuteLinuxCommandTool::execute_async(const neogra
             }
         }
 
-        auto proc = boost::process::process{
+        auto procExe  = boost::process::environment::find_executable("bash");
+        auto procArgs = std::vector<std::string>{"-c", command};
+        auto proc     = boost::process::process{
             ctx,
-            boost::process::environment::find_executable("bash"),
-            {"-c",          command      },
+            procExe,
+            procArgs,
             boost::process::process_environment(procEnv),
             boost::process::process_stdio{.out = outpip, .err = errpip},
         };
@@ -126,12 +146,9 @@ asio::awaitable<std::string> ExecuteLinuxCommandTool::execute_async(const neogra
             if (res.index() == 1) {
                 boost::system::error_code ec;
                 proc.terminate(ec);
-                co_return fmt::format(
-                    R"({{"error":"Command timed out after {} seconds","stdout":"{}","stderr":"{}"}})",
-                    timeout,
-                    strout,
-                    strerr
-                );
+                // 回收子进程避免僵尸; 管道写端随进程组被杀而关闭
+                co_await proc.async_wait(asio::redirect_error(asio::use_awaitable, ec));
+                co_return makeTimeoutResult(timeout, strout, strerr);
             }
         } else {
             co_await std::move(readStdOutFuture);
@@ -165,7 +182,10 @@ asio::awaitable<std::string> ExecuteLinuxCommandTool::execute_async(const neogra
 #endif
     if (!pipe) {
         auto ec = std::error_code{errno, std::system_category()};
-        co_return fmt::format(R"({{"error":"Exec command failed. Error: {}"}})", ec.message());
+        co_return neograph::json{
+            {"error", fmt::format("Exec command failed. Error: {}", ec.message())},
+        }
+            .dump();
     }
 
     // TODO: 压缩
@@ -289,12 +309,9 @@ asio::awaitable<std::string>
             if (res.index() == 1) {
                 boost::system::error_code ec;
                 proc.terminate(ec);
-                co_return fmt::format(
-                    R"({{"error":"Command timed out after {} seconds","stdout":"{}","stderr":"{}"}})",
-                    timeout,
-                    strout,
-                    strerr
-                );
+                // 回收子进程避免僵尸
+                co_await proc.async_wait(asio::redirect_error(asio::use_awaitable, ec));
+                co_return makeTimeoutResult(timeout, strout, strerr);
             }
         } else {
             co_await proc.async_wait(asio::use_awaitable);
@@ -328,7 +345,10 @@ asio::awaitable<std::string>
 #endif
     if (!pipe) {
         auto ec = std::error_code{errno, std::system_category()};
-        co_return fmt::format(R"({{"error":"Exec command failed. Error: {}"}})", ec.message());
+        co_return neograph::json{
+            {"error", fmt::format("Exec command failed. Error: {}", ec.message())},
+        }
+            .dump();
     }
 
     std::array<char, 1024> buffer{};
@@ -382,9 +402,8 @@ asio::awaitable<std::string> ExecutePythonTool::execute_async(const neograph::js
     if (command.empty()) {
         co_return R"({"error":"Arg `command` is empty"})";
     }
-    auto timeout = arguments.value("timeout", 60);
-
-    co_return "";
+    // 尚未实现: 必须返回明确错误, 不能返回空串让 LLM 误以为执行成功
+    co_return R"({"error":"execute_python_command is not implemented"})";
 }
 
 ExecuteJavaScriptTool::ExecuteJavaScriptTool(
@@ -429,9 +448,8 @@ asio::awaitable<std::string> ExecuteJavaScriptTool::execute_async(const neograph
     if (command.empty()) {
         co_return R"({"error":"Arg `command` is empty"})";
     }
-    auto timeout = arguments.value("timeout", 60);
-
-    co_return "";
+    // 尚未实现: 必须返回明确错误, 不能返回空串让 LLM 误以为执行成功
+    co_return R"({"error":"execute_javascript_command is not implemented"})";
 }
 
 } // namespace tools

@@ -529,7 +529,17 @@ asio::awaitable<bool> RAGSearchTool::VectorStore::addDocuments(std::vector<Docum
     auto embeddings = co_await embedder->embed_batch(texts);
 
     if (embeddings.has_value()) {
-        auto start = embeddings.value().begin();
+        auto& embVec = embeddings.value();
+        if (embVec.size() != texts.size()) {
+            // embedding 数量与输入 chunk 数不一致 (部分失败/截断), 直接返回避免迭代器越界
+            XX_LOGE(
+                "RAG addDocuments: embedding count {} != text chunk count {}",
+                embVec.size(),
+                texts.size()
+            );
+            co_return false;
+        }
+        auto start = embVec.begin();
         for (size_t i = 0; i < appendDocs.size(); ++i) {
             if (false == appendDocs[i].content.empty()) {
                 appendDocs[i].embedding
