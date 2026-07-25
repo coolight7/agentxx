@@ -1,5 +1,5 @@
 #include "agentxx/agent/prompt.h"
-
+#include "agentxx/util/log.h"
 #include <cassert>
 
 namespace agentxx {
@@ -8,6 +8,7 @@ namespace agent {
 const std::string& ToolPrompt::getArg(std::string_view name) const {
     const auto it = args.find(name);
     if (it == args.end()) {
+        XX_LOGE("ToolPrompt::getArg 必须传入存在的 name: {}", name);
         assert(false);
         static const std::string empty;
         return empty;
