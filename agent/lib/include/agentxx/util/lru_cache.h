@@ -28,7 +28,7 @@ private:
 public:
 
     explicit LruCache(size_t capacity) :
-        capacity_(capacity) {
+        capacity_(capacity == 0 ? 1 : capacity) {
         assert(capacity_ > 0);
     }
 

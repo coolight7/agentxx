@@ -9,6 +9,8 @@ namespace agent {
 void ModelProviderRegistry::registerModel(const std::string& name, const ModelConfig& config) {
     std::unique_lock<std::shared_mutex> lock(mutex_);
     models_[name] = config;
+    // 同名覆盖注册时使旧 provider 缓存失效, 否则 getProvider 返回基于旧配置的 provider
+    providerCache_.erase(name);
     if (defaultName_.empty()) {
         defaultName_ = name;
     }

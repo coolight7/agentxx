@@ -733,24 +733,27 @@ protected:
             co_return;
         }
 
-        DIR* dir = opendir("/proc/driver/nvidia/gpus");
-        if (!dir) {
+        // 先同步收集目录项并立即关闭 DIR, 避免跨 co_await 持有 DIR* 导致协程取消时 fd 泄漏
+        std::vector<std::string> gpuDirs;
+        {
+            DIR* dir = opendir("/proc/driver/nvidia/gpus");
+            if (!dir) {
+                co_return;
+            }
+            struct dirent* ent;
+            while ((ent = readdir(dir)) != nullptr) {
+                if (ent->d_name[0] == '.') {
+                    continue;
+                }
+                gpuDirs.emplace_back(ent->d_name);
+            }
+            closedir(dir);
+        }
+        if (gpuDirs.empty()) {
             co_return;
         }
 
-        struct dirent* ent;
-        while ((ent = readdir(dir)) != nullptr) {
-            if (ent->d_name[0] == '.') {
-                continue;
-            }
-
-            std::string infoPath
-                = std::string("/proc/driver/nvidia/gpus/") + ent->d_name + "/information";
-            std::string infoContent = co_await readFileContent(infoPath);
-            if (infoContent.empty()) {
-                continue;
-            }
-
+        auto parseInformation = [&](const std::string& infoContent) {
             std::istringstream infoFile(infoContent);
             std::string        line;
             while (std::getline(infoFile, line)) {
@@ -773,9 +776,34 @@ protected:
                     }
                 }
             }
+        };
+
+        // 多 GPU: 优先按 PCI 地址精确匹配本 card 对应的 GPU 目录
+        // entry.devicePath 形如 /sys/class/drm/cardN/device, 符号链接目标的 basename 即 PCI 地址
+        std::error_code ec;
+        auto            symlinkTarget = std::filesystem::read_symlink(entry.devicePath, ec);
+        std::string     pciAddr       = ec ? std::string{} : symlinkTarget.filename().string();
+        if (!pciAddr.empty()) {
+            std::string infoContent = co_await readFileContent(
+                std::string("/proc/driver/nvidia/gpus/") + pciAddr + "/information"
+            );
+            if (!infoContent.empty()) {
+                parseInformation(infoContent);
+                co_return;
+            }
+        }
+
+        // 退化: 遍历各 GPU 目录取第一个有效项 (保持旧行为, 兼容无法解析 PCI 地址的情况)
+        for (const auto& name : gpuDirs) {
+            std::string infoContent = co_await readFileContent(
+                std::string("/proc/driver/nvidia/gpus/") + name + "/information"
+            );
+            if (infoContent.empty()) {
+                continue;
+            }
+            parseInformation(infoContent);
             break;
         }
-        closedir(dir);
     }
 
     static uint32_t parseHexSysfs(std::string_view line) {

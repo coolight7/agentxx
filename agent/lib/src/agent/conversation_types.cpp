@@ -14,7 +14,8 @@ static uint64_t fnv1a(const std::string& data, uint64_t seed) {
 }
 
 void ChainHash::append(const std::string& serialized) {
-    hash_ = fnv1a(serialized, hash_ == 0 ? 14695981039346656037ULL : hash_);
+    // 用 count_ 判断首次追加, 而非 hash_==0 (合法链哈希也可能算出 0, 会错误重置种子)
+    hash_ = fnv1a(serialized, count_ == 0 ? 14695981039346656037ULL : hash_);
     ++count_;
 }
 

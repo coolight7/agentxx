@@ -284,5 +284,7 @@ public:
     /// 清空路由
     void clear() {
         this->routerTree.clearChild();
+        // 节点已释放, 清空缓存
+        this->cacheMap.clear();
     }
 };
