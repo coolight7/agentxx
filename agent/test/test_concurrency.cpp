@@ -56,8 +56,8 @@ void testLogDispatcherConcurrency() {
         baseline[i] = sinks[i]->count.load();
     }
 
-    std::atomic<bool>          start{false};
-    std::vector<std::thread>   threads;
+    std::atomic<bool>        start{false};
+    std::vector<std::thread> threads;
     for (int t = 0; t < kThreads; ++t) {
         threads.emplace_back([&]() {
             while (!start.load(std::memory_order_acquire)) {
@@ -101,10 +101,10 @@ void testModelRegistryConcurrency() {
         ModelProviderRegistry reg;
         reg.registerModel("m1", ModelConfig{});
 
-        constexpr int                              kThreads = 8;
-        constexpr int                              kIter    = 200;
-        std::atomic<bool>                          start{false};
-        std::vector<std::thread>                   threads;
+        constexpr int                                    kThreads = 8;
+        constexpr int                                    kIter    = 200;
+        std::atomic<bool>                                start{false};
+        std::vector<std::thread>                         threads;
         std::vector<std::shared_ptr<neograph::Provider>> results(kThreads);
         for (int t = 0; t < kThreads; ++t) {
             threads.emplace_back([&, t]() {
@@ -176,9 +176,9 @@ void testMcpServerRegistrationConcurrency() {
 
     McpServer server;
 
-    constexpr int          kThreads = 8;
-    constexpr int          kIter    = 100;
-    std::atomic<bool>      start{false};
+    constexpr int            kThreads = 8;
+    constexpr int            kIter    = 100;
+    std::atomic<bool>        start{false};
     std::vector<std::thread> threads;
     for (int t = 0; t < kThreads; ++t) {
         threads.emplace_back([&, t]() {

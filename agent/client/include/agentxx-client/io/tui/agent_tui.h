@@ -112,10 +112,10 @@ private:
     /// 消息列表滚动: 是否吸附在底部 (吸附时新增消息自动滚动到底部)
     bool stickToBottom_ = true;
     /// 未吸附底部时的滚动锚点: 聚焦的消息块绝对索引 (消息仅追加, 索引稳定)
-    int   scrollAnchorIndex_ = 0;
+    int scrollAnchorIndex_ = 0;
     /// 滚轮累加器: 用于降低滚动速度, 每次滚轮事件累加 0.5f, 达到 ±1.0f 时移动一个块
-    float scrollAccum_ = 0.0f;
-    static constexpr float kScrollStep = 0.5f;
+    float                  scrollAccum_ = 0.0f;
+    static constexpr float kScrollStep  = 0.5f;
 
     std::string                      inputText_;
     std::optional<PermissionRequest> pendingPermission_;
@@ -126,7 +126,7 @@ private:
     std::vector<std::string> modelNames_;
 
     /// 设置弹窗状态
-    bool showSettings_        = false;
+    bool showSettings_         = false;
     int  selectedSettingIndex_ = 0;
 
     /// 用户输入队列: DeepAgent 执行中收到的用户输入排队, 轮次结束后自动逐个发送
@@ -187,9 +187,9 @@ private:
     ftxui::Element renderMessages();
     /// 特化渲染 filesystem_edit_text_file (git diff 对比), 实现见 tui_render_edittool.cpp
     /// - 折叠态: 在 header 追加文件路径预览
-    void           appendEditToolHeader(const Message& msg, ftxui::Elements& header);
+    void appendEditToolHeader(const Message& msg, ftxui::Elements& header);
     /// - 展开态: 渲染文件路径 + diff 对比 + 错误
-    void           appendEditToolBody(const Message& msg, ftxui::Elements& lines);
+    void appendEditToolBody(const Message& msg, ftxui::Elements& lines);
     /// - diff 对比块 (屏幕足够宽时左右对比, 不足时单块内对比)
     ftxui::Element renderEditToolDiff(const std::string& oldStr, const std::string& newStr);
     /// 当前可聚焦的消息块数量 (需在持有 mutex_ 时调用)
@@ -222,7 +222,8 @@ private:
     /// 取消当前正在执行的轮次
     void cancelCurrentRun();
 
-    /// 发送一条用户输入到 DeepAgent (刷新 currentToken / 追加 User 消息 / 置 streaming / 入 channel)
+    /// 发送一条用户输入到 DeepAgent (刷新 currentToken / 追加 User 消息 / 置 streaming / 入
+    /// channel)
     /// - 调用方须持有 mutex_
     void sendUserInputLocked(std::string text);
     /// 若空闲且输入队列非空, 取队首发送 (轮次结束自动派发); 调用方须持有 mutex_

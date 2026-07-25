@@ -337,11 +337,12 @@ void AgentTUI::start() {
                     const int last = focusBlockCount() - 1;
                     if (last >= 0) {
                         int cur = stickToBottom_ ? last : scrollAnchorIndex_;
-                        scrollAccum_ += (mouse.button == Mouse::WheelUp) ? -kScrollStep : +kScrollStep;
+                        scrollAccum_
+                            += (mouse.button == Mouse::WheelUp) ? -kScrollStep : +kScrollStep;
                         int move = static_cast<int>(scrollAccum_);
                         if (move != 0) {
                             scrollAccum_ -= static_cast<float>(move);
-                            cur += move;
+                            cur          += move;
                             if (cur >= last) {
                                 stickToBottom_ = true;
                                 scrollAccum_   = 0.0f;
@@ -430,11 +431,8 @@ void AgentTUI::sendUserInputLocked(std::string text) {
     messages_.push_back({Message::Role::User, text});
     isStreaming_   = true;
     stickToBottom_ = true;
-    inputChannel_->async_send(
-        neograph_asio_error_code{},
-        std::move(text),
-        [](neograph_asio_error_code) {}
-    );
+    inputChannel_
+        ->async_send(neograph_asio_error_code{}, std::move(text), [](neograph_asio_error_code) {});
 }
 
 void AgentTUI::dispatchNextPendingInput() {
