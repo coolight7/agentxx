@@ -736,12 +736,12 @@ asio::awaitable<std::string> FilesystemWriteFileTool::execute_async(const neogra
             // 写入文件内容
             if (is_binary) {
                 auto result = agentxx::util::base64Decode(content);
-                if (result.empty()) {
+                if (!result.has_value()) {
                     throw std::runtime_error{"base64 decode failed"};
                 }
                 co_await asio::async_write(
                     stream,
-                    asio::buffer(result),
+                    asio::buffer(result.value()),
                     asio::redirect_error(asio::use_awaitable, errCode)
                 );
             } else {
@@ -792,10 +792,10 @@ asio::awaitable<std::string> FilesystemWriteFileTool::execute_async(const neogra
             // 写入文件内容
             if (is_binary) {
                 auto result = agentxx::util::base64Decode(content);
-                if (result.empty()) {
+                if (!result.has_value()) {
                     throw std::runtime_error{"base64 decode failed"};
                 }
-                stream << result;
+                stream << result.value();
             } else {
                 stream << content;
             }
@@ -1283,9 +1283,12 @@ asio::awaitable<std::string> FilesystemGrepTool::execute_async(const neograph::j
                             }
                         }
 
+                        // TODO: content 取一行内容
                         matchsContent.push_back(neograph::json{
-                            {"content", text_patterns},
-                            {"line",    lineCount    },
+                            {"content",
+                             std::string_view{filetext}.substr(match.start, match.end - match.start)
+                            },
+                            {"line", lineCount},
                         });
                         index = match.start;
                     }

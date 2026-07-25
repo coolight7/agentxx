@@ -202,12 +202,16 @@ void ModelCallWrapNode::onHandleStartError(
     if (false == errorRethrow) {
         auto msg = neograph::ChatMessage{
             .role    = "assistant",
-            .content = fmt::format(
-                R"({{"error": "{}/Start call `{}` exception: {}"}})",
-                nodeName,
-                item.name,
-                exceptionStr
-            ),
+            .content = neograph::json{
+                           {"error",
+                            fmt::format(
+                                "{}/Start call `{}` exception: {}",
+                                nodeName,
+                                item.name,
+                                exceptionStr
+                            )},
+            }
+                           .dump(),
         };
         auto msgJson = neograph::json{};
         neograph::to_json(msgJson, msg);
@@ -228,10 +232,12 @@ void ModelCallWrapNode::onHandleBaseRunError(
     // 插入消息，保证消息顺序正确
     if (false == errorRethrow && isCurrentError) {
         auto msg = neograph::ChatMessage{
-            .role = "assistant",
-            .content
-            = fmt::format(R"({{"error": "{}/run exception: {}"}})", nodeName, exceptionStr),
-            .flags = neograph::MessageFlag::AutoInserted,
+            .role    = "assistant",
+            .content = neograph::json{
+                           {"error", fmt::format("{}/run exception: {}", nodeName, exceptionStr)},
+            }
+                           .dump(),
+            .flags   = neograph::MessageFlag::AutoInserted,
         };
         auto msgJson = neograph::json{};
         neograph::to_json(msgJson, msg);
