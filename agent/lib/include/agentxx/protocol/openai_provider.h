@@ -167,116 +167,151 @@ private:
             }
         }
         if (!lineBuffer.empty()) {
-            processSseBuffer(lineBuffer, completion, fullContent, fullThinking, tcMap, on_chunk);
+            processSseBuffer(
+                lineBuffer,
+                completion,
+                fullContent,
+                fullThinking,
+                tcMap,
+                on_chunk,
+                /*finalFlush=*/true
+            );
         }
     }
 
+public:
+
+    /// 处理 OpenAI SSE 缓冲区 (public 以便单测)
+    /// - finalFlush: 连接关闭时对末尾未以 "\n" 结尾的最后一行也进行解析
     static void processSseBuffer(
         std::string&                       buf,
         neograph::ChatCompletion&          completion,
         std::string&                       fullContent,
         std::string&                       fullThinking,
         std::map<int, neograph::ToolCall>& tcMap,
-        neograph::FormatDataStreamCallback on_chunk
+        neograph::FormatDataStreamCallback on_chunk,
+        bool                               finalFlush = false
     ) {
         size_t pos;
         while ((pos = buf.find('\n')) != std::string::npos) {
             std::string line = buf.substr(0, pos);
             buf.erase(0, pos + 1);
+            processSseLine(line, completion, fullContent, fullThinking, tcMap, on_chunk);
+        }
+        if (finalFlush && !buf.empty()) {
+            // 连接 abrupt 关闭时, 最后一行可能没有 trailing "\n", 此处补解析
+            std::string line = std::move(buf);
+            buf.clear();
+            processSseLine(line, completion, fullContent, fullThinking, tcMap, on_chunk);
+        }
+    }
 
-            if (!line.empty() && line.back() == '\r') {
-                line.pop_back();
+    static void processSseLine(
+        const std::string&                 line_in,
+        neograph::ChatCompletion&          completion,
+        std::string&                       fullContent,
+        std::string&                       fullThinking,
+        std::map<int, neograph::ToolCall>& tcMap,
+        neograph::FormatDataStreamCallback on_chunk
+    ) {
+        std::string line = line_in;
+        if (!line.empty() && line.back() == '\r') {
+            line.pop_back();
+        }
+
+        // SSE 规范: "data:" 后的单个前导空格可选
+        if (line.rfind("data:", 0) != 0) {
+            return;
+        }
+        std::string payload = line.substr(5);
+        if (!payload.empty() && payload.front() == ' ') {
+            payload.erase(0, 1);
+        }
+
+        if (payload == "[DONE]") {
+            return;
+        }
+
+        try {
+            auto j = neograph::json::parse(payload);
+
+            if (j.contains("usage") && !j["usage"].is_null()) {
+                auto u                             = j["usage"];
+                completion.usage.prompt_tokens     = u.value("prompt_tokens", 0);
+                completion.usage.completion_tokens = u.value("completion_tokens", 0);
+                completion.usage.total_tokens      = u.value(
+                    "total_tokens",
+                    completion.usage.prompt_tokens + completion.usage.completion_tokens
+                );
             }
 
-            if (line.rfind("data: ", 0) != 0) {
-                continue;
+            if (!j.contains("choices") || !j["choices"].is_array() || j["choices"].empty()) {
+                return;
             }
-            std::string payload = line.substr(6);
+            auto delta = j["choices"][0]["delta"];
 
-            if (payload == "[DONE]") {
-                continue;
-            }
-
-            try {
-                auto j = neograph::json::parse(payload);
-
-                if (j.contains("usage") && !j["usage"].is_null()) {
-                    auto u                             = j["usage"];
-                    completion.usage.prompt_tokens     = u.value("prompt_tokens", 0);
-                    completion.usage.completion_tokens = u.value("completion_tokens", 0);
-                    completion.usage.total_tokens      = u.value(
-                        "total_tokens",
-                        completion.usage.prompt_tokens + completion.usage.completion_tokens
-                    );
+            if (delta.contains("content") && !delta["content"].is_null()) {
+                std::string token = delta["content"].get<std::string>();
+                if (!token.empty()) {
+                    fullContent += token;
+                    if (on_chunk) {
+                        on_chunk(neograph::ChatStreamChunk{
+                            neograph::ChatStreamChunk::TYPE_CONTENT,
+                            token
+                        });
+                    }
                 }
+            }
 
-                if (!j.contains("choices") || !j["choices"].is_array() || j["choices"].empty()) {
-                    continue;
+            if (delta.contains("reasoning_content") && delta["reasoning_content"].is_string()) {
+                auto token = delta["reasoning_content"].get<std::string>();
+                if (!token.empty()) {
+                    fullThinking += token;
+                    if (on_chunk) {
+                        on_chunk(neograph::ChatStreamChunk{
+                            neograph::ChatStreamChunk::TYPE_THINKING,
+                            token
+                        });
+                    }
                 }
-                auto delta = j["choices"][0]["delta"];
+            } else if (delta.contains("thinking") && delta["thinking"].is_string()) {
+                auto token = delta["thinking"].get<std::string>();
+                if (!token.empty()) {
+                    fullThinking += token;
+                    if (on_chunk) {
+                        on_chunk(neograph::ChatStreamChunk{
+                            neograph::ChatStreamChunk::TYPE_THINKING,
+                            token
+                        });
+                    }
+                }
+            }
 
-                if (delta.contains("content") && !delta["content"].is_null()) {
-                    std::string token = delta["content"].get<std::string>();
-                    if (!token.empty()) {
-                        fullContent += token;
-                        if (on_chunk) {
-                            on_chunk(neograph::ChatStreamChunk{
-                                neograph::ChatStreamChunk::TYPE_CONTENT,
-                                token
-                            });
+            if (delta.contains("tool_calls")) {
+                for (const auto& tc : delta["tool_calls"]) {
+                    int idx = tc.value("index", 0);
+                    if (tc.contains("id")) {
+                        tcMap[idx].id = tc["id"].get<std::string>();
+                    }
+                    if (tc.contains("function")) {
+                        if (tc["function"].contains("name")) {
+                            tcMap[idx].name += tc["function"]["name"].get<std::string>();
+                        }
+                        if (tc["function"].contains("arguments")) {
+                            tcMap[idx].arguments += tc["function"]["arguments"].get<std::string>();
                         }
                     }
                 }
-
-                if (delta.contains("reasoning_content") && delta["reasoning_content"].is_string()) {
-                    auto token = delta["reasoning_content"].get<std::string>();
-                    if (!token.empty()) {
-                        fullThinking += token;
-                        if (on_chunk) {
-                            on_chunk(neograph::ChatStreamChunk{
-                                neograph::ChatStreamChunk::TYPE_THINKING,
-                                token
-                            });
-                        }
-                    }
-                } else if (delta.contains("thinking") && delta["thinking"].is_string()) {
-                    auto token = delta["thinking"].get<std::string>();
-                    if (!token.empty()) {
-                        fullThinking += token;
-                        if (on_chunk) {
-                            on_chunk(neograph::ChatStreamChunk{
-                                neograph::ChatStreamChunk::TYPE_THINKING,
-                                token
-                            });
-                        }
-                    }
-                }
-
-                if (delta.contains("tool_calls")) {
-                    for (const auto& tc : delta["tool_calls"]) {
-                        int idx = tc.value("index", 0);
-                        if (tc.contains("id")) {
-                            tcMap[idx].id = tc["id"].get<std::string>();
-                        }
-                        if (tc.contains("function")) {
-                            if (tc["function"].contains("name")) {
-                                tcMap[idx].name += tc["function"]["name"].get<std::string>();
-                            }
-                            if (tc["function"].contains("arguments")) {
-                                tcMap[idx].arguments
-                                    += tc["function"]["arguments"].get<std::string>();
-                            }
-                        }
-                    }
-                }
-            } catch (...) {
             }
+        } catch (...) {
         }
     }
 
     static void extractThinkTags(std::string& content, std::string& thinking);
 
     static asio::ssl::context& sslContext();
+
+private:
 
     agentxx::agent::ModelConfig config_;
 };

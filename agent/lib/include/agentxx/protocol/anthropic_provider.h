@@ -61,6 +61,7 @@ public:
     static neograph::ChatCompletion parseResponse(const neograph::json& resp);
 
     /// Process Anthropic SSE buffer.
+    /// - finalFlush: 连接关闭时对末尾未以 "\n\n" 结尾的最后一个事件块也进行解析
     static void processSseBuffer(
         std::string&                       buf,
         neograph::ChatCompletion&          completion,
@@ -68,94 +69,129 @@ public:
         std::string&                       fullThinking,
         std::map<int, neograph::ToolCall>& tcMap,
         std::map<int, std::string>&        blockTypes,
-        neograph::FormatDataStreamCallback on_chunk
+        neograph::FormatDataStreamCallback on_chunk,
+        bool                               finalFlush = false
     ) {
         size_t pos;
         while ((pos = buf.find("\n\n")) != std::string::npos) {
             std::string block = buf.substr(0, pos);
             buf.erase(0, pos + 2);
+            processSseBlock(
+                block, completion, fullContent, fullThinking, tcMap, blockTypes, on_chunk
+            );
+        }
+        if (finalFlush && !buf.empty()) {
+            // 连接 abrupt 关闭时, 最后一个事件可能没有 trailing "\n\n", 此处补解析
+            std::string block = std::move(buf);
+            buf.clear();
+            processSseBlock(
+                block, completion, fullContent, fullThinking, tcMap, blockTypes, on_chunk
+            );
+        }
+    }
 
-            std::string currentEvent;
-            std::string payload;
+    /// 解析单个 SSE 事件块 (以 "\n\n" 分隔的一块, 含若干 event:/data: 行)
+    static void processSseBlock(
+        const std::string&                 block,
+        neograph::ChatCompletion&          completion,
+        std::string&                       fullContent,
+        std::string&                       fullThinking,
+        std::map<int, neograph::ToolCall>& tcMap,
+        std::map<int, std::string>&        blockTypes,
+        neograph::FormatDataStreamCallback on_chunk
+    ) {
+        std::string currentEvent;
+        std::string payload;
 
-            size_t lineStart = 0;
-            while (lineStart < block.size()) {
-                auto        lineEnd = block.find('\n', lineStart);
-                std::string line    = (lineEnd == std::string::npos)
-                                          ? block.substr(lineStart)
-                                          : block.substr(lineStart, lineEnd - lineStart);
-                lineStart           = (lineEnd == std::string::npos) ? block.size() : lineEnd + 1;
+        size_t lineStart = 0;
+        while (lineStart < block.size()) {
+            auto        lineEnd = block.find('\n', lineStart);
+            std::string line    = (lineEnd == std::string::npos)
+                                      ? block.substr(lineStart)
+                                      : block.substr(lineStart, lineEnd - lineStart);
+            lineStart           = (lineEnd == std::string::npos) ? block.size() : lineEnd + 1;
 
-                if (!line.empty() && line.back() == '\r') {
-                    line.pop_back();
-                }
-
-                if (line.rfind("event: ", 0) == 0) {
-                    currentEvent = line.substr(7);
-                } else if (line.rfind("data: ", 0) == 0) {
-                    payload = line.substr(6);
-                }
+            if (!line.empty() && line.back() == '\r') {
+                line.pop_back();
             }
 
-            if (payload.empty()) {
-                continue;
+            // SSE 规范: 字段名后冒号之后的单个前导空格可选; 多个 data: 行以 "\n" 拼接
+            if (line.rfind("event:", 0) == 0) {
+                auto val = line.substr(6);
+                if (!val.empty() && val.front() == ' ') {
+                    val.erase(0, 1);
+                }
+                currentEvent = val;
+            } else if (line.rfind("data:", 0) == 0) {
+                auto val = line.substr(5);
+                if (!val.empty() && val.front() == ' ') {
+                    val.erase(0, 1);
+                }
+                if (!payload.empty()) {
+                    payload += "\n";
+                }
+                payload += val;
             }
+        }
 
-            try {
-                auto j = neograph::json::parse(payload);
+        if (payload.empty()) {
+            return;
+        }
 
-                if (currentEvent == "message_start") {
-                    if (j.contains("message") && j["message"].contains("usage")) {
-                        auto u                         = j["message"]["usage"];
-                        completion.usage.prompt_tokens = u.value("input_tokens", 0);
+        try {
+            auto j = neograph::json::parse(payload);
+
+            if (currentEvent == "message_start") {
+                if (j.contains("message") && j["message"].contains("usage")) {
+                    auto u                         = j["message"]["usage"];
+                    completion.usage.prompt_tokens = u.value("input_tokens", 0);
+                }
+            } else if (currentEvent == "content_block_start") {
+                int idx = j.value("index", 0);
+                if (j.contains("content_block")) {
+                    auto type       = j["content_block"].value("type", std::string{});
+                    blockTypes[idx] = type;
+                    if (type == "tool_use") {
+                        tcMap[idx].id   = j["content_block"].value("id", std::string{});
+                        tcMap[idx].name = j["content_block"].value("name", std::string{});
                     }
-                } else if (currentEvent == "content_block_start") {
-                    int idx = j.value("index", 0);
-                    if (j.contains("content_block")) {
-                        auto type       = j["content_block"].value("type", std::string{});
-                        blockTypes[idx] = type;
-                        if (type == "tool_use") {
-                            tcMap[idx].id   = j["content_block"].value("id", std::string{});
-                            tcMap[idx].name = j["content_block"].value("name", std::string{});
+                }
+            } else if (currentEvent == "content_block_delta") {
+                int idx = j.value("index", 0);
+                if (j.contains("delta")) {
+                    auto deltaType = j["delta"].value("type", std::string{});
+                    if (deltaType == "text_delta") {
+                        auto text    = j["delta"].value("text", std::string{});
+                        fullContent += text;
+                        if (on_chunk) {
+                            on_chunk(neograph::ChatStreamChunk{
+                                neograph::ChatStreamChunk::TYPE_CONTENT,
+                                text
+                            });
                         }
-                    }
-                } else if (currentEvent == "content_block_delta") {
-                    int idx = j.value("index", 0);
-                    if (j.contains("delta")) {
-                        auto deltaType = j["delta"].value("type", std::string{});
-                        if (deltaType == "text_delta") {
-                            auto text    = j["delta"].value("text", std::string{});
-                            fullContent += text;
-                            if (on_chunk) {
-                                on_chunk(neograph::ChatStreamChunk{
-                                    neograph::ChatStreamChunk::TYPE_CONTENT,
-                                    text
-                                });
-                            }
-                        } else if (deltaType == "thinking_delta") {
-                            auto thinking  = j["delta"].value("thinking", std::string{});
-                            fullThinking  += thinking;
-                            if (on_chunk) {
-                                on_chunk(neograph::ChatStreamChunk{
-                                    neograph::ChatStreamChunk::TYPE_THINKING,
-                                    thinking
-                                });
-                            }
-                        } else if (deltaType == "input_json_delta") {
-                            auto partialJson      = j["delta"].value("partial_json", std::string{});
-                            tcMap[idx].arguments += partialJson;
+                    } else if (deltaType == "thinking_delta") {
+                        auto thinking  = j["delta"].value("thinking", std::string{});
+                        fullThinking  += thinking;
+                        if (on_chunk) {
+                            on_chunk(neograph::ChatStreamChunk{
+                                neograph::ChatStreamChunk::TYPE_THINKING,
+                                thinking
+                            });
                         }
-                    }
-                } else if (currentEvent == "message_delta") {
-                    if (j.contains("usage")) {
-                        auto u                             = j["usage"];
-                        completion.usage.completion_tokens = u.value("output_tokens", 0);
-                        completion.usage.total_tokens
-                            = completion.usage.prompt_tokens + completion.usage.completion_tokens;
+                    } else if (deltaType == "input_json_delta") {
+                        auto partialJson      = j["delta"].value("partial_json", std::string{});
+                        tcMap[idx].arguments += partialJson;
                     }
                 }
-            } catch (...) {
+            } else if (currentEvent == "message_delta") {
+                if (j.contains("usage")) {
+                    auto u                             = j["usage"];
+                    completion.usage.completion_tokens = u.value("output_tokens", 0);
+                    completion.usage.total_tokens
+                        = completion.usage.prompt_tokens + completion.usage.completion_tokens;
+                }
             }
+        } catch (...) {
         }
     }
 
@@ -287,7 +323,8 @@ private:
                 fullThinking,
                 tcMap,
                 blockTypes,
-                on_chunk
+                on_chunk,
+                /*finalFlush=*/true
             );
         }
     }
