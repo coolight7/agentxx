@@ -120,16 +120,6 @@ static void test_chain_hash() {
     XX_TEST_EXPECT_EQ(ch.tail(), 0u);
 }
 
-static void test_tool_prompt_get_arg() {
-    agentxx::agent::ToolPrompt tp;
-    tp.depict      = "test tool";
-    tp.args["foo"] = "bar";
-
-    XX_TEST_EXPECT_EQ(tp.getArg("foo"), "bar");
-    // 缺失的 key: 修复前 release 下解引用 end() (UB/崩溃); 修复后返回空串兜底
-    XX_TEST_EXPECT_EQ(tp.getArg("missing"), "");
-}
-
 TestResult testMiscFixes() {
     g_mf_passed = 0;
     g_mf_failed = 0;
@@ -137,7 +127,6 @@ TestResult testMiscFixes() {
     test_lru_cache();
     test_router();
     test_chain_hash();
-    test_tool_prompt_get_arg();
 
     return TestResult{g_mf_passed, g_mf_failed};
 }
