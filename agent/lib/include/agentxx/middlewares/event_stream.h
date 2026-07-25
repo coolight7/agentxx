@@ -225,7 +225,7 @@ public:
                         std::move(resp),
                         [](neograph_asio_error_code) {}
                     );
-                } catch (const neograph::graph::CancelledException& e) {
+                } catch (const neograph::graph::CancelledException& _) {
                     // 超时取消, 不必发错误到 channel (请求方已超时返回)
                 } catch (const std::exception& e) {
                     XX_LOGE(

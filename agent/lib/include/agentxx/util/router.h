@@ -25,7 +25,7 @@ protected:
 
         RouterTreePort(std::string_view in_path = "") noexcept :
             path(in_path) {
-            for (int i = handles.size(); i-- > 0;) {
+            for (size_t i = 0; i < handles.size(); ++i) {
                 handles[i] = nullptr;
             }
         }
