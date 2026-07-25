@@ -491,13 +491,17 @@ public:
         }
     }
 
-    std::optional<std::string> getShareStoreItemValue(std::string_view thread_id, const int id);
+    std::optional<std::string> getShareStoreItemValue(std::string_view thread_id, const size_t id);
 
-    void setShareStoreItemValue(const std::string& thread_id, const int id, std::string_view value);
+    void setShareStoreItemValue(
+        const std::string& thread_id,
+        const size_t       id,
+        std::string_view   value
+    );
 
     size_t addShareStoreItemValue(const std::string& thread_id, std::string_view value);
 
-    void removeShareStoreItemValue(std::string_view thread_id, const int id);
+    void removeShareStoreItemValue(std::string_view thread_id, const size_t id);
 
     void removeGraphDataItem(const std::string& thread_id, std::string_view key);
 

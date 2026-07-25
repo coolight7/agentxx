@@ -260,7 +260,7 @@ neograph::json MiddlewareContext::anyToJson(const std::any& val) {
 }
 
 std::optional<std::string>
-    MiddlewareContext::getShareStoreItemValue(std::string_view thread_id, const int id) {
+    MiddlewareContext::getShareStoreItemValue(std::string_view thread_id, const size_t id) {
     auto it = shareStore.find(thread_id);
     if (shareStore.end() != it) {
         auto reslut = it->second.store.find(id);
@@ -273,7 +273,7 @@ std::optional<std::string>
 
 void MiddlewareContext::setShareStoreItemValue(
     const std::string& thread_id,
-    const int          id,
+    const size_t       id,
     std::string_view   value
 ) {
     shareStore[thread_id].store[id] = value;
@@ -289,7 +289,7 @@ size_t MiddlewareContext::addShareStoreItemValue(
     return id;
 }
 
-void MiddlewareContext::removeShareStoreItemValue(std::string_view thread_id, const int id) {
+void MiddlewareContext::removeShareStoreItemValue(std::string_view thread_id, const size_t id) {
     auto it = shareStore.find(thread_id);
     if (shareStore.end() != it) {
         auto reslutIt = it->second.store.find(id);
