@@ -513,6 +513,11 @@ asio::awaitable<void> runLocalTuiUnifiedAsync(
             r->cancel(threadId);
         }
     });
+    tui->setSelectModelCallback([weakRemote, threadId](const std::string& model) {
+        if (auto r = weakRemote.lock()) {
+            r->selectModel(threadId, model);
+        }
+    });
     // 远程上下文统计 -> 更新 TUI 会话显示
     remote->setContextStatsCallback([ctx, threadId](uint64_t c, uint64_t m) {
         auto s = ctx->getSession(threadId);
@@ -591,6 +596,13 @@ asio::awaitable<void> runRemoteTuiAsync(
         cfg,
         wsCfg
     );
+
+    std::weak_ptr<agentxx::agent::remote::RemoteClientAgentIO> weakRemote = remote;
+    io->setSelectModelCallback([weakRemote](const std::string& modelName) {
+        if (auto r = weakRemote.lock()) {
+            r->selectModel("session", modelName);
+        }
+    });
 
     co_await remote->runSession("session", model);
     co_await remote->shutdown();

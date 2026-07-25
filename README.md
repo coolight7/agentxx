@@ -210,8 +210,8 @@
 - ⬜GUI
 
 ### Server
-- Agent2App Api Server
-- ACP Server
+- ✅MCP server
+- ✅ACP Server
 - A2A Server
 
 ### 测试
