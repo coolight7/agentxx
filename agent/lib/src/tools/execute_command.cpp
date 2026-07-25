@@ -110,9 +110,16 @@ asio::awaitable<std::string> ExecuteLinuxCommandTool::execute_async(const neogra
             }
         }
 
+#if XX_IS_WIN_D
         auto procExe  = boost::process::environment::find_executable("bash");
         auto procArgs = std::vector<std::string>{"-c", command};
-        auto proc     = boost::process::process{
+#else
+        // setsid 使子进程成为新会话/进程组 leader (pgid == pid),
+        // 超时时可经 killpg 整组清理 bash 派生的子孙进程, 避免孤儿进程持有管道
+        auto procExe  = boost::process::environment::find_executable("setsid");
+        auto procArgs = std::vector<std::string>{"bash", "-c", command};
+#endif
+        auto proc = boost::process::process{
             ctx,
             procExe,
             procArgs,
@@ -146,8 +153,6 @@ asio::awaitable<std::string> ExecuteLinuxCommandTool::execute_async(const neogra
             if (res.index() == 1) {
                 boost::system::error_code ec;
                 proc.terminate(ec);
-                // 回收子进程避免僵尸; 管道写端随进程组被杀而关闭
-                co_await proc.async_wait(asio::redirect_error(asio::use_awaitable, ec));
                 co_return makeTimeoutResult(timeout, strout, strerr);
             }
         } else {
