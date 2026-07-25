@@ -42,6 +42,15 @@ public:
         neograph::FormatDataStreamCallback on_chunk = nullptr
     ) override;
 
+    /// 从 content 文本中提取嵌入的 tool call JSON（LLM 未正确使用 tool_calls API 时的兜底）
+    /// - 支持 ```json 代码块和行内 JSON 两种格式
+    /// - 匹配模式: {"name":"...","arguments":...} 或 {"function":{"name":"...","arguments":...}}
+    /// - 成功提取后从 content 中移除匹配的文本
+    static void extractToolCalls(
+        std::string& content,
+        std::vector<neograph::ToolCall>& toolCalls
+    );
+
 private:
 
     static constexpr const char* kDefaultBaseUrl = "https://api.openai.com";

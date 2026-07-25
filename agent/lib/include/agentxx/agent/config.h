@@ -30,6 +30,8 @@ public:
     std::string anthropicVersion = "2023-06-01";
     /// max_tokens
     int maxTokens = 8096;
+    /// 从 content 文本中尝试提取 tool call（当 LLM 未正确使用 tool_calls API 时的兜底方案）
+    bool extractToolCallsFromContent = false;
     /// 模型支持的最大上下文 token 数
     /// - 0 表示未指定, 此时上下文压缩中间件使用其默认值
     ///   [agentxx::middleware::SummarizationMiddlewareHandle::defaultModelSupportMaxToken]

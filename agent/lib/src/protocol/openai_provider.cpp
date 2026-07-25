@@ -192,6 +192,10 @@ asio::awaitable<neograph::ChatCompletion>
     if (completion.message.reasoning_content.empty()) {
         extractThinkTags(completion.message.content, completion.message.reasoning_content);
     }
+    if (config_.extractToolCallsFromContent && completion.message.tool_calls.empty()) {
+        extractToolCalls(completion.message.reasoning_content, completion.message.tool_calls);
+        extractToolCalls(completion.message.content, completion.message.tool_calls);
+    }
 
     if (completion.message.reasoning_content.empty()) {
         if (choice.contains("reasoning_content") && !choice["reasoning_content"].is_null()) {
@@ -322,6 +326,10 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStream(
     if (fullThinking.empty()) {
         extractThinkTags(fullContent, fullThinking);
     }
+    if (config_.extractToolCallsFromContent && tcMap.empty()) {
+        extractToolCalls(fullContent, completion.message.tool_calls);
+        extractToolCalls(fullThinking, completion.message.tool_calls);
+    }
     completion.message.content           = fullContent;
     completion.message.reasoning_content = fullThinking;
     for (auto& [idx, tc] : tcMap) {
@@ -329,6 +337,134 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStream(
     }
 
     co_return completion;
+}
+
+void OpenAIProvider::extractToolCalls(
+    std::string&                     content,
+    std::vector<neograph::ToolCall>& toolCalls
+) {
+    auto trim = [](const std::string& s) -> std::string {
+        size_t start = 0;
+        while (start < s.size()
+               && (s[start] == ' ' || s[start] == '\t' || s[start] == '\n' || s[start] == '\r')) {
+            ++start;
+        }
+        size_t end = s.size();
+        while (end > start
+               && (s[end - 1] == ' ' || s[end - 1] == '\t' || s[end - 1] == '\n'
+                   || s[end - 1] == '\r')) {
+            --end;
+        }
+        return s.substr(start, end - start);
+    };
+
+    auto tryExtract = [&](const std::string& jsonStr) -> bool {
+        std::string trimmed = trim(jsonStr);
+        if (trimmed.empty()) {
+            return false;
+        }
+        try {
+            neograph::json j = neograph::json::parse(trimmed);
+            if (!j.is_object()) {
+                return false;
+            }
+
+            neograph::ToolCall tc;
+            bool               found = false;
+
+            if (j.contains("name") && j["name"].is_string()) {
+                neograph::json nameVal = j["name"];
+                tc.name                = nameVal.get<std::string>();
+                if (j.contains("arguments")) {
+                    neograph::json argsVal = j["arguments"];
+                    if (argsVal.is_object()) {
+                        tc.arguments = argsVal.dump();
+                    } else if (argsVal.is_string()) {
+                        tc.arguments = argsVal.get<std::string>();
+                    }
+                    found = true;
+                }
+            }
+
+            if (!found && j.contains("function") && j["function"].is_object()) {
+                neograph::json fn = j["function"];
+                if (fn.contains("name") && fn["name"].is_string()) {
+                    neograph::json nameVal = fn["name"];
+                    tc.name                = nameVal.get<std::string>();
+                    if (fn.contains("arguments")) {
+                        neograph::json argsVal = fn["arguments"];
+                        if (argsVal.is_object()) {
+                            tc.arguments = argsVal.dump();
+                        } else if (argsVal.is_string()) {
+                            tc.arguments = argsVal.get<std::string>();
+                        }
+                    }
+                    found = true;
+                }
+            }
+
+            if (found) {
+                tc.id = "extr_" + std::to_string(toolCalls.size());
+                toolCalls.push_back(std::move(tc));
+                return true;
+            }
+        } catch (...) {
+        }
+        return false;
+    };
+
+    std::string cleaned;
+    size_t      pos      = 0;
+    int         numFound = 0;
+
+    /// Phase 1: Extract from ```json code fences
+    while (pos < content.size()) {
+        auto fenceStart = content.find("```json", pos);
+        if (fenceStart == std::string::npos) {
+            break;
+        }
+
+        auto fenceEnd = content.find("```", fenceStart + 7);
+        if (fenceEnd == std::string::npos) {
+            cleaned += content.substr(pos);
+            pos      = content.size();
+            break;
+        }
+
+        cleaned += content.substr(pos, fenceStart - pos);
+
+        std::string jsonStr = content.substr(fenceStart + 7, fenceEnd - fenceStart - 7);
+        if (tryExtract(jsonStr)) {
+            ++numFound;
+        } else if (!trim(jsonStr).empty()) {
+            cleaned += "```json\n" + jsonStr + "\n```";
+        }
+
+        pos = fenceEnd + 3;
+    }
+
+    if (pos < content.size()) {
+        cleaned += content.substr(pos);
+    }
+
+    /// Phase 2: If nothing found from code fences, try the last JSON object in content
+    if (numFound == 0) {
+        auto lastBrace = cleaned.rfind('}');
+        if (lastBrace != std::string::npos && lastBrace > 0) {
+            auto openBrace = cleaned.rfind('{', lastBrace);
+            if (openBrace != std::string::npos) {
+                std::string candidate = cleaned.substr(openBrace, lastBrace - openBrace + 1);
+                if (tryExtract(candidate)) {
+                    cleaned.erase(openBrace);
+                    ++numFound;
+                }
+            }
+        }
+    }
+
+    if (numFound > 0) {
+        content = trim(cleaned);
+    }
 }
 
 void OpenAIProvider::extractThinkTags(std::string& content, std::string& thinking) {
