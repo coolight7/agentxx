@@ -179,7 +179,7 @@ std::optional<ftxui::Element> AgentTUI::renderPlanningInfo() {
     Elements lines;
 
     Elements title;
-    title.push_back(text("规划") | bold | color(theme_.accentColor));
+    title.push_back(text("规划") | color(theme_.accentColor));
     if (!plan->toolFinished) {
         title.push_back(text("  规划中...") | color(theme_.hintColor) | dim);
     }
@@ -211,8 +211,9 @@ std::optional<ftxui::Element> AgentTUI::renderPlanningInfo() {
 
     const auto notes = args.value("notes", std::string{});
     if (!notes.empty()) {
-        lines.push_back(text("备注") | color(theme_.hintColor));
-        lines.push_back(paragraph(notes) | color(theme_.assistantColor));
+        lines.push_back(text(""));
+        lines.push_back(text("笔记") | color(theme_.accentColor));
+        lines.push_back(paragraph(notes) | color(theme_.hintColor));
     }
 
     return vbox(std::move(lines));
