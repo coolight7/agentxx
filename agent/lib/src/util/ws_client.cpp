@@ -74,7 +74,7 @@ void WsClient::abort() noexcept {
         return;
     }
     impl_->closed_ = true;
-    boost::system::error_code ec;
+    neograph_asio_error_code ec;
     if (impl_->isSsl && impl_->wss) {
         auto& lowest = boost::beast::get_lowest_layer(*impl_->wss);
         lowest.socket().shutdown(asio::ip::tcp::socket::shutdown_both, ec);
@@ -298,7 +298,7 @@ asio::awaitable<std::expected<std::unique_ptr<WsClient>, std::string>> wsConnect
                 asio::cancel_after(config.connectTimeout, asio::use_awaitable)
             );
 
-            boost::system::error_code tcpEc;
+            neograph_asio_error_code tcpEc;
             beast::get_lowest_layer(sslStream).socket().set_option(tcp::no_delay(true), tcpEc);
 
             co_await sslStream.async_handshake(
@@ -335,7 +335,7 @@ asio::awaitable<std::expected<std::unique_ptr<WsClient>, std::string>> wsConnect
                 asio::cancel_after(config.connectTimeout, asio::use_awaitable)
             );
 
-            boost::system::error_code tcpEc;
+            neograph_asio_error_code tcpEc;
             tcpStream.socket().set_option(tcp::no_delay(true), tcpEc);
 
             impl->ws = std::make_unique<WsClient::Impl::WsStream>(std::move(tcpStream));

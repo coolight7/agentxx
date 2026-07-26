@@ -31,7 +31,7 @@ void ChannelAgentIOTransport::send(WireMessage msg) {
     if (closed_.load(std::memory_order_acquire)) {
         return;
     }
-    outgoing_->try_send(boost::system::error_code{}, std::move(msg));
+    outgoing_->try_send(neograph_asio_error_code{}, std::move(msg));
 }
 
 asio::awaitable<std::optional<WireMessage>> ChannelAgentIOTransport::recv() {

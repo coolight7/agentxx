@@ -46,7 +46,7 @@ class AgentConfig {
 public:
 
     std::string agentName     = "Agentxx";
-    std::string agentNameView = "萝卜";
+    std::string agentNameView = "Agentxx";
 
     /// 主模型配置
     ModelConfig model;

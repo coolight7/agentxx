@@ -91,8 +91,8 @@ struct McpClient::StdioTransport {
     asio::awaitable<void> readerLoop(std::shared_ptr<McpClient> client) {
         std::string buffer;
         while (running.load()) {
-            boost::system::error_code ec;
-            std::size_t               n = co_await asio::async_read_until(
+            neograph_asio_error_code ec;
+            std::size_t              n = co_await asio::async_read_until(
                 *stdoutPipe,
                 asio::dynamic_buffer(buffer, 4096),
                 '\n',
@@ -131,7 +131,7 @@ struct McpClient::StdioTransport {
             return;
         }
         running.store(false);
-        boost::system::error_code ec;
+        neograph_asio_error_code ec;
         if (stdinPipe.has_value()) {
             stdinPipe->close(ec);
         }
@@ -1037,8 +1037,8 @@ asio::awaitable<std::expected<json, std::string>>
 
 #if defined(BOOST_PROCESS_V2_PROCESS_HPP)
     {
-        auto                      wguard = co_await stdioWriteMutex_->lock();
-        boost::system::error_code wec;
+        auto                     wguard = co_await stdioWriteMutex_->lock();
+        neograph_asio_error_code wec;
         co_await asio::async_write(
             *stdio_->stdinPipe,
             asio::buffer(reqStr),
@@ -1117,7 +1117,7 @@ asio::awaitable<void> McpClient::sendRawNotification(std::string_view method, co
         auto reqStr = req.dump() + "\n";
         auto wguard = co_await stdioWriteMutex_->lock();
 #if defined(BOOST_PROCESS_V2_PROCESS_HPP)
-        boost::system::error_code wec;
+        neograph_asio_error_code wec;
         co_await asio::async_write(
             *stdio_->stdinPipe,
             asio::buffer(reqStr),

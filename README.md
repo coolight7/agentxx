@@ -206,7 +206,8 @@
 - ⬜部分扩展功能独立编译为 exe，以便支持 WSL 连接扩展获取数据
 
 ### cli
-- ⬜TUI
+- ✅cli
+- ✅TUI
 - ⬜GUI
 
 ### Server

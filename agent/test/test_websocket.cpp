@@ -29,7 +29,7 @@ static asio::awaitable<void> test_ws_echo() {
         boost::beast::flat_buffer buf;
         for (;;) {
             buf.clear();
-            boost::system::error_code ec;
+            neograph_asio_error_code ec;
             co_await ws.async_read(buf, asio::redirect_error(asio::use_awaitable, ec));
             if (ec) {
                 co_return;
@@ -97,7 +97,7 @@ static asio::awaitable<void> test_ws_multiple_messages() {
         boost::beast::flat_buffer buf;
         for (;;) {
             buf.clear();
-            boost::system::error_code ec;
+            neograph_asio_error_code ec;
             co_await ws.async_read(buf, asio::redirect_error(asio::use_awaitable, ec));
             if (ec) {
                 co_return;
@@ -162,7 +162,7 @@ static asio::awaitable<void> test_ws_binary() {
         boost::beast::flat_buffer buf;
         for (;;) {
             buf.clear();
-            boost::system::error_code ec;
+            neograph_asio_error_code ec;
             co_await ws.async_read(buf, asio::redirect_error(asio::use_awaitable, ec));
             if (ec) {
                 co_return;
@@ -233,7 +233,7 @@ static asio::awaitable<void> test_ws_large_message() {
         boost::beast::flat_buffer buf;
         for (;;) {
             buf.clear();
-            boost::system::error_code ec;
+            neograph_asio_error_code ec;
             co_await ws.async_read(buf, asio::redirect_error(asio::use_awaitable, ec));
             if (ec) {
                 co_return;
@@ -297,7 +297,7 @@ static asio::awaitable<void> test_ws_ping_pong() {
         boost::beast::flat_buffer buf;
         for (;;) {
             buf.clear();
-            boost::system::error_code ec;
+            neograph_asio_error_code ec;
             co_await ws.async_read(buf, asio::redirect_error(asio::use_awaitable, ec));
             if (ec) {
                 co_return;
@@ -360,7 +360,7 @@ static asio::awaitable<void> test_ws_server_close() {
 
     server.enableWebSocket("/ws", [](HttpServer::WsStream& ws) -> asio::awaitable<void> {
         boost::beast::flat_buffer buf;
-        boost::system::error_code ec;
+        neograph_asio_error_code  ec;
         co_await ws.async_read(buf, asio::redirect_error(asio::use_awaitable, ec));
         if (ec) {
             co_return;
@@ -418,7 +418,7 @@ static asio::awaitable<void> test_ws_invalid_path() {
 
     server.enableWebSocket("/ws", [](HttpServer::WsStream& ws) -> asio::awaitable<void> {
         boost::beast::flat_buffer buf;
-        boost::system::error_code ec;
+        neograph_asio_error_code  ec;
         co_await ws.async_read(buf, asio::redirect_error(asio::use_awaitable, ec));
     });
 
@@ -486,7 +486,7 @@ static asio::awaitable<void> test_ws_concurrent_clients() {
         boost::beast::flat_buffer buf;
         for (;;) {
             buf.clear();
-            boost::system::error_code ec;
+            neograph_asio_error_code ec;
             co_await ws.async_read(buf, asio::redirect_error(asio::use_awaitable, ec));
             if (ec) {
                 co_return;
@@ -546,8 +546,8 @@ static asio::awaitable<void> test_ws_concurrent_clients() {
             TEST_FAIL << "ws concurrent client " << c << ": connect failed: " << result.error()
                       << std::endl;
         }
-        asio::steady_timer        delay(executor, std::chrono::milliseconds(100));
-        boost::system::error_code dec;
+        asio::steady_timer       delay(executor, std::chrono::milliseconds(100));
+        neograph_asio_error_code dec;
         co_await delay.async_wait(asio::redirect_error(asio::use_awaitable, dec));
     }
     XX_TEST_EXPECT_EQ(successCount, kNumClients);
@@ -567,7 +567,7 @@ static asio::awaitable<void> test_ws_client_disconnect() {
             boost::beast::flat_buffer buf;
             for (;;) {
                 buf.clear();
-                boost::system::error_code ec;
+                neograph_asio_error_code ec;
                 co_await ws.async_read(buf, asio::redirect_error(asio::use_awaitable, ec));
                 if (ec) {
                     if (ec == boost::beast::websocket::error::closed || ec == asio::error::eof
@@ -611,7 +611,7 @@ static asio::awaitable<void> test_ws_client_disconnect() {
     }
 
     asio::steady_timer timer(co_await asio::this_coro::executor, std::chrono::milliseconds(200));
-    boost::system::error_code tec;
+    neograph_asio_error_code tec;
     co_await timer.async_wait(asio::redirect_error(asio::use_awaitable, tec));
 
     XX_TEST_EXPECT_TRUE(serverDetectedClose);
@@ -628,7 +628,7 @@ static asio::awaitable<void> test_ws_start_async_mode() {
         boost::beast::flat_buffer buf;
         for (;;) {
             buf.clear();
-            boost::system::error_code ec;
+            neograph_asio_error_code ec;
             co_await ws.async_read(buf, asio::redirect_error(asio::use_awaitable, ec));
             if (ec) {
                 co_return;
@@ -711,7 +711,7 @@ static asio::awaitable<void> test_ws_recv_timeout() {
 
     server.enableWebSocket("/ws", [](HttpServer::WsStream& ws) -> asio::awaitable<void> {
         asio::steady_timer timer(co_await asio::this_coro::executor, std::chrono::seconds{30});
-        boost::system::error_code ec;
+        neograph_asio_error_code ec;
         co_await timer.async_wait(asio::redirect_error(asio::use_awaitable, ec));
     });
 
@@ -765,7 +765,7 @@ static asio::awaitable<void> test_ws_empty_message() {
         boost::beast::flat_buffer buf;
         for (;;) {
             buf.clear();
-            boost::system::error_code ec;
+            neograph_asio_error_code ec;
             co_await ws.async_read(buf, asio::redirect_error(asio::use_awaitable, ec));
             if (ec) {
                 co_return;
@@ -827,7 +827,7 @@ static asio::awaitable<void> test_ws_unicode() {
         boost::beast::flat_buffer buf;
         for (;;) {
             buf.clear();
-            boost::system::error_code ec;
+            neograph_asio_error_code ec;
             co_await ws.async_read(buf, asio::redirect_error(asio::use_awaitable, ec));
             if (ec) {
                 co_return;
@@ -905,7 +905,7 @@ static asio::awaitable<void> test_ws_http_and_ws_coexist() {
         boost::beast::flat_buffer buf;
         for (;;) {
             buf.clear();
-            boost::system::error_code ec;
+            neograph_asio_error_code ec;
             co_await ws.async_read(buf, asio::redirect_error(asio::use_awaitable, ec));
             if (ec) {
                 co_return;
@@ -984,7 +984,7 @@ static asio::awaitable<void> test_ws_send_after_close() {
 
     server.enableWebSocket("/ws", [](HttpServer::WsStream& ws) -> asio::awaitable<void> {
         boost::beast::flat_buffer buf;
-        boost::system::error_code ec;
+        neograph_asio_error_code  ec;
         co_await ws.async_read(buf, asio::redirect_error(asio::use_awaitable, ec));
     });
 

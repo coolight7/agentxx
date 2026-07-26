@@ -92,7 +92,7 @@ public:
 static asio::awaitable<void> testSleep(asio::any_io_executor ex, std::chrono::milliseconds d) {
     asio::steady_timer t(ex);
     t.expires_after(d);
-    boost::system::error_code ec;
+    neograph_asio_error_code ec;
     co_await t.async_wait(asio::redirect_error(asio::use_awaitable, ec));
 }
 
@@ -103,14 +103,14 @@ static asio::awaitable<void> testSleep(asio::any_io_executor ex, std::chrono::mi
 static asio::awaitable<bool> wsSendJson(HttpServer::WsStream& ws, const neograph::json& j) {
     auto s = j.dump();
     ws.text(true);
-    boost::system::error_code ec;
+    neograph_asio_error_code ec;
     co_await ws.async_write(asio::buffer(s), asio::redirect_error(asio::use_awaitable, ec));
     co_return !ec;
 }
 
 static asio::awaitable<std::optional<neograph::json>> wsRecvJson(HttpServer::WsStream& ws) {
     boost::beast::flat_buffer buf;
-    boost::system::error_code ec;
+    neograph_asio_error_code  ec;
     co_await ws.async_read(buf, asio::redirect_error(asio::use_awaitable, ec));
     if (ec) {
         co_return std::nullopt;
@@ -1244,7 +1244,7 @@ static asio::awaitable<void> test_remote_auth_timeout() {
         auto hello = co_await wsRecvJson(ws);
         if (hello) {
             asio::steady_timer timer(co_await asio::this_coro::executor, std::chrono::seconds{5});
-            boost::system::error_code ec;
+            neograph_asio_error_code ec;
             co_await timer.async_wait(asio::redirect_error(asio::use_awaitable, ec));
         }
     });

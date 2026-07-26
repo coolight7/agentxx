@@ -22,19 +22,19 @@ namespace remote {
 /// - 两种接入方式:
 ///   - WS/WSS 服务: start(ex) 启动 HttpServer, 每个 WS 连接 -> serveTransport
 ///   - 进程内: 直接 serveTransport(ChannelAgentIOTransport) 服务单个进程内连接
-/// - 安全: WS 模式默认仅监听 127.0.0.1; 强制 token 鉴权 (可经 autoGenerateToken 关闭, 仅进程内用)
+/// - 安全: WS 模式默认强制 token 鉴权 (可经 autoGenerateToken 关闭, 仅进程内用)
 class AgentServer {
 public:
 
     struct Config {
-        util::HttpServer::Config http; // address 缺省 "0.0.0.0" 时改为 "127.0.0.1"
-        std::string              wsPath = "/agent";
+        inline static const std::string defaultBasePath = "/deepagent";
+
+        util::HttpServer::Config http;  // address
         std::string              token; // 空且 autoGenerateToken 时自动生成
         /// 进程内可信连接可关闭鉴权 (token 留空即不校验)
         bool                 autoGenerateToken = true;
         std::chrono::seconds interruptTimeout{300};
-        std::chrono::seconds permissionTimeout{300};
-        std::chrono::seconds gracePeriod{30}; // 断线重挂宽限期
+        std::chrono::seconds gracePeriod{30}; // 断线重挂等待期
         size_t               deltaBufferCap = 4096;
     };
 

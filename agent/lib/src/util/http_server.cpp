@@ -58,8 +58,8 @@ HttpServer::~HttpServer() {
 
 uint16_t HttpServer::port() const noexcept {
     if (acceptor_ && acceptor_->is_open()) {
-        boost::system::error_code ec;
-        auto                      ep = acceptor_->local_endpoint(ec);
+        neograph_asio_error_code ec;
+        auto                     ep = acceptor_->local_endpoint(ec);
         if (!ec) {
             return ep.port();
         }
@@ -139,7 +139,7 @@ void HttpServer::stop() {
     if (!stopped_.compare_exchange_strong(expected, true)) {
         return;
     }
-    boost::system::error_code ec;
+    neograph_asio_error_code ec;
     if (acceptor_ && acceptor_->is_open()) {
         acceptor_->cancel(ec);
         acceptor_->close(ec);
@@ -225,8 +225,8 @@ asio::awaitable<void> HttpServer::acceptLoop() {
     using tcp     = asio::ip::tcp;
     auto executor = co_await asio::this_coro::executor;
     while (!stopped_) {
-        boost::system::error_code ec;
-        tcp::socket               socket
+        neograph_asio_error_code ec;
+        tcp::socket              socket
             = co_await acceptor_->async_accept(asio::redirect_error(asio::use_awaitable, ec));
         if (ec) {
             if (ec == asio::error::operation_aborted || ec == asio::error::connection_aborted) {
@@ -247,11 +247,11 @@ asio::awaitable<void> HttpServer::acceptLoop() {
             continue;
         }
 
-        boost::system::error_code tcpEc;
+        neograph_asio_error_code tcpEc;
         socket.set_option(asio::ip::tcp::no_delay(true), tcpEc);
 
         if (activeConnections_.load(std::memory_order_relaxed) >= config_.maxConnections) {
-            boost::system::error_code closeEc;
+            neograph_asio_error_code closeEc;
             socket.shutdown(tcp::socket::shutdown_both, closeEc);
             socket.close(closeEc);
             XX_LOGW("[server] Max connections reached, dropping client");
@@ -285,8 +285,8 @@ asio::awaitable<void> HttpServer::acceptLoopAsync() {
     using tcp     = asio::ip::tcp;
     auto executor = co_await asio::this_coro::executor;
     while (!stopped_) {
-        boost::system::error_code ec;
-        tcp::socket               socket
+        neograph_asio_error_code ec;
+        tcp::socket              socket
             = co_await acceptor_->async_accept(asio::redirect_error(asio::use_awaitable, ec));
         if (ec) {
             if (ec == asio::error::operation_aborted || ec == asio::error::connection_aborted) {
@@ -307,11 +307,11 @@ asio::awaitable<void> HttpServer::acceptLoopAsync() {
             continue;
         }
 
-        boost::system::error_code tcpEc;
+        neograph_asio_error_code tcpEc;
         socket.set_option(asio::ip::tcp::no_delay(true), tcpEc);
 
         if (activeConnections_.load(std::memory_order_relaxed) >= config_.maxConnections) {
-            boost::system::error_code closeEc;
+            neograph_asio_error_code closeEc;
             socket.shutdown(tcp::socket::shutdown_both, closeEc);
             socket.close(closeEc);
             XX_LOGW("[server] Max connections reached, dropping client");

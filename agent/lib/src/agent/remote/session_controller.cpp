@@ -64,8 +64,7 @@ asio::awaitable<neograph::json> SessionController::handleInterrupt(
     std::string_view interruptValue,
     std::string_view interruptArgJson
 ) {
-    auto timeout
-        = (interruptNode == "permission") ? config_.permissionTimeout : config_.interruptTimeout;
+    auto timeout = config_.interruptTimeout;
 
     auto    ch = std::make_shared<RespChannel>(ex_, 1);
     int64_t id;

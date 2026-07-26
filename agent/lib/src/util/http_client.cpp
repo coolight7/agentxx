@@ -357,14 +357,14 @@ asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::requestAsy
                     endpoints,
                     asio::cancel_after(config.connectTimeout, asio::use_awaitable)
                 );
-                boost::system::error_code tcpEc;
+                neograph_asio_error_code tcpEc;
                 stream.lowest_layer().set_option(asio::ip::tcp::no_delay(true), tcpEc);
                 co_await stream.async_handshake(
                     asio::ssl::stream_base::client,
                     asio::cancel_after(config.connectTimeout, asio::use_awaitable)
                 );
                 result = co_await exchange(stream, req, config);
-                boost::system::error_code sslEc;
+                neograph_asio_error_code sslEc;
                 co_await stream.async_shutdown(asio::redirect_error(asio::use_awaitable, sslEc));
             } else {
                 tcp::socket stream(executor);
@@ -373,7 +373,7 @@ asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::requestAsy
                     endpoints,
                     asio::cancel_after(config.connectTimeout, asio::use_awaitable)
                 );
-                boost::system::error_code tcpEc;
+                neograph_asio_error_code tcpEc;
                 stream.set_option(asio::ip::tcp::no_delay(true), tcpEc);
                 result = co_await exchange(stream, req, config);
             }

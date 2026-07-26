@@ -228,8 +228,8 @@ private:
     void confirmModelSelection();
     /// 应用设置中的主题选择
     void applyThemeSelection();
-    /// 取消当前正在执行的轮次
-    void cancelCurrentRun();
+    /// 取消当前正在执行的轮次; 调用方须持有 mutex_
+    void cancelCurrentRunLocked();
 
     /// 发送一条用户输入到 DeepAgent (刷新 currentToken / 追加 User 消息 / 置 streaming / 入
     /// channel)

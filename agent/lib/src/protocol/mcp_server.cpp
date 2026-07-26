@@ -675,7 +675,7 @@ asio::awaitable<void> McpServer::handleSseStream(
             auto               executor = co_await asio::this_coro::executor;
             asio::steady_timer timer(executor);
             timer.expires_after(std::chrono::seconds(15));
-            boost::system::error_code ec;
+            neograph_asio_error_code ec;
             co_await timer.async_wait(asio::redirect_error(asio::use_awaitable, ec));
         }
     } catch (...) {

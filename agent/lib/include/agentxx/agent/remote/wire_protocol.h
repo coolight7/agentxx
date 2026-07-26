@@ -13,7 +13,7 @@ namespace agent {
 namespace remote {
 
 /// 双向 WS JSON 消息类型常量
-/// - 信封约定: {"type": "<msgType>", "id": <opt requestId>, "thread": <threadId>, ...payload}
+/// - 约定: {"type": "<msgType>", "id": <opt requestId>, "thread": <threadId>, ...payload}
 struct MsgType {
     // ===== Client -> Server =====
     inline static constexpr std::string_view Hello             = "hello";

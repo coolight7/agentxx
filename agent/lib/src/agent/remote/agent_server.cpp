@@ -45,21 +45,21 @@ void AgentServer::start(asio::any_io_executor ex) {
     http_    = std::make_unique<util::HttpServer>(config_.http);
     bool ssl = !config_.http.sslCertFile.empty() && !config_.http.sslKeyFile.empty();
     if (ssl) {
-        http_->enableWebSocketSsl(config_.wsPath, [this](util::HttpServer::WssStream& ws) {
+        http_->enableWebSocketSsl(config_.defaultBasePath, [this](util::HttpServer::WssStream& ws) {
             return handleWss(ws);
         });
     } else {
-        http_->enableWebSocket(config_.wsPath, [this](util::HttpServer::WsStream& ws) {
+        http_->enableWebSocket(config_.defaultBasePath, [this](util::HttpServer::WsStream& ws) {
             return handleWs(ws);
         });
     }
     http_->startAsync(ex);
     XX_OUT(
-        "[agent_server] deepagent {} service on {}:{} (path={}, token={})",
+        "[agent_server] DeepAgent {} service on {}:{}{} (token={})",
         ssl ? "WSS" : "WS",
         config_.http.address,
         port(),
-        config_.wsPath,
+        config_.defaultBasePath,
         config_.token
     );
 }
@@ -87,11 +87,10 @@ std::shared_ptr<SessionController> AgentServer::getOrCreateController(std::strin
     }
 
     SessionController::Config cfg;
-    cfg.threadId          = std::string{threadId};
-    cfg.interruptTimeout  = config_.interruptTimeout;
-    cfg.permissionTimeout = config_.permissionTimeout;
-    cfg.gracePeriod       = config_.gracePeriod;
-    cfg.deltaBufferCap    = config_.deltaBufferCap;
+    cfg.threadId         = std::string{threadId};
+    cfg.interruptTimeout = config_.interruptTimeout;
+    cfg.gracePeriod      = config_.gracePeriod;
+    cfg.deltaBufferCap   = config_.deltaBufferCap;
 
     auto ctrl                           = std::make_shared<SessionController>(ex_, agent_, cfg);
     controllers_[std::string{threadId}] = ctrl;
