@@ -51,10 +51,10 @@ public:
 
 private:
 
-    mutable std::shared_mutex                                  mutex_;
+    mutable std::shared_mutex                                               mutex_;
     std::map<std::string, ModelConfig, std::less<>>                         models_;
     std::map<std::string, std::shared_ptr<neograph::Provider>, std::less<>> providerCache_;
-    std::string                                                defaultName_;
+    std::string                                                             defaultName_;
 };
 
 } // namespace agent

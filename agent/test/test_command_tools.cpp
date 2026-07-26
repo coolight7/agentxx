@@ -471,16 +471,15 @@ asio::awaitable<void>
 // ---- #6: 超时清理子孙进程 ----
 
 asio::awaitable<void>
-    test_linux_timeout_kills_descendants(std::weak_ptr<agentxx::agent::AgentContext> agentContext
-    ) {
+    test_linux_timeout_kills_descendants(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::ExecuteLinuxCommandTool{agentContext};
     // bash 派生后台 sleep 子孙进程并持有 stdout 管道; 修复后经 setsid+killpg 整组清理
     auto args = neograph::json{
         {"command", "bash -c '(sleep 31.7 &) ; echo started; sleep 31.7'"},
         {"timeout", 1                                                    },
     };
-    auto start  = std::chrono::steady_clock::now();
-    auto result = co_await tool.execute_async(args);
+    auto start   = std::chrono::steady_clock::now();
+    auto result  = co_await tool.execute_async(args);
     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                        std::chrono::steady_clock::now() - start
     )
@@ -494,8 +493,9 @@ asio::awaitable<void>
     co_await delay.async_wait(asio::use_awaitable);
     auto checkArgs = neograph::json{
         {"command",
-         R"(A="sleep 31"; B=".7"; pgrep -f "$A$B" >/dev/null 2>&1 && echo ORPHAN_ALIVE || echo NO_ORPHAN)"},
-        {"timeout", 5},
+         R"(A="sleep 31"; B=".7"; pgrep -f "$A$B" >/dev/null 2>&1 && echo ORPHAN_ALIVE || echo NO_ORPHAN)"
+        },
+        {"timeout", 5                                                                                     },
     };
     auto check = co_await tool.execute_async(checkArgs);
     XX_TEST_EXPECT_TRUE(check.find("NO_ORPHAN") != std::string::npos);

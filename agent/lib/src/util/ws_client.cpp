@@ -386,24 +386,24 @@ std::unique_ptr<WsClient> wrapAcceptedWs(
     auto impl   = std::make_unique<WsClient::Impl>(std::move(ex), std::move(config));
     impl->isSsl = false;
     impl->ws    = std::make_unique<WsClient::Impl::WsStream>(std::move(ws));
-    impl->ws->set_option(boost::beast::websocket::stream_base::timeout::suggested(
-        boost::beast::role_type::server
-    ));
+    impl->ws->set_option(
+        boost::beast::websocket::stream_base::timeout::suggested(boost::beast::role_type::server)
+    );
     impl->ws->read_message_max(impl->config.maxMessageSize);
     return std::unique_ptr<WsClient>(new WsClient(std::move(impl)));
 }
 
 std::unique_ptr<WsClient> wrapAcceptedWss(
-    asio::any_io_executor ex,
+    asio::any_io_executor                                                               ex,
     boost::beast::websocket::stream<boost::beast::ssl_stream<boost::beast::tcp_stream>> wss,
-    WsClientConfig        config
+    WsClientConfig                                                                      config
 ) {
     auto impl   = std::make_unique<WsClient::Impl>(std::move(ex), std::move(config));
     impl->isSsl = true;
     impl->wss   = std::make_unique<WsClient::Impl::WssStream>(std::move(wss));
-    impl->wss->set_option(boost::beast::websocket::stream_base::timeout::suggested(
-        boost::beast::role_type::server
-    ));
+    impl->wss->set_option(
+        boost::beast::websocket::stream_base::timeout::suggested(boost::beast::role_type::server)
+    );
     impl->wss->read_message_max(impl->config.maxMessageSize);
     return std::unique_ptr<WsClient>(new WsClient(std::move(impl)));
 }

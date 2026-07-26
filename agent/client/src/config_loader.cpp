@@ -120,7 +120,7 @@ std::string resolveEnvVars(
         }
 
         std::string varName{input.substr(start + 2, close - start - 2)};
-        pos                 = close + 1;
+        pos = close + 1;
 
         auto ovIt = overrideEnvVars.find(varName);
         if (ovIt != overrideEnvVars.end()) {

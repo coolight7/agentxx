@@ -1,6 +1,5 @@
 #include "agentxx/expand/get_cpu_gpu_use.h"
 #include "agentxx/util/log.h"
-#include <fmt/format.h>
 #include "asio/steady_timer.hpp"
 #include "asio/use_awaitable.hpp"
 #include <fmt/format.h>
@@ -716,7 +715,10 @@ protected:
     }
 
     static asio::awaitable<void> queryAmdGpuUsage(GpuInfo& info, std::string_view devicePath) {
-        co_await readSysfsUint64(fmt::format("{}/mem_info_vram_used", devicePath), info.dedicatedVramUsedMB);
+        co_await readSysfsUint64(
+            fmt::format("{}/mem_info_vram_used", devicePath),
+            info.dedicatedVramUsedMB
+        );
         info.dedicatedVramUsedMB /= (1024 * 1024);
 
         uint64_t gpuBusy = 0;

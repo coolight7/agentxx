@@ -142,7 +142,9 @@ json AcpProtocolHandler::callClient(
     if (status != std::future_status::ready) {
         std::lock_guard lk(pendingMu_);
         pending_.erase(id);
-        throw std::runtime_error(fmt::format("AcpProtocolHandler::callClient: timeout for '{}'", method));
+        throw std::runtime_error(
+            fmt::format("AcpProtocolHandler::callClient: timeout for '{}'", method)
+        );
     }
     auto resp = fut.get();
     if (resp.contains("error")) {

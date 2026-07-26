@@ -14,7 +14,6 @@
 #include <fmt/format.h>
 #include <iostream>
 #include <memory>
-#include <fmt/format.h>
 
 namespace agentxx {
 namespace test {
@@ -57,7 +56,7 @@ asio::awaitable<void> test_interrupt_bus_request_response() {
     auto sessionBus
         = std::make_shared<agentxx::middleware::EventBus>(co_await asio::this_coro::executor);
 
-    auto io  = std::make_shared<MockIO>();
+    auto io          = std::make_shared<MockIO>();
     io->interruptTag = "answered";
     io->registerOnBus(sessionBus);
 
@@ -108,7 +107,7 @@ asio::awaitable<void> test_permission_bus_request_response() {
     auto sessionBus
         = std::make_shared<agentxx::middleware::EventBus>(co_await asio::this_coro::executor);
 
-    auto io  = std::make_shared<MockIO>();
+    auto io             = std::make_shared<MockIO>();
     io->permissionAllow = true;
     io->registerOnBus(sessionBus);
 
@@ -135,11 +134,11 @@ asio::awaitable<void> test_permission_bus_request_response() {
     // 切换为拒绝
     io->permissionAllow = false;
     auto respDeny       = co_await sessionBus
-                    ->request<agentxx::events::ReqPermission, agentxx::events::RespPermission>(
-                        agentxx::events::Topic::Permission,
-                        reqAllow,
-                        std::chrono::seconds(5)
-                    );
+                        ->request<agentxx::events::ReqPermission, agentxx::events::RespPermission>(
+                            agentxx::events::Topic::Permission,
+                            reqAllow,
+                            std::chrono::seconds(5)
+                        );
     XX_TEST_EXPECT_TRUE(respDeny.has_value());
     if (respDeny.has_value()) {
         XX_TEST_EXPECT_TRUE(respDeny->decision == agentxx::events::RespPermission::Decision::Deny);
@@ -173,7 +172,7 @@ asio::awaitable<void> test_registerOnBus_no_accumulation() {
             agentxx::events::Topic::Permission
         );
 
-    auto io  = std::make_shared<MockIO>();
+    auto io          = std::make_shared<MockIO>();
     io->interruptTag = "v1";
 
     // 模拟每个会话轮次都调用 registerOnBus (同一 IO 对象)

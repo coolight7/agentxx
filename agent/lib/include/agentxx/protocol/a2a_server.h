@@ -272,7 +272,7 @@ private:
     std::shared_ptr<agentxx::agent::DeepAgent> deepAgent_;
     std::unique_ptr<util::HttpServer>          httpServer_;
 
-    mutable std::mutex                                 tasksMutex_;
+    mutable std::mutex                                              tasksMutex_;
     std::map<std::string, std::shared_ptr<TaskRecord>, std::less<>> tasks_;
 
     struct SSEClient {
@@ -283,7 +283,7 @@ private:
     std::mutex                              sseClientsMutex_;
     std::vector<std::shared_ptr<SSEClient>> sseClients_;
 
-    std::mutex              workersMutex_;
+    std::mutex               workersMutex_;
     std::vector<std::thread> workers_;
 
     std::atomic<bool> stopped_{false};

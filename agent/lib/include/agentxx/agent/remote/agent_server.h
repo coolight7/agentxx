@@ -77,7 +77,7 @@ private:
     std::unique_ptr<util::HttpServer> http_;
     asio::any_io_executor             ex_;
 
-    std::mutex                                                controllersMutex_;
+    std::mutex                                                             controllersMutex_;
     std::map<std::string, std::shared_ptr<SessionController>, std::less<>> controllers_;
 };
 

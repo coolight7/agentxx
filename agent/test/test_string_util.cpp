@@ -324,9 +324,9 @@ void test_base64() {
 
     // 非法输入必须返回 nullopt (修复: 不能与空结果混淆)
     XX_TEST_EXPECT_FALSE(agentxx::util::base64Decode("!!!not base64!!!").has_value());
-    XX_TEST_EXPECT_FALSE(agentxx::util::base64Decode("====").has_value());      // 仅 padding
-    XX_TEST_EXPECT_FALSE(agentxx::util::base64Decode("Zm9vY").has_value());     // 数据长度 mod4==1 非法
-    XX_TEST_EXPECT_FALSE(agentxx::util::base64Decode("Zm=v").has_value());      // padding 位置非法
+    XX_TEST_EXPECT_FALSE(agentxx::util::base64Decode("====").has_value()); // 仅 padding
+    XX_TEST_EXPECT_FALSE(agentxx::util::base64Decode("Zm9vY").has_value()); // 数据长度 mod4==1 非法
+    XX_TEST_EXPECT_FALSE(agentxx::util::base64Decode("Zm=v").has_value()); // padding 位置非法
     XX_TEST_EXPECT_FALSE(agentxx::util::base64Decode("Zm9v YmFy").has_value()); // 含空格非法
 }
 
@@ -345,8 +345,7 @@ void test_convertCharset() {
     }
     // 非法编码名: 失败 (修复: 不能谎报成功)
     {
-        auto [ok, res]
-            = agentxx::util::convertCharset("hello", "NOT_A_REAL_ENCODING_XYZ", "UTF-8");
+        auto [ok, res] = agentxx::util::convertCharset("hello", "NOT_A_REAL_ENCODING_XYZ", "UTF-8");
         XX_TEST_EXPECT_FALSE(ok);
         XX_TEST_EXPECT_FALSE(res.has_value());
     }
@@ -379,7 +378,9 @@ void test_utf8Check() {
     // 非法/截断 UTF-8 返回 0
     XX_TEST_EXPECT_EQ(agentxx::util::utf8GetLengthCheckAvail(std::string("\xC0\x80", 2)), 0u);
     XX_TEST_EXPECT_EQ(agentxx::util::utf8GetLengthCheckAvail(std::string("\xFF\xFE", 2)), 0u);
-    XX_TEST_EXPECT_EQ(agentxx::util::utf8GetLengthCheckAvail(std::string("\xE4\xB8", 2)), 0u
+    XX_TEST_EXPECT_EQ(
+        agentxx::util::utf8GetLengthCheckAvail(std::string("\xE4\xB8", 2)),
+        0u
     ); // 截断的 3 字节序列
     XX_TEST_EXPECT_FALSE(agentxx::util::utf8IsAvail(std::string("\xFF\xFE", 2)));
     XX_TEST_EXPECT_FALSE(agentxx::util::utf8IsAvail(""));

@@ -89,7 +89,9 @@ asio::awaitable<std::string> CrossAgentQueryTool::execute_async(const neograph::
         );
     }
     if (resp->hasError) {
-        co_return neograph::json{{"error", resp->errorMessage}}.dump();
+        co_return neograph::json{
+            {"error", resp->errorMessage}
+        }.dump();
     }
     co_return resp->content;
 }

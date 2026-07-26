@@ -43,9 +43,13 @@ static void test_task_state_conversion() {
     XX_TEST_EXPECT_TRUE(taskStateFromString("TASK_STATE_COMPLETED") == A2aTaskState::Completed);
     XX_TEST_EXPECT_TRUE(taskStateFromString("TASK_STATE_FAILED") == A2aTaskState::Failed);
     XX_TEST_EXPECT_TRUE(taskStateFromString("TASK_STATE_CANCELED") == A2aTaskState::Canceled);
-    XX_TEST_EXPECT_TRUE(taskStateFromString("TASK_STATE_INPUT_REQUIRED") == A2aTaskState::InputRequired);
+    XX_TEST_EXPECT_TRUE(
+        taskStateFromString("TASK_STATE_INPUT_REQUIRED") == A2aTaskState::InputRequired
+    );
     XX_TEST_EXPECT_TRUE(taskStateFromString("TASK_STATE_REJECTED") == A2aTaskState::Rejected);
-    XX_TEST_EXPECT_TRUE(taskStateFromString("TASK_STATE_AUTH_REQUIRED") == A2aTaskState::AuthRequired);
+    XX_TEST_EXPECT_TRUE(
+        taskStateFromString("TASK_STATE_AUTH_REQUIRED") == A2aTaskState::AuthRequired
+    );
     XX_TEST_EXPECT_TRUE(taskStateFromString("invalid") == A2aTaskState::Unspecified);
     XX_TEST_EXPECT_TRUE(taskStateFromString("") == A2aTaskState::Unspecified);
 }
@@ -64,7 +68,12 @@ static void test_terminal_state() {
 }
 
 static void test_json_rpc_helpers() {
-    auto result = A2aServer::jsonRpcResult(json(1), json{{"key", "value"}});
+    auto result = A2aServer::jsonRpcResult(
+        json(1),
+        json{
+            {"key", "value"}
+    }
+    );
     XX_TEST_EXPECT_EQ(result["jsonrpc"].get<std::string>(), "2.0");
     XX_TEST_EXPECT_EQ(result["id"].get<int>(), 1);
     XX_TEST_EXPECT_TRUE(result.contains("result"));
@@ -107,7 +116,7 @@ static void test_extract_text_from_parts() {
         json{{"text", "world"}},
         json{{"data", json{{"key", "val"}}}},
     });
-    auto text = A2aServer::extractTextFromParts(parts);
+    auto text  = A2aServer::extractTextFromParts(parts);
     XX_TEST_EXPECT_EQ(text, "hello\nworld");
 
     json emptyParts = json::array();
@@ -197,7 +206,9 @@ static void test_client_extract_helpers() {
 // ---------------------------------------------------------------------------
 
 static uint16_t startServerThread(A2aServer& server, std::thread& th) {
-    th = std::thread([&server]() { server.start(); });
+    th = std::thread([&server]() {
+        server.start();
+    });
     while (server.port() == 0 && !server.isStopped()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
@@ -237,10 +248,12 @@ static asio::awaitable<void> test_a2a_server_integration() {
             XX_TEST_EXPECT_TRUE(card["supportedInterfaces"].is_array());
             XX_TEST_EXPECT_TRUE(card["supportedInterfaces"].size() > 0);
             XX_TEST_EXPECT_EQ(
-                card["supportedInterfaces"][0]["protocolBinding"].get<std::string>(), "JSONRPC"
+                card["supportedInterfaces"][0]["protocolBinding"].get<std::string>(),
+                "JSONRPC"
             );
             XX_TEST_EXPECT_EQ(
-                card["supportedInterfaces"][0]["protocolVersion"].get<std::string>(), "1.0"
+                card["supportedInterfaces"][0]["protocolVersion"].get<std::string>(),
+                "1.0"
             );
             XX_TEST_EXPECT_TRUE(card.contains("capabilities"));
             XX_TEST_EXPECT_TRUE(card["capabilities"]["streaming"].get<bool>());
@@ -304,7 +317,9 @@ static asio::awaitable<void> test_a2a_server_integration() {
     // --- SendMessage: missing parts ---
     {
         json params;
-        params["message"] = json{{"role", "ROLE_USER"}};
+        params["message"] = json{
+            {"role", "ROLE_USER"}
+        };
         auto result = co_await client.rpcCall("SendMessage", std::move(params));
         XX_TEST_EXPECT_FALSE(result.has_value());
     }
@@ -313,7 +328,7 @@ static asio::awaitable<void> test_a2a_server_integration() {
     {
         json params;
         params["message"] = json{
-            {"role", "ROLE_AGENT"},
+            {"role",  "ROLE_AGENT"                          },
             {"parts", json::array({json{{"text", "hello"}}})},
         };
         auto result = co_await client.rpcCall("SendMessage", std::move(params));
@@ -322,14 +337,16 @@ static asio::awaitable<void> test_a2a_server_integration() {
 
     // --- Version negotiation: unsupported version ---
     {
-        auto url = baseUrl + "/a2a";
+        auto            url = baseUrl + "/a2a";
         util::HeaderMap headers;
         headers.set("A2A-Version", "99.0");
         json request;
         request["jsonrpc"] = "2.0";
         request["id"]      = 1;
         request["method"]  = "GetTask";
-        request["params"]  = json{{"id", "x"}};
+        request["params"]  = json{
+             {"id", "x"}
+        };
 
         auto resp = co_await util::HttpClient::postAsync(
             url,
@@ -352,7 +369,7 @@ static asio::awaitable<void> test_a2a_server_integration() {
 
     // --- Version negotiation: valid version 0.3 ---
     {
-        auto url = baseUrl + "/a2a";
+        auto            url = baseUrl + "/a2a";
         util::HeaderMap headers;
         headers.set("A2A-Version", "0.3");
         json request;
@@ -381,7 +398,7 @@ static asio::awaitable<void> test_a2a_server_integration() {
 
     // --- Invalid JSON body ---
     {
-        auto url = baseUrl + "/a2a";
+        auto url  = baseUrl + "/a2a";
         auto resp = co_await util::HttpClient::postAsync(
             url,
             std::string_view("not valid json{{{"),
@@ -466,7 +483,7 @@ static asio::awaitable<void> test_a2a_send_message_creates_task() {
     std::thread serverThread;
     auto        port = startServerThread(server, serverThread);
 
-    auto baseUrl = "http://127.0.0.1:" + std::to_string(port);
+    auto              baseUrl = "http://127.0.0.1:" + std::to_string(port);
     A2aClient::Config clientCfg;
     clientCfg.baseUrl = baseUrl;
     A2aClient client(std::move(clientCfg));
@@ -480,16 +497,12 @@ static asio::awaitable<void> test_a2a_send_message_creates_task() {
         taskId = A2aClient::extractTaskId(sendResult.value());
         XX_TEST_EXPECT_FALSE(taskId.empty());
         auto state = A2aClient::extractTaskState(sendResult.value()["task"]);
-        XX_TEST_EXPECT_TRUE(
-            state == "TASK_STATE_WORKING" || state == "TASK_STATE_SUBMITTED"
-        );
+        XX_TEST_EXPECT_TRUE(state == "TASK_STATE_WORKING" || state == "TASK_STATE_SUBMITTED");
     }
 
     // Wait a bit for the execution thread to finish (it will fail since no DeepAgent)
-    co_await asio::steady_timer(
-        co_await asio::this_coro::executor, std::chrono::milliseconds(200)
-    )
-                 .async_wait(asio::use_awaitable);
+    co_await asio::steady_timer(co_await asio::this_coro::executor, std::chrono::milliseconds(200))
+        .async_wait(asio::use_awaitable);
 
     // GetTask should find the task
     if (!taskId.empty()) {
@@ -530,7 +543,7 @@ static asio::awaitable<void> test_a2a_cancel_terminal_task() {
     std::thread serverThread;
     auto        port = startServerThread(server, serverThread);
 
-    auto baseUrl = "http://127.0.0.1:" + std::to_string(port);
+    auto              baseUrl = "http://127.0.0.1:" + std::to_string(port);
     A2aClient::Config clientCfg;
     clientCfg.baseUrl = baseUrl;
     A2aClient client(std::move(clientCfg));
@@ -544,10 +557,8 @@ static asio::awaitable<void> test_a2a_cancel_terminal_task() {
     }
 
     // Wait for execution to finish (will fail since no DeepAgent -> terminal state)
-    co_await asio::steady_timer(
-        co_await asio::this_coro::executor, std::chrono::milliseconds(200)
-    )
-                 .async_wait(asio::use_awaitable);
+    co_await asio::steady_timer(co_await asio::this_coro::executor, std::chrono::milliseconds(200))
+        .async_wait(asio::use_awaitable);
 
     // Cancel should fail on terminal state
     if (!taskId.empty()) {
@@ -576,7 +587,7 @@ static asio::awaitable<void> test_a2a_list_tasks_filters() {
     std::thread serverThread;
     auto        port = startServerThread(server, serverThread);
 
-    auto baseUrl = "http://127.0.0.1:" + std::to_string(port);
+    auto              baseUrl = "http://127.0.0.1:" + std::to_string(port);
     A2aClient::Config clientCfg;
     clientCfg.baseUrl = baseUrl;
     A2aClient client(std::move(clientCfg));
@@ -586,10 +597,8 @@ static asio::awaitable<void> test_a2a_list_tasks_filters() {
     XX_TEST_EXPECT_TRUE(sendResult.has_value());
 
     // Wait for execution
-    co_await asio::steady_timer(
-        co_await asio::this_coro::executor, std::chrono::milliseconds(200)
-    )
-                 .async_wait(asio::use_awaitable);
+    co_await asio::steady_timer(co_await asio::this_coro::executor, std::chrono::milliseconds(200))
+        .async_wait(asio::use_awaitable);
 
     // Filter by contextId
     {
@@ -637,12 +646,12 @@ static void test_agent_card_structure() {
     cfg.inputModes         = {"text/plain", "application/json"};
     cfg.outputModes        = {"text/plain"};
     cfg.skills             = {
-        {"skill-1", "Skill One", "First skill", {"tag1", "tag2"}, {"example1"}},
-        {"skill-2", "Skill Two", "Second skill", {"tag3"}, {}},
+        {"skill-1", "Skill One", "First skill",  {"tag1", "tag2"}, {"example1"}},
+        {"skill-2", "Skill Two", "Second skill", {"tag3"},         {}          },
     };
 
     A2aServer server(nullptr, std::move(cfg));
-    auto card = server.agentCard();
+    auto      card = server.agentCard();
 
     XX_TEST_EXPECT_EQ(card["name"].get<std::string>(), "card-test");
     XX_TEST_EXPECT_EQ(card["description"].get<std::string>(), "Card structure test");
@@ -676,7 +685,7 @@ static asio::awaitable<void> test_a2a_send_to_terminal_task() {
     std::thread serverThread;
     auto        port = startServerThread(server, serverThread);
 
-    auto baseUrl = "http://127.0.0.1:" + std::to_string(port);
+    auto              baseUrl = "http://127.0.0.1:" + std::to_string(port);
     A2aClient::Config clientCfg;
     clientCfg.baseUrl = baseUrl;
     A2aClient client(std::move(clientCfg));
@@ -689,10 +698,8 @@ static asio::awaitable<void> test_a2a_send_to_terminal_task() {
         taskId = A2aClient::extractTaskId(sendResult.value());
     }
 
-    co_await asio::steady_timer(
-        co_await asio::this_coro::executor, std::chrono::milliseconds(200)
-    )
-                 .async_wait(asio::use_awaitable);
+    co_await asio::steady_timer(co_await asio::this_coro::executor, std::chrono::milliseconds(200))
+        .async_wait(asio::use_awaitable);
 
     // Try to send another message to the same task (should fail - terminal state)
     if (!taskId.empty()) {
@@ -721,7 +728,7 @@ static asio::awaitable<void> test_a2a_get_task_history() {
     std::thread serverThread;
     auto        port = startServerThread(server, serverThread);
 
-    auto baseUrl = "http://127.0.0.1:" + std::to_string(port);
+    auto              baseUrl = "http://127.0.0.1:" + std::to_string(port);
     A2aClient::Config clientCfg;
     clientCfg.baseUrl = baseUrl;
     A2aClient client(std::move(clientCfg));
@@ -733,10 +740,8 @@ static asio::awaitable<void> test_a2a_get_task_history() {
         taskId = A2aClient::extractTaskId(sendResult.value());
     }
 
-    co_await asio::steady_timer(
-        co_await asio::this_coro::executor, std::chrono::milliseconds(200)
-    )
-                 .async_wait(asio::use_awaitable);
+    co_await asio::steady_timer(co_await asio::this_coro::executor, std::chrono::milliseconds(200))
+        .async_wait(asio::use_awaitable);
 
     if (!taskId.empty()) {
         // Get with history

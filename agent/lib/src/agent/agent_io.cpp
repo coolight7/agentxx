@@ -60,7 +60,9 @@ void AgentIOBase::sendUserInput(
     bool             isFirstMsg,
     std::string_view model
 ) {
-    sendToPeer(WireUserInput{std::string{threadId}, std::string{text}, isFirstMsg, std::string{model}});
+    sendToPeer(
+        WireUserInput{std::string{threadId}, std::string{text}, isFirstMsg, std::string{model}}
+    );
 }
 
 // ---------------------------------------------------------------------------

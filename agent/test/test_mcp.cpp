@@ -1821,9 +1821,8 @@ asio::awaitable<void> test_mcp_client_accept_header() {
 
     using Handler = Server::Handler;
     auto handler  = std::make_shared<Handler>(
-        [](Server::Request&  req,
-           Server::Response& resp,
-           std::string_view) -> asio::awaitable<void> {
+        [](Server::Request& req, Server::Response& resp, std::string_view
+        ) -> asio::awaitable<void> {
             namespace http = boost::beast::http;
 
             auto accept = req[http::field::accept];

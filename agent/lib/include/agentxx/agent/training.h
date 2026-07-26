@@ -94,8 +94,8 @@ inline std::vector<TrainingTestCase> loadTestCasesFromDirectory(std::string_view
 /// 剥离 LLM 响应中可能存在的 Markdown 代码块标记
 inline std::string stripMarkdownCodeBlock(std::string_view content) {
     std::string result{content};
-    auto        start  = result.find_first_not_of(" \t\n\r");
-    auto        end    = result.find_last_not_of(" \t\n\r");
+    auto        start = result.find_first_not_of(" \t\n\r");
+    auto        end   = result.find_last_not_of(" \t\n\r");
     if (start == std::string::npos) {
         return result;
     }

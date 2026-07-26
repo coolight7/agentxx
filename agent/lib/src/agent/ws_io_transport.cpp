@@ -97,9 +97,7 @@ asio::awaitable<bool> WsAgentIOTransport::connect(const WireHello& hello) {
 
     // 客户端模式: 发送 hello 并等待 helloAck
     // 注意: HelloAck 在此处被消费 (仅用于握手判断), 不会传递给 runTransportLoop 的调用方
-    auto helloJson = remote::makeHello(
-        hello.threadId, hello.token, hello.lastSeq, hello.tailHash
-    );
+    auto helloJson = remote::makeHello(hello.threadId, hello.token, hello.lastSeq, hello.tailHash);
     writeQueue_->try_send(ErrorCode{}, helloJson.dump());
 
     try {
@@ -126,8 +124,7 @@ void WsAgentIOTransport::close() {
 }
 
 bool WsAgentIOTransport::alive() const noexcept {
-    return !stopped_.load(std::memory_order_acquire)
-        && connected_.load(std::memory_order_acquire);
+    return !stopped_.load(std::memory_order_acquire) && connected_.load(std::memory_order_acquire);
 }
 
 // ---------------------------------------------------------------------------
@@ -136,9 +133,27 @@ bool WsAgentIOTransport::alive() const noexcept {
 
 void WsAgentIOTransport::spawnLoops() {
     auto self = shared_from_this();
-    asio::co_spawn(ex_, [self]() -> asio::awaitable<void> { co_await self->writeLoop(); }, asio::detached);
-    asio::co_spawn(ex_, [self]() -> asio::awaitable<void> { co_await self->readLoop(); }, asio::detached);
-    asio::co_spawn(ex_, [self]() -> asio::awaitable<void> { co_await self->heartbeatLoop(); }, asio::detached);
+    asio::co_spawn(
+        ex_,
+        [self]() -> asio::awaitable<void> {
+            co_await self->writeLoop();
+        },
+        asio::detached
+    );
+    asio::co_spawn(
+        ex_,
+        [self]() -> asio::awaitable<void> {
+            co_await self->readLoop();
+        },
+        asio::detached
+    );
+    asio::co_spawn(
+        ex_,
+        [self]() -> asio::awaitable<void> {
+            co_await self->heartbeatLoop();
+        },
+        asio::detached
+    );
 }
 
 void WsAgentIOTransport::stopLoops() {
@@ -159,7 +174,9 @@ void WsAgentIOTransport::stopLoops() {
 asio::awaitable<void> WsAgentIOTransport::writeLoop() {
     auto queue  = writeQueue_;
     auto client = wsClient_;
-    if (!queue || !client) co_return;
+    if (!queue || !client) {
+        co_return;
+    }
     for (;;) {
         std::string text;
         try {
@@ -177,7 +194,9 @@ asio::awaitable<void> WsAgentIOTransport::writeLoop() {
 
 asio::awaitable<void> WsAgentIOTransport::readLoop() {
     auto client = wsClient_;
-    if (!client) co_return;
+    if (!client) {
+        co_return;
+    }
 
     for (;;) {
         bool disconnected = false;
@@ -205,7 +224,8 @@ asio::awaitable<void> WsAgentIOTransport::readLoop() {
                 uint64_t seq = delta->seq;
                 uint64_t cur = lastDeltaSeq_.load(std::memory_order_acquire);
                 while (seq > cur
-                       && !lastDeltaSeq_.compare_exchange_weak(cur, seq, std::memory_order_acq_rel)) {
+                       && !lastDeltaSeq_.compare_exchange_weak(cur, seq, std::memory_order_acq_rel)
+                ) {
                 }
             } else if (auto* sync = std::get_if<SyncPayload>(&wireMsg.value())) {
                 lastTailHash_ = sync->tailHash;
@@ -226,7 +246,7 @@ asio::awaitable<void> WsAgentIOTransport::readLoop() {
 
         // 客户端模式: 自动重连
         connected_.store(false, std::memory_order_release);
-        int attempts = 0;
+        int  attempts    = 0;
         bool reconnected = false;
         while (!stopped_.load(std::memory_order_acquire)) {
             ++attempts;
@@ -237,10 +257,14 @@ asio::awaitable<void> WsAgentIOTransport::readLoop() {
             backoff.expires_after(config_.reconnectBackoff);
             ErrorCode ec;
             co_await backoff.async_wait(asio::redirect_error(asio::use_awaitable, ec));
-            if (stopped_.load(std::memory_order_acquire)) break;
+            if (stopped_.load(std::memory_order_acquire)) {
+                break;
+            }
 
             auto newClient = co_await util::wsConnect(ex_, url_, {}, wsConfig_);
-            if (!newClient) continue;
+            if (!newClient) {
+                continue;
+            }
 
             client    = std::shared_ptr<util::WsClient>(std::move(newClient.value()));
             wsClient_ = client;
@@ -253,7 +277,9 @@ asio::awaitable<void> WsAgentIOTransport::readLoop() {
             auto self   = shared_from_this();
             asio::co_spawn(
                 ex_,
-                [self]() -> asio::awaitable<void> { co_await self->writeLoop(); },
+                [self]() -> asio::awaitable<void> {
+                    co_await self->writeLoop();
+                },
                 asio::detached
             );
 
@@ -268,7 +294,9 @@ asio::awaitable<void> WsAgentIOTransport::readLoop() {
             reconnected = true;
             break;
         }
-        if (!reconnected) break;
+        if (!reconnected) {
+            break;
+        }
     }
 
     if (recvQueue_) {
@@ -278,7 +306,9 @@ asio::awaitable<void> WsAgentIOTransport::readLoop() {
 
 asio::awaitable<void> WsAgentIOTransport::heartbeatLoop() {
     auto timer = heartbeatTimer_;
-    if (!timer) co_return;
+    if (!timer) {
+        co_return;
+    }
     for (;;) {
         timer->expires_after(config_.heartbeatInterval);
         ErrorCode ec;
@@ -451,7 +481,7 @@ std::optional<WireMessage> WsAgentIOTransport::deserialize(std::string_view json
         return WireMessage{std::move(sm)};
     } else if (t == remote::MsgType::ContextStats) {
         WireContextStats stats;
-        stats.contextTokens     = j.value("context_tokens", uint64_t{0});
+        stats.contextTokens    = j.value("context_tokens", uint64_t{0});
         stats.maxContextTokens = j.value("max_context_tokens", uint64_t{0});
         return WireMessage{std::move(stats)};
     } else if (t == remote::MsgType::ErrorMsg) {

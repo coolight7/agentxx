@@ -59,7 +59,9 @@ asio::awaitable<std::string> CodeGraphSearchTool::execute_async(const neograph::
 
     auto result = codegraph->searchSymbols(query, limit);
     if (!result.success) {
-        co_return neograph::json{{"error", result.error}}.dump();
+        co_return neograph::json{
+            {"error", result.error}
+        }.dump();
     }
 
     auto json = neograph::json::array();
@@ -132,7 +134,9 @@ asio::awaitable<std::string> CodeGraphContextTool::execute_async(const neograph:
 
     auto result = codegraph->getSymbolContext(symbol, limit, max_depth);
     if (!result.success) {
-        co_return neograph::json{{"error", result.error}}.dump();
+        co_return neograph::json{
+            {"error", result.error}
+        }.dump();
     }
 
     co_return result.context.dump();
@@ -186,7 +190,9 @@ asio::awaitable<std::string> CodeGraphCallersTool::execute_async(const neograph:
 
     auto result = codegraph->getCallers(symbol, max_depth);
     if (!result.success) {
-        co_return neograph::json{{"error", result.error}}.dump();
+        co_return neograph::json{
+            {"error", result.error}
+        }.dump();
     }
     co_return result.impact.dump();
 }
@@ -239,7 +245,9 @@ asio::awaitable<std::string> CodeGraphCalleesTool::execute_async(const neograph:
 
     auto result = codegraph->getCallees(symbol, max_depth);
     if (!result.success) {
-        co_return neograph::json{{"error", result.error}}.dump();
+        co_return neograph::json{
+            {"error", result.error}
+        }.dump();
     }
     co_return result.impact.dump();
 }
@@ -292,7 +300,9 @@ asio::awaitable<std::string> CodeGraphImpactTool::execute_async(const neograph::
 
     auto result = codegraph->getImpact(symbol, max_depth);
     if (!result.success) {
-        co_return neograph::json{{"error", result.error}}.dump();
+        co_return neograph::json{
+            {"error", result.error}
+        }.dump();
     }
     co_return result.impact.dump();
 }
@@ -321,7 +331,9 @@ neograph::ChatTool CodeGraphStatusTool::get_definition() const {
 asio::awaitable<std::string> CodeGraphStatusTool::execute_async(const neograph::json& arguments) {
     auto result = codegraph->getStatus();
     if (!result.success) {
-        co_return neograph::json{{"error", result.error}}.dump();
+        co_return neograph::json{
+            {"error", result.error}
+        }.dump();
     }
 
     co_return fmt::format(
@@ -450,7 +462,9 @@ asio::awaitable<std::string> CodeGraphPathTool::execute_async(const neograph::js
 
     auto result = codegraph->findPath(from, to, max_depth);
     if (!result.success) {
-        co_return neograph::json{{"error", result.error}}.dump();
+        co_return neograph::json{
+            {"error", result.error}
+        }.dump();
     }
 
     auto json = neograph::json::array();
