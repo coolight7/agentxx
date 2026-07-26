@@ -91,15 +91,15 @@ asio::awaitable<std::expected<std::unique_ptr<WsClient>, std::string>> wsConnect
 
 /// 从已 accept 的服务端 WS stream 创建 WsClient (供 AgentServer 使用)
 std::unique_ptr<WsClient> wrapAcceptedWs(
-    asio::any_io_executor                                              ex,
-    boost::beast::websocket::stream<boost::beast::tcp_stream>          ws,
-    WsClientConfig                                                     config = {}
+    asio::any_io_executor                                     ex,
+    boost::beast::websocket::stream<boost::beast::tcp_stream> ws,
+    WsClientConfig                                            config = {}
 );
 
 std::unique_ptr<WsClient> wrapAcceptedWss(
-    asio::any_io_executor ex,
+    asio::any_io_executor                                                               ex,
     boost::beast::websocket::stream<boost::beast::ssl_stream<boost::beast::tcp_stream>> wss,
-    WsClientConfig        config = {}
+    WsClientConfig                                                                      config = {}
 );
 
 } // namespace util

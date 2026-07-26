@@ -243,7 +243,7 @@ AnthropicProvider::ParsedEndpoint AnthropicProvider::parseEndpoint(std::string_v
     auto        rest      = base_url.substr(schemeEnd + 3);
     auto        pathStart = rest.find('/');
     std::string hostPort{(pathStart == std::string::npos) ? rest : rest.substr(0, pathStart)};
-    ep.prefix             = (pathStart == std::string::npos) ? "" : rest.substr(pathStart);
+    ep.prefix = (pathStart == std::string::npos) ? "" : rest.substr(pathStart);
 
     ep.port = (ep.scheme == "https") ? 443 : 80;
 

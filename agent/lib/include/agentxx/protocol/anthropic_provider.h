@@ -119,11 +119,10 @@ public:
         while (lineStart < block.size()) {
             auto        lineEnd = block.find('\n', lineStart);
             std::string line{
-                (lineEnd == std::string::npos)
-                    ? block.substr(lineStart)
-                    : block.substr(lineStart, lineEnd - lineStart)
+                (lineEnd == std::string::npos) ? block.substr(lineStart)
+                                               : block.substr(lineStart, lineEnd - lineStart)
             };
-            lineStart           = (lineEnd == std::string::npos) ? block.size() : lineEnd + 1;
+            lineStart = (lineEnd == std::string::npos) ? block.size() : lineEnd + 1;
 
             if (!line.empty() && line.back() == '\r') {
                 line.pop_back();

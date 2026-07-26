@@ -709,7 +709,7 @@ asio::awaitable<DeepAgent::ConversationTurnResult> DeepAgent::runConversationTur
             );
 
             auto cfg = neograph::graph::RunConfig{
-        .thread_id        = std::string{threadId},
+                .thread_id        = std::string{threadId},
                 .input            = {{"messages", session->llmMessages}},
                 .max_steps        = 1024,
                 .stream_mode      = neograph::graph::StreamMode::ALL,
@@ -752,16 +752,19 @@ asio::awaitable<DeepAgent::ConversationTurnResult> DeepAgent::runConversationTur
                     result->interrupt_value
                 );
 
-                engine->update_state(std::string{threadId}, [&](neograph::graph::GraphState& state) {
-                    auto data = agentContext->middlewareHandleContext->getGraphDataToState(
-                        state,
-                        threadId
-                    );
-                    state.overwrite(
-                        agentxx::middleware::MiddlewareContext::channel_savedGraphData,
-                        data
-                    );
-                });
+                engine->update_state(
+                    std::string{threadId},
+                    [&](neograph::graph::GraphState& state) {
+                        auto data = agentContext->middlewareHandleContext->getGraphDataToState(
+                            state,
+                            threadId
+                        );
+                        state.overwrite(
+                            agentxx::middleware::MiddlewareContext::channel_savedGraphData,
+                            data
+                        );
+                    }
+                );
 
                 auto crudeResult = std::move(result);
                 result           = std::nullopt;
@@ -883,11 +886,15 @@ asio::awaitable<DeepAgent::ConversationTurnResult> DeepAgent::runConversationTur
                         resumeValues
                     );
 
-                    engine->update_state(std::string{threadId}, [&](neograph::graph::GraphState& state) {
-                        state.overwrite("messages", session->llmMessages);
-                    });
+                    engine->update_state(
+                        std::string{threadId},
+                        [&](neograph::graph::GraphState& state) {
+                            state.overwrite("messages", session->llmMessages);
+                        }
+                    );
 
-                    result = co_await engine->resume_async(std::string{threadId}, nullptr, eventCallback);
+                    result = co_await engine
+                                 ->resume_async(std::string{threadId}, nullptr, eventCallback);
 
                     if (!result->interrupted) {
                         session->llmMessages = result->channel_raw("messages");

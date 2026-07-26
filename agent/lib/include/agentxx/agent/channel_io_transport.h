@@ -23,7 +23,8 @@ public:
     ChannelAgentIOTransport(std::shared_ptr<Chan> outgoing, std::shared_ptr<Chan> incoming);
 
     /// 创建互连的一对传输: first=client 端, second=server 端
-    static std::pair<std::unique_ptr<ChannelAgentIOTransport>, std::unique_ptr<ChannelAgentIOTransport>>
+    static std::
+        pair<std::unique_ptr<ChannelAgentIOTransport>, std::unique_ptr<ChannelAgentIOTransport>>
         makePair(asio::any_io_executor clientEx, asio::any_io_executor serverEx, size_t cap = 4096);
 
     void send(WireMessage msg) override;

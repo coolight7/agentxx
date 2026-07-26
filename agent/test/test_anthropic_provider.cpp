@@ -488,9 +488,8 @@ std::unique_ptr<MockAnthropicServer> startAnthropicMockServer(uint16_t& outPort)
     );
 
     auto handle = [mock = mock.get(
-                   )](HttpServer::Request&  req,
-                      HttpServer::Response& resp,
-                      std::string_view) -> asio::awaitable<void> {
+                   )](HttpServer::Request& req, HttpServer::Response& resp, std::string_view
+                  ) -> asio::awaitable<void> {
         mock->lastRequestBody = req.body();
         // Capture headers for verification
         std::string headers;
@@ -1705,23 +1704,34 @@ void test_anthropic_sse_parsing_edge_cases() {
         std::map<int, neograph::ToolCall> tcMap;
         std::map<int, std::string>        blockTypes;
         AnthropicProvider::processSseBuffer(
-            buf, completion, content, thinking, tcMap, blockTypes, nullptr
+            buf,
+            completion,
+            content,
+            thinking,
+            tcMap,
+            blockTypes,
+            nullptr
         );
         XX_TEST_EXPECT_EQ(content, "Hi");
     }
 
     // B1: 同一事件的多个 data: 行应按 SSE 规范以 "\n" 拼接后再解析
     {
-        std::string buf
-            = "event: content_block_delta\n"
-              "data: {\"type\":\"content_block_delta\",\"index\":0,\n"
-              "data: \"delta\":{\"type\":\"text_delta\",\"text\":\"AB\"}}\n\n";
+        std::string                       buf = "event: content_block_delta\n"
+                                                "data: {\"type\":\"content_block_delta\",\"index\":0,\n"
+                                                "data: \"delta\":{\"type\":\"text_delta\",\"text\":\"AB\"}}\n\n";
         neograph::ChatCompletion          completion;
         std::string                       content, thinking;
         std::map<int, neograph::ToolCall> tcMap;
         std::map<int, std::string>        blockTypes;
         AnthropicProvider::processSseBuffer(
-            buf, completion, content, thinking, tcMap, blockTypes, nullptr
+            buf,
+            completion,
+            content,
+            thinking,
+            tcMap,
+            blockTypes,
+            nullptr
         );
         // 修复前仅保留最后一个 data: 行 -> 非法 JSON -> content 为空
         XX_TEST_EXPECT_EQ(content, "AB");
@@ -1739,12 +1749,26 @@ void test_anthropic_sse_parsing_edge_cases() {
         std::map<int, std::string>        blockTypes;
         // finalFlush=false: 事件不完整, 暂不解析
         AnthropicProvider::processSseBuffer(
-            buf, completion, content, thinking, tcMap, blockTypes, nullptr, /*finalFlush=*/false
+            buf,
+            completion,
+            content,
+            thinking,
+            tcMap,
+            blockTypes,
+            nullptr,
+            /*finalFlush=*/false
         );
         XX_TEST_EXPECT_EQ(content, "");
         // finalFlush=true: 解析末尾块
         AnthropicProvider::processSseBuffer(
-            buf, completion, content, thinking, tcMap, blockTypes, nullptr, /*finalFlush=*/true
+            buf,
+            completion,
+            content,
+            thinking,
+            tcMap,
+            blockTypes,
+            nullptr,
+            /*finalFlush=*/true
         );
         XX_TEST_EXPECT_EQ(content, "End");
     }

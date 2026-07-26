@@ -273,9 +273,9 @@ std::unique_ptr<MockOpenAIServer> startMockServer(uint16_t& outPort) {
         "/chat/completions",
         2,
         std::make_shared<HttpServer::Handler>(
-            [mock
-             = mock.get()](HttpServer::Request& req, HttpServer::Response& resp, std::string_view)
-                -> asio::awaitable<void> {
+            [mock = mock.get(
+             )](HttpServer::Request& req, HttpServer::Response& resp, std::string_view
+            ) -> asio::awaitable<void> {
                 mock->lastRequestBody = req.body();
 
                 switch (mock->mode) {
@@ -1859,9 +1859,9 @@ void test_openai_sse_parsing_edge_cases() {
 
     // B2: "data:" 冒号后无单个空格也必须解析
     {
-        std::string buf = "data:{\"choices\":[{\"delta\":{\"content\":\"Hi\"}}]}\n\n";
-        neograph::ChatCompletion          completion;
-        std::string                       content, thinking;
+        std::string              buf = "data:{\"choices\":[{\"delta\":{\"content\":\"Hi\"}}]}\n\n";
+        neograph::ChatCompletion completion;
+        std::string              content, thinking;
         std::map<int, neograph::ToolCall> tcMap;
         OpenAIProvider::processSseBuffer(buf, completion, content, thinking, tcMap, nullptr);
         XX_TEST_EXPECT_EQ(content, "Hi");
@@ -1869,16 +1869,29 @@ void test_openai_sse_parsing_edge_cases() {
 
     // B3: 连接关闭时末尾未以 "\n" 结尾的行, finalFlush=true 时应补解析
     {
-        std::string buf = "data: {\"choices\":[{\"delta\":{\"content\":\"End\"}}]}"; // 无 trailing \n
+        std::string buf
+            = "data: {\"choices\":[{\"delta\":{\"content\":\"End\"}}]}"; // 无 trailing \n
         neograph::ChatCompletion          completion;
         std::string                       content, thinking;
         std::map<int, neograph::ToolCall> tcMap;
         OpenAIProvider::processSseBuffer(
-            buf, completion, content, thinking, tcMap, nullptr, /*finalFlush=*/false
+            buf,
+            completion,
+            content,
+            thinking,
+            tcMap,
+            nullptr,
+            /*finalFlush=*/false
         );
         XX_TEST_EXPECT_EQ(content, "");
         OpenAIProvider::processSseBuffer(
-            buf, completion, content, thinking, tcMap, nullptr, /*finalFlush=*/true
+            buf,
+            completion,
+            content,
+            thinking,
+            tcMap,
+            nullptr,
+            /*finalFlush=*/true
         );
         XX_TEST_EXPECT_EQ(content, "End");
     }

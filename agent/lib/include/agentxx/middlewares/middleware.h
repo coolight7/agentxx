@@ -185,7 +185,7 @@ public:
     /// - 如果 thread 很多，可以等需要时从硬盘加载进内存
     virtual asio::awaitable<std::shared_ptr<T>> loadStateItem(std::string_view thread_id) {
         // TODO: 从磁盘读取
-        auto ptr          = std::make_shared<T>();
+        auto ptr                       = std::make_shared<T>();
         states[std::string{thread_id}] = ptr;
         co_return ptr;
     }

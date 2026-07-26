@@ -6,14 +6,17 @@ namespace agentxx {
 namespace agent {
 
 ChannelAgentIOTransport::ChannelAgentIOTransport(
-    std::shared_ptr<Chan> outgoing, std::shared_ptr<Chan> incoming
+    std::shared_ptr<Chan> outgoing,
+    std::shared_ptr<Chan> incoming
 ) :
     outgoing_(std::move(outgoing)),
     incoming_(std::move(incoming)) {}
 
 std::pair<std::unique_ptr<ChannelAgentIOTransport>, std::unique_ptr<ChannelAgentIOTransport>>
     ChannelAgentIOTransport::makePair(
-        asio::any_io_executor clientEx, asio::any_io_executor serverEx, size_t cap
+        asio::any_io_executor clientEx,
+        asio::any_io_executor serverEx,
+        size_t                cap
     ) {
     auto clientToServer = std::make_shared<Chan>(clientEx, cap);
     auto serverToClient = std::make_shared<Chan>(serverEx, cap);

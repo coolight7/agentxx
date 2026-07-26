@@ -103,9 +103,9 @@ private:
     bool                 clientMode_ = false;
 
     // 连接状态
-    std::shared_ptr<util::WsClient> wsClient_;
-    std::shared_ptr<WriteQueue>     writeQueue_;
-    std::shared_ptr<RecvQueue>      recvQueue_;
+    std::shared_ptr<util::WsClient>     wsClient_;
+    std::shared_ptr<WriteQueue>         writeQueue_;
+    std::shared_ptr<RecvQueue>          recvQueue_;
     std::shared_ptr<asio::steady_timer> heartbeatTimer_;
 
     // 重连增量重放状态

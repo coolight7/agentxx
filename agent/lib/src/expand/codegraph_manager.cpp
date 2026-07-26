@@ -231,13 +231,13 @@ public:
                 continue;
             }
 
-        auto extractor = codegraph::create_extractor(std::string{lang});
+            auto extractor = codegraph::create_extractor(std::string{lang});
             if (!extractor) {
                 XX_LOGW("CodeGraphManager: no extractor for lang={} file={}", lang, file_path);
                 continue;
             }
 
-        std::ifstream ifs(std::string{file_path});
+            std::ifstream ifs(std::string{file_path});
             if (!ifs.is_open()) {
                 XX_LOGW("CodeGraphManager: cannot open file {}", file_path);
                 continue;
@@ -247,7 +247,7 @@ public:
                 std::istreambuf_iterator<char>()
             );
 
-        auto result = extractor->extract(std::string{file_path}, source);
+            auto result = extractor->extract(std::string{file_path}, source);
             XX_LOGI(
                 "CodeGraphManager: extracted {} nodes, {} unresolved refs from {}",
                 result.nodes.size(),

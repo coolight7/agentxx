@@ -140,13 +140,13 @@ private:
 
     // -- Sessions --
     mutable std::mutex                                        sessionsMu_;
-    std::map<std::string, std::string, std::less<>>            sessions_; // sessionId → cwd
+    std::map<std::string, std::string, std::less<>>           sessions_; // sessionId → cwd
     std::map<std::string, std::shared_ptr<std::atomic<bool>>> cancelFlags_;
 
     // -- In-flight prompt tracking --
-    mutable std::mutex    inflightMu_;
+    mutable std::mutex                 inflightMu_;
     std::set<std::string, std::less<>> inflightSessions_;
-    std::atomic<int>      inflightCount_{0};
+    std::atomic<int>                   inflightCount_{0};
 
     std::mutex              workersMu_;
     std::condition_variable workersCv_;

@@ -98,7 +98,7 @@ public:
     bool checkMessagesUtf8BeforeLLM = true;
 
     /// 日志输出控制
-    bool logPrintToolcall                        = false;
+    bool logPrintToolcall                       = false;
     bool logPrintMessagesBeforeLLM              = false;
     bool logPrintMessagesBeforeLLMWithSystemMsg = false;
     bool logPrintSummarizationResultTokenCount  = false;

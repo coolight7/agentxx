@@ -81,11 +81,11 @@ asio::awaitable<neograph::json> SessionController::handleInterrupt(
     }
 
     sendToPeer(WireInterruptRequest{
-        .id      = id,
+        .id       = id,
         .threadId = config_.threadId,
-        .node    = std::string{interruptNode},
-        .value   = std::string{interruptValue},
-        .argJson = std::string{interruptArgJson},
+        .node     = std::string{interruptNode},
+        .value    = std::string{interruptValue},
+        .argJson  = std::string{interruptArgJson},
     });
 
     neograph::json result = neograph::json::array();
@@ -137,15 +137,15 @@ void SessionController::handleHello(const WireHello& hello, std::vector<std::str
     cancelGraceTimer();
 
     // 在锁内收集重放数据, 释放锁后再发送 (避免持锁期间做 IO)
-    std::vector<Delta>              replayDeltas;
-    std::optional<SyncPayload>      replaySync;
-    std::string                     tailHash;
+    std::vector<Delta>                replayDeltas;
+    std::optional<SyncPayload>        replaySync;
+    std::string                       tailHash;
     std::vector<WireInterruptRequest> pendingInterrupts;
 
     {
         std::lock_guard<std::mutex> lock(bufferMutex_);
-        auto sess = session();
-        tailHash  = sess ? sess->chainHash.tailHex() : std::string{};
+        auto                        sess = session();
+        tailHash                         = sess ? sess->chainHash.tailHex() : std::string{};
 
         if (hello.lastSeq > 0) {
             auto deltas = deltasSinceLocked(hello.lastSeq);
@@ -165,11 +165,11 @@ void SessionController::handleHello(const WireHello& hello, std::vector<std::str
         std::lock_guard<std::mutex> lock2(pendingMutex_);
         for (const auto& [id, p] : pending_) {
             pendingInterrupts.push_back(WireInterruptRequest{
-                .id      = id,
+                .id       = id,
                 .threadId = config_.threadId,
-                .node    = p.node,
-                .value   = p.value,
-                .argJson = p.argJson,
+                .node     = p.node,
+                .value    = p.value,
+                .argJson  = p.argJson,
             });
         }
     }

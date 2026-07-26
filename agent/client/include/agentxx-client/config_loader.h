@@ -29,44 +29,44 @@ std::map<std::string, std::string> loadDotEnv(const std::vector<std::string>& pa
 std::map<std::string, std::string> loadOverrideEnv(std::string_view path);
 
 std::string resolveEnvVars(
-    std::string_view                        input,
+    std::string_view                          input,
     const std::map<std::string, std::string>& dotEnvVars,
     const std::map<std::string, std::string>& overrideEnvVars
 );
 
 YamlAppConfig loadYamlConfig(
-    std::string_view                        path,
+    std::string_view                          path,
     const std::map<std::string, std::string>& dotEnvVars,
     const std::map<std::string, std::string>& overrideEnvVars
 );
 
 agent::ModelConfig resolveModelConfig(
     const std::map<std::string, agent::ModelConfig>& models,
-    std::string_view                               modelName
+    std::string_view                                 modelName
 );
 
 void applyModelToConfig(
     std::shared_ptr<agent::AgentConfig>              agentConfig,
     const std::map<std::string, agent::ModelConfig>& models,
-    std::string_view                               modelName
+    std::string_view                                 modelName
 );
 
 void applySubagentModelToConfig(
     std::shared_ptr<agent::AgentConfig>              agentConfig,
     const std::map<std::string, agent::ModelConfig>& models,
-    std::string_view                               modelName
+    std::string_view                                 modelName
 );
 
 void applyWebSearchModelToConfig(
     std::shared_ptr<agent::AgentConfig>              agentConfig,
     const std::map<std::string, agent::ModelConfig>& models,
-    std::string_view                               modelName
+    std::string_view                                 modelName
 );
 
 void applyAvailableModelsToConfig(
     std::shared_ptr<agent::AgentConfig>              agentConfig,
     const std::map<std::string, agent::ModelConfig>& models,
-    std::string_view                               currentModelName
+    std::string_view                                 currentModelName
 );
 
 } // namespace client

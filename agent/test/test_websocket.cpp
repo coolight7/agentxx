@@ -645,9 +645,8 @@ static asio::awaitable<void> test_ws_start_async_mode() {
         "/health",
         0,
         std::make_shared<HttpServer::Handler>(
-            [](HttpServer::Request&,
-               HttpServer::Response& resp,
-               std::string_view) -> asio::awaitable<void> {
+            [](HttpServer::Request&, HttpServer::Response& resp, std::string_view
+            ) -> asio::awaitable<void> {
                 resp.result(boost::beast::http::status::ok);
                 resp.set(boost::beast::http::field::content_type, "text/plain");
                 resp.body() = "ok";
@@ -891,9 +890,8 @@ static asio::awaitable<void> test_ws_http_and_ws_coexist() {
         "/api/data",
         0,
         std::make_shared<HttpServer::Handler>(
-            [](HttpServer::Request&,
-               HttpServer::Response& resp,
-               std::string_view) -> asio::awaitable<void> {
+            [](HttpServer::Request&, HttpServer::Response& resp, std::string_view
+            ) -> asio::awaitable<void> {
                 resp.result(boost::beast::http::status::ok);
                 resp.set(boost::beast::http::field::content_type, "application/json");
                 resp.body() = R"({"status":"ok"})";

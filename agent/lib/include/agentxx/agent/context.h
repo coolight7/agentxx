@@ -112,7 +112,7 @@ public:
 
 private:
 
-    std::mutex                                      mutex_;
+    std::mutex                                                   mutex_;
     std::map<std::string, std::shared_ptr<Session>, std::less<>> sessions_;
 };
 

@@ -21,7 +21,7 @@ namespace agent {
 struct WireHello {
     std::string threadId;
     std::string token;
-    uint64_t    lastSeq  = 0;
+    uint64_t    lastSeq = 0;
     std::string tailHash;
     std::string model;
 };
@@ -58,19 +58,19 @@ struct WireInterruptRequest {
 };
 
 struct WireInterruptResponse {
-    int64_t          id = 0;
-    neograph::json   result;
+    int64_t        id = 0;
+    neograph::json result;
 };
 
 struct WireTurnResult {
     std::string threadId;
-    bool        hasError    = false;
+    bool        hasError = false;
     std::string errorMessage;
     bool        interrupted = false;
 };
 
 struct WireContextStats {
-    uint64_t contextTokens     = 0;
+    uint64_t contextTokens    = 0;
     uint64_t maxContextTokens = 0;
 };
 

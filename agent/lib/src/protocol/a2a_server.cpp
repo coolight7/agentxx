@@ -704,7 +704,11 @@ json A2aServer::makeUnsupportedOperation(const json& id, std::string_view detail
 }
 
 json A2aServer::makeVersionNotSupported(const json& id, std::string_view version) {
-    return jsonRpcError(id, kA2aVersionNotSupported, fmt::format("A2A version not supported: {}", version));
+    return jsonRpcError(
+        id,
+        kA2aVersionNotSupported,
+        fmt::format("A2A version not supported: {}", version)
+    );
 }
 
 std::string A2aServer::generateId() {
