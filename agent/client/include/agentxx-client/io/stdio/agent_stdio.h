@@ -6,11 +6,12 @@
 #include <iostream>
 #include <optional>
 #include <string>
+#include <string_view>
 
 class StderrLogSink : public agentxx::util::LogSink {
 public:
 
-    void onLog(agentxx::util::LogLevel, const std::string& message) override {
+    void onLog(agentxx::util::LogLevel, std::string_view message) override {
         std::cerr << message << std::endl;
     }
 };
@@ -30,10 +31,10 @@ public:
     asio::awaitable<std::optional<std::string>> getInput() override;
 
     asio::awaitable<neograph::json> handleInterrupt(
-        const std::string& threadId,
-        const std::string& interruptNode,
-        const std::string& interruptValue,
-        const std::string& interruptArgJson
+        std::string_view threadId,
+        std::string_view interruptNode,
+        std::string_view interruptValue,
+        std::string_view interruptArgJson
     ) override;
 
     AgentStdIO();

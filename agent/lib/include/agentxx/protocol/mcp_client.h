@@ -107,17 +107,17 @@ public:
     asio::awaitable<std::expected<std::vector<McpToolDefinition>, std::string>> listTools();
 
     asio::awaitable<std::expected<json, std::string>>
-        callTool(const std::string& name, const json& arguments = json::object());
+        callTool(std::string_view name, const json& arguments = json::object());
 
     asio::awaitable<std::expected<std::vector<McpResourceDefinition>, std::string>> listResources();
 
     asio::awaitable<std::expected<McpResourceContent, std::string>>
-        readResource(const std::string& uri);
+        readResource(std::string_view uri);
 
     asio::awaitable<std::expected<std::vector<McpPromptDefinition>, std::string>> listPrompts();
 
     asio::awaitable<std::expected<McpPromptResult, std::string>>
-        getPrompt(const std::string& name, const json& arguments = json::object());
+        getPrompt(std::string_view name, const json& arguments = json::object());
 
     // -----------------------------------------------------------------------
     // Tool adapter factory
@@ -142,15 +142,15 @@ private:
         std::promise<json> promise;
     };
 
-    static json makeRequest(int64_t id, const std::string& method, const json& params);
+    static json makeRequest(int64_t id, std::string_view method, const json& params);
 
     static std::optional<std::string> getErrorFromResponse(const json& response);
 
     static std::string
-        negotiateProtocolVersion(const std::string& requested, const json& serverResult);
+        negotiateProtocolVersion(std::string_view requested, const json& serverResult);
 
     asio::awaitable<std::expected<json, std::string>>
-        sendRequest(const std::string& method, const json& params);
+        sendRequest(std::string_view method, const json& params);
 
     // -----------------------------------------------------------------------
     // SSE endpoint discovery & event parsing
@@ -165,7 +165,7 @@ private:
     };
 
     /// Parse SSE text into a list of (event-type, data) pairs.
-    static std::vector<SseEvent> parseSseEvents(const std::string& body);
+    static std::vector<SseEvent> parseSseEvents(std::string_view body);
 
     /// Extract a value from a URL query string by key.
     static std::string getQueryParam(std::string_view query, std::string_view key);
@@ -177,12 +177,12 @@ private:
     util::HeaderMap buildHttpHeaders() const;
 
     asio::awaitable<std::expected<json, std::string>>
-        sendHttpRequest(int64_t id, const std::string& method, const json& params);
+        sendHttpRequest(int64_t id, std::string_view method, const json& params);
 
     asio::awaitable<std::expected<json, std::string>>
-        sendStdioRequest(int64_t id, const std::string& method, const json& params);
+        sendStdioRequest(int64_t id, std::string_view method, const json& params);
 
-    asio::awaitable<void> sendRawNotification(const std::string& method, const json& params);
+    asio::awaitable<void> sendRawNotification(std::string_view method, const json& params);
 
     // -----------------------------------------------------------------------
     // Stdio subprocess management

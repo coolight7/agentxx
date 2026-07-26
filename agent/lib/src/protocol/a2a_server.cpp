@@ -2,6 +2,7 @@
 
 #include "agentxx/util/log.h"
 #include "agentxx/util/string_util.h"
+#include <fmt/format.h>
 #include <random>
 #include <sstream>
 #include <thread>
@@ -77,7 +78,7 @@ json A2aServer::agentCard() const {
     json interfaces = json::array();
     {
         json iface;
-        iface["url"]             = "http://localhost:" + std::to_string(port()) + config_.a2aEndpoint;
+        iface["url"] = "http://localhost:" + std::to_string(port()) + config_.a2aEndpoint;
         iface["protocolBinding"] = "JSONRPC";
         iface["protocolVersion"] = kA2aVersion;
         interfaces.push_back(std::move(iface));
@@ -93,9 +94,9 @@ json A2aServer::agentCard() const {
     card["skills"]              = std::move(skills);
 
     json caps;
-    caps["streaming"]       = config_.supportStreaming;
+    caps["streaming"]         = config_.supportStreaming;
     caps["pushNotifications"] = false;
-    card["capabilities"]    = std::move(caps);
+    card["capabilities"]      = std::move(caps);
 
     return card;
 }
@@ -108,7 +109,7 @@ void A2aServer::setupRoutes() {
     using Handler = util::HttpServer::Handler;
 
     auto cardHandler = std::make_shared<Handler>(Handler(
-        [this](util::HttpServer::Request& req, util::HttpServer::Response& resp, const std::string&)
+        [this](util::HttpServer::Request& req, util::HttpServer::Response& resp, std::string_view)
             -> asio::awaitable<void> {
             co_await handleAgentCard(req, resp);
         }
@@ -116,7 +117,7 @@ void A2aServer::setupRoutes() {
     httpServer_->router().add(config_.agentCardPath, 0, cardHandler);
 
     auto a2aHandler = std::make_shared<Handler>(Handler(
-        [this](util::HttpServer::Request& req, util::HttpServer::Response& resp, const std::string&)
+        [this](util::HttpServer::Request& req, util::HttpServer::Response& resp, std::string_view)
             -> asio::awaitable<void> {
             co_await handleA2aRequest(req, resp);
         }
@@ -136,8 +137,10 @@ void A2aServer::setupRoutes() {
 // HTTP handlers
 // ---------------------------------------------------------------------------
 
-asio::awaitable<void>
-    A2aServer::handleAgentCard(util::HttpServer::Request& /*req*/, util::HttpServer::Response& resp) {
+asio::awaitable<void> A2aServer::handleAgentCard(
+    util::HttpServer::Request& /*req*/,
+    util::HttpServer::Response& resp
+) {
     writeJsonResponse(resp, boost::beast::http::status::ok, agentCard());
     co_return;
 }
@@ -178,7 +181,7 @@ asio::awaitable<void> A2aServer::handleSseRequest(
     util::HttpServer::Request& /*req*/,
     std::shared_ptr<util::HttpServer::SseWriter> writer
 ) {
-    auto client = std::make_shared<SSEClient>();
+    auto client    = std::make_shared<SSEClient>();
     client->writer = writer;
     {
         std::lock_guard<std::mutex> lock(sseClientsMutex_);
@@ -187,9 +190,10 @@ asio::awaitable<void> A2aServer::handleSseRequest(
 
     while (!client->closed && !stopped_.load(std::memory_order_acquire)) {
         co_await asio::steady_timer(
-            co_await asio::this_coro::executor, std::chrono::milliseconds(100)
+            co_await asio::this_coro::executor,
+            std::chrono::milliseconds(100)
         )
-                     .async_wait(asio::use_awaitable);
+            .async_wait(asio::use_awaitable);
     }
 
     {
@@ -198,7 +202,9 @@ asio::awaitable<void> A2aServer::handleSseRequest(
             std::remove_if(
                 sseClients_.begin(),
                 sseClients_.end(),
-                [&](const auto& c) { return c.get() == client.get(); }
+                [&](const auto& c) {
+                    return c.get() == client.get();
+                }
             ),
             sseClients_.end()
         );
@@ -286,7 +292,8 @@ json A2aServer::handleSendMessage(const json& id, const json& params) {
             task = it->second;
             if (isTerminalState(task->state)) {
                 return makeUnsupportedOperation(
-                    id, "Cannot send message to task in terminal state"
+                    id,
+                    "Cannot send message to task in terminal state"
                 );
             }
         } else {
@@ -294,14 +301,14 @@ json A2aServer::handleSendMessage(const json& id, const json& params) {
             if (contextId.empty()) {
                 contextId = generateId();
             }
-            task            = std::make_shared<TaskRecord>();
-            task->id        = taskId;
-            task->contextId = contextId;
-            task->state     = A2aTaskState::Submitted;
-            task->createdAt = currentTimestamp();
-            task->updatedAt = task->createdAt;
+            task             = std::make_shared<TaskRecord>();
+            task->id         = taskId;
+            task->contextId  = contextId;
+            task->state      = A2aTaskState::Submitted;
+            task->createdAt  = currentTimestamp();
+            task->updatedAt  = task->createdAt;
             task->cancelFlag = std::make_shared<std::atomic<bool>>(false);
-            tasks_[taskId]  = task;
+            tasks_[taskId]   = task;
             pruneOldTasks();
         }
 
@@ -319,7 +326,7 @@ json A2aServer::handleSendMessage(const json& id, const json& params) {
     auto result = json::object();
     {
         std::lock_guard<std::mutex> lock(tasksMutex_);
-        auto it = tasks_.find(taskId);
+        auto                        it = tasks_.find(taskId);
         if (it != tasks_.end()) {
             result["task"] = makeTask(it->second->id, it->second->contextId, it->second->state);
         }
@@ -343,16 +350,18 @@ json A2aServer::handleGetTask(const json& id, const json& params) {
     json result;
     result["id"]        = task->id;
     result["contextId"] = task->contextId;
-    result["status"]    = json{{"state", taskStateToString(task->state)},
-                            {"timestamp", task->updatedAt}};
+    result["status"]    = json{
+           {"state",     taskStateToString(task->state)},
+           {"timestamp", task->updatedAt               }
+    };
     result["artifacts"] = task->artifacts;
     result["metadata"]  = task->metadata;
 
     if (historyLength > 0 && !task->history.empty()) {
-        json hist = json::array();
-        auto  start = task->history.size() > static_cast<size_t>(historyLength)
-                          ? task->history.size() - historyLength
-                          : 0;
+        json hist  = json::array();
+        auto start = task->history.size() > static_cast<size_t>(historyLength)
+                         ? task->history.size() - historyLength
+                         : 0;
         for (size_t i = start; i < task->history.size(); ++i) {
             hist.push_back(task->history[i]);
         }
@@ -363,11 +372,15 @@ json A2aServer::handleGetTask(const json& id, const json& params) {
 }
 
 json A2aServer::handleListTasks(const json& id, const json& params) {
-    auto contextId = params.value("contextId", std::string{});
+    auto contextId    = params.value("contextId", std::string{});
     auto statusFilter = params.value("status", std::string{});
-    auto pageSize  = params.value("pageSize", 50);
-    if (pageSize < 1) pageSize = 1;
-    if (pageSize > 100) pageSize = 100;
+    auto pageSize     = params.value("pageSize", 50);
+    if (pageSize < 1) {
+        pageSize = 1;
+    }
+    if (pageSize > 100) {
+        pageSize = 100;
+    }
 
     std::vector<json> taskList;
     {
@@ -376,21 +389,22 @@ json A2aServer::handleListTasks(const json& id, const json& params) {
             if (!contextId.empty() && task->contextId != contextId) {
                 continue;
             }
-            if (!statusFilter.empty()
-                && taskStateToString(task->state) != statusFilter) {
+            if (!statusFilter.empty() && taskStateToString(task->state) != statusFilter) {
                 continue;
             }
             json t;
             t["id"]        = task->id;
             t["contextId"] = task->contextId;
-            t["status"]    = json{{"state", taskStateToString(task->state)},
-                               {"timestamp", task->updatedAt}};
+            t["status"]    = json{
+                   {"state",     taskStateToString(task->state)},
+                   {"timestamp", task->updatedAt               }
+            };
             taskList.push_back(std::move(t));
         }
     }
 
-    int totalSize = static_cast<int>(taskList.size());
-    json tasksArr = json::array();
+    int  totalSize = static_cast<int>(taskList.size());
+    json tasksArr  = json::array();
     for (auto& t : taskList) {
         tasksArr.push_back(std::move(t));
     }
@@ -412,7 +426,7 @@ json A2aServer::handleCancelTask(const json& id, const json& params) {
     std::shared_ptr<TaskRecord> task;
     {
         std::lock_guard<std::mutex> lock(tasksMutex_);
-        auto it = tasks_.find(taskId);
+        auto                        it = tasks_.find(taskId);
         if (it == tasks_.end()) {
             return makeTaskNotFound(id, taskId);
         }
@@ -421,7 +435,9 @@ json A2aServer::handleCancelTask(const json& id, const json& params) {
 
     if (isTerminalState(task->state)) {
         return jsonRpcError(
-            id, kA2aTaskNotCancelable, "Task is in terminal state and cannot be canceled"
+            id,
+            kA2aTaskNotCancelable,
+            "Task is in terminal state and cannot be canceled"
         );
     }
 
@@ -430,19 +446,19 @@ json A2aServer::handleCancelTask(const json& id, const json& params) {
     }
     updateTaskState(taskId, A2aTaskState::Canceled);
 
-    return jsonRpcResult(
-        id, makeTask(task->id, task->contextId, A2aTaskState::Canceled)
-    );
+    return jsonRpcResult(id, makeTask(task->id, task->contextId, A2aTaskState::Canceled));
 }
 
 // ---------------------------------------------------------------------------
 // Task execution
 // ---------------------------------------------------------------------------
 
-void A2aServer::executeTask(const std::string& taskId, const std::string& userInput) {
+void A2aServer::executeTask(std::string_view taskId, std::string_view userInput) {
     std::thread([this, taskId, userInput]() {
         auto task = findTask(taskId);
-        if (!task) return;
+        if (!task) {
+            return;
+        }
 
         auto cancelFlag = task->cancelFlag;
 
@@ -455,7 +471,7 @@ void A2aServer::executeTask(const std::string& taskId, const std::string& userIn
             return;
         }
 
-        std::string threadId = "a2a_" + taskId;
+        std::string threadId = fmt::format("a2a_{}", taskId);
         std::string collected;
 
         try {
@@ -463,9 +479,12 @@ void A2aServer::executeTask(const std::string& taskId, const std::string& userIn
             asio::co_spawn(
                 *ioCtx,
                 [this, &threadId, &userInput, &collected, &cancelFlag]() -> asio::awaitable<void> {
+                    std::vector<neograph::ChatMessage> msgs{
+                        neograph::ChatMessage{"user", std::string{userInput}}
+                    };
                     auto result = co_await deepAgent_->runNonStreamAsync(
                         threadId,
-                        {neograph::ChatMessage{"user", userInput}},
+                        msgs,
                         [&collected, &cancelFlag](const neograph::graph::GraphEvent& event) {
                             if (event.type == neograph::graph::GraphEvent::Type::LLM_TOKEN) {
                                 if (event.data.is_string()) {
@@ -507,7 +526,7 @@ void A2aServer::executeTask(const std::string& taskId, const std::string& userIn
 
         {
             std::lock_guard<std::mutex> lock(tasksMutex_);
-            auto it = tasks_.find(taskId);
+            auto                        it = tasks_.find(taskId);
             if (it != tasks_.end()) {
                 json agentMsg;
                 agentMsg["messageId"] = generateId();
@@ -528,12 +547,16 @@ void A2aServer::executeTask(const std::string& taskId, const std::string& userIn
         json event;
         event["taskId"]    = taskId;
         event["contextId"] = task->contextId;
-        event["status"]    = json{{"state", taskStateToString(A2aTaskState::Completed)},
-                               {"timestamp", currentTimestamp()}};
+        event["status"]    = json{
+               {"state",     taskStateToString(A2aTaskState::Completed)},
+               {"timestamp", currentTimestamp()                        }
+        };
         json sseMsg;
         sseMsg["jsonrpc"] = "2.0";
         sseMsg["id"]      = json(nullptr);
-        sseMsg["result"]  = json{{"statusUpdate", std::move(event)}};
+        sseMsg["result"]  = json{
+             {"statusUpdate", std::move(event)}
+        };
         broadcastSSE(sseMsg.dump());
     }).detach();
 }
@@ -542,7 +565,7 @@ void A2aServer::executeTask(const std::string& taskId, const std::string& userIn
 // SSE
 // ---------------------------------------------------------------------------
 
-void A2aServer::broadcastSSE(const std::string& data) {
+void A2aServer::broadcastSSE(std::string_view data) {
     std::lock_guard<std::mutex> lock(sseClientsMutex_);
     for (auto& client : sseClients_) {
         if (!client->closed && client->writer) {
@@ -566,18 +589,22 @@ void A2aServer::stopSSE() {
 // Task store helpers
 // ---------------------------------------------------------------------------
 
-std::shared_ptr<A2aServer::TaskRecord> A2aServer::findTask(const std::string& taskId) {
+std::shared_ptr<A2aServer::TaskRecord> A2aServer::findTask(std::string_view taskId) {
     std::lock_guard<std::mutex> lock(tasksMutex_);
-    auto it = tasks_.find(taskId);
+    auto                        it = tasks_.find(taskId);
     return it != tasks_.end() ? it->second : nullptr;
 }
 
 void A2aServer::updateTaskState(
-    const std::string& taskId, A2aTaskState state, const json& statusMsg
+    std::string_view taskId,
+    A2aTaskState     state,
+    const json&      statusMsg
 ) {
     std::lock_guard<std::mutex> lock(tasksMutex_);
-    auto it = tasks_.find(taskId);
-    if (it == tasks_.end()) return;
+    auto                        it = tasks_.find(taskId);
+    if (it == tasks_.end()) {
+        return;
+    }
     it->second->state     = state;
     it->second->updatedAt = currentTimestamp();
     if (!statusMsg.is_null()) {
@@ -589,7 +616,9 @@ void A2aServer::updateTaskState(
 }
 
 void A2aServer::pruneOldTasks() {
-    if (tasks_.size() <= config_.maxTasks) return;
+    if (tasks_.size() <= config_.maxTasks) {
+        return;
+    }
     auto excess = tasks_.size() - config_.maxTasks;
     for (auto it = tasks_.begin(); it != tasks_.end() && excess > 0;) {
         if (isTerminalState(it->second->state)) {
@@ -606,7 +635,9 @@ void A2aServer::pruneOldTasks() {
 // ---------------------------------------------------------------------------
 
 void A2aServer::writeJsonResponse(
-    util::HttpServer::Response& resp, boost::beast::http::status status, const json& body
+    util::HttpServer::Response& resp,
+    boost::beast::http::status  status,
+    const json&                 body
 ) {
     resp.result(status);
     resp.set(boost::beast::http::field::content_type, "application/json");
@@ -626,32 +657,33 @@ json A2aServer::jsonRpcResult(const json& id, json result) {
     return resp;
 }
 
-json A2aServer::jsonRpcError(const json& id, int code, const std::string& msg) {
+json A2aServer::jsonRpcError(const json& id, int code, std::string_view msg) {
     json resp;
     resp["jsonrpc"] = "2.0";
     resp["id"]      = id;
-    resp["error"]   = json{{"code", code}, {"message", msg}};
+    resp["error"]   = json{
+          {"code",    code},
+          {"message", msg }
+    };
     return resp;
 }
 
-json A2aServer::makeTaskNotFound(const json& id, const std::string& taskId) {
-    return jsonRpcError(id, kA2aTaskNotFound, "Task not found: " + taskId);
+json A2aServer::makeTaskNotFound(const json& id, std::string_view taskId) {
+    return jsonRpcError(id, kA2aTaskNotFound, fmt::format("Task not found: {}", taskId));
 }
 
-json A2aServer::makeUnsupportedOperation(const json& id, const std::string& detail) {
+json A2aServer::makeUnsupportedOperation(const json& id, std::string_view detail) {
     return jsonRpcError(id, kA2aUnsupportedOperation, detail);
 }
 
-json A2aServer::makeVersionNotSupported(const json& id, const std::string& version) {
-    return jsonRpcError(
-        id, kA2aVersionNotSupported, "A2A version not supported: " + version
-    );
+json A2aServer::makeVersionNotSupported(const json& id, std::string_view version) {
+    return jsonRpcError(id, kA2aVersionNotSupported, fmt::format("A2A version not supported: {}", version));
 }
 
 std::string A2aServer::generateId() {
-    static std::atomic<uint64_t> counter{0};
-    static std::random_device    rd;
-    static std::mt19937_64       gen(rd());
+    static std::atomic<uint64_t>                   counter{0};
+    static std::random_device                      rd;
+    static std::mt19937_64                         gen(rd());
     static std::uniform_int_distribution<uint64_t> dist;
 
     auto ts  = std::chrono::steady_clock::now().time_since_epoch().count();
@@ -666,9 +698,7 @@ std::string A2aServer::generateId() {
 std::string A2aServer::currentTimestamp() {
     auto now = std::chrono::system_clock::now();
     auto tt  = std::chrono::system_clock::to_time_t(now);
-    auto ms  = std::chrono::duration_cast<std::chrono::milliseconds>(
-                   now.time_since_epoch()
-    ) % 1000;
+    auto ms  = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()) % 1000;
 
     std::tm tm{};
     gmtime_r(&tt, &tm);
@@ -689,11 +719,13 @@ std::string A2aServer::currentTimestamp() {
     return buf;
 }
 
-json A2aServer::makeTextPart(const std::string& text) {
-    return json{{"text", text}};
+json A2aServer::makeTextPart(std::string_view text) {
+    return json{
+        {"text", text}
+    };
 }
 
-json A2aServer::makeMessage(const std::string& role, const std::string& text) {
+json A2aServer::makeMessage(std::string_view role, std::string_view text) {
     json msg;
     msg["messageId"] = generateId();
     msg["role"]      = role;
@@ -702,10 +734,10 @@ json A2aServer::makeMessage(const std::string& role, const std::string& text) {
 }
 
 json A2aServer::makeTask(
-    const std::string& id,
-    const std::string& contextId,
-    A2aTaskState       state,
-    const json&        statusMessage
+    std::string_view id,
+    std::string_view contextId,
+    A2aTaskState     state,
+    const json&      statusMessage
 ) {
     json task;
     task["id"]        = id;
@@ -724,10 +756,14 @@ json A2aServer::makeTask(
 
 std::string A2aServer::extractTextFromParts(const json& parts) {
     std::string result;
-    if (!parts.is_array()) return result;
+    if (!parts.is_array()) {
+        return result;
+    }
     for (const auto& part : parts) {
         if (part.is_object() && part.contains("text") && part["text"].is_string()) {
-            if (!result.empty()) result += "\n";
+            if (!result.empty()) {
+                result += "\n";
+            }
             result += part["text"].get<std::string>();
         }
     }

@@ -68,10 +68,10 @@ asio::awaitable<std::optional<std::string>> SessionController::waitInput() {
 }
 
 asio::awaitable<neograph::json> SessionController::handleInterrupt(
-    const std::string& /*threadId*/,
-    const std::string& interruptNode,
-    const std::string& interruptValue,
-    const std::string& interruptArgJson
+    std::string_view /*threadId*/,
+    std::string_view interruptNode,
+    std::string_view interruptValue,
+    std::string_view interruptArgJson
 ) {
     // 请求级超时: 权限询问与一般中断分别配置
     auto timeout
@@ -82,7 +82,12 @@ asio::awaitable<neograph::json> SessionController::handleInterrupt(
     {
         std::lock_guard<std::mutex> lock(pendingMutex_);
         id           = nextReqId_++;
-        pending_[id] = PendingInterrupt{ch, interruptNode, interruptValue, interruptArgJson};
+        pending_[id] = PendingInterrupt{
+            ch,
+            std::string{interruptNode},
+            std::string{interruptValue},
+            std::string{interruptArgJson}
+        };
     }
 
     pushToActive(
@@ -168,7 +173,7 @@ void SessionController::stop() {
 void SessionController::attach(
     const std::shared_ptr<IConnectionSink>& conn,
     uint64_t                                lastSeq,
-    const std::string& /*tailHash*/
+    std::string_view /*tailHash*/
 ) {
     cancelGraceTimer();
     // 在 bufferMutex_ 下设置活动连接并重放, 与 onDelta 的实时推送串行化 (保证顺序)

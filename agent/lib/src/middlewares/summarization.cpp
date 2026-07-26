@@ -128,7 +128,7 @@ Output ONLY the summary text, no meta-commentary.
 void SummarizationMiddlewareHandle::offloadLongContentToTempStore(
     neograph::ChatMessage&                    msg,
     const std::shared_ptr<MiddlewareContext>& ctx,
-    const std::string&                        thread_id
+    std::string_view                          thread_id
 ) {
     if (msg.content.size() <= longContentByteThreshold) {
         return;

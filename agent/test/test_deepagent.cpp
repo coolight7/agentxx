@@ -40,10 +40,10 @@ public:
     }
 
     asio::awaitable<neograph::json> handleInterrupt(
-        const std::string& /*threadId*/,
-        const std::string& /*interruptNode*/,
-        const std::string& /*interruptValue*/,
-        const std::string& /*interruptArgJson*/
+        std::string_view /*threadId*/,
+        std::string_view /*interruptNode*/,
+        std::string_view /*interruptValue*/,
+        std::string_view /*interruptArgJson*/
     ) override {
         co_return neograph::json::array();
     }
@@ -107,7 +107,7 @@ DaSimServer startDaSimServer() {
         std::make_shared<agentxx::util::HttpServer::Handler>(
             [](agentxx::util::HttpServer::Request&  req,
                agentxx::util::HttpServer::Response& resp,
-               const std::string&) -> asio::awaitable<void> {
+               std::string_view) -> asio::awaitable<void> {
                 namespace http = boost::beast::http;
 
                 auto j            = neograph::json::parse(req.body());

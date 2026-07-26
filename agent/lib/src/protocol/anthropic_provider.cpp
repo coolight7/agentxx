@@ -229,7 +229,7 @@ neograph::json AnthropicProvider::buildBody(const neograph::CompletionParams& pa
     return body;
 }
 
-AnthropicProvider::ParsedEndpoint AnthropicProvider::parseEndpoint(const std::string& base_url) {
+AnthropicProvider::ParsedEndpoint AnthropicProvider::parseEndpoint(std::string_view base_url) {
     ParsedEndpoint ep;
     ep.scheme = "https";
     ep.port   = 443;
@@ -242,7 +242,7 @@ AnthropicProvider::ParsedEndpoint AnthropicProvider::parseEndpoint(const std::st
     ep.scheme             = base_url.substr(0, schemeEnd);
     auto        rest      = base_url.substr(schemeEnd + 3);
     auto        pathStart = rest.find('/');
-    std::string hostPort  = (pathStart == std::string::npos) ? rest : rest.substr(0, pathStart);
+    std::string hostPort{(pathStart == std::string::npos) ? rest : rest.substr(0, pathStart)};
     ep.prefix             = (pathStart == std::string::npos) ? "" : rest.substr(pathStart);
 
     ep.port = (ep.scheme == "https") ? 443 : 80;

@@ -4,7 +4,7 @@
 namespace agentxx {
 namespace agent {
 
-static uint64_t fnv1a(const std::string& data, uint64_t seed) {
+static uint64_t fnv1a(std::string_view data, uint64_t seed) {
     uint64_t hash = seed;
     for (unsigned char c : data) {
         hash ^= c;
@@ -13,7 +13,7 @@ static uint64_t fnv1a(const std::string& data, uint64_t seed) {
     return hash;
 }
 
-void ChainHash::append(const std::string& serialized) {
+void ChainHash::append(std::string_view serialized) {
     // 用 count_ 判断首次追加, 而非 hash_==0 (合法链哈希也可能算出 0, 会错误重置种子)
     hash_ = fnv1a(serialized, count_ == 0 ? 14695981039346656037ULL : hash_);
     ++count_;

@@ -106,7 +106,7 @@ neograph::json OpenAIProvider::buildBody(const neograph::CompletionParams& param
     return body;
 }
 
-OpenAIProvider::ParsedEndpoint OpenAIProvider::parseEndpoint(const std::string& base_url) {
+OpenAIProvider::ParsedEndpoint OpenAIProvider::parseEndpoint(std::string_view base_url) {
     ParsedEndpoint ep;
     ep.scheme = "https";
     ep.port   = 443;
@@ -119,7 +119,7 @@ OpenAIProvider::ParsedEndpoint OpenAIProvider::parseEndpoint(const std::string& 
     ep.scheme             = base_url.substr(0, schemeEnd);
     auto        rest      = base_url.substr(schemeEnd + 3);
     auto        pathStart = rest.find('/');
-    std::string hostPort  = (pathStart == std::string::npos) ? rest : rest.substr(0, pathStart);
+    std::string hostPort{(pathStart == std::string::npos) ? rest : rest.substr(0, pathStart)};
     ep.prefix             = (pathStart == std::string::npos) ? "" : rest.substr(pathStart);
 
     ep.port = (ep.scheme == "https") ? 443 : 80;
@@ -343,7 +343,7 @@ void OpenAIProvider::extractToolCalls(
     std::string&                     content,
     std::vector<neograph::ToolCall>& toolCalls
 ) {
-    auto trim = [](const std::string& s) -> std::string {
+    auto trim = [](std::string_view s) -> std::string {
         size_t start = 0;
         while (start < s.size()
                && (s[start] == ' ' || s[start] == '\t' || s[start] == '\n' || s[start] == '\r')) {
@@ -355,10 +355,10 @@ void OpenAIProvider::extractToolCalls(
                    || s[end - 1] == '\r')) {
             --end;
         }
-        return s.substr(start, end - start);
+        return std::string{s.substr(start, end - start)};
     };
 
-    auto tryExtract = [&](const std::string& jsonStr) -> bool {
+    auto tryExtract = [&](std::string_view jsonStr) -> bool {
         std::string trimmed = trim(jsonStr);
         if (trimmed.empty()) {
             return false;

@@ -31,7 +31,7 @@ namespace {
 struct CountingSink : public agentxx::util::LogSink {
     std::atomic<size_t> count{0};
 
-    void onLog(agentxx::util::LogLevel, const std::string&) override {
+    void onLog(agentxx::util::LogLevel, std::string_view) override {
         count.fetch_add(1, std::memory_order_relaxed);
     }
 };

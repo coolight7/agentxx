@@ -76,8 +76,8 @@ ftxui::Element AgentTUI::renderLogWindow() {
 }
 
 void AgentTUI::addSidebarTab(
-    const std::string&              id,
-    const std::string&              title,
+    std::string_view                id,
+    std::string_view                title,
     std::function<ftxui::Element()> render
 ) {
     for (auto& tab : sidebarTabs_) {
@@ -87,11 +87,11 @@ void AgentTUI::addSidebarTab(
             return;
         }
     }
-    sidebarTabs_.push_back(SidebarTab{id, title, std::move(render)});
+    sidebarTabs_.push_back(SidebarTab{std::string{id}, std::string{title}, std::move(render)});
     activeTabIndex_ = static_cast<int>(sidebarTabs_.size()) - 1;
 }
 
-void AgentTUI::removeSidebarTab(const std::string& id) {
+void AgentTUI::removeSidebarTab(std::string_view id) {
     for (size_t i = 0; i < sidebarTabs_.size(); ++i) {
         if (sidebarTabs_[i].id == id) {
             sidebarTabs_.erase(sidebarTabs_.begin() + i);
@@ -103,7 +103,7 @@ void AgentTUI::removeSidebarTab(const std::string& id) {
     }
 }
 
-bool AgentTUI::hasSidebarTab(const std::string& id) const {
+bool AgentTUI::hasSidebarTab(std::string_view id) const {
     for (const auto& tab : sidebarTabs_) {
         if (tab.id == id) {
             return true;

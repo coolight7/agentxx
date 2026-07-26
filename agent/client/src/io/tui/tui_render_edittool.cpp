@@ -2,6 +2,7 @@
 #include "agentxx/util/diff_util.h"
 #include "agentxx/util/string_util.h"
 #include "ftxui/screen/terminal.hpp"
+#include <fmt/format.h>
 
 using namespace ftxui;
 
@@ -45,7 +46,7 @@ void AgentTUI::appendEditToolBody(const Message& msg, Elements& lines) {
     }
 }
 
-ftxui::Element AgentTUI::renderEditToolDiff(const std::string& oldStr, const std::string& newStr) {
+ftxui::Element AgentTUI::renderEditToolDiff(std::string_view oldStr, std::string_view newStr) {
     using agentxx::util::DiffLineType;
     auto diff = agentxx::util::computeLineDiff(oldStr, newStr);
     if (diff.empty()) {
@@ -55,12 +56,12 @@ ftxui::Element AgentTUI::renderEditToolDiff(const std::string& oldStr, const std
     const int  screenW    = ftxui::Terminal::Size().dimx;
     const bool sideBySide = screenW >= 100;
 
-    auto trunc = [](const std::string& s, size_t maxChars) {
+    auto trunc = [](std::string_view s, size_t maxChars) -> std::string {
         const auto idx = agentxx::util::findIndexByUtf8Length(s, maxChars);
         if (idx > 0 && idx < s.size()) {
-            return s.substr(0, idx) + "...";
+            return fmt::format("{}...", s.substr(0, idx));
         }
-        return s;
+        return std::string{s};
     };
 
     if (!sideBySide) {
@@ -92,7 +93,7 @@ ftxui::Element AgentTUI::renderEditToolDiff(const std::string& oldStr, const std
     auto     emptyCell = [&]() {
         return text(" ") | color(theme_.hintColor);
     };
-    auto makeCell = [&](const std::string& sign, int no, const std::string& txt, ftxui::Color c) {
+    auto makeCell = [&](std::string_view sign, int no, std::string_view txt, ftxui::Color c) {
         std::string noStr = (no > 0) ? std::to_string(no) : std::string{};
         return hbox({
             text(sign) | color(c) | bold,

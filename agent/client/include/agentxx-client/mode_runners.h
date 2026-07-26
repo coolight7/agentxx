@@ -15,13 +15,13 @@ void runLocalTuiUnified(
     std::shared_ptr<agent::AgentConfig> config
 );
 
-void runRemoteCli(const std::string& url, const std::string& token, const std::string& model);
+void runRemoteCli(std::string_view url, std::string_view token, std::string_view model);
 
 void runRemoteTui(
     std::shared_ptr<agent::AgentConfig> config,
-    const std::string&                  url,
-    const std::string&                  token,
-    const std::string&                  model
+    std::string_view                    url,
+    std::string_view                    token,
+    std::string_view                    model
 );
 
 } // namespace client

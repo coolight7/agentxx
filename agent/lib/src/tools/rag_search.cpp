@@ -215,7 +215,7 @@ std::vector<std::string> RAGSearchTool::VectorStore::splitByStructure(std::strin
                     inCodeBlock  = true;
                     currentBlock = std::string{line};
                 } else {
-                    currentBlock += "\n" + std::string{line};
+                    currentBlock += fmt::format("\n{}", line);
                     flushBlock();
                     inCodeBlock = false;
                 }
@@ -356,7 +356,7 @@ std::vector<std::string> RAGSearchTool::VectorStore::applyChunkOverlap(
             continue;
         }
 
-        result.push_back(std::string{prev.substr(overlapStart)} + chunks[i]);
+        result.push_back(fmt::format("{}{}", prev.substr(overlapStart), chunks[i]));
     }
 
     return result;

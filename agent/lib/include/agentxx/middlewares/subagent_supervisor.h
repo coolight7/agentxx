@@ -31,7 +31,7 @@ public:
     /// NOTE: 跨 agent 查询的完整实现 (向 subagent 注入消息并等待应答) 尚未完成,
     ///       当前 handleCrossAgent 返回明确的 "not implemented" 错误,
     ///       此名单仅用于校验目标 agent 是否运行中
-    std::map<std::string, bool> runningRegistry_;
+    std::map<std::string, bool, std::less<>> runningRegistry_;
 
     explicit SubagentSupervisor(std::weak_ptr<agentxx::agent::AgentContext> ctx);
 
@@ -45,10 +45,10 @@ private:
 
     /// 运行单个 subagent (单/批量共用)
     asio::awaitable<events::RespSubagentResult> runSubagent(
-        const std::string& subagentName,
-        const std::string& systemPromptIn,
-        const std::string& message,
-        const std::string& parentThreadId = ""
+        std::string_view subagentName,
+        std::string_view systemPromptIn,
+        std::string_view message,
+        std::string_view parentThreadId = ""
     );
 
     /// 批量并发运行多个 subagent (真并发: co_spawn + channel wait_for_all)

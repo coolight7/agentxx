@@ -67,7 +67,7 @@ public:
     /// 会被添加移动到 agent 中，完成后此处留空数组
     std::vector<std::unique_ptr<agentxx::tools::XXToolBase>> toolcalls{};
     /// 每个 [Middleware] 全局共享，按会话ID 取值 <thread_id, state>
-    std::map<std::string, std::shared_ptr<BaseMiddlewareState>> states{};
+    std::map<std::string, std::shared_ptr<BaseMiddlewareState>, std::less<>> states{};
 
     BaseMiddlewareHandleInterface(
         std::string_view                            in_name,
@@ -183,14 +183,14 @@ public:
 
     /// 延迟加载 state
     /// - 如果 thread 很多，可以等需要时从硬盘加载进内存
-    virtual asio::awaitable<std::shared_ptr<T>> loadStateItem(const std::string& thread_id) {
+    virtual asio::awaitable<std::shared_ptr<T>> loadStateItem(std::string_view thread_id) {
         // TODO: 从磁盘读取
         auto ptr          = std::make_shared<T>();
-        states[thread_id] = ptr;
+        states[std::string{thread_id}] = ptr;
         co_return ptr;
     }
 
-    virtual asio::awaitable<std::shared_ptr<T>> getStateItem(const std::string& thread_id) {
+    virtual asio::awaitable<std::shared_ptr<T>> getStateItem(std::string_view thread_id) {
         {
             auto it = states.find(thread_id);
             if (it != states.end()) {
@@ -200,7 +200,7 @@ public:
         co_return co_await loadStateItem(thread_id);
     }
 
-    virtual asio::awaitable<void> saveStateItem(const std::string& thread_id, bool offload = true) {
+    virtual asio::awaitable<void> saveStateItem(std::string_view thread_id, bool offload = true) {
         std::shared_ptr<agentxx::middleware::BaseMiddlewareState> oldEntity = nullptr;
         bool                                                      doSave    = false;
         if (offload) {
@@ -224,7 +224,7 @@ public:
         co_return;
     }
 
-    virtual bool containsItem(const std::string& thread_id) {
+    virtual bool containsItem(std::string_view thread_id) {
         return states.contains(thread_id);
     }
 };
@@ -492,21 +492,18 @@ public:
 
     std::optional<std::string> getShareStoreItemValue(std::string_view thread_id, const size_t id);
 
-    void setShareStoreItemValue(
-        const std::string& thread_id,
-        const size_t       id,
-        std::string_view   value
-    );
+    void
+        setShareStoreItemValue(std::string_view thread_id, const size_t id, std::string_view value);
 
-    size_t addShareStoreItemValue(const std::string& thread_id, std::string_view value);
+    size_t addShareStoreItemValue(std::string_view thread_id, std::string_view value);
 
     void removeShareStoreItemValue(std::string_view thread_id, const size_t id);
 
-    void removeGraphDataItem(const std::string& thread_id, std::string_view key);
+    void removeGraphDataItem(std::string_view thread_id, std::string_view key);
 
     template<typename T>
-    T& getGraphDataItemValue(const std::string& thread_id, std::string_view key) {
-        auto& itemGraphData = graphData[thread_id];
+    T& getGraphDataItemValue(std::string_view thread_id, std::string_view key) {
+        auto& itemGraphData = graphData[std::string{thread_id}];
         auto  it            = itemGraphData.find(key);
         if (it == itemGraphData.end()) {
             auto [insertIt, _] = itemGraphData.insert(std::pair<std::string, std::any>{key, T{}});
@@ -518,8 +515,8 @@ public:
     }
 
     template<typename T>
-    void setGraphDataItemValue(const std::string& thread_id, std::string_view key, const T& value) {
-        auto& itemGraphData = graphData[thread_id];
+    void setGraphDataItemValue(std::string_view thread_id, std::string_view key, const T& value) {
+        auto& itemGraphData = graphData[std::string{thread_id}];
         auto  it            = itemGraphData.find(key);
         if (it == itemGraphData.end()) {
             itemGraphData.insert(std::pair<std::string, std::any>{key, value});
@@ -530,11 +527,11 @@ public:
 
     template<typename T>
     void modifyGraphDataItemValue(
-        const std::string&        thread_id,
+        std::string_view          thread_id,
         std::string_view          key,
         std::function<void(T&)>&& modify
     ) {
-        auto& itemGraphData = graphData[thread_id];
+        auto& itemGraphData = graphData[std::string{thread_id}];
         auto  it            = itemGraphData.find(key);
         if (it == itemGraphData.end()) {
             auto value = T{};
@@ -547,23 +544,23 @@ public:
     }
 
     /// 一般用于捕获到 NodeInterrupt 后重新抛出，而不能作为首次抛出使用
-    void throwNodeInterruptBase(const std::string& thread_id, const neograph::json& msgs);
+    void throwNodeInterruptBase(std::string_view thread_id, const neograph::json& msgs);
 
     /// 工具请求中断：检查已有结果（resume 后）或存储参数并抛异常
     asio::awaitable<neograph::json> requestInterrupt(
-        const std::string&                         thread_id,
+        std::string_view                           thread_id,
         const std::function<InterruptHandleArg()>& onCreateArg,
         const neograph::json&                      msgs
     );
 
     /// 将 graphData 中 JSON 兼容条目序列化到 state channel
     neograph::json
-        getGraphDataToState(neograph::graph::GraphState& state, const std::string& thread_id);
+        getGraphDataToState(neograph::graph::GraphState& state, std::string_view thread_id);
 
     /// 从 state channel 恢复 graphData (用于中断 resume)
-    void setGraphDataFromState(neograph::graph::GraphState& state, const std::string& thread_id);
+    void setGraphDataFromState(neograph::graph::GraphState& state, std::string_view thread_id);
 
-    void setGraphDataFromState(const neograph::json& j, const std::string& thread_id);
+    void setGraphDataFromState(const neograph::json& j, std::string_view thread_id);
 };
 
 } // namespace middleware

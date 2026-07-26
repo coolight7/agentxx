@@ -29,8 +29,8 @@ enum class LogLevel {
 class LogSink {
 public:
 
-    virtual ~LogSink()                                             = default;
-    virtual void onLog(LogLevel level, const std::string& message) = 0;
+    virtual ~LogSink()                                           = default;
+    virtual void onLog(LogLevel level, std::string_view message) = 0;
 };
 
 /// 全局日志分发器 (单例)
@@ -48,7 +48,7 @@ public:
 
     void removeSink(const std::shared_ptr<LogSink>& sink);
 
-    void dispatch(LogLevel level, const std::string& message);
+    void dispatch(LogLevel level, std::string_view message);
 
 private:
 
@@ -64,7 +64,7 @@ private:
 };
 
 /// XX_LOG 宏统一入口: 输出到 stderr 并分发到已注册的 sink
-void xxLogPrint(LogLevel level, const std::string& message);
+void xxLogPrint(LogLevel level, std::string_view message);
 
 #if XX_IS_LINUX_D
 

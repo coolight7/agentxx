@@ -24,7 +24,7 @@ std::shared_ptr<agentxx::agent::AgentConfig> buildDefaultConfig() {
 
 std::shared_ptr<agentxx::agent::AgentConfig> makeSubAgentConfig(
     std::shared_ptr<agentxx::agent::AgentConfig> base,
-    const std::string&                           systemPrompt
+    std::string_view                             systemPrompt
 ) {
     auto cfg                                   = std::make_shared<agentxx::agent::AgentConfig>();
     cfg->model                                 = base->getSubagentModel();

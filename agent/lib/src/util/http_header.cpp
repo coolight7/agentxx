@@ -41,8 +41,8 @@ void HeaderMap::set(std::string_view name, const std::vector<std::string>& value
     }
 }
 
-void HeaderMap::set(std::string_view name, const std::string& value) {
-    set(name, std::vector<std::string>{value});
+void HeaderMap::set(std::string_view name, std::string_view value) {
+    set(name, std::vector<std::string>{std::string{value}});
 }
 
 } // namespace util

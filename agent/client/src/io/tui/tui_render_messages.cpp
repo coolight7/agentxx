@@ -4,9 +4,9 @@
 using namespace ftxui;
 
 namespace {
-std::string oneLinePreview(const std::string& s, size_t max = 60) {
+std::string oneLinePreview(std::string_view s, size_t max = 60) {
     const auto  nl   = s.find('\n');
-    std::string line = (nl == std::string::npos) ? s : s.substr(0, nl);
+    std::string line{(nl == std::string::npos) ? s : s.substr(0, nl)};
     const auto  idx  = agentxx::util::findIndexByUtf8Length(line, max);
     if (idx > 0 && idx < line.size()) {
         line.resize(idx);

@@ -44,9 +44,9 @@ static bool parseEnvLine(std::string& line, std::string& key, std::string& value
     return !key.empty();
 }
 
-std::map<std::string, std::string> loadDotEnv(const std::string& path) {
+std::map<std::string, std::string> loadDotEnv(std::string_view path) {
     std::map<std::string, std::string> vars;
-    std::ifstream                      file(path);
+    std::ifstream                      file(std::string{path});
     if (!file.is_open()) {
         return vars;
     }
@@ -63,9 +63,9 @@ std::map<std::string, std::string> loadDotEnv(const std::string& path) {
     return vars;
 }
 
-std::map<std::string, std::string> loadOverrideEnv(const std::string& path) {
+std::map<std::string, std::string> loadOverrideEnv(std::string_view path) {
     std::map<std::string, std::string> vars;
-    std::ifstream                      file(path);
+    std::ifstream                      file(std::string{path});
     if (!file.is_open()) {
         return vars;
     }
@@ -97,7 +97,7 @@ std::map<std::string, std::string> loadDotEnv(const std::vector<std::string>& pa
 // ---------------------------------------------------------------------------
 
 std::string resolveEnvVars(
-    const std::string&                        input,
+    std::string_view                          input,
     const std::map<std::string, std::string>& dotEnvVars,
     const std::map<std::string, std::string>& overrideEnvVars
 ) {
@@ -119,7 +119,7 @@ std::string resolveEnvVars(
             break;
         }
 
-        std::string varName = input.substr(start + 2, close - start - 2);
+        std::string varName{input.substr(start + 2, close - start - 2)};
         pos                 = close + 1;
 
         auto ovIt = overrideEnvVars.find(varName);
@@ -191,12 +191,12 @@ static neograph::json yamlToJson(const YAML::Node& node) {
 // ---------------------------------------------------------------------------
 
 YamlAppConfig loadYamlConfig(
-    const std::string&                        path,
+    std::string_view                          path,
     const std::map<std::string, std::string>& dotEnvVars,
     const std::map<std::string, std::string>& overrideEnvVars
 ) {
     YamlAppConfig cfg;
-    auto          root = YAML::LoadFile(path);
+    auto          root = YAML::LoadFile(std::string{path});
 
     if (root["models"] && root["models"].IsSequence()) {
         for (const auto& node : root["models"]) {
@@ -222,7 +222,7 @@ YamlAppConfig loadYamlConfig(
                                       dotEnvVars,
                                       overrideEnvVars
                                   )
-                                   == "true";
+                                  == "true";
             }
             if (node["connect_timeout"]) {
                 mc.connectTimeoutSeconds = std::stoi(resolveEnvVars(
@@ -325,12 +325,12 @@ YamlAppConfig loadYamlConfig(
 
 agent::ModelConfig resolveModelConfig(
     const std::map<std::string, agent::ModelConfig>& models,
-    const std::string&                               modelName
+    std::string_view                                 modelName
 ) {
     if (modelName.empty()) {
         return agent::ModelConfig{};
     }
-    auto it = models.find(modelName);
+    auto it = models.find(std::string{modelName});
     if (it == models.end()) {
         XX_LOGE("[Config] Warning: model '{}' not found in config", modelName);
         return agent::ModelConfig{};
@@ -341,7 +341,7 @@ agent::ModelConfig resolveModelConfig(
 void applyModelToConfig(
     std::shared_ptr<agent::AgentConfig>              agentConfig,
     const std::map<std::string, agent::ModelConfig>& models,
-    const std::string&                               modelName
+    std::string_view                                 modelName
 ) {
     auto mc = resolveModelConfig(models, modelName);
     if (mc.isValid()) {
@@ -352,7 +352,7 @@ void applyModelToConfig(
 void applySubagentModelToConfig(
     std::shared_ptr<agent::AgentConfig>              agentConfig,
     const std::map<std::string, agent::ModelConfig>& models,
-    const std::string&                               modelName
+    std::string_view                                 modelName
 ) {
     auto mc = resolveModelConfig(models, modelName);
     if (mc.isValid()) {
@@ -363,7 +363,7 @@ void applySubagentModelToConfig(
 void applyWebSearchModelToConfig(
     std::shared_ptr<agent::AgentConfig>              agentConfig,
     const std::map<std::string, agent::ModelConfig>& models,
-    const std::string&                               modelName
+    std::string_view                                 modelName
 ) {
     auto mc = resolveModelConfig(models, modelName);
     if (mc.isValid()) {
@@ -374,7 +374,7 @@ void applyWebSearchModelToConfig(
 void applyAvailableModelsToConfig(
     std::shared_ptr<agent::AgentConfig>              agentConfig,
     const std::map<std::string, agent::ModelConfig>& models,
-    const std::string&                               currentModelName
+    std::string_view                                 currentModelName
 ) {
     for (const auto& [name, entry] : models) {
         auto mc = resolveModelConfig(models, name);

@@ -1137,7 +1137,7 @@ neograph::ChatTool FilesystemGrepTool::get_definition() const {
     };
 }
 
-asio::awaitable<std::string> FilesystemGrepTool::readFileContent(const std::string& filepath) {
+asio::awaitable<std::string> FilesystemGrepTool::readFileContent(std::string_view filepath) {
     auto systemCharsetFilePath = agentxx::util::toCurrentSystemStandardPath(filepath);
     agentxx::util::autoConvertToSystemPath(systemCharsetFilePath);
 

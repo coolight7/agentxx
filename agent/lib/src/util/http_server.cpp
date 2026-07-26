@@ -162,18 +162,18 @@ void HttpServer::stop() {
 }
 
 void HttpServer::addSseRoute(
-    const std::string&                                                         path,
+    std::string_view                                                           path,
     std::function<asio::awaitable<void>(Request&, std::shared_ptr<SseWriter>)> handler
 ) {
-    sseRoutes_[path] = std::move(handler);
+    sseRoutes_[std::string{path}] = std::move(handler);
 }
 
-void HttpServer::enableWebSocket(const std::string& path, WsHandler handler) {
-    wsRoutes_[path] = std::move(handler);
+void HttpServer::enableWebSocket(std::string_view path, WsHandler handler) {
+    wsRoutes_[std::string{path}] = std::move(handler);
 }
 
-void HttpServer::enableWebSocketSsl(const std::string& path, WssHandler handler) {
-    wsSslRoutes_[path] = std::move(handler);
+void HttpServer::enableWebSocketSsl(std::string_view path, WssHandler handler) {
+    wsSslRoutes_[std::string{path}] = std::move(handler);
 }
 
 void HttpServer::startAsync(asio::any_io_executor executor) {

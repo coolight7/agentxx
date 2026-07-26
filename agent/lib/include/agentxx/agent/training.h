@@ -31,10 +31,10 @@ struct TrainingTestCase {
 };
 
 /// 从 JSON 文件中加载测试用例
-inline std::vector<TrainingTestCase> loadTestCasesFromFile(const std::string& filePath) {
+inline std::vector<TrainingTestCase> loadTestCasesFromFile(std::string_view filePath) {
     std::vector<TrainingTestCase> cases;
     try {
-        std::ifstream ifs(filePath);
+        std::ifstream ifs(std::string{filePath});
         if (!ifs.is_open()) {
             XX_LOGE("[Training] Failed to open test case file: {}", filePath);
             return cases;
@@ -67,7 +67,7 @@ inline std::vector<TrainingTestCase> loadTestCasesFromFile(const std::string& fi
 }
 
 /// 从目录中加载所有 JSON 测试用例文件
-inline std::vector<TrainingTestCase> loadTestCasesFromDirectory(const std::string& dirPath) {
+inline std::vector<TrainingTestCase> loadTestCasesFromDirectory(std::string_view dirPath) {
     std::vector<TrainingTestCase> allCases;
     try {
         for (const auto& entry : std::filesystem::directory_iterator(dirPath)) {
@@ -92,8 +92,8 @@ inline std::vector<TrainingTestCase> loadTestCasesFromDirectory(const std::strin
 }
 
 /// 剥离 LLM 响应中可能存在的 Markdown 代码块标记
-inline std::string stripMarkdownCodeBlock(const std::string& content) {
-    std::string result = content;
+inline std::string stripMarkdownCodeBlock(std::string_view content) {
+    std::string result{content};
     auto        start  = result.find_first_not_of(" \t\n\r");
     auto        end    = result.find_last_not_of(" \t\n\r");
     if (start == std::string::npos) {
@@ -119,7 +119,7 @@ inline std::string stripMarkdownCodeBlock(const std::string& content) {
 
 /// 从 LLM 响应中解析 JSON：先剥离 markdown 代码块，失败则尝试提取首个 {...}
 /// 子串
-inline neograph::json parseJsonFromResponse(const std::string& content) {
+inline neograph::json parseJsonFromResponse(std::string_view content) {
     auto stripped = stripMarkdownCodeBlock(content);
     try {
         return neograph::json::parse(stripped);
@@ -171,15 +171,12 @@ struct PromptVariant {
 // ======================== 回调类型 ========================
 
 /// 自定义评分回调
-using TrainingScoringFunc = std::function<asio::awaitable<TrainingScore>(
-    const std::string&      agentOutput,
-    const TrainingTestCase& testCase,
-    int                     iteration
-)>;
+using TrainingScoringFunc = std::function<asio::awaitable<
+    TrainingScore>(std::string_view agentOutput, const TrainingTestCase& testCase, int iteration)>;
 
 /// 迭代观察回调
 using TrainingIterationCallback
-    = std::function<void(const TrainingScore& score, const std::string& agentOutput)>;
+    = std::function<void(const TrainingScore& score, std::string_view agentOutput)>;
 
 // ======================== 进化训练配置 ========================
 
@@ -389,8 +386,8 @@ protected:
     /// 输入中的 system 消息，因此必须写入 config 而非通过消息传入
     asio::awaitable<std::string> runLLMAgent(
         std::shared_ptr<agentxx::agent::DeepAgent> agent,
-        const std::string&                         systemPrompt,
-        const std::string&                         userContent
+        std::string_view                           systemPrompt,
+        std::string_view                           userContent
     );
 
     /// 将变体的完整 prompt 写入 trainAgent 的运行时配置
@@ -405,11 +402,11 @@ protected:
     PromptVariant promptVariantFromJson(const neograph::json& j) const;
 
     /// 轮转备份保存文件：file -> file.1 -> file.2 -> ... -> file.N
-    void rotateSaveFile(const std::string& path, int keepCount);
+    void rotateSaveFile(std::string_view path, int keepCount);
 
-    void savePopulationToFile(const std::string& filePath, int backupCount = 0);
+    void savePopulationToFile(std::string_view filePath, int backupCount = 0);
 
-    bool loadPopulationFromFile(const std::string& filePath);
+    bool loadPopulationFromFile(std::string_view filePath);
 
     // ---- 评分 ----
 
@@ -428,7 +425,7 @@ protected:
     asio::awaitable<OptimizedPrompts> optimizeVariantWithLLM(
         const PromptVariant&           variant,
         const TrainingTestCase&        testCase,
-        const std::string&             agentOutput,
+        std::string_view               agentOutput,
         const TrainingScore&           score,
         const EvolutionTrainingConfig& cfg
     );
@@ -439,7 +436,7 @@ protected:
 
     /// 对字符串进行随机变异：以 mutationRate 概率对每个字符进行插入/删除/替换
     /// 注意: 字符级变异会破坏 prompt 语义，仅作为 LLM 变异不可用时的降级手段
-    std::string mutateString(const std::string& input, double mutationRate);
+    std::string mutateString(std::string_view input, double mutationRate);
 
     PromptVariant createChildVariantCharMut(const PromptVariant& parent, double mutationRate);
 
@@ -473,7 +470,7 @@ public:
 
     // ---- 初始化种子 prompt ----
 
-    void seedInitialPopulation(const std::string& baseSystemPrompt);
+    void seedInitialPopulation(std::string_view baseSystemPrompt);
 
     /// 从完整 AgentPrompt 初始化种子（包含 planning/skill/tool prompts）
     void seedInitialPopulation(const AgentPrompt& prompt);

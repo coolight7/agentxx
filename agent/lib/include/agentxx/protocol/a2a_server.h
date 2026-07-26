@@ -41,43 +41,68 @@ enum class A2aTaskState {
 
 inline std::string taskStateToString(A2aTaskState s) {
     switch (s) {
-        case A2aTaskState::Submitted:     return "TASK_STATE_SUBMITTED";
-        case A2aTaskState::Working:       return "TASK_STATE_WORKING";
-        case A2aTaskState::Completed:     return "TASK_STATE_COMPLETED";
-        case A2aTaskState::Failed:        return "TASK_STATE_FAILED";
-        case A2aTaskState::Canceled:      return "TASK_STATE_CANCELED";
-        case A2aTaskState::InputRequired: return "TASK_STATE_INPUT_REQUIRED";
-        case A2aTaskState::Rejected:      return "TASK_STATE_REJECTED";
-        case A2aTaskState::AuthRequired:  return "TASK_STATE_AUTH_REQUIRED";
-        default:                          return "TASK_STATE_UNSPECIFIED";
+        case A2aTaskState::Submitted:
+            return "TASK_STATE_SUBMITTED";
+        case A2aTaskState::Working:
+            return "TASK_STATE_WORKING";
+        case A2aTaskState::Completed:
+            return "TASK_STATE_COMPLETED";
+        case A2aTaskState::Failed:
+            return "TASK_STATE_FAILED";
+        case A2aTaskState::Canceled:
+            return "TASK_STATE_CANCELED";
+        case A2aTaskState::InputRequired:
+            return "TASK_STATE_INPUT_REQUIRED";
+        case A2aTaskState::Rejected:
+            return "TASK_STATE_REJECTED";
+        case A2aTaskState::AuthRequired:
+            return "TASK_STATE_AUTH_REQUIRED";
+        default:
+            return "TASK_STATE_UNSPECIFIED";
     }
 }
 
-inline A2aTaskState taskStateFromString(const std::string& s) {
-    if (s == "TASK_STATE_SUBMITTED")      return A2aTaskState::Submitted;
-    if (s == "TASK_STATE_WORKING")        return A2aTaskState::Working;
-    if (s == "TASK_STATE_COMPLETED")      return A2aTaskState::Completed;
-    if (s == "TASK_STATE_FAILED")         return A2aTaskState::Failed;
-    if (s == "TASK_STATE_CANCELED")       return A2aTaskState::Canceled;
-    if (s == "TASK_STATE_INPUT_REQUIRED") return A2aTaskState::InputRequired;
-    if (s == "TASK_STATE_REJECTED")       return A2aTaskState::Rejected;
-    if (s == "TASK_STATE_AUTH_REQUIRED")  return A2aTaskState::AuthRequired;
+inline A2aTaskState taskStateFromString(std::string_view s) {
+    if (s == "TASK_STATE_SUBMITTED") {
+        return A2aTaskState::Submitted;
+    }
+    if (s == "TASK_STATE_WORKING") {
+        return A2aTaskState::Working;
+    }
+    if (s == "TASK_STATE_COMPLETED") {
+        return A2aTaskState::Completed;
+    }
+    if (s == "TASK_STATE_FAILED") {
+        return A2aTaskState::Failed;
+    }
+    if (s == "TASK_STATE_CANCELED") {
+        return A2aTaskState::Canceled;
+    }
+    if (s == "TASK_STATE_INPUT_REQUIRED") {
+        return A2aTaskState::InputRequired;
+    }
+    if (s == "TASK_STATE_REJECTED") {
+        return A2aTaskState::Rejected;
+    }
+    if (s == "TASK_STATE_AUTH_REQUIRED") {
+        return A2aTaskState::AuthRequired;
+    }
     return A2aTaskState::Unspecified;
 }
 
 inline bool isTerminalState(A2aTaskState s) {
-    return s == A2aTaskState::Completed || s == A2aTaskState::Failed
-        || s == A2aTaskState::Canceled || s == A2aTaskState::Rejected;
+    return s == A2aTaskState::Completed || s == A2aTaskState::Failed || s == A2aTaskState::Canceled
+           || s == A2aTaskState::Rejected;
 }
 
 // A2A-specific JSON-RPC error codes
-inline constexpr int kA2aTaskNotFound              = -32001;
-inline constexpr int kA2aTaskNotCancelable         = -32002;
+inline constexpr int kA2aTaskNotFound                 = -32001;
+inline constexpr int kA2aTaskNotCancelable            = -32002;
 inline constexpr int kA2aPushNotificationNotSupported = -32003;
-inline constexpr int kA2aUnsupportedOperation      = -32004;
-inline constexpr int kA2aContentTypeNotSupported   = -32005;
-inline constexpr int kA2aInvalidAgentResponse      = -32006;
-inline constexpr int kA2aVersionNotSupported       = -32009;
+inline constexpr int kA2aUnsupportedOperation         = -32004;
+inline constexpr int kA2aContentTypeNotSupported      = -32005;
+inline constexpr int kA2aInvalidAgentResponse         = -32006;
+inline constexpr int kA2aVersionNotSupported          = -32009;
 
 // ---------------------------------------------------------------------------
 // A2A Server
@@ -104,14 +129,14 @@ public:
 
     struct Config {
         util::HttpServer::Config httpConfig;
-        std::string              a2aEndpoint     = "/a2a";
-        std::string              sseEndpoint     = "/a2a/sse";
-        std::string              agentCardPath   = "/.well-known/agent-card.json";
-        std::string              serverName      = "agentxx-a2a";
-        std::string              serverVersion   = "1.0.0";
-        std::string              description     = "Agentxx A2A Server";
-        std::vector<std::string> inputModes      = {"text/plain"};
-        std::vector<std::string> outputModes     = {"text/plain", "application/json"};
+        std::string              a2aEndpoint   = "/a2a";
+        std::string              sseEndpoint   = "/a2a/sse";
+        std::string              agentCardPath = "/.well-known/agent-card.json";
+        std::string              serverName    = "agentxx-a2a";
+        std::string              serverVersion = "1.0.0";
+        std::string              description   = "Agentxx A2A Server";
+        std::vector<std::string> inputModes    = {"text/plain"};
+        std::vector<std::string> outputModes   = {"text/plain", "application/json"};
         std::vector<SkillDef>    skills;
         bool                     supportStreaming = true;
         size_t                   maxTasks         = 10000;
@@ -138,21 +163,21 @@ public:
     // -----------------------------------------------------------------------
 
     static json jsonRpcResult(const json& id, json result);
-    static json jsonRpcError(const json& id, int code, const std::string& msg);
-    static json makeTaskNotFound(const json& id, const std::string& taskId);
-    static json makeUnsupportedOperation(const json& id, const std::string& detail);
-    static json makeVersionNotSupported(const json& id, const std::string& version);
+    static json jsonRpcError(const json& id, int code, std::string_view msg);
+    static json makeTaskNotFound(const json& id, std::string_view taskId);
+    static json makeUnsupportedOperation(const json& id, std::string_view detail);
+    static json makeVersionNotSupported(const json& id, std::string_view version);
 
     static std::string generateId();
     static std::string currentTimestamp();
 
-    static json makeTextPart(const std::string& text);
-    static json makeMessage(const std::string& role, const std::string& text);
+    static json makeTextPart(std::string_view text);
+    static json makeMessage(std::string_view role, std::string_view text);
     static json makeTask(
-        const std::string& id,
-        const std::string& contextId,
-        A2aTaskState       state,
-        const json&        statusMessage = json()
+        std::string_view id,
+        std::string_view contextId,
+        A2aTaskState     state,
+        const json&      statusMessage = json()
     );
 
     static std::string extractTextFromParts(const json& parts);
@@ -160,14 +185,14 @@ public:
 private:
 
     struct TaskRecord {
-        std::string  id;
-        std::string  contextId;
-        A2aTaskState state = A2aTaskState::Submitted;
-        json         history    = json::array();
-        json         artifacts  = json::array();
-        json         metadata   = json::object();
-        std::string  createdAt;
-        std::string  updatedAt;
+        std::string                        id;
+        std::string                        contextId;
+        A2aTaskState                       state     = A2aTaskState::Submitted;
+        json                               history   = json::array();
+        json                               artifacts = json::array();
+        json                               metadata  = json::object();
+        std::string                        createdAt;
+        std::string                        updatedAt;
         std::shared_ptr<std::atomic<bool>> cancelFlag;
     };
 
@@ -207,24 +232,24 @@ private:
     // Task execution (async worker)
     // -----------------------------------------------------------------------
 
-    void executeTask(const std::string& taskId, const std::string& userInput);
+    void executeTask(std::string_view taskId, std::string_view userInput);
 
     // -----------------------------------------------------------------------
     // SSE broadcast
     // -----------------------------------------------------------------------
 
-    void broadcastSSE(const std::string& data);
+    void broadcastSSE(std::string_view data);
     void stopSSE();
 
     // -----------------------------------------------------------------------
     // Task store helpers
     // -----------------------------------------------------------------------
 
-    std::shared_ptr<TaskRecord> findTask(const std::string& taskId);
+    std::shared_ptr<TaskRecord> findTask(std::string_view taskId);
     void                        updateTaskState(
-                               const std::string& taskId,
-                               A2aTaskState       state,
-                               const json&        statusMsg = json()
+                               std::string_view taskId,
+                               A2aTaskState     state,
+                               const json&      statusMsg = json()
                            );
     void pruneOldTasks();
 
@@ -246,13 +271,14 @@ private:
     std::shared_ptr<agentxx::agent::DeepAgent> deepAgent_;
     std::unique_ptr<util::HttpServer>          httpServer_;
 
-    mutable std::mutex                              tasksMutex_;
-    std::map<std::string, std::shared_ptr<TaskRecord>> tasks_;
+    mutable std::mutex                                 tasksMutex_;
+    std::map<std::string, std::shared_ptr<TaskRecord>, std::less<>> tasks_;
 
     struct SSEClient {
         std::shared_ptr<util::HttpServer::SseWriter> writer;
         bool                                         closed = false;
     };
+
     std::mutex                              sseClientsMutex_;
     std::vector<std::shared_ptr<SSEClient>> sseClients_;
 

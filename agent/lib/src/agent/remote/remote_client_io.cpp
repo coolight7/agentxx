@@ -75,10 +75,10 @@ asio::awaitable<std::optional<std::string>> RemoteClientAgentIO::getInput() {
 }
 
 asio::awaitable<neograph::json> RemoteClientAgentIO::handleInterrupt(
-    const std::string& threadId,
-    const std::string& interruptNode,
-    const std::string& interruptValue,
-    const std::string& interruptArgJson
+    std::string_view threadId,
+    std::string_view interruptNode,
+    std::string_view interruptValue,
+    std::string_view interruptArgJson
 ) {
     if (!inner_) {
         co_return neograph::json::array();
@@ -215,11 +215,11 @@ asio::awaitable<void> RemoteClientAgentIO::writeLoop() {
 }
 
 asio::awaitable<void> RemoteClientAgentIO::handleInterruptRequest(
-    int64_t            id,
-    const std::string& threadId,
-    const std::string& node,
-    const std::string& value,
-    const std::string& argJson
+    int64_t          id,
+    std::string_view threadId,
+    std::string_view node,
+    std::string_view value,
+    std::string_view argJson
 ) {
     auto result = co_await handleInterrupt(threadId, node, value, argJson);
     enqueue(makeInterruptResponse(id, result));
@@ -352,7 +352,7 @@ asio::awaitable<void> RemoteClientAgentIO::heartbeat() {
 // ---------------------------------------------------------------------------
 
 asio::awaitable<bool>
-    RemoteClientAgentIO::connect(const std::string& threadId, const std::string& token) {
+    RemoteClientAgentIO::connect(std::string_view threadId, std::string_view token) {
     // 重连时携带 lastSeq/tailHash 供 server 增量重放
     enqueue(makeHello(threadId, token, lastDeltaSeq_.load(std::memory_order_acquire), lastTailHash_)
     );
@@ -373,7 +373,7 @@ asio::awaitable<bool>
 // ---------------------------------------------------------------------------
 
 asio::awaitable<bool>
-    RemoteClientAgentIO::start(const std::string& threadId, const std::string& token) {
+    RemoteClientAgentIO::start(std::string_view threadId, std::string_view token) {
     threadId_ = threadId;
     resetConnState();
     spawnLoops();
@@ -386,10 +386,10 @@ asio::awaitable<bool>
 }
 
 void RemoteClientAgentIO::sendUserInput(
-    const std::string& threadId,
-    const std::string& text,
-    bool               isFirstMsg,
-    const std::string& model
+    std::string_view threadId,
+    std::string_view text,
+    bool             isFirstMsg,
+    std::string_view model
 ) {
     enqueue(makeUserInput(threadId, text, isFirstMsg, model));
 }
@@ -398,19 +398,19 @@ asio::awaitable<RemoteClientAgentIO::TurnResult> RemoteClientAgentIO::awaitTurnR
     co_return co_await turnChannel_->async_receive(asio::use_awaitable);
 }
 
-void RemoteClientAgentIO::selectModel(const std::string& threadId, const std::string& model) {
+void RemoteClientAgentIO::selectModel(std::string_view threadId, std::string_view model) {
     enqueue(makeSelectModel(threadId, model));
 }
 
-void RemoteClientAgentIO::cancel(const std::string& threadId) {
+void RemoteClientAgentIO::cancel(std::string_view threadId) {
     enqueue(makeCancel(threadId));
 }
 
-void RemoteClientAgentIO::requestCancel(const std::string& threadId) {
+void RemoteClientAgentIO::requestCancel(std::string_view threadId) {
     cancel(threadId);
 }
 
-void RemoteClientAgentIO::requestSelectModel(const std::string& threadId, const std::string& model) {
+void RemoteClientAgentIO::requestSelectModel(std::string_view threadId, std::string_view model) {
     selectModel(threadId, model);
 }
 
@@ -500,7 +500,7 @@ asio::awaitable<bool> RemoteClientAgentIO::runOnce() {
 }
 
 asio::awaitable<void>
-    RemoteClientAgentIO::runSession(const std::string& threadId, const std::string& model) {
+    RemoteClientAgentIO::runSession(std::string_view threadId, std::string_view model) {
     threadId_ = threadId;
     model_    = model;
     first_    = true;

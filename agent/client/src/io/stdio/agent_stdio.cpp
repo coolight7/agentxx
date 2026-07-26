@@ -76,10 +76,10 @@ asio::awaitable<std::optional<std::string>> AgentStdIO::getInput() {
 }
 
 asio::awaitable<neograph::json> AgentStdIO::handleInterrupt(
-    const std::string& threadId,
-    const std::string& interruptNode,
-    const std::string& interruptValue,
-    const std::string& interruptArgJson
+    std::string_view threadId,
+    std::string_view interruptNode,
+    std::string_view interruptValue,
+    std::string_view interruptArgJson
 ) {
     auto argOpt
         = agentxx::middleware::InterruptHandleArg::fromJson(neograph::json::parse(interruptArgJson)

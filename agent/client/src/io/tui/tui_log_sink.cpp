@@ -1,10 +1,10 @@
 #include "agentxx-client/io/tui/agent_tui.h"
 
-void TUILogSink::onLog(agentxx::util::LogLevel level, const std::string& message) {
+void TUILogSink::onLog(agentxx::util::LogLevel level, std::string_view message) {
     std::function<void()> cb;
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        lines_.push_back(Line{level, message});
+        lines_.push_back(Line{level, std::string{message}});
         while (lines_.size() > maxLines_) {
             lines_.pop_front();
         }

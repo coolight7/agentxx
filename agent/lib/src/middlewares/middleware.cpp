@@ -272,17 +272,15 @@ std::optional<std::string>
 }
 
 void MiddlewareContext::setShareStoreItemValue(
-    const std::string& thread_id,
-    const size_t       id,
-    std::string_view   value
+    std::string_view thread_id,
+    const size_t     id,
+    std::string_view value
 ) {
     shareStore[thread_id].store[id] = value;
 }
 
-size_t MiddlewareContext::addShareStoreItemValue(
-    const std::string& thread_id,
-    std::string_view   value
-) {
+size_t
+    MiddlewareContext::addShareStoreItemValue(std::string_view thread_id, std::string_view value) {
     auto& store     = shareStore[thread_id];
     auto  id        = store.getNextId();
     store.store[id] = value;
@@ -299,7 +297,7 @@ void MiddlewareContext::removeShareStoreItemValue(std::string_view thread_id, co
     }
 }
 
-void MiddlewareContext::removeGraphDataItem(const std::string& thread_id, std::string_view key) {
+void MiddlewareContext::removeGraphDataItem(std::string_view thread_id, std::string_view key) {
     auto it = graphData.find(thread_id);
     if (graphData.end() != it) {
         auto resultIt = it->second.find(key);
@@ -310,7 +308,7 @@ void MiddlewareContext::removeGraphDataItem(const std::string& thread_id, std::s
 }
 
 void MiddlewareContext::throwNodeInterruptBase(
-    const std::string&    thread_id,
+    std::string_view      thread_id,
     const neograph::json& msgs
 ) {
     if (msgs.is_array()) {
@@ -320,7 +318,7 @@ void MiddlewareContext::throwNodeInterruptBase(
 }
 
 asio::awaitable<neograph::json> MiddlewareContext::requestInterrupt(
-    const std::string&                         thread_id,
+    std::string_view                           thread_id,
     const std::function<InterruptHandleArg()>& onCreateArg,
     const neograph::json&                      msgs
 ) {
@@ -346,7 +344,7 @@ asio::awaitable<neograph::json> MiddlewareContext::requestInterrupt(
 
 neograph::json MiddlewareContext::getGraphDataToState(
     neograph::graph::GraphState& state,
-    const std::string&           thread_id
+    std::string_view             thread_id
 ) {
     neograph::json saved = neograph::json::object();
     auto           it    = graphData.find(thread_id);
@@ -360,15 +358,12 @@ neograph::json MiddlewareContext::getGraphDataToState(
 
 void MiddlewareContext::setGraphDataFromState(
     neograph::graph::GraphState& state,
-    const std::string&           thread_id
+    std::string_view             thread_id
 ) {
     setGraphDataFromState(state.get(channel_savedGraphData), thread_id);
 }
 
-void MiddlewareContext::setGraphDataFromState(
-    const neograph::json& j,
-    const std::string&    thread_id
-) {
+void MiddlewareContext::setGraphDataFromState(const neograph::json& j, std::string_view thread_id) {
     if (j.is_object()) {
         auto data = std::map<std::string, std::any, std::less<>>{};
         for (auto it = j.begin(); it != j.end(); ++it) {

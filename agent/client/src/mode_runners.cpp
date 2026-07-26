@@ -22,9 +22,9 @@ namespace client {
 // ---------------------------------------------------------------------------
 
 static std::shared_ptr<agent::remote::RemoteClientAgentIO> setupLocalUnified(
-    asio::any_io_executor                      clientEx,
-    std::shared_ptr<agent::DeepAgent>          agent,
-    std::shared_ptr<agent::AgentIOBase>        io
+    asio::any_io_executor               clientEx,
+    std::shared_ptr<agent::DeepAgent>   agent,
+    std::shared_ptr<agent::AgentIOBase> io
 ) {
     auto agentEx = agent->ioCtx->get_executor();
     auto [clientTransport, serverTransport]
@@ -105,7 +105,7 @@ static asio::awaitable<void> runLocalTuiUnifiedAsync(
             registry->registerModel(config->model.modelName, config->model);
             registry->setDefaultModel(config->model.modelName);
         } else if (!config->currentModelName.empty()
-                    && registry->hasModel(config->currentModelName)) {
+                   && registry->hasModel(config->currentModelName)) {
             registry->setDefaultModel(config->currentModelName);
         }
         ctx->modelRegistry = std::move(registry);
@@ -163,9 +163,9 @@ static asio::awaitable<void>
     co_await remote->shutdown();
 }
 
-void runRemoteCli(const std::string& url, const std::string& token, const std::string& model) {
+void runRemoteCli(std::string_view url, std::string_view token, std::string_view model) {
     asio::io_context ctx;
-    asio::co_spawn(ctx, runRemoteCliAsync(url, token, model), asio::detached);
+    asio::co_spawn(ctx, runRemoteCliAsync(std::string{url}, std::string{token}, std::string{model}), asio::detached);
     ctx.run();
 }
 
@@ -205,12 +205,12 @@ static asio::awaitable<void> runRemoteTuiAsync(
 
 void runRemoteTui(
     std::shared_ptr<agent::AgentConfig> config,
-    const std::string&                  url,
-    const std::string&                  token,
-    const std::string&                  model
+    std::string_view                    url,
+    std::string_view                    token,
+    std::string_view                    model
 ) {
     asio::io_context ctx;
-    asio::co_spawn(ctx, runRemoteTuiAsync(config, url, token, model), asio::detached);
+    asio::co_spawn(ctx, runRemoteTuiAsync(config, std::string{url}, std::string{token}, std::string{model}), asio::detached);
     ctx.run();
 }
 

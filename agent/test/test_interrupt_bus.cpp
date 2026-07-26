@@ -11,8 +11,10 @@
 #include "asio/detached.hpp"
 #include "asio/io_context.hpp"
 #include "asio/use_awaitable.hpp"
+#include <fmt/format.h>
 #include <iostream>
 #include <memory>
+#include <fmt/format.h>
 
 namespace agentxx {
 namespace test {
@@ -37,10 +39,10 @@ public:
     }
 
     asio::awaitable<neograph::json> handleInterrupt(
-        const std::string& /*threadId*/,
-        const std::string& interruptNode,
-        const std::string& /*interruptValue*/,
-        const std::string& /*interruptArgJson*/
+        std::string_view /*threadId*/,
+        std::string_view interruptNode,
+        std::string_view /*interruptValue*/,
+        std::string_view /*interruptArgJson*/
     ) override {
         ++interruptCalls;
         if (interruptNode == "permission") {
@@ -224,7 +226,7 @@ asio::awaitable<void> test_interrupt_bus_custom_handler() {
            size_t /*corrId*/) -> asio::awaitable<agentxx::events::RespInterrupt> {
             co_return agentxx::events::RespInterrupt{
                 .handled    = true,
-                .resultJson = std::string{"\"custom_ok_"} + req.handleName + "\"",
+                .resultJson = fmt::format("\"custom_ok_{}\"", req.handleName),
             };
         }
     );

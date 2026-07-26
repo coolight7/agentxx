@@ -52,7 +52,7 @@ public:
 class SubAgentManagerTool : public XXToolBase {
 public:
 
-    std::map<std::string, std::shared_ptr<SubAgentTaskBase>> subAgentList{};
+    std::map<std::string, std::shared_ptr<SubAgentTaskBase>, std::less<>> subAgentList{};
 
     SubAgentManagerTool(
         std::string_view                            in_nodeName,

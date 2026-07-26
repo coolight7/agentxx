@@ -50,7 +50,7 @@ void LogDispatcher::removeSink(const std::shared_ptr<LogSink>& sink) {
     sinks_.store(std::move(next), std::memory_order_release);
 }
 
-void LogDispatcher::dispatch(LogLevel level, const std::string& message) {
+void LogDispatcher::dispatch(LogLevel level, std::string_view message) {
     // 无锁加载快照 (copy-on-write); 多线程并发 dispatch 互不阻塞, 且不持锁回调 sink
     auto snapshot = sinks_.load(std::memory_order_acquire);
     for (const auto& wp : *snapshot) {
@@ -64,7 +64,7 @@ void LogDispatcher::dispatch(LogLevel level, const std::string& message) {
     }
 }
 
-void xxLogPrint(LogLevel level, const std::string& message) {
+void xxLogPrint(LogLevel level, std::string_view message) {
     // std::cerr << message << std::endl;
     LogDispatcher::instance().dispatch(level, message);
 }

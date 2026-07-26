@@ -274,7 +274,7 @@ std::unique_ptr<MockOpenAIServer> startMockServer(uint16_t& outPort) {
         2,
         std::make_shared<HttpServer::Handler>(
             [mock
-             = mock.get()](HttpServer::Request& req, HttpServer::Response& resp, const std::string&)
+             = mock.get()](HttpServer::Request& req, HttpServer::Response& resp, std::string_view)
                 -> asio::awaitable<void> {
                 mock->lastRequestBody = req.body();
 

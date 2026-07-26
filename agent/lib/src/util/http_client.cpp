@@ -271,7 +271,7 @@ std::chrono::seconds HttpClient::calcSendTimeout(size_t bodyBytes) {
 
 asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::requestAsync(
     std::string_view     method,
-    const std::string&   url,
+    std::string_view     url,
     std::string_view     body,
     std::string_view     contentType,
     const HeaderMap&     extraHeaders,
@@ -280,7 +280,7 @@ asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::requestAsy
     namespace http = boost::beast::http;
     using asio::ip::tcp;
 
-    std::string currentUrl = url;
+    std::string currentUrl{url};
     std::string currentMethod(method);
     std::string currentBody(body);
     std::string currentContentType(contentType);
@@ -425,7 +425,7 @@ bool HttpClient::getSslVerify() noexcept {
 }
 
 asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::getAsync(
-    const std::string&   url,
+    std::string_view     url,
     const HeaderMap&     extraHeaders,
     const RequestConfig& config
 ) {
@@ -433,7 +433,7 @@ asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::getAsync(
 }
 
 asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::headAsync(
-    const std::string&   url,
+    std::string_view     url,
     const HeaderMap&     extraHeaders,
     const RequestConfig& config
 ) {
@@ -441,7 +441,7 @@ asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::headAsync(
 }
 
 asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::postAsync(
-    const std::string&    url,
+    std::string_view      url,
     const neograph::json& body,
     const HeaderMap&      extraHeaders,
     const RequestConfig&  config
@@ -457,7 +457,7 @@ asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::postAsync(
 }
 
 asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::postAsync(
-    const std::string&   url,
+    std::string_view     url,
     std::string_view     body,
     std::string_view     contentType,
     const HeaderMap&     extraHeaders,
@@ -467,7 +467,7 @@ asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::postAsync(
 }
 
 asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::putAsync(
-    const std::string&   url,
+    std::string_view     url,
     std::string_view     body,
     std::string_view     contentType,
     const HeaderMap&     extraHeaders,
@@ -477,7 +477,7 @@ asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::putAsync(
 }
 
 asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::patchAsync(
-    const std::string&   url,
+    std::string_view     url,
     std::string_view     body,
     std::string_view     contentType,
     const HeaderMap&     extraHeaders,
@@ -487,7 +487,7 @@ asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::patchAsync
 }
 
 asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::deleteAsync(
-    const std::string&   url,
+    std::string_view     url,
     const HeaderMap&     extraHeaders,
     const RequestConfig& config
 ) {
@@ -495,7 +495,7 @@ asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::deleteAsyn
 }
 
 asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::optionsAsync(
-    const std::string&   url,
+    std::string_view     url,
     const HeaderMap&     extraHeaders,
     const RequestConfig& config
 ) {
@@ -503,7 +503,7 @@ asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::optionsAsy
 }
 
 asio::awaitable<std::expected<std::string, std::string>>
-    HttpClient::fetchMarkdown(const std::string& url, const RequestConfig& config) {
+    HttpClient::fetchMarkdown(std::string_view url, const RequestConfig& config) {
     auto resp = co_await getAsync(url, {}, config);
     if (!resp.has_value()) {
         XX_LOGE("fetchMarkdown error: {}", resp.error());

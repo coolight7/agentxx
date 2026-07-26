@@ -12,6 +12,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <fmt/format.h>
 
 namespace agentxx {
 namespace test {
@@ -366,7 +367,7 @@ asio::awaitable<void> test_http_client_beast_server() {
         return std::make_shared<Server::Handler>(
             [ct,
              body = std::move(body),
-             st](Server::Request&, Server::Response& resp, const std::string&)
+             st](Server::Request&, Server::Response& resp, std::string_view)
                 -> asio::awaitable<void> {
                 resp.result(st);
                 resp.set(field::content_type, ct);
@@ -405,7 +406,7 @@ asio::awaitable<void> test_http_client_beast_server() {
         std::make_shared<Server::Handler>(
             [](Server::Request&  req,
                Server::Response& resp,
-               const std::string&) -> asio::awaitable<void> {
+               std::string_view) -> asio::awaitable<void> {
                 resp.result(status::ok);
                 resp.set(field::content_type, "text/plain");
                 auto val    = req[field::x_forwarded_for];
@@ -423,7 +424,7 @@ asio::awaitable<void> test_http_client_beast_server() {
         std::make_shared<Server::Handler>(
             [](Server::Request&  req,
                Server::Response& resp,
-               const std::string&) -> asio::awaitable<void> {
+               std::string_view) -> asio::awaitable<void> {
                 resp.result(status::ok);
                 resp.set(field::content_type, "text/plain");
                 auto target = req.target();
@@ -441,7 +442,7 @@ asio::awaitable<void> test_http_client_beast_server() {
         std::make_shared<Server::Handler>(
             [](Server::Request&  req,
                Server::Response& resp,
-               const std::string&) -> asio::awaitable<void> {
+               std::string_view) -> asio::awaitable<void> {
                 resp.result(status::ok);
                 resp.set(field::content_type, "text/plain");
                 resp.body() = req.body();
@@ -458,7 +459,7 @@ asio::awaitable<void> test_http_client_beast_server() {
         std::make_shared<Server::Handler>(
             [](Server::Request&  req,
                Server::Response& resp,
-               const std::string&) -> asio::awaitable<void> {
+               std::string_view) -> asio::awaitable<void> {
                 resp.result(status::ok);
                 resp.set(field::content_type, "text/plain");
                 resp.body() = "put:" + req.body();
@@ -478,7 +479,7 @@ asio::awaitable<void> test_http_client_beast_server() {
         std::make_shared<Server::Handler>(
             [](Server::Request&,
                Server::Response& resp,
-               const std::string&) -> asio::awaitable<void> {
+               std::string_view) -> asio::awaitable<void> {
                 resp.result(status::found);
                 resp.set(field::location, "/hello");
                 resp.prepare_payload();
@@ -494,7 +495,7 @@ asio::awaitable<void> test_http_client_beast_server() {
         std::make_shared<Server::Handler>(
             [](Server::Request&,
                Server::Response& resp,
-               const std::string&) -> asio::awaitable<void> {
+               std::string_view) -> asio::awaitable<void> {
                 resp.result(status::found);
                 resp.set(field::location, "/redirect-loop");
                 resp.prepare_payload();
@@ -508,11 +509,11 @@ asio::awaitable<void> test_http_client_beast_server() {
         "/wildcard/*",
         0,
         std::make_shared<Server::Handler>(
-            [](Server::Request&, Server::Response& resp, const std::string& matched_path
+            [](Server::Request&, Server::Response& resp, std::string_view matched_path
             ) -> asio::awaitable<void> {
                 resp.result(status::ok);
                 resp.set(field::content_type, "text/plain");
-                resp.body() = "matched:" + matched_path;
+                resp.body() = fmt::format("matched:{}", matched_path);
                 resp.prepare_payload();
                 co_return;
             }
@@ -526,7 +527,7 @@ asio::awaitable<void> test_http_client_beast_server() {
         std::make_shared<Server::Handler>(
             [](Server::Request&  req,
                Server::Response& resp,
-               const std::string&) -> asio::awaitable<void> {
+               std::string_view) -> asio::awaitable<void> {
                 resp.result(status::ok);
                 resp.set(field::content_type, "text/plain");
                 resp.body() = "patch:" + req.body();
@@ -543,7 +544,7 @@ asio::awaitable<void> test_http_client_beast_server() {
         std::make_shared<Server::Handler>(
             [](Server::Request&  req,
                Server::Response& resp,
-               const std::string&) -> asio::awaitable<void> {
+               std::string_view) -> asio::awaitable<void> {
                 resp.result(status::ok);
                 resp.set(field::content_type, "text/plain");
                 resp.body() = "delete:" + req.body();
@@ -560,7 +561,7 @@ asio::awaitable<void> test_http_client_beast_server() {
         std::make_shared<Server::Handler>(
             [](Server::Request&,
                Server::Response& resp,
-               const std::string&) -> asio::awaitable<void> {
+               std::string_view) -> asio::awaitable<void> {
                 resp.result(status::ok);
                 resp.set(field::content_type, "text/plain");
                 resp.body() = "hello world";
@@ -577,7 +578,7 @@ asio::awaitable<void> test_http_client_beast_server() {
         std::make_shared<Server::Handler>(
             [](Server::Request&  req,
                Server::Response& resp,
-               const std::string&) -> asio::awaitable<void> {
+               std::string_view) -> asio::awaitable<void> {
                 resp.result(status::ok);
                 resp.set(field::content_type, "text/plain");
                 // Default 1000 bytes, or use ?size=NNNN

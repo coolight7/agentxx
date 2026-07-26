@@ -103,7 +103,7 @@ public:
 
     neograph::ChatTool get_definition() const override;
 
-    asio::awaitable<std::string> readFileContent(const std::string& filepath);
+    asio::awaitable<std::string> readFileContent(std::string_view filepath);
 
     asio::awaitable<std::string> execute_async(const neograph::json& arguments) override;
 };

@@ -86,7 +86,7 @@ public:
 
     /// 设置本会话选择的模型名 (线程安全)
     /// - 为空表示使用 ModelProviderRegistry 的默认模型
-    void setModelName(const std::string& name);
+    void setModelName(std::string_view name);
     /// 获取本会话选择的模型名 (线程安全)
     std::string getModelName() const;
 
@@ -103,17 +103,17 @@ class SessionStore {
 public:
 
     /// 获取或创建指定 thread_id 的会话
-    std::shared_ptr<Session> getOrCreate(const std::string& threadId);
+    std::shared_ptr<Session> getOrCreate(std::string_view threadId);
 
     /// 获取指定 thread_id 的会话; 不存在时返回 nullptr
-    std::shared_ptr<Session> get(const std::string& threadId);
+    std::shared_ptr<Session> get(std::string_view threadId);
 
-    void remove(const std::string& threadId);
+    void remove(std::string_view threadId);
 
 private:
 
     std::mutex                                      mutex_;
-    std::map<std::string, std::shared_ptr<Session>> sessions_;
+    std::map<std::string, std::shared_ptr<Session>, std::less<>> sessions_;
 };
 
 class AgentContext {
@@ -138,7 +138,7 @@ public:
     std::shared_ptr<SessionStore> sessions = std::make_shared<SessionStore>();
 
     /// 便捷方法: 获取或创建指定 thread_id 的会话
-    std::shared_ptr<Session> getSession(const std::string& threadId);
+    std::shared_ptr<Session> getSession(std::string_view threadId);
 };
 
 } // namespace agent

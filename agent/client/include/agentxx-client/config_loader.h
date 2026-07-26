@@ -24,49 +24,49 @@ struct YamlAppConfig {
     std::string                               useModelTrainOptimizer;
 };
 
-std::map<std::string, std::string> loadDotEnv(const std::string& path);
+std::map<std::string, std::string> loadDotEnv(std::string_view path);
 std::map<std::string, std::string> loadDotEnv(const std::vector<std::string>& paths);
-std::map<std::string, std::string> loadOverrideEnv(const std::string& path);
+std::map<std::string, std::string> loadOverrideEnv(std::string_view path);
 
 std::string resolveEnvVars(
-    const std::string&                        input,
+    std::string_view                        input,
     const std::map<std::string, std::string>& dotEnvVars,
     const std::map<std::string, std::string>& overrideEnvVars
 );
 
 YamlAppConfig loadYamlConfig(
-    const std::string&                        path,
+    std::string_view                        path,
     const std::map<std::string, std::string>& dotEnvVars,
     const std::map<std::string, std::string>& overrideEnvVars
 );
 
 agent::ModelConfig resolveModelConfig(
     const std::map<std::string, agent::ModelConfig>& models,
-    const std::string&                               modelName
+    std::string_view                               modelName
 );
 
 void applyModelToConfig(
     std::shared_ptr<agent::AgentConfig>              agentConfig,
     const std::map<std::string, agent::ModelConfig>& models,
-    const std::string&                               modelName
+    std::string_view                               modelName
 );
 
 void applySubagentModelToConfig(
     std::shared_ptr<agent::AgentConfig>              agentConfig,
     const std::map<std::string, agent::ModelConfig>& models,
-    const std::string&                               modelName
+    std::string_view                               modelName
 );
 
 void applyWebSearchModelToConfig(
     std::shared_ptr<agent::AgentConfig>              agentConfig,
     const std::map<std::string, agent::ModelConfig>& models,
-    const std::string&                               modelName
+    std::string_view                               modelName
 );
 
 void applyAvailableModelsToConfig(
     std::shared_ptr<agent::AgentConfig>              agentConfig,
     const std::map<std::string, agent::ModelConfig>& models,
-    const std::string&                               currentModelName
+    std::string_view                               currentModelName
 );
 
 } // namespace client
