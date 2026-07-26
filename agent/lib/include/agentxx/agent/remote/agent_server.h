@@ -1,7 +1,7 @@
 #pragma once
 
+#include "agentxx/agent/agent_io_transport.h"
 #include "agentxx/agent/deepagent.h"
-#include "agentxx/agent/remote/message_transport.h"
 #include "agentxx/agent/remote/session_controller.h"
 #include "agentxx/util/http_server.h"
 #include "asio/any_io_executor.hpp"
@@ -21,7 +21,7 @@ namespace remote {
 /// - 每个 threadId 一个 SessionController (与连接解耦, 支持断线 grace 重挂 + 增量重放)
 /// - 两种接入方式:
 ///   - WS/WSS 服务: start(ex) 启动 HttpServer, 每个 WS 连接 -> serveTransport
-///   - 进程内: 直接 serveTransport(ChannelTransport) 服务单个进程内连接 (统一本地/远程路径)
+///   - 进程内: 直接 serveTransport(ChannelAgentIOTransport) 服务单个进程内连接
 /// - 安全: WS 模式默认仅监听 127.0.0.1; 强制 token 鉴权 (可经 autoGenerateToken 关闭, 仅进程内用)
 class AgentServer {
 public:
@@ -57,9 +57,9 @@ public:
         return config_.token;
     }
 
-    /// 在给定传输上服务一个连接 (WS handler 与进程内 ChannelTransport 共用)
+    /// 在给定传输上服务一个连接 (WS handler 与进程内 ChannelAgentIOTransport 共用)
     /// - 须在 agent 的 executor 上 co_await
-    asio::awaitable<void> serveTransport(std::unique_ptr<MessageTransport> transport);
+    asio::awaitable<void> serveTransport(std::shared_ptr<AgentIOTransportBase> transport);
 
     /// 生成随机 hex token
     static std::string generateToken(size_t bytes = 24);
@@ -68,10 +68,6 @@ private:
 
     asio::awaitable<void> handleWs(util::HttpServer::WsStream& ws);
     asio::awaitable<void> handleWss(util::HttpServer::WssStream& ws);
-
-    /// 模板: 在已升级的 WS stream 上建立传输并交由 serveTransport
-    template<typename WsStream>
-    asio::awaitable<void> serveConnection(WsStream& ws);
 
     /// 取/建指定 threadId 的 SessionController (并启动其驱动循环)
     std::shared_ptr<SessionController> getOrCreateController(std::string_view threadId);

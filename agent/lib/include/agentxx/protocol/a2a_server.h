@@ -8,6 +8,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <asio/awaitable.hpp>
@@ -281,6 +282,9 @@ private:
 
     std::mutex                              sseClientsMutex_;
     std::vector<std::shared_ptr<SSEClient>> sseClients_;
+
+    std::mutex              workersMutex_;
+    std::vector<std::thread> workers_;
 
     std::atomic<bool> stopped_{false};
 };

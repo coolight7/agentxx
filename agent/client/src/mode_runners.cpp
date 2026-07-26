@@ -2,58 +2,84 @@
 
 #include "agentxx-client/io/stdio/agent_stdio.h"
 #include "agentxx-client/io/tui/agent_tui.h"
+#include "agentxx/agent/channel_io_transport.h"
 #include "agentxx/agent/model_registry.h"
 #include "agentxx/agent/remote/agent_server.h"
-#include "agentxx/agent/remote/channel_transport.h"
-#include "agentxx/agent/remote/remote_client_io.h"
+#include "agentxx/agent/remote/session_controller.h"
+#include "agentxx/agent/ws_io_transport.h"
 #include "agentxx/util/log.h"
 #include "agentxx/util/ws_client.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/executor_work_guard.hpp"
 #include "asio/io_context.hpp"
+#include "asio/steady_timer.hpp"
+#include "asio/use_awaitable.hpp"
 #include <thread>
 
 namespace agentxx {
 namespace client {
 
 // ---------------------------------------------------------------------------
-// Local unified (in-process ChannelTransport)
+// Local unified DIRECT (ChannelAgentIOTransport 直连 TUI ↔ SessionController)
 // ---------------------------------------------------------------------------
 
-static std::shared_ptr<agent::remote::RemoteClientAgentIO> setupLocalUnified(
+/// TUI 持有 client transport, SessionController 持有 server transport
+/// 无 RemoteClientAgentIO / RemoteServerAgentIO 中间层
+static std::shared_ptr<agent::SessionController> setupLocalUnifiedDirect(
     asio::any_io_executor               clientEx,
     std::shared_ptr<agent::DeepAgent>   agent,
-    std::shared_ptr<agent::AgentIOBase> io
+    std::shared_ptr<agent::AgentIOBase> clientIO,
+    const std::string&                  threadId
 ) {
     auto agentEx = agent->ioCtx->get_executor();
     auto [clientTransport, serverTransport]
-        = agent::remote::ChannelTransport::makePair(clientEx, agentEx);
+        = agent::ChannelAgentIOTransport::makePair(clientEx, agentEx);
 
-    agent::remote::AgentServer::Config srvCfg;
-    srvCfg.autoGenerateToken = false;
-    srvCfg.token             = "";
-    auto server              = std::make_shared<agent::remote::AgentServer>(agent, srvCfg);
+    // 客户端 IO 持有 client transport
+    clientIO->setTransport(std::shared_ptr<agent::AgentIOTransportBase>(std::move(clientTransport))
+    );
 
+    // 服务端: SessionController 持有 server transport
+    agent::SessionController::Config scCfg;
+    scCfg.threadId  = threadId;
+    auto controller = std::make_shared<agent::SessionController>(agentEx, agent, scCfg);
+    controller->setTransport(std::shared_ptr<agent::AgentIOTransportBase>(std::move(serverTransport)
+    ));
+
+    // 在 agent 线程启动: init -> supervisor -> SessionController 驱动循环 + transport 接收循环
     asio::co_spawn(
         *agent->ioCtx,
-        [agent, server, st = std::move(serverTransport)]() mutable -> asio::awaitable<void> {
+        [agent, controller]() -> asio::awaitable<void> {
             co_await agent->init();
             auto supervisor = middleware::SubagentSupervisor{agent->agentContext};
             co_await supervisor.start();
-            co_await server->serveTransport(std::move(st));
-            co_return;
+            // 并发运行: transport 接收循环 + 会话驱动循环
+            co_await controller->runTransportLoop();
+        },
+        asio::detached
+    );
+    asio::co_spawn(
+        *agent->ioCtx,
+        [controller]() -> asio::awaitable<void> {
+            co_await controller->run();
         },
         asio::detached
     );
 
-    agent::remote::RemoteClientAgentIO::Config cliCfg;
-    return std::make_shared<agent::remote::RemoteClientAgentIO>(
+    // 客户端: 启动 transport 接收循环 (在 client 线程)
+    asio::co_spawn(
         clientEx,
-        std::move(clientTransport),
-        std::move(io),
-        cliCfg
+        [clientIO]() -> asio::awaitable<void> {
+            co_await clientIO->runTransportLoop();
+        },
+        asio::detached
     );
+
+    // 发送 hello 触发服务端重放/同步
+    clientIO->sendToPeer(agent::WireHello{threadId, "", 0, ""});
+
+    return controller;
 }
 
 template<typename Coro>
@@ -77,10 +103,19 @@ static void runLocalUnifiedMain(std::shared_ptr<agent::DeepAgent> agent, Coro co
 static asio::awaitable<void> runLocalCliUnifiedAsync(std::shared_ptr<agent::DeepAgent> agent) {
     auto clientEx = co_await asio::this_coro::executor;
     auto io       = std::make_shared<AgentStdIO>();
-    auto remote   = setupLocalUnified(clientEx, agent, io);
     XX_OUT("======= Agentxx Client (CLI, in-process unified) =======");
-    co_await remote->runSession("session", "");
-    co_await remote->shutdown();
+    setupLocalUnifiedDirect(clientEx, agent, io, "session");
+    // CLI 输入循环: 从 stdin 读取并发送
+    for (;;) {
+        auto input = co_await io->getInput();
+        if (!input.has_value()) {
+            break;
+        }
+        if (input->empty()) {
+            continue;
+        }
+        io->sendToPeer(agent::WireUserInput{"session", *input, false, ""});
+    }
 }
 
 void runLocalCliUnified(std::shared_ptr<agent::DeepAgent> agent) {
@@ -113,19 +148,15 @@ static asio::awaitable<void> runLocalTuiUnifiedAsync(
     auto tui = std::make_shared<AgentTUI>(clientEx, ctx, threadId);
     tui->start();
 
-    auto remote = setupLocalUnified(clientEx, agent, tui);
+    setupLocalUnifiedDirect(clientEx, agent, tui, threadId);
 
-    tui->setControlTarget(remote);
-    remote->setContextStatsCallback([ctx, threadId](uint64_t c, uint64_t m) {
-        auto s = ctx->getSession(threadId);
-        if (s && s->contextStats) {
-            s->contextStats->contextTokens.store(c, std::memory_order_relaxed);
-            s->contextStats->maxContextTokens.store(m, std::memory_order_relaxed);
-        }
-    });
-
-    co_await remote->runSession(threadId, "");
-    co_await remote->shutdown();
+    // TUI 模式下输入由 FTXUI 事件循环驱动 (sendUserInputLocked 经 transport 发送)
+    // 此处等待 TUI 停止
+    while (tui->running()) {
+        asio::steady_timer timer(clientEx);
+        timer.expires_after(std::chrono::milliseconds(200));
+        co_await timer.async_wait(asio::use_awaitable);
+    }
     tui->stop();
 }
 
@@ -137,7 +168,7 @@ void runLocalTuiUnified(
 }
 
 // ---------------------------------------------------------------------------
-// Remote client (WS connection to deepagent server)
+// Remote client (WS connection to deepagent server, WsAgentIOTransport 直连)
 // ---------------------------------------------------------------------------
 
 static asio::awaitable<void>
@@ -145,27 +176,53 @@ static asio::awaitable<void>
     auto ex = co_await asio::this_coro::executor;
     auto io = std::make_shared<AgentStdIO>();
 
-    agent::remote::RemoteClientAgentIO::Config cfg;
-    util::WsClientConfig                       wsCfg;
+    agent::WsAgentIOTransport::Config transportCfg;
+    util::WsClientConfig              wsCfg;
     wsCfg.recvTimeout = std::chrono::seconds{60};
 
-    auto remote = std::make_shared<agent::remote::RemoteClientAgentIO>(
+    auto transport = std::make_shared<agent::WsAgentIOTransport>(
         ex,
-        io,
         std::move(url),
         std::move(token),
-        cfg,
+        transportCfg,
         wsCfg
     );
+    io->setTransport(transport);
 
     XX_OUT("======= Agentxx Remote Client (CLI, auto-reconnect) =======");
-    co_await remote->runSession("session", model);
-    co_await remote->shutdown();
+
+    // 连接并握手
+    agent::WireHello hello{"session", token, 0, ""};
+    bool             ok = co_await transport->connect(hello);
+    if (!ok) {
+        XX_LOGE("[remote_cli] connection failed");
+        co_return;
+    }
+
+    // 启动接收循环
+    asio::co_spawn(ex, io->runTransportLoop(), asio::detached);
+
+    // 输入循环
+    for (;;) {
+        auto input = co_await io->getInput();
+        if (!input.has_value()) {
+            break;
+        }
+        if (input->empty()) {
+            continue;
+        }
+        io->sendToPeer(agent::WireUserInput{"session", *input, false, model});
+    }
+    transport->close();
 }
 
 void runRemoteCli(std::string_view url, std::string_view token, std::string_view model) {
     asio::io_context ctx;
-    asio::co_spawn(ctx, runRemoteCliAsync(std::string{url}, std::string{token}, std::string{model}), asio::detached);
+    asio::co_spawn(
+        ctx,
+        runRemoteCliAsync(std::string{url}, std::string{token}, std::string{model}),
+        asio::detached
+    );
     ctx.run();
 }
 
@@ -183,23 +240,33 @@ static asio::awaitable<void> runRemoteTuiAsync(
     io->setRemoteUrl(url);
     io->start();
 
-    agent::remote::RemoteClientAgentIO::Config cfg;
-    util::WsClientConfig                       wsCfg;
+    agent::WsAgentIOTransport::Config transportCfg;
+    util::WsClientConfig              wsCfg;
     wsCfg.recvTimeout = std::chrono::seconds{60};
 
-    auto remote = std::make_shared<agent::remote::RemoteClientAgentIO>(
-        ex,
-        io,
-        std::move(url),
-        std::move(token),
-        cfg,
-        wsCfg
-    );
+    auto transport
+        = std::make_shared<agent::WsAgentIOTransport>(ex, url, token, transportCfg, wsCfg);
+    io->setTransport(transport);
 
-    io->setControlTarget(remote);
+    // 连接并握手
+    agent::WireHello hello{"session", token, 0, ""};
+    bool             ok = co_await transport->connect(hello);
+    if (!ok) {
+        XX_LOGE("[remote_tui] connection failed");
+        io->stop();
+        co_return;
+    }
 
-    co_await remote->runSession("session", model);
-    co_await remote->shutdown();
+    // 启动接收循环
+    asio::co_spawn(ex, io->runTransportLoop(), asio::detached);
+
+    // 等待 TUI 退出
+    while (io->running()) {
+        asio::steady_timer timer(ex);
+        timer.expires_after(std::chrono::milliseconds(200));
+        co_await timer.async_wait(asio::use_awaitable);
+    }
+    transport->close();
     io->stop();
 }
 
@@ -210,7 +277,11 @@ void runRemoteTui(
     std::string_view                    model
 ) {
     asio::io_context ctx;
-    asio::co_spawn(ctx, runRemoteTuiAsync(config, std::string{url}, std::string{token}, std::string{model}), asio::detached);
+    asio::co_spawn(
+        ctx,
+        runRemoteTuiAsync(config, std::string{url}, std::string{token}, std::string{model}),
+        asio::detached
+    );
     ctx.run();
 }
 

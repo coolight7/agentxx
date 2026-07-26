@@ -3,6 +3,8 @@
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/util/string_util.h"
 #include "asio/as_tuple.hpp"
+#include "asio/co_spawn.hpp"
+#include "asio/detached.hpp"
 #include "asio/use_awaitable.hpp"
 #include "fmt/format.h"
 #include "ftxui/component/event.hpp"
@@ -23,6 +25,7 @@ AgentTUI::AgentTUI(
     agentContext_(std::move(agentContext)),
     theme_(theme),
     threadId_(std::move(threadId)),
+    ex_(ex),
     inputChannel_(std::make_shared<LineChannel>(ex, 64)),
     permissionChannel_(std::make_shared<BoolChannel>(ex, 4)),
     logSink_(std::make_shared<TUILogSink>()) {
@@ -109,11 +112,11 @@ void AgentTUI::start() {
                 vbox({
                     text(" "),
                     hbox({
-                        text(" "),
+                        text("  "),
                         indicator,
-                        text(" "),
+                        text("  "),
                         input->Render() | color(theme_.inputTextColor) | flex,
-                        text(" "),
+                        text("  "),
                     }),
                     text(" "),
                 }) | bgcolor(theme_.inputBgColor)
@@ -418,8 +421,8 @@ void AgentTUI::stop() {
 }
 
 void AgentTUI::requestCancel(std::string_view threadId) {
-    if (auto target = controlTarget_.lock()) {
-        target->requestCancel(threadId);
+    if (transport_) {
+        sendToPeer(agentxx::agent::WireCancel{std::string{threadId}});
     } else if (session_) {
         auto token = session_->getCancelToken();
         if (token) {
@@ -429,9 +432,58 @@ void AgentTUI::requestCancel(std::string_view threadId) {
 }
 
 void AgentTUI::requestSelectModel(std::string_view threadId, std::string_view model) {
-    if (auto target = controlTarget_.lock()) {
-        target->requestSelectModel(threadId, model);
+    if (transport_) {
+        sendToPeer(agentxx::agent::WireSelectModel{std::string{threadId}, std::string{model}});
     }
+}
+
+void AgentTUI::onPeerMessage(agentxx::agent::WireMessage msg) {
+    std::visit(
+        [this](auto&& m) {
+            using T = std::decay_t<decltype(m)>;
+            if constexpr (std::is_same_v<T, agentxx::agent::Delta>) {
+                onDelta(m);
+            } else if constexpr (std::is_same_v<T, agentxx::agent::SyncPayload>) {
+                onSync(m);
+            } else if constexpr (std::is_same_v<T, agentxx::agent::WireTurnResult>) {
+                std::lock_guard<std::mutex> lock(mutex_);
+                isStreaming_ = false;
+                if (m.hasError && !m.errorMessage.empty()) {
+                    messages_.push_back({Message::Role::System, "[Error] " + m.errorMessage});
+                }
+                dispatchNextPendingInput();
+                postRedraw();
+            } else if constexpr (std::is_same_v<T, agentxx::agent::WireContextStats>) {
+                if (auto ctx = agentContext_) {
+                    auto s = ctx->getSession(threadId_);
+                    if (s && s->contextStats) {
+                        s->contextStats->contextTokens.store(
+                            m.contextTokens,
+                            std::memory_order_relaxed
+                        );
+                        s->contextStats->maxContextTokens.store(
+                            m.maxContextTokens,
+                            std::memory_order_relaxed
+                        );
+                    }
+                }
+                postRedraw();
+            } else if constexpr (std::is_same_v<T, agentxx::agent::WireInterruptRequest>) {
+                auto self = shared_from_this();
+                asio::co_spawn(
+                    ex_,
+                    [self, req = std::move(m)]() mutable -> asio::awaitable<void> {
+                        auto result
+                            = co_await self
+                                  ->handleInterrupt(req.threadId, req.node, req.value, req.argJson);
+                        self->sendToPeer(agentxx::agent::WireInterruptResponse{req.id, result});
+                    },
+                    asio::detached
+                );
+            }
+        },
+        std::move(msg)
+    );
 }
 
 void AgentTUI::cancelCurrentRun() {
@@ -460,8 +512,15 @@ void AgentTUI::sendUserInputLocked(std::string text) {
     messages_.push_back({Message::Role::User, text});
     isStreaming_   = true;
     stickToBottom_ = true;
-    inputChannel_
-        ->async_send(neograph_asio_error_code{}, std::move(text), [](neograph_asio_error_code) {});
+    if (transport_) {
+        sendToPeer(agentxx::agent::WireUserInput{threadId_, text, false, ""});
+    } else {
+        inputChannel_->async_send(
+            neograph_asio_error_code{},
+            std::move(text),
+            [](neograph_asio_error_code) {}
+        );
+    }
 }
 
 void AgentTUI::dispatchNextPendingInput() {

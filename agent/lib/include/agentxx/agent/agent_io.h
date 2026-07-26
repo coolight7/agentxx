@@ -105,15 +105,15 @@ public:
     /// - 重复调用会先移除上一次注册的处理器, 避免 handler 累积、泄漏与悬空 this
     virtual void registerOnBus(std::shared_ptr<agentxx::middleware::EventBus> sessionBus);
 
+    /// 向对端发送消息 (经 transport; transport 为空时静默丢弃)
+    void sendToPeer(WireMessage msg);
+
 protected:
 
     /// 处理从 transport 收到的对端消息 (子类覆写以分发到具体处理器)
     /// - 默认实现: 按消息类型分发到 onDelta/onSync/onTurnResult/onContextStats
     /// - 客户端子类额外处理 InterruptRequest; 服务端子类额外处理 UserInput/Cancel 等
     virtual void onPeerMessage(WireMessage msg);
-
-    /// 向对端发送消息 (经 transport; transport 为空时静默丢弃)
-    void sendToPeer(WireMessage msg);
 
     /// 从已注册的总线上移除本 IO 的处理器 (若总线仍存活)
     void unregisterFromBus();

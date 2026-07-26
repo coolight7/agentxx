@@ -47,6 +47,15 @@ void A2aServer::stop() {
         }
     }
     httpServer_->stop();
+    {
+        std::lock_guard<std::mutex> lock(workersMutex_);
+        for (auto& t : workers_) {
+            if (t.joinable()) {
+                t.join();
+            }
+        }
+        workers_.clear();
+    }
 }
 
 uint16_t A2aServer::port() const {
@@ -454,7 +463,7 @@ json A2aServer::handleCancelTask(const json& id, const json& params) {
 // ---------------------------------------------------------------------------
 
 void A2aServer::executeTask(std::string_view taskId, std::string_view userInput) {
-    std::thread([this, taskId, userInput]() {
+    std::thread worker([this, taskId = std::string(taskId), userInput = std::string(userInput)]() {
         auto task = findTask(taskId);
         if (!task) {
             return;
@@ -558,7 +567,25 @@ void A2aServer::executeTask(std::string_view taskId, std::string_view userInput)
              {"statusUpdate", std::move(event)}
         };
         broadcastSSE(sseMsg.dump());
-    }).detach();
+    });
+    {
+        std::lock_guard<std::mutex> lock(workersMutex_);
+        // 清理已完成的 worker
+        workers_.erase(
+            std::remove_if(
+                workers_.begin(),
+                workers_.end(),
+                [](std::thread& t) {
+                    if (t.joinable()) {
+                        return false;
+                    }
+                    return true;
+                }
+            ),
+            workers_.end()
+        );
+        workers_.push_back(std::move(worker));
+    }
 }
 
 // ---------------------------------------------------------------------------
