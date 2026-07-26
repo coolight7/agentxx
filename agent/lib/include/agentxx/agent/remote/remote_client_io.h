@@ -68,31 +68,31 @@ public:
     void                                        onSync(const SyncPayload& payload) override;
     asio::awaitable<std::optional<std::string>> getInput() override;
     asio::awaitable<neograph::json>             handleInterrupt(
-                    const std::string& threadId,
-                    const std::string& interruptNode,
-                    const std::string& interruptValue,
-                    const std::string& interruptArgJson
+                    std::string_view threadId,
+                    std::string_view interruptNode,
+                    std::string_view interruptValue,
+                    std::string_view interruptArgJson
                 ) override;
-    void requestCancel(const std::string& threadId) override;
-    void requestSelectModel(const std::string& threadId, const std::string& model) override;
+    void requestCancel(std::string_view threadId) override;
+    void requestSelectModel(std::string_view threadId, std::string_view model) override;
 
     // ----- 手动模式: 调用方驱动输入循环 -----
 
     /// 启动读/写/心跳协程并握手鉴权; 返回是否连接成功
-    asio::awaitable<bool> start(const std::string& threadId, const std::string& token);
+    asio::awaitable<bool> start(std::string_view threadId, std::string_view token);
 
     void sendUserInput(
-        const std::string& threadId,
-        const std::string& text,
-        bool               isFirstMsg,
-        const std::string& model = ""
+        std::string_view threadId,
+        std::string_view text,
+        bool             isFirstMsg,
+        std::string_view model = ""
     );
 
     /// 等待当前轮次结束; 断线时抛异常
     asio::awaitable<TurnResult> awaitTurnResult();
 
-    void selectModel(const std::string& threadId, const std::string& model);
-    void cancel(const std::string& threadId);
+    void selectModel(std::string_view threadId, std::string_view model);
+    void cancel(std::string_view threadId);
 
     /// 设置上下文统计更新回调 (server 推送 context_stats 时调用; 供更新本地 TUI 显示)
     using ContextStatsCallback
@@ -109,7 +109,7 @@ public:
 
     /// 连接(可重连)并循环: 取本地输入 -> 发送 -> 等待轮次; 断线自动重连,
     /// 本地输入结束(nullopt)时退出
-    asio::awaitable<void> runSession(const std::string& threadId, const std::string& model = "");
+    asio::awaitable<void> runSession(std::string_view threadId, std::string_view model = "");
 
     bool disconnected() const noexcept {
         return disconnected_.load(std::memory_order_acquire);
@@ -134,14 +134,14 @@ private:
     asio::awaitable<void> heartbeat();
 
     asio::awaitable<void> handleInterruptRequest(
-        int64_t            id,
-        const std::string& threadId,
-        const std::string& node,
-        const std::string& value,
-        const std::string& argJson
+        int64_t          id,
+        std::string_view threadId,
+        std::string_view node,
+        std::string_view value,
+        std::string_view argJson
     );
 
-    asio::awaitable<bool> connect(const std::string& threadId, const std::string& token);
+    asio::awaitable<bool> connect(std::string_view threadId, std::string_view token);
 
     /// 单次连接会话: 启动协程 -> 握手 -> 输入泵 -> 关闭; 返回握手是否成功
     asio::awaitable<bool> runOnce();

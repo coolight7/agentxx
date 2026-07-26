@@ -4,7 +4,7 @@ namespace agentxx {
 namespace nodes {
 
 AgentStartCallWrapNode::AgentStartCallWrapNode(
-    const std::string&                          name,
+    std::string_view                            name,
     std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
 ) :
     WrapHandleBaseNode<agentxx::nodes::WrapBaseNodeInterface>(name, in_agentContext) {}
@@ -31,7 +31,7 @@ asio::awaitable<void> AgentStartCallWrapNode::onHandleEnd(
 }
 
 MiddlewareWrapAgentEndCallNode::MiddlewareWrapAgentEndCallNode(
-    const std::string&                          name,
+    std::string_view                            name,
     std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
 ) :
     WrapHandleBaseNode<agentxx::nodes::WrapBaseNodeInterface>(name, in_agentContext) {}

@@ -1,7 +1,9 @@
 #include "agentxx/expand/get_cpu_gpu_use.h"
 #include "agentxx/util/log.h"
+#include <fmt/format.h>
 #include "asio/steady_timer.hpp"
 #include "asio/use_awaitable.hpp"
+#include <fmt/format.h>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -569,13 +571,13 @@ protected:
 
     CpuTimes _sample;
 
-    static asio::awaitable<std::string> readFileContent(const std::string& path) {
+    static asio::awaitable<std::string> readFileContent(std::string_view path) {
 #if ASIO_HAS_FILE || BOOST_ASIO_HAS_FILE
         {
             auto                     executor = co_await asio::this_coro::executor;
             asio::stream_file        stream{executor};
             neograph_asio_error_code errCode;
-            stream.open(path, asio::stream_file::read_only, errCode);
+            stream.open(std::string{path}, asio::stream_file::read_only, errCode);
             if (!stream.is_open()) {
                 co_return "";
             }
@@ -713,12 +715,12 @@ protected:
         cache.built = true;
     }
 
-    static asio::awaitable<void> queryAmdGpuUsage(GpuInfo& info, const std::string& devicePath) {
-        co_await readSysfsUint64(devicePath + "/mem_info_vram_used", info.dedicatedVramUsedMB);
+    static asio::awaitable<void> queryAmdGpuUsage(GpuInfo& info, std::string_view devicePath) {
+        co_await readSysfsUint64(fmt::format("{}/mem_info_vram_used", devicePath), info.dedicatedVramUsedMB);
         info.dedicatedVramUsedMB /= (1024 * 1024);
 
         uint64_t gpuBusy = 0;
-        co_await readSysfsUint64(devicePath + "/gpu_busy_percent", gpuBusy);
+        co_await readSysfsUint64(fmt::format("{}/gpu_busy_percent", devicePath), gpuBusy);
         info.usagePercent = static_cast<double>(gpuBusy);
 
         if (info.usagePercent == 0.0 && info.dedicatedVramMB > 0) {
@@ -753,7 +755,7 @@ protected:
             co_return;
         }
 
-        auto parseInformation = [&](const std::string& infoContent) {
+        auto parseInformation = [&](std::string_view infoContent) {
             std::istringstream infoFile(infoContent);
             std::string        line;
             while (std::getline(infoFile, line)) {
@@ -819,14 +821,14 @@ protected:
         return val;
     }
 
-    static asio::awaitable<void> readSysfsString(const std::string& path, std::string& out) {
+    static asio::awaitable<void> readSysfsString(std::string_view path, std::string& out) {
         std::string content = co_await readFileContent(path);
         if (!content.empty()) {
             out = agentxx::util::removeBetweenSpace(content);
         }
     }
 
-    static asio::awaitable<void> readSysfsUint64(const std::string& path, uint64_t& out) {
+    static asio::awaitable<void> readSysfsUint64(std::string_view path, uint64_t& out) {
         std::string content = co_await readFileContent(path);
         if (!content.empty()) {
             std::istringstream iss(content);

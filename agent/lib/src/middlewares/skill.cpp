@@ -35,7 +35,7 @@ asio::awaitable<std::pair<std::string, agentxx::middleware::_SkillMetadata>>
     auto          data = agentxx::middleware::_SkillMetadata{.dirpath = std::string{dirpath}};
     std::ifstream stream;
     try {
-        stream.open(std::string{dirpath} + "/SKILL.md");
+        stream.open(fmt::format("{}/SKILL.md", dirpath));
         if (!stream) {
             auto ec = std::error_code{errno, std::system_category()};
             throw std::runtime_error{fmt::format(R"(Can not open file. Error: {})", ec.message())};

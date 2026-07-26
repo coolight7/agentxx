@@ -22,15 +22,16 @@ public:
 
     // 初始化Hyperscan数据库
     XXRegexHP(
-        const std::string& regstr,
-        unsigned int       flags = agentxx::util::XXRegex::defHSFlags_normal
+        std::string_view regstr,
+        unsigned int     flags = agentxx::util::XXRegex::defHSFlags_normal
     ) :
         hs_db(nullptr),
         hs_scratch(nullptr) {
         // 编译正则表达式到Hyperscan数据库
         hs_compile_error_t* compile_err = nullptr;
+        std::string         regstr_str{regstr};
         hs_error_t          err
-            = hs_compile(regstr.c_str(), flags, HS_MODE_BLOCK, nullptr, &hs_db, &compile_err);
+            = hs_compile(regstr_str.c_str(), flags, HS_MODE_BLOCK, nullptr, &hs_db, &compile_err);
         if (err != HS_SUCCESS) {
             // compile_err 仅在 HS_COMPILER_ERROR 时非空, 其余错误需判空避免空指针解引用
             XX_LOGE(
@@ -241,7 +242,7 @@ private:
 };
 
 std::shared_ptr<agentxx::util::XXRegex>
-    agentxx::util::XXRegex::createRegex(const std::string& regstr, unsigned int flags) {
+    agentxx::util::XXRegex::createRegex(std::string_view regstr, unsigned int flags) {
     return std::make_shared<XXRegexHP>(regstr, flags);
 }
 
@@ -267,8 +268,8 @@ public:
 
     // 单模式构造函数
     XXRegexStdRegex(
-        const std::string& regstr,
-        unsigned int       flags = agentxx::util::XXRegex::defHSFlags_normal
+        std::string_view regstr,
+        unsigned int     flags = agentxx::util::XXRegex::defHSFlags_normal
     ) :
         valid_(false),
         multi_mode_(false) {
@@ -415,7 +416,7 @@ private:
 };
 
 std::shared_ptr<agentxx::util::XXRegex>
-    agentxx::util::XXRegex::createRegex(const std::string& regstr, unsigned int flags) {
+    agentxx::util::XXRegex::createRegex(std::string_view regstr, unsigned int flags) {
     return std::make_shared<XXRegexStdRegex>(regstr, flags);
 }
 

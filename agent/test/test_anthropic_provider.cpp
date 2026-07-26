@@ -490,7 +490,7 @@ std::unique_ptr<MockAnthropicServer> startAnthropicMockServer(uint16_t& outPort)
     auto handle = [mock = mock.get(
                    )](HttpServer::Request&  req,
                       HttpServer::Response& resp,
-                      const std::string&) -> asio::awaitable<void> {
+                      std::string_view) -> asio::awaitable<void> {
         mock->lastRequestBody = req.body();
         // Capture headers for verification
         std::string headers;

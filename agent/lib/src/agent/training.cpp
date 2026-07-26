@@ -20,12 +20,12 @@ size_t PromptVariant::promptHash() const {
 
 asio::awaitable<std::string> EvolutionTrainingAgent::runLLMAgent(
     std::shared_ptr<agentxx::agent::DeepAgent> agent,
-    const std::string&                         systemPrompt,
-    const std::string&                         userContent
+    std::string_view                           systemPrompt,
+    std::string_view                           userContent
 ) {
-    agent->getContext()->agentConfig->prompt.systemPrompt = systemPrompt;
+    agent->getContext()->agentConfig->prompt.systemPrompt = std::string{systemPrompt};
     std::vector<neograph::ChatMessage> messages           = {
-        neograph::ChatMessage{.role = "user", .content = userContent},
+        neograph::ChatMessage{.role = "user", .content = std::string{userContent}},
     };
     auto result = co_await agent->runStreamAsync(messages);
     co_return result.content;
@@ -78,33 +78,33 @@ PromptVariant EvolutionTrainingAgent::promptVariantFromJson(const neograph::json
     return v;
 }
 
-void EvolutionTrainingAgent::rotateSaveFile(const std::string& path, int keepCount) {
+void EvolutionTrainingAgent::rotateSaveFile(std::string_view path, int keepCount) {
     if (keepCount <= 0) {
         return;
     }
     namespace fs = std::filesystem;
     try {
-        fs::path oldest(path + "." + std::to_string(keepCount));
+        fs::path oldest(fmt::format("{}.{}", path, keepCount));
         if (fs::exists(oldest)) {
             fs::remove(oldest);
         }
         for (int i = keepCount - 1; i >= 1; --i) {
-            fs::path from(path + "." + std::to_string(i));
-            fs::path to(path + "." + std::to_string(i + 1));
+            fs::path from(fmt::format("{}.{}", path, i));
+            fs::path to(fmt::format("{}.{}", path, i + 1));
             if (fs::exists(from)) {
                 fs::rename(from, to);
             }
         }
         fs::path cur(path);
         if (fs::exists(cur)) {
-            fs::copy_file(cur, path + ".1", fs::copy_options::overwrite_existing);
+            fs::copy_file(cur, fmt::format("{}.1", path), fs::copy_options::overwrite_existing);
         }
     } catch (const std::exception& e) {
         XX_LOGD("[EvolutionTraining] Backup rotation skipped: {}", e.what());
     }
 }
 
-void EvolutionTrainingAgent::savePopulationToFile(const std::string& filePath, int backupCount) {
+void EvolutionTrainingAgent::savePopulationToFile(std::string_view filePath, int backupCount) {
     try {
         if (backupCount > 0) {
             rotateSaveFile(filePath, backupCount);
@@ -120,7 +120,7 @@ void EvolutionTrainingAgent::savePopulationToFile(const std::string& filePath, i
         root["generationCounter"] = generationCounter;
         root["savedAt"]           = std::chrono::system_clock::now().time_since_epoch().count();
 
-        std::ofstream ofs(filePath, std::ios::out | std::ios::trunc);
+        std::ofstream ofs(std::string{filePath}, std::ios::out | std::ios::trunc);
         if (ofs.is_open()) {
             ofs << root.dump(2);
             ofs.close();
@@ -133,9 +133,9 @@ void EvolutionTrainingAgent::savePopulationToFile(const std::string& filePath, i
     }
 }
 
-bool EvolutionTrainingAgent::loadPopulationFromFile(const std::string& filePath) {
+bool EvolutionTrainingAgent::loadPopulationFromFile(std::string_view filePath) {
     try {
-        std::ifstream ifs(filePath);
+        std::ifstream ifs(std::string{filePath});
         if (!ifs.is_open()) {
             XX_LOGD(
                 "[EvolutionTraining] No existing save file found at {}, "
@@ -272,7 +272,7 @@ std::string EvolutionTrainingAgent::buildPromptContextMessage(const PromptVarian
 asio::awaitable<OptimizedPrompts> EvolutionTrainingAgent::optimizeVariantWithLLM(
     const PromptVariant&           variant,
     const TrainingTestCase&        testCase,
-    const std::string&             agentOutput,
+    std::string_view               agentOutput,
     const TrainingScore&           score,
     const EvolutionTrainingConfig& cfg
 ) {
@@ -331,9 +331,9 @@ std::string EvolutionTrainingAgent::generateId() {
     return fmt::format("gen{}_{}", generationCounter, now);
 }
 
-std::string EvolutionTrainingAgent::mutateString(const std::string& input, double mutationRate) {
+std::string EvolutionTrainingAgent::mutateString(std::string_view input, double mutationRate) {
     if (mutationRate <= 0.0 || input.empty()) {
-        return input;
+        return std::string{input};
     }
     std::string result;
     result.reserve(input.size() * 2);
@@ -564,7 +564,7 @@ EvolutionTrainingAgent::EvolutionTrainingAgent(
     optimizerAgent(in_optimizerAgent),
     rng(std::chrono::system_clock::now().time_since_epoch().count()) {}
 
-void EvolutionTrainingAgent::seedInitialPopulation(const std::string& baseSystemPrompt) {
+void EvolutionTrainingAgent::seedInitialPopulation(std::string_view baseSystemPrompt) {
     if (!population.empty()) {
         return;
     }

@@ -157,7 +157,7 @@ public:
 
     static asio::awaitable<std::expected<HttpResponse, std::string>> requestAsync(
         std::string_view     method,
-        const std::string&   url,
+        std::string_view     url,
         std::string_view     body,
         std::string_view     contentType,
         const HeaderMap&     extraHeaders,
@@ -171,26 +171,26 @@ public:
     static bool getSslVerify() noexcept;
 
     static asio::awaitable<std::expected<HttpResponse, std::string>> getAsync(
-        const std::string&   url,
+        std::string_view     url,
         const HeaderMap&     extraHeaders = {},
         const RequestConfig& config       = {}
     );
 
     static asio::awaitable<std::expected<HttpResponse, std::string>> headAsync(
-        const std::string&   url,
+        std::string_view     url,
         const HeaderMap&     extraHeaders = {},
         const RequestConfig& config       = {}
     );
 
     static asio::awaitable<std::expected<HttpResponse, std::string>> postAsync(
-        const std::string&    url,
+        std::string_view      url,
         const neograph::json& body,
         const HeaderMap&      extraHeaders = {},
         const RequestConfig&  config       = {}
     );
 
     static asio::awaitable<std::expected<HttpResponse, std::string>> postAsync(
-        const std::string&   url,
+        std::string_view     url,
         std::string_view     body,
         std::string_view     contentType  = "text/plain",
         const HeaderMap&     extraHeaders = {},
@@ -198,7 +198,7 @@ public:
     );
 
     static asio::awaitable<std::expected<HttpResponse, std::string>> putAsync(
-        const std::string&   url,
+        std::string_view     url,
         std::string_view     body,
         std::string_view     contentType  = "text/plain",
         const HeaderMap&     extraHeaders = {},
@@ -206,7 +206,7 @@ public:
     );
 
     static asio::awaitable<std::expected<HttpResponse, std::string>> patchAsync(
-        const std::string&   url,
+        std::string_view     url,
         std::string_view     body,
         std::string_view     contentType  = "text/plain",
         const HeaderMap&     extraHeaders = {},
@@ -214,19 +214,19 @@ public:
     );
 
     static asio::awaitable<std::expected<HttpResponse, std::string>> deleteAsync(
-        const std::string&   url,
+        std::string_view     url,
         const HeaderMap&     extraHeaders = {},
         const RequestConfig& config       = {}
     );
 
     static asio::awaitable<std::expected<HttpResponse, std::string>> optionsAsync(
-        const std::string&   url,
+        std::string_view     url,
         const HeaderMap&     extraHeaders = {},
         const RequestConfig& config       = {}
     );
 
     static asio::awaitable<std::expected<std::string, std::string>> fetchMarkdown(
-        const std::string&   url,
+        std::string_view     url,
         const RequestConfig& config
         = RequestConfig{.connectTimeout = std::chrono::seconds{15}, .readTimeout = std::chrono::seconds{15}}
     );

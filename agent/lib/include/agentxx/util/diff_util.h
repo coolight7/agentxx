@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <fmt/format.h>
 #include <string>
 #include <vector>
 
@@ -25,7 +26,7 @@ struct DiffLine {
 
 namespace detail {
 /// 按 '\n' 拆分文本为行 (不保留行尾换行符; 末尾空行忽略)
-[[nodiscard]] inline std::vector<std::string> splitDiffLines(const std::string& s) {
+[[nodiscard]] inline std::vector<std::string> splitDiffLines(std::string_view s) {
     std::vector<std::string> lines;
     size_t                   start = 0;
     for (size_t i = 0; i < s.size(); ++i) {
@@ -43,7 +44,7 @@ namespace detail {
 
 /// 基于 LCS 计算 oldText -> newText 的逐行 diff
 [[nodiscard]] inline std::vector<DiffLine>
-    computeLineDiff(const std::string& oldText, const std::string& newText) {
+    computeLineDiff(std::string_view oldText, std::string_view newText) {
     auto       oldLines = detail::splitDiffLines(oldText);
     auto       newLines = detail::splitDiffLines(newText);
     const auto n        = oldLines.size();
@@ -88,18 +89,15 @@ namespace detail {
 }
 
 /// 生成 git 风格的 unified diff 字符串 (单 hunk 覆盖全部变更)
-[[nodiscard]] inline std::string makeUnifiedDiff(
-    const std::string& oldText,
-    const std::string& newText,
-    const std::string& path
-) {
+[[nodiscard]] inline std::string
+    makeUnifiedDiff(std::string_view oldText, std::string_view newText, std::string_view path) {
     const auto oldCount = detail::splitDiffLines(oldText).size();
     const auto newCount = detail::splitDiffLines(newText).size();
     auto       diff     = computeLineDiff(oldText, newText);
 
     std::string out;
-    out += "--- a/" + path + "\n";
-    out += "+++ b/" + path + "\n";
+    out += fmt::format("--- a/{}\n", path);
+    out += fmt::format("+++ b/{}\n", path);
     out += "@@ -1," + std::to_string(oldCount) + " +1," + std::to_string(newCount) + " @@\n";
     for (const auto& l : diff) {
         switch (l.type) {

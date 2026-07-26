@@ -17,7 +17,7 @@
 #include <utility>
 #include <vector>
 
-std::vector<agentxx::agent::TrainingTestCase> loadTestCasesRecursive(const std::string& dirPath) {
+std::vector<agentxx::agent::TrainingTestCase> loadTestCasesRecursive(std::string_view dirPath) {
     std::vector<agentxx::agent::TrainingTestCase> allCases;
     try {
         for (const auto& entry : std::filesystem::directory_iterator(dirPath)) {
@@ -58,7 +58,7 @@ std::string findProjectRoot() {
 
 void replacePlaceholders(
     std::vector<agentxx::agent::TrainingTestCase>& cases,
-    const std::string&                             projectRoot
+    std::string_view                               projectRoot
 ) {
     const std::string placeholder = "{agentxx_root}";
     for (auto& tc : cases) {

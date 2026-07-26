@@ -52,39 +52,33 @@ public:
     // -----------------------------------------------------------------------
 
     asio::awaitable<std::expected<json, std::string>> sendMessage(
-        const std::string& text,
-        const std::string& taskId    = "",
-        const std::string& contextId = ""
+        std::string_view text,
+        std::string_view taskId    = "",
+        std::string_view contextId = ""
     );
 
-    asio::awaitable<std::expected<json, std::string>> getTask(
-        const std::string& taskId,
-        int                historyLength = 0
-    );
+    asio::awaitable<std::expected<json, std::string>>
+        getTask(std::string_view taskId, int historyLength = 0);
 
-    asio::awaitable<std::expected<json, std::string>> listTasks(
-        const std::string& contextId = "",
-        const std::string& status    = "",
-        int                pageSize  = 50
-    );
+    asio::awaitable<std::expected<json, std::string>>
+        listTasks(std::string_view contextId = "", std::string_view status = "", int pageSize = 50);
 
-    asio::awaitable<std::expected<json, std::string>> cancelTask(const std::string& taskId);
+    asio::awaitable<std::expected<json, std::string>> cancelTask(std::string_view taskId);
 
     // -----------------------------------------------------------------------
     // Low-level JSON-RPC call (public for testing)
     // -----------------------------------------------------------------------
 
-    asio::awaitable<std::expected<json, std::string>>
-        rpcCall(const std::string& method, json params);
+    asio::awaitable<std::expected<json, std::string>> rpcCall(std::string_view method, json params);
 
     // -----------------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------------
 
     static json buildTextMessage(
-        const std::string& text,
-        const std::string& taskId    = "",
-        const std::string& contextId = ""
+        std::string_view text,
+        std::string_view taskId    = "",
+        std::string_view contextId = ""
     );
 
     static std::string extractTaskId(const json& sendMessageResult);
@@ -93,7 +87,7 @@ public:
 
 private:
 
-    Config config_;
+    Config  config_;
     int64_t nextId_ = 1;
 };
 

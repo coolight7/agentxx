@@ -29,7 +29,7 @@ namespace fs = std::filesystem;
 
 static constexpr std::string_view kCodeGraphDbPath = ".codegraph";
 
-static bool should_skip(const std::string& file_path) {
+static bool should_skip(std::string_view file_path) {
     static const std::string kSkipAgentxx
         = fmt::format("/{}/", agentxx::agent::AgentConfigStatic::agentxxDataDirPath);
     static const std::string kSkipCodeGraph = fmt::format("/{}/", kCodeGraphDbPath);
@@ -46,7 +46,7 @@ static bool should_skip(const std::string& file_path) {
            || path_str.find(kSkipCodeGraph) != std::string::npos;
 }
 
-static std::vector<std::string> collect_source_files(const std::string& root_path) {
+static std::vector<std::string> collect_source_files(std::string_view root_path) {
     std::vector<std::string> files;
     try {
         for (const auto& entry : fs::recursive_directory_iterator(
@@ -75,9 +75,9 @@ static std::vector<std::string> collect_source_files(const std::string& root_pat
 static bool is_changed(
     codegraph::Database&       db,
     const fs::directory_entry& entry,
-    const std::string&         file_path
+    std::string_view           file_path
 ) {
-    auto existing = db.get_file(file_path);
+    auto existing = db.get_file(std::string{file_path});
     if (!existing.has_value()) {
         return true;
     }
@@ -146,7 +146,7 @@ public:
         needs_initialize_ = true;
     }
 
-    bool initialize(const std::string& project_root) {
+    bool initialize(std::string_view project_root) {
         {
             std::lock_guard<std::mutex> lock(mutex_);
             if (!needs_initialize_ && project_root_ == project_root && db_) {
@@ -186,7 +186,7 @@ public:
         }
     }
 
-    bool indexDirectory(const std::string& path, bool incremental) {
+    bool indexDirectory(std::string_view path, bool incremental) {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!db_) {
             return false;
@@ -231,13 +231,13 @@ public:
                 continue;
             }
 
-            auto extractor = codegraph::create_extractor(lang);
+        auto extractor = codegraph::create_extractor(std::string{lang});
             if (!extractor) {
                 XX_LOGW("CodeGraphManager: no extractor for lang={} file={}", lang, file_path);
                 continue;
             }
 
-            std::ifstream ifs(file_path);
+        std::ifstream ifs(std::string{file_path});
             if (!ifs.is_open()) {
                 XX_LOGW("CodeGraphManager: cannot open file {}", file_path);
                 continue;
@@ -247,7 +247,7 @@ public:
                 std::istreambuf_iterator<char>()
             );
 
-            auto result = extractor->extract(file_path, source);
+        auto result = extractor->extract(std::string{file_path}, source);
             XX_LOGI(
                 "CodeGraphManager: extracted {} nodes, {} unresolved refs from {}",
                 result.nodes.size(),
@@ -344,7 +344,7 @@ public:
         return true;
     }
 
-    CodeGraphSearchResult searchSymbols(const std::string& query, int limit) {
+    CodeGraphSearchResult searchSymbols(std::string_view query, int limit) {
         CodeGraphSearchResult       result;
         std::lock_guard<std::mutex> lock(mutex_);
         if (!db_ || !fts_search_) {
@@ -352,7 +352,7 @@ public:
             return result;
         }
         try {
-            result.nodes   = fts_search_->search(query, limit);
+            result.nodes   = fts_search_->search(std::string{query}, limit);
             result.success = true;
         } catch (const std::exception& e) {
             result.error = e.what();
@@ -360,7 +360,7 @@ public:
         return result;
     }
 
-    CodeGraphContextResult getSymbolContext(const std::string& symbol, int limit, int max_depth) {
+    CodeGraphContextResult getSymbolContext(std::string_view symbol, int limit, int max_depth) {
         CodeGraphContextResult      result;
         std::lock_guard<std::mutex> lock(mutex_);
         if (!context_builder_) {
@@ -368,7 +368,7 @@ public:
             return result;
         }
         try {
-            result.context = context_builder_->build_context(symbol, limit, max_depth);
+            result.context = context_builder_->build_context(std::string{symbol}, limit, max_depth);
             if (result.context.contains("error")) {
                 result.error   = result.context["error"].get<std::string>();
                 result.success = false;
@@ -381,7 +381,7 @@ public:
         return result;
     }
 
-    CodeGraphImpactResult getCallers(const std::string& symbol, int max_depth) {
+    CodeGraphImpactResult getCallers(std::string_view symbol, int max_depth) {
         CodeGraphImpactResult       result;
         std::lock_guard<std::mutex> lock(mutex_);
         if (!context_builder_) {
@@ -389,7 +389,7 @@ public:
             return result;
         }
         try {
-            result.impact = context_builder_->get_callers(symbol, max_depth);
+            result.impact = context_builder_->get_callers(std::string{symbol}, max_depth);
             if (result.impact.contains("error")) {
                 result.error   = result.impact["error"].get<std::string>();
                 result.success = false;
@@ -402,7 +402,7 @@ public:
         return result;
     }
 
-    CodeGraphImpactResult getCallees(const std::string& symbol, int max_depth) {
+    CodeGraphImpactResult getCallees(std::string_view symbol, int max_depth) {
         CodeGraphImpactResult       result;
         std::lock_guard<std::mutex> lock(mutex_);
         if (!context_builder_) {
@@ -410,7 +410,7 @@ public:
             return result;
         }
         try {
-            result.impact = context_builder_->get_callees(symbol, max_depth);
+            result.impact = context_builder_->get_callees(std::string{symbol}, max_depth);
             if (result.impact.contains("error")) {
                 result.error   = result.impact["error"].get<std::string>();
                 result.success = false;
@@ -423,7 +423,7 @@ public:
         return result;
     }
 
-    CodeGraphImpactResult getImpact(const std::string& symbol, int max_depth) {
+    CodeGraphImpactResult getImpact(std::string_view symbol, int max_depth) {
         CodeGraphImpactResult       result;
         std::lock_guard<std::mutex> lock(mutex_);
         if (!context_builder_) {
@@ -431,7 +431,7 @@ public:
             return result;
         }
         try {
-            result.impact = context_builder_->get_impact(symbol, max_depth);
+            result.impact = context_builder_->get_impact(std::string{symbol}, max_depth);
             if (result.impact.contains("error")) {
                 result.error   = result.impact["error"].get<std::string>();
                 result.success = false;
@@ -444,7 +444,7 @@ public:
         return result;
     }
 
-    CodeGraphPathResult findPath(const std::string& from, const std::string& to, int max_depth) {
+    CodeGraphPathResult findPath(std::string_view from, std::string_view to, int max_depth) {
         CodeGraphPathResult         result;
         std::lock_guard<std::mutex> lock(mutex_);
         if (!db_ || !traverser_) {
@@ -452,8 +452,8 @@ public:
             return result;
         }
         try {
-            auto from_nodes = db_->find_nodes_by_name(from, 1);
-            auto to_nodes   = db_->find_nodes_by_name(to, 1);
+            auto from_nodes = db_->find_nodes_by_name(std::string{from}, 1);
+            auto to_nodes   = db_->find_nodes_by_name(std::string{to}, 1);
             if (from_nodes.empty() || to_nodes.empty()) {
                 result.error = "Symbol not found";
                 return result;
@@ -527,11 +527,10 @@ public:
             file_watcher_ = codegraph::FileWatcher::create(project_root_, &running_);
             file_watcher_->add_watch_recursive(project_root_);
 
-            file_watcher_->set_callback([this,
-                                         auto_reindex](const std::string& path, uint32_t mask) {
+            file_watcher_->set_callback([this, auto_reindex](std::string_view path, uint32_t mask) {
                 if (auto_reindex
                     && (mask & (codegraph::FILE_EVENT_MODIFIED | codegraph::FILE_EVENT_CREATED))) {
-                    std::string lang = codegraph::detect_language(path);
+                    std::string lang = codegraph::detect_language(std::string{path});
                     if (!lang.empty() && !should_skip(path)) {
                         this->indexFile(path, lang);
                     }
@@ -573,15 +572,15 @@ public:
     }
 
     void writeExtractionResult(
-        const std::string&           file_path,
-        const std::string&           lang,
+        std::string_view             file_path,
+        std::string_view             lang,
         codegraph::ExtractionResult& result
     ) {
         db_->begin_transaction();
         try {
-            db_->delete_edges_for_file_nodes(file_path);
-            db_->delete_unresolved_refs_by_file(file_path);
-            db_->delete_nodes_by_file(file_path);
+            db_->delete_edges_for_file_nodes(std::string{file_path});
+            db_->delete_unresolved_refs_by_file(std::string{file_path});
+            db_->delete_nodes_by_file(std::string{file_path});
 
             std::vector<int64_t> id_map;
             id_map.reserve(result.nodes.size());
@@ -621,24 +620,24 @@ public:
         }
     }
 
-    void indexFile(const std::string& file_path, const std::string& lang) {
+    void indexFile(std::string_view file_path, std::string_view lang) {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!db_) {
             return;
         }
 
-        auto extractor = codegraph::create_extractor(lang);
+        auto extractor = codegraph::create_extractor(std::string{lang});
         if (!extractor) {
             return;
         }
 
-        std::ifstream ifs(file_path);
+        std::ifstream ifs(std::string{file_path});
         if (!ifs.is_open()) {
             return;
         }
         std::string source((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
 
-        auto result = extractor->extract(file_path, source);
+        auto result = extractor->extract(std::string{file_path}, source);
         writeExtractionResult(file_path, lang, result);
     }
 
@@ -673,7 +672,7 @@ CodeGraphManager::~CodeGraphManager() {
     impl_->shutdown();
 }
 
-bool CodeGraphManager::initialize(const std::string& project_root) {
+bool CodeGraphManager::initialize(std::string_view project_root) {
     return impl_->initialize(project_root);
 }
 
@@ -685,7 +684,7 @@ bool CodeGraphManager::isRunning() const {
     return impl_->isRunning();
 }
 
-bool CodeGraphManager::indexDirectory(const std::string& path, bool incremental) {
+bool CodeGraphManager::indexDirectory(std::string_view path, bool incremental) {
     return impl_->indexDirectory(path, incremental);
 }
 
@@ -697,29 +696,29 @@ bool CodeGraphManager::resolveReferences() {
     return impl_->resolveReferencesLocked();
 }
 
-CodeGraphSearchResult CodeGraphManager::searchSymbols(const std::string& query, int limit) {
+CodeGraphSearchResult CodeGraphManager::searchSymbols(std::string_view query, int limit) {
     return impl_->searchSymbols(query, limit);
 }
 
 CodeGraphContextResult
-    CodeGraphManager::getSymbolContext(const std::string& symbol, int limit, int max_depth) {
+    CodeGraphManager::getSymbolContext(std::string_view symbol, int limit, int max_depth) {
     return impl_->getSymbolContext(symbol, limit, max_depth);
 }
 
-CodeGraphImpactResult CodeGraphManager::getCallers(const std::string& symbol, int max_depth) {
+CodeGraphImpactResult CodeGraphManager::getCallers(std::string_view symbol, int max_depth) {
     return impl_->getCallers(symbol, max_depth);
 }
 
-CodeGraphImpactResult CodeGraphManager::getCallees(const std::string& symbol, int max_depth) {
+CodeGraphImpactResult CodeGraphManager::getCallees(std::string_view symbol, int max_depth) {
     return impl_->getCallees(symbol, max_depth);
 }
 
-CodeGraphImpactResult CodeGraphManager::getImpact(const std::string& symbol, int max_depth) {
+CodeGraphImpactResult CodeGraphManager::getImpact(std::string_view symbol, int max_depth) {
     return impl_->getImpact(symbol, max_depth);
 }
 
 CodeGraphPathResult
-    CodeGraphManager::findPath(const std::string& from, const std::string& to, int max_depth) {
+    CodeGraphManager::findPath(std::string_view from, std::string_view to, int max_depth) {
     return impl_->findPath(from, to, max_depth);
 }
 

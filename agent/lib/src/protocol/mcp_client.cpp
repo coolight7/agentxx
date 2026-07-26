@@ -1,5 +1,6 @@
 #include "agentxx/protocol/mcp_client.h"
 
+#include <fmt/format.h>
 #include <thread>
 #if AGENTXX_ENABLE_BOOST_PROCESS
 #include "asio/readable_pipe.hpp"
@@ -37,8 +38,8 @@ namespace server {
 
 namespace {
 /// 计算命名空间前缀后的对外 tool 名称 (namespace 非空时为 "namespace_name")
-std::string makeNamespacedName(const std::string& toolNamespace, const std::string& name) {
-    return toolNamespace.empty() ? name : toolNamespace + "_" + name;
+std::string makeNamespacedName(std::string_view toolNamespace, std::string_view name) {
+    return toolNamespace.empty() ? std::string{name} : fmt::format("{}_{}", toolNamespace, name);
 }
 } // namespace
 
@@ -546,7 +547,7 @@ asio::awaitable<std::expected<std::vector<McpToolDefinition>, std::string>> McpC
 }
 
 asio::awaitable<std::expected<json, std::string>>
-    McpClient::callTool(const std::string& name, const json& arguments) {
+    McpClient::callTool(std::string_view name, const json& arguments) {
     json params;
     params["name"]      = name;
     params["arguments"] = arguments;
@@ -604,7 +605,7 @@ asio::awaitable<std::expected<std::vector<McpResourceDefinition>, std::string>>
 }
 
 asio::awaitable<std::expected<McpResourceContent, std::string>>
-    McpClient::readResource(const std::string& uri) {
+    McpClient::readResource(std::string_view uri) {
     json params;
     params["uri"] = uri;
     auto resp     = co_await sendRequest("resources/read", std::move(params));
@@ -622,7 +623,7 @@ asio::awaitable<std::expected<McpResourceContent, std::string>>
     content.uri = uri;
     if (r.contains("contents") && r["contents"].is_array() && !r["contents"].empty()) {
         json c           = r["contents"][0];
-        content.uri      = c.value("uri", uri);
+        content.uri      = c.value("uri", std::string{uri});
         content.mimeType = c.value("mimeType", std::string{});
         if (c.contains("text")) {
             content.text = c["text"].get<std::string>();
@@ -672,7 +673,7 @@ asio::awaitable<std::expected<std::vector<McpPromptDefinition>, std::string>>
 }
 
 asio::awaitable<std::expected<McpPromptResult, std::string>>
-    McpClient::getPrompt(const std::string& name, const json& arguments) {
+    McpClient::getPrompt(std::string_view name, const json& arguments) {
     json params;
     params["name"]      = name;
     params["arguments"] = arguments;
@@ -719,7 +720,7 @@ std::unique_ptr<McpClientTool>
     );
 }
 
-json McpClient::makeRequest(int64_t id, const std::string& method, const json& params) {
+json McpClient::makeRequest(int64_t id, std::string_view method, const json& params) {
     json req;
     req["jsonrpc"] = "2.0";
     req["id"]      = id;
@@ -742,7 +743,7 @@ std::optional<std::string> McpClient::getErrorFromResponse(const json& response)
 }
 
 std::string
-    McpClient::negotiateProtocolVersion(const std::string& requested, const json& serverResult) {
+    McpClient::negotiateProtocolVersion(std::string_view requested, const json& serverResult) {
     auto serverVersion = serverResult.value("protocolVersion", std::string{});
     if (serverVersion.empty()) {
         return std::string(kProtocol2024_11_05);
@@ -763,11 +764,11 @@ std::string
         return serverVersion;
     }
 
-    return requested;
+    return std::string{requested};
 }
 
 asio::awaitable<std::expected<json, std::string>>
-    McpClient::sendRequest(const std::string& method, const json& params) {
+    McpClient::sendRequest(std::string_view method, const json& params) {
     if (closed_.load()) {
         co_return std::unexpected{std::string{"client is closed"}};
     }
@@ -792,7 +793,7 @@ std::string McpClient::buildSseUrl(std::string_view serverUrl) {
     return url + "/sse";
 }
 
-std::vector<McpClient::SseEvent> McpClient::parseSseEvents(const std::string& body) {
+std::vector<McpClient::SseEvent> McpClient::parseSseEvents(std::string_view body) {
     std::vector<SseEvent> events;
     std::string           curEvent;
     std::string           curData;
@@ -927,7 +928,7 @@ util::HeaderMap McpClient::buildHttpHeaders() const {
 }
 
 asio::awaitable<std::expected<json, std::string>>
-    McpClient::sendHttpRequest(int64_t id, const std::string& method, const json& params) {
+    McpClient::sendHttpRequest(int64_t id, std::string_view method, const json& params) {
     if (!sseDiscovered_.load()) {
         co_await discoverSseEndpoint();
     }
@@ -1022,7 +1023,7 @@ asio::awaitable<std::expected<json, std::string>>
 }
 
 asio::awaitable<std::expected<json, std::string>>
-    McpClient::sendStdioRequest(int64_t id, const std::string& method, const json& params) {
+    McpClient::sendStdioRequest(int64_t id, std::string_view method, const json& params) {
     auto req    = makeRequest(id, method, params);
     auto reqStr = req.dump() + "\n";
 
@@ -1096,8 +1097,7 @@ asio::awaitable<std::expected<json, std::string>>
     co_return response;
 }
 
-asio::awaitable<void>
-    McpClient::sendRawNotification(const std::string& method, const json& params) {
+asio::awaitable<void> McpClient::sendRawNotification(std::string_view method, const json& params) {
     json req;
     req["jsonrpc"] = "2.0";
     req["method"]  = method;

@@ -270,8 +270,8 @@ void AgentTUI::start() {
             }
 
             {
-                const std::string& in     = event.input();
-                const bool         isSend = (in == "\x1B\n" || in == "\x1B\r");
+                std::string_view in     = event.input();
+                const bool       isSend = (in == "\x1B\n" || in == "\x1B\r");
                 if (isSend) {
                     std::string text = inputText_;
                     while (!text.empty() && (text.back() == '\n' || text.back() == '\r')) {
@@ -417,7 +417,7 @@ void AgentTUI::stop() {
     }
 }
 
-void AgentTUI::requestCancel(const std::string& threadId) {
+void AgentTUI::requestCancel(std::string_view threadId) {
     if (auto target = controlTarget_.lock()) {
         target->requestCancel(threadId);
     } else if (session_) {
@@ -428,7 +428,7 @@ void AgentTUI::requestCancel(const std::string& threadId) {
     }
 }
 
-void AgentTUI::requestSelectModel(const std::string& threadId, const std::string& model) {
+void AgentTUI::requestSelectModel(std::string_view threadId, std::string_view model) {
     if (auto target = controlTarget_.lock()) {
         target->requestSelectModel(threadId, model);
     }
@@ -644,10 +644,10 @@ void AgentTUI::onSync(const agentxx::agent::SyncPayload& payload) {
 }
 
 asio::awaitable<neograph::json> AgentTUI::handleInterrupt(
-    const std::string& threadId,
-    const std::string& interruptNode,
-    const std::string& interruptValue,
-    const std::string& interruptArgJson
+    std::string_view threadId,
+    std::string_view interruptNode,
+    std::string_view interruptValue,
+    std::string_view interruptArgJson
 ) {
     auto argOpt
         = agentxx::middleware::InterruptHandleArg::fromJson(neograph::json::parse(interruptArgJson)
@@ -662,7 +662,8 @@ asio::awaitable<neograph::json> AgentTUI::handleInterrupt(
 
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        std::string msg = "Interrupted at: " + interruptNode + "\nValue: " + interruptValue;
+        std::string                 msg
+            = fmt::format("Interrupted at: {}\nValue: {}", interruptNode, interruptValue);
         if (!handleArg.name.empty()) {
             msg += "\nHandle: " + handleArg.name;
         }

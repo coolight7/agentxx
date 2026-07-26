@@ -28,7 +28,7 @@ protected:
 public:
 
     ModelCallWrapNode(
-        const std::string&                          name,
+        std::string_view                            name,
         const neograph::graph::NodeContext&         ctx,
         std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
     );
@@ -36,16 +36,16 @@ public:
     /// 解析指定会话使用的 Provider
     /// - 启用动态切换时按会话 (thread_id) 选择的模型经 modelRegistry 解析
     /// - 否则回退到节点构造时的 provider_
-    std::shared_ptr<neograph::Provider> resolveCurrentProvider(const std::string& threadId);
+    std::shared_ptr<neograph::Provider> resolveCurrentProvider(std::string_view threadId);
 
     /// 解析指定会话使用的模型名 (发送给 LLM api 的 model 字段)
-    std::string resolveCurrentModelName(const std::string& threadId) const;
+    std::string resolveCurrentModelName(std::string_view threadId) const;
 
     asio::awaitable<neograph::ChatCompletion>
         onReceiveToken(neograph::CompletionParams& params, neograph::graph::NodeInput& input);
 
     neograph::CompletionParams
-        build_params(const neograph::graph::GraphState& state, const std::string& threadId) const;
+        build_params(const neograph::graph::GraphState& state, std::string_view threadId) const;
 
     asio::awaitable<neograph::graph::NodeOutput> callLLM(neograph::graph::NodeInput& in);
 

@@ -24,7 +24,7 @@ public:
 
     void set(std::string_view name, const std::vector<std::string>& value);
 
-    void set(std::string_view name, const std::string& value);
+    void set(std::string_view name, std::string_view value);
 };
 
 } // namespace util

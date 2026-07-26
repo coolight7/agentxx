@@ -887,7 +887,7 @@ private:
         return result;
     }
 
-    static SOCKET wsConnect(int port, const std::string& wsPath) {
+    static SOCKET wsConnect(int port, std::string_view wsPath) {
         if (!ensureWSA()) {
             return INVALID_SOCKET;
         }

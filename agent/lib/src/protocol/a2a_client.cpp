@@ -5,7 +5,8 @@
 namespace agentxx {
 namespace server {
 
-A2aClient::A2aClient(Config config) : config_(std::move(config)) {}
+A2aClient::A2aClient(Config config) :
+    config_(std::move(config)) {}
 
 // ---------------------------------------------------------------------------
 // Agent discovery
@@ -40,7 +41,9 @@ asio::awaitable<std::expected<json, std::string>> A2aClient::fetchAgentCard() {
 // ---------------------------------------------------------------------------
 
 asio::awaitable<std::expected<json, std::string>> A2aClient::sendMessage(
-    const std::string& text, const std::string& taskId, const std::string& contextId
+    std::string_view text,
+    std::string_view taskId,
+    std::string_view contextId
 ) {
     json params;
     params["message"] = buildTextMessage(text, taskId, contextId);
@@ -48,7 +51,7 @@ asio::awaitable<std::expected<json, std::string>> A2aClient::sendMessage(
 }
 
 asio::awaitable<std::expected<json, std::string>>
-    A2aClient::getTask(const std::string& taskId, int historyLength) {
+    A2aClient::getTask(std::string_view taskId, int historyLength) {
     json params;
     params["id"] = taskId;
     if (historyLength > 0) {
@@ -57,9 +60,8 @@ asio::awaitable<std::expected<json, std::string>>
     co_return co_await rpcCall("GetTask", std::move(params));
 }
 
-asio::awaitable<std::expected<json, std::string>> A2aClient::listTasks(
-    const std::string& contextId, const std::string& status, int pageSize
-) {
+asio::awaitable<std::expected<json, std::string>>
+    A2aClient::listTasks(std::string_view contextId, std::string_view status, int pageSize) {
     json params;
     if (!contextId.empty()) {
         params["contextId"] = contextId;
@@ -71,8 +73,7 @@ asio::awaitable<std::expected<json, std::string>> A2aClient::listTasks(
     co_return co_await rpcCall("ListTasks", std::move(params));
 }
 
-asio::awaitable<std::expected<json, std::string>>
-    A2aClient::cancelTask(const std::string& taskId) {
+asio::awaitable<std::expected<json, std::string>> A2aClient::cancelTask(std::string_view taskId) {
     json params;
     params["id"] = taskId;
     co_return co_await rpcCall("CancelTask", std::move(params));
@@ -83,7 +84,7 @@ asio::awaitable<std::expected<json, std::string>>
 // ---------------------------------------------------------------------------
 
 asio::awaitable<std::expected<json, std::string>>
-    A2aClient::rpcCall(const std::string& method, json params) {
+    A2aClient::rpcCall(std::string_view method, json params) {
     json request;
     request["jsonrpc"] = "2.0";
     request["id"]      = nextId_++;
@@ -109,9 +110,7 @@ asio::awaitable<std::expected<json, std::string>>
         co_return std::unexpected("HTTP request failed: " + resp.error());
     }
     if (!resp->isSuccess()) {
-        co_return std::unexpected(
-            "HTTP error " + std::to_string(resp->status) + ": " + resp->body
-        );
+        co_return std::unexpected("HTTP error " + std::to_string(resp->status) + ": " + resp->body);
     }
 
     auto parsed = resp->bodyJson();
@@ -123,9 +122,7 @@ asio::awaitable<std::expected<json, std::string>>
     if (response.contains("error") && !response["error"].is_null()) {
         auto code = response["error"].value("code", 0);
         auto msg  = response["error"].value("message", std::string{"Unknown error"});
-        co_return std::unexpected(
-            "JSON-RPC error " + std::to_string(code) + ": " + msg
-        );
+        co_return std::unexpected("JSON-RPC error " + std::to_string(code) + ": " + msg);
     }
 
     if (!response.contains("result")) {
@@ -140,7 +137,9 @@ asio::awaitable<std::expected<json, std::string>>
 // ---------------------------------------------------------------------------
 
 json A2aClient::buildTextMessage(
-    const std::string& text, const std::string& taskId, const std::string& contextId
+    std::string_view text,
+    std::string_view taskId,
+    std::string_view contextId
 ) {
     json msg;
     msg["role"]  = "ROLE_USER";
@@ -179,7 +178,9 @@ std::string A2aClient::extractArtifactText(const json& task) {
         }
         for (const auto& part : artifact["parts"]) {
             if (part.contains("text") && part["text"].is_string()) {
-                if (!result.empty()) result += "\n";
+                if (!result.empty()) {
+                    result += "\n";
+                }
                 result += part["text"].get<std::string>();
             }
         }

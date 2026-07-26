@@ -8,9 +8,9 @@ using namespace ftxui;
 
 namespace {
 /// 取首行并按 utf8 长度截断 (用于待发送消息折叠为一行)
-std::string oneLine(const std::string& s, size_t max = 60) {
+std::string oneLine(std::string_view s, size_t max = 60) {
     const auto  nl   = s.find('\n');
-    std::string line = (nl == std::string::npos) ? s : s.substr(0, nl);
+    std::string line{(nl == std::string::npos) ? s : s.substr(0, nl)};
     const auto  idx  = agentxx::util::findIndexByUtf8Length(line, max);
     if (idx > 0 && idx < line.size()) {
         line.resize(idx);

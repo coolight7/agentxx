@@ -21,7 +21,7 @@ std::shared_ptr<neograph::graph::CancelToken> Session::getCancelToken() {
     return cancelToken_;
 }
 
-void Session::setModelName(const std::string& name) {
+void Session::setModelName(std::string_view name) {
     std::lock_guard<std::mutex> lock(mutex_);
     modelName_ = name;
 }
@@ -31,29 +31,29 @@ std::string Session::getModelName() const {
     return modelName_;
 }
 
-std::shared_ptr<Session> SessionStore::getOrCreate(const std::string& threadId) {
+std::shared_ptr<Session> SessionStore::getOrCreate(std::string_view threadId) {
     std::lock_guard<std::mutex> lock(mutex_);
     auto                        it = sessions_.find(threadId);
     if (it != sessions_.end()) {
         return it->second;
     }
     auto session        = std::make_shared<Session>();
-    sessions_[threadId] = session;
+    sessions_[std::string{threadId}] = session;
     return session;
 }
 
-std::shared_ptr<Session> SessionStore::get(const std::string& threadId) {
+std::shared_ptr<Session> SessionStore::get(std::string_view threadId) {
     std::lock_guard<std::mutex> lock(mutex_);
     auto                        it = sessions_.find(threadId);
     return it == sessions_.end() ? nullptr : it->second;
 }
 
-void SessionStore::remove(const std::string& threadId) {
+void SessionStore::remove(std::string_view threadId) {
     std::lock_guard<std::mutex> lock(mutex_);
     sessions_.erase(threadId);
 }
 
-std::shared_ptr<Session> AgentContext::getSession(const std::string& threadId) {
+std::shared_ptr<Session> AgentContext::getSession(std::string_view threadId) {
     return sessions->getOrCreate(threadId);
 }
 

@@ -55,30 +55,29 @@ public:
     CodeGraphManager(const CodeGraphManager&)            = delete;
     CodeGraphManager& operator=(const CodeGraphManager&) = delete;
 
-    bool initialize(const std::string& project_root);
+    bool initialize(std::string_view project_root);
     void shutdown();
 
     bool isRunning() const;
 
-    bool indexDirectory(const std::string& path, bool incremental = true);
+    bool indexDirectory(std::string_view path, bool incremental = true);
     bool updateIndex();
     bool resolveReferences();
 
-    CodeGraphSearchResult searchSymbols(const std::string& query, int limit = 20);
+    CodeGraphSearchResult searchSymbols(std::string_view query, int limit = 20);
     CodeGraphContextResult
-        getSymbolContext(const std::string& symbol, int limit = 10, int max_depth = 3);
-    CodeGraphImpactResult getCallers(const std::string& symbol, int max_depth = 3);
-    CodeGraphImpactResult getCallees(const std::string& symbol, int max_depth = 3);
-    CodeGraphImpactResult getImpact(const std::string& symbol, int max_depth = 5);
-    CodeGraphPathResult
-        findPath(const std::string& from, const std::string& to, int max_depth = 10);
+        getSymbolContext(std::string_view symbol, int limit = 10, int max_depth = 3);
+    CodeGraphImpactResult getCallers(std::string_view symbol, int max_depth = 3);
+    CodeGraphImpactResult getCallees(std::string_view symbol, int max_depth = 3);
+    CodeGraphImpactResult getImpact(std::string_view symbol, int max_depth = 5);
+    CodeGraphPathResult   findPath(std::string_view from, std::string_view to, int max_depth = 10);
     CodeGraphStatusResult getStatus();
 
     bool startFileWatcher(bool auto_reindex = true);
     void stopFileWatcher();
 
     using IndexProgressCallback
-        = std::function<void(int processed, int total, const std::string& current_file)>;
+        = std::function<void(int processed, int total, std::string_view current_file)>;
     void setProgressCallback(IndexProgressCallback callback);
 
 private:

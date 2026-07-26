@@ -57,7 +57,7 @@ public:
     }
 
     asio::awaitable<neograph::json>
-        handleInterrupt(const std::string&, const std::string&, const std::string&, const std::string&)
+        handleInterrupt(std::string_view, std::string_view, std::string_view, std::string_view)
             override {
         co_return neograph::json::array({"true"});
     }
@@ -122,7 +122,7 @@ public:
     }
 
     asio::awaitable<neograph::json>
-        handleInterrupt(const std::string&, const std::string&, const std::string&, const std::string&)
+        handleInterrupt(std::string_view, std::string_view, std::string_view, std::string_view)
             override {
         co_return neograph::json::array({"true"});
     }
@@ -1420,11 +1420,11 @@ static asio::awaitable<void> test_remote_auth_rejected() {
     cfg.token = "secret";
     auto io   = std::make_shared<remote::RemoteServerAgentIO>(ex, std::move(serverT), cfg);
     io->setAuthHandler(
-        [ex](const std::string& threadId, uint64_t, const std::string&, std::string& outTailHash)
+        [ex](std::string_view threadId, uint64_t, std::string_view, std::string& outTailHash)
             -> std::shared_ptr<remote::SessionController> {
             outTailHash = "";
             remote::SessionController::Config scCfg;
-            scCfg.threadId = threadId;
+            scCfg.threadId = std::string{threadId};
             return std::make_shared<remote::SessionController>(
                 ex,
                 std::weak_ptr<agentxx::agent::DeepAgent>{},

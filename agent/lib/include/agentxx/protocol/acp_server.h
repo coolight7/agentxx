@@ -75,16 +75,16 @@ public:
     /// Emit an outbound request (agent→client) and wait for the response.
     /// The notification sink must be set before calling this.
     json callClient(
-        const std::string&        method,
+        std::string_view          method,
         json                      params,
         std::chrono::milliseconds timeout = std::chrono::seconds{30}
     );
 
     // -- Session queries (for tests / introspection) -----------------------
 
-    bool        hasSession(const std::string& sessionId) const;
-    std::string sessionCwd(const std::string& sessionId) const;
-    bool        isInFlight(const std::string& sessionId) const;
+    bool        hasSession(std::string_view sessionId) const;
+    std::string sessionCwd(std::string_view sessionId) const;
+    bool        isInFlight(std::string_view sessionId) const;
     int         inflightCount() const;
 
     /// Drain in-flight workers (used by transports before shutdown).
@@ -95,8 +95,8 @@ public:
     // -----------------------------------------------------------------------
 
     static json        jsonRpcResult(const json& id, json result);
-    static json        jsonRpcError(const json& id, int code, const std::string& msg);
-    static json        makeParseError(const std::string& detail);
+    static json        jsonRpcError(const json& id, int code, std::string_view msg);
+    static json        makeParseError(std::string_view detail);
     static json        makeInvalidRequest();
     static std::string extractUserText(const json& prompt);
     static std::string generateSessionId();
@@ -109,12 +109,12 @@ public:
     json handleSessionNew(const json& params, const json& id);
     void handleSessionPrompt(const json& env, const json& params, const json& id);
     void workerRunPrompt(
-        const std::string&                 sessionId,
+        std::string_view                   sessionId,
         const json&                        promptBlocks,
         const json&                        id,
         std::shared_ptr<std::atomic<bool>> cancelFlag
     );
-    void workerCleanup(const std::string& sessionId);
+    void workerCleanup(std::string_view sessionId);
     void handleSessionCancel(const json& params);
 
     // -----------------------------------------------------------------------
@@ -122,8 +122,8 @@ public:
     // -----------------------------------------------------------------------
 
     void emit(const json& env);
-    void emitNotification(const std::string& method, const json& params);
-    void emitAgentMessageChunk(const std::string& sessionId, const std::string& text);
+    void emitNotification(std::string_view method, const json& params);
+    void emitAgentMessageChunk(std::string_view sessionId, std::string_view text);
 
 private:
 
@@ -140,12 +140,12 @@ private:
 
     // -- Sessions --
     mutable std::mutex                                        sessionsMu_;
-    std::map<std::string, std::string>                        sessions_; // sessionId → cwd
+    std::map<std::string, std::string, std::less<>>            sessions_; // sessionId → cwd
     std::map<std::string, std::shared_ptr<std::atomic<bool>>> cancelFlags_;
 
     // -- In-flight prompt tracking --
     mutable std::mutex    inflightMu_;
-    std::set<std::string> inflightSessions_;
+    std::set<std::string, std::less<>> inflightSessions_;
     std::atomic<int>      inflightCount_{0};
 
     std::mutex              workersMu_;
@@ -224,7 +224,7 @@ private:
     asio::awaitable<void>
         handleSseRequest(util::HttpServer::Request& req, util::HttpServer::Response& resp);
 
-    void broadcastSSE(const std::string& /*data*/);
+    void broadcastSSE(std::string_view /*data*/);
     void stopSSE();
 
     // -----------------------------------------------------------------------
@@ -237,8 +237,7 @@ private:
         const neograph::json&       body
     );
 
-    neograph::json
-        jsonRpcError(const neograph::json& id, int code, const std::string& message) const;
+    neograph::json jsonRpcError(const neograph::json& id, int code, std::string_view message) const;
 
     // -----------------------------------------------------------------------
     // Members

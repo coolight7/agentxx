@@ -68,10 +68,10 @@ public:
     void                                        onSync(const SyncPayload& payload) override;
     asio::awaitable<std::optional<std::string>> getInput() override;
     asio::awaitable<neograph::json>             handleInterrupt(
-                    const std::string& threadId,
-                    const std::string& interruptNode,
-                    const std::string& interruptValue,
-                    const std::string& interruptArgJson
+                    std::string_view threadId,
+                    std::string_view interruptNode,
+                    std::string_view interruptValue,
+                    std::string_view interruptArgJson
                 ) override;
 
     // ----- 生命周期 -----
@@ -88,7 +88,7 @@ public:
     void attach(
         const std::shared_ptr<IConnectionSink>& conn,
         uint64_t                                lastSeq,
-        const std::string&                      tailHash
+        std::string_view                        tailHash
     );
 
     /// 解绑活动连接 (conn 为当前活动时); 轮次进行中则启动 grace period
@@ -100,7 +100,7 @@ public:
     void resolveInterrupt(int64_t id, neograph::json result);
     void onCancel();
 
-    const std::string& threadId() const noexcept {
+    std::string_view threadId() const noexcept {
         return config_.threadId;
     }
 

@@ -82,7 +82,7 @@ uint16_t AgentServer::port() const {
     return http_ ? http_->port() : 0;
 }
 
-std::shared_ptr<SessionController> AgentServer::getOrCreateController(const std::string& threadId) {
+std::shared_ptr<SessionController> AgentServer::getOrCreateController(std::string_view threadId) {
     std::lock_guard<std::mutex> lock(controllersMutex_);
     auto                        it = controllers_.find(threadId);
     if (it != controllers_.end()) {
@@ -90,14 +90,14 @@ std::shared_ptr<SessionController> AgentServer::getOrCreateController(const std:
     }
 
     SessionController::Config cfg;
-    cfg.threadId          = threadId;
+    cfg.threadId          = std::string{threadId};
     cfg.interruptTimeout  = config_.interruptTimeout;
     cfg.permissionTimeout = config_.permissionTimeout;
     cfg.gracePeriod       = config_.gracePeriod;
     cfg.deltaBufferCap    = config_.deltaBufferCap;
 
     auto ctrl              = std::make_shared<SessionController>(ex_, agent_, cfg);
-    controllers_[threadId] = ctrl;
+    controllers_[std::string{threadId}] = ctrl;
 
     // 启动会话驱动循环 (独立于连接存在)
     asio::co_spawn(ex_, ctrl->run(), [ctrl, threadId](std::exception_ptr ep) {
@@ -139,10 +139,10 @@ asio::awaitable<void> AgentServer::serveTransport(std::unique_ptr<MessageTranspo
     // 鉴权通过后绑定到对应 threadId 的 SessionController (含增量重放)
     io->setAuthHandler(
         [this, weakIo](
-            const std::string& threadId,
-            uint64_t           lastSeq,
-            const std::string& tailHash,
-            std::string&       outTailHash
+            std::string_view threadId,
+            uint64_t         lastSeq,
+            std::string_view tailHash,
+            std::string&     outTailHash
         ) -> std::shared_ptr<SessionController> {
             auto conn = weakIo.lock();
             if (!conn) {
@@ -154,7 +154,7 @@ asio::awaitable<void> AgentServer::serveTransport(std::unique_ptr<MessageTranspo
             return ctrl;
         }
     );
-    io->setSelectModelCallback([this, weakIo](const std::string& model) {
+    io->setSelectModelCallback([this, weakIo](std::string_view model) {
         auto conn = weakIo.lock();
         if (!conn || !agent_) {
             return;

@@ -15,7 +15,7 @@ public:
     inline static constexpr auto defNodeType = std::string_view{"xx_MiddlewareWrapAgentStartCall"};
 
     AgentStartCallWrapNode(
-        const std::string&                          name,
+        std::string_view                            name,
         std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
     );
 
@@ -39,7 +39,7 @@ public:
     inline static constexpr auto defNodeType = std::string_view{"xx_MiddlewareWrapAgentEndCall"};
 
     MiddlewareWrapAgentEndCallNode(
-        const std::string&                          name,
+        std::string_view                            name,
         std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
     );
 

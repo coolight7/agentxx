@@ -77,9 +77,9 @@ void McpServer::addTool(McpToolDefinition def, ToolHandler handler) {
     toolsListChanged_  = true;
 }
 
-void McpServer::removeTool(const std::string& name) {
+void McpServer::removeTool(std::string_view name) {
     std::unique_lock lock(toolsMutex_);
-    toolsByName_.erase(name);
+    toolsByName_.erase(std::string{name});
     toolsListChanged_ = true;
 }
 
@@ -100,9 +100,9 @@ void McpServer::addResource(McpResourceDefinition def, ResourceReader reader) {
     resourcesListChanged_ = true;
 }
 
-void McpServer::removeResource(const std::string& uri) {
+void McpServer::removeResource(std::string_view uri) {
     std::unique_lock lock(resourcesMutex_);
-    resourcesByUri_.erase(uri);
+    resourcesByUri_.erase(std::string{uri});
     resourcesListChanged_ = true;
 }
 
@@ -123,9 +123,9 @@ void McpServer::addPrompt(McpPromptDefinition def, PromptHandler handler) {
     promptsListChanged_  = true;
 }
 
-void McpServer::removePrompt(const std::string& name) {
+void McpServer::removePrompt(std::string_view name) {
     std::unique_lock lock(promptsMutex_);
-    promptsByName_.erase(name);
+    promptsByName_.erase(std::string{name});
     promptsListChanged_ = true;
 }
 
@@ -173,7 +173,7 @@ void McpServer::setupRoutes() {
     using Handler = util::HttpServer::Handler;
 
     auto mcpHandler = std::make_shared<Handler>(Handler(
-        [this](util::HttpServer::Request& req, util::HttpServer::Response& resp, const std::string&)
+        [this](util::HttpServer::Request& req, util::HttpServer::Response& resp, std::string_view)
             -> asio::awaitable<void> {
             co_await handleMcpRequest(req, resp);
         }
@@ -690,7 +690,7 @@ asio::awaitable<void> McpServer::handleSseStream(
     }
 }
 
-void McpServer::broadcastSSE(const std::string& event, const std::string& data) {
+void McpServer::broadcastSSE(std::string_view event, std::string_view data) {
     std::unique_lock lock(sseClientsMutex_);
     for (auto& client : sseClients_) {
         if (!client->closed && client->writer) {

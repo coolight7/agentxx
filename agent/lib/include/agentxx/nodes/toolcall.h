@@ -15,7 +15,7 @@ public:
     inline static constexpr auto defNodeType = std::string_view{"xx_Toolcall"};
 
     ToolcallWrapNode(
-        const std::string&                          in_name,
+        std::string_view                            in_name,
         const neograph::graph::NodeContext&         in_ctx,
         std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
     );

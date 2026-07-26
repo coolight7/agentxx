@@ -135,9 +135,9 @@ class McpServer {
 public:
 
     using ToolHandler    = std::function<json(const json& arguments)>;
-    using ResourceReader = std::function<std::optional<McpResourceContent>(const std::string& uri)>;
+    using ResourceReader = std::function<std::optional<McpResourceContent>(std::string_view uri)>;
     using PromptHandler  = std::function<
-         std::optional<McpPromptResult>(const std::string& name, const json& arguments)>;
+         std::optional<McpPromptResult>(std::string_view name, const json& arguments)>;
 
     struct Config {
         util::HttpServer::Config httpConfig;
@@ -177,11 +177,11 @@ public:
     // -----------------------------------------------------------------------
 
     void                           addTool(McpToolDefinition def, ToolHandler handler);
-    void                           removeTool(const std::string& name);
+    void                           removeTool(std::string_view name);
     std::vector<McpToolDefinition> listTools() const;
 
     void addResource(McpResourceDefinition def, ResourceReader reader);
-    void removeResource(const std::string& uri);
+    void removeResource(std::string_view uri);
     std::vector<McpResourceDefinition> listResources() const;
 
     // -----------------------------------------------------------------------
@@ -189,7 +189,7 @@ public:
     // -----------------------------------------------------------------------
 
     void                             addPrompt(McpPromptDefinition def, PromptHandler handler);
-    void                             removePrompt(const std::string& name);
+    void                             removePrompt(std::string_view name);
     std::vector<McpPromptDefinition> listPrompts() const;
 
     // -----------------------------------------------------------------------
@@ -286,7 +286,7 @@ private:
     // SSE notification broadcast
     // -----------------------------------------------------------------------
 
-    void broadcastSSE(const std::string& event, const std::string& data);
+    void broadcastSSE(std::string_view event, std::string_view data);
     void stopSSE();
 
     // -----------------------------------------------------------------------

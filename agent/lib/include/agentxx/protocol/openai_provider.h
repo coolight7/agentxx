@@ -63,7 +63,7 @@ private:
         std::string prefix;
     };
 
-    static ParsedEndpoint parseEndpoint(const std::string& base_url);
+    static ParsedEndpoint parseEndpoint(std::string_view base_url);
 
     asio::awaitable<neograph::ChatCompletion> completeAsync(const neograph::CompletionParams& params
     );
@@ -207,14 +207,14 @@ public:
     }
 
     static void processSseLine(
-        const std::string&                 line_in,
+        std::string_view                   line_in,
         neograph::ChatCompletion&          completion,
         std::string&                       fullContent,
         std::string&                       fullThinking,
         std::map<int, neograph::ToolCall>& tcMap,
         neograph::FormatDataStreamCallback on_chunk
     ) {
-        std::string line = line_in;
+        std::string line{line_in};
         if (!line.empty() && line.back() == '\r') {
             line.pop_back();
         }

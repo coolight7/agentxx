@@ -77,7 +77,13 @@ public:
             std::string block = buf.substr(0, pos);
             buf.erase(0, pos + 2);
             processSseBlock(
-                block, completion, fullContent, fullThinking, tcMap, blockTypes, on_chunk
+                block,
+                completion,
+                fullContent,
+                fullThinking,
+                tcMap,
+                blockTypes,
+                on_chunk
             );
         }
         if (finalFlush && !buf.empty()) {
@@ -85,14 +91,20 @@ public:
             std::string block = std::move(buf);
             buf.clear();
             processSseBlock(
-                block, completion, fullContent, fullThinking, tcMap, blockTypes, on_chunk
+                block,
+                completion,
+                fullContent,
+                fullThinking,
+                tcMap,
+                blockTypes,
+                on_chunk
             );
         }
     }
 
     /// 解析单个 SSE 事件块 (以 "\n\n" 分隔的一块, 含若干 event:/data: 行)
     static void processSseBlock(
-        const std::string&                 block,
+        std::string_view                   block,
         neograph::ChatCompletion&          completion,
         std::string&                       fullContent,
         std::string&                       fullThinking,
@@ -106,9 +118,11 @@ public:
         size_t lineStart = 0;
         while (lineStart < block.size()) {
             auto        lineEnd = block.find('\n', lineStart);
-            std::string line    = (lineEnd == std::string::npos)
-                                      ? block.substr(lineStart)
-                                      : block.substr(lineStart, lineEnd - lineStart);
+            std::string line{
+                (lineEnd == std::string::npos)
+                    ? block.substr(lineStart)
+                    : block.substr(lineStart, lineEnd - lineStart)
+            };
             lineStart           = (lineEnd == std::string::npos) ? block.size() : lineEnd + 1;
 
             if (!line.empty() && line.back() == '\r') {
@@ -210,7 +224,7 @@ private:
         std::string prefix;
     };
 
-    static ParsedEndpoint parseEndpoint(const std::string& base_url);
+    static ParsedEndpoint parseEndpoint(std::string_view base_url);
 
     asio::awaitable<neograph::ChatCompletion> completeAsync(const neograph::CompletionParams& params
     );

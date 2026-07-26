@@ -16,7 +16,7 @@ struct HistoryMessage {
 class ChainHash {
 public:
 
-    void append(const std::string& serialized);
+    void append(std::string_view serialized);
     void reset();
 
     uint64_t    tail() const;

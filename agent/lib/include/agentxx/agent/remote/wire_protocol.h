@@ -187,10 +187,10 @@ inline std::optional<SyncPayload> syncFromJson(const neograph::json& j) {
 // ---------------------------------------------------------------------------
 
 inline neograph::json makeHello(
-    const std::string& threadId,
-    const std::string& token,
-    uint64_t           lastSeq  = 0,
-    const std::string& tailHash = ""
+    std::string_view threadId,
+    std::string_view token,
+    uint64_t         lastSeq  = 0,
+    std::string_view tailHash = ""
 ) {
     neograph::json j = {
         {"type",   MsgType::Hello},
@@ -207,10 +207,10 @@ inline neograph::json makeHello(
 }
 
 inline neograph::json makeUserInput(
-    const std::string& threadId,
-    const std::string& text,
-    bool               isFirstMsg,
-    const std::string& model = ""
+    std::string_view threadId,
+    std::string_view text,
+    bool             isFirstMsg,
+    std::string_view model = ""
 ) {
     neograph::json j = {
         {"type",         MsgType::UserInput},
@@ -232,14 +232,14 @@ inline neograph::json makeInterruptResponse(int64_t id, const neograph::json& re
     };
 }
 
-inline neograph::json makeCancel(const std::string& threadId) {
+inline neograph::json makeCancel(std::string_view threadId) {
     return neograph::json{
         {"type",   MsgType::Cancel},
         {"thread", threadId       },
     };
 }
 
-inline neograph::json makeSelectModel(const std::string& threadId, const std::string& model) {
+inline neograph::json makeSelectModel(std::string_view threadId, std::string_view model) {
     return neograph::json{
         {"type",   MsgType::SelectModel},
         {"thread", threadId            },
@@ -260,8 +260,8 @@ inline neograph::json makePing(int64_t t) {
 
 inline neograph::json makeHelloAck(
     bool                            ok,
-    const std::string&              threadId,
-    const std::string&              tailHash,
+    std::string_view                threadId,
+    std::string_view                tailHash,
     const std::vector<std::string>& models
 ) {
     neograph::json j = {
@@ -310,11 +310,11 @@ inline std::optional<SyncPayload> syncMsgFromJson(const neograph::json& j) {
 }
 
 inline neograph::json makeInterruptRequest(
-    int64_t            id,
-    const std::string& threadId,
-    const std::string& node,
-    const std::string& value,
-    const std::string& argJson
+    int64_t          id,
+    std::string_view threadId,
+    std::string_view node,
+    std::string_view value,
+    std::string_view argJson
 ) {
     return neograph::json{
         {"type",     MsgType::InterruptRequest},
@@ -327,10 +327,10 @@ inline neograph::json makeInterruptRequest(
 }
 
 inline neograph::json makeTurnResult(
-    const std::string& threadId,
-    bool               hasError,
-    const std::string& errorMessage,
-    bool               interrupted
+    std::string_view threadId,
+    bool             hasError,
+    std::string_view errorMessage,
+    bool             interrupted
 ) {
     neograph::json j = {
         {"type",        MsgType::TurnResult},
@@ -352,7 +352,7 @@ inline neograph::json makeContextStats(uint64_t contextTokens, uint64_t maxConte
     };
 }
 
-inline neograph::json makeError(int code, const std::string& message) {
+inline neograph::json makeError(int code, std::string_view message) {
     return neograph::json{
         {"type",    MsgType::ErrorMsg},
         {"code",    code             },

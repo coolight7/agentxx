@@ -91,8 +91,8 @@ public:
         out.writes.push_back(neograph::graph::ChannelWrite{
             "messages",
             neograph::json{
-                {"error", fmt::format("Middleware Wrap `{}` exception: {}", name, errInfo)},
-            }
+                           {"error", fmt::format("Middleware Wrap `{}` exception: {}", name, errInfo)},
+                           }
                 .dump(),
         });
         co_return out;
@@ -117,11 +117,11 @@ public:
 
     template<typename... Args>
     WrapHandleBaseNode(
-        const std::string&                          name,
+        std::string_view                            name,
         std::weak_ptr<agentxx::agent::AgentContext> in_agentContext,
         Args&&... args
     ) :
-        T(name, std::forward<Args>(args)...),
+        T(std::string{name}, std::forward<Args>(args)...),
         nodeName(name),
         agentContext(in_agentContext) {}
 

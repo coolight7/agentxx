@@ -8,8 +8,81 @@ namespace agentxx {
 namespace agent {
 
 AgentIOBase::~AgentIOBase() {
-    // IO 销毁前移除总线上的处理器, 避免 handler 持有悬空 this
     unregisterFromBus();
+}
+
+// ---------------------------------------------------------------------------
+// Transport 管理
+// ---------------------------------------------------------------------------
+
+void AgentIOBase::setTransport(std::shared_ptr<AgentIOTransportBase> transport) {
+    transport_ = std::move(transport);
+}
+
+std::shared_ptr<AgentIOTransportBase> AgentIOBase::transport() const noexcept {
+    return transport_;
+}
+
+asio::awaitable<void> AgentIOBase::runTransportLoop() {
+    if (!transport_) {
+        co_return;
+    }
+    while (transport_->alive()) {
+        auto msg = co_await transport_->recv();
+        if (!msg.has_value()) {
+            break;
+        }
+        onPeerMessage(std::move(*msg));
+    }
+}
+
+void AgentIOBase::sendToPeer(WireMessage msg) {
+    if (transport_) {
+        transport_->send(std::move(msg));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 默认命令实现 (经 transport 发送)
+// ---------------------------------------------------------------------------
+
+void AgentIOBase::requestCancel(std::string_view threadId) {
+    sendToPeer(WireCancel{std::string{threadId}});
+}
+
+void AgentIOBase::requestSelectModel(std::string_view threadId, std::string_view model) {
+    sendToPeer(WireSelectModel{std::string{threadId}, std::string{model}});
+}
+
+void AgentIOBase::sendUserInput(
+    std::string_view threadId,
+    std::string_view text,
+    bool             isFirstMsg,
+    std::string_view model
+) {
+    sendToPeer(WireUserInput{std::string{threadId}, std::string{text}, isFirstMsg, std::string{model}});
+}
+
+// ---------------------------------------------------------------------------
+// 默认消息分发 (子类覆写以扩展)
+// ---------------------------------------------------------------------------
+
+void AgentIOBase::onPeerMessage(WireMessage msg) {
+    std::visit(
+        [this](auto&& m) {
+            using T = std::decay_t<decltype(m)>;
+            if constexpr (std::is_same_v<T, Delta>) {
+                onDelta(m);
+            } else if constexpr (std::is_same_v<T, SyncPayload>) {
+                onSync(m);
+            } else if constexpr (std::is_same_v<T, WireTurnResult>) {
+                onTurnResult(m);
+            } else if constexpr (std::is_same_v<T, WireContextStats>) {
+                onContextStats(m);
+            }
+        },
+        std::move(msg)
+    );
 }
 
 void AgentIOBase::unregisterFromBus() {

@@ -1,6 +1,6 @@
 # TODO
 - tui 特化各种 toolcall 渲染
 
-- /home/coolight/program/agentxx/agent/client/include/agentxx-client/io/tui/agent_tui.h 修复 TUI 中用户取消无效，消息列表中插入了取消提示，但 llm 消息仍在继续输出
-- 在 /home/coolight/program/agentxx/agent/lib/include/agentxx/protocol 实现谷歌的智能体交互 A2A 协议，并添加足量的测试，确保能用于生产环境稳定使用、广泛兼容性
-- 通读代码 /home/coolight/program/agentxx/agent/lib、/home/coolight/program/agentxx/agent/client，检查是否有可以优化的或是需要重构架构设计
+- 我觉得还得原来的分层容易理解，这样可以吗，有没有需要改进的：
+    - 捋清楚数据流动方向 client -> AgentIO -> remote/channel -> AgentIO -> deepagent server
+    - 所以实际上应当设计为 AgentIOBase + AgentIOTransportBase, 一个负责定义 client/server 之间的操作接口，一个负责 AgentIO 之间的通信，构造时应当写 AgentIOBase 包含 AgentIOTransportBase, 即 AgentIOBase(AgentIOTransportBase) , 这样就清晰了

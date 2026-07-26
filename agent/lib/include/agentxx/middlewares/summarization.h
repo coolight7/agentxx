@@ -93,7 +93,7 @@ public:
     void offloadLongContentToTempStore(
         neograph::ChatMessage&                    msg,
         const std::shared_ptr<MiddlewareContext>& ctx,
-        const std::string&                        thread_id
+        std::string_view                          thread_id
     );
 
     void doSummarizeToolcall(std::vector<neograph::ChatMessage>& messages);

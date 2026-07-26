@@ -1,6 +1,7 @@
 #include "agentxx/protocol/acp_server.h"
 
 #include "agentxx/util/log.h"
+#include <fmt/format.h>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
@@ -113,7 +114,7 @@ json AcpProtocolHandler::handleMessage(const json& env) {
 }
 
 json AcpProtocolHandler::callClient(
-    const std::string&        method,
+    std::string_view          method,
     json                      params,
     std::chrono::milliseconds timeout
 ) {
@@ -141,7 +142,7 @@ json AcpProtocolHandler::callClient(
     if (status != std::future_status::ready) {
         std::lock_guard lk(pendingMu_);
         pending_.erase(id);
-        throw std::runtime_error("AcpProtocolHandler::callClient: timeout for '" + method + "'");
+        throw std::runtime_error(fmt::format("AcpProtocolHandler::callClient: timeout for '{}'", method));
     }
     auto resp = fut.get();
     if (resp.contains("error")) {
@@ -150,18 +151,18 @@ json AcpProtocolHandler::callClient(
     return resp.contains("result") ? resp["result"] : json::object();
 }
 
-bool AcpProtocolHandler::hasSession(const std::string& sessionId) const {
+bool AcpProtocolHandler::hasSession(std::string_view sessionId) const {
     std::lock_guard lk(sessionsMu_);
     return sessions_.find(sessionId) != sessions_.end();
 }
 
-std::string AcpProtocolHandler::sessionCwd(const std::string& sessionId) const {
+std::string AcpProtocolHandler::sessionCwd(std::string_view sessionId) const {
     std::lock_guard lk(sessionsMu_);
     auto            it = sessions_.find(sessionId);
     return it != sessions_.end() ? it->second : std::string{};
 }
 
-bool AcpProtocolHandler::isInFlight(const std::string& sessionId) const {
+bool AcpProtocolHandler::isInFlight(std::string_view sessionId) const {
     std::lock_guard lk(inflightMu_);
     return inflightSessions_.count(sessionId) > 0;
 }
@@ -185,7 +186,7 @@ json AcpProtocolHandler::jsonRpcResult(const json& id, json result) {
     return j;
 }
 
-json AcpProtocolHandler::jsonRpcError(const json& id, int code, const std::string& msg) {
+json AcpProtocolHandler::jsonRpcError(const json& id, int code, std::string_view msg) {
     json j;
     j["jsonrpc"] = "2.0";
     j["id"]      = id;
@@ -196,8 +197,8 @@ json AcpProtocolHandler::jsonRpcError(const json& id, int code, const std::strin
     return j;
 }
 
-json AcpProtocolHandler::makeParseError(const std::string& detail) {
-    return jsonRpcError(json{}, -32700, "Parse error: " + detail);
+json AcpProtocolHandler::makeParseError(std::string_view detail) {
+    return jsonRpcError(json{}, -32700, fmt::format("Parse error: {}", detail));
 }
 
 json AcpProtocolHandler::makeInvalidRequest() {
@@ -322,7 +323,7 @@ void AcpProtocolHandler::handleSessionPrompt(const json& env, const json& params
 }
 
 void AcpProtocolHandler::workerRunPrompt(
-    const std::string&                 sessionId,
+    std::string_view                   sessionId,
     const json&                        promptBlocks,
     const json&                        id,
     std::shared_ptr<std::atomic<bool>> cancelFlag
@@ -414,7 +415,7 @@ void AcpProtocolHandler::workerRunPrompt(
     workerCleanup(sessionId);
 }
 
-void AcpProtocolHandler::workerCleanup(const std::string& sessionId) {
+void AcpProtocolHandler::workerCleanup(std::string_view sessionId) {
     {
         std::lock_guard lk(inflightMu_);
         inflightSessions_.erase(sessionId);
@@ -448,7 +449,7 @@ void AcpProtocolHandler::emit(const json& env) {
     }
 }
 
-void AcpProtocolHandler::emitNotification(const std::string& method, const json& params) {
+void AcpProtocolHandler::emitNotification(std::string_view method, const json& params) {
     json env;
     env["jsonrpc"] = "2.0";
     env["method"]  = method;
@@ -456,10 +457,7 @@ void AcpProtocolHandler::emitNotification(const std::string& method, const json&
     emit(env);
 }
 
-void AcpProtocolHandler::emitAgentMessageChunk(
-    const std::string& sessionId,
-    const std::string& text
-) {
+void AcpProtocolHandler::emitAgentMessageChunk(std::string_view sessionId, std::string_view text) {
     json chunk;
     chunk["session_id"]               = sessionId;
     chunk["update"]["session_update"] = "agent_message_chunk";
@@ -560,7 +558,7 @@ void HttpAcpServer::setupRoutes() {
     using Handler = util::HttpServer::Handler;
 
     auto acpHandler = std::make_shared<Handler>(Handler(
-        [this](util::HttpServer::Request& req, util::HttpServer::Response& resp, const std::string&)
+        [this](util::HttpServer::Request& req, util::HttpServer::Response& resp, std::string_view)
             -> asio::awaitable<void> {
             co_await handleAcpRequest(req, resp);
         }
@@ -568,7 +566,7 @@ void HttpAcpServer::setupRoutes() {
     httpServer_->router().add(config_.acpEndpoint, 2, acpHandler);
 
     auto sseHandler = std::make_shared<Handler>(Handler(
-        [this](util::HttpServer::Request& req, util::HttpServer::Response& resp, const std::string&)
+        [this](util::HttpServer::Request& req, util::HttpServer::Response& resp, std::string_view)
             -> asio::awaitable<void> {
             co_await handleSseRequest(req, resp);
         }
@@ -705,7 +703,7 @@ asio::awaitable<void> HttpAcpServer::handleSseRequest(
     co_return;
 }
 
-void HttpAcpServer::broadcastSSE(const std::string& /*data*/) {
+void HttpAcpServer::broadcastSSE(std::string_view /*data*/) {
     if (config_.httpConfig.accessLogEnabled) {
         XX_LOGI("[acp] SSE notification");
     }
@@ -725,7 +723,7 @@ void HttpAcpServer::writeJsonResponse(
 }
 
 neograph::json
-    HttpAcpServer::jsonRpcError(const neograph::json& id, int code, const std::string& message)
+    HttpAcpServer::jsonRpcError(const neograph::json& id, int code, std::string_view message)
         const {
     neograph::json err;
     err["jsonrpc"] = "2.0";

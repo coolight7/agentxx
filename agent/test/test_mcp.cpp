@@ -129,10 +129,10 @@ void test_mcp_server_unit() {
         def.description = "A test resource";
         def.mimeType    = "text/plain";
 
-        server.addResource(def, [](const std::string& uri) -> std::optional<McpResourceContent> {
+        server.addResource(def, [](std::string_view uri) -> std::optional<McpResourceContent> {
             if (uri == "file:///test.txt") {
                 return McpResourceContent{
-                    .uri      = uri,
+                    .uri      = std::string{uri},
                     .mimeType = "text/plain",
                     .text     = "hello world"
                 };
@@ -163,7 +163,7 @@ void test_mcp_server_unit() {
 
         server.addPrompt(
             def,
-            [](const std::string& name, const json& args) -> std::optional<McpPromptResult> {
+            [](std::string_view name, const json& args) -> std::optional<McpPromptResult> {
                 if (name != "greet") {
                     return std::nullopt;
                 }
@@ -914,9 +914,9 @@ void test_mcp_server_stdio_resources_prompts() {
     resDef.uri      = "file:///test.txt";
     resDef.name     = "Test File";
     resDef.mimeType = "text/plain";
-    server.addResource(resDef, [](const std::string& uri) -> std::optional<McpResourceContent> {
+    server.addResource(resDef, [](std::string_view uri) -> std::optional<McpResourceContent> {
         if (uri == "file:///test.txt") {
-            return McpResourceContent{uri, "text/plain", "hello world"};
+            return McpResourceContent{std::string{uri}, "text/plain", "hello world"};
         }
         return std::nullopt;
     });
@@ -931,7 +931,7 @@ void test_mcp_server_stdio_resources_prompts() {
     promptDef.arguments.push_back(std::move(arg));
     server.addPrompt(
         promptDef,
-        [](const std::string& name, const json& args) -> std::optional<McpPromptResult> {
+        [](std::string_view name, const json& args) -> std::optional<McpPromptResult> {
             if (name != "greet") {
                 return std::nullopt;
             }
@@ -1823,7 +1823,7 @@ asio::awaitable<void> test_mcp_client_accept_header() {
     auto handler  = std::make_shared<Handler>(
         [](Server::Request&  req,
            Server::Response& resp,
-           const std::string&) -> asio::awaitable<void> {
+           std::string_view) -> asio::awaitable<void> {
             namespace http = boost::beast::http;
 
             auto accept = req[http::field::accept];

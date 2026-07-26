@@ -34,10 +34,10 @@ public:
 
     /// 鉴权回调: 校验通过后绑定到 SessionController 并返回它 (附当前 tailHash); 失败返回 nullptr
     using AuthHandler = std::function<std::shared_ptr<SessionController>(
-        const std::string& threadId,
-        uint64_t           lastSeq,
-        const std::string& tailHash,
-        std::string&       outTailHash
+        std::string_view threadId,
+        uint64_t         lastSeq,
+        std::string_view tailHash,
+        std::string&     outTailHash
     )>;
 
     RemoteServerAgentIO(
@@ -57,14 +57,14 @@ public:
     }
 
     /// 设置切换模型回调 (AgentServer 注入, 调用 agent->selectModel)
-    void setSelectModelCallback(std::function<void(const std::string&)> cb) {
+    void setSelectModelCallback(std::function<void(std::string_view)> cb) {
         onSelectModel_ = std::move(cb);
     }
 
     /// 运行连接: 启动读/写协程直至断线; 断线时从 SessionController detach
     asio::awaitable<void> run();
 
-    const std::string& threadId() const noexcept {
+    std::string_view threadId() const noexcept {
         return threadId_;
     }
 
@@ -95,9 +95,9 @@ private:
     std::shared_ptr<WriteQueue>  writeQueue_;
     std::shared_ptr<JoinChannel> joinChannel_;
 
-    std::shared_ptr<SessionController>      controller_;
-    AuthHandler                             authHandler_;
-    std::function<void(const std::string&)> onSelectModel_;
+    std::shared_ptr<SessionController>    controller_;
+    AuthHandler                           authHandler_;
+    std::function<void(std::string_view)> onSelectModel_;
 
     std::atomic<bool> stopped_{false};
     std::atomic<bool> disconnected_{false};

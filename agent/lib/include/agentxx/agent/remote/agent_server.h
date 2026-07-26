@@ -74,7 +74,7 @@ private:
     asio::awaitable<void> serveConnection(WsStream& ws);
 
     /// 取/建指定 threadId 的 SessionController (并启动其驱动循环)
-    std::shared_ptr<SessionController> getOrCreateController(const std::string& threadId);
+    std::shared_ptr<SessionController> getOrCreateController(std::string_view threadId);
 
     std::shared_ptr<DeepAgent>        agent_;
     Config                            config_;
@@ -82,7 +82,7 @@ private:
     asio::any_io_executor             ex_;
 
     std::mutex                                                controllersMutex_;
-    std::map<std::string, std::shared_ptr<SessionController>> controllers_;
+    std::map<std::string, std::shared_ptr<SessionController>, std::less<>> controllers_;
 };
 
 } // namespace remote

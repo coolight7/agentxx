@@ -13,7 +13,7 @@ namespace agentxx {
 namespace nodes {
 
 ModelCallWrapNode::ModelCallWrapNode(
-    const std::string&                          name,
+    std::string_view                            name,
     const neograph::graph::NodeContext&         ctx,
     std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
 ) :
@@ -25,7 +25,7 @@ ModelCallWrapNode::ModelCallWrapNode(
 }
 
 std::shared_ptr<neograph::Provider>
-    ModelCallWrapNode::resolveCurrentProvider(const std::string& threadId) {
+    ModelCallWrapNode::resolveCurrentProvider(std::string_view threadId) {
     if (useDynamicModel_) {
         auto ctxPtr = agentContext.lock();
         if (ctxPtr && ctxPtr->modelRegistry) {
@@ -42,7 +42,7 @@ std::shared_ptr<neograph::Provider>
     return provider_;
 }
 
-std::string ModelCallWrapNode::resolveCurrentModelName(const std::string& threadId) const {
+std::string ModelCallWrapNode::resolveCurrentModelName(std::string_view threadId) const {
     if (useDynamicModel_) {
         auto ctxPtr = agentContext.lock();
         if (ctxPtr && ctxPtr->modelRegistry) {
@@ -110,7 +110,7 @@ asio::awaitable<neograph::ChatCompletion> ModelCallWrapNode::onReceiveToken(
 
 neograph::CompletionParams ModelCallWrapNode::build_params(
     const neograph::graph::GraphState& state,
-    const std::string&                 threadId
+    std::string_view                   threadId
 ) const {
     auto messages = state.get_messages();
 

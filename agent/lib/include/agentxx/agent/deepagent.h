@@ -69,20 +69,20 @@ public:
 
     /// 选择指定会话 modelcall 使用的模型 (运行时切换, 按 thread_id 隔离)
     /// - modelName 为空或不存在时不改变该会话的选择
-    void selectModel(const std::string& threadId, const std::string& modelName);
+    void selectModel(std::string_view threadId, std::string_view modelName);
 
     /// 指定会话当前实际使用的模型显示名称 (解析会话选择/默认模型)
-    std::string getCurrentModelName(const std::string& threadId) const;
+    std::string getCurrentModelName(std::string_view threadId) const;
 
     /// 执行一轮对话
     /// - 消息由 Session 内部管理 (fullHistory + llmMessages 双消息集)
     /// - 增量事件经 io->onDelta() 推送; 状态不一致时经 io->onSync() 校准
     asio::awaitable<ConversationTurnResult> runConversationTurnAsync(
-        const std::string&           threadId,
-        const std::string&           userInput,
+        std::string_view             threadId,
+        std::string_view             userInput,
         bool                         isFirstMsg,
         std::shared_ptr<AgentIOBase> io,
-        const std::string&           modelName = ""
+        std::string_view             modelName = ""
     );
 
     ~DeepAgent();
@@ -101,19 +101,19 @@ public:
     /// - callback: optional event callback, nullptr if not needed
     /// - returns: full collected output content
     asio::awaitable<std::string> runNonStreamAsync(
-        const std::string&                                      threadId,
+        std::string_view                                        threadId,
         const std::vector<neograph::ChatMessage>&               messages,
         std::function<void(const neograph::graph::GraphEvent&)> callback  = nullptr,
-        const std::string&                                      modelName = ""
+        std::string_view                                        modelName = ""
     );
 
     /// Run agent with a single user input and optional custom system prompt
     /// Convenience wrapper that builds messages automatically
     asio::awaitable<std::string> runSingleInputAsync(
-        const std::string& threadId,
-        const std::string& userInput,
-        const std::string& systemPrompt = "",
-        const std::string& modelName    = ""
+        std::string_view threadId,
+        std::string_view userInput,
+        std::string_view systemPrompt = "",
+        std::string_view modelName    = ""
     );
 
     /// Run a simple completion with just messages (for subagent
@@ -126,7 +126,7 @@ public:
 
     asio::awaitable<SimpleRunResult> runStreamAsync(
         const std::vector<neograph::ChatMessage>& messages,
-        const std::string&                        modelName = ""
+        std::string_view                          modelName = ""
     );
 };
 

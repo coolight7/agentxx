@@ -523,14 +523,14 @@ asio::awaitable<void> DeepAgent::init() {
     co_return;
 }
 
-void DeepAgent::selectModel(const std::string& threadId, const std::string& modelName) {
+void DeepAgent::selectModel(std::string_view threadId, std::string_view modelName) {
     if (false == modelName.empty() && agentContext->modelRegistry
         && agentContext->modelRegistry->hasModel(modelName)) {
         agentContext->getSession(threadId)->setModelName(modelName);
     }
 }
 
-std::string DeepAgent::getCurrentModelName(const std::string& threadId) const {
+std::string DeepAgent::getCurrentModelName(std::string_view threadId) const {
     std::string selected;
     if (auto session = agentContext->sessions->get(threadId)) {
         selected = session->getModelName();
@@ -542,11 +542,11 @@ std::string DeepAgent::getCurrentModelName(const std::string& threadId) const {
 }
 
 asio::awaitable<DeepAgent::ConversationTurnResult> DeepAgent::runConversationTurnAsync(
-    const std::string&           threadId,
-    const std::string&           userInput,
+    std::string_view             threadId,
+    std::string_view             userInput,
     bool                         isFirstMsg,
     std::shared_ptr<AgentIOBase> io,
-    const std::string&           modelName
+    std::string_view             modelName
 ) {
     ConversationTurnResult turnResult;
     auto                   session = agentContext->getSession(threadId);
@@ -574,7 +574,7 @@ asio::awaitable<DeepAgent::ConversationTurnResult> DeepAgent::runConversationTur
 
     bool resumeInterrupt = false;
     if (false == agentContext->middlewareHandleContext->graphData.contains(threadId)) {
-        auto data = engine->get_state(threadId).value_or(neograph::json{});
+        auto data = engine->get_state(std::string{threadId}).value_or(neograph::json{});
         if (data.is_object()
             && data.contains(agentxx::middleware::MiddlewareContext::channel_savedGraphData)) {
             resumeInterrupt = true;
@@ -584,7 +584,7 @@ asio::awaitable<DeepAgent::ConversationTurnResult> DeepAgent::runConversationTur
 
     co_await agentxx::util::catchErrorAsync<void>(
         [&]() -> asio::awaitable<void> {
-            auto processedInput = userInput;
+            auto processedInput = std::string{userInput};
             agentxx::util::autoConvertToUtf8(processedInput);
 
             auto userMsgJson = neograph::json{
@@ -703,13 +703,13 @@ asio::awaitable<DeepAgent::ConversationTurnResult> DeepAgent::runConversationTur
 
             auto eventCallback = agentxx::middleware::EventBridge::make(
                 agentContext->agentConfig->agentName,
-                threadId,
+                std::string{threadId},
                 agentContext,
                 std::move(internalEventCallback)
             );
 
             auto cfg = neograph::graph::RunConfig{
-                .thread_id        = threadId,
+        .thread_id        = std::string{threadId},
                 .input            = {{"messages", session->llmMessages}},
                 .max_steps        = 1024,
                 .stream_mode      = neograph::graph::StreamMode::ALL,
@@ -752,7 +752,7 @@ asio::awaitable<DeepAgent::ConversationTurnResult> DeepAgent::runConversationTur
                     result->interrupt_value
                 );
 
-                engine->update_state(threadId, [&](neograph::graph::GraphState& state) {
+                engine->update_state(std::string{threadId}, [&](neograph::graph::GraphState& state) {
                     auto data = agentContext->middlewareHandleContext->getGraphDataToState(
                         state,
                         threadId
@@ -794,7 +794,7 @@ asio::awaitable<DeepAgent::ConversationTurnResult> DeepAgent::runConversationTur
                                     .parentAgentName = agentContext->agentConfig
                                                            ? agentContext->agentConfig->agentName
                                                            : std::string{},
-                                    .parentThreadId  = threadId,
+                                    .parentThreadId  = std::string{threadId},
                                     .subagentName    = subagentArg.value("subagent", std::string{}),
                                     .systemPrompt
                                     = subagentArg.value("system_prompt", std::string{}),
@@ -803,7 +803,7 @@ asio::awaitable<DeepAgent::ConversationTurnResult> DeepAgent::runConversationTur
                                 }
                             );
                             if (resp.has_value()) {
-                                interruptResult = neograph::json{resp->content};
+                                interruptResult = neograph::json{std::string{resp->content}};
                             }
                         } else if (interruptArg.name == "subagent_batch") {
                             auto batchArg = interruptArg.arg;
@@ -811,7 +811,7 @@ asio::awaitable<DeepAgent::ConversationTurnResult> DeepAgent::runConversationTur
                                 .parentAgentName = agentContext->agentConfig
                                                        ? agentContext->agentConfig->agentName
                                                        : std::string{},
-                                .parentThreadId  = threadId,
+                                .parentThreadId  = std::string{threadId},
                             };
                             if (batchArg.contains("tasks") && batchArg["tasks"].is_array()) {
                                 for (const auto& t : batchArg["tasks"]) {
@@ -836,8 +836,8 @@ asio::awaitable<DeepAgent::ConversationTurnResult> DeepAgent::runConversationTur
                                         rid = interruptArg.resultId;
                                     }
                                     resumeValues[rid] =
-                    r.hasError ? neograph::json{{"error", r.errorMessage}}
-                               : neograph::json{r.content};
+                    r.hasError ? neograph::json{{"error", std::string{r.errorMessage}}}
+                               : neograph::json{std::string{r.content}};
                                 }
                             }
                         } else {
@@ -852,7 +852,7 @@ asio::awaitable<DeepAgent::ConversationTurnResult> DeepAgent::runConversationTur
                                                   = agentContext->agentConfig
                                                         ? agentContext->agentConfig->agentName
                                                         : std::string{},
-                                                  .threadId          = threadId,
+                                                  .threadId          = std::string{threadId},
                                                   .interruptNode     = interruptNode,
                                                   .interruptValue    = interruptValue,
                                                   .handleName        = interruptArg.name,
@@ -883,11 +883,11 @@ asio::awaitable<DeepAgent::ConversationTurnResult> DeepAgent::runConversationTur
                         resumeValues
                     );
 
-                    engine->update_state(threadId, [&](neograph::graph::GraphState& state) {
+                    engine->update_state(std::string{threadId}, [&](neograph::graph::GraphState& state) {
                         state.overwrite("messages", session->llmMessages);
                     });
 
-                    result = co_await engine->resume_async(threadId, nullptr, eventCallback);
+                    result = co_await engine->resume_async(std::string{threadId}, nullptr, eventCallback);
 
                     if (!result->interrupted) {
                         session->llmMessages = result->channel_raw("messages");
@@ -895,7 +895,7 @@ asio::awaitable<DeepAgent::ConversationTurnResult> DeepAgent::runConversationTur
                 }
             }
 
-            engine->update_state(threadId, [&](neograph::graph::GraphState& state) {
+            engine->update_state(std::string{threadId}, [&](neograph::graph::GraphState& state) {
                 state.remove(agentxx::middleware::MiddlewareContext::channel_savedGraphData);
             });
             co_return;
@@ -934,10 +934,10 @@ std::shared_ptr<AgentContext> DeepAgent::getContext() {
 }
 
 asio::awaitable<std::string> DeepAgent::runNonStreamAsync(
-    const std::string&                                      threadId,
+    std::string_view                                        threadId,
     const std::vector<neograph::ChatMessage>&               messages,
     std::function<void(const neograph::graph::GraphEvent&)> callback,
-    const std::string&                                      modelName
+    std::string_view                                        modelName
 ) {
     selectModel(threadId, modelName);
     auto inputMessages = neograph::json::array();
@@ -948,7 +948,7 @@ asio::awaitable<std::string> DeepAgent::runNonStreamAsync(
     }
 
     auto cfg = neograph::graph::RunConfig{
-        .thread_id        = threadId,
+        .thread_id        = std::string{threadId},
         .input            = {{"messages", std::move(inputMessages)}},
         .resume_if_exists = false,
     };
@@ -989,23 +989,23 @@ asio::awaitable<std::string> DeepAgent::runNonStreamAsync(
 }
 
 asio::awaitable<std::string> DeepAgent::runSingleInputAsync(
-    const std::string& threadId,
-    const std::string& userInput,
-    const std::string& systemPrompt,
-    const std::string& modelName
+    std::string_view threadId,
+    std::string_view userInput,
+    std::string_view systemPrompt,
+    std::string_view modelName
 ) {
     std::vector<neograph::ChatMessage> messages;
 
     if (!systemPrompt.empty()) {
         messages.push_back(neograph::ChatMessage{
             .role    = "system",
-            .content = systemPrompt,
+            .content = std::string{systemPrompt},
         });
     }
 
     messages.push_back(neograph::ChatMessage{
         .role    = "user",
-        .content = userInput,
+        .content = std::string{userInput},
     });
 
     co_return co_await runNonStreamAsync(threadId, messages, nullptr, modelName);
@@ -1013,7 +1013,7 @@ asio::awaitable<std::string> DeepAgent::runSingleInputAsync(
 
 asio::awaitable<DeepAgent::SimpleRunResult> DeepAgent::runStreamAsync(
     const std::vector<neograph::ChatMessage>& messages,
-    const std::string&                        modelName
+    std::string_view                          modelName
 ) {
     auto threadId
         = fmt::format("subagent_{}", std::chrono::system_clock::now().time_since_epoch().count());

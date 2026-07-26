@@ -33,7 +33,7 @@ public:
         std::string             text;
     };
 
-    void onLog(agentxx::util::LogLevel level, const std::string& message) override;
+    void onLog(agentxx::util::LogLevel level, std::string_view message) override;
 
     /// 拷贝当前缓存的日志行 (供渲染线程读取)
     std::vector<Line> snapshot() const;
@@ -160,6 +160,7 @@ private:
     ftxui::ScreenInteractive* screen() const {
         return screen_.load(std::memory_order_acquire);
     }
+
     // screen_ 由 UI 线程写、agent/日志线程经 postRedraw 读, 必须原子化避免数据竞争与 UAF
     std::atomic<ftxui::ScreenInteractive*> screen_{nullptr};
     std::thread                            uiThread_;
@@ -200,7 +201,7 @@ private:
     /// - 展开态: 渲染文件路径 + diff 对比 + 错误
     void appendEditToolBody(const Message& msg, ftxui::Elements& lines);
     /// - diff 对比块 (屏幕足够宽时左右对比, 不足时单块内对比)
-    ftxui::Element renderEditToolDiff(const std::string& oldStr, const std::string& newStr);
+    ftxui::Element renderEditToolDiff(std::string_view oldStr, std::string_view newStr);
     /// 当前可聚焦的消息块数量 (需在持有 mutex_ 时调用)
     int            focusBlockCount() const;
     ftxui::Element renderPermissionOverlay();
@@ -240,12 +241,12 @@ private:
 
     /// 侧边栏 tab 管理
     void addSidebarTab(
-        const std::string&              id,
-        const std::string&              title,
+        std::string_view                id,
+        std::string_view                title,
         std::function<ftxui::Element()> render
     );
-    void removeSidebarTab(const std::string& id);
-    bool hasSidebarTab(const std::string& id) const;
+    void removeSidebarTab(std::string_view id);
+    bool hasSidebarTab(std::string_view id) const;
     /// F12: 插入/关闭日志窗口 tab
     void toggleLogWindow();
     /// 处理侧边栏 tab 的鼠标点击; 返回是否消费了该事件
@@ -287,11 +288,11 @@ public:
     void onSync(const agentxx::agent::SyncPayload& payload) override;
     asio::awaitable<std::optional<std::string>> getInput() override;
     asio::awaitable<neograph::json>             handleInterrupt(
-                    const std::string& threadId,
-                    const std::string& interruptNode,
-                    const std::string& interruptValue,
-                    const std::string& interruptArgJson
+                    std::string_view threadId,
+                    std::string_view interruptNode,
+                    std::string_view interruptValue,
+                    std::string_view interruptArgJson
                 ) override;
-    void requestCancel(const std::string& threadId) override;
-    void requestSelectModel(const std::string& threadId, const std::string& model) override;
+    void requestCancel(std::string_view threadId) override;
+    void requestSelectModel(std::string_view threadId, std::string_view model) override;
 };

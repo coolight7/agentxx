@@ -6,9 +6,9 @@
 namespace agentxx {
 namespace agent {
 
-void ModelProviderRegistry::registerModel(const std::string& name, const ModelConfig& config) {
+void ModelProviderRegistry::registerModel(std::string_view name, const ModelConfig& config) {
     std::unique_lock<std::shared_mutex> lock(mutex_);
-    models_[name] = config;
+    models_[std::string{name}] = config;
     // 同名覆盖注册时使旧 provider 缓存失效, 否则 getProvider 返回基于旧配置的 provider
     providerCache_.erase(name);
     if (defaultName_.empty()) {
@@ -16,12 +16,12 @@ void ModelProviderRegistry::registerModel(const std::string& name, const ModelCo
     }
 }
 
-bool ModelProviderRegistry::setDefaultModel(const std::string& name) {
+bool ModelProviderRegistry::setDefaultModel(std::string_view name) {
     std::unique_lock<std::shared_mutex> lock(mutex_);
     if (false == models_.contains(name)) {
         return false;
     }
-    defaultName_ = name;
+    defaultName_ = std::string{name};
     return true;
 }
 
@@ -30,15 +30,15 @@ std::string ModelProviderRegistry::getDefaultModelName() const {
     return defaultName_;
 }
 
-std::string ModelProviderRegistry::resolveModelName(const std::string& name) const {
+std::string ModelProviderRegistry::resolveModelName(std::string_view name) const {
     std::shared_lock<std::shared_mutex> lock(mutex_);
     if (false == name.empty() && models_.contains(name)) {
-        return name;
+        return std::string{name};
     }
     return defaultName_;
 }
 
-ModelConfig ModelProviderRegistry::getModelConfig(const std::string& name) const {
+ModelConfig ModelProviderRegistry::getModelConfig(std::string_view name) const {
     std::shared_lock<std::shared_mutex> lock(mutex_);
     auto effective = (false == name.empty() && models_.contains(name)) ? name : defaultName_;
     auto it        = models_.find(effective);
@@ -55,7 +55,7 @@ std::shared_ptr<neograph::Provider> ModelProviderRegistry::createProvider(const 
     return agentxx::server::OpenAIProvider::create_shared(mc);
 }
 
-std::shared_ptr<neograph::Provider> ModelProviderRegistry::getProvider(const std::string& name) {
+std::shared_ptr<neograph::Provider> ModelProviderRegistry::getProvider(std::string_view name) {
     std::string effective;
     ModelConfig cfg;
     {
@@ -95,7 +95,7 @@ std::vector<std::string> ModelProviderRegistry::listModelNames() const {
     return names;
 }
 
-bool ModelProviderRegistry::hasModel(const std::string& name) const {
+bool ModelProviderRegistry::hasModel(std::string_view name) const {
     std::shared_lock<std::shared_mutex> lock(mutex_);
     return models_.contains(name);
 }

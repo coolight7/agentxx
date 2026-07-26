@@ -90,10 +90,10 @@ SubagentSupervisor::~SubagentSupervisor() {
 }
 
 asio::awaitable<events::RespSubagentResult> SubagentSupervisor::runSubagent(
-    const std::string& subagentName,
-    const std::string& systemPromptIn,
-    const std::string& message,
-    const std::string& parentThreadId
+    std::string_view subagentName,
+    std::string_view systemPromptIn,
+    std::string_view message,
+    std::string_view parentThreadId
 ) {
     auto ctxPtr = agentContext.lock();
     if (!ctxPtr || !ctxPtr->subagentManagerToolPtr) {
@@ -120,7 +120,7 @@ asio::awaitable<events::RespSubagentResult> SubagentSupervisor::runSubagent(
         };
     }
 
-    std::string systemPrompt = systemPromptIn;
+    std::string systemPrompt{systemPromptIn};
     if (systemPrompt.empty()) {
         systemPrompt = subagent->systemPrompt;
         if (systemPrompt.empty()) {
@@ -132,7 +132,7 @@ asio::awaitable<events::RespSubagentResult> SubagentSupervisor::runSubagent(
     auto busPtr     = ctxPtr->bus;
 
     // 标记 subagent 运行中 (供跨 agent 查询路由校验)
-    runningRegistry_[subagentName] = true;
+    runningRegistry_[std::string{subagentName}] = true;
 
     try {
         neograph::graph::RunConfig cfg{
@@ -187,7 +187,7 @@ asio::awaitable<events::RespSubagentResult> SubagentSupervisor::runSubagent(
                                 busPtr->executor(),
                                 [busPtr,
                                  subagentId,
-                                 agentName = subagentName,
+                                 agentName = std::string{subagentName},
                                  token     = std::move(token),
                                  kind      = std::move(kind)]() -> asio::awaitable<void> {
                                     co_await busPtr->publish<events::EventSubagentProgress>(

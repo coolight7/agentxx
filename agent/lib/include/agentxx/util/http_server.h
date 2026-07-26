@@ -51,8 +51,8 @@ public:
 
     using Request  = boost::beast::http::request<boost::beast::http::string_body>;
     using Response = boost::beast::http::response<boost::beast::http::string_body>;
-    using Handler  = std::function<
-         asio::awaitable<void>(Request&, Response&, const std::string& matched_path)>;
+    using Handler
+        = std::function<asio::awaitable<void>(Request&, Response&, std::string_view matched_path)>;
     using Router = XXRouter<Handler, 9>;
 
     using WsStream  = boost::beast::websocket::stream<boost::beast::tcp_stream>;
@@ -134,17 +134,17 @@ public:
     /// Register a streaming SSE handler. Unlike normal handlers, the SSE
     /// handler receives an SseWriter to push events incrementally.
     void addSseRoute(
-        const std::string&                                                         path,
+        std::string_view                                                           path,
         std::function<asio::awaitable<void>(Request&, std::shared_ptr<SseWriter>)> handler
     );
 
     /// Register a WebSocket endpoint. When a client sends an HTTP GET with
     /// Upgrade: websocket to the given path, the connection is upgraded and
     /// the handler is invoked with the websocket stream.
-    void enableWebSocket(const std::string& path, WsHandler handler);
+    void enableWebSocket(std::string_view path, WsHandler handler);
 
     /// Register a WebSocket endpoint for SSL (wss://) connections.
-    void enableWebSocketSsl(const std::string& path, WssHandler handler);
+    void enableWebSocketSsl(std::string_view path, WssHandler handler);
 
     /// Start the accept loop on the given executor without creating threads.
     /// The caller is responsible for running the io_context.
