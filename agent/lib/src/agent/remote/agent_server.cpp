@@ -1,8 +1,8 @@
 #include "agentxx/agent/remote/agent_server.h"
 
-#include "agentxx/agent/remote/remote_server_io.h"
-#include "agentxx/agent/remote/ws_transport.h"
+#include "agentxx/agent/ws_io_transport.h"
 #include "agentxx/util/log.h"
+#include "agentxx/util/ws_client.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/this_coro.hpp"
@@ -15,14 +15,12 @@ namespace remote {
 AgentServer::AgentServer(std::shared_ptr<DeepAgent> agent, Config config) :
     agent_(std::move(agent)),
     config_(std::move(config)) {
-    // 安全默认: 未显式指定地址时仅监听回环
-    if (config_.http.address == "0.0.0.0") {
-        config_.http.address = "127.0.0.1";
+    if (config_.http.address.empty()) {
+        config_.http.address = "0.0.0.0";
     }
     if (config_.token.empty() && config_.autoGenerateToken) {
         config_.token = generateToken();
     }
-    // HttpServer 延迟到 start() 创建 (进程内模式无需 HttpServer)
 }
 
 AgentServer::~AgentServer() {
@@ -31,7 +29,6 @@ AgentServer::~AgentServer() {
 
 std::string AgentServer::generateToken(size_t bytes) {
     static const char* hex = "0123456789abcdef";
-    // 直接使用 random_device 逐字节生成, 避免用单一 64 位种子驱动 mt19937 导致 token 可预测
     std::random_device rd;
     std::string        token;
     token.reserve(bytes * 2);
@@ -96,10 +93,9 @@ std::shared_ptr<SessionController> AgentServer::getOrCreateController(std::strin
     cfg.gracePeriod       = config_.gracePeriod;
     cfg.deltaBufferCap    = config_.deltaBufferCap;
 
-    auto ctrl              = std::make_shared<SessionController>(ex_, agent_, cfg);
+    auto ctrl                           = std::make_shared<SessionController>(ex_, agent_, cfg);
     controllers_[std::string{threadId}] = ctrl;
 
-    // 启动会话驱动循环 (独立于连接存在)
     asio::co_spawn(ex_, ctrl->run(), [ctrl, threadId](std::exception_ptr ep) {
         if (ep) {
             try {
@@ -113,67 +109,66 @@ std::shared_ptr<SessionController> AgentServer::getOrCreateController(std::strin
 }
 
 asio::awaitable<void> AgentServer::handleWs(util::HttpServer::WsStream& ws) {
-    co_await serveConnection(ws);
-}
-
-asio::awaitable<void> AgentServer::handleWss(util::HttpServer::WssStream& ws) {
-    co_await serveConnection(ws);
-}
-
-asio::awaitable<void> AgentServer::serveTransport(std::unique_ptr<MessageTransport> transport) {
-    auto ex = co_await asio::this_coro::executor;
-    ex_     = ex;
-
-    RemoteServerAgentIO::Config ioCfg;
-    ioCfg.token = config_.token;
-    if (agent_ && agent_->agentContext && agent_->agentContext->agentConfig) {
-        for (const auto& [name, mc] : agent_->agentContext->agentConfig->availableModels) {
-            ioCfg.models.push_back(name);
-        }
-    }
-
-    auto io = std::make_shared<RemoteServerAgentIO>(ex, std::move(transport), std::move(ioCfg));
-
-    std::weak_ptr<RemoteServerAgentIO> weakIo = io;
-
-    // 鉴权通过后绑定到对应 threadId 的 SessionController (含增量重放)
-    io->setAuthHandler(
-        [this, weakIo](
-            std::string_view threadId,
-            uint64_t         lastSeq,
-            std::string_view tailHash,
-            std::string&     outTailHash
-        ) -> std::shared_ptr<SessionController> {
-            auto conn = weakIo.lock();
-            if (!conn) {
-                return nullptr;
-            }
-            auto ctrl   = getOrCreateController(threadId);
-            outTailHash = ctrl->currentTailHash();
-            ctrl->attach(conn, lastSeq, tailHash);
-            return ctrl;
-        }
-    );
-    io->setSelectModelCallback([this, weakIo](std::string_view model) {
-        auto conn = weakIo.lock();
-        if (!conn || !agent_) {
-            return;
-        }
-        agent_->selectModel(conn->threadId(), model);
-    });
-
-    co_await io->run();
-}
-
-template<typename WsStream>
-asio::awaitable<void> AgentServer::serveConnection(WsStream& ws) {
-    auto transport = std::make_unique<ServerWsTransportT<WsStream>>(ws);
+    auto ex     = co_await asio::this_coro::executor;
+    auto client = util::wrapAcceptedWs(ex, std::move(ws));
+    auto transport
+        = std::make_shared<WsAgentIOTransport>(ex, std::move(client), WsAgentIOTransport::Config{});
     co_await serveTransport(std::move(transport));
 }
 
-// 显式实例化两种 WS stream 类型
-template asio::awaitable<void> AgentServer::serveConnection(util::HttpServer::WsStream&);
-template asio::awaitable<void> AgentServer::serveConnection(util::HttpServer::WssStream&);
+asio::awaitable<void> AgentServer::handleWss(util::HttpServer::WssStream& ws) {
+    auto ex     = co_await asio::this_coro::executor;
+    auto client = util::wrapAcceptedWss(ex, std::move(ws));
+    auto transport
+        = std::make_shared<WsAgentIOTransport>(ex, std::move(client), WsAgentIOTransport::Config{});
+    co_await serveTransport(std::move(transport));
+}
+
+asio::awaitable<void> AgentServer::serveTransport(std::shared_ptr<AgentIOTransportBase> transport) {
+    // 服务端模式初始化: 启动读写循环, 不发送 hello
+    WireHello dummyHello;
+    bool      initOk = co_await transport->connect(dummyHello);
+    if (!initOk) {
+        co_return;
+    }
+
+    // 等待客户端 hello
+    auto msg = co_await transport->recv();
+    if (!msg) {
+        co_return;
+    }
+    auto* hello = std::get_if<WireHello>(&*msg);
+    if (!hello) {
+        co_return;
+    }
+
+    // 鉴权
+    bool authOk = config_.token.empty() || hello->token == config_.token;
+    if (!authOk) {
+        transport->send(WireHelloAck{.ok = false, .threadId = hello->threadId});
+        co_return;
+    }
+
+    auto ctrl = getOrCreateController(hello->threadId);
+
+    // 收集可用模型
+    std::vector<std::string> models;
+    if (agent_ && agent_->agentContext && agent_->agentContext->agentConfig) {
+        for (const auto& [name, mc] : agent_->agentContext->agentConfig->availableModels) {
+            models.push_back(name);
+        }
+    }
+
+    // 绑定 transport 到 controller, 发送 helloAck + 增量重放
+    ctrl->setTransport(transport);
+    ctrl->handleHello(*hello, std::move(models));
+
+    // 运行接收循环 (直到 transport 关闭)
+    co_await ctrl->runTransportLoop();
+
+    // 连接断开
+    ctrl->onDisconnect();
+}
 
 } // namespace remote
 } // namespace agent

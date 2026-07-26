@@ -156,6 +156,8 @@ private:
     std::string threadId_;
     /// 缓存的模型显示名称 (避免 render 热路径频繁加锁)
     std::string cachedModelName_;
+    /// 本 TUI 绑定的 executor (供 onPeerMessage 中 co_spawn 使用)
+    asio::any_io_executor ex_;
 
     ftxui::ScreenInteractive* screen() const {
         return screen_.load(std::memory_order_acquire);
@@ -174,9 +176,6 @@ private:
     std::shared_ptr<BoolChannel> permissionChannel_;
     std::shared_ptr<TUILogSink>  logSink_;
 
-    /// 控制目标: 取消/模型切换等命令经此 AgentIOBase 接口路由 (远程模式为 RemoteClientAgentIO)
-    /// - 未设置时取消使用本地 session cancelToken
-    std::weak_ptr<agentxx::agent::AgentIOBase> controlTarget_;
     /// 远程 Agentxx 地址 (空表示内置 Agentxx; 非空为远程 http[s]://ip:port)
     std::string remoteUrl_;
 
@@ -273,10 +272,8 @@ public:
     void start();
     void stop();
 
-    /// 设置控制目标 (远程模式下为 RemoteClientAgentIO; 取消/模型切换经其 AgentIOBase 接口路由)
-    /// - 未设置时取消使用本地 session cancelToken
-    void setControlTarget(std::shared_ptr<agentxx::agent::AgentIOBase> target) {
-        controlTarget_ = std::move(target);
+    bool running() const noexcept {
+        return running_.load(std::memory_order_acquire);
     }
 
     /// 设置远程 Agentxx 地址 (供信息侧边栏显示运行模式; 不调用则为内置 Agentxx)
@@ -295,4 +292,9 @@ public:
                 ) override;
     void requestCancel(std::string_view threadId) override;
     void requestSelectModel(std::string_view threadId, std::string_view model) override;
+
+protected:
+
+    /// 处理从 transport 收到的对端消息 (Delta/Sync/InterruptRequest/TurnResult/ContextStats)
+    void onPeerMessage(agentxx::agent::WireMessage msg) override;
 };

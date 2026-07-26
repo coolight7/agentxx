@@ -10,6 +10,7 @@
 #include "asio/steady_timer.hpp"
 #include "asio/use_awaitable.hpp"
 #include <boost/beast/core.hpp>
+#include <boost/beast/ssl.hpp>
 #include <boost/beast/websocket.hpp>
 #include <boost/beast/websocket/ssl.hpp>
 #include <chrono>
@@ -86,6 +87,19 @@ asio::awaitable<std::expected<std::unique_ptr<WsClient>, std::string>> wsConnect
     std::string_view                                 url,
     std::vector<std::pair<std::string, std::string>> headers = {},
     WsClientConfig                                   config  = {}
+);
+
+/// 从已 accept 的服务端 WS stream 创建 WsClient (供 AgentServer 使用)
+std::unique_ptr<WsClient> wrapAcceptedWs(
+    asio::any_io_executor                                              ex,
+    boost::beast::websocket::stream<boost::beast::tcp_stream>          ws,
+    WsClientConfig                                                     config = {}
+);
+
+std::unique_ptr<WsClient> wrapAcceptedWss(
+    asio::any_io_executor ex,
+    boost::beast::websocket::stream<boost::beast::ssl_stream<boost::beast::tcp_stream>> wss,
+    WsClientConfig        config = {}
 );
 
 } // namespace util

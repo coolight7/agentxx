@@ -58,12 +58,37 @@ int main(int argn, char** argv) {
     std::string remoteModel;
     std::string srvHost = "127.0.0.1";
     std::string wsPath  = "/agent";
-    uint16_t    srvPort = 17000;
+    uint16_t    srvPort = 7007;
     std::string sslCertFile;
     std::string sslKeyFile;
     for (int i = 1; i < argn; ++i) {
-        std::string arg(argv[i]);
-        if (arg == "--config" && i + 1 < argn) {
+        auto arg = std::string_view{argv[i]};
+        if (arg == "--help" || arg == "-h") {
+            XX_OUT(R"_(
+Usage: agentxx_cli [mode] [options]
+
+Modes:
+    tui                  TUI 交互模式 (默认)
+    cli                  命令行 stdio 交互模式
+    server               启动 WebSocket agent 服务
+    acp                  ACP stdio 服务模式
+    train                训练模式
+
+Options:
+    -h, --help           显示帮助信息
+    --config <path>      配置文件路径 (默认: agentxx-config.yaml)
+    --env <path>         覆盖式环境变量文件路径
+    --agent <url>        远程 agent server 地址 (ws://host:port/path)
+    --token <token>      认证 token (也可通过 url 查询串携带)
+    --model <model>      远程模型名称
+    --host <host>        服务监听地址 (默认: 127.0.0.1)
+    --port <port>        服务监听端口 (默认: 17000)
+    --ws-path <path>     WebSocket 路径 (默认: /agent)
+    --ssl-cert <file>    SSL 证书文件路径
+    --ssl-key <file>     SSL 私钥文件路径
+)_");
+            return 0;
+        } else if (arg == "--config" && i + 1 < argn) {
             ++i;
             configPath = argv[i];
         } else if (arg == "--env" && i + 1 < argn) {
@@ -93,10 +118,11 @@ int main(int argn, char** argv) {
         } else if (arg == "--ssl-key" && i + 1 < argn) {
             ++i;
             sslKeyFile = argv[i];
-        } else if (mode == "tui") {
+        } else if (arg == "tui" || arg == "cli" || arg == "server" || arg == "acp"
+                   || arg == "train") {
             mode = arg;
-        } else if (mode == "cli") {
-            mode = arg;
+        } else {
+            XX_LOGE("Unknown arg: `{}`", arg);
         }
     }
 
@@ -211,8 +237,8 @@ int main(int argn, char** argv) {
     config->skillDirPaths
         = std::vector<std::string>{"/home/coolight/program/agentxx/isolation/skills/"};
 
-    // ======================== deepagent WS 服务模式 ========================
-    if (mode == "deepagent") {
+    // ======================== deepagent Websocket Server 服务模式 ========================
+    if (mode == "server") {
         config->logPrintToolcall                       = false;
         config->logPrintMessagesBeforeLLM              = true;
         config->logPrintMessagesBeforeLLMWithSystemMsg = false;
@@ -229,11 +255,17 @@ int main(int argn, char** argv) {
         srvCfg.token            = agentToken;
         auto server = std::make_shared<agentxx::agent::remote::AgentServer>(agent, srvCfg);
 
+        bool        useSsl = !sslCertFile.empty() && !sslKeyFile.empty();
+        std::string listenUrl
+            = (useSsl ? "wss://" : "ws://") + srvHost + ":" + std::to_string(srvPort) + wsPath;
+
         asio::co_spawn(
             *agent->ioCtx,
-            [agent, server]() -> asio::awaitable<void> {
+            [agent, server, listenUrl]() -> asio::awaitable<void> {
                 co_await agent->init();
                 server->start(co_await asio::this_coro::executor);
+                XX_OUT("DeepAgent Server listen on {}", listenUrl);
+                XX_OUT("Use client connect: agentxx_cli --agent {}", listenUrl);
                 co_return;
             },
             asio::detached

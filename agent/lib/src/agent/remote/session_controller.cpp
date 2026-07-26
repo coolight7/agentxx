@@ -2,7 +2,6 @@
 
 #include "agentxx/agent/context.h"
 #include "agentxx/agent/deepagent.h"
-#include "agentxx/agent/remote/wire_protocol.h"
 #include "agentxx/util/log.h"
 #include "asio/cancel_after.hpp"
 #include "asio/co_spawn.hpp"
@@ -13,7 +12,6 @@
 
 namespace agentxx {
 namespace agent {
-namespace remote {
 
 SessionController::SessionController(
     asio::any_io_executor    ex,
@@ -30,29 +28,22 @@ SessionController::~SessionController() {
 }
 
 // ---------------------------------------------------------------------------
-// AgentIOBase
+// AgentIOBase: DeepAgent 产出的事件, 经 transport 发给客户端
 // ---------------------------------------------------------------------------
 
 void SessionController::onDelta(const Delta& delta) {
-    // onDelta 可能来自 engine 线程; 在 bufferMutex_ 下完成"记录+推送",
-    // 与 attach 的重放串行化, 保证 delta 到达顺序与 seq 一致 (避免 grace 重挂时乱序)
-    std::lock_guard<std::mutex> lock(bufferMutex_);
-    deltaBuffer_.push_back(delta);
-    while (deltaBuffer_.size() > config_.deltaBufferCap) {
-        deltaBuffer_.pop_front();
-    }
-    std::shared_ptr<IConnectionSink> conn;
     {
-        std::lock_guard<std::mutex> lock2(connMutex_);
-        conn = activeConn_.lock();
+        std::lock_guard<std::mutex> lock(bufferMutex_);
+        deltaBuffer_.push_back(delta);
+        while (deltaBuffer_.size() > config_.deltaBufferCap) {
+            deltaBuffer_.pop_front();
+        }
     }
-    if (conn && conn->alive()) {
-        conn->pushMessage(makeDeltaMsg(delta));
-    }
+    sendToPeer(delta);
 }
 
 void SessionController::onSync(const SyncPayload& payload) {
-    pushToActive(makeSyncMsg(payload));
+    sendToPeer(payload);
 }
 
 asio::awaitable<std::optional<std::string>> SessionController::getInput() {
@@ -63,7 +54,7 @@ asio::awaitable<std::optional<std::string>> SessionController::waitInput() {
     try {
         co_return co_await inputChannel_->async_receive(asio::use_awaitable);
     } catch (const boost::system::system_error&) {
-        co_return std::nullopt; // channel 关闭 (stop)
+        co_return std::nullopt;
     }
 }
 
@@ -73,7 +64,6 @@ asio::awaitable<neograph::json> SessionController::handleInterrupt(
     std::string_view interruptValue,
     std::string_view interruptArgJson
 ) {
-    // 请求级超时: 权限询问与一般中断分别配置
     auto timeout
         = (interruptNode == "permission") ? config_.permissionTimeout : config_.interruptTimeout;
 
@@ -90,15 +80,18 @@ asio::awaitable<neograph::json> SessionController::handleInterrupt(
         };
     }
 
-    pushToActive(
-        makeInterruptRequest(id, config_.threadId, interruptNode, interruptValue, interruptArgJson)
-    );
+    sendToPeer(WireInterruptRequest{
+        .id      = id,
+        .threadId = config_.threadId,
+        .node    = std::string{interruptNode},
+        .value   = std::string{interruptValue},
+        .argJson = std::string{interruptArgJson},
+    });
 
     neograph::json result = neograph::json::array();
     try {
         result = co_await ch->async_receive(asio::cancel_after(timeout, asio::use_awaitable));
     } catch (const boost::system::system_error& e) {
-        // 超时 / 断线 (resp channel 被 close)
         XX_LOGW("[session_ctrl] interrupt #{} ended early: {}", id, e.what());
     }
     {
@@ -109,125 +102,104 @@ asio::awaitable<neograph::json> SessionController::handleInterrupt(
 }
 
 // ---------------------------------------------------------------------------
-// 驱动循环
+// AgentIOBase: 对端 (客户端) 发来的消息分发
 // ---------------------------------------------------------------------------
 
-asio::awaitable<void> SessionController::run() {
-    running_.store(true, std::memory_order_release);
-    while (!stopped_.load(std::memory_order_acquire)) {
-        auto input = co_await waitInput();
-        if (!input.has_value()) {
-            break; // stop
-        }
-        if (input->empty()) {
-            continue;
-        }
-
-        turnActive_.store(true, std::memory_order_release);
-
-        auto agent = agent_.lock();
-        if (!agent) {
-            turnActive_.store(false, std::memory_order_release);
-            break;
-        }
-        try {
-            auto result = co_await agent->runConversationTurnAsync(
-                config_.threadId,
-                *input,
-                firstTurn_,
-                shared_from_this()
-            );
-            firstTurn_ = false;
-            pushToActive(makeTurnResult(
-                config_.threadId,
-                result.hasError,
-                result.errorMessage,
-                result.interrupted
-            ));
-            sendContextStats();
-        } catch (const std::exception& e) {
-            XX_LOGE("[session_ctrl] turn error: {}", e.what());
-            pushToActive(makeTurnResult(config_.threadId, true, e.what(), false));
-        }
-
-        turnActive_.store(false, std::memory_order_release);
-    }
-    running_.store(false, std::memory_order_release);
-}
-
-void SessionController::stop() {
-    bool expected = false;
-    if (!stopped_.compare_exchange_strong(expected, true)) {
-        return;
-    }
-    cancelGraceTimer();
-    failAllPending();
-    inputChannel_->close();
-    onCancel();
+void SessionController::onPeerMessage(WireMessage msg) {
+    std::visit(
+        [this](auto&& m) {
+            using T = std::decay_t<decltype(m)>;
+            if constexpr (std::is_same_v<T, WireHello>) {
+                handleHello(m);
+            } else if constexpr (std::is_same_v<T, WireUserInput>) {
+                cancelGraceTimer();
+                inputChannel_->try_send(ErrorCode{}, m.text);
+            } else if constexpr (std::is_same_v<T, WireCancel>) {
+                onCancel();
+            } else if constexpr (std::is_same_v<T, WireSelectModel>) {
+                auto agent = agent_.lock();
+                if (agent) {
+                    agent->selectModel(m.threadId, m.model);
+                }
+            } else if constexpr (std::is_same_v<T, WireInterruptResponse>) {
+                resolveInterrupt(m.id, std::move(m.result));
+            }
+        },
+        std::move(msg)
+    );
 }
 
 // ---------------------------------------------------------------------------
 // 连接管理
 // ---------------------------------------------------------------------------
 
-void SessionController::attach(
-    const std::shared_ptr<IConnectionSink>& conn,
-    uint64_t                                lastSeq,
-    std::string_view /*tailHash*/
-) {
+void SessionController::handleHello(const WireHello& hello, std::vector<std::string> models) {
     cancelGraceTimer();
-    // 在 bufferMutex_ 下设置活动连接并重放, 与 onDelta 的实时推送串行化 (保证顺序)
+
+    // 在锁内收集重放数据, 释放锁后再发送 (避免持锁期间做 IO)
+    std::vector<Delta>              replayDeltas;
+    std::optional<SyncPayload>      replaySync;
+    std::string                     tailHash;
+    std::vector<WireInterruptRequest> pendingInterrupts;
+
     {
         std::lock_guard<std::mutex> lock(bufferMutex_);
-        {
-            std::lock_guard<std::mutex> lock2(connMutex_);
-            activeConn_ = conn;
-        }
+        auto sess = session();
+        tailHash  = sess ? sess->chainHash.tailHex() : std::string{};
 
-        auto     sess   = session();
-        uint64_t curSeq = sess ? sess->deltaSeq : 0;
-        if (lastSeq > 0) {
-            auto deltas = deltasSinceLocked(lastSeq);
+        if (hello.lastSeq > 0) {
+            auto deltas = deltasSinceLocked(hello.lastSeq);
             if (deltas.has_value()) {
-                for (const auto& d : deltas.value()) {
-                    conn->pushMessage(makeDeltaMsg(d));
-                }
+                replayDeltas = std::move(deltas.value());
             } else {
-                conn->pushMessage(makeSyncMsg(buildFullSync(), curSeq));
+                replaySync = buildFullSync();
             }
         } else {
-            // 新连接到已有历史的会话 -> 全量 sync 供客户端展示
             if (sess && !sess->fullHistory.empty()) {
-                conn->pushMessage(makeSyncMsg(buildFullSync(), curSeq));
+                replaySync = buildFullSync();
             }
         }
     }
 
-    // 非 delta 消息 (统计/挂起中断) 无需与 delta 严格有序, 在 bufferMutex_ 外推送
-    sendContextStats();
-    resendPendingInterrupts(conn);
-}
-
-void SessionController::detach(IConnectionSink* conn) {
-    bool wasActive = false;
     {
-        std::lock_guard<std::mutex> lock(connMutex_);
-        auto                        active = activeConn_.lock();
-        if (active.get() == conn) {
-            activeConn_.reset();
-            wasActive = true;
+        std::lock_guard<std::mutex> lock2(pendingMutex_);
+        for (const auto& [id, p] : pending_) {
+            pendingInterrupts.push_back(WireInterruptRequest{
+                .id      = id,
+                .threadId = config_.threadId,
+                .node    = p.node,
+                .value   = p.value,
+                .argJson = p.argJson,
+            });
         }
     }
-    if (wasActive && turnActive_.load(std::memory_order_acquire)) {
-        // 轮次进行中断线 -> 启动 grace period (期内重连可重挂)
-        startGraceTimer();
+
+    // 锁外发送
+    for (const auto& d : replayDeltas) {
+        sendToPeer(d);
     }
-    // 空闲断线: 驱动循环继续在 waitInput 等待, 不取消轮次
+    if (replaySync.has_value()) {
+        sendToPeer(std::move(replaySync.value()));
+    }
+
+    sendContextStats();
+
+    for (auto& req : pendingInterrupts) {
+        sendToPeer(std::move(req));
+    }
+
+    sendToPeer(WireHelloAck{
+        .ok       = true,
+        .threadId = config_.threadId,
+        .tailHash = std::move(tailHash),
+        .models   = std::move(models),
+    });
 }
 
-void SessionController::onUserInput(std::string text) {
-    cancelGraceTimer();
-    inputChannel_->try_send(ErrorCode{}, std::move(text));
+void SessionController::onDisconnect() {
+    if (turnActive_.load(std::memory_order_acquire)) {
+        startGraceTimer();
+    }
 }
 
 void SessionController::resolveInterrupt(int64_t id, neograph::json result) {
@@ -255,28 +227,82 @@ void SessionController::onCancel() {
 }
 
 // ---------------------------------------------------------------------------
-// 推送 / 缓冲
+// 驱动循环
 // ---------------------------------------------------------------------------
 
-void SessionController::pushToActive(neograph::json msg) {
-    std::shared_ptr<IConnectionSink> conn;
-    {
-        std::lock_guard<std::mutex> lock(connMutex_);
-        conn = activeConn_.lock();
+asio::awaitable<void> SessionController::run() {
+    running_.store(true, std::memory_order_release);
+    while (!stopped_.load(std::memory_order_acquire)) {
+        auto input = co_await waitInput();
+        if (!input.has_value()) {
+            break;
+        }
+        if (input->empty()) {
+            continue;
+        }
+
+        turnActive_.store(true, std::memory_order_release);
+
+        auto agent = agent_.lock();
+        if (!agent) {
+            turnActive_.store(false, std::memory_order_release);
+            break;
+        }
+        try {
+            auto result = co_await agent->runConversationTurnAsync(
+                config_.threadId,
+                *input,
+                firstTurn_,
+                shared_from_this()
+            );
+            firstTurn_ = false;
+            sendToPeer(WireTurnResult{
+                .threadId     = config_.threadId,
+                .hasError     = result.hasError,
+                .errorMessage = result.errorMessage,
+                .interrupted  = result.interrupted,
+            });
+            sendContextStats();
+        } catch (const std::exception& e) {
+            XX_LOGE("[session_ctrl] turn error: {}", e.what());
+            sendToPeer(WireTurnResult{
+                .threadId     = config_.threadId,
+                .hasError     = true,
+                .errorMessage = e.what(),
+                .interrupted  = false,
+            });
+        }
+
+        turnActive_.store(false, std::memory_order_release);
     }
-    if (conn && conn->alive()) {
-        conn->pushMessage(std::move(msg));
+    running_.store(false, std::memory_order_release);
+}
+
+void SessionController::stop() {
+    bool expected = false;
+    if (!stopped_.compare_exchange_strong(expected, true)) {
+        return;
+    }
+    cancelGraceTimer();
+    failAllPending();
+    inputChannel_->close();
+    onCancel();
+    if (transport_) {
+        transport_->close();
     }
 }
 
+// ---------------------------------------------------------------------------
+// 推送 / 缓冲
+// ---------------------------------------------------------------------------
+
 std::optional<std::vector<Delta>> SessionController::deltasSinceLocked(uint64_t seq) {
-    // 调用方已持有 bufferMutex_
     if (deltaBuffer_.empty()) {
-        return std::nullopt; // 空缓冲无法确认连续性 -> 回退全量 sync
+        return std::nullopt;
     }
     uint64_t oldest = deltaBuffer_.front().seq;
     if (seq + 1 < oldest) {
-        return std::nullopt; // 缓冲已不覆盖, 需全量 sync
+        return std::nullopt;
     }
     std::vector<Delta> out;
     for (const auto& d : deltaBuffer_) {
@@ -308,10 +334,9 @@ void SessionController::sendContextStats() {
     if (!sess || !sess->contextStats) {
         return;
     }
-    pushToActive(makeContextStats(
-        sess->contextStats->contextTokens.load(std::memory_order_relaxed),
-        sess->contextStats->maxContextTokens.load(std::memory_order_relaxed)
-    ));
+    auto ctxTokens = sess->contextStats->contextTokens.load(std::memory_order_relaxed);
+    auto maxTokens = sess->contextStats->maxContextTokens.load(std::memory_order_relaxed);
+    sendToPeer(WireContextStats{ctxTokens, maxTokens});
 }
 
 std::shared_ptr<Session> SessionController::session() {
@@ -328,7 +353,6 @@ std::shared_ptr<Session> SessionController::session() {
 
 void SessionController::startGraceTimer() {
     if (config_.gracePeriod.count() <= 0) {
-        // 无 grace: 立即取消轮次
         onCancel();
         failAllPending();
         return;
@@ -346,14 +370,10 @@ void SessionController::startGraceTimer() {
             ErrorCode ec;
             co_await timer->async_wait(asio::redirect_error(asio::use_awaitable, ec));
             if (ec) {
-                co_return; // 被取消 (已重连)
+                co_return;
             }
-            bool hasConn;
-            {
-                std::lock_guard<std::mutex> lock(self->connMutex_);
-                hasConn = !self->activeConn_.expired();
-            }
-            if (!hasConn && self->turnActive_.load(std::memory_order_acquire)) {
+            bool hasTransport = self->transport_ && self->transport_->alive();
+            if (!hasTransport && self->turnActive_.load(std::memory_order_acquire)) {
                 XX_LOGW(
                     "[session_ctrl] grace period expired, cancelling turn (thread={})",
                     self->config_.threadId
@@ -387,13 +407,5 @@ void SessionController::failAllPending() {
     pending_.clear();
 }
 
-void SessionController::resendPendingInterrupts(const std::shared_ptr<IConnectionSink>& conn) {
-    std::lock_guard<std::mutex> lock(pendingMutex_);
-    for (const auto& [id, p] : pending_) {
-        conn->pushMessage(makeInterruptRequest(id, config_.threadId, p.node, p.value, p.argJson));
-    }
-}
-
-} // namespace remote
 } // namespace agent
 } // namespace agentxx

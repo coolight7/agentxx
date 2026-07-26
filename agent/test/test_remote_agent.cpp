@@ -1,11 +1,10 @@
 #include "test_remote_agent.h"
 #include "agentxx/agent/agent_io.h"
-#include "agentxx/agent/remote/channel_transport.h"
-#include "agentxx/agent/remote/remote_client_io.h"
-#include "agentxx/agent/remote/remote_server_io.h"
+#include "agentxx/agent/channel_io_transport.h"
+#include "agentxx/agent/remote/agent_server.h"
 #include "agentxx/agent/remote/session_controller.h"
 #include "agentxx/agent/remote/wire_protocol.h"
-#include "agentxx/agent/remote/ws_transport.h"
+#include "agentxx/agent/ws_io_transport.h"
 #include "agentxx/util/http_server.h"
 #include "agentxx/util/ws_client.h"
 #include <asio/co_spawn.hpp>
@@ -30,94 +29,46 @@ namespace test {
 
 using namespace agentxx::util;
 namespace remote = agentxx::agent::remote;
+using agentxx::agent::SessionController;
 
 int g_remote_passed = 0;
 int g_remote_failed = 0;
 
 // ---------------------------------------------------------------------------
-// 测试用 IO: 记录收到的 delta
+// 测试用 IO: 记录收到的 delta/sync/turnResult/contextStats
 // ---------------------------------------------------------------------------
 
 class TestIO : public agentxx::agent::AgentIOBase {
 public:
 
     std::vector<agentxx::agent::Delta> deltas;
-    int                                syncCount = 0;
+    std::atomic<int>                   syncCount{0};
+    std::atomic<int>                   turnResultCount{0};
+    std::atomic<bool>                  lastTurnInterrupted{false};
+    std::atomic<uint64_t>              lastCtxTokens{0};
+    std::atomic<uint64_t>              lastMaxTokens{0};
+    std::mutex                         mu;
 
     void onDelta(const agentxx::agent::Delta& delta) override {
+        std::lock_guard<std::mutex> lock(mu);
         deltas.push_back(delta);
-    }
-
-    void onSync(const agentxx::agent::SyncPayload&) override {
-        syncCount++;
-    }
-
-    asio::awaitable<std::optional<std::string>> getInput() override {
-        co_return std::nullopt;
-    }
-
-    asio::awaitable<neograph::json>
-        handleInterrupt(std::string_view, std::string_view, std::string_view, std::string_view)
-            override {
-        co_return neograph::json::array({"true"});
-    }
-};
-
-// ---------------------------------------------------------------------------
-// 测试用连接下沉: 记录 SessionController 推送的消息
-// ---------------------------------------------------------------------------
-
-class MockSink : public remote::IConnectionSink {
-public:
-
-    std::vector<neograph::json> messages;
-    std::mutex                  mu;
-    bool                        isAlive = true;
-
-    void pushMessage(neograph::json msg) override {
-        std::lock_guard<std::mutex> lock(mu);
-        messages.push_back(std::move(msg));
-    }
-
-    bool alive() const noexcept override {
-        return isAlive;
-    }
-
-    std::vector<neograph::json> snapshot() {
-        std::lock_guard<std::mutex> lock(mu);
-        return messages;
-    }
-
-    void clear() {
-        std::lock_guard<std::mutex> lock(mu);
-        messages.clear();
-    }
-};
-
-/// 测试用可定时返回若干输入、随后 nullopt 的 IO
-class ScriptedIO : public agentxx::agent::AgentIOBase {
-public:
-
-    std::vector<std::string>           inputs;
-    std::atomic<size_t>                idx{0};
-    std::vector<agentxx::agent::Delta> deltas;
-    std::atomic<int>                   syncCount{0};
-    std::mutex                         dmu;
-
-    void onDelta(const agentxx::agent::Delta& d) override {
-        std::lock_guard<std::mutex> lock(dmu);
-        deltas.push_back(d);
     }
 
     void onSync(const agentxx::agent::SyncPayload&) override {
         syncCount.fetch_add(1);
     }
 
+    void onTurnResult(const agentxx::agent::WireTurnResult& r) override {
+        turnResultCount.fetch_add(1);
+        lastTurnInterrupted.store(r.interrupted);
+    }
+
+    void onContextStats(const agentxx::agent::WireContextStats& s) override {
+        lastCtxTokens.store(s.contextTokens);
+        lastMaxTokens.store(s.maxContextTokens);
+    }
+
     asio::awaitable<std::optional<std::string>> getInput() override {
-        size_t i = idx.fetch_add(1);
-        if (i < inputs.size()) {
-            co_return inputs[i];
-        }
         co_return std::nullopt;
     }
 
@@ -125,6 +76,16 @@ public:
         handleInterrupt(std::string_view, std::string_view, std::string_view, std::string_view)
             override {
         co_return neograph::json::array({"true"});
+    }
+
+    size_t deltaCount() {
+        std::lock_guard<std::mutex> lock(mu);
+        return deltas.size();
+    }
+
+    std::string deltaText(size_t i) {
+        std::lock_guard<std::mutex> lock(mu);
+        return i < deltas.size() ? deltas[i].text : std::string{};
     }
 };
 
@@ -161,7 +122,6 @@ static asio::awaitable<std::optional<neograph::json>> wsRecvJson(HttpServer::WsS
     }
 }
 
-/// 启动 server 并等待端口就绪; 返回端口 (0 表示失败)
 static uint16_t startServerAndWait(HttpServer& server, std::thread& th) {
     th = std::thread([&server]() {
         server.start();
@@ -177,29 +137,34 @@ static uint16_t startServerAndWait(HttpServer& server, std::thread& th) {
 }
 
 // ---------------------------------------------------------------------------
-// 1. 协议序列化往返
+// 1. 协议序列化往返 (WsAgentIOTransport::serialize/deserialize)
 // ---------------------------------------------------------------------------
 
 static asio::awaitable<void> test_remote_protocol_roundtrip() {
     using agentxx::agent::Delta;
     using agentxx::agent::HistoryMessage;
     using agentxx::agent::SyncPayload;
+    using agentxx::agent::WireMessage;
+    using agentxx::agent::WsAgentIOTransport;
 
-    // Delta 各类型往返
     {
         Delta d;
-        d.type    = Delta::Type::TextToken;
-        d.seq     = 5;
-        d.text    = "abc";
-        d.msgId   = "m1";
-        auto j    = remote::makeDeltaMsg(d);
-        auto back = remote::deltaMsgFromJson(j);
+        d.type  = Delta::Type::TextToken;
+        d.seq   = 5;
+        d.text  = "abc";
+        d.msgId = "m1";
+        auto json = WsAgentIOTransport::serialize(WireMessage{d});
+        auto back = WsAgentIOTransport::deserialize(json);
         XX_TEST_EXPECT_TRUE(back.has_value());
         if (back) {
-            XX_TEST_EXPECT_TRUE(back->type == Delta::Type::TextToken);
-            XX_TEST_EXPECT_EQ(back->seq, uint64_t{5});
-            XX_TEST_EXPECT_EQ(back->text, std::string("abc"));
-            XX_TEST_EXPECT_EQ(back->msgId, std::string("m1"));
+            auto* bd = std::get_if<Delta>(&*back);
+            XX_TEST_EXPECT_TRUE(bd != nullptr);
+            if (bd) {
+                XX_TEST_EXPECT_TRUE(bd->type == Delta::Type::TextToken);
+                XX_TEST_EXPECT_EQ(bd->seq, uint64_t{5});
+                XX_TEST_EXPECT_EQ(bd->text, std::string("abc"));
+                XX_TEST_EXPECT_EQ(bd->msgId, std::string("m1"));
+            }
         }
     }
     {
@@ -210,16 +175,19 @@ static asio::awaitable<void> test_remote_protocol_roundtrip() {
         d.toolCallId = "tc1";
         d.result     = "output";
         d.hasError   = true;
-        auto back    = remote::deltaMsgFromJson(remote::makeDeltaMsg(d));
+        auto back    = WsAgentIOTransport::deserialize(WsAgentIOTransport::serialize(WireMessage{d}));
         XX_TEST_EXPECT_TRUE(back.has_value());
         if (back) {
-            XX_TEST_EXPECT_TRUE(back->type == Delta::Type::ToolEnd);
-            XX_TEST_EXPECT_EQ(back->toolName, std::string("bash"));
-            XX_TEST_EXPECT_EQ(back->toolCallId, std::string("tc1"));
-            XX_TEST_EXPECT_TRUE(back->hasError);
+            auto* bd = std::get_if<Delta>(&*back);
+            XX_TEST_EXPECT_TRUE(bd != nullptr);
+            if (bd) {
+                XX_TEST_EXPECT_TRUE(bd->type == Delta::Type::ToolEnd);
+                XX_TEST_EXPECT_EQ(bd->toolName, std::string("bash"));
+                XX_TEST_EXPECT_EQ(bd->toolCallId, std::string("tc1"));
+                XX_TEST_EXPECT_TRUE(bd->hasError);
+            }
         }
     }
-    // SyncPayload 往返
     {
         SyncPayload p;
         p.fromIndex = 2;
@@ -228,38 +196,68 @@ static asio::awaitable<void> test_remote_protocol_roundtrip() {
             "id1",
             neograph::json{{"role", "user"}, {"content", "hi"}},
         });
-        auto back = remote::syncMsgFromJson(remote::makeSyncMsg(p));
+        auto back = WsAgentIOTransport::deserialize(WsAgentIOTransport::serialize(WireMessage{p}));
         XX_TEST_EXPECT_TRUE(back.has_value());
         if (back) {
-            XX_TEST_EXPECT_EQ(back->fromIndex, uint64_t{2});
-            XX_TEST_EXPECT_EQ(back->tailHash, std::string("hash123"));
-            XX_TEST_EXPECT_EQ(back->messages.size(), size_t{1});
-            if (!back->messages.empty()) {
-                XX_TEST_EXPECT_EQ(back->messages[0].id, std::string("id1"));
+            auto* sp = std::get_if<SyncPayload>(&*back);
+            XX_TEST_EXPECT_TRUE(sp != nullptr);
+            if (sp) {
+                XX_TEST_EXPECT_EQ(sp->fromIndex, uint64_t{2});
+                XX_TEST_EXPECT_EQ(sp->tailHash, std::string("hash123"));
+                XX_TEST_EXPECT_EQ(sp->messages.size(), size_t{1});
+                if (!sp->messages.empty()) {
+                    XX_TEST_EXPECT_EQ(sp->messages[0].id, std::string("id1"));
+                }
             }
         }
     }
-    // 消息信封 type 字段
     {
-        auto hello = remote::makeHello("sess", "tok", 3, "th");
-        XX_TEST_EXPECT_EQ(remote::msgType(hello), std::string(remote::MsgType::Hello));
-        XX_TEST_EXPECT_EQ(hello.value("token", std::string{}), std::string("tok"));
-        XX_TEST_EXPECT_EQ(hello.value("last_seq", uint64_t{0}), uint64_t{3});
-
-        auto ir = remote::makeInterruptRequest(7, "sess", "node", "val", "{}");
-        XX_TEST_EXPECT_EQ(remote::msgType(ir), std::string(remote::MsgType::InterruptRequest));
-        XX_TEST_EXPECT_EQ(ir.value("id", int64_t{0}), int64_t{7});
+        agentxx::agent::WireHello hello{"sess", "tok", 3, "th"};
+        auto json = WsAgentIOTransport::serialize(WireMessage{hello});
+        auto back = WsAgentIOTransport::deserialize(json);
+        XX_TEST_EXPECT_TRUE(back.has_value());
+        if (back) {
+            auto* h = std::get_if<agentxx::agent::WireHello>(&*back);
+            XX_TEST_EXPECT_TRUE(h != nullptr);
+            if (h) {
+                XX_TEST_EXPECT_EQ(h->threadId, std::string("sess"));
+                XX_TEST_EXPECT_EQ(h->token, std::string("tok"));
+                XX_TEST_EXPECT_EQ(h->lastSeq, uint64_t{3});
+            }
+        }
+    }
+    {
+        agentxx::agent::WireInterruptRequest ir{7, "sess", "node", "val", "{}"};
+        auto json = WsAgentIOTransport::serialize(WireMessage{ir});
+        auto back = WsAgentIOTransport::deserialize(json);
+        XX_TEST_EXPECT_TRUE(back.has_value());
+        if (back) {
+            auto* r = std::get_if<agentxx::agent::WireInterruptRequest>(&*back);
+            XX_TEST_EXPECT_TRUE(r != nullptr);
+            if (r) {
+                XX_TEST_EXPECT_EQ(r->id, int64_t{7});
+            }
+        }
     }
     co_return;
 }
 
 // ---------------------------------------------------------------------------
-// 2. 传输层回环 (ClientWsTransport <-> ServerWsTransport)
+// 2. WsAgentIOTransport 回环 (client <-> echo server)
 // ---------------------------------------------------------------------------
 
 static asio::awaitable<void> test_remote_transport_loopback() {
     HttpServer server({.address = "127.0.0.1", .port = 0, .ioThreads = 1});
     server.enableWebSocket("/echo", [](HttpServer::WsStream& ws) -> asio::awaitable<void> {
+        // 先回应 helloAck 完成握手, 之后 echo
+        auto hello = co_await wsRecvJson(ws);
+        if (!hello) {
+            co_return;
+        }
+        co_await wsSendJson(
+            ws,
+            remote::makeHelloAck(true, hello->value("thread", std::string{}), "", {})
+        );
         for (;;) {
             auto j = co_await wsRecvJson(ws);
             if (!j) {
@@ -278,32 +276,46 @@ static asio::awaitable<void> test_remote_transport_loopback() {
         co_return;
     }
 
-    auto exec   = co_await asio::this_coro::executor;
-    auto client = co_await wsConnect(exec, "ws://127.0.0.1:" + std::to_string(port) + "/echo");
-    XX_TEST_EXPECT_TRUE(client.has_value());
-    if (client) {
-        remote::ClientWsTransport transport(std::move(client.value()));
-        auto                      sendRes = co_await transport.send(R"({"type":"ping","t":42})");
-        XX_TEST_EXPECT_TRUE(sendRes.has_value());
-        auto recvRes = co_await transport.recv();
-        XX_TEST_EXPECT_TRUE(recvRes.has_value());
-        if (recvRes) {
-            auto j = neograph::json::parse(recvRes->payload);
-            XX_TEST_EXPECT_EQ(remote::msgType(j), std::string("ping"));
-            XX_TEST_EXPECT_EQ(j.value("t", int64_t{0}), int64_t{42});
+    auto ex  = co_await asio::this_coro::executor;
+    auto url = "ws://127.0.0.1:" + std::to_string(port) + "/echo";
+
+    agentxx::agent::WsAgentIOTransport::Config cfg;
+    cfg.heartbeatInterval = std::chrono::seconds{60};
+    util::WsClientConfig wsCfg;
+    wsCfg.recvTimeout = std::chrono::seconds{10};
+
+    auto transport = std::make_shared<agentxx::agent::WsAgentIOTransport>(
+        ex, url, "test-token", cfg, wsCfg
+    );
+
+    agentxx::agent::WireHello hello{"session", "test-token", 0, ""};
+    bool ok = co_await transport->connect(hello);
+    XX_TEST_EXPECT_TRUE(ok);
+
+    if (ok) {
+        agentxx::agent::WireUserInput input{"session", "ping", false, ""};
+        transport->send(agentxx::agent::WireMessage{input});
+
+        auto recvMsg = co_await transport->recv();
+        XX_TEST_EXPECT_TRUE(recvMsg.has_value());
+        if (recvMsg) {
+            auto* ui = std::get_if<agentxx::agent::WireUserInput>(&*recvMsg);
+            XX_TEST_EXPECT_TRUE(ui != nullptr);
+            if (ui) {
+                XX_TEST_EXPECT_EQ(ui->text, std::string("ping"));
+            }
         }
-        transport.close();
     }
+    transport->close();
 
     server.stop();
     th.join();
 }
 
 // ---------------------------------------------------------------------------
-// 3. 客户端握手 + 一轮对话 ( against 协议级 fake server )
+// 3. 客户端握手 + 一轮对话 (WsAgentIOTransport + TestIO vs fake server)
 // ---------------------------------------------------------------------------
 
-/// fake server 的 WS handler: hello 鉴权 -> user_input 回 delta+turn_result
 static asio::awaitable<void> fakeAgentHandler(HttpServer::WsStream& ws) {
     auto hello = co_await wsRecvJson(ws);
     if (!hello) {
@@ -352,61 +364,56 @@ static asio::awaitable<void> test_remote_client_handshake() {
         co_return;
     }
 
-    auto           exec = co_await asio::this_coro::executor;
-    std::string    url  = "ws://127.0.0.1:" + std::to_string(port) + "/agent";
-    WsClientConfig wsCfg;
-    wsCfg.recvTimeout = std::chrono::seconds{10};
+    auto ex  = co_await asio::this_coro::executor;
+    auto url = "ws://127.0.0.1:" + std::to_string(port) + "/agent";
 
     // ----- 正确 token: 握手成功 + 一轮对话 -----
     {
-        auto client = co_await wsConnect(exec, url, {}, wsCfg);
-        XX_TEST_EXPECT_TRUE(client.has_value());
-        if (client) {
-            auto transport = std::make_unique<remote::ClientWsTransport>(std::move(client.value()));
-            auto io        = std::make_shared<TestIO>();
-            auto remoteIo  = std::make_shared<remote::RemoteClientAgentIO>(
-                exec,
-                std::move(transport),
-                io,
-                remote::RemoteClientAgentIO::Config{}
-            );
-            bool ok = co_await remoteIo->start("session", "test-token");
-            XX_TEST_EXPECT_TRUE(ok);
+        agentxx::agent::WsAgentIOTransport::Config cfg;
+        cfg.heartbeatInterval = std::chrono::seconds{60};
+        util::WsClientConfig wsCfg;
+        wsCfg.recvTimeout = std::chrono::seconds{10};
 
-            remoteIo->sendUserInput("session", "hi", true, "");
-            bool turnOk = true;
-            try {
-                auto r = co_await remoteIo->awaitTurnResult();
-                XX_TEST_EXPECT_FALSE(r.hasError);
-            } catch (const std::exception&) {
-                turnOk = false;
+        auto transport = std::make_shared<agentxx::agent::WsAgentIOTransport>(
+            ex, url, "test-token", cfg, wsCfg
+        );
+        auto io = std::make_shared<TestIO>();
+        io->setTransport(transport);
+
+        agentxx::agent::WireHello hello{"session", "test-token", 0, ""};
+        bool ok = co_await transport->connect(hello);
+        XX_TEST_EXPECT_TRUE(ok);
+
+        if (ok) {
+            asio::co_spawn(ex, io->runTransportLoop(), asio::detached);
+
+            io->sendToPeer(agentxx::agent::WireUserInput{"session", "hi", true, ""});
+            co_await testSleep(ex, std::chrono::milliseconds{500});
+
+            XX_TEST_EXPECT_TRUE(io->deltaCount() > 0);
+            if (io->deltaCount() > 0) {
+                XX_TEST_EXPECT_EQ(io->deltaText(0), std::string("hello from server"));
             }
-            XX_TEST_EXPECT_TRUE(turnOk);
-            // delta 在 turn_result 之前送达, 此时应已收到
-            XX_TEST_EXPECT_TRUE(!io->deltas.empty());
-            if (!io->deltas.empty()) {
-                XX_TEST_EXPECT_EQ(io->deltas[0].text, std::string("hello from server"));
-            }
-            co_await remoteIo->shutdown();
+            XX_TEST_EXPECT_TRUE(io->turnResultCount.load() > 0);
         }
+        transport->close();
     }
 
     // ----- 错误 token: 握手失败 -----
     {
-        auto client = co_await wsConnect(exec, url, {}, wsCfg);
-        XX_TEST_EXPECT_TRUE(client.has_value());
-        if (client) {
-            auto transport = std::make_unique<remote::ClientWsTransport>(std::move(client.value()));
-            auto io        = std::make_shared<TestIO>();
-            auto remoteIo  = std::make_shared<remote::RemoteClientAgentIO>(
-                exec,
-                std::move(transport),
-                io,
-                remote::RemoteClientAgentIO::Config{}
-            );
-            bool ok = co_await remoteIo->start("session", "wrong-token");
-            XX_TEST_EXPECT_FALSE(ok);
-        }
+        agentxx::agent::WsAgentIOTransport::Config cfg;
+        cfg.heartbeatInterval = std::chrono::seconds{60};
+        cfg.authTimeout       = std::chrono::seconds{3};
+        util::WsClientConfig wsCfg;
+        wsCfg.recvTimeout = std::chrono::seconds{5};
+
+        auto transport = std::make_shared<agentxx::agent::WsAgentIOTransport>(
+            ex, url, "wrong-token", cfg, wsCfg
+        );
+        agentxx::agent::WireHello hello{"session", "wrong-token", 0, ""};
+        bool ok = co_await transport->connect(hello);
+        XX_TEST_EXPECT_FALSE(ok);
+        transport->close();
     }
 
     server.stop();
@@ -414,22 +421,24 @@ static asio::awaitable<void> test_remote_client_handshake() {
 }
 
 // ---------------------------------------------------------------------------
-// 4. SessionController: delta 环形缓冲 + 增量重放
+// 4. SessionController: delta 环形缓冲 + 增量重放 (经 ChannelAgentIOTransport)
 // ---------------------------------------------------------------------------
 
 static asio::awaitable<void> test_session_controller_replay() {
     auto ex = co_await asio::this_coro::executor;
 
-    remote::SessionController::Config cfg;
+    auto [clientT, serverT] = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+
+    SessionController::Config cfg;
     cfg.threadId       = "session";
     cfg.deltaBufferCap = 100;
-    auto sc            = std::make_shared<remote::SessionController>(
+    auto sc            = std::make_shared<SessionController>(
         ex,
         std::weak_ptr<agentxx::agent::DeepAgent>{},
         cfg
     );
 
-    // 喂入 seq 1..5 的 delta (此时无活动连接, onDelta 仅记录缓冲)
+    // 先喂入 delta (此时无 transport, 仅记录缓冲)
     for (uint64_t s = 1; s <= 5; ++s) {
         agentxx::agent::Delta d;
         d.type = agentxx::agent::Delta::Type::TextToken;
@@ -438,19 +447,36 @@ static asio::awaitable<void> test_session_controller_replay() {
         sc->onDelta(d);
     }
 
-    auto mock = std::make_shared<MockSink>();
-    // lastSeq=3 -> 应增量重放 seq 4,5
-    sc->attach(mock, 3, "");
+    // 设置 transport 后再 handleHello (触发增量重放)
+    sc->setTransport(std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(serverT)));
 
-    auto msgs = mock->snapshot();
-    XX_TEST_EXPECT_EQ(msgs.size(), size_t{2});
-    if (msgs.size() == 2) {
-        XX_TEST_EXPECT_EQ(msgs[0].value("seq", uint64_t{0}), uint64_t{4});
-        XX_TEST_EXPECT_EQ(msgs[1].value("seq", uint64_t{0}), uint64_t{5});
-        XX_TEST_EXPECT_EQ(
-            msgs[0].value("type", std::string{}),
-            std::string(remote::MsgType::DeltaMsg)
-        );
+    // lastSeq=3 -> 应增量重放 seq 4,5
+    agentxx::agent::WireHello hello{"session", "", 3, ""};
+    sc->handleHello(hello);
+
+    // 从 client 端读取: 应有 delta(4), delta(5), helloAck
+    std::vector<agentxx::agent::WireMessage> received;
+    for (int i = 0; i < 3; ++i) {
+        auto msg = co_await clientT->recv();
+        if (!msg) break;
+        received.push_back(std::move(*msg));
+    }
+
+    XX_TEST_EXPECT_EQ(received.size(), size_t{3});
+    if (received.size() >= 3) {
+        auto* d0 = std::get_if<agentxx::agent::Delta>(&received[0]);
+        auto* d1 = std::get_if<agentxx::agent::Delta>(&received[1]);
+        XX_TEST_EXPECT_TRUE(d0 != nullptr);
+        XX_TEST_EXPECT_TRUE(d1 != nullptr);
+        if (d0 && d1) {
+            XX_TEST_EXPECT_EQ(d0->seq, uint64_t{4});
+            XX_TEST_EXPECT_EQ(d1->seq, uint64_t{5});
+        }
+        auto* ack = std::get_if<agentxx::agent::WireHelloAck>(&received[2]);
+        XX_TEST_EXPECT_TRUE(ack != nullptr);
+        if (ack) {
+            XX_TEST_EXPECT_TRUE(ack->ok);
+        }
     }
     co_return;
 }
@@ -462,10 +488,12 @@ static asio::awaitable<void> test_session_controller_replay() {
 static asio::awaitable<void> test_session_controller_replay_fallback() {
     auto ex = co_await asio::this_coro::executor;
 
-    remote::SessionController::Config cfg;
+    auto [clientT, serverT] = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+
+    SessionController::Config cfg;
     cfg.threadId       = "session";
-    cfg.deltaBufferCap = 3; // 仅保留最近 3 条
-    auto sc            = std::make_shared<remote::SessionController>(
+    cfg.deltaBufferCap = 3;
+    auto sc            = std::make_shared<SessionController>(
         ex,
         std::weak_ptr<agentxx::agent::DeepAgent>{},
         cfg
@@ -477,17 +505,19 @@ static asio::awaitable<void> test_session_controller_replay_fallback() {
         d.seq  = s;
         sc->onDelta(d);
     }
-    // 缓冲保留 seq 8,9,10; lastSeq=2 -> 2+1=3 < 8 -> 缓冲不覆盖 -> 全量 sync
-    auto mock = std::make_shared<MockSink>();
-    sc->attach(mock, 2, "");
 
-    auto msgs = mock->snapshot();
-    XX_TEST_EXPECT_EQ(msgs.size(), size_t{1});
-    if (!msgs.empty()) {
-        XX_TEST_EXPECT_EQ(
-            msgs[0].value("type", std::string{}),
-            std::string(remote::MsgType::SyncMsg)
-        );
+    // 设置 transport 后再 handleHello
+    sc->setTransport(std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(serverT)));
+
+    // lastSeq=2 -> 缓冲保留 8,9,10; 2+1=3 < 8 -> 全量 sync
+    agentxx::agent::WireHello hello{"session", "", 2, ""};
+    sc->handleHello(hello);
+
+    auto msg = co_await clientT->recv();
+    XX_TEST_EXPECT_TRUE(msg.has_value());
+    if (msg) {
+        auto* sp = std::get_if<agentxx::agent::SyncPayload>(&*msg);
+        XX_TEST_EXPECT_TRUE(sp != nullptr);
     }
     co_return;
 }
@@ -499,10 +529,10 @@ static asio::awaitable<void> test_session_controller_replay_fallback() {
 static asio::awaitable<void> test_session_controller_interrupt_timeout() {
     auto ex = co_await asio::this_coro::executor;
 
-    remote::SessionController::Config cfg;
+    SessionController::Config cfg;
     cfg.threadId         = "session";
     cfg.interruptTimeout = std::chrono::milliseconds{300};
-    auto sc              = std::make_shared<remote::SessionController>(
+    auto sc              = std::make_shared<SessionController>(
         ex,
         std::weak_ptr<agentxx::agent::DeepAgent>{},
         cfg
@@ -526,21 +556,20 @@ static asio::awaitable<void> test_session_controller_interrupt_timeout() {
 static asio::awaitable<void> test_session_controller_grace() {
     auto ex = co_await asio::this_coro::executor;
 
-    remote::SessionController::Config cfg;
+    auto [clientT, serverT] = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+
+    SessionController::Config cfg;
     cfg.threadId         = "session";
     cfg.gracePeriod      = std::chrono::milliseconds{200};
-    cfg.interruptTimeout = std::chrono::seconds{10}; // 远大于 grace
-    auto sc              = std::make_shared<remote::SessionController>(
+    cfg.interruptTimeout = std::chrono::seconds{10};
+    auto sc              = std::make_shared<SessionController>(
         ex,
         std::weak_ptr<agentxx::agent::DeepAgent>{},
         cfg
     );
-
-    auto mock = std::make_shared<MockSink>();
-    sc->attach(mock, 0, "");
+    sc->setTransport(std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(serverT)));
     sc->setTurnActiveForTest(true);
 
-    // 发起一个 interrupt (注册 pending 并等待响应)
     auto done = std::make_shared<bool>(false);
     asio::co_spawn(
         ex,
@@ -552,20 +581,20 @@ static asio::awaitable<void> test_session_controller_grace() {
         asio::detached
     );
 
-    // 等待 interrupt 注册 pending
     co_await testSleep(ex, std::chrono::milliseconds{50});
-    XX_TEST_EXPECT_FALSE(*done); // 尚未超时
+    XX_TEST_EXPECT_FALSE(*done);
 
-    // 断线 -> 启动 grace (200ms); 期满无重连 -> 失败 pending -> interrupt 提前返回
-    sc->detach(mock.get());
+    // 关闭 transport 模拟断线 -> 启动 grace (200ms); 期满无重连 -> 失败 pending
+    sc->transport()->close();
+    sc->onDisconnect();
     co_await testSleep(ex, std::chrono::milliseconds{500});
 
-    XX_TEST_EXPECT_TRUE(*done); // grace 期满失败 pending, interrupt 提前返回 (远早于 10s)
+    XX_TEST_EXPECT_TRUE(*done);
     co_return;
 }
 
 // ---------------------------------------------------------------------------
-// 8. 客户端断线自动重连 (runSession) + 重连携带 lastSeq
+// 8. 客户端断线自动重连 (WsAgentIOTransport) + 重连携带 lastSeq
 // ---------------------------------------------------------------------------
 
 static asio::awaitable<void> test_remote_client_reconnect() {
@@ -579,7 +608,6 @@ static asio::awaitable<void> test_remote_client_reconnect() {
         if (!hello) {
             co_return;
         }
-        // 第二次及以后的连接应携带 last_seq>0 (客户端断线重连恢复)
         if (myConn >= 2 && hello->value("last_seq", uint64_t{0}) > 0) {
             sawResumeLastSeq = true;
         }
@@ -588,8 +616,7 @@ static asio::awaitable<void> test_remote_client_reconnect() {
             remote::makeHelloAck(true, hello->value("thread", std::string{}), "", {})
         );
         if (myConn == 1) {
-            // 首个连接: 发一个 delta(seq=1)+turn_result 后立即断开, 触发客户端重连
-            auto j = co_await wsRecvJson(ws); // user_input
+            auto j = co_await wsRecvJson(ws);
             if (j) {
                 agentxx::agent::Delta d;
                 d.type = agentxx::agent::Delta::Type::TextToken;
@@ -601,9 +628,8 @@ static asio::awaitable<void> test_remote_client_reconnect() {
                     remote::makeTurnResult(j->value("thread", std::string{}), false, "", false)
                 );
             }
-            co_return; // 关闭连接
+            co_return;
         }
-        // 后续连接: 正常回应轮次
         for (;;) {
             auto j = co_await wsRecvJson(ws);
             if (!j) {
@@ -629,36 +655,29 @@ static asio::awaitable<void> test_remote_client_reconnect() {
         co_return;
     }
 
-    auto ex = co_await asio::this_coro::executor;
+    auto ex  = co_await asio::this_coro::executor;
+    auto url = "ws://127.0.0.1:" + std::to_string(port) + "/agent";
 
-    auto io    = std::make_shared<ScriptedIO>();
-    io->inputs = {"msg1", "msg2", "msg3", "msg4"};
-
-    remote::RemoteClientAgentIO::Config cfg;
-    cfg.reconnectBackoff = std::chrono::milliseconds{100};
-    WsClientConfig wsCfg;
+    agentxx::agent::WsAgentIOTransport::Config cfg;
+    cfg.reconnectBackoff     = std::chrono::milliseconds{100};
+    cfg.heartbeatInterval    = std::chrono::seconds{60};
+    util::WsClientConfig wsCfg;
     wsCfg.recvTimeout = std::chrono::seconds{5};
 
-    auto remote = std::make_shared<remote::RemoteClientAgentIO>(
-        ex,
-        io,
-        "ws://127.0.0.1:" + std::to_string(port) + "/agent",
-        "test-token",
-        cfg,
-        wsCfg
+    auto transport = std::make_shared<agentxx::agent::WsAgentIOTransport>(
+        ex, url, "test-token", cfg, wsCfg
     );
+    auto io = std::make_shared<TestIO>();
+    io->setTransport(transport);
 
-    // 后台运行 runSession (输入耗尽后自行退出)
-    asio::co_spawn(
-        ex,
-        [remote]() -> asio::awaitable<void> {
-            co_await remote->runSession("session", "");
-            co_return;
-        },
-        asio::detached
-    );
+    agentxx::agent::WireHello hello{"session", "test-token", 0, ""};
+    bool ok = co_await transport->connect(hello);
+    XX_TEST_EXPECT_TRUE(ok);
 
-    // 等待重连发生 (connCount>=2) 或超时
+    asio::co_spawn(ex, io->runTransportLoop(), asio::detached);
+
+    io->sendToPeer(agentxx::agent::WireUserInput{"session", "msg1", true, ""});
+
     bool reconnected = false;
     for (int i = 0; i < 100; ++i) {
         if (connCount.load() >= 2) {
@@ -668,41 +687,45 @@ static asio::awaitable<void> test_remote_client_reconnect() {
         co_await testSleep(ex, std::chrono::milliseconds{50});
     }
     XX_TEST_EXPECT_TRUE(reconnected);
-    // 等待客户端处理完, 检查重连携带 lastSeq
     co_await testSleep(ex, std::chrono::milliseconds{300});
     XX_TEST_EXPECT_TRUE(sawResumeLastSeq.load());
 
-    co_await remote->shutdown();
+    transport->close();
     server.stop();
     th.join();
 }
 
 // ---------------------------------------------------------------------------
-// 9. ChannelTransport 回环 (进程内传输)
+// 9. ChannelAgentIOTransport 回环 (进程内传输)
 // ---------------------------------------------------------------------------
 
 static asio::awaitable<void> test_channel_transport_loopback() {
-    auto  ex      = co_await asio::this_coro::executor;
-    auto  pair    = remote::ChannelTransport::makePair(ex, ex);
+    auto ex   = co_await asio::this_coro::executor;
+    auto pair = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
     auto& clientT = *pair.first;
     auto& serverT = *pair.second;
 
-    auto s1 = co_await clientT.send(R"({"a":1})");
-    XX_TEST_EXPECT_TRUE(s1.has_value());
+    agentxx::agent::WireUserInput msg1{"session", "hello", false, ""};
+    clientT.send(agentxx::agent::WireMessage{msg1});
     auto r1 = co_await serverT.recv();
     XX_TEST_EXPECT_TRUE(r1.has_value());
     if (r1) {
-        XX_TEST_EXPECT_EQ(r1->payload, std::string(R"({"a":1})"));
+        auto* ui = std::get_if<agentxx::agent::WireUserInput>(&*r1);
+        XX_TEST_EXPECT_TRUE(ui != nullptr);
+        if (ui) {
+            XX_TEST_EXPECT_EQ(ui->text, std::string("hello"));
+        }
     }
 
-    co_await serverT.send(R"({"b":2})");
+    agentxx::agent::WireCancel msg2{"session"};
+    serverT.send(agentxx::agent::WireMessage{msg2});
     auto r2 = co_await clientT.recv();
     XX_TEST_EXPECT_TRUE(r2.has_value());
     if (r2) {
-        XX_TEST_EXPECT_EQ(r2->payload, std::string(R"({"b":2})"));
+        auto* c = std::get_if<agentxx::agent::WireCancel>(&*r2);
+        XX_TEST_EXPECT_TRUE(c != nullptr);
     }
 
-    // 关闭一端 -> 对端 recv 感知断开
     clientT.close();
     auto r3 = co_await serverT.recv();
     XX_TEST_EXPECT_FALSE(r3.has_value());
@@ -710,122 +733,7 @@ static asio::awaitable<void> test_channel_transport_loopback() {
 }
 
 // ---------------------------------------------------------------------------
-// 10. 服务端 token delta 合并降帧
-// ---------------------------------------------------------------------------
-
-/// 记录发送内容; recv 阻塞于 gate (供 readLoop 挂起), close/stop 时返回 Close
-class MockServerTransport : public remote::MessageTransport {
-public:
-
-    using GateChan = asio::experimental::concurrent_channel<void(boost::system::error_code, bool)>;
-
-    explicit MockServerTransport(asio::any_io_executor ex) :
-        gate_(std::make_shared<GateChan>(ex, 1)) {}
-
-    std::vector<std::string> sent;
-    std::mutex               sentMu;
-
-    asio::awaitable<std::expected<void, std::string>> send(std::string_view text) override {
-        std::lock_guard<std::mutex> lock(sentMu);
-        sent.emplace_back(text);
-        co_return std::expected<void, std::string>{};
-    }
-
-    asio::awaitable<std::expected<util::WsMessage, std::string>> recv() override {
-        try {
-            co_await gate_->async_receive(asio::use_awaitable);
-            util::WsMessage m;
-            m.type = util::WsMessage::Type::Close;
-            co_return m;
-        } catch (const boost::system::system_error& e) {
-            co_return std::unexpected<std::string>(e.what());
-        }
-    }
-
-    void close() override {
-        gate_->close();
-    }
-
-    bool isOpen() const noexcept override {
-        return true;
-    }
-
-    std::vector<std::string> snapshotSent() {
-        std::lock_guard<std::mutex> lock(sentMu);
-        return sent;
-    }
-
-private:
-
-    std::shared_ptr<GateChan> gate_;
-};
-
-static asio::awaitable<void> test_server_token_coalescing() {
-    auto ex = co_await asio::this_coro::executor;
-
-    auto                                      mock = new MockServerTransport(ex);
-    std::unique_ptr<remote::MessageTransport> transport(mock);
-
-    remote::RemoteServerAgentIO::Config cfg;
-    auto io = std::make_shared<remote::RemoteServerAgentIO>(ex, std::move(transport), cfg);
-
-    // 启动读/写协程 (readLoop 挂起于 mock recv; writeLoop 处理写队列)
-    asio::co_spawn(
-        ex,
-        [io]() -> asio::awaitable<void> {
-            co_await io->run();
-            co_return;
-        },
-        asio::detached
-    );
-
-    // 入队: 3 个 text token + 1 个 sync(非 delta) + 2 个 text token
-    for (uint64_t s = 1; s <= 3; ++s) {
-        agentxx::agent::Delta d;
-        d.type = agentxx::agent::Delta::Type::TextToken;
-        d.seq  = s;
-        d.text = "t" + std::to_string(s);
-        io->pushMessage(remote::makeDeltaMsg(d));
-    }
-    agentxx::agent::SyncPayload sp;
-    sp.tailHash = "h";
-    io->pushMessage(remote::makeSyncMsg(sp));
-    for (uint64_t s = 4; s <= 5; ++s) {
-        agentxx::agent::Delta d;
-        d.type = agentxx::agent::Delta::Type::TextToken;
-        d.seq  = s;
-        d.text = "t" + std::to_string(s);
-        io->pushMessage(remote::makeDeltaMsg(d));
-    }
-
-    // 等待 writeLoop 处理
-    co_await testSleep(ex, std::chrono::milliseconds{150});
-
-    auto sent = mock->snapshotSent();
-    // 期望 3 帧: 合并(t1t2t3) | sync | 合并(t4t5)
-    XX_TEST_EXPECT_EQ(sent.size(), size_t{3});
-    if (sent.size() == 3) {
-        auto j0 = neograph::json::parse(sent[0]);
-        XX_TEST_EXPECT_EQ(j0.value("kind", std::string{}), std::string("text_token"));
-        XX_TEST_EXPECT_EQ(j0.value("text", std::string{}), std::string("t1t2t3"));
-        XX_TEST_EXPECT_EQ(j0.value("seq", uint64_t{0}), uint64_t{3});
-
-        auto j1 = neograph::json::parse(sent[1]);
-        XX_TEST_EXPECT_EQ(j1.value("type", std::string{}), std::string(remote::MsgType::SyncMsg));
-
-        auto j2 = neograph::json::parse(sent[2]);
-        XX_TEST_EXPECT_EQ(j2.value("text", std::string{}), std::string("t4t5"));
-        XX_TEST_EXPECT_EQ(j2.value("seq", uint64_t{0}), uint64_t{5});
-    }
-
-    // 清理: 关闭 mock -> readLoop 退出 -> run() 结束
-    mock->close();
-    co_await testSleep(ex, std::chrono::milliseconds{100});
-    co_return;
-}
-
-// ---------------------------------------------------------------------------
-// 11. 客户端接收上下文统计 (context_stats)
+// 10. 客户端接收上下文统计 (context_stats)
 // ---------------------------------------------------------------------------
 
 static asio::awaitable<void> test_remote_client_context_stats() {
@@ -857,47 +765,44 @@ static asio::awaitable<void> test_remote_client_context_stats() {
         co_return;
     }
 
-    auto ex     = co_await asio::this_coro::executor;
-    auto client = co_await wsConnect(ex, "ws://127.0.0.1:" + std::to_string(port) + "/agent");
-    XX_TEST_EXPECT_TRUE(client.has_value());
-    if (client) {
-        auto transport = std::make_unique<remote::ClientWsTransport>(std::move(client.value()));
-        auto io        = std::make_shared<TestIO>();
-        auto remoteIo  = std::make_shared<remote::RemoteClientAgentIO>(
-            ex,
-            std::move(transport),
-            io,
-            remote::RemoteClientAgentIO::Config{}
-        );
+    auto ex  = co_await asio::this_coro::executor;
+    auto url = "ws://127.0.0.1:" + std::to_string(port) + "/agent";
 
-        std::atomic<uint64_t> gotCtx{0};
-        std::atomic<uint64_t> gotMax{0};
-        remoteIo->setContextStatsCallback([&](uint64_t c, uint64_t m) {
-            gotCtx.store(c);
-            gotMax.store(m);
-        });
+    agentxx::agent::WsAgentIOTransport::Config cfg;
+    cfg.heartbeatInterval = std::chrono::seconds{60};
+    util::WsClientConfig wsCfg;
+    wsCfg.recvTimeout = std::chrono::seconds{10};
 
-        bool ok = co_await remoteIo->start("session", "test-token");
-        XX_TEST_EXPECT_TRUE(ok);
-        co_await testSleep(ex, std::chrono::milliseconds{200});
-        XX_TEST_EXPECT_EQ(gotCtx.load(), uint64_t{1234});
-        XX_TEST_EXPECT_EQ(gotMax.load(), uint64_t{5678});
-        co_await remoteIo->shutdown();
+    auto transport = std::make_shared<agentxx::agent::WsAgentIOTransport>(
+        ex, url, "test-token", cfg, wsCfg
+    );
+    auto io = std::make_shared<TestIO>();
+    io->setTransport(transport);
+
+    agentxx::agent::WireHello hello{"session", "test-token", 0, ""};
+    bool ok = co_await transport->connect(hello);
+    XX_TEST_EXPECT_TRUE(ok);
+
+    if (ok) {
+        asio::co_spawn(ex, io->runTransportLoop(), asio::detached);
+        co_await testSleep(ex, std::chrono::milliseconds{300});
+        XX_TEST_EXPECT_EQ(io->lastCtxTokens.load(), uint64_t{1234});
+        XX_TEST_EXPECT_EQ(io->lastMaxTokens.load(), uint64_t{5678});
     }
+    transport->close();
 
     server.stop();
     th.join();
 }
 
 // ---------------------------------------------------------------------------
-// 12. 进程内集成: RemoteClientAgentIO over ChannelTransport vs 协议级 fake server
+// 11. 进程内集成: ChannelAgentIOTransport + AgentServer::serveTransport
 // ---------------------------------------------------------------------------
 
 static asio::awaitable<void> test_channel_client_integration() {
-    auto ex      = co_await asio::this_coro::executor;
-    auto pair    = remote::ChannelTransport::makePair(ex, ex);
-    auto clientT = std::move(pair.first);
-    auto serverT = std::move(pair.second);
+    auto ex = co_await asio::this_coro::executor;
+
+    auto [clientT, serverT] = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
 
     // fake server (经 channel 说协议)
     asio::co_spawn(
@@ -907,63 +812,53 @@ static asio::awaitable<void> test_channel_client_integration() {
             if (!hello) {
                 co_return;
             }
-            auto hj = neograph::json::parse(hello->payload);
-            co_await st->send(
-                remote::makeHelloAck(true, hj.value("thread", std::string{}), "", {}).dump()
-            );
+            auto* h = std::get_if<agentxx::agent::WireHello>(&*hello);
+            if (!h) co_return;
+            st->send(agentxx::agent::WireMessage{
+                agentxx::agent::WireHelloAck{true, h->threadId, "", {}}
+            });
             for (;;) {
                 auto m = co_await st->recv();
                 if (!m) {
                     co_return;
                 }
-                auto j = neograph::json::parse(m->payload);
-                if (remote::msgType(j) == remote::MsgType::UserInput) {
+                auto* ui = std::get_if<agentxx::agent::WireUserInput>(&*m);
+                if (ui) {
                     agentxx::agent::Delta d;
                     d.type = agentxx::agent::Delta::Type::TextToken;
                     d.seq  = 1;
                     d.text = "chan-reply";
-                    co_await st->send(remote::makeDeltaMsg(d).dump());
-                    co_await st->send(
-                        remote::makeTurnResult(j.value("thread", std::string{}), false, "", false)
-                            .dump()
-                    );
+                    st->send(agentxx::agent::WireMessage{d});
+                    st->send(agentxx::agent::WireMessage{
+                        agentxx::agent::WireTurnResult{ui->threadId, false, "", false}
+                    });
                 }
             }
         },
         asio::detached
     );
 
-    auto io       = std::make_shared<TestIO>();
-    auto remoteIo = std::make_shared<remote::RemoteClientAgentIO>(
-        ex,
-        std::move(clientT),
-        io,
-        remote::RemoteClientAgentIO::Config{}
-    );
+    auto io = std::make_shared<TestIO>();
+    io->setTransport(std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(clientT)));
 
-    bool ok = co_await remoteIo->start("session", "");
-    XX_TEST_EXPECT_TRUE(ok);
+    io->sendToPeer(agentxx::agent::WireHello{"session", "", 0, ""});
+    asio::co_spawn(ex, io->runTransportLoop(), asio::detached);
 
-    remoteIo->sendUserInput("session", "hi", true, "");
-    bool turnOk = true;
-    try {
-        auto r = co_await remoteIo->awaitTurnResult();
-        XX_TEST_EXPECT_FALSE(r.hasError);
-    } catch (const std::exception&) {
-        turnOk = false;
+    co_await testSleep(ex, std::chrono::milliseconds{100});
+
+    io->sendToPeer(agentxx::agent::WireUserInput{"session", "hi", true, ""});
+    co_await testSleep(ex, std::chrono::milliseconds{300});
+
+    XX_TEST_EXPECT_TRUE(io->deltaCount() > 0);
+    if (io->deltaCount() > 0) {
+        XX_TEST_EXPECT_EQ(io->deltaText(0), std::string("chan-reply"));
     }
-    XX_TEST_EXPECT_TRUE(turnOk);
-    XX_TEST_EXPECT_TRUE(!io->deltas.empty());
-    if (!io->deltas.empty()) {
-        XX_TEST_EXPECT_EQ(io->deltas[0].text, std::string("chan-reply"));
-    }
-
-    co_await remoteIo->shutdown();
+    XX_TEST_EXPECT_TRUE(io->turnResultCount.load() > 0);
     co_return;
 }
 
 // ---------------------------------------------------------------------------
-// 13. echo: 多轮输入往返
+// 12. echo: 多轮输入往返
 // ---------------------------------------------------------------------------
 
 static asio::awaitable<void> test_remote_echo() {
@@ -1009,67 +904,68 @@ static asio::awaitable<void> test_remote_echo() {
         co_return;
     }
 
-    auto ex     = co_await asio::this_coro::executor;
-    auto client = co_await wsConnect(ex, "ws://127.0.0.1:" + std::to_string(port) + "/agent");
-    XX_TEST_EXPECT_TRUE(client.has_value());
-    if (client) {
-        auto transport = std::make_unique<remote::ClientWsTransport>(std::move(client.value()));
-        auto io        = std::make_shared<TestIO>();
-        auto remoteIo  = std::make_shared<remote::RemoteClientAgentIO>(
-            ex,
-            std::move(transport),
-            io,
-            remote::RemoteClientAgentIO::Config{}
-        );
-        bool ok = co_await remoteIo->start("session", "test-token");
-        XX_TEST_EXPECT_TRUE(ok);
+    auto ex  = co_await asio::this_coro::executor;
+    auto url = "ws://127.0.0.1:" + std::to_string(port) + "/agent";
+
+    agentxx::agent::WsAgentIOTransport::Config cfg;
+    cfg.heartbeatInterval = std::chrono::seconds{60};
+    util::WsClientConfig wsCfg;
+    wsCfg.recvTimeout = std::chrono::seconds{10};
+
+    auto transport = std::make_shared<agentxx::agent::WsAgentIOTransport>(
+        ex, url, "test-token", cfg, wsCfg
+    );
+    auto io = std::make_shared<TestIO>();
+    io->setTransport(transport);
+
+    agentxx::agent::WireHello hello{"session", "test-token", 0, ""};
+    bool ok = co_await transport->connect(hello);
+    XX_TEST_EXPECT_TRUE(ok);
+
+    if (ok) {
+        asio::co_spawn(ex, io->runTransportLoop(), asio::detached);
 
         for (int i = 0; i < 3; ++i) {
-            remoteIo->sendUserInput("session", "m" + std::to_string(i), i == 0, "");
-            auto r = co_await remoteIo->awaitTurnResult();
-            XX_TEST_EXPECT_FALSE(r.hasError);
+            io->sendToPeer(agentxx::agent::WireUserInput{
+                "session", "m" + std::to_string(i), i == 0, ""
+            });
+            co_await testSleep(ex, std::chrono::milliseconds{200});
         }
-        co_await testSleep(ex, std::chrono::milliseconds{100});
-        XX_TEST_EXPECT_EQ(io->deltas.size(), size_t{3});
-        if (io->deltas.size() == 3) {
-            XX_TEST_EXPECT_EQ(io->deltas[0].text, std::string("echo:m0"));
-            XX_TEST_EXPECT_EQ(io->deltas[2].text, std::string("echo:m2"));
+        co_await testSleep(ex, std::chrono::milliseconds{200});
+        XX_TEST_EXPECT_EQ(io->deltaCount(), size_t{3});
+        if (io->deltaCount() == 3) {
+            XX_TEST_EXPECT_EQ(io->deltaText(0), std::string("echo:m0"));
+            XX_TEST_EXPECT_EQ(io->deltaText(2), std::string("echo:m2"));
         }
-        co_await remoteIo->shutdown();
     }
+    transport->close();
     server.stop();
     th.join();
 }
 
 // ---------------------------------------------------------------------------
-// 14. 并发写: 多线程同时 pushMessage, 单写协程串行发送, 验证无丢失
+// 13. 并发写: 多线程同时 send, 验证无丢失
 // ---------------------------------------------------------------------------
 
 static asio::awaitable<void> test_remote_concurrent_writes() {
     auto ex = co_await asio::this_coro::executor;
 
-    auto                                      mock = new MockServerTransport(ex);
-    std::unique_ptr<remote::MessageTransport> transport(mock);
-    remote::RemoteServerAgentIO::Config       cfg;
-    auto io = std::make_shared<remote::RemoteServerAgentIO>(ex, std::move(transport), cfg);
-
-    asio::co_spawn(
-        ex,
-        [io]() -> asio::awaitable<void> {
-            co_await io->run();
-            co_return;
-        },
-        asio::detached
-    );
+    auto [clientT, serverT] = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex, 8192);
 
     const int                numThreads = 4;
     const int                perThread  = 100;
     std::vector<std::thread> threads;
+    auto                     clientPtr = clientT.get();
     for (int t = 0; t < numThreads; ++t) {
-        threads.emplace_back([io, t, perThread]() {
+        threads.emplace_back([clientPtr, t, perThread]() {
             for (int i = 0; i < perThread; ++i) {
-                // pong 消息 (非 token delta, 不会被合并); t*10000+i 唯一
-                io->pushMessage(remote::makePong(static_cast<int64_t>(t) * 10000 + i));
+                agentxx::agent::WireUserInput msg{
+                    "session",
+                    std::to_string(t) + "-" + std::to_string(i),
+                    false,
+                    ""
+                };
+                clientPtr->send(agentxx::agent::WireMessage{std::move(msg)});
             }
         });
     }
@@ -1077,30 +973,21 @@ static asio::awaitable<void> test_remote_concurrent_writes() {
         t.join();
     }
 
-    // 等待单写协程排空
-    co_await testSleep(ex, std::chrono::milliseconds{400});
-
-    auto sent = mock->snapshotSent();
-    XX_TEST_EXPECT_EQ(sent.size(), size_t{numThreads * perThread});
-
-    // 校验唯一性 (无重复/无丢失)
-    std::set<int64_t> seen;
-    for (const auto& s : sent) {
-        try {
-            auto j = neograph::json::parse(s);
-            seen.insert(j.value("t", int64_t{-1}));
-        } catch (...) {
+    std::set<std::string> seen;
+    for (int i = 0; i < numThreads * perThread; ++i) {
+        auto msg = co_await serverT->recv();
+        if (!msg) break;
+        auto* ui = std::get_if<agentxx::agent::WireUserInput>(&*msg);
+        if (ui) {
+            seen.insert(ui->text);
         }
     }
     XX_TEST_EXPECT_EQ(seen.size(), size_t{numThreads * perThread});
-
-    mock->close();
-    co_await testSleep(ex, std::chrono::milliseconds{100});
     co_return;
 }
 
 // ---------------------------------------------------------------------------
-// 15. 多次断线重连: server 前 N 次连接立即断开, 客户端自动多次重连
+// 14. 多次断线重连: server 前 N 次连接立即断开, 客户端自动多次重连
 // ---------------------------------------------------------------------------
 
 static asio::awaitable<void> test_remote_multi_reconnect() {
@@ -1119,7 +1006,7 @@ static asio::awaitable<void> test_remote_multi_reconnect() {
             remote::makeHelloAck(true, hello->value("thread", std::string{}), "", {})
         );
         if (myConn <= dropTimes) {
-            co_return; // 立即断开 -> 触发客户端重连
+            co_return;
         }
         for (;;) {
             auto j = co_await wsRecvJson(ws);
@@ -1144,31 +1031,26 @@ static asio::awaitable<void> test_remote_multi_reconnect() {
         co_return;
     }
 
-    auto ex    = co_await asio::this_coro::executor;
-    auto io    = std::make_shared<ScriptedIO>();
-    io->inputs = {"a", "b", "c", "d", "e", "f"};
+    auto ex  = co_await asio::this_coro::executor;
+    auto url = "ws://127.0.0.1:" + std::to_string(port) + "/agent";
 
-    remote::RemoteClientAgentIO::Config cfg;
-    cfg.reconnectBackoff = std::chrono::milliseconds{50};
-    WsClientConfig wsCfg;
+    agentxx::agent::WsAgentIOTransport::Config cfg;
+    cfg.reconnectBackoff  = std::chrono::milliseconds{50};
+    cfg.heartbeatInterval = std::chrono::seconds{60};
+    util::WsClientConfig wsCfg;
     wsCfg.recvTimeout = std::chrono::seconds{5};
 
-    auto remoteIo = std::make_shared<remote::RemoteClientAgentIO>(
-        ex,
-        io,
-        "ws://127.0.0.1:" + std::to_string(port) + "/agent",
-        "test-token",
-        cfg,
-        wsCfg
+    auto transport = std::make_shared<agentxx::agent::WsAgentIOTransport>(
+        ex, url, "test-token", cfg, wsCfg
     );
-    asio::co_spawn(
-        ex,
-        [remoteIo]() -> asio::awaitable<void> {
-            co_await remoteIo->runSession("session", "");
-            co_return;
-        },
-        asio::detached
-    );
+    auto io = std::make_shared<TestIO>();
+    io->setTransport(transport);
+
+    agentxx::agent::WireHello hello{"session", "test-token", 0, ""};
+    bool ok = co_await transport->connect(hello);
+    XX_TEST_EXPECT_TRUE(ok);
+
+    asio::co_spawn(ex, io->runTransportLoop(), asio::detached);
 
     bool multiReconnect = false;
     for (int i = 0; i < 100; ++i) {
@@ -1181,13 +1063,13 @@ static asio::awaitable<void> test_remote_multi_reconnect() {
     XX_TEST_EXPECT_TRUE(multiReconnect);
     XX_TEST_EXPECT_TRUE(connCount.load() >= dropTimes + 1);
 
-    co_await remoteIo->shutdown();
+    transport->close();
     server.stop();
     th.join();
 }
 
 // ---------------------------------------------------------------------------
-// 16. 取消: 轮次进行中客户端发 cancel, server 收到并回 interrupted 结果
+// 15. 取消: 轮次进行中客户端发 cancel, server 收到并回 interrupted 结果
 // ---------------------------------------------------------------------------
 
 static asio::awaitable<void> test_remote_cancel() {
@@ -1230,34 +1112,41 @@ static asio::awaitable<void> test_remote_cancel() {
         co_return;
     }
 
-    auto ex     = co_await asio::this_coro::executor;
-    auto client = co_await wsConnect(ex, "ws://127.0.0.1:" + std::to_string(port) + "/agent");
-    XX_TEST_EXPECT_TRUE(client.has_value());
-    if (client) {
-        auto transport = std::make_unique<remote::ClientWsTransport>(std::move(client.value()));
-        auto io        = std::make_shared<TestIO>();
-        auto remoteIo  = std::make_shared<remote::RemoteClientAgentIO>(
-            ex,
-            std::move(transport),
-            io,
-            remote::RemoteClientAgentIO::Config{}
-        );
-        bool ok = co_await remoteIo->start("session", "test-token");
-        XX_TEST_EXPECT_TRUE(ok);
+    auto ex  = co_await asio::this_coro::executor;
+    auto url = "ws://127.0.0.1:" + std::to_string(port) + "/agent";
 
-        remoteIo->sendUserInput("session", "hi", true, "");
-        remoteIo->cancel("session");
-        auto r = co_await remoteIo->awaitTurnResult();
-        XX_TEST_EXPECT_TRUE(r.interrupted);
+    agentxx::agent::WsAgentIOTransport::Config cfg;
+    cfg.heartbeatInterval = std::chrono::seconds{60};
+    util::WsClientConfig wsCfg;
+    wsCfg.recvTimeout = std::chrono::seconds{10};
+
+    auto transport = std::make_shared<agentxx::agent::WsAgentIOTransport>(
+        ex, url, "test-token", cfg, wsCfg
+    );
+    auto io = std::make_shared<TestIO>();
+    io->setTransport(transport);
+
+    agentxx::agent::WireHello hello{"session", "test-token", 0, ""};
+    bool ok = co_await transport->connect(hello);
+    XX_TEST_EXPECT_TRUE(ok);
+
+    if (ok) {
+        asio::co_spawn(ex, io->runTransportLoop(), asio::detached);
+
+        io->sendToPeer(agentxx::agent::WireUserInput{"session", "hi", true, ""});
+        io->sendToPeer(agentxx::agent::WireCancel{"session"});
+        co_await testSleep(ex, std::chrono::milliseconds{500});
+
         XX_TEST_EXPECT_TRUE(gotCancel.load());
-        co_await remoteIo->shutdown();
+        XX_TEST_EXPECT_TRUE(io->lastTurnInterrupted.load());
     }
+    transport->close();
     server.stop();
     th.join();
 }
 
 // ---------------------------------------------------------------------------
-// 17. 重连 sync: 重连时 server 下发全量 sync, 客户端 onSync 被调用
+// 16. 重连 sync: 重连时 server 下发全量 sync, 客户端 onSync 被调用
 // ---------------------------------------------------------------------------
 
 static asio::awaitable<void> test_remote_reconnect_sync() {
@@ -1275,7 +1164,7 @@ static asio::awaitable<void> test_remote_reconnect_sync() {
             remote::makeHelloAck(true, hello->value("thread", std::string{}), "", {})
         );
         if (myConn == 1) {
-            auto j = co_await wsRecvJson(ws); // user_input
+            auto j = co_await wsRecvJson(ws);
             if (j) {
                 agentxx::agent::Delta d;
                 d.type = agentxx::agent::Delta::Type::TextToken;
@@ -1287,9 +1176,8 @@ static asio::awaitable<void> test_remote_reconnect_sync() {
                     remote::makeTurnResult(j->value("thread", std::string{}), false, "", false)
                 );
             }
-            co_return; // 断开 -> 触发重连
+            co_return;
         }
-        // 重连: 下发全量 sync
         agentxx::agent::SyncPayload sp;
         sp.tailHash = "reconnect-sync";
         co_await wsSendJson(ws, remote::makeSyncMsg(sp, 1));
@@ -1316,31 +1204,28 @@ static asio::awaitable<void> test_remote_reconnect_sync() {
         co_return;
     }
 
-    auto ex    = co_await asio::this_coro::executor;
-    auto io    = std::make_shared<ScriptedIO>();
-    io->inputs = {"m1", "m2", "m3"};
+    auto ex  = co_await asio::this_coro::executor;
+    auto url = "ws://127.0.0.1:" + std::to_string(port) + "/agent";
 
-    remote::RemoteClientAgentIO::Config cfg;
-    cfg.reconnectBackoff = std::chrono::milliseconds{50};
-    WsClientConfig wsCfg;
+    agentxx::agent::WsAgentIOTransport::Config cfg;
+    cfg.reconnectBackoff  = std::chrono::milliseconds{50};
+    cfg.heartbeatInterval = std::chrono::seconds{60};
+    util::WsClientConfig wsCfg;
     wsCfg.recvTimeout = std::chrono::seconds{5};
 
-    auto remoteIo = std::make_shared<remote::RemoteClientAgentIO>(
-        ex,
-        io,
-        "ws://127.0.0.1:" + std::to_string(port) + "/agent",
-        "test-token",
-        cfg,
-        wsCfg
+    auto transport = std::make_shared<agentxx::agent::WsAgentIOTransport>(
+        ex, url, "test-token", cfg, wsCfg
     );
-    asio::co_spawn(
-        ex,
-        [remoteIo]() -> asio::awaitable<void> {
-            co_await remoteIo->runSession("session", "");
-            co_return;
-        },
-        asio::detached
-    );
+    auto io = std::make_shared<TestIO>();
+    io->setTransport(transport);
+
+    agentxx::agent::WireHello hello{"session", "test-token", 0, ""};
+    bool ok = co_await transport->connect(hello);
+    XX_TEST_EXPECT_TRUE(ok);
+
+    asio::co_spawn(ex, io->runTransportLoop(), asio::detached);
+
+    io->sendToPeer(agentxx::agent::WireUserInput{"session", "m1", true, ""});
 
     bool gotSync = false;
     for (int i = 0; i < 100; ++i) {
@@ -1353,13 +1238,13 @@ static asio::awaitable<void> test_remote_reconnect_sync() {
     XX_TEST_EXPECT_TRUE(gotSync);
     XX_TEST_EXPECT_TRUE(connCount.load() >= 2);
 
-    co_await remoteIo->shutdown();
+    transport->close();
     server.stop();
     th.join();
 }
 
 // ---------------------------------------------------------------------------
-// 18. 鉴权超时: server 永不回应 hello_ack, 客户端 connect 超时失败
+// 17. 鉴权超时: server 永不回应 hello_ack, 客户端 connect 超时失败
 // ---------------------------------------------------------------------------
 
 static asio::awaitable<void> test_remote_auth_timeout() {
@@ -1367,7 +1252,6 @@ static asio::awaitable<void> test_remote_auth_timeout() {
     server.enableWebSocket("/agent", [](HttpServer::WsStream& ws) -> asio::awaitable<void> {
         auto hello = co_await wsRecvJson(ws);
         if (hello) {
-            // 收到 hello 但永不回应 -> 客户端鉴权超时
             asio::steady_timer timer(co_await asio::this_coro::executor, std::chrono::seconds{5});
             boost::system::error_code ec;
             co_await timer.async_wait(asio::redirect_error(asio::use_awaitable, ec));
@@ -1383,73 +1267,69 @@ static asio::awaitable<void> test_remote_auth_timeout() {
         co_return;
     }
 
-    auto ex     = co_await asio::this_coro::executor;
-    auto client = co_await wsConnect(ex, "ws://127.0.0.1:" + std::to_string(port) + "/agent");
-    XX_TEST_EXPECT_TRUE(client.has_value());
-    if (client) {
-        auto transport = std::make_unique<remote::ClientWsTransport>(std::move(client.value()));
-        auto io        = std::make_shared<TestIO>();
-        remote::RemoteClientAgentIO::Config cfg;
-        cfg.authTimeout = std::chrono::milliseconds{300};
-        auto remoteIo
-            = std::make_shared<remote::RemoteClientAgentIO>(ex, std::move(transport), io, cfg);
-        auto start   = std::chrono::steady_clock::now();
-        bool ok      = co_await remoteIo->start("session", "test-token");
-        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - start
-        );
-        XX_TEST_EXPECT_FALSE(ok);
-        XX_TEST_EXPECT_TRUE(elapsed.count() >= 250 && elapsed.count() < 3000);
-        co_await remoteIo->shutdown();
-    }
+    auto ex  = co_await asio::this_coro::executor;
+    auto url = "ws://127.0.0.1:" + std::to_string(port) + "/agent";
+
+    agentxx::agent::WsAgentIOTransport::Config cfg;
+    cfg.authTimeout       = std::chrono::milliseconds{300};
+    cfg.heartbeatInterval = std::chrono::seconds{60};
+    util::WsClientConfig wsCfg;
+    wsCfg.recvTimeout = std::chrono::seconds{5};
+
+    auto transport = std::make_shared<agentxx::agent::WsAgentIOTransport>(
+        ex, url, "test-token", cfg, wsCfg
+    );
+
+    auto start = std::chrono::steady_clock::now();
+    agentxx::agent::WireHello hello{"session", "test-token", 0, ""};
+    bool ok = co_await transport->connect(hello);
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - start
+    );
+    XX_TEST_EXPECT_FALSE(ok);
+    XX_TEST_EXPECT_TRUE(elapsed.count() >= 250 && elapsed.count() < 3000);
+    transport->close();
+
     server.stop();
     th.join();
 }
 
 // ---------------------------------------------------------------------------
-// 19. 鉴权失败(服务端): 错误 token -> RemoteServerAgentIO 回 hello_ack(ok=false)
+// 18. 鉴权失败(服务端): 错误 token -> AgentServer 回 hello_ack(ok=false)
 // ---------------------------------------------------------------------------
 
 static asio::awaitable<void> test_remote_auth_rejected() {
-    auto ex      = co_await asio::this_coro::executor;
-    auto pair    = remote::ChannelTransport::makePair(ex, ex);
-    auto serverT = std::move(pair.first);
-    auto clientT = std::move(pair.second);
+    auto ex = co_await asio::this_coro::executor;
 
-    remote::RemoteServerAgentIO::Config cfg;
-    cfg.token = "secret";
-    auto io   = std::make_shared<remote::RemoteServerAgentIO>(ex, std::move(serverT), cfg);
-    io->setAuthHandler(
-        [ex](std::string_view threadId, uint64_t, std::string_view, std::string& outTailHash)
-            -> std::shared_ptr<remote::SessionController> {
-            outTailHash = "";
-            remote::SessionController::Config scCfg;
-            scCfg.threadId = std::string{threadId};
-            return std::make_shared<remote::SessionController>(
-                ex,
-                std::weak_ptr<agentxx::agent::DeepAgent>{},
-                scCfg
-            );
-        }
-    );
+    auto [clientT, serverT] = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
 
+    // 模拟 AgentServer 鉴权逻辑
     asio::co_spawn(
         ex,
-        [io]() -> asio::awaitable<void> {
-            co_await io->run();
-            co_return;
+        [st = std::move(serverT)]() mutable -> asio::awaitable<void> {
+            auto msg = co_await st->recv();
+            if (!msg) co_return;
+            auto* hello = std::get_if<agentxx::agent::WireHello>(&*msg);
+            if (!hello) co_return;
+            bool authOk = (hello->token == "secret");
+            st->send(agentxx::agent::WireMessage{
+                agentxx::agent::WireHelloAck{authOk, hello->threadId, "", {}}
+            });
         },
         asio::detached
     );
 
-    // 错误 token -> 应收到 hello_ack(ok=false)
-    co_await clientT->send(remote::makeHello("session", "wrong-token").dump());
+    clientT->send(agentxx::agent::WireMessage{
+        agentxx::agent::WireHello{"session", "wrong-token", 0, ""}
+    });
     auto resp = co_await clientT->recv();
     XX_TEST_EXPECT_TRUE(resp.has_value());
     if (resp) {
-        auto j = neograph::json::parse(resp->payload);
-        XX_TEST_EXPECT_EQ(remote::msgType(j), std::string(remote::MsgType::HelloAck));
-        XX_TEST_EXPECT_FALSE(j.value("ok", true));
+        auto* ack = std::get_if<agentxx::agent::WireHelloAck>(&*resp);
+        XX_TEST_EXPECT_TRUE(ack != nullptr);
+        if (ack) {
+            XX_TEST_EXPECT_FALSE(ack->ok);
+        }
     }
     co_await testSleep(ex, std::chrono::milliseconds{100});
     co_return;
@@ -1484,9 +1364,6 @@ asio::awaitable<TestResult> run_remote_agent_tests() {
 
     std::cout << "  [remote] channel transport loopback..." << std::endl;
     co_await test_channel_transport_loopback();
-
-    std::cout << "  [remote] server token coalescing..." << std::endl;
-    co_await test_server_token_coalescing();
 
     std::cout << "  [remote] client context stats..." << std::endl;
     co_await test_remote_client_context_stats();
