@@ -173,10 +173,9 @@ private:
     std::shared_ptr<BoolChannel> permissionChannel_;
     std::shared_ptr<TUILogSink>  logSink_;
 
-    /// 远程模式取消回调 (未设置则用本地 cancelToken)
-    std::function<void()> cancelCallback_;
-    /// 模型切换回调 (通知远程 server 切换模型)
-    std::function<void(const std::string&)> selectModelCallback_;
+    /// 控制目标: 取消/模型切换等命令经此 AgentIOBase 接口路由 (远程模式为 RemoteClientAgentIO)
+    /// - 未设置时取消使用本地 session cancelToken
+    std::weak_ptr<agentxx::agent::AgentIOBase> controlTarget_;
     /// 远程 Agentxx 地址 (空表示内置 Agentxx; 非空为远程 http[s]://ip:port)
     std::string remoteUrl_;
 
@@ -273,15 +272,10 @@ public:
     void start();
     void stop();
 
-    /// 设置取消当前轮次的回调 (远程模式下路由为发送 cancel 消息到 server)
-    /// - 未设置时使用本地 session cancelToken
-    void setCancelCallback(std::function<void()> cb) {
-        cancelCallback_ = std::move(cb);
-    }
-
-    /// 设置模型切换回调 (通知远程 server 切换模型)
-    void setSelectModelCallback(std::function<void(const std::string&)> cb) {
-        selectModelCallback_ = std::move(cb);
+    /// 设置控制目标 (远程模式下为 RemoteClientAgentIO; 取消/模型切换经其 AgentIOBase 接口路由)
+    /// - 未设置时取消使用本地 session cancelToken
+    void setControlTarget(std::shared_ptr<agentxx::agent::AgentIOBase> target) {
+        controlTarget_ = std::move(target);
     }
 
     /// 设置远程 Agentxx 地址 (供信息侧边栏显示运行模式; 不调用则为内置 Agentxx)
@@ -298,4 +292,6 @@ public:
                     const std::string& interruptValue,
                     const std::string& interruptArgJson
                 ) override;
+    void requestCancel(const std::string& threadId) override;
+    void requestSelectModel(const std::string& threadId, const std::string& model) override;
 };

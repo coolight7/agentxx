@@ -119,11 +119,6 @@ asio::awaitable<void> SessionController::run() {
         }
 
         turnActive_.store(true, std::memory_order_release);
-        auto cancelToken = std::make_shared<neograph::graph::CancelToken>();
-        {
-            std::lock_guard<std::mutex> lock(cancelMutex_);
-            currentCancel_ = cancelToken;
-        }
 
         auto agent = agent_.lock();
         if (!agent) {
@@ -151,10 +146,6 @@ asio::awaitable<void> SessionController::run() {
         }
 
         turnActive_.store(false, std::memory_order_release);
-        {
-            std::lock_guard<std::mutex> lock(cancelMutex_);
-            currentCancel_.reset();
-        }
     }
     running_.store(false, std::memory_order_release);
 }
@@ -249,13 +240,12 @@ void SessionController::resolveInterrupt(int64_t id, neograph::json result) {
 }
 
 void SessionController::onCancel() {
-    std::shared_ptr<neograph::graph::CancelToken> tok;
-    {
-        std::lock_guard<std::mutex> lock(cancelMutex_);
-        tok = currentCancel_;
-    }
-    if (tok) {
-        tok->cancel();
+    auto sess = session();
+    if (sess) {
+        auto token = sess->getCancelToken();
+        if (token) {
+            token->cancel();
+        }
     }
 }
 

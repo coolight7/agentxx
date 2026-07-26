@@ -406,6 +406,14 @@ void RemoteClientAgentIO::cancel(const std::string& threadId) {
     enqueue(makeCancel(threadId));
 }
 
+void RemoteClientAgentIO::requestCancel(const std::string& threadId) {
+    cancel(threadId);
+}
+
+void RemoteClientAgentIO::requestSelectModel(const std::string& threadId, const std::string& model) {
+    selectModel(threadId, model);
+}
+
 asio::awaitable<void> RemoteClientAgentIO::shutdown() {
     stopped_.store(true, std::memory_order_release);
     breakConnection();

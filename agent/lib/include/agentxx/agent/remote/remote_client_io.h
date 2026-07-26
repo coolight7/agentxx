@@ -73,6 +73,8 @@ public:
                     const std::string& interruptValue,
                     const std::string& interruptArgJson
                 ) override;
+    void requestCancel(const std::string& threadId) override;
+    void requestSelectModel(const std::string& threadId, const std::string& model) override;
 
     // ----- 手动模式: 调用方驱动输入循环 -----
 

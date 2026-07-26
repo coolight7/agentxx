@@ -6,7 +6,6 @@
 #include "asio/this_coro.hpp"
 #include "fmt/format.h"
 #include "neograph/json.h"
-#include <iostream>
 #include <memory>
 #include <optional>
 #include <string>
@@ -38,6 +37,12 @@ public:
         const std::string& interruptValue,
         const std::string& interruptArgJson
     ) = 0;
+
+    /// 请求取消指定会话当前轮次 (默认无操作; 远程 IO 覆写以发送 cancel 消息)
+    virtual void requestCancel(const std::string& /*threadId*/) {}
+
+    /// 请求切换指定会话的模型 (默认无操作; 远程 IO 覆写以发送 selectModel 消息)
+    virtual void requestSelectModel(const std::string& /*threadId*/, const std::string& /*model*/) {}
 
     /// 在会话总线上注册本 IO 的事件处理器 (interrupt / permission)
     /// - 重复调用会先移除上一次注册的处理器, 避免 handler 累积、泄漏与悬空 this

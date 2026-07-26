@@ -38,7 +38,6 @@
 #include "neograph/mcp/client.h"
 #include <chrono>
 #include <functional>
-#include <iostream>
 #include <memory>
 #include <sstream>
 

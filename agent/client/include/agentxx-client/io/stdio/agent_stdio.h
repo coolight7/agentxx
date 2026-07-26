@@ -3,6 +3,7 @@
 #include "agentxx/agent/agent_io.h"
 #include "asio/awaitable.hpp"
 #include "neograph/json.h"
+#include <iostream>
 #include <optional>
 #include <string>
 

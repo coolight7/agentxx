@@ -4,7 +4,6 @@
 #include "agentxx/agent/conversation_types.h"
 #include <atomic>
 #include <functional>
-#include <iostream>
 #include <map>
 #include <memory>
 #include <mutex>

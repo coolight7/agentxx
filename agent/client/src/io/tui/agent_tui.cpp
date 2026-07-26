@@ -417,15 +417,26 @@ void AgentTUI::stop() {
     }
 }
 
-void AgentTUI::cancelCurrentRun() {
-    if (cancelCallback_) {
-        cancelCallback_();
+void AgentTUI::requestCancel(const std::string& threadId) {
+    if (auto target = controlTarget_.lock()) {
+        target->requestCancel(threadId);
     } else if (session_) {
         auto token = session_->getCancelToken();
         if (token) {
             token->cancel();
         }
     }
+}
+
+void AgentTUI::requestSelectModel(const std::string& threadId, const std::string& model) {
+    if (auto target = controlTarget_.lock()) {
+        target->requestSelectModel(threadId, model);
+    }
+}
+
+void AgentTUI::cancelCurrentRun() {
+    requestCancel(threadId_);
+    std::lock_guard<std::mutex> lock(mutex_);
     if (!currentToken_.empty()) {
         messages_.push_back({currentTokenRole_, currentToken_});
         if (currentTokenRole_ == Message::Role::Thinking) {

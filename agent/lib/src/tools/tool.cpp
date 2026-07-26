@@ -47,7 +47,7 @@ std::optional<agentxx::middleware::SummarizationToolHandle>
     // };
 }
 
-XXToolWarp::XXToolWarp(
+XXToolWrap::XXToolWrap(
     std::unique_ptr<neograph::Tool>&&                           in_inner,
     std::weak_ptr<agentxx::agent::AgentContext>                 in_agentContext,
     bool                                                        in_autoSummaryOutput,
@@ -65,15 +65,15 @@ XXToolWarp::XXToolWarp(
     inner(std::move(in_inner)),
     summarizationHandle(in_summarizationHandle) {}
 
-std::string XXToolWarp::get_name() const {
+std::string XXToolWrap::get_name() const {
     return inner->get_name();
 }
 
-neograph::ChatTool XXToolWarp::get_definition() const {
+neograph::ChatTool XXToolWrap::get_definition() const {
     return inner->get_definition();
 }
 
-asio::awaitable<std::string> XXToolWarp::execute_async(const neograph::json& arguments) {
+asio::awaitable<std::string> XXToolWrap::execute_async(const neograph::json& arguments) {
     co_return co_await inner->real_execute_async(arguments);
 }
 

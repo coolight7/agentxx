@@ -3,7 +3,7 @@
 #include "agentxx/nodes/agentcall.h"
 #include "agentxx/nodes/modelcall.h"
 #include "agentxx/nodes/toolcall.h"
-#include "agentxx/nodes/warp_handle.h"
+#include "agentxx/nodes/wrap_handle.h"
 #include "fmt/format.h"
 #include <memory>
 #include <sstream>

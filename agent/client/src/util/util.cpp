@@ -31,7 +31,7 @@ std::shared_ptr<agentxx::agent::AgentConfig> makeSubAgentConfig(
     cfg->agentName                             = base->agentName + "_sub";
     cfg->agentNameView                         = base->agentNameView;
     cfg->prompt.systemPrompt                   = systemPrompt;
-    cfg->logPringToolcall                      = false;
+    cfg->logPrintToolcall                      = false;
     cfg->logPrintMessagesBeforeLLM             = false;
     cfg->logPrintSummarizationResultTokenCount = false;
     return cfg;

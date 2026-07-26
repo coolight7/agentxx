@@ -7,7 +7,6 @@
 #include <any>
 #include <cstdlib>
 #include <functional>
-#include <iostream>
 #include <memory>
 #include <neograph/llm/rate_limited_provider.h>
 #include <neograph/llm/schema_provider.h>
@@ -23,7 +22,7 @@ namespace asio = ::boost::asio;
 namespace agentxx {
 namespace tools {
 class XXToolBase;
-class XXToolWarp;
+class XXToolWrap;
 } // namespace tools
 
 namespace middleware {
@@ -231,7 +230,7 @@ public:
 };
 
 template<BaseMiddlewareStateType T>
-class MiddlewareWarpHandle : public BaseMiddlewareHandle<T> {
+class MiddlewareWrapHandle : public BaseMiddlewareHandle<T> {
 public:
 
     onGraphNodeBeforeCallFunc onAgentcallStart;
@@ -242,7 +241,7 @@ public:
     onGraphNodeBeforeCallFunc onToolcallStart;
     onGraphNodeAfterCallFunc  onToolcallEnd;
 
-    MiddlewareWarpHandle(
+    MiddlewareWrapHandle(
         std::string_view                            in_name,
         std::weak_ptr<agentxx::agent::AgentContext> in_agentContext,
         const onGraphNodeBeforeCallFunc&            in_onAgentcallStart = nullptr,

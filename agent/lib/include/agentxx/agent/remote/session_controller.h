@@ -172,10 +172,6 @@ private:
     std::mutex                          graceMutex_;
     std::shared_ptr<asio::steady_timer> graceTimer_;
 
-    // 当前轮次取消令牌
-    std::mutex                                    cancelMutex_;
-    std::shared_ptr<neograph::graph::CancelToken> currentCancel_;
-
     std::atomic<bool> running_{false};
     std::atomic<bool> turnActive_{false};
     std::atomic<bool> stopped_{false};
