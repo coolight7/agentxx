@@ -216,7 +216,7 @@ private:
     std::unique_ptr<util::AsyncMutex>                            stdioWriteMutex_;
     std::mutex                                                   pendingMutex_;
     std::unordered_map<int64_t, std::shared_ptr<PendingRequest>> pending_;
-    boost::system::error_code                                    ignoreEc_;
+    neograph_asio_error_code                                     ignoreEc_;
 };
 
 // ---------------------------------------------------------------------------

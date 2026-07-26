@@ -40,9 +40,8 @@ class SessionController : public AgentIOBase,
 public:
 
     struct Config {
-        std::string               threadId          = "session";
-        std::chrono::milliseconds interruptTimeout  = std::chrono::seconds{300};
-        std::chrono::milliseconds permissionTimeout = std::chrono::seconds{300};
+        std::string               threadId         = "session";
+        std::chrono::milliseconds interruptTimeout = std::chrono::seconds{300};
         /// 断线后保持运行中轮次的宽限期; <=0 表示断线立即取消轮次
         std::chrono::milliseconds gracePeriod = std::chrono::seconds{30};
         /// delta 环形缓冲容量 (按消息数)
@@ -105,7 +104,7 @@ public:
 
 private:
 
-    using ErrorCode = boost::system::error_code;
+    using ErrorCode = neograph_asio_error_code;
 
     struct PendingInterrupt {
         std::shared_ptr<asio::experimental::concurrent_channel<void(ErrorCode, neograph::json)>> ch;

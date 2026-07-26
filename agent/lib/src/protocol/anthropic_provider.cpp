@@ -372,7 +372,7 @@ asio::awaitable<neograph::ChatCompletion> AnthropicProvider::doStream(
 
     tcp::socket socket(executor);
     co_await asio::async_connect(socket, endpoints, asio::cancel_after(rem(), asio::use_awaitable));
-    boost::system::error_code tcpEc;
+    neograph_asio_error_code tcpEc;
     socket.set_option(asio::ip::tcp::no_delay(true), tcpEc);
 
     if (isHttps) {
@@ -406,7 +406,7 @@ asio::awaitable<neograph::ChatCompletion> AnthropicProvider::doStream(
             on_chunk
         );
 
-        boost::system::error_code shutEc;
+        neograph_asio_error_code shutEc;
         co_await stream.async_shutdown(asio::redirect_error(asio::use_awaitable, shutEc));
     } else {
         boost::beast::tcp_stream stream(std::move(socket));

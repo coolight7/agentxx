@@ -18,7 +18,7 @@ class ChannelAgentIOTransport : public AgentIOTransportBase {
 public:
 
     using Chan
-        = asio::experimental::concurrent_channel<void(boost::system::error_code, WireMessage)>;
+        = asio::experimental::concurrent_channel<void(neograph_asio_error_code, WireMessage)>;
 
     ChannelAgentIOTransport(std::shared_ptr<Chan> outgoing, std::shared_ptr<Chan> incoming);
 

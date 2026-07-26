@@ -57,7 +57,6 @@ int main(int argn, char** argv) {
     std::string agentToken;
     std::string remoteModel;
     std::string srvHost = "127.0.0.1";
-    std::string wsPath  = "/agent";
     uint16_t    srvPort = 7007;
     std::string sslCertFile;
     std::string sslKeyFile;
@@ -78,12 +77,11 @@ Options:
     -h, --help           显示帮助信息
     --config <path>      配置文件路径 (默认: agentxx-config.yaml)
     --env <path>         覆盖式环境变量文件路径
-    --agent <url>        远程 agent server 地址 (ws://host:port/path)
+    --agent <url>        远程 agent server 地址 (ws://host:port/deepagent)
     --token <token>      认证 token (也可通过 url 查询串携带)
     --model <model>      远程模型名称
     --host <host>        服务监听地址 (默认: 127.0.0.1)
     --port <port>        服务监听端口 (默认: 17000)
-    --ws-path <path>     WebSocket 路径 (默认: /agent)
     --ssl-cert <file>    SSL 证书文件路径
     --ssl-key <file>     SSL 私钥文件路径
 )_");
@@ -109,9 +107,6 @@ Options:
         } else if (arg == "--port" && i + 1 < argn) {
             ++i;
             srvPort = static_cast<uint16_t>(std::stoi(argv[i]));
-        } else if (arg == "--ws-path" && i + 1 < argn) {
-            ++i;
-            wsPath = argv[i];
         } else if (arg == "--ssl-cert" && i + 1 < argn) {
             ++i;
             sslCertFile = argv[i];
@@ -251,21 +246,14 @@ Options:
         srvCfg.http.port        = srvPort;
         srvCfg.http.sslCertFile = sslCertFile;
         srvCfg.http.sslKeyFile  = sslKeyFile;
-        srvCfg.wsPath           = wsPath;
         srvCfg.token            = agentToken;
         auto server = std::make_shared<agentxx::agent::remote::AgentServer>(agent, srvCfg);
 
-        bool        useSsl = !sslCertFile.empty() && !sslKeyFile.empty();
-        std::string listenUrl
-            = (useSsl ? "wss://" : "ws://") + srvHost + ":" + std::to_string(srvPort) + wsPath;
-
         asio::co_spawn(
             *agent->ioCtx,
-            [agent, server, listenUrl]() -> asio::awaitable<void> {
+            [agent, server]() -> asio::awaitable<void> {
                 co_await agent->init();
                 server->start(co_await asio::this_coro::executor);
-                XX_OUT("DeepAgent Server listen on {}", listenUrl);
-                XX_OUT("Use client connect: agentxx_cli --agent {}", listenUrl);
                 co_return;
             },
             asio::detached
@@ -273,8 +261,8 @@ Options:
         asio::co_spawn(
             *agent->ioCtx,
             [agent, server]() -> asio::awaitable<void> {
-                asio::signal_set          signals(*agent->ioCtx, SIGINT, SIGTERM);
-                boost::system::error_code ec;
+                asio::signal_set         signals(*agent->ioCtx, SIGINT, SIGTERM);
+                neograph_asio_error_code ec;
                 co_await signals.async_wait(asio::redirect_error(asio::use_awaitable, ec));
                 XX_OUT("[agent_server] signal received, shutting down...");
                 server->stop();

@@ -151,7 +151,7 @@ asio::awaitable<std::string> ExecuteLinuxCommandTool::execute_async(const neogra
                 || timer.async_wait(asio::use_awaitable)
             );
             if (res.index() == 1) {
-                boost::system::error_code ec;
+                neograph_asio_error_code ec;
                 proc.terminate(ec);
                 co_return makeTimeoutResult(timeout, strout, strerr);
             }
@@ -312,7 +312,7 @@ asio::awaitable<std::string>
                 || timer.async_wait(asio::use_awaitable)
             );
             if (res.index() == 1) {
-                boost::system::error_code ec;
+                neograph_asio_error_code ec;
                 proc.terminate(ec);
                 // 回收子进程避免僵尸
                 co_await proc.async_wait(asio::redirect_error(asio::use_awaitable, ec));

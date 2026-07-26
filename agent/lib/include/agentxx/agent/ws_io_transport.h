@@ -79,7 +79,7 @@ public:
 
 private:
 
-    using ErrorCode  = boost::system::error_code;
+    using ErrorCode  = neograph_asio_error_code;
     using WriteQueue = asio::experimental::concurrent_channel<void(ErrorCode, std::string)>;
     using RecvQueue  = asio::experimental::concurrent_channel<void(ErrorCode, WireMessage)>;
 

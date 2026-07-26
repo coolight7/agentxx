@@ -301,8 +301,8 @@ private:
             );
         }
 
-        size_t                    processed = 0;
-        boost::system::error_code ec;
+        size_t                   processed = 0;
+        neograph_asio_error_code ec;
         while (!parser.is_done()) {
             co_await http::async_read_some(
                 stream,

@@ -182,7 +182,7 @@ private:
         }
 
         asio::awaitable<void> close() override {
-            boost::system::error_code ec;
+            neograph_asio_error_code ec;
             boost::beast::get_lowest_layer(stream_).socket().shutdown(
                 asio::ip::tcp::socket::shutdown_send,
                 ec
@@ -285,7 +285,7 @@ private:
     template<typename Stream>
     asio::awaitable<void> serve(Stream stream) {
         namespace http = boost::beast::http;
-        boost::system::error_code ec;
+        neograph_asio_error_code ec;
 
         boost::beast::flat_buffer buffer;
         bool                      keepAlive = false;

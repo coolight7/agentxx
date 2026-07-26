@@ -1524,8 +1524,8 @@ public:
 
         thread = std::thread([this]() {
             while (!stopped.load()) {
-                boost::system::error_code ec;
-                asio::ip::tcp::socket     sock(ioCtx);
+                neograph_asio_error_code ec;
+                asio::ip::tcp::socket    sock(ioCtx);
                 acceptor->accept(sock, ec);
                 if (ec) {
                     break;
@@ -1541,8 +1541,8 @@ public:
     void stop() {
         stopped.store(true);
         if (acceptor) {
-            boost::system::error_code ec;
-            asio::ip::tcp::socket     dummy(ioCtx);
+            neograph_asio_error_code ec;
+            asio::ip::tcp::socket    dummy(ioCtx);
             dummy.connect(ep, ec);
             acceptor->close(ec);
         }
@@ -1555,7 +1555,7 @@ private:
 
     void handleConn(asio::ip::tcp::socket& sock) {
         namespace http = boost::beast::http;
-        boost::system::error_code ec;
+        neograph_asio_error_code ec;
 
         boost::beast::flat_buffer        buf;
         http::request<http::string_body> req;
@@ -1688,8 +1688,8 @@ public:
 
         thread = std::thread([this]() {
             while (!stopped.load()) {
-                boost::system::error_code ec;
-                asio::ip::tcp::socket     sock(ioCtx);
+                neograph_asio_error_code ec;
+                asio::ip::tcp::socket    sock(ioCtx);
                 acceptor->accept(sock, ec);
                 if (ec) {
                     break;
@@ -1705,8 +1705,8 @@ public:
     void stop() {
         stopped.store(true);
         if (acceptor) {
-            boost::system::error_code ec;
-            asio::ip::tcp::socket     dummy(ioCtx);
+            neograph_asio_error_code ec;
+            asio::ip::tcp::socket    dummy(ioCtx);
             dummy.connect(ep, ec);
             acceptor->close(ec);
         }
@@ -1726,7 +1726,7 @@ private:
         }
 
         namespace http = boost::beast::http;
-        boost::system::error_code ec;
+        neograph_asio_error_code ec;
 
         boost::beast::flat_buffer        buf;
         http::request<http::string_body> req;

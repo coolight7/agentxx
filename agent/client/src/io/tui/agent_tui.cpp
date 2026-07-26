@@ -394,7 +394,7 @@ void AgentTUI::start() {
                 return false;
             }
             if (event == Event::Escape && isStreaming_) {
-                cancelCurrentRun();
+                cancelCurrentRunLocked();
                 postRedraw();
                 return true;
             }
@@ -486,9 +486,8 @@ void AgentTUI::onPeerMessage(agentxx::agent::WireMessage msg) {
     );
 }
 
-void AgentTUI::cancelCurrentRun() {
+void AgentTUI::cancelCurrentRunLocked() {
     requestCancel(threadId_);
-    std::lock_guard<std::mutex> lock(mutex_);
     if (!currentToken_.empty()) {
         messages_.push_back({currentTokenRole_, currentToken_});
         if (currentTokenRole_ == Message::Role::Thinking) {
