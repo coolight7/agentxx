@@ -145,7 +145,7 @@ asio::awaitable<void> DeepAgent::init() {
 
         /// Toolcall  应当作为最后一层，输出的日志才会是最终的样子
         agentContext->middlewareHandleContext->handles.push_back(
-            std::make_shared<agentxx::middleware::MiddlewareWarpHandle<
+            std::make_shared<agentxx::middleware::MiddlewareWrapHandle<
                 agentxx::middleware::BaseMiddlewareState>>(
                 "LogPring",
                 agentContext,
@@ -166,7 +166,7 @@ asio::awaitable<void> DeepAgent::init() {
                 [ctx    = std::weak_ptr<AgentContext>(agentContext),
                  config = agentContext->agentConfig](neograph::graph::NodeInput& in
                 ) -> asio::awaitable<void> {
-                    if (config->logPringToolcall) {
+                    if (config->logPrintToolcall) {
                         co_await agentxx::nodes::ToolcallWrapNode::defStdoutLogOnToolcallStart(in);
                     }
                     if (auto ctxPtr = ctx.lock()) {
@@ -182,7 +182,7 @@ asio::awaitable<void> DeepAgent::init() {
                     const neograph::graph::NodeInput& in,
                     neograph::graph::NodeOutput&      result
                 ) -> asio::awaitable<void> {
-                    if (config->logPringToolcall) {
+                    if (config->logPrintToolcall) {
                         co_await agentxx::nodes::ToolcallWrapNode::defStdoutLogOnToolcallEnd(
                             in,
                             result

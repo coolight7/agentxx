@@ -1,6 +1,6 @@
 #pragma once
 
-#include "agentxx/nodes/warp_handle.h"
+#include "agentxx/nodes/wrap_handle.h"
 #include <string>
 #include <string_view>
 
@@ -8,7 +8,7 @@ namespace agentxx {
 namespace nodes {
 
 class NEOGRAPH_API AgentStartCallWrapNode
-    : public WrapHandleBaseNode<agentxx::nodes::WarpBaseNodeInterface> {
+    : public WrapHandleBaseNode<agentxx::nodes::WrapBaseNodeInterface> {
 protected:
 public:
 
@@ -32,7 +32,7 @@ public:
 };
 
 class NEOGRAPH_API MiddlewareWrapAgentEndCallNode
-    : public WrapHandleBaseNode<agentxx::nodes::WarpBaseNodeInterface> {
+    : public WrapHandleBaseNode<agentxx::nodes::WrapBaseNodeInterface> {
 protected:
 public:
 

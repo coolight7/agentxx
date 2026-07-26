@@ -55,8 +55,8 @@ public:
 
 /// - 封装原始的 [neograph::Tool] 类型，添加额外功能
 /// - 部分函数 (如 MCP) 返回的 tool 类型是原始的 [neograph::Tool]，可以用
-/// [XXToolWarp] 进行封装扩展功能
-class XXToolWarp : public XXToolBase {
+/// [XXToolWrap] 进行封装扩展功能
+class XXToolWrap : public XXToolBase {
 protected:
 
     std::unique_ptr<neograph::Tool>                             inner;
@@ -64,7 +64,7 @@ protected:
 
 public:
 
-    XXToolWarp(
+    XXToolWrap(
         std::unique_ptr<neograph::Tool>&&                           in_inner,
         std::weak_ptr<agentxx::agent::AgentContext>                 in_agentContext,
         bool                                                        in_autoSummaryOutput = false,

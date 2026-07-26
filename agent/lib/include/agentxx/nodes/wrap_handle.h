@@ -6,7 +6,6 @@
 #include "fmt/format.h"
 #include <cstdlib>
 #include <functional>
-#include <iostream>
 #include <neograph/llm/rate_limited_provider.h>
 #include <neograph/llm/schema_provider.h>
 #include <neograph/neograph.h>
@@ -25,14 +24,14 @@ template<typename T>
 concept BaseGraphNodeType = std::same_as<T, neograph::graph::GraphNode>
                             || std::derived_from<T, neograph::graph::GraphNode>;
 
-class WarpBaseNodeInterface : public neograph::graph::GraphNode {
+class WrapBaseNodeInterface : public neograph::graph::GraphNode {
 protected:
 
     std::string name_;
 
 public:
 
-    WarpBaseNodeInterface(std::string_view name);
+    WrapBaseNodeInterface(std::string_view name);
 
     asio::awaitable<neograph::graph::NodeOutput> run(neograph::graph::NodeInput in) override;
 

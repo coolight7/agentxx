@@ -263,9 +263,9 @@ std::optional<std::string>
     MiddlewareContext::getShareStoreItemValue(std::string_view thread_id, const size_t id) {
     auto it = shareStore.find(thread_id);
     if (shareStore.end() != it) {
-        auto reslut = it->second.store.find(id);
-        if (it->second.store.end() != reslut) {
-            return reslut->second;
+        auto result = it->second.store.find(id);
+        if (it->second.store.end() != result) {
+            return result->second;
         }
     }
     return std::nullopt;
@@ -292,9 +292,9 @@ size_t MiddlewareContext::addShareStoreItemValue(
 void MiddlewareContext::removeShareStoreItemValue(std::string_view thread_id, const size_t id) {
     auto it = shareStore.find(thread_id);
     if (shareStore.end() != it) {
-        auto reslutIt = it->second.store.find(id);
-        if (it->second.store.end() != reslutIt) {
-            it->second.store.erase(reslutIt);
+        auto resultIt = it->second.store.find(id);
+        if (it->second.store.end() != resultIt) {
+            it->second.store.erase(resultIt);
         }
     }
 }
@@ -302,9 +302,9 @@ void MiddlewareContext::removeShareStoreItemValue(std::string_view thread_id, co
 void MiddlewareContext::removeGraphDataItem(const std::string& thread_id, std::string_view key) {
     auto it = graphData.find(thread_id);
     if (graphData.end() != it) {
-        auto reslutIt = it->second.find(key);
-        if (it->second.end() != reslutIt) {
-            it->second.erase(reslutIt);
+        auto resultIt = it->second.find(key);
+        if (it->second.end() != resultIt) {
+            it->second.erase(resultIt);
         }
     }
 }

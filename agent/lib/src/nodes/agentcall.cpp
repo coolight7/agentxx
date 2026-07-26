@@ -7,7 +7,7 @@ AgentStartCallWrapNode::AgentStartCallWrapNode(
     const std::string&                          name,
     std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
 ) :
-    WrapHandleBaseNode<agentxx::nodes::WarpBaseNodeInterface>(name, in_agentContext) {}
+    WrapHandleBaseNode<agentxx::nodes::WrapBaseNodeInterface>(name, in_agentContext) {}
 
 asio::awaitable<void> AgentStartCallWrapNode::onHandleStart(
     agentxx::middleware::BaseMiddlewareHandleInterface& item,
@@ -34,7 +34,7 @@ MiddlewareWrapAgentEndCallNode::MiddlewareWrapAgentEndCallNode(
     const std::string&                          name,
     std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
 ) :
-    WrapHandleBaseNode<agentxx::nodes::WarpBaseNodeInterface>(name, in_agentContext) {}
+    WrapHandleBaseNode<agentxx::nodes::WrapBaseNodeInterface>(name, in_agentContext) {}
 
 asio::awaitable<void> MiddlewareWrapAgentEndCallNode::onHandleStart(
     agentxx::middleware::BaseMiddlewareHandleInterface& item,
