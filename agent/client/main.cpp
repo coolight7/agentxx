@@ -50,6 +50,10 @@ int main(int argn, char** argv) {
     agentxx::util::signalError(argv[0]);
 #endif
 
+    /// 默认启动 stdio 作为日志输出，对于 tui 等自己拦截日志的可以移除后添加自己的日志拦截器
+    auto defaultLogSink = std::make_shared<StderrLogSink>();
+    agentxx::util::LogDispatcher::instance().addSink(defaultLogSink);
+
     std::string configPath = "agentxx-config.yaml";
     std::string overrideEnvPath;
     std::string mode = "tui";
@@ -279,6 +283,7 @@ Options:
     // client 和 agent 不在同一个进程中，使用网络交互
     if (!agentUrl.empty()) {
         if (mode == "tui") {
+            agentxx::util::LogDispatcher::instance().removeSink(defaultLogSink);
             runRemoteTui(config, agentUrl, agentToken, remoteModel);
         } else {
             runRemoteCli(agentUrl, agentToken, remoteModel);
@@ -289,6 +294,7 @@ Options:
     // ======================== 同一进程内 client + agent 模式 ========================
     // client 和 agent 在同一个进程中，使用线程间数据交互
     if (mode == "tui") {
+        agentxx::util::LogDispatcher::instance().removeSink(defaultLogSink);
         config->logPrintToolcall                       = false;
         config->logPrintMessagesBeforeLLM              = true;
         config->logPrintMessagesBeforeLLMWithSystemMsg = false;

@@ -41,13 +41,13 @@ void AgentStdIO::onDelta(const agentxx::agent::Delta& delta) {
             break;
         case Type::ToolStart:
             std::cout << std::endl
-                      << fmt::format("[Tool] {} running...", delta.toolName) << std::flush;
+                      << fmt::format("[Tool] {} running...", delta.toolName) << std::endl;
             break;
         case Type::ToolEnd:
             std::cout
                 << std::endl
                 << fmt::format("[Tool] {} {}", delta.toolName, delta.hasError ? "error" : "done")
-                << std::flush;
+                << std::endl;
             break;
         case Type::TurnStart:
             isThinking_ = false;
@@ -72,6 +72,7 @@ void AgentStdIO::onSync(const agentxx::agent::SyncPayload& payload) {
 
 asio::awaitable<std::optional<std::string>> AgentStdIO::getInput() {
     auto& stdinReader = StdinReader::instance(co_await asio::this_coro::executor);
+    std::cout << "\n>>>" << std::flush;
     co_return co_await stdinReader.readLine();
 }
 
