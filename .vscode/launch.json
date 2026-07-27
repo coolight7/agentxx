@@ -7,7 +7,7 @@
             "program": "${workspaceFolder}/agent/build/linux-debug/exec/agentxx_cli",
             "preLaunchTask": "compileLinuxDebugCxx",
             "args": [
-                "cli"
+                "server"
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/agent",
