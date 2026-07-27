@@ -57,9 +57,9 @@ protected:
         Node() {}
     };
 
-    bool                    caseInsensitive; // 忽略大小写
-    std::vector<Node>       nodes{};         // Trie节点存储
-    std::vector<StringType> patterns{};      // 所有模式串
+    bool                    ignoreCase; // 忽略大小写
+    std::vector<Node>       nodes{};    // Trie节点存储
+    std::vector<StringType> patterns{}; // 所有模式串
 
 public:
 
@@ -82,8 +82,8 @@ public:
         }
     };
 
-    AhoCorasick(const std::vector<StringViewType>& patterns, bool in_caseInsensitive = true) :
-        caseInsensitive(in_caseInsensitive) {
+    AhoCorasick(const std::vector<StringViewType>& patterns, bool in_ignoreCase = true) :
+        ignoreCase(in_ignoreCase) {
         nodes.emplace_back(); // 初始化根节点
         for (const auto& item : patterns) {
             addPattern(item);
@@ -91,8 +91,8 @@ public:
         build();
     }
 
-    AhoCorasick(const std::vector<StringType>& patterns, bool in_caseInsensitive = true) :
-        caseInsensitive(in_caseInsensitive) {
+    AhoCorasick(const std::vector<StringType>& patterns, bool in_ignoreCase = true) :
+        ignoreCase(in_ignoreCase) {
         nodes.emplace_back(); // 初始化根节点
         for (const auto& item : patterns) {
             addPattern(item);
@@ -101,7 +101,7 @@ public:
     }
 
     CharType onCharCode(CharType ch) const {
-        if (caseInsensitive) {
+        if (ignoreCase) {
             // 转换为小写字母
             if (ch >= 65 && ch <= 90) {
                 return ch + 32;
@@ -211,6 +211,11 @@ public:
         }
 
         return result;
+    }
+
+    [[nodiscard]] bool contains(const StringViewType text) const {
+        auto matches = search(text, true);
+        return (false == matches.empty());
     }
 
     [[nodiscard]] StringType removeAll(

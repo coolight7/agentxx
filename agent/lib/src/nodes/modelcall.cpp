@@ -2,6 +2,7 @@
 
 #include "agentxx/agent/model_registry.h"
 #include "agentxx/protocol/openai_provider.h"
+#include "agentxx/util/aho_corasick.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/log.h"
 #include "agentxx/util/string_util.h"
@@ -11,6 +12,18 @@
 
 namespace agentxx {
 namespace nodes {
+
+// 限速
+inline static const auto defaultRateLimitTag = agentxx::util::AhoCorasick<char>{
+    std::vector<std::string>{
+                             "429", "rate limit",
+                             "has been exhausted", "insufficient",
+                             "速率限制", "限速",
+                             "请求频率", "已耗尽",
+                             "已用完"
+    },
+    true
+};
 
 ModelCallWrapNode::ModelCallWrapNode(
     std::string_view                            name,
@@ -256,7 +269,7 @@ void ModelCallWrapNode::repairMessages(neograph::graph::NodeInput& in) {
         if ("system" == role || "user" == role || "tool" == role) {
             return;
         }
-        // 插入 user msg
+        // 插入 user msg 修正消息顺序
         auto userMsg = neograph::ChatMessage{
             .role    = "user",
             .content = "[Please continue]",
@@ -430,7 +443,7 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
         );
         retry++;
         size_t appendDelay = 0;
-        if (agentxx::util::isIgnoreCaseContains(errInfo, "rate limit")) {
+        if (defaultRateLimitTag.contains(errInfo)) {
             // 限速，增加延时
             appendDelay = retry * 1000 * 5;
         }
