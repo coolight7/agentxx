@@ -122,6 +122,17 @@ void SessionController::onPeerMessage(WireMessage msg) {
                 }
             } else if constexpr (std::is_same_v<T, WireInterruptResponse>) {
                 resolveInterrupt(m.id, std::move(m.result));
+            } else if constexpr (std::is_same_v<T, WireGetModel>) {
+                auto agent = agent_.lock();
+                if (!agent) { return; }
+                std::string currentModel = agent->getCurrentModelName(m.threadId);
+                std::vector<std::string> models;
+                if (agent->agentContext && agent->agentContext->agentConfig) {
+                    for (const auto& [name, mc] : agent->agentContext->agentConfig->availableModels) {
+                        models.push_back(name);
+                    }
+                }
+                sendToPeer(WireModelInfo{std::move(currentModel), std::move(models)});
             }
         },
         std::move(msg)

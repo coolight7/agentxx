@@ -104,6 +104,10 @@ ftxui::Element AgentTUI::renderStatusBar() {
 }
 
 void AgentTUI::openModelSelector() {
+    // 远程模式: 请求服务端刷新模型信息
+    if (transport_) {
+        sendToPeer(agentxx::agent::WireGetModel{threadId_});
+    }
     modelNames_.clear();
     selectedModelIndex_ = 0;
     if (agentContext_ && agentContext_->modelRegistry) {

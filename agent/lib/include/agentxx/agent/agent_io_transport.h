@@ -79,6 +79,23 @@ struct WireError {
     std::string message;
 };
 
+/// 服务端日志转发 (Server -> Client)
+struct WireLog {
+    int         level = 0;
+    std::string message;
+};
+
+/// 客户端请求当前模型信息 (Client -> Server)
+struct WireGetModel {
+    std::string threadId;
+};
+
+/// 服务端模型信息响应 (Server -> Client)
+struct WireModelInfo {
+    std::string              currentModel;
+    std::vector<std::string> models;
+};
+
 /// 所有可能的线消息类型 (tagged variant)
 using WireMessage = std::variant<
     WireHello,
@@ -92,7 +109,10 @@ using WireMessage = std::variant<
     SyncPayload,
     WireTurnResult,
     WireContextStats,
-    WireError>;
+    WireError,
+    WireLog,
+    WireGetModel,
+    WireModelInfo>;
 
 // ---------------------------------------------------------------------------
 // AgentIOTransportBase: 两个 AgentIOBase 端点之间的协议传输层

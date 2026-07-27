@@ -21,6 +21,7 @@ struct MsgType {
     inline static constexpr std::string_view InterruptResponse = "interrupt_response";
     inline static constexpr std::string_view Cancel            = "cancel";
     inline static constexpr std::string_view SelectModel       = "select_model";
+    inline static constexpr std::string_view GetModel          = "get_model";
     inline static constexpr std::string_view Ping              = "ping";
 
     // ===== Server -> Client =====
@@ -31,6 +32,8 @@ struct MsgType {
     inline static constexpr std::string_view TurnResult       = "turn_result";
     inline static constexpr std::string_view ContextStats     = "context_stats";
     inline static constexpr std::string_view ErrorMsg         = "error";
+    inline static constexpr std::string_view LogMsg           = "log";
+    inline static constexpr std::string_view ModelInfo        = "model_info";
     inline static constexpr std::string_view Pong             = "pong";
 };
 
@@ -360,10 +363,39 @@ inline neograph::json makeError(int code, std::string_view message) {
     };
 }
 
+inline neograph::json makeGetModel(std::string_view threadId) {
+    return neograph::json{
+        {"type",   MsgType::GetModel},
+        {"thread", threadId         },
+    };
+}
+
+inline neograph::json makeModelInfo(
+    std::string_view                currentModel,
+    const std::vector<std::string>& models
+) {
+    neograph::json j = {
+        {"type",          MsgType::ModelInfo},
+        {"current_model", currentModel       },
+    };
+    if (!models.empty()) {
+        j["models"] = models;
+    }
+    return j;
+}
+
 inline neograph::json makePong(int64_t t) {
     return neograph::json{
         {"type", MsgType::Pong},
         {"t",    t            },
+    };
+}
+
+inline neograph::json makeLog(int level, std::string_view message) {
+    return neograph::json{
+        {"type",    MsgType::LogMsg},
+        {"level",   level          },
+        {"message", message        },
     };
 }
 
