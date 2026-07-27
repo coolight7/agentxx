@@ -124,6 +124,14 @@ asio::awaitable<void> DeepAgent::init() {
             agentContext->middlewareHandleContext->handles.push_back(skillMiddleware);
         }
         {
+            auto memoryFileMiddleware
+                = std::make_shared<agentxx::middleware::MemoryFileMiddlewareHandle>(
+                    config->memoryFilePaths,
+                    agentContext
+                );
+            agentContext->middlewareHandleContext->handles.push_back(memoryFileMiddleware);
+        }
+        {
             summarizationMiddleware
                 = std::make_shared<agentxx::middleware::SummarizationMiddlewareHandle>(
                     subagentManagerTool.get(),

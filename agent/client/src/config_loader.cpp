@@ -316,6 +316,24 @@ YamlAppConfig loadYamlConfig(
         }
     }
 
+    if (root["skill_dirs"] && root["skill_dirs"].IsSequence()) {
+        for (const auto& node : root["skill_dirs"]) {
+            auto p = resolveEnvVars(node.as<std::string>(""), dotEnvVars, overrideEnvVars);
+            if (!p.empty()) {
+                cfg.skillDirPaths.push_back(std::move(p));
+            }
+        }
+    }
+
+    if (root["memory_files"] && root["memory_files"].IsSequence()) {
+        for (const auto& node : root["memory_files"]) {
+            auto p = resolveEnvVars(node.as<std::string>(""), dotEnvVars, overrideEnvVars);
+            if (!p.empty()) {
+                cfg.memoryFilePaths.push_back(std::move(p));
+            }
+        }
+    }
+
     return cfg;
 }
 

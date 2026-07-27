@@ -5,6 +5,7 @@
 #include <cassert>
 #include <cstring>
 #include <functional>
+#include <iomanip>
 #include <optional>
 #include <queue>
 #include <ranges>
@@ -781,7 +782,7 @@ inline PinyinCallback s_pinyinCallback = nullptr;
     const double base  = 1024.0;
 
     // 计算应该使用的单位索引
-    int    index = 0;
+    size_t index = 0;
     double size  = static_cast<double>(bytes);
     while (size >= base && index < units.size() - 1) {
         size /= base;

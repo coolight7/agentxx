@@ -6,6 +6,7 @@
 #include "agentxx/agent/model_registry.h"
 #include "agentxx/middlewares/event_stream.h"
 #include "agentxx/middlewares/events.h"
+#include "agentxx/middlewares/memory_file.h"
 #include "agentxx/middlewares/permission.h"
 #include "agentxx/middlewares/planning.h"
 #include "agentxx/middlewares/skill.h"

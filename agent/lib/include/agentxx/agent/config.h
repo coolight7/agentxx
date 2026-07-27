@@ -71,6 +71,10 @@ public:
 
     agentxx::agent::AgentPrompt prompt;
     std::vector<std::string>    skillDirPaths{};
+    /// 上下文文件路径列表
+    /// - 支持绝对路径或相对路径（相对路径按程序工作目录解析）
+    /// - 文件内容会在每次模型调用时注入系统提示词
+    std::vector<std::string> memoryFilePaths{};
     /// MCP 服务器配置
     /// - key: MCP 命名空间 (每个 MCP 的命名空间应当唯一，作为该服务所有 tool 的名称前缀)
     /// - value: MCP 服务器 URL
