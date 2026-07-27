@@ -53,6 +53,7 @@ void AgentStdIO::onDelta(const agentxx::agent::Delta& delta) {
             isThinking_ = false;
             break;
         case Type::TurnEnd:
+            std::cout << "\n>>> " << std::flush;
             isThinking_ = false;
             break;
     }
@@ -72,7 +73,6 @@ void AgentStdIO::onSync(const agentxx::agent::SyncPayload& payload) {
 
 asio::awaitable<std::optional<std::string>> AgentStdIO::getInput() {
     auto& stdinReader = StdinReader::instance(co_await asio::this_coro::executor);
-    std::cout << "\n>>>" << std::flush;
     co_return co_await stdinReader.readLine();
 }
 

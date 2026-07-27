@@ -15,6 +15,7 @@
 #include "asio/io_context.hpp"
 #include "asio/steady_timer.hpp"
 #include "asio/use_awaitable.hpp"
+#include <iostream>
 #include <thread>
 
 namespace agentxx {
@@ -106,6 +107,7 @@ static asio::awaitable<void> runLocalCliUnifiedAsync(std::shared_ptr<agent::Deep
     XX_OUT("======= Agentxx Client (CLI, in-process unified) =======");
     setupLocalUnifiedDirect(clientEx, agent, io, "session");
     // CLI 输入循环: 从 stdin 读取并发送
+    std::cout << "\n>>> " << std::flush;
     for (;;) {
         auto input = co_await io->getInput();
         if (!input.has_value()) {

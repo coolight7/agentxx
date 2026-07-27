@@ -282,8 +282,8 @@ Options:
     // ======================== 远程 client + agent server模式 (--agent) ========================
     // client 和 agent 不在同一个进程中，使用网络交互
     if (!agentUrl.empty()) {
+        agentxx::util::LogDispatcher::instance().removeSink(defaultLogSink);
         if (mode == "tui") {
-            agentxx::util::LogDispatcher::instance().removeSink(defaultLogSink);
             runRemoteTui(config, agentUrl, agentToken, remoteModel);
         } else {
             runRemoteCli(agentUrl, agentToken, remoteModel);
@@ -302,6 +302,7 @@ Options:
         auto agent = std::make_shared<agentxx::agent::DeepAgent>(config);
         runLocalTuiUnified(agent, config);
     } else {
+        agentxx::util::LogDispatcher::instance().removeSink(defaultLogSink);
         config->logPrintToolcall                      = true;
         config->logPrintMessagesBeforeLLM             = true;
         config->logPrintSummarizationResultTokenCount = true;
