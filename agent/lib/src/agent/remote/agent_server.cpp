@@ -12,6 +12,24 @@ namespace agentxx {
 namespace agent {
 namespace remote {
 
+/// 将服务端日志经 transport 转发给远程客户端的 LogSink
+class TransportLogSink : public util::LogSink {
+public:
+
+    explicit TransportLogSink(std::shared_ptr<AgentIOTransportBase> transport) :
+        transport_(std::move(transport)) {}
+
+    void onLog(util::LogLevel level, std::string_view message) override {
+        if (auto t = transport_.lock()) {
+            t->send(WireLog{static_cast<int>(level), std::string{message}});
+        }
+    }
+
+private:
+
+    std::weak_ptr<AgentIOTransportBase> transport_;
+};
+
 AgentServer::AgentServer(std::shared_ptr<DeepAgent> agent, Config config) :
     agent_(std::move(agent)),
     config_(std::move(config)) {
@@ -162,10 +180,15 @@ asio::awaitable<void> AgentServer::serveTransport(std::shared_ptr<AgentIOTranspo
     ctrl->setTransport(transport);
     ctrl->handleHello(*hello, std::move(models));
 
+    // 注册日志转发 sink: 将服务端日志经 transport 推送给远程客户端
+    auto logSink = std::make_shared<TransportLogSink>(transport);
+    util::LogDispatcher::instance().addSink(logSink);
+
     // 运行接收循环 (直到 transport 关闭)
     co_await ctrl->runTransportLoop();
 
     // 连接断开
+    util::LogDispatcher::instance().removeSink(logSink);
     ctrl->onDisconnect();
 }
 

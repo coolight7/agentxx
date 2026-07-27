@@ -392,6 +392,12 @@ std::string WsAgentIOTransport::serialize(const WireMessage& msg) {
                 return remote::makeContextStats(m.contextTokens, m.maxContextTokens).dump();
             } else if constexpr (std::is_same_v<T, WireError>) {
                 return remote::makeError(m.code, m.message).dump();
+            } else if constexpr (std::is_same_v<T, WireLog>) {
+                return remote::makeLog(m.level, m.message).dump();
+            } else if constexpr (std::is_same_v<T, WireGetModel>) {
+                return remote::makeGetModel(m.threadId).dump();
+            } else if constexpr (std::is_same_v<T, WireModelInfo>) {
+                return remote::makeModelInfo(m.currentModel, m.models).dump();
             } else {
                 return "{}";
             }
@@ -489,6 +495,26 @@ std::optional<WireMessage> WsAgentIOTransport::deserialize(std::string_view json
         err.code    = j.value("code", 0);
         err.message = j.value("message", std::string{});
         return WireMessage{std::move(err)};
+    } else if (t == remote::MsgType::LogMsg) {
+        WireLog log;
+        log.level   = j.value("level", 0);
+        log.message = j.value("message", std::string{});
+        return WireMessage{std::move(log)};
+    } else if (t == remote::MsgType::GetModel) {
+        WireGetModel req;
+        req.threadId = j.value("thread", std::string{});
+        return WireMessage{std::move(req)};
+    } else if (t == remote::MsgType::ModelInfo) {
+        WireModelInfo info;
+        info.currentModel = j.value("current_model", std::string{});
+        if (j.contains("models") && j["models"].is_array()) {
+            for (const auto& m : j["models"]) {
+                if (m.is_string()) {
+                    info.models.push_back(m.get<std::string>());
+                }
+            }
+        }
+        return WireMessage{std::move(info)};
     }
     // Pong / Ping: 心跳内部处理, 不转发给调用方
     return std::nullopt;

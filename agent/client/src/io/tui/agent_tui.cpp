@@ -437,6 +437,13 @@ void AgentTUI::requestSelectModel(std::string_view threadId, std::string_view mo
     }
 }
 
+void AgentTUI::refreshModelName() {
+    if (session_ && agentContext_ && agentContext_->modelRegistry) {
+        cachedModelName_ = agentContext_->modelRegistry->resolveModelName(session_->getModelName());
+        postRedraw();
+    }
+}
+
 void AgentTUI::onPeerMessage(agentxx::agent::WireMessage msg) {
     std::visit(
         [this](auto&& m) {
@@ -480,6 +487,35 @@ void AgentTUI::onPeerMessage(agentxx::agent::WireMessage msg) {
                     },
                     asio::detached
                 );
+            } else if constexpr (std::is_same_v<T, agentxx::agent::WireLog>) {
+                if (logSink_) {
+                    logSink_->onLog(
+                        static_cast<agentxx::util::LogLevel>(m.level),
+                        m.message
+                    );
+                    postRedraw();
+                }
+            } else if constexpr (std::is_same_v<T, agentxx::agent::WireModelInfo>) {
+                std::lock_guard<std::mutex> lock(mutex_);
+                if (!m.models.empty()) {
+                    auto registry = std::make_shared<agentxx::agent::ModelProviderRegistry>();
+                    for (const auto& name : m.models) {
+                        agentxx::agent::ModelConfig mc;
+                        mc.modelName = name;
+                        registry->registerModel(name, mc);
+                    }
+                    agentContext_->modelRegistry = std::move(registry);
+                    if (showModelSelector_) {
+                        modelNames_ = agentContext_->modelRegistry->listModelNames();
+                    }
+                }
+                if (!m.currentModel.empty()) {
+                    cachedModelName_ = m.currentModel;
+                    if (auto s = currentSession()) {
+                        s->setModelName(m.currentModel);
+                    }
+                }
+                postRedraw();
             }
         },
         std::move(msg)

@@ -259,6 +259,9 @@ static asio::awaitable<void> runRemoteTuiAsync(
         co_return;
     }
 
+    // 请求服务端当前模型信息, 待 onPeerMessage 收到 WireModelInfo 后更新显示
+    io->sendToPeer(agent::WireGetModel{"session"});
+
     // 启动接收循环
     asio::co_spawn(ex, io->runTransportLoop(), asio::detached);
 
