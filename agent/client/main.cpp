@@ -233,8 +233,22 @@ Options:
     applyAvailableModelsToConfig(config, yamlCfg.models, yamlCfg.useModelDefault);
     // MCP 服务器 (来自 config.yaml 的 mcp_servers, key 为命名空间)
     config->mcpServerUrls = yamlCfg.mcpServers;
-    config->skillDirPaths
-        = std::vector<std::string>{"/home/coolight/program/agentxx/isolation/skills/"};
+
+    // 解析路径：相对路径按程序工作目录解析为绝对路径
+    auto resolvePath = [](std::string_view p) -> std::string {
+        std::filesystem::path fp{p};
+        if (fp.is_absolute()) {
+            return fp.lexically_normal().string();
+        }
+        return (std::filesystem::current_path() / fp).lexically_normal().string();
+    };
+
+    for (const auto& p : yamlCfg.skillDirPaths) {
+        config->skillDirPaths.push_back(resolvePath(p));
+    }
+    for (const auto& p : yamlCfg.memoryFilePaths) {
+        config->memoryFilePaths.push_back(resolvePath(p));
+    }
 
     // ======================== deepagent Websocket Server 服务模式 ========================
     if (mode == "server") {

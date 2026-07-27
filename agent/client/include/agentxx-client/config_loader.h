@@ -15,6 +15,8 @@ namespace client {
 struct YamlAppConfig {
     std::map<std::string, agent::ModelConfig> models;
     std::map<std::string, std::string>        mcpServers;
+    std::vector<std::string>                  skillDirPaths;
+    std::vector<std::string>                  memoryFilePaths;
     std::string                               useModelDefault;
     std::string                               useModelSubagent;
     std::string                               useModelWebSearch;
