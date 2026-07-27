@@ -86,7 +86,7 @@ void AgentServer::stop() {
     if (http_) {
         http_->stop();
     }
-    std::lock_guard<std::mutex> lock(controllersMutex_);
+    // 无锁遍历关闭
     for (auto& [id, ctrl] : controllers_) {
         ctrl->stop();
     }
@@ -98,8 +98,7 @@ uint16_t AgentServer::port() const {
 }
 
 std::shared_ptr<SessionController> AgentServer::getOrCreateController(std::string_view threadId) {
-    std::lock_guard<std::mutex> lock(controllersMutex_);
-    auto                        it = controllers_.find(threadId);
+    auto                        it = controllers_.find(threadId);  // 无锁查找
     if (it != controllers_.end()) {
         return it->second;
     }

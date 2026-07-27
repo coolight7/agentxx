@@ -769,6 +769,36 @@ inline PinyinCallback s_pinyinCallback = nullptr;
     return std::nullopt;
 }
 
+[[nodiscard]] inline constexpr std::string formatSize(size_t bytes, int precision = 1) {
+    if (bytes == 0) {
+        return "0B";
+    }
+
+    // 定义单位列表（顺序：B, K, M, G, T, P...）
+    const std::vector<std::string> units_decimal = {"", "K", "M", "G", "T", "P"};
+
+    const auto&  units = units_decimal;
+    const double base  = 1024.0;
+
+    // 计算应该使用的单位索引
+    int    index = 0;
+    double size  = static_cast<double>(bytes);
+    while (size >= base && index < units.size() - 1) {
+        size /= base;
+        ++index;
+    }
+
+    // 格式化输出：如果整数部分≥100，则去掉小数（更简洁）
+    std::ostringstream oss;
+    if (std::floor(size) >= 100.0) {
+        oss << std::fixed << std::setprecision(0) << size;
+    } else {
+        oss << std::fixed << std::setprecision(precision) << size;
+    }
+    oss << units[index];
+    return oss.str();
+}
+
 [[nodiscard]] inline constexpr bool
     isIgnoreCaseEqual(std::string_view left, std::string_view right) {
     if (left.size() == right.size()) {

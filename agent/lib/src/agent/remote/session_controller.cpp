@@ -6,6 +6,7 @@
 #include "asio/cancel_after.hpp"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
+#include "asio/dispatch.hpp"
 #include "asio/redirect_error.hpp"
 #include "asio/use_awaitable.hpp"
 #include "neograph/graph/cancel.h"
@@ -24,7 +25,7 @@ SessionController::SessionController(
     inputChannel_(std::make_shared<InputChannel>(ex_, 64)) {}
 
 SessionController::~SessionController() {
-    stop();
+    stopImpl();
 }
 
 // ---------------------------------------------------------------------------
@@ -32,12 +33,9 @@ SessionController::~SessionController() {
 // ---------------------------------------------------------------------------
 
 void SessionController::onDelta(const Delta& delta) {
-    {
-        std::lock_guard<std::mutex> lock(bufferMutex_);
-        deltaBuffer_.push_back(delta);
-        while (deltaBuffer_.size() > config_.deltaBufferCap) {
-            deltaBuffer_.pop_front();
-        }
+    deltaBuffer_.push_back(delta);
+    while (deltaBuffer_.size() > config_.deltaBufferCap) {
+        deltaBuffer_.pop_front();
     }
     sendToPeer(delta);
 }
@@ -67,17 +65,13 @@ asio::awaitable<neograph::json> SessionController::handleInterrupt(
     auto timeout = config_.interruptTimeout;
 
     auto    ch = std::make_shared<RespChannel>(ex_, 1);
-    int64_t id;
-    {
-        std::lock_guard<std::mutex> lock(pendingMutex_);
-        id           = nextReqId_++;
-        pending_[id] = PendingInterrupt{
-            ch,
-            std::string{interruptNode},
-            std::string{interruptValue},
-            std::string{interruptArgJson}
-        };
-    }
+    int64_t id = nextReqId_++;
+    pending_[id] = PendingInterrupt{
+        ch,
+        std::string{interruptNode},
+        std::string{interruptValue},
+        std::string{interruptArgJson}
+    };
 
     sendToPeer(WireInterruptRequest{
         .id       = id,
@@ -93,10 +87,7 @@ asio::awaitable<neograph::json> SessionController::handleInterrupt(
     } catch (const boost::system::system_error& e) {
         XX_LOGW("[session_ctrl] interrupt #{} ended early: {}", id, e.what());
     }
-    {
-        std::lock_guard<std::mutex> lock(pendingMutex_);
-        pending_.erase(id);
-    }
+    pending_.erase(id);
     co_return result;
 }
 
@@ -146,45 +137,37 @@ void SessionController::onPeerMessage(WireMessage msg) {
 void SessionController::handleHello(const WireHello& hello, std::vector<std::string> models) {
     cancelGraceTimer();
 
-    // 在锁内收集重放数据, 释放锁后再发送 (避免持锁期间做 IO)
     std::vector<Delta>                replayDeltas;
     std::optional<SyncPayload>        replaySync;
     std::string                       tailHash;
     std::vector<WireInterruptRequest> pendingInterrupts;
 
-    {
-        std::lock_guard<std::mutex> lock(bufferMutex_);
-        auto                        sess = session();
-        tailHash                         = sess ? sess->chainHash.tailHex() : std::string{};
+    auto sess = session();
+    tailHash  = sess ? sess->chainHash.tailHex() : std::string{};
 
-        if (hello.lastSeq > 0) {
-            auto deltas = deltasSinceLocked(hello.lastSeq);
-            if (deltas.has_value()) {
-                replayDeltas = std::move(deltas.value());
-            } else {
-                replaySync = buildFullSync();
-            }
+    if (hello.lastSeq > 0) {
+        auto deltas = deltasSince(hello.lastSeq);
+        if (deltas.has_value()) {
+            replayDeltas = std::move(deltas.value());
         } else {
-            if (sess && !sess->fullHistory.empty()) {
-                replaySync = buildFullSync();
-            }
+            replaySync = buildFullSync();
+        }
+    } else {
+        if (sess && !sess->fullHistory.empty()) {
+            replaySync = buildFullSync();
         }
     }
 
-    {
-        std::lock_guard<std::mutex> lock2(pendingMutex_);
-        for (const auto& [id, p] : pending_) {
-            pendingInterrupts.push_back(WireInterruptRequest{
-                .id       = id,
-                .threadId = config_.threadId,
-                .node     = p.node,
-                .value    = p.value,
-                .argJson  = p.argJson,
-            });
-        }
+    for (const auto& [id, p] : pending_) {
+        pendingInterrupts.push_back(WireInterruptRequest{
+            .id       = id,
+            .threadId = config_.threadId,
+            .node     = p.node,
+            .value    = p.value,
+            .argJson  = p.argJson,
+        });
     }
 
-    // 锁外发送
     for (const auto& d : replayDeltas) {
         sendToPeer(d);
     }
@@ -213,16 +196,9 @@ void SessionController::onDisconnect() {
 }
 
 void SessionController::resolveInterrupt(int64_t id, neograph::json result) {
-    std::shared_ptr<RespChannel> ch;
-    {
-        std::lock_guard<std::mutex> lock(pendingMutex_);
-        auto                        it = pending_.find(id);
-        if (it != pending_.end()) {
-            ch = it->second.ch;
-        }
-    }
-    if (ch) {
-        ch->try_send(ErrorCode{}, std::move(result));
+    auto it = pending_.find(id);
+    if (it != pending_.end()) {
+        it->second.ch->try_send(ErrorCode{}, std::move(result));
     }
 }
 
@@ -289,6 +265,15 @@ asio::awaitable<void> SessionController::run() {
 }
 
 void SessionController::stop() {
+    if (stopped_.load(std::memory_order_acquire)) {
+        return;
+    }
+    asio::dispatch(ex_, [self = shared_from_this()]() {
+        self->stopImpl();
+    });
+}
+
+void SessionController::stopImpl() {
     bool expected = false;
     if (!stopped_.compare_exchange_strong(expected, true)) {
         return;
@@ -306,7 +291,7 @@ void SessionController::stop() {
 // 推送 / 缓冲
 // ---------------------------------------------------------------------------
 
-std::optional<std::vector<Delta>> SessionController::deltasSinceLocked(uint64_t seq) {
+std::optional<std::vector<Delta>> SessionController::deltasSince(uint64_t seq) {
     if (deltaBuffer_.empty()) {
         return std::nullopt;
     }
@@ -369,10 +354,7 @@ void SessionController::startGraceTimer() {
     }
     auto timer = std::make_shared<asio::steady_timer>(ex_);
     timer->expires_after(config_.gracePeriod);
-    {
-        std::lock_guard<std::mutex> lock(graceMutex_);
-        graceTimer_ = timer;
-    }
+    graceTimer_ = timer;
     auto self = shared_from_this();
     asio::co_spawn(
         ex_,
@@ -398,19 +380,14 @@ void SessionController::startGraceTimer() {
 }
 
 void SessionController::cancelGraceTimer() {
-    std::shared_ptr<asio::steady_timer> t;
-    {
-        std::lock_guard<std::mutex> lock(graceMutex_);
-        t = std::move(graceTimer_);
-        graceTimer_.reset();
-    }
+    auto t = std::move(graceTimer_);
+    graceTimer_.reset();
     if (t) {
         t->cancel();
     }
 }
 
 void SessionController::failAllPending() {
-    std::lock_guard<std::mutex> lock(pendingMutex_);
     for (auto& [id, p] : pending_) {
         p.ch->close();
     }

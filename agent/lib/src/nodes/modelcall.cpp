@@ -435,20 +435,21 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
         }
 
         // 自动重试
-        XX_LOGD(
-            "LLMCallNode retry: {}/{} | {}",
-            retry,
-            agentCtxPtr->agentConfig->llmMaxRetry,
-            errInfo
-        );
         retry++;
         size_t appendDelay = 0;
         if (defaultRateLimitTag.contains(errInfo)) {
             // 限速，增加延时
-            appendDelay = retry * 1000 * 5;
+            appendDelay = retry * 5;
         }
+        XX_LOGD(
+            "LLMCallNode Retry delay {} seconds: {}/{} | {}",
+            retry + appendDelay,
+            retry,
+            agentCtxPtr->agentConfig->llmMaxRetry,
+            errInfo
+        );
         // 逐渐延长延时等待
-        timer.expires_after(std::chrono::milliseconds(retry * 1000 + appendDelay));
+        timer.expires_after(std::chrono::milliseconds((retry + appendDelay) * 1000));
         co_await timer.async_wait(asio::use_awaitable);
     } while (true);
 }

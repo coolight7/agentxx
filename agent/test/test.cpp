@@ -12,6 +12,7 @@
 #include "test_codegraph_tools.h"
 #include "test_command_tools.h"
 #include "test_concurrency.h"
+#include "test_lockless.h"
 #include "test_cpu_gpu_use.h"
 #include "test_crossagent.h"
 #include "test_datetime_tool.h"
@@ -37,6 +38,7 @@
 #include "test_text_selection_monitor.h"
 #include "test_web_search_tools.h"
 #include "test_websocket.h"
+#include "test_session_concurrency.h"
 #include <cstring>
 #include <iostream>
 #include <map>
@@ -102,6 +104,7 @@ int main(int argn, char** argv) {
     runSync("diff_util", agentxx::test::testDiffUtil);
     runSync("events", agentxx::test::test_events);
     runSync("concurrency", agentxx::test::testConcurrency);
+    runSync("lockless", agentxx::test::testLockless);
     runSync("misc_fixes", agentxx::test::testMiscFixes);
 
     // ---- 异步测试模块 ----
@@ -186,6 +189,7 @@ int main(int argn, char** argv) {
             co_await run("openai_provider", agentxx::test::run_openai_provider_tests);
             co_await run("anthropic_provider", agentxx::test::run_anthropic_provider_tests);
             co_await run("deepagent", agentxx::test::run_deepagent_tests);
+            
             ioCtx.stop();
         },
         asio::detached
@@ -205,6 +209,9 @@ int main(int argn, char** argv) {
             monitor->stop();
         }
     }
+
+    // ---- Session 并发访问测试 ----
+    runSync("session_concurrency", agentxx::test::testSessionConcurrentAccess);
 
     std::cout << "======= Test Done =======" << std::endl;
     std::cout << "Total: passed=" << total.passed << " failed=" << total.failed << std::endl;

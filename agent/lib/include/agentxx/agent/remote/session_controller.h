@@ -10,7 +10,6 @@
 #include <deque>
 #include <map>
 #include <memory>
-#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -33,8 +32,8 @@ class Session;
 /// - 作为 AgentIOBase 被 DeepAgent 驱动; 驱动循环独立于连接存在
 /// - 持有 delta 环形缓冲, 供重连时增量重放 (seq 连续则重放, 否则回退全量 sync)
 /// - 通过 transport 与客户端端点通信 (Channel 或 WS)
-/// - 线程模型: 驱动循环在 agent executor 上; onDelta 可能来自 engine 线程,
-///   故 delta 缓冲加锁保护
+/// - 线程模型: 所有成员状态 (deltaBuffer_/pending_/graceTimer_) 仅在 ex_ 线程访问，
+///   无需锁保护; stop() 通过 asio::dispatch(ex_) 保证在 ex_ 线程执行清理
 class SessionController : public AgentIOBase,
                           public std::enable_shared_from_this<SessionController> {
 public:
@@ -118,8 +117,8 @@ private:
 
     asio::awaitable<std::optional<std::string>> waitInput();
 
-    /// 取 seq 之后的 delta (调用方须持有 bufferMutex_); nullopt 表示需全量 sync
-    std::optional<std::vector<Delta>> deltasSinceLocked(uint64_t seq);
+    /// 取 seq 之后的 delta; nullopt 表示需全量 sync
+    std::optional<std::vector<Delta>> deltasSince(uint64_t seq);
 
     SyncPayload              buildFullSync();
     std::shared_ptr<Session> session();
@@ -131,27 +130,27 @@ private:
     void cancelGraceTimer();
     void failAllPending();
 
+    /// 实际清理逻辑 (须在 ex_ 线程执行)
+    void stopImpl();
+
     void resolveInterrupt(int64_t id, neograph::json result);
     void onCancel();
 
     asio::any_io_executor    ex_;
     std::weak_ptr<DeepAgent> agent_;
     Config                   config_;
-
-    // delta 环形缓冲 (跨线程: onDelta 写, handleHello 读)
-    mutable std::mutex bufferMutex_;
-    std::deque<Delta>  deltaBuffer_;
-
-    // 输入 channel (onPeerMessage 写, waitInput 读)
+    
+    // delta 环形缓冲 (仅 ex_ 线程访问: onDelta 写, handleHello 读)
+    std::deque<Delta> deltaBuffer_;
+    
+    // 输入 channel (concurrent_channel 内部线程安全)
     std::shared_ptr<InputChannel> inputChannel_;
 
-    // pending interrupt (pendingMutex_ 保护; 不在持锁期间 co_await)
-    std::mutex                          pendingMutex_;
+    // pending interrupt (仅 ex_ 线程访问: handleInterrupt 写, resolveInterrupt 读)
     std::map<int64_t, PendingInterrupt> pending_;
     int64_t                             nextReqId_ = 1;
 
-    // grace 定时器
-    std::mutex                          graceMutex_;
+    // grace 定时器 (仅 ex_ 线程访问: startGraceTimer/cancelGraceTimer)
     std::shared_ptr<asio::steady_timer> graceTimer_;
 
     std::atomic<bool> running_{false};

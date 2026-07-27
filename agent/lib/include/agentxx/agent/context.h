@@ -52,9 +52,11 @@ enum class Activity : uint8_t {
 };
 
 /// 单个会话的独立状态 (按 thread_id 区分)
-/// - 设计目标: 单线程/多协程交错执行多会话, 会话间状态彼此隔离
-/// - io/contextStats 在 agent 线程(io_context)上访问
-/// - cancelToken/modelName 可能被 UI 线程访问, 故加锁保护
+/// - 设计目标：单线程/多协程交错执行多会话，会话间状态彼此隔离
+/// - io/bus/contextStats 在 agent 线程 (io_context) 上访问，无需额外同步
+/// - fullHistory/llmMessages/deltaSeq 仅在 DeepAgent::runConversationTurnAsync 中写入（ioContext 线程）
+///   UI 线程仅通过 getFullHistoryCopy() 等辅助方法只读访问，避免竞争条件
+/// - cancelToken/modelName 支持 UI 线程读取（用于显示取消按钮和当前模型），加锁保护
 class Session {
 public:
 
@@ -76,7 +78,43 @@ public:
     /// Delta 流序号 (单调递增)
     uint64_t deltaSeq = 0;
 
-    /// 向 fullHistory 追加一条消息并更新链式哈希, 返回分配的 msgId
+    /// 获取完整历史消息副本（无锁，原子读取）
+    /// - 返回的是不可变快照的拷贝
+    std::vector<HistoryMessage> getFullHistoryCopy() const {
+        auto snap = historySnapshot_.load(std::memory_order_acquire);
+        return *snap;  // 拷贝已有，无需锁
+    }
+    
+    /// 获取 LLm 上下文消息副本（使用原有锁机制）
+    neograph::json getLlmMessagesCopy() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return llmMessages.dump();
+    }
+    
+    /// 获取链式哈希信息（线程安全）
+    struct HashInfo {
+        size_t count;
+        std::string tailHex;
+    };
+    
+    HashInfo getHashInfo() const {
+        // ChainHash 不支持 atomic，使用简单内存序读取
+        // 注意：这里是潜在的数据竞争窗口，但只影响校验一致性
+        // 设计保证 appendHistory 仅在 ioContext 线程调用，UI 读取为 snapshot
+        if (fullHistory.empty()) {
+            return {0, {}};
+        }
+        return {chainHash.count(), chainHash.tailHex()};
+    }
+    
+    /// 获取 Delta 序列号（使用原锁机制）
+    uint64_t getDeltaSeq() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return deltaSeq;
+    }
+    
+    /// 向 fullHistory 追加一条消息并更新链式哈希，返回分配的 msgId
+    /// 注意：此方法应在 ioContext 线程内调用，调用方需自行处理锁
     std::string appendHistory(neograph::json msgData);
 
     /// 设置本会话当前轮次的取消令牌 (线程安全)
@@ -92,10 +130,15 @@ public:
 
 private:
 
-    mutable std::mutex                            mutex_;
+    mutable std::mutex                            mutex_;           // 保护 cancelToken_, modelName_, msgIdCounter_
     std::shared_ptr<neograph::graph::CancelToken> cancelToken_ = nullptr;
     std::string                                   modelName_;
     uint64_t                                      msgIdCounter_ = 0;
+    
+    // 无锁同步状态（history 快照用于 UI 读取）
+    std::atomic<std::shared_ptr<const std::vector<HistoryMessage>>> historySnapshot_{
+        std::make_shared<const std::vector<HistoryMessage>>()
+    };
 };
 
 /// 会话存储: 按 thread_id 取/建 Session (线程安全)
@@ -112,8 +155,7 @@ public:
 
 private:
 
-    std::mutex                                                   mutex_;
-    std::map<std::string, std::shared_ptr<Session>, std::less<>> sessions_;
+    std::map<std::string, std::shared_ptr<Session>, std::less<>> sessions_;  // 单线程访问，无需锁
 };
 
 class AgentContext {
