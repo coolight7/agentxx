@@ -8,6 +8,11 @@ std::string Session::appendHistory(neograph::json msgData) {
     auto id = fmt::format("msg_{:06d}", ++msgIdCounter_);
     chainHash.append(msgData.dump());
     fullHistory.push_back(HistoryMessage{id, std::move(msgData)});
+    
+    // 发布新快照（原子替换，无锁读取）
+    auto snapshot = std::make_shared<const std::vector<HistoryMessage>>(fullHistory);
+    historySnapshot_.store(snapshot, std::memory_order_release);
+    
     return id;
 }
 
@@ -32,8 +37,7 @@ std::string Session::getModelName() const {
 }
 
 std::shared_ptr<Session> SessionStore::getOrCreate(std::string_view threadId) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    auto                        it = sessions_.find(threadId);
+    auto it = sessions_.find(threadId);
     if (it != sessions_.end()) {
         return it->second;
     }
@@ -43,13 +47,11 @@ std::shared_ptr<Session> SessionStore::getOrCreate(std::string_view threadId) {
 }
 
 std::shared_ptr<Session> SessionStore::get(std::string_view threadId) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    auto                        it = sessions_.find(threadId);
+    auto it = sessions_.find(threadId);
     return it == sessions_.end() ? nullptr : it->second;
 }
 
 void SessionStore::remove(std::string_view threadId) {
-    std::lock_guard<std::mutex> lock(mutex_);
     sessions_.erase(threadId);
 }
 

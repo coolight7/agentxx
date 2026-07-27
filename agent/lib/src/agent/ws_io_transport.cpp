@@ -95,11 +95,11 @@ asio::awaitable<bool> WsAgentIOTransport::connect(const WireHello& hello) {
     // 记录 threadId 供重连时复用
     helloThreadId_ = hello.threadId;
 
-    // 客户端模式: 发送 hello 并等待 helloAck
-    // 注意: HelloAck 在此处被消费 (仅用于握手判断), 不会传递给 runTransportLoop 的调用方
+    // 客户端模式：发送 hello 并等待 helloAck
+    // 注意：HelloAck 在此处被消费 (仅用于握手判断), 不会传递给 runTransportLoop 的调用方
     auto helloJson = remote::makeHello(hello.threadId, hello.token, hello.lastSeq, hello.tailHash);
     writeQueue_->try_send(ErrorCode{}, helloJson.dump());
-
+    
     try {
         for (;;) {
             auto msg = co_await recvQueue_->async_receive(
@@ -109,10 +109,13 @@ asio::awaitable<bool> WsAgentIOTransport::connect(const WireHello& hello) {
                 break;
             }
         }
-    } catch (const boost::system::system_error&) {
-        // 超时或 channel 关闭
+    } catch (const boost::system::system_error& e) {
+        // 超时或 channel 关闭，确保资源清理
+        XX_LOGW("[ws_transport] auth handshake timeout or disconnected: {}", e.what());
+        stopLoops();  // 确保所有循环和资源被正确关闭
+        connected_.store(false, std::memory_order_release);  // 明确设置连接状态
     }
-
+    
     co_return connected_.load(std::memory_order_acquire);
 }
 
