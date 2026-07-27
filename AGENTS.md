@@ -9,6 +9,7 @@
     - Android 5.0+
 
 ## 设计
+- 详细架构设计见[design.md](docs/zh-cn/design.md)，当大幅修改代码时，请参考并更新
 - Agent 的设计支持:
     - 并发多会话，单线程/多协程交错执行会话，不需要线程锁
     - client 主要负责UI渲染展示、用户交互；agent (DeepAgent) 负责运行会话，调用 llm api、运行 toolcall 等
