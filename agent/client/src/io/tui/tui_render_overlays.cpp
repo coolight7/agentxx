@@ -83,15 +83,17 @@ ftxui::Element AgentTUI::renderStatusBar() {
         ctx    = session_->contextStats->contextTokens.load();
         maxCtx = session_->contextStats->maxContextTokens.load();
     }
-    const auto toK = [](size_t v) {
-        return fmt::format("{:.1f}k", static_cast<double>(v) / 1000.0);
-    };
     std::string ctxText;
     if (maxCtx > 0) {
         const double pct = 100.0 * static_cast<double>(ctx) / static_cast<double>(maxCtx);
-        ctxText          = fmt::format(" {}/{} ({:.1f}%) ", toK(ctx), toK(maxCtx), pct);
+        ctxText          = fmt::format(
+            " {}/{} ({:.1f}%) ",
+            agentxx::util::formatSize(ctx),
+            agentxx::util::formatSize(maxCtx),
+            pct
+        );
     } else {
-        ctxText = fmt::format(" {} ", toK(ctx));
+        ctxText = fmt::format(" {} ", agentxx::util::formatSize(ctx));
     }
     auto ctxInfo = text(ctxText) | color(theme_.statusColor);
 

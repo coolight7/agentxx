@@ -296,16 +296,17 @@ Options:
     if (mode == "tui") {
         agentxx::util::LogDispatcher::instance().removeSink(defaultLogSink);
         config->logPrintToolcall                       = false;
-        config->logPrintMessagesBeforeLLM              = true;
+        config->logPrintMessagesBeforeLLM              = false;
         config->logPrintMessagesBeforeLLMWithSystemMsg = false;
         config->logPrintSummarizationResultTokenCount  = true;
         auto agent = std::make_shared<agentxx::agent::DeepAgent>(config);
         runLocalTuiUnified(agent, config);
     } else {
         agentxx::util::LogDispatcher::instance().removeSink(defaultLogSink);
-        config->logPrintToolcall                      = true;
-        config->logPrintMessagesBeforeLLM             = true;
-        config->logPrintSummarizationResultTokenCount = true;
+        config->logPrintToolcall                       = false;
+        config->logPrintMessagesBeforeLLM              = false;
+        config->logPrintMessagesBeforeLLMWithSystemMsg = false;
+        config->logPrintSummarizationResultTokenCount  = true;
         auto agent = std::make_shared<agentxx::agent::DeepAgent>(config);
         runLocalCliUnified(agent);
     }
