@@ -3,11 +3,13 @@
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/conversation_types.h"
 #include <atomic>
+#include <cassert>
 #include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace agentxx::middleware {
@@ -54,8 +56,9 @@ enum class Activity : uint8_t {
 /// 单个会话的独立状态 (按 thread_id 区分)
 /// - 设计目标：单线程/多协程交错执行多会话，会话间状态彼此隔离
 /// - io/bus/contextStats 在 agent 线程 (io_context) 上访问，无需额外同步
-/// - fullHistory/llmMessages/deltaSeq 仅在 DeepAgent::runConversationTurnAsync 中写入（ioContext 线程）
-///   UI 线程仅通过 getFullHistoryCopy() 等辅助方法只读访问，避免竞争条件
+/// - fullHistory/llmMessages/deltaSeq/chainHash 仅在 ioContext 线程写入
+///   通过 bindIoThread() 绑定 io 线程, assertIoThread() 强制校验
+///   UI 线程仅通过 getFullHistoryCopy() / getHashInfoSnapshot() 等快照方法只读访问
 /// - cancelToken/modelName 支持 UI 线程读取（用于显示取消按钮和当前模型），加锁保护
 class Session {
 public:
@@ -70,51 +73,79 @@ public:
     std::atomic<Activity> activity{Activity::Idle};
 
     /// 完整历史消息 (append-only, 永不压缩, 用于 client 同步与展示)
+    /// - 仅 ioContext 线程可写 (appendHistory), 通过 assertIoThread() 强制
     std::vector<HistoryMessage> fullHistory;
     /// LLM 上下文消息 (可压缩/裁剪, 仅用于调用 LLM API)
+    /// - 仅 ioContext 线程可读写
     neograph::json llmMessages = neograph::json::array();
     /// fullHistory 的链式哈希 (用于 client 校验一致性)
+    /// - 仅 ioContext 线程可写 (appendHistory 内部更新)
     ChainHash chainHash;
-    /// Delta 流序号 (单调递增)
-    uint64_t deltaSeq = 0;
+    /// Delta 流序号 (单调递增, 原子操作, 跨线程安全)
+    std::atomic<uint64_t> deltaSeq{0};
+
+    // -------------------------------------------------------------------
+    // 线程绑定: 强制 fullHistory/llmMessages/chainHash 只在 io 线程写入
+    // -------------------------------------------------------------------
+
+    /// 绑定 io 线程 (在 DeepAgent::runConversationTurnAsync 首次使用时调用)
+    /// - 仅首次调用生效, 后续调用为 no-op
+    void bindIoThread() {
+        auto expected = std::thread::id{};
+        ioThreadId_.compare_exchange_strong(expected, std::this_thread::get_id());
+    }
+
+    /// 断言当前线程为已绑定的 io 线程
+    /// - 未绑定时 (ioThreadId_ == default) 不触发, 允许初始化阶段使用
+    /// - 已绑定后, 非 io 线程调用将触发 assert 失败 (Debug) / 未定义行为 (Release)
+    void assertIoThread() const {
+        auto bound = ioThreadId_.load(std::memory_order_relaxed);
+        assert(
+            (bound == std::thread::id{} || bound == std::this_thread::get_id())
+            && "Session: mutable state (fullHistory/llmMessages/chainHash) must only be "
+               "accessed on the bound io thread"
+        );
+    }
+
+    // -------------------------------------------------------------------
+    // 跨线程安全的只读快照接口 (UI / SessionController 线程可调用)
+    // -------------------------------------------------------------------
 
     /// 获取完整历史消息副本（无锁，原子读取）
-    /// - 返回的是不可变快照的拷贝
+    /// - 返回的是不可变快照的拷贝, 任意线程安全
     std::vector<HistoryMessage> getFullHistoryCopy() const {
         auto snap = historySnapshot_.load(std::memory_order_acquire);
-        return *snap;  // 拷贝已有，无需锁
+        return *snap;
     }
-    
-    /// 获取 LLm 上下文消息副本（使用原有锁机制）
+
+    /// 获取 LLM 上下文消息副本（加锁, 任意线程安全）
     neograph::json getLlmMessagesCopy() const {
         std::lock_guard<std::mutex> lock(mutex_);
-        return llmMessages.dump();
+        return llmMessages;
     }
-    
-    /// 获取链式哈希信息（线程安全）
+
+    /// 获取链式哈希信息（线程安全, 基于快照）
     struct HashInfo {
-        size_t count;
+        size_t      count   = 0;
         std::string tailHex;
     };
-    
+
     HashInfo getHashInfo() const {
-        // ChainHash 不支持 atomic，使用简单内存序读取
-        // 注意：这里是潜在的数据竞争窗口，但只影响校验一致性
-        // 设计保证 appendHistory 仅在 ioContext 线程调用，UI 读取为 snapshot
-        if (fullHistory.empty()) {
-            return {0, {}};
-        }
-        return {chainHash.count(), chainHash.tailHex()};
+        auto snap = hashSnapshot_.load(std::memory_order_acquire);
+        return *snap;
     }
-    
-    /// 获取 Delta 序列号（使用原锁机制）
+
+    /// 获取 Delta 序列号（原子读取, 任意线程安全）
     uint64_t getDeltaSeq() const {
-        std::lock_guard<std::mutex> lock(mutex_);
-        return deltaSeq;
+        return deltaSeq.load(std::memory_order_acquire);
     }
-    
+
+    // -------------------------------------------------------------------
+    // io 线程专用写入接口
+    // -------------------------------------------------------------------
+
     /// 向 fullHistory 追加一条消息并更新链式哈希，返回分配的 msgId
-    /// 注意：此方法应在 ioContext 线程内调用，调用方需自行处理锁
+    /// - 必须在 ioContext 线程内调用 (assertIoThread 强制校验)
     std::string appendHistory(neograph::json msgData);
 
     /// 设置本会话当前轮次的取消令牌 (线程安全)
@@ -130,14 +161,22 @@ public:
 
 private:
 
-    mutable std::mutex                            mutex_;           // 保护 cancelToken_, modelName_, msgIdCounter_
+    mutable std::mutex                            mutex_; // 保护 cancelToken_, modelName_, llmMessages 跨线程读
     std::shared_ptr<neograph::graph::CancelToken> cancelToken_ = nullptr;
     std::string                                   modelName_;
     uint64_t                                      msgIdCounter_ = 0;
-    
-    // 无锁同步状态（history 快照用于 UI 读取）
+
+    /// 绑定的 io 线程 id (std::thread::id{} 表示未绑定)
+    std::atomic<std::thread::id> ioThreadId_{std::thread::id{}};
+
+    /// 无锁快照: fullHistory (供 UI 线程只读)
     std::atomic<std::shared_ptr<const std::vector<HistoryMessage>>> historySnapshot_{
         std::make_shared<const std::vector<HistoryMessage>>()
+    };
+
+    /// 无锁快照: chainHash 信息 (供 UI 线程只读)
+    std::atomic<std::shared_ptr<const HashInfo>> hashSnapshot_{
+        std::make_shared<const HashInfo>()
     };
 };
 
@@ -155,7 +194,13 @@ public:
 
 private:
 
-    std::map<std::string, std::shared_ptr<Session>, std::less<>> sessions_;  // 单线程访问，无需锁
+    /// 保护 sessions_ 的互斥锁
+    /// - getOrCreate/get/remove 会被 agent 线程 (io_context) 与 UI 线程并发调用
+    ///   (如 DeepAgent middleware 与 AgentTUI 渲染/事件线程同时取会话),
+    ///   std::map 非线程安全, 并发 find/insert 会破坏内部红黑树结构
+    ///   (数据竞争 / use-after-free / 遍历死循环导致卡住无响应)
+    mutable std::mutex                                           mutex_;
+    std::map<std::string, std::shared_ptr<Session>, std::less<>> sessions_;
 };
 
 class AgentContext {
