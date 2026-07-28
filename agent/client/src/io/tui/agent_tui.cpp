@@ -129,7 +129,7 @@ void AgentTUI::start() {
                         text("  "),
                         indicator,
                         text("  "),
-                        input_component->Render() | color(theme_.inputTextColor) | focus | flex,
+                        input_component->Render() | color(theme_.inputTextColor) | flex,
                         text("  "),
                     }),
                     text(" "),
