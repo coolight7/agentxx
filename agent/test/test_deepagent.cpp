@@ -60,19 +60,6 @@ neograph::json g_da_sim_tool_calls        = neograph::json::array();
 /// 默认模拟器配置
 static DaSimConfig g_defaultSimConfig;
 
-/// 生成随机延迟时间（毫秒）
-static std::chrono::milliseconds generateRandomDelay(const DaSimConfig& config) {
-    if (!config.enableRandomDelay) {
-        return std::chrono::milliseconds{0};
-    }
-    // 简单线性伪随机数生成器
-    static thread_local uint64_t randState = 12345;
-    randState   = randState * 6364136223846793005ULL + 1442695040888963407ULL;
-    auto range  = static_cast<uint64_t>(config.maxDelay.count() - config.minDelay.count());
-    auto offset = (randState % (range + 1));
-    return std::chrono::milliseconds{static_cast<int>(config.minDelay.count() + offset)};
-}
-
 DaSimServer::DaSimServer(DaSimServer&& o) noexcept :
     svr(std::move(o.svr)),
     thr(std::move(o.thr)),

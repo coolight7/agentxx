@@ -173,7 +173,7 @@ private:
             if (!event.empty()) {
                 chunk += fmt::format("event: {}\n", event);
             }
-            chunk += fmt::format("data: {}\n\n", event);
+            chunk += fmt::format("data: {}\n\n", data);
             co_return co_await doWrite(chunk);
         }
 
