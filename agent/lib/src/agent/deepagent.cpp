@@ -155,7 +155,7 @@ asio::awaitable<void> DeepAgent::init() {
         agentContext->middlewareHandleContext->handles.push_back(
             std::make_shared<agentxx::middleware::MiddlewareWrapHandle<
                 agentxx::middleware::BaseMiddlewareState>>(
-                "LogPring",
+                "LogPrint",
                 agentContext,
                 (agentxx::middleware::onGraphNodeBeforeCallFunc) nullptr,
                 (agentxx::middleware::onGraphNodeAfterCallFunc) nullptr,

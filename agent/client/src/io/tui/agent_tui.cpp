@@ -75,17 +75,19 @@ void AgentTUI::start() {
         }
 
         // 使用 Component 构建主 UI 树
-        auto input_option      = InputOption();
-        input_option.multiline = true;
-        input_option.transform = [](InputState state) {
+        auto input_option            = InputOption();
+        input_option.multiline       = true;
+        input_option.insert          = true;
+        input_option.cursor_position = 0;
+        input_option.placeholder     = "Type a message... (Enter=send, Alt+Enter=newline)";
+        input_option.on_enter        = nullptr;
+        input_option.transform       = [](InputState state) {
             if (state.is_placeholder) {
                 state.element |= dim;
             }
             return state.element;
         };
-        input_option.on_enter = nullptr;
-        auto input_component
-            = Input(&inputText_, "Type a message... (Enter=send, Alt+Enter=newline)", input_option);
+        auto input_component = Input(&inputText_, input_option);
         // 可滚动消息列表组件 (只包裹消息内容, 外层 hbox+spacer 提供宽度约束)
         messagesScrollable_ = std::make_shared<Scrollable>([this]() -> Element {
             // 不能加 flex，否则文本自动换行的宽度取值有问题
@@ -148,11 +150,12 @@ void AgentTUI::start() {
             }
 
             auto messagesArea = hbox({
-                text("   "),
-                messagesScrollable_->Render() | flex,
-                text("   "),
-            });
-            auto mainWidget   = vbox({
+                                    text("   "),
+                                    messagesScrollable_->Render() | flex,
+                                    text("   "),
+                                })
+                                | reflect(messagesAreaBox_);
+            auto mainWidget = vbox({
                 messagesArea | flex,
                 pendingBar,
                 input_bar,

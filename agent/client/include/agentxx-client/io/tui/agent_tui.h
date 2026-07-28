@@ -147,6 +147,8 @@ private:
     /// 用于鼠标点击展开/折叠 (渲染时经 reflect 填充)
     std::vector<ftxui::Box> collapsibleBoxes_;
     std::vector<size_t>     collapsibleMsgIndices_;
+    /// 消息列表整体渲染区域, 用于限制折叠点击的 X 范围 (避免误触侧边栏)
+    ftxui::Box messagesAreaBox_;
 
     std::shared_ptr<agentxx::agent::AgentContext> agentContext_;
     TUITheme                                      theme_;
@@ -167,7 +169,7 @@ private:
     std::atomic<bool>                      running_{false};
 
     /// handleInterrupt 正在等待用户输入时为 true;
-    /// 此时 Alt+Enter 须把输入直接送入 inputChannel_ (而非 isStreaming_ 待发送队列), 否则死锁
+    /// 此时 Enter 须把输入直接送入 inputChannel_ (而非 isStreaming_ 待发送队列), 否则死锁
     std::atomic<bool> awaitingInterruptInput_{false};
 
     std::shared_ptr<LineChannel> inputChannel_;
