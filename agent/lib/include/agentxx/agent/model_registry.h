@@ -4,8 +4,6 @@
 #include "neograph/provider.h"
 #include <map>
 #include <memory>
-#include <mutex>
-#include <shared_mutex>
 #include <string>
 #include <vector>
 
@@ -15,7 +13,8 @@ namespace agent {
 /// 模型 Provider 注册表 (共享)
 /// - 管理多个命名模型配置及其 Provider 实例缓存
 /// - 仅保存可用模型与默认模型; "当前选择" 由各 Session 独立记录
-/// - 线程安全: UI 线程读取/切换, graph 运行线程按名解析 Provider
+/// - 仅在 agent io_context 线程访问, 无需锁保护
+/// - UI 线程通过 Wire 消息 (WireGetModel/WireSelectModel) 间接操作
 class ModelProviderRegistry {
 public:
 
@@ -51,7 +50,6 @@ public:
 
 private:
 
-    mutable std::shared_mutex                                               mutex_;
     std::map<std::string, ModelConfig, std::less<>>                         models_;
     std::map<std::string, std::shared_ptr<neograph::Provider>, std::less<>> providerCache_;
     std::string                                                             defaultName_;

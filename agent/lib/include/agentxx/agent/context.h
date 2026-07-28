@@ -7,7 +7,6 @@
 #include <functional>
 #include <map>
 #include <memory>
-#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -56,10 +55,10 @@ enum class Activity : uint8_t {
 /// 单个会话的独立状态 (按 thread_id 区分)
 /// - 设计目标：单线程/多协程交错执行多会话，会话间状态彼此隔离
 /// - io/bus/contextStats 在 agent 线程 (io_context) 上访问，无需额外同步
-/// - fullHistory/llmMessages/deltaSeq/chainHash 仅在 ioContext 线程写入
+/// - fullHistory/llmMessages/deltaSeq/chainHash/cancelToken/modelName 仅在 ioContext 线程访问
 ///   通过 bindIoThread() 绑定 io 线程, assertIoThread() 强制校验
-///   UI 线程仅通过 getFullHistoryCopy() / getHashInfoSnapshot() 等快照方法只读访问
-/// - cancelToken/modelName 支持 UI 线程读取（用于显示取消按钮和当前模型），加锁保护
+///   UI 线程仅通过 getFullHistoryCopy() / getHashInfo() 等原子快照方法只读访问
+/// - UI 线程的取消/切模型操作通过 Wire 消息 (WireCancel/WireSelectModel) 发往 agent 线程处理
 class Session {
 public:
 
@@ -118,12 +117,6 @@ public:
         return *snap;
     }
 
-    /// 获取 LLM 上下文消息副本（加锁, 任意线程安全）
-    neograph::json getLlmMessagesCopy() const {
-        std::lock_guard<std::mutex> lock(mutex_);
-        return llmMessages;
-    }
-
     /// 获取链式哈希信息（线程安全, 基于快照）
     struct HashInfo {
         size_t      count   = 0;
@@ -148,20 +141,19 @@ public:
     /// - 必须在 ioContext 线程内调用 (assertIoThread 强制校验)
     std::string appendHistory(neograph::json msgData);
 
-    /// 设置本会话当前轮次的取消令牌 (线程安全)
+    /// 设置本会话当前轮次的取消令牌 (仅 io 线程)
     void setCancelToken(std::shared_ptr<neograph::graph::CancelToken> token);
-    /// 获取本会话当前轮次的取消令牌 (线程安全)
+    /// 获取本会话当前轮次的取消令牌 (仅 io 线程)
     std::shared_ptr<neograph::graph::CancelToken> getCancelToken();
 
-    /// 设置本会话选择的模型名 (线程安全)
+    /// 设置本会话选择的模型名 (仅 io 线程)
     /// - 为空表示使用 ModelProviderRegistry 的默认模型
     void setModelName(std::string_view name);
-    /// 获取本会话选择的模型名 (线程安全)
+    /// 获取本会话选择的模型名 (仅 io 线程)
     std::string getModelName() const;
 
 private:
 
-    mutable std::mutex                            mutex_; // 保护 cancelToken_, modelName_, llmMessages 跨线程读
     std::shared_ptr<neograph::graph::CancelToken> cancelToken_ = nullptr;
     std::string                                   modelName_;
     uint64_t                                      msgIdCounter_ = 0;
@@ -180,7 +172,9 @@ private:
     };
 };
 
-/// 会话存储: 按 thread_id 取/建 Session (线程安全)
+/// 会话存储: 按 thread_id 取/建 Session
+/// - 仅在 agent io_context 线程访问, 无需锁保护
+/// - UI 线程通过 Wire 消息间接操作, 不直接访问此存储
 class SessionStore {
 public:
 
@@ -194,12 +188,6 @@ public:
 
 private:
 
-    /// 保护 sessions_ 的互斥锁
-    /// - getOrCreate/get/remove 会被 agent 线程 (io_context) 与 UI 线程并发调用
-    ///   (如 DeepAgent middleware 与 AgentTUI 渲染/事件线程同时取会话),
-    ///   std::map 非线程安全, 并发 find/insert 会破坏内部红黑树结构
-    ///   (数据竞争 / use-after-free / 遍历死循环导致卡住无响应)
-    mutable std::mutex                                           mutex_;
     std::map<std::string, std::shared_ptr<Session>, std::less<>> sessions_;
 };
 

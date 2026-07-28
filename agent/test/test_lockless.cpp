@@ -16,7 +16,7 @@ TestResult testSessionStoreLockless() {
     g_lockless_passed = 0;
     g_lockless_failed = 0;
 
-    // 测试 1: 单线程场景下的基本操作（符合设计保证）
+    // 测试 1: 单线程场景下的基本操作（符合设计保证: 仅 agent io 线程访问）
     {
         using namespace agentxx::agent;
         auto store = std::make_shared<SessionStore>();
@@ -34,40 +34,33 @@ TestResult testSessionStoreLockless() {
         XX_TEST_EXPECT_TRUE(store->get("thread_2") != nullptr);
     }
 
-    // 测试 2: 多线程并发创建/获取 - 验证无竞争条件
+    // 测试 2: 批量创建/获取一致性 (单线程, 模拟多会话场景)
     {
         using namespace agentxx::agent;
         auto store = std::make_shared<SessionStore>();
 
-        constexpr int kThreads = 8;
-        constexpr int kPerThread = 100;
-
-        std::atomic<bool> start{false};
-        std::vector<std::thread> threads;
-        std::vector<std::shared_ptr<Session>> results(kThreads);
-
-        for (int t = 0; t < kThreads; ++t) {
-            threads.emplace_back([&, t]() {
-                while (!start.load(std::memory_order_acquire)) {
-                    std::this_thread::yield();
-                }
-
-                std::shared_ptr<Session> sess;
-                for (int i = 0; i < kPerThread; ++i) {
-                    sess = store->getOrCreate("shared_thread");
-                }
-                results[t] = sess;
-            });
+        constexpr int kSessions = 100;
+        std::vector<std::shared_ptr<Session>> created;
+        for (int i = 0; i < kSessions; ++i) {
+            created.push_back(store->getOrCreate(fmt::format("t_{}", i)));
         }
 
-        start.store(true, std::memory_order_release);
-        for (auto& th : threads) {
-            th.join();
+        XX_TEST_EXPECT_TRUE(created.size() == kSessions);
+        for (int i = 0; i < kSessions; ++i) {
+            auto got = store->get(fmt::format("t_{}", i));
+            XX_TEST_EXPECT_TRUE(got == created[i]);
         }
 
-        XX_TEST_EXPECT_TRUE(results[0] != nullptr);
-        for (int t = 1; t < kThreads; ++t) {
-            XX_TEST_EXPECT_TRUE(results[t] == results[0]);
+        for (int i = 0; i < kSessions; i += 2) {
+            store->remove(fmt::format("t_{}", i));
+        }
+        for (int i = 0; i < kSessions; ++i) {
+            auto got = store->get(fmt::format("t_{}", i));
+            if (i % 2 == 0) {
+                XX_TEST_EXPECT_TRUE(got == nullptr);
+            } else {
+                XX_TEST_EXPECT_TRUE(got != nullptr);
+            }
         }
     }
 
@@ -270,34 +263,16 @@ TestResult testSessionMutexFields() {
 
     using namespace agentxx::agent;
 
-    // cancelToken / modelName 使用 mutex 保护，验证多线程并发 set/get 安全
+    // cancelToken / modelName 仅在 io 线程访问 (单线程), 验证基本 set/get 正确性
     {
         auto session = std::make_shared<Session>();
 
-        constexpr int kThreads = 4;
         constexpr int kIter = 5000;
-        std::atomic<bool> start{false};
-        std::vector<std::thread> threads;
-
-        for (int t = 0; t < kThreads; ++t) {
-            threads.emplace_back([&, t]() {
-                while (!start.load(std::memory_order_acquire)) {
-                    std::this_thread::yield();
-                }
-                auto name = fmt::format("model_{}", t);
-                for (int i = 0; i < kIter; ++i) {
-                    session->setModelName(name);
-                    auto got = session->getModelName();
-                    if (got.substr(0, 6) != "model_") {
-                        return;
-                    }
-                }
-            });
-        }
-
-        start.store(true, std::memory_order_release);
-        for (auto& th : threads) {
-            th.join();
+        for (int i = 0; i < kIter; ++i) {
+            auto name = fmt::format("model_{}", i % 4);
+            session->setModelName(name);
+            auto got = session->getModelName();
+            XX_TEST_EXPECT_TRUE(got == name);
         }
 
         auto final_ = session->getModelName();

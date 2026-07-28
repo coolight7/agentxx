@@ -7,9 +7,7 @@ namespace agentxx {
 namespace agent {
 
 void ModelProviderRegistry::registerModel(std::string_view name, const ModelConfig& config) {
-    std::unique_lock<std::shared_mutex> lock(mutex_);
     models_[std::string{name}] = config;
-    // 同名覆盖注册时使旧 provider 缓存失效, 否则 getProvider 返回基于旧配置的 provider
     providerCache_.erase(name);
     if (defaultName_.empty()) {
         defaultName_ = name;
@@ -17,7 +15,6 @@ void ModelProviderRegistry::registerModel(std::string_view name, const ModelConf
 }
 
 bool ModelProviderRegistry::setDefaultModel(std::string_view name) {
-    std::unique_lock<std::shared_mutex> lock(mutex_);
     if (false == models_.contains(name)) {
         return false;
     }
@@ -26,12 +23,10 @@ bool ModelProviderRegistry::setDefaultModel(std::string_view name) {
 }
 
 std::string ModelProviderRegistry::getDefaultModelName() const {
-    std::shared_lock<std::shared_mutex> lock(mutex_);
     return defaultName_;
 }
 
 std::string ModelProviderRegistry::resolveModelName(std::string_view name) const {
-    std::shared_lock<std::shared_mutex> lock(mutex_);
     if (false == name.empty() && models_.contains(name)) {
         return std::string{name};
     }
@@ -39,7 +34,6 @@ std::string ModelProviderRegistry::resolveModelName(std::string_view name) const
 }
 
 ModelConfig ModelProviderRegistry::getModelConfig(std::string_view name) const {
-    std::shared_lock<std::shared_mutex> lock(mutex_);
     auto effective = (false == name.empty() && models_.contains(name)) ? name : defaultName_;
     auto it        = models_.find(effective);
     if (it == models_.end()) {
@@ -56,38 +50,22 @@ std::shared_ptr<neograph::Provider> ModelProviderRegistry::createProvider(const 
 }
 
 std::shared_ptr<neograph::Provider> ModelProviderRegistry::getProvider(std::string_view name) {
-    std::string effective;
-    ModelConfig cfg;
-    {
-        std::shared_lock<std::shared_mutex> lock(mutex_);
-        effective  = (false == name.empty() && models_.contains(name)) ? name : defaultName_;
-        auto cfgIt = models_.find(effective);
-        if (cfgIt == models_.end()) {
-            return nullptr;
-        }
-        auto cacheIt = providerCache_.find(effective);
-        if (cacheIt != providerCache_.end()) {
-            return cacheIt->second;
-        }
-        // 复制配置, 避免解锁后再使用迭代器 (可能被并发 registerModel 失效)
-        cfg = cfgIt->second;
+    auto effective = (false == name.empty() && models_.contains(name)) ? name : defaultName_;
+    auto cfgIt     = models_.find(effective);
+    if (cfgIt == models_.end()) {
+        return nullptr;
     }
-    auto provider = createProvider(cfg);
-    {
-        std::unique_lock<std::shared_mutex> ulock(mutex_);
-        // 双重检查: 另一线程可能已创建并缓存, 复用以避免重复构造
-        auto cacheIt = providerCache_.find(effective);
-        if (cacheIt != providerCache_.end()) {
-            return cacheIt->second;
-        }
-        providerCache_[effective] = provider;
+    auto cacheIt = providerCache_.find(effective);
+    if (cacheIt != providerCache_.end()) {
+        return cacheIt->second;
     }
+    auto provider              = createProvider(cfgIt->second);
+    providerCache_[effective] = provider;
     return provider;
 }
 
 std::vector<std::string> ModelProviderRegistry::listModelNames() const {
-    std::shared_lock<std::shared_mutex> lock(mutex_);
-    std::vector<std::string>            names;
+    std::vector<std::string> names;
     names.reserve(models_.size());
     for (const auto& kv : models_) {
         names.push_back(kv.first);
@@ -96,12 +74,10 @@ std::vector<std::string> ModelProviderRegistry::listModelNames() const {
 }
 
 bool ModelProviderRegistry::hasModel(std::string_view name) const {
-    std::shared_lock<std::shared_mutex> lock(mutex_);
     return models_.contains(name);
 }
 
 size_t ModelProviderRegistry::size() const {
-    std::shared_lock<std::shared_mutex> lock(mutex_);
     return models_.size();
 }
 

@@ -142,6 +142,8 @@ asio::awaitable<void> test_eventbridge_error() {
 }
 
 asio::awaitable<TestResult> run_event_bridge_tests() {
+    g_eb_passed = 0;
+    g_eb_failed = 0;
     try {
         co_await test_eventbridge_token();
         co_await test_eventbridge_nullbus_passthrough();
