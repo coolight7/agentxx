@@ -58,7 +58,7 @@ struct DaSimServer {
     void stop();
 };
 
-asio::awaitable<TestResult> run_deepagent_tests();
+asio::awaitable<TestResult> run_agent_tests();
 
 /// 启动 LLM 模拟器
 DaSimServer startDaSimServer();

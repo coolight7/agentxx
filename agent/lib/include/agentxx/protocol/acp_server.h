@@ -132,7 +132,7 @@ private:
     // -----------------------------------------------------------------------
 
     Config                                     config_;
-    std::shared_ptr<agentxx::agent::BaseAgent> deepAgent_;
+    std::shared_ptr<agentxx::agent::BaseAgent> agent_;
     json                                       agentInfo_;
     std::atomic<bool>                          initialized_{false};
     std::atomic<bool>                          stopFlag_{false};
@@ -244,7 +244,7 @@ private:
     // -----------------------------------------------------------------------
 
     Config                                     config_;
-    std::shared_ptr<agentxx::agent::BaseAgent> deepAgent_;
+    std::shared_ptr<agentxx::agent::BaseAgent> agent_;
     AcpProtocolHandler                         handler_;
     std::unique_ptr<util::HttpServer>          httpServer_;
 
@@ -281,7 +281,7 @@ public:
 
 private:
 
-    std::shared_ptr<agentxx::agent::BaseAgent> deepAgent_;
+    std::shared_ptr<agentxx::agent::BaseAgent> agent_;
     AcpProtocolHandler                         handler_;
     std::atomic<bool>                          running_{false};
 };

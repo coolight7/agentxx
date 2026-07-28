@@ -8,6 +8,7 @@
 #include "asio/use_awaitable.hpp"
 #include "test_a2a.h"
 #include "test_acp.h"
+#include "test_agent.h"
 #include "test_anthropic_provider.h"
 #include "test_codegraph_tools.h"
 #include "test_command_tools.h"
@@ -15,7 +16,6 @@
 #include "test_cpu_gpu_use.h"
 #include "test_crossagent.h"
 #include "test_datetime_tool.h"
-#include "test_deepagent.h"
 #include "test_diff_util.h"
 #include "test_event_bridge.h"
 #include "test_event_stream.h"
@@ -188,7 +188,7 @@ int main(int argn, char** argv) {
             co_await run("a2a", agentxx::test::run_a2a_tests);
             co_await run("openai_provider", agentxx::test::run_openai_provider_tests);
             co_await run("anthropic_provider", agentxx::test::run_anthropic_provider_tests);
-            co_await run("deepagent", agentxx::test::run_deepagent_tests);
+            co_await run("agent", agentxx::test::run_agent_tests);
 
             ioCtx.stop();
         },
