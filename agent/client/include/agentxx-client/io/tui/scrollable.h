@@ -21,6 +21,7 @@
 ///   bool atBottom = scroll->isStickToBottom();
 class Scrollable : public ftxui::ComponentBase {
 public:
+
     using RenderFunc = std::function<ftxui::Element()>;
 
     static ftxui::Component Create(RenderFunc render) {
@@ -34,6 +35,7 @@ public:
             scroll_ = 1.0f;
         }
     }
+
     bool isStickToBottom() const {
         return stickToBottom_;
     }
@@ -48,21 +50,19 @@ public:
     float scroll() const {
         return scroll_;
     }
+
     void setScroll(float s) {
-        scroll_ = std::max(0.0f, std::min(1.0f, s));
+        scroll_        = std::max(0.0f, std::min(1.0f, s));
         stickToBottom_ = false;
     }
 
-    explicit Scrollable(RenderFunc render)
-        : render_(std::move(render)) {}
+    explicit Scrollable(RenderFunc render) :
+        render_(std::move(render)) {}
 
     // ComponentBase 接口
     ftxui::Element OnRender() override {
-        return render_()
-            | ftxui::focusPositionRelative(0.0f, scroll_)
-            | ftxui::vscroll_indicator
-            | ftxui::yframe
-            | ftxui::reflect(box_);
+        return render_() | ftxui::focusPositionRelative(0.0f, scroll_) | ftxui::vscroll_indicator
+               | ftxui::yframe | ftxui::reflect(box_);
     }
 
     bool OnEvent(ftxui::Event event) override {
@@ -77,7 +77,7 @@ public:
         constexpr float kStep = 0.05f;
         if (mouse.button == ftxui::Mouse::WheelUp) {
             stickToBottom_ = false;
-            scroll_ = std::max(0.0f, scroll_ - kStep);
+            scroll_        = std::max(0.0f, scroll_ - kStep);
             return true;
         }
         if (mouse.button == ftxui::Mouse::WheelDown) {
@@ -92,8 +92,9 @@ public:
     }
 
 private:
+
     RenderFunc render_;
-    float scroll_ = 1.0f;
-    bool stickToBottom_ = true;
+    float      scroll_        = 1.0f;
+    bool       stickToBottom_ = true;
     ftxui::Box box_;
 };

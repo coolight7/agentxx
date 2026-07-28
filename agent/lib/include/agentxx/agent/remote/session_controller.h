@@ -139,10 +139,10 @@ private:
     asio::any_io_executor    ex_;
     std::weak_ptr<BaseAgent> agent_;
     Config                   config_;
-    
+
     // delta 环形缓冲 (仅 ex_ 线程访问: onDelta 写, handleHello 读)
     std::deque<Delta> deltaBuffer_;
-    
+
     // 输入 channel (concurrent_channel 内部线程安全)
     std::shared_ptr<InputChannel> inputChannel_;
 

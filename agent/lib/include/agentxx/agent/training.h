@@ -1,8 +1,8 @@
 #pragma once
 
+#include "agentxx/agent/base_agent.h"
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/config_static.h"
-#include "agentxx/agent/base_agent.h"
 #include "neograph/json.h"
 #include "neograph/llm/openai_provider.h"
 #include "neograph/types.h"

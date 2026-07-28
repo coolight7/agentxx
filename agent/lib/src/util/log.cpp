@@ -212,28 +212,44 @@ static void sigSafeDumpStack(int consoleFd, int fileFd, void** frames, int size)
 /// 信号编号 -> 名称 (async-signal-safe: 仅返回静态字符串)
 static const char* sigName(int signo) {
     switch (signo) {
-        case SIGSEGV: return "SIGSEGV";
-        case SIGABRT: return "SIGABRT";
-        case SIGBUS: return "SIGBUS";
-        case SIGFPE: return "SIGFPE";
-        case SIGILL: return "SIGILL";
-        case SIGTRAP: return "SIGTRAP";
-        case SIGSYS: return "SIGSYS";
-        default: return "UNKNOWN";
+        case SIGSEGV:
+            return "SIGSEGV";
+        case SIGABRT:
+            return "SIGABRT";
+        case SIGBUS:
+            return "SIGBUS";
+        case SIGFPE:
+            return "SIGFPE";
+        case SIGILL:
+            return "SIGILL";
+        case SIGTRAP:
+            return "SIGTRAP";
+        case SIGSYS:
+            return "SIGSYS";
+        default:
+            return "UNKNOWN";
     }
 }
 
 /// 信号编号 -> 简要原因描述
 static const char* sigReason(int signo) {
     switch (signo) {
-        case SIGSEGV: return "Segmentation fault (invalid memory access)";
-        case SIGABRT: return "Abort (assertion failure / std::terminate / abort())";
-        case SIGBUS: return "Bus error (alignment fault / bad physical address)";
-        case SIGFPE: return "Floating-point exception (division by zero / overflow)";
-        case SIGILL: return "Illegal instruction";
-        case SIGTRAP: return "Trace/breakpoint trap";
-        case SIGSYS: return "Bad system call";
-        default: return "Unknown fatal signal";
+        case SIGSEGV:
+            return "Segmentation fault (invalid memory access)";
+        case SIGABRT:
+            return "Abort (assertion failure / std::terminate / abort())";
+        case SIGBUS:
+            return "Bus error (alignment fault / bad physical address)";
+        case SIGFPE:
+            return "Floating-point exception (division by zero / overflow)";
+        case SIGILL:
+            return "Illegal instruction";
+        case SIGTRAP:
+            return "Trace/breakpoint trap";
+        case SIGSYS:
+            return "Bad system call";
+        default:
+            return "Unknown fatal signal";
     }
 }
 
@@ -322,6 +338,7 @@ static void signal_handler(int signo, siginfo_t* info, void* /*ucontext*/) {
 
     // 恢复默认处理并重新抛出, 保留原始退出状态 (core dump 等)
     struct sigaction sa {};
+
     sa.sa_handler = SIG_DFL;
     sigemptyset(&sa.sa_mask);
     sigaction(signo, &sa, nullptr);
@@ -333,12 +350,19 @@ void signalError(std::string_view exepath) {
     XX_LOGI("# Signal error handler: {}", exepath.data());
 
     struct sigaction sa {};
+
     sa.sa_sigaction = signal_handler;
     sa.sa_flags     = SA_SIGINFO | SA_RESETHAND;
     sigemptyset(&sa.sa_mask);
 
     static constexpr int fatalSignals[] = {
-        SIGSEGV, SIGABRT, SIGBUS, SIGFPE, SIGILL, SIGTRAP, SIGSYS,
+        SIGSEGV,
+        SIGABRT,
+        SIGBUS,
+        SIGFPE,
+        SIGILL,
+        SIGTRAP,
+        SIGSYS,
     };
     for (int sig : fatalSignals) {
         sigaction(sig, &sa, nullptr);

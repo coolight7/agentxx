@@ -59,7 +59,7 @@ std::shared_ptr<neograph::Provider> ModelProviderRegistry::getProvider(std::stri
     if (cacheIt != providerCache_.end()) {
         return cacheIt->second;
     }
-    auto provider              = createProvider(cfgIt->second);
+    auto provider             = createProvider(cfgIt->second);
     providerCache_[effective] = provider;
     return provider;
 }

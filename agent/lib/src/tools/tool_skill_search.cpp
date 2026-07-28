@@ -114,7 +114,7 @@ void ToolSkillSearchSubAgentTask::createSystemPrompt() {
 }
 
 void ToolSkillSearchSubAgentTask::createSubgraph(
-    const neograph::graph::NodeContext&        context,
+    const neograph::graph::NodeContext&                   context,
     std::shared_ptr<const neograph::graph::GraphRegistry> registry
 ) {
     if (nullptr == subgraph) {
@@ -122,7 +122,7 @@ void ToolSkillSearchSubAgentTask::createSubgraph(
         config.node_context = context;
         neograph::graph::EngineResources resources;
         resources.registry = std::move(registry);
-        auto inner = neograph::graph::GraphEngine::build(
+        auto inner         = neograph::graph::GraphEngine::build(
             defCreateSubGraphDefine(),
             std::move(config),
             std::move(resources)

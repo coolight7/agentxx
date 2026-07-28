@@ -119,7 +119,7 @@ public:
 
     /// 获取链式哈希信息（线程安全, 基于快照）
     struct HashInfo {
-        size_t      count   = 0;
+        size_t      count = 0;
         std::string tailHex;
     };
 
@@ -167,9 +167,7 @@ private:
     };
 
     /// 无锁快照: chainHash 信息 (供 UI 线程只读)
-    std::atomic<std::shared_ptr<const HashInfo>> hashSnapshot_{
-        std::make_shared<const HashInfo>()
-    };
+    std::atomic<std::shared_ptr<const HashInfo>> hashSnapshot_{std::make_shared<const HashInfo>()};
 };
 
 /// 会话存储: 按 thread_id 取/建 Session

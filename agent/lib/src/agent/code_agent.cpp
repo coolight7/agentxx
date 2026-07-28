@@ -39,8 +39,7 @@ asio::awaitable<void> CodeAgent::setupMiddleware() {
     {
         agentContext->permissionMiddleware
             = std::make_shared<agentxx::middleware::PermissionMiddlewareHandle>(agentContext);
-        agentContext->middlewareHandleContext->handles.push_back(
-            agentContext->permissionMiddleware
+        agentContext->middlewareHandleContext->handles.push_back(agentContext->permissionMiddleware
         );
     }
     {
@@ -70,25 +69,22 @@ asio::awaitable<void> CodeAgent::setupMiddleware() {
         auto planningMiddleware
             = std::make_shared<agentxx::middleware::PlanningMiddlewareHandle>(agentContext);
         planningMiddleware->toolcalls.push_back(
-            std::make_unique<agentxx::tools::WritePlanningTool>(
-                planningMiddleware,
-                agentContext
-            )
+            std::make_unique<agentxx::tools::WritePlanningTool>(planningMiddleware, agentContext)
         );
         agentContext->middlewareHandleContext->handles.push_back(planningMiddleware);
     }
 
     /// Toolcall  应当作为最后一层，输出的日志才会是最终的样子
     agentContext->middlewareHandleContext->handles.push_back(
-        std::make_shared<agentxx::middleware::MiddlewareWrapHandle<
-            agentxx::middleware::BaseMiddlewareState>>(
+        std::make_shared<
+            agentxx::middleware::MiddlewareWrapHandle<agentxx::middleware::BaseMiddlewareState>>(
             "LogPrint",
             agentContext,
             (agentxx::middleware::onGraphNodeBeforeCallFunc) nullptr,
             (agentxx::middleware::onGraphNodeAfterCallFunc) nullptr,
             (agentxx::middleware::onGraphNodeBeforeCallFunc) nullptr,
-            [config = agentContext->agentConfig](neograph::graph::NodeInput& in
-            ) -> asio::awaitable<void> {
+            [config
+             = agentContext->agentConfig](neograph::graph::NodeInput& in) -> asio::awaitable<void> {
                 if (config->logPrintMessagesBeforeLLM) {
                     agentxx::middleware::BaseMiddlewareHandleInterface::printMessages(
                         in.state.get_messages(),
@@ -98,9 +94,9 @@ asio::awaitable<void> CodeAgent::setupMiddleware() {
                 co_return;
             },
             (agentxx::middleware::onGraphNodeAfterCallFunc) nullptr,
-            [ctx    = std::weak_ptr<AgentContext>(agentContext),
-             config = agentContext->agentConfig](neograph::graph::NodeInput& in
-            ) -> asio::awaitable<void> {
+            [ctx = std::weak_ptr<AgentContext>(agentContext),
+             config
+             = agentContext->agentConfig](neograph::graph::NodeInput& in) -> asio::awaitable<void> {
                 if (config->logPrintToolcall) {
                     co_await agentxx::nodes::ToolcallWrapNode::defStdoutLogOnToolcallStart(in);
                 }
@@ -112,8 +108,7 @@ asio::awaitable<void> CodeAgent::setupMiddleware() {
                 }
                 co_return;
             },
-            [ctx    = std::weak_ptr<AgentContext>(agentContext),
-             config = agentContext->agentConfig](
+            [ctx = std::weak_ptr<AgentContext>(agentContext), config = agentContext->agentConfig](
                 const neograph::graph::NodeInput& in,
                 neograph::graph::NodeOutput&      result
             ) -> asio::awaitable<void> {
@@ -138,7 +133,7 @@ asio::awaitable<void> CodeAgent::setupMiddleware() {
 }
 
 asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAgent::createTools() {
-    auto config = agentContext->agentConfig;
+    auto        config           = agentContext->agentConfig;
     const auto& subagentModelCfg = config->getSubagentModel();
 
     std::vector<std::unique_ptr<agentxx::tools::XXToolBase>> tools{};
@@ -161,8 +156,7 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
                     auto mcpTools = co_await mcpClient->listTools();
                     if (mcpTools.has_value()) {
                         for (auto& tool : mcpTools.value()) {
-                            tools.push_back(mcpClient->createTool(std::move(tool), agentContext)
-                            );
+                            tools.push_back(mcpClient->createTool(std::move(tool), agentContext));
                         }
                     } else {
                         XX_LOGE(
@@ -173,22 +167,12 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
                         );
                     }
                 } else {
-                    XX_LOGE(
-                        "load mcp tool error: {} | {} | {}",
-                        mcpNamespace,
-                        url,
-                        result.error()
-                    );
+                    XX_LOGE("load mcp tool error: {} | {} | {}", mcpNamespace, url, result.error());
                 }
                 co_return;
             },
             [&](std::string errmsg) -> asio::awaitable<void> {
-                XX_LOGE(
-                    "[agentxx] Append mcp tool error: {} | {} | {}",
-                    mcpNamespace,
-                    url,
-                    errmsg
-                );
+                XX_LOGE("[agentxx] Append mcp tool error: {} | {} | {}", mcpNamespace, url, errmsg);
                 co_return;
             }
         );
@@ -235,9 +219,9 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
             config->model.apiKey,
             config->model.modelName
         );
-        auto docsStore = std::make_shared<agentxx::tools::RAGSearchTool::VectorStore>(client);
-        auto docs      = co_await docsStore->scanDocument(config->ragDocsPaths);
-        auto docxSize  = docs.size();
+        auto docsStore    = std::make_shared<agentxx::tools::RAGSearchTool::VectorStore>(client);
+        auto docs         = co_await docsStore->scanDocument(config->ragDocsPaths);
+        auto docxSize     = docs.size();
         auto isAddSuccess = co_await docsStore->addDocuments(std::move(docs));
         XX_LOGD(
             R"_(
@@ -245,8 +229,7 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
 {}
 ┗━━━━━━ RAG Embedding ━━━━━━┛
 )_",
-            isAddSuccess ? fmt::format("┣━ ✅ success: append {} docs", docxSize)
-                         : "┣━ ❌ failed"
+            isAddSuccess ? fmt::format("┣━ ✅ success: append {} docs", docxSize) : "┣━ ❌ failed"
         );
         tools.push_back(std::make_unique<agentxx::tools::RAGSearchTool>(docsStore, agentContext));
     }
