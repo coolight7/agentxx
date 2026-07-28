@@ -70,8 +70,6 @@ void xxLogPrint(LogLevel level, std::string_view message);
 
 void printStack();
 
-void signal_handler(int signo);
-
 void signalError(std::string_view exepath);
 
 #else
