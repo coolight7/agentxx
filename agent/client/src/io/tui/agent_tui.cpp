@@ -85,7 +85,7 @@ void AgentTUI::start() {
         };
         input_option.on_enter = nullptr;
         auto input_component
-            = Input(&inputText_, "Type a message... (Enter=newline, Alt+Enter=send)", input_option);
+            = Input(&inputText_, "Type a message... (Enter=send, Alt+Enter=newline)", input_option);
         // 可滚动消息列表组件 (只包裹消息内容, 外层 hbox+spacer 提供宽度约束)
         messagesScrollable_ = std::make_shared<Scrollable>([this]() -> Element {
             // 不能加 flex，否则文本自动换行的宽度取值有问题
@@ -292,8 +292,13 @@ void AgentTUI::start() {
             }
 
             {
-                std::string_view in     = event.input();
-                const bool       isSend = (in == "\x1B\n" || in == "\x1B\r");
+                std::string_view in = event.input();
+                if (in == "\x1B\n" || in == "\x1B\r") {
+                    inputText_ += '\n';
+                    postRedraw();
+                    return true;
+                }
+                const bool isSend = (event == Event::Return);
                 if (isSend) {
                     std::string text = inputText_;
                     while (!text.empty() && (text.back() == '\n' || text.back() == '\r')) {
@@ -739,7 +744,7 @@ asio::awaitable<neograph::json> AgentTUI::handleInterrupt(
     }
     const auto& handleArg = argOpt.value();
 
-    // 标记进入中断输入等待: 使 Alt+Enter 把用户输入直接送入 inputChannel_ (避免死锁)
+    // 标记进入中断输入等待: 使 Enter 把用户输入直接送入 inputChannel_ (避免死锁)
     awaitingInterruptInput_.store(true, std::memory_order_release);
 
     {
