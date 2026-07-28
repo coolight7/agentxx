@@ -276,15 +276,37 @@ void MiddlewareContext::setShareStoreItemValue(
     const size_t     id,
     std::string_view value
 ) {
-    shareStore[thread_id].store[id] = value;
+    // shareStore[thread_id].store[id] = value;
+
+    auto it = shareStore.find(thread_id);
+    if (it != shareStore.end()) {
+        it->second.store[id] = value;
+    } else {
+        shareStore.emplace(
+            std::string{thread_id},
+            MiddlewareContext::ThreadShareStore{
+                .store = std::map<size_t, std::string>{{id, std::string{value}}}
+            }
+        );
+    }
 }
 
 size_t
     MiddlewareContext::addShareStoreItemValue(std::string_view thread_id, std::string_view value) {
-    auto& store     = shareStore[thread_id];
-    auto  id        = store.getNextId();
-    store.store[id] = value;
-    return id;
+    auto it = shareStore.find(thread_id);
+    if (it != shareStore.end()) {
+        auto id              = it->second.getNextId();
+        it->second.store[id] = value;
+        return id;
+    } else {
+        shareStore.emplace(
+            std::string{thread_id},
+            MiddlewareContext::ThreadShareStore{
+                .store = std::map<size_t, std::string>{{1, std::string{value}}}
+            }
+        );
+        return 1;
+    }
 }
 
 void MiddlewareContext::removeShareStoreItemValue(std::string_view thread_id, const size_t id) {
@@ -369,7 +391,12 @@ void MiddlewareContext::setGraphDataFromState(const neograph::json& j, std::stri
         for (auto it = j.begin(); it != j.end(); ++it) {
             data[it.key()] = it.value();
         }
-        graphData[thread_id] = std::move(data);
+        auto it = graphData.find(thread_id); // find 支持异构查找（使用透明比较器）
+        if (it != graphData.end()) {
+            it->second = std::move(data);
+        } else {
+            graphData.emplace(std::string{thread_id}, std::move(data));
+        }
     }
 }
 

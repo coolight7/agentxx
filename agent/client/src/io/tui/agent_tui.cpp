@@ -102,7 +102,7 @@ void AgentTUI::start() {
             if (pendingPermission_) {
                 indicator = text("!") | bgcolor(Color::Red) | color(Color::White) | bold | blink;
             } else if (isStreaming_) {
-                indicator = text("⏹") | color(theme_.accentColor) | bold;
+                indicator = text("~") | color(theme_.accentColor) | bold;
             } else {
                 indicator = text(">") | color(theme_.promptColor) | bold;
             }
@@ -358,8 +358,8 @@ void AgentTUI::start() {
                     }
                     const int last = messagesBlockCount_ - 1;
                     if (last >= 0) {
-                        int cur = stickToBottom_ ? last : messagesSelector_;
-                        cur    += (mouse.button == Mouse::WheelUp) ? -1 : +1;
+                        int cur  = stickToBottom_ ? last : messagesSelector_;
+                        cur     += (mouse.button == Mouse::WheelUp) ? -1 : +1;
                         if (cur >= last) {
                             stickToBottom_ = true;
                         } else {
@@ -483,10 +483,7 @@ void AgentTUI::onPeerMessage(agentxx::agent::WireMessage msg) {
                 );
             } else if constexpr (std::is_same_v<T, agentxx::agent::WireLog>) {
                 if (logSink_) {
-                    logSink_->onLog(
-                        static_cast<agentxx::util::LogLevel>(m.level),
-                        m.message
-                    );
+                    logSink_->onLog(static_cast<agentxx::util::LogLevel>(m.level), m.message);
                     postRedraw();
                 }
             } else if constexpr (std::is_same_v<T, agentxx::agent::WireModelInfo>) {

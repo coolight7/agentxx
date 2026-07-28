@@ -38,7 +38,7 @@ static void test_lru_cache() {
     XX_TEST_EXPECT_TRUE(c.get(3).has_value());
 
     // get 提升新鲜度: 访问 2 后, put 4 应淘汰 3 而非 2
-    c.get(2);
+    { auto _ = c.get(2); }
     c.put(4, 40);
     XX_TEST_EXPECT_TRUE(c.get(2).has_value());
     XX_TEST_EXPECT_FALSE(c.get(3).has_value());

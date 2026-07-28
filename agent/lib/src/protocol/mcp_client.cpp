@@ -798,8 +798,9 @@ std::vector<McpClient::SseEvent> McpClient::parseSseEvents(std::string_view body
     std::string           curEvent;
     std::string           curData;
 
-    std::istringstream stream(body);
-    std::string        line;
+    auto stream = std::stringstream{};
+    stream << body;
+    std::string line;
     while (std::getline(stream, line)) {
         if (!line.empty() && line.back() == '\r') {
             line.pop_back();
