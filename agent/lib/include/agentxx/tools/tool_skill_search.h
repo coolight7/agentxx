@@ -72,7 +72,10 @@ Remember: Output ONLY valid JSON, nothing else before or after.
 
     void createSystemPrompt();
 
-    void createSubgraph(const neograph::graph::NodeContext& context);
+    void createSubgraph(
+        const neograph::graph::NodeContext&        context,
+        std::shared_ptr<const neograph::graph::GraphRegistry> registry = nullptr
+    );
 
     inline static neograph::json defCreateSubGraphDefine();
 };

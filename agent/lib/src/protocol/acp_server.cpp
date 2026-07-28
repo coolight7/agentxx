@@ -15,7 +15,7 @@ namespace server {
 // ---------------------------------------------------------------------------
 
 AcpProtocolHandler::AcpProtocolHandler(
-    std::shared_ptr<agentxx::agent::DeepAgent> agent,
+    std::shared_ptr<agentxx::agent::BaseAgent> agent,
     json                                       agentInfo,
     Config                                     config
 ) :
@@ -476,7 +476,7 @@ void AcpProtocolHandler::emitAgentMessageChunk(std::string_view sessionId, std::
 // ---------------------------------------------------------------------------
 
 HttpAcpServer::HttpAcpServer(
-    std::shared_ptr<agentxx::agent::DeepAgent> agent,
+    std::shared_ptr<agentxx::agent::BaseAgent> agent,
     neograph::json                             agentInfo,
     Config                                     config
 ) :
@@ -742,7 +742,7 @@ neograph::json
 // ---------------------------------------------------------------------------
 
 StdioAcpServer::StdioAcpServer(
-    std::shared_ptr<agentxx::agent::DeepAgent> agent,
+    std::shared_ptr<agentxx::agent::BaseAgent> agent,
     neograph::json                             agentInfo
 ) :
     deepAgent_(std::move(agent)),

@@ -1,5 +1,5 @@
 #include "test_deepagent.h"
-#include "agentxx/agent/deepagent.h"
+#include "agentxx/agent/code_agent.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/io_context.hpp"
@@ -250,7 +250,7 @@ asio::awaitable<void> test_deepagent_init() {
     cfg->model.apiKey    = "EMPTY";
     cfg->model.modelName = "test-sim";
 
-    agentxx::agent::DeepAgent agent(cfg);
+    agentxx::agent::CodeAgent agent(cfg);
     co_await agent.init();
 
     XX_TEST_EXPECT_TRUE(agent.engine != nullptr);
@@ -272,7 +272,7 @@ asio::awaitable<void> test_deepagent_single_input() {
     g_da_sim_response_content = "This is the test response content.";
     g_da_sim_tool_calls       = neograph::json::array();
 
-    agentxx::agent::DeepAgent agent(cfg);
+    agentxx::agent::CodeAgent agent(cfg);
     co_await agent.init();
 
     auto result = co_await agent.runSingleInputAsync("test_thread", "Hello");
@@ -296,7 +296,7 @@ asio::awaitable<void> test_deepagent_conversation_turn() {
     g_da_sim_response_content = "Hello from the simulated LLM!";
     g_da_sim_tool_calls       = neograph::json::array();
 
-    agentxx::agent::DeepAgent agent(cfg);
+    agentxx::agent::CodeAgent agent(cfg);
     co_await agent.init();
 
     auto result = co_await agent
@@ -332,7 +332,7 @@ asio::awaitable<void> test_deepagent_tool_calls() {
                        },
     });
 
-    agentxx::agent::DeepAgent agent(cfg);
+    agentxx::agent::CodeAgent agent(cfg);
     co_await agent.init();
 
     auto result = co_await agent.runConversationTurnAsync("tool_test", "List files", true, nullptr);
@@ -355,7 +355,7 @@ asio::awaitable<void> test_deepagent_multi_turn() {
     g_da_sim_response_content = "Response for turn ";
     g_da_sim_tool_calls       = neograph::json::array();
 
-    agentxx::agent::DeepAgent agent(cfg);
+    agentxx::agent::CodeAgent agent(cfg);
     co_await agent.init();
 
     for (int turn = 0; turn < 3; ++turn) {
@@ -383,7 +383,7 @@ asio::awaitable<void> test_deepagent_large_history() {
     g_da_sim_response_content = "Final response after long history.";
     g_da_sim_tool_calls       = neograph::json::array();
 
-    agentxx::agent::DeepAgent agent(cfg);
+    agentxx::agent::CodeAgent agent(cfg);
     co_await agent.init();
 
     auto result
@@ -406,7 +406,7 @@ asio::awaitable<void> test_deepagent_nonstream() {
     g_da_sim_response_content = "Non-stream test response.";
     g_da_sim_tool_calls       = neograph::json::array();
 
-    agentxx::agent::DeepAgent agent(cfg);
+    agentxx::agent::CodeAgent agent(cfg);
     co_await agent.init();
 
     std::vector<neograph::ChatMessage> msgs;
@@ -439,7 +439,7 @@ asio::awaitable<void> test_deepagent_io_session_bus() {
     g_da_sim_response_content = "Hello from IO session bus test!";
     g_da_sim_tool_calls       = neograph::json::array();
 
-    agentxx::agent::DeepAgent agent(cfg);
+    agentxx::agent::CodeAgent agent(cfg);
     co_await agent.init();
 
     auto io = std::make_shared<TestAgentIO>();
@@ -471,7 +471,7 @@ asio::awaitable<void> test_deepagent_io_null() {
     g_da_sim_response_content = "Null IO test.";
     g_da_sim_tool_calls       = neograph::json::array();
 
-    agentxx::agent::DeepAgent agent(cfg);
+    agentxx::agent::CodeAgent agent(cfg);
     co_await agent.init();
 
     // 传入 nullptr IO, 验证不崩溃
@@ -493,7 +493,7 @@ asio::awaitable<void> test_deepagent_session_activity_streaming() {
     g_da_sim_response_content = "Activity check response.";
     g_da_sim_tool_calls       = neograph::json::array();
 
-    agentxx::agent::DeepAgent agent(cfg);
+    agentxx::agent::CodeAgent agent(cfg);
     co_await agent.init();
 
     auto io = std::make_shared<TestAgentIO>();
@@ -531,7 +531,7 @@ asio::awaitable<void> test_deepagent_session_activity_toolcall() {
                        },
     });
 
-    agentxx::agent::DeepAgent agent(cfg);
+    agentxx::agent::CodeAgent agent(cfg);
     co_await agent.init();
 
     auto io     = std::make_shared<TestAgentIO>();
@@ -556,7 +556,7 @@ asio::awaitable<void> test_deepagent_multi_session_io() {
     g_da_sim_response_content = "Multi-session response.";
     g_da_sim_tool_calls       = neograph::json::array();
 
-    agentxx::agent::DeepAgent agent(cfg);
+    agentxx::agent::CodeAgent agent(cfg);
     co_await agent.init();
 
     auto ioA = std::make_shared<TestAgentIO>();
@@ -594,7 +594,7 @@ asio::awaitable<void> test_deepagent_reuse_session_bus() {
     g_da_sim_response_content = "Reuse session bus test.";
     g_da_sim_tool_calls       = neograph::json::array();
 
-    agentxx::agent::DeepAgent agent(cfg);
+    agentxx::agent::CodeAgent agent(cfg);
     co_await agent.init();
 
     auto io = std::make_shared<TestAgentIO>();

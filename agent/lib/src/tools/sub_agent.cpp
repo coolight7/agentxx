@@ -39,15 +39,27 @@ SubAgentTaskBase::~SubAgentTaskBase() {}
 SubAgentNormalTask::SubAgentNormalTask(
     std::string_view                    in_subAgentName,
     std::string_view                    in_subAgentDepict,
-    const neograph::graph::NodeContext& in_context
+    const neograph::graph::NodeContext& in_context,
+    std::shared_ptr<const neograph::graph::GraphRegistry> in_registry
 ) :
     SubAgentTaskBase(in_subAgentName, in_subAgentDepict, "") {
-    createSubgraph(in_context);
+    createSubgraph(in_context, std::move(in_registry));
 }
 
-void SubAgentNormalTask::createSubgraph(const neograph::graph::NodeContext& context) {
+void SubAgentNormalTask::createSubgraph(
+    const neograph::graph::NodeContext&        context,
+    std::shared_ptr<const neograph::graph::GraphRegistry> registry
+) {
     if (nullptr == subgraph) {
-        auto inner = neograph::graph::GraphEngine::compile(defCreateSubGraphDefine(), context);
+        neograph::graph::EngineConfig config;
+        config.node_context = context;
+        neograph::graph::EngineResources resources;
+        resources.registry = std::move(registry);
+        auto inner = neograph::graph::GraphEngine::build(
+            defCreateSubGraphDefine(),
+            std::move(config),
+            std::move(resources)
+        );
         assert(nullptr != inner);
         subgraph = std::shared_ptr<neograph::graph::GraphEngine>(inner.release());
     }

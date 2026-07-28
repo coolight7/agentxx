@@ -15,7 +15,7 @@ namespace server {
 // Construction / Destruction
 // ---------------------------------------------------------------------------
 
-A2aServer::A2aServer(std::shared_ptr<agentxx::agent::DeepAgent> agent, Config config) :
+A2aServer::A2aServer(std::shared_ptr<agentxx::agent::BaseAgent> agent, Config config) :
     config_(std::move(config)),
     deepAgent_(std::move(agent)),
     httpServer_(std::make_unique<util::HttpServer>(config_.httpConfig)) {

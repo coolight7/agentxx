@@ -336,7 +336,7 @@ void AgentTUI::start() {
                                 [](neograph_asio_error_code) {}
                             );
                         } else if (isStreaming_) {
-                            // DeepAgent 执行中 -> 加入待发送队列, 轮次结束后自动发送
+                            // BaseAgent 执行中 -> 加入待发送队列, 轮次结束后自动发送
                             pendingInputs_.push_back(PendingInput{std::move(text), false});
                         } else {
                             sendUserInputLocked(std::move(text));

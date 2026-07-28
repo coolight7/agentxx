@@ -6,46 +6,30 @@
 #include "agentxx/agent/model_registry.h"
 #include "agentxx/middlewares/event_stream.h"
 #include "agentxx/middlewares/events.h"
-#include "agentxx/middlewares/memory_file.h"
-#include "agentxx/middlewares/permission.h"
-#include "agentxx/middlewares/planning.h"
-#include "agentxx/middlewares/skill.h"
-#include "agentxx/middlewares/subagent_supervisor.h"
-#include "agentxx/middlewares/summarization.h"
+#include "agentxx/middlewares/middleware.h"
 #include "agentxx/nodes/agentcall.h"
 #include "agentxx/nodes/modelcall.h"
 #include "agentxx/nodes/toolcall.h"
-#include "agentxx/protocol/mcp_client.h"
-#include "agentxx/protocol/openai_provider.h"
-#include "agentxx/tools/cross_agent_query.h"
-#include "agentxx/tools/execute_command.h"
-#include "agentxx/tools/filesystem.h"
-#include "agentxx/tools/planning.h"
-#include "agentxx/tools/rag_search.h"
 #include "agentxx/tools/share_store.h"
-#include "agentxx/tools/string.h"
-#include "agentxx/tools/sub_agent.h"
 #include "agentxx/tools/system.h"
-#include "agentxx/tools/tool_skill_search.h"
-#include "agentxx/tools/ui_control.h"
-#include "agentxx/tools/web_search.h"
+#include "agentxx/tools/tool.h"
 #include "agentxx/util/log.h"
-#include "asio/co_spawn.hpp"
-#include "asio/detached.hpp"
 #include "asio/io_context.hpp"
 #include "neograph/graph/engine.h"
+#include "neograph/graph/registry.h"
 #include "neograph/graph/types.h"
-#include "neograph/llm/openai_provider.h"
-#include "neograph/mcp/client.h"
-#include <chrono>
 #include <functional>
 #include <memory>
-#include <sstream>
 
 namespace agentxx {
 namespace agent {
 
-class DeepAgent {
+/// Agent 基类: 提供核心基础设施与 ReAct 执行循环
+/// - 管理 ioCtx / GraphEngine / AgentContext
+/// - 提供会话执行 (runConversationTurnAsync) 与中断恢复
+/// - 子类通过 override 虚函数自定义 middleware / tool / 图结构
+/// - 支持多实例: 每个 BaseAgent 使用独立的 GraphRegistry, 不依赖全局 NodeFactory
+class BaseAgent {
 public:
 
     /// 主协程调度器
@@ -57,8 +41,10 @@ public:
     std::shared_ptr<asio::io_context>             ioCtx        = nullptr;
     std::shared_ptr<neograph::graph::GraphEngine> engine       = nullptr;
     std::shared_ptr<AgentContext>                 agentContext = nullptr;
+    /// per-agent 节点注册表 (支持多 Agent 实例, 不依赖全局 NodeFactory)
+    std::shared_ptr<const neograph::graph::GraphRegistry> graphRegistry = nullptr;
 
-    DeepAgent(std::shared_ptr<agentxx::agent::AgentConfig> in_config);
+    BaseAgent(std::shared_ptr<agentxx::agent::AgentConfig> in_config);
 
     asio::awaitable<void> init();
 
@@ -86,21 +72,15 @@ public:
         std::string_view             modelName = ""
     );
 
-    ~DeepAgent();
+    virtual ~BaseAgent();
 
-    // Get underlying engine
     neograph::graph::GraphEngine*       getEngine();
     const neograph::graph::GraphEngine* getEngine() const;
 
-    // Get agent context
     std::shared_ptr<AgentContext> getContext();
 
     /// Run agent with custom system prompt and user input, collect full output as
     /// string
-    /// - threadId: unique thread ID for this execution
-    /// - messages: list of chat messages (system + user)
-    /// - callback: optional event callback, nullptr if not needed
-    /// - returns: full collected output content
     asio::awaitable<std::string> runNonStreamAsync(
         std::string_view                                        threadId,
         const std::vector<neograph::ChatMessage>&               messages,
@@ -109,7 +89,6 @@ public:
     );
 
     /// Run agent with a single user input and optional custom system prompt
-    /// Convenience wrapper that builds messages automatically
     asio::awaitable<std::string> runSingleInputAsync(
         std::string_view threadId,
         std::string_view userInput,
@@ -117,9 +96,6 @@ public:
         std::string_view modelName    = ""
     );
 
-    /// Run a simple completion with just messages (for subagent
-    /// scoring/optimization) Returns the full content as a string (collects all
-    /// tokens)
     struct SimpleRunResult {
         std::string                content;
         neograph::graph::RunResult fullResult;
@@ -128,6 +104,50 @@ public:
     asio::awaitable<SimpleRunResult> runStreamAsync(
         const std::vector<neograph::ChatMessage>& messages,
         std::string_view                          modelName = ""
+    );
+
+protected:
+
+    // =================================================================
+    // 扩展点: 子类 override 以自定义 agent 行为
+    // =================================================================
+
+    /// 添加中间件到 agentContext->middlewareHandleContext->handles
+    /// - 在 init() 中于 createTools() 之前调用
+    /// - 中间件自带的 toolcalls 会在 createTools() 之后被自动收集
+    virtual asio::awaitable<void> setupMiddleware();
+
+    /// 创建工具列表
+    /// - 在 init() 中于 setupMiddleware() 之后调用
+    /// - 返回的工具将被注册到 GraphEngine
+    virtual asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> createTools();
+
+    /// 构建图定义 JSON
+    /// - 默认实现返回标准 ReAct 循环:
+    ///   __start__ → agent_start → llm → [has_tool_calls?] → tools/agent_end → __end__
+    virtual neograph::json buildGraphDefinition();
+
+    /// 向 per-agent GraphRegistry 注册节点类型
+    /// - 默认注册 4 个核心节点: AgentStart / AgentEnd / ModelCall / Toolcall
+    /// - 子类可 override 添加自定义节点类型
+    virtual void registerNodes(neograph::graph::GraphRegistry& registry);
+
+    // =================================================================
+    // 内部辅助方法
+    // =================================================================
+
+    /// 创建模型 Provider 注册表并注入 AgentContext
+    void setupModelRegistry();
+
+    /// 创建事件总线并注入 AgentContext
+    void setupEventBus();
+
+    /// 收集中间件自带的 toolcalls 到工具列表
+    void collectMiddlewareTools(std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>& tools);
+
+    /// 为所有工具创建 summarization 压缩句柄
+    void setupSummarizationHandles(
+        const std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>& tools
     );
 };
 

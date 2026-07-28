@@ -148,7 +148,7 @@ public:
 
     /// Start the accept loop on the given executor without creating threads.
     /// The caller is responsible for running the io_context.
-    /// Suitable for single-threaded server mode (e.g. deepagent service).
+    /// Suitable for single-threaded server mode (e.g. agent service).
     void startAsync(asio::any_io_executor executor);
 
 private:

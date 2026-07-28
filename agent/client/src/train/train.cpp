@@ -1,5 +1,6 @@
 #include "agentxx-client/train/train.h"
 
+#include "agentxx/agent/code_agent.h"
 #include "agentxx/agent/training.h"
 #include "agentxx/util/log.h"
 #include "asio/co_spawn.hpp"
@@ -80,12 +81,12 @@ void runTrainingMode(
 ) {
     XX_OUT("======= Agentxx Training Mode =======");
 
-    auto trainAgent                   = std::make_shared<agentxx::agent::DeepAgent>(baseConfig);
+    auto trainAgent                   = std::make_shared<agentxx::agent::CodeAgent>(baseConfig);
     scorerConfig->prompt.systemPrompt = agentxx::agent::EvolutionTrainingConfig{}.scoringPrompt;
-    auto scorerAgent                  = std::make_shared<agentxx::agent::DeepAgent>(scorerConfig);
+    auto scorerAgent                  = std::make_shared<agentxx::agent::CodeAgent>(scorerConfig);
     optimizerConfig->prompt.systemPrompt
         = agentxx::agent::EvolutionTrainingConfig{}.optimizerPrompt;
-    auto optimizerAgent = std::make_shared<agentxx::agent::DeepAgent>(optimizerConfig);
+    auto optimizerAgent = std::make_shared<agentxx::agent::CodeAgent>(optimizerConfig);
 
     std::string projectRoot = findProjectRoot();
     std::string dataDir     = projectRoot + "/resource/train/data";

@@ -17,7 +17,7 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
 - **跨平台**: 支持 Linux x86_64 (含 WSL 扩展)、Windows 10+ x86_64、Android 5.0+
 - **多形态编译**: 可编译为独立可执行程序、动态库、静态库，仅依赖基本系统库
 - **高并发**: 单线程/多协程交错执行多会话，无需线程锁
-- **分层解耦**: Client 负责 UI 渲染与用户交互，Agent (DeepAgent) 负责会话运行、LLM API 调用、ToolCall 执行
+- **分层解耦**: Client 负责 UI 渲染与用户交互，Agent (BaseAgent/CodeAgent) 负责会话运行、LLM API 调用、ToolCall 执行
 - **多连接模式**: 支持 client+agent 同进程 (线程间 Channel 直连) 和 client 经 WebSocket 连接远程 agent server
 
 ---
@@ -288,14 +288,14 @@ agentxx_cli train --config agentxx-config.yaml
 ### 作为库使用
 
 ```cpp
-#include "agentxx/agent/deepagent.h"
+#include "agentxx/agent/code_agent.h"
 
 auto config = std::make_shared<agentxx::agent::AgentConfig>();
 config->model.baseUrl   = "https://api.openai.com";
 config->model.apiKey    = "sk-...";
 config->model.modelName = "gpt-4";
 
-agentxx::agent::DeepAgent agent(config);
+agentxx::agent::CodeAgent agent(config);
 
 asio::co_spawn(*agent.ioCtx, [&]() -> asio::awaitable<void> {
     co_await agent.init();
@@ -348,7 +348,7 @@ agent.ioCtx->run();
 │  └──────────────────────┬──────────────────────────────────┘    │
 │                         │                                       │
 │  ┌──────────────────────▼──────────────────────────────────┐    │
-│  │                    DeepAgent                             │    │
+│  │              BaseAgent / CodeAgent                       │    │
 │  │  ┌─────────────────────────────────────────────────┐    │    │
 │  │  │              GraphEngine (ReAct Loop)            │    │    │
 │  │  │                                                  │    │    │
@@ -360,6 +360,9 @@ agent.ioCtx->run();
 │  │  │                                        │         │    │    │
 │  │  │                                     __end__      │    │    │
 │  │  └─────────────────────────────────────────────────┘    │    │
+│  │                                                          │    │
+│  │  BaseAgent: 核心基础设施 + ReAct 循环 + 会话执行         │    │
+│  │  CodeAgent: 继承 BaseAgent, 添加编程工具/中间件          │    │
 │  │                                                          │    │
 │  │  ┌────────────┐ ┌────────────┐ ┌────────────────────┐   │    │
 │  │  │ ModelCall  │ │ Toolcall   │ │ AgentStart/End     │   │    │
@@ -406,7 +409,7 @@ User Input → AgentTUI/AgentStdIO
     → ChannelAgentIOTransport (client 端)
     → ChannelAgentIOTransport (server 端)
     → SessionController.onPeerMessage()
-    → SessionController.run() → DeepAgent.runConversationTurnAsync()
+    → SessionController.run() → BaseAgent.runConversationTurnAsync()
         → GraphEngine (ReAct Loop)
             → ModelCallWrapNode → OpenAI/Anthropic Provider → LLM API
             → ToolcallWrapNode → Tools (filesystem/command/web/...)
@@ -438,7 +441,7 @@ User Input → AgentTUI/AgentStdIO
 
 #### 1. Graph Engine + ReAct Loop
 
-DeepAgent 的核心执行引擎基于 NeoGraph 图引擎，构建 ReAct (Reasoning + Acting) 循环：
+BaseAgent 的核心执行引擎基于 NeoGraph 图引擎，构建 ReAct (Reasoning + Acting) 循环：
 
 ```
 __start__ → agent_start → llm → [conditional: has_tool_calls?]
@@ -482,7 +485,7 @@ AgentIOBase (客户端端点)
     └── runTransportLoop() ← 接收循环
 
 AgentIOBase (服务端端点: SessionController)
-    ├── onDelta()          ← DeepAgent 产出，经 transport 发给客户端
+    ├── onDelta()          ← BaseAgent 产出，经 transport 发给客户端
     ├── getInput()         ← 从 transport 等待客户端输入
     ├── handleInterrupt()  ← 发送 InterruptRequest，等待客户端响应
     └── run()              ← 驱动循环: 取输入 → 执行轮次 → 推送结果
@@ -567,7 +570,8 @@ agent/
 │   ├── include/agentxx/
 │   │   ├── agentxx.h             # 库总入口头文件
 │   │   ├── agent/                # Agent 核心
-│   │   │   ├── deepagent.h       # DeepAgent 主类 (init/runConversationTurn/runNonStream)
+│  │   │   ├── base_agent.h     # BaseAgent 基类 (核心基础设施 + ReAct 循环 + 会话执行)
+│  │   │   ├── code_agent.h     # CodeAgent (继承 BaseAgent, 编程工具/中间件)
 │   │   │   ├── agent_io.h        # AgentIOBase 端点基类 (client/server 操作契约)
 │   │   │   ├── agent_io_transport.h # 传输层抽象基类
 │   │   │   ├── channel_io_transport.h # 进程内 Channel 传输 (零序列化)
@@ -661,7 +665,7 @@ agent/
 ├── test/                         # agentxx_test 测试程序
 │   ├── test.cpp                  # 测试入口: 模块注册与调度
 │   ├── test_framework.h          # 测试框架 (断言宏 / TestResult)
-│   ├── test_deepagent.*          # DeepAgent 集成测试 (模拟 LLM Server)
+│   ├── test_deepagent.*          # CodeAgent 集成测试 (模拟 LLM Server)
 │   ├── test_events.*             # 事件类型测试
 │   ├── test_event_stream.*       # EventBus / EventStream / RequestResponseStream 测试
 │   ├── test_event_bridge.*       # EventBridge 事件翻译测试
@@ -728,8 +732,8 @@ agent/
 ### 关键依赖关系
 
 ```
-DeepAgent
-  ├── GraphEngine (NeoGraph)
+BaseAgent (基类)
+  ├── GraphEngine (NeoGraph) + per-agent GraphRegistry
   │     ├── ModelCallWrapNode → OpenAIProvider / AnthropicProvider
   │     ├── ToolcallWrapNode → XXToolBase 工具集
   │     └── AgentStart/EndCallWrapNode
@@ -739,6 +743,10 @@ DeepAgent
   │     ├── ModelProviderRegistry
   │     └── EventBus
   └── AgentConfig → ModelConfig / AgentPrompt
+
+CodeAgent (继承 BaseAgent)
+  ├── 工具: Filesystem | Command | Web | RAG | SubAgent | MCP | ...
+  └── 中间件: Permission | Skill | MemoryFile | Summarization | Planning | LogPrint
 
 Client (agentxx_cli)
   ├── AgentTUI / AgentStdIO → AgentIOBase

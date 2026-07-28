@@ -1,7 +1,7 @@
 #pragma once
 
 #include "agentxx/agent/agent_io_transport.h"
-#include "agentxx/agent/deepagent.h"
+#include "agentxx/agent/base_agent.h"
 #include "agentxx/agent/remote/session_controller.h"
 #include "agentxx/util/http_server.h"
 #include "asio/any_io_executor.hpp"
@@ -16,8 +16,8 @@ namespace agentxx {
 namespace agent {
 namespace remote {
 
-/// DeepAgent 服务
-/// - 单 io_context/单线程多协程: 复用 DeepAgent.ioCtx
+/// Agent 服务
+/// - 单 io_context/单线程多协程: 复用 BaseAgent.ioCtx
 /// - 每个 threadId 一个 SessionController (与连接解耦, 支持断线 grace 重挂 + 增量重放)
 /// - 两种接入方式:
 ///   - WS/WSS 服务: start(ex) 启动 HttpServer, 每个 WS 连接 -> serveTransport
@@ -27,7 +27,7 @@ class AgentServer {
 public:
 
     struct Config {
-        inline static const std::string defaultBasePath = "/deepagent";
+        inline static const std::string defaultBasePath = "/agent";
 
         util::HttpServer::Config http;  // address
         std::string              token; // 空且 autoGenerateToken 时自动生成
@@ -38,7 +38,7 @@ public:
         size_t               deltaBufferCap = 4096;
     };
 
-    AgentServer(std::shared_ptr<DeepAgent> agent, Config config);
+    AgentServer(std::shared_ptr<BaseAgent> agent, Config config);
 
     AgentServer(const AgentServer&)            = delete;
     AgentServer& operator=(const AgentServer&) = delete;
@@ -72,7 +72,7 @@ private:
     /// 取/建指定 threadId 的 SessionController (并启动其驱动循环)
     std::shared_ptr<SessionController> getOrCreateController(std::string_view threadId);
 
-    std::shared_ptr<DeepAgent>        agent_;
+    std::shared_ptr<BaseAgent>        agent_;
     Config                            config_;
     std::unique_ptr<util::HttpServer> http_;
     asio::any_io_executor             ex_;

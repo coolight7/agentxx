@@ -1,17 +1,17 @@
 #pragma once
 
+#include "agentxx/agent/code_agent.h"
 #include "agentxx/agent/config.h"
-#include "agentxx/agent/deepagent.h"
 #include <memory>
 #include <string>
 
 namespace agentxx {
 namespace client {
 
-void runLocalCliUnified(std::shared_ptr<agent::DeepAgent> agent);
+void runLocalCliUnified(std::shared_ptr<agent::CodeAgent> agent);
 
 void runLocalTuiUnified(
-    std::shared_ptr<agent::DeepAgent>   agent,
+    std::shared_ptr<agent::CodeAgent>   agent,
     std::shared_ptr<agent::AgentConfig> config
 );
 

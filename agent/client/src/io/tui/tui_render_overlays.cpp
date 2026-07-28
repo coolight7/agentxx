@@ -88,12 +88,12 @@ ftxui::Element AgentTUI::renderStatusBar() {
         const double pct = 100.0 * static_cast<double>(ctx) / static_cast<double>(maxCtx);
         ctxText          = fmt::format(
             " {}/{} ({:.1f}%) ",
-            agentxx::util::formatSize(ctx, 1000),
-            agentxx::util::formatSize(maxCtx, 1000),
+            agentxx::util::formatSize(ctx),
+            agentxx::util::formatSize(maxCtx),
             pct
         );
     } else {
-        ctxText = fmt::format(" {} ", agentxx::util::formatSize(ctx, 1000));
+        ctxText = fmt::format(" {} ", agentxx::util::formatSize(ctx));
     }
     auto ctxInfo = text(ctxText) | color(theme_.statusColor);
 

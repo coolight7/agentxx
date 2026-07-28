@@ -1,12 +1,20 @@
-#include "agentxx/agent/deepagent.h"
+#include "agentxx/agent/base_agent.h"
 
+#include "agentxx/middlewares/summarization.h"
 #include "agentxx/util/diff_util.h"
+#include "asio/co_spawn.hpp"
+#include "asio/detached.hpp"
+#include "neograph/graph/compiler.h"
+#include "neograph/graph/validator.h"
+#include "neograph/llm/openai_provider.h"
 #include <cassert>
+#include <chrono>
+#include <sstream>
 
 namespace agentxx {
 namespace agent {
 
-DeepAgent::DeepAgent(std::shared_ptr<agentxx::agent::AgentConfig> in_config) {
+BaseAgent::BaseAgent(std::shared_ptr<agentxx::agent::AgentConfig> in_config) {
     ioCtx                     = std::make_shared<asio::io_context>();
     agentContext              = std::make_shared<AgentContext>();
     agentContext->agentConfig = in_config;
@@ -14,425 +22,41 @@ DeepAgent::DeepAgent(std::shared_ptr<agentxx::agent::AgentConfig> in_config) {
     assert(in_config->model.isValid());
 }
 
-asio::awaitable<void> DeepAgent::init() {
+asio::awaitable<void> BaseAgent::init() {
 #if ASIO_HAS_FILE || BOOST_ASIO_HAS_FILE
     XX_LOGD("Enable asio/async file RW");
 #else
     XX_LOGD("Disable asio/async file RW");
 #endif
 
-    auto config = agentContext->agentConfig;
-    // subagent 模型配置：未指定时默认取主模型
-    const auto& subagentModelCfg = config->getSubagentModel();
+    setupModelRegistry();
+    setupEventBus();
 
-    {
-        /// 创建模型 Provider 注册表并注入 AgentContext
-        /// - 注册可用模型; 各会话的当前选择记录在 Session 中
-        /// - 主模型兜底注册, 保证至少有一个可用模型
-        auto registry = std::make_shared<agentxx::agent::ModelProviderRegistry>();
-        for (const auto& [name, mc] : config->availableModels) {
-            registry->registerModel(name, mc);
-        }
-        if (config->availableModels.empty()) {
-            registry->registerModel(config->model.modelName, config->model);
-            registry->setDefaultModel(config->model.modelName);
-        } else if (false == config->currentModelName.empty()
-                   && registry->hasModel(config->currentModelName)) {
-            registry->setDefaultModel(config->currentModelName);
-        }
-        agentContext->modelRegistry = std::move(registry);
-    }
-
-    {
-        /// 创建事件总线并注入 AgentContext
-        /// - executor 取自 DeepAgent::ioCtx, 与 graph 运行在同一 io_context,
-        ///   单线程协作式调度, 模块间无需加锁
-        /// - 所有节点/middleware/tool 经 weak_ptr<AgentContext> 取
-        /// agentContext->bus
-        agentContext->bus = std::make_shared<agentxx::middleware::EventBus>(ioCtx->get_executor());
-    }
-
-    {
-        /// register Node
-        neograph::graph::NodeFactory::instance().register_type(
-            std::string{agentxx::nodes::AgentStartCallWrapNode::defNodeType},
-            [this](
-                const std::string& name,
-                const neograph::json&,
-                const neograph::graph::NodeContext& ctx
-            ) {
-                return std::make_unique<agentxx::nodes::AgentStartCallWrapNode>(name, agentContext);
-            }
-        );
-        neograph::graph::NodeFactory::instance().register_type(
-            std::string{agentxx::nodes::MiddlewareWrapAgentEndCallNode::defNodeType},
-            [this](
-                const std::string& name,
-                const neograph::json&,
-                const neograph::graph::NodeContext& ctx
-            ) {
-                return std::make_unique<agentxx::nodes::MiddlewareWrapAgentEndCallNode>(
-                    name,
-                    agentContext
-                );
-            }
-        );
-        neograph::graph::NodeFactory::instance().register_type(
-            std::string{agentxx::nodes::ModelCallWrapNode::defNodeType},
-            [this](
-                const std::string& name,
-                const neograph::json&,
-                const neograph::graph::NodeContext& ctx
-            ) {
-                return std::make_unique<agentxx::nodes::ModelCallWrapNode>(name, ctx, agentContext);
-            }
-        );
-        neograph::graph::NodeFactory::instance().register_type(
-            std::string{agentxx::nodes::ToolcallWrapNode::defNodeType},
-            [this](
-                const std::string& name,
-                const neograph::json&,
-                const neograph::graph::NodeContext& ctx
-            ) {
-                return std::make_unique<agentxx::nodes::ToolcallWrapNode>(name, ctx, agentContext);
-            }
-        );
-    }
-
-    /// middleware
     agentContext->middlewareHandleContext
         = std::make_shared<agentxx::middleware::MiddlewareContext>();
-    std::shared_ptr<agentxx::middleware::SummarizationMiddlewareHandle> summarizationMiddleware;
-    auto                                                                subagentManagerTool
-        = std::make_unique<agentxx::tools::SubAgentManagerTool>("subagent_manager", agentContext);
-    agentContext->subagentManagerToolPtr = subagentManagerTool.get();
+
     {
-        {
-            agentContext->permissionMiddleware
-                = std::make_shared<agentxx::middleware::PermissionMiddlewareHandle>(agentContext);
-            agentContext->middlewareHandleContext->handles.push_back(
-                agentContext->permissionMiddleware
-            );
-        }
-        {
-            auto skillMiddleware = std::make_shared<agentxx::middleware::SkillMiddlewareHandle>(
-                config->skillDirPaths,
-                agentContext
-            );
-            // skillMiddleware->toolcalls.push_back(
-            //     std::make_unique<agentxx::tools::SkillTool>(agentContext));
-            agentContext->middlewareHandleContext->handles.push_back(skillMiddleware);
-        }
-        {
-            auto memoryFileMiddleware
-                = std::make_shared<agentxx::middleware::MemoryFileMiddlewareHandle>(
-                    config->memoryFilePaths,
-                    agentContext
-                );
-            agentContext->middlewareHandleContext->handles.push_back(memoryFileMiddleware);
-        }
-        {
-            summarizationMiddleware
-                = std::make_shared<agentxx::middleware::SummarizationMiddlewareHandle>(
-                    subagentManagerTool.get(),
-                    agentContext
-                );
-            agentContext->middlewareHandleContext->handles.push_back(summarizationMiddleware);
-        }
-        {
-            auto planningMiddleware
-                = std::make_shared<agentxx::middleware::PlanningMiddlewareHandle>(agentContext);
-            planningMiddleware->toolcalls.push_back(
-                std::make_unique<agentxx::tools::WritePlanningTool>(
-                    planningMiddleware,
-                    agentContext
-                )
-            );
-            agentContext->middlewareHandleContext->handles.push_back(planningMiddleware);
-        }
-
-        /// Toolcall  应当作为最后一层，输出的日志才会是最终的样子
-        agentContext->middlewareHandleContext->handles.push_back(
-            std::make_shared<agentxx::middleware::MiddlewareWrapHandle<
-                agentxx::middleware::BaseMiddlewareState>>(
-                "LogPrint",
-                agentContext,
-                (agentxx::middleware::onGraphNodeBeforeCallFunc) nullptr,
-                (agentxx::middleware::onGraphNodeAfterCallFunc) nullptr,
-                (agentxx::middleware::onGraphNodeBeforeCallFunc) nullptr,
-                [config = agentContext->agentConfig](neograph::graph::NodeInput& in
-                ) -> asio::awaitable<void> {
-                    if (config->logPrintMessagesBeforeLLM) {
-                        agentxx::middleware::BaseMiddlewareHandleInterface::printMessages(
-                            in.state.get_messages(),
-                            config->logPrintMessagesBeforeLLMWithSystemMsg
-                        );
-                    }
-                    co_return;
-                },
-                (agentxx::middleware::onGraphNodeAfterCallFunc) nullptr,
-                [ctx    = std::weak_ptr<AgentContext>(agentContext),
-                 config = agentContext->agentConfig](neograph::graph::NodeInput& in
-                ) -> asio::awaitable<void> {
-                    if (config->logPrintToolcall) {
-                        co_await agentxx::nodes::ToolcallWrapNode::defStdoutLogOnToolcallStart(in);
-                    }
-                    if (auto ctxPtr = ctx.lock()) {
-                        auto session = ctxPtr->sessions->get(in.ctx.thread_id);
-                        if (session) {
-                            session->activity = Activity::ExecutingTool;
-                        }
-                    }
-                    co_return;
-                },
-                [ctx    = std::weak_ptr<AgentContext>(agentContext),
-                 config = agentContext->agentConfig](
-                    const neograph::graph::NodeInput& in,
-                    neograph::graph::NodeOutput&      result
-                ) -> asio::awaitable<void> {
-                    if (config->logPrintToolcall) {
-                        co_await agentxx::nodes::ToolcallWrapNode::defStdoutLogOnToolcallEnd(
-                            in,
-                            result
-                        );
-                    }
-                    if (auto ctxPtr = ctx.lock()) {
-                        auto session = ctxPtr->sessions->get(in.ctx.thread_id);
-                        if (session) {
-                            session->activity = Activity::Idle;
-                        }
-                    }
-                    co_return;
-                }
-            )
-        );
+        auto registry = std::make_shared<neograph::graph::GraphRegistry>();
+        registerNodes(*registry);
+        graphRegistry = std::move(registry);
     }
 
-    /// Toolcall
-    std::vector<std::unique_ptr<agentxx::tools::XXToolBase>> tools{};
-    {
-        /// middleware tools
-        for (auto& item : agentContext->middlewareHandleContext->handles) {
-            if (false == item->toolcalls.empty()) {
-                tools.insert(
-                    tools.end(),
-                    std::make_move_iterator(item->toolcalls.begin()),
-                    std::make_move_iterator(item->toolcalls.end())
-                );
-            }
-        }
-    }
-    {
-        /// MCP tool
-        for (const auto& [mcpNamespace, url] : config->mcpServerUrls) {
-            co_await agentxx::util::catchErrorAsync<void>(
-                [&]() -> asio::awaitable<void> {
-                    XX_LOGD("load mcp tool: {} | {}", mcpNamespace, url);
-                    auto mcpClient = std::make_shared<agentxx::server::McpClient>(
-                        agentxx::server::McpClient::Config{
-                            .serverUrl = url,
-                            .protocolVersion
-                            = std::string{agentxx::server::McpClient::kProtocol2025_11_25},
-                            .toolNamespace = mcpNamespace,
-                        }
-                    );
-                    auto result = co_await mcpClient->initialize();
-                    if (result.has_value()) {
-                        auto mcpTools = co_await mcpClient->listTools();
-                        if (mcpTools.has_value()) {
-                            for (auto& tool : mcpTools.value()) {
-                                tools.push_back(mcpClient->createTool(std::move(tool), agentContext)
-                                );
-                            }
-                        } else {
-                            XX_LOGE(
-                                "list mcp tool error: {} | {} | {}",
-                                mcpNamespace,
-                                url,
-                                mcpTools.error()
-                            );
-                        }
-                    } else {
-                        XX_LOGE(
-                            "load mcp tool error: {} | {} | {}",
-                            mcpNamespace,
-                            url,
-                            result.error()
-                        );
-                    }
-                    co_return;
-                },
-                [&](std::string errmsg) -> asio::awaitable<void> {
-                    XX_LOGE(
-                        "[agentxx] Append mcp tool error: {} | {} | {}",
-                        mcpNamespace,
-                        url,
-                        errmsg
-                    );
-                    co_return;
-                }
-            );
-        }
-    }
-    {
-        tools.push_back(std::make_unique<agentxx::tools::ThreadShareStoreTool>(agentContext));
-        tools.push_back(std::make_unique<agentxx::tools::FileSystemListTool>(agentContext));
-        tools.push_back(std::make_unique<agentxx::tools::FilesystemReadTextFileTool>(agentContext));
-        tools.push_back(std::make_unique<agentxx::tools::FilesystemReadBinaryFileTool>(agentContext)
-        );
-        tools.push_back(std::make_unique<agentxx::tools::FilesystemWriteFileTool>(agentContext));
-        tools.push_back(std::make_unique<agentxx::tools::FilesystemEditTextFileTool>(agentContext));
-        tools.push_back(std::make_unique<agentxx::tools::FilesystemGlobTool>(agentContext));
-        tools.push_back(std::make_unique<agentxx::tools::FilesystemGrepTool>(agentContext));
+    co_await setupMiddleware();
 
-        tools.push_back(std::make_unique<agentxx::tools::StringHtml2MarkdownTool>(agentContext));
-        tools.push_back(std::make_unique<agentxx::tools::StringRegexpTool>(agentContext));
+    auto tools = co_await createTools();
 
-        tools.push_back(std::make_unique<agentxx::tools::GetCurrentDateTimeTool>(agentContext));
-#if XX_IS_WIN_D || XX_IS_LINUX_D
-        tools.push_back(std::make_unique<agentxx::tools::GetSystemCoreInfoTool>(agentContext));
-#endif
+    collectMiddlewareTools(tools);
 
-        tools.push_back(std::make_unique<agentxx::tools::WebFetchUrlTool>(agentContext));
-        tools.push_back(std::make_unique<agentxx::tools::WebFetchUrlMarkdownTool>(agentContext));
-        if (config->websearchModel.has_value()) {
-            // 使用模型进行网络搜索
-            tools.push_back(std::make_unique<agentxx::tools::ModelWebSearchTool>(
-                config->websearchModel.value(),
-                agentContext
-            ));
-        } else if (false == config->websearchApiUrl.empty()) {
-            tools.push_back(std::make_unique<agentxx::tools::WebSearchTool>(
-                config->websearchApiUrl,
-                config->websearchConvertHtml2markdown,
-                agentContext
-            ));
-        }
+    setupSummarizationHandles(tools);
 
-        if (false == config->ragDocsPaths.empty()) {
-            auto client = std::make_shared<agentxx::tools::EmbeddingClient>(
-                config->model.baseUrl,
-                config->model.apiKey,
-                config->model.modelName
-            );
-            auto docsStore = std::make_shared<agentxx::tools::RAGSearchTool::VectorStore>(client);
-            auto docs      = co_await docsStore->scanDocument(config->ragDocsPaths);
-            auto docxSize  = docs.size();
-            auto isAddSuccess = co_await docsStore->addDocuments(std::move(docs));
-            XX_LOGD(
-                R"_(
-┏━━━━━━ RAG Embedding ━━━━━━┓
-{}
-┗━━━━━━ RAG Embedding ━━━━━━┛
-)_",
-                isAddSuccess ? fmt::format("┣━ ✅ success: append {} docs", docxSize)
-                             : "┣━ ❌ failed"
-            );
-            tools.push_back(std::make_unique<agentxx::tools::RAGSearchTool>(docsStore, agentContext)
-            );
-        }
+    auto graphDef = buildGraphDefinition();
 
-#if XX_IS_WIN_D
-        tools.push_back(std::make_unique<agentxx::tools::UIControlKeyboardMouseTool>(agentContext));
-        tools.push_back(std::make_unique<agentxx::tools::ExecuteWindowsCommandTool>(agentContext));
-#elif XX_IS_LINUX_D
-        tools.push_back(std::make_unique<agentxx::tools::ExecuteLinuxCommandTool>(agentContext));
-        if (agentxx::util::isRunningInWSL()) {
-            tools.push_back(std::make_unique<agentxx::tools::ExecuteWindowsCommandTool>(agentContext
-            ));
-        }
-#elif XX_IS_MACOS_D
-        tools.push_back(std::make_unique<agentxx::tools::ExecuteLinuxCommandTool>(agentContext));
-#endif
+    auto config = agentContext->agentConfig;
 
-        {
-            // cross-agent query tool (供主 agent/subagent 互相查询)
-            tools.push_back(std::make_unique<agentxx::tools::CrossAgentQueryTool>(agentContext));
-        }
-
-        {
-            // subagent
-            {
-                // subagent_task
-                neograph::graph::NodeContext nodeContext{};
-                nodeContext.instructions = "";
-                nodeContext.provider     = ModelProviderRegistry::createProvider(subagentModelCfg);
-
-                /// 复制 tool
-                std::vector<neograph::Tool*> toolPtrs;
-                toolPtrs.reserve(tools.size());
-                for (auto& t : tools) {
-                    toolPtrs.push_back(t.get());
-                }
-                nodeContext.tools = std::move(toolPtrs);
-
-                const auto nodeName = std::string{"subagent_task"};
-
-                subagentManagerTool->subAgentList.insert(std::make_pair(
-                    nodeName,
-                    std::make_shared<agentxx::tools::SubAgentNormalTask>(
-                        nodeName,
-                        R"(Create a isolation messages context sub agent to exec. (need system prompt))",
-                        nodeContext
-                    )
-                ));
-            }
-            // {
-            //   // tool_skill_search
-            //   // - 复制 除了 subagent 的所有 tool/mcp tool/skill 组合上下文到
-            //   // subagent 中 根据需求分析加载/使用的 tool/skill
-            //   neograph::graph::NodeContext nodeContext{};
-            //   nodeContext.instructions = "";
-            //   nodeContext.provider =
-            //       ModelProviderRegistry::createProvider(config->model);
-
-            //   // 收集延迟加载的 tool 信息
-            //   std::vector<agentxx::tools::ToolSkillSearchSubAgentTask::DelayToolInfo>
-            //       delayToolInfos;
-            //   for (auto &t : tools) {
-            //     auto *xxTool = dynamic_cast<agentxx::tools::XXToolBase
-            //     *>(t.get()); if (xxTool && xxTool->isDelayLoad) {
-            //       auto def = xxTool->get_definition();
-            //       delayToolInfos.push_back({xxTool->get_name(),
-            //       def.description});
-            //     }
-            //   }
-
-            //   // 给子 agent 提供文件系统 tool，用于搜索和读取 SKILL.md
-            //   std::vector<neograph::Tool *> searchToolPtrs;
-            //   searchToolPtrs.reserve(tools.size());
-            //   for (auto &t : tools) {
-            //     const auto &name = t->get_name();
-            //     if (name == "filesystem_glob" || name == "filesystem_listfile" ||
-            //         name == "filesystem_read_text_file" ||
-            //         name == "filesystem_grep") {
-            //       searchToolPtrs.push_back(t.get());
-            //     }
-            //   }
-            //   nodeContext.tools = std::move(searchToolPtrs);
-
-            //   subagentManagerTool->subAgentList.insert(std::make_pair(
-            //       "tool_skill_search",
-            //       std::make_shared<agentxx::tools::ToolSkillSearchSubAgentTask>(
-            //           nodeContext, delayToolInfos, config->skillDirPaths,
-            //           middlewareHandleContext)));
-            // }
-
-            tools.push_back(std::move(subagentManagerTool));
-        }
-    }
-    for (const auto& tool : tools) {
-        auto handle = tool->createSummarizationToolHandle();
-        if (handle.has_value()) {
-            summarizationMiddleware->summarizationToolHandles[tool->get_name()] = handle.value();
-        }
-    }
-
-    /// === Main Agent ===
     neograph::graph::NodeContext nodeContext{};
     nodeContext.instructions = config->prompt.systemPrompt;
-    nodeContext.provider     = ModelProviderRegistry::createProvider(config->model);
-    // 主 agent 的 llm 节点启用运行时动态模型切换 (经 modelRegistry)
+    nodeContext.provider
+        = ModelProviderRegistry::createProvider(config->model);
     nodeContext.extra_config = neograph::json{
         {std::string{agentxx::nodes::ModelCallWrapNode::defUseModelRegistryKey}, true},
     };
@@ -444,7 +68,102 @@ asio::awaitable<void> DeepAgent::init() {
     }
     nodeContext.tools = std::move(toolPtrs);
 
-    auto store = std::make_shared<neograph::graph::InMemoryCheckpointStore>();
+    auto topology = neograph::graph::GraphCompiler::parse(graphDef, *graphRegistry);
+    auto validated = neograph::graph::GraphValidator::require_valid(
+        std::move(topology),
+        *graphRegistry
+    );
+
+    neograph::graph::EngineConfig engineConfig;
+    engineConfig.node_context     = std::move(nodeContext);
+    engineConfig.checkpoint_store = std::make_shared<neograph::graph::InMemoryCheckpointStore>();
+
+    neograph::graph::EngineResources resources;
+    resources.registry = graphRegistry;
+
+    engine = neograph::graph::GraphEngine::link(
+        std::move(validated),
+        std::move(engineConfig),
+        std::move(resources)
+    );
+    assert(nullptr != engine);
+    {
+        auto crudeTools = std::vector<std::unique_ptr<neograph::Tool>>{};
+        for (auto& tool : tools) {
+            crudeTools.push_back(std::move(tool));
+        }
+        engine->own_tools(std::move(crudeTools));
+    }
+
+    co_return;
+}
+
+void BaseAgent::setupModelRegistry() {
+    auto config = agentContext->agentConfig;
+    auto registry = std::make_shared<agentxx::agent::ModelProviderRegistry>();
+    for (const auto& [name, mc] : config->availableModels) {
+        registry->registerModel(name, mc);
+    }
+    if (config->availableModels.empty()) {
+        registry->registerModel(config->model.modelName, config->model);
+        registry->setDefaultModel(config->model.modelName);
+    } else if (false == config->currentModelName.empty()
+               && registry->hasModel(config->currentModelName)) {
+        registry->setDefaultModel(config->currentModelName);
+    }
+    agentContext->modelRegistry = std::move(registry);
+}
+
+void BaseAgent::setupEventBus() {
+    agentContext->bus = std::make_shared<agentxx::middleware::EventBus>(ioCtx->get_executor());
+}
+
+void BaseAgent::registerNodes(neograph::graph::GraphRegistry& registry) {
+    auto ctx = agentContext;
+    registry.register_type(
+        std::string{agentxx::nodes::AgentStartCallWrapNode::defNodeType},
+        [ctx](
+            const std::string& name,
+            const neograph::json&,
+            const neograph::graph::NodeContext&
+        ) {
+            return std::make_unique<agentxx::nodes::AgentStartCallWrapNode>(name, ctx);
+        }
+    );
+    registry.register_type(
+        std::string{agentxx::nodes::MiddlewareWrapAgentEndCallNode::defNodeType},
+        [ctx](
+            const std::string& name,
+            const neograph::json&,
+            const neograph::graph::NodeContext&
+        ) {
+            return std::make_unique<agentxx::nodes::MiddlewareWrapAgentEndCallNode>(name, ctx);
+        }
+    );
+    registry.register_type(
+        std::string{agentxx::nodes::ModelCallWrapNode::defNodeType},
+        [ctx](
+            const std::string& name,
+            const neograph::json&,
+            const neograph::graph::NodeContext& nodeCtx
+        ) {
+            return std::make_unique<agentxx::nodes::ModelCallWrapNode>(name, nodeCtx, ctx);
+        }
+    );
+    registry.register_type(
+        std::string{agentxx::nodes::ToolcallWrapNode::defNodeType},
+        [ctx](
+            const std::string& name,
+            const neograph::json&,
+            const neograph::graph::NodeContext& nodeCtx
+        ) {
+            return std::make_unique<agentxx::nodes::ToolcallWrapNode>(name, nodeCtx, ctx);
+        }
+    );
+}
+
+neograph::json BaseAgent::buildGraphDefinition() {
+    auto config = agentContext->agentConfig;
 
     // JSON definition equivalent to the Agent::run() ReAct loop:
     //                 ------- sub_agent_task <--- toolcall/sub_agent_task
@@ -458,7 +177,7 @@ asio::awaitable<void> DeepAgent::init() {
     //                            __end__
 
     // clang-format off
-    auto graphDefinition = neograph::json{
+    return neograph::json{
         {"name", config->agentName},
         {
             "channels", {
@@ -517,28 +236,60 @@ asio::awaitable<void> DeepAgent::init() {
          },
     };
     // clang-format on
+}
 
-    engine = std::move(neograph::graph::GraphEngine::compile(graphDefinition, nodeContext, store));
-    assert(nullptr != engine);
-    {
-        auto crudeTools = std::vector<std::unique_ptr<neograph::Tool>>{};
-        for (auto& tool : tools) {
-            crudeTools.push_back(std::move(tool));
-        }
-        engine->own_tools(std::move(crudeTools));
-    }
-
+asio::awaitable<void> BaseAgent::setupMiddleware() {
     co_return;
 }
 
-void DeepAgent::selectModel(std::string_view threadId, std::string_view modelName) {
+asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> BaseAgent::createTools() {
+    std::vector<std::unique_ptr<agentxx::tools::XXToolBase>> tools{};
+    tools.push_back(std::make_unique<agentxx::tools::ThreadShareStoreTool>(agentContext));
+    tools.push_back(std::make_unique<agentxx::tools::GetCurrentDateTimeTool>(agentContext));
+    co_return tools;
+}
+
+void BaseAgent::collectMiddlewareTools(
+    std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>& tools
+) {
+    for (auto& item : agentContext->middlewareHandleContext->handles) {
+        if (false == item->toolcalls.empty()) {
+            tools.insert(
+                tools.end(),
+                std::make_move_iterator(item->toolcalls.begin()),
+                std::make_move_iterator(item->toolcalls.end())
+            );
+        }
+    }
+}
+
+void BaseAgent::setupSummarizationHandles(
+    const std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>& tools
+) {
+    for (auto& handle : agentContext->middlewareHandleContext->handles) {
+        auto* summarization
+            = dynamic_cast<agentxx::middleware::SummarizationMiddlewareHandle*>(handle.get());
+        if (nullptr == summarization) {
+            continue;
+        }
+        for (const auto& tool : tools) {
+            auto toolHandle = tool->createSummarizationToolHandle();
+            if (toolHandle.has_value()) {
+                summarization->summarizationToolHandles[tool->get_name()] = toolHandle.value();
+            }
+        }
+        break;
+    }
+}
+
+void BaseAgent::selectModel(std::string_view threadId, std::string_view modelName) {
     if (false == modelName.empty() && agentContext->modelRegistry
         && agentContext->modelRegistry->hasModel(modelName)) {
         agentContext->getSession(threadId)->setModelName(modelName);
     }
 }
 
-std::string DeepAgent::getCurrentModelName(std::string_view threadId) const {
+std::string BaseAgent::getCurrentModelName(std::string_view threadId) const {
     std::string selected;
     if (auto session = agentContext->sessions->get(threadId)) {
         selected = session->getModelName();
@@ -549,7 +300,7 @@ std::string DeepAgent::getCurrentModelName(std::string_view threadId) const {
     return agentContext->agentConfig->model.modelName;
 }
 
-asio::awaitable<DeepAgent::ConversationTurnResult> DeepAgent::runConversationTurnAsync(
+asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTurnAsync(
     std::string_view             threadId,
     std::string_view             userInput,
     bool                         isFirstMsg,
@@ -558,7 +309,6 @@ asio::awaitable<DeepAgent::ConversationTurnResult> DeepAgent::runConversationTur
 ) {
     ConversationTurnResult turnResult;
     auto                   session = agentContext->getSession(threadId);
-    // 绑定 io 线程: 后续 fullHistory/llmMessages/chainHash 的写入必须在此线程
     session->bindIoThread();
     session->assertIoThread();
     if (!session->bus) {
@@ -654,8 +404,6 @@ asio::awaitable<DeepAgent::ConversationTurnResult> DeepAgent::runConversationTur
                         }
                         auto toolName   = jm.value("tool_name", std::string{});
                         auto toolCallId = jm.value("tool_call_id", std::string{});
-                        // 文本编辑工具: 向 fullHistory 额外记录 git diff 对比信息
-                        // (仅写入 fullHistory 副本, 不影响 LLM 上下文)
                         auto historyMsg = jm;
                         if (false == hasError && toolName == "filesystem_edit_text_file") {
                             for (auto it = session->fullHistory.rbegin();
@@ -802,8 +550,8 @@ asio::awaitable<DeepAgent::ConversationTurnResult> DeepAgent::runConversationTur
                             if (interruptArg.name == "subagent") {
                                 auto subagentArg = interruptArg.arg;
                                 auto resp        = co_await agentContext->bus->request<
-                                           events::ReqSubagentStart,
-                                           events::RespSubagentResult>(
+                                    events::ReqSubagentStart,
+                                    events::RespSubagentResult>(
                                     events::Topic::Subagent,
                                     events::ReqSubagentStart{
                                         .parentAgentName
@@ -892,7 +640,7 @@ asio::awaitable<DeepAgent::ConversationTurnResult> DeepAgent::runConversationTur
                         }
                     }
 
-                    if (false == resumeValues.empty()) {
+                    if (false != resumeValues.empty()) {
                         agentContext->middlewareHandleContext->setGraphDataItemValue<
                             neograph::json>(
                             threadId,
@@ -916,7 +664,6 @@ asio::awaitable<DeepAgent::ConversationTurnResult> DeepAgent::runConversationTur
                     }
                 }
             } catch (const neograph::graph::CancelledException&) {
-                // 取消执行，不需要向外抛异常
             }
 
             co_return;
@@ -942,23 +689,23 @@ asio::awaitable<DeepAgent::ConversationTurnResult> DeepAgent::runConversationTur
     co_return turnResult;
 }
 
-DeepAgent::~DeepAgent() {
+BaseAgent::~BaseAgent() {
     engine = nullptr;
 }
 
-neograph::graph::GraphEngine* DeepAgent::getEngine() {
+neograph::graph::GraphEngine* BaseAgent::getEngine() {
     return engine.get();
 }
 
-const neograph::graph::GraphEngine* DeepAgent::getEngine() const {
+const neograph::graph::GraphEngine* BaseAgent::getEngine() const {
     return engine.get();
 }
 
-std::shared_ptr<AgentContext> DeepAgent::getContext() {
+std::shared_ptr<AgentContext> BaseAgent::getContext() {
     return agentContext;
 }
 
-asio::awaitable<std::string> DeepAgent::runNonStreamAsync(
+asio::awaitable<std::string> BaseAgent::runNonStreamAsync(
     std::string_view                                        threadId,
     const std::vector<neograph::ChatMessage>&               messages,
     std::function<void(const neograph::graph::GraphEvent&)> callback,
@@ -1013,7 +760,7 @@ asio::awaitable<std::string> DeepAgent::runNonStreamAsync(
     co_return oss.str();
 }
 
-asio::awaitable<std::string> DeepAgent::runSingleInputAsync(
+asio::awaitable<std::string> BaseAgent::runSingleInputAsync(
     std::string_view threadId,
     std::string_view userInput,
     std::string_view systemPrompt,
@@ -1036,7 +783,7 @@ asio::awaitable<std::string> DeepAgent::runSingleInputAsync(
     co_return co_await runNonStreamAsync(threadId, messages, nullptr, modelName);
 }
 
-asio::awaitable<DeepAgent::SimpleRunResult> DeepAgent::runStreamAsync(
+asio::awaitable<BaseAgent::SimpleRunResult> BaseAgent::runStreamAsync(
     const std::vector<neograph::ChatMessage>& messages,
     std::string_view                          modelName
 ) {

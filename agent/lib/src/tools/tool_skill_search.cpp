@@ -113,9 +113,20 @@ void ToolSkillSearchSubAgentTask::createSystemPrompt() {
     systemPrompt = fmt::format(defSystemPromptTemplate, toolsList.str(), skillsDirs.str());
 }
 
-void ToolSkillSearchSubAgentTask::createSubgraph(const neograph::graph::NodeContext& context) {
+void ToolSkillSearchSubAgentTask::createSubgraph(
+    const neograph::graph::NodeContext&        context,
+    std::shared_ptr<const neograph::graph::GraphRegistry> registry
+) {
     if (nullptr == subgraph) {
-        auto inner = neograph::graph::GraphEngine::compile(defCreateSubGraphDefine(), context);
+        neograph::graph::EngineConfig config;
+        config.node_context = context;
+        neograph::graph::EngineResources resources;
+        resources.registry = std::move(registry);
+        auto inner = neograph::graph::GraphEngine::build(
+            defCreateSubGraphDefine(),
+            std::move(config),
+            std::move(resources)
+        );
         assert(nullptr != inner);
         subgraph = std::shared_ptr<neograph::graph::GraphEngine>(inner.release());
     }

@@ -30,7 +30,7 @@ private:
     std::weak_ptr<AgentIOTransportBase> transport_;
 };
 
-AgentServer::AgentServer(std::shared_ptr<DeepAgent> agent, Config config) :
+AgentServer::AgentServer(std::shared_ptr<BaseAgent> agent, Config config) :
     agent_(std::move(agent)),
     config_(std::move(config)) {
     if (config_.http.address.empty()) {
@@ -73,7 +73,7 @@ void AgentServer::start(asio::any_io_executor ex) {
     }
     http_->startAsync(ex);
     XX_OUT(
-        "[agent_server] DeepAgent {} service on {}:{}{} (token={})",
+        "[agent_server] BaseAgent {} service on {}:{}{} (token={})",
         ssl ? "WSS" : "WS",
         config_.http.address,
         port(),
