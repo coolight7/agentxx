@@ -247,7 +247,7 @@ ftxui::Element AgentTUI::renderInfoSidebar() {
     }
     elements.push_back(
         hbox({
-            text(fmt::format("Agentxx {}", kAgentxxVersion, mode)),
+            text(fmt::format("Agentxx {} ", kAgentxxVersion)),
             filler(),
             text(mode),
         })
