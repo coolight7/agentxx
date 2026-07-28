@@ -190,10 +190,10 @@ path/to/agentxx_test
 path/to/agentxx_test --fail-fast
 
 # 仅运行指定模块
-path/to/agentxx_test string_util regex deepagent
+path/to/agentxx_test string_util regex agent
 ```
 
-可用测试模块: `string_util` `regex` `diff_util` `events` `concurrency` `misc_fixes` `event_stream` `event_bridge` `interrupt_bus` `subagent_bus` `crossagent` `string_tools` `share_store` `rag_search` `datetime` `filesystem` `command` `web_search` `codegraph` `cpu_gpu` `http` `websocket` `remote_agent` `mcp` `acp` `a2a` `openai_provider` `anthropic_provider` `deepagent` `screen_capture` `text_selection`
+可用测试模块: `string_util` `regex` `diff_util` `events` `concurrency` `misc_fixes` `event_stream` `event_bridge` `interrupt_bus` `subagent_bus` `crossagent` `string_tools` `share_store` `rag_search` `datetime` `filesystem` `command` `web_search` `codegraph` `cpu_gpu` `http` `websocket` `remote_agent` `mcp` `acp` `a2a` `openai_provider` `anthropic_provider` `agent` `screen_capture` `text_selection`
 
 ### 配置文件
 
@@ -252,7 +252,7 @@ agentxx_cli [mode] [options]
 | `-h, --help` | 显示帮助 |
 | `--config <path>` | 配置文件路径 (默认: agentxx-config.yaml) |
 | `--env <path>` | 覆盖式环境变量文件路径 |
-| `--agent <url>` | 远程 agent server 地址 (ws://host:port/deepagent) |
+| `--agent <url>` | 远程 agent server 地址 (ws://host:port/agent) |
 | `--token <token>` | 认证 token |
 | `--model <model>` | 远程模型名称 |
 | `--host <host>` | 服务监听地址 (默认: 127.0.0.1) |
@@ -273,10 +273,10 @@ agentxx_cli cli --config agentxx-config.yaml
 agentxx_cli server --host 0.0.0.0 --port 17000 --config agentxx-config.yaml
 
 # 连接远程 agent (TUI)
-agentxx_cli tui --agent ws://192.168.1.100:17000/deepagent --token xxx
+agentxx_cli tui --agent ws://192.168.1.100:17000/agent --token xxx
 
 # 连接远程 agent (CLI)
-agentxx_cli cli --agent ws://192.168.1.100:17000/deepagent?token=xxx
+agentxx_cli cli --agent ws://192.168.1.100:17000/agent?token=xxx
 
 # ACP stdio 服务
 agentxx_cli acp --config agentxx-config.yaml
@@ -665,7 +665,7 @@ agent/
 ├── test/                         # agentxx_test 测试程序
 │   ├── test.cpp                  # 测试入口: 模块注册与调度
 │   ├── test_framework.h          # 测试框架 (断言宏 / TestResult)
-│   ├── test_deepagent.*          # CodeAgent 集成测试 (模拟 LLM Server)
+│   ├── test_agent.*          # CodeAgent 集成测试 (模拟 LLM Server)
 │   ├── test_events.*             # 事件类型测试
 │   ├── test_event_stream.*       # EventBus / EventStream / RequestResponseStream 测试
 │   ├── test_event_bridge.*       # EventBridge 事件翻译测试

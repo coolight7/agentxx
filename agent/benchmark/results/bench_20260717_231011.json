@@ -914,7 +914,7 @@
       "stddev_human": "574.8 ns"
     },
     {
-      "name": "DeepAgent::init [graph engine compilation]",
+      "name": "agent::init [graph engine compilation]",
       "iterations": 10,
       "total_ns": 22810338.00,
       "mean_ns": 2281033.80,
@@ -930,7 +930,7 @@
       "stddev_human": "4.42 ms"
     },
     {
-      "name": "DeepAgent::init [warm re-init]",
+      "name": "agent::init [warm re-init]",
       "iterations": 10,
       "total_ns": 7475180.00,
       "mean_ns": 747518.00,
@@ -946,7 +946,7 @@
       "stddev_human": "53.77 us"
     },
     {
-      "name": "DeepAgent::runConversationTurnAsync [LLM end-to-end]",
+      "name": "agent::runConversationTurnAsync [LLM end-to-end]",
       "iterations": 5,
       "total_ns": 5022020904.00,
       "mean_ns": 1004404180.80,
@@ -962,7 +962,7 @@
       "stddev_human": "1.55 ms"
     },
     {
-      "name": "DeepAgent::runSingleInputAsync [completion]",
+      "name": "agent::runSingleInputAsync [completion]",
       "iterations": 5,
       "total_ns": 5021154612.00,
       "mean_ns": 1004230922.40,
@@ -978,7 +978,7 @@
       "stddev_human": "1.43 ms"
     },
     {
-      "name": "DeepAgent::runConversationTurnAsync [multi-turn x3]",
+      "name": "agent::runConversationTurnAsync [multi-turn x3]",
       "iterations": 5,
       "total_ns": 15053147777.00,
       "mean_ns": 3010629555.40,
@@ -994,7 +994,7 @@
       "stddev_human": "1.57 ms"
     },
     {
-      "name": "DeepAgent::runConversationTurnAsync [history=20]",
+      "name": "agent::runConversationTurnAsync [history=20]",
       "iterations": 5,
       "total_ns": 5017451060.00,
       "mean_ns": 1003490212.00,

@@ -17,7 +17,7 @@ namespace server {
 
 A2aServer::A2aServer(std::shared_ptr<agentxx::agent::BaseAgent> agent, Config config) :
     config_(std::move(config)),
-    deepAgent_(std::move(agent)),
+    agent_(std::move(agent)),
     httpServer_(std::make_unique<util::HttpServer>(config_.httpConfig)) {
     setupRoutes();
 }
@@ -476,7 +476,7 @@ void A2aServer::executeTask(std::string_view taskId, std::string_view userInput)
 
         auto cancelFlag = task->cancelFlag;
 
-        if (!deepAgent_) {
+        if (!agent_) {
             updateTaskState(
                 taskId,
                 A2aTaskState::Failed,
@@ -496,7 +496,7 @@ void A2aServer::executeTask(std::string_view taskId, std::string_view userInput)
                     std::vector<neograph::ChatMessage> msgs{
                         neograph::ChatMessage{"user", std::string{userInput}}
                     };
-                    auto result = co_await deepAgent_->runNonStreamAsync(
+                    auto result = co_await agent_->runNonStreamAsync(
                         threadId,
                         msgs,
                         [&collected, &cancelFlag](const neograph::graph::GraphEvent& event) {

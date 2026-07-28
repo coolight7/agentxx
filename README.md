@@ -233,7 +233,7 @@
     - 核心库，包含了内置实现的 toolcall、node、middleware 等，分离编译以便嵌入其他 app 开发使用
 - `agent/client`: agentxx_cli
     - 命令行可执行程序，计划用于启动服务、实现命令行用户交互、TUI
-    - `agent/client/include/agentxx-client/io` 实现了 stdio、TUI 方式的 DeepAgent 调用
+    - `agent/client/include/agentxx-client/io` 实现了 stdio、TUI 方式的 Agent 调用
     - `agent/client/include/agentxx-client/train` 提示词训练
 - `agent/test`: agentxx_test
     - 测试
@@ -302,7 +302,7 @@ agentxx_cli cli # 启动 cli
 # - client 和 agent-server 分离为两个进程，两者使用 websocket 网络连接
 # - 自己开发 GUI 连接 server 可使用该方式连接
 agentxx_cli server --host 0.0.0.0 --port 7007 --token passwd # 启动 agent-server
-agentxx_cli tui --agent ws://127.0.0.1:7007/deepagent --token passwd # 连接 server
+agentxx_cli tui --agent ws://127.0.0.1:7007/agent --token passwd # 连接 server
 ```
 
 ## LICENSE & THIRD_PARTY

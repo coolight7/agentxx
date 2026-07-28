@@ -20,7 +20,7 @@ AcpProtocolHandler::AcpProtocolHandler(
     Config                                     config
 ) :
     config_(std::move(config)),
-    deepAgent_(std::move(agent)),
+    agent_(std::move(agent)),
     agentInfo_(std::move(agentInfo)) {}
 
 AcpProtocolHandler::~AcpProtocolHandler() {
@@ -333,7 +333,7 @@ void AcpProtocolHandler::workerRunPrompt(
     try {
         auto userText = extractUserText(promptBlocks);
 
-        auto& engine = deepAgent_->engine;
+        auto& engine = agent_->engine;
         if (!engine) {
             emitAgentMessageChunk(sessionId, "(graph error: engine is null)");
             emit(jsonRpcResult(
@@ -481,9 +481,9 @@ HttpAcpServer::HttpAcpServer(
     Config                                     config
 ) :
     config_(std::move(config)),
-    deepAgent_(std::move(agent)),
+    agent_(std::move(agent)),
     handler_(
-        deepAgent_,
+        agent_,
         std::move(agentInfo),
         {.serverName = config_.serverName, .serverVersion = config_.serverVersion}
     ) {
@@ -745,9 +745,9 @@ StdioAcpServer::StdioAcpServer(
     std::shared_ptr<agentxx::agent::BaseAgent> agent,
     neograph::json                             agentInfo
 ) :
-    deepAgent_(std::move(agent)),
+    agent_(std::move(agent)),
     handler_(
-        deepAgent_,
+        agent_,
         std::move(agentInfo),
         {.serverName = "agentxx-acp-stdio", .serverVersion = "0.1.0"}
     ) {}

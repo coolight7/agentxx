@@ -269,7 +269,7 @@ private:
     // -----------------------------------------------------------------------
 
     Config                                     config_;
-    std::shared_ptr<agentxx::agent::BaseAgent> deepAgent_;
+    std::shared_ptr<agentxx::agent::BaseAgent> agent_;
     std::unique_ptr<util::HttpServer>          httpServer_;
 
     mutable std::mutex                                              tasksMutex_;

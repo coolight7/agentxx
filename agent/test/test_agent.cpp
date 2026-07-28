@@ -1,9 +1,9 @@
-#include "test_deepagent.h"
 #include "agentxx/agent/code_agent.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/io_context.hpp"
 #include "asio/use_awaitable.hpp"
+#include "test_agent.h"
 #include <atomic>
 #include <string>
 #include <vector>
@@ -241,7 +241,7 @@ DaSimServer startDaSimServer() {
     return sim;
 }
 
-asio::awaitable<void> test_deepagent_init() {
+asio::awaitable<void> test_agent_init() {
     auto sim     = startDaSimServer();
     auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
 
@@ -259,7 +259,7 @@ asio::awaitable<void> test_deepagent_init() {
     co_return;
 }
 
-asio::awaitable<void> test_deepagent_single_input() {
+asio::awaitable<void> test_agent_single_input() {
     auto sim     = startDaSimServer();
     auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
 
@@ -283,7 +283,7 @@ asio::awaitable<void> test_deepagent_single_input() {
     co_return;
 }
 
-asio::awaitable<void> test_deepagent_conversation_turn() {
+asio::awaitable<void> test_agent_conversation_turn() {
     auto sim     = startDaSimServer();
     auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
 
@@ -308,7 +308,7 @@ asio::awaitable<void> test_deepagent_conversation_turn() {
     co_return;
 }
 
-asio::awaitable<void> test_deepagent_tool_calls() {
+asio::awaitable<void> test_agent_tool_calls() {
     auto sim     = startDaSimServer();
     auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
 
@@ -342,7 +342,7 @@ asio::awaitable<void> test_deepagent_tool_calls() {
     co_return;
 }
 
-asio::awaitable<void> test_deepagent_multi_turn() {
+asio::awaitable<void> test_agent_multi_turn() {
     auto sim     = startDaSimServer();
     auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
 
@@ -370,7 +370,7 @@ asio::awaitable<void> test_deepagent_multi_turn() {
     co_return;
 }
 
-asio::awaitable<void> test_deepagent_large_history() {
+asio::awaitable<void> test_agent_large_history() {
     auto sim     = startDaSimServer();
     auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
 
@@ -394,7 +394,7 @@ asio::awaitable<void> test_deepagent_large_history() {
     co_return;
 }
 
-asio::awaitable<void> test_deepagent_nonstream() {
+asio::awaitable<void> test_agent_nonstream() {
     auto sim     = startDaSimServer();
     auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
 
@@ -427,7 +427,7 @@ asio::awaitable<void> test_deepagent_nonstream() {
     co_return;
 }
 
-asio::awaitable<void> test_deepagent_io_session_bus() {
+asio::awaitable<void> test_agent_io_session_bus() {
     auto sim     = startDaSimServer();
     auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
 
@@ -460,7 +460,7 @@ asio::awaitable<void> test_deepagent_io_session_bus() {
     co_return;
 }
 
-asio::awaitable<void> test_deepagent_io_null() {
+asio::awaitable<void> test_agent_io_null() {
     auto sim     = startDaSimServer();
     auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
 
@@ -482,7 +482,7 @@ asio::awaitable<void> test_deepagent_io_null() {
     co_return;
 }
 
-asio::awaitable<void> test_deepagent_session_activity_streaming() {
+asio::awaitable<void> test_agent_session_activity_streaming() {
     auto sim     = startDaSimServer();
     auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
 
@@ -509,7 +509,7 @@ asio::awaitable<void> test_deepagent_session_activity_streaming() {
     co_return;
 }
 
-asio::awaitable<void> test_deepagent_session_activity_toolcall() {
+asio::awaitable<void> test_agent_session_activity_toolcall() {
     auto sim     = startDaSimServer();
     auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
 
@@ -545,7 +545,7 @@ asio::awaitable<void> test_deepagent_session_activity_toolcall() {
     co_return;
 }
 
-asio::awaitable<void> test_deepagent_multi_session_io() {
+asio::awaitable<void> test_agent_multi_session_io() {
     auto sim     = startDaSimServer();
     auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
 
@@ -583,7 +583,7 @@ asio::awaitable<void> test_deepagent_multi_session_io() {
     co_return;
 }
 
-asio::awaitable<void> test_deepagent_reuse_session_bus() {
+asio::awaitable<void> test_agent_reuse_session_bus() {
     auto sim     = startDaSimServer();
     auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
 
@@ -615,26 +615,26 @@ asio::awaitable<void> test_deepagent_reuse_session_bus() {
     co_return;
 }
 
-asio::awaitable<TestResult> run_deepagent_tests() {
+asio::awaitable<TestResult> run_agent_tests() {
     g_da_passed = 0;
     g_da_failed = 0;
 
     try {
-        co_await test_deepagent_init();
-        co_await test_deepagent_single_input();
-        co_await test_deepagent_conversation_turn();
-        co_await test_deepagent_tool_calls();
-        co_await test_deepagent_multi_turn();
-        co_await test_deepagent_large_history();
-        co_await test_deepagent_nonstream();
-        co_await test_deepagent_io_session_bus();
-        co_await test_deepagent_io_null();
-        co_await test_deepagent_session_activity_streaming();
-        co_await test_deepagent_session_activity_toolcall();
-        co_await test_deepagent_multi_session_io();
-        co_await test_deepagent_reuse_session_bus();
+        co_await test_agent_init();
+        co_await test_agent_single_input();
+        co_await test_agent_conversation_turn();
+        co_await test_agent_tool_calls();
+        co_await test_agent_multi_turn();
+        co_await test_agent_large_history();
+        co_await test_agent_nonstream();
+        co_await test_agent_io_session_bus();
+        co_await test_agent_io_null();
+        co_await test_agent_session_activity_streaming();
+        co_await test_agent_session_activity_toolcall();
+        co_await test_agent_multi_session_io();
+        co_await test_agent_reuse_session_bus();
     } catch (const std::exception& e) {
-        TEST_FAIL << "deepagent suite exception: " << e.what() << std::endl;
+        TEST_FAIL << "agent suite exception: " << e.what() << std::endl;
         g_da_failed++;
     }
 
