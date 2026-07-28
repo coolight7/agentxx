@@ -26,8 +26,7 @@ ftxui::Element AgentTUI::renderSidebar() {
     return vbox({
                tabBar,
                text(" "),
-               hbox({text(" "), content | flex | vscroll_indicator | yframe, text(" ")})
-                   | flex | yframe | reflect(sidebarContentBox_),
+               hbox({text(" "), sidebarScrollable_->Render() | flex, text(" ")}) | flex,
            })
            | size(WIDTH, LESS_THAN, 56) | size(WIDTH, GREATER_THAN, 28)
            | bgcolor(theme_.blockColor);
@@ -66,12 +65,6 @@ ftxui::Element AgentTUI::renderLogWindow() {
     if (elements.empty()) {
         return text(" (no logs) ") | dim;
     }
-    int last = static_cast<int>(elements.size()) - 1;
-    if (logStickToBottom_ || logFocusIndex_ < 0) {
-        logFocusIndex_ = last;
-    }
-    logFocusIndex_           = std::clamp(logFocusIndex_, 0, last);
-    elements[logFocusIndex_] = elements[logFocusIndex_] | focus;
     return vbox(std::move(elements));
 }
 
@@ -120,6 +113,9 @@ void AgentTUI::toggleLogWindow() {
             return renderLogWindow();
         });
     }
+    if (sidebarScrollable_) {
+        sidebarScrollable_->setStickToBottom(true);
+    }
 }
 
 bool AgentTUI::handleSidebarMouse(const ftxui::Mouse& mouse) {
@@ -129,6 +125,9 @@ bool AgentTUI::handleSidebarMouse(const ftxui::Mouse& mouse) {
         }
         if (mouse.button == Mouse::Left && mouse.motion == Mouse::Released) {
             activeTabIndex_ = static_cast<int>(i);
+            if (sidebarScrollable_) {
+                sidebarScrollable_->setStickToBottom(true);
+            }
             return true;
         }
         if (mouse.button == Mouse::Right && mouse.motion == Mouse::Released) {

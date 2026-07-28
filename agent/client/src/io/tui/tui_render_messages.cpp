@@ -28,31 +28,9 @@ ftxui::Element AgentTUI::renderMessages() {
     }
     collapsibleBoxes_.assign(collapsibleMsgIndices_.size(), ftxui::Box{});
 
-    /// 计算总块数 (消息 + 流式输出 + 底部锚点)
-    int blockCount = static_cast<int>(messages_.size());
-    if (isStreaming_ && !currentToken_.empty()) {
-        ++blockCount;
-    }
-    if (blockCount > 0) {
-        ++blockCount; // 底部锚点
-    }
-    messagesBlockCount_ = blockCount;
-
-    /// 确定聚焦块索引
-    int focusIdx = -1;
-    if (blockCount > 0) {
-        focusIdx
-            = stickToBottom_ ? (blockCount - 1) : std::clamp(messagesSelector_, 0, blockCount - 1);
-    }
-
-    Elements elements;
-    int      idx                = 0;
-    int      collapsibleOrdinal = 0;
-    auto     pushBlock          = [&](Element block, bool spacer) {
-        if (idx == focusIdx) {
-            block = std::move(block) | focus;
-        }
-        ++idx;
+    Elements    elements;
+    int         collapsibleOrdinal = 0;
+    auto        pushBlock          = [&](Element block, bool spacer) {
         elements.push_back(std::move(block));
         if (spacer) {
             elements.push_back(text(""));
@@ -164,16 +142,6 @@ ftxui::Element AgentTUI::renderMessages() {
         } else {
             pushBlock(paragraph(currentToken_) | color(theme_.assistantColor), false);
         }
-    }
-
-    /// 底部锚点: stickToBottom_ 时聚焦此元素确保滚动到真正底部
-    if (!elements.empty()) {
-        Element anchor = text("");
-        if (idx == focusIdx) {
-            anchor = anchor | focus;
-        }
-        ++idx;
-        elements.push_back(std::move(anchor));
     }
 
     if (elements.empty()) {
