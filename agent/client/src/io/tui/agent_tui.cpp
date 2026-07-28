@@ -88,7 +88,8 @@ void AgentTUI::start() {
             = Input(&inputText_, "Type a message... (Enter=newline, Alt+Enter=send)", input_option);
         // 可滚动消息列表组件 (只包裹消息内容, 外层 hbox+spacer 提供宽度约束)
         messagesScrollable_ = std::make_shared<Scrollable>([this]() -> Element {
-            return renderMessages() | flex;
+            // 不能加 flex，否则文本自动换行的宽度取值有问题
+            return renderMessages();
         });
 
         // 侧边栏内容可滚动组件 (各 tab 共用)
@@ -151,7 +152,7 @@ void AgentTUI::start() {
                 messagesScrollable_->Render() | flex,
                 text("   "),
             });
-            auto mainWidget = vbox({
+            auto mainWidget   = vbox({
                 messagesArea | flex,
                 pendingBar,
                 input_bar,
