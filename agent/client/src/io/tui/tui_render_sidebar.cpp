@@ -142,8 +142,11 @@ bool AgentTUI::handleCollapsibleMouse(const ftxui::Mouse& mouse) {
     if (mouse.button != Mouse::Left || mouse.motion != Mouse::Released) {
         return false;
     }
+    if (mouse.x < messagesAreaBox_.x_min || mouse.x > messagesAreaBox_.x_max) {
+        return false;
+    }
     for (size_t k = 0; k < collapsibleBoxes_.size() && k < collapsibleMsgIndices_.size(); ++k) {
-        if (false == collapsibleBoxes_[k].Contain(mouse.x, mouse.y)) {
+        if (mouse.y < collapsibleBoxes_[k].y_min || mouse.y > collapsibleBoxes_[k].y_max) {
             continue;
         }
         const size_t mi = collapsibleMsgIndices_[k];
