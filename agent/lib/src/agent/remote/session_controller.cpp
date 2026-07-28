@@ -143,7 +143,7 @@ void SessionController::handleHello(const WireHello& hello, std::vector<std::str
     std::vector<WireInterruptRequest> pendingInterrupts;
 
     auto sess = session();
-    tailHash  = sess ? sess->chainHash.tailHex() : std::string{};
+    tailHash  = sess ? sess->getHashInfo().tailHex : std::string{};
 
     if (hello.lastSeq > 0) {
         auto deltas = deltasSince(hello.lastSeq);
@@ -153,7 +153,7 @@ void SessionController::handleHello(const WireHello& hello, std::vector<std::str
             replaySync = buildFullSync();
         }
     } else {
-        if (sess && !sess->fullHistory.empty()) {
+        if (sess && !sess->getFullHistoryCopy().empty()) {
             replaySync = buildFullSync();
         }
     }
@@ -313,15 +313,15 @@ SyncPayload SessionController::buildFullSync() {
     p.fromIndex = 0;
     auto sess   = session();
     if (sess) {
-        p.messages = sess->fullHistory;
-        p.tailHash = sess->chainHash.tailHex();
+        p.messages = sess->getFullHistoryCopy();
+        p.tailHash = sess->getHashInfo().tailHex;
     }
     return p;
 }
 
 std::string SessionController::currentTailHash() {
     auto sess = session();
-    return sess ? sess->chainHash.tailHex() : std::string{};
+    return sess ? sess->getHashInfo().tailHex : std::string{};
 }
 
 void SessionController::sendContextStats() {

@@ -558,6 +558,9 @@ asio::awaitable<DeepAgent::ConversationTurnResult> DeepAgent::runConversationTur
 ) {
     ConversationTurnResult turnResult;
     auto                   session = agentContext->getSession(threadId);
+    // 绑定 io 线程: 后续 fullHistory/llmMessages/chainHash 的写入必须在此线程
+    session->bindIoThread();
+    session->assertIoThread();
     if (!session->bus) {
         session->bus
             = std::make_shared<agentxx::middleware::EventBus>(co_await asio::this_coro::executor);
@@ -570,7 +573,7 @@ asio::awaitable<DeepAgent::ConversationTurnResult> DeepAgent::runConversationTur
     auto ioPtr = session->io;
 
     auto emitDelta = [&](Delta delta) {
-        delta.seq = ++session->deltaSeq;
+        delta.seq = session->deltaSeq.fetch_add(1, std::memory_order_acq_rel) + 1;
         if (ioPtr) {
             ioPtr->onDelta(delta);
         }
