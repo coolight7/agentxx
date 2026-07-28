@@ -85,7 +85,7 @@ asio::awaitable<void> ToolSkillSearchSubAgentTask::onSubagentEnd(std::string& re
         //     }
         //   }
         // }
-    } catch (const std::exception& _) {
+    } catch (...) {
         // 转json失败则不处理
     }
     co_return;

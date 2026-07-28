@@ -51,7 +51,7 @@ asio::awaitable<std::optional<std::string>> SessionController::getInput() {
 asio::awaitable<std::optional<std::string>> SessionController::waitInput() {
     try {
         co_return co_await inputChannel_->async_receive(asio::use_awaitable);
-    } catch (const boost::system::system_error&) {
+    } catch (...) {
         co_return std::nullopt;
     }
 }

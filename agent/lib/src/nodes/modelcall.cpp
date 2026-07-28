@@ -389,11 +389,11 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
             // 触发异常时，本次 LLM 消息不会添加到 result 中，因此需要额外处理
             result = co_await callLLM(in);
             co_return;
-        } catch (const neograph::graph::CancelledException& _) {
+        } catch (const neograph::graph::CancelledException&) {
             isCancel = true;
             errInfo  = "Cancel";
             errorPtr = std::current_exception();
-            // } catch (const neograph::graph::NodeInterrupt &_) {
+            // } catch (const neograph::graph::NodeInterrupt&) {
             // isCancel = true;
             // llm node 无 Interrupt
         } catch (const std::exception& e) {

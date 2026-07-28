@@ -3,6 +3,7 @@
 #include "agentxx/agent/context.h"
 #include "agentxx/middlewares/events.h"
 #include "agentxx/middlewares/middleware.h"
+#include "agentxx/util/exception.h"
 #include "asio/as_tuple.hpp"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
@@ -223,34 +224,33 @@ public:
              req        = std::move(req),
              correlationId,
              channel]() -> asio::awaitable<void> {
-                try {
-                    auto resp = co_await handler(req, correlationId);
-                    channel->async_send(
-                        neograph_asio_error_code{},
-                        std::move(resp),
-                        [](neograph_asio_error_code) {}
-                    );
-                } catch (const neograph::graph::CancelledException& _) {
-                    // 超时取消, 不必发错误到 channel (请求方已超时返回)
-                } catch (const std::exception& e) {
-                    XX_LOGE(
-                        "RequestResponseStream `{}` server exception: {}",
-                        streamName,
-                        e.what()
-                    );
-                    channel->async_send(
-                        asio::experimental::channel_errc::channel_cancelled,
-                        RespType{},
-                        [](neograph_asio_error_code) {}
-                    );
-                } catch (...) {
-                    XX_LOGE("RequestResponseStream `{}` server unknown exception", streamName);
-                    channel->async_send(
-                        asio::experimental::channel_errc::channel_cancelled,
-                        RespType{},
-                        [](neograph_asio_error_code) {}
-                    );
-                }
+                co_await agentxx::util::catchErrorAsync<void>(
+                    [&]() -> asio::awaitable<void> {
+                        try {
+                            auto resp = co_await handler(req, correlationId);
+                            channel->async_send(
+                                neograph_asio_error_code{},
+                                std::move(resp),
+                                [](neograph_asio_error_code) {}
+                            );
+                        } catch (const neograph::graph::CancelledException&) {
+                            // 超时取消, 不必发错误到 channel (请求方已超时返回)
+                        }
+                    },
+                    [&](std::string errinfo) -> asio::awaitable<void> {
+                        XX_LOGE(
+                            "RequestResponseStream `{}` server exception: {}",
+                            streamName,
+                            errinfo
+                        );
+                        channel->async_send(
+                            asio::experimental::channel_errc::channel_cancelled,
+                            RespType{},
+                            [](neograph_asio_error_code) {}
+                        );
+                        co_return;
+                    }
+                );
             },
             asio::detached
         );

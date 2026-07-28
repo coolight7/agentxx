@@ -194,11 +194,11 @@ public:
             try {
                 co_await onHandleStart(*item, in);
                 continue;
-            } catch (const neograph::graph::CancelledException& _) {
+            } catch (const neograph::graph::CancelledException&) {
                 errorRethrow = true;
                 onHandleStartError(errorRethrow, true, "", *item, in, out);
                 errorPtr = std::current_exception();
-            } catch (const neograph::graph::NodeInterrupt& _) {
+            } catch (const neograph::graph::NodeInterrupt&) {
                 errorRethrow = true;
                 onHandleStartError(errorRethrow, true, "", *item, in, out);
                 errorPtr = std::current_exception();
@@ -228,11 +228,11 @@ public:
                     co_await baseRun(agentCtxPtr->middlewareHandleContext->handles, in, out);
                     i = len;
                     break;
-                } catch (const neograph::graph::CancelledException& _) {
+                } catch (const neograph::graph::CancelledException&) {
                     errorRethrow = true;
                     onHandleBaseRunError(errorRethrow, true, "", in, out);
                     errorPtr = std::current_exception();
-                } catch (const neograph::graph::NodeInterrupt& _) {
+                } catch (const neograph::graph::NodeInterrupt&) {
                     errorRethrow = true;
                     onHandleBaseRunError(errorRethrow, true, "", in, out);
                     errorPtr = std::current_exception();
@@ -270,11 +270,11 @@ public:
                 try {
                     co_await onHandleEnd(*item, in, out);
                     continue;
-                } catch (const neograph::graph::CancelledException& _) {
+                } catch (const neograph::graph::CancelledException&) {
                     errorRethrow = true;
                     onHandleEndError(errorRethrow, true, "", *item, in, out);
                     errorPtr = std::current_exception();
-                } catch (const neograph::graph::NodeInterrupt& _) {
+                } catch (const neograph::graph::NodeInterrupt&) {
                     errorRethrow = true;
                     onHandleEndError(errorRethrow, true, "", *item, in, out);
                     errorPtr = std::current_exception();

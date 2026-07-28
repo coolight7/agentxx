@@ -12,7 +12,7 @@
 - 详细架构设计见[design.md](docs/zh-cn/design.md)，当大幅修改代码时，请参考并更新
 - Agent 的设计支持:
     - 并发多会话，单线程/多协程交错执行会话，不需要线程锁
-    - client 主要负责UI渲染展示、用户交互；agent (BaseAgent/CodeAgent) 负责运行会话，调用 llm api、运行 toolcall 等
+    - client 主要负责UI渲染展示、用户交互；agent (BaseAgent/CodeAgent) 负责运行会话、调用 llm api、运行 toolcall 等
     - 支持 client+agent 在同一个进程内启动，此时两者使用线程间数据交互
     - 支持 client 通过网络连接 agent server，此时两者在不同进程，通过网络传输交互（已支持 websocket）
     - 应当尽量统一抽象接口，分层屏蔽细节，降低复杂度，让架构设计更清晰
@@ -92,6 +92,8 @@ path/to/agentxx_test string_util regex
     - release_build: `agent/build/linux-release/` 或 `agent/build/windows-release/`
     - android_release_build: `agent/build/android-release/`
     - 注意，修改文件时不建议修改 build 目录内的文件，编译时可能被覆盖
+- 为了减少编译输出内容展示，只捕捉关键词，可以参考: `./path/to/linux_debug_build.sh 2>&1 | grep -E "Built target|error|warn" | tail -10`
 
 ## 常见问题
 - 如果遇到编译器崩溃 (ICE)，直接重新运行编译尝试即可，如果多次运行都崩溃，则可能确实代码有问题，需要重新检查一下。
+- 编译如果警告`不应忽略函数返回值`时，如果函数返回值是协程值(比如asio::awaitable<>)则必须处理，需要 co_await，否则该协程函数没有启动执行，相当于没调用

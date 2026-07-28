@@ -18,7 +18,8 @@ void PermissionMiddlewareHandle::setFilesystemPermission(
     size_t             index
 ) {
     assert(index == 0 || index == 1);
-    filesystemPermission.add(path, index, std::make_shared<PermissionOperator>(op));
+    filesystemPermission
+        .add(path, static_cast<int>(index), std::make_shared<PermissionOperator>(op));
 }
 
 asio::awaitable<bool> PermissionMiddlewareHandle::defOnFilesystemHandle(
@@ -28,7 +29,7 @@ asio::awaitable<bool> PermissionMiddlewareHandle::defOnFilesystemHandle(
 ) {
     auto        path = args.value<std::string>("path", "");
     std::string re_path;
-    auto        handle = filesystemPermission.get(path, index, re_path);
+    auto        handle = filesystemPermission.get(path, static_cast<int>(index), re_path);
     if (nullptr != handle) {
         auto permission = *handle;
         switch (permission) {
