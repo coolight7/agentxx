@@ -1,5 +1,6 @@
 #pragma once
 
+#include "agentxx-client/io/tui/scrollable.h"
 #include "agentxx-client/io/tui/tui_theme.h"
 #include "agentxx/agent/agent_io.h"
 #include "agentxx/agent/context.h"
@@ -109,12 +110,10 @@ private:
     Message::Role        currentTokenRole_ = Message::Role::Assistant;
     bool                 isStreaming_      = false;
 
-    /// 消息列表滚动: 是否吸附在底部 (吸附时新增消息自动滚动到底部)
-    bool stickToBottom_ = true;
-    /// 当前聚焦的消息块索引 (yframe 自动滚动到 focus 元素)
-    int  messagesSelector_ = 0;
-    /// 消息块总数 (上次渲染时计算)
-    int  messagesBlockCount_ = 0;
+    /// 可滚动的消息列表组件
+    std::shared_ptr<Scrollable> messagesScrollable_;
+    /// 侧边栏内容可滚动组件
+    std::shared_ptr<Scrollable> sidebarScrollable_;
 
     std::string                      inputText_;
     std::optional<PermissionRequest> pendingPermission_;
@@ -148,9 +147,6 @@ private:
     /// 用于鼠标点击展开/折叠 (渲染时经 reflect 填充)
     std::vector<ftxui::Box> collapsibleBoxes_;
     std::vector<size_t>     collapsibleMsgIndices_;
-
-    /// 消息区域实际渲染 box (经 reflect 填充), 用于自适应换行宽度
-    ftxui::Box messageAreaBox_;
 
     std::shared_ptr<agentxx::agent::AgentContext> agentContext_;
     TUITheme                                      theme_;
@@ -189,20 +185,6 @@ private:
     static constexpr int kInfoSidebarMinWidth = 120;
     /// 程序版本号 (与 CMake project VERSION 保持一致)
     static constexpr const char* kAgentxxVersion = "0.1.0";
-
-    /// 日志窗口滚动状态 (同消息区的 stickToBottom_ 模式)
-    bool logStickToBottom_ = true;
-    int  logFocusIndex_    = -1;
-
-    /// 侧边栏内容滚动状态 (用于信息等非日志 tab)
-    int  sidebarScrollOffset_   = 0;
-    bool sidebarStickToBottom_  = true;
-    ftxui::Box sidebarContentBox_;
-
-    /// 消息滚动辅助
-    void handleMessagesScroll(int direction);
-    /// 侧边栏滚动辅助 (根据当前 tab 派发)
-    void handleSidebarScroll(int direction);
 
     void           postRedraw();
     ftxui::Element renderMessages();

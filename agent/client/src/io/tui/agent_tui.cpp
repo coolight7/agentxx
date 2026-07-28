@@ -86,19 +86,29 @@ void AgentTUI::start() {
         input_option.on_enter = nullptr;
         auto input_component
             = Input(&inputText_, "Type a message... (Enter=newline, Alt+Enter=send)", input_option);
-
-        // 参考 ftxui::Renderer 的设计模式：将渲染逻辑封装在 Lambda 中
-        // 这样可以保持组件化，同时允许外部事件处理
-        auto messages = Renderer([&]() -> Element {
+        // 可滚动消息列表组件
+        messagesScrollable_ = std::make_shared<Scrollable>([this]() -> Element {
             return hbox({
                 text("   "),
-                renderMessages() | vscroll_indicator | yframe | reflect(messageAreaBox_),
+                renderMessages() | flex,
                 text("   "),
             });
         });
 
+        // 侧边栏内容可滚动组件 (各 tab 共用)
+        sidebarScrollable_ = std::make_shared<Scrollable>([this]() -> Element {
+            if (activeTabIndex_ >= 0 && activeTabIndex_ < static_cast<int>(sidebarTabs_.size())) {
+                return sidebarTabs_[activeTabIndex_].render();
+            }
+            return text(" ");
+        });
+
+        // 构建组件树: Stacked 将事件依次发给子组件, 不参与布局
+        auto stacked
+            = Container::Stacked({messagesScrollable_, sidebarScrollable_, input_component});
+
         // 主渲染器组件
-        auto main_renderer = Renderer(input_component, [&]() -> Element {
+        auto main_renderer = Renderer(stacked, [&]() -> Element {
             std::lock_guard<std::mutex> lock(mutex_);
 
             // 指示器状态显示
@@ -141,7 +151,7 @@ void AgentTUI::start() {
             }
 
             auto mainWidget = vbox({
-                messages->Render() | flex,
+                messagesScrollable_->Render() | flex,
                 pendingBar,
                 input_bar,
                 renderStatusBar(),
@@ -307,7 +317,9 @@ void AgentTUI::start() {
                                 currentToken_.clear();
                             }
                             messages_.push_back({Message::Role::User, text});
-                            stickToBottom_ = true;
+                            if (messagesScrollable_) {
+                                messagesScrollable_->setStickToBottom(true);
+                            }
                             inputChannel_->async_send(
                                 neograph_asio_error_code{},
                                 std::move(text),
@@ -343,42 +355,8 @@ void AgentTUI::start() {
                 return true;
             }
             if (event.is_mouse()) {
+                // 滚轮事件由 Scrollable 子组件处理, 此处不拦截
                 const auto& mouse = event.mouse();
-                if (mouse.button == Mouse::WheelUp) {
-                    if (messageAreaBox_.Contain(mouse.x, mouse.y)) {
-                        handleMessagesScroll(-1);
-                        return true;
-                    }
-                    if (sidebarContentBox_.Contain(mouse.x, mouse.y)) {
-                        handleSidebarScroll(-1);
-                        return true;
-                    }
-                    const int last = messagesBlockCount_ - 1;
-                    if (last >= 0) {
-                        int cur  = stickToBottom_ ? last : messagesSelector_;
-                        cur     += (mouse.button == Mouse::WheelUp) ? -1 : +1;
-                        if (cur >= last) {
-                            stickToBottom_ = true;
-                        } else {
-                            stickToBottom_    = false;
-                            messagesSelector_ = std::max(0, cur);
-                        }
-                    }
-                    postRedraw();
-                    return true;
-                    return false;
-                }
-                if (mouse.button == Mouse::WheelDown) {
-                    if (messageAreaBox_.Contain(mouse.x, mouse.y)) {
-                        handleMessagesScroll(1);
-                        return true;
-                    }
-                    if (sidebarContentBox_.Contain(mouse.x, mouse.y)) {
-                        handleSidebarScroll(1);
-                        return true;
-                    }
-                    return false;
-                }
                 if (mouse.button == Mouse::Left && mouse.motion == Mouse::Released
                     && !pendingInputs_.empty()
                     && pendingInputCounterBox_.Contain(mouse.x, mouse.y)) {
@@ -546,8 +524,10 @@ void AgentTUI::sendUserInputLocked(std::string text) {
         currentToken_.clear();
     }
     messages_.push_back({Message::Role::User, text});
-    isStreaming_   = true;
-    stickToBottom_ = true;
+    isStreaming_ = true;
+    if (messagesScrollable_) {
+        messagesScrollable_->setStickToBottom(true);
+    }
     if (transport_) {
         sendToPeer(agentxx::agent::WireUserInput{threadId_, text, false, ""});
     } else {
@@ -654,6 +634,9 @@ void AgentTUI::onDelta(const agentxx::agent::Delta& delta) {
             dispatchNextPendingInput();
         } break;
     }
+    if (messagesScrollable_) {
+        messagesScrollable_->onContentUpdate();
+    }
     postRedraw();
 }
 
@@ -733,7 +716,9 @@ void AgentTUI::onSync(const agentxx::agent::SyncPayload& payload) {
                 messages_.push_back(std::move(m));
             }
         }
-        stickToBottom_ = true;
+    }
+    if (messagesScrollable_) {
+        messagesScrollable_->onContentUpdate();
     }
     postRedraw();
 }
@@ -851,65 +836,4 @@ asio::awaitable<std::optional<std::string>> AgentTUI::getInput() {
         co_return std::nullopt;
     }
     co_return std::optional<std::string>(std::move(line));
-}
-
-void AgentTUI::handleMessagesScroll(int direction) {
-    const int blockCount = messagesBlockCount_;
-    if (blockCount <= 0) {
-        return;
-    }
-    if (direction < 0) {
-        if (stickToBottom_) {
-            stickToBottom_    = false;
-            messagesSelector_ = blockCount - 1;
-        }
-        if (messagesSelector_ > 0) {
-            --messagesSelector_;
-        }
-    } else {
-        if (messagesSelector_ < blockCount - 1) {
-            ++messagesSelector_;
-        } else {
-            stickToBottom_ = true;
-        }
-    }
-    postRedraw();
-}
-
-void AgentTUI::handleSidebarScroll(int direction) {
-    if (activeTabIndex_ >= 0 && activeTabIndex_ < static_cast<int>(sidebarTabs_.size())
-        && sidebarTabs_[activeTabIndex_].id == kLogTabId) {
-        int last = logSink_ ? static_cast<int>(logSink_->snapshot().size()) - 1 : 0;
-        if (last < 0) {
-            return;
-        }
-        if (direction < 0) {
-            if (logStickToBottom_) {
-                logStickToBottom_ = false;
-                logFocusIndex_    = last;
-            }
-            if (logFocusIndex_ > 0) {
-                --logFocusIndex_;
-            }
-        } else {
-            if (logFocusIndex_ < last) {
-                ++logFocusIndex_;
-            } else {
-                logStickToBottom_ = true;
-                logFocusIndex_    = last;
-            }
-        }
-    } else {
-        // 其他 tab 使用通用滚动偏移
-        if (sidebarScrollOffset_ < 0 || sidebarStickToBottom_) {
-            sidebarStickToBottom_ = false;
-            sidebarScrollOffset_  = 0;
-        }
-        sidebarScrollOffset_ += direction;
-        if (sidebarScrollOffset_ < 0) {
-            sidebarScrollOffset_  = 0;
-            sidebarStickToBottom_ = false;
-        }
-    }
-    postRedraw();
 }
