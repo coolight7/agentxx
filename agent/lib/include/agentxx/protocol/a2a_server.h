@@ -151,8 +151,8 @@ public:
 
     ~A2aServer();
 
-    void start();
-    void stop();
+    void                  start();
+    asio::awaitable<void> stop();
 
     uint16_t port() const;
     bool     isStopped() const;
@@ -239,8 +239,8 @@ private:
     // SSE broadcast
     // -----------------------------------------------------------------------
 
-    void broadcastSSE(std::string_view data);
-    void stopSSE();
+    asio::awaitable<void> broadcastSSE(std::string_view data);
+    asio::awaitable<void> stopSSE();
 
     // -----------------------------------------------------------------------
     // Task store helpers

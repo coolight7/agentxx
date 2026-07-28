@@ -27,7 +27,12 @@ SummarizationMiddlewareHandle::SummarizationMiddlewareHandle(
     asciiCharsPerToken(in_asciiCharsPerToken),
     unicodeCharsPerToken(in_unicodeCharsPerToken),
     tokensPerImage(in_tokensPerImage),
-    extraTokensPerMessage(in_extraTokensPerMessage) {}
+    extraTokensPerMessage(in_extraTokensPerMessage) {
+    assert(asciiCharsPerToken >= 0);
+    assert(unicodeCharsPerToken >= 0);
+    assert(tokensPerImage >= 0);
+    assert(extraTokensPerMessage >= 0);
+}
 
 size_t SummarizationMiddlewareHandle::countTokensForUtf8Str(std::string_view in_str) {
     size_t unicodeCount = 0, asciiCount = 0;
@@ -51,7 +56,9 @@ size_t SummarizationMiddlewareHandle::countTokensForUtf8Str(std::string_view in_
         }
         ++unicodeCount;
     }
-    return unicodeCount / unicodeCharsPerToken + asciiCount / asciiCharsPerToken;
+    return static_cast<size_t>(
+        unicodeCount / unicodeCharsPerToken + asciiCount / asciiCharsPerToken
+    );
 }
 
 size_t SummarizationMiddlewareHandle::countTokens(
@@ -60,16 +67,16 @@ size_t SummarizationMiddlewareHandle::countTokens(
 ) {
     size_t count = 0;
     for (const auto& msg : systemMsgs) {
-        count += extraTokensPerMessage + countTokensForUtf8Str(msg);
+        count += static_cast<size_t>(extraTokensPerMessage) + countTokensForUtf8Str(msg);
     }
     for (const auto& item : messages) {
-        count += extraTokensPerMessage + countTokensForUtf8Str(item.role)
+        count += static_cast<size_t>(extraTokensPerMessage) + countTokensForUtf8Str(item.role)
                  + countTokensForUtf8Str(item.content);
         for (const auto& tool : item.tool_calls) {
             count += countTokensForUtf8Str(tool.id) + countTokensForUtf8Str(tool.name)
                      + countTokensForUtf8Str(tool.arguments);
         }
-        count += tokensPerImage * item.image_urls.size();
+        count += static_cast<size_t>(tokensPerImage * item.image_urls.size());
     }
     return count;
 }
@@ -152,10 +159,12 @@ void SummarizationMiddlewareHandle::doSummarizeToolcall(std::vector<neograph::Ch
                 && itemHandleIt->second.generateDeduplicationKey
                 && itemHandleIt->second.truncateResponse) {
                 // 寻找 llm toolcall message
-                int lastMsgIndex  = i - 1;
-                int toolcallIndex = -1;
+                int64_t lastMsgIndex  = i - 1;
+                int64_t toolcallIndex = -1;
                 for (; lastMsgIndex > 0; --lastMsgIndex) {
-                    for (size_t j = 0; j < messages[lastMsgIndex].tool_calls.size(); ++j) {
+                    for (int64_t j = 0;
+                         j < static_cast<int64_t>(messages[lastMsgIndex].tool_calls.size());
+                         ++j) {
                         if (msg.tool_call_id == messages[lastMsgIndex].tool_calls[j].id) {
                             toolcallIndex = j;
                             break;

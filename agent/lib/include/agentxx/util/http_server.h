@@ -171,9 +171,9 @@ private:
         asio::awaitable<bool> writeEvent(std::string_view event, std::string_view data) override {
             std::string chunk;
             if (!event.empty()) {
-                chunk += "event: " + std::string(event) + "\n";
+                chunk += fmt::format("event: {}\n", event);
             }
-            chunk += "data: " + std::string(data) + "\n\n";
+            chunk += fmt::format("data: {}\n\n", event);
             co_return co_await doWrite(chunk);
         }
 

@@ -908,18 +908,12 @@ private:
         }
 
         std::string key        = "dGhlIHNhbXBsZSBub25jZQ==";
-        std::string upgradeReq = "GET " + wsPath
-                                 + " HTTP/1.1\r\n"
-                                   "Host: 127.0.0.1:"
-                                 + std::to_string(port)
-                                 + "\r\n"
-                                   "Upgrade: websocket\r\n"
-                                   "Connection: Upgrade\r\n"
-                                   "Sec-WebSocket-Key: "
-                                 + key
-                                 + "\r\n"
-                                   "Sec-WebSocket-Version: 13\r\n"
-                                   "\r\n";
+        std::string upgradeReq = fmt::format(
+            "GET {} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {}\r\nSec-WebSocket-Version: 13\r\n\r\n",
+            wsPath,
+            port,
+            key
+        );
 
         if (send(sock, upgradeReq.c_str(), static_cast<int>(upgradeReq.size()), 0) <= 0) {
             closesocket(sock);

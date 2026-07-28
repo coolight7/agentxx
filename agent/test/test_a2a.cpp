@@ -464,7 +464,7 @@ static asio::awaitable<void> test_a2a_server_integration() {
         }
     }
 
-    server.stop();
+    co_await server.stop();
     serverThread.join();
     co_return;
 }
@@ -525,7 +525,7 @@ static asio::awaitable<void> test_a2a_send_message_creates_task() {
         }
     }
 
-    server.stop();
+    co_await server.stop();
     serverThread.join();
     co_return;
 }
@@ -569,7 +569,7 @@ static asio::awaitable<void> test_a2a_cancel_terminal_task() {
         }
     }
 
-    server.stop();
+    co_await server.stop();
     serverThread.join();
     co_return;
 }
@@ -627,7 +627,7 @@ static asio::awaitable<void> test_a2a_list_tasks_filters() {
         }
     }
 
-    server.stop();
+    co_await server.stop();
     serverThread.join();
     co_return;
 }
@@ -710,7 +710,7 @@ static asio::awaitable<void> test_a2a_send_to_terminal_task() {
         }
     }
 
-    server.stop();
+    co_await server.stop();
     serverThread.join();
     co_return;
 }
@@ -764,7 +764,7 @@ static asio::awaitable<void> test_a2a_get_task_history() {
         }
     }
 
-    server.stop();
+    co_await server.stop();
     serverThread.join();
     co_return;
 }

@@ -3,6 +3,7 @@
 #include "agentxx/util/log.h"
 #include <algorithm>
 #include <cassert>
+#include <charconv>
 #include <cstring>
 #include <functional>
 #include <iomanip>
@@ -19,6 +20,7 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+
 
 namespace agentxx {
 namespace util {
@@ -790,14 +792,12 @@ inline PinyinCallback s_pinyinCallback = nullptr;
     }
 
     // 格式化输出：如果整数部分≥100，则去掉小数（更简洁）
-    std::ostringstream oss;
+    std::stringstream oss;
     if (std::floor(size) >= 100.0) {
-        oss << std::fixed << std::setprecision(0) << size;
+        return fmt::format("{}{}", int64_t(size), units[index]);
     } else {
-        oss << std::fixed << std::setprecision(precision) << size;
+        return fmt::format("{:.1}{}", size, units[index]);
     }
-    oss << units[index];
-    return oss.str();
 }
 
 [[nodiscard]] inline constexpr bool

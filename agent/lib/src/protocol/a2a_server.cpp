@@ -2,6 +2,7 @@
 
 #include "agentxx/util/log.h"
 #include "agentxx/util/string_util.h"
+#include <fmt/chrono.h>
 #include <fmt/format.h>
 #include <random>
 #include <sstream>
@@ -22,7 +23,11 @@ A2aServer::A2aServer(std::shared_ptr<agentxx::agent::DeepAgent> agent, Config co
 }
 
 A2aServer::~A2aServer() {
-    stop();
+    auto ioCtx = std::make_shared<asio::io_context>();
+    asio::co_spawn(*ioCtx, [this]() -> asio::awaitable<void> {
+        co_await stop();
+    });
+    ioCtx->run();
 }
 
 // ---------------------------------------------------------------------------
@@ -33,11 +38,11 @@ void A2aServer::start() {
     httpServer_->start();
 }
 
-void A2aServer::stop() {
+asio::awaitable<void> A2aServer::stop() {
     if (stopped_.exchange(true)) {
-        return;
+        co_return;
     }
-    stopSSE();
+    co_await stopSSE();
     {
         std::lock_guard<std::mutex> lock(tasksMutex_);
         for (auto& [id, task] : tasks_) {
@@ -483,8 +488,8 @@ void A2aServer::executeTask(std::string_view taskId, std::string_view userInput)
         std::string threadId = fmt::format("a2a_{}", taskId);
         std::string collected;
 
+        auto ioCtx = std::make_shared<asio::io_context>();
         try {
-            auto ioCtx = std::make_shared<asio::io_context>();
             asio::co_spawn(
                 *ioCtx,
                 [this, &threadId, &userInput, &collected, &cancelFlag]() -> asio::awaitable<void> {
@@ -566,7 +571,10 @@ void A2aServer::executeTask(std::string_view taskId, std::string_view userInput)
         sseMsg["result"]  = json{
              {"statusUpdate", std::move(event)}
         };
-        broadcastSSE(sseMsg.dump());
+        asio::co_spawn(*ioCtx, [&]() -> asio::awaitable<void> {
+            co_await broadcastSSE(sseMsg.dump());
+        });
+        ioCtx->run();
     });
     {
         std::lock_guard<std::mutex> lock(workersMutex_);
@@ -592,21 +600,21 @@ void A2aServer::executeTask(std::string_view taskId, std::string_view userInput)
 // SSE
 // ---------------------------------------------------------------------------
 
-void A2aServer::broadcastSSE(std::string_view data) {
+asio::awaitable<void> A2aServer::broadcastSSE(std::string_view data) {
     std::lock_guard<std::mutex> lock(sseClientsMutex_);
     for (auto& client : sseClients_) {
         if (!client->closed && client->writer) {
-            client->writer->writeEvent("message", data);
+            co_await client->writer->writeEvent("message", data);
         }
     }
 }
 
-void A2aServer::stopSSE() {
+asio::awaitable<void> A2aServer::stopSSE() {
     std::lock_guard<std::mutex> lock(sseClientsMutex_);
     for (auto& client : sseClients_) {
         client->closed = true;
         if (client->writer) {
-            client->writer->close();
+            co_await client->writer->close();
         }
     }
     sseClients_.clear();
@@ -731,23 +739,7 @@ std::string A2aServer::currentTimestamp() {
     auto tt  = std::chrono::system_clock::to_time_t(now);
     auto ms  = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()) % 1000;
 
-    std::tm tm{};
-    gmtime_r(&tt, &tm);
-
-    char buf[32];
-    std::snprintf(
-        buf,
-        sizeof(buf),
-        "%04d-%02d-%02dT%02d:%02d:%02d.%03dZ",
-        tm.tm_year + 1900,
-        tm.tm_mon + 1,
-        tm.tm_mday,
-        tm.tm_hour,
-        tm.tm_min,
-        tm.tm_sec,
-        static_cast<int>(ms.count())
-    );
-    return buf;
+    return fmt::format("{:%Y-%m-%dT%H:%M:%S}.{:03d}Z", fmt::gmtime(tt), ms.count());
 }
 
 json A2aServer::makeTextPart(std::string_view text) {
