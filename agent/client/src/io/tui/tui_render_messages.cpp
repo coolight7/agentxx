@@ -147,7 +147,14 @@ ftxui::Element AgentTUI::renderMessages() {
     if (elements.empty()) {
         return vbox({
             filler(),
-            text("Agentxx TUI") | bold | color(theme_.accentColor) | center,
+            text(R"_(
+    ___   _____________   ________             
+   /   | / ____/ ____/ | / /_  __/    __    __ 
+  / /| |/ / __/ __/ /  |/ / / /    __/ /___/ /_
+ / ___ / /_/ / /___/ /|  / / /    /_  __/_  __/
+/_/  |_\____/_____/_/ |_/ /_/      /_/   /_/   
+)_") | bold | color(theme_.accentColor)
+                | center,
             text("Type a message to start. [F2] switch model, [Esc] cancel, "
                  "[Ctrl+C] quit.")
                 | dim | center,
