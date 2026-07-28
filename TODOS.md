@@ -3,7 +3,7 @@
 - node 可支持插件化加载动态库 + graph json定义
 - 拆分需要区分不同线程，继承出不同class，屏蔽不可用函数或检查
 - exec: 支持指定多条指令
-- usage 统计
+- usage 统计、skill、mcp、memory 使用统计
 - 运行时长、时间点
 
 ## 提示词优化
