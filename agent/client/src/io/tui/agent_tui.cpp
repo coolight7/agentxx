@@ -92,7 +92,8 @@ void AgentTUI::start() {
 
             auto messages = hbox({
                                 text("   "),
-                                renderMessages() | flex | vscroll_indicator | yframe,
+                                renderMessages() | flex | vscroll_indicator | yframe
+                                    | reflect(messageAreaBox_),
                                 text("   "),
                             })
                             | flex | yframe;
@@ -355,22 +356,15 @@ void AgentTUI::start() {
                         postRedraw();
                         return true;
                     }
-                    const int last = focusBlockCount() - 1;
+                    const int last = messagesBlockCount_ - 1;
                     if (last >= 0) {
-                        int cur = stickToBottom_ ? last : scrollAnchorIndex_;
-                        scrollAccum_
-                            += (mouse.button == Mouse::WheelUp) ? -kScrollStep : +kScrollStep;
-                        int move = static_cast<int>(scrollAccum_);
-                        if (move != 0) {
-                            scrollAccum_ -= static_cast<float>(move);
-                            cur          += move;
-                            if (cur >= last) {
-                                stickToBottom_ = true;
-                                scrollAccum_   = 0.0f;
-                            } else {
-                                stickToBottom_     = false;
-                                scrollAnchorIndex_ = std::max(0, cur);
-                            }
+                        int cur = stickToBottom_ ? last : messagesSelector_;
+                        cur    += (mouse.button == Mouse::WheelUp) ? -1 : +1;
+                        if (cur >= last) {
+                            stickToBottom_ = true;
+                        } else {
+                            stickToBottom_    = false;
+                            messagesSelector_ = std::max(0, cur);
                         }
                     }
                     postRedraw();

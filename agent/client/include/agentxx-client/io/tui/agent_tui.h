@@ -111,11 +111,10 @@ private:
 
     /// 消息列表滚动: 是否吸附在底部 (吸附时新增消息自动滚动到底部)
     bool stickToBottom_ = true;
-    /// 未吸附底部时的滚动锚点: 聚焦的消息块绝对索引 (消息仅追加, 索引稳定)
-    int scrollAnchorIndex_ = 0;
-    /// 滚轮累加器: 用于降低滚动速度, 每次滚轮事件累加 0.5f, 达到 ±1.0f 时移动一个块
-    float                  scrollAccum_ = 0.0f;
-    static constexpr float kScrollStep  = 0.5f;
+    /// 当前聚焦的消息块索引 (yframe 自动滚动到 focus 元素)
+    int  messagesSelector_ = 0;
+    /// 消息块总数 (上次渲染时计算)
+    int  messagesBlockCount_ = 0;
 
     std::string                      inputText_;
     std::optional<PermissionRequest> pendingPermission_;
@@ -149,6 +148,9 @@ private:
     /// 用于鼠标点击展开/折叠 (渲染时经 reflect 填充)
     std::vector<ftxui::Box> collapsibleBoxes_;
     std::vector<size_t>     collapsibleMsgIndices_;
+
+    /// 消息区域实际渲染 box (经 reflect 填充), 用于自适应换行宽度
+    ftxui::Box messageAreaBox_;
 
     std::shared_ptr<agentxx::agent::AgentContext> agentContext_;
     TUITheme                                      theme_;
@@ -201,8 +203,6 @@ private:
     void appendEditToolBody(const Message& msg, ftxui::Elements& lines);
     /// - diff 对比块 (屏幕足够宽时左右对比, 不足时单块内对比)
     ftxui::Element renderEditToolDiff(std::string_view oldStr, std::string_view newStr);
-    /// 当前可聚焦的消息块数量 (需在持有 mutex_ 时调用)
-    int            focusBlockCount() const;
     ftxui::Element renderPermissionOverlay();
     ftxui::Element renderModelSelectorOverlay();
     ftxui::Element renderSettingsOverlay();
