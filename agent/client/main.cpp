@@ -4,6 +4,7 @@
 #include "agentxx-client/mode_runners.h"
 #include "agentxx-client/train/train.h"
 #include "agentxx-client/util/util.h"
+#include "agentxx/agent/code_agent.h"
 #include "agentxx/agent/remote/agent_server.h"
 #include "agentxx/protocol/acp_server.h"
 #include "agentxx/util/exception.h"
@@ -81,7 +82,7 @@ Options:
     -h, --help           显示帮助信息
     --config <path>      配置文件路径 (默认: agentxx-config.yaml)
     --env <path>         覆盖式环境变量文件路径
-    --agent <url>        远程 agent server 地址 (ws://host:port/deepagent)
+    --agent <url>        远程 agent server 地址 (ws://host:port/agent)
     --token <token>      认证 token (也可通过 url 查询串携带)
     --model <model>      远程模型名称
     --host <host>        服务监听地址 (默认: 127.0.0.1)
@@ -211,7 +212,7 @@ Options:
         applyModelToConfig(config, yamlCfg.models, yamlCfg.useModelAcp);
         applySubagentModelToConfig(config, yamlCfg.models, yamlCfg.useModelSubagent);
         applyWebSearchModelToConfig(config, yamlCfg.models, yamlCfg.useModelWebSearch);
-        auto agent = std::make_shared<agentxx::agent::DeepAgent>(config);
+        auto agent = std::make_shared<agentxx::agent::CodeAgent>(config);
         asio::co_spawn(
             *agent->ioCtx,
             [agent]() -> asio::awaitable<void> {
@@ -250,14 +251,14 @@ Options:
         config->memoryFilePaths.push_back(resolvePath(p));
     }
 
-    // ======================== deepagent Websocket Server 服务模式 ========================
+    // ======================== CodeAgent Websocket Server 服务模式 ========================
     if (mode == "server") {
         config->logPrintToolcall                       = false;
         config->logPrintMessagesBeforeLLM              = true;
         config->logPrintMessagesBeforeLLMWithSystemMsg = false;
         config->logPrintSummarizationResultTokenCount  = true;
 
-        auto agent = std::make_shared<agentxx::agent::DeepAgent>(config);
+        auto agent = std::make_shared<agentxx::agent::CodeAgent>(config);
 
         agentxx::agent::remote::AgentServer::Config srvCfg;
         srvCfg.http.address     = srvHost;
@@ -313,7 +314,7 @@ Options:
         config->logPrintMessagesBeforeLLM              = false;
         config->logPrintMessagesBeforeLLMWithSystemMsg = false;
         config->logPrintSummarizationResultTokenCount  = true;
-        auto agent = std::make_shared<agentxx::agent::DeepAgent>(config);
+        auto agent = std::make_shared<agentxx::agent::CodeAgent>(config);
         runLocalTuiUnified(agent, config);
     } else {
         agentxx::util::LogDispatcher::instance().removeSink(defaultLogSink);
@@ -321,7 +322,7 @@ Options:
         config->logPrintMessagesBeforeLLM              = false;
         config->logPrintMessagesBeforeLLMWithSystemMsg = false;
         config->logPrintSummarizationResultTokenCount  = true;
-        auto agent = std::make_shared<agentxx::agent::DeepAgent>(config);
+        auto agent = std::make_shared<agentxx::agent::CodeAgent>(config);
         runLocalCliUnified(agent);
     }
     return 0;

@@ -4,6 +4,7 @@
 #include <map>
 #include <memory>
 #include <neograph/graph/engine.h>
+#include <neograph/graph/registry.h>
 #include <neograph/graph/types.h>
 #include <string>
 #include <string_view>
@@ -39,12 +40,16 @@ class SubAgentNormalTask : public SubAgentTaskBase {
 public:
 
     SubAgentNormalTask(
-        std::string_view                    in_subAgentName,
-        std::string_view                    in_subAgentDepict,
-        const neograph::graph::NodeContext& in_context
+        std::string_view                           in_subAgentName,
+        std::string_view                           in_subAgentDepict,
+        const neograph::graph::NodeContext&        in_context,
+        std::shared_ptr<const neograph::graph::GraphRegistry> in_registry = nullptr
     );
 
-    void createSubgraph(const neograph::graph::NodeContext& context);
+    void createSubgraph(
+        const neograph::graph::NodeContext&        context,
+        std::shared_ptr<const neograph::graph::GraphRegistry> registry = nullptr
+    );
 
     inline static neograph::json defCreateSubGraphDefine();
 };

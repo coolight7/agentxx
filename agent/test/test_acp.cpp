@@ -1,4 +1,5 @@
 #include "test_acp.h"
+#include "agentxx/agent/code_agent.h"
 #include "agentxx/protocol/acp_server.h"
 #include "agentxx/tools/tool.h"
 #include "agentxx/util/http_client.h"
@@ -35,14 +36,14 @@ static uint16_t startMockTcpListener() {
     return acceptor.local_endpoint().port();
 }
 
-/// Create a DeepAgent wrapping a minimal passthrough graph for testing.
-static std::shared_ptr<agentxx::agent::DeepAgent> makeTestAgent(const std::string& name) {
+/// Create a CodeAgent wrapping a minimal passthrough graph for testing.
+static std::shared_ptr<agentxx::agent::CodeAgent> makeTestAgent(const std::string& name) {
     auto port               = startMockTcpListener();
     auto config             = std::make_shared<agentxx::agent::AgentConfig>();
     config->model.baseUrl   = "http://127.0.0.1:" + std::to_string(port);
     config->model.apiKey    = "EMPTY";
     config->model.modelName = "acp-test-mock";
-    auto agent              = std::make_shared<agentxx::agent::DeepAgent>(config);
+    auto agent              = std::make_shared<agentxx::agent::CodeAgent>(config);
 
     neograph::json def = {
         {"name",     name                                                               },

@@ -470,7 +470,7 @@ static asio::awaitable<void> test_a2a_server_integration() {
 }
 
 // ---------------------------------------------------------------------------
-// Test: SendMessage creates task (without DeepAgent, task stays in Working)
+// Test: SendMessage creates task (without BaseAgent, task stays in Working)
 // ---------------------------------------------------------------------------
 
 static asio::awaitable<void> test_a2a_send_message_creates_task() {
@@ -488,7 +488,7 @@ static asio::awaitable<void> test_a2a_send_message_creates_task() {
     clientCfg.baseUrl = baseUrl;
     A2aClient client(std::move(clientCfg));
 
-    // SendMessage should create a task (will fail in execution since no DeepAgent,
+    // SendMessage should create a task (will fail in execution since no BaseAgent,
     // but the task record should exist)
     auto sendResult = co_await client.sendMessage("hello world");
     XX_TEST_EXPECT_TRUE(sendResult.has_value());
@@ -500,7 +500,7 @@ static asio::awaitable<void> test_a2a_send_message_creates_task() {
         XX_TEST_EXPECT_TRUE(state == "TASK_STATE_WORKING" || state == "TASK_STATE_SUBMITTED");
     }
 
-    // Wait a bit for the execution thread to finish (it will fail since no DeepAgent)
+    // Wait a bit for the execution thread to finish (it will fail since no BaseAgent)
     co_await asio::steady_timer(co_await asio::this_coro::executor, std::chrono::milliseconds(200))
         .async_wait(asio::use_awaitable);
 
@@ -556,7 +556,7 @@ static asio::awaitable<void> test_a2a_cancel_terminal_task() {
         taskId = A2aClient::extractTaskId(sendResult.value());
     }
 
-    // Wait for execution to finish (will fail since no DeepAgent -> terminal state)
+    // Wait for execution to finish (will fail since no BaseAgent -> terminal state)
     co_await asio::steady_timer(co_await asio::this_coro::executor, std::chrono::milliseconds(200))
         .async_wait(asio::use_awaitable);
 

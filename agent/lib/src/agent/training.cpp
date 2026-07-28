@@ -19,7 +19,7 @@ size_t PromptVariant::promptHash() const {
 }
 
 asio::awaitable<std::string> EvolutionTrainingAgent::runLLMAgent(
-    std::shared_ptr<agentxx::agent::DeepAgent> agent,
+    std::shared_ptr<agentxx::agent::BaseAgent> agent,
     std::string_view                           systemPrompt,
     std::string_view                           userContent
 ) {
@@ -555,9 +555,9 @@ void EvolutionTrainingAgent::deduplicatePopulation() {
 }
 
 EvolutionTrainingAgent::EvolutionTrainingAgent(
-    std::shared_ptr<agentxx::agent::DeepAgent> in_scoreAgent,
-    std::shared_ptr<agentxx::agent::DeepAgent> in_trainAgent,
-    std::shared_ptr<agentxx::agent::DeepAgent> in_optimizerAgent
+    std::shared_ptr<agentxx::agent::BaseAgent> in_scoreAgent,
+    std::shared_ptr<agentxx::agent::BaseAgent> in_trainAgent,
+    std::shared_ptr<agentxx::agent::BaseAgent> in_optimizerAgent
 ) :
     scoreAgent(in_scoreAgent),
     trainAgent(in_trainAgent),

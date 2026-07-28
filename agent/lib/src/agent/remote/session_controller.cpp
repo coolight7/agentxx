@@ -1,7 +1,7 @@
 #include "agentxx/agent/remote/session_controller.h"
 
 #include "agentxx/agent/context.h"
-#include "agentxx/agent/deepagent.h"
+#include "agentxx/agent/base_agent.h"
 #include "agentxx/util/log.h"
 #include "asio/cancel_after.hpp"
 #include "asio/co_spawn.hpp"
@@ -16,7 +16,7 @@ namespace agent {
 
 SessionController::SessionController(
     asio::any_io_executor    ex,
-    std::weak_ptr<DeepAgent> agent,
+    std::weak_ptr<BaseAgent> agent,
     Config                   config
 ) :
     ex_(std::move(ex)),
@@ -29,7 +29,7 @@ SessionController::~SessionController() {
 }
 
 // ---------------------------------------------------------------------------
-// AgentIOBase: DeepAgent 产出的事件, 经 transport 发给客户端
+// AgentIOBase: BaseAgent 产出的事件, 经 transport 发给客户端
 // ---------------------------------------------------------------------------
 
 void SessionController::onDelta(const Delta& delta) {

@@ -14,7 +14,7 @@
 #include <asio/awaitable.hpp>
 #include <neograph/json.h>
 
-#include "agentxx/agent/deepagent.h"
+#include "agentxx/agent/base_agent.h"
 #include "agentxx/util/http_server.h"
 
 namespace agentxx {
@@ -144,7 +144,7 @@ public:
         std::chrono::seconds     taskTimeout{300};
     };
 
-    explicit A2aServer(std::shared_ptr<agentxx::agent::DeepAgent> agent, Config config);
+    explicit A2aServer(std::shared_ptr<agentxx::agent::BaseAgent> agent, Config config);
 
     A2aServer(const A2aServer&)            = delete;
     A2aServer& operator=(const A2aServer&) = delete;
@@ -269,7 +269,7 @@ private:
     // -----------------------------------------------------------------------
 
     Config                                     config_;
-    std::shared_ptr<agentxx::agent::DeepAgent> deepAgent_;
+    std::shared_ptr<agentxx::agent::BaseAgent> deepAgent_;
     std::unique_ptr<util::HttpServer>          httpServer_;
 
     mutable std::mutex                                              tasksMutex_;

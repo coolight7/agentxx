@@ -440,7 +440,7 @@ static asio::awaitable<void> test_session_controller_replay() {
     cfg.threadId       = "session";
     cfg.deltaBufferCap = 100;
     auto sc
-        = std::make_shared<SessionController>(ex, std::weak_ptr<agentxx::agent::DeepAgent>{}, cfg);
+        = std::make_shared<SessionController>(ex, std::weak_ptr<agentxx::agent::BaseAgent>{}, cfg);
 
     // 先喂入 delta (此时无 transport, 仅记录缓冲)
     for (uint64_t s = 1; s <= 5; ++s) {
@@ -500,7 +500,7 @@ static asio::awaitable<void> test_session_controller_replay_fallback() {
     cfg.threadId       = "session";
     cfg.deltaBufferCap = 3;
     auto sc
-        = std::make_shared<SessionController>(ex, std::weak_ptr<agentxx::agent::DeepAgent>{}, cfg);
+        = std::make_shared<SessionController>(ex, std::weak_ptr<agentxx::agent::BaseAgent>{}, cfg);
 
     for (uint64_t s = 1; s <= 10; ++s) {
         agentxx::agent::Delta d;
@@ -536,7 +536,7 @@ static asio::awaitable<void> test_session_controller_interrupt_timeout() {
     cfg.threadId         = "session";
     cfg.interruptTimeout = std::chrono::milliseconds{300};
     auto sc
-        = std::make_shared<SessionController>(ex, std::weak_ptr<agentxx::agent::DeepAgent>{}, cfg);
+        = std::make_shared<SessionController>(ex, std::weak_ptr<agentxx::agent::BaseAgent>{}, cfg);
 
     auto start   = std::chrono::steady_clock::now();
     auto result  = co_await sc->handleInterrupt("session", "node", "val", "{}");
@@ -563,7 +563,7 @@ static asio::awaitable<void> test_session_controller_grace() {
     cfg.gracePeriod      = std::chrono::milliseconds{200};
     cfg.interruptTimeout = std::chrono::seconds{10};
     auto sc
-        = std::make_shared<SessionController>(ex, std::weak_ptr<agentxx::agent::DeepAgent>{}, cfg);
+        = std::make_shared<SessionController>(ex, std::weak_ptr<agentxx::agent::BaseAgent>{}, cfg);
     sc->setTransport(std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(serverT)));
     sc->setTurnActiveForTest(true);
 

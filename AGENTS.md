@@ -12,7 +12,7 @@
 - 详细架构设计见[design.md](docs/zh-cn/design.md)，当大幅修改代码时，请参考并更新
 - Agent 的设计支持:
     - 并发多会话，单线程/多协程交错执行会话，不需要线程锁
-    - client 主要负责UI渲染展示、用户交互；agent (DeepAgent) 负责运行会话，调用 llm api、运行 toolcall 等
+    - client 主要负责UI渲染展示、用户交互；agent (BaseAgent/CodeAgent) 负责运行会话，调用 llm api、运行 toolcall 等
     - 支持 client+agent 在同一个进程内启动，此时两者使用线程间数据交互
     - 支持 client 通过网络连接 agent server，此时两者在不同进程，通过网络传输交互（已支持 websocket）
     - 应当尽量统一抽象接口，分层屏蔽细节，降低复杂度，让架构设计更清晰
@@ -26,9 +26,10 @@
 - `agent`: 
     - C++ 实现 Agent
 - `agent/lib`: libagentxx
-    - 核心库，包含了内置实现的 DeepAgent、toolcall、node、middleware 等，分离编译以便嵌入其他 app 开发使用
+    - 核心库，包含了内置实现的 BaseAgent/CodeAgent、toolcall、node、middleware 等，分离编译以便嵌入其他 app 开发使用
     - [util](agent/lib/include/agentxx/util/) 一些工具类和函数，包括 `http server/client`、`websocket server/client`、`log`、`lru cache`、`aho_corasick/regex`、[字符串工具](agent/lib/include/agentxx/util/string_util.h) (大小写转换、str转数值、自动检测字符编码并转utf8、计算utf8长度、移除空白符、base64、unix/windows/自动路径标准化、忽略大小写的判断包含/相等、split按char切割字符串)、[异常处理](agent/lib/include/agentxx/util/exception.h)
-    - [DeepAgent](agent/lib/include/agentxx/agent/deepagent.h) agent 运行核心
+    - [BaseAgent](agent/lib/include/agentxx/agent/base_agent.h) agent 运行核心基类 (ReAct 循环 + 会话执行)
+    - [CodeAgent](agent/lib/include/agentxx/agent/code_agent.h) 继承 BaseAgent, 添加编程工具/中间件
 - `agent/client`: 编译结果 {build}/exec/agentxx_cli
     - 命令行可执行程序，用于启动 agent 服务、实现命令行 cli/TUI 交互
     - `agent/client/main.cpp` 通过 --agent 启动时

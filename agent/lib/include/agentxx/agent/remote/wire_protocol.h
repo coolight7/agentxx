@@ -37,7 +37,7 @@ struct MsgType {
     inline static constexpr std::string_view Pong             = "pong";
 };
 
-/// 中断/取消原因 (供 DeepAgent 区分中断来源)
+/// 中断/取消原因 (供 BaseAgent 区分中断来源)
 struct CloseReason {
     inline static constexpr std::string_view UserCancel         = "user_cancel";
     inline static constexpr std::string_view ClientDisconnected = "client_disconnected";

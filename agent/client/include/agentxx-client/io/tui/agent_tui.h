@@ -91,7 +91,7 @@ private:
         std::string target;
     };
 
-    /// 排队等待发送的用户输入 (DeepAgent 执行中收到, 轮次结束后自动逐个发送)
+    /// 排队等待发送的用户输入 (BaseAgent 执行中收到, 轮次结束后自动逐个发送)
     struct PendingInput {
         std::string text;
         bool        expanded = false; // 弹窗中是否展开为多行 (默认折叠为一行)
@@ -127,7 +127,7 @@ private:
     bool showSettings_         = false;
     int  selectedSettingIndex_ = 0;
 
-    /// 用户输入队列: DeepAgent 执行中收到的用户输入排队, 轮次结束后自动逐个发送
+    /// 用户输入队列: BaseAgent 执行中收到的用户输入排队, 轮次结束后自动逐个发送
     std::deque<PendingInput> pendingInputs_;
     /// 待发送消息队列弹窗开关
     bool showPendingInputs_ = false;
@@ -225,7 +225,7 @@ private:
     /// 取消当前正在执行的轮次; 调用方须持有 mutex_
     void cancelCurrentRunLocked();
 
-    /// 发送一条用户输入到 DeepAgent (刷新 currentToken / 追加 User 消息 / 置 streaming / 入
+    /// 发送一条用户输入到 BaseAgent (刷新 currentToken / 追加 User 消息 / 置 streaming / 入
     /// channel)
     /// - 调用方须持有 mutex_
     void sendUserInputLocked(std::string text);

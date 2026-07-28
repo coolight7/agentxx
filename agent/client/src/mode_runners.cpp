@@ -7,6 +7,7 @@
 #include "agentxx/agent/remote/agent_server.h"
 #include "agentxx/agent/remote/session_controller.h"
 #include "agentxx/agent/ws_io_transport.h"
+#include "agentxx/middlewares/subagent_supervisor.h"
 #include "agentxx/util/log.h"
 #include "agentxx/util/ws_client.h"
 #include "asio/co_spawn.hpp"
@@ -29,7 +30,7 @@ namespace client {
 /// 无 RemoteClientAgentIO / RemoteServerAgentIO 中间层
 static std::shared_ptr<agent::SessionController> setupLocalUnifiedDirect(
     asio::any_io_executor               clientEx,
-    std::shared_ptr<agent::DeepAgent>   agent,
+    std::shared_ptr<agent::CodeAgent>   agent,
     std::shared_ptr<agent::AgentIOBase> clientIO,
     const std::string&                  threadId
 ) {
@@ -84,7 +85,7 @@ static std::shared_ptr<agent::SessionController> setupLocalUnifiedDirect(
 }
 
 template<typename Coro>
-static void runLocalUnifiedMain(std::shared_ptr<agent::DeepAgent> agent, Coro coro) {
+static void runLocalUnifiedMain(std::shared_ptr<agent::CodeAgent> agent, Coro coro) {
     auto        work = asio::make_work_guard(*agent->ioCtx);
     std::thread agentThread([&agent]() {
         agent->ioCtx->run();
@@ -101,7 +102,7 @@ static void runLocalUnifiedMain(std::shared_ptr<agent::DeepAgent> agent, Coro co
     }
 }
 
-static asio::awaitable<void> runLocalCliUnifiedAsync(std::shared_ptr<agent::DeepAgent> agent) {
+static asio::awaitable<void> runLocalCliUnifiedAsync(std::shared_ptr<agent::CodeAgent> agent) {
     auto clientEx = co_await asio::this_coro::executor;
     auto io       = std::make_shared<AgentStdIO>();
     XX_OUT("======= Agentxx Client (CLI, in-process unified) =======");
@@ -120,12 +121,12 @@ static asio::awaitable<void> runLocalCliUnifiedAsync(std::shared_ptr<agent::Deep
     }
 }
 
-void runLocalCliUnified(std::shared_ptr<agent::DeepAgent> agent) {
+void runLocalCliUnified(std::shared_ptr<agent::CodeAgent> agent) {
     runLocalUnifiedMain(agent, runLocalCliUnifiedAsync(agent));
 }
 
 static asio::awaitable<void> runLocalTuiUnifiedAsync(
-    std::shared_ptr<agent::DeepAgent>   agent,
+    std::shared_ptr<agent::CodeAgent>   agent,
     std::shared_ptr<agent::AgentConfig> config
 ) {
     auto              clientEx = co_await asio::this_coro::executor;
@@ -163,14 +164,14 @@ static asio::awaitable<void> runLocalTuiUnifiedAsync(
 }
 
 void runLocalTuiUnified(
-    std::shared_ptr<agent::DeepAgent>   agent,
+    std::shared_ptr<agent::CodeAgent>   agent,
     std::shared_ptr<agent::AgentConfig> config
 ) {
     runLocalUnifiedMain(agent, runLocalTuiUnifiedAsync(agent, config));
 }
 
 // ---------------------------------------------------------------------------
-// Remote client (WS connection to deepagent server, WsAgentIOTransport 直连)
+// Remote client (WS connection to agent server, WsAgentIOTransport 直连)
 // ---------------------------------------------------------------------------
 
 static asio::awaitable<void>

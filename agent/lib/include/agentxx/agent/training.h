@@ -2,7 +2,7 @@
 
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/config_static.h"
-#include "agentxx/agent/deepagent.h"
+#include "agentxx/agent/base_agent.h"
 #include "neograph/json.h"
 #include "neograph/llm/openai_provider.h"
 #include "neograph/types.h"
@@ -371,9 +371,9 @@ Include the "toolPrompt" object only if you want to vary tool prompts.
 class EvolutionTrainingAgent {
 protected:
 
-    std::shared_ptr<agentxx::agent::DeepAgent> scoreAgent;
-    std::shared_ptr<agentxx::agent::DeepAgent> trainAgent;
-    std::shared_ptr<agentxx::agent::DeepAgent> optimizerAgent;
+    std::shared_ptr<agentxx::agent::BaseAgent> scoreAgent;
+    std::shared_ptr<agentxx::agent::BaseAgent> trainAgent;
+    std::shared_ptr<agentxx::agent::BaseAgent> optimizerAgent;
 
     std::vector<PromptVariant> population;
     std::mt19937               rng;
@@ -385,7 +385,7 @@ protected:
     /// 注意: ModelCallWrapNode 会用 agentConfig->prompt.systemPrompt 覆盖
     /// 输入中的 system 消息，因此必须写入 config 而非通过消息传入
     asio::awaitable<std::string> runLLMAgent(
-        std::shared_ptr<agentxx::agent::DeepAgent> agent,
+        std::shared_ptr<agentxx::agent::BaseAgent> agent,
         std::string_view                           systemPrompt,
         std::string_view                           userContent
     );
@@ -463,9 +463,9 @@ protected:
 public:
 
     EvolutionTrainingAgent(
-        std::shared_ptr<agentxx::agent::DeepAgent> in_scoreAgent,
-        std::shared_ptr<agentxx::agent::DeepAgent> in_trainAgent,
-        std::shared_ptr<agentxx::agent::DeepAgent> in_optimizerAgent = nullptr
+        std::shared_ptr<agentxx::agent::BaseAgent> in_scoreAgent,
+        std::shared_ptr<agentxx::agent::BaseAgent> in_trainAgent,
+        std::shared_ptr<agentxx::agent::BaseAgent> in_optimizerAgent = nullptr
     );
 
     // ---- 初始化种子 prompt ----

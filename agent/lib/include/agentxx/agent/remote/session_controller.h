@@ -21,15 +21,15 @@ class CancelToken;
 namespace agentxx {
 namespace agent {
 
-class DeepAgent;
+class BaseAgent;
 class Session;
 
 /// 按 threadId 持久的会话控制器 (服务端 AgentIOBase 端点)
 ///
-/// 数据流: DeepAgent → SessionController → transport → 客户端 AgentIOBase
-///         客户端 AgentIOBase → transport → SessionController → DeepAgent
+/// 数据流: BaseAgent → SessionController → transport → 客户端 AgentIOBase
+///         客户端 AgentIOBase → transport → SessionController → BaseAgent
 ///
-/// - 作为 AgentIOBase 被 DeepAgent 驱动; 驱动循环独立于连接存在
+/// - 作为 AgentIOBase 被 BaseAgent 驱动; 驱动循环独立于连接存在
 /// - 持有 delta 环形缓冲, 供重连时增量重放 (seq 连续则重放, 否则回退全量 sync)
 /// - 通过 transport 与客户端端点通信 (Channel 或 WS)
 /// - 线程模型: 所有成员状态 (deltaBuffer_/pending_/graceTimer_) 仅在 ex_ 线程访问，
@@ -47,15 +47,15 @@ public:
         size_t deltaBufferCap = 4096;
     };
 
-    SessionController(asio::any_io_executor ex, std::weak_ptr<DeepAgent> agent, Config config);
+    SessionController(asio::any_io_executor ex, std::weak_ptr<BaseAgent> agent, Config config);
 
     ~SessionController() override;
 
-    // ----- AgentIOBase: 对端推给我的 (DeepAgent 产出, 经 transport 发给客户端) -----
+    // ----- AgentIOBase: 对端推给我的 (BaseAgent 产出, 经 transport 发给客户端) -----
     void onDelta(const Delta& delta) override;
     void onSync(const SyncPayload& payload) override;
 
-    // ----- AgentIOBase: 对端从我这拉取的 (DeepAgent 调用) -----
+    // ----- AgentIOBase: 对端从我这拉取的 (BaseAgent 调用) -----
     asio::awaitable<std::optional<std::string>> getInput() override;
     asio::awaitable<neograph::json>             handleInterrupt(
                     std::string_view threadId,
@@ -137,7 +137,7 @@ private:
     void onCancel();
 
     asio::any_io_executor    ex_;
-    std::weak_ptr<DeepAgent> agent_;
+    std::weak_ptr<BaseAgent> agent_;
     Config                   config_;
     
     // delta 环形缓冲 (仅 ex_ 线程访问: onDelta 写, handleHello 读)

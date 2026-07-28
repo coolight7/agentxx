@@ -87,7 +87,7 @@ public:
     // 线程绑定: 强制 fullHistory/llmMessages/chainHash 只在 io 线程写入
     // -------------------------------------------------------------------
 
-    /// 绑定 io 线程 (在 DeepAgent::runConversationTurnAsync 首次使用时调用)
+    /// 绑定 io 线程 (在 BaseAgent::runConversationTurnAsync 首次使用时调用)
     /// - 仅首次调用生效, 后续调用为 no-op
     void bindIoThread() {
         auto expected = std::thread::id{};
@@ -199,13 +199,13 @@ public:
     std::shared_ptr<agentxx::middleware::PermissionMiddlewareHandle> permissionMiddleware = nullptr;
     agentxx::tools::SubAgentManagerTool* subagentManagerToolPtr                           = nullptr;
     /// 事件总线
-    /// - 由 DeepAgent 在 init() 中创建并注入; 节点/middleware/tool 经
+    /// - 由 BaseAgent 在 init() 中创建并注入; 节点/middleware/tool 经
     ///   weak_ptr<AgentContext> 取用
-    /// - 完整定义在使用点 (deepagent.h) 引入
+    /// - 完整定义在使用点 (base_agent.h) 引入
     std::shared_ptr<agentxx::middleware::EventBus> bus = nullptr;
 
     /// 模型 Provider 注册表 (共享)
-    /// - 由 DeepAgent 在 init() 中创建并注入
+    /// - 由 BaseAgent 在 init() 中创建并注入
     /// - 含可用模型与默认模型; 各会话的当前选择记录在 Session 中
     std::shared_ptr<ModelProviderRegistry> modelRegistry = nullptr;
 

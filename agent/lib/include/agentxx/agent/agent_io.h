@@ -20,7 +20,7 @@ namespace agent {
 
 /// Agent 端点基类: 定义 client/server 之间的操作契约
 ///
-/// 数据流: Client UI → AgentIOBase → AgentIOTransportBase → AgentIOBase → DeepAgent
+/// 数据流: Client UI → AgentIOBase → AgentIOTransportBase → AgentIOBase → BaseAgent
 ///
 /// 每个端点持有一个 transport (组合关系), 通过 transport 与对端通信:
 /// - 本端调用 sendToPeer() 发送命令/输入到对端

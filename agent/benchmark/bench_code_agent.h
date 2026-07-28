@@ -1,6 +1,6 @@
 #pragma once
 
-#include "agentxx/agent/deepagent.h"
+#include "agentxx/agent/code_agent.h"
 #include "agentxx/util/http_server.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
@@ -281,7 +281,7 @@ inline void reportBenchResult(const std::string &name,
 
 } // namespace detail
 
-struct DeepAgentBenchConfig {
+struct CodeAgentBenchConfig {
   std::string openAIBaseUrl;
   std::string openAIApiKey;
   std::string openAIModelName;
@@ -291,8 +291,8 @@ struct DeepAgentBenchConfig {
 };
 
 inline void
-benchDeepAgentRunConversationTurnAsync(const DeepAgentBenchConfig &cfg) {
-  std::cout << "\n=== DeepAgent::runConversationTurnAsync Benchmarks ==="
+benchCodeAgentRunConversationTurnAsync(const CodeAgentBenchConfig &cfg) {
+  std::cout << "\n=== CodeAgent::runConversationTurnAsync Benchmarks ==="
             << std::endl;
 
   std::string baseUrl = cfg.openAIBaseUrl;
@@ -320,7 +320,7 @@ benchDeepAgentRunConversationTurnAsync(const DeepAgentBenchConfig &cfg) {
 
   for (size_t i = 0; i < cfg.iterations; ++i) {
     asio::io_context ioCtx;
-    agentxx::agent::DeepAgent agent(agentConfig);
+    agentxx::agent::CodeAgent agent(agentConfig);
 
     asio::co_spawn(
         ioCtx,
@@ -380,7 +380,7 @@ benchDeepAgentRunConversationTurnAsync(const DeepAgentBenchConfig &cfg) {
   double median_ns = durations[durations.size() / 2];
 
   BenchResult r;
-  r.name = "DeepAgent::runConversationTurnAsync [LLM end-to-end]";
+  r.name = "CodeAgent::runConversationTurnAsync [LLM end-to-end]";
   r.iterations = durations.size();
   r.total_ns = total_ns;
   r.mean_ns = mean_ns;
@@ -392,10 +392,10 @@ benchDeepAgentRunConversationTurnAsync(const DeepAgentBenchConfig &cfg) {
   printResult(r);
 }
 
-inline void benchDeepAgentInit() {
-  std::cout << "\n=== DeepAgent::init Benchmarks ===" << std::endl;
+inline void benchCodeAgentInit() {
+  std::cout << "\n=== CodeAgent::init Benchmarks ===" << std::endl;
 
-  DeepAgentBenchConfig config;
+  CodeAgentBenchConfig config;
   config.openAIBaseUrl = std::getenv("AGENTXX_BENCH_LLM_BASE_URL")
                              ? std::getenv("AGENTXX_BENCH_LLM_BASE_URL")
                              : "";
@@ -425,7 +425,7 @@ inline void benchDeepAgentInit() {
 
   for (size_t i = 0; i < iterations; ++i) {
     asio::io_context ioCtx;
-    agentxx::agent::DeepAgent agent(agentConfig);
+    agentxx::agent::CodeAgent agent(agentConfig);
 
     asio::co_spawn(
         ioCtx,
@@ -470,7 +470,7 @@ inline void benchDeepAgentInit() {
   double median_ns = durations[durations.size() / 2];
 
   BenchResult r;
-  r.name = "DeepAgent::init [graph engine compilation]";
+  r.name = "CodeAgent::init [graph engine compilation]";
   r.iterations = durations.size();
   r.total_ns = total_ns;
   r.mean_ns = mean_ns;
@@ -483,11 +483,11 @@ inline void benchDeepAgentInit() {
 }
 
 // -----------------------------------------------------------------------
-// benchmark: deepagent runSingleInputAsync (simple completion, no tool loop)
+// benchmark: code_agent runSingleInputAsync (simple completion, no tool loop)
 // Measures the overhead of a single LLM call through the agent framework.
 // -----------------------------------------------------------------------
-inline void benchDeepAgentSimpleCompletion(const DeepAgentBenchConfig &cfg) {
-  std::cout << "\n=== DeepAgent::runSingleInputAsync [simple completion] ==="
+inline void benchCodeAgentSimpleCompletion(const CodeAgentBenchConfig &cfg) {
+  std::cout << "\n=== CodeAgent::runSingleInputAsync [simple completion] ==="
             << std::endl;
 
   std::string baseUrl = cfg.openAIBaseUrl;
@@ -511,7 +511,7 @@ inline void benchDeepAgentSimpleCompletion(const DeepAgentBenchConfig &cfg) {
 
   for (size_t i = 0; i < cfg.iterations; ++i) {
     asio::io_context ioCtx;
-    agentxx::agent::DeepAgent agent(agentConfig);
+    agentxx::agent::CodeAgent agent(agentConfig);
 
     asio::co_spawn(
         ioCtx,
@@ -533,16 +533,16 @@ inline void benchDeepAgentSimpleCompletion(const DeepAgentBenchConfig &cfg) {
     ioCtx.run();
   }
 
-  detail::reportBenchResult("DeepAgent::runSingleInputAsync [completion]",
+  detail::reportBenchResult("CodeAgent::runSingleInputAsync [completion]",
                             durations);
 }
 
 // -----------------------------------------------------------------------
-// benchmark: deepagent multi-turn conversation
+// benchmark: code_agent multi-turn conversation
 // Runs multiple turns sequentially, passing messages between each turn.
 // -----------------------------------------------------------------------
-inline void benchDeepAgentMultiTurn(const DeepAgentBenchConfig &cfg) {
-  std::cout << "\n=== DeepAgent::runConversationTurnAsync [multi-turn] ==="
+inline void benchCodeAgentMultiTurn(const CodeAgentBenchConfig &cfg) {
+  std::cout << "\n=== CodeAgent::runConversationTurnAsync [multi-turn] ==="
             << std::endl;
 
   std::string baseUrl = cfg.openAIBaseUrl;
@@ -568,7 +568,7 @@ inline void benchDeepAgentMultiTurn(const DeepAgentBenchConfig &cfg) {
 
   for (size_t i = 0; i < cfg.iterations; ++i) {
     asio::io_context ioCtx;
-    agentxx::agent::DeepAgent agent(agentConfig);
+    agentxx::agent::CodeAgent agent(agentConfig);
 
     asio::co_spawn(
         ioCtx,
@@ -602,17 +602,17 @@ inline void benchDeepAgentMultiTurn(const DeepAgentBenchConfig &cfg) {
   }
 
   detail::reportBenchResult(
-      "DeepAgent::runConversationTurnAsync [multi-turn x" +
+      "CodeAgent::runConversationTurnAsync [multi-turn x" +
           std::to_string(turnsPerIteration) + "]",
       durations);
 }
 
 // -----------------------------------------------------------------------
-// benchmark: deepagent with large conversation history
+// benchmark: code_agent with large conversation history
 // Prepares a long message history then runs one final turn.
 // -----------------------------------------------------------------------
-inline void benchDeepAgentLargeHistory(const DeepAgentBenchConfig &cfg) {
-  std::cout << "\n=== DeepAgent::runConversationTurnAsync [large history] ==="
+inline void benchCodeAgentLargeHistory(const CodeAgentBenchConfig &cfg) {
+  std::cout << "\n=== CodeAgent::runConversationTurnAsync [large history] ==="
             << std::endl;
 
   std::string baseUrl = cfg.openAIBaseUrl;
@@ -638,7 +638,7 @@ inline void benchDeepAgentLargeHistory(const DeepAgentBenchConfig &cfg) {
 
   for (size_t i = 0; i < cfg.iterations; ++i) {
     asio::io_context ioCtx;
-    agentxx::agent::DeepAgent agent(agentConfig);
+    agentxx::agent::CodeAgent agent(agentConfig);
 
     asio::co_spawn(
         ioCtx,
@@ -682,7 +682,7 @@ inline void benchDeepAgentLargeHistory(const DeepAgentBenchConfig &cfg) {
     ioCtx.run();
   }
 
-  detail::reportBenchResult("DeepAgent::runConversationTurnAsync [history=" +
+  detail::reportBenchResult("CodeAgent::runConversationTurnAsync [history=" +
                                 std::to_string(historyMessages) + "]",
                             durations);
 }
@@ -691,10 +691,10 @@ inline void benchDeepAgentLargeHistory(const DeepAgentBenchConfig &cfg) {
 // benchmark: agent init warm (re-init with same config)
 // Measures whether repeated init benefits from any internal caching.
 // -----------------------------------------------------------------------
-inline void benchDeepAgentInitWarm() {
-  std::cout << "\n=== DeepAgent::init [warm — same config] ===" << std::endl;
+inline void benchCodeAgentInitWarm() {
+  std::cout << "\n=== CodeAgent::init [warm — same config] ===" << std::endl;
 
-  DeepAgentBenchConfig config;
+  CodeAgentBenchConfig config;
   config.openAIBaseUrl = std::getenv("AGENTXX_BENCH_LLM_BASE_URL")
                              ? std::getenv("AGENTXX_BENCH_LLM_BASE_URL")
                              : "";
@@ -718,7 +718,7 @@ inline void benchDeepAgentInitWarm() {
   // One cold init to warm up caches
   {
     asio::io_context ioCtx;
-    agentxx::agent::DeepAgent agent(agentConfig);
+    agentxx::agent::CodeAgent agent(agentConfig);
     asio::co_spawn(
         ioCtx, [&]() -> asio::awaitable<void> { co_await agent.init(); },
         asio::detached);
@@ -731,7 +731,7 @@ inline void benchDeepAgentInitWarm() {
 
   for (size_t i = 0; i < iterations; ++i) {
     asio::io_context ioCtx;
-    agentxx::agent::DeepAgent agent(agentConfig);
+    agentxx::agent::CodeAgent agent(agentConfig);
 
     asio::co_spawn(
         ioCtx,
@@ -748,7 +748,7 @@ inline void benchDeepAgentInitWarm() {
     ioCtx.run();
   }
 
-  detail::reportBenchResult("DeepAgent::init [warm re-init]", durations);
+  detail::reportBenchResult("CodeAgent::init [warm re-init]", durations);
 }
 } // namespace bench
 } // namespace agentxx

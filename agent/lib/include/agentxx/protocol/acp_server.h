@@ -13,7 +13,7 @@
 
 #include <neograph/json.h>
 
-#include "agentxx/agent/deepagent.h"
+#include "agentxx/agent/base_agent.h"
 #include "agentxx/util/http_server.h"
 
 namespace agentxx {
@@ -43,7 +43,7 @@ public:
     using NotificationSink = std::function<void(const json&)>;
 
     AcpProtocolHandler(
-        std::shared_ptr<agentxx::agent::DeepAgent> agent,
+        std::shared_ptr<agentxx::agent::BaseAgent> agent,
         json                                       agentInfo,
         Config                                     config
     );
@@ -132,7 +132,7 @@ private:
     // -----------------------------------------------------------------------
 
     Config                                     config_;
-    std::shared_ptr<agentxx::agent::DeepAgent> deepAgent_;
+    std::shared_ptr<agentxx::agent::BaseAgent> deepAgent_;
     json                                       agentInfo_;
     std::atomic<bool>                          initialized_{false};
     std::atomic<bool>                          stopFlag_{false};
@@ -178,7 +178,7 @@ public:
     };
 
     HttpAcpServer(
-        std::shared_ptr<agentxx::agent::DeepAgent> agent,
+        std::shared_ptr<agentxx::agent::BaseAgent> agent,
         neograph::json                             agentInfo,
         Config                                     config
     );
@@ -244,7 +244,7 @@ private:
     // -----------------------------------------------------------------------
 
     Config                                     config_;
-    std::shared_ptr<agentxx::agent::DeepAgent> deepAgent_;
+    std::shared_ptr<agentxx::agent::BaseAgent> deepAgent_;
     AcpProtocolHandler                         handler_;
     std::unique_ptr<util::HttpServer>          httpServer_;
 
@@ -263,7 +263,7 @@ private:
 class StdioAcpServer {
 public:
 
-    StdioAcpServer(std::shared_ptr<agentxx::agent::DeepAgent> agent, neograph::json agentInfo);
+    StdioAcpServer(std::shared_ptr<agentxx::agent::BaseAgent> agent, neograph::json agentInfo);
 
     StdioAcpServer(const StdioAcpServer&)            = delete;
     StdioAcpServer& operator=(const StdioAcpServer&) = delete;
@@ -281,7 +281,7 @@ public:
 
 private:
 
-    std::shared_ptr<agentxx::agent::DeepAgent> deepAgent_;
+    std::shared_ptr<agentxx::agent::BaseAgent> deepAgent_;
     AcpProtocolHandler                         handler_;
     std::atomic<bool>                          running_{false};
 };
