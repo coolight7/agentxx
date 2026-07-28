@@ -50,8 +50,9 @@ std::shared_ptr<neograph::Provider> ModelProviderRegistry::createProvider(const 
 }
 
 std::shared_ptr<neograph::Provider> ModelProviderRegistry::getProvider(std::string_view name) {
-    auto effective = (false == name.empty() && models_.contains(name)) ? name : defaultName_;
-    auto cfgIt     = models_.find(effective);
+    std::string_view effective
+        = (false == name.empty() && models_.contains(name)) ? name : defaultName_;
+    auto cfgIt = models_.find(effective);
     if (cfgIt == models_.end()) {
         return nullptr;
     }
@@ -59,8 +60,8 @@ std::shared_ptr<neograph::Provider> ModelProviderRegistry::getProvider(std::stri
     if (cacheIt != providerCache_.end()) {
         return cacheIt->second;
     }
-    auto provider             = createProvider(cfgIt->second);
-    providerCache_[effective] = provider;
+    auto provider = createProvider(cfgIt->second);
+    providerCache_.emplace(std::string{effective}, provider);
     return provider;
 }
 

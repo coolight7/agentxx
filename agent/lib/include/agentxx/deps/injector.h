@@ -124,7 +124,7 @@ private:
         auto instance = it->second();
         try {
             return std::dynamic_pointer_cast<T>(std::any_cast<std::shared_ptr<void>>(instance));
-        } catch (const std::bad_any_cast&) {
+        } catch (...) {
             throw std::runtime_error(
                 "Cannot cast dependency to requested type: " + std::string(key)
             );

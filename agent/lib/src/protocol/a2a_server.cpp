@@ -24,9 +24,13 @@ A2aServer::A2aServer(std::shared_ptr<agentxx::agent::BaseAgent> agent, Config co
 
 A2aServer::~A2aServer() {
     auto ioCtx = std::make_shared<asio::io_context>();
-    asio::co_spawn(*ioCtx, [this]() -> asio::awaitable<void> {
-        co_await stop();
-    });
+    asio::co_spawn(
+        *ioCtx,
+        [this]() -> asio::awaitable<void> {
+            co_await stop();
+        },
+        asio::detached
+    );
     ioCtx->run();
 }
 
@@ -571,9 +575,13 @@ void A2aServer::executeTask(std::string_view taskId, std::string_view userInput)
         sseMsg["result"]  = json{
              {"statusUpdate", std::move(event)}
         };
-        asio::co_spawn(*ioCtx, [&]() -> asio::awaitable<void> {
-            co_await broadcastSSE(sseMsg.dump());
-        });
+        asio::co_spawn(
+            *ioCtx,
+            [&]() -> asio::awaitable<void> {
+                co_await broadcastSSE(sseMsg.dump());
+            },
+            asio::detached
+        );
         ioCtx->run();
     });
     {
