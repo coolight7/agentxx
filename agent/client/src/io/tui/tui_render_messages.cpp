@@ -28,9 +28,9 @@ ftxui::Element AgentTUI::renderMessages() {
     }
     collapsibleBoxes_.assign(collapsibleMsgIndices_.size(), ftxui::Box{});
 
-    Elements    elements;
-    int         collapsibleOrdinal = 0;
-    auto        pushBlock          = [&](Element block, bool spacer) {
+    Elements elements;
+    int      collapsibleOrdinal = 0;
+    auto     pushBlock          = [&](Element block, bool spacer) {
         elements.push_back(std::move(block));
         if (spacer) {
             elements.push_back(text(""));

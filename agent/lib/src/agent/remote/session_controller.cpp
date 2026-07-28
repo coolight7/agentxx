@@ -1,7 +1,7 @@
 #include "agentxx/agent/remote/session_controller.h"
 
-#include "agentxx/agent/context.h"
 #include "agentxx/agent/base_agent.h"
+#include "agentxx/agent/context.h"
 #include "agentxx/util/log.h"
 #include "asio/cancel_after.hpp"
 #include "asio/co_spawn.hpp"
@@ -64,8 +64,8 @@ asio::awaitable<neograph::json> SessionController::handleInterrupt(
 ) {
     auto timeout = config_.interruptTimeout;
 
-    auto    ch = std::make_shared<RespChannel>(ex_, 1);
-    int64_t id = nextReqId_++;
+    auto    ch   = std::make_shared<RespChannel>(ex_, 1);
+    int64_t id   = nextReqId_++;
     pending_[id] = PendingInterrupt{
         ch,
         std::string{interruptNode},
@@ -115,11 +115,14 @@ void SessionController::onPeerMessage(WireMessage msg) {
                 resolveInterrupt(m.id, std::move(m.result));
             } else if constexpr (std::is_same_v<T, WireGetModel>) {
                 auto agent = agent_.lock();
-                if (!agent) { return; }
-                std::string currentModel = agent->getCurrentModelName(m.threadId);
+                if (!agent) {
+                    return;
+                }
+                std::string              currentModel = agent->getCurrentModelName(m.threadId);
                 std::vector<std::string> models;
                 if (agent->agentContext && agent->agentContext->agentConfig) {
-                    for (const auto& [name, mc] : agent->agentContext->agentConfig->availableModels) {
+                    for (const auto& [name, mc] :
+                         agent->agentContext->agentConfig->availableModels) {
                         models.push_back(name);
                     }
                 }
@@ -355,7 +358,7 @@ void SessionController::startGraceTimer() {
     auto timer = std::make_shared<asio::steady_timer>(ex_);
     timer->expires_after(config_.gracePeriod);
     graceTimer_ = timer;
-    auto self = shared_from_this();
+    auto self   = shared_from_this();
     asio::co_spawn(
         ex_,
         [self, timer]() -> asio::awaitable<void> {

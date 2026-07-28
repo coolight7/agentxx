@@ -37,9 +37,9 @@ asio::awaitable<void> SubAgentTaskBase::onSubagentEnd(std::string& result) {
 SubAgentTaskBase::~SubAgentTaskBase() {}
 
 SubAgentNormalTask::SubAgentNormalTask(
-    std::string_view                    in_subAgentName,
-    std::string_view                    in_subAgentDepict,
-    const neograph::graph::NodeContext& in_context,
+    std::string_view                                      in_subAgentName,
+    std::string_view                                      in_subAgentDepict,
+    const neograph::graph::NodeContext&                   in_context,
     std::shared_ptr<const neograph::graph::GraphRegistry> in_registry
 ) :
     SubAgentTaskBase(in_subAgentName, in_subAgentDepict, "") {
@@ -47,7 +47,7 @@ SubAgentNormalTask::SubAgentNormalTask(
 }
 
 void SubAgentNormalTask::createSubgraph(
-    const neograph::graph::NodeContext&        context,
+    const neograph::graph::NodeContext&                   context,
     std::shared_ptr<const neograph::graph::GraphRegistry> registry
 ) {
     if (nullptr == subgraph) {
@@ -55,7 +55,7 @@ void SubAgentNormalTask::createSubgraph(
         config.node_context = context;
         neograph::graph::EngineResources resources;
         resources.registry = std::move(registry);
-        auto inner = neograph::graph::GraphEngine::build(
+        auto inner         = neograph::graph::GraphEngine::build(
             defCreateSubGraphDefine(),
             std::move(config),
             std::move(resources)

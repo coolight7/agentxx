@@ -30,17 +30,17 @@ extern neograph::json g_da_sim_tool_calls;
 
 /// 模拟器配置选项
 struct DaSimConfig {
-    bool enableRandomDelay = false;          // 启用随机延迟模拟网络抖动
-    std::chrono::milliseconds minDelay{5};   // 最小延迟（毫秒）
-    std::chrono::milliseconds maxDelay{50};  // 最大延迟（毫秒）
-    
-    bool injectError429 = false;             // 模拟限流错误 (HTTP 429)
-    bool injectError503 = false;             // 模拟服务不可用 (HTTP 503)
-    bool injectStreamBreak = false;          // 模拟流式断开
-    
-    bool supportThinkingBlock = false;       // 支持 Anthropic thinking block
-    bool streamByWords = true;               // 按单词分片模拟真实流量
-    size_t wordsPerChunk = 5;                // 每次 chunk 的单词数
+    bool                      enableRandomDelay = false; // 启用随机延迟模拟网络抖动
+    std::chrono::milliseconds minDelay{5};               // 最小延迟（毫秒）
+    std::chrono::milliseconds maxDelay{50};              // 最大延迟（毫秒）
+
+    bool injectError429    = false; // 模拟限流错误 (HTTP 429)
+    bool injectError503    = false; // 模拟服务不可用 (HTTP 503)
+    bool injectStreamBreak = false; // 模拟流式断开
+
+    bool   supportThinkingBlock = false; // 支持 Anthropic thinking block
+    bool   streamByWords        = true;  // 按单词分片模拟真实流量
+    size_t wordsPerChunk        = 5;     // 每次 chunk 的单词数
 };
 
 struct DaSimServer {

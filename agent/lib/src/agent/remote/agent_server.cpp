@@ -98,7 +98,7 @@ uint16_t AgentServer::port() const {
 }
 
 std::shared_ptr<SessionController> AgentServer::getOrCreateController(std::string_view threadId) {
-    auto                        it = controllers_.find(threadId);  // 无锁查找
+    auto it = controllers_.find(threadId); // 无锁查找
     if (it != controllers_.end()) {
         return it->second;
     }

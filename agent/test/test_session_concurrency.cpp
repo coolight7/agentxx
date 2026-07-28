@@ -21,7 +21,7 @@ static void test_concurrent_history_snapshot() {
     auto session = std::make_shared<Session>();
 
     // 在 "io 线程" 上绑定并写入
-    constexpr int kTotalMessages = 2000;
+    constexpr int     kTotalMessages = 2000;
     std::atomic<bool> writerDone{false};
     std::atomic<bool> consistent{true};
 
@@ -38,7 +38,7 @@ static void test_concurrent_history_snapshot() {
     });
 
     // 多个 reader 线程并发读取快照 (模拟 UI 线程)
-    constexpr int kReaders = 4;
+    constexpr int            kReaders = 4;
     std::vector<std::thread> readers;
     for (int r = 0; r < kReaders; ++r) {
         readers.emplace_back([&]() {
@@ -79,7 +79,7 @@ static void test_concurrent_hash_snapshot() {
 
     auto session = std::make_shared<Session>();
 
-    constexpr int kTotalMessages = 1000;
+    constexpr int     kTotalMessages = 1000;
     std::atomic<bool> writerDone{false};
     std::atomic<bool> hashOk{true};
 
@@ -94,7 +94,7 @@ static void test_concurrent_hash_snapshot() {
         writerDone.store(true, std::memory_order_release);
     });
 
-    constexpr int kReaders = 3;
+    constexpr int            kReaders = 3;
     std::vector<std::thread> readers;
     for (int r = 0; r < kReaders; ++r) {
         readers.emplace_back([&]() {
@@ -137,7 +137,7 @@ static void test_concurrent_activity_and_deltaSeq() {
 
     auto session = std::make_shared<Session>();
 
-    constexpr int kIter = 50000;
+    constexpr int     kIter = 50000;
     std::atomic<bool> stateOk{true};
     std::atomic<bool> seqOk{true};
 
@@ -153,15 +153,15 @@ static void test_concurrent_activity_and_deltaSeq() {
     });
 
     // readers: 并发读取 activity 和 deltaSeq
-    constexpr int kReaders = 4;
+    constexpr int            kReaders = 4;
     std::vector<std::thread> readers;
     for (int r = 0; r < kReaders; ++r) {
         readers.emplace_back([&]() {
             uint64_t lastSeq = 0;
             for (int i = 0; i < kIter; ++i) {
                 auto a = session->activity.load(std::memory_order_relaxed);
-                if (a != Activity::Idle && a != Activity::Streaming &&
-                    a != Activity::ExecutingTool && a != Activity::WaitingInput) {
+                if (a != Activity::Idle && a != Activity::Streaming && a != Activity::ExecutingTool
+                    && a != Activity::WaitingInput) {
                     stateOk.store(false, std::memory_order_relaxed);
                     return;
                 }
@@ -198,8 +198,8 @@ static void test_session_store_basic() {
 
     XX_TEST_EXPECT_TRUE(s1 != nullptr);
     XX_TEST_EXPECT_TRUE(s2 != nullptr);
-    XX_TEST_EXPECT_TRUE(s1 == s3);   // 同一 thread_id 返回同一实例
-    XX_TEST_EXPECT_TRUE(s1 != s2);   // 不同 thread_id 不同实例
+    XX_TEST_EXPECT_TRUE(s1 == s3); // 同一 thread_id 返回同一实例
+    XX_TEST_EXPECT_TRUE(s1 != s2); // 不同 thread_id 不同实例
 
     store.remove("thread_a");
     XX_TEST_EXPECT_TRUE(store.get("thread_a") == nullptr);

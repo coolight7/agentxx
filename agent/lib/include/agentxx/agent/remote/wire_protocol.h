@@ -370,13 +370,11 @@ inline neograph::json makeGetModel(std::string_view threadId) {
     };
 }
 
-inline neograph::json makeModelInfo(
-    std::string_view                currentModel,
-    const std::vector<std::string>& models
-) {
+inline neograph::json
+    makeModelInfo(std::string_view currentModel, const std::vector<std::string>& models) {
     neograph::json j = {
         {"type",          MsgType::ModelInfo},
-        {"current_model", currentModel       },
+        {"current_model", currentModel      },
     };
     if (!models.empty()) {
         j["models"] = models;

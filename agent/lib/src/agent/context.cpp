@@ -17,9 +17,8 @@ std::string Session::appendHistory(neograph::json msgData) {
     historySnapshot_.store(snapshot, std::memory_order_release);
 
     // 发布 chainHash 新快照（供 UI 线程无锁读取）
-    auto hashSnap = std::make_shared<const HashInfo>(
-        HashInfo{chainHash.count(), chainHash.tailHex()}
-    );
+    auto hashSnap
+        = std::make_shared<const HashInfo>(HashInfo{chainHash.count(), chainHash.tailHex()});
     hashSnapshot_.store(hashSnap, std::memory_order_release);
 
     return id;

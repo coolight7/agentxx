@@ -2,9 +2,9 @@
 
 #include "agentxx/agent/context.h"
 #include <atomic>
+#include <fmt/format.h>
 #include <thread>
 #include <vector>
-#include <fmt/format.h>
 
 int g_lockless_passed = 0;
 int g_lockless_failed = 0;
@@ -39,7 +39,7 @@ TestResult testSessionStoreLockless() {
         using namespace agentxx::agent;
         auto store = std::make_shared<SessionStore>();
 
-        constexpr int kSessions = 100;
+        constexpr int                         kSessions = 100;
         std::vector<std::shared_ptr<Session>> created;
         for (int i = 0; i < kSessions; ++i) {
             created.push_back(store->getOrCreate(fmt::format("t_{}", i)));
@@ -97,7 +97,7 @@ TestResult testSessionDoubleBuffer() {
     // 测试 2: 真正的并发读写 - writer 持续 append，reader 持续读取快照
     // 验证: 快照 size 单调递增、内容连续完整（不会读到半写状态）
     {
-        auto session = std::make_shared<Session>();
+        auto              session = std::make_shared<Session>();
         std::atomic<bool> done{false};
         std::atomic<bool> consistent{true};
 
@@ -142,11 +142,14 @@ TestResult testSessionDoubleBuffer() {
     {
         auto session = std::make_shared<Session>();
         for (int i = 0; i < 50; ++i) {
-            session->appendHistory(neograph::json{{"role", "user"}, {"content", fmt::format("x{}", i)}});
+            session->appendHistory(neograph::json{
+                {"role", "user"},
+                {"content", fmt::format("x{}", i)}
+            });
         }
 
-        constexpr int kReaders = 4;
-        std::atomic<bool> allOk{true};
+        constexpr int            kReaders = 4;
+        std::atomic<bool>        allOk{true};
         std::vector<std::thread> readers;
 
         for (int r = 0; r < kReaders; ++r) {
@@ -180,9 +183,9 @@ TestResult testContextStatsAtomic() {
     {
         auto stats = std::make_shared<ContextStats>();
 
-        constexpr int kWriters = 4;
-        constexpr int kPerWriter = 10000;
-        std::atomic<bool> start{false};
+        constexpr int            kWriters   = 4;
+        constexpr int            kPerWriter = 10000;
+        std::atomic<bool>        start{false};
         std::vector<std::thread> threads;
 
         for (int w = 0; w < kWriters; ++w) {
@@ -193,14 +196,15 @@ TestResult testContextStatsAtomic() {
                 for (int i = 0; i < kPerWriter; ++i) {
                     stats->contextTokens.store(
                         stats->contextTokens.load(std::memory_order_relaxed) + 1,
-                        std::memory_order_relaxed);
+                        std::memory_order_relaxed
+                    );
                 }
             });
         }
 
         // 并发 reader 不应崩溃或读到撕裂值
         std::atomic<bool> readOk{true};
-        std::thread reader([&]() {
+        std::thread       reader([&]() {
             while (!start.load(std::memory_order_acquire)) {
                 std::this_thread::yield();
             }
@@ -229,7 +233,7 @@ TestResult testContextStatsAtomic() {
         XX_TEST_EXPECT_TRUE(session->activity.load() == Activity::Idle);
 
         std::atomic<bool> stateOk{true};
-        std::thread writer([&]() {
+        std::thread       writer([&]() {
             for (int i = 0; i < 10000; ++i) {
                 session->activity.store(Activity::Streaming, std::memory_order_relaxed);
                 session->activity.store(Activity::ExecutingTool, std::memory_order_relaxed);
@@ -240,8 +244,8 @@ TestResult testContextStatsAtomic() {
         std::thread reader([&]() {
             for (int i = 0; i < 10000; ++i) {
                 auto a = session->activity.load(std::memory_order_relaxed);
-                if (a != Activity::Idle && a != Activity::Streaming &&
-                    a != Activity::ExecutingTool && a != Activity::WaitingInput) {
+                if (a != Activity::Idle && a != Activity::Streaming && a != Activity::ExecutingTool
+                    && a != Activity::WaitingInput) {
                     stateOk.store(false, std::memory_order_relaxed);
                     break;
                 }
@@ -282,7 +286,7 @@ TestResult testSessionMutexFields() {
     // getHashInfo 边界: 空 history
     {
         auto session = std::make_shared<Session>();
-        auto info = session->getHashInfo();
+        auto info    = session->getHashInfo();
         XX_TEST_EXPECT_EQ(info.count, size_t{0});
         XX_TEST_EXPECT_TRUE(info.tailHex.empty());
     }
@@ -291,7 +295,10 @@ TestResult testSessionMutexFields() {
     {
         auto session = std::make_shared<Session>();
         for (int i = 0; i < 10; ++i) {
-            session->appendHistory(neograph::json{{"role", "user"}, {"content", fmt::format("h{}", i)}});
+            session->appendHistory(neograph::json{
+                {"role", "user"},
+                {"content", fmt::format("h{}", i)}
+            });
         }
         auto info = session->getHashInfo();
         XX_TEST_EXPECT_EQ(info.count, size_t{10});
@@ -304,17 +311,17 @@ TestResult testSessionMutexFields() {
 TestResult testLockless() {
     TestResult result;
 
-    auto r1 = testSessionStoreLockless();
-    result += r1;
+    auto r1  = testSessionStoreLockless();
+    result  += r1;
 
-    auto r2 = testSessionDoubleBuffer();
-    result += r2;
+    auto r2  = testSessionDoubleBuffer();
+    result  += r2;
 
-    auto r3 = testContextStatsAtomic();
-    result += r3;
+    auto r3  = testContextStatsAtomic();
+    result  += r3;
 
-    auto r4 = testSessionMutexFields();
-    result += r4;
+    auto r4  = testSessionMutexFields();
+    result  += r4;
 
     return result;
 }

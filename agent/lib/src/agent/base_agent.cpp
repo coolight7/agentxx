@@ -55,8 +55,7 @@ asio::awaitable<void> BaseAgent::init() {
 
     neograph::graph::NodeContext nodeContext{};
     nodeContext.instructions = config->prompt.systemPrompt;
-    nodeContext.provider
-        = ModelProviderRegistry::createProvider(config->model);
+    nodeContext.provider     = ModelProviderRegistry::createProvider(config->model);
     nodeContext.extra_config = neograph::json{
         {std::string{agentxx::nodes::ModelCallWrapNode::defUseModelRegistryKey}, true},
     };
@@ -69,10 +68,8 @@ asio::awaitable<void> BaseAgent::init() {
     nodeContext.tools = std::move(toolPtrs);
 
     auto topology = neograph::graph::GraphCompiler::parse(graphDef, *graphRegistry);
-    auto validated = neograph::graph::GraphValidator::require_valid(
-        std::move(topology),
-        *graphRegistry
-    );
+    auto validated
+        = neograph::graph::GraphValidator::require_valid(std::move(topology), *graphRegistry);
 
     neograph::graph::EngineConfig engineConfig;
     engineConfig.node_context     = std::move(nodeContext);
@@ -99,7 +96,7 @@ asio::awaitable<void> BaseAgent::init() {
 }
 
 void BaseAgent::setupModelRegistry() {
-    auto config = agentContext->agentConfig;
+    auto config   = agentContext->agentConfig;
     auto registry = std::make_shared<agentxx::agent::ModelProviderRegistry>();
     for (const auto& [name, mc] : config->availableModels) {
         registry->registerModel(name, mc);
@@ -122,21 +119,13 @@ void BaseAgent::registerNodes(neograph::graph::GraphRegistry& registry) {
     auto ctx = agentContext;
     registry.register_type(
         std::string{agentxx::nodes::AgentStartCallWrapNode::defNodeType},
-        [ctx](
-            const std::string& name,
-            const neograph::json&,
-            const neograph::graph::NodeContext&
-        ) {
+        [ctx](const std::string& name, const neograph::json&, const neograph::graph::NodeContext&) {
             return std::make_unique<agentxx::nodes::AgentStartCallWrapNode>(name, ctx);
         }
     );
     registry.register_type(
         std::string{agentxx::nodes::MiddlewareWrapAgentEndCallNode::defNodeType},
-        [ctx](
-            const std::string& name,
-            const neograph::json&,
-            const neograph::graph::NodeContext&
-        ) {
+        [ctx](const std::string& name, const neograph::json&, const neograph::graph::NodeContext&) {
             return std::make_unique<agentxx::nodes::MiddlewareWrapAgentEndCallNode>(name, ctx);
         }
     );
@@ -550,8 +539,8 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                             if (interruptArg.name == "subagent") {
                                 auto subagentArg = interruptArg.arg;
                                 auto resp        = co_await agentContext->bus->request<
-                                    events::ReqSubagentStart,
-                                    events::RespSubagentResult>(
+                                           events::ReqSubagentStart,
+                                           events::RespSubagentResult>(
                                     events::Topic::Subagent,
                                     events::ReqSubagentStart{
                                         .parentAgentName

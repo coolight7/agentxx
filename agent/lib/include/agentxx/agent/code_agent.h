@@ -33,7 +33,8 @@ protected:
 
     asio::awaitable<void> setupMiddleware() override;
 
-    asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> createTools() override;
+    asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>>
+        createTools() override;
 
 private:
 

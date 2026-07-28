@@ -12,7 +12,6 @@
 #include "test_codegraph_tools.h"
 #include "test_command_tools.h"
 #include "test_concurrency.h"
-#include "test_lockless.h"
 #include "test_cpu_gpu_use.h"
 #include "test_crossagent.h"
 #include "test_datetime_tool.h"
@@ -24,6 +23,7 @@
 #include "test_filesystem_tools.h"
 #include "test_http.h"
 #include "test_interrupt_bus.h"
+#include "test_lockless.h"
 #include "test_mcp.h"
 #include "test_misc_fixes.h"
 #include "test_openai_provider.h"
@@ -31,6 +31,7 @@
 #include "test_regex.h"
 #include "test_remote_agent.h"
 #include "test_screen_capture.h"
+#include "test_session_concurrency.h"
 #include "test_share_store.h"
 #include "test_string_tools.h"
 #include "test_string_util.h"
@@ -38,7 +39,6 @@
 #include "test_text_selection_monitor.h"
 #include "test_web_search_tools.h"
 #include "test_websocket.h"
-#include "test_session_concurrency.h"
 #include <cstring>
 #include <iostream>
 #include <map>
@@ -189,7 +189,7 @@ int main(int argn, char** argv) {
             co_await run("openai_provider", agentxx::test::run_openai_provider_tests);
             co_await run("anthropic_provider", agentxx::test::run_anthropic_provider_tests);
             co_await run("deepagent", agentxx::test::run_deepagent_tests);
-            
+
             ioCtx.stop();
         },
         asio::detached
