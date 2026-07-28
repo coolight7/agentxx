@@ -224,7 +224,7 @@ ftxui::Element AgentTUI::renderInfoSidebar() {
 
     // 顶部: planning 特化渲染 (存在 planning_write toolcall 时)
     if (auto planning = renderPlanningInfo()) {
-        elements.push_back(std::move(*planning) | vscroll_indicator | yframe);
+        elements.push_back(std::move(*planning) | flex | vscroll_indicator | yframe);
         elements.push_back(text(" "));
     }
 
