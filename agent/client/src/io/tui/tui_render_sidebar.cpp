@@ -26,8 +26,8 @@ ftxui::Element AgentTUI::renderSidebar() {
     return vbox({
                tabBar,
                text(" "),
-               hbox({text(" "), content | flex | vscroll_indicator | yframe, text(" ")}) | flex
-                   | yframe,
+               hbox({text(" "), content | flex | vscroll_indicator | yframe, text(" ")})
+                   | flex | yframe | reflect(sidebarContentBox_),
            })
            | size(WIDTH, LESS_THAN, 56) | size(WIDTH, GREATER_THAN, 28)
            | bgcolor(theme_.blockColor);

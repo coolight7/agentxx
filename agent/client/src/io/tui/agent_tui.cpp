@@ -74,6 +74,7 @@ void AgentTUI::start() {
             }
         }
 
+        // 使用 Component 构建主 UI 树
         auto input_option      = InputOption();
         input_option.multiline = true;
         input_option.transform = [](InputState state) {
@@ -83,21 +84,24 @@ void AgentTUI::start() {
             return state.element;
         };
         input_option.on_enter = nullptr;
-
-        auto input
+        auto input_component
             = Input(&inputText_, "Type a message... (Enter=newline, Alt+Enter=send)", input_option);
 
-        auto layout = Renderer(input, [&]() -> Element {
+        // 参考 ftxui::Renderer 的设计模式：将渲染逻辑封装在 Lambda 中
+        // 这样可以保持组件化，同时允许外部事件处理
+        auto messages = Renderer([&]() -> Element {
+            return hbox({
+                text("   "),
+                renderMessages() | vscroll_indicator | yframe | reflect(messageAreaBox_),
+                text("   "),
+            });
+        });
+
+        // 主渲染器组件
+        auto main_renderer = Renderer(input_component, [&]() -> Element {
             std::lock_guard<std::mutex> lock(mutex_);
 
-            auto messages = hbox({
-                                text("   "),
-                                renderMessages() | flex | vscroll_indicator | yframe
-                                    | reflect(messageAreaBox_),
-                                text("   "),
-                            })
-                            | flex | yframe;
-
+            // 指示器状态显示
             Element indicator;
             if (pendingPermission_) {
                 indicator = text("!") | bgcolor(Color::Red) | color(Color::White) | bold | blink;
@@ -116,7 +120,7 @@ void AgentTUI::start() {
                         text("  "),
                         indicator,
                         text("  "),
-                        input->Render() | color(theme_.inputTextColor) | flex,
+                        input_component->Render() | color(theme_.inputTextColor) | focus | flex,
                         text("  "),
                     }),
                     text(" "),
@@ -136,18 +140,19 @@ void AgentTUI::start() {
                 });
             }
 
-            auto main = vbox({
-                messages,
+            auto mainWidget = vbox({
+                messages->Render() | flex,
                 pendingBar,
                 input_bar,
                 renderStatusBar(),
                 text(" "),
             });
 
-            Element body = main;
+            // 带侧边栏的主体布局
+            Element body = mainWidget;
             if (false == sidebarTabs_.empty()) {
                 body = hbox({
-                    main | flex,
+                    mainWidget | flex,
                     renderSidebar(),
                 });
             }
@@ -165,7 +170,8 @@ void AgentTUI::start() {
             return result | bold | bgcolor(theme_.backgroundColor);
         });
 
-        auto event_handler = CatchEvent(layout, [&](Event event) -> bool {
+        // 绑定事件处理
+        auto event_handler = CatchEvent(main_renderer, [&](Event event) -> bool {
             if (event == Event::CtrlC) {
                 if (!inputText_.empty()) {
                     inputText_.clear();
@@ -338,22 +344,13 @@ void AgentTUI::start() {
             }
             if (event.is_mouse()) {
                 const auto& mouse = event.mouse();
-                if (mouse.button == Mouse::WheelUp || mouse.button == Mouse::WheelDown) {
-                    if (!sidebarTabs_.empty() && mouse.x >= ftxui::Terminal::Size().dimx - 56) {
-                        const int last
-                            = static_cast<int>(logSink_ ? logSink_->snapshot().size() : 0) - 1;
-                        if (last >= 0) {
-                            int cur  = logStickToBottom_ ? last : logFocusIndex_;
-                            cur     += (mouse.button == Mouse::WheelUp) ? -1 : +1;
-                            if (cur >= last) {
-                                logStickToBottom_ = true;
-                                logFocusIndex_    = -1;
-                            } else {
-                                logStickToBottom_ = false;
-                                logFocusIndex_    = std::max(0, cur);
-                            }
-                        }
-                        postRedraw();
+                if (mouse.button == Mouse::WheelUp) {
+                    if (messageAreaBox_.Contain(mouse.x, mouse.y)) {
+                        handleMessagesScroll(-1);
+                        return true;
+                    }
+                    if (sidebarContentBox_.Contain(mouse.x, mouse.y)) {
+                        handleSidebarScroll(-1);
                         return true;
                     }
                     const int last = messagesBlockCount_ - 1;
@@ -369,6 +366,18 @@ void AgentTUI::start() {
                     }
                     postRedraw();
                     return true;
+                    return false;
+                }
+                if (mouse.button == Mouse::WheelDown) {
+                    if (messageAreaBox_.Contain(mouse.x, mouse.y)) {
+                        handleMessagesScroll(1);
+                        return true;
+                    }
+                    if (sidebarContentBox_.Contain(mouse.x, mouse.y)) {
+                        handleSidebarScroll(1);
+                        return true;
+                    }
+                    return false;
                 }
                 if (mouse.button == Mouse::Left && mouse.motion == Mouse::Released
                     && !pendingInputs_.empty()
@@ -483,6 +492,7 @@ void AgentTUI::onPeerMessage(agentxx::agent::WireMessage msg) {
                 );
             } else if constexpr (std::is_same_v<T, agentxx::agent::WireLog>) {
                 if (logSink_) {
+                    logSink_->onLog(static_cast<agentxx::util::LogLevel>(m.level), m.message);
                     logSink_->onLog(static_cast<agentxx::util::LogLevel>(m.level), m.message);
                     postRedraw();
                 }
@@ -841,4 +851,65 @@ asio::awaitable<std::optional<std::string>> AgentTUI::getInput() {
         co_return std::nullopt;
     }
     co_return std::optional<std::string>(std::move(line));
+}
+
+void AgentTUI::handleMessagesScroll(int direction) {
+    const int blockCount = messagesBlockCount_;
+    if (blockCount <= 0) {
+        return;
+    }
+    if (direction < 0) {
+        if (stickToBottom_) {
+            stickToBottom_    = false;
+            messagesSelector_ = blockCount - 1;
+        }
+        if (messagesSelector_ > 0) {
+            --messagesSelector_;
+        }
+    } else {
+        if (messagesSelector_ < blockCount - 1) {
+            ++messagesSelector_;
+        } else {
+            stickToBottom_ = true;
+        }
+    }
+    postRedraw();
+}
+
+void AgentTUI::handleSidebarScroll(int direction) {
+    if (activeTabIndex_ >= 0 && activeTabIndex_ < static_cast<int>(sidebarTabs_.size())
+        && sidebarTabs_[activeTabIndex_].id == kLogTabId) {
+        int last = logSink_ ? static_cast<int>(logSink_->snapshot().size()) - 1 : 0;
+        if (last < 0) {
+            return;
+        }
+        if (direction < 0) {
+            if (logStickToBottom_) {
+                logStickToBottom_ = false;
+                logFocusIndex_    = last;
+            }
+            if (logFocusIndex_ > 0) {
+                --logFocusIndex_;
+            }
+        } else {
+            if (logFocusIndex_ < last) {
+                ++logFocusIndex_;
+            } else {
+                logStickToBottom_ = true;
+                logFocusIndex_    = last;
+            }
+        }
+    } else {
+        // 其他 tab 使用通用滚动偏移
+        if (sidebarScrollOffset_ < 0 || sidebarStickToBottom_) {
+            sidebarStickToBottom_ = false;
+            sidebarScrollOffset_  = 0;
+        }
+        sidebarScrollOffset_ += direction;
+        if (sidebarScrollOffset_ < 0) {
+            sidebarScrollOffset_  = 0;
+            sidebarStickToBottom_ = false;
+        }
+    }
+    postRedraw();
 }

@@ -194,6 +194,16 @@ private:
     bool logStickToBottom_ = true;
     int  logFocusIndex_    = -1;
 
+    /// 侧边栏内容滚动状态 (用于信息等非日志 tab)
+    int  sidebarScrollOffset_   = 0;
+    bool sidebarStickToBottom_  = true;
+    ftxui::Box sidebarContentBox_;
+
+    /// 消息滚动辅助
+    void handleMessagesScroll(int direction);
+    /// 侧边栏滚动辅助 (根据当前 tab 派发)
+    void handleSidebarScroll(int direction);
+
     void           postRedraw();
     ftxui::Element renderMessages();
     /// 特化渲染 filesystem_edit_text_file (git diff 对比), 实现见 tui_render_edittool.cpp
