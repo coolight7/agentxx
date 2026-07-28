@@ -209,7 +209,35 @@ static void sigSafeDumpStack(int consoleFd, int fileFd, void** frames, int size)
     sigSafeWriteStr(fileFd, "======= Dump stack end =======\n");
 }
 
-void signal_handler(int signo) {
+/// 信号编号 -> 名称 (async-signal-safe: 仅返回静态字符串)
+static const char* sigName(int signo) {
+    switch (signo) {
+        case SIGSEGV: return "SIGSEGV";
+        case SIGABRT: return "SIGABRT";
+        case SIGBUS: return "SIGBUS";
+        case SIGFPE: return "SIGFPE";
+        case SIGILL: return "SIGILL";
+        case SIGTRAP: return "SIGTRAP";
+        case SIGSYS: return "SIGSYS";
+        default: return "UNKNOWN";
+    }
+}
+
+/// 信号编号 -> 简要原因描述
+static const char* sigReason(int signo) {
+    switch (signo) {
+        case SIGSEGV: return "Segmentation fault (invalid memory access)";
+        case SIGABRT: return "Abort (assertion failure / std::terminate / abort())";
+        case SIGBUS: return "Bus error (alignment fault / bad physical address)";
+        case SIGFPE: return "Floating-point exception (division by zero / overflow)";
+        case SIGILL: return "Illegal instruction";
+        case SIGTRAP: return "Trace/breakpoint trap";
+        case SIGSYS: return "Bad system call";
+        default: return "Unknown fatal signal";
+    }
+}
+
+static void signal_handler(int signo, siginfo_t* info, void* /*ucontext*/) {
     // 仅使用 async-signal-safe 函数: backtrace/open/write/close/_exit 等
     void* buffer[64];
     auto  size = backtrace(buffer, 64);
@@ -223,7 +251,6 @@ void signal_handler(int signo) {
         for (const char* p = prefix; *p != '\0'; ++p) {
             filename[pos++] = *p;
         }
-        // pid 转字符串
         char pidbuf[24];
         int  pn  = 0;
         auto pid = static_cast<unsigned long long>(getpid());
@@ -247,14 +274,41 @@ void signal_handler(int signo) {
 
     int fileFd = open(filename, O_WRONLY | O_CREAT | O_TRUNC, 0644);
 
-    sigSafeWriteStr(STDERR_FILENO, "\n======= xx catch signal ");
+    auto writeBoth = [&](const char* s) {
+        sigSafeWriteStr(STDERR_FILENO, s);
+        if (fileFd >= 0) {
+            sigSafeWriteStr(fileFd, s);
+        }
+    };
+
+    writeBoth("\n======= xx catch signal ");
     sigSafeWriteUInt(STDERR_FILENO, static_cast<unsigned long long>(signo));
-    sigSafeWriteStr(STDERR_FILENO, " =======\n");
     if (fileFd >= 0) {
-        sigSafeWriteStr(fileFd, "\n======= xx catch signal ");
         sigSafeWriteUInt(fileFd, static_cast<unsigned long long>(signo));
-        sigSafeWriteStr(fileFd, " =======\n");
     }
+    writeBoth(" (");
+    writeBoth(sigName(signo));
+    writeBoth(")\n");
+    writeBoth("Reason: ");
+    writeBoth(sigReason(signo));
+    writeBoth("\n");
+
+    // 输出故障地址 (对 SIGSEGV/SIGBUS/SIGFPE 等有意义)
+    if (info != nullptr && info->si_addr != nullptr) {
+        writeBoth("Fault address: ");
+        sigSafeWriteHex(STDERR_FILENO, info->si_addr);
+        if (fileFd >= 0) {
+            sigSafeWriteHex(fileFd, info->si_addr);
+        }
+        writeBoth("\n");
+    }
+
+    writeBoth("PID: ");
+    sigSafeWriteUInt(STDERR_FILENO, static_cast<unsigned long long>(getpid()));
+    if (fileFd >= 0) {
+        sigSafeWriteUInt(fileFd, static_cast<unsigned long long>(getpid()));
+    }
+    writeBoth("\n");
 
     sigSafeDumpStack(STDERR_FILENO, fileFd, buffer, size);
 
@@ -266,14 +320,29 @@ void signal_handler(int signo) {
     sigSafeWriteStr(STDERR_FILENO, filename);
     sigSafeWriteStr(STDERR_FILENO, "\n");
 
-    signal(signo, SIG_DFL);
+    // 恢复默认处理并重新抛出, 保留原始退出状态 (core dump 等)
+    struct sigaction sa {};
+    sa.sa_handler = SIG_DFL;
+    sigemptyset(&sa.sa_mask);
+    sigaction(signo, &sa, nullptr);
     raise(signo);
 }
 
 void signalError(std::string_view exepath) {
     _exe_path = exepath;
     XX_LOGI("# Signal error handler: {}", exepath.data());
-    signal(SIGSEGV, signal_handler);
+
+    struct sigaction sa {};
+    sa.sa_sigaction = signal_handler;
+    sa.sa_flags     = SA_SIGINFO | SA_RESETHAND;
+    sigemptyset(&sa.sa_mask);
+
+    static constexpr int fatalSignals[] = {
+        SIGSEGV, SIGABRT, SIGBUS, SIGFPE, SIGILL, SIGTRAP, SIGSYS,
+    };
+    for (int sig : fatalSignals) {
+        sigaction(sig, &sa, nullptr);
+    }
 }
 
 #else
