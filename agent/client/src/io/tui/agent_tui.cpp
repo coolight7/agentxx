@@ -414,24 +414,12 @@ void AgentTUI::stop() {
 void AgentTUI::requestCancel(std::string_view threadId) {
     if (transport_) {
         sendToPeer(agentxx::agent::WireCancel{std::string{threadId}});
-    } else if (session_) {
-        auto token = session_->getCancelToken();
-        if (token) {
-            token->cancel();
-        }
     }
 }
 
 void AgentTUI::requestSelectModel(std::string_view threadId, std::string_view model) {
     if (transport_) {
         sendToPeer(agentxx::agent::WireSelectModel{std::string{threadId}, std::string{model}});
-    }
-}
-
-void AgentTUI::refreshModelName() {
-    if (session_ && agentContext_ && agentContext_->modelRegistry) {
-        cachedModelName_ = agentContext_->modelRegistry->resolveModelName(session_->getModelName());
-        postRedraw();
     }
 }
 
@@ -452,18 +440,15 @@ void AgentTUI::onPeerMessage(agentxx::agent::WireMessage msg) {
                 dispatchNextPendingInput();
                 postRedraw();
             } else if constexpr (std::is_same_v<T, agentxx::agent::WireContextStats>) {
-                if (auto ctx = agentContext_) {
-                    auto s = ctx->getSession(threadId_);
-                    if (s && s->contextStats) {
-                        s->contextStats->contextTokens.store(
-                            m.contextTokens,
-                            std::memory_order_relaxed
-                        );
-                        s->contextStats->maxContextTokens.store(
-                            m.maxContextTokens,
-                            std::memory_order_relaxed
-                        );
-                    }
+                if (session_ && session_->contextStats) {
+                    session_->contextStats->contextTokens.store(
+                        m.contextTokens,
+                        std::memory_order_relaxed
+                    );
+                    session_->contextStats->maxContextTokens.store(
+                        m.maxContextTokens,
+                        std::memory_order_relaxed
+                    );
                 }
                 postRedraw();
             } else if constexpr (std::is_same_v<T, agentxx::agent::WireInterruptRequest>) {
@@ -487,22 +472,10 @@ void AgentTUI::onPeerMessage(agentxx::agent::WireMessage msg) {
             } else if constexpr (std::is_same_v<T, agentxx::agent::WireModelInfo>) {
                 std::lock_guard<std::mutex> lock(mutex_);
                 if (!m.models.empty()) {
-                    auto registry = std::make_shared<agentxx::agent::ModelProviderRegistry>();
-                    for (const auto& name : m.models) {
-                        agentxx::agent::ModelConfig mc;
-                        mc.modelName = name;
-                        registry->registerModel(name, mc);
-                    }
-                    agentContext_->modelRegistry = std::move(registry);
-                    if (showModelSelector_) {
-                        modelNames_ = agentContext_->modelRegistry->listModelNames();
-                    }
+                    modelNames_ = m.models;
                 }
                 if (!m.currentModel.empty()) {
                     cachedModelName_ = m.currentModel;
-                    if (auto s = currentSession()) {
-                        s->setModelName(m.currentModel);
-                    }
                 }
                 postRedraw();
             }

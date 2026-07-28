@@ -189,6 +189,8 @@ asio::awaitable<void> test_subagent_bus_timeout() {
 }
 
 asio::awaitable<TestResult> run_subagent_bus_tests() {
+    g_sb_passed = 0;
+    g_sb_failed = 0;
     try {
         co_await test_subagent_bus_request_response();
         co_await test_subagent_progress_events();

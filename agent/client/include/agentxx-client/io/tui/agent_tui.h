@@ -275,9 +275,6 @@ public:
         remoteUrl_ = std::move(url);
     }
 
-    /// 从 modelRegistry 刷新缓存的模型显示名称 (远程模式握手后调用)
-    void refreshModelName();
-
     void onDelta(const agentxx::agent::Delta& delta) override;
     void onSync(const agentxx::agent::SyncPayload& payload) override;
     asio::awaitable<std::optional<std::string>> getInput() override;

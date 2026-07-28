@@ -21,7 +21,6 @@
 #include <utility>
 #include <vector>
 
-
 namespace agentxx {
 namespace util {
 
@@ -772,16 +771,15 @@ inline PinyinCallback s_pinyinCallback = nullptr;
     return std::nullopt;
 }
 
-[[nodiscard]] inline constexpr std::string formatSize(size_t bytes, int precision = 1) {
+[[nodiscard]] inline constexpr std::string formatSize(size_t bytes, double base = 1024) {
     if (bytes == 0) {
-        return "0B";
+        return "0";
     }
 
     // 定义单位列表（顺序：B, K, M, G, T, P...）
     const std::vector<std::string> units_decimal = {"", "K", "M", "G", "T", "P"};
 
-    const auto&  units = units_decimal;
-    const double base  = 1024.0;
+    const auto& units = units_decimal;
 
     // 计算应该使用的单位索引
     size_t index = 0;
@@ -791,12 +789,12 @@ inline PinyinCallback s_pinyinCallback = nullptr;
         ++index;
     }
 
-    // 格式化输出：如果整数部分≥100，则去掉小数（更简洁）
+    // 格式化输出：如果整数部分≥100，则去掉小数
     std::stringstream oss;
     if (std::floor(size) >= 100.0) {
         return fmt::format("{}{}", int64_t(size), units[index]);
     } else {
-        return fmt::format("{:.1}{}", size, units[index]);
+        return fmt::format("{:.1f}{}", size, units[index]);
     }
 }
 

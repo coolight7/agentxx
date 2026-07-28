@@ -26,28 +26,27 @@ std::string Session::appendHistory(neograph::json msgData) {
 }
 
 void Session::setCancelToken(std::shared_ptr<neograph::graph::CancelToken> token) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    assertIoThread();
     cancelToken_ = std::move(token);
 }
 
 std::shared_ptr<neograph::graph::CancelToken> Session::getCancelToken() {
-    std::lock_guard<std::mutex> lock(mutex_);
+    assertIoThread();
     return cancelToken_;
 }
 
 void Session::setModelName(std::string_view name) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    assertIoThread();
     modelName_ = name;
 }
 
 std::string Session::getModelName() const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    assertIoThread();
     return modelName_;
 }
 
 std::shared_ptr<Session> SessionStore::getOrCreate(std::string_view threadId) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    auto                        it = sessions_.find(threadId);
+    auto it = sessions_.find(threadId);
     if (it != sessions_.end()) {
         return it->second;
     }
@@ -57,13 +56,11 @@ std::shared_ptr<Session> SessionStore::getOrCreate(std::string_view threadId) {
 }
 
 std::shared_ptr<Session> SessionStore::get(std::string_view threadId) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    auto                        it = sessions_.find(threadId);
+    auto it = sessions_.find(threadId);
     return it == sessions_.end() ? nullptr : it->second;
 }
 
 void SessionStore::remove(std::string_view threadId) {
-    std::lock_guard<std::mutex> lock(mutex_);
     sessions_.erase(threadId);
 }
 

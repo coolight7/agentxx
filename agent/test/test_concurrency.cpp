@@ -90,80 +90,43 @@ void testLogDispatcherConcurrency() {
 }
 
 // ---------------------------------------------------------------------------
-// ModelProviderRegistry: getProvider 双重检查锁 (并发取同一缓存实例) + 读写并发
+// ModelProviderRegistry: 单线程功能验证 (已改为单线程设计, 仅 agent io 线程访问)
 // ---------------------------------------------------------------------------
 
 void testModelRegistryConcurrency() {
     using namespace agentxx::agent;
 
-    // (1) 并发 getProvider: 所有线程应拿到同一个缓存 Provider (双重检查锁正确)
+    // (1) getProvider 缓存: 多次调用返回同一实例
     {
         ModelProviderRegistry reg;
         reg.registerModel("m1", ModelConfig{});
 
-        constexpr int                                    kThreads = 8;
-        constexpr int                                    kIter    = 200;
-        std::atomic<bool>                                start{false};
-        std::vector<std::thread>                         threads;
-        std::vector<std::shared_ptr<neograph::Provider>> results(kThreads);
-        for (int t = 0; t < kThreads; ++t) {
-            threads.emplace_back([&, t]() {
-                while (!start.load(std::memory_order_acquire)) {
-                }
-                std::shared_ptr<neograph::Provider> p;
-                for (int i = 0; i < kIter; ++i) {
-                    p = reg.getProvider("m1");
-                }
-                results[t] = p;
-            });
-        }
-        start.store(true, std::memory_order_release);
-        for (auto& th : threads) {
-            th.join();
-        }
+        auto p1 = reg.getProvider("m1");
+        auto p2 = reg.getProvider("m1");
 
-        XX_TEST_EXPECT_TRUE(results[0] != nullptr);
-        for (int t = 1; t < kThreads; ++t) {
-            XX_TEST_EXPECT_TRUE(results[t] == results[0]);
-        }
+        XX_TEST_EXPECT_TRUE(p1 != nullptr);
+        XX_TEST_EXPECT_TRUE(p1 == p2);
     }
 
-    // (2) 读写并发: 多线程读 (resolve/getConfig/list/has) + 单线程写 (register), 不崩溃
+    // (2) 注册/读取/解析功能正确性
     {
         ModelProviderRegistry reg;
         reg.registerModel("base", ModelConfig{});
 
-        std::atomic<bool> stop{false};
-        std::thread       writer([&]() {
-            int i = 0;
-            while (!stop.load(std::memory_order_acquire)) {
-                reg.registerModel("dyn_" + std::to_string(i++), ModelConfig{});
-            }
-        });
+        for (int i = 0; i < 100; ++i) {
+            reg.registerModel("dyn_" + std::to_string(i), ModelConfig{});
+        }
 
-        constexpr int            kReaders = 6;
-        std::vector<std::thread> readers;
-        for (int r = 0; r < kReaders; ++r) {
-            readers.emplace_back([&]() {
-                for (int i = 0; i < 2000; ++i) {
-                    auto name = reg.resolveModelName("base");
-                    auto cfg  = reg.getModelConfig(name);
-                    auto list = reg.listModelNames();
-                    auto has  = reg.hasModel("base");
-                    (void)cfg;
-                    (void)list;
-                    (void)has;
-                }
-            });
-        }
-        for (auto& th : readers) {
-            th.join();
-        }
-        stop.store(true, std::memory_order_release);
-        writer.join();
+        auto name = reg.resolveModelName("base");
+        auto cfg  = reg.getModelConfig(name);
+        auto list = reg.listModelNames();
+        auto has  = reg.hasModel("base");
+        (void)cfg;
 
         XX_TEST_EXPECT_TRUE(reg.size() >= 1);
-        XX_TEST_EXPECT_TRUE(reg.hasModel("base"));
+        XX_TEST_EXPECT_TRUE(has);
+        XX_TEST_EXPECT_TRUE(list.size() == 101);
+        XX_TEST_EXPECT_TRUE(name == "base");
     }
 }
 
@@ -284,17 +247,15 @@ void testAsyncMutex() {
 } // namespace
 
 TestResult testConcurrency() {
-    int passed = 0;
-    int failed = 0;
+    g_conc_passed = 0;
+    g_conc_failed = 0;
 
     testLogDispatcherConcurrency();
     testModelRegistryConcurrency();
     testMcpServerRegistrationConcurrency();
     testAsyncMutex();
 
-    passed = g_conc_passed;
-    failed = g_conc_failed;
-    return TestResult{passed, failed};
+    return TestResult{g_conc_passed, g_conc_failed};
 }
 
 } // namespace test

@@ -88,12 +88,12 @@ ftxui::Element AgentTUI::renderStatusBar() {
         const double pct = 100.0 * static_cast<double>(ctx) / static_cast<double>(maxCtx);
         ctxText          = fmt::format(
             " {}/{} ({:.1f}%) ",
-            agentxx::util::formatSize(ctx),
-            agentxx::util::formatSize(maxCtx),
+            agentxx::util::formatSize(ctx, 1000),
+            agentxx::util::formatSize(maxCtx, 1000),
             pct
         );
     } else {
-        ctxText = fmt::format(" {} ", agentxx::util::formatSize(ctx));
+        ctxText = fmt::format(" {} ", agentxx::util::formatSize(ctx, 1000));
     }
     auto ctxInfo = text(ctxText) | color(theme_.statusColor);
 
@@ -106,19 +106,14 @@ ftxui::Element AgentTUI::renderStatusBar() {
 }
 
 void AgentTUI::openModelSelector() {
-    // 远程模式: 请求服务端刷新模型信息
     if (transport_) {
         sendToPeer(agentxx::agent::WireGetModel{threadId_});
     }
-    modelNames_.clear();
     selectedModelIndex_ = 0;
-    if (agentContext_ && agentContext_->modelRegistry) {
-        modelNames_ = agentContext_->modelRegistry->listModelNames();
-        for (size_t i = 0; i < modelNames_.size(); ++i) {
-            if (modelNames_[i] == cachedModelName_) {
-                selectedModelIndex_ = static_cast<int>(i);
-                break;
-            }
+    for (size_t i = 0; i < modelNames_.size(); ++i) {
+        if (modelNames_[i] == cachedModelName_) {
+            selectedModelIndex_ = static_cast<int>(i);
+            break;
         }
     }
     showModelSelector_ = true;
@@ -127,9 +122,6 @@ void AgentTUI::openModelSelector() {
 void AgentTUI::confirmModelSelection() {
     if (selectedModelIndex_ >= 0 && selectedModelIndex_ < static_cast<int>(modelNames_.size())) {
         cachedModelName_ = modelNames_[selectedModelIndex_];
-        if (session_) {
-            session_->setModelName(cachedModelName_);
-        }
         requestSelectModel(threadId_, cachedModelName_);
     }
     showModelSelector_ = false;
