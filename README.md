@@ -283,6 +283,28 @@ npm install --legacy-peer-deps
     - [Android 动态库编译 .so / 静态库 .a](/docs/zh-cn/build/android.md)
     - [Windows 可执行程序 .exe / 动态库编译 .dll / 静态库 .lib](/docs/zh-cn/build/windows.md)
 
+## 运行 & 配置文件
+- 参考 `{项目根目录}` 下的 `agentxx-config.yaml`，修改它在里面配置你的模型 llm api，然后 cd 到 `agentxx-config.yaml` 所在目录，运行 agentxx_cli 即可
+- （可选）`agentxx-config.yaml` 内配置 llm api key 时，建议放到同目录的 `.env` 中，模版参考 `.env.example`, 复制并重命名为 `.env` 然后添加环境变量即可
+```sh
+cd {项目根目录}
+# 修改 agentxx-config.yaml 
+# 可选: 
+#       cp .env.example .env
+#       修改 .env 添加环境变量 api key
+
+# client 负责UI渲染和输入输出交互, agent-server 负责执行会话、调用 llm api 等实际操作
+
+# client + agent-server 在同一个进程内启动, agentxx_cli 内的 client 包含两种UI:
+agentxx_cli tui # 启动 TUI 界面
+agentxx_cli cli # 启动 cli 
+
+# - client 和 agent-server 分离为两个进程，两者使用 websocket 网络连接
+# - 自己开发 GUI 连接 server 可使用该方式连接
+agentxx_cli server --host 0.0.0.0 --port 7007 --token passwd # 启动 agent-server
+agentxx_cli tui --agent ws://127.0.0.1:7007/deepagent --token passwd # 连接 server
+```
+
 ## LICENSE & THIRD_PARTY
 - [MIT License](LICENSE)
 - 根据 动态链接、静态链接 库的不同，可能会携带他们的开源协议
