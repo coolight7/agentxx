@@ -8,7 +8,7 @@
     - Windows 10+ x86_64
     - Android 5.0+
 
-## 设计
+## 设计 & 建议
 - 详细架构设计见[design.md](docs/zh-cn/design.md)，当大幅修改代码时，请参考并更新
 - Agent 的设计支持:
     - 并发多会话，单线程/多协程交错执行会话，不需要线程锁
@@ -21,6 +21,7 @@
 - 合适的情况下，尽量使用`std::string_view`替代`const std::string&`
 - 应当使用 [XX_LOG](agent/lib/include/agentxx/util/log.h) 输出日志，而不是 std::cout/cerr，避免影响 TUI 显示
 - 最终的代码实现目标要能稳定运行在生产环境，广泛服务于各种设备和用户，需要仔细思考实现方案、编写足量的常规使用方式测试+各种边界情况测试
+- 非必要不应修改 `agent/third_party/` 内的代码，尽量修改本项目的代码实现功能。如果修改了的话应当删除 build 内对应的目录，让 cmake 重新编译，否则可能不生效
 
 ## 代码结构
 - `agent`: 
