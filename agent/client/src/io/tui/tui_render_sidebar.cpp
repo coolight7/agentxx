@@ -44,8 +44,7 @@ ftxui::Element AgentTUI::renderSidebar() {
                handle,
                vbox(std::move(layout)) | flex,
            })
-           | size(WIDTH, EQUAL, sidebarWidth_)
-           | bgcolor(theme_.blockColor);
+           | size(WIDTH, EQUAL, sidebarWidth_) | bgcolor(theme_.blockColor);
 }
 
 ftxui::Element AgentTUI::renderLogWindow() {
