@@ -127,8 +127,8 @@ inline neograph::json deltaToJson(const Delta& d) {
     if (d.startTimeMs > 0) {
         j["start_time_ms"] = d.startTimeMs;
     }
-    if (d.durationSeconds > 0.0) {
-        j["duration_seconds"] = d.durationSeconds;
+    if (d.durationMs > 0) {
+        j["duration_ms"] = d.durationMs;
     }
     return j;
 }
@@ -142,19 +142,19 @@ inline std::optional<Delta> deltaFromJson(const neograph::json& j) {
         return std::nullopt;
     }
     Delta d;
-    d.type            = typeOpt.value();
-    d.seq             = j.value("seq", uint64_t{0});
-    d.text            = j.value("text", std::string{});
-    d.msgId           = j.value("msg_id", std::string{});
-    d.toolName        = j.value("tool_name", std::string{});
-    d.toolCallId      = j.value("tool_call_id", std::string{});
-    d.arguments       = j.value("arguments", std::string{});
-    d.result          = j.value("result", std::string{});
-    d.hasError        = j.value("has_error", false);
-    d.historyCount    = j.value("history_count", uint64_t{0});
-    d.tailHash        = j.value("tail_hash", std::string{});
-    d.startTimeMs     = j.value("start_time_ms", int32_t{0});
-    d.durationSeconds = j.value("duration_seconds", double{0.0});
+    d.type         = typeOpt.value();
+    d.seq          = j.value("seq", uint64_t{0});
+    d.text         = j.value("text", std::string{});
+    d.msgId        = j.value("msg_id", std::string{});
+    d.toolName     = j.value("tool_name", std::string{});
+    d.toolCallId   = j.value("tool_call_id", std::string{});
+    d.arguments    = j.value("arguments", std::string{});
+    d.result       = j.value("result", std::string{});
+    d.hasError     = j.value("has_error", false);
+    d.historyCount = j.value("history_count", uint64_t{0});
+    d.tailHash     = j.value("tail_hash", std::string{});
+    d.startTimeMs  = j.value("start_time_ms", int32_t{0});
+    d.durationMs   = j.value("duration_ms", int32_t{0});
     return d;
 }
 

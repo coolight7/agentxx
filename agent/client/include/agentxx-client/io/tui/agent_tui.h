@@ -84,9 +84,9 @@ private:
         bool        toolHasError = false;
         bool        collapsed    = false; // 折叠/展开 (Thinking/Tool 默认折叠)
 
-        // 运行时长统计 (秒，毫秒部分用于显示)
-        double durationSeconds = 0.0;
-        // 开始时间戳 (毫秒级)
+        // 运行时长统计 (毫秒)
+        int32_t durationMs = 0;
+        // 开始时间戳 (毫秒)
         int32_t startTimeMs = 0;
     };
 

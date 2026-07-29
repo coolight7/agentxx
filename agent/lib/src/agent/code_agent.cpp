@@ -42,14 +42,24 @@ asio::awaitable<void> CodeAgent::setupMiddleware() {
         agentContext->middlewareHandleContext->handles.push_back(agentContext->permissionMiddleware
         );
     }
+    // 添加 Skill Middleware 并记录启动信息
     {
+        for (const auto& dirPath : config->skillDirPaths) {
+            agentContext->appendComponentInfo.skills.push_back(dirPath);
+        }
+
         auto skillMiddleware = std::make_shared<agentxx::middleware::SkillMiddlewareHandle>(
             config->skillDirPaths,
             agentContext
         );
         agentContext->middlewareHandleContext->handles.push_back(skillMiddleware);
     }
+    // 添加 Memory File Middleware 并记录启动信息
     {
+        for (const auto& memPath : config->memoryFilePaths) {
+            agentContext->appendComponentInfo.memoryFiles.push_back(memPath);
+        }
+
         auto memoryFileMiddleware
             = std::make_shared<agentxx::middleware::MemoryFileMiddlewareHandle>(
                 config->memoryFilePaths,
@@ -158,6 +168,8 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
                         for (auto& tool : mcpTools.value()) {
                             tools.push_back(mcpClient->createTool(std::move(tool), agentContext));
                         }
+                        // 添加到启动信息
+                        agentContext->appendComponentInfo.mcpTools.push_back(mcpNamespace);
                     } else {
                         XX_LOGE(
                             "list mcp tool error: {} | {} | {}",
@@ -279,6 +291,39 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
     }
 
     co_return tools;
+}
+
+void CodeAgent::collectAppendComponentInfo(std::vector<AppendComponentNotification>& notifications
+) {
+    // MCP 工具
+    for (const auto& mcp : agentContext->appendComponentInfo.mcpTools) {
+        notifications.push_back(AppendComponentNotification{
+            .type         = AppendComponentNotification::Type::Mcp,
+            .name         = mcp,
+            .success      = true,
+            .errorMessage = "",
+        });
+    }
+
+    // Skill
+    for (const auto& skill : agentContext->appendComponentInfo.skills) {
+        notifications.push_back(AppendComponentNotification{
+            .type         = AppendComponentNotification::Type::Skill,
+            .name         = skill,
+            .success      = true,
+            .errorMessage = "",
+        });
+    }
+
+    // Memory 文件
+    for (const auto& memory : agentContext->appendComponentInfo.memoryFiles) {
+        notifications.push_back(AppendComponentNotification{
+            .type         = AppendComponentNotification::Type::Memory,
+            .name         = memory,
+            .success      = true,
+            .errorMessage = "",
+        });
+    }
 }
 
 } // namespace agent
