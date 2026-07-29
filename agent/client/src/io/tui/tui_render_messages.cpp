@@ -181,8 +181,8 @@ ftxui::Element AgentTUI::renderMessages() {
         if (currentTokenRole_ == Message::Role::Thinking) {
             // 流式输出中的 Thinking：显示时间统计（如果存在）
             std::string durationStr;
-            if (currentMsg && (currentMsg->msg.durationMs > 0 || currentMsg->startTimeMs > 0)) {
-                int32_t durationMs = currentMsg->msg.durationMs;
+            if (currentMsg && (currentMsg->durationMs > 0 || currentMsg->startTimeMs > 0)) {
+                int32_t durationMs = currentMsg->durationMs;
                 if (durationMs <= 0 && currentMsg->startTimeMs > 0) {
                     const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
                                          std::chrono::steady_clock::now().time_since_epoch()

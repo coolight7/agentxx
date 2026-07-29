@@ -1,4 +1,6 @@
 #include "agentxx-client/io/tui/agent_tui.h"
+#include "ftxui/screen/terminal.hpp"
+#include <algorithm>
 #include <filesystem>
 
 using namespace ftxui;
@@ -27,13 +29,22 @@ ftxui::Element AgentTUI::renderSidebar() {
     Elements layout;
     layout.push_back(tabBar);
     layout.push_back(text(" "));
+    // 滚动主体: | flex 使其充满侧边栏可用宽度 (日志/信息 tab 统一占满)
     layout.push_back(hbox({text(" "), sidebarScrollable_->Render() | flex, text(" ")}) | flex);
     if (footerRender) {
-        layout.push_back(hbox({text(" "), footerRender(), text(" ")}) | xframe);
+        layout.push_back(hbox({text(" "), footerRender() | flex, text(" ")}) | xframe);
         layout.push_back(text(" "));
     }
 
-    return vbox(std::move(layout)) | size(WIDTH, LESS_THAN, 56) | size(WIDTH, GREATER_THAN, 28)
+    // 左侧拖拽手柄: 1 格宽的竖线 (取输入框背景色), 按住左键左右拖动可调整侧边栏宽度
+    auto handle = separatorStyled(BorderStyle::LIGHT) | color(theme_.inputBgColor)
+                  | reflect(sidebarHandleBox_);
+
+    return hbox({
+               handle,
+               vbox(std::move(layout)) | flex,
+           })
+           | size(WIDTH, EQUAL, sidebarWidth_)
            | bgcolor(theme_.blockColor);
 }
 
@@ -146,6 +157,31 @@ bool AgentTUI::handleSidebarMouse(const ftxui::Mouse& mouse) {
             removeSidebarTab(sidebarTabs_[i].id);
             return true;
         }
+    }
+    return false;
+}
+
+bool AgentTUI::handleSidebarResizeMouse(const ftxui::Mouse& mouse) {
+    // 拖拽中: 消费所有鼠标事件, 依据相对位移调整宽度 (手柄左移 -> 变宽)
+    if (sidebarResizing_) {
+        if (mouse.motion == Mouse::Released) {
+            sidebarResizing_ = false;
+            return true;
+        }
+        const int newWidth = sidebarResizeStartWidth_ + (sidebarResizeStartX_ - mouse.x);
+        // 上限同时受终端宽度约束, 避免侧边栏超出屏幕挤掉消息区
+        const int screenW = ftxui::Terminal::Size().dimx;
+        const int maxW    = std::min(kSidebarMaxWidth, std::max(kSidebarMinWidth, screenW - 10));
+        sidebarWidth_     = std::clamp(newWidth, kSidebarMinWidth, maxW);
+        return true;
+    }
+    // 在手柄上按下左键 -> 进入拖拽
+    if (mouse.button == Mouse::Left && mouse.motion == Mouse::Pressed
+        && sidebarHandleBox_.Contain(mouse.x, mouse.y)) {
+        sidebarResizing_         = true;
+        sidebarResizeStartX_     = mouse.x;
+        sidebarResizeStartWidth_ = sidebarWidth_;
+        return true;
     }
     return false;
 }
