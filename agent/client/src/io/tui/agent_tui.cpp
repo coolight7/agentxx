@@ -663,10 +663,6 @@ void AgentTUI::onDelta(const agentxx::agent::Delta& delta) {
                 messages_.push_back(std::move(m));
             }
         } break;
-        case Type::TurnStart: {
-            std::lock_guard<std::mutex> lock(mutex_);
-            isStreaming_ = true;
-        } break;
         case Type::NodeStart: {
             std::lock_guard<std::mutex> lock(mutex_);
             currentNodeName_ = delta.nodeName;
@@ -676,6 +672,12 @@ void AgentTUI::onDelta(const agentxx::agent::Delta& delta) {
             if (currentNodeName_ == delta.nodeName) {
                 currentNodeName_.clear();
             }
+            messages_.back().startTimeMs = delta.startTimeMs;
+            messages_.back().durationMs  = delta.durationMs;
+        } break;
+        case Type::TurnStart: {
+            std::lock_guard<std::mutex> lock(mutex_);
+            isStreaming_ = true;
         } break;
         case Type::TurnEnd: {
             std::lock_guard<std::mutex> lock(mutex_);

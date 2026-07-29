@@ -358,132 +358,142 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
     auto cancelToken = std::make_shared<neograph::graph::CancelToken>();
     session->setCancelToken(cancelToken);
 
-    auto internalEventCallback =
-        [session, emitDelta, ioPtr](const neograph::graph::GraphEvent& event) {
-            using T = neograph::graph::GraphEvent::Type;
-            switch (event.type) {
-                case T::LLM_TOKEN: {
-                    std::string token;
-                    bool        isThinking = false;
-                    if (event.data.is_string()) {
-                        token = event.data.get<std::string>();
-                    } else if (event.data.is_object()) {
-                        neograph::ChatStreamChunk chunk;
-                        neograph::from_json(event.data, chunk);
-                        token      = std::move(chunk.data);
-                        isThinking = (chunk.type == neograph::ChatStreamChunk::TYPE_THINKING);
-                    }
-                    emitDelta(Delta{
-                        .type = isThinking ? Delta::Type::ThinkingToken : Delta::Type::TextToken,
-                        .text = std::move(token),
-                    });
-                } break;
-                case T::CHANNEL_WRITE: {
-                    auto chan  = event.data.value("channel", std::string{});
-                    auto value = event.data.value("value", neograph::json{});
-                    if (chan != "messages" || !value.is_array()) {
-                        break;
-                    }
-                    bool hasLLMOutput = false;
-                    for (const auto& jm : value) {
-                        auto role = jm.value("role", std::string{});
-                        if (role == "assistant" && jm.contains("tool_calls")) {
-                            hasLLMOutput = true;
-                            auto msgId   = session->appendHistory(jm);
-                            for (const auto& tc : jm["tool_calls"]) {
-                                emitDelta(Delta{
-                                    .type       = Delta::Type::ToolStart,
-                                    .msgId      = msgId,
-                                    .toolName   = tc.value("name", std::string{}),
-                                    .toolCallId = tc.value("id", std::string{}),
-                                    .arguments  = tc.value("arguments", std::string{}),
-                                });
-                            }
-                        } else if (role == "tool") {
-                            auto content  = jm.value("content", std::string{});
-                            bool hasError = false;
-                            try {
-                                auto parsed = neograph::json::parse(content);
-                                hasError    = parsed.is_object() && parsed.contains("error");
-                            } catch (...) {
-                            }
-                            auto toolName   = jm.value("tool_name", std::string{});
-                            auto toolCallId = jm.value("tool_call_id", std::string{});
-                            if (!toolCallId.empty()) {
-                                continue;
-                            }
-                            auto historyMsg = jm;
-                            if (false == hasError && toolName == "filesystem_edit_text_file") {
-                                // 生成 diff 记录
-                                for (auto it = session->fullHistory.rbegin();
-                                     it != session->fullHistory.rend();
-                                     ++it) {
-                                    const auto& hd = it->data;
-                                    if (hd.value("role", std::string{}) != "assistant"
-                                        || !hd.contains("tool_calls")) {
+    auto internalEventCallback = [session, emitDelta, ioPtr, start_time_ms](
+                                     const neograph::graph::GraphEvent& event
+                                 ) {
+        using T = neograph::graph::GraphEvent::Type;
+        switch (event.type) {
+            case T::LLM_TOKEN: {
+                std::string token;
+                bool        isThinking = false;
+                if (event.data.is_string()) {
+                    token = event.data.get<std::string>();
+                } else if (event.data.is_object()) {
+                    neograph::ChatStreamChunk chunk;
+                    neograph::from_json(event.data, chunk);
+                    token      = std::move(chunk.data);
+                    isThinking = (chunk.type == neograph::ChatStreamChunk::TYPE_THINKING);
+                }
+                emitDelta(Delta{
+                    .type = isThinking ? Delta::Type::ThinkingToken : Delta::Type::TextToken,
+                    .text = std::move(token),
+                });
+            } break;
+            case T::CHANNEL_WRITE: {
+                auto chan  = event.data.value("channel", std::string{});
+                auto value = event.data.value("value", neograph::json{});
+                if (chan != "messages" || !value.is_array()) {
+                    break;
+                }
+                bool hasLLMOutput = false;
+                for (const auto& jm : value) {
+                    auto role = jm.value("role", std::string{});
+                    if (role == "assistant" && jm.contains("tool_calls")) {
+                        hasLLMOutput = true;
+                        auto msgId   = session->appendHistory(jm);
+                        for (const auto& tc : jm["tool_calls"]) {
+                            emitDelta(Delta{
+                                .type       = Delta::Type::ToolStart,
+                                .msgId      = msgId,
+                                .toolName   = tc.value("name", std::string{}),
+                                .toolCallId = tc.value("id", std::string{}),
+                                .arguments  = tc.value("arguments", std::string{}),
+                            });
+                        }
+                    } else if (role == "tool") {
+                        auto content  = jm.value("content", std::string{});
+                        bool hasError = false;
+                        try {
+                            auto parsed = neograph::json::parse(content);
+                            hasError    = parsed.is_object() && parsed.contains("error");
+                        } catch (...) {
+                        }
+                        auto toolName   = jm.value("tool_name", std::string{});
+                        auto toolCallId = jm.value("tool_call_id", std::string{});
+                        if (!toolCallId.empty()) {
+                            continue;
+                        }
+                        auto historyMsg = jm;
+                        if (false == hasError && toolName == "filesystem_edit_text_file") {
+                            // 生成 diff 记录
+                            for (auto it = session->fullHistory.rbegin();
+                                 it != session->fullHistory.rend();
+                                 ++it) {
+                                const auto& hd = it->data;
+                                if (hd.value("role", std::string{}) != "assistant"
+                                    || !hd.contains("tool_calls")) {
+                                    continue;
+                                }
+                                bool foundArgs = false;
+                                for (const auto& tc : hd["tool_calls"]) {
+                                    if (tc.value("id", std::string{}) != toolCallId) {
                                         continue;
                                     }
-                                    bool foundArgs = false;
-                                    for (const auto& tc : hd["tool_calls"]) {
-                                        if (tc.value("id", std::string{}) != toolCallId) {
-                                            continue;
-                                        }
-                                        foundArgs = true;
-                                        try {
-                                            auto args = neograph::json::parse(
-                                                tc.value("arguments", std::string{})
-                                            );
-                                            historyMsg["diff"] = agentxx::util::makeUnifiedDiff(
-                                                args.value("old_str", std::string{}),
-                                                args.value("new_str", std::string{}),
-                                                args.value("path", std::string{})
-                                            );
-                                        } catch (...) {
-                                        }
-                                        break;
+                                    foundArgs = true;
+                                    try {
+                                        auto args = neograph::json::parse(
+                                            tc.value("arguments", std::string{})
+                                        );
+                                        historyMsg["diff"] = agentxx::util::makeUnifiedDiff(
+                                            args.value("old_str", std::string{}),
+                                            args.value("new_str", std::string{}),
+                                            args.value("path", std::string{})
+                                        );
+                                    } catch (...) {
                                     }
-                                    if (foundArgs) {
-                                        break;
-                                    }
+                                    break;
+                                }
+                                if (foundArgs) {
+                                    break;
                                 }
                             }
-                            session->appendHistory(historyMsg);
-                            emitDelta(Delta{
-                                .type       = Delta::Type::ToolEnd,
-                                .toolName   = toolName,
-                                .toolCallId = toolCallId,
-                                .result     = content,
-                                .hasError   = hasError,
-                            });
-                        } else if (role == "assistant") {
-                            hasLLMOutput = true;
-                            session->appendHistory(jm);
                         }
-                    }
-                    // llm node 执行完成，推送上下文统计更新
-                    if (hasLLMOutput && ioPtr && session->contextStats) {
-                        ioPtr->sendToPeer(WireContextStats{
-                            session->contextStats->contextTokens.load(std::memory_order_relaxed),
-                            session->contextStats->maxContextTokens.load(std::memory_order_relaxed),
+                        session->appendHistory(historyMsg);
+                        emitDelta(Delta{
+                            .type       = Delta::Type::ToolEnd,
+                            .toolName   = toolName,
+                            .toolCallId = toolCallId,
+                            .result     = content,
+                            .hasError   = hasError,
                         });
+                    } else if (role == "assistant") {
+                        hasLLMOutput = true;
+                        session->appendHistory(jm);
                     }
-                } break;
-                case T::NODE_START: {
-                    emitDelta(Delta{
-                        .type     = Delta::Type::NodeStart,
-                        .nodeName = event.node_name,
+                }
+                // llm node 执行完成，推送上下文统计更新
+                if (hasLLMOutput && ioPtr && session->contextStats) {
+                    ioPtr->sendToPeer(WireContextStats{
+                        session->contextStats->contextTokens.load(std::memory_order_relaxed),
+                        session->contextStats->maxContextTokens.load(std::memory_order_relaxed),
                     });
-                } break;
-                case T::NODE_END: {
-                    emitDelta(Delta{
-                        .type     = Delta::Type::NodeEnd,
-                        .nodeName = event.node_name,
-                    });
-                } break;
-                default:
-                    break;
-            }
-        };
+                }
+            } break;
+            case T::NODE_START: {
+                emitDelta(Delta{
+                    .type     = Delta::Type::NodeStart,
+                    .nodeName = event.node_name,
+                });
+            } break;
+            case T::NODE_END: {
+                // 计算轮次持续时间
+                const int32_t end_time_ms
+                    = static_cast<int32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                               std::chrono::steady_clock::now().time_since_epoch()
+                    )
+                                               .count());
+                const int32_t duration_ms = end_time_ms - start_time_ms;
+                emitDelta(Delta{
+                    .type        = Delta::Type::NodeEnd,
+                    .nodeName    = event.node_name,
+                    .startTimeMs = start_time_ms,
+                    .durationMs  = duration_ms,
+                });
+            } break;
+            default:
+                break;
+        }
+    };
 
     auto eventCallback = agentxx::middleware::EventBridge::make(
         agentContext->agentConfig->agentName,

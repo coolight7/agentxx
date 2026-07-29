@@ -292,13 +292,14 @@ ftxui::Element AgentTUI::renderContextOverlay() {
         }
     }
 
-    auto title = fmt::format(" LLM Context ({}) ", (msgs.is_array() ? msgs.size() : 0));
-
+    auto title         = fmt::format(" LLM Context ({}) ", (msgs.is_array() ? msgs.size() : 0));
+    auto contentWidget = Scrollable([&]() -> Element {
+        return vbox(std::move(items)) | yframe | vscroll_indicator;
+    });
     return vbox({
                text(title) | bold | inverted,
                separator(),
-               vbox(std::move(items)) | yframe | vscroll_indicator
-                   | size(HEIGHT, LESS_THAN, maxVisible),
+               contentWidget.Render() | size(HEIGHT, LESS_THAN, maxVisible),
                separator(),
                text(" [Up/Down] Scroll  [Esc] Close ") | center | dim,
            })

@@ -58,6 +58,8 @@ ftxui::Element AgentTUI::renderMessages() {
                 pushBlock(paragraph(msg.text) | color(theme_.assistantColor), true);
             } break;
             case Message::Role::Thinking: {
+                // - 如果这个 Thinking
+                // 消息正在输出，默认为自动展开状态并跟随滚动，直到输出该消息完成时自动折叠
                 const bool expanded = !msg.collapsed;
                 Elements   lines;
                 Elements   header;
@@ -66,32 +68,21 @@ ftxui::Element AgentTUI::renderMessages() {
 
                 // 如果设置了用时，显示格式为 [Thinking] {用时} {内容/缩略内容}
                 std::string durationStr;
-                if (msg.durationMs > 0 || msg.startTimeMs > 0) {
+                if (msg.durationMs > 0) {
                     int32_t durationMs = msg.durationMs;
-                    if (durationMs <= 0 && msg.startTimeMs > 0) {
-                        // 使用 start time 计算当前时刻与开始时刻的差值
-                        const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                             std::chrono::steady_clock::now().time_since_epoch()
-                        )
-                                             .count();
-                        durationMs = static_cast<int32_t>(now - msg.startTimeMs);
-                    }
                     if (durationMs > 0) {
-                        durationStr = fmt::format("({})", formatDurationMilliseconds(durationMs));
+                        durationStr = formatDurationMilliseconds(durationMs);
                     }
+                }
+
+                // 展开模式：在 header 后追加 duration
+                if (!durationStr.empty()) {
+                    header.push_back(text(durationStr) | color(theme_.thinkingColor));
+                    header.push_back(text(" "));
                 }
 
                 if (!expanded) {
                     header.push_back(text(oneLinePreview(msg.text)) | color(theme_.thinkingColor));
-                    if (!durationStr.empty()) {
-                        header.insert(header.begin(), text(durationStr) | color(theme_.hintColor));
-                    }
-                } else {
-                    // 展开模式：在 header 后追加 duration
-                    if (!durationStr.empty()) {
-                        header.push_back(text(" ") | color(theme_.hintColor));
-                        header.push_back(text(durationStr) | color(theme_.hintColor));
-                    }
                 }
                 lines.push_back(hbox(std::move(header)));
                 if (expanded) {
@@ -179,7 +170,7 @@ ftxui::Element AgentTUI::renderMessages() {
         }
 
         if (currentTokenRole_ == Message::Role::Thinking) {
-            // 流式输出中的 Thinking：显示时间统计（如果存在）
+            // 流式输出中的 Thinking：自动展开并显示完整内容，跟随滚动
             std::string durationStr;
             if (currentMsg && (currentMsg->durationMs > 0 || currentMsg->startTimeMs > 0)) {
                 int32_t durationMs = currentMsg->durationMs;
@@ -195,14 +186,18 @@ ftxui::Element AgentTUI::renderMessages() {
                 }
             }
 
-            pushBlock(
-                hbox({
-                    text("[Thinking] ") | color(theme_.thinkingColor),
-                    text(durationStr.empty() ? "" : (" " + durationStr)) | color(theme_.hintColor),
-                    paragraph(oneLinePreview(currentToken_, 80)) | color(theme_.thinkingColor),
-                }),
-                false
-            );
+            Elements lines;
+            Elements header;
+            header.push_back(text("- ") | color(theme_.thinkingColor));
+            header.push_back(text("[Thinking] ") | color(theme_.thinkingColor));
+            if (!durationStr.empty()) {
+                header.push_back(text(" "));
+                header.push_back(text(durationStr) | color(theme_.thinkingColor));
+                header.push_back(text(" "));
+            }
+            lines.push_back(hbox(std::move(header)));
+            lines.push_back(paragraph(currentToken_) | color(theme_.thinkingColor));
+            pushBlock(vbox(std::move(lines)), false);
         } else {
             pushBlock(paragraph(currentToken_) | color(theme_.assistantColor), false);
         }
