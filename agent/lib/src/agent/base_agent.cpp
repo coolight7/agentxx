@@ -279,6 +279,11 @@ void BaseAgent::selectModel(std::string_view threadId, std::string_view modelNam
     }
 }
 
+void BaseAgent::collectAppendComponentInfo(std::vector<
+                                           AppendComponentNotification>& /*notifications*/) {
+    // BaseAgent: 空实现，无需收集信息
+}
+
 std::string BaseAgent::getCurrentModelName(std::string_view threadId) const {
     std::string selected;
     if (auto session = agentContext->sessions->get(threadId)) {
@@ -313,9 +318,11 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
     auto ioPtr = session->io;
 
     // 记录轮次开始时间 (毫秒)
-    const int32_t start_time_ms = static_cast<int32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
-                                           std::chrono::steady_clock::now().time_since_epoch())
-                                           .count());
+    const int32_t start_time_ms
+        = static_cast<int32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                   std::chrono::steady_clock::now().time_since_epoch()
+        )
+                                   .count());
 
     auto emitDelta = [&](Delta delta) {
         delta.seq = session->deltaSeq.fetch_add(1, std::memory_order_acq_rel) + 1;
@@ -692,29 +699,31 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
     });
 
     // 计算轮次持续时间
-    const int32_t end_time_ms = static_cast<int32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
-                                   std::chrono::steady_clock::now().time_since_epoch())
+    const int32_t end_time_ms
+        = static_cast<int32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                   std::chrono::steady_clock::now().time_since_epoch()
+        )
                                    .count());
-    const double duration_sec = static_cast<double>(end_time_ms - start_time_ms) / 1000.0;
+    const int32_t duration_ms = end_time_ms - start_time_ms;
 
     // 发送 TurnEnd Delta，包含时长统计
     emitDelta(Delta{
-        .type           = Delta::Type::TurnEnd,
-        .historyCount   = session->chainHash.count(),
-        .tailHash       = session->chainHash.tailHex(),
-        .startTimeMs    = start_time_ms,
-        .durationSeconds = duration_sec,
+        .type         = Delta::Type::TurnEnd,
+        .historyCount = session->chainHash.count(),
+        .tailHash     = session->chainHash.tailHex(),
+        .startTimeMs  = start_time_ms,
+        .durationMs   = duration_ms,
     });
 
     // 通过 ioPtr 发送 TurnResult (供远程模式使用)
     if (ioPtr) {
         auto resultMsg = WireTurnResult{
-            .threadId      = std::string{threadId},
-            .hasError      = turnResult.hasError,
-            .errorMessage  = turnResult.errorMessage,
-            .interrupted   = turnResult.interrupted,
-            .startTimeMs   = start_time_ms,
-            .durationSeconds = duration_sec,
+            .threadId     = std::string{threadId},
+            .hasError     = turnResult.hasError,
+            .errorMessage = turnResult.errorMessage,
+            .interrupted  = turnResult.interrupted,
+            .startTimeMs  = start_time_ms,
+            .durationMs   = duration_ms,
         };
         ioPtr->sendToPeer(std::move(resultMsg));
     }

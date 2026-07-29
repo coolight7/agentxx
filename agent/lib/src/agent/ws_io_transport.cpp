@@ -374,7 +374,7 @@ std::string WsAgentIOTransport::serialize(const WireMessage& msg) {
             } else if constexpr (std::is_same_v<T, WireHelloAck>) {
                 return remote::makeHelloAck(m.ok, m.threadId, m.tailHash, m.models).dump();
             } else if constexpr (std::is_same_v<T, WireUserInput>) {
-                return remote::makeUserInput(m.threadId, m.text, m.isFirstMsg, m.model).dump();
+                return remote::makeUserInput(m.threadId, m.text).dump();
             } else if constexpr (std::is_same_v<T, WireCancel>) {
                 return remote::makeCancel(m.threadId).dump();
             } else if constexpr (std::is_same_v<T, WireSelectModel>) {
@@ -401,6 +401,10 @@ std::string WsAgentIOTransport::serialize(const WireMessage& msg) {
                 return remote::makeGetModel(m.threadId).dump();
             } else if constexpr (std::is_same_v<T, WireModelInfo>) {
                 return remote::makeModelInfo(m.currentModel, m.models).dump();
+            } else if constexpr (std::is_same_v<T, WireGetAppendComponentInfo>) {
+                return remote::makeGetAppendComponentInfo(m.threadId).dump();
+            } else if constexpr (std::is_same_v<T, WireAppendComponentInfo>) {
+                return remote::makeAppendComponentInfo(m.notifications).dump();
             } else {
                 return "{}";
             }
@@ -474,10 +478,8 @@ std::optional<WireMessage> WsAgentIOTransport::deserialize(std::string_view json
         return WireMessage{std::move(hello)};
     } else if (t == remote::MsgType::UserInput) {
         WireUserInput input;
-        input.threadId   = j.value("thread", std::string{});
-        input.text       = j.value("text", std::string{});
-        input.isFirstMsg = j.value("is_first_msg", false);
-        input.model      = j.value("model", std::string{});
+        input.threadId = j.value("thread", std::string{});
+        input.text     = j.value("text", std::string{});
         return WireMessage{std::move(input)};
     } else if (t == remote::MsgType::Cancel) {
         WireCancel cancel;
@@ -517,6 +519,14 @@ std::optional<WireMessage> WsAgentIOTransport::deserialize(std::string_view json
                 }
             }
         }
+        return WireMessage{std::move(info)};
+    } else if (t == remote::MsgType::GetAppendComponentInfo) {
+        WireGetAppendComponentInfo req;
+        req.threadId = j.value("thread", std::string{});
+        return WireMessage{std::move(req)};
+    } else if (t == remote::MsgType::AppendComponentInfo) {
+        WireAppendComponentInfo info;
+        info.notifications = remote::appendComponentInfoFromJson(j);
         return WireMessage{std::move(info)};
     }
     // Pong / Ping: 心跳内部处理, 不转发给调用方

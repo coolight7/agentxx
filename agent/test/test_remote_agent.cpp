@@ -292,7 +292,7 @@ static asio::awaitable<void> test_remote_transport_loopback() {
     XX_TEST_EXPECT_TRUE(ok);
 
     if (ok) {
-        agentxx::agent::WireUserInput input{"session", "ping", false, ""};
+        agentxx::agent::WireUserInput input{"session", "ping"};
         transport->send(agentxx::agent::WireMessage{input});
 
         auto recvMsg = co_await transport->recv();
@@ -390,7 +390,7 @@ static asio::awaitable<void> test_remote_client_handshake() {
         if (ok) {
             asio::co_spawn(ex, io->runTransportLoop(), asio::detached);
 
-            io->sendToPeer(agentxx::agent::WireUserInput{"session", "hi", true, ""});
+            io->sendToPeer(agentxx::agent::WireUserInput{"session", "hi"});
             co_await testSleep(ex, std::chrono::milliseconds{500});
 
             XX_TEST_EXPECT_TRUE(io->deltaCount() > 0);
@@ -672,7 +672,7 @@ static asio::awaitable<void> test_remote_client_reconnect() {
 
     asio::co_spawn(ex, io->runTransportLoop(), asio::detached);
 
-    io->sendToPeer(agentxx::agent::WireUserInput{"session", "msg1", true, ""});
+    io->sendToPeer(agentxx::agent::WireUserInput{"session", "msg1"});
 
     bool reconnected = false;
     for (int i = 0; i < 100; ++i) {
@@ -701,7 +701,7 @@ static asio::awaitable<void> test_channel_transport_loopback() {
     auto& clientT = *pair.first;
     auto& serverT = *pair.second;
 
-    agentxx::agent::WireUserInput msg1{"session", "hello", false, ""};
+    agentxx::agent::WireUserInput msg1{"session", "hello"};
     clientT.send(agentxx::agent::WireMessage{msg1});
     auto r1 = co_await serverT.recv();
     XX_TEST_EXPECT_TRUE(r1.has_value());
@@ -843,7 +843,7 @@ static asio::awaitable<void> test_channel_client_integration() {
 
     co_await testSleep(ex, std::chrono::milliseconds{100});
 
-    io->sendToPeer(agentxx::agent::WireUserInput{"session", "hi", true, ""});
+    io->sendToPeer(agentxx::agent::WireUserInput{"session", "hi"});
     co_await testSleep(ex, std::chrono::milliseconds{300});
 
     XX_TEST_EXPECT_TRUE(io->deltaCount() > 0);
@@ -923,7 +923,7 @@ static asio::awaitable<void> test_remote_echo() {
 
         for (int i = 0; i < 3; ++i) {
             io->sendToPeer(
-                agentxx::agent::WireUserInput{"session", "m" + std::to_string(i), i == 0, ""}
+                agentxx::agent::WireUserInput{"session", "m" + std::to_string(i)}
             );
             co_await testSleep(ex, std::chrono::milliseconds{200});
         }
@@ -956,7 +956,7 @@ static asio::awaitable<void> test_remote_concurrent_writes() {
         threads.emplace_back([clientPtr, t, perThread]() {
             for (int i = 0; i < perThread; ++i) {
                 agentxx::agent::WireUserInput
-                    msg{"session", std::to_string(t) + "-" + std::to_string(i), false, ""};
+                    msg{"session", std::to_string(t) + "-" + std::to_string(i)};
                 clientPtr->send(agentxx::agent::WireMessage{std::move(msg)});
             }
         });
@@ -1125,7 +1125,7 @@ static asio::awaitable<void> test_remote_cancel() {
     if (ok) {
         asio::co_spawn(ex, io->runTransportLoop(), asio::detached);
 
-        io->sendToPeer(agentxx::agent::WireUserInput{"session", "hi", true, ""});
+        io->sendToPeer(agentxx::agent::WireUserInput{"session", "hi"});
         io->sendToPeer(agentxx::agent::WireCancel{"session"});
         co_await testSleep(ex, std::chrono::milliseconds{500});
 
@@ -1216,7 +1216,7 @@ static asio::awaitable<void> test_remote_reconnect_sync() {
 
     asio::co_spawn(ex, io->runTransportLoop(), asio::detached);
 
-    io->sendToPeer(agentxx::agent::WireUserInput{"session", "m1", true, ""});
+    io->sendToPeer(agentxx::agent::WireUserInput{"session", "m1"});
 
     bool gotSync = false;
     for (int i = 0; i < 100; ++i) {
