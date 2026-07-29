@@ -58,20 +58,21 @@ ftxui::Element AgentTUI::renderMessages() {
                 pushBlock(paragraph(msg.text) | color(theme_.assistantColor), true);
             } break;
             case Message::Role::Thinking: {
-                const bool expanded   = !msg.collapsed;
+                const bool expanded = !msg.collapsed;
                 Elements   lines;
                 Elements   header;
-                header.push_back(text(expanded ? "- " : "+ ") | color(theme_.hintColor));
+                header.push_back(text(expanded ? "- " : "+ ") | color(theme_.thinkingColor));
                 header.push_back(text("[Thinking] ") | color(theme_.thinkingColor));
 
                 // 如果设置了用时，显示格式为 [Thinking] {用时} {内容/缩略内容}
                 std::string durationStr;
-                if (msg.durationSeconds > 0.0 || msg.startTimeMs > 0) {
-                    int32_t durationMs = static_cast<int32_t>(msg.durationSeconds * 1000);
+                if (msg.durationMs > 0 || msg.startTimeMs > 0) {
+                    int32_t durationMs = msg.durationMs;
                     if (durationMs <= 0 && msg.startTimeMs > 0) {
                         // 使用 start time 计算当前时刻与开始时刻的差值
                         const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                             std::chrono::steady_clock::now().time_since_epoch())
+                                             std::chrono::steady_clock::now().time_since_epoch()
+                        )
                                              .count();
                         durationMs = static_cast<int32_t>(now - msg.startTimeMs);
                     }
@@ -96,35 +97,42 @@ ftxui::Element AgentTUI::renderMessages() {
                 if (expanded) {
                     lines.push_back(paragraph(msg.text) | color(theme_.thinkingColor));
                 }
-                Element block = vbox(std::move(lines)) | reflect(collapsibleBoxes_[collapsibleOrdinal]);
+                Element block
+                    = vbox(std::move(lines)) | reflect(collapsibleBoxes_[collapsibleOrdinal]);
                 ++collapsibleOrdinal;
                 pushBlock(std::move(block), true);
                 break;
             }
             case Message::Role::System: {
-                pushBlock(paragraph(msg.text) | color(theme_.systemColor), true);
+                pushBlock(
+                    hbox({
+                        text("# ") | color(theme_.systemColor),
+                        paragraph(msg.text) | color(theme_.systemColor),
+                    }),
+                    true
+                );
             } break;
             case Message::Role::Tool: {
                 const bool expanded   = !msg.collapsed;
                 const bool isEditTool = (msg.toolName == "filesystem_edit_text_file");
                 Elements   lines;
                 Elements   header;
-                header.push_back(text(expanded ? "- " : "+ ") | color(theme_.hintColor));
+                header.push_back(text(expanded ? "- " : "+ ") | color(theme_.toolColor));
                 header.push_back(text("[Tool] ") | color(theme_.toolColor));
                 header.push_back(text(msg.toolName) | color(theme_.toolColor));
                 if (!expanded) {
                     if (!msg.toolFinished) {
-                        header.push_back(text("  running...") | color(theme_.hintColor) | dim);
+                        header.push_back(text("  running...") | color(theme_.hintColor));
                     } else if (msg.toolHasError) {
                         header.push_back(text("  error: ") | color(theme_.systemColor));
                         header.push_back(
-                            text(oneLinePreview(msg.toolResult)) | color(theme_.systemColor) | dim
+                            text(oneLinePreview(msg.toolResult)) | color(theme_.systemColor)
                         );
                     } else if (isEditTool) {
                         appendEditToolHeader(msg, header);
                     } else {
                         header.push_back(
-                            text("  " + oneLinePreview(msg.toolResult)) | color(theme_.toolColor) | dim
+                            text("  " + oneLinePreview(msg.toolResult)) | color(theme_.toolColor)
                         );
                     }
                 }
@@ -147,12 +155,13 @@ ftxui::Element AgentTUI::renderMessages() {
                                 paragraph(msg.toolResult) | color(rc),
                             }));
                         } else {
-                            lines.push_back(text("  running...") | color(theme_.hintColor) | dim);
+                            lines.push_back(text("  running...") | color(theme_.hintColor));
                         }
                     }
                 }
 
-                Element block = vbox(std::move(lines)) | reflect(collapsibleBoxes_[collapsibleOrdinal]);
+                Element block
+                    = vbox(std::move(lines)) | reflect(collapsibleBoxes_[collapsibleOrdinal]);
                 ++collapsibleOrdinal;
                 pushBlock(std::move(block), true);
             } break;
@@ -168,15 +177,16 @@ ftxui::Element AgentTUI::renderMessages() {
                 break;
             }
         }
-        
+
         if (currentTokenRole_ == Message::Role::Thinking) {
             // 流式输出中的 Thinking：显示时间统计（如果存在）
             std::string durationStr;
-            if (currentMsg && (currentMsg->durationSeconds > 0.0 || currentMsg->startTimeMs > 0)) {
-                int32_t durationMs = static_cast<int32_t>(currentMsg->durationSeconds * 1000);
+            if (currentMsg && (currentMsg->msg.durationMs > 0 || currentMsg->startTimeMs > 0)) {
+                int32_t durationMs = currentMsg->msg.durationMs;
                 if (durationMs <= 0 && currentMsg->startTimeMs > 0) {
                     const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                         std::chrono::steady_clock::now().time_since_epoch())
+                                         std::chrono::steady_clock::now().time_since_epoch()
+                    )
                                          .count();
                     durationMs = static_cast<int32_t>(now - currentMsg->startTimeMs);
                 }
@@ -207,7 +217,8 @@ ftxui::Element AgentTUI::renderMessages() {
   / /| |/ / __/ __/ /  |/ / / /    __/ /___/ /_
  / ___ / /_/ / /___/ /|  / / /    /_  __/_  __/
 /_/  |_\____/_____/_/ |_/ /_/      /_/   /_/   
-)_") | bold | color(theme_.accentColor) | center,
+)_") | bold | color(theme_.accentColor)
+                | center,
             text("Type a message to start. [F2] switch model, [Esc] cancel, "
                  "[Ctrl+C] quit.")
                 | dim | center,

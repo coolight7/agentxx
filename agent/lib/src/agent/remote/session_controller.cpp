@@ -127,6 +127,15 @@ void SessionController::onPeerMessage(WireMessage msg) {
                     }
                 }
                 sendToPeer(WireModelInfo{std::move(currentModel), std::move(models)});
+            } else if constexpr (std::is_same_v<T, WireGetAppendComponentInfo>) {
+                auto agent = agent_.lock();
+                if (!agent) {
+                    return;
+                }
+                // 客户端拉取加载的组件信息: 收集已加载的 MCP/Skill/Memory 并回填
+                std::vector<AppendComponentNotification> notifications;
+                agent->collectAppendComponentInfo(notifications);
+                sendToPeer(WireAppendComponentInfo{std::move(notifications)});
             }
         },
         std::move(msg)

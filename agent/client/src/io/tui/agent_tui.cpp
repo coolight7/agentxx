@@ -648,17 +648,17 @@ void AgentTUI::onDelta(const agentxx::agent::Delta& delta) {
             isStreaming_ = false;
 
             // 创建一条系统消息记录本轮运行的统计信息
-            if (delta.durationSeconds > 0.0 || delta.startTimeMs > 0) {
+            if (delta.durationMs > 0 || delta.startTimeMs > 0) {
                 Message statMsg;
                 statMsg.role = Message::Role::System;
                 statMsg.text = fmt::format(
                     "{} · {} · {}",
                     cachedModelName_,
-                    formatDurationMilliseconds(static_cast<int32_t>(delta.durationSeconds * 1000)),
+                    formatDurationMilliseconds(static_cast<int32_t>(delta.durationMs)),
                     formatTimestampMilliseconds(delta.startTimeMs)
                 );
-                statMsg.durationSeconds = delta.durationSeconds;
-                statMsg.startTimeMs     = delta.startTimeMs;
+                statMsg.durationMs  = delta.durationMs;
+                statMsg.startTimeMs = delta.startTimeMs;
                 messages_.push_back(std::move(statMsg));
             }
 
@@ -720,8 +720,8 @@ void AgentTUI::onSync(const agentxx::agent::SyncPayload& payload) {
                         thinkMsg.text      = reasoning;
                         thinkMsg.collapsed = true;
                         // 从原始数据中读取时间信息（如果有）
-                        thinkMsg.startTimeMs     = d.value("start_time_ms", int32_t{0});
-                        thinkMsg.durationSeconds = d.value("duration_seconds", double{0.0});
+                        thinkMsg.startTimeMs = d.value("start_time_ms", int32_t{0});
+                        thinkMsg.durationMs  = d.value("duration_ms", int32_t{0});
                         messages_.push_back(std::move(thinkMsg));
                     }
                 }
@@ -733,8 +733,8 @@ void AgentTUI::onSync(const agentxx::agent::SyncPayload& payload) {
                 m.toolFinished = true;
                 m.collapsed    = true;
                 // 从原始数据中读取时间信息（如果有）
-                m.startTimeMs     = d.value("start_time_ms", int32_t{0});
-                m.durationSeconds = d.value("duration_seconds", double{0.0});
+                m.startTimeMs = d.value("start_time_ms", int32_t{0});
+                m.durationMs  = d.value("duration_ms", int32_t{0});
                 try {
                     auto parsed    = neograph::json::parse(m.toolResult);
                     m.toolHasError = parsed.is_object() && parsed.contains("error");
@@ -755,8 +755,8 @@ void AgentTUI::onSync(const agentxx::agent::SyncPayload& payload) {
                 m.role = Message::Role::System;
                 m.text = d.value("content", std::string{});
                 // 从原始数据中读取时间信息（如果有）
-                m.startTimeMs     = d.value("start_time_ms", int32_t{0});
-                m.durationSeconds = d.value("duration_seconds", double{0.0});
+                m.startTimeMs = d.value("start_time_ms", int32_t{0});
+                m.durationMs  = d.value("duration_ms", int32_t{0});
             }
             if (false == skipPush) {
                 messages_.push_back(std::move(m));

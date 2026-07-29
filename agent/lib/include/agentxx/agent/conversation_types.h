@@ -13,6 +13,20 @@ struct HistoryMessage {
     neograph::json data;
 };
 
+/// 加载组件通知：显示加载的 MCP/Skill/Memory 信息
+struct AppendComponentNotification {
+    enum class Type : uint8_t {
+        Mcp,    // MCP 工具
+        Skill,  // Skill
+        Memory, // Memory 文件
+    };
+
+    Type        type;
+    std::string name;         // 名称 (MCP 命名空间 / Skill 名 / Memory 文件名)
+    bool        success;      // 是否加载成功
+    std::string errorMessage; // 失败时的错误信息
+};
+
 class ChainHash {
 public:
 
@@ -52,12 +66,12 @@ struct Delta {
     std::string result;
     bool        hasError = false;
 
-    uint64_t    historyCount    = 0;
+    uint64_t    historyCount = 0;
     std::string tailHash;
-    
+
     // 运行时统计 (仅 TurnEnd 使用)
-    int32_t     startTimeMs     = 0;   // 开始时间戳 (毫秒)
-    double      durationSeconds = 0.0; // 运行时长 (秒)
+    int32_t startTimeMs = 0; // 开始时间戳 (毫秒)
+    int32_t durationMs  = 0; // 运行时长 (毫秒)
 };
 
 struct SyncPayload {

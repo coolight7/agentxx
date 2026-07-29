@@ -42,9 +42,9 @@ asio::awaitable<void>
 
     XX_LOGD(
         R"_(
-┏━━━━━━ Context File Load ━━━━━━┓
+┏━━━━━━ Memory File Load ━━━━━━┓
 {}
-┗━━━━━━ Context File Load ━━━━━━┛
+┗━━━━━━ Memory File Load ━━━━━━┛
 )_",
         logContent
     );
