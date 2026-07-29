@@ -93,7 +93,7 @@ path/to/agentxx_test string_util regex
     - release_build: `agent/build/linux-release/` 或 `agent/build/windows-release/`
     - android_release_build: `agent/build/android-release/`
     - 注意，修改文件时不建议修改 build 目录内的文件，编译时可能被覆盖
-- 为了减少编译输出内容展示，只捕捉关键词，可以参考: `./path/to/linux_debug_build.sh 2>&1 | grep -E "Built target|error|warn" | tail -10`
+- 为了减少编译输出内容展示，只捕捉关键词，可以参考: `./path/to/linux_debug_build.sh 2>&1 | grep -E -i "Built target|error|warn" | tail -10`
 
 ## 常见问题
 - 如果遇到编译器崩溃 (ICE)，直接重新运行编译尝试即可，如果多次运行都崩溃，则可能确实代码有问题，需要重新检查一下。
