@@ -54,15 +54,12 @@ void AgentIOBase::requestSelectModel(std::string_view threadId, std::string_view
     sendToPeer(WireSelectModel{std::string{threadId}, std::string{model}});
 }
 
-void AgentIOBase::sendUserInput(
-    std::string_view threadId,
-    std::string_view text,
-    bool             isFirstMsg,
-    std::string_view model
-) {
-    sendToPeer(
-        WireUserInput{std::string{threadId}, std::string{text}, isFirstMsg, std::string{model}}
-    );
+void AgentIOBase::requestAppendComponentInfo(std::string_view threadId) {
+    sendToPeer(WireGetAppendComponentInfo{std::string{threadId}});
+}
+
+void AgentIOBase::sendUserInput(std::string_view threadId, std::string_view text) {
+    sendToPeer(WireUserInput{std::string{threadId}, std::string{text}});
 }
 
 // ---------------------------------------------------------------------------
