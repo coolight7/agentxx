@@ -125,10 +125,10 @@ asio::awaitable<std::string>
         try {
             result = co_await tool->real_execute_async(args);
             break;
-        } catch (const neograph::graph::CancelledException& e) {
+        } catch (const neograph::graph::CancelledException&) {
             isCancel = true;
             errorPtr = std::current_exception();
-        } catch (const neograph::graph::NodeInterrupt& e) {
+        } catch (const neograph::graph::NodeInterrupt&) {
             isCancel = true;
             errorPtr = std::current_exception();
         } catch (const std::exception& e) {
@@ -264,7 +264,7 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
                     args["tool_call_id"] = tc.id;
                 }
                 tool_msg.content = co_await execTool(*it, args);
-            } catch (const neograph::graph::NodeInterrupt& e) {
+            } catch (const neograph::graph::NodeInterrupt&) {
                 // tool触发中断
                 // - 不应在这里提取中断参数，协程并发等 co_await
                 // 执行完成时可能参数数组已经不是单一值
