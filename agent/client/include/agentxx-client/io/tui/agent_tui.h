@@ -74,8 +74,8 @@ private:
             System,
             Tool
         };
-        Role         role;
-        std::string  text; // 文本内容; Tool 角色时为 arguments
+        Role        role;
+        std::string text; // 文本内容; Tool 角色时为 arguments
         // 以下仅 Tool 角色使用
         std::string toolName;
         std::string toolCallId;
@@ -83,11 +83,11 @@ private:
         bool        toolFinished = false;
         bool        toolHasError = false;
         bool        collapsed    = false; // 折叠/展开 (Thinking/Tool 默认折叠)
-        
+
         // 运行时长统计 (秒，毫秒部分用于显示)
-        double      durationSeconds = 0.0;
+        double durationSeconds = 0.0;
         // 开始时间戳 (毫秒级)
-        int32_t     startTimeMs   = 0;
+        int32_t startTimeMs = 0;
     };
 
     struct PermissionRequest {
@@ -104,9 +104,12 @@ private:
 
     /// 右侧边栏 tab (类似浏览器 tab)
     struct SidebarTab {
-        std::string                     id;
-        std::string                     title;
+        std::string id;
+        std::string title;
+        /// 可滚动主体内容 (经 sidebarScrollable_ 渲染)
         std::function<ftxui::Element()> render;
+        /// 底部常驻内容 (渲染于滚动区之外, 不随内容滚动; 为空则无)
+        std::function<ftxui::Element()> footer;
     };
 
     std::mutex           mutex_;
@@ -213,8 +216,10 @@ private:
     ftxui::Element renderSidebar();
     /// 日志窗口内容
     ftxui::Element renderLogWindow();
-    /// 信息侧边栏内容: 顶部 planning 特化渲染 + 底部工作目录/版本/运行模式
+    /// 信息侧边栏可滚动主体: planning 特化渲染 + MCP/Skill/Memory 统计 (组成单一滚动列表)
     ftxui::Element renderInfoSidebar();
+    /// 信息侧边栏底部常驻内容: 工作目录 + 版本/运行模式 (不随主体滚动)
+    ftxui::Element renderInfoSidebarFooter();
     /// planning 特化渲染 (取最新 planning_write toolcall 的 todos/notes); 无规划时返回空
     std::optional<ftxui::Element> renderPlanningInfo();
 
@@ -238,10 +243,12 @@ private:
     void dispatchNextPendingInput();
 
     /// 侧边栏 tab 管理
+    /// - render: 可滚动主体内容; footer: 底部常驻内容 (可选, 渲染于滚动区之外)
     void addSidebarTab(
         std::string_view                id,
         std::string_view                title,
-        std::function<ftxui::Element()> render
+        std::function<ftxui::Element()> render,
+        std::function<ftxui::Element()> footer = nullptr
     );
     void removeSidebarTab(std::string_view id);
     bool hasSidebarTab(std::string_view id) const;
@@ -255,8 +262,11 @@ private:
     /// 处理待发送消息队列弹窗的鼠标点击 (清空/删除/展开折叠); 返回是否消费了该事件
     bool handlePendingInputsMouse(const ftxui::Mouse& mouse);
 
-    /// 缓存的本会话指针 (构造时初始化, 避免反复查找 SessionStore)
+    /// 缓存的本会话指针 (构造时初始化，避免反复查找 SessionStore)
     std::shared_ptr<agentxx::agent::Session> session_;
+
+    // 会话加载的组件明细 (MCP/Skill/Memory), 供信息侧边栏渲染
+    std::vector<agentxx::agent::AppendComponentNotification> appendComponents_;
 
 public:
 

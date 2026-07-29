@@ -74,13 +74,13 @@ public:
     /// 请求切换指定会话的模型
     virtual void requestSelectModel(std::string_view threadId, std::string_view model);
 
+    /// 请求拉取会话启动信息 (MCP/Skill/Memory)
+    /// - 客户端启动后调用一次; 服务端以 WireAppendComponentInfo 回应, 由 onPeerMessage 处理
+    virtual void requestAppendComponentInfo(std::string_view threadId);
+
     /// 发送用户输入到对端
-    virtual void sendUserInput(
-        std::string_view threadId,
-        std::string_view text,
-        bool             isFirstMsg,
-        std::string_view model = ""
-    );
+    /// - 是否首轮由服务端自行管理; 模型切换经 requestSelectModel
+    virtual void sendUserInput(std::string_view threadId, std::string_view text);
 
     // -----------------------------------------------------------------------
     // Transport 管理

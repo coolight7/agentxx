@@ -16,25 +16,27 @@ namespace remote {
 /// - 约定: {"type": "<msgType>", "id": <opt requestId>, "thread": <threadId>, ...payload}
 struct MsgType {
     // ===== Client -> Server =====
-    inline static constexpr std::string_view Hello             = "hello";
-    inline static constexpr std::string_view UserInput         = "user_input";
-    inline static constexpr std::string_view InterruptResponse = "interrupt_response";
-    inline static constexpr std::string_view Cancel            = "cancel";
-    inline static constexpr std::string_view SelectModel       = "select_model";
-    inline static constexpr std::string_view GetModel          = "get_model";
-    inline static constexpr std::string_view Ping              = "ping";
+    inline static constexpr std::string_view Hello                  = "hello";
+    inline static constexpr std::string_view UserInput              = "user_input";
+    inline static constexpr std::string_view InterruptResponse      = "interrupt_response";
+    inline static constexpr std::string_view Cancel                 = "cancel";
+    inline static constexpr std::string_view SelectModel            = "select_model";
+    inline static constexpr std::string_view GetModel               = "get_model";
+    inline static constexpr std::string_view GetAppendComponentInfo = "get_append_component_info";
+    inline static constexpr std::string_view Ping                   = "ping";
 
     // ===== Server -> Client =====
-    inline static constexpr std::string_view HelloAck         = "hello_ack";
-    inline static constexpr std::string_view DeltaMsg         = "delta";
-    inline static constexpr std::string_view SyncMsg          = "sync";
-    inline static constexpr std::string_view InterruptRequest = "interrupt_request";
-    inline static constexpr std::string_view TurnResult       = "turn_result";
-    inline static constexpr std::string_view ContextStats     = "context_stats";
-    inline static constexpr std::string_view ErrorMsg         = "error";
-    inline static constexpr std::string_view LogMsg           = "log";
-    inline static constexpr std::string_view ModelInfo        = "model_info";
-    inline static constexpr std::string_view Pong             = "pong";
+    inline static constexpr std::string_view HelloAck            = "hello_ack";
+    inline static constexpr std::string_view DeltaMsg            = "delta";
+    inline static constexpr std::string_view SyncMsg             = "sync";
+    inline static constexpr std::string_view InterruptRequest    = "interrupt_request";
+    inline static constexpr std::string_view TurnResult          = "turn_result";
+    inline static constexpr std::string_view ContextStats        = "context_stats";
+    inline static constexpr std::string_view ErrorMsg            = "error";
+    inline static constexpr std::string_view LogMsg              = "log";
+    inline static constexpr std::string_view ModelInfo           = "model_info";
+    inline static constexpr std::string_view AppendComponentInfo = "append_component_info";
+    inline static constexpr std::string_view Pong                = "pong";
 };
 
 /// 中断/取消原因 (供 BaseAgent 区分中断来源)
@@ -140,19 +142,19 @@ inline std::optional<Delta> deltaFromJson(const neograph::json& j) {
         return std::nullopt;
     }
     Delta d;
-    d.type             = typeOpt.value();
-    d.seq              = j.value("seq", uint64_t{0});
-    d.text             = j.value("text", std::string{});
-    d.msgId            = j.value("msg_id", std::string{});
-    d.toolName         = j.value("tool_name", std::string{});
-    d.toolCallId       = j.value("tool_call_id", std::string{});
-    d.arguments        = j.value("arguments", std::string{});
-    d.result           = j.value("result", std::string{});
-    d.hasError         = j.value("has_error", false);
-    d.historyCount     = j.value("history_count", uint64_t{0});
-    d.tailHash         = j.value("tail_hash", std::string{});
-    d.startTimeMs      = j.value("start_time_ms", int32_t{0});
-    d.durationSeconds  = j.value("duration_seconds", double{0.0});
+    d.type            = typeOpt.value();
+    d.seq             = j.value("seq", uint64_t{0});
+    d.text            = j.value("text", std::string{});
+    d.msgId           = j.value("msg_id", std::string{});
+    d.toolName        = j.value("tool_name", std::string{});
+    d.toolCallId      = j.value("tool_call_id", std::string{});
+    d.arguments       = j.value("arguments", std::string{});
+    d.result          = j.value("result", std::string{});
+    d.hasError        = j.value("has_error", false);
+    d.historyCount    = j.value("history_count", uint64_t{0});
+    d.tailHash        = j.value("tail_hash", std::string{});
+    d.startTimeMs     = j.value("start_time_ms", int32_t{0});
+    d.durationSeconds = j.value("duration_seconds", double{0.0});
     return d;
 }
 
@@ -218,22 +220,12 @@ inline neograph::json makeHello(
     return j;
 }
 
-inline neograph::json makeUserInput(
-    std::string_view threadId,
-    std::string_view text,
-    bool             isFirstMsg,
-    std::string_view model = ""
-) {
-    neograph::json j = {
-        {"type",         MsgType::UserInput},
-        {"thread",       threadId          },
-        {"text",         text              },
-        {"is_first_msg", isFirstMsg        },
+inline neograph::json makeUserInput(std::string_view threadId, std::string_view text) {
+    return neograph::json{
+        {"type",   MsgType::UserInput},
+        {"thread", threadId          },
+        {"text",   text              },
     };
-    if (!model.empty()) {
-        j["model"] = model;
-    }
-    return j;
 }
 
 inline neograph::json makeInterruptResponse(int64_t id, const neograph::json& result) {
@@ -397,6 +389,60 @@ inline neograph::json
         j["models"] = models;
     }
     return j;
+}
+
+// ---------------------------------------------------------------------------
+// AppendComponentNotification <-> json (客户端拉取 MCP/Skill/Memory 启动信息)
+// ---------------------------------------------------------------------------
+
+inline neograph::json appendComponentNotificationToJson(const AppendComponentNotification& n) {
+    return neograph::json{
+        {"type",          static_cast<int>(n.type)},
+        {"name",          n.name                  },
+        {"success",       n.success               },
+        {"error_message", n.errorMessage          },
+    };
+}
+
+inline AppendComponentNotification appendComponentNotificationFromJson(const neograph::json& j) {
+    AppendComponentNotification n;
+    n.type         = static_cast<AppendComponentNotification::Type>(j.value("type", 0));
+    n.name         = j.value("name", std::string{});
+    n.success      = j.value("success", true);
+    n.errorMessage = j.value("error_message", std::string{});
+    return n;
+}
+
+inline neograph::json makeGetAppendComponentInfo(std::string_view threadId) {
+    return neograph::json{
+        {"type",   MsgType::GetAppendComponentInfo},
+        {"thread", threadId                       },
+    };
+}
+
+inline neograph::json
+    makeAppendComponentInfo(const std::vector<AppendComponentNotification>& notifications) {
+    neograph::json j = {
+        {"type", MsgType::AppendComponentInfo}
+    };
+    neograph::json arr = neograph::json::array();
+    for (const auto& n : notifications) {
+        arr.push_back(appendComponentNotificationToJson(n));
+    }
+    j["notifications"] = std::move(arr);
+    return j;
+}
+
+inline std::vector<AppendComponentNotification> appendComponentInfoFromJson(const neograph::json& j
+) {
+    std::vector<AppendComponentNotification> out;
+    auto arr = j.value("notifications", neograph::json::array());
+    if (arr.is_array()) {
+        for (const auto& item : arr) {
+            out.push_back(appendComponentNotificationFromJson(item));
+        }
+    }
+    return out;
 }
 
 inline neograph::json makePong(int64_t t) {
