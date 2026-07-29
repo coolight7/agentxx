@@ -56,10 +56,9 @@ public:
         neograph::graph::NodeOutput&                                                      out
     ) override;
 
-    static asio::awaitable<void>
-        defStdoutLogOnToolcallStart(neograph::graph::NodeInput& in, size_t limitOutput = 0);
+    static void defStdoutLogOnToolcallStart(neograph::graph::NodeInput& in, size_t limitOutput = 0);
 
-    static asio::awaitable<void> defStdoutLogOnToolcallEnd(
+    static void defStdoutLogOnToolcallEnd(
         const neograph::graph::NodeInput& in,
         neograph::graph::NodeOutput&      result,
         size_t                            limitOutput = 0

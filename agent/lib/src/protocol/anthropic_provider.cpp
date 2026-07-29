@@ -407,7 +407,10 @@ asio::awaitable<neograph::ChatCompletion> AnthropicProvider::doStream(
         );
 
         neograph_asio_error_code shutEc;
-        co_await stream.async_shutdown(asio::redirect_error(asio::use_awaitable, shutEc));
+        co_await stream.async_shutdown(asio::cancel_after(
+            std::chrono::seconds{3},
+            asio::redirect_error(asio::use_awaitable, shutEc)
+        ));
     } else {
         boost::beast::tcp_stream stream(std::move(socket));
 

@@ -108,7 +108,7 @@ asio::awaitable<void> CodeAgent::setupMiddleware() {
              config
              = agentContext->agentConfig](neograph::graph::NodeInput& in) -> asio::awaitable<void> {
                 if (config->logPrintToolcall) {
-                    co_await agentxx::nodes::ToolcallWrapNode::defStdoutLogOnToolcallStart(in);
+                    agentxx::nodes::ToolcallWrapNode::defStdoutLogOnToolcallStart(in);
                 }
                 if (auto ctxPtr = ctx.lock()) {
                     auto session = ctxPtr->sessions->get(in.ctx.thread_id);
@@ -123,10 +123,7 @@ asio::awaitable<void> CodeAgent::setupMiddleware() {
                 neograph::graph::NodeOutput&      result
             ) -> asio::awaitable<void> {
                 if (config->logPrintToolcall) {
-                    co_await agentxx::nodes::ToolcallWrapNode::defStdoutLogOnToolcallEnd(
-                        in,
-                        result
-                    );
+                    agentxx::nodes::ToolcallWrapNode::defStdoutLogOnToolcallEnd(in, result);
                 }
                 if (auto ctxPtr = ctx.lock()) {
                     auto session = ctxPtr->sessions->get(in.ctx.thread_id);

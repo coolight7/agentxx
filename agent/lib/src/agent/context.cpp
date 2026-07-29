@@ -49,8 +49,8 @@ std::shared_ptr<Session> SessionStore::getOrCreate(std::string_view threadId) {
     if (it != sessions_.end()) {
         return it->second;
     }
-    auto session                     = std::make_shared<Session>();
-    sessions_[std::string{threadId}] = session;
+    auto session = std::make_shared<Session>();
+    sessions_.emplace(threadId, session);
     return session;
 }
 
