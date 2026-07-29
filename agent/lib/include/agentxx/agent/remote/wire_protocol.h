@@ -121,6 +121,13 @@ inline neograph::json deltaToJson(const Delta& d) {
     if (!d.tailHash.empty()) {
         j["tail_hash"] = d.tailHash;
     }
+    // 运行时统计字段 (TurnEnd 使用)
+    if (d.startTimeMs > 0) {
+        j["start_time_ms"] = d.startTimeMs;
+    }
+    if (d.durationSeconds > 0.0) {
+        j["duration_seconds"] = d.durationSeconds;
+    }
     return j;
 }
 
@@ -133,17 +140,19 @@ inline std::optional<Delta> deltaFromJson(const neograph::json& j) {
         return std::nullopt;
     }
     Delta d;
-    d.type         = typeOpt.value();
-    d.seq          = j.value("seq", uint64_t{0});
-    d.text         = j.value("text", std::string{});
-    d.msgId        = j.value("msg_id", std::string{});
-    d.toolName     = j.value("tool_name", std::string{});
-    d.toolCallId   = j.value("tool_call_id", std::string{});
-    d.arguments    = j.value("arguments", std::string{});
-    d.result       = j.value("result", std::string{});
-    d.hasError     = j.value("has_error", false);
-    d.historyCount = j.value("history_count", uint64_t{0});
-    d.tailHash     = j.value("tail_hash", std::string{});
+    d.type             = typeOpt.value();
+    d.seq              = j.value("seq", uint64_t{0});
+    d.text             = j.value("text", std::string{});
+    d.msgId            = j.value("msg_id", std::string{});
+    d.toolName         = j.value("tool_name", std::string{});
+    d.toolCallId       = j.value("tool_call_id", std::string{});
+    d.arguments        = j.value("arguments", std::string{});
+    d.result           = j.value("result", std::string{});
+    d.hasError         = j.value("has_error", false);
+    d.historyCount     = j.value("history_count", uint64_t{0});
+    d.tailHash         = j.value("tail_hash", std::string{});
+    d.startTimeMs      = j.value("start_time_ms", int32_t{0});
+    d.durationSeconds  = j.value("duration_seconds", double{0.0});
     return d;
 }
 
@@ -333,7 +342,9 @@ inline neograph::json makeTurnResult(
     std::string_view threadId,
     bool             hasError,
     std::string_view errorMessage,
-    bool             interrupted
+    bool             interrupted,
+    int32_t          startTimeMs = 0,
+    double           durationSec = 0.0
 ) {
     neograph::json j = {
         {"type",        MsgType::TurnResult},
@@ -343,6 +354,12 @@ inline neograph::json makeTurnResult(
     };
     if (!errorMessage.empty()) {
         j["error_message"] = errorMessage;
+    }
+    if (startTimeMs > 0) {
+        j["start_time_ms"] = startTimeMs;
+    }
+    if (durationSec > 0.0) {
+        j["duration_seconds"] = durationSec;
     }
     return j;
 }
