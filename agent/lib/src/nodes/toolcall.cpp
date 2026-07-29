@@ -310,7 +310,7 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
     co_return;
 }
 
-asio::awaitable<void> ToolcallWrapNode::defStdoutLogOnToolcallStart(
+void ToolcallWrapNode::defStdoutLogOnToolcallStart(
     neograph::graph::NodeInput& in,
     size_t                      limitOutput
 ) {
@@ -342,10 +342,9 @@ asio::awaitable<void> ToolcallWrapNode::defStdoutLogOnToolcallStart(
 )",
         out.str()
     );
-    co_return;
 }
 
-asio::awaitable<void> ToolcallWrapNode::defStdoutLogOnToolcallEnd(
+void ToolcallWrapNode::defStdoutLogOnToolcallEnd(
     const neograph::graph::NodeInput& in,
     neograph::graph::NodeOutput&      result,
     size_t                            limitOutput
@@ -372,7 +371,6 @@ asio::awaitable<void> ToolcallWrapNode::defStdoutLogOnToolcallEnd(
 )",
         out.str()
     );
-    co_return;
 }
 
 } // namespace nodes

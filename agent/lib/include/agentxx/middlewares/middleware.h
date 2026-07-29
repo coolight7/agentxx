@@ -265,6 +265,7 @@ public:
         if (nullptr != onAgentcallStart) {
             co_await onAgentcallStart(in);
         }
+        co_return;
     }
 
     asio::awaitable<void> onAgentcallEndFunc(
@@ -274,18 +275,21 @@ public:
         if (nullptr != onAgentcallEnd) {
             co_await onAgentcallEnd(in, result);
         }
+        co_return;
     }
 
     asio::awaitable<void> onModelcallStartFunc(neograph::graph::NodeInput& in) override {
         if (nullptr != onModelcallStart) {
             co_await onModelcallStart(in);
         }
+        co_return;
     }
 
     asio::awaitable<void> onModelcallRunFunc(neograph::graph::NodeInput& in) override {
         if (nullptr != onModelcallRun) {
             co_await onModelcallRun(in);
         }
+        co_return;
     }
 
     asio::awaitable<void> onModelcallEndFunc(
@@ -295,12 +299,14 @@ public:
         if (nullptr != onModelcallEnd) {
             co_await onModelcallEnd(in, result);
         }
+        co_return;
     }
 
     asio::awaitable<void> onToolcallStartFunc(neograph::graph::NodeInput& in) override {
         if (nullptr != onToolcallStart) {
             co_await onToolcallStart(in);
         }
+        co_return;
     }
 
     asio::awaitable<void> onToolcallEndFunc(
@@ -310,6 +316,7 @@ public:
         if (nullptr != onToolcallEnd) {
             co_await onToolcallEnd(in, result);
         }
+        co_return;
     }
 };
 
