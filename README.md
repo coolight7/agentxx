@@ -15,6 +15,7 @@
     - [测试](#测试)
 - [目录结构](#目录结构)
 - [编译](#编译)
+- [运行&配置文件](#配置文件和运行)
 
 ## 兼容性
 - 跨系统支持:
@@ -283,7 +284,7 @@ npm install --legacy-peer-deps
     - [Android 动态库编译 .so / 静态库 .a](/docs/zh-cn/build/android.md)
     - [Windows 可执行程序 .exe / 动态库编译 .dll / 静态库 .lib](/docs/zh-cn/build/windows.md)
 
-## 运行 & 配置文件
+## 配置文件和运行
 - 参考 `{项目根目录}` 下的 `agentxx-config.yaml`，修改它在里面配置你的模型 llm api，然后 cd 到 `agentxx-config.yaml` 所在目录，运行 agentxx_cli 即可
 - （可选）`agentxx-config.yaml` 内配置 llm api key 时，建议放到同目录的 `.env` 中，模版参考 `.env.example`, 复制并重命名为 `.env` 然后添加环境变量即可
 ```sh
