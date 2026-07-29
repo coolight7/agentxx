@@ -36,6 +36,8 @@ struct MsgType {
     inline static constexpr std::string_view LogMsg              = "log";
     inline static constexpr std::string_view ModelInfo           = "model_info";
     inline static constexpr std::string_view AppendComponentInfo = "append_component_info";
+    inline static constexpr std::string_view GetContext          = "get_context";
+    inline static constexpr std::string_view ContextMessages     = "context_messages";
     inline static constexpr std::string_view Pong                = "pong";
 };
 
@@ -65,6 +67,10 @@ inline std::string_view deltaTypeToString(Delta::Type t) noexcept {
             return "turn_start";
         case T::TurnEnd:
             return "turn_end";
+        case T::NodeStart:
+            return "node_start";
+        case T::NodeEnd:
+            return "node_end";
     }
     return "text_token";
 }
@@ -88,6 +94,12 @@ inline std::optional<Delta::Type> deltaTypeFromString(std::string_view s) noexce
     }
     if (s == "turn_end") {
         return T::TurnEnd;
+    }
+    if (s == "node_start") {
+        return T::NodeStart;
+    }
+    if (s == "node_end") {
+        return T::NodeEnd;
     }
     return std::nullopt;
 }
@@ -130,6 +142,9 @@ inline neograph::json deltaToJson(const Delta& d) {
     if (d.durationMs > 0) {
         j["duration_ms"] = d.durationMs;
     }
+    if (!d.nodeName.empty()) {
+        j["node_name"] = d.nodeName;
+    }
     return j;
 }
 
@@ -155,6 +170,7 @@ inline std::optional<Delta> deltaFromJson(const neograph::json& j) {
     d.tailHash     = j.value("tail_hash", std::string{});
     d.startTimeMs  = j.value("start_time_ms", int32_t{0});
     d.durationMs   = j.value("duration_ms", int32_t{0});
+    d.nodeName     = j.value("node_name", std::string{});
     return d;
 }
 
@@ -449,6 +465,20 @@ inline neograph::json makePong(int64_t t) {
     return neograph::json{
         {"type", MsgType::Pong},
         {"t",    t            },
+    };
+}
+
+inline neograph::json makeGetContext(std::string_view threadId) {
+    return neograph::json{
+        {"type",   MsgType::GetContext},
+        {"thread", threadId           },
+    };
+}
+
+inline neograph::json makeContextMessages(const neograph::json& messages) {
+    return neograph::json{
+        {"type",     MsgType::ContextMessages},
+        {"messages", messages                },
     };
 }
 
