@@ -74,6 +74,3 @@ cd {项目根目录}/agent
 
 ### linux 上运行到 网络相关的代码会卡很久?
 - 可能是 asio 版本问题，在某些 Boost 版本(如 1.91)的asio可能在启用 io_uring 后有 bug，可以更换其他 Boost 版本。
-
-### GCC internal compiler error (ICE)
-- 就是 GCC 自己崩溃了，直接重新编译就可以了；如果多次编译都不行，可能内存不够需要降低并发数，或是代码确实有问题，可以换到 windows 用 msvc 或其他编译器编译看看；也可以让ai看一下崩溃时编译的文件。
