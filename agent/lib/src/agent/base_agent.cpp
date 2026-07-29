@@ -674,6 +674,7 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                     }
                 }
             } catch (const neograph::graph::CancelledException&) {
+                // TODO: 记录已有的消息
             }
 
             co_return;
