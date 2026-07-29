@@ -16,6 +16,24 @@
 
 using namespace ftxui;
 
+// 格式化毫秒到字符串 (秒。毫秒格式，如 "1.234s")
+static std::string formatDurationMilliseconds(int32_t milliseconds) {
+    const double seconds = static_cast<double>(milliseconds) / 1000.0;
+    return fmt::format("{:.1f}s", seconds);
+}
+
+// 格式化时间戳为本地时间 (HH:MM:SS.mmm)
+static std::string formatTimestampMilliseconds(int32_t timestamp_ms) {
+    const auto duration = std::chrono::milliseconds(timestamp_ms);
+    const auto total_seconds = std::chrono::duration_cast<std::chrono::seconds>(duration).count();
+    const int hours   = static_cast<int>(total_seconds / 3600);
+    const int minutes = static_cast<int>((total_seconds % 3600) / 60);
+    const int secs    = static_cast<int>(total_seconds % 60);
+    const int millis  = static_cast<int>(timestamp_ms % 1000);
+    
+    return fmt::format("{:02d}:{:02d}:{:02d}.{:03d}", hours, minutes, secs, millis);
+}
+
 AgentTUI::AgentTUI(
     asio::any_io_executor                         ex,
     std::shared_ptr<agentxx::agent::AgentContext> agentContext,
@@ -613,16 +631,36 @@ void AgentTUI::onDelta(const agentxx::agent::Delta& delta) {
                 currentToken_.clear();
             }
             isStreaming_ = false;
+            
+            // 创建一条系统消息记录本轮运行的统计信息
+            if (delta.durationSeconds > 0.0 || delta.startTimeMs > 0) {
+                Message statMsg;
+                statMsg.role          = Message::Role::System;
+                statMsg.text          = fmt::format(
+                    "{} ⏱ {} | {}",
+                    cachedModelName_,
+                    formatDurationMilliseconds(static_cast<int32_t>(delta.durationSeconds * 1000)),
+                    formatTimestampMilliseconds(delta.startTimeMs)
+                );
+                statMsg.durationSeconds = delta.durationSeconds;
+                statMsg.startTimeMs     = delta.startTimeMs;
+                messages_.push_back(std::move(statMsg));
+            }
+            
             // 轮次结束 -> 自动派发下一个排队输入
             dispatchNextPendingInput();
         } break;
     }
-    if (messagesScrollable_) {
+    
+    // 只有当前滚动在底部时（stickToBottom=true）才自动吸附到底部
+    // 如果用户手动滚动了（stickToBottom=false），则不自动跟随
+    if (messagesScrollable_ && messagesScrollable_->isStickToBottom()) {
+        messagesScrollable_->setStickToBottom(true);
+    } else if (messagesScrollable_) {
         messagesScrollable_->onContentUpdate();
     }
     postRedraw();
 }
-
 void AgentTUI::onSync(const agentxx::agent::SyncPayload& payload) {
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -665,6 +703,9 @@ void AgentTUI::onSync(const agentxx::agent::SyncPayload& payload) {
                         thinkMsg.role      = Message::Role::Thinking;
                         thinkMsg.text      = reasoning;
                         thinkMsg.collapsed = true;
+                        // 从原始数据中读取时间信息（如果有）
+                        thinkMsg.startTimeMs  = d.value("start_time_ms", int32_t{0});
+                        thinkMsg.durationSeconds = d.value("duration_seconds", double{0.0});
                         messages_.push_back(std::move(thinkMsg));
                     }
                 }
@@ -675,6 +716,9 @@ void AgentTUI::onSync(const agentxx::agent::SyncPayload& payload) {
                 m.toolResult   = d.value("content", std::string{});
                 m.toolFinished = true;
                 m.collapsed    = true;
+                // 从原始数据中读取时间信息（如果有）
+                m.startTimeMs     = d.value("start_time_ms", int32_t{0});
+                m.durationSeconds = d.value("duration_seconds", double{0.0});
                 try {
                     auto parsed    = neograph::json::parse(m.toolResult);
                     m.toolHasError = parsed.is_object() && parsed.contains("error");
@@ -694,6 +738,9 @@ void AgentTUI::onSync(const agentxx::agent::SyncPayload& payload) {
             } else {
                 m.role = Message::Role::System;
                 m.text = d.value("content", std::string{});
+                // 从原始数据中读取时间信息（如果有）
+                m.startTimeMs  = d.value("start_time_ms", int32_t{0});
+                m.durationSeconds = d.value("duration_seconds", double{0.0});
             }
             if (false == skipPush) {
                 messages_.push_back(std::move(m));
