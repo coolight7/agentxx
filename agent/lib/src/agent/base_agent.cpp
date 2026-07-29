@@ -468,6 +468,18 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                         });
                     }
                 } break;
+                case T::NODE_START: {
+                    emitDelta(Delta{
+                        .type     = Delta::Type::NodeStart,
+                        .nodeName = event.node_name,
+                    });
+                } break;
+                case T::NODE_END: {
+                    emitDelta(Delta{
+                        .type     = Delta::Type::NodeEnd,
+                        .nodeName = event.node_name,
+                    });
+                } break;
                 default:
                     break;
             }
@@ -681,7 +693,13 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                     }
                 }
             } catch (const neograph::graph::CancelledException&) {
-                // TODO: 记录已有的消息
+                auto state = engine->get_state(std::string{threadId});
+                if (state.has_value() && state->is_object() && state->contains("messages")) {
+                    auto msgs = (*state)["messages"];
+                    if (msgs.is_array() && !msgs.empty()) {
+                        session->llmMessages = std::move(msgs);
+                    }
+                }
             }
 
             co_return;

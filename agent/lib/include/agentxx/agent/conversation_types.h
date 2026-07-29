@@ -51,6 +51,8 @@ struct Delta {
         ToolEnd,
         TurnStart,
         TurnEnd,
+        NodeStart,
+        NodeEnd,
     };
 
     Type     type;
@@ -65,6 +67,8 @@ struct Delta {
 
     std::string result;
     bool        hasError = false;
+
+    std::string nodeName;
 
     uint64_t    historyCount = 0;
     std::string tailHash;
