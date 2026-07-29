@@ -302,7 +302,7 @@ ftxui::Element AgentTUI::renderInfoSidebar() {
                       ++count;
                       elements.push_back(
                           hbox({
-                              text("│  • "),
+                              text("│  · "),
                               text(notif.name),
                           })
                           | color(notif.success ? theme_.assistantColor : theme_.systemColor)
@@ -376,8 +376,8 @@ ftxui::Element AgentTUI::renderLogSidebarFooter() {
 
     row.push_back(filler());
 
-    auto ctxBtn = text(" 上下文 ") | bgcolor(theme_.buttonBgColor)
-                  | color(theme_.buttonTextColor) | reflect(contextButtonBox_);
+    auto ctxBtn = text(" 上下文 ") | bgcolor(theme_.buttonBgColor) | color(theme_.buttonTextColor)
+                  | reflect(contextButtonBox_);
     row.push_back(ctxBtn);
 
     return hbox(std::move(row));

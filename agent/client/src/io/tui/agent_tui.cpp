@@ -530,7 +530,6 @@ void AgentTUI::onPeerMessage(agentxx::agent::WireMessage msg) {
                 postRedraw();
             } else if constexpr (std::is_same_v<T, agentxx::agent::WireAppendComponentInfo>) {
                 // 客户端拉取的启动信息: 整批更新统计与明细
-                using Type = agentxx::agent::AppendComponentNotification::Type;
                 {
                     std::lock_guard<std::mutex> lock(mutex_);
                     for (const auto& notif : m.notifications) {

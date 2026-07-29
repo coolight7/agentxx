@@ -72,10 +72,6 @@ ftxui::Element AgentTUI::renderStatusBar() {
     if (modelName.empty()) {
         modelName = "<none>";
     }
-    auto modelInfo = hbox({
-        text(" [F2] ") | color(theme_.hintColor),
-        text(modelName) | color(theme_.accentColor) | bold,
-    });
 
     size_t ctx    = 0;
     size_t maxCtx = 0;
@@ -95,13 +91,20 @@ ftxui::Element AgentTUI::renderStatusBar() {
     } else {
         ctxText = fmt::format(" {} ", agentxx::util::formatSize(ctx));
     }
-    auto ctxInfo = text(ctxText) | color(theme_.statusColor);
 
+    auto modelInfo = hbox({
+        text("[F2] ") | color(theme_.hintColor),
+        text(modelName) | color(theme_.accentColor),
+        text(" · ") | color(theme_.hintColor),
+        text(ctxText) | color(theme_.hintColor),
+        text(" "),
+    });
     return hbox({
+        text(" "),
         modelInfo,
         filler(),
-        ctxInfo,
-        text(" [Ctrl+I] Settings ") | color(theme_.hintColor),
+        text(" [Ctrl+I] Settings") | color(theme_.hintColor),
+        text(" "),
     });
 }
 
@@ -289,10 +292,7 @@ ftxui::Element AgentTUI::renderContextOverlay() {
         }
     }
 
-    auto title = fmt::format(
-        " LLM Context ({}) ",
-        (msgs.is_array() ? msgs.size() : 0)
-    );
+    auto title = fmt::format(" LLM Context ({}) ", (msgs.is_array() ? msgs.size() : 0));
 
     return vbox({
                text(title) | bold | inverted,
