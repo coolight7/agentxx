@@ -1,7 +1,7 @@
 # Agentxx
 [Github agentxx](https://github.com/coolight7/agentxx)
 
-- C++ 实现的 AI Agent，减少内存占用、程序包体积、摆脱复杂依赖，为普通性能的手机、电脑等设备上运行设计
+- C++ 实现的 AI Agent，可编译为`单程序、动态库`直接启动使用。降低内存占用、程序包体积、摆脱庞大的 动态库、python、js 等依赖，为普通性能的手机、电脑等设备上运行设计
 
 > - 早期开发中...
 
@@ -25,7 +25,7 @@
 | Status | System | TIP |
 |---|---|---|
 | ✅ | Windows 10+ | - |
-| ✅ | Linux | 在WSL时额外支持扩展功能 |
+| ✅ | Linux | 在WSL运行时额外支持直接执行 windows 程序和命令 |
 | ✅ | Android 5.0+ | Linux 交叉编译 |
 | ⬜ | Macos | 待测试兼容 |
 | ⬜ | IOS | 待测试兼容 |
@@ -294,16 +294,18 @@ cd {项目根目录}
 #       cp .env.example .env
 #       修改 .env 添加环境变量 api key
 
-# client 负责UI渲染和输入输出交互, agent-server 负责执行会话、调用 llm api 等实际操作
+# client 负责UI渲染和输入输出交互
+# agent-server 负责执行会话、调用 llm api 等实际操作
+# agentxx_cli 启动时可以选择 `启动UI+server` 或 `仅启动UI，网络连接server` 或 `仅启动 server`
 
 # client + agent-server 在同一个进程内启动, agentxx_cli 内的 client 包含两种UI:
-agentxx_cli tui # 启动 TUI 界面
-agentxx_cli cli # 启动 cli 
+agentxx_cli tui # 一个进程启动 TUI 界面 + agent-server
+agentxx_cli cli # 一个进程启动 cli + agent-server
 
 # - client 和 agent-server 分离为两个进程，两者使用 websocket 网络连接
 # - 自己开发 GUI 连接 server 可使用该方式连接
 agentxx_cli server --host 0.0.0.0 --port 7007 --token passwd # 启动 agent-server
-agentxx_cli tui --agent ws://127.0.0.1:7007/agent --token passwd # 连接 server
+agentxx_cli tui --agent ws://127.0.0.1:7007/agent --token passwd # 启动 TUI界面，并连接 agent-server
 ```
 
 ## LICENSE & THIRD_PARTY

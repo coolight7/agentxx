@@ -74,8 +74,8 @@ private:
             System,
             Tool
         };
-        Role        role;
-        std::string text; // 文本内容; Tool 角色时为 arguments
+        Role         role;
+        std::string  text; // 文本内容; Tool 角色时为 arguments
         // 以下仅 Tool 角色使用
         std::string toolName;
         std::string toolCallId;
@@ -83,6 +83,11 @@ private:
         bool        toolFinished = false;
         bool        toolHasError = false;
         bool        collapsed    = false; // 折叠/展开 (Thinking/Tool 默认折叠)
+        
+        // 运行时长统计 (秒，毫秒部分用于显示)
+        double      durationSeconds = 0.0;
+        // 开始时间戳 (毫秒级)
+        int32_t     startTimeMs   = 0;
     };
 
     struct PermissionRequest {

@@ -64,9 +64,11 @@ struct WireInterruptResponse {
 
 struct WireTurnResult {
     std::string threadId;
-    bool        hasError = false;
+    bool        hasError         = false;
     std::string errorMessage;
-    bool        interrupted = false;
+    bool        interrupted      = false;
+    int32_t     startTimeMs      = 0; // 轮次开始时间戳 (毫秒)
+    double      durationSeconds  = 0.0; // 运行时长 (秒)
 };
 
 struct WireContextStats {

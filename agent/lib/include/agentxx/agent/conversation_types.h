@@ -52,8 +52,12 @@ struct Delta {
     std::string result;
     bool        hasError = false;
 
-    uint64_t    historyCount = 0;
+    uint64_t    historyCount    = 0;
     std::string tailHash;
+    
+    // 运行时统计 (仅 TurnEnd 使用)
+    int32_t     startTimeMs     = 0;   // 开始时间戳 (毫秒)
+    double      durationSeconds = 0.0; // 运行时长 (秒)
 };
 
 struct SyncPayload {
