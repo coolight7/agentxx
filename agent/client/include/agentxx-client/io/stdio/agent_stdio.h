@@ -39,4 +39,9 @@ public:
 
     AgentStdIO();
     ~AgentStdIO() override;
+
+protected:
+
+    /// 处理对端消息: 拦截 WireAppendComponentInfo (启动信息统计), 其余委托基类
+    void onPeerMessage(agentxx::agent::WireMessage msg) override;
 };

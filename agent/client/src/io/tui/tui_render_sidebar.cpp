@@ -18,17 +18,22 @@ ftxui::Element AgentTUI::renderSidebar() {
     }
     auto tabBar = hbox(std::move(tabs)) | xframe;
 
-    Element content = text(" ");
+    // 取当前激活 tab 的底部常驻内容 (渲染于滚动区之外, 不随主体滚动)
+    std::function<ftxui::Element()> footerRender;
     if (activeTabIndex_ >= 0 && activeTabIndex_ < static_cast<int>(sidebarTabs_.size())) {
-        content = sidebarTabs_[activeTabIndex_].render();
+        footerRender = sidebarTabs_[activeTabIndex_].footer;
     }
 
-    return vbox({
-               tabBar,
-               text(" "),
-               hbox({text(" "), sidebarScrollable_->Render() | flex, text(" ")}) | flex,
-           })
-           | size(WIDTH, LESS_THAN, 56) | size(WIDTH, GREATER_THAN, 28)
+    Elements layout;
+    layout.push_back(tabBar);
+    layout.push_back(text(" "));
+    layout.push_back(hbox({text(" "), sidebarScrollable_->Render() | flex, text(" ")}) | flex);
+    if (footerRender) {
+        layout.push_back(hbox({text(" "), footerRender(), text(" ")}) | xframe);
+        layout.push_back(text(" "));
+    }
+
+    return vbox(std::move(layout)) | size(WIDTH, LESS_THAN, 56) | size(WIDTH, GREATER_THAN, 28)
            | bgcolor(theme_.blockColor);
 }
 
@@ -71,16 +76,23 @@ ftxui::Element AgentTUI::renderLogWindow() {
 void AgentTUI::addSidebarTab(
     std::string_view                id,
     std::string_view                title,
-    std::function<ftxui::Element()> render
+    std::function<ftxui::Element()> render,
+    std::function<ftxui::Element()> footer
 ) {
     for (auto& tab : sidebarTabs_) {
         if (tab.id == id) {
             tab.title  = title;
             tab.render = std::move(render);
+            tab.footer = std::move(footer);
             return;
         }
     }
-    sidebarTabs_.push_back(SidebarTab{std::string{id}, std::string{title}, std::move(render)});
+    sidebarTabs_.push_back(SidebarTab{
+        std::string{id},
+        std::string{title},
+        std::move(render),
+        std::move(footer),
+    });
     activeTabIndex_ = static_cast<int>(sidebarTabs_.size()) - 1;
 }
 
@@ -224,15 +236,66 @@ std::optional<ftxui::Element> AgentTUI::renderPlanningInfo() {
 ftxui::Element AgentTUI::renderInfoSidebar() {
     Elements elements;
 
-    // 顶部: planning 特化渲染 (存在 planning_write toolcall 时)
+    // planning 特化渲染 (存在 planning_write toolcall 时)
     if (auto planning = renderPlanningInfo()) {
-        elements.push_back(std::move(*planning) | flex | vscroll_indicator | yframe);
+        elements.push_back(std::move(*planning));
         elements.push_back(text(" "));
     }
 
-    elements.push_back(filler());
+    // 附加加载模块 (MCP/Skill/Memory) 统计 + 明细
+    if (false == appendComponents_.empty()) {
+        Elements appendComponentsElements;
 
-    // 底部: 当前工作目录
+        appendComponentsElements.push_back(text("+ Append Components") | color(theme_.accentColor));
+
+        // 输出一组: 先显示统计数量, 再逐行列出名称 (失败项用错误色标注)
+        auto appendGroup
+            = [&](std::string_view label, agentxx::agent::AppendComponentNotification::Type type) {
+                  size_t   count = 0;
+                  Elements elements;
+                  for (const auto& notif : appendComponents_) {
+                      if (notif.type != type) {
+                          continue;
+                      }
+                      ++count;
+                      elements.push_back(
+                          hbox({
+                              text("│  • "),
+                              text(notif.name),
+                          })
+                          | color(notif.success ? theme_.assistantColor : theme_.systemColor)
+                      );
+                  }
+                  if (count > 0) {
+                      appendComponentsElements.push_back(
+                          hbox({
+                              text("┣━ "),
+                              text(fmt::format("{}: {}", label, count)),
+                          })
+                          | color(theme_.assistantColor)
+                      );
+                      appendComponentsElements.push_back(vbox(elements));
+                  }
+              };
+        appendGroup("Memory", agentxx::agent::AppendComponentNotification::Type::Memory);
+        appendGroup("Skill", agentxx::agent::AppendComponentNotification::Type::Skill);
+        appendGroup("MCP", agentxx::agent::AppendComponentNotification::Type::Mcp);
+
+        elements.push_back(vbox(std::move(appendComponentsElements)));
+    }
+
+    if (elements.empty()) {
+        elements.push_back(text("(暂无信息)") | color(theme_.hintColor));
+    }
+
+    // planning 与统计信息共同组成单一可滚动列表 (滚动由 sidebarScrollable_ 提供)
+    return vbox(std::move(elements));
+}
+
+ftxui::Element AgentTUI::renderInfoSidebarFooter() {
+    Elements elements;
+
+    // 当前工作目录
     std::string cwd;
     try {
         cwd = std::filesystem::current_path().string();
@@ -241,12 +304,12 @@ ftxui::Element AgentTUI::renderInfoSidebar() {
     }
     elements.push_back(text(cwd) | color(theme_.hintColor));
 
-    // 底部: Agentxx 版本 + 运行模式 (内置 / 远程 http[s]://ip:port)
+    // Agentxx 版本 + 运行模式 (内置 / 远程 http[s]://ip:port)
     std::string mode;
     if (remoteUrl_.empty()) {
         mode = "内置服务";
     } else {
-        mode = "" + remoteUrl_;
+        mode = remoteUrl_;
     }
     elements.push_back(
         hbox({
@@ -254,9 +317,8 @@ ftxui::Element AgentTUI::renderInfoSidebar() {
             filler(),
             text(mode),
         })
-        | color(theme_.hintColor)
+        | xflex | color(theme_.hintColor)
     );
-    elements.push_back(text(" "));
 
     return vbox(std::move(elements));
 }

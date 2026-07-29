@@ -1,15 +1,25 @@
 #include "agentxx-client/io/stdio/agent_stdio.h"
 
 #include "agentxx-client/io/stdio/stdin_reader.h"
+#include "agentxx/agent/conversation_types.h"
 #include "agentxx/middlewares/middleware.h"
+#include "agentxx/util/log.h"
 #include "agentxx/util/string_util.h"
 #include "asio/this_coro.hpp"
 #include "fmt/format.h"
+#include <atomic>
 #include <cctype>
 #include <charconv>
 #include <cstdint>
 #include <iostream>
+#include <mutex>
 #include <utility>
+
+// 首次会话启动通知的计数器 (仅用于控制台输出, 单会话场景下无需严格同步)
+static std::atomic<bool> g_firstSessionDone{false};
+static int               g_mcpCount    = 0;
+static int               g_skillCount  = 0;
+static int               g_memoryCount = 0;
 
 AgentStdIO::AgentStdIO() :
     logSink_(std::make_shared<StderrLogSink>()) {
@@ -52,9 +62,36 @@ void AgentStdIO::onDelta(const agentxx::agent::Delta& delta) {
         case Type::TurnStart:
             isThinking_ = false;
             break;
-        case Type::TurnEnd:
+        case Type::TurnEnd: {
             std::cout << "\n>>> " << std::flush;
             isThinking_ = false;
+
+            // 首次会话结束时输出汇总信息
+            if (!g_firstSessionDone.exchange(true)) {
+                if (g_mcpCount > 0 || g_skillCount > 0 || g_memoryCount > 0) {
+                    std::cout << fmt::format(
+                        R"_(
+┏━━━━━━ Session Startup ━━━━━━┓
+┣━ MCP Tools: {}
+┣━ Skills: {}
+┣━ Memory Files: {}
+┗━━━━━━ Session Startup ━━━━━━┛
+)_",
+                        g_mcpCount,
+                        g_skillCount,
+                        g_memoryCount
+                    ) << std::endl;
+
+                    // 重置计数器，以便下次新会话可以重新显示
+                    g_firstSessionDone = false;
+                    g_mcpCount         = 0;
+                    g_skillCount       = 0;
+                    g_memoryCount      = 0;
+                }
+            }
+            break;
+        }
+        default:
             break;
     }
 }
@@ -69,6 +106,34 @@ void AgentStdIO::onSync(const agentxx::agent::SyncPayload& payload) {
             std::cout << content << std::endl;
         }
     }
+}
+
+void AgentStdIO::onPeerMessage(agentxx::agent::WireMessage msg) {
+    // 拦截启动信息响应: 整批统计 MCP/Skill/Memory, 其余消息委托基类分发
+    if (auto* info = std::get_if<agentxx::agent::WireAppendComponentInfo>(&msg)) {
+        using Type = agentxx::agent::AppendComponentNotification::Type;
+        for (const auto& notif : info->notifications) {
+            switch (notif.type) {
+                case Type::Mcp:
+                    ++g_mcpCount;
+                    break;
+                case Type::Skill:
+                    ++g_skillCount;
+                    break;
+                case Type::Memory:
+                    ++g_memoryCount;
+                    break;
+            }
+        }
+        XX_LOGI(
+            "AppendComponentInfo: MCP={}, Skill={}, Memory={}",
+            g_mcpCount,
+            g_skillCount,
+            g_memoryCount
+        );
+        return;
+    }
+    agentxx::agent::AgentIOBase::onPeerMessage(std::move(msg));
 }
 
 asio::awaitable<std::optional<std::string>> AgentStdIO::getInput() {

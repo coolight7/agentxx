@@ -189,6 +189,16 @@ private:
     std::map<std::string, std::shared_ptr<Session>, std::less<>> sessions_;
 };
 
+/// 加载组件信息容器
+struct AgentAppendComponentInfo {
+    // 已成功加载的 MCP 工具命名空间列表
+    std::vector<std::string> mcpTools;
+    // 成功加载的 Skill 名称列表
+    std::vector<std::string> skills;
+    // 成功加载的 Memory 文件路径列表
+    std::vector<std::string> memoryFiles;
+};
+
 class AgentContext {
 public:
 
@@ -207,10 +217,13 @@ public:
     /// - 含可用模型与默认模型; 各会话的当前选择记录在 Session 中
     std::shared_ptr<ModelProviderRegistry> modelRegistry = nullptr;
 
-    /// 会话存储: 按 thread_id 取/建 Session
+    /// 会话存储：按 thread_id 取/建 Session
     std::shared_ptr<SessionStore> sessions = std::make_shared<SessionStore>();
 
-    /// 便捷方法: 获取或创建指定 thread_id 的会话
+    /// 组件加载信息
+    AgentAppendComponentInfo appendComponentInfo;
+
+    /// 便捷方法：获取或创建指定 thread_id 的会话
     std::shared_ptr<Session> getSession(std::string_view threadId);
 };
 

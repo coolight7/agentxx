@@ -81,6 +81,9 @@ static std::shared_ptr<agent::SessionController> setupLocalUnifiedDirect(
     // 发送 hello 触发服务端重放/同步
     clientIO->sendToPeer(agent::WireHello{threadId, "", 0, ""});
 
+    // 客户端启动后拉取一次启动信息 (MCP/Skill/Memory)
+    clientIO->requestAppendComponentInfo(threadId);
+
     return controller;
 }
 
@@ -117,7 +120,7 @@ static asio::awaitable<void> runLocalCliUnifiedAsync(std::shared_ptr<agent::Code
         if (input->empty()) {
             continue;
         }
-        io->sendToPeer(agent::WireUserInput{"session", *input, false, ""});
+        io->sendToPeer(agent::WireUserInput{"session", *input});
     }
 }
 
@@ -202,8 +205,16 @@ static asio::awaitable<void>
         co_return;
     }
 
+    // 指定模型 (经独立的模型选择通道, 而非随每条输入发送)
+    if (!model.empty()) {
+        io->requestSelectModel("session", model);
+    }
+
     // 启动接收循环
     asio::co_spawn(ex, io->runTransportLoop(), asio::detached);
+
+    // 客户端启动后拉取一次启动信息 (MCP/Skill/Memory)
+    io->requestAppendComponentInfo("session");
 
     // 输入循环
     for (;;) {
@@ -214,7 +225,7 @@ static asio::awaitable<void>
         if (input->empty()) {
             continue;
         }
-        io->sendToPeer(agent::WireUserInput{"session", *input, false, model});
+        io->sendToPeer(agent::WireUserInput{"session", *input});
     }
     transport->close();
 }
@@ -260,8 +271,16 @@ static asio::awaitable<void> runRemoteTuiAsync(
         co_return;
     }
 
+    // 指定模型 (经独立的模型选择通道); 先于 GetModel 发送, 使其返回所选模型
+    if (!model.empty()) {
+        io->requestSelectModel("session", model);
+    }
+
     // 请求服务端当前模型信息, 待 onPeerMessage 收到 WireModelInfo 后更新显示
     io->sendToPeer(agent::WireGetModel{"session"});
+
+    // 客户端启动后拉取一次启动信息 (MCP/Skill/Memory)
+    io->requestAppendComponentInfo("session");
 
     // 启动接收循环
     asio::co_spawn(ex, io->runTransportLoop(), asio::detached);

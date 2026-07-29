@@ -36,8 +36,6 @@ struct WireHelloAck {
 struct WireUserInput {
     std::string threadId;
     std::string text;
-    bool        isFirstMsg = false;
-    std::string model;
 };
 
 struct WireCancel {
@@ -64,11 +62,11 @@ struct WireInterruptResponse {
 
 struct WireTurnResult {
     std::string threadId;
-    bool        hasError         = false;
+    bool        hasError = false;
     std::string errorMessage;
-    bool        interrupted      = false;
-    int32_t     startTimeMs      = 0; // 轮次开始时间戳 (毫秒)
-    double      durationSeconds  = 0.0; // 运行时长 (秒)
+    bool        interrupted     = false;
+    int32_t     startTimeMs     = 0;   // 轮次开始时间戳 (毫秒)
+    double      durationSeconds = 0.0; // 运行时长 (秒)
 };
 
 struct WireContextStats {
@@ -98,6 +96,16 @@ struct WireModelInfo {
     std::vector<std::string> models;
 };
 
+/// 客户端请求会话启动信息 (Client -> Server): 拉取已加载的 MCP/Skill/Memory 列表
+struct WireGetAppendComponentInfo {
+    std::string threadId;
+};
+
+/// 服务端加载组件响应 (Server -> Client): collectAppendComponentInfo 收集的结果
+struct WireAppendComponentInfo {
+    std::vector<AppendComponentNotification> notifications;
+};
+
 /// 所有可能的线消息类型 (tagged variant)
 using WireMessage = std::variant<
     WireHello,
@@ -114,7 +122,9 @@ using WireMessage = std::variant<
     WireError,
     WireLog,
     WireGetModel,
-    WireModelInfo>;
+    WireModelInfo,
+    WireGetAppendComponentInfo,
+    WireAppendComponentInfo>;
 
 // ---------------------------------------------------------------------------
 // AgentIOTransportBase: 两个 AgentIOBase 端点之间的协议传输层

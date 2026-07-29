@@ -72,6 +72,11 @@ public:
         std::string_view             modelName = ""
     );
 
+    /// 收集会话启动时通知的信息 (MCP/Skill/Memory)
+    /// - CodeAgent 覆写以收集实际加载的组件列表
+    virtual void collectAppendComponentInfo(std::vector<AppendComponentNotification>& notifications
+    );
+
     virtual ~BaseAgent();
 
     neograph::graph::GraphEngine*       getEngine();
