@@ -241,3 +241,67 @@ bool AgentTUI::handlePendingInputsMouse(const ftxui::Mouse& mouse) {
     }
     return false;
 }
+
+ftxui::Element AgentTUI::renderContextOverlay() {
+    const auto& msgs = contextMessages_;
+
+    const int maxVisible = std::max(8, ftxui::Terminal::Size().dimy - 10);
+
+    Elements items;
+    if (!msgs.is_array() || msgs.empty()) {
+        items.push_back(text(" (empty) ") | dim);
+    } else {
+        size_t idx = 0;
+        for (const auto& m : msgs) {
+            auto role    = m.value("role", std::string{});
+            auto content = m.value("content", std::string{});
+
+            ftxui::Color roleColor = theme_.assistantColor;
+            if (role == "user") {
+                roleColor = theme_.promptColor;
+            } else if (role == "system") {
+                roleColor = theme_.hintColor;
+            } else if (role == "tool") {
+                roleColor = theme_.thinkingColor;
+            }
+
+            std::string preview = oneLine(content, 80);
+            if (m.contains("tool_calls")) {
+                auto toolCalls = m["tool_calls"];
+                if (toolCalls.is_array() && !toolCalls.empty()) {
+                    std::string names;
+                    for (const auto& tc : toolCalls) {
+                        if (!names.empty()) {
+                            names += ", ";
+                        }
+                        names += tc.value("name", std::string{});
+                    }
+                    preview = "[tool_calls: " + names + "]";
+                }
+            }
+
+            items.push_back(hbox({
+                text(fmt::format("{:>3} ", idx)) | color(theme_.hintColor),
+                text(fmt::format("[{}] ", role)) | color(roleColor) | bold,
+                text(preview) | color(theme_.assistantColor) | flex,
+            }));
+            ++idx;
+        }
+    }
+
+    auto title = fmt::format(
+        " LLM Context ({}) ",
+        (msgs.is_array() ? msgs.size() : 0)
+    );
+
+    return vbox({
+               text(title) | bold | inverted,
+               separator(),
+               vbox(std::move(items)) | yframe | vscroll_indicator
+                   | size(HEIGHT, LESS_THAN, maxVisible),
+               separator(),
+               text(" [Up/Down] Scroll  [Esc] Close ") | center | dim,
+           })
+           | border | size(WIDTH, LESS_THAN, 100) | size(WIDTH, GREATER_THAN, 50)
+           | color(theme_.accentColor);
+}

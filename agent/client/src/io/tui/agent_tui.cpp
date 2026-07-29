@@ -203,6 +203,8 @@ void AgentTUI::start() {
                 result = renderSettingsOverlay() | center;
             } else if (showPendingInputs_) {
                 result = renderPendingInputsOverlay() | center;
+            } else if (showContextOverlay_) {
+                result = renderContextOverlay() | center;
             }
             return result | bold | bgcolor(theme_.backgroundColor);
         });
@@ -316,6 +318,15 @@ void AgentTUI::start() {
                 return true; // 弹窗打开时屏蔽其余输入
             }
 
+            if (showContextOverlay_) {
+                if (event == Event::Escape) {
+                    showContextOverlay_ = false;
+                    postRedraw();
+                    return true;
+                }
+                return true;
+            }
+
             {
                 std::string_view in = event.input();
                 if (in == "\x1B\n" || in == "\x1B\r") {
@@ -402,6 +413,17 @@ void AgentTUI::start() {
                     return true;
                 }
                 if (handleCollapsibleMouse(mouse)) {
+                    postRedraw();
+                    return true;
+                }
+                if (mouse.button == Mouse::Left && mouse.motion == Mouse::Released
+                    && contextButtonBox_.Contain(mouse.x, mouse.y)) {
+                    if (transport_) {
+                        sendToPeer(agentxx::agent::WireGetContext{threadId_});
+                    } else if (session_) {
+                        contextMessages_    = session_->llmMessages;
+                        showContextOverlay_ = true;
+                    }
                     postRedraw();
                     return true;
                 }
@@ -515,6 +537,11 @@ void AgentTUI::onPeerMessage(agentxx::agent::WireMessage msg) {
                         appendComponents_.push_back(notif);
                     }
                 }
+                postRedraw();
+            } else if constexpr (std::is_same_v<T, agentxx::agent::WireContextMessages>) {
+                std::lock_guard<std::mutex> lock(mutex_);
+                contextMessages_    = m.messages;
+                showContextOverlay_ = true;
                 postRedraw();
             }
         },
@@ -640,6 +667,16 @@ void AgentTUI::onDelta(const agentxx::agent::Delta& delta) {
         case Type::TurnStart: {
             std::lock_guard<std::mutex> lock(mutex_);
             isStreaming_ = true;
+        } break;
+        case Type::NodeStart: {
+            std::lock_guard<std::mutex> lock(mutex_);
+            currentNodeName_ = delta.nodeName;
+        } break;
+        case Type::NodeEnd: {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (currentNodeName_ == delta.nodeName) {
+                currentNodeName_.clear();
+            }
         } break;
         case Type::TurnEnd: {
             std::lock_guard<std::mutex> lock(mutex_);
