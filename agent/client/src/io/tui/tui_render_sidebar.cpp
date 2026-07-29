@@ -131,9 +131,16 @@ void AgentTUI::toggleLogWindow() {
     if (hasSidebarTab(kLogTabId)) {
         removeSidebarTab(kLogTabId);
     } else {
-        addSidebarTab(kLogTabId, "Logs", [this]() {
-            return renderLogWindow();
-        });
+        addSidebarTab(
+            kLogTabId,
+            "Logs",
+            [this]() {
+                return renderLogWindow();
+            },
+            [this]() {
+                return renderLogSidebarFooter();
+            }
+        );
     }
     if (sidebarScrollable_) {
         sidebarScrollable_->setStickToBottom(true);
@@ -356,4 +363,22 @@ ftxui::Element AgentTUI::renderInfoSidebarFooter() {
     );
 
     return vbox(std::move(elements));
+}
+
+ftxui::Element AgentTUI::renderLogSidebarFooter() {
+    Elements row;
+
+    if (currentNodeName_.empty()) {
+        row.push_back(text(" idle") | color(theme_.hintColor));
+    } else {
+        row.push_back(text(" ▶ " + currentNodeName_) | color(theme_.accentColor) | bold);
+    }
+
+    row.push_back(filler());
+
+    auto ctxBtn = text(" 上下文 ") | bgcolor(theme_.buttonBgColor)
+                  | color(theme_.buttonTextColor) | reflect(contextButtonBox_);
+    row.push_back(ctxBtn);
+
+    return hbox(std::move(row));
 }

@@ -106,6 +106,16 @@ struct WireAppendComponentInfo {
     std::vector<AppendComponentNotification> notifications;
 };
 
+/// 客户端请求当前会话 LLM 上下文消息 (Client -> Server)
+struct WireGetContext {
+    std::string threadId;
+};
+
+/// 服务端 LLM 上下文消息响应 (Server -> Client)
+struct WireContextMessages {
+    neograph::json messages;
+};
+
 /// 所有可能的线消息类型 (tagged variant)
 using WireMessage = std::variant<
     WireHello,
@@ -124,7 +134,9 @@ using WireMessage = std::variant<
     WireGetModel,
     WireModelInfo,
     WireGetAppendComponentInfo,
-    WireAppendComponentInfo>;
+    WireAppendComponentInfo,
+    WireGetContext,
+    WireContextMessages>;
 
 // ---------------------------------------------------------------------------
 // AgentIOTransportBase: 两个 AgentIOBase 端点之间的协议传输层

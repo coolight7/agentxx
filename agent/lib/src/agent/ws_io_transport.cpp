@@ -405,6 +405,10 @@ std::string WsAgentIOTransport::serialize(const WireMessage& msg) {
                 return remote::makeGetAppendComponentInfo(m.threadId).dump();
             } else if constexpr (std::is_same_v<T, WireAppendComponentInfo>) {
                 return remote::makeAppendComponentInfo(m.notifications).dump();
+            } else if constexpr (std::is_same_v<T, WireGetContext>) {
+                return remote::makeGetContext(m.threadId).dump();
+            } else if constexpr (std::is_same_v<T, WireContextMessages>) {
+                return remote::makeContextMessages(m.messages).dump();
             } else {
                 return "{}";
             }
@@ -528,6 +532,14 @@ std::optional<WireMessage> WsAgentIOTransport::deserialize(std::string_view json
         WireAppendComponentInfo info;
         info.notifications = remote::appendComponentInfoFromJson(j);
         return WireMessage{std::move(info)};
+    } else if (t == remote::MsgType::GetContext) {
+        WireGetContext req;
+        req.threadId = j.value("thread", std::string{});
+        return WireMessage{std::move(req)};
+    } else if (t == remote::MsgType::ContextMessages) {
+        WireContextMessages resp;
+        resp.messages = j.value("messages", neograph::json::array());
+        return WireMessage{std::move(resp)};
     }
     // Pong / Ping: 心跳内部处理, 不转发给调用方
     return std::nullopt;

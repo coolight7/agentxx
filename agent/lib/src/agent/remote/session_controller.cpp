@@ -136,6 +136,13 @@ void SessionController::onPeerMessage(WireMessage msg) {
                 std::vector<AppendComponentNotification> notifications;
                 agent->collectAppendComponentInfo(notifications);
                 sendToPeer(WireAppendComponentInfo{std::move(notifications)});
+            } else if constexpr (std::is_same_v<T, WireGetContext>) {
+                auto sess = session();
+                if (!sess) {
+                    sendToPeer(WireContextMessages{neograph::json::array()});
+                    return;
+                }
+                sendToPeer(WireContextMessages{sess->llmMessages});
             }
         },
         std::move(msg)

@@ -135,6 +135,15 @@ private:
     bool showSettings_         = false;
     int  selectedSettingIndex_ = 0;
 
+    /// 上下文弹窗状态 (查看当前会话 llm messages)
+    bool showContextOverlay_ = false;
+    int  contextScrollOffset_ = 0;
+    /// 从 server 收到的 llm messages 缓存 (弹窗展示用)
+    neograph::json contextMessages_ = neograph::json::array();
+
+    /// 当前正在执行的节点名称 (由 NodeStart/NodeEnd Delta 更新)
+    std::string currentNodeName_;
+
     /// 用户输入队列: BaseAgent 执行中收到的用户输入排队, 轮次结束后自动逐个发送
     std::deque<PendingInput> pendingInputs_;
     /// 待发送消息队列弹窗开关
@@ -167,6 +176,8 @@ private:
     std::vector<size_t>     collapsibleMsgIndices_;
     /// 消息列表整体渲染区域, 用于限制折叠点击的 X 范围 (避免误触侧边栏)
     ftxui::Box messagesAreaBox_;
+    /// 日志侧边栏底部 "上下文" 按钮的渲染区域 (鼠标点击检测)
+    ftxui::Box contextButtonBox_;
 
     std::shared_ptr<agentxx::agent::AgentContext> agentContext_;
     TUITheme                                      theme_;
@@ -224,6 +235,8 @@ private:
     ftxui::Element renderSettingsOverlay();
     /// 待发送消息队列弹窗 (顶部清空按钮, 每条消息折叠为一行 + 删除按钮)
     ftxui::Element renderPendingInputsOverlay();
+    /// 上下文弹窗: 显示当前会话的 llm messages 列表
+    ftxui::Element renderContextOverlay();
     /// 输入框下方的状态栏: 左侧模型名, 右侧上下文占用
     ftxui::Element renderStatusBar();
     /// 右侧边栏: 顶部 tab 栏 + 当前 tab 内容; 无 tab 时不应调用
@@ -234,6 +247,8 @@ private:
     ftxui::Element renderInfoSidebar();
     /// 信息侧边栏底部常驻内容: 工作目录 + 版本/运行模式 (不随主体滚动)
     ftxui::Element renderInfoSidebarFooter();
+    /// 日志侧边栏底部常驻内容: 当前执行节点名 + "上下文" 按钮
+    ftxui::Element renderLogSidebarFooter();
     /// planning 特化渲染 (取最新 planning_write toolcall 的 todos/notes); 无规划时返回空
     std::optional<ftxui::Element> renderPlanningInfo();
 
