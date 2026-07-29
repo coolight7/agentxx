@@ -298,28 +298,30 @@ std::optional<std::string> agentxx::util::base64Decode(std::string_view str) {
     }
 
 #if XX_IS_DEBUG_D
-    // 校验 base64 格式: 仅含合法字符, '=' 仅在结尾 (最多 2 个), 数据长度 mod 4 不为 1
-    size_t padCount = 0;
-    for (size_t i = 0; i < str.size(); ++i) {
-        unsigned char c = static_cast<unsigned char>(str[i]);
-        if (c == '=') {
-            if (i < str.size() - 2) {
-                return std::nullopt; // '=' 只能出现在结尾最多 2 个
-            }
-            ++padCount;
-        } else {
-            bool valid = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
-                         || c == '+' || c == '/';
-            if (!valid) {
-                return std::nullopt;
-            }
-            if (padCount > 0) {
-                return std::nullopt; // padding 之后不应再出现数据字符
+    {
+        size_t padCount = 0;
+        // 校验 base64 格式: 仅含合法字符, '=' 仅在结尾 (最多 2 个), 数据长度 mod 4 不为 1
+        for (size_t i = 0; i < str.size(); ++i) {
+            unsigned char c = static_cast<unsigned char>(str[i]);
+            if (c == '=') {
+                if (i < str.size() - 2) {
+                    return std::nullopt; // '=' 只能出现在结尾最多 2 个
+                }
+                ++padCount;
+            } else {
+                bool valid = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
+                             || (c >= '0' && c <= '9') || c == '+' || c == '/';
+                if (!valid) {
+                    return std::nullopt;
+                }
+                if (padCount > 0) {
+                    return std::nullopt; // padding 之后不应再出现数据字符
+                }
             }
         }
-    }
-    if ((str.size() - padCount) % 4 == 1) {
-        return std::nullopt; // 非法 base64 长度
+        if ((str.size() - padCount) % 4 == 1) {
+            return std::nullopt; // 非法 base64 长度
+        }
     }
 #endif
 
@@ -331,8 +333,7 @@ std::optional<std::string> agentxx::util::base64Decode(std::string_view str) {
     auto [bytes_written, chars_read]
         = boost::beast::detail::base64::decode(result.data(), str.data(), str.size());
 
-    if (chars_read < str.size() - padCount) {
-        // 解码提前终止 (理论上校验后不会发生, 防御性返回失败)
+    if (chars_read < str.size()) {
         return std::nullopt;
     }
 

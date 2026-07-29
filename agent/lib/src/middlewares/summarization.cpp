@@ -244,8 +244,10 @@ asio::awaitable<void>
               )
               .get<std::vector<std::string>>();
 
-    const auto countTokenUsage = countTokens(appendSystemPromptList, messages);
-    const auto tokenUsage      = std::max(static_cast<size_t>(apiTokenUsage), countTokenUsage);
+    size_t     countTokenUsage = 0;
+    const auto tokenUsage      = (apiTokenUsage > 0)
+                                     ? static_cast<size_t>(apiTokenUsage)
+                                     : (countTokenUsage = countTokens(appendSystemPromptList, messages));
 
     const auto& thread_id = in.ctx.thread_id;
 
@@ -362,15 +364,15 @@ asio::awaitable<void>
             XX_OUT(
                 R"_(
 ┏━━━━━━ Summary ━━━━━━┓
-┣━ MAX Token Limit: {}
-┣━ Api TokenUsage: {}
-┣━ Count Messages Token: {}/{}
+┣━ Api Token Usage: {}
+┣━ Count Messages Token: {}
+┣━ Token Limit: {}/{}
 ┣━ Summary To: {}
 ┗━━━━━━ Summary ━━━━━━┛)_",
-                modelSupportMaxToken,
                 apiTokenUsage,
-                tokenUsage,
                 countTokenUsage,
+                tokenUsage,
+                modelSupportMaxToken,
                 countTokens(appendSystemPromptList, in.state.get_messages())
             );
         }
@@ -379,15 +381,15 @@ asio::awaitable<void>
             XX_OUT(
                 R"_(
 ┏━━━━━━ Summary ━━━━━━┓
-┣━ MAX Token Limit: {}
-┣━ Api TokenUsage: {}
-┣━ Count Messages Token: {}/{}
+┣━ Api Token Usage: {}
+┣━ Count Messages Token: {}
+┣━ Token Limit: {}/{}
 ┣━ Not Need Summary
 ┗━━━━━━ Summary ━━━━━━┛)_",
-                modelSupportMaxToken,
                 apiTokenUsage,
-                tokenUsage,
                 countTokenUsage,
+                tokenUsage,
+                modelSupportMaxToken,
                 countTokens(appendSystemPromptList, in.state.get_messages())
             );
         }
