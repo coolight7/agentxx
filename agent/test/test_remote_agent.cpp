@@ -922,9 +922,7 @@ static asio::awaitable<void> test_remote_echo() {
         asio::co_spawn(ex, io->runTransportLoop(), asio::detached);
 
         for (int i = 0; i < 3; ++i) {
-            io->sendToPeer(
-                agentxx::agent::WireUserInput{"session", "m" + std::to_string(i)}
-            );
+            io->sendToPeer(agentxx::agent::WireUserInput{"session", "m" + std::to_string(i)});
             co_await testSleep(ex, std::chrono::milliseconds{200});
         }
         co_await testSleep(ex, std::chrono::milliseconds{200});
@@ -955,8 +953,10 @@ static asio::awaitable<void> test_remote_concurrent_writes() {
     for (int t = 0; t < numThreads; ++t) {
         threads.emplace_back([clientPtr, t, perThread]() {
             for (int i = 0; i < perThread; ++i) {
-                agentxx::agent::WireUserInput
-                    msg{"session", std::to_string(t) + "-" + std::to_string(i)};
+                agentxx::agent::WireUserInput msg{
+                    "session",
+                    std::to_string(t) + "-" + std::to_string(i)
+                };
                 clientPtr->send(agentxx::agent::WireMessage{std::move(msg)});
             }
         });
