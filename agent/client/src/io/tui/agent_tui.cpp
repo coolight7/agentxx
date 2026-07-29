@@ -389,6 +389,11 @@ void AgentTUI::start() {
             if (event.is_mouse()) {
                 // 滚轮事件由 Scrollable 子组件处理, 此处不拦截
                 const auto& mouse = event.mouse();
+                // 侧边栏拖拽调整宽度 (拖拽中优先消费所有鼠标事件)
+                if (handleSidebarResizeMouse(mouse)) {
+                    postRedraw();
+                    return true;
+                }
                 if (mouse.button == Mouse::Left && mouse.motion == Mouse::Released
                     && !pendingInputs_.empty()
                     && pendingInputCounterBox_.Contain(mouse.x, mouse.y)) {

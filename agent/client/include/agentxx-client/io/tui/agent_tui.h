@@ -151,6 +151,16 @@ private:
     /// 各 tab 标题的渲染区域, 用于鼠标点击检测 (渲染时经 reflect 填充)
     std::vector<ftxui::Box> tabBoxes_;
 
+    /// 侧边栏宽度 (拖拽左边框可调; 渲染时对整体应用 size(WIDTH, EQUAL, sidebarWidth_))
+    int sidebarWidth_ = kSidebarDefaultWidth;
+    /// 是否正在拖拽调整侧边栏宽度
+    bool sidebarResizing_ = false;
+    /// 拖拽起始鼠标 x 与起始宽度 (delta 计算, 避免依赖绝对屏幕几何)
+    int sidebarResizeStartX_     = 0;
+    int sidebarResizeStartWidth_ = 0;
+    /// 侧边栏左侧拖拽手柄的渲染区域 (渲染时经 reflect 填充)
+    ftxui::Box sidebarHandleBox_;
+
     /// 各可折叠消息块 (Thinking/Tool) 的渲染区域与对应 messages_ 索引,
     /// 用于鼠标点击展开/折叠 (渲染时经 reflect 填充)
     std::vector<ftxui::Box> collapsibleBoxes_;
@@ -193,6 +203,10 @@ private:
     static constexpr const char* kInfoTabId = "xx_info";
     /// 屏幕宽度达到此值时默认显示信息侧边栏
     static constexpr int kInfoSidebarMinWidth = 120;
+    /// 侧边栏宽度拖拽范围与默认值
+    static constexpr int kSidebarMinWidth     = 24;
+    static constexpr int kSidebarMaxWidth     = 120;
+    static constexpr int kSidebarDefaultWidth = 40;
     /// 程序版本号 (与 CMake project VERSION 保持一致)
     static constexpr const char* kAgentxxVersion = "0.1.0";
 
@@ -256,6 +270,9 @@ private:
     void toggleLogWindow();
     /// 处理侧边栏 tab 的鼠标点击; 返回是否消费了该事件
     bool handleSidebarMouse(const ftxui::Mouse& mouse);
+    /// 处理侧边栏左边框拖拽调整宽度; 返回是否消费了该事件
+    /// - 拖拽中会消费所有鼠标事件, 应在其他鼠标处理之前调用
+    bool handleSidebarResizeMouse(const ftxui::Mouse& mouse);
     /// 处理可折叠消息块 (Thinking/Tool) 的鼠标点击 (展开/折叠);
     /// 返回是否消费了该事件
     bool handleCollapsibleMouse(const ftxui::Mouse& mouse);
