@@ -27,7 +27,7 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
 ### 核心对话能力
 
 - **多轮对话**: 支持完整的多轮对话管理，维护 `fullHistory` (append-only 完整历史) 和 `llmMessages` (可压缩的 LLM 上下文) 双消息集
-- **流式输出**: LLM 响应以增量 Delta 事件推送 (TextToken / ThinkingToken / ToolStart / ToolEnd / TurnStart / TurnEnd)
+- **流式输出**: LLM 响应以增量 Delta 事件推送 (TextToken / ThinkingToken / ToolStart / ToolEnd / TurnStart / TurnEnd / NodeStart / NodeEnd)
 - **多模型支持**: 运行时按会话 (thread_id) 动态切换模型，支持 OpenAI 和 Anthropic 两种 Provider 协议
 - **上下文压缩**: SummarizationMiddleware 在上下文接近模型 token 上限时自动压缩历史消息，支持 toolcall 输出去重与截断
 - **思维链展示**: 支持 LLM 的 thinking/reasoning_content 流式输出与展示
@@ -85,6 +85,7 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
 |--------|------|
 | **PermissionMiddleware** | 工具调用权限控制，经事件总线向用户请求授权 (HIL) |
 | **SkillMiddleware** | 技能文件 (SKILL.md) 的渐进式发现与加载 |
+| **MemoryFileMiddleware** | 上下文文件 (Memory) 读取与缓存，每次模型调用时注入系统提示词 |
 | **SummarizationMiddleware** | 上下文 token 统计与自动压缩，防止超出模型上下文窗口 |
 | **PlanningMiddleware** | 任务规划状态管理，将 planning 数据注入 system prompt |
 | **SubagentSupervisor** | 子代理生命周期管理与结果收集 |
@@ -100,14 +101,16 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
 ### 多会话与并发
 
 - **Session 隔离**: 每个 thread_id 独立的 Session，包含 IO、EventBus、ContextStats、CancelToken、模型选择、消息历史
-- **SessionStore**: 线程安全的会话存储，按 thread_id 取/建 Session
+- **SessionStore**: 会话存储，按 thread_id 取/建 Session (仅 agent io_context 线程访问，无需锁保护)
 - **活动状态**: Idle / Streaming / ExecutingTool / WaitingInput 四种状态
 - **链式哈希**: fullHistory 使用 FNV-1a 链式哈希校验一致性
+- **线程绑定与无锁快照**: Session 通过 `bindIoThread()` 绑定 io 线程，`assertIoThread()` 强制校验可变状态 (fullHistory/llmMessages/chainHash) 仅在 io 线程写入；UI 线程通过 `getFullHistoryCopy()` / `getHashInfo()` 等原子快照方法 (基于 `std::atomic<shared_ptr<const T>>`) 只读访问，无需加锁
+- **取消/切模型**: UI 线程的取消/切模型操作通过 Wire 消息 (WireCancel/WireSelectModel) 发往 agent 线程处理，避免跨线程竞争
 
 ### 远程通信
 
 - **WebSocket 服务**: AgentServer 提供 WS/WSS 服务，支持 token 鉴权
-- **Wire Protocol**: 双向 JSON 消息协议 (Hello/UserInput/Cancel/SelectModel/Delta/Sync/InterruptRequest/InterruptResponse/TurnResult/ContextStats)
+- **Wire Protocol**: 双向 JSON 消息协议 (Hello/UserInput/Cancel/SelectModel/GetModel/Delta/Sync/InterruptRequest/InterruptResponse/TurnResult/ContextStats/Error/Log/ModelInfo/GetAppendComponentInfo/AppendComponentInfo/GetContext/ContextMessages/Ping/Pong)
 - **断线重连**: 客户端自动重连，携带 lastSeq 供增量 Delta 重放，seq 不连续时回退全量 Sync
 - **Grace Period**: 断线后会话保持运行的宽限期，避免误取消进行中的轮次
 - **进程内直连**: ChannelAgentIOTransport 零序列化 Channel 传输，同进程内 client 与 agent 直连
@@ -256,7 +259,7 @@ agentxx_cli [mode] [options]
 | `--token <token>` | 认证 token |
 | `--model <model>` | 远程模型名称 |
 | `--host <host>` | 服务监听地址 (默认: 127.0.0.1) |
-| `--port <port>` | 服务监听端口 (默认: 17000) |
+| `--port <port>` | 服务监听端口 (默认: 7007) |
 | `--ssl-cert <file>` | SSL 证书文件路径 |
 | `--ssl-key <file>` | SSL 私钥文件路径 |
 
