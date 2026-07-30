@@ -737,6 +737,147 @@ asio::awaitable<void> test_non_streaming_tool_call(MockOpenAIServer& mock, uint1
     }
 }
 
+// ---------------------------------------------------------------------------
+// Test: LLM API 响应 toolcall 时没有 toolcall_id
+// 某些 LLM 提供商返回的 tool_calls 中可能缺少 id 字段，
+// 需要验证解析行为：非流式路径 id 为空字符串；流式路径有 fallback 生成 "call_N"。
+// ---------------------------------------------------------------------------
+
+asio::awaitable<void>
+    test_non_streaming_tool_call_missing_id(MockOpenAIServer& mock, uint16_t port) {
+    std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
+    mock.mode           = MockMode::Normal;
+
+    // 构造一个没有 "id" 字段的 tool_call 响应
+    auto tcFunc         = neograph::json::object();
+    tcFunc["name"]      = "get_weather";
+    tcFunc["arguments"] = R"({"location":"Beijing"})";
+    auto tc             = neograph::json::object();
+    // 注意: 不设置 tc["id"]
+    tc["type"]     = "function";
+    tc["function"] = tcFunc;
+    auto tcArr     = neograph::json::array();
+    tcArr.push_back(tc);
+    auto msg                = neograph::json::object();
+    msg["role"]             = "assistant";
+    msg["content"]          = neograph::json(nullptr);
+    msg["tool_calls"]       = tcArr;
+    auto choice             = neograph::json::object();
+    choice["index"]         = 0;
+    choice["finish_reason"] = "tool_calls";
+    choice["message"]       = msg;
+    auto choices            = neograph::json::array();
+    choices.push_back(choice);
+    neograph::json resp;
+    resp["id"]      = "chatcmpl-no-id";
+    resp["object"]  = "chat.completion";
+    resp["created"] = 1700000002;
+    resp["model"]   = "mock-model";
+    resp["choices"] = choices;
+
+    mock.customResponse = resp;
+
+    auto provider = server::OpenAIProvider::create(makeOaiCfg("sk-test", baseUrl));
+
+    neograph::CompletionParams params;
+    params.model    = "gpt-4o";
+    params.messages = {
+        neograph::ChatMessage{.role = "user", .content = "What is the weather?"}
+    };
+    params.tools = {
+        neograph::ChatTool{
+                           .name        = "get_weather",
+                           .description = "Get weather for a location",
+                           .parameters  = neograph::json::parse(
+                R"({"type":"object","properties":{"location":{"type":"string"}}})"
+            )
+        }
+    };
+
+    try {
+        auto result = co_await provider->invoke(params, nullptr);
+        XX_TEST_EXPECT_EQ(result.message.role, "assistant");
+        XX_TEST_EXPECT_FALSE(result.message.tool_calls.empty());
+        if (!result.message.tool_calls.empty()) {
+            XX_TEST_EXPECT_EQ(result.message.tool_calls[0].name, "get_weather");
+            XX_TEST_EXPECT_TRUE(
+                result.message.tool_calls[0].arguments.find("Beijing") != std::string::npos
+            );
+            // 非流式路径: parse_response_message 使用 tc.value("id", "")
+            // 缺少 id 时应为空字符串
+            XX_TEST_EXPECT_TRUE(result.message.tool_calls[0].id.empty());
+        }
+    } catch (const std::exception& e) {
+        XX_TEST_FAILED++;
+        TEST_FAIL << "non-streaming tool call missing id failed: " << e.what() << std::endl;
+    }
+}
+
+asio::awaitable<void> test_streaming_tool_call_missing_id(MockOpenAIServer& mock, uint16_t port) {
+    std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
+    mock.mode           = MockMode::StreamingToolCall;
+
+    // 构造流式 tool_call SSE chunks，不包含 id 字段
+    mock.sseChunks.clear();
+    // 第一个 chunk: role + tool_call 开始 (无 id)
+    mock.sseChunks.push_back(MockOpenAIServer::sseData(
+        R"({"choices":[{"index":0,"delta":{"role":"assistant","content":null,"tool_calls":[{"index":0,"function":{"name":"get_weather","arguments":""}}]}}]})"
+    ));
+    // 第二个 chunk: arguments 增量 (无 id)
+    mock.sseChunks.push_back(MockOpenAIServer::sseData(
+        R"({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"location\":"}}]}}]})"
+    ));
+    // 第三个 chunk: arguments 增量 (无 id)
+    mock.sseChunks.push_back(MockOpenAIServer::sseData(
+        R"({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"Shanghai\"}"}}]}}]})"
+    ));
+    // usage + done
+    mock.sseChunks.push_back(MockOpenAIServer::sseData(
+        R"({"choices":[{"index":0,"delta":{}}],"usage":{"prompt_tokens":8,"completion_tokens":4,"total_tokens":12}})"
+    ));
+    mock.sseChunks.push_back(MockOpenAIServer::sseDone());
+
+    auto provider = server::OpenAIProvider::create(makeOaiCfg("sk-test", baseUrl));
+
+    neograph::CompletionParams params;
+    params.model    = "gpt-4o";
+    params.messages = {
+        neograph::ChatMessage{.role = "user", .content = "What is the weather?"}
+    };
+    params.tools = {
+        neograph::ChatTool{
+                           .name        = "get_weather",
+                           .description = "Get weather for a location",
+                           .parameters  = neograph::json::parse(
+                R"({"type":"object","properties":{"location":{"type":"string"}}})"
+            )
+        }
+    };
+
+    try {
+        std::string              accumulated;
+        neograph::StreamCallback onChunk = [&](const std::string& chunk) {
+            accumulated += chunk;
+        };
+        auto result = co_await provider->invoke(params, onChunk);
+        XX_TEST_EXPECT_EQ(result.message.role, "assistant");
+        XX_TEST_EXPECT_FALSE(result.message.tool_calls.empty());
+        if (!result.message.tool_calls.empty()) {
+            XX_TEST_EXPECT_EQ(result.message.tool_calls[0].name, "get_weather");
+            XX_TEST_EXPECT_TRUE(
+                result.message.tool_calls[0].arguments.find("Shanghai") != std::string::npos
+            );
+            // 流式路径: doStream 结束后有 fallback:
+            // if (tc.id.empty()) tc.id = "call_" + std::to_string(idx);
+            // 缺少 id 时应生成 "call_0"
+            XX_TEST_EXPECT_EQ(result.message.tool_calls[0].id, "call_0");
+        }
+    } catch (const std::exception& e) {
+        XX_TEST_FAILED++;
+        TEST_FAIL << "streaming tool call missing id failed: " << e.what() << std::endl;
+    }
+}
+
 asio::awaitable<void> test_rate_limit_error(MockOpenAIServer& mock, uint16_t port) {
     std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
     mock.mode           = MockMode::RateLimit;
@@ -1842,11 +1983,11 @@ void test_read_timeout_streaming() {
 }
 
 void test_send_timeout_calculation() {
-    XX_TEST_EXPECT_EQ(agentxx::util::HttpClient::calcSendTimeout(0).count(), 30);
-    XX_TEST_EXPECT_EQ(agentxx::util::HttpClient::calcSendTimeout(1024).count(), 30);
-    XX_TEST_EXPECT_EQ(agentxx::util::HttpClient::calcSendTimeout(65536 * 30).count(), 30);
-    XX_TEST_EXPECT_EQ(agentxx::util::HttpClient::calcSendTimeout(65536 * 31).count(), 31);
-    XX_TEST_EXPECT_EQ(agentxx::util::HttpClient::calcSendTimeout(65536 * 500).count(), 500);
+    XX_TEST_EXPECT_EQ(agentxx::util::HttpClient::calcTimeoutBySize(0).count(), 30);
+    XX_TEST_EXPECT_EQ(agentxx::util::HttpClient::calcTimeoutBySize(1024).count(), 30);
+    XX_TEST_EXPECT_EQ(agentxx::util::HttpClient::calcTimeoutBySize(65536 * 30).count(), 30);
+    XX_TEST_EXPECT_EQ(agentxx::util::HttpClient::calcTimeoutBySize(65536 * 31).count(), 31);
+    XX_TEST_EXPECT_EQ(agentxx::util::HttpClient::calcTimeoutBySize(65536 * 500).count(), 500);
 }
 
 // ---------------------------------------------------------------------------
@@ -1943,6 +2084,8 @@ asio::awaitable<TestResult> run_openai_provider_tests() {
 
     co_await test_non_streaming_completion(*mock, port);
     co_await test_non_streaming_tool_call(*mock, port);
+    co_await test_non_streaming_tool_call_missing_id(*mock, port);
+    co_await test_streaming_tool_call_missing_id(*mock, port);
     co_await test_rate_limit_error(*mock, port);
     co_await test_server_error(*mock, port);
     co_await test_extra_body_passthrough(*mock, port);

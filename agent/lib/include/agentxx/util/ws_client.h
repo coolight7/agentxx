@@ -37,9 +37,11 @@ struct WsMessage {
 };
 
 struct WsClientConfig {
-    std::chrono::milliseconds connectTimeout = std::chrono::seconds{10};
+    inline static constexpr size_t kTimeoutChunkBytes = 64 * 1024;
+
+    std::chrono::milliseconds connectTimeout = std::chrono::seconds{16};
     std::chrono::milliseconds recvTimeout    = std::chrono::seconds{60};
-    std::chrono::milliseconds sendTimeout    = std::chrono::seconds{30};
+    std::chrono::milliseconds sendTimeout    = std::chrono::seconds{60};
     bool                      sslVerify      = false;
     size_t                    maxMessageSize = 16 * 1024 * 1024;
 };
@@ -70,7 +72,7 @@ public:
 
     bool isOpen() const noexcept;
 
-    void setRecvTimeout(std::chrono::milliseconds timeout) noexcept;
+    void setRecvTimeout(std::chrono::seconds timeout) noexcept;
 
     /// 关闭底层 socket, 使挂起的 recv/send 以错误返回
     /// - 须在 WsClient 绑定的 executor 上调用 (与 recv/send 同线程)

@@ -1,5 +1,5 @@
 #include "agentxx/util/http_client.h"
-
+#include "agentxx/util/exception.h"
 #include "html2md/html2md.h"
 #include <openssl/ssl.h>
 
@@ -264,7 +264,7 @@ std::optional<HttpClient::ParsedUrl> HttpClient::parseUrl(std::string_view url) 
     return ParsedUrl{std::move(scheme), std::move(host), port, std::move(path)};
 }
 
-std::chrono::seconds HttpClient::calcSendTimeout(size_t bodyBytes) {
+std::chrono::seconds HttpClient::calcTimeoutBySize(size_t bodyBytes) {
     int64_t seconds = (static_cast<int64_t>(bodyBytes) + 65535) / 65536;
     return std::chrono::seconds{std::max<int64_t>(30, seconds)};
 }
@@ -291,105 +291,114 @@ asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::requestAsy
     std::expected<HttpResponse, std::string> result;
     for (size_t redirectCount = 0;; ++redirectCount) {
         result = std::unexpected{std::string{"unknown error"}};
-        try {
-            auto parsed = parseUrl(currentUrl);
-            if (!parsed) {
-                throw std::runtime_error{"invalid url: " + currentUrl};
-            }
-            bool isHttps     = parsed->scheme == "https";
-            bool defaultPort = (isHttps && parsed->port == 443) || (!isHttps && parsed->port == 80);
-            std::string hostHeader = parsed->host;
-            if (!defaultPort) {
-                hostHeader += ":" + std::to_string(parsed->port);
-            }
+        co_await agentxx::util::catchErrorAsync<void>(
+            [&]() -> asio::awaitable<void> {
+                try {
+                    auto parsed = parseUrl(currentUrl);
+                    if (!parsed) {
+                        throw std::runtime_error{"invalid url: " + currentUrl};
+                    }
+                    bool isHttps = parsed->scheme == "https";
+                    bool defaultPort
+                        = (isHttps && parsed->port == 443) || (!isHttps && parsed->port == 80);
+                    std::string hostHeader = parsed->host;
+                    if (!defaultPort) {
+                        hostHeader += ":" + std::to_string(parsed->port);
+                    }
 
-            http::request<http::string_body> req{
-                http::string_to_verb(currentMethod),
-                parsed->path,
-                11
-            };
-            bool hasHost = extraHeaders.contains("host");
-            if (!hasHost) {
-                req.set(http::field::host, hostHeader);
-            }
-            req.set(
-                http::field::user_agent,
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/119.0.6045.160 Safari/537.36"
-            );
-            req.set(http::field::accept, "*/*");
-            req.set(http::field::accept_encoding, "identity");
-            if (!config.keepAlive) {
-                req.set(http::field::connection, "close");
-            }
+                    http::request<http::string_body> req{
+                        http::string_to_verb(currentMethod),
+                        parsed->path,
+                        11
+                    };
+                    bool hasHost = extraHeaders.contains("host");
+                    if (!hasHost) {
+                        req.set(http::field::host, hostHeader);
+                    }
+                    req.set(
+                        http::field::user_agent,
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/119.0.6045.160 Safari/537.36"
+                    );
+                    req.set(http::field::accept, "*/*");
+                    req.set(http::field::accept_encoding, "identity");
+                    if (!config.keepAlive) {
+                        req.set(http::field::connection, "close");
+                    }
 
-            for (const auto& [k, v] : extraHeaders.data) {
-                if (isIgnoreCaseEqual(k, "host")) {
-                    continue;
+                    for (const auto& [k, v] : extraHeaders.data) {
+                        if (isIgnoreCaseEqual(k, "host")) {
+                            continue;
+                        }
+                        req.set(k, stringVectorJoin(v, "; "));
+                    }
+                    if (!currentBody.empty()) {
+                        if (!currentContentType.empty()) {
+                            req.set(http::field::content_type, currentContentType);
+                        }
+                        req.body() = currentBody;
+                        req.prepare_payload();
+                    }
+
+                    auto endpoints = co_await resolver.async_resolve(
+                        parsed->host,
+                        std::to_string(parsed->port),
+                        asio::cancel_after(config.connectTimeout, asio::use_awaitable)
+                    );
+
+                    if (isHttps) {
+                        bool verify = config.sslVerify.value_or(
+                            sslVerifyEnabled_.load(std::memory_order_relaxed)
+                        );
+                        auto&                          sslCtx = sharedSslCtx(verify);
+                        asio::ssl::stream<tcp::socket> stream(executor, sslCtx);
+                        if (!parsed->host.empty()) {
+                            ::SSL_set_tlsext_host_name(
+                                stream.native_handle(),
+                                parsed->host.c_str()
+                            );
+                        }
+                        co_await asio::async_connect(
+                            stream.lowest_layer(),
+                            endpoints,
+                            asio::cancel_after(config.connectTimeout, asio::use_awaitable)
+                        );
+                        neograph_asio_error_code tcpEc;
+                        stream.lowest_layer().set_option(asio::ip::tcp::no_delay(true), tcpEc);
+                        co_await stream.async_handshake(
+                            asio::ssl::stream_base::client,
+                            asio::cancel_after(config.connectTimeout, asio::use_awaitable)
+                        );
+                        result = co_await exchange(stream, req, config);
+                        neograph_asio_error_code sslEc;
+                        co_await stream.async_shutdown(asio::use_awaitable);
+                    } else {
+                        tcp::socket stream(executor);
+                        co_await asio::async_connect(
+                            stream,
+                            endpoints,
+                            asio::cancel_after(config.connectTimeout, asio::use_awaitable)
+                        );
+                        neograph_asio_error_code tcpEc;
+                        stream.set_option(asio::ip::tcp::no_delay(true), tcpEc);
+                        result = co_await exchange(stream, req, config);
+                    }
+                    co_return;
+                } catch (const boost::system::system_error& e) {
+                    auto errInfo = std::string{e.what()};
+                    agentxx::util::autoConvertToUtf8(errInfo);
+                    if (e.code() == asio::error::operation_aborted) {
+                        result = std::unexpected{fmt::format("timeout: {}", errInfo)};
+                    } else {
+                        result = std::unexpected{errInfo};
+                    }
                 }
-                req.set(k, stringVectorJoin(v, "; "));
-            }
-            if (!currentBody.empty()) {
-                if (!currentContentType.empty()) {
-                    req.set(http::field::content_type, currentContentType);
-                }
-                req.body() = currentBody;
-                req.prepare_payload();
-            }
-
-            auto endpoints = co_await resolver.async_resolve(
-                parsed->host,
-                std::to_string(parsed->port),
-                asio::cancel_after(config.connectTimeout, asio::use_awaitable)
-            );
-
-            if (isHttps) {
-                bool verify
-                    = config.sslVerify.value_or(sslVerifyEnabled_.load(std::memory_order_relaxed));
-                auto&                          sslCtx = sharedSslCtx(verify);
-                asio::ssl::stream<tcp::socket> stream(executor, sslCtx);
-                if (!parsed->host.empty()) {
-                    ::SSL_set_tlsext_host_name(stream.native_handle(), parsed->host.c_str());
-                }
-                co_await asio::async_connect(
-                    stream.lowest_layer(),
-                    endpoints,
-                    asio::cancel_after(config.connectTimeout, asio::use_awaitable)
-                );
-                neograph_asio_error_code tcpEc;
-                stream.lowest_layer().set_option(asio::ip::tcp::no_delay(true), tcpEc);
-                co_await stream.async_handshake(
-                    asio::ssl::stream_base::client,
-                    asio::cancel_after(config.connectTimeout, asio::use_awaitable)
-                );
-                result = co_await exchange(stream, req, config);
-                neograph_asio_error_code sslEc;
-                co_await stream.async_shutdown(asio::use_awaitable);
-            } else {
-                tcp::socket stream(executor);
-                co_await asio::async_connect(
-                    stream,
-                    endpoints,
-                    asio::cancel_after(config.connectTimeout, asio::use_awaitable)
-                );
-                neograph_asio_error_code tcpEc;
-                stream.set_option(asio::ip::tcp::no_delay(true), tcpEc);
-                result = co_await exchange(stream, req, config);
-            }
-        } catch (const boost::system::system_error& e) {
-            if (e.code() == asio::error::operation_aborted) {
-                result = std::unexpected{std::string{"timeout"}};
-            } else {
-                auto errInfo = std::string{e.what()};
-                agentxx::util::autoConvertToUtf8(errInfo);
+            },
+            [&](std::string errInfo) -> asio::awaitable<void> {
                 result = std::unexpected{errInfo};
             }
-        } catch (const std::exception& e) {
-            auto errInfo = std::string{e.what()};
-            agentxx::util::autoConvertToUtf8(errInfo);
-            result = std::unexpected{errInfo};
-        }
+        );
 
         if (!result.has_value()) {
             break;

@@ -231,7 +231,7 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStream(
 
     auto connectTimeout = std::chrono::seconds{config_.connectTimeoutSeconds};
     auto readTimeout    = std::chrono::seconds{config_.readTimeoutSeconds};
-    auto sendTimeout    = agentxx::util::HttpClient::calcSendTimeout(bodyStr.size());
+    auto sendTimeout    = agentxx::util::HttpClient::calcTimeoutBySize(bodyStr.size());
     auto deadline       = std::chrono::steady_clock::now() + connectTimeout;
     auto rem            = [&] {
         auto d = deadline - std::chrono::steady_clock::now();

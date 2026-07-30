@@ -1,6 +1,7 @@
 #include "agentxx/util/ws_client.h"
 
 #include "agentxx/util/http_client.h"
+#include <algorithm>
 #include <asio/redirect_error.hpp>
 #include <openssl/ssl.h>
 
@@ -19,8 +20,6 @@ struct WsClient::Impl {
     std::unique_ptr<WssStream> wss;
     bool                       isSsl   = false;
     bool                       closed_ = false;
-
-    boost::beast::flat_buffer readBuffer;
 
     Impl(asio::any_io_executor ex, WsClientConfig cfg) :
         executor(std::move(ex)),
@@ -63,7 +62,7 @@ bool WsClient::isOpen() const noexcept {
     return impl_ && !impl_->closed_;
 }
 
-void WsClient::setRecvTimeout(std::chrono::milliseconds timeout) noexcept {
+void WsClient::setRecvTimeout(std::chrono::seconds timeout) noexcept {
     if (impl_) {
         impl_->config.recvTimeout = timeout;
     }
@@ -91,18 +90,31 @@ asio::awaitable<std::expected<void, std::string>> WsClient::sendText(std::string
         co_return std::unexpected{std::string{"connection closed"}};
     }
     try {
+        size_t offset = 0;
         if (impl_->isSsl) {
             impl_->wss->text(true);
-            co_await impl_->wss->async_write(
-                asio::buffer(payload),
-                asio::cancel_after(impl_->config.sendTimeout, asio::use_awaitable)
-            );
+            do {
+                size_t len = std::min(WsClientConfig::kTimeoutChunkBytes, payload.size() - offset);
+                bool   fin = (offset + len >= payload.size());
+                auto   n   = co_await impl_->wss->async_write_some(
+                    fin,
+                    asio::buffer(payload.data() + offset, len),
+                    asio::cancel_after(impl_->config.sendTimeout, asio::use_awaitable)
+                );
+                offset += n;
+            } while (offset < payload.size());
         } else {
             impl_->ws->text(true);
-            co_await impl_->ws->async_write(
-                asio::buffer(payload),
-                asio::cancel_after(impl_->config.sendTimeout, asio::use_awaitable)
-            );
+            do {
+                size_t len = std::min(WsClientConfig::kTimeoutChunkBytes, payload.size() - offset);
+                bool   fin = (offset + len >= payload.size());
+                auto   n   = co_await impl_->ws->async_write_some(
+                    fin,
+                    asio::buffer(payload.data() + offset, len),
+                    asio::cancel_after(impl_->config.sendTimeout, asio::use_awaitable)
+                );
+                offset += n;
+            } while (offset < payload.size());
         }
         co_return std::expected<void, std::string>{};
     } catch (const boost::system::system_error& e) {
@@ -116,18 +128,31 @@ asio::awaitable<std::expected<void, std::string>> WsClient::sendBinary(std::stri
         co_return std::unexpected{std::string{"connection closed"}};
     }
     try {
+        size_t offset = 0;
         if (impl_->isSsl) {
             impl_->wss->binary(true);
-            co_await impl_->wss->async_write(
-                asio::buffer(payload),
-                asio::cancel_after(impl_->config.sendTimeout, asio::use_awaitable)
-            );
+            do {
+                size_t len = std::min(WsClientConfig::kTimeoutChunkBytes, payload.size() - offset);
+                bool   fin = (offset + len >= payload.size());
+                auto   n   = co_await impl_->wss->async_write_some(
+                    fin,
+                    asio::buffer(payload.data() + offset, len),
+                    asio::cancel_after(impl_->config.sendTimeout, asio::use_awaitable)
+                );
+                offset += n;
+            } while (offset < payload.size());
         } else {
             impl_->ws->binary(true);
-            co_await impl_->ws->async_write(
-                asio::buffer(payload),
-                asio::cancel_after(impl_->config.sendTimeout, asio::use_awaitable)
-            );
+            do {
+                size_t len = std::min(WsClientConfig::kTimeoutChunkBytes, payload.size() - offset);
+                bool   fin = (offset + len >= payload.size());
+                auto   n   = co_await impl_->ws->async_write_some(
+                    fin,
+                    asio::buffer(payload.data() + offset, len),
+                    asio::cancel_after(impl_->config.sendTimeout, asio::use_awaitable)
+                );
+                offset += n;
+            } while (offset < payload.size());
         }
         co_return std::expected<void, std::string>{};
     } catch (const boost::system::system_error& e) {
@@ -141,15 +166,19 @@ asio::awaitable<std::expected<void, std::string>> WsClient::sendPing(std::string
         co_return std::unexpected{std::string{"connection closed"}};
     }
     try {
+        auto timeout = std::max(
+            std::chrono::seconds{30},
+            std::chrono::seconds{static_cast<int64_t>(payload.size()) / (64 * 1024)}
+        );
         if (impl_->isSsl) {
             co_await impl_->wss->async_ping(
                 boost::beast::websocket::ping_data{payload},
-                asio::cancel_after(impl_->config.sendTimeout, asio::use_awaitable)
+                asio::cancel_after(timeout, asio::use_awaitable)
             );
         } else {
             co_await impl_->ws->async_ping(
                 boost::beast::websocket::ping_data{payload},
-                asio::cancel_after(impl_->config.sendTimeout, asio::use_awaitable)
+                asio::cancel_after(timeout, asio::use_awaitable)
             );
         }
         co_return std::expected<void, std::string>{};
@@ -191,24 +220,32 @@ asio::awaitable<std::expected<WsMessage, std::string>> WsClient::recv() {
         co_return std::unexpected{std::string{"connection closed"}};
     }
     try {
-        impl_->readBuffer.clear();
+        std::string payload;
+        std::string chunk;
+        chunk.resize(4096);
+
         if (impl_->isSsl) {
-            co_await impl_->wss->async_read(
-                impl_->readBuffer,
-                asio::cancel_after(impl_->config.recvTimeout, asio::use_awaitable)
-            );
+            while (!impl_->wss->is_message_done()) {
+                auto n = co_await impl_->wss->async_read_some(
+                    asio::buffer(chunk, chunk.size()),
+                    asio::cancel_after(impl_->config.recvTimeout, asio::use_awaitable)
+                );
+                payload.append(chunk, n);
+            }
         } else {
-            co_await impl_->ws->async_read(
-                impl_->readBuffer,
-                asio::cancel_after(impl_->config.recvTimeout, asio::use_awaitable)
-            );
+            while (!impl_->ws->is_message_done()) {
+                auto n = co_await impl_->ws->async_read_some(
+                    asio::buffer(chunk, chunk.size()),
+                    asio::cancel_after(impl_->config.recvTimeout, asio::use_awaitable)
+                );
+                payload.append(chunk, n);
+            }
         }
 
         WsMessage msg;
         bool      isText = impl_->isSsl ? impl_->wss->got_text() : impl_->ws->got_text();
         msg.type         = isText ? WsMessage::Type::Text : WsMessage::Type::Binary;
-        msg.payload      = boost::beast::buffers_to_string(impl_->readBuffer.data());
-        impl_->readBuffer.consume(impl_->readBuffer.size());
+        msg.payload      = std::move(payload);
         co_return std::expected<WsMessage, std::string>{std::move(msg)};
     } catch (const boost::system::system_error& e) {
         impl_->closed_ = true;

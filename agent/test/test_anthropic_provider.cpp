@@ -1678,11 +1678,11 @@ void test_anthropic_read_timeout_streaming() {
 }
 
 void test_anthropic_send_timeout_calculation() {
-    XX_TEST_EXPECT_EQ(agentxx::util::HttpClient::calcSendTimeout(0).count(), 30);
-    XX_TEST_EXPECT_EQ(agentxx::util::HttpClient::calcSendTimeout(1024).count(), 30);
-    XX_TEST_EXPECT_EQ(agentxx::util::HttpClient::calcSendTimeout(65536 * 30).count(), 30);
-    XX_TEST_EXPECT_EQ(agentxx::util::HttpClient::calcSendTimeout(65536 * 31).count(), 31);
-    XX_TEST_EXPECT_EQ(agentxx::util::HttpClient::calcSendTimeout(65536 * 500).count(), 500);
+    XX_TEST_EXPECT_EQ(agentxx::util::HttpClient::calcTimeoutBySize(0).count(), 30);
+    XX_TEST_EXPECT_EQ(agentxx::util::HttpClient::calcTimeoutBySize(1024).count(), 30);
+    XX_TEST_EXPECT_EQ(agentxx::util::HttpClient::calcTimeoutBySize(65536 * 30).count(), 30);
+    XX_TEST_EXPECT_EQ(agentxx::util::HttpClient::calcTimeoutBySize(65536 * 31).count(), 31);
+    XX_TEST_EXPECT_EQ(agentxx::util::HttpClient::calcTimeoutBySize(65536 * 500).count(), 500);
 }
 
 // ---------------------------------------------------------------------------
