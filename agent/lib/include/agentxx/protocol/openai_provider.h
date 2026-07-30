@@ -141,18 +141,14 @@ private:
             );
         }
 
-        size_t                   processed = 0;
-        neograph_asio_error_code ec;
+        size_t processed = 0;
         while (!parser.is_done()) {
             co_await http::async_read_some(
                 stream,
                 buf,
                 parser,
-                asio::cancel_after(readTimeout, asio::redirect_error(asio::use_awaitable, ec))
+                asio::cancel_after(readTimeout, asio::use_awaitable)
             );
-            if (ec) {
-                break;
-            }
             auto& body = parser.get().body();
             if (body.size() > processed) {
                 lineBuffer += body.substr(processed);

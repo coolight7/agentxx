@@ -23,7 +23,7 @@ public:
     std::string apiKey                = "EMPTY";
     std::string modelName             = "Agentxx"; ///< 发送请求时的 model 字段值
     int         connectTimeoutSeconds = 16;
-    int         readTimeoutSeconds    = 24;
+    int         readTimeoutSeconds    = 30;
     /// 是否在发送 LLM 请求时携带 thinking 内容
     bool sendThinking = false;
     /// Anthropic API version（仅 Anthropic 使用）

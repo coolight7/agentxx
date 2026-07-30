@@ -6,6 +6,7 @@
 - BaseAgent 增加支持 usage 统计
 - 修改 BaseAgent 取消执行时保留本轮会话已经产生的消息，目前一旦用户取消执行，会丢弃本轮会话的消息回退到上一轮结束时的消息
 - list_file 异步可取消、filesystem 限制超时
+- 添加测试 provide llm api 响应 toolcall 时没有 toolcall_id
 
 ## 提示词优化
 - 建议对大的操作、改动先进行规划，每完成一步更新规划，最后测试完成后 -> 回顾修改的代码检查是否有问题 -> 最终整体总结
