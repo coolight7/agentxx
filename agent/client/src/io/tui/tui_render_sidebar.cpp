@@ -1,4 +1,5 @@
 #include "agentxx-client/io/tui/agent_tui.h"
+#include "agentxx/util/string_util.h"
 #include "ftxui/screen/terminal.hpp"
 #include <algorithm>
 #include <filesystem>
@@ -291,37 +292,44 @@ ftxui::Element AgentTUI::renderInfoSidebar() {
         appendComponentsElements.push_back(text("+ Append Components") | color(theme_.accentColor));
 
         // 输出一组: 先显示统计数量, 再逐行列出名称 (失败项用错误色标注)
-        auto appendGroup
-            = [&](std::string_view label, agentxx::agent::AppendComponentNotification::Type type) {
-                  size_t   count = 0;
-                  Elements elements;
-                  for (const auto& notif : appendComponents_) {
-                      if (notif.type != type) {
-                          continue;
-                      }
-                      ++count;
-                      elements.push_back(
-                          hbox({
-                              text("│  · "),
-                              text(notif.name),
-                          })
-                          | color(notif.success ? theme_.assistantColor : theme_.systemColor)
-                      );
-                  }
-                  if (count > 0) {
-                      appendComponentsElements.push_back(
-                          hbox({
-                              text("┣━ "),
-                              text(fmt::format("{}: {}", label, count)),
-                          })
-                          | color(theme_.assistantColor)
-                      );
-                      appendComponentsElements.push_back(vbox(elements));
-                  }
-              };
-        appendGroup("Memory", agentxx::agent::AppendComponentNotification::Type::Memory);
-        appendGroup("Skill", agentxx::agent::AppendComponentNotification::Type::Skill);
-        appendGroup("MCP", agentxx::agent::AppendComponentNotification::Type::Mcp);
+        auto appendGroup = [&](std::string_view                                  label,
+                               agentxx::agent::AppendComponentNotification::Type type,
+                               bool                                              splitName) {
+            size_t   count = 0;
+            Elements elements;
+            for (const auto& notif : appendComponents_) {
+                if (notif.type != type) {
+                    continue;
+                }
+                ++count;
+                elements.push_back(
+                    (splitName ? hbox({
+                                     text("│  · "),
+                                     text(agentxx::util::getFileName(notif.name)),
+                                     text(" "),
+                                     text(notif.name),
+                                 })
+                               : hbox({
+                                     text("│  · "),
+                                     text(notif.name),
+                                 }))
+                    | color(notif.success ? theme_.assistantColor : theme_.systemColor)
+                );
+            }
+            if (count > 0) {
+                appendComponentsElements.push_back(
+                    hbox({
+                        text("┣━ "),
+                        text(fmt::format("{}: {}", label, count)),
+                    })
+                    | color(theme_.assistantColor)
+                );
+                appendComponentsElements.push_back(vbox(elements));
+            }
+        };
+        appendGroup("Memory", agentxx::agent::AppendComponentNotification::Type::Memory, true);
+        appendGroup("Skill", agentxx::agent::AppendComponentNotification::Type::Skill, true);
+        appendGroup("MCP", agentxx::agent::AppendComponentNotification::Type::Mcp, false);
 
         elements.push_back(vbox(std::move(appendComponentsElements)));
     }
