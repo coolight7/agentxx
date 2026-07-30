@@ -52,3 +52,6 @@
 	path = agent/third_party/ftxui
 	url = https://github.com/ArthurSonzogni/FTXUI
 	branch = v7.0.1
+[submodule "agent/third_party/markdown_ftxui"]
+	path = agent/third_party/markdown_ftxui
+	url = https://github.com/coolight7/MarkdownFTXUI
