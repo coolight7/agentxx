@@ -131,6 +131,7 @@ ftxui::Element AgentTUI::renderMessages() {
                 header.push_back(text(expanded ? "- " : "+ ") | color(theme_.toolColor));
                 header.push_back(text("[Tool] ") | color(theme_.toolColor));
                 header.push_back(text(msg.toolName) | color(theme_.toolColor));
+                header.push_back(text(" "));
                 if (!expanded) {
                     if (!msg.toolFinished) {
                         header.push_back(text("running...") | color(theme_.hintColor));

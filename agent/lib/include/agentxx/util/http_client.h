@@ -56,7 +56,7 @@ inline constexpr uint64_t kDefaultMaxResponseBody = 10 * 1024 * 1024;
 /// - sslVerify: enables TLS certificate verification for this request; nullopt
 ///   falls back to the global default (see HttpClient::setSslVerify).
 /// - sendTimeout: bounds writing the request; nullopt auto-derives it from the
-///   request body size (see HttpClient::calcSendTimeout).
+///   request body size (see HttpClient::calcTimeoutBySize).
 /// - readTimeout: bounds the gap between successive incoming data chunks; if no
 ///   new data arrives within readTimeout the request is treated as timed out
 ///   (the timer resets every time new data is received).
@@ -116,7 +116,7 @@ public:
 
     static std::optional<ParsedUrl> parseUrl(std::string_view url);
 
-    static std::chrono::seconds calcSendTimeout(size_t bodyBytes);
+    static std::chrono::seconds calcTimeoutBySize(size_t bodyBytes);
 
     template<typename Stream>
     static asio::awaitable<std::expected<HttpResponse, std::string>> exchange(
@@ -126,7 +126,7 @@ public:
     ) {
         namespace http = boost::beast::http;
 
-        auto sendTimeout = config.sendTimeout.value_or(calcSendTimeout(req.body().size()));
+        auto sendTimeout = config.sendTimeout.value_or(calcTimeoutBySize(req.body().size()));
         co_await http::async_write(
             stream,
             req,
