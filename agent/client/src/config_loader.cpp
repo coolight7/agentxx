@@ -238,6 +238,27 @@ YamlAppConfig loadYamlConfig(
                     overrideEnvVars
                 ));
             }
+            if (node["ssl_verify"]) {
+                auto val = resolveEnvVars(
+                    node["ssl_verify"].as<std::string>(""),
+                    dotEnvVars,
+                    overrideEnvVars
+                );
+                if (val == "true") {
+                    mc.sslVerify = true;
+                } else if (val == "false") {
+                    mc.sslVerify = false;
+                }
+            }
+            if (node["extract_tool_calls_from_content"]) {
+                mc.extractToolCallsFromContent = resolveEnvVars(
+                                                     node["extract_tool_calls_from_content"]
+                                                         .as<std::string>("false"),
+                                                     dotEnvVars,
+                                                     overrideEnvVars
+                                                 )
+                                                 == "true";
+            }
             if (node["model_support_max_token"]) {
                 mc.modelSupportMaxToken = static_cast<size_t>(std::stoull(resolveEnvVars(
                     node["model_support_max_token"].as<std::string>("0"),

@@ -247,7 +247,8 @@ asio::awaitable<neograph::ChatCompletion>
         headers,
         HttpClient::RequestConfig{
             .connectTimeout = std::chrono::seconds{config_.connectTimeoutSeconds},
-            .readTimeout    = std::chrono::seconds{config_.readTimeoutSeconds}
+            .readTimeout    = std::chrono::seconds{config_.readTimeoutSeconds},
+            .sslVerify      = config_.sslVerify,
         }
     );
 
