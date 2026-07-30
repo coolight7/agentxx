@@ -27,10 +27,11 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
 ### 核心对话能力
 
 - **多轮对话**: 支持完整的多轮对话管理，维护 `fullHistory` (append-only 完整历史) 和 `llmMessages` (可压缩的 LLM 上下文) 双消息集
-- **流式输出**: LLM 响应以增量 Delta 事件推送 (TextToken / ThinkingToken / ToolStart / ToolEnd / TurnStart / TurnEnd / NodeStart / NodeEnd)
+- **流式输出**: LLM 响应以增量 Delta 事件推送 (TextToken / ThinkingToken / ToolStart / ToolEnd / TurnStart / TurnEnd / NodeStart / NodeEnd)，每个 Delta 携带单调递增 seq 用于重放与同步
 - **多模型支持**: 运行时按会话 (thread_id) 动态切换模型，支持 OpenAI 和 Anthropic 两种 Provider 协议
 - **上下文压缩**: SummarizationMiddleware 在上下文接近模型 token 上限时自动压缩历史消息，支持 toolcall 输出去重与截断
 - **思维链展示**: 支持 LLM 的 thinking/reasoning_content 流式输出与展示
+- **节点级事件**: NodeStart/NodeEnd 事件标记 Graph 节点执行生命周期，便于 UI 展示进度
 
 ### 工具调用 (ToolCall)
 
@@ -88,13 +89,15 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
 | **MemoryFileMiddleware** | 上下文文件 (Memory) 读取与缓存，每次模型调用时注入系统提示词 |
 | **SummarizationMiddleware** | 上下文 token 统计与自动压缩，防止超出模型上下文窗口 |
 | **PlanningMiddleware** | 任务规划状态管理，将 planning 数据注入 system prompt |
-| **SubagentSupervisor** | 子代理生命周期管理与结果收集 |
+| **SubagentSupervisor** | 子代理生命周期管理与结果收集，支持批量并发委派和跨 agent 查询路由 |
 | **EventBridge** | 将 GraphEngine 事件翻译为 EventBus 强类型事件 |
+| **LogPrint** | 调试日志输出中间件 (条件编译，按配置控制日志级别) |
 
 ### 事件系统
 
 - **EventBus**: 强类型事件总线，支持单向事件流 (`EventStream<T>`) 和请求-响应流 (`RequestResponseStream<Req, Resp>`)
-- **事件主题**: AgentTurnStart/End、ModelCallStart/End、ModelToken、ToolCallStart/End、SubagentProgress、Display、UserInput、Cancel、Error、Interrupt、Permission、Subagent
+- **事件主题**: 按 `Topic` 命名空间常量组织，范围覆盖 `agent.*`、`service.*`、`io.*`
+- **订阅机制**: 支持常驻订阅和执行次数限制 (execHit) 的自动移除订阅
 - **HIL (Human-in-the-Loop)**: 中断/权限请求经 RequestResponseStream 派发到客户端 UI，支持超时
 - **定时器**: EventBus 内置定时器事件流，支持 once/repeat 模式
 
@@ -106,6 +109,7 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
 - **链式哈希**: fullHistory 使用 FNV-1a 链式哈希校验一致性
 - **线程绑定与无锁快照**: Session 通过 `bindIoThread()` 绑定 io 线程，`assertIoThread()` 强制校验可变状态 (fullHistory/llmMessages/chainHash) 仅在 io 线程写入；UI 线程通过 `getFullHistoryCopy()` / `getHashInfo()` 等原子快照方法 (基于 `std::atomic<shared_ptr<const T>>`) 只读访问，无需加锁
 - **取消/切模型**: UI 线程的取消/切模型操作通过 Wire 消息 (WireCancel/WireSelectModel) 发往 agent 线程处理，避免跨线程竞争
+- **异步互斥锁**: `AsyncMutex` 基于 asio concurrent_channel 实现协程感知互斥，不会阻塞线程，适用于协程跨越 co_await 临界区
 
 ### 远程通信
 
@@ -114,6 +118,7 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
 - **断线重连**: 客户端自动重连，携带 lastSeq 供增量 Delta 重放，seq 不连续时回退全量 Sync
 - **Grace Period**: 断线后会话保持运行的宽限期，避免误取消进行中的轮次
 - **进程内直连**: ChannelAgentIOTransport 零序列化 Channel 传输，同进程内 client 与 agent 直连
+- **传输层抽象**: `AgentIOTransportBase` 提供统一的 `connect/recv/send/close/alive` 接口，对调用方隐藏传输细节
 
 ### 协议支持
 
@@ -129,7 +134,7 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
 
 - **TUI 模式**: 基于 FTXUI 的终端 UI，支持：
   - 消息列表 (User/Assistant/Thinking/Tool/System 角色)
-  - Thinking/Tool 消息自动折叠/展开
+  - Thinking/Tool 消息自动折叠/展开 (执行中展开，完成后折叠)
   - 流式 token 实时渲染
   - 权限请求弹窗
   - 模型选择器 (运行时切换)
@@ -138,6 +143,9 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
   - 文件编辑 diff 对比渲染
   - 上下文 token 占用状态栏
   - 主题切换
+  - 自动滚动吸附底部 (Scrollable 组件)
+- **TUI 渲染模块化**: 将消息列表、侧边栏、浮层、编辑工具渲染拆分到独立文件
+- **TUILogSink**: XX_LOG 日志输出接入 TUI 右侧日志面板
 - **CLI 模式**: 基于 stdin/stdout 的简洁命令行交互
 
 ### 训练系统
@@ -147,6 +155,7 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
   - 评估: 运行测试用例集，支持精确匹配和 LLM 评分
   - 优化: 基于反馈的 LLM 提示词补丁生成
   - 收敛检测与去重
+- **训练配置**: 支持独立的训练模型、评分模型、优化模型
 
 ### 扩展能力
 
@@ -157,6 +166,13 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
 | **TextSelectionMonitor** | 系统级文本选择事件监听 (Windows UI Automation) |
 | **CpuGpuMonitor** | CPU/内存/GPU 使用率查询 |
 | **CodeGraphManager** | 代码索引与符号分析 (基于 codegraph-cpp) |
+
+### 依赖注入
+
+- **DependencyContainer**: 轻量级 DI 容器，支持按类型和名称注册/解析依赖
+- **工厂方法**: 支持工厂函数注册 (返回 `std::any`)
+- **单例管理**: 默认延迟初始化，避免循环依赖
+- **有名称注册**: 支持同名不同类型的依赖项
 
 ---
 
@@ -196,7 +212,7 @@ path/to/agentxx_test --fail-fast
 path/to/agentxx_test string_util regex agent
 ```
 
-可用测试模块: `string_util` `regex` `diff_util` `events` `concurrency` `misc_fixes` `event_stream` `event_bridge` `interrupt_bus` `subagent_bus` `crossagent` `string_tools` `share_store` `rag_search` `datetime` `filesystem` `command` `web_search` `codegraph` `cpu_gpu` `http` `websocket` `remote_agent` `mcp` `acp` `a2a` `openai_provider` `anthropic_provider` `agent` `screen_capture` `text_selection`
+可用测试模块: `string_util` `regex` `diff_util` `events` `concurrency` `misc_fixes` `event_stream` `event_bridge` `interrupt_bus` `subagent_bus` `crossagent` `string_tools` `share_store` `rag_search` `datetime` `filesystem` `command` `web_search` `codegraph` `cpu_gpu` `http` `websocket` `remote_agent` `mcp` `acp` `a2a` `openai_provider` `anthropic_provider` `agent` `screen_capture` `text_selection` `lockless` `session_concurrency`
 
 ### 配置文件
 
@@ -337,17 +353,20 @@ agent.ioCtx->run();
 │       │              │                   │                      │
 │       └──────────────┼───────────────────┘                      │
 │                      │ AgentIOBase                              │
-│                      │ (onDelta/onSync/getInput/handleInterrupt)│
+│                      │ (onDelta/onSync/getInput/handleInterrupt │
+│                      │  registerOnBus/sendToPeer/requestCancel) │
 ├──────────────────────┼──────────────────────────────────────────┤
-│               Transport 层                                      │
+│               Transport 层 (AgentIOTransportBase)               │
 │  ┌─────────────────────────────────────────────────────────┐    │
-│  │  ChannelAgentIOTransport (进程内, 零序列化)              │    │
+│  │  ChannelAgentIOTransport (进程内, 零序列化 Channel)      │    │
 │  │  WsAgentIOTransport (跨进程/设备, JSON over WebSocket)   │    │
+│  │  connect() / recv() / send() / close() / alive()        │    │
 │  └─────────────────────────────────────────────────────────┘    │
 ├─────────────────────────────────────────────────────────────────┤
 │                        Agent 层                                 │
 │  ┌─────────────────────────────────────────────────────────┐    │
 │  │  AgentServer (WS 服务) / SessionController (会话驱动)    │    │
+│  │  SessionController: delta 缓冲/重连重放/grace period    │    │
 │  └──────────────────────┬──────────────────────────────────┘    │
 │                         │                                       │
 │  ┌──────────────────────▼──────────────────────────────────┐    │
@@ -374,7 +393,8 @@ agent.ioCtx->run();
 │  │        │              │                  │               │    │
 │  │  ┌─────▼──────────────▼──────────────────▼───────────┐   │    │
 │  │  │           Middleware Stack (栈式中间件)             │   │    │
-│  │  │  Permission → Skill → Summarization → Planning    │   │    │
+│  │  │  Permission → Skill → MemoryFile → Summarization  │   │    │
+│  │  │  → Planning → LogPrint                            │   │    │
 │  │  └───────────────────────────────────────────────────┘   │    │
 │  │                                                          │    │
 │  │  ┌───────────────────────────────────────────────────┐   │    │
@@ -400,6 +420,11 @@ agent.ioCtx->run();
 │  │                   Protocol Servers                        │    │
 │  │  McpServer | A2aServer | StdioAcpServer                  │    │
 │  └──────────────────────────────────────────────────────────┘    │
+│                                                                  │
+│  ┌──────────────────────────────────────────────────────────┐    │
+│  │              Dependency Injection                         │    │
+│  │  deps::DependencyContainer (工厂/单例/有名称注册)         │    │
+│  └──────────────────────────────────────────────────────────┘    │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -409,8 +434,9 @@ agent.ioCtx->run();
 
 ```
 User Input → AgentTUI/AgentStdIO
-    → ChannelAgentIOTransport (client 端)
-    → ChannelAgentIOTransport (server 端)
+    → AgentIOBase.sendUserInput()
+    → ChannelAgentIOTransport::send() (client 端, 零序列化)
+    → ChannelAgentIOTransport::recv() (server 端)
     → SessionController.onPeerMessage()
     → SessionController.run() → BaseAgent.runConversationTurnAsync()
         → GraphEngine (ReAct Loop)
@@ -418,7 +444,9 @@ User Input → AgentTUI/AgentStdIO
             → ToolcallWrapNode → Tools (filesystem/command/web/...)
         → Delta 事件流
     → SessionController.onDelta()
-    → ChannelAgentIOTransport → AgentTUI/AgentStdIO.onDelta()
+    → ChannelAgentIOTransport::send() (server 端)
+    → ChannelAgentIOTransport::recv() (client 端)
+    → AgentTUI/AgentStdIO.onDelta()
     → UI 渲染
 ```
 
@@ -426,16 +454,17 @@ User Input → AgentTUI/AgentStdIO
 
 ```
 User Input → AgentTUI/AgentStdIO
-    → WsAgentIOTransport (client, JSON 序列化)
+    → AgentIOBase.sendUserInput()
+    → WsAgentIOTransport::send() (client, JSON 序列化)
     → WebSocket 网络传输
     → AgentServer.handleWs()
-    → WsAgentIOTransport (server, JSON 反序列化)
+    → WsAgentIOTransport::recv() (server, JSON 反序列化)
     → SessionController.onPeerMessage()
     → ... (同上)
     → SessionController.onDelta()
-    → WsAgentIOTransport (server, JSON 序列化)
+    → WsAgentIOTransport::send() (server, JSON 序列化)
     → WebSocket 网络传输
-    → WsAgentIOTransport (client, JSON 反序列化)
+    → WsAgentIOTransport::recv() (client, JSON 反序列化)
     → AgentTUI/AgentStdIO.onDelta()
     → UI 渲染
 ```
@@ -456,6 +485,7 @@ __start__ → agent_start → llm → [conditional: has_tool_calls?]
 - **llm (ModelCallWrapNode)**: 调用 LLM API，支持动态模型切换、消息修复、重试
 - **tools (ToolcallWrapNode)**: 分发执行工具调用，支持自动压缩输出
 - **agent_end**: 清理临时数据、保存状态
+- **Node events**: 每个节点执行时发出 NodeStart/NodeEnd 事件，传递节点名称
 
 #### 2. 栈式中间件 (WrapHandleBaseNode)
 
@@ -469,50 +499,86 @@ start1 → start2 → start3
 end1  ←   end2  ←   end3
 ```
 
-- 每个中间件实现 `onHandleStart` / `onHandleEnd` 钩子
+- 每个中间件实现 `onHandleStart` / `onHandleEnd` 钩子 (可分别挂载到 agent_start、modelcall、toolcall)
 - start 阶段异常时跳过 baseRun，直接执行对应的 end
 - 支持 CancelledException / NodeInterrupt 的重新抛出
 - 中间件按会话 (thread_id) 维护独立 State
+- CodeAgent 注册的中间件栈: Permission → Skill → MemoryFile → Summarization → Planning → LogPrint
 
-#### 3. AgentIOBase 端点模型
+#### 3. AgentIOBase 端点模型 + Transport 层
 
-Client 和 Server 都继承 `AgentIOBase`，通过 Transport 组合关系通信：
+Client 和 Server 都继承 `AgentIOBase`，通过 `AgentIOTransportBase` 传输层通信：
 
 ```
-AgentIOBase (客户端端点)
-    ├── onDelta()          ← 接收增量事件
-    ├── onSync()           ← 接收全量同步
-    ├── getInput()         ← 提供用户输入
-    ├── handleInterrupt()  ← 处理 HIL 交互
-    ├── sendToPeer()       → 发送命令到对端
-    └── runTransportLoop() ← 接收循环
+AgentIOBase (客户端端点: AgentTUI / AgentStdIO)
+    ├── onDelta()          ← 接收增量事件 (来自对端)
+    ├── onSync()           ← 接收全量同步 (校准)
+    ├── onTurnResult()     ← 轮次结束通知
+    ├── onContextStats()   ← 上下文统计更新
+    ├── getInput()         → 提供用户输入 (被对端拉取)
+    ├── handleInterrupt()  → 处理 HIL 交互 (权限/中断)
+    ├── registerOnBus()    → 与会话级 EventBus 绑定 (注册 interrupt/permission handler)
+    ├── sendToPeer()       → 发送 WireMessage 到对端
+    ├── requestCancel()    → 主动请求取消
+    ├── requestSelectModel() → 切换模型
+    └── runTransportLoop() ← 接收循环 (从 transport 读消息 → dispatch)
 
 AgentIOBase (服务端端点: SessionController)
-    ├── onDelta()          ← BaseAgent 产出，经 transport 发给客户端
-    ├── getInput()         ← 从 transport 等待客户端输入
-    ├── handleInterrupt()  ← 发送 InterruptRequest，等待客户端响应
-    └── run()              ← 驱动循环: 取输入 → 执行轮次 → 推送结果
+    ├── onDelta()          ← BaseAgent 产出 → 经 transport 发给客户端
+    ├── onSync()           ← 同步 fullHistory
+    ├── getInput()         → 从 transport 等待客户端输入
+    ├── handleInterrupt()  → 发送 InterruptRequest，等待客户端响应
+    └── run()              → 驱动循环: 取输入 → 执行轮次 → 推送结果
+
+AgentIOTransportBase (传输层抽象)
+    ├── connect(hello)     → 建立连接并发送握手
+    ├── recv()             → 接收 WireMessage (协程阻塞)
+    ├── send(msg)          → 发送 WireMessage
+    ├── close()            → 关闭传输
+    └── alive()            → 传输是否存活
 ```
 
 #### 4. EventBus 强类型事件
 
 ```cpp
 // 单向事件流
-auto& stream = bus.get<EventModelToken>("model.token");
+auto& stream = bus.get<EventModelToken>("agent.model.token");
 stream.subscribe([](const EventModelToken& e) -> asio::awaitable<void> {
     // 处理 token
 });
 co_await stream.publish(EventModelToken{.token = "hello"});
 
 // 请求-响应流 (HIL)
-auto& rr = bus.getRR<ReqPermission, RespPermission>("permission");
+auto& rr = bus.getRR<ReqPermission, RespPermission>("service.permission");
 rr.serve([](const ReqPermission& req, size_t corrId) -> asio::awaitable<RespPermission> {
     co_return RespPermission{.decision = RespPermission::Decision::Allow};
 });
 auto resp = co_await rr.request(ReqPermission{.category = "filesystem_write"});
 ```
 
-#### 5. 会话隔离
+事件主题 (Topic) 命名规范: `<scope>.<subject>[.<detail>]`
+
+| Topic | 事件类型 | 方向 | 说明 |
+|-------|---------|------|------|
+| `agent.turn.start` | EventAgentTurnStart | 单向 | 轮次开始 |
+| `agent.turn.end` | EventAgentTurnEnd | 单向 | 轮次结束 |
+| `agent.model.start` | EventModelCallStart | 单向 | 模型调用开始 |
+| `agent.model.token` | EventModelToken | 单向 | 模型输出 token |
+| `agent.model.end` | EventModelCallEnd | 单向 | 模型调用结束 |
+| `agent.tool.start` | EventToolCallStart | 单向 | 工具调用开始 |
+| `agent.tool.end` | EventToolCallEnd | 单向 | 工具调用结束 |
+| `subagent.progress` | EventSubagentProgress | 单向 | Subagent 进度 |
+| `io.display` | EventDisplay | 单向 | 通用显示输出 |
+| `io.user_input` | EventUserInput | 单向 | 用户输入 |
+| `io.cancel` | EventCancel | 单向 | 取消信号 |
+| `agent.error` | EventError | 单向 | 错误通知 |
+| `service.interrupt` | ReqInterrupt / RespInterrupt | RR | 中断 HIL |
+| `service.permission` | ReqPermission / RespPermission | RR | 权限询问 |
+| `service.subagent` | ReqSubagentStart / RespSubagentResult | RR | Subagent 委派 |
+| `service.subagent.batch` | ReqSubagentBatch / RespSubagentBatch | RR | 批量 subagent |
+| `service.crossagent` | ReqCrossAgent / RespCrossAgent | RR | 跨 agent 查询 |
+
+#### 5. 会话隔离与无锁设计
 
 ```
 AgentContext
@@ -522,16 +588,25 @@ AgentContext
     ├── modelRegistry        (模型注册表)
     └── sessions (SessionStore)
          ├── "thread_1" → Session
-         │     ├── io
-         │     ├── bus (会话级事件总线)
-         │     ├── contextStats
-         │     ├── activity
-         │     ├── fullHistory + chainHash
-         │     ├── llmMessages
-         │     ├── cancelToken
-         │     └── modelName
+         │     ├── io                    (AgentIOBase)
+         │     ├── bus                   (会话级事件总线)
+         │     ├── contextStats          (std::atomic 字段, 跨线程安全)
+         │     ├── activity              (std::atomic<Activity>, 跨线程安全)
+         │     ├── fullHistory + chainHash (io 线程写入, atomic snapshot 供 UI 只读)
+         │     ├── historySnapshot_      (std::atomic<shared_ptr<const vector>>, 无锁快照)
+         │     ├── hashSnapshot_         (std::atomic<shared_ptr<const HashInfo>>, 无锁快照)
+         │     ├── deltaSeq              (std::atomic<uint64_t>, 原子递增)
+         │     ├── cancelToken           (仅 io 线程读写)
+         │     └── modelName             (仅 io 线程读写, 经 Wire 切换)
          └── "thread_2" → Session
                └── ...
+
+线程安全策略:
+  - io 线程: 写入 fullHistory/llmMessages/chainHash (assertIoThread 强制校验)
+  - UI 线程: 通过 atomic snapshot 只读访问 getFullHistoryCopy() / getHashInfo()
+  - 取消/切模型: 经 Wire 消息发往 agent 线程处理
+  - SessionStore: 仅在 agent io_context 线程访问, 无需锁
+  - AsyncMutex: 协程感知互斥锁, 用于跨越 co_await 的临界区保护
 ```
 
 ### 连接与重连机制
@@ -539,7 +614,8 @@ AgentContext
 ```
 Client                              Server
   │                                    │
-  │──── Hello (thread, token, seq) ───→│
+  │──── Hello (thread, token, seq,    │
+  │      tailHash, model) ───────────→│
   │                                    │ 验证 token
   │                                    │ 查找/创建 SessionController
   │←── HelloAck (ok, models, hash) ───│
@@ -555,12 +631,38 @@ Client                              Server
   │                                    │
   │  [连接断开]                         │ 启动 grace 定时器
   │                                    │
-  │──── Hello (seq=3) ───────────────→│ 增量重放 seq>3 的 delta
-  │←── HelloAck + Delta replay ───────│
+  │──── Hello (seq=3, tailHash) ─────→│ 增量重放 seq>3 的 delta
+  │←── HelloAck + Delta replay ───────│ seq 不连续时回退全量 Sync
   │                                    │
   │──── Cancel ──────────────────────→│ 取消当前轮次
   │                                    │
   │──── SelectModel (model) ─────────→│ 切换会话模型
+  │                                    │
+  │──── GetModel ────────────────────→│ 查询当前模型信息
+  │←── ModelInfo ─────────────────────│
+  │                                    │
+  │──── GetAppendComponentInfo ──────→│ 查询 MCP/Skill/Memory 组件加载信息
+  │←── AppendComponentInfo ───────────│
+  │                                    │
+  │──── GetContext ──────────────────→│ 查询当前 llmMessages
+  │←── ContextMessages ───────────────│
+  │                                    │
+  │ (可选) 日志转发
+  │←── Log (level, message) ─────────│ 服务端日志实时推送
+  │                                    │
+  │ (可选) 上下文统计
+  │←── ContextStats ──────────────────│ token 用量推送
+```
+
+### 依赖注入容器
+
+```
+deps::DependencyContainer
+    ├── registerSingleton<T>(factory)       → 注册单例 (默认无名称)
+    ├── registerNamedSingleton<T>(name, fn) → 注册有名称单例
+    ├── resolve<T>()                        → 解析默认实例
+    ├── resolveNamed<T>(name)               → 解析有名称实例
+    └── hasType<T>()                        → 检查是否存在
 ```
 
 ---
@@ -573,37 +675,42 @@ agent/
 │   ├── include/agentxx/
 │   │   ├── agentxx.h             # 库总入口头文件
 │   │   ├── agent/                # Agent 核心
-│  │   │   ├── base_agent.h     # BaseAgent 基类 (核心基础设施 + ReAct 循环 + 会话执行)
-│  │   │   ├── code_agent.h     # CodeAgent (继承 BaseAgent, 编程工具/中间件)
+│   │   │   ├── base_agent.h      # BaseAgent 基类 (核心基础设施 + ReAct 循环 + 会话执行)
+│   │   │   ├── code_agent.h      # CodeAgent (继承 BaseAgent, 编程工具/中间件)
 │   │   │   ├── agent_io.h        # AgentIOBase 端点基类 (client/server 操作契约)
-│   │   │   ├── agent_io_transport.h # 传输层抽象基类
+│   │   │   ├── agent_io_transport.h # 传输层抽象基类 (connect/recv/send/close/alive)
 │   │   │   ├── channel_io_transport.h # 进程内 Channel 传输 (零序列化)
-│   │   │   ├── ws_io_transport.h # WebSocket 传输 (JSON 编解码/心跳/重连)
+│   │   │   ├── ws_io_transport.h  # WebSocket 传输 (JSON 编解码/心跳/重连)
 │   │   │   ├── config.h          # AgentConfig / ModelConfig 配置
 │   │   │   ├── config_static.h   # 静态路径配置
 │   │   │   ├── context.h         # AgentContext / Session / SessionStore / ContextStats
-│   │   │   ├── conversation_types.h # Delta / SyncPayload / HistoryMessage / ChainHash
+│   │   │   │                     #   Session: 线程绑定 + 无锁快照 (atomic snapshot)
+│   │   │   ├── conversation_types.h # Delta(含NodeStart/End/seq/timing) / SyncPayload
+│   │   │   │                     #   HistoryMessage / ChainHash / AppendComponentNotification
 │   │   │   ├── model_registry.h  # ModelProviderRegistry (运行时模型切换)
 │   │   │   ├── prompt.h          # AgentPrompt / ToolPrompt 提示词管理
-│   │   │   ├── training.h        # EvolutionTrainingAgent 进化训练
+│   │   │   ├── training.h        # EvolutionTrainingAgent 进化训练 (变异/评估/优化/收敛检测)
 │   │   │   └── remote/           # 远程通信
 │   │   │       ├── agent_server.h    # AgentServer (WS 服务, token 鉴权)
-│   │   │       ├── session_controller.h # SessionController (会话驱动, delta 缓冲, 重连重放)
+│   │   │       ├── session_controller.h # SessionController (会话驱动, delta 缓冲/重放, grace)
 │   │   │       └── wire_protocol.h   # Wire Protocol 消息类型与序列化
+│   │   ├── deps/                 # 依赖注入
+│   │   │   └── injector.h        # DependencyContainer (工厂/单例/有名称注册)
 │   │   ├── nodes/                # Graph 节点
 │   │   │   ├── wrap_handle.h     # WrapHandleBaseNode 栈式中间件基类
 │   │   │   ├── modelcall.h       # ModelCallWrapNode (LLM 调用, 动态模型切换)
 │   │   │   ├── toolcall.h        # ToolcallWrapNode (工具分发, 自动压缩)
 │   │   │   └── agentcall.h       # AgentStart/EndCallWrapNode (会话生命周期)
 │   │   ├── middlewares/          # 中间件
-│   │   │   ├── middleware.h      # BaseMiddlewareHandle / MiddlewareContext 基类
-│   │   │   ├── events.h          # 事件类型定义 (Topic / Event structs)
+│   │   │   ├── middleware.h      # BaseMiddlewareHandle / MiddlewareContext / State 基类
+│   │   │   ├── events.h          # 事件类型定义 (Topic 命名空间 / Event structs)
 │   │   │   ├── event_stream.h    # EventBus / EventStream / RequestResponseStream
 │   │   │   ├── permission.h      # PermissionMiddleware (工具权限 HIL)
 │   │   │   ├── skill.h           # SkillMiddleware (技能发现与加载)
+│   │   │   ├── memory_file.h     # MemoryFileMiddleware (上下文文件注入)
 │   │   │   ├── summarization.h   # SummarizationMiddleware (上下文压缩)
 │   │   │   ├── planning.h        # PlanningMiddleware (任务规划状态)
-│   │   │   └── subagent_supervisor.h # SubagentSupervisor (子代理管理)
+│   │   │   └── subagent_supervisor.h # SubagentSupervisor (子代理管理, 批量委派, 跨 agent 路由)
 │   │   ├── tools/                # 工具
 │   │   │   ├── tool.h            # XXToolBase / XXToolWrap 工具基类
 │   │   │   ├── filesystem.h      # 文件系统工具 (list/read/write/edit/glob/grep)
@@ -635,9 +742,10 @@ agent/
 │   │   │   └── get_cpu_gpu_use.h # CPU/GPU 监控
 │   │   └── util/                 # 工具类
 │   │       ├── log.h             # 日志系统 (XX_LOG 宏, LogDispatcher, LogSink)
-│   │       ├── string_util.h     # 字符串工具 (编码转换/路径标准化/base64/自然排序等)
+│   │       ├── string_util.h     # 字符串工具 (编码转换/路径标准化/base64/自然排序/IgnoreCaseMap 等)
 │   │       ├── http_client.h     # HTTP 客户端 (基于 Boost.Beast)
 │   │       ├── http_server.h     # HTTP 服务器 (路由/WS/SSE/SSL)
+│   │       ├── http_header.h     # HeaderMap (忽略大小写的 HTTP 头部管理)
 │   │       ├── ws_client.h       # WebSocket 客户端
 │   │       ├── exception.h       # 异常处理工具
 │   │       ├── lru_cache.h       # LRU 缓存
@@ -645,7 +753,7 @@ agent/
 │   │       ├── regex.h           # 正则引擎 (hyperscan/vectorscan)
 │   │       ├── aho_corasick.h    # Aho-Corasick 多模式匹配
 │   │       ├── router.h          # HTTP 路由器
-│   │       ├── async_mutex.h     # 协程感知异步互斥锁
+│   │       ├── async_mutex.h     # 协程感知异步互斥锁 (基于 concurrent_channel)
 │   │       └── util.h            # 通用工具 (系统检测等)
 │   └── src/                      # 实现文件 (与 include 目录结构对应)
 │
@@ -653,22 +761,38 @@ agent/
 │   ├── main.cpp                  # 入口: 参数解析 → 配置加载 → 模式分发
 │   ├── include/agentxx-client/
 │   │   ├── config_loader.h       # YAML 配置加载 / .env 解析 / 环境变量替换
-│   │   ├── mode_runners.h        # 运行模式入口 (local/remote × tui/cli)
+│   │   ├── mode_runners.h        # 运行模式入口 (local/remote × tui/cli, 统一调用)
 │   │   ├── io/
 │   │   │   ├── stdio/
 │   │   │   │   ├── agent_stdio.h # AgentStdIO (stdin/stdout 交互)
 │   │   │   │   └── stdin_reader.h # 异步 stdin 读取器
 │   │   │   └── tui/
-│   │   │       ├── agent_tui.h   # AgentTUI (FTXUI 终端 UI)
+│   │   │       ├── agent_tui.h   # AgentTUI (FTXUI 终端 UI, 接收/显示/排队/权限/日志)
+│   │   │       ├── scrollable.h  # Scrollable (可复用的自动滚动容器组件)
 │   │   │       └── tui_theme.h   # TUI 主题配色
 │   │   ├── train/                # 训练模式
 │   │   └── util/                 # 客户端工具
 │   └── src/                      # 实现文件
+│       ├── main.cpp
+│       ├── config_loader.cpp
+│       ├── mode_runners.cpp
+│       ├── io/
+│       │   ├── stdio/agent_stdio.cpp, stdin_reader.cpp
+│       │   └── tui/
+│       │       ├── agent_tui.cpp
+│       │       ├── tui_theme.cpp
+│       │       ├── tui_render_messages.cpp   # 消息列表渲染
+│       │       ├── tui_render_sidebar.cpp    # 右侧边栏渲染
+│       │       ├── tui_render_overlays.cpp   # 浮层渲染 (权限/中断)
+│       │       ├── tui_render_edittool.cpp   # 文件编辑 diff 渲染
+│       │       └── tui_log_sink.cpp          # TUI 日志接收器
+│       ├── train/train.cpp        # 训练实现
+│       └── util/util.cpp          # 客户端工具实现
 │
 ├── test/                         # agentxx_test 测试程序
 │   ├── test.cpp                  # 测试入口: 模块注册与调度
 │   ├── test_framework.h          # 测试框架 (断言宏 / TestResult)
-│   ├── test_agent.*          # CodeAgent 集成测试 (模拟 LLM Server)
+│   ├── test_agent.*              # CodeAgent 集成测试 (模拟 LLM Server)
 │   ├── test_events.*             # 事件类型测试
 │   ├── test_event_stream.*       # EventBus / EventStream / RequestResponseStream 测试
 │   ├── test_event_bridge.*       # EventBridge 事件翻译测试
@@ -676,6 +800,8 @@ agent/
 │   ├── test_subagent_bus.*       # 子代理总线测试
 │   ├── test_crossagent.*         # 跨代理通信测试
 │   ├── test_concurrency.*        # 并发测试
+│   ├── test_lockless.*           # Session 无锁快照测试
+│   ├── test_session_concurrency.* # Session 跨线程只读快照测试
 │   ├── test_remote_agent.*       # 远程 Agent (WS 传输 / SessionController) 测试
 │   ├── test_mcp.*                # MCP 协议测试 (多版本/HTTP/stdio)
 │   ├── test_a2a.*                # A2A 协议测试
@@ -743,17 +869,34 @@ BaseAgent (基类)
   ├── MiddlewareContext → 中间件栈
   ├── AgentContext
   │     ├── SessionStore → Session (per thread_id)
+  │     │     ├── fullHistory + chainHash (io 线程写入, atomic snapshot 供 UI 只读)
+  │     │     ├── llmMessages (io 线程读写)
+  │     │     ├── cancelToken / modelName (io 线程读写)
+  │     │     ├── activity / deltaSeq / contextStats (atomic, 跨线程安全)
+  │     │     └── io / bus (会话级)
   │     ├── ModelProviderRegistry
   │     └── EventBus
   └── AgentConfig → ModelConfig / AgentPrompt
 
 CodeAgent (继承 BaseAgent)
-  ├── 工具: Filesystem | Command | Web | RAG | SubAgent | MCP | ...
-  └── 中间件: Permission | Skill | MemoryFile | Summarization | Planning | LogPrint
+  ├── 工具: Filesystem | Command | Web | RAG | SubAgent | MCP | CodeGraph | ...
+  └── 中间件: Permission → Skill → MemoryFile → Summarization → Planning → LogPrint
+
+SessionController (远程会话驱动)
+  ├── AgentIOBase (服务端端点)
+  ├── BaseAgent.runConversationTurnAsync()
+  ├── deltaBuf (断线缓冲) + grace timer
+  └── AgentIOTransportBase (从 AgentServer 传入)
 
 Client (agentxx_cli)
   ├── AgentTUI / AgentStdIO → AgentIOBase
   ├── ChannelAgentIOTransport / WsAgentIOTransport → AgentIOTransportBase
   ├── ConfigLoader → YAML + .env
   └── ModeRunners → local/remote × tui/cli 组合
-```
+     ├── runLocalTuiUnified / runLocalCliUnified
+     └── runRemoteTui / runRemoteCli
+
+EventBus (事件总线)
+  ├── EventStream<T> (单向: publish/subscribe/unsubscribe)
+  ├── RequestResponseStream<Req, Resp> (双向: request/serve)
+  └── 主题表 (Topic 命名空间常量)
