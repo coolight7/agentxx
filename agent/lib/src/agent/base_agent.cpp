@@ -105,8 +105,7 @@ void BaseAgent::setupModelRegistry() {
     if (config->availableModels.empty()) {
         registry->registerModel(config->model.modelName, config->model);
         registry->setDefaultModel(config->model.modelName);
-    } else if (false == config->currentModelName.empty()
-               && registry->hasModel(config->currentModelName)) {
+    } else if (false == config->currentModelName.empty() && registry->hasModel(config->currentModelName)) {
         registry->setDefaultModel(config->currentModelName);
     }
     agentContext->modelRegistry = std::move(registry);
@@ -508,8 +507,11 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
     co_await agentxx::util::catchErrorAsync<void>(
         [&]() -> asio::awaitable<void> {
             try {
+                // - 存在值 [neograph::graph::RunResult], 声明 optional 类型用于后续赋值 [nullopt]
                 std::optional<neograph::graph::RunResult> result;
                 if (resumeInterrupt) {
+                    // - 程序重启恢复中断: 跳过 [engine->run_stream_async], 从恢复的 graphData
+                    // 重建中断结果, 直接进入中断处理循环, 重新处理可能未完成的中断并 resume
                     neograph::graph::RunResult recovered;
                     recovered.interrupted = true;
                     recovered.interrupt_node
@@ -524,15 +526,37 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                             agentxx::middleware::MiddlewareContext::graphDataKey_interruptValue
                         );
                     result = std::move(recovered);
+                    // - 中断、异常、取消执行会让 neograph::engine 丢弃本轮 session
+                    // 已经产生的上下文，因此这里取 [graphDataKey_tempMessages] 而不是
+                    // [result->channel_raw("messages")]
+                    auto& im
+                        = agentContext->middlewareHandleContext
+                              ->getGraphDataItemValue<neograph::json>(
+                                  threadId,
+                                  agentxx::middleware::MiddlewareContext::graphDataKey_tempMessages
+                              );
+                    if (im.is_array()) {
+                        session->llmMessages = im;
+                    }
                 } else {
                     result = co_await engine->run_stream_async(cfg, eventCallback);
 
-                    if (!result->interrupted) {
+                    if (result->interrupted) {
+                        auto& im = agentContext->middlewareHandleContext->getGraphDataItemValue<
+                            neograph::json>(
+                            threadId,
+                            agentxx::middleware::MiddlewareContext::graphDataKey_tempMessages
+                        );
+                        if (im.is_array()) {
+                            session->llmMessages = im;
+                        }
+                    } else {
                         session->llmMessages = result->channel_raw("messages");
                     }
                 }
 
                 while (result.has_value() && result->interrupted) {
+                    // 记录中断节点信息到 graphData, 供程序重启恢复中断时复用
                     agentContext->middlewareHandleContext->setGraphDataItemValue<std::string>(
                         threadId,
                         agentxx::middleware::MiddlewareContext::graphDataKey_interruptNode,
@@ -544,10 +568,11 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                         result->interrupt_value
                     );
 
-                    // 保存 graphData，以防中断处理时停止运行丢失数据
                     engine->update_state(
                         std::string{threadId},
                         [&](neograph::graph::GraphState& state) {
+                            // - 本轮 graph 还没有执行完成，序列化 graphData 到 state checkpoint
+                            // 以防中断处理期间 程序 终止, 导致 graphData 丢失
                             auto data = agentContext->middlewareHandleContext->getGraphDataToState(
                                 state,
                                 threadId
@@ -568,6 +593,7 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
 
                     auto resumeValues = neograph::json{};
 
+                    // 从 [graphDataKey_interruptArgs] 提取中断参数
                     const auto interruptArgs
                         = agentxx::middleware::InterruptHandleArg::listFromJson(
                             agentContext->middlewareHandleContext->getGraphDataItemValue<
@@ -585,8 +611,8 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                             if (interruptArg.name == "subagent") {
                                 auto subagentArg = interruptArg.arg;
                                 auto resp        = co_await agentContext->bus->request<
-                                           events::ReqSubagentStart,
-                                           events::RespSubagentResult>(
+                                    events::ReqSubagentStart,
+                                    events::RespSubagentResult>(
                                     events::Topic::Subagent,
                                     events::ReqSubagentStart{
                                         .parentAgentName
@@ -694,20 +720,40 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                         result = co_await engine
                                      ->resume_async(std::string{threadId}, nullptr, eventCallback);
 
-                        if (!result->interrupted) {
+                        if (result->interrupted) {
+                            // 中断时 [result] 内的 messages 是被 neograph::engine
+                            // 回滚的，本轮 session 的上下文已经被丢弃；应该取中断时保存的 messages
+                            auto& im = agentContext->middlewareHandleContext->getGraphDataItemValue<
+                                neograph::json>(
+                                threadId,
+                                agentxx::middleware::MiddlewareContext::graphDataKey_tempMessages
+                            );
+                            if (im.is_array()) {
+                                session->llmMessages = im;
+                            }
+                        } else {
                             session->llmMessages = result->channel_raw("messages");
                         }
                     }
                 }
             } catch (const neograph::graph::CancelledException& e) {
                 XX_LOGI("Agent Session Cancelled: {}", e.what());
-                auto state = engine->get_state(std::string{threadId});
-                if (state.has_value() && state->is_object() && state->contains("messages")) {
-                    auto msgs = (*state)["messages"];
-                    if (msgs.is_array() && !msgs.empty()) {
-                        session->llmMessages = std::move(msgs);
-                    }
+
+                // 提取临时保存的上下文，并写回 state，避免函数返回后程序中断丢失数据
+                auto& im
+                    = agentContext->middlewareHandleContext->getGraphDataItemValue<neograph::json>(
+                        threadId,
+                        agentxx::middleware::MiddlewareContext::graphDataKey_tempMessages
+                    );
+                if (im.is_array()) {
+                    session->llmMessages = im;
                 }
+                engine->update_state(
+                    std::string{threadId},
+                    [&](neograph::graph::GraphState& state) {
+                        state.overwrite("messages", session->llmMessages);
+                    }
+                );
             }
 
             co_return;
@@ -716,11 +762,24 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
             XX_LOGE("Agent Session Response failed: {}", errmsg);
             turnResult.hasError     = true;
             turnResult.errorMessage = std::move(errmsg);
+
+            // 提取临时保存的上下文，并写回 state，避免函数返回后程序中断丢失数据
+            auto& im = agentContext->middlewareHandleContext->getGraphDataItemValue<neograph::json>(
+                threadId,
+                agentxx::middleware::MiddlewareContext::graphDataKey_tempMessages
+            );
+            if (im.is_array()) {
+                session->llmMessages = im;
+            }
+            engine->update_state(std::string{threadId}, [&](neograph::graph::GraphState& state) {
+                state.overwrite("messages", session->llmMessages);
+            });
             co_return;
         }
     );
 
     engine->update_state(std::string{threadId}, [&](neograph::graph::GraphState& state) {
+        // 中断已经处理完成，清理 graphData
         state.remove(agentxx::middleware::MiddlewareContext::channel_savedGraphData);
     });
 
