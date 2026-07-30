@@ -40,8 +40,8 @@ void AgentTUI::appendEditToolBody(const Message& msg, Elements& lines) {
     lines.push_back(renderEditToolDiff(oldStr, newStr));
     if (msg.toolFinished && msg.toolHasError) {
         lines.push_back(hbox({
-            text("  error: ") | color(theme_.systemColor),
-            paragraph(msg.toolResult) | color(theme_.systemColor),
+            text("  error: ") | color(theme_.errorColor),
+            paragraph(msg.toolResult) | color(theme_.errorColor),
         }));
     }
 }
