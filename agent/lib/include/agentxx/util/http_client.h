@@ -18,6 +18,8 @@
 #include <cctype>
 #include <charconv>
 #include <expected>
+#include <functional>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <neograph/api.h>
@@ -62,9 +64,9 @@ inline constexpr uint64_t kDefaultMaxResponseBody = 10 * 1024 * 1024;
 ///   (the timer resets every time new data is received).
 struct RequestConfig {
     std::chrono::milliseconds                connectTimeout  = std::chrono::seconds{30};
-    std::optional<bool>                      sslVerify       = std::nullopt;
     std::optional<std::chrono::milliseconds> sendTimeout     = std::nullopt;
     std::chrono::milliseconds                readTimeout     = std::chrono::seconds{60};
+    std::optional<bool>                      sslVerify       = std::nullopt;
     size_t                                   followRedirect  = 3;
     bool                                     keepAlive       = false;
     uint64_t                                 maxResponseBody = kDefaultMaxResponseBody;
@@ -162,6 +164,21 @@ public:
         std::string_view     contentType,
         const HeaderMap&     extraHeaders,
         const RequestConfig& config = {}
+    );
+
+    /// SSE 流式请求: 连接、发送、读取响应头后逐块回调 body 数据。
+    /// - 每次收到新数据块时调用 onChunk (分块间隔受 readTimeout 约束)
+    /// - HTTP 429 时抛出 neograph::RateLimitError (解析 retry-after)
+    /// - 其他非 2xx 时抛出 std::runtime_error
+    /// - 网络/超时错误抛出 boost::system::system_error
+    static asio::awaitable<void> requestSseAsync(
+        std::string_view                      method,
+        std::string_view                      url,
+        std::string_view                      body,
+        std::string_view                      contentType,
+        const HeaderMap&                      extraHeaders,
+        const RequestConfig&                  config,
+        std::function<void(std::string_view)> onChunk
     );
 
     /// Enable/disable SSL certificate verification (default: enabled).

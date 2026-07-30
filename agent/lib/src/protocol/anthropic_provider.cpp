@@ -229,39 +229,6 @@ neograph::json AnthropicProvider::buildBody(const neograph::CompletionParams& pa
     return body;
 }
 
-AnthropicProvider::ParsedEndpoint AnthropicProvider::parseEndpoint(std::string_view base_url) {
-    ParsedEndpoint ep;
-    ep.scheme = "https";
-    ep.port   = 443;
-
-    auto schemeEnd = base_url.find("://");
-    if (schemeEnd == std::string::npos) {
-        ep.host = base_url;
-        return ep;
-    }
-    ep.scheme             = base_url.substr(0, schemeEnd);
-    auto        rest      = base_url.substr(schemeEnd + 3);
-    auto        pathStart = rest.find('/');
-    std::string hostPort{(pathStart == std::string::npos) ? rest : rest.substr(0, pathStart)};
-    ep.prefix = (pathStart == std::string::npos) ? "" : rest.substr(pathStart);
-
-    ep.port = (ep.scheme == "https") ? 443 : 80;
-
-    auto colon = hostPort.rfind(':');
-    if (colon != std::string::npos) {
-        ep.host = hostPort.substr(0, colon);
-        int p   = 0;
-        auto [ptr, ec]
-            = std::from_chars(hostPort.data() + colon + 1, hostPort.data() + hostPort.size(), p);
-        if (ec == std::errc{} && p > 0 && p <= 65535) {
-            ep.port = static_cast<uint16_t>(p);
-        }
-    } else {
-        ep.host = hostPort;
-    }
-    return ep;
-}
-
 asio::awaitable<neograph::ChatCompletion>
     AnthropicProvider::completeAsync(const neograph::CompletionParams& params) {
     using namespace agentxx::util;
@@ -324,43 +291,13 @@ asio::awaitable<neograph::ChatCompletion> AnthropicProvider::doStream(
     const neograph::json&              body,
     neograph::FormatDataStreamCallback on_chunk
 ) {
-    namespace http = boost::beast::http;
-    using asio::ip::tcp;
+    using namespace agentxx::util;
 
-    auto bodyStr  = body.dump();
-    auto executor = co_await asio::this_coro::executor;
-    auto ep       = parseEndpoint(config_.baseUrl);
-    auto target   = ep.prefix + "/v1/messages";
-    bool isHttps  = ep.scheme == "https";
+    auto bodyStr = body.dump();
 
-    auto connectTimeout = std::chrono::seconds{config_.connectTimeoutSeconds};
-    auto readTimeout    = std::chrono::seconds{config_.readTimeoutSeconds};
-    auto sendTimeout    = agentxx::util::HttpClient::calcTimeoutBySize(bodyStr.size());
-    auto deadline       = std::chrono::steady_clock::now() + connectTimeout;
-    auto rem            = [&] {
-        auto d = deadline - std::chrono::steady_clock::now();
-        return std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::max(d, std::chrono::steady_clock::duration::zero())
-        );
-    };
-
-    http::request<http::string_body> req{http::verb::post, target, 11};
-    req.set(http::field::host, ep.host);
-    req.set(http::field::user_agent, "agentxx/1.0");
-    req.set(http::field::content_type, "application/json");
-    req.set("x-api-key", config_.apiKey);
-    req.set("anthropic-version", config_.anthropicVersion);
-    req.set(http::field::accept, "text/event-stream");
-    req.set(http::field::connection, "keep-alive");
-    req.body() = bodyStr;
-    req.prepare_payload();
-
-    tcp::resolver resolver(executor);
-    auto          endpoints = co_await resolver.async_resolve(
-        ep.host,
-        std::to_string(ep.port),
-        asio::cancel_after(rem(), asio::use_awaitable)
-    );
+    HeaderMap headers;
+    headers.set("x-api-key", config_.apiKey);
+    headers.set("anthropic-version", config_.anthropicVersion);
 
     neograph::ChatCompletion completion;
     completion.message.role = "assistant";
@@ -370,65 +307,41 @@ asio::awaitable<neograph::ChatCompletion> AnthropicProvider::doStream(
     std::map<int, std::string>        blockTypes;
     std::string                       lineBuffer;
 
-    tcp::socket socket(executor);
-    co_await asio::async_connect(socket, endpoints, asio::cancel_after(rem(), asio::use_awaitable));
-    neograph_asio_error_code tcpEc;
-    socket.set_option(asio::ip::tcp::no_delay(true), tcpEc);
+    co_await HttpClient::requestSseAsync(
+        "POST",
+        config_.baseUrl + "/v1/messages",
+        bodyStr,
+        "application/json",
+        headers,
+        HttpClient::RequestConfig{
+            .connectTimeout = std::chrono::seconds{config_.connectTimeoutSeconds},
+            .readTimeout    = std::chrono::seconds{config_.readTimeoutSeconds},
+            .sslVerify      = config_.sslVerify,
+        },
+        [&](std::string_view chunk) {
+            lineBuffer += chunk;
+            processSseBuffer(
+                lineBuffer,
+                completion,
+                fullContent,
+                fullThinking,
+                tcMap,
+                blockTypes,
+                on_chunk
+            );
+        }
+    );
 
-    if (isHttps) {
-        auto&                                              sslCtx = sslContext();
-        boost::beast::ssl_stream<boost::beast::tcp_stream> stream(
-            boost::beast::tcp_stream(std::move(socket)),
-            sslCtx
-        );
-        ::SSL_set_tlsext_host_name(stream.native_handle(), const_cast<char*>(ep.host.c_str()));
-        co_await stream.async_handshake(
-            asio::ssl::stream_base::client,
-            asio::cancel_after(rem(), asio::use_awaitable)
-        );
-
-        co_await http::async_write(
-            stream,
-            req,
-            asio::cancel_after(sendTimeout, asio::use_awaitable)
-        );
-
-        co_await readSseStream(
-            stream,
-            deadline,
-            readTimeout,
+    if (!lineBuffer.empty()) {
+        processSseBuffer(
+            lineBuffer,
             completion,
             fullContent,
             fullThinking,
             tcMap,
             blockTypes,
-            lineBuffer,
-            on_chunk
-        );
-
-        co_await stream.async_shutdown(
-            asio::cancel_after(std::chrono::seconds{3}, asio::use_awaitable)
-        );
-    } else {
-        boost::beast::tcp_stream stream(std::move(socket));
-
-        co_await http::async_write(
-            stream,
-            req,
-            asio::cancel_after(sendTimeout, asio::use_awaitable)
-        );
-
-        co_await readSseStream(
-            stream,
-            deadline,
-            readTimeout,
-            completion,
-            fullContent,
-            fullThinking,
-            tcMap,
-            blockTypes,
-            lineBuffer,
-            on_chunk
+            on_chunk,
+            /*finalFlush=*/true
         );
     }
 
@@ -449,10 +362,6 @@ asio::awaitable<neograph::ChatCompletion> AnthropicProvider::doStream(
     }
 
     co_return completion;
-}
-
-asio::ssl::context& AnthropicProvider::sslContext() {
-    return agentxx::util::HttpClient::sharedSslCtx(false);
 }
 
 } // namespace server
