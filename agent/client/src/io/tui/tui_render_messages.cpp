@@ -19,12 +19,14 @@ std::string oneLinePreview(std::string_view s, size_t max = 60) {
     return line;
 }
 
-ftxui::Element renderMarkdown(std::string_view text, ftxui::Color color) {
+ftxui::Element renderMarkdown(
+    std::string_view text, ftxui::Color color, markdown::Theme const& mdTheme
+) {
     if (text.empty()) return ftxui::text("");
     auto parser = markdown::make_cmark_parser();
     auto ast    = parser->parse(text);
     markdown::DomBuilder builder;
-    auto el = builder.build(ast);
+    auto el = builder.build(ast, -1, mdTheme);
     return el | ftxui::color(color);
 }
 
@@ -67,7 +69,9 @@ ftxui::Element AgentTUI::renderMessages() {
                 );
             } break;
             case Message::Role::Assistant: {
-                pushBlock(renderMarkdown(msg.text, theme_.assistantColor), true);
+                pushBlock(
+                    renderMarkdown(msg.text, theme_.assistantColor, theme_.markdownTheme), true
+                );
             } break;
             case Message::Role::Thinking: {
                 // - 如果这个 Thinking
@@ -98,7 +102,9 @@ ftxui::Element AgentTUI::renderMessages() {
                 }
                 lines.push_back(hbox(std::move(header)));
                 if (expanded) {
-                    lines.push_back(renderMarkdown(msg.text, theme_.thinkingColor));
+                    lines.push_back(
+                        renderMarkdown(msg.text, theme_.thinkingColor, theme_.markdownTheme)
+                    );
                 }
                 Element block
                     = vbox(std::move(lines)) | reflect(collapsibleBoxes_[collapsibleOrdinal]);
@@ -127,9 +133,9 @@ ftxui::Element AgentTUI::renderMessages() {
                     if (!msg.toolFinished) {
                         header.push_back(text("  running...") | color(theme_.hintColor));
                     } else if (msg.toolHasError) {
-                        header.push_back(text("  error: ") | color(theme_.systemColor));
+                        header.push_back(text("  error: ") | color(theme_.errorColor));
                         header.push_back(
-                            text(oneLinePreview(msg.toolResult)) | color(theme_.systemColor)
+                            text(oneLinePreview(msg.toolResult)) | color(theme_.errorColor)
                         );
                     } else if (isEditTool) {
                         appendEditToolHeader(msg, header);
@@ -152,7 +158,7 @@ ftxui::Element AgentTUI::renderMessages() {
                             }));
                         }
                         if (msg.toolFinished) {
-                            auto rc = msg.toolHasError ? theme_.systemColor : theme_.toolColor;
+                            auto rc = msg.toolHasError ? theme_.errorColor : theme_.toolColor;
                             lines.push_back(hbox({
                                 text(msg.toolHasError ? "  error: " : "  result: ") | color(rc),
                                 paragraph(msg.toolResult) | color(rc),
@@ -208,10 +214,14 @@ ftxui::Element AgentTUI::renderMessages() {
                 header.push_back(text(" "));
             }
             lines.push_back(hbox(std::move(header)));
-            lines.push_back(renderMarkdown(currentToken_, theme_.thinkingColor));
+            lines.push_back(
+                renderMarkdown(currentToken_, theme_.thinkingColor, theme_.markdownTheme)
+            );
             pushBlock(vbox(std::move(lines)), false);
         } else {
-            pushBlock(renderMarkdown(currentToken_, theme_.assistantColor), false);
+            pushBlock(
+                renderMarkdown(currentToken_, theme_.assistantColor, theme_.markdownTheme), false
+            );
         }
     }
 

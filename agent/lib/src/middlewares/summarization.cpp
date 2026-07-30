@@ -359,7 +359,6 @@ asio::awaitable<void>
     }
 
     if (newMsgsJson.is_array() && false == newMsgsJson.empty()) {
-        auto msgSize = newMsgsJson.size();
         in.state.overwrite("messages", std::move(newMsgsJson));
         if (agentCtxPtr->agentConfig->logPrintSummarizationResultTokenCount) {
             XX_OUT(
@@ -371,7 +370,7 @@ asio::awaitable<void>
 ┣━ Token Limit: {}/{}
 ┣━ Summary To: {}
 ┗━━━━━━ Summary ━━━━━━┛)_",
-                msgSize,
+                messages.size(),
                 apiTokenUsage,
                 countTokenUsage,
                 tokenUsage,
@@ -380,7 +379,6 @@ asio::awaitable<void>
             );
         }
     } else {
-        auto msgSize = newMsgsJson.size();
         if (agentCtxPtr->agentConfig->logPrintSummarizationResultTokenCount) {
             XX_OUT(
                 R"_(
@@ -391,7 +389,7 @@ asio::awaitable<void>
 ┣━ Token Limit: {}/{}
 ┣━ Not Need Summary
 ┗━━━━━━ Summary ━━━━━━┛)_",
-                msgSize,
+                messages.size(),
                 apiTokenUsage,
                 countTokenUsage,
                 tokenUsage,

@@ -326,6 +326,7 @@ agentxx_cli tui --agent ws://127.0.0.1:7007/agent --token passwd # 启动 TUI界
     - [hyperscan](https://github.com/intel/hyperscan)
     - [iconv](https://www.gnu.org/software/libiconv/) | [libiconv-native](https://github.com/hesphoros/libiconv-native)
     - [liburing](https://github.com/axboe/liburing)
+    - [MarkdownFTXUI](https://github.com/coolight7/MarkdownFTXUI)
     - [NeoGraph](https://github.com/fox1245/NeoGraph)
     - [OpenSSL](https://www.openssl.org/)
     - [simdjson](https://github.com/simdjson/simdjson/)

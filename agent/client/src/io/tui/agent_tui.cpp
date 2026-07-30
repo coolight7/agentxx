@@ -135,7 +135,8 @@ void AgentTUI::start() {
             // 指示器状态显示
             Element indicator;
             if (pendingPermission_) {
-                indicator = text("!") | bgcolor(Color::Red) | color(Color::White) | bold | blink;
+                indicator
+                    = text("!") | bgcolor(theme_.errorColor) | color(Color::White) | bold | blink;
             } else if (isStreaming_) {
                 indicator = text("~") | color(theme_.accentColor) | bold;
             } else {

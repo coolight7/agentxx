@@ -68,7 +68,7 @@ ftxui::Element AgentTUI::renderLogWindow() {
                 prefix = "[W] ";
                 break;
             case agentxx::util::LogLevel::Error:
-                c      = theme_.systemColor;
+                c      = theme_.errorColor;
                 prefix = "[E] ";
                 break;
             case agentxx::util::LogLevel::Out:
@@ -253,11 +253,11 @@ std::optional<ftxui::Element> AgentTUI::renderPlanningInfo() {
                 icon = "[~]";
                 c    = theme_.thinkingColor;
             } else if (state == "completed") {
-                icon = "[x]";
+                icon = "[#]";
                 c    = theme_.promptColor;
             } else if (state == "failed") {
                 icon = "[!]";
-                c    = theme_.systemColor;
+                c    = theme_.errorColor;
             }
             lines.push_back(hbox({
                 text(icon + " ") | color(c),
@@ -379,7 +379,7 @@ ftxui::Element AgentTUI::renderLogSidebarFooter() {
     if (currentNodeName_.empty()) {
         row.push_back(text(" idle") | color(theme_.hintColor));
     } else {
-        row.push_back(text(" ▶ " + currentNodeName_) | color(theme_.accentColor) | bold);
+        row.push_back(text(" > " + currentNodeName_) | color(theme_.accentColor));
     }
 
     row.push_back(filler());
