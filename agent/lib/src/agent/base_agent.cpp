@@ -738,6 +738,8 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                 }
             } catch (const neograph::graph::CancelledException& e) {
                 XX_LOGI("Agent Session Cancelled: {}", e.what());
+                turnResult.hasError     = true;
+                turnResult.errorMessage = "cancelled";
 
                 // 提取临时保存的上下文，并写回 state，避免函数返回后程序中断丢失数据
                 auto& im
