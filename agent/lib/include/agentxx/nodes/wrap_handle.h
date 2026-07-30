@@ -196,11 +196,13 @@ public:
                 continue;
             } catch (const neograph::graph::CancelledException&) {
                 errorRethrow = true;
-                onHandleStartError(errorRethrow, true, "", *item, in, out);
+                errInfo      = "cancelled";
+                onHandleStartError(errorRethrow, true, errInfo, *item, in, out);
                 errorPtr = std::current_exception();
             } catch (const neograph::graph::NodeInterrupt&) {
                 errorRethrow = true;
-                onHandleStartError(errorRethrow, true, "", *item, in, out);
+                errInfo      = "interrupt";
+                onHandleStartError(errorRethrow, true, errInfo, *item, in, out);
                 errorPtr = std::current_exception();
             } catch (const std::exception& e) {
                 errInfo = e.what();
@@ -230,11 +232,13 @@ public:
                     break;
                 } catch (const neograph::graph::CancelledException&) {
                     errorRethrow = true;
-                    onHandleBaseRunError(errorRethrow, true, "", in, out);
+                    errInfo      = "cancelled";
+                    onHandleBaseRunError(errorRethrow, true, errInfo, in, out);
                     errorPtr = std::current_exception();
                 } catch (const neograph::graph::NodeInterrupt&) {
                     errorRethrow = true;
-                    onHandleBaseRunError(errorRethrow, true, "", in, out);
+                    errInfo      = "interrupt";
+                    onHandleBaseRunError(errorRethrow, true, errInfo, in, out);
                     errorPtr = std::current_exception();
                 } catch (const std::exception& e) {
                     errInfo = e.what();
@@ -249,9 +253,9 @@ public:
                     onHandleBaseRunError(errorRethrow, true, errInfo, in, out);
                     errorPtr = std::current_exception();
                 }
-                XX_LOGE("{}/run exception: {})", nodeName, errInfo);
+                XX_LOGE("{}/run exception: {}", nodeName, errInfo);
             } else if (nullptr != errorPtr) {
-                onHandleBaseRunError(errorRethrow, false, "", in, out);
+                onHandleBaseRunError(errorRethrow, false, errInfo, in, out);
             } else {
                 XX_LOGE(
                     R"_({}/run, Before `baseRun` should exec all `onStart` or catch exception)_",
@@ -264,7 +268,7 @@ public:
         for (; i-- > 0;) {
             auto& item = agentCtxPtr->middlewareHandleContext->handles[i];
             if (nullptr != errorPtr) {
-                onHandleEndError(errorRethrow, false, "", *item, in, out);
+                onHandleEndError(errorRethrow, false, errInfo, *item, in, out);
             } else {
                 std::string errInfo;
                 try {
@@ -272,11 +276,13 @@ public:
                     continue;
                 } catch (const neograph::graph::CancelledException&) {
                     errorRethrow = true;
-                    onHandleEndError(errorRethrow, true, "", *item, in, out);
+                    errInfo      = "cancelled";
+                    onHandleEndError(errorRethrow, true, errInfo, *item, in, out);
                     errorPtr = std::current_exception();
                 } catch (const neograph::graph::NodeInterrupt&) {
                     errorRethrow = true;
-                    onHandleEndError(errorRethrow, true, "", *item, in, out);
+                    errInfo      = "interrupt";
+                    onHandleEndError(errorRethrow, true, errInfo, *item, in, out);
                     errorPtr = std::current_exception();
                 } catch (const std::exception& e) {
                     errInfo = e.what();
@@ -302,6 +308,14 @@ public:
             }
         }
 
+        if (nullptr != errorPtr) {
+            // 保存此时的上下文，如果直接抛异常到 neograph::engine，会丢失本轮 session 增加的上下文
+            agentContext->lock()->setGraphDataItemValue(
+                thread_id,
+                MiddlewareContext::graphDataKey_tempMessages,
+                msgs
+            );
+        }
         if (errorRethrow) {
             std::rethrow_exception(errorPtr);
         }

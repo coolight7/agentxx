@@ -212,7 +212,7 @@ void ModelCallWrapNode::onHandleStartError(
 ) noexcept {
     // 插入消息，保证消息顺序正确
     // 不会记录 toolcall
-    if (false == errorRethrow) {
+    if (false == errorRethrow && isCurrentError) {
         auto msg = neograph::ChatMessage{
             .role    = "assistant",
             .content = neograph::json{
@@ -391,7 +391,7 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
             co_return;
         } catch (const neograph::graph::CancelledException&) {
             isCancel = true;
-            errInfo  = "Cancel";
+            errInfo  = "Cancelled";
             errorPtr = std::current_exception();
             // } catch (const neograph::graph::NodeInterrupt&) {
             // isCancel = true;
