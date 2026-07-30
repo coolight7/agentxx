@@ -173,6 +173,15 @@ asio::awaitable<neograph::graph::NodeOutput>
     auto completion = co_await onReceiveToken(params, in);
     neograph::graph::record_usage(in.ctx, completion); // #88
 
+    // 部分 OpenAI 兼容 API (如 Ollama) 流式响应不返回 tool_call id，
+    // 此处补充合成 ID，确保下游 ToolStart/ToolEnd 能正确关联
+    for (size_t i = 0; i < completion.message.tool_calls.size(); ++i) {
+        auto& tc = completion.message.tool_calls[i];
+        if (tc.id.empty()) {
+            tc.id = "call_" + std::to_string(i);
+        }
+    }
+
     neograph::json msg_json;
     neograph::to_json(msg_json, completion.message);
 
@@ -226,7 +235,7 @@ void ModelCallWrapNode::onHandleStartError(
         neograph::to_json(msgJson, msg);
         result.writes.push_back(neograph::graph::ChannelWrite{
             "messages",
-            msgJson,
+            neograph::json::array({msgJson}),
         });
     }
 }
@@ -252,7 +261,7 @@ void ModelCallWrapNode::onHandleBaseRunError(
         neograph::to_json(msgJson, msg);
         result.writes.push_back(neograph::graph::ChannelWrite{
             "messages",
-            msgJson,
+            neograph::json::array({msgJson}),
         });
     }
 }
