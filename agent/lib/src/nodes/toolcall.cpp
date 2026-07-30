@@ -31,7 +31,7 @@ void ToolcallWrapNode::onHandleStartError(
     neograph::graph::NodeOutput&                        result
 ) noexcept {
     // 插入消息，保证消息顺序正确
-    if (false == errorRethrow) {
+    if (false == errorRethrow && isCurrentError) {
         auto msg = neograph::ChatMessage{
             .role    = "tool",
             .content = fmt::format(

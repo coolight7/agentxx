@@ -333,9 +333,11 @@ void MiddlewareContext::throwNodeInterruptBase(
     std::string_view      thread_id,
     const neograph::json& msgs
 ) {
-    if (msgs.is_array()) {
-        setGraphDataItemValue(thread_id, MiddlewareContext::graphDataKey_interruptMessages, msgs);
-    }
+    // if (msgs.is_array()) {
+    // 直接抛异常到 neograph::engine 的话会丢失本轮 session 上下文，因此需要临时保存，这里改为交由
+    // wrap_handle 保存此时的 上下文 setGraphDataItemValue(thread_id,
+    // MiddlewareContext::graphDataKey_tempMessages, msgs);
+    // }
     throw neograph::graph::NodeInterrupt{"xx-NodeInterrupt"};
 }
 

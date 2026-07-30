@@ -389,7 +389,8 @@ public:
     inline static const std::string graphDataKey_systemMessage{"systemMessage"};
     inline static const std::string graphDataKey_tempLLMMessage{"xx_ModelCallWrap_tempLLMMessage"};
     inline static const std::string graphDataKey_LLMTokenUsage{"xx_ModelCallWrap_LLMTokenUsage"};
-    inline static const std::string graphDataKey_interruptMessages{"xx_interruptMessages"};
+    /// 存储 中断、异常、取消 时的 messages
+    inline static const std::string graphDataKey_tempMessages{"xx_tempMessages"};
     inline static const std::string graphDataKey_interruptArgs{"xx_interruptArgs"};
     inline static const std::string graphDataKey_interruptResult{"xx_interruptResult"};
     /// 中断发生的节点名 (供程序重启恢复中断时复用)

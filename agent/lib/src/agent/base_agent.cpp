@@ -401,16 +401,11 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                             });
                         }
                     } else if (role == "tool") {
-                        auto content  = jm.value("content", std::string{});
-                        bool hasError = false;
-                        try {
-                            auto parsed = neograph::json::parse(content);
-                            hasError    = parsed.is_object() && parsed.contains("error");
-                        } catch (...) {
-                        }
+                        auto content    = jm.value("content", std::string{});
+                        bool hasError   = content.contains("error");
                         auto toolName   = jm.value("tool_name", std::string{});
                         auto toolCallId = jm.value("tool_call_id", std::string{});
-                        if (!toolCallId.empty()) {
+                        if (toolCallId.empty()) {
                             continue;
                         }
                         auto historyMsg = jm;
@@ -549,6 +544,7 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                         result->interrupt_value
                     );
 
+                    // 保存 graphData，以防中断处理时停止运行丢失数据
                     engine->update_state(
                         std::string{threadId},
                         [&](neograph::graph::GraphState& state) {
@@ -645,9 +641,9 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                                     }
                                 }
                             } else {
-                                auto sess = agentContext->sessions->get(threadId);
-                                if (sess && sess->bus) {
-                                    auto resp = co_await sess->bus->request<
+                                auto session = agentContext->sessions->get(threadId);
+                                if (session && session->bus) {
+                                    auto resp = co_await session->bus->request<
                                         events::ReqInterrupt,
                                         events::RespInterrupt>(
                                         events::Topic::Interrupt,
@@ -679,7 +675,8 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                         }
                     }
 
-                    if (false != resumeValues.empty()) {
+                    if (false == resumeValues.empty()) {
+                        // 中断处理完成，写回结果
                         agentContext->middlewareHandleContext->setGraphDataItemValue<
                             neograph::json>(
                             threadId,
@@ -702,7 +699,8 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                         }
                     }
                 }
-            } catch (const neograph::graph::CancelledException&) {
+            } catch (const neograph::graph::CancelledException& e) {
+                XX_LOGI("Agent Session Cancelled: {}", e.what());
                 auto state = engine->get_state(std::string{threadId});
                 if (state.has_value() && state->is_object() && state->contains("messages")) {
                     auto msgs = (*state)["messages"];
@@ -715,7 +713,7 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
             co_return;
         },
         [&](std::string errmsg) -> asio::awaitable<void> {
-            XX_LOGE(R"({{"error": "Agent Response failed: {}"}})", errmsg);
+            XX_LOGE("Agent Session Response failed: {}", errmsg);
             turnResult.hasError     = true;
             turnResult.errorMessage = std::move(errmsg);
             co_return;
