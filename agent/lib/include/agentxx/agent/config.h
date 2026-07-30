@@ -25,7 +25,8 @@ public:
     int         connectTimeoutSeconds = 16;
     int         readTimeoutSeconds    = 30;
     /// 是否在发送 LLM 请求时携带 thinking 内容
-    bool sendThinking = false;
+    bool                sendThinking = false;
+    std::optional<bool> sslVerify    = std::nullopt;
     /// Anthropic API version（仅 Anthropic 使用）
     std::string anthropicVersion = "2023-06-01";
     /// max_tokens

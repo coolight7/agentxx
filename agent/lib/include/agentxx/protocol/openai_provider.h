@@ -5,12 +5,9 @@
 #include "agentxx/util/log.h"
 #include "agentxx/util/string_util.h"
 #include "asio/awaitable.hpp"
-#include "asio/cancel_after.hpp"
-#include "asio/redirect_error.hpp"
 #include "asio/use_awaitable.hpp"
 #include <charconv>
 #include <chrono>
-#include <limits>
 #include <map>
 #include <memory>
 #include <neograph/api.h>
@@ -57,15 +54,6 @@ private:
 
     neograph::json buildBody(const neograph::CompletionParams& params) const;
 
-    struct ParsedEndpoint {
-        std::string scheme;
-        std::string host;
-        uint16_t    port;
-        std::string prefix;
-    };
-
-    static ParsedEndpoint parseEndpoint(std::string_view base_url);
-
     asio::awaitable<neograph::ChatCompletion> completeAsync(const neograph::CompletionParams& params
     );
 
@@ -74,107 +62,6 @@ private:
         const neograph::json&              body,
         neograph::FormatDataStreamCallback on_chunk
     );
-
-    template<typename Stream>
-    asio::awaitable<void> readSseStream(
-        Stream&                               stream,
-        std::chrono::steady_clock::time_point deadline,
-        std::chrono::seconds                  readTimeout,
-        neograph::ChatCompletion&             completion,
-        std::string&                          fullContent,
-        std::string&                          fullThinking,
-        std::map<int, neograph::ToolCall>&    tcMap,
-        std::string&                          lineBuffer,
-        neograph::FormatDataStreamCallback    on_chunk
-    ) {
-        namespace http = boost::beast::http;
-
-        auto rem = [&] {
-            auto d = deadline - std::chrono::steady_clock::now();
-            return std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::max(d, std::chrono::steady_clock::duration::zero())
-            );
-        };
-
-        boost::beast::flat_buffer                buf;
-        http::response_parser<http::string_body> parser;
-        parser.body_limit(std::numeric_limits<uint64_t>::max());
-        parser.eager(true);
-
-        co_await http::async_read_header(
-            stream,
-            buf,
-            parser,
-            asio::cancel_after(readTimeout, asio::use_awaitable)
-        );
-
-        if (parser.get().result_int() == 429) {
-            co_await http::async_read(
-                stream,
-                buf,
-                parser,
-                asio::cancel_after(rem(), asio::use_awaitable)
-            );
-            auto resp       = parser.release();
-            auto raw        = resp[http::field::retry_after];
-            int  retryAfter = -1;
-            if (!raw.empty()) {
-                int seconds    = 0;
-                auto [ptr, ec] = agentxx::util::parseNumberFromString(raw, seconds);
-                if (ec == std::errc{} && seconds >= 0) {
-                    retryAfter = seconds;
-                }
-            }
-            throw neograph::RateLimitError("API error (HTTP 429): " + resp.body(), retryAfter);
-        }
-
-        if (parser.get().result_int() != 200) {
-            co_await http::async_read(
-                stream,
-                buf,
-                parser,
-                asio::cancel_after(rem(), asio::use_awaitable)
-            );
-            auto resp = parser.release();
-            throw std::runtime_error(
-                "API error (HTTP " + std::to_string(resp.result_int()) + "): " + resp.body()
-            );
-        }
-
-        size_t processed = 0;
-        while (!parser.is_done()) {
-            co_await http::async_read_some(
-                stream,
-                buf,
-                parser,
-                asio::cancel_after(readTimeout, asio::use_awaitable)
-            );
-            auto& body = parser.get().body();
-            if (body.size() > processed) {
-                lineBuffer += body.substr(processed);
-                processed   = body.size();
-                processSseBuffer(
-                    lineBuffer,
-                    completion,
-                    fullContent,
-                    fullThinking,
-                    tcMap,
-                    on_chunk
-                );
-            }
-        }
-        if (!lineBuffer.empty()) {
-            processSseBuffer(
-                lineBuffer,
-                completion,
-                fullContent,
-                fullThinking,
-                tcMap,
-                on_chunk,
-                /*finalFlush=*/true
-            );
-        }
-    }
 
 public:
 
@@ -299,8 +186,6 @@ public:
     }
 
     static void extractThinkTags(std::string& content, std::string& thinking);
-
-    static asio::ssl::context& sslContext();
 
 private:
 

@@ -1,6 +1,7 @@
 #include "agentxx/util/http_client.h"
 #include "agentxx/util/exception.h"
 #include "html2md/html2md.h"
+#include <neograph/provider.h>
 #include <openssl/ssl.h>
 
 namespace agentxx {
@@ -394,9 +395,11 @@ asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::requestAsy
                         result = std::unexpected{errInfo};
                     }
                 }
+                co_return;
             },
             [&](std::string errInfo) -> asio::awaitable<void> {
                 result = std::unexpected{errInfo};
+                co_return;
             }
         );
 
@@ -423,6 +426,174 @@ asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::requestAsy
         }
     }
     co_return result;
+}
+
+asio::awaitable<void> HttpClient::requestSseAsync(
+    std::string_view                      method,
+    std::string_view                      url,
+    std::string_view                      body,
+    std::string_view                      contentType,
+    const HeaderMap&                      extraHeaders,
+    const RequestConfig&                  config,
+    std::function<void(std::string_view)> onChunk
+) {
+    namespace http = boost::beast::http;
+    using asio::ip::tcp;
+
+    auto parsed = parseUrl(url);
+    if (!parsed) {
+        throw std::runtime_error{"invalid url: " + std::string(url)};
+    }
+    bool        isHttps     = parsed->scheme == "https";
+    bool        defaultPort = (isHttps && parsed->port == 443) || (!isHttps && parsed->port == 80);
+    std::string hostHeader  = parsed->host;
+    if (!defaultPort) {
+        hostHeader += ":" + std::to_string(parsed->port);
+    }
+
+    http::request<http::string_body> req{http::string_to_verb(method), parsed->path, 11};
+    bool                             hasHost = extraHeaders.contains("host");
+    if (!hasHost) {
+        req.set(http::field::host, hostHeader);
+    }
+    req.set(http::field::user_agent, "agentxx/1.0");
+    req.set(http::field::accept, "text/event-stream");
+    req.set(http::field::connection, "keep-alive");
+
+    for (const auto& [k, v] : extraHeaders.data) {
+        if (isIgnoreCaseEqual(k, "host")) {
+            continue;
+        }
+        req.set(k, stringVectorJoin(v, "; "));
+    }
+    if (!body.empty()) {
+        if (!contentType.empty()) {
+            req.set(http::field::content_type, contentType);
+        }
+        req.body() = body;
+        req.prepare_payload();
+    }
+
+    auto          executor = co_await asio::this_coro::executor;
+    tcp::resolver resolver(executor);
+    auto          endpoints = co_await resolver.async_resolve(
+        parsed->host,
+        std::to_string(parsed->port),
+        asio::cancel_after(config.connectTimeout, asio::use_awaitable)
+    );
+
+    auto sendTimeout = config.sendTimeout.value_or(calcTimeoutBySize(req.body().size()));
+
+    auto doSseExchange = [&](auto& stream) -> asio::awaitable<void> {
+        co_await http::async_write(
+            stream,
+            req,
+            asio::cancel_after(sendTimeout, asio::use_awaitable)
+        );
+
+        boost::beast::flat_buffer                buf;
+        http::response_parser<http::string_body> parser;
+        parser.body_limit(std::numeric_limits<uint64_t>::max());
+        parser.eager(true);
+
+        co_await http::async_read_header(
+            stream,
+            buf,
+            parser,
+            asio::cancel_after(config.readTimeout, asio::use_awaitable)
+        );
+
+        if (parser.get().result_int() == 429) {
+            co_await http::async_read(
+                stream,
+                buf,
+                parser,
+                asio::cancel_after(config.readTimeout, asio::use_awaitable)
+            );
+            auto resp       = parser.release();
+            auto raw        = resp[http::field::retry_after];
+            int  retryAfter = -1;
+            if (!raw.empty()) {
+                int seconds    = 0;
+                auto [ptr, ec] = parseNumberFromString(raw, seconds);
+                if (ec == std::errc{} && seconds >= 0) {
+                    retryAfter = seconds;
+                }
+            }
+            throw neograph::RateLimitError("API error (HTTP 429): " + resp.body(), retryAfter);
+        }
+
+        if (parser.get().result_int() != 200) {
+            co_await http::async_read(
+                stream,
+                buf,
+                parser,
+                asio::cancel_after(config.readTimeout, asio::use_awaitable)
+            );
+            auto resp = parser.release();
+            throw std::runtime_error(
+                "API error (HTTP " + std::to_string(resp.result_int()) + "): " + resp.body()
+            );
+        }
+
+        size_t                   processed = 0;
+        neograph_asio_error_code ec;
+        while (!parser.is_done()) {
+            co_await http::async_read_some(
+                stream,
+                buf,
+                parser,
+                asio::cancel_after(
+                    config.readTimeout,
+                    asio::redirect_error(asio::use_awaitable, ec)
+                )
+            );
+            if (ec) {
+                if (ec == asio::error::eof) {
+                    break;
+                }
+                throw neograph_asio_system_error(ec, "SSE stream read");
+            }
+            auto& respBody = parser.get().body();
+            if (respBody.size() > processed) {
+                onChunk(std::string_view{respBody}.substr(processed));
+                processed = respBody.size();
+            }
+        }
+    };
+
+    if (isHttps) {
+        bool  verify = config.sslVerify.value_or(sslVerifyEnabled_.load(std::memory_order_relaxed));
+        auto& sslCtx = sharedSslCtx(verify);
+        asio::ssl::stream<tcp::socket> stream(executor, sslCtx);
+        if (!parsed->host.empty()) {
+            ::SSL_set_tlsext_host_name(stream.native_handle(), parsed->host.c_str());
+        }
+        co_await asio::async_connect(
+            stream.lowest_layer(),
+            endpoints,
+            asio::cancel_after(config.connectTimeout, asio::use_awaitable)
+        );
+        neograph_asio_error_code tcpEc;
+        stream.lowest_layer().set_option(asio::ip::tcp::no_delay(true), tcpEc);
+        co_await stream.async_handshake(
+            asio::ssl::stream_base::client,
+            asio::cancel_after(config.connectTimeout, asio::use_awaitable)
+        );
+        co_await doSseExchange(stream);
+        neograph_asio_error_code sslEc;
+        stream.lowest_layer().shutdown(asio::ip::tcp::socket::shutdown_both, sslEc);
+    } else {
+        tcp::socket stream(executor);
+        co_await asio::async_connect(
+            stream,
+            endpoints,
+            asio::cancel_after(config.connectTimeout, asio::use_awaitable)
+        );
+        neograph_asio_error_code tcpEc;
+        stream.set_option(asio::ip::tcp::no_delay(true), tcpEc);
+        co_await doSseExchange(stream);
+    }
 }
 
 void HttpClient::setSslVerify(bool enable) noexcept {
