@@ -181,6 +181,7 @@ public:
     ///
     /// - start 出现错误时，跳过 baseRun，执行对应的 end
     asio::awaitable<neograph::graph::NodeOutput> run(neograph::graph::NodeInput in) override final {
+        std::string                 errInfo;
         std::exception_ptr          errorPtr;
         bool                        errorRethrow = false;
         neograph::graph::NodeOutput out;
@@ -189,8 +190,7 @@ public:
         const auto len         = agentCtxPtr->middlewareHandleContext->handles.size();
         size_t     i           = 0;
         for (; i < len; ++i) {
-            auto&       item = agentCtxPtr->middlewareHandleContext->handles[i];
-            std::string errInfo;
+            auto& item = agentCtxPtr->middlewareHandleContext->handles[i];
             try {
                 co_await onHandleStart(*item, in);
                 continue;
@@ -225,7 +225,6 @@ public:
 
         do {
             if (i >= len) {
-                std::string errInfo;
                 try {
                     co_await baseRun(agentCtxPtr->middlewareHandleContext->handles, in, out);
                     i = len;
@@ -270,7 +269,6 @@ public:
             if (nullptr != errorPtr) {
                 onHandleEndError(errorRethrow, false, errInfo, *item, in, out);
             } else {
-                std::string errInfo;
                 try {
                     co_await onHandleEnd(*item, in, out);
                     continue;
@@ -310,10 +308,11 @@ public:
 
         if (nullptr != errorPtr) {
             // 保存此时的上下文，如果直接抛异常到 neograph::engine，会丢失本轮 session 增加的上下文
-            agentContext->lock()->setGraphDataItemValue(
-                thread_id,
-                MiddlewareContext::graphDataKey_tempMessages,
-                msgs
+            auto session = agentCtxPtr->getSession(in.ctx.thread_id);
+            agentCtxPtr->middlewareHandleContext->setGraphDataItemValue(
+                in.ctx.thread_id,
+                agentxx::middleware::MiddlewareContext::graphDataKey_tempMessages,
+                session->llmMessages
             );
         }
         if (errorRethrow) {
