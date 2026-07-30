@@ -2,6 +2,7 @@
 
 #include "agentxx/agent/config.h"
 #include "agentxx/util/http_client.h"
+#include "agentxx/util/log.h"
 #include "agentxx/util/string_util.h"
 #include "asio/awaitable.hpp"
 #include "asio/cancel_after.hpp"
@@ -151,60 +152,57 @@ public:
             return;
         }
 
-        try {
-            auto j = neograph::json::parse(payload);
+        auto j = neograph::json::parse(payload);
 
-            if (currentEvent == "message_start") {
-                if (j.contains("message") && j["message"].contains("usage")) {
-                    auto u                         = j["message"]["usage"];
-                    completion.usage.prompt_tokens = u.value("input_tokens", 0);
-                }
-            } else if (currentEvent == "content_block_start") {
-                int idx = j.value("index", 0);
-                if (j.contains("content_block")) {
-                    auto type       = j["content_block"].value("type", std::string{});
-                    blockTypes[idx] = type;
-                    if (type == "tool_use") {
-                        tcMap[idx].id   = j["content_block"].value("id", std::string{});
-                        tcMap[idx].name = j["content_block"].value("name", std::string{});
-                    }
-                }
-            } else if (currentEvent == "content_block_delta") {
-                int idx = j.value("index", 0);
-                if (j.contains("delta")) {
-                    auto deltaType = j["delta"].value("type", std::string{});
-                    if (deltaType == "text_delta") {
-                        auto text    = j["delta"].value("text", std::string{});
-                        fullContent += text;
-                        if (on_chunk) {
-                            on_chunk(neograph::ChatStreamChunk{
-                                neograph::ChatStreamChunk::TYPE_CONTENT,
-                                text
-                            });
-                        }
-                    } else if (deltaType == "thinking_delta") {
-                        auto thinking  = j["delta"].value("thinking", std::string{});
-                        fullThinking  += thinking;
-                        if (on_chunk) {
-                            on_chunk(neograph::ChatStreamChunk{
-                                neograph::ChatStreamChunk::TYPE_THINKING,
-                                thinking
-                            });
-                        }
-                    } else if (deltaType == "input_json_delta") {
-                        auto partialJson      = j["delta"].value("partial_json", std::string{});
-                        tcMap[idx].arguments += partialJson;
-                    }
-                }
-            } else if (currentEvent == "message_delta") {
-                if (j.contains("usage")) {
-                    auto u                             = j["usage"];
-                    completion.usage.completion_tokens = u.value("output_tokens", 0);
-                    completion.usage.total_tokens
-                        = completion.usage.prompt_tokens + completion.usage.completion_tokens;
+        // 允许异常时字节抛出给到 ModelCallNode ，以便自动处理
+        if (currentEvent == "message_start") {
+            if (j.contains("message") && j["message"].contains("usage")) {
+                auto u                         = j["message"]["usage"];
+                completion.usage.prompt_tokens = u.value("input_tokens", 0);
+            }
+        } else if (currentEvent == "content_block_start") {
+            int idx = j.value("index", 0);
+            if (j.contains("content_block")) {
+                auto type       = j["content_block"].value("type", std::string{});
+                blockTypes[idx] = type;
+                if (type == "tool_use") {
+                    tcMap[idx].id   = j["content_block"].value("id", std::string{});
+                    tcMap[idx].name = j["content_block"].value("name", std::string{});
                 }
             }
-        } catch (...) {
+        } else if (currentEvent == "content_block_delta") {
+            int idx = j.value("index", 0);
+            if (j.contains("delta")) {
+                auto deltaType = j["delta"].value("type", std::string{});
+                if (deltaType == "text_delta") {
+                    auto text    = j["delta"].value("text", std::string{});
+                    fullContent += text;
+                    if (on_chunk) {
+                        on_chunk(neograph::ChatStreamChunk{
+                            neograph::ChatStreamChunk::TYPE_CONTENT,
+                            text,
+                        });
+                    }
+                } else if (deltaType == "thinking_delta") {
+                    auto thinking  = j["delta"].value("thinking", std::string{});
+                    fullThinking  += thinking;
+                    if (on_chunk) {
+                        on_chunk(neograph::ChatStreamChunk{
+                            neograph::ChatStreamChunk::TYPE_THINKING,
+                            thinking
+                        });
+                    }
+                } else if (deltaType == "input_json_delta") {
+                    auto partialJson      = j["delta"].value("partial_json", std::string{});
+                    tcMap[idx].arguments += partialJson;
+                }
+            }
+        } else if (currentEvent == "message_delta") {
+            if (j.contains("usage")) {
+                completion.usage.completion_tokens = j["usage"].value<int>("output_tokens", 0);
+                completion.usage.total_tokens
+                    = completion.usage.prompt_tokens + completion.usage.completion_tokens;
+            }
         }
     }
 
@@ -311,7 +309,10 @@ private:
                 asio::cancel_after(readTimeout, asio::redirect_error(asio::use_awaitable, ec))
             );
             if (ec) {
-                break;
+                if (ec == asio::error::eof) {
+                    break;
+                }
+                throw neograph_asio_system_error(ec, "SSE stream read");
             }
             auto& body = parser.get().body();
             if (body.size() > processed) {

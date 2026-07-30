@@ -283,7 +283,7 @@ Options:
                 asio::signal_set         signals(*agent->ioCtx, SIGINT, SIGTERM);
                 neograph_asio_error_code ec;
                 co_await signals.async_wait(asio::redirect_error(asio::use_awaitable, ec));
-                XX_OUT("[agent_server] signal received, shutting down...");
+                XX_OUT("[agent_server] signal received, shutting down ({})...", ec.message());
                 server->stop();
                 agent->ioCtx->stop();
                 co_return;

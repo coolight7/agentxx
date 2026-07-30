@@ -405,14 +405,13 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                         }
                     } else if (role == "tool") {
                         auto content    = jm.value("content", std::string{});
-                        bool hasError   = content.contains("error");
                         auto toolName   = jm.value("tool_name", std::string{});
                         auto toolCallId = jm.value("tool_call_id", std::string{});
                         if (toolCallId.empty()) {
                             continue;
                         }
                         auto historyMsg = jm;
-                        if (false == hasError && toolName == "filesystem_edit_text_file") {
+                        if (toolName == "filesystem_edit_text_file") {
                             // 生成 diff 记录
                             for (auto it = session->fullHistory.rbegin();
                                  it != session->fullHistory.rend();
@@ -452,7 +451,7 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                             .toolName   = toolName,
                             .toolCallId = toolCallId,
                             .result     = content,
-                            .hasError   = hasError,
+                            .hasError   = false,
                         });
                     } else if (role == "assistant") {
                         hasLLMOutput = true;

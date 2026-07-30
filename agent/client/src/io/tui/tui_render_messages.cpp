@@ -19,14 +19,15 @@ std::string oneLinePreview(std::string_view s, size_t max = 60) {
     return line;
 }
 
-ftxui::Element renderMarkdown(
-    std::string_view text, ftxui::Color color, markdown::Theme const& mdTheme
-) {
-    if (text.empty()) return ftxui::text("");
-    auto parser = markdown::make_cmark_parser();
-    auto ast    = parser->parse(text);
+ftxui::Element
+    renderMarkdown(std::string_view text, ftxui::Color color, markdown::Theme const& mdTheme) {
+    if (text.empty()) {
+        return ftxui::text("");
+    }
+    auto                 parser = markdown::make_cmark_parser();
+    auto                 ast    = parser->parse(text);
     markdown::DomBuilder builder;
-    auto el = builder.build(ast, -1, mdTheme);
+    auto                 el = builder.build(ast, -1, mdTheme);
     return el | ftxui::color(color);
 }
 
@@ -70,7 +71,17 @@ ftxui::Element AgentTUI::renderMessages() {
             } break;
             case Message::Role::Assistant: {
                 pushBlock(
-                    renderMarkdown(msg.text, theme_.assistantColor, theme_.markdownTheme), true
+                    renderMarkdown(msg.text, theme_.assistantColor, theme_.markdownTheme),
+                    true
+                );
+            } break;
+            case Message::Role::System: {
+                pushBlock(
+                    hbox({
+                        text("# ") | color(theme_.systemColor),
+                        paragraph(msg.text) | color(theme_.systemColor),
+                    }),
+                    true
                 );
             } break;
             case Message::Role::Thinking: {
@@ -112,15 +123,6 @@ ftxui::Element AgentTUI::renderMessages() {
                 pushBlock(std::move(block), true);
                 break;
             }
-            case Message::Role::System: {
-                pushBlock(
-                    hbox({
-                        text("# ") | color(theme_.systemColor),
-                        paragraph(msg.text) | color(theme_.systemColor),
-                    }),
-                    true
-                );
-            } break;
             case Message::Role::Tool: {
                 const bool expanded   = !msg.collapsed;
                 const bool isEditTool = (msg.toolName == "filesystem_edit_text_file");
@@ -131,9 +133,9 @@ ftxui::Element AgentTUI::renderMessages() {
                 header.push_back(text(msg.toolName) | color(theme_.toolColor));
                 if (!expanded) {
                     if (!msg.toolFinished) {
-                        header.push_back(text("  running...") | color(theme_.hintColor));
+                        header.push_back(text("running...") | color(theme_.hintColor));
                     } else if (msg.toolHasError) {
-                        header.push_back(text("  error: ") | color(theme_.errorColor));
+                        header.push_back(text("error: ") | color(theme_.errorColor));
                         header.push_back(
                             text(oneLinePreview(msg.toolResult)) | color(theme_.errorColor)
                         );
@@ -141,7 +143,7 @@ ftxui::Element AgentTUI::renderMessages() {
                         appendEditToolHeader(msg, header);
                     } else {
                         header.push_back(
-                            text("  " + oneLinePreview(msg.toolResult)) | color(theme_.toolColor)
+                            text(oneLinePreview(msg.toolResult)) | color(theme_.toolColor)
                         );
                     }
                 }
@@ -209,7 +211,6 @@ ftxui::Element AgentTUI::renderMessages() {
             header.push_back(text("- ") | color(theme_.thinkingColor));
             header.push_back(text("[Thinking] ") | color(theme_.thinkingColor));
             if (!durationStr.empty()) {
-                header.push_back(text(" "));
                 header.push_back(text(durationStr) | color(theme_.thinkingColor));
                 header.push_back(text(" "));
             }
@@ -220,7 +221,8 @@ ftxui::Element AgentTUI::renderMessages() {
             pushBlock(vbox(std::move(lines)), false);
         } else {
             pushBlock(
-                renderMarkdown(currentToken_, theme_.assistantColor, theme_.markdownTheme), false
+                renderMarkdown(currentToken_, theme_.assistantColor, theme_.markdownTheme),
+                false
             );
         }
     }

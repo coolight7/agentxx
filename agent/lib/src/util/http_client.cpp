@@ -365,7 +365,7 @@ asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::requestAsy
                 );
                 result = co_await exchange(stream, req, config);
                 neograph_asio_error_code sslEc;
-                co_await stream.async_shutdown(asio::redirect_error(asio::use_awaitable, sslEc));
+                co_await stream.async_shutdown(asio::use_awaitable);
             } else {
                 tcp::socket stream(executor);
                 co_await asio::async_connect(

@@ -299,11 +299,9 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStream(
             on_chunk
         );
 
-        neograph_asio_error_code shutEc;
-        co_await stream.async_shutdown(asio::cancel_after(
-            std::chrono::seconds{3},
-            asio::redirect_error(asio::use_awaitable, shutEc)
-        ));
+        co_await stream.async_shutdown(
+            asio::cancel_after(std::chrono::seconds{3}, asio::use_awaitable)
+        );
     } else {
         boost::beast::tcp_stream stream(std::move(socket));
 
