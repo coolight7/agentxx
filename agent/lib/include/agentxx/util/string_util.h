@@ -332,10 +332,10 @@ using IgnoreCaseSet = std::unordered_set<std::string, IgnoreCaseHash, IgnoreCase
 }
 
 [[nodiscard]] inline constexpr bool utf8IsAvail(std::string_view str) {
-    if (str.empty() || str[0] == '\0' || (utf8GetLengthCheckAvail(str) == 0)) {
-        return false;
+    if (str.empty() || str[0] == '\0') {
+        return true;
     }
-    return true;
+    return utf8GetLengthCheckAvail(str) != 0;
 }
 
 template<typename T>

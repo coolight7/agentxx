@@ -368,18 +368,20 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
     auto   ctxPtr = agentContext.lock()->middlewareHandleContext;
     auto   timer  = asio::steady_timer(co_await asio::this_coro::executor);
     size_t retry  = 0;
+
     do {
         // 清理过时的 临时 LLM 消息
         ctxPtr->removeGraphDataItem(
             in.ctx.thread_id,
             agentxx::middleware::MiddlewareContext::graphDataKey_tempLLMMessage
         );
-        // 修正上下文角色顺序
-        repairMessages(in);
-
+        // 重试时 messages 可能已经发生更改，因此允许在重试时再次执行
+        // 但要实现 [handle->onModelcallRunFunc] 的地方自己保证重复执行没有问题
         for (auto& handle : handles) {
             co_await handle->onModelcallRunFunc(in);
         }
+        // 修正上下文角色顺序
+        repairMessages(in);
 
         bool               isCancel = false;
         std::string        errInfo;
