@@ -6,3 +6,4 @@ __pycache__
 help-dummy.o
 .VSCodeCounter
 .env
+crash-*.log

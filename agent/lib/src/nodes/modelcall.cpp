@@ -167,11 +167,7 @@ neograph::CompletionParams ModelCallWrapNode::build_params(
 
 asio::awaitable<neograph::graph::NodeOutput>
     ModelCallWrapNode::callLLM(neograph::graph::NodeInput& in) {
-    auto params = build_params(in.state, in.ctx.thread_id);
-    // v0.4 PR 9a: explicit cancel propagation — no thread-local
-    // smuggling. The provider binds this token's slot to its inner
-    // ConnPool::async_post co_await, so a caller's cancel() aborts
-    // the in-flight HTTPS socket.
+    auto params         = build_params(in.state, in.ctx.thread_id);
     params.cancel_token = in.ctx.cancel_token;
 
     auto completion = co_await onReceiveToken(params, in);
@@ -281,11 +277,16 @@ void ModelCallWrapNode::repairMessages(neograph::graph::NodeInput& in) {
     }
 
     auto agentCtxPtr = agentContext.lock();
-    if (agentCtxPtr->agentConfig->checkMessagesUtf8BeforeLLM) {
-        // 检查是否符合 utf8
+    if (agentCtxPtr->agentConfig->checkMessagesBeforeLLM) {
         auto msgs = in.state.get_messages();
         for (const auto& msg : msgs) {
             bool doPrint = false;
+            // 检查消息非空
+            if (msg.content.empty() && msg.tool_calls.empty()) {
+                XX_LOGE("  - Message is Empty: ");
+                doPrint = true;
+            }
+            // 检查是否符合 utf8
             if (false == agentxx::util::utf8IsAvail(msg.content)) {
                 XX_LOGE("  - Message.content is not utf8 available: ");
                 doPrint = true;

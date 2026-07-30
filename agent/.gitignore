@@ -7,4 +7,3 @@
 /third_party/paddle_inference/
 /third_party/paddle_inference_model/
 /third_party/PaddleOCR/
-crash-*.log

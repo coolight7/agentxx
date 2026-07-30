@@ -99,7 +99,7 @@ public:
     std::optional<ModelConfig> websearchModel;
 
     /// 在向 llm api 发起请求之前，检查 [messages] 是否符合 utf-8 编码
-    bool checkMessagesUtf8BeforeLLM = true;
+    bool checkMessagesBeforeLLM = true;
 
     /// 日志输出控制
     bool logPrintToolcall                       = false;

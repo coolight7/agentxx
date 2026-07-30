@@ -339,6 +339,16 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStream(
         completion.message.tool_calls.push_back(std::move(tc));
     }
 
+    if (fullContent.empty() && fullThinking.empty() && completion.message.tool_calls.empty()) {
+        XX_LOGW(
+            "LLM stream completed with empty response | model={} usage={}/{}/{}",
+            params.model,
+            completion.usage.prompt_tokens,
+            completion.usage.completion_tokens,
+            completion.usage.total_tokens
+        );
+    }
+
     co_return completion;
 }
 
@@ -366,52 +376,49 @@ void OpenAIProvider::extractToolCalls(
         if (trimmed.empty()) {
             return false;
         }
-        try {
-            neograph::json j = neograph::json::parse(trimmed);
-            if (!j.is_object()) {
-                return false;
+        neograph::json j = neograph::json::parse(trimmed);
+        if (!j.is_object()) {
+            return false;
+        }
+
+        neograph::ToolCall tc;
+        bool               found = false;
+
+        if (j.contains("name") && j["name"].is_string()) {
+            neograph::json nameVal = j["name"];
+            tc.name                = nameVal.get<std::string>();
+            if (j.contains("arguments")) {
+                neograph::json argsVal = j["arguments"];
+                if (argsVal.is_object()) {
+                    tc.arguments = argsVal.dump();
+                } else if (argsVal.is_string()) {
+                    tc.arguments = argsVal.get<std::string>();
+                }
+                found = true;
             }
+        }
 
-            neograph::ToolCall tc;
-            bool               found = false;
-
-            if (j.contains("name") && j["name"].is_string()) {
-                neograph::json nameVal = j["name"];
+        if (!found && j.contains("function") && j["function"].is_object()) {
+            neograph::json fn = j["function"];
+            if (fn.contains("name") && fn["name"].is_string()) {
+                neograph::json nameVal = fn["name"];
                 tc.name                = nameVal.get<std::string>();
-                if (j.contains("arguments")) {
-                    neograph::json argsVal = j["arguments"];
+                if (fn.contains("arguments")) {
+                    neograph::json argsVal = fn["arguments"];
                     if (argsVal.is_object()) {
                         tc.arguments = argsVal.dump();
                     } else if (argsVal.is_string()) {
                         tc.arguments = argsVal.get<std::string>();
                     }
-                    found = true;
                 }
+                found = true;
             }
+        }
 
-            if (!found && j.contains("function") && j["function"].is_object()) {
-                neograph::json fn = j["function"];
-                if (fn.contains("name") && fn["name"].is_string()) {
-                    neograph::json nameVal = fn["name"];
-                    tc.name                = nameVal.get<std::string>();
-                    if (fn.contains("arguments")) {
-                        neograph::json argsVal = fn["arguments"];
-                        if (argsVal.is_object()) {
-                            tc.arguments = argsVal.dump();
-                        } else if (argsVal.is_string()) {
-                            tc.arguments = argsVal.get<std::string>();
-                        }
-                    }
-                    found = true;
-                }
-            }
-
-            if (found) {
-                tc.id = "extr_" + std::to_string(toolCalls.size());
-                toolCalls.push_back(std::move(tc));
-                return true;
-            }
-        } catch (...) {
+        if (found) {
+            tc.id = "extr_" + std::to_string(toolCalls.size());
+            toolCalls.push_back(std::move(tc));
+            return true;
         }
         return false;
     };
