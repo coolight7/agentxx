@@ -17,6 +17,8 @@ models:
     send_thinking: true
     connect_timeout: 30 # seconds 建立连接时的超时限制 
     read_timeout: 30 # seconds 接收数据时，超过该时长`未收到新数据`时判断为响应超时，即相邻数据间隔应当小于该时长
+    ssl_verify: true # 是否验证 TLS 证书；不指定时使用全局默认值
+    extract_tool_calls_from_content: false # 从 content 文本中提取 tool call（LLM 未正确使用 tool_calls API 时的兜底）
     model_support_max_token: 262144 # 模型支持的最大上下文 token 数；不指定时上下文压缩使用默认值 256k
     extra_api_config:
       stream: true
