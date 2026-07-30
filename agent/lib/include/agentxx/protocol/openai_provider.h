@@ -2,6 +2,7 @@
 
 #include "agentxx/agent/config.h"
 #include "agentxx/util/http_client.h"
+#include "agentxx/util/log.h"
 #include "agentxx/util/string_util.h"
 #include "asio/awaitable.hpp"
 #include "asio/cancel_after.hpp"
@@ -104,7 +105,7 @@ private:
             stream,
             buf,
             parser,
-            asio::cancel_after(rem(), asio::use_awaitable)
+            asio::cancel_after(readTimeout, asio::use_awaitable)
         );
 
         if (parser.get().result_int() == 429) {
@@ -232,78 +233,72 @@ public:
             return;
         }
 
-        try {
-            auto j = neograph::json::parse(payload);
+        auto j = neograph::json::parse(payload);
 
-            if (j.contains("usage") && !j["usage"].is_null()) {
-                auto u                             = j["usage"];
-                completion.usage.prompt_tokens     = u.value("prompt_tokens", 0);
-                completion.usage.completion_tokens = u.value("completion_tokens", 0);
-                completion.usage.total_tokens      = u.value(
-                    "total_tokens",
-                    completion.usage.prompt_tokens + completion.usage.completion_tokens
-                );
+        if (j.contains("usage") && !j["usage"].is_null()) {
+            auto u                             = j["usage"];
+            completion.usage.prompt_tokens     = u.value("prompt_tokens", 0);
+            completion.usage.completion_tokens = u.value("completion_tokens", 0);
+            completion.usage.total_tokens      = u.value(
+                "total_tokens",
+                completion.usage.prompt_tokens + completion.usage.completion_tokens
+            );
+        }
+
+        if (!j.contains("choices") || !j["choices"].is_array() || j["choices"].empty()) {
+            return;
+        }
+        auto delta = j["choices"][0]["delta"];
+
+        if (delta.contains("content") && !delta["content"].is_null()) {
+            std::string token = delta["content"].get<std::string>();
+            if (!token.empty()) {
+                fullContent += token;
+                if (on_chunk) {
+                    on_chunk(
+                        neograph::ChatStreamChunk{neograph::ChatStreamChunk::TYPE_CONTENT, token}
+                    );
+                }
             }
+        }
 
-            if (!j.contains("choices") || !j["choices"].is_array() || j["choices"].empty()) {
-                return;
+        if (delta.contains("reasoning_content") && delta["reasoning_content"].is_string()) {
+            auto token = delta["reasoning_content"].get<std::string>();
+            if (!token.empty()) {
+                fullThinking += token;
+                if (on_chunk) {
+                    on_chunk(
+                        neograph::ChatStreamChunk{neograph::ChatStreamChunk::TYPE_THINKING, token}
+                    );
+                }
             }
-            auto delta = j["choices"][0]["delta"];
+        } else if (delta.contains("thinking") && delta["thinking"].is_string()) {
+            auto token = delta["thinking"].get<std::string>();
+            if (!token.empty()) {
+                fullThinking += token;
+                if (on_chunk) {
+                    on_chunk(
+                        neograph::ChatStreamChunk{neograph::ChatStreamChunk::TYPE_THINKING, token}
+                    );
+                }
+            }
+        }
 
-            if (delta.contains("content") && !delta["content"].is_null()) {
-                std::string token = delta["content"].get<std::string>();
-                if (!token.empty()) {
-                    fullContent += token;
-                    if (on_chunk) {
-                        on_chunk(neograph::ChatStreamChunk{
-                            neograph::ChatStreamChunk::TYPE_CONTENT,
-                            token
-                        });
+        if (delta.contains("tool_calls")) {
+            for (const auto& tc : delta["tool_calls"]) {
+                int idx = tc.value("index", 0);
+                if (tc.contains("id")) {
+                    tcMap[idx].id = tc["id"].get<std::string>();
+                }
+                if (tc.contains("function")) {
+                    if (tc["function"].contains("name")) {
+                        tcMap[idx].name += tc["function"]["name"].get<std::string>();
+                    }
+                    if (tc["function"].contains("arguments")) {
+                        tcMap[idx].arguments += tc["function"]["arguments"].get<std::string>();
                     }
                 }
             }
-
-            if (delta.contains("reasoning_content") && delta["reasoning_content"].is_string()) {
-                auto token = delta["reasoning_content"].get<std::string>();
-                if (!token.empty()) {
-                    fullThinking += token;
-                    if (on_chunk) {
-                        on_chunk(neograph::ChatStreamChunk{
-                            neograph::ChatStreamChunk::TYPE_THINKING,
-                            token
-                        });
-                    }
-                }
-            } else if (delta.contains("thinking") && delta["thinking"].is_string()) {
-                auto token = delta["thinking"].get<std::string>();
-                if (!token.empty()) {
-                    fullThinking += token;
-                    if (on_chunk) {
-                        on_chunk(neograph::ChatStreamChunk{
-                            neograph::ChatStreamChunk::TYPE_THINKING,
-                            token
-                        });
-                    }
-                }
-            }
-
-            if (delta.contains("tool_calls")) {
-                for (const auto& tc : delta["tool_calls"]) {
-                    int idx = tc.value("index", 0);
-                    if (tc.contains("id")) {
-                        tcMap[idx].id = tc["id"].get<std::string>();
-                    }
-                    if (tc.contains("function")) {
-                        if (tc["function"].contains("name")) {
-                            tcMap[idx].name += tc["function"]["name"].get<std::string>();
-                        }
-                        if (tc["function"].contains("arguments")) {
-                            tcMap[idx].arguments += tc["function"]["arguments"].get<std::string>();
-                        }
-                    }
-                }
-            }
-        } catch (...) {
         }
     }
 
