@@ -304,13 +304,13 @@ ftxui::Element AgentTUI::renderInfoSidebar() {
                 ++count;
                 elements.push_back(
                     (splitName ? hbox({
-                                     text("│  · "),
+                                     text("│  "),
                                      text(agentxx::util::getFileName(notif.name)),
-                                     text(" "),
+                                     text(" · "),
                                      text(notif.name),
                                  })
                                : hbox({
-                                     text("│  · "),
+                                     text("│  "),
                                      text(notif.name),
                                  }))
                     | color(notif.success ? theme_.assistantColor : theme_.systemColor)
