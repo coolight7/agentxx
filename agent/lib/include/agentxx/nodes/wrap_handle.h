@@ -60,14 +60,14 @@ public:
 
     virtual asio::awaitable<void> onBeforeCallFunc(neograph::graph::NodeInput& in) {
         if (nullptr != onBeforeCall) {
-            co_return onBeforeCall(in);
+            co_await onBeforeCall(in);
         }
     }
 
     virtual asio::awaitable<void>
         onAfterCallFunc(const neograph::graph::NodeInput& in, neograph::graph::NodeOutput& result) {
         if (nullptr != onAfterCall) {
-            co_return onAfterCall(in, result);
+            co_await onAfterCall(in, result);
         }
     }
 

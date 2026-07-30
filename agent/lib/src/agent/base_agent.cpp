@@ -105,8 +105,12 @@ void BaseAgent::setupModelRegistry() {
     if (config->availableModels.empty()) {
         registry->registerModel(config->model.modelName, config->model);
         registry->setDefaultModel(config->model.modelName);
-    } else if (false == config->currentModelName.empty() && registry->hasModel(config->currentModelName)) {
+    } else if (false == config->currentModelName.empty()
+               && registry->hasModel(config->currentModelName)) {
         registry->setDefaultModel(config->currentModelName);
+    } else {
+        // [currentModelName] 不存在
+        XX_LOGE("指定使用的模型不存在: `{}`", config->currentModelName);
     }
     agentContext->modelRegistry = std::move(registry);
 }
@@ -611,8 +615,8 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                             if (interruptArg.name == "subagent") {
                                 auto subagentArg = interruptArg.arg;
                                 auto resp        = co_await agentContext->bus->request<
-                                    events::ReqSubagentStart,
-                                    events::RespSubagentResult>(
+                                           events::ReqSubagentStart,
+                                           events::RespSubagentResult>(
                                     events::Topic::Subagent,
                                     events::ReqSubagentStart{
                                         .parentAgentName
@@ -717,6 +721,7 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                             }
                         );
 
+                        // 恢复执行中断点，直接回到触发中断的 Node
                         result = co_await engine
                                      ->resume_async(std::string{threadId}, nullptr, eventCallback);
 
