@@ -437,6 +437,9 @@ asio::awaitable<neograph::ChatCompletion> AnthropicProvider::doStream(
     completion.message.content           = fullContent;
     completion.message.reasoning_content = fullThinking;
     for (auto& [idx, tc] : tcMap) {
+        if (tc.id.empty()) {
+            tc.id = "call_" + std::to_string(idx);
+        }
         completion.message.tool_calls.push_back(std::move(tc));
     }
     if (config_.extractToolCallsFromContent && completion.message.tool_calls.empty()) {
