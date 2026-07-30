@@ -1,6 +1,9 @@
 #include "agentxx-client/io/tui/agent_tui.h"
 #include "agentxx/util/string_util.h"
 
+#include <markdown/dom_builder.hpp>
+#include <markdown/parser.hpp>
+
 using namespace ftxui;
 
 namespace {
@@ -14,6 +17,15 @@ std::string oneLinePreview(std::string_view s, size_t max = 60) {
         line += "...";
     }
     return line;
+}
+
+ftxui::Element renderMarkdown(std::string_view text, ftxui::Color color) {
+    if (text.empty()) return ftxui::text("");
+    auto parser = markdown::make_cmark_parser();
+    auto ast    = parser->parse(text);
+    markdown::DomBuilder builder;
+    auto el = builder.build(ast);
+    return el | ftxui::color(color);
 }
 
 } // namespace
@@ -55,7 +67,7 @@ ftxui::Element AgentTUI::renderMessages() {
                 );
             } break;
             case Message::Role::Assistant: {
-                pushBlock(paragraph(msg.text) | color(theme_.assistantColor), true);
+                pushBlock(renderMarkdown(msg.text, theme_.assistantColor), true);
             } break;
             case Message::Role::Thinking: {
                 // - 如果这个 Thinking
@@ -86,7 +98,7 @@ ftxui::Element AgentTUI::renderMessages() {
                 }
                 lines.push_back(hbox(std::move(header)));
                 if (expanded) {
-                    lines.push_back(paragraph(msg.text) | color(theme_.thinkingColor));
+                    lines.push_back(renderMarkdown(msg.text, theme_.thinkingColor));
                 }
                 Element block
                     = vbox(std::move(lines)) | reflect(collapsibleBoxes_[collapsibleOrdinal]);
@@ -196,10 +208,10 @@ ftxui::Element AgentTUI::renderMessages() {
                 header.push_back(text(" "));
             }
             lines.push_back(hbox(std::move(header)));
-            lines.push_back(paragraph(currentToken_) | color(theme_.thinkingColor));
+            lines.push_back(renderMarkdown(currentToken_, theme_.thinkingColor));
             pushBlock(vbox(std::move(lines)), false);
         } else {
-            pushBlock(paragraph(currentToken_) | color(theme_.assistantColor), false);
+            pushBlock(renderMarkdown(currentToken_, theme_.assistantColor), false);
         }
     }
 

@@ -54,6 +54,24 @@ find_package(agentxx_static REQUIRED)
 
 find_package(ftxui REQUIRED)
 
+# cmark-gfm 及其 extensions 通过 markdown_ftxui 的 FetchContent 构建并安装。
+# 手动创建 IMPORTED 目标供 markdown-ui 的 config 文件查找。
+find_library(CMARK_GFM_LIBRARY cmark-gfm PATHS "${AGENTXX_INSTALL_DIR}/lib" NO_DEFAULT_PATH)
+find_library(CMARK_GFM_EXTENSIONS_LIBRARY cmark-gfm-extensions PATHS "${AGENTXX_INSTALL_DIR}/lib" NO_DEFAULT_PATH)
+if(CMARK_GFM_LIBRARY AND CMARK_GFM_EXTENSIONS_LIBRARY)
+  add_library(libcmark-gfm_static STATIC IMPORTED)
+  set_target_properties(libcmark-gfm_static PROPERTIES
+    IMPORTED_LOCATION "${CMARK_GFM_LIBRARY}"
+    IMPORTED_LINK_INTERFACE_LANGUAGES "C"
+  )
+  add_library(libcmark-gfm-extensions_static STATIC IMPORTED)
+  set_target_properties(libcmark-gfm-extensions_static PROPERTIES
+    IMPORTED_LOCATION "${CMARK_GFM_EXTENSIONS_LIBRARY}"
+    IMPORTED_LINK_INTERFACE_LANGUAGES "C"
+  )
+endif()
+find_package(markdown-ui REQUIRED)
+
 target_link_directories(agentxx_cli PUBLIC
   "${AGENTXX_INSTALL_DIR}/lib/"
 )
@@ -69,6 +87,8 @@ target_link_libraries(agentxx_cli PUBLIC
   # === neograph ^^^
   yyjson
 	agentxx_static
+  ftxui::ftxui
+  markdown::markdown-ui
 )
 if (AGENTXX_ENABLE_HYPERSCAN OR AGENTXX_ENABLE_VECTORSCAN)
   pkg_check_modules(hyperscan REQUIRED IMPORTED_TARGET libhs)
@@ -83,8 +103,6 @@ if (AGENTXX_LINUX_IO_URING_SUPPORTED)
     PkgConfig::uring
   )
 endif()
-
-target_link_libraries(agentxx_cli PRIVATE ftxui::ftxui)
 
 if (XX_IS_MSVC_D)
 	target_compile_options(agentxx_cli PRIVATE 

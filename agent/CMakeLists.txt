@@ -753,6 +753,24 @@ if (AGENTXX_BUILD_CLIENT)
       ${_AGENTXX_COMMON_CMAKE_CACHE_ARGS}
     TEST_COMMAND ""
   )
+
+  # markdown ftxui
+  ExternalProject_Add(
+    markdown_ftxui_repo
+    DEPENDS
+      ftxui_repo
+    SOURCE_DIR "${AGENTXX_THIRD_PARTY_DIR}/markdown_ftxui/"
+    INSTALL_DIR "${AGENTXX_INSTALL_DIR}"
+    CMAKE_ARGS
+      ${_AGENTXX_COMMON_CMAKE_ARGS}
+      -DMARKDOWN_UI_BUILD_TESTS=OFF
+      -DMARKDOWN_UI_BUILD_DEMO=OFF
+      -DBUILD_SHARED_LIBS=OFF
+      -DBUILD_STATIC_LIBS=ON
+    CMAKE_CACHE_ARGS
+      ${_AGENTXX_COMMON_CMAKE_CACHE_ARGS}
+    TEST_COMMAND ""
+  )
 endif()
 
 ExternalProject_Add(
@@ -796,6 +814,8 @@ if (AGENTXX_BUILD_CLIENT)
     agentxx_client_repo
     DEPENDS 
       agentxx_lib_repo
+      ftxui_repo
+      markdown_ftxui_repo
     SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/client/"
     INSTALL_DIR "${AGENTXX_INSTALL_DIR}"
     BUILD_ALWAYS TRUE
@@ -806,7 +826,6 @@ if (AGENTXX_BUILD_CLIENT)
       ${_AGENTXX_COMMON_CMAKE_CACHE_ARGS}
     TEST_COMMAND ""
   )
-  add_dependencies(agentxx_client_repo ftxui_repo)
 endif()
 if (AGENTXX_BUILD_TEST)
   ExternalProject_Add(
