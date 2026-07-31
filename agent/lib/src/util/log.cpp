@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <execinfo.h>
 #include <fcntl.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #endif
 
@@ -191,8 +192,7 @@ static void sigSafeWriteHex(int fd, const void* ptr) {
     sigSafeWriteBuf(fd, buf, static_cast<size_t>(pos));
 }
 
-/// 将栈帧地址写入两个 fd (异步信号安全); 不做符号化 (符号化需 malloc/popen, 非信号安全),
-/// 可事后用 addr2line 依据这些地址离线解析
+/// 将栈帧地址写入两个 fd (异步信号安全), 并调用 backtrace_symbols_fd 输出基本符号信息
 static void sigSafeDumpStack(int consoleFd, int fileFd, void** frames, int size) {
     sigSafeWriteStr(consoleFd, "======= Dump stack start =======\n");
     sigSafeWriteStr(fileFd, "======= Dump stack start =======\n");
@@ -205,8 +205,99 @@ static void sigSafeDumpStack(int consoleFd, int fileFd, void** frames, int size)
             sigSafeWriteStr(fd, "\n");
         }
     }
+    // backtrace_symbols_fd 是 async-signal-safe 的, 输出动态符号表中的函数名
+    if (consoleFd >= 0) {
+        sigSafeWriteStr(consoleFd, "--- symbols ---\n");
+        backtrace_symbols_fd(frames, size, consoleFd);
+    }
+    if (fileFd >= 0) {
+        sigSafeWriteStr(fileFd, "--- symbols ---\n");
+        backtrace_symbols_fd(frames, size, fileFd);
+    }
     sigSafeWriteStr(consoleFd, "======= Dump stack end =======\n");
     sigSafeWriteStr(fileFd, "======= Dump stack end =======\n");
+}
+
+/// fork 子进程调用 addr2line 将地址解析为函数名+源码文件位置 (async-signal-safe:
+/// fork/pipe/dup2/close/read/write/execvp/waitpid/_exit 均为信号安全函数)
+static void sigSafeAddr2Line(int consoleFd, int fileFd, void** frames, int size) {
+    if (_exe_path.empty() || size <= 0) {
+        return;
+    }
+
+    // 预格式化地址字符串到静态缓冲区 (信号处理器中不可 malloc)
+    static char addr_bufs[64][20]; // "0x" + 最多16位hex + '\0'
+    const char* argv[64 + 6];      // addr2line -f -C -p -e <exe> <addrs...> NULL
+
+    int argc      = 0;
+    argv[argc++]  = "addr2line";
+    argv[argc++]  = "-f"; // 显示函数名
+    argv[argc++]  = "-C"; // demangle C++ 符号
+    argv[argc++]  = "-p"; // 单行漂亮输出
+    argv[argc++]  = "-e";
+    argv[argc++]  = _exe_path.c_str();
+
+    int addr_count = size < 64 ? size : 64;
+    for (int i = 0; i < addr_count; i++) {
+        uintptr_t v   = reinterpret_cast<uintptr_t>(frames[i]);
+        char*     buf = addr_bufs[i];
+        buf[0]        = '0';
+        buf[1]        = 'x';
+        char tmp[16];
+        int  n = 0;
+        if (v == 0) {
+            tmp[n++] = '0';
+        } else {
+            while (v != 0) {
+                int d    = static_cast<int>(v & 0xFu);
+                tmp[n++] = static_cast<char>(d < 10 ? ('0' + d) : ('a' + (d - 10)));
+                v >>= 4;
+            }
+        }
+        for (int j = n - 1; j >= 0; --j) {
+            buf[2 + (n - 1 - j)] = tmp[j];
+        }
+        buf[2 + n]   = '\0';
+        argv[argc++] = buf;
+    }
+    argv[argc] = nullptr;
+
+    int pipefd[2];
+    if (pipe(pipefd) < 0) {
+        return;
+    }
+
+    pid_t pid = fork();
+    if (pid == 0) {
+        // 子进程: stdout 重定向到 pipe 写端, 然后 exec addr2line
+        close(pipefd[0]);
+        dup2(pipefd[1], STDOUT_FILENO);
+        close(pipefd[1]);
+        int devnull = open("/dev/null", O_RDONLY);
+        if (devnull >= 0) {
+            dup2(devnull, STDIN_FILENO);
+            close(devnull);
+        }
+        execvp("addr2line", const_cast<char* const*>(argv));
+        _exit(127); // exec 失败
+    }
+
+    // 父进程: 从 pipe 读取 addr2line 输出, 写入 console 和 file
+    close(pipefd[1]);
+    char    rbuf[512];
+    ssize_t rn;
+    while ((rn = read(pipefd[0], rbuf, sizeof(rbuf))) > 0) {
+        sigSafeWriteBuf(consoleFd, rbuf, static_cast<size_t>(rn));
+        if (fileFd >= 0) {
+            sigSafeWriteBuf(fileFd, rbuf, static_cast<size_t>(rn));
+        }
+    }
+    close(pipefd[0]);
+
+    if (pid > 0) {
+        int status = 0;
+        waitpid(pid, &status, 0);
+    }
 }
 
 /// 信号编号 -> 名称 (async-signal-safe: 仅返回静态字符串)
@@ -327,6 +418,13 @@ static void signal_handler(int signo, siginfo_t* info, void* /*ucontext*/) {
     writeBoth("\n");
 
     sigSafeDumpStack(STDERR_FILENO, fileFd, buffer, size);
+
+    // fork addr2line 子进程解析地址为函数名+源码位置
+    sigSafeWriteStr(STDERR_FILENO, "--- addr2line ---\n");
+    if (fileFd >= 0) {
+        sigSafeWriteStr(fileFd, "--- addr2line ---\n");
+    }
+    sigSafeAddr2Line(STDERR_FILENO, fileFd, buffer, size);
 
     if (fileFd >= 0) {
         close(fileFd);
