@@ -16,13 +16,35 @@
 
 using namespace ftxui;
 
-// 格式化毫秒到字符串 (秒。毫秒格式，如 "1.234s")
-static std::string formatDurationMilliseconds(int32_t milliseconds) {
-    return fmt::format("{:.1f}s", static_cast<double>(milliseconds) / 1000.0);
+// 格式化毫秒到可读字符串，自动选择最合适的单位
+// < 60s: "X.Xs" (如 "3.2s")
+// < 3600s (1h): "Xm Ys" (如 "2m 15s")
+// >= 3600s: "Xh Ym Zs" (如 "1h 2m 30s")
+static std::string formatDurationMilliseconds(int64_t milliseconds) {
+    if (milliseconds < 0) {
+        return "0.0s";
+    }
+    const int64_t totalSec = milliseconds / 1000;
+    const int64_t hours    = totalSec / 3600;
+    const int64_t minutes  = (totalSec % 3600) / 60;
+    const int64_t seconds  = totalSec % 60;
+
+    if (hours > 0) {
+        return fmt::format("{}h {}m {}s", hours, minutes, seconds);
+    }
+    if (minutes > 0) {
+        if (seconds > 0) {
+            return fmt::format("{}m {}s", minutes, seconds);
+        }
+        return fmt::format("{}m 0s", minutes);
+    }
+    // 不足一分钟：显示秒+毫秒
+    const double sec = static_cast<double>(milliseconds) / 1000.0;
+    return fmt::format("{:.1f}s", sec);
 }
 
 // 格式化时间戳为本地时间 (HH:MM:SS.mmm)
-static std::string formatTimestampMilliseconds(int32_t timestamp_ms) {
+static std::string formatTimestampMilliseconds(int64_t timestamp_ms) {
     std::chrono::zoned_time time{
         std::chrono::current_zone(),
         std::chrono::sys_time{std::chrono::seconds(static_cast<size_t>(timestamp_ms / 1000))}
@@ -698,8 +720,8 @@ void AgentTUI::onDelta(const agentxx::agent::Delta& delta) {
                 statMsg.text = fmt::format(
                     "{} · {} · {}",
                     cachedModelName_,
-                    formatDurationMilliseconds(static_cast<int32_t>(delta.durationMs)),
-                    formatTimestampMilliseconds(delta.startTimeMs)
+                    formatDurationMilliseconds(delta.durationMs),
+                    formatTimestampMilliseconds(delta.startTimeMs + delta.durationMs)
                 );
                 statMsg.durationMs  = delta.durationMs;
                 statMsg.startTimeMs = delta.startTimeMs;
@@ -764,8 +786,8 @@ void AgentTUI::onSync(const agentxx::agent::SyncPayload& payload) {
                         thinkMsg.text      = reasoning;
                         thinkMsg.collapsed = true;
                         // 从原始数据中读取时间信息（如果有）
-                        thinkMsg.startTimeMs = d.value("start_time_ms", int32_t{0});
-                        thinkMsg.durationMs  = d.value("duration_ms", int32_t{0});
+                        thinkMsg.startTimeMs = d.value("start_time_ms", int64_t{0});
+                        thinkMsg.durationMs  = d.value("duration_ms", int64_t{0});
                         messages_.push_back(std::move(thinkMsg));
                     }
                 }
@@ -777,8 +799,8 @@ void AgentTUI::onSync(const agentxx::agent::SyncPayload& payload) {
                 m.toolFinished = true;
                 m.collapsed    = true;
                 // 从原始数据中读取时间信息（如果有）
-                m.startTimeMs = d.value("start_time_ms", int32_t{0});
-                m.durationMs  = d.value("duration_ms", int32_t{0});
+                m.startTimeMs = d.value("start_time_ms", int64_t{0});
+                m.durationMs  = d.value("duration_ms", int64_t{0});
                 try {
                     auto parsed    = neograph::json::parse(m.toolResult);
                     m.toolHasError = parsed.is_object() && parsed.contains("error");
@@ -799,8 +821,8 @@ void AgentTUI::onSync(const agentxx::agent::SyncPayload& payload) {
                 m.role = Message::Role::System;
                 m.text = d.value("content", std::string{});
                 // 从原始数据中读取时间信息（如果有）
-                m.startTimeMs = d.value("start_time_ms", int32_t{0});
-                m.durationMs  = d.value("duration_ms", int32_t{0});
+                m.startTimeMs = d.value("start_time_ms", int64_t{0});
+                m.durationMs  = d.value("duration_ms", int64_t{0});
             }
             if (false == skipPush) {
                 messages_.push_back(std::move(m));

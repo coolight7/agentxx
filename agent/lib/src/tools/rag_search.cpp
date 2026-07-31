@@ -171,9 +171,9 @@ std::vector<std::string> RAGSearchTool::VectorStore::splitByStructure(std::strin
     size_t                   len       = text.size();
     size_t                   lineStart = 0;
     std::string              currentBlock;
-    bool                     inCodeBlock   = false;
-    bool [[maybe_unused]] currentIsHeading = false;
-    bool currentIsListItem                 = false;
+    bool                     inCodeBlock       = false;
+    [[maybe_unused]] bool    currentIsHeading  = false;
+    bool                     currentIsListItem = false;
 
     auto flushBlock = [&]() {
         if (!currentBlock.empty()) {

@@ -389,7 +389,14 @@ std::string WsAgentIOTransport::serialize(const WireMessage& msg) {
             } else if constexpr (std::is_same_v<T, SyncPayload>) {
                 return remote::makeSyncMsg(m).dump();
             } else if constexpr (std::is_same_v<T, WireTurnResult>) {
-                return remote::makeTurnResult(m.threadId, m.hasError, m.errorMessage, m.interrupted)
+                return remote::makeTurnResult(
+                           m.threadId,
+                           m.hasError,
+                           m.errorMessage,
+                           m.interrupted,
+                           m.startTimeMs,
+                           m.durationMs
+                )
                     .dump();
             } else if constexpr (std::is_same_v<T, WireContextStats>) {
                 return remote::makeContextStats(m.contextTokens, m.maxContextTokens).dump();
