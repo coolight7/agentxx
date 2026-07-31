@@ -279,6 +279,11 @@ bool agentxx::util::autoConvertToSystemPath(std::string& str) {
 }
 
 std::string agentxx::util::base64Encode(std::string_view data) {
+    if (data.empty()) {
+        // 空输入合法, 解码为空结果
+        return std::string{};
+    }
+
     // 预分配
     std::string result;
     result.resize(boost::beast::detail::base64::encoded_size(data.size()));
@@ -333,9 +338,7 @@ std::optional<std::string> agentxx::util::base64Decode(std::string_view str) {
     auto [bytes_written, chars_read]
         = boost::beast::detail::base64::decode(result.data(), str.data(), str.size());
 
-    if (chars_read < str.size()) {
-        return std::nullopt;
-    }
+    // [decode] 会忽略末尾的 =, 因此可能出现 `chars_read < str.size()`
 
     result.resize(bytes_written);
     return result;
