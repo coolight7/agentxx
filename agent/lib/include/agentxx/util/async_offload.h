@@ -51,25 +51,12 @@ namespace util {
 /// 将同步阻塞函数卸载到线程池执行, 主协程挂起等待结果
 /// - fn: 无参可调用对象, 返回 T
 /// - 不支持取消 (fn 无法感知取消请求); 若需要取消支持请用 co_offload_cancellable
-template<typename T, typename F>
-asio::awaitable<T> co_offload(asio::thread_pool& pool, F&& fn) {
+template<typename T>
+asio::awaitable<T> co_offload(asio::thread_pool& pool, std::function<asio::awaitable<T>()>&& fn) {
     co_return co_await asio::co_spawn(
         pool.get_executor(),
-        [fn = std::forward<F>(fn)]() -> asio::awaitable<T> {
-            co_return fn();
-        },
-        asio::use_awaitable
-    );
-}
-
-/// void 特化
-template<typename F>
-asio::awaitable<void> co_offload_void(asio::thread_pool& pool, F&& fn) {
-    co_await asio::co_spawn(
-        pool.get_executor(),
-        [fn = std::forward<F>(fn)]() -> asio::awaitable<void> {
-            fn();
-            co_return;
+        [fn = std::forward<std::function<asio::awaitable<T>()>>(fn)]() -> asio::awaitable<T> {
+            co_return co_await fn();
         },
         asio::use_awaitable
     );
@@ -85,48 +72,26 @@ asio::awaitable<void> co_offload_void(asio::thread_pool& pool, F&& fn) {
 ///
 /// @tparam T 返回值类型
 /// @tparam F 可调用类型, 签名: T(std::atomic<bool>&)
-template<typename T, typename F>
-asio::awaitable<T> co_offload_cancellable(asio::thread_pool& pool, F&& fn) {
+template<typename T>
+asio::awaitable<T> co_offload_cancellable(
+    asio::thread_pool&                                      pool,
+    std::function<asio::awaitable<T>(std::atomic<bool>&)>&& fn
+) {
     // 共享取消标志: 父协程 (io_context 线程) 写, 工作线程读
     auto cancel_flag = std::make_shared<std::atomic<bool>>(false);
 
     try {
         co_return co_await asio::co_spawn(
             pool.get_executor(),
-            [fn = std::forward<F>(fn), cancel_flag]() -> asio::awaitable<T> {
-                co_return fn(*cancel_flag);
+            [fn = std::forward<std::function<asio::awaitable<T>(std::atomic<bool>&)>>(fn),
+             cancel_flag]() -> asio::awaitable<T> {
+                co_return co_await fn(*cancel_flag);
             },
             asio::use_awaitable
         );
-    } catch (const neograph_asio_system_error& e) {
-        if (e.code() == asio::error::operation_aborted) {
-            // 父协程被取消 → 通知工作线程退出
-            cancel_flag->store(true, std::memory_order_release);
-            throw neograph::graph::CancelledException("offload task cancelled");
-        }
-        throw;
-    }
-}
-
-/// void 特化: 支持取消的卸载 (无返回值)
-template<typename F>
-asio::awaitable<void> co_offload_cancellable_void(asio::thread_pool& pool, F&& fn) {
-    auto cancel_flag = std::make_shared<std::atomic<bool>>(false);
-
-    try {
-        co_await asio::co_spawn(
-            pool.get_executor(),
-            [fn = std::forward<F>(fn), cancel_flag]() -> asio::awaitable<void> {
-                fn(*cancel_flag);
-                co_return;
-            },
-            asio::use_awaitable
-        );
-    } catch (const neograph_asio_system_error& e) {
-        if (e.code() == asio::error::operation_aborted) {
-            cancel_flag->store(true, std::memory_order_release);
-            throw neograph::graph::CancelledException("offload task cancelled");
-        }
+    } catch (const neograph::graph::CancelledException& e) {
+        // 父协程被取消 → 通知工作线程退出
+        cancel_flag->store(true, std::memory_order_release);
         throw;
     }
 }

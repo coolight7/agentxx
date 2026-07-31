@@ -138,7 +138,8 @@ asio::awaitable<std::string> FileSystemListTool::execute_async(const neograph::j
     // 当父协程被 CancelToken 取消时, cancel_flag 被置 true, 工作线程检测后提前退出释放线程
     auto result = co_await agentxx::util::co_offload_cancellable<neograph::json>(
         pool,
-        [targetPath, recursive, limit](std::atomic<bool>& cancel_flag) -> neograph::json {
+        [targetPath, recursive, limit](std::atomic<bool>& cancel_flag
+        ) -> asio::awaitable<neograph::json> {
             auto result = neograph::json::array();
 
             auto onAppendItem = [&](const std::filesystem::directory_entry& entity) {
@@ -216,7 +217,7 @@ asio::awaitable<std::string> FileSystemListTool::execute_async(const neograph::j
                 });
             }
 
-            return result;
+            co_return result;
         }
     );
 
@@ -1100,14 +1101,14 @@ asio::awaitable<std::string> FilesystemGlobTool::execute_async(const neograph::j
     // 当父协程被 CancelToken 取消时, cancel_flag 被置 true, 工作线程检测后提前退出释放线程
     auto result = co_await agentxx::util::co_offload_cancellable<std::string>(
         pool,
-        [file_patterns](std::atomic<bool>& cancel_flag) -> std::string {
+        [file_patterns](std::atomic<bool>& cancel_flag) -> asio::awaitable<std::string> {
             if (cancel_flag.load(std::memory_order_acquire)) {
                 throw neograph::graph::CancelledException("filesystem_glob cancelled");
             }
 
             auto relist = glob::rglob(file_patterns);
             if (relist.empty()) {
-                return R"({"error":"No match `file_patterns` found"})";
+                co_return R"({"error":"No match `file_patterns` found"})";
             }
 
             auto oss = std::ostringstream{};
@@ -1117,7 +1118,7 @@ asio::awaitable<std::string> FilesystemGlobTool::execute_async(const neograph::j
                 }
                 oss << item.generic_string() << std::endl;
             }
-            return oss.str();
+            co_return oss.str();
         }
     );
 
