@@ -4,9 +4,7 @@
 - 拆分需要区分不同线程，继承出不同class，屏蔽不可用函数或检查
 - exec: 支持指定多条指令
 - BaseAgent 增加支持 usage 统计
-- 修改 BaseAgent 取消执行时保留本轮会话已经产生的消息，目前一旦用户取消执行，会丢弃本轮会话的消息回退到上一轮结束时的消息
 - list_file 异步可取消、filesystem 限制超时
-- 检查异步网络请求的 readTimeout 是否正确
 - 添加测试 provide llm api 响应 toolcall 时没有 toolcall_id
 
 ## 提示词优化
@@ -16,4 +14,3 @@
 - 建议当需要通读一个大项目时，可以先由一个 subagent 总结出大致的 wiki，然后分析划分模块化，再分享 wiki 给多个 subagent 各自负责模块解决问题
 
 ## 问题
-- 经常运行中断、toolcall 运行状态未更新

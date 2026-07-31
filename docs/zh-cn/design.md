@@ -216,7 +216,7 @@ path/to/agentxx_test string_util regex agent
 
 ### 配置文件
 
-配置文件为 YAML 格式 (默认 `agentxx-config.yaml`)，支持 `${VAR}` 环境变量替换：
+配置文件为 YAML 格式 (默认 `{程序运行目录}/agentxx-config.yaml`, 支持 agentxx_cli --config 指定文件路径)，其中部分变量支持 `${VAR}` 环境变量替换：
 
 ```yaml
 models:

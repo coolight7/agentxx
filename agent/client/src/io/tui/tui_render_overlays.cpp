@@ -81,9 +81,10 @@ ftxui::Element AgentTUI::renderStatusBar() {
     }
     std::string ctxText;
     if (maxCtx > 0) {
-        const double pct = 100.0 * static_cast<double>(ctx) / static_cast<double>(maxCtx);
-        ctxText          = fmt::format(
-            " {}/{} ({:.1f}%) ",
+        const int pct
+            = static_cast<int>(100.0 * static_cast<double>(ctx) / static_cast<double>(maxCtx));
+        ctxText = fmt::format(
+            " {}/{}/{}% ",
             agentxx::util::formatSize(ctx),
             agentxx::util::formatSize(maxCtx),
             pct
