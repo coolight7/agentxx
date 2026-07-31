@@ -229,10 +229,10 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
             config->model.apiKey,
             config->model.modelName
         );
-        auto docsStore    = std::make_shared<agentxx::tools::RAGSearchTool::VectorStore>(client);
-        auto docs         = co_await docsStore->scanDocument(config->ragDocsPaths);
-        auto docxSize     = docs.size();
-        auto isAddSuccess = co_await docsStore->addDocuments(std::move(docs));
+        auto docsStore = std::make_shared<agentxx::tools::RAGSearchTool::VectorStore>(client);
+        auto docs      = co_await docsStore->scanDocument(config->ragDocsPaths);
+        [[maybe_unused]] auto docxSize     = docs.size();
+        [[maybe_unused]] auto isAddSuccess = co_await docsStore->addDocuments(std::move(docs));
         XX_LOGD(
             R"_(
 ┏━━━━━━ RAG Embedding ━━━━━━┓

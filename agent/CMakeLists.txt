@@ -754,11 +754,31 @@ if (AGENTXX_BUILD_CLIENT)
     TEST_COMMAND ""
   )
 
+  # cmark-gfm; required by markdown-ui
+  ExternalProject_Add(
+    cmark_gfm_repo
+    SOURCE_DIR "${AGENTXX_THIRD_PARTY_DIR}/cmark_gfm/"
+    INSTALL_DIR "${AGENTXX_INSTALL_DIR}"
+    CMAKE_ARGS
+      ${_AGENTXX_COMMON_CMAKE_ARGS}
+      -DCMARK_TESTS=OFF
+      -DCMARK_STATIC=ON
+      -DCMARK_SHARED=OFF
+      -DCMARK_LIB_FUZZER=OFF
+      -DCMARK_FUZZ_QUADRATIC=OFF
+      -DBUILD_SHARED_LIBS=OFF
+      -DBUILD_STATIC_LIBS=ON
+    CMAKE_CACHE_ARGS
+      ${_AGENTXX_COMMON_CMAKE_CACHE_ARGS}
+    TEST_COMMAND ""
+  )
+
   # markdown ftxui
   ExternalProject_Add(
     markdown_ftxui_repo
     DEPENDS
       ftxui_repo
+      cmark_gfm_repo
     SOURCE_DIR "${AGENTXX_THIRD_PARTY_DIR}/markdown_ftxui/"
     INSTALL_DIR "${AGENTXX_INSTALL_DIR}"
     CMAKE_ARGS
@@ -815,6 +835,7 @@ if (AGENTXX_BUILD_CLIENT)
     DEPENDS 
       agentxx_lib_repo
       ftxui_repo
+      cmark_gfm_repo
       markdown_ftxui_repo
     SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/client/"
     INSTALL_DIR "${AGENTXX_INSTALL_DIR}"
