@@ -104,7 +104,7 @@ inline LlmSimServer startLlmSimServer() {
         std::make_shared<agentxx::util::HttpServer::Handler>(
             [](agentxx::util::HttpServer::Request&  req,
                agentxx::util::HttpServer::Response& resp,
-               const std::string&) -> asio::awaitable<void> {
+               std::string_view) -> asio::awaitable<void> {
                 namespace http = boost::beast::http;
 
                 auto j            = neograph::json::parse(req.body());
@@ -677,9 +677,7 @@ inline void benchCodeAgentLargeHistory(const CodeAgentBenchConfig& cfg) {
                     "bench_history_" + std::to_string(i),
                     cfg.userInput,
                     true,
-                    std::move(messages),
-                    nullptr,
-                    [](const neograph::graph::GraphEvent&) {}
+                    nullptr
                 );
                 auto end = std::chrono::high_resolution_clock::now();
 

@@ -99,7 +99,7 @@ public:
     /// - 未绑定时 (ioThreadId_ == default) 不触发, 允许初始化阶段使用
     /// - 已绑定后, 非 io 线程调用将触发 assert 失败 (Debug) / 未定义行为 (Release)
     void assertIoThread() const {
-        auto bound = ioThreadId_.load(std::memory_order_relaxed);
+        [[maybe_unused]] auto bound = ioThreadId_.load(std::memory_order_relaxed);
         assert(
             (bound == std::thread::id{} || bound == std::this_thread::get_id())
             && "Session: mutable state (fullHistory/llmMessages/chainHash) must only be "

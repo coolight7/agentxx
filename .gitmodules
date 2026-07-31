@@ -55,3 +55,7 @@
 [submodule "agent/third_party/markdown_ftxui"]
 	path = agent/third_party/markdown_ftxui
 	url = https://github.com/coolight7/MarkdownFTXUI
+[submodule "agent/third_party/cmark_gfm"]
+	path = agent/third_party/cmark_gfm
+	url = https://github.com/github/cmark-gfm
+	branch = 0.29.0.gfm.13

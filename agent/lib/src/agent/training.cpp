@@ -427,9 +427,9 @@ asio::awaitable<EvolutionTrainingAgent::EvaluationResult> EvolutionTrainingAgent
 ) {
     EvaluationResult evResult;
     variant.perTestCaseScores.clear();
-    double totalScore      = 0.0;
-    int    testCount       = 0;
-    bool   earlyTerminated = false;
+    double                totalScore      = 0.0;
+    int                   testCount       = 0;
+    [[maybe_unused]] bool earlyTerminated = false;
 
     for (size_t caseIdx = 0; caseIdx < cfg.testCases.size(); ++caseIdx) {
         const auto& testCase = cfg.testCases[caseIdx];
@@ -801,7 +801,7 @@ asio::awaitable<void> EvolutionTrainingAgent::runEvolutionLoop(const EvolutionTr
         if (cfg.verbose && !population.empty()) {
             XX_LOGD("[EvolutionTraining] [{}] Top 5 prompts:", generationCounter);
             for (size_t i = 0; i < std::min(population.size(), static_cast<size_t>(5)); ++i) {
-                const auto& v = population[i];
+                [[maybe_unused]] const auto& v = population[i];
                 XX_LOGD(
                     "  [{}/{}] id={} avgScore={:.4f} tests={} gen={} parent={}",
                     i + 1,
@@ -814,8 +814,8 @@ asio::awaitable<void> EvolutionTrainingAgent::runEvolutionLoop(const EvolutionTr
                 );
             }
 
-            const auto& best = population[0];
-            const auto& sp   = best.prompt.systemPrompt;
+            const auto&                  best = population[0];
+            [[maybe_unused]] const auto& sp   = best.prompt.systemPrompt;
             XX_LOGD(
                 "[EvolutionTraining] [{}] Best prompt (score={:.4f}):\n{}",
                 generationCounter,
