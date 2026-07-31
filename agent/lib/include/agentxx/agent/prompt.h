@@ -328,7 +328,7 @@ Returns binary content as base64 string.)",
 | `[!]` | any character not listed in the brackets | `[!ABC]*` matches files that do not start with A,B or C |
 
 e.g., `/upload/**/*.txt`,`/docx/*[0-9].txt`,`/usr/include/nc*.h`,`/output/file[0-9].*`,`C:/down/read/??.txt`.
-)"},
+)"}, 
                   },
           },
       },

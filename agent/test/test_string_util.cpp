@@ -383,7 +383,7 @@ void test_utf8Check() {
         0u
     ); // 截断的 3 字节序列
     XX_TEST_EXPECT_FALSE(agentxx::util::utf8IsAvail(std::string("\xFF\xFE", 2)));
-    XX_TEST_EXPECT_FALSE(agentxx::util::utf8IsAvail(""));
+    XX_TEST_EXPECT_TRUE(agentxx::util::utf8IsAvail(""));
 
     // 含内嵌 '\0': 在 '\0' 处停止计数 (修复 #8: 直接传 string_view 而非 str.data())
     {

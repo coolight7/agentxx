@@ -1,6 +1,7 @@
 #include "agentxx/tools/filesystem.h"
 
 #include "agentxx/util/aho_corasick.h"
+#include "agentxx/util/async_offload.h"
 #include "agentxx/util/log.h"
 #include "agentxx/util/regex.h"
 #include "agentxx/util/string_util.h"
@@ -129,70 +130,95 @@ asio::awaitable<std::string> FileSystemListTool::execute_async(const neograph::j
     auto recursive = arguments.value("recursive", false);
     auto limit     = arguments.value<int64_t>("limit", 100);
 
-    auto result       = neograph::json::array();
-    auto onAppendItem = [&](const std::filesystem::directory_entry& entity) {
-        try {
-            auto file_time = entity.last_write_time();
+    // 获取阻塞操作卸载线程池, 避免 std::filesystem 同步调用阻塞 io_context 事件循环
+    auto  agentPtr = agentContext.lock();
+    auto& pool     = *agentPtr->blockingPool;
 
-            auto sys_time = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
-                file_time - std::filesystem::file_time_type::clock::now()
-                + std::chrono::system_clock::now()
-            );
+    // 将所有 std::filesystem 阻塞操作卸载到线程池, 支持取消传播:
+    // 当父协程被 CancelToken 取消时, cancel_flag 被置 true, 工作线程检测后提前退出释放线程
+    auto result = co_await agentxx::util::co_offload_cancellable<neograph::json>(
+        pool,
+        [targetPath, recursive, limit](std::atomic<bool>& cancel_flag) -> neograph::json {
+            auto result = neograph::json::array();
 
-            // 提取 Unix 秒数
-            auto unixtime = static_cast<size_t>(
-                std::chrono::duration_cast<std::chrono::seconds>(sys_time.time_since_epoch())
-                    .count()
-            );
-            auto json = neograph::json{
-                {"path", entity.path().generic_string()},
-                {"type",
-                 (entity.is_directory()      ? "dir"
-                  : entity.is_regular_file() ? "file"
-                  : entity.is_symlink()      ? "symlink"
-                                             : "other")},
-                {"last_write_timestamp", unixtime},
-                {"last_write_time", std::format("{:%Y-%m-%d %H:%M:%S}", sys_time)},
+            auto onAppendItem = [&](const std::filesystem::directory_entry& entity) {
+                try {
+                    auto file_time = entity.last_write_time();
+
+                    auto sys_time
+                        = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+                            file_time - std::filesystem::file_time_type::clock::now()
+                            + std::chrono::system_clock::now()
+                        );
+
+                    // 提取 Unix 秒数
+                    auto unixtime
+                        = static_cast<size_t>(std::chrono::duration_cast<std::chrono::seconds>(
+                                                  sys_time.time_since_epoch()
+                        )
+                                                  .count());
+                    auto json = neograph::json{
+                        {"path", entity.path().generic_string()},
+                        {"type",
+                         (entity.is_directory()      ? "dir"
+                          : entity.is_regular_file() ? "file"
+                          : entity.is_symlink()      ? "symlink"
+                                                     : "other")},
+                        {"last_write_timestamp", unixtime},
+                        {"last_write_time", std::format("{:%Y-%m-%d %H:%M:%S}", sys_time)},
+                    };
+                    if (entity.is_regular_file()) {
+                        json["size"] = static_cast<size_t>(entity.file_size());
+                    }
+                    result.push_back(json);
+                } catch (const std::exception& e) {
+                    result.push_back(neograph::json{
+                        {"path",  entity.path().generic_string()},
+                        {"error", e.what()                      },
+                    });
+                }
             };
-            if (entity.is_regular_file()) {
-                json["size"] = static_cast<size_t>(entity.file_size());
-            }
-            result.push_back(json);
-        } catch (const std::exception& e) {
-            result.push_back(neograph::json{
-                {"path",  entity.path().generic_string()},
-                {"error", e.what()                      },
-            });
-        }
-    };
 
-    if (false == std::filesystem::exists(targetPath)) {
-        result.push_back(neograph::json{
-            {"error", "Path not exist"}
-        });
-    } else if (std::filesystem::is_directory(targetPath)) {
-        if (recursive) {
-            for (const auto& entity : std::filesystem::recursive_directory_iterator(targetPath)) {
-                onAppendItem(entity);
-                if (limit > 0 && static_cast<int64_t>(result.size()) >= limit) {
-                    break;
+            if (false == std::filesystem::exists(targetPath)) {
+                result.push_back(neograph::json{
+                    {"error", "Path not exist"}
+                });
+            } else if (std::filesystem::is_directory(targetPath)) {
+                if (recursive) {
+                    for (const auto& entity :
+                         std::filesystem::recursive_directory_iterator(targetPath)) {
+                        // 检查取消标志, 提前退出释放线程
+                        if (cancel_flag.load(std::memory_order_acquire)) {
+                            throw neograph::graph::CancelledException("filesystem_list cancelled");
+                        }
+                        onAppendItem(entity);
+                        if (limit > 0 && static_cast<int64_t>(result.size()) >= limit) {
+                            break;
+                        }
+                    }
+                } else {
+                    for (const auto& entity : std::filesystem::directory_iterator(targetPath)) {
+                        // 检查取消标志, 提前退出释放线程
+                        if (cancel_flag.load(std::memory_order_acquire)) {
+                            throw neograph::graph::CancelledException("filesystem_list cancelled");
+                        }
+                        onAppendItem(entity);
+                        if (limit > 0 && static_cast<int64_t>(result.size()) >= limit) {
+                            break;
+                        }
+                    }
                 }
+            } else if (std::filesystem::is_regular_file(targetPath)) {
+                onAppendItem(std::filesystem::directory_entry(targetPath));
+            } else {
+                result.push_back(neograph::json{
+                    {"error", "Path exist, but is not a directory or file"}
+                });
             }
-        } else {
-            for (const auto& entity : std::filesystem::directory_iterator(targetPath)) {
-                onAppendItem(entity);
-                if (limit > 0 && static_cast<int64_t>(result.size()) >= limit) {
-                    break;
-                }
-            }
+
+            return result;
         }
-    } else if (std::filesystem::is_regular_file(targetPath)) {
-        onAppendItem(std::filesystem::directory_entry(targetPath));
-    } else {
-        result.push_back(neograph::json{
-            {"error", "Path exist, but is not a directory or file"}
-        });
-    }
+    );
 
     co_return result.dump();
 }
@@ -1066,17 +1092,36 @@ asio::awaitable<std::string> FilesystemGlobTool::execute_async(const neograph::j
         item = agentxx::util::toCurrentSystemStandardPath(item);
     }
 
-    auto relist = glob::rglob(file_patterns);
-    if (relist.empty()) {
-        co_return R"({"error":"No match `file_patterns` found"})";
-    }
+    // 获取阻塞操作卸载线程池, 避免 glob 同步调用阻塞 io_context 事件循环
+    auto  agentPtr = agentContext.lock();
+    auto& pool     = *agentPtr->blockingPool;
 
-    auto result = std::ostringstream{};
-    for (auto& item : relist) {
-        result << item.generic_string() << std::endl;
-    }
+    // 将 glob 阻塞操作卸载到线程池, 支持取消传播:
+    // 当父协程被 CancelToken 取消时, cancel_flag 被置 true, 工作线程检测后提前退出释放线程
+    auto result = co_await agentxx::util::co_offload_cancellable<std::string>(
+        pool,
+        [file_patterns](std::atomic<bool>& cancel_flag) -> std::string {
+            if (cancel_flag.load(std::memory_order_acquire)) {
+                throw neograph::graph::CancelledException("filesystem_glob cancelled");
+            }
 
-    co_return result.str();
+            auto relist = glob::rglob(file_patterns);
+            if (relist.empty()) {
+                return R"({"error":"No match `file_patterns` found"})";
+            }
+
+            auto oss = std::ostringstream{};
+            for (auto& item : relist) {
+                if (cancel_flag.load(std::memory_order_acquire)) {
+                    throw neograph::graph::CancelledException("filesystem_glob cancelled");
+                }
+                oss << item.generic_string() << std::endl;
+            }
+            return oss.str();
+        }
+    );
+
+    co_return result;
 }
 
 FilesystemGrepTool::FilesystemGrepTool(std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
@@ -1127,13 +1172,14 @@ neograph::ChatTool FilesystemGrepTool::get_definition() const {
                         },
                     },
                 },
-            }, {"required",
-             neograph::json::array({
-                 "text_patterns_is_regex",
-                 "text_patterns",
-                 "file_patterns",
-             })},
-                       },
+            }, {
+                "required",
+                neograph::json::array({
+                    "text_patterns_is_regex",
+                    "text_patterns",
+                    "file_patterns",
+                }),
+            }, },
     };
 }
 
@@ -1308,8 +1354,7 @@ asio::awaitable<std::string> FilesystemGrepTool::execute_async(const neograph::j
             co_return str;
         } else {
             throw std::runtime_error{fmt::format(
-                "Found {} files match `file_patterns`, but no match "
-                "`text_patterns` file found.",
+                R"_(Found {} files match `file_patterns`, but no match `text_patterns` file found.)_",
                 refilelist.size()
             )};
         }
@@ -1318,8 +1363,7 @@ asio::awaitable<std::string> FilesystemGrepTool::execute_async(const neograph::j
             co_return resultJson.dump();
         } else {
             throw std::runtime_error{fmt::format(
-                "Found {} files match `file_patterns`, but no match "
-                "`text_patterns` file found.",
+                R"_(Found {} files match `file_patterns`, but no match `text_patterns` file found.)_",
                 refilelist.size()
             )};
         }
