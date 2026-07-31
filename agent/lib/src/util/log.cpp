@@ -227,15 +227,15 @@ static void sigSafeAddr2Line(int consoleFd, int fileFd, void** frames, int size)
 
     // 预格式化地址字符串到静态缓冲区 (信号处理器中不可 malloc)
     static char addr_bufs[64][20]; // "0x" + 最多16位hex + '\0'
-    const char* argv[64 + 6];      // addr2line -f -C -p -e <exe> <addrs...> NULL
+    const char* argv[64 + 6 + 1];  // addr2line -f -C -p -e <exe> <addrs...> NULL
 
-    int argc      = 0;
-    argv[argc++]  = "addr2line";
-    argv[argc++]  = "-f"; // 显示函数名
-    argv[argc++]  = "-C"; // demangle C++ 符号
-    argv[argc++]  = "-p"; // 单行漂亮输出
-    argv[argc++]  = "-e";
-    argv[argc++]  = _exe_path.c_str();
+    int argc     = 0;
+    argv[argc++] = "addr2line";
+    argv[argc++] = "-f"; // 显示函数名
+    argv[argc++] = "-C"; // demangle C++ 符号
+    argv[argc++] = "-p"; // 单行漂亮输出
+    argv[argc++] = "-e";
+    argv[argc++] = _exe_path.c_str();
 
     int addr_count = size < 64 ? size : 64;
     for (int i = 0; i < addr_count; i++) {
@@ -249,9 +249,9 @@ static void sigSafeAddr2Line(int consoleFd, int fileFd, void** frames, int size)
             tmp[n++] = '0';
         } else {
             while (v != 0) {
-                int d    = static_cast<int>(v & 0xFu);
-                tmp[n++] = static_cast<char>(d < 10 ? ('0' + d) : ('a' + (d - 10)));
-                v >>= 4;
+                int d      = static_cast<int>(v & 0xFu);
+                tmp[n++]   = static_cast<char>(d < 10 ? ('0' + d) : ('a' + (d - 10)));
+                v        >>= 4;
             }
         }
         for (int j = n - 1; j >= 0; --j) {

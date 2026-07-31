@@ -1112,7 +1112,7 @@ neograph::ChatTool FilesystemGlobTool::get_definition() const {
                     {
                         "timeout",
                         {
-                            {"type", "integer"},
+                            {"type", "number"},
                             {"description", prompt.getArg("timeout")},
                         },
                     },
@@ -1236,7 +1236,7 @@ neograph::ChatTool FilesystemGrepTool::get_definition() const {
                     {
                         "timeout",
                         {
-                            {"type", "integer"},
+                            {"type", "number"},
                             {"description", prompt.getArg("timeout")},
                         },
                     },

@@ -50,6 +50,11 @@ asio::awaitable<void> BaseAgent::init() {
 
     setupSummarizationHandles(tools);
 
+    // 检查 tools 的提示词
+    for (const auto& item : tools) {
+        assert(item->get_definition().name == item->get_name());
+    }
+
     auto graphDef = buildGraphDefinition();
 
     auto config = agentContext->agentConfig;
