@@ -320,12 +320,12 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
 
     auto ioPtr = session->io;
 
-    // 记录轮次开始时间 (毫秒)
-    const int32_t start_time_ms
-        = static_cast<int32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
-                                   std::chrono::steady_clock::now().time_since_epoch()
-        )
-                                   .count());
+    // 基于 system_clock 记录开始时间，用于后续时长计算
+    const auto start_time = std::chrono::system_clock::now();
+    // 记录轮次开始时间 (毫秒, Unix 时间戳, 用于显示)
+    const auto start_time_ms = static_cast<int64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(start_time.time_since_epoch()).count()
+    );
 
     auto emitDelta = [&](Delta delta) {
         delta.seq = session->deltaSeq.fetch_add(1, std::memory_order_acq_rel) + 1;
@@ -361,7 +361,7 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
     auto cancelToken = std::make_shared<neograph::graph::CancelToken>();
     session->setCancelToken(cancelToken);
 
-    auto internalEventCallback = [session, emitDelta, ioPtr, start_time_ms](
+    auto internalEventCallback = [session, emitDelta, ioPtr, start_time_ms, start_time](
                                      const neograph::graph::GraphEvent& event
                                  ) {
         using T = neograph::graph::GraphEvent::Type;
@@ -473,13 +473,12 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                 });
             } break;
             case T::NODE_END: {
-                // 计算轮次持续时间
-                const int32_t end_time_ms
-                    = static_cast<int32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
-                                               std::chrono::steady_clock::now().time_since_epoch()
+                // 计算持续时间
+                const int64_t duration_ms
+                    = static_cast<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                               std::chrono::system_clock::now() - start_time
                     )
                                                .count());
-                const int32_t duration_ms = end_time_ms - start_time_ms;
                 emitDelta(Delta{
                     .type        = Delta::Type::NodeEnd,
                     .nodeName    = event.node_name,
@@ -790,12 +789,11 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
     });
 
     // 计算轮次持续时间
-    const int32_t end_time_ms
-        = static_cast<int32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
-                                   std::chrono::steady_clock::now().time_since_epoch()
+    const auto duration_ms
+        = static_cast<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                   std::chrono::system_clock::now() - start_time
         )
                                    .count());
-    const int32_t duration_ms = end_time_ms - start_time_ms;
 
     // 发送 TurnEnd Delta，包含时长统计
     emitDelta(Delta{

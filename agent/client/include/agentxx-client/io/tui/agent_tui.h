@@ -85,9 +85,9 @@ private:
         bool        collapsed    = false; // 折叠/展开 (Thinking/Tool 默认折叠)
 
         // 运行时长统计 (毫秒)
-        int32_t durationMs = 0;
+        int64_t durationMs = 0;
         // 开始时间戳 (毫秒)
-        int32_t startTimeMs = 0;
+        int64_t startTimeMs = 0;
     };
 
     struct PermissionRequest {
@@ -136,7 +136,7 @@ private:
     int  selectedSettingIndex_ = 0;
 
     /// 上下文弹窗状态 (查看当前会话 llm messages)
-    bool showContextOverlay_ = false;
+    bool showContextOverlay_  = false;
     int  contextScrollOffset_ = 0;
     /// 从 server 收到的 llm messages 缓存 (弹窗展示用)
     neograph::json contextMessages_ = neograph::json::array();

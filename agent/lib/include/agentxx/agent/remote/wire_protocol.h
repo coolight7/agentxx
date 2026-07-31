@@ -168,8 +168,8 @@ inline std::optional<Delta> deltaFromJson(const neograph::json& j) {
     d.hasError     = j.value("has_error", false);
     d.historyCount = j.value("history_count", uint64_t{0});
     d.tailHash     = j.value("tail_hash", std::string{});
-    d.startTimeMs  = j.value("start_time_ms", int32_t{0});
-    d.durationMs   = j.value("duration_ms", int32_t{0});
+    d.startTimeMs  = j.value("start_time_ms", int64_t{0});
+    d.durationMs   = j.value("duration_ms", int64_t{0});
     d.nodeName     = j.value("node_name", std::string{});
     return d;
 }
@@ -351,8 +351,8 @@ inline neograph::json makeTurnResult(
     bool             hasError,
     std::string_view errorMessage,
     bool             interrupted,
-    int32_t          startTimeMs = 0,
-    double           durationSec = 0.0
+    int64_t          startTimeMs = 0,
+    int64_t          durationMs  = 0
 ) {
     neograph::json j = {
         {"type",        MsgType::TurnResult},
@@ -366,8 +366,8 @@ inline neograph::json makeTurnResult(
     if (startTimeMs > 0) {
         j["start_time_ms"] = startTimeMs;
     }
-    if (durationSec > 0.0) {
-        j["duration_seconds"] = durationSec;
+    if (durationMs > 0) {
+        j["duration_ms"] = durationMs;
     }
     return j;
 }

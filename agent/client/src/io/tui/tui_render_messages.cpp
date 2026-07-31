@@ -33,10 +33,31 @@ ftxui::Element
 
 } // namespace
 
-// 格式化毫秒到字符串 (秒。毫秒格式，如 "1.2s")
+// 格式化毫秒到可读字符串，自动选择最合适的单位
+// < 60s: "X.Xs" (如 "3.2s")
+// < 3600s (1h): "Xm Ys" (如 "2m 15s")
+// >= 3600s: "Xh Ym Zs" (如 "1h 2m 30s")
 static std::string formatDurationMilliseconds(int32_t milliseconds) {
-    const double seconds = static_cast<double>(milliseconds) / 1000.0;
-    return fmt::format("{:.1f}s", seconds);
+    if (milliseconds < 0) {
+        return "0.0s";
+    }
+    const int32_t totalSec = milliseconds / 1000;
+    const int32_t hours    = totalSec / 3600;
+    const int32_t minutes  = (totalSec % 3600) / 60;
+    const int32_t seconds  = totalSec % 60;
+
+    if (hours > 0) {
+        return fmt::format("{}h {}m {}s", hours, minutes, seconds);
+    }
+    if (minutes > 0) {
+        if (seconds > 0) {
+            return fmt::format("{}m {}s", minutes, seconds);
+        }
+        return fmt::format("{}m 0s", minutes);
+    }
+    // 不足一分钟：显示秒+毫秒
+    const double sec = static_cast<double>(milliseconds) / 1000.0;
+    return fmt::format("{:.1f}s", sec);
 }
 
 ftxui::Element AgentTUI::renderMessages() {
@@ -96,7 +117,7 @@ ftxui::Element AgentTUI::renderMessages() {
                 // 如果设置了用时，显示格式为 [Thinking] {用时} {内容/缩略内容}
                 std::string durationStr;
                 if (msg.durationMs > 0) {
-                    int32_t durationMs = msg.durationMs;
+                    auto durationMs = msg.durationMs;
                     if (durationMs > 0) {
                         durationStr = formatDurationMilliseconds(durationMs);
                     }
@@ -193,18 +214,9 @@ ftxui::Element AgentTUI::renderMessages() {
         if (currentTokenRole_ == Message::Role::Thinking) {
             // 流式输出中的 Thinking：自动展开并显示完整内容，跟随滚动
             std::string durationStr;
-            if (currentMsg && (currentMsg->durationMs > 0 || currentMsg->startTimeMs > 0)) {
-                int32_t durationMs = currentMsg->durationMs;
-                if (durationMs <= 0 && currentMsg->startTimeMs > 0) {
-                    const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                         std::chrono::steady_clock::now().time_since_epoch()
-                    )
-                                         .count();
-                    durationMs = static_cast<int32_t>(now - currentMsg->startTimeMs);
-                }
-                if (durationMs > 0) {
-                    durationStr = fmt::format("({})", formatDurationMilliseconds(durationMs));
-                }
+            if (currentMsg && currentMsg->durationMs > 0) {
+                durationStr
+                    = fmt::format("({})", formatDurationMilliseconds(currentMsg->durationMs));
             }
 
             Elements lines;
