@@ -6,12 +6,14 @@
 #include "agentxx/util/regex.h"
 #include "agentxx/util/string_util.h"
 #include "asio/as_tuple.hpp"
+#include "asio/experimental/awaitable_operators.hpp"
 #include "asio/random_access_file.hpp"
 #include "asio/read.hpp"
 #include "asio/read_at.hpp"
 #include "asio/read_until.hpp"
 #include "asio/redirect_error.hpp"
 #include "asio/registered_buffer.hpp"
+#include "asio/steady_timer.hpp"
 #include "asio/stream_file.hpp"
 #include "asio/use_awaitable.hpp"
 #include "asio/write.hpp"
@@ -106,6 +108,13 @@ neograph::ChatTool FileSystemListTool::get_definition() const {
                             {"description", prompt.getArg("limit")},
                         },
                     },
+                    {
+                        "timeout",
+                        {
+                            {"type", "number"},
+                            {"description", prompt.getArg("timeout")},
+                        },
+                    },
                 },
             }, {"required", neograph::json::array({"path"})},
                        },
@@ -129,16 +138,21 @@ asio::awaitable<std::string> FileSystemListTool::execute_async(const neograph::j
     }
     auto recursive = arguments.value("recursive", false);
     auto limit     = arguments.value<int64_t>("limit", 100);
+    auto timeout   = static_cast<int64_t>(arguments.value<double>("timeout", 120.0));
 
     // 获取阻塞操作卸载线程池, 避免 std::filesystem 同步调用阻塞 io_context 事件循环
     auto  agentPtr = agentContext.lock();
     auto& pool     = *agentPtr->blockingPool;
 
+    // 外部提供 cancelFlag, 超时时由定时器设置, 通知工作线程提前退出
+    auto cancelFlag = std::make_shared<std::atomic<bool>>(false);
+
     // 将所有 std::filesystem 阻塞操作卸载到线程池, 支持取消传播:
-    // 当父协程被 CancelToken 取消时, cancel_flag 被置 true, 工作线程检测后提前退出释放线程
-    auto result = co_await agentxx::util::offloadCancellableAsync<neograph::json>(
+    // 当父协程被 CancelToken 取消或超时时, cancelFlag 被置 true, 工作线程检测后提前退出释放线程
+    auto workFuture = agentxx::util::offloadCancellableAsync<neograph::json>(
         pool,
-        [targetPath, recursive, limit](std::atomic<bool>& cancel_flag
+        cancelFlag,
+        [targetPath, recursive, limit](std::atomic<bool>& cancelFlag
         ) -> asio::awaitable<neograph::json> {
             auto result = neograph::json::array();
 
@@ -189,7 +203,7 @@ asio::awaitable<std::string> FileSystemListTool::execute_async(const neograph::j
                     for (const auto& entity :
                          std::filesystem::recursive_directory_iterator(targetPath)) {
                         // 检查取消标志, 提前退出释放线程
-                        if (cancel_flag.load(std::memory_order_acquire)) {
+                        if (cancelFlag.load(std::memory_order_acquire)) {
                             throw neograph::graph::CancelledException("filesystem_list cancelled");
                         }
                         onAppendItem(entity);
@@ -200,7 +214,7 @@ asio::awaitable<std::string> FileSystemListTool::execute_async(const neograph::j
                 } else {
                     for (const auto& entity : std::filesystem::directory_iterator(targetPath)) {
                         // 检查取消标志, 提前退出释放线程
-                        if (cancel_flag.load(std::memory_order_acquire)) {
+                        if (cancelFlag.load(std::memory_order_acquire)) {
                             throw neograph::graph::CancelledException("filesystem_list cancelled");
                         }
                         onAppendItem(entity);
@@ -221,7 +235,25 @@ asio::awaitable<std::string> FileSystemListTool::execute_async(const neograph::j
         }
     );
 
-    co_return result.dump();
+    if (timeout > 0) {
+        // 超时竞争: 工作协程 vs 定时器, 谁先完成取谁
+        using namespace asio::experimental::awaitable_operators;
+        auto               ctx = co_await asio::this_coro::executor;
+        asio::steady_timer timer(ctx, std::chrono::seconds(timeout));
+        auto res = co_await (std::move(workFuture) || timer.async_wait(asio::use_awaitable));
+        if (res.index() == 1) {
+            // 超时, 通知工作线程退出
+            cancelFlag->store(true, std::memory_order_release);
+            co_return fmt::format(
+                R"([Error] filesystem_list timed out after {} seconds. Try narrowing the path or setting a limit.)",
+                timeout
+            );
+        }
+        co_return std::get<0>(res).dump();
+    } else {
+        auto result = co_await std::move(workFuture);
+        co_return result.dump();
+    }
 }
 
 FilesystemReadTextFileTool::FilesystemReadTextFileTool(
@@ -1077,6 +1109,13 @@ neograph::ChatTool FilesystemGlobTool::get_definition() const {
                             {"description", prompt.getArg("file_patterns")},
                         },
                     },
+                    {
+                        "timeout",
+                        {
+                            {"type", "integer"},
+                            {"description", prompt.getArg("timeout")},
+                        },
+                    },
                 },
             }, {"required", neograph::json::array({"file_patterns"})},
                        },
@@ -1088,6 +1127,7 @@ asio::awaitable<std::string> FilesystemGlobTool::execute_async(const neograph::j
     if (file_patterns.empty()) {
         co_return R"({"error":"Arg `file_patterns` is empty"})";
     }
+    auto timeout = static_cast<int64_t>(arguments.value<double>("timeout", 120.0));
 
     for (auto& item : file_patterns) {
         item = agentxx::util::toCurrentSystemStandardPath(item);
@@ -1097,10 +1137,14 @@ asio::awaitable<std::string> FilesystemGlobTool::execute_async(const neograph::j
     auto  agentPtr = agentContext.lock();
     auto& pool     = *agentPtr->blockingPool;
 
+    // 外部提供 cancelFlag, 超时时由定时器设置, 通知工作线程提前退出
+    auto cancelFlag = std::make_shared<std::atomic<bool>>(false);
+
     // 将 glob 阻塞操作卸载到线程池, 支持取消传播:
-    // 当父协程被 CancelToken 取消时, cancelFlag 被置 true, 工作线程检测后提前退出释放线程
-    auto result = co_await agentxx::util::offloadCancellableAsync<std::string>(
+    // 当父协程被 CancelToken 取消或超时时, cancelFlag 被置 true, 工作线程检测后提前退出释放线程
+    auto workFuture = agentxx::util::offloadCancellableAsync<std::string>(
         pool,
+        cancelFlag,
         [file_patterns](std::atomic<bool>& cancelFlag) -> asio::awaitable<std::string> {
             if (cancelFlag.load(std::memory_order_acquire)) {
                 throw neograph::graph::CancelledException("filesystem_glob cancelled");
@@ -1122,7 +1166,24 @@ asio::awaitable<std::string> FilesystemGlobTool::execute_async(const neograph::j
         }
     );
 
-    co_return result;
+    if (timeout > 0) {
+        // 超时竞争: 工作协程 vs 定时器, 谁先完成取谁
+        using namespace asio::experimental::awaitable_operators;
+        auto               ctx = co_await asio::this_coro::executor;
+        asio::steady_timer timer(ctx, std::chrono::seconds(timeout));
+        auto res = co_await (std::move(workFuture) || timer.async_wait(asio::use_awaitable));
+        if (res.index() == 1) {
+            // 超时, 通知工作线程退出
+            cancelFlag->store(true, std::memory_order_release);
+            co_return fmt::format(
+                R"([Error] filesystem_glob timed out after {} seconds. Try narrowing the file_patterns.)",
+                timeout
+            );
+        }
+        co_return std::get<0>(res);
+    } else {
+        co_return co_await std::move(workFuture);
+    }
 }
 
 FilesystemGrepTool::FilesystemGrepTool(std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
@@ -1170,6 +1231,13 @@ neograph::ChatTool FilesystemGrepTool::get_definition() const {
                             {"type", "string"},
                             {"enum", neograph::json::array({"files_with_matches", "content"})},
                             {"description", prompt.getArg("output_mode")},
+                        },
+                    },
+                    {
+                        "timeout",
+                        {
+                            {"type", "integer"},
+                            {"description", prompt.getArg("timeout")},
                         },
                     },
                 },
@@ -1252,137 +1320,174 @@ asio::awaitable<std::string> FilesystemGrepTool::execute_async(const neograph::j
     if (output_mode.empty()) {
         co_return R"({"error":"Arg `output_mode` is empty"})";
     }
+    auto timeout = static_cast<int64_t>(arguments.value<double>("timeout", 120.0));
 
-    std::vector<std::filesystem::path> refilelist{};
-    {
-        auto  agentPtr = agentContext.lock();
-        auto& pool     = *agentPtr->blockingPool;
+    // 外部提供 cancelFlag, 超时时由定时器设置, 通知 glob 工作线程提前退出
+    auto cancelFlag = std::make_shared<std::atomic<bool>>(false);
 
-        // 将 glob 阻塞操作卸载到线程池, 支持取消传播:
-        // 当父协程被 CancelToken 取消时, cancel_flag 被置 true, 工作线程检测后提前退出释放线程
-        auto relist = co_await agentxx::util::offloadCancellableAsync<
-            std::vector<std::filesystem::__cxx11::path>>(
-            pool,
-            [file_patterns](std::atomic<bool>& cancelFlag
-            ) -> asio::awaitable<std::vector<std::filesystem::__cxx11::path>> {
-                // TODO: 传入 [cancel_flag]
-                co_return glob::rglob(file_patterns);
-            }
-        );
-        refilelist.insert(
-            refilelist.end(),
-            std::make_move_iterator(relist.begin()),
-            std::make_move_iterator(relist.end())
-        );
-    }
-    if (refilelist.empty()) {
-        throw std::runtime_error{"No match `file_patterns` file found"};
-    }
+    // 将整个 grep 操作 (glob + 逐文件搜索) 包装为子协程, 与超时定时器竞争
+    auto workFuture
+        = [this, file_patterns, text_patterns, text_patterns_is_regex, output_mode, cancelFlag](
+          ) -> asio::awaitable<std::string> {
+        std::vector<std::filesystem::path> refilelist{};
+        {
+            auto  agentPtr = agentContext.lock();
+            auto& pool     = *agentPtr->blockingPool;
 
-    bool isContainsMode = ("content" != output_mode);
-    auto resultStr      = std::ostringstream{};
-    auto resultJson     = neograph::json::array();
+            // 将 glob 阻塞操作卸载到线程池, 支持取消传播:
+            // 当父协程被 CancelToken 取消或超时时, cancelFlag 被置 true, 工作线程检测后提前退出
+            auto relist = co_await agentxx::util::offloadCancellableAsync<
+                std::vector<std::filesystem::__cxx11::path>>(
+                pool,
+                cancelFlag,
+                [file_patterns](std::atomic<bool>& cancelFlag
+                ) -> asio::awaitable<std::vector<std::filesystem::__cxx11::path>> {
+                    // TODO: 传入 [cancelFlag]
+                    co_return glob::rglob(file_patterns);
+                }
+            );
+            refilelist.insert(
+                refilelist.end(),
+                std::make_move_iterator(relist.begin()),
+                std::make_move_iterator(relist.end())
+            );
+        }
+        if (refilelist.empty()) {
+            throw std::runtime_error{"No match `file_patterns` file found"};
+        }
 
-    if (text_patterns_is_regex) {
-        // 正则匹配
-        auto regex = agentxx::util::XXRegex::createRegex(text_patterns);
-        for (const auto& item : refilelist) {
-            auto filepath = item.generic_string();
-            auto filetext = co_await readFileContent(filepath);
-            auto matchs   = std::vector<agentxx::util::XXRegexMatchResult>{};
-            if (regex->match(filetext, matchs)) {
-                if (isContainsMode) {
-                    resultStr << filepath << ":" << matchs.size() << "\n";
-                } else {
-                    auto   matchsContent = neograph::json::array();
-                    size_t index         = 0;
-                    size_t lineCount     = 0;
+        bool isContainsMode = ("content" != output_mode);
+        auto resultStr      = std::ostringstream{};
+        auto resultJson     = neograph::json::array();
 
-                    for (const auto& match : matchs) {
-                        // 计算到 match 时的行数
-                        for (size_t i = index; i < match.start; ++i) {
-                            if (filetext[i] == '\n') {
-                                ++lineCount;
+        if (text_patterns_is_regex) {
+            // 正则匹配
+            auto regex = agentxx::util::XXRegex::createRegex(text_patterns);
+            for (const auto& item : refilelist) {
+                // 检查取消/超时标志, 提前退出
+                if (cancelFlag->load(std::memory_order_acquire)) {
+                    throw neograph::graph::CancelledException("filesystem_grep cancelled");
+                }
+                auto filepath = item.generic_string();
+                auto filetext = co_await readFileContent(filepath);
+                auto matchs   = std::vector<agentxx::util::XXRegexMatchResult>{};
+                if (regex->match(filetext, matchs)) {
+                    if (isContainsMode) {
+                        resultStr << filepath << ":" << matchs.size() << "\n";
+                    } else {
+                        auto   matchsContent = neograph::json::array();
+                        size_t index         = 0;
+                        size_t lineCount     = 0;
+
+                        for (const auto& match : matchs) {
+                            // 计算到 match 时的行数
+                            for (size_t i = index; i < match.start; ++i) {
+                                if (filetext[i] == '\n') {
+                                    ++lineCount;
+                                }
                             }
+
+                            matchsContent.push_back(neograph::json{
+                                {"content",
+                                 std::string_view{filetext}
+                                     .substr(match.start, match.end - match.start)},
+                                {"line", lineCount},
+                            });
+                            index = match.start;
                         }
 
-                        matchsContent.push_back(neograph::json{
-                            {"content",
-                             std::string_view{filetext}.substr(match.start, match.end - match.start)
-                            },
-                            {"line", lineCount},
+                        resultJson.push_back(neograph::json{
+                            {"filepath", filepath     },
+                            {"matchs",   matchsContent},
                         });
-                        index = match.start;
                     }
+                }
+            }
+        } else {
+            // 文本精确匹配
+            auto search = agentxx::util::AhoCorasick<char>{text_patterns, true};
+            for (const auto& item : refilelist) {
+                // 检查取消/超时标志, 提前退出
+                if (cancelFlag->load(std::memory_order_acquire)) {
+                    throw neograph::graph::CancelledException("filesystem_grep cancelled");
+                }
+                auto filepath = item.generic_string();
+                auto filetext = co_await readFileContent(filepath);
+                auto matchs   = search.search(filetext);
+                if (false == matchs.empty()) {
+                    if (isContainsMode) {
+                        resultStr << filepath << ":" << matchs.size() << "\n";
+                    } else {
+                        auto   matchsContent = neograph::json::array();
+                        size_t index         = 0;
+                        size_t lineCount     = 0;
 
-                    resultJson.push_back(neograph::json{
-                        {"filepath", filepath     },
-                        {"matchs",   matchsContent},
-                    });
+                        for (const auto& match : matchs) {
+                            // 计算到 match 时的行数
+                            for (size_t i = index; i < match.start; ++i) {
+                                if (filetext[i] == '\n') {
+                                    ++lineCount;
+                                }
+                            }
+
+                            // TODO: content 取一行内容
+                            matchsContent.push_back(neograph::json{
+                                {"content",
+                                 std::string_view{filetext}
+                                     .substr(match.start, match.end - match.start)},
+                                {"line", lineCount},
+                            });
+                            index = match.start;
+                        }
+
+                        resultJson.push_back(neograph::json{
+                            {"filepath", filepath     },
+                            {"matchs",   matchsContent},
+                        });
+                    }
                 }
             }
         }
-    } else {
-        // 文本精确匹配
-        auto search = agentxx::util::AhoCorasick<char>{text_patterns, true};
-        for (const auto& item : refilelist) {
-            auto filepath = item.generic_string();
-            auto filetext = co_await readFileContent(filepath);
-            auto matchs   = search.search(filetext);
-            if (false == matchs.empty()) {
-                if (isContainsMode) {
-                    resultStr << filepath << ":" << matchs.size() << "\n";
-                } else {
-                    auto   matchsContent = neograph::json::array();
-                    size_t index         = 0;
-                    size_t lineCount     = 0;
 
-                    for (const auto& match : matchs) {
-                        // 计算到 match 时的行数
-                        for (size_t i = index; i < match.start; ++i) {
-                            if (filetext[i] == '\n') {
-                                ++lineCount;
-                            }
-                        }
-
-                        // TODO: content 取一行内容
-                        matchsContent.push_back(neograph::json{
-                            {"content",
-                             std::string_view{filetext}.substr(match.start, match.end - match.start)
-                            },
-                            {"line", lineCount},
-                        });
-                        index = match.start;
-                    }
-
-                    resultJson.push_back(neograph::json{
-                        {"filepath", filepath     },
-                        {"matchs",   matchsContent},
-                    });
-                }
+        if (isContainsMode) {
+            auto str = resultStr.str();
+            if (false == str.empty()) {
+                co_return str;
+            } else {
+                throw std::runtime_error{fmt::format(
+                    R"_(Found {} files match `file_patterns`, but no match `text_patterns` file found.)_",
+                    refilelist.size()
+                )};
+            }
+        } else {
+            if (false == resultJson.empty()) {
+                co_return resultJson.dump();
+            } else {
+                throw std::runtime_error{fmt::format(
+                    R"_(Found {} files match `file_patterns`, but no match `text_patterns` file found.)_",
+                    refilelist.size()
+                )};
             }
         }
-    }
+    }();
 
-    if (isContainsMode) {
-        auto str = resultStr.str();
-        if (false == str.empty()) {
-            co_return str;
-        } else {
-            throw std::runtime_error{fmt::format(
-                R"_(Found {} files match `file_patterns`, but no match `text_patterns` file found.)_",
-                refilelist.size()
-            )};
+    if (timeout > 0) {
+        // 超时竞争: 工作协程 vs 定时器, 谁先完成取谁
+        using namespace asio::experimental::awaitable_operators;
+        auto               ctx = co_await asio::this_coro::executor;
+        asio::steady_timer timer(ctx, std::chrono::seconds(timeout));
+        auto res = co_await (std::move(workFuture) || timer.async_wait(asio::use_awaitable));
+        if (res.index() == 1) {
+            // 超时, 通知工作线程退出
+            cancelFlag->store(true, std::memory_order_release);
+            co_return fmt::format(
+                R"([Error] filesystem_grep timed out after {} seconds. Try narrowing the file_patterns or text_patterns.)",
+                timeout
+            );
         }
+        co_return std::get<0>(res);
     } else {
-        if (false == resultJson.empty()) {
-            co_return resultJson.dump();
-        } else {
-            throw std::runtime_error{fmt::format(
-                R"_(Found {} files match `file_patterns`, but no match `text_patterns` file found.)_",
-                refilelist.size()
-            )};
-        }
+        co_return co_await std::move(workFuture);
     }
 }
 
