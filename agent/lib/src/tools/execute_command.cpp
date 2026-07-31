@@ -29,18 +29,25 @@ namespace tools {
 /// - 子进程输出可能含引号/反斜杠/换行或非 UTF-8 字节, 必须经 neograph::json 转义,
 ///   不能直接用 fmt 拼接进手写 JSON (会产生非法 JSON / JSON 注入)
 static std::string makeTimeoutResult(int timeout, std::string strout, std::string strerr) {
-    if (!(strout.empty() || agentxx::util::autoConvertToUtf8(strout))) {
-        strout = "[stdout conversion to utf8 failed]";
+    if (false == (strout.empty() || agentxx::util::autoConvertToUtf8(strout))) {
+        strout = "[StdOut conversion to utf8 failed, discard]";
     }
-    if (!(strerr.empty() || agentxx::util::autoConvertToUtf8(strerr))) {
-        strerr = "[stderr conversion to utf8 failed]";
+    if (false == (strerr.empty() || agentxx::util::autoConvertToUtf8(strerr))) {
+        strerr = "[StdErr conversion to utf8 failed, discard]";
     }
-    return neograph::json{
-        {"error", fmt::format("Command timed out after {} seconds", timeout)},
-        {"stdout", strout},
-        {"stderr", strerr},
-    }
-        .dump();
+    return fmt::format(
+        R"_(
+## Error
+Command timed out after {} seconds. If this command is expected to take longer and is not waiting for interactive input, retry with a larger timeout value.
+## StdOut
+{}
+## StdErr
+{}
+)_",
+        timeout,
+        strout,
+        strerr
+    );
 }
 
 ExecuteLinuxCommandTool::ExecuteLinuxCommandTool(
@@ -93,6 +100,7 @@ asio::awaitable<std::string> ExecuteLinuxCommandTool::execute_async(const neogra
     if (command.empty()) {
         co_return R"({"error":"Arg `command` is empty"})";
     }
+    // [all_output] 为false时，仅执行失败才返回 stdout和stderr
     auto all_output = arguments.value("all_output", true);
     auto timeout    = arguments.value("timeout", 60);
 
@@ -169,12 +177,12 @@ asio::awaitable<std::string> ExecuteLinuxCommandTool::execute_async(const neogra
             if (strout.empty() || agentxx::util::autoConvertToUtf8(strout)) {
                 result << "## StdOut:\n" << strout << "\n";
             } else {
-                result << "## StdOut conversion to utf8 failed, truncated\n";
+                result << "## StdOut conversion to utf8 failed, discard\n";
             }
             if (strerr.empty() || agentxx::util::autoConvertToUtf8(strerr)) {
                 result << "## StdErr:\n" << strerr << "\n";
             } else {
-                result << "## StdErr conversion to utf8 failed, truncated\n";
+                result << "## StdErr conversion to utf8 failed, discard\n";
             }
         }
         co_return result.str();
@@ -264,6 +272,7 @@ asio::awaitable<std::string>
     if (command.empty()) {
         co_return R"({"error":"Arg `command` is empty"})";
     }
+    // [all_output] 为false时，仅执行失败才返回 stdout和stderr
     auto all_output = arguments.value("all_output", true);
     auto timeout    = arguments.value("timeout", 60);
 // TODO: UNC 路径不受支持。默认值设为 Windows 目录
@@ -332,12 +341,12 @@ asio::awaitable<std::string>
             if (strout.empty() || agentxx::util::autoConvertToUtf8(strout)) {
                 result << "## StdOut:\n" << strout << "\n";
             } else {
-                result << "## StdOut conversion to utf8 failed, truncated\n";
+                result << "## StdOut conversion to utf8 failed, discard\n";
             }
             if (strerr.empty() || agentxx::util::autoConvertToUtf8(strerr)) {
                 result << "## StdErr:\n" << strerr << "\n";
             } else {
-                result << "## StdErr conversion to utf8 failed, truncated\n";
+                result << "## StdErr conversion to utf8 failed, discard\n";
             }
         }
         co_return result.str();

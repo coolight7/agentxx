@@ -215,20 +215,26 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStream(
         },
         [&](std::string_view chunk) {
             lineBuffer += chunk;
-            processSseBuffer(lineBuffer, completion, fullContent, fullThinking, tcMap, on_chunk);
+            try {
+                processSseBuffer(lineBuffer, completion, fullContent, fullThinking, tcMap, on_chunk);
+            } catch (const std::exception&) {
+            }
         }
     );
 
     if (!lineBuffer.empty()) {
-        processSseBuffer(
-            lineBuffer,
-            completion,
-            fullContent,
-            fullThinking,
-            tcMap,
-            on_chunk,
-            /*finalFlush=*/true
-        );
+        try {
+            processSseBuffer(
+                lineBuffer,
+                completion,
+                fullContent,
+                fullThinking,
+                tcMap,
+                on_chunk,
+                /*finalFlush=*/true
+            );
+        } catch (const std::exception&) {
+        }
     }
 
     if (fullThinking.empty()) {

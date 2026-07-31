@@ -225,21 +225,21 @@ asio::awaitable<std::expected<WsMessage, std::string>> WsClient::recv() {
         chunk.resize(4096);
 
         if (impl_->isSsl) {
-            while (!impl_->wss->is_message_done()) {
+            do {
                 auto n = co_await impl_->wss->async_read_some(
                     asio::buffer(chunk, chunk.size()),
                     asio::cancel_after(impl_->config.recvTimeout, asio::use_awaitable)
                 );
-                payload.append(chunk, n);
-            }
+                payload.append(chunk.data(), n);
+            } while (!impl_->wss->is_message_done());
         } else {
-            while (!impl_->ws->is_message_done()) {
+            do {
                 auto n = co_await impl_->ws->async_read_some(
                     asio::buffer(chunk, chunk.size()),
                     asio::cancel_after(impl_->config.recvTimeout, asio::use_awaitable)
                 );
-                payload.append(chunk, n);
-            }
+                payload.append(chunk.data(), n);
+            } while (!impl_->ws->is_message_done());
         }
 
         WsMessage msg;
