@@ -136,7 +136,7 @@ asio::awaitable<std::string> FileSystemListTool::execute_async(const neograph::j
 
     // 将所有 std::filesystem 阻塞操作卸载到线程池, 支持取消传播:
     // 当父协程被 CancelToken 取消时, cancel_flag 被置 true, 工作线程检测后提前退出释放线程
-    auto result = co_await agentxx::util::co_offload_cancellable<neograph::json>(
+    auto result = co_await agentxx::util::offloadCancellableAsync<neograph::json>(
         pool,
         [targetPath, recursive, limit](std::atomic<bool>& cancel_flag
         ) -> asio::awaitable<neograph::json> {
@@ -1098,11 +1098,11 @@ asio::awaitable<std::string> FilesystemGlobTool::execute_async(const neograph::j
     auto& pool     = *agentPtr->blockingPool;
 
     // 将 glob 阻塞操作卸载到线程池, 支持取消传播:
-    // 当父协程被 CancelToken 取消时, cancel_flag 被置 true, 工作线程检测后提前退出释放线程
-    auto result = co_await agentxx::util::co_offload_cancellable<std::string>(
+    // 当父协程被 CancelToken 取消时, cancelFlag 被置 true, 工作线程检测后提前退出释放线程
+    auto result = co_await agentxx::util::offloadCancellableAsync<std::string>(
         pool,
-        [file_patterns](std::atomic<bool>& cancel_flag) -> asio::awaitable<std::string> {
-            if (cancel_flag.load(std::memory_order_acquire)) {
+        [file_patterns](std::atomic<bool>& cancelFlag) -> asio::awaitable<std::string> {
+            if (cancelFlag.load(std::memory_order_acquire)) {
                 throw neograph::graph::CancelledException("filesystem_glob cancelled");
             }
 
@@ -1113,7 +1113,7 @@ asio::awaitable<std::string> FilesystemGlobTool::execute_async(const neograph::j
 
             auto oss = std::ostringstream{};
             for (auto& item : relist) {
-                if (cancel_flag.load(std::memory_order_acquire)) {
+                if (cancelFlag.load(std::memory_order_acquire)) {
                     throw neograph::graph::CancelledException("filesystem_glob cancelled");
                 }
                 oss << item.generic_string() << std::endl;
@@ -1254,12 +1254,25 @@ asio::awaitable<std::string> FilesystemGrepTool::execute_async(const neograph::j
     }
 
     std::vector<std::filesystem::path> refilelist{};
-    auto                               relist = glob::rglob(file_patterns);
-    refilelist.insert(
-        refilelist.end(),
-        std::make_move_iterator(relist.begin()),
-        std::make_move_iterator(relist.end())
-    );
+    {
+        auto  agentPtr = agentContext.lock();
+        auto& pool     = *agentPtr->blockingPool;
+
+        // 将 glob 阻塞操作卸载到线程池, 支持取消传播:
+        // 当父协程被 CancelToken 取消时, cancel_flag 被置 true, 工作线程检测后提前退出释放线程
+        auto relist = co_await agentxx::util::offloadCancellableAsync<std::string>(
+            pool,
+            [file_patterns](std::atomic<bool>& cancelFlag) -> asio::awaitable<std::string> {
+                // TODO: 传入 [cancel_flag]
+                co_return glob::rglob(file_patterns);
+            }
+        );
+        refilelist.insert(
+            refilelist.end(),
+            std::make_move_iterator(relist.begin()),
+            std::make_move_iterator(relist.end())
+        );
+    }
     if (refilelist.empty()) {
         throw std::runtime_error{"No match `file_patterns` file found"};
     }
