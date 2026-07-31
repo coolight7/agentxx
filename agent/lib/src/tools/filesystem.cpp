@@ -1260,9 +1260,11 @@ asio::awaitable<std::string> FilesystemGrepTool::execute_async(const neograph::j
 
         // 将 glob 阻塞操作卸载到线程池, 支持取消传播:
         // 当父协程被 CancelToken 取消时, cancel_flag 被置 true, 工作线程检测后提前退出释放线程
-        auto relist = co_await agentxx::util::offloadCancellableAsync<std::string>(
+        auto relist = co_await agentxx::util::offloadCancellableAsync<
+            std::vector<std::filesystem::__cxx11::path>>(
             pool,
-            [file_patterns](std::atomic<bool>& cancelFlag) -> asio::awaitable<std::string> {
+            [file_patterns](std::atomic<bool>& cancelFlag
+            ) -> asio::awaitable<std::vector<std::filesystem::__cxx11::path>> {
                 // TODO: 传入 [cancel_flag]
                 co_return glob::rglob(file_patterns);
             }
