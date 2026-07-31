@@ -51,7 +51,7 @@ namespace util {
 /// 将同步阻塞函数卸载到线程池执行, 主协程挂起等待结果
 /// - fn: 无参可调用对象, 返回 T
 /// - 不支持取消 (fn 无法感知取消请求); 若需要取消支持请用 co_offload_cancellable
-template <typename T, typename F>
+template<typename T, typename F>
 asio::awaitable<T> co_offload(asio::thread_pool& pool, F&& fn) {
     co_return co_await asio::co_spawn(
         pool.get_executor(),
@@ -63,7 +63,7 @@ asio::awaitable<T> co_offload(asio::thread_pool& pool, F&& fn) {
 }
 
 /// void 特化
-template <typename F>
+template<typename F>
 asio::awaitable<void> co_offload_void(asio::thread_pool& pool, F&& fn) {
     co_await asio::co_spawn(
         pool.get_executor(),
@@ -85,7 +85,7 @@ asio::awaitable<void> co_offload_void(asio::thread_pool& pool, F&& fn) {
 ///
 /// @tparam T 返回值类型
 /// @tparam F 可调用类型, 签名: T(std::atomic<bool>&)
-template <typename T, typename F>
+template<typename T, typename F>
 asio::awaitable<T> co_offload_cancellable(asio::thread_pool& pool, F&& fn) {
     // 共享取消标志: 父协程 (io_context 线程) 写, 工作线程读
     auto cancel_flag = std::make_shared<std::atomic<bool>>(false);
@@ -109,7 +109,7 @@ asio::awaitable<T> co_offload_cancellable(asio::thread_pool& pool, F&& fn) {
 }
 
 /// void 特化: 支持取消的卸载 (无返回值)
-template <typename F>
+template<typename F>
 asio::awaitable<void> co_offload_cancellable_void(asio::thread_pool& pool, F&& fn) {
     auto cancel_flag = std::make_shared<std::atomic<bool>>(false);
 

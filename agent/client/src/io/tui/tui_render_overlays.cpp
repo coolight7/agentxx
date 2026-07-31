@@ -84,13 +84,13 @@ ftxui::Element AgentTUI::renderStatusBar() {
         const int pct
             = static_cast<int>(100.0 * static_cast<double>(ctx) / static_cast<double>(maxCtx));
         ctxText = fmt::format(
-            " {}/{}/{}% ",
+            "{}/{}/{}%",
             agentxx::util::formatSize(ctx),
             agentxx::util::formatSize(maxCtx),
             pct
         );
     } else {
-        ctxText = fmt::format(" {} ", agentxx::util::formatSize(ctx));
+        ctxText = fmt::format("{}", agentxx::util::formatSize(ctx));
     }
 
     auto modelInfo = hbox({
@@ -98,13 +98,14 @@ ftxui::Element AgentTUI::renderStatusBar() {
         text(modelName) | color(theme_.accentColor),
         text(" · ") | color(theme_.hintColor),
         text(ctxText) | color(theme_.hintColor),
-        text(" "),
     });
     return hbox({
         text(" "),
         modelInfo,
+        text(" "),
         filler(),
-        text(" [Ctrl+I] Settings") | color(theme_.hintColor),
+        text(" "),
+        text("[Ctrl+I] Settings") | color(theme_.hintColor),
         text(" "),
     });
 }

@@ -251,13 +251,13 @@ YamlAppConfig loadYamlConfig(
                 }
             }
             if (node["extract_tool_calls_from_content"]) {
-                mc.extractToolCallsFromContent = resolveEnvVars(
-                                                     node["extract_tool_calls_from_content"]
-                                                         .as<std::string>("false"),
-                                                     dotEnvVars,
-                                                     overrideEnvVars
-                                                 )
-                                                 == "true";
+                mc.extractToolCallsFromContent
+                    = resolveEnvVars(
+                          node["extract_tool_calls_from_content"].as<std::string>("false"),
+                          dotEnvVars,
+                          overrideEnvVars
+                      )
+                      == "true";
             }
             if (node["model_support_max_token"]) {
                 mc.modelSupportMaxToken = static_cast<size_t>(std::stoull(resolveEnvVars(

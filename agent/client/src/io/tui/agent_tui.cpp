@@ -30,13 +30,13 @@ static std::string formatDurationMilliseconds(int64_t milliseconds) {
     const int64_t seconds  = totalSec % 60;
 
     if (hours > 0) {
-        return fmt::format("{}h {}m {}s", hours, minutes, seconds);
+        return fmt::format("{}h{}m{}s", hours, minutes, seconds);
     }
     if (minutes > 0) {
         if (seconds > 0) {
-            return fmt::format("{}m {}s", minutes, seconds);
+            return fmt::format("{}m{}s", minutes, seconds);
         }
-        return fmt::format("{}m 0s", minutes);
+        return fmt::format("{}m0s", minutes);
     }
     // 不足一分钟：显示秒+毫秒
     const double sec = static_cast<double>(milliseconds) / 1000.0;
