@@ -143,7 +143,8 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
     auto        config           = agentContext->agentConfig;
     const auto& subagentModelCfg = config->getSubagentModel();
 
-    std::vector<std::unique_ptr<agentxx::tools::XXToolBase>> tools{};
+    std::vector<std::unique_ptr<agentxx::tools::XXToolBase>> tools
+        = co_await BaseAgent::createTools();
 
     /// MCP tool
     for (const auto& [mcpNamespace, url] : config->mcpServerUrls) {
