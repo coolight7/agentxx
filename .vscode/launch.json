@@ -10,7 +10,26 @@
                 "server"
             ],
             "stopAtEntry": false,
-            "cwd": "${workspaceFolder}/agent",
+            "cwd": "${workspaceFolder}/",
+            "environment": [
+                {
+                    "name": "ASAN_OPTIONS",
+                    "value": "detect_leaks=0"
+                }
+            ],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "setupCommands": []
+        },
+        {
+            "name": "(gdb) agentxx_test",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/agent/build/linux-debug/exec/agentxx_test",
+            "preLaunchTask": "compileLinuxDebugCxx",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}/",
             "environment": [
                 {
                     "name": "ASAN_OPTIONS",
@@ -29,7 +48,7 @@
             "preLaunchTask": "compileWindowsDebugCxx",
             "args": [],
             "stopAtEntry": false,
-            "cwd": "${workspaceFolder}/agent",
+            "cwd": "${workspaceFolder}/",
             "environment": [],
             "console": "internalConsole"
         },
@@ -41,7 +60,7 @@
             "preLaunchTask": "compileWindowsDebugCxx",
             "args": [],
             "stopAtEntry": false,
-            "cwd": "${workspaceFolder}/agent",
+            "cwd": "${workspaceFolder}/",
             "environment": [],
             "console": "internalConsole"
         }

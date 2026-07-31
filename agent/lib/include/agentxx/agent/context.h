@@ -2,6 +2,7 @@
 
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/conversation_types.h"
+#include "asio/thread_pool.hpp"
 #include <atomic>
 #include <cassert>
 #include <functional>
@@ -222,6 +223,13 @@ public:
 
     /// 组件加载信息
     AgentAppendComponentInfo appendComponentInfo;
+
+    /// 阻塞操作执行线程池 (文件系统遍历、glob、DNS 解析等同步阻塞操作)
+    /// - 通过 agentxx::util::co_offload / co_offload_cancellable 使用
+    /// - 避免阻塞操作卡住 io_context 事件循环
+    std::shared_ptr<asio::thread_pool> blockingPool
+        = std::make_shared<asio::thread_pool>(std::max(2u, std::thread::hardware_concurrency() / 2)
+        );
 
     /// 便捷方法：获取或创建指定 thread_id 的会话
     std::shared_ptr<Session> getSession(std::string_view threadId);
