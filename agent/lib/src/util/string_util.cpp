@@ -302,7 +302,6 @@ std::optional<std::string> agentxx::util::base64Decode(std::string_view str) {
         return std::string{};
     }
 
-#if XX_IS_DEBUG_D
     {
         size_t padCount = 0;
         // 校验 base64 格式: 仅含合法字符, '=' 仅在结尾 (最多 2 个), 数据长度 mod 4 不为 1
@@ -328,7 +327,6 @@ std::optional<std::string> agentxx::util::base64Decode(std::string_view str) {
             return std::nullopt; // 非法 base64 长度
         }
     }
-#endif
 
     std::string result;
     // decoded_size(n) 要求 n 为 4 的倍数, 对未补齐 padding 的输入 (长度 mod4 ∈ {2,3})
@@ -339,7 +337,9 @@ std::optional<std::string> agentxx::util::base64Decode(std::string_view str) {
         = boost::beast::detail::base64::decode(result.data(), str.data(), str.size());
 
     // [decode] 会忽略末尾的 =, 因此可能出现 `chars_read < str.size()`
-
+    if (chars_read == 0) {
+        return std::nullopt;
+    }
     result.resize(bytes_written);
     return result;
 }
