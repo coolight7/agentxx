@@ -225,7 +225,7 @@ public:
     AgentAppendComponentInfo appendComponentInfo;
 
     /// 阻塞操作执行线程池 (文件系统遍历、glob、DNS 解析等同步阻塞操作)
-    /// - 通过 agentxx::util::co_offload / co_offload_cancellable 使用
+    /// - 通过 agentxx::util::offloadAsync / offloadCancellableAsync 使用
     /// - 避免阻塞操作卡住 io_context 事件循环
     std::shared_ptr<asio::thread_pool> blockingPool
         = std::make_shared<asio::thread_pool>(std::max(2u, std::thread::hardware_concurrency() / 2)

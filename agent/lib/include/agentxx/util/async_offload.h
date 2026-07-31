@@ -4,9 +4,9 @@
  * @file util/async_offload.h
  * @brief 将阻塞操作卸载到线程池执行的协程工具函数
  *
- * 提供 co_offload / co_offload_cancellable 两个工具函数:
- * - co_offload: 将同步阻塞 lambda 卸载到线程池, 主协程挂起等待, 不阻塞 io_context
- * - co_offload_cancellable: 同上, 但支持取消传播 —— 当父协程被 CancelToken 取消时,
+ * 提供 offloadAsync / offloadCancellableAsync 两个工具函数:
+ * - offloadAsync: 将同步阻塞 lambda 卸载到线程池, 主协程挂起等待, 不阻塞 io_context
+ * - offloadCancellableAsync: 同上, 但支持取消传播 —— 当父协程被 CancelToken 取消时,
  *   设置 cancel_flag 通知工作线程提前退出, 释放线程执行下一个任务
  *
  * 取消传播链:
@@ -20,7 +20,7 @@
  * 用法示例:
  * @code
  *   auto& pool = agentCtx->blockingPool;
- *   auto result = co_await agentxx::util::co_offload_cancellable<neograph::json>(
+ *   auto result = co_await agentxx::util::offloadCancellableAsync<neograph::json>(
  *       *pool,
  *       [](std::atomic<bool>& cancel_flag) -> neograph::json {
  *           for (auto& entry : std::filesystem::directory_iterator(path)) {
@@ -50,9 +50,9 @@ namespace util {
 
 /// 将同步阻塞函数卸载到线程池执行, 主协程挂起等待结果
 /// - fn: 无参可调用对象, 返回 T
-/// - 不支持取消 (fn 无法感知取消请求); 若需要取消支持请用 co_offload_cancellable
+/// - 不支持取消 (fn 无法感知取消请求); 若需要取消支持请用 offloadCancellableAsync
 template<typename T>
-asio::awaitable<T> co_offload(asio::thread_pool& pool, std::function<asio::awaitable<T>()>&& fn) {
+asio::awaitable<T> offloadAsync(asio::thread_pool& pool, std::function<asio::awaitable<T>()>&& fn) {
     co_return co_await asio::co_spawn(
         pool.get_executor(),
         [fn = std::forward<std::function<asio::awaitable<T>()>>(fn)]() -> asio::awaitable<T> {
@@ -73,7 +73,7 @@ asio::awaitable<T> co_offload(asio::thread_pool& pool, std::function<asio::await
 /// @tparam T 返回值类型
 /// @tparam F 可调用类型, 签名: T(std::atomic<bool>&)
 template<typename T>
-asio::awaitable<T> co_offload_cancellable(
+asio::awaitable<T> offloadCancellableAsync(
     asio::thread_pool&                                      pool,
     std::function<asio::awaitable<T>(std::atomic<bool>&)>&& fn
 ) {
