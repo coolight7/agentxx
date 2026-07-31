@@ -138,10 +138,11 @@ ftxui::Element AgentTUI::renderMessages() {
                         renderMarkdown(msg.text, theme_.thinkingColor, theme_.markdownTheme)
                     );
                 }
-                Element block
-                    = vbox(std::move(lines)) | reflect(collapsibleBoxes_[collapsibleOrdinal]);
+                pushBlock(
+                    vbox(std::move(lines)) | reflect(collapsibleBoxes_[collapsibleOrdinal]),
+                    true
+                );
                 ++collapsibleOrdinal;
-                pushBlock(std::move(block), true);
                 break;
             }
             case Message::Role::Tool: {
@@ -193,10 +194,11 @@ ftxui::Element AgentTUI::renderMessages() {
                     }
                 }
 
-                Element block
-                    = vbox(std::move(lines)) | reflect(collapsibleBoxes_[collapsibleOrdinal]);
+                pushBlock(
+                    vbox(std::move(lines)) | reflect(collapsibleBoxes_[collapsibleOrdinal]),
+                    true
+                );
                 ++collapsibleOrdinal;
-                pushBlock(std::move(block), true);
             } break;
         }
     }

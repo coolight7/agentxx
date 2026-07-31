@@ -742,23 +742,7 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
             } catch (const neograph::graph::CancelledException& e) {
                 XX_LOGI("Agent Session Cancelled: {}", e.what());
                 turnResult.hasError     = true;
-                turnResult.errorMessage = "cancelled";
-
-                // 提取临时保存的上下文，并写回 state，避免函数返回后程序中断丢失数据
-                auto& im
-                    = agentContext->middlewareHandleContext->getGraphDataItemValue<neograph::json>(
-                        threadId,
-                        agentxx::middleware::MiddlewareContext::graphDataKey_tempMessages
-                    );
-                if (im.is_array()) {
-                    session->llmMessages = im;
-                }
-                engine->update_state(
-                    std::string{threadId},
-                    [&](neograph::graph::GraphState& state) {
-                        state.overwrite("messages", session->llmMessages);
-                    }
-                );
+                turnResult.errorMessage = "Cancelled by user";
             }
 
             co_return;
@@ -767,21 +751,22 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
             XX_LOGE("Agent Session Response failed: {}", errmsg);
             turnResult.hasError     = true;
             turnResult.errorMessage = std::move(errmsg);
-
-            // 提取临时保存的上下文，并写回 state，避免函数返回后程序中断丢失数据
-            auto& im = agentContext->middlewareHandleContext->getGraphDataItemValue<neograph::json>(
-                threadId,
-                agentxx::middleware::MiddlewareContext::graphDataKey_tempMessages
-            );
-            if (im.is_array()) {
-                session->llmMessages = im;
-            }
-            engine->update_state(std::string{threadId}, [&](neograph::graph::GraphState& state) {
-                state.overwrite("messages", session->llmMessages);
-            });
             co_return;
         }
     );
+    if (turnResult.hasError) {
+        // - 出现异常时 state.messages 已经被回滚，提取临时保存的上下文，并写回 state
+        auto& im = agentContext->middlewareHandleContext->getGraphDataItemValue<neograph::json>(
+            threadId,
+            agentxx::middleware::MiddlewareContext::graphDataKey_tempMessages
+        );
+        if (im.is_array()) {
+            session->llmMessages = im;
+        }
+        engine->update_state(std::string{threadId}, [&](neograph::graph::GraphState& state) {
+            state.overwrite("messages", session->llmMessages);
+        });
+    }
 
     engine->update_state(std::string{threadId}, [&](neograph::graph::GraphState& state) {
         // 中断已经处理完成，清理 graphData

@@ -400,17 +400,17 @@ Example for a "fix a bug" workflow:
 - roadmap:
 ```mermaid
 stateDiagram-v2
-    [*] --> phase_1_reproduce_bug
-    phase_1_reproduce_bug --> phase_1_in_progress: start
-    phase_1_in_progress --> phase_1_completed: reproduced
-    phase_1_in_progress --> phase_1_failed: cannot reproduce
-    phase_1_completed --> phase_2_locate_root_cause
-    phase_2_locate_root_cause --> phase_2_in_progress: analyze
-    phase_2_in_progress --> phase_2_completed: found cause
-    phase_2_completed --> phase_3_implement_fix
-    phase_3_implement_fix --> phase_3_in_progress: coding
-    phase_3_in_progress --> phase_3_completed: fix works
-    phase_3_completed --> [*]
+    [*] --> 1_reproduce_bug
+    1_reproduce_bug --> 1_in_progress: start
+    1_in_progress --> 1_completed: reproduced
+    1_in_progress --> 1_failed: cannot reproduce
+    1_completed --> 2_locate_root_cause
+    2_locate_root_cause --> 2_in_progress: analyze
+    2_in_progress --> 2_completed: found cause
+    2_completed --> 3_implement_fix
+    3_implement_fix --> 3_in_progress: coding
+    3_in_progress --> 3_completed: fix works
+    3_completed --> [*]
 ```
 - todos (only current + next):
 [

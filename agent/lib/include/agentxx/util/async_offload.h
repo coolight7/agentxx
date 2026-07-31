@@ -78,20 +78,51 @@ asio::awaitable<T> offloadCancellableAsync(
     std::function<asio::awaitable<T>(std::atomic<bool>&)>&& fn
 ) {
     // 共享取消标志: 父协程 (io_context 线程) 写, 工作线程读
-    auto cancel_flag = std::make_shared<std::atomic<bool>>(false);
+    auto cancelFlag = std::make_shared<std::atomic<bool>>(false);
 
     try {
         co_return co_await asio::co_spawn(
             pool.get_executor(),
             [fn = std::forward<std::function<asio::awaitable<T>(std::atomic<bool>&)>>(fn),
-             cancel_flag]() -> asio::awaitable<T> {
-                co_return co_await fn(*cancel_flag);
+             cancelFlag]() -> asio::awaitable<T> {
+                co_return co_await fn(*cancelFlag);
             },
             asio::use_awaitable
         );
     } catch (const neograph::graph::CancelledException& e) {
         // 父协程被取消 → 通知工作线程退出
-        cancel_flag->store(true, std::memory_order_release);
+        cancelFlag->store(true, std::memory_order_release);
+        throw;
+    }
+}
+
+/// 将同步阻塞函数卸载到线程池执行, 支持取消传播 (外部提供 cancelFlag 版本)
+/// - 与上面的重载相同, 但 cancelFlag 由调用方提供, 允许外部 (如超时定时器) 设置取消标志
+/// - 当父协程被取消或外部设置 cancelFlag 时, 工作线程检测后提前退出
+///
+/// - pool 线程池
+/// - [cancelFlag] 外部提供的共享取消标志
+/// - fn 可调用对象, 签名: awaitable<T>(std::atomic<bool>&)
+///
+/// return T 返回值类型
+template<typename T>
+asio::awaitable<T> offloadCancellableAsync(
+    asio::thread_pool&                                      pool,
+    std::shared_ptr<std::atomic<bool>>                      cancelFlag,
+    std::function<asio::awaitable<T>(std::atomic<bool>&)>&& fn
+) {
+    try {
+        co_return co_await asio::co_spawn(
+            pool.get_executor(),
+            [fn = std::forward<std::function<asio::awaitable<T>(std::atomic<bool>&)>>(fn),
+             &cancelFlag]() -> asio::awaitable<T> {
+                co_return co_await fn(*cancelFlag);
+            },
+            asio::use_awaitable
+        );
+    } catch (const neograph::graph::CancelledException& e) {
+        // 父协程被取消 → 通知工作线程退出
+        cancelFlag->store(true, std::memory_order_release);
         throw;
     }
 }

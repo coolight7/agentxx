@@ -56,7 +56,7 @@
     - ✅拦截输出，超过限制长度时自动压缩、截取摘要存储到 share_store
     - ⬜支持依托`事件流`实现异步获取结果、分块获取结果
     - ⬜长时间运行时自动警告，并转由`事件流`异步获取结果
-    - ✅filesystem (支持 `同步`/`asio io_uring/IOCP 协程异步` 文件读写)
+    - ✅filesystem (支持 `同步`/`asio io_uring/IOCP 协程异步` 文件读写、超时限制)
         - ls (file/dir/recursive-dir/limit)
         - read_text (full / offset-limit)
         - read_binary (full / byte-offset-limit)
@@ -67,7 +67,7 @@
         - WSL 系统环境下自动转换 windows 文件路径
         - 读取文件内容时自动转换字符编码到 utf8
         - ⬜写入文件内容时保持文件原有字符编码
-    - ✅execute_command (支持 `同步`/`Boost.process 协程异步`执行)
+    - ✅execute_command (支持 `同步`/`Boost.process 协程异步`执行、超时限制)
         - execute_linux_command
         - execute_windows_command (检测到 WSL 环境时，允许在 linux/wsl 直接执行 windows 命令)
         - ⬜execute_python_command
@@ -161,7 +161,9 @@
 - ✅**自定义配置**
     - 支持启动时从 agentxx-config.yaml、.env 加载配置文件
     - 分离 System/Tool Prompt 到独立配置，以便支持自定义和`Self-upgrade`自动调整适配
-- ⬜队列输入
+- **队列等待输入**
+    - 正在运行会话时增加用户输入，则添加到队列中，等待会话完成自动插入
+    - ✅TUI输入队列
 
 ### 提示词训练
 - 系统提示词、工具提示词 对 LLM 的运行效果有重要影响，尤其是希望用于本地运行的小模型，为此设计了 `提示词训练`，希望实现对不同 LLM 模型针对性的提示词设计

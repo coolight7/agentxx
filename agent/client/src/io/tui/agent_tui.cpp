@@ -580,7 +580,7 @@ void AgentTUI::cancelCurrentRunLocked() {
         }
         currentToken_.clear();
     }
-    messages_.push_back({Message::Role::System, "[Cancelled by user]"});
+    messages_.push_back({Message::Role::System, "[Cancel Request]"});
     isStreaming_ = false;
     dispatchNextPendingInput();
 }
