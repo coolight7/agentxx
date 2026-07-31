@@ -237,9 +237,15 @@ If the user enters a Windows file path (starting with drive letters such as `C:\
                   {
                       {"path", "文件或文件夹的绝对路径"},
                       {"recursive", "默认 `false`. 是否递归子目录"},
-                      {"limit",
-                       "默认 `100`. 限制列出的文件、文件夹数量，指定`limit <= "
-                       "0`时不限制数量"},
+                      {
+                        "limit",
+                        R"(默认 `100`. 限制列出的文件、文件夹数量，指定`limit <= 0`时不限制数量)",
+                      },
+                      {
+                          "timeout",
+                          R"(Default `120` seconds. 
+执行超时时间 (秒), 指定 0 表示不限时)",
+                      },
                   },
           },
       },
@@ -329,6 +335,11 @@ Returns binary content as base64 string.)",
 
 e.g., `/upload/**/*.txt`,`/docx/*[0-9].txt`,`/usr/include/nc*.h`,`/output/file[0-9].*`,`C:/down/read/??.txt`.
 )"}, 
+                      {
+                          "timeout",
+                          R"(Default `120` seconds. 
+执行超时时间 (秒), 指定 0 表示不限时)",
+                      },
                   },
           },
       },
@@ -364,6 +375,11 @@ e.g., `/upload/**/*.txt`,`/docx/*[0-9].txt`,`/usr/include/nc*.h`,`/output/file[0
 Output format:
 'files_with_matches': Only file paths containing matches and count with `file:match_count` format
 'content': Matching lines with file:line:content format)"},
+                      {
+                          "timeout",
+                          R"(Default `120` seconds. 
+执行超时时间 (秒), 指定 0 表示不限时)",
+                      },
                   },
           },
       },
