@@ -1002,6 +1002,23 @@ asio::awaitable<void> test_per_call_extra_fields(MockOpenAIServer& mock, uint16_
 asio::awaitable<void> test_streaming_completion(MockOpenAIServer& mock, uint16_t port) {
     std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
     mock.mode           = MockMode::Streaming;
+    mock.sseChunks.clear();
+    mock.sseChunks.push_back(MockOpenAIServer::sseData(
+        R"({"choices":[{"index":0,"delta":{"role":"assistant","content":""}}]})"
+    ));
+    mock.sseChunks.push_back(
+        MockOpenAIServer::sseData(R"({"choices":[{"index":0,"delta":{"content":"Hello"}}]})")
+    );
+    mock.sseChunks.push_back(
+        MockOpenAIServer::sseData(R"({"choices":[{"index":0,"delta":{"content":" "}}]})")
+    );
+    mock.sseChunks.push_back(
+        MockOpenAIServer::sseData(R"({"choices":[{"index":0,"delta":{"content":"world"}}]})")
+    );
+    mock.sseChunks.push_back(MockOpenAIServer::sseData(
+        R"({"choices":[{"index":0,"delta":{}}],"usage":{"prompt_tokens":5,"completion_tokens":3,"total_tokens":8}})"
+    ));
+    mock.sseChunks.push_back(MockOpenAIServer::sseDone());
 
     auto provider = server::OpenAIProvider::create(makeOaiCfg("sk-test", baseUrl));
 

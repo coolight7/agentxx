@@ -494,7 +494,6 @@ asio::awaitable<void> HttpClient::requestSseAsync(
         boost::beast::flat_buffer                buf;
         http::response_parser<http::string_body> parser;
         parser.body_limit(std::numeric_limits<uint64_t>::max());
-        parser.eager(true);
 
         co_await http::async_read_header(
             stream,
@@ -538,6 +537,16 @@ asio::awaitable<void> HttpClient::requestSseAsync(
 
         size_t                   processed = 0;
         neograph_asio_error_code ec;
+
+        auto flushBody = [&]() {
+            auto& respBody = parser.get().body();
+            if (respBody.size() > processed) {
+                onChunk(std::string_view{respBody}.substr(processed));
+                processed = respBody.size();
+            }
+        };
+
+        flushBody();
         while (!parser.is_done()) {
             co_await http::async_read_some(
                 stream,
@@ -549,17 +558,14 @@ asio::awaitable<void> HttpClient::requestSseAsync(
                 )
             );
             if (ec) {
-                if (ec == asio::error::eof) {
+                if (ec == asio::error::eof || ec == http::error::end_of_stream) {
                     break;
                 }
                 throw neograph_asio_system_error(ec, "SSE stream read");
             }
-            auto& respBody = parser.get().body();
-            if (respBody.size() > processed) {
-                onChunk(std::string_view{respBody}.substr(processed));
-                processed = respBody.size();
-            }
+            flushBody();
         }
+        flushBody();
     };
 
     if (isHttps) {

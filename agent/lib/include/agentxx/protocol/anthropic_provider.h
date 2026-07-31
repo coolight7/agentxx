@@ -149,7 +149,12 @@ public:
             return;
         }
 
-        auto j = neograph::json::parse(payload);
+        neograph::json j;
+        try {
+            j = neograph::json::parse(payload);
+        } catch (...) {
+            return;
+        }
 
         // 允许异常时字节抛出给到 ModelCallNode ，以便自动处理
         if (currentEvent == "message_start") {

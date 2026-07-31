@@ -114,8 +114,8 @@ Current System is {}{}, please use linux shell/bash commands.)",
                       {
                           "all_output",
                           R"(Default `true`. 
-`true`: Return all output.
-`false`: Truncate Output. Only return the stdout and stderr output when the command faild.)",
+`true`: Always return stdout and stderr output.
+`false`: Only return the stdout and stderr output when the command faild.)",
                       },
                       {
                           "timeout",
@@ -185,8 +185,8 @@ If the user enters a Windows file path (starting with drive letters such as `C:\
                       {
                           "all_output",
                           R"(Default `true`. 
-`true`: Return all output.
-`false`: Truncate Output. Only return the stdout and stderr output when the command faild.)",
+`true`: Always return stdout and stderr output.
+`false`: Only return the stdout and stderr output when the command faild.)",
                       },
                       {
                           "timeout",

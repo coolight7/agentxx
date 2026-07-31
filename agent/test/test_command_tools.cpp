@@ -452,17 +452,11 @@ asio::awaitable<void>
     };
     auto result = co_await tool.execute_async(args);
 
-    bool parsed = false;
-    try {
-        auto j = neograph::json::parse(result);
-        parsed = j.is_object() && j.contains("error");
-        if (parsed) {
-            auto stdoutStr = j.value("stdout", std::string{});
-            XX_TEST_EXPECT_TRUE(stdoutStr.find("\"quotes\"") != std::string::npos);
-            XX_TEST_EXPECT_TRUE(stdoutStr.find("\\backslash") != std::string::npos);
-        }
-    } catch (...) {
-        parsed = false;
+    bool parsed = result.find("## Error") != std::string::npos
+                  && result.find("timed out") != std::string::npos;
+    if (parsed) {
+        XX_TEST_EXPECT_TRUE(result.find("\"quotes\"") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(result.find("\\backslash") != std::string::npos);
     }
     XX_TEST_EXPECT_TRUE(parsed);
     co_return;

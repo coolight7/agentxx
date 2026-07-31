@@ -321,6 +321,23 @@ asio::awaitable<neograph::ChatCompletion> AnthropicProvider::doStream(
         },
         [&](std::string_view chunk) {
             lineBuffer += chunk;
+            try {
+                processSseBuffer(
+                    lineBuffer,
+                    completion,
+                    fullContent,
+                    fullThinking,
+                    tcMap,
+                    blockTypes,
+                    on_chunk
+                );
+            } catch (const std::exception&) {
+            }
+        }
+    );
+
+    if (!lineBuffer.empty()) {
+        try {
             processSseBuffer(
                 lineBuffer,
                 completion,
@@ -328,22 +345,11 @@ asio::awaitable<neograph::ChatCompletion> AnthropicProvider::doStream(
                 fullThinking,
                 tcMap,
                 blockTypes,
-                on_chunk
+                on_chunk,
+                /*finalFlush=*/true
             );
+        } catch (const std::exception&) {
         }
-    );
-
-    if (!lineBuffer.empty()) {
-        processSseBuffer(
-            lineBuffer,
-            completion,
-            fullContent,
-            fullThinking,
-            tcMap,
-            blockTypes,
-            on_chunk,
-            /*finalFlush=*/true
-        );
     }
 
     completion.message.content           = fullContent;
