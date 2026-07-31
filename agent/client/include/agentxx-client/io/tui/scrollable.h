@@ -74,7 +74,7 @@ public:
             return false;
         }
 
-        constexpr float kStep = 0.05f;
+        constexpr float kStep = 0.01f;
         if (mouse.button == ftxui::Mouse::WheelUp) {
             stickToBottom_ = false;
             scroll_        = std::max(0.0f, scroll_ - kStep);
