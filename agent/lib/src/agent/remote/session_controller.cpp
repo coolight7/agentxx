@@ -187,6 +187,16 @@ void SessionController::handleHello(const WireHello& hello, std::vector<std::str
         });
     }
 
+    // 先发送 HelloAck 再重放: 客户端 connect() 握手循环会丢弃 HelloAck 之前的消息,
+    // 若先重放后 HelloAck, 全量 Sync/增量 Delta 会被客户端丢弃 → 重连后历史丢失。
+    // HelloAck 之后发送的重放消息经客户端 recvQueue 缓冲, 由 runTransportLoop 正常处理。
+    sendToPeer(WireHelloAck{
+        .ok       = true,
+        .threadId = config_.threadId,
+        .tailHash = std::move(tailHash),
+        .models   = std::move(models),
+    });
+
     for (const auto& d : replayDeltas) {
         sendToPeer(d);
     }
@@ -199,13 +209,6 @@ void SessionController::handleHello(const WireHello& hello, std::vector<std::str
     for (auto& req : pendingInterrupts) {
         sendToPeer(std::move(req));
     }
-
-    sendToPeer(WireHelloAck{
-        .ok       = true,
-        .threadId = config_.threadId,
-        .tailHash = std::move(tailHash),
-        .models   = std::move(models),
-    });
 }
 
 void SessionController::onDisconnect() {
