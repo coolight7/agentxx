@@ -16,7 +16,7 @@ void AgentTUI::appendEditToolHeader(const Message& msg, Elements& header) {
     } catch (...) {
     }
     if (!path.empty()) {
-        header.push_back(text("  " + path) | color(theme_.toolColor) | dim);
+        header.push_back(text(path) | color(theme_.toolColor) | dim);
     }
 }
 
@@ -93,9 +93,9 @@ ftxui::Element AgentTUI::renderEditToolDiff(std::string_view oldStr, std::string
     auto makeCell = [&](std::string_view sign, int no, std::string_view txt, ftxui::Color c) {
         std::string noStr = (no > 0) ? std::to_string(no) : std::string{};
         return hbox({
-            text(sign) | color(c) | bold,
+            text(sign) | color(c),
             text(noStr) | color(theme_.hintColor) | size(WIDTH, EQUAL, 4),
-            text(" ") | color(theme_.hintColor),
+            text(" "),
             text(trunc(txt, static_cast<size_t>(textW))) | color(c),
         });
     };

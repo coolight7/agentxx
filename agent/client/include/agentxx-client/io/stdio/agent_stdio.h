@@ -8,11 +8,11 @@
 #include <string>
 #include <string_view>
 
-class StderrLogSink : public agentxx::util::LogSink {
+class StderrLogSink : public agentxx::util::ThreadedLogSink {
 public:
 
-    void onLog(agentxx::util::LogLevel, std::string_view message) override {
-        std::cerr << message << std::endl;
+    void onLog(const agentxx::util::LogEntry& entry) override {
+        std::cerr << entry.message << std::endl;
     }
 };
 

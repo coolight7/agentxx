@@ -11,7 +11,7 @@ TUITheme TUITheme::darkTheme() {
         .promptColor           = ftxui::Color::Green,
         .accentColor           = ftxui::Color::RGB(102, 204, 255), // #66ccff
         .statusColor           = ftxui::Color::GrayLight,
-        .hintColor             = ftxui::Color::GrayDark,
+        .hintColor             = ftxui::Color::RGB(117, 125, 138),
         .backgroundColor       = ftxui::Color::RGB(0, 0, 0),       // #000
         .blockColor            = ftxui::Color::RGB(18, 18, 18),    // #121212
         .inputBgColor          = ftxui::Color::RGB(24, 26, 30),    //
@@ -39,23 +39,23 @@ TUITheme TUITheme::darkTheme() {
 
 TUITheme TUITheme::lightTheme() {
     return TUITheme{
-        .userColor             = ftxui::Color::RGB(102, 204, 255),
-        .assistantColor        = ftxui::Color::Black,
+        .userColor             = ftxui::Color::RGB(60, 80, 130),
+        .assistantColor        = ftxui::Color::RGB(50, 50, 50),
         .thinkingColor         = ftxui::Color::Yellow4,
         .toolColor             = ftxui::Color::RGB(135, 136, 137), // #878889
         .systemColor           = ftxui::Color::RGB(135, 136, 137),
         .errorColor            = ftxui::Color::RGB(200, 30, 30),   // #c81e1e
         .promptColor           = ftxui::Color::DarkGreen,
-        .accentColor           = ftxui::Color::Blue3,
+        .accentColor           = ftxui::Color::RGB(102, 204, 255),
         .statusColor           = ftxui::Color::Grey37,
-        .hintColor             = ftxui::Color::Grey53,
+        .hintColor             = ftxui::Color::RGB(135, 136, 137),
         .backgroundColor       = ftxui::Color::RGB(255, 255, 255),
         .blockColor            = ftxui::Color::RGB(246, 247, 252),
         .inputBgColor          = ftxui::Color::RGB(235, 238, 240),
-        .inputTextColor        = ftxui::Color::Black,
+        .inputTextColor        = ftxui::Color::RGB(50, 50, 50),
         .buttonBgColor         = ftxui::Color::RGB(220, 224, 228),
-        .buttonTextColor       = ftxui::Color::Black,
-        .buttonActiveBgColor   = ftxui::Color::Blue3,
+        .buttonTextColor       = ftxui::Color::RGB(50, 50, 50),
+        .buttonActiveBgColor   = ftxui::Color::RGB(60, 80, 130),
         .buttonActiveTextColor = ftxui::Color::White,
         .markdownTheme         = markdown::Theme{
             .name        = "Light",
@@ -67,7 +67,7 @@ TUITheme TUITheme::lightTheme() {
             .heading3    = ftxui::Decorator(ftxui::bold) | ftxui::color(ftxui::Color::Grey37),
             .link        = ftxui::color(ftxui::Color::Blue3),
             .code_inline = ftxui::color(ftxui::Color::RGB(150, 80, 0)),
-            .code_block  = ftxui::color(ftxui::Color::RGB(60, 60, 60)),
+            .code_block  = ftxui::color(ftxui::Color::RGB(50, 50, 50)),
             .blockquote  = ftxui::color(ftxui::Color::Grey37),
         },
     };
