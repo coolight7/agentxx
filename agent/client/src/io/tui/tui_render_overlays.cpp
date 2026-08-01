@@ -79,23 +79,27 @@ ftxui::Element AgentTUI::renderStatusBar() {
         ctx    = session_->contextStats->contextTokens.load();
         maxCtx = session_->contextStats->maxContextTokens.load();
     }
-    std::string ctxText;
+    ftxui::Element ctxText;
     if (maxCtx > 0) {
-        ctxText = fmt::format(
-            "{}/{}·{}%",
-            agentxx::util::formatSize(ctx),
-            agentxx::util::formatSize(maxCtx),
-            static_cast<int>(100.0 * static_cast<double>(ctx) / static_cast<double>(maxCtx))
-        );
+        ctxText = hbox({
+            text(agentxx::util::formatSize(ctx)) | color(theme_.hintColor),
+            text("/") | color(theme_.hintColor) | dim,
+            text(agentxx::util::formatSize(maxCtx)) | color(theme_.hintColor),
+            text("·") | color(theme_.hintColor) | dim,
+            text(fmt::format(
+                "{}%",
+                static_cast<int>(100.0 * static_cast<double>(ctx) / static_cast<double>(maxCtx))
+            )) | color(theme_.hintColor),
+        });
     } else {
-        ctxText = fmt::format("{}", agentxx::util::formatSize(ctx));
+        ctxText = text(fmt::format("{}", agentxx::util::formatSize(ctx))) | color(theme_.hintColor);
     }
 
     auto modelInfo = hbox({
         text("[F2] ") | color(theme_.hintColor),
         text(modelName) | color(theme_.accentColor),
         text(" · ") | color(theme_.hintColor),
-        text(ctxText) | color(theme_.hintColor),
+        ctxText | color(theme_.hintColor),
     });
     return hbox({
         text(" "),
