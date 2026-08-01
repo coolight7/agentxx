@@ -168,12 +168,15 @@ ftxui::Element AgentTUI::buildMessageBlock(
 std::vector<ScrollItem> AgentTUI::buildMessageItems() {
     messageItemMeta_.clear();
 
+    // 本帧快照 (渲染 lambda 开头已填充 frameState_)
+    const auto& st = *frameState_;
+
     // 获取消息列表可用宽度 (用于限制表格等宽元素); 首帧尚未布局时为 -1, 不限制
     const int msgListWidth = messagesScrollable_ ? messagesScrollable_->contentWidth() : -1;
 
     // 空状态: 单个占满视口的欢迎横幅 (fillViewport 居中)
-    const bool hasStreamingToken = isStreaming_ && !currentToken_.empty();
-    if (messages_.empty() && !hasStreamingToken) {
+    const bool hasStreamingToken = st.isStreaming && !st.currentToken.empty();
+    if (st.messages.empty() && !hasStreamingToken) {
         auto banner = vbox({
             filler(),
             text(R"_(
@@ -195,18 +198,18 @@ std::vector<ScrollItem> AgentTUI::buildMessageItems() {
     }
 
     // 同步缓存大小: 收缩 (如 onSync 清空) 时整体重建; 增长时仅新增条目
-    if (messageCache_.size() > messages_.size()) {
+    if (messageCache_.size() > st.messages.size()) {
         messageCache_.clear();
     }
-    while (messageCache_.size() < messages_.size()) {
+    while (messageCache_.size() < st.messages.size()) {
         messageCache_.push_back(MessageCache{});
     }
 
     std::vector<ScrollItem> items;
-    items.reserve(messages_.size() + 1);
+    items.reserve(st.messages.size() + 1);
 
-    for (size_t i = 0; i < messages_.size(); ++i) {
-        const auto& msg   = messages_[i];
+    for (size_t i = 0; i < st.messages.size(); ++i) {
+        const auto& msg   = *st.messages[i];
         auto&       cache = messageCache_[i];
         int64_t     sig   = messageSignature(msg);
         // 内容/状态变化 或 可用宽度变化 (表格换行依赖宽度) -> 重建块元素
@@ -231,15 +234,15 @@ std::vector<ScrollItem> AgentTUI::buildMessageItems() {
     if (hasStreamingToken) {
         // 查找最近的对应角色消息以获取时间信息
         const Message* currentMsg = nullptr;
-        for (auto it = messages_.rbegin(); it != messages_.rend(); ++it) {
-            if (it->role == currentTokenRole_) {
-                currentMsg = &(*it);
+        for (size_t i = st.messages.size(); i > 0; --i) {
+            if (st.messages[i - 1]->role == st.currentTokenRole) {
+                currentMsg = st.messages[i - 1].get();
                 break;
             }
         }
 
         Element block;
-        if (currentTokenRole_ == Message::Role::Thinking) {
+        if (st.currentTokenRole == Message::Role::Thinking) {
             // 流式输出中的 Thinking：自动展开并显示完整内容，跟随滚动
             Elements lines;
             Elements header;
@@ -252,7 +255,7 @@ std::vector<ScrollItem> AgentTUI::buildMessageItems() {
             }
             lines.push_back(hbox(std::move(header)));
             auto [el, builder] = renderMarkdown(
-                currentToken_,
+                st.currentToken,
                 theme_.thinkingColor,
                 theme_.markdownTheme,
                 msgListWidth
@@ -264,7 +267,7 @@ std::vector<ScrollItem> AgentTUI::buildMessageItems() {
             block = vbox(std::move(lines));
         } else {
             auto [el, builder] = renderMarkdown(
-                currentToken_,
+                st.currentToken,
                 theme_.assistantColor,
                 theme_.markdownTheme,
                 msgListWidth
@@ -275,7 +278,7 @@ std::vector<ScrollItem> AgentTUI::buildMessageItems() {
             block = std::move(el);
         }
         items.push_back(ScrollItem{std::move(block), false});
-        messageItemMeta_.push_back(MessageItemMeta{currentTokenRole_, false, -1});
+        messageItemMeta_.push_back(MessageItemMeta{st.currentTokenRole, false, -1});
     }
 
     return items;

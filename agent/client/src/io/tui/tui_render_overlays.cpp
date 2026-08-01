@@ -7,11 +7,12 @@
 using namespace ftxui;
 
 ftxui::Element AgentTUI::renderModelSelectorOverlay() {
-    const int maxVisible = std::max(5, ftxui::Terminal::Size().dimy / 2);
+    const auto& st         = *frameState_;
+    const int   maxVisible = std::max(5, ftxui::Terminal::Size().dimy / 2);
 
     Elements items;
-    for (size_t i = 0; i < modelNames_.size(); ++i) {
-        auto entry = text(" " + modelNames_[i] + " ");
+    for (size_t i = 0; i < st.modelNames.size(); ++i) {
+        auto entry = text(" " + st.modelNames[i] + " ");
         if (static_cast<int>(i) == selectedModelIndex_) {
             entry = entry | bgcolor(theme_.buttonActiveBgColor)
                     | color(theme_.buttonActiveTextColor) | bold | focus;
@@ -22,7 +23,7 @@ ftxui::Element AgentTUI::renderModelSelectorOverlay() {
     }
 
     Element list;
-    if (modelNames_.empty()) {
+    if (st.modelNames.empty()) {
         list = text(" (no models available) ") | dim;
     } else {
         list = vbox(std::move(items)) | yframe | vscroll_indicator
@@ -40,7 +41,9 @@ ftxui::Element AgentTUI::renderModelSelectorOverlay() {
 }
 
 ftxui::Element AgentTUI::renderStatusBar() {
-    std::string modelName = cachedModelName_;
+    const auto& st = *frameState_;
+
+    std::string modelName = st.cachedModelName;
     if (modelName.empty()) {
         modelName = "<none>";
     }
@@ -89,8 +92,9 @@ void AgentTUI::openModelSelector() {
         sendToPeer(agentxx::agent::WireGetModel{threadId_});
     }
     selectedModelIndex_ = 0;
-    for (size_t i = 0; i < modelNames_.size(); ++i) {
-        if (modelNames_[i] == cachedModelName_) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (size_t i = 0; i < state_->modelNames.size(); ++i) {
+        if (state_->modelNames[i] == state_->cachedModelName) {
             selectedModelIndex_ = static_cast<int>(i);
             break;
         }
@@ -99,9 +103,12 @@ void AgentTUI::openModelSelector() {
 }
 
 void AgentTUI::confirmModelSelection() {
-    if (selectedModelIndex_ >= 0 && selectedModelIndex_ < static_cast<int>(modelNames_.size())) {
-        cachedModelName_ = modelNames_[selectedModelIndex_];
-        requestSelectModel(threadId_, cachedModelName_);
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (selectedModelIndex_ >= 0
+        && selectedModelIndex_ < static_cast<int>(state_->modelNames.size())) {
+        auto& st          = mutableStateLocked();
+        st.cachedModelName = st.modelNames[selectedModelIndex_];
+        requestSelectModel(threadId_, st.cachedModelName);
     }
     showModelSelector_ = false;
 }
@@ -146,8 +153,10 @@ void AgentTUI::applyThemeSelection() {
 }
 
 ftxui::Element AgentTUI::renderPendingInputsOverlay() {
-    pendingInputBoxes_.assign(pendingInputs_.size(), ftxui::Box{});
-    pendingInputDelBoxes_.assign(pendingInputs_.size(), ftxui::Box{});
+    const auto& st = *frameState_;
+
+    pendingInputBoxes_.assign(st.pendingInputs.size(), ftxui::Box{});
+    pendingInputDelBoxes_.assign(st.pendingInputs.size(), ftxui::Box{});
 
     // 顶部: 两端对齐 "待发送消息队列" ... [清空]
     auto clearBtn = text(" 清空 ") | bgcolor(theme_.buttonBgColor) | color(theme_.buttonTextColor)
@@ -160,11 +169,11 @@ ftxui::Element AgentTUI::renderPendingInputsOverlay() {
     });
 
     Elements items;
-    if (pendingInputs_.empty()) {
+    if (st.pendingInputs.empty()) {
         items.push_back(text(" (空) ") | dim);
     }
-    for (size_t i = 0; i < pendingInputs_.size(); ++i) {
-        const auto& pi = pendingInputs_[i];
+    for (size_t i = 0; i < st.pendingInputs.size(); ++i) {
+        const auto& pi = st.pendingInputs[i];
         auto delBtn    = text(" ✕ ") | bgcolor(theme_.buttonBgColor) | color(theme_.systemColor)
                       | reflect(pendingInputDelBoxes_[i]);
         Element row;
@@ -203,21 +212,25 @@ bool AgentTUI::handlePendingInputsMouse(const ftxui::Mouse& mouse) {
     }
     // 清空按钮: 清空队列并关闭弹窗
     if (pendingInputClearBox_.Contain(mouse.x, mouse.y)) {
-        pendingInputs_.clear();
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto&                       st = mutableStateLocked();
+        st.pendingInputs.clear();
         showPendingInputs_ = false;
         return true;
     }
     // 删除按钮 (优先于行展开判定)
-    for (size_t i = 0; i < pendingInputDelBoxes_.size() && i < pendingInputs_.size(); ++i) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto&                       st = mutableStateLocked();
+    for (size_t i = 0; i < pendingInputDelBoxes_.size() && i < st.pendingInputs.size(); ++i) {
         if (pendingInputDelBoxes_[i].Contain(mouse.x, mouse.y)) {
-            pendingInputs_.erase(pendingInputs_.begin() + static_cast<std::ptrdiff_t>(i));
+            st.pendingInputs.erase(st.pendingInputs.begin() + static_cast<std::ptrdiff_t>(i));
             return true;
         }
     }
     // 消息行: 展开/折叠
-    for (size_t i = 0; i < pendingInputBoxes_.size() && i < pendingInputs_.size(); ++i) {
+    for (size_t i = 0; i < pendingInputBoxes_.size() && i < st.pendingInputs.size(); ++i) {
         if (pendingInputBoxes_[i].Contain(mouse.x, mouse.y)) {
-            pendingInputs_[i].expanded = !pendingInputs_[i].expanded;
+            st.pendingInputs[i].expanded = !st.pendingInputs[i].expanded;
             return true;
         }
     }
@@ -225,7 +238,8 @@ bool AgentTUI::handlePendingInputsMouse(const ftxui::Mouse& mouse) {
 }
 
 ftxui::Element AgentTUI::renderContextOverlay() {
-    const auto& msgs = contextMessages_;
+    const auto& st   = *frameState_;
+    const auto& msgs = st.contextMessages;
 
     const int maxVisible = std::max(8, ftxui::Terminal::Size().dimy - 10);
 

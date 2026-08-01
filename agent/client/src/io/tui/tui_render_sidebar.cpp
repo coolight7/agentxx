@@ -224,8 +224,10 @@ bool AgentTUI::handleCollapsibleMouse(const ftxui::Mouse& mouse) {
             continue;
         }
         const size_t mi = collapsibleMsgIndices_[k];
-        if (mi < messages_.size()) {
-            messages_[mi].collapsed = !messages_[mi].collapsed;
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (mi < state_->messages.size()) {
+            auto& msg     = mutableMessageLocked(*state_, mi);
+            msg.collapsed = !msg.collapsed;
             return true;
         }
     }
@@ -233,11 +235,14 @@ bool AgentTUI::handleCollapsibleMouse(const ftxui::Mouse& mouse) {
 }
 
 std::optional<ftxui::Element> AgentTUI::renderPlanningInfo() {
+    const auto& st = *frameState_;
+
     // 取最新的 planning_write toolcall
     const Message* plan = nullptr;
-    for (auto it = messages_.rbegin(); it != messages_.rend(); ++it) {
-        if (it->role == Message::Role::Tool && it->toolName == "planning_write") {
-            plan = &(*it);
+    for (size_t i = st.messages.size(); i > 0; --i) {
+        const auto& m = *st.messages[i - 1];
+        if (m.role == Message::Role::Tool && m.toolName == "planning_write") {
+            plan = &m;
             break;
         }
     }
@@ -296,6 +301,8 @@ std::optional<ftxui::Element> AgentTUI::renderPlanningInfo() {
 }
 
 std::vector<ScrollItem> AgentTUI::renderInfoSidebar() {
+    const auto& st = *frameState_;
+
     Elements elements;
 
     // planning 特化渲染 (存在 planning_write toolcall 时)
@@ -305,7 +312,7 @@ std::vector<ScrollItem> AgentTUI::renderInfoSidebar() {
     }
 
     // 附加加载模块 (MCP/Skill/Memory) 统计 + 明细
-    if (false == appendComponents_.empty()) {
+    if (false == st.appendComponents.empty()) {
         Elements appendComponentsElements;
 
         appendComponentsElements.push_back(text("Append Components") | color(theme_.accentColor));
@@ -315,13 +322,13 @@ std::vector<ScrollItem> AgentTUI::renderInfoSidebar() {
                                agentxx::agent::AppendComponentNotification::Type type,
                                bool                                              splitName) {
             size_t   count = 0;
-            Elements elements;
-            for (const auto& notif : appendComponents_) {
+            Elements elems;
+            for (const auto& notif : st.appendComponents) {
                 if (notif.type != type) {
                     continue;
                 }
                 ++count;
-                elements.push_back(
+                elems.push_back(
                     (splitName ? hbox({
                                      text(fmt::format(
                                          "│   {}·{}",
@@ -344,7 +351,7 @@ std::vector<ScrollItem> AgentTUI::renderInfoSidebar() {
                     })
                     | color(theme_.assistantColor)
                 );
-                appendComponentsElements.push_back(vbox(elements));
+                appendComponentsElements.push_back(vbox(elems));
             }
         };
         appendGroup("Memory", agentxx::agent::AppendComponentNotification::Type::Memory, true);
@@ -399,12 +406,14 @@ ftxui::Element AgentTUI::renderInfoSidebarFooter() {
 }
 
 ftxui::Element AgentTUI::renderLogSidebarFooter() {
+    const auto& st = *frameState_;
+
     Elements row;
 
-    if (currentNodeName_.empty()) {
+    if (st.currentNodeName.empty()) {
         row.push_back(text(" idle") | color(theme_.hintColor));
     } else {
-        row.push_back(text(" > " + currentNodeName_) | color(theme_.accentColor));
+        row.push_back(text(" > " + st.currentNodeName) | color(theme_.accentColor));
     }
 
     row.push_back(filler());
