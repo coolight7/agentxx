@@ -105,10 +105,13 @@ asio::awaitable<void> SkillMiddlewareHandle::onAgentcallStartFunc(neograph::grap
     }
     // list skills / load skill metadata
     if (false == haveLoadSkillMetadata) {
+        // 先置位防止并发会话重复进入加载; 但加载结果先写入局部变量, 完成后再整体替换 skillCache。
+        // 加载循环含 co_await, 挂起期间其他会话若读 skillCache 只会看到空缓存(整体赋值尚未发生),
+        // 不会看到半加载状态 (单线程协程模型下整体赋值不被打断)。
         haveLoadSkillMetadata = true;
 
-        skillCache.skillData.clear();
-        skillCache.loadErrors.clear();
+        decltype(skillCache.skillData)  loadedData;
+        decltype(skillCache.loadErrors) loadedErrors;
         auto skillQueue
             = std::vector<std::string>{initSkillDirPaths.begin(), initSkillDirPaths.end()};
         for (size_t i = 0; i < skillQueue.size(); ++i) {
@@ -120,9 +123,9 @@ asio::awaitable<void> SkillMiddlewareHandle::onAgentcallStartFunc(neograph::grap
                         // load skill metadata
                         const auto [err, metadata] = co_await readSkillFile(itempath);
                         if (err.empty()) {
-                            skillCache.skillData[itempath] = metadata;
+                            loadedData[itempath] = metadata;
                         } else {
-                            skillCache.loadErrors[itempath] = err;
+                            loadedErrors[itempath] = err;
                         }
                     } else {
                         // 添加子目录等待加载
@@ -134,9 +137,13 @@ asio::awaitable<void> SkillMiddlewareHandle::onAgentcallStartFunc(neograph::grap
                     }
                 }
             } catch (const std::exception& e) {
-                skillCache.loadErrors[itempath] = e.what();
+                loadedErrors[itempath] = e.what();
             }
         }
+
+        // 加载完成, 整体替换缓存
+        skillCache.skillData  = std::move(loadedData);
+        skillCache.loadErrors = std::move(loadedErrors);
 
         std::string content;
         for (const auto& item : skillCache.skillData) {
