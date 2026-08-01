@@ -1,4 +1,5 @@
 #include "agentxx/util/regex.h"
+#include "agentxx/util/exception.h"
 #include "agentxx/util/log.h"
 #include <algorithm>
 
@@ -242,14 +243,30 @@ private:
 
 std::shared_ptr<agentxx::util::XXRegex>
     agentxx::util::XXRegex::createRegex(const std::string& regstr, unsigned int flags) {
-    return std::make_shared<XXRegexHP>(regstr, flags);
+    return agentxx::util::catchError<std::shared_ptr<agentxx::util::XXRegex>>(
+        [&]() -> std::shared_ptr<agentxx::util::XXRegex> {
+            return std::make_shared<XXRegexHP>(regstr, flags);
+        },
+        [&](std::string errinfo) -> std::shared_ptr<agentxx::util::XXRegex> {
+            XX_LOGE("Regex compilation failed: {} | {}", errinfo, regstr);
+            return nullptr;
+        }
+    );
 }
 
 std::shared_ptr<agentxx::util::XXRegex> agentxx::util::XXRegex::createRegex(
     const std::vector<std::string>& regstrs,
     unsigned int                    flags
 ) {
-    return std::make_shared<XXRegexHP>(regstrs, flags);
+    return agentxx::util::catchError<std::shared_ptr<agentxx::util::XXRegex>>(
+        [&]() -> std::shared_ptr<agentxx::util::XXRegex> {
+            return std::make_shared<XXRegexHP>(regstrs, flags);
+        },
+        [&](std::string errinfo) -> std::shared_ptr<agentxx::util::XXRegex> {
+            XX_LOGE("Regex compilation failed: {} | {}", errinfo, regstrs.size());
+            return nullptr;
+        }
+    );
 }
 
 #else
@@ -416,14 +433,30 @@ private:
 
 std::shared_ptr<agentxx::util::XXRegex>
     agentxx::util::XXRegex::createRegex(const std::string& regstr, unsigned int flags) {
-    return std::make_shared<XXRegexStdRegex>(regstr, flags);
+    return agentxx::util::catchError<std::shared_ptr<agentxx::util::XXRegex>>(
+        [&]() -> std::shared_ptr<agentxx::util::XXRegex> {
+            return std::make_shared<XXRegexStdRegex>(regstr, flags);
+        },
+        [&](std::string errinfo) -> std::shared_ptr<agentxx::util::XXRegex> {
+            XX_LOGE("Regex compilation failed: {} | {}", errinfo, regstr);
+            return nullptr;
+        }
+    );
 }
 
 std::shared_ptr<agentxx::util::XXRegex> agentxx::util::XXRegex::createRegex(
     const std::vector<std::string>& regstrs,
     unsigned int                    flags
 ) {
-    return std::make_shared<XXRegexStdRegex>(regstrs, flags);
+    return agentxx::util::catchError<std::shared_ptr<agentxx::util::XXRegex>>(
+        [&]() -> std::shared_ptr<agentxx::util::XXRegex> {
+            return std::make_shared<XXRegexStdRegex>(regstrs, flags);
+        },
+        [&](std::string errinfo) -> std::shared_ptr<agentxx::util::XXRegex> {
+            XX_LOGE("Regex compilation failed: {} | {}", errinfo, regstrs.size());
+            return nullptr;
+        }
+    );
 }
 
 #endif

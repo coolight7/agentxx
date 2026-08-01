@@ -116,3 +116,4 @@ memory_files:
   # - "/absolute/path/to/context.md"
   # - "relative/path/to/AGENTS.md"
   - "AGENTS.md"
+  - ".agentxx/memory/self.md"
