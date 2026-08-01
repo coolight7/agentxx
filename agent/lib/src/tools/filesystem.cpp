@@ -770,7 +770,9 @@ asio::awaitable<std::string> FilesystemWriteFileTool::execute_async(const neogra
         asio::stream_file stream{currentIoCtx};
         auto              path = std::filesystem::path(filepath);
         if (false == overwrite && std::filesystem::exists(path)) {
-            throw std::runtime_error{"File already exist"};
+            throw std::runtime_error{
+                "File already exist. Set `overwrite` = true if want to overwrite."
+            };
         }
         if (false == std::filesystem::exists(path.parent_path())
             && false == std::filesystem::create_directories(path.parent_path())) {
@@ -824,7 +826,9 @@ asio::awaitable<std::string> FilesystemWriteFileTool::execute_async(const neogra
         std::ofstream stream;
         auto          path = std::filesystem::path(filepath);
         if (false == overwrite && std::filesystem::exists(path)) {
-            throw std::runtime_error{"File already exist"};
+            throw std::runtime_error{
+                "File already exist. Set `overwrite` = true if want to overwrite."
+            };
         }
         if (false == std::filesystem::exists(path.parent_path())
             && false == std::filesystem::create_directories(path.parent_path())) {

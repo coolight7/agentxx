@@ -146,6 +146,12 @@ struct IgnoreCaseHash {
     size_t operator()(std::string_view s) const {
         return std::hash<std::string>()(toLower(s));
     }
+
+    // 支持 const char* 透明查找 (字符串字面量), 否则字面量同时可转换到
+    // std::string 与 std::string_view, 导致重载解析歧义无法编译
+    size_t operator()(const char* s) const {
+        return (*this)(std::string_view{s});
+    }
 };
 
 // 不区分大小写相等判断
@@ -789,9 +795,10 @@ inline PinyinCallback s_pinyinCallback = nullptr;
         ++index;
     }
 
-    // 格式化输出：如果整数部分≥100，则去掉小数
-    std::stringstream oss;
-    if (std::floor(size) >= 100.0) {
+    // 格式化输出: size 为整数时无小数 (避免 "1" 显示为 "1.0"),
+    // 否则保留一位小数 (如 1.5K); 原逻辑仅按 >=100 去掉小数,
+    // 导致 formatSize(1) 返回 "1.0" 这类不合理显示
+    if (size == std::floor(size)) {
         return fmt::format("{}{}", int64_t(size), units[index]);
     } else {
         return fmt::format("{:.1f}{}", size, units[index]);

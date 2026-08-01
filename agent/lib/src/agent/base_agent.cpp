@@ -331,11 +331,8 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
     const auto start_time_ms = static_cast<int64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(start_time.time_since_epoch()).count()
     );
-    auto    node_start_time    = std::chrono::system_clock::now();
-    int64_t node_start_time_ms = static_cast<int64_t>(
-        std::chrono::duration_cast<std::chrono::milliseconds>(node_start_time.time_since_epoch())
-            .count()
-    );
+    auto node_start_time    = start_time;
+    auto node_start_time_ms = start_time_ms;
 
     auto emitDelta = [&](Delta delta) {
         delta.seq = session->deltaSeq.fetch_add(1, std::memory_order_acq_rel) + 1;
@@ -500,7 +497,8 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                 }
             } break;
             case T::NODE_START: {
-                node_start_time = std::chrono::system_clock::now();
+                lastChatChunkType = neograph::ChatStreamChunk::TYPE_UNKNOWN;
+                node_start_time   = std::chrono::system_clock::now();
                 node_start_time_ms
                     = static_cast<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
                                                node_start_time.time_since_epoch()
