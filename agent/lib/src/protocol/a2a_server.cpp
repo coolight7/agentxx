@@ -298,7 +298,7 @@ json A2aServer::handleSendMessage(const json& id, const json& params) {
     auto taskId    = message.value("taskId", std::string{});
     auto contextId = message.value("contextId", std::string{});
 
-    std::shared_ptr<TaskRecord> task;
+    std::shared_ptr<TaskRecord> task = nullptr;
     {
         std::lock_guard<std::mutex> lock(tasksMutex_);
 
@@ -441,7 +441,7 @@ json A2aServer::handleCancelTask(const json& id, const json& params) {
         return jsonRpcError(id, -32602, "Invalid params: id is required");
     }
 
-    std::shared_ptr<TaskRecord> task;
+    std::shared_ptr<TaskRecord> task = nullptr;
     {
         std::lock_guard<std::mutex> lock(tasksMutex_);
         auto                        it = tasks_.find(taskId);

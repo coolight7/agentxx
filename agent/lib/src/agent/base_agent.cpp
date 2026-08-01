@@ -331,6 +331,11 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
     const auto start_time_ms = static_cast<int64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(start_time.time_since_epoch()).count()
     );
+    auto    node_start_time    = std::chrono::system_clock::now();
+    int64_t node_start_time_ms = static_cast<int64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(node_start_time.time_since_epoch())
+            .count()
+    );
 
     auto emitDelta = [&](Delta delta) {
         delta.seq = session->deltaSeq.fetch_add(1, std::memory_order_acq_rel) + 1;
@@ -366,28 +371,51 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
     auto cancelToken = std::make_shared<neograph::graph::CancelToken>();
     session->setCancelToken(cancelToken);
 
-    auto internalEventCallback = [session, emitDelta, ioPtr, start_time_ms, start_time](
-                                     const neograph::graph::GraphEvent& event
-                                 ) {
+    auto lastChatChunkType = neograph::ChatStreamChunk::TYPE_UNKNOWN;
+
+    auto internalEventCallback = [session,
+                                  emitDelta,
+                                  ioPtr,
+                                  &lastChatChunkType,
+                                  &start_time,
+                                  &start_time_ms,
+                                  &node_start_time,
+                                  &node_start_time_ms](const neograph::graph::GraphEvent& event) {
         using T = neograph::graph::GraphEvent::Type;
         switch (event.type) {
             case T::LLM_TOKEN: {
                 std::string token;
-                bool        isThinking = false;
+                bool        sendDuration = false;
+
                 if (event.data.is_string()) {
-                    token = event.data.get<std::string>();
+                    token             = event.data.get<std::string>();
+                    lastChatChunkType = neograph::ChatStreamChunk::TYPE_CONTENT;
                 } else if (event.data.is_object()) {
                     neograph::ChatStreamChunk chunk;
                     neograph::from_json(event.data, chunk);
-                    token      = std::move(chunk.data);
-                    isThinking = (chunk.type == neograph::ChatStreamChunk::TYPE_THINKING);
+                    token             = std::move(chunk.data);
+                    sendDuration      = (lastChatChunkType != chunk.type);
+                    lastChatChunkType = chunk.type;
                 }
+
                 emitDelta(Delta{
-                    .type = isThinking ? Delta::Type::ThinkingToken : Delta::Type::TextToken,
-                    .text = std::move(token),
+                    .type        = (lastChatChunkType == neograph::ChatStreamChunk::TYPE_THINKING)
+                                       ? Delta::Type::ThinkingToken
+                                       : Delta::Type::TextToken,
+                    .text        = std::move(token),
+                    .startTimeMs = node_start_time_ms,
+                    .durationMs  = sendDuration
+                                       ? static_cast<int64_t>(
+                                            std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                std::chrono::system_clock::now() - node_start_time
+                                            )
+                                                .count()
+                                        )
+                                       : 0,
                 });
             } break;
             case T::CHANNEL_WRITE: {
+                // TODO: 改为使用 LLM_TOKEN 实现
                 auto chan  = event.data.value("channel", std::string{});
                 auto value = event.data.value("value", neograph::json{});
                 if (chan != "messages" || !value.is_array()) {
@@ -472,22 +500,29 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                 }
             } break;
             case T::NODE_START: {
+                node_start_time = std::chrono::system_clock::now();
+                node_start_time_ms
+                    = static_cast<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                               node_start_time.time_since_epoch()
+                    )
+                                               .count());
                 emitDelta(Delta{
-                    .type     = Delta::Type::NodeStart,
-                    .nodeName = event.node_name,
+                    .type        = Delta::Type::NodeStart,
+                    .nodeName    = event.node_name,
+                    .startTimeMs = node_start_time_ms,
                 });
             } break;
             case T::NODE_END: {
                 // 计算持续时间
                 const int64_t duration_ms
                     = static_cast<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
-                                               std::chrono::system_clock::now() - start_time
+                                               std::chrono::system_clock::now() - node_start_time
                     )
                                                .count());
                 emitDelta(Delta{
                     .type        = Delta::Type::NodeEnd,
                     .nodeName    = event.node_name,
-                    .startTimeMs = start_time_ms,
+                    .startTimeMs = node_start_time_ms,
                     .durationMs  = duration_ms,
                 });
             } break;
