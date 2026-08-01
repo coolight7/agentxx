@@ -54,6 +54,10 @@ void AcpProtocolHandler::stop() {
         }
     }
     workersCv_.notify_all();
+    // 等待所有在途 worker 结束: worker 为 detached 线程, 若不等待, 本对象析构后
+    // 仍在运行的 worker 会访问已销毁成员 (agent_/sessions/sink) → UAF。
+    // worker 检测到 cancel/stop 标志后退出 (callClient 亦自带超时, 不会永久阻塞)。
+    drainWorkers();
 }
 
 json AcpProtocolHandler::handleMessage(const json& env) {
@@ -668,7 +672,16 @@ asio::awaitable<void> HttpAcpServer::handleAcpRequest(
         }
     }
 
-    auto status = future.wait_for(config_.asyncTimeout);
+    // 协程感知的异步等待: 周期性挂起(让出线程)检查 future, 直到就绪或超时。
+    // 直接 future.wait_for 会阻塞整个 executor 线程, 卡死同线程上的其他协程/请求。
+    const auto         deadline = std::chrono::steady_clock::now() + config_.asyncTimeout;
+    std::future_status status   = future.wait_for(std::chrono::milliseconds(0));
+    while (std::future_status::timeout == status && std::chrono::steady_clock::now() < deadline) {
+        asio::steady_timer timer(co_await asio::this_coro::executor);
+        timer.expires_after(std::chrono::milliseconds(20));
+        co_await timer.async_wait(asio::use_awaitable);
+        status = future.wait_for(std::chrono::milliseconds(0));
+    }
     if (status == std::future_status::timeout) {
         std::unique_lock lock(pendingMutex_);
         pendingResponses_.erase(idVal);
