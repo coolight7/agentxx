@@ -50,6 +50,20 @@ inline std::ostream& warnStream() {
     return std::cerr << "[WARN] ";
 }
 
+// 可流式输出检测: 某些类型 (std::errc/error_code 等) 无 operator<<,
+// 失败输出时以占位符代替, 避免 XX_TEST_EXPECT_EQ 因无法打印而编译失败
+template<typename T>
+concept Streamable = requires(std::ostream& os, const T& t) { os << t; };
+
+template<typename T>
+void printTestValue(std::ostream& os, const T& v) {
+    if constexpr (Streamable<T>) {
+        os << v;
+    } else {
+        os << "<unprintable>";
+    }
+}
+
 } // namespace test
 } // namespace agentxx
 
@@ -82,17 +96,20 @@ inline std::ostream& warnStream() {
         }                                                                    \
     } while (0)
 
-#define XX_TEST_EXPECT_EQ(expr, expected)                                                \
-    do {                                                                                 \
-        auto _result   = (expr);                                                         \
-        auto _expected = (expected);                                                     \
-        if (_result == _expected) {                                                      \
-            XX_TEST_PASSED++;                                                            \
-        } else {                                                                         \
-            XX_TEST_FAILED++;                                                            \
-            TEST_FAIL << "line " << __LINE__ << ": expected " << (_expected) << ", got " \
-                      << (_result) << std::endl;                                         \
-        }                                                                                \
+#define XX_TEST_EXPECT_EQ(expr, expected)                            \
+    do {                                                             \
+        auto _result   = (expr);                                     \
+        auto _expected = (expected);                                 \
+        if (_result == _expected) {                                  \
+            XX_TEST_PASSED++;                                        \
+        } else {                                                     \
+            XX_TEST_FAILED++;                                        \
+            TEST_FAIL << "line " << __LINE__ << ": expected ";       \
+            agentxx::test::printTestValue(std::cout, _expected);     \
+            std::cout << ", got ";                                   \
+            agentxx::test::printTestValue(std::cout, _result);       \
+            std::cout << std::endl;                                  \
+        }                                                            \
     } while (0)
 
 #define XX_TEST_EXPECT_NULLOPT(expr)                                               \

@@ -9,6 +9,7 @@
 #include "test_a2a.h"
 #include "test_acp.h"
 #include "test_agent.h"
+#include "test_aho_corasick.h"
 #include "test_anthropic_provider.h"
 #include "test_codegraph_tools.h"
 #include "test_command_tools.h"
@@ -37,6 +38,7 @@
 #include "test_string_util.h"
 #include "test_subagent_bus.h"
 #include "test_text_selection_monitor.h"
+#include "test_util_misc.h"
 #include "test_web_search_tools.h"
 #include "test_websocket.h"
 #include <cstring>
@@ -106,6 +108,8 @@ int main(int argn, char** argv) {
     runSync("concurrency", agentxx::test::testConcurrency);
     runSync("lockless", agentxx::test::testLockless);
     runSync("misc_fixes", agentxx::test::testMiscFixes);
+    runSync("aho_corasick", agentxx::test::testAhoCorasick);
+    runSync("util_misc", agentxx::test::testUtilMisc);
 
     // ---- 异步测试模块 ----
     asio::co_spawn(

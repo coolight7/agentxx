@@ -4,6 +4,7 @@
 #include "agentxx/agent/model_registry.h"
 #include "agentxx/protocol/mcp_server.h"
 #include "agentxx/util/async_mutex.h"
+#include "agentxx/util/async_offload.h"
 #include "agentxx/util/log.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
@@ -31,7 +32,7 @@ namespace {
 struct CountingSink : public agentxx::util::LogSink {
     std::atomic<size_t> count{0};
 
-    void onLog(agentxx::util::LogLevel, std::string_view) override {
+    void onLog(const agentxx::util::LogEntry&) override {
         count.fetch_add(1, std::memory_order_relaxed);
     }
 };
@@ -70,6 +71,11 @@ void testLogDispatcherConcurrency() {
     start.store(true, std::memory_order_release);
     for (auto& th : threads) {
         th.join();
+    }
+
+    // dispatch 仅入队, 需 pump 消费后 onLog 才执行
+    for (int i = 0; i < kSinks; ++i) {
+        sinks[i]->pump();
     }
 
     const size_t expected = static_cast<size_t>(kThreads) * kPerThread;
@@ -244,6 +250,104 @@ void testAsyncMutex() {
     XX_TEST_EXPECT_EQ(sharedCounter, kCoros * kIter * 2);
 }
 
+// ---------------------------------------------------------------------------
+// AsyncOffload: 阻塞任务卸载到线程池
+// ---------------------------------------------------------------------------
+
+void testAsyncOffload() {
+    using namespace agentxx::util;
+
+    // 1. offloadAsync: 卸载到线程池执行并返回结果
+    {
+        asio::io_context   ioc;
+        asio::thread_pool  pool(2);
+        std::atomic<bool>  ranOnWorker{false};
+
+        asio::co_spawn(
+            ioc,
+            [&]() -> asio::awaitable<void> {
+                auto v = co_await agentxx::util::offloadAsync<int>(
+                    pool,
+                    [&]() -> asio::awaitable<int> {
+                        ranOnWorker.store(true, std::memory_order_release);
+                        co_return 42;
+                    }
+                );
+                XX_TEST_EXPECT_EQ(v, 42);
+            },
+            asio::detached
+        );
+        ioc.run();
+        pool.join();
+        XX_TEST_EXPECT_TRUE(ranOnWorker.load());
+    }
+
+    // 2. offloadCancellableAsync: 正常完成返回结果 (未取消)
+    {
+        asio::io_context  ioc;
+        asio::thread_pool pool(1);
+        asio::co_spawn(
+            ioc,
+            [&]() -> asio::awaitable<void> {
+                auto v = co_await agentxx::util::offloadCancellableAsync<int>(
+                    pool,
+                    [](std::atomic<bool>&) -> asio::awaitable<int> {
+                        co_return 7;
+                    }
+                );
+                XX_TEST_EXPECT_EQ(v, 7);
+            },
+            asio::detached
+        );
+        ioc.run();
+        pool.join();
+    }
+
+    // 3. offloadCancellableAsync 外部 cancelFlag 版本: 工作线程轮询检测取消并提前退出
+    {
+        asio::io_context   ioc;
+        asio::thread_pool  pool(1);
+        auto               flag = std::make_shared<std::atomic<bool>>(false);
+        std::atomic<bool>  workerSawCancel{false};
+
+        asio::co_spawn(
+            ioc,
+            [&]() -> asio::awaitable<void> {
+                bool threw = false;
+                try {
+                    co_await agentxx::util::offloadCancellableAsync<int>(
+                        pool,
+                        flag,
+                        [&](std::atomic<bool>& cancel_flag) -> asio::awaitable<int> {
+                            // 工作线程: 轮询外部取消标志
+                            while (!cancel_flag.load(std::memory_order_acquire)) {
+                                std::this_thread::yield();
+                            }
+                            workerSawCancel.store(true, std::memory_order_release);
+                            throw neograph::graph::CancelledException("external cancel");
+                        }
+                    );
+                } catch (const neograph::graph::CancelledException&) {
+                    threw = true;
+                }
+                XX_TEST_EXPECT_TRUE(threw);
+            },
+            asio::detached
+        );
+
+        // 稍后从外部设置取消标志
+        std::thread setter([&]() {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            flag->store(true, std::memory_order_release);
+        });
+        ioc.run();
+        setter.join();
+        pool.join();
+
+        XX_TEST_EXPECT_TRUE(workerSawCancel.load());
+    }
+}
+
 } // namespace
 
 TestResult testConcurrency() {
@@ -254,6 +358,7 @@ TestResult testConcurrency() {
     testModelRegistryConcurrency();
     testMcpServerRegistrationConcurrency();
     testAsyncMutex();
+    testAsyncOffload();
 
     return TestResult{g_conc_passed, g_conc_failed};
 }
