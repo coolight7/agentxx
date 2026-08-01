@@ -52,7 +52,7 @@ namespace {
 
 // 构建单行日志元素 (按日志级别着色 + 前缀)
 ftxui::Element buildLogLine(const TUILogSink::Line& line, const TUITheme& theme) {
-    ftxui::Color c      = theme.assistantColor;
+    ftxui::Color c = theme.assistantColor;
     std::string  prefix;
     switch (line.level) {
         case agentxx::util::LogLevel::Debug:
@@ -84,7 +84,9 @@ ftxui::Element buildLogLine(const TUILogSink::Line& line, const TUITheme& theme)
 std::vector<ScrollItem> AgentTUI::renderLogWindow() {
     auto lines = logSink_ ? logSink_->snapshot() : std::vector<TUILogSink::Line>{};
     if (lines.empty()) {
-        return {ScrollItem{text(" (no logs) ") | dim, false}};
+        return {
+            ScrollItem{text(" (no logs) ") | dim, false}
+        };
     }
     // 日志仅追加: 按行索引缓存元素, 仅构建新增行 (避免每帧重建全部日志行)
     if (logLineCache_.size() > lines.size()) {
@@ -306,7 +308,7 @@ std::vector<ScrollItem> AgentTUI::renderInfoSidebar() {
     if (false == appendComponents_.empty()) {
         Elements appendComponentsElements;
 
-        appendComponentsElements.push_back(text("+ Append Components") | color(theme_.accentColor));
+        appendComponentsElements.push_back(text("Append Components") | color(theme_.accentColor));
 
         // 输出一组: 先显示统计数量, 再逐行列出名称 (失败项用错误色标注)
         auto appendGroup = [&](std::string_view                                  label,

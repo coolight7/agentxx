@@ -3,6 +3,7 @@
 #include "agentxx-client/io/tui/scrollable.h"
 #include "agentxx-client/io/tui/tui_theme.h"
 #include "agentxx/agent/agent_io.h"
+#include <markdown/dom_builder.hpp>
 #include "agentxx/agent/context.h"
 #include "agentxx/util/log.h"
 #include "asio/awaitable.hpp"
@@ -25,7 +26,7 @@
 
 /// TUI 日志接收器
 /// - 注册到 agentxx::util::LogDispatcher 以接收 XX_LOG 系列日志
-/// - 线程安全缓存日志行, 供右侧边栏日志窗口渲染
+/// - 宿主为 UI 线程: 由 UI Loop 每帧调 pump() 消费, onLog/snapshot/clear 均在 UI 线程, 无需加锁
 class TUILogSink : public agentxx::util::LogSink {
 public:
 
@@ -34,21 +35,20 @@ public:
         std::string             text;
     };
 
-    void onLog(agentxx::util::LogLevel level, std::string_view message) override;
-
-    /// 拷贝当前缓存的日志行 (供渲染线程读取)
+    /// 拷贝当前缓存的日志行 (UI 线程调用)
     std::vector<Line> snapshot() const;
-
-    void setOnNewLog(std::function<void()> cb);
 
     void clear();
 
+protected:
+
+    /// UI 线程串行调用 (经 pump), 无需加锁
+    void onLog(const agentxx::util::LogEntry& entry) override;
+
 private:
 
-    mutable std::mutex    mutex_;
-    std::deque<Line>      lines_;
-    size_t                maxLines_ = 2000;
-    std::function<void()> onNewLog_;
+    std::deque<Line> lines_;
+    size_t           maxLines_ = 2000;
 };
 
 /// TUI
@@ -117,6 +117,9 @@ private:
     struct MessageCache {
         ftxui::Element element; // 缓存的渲染元素
         int64_t        sig = 0; // 内容签名 (64 位哈希, 变化时重建)
+        /// markdown DomBuilder 持有 reflect() 引用的 Box (LinkTarget::boxes),
+        /// 必须与 element 同生命周期, 否则 reflect 写入悬空引用 → UAF
+        std::vector<std::unique_ptr<markdown::DomBuilder>> mdBuilders;
     };
 
     /// 消息列表子项元数据 (与 buildMessageItems 返回的 items 一一对应),
@@ -144,6 +147,8 @@ private:
 
     /// 消息元素缓存 (按 messages_ 索引; 仅内容变化的消息重建 Element)
     std::vector<MessageCache> messageCache_;
+    /// 流式 token 的 markdown DomBuilder (每帧重建, 须与帧内 element 同生命周期)
+    std::vector<std::unique_ptr<markdown::DomBuilder>> streamingMdBuilders_;
     /// 消息列表子项元数据 (每帧由 buildMessageItems 填充)
     std::vector<MessageItemMeta> messageItemMeta_;
     /// 日志行元素缓存 (日志仅追加, 按行索引缓存避免每帧重建)
@@ -214,14 +219,13 @@ private:
     /// 本 TUI 绑定的 executor (供 onPeerMessage 中 co_spawn 使用)
     asio::any_io_executor ex_;
 
-    ftxui::ScreenInteractive* screen() const {
-        return screen_.load(std::memory_order_acquire);
-    }
-
-    // screen_ 由 UI 线程写、agent/日志线程经 postRedraw 读, 必须原子化避免数据竞争与 UAF
-    std::atomic<ftxui::ScreenInteractive*> screen_{nullptr};
-    std::thread                            uiThread_;
-    std::atomic<bool>                      running_{false};
+    // screen_ 由 UI 线程创建/销毁, agent/日志线程经 postRedraw 读;
+    // 经 screenMutex_ + shared_ptr 保护: 并发读取方持有引用计数,
+    // 确保 UI 线程退出并销毁 App 期间 postRedraw 不会访问已销毁对象 (UAF)
+    std::mutex                                    screenMutex_;
+    std::shared_ptr<ftxui::ScreenInteractive> screen_;
+    std::thread                                  uiThread_;
+    std::atomic<bool>                            running_{false};
 
     /// handleInterrupt 正在等待用户输入时为 true;
     /// 此时 Enter 须把输入直接送入 inputChannel_ (而非 isStreaming_ 待发送队列), 否则死锁
@@ -252,7 +256,11 @@ private:
     /// 同时填充 messageItemMeta_ 与 messageCache_ (仅重建内容变化的消息)
     std::vector<ScrollItem> buildMessageItems();
     /// 构建单条消息的渲染块 (不含末尾空行); 仅在消息签名变化时调用并缓存
-    ftxui::Element buildMessageBlock(const Message& msg);
+    /// mdBuilders 收集 markdown DomBuilder (其内部 Box 被 reflect() 引用, 须与 element 同生命周期)
+    ftxui::Element buildMessageBlock(
+        const Message&                                   msg,
+        std::vector<std::unique_ptr<markdown::DomBuilder>>& mdBuilders
+    );
     /// 计算消息内容签名 (64 位哈希; 签名不变则复用缓存元素)
     static int64_t messageSignature(const Message& msg);
     /// 特化渲染 filesystem_edit_text_file (git diff 对比), 实现见 tui_render_edittool.cpp

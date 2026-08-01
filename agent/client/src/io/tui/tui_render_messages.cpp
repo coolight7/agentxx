@@ -19,16 +19,18 @@ std::string oneLinePreview(std::string_view s, size_t max = 60) {
     return line;
 }
 
-ftxui::Element
+/// 渲染 markdown 并返回元素 + DomBuilder (builder 内部 Box 被 reflect() 引用,
+/// 必须与返回的 element 同生命周期, 否则 SetBox 写入悬空引用 → UAF)
+std::pair<ftxui::Element, std::unique_ptr<markdown::DomBuilder>>
     renderMarkdown(std::string_view text, ftxui::Color color, markdown::Theme const& mdTheme) {
     if (text.empty()) {
-        return ftxui::text("");
+        return {ftxui::text(""), nullptr};
     }
-    auto                 parser = markdown::make_cmark_parser();
-    auto                 ast    = parser->parse(text);
-    markdown::DomBuilder builder;
-    auto                 el = builder.build(ast, -1, mdTheme);
-    return el | ftxui::color(color);
+    auto parser  = markdown::make_cmark_parser();
+    auto ast     = parser->parse(text);
+    auto builder = std::make_unique<markdown::DomBuilder>();
+    auto el      = builder->build(ast, -1, mdTheme);
+    return {el | ftxui::color(color), std::move(builder)};
 }
 
 // 格式化毫秒到可读字符串，自动选择最合适的单位
@@ -81,15 +83,24 @@ int64_t AgentTUI::messageSignature(const Message& msg) {
 
 // 构建单条消息的渲染块 (不含末尾空行)。
 // 由 buildMessageItems 在消息签名变化时调用并缓存。
-ftxui::Element AgentTUI::buildMessageBlock(const Message& msg) {
+ftxui::Element AgentTUI::buildMessageBlock(
+    const Message&                                      msg,
+    std::vector<std::unique_ptr<markdown::DomBuilder>>& mdBuilders
+) {
     switch (msg.role) {
         case Message::Role::User:
             return hbox({
                 text("> ") | color(theme_.userColor),
                 paragraph(msg.text) | color(theme_.userColor),
             });
-        case Message::Role::Assistant:
-            return renderMarkdown(msg.text, theme_.assistantColor, theme_.markdownTheme);
+        case Message::Role::Assistant: {
+            auto [el, builder]
+                = renderMarkdown(msg.text, theme_.assistantColor, theme_.markdownTheme);
+            if (builder) {
+                mdBuilders.push_back(std::move(builder));
+            }
+            return el;
+        }
         case Message::Role::System:
             return hbox({
                 text("# ") | color(theme_.systemColor),
@@ -114,12 +125,18 @@ ftxui::Element AgentTUI::buildMessageBlock(const Message& msg) {
             }
 
             if (!expanded) {
-                header.push_back(text(oneLinePreview(msg.text)) | color(theme_.thinkingColor));
+                header.push_back(
+                    text(oneLinePreview(msg.text)) | color(theme_.thinkingColor) | dim
+                );
             }
             lines.push_back(hbox(std::move(header)));
             if (expanded) {
-                lines.push_back(renderMarkdown(msg.text, theme_.thinkingColor, theme_.markdownTheme)
-                );
+                auto [el, builder]
+                    = renderMarkdown(msg.text, theme_.thinkingColor, theme_.markdownTheme);
+                if (builder) {
+                    mdBuilders.push_back(std::move(builder));
+                }
+                lines.push_back(std::move(el));
             }
             return vbox(std::move(lines));
         }
@@ -134,12 +151,12 @@ ftxui::Element AgentTUI::buildMessageBlock(const Message& msg) {
             );
             if (!expanded) {
                 if (!msg.toolFinished) {
-                    header.push_back(text("running...") | color(theme_.hintColor));
+                    header.push_back(text("running...") | color(theme_.toolColor));
                 } else if (isEditTool) {
                     appendEditToolHeader(msg, header);
                 } else {
                     header.push_back(
-                        text(oneLinePreview(msg.toolResult)) | color(theme_.toolColor)
+                        text(oneLinePreview(msg.toolResult)) | color(theme_.toolColor) | dim
                     );
                 }
             }
@@ -151,7 +168,7 @@ ftxui::Element AgentTUI::buildMessageBlock(const Message& msg) {
                 } else {
                     if (!msg.text.empty()) {
                         lines.push_back(hbox({
-                            text("  args: ") | color(theme_.hintColor),
+                            text("  args: ") | color(theme_.toolColor),
                             paragraph(msg.text) | color(theme_.toolColor),
                         }));
                     }
@@ -162,7 +179,7 @@ ftxui::Element AgentTUI::buildMessageBlock(const Message& msg) {
                             paragraph(msg.toolResult) | color(rc),
                         }));
                     } else {
-                        lines.push_back(text("  running...") | color(theme_.hintColor));
+                        lines.push_back(text("  running...") | color(theme_.toolColor));
                     }
                 }
             }
@@ -215,8 +232,9 @@ std::vector<ScrollItem> AgentTUI::buildMessageItems() {
         int64_t     sig   = messageSignature(msg);
         if (cache.sig != sig || !cache.element) {
             // 内容/状态变化 -> 重建块元素 (markdown 仅在此解析)
+            cache.mdBuilders.clear();
             cache.element = vbox({
-                buildMessageBlock(msg),
+                buildMessageBlock(msg, cache.mdBuilders),
                 text(""),
             });
             cache.sig     = sig;
@@ -229,6 +247,7 @@ std::vector<ScrollItem> AgentTUI::buildMessageItems() {
     }
 
     // 流式输出中的当前 token (每帧重建, 不缓存)
+    streamingMdBuilders_.clear();
     if (hasStreamingToken) {
         // 查找最近的对应角色消息以获取时间信息
         const Message* currentMsg = nullptr;
@@ -252,12 +271,20 @@ std::vector<ScrollItem> AgentTUI::buildMessageItems() {
                 );
             }
             lines.push_back(hbox(std::move(header)));
-            lines.push_back(
-                renderMarkdown(currentToken_, theme_.thinkingColor, theme_.markdownTheme)
-            );
+            auto [el, builder]
+                = renderMarkdown(currentToken_, theme_.thinkingColor, theme_.markdownTheme);
+            if (builder) {
+                streamingMdBuilders_.push_back(std::move(builder));
+            }
+            lines.push_back(std::move(el));
             block = vbox(std::move(lines));
         } else {
-            block = renderMarkdown(currentToken_, theme_.assistantColor, theme_.markdownTheme);
+            auto [el, builder]
+                = renderMarkdown(currentToken_, theme_.assistantColor, theme_.markdownTheme);
+            if (builder) {
+                streamingMdBuilders_.push_back(std::move(builder));
+            }
+            block = std::move(el);
         }
         items.push_back(ScrollItem{std::move(block), false});
         messageItemMeta_.push_back(MessageItemMeta{currentTokenRole_, false, -1});

@@ -81,13 +81,11 @@ ftxui::Element AgentTUI::renderStatusBar() {
     }
     std::string ctxText;
     if (maxCtx > 0) {
-        const int pct
-            = static_cast<int>(100.0 * static_cast<double>(ctx) / static_cast<double>(maxCtx));
         ctxText = fmt::format(
-            "{}/{}/{}%",
+            "{}/{}·{}%",
             agentxx::util::formatSize(ctx),
             agentxx::util::formatSize(maxCtx),
-            pct
+            static_cast<int>(100.0 * static_cast<double>(ctx) / static_cast<double>(maxCtx))
         );
     } else {
         ctxText = fmt::format("{}", agentxx::util::formatSize(ctx));
@@ -261,15 +259,15 @@ ftxui::Element AgentTUI::renderContextOverlay() {
     } else {
         const int totalItems = static_cast<int>(msgs.size());
         // clamp scroll offset
-        const int maxScroll = std::max(0, totalItems - maxVisible);
+        const int maxScroll  = std::max(0, totalItems - maxVisible);
         contextScrollOffset_ = std::clamp(contextScrollOffset_, 0, maxScroll);
 
         // 仅渲染可见范围内的条目 (手动滚动, 无需 focus/yframe)
         const int end = std::min(totalItems, contextScrollOffset_ + maxVisible);
         for (int i = contextScrollOffset_; i < end; ++i) {
-            const auto& m        = msgs[static_cast<size_t>(i)];
-            auto        role     = m.value("role", std::string{});
-            auto        content  = m.value("content", std::string{});
+            const auto& m       = msgs[static_cast<size_t>(i)];
+            auto        role    = m.value("role", std::string{});
+            auto        content = m.value("content", std::string{});
 
             ftxui::Color roleColor = theme_.assistantColor;
             if (role == "user") {

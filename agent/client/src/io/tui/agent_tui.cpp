@@ -8,6 +8,7 @@
 #include "asio/use_awaitable.hpp"
 #include "fmt/format.h"
 #include "ftxui/component/event.hpp"
+#include "ftxui/component/loop.hpp"
 #include "ftxui/screen/terminal.hpp"
 #include "neograph/graph/cancel.h"
 #include <algorithm>
@@ -83,26 +84,32 @@ AgentTUI::~AgentTUI() {
 }
 
 void AgentTUI::postRedraw() {
-    if (auto* s = screen_.load(std::memory_order_acquire)) {
-        s->PostEvent(Event::Custom);
+    std::shared_ptr<ftxui::ScreenInteractive> s;
+    {
+        std::lock_guard<std::mutex> lock(screenMutex_);
+        s = screen_;
+    }
+    if (s) {
+        // 必须经 App::Post (内部 task_runner 有互斥锁) 而非 PostEvent:
+        // FTXUI v7.0.1 的 event_buffer (MultiReceiverBuffer) 非线程安全,
+        // 多线程并发 Push 与 UI 线程 Pop/Prune 无锁竞争会破坏 std::deque,
+        // 在 Get() 的 operator[] 越界断言处 SIGABRT
+        s->Post(Event::Custom);
     }
 }
 
 void AgentTUI::start() {
     running_ = true;
     if (logSink_) {
-        std::weak_ptr<AgentTUI> weakSelf = shared_from_this();
-        logSink_->setOnNewLog([weakSelf]() {
-            if (auto self = weakSelf.lock()) {
-                self->postRedraw();
-            }
-        });
         agentxx::util::LogDispatcher::instance().addSink(logSink_);
     }
 
     uiThread_ = std::thread([this]() {
-        auto screen = ScreenInteractive::Fullscreen();
-        screen_.store(&screen, std::memory_order_release);
+        auto screen = std::make_shared<ScreenInteractive>(ScreenInteractive::Fullscreen());
+        {
+            std::lock_guard<std::mutex> lock(screenMutex_);
+            screen_ = screen;
+        }
 
         // 屏幕足够宽时默认显示信息侧边栏
         {
@@ -111,7 +118,7 @@ void AgentTUI::start() {
                 && !hasSidebarTab(kInfoTabId)) {
                 addSidebarTab(
                     kInfoTabId,
-                    "信息",
+                    "Info",
                     [this]() {
                         return renderInfoSidebar();
                     },
@@ -266,7 +273,7 @@ void AgentTUI::start() {
                     postRedraw();
                 } else {
                     running_ = false;
-                    screen.Exit();
+                    screen->Exit();
                 }
                 return true;
             }
@@ -523,18 +530,36 @@ void AgentTUI::start() {
             return false;
         });
 
-        screen.Loop(event_handler);
-        screen_.store(nullptr, std::memory_order_release);
+        // 自定义 Loop: 每帧先 pump 日志队列 (UI 线程消费, 无需跨线程唤醒),
+        // 有新日志时 Post(Event::Custom) 触发重绘
+        {
+            ftxui::Loop loop(screen.get(), event_handler);
+            while (!loop.HasQuitted()) {
+                if (logSink_ && logSink_->pump() > 0) {
+                    screen->Post(Event::Custom);
+                }
+                loop.RunOnceBlocking();
+            }
+        }
+        {
+            std::lock_guard<std::mutex> lock(screenMutex_);
+            screen_ = nullptr;
+        }
     });
 }
 
 void AgentTUI::stop() {
     if (logSink_) {
         agentxx::util::LogDispatcher::instance().removeSink(logSink_);
-        logSink_->setOnNewLog(nullptr);
     }
     running_ = false;
-    if (auto* s = screen_.load(std::memory_order_acquire)) {
+    std::shared_ptr<ftxui::ScreenInteractive> s;
+    {
+        std::lock_guard<std::mutex> lock(screenMutex_);
+        s = std::move(screen_);
+        screen_.reset();
+    }
+    if (s) {
         s->Exit();
     }
     if (uiThread_.joinable()) {
@@ -595,10 +620,10 @@ void AgentTUI::onPeerMessage(agentxx::agent::WireMessage msg) {
                     asio::detached
                 );
             } else if constexpr (std::is_same_v<T, agentxx::agent::WireLog>) {
-                if (logSink_) {
-                    logSink_->onLog(static_cast<agentxx::util::LogLevel>(m.level), m.message);
-                    postRedraw();
-                }
+                agentxx::util::LogDispatcher::instance().dispatch(
+                    static_cast<agentxx::util::LogLevel>(m.level),
+                    m.message
+                );
             } else if constexpr (std::is_same_v<T, agentxx::agent::WireModelInfo>) {
                 std::lock_guard<std::mutex> lock(mutex_);
                 if (!m.models.empty()) {
