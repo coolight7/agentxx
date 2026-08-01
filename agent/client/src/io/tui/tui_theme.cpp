@@ -2,7 +2,7 @@
 
 TUITheme TUITheme::darkTheme() {
     return TUITheme{
-        .userColor             = ftxui::Color::Cyan,
+        .userColor             = ftxui::Color::RGB(102, 204, 255),
         .assistantColor        = ftxui::Color::RGB(255, 255, 255), // #fff
         .thinkingColor         = ftxui::Color::RGB(255, 175, 95),  // #ffaf5f
         .toolColor             = ftxui::Color::RGB(117, 125, 138), // #757d8a
@@ -39,7 +39,7 @@ TUITheme TUITheme::darkTheme() {
 
 TUITheme TUITheme::lightTheme() {
     return TUITheme{
-        .userColor             = ftxui::Color::Blue3,
+        .userColor             = ftxui::Color::RGB(102, 204, 255),
         .assistantColor        = ftxui::Color::Black,
         .thinkingColor         = ftxui::Color::Yellow4,
         .toolColor             = ftxui::Color::RGB(135, 136, 137), // #878889

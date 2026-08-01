@@ -18,6 +18,24 @@
 
 using namespace agentxx::client;
 
+// ASan 默认选项 (仅在链接了 AddressSanitizer 时生效;  release/无 ASan 构建中为无害的弱符号)。
+//
+// 背景: TUI 全屏模式会切到备用屏 (alternate screen) + raw 模式 + 鼠标捕获。
+// ASan 检测到错误后默认以 _exit() 结束进程, 绕过 ftxui 注册的退出/信号清理,
+// 导致终端停留在备用屏/raw 模式: 备用屏无回滚缓冲、raw 模式滚轮失效 -> 终端"卡住",
+// 且备用屏上的 ASan 报告无法滚动查看完整。
+//
+// 对策:
+// - abort_on_error=1: ASan 改用 abort() 结束 -> 触发 SIGABRT -> ftxui 的信号处理
+//   恢复终端 (退出备用屏/恢复 termios/显示光标), 终端不再卡住。
+// - log_path=agentxx_asan: ASan 报告写入工作目录下 agentxx_asan.<pid> 文件
+//   (恢复终端会退出备用屏, 屏上报告随之消失, 故必须落盘才能看完整报告)。
+//   崩溃后用 `less agentxx_asan.*` 查看。
+// 注: 环境变量 ASAN_OPTIONS 会整体覆盖此默认值。
+extern "C" const char* __asan_default_options() {
+    return "abort_on_error=1:log_path=agentxx_asan";
+}
+
 static std::string extractTokenFromUrl(std::string& url) {
     auto q = url.find('?');
     if (q == std::string::npos) {

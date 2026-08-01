@@ -38,12 +38,6 @@ void AgentTUI::appendEditToolBody(const Message& msg, Elements& lines) {
         }));
     }
     lines.push_back(renderEditToolDiff(oldStr, newStr));
-    if (msg.toolFinished && msg.toolHasError) {
-        lines.push_back(hbox({
-            text("  error: ") | color(theme_.errorColor),
-            paragraph(msg.toolResult) | color(theme_.errorColor),
-        }));
-    }
 }
 
 ftxui::Element AgentTUI::renderEditToolDiff(std::string_view oldStr, std::string_view newStr) {
@@ -65,7 +59,10 @@ ftxui::Element AgentTUI::renderEditToolDiff(std::string_view oldStr, std::string
     };
 
     if (!sideBySide) {
-        Elements lines;
+        // 单块模式: 按可用宽度截断长行 (减去前缀 "x " 2 列与少量边距),
+        // 避免 CJK 等宽字符被 stencil 从中间截断显示异常
+        const size_t maxChars = static_cast<size_t>(std::max(20, screenW - 6));
+        Elements     lines;
         for (const auto& l : diff) {
             ftxui::Color c      = theme_.toolColor;
             std::string  prefix = " ";
@@ -79,7 +76,7 @@ ftxui::Element AgentTUI::renderEditToolDiff(std::string_view oldStr, std::string
             lines.push_back(hbox({
                 text(prefix) | color(c),
                 text(" ") | color(theme_.hintColor),
-                text(l.text) | color(c),
+                text(trunc(l.text, maxChars)) | color(c),
             }));
         }
         return vbox(std::move(lines));

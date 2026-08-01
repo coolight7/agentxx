@@ -31,20 +31,18 @@ ftxui::Element
     return el | ftxui::color(color);
 }
 
-} // namespace
-
 // 格式化毫秒到可读字符串，自动选择最合适的单位
 // < 60s: "X.Xs" (如 "3.2s")
 // < 3600s (1h): "Xm Ys" (如 "2m 15s")
 // >= 3600s: "Xh Ym Zs" (如 "1h 2m 30s")
-static std::string formatDurationMilliseconds(int32_t milliseconds) {
+std::string formatDurationMilliseconds(int64_t milliseconds) {
     if (milliseconds < 0) {
         return "0.0s";
     }
-    const int32_t totalSec = milliseconds / 1000;
-    const int32_t hours    = totalSec / 3600;
-    const int32_t minutes  = (totalSec % 3600) / 60;
-    const int32_t seconds  = totalSec % 60;
+    const int64_t totalSec = milliseconds / 1000;
+    const int64_t hours    = totalSec / 3600;
+    const int64_t minutes  = (totalSec % 3600) / 60;
+    const int64_t seconds  = totalSec % 60;
 
     if (hours > 0) {
         return fmt::format("{}h{}m{}s", hours, minutes, seconds);
@@ -60,190 +58,127 @@ static std::string formatDurationMilliseconds(int32_t milliseconds) {
     return fmt::format("{:.1f}s", sec);
 }
 
-ftxui::Element AgentTUI::renderMessages() {
-    collapsibleMsgIndices_.clear();
-    for (size_t i = 0; i < messages_.size(); ++i) {
-        if (messages_[i].role == Message::Role::Thinking
-            || messages_[i].role == Message::Role::Tool) {
-            collapsibleMsgIndices_.push_back(i);
-        }
-    }
-    collapsibleBoxes_.assign(collapsibleMsgIndices_.size(), ftxui::Box{});
+} // namespace
 
-    Elements elements;
-    int      collapsibleOrdinal = 0;
-    auto     pushBlock          = [&](Element block, bool spacer) {
-        elements.push_back(std::move(block));
-        if (spacer) {
-            elements.push_back(text(""));
-        }
+// 计算消息内容签名 (64 位哈希): 组合各影响渲染的字段 (标量 + 文本哈希)。
+// 相比字符串拼接, 整数哈希比较开销更低。签名不变则复用缓存的 Element。
+int64_t AgentTUI::messageSignature(const Message& msg) {
+    // boost 风格 hash_combine (64 位黄金比例常数)
+    auto combine = [](uint64_t seed, uint64_t v) -> uint64_t {
+        return seed ^ (v + 0x9e3779b97f4a7c15ULL + (seed << 6) + (seed >> 2));
     };
+    uint64_t h = 0;
+    h          = combine(h, static_cast<uint64_t>(msg.role));
+    h          = combine(h, msg.collapsed);
+    h          = combine(h, msg.toolFinished);
+    h          = combine(h, msg.durationMs);
+    h          = combine(h, msg.startTimeMs);
+    h          = combine(h, std::hash<std::string>{}(msg.toolName));
+    h          = combine(h, std::hash<std::string>{}(msg.text));
+    h          = combine(h, std::hash<std::string>{}(msg.toolResult));
+    return static_cast<int64_t>(h);
+}
 
-    for (const auto& msg : messages_) {
-        switch (msg.role) {
-            case Message::Role::User: {
-                pushBlock(
-                    hbox({
-                        text("> ") | color(theme_.userColor),
-                        paragraph(msg.text) | color(theme_.userColor),
-                    }),
-                    true
-                );
-            } break;
-            case Message::Role::Assistant: {
-                pushBlock(
-                    renderMarkdown(msg.text, theme_.assistantColor, theme_.markdownTheme),
-                    true
-                );
-            } break;
-            case Message::Role::System: {
-                pushBlock(
-                    hbox({
-                        text("# ") | color(theme_.systemColor),
-                        paragraph(msg.text) | color(theme_.systemColor),
-                    }),
-                    true
-                );
-            } break;
-            case Message::Role::Thinking: {
-                // - 如果这个 Thinking
-                // 消息正在输出，默认为自动展开状态并跟随滚动，直到输出该消息完成时自动折叠
-                const bool expanded = !msg.collapsed;
-                Elements   lines;
-                Elements   header;
-                header.push_back(text(expanded ? "- " : "+ ") | color(theme_.thinkingColor));
-                header.push_back(text("[Thinking] ") | color(theme_.thinkingColor));
-
-                // 如果设置了用时，显示格式为 [Thinking] {用时} {内容/缩略内容}
-                std::string durationStr;
-                if (msg.durationMs > 0) {
-                    auto durationMs = msg.durationMs;
-                    if (durationMs > 0) {
-                        durationStr = formatDurationMilliseconds(durationMs);
-                    }
-                }
-
-                // 展开模式：在 header 后追加 duration
-                if (!durationStr.empty()) {
-                    header.push_back(text(durationStr) | color(theme_.thinkingColor));
-                    header.push_back(text(" "));
-                }
-
-                if (!expanded) {
-                    header.push_back(text(oneLinePreview(msg.text)) | color(theme_.thinkingColor));
-                }
-                lines.push_back(hbox(std::move(header)));
-                if (expanded) {
-                    lines.push_back(
-                        renderMarkdown(msg.text, theme_.thinkingColor, theme_.markdownTheme)
-                    );
-                }
-                pushBlock(
-                    vbox(std::move(lines)) | reflect(collapsibleBoxes_[collapsibleOrdinal]),
-                    true
-                );
-                ++collapsibleOrdinal;
-                break;
-            }
-            case Message::Role::Tool: {
-                const bool expanded   = !msg.collapsed;
-                const bool isEditTool = (msg.toolName == "filesystem_edit_text_file");
-                Elements   lines;
-                Elements   header;
-                header.push_back(text(expanded ? "- " : "+ ") | color(theme_.toolColor));
-                header.push_back(text("[Tool] ") | color(theme_.toolColor));
-                header.push_back(text(msg.toolName) | color(theme_.toolColor));
-                header.push_back(text(" "));
-                if (!expanded) {
-                    if (!msg.toolFinished) {
-                        header.push_back(text("running...") | color(theme_.hintColor));
-                    } else if (msg.toolHasError) {
-                        header.push_back(text("error: ") | color(theme_.errorColor));
-                        header.push_back(
-                            text(oneLinePreview(msg.toolResult)) | color(theme_.errorColor)
-                        );
-                    } else if (isEditTool) {
-                        appendEditToolHeader(msg, header);
-                    } else {
-                        header.push_back(
-                            text(oneLinePreview(msg.toolResult)) | color(theme_.toolColor)
-                        );
-                    }
-                }
-                lines.push_back(hbox(std::move(header)));
-
-                if (expanded) {
-                    if (isEditTool) {
-                        appendEditToolBody(msg, lines);
-                    } else {
-                        if (!msg.text.empty()) {
-                            lines.push_back(hbox({
-                                text("  args: ") | color(theme_.hintColor),
-                                paragraph(msg.text) | color(theme_.toolColor),
-                            }));
-                        }
-                        if (msg.toolFinished) {
-                            auto rc = msg.toolHasError ? theme_.errorColor : theme_.toolColor;
-                            lines.push_back(hbox({
-                                text(msg.toolHasError ? "  error: " : "  result: ") | color(rc),
-                                paragraph(msg.toolResult) | color(rc),
-                            }));
-                        } else {
-                            lines.push_back(text("  running...") | color(theme_.hintColor));
-                        }
-                    }
-                }
-
-                pushBlock(
-                    vbox(std::move(lines)) | reflect(collapsibleBoxes_[collapsibleOrdinal]),
-                    true
-                );
-                ++collapsibleOrdinal;
-            } break;
-        }
-    }
-
-    if (isStreaming_ && !currentToken_.empty()) {
-        // 查找最近的对应角色消息以获取时间信息
-        Message* currentMsg = nullptr;
-        for (auto it = messages_.rbegin(); it != messages_.rend(); ++it) {
-            if (it->role == currentTokenRole_) {
-                currentMsg = &(*it);
-                break;
-            }
-        }
-
-        if (currentTokenRole_ == Message::Role::Thinking) {
-            // 流式输出中的 Thinking：自动展开并显示完整内容，跟随滚动
-            std::string durationStr;
-            if (currentMsg && currentMsg->durationMs > 0) {
-                durationStr
-                    = fmt::format("({})", formatDurationMilliseconds(currentMsg->durationMs));
-            }
-
-            Elements lines;
-            Elements header;
-            header.push_back(text("- ") | color(theme_.thinkingColor));
+// 构建单条消息的渲染块 (不含末尾空行)。
+// 由 buildMessageItems 在消息签名变化时调用并缓存。
+ftxui::Element AgentTUI::buildMessageBlock(const Message& msg) {
+    switch (msg.role) {
+        case Message::Role::User:
+            return hbox({
+                text("> ") | color(theme_.userColor),
+                paragraph(msg.text) | color(theme_.userColor),
+            });
+        case Message::Role::Assistant:
+            return renderMarkdown(msg.text, theme_.assistantColor, theme_.markdownTheme);
+        case Message::Role::System:
+            return hbox({
+                text("# ") | color(theme_.systemColor),
+                paragraph(msg.text) | color(theme_.systemColor),
+            });
+        case Message::Role::Thinking: {
+            // - 如果这个 Thinking
+            // 消息正在输出，默认为自动展开状态并跟随滚动，直到输出该消息完成时自动折叠
+            const bool expanded = !msg.collapsed;
+            Elements   lines;
+            Elements   header;
+            header.push_back(text(expanded ? "- " : "+ ") | color(theme_.thinkingColor));
             header.push_back(text("[Thinking] ") | color(theme_.thinkingColor));
-            if (!durationStr.empty()) {
+
+            // 如果设置了用时，显示格式为 [Thinking] {用时} {内容/缩略内容}
+            std::string durationStr;
+            if (msg.durationMs > 0) {
+                durationStr = formatDurationMilliseconds(msg.durationMs);
+                // 在 header 后追加 duration
                 header.push_back(text(durationStr) | color(theme_.thinkingColor));
                 header.push_back(text(" "));
             }
+
+            if (!expanded) {
+                header.push_back(text(oneLinePreview(msg.text)) | color(theme_.thinkingColor));
+            }
             lines.push_back(hbox(std::move(header)));
-            lines.push_back(
-                renderMarkdown(currentToken_, theme_.thinkingColor, theme_.markdownTheme)
+            if (expanded) {
+                lines.push_back(renderMarkdown(msg.text, theme_.thinkingColor, theme_.markdownTheme)
+                );
+            }
+            return vbox(std::move(lines));
+        }
+        case Message::Role::Tool: {
+            const bool expanded   = !msg.collapsed;
+            const bool isEditTool = (msg.toolName == "filesystem_edit_text_file");
+            Elements   lines;
+            Elements   header;
+            header.push_back(
+                text(fmt::format("{} [Tool] {} ", expanded ? "-" : "+", msg.toolName))
+                | color(theme_.toolColor)
             );
-            pushBlock(vbox(std::move(lines)), false);
-        } else {
-            pushBlock(
-                renderMarkdown(currentToken_, theme_.assistantColor, theme_.markdownTheme),
-                false
-            );
+            if (!expanded) {
+                if (!msg.toolFinished) {
+                    header.push_back(text("running...") | color(theme_.hintColor));
+                } else if (isEditTool) {
+                    appendEditToolHeader(msg, header);
+                } else {
+                    header.push_back(
+                        text(oneLinePreview(msg.toolResult)) | color(theme_.toolColor)
+                    );
+                }
+            }
+            lines.push_back(hbox(std::move(header)));
+
+            if (expanded) {
+                if (isEditTool) {
+                    appendEditToolBody(msg, lines);
+                } else {
+                    if (!msg.text.empty()) {
+                        lines.push_back(hbox({
+                            text("  args: ") | color(theme_.hintColor),
+                            paragraph(msg.text) | color(theme_.toolColor),
+                        }));
+                    }
+                    if (msg.toolFinished) {
+                        auto rc = theme_.toolColor;
+                        lines.push_back(hbox({
+                            text("  result: ") | color(rc),
+                            paragraph(msg.toolResult) | color(rc),
+                        }));
+                    } else {
+                        lines.push_back(text("  running...") | color(theme_.hintColor));
+                    }
+                }
+            }
+            return vbox(std::move(lines));
         }
     }
+    return text("");
+}
 
-    if (elements.empty()) {
-        return vbox({
+std::vector<ScrollItem> AgentTUI::buildMessageItems() {
+    messageItemMeta_.clear();
+
+    // 空状态: 单个占满视口的欢迎横幅 (fillViewport 居中)
+    const bool hasStreamingToken = isStreaming_ && !currentToken_.empty();
+    if (messages_.empty() && !hasStreamingToken) {
+        auto banner = vbox({
             filler(),
             text(R"_(
     ___   _____________   ________             
@@ -258,6 +193,75 @@ ftxui::Element AgentTUI::renderMessages() {
                 | dim | center,
             filler(),
         });
+        return {
+            ScrollItem{std::move(banner), true}
+        };
     }
-    return vbox(std::move(elements));
+
+    // 同步缓存大小: 收缩 (如 onSync 清空) 时整体重建; 增长时仅新增条目
+    if (messageCache_.size() > messages_.size()) {
+        messageCache_.clear();
+    }
+    while (messageCache_.size() < messages_.size()) {
+        messageCache_.push_back(MessageCache{});
+    }
+
+    std::vector<ScrollItem> items;
+    items.reserve(messages_.size() + 1);
+
+    for (size_t i = 0; i < messages_.size(); ++i) {
+        const auto& msg   = messages_[i];
+        auto&       cache = messageCache_[i];
+        int64_t     sig   = messageSignature(msg);
+        if (cache.sig != sig || !cache.element) {
+            // 内容/状态变化 -> 重建块元素 (markdown 仅在此解析)
+            cache.element = vbox({
+                buildMessageBlock(msg),
+                text(""),
+            });
+            cache.sig     = sig;
+        }
+        items.push_back(ScrollItem{cache.element, false});
+
+        const bool collapsible
+            = (msg.role == Message::Role::Thinking || msg.role == Message::Role::Tool);
+        messageItemMeta_.push_back(MessageItemMeta{msg.role, collapsible, static_cast<int>(i)});
+    }
+
+    // 流式输出中的当前 token (每帧重建, 不缓存)
+    if (hasStreamingToken) {
+        // 查找最近的对应角色消息以获取时间信息
+        const Message* currentMsg = nullptr;
+        for (auto it = messages_.rbegin(); it != messages_.rend(); ++it) {
+            if (it->role == currentTokenRole_) {
+                currentMsg = &(*it);
+                break;
+            }
+        }
+
+        Element block;
+        if (currentTokenRole_ == Message::Role::Thinking) {
+            // 流式输出中的 Thinking：自动展开并显示完整内容，跟随滚动
+            Elements lines;
+            Elements header;
+            header.push_back(text("- [Thinking] ") | color(theme_.thinkingColor));
+            if (currentMsg && currentMsg->durationMs > 0) {
+                header.push_back(
+                    text(fmt::format("({}) ", formatDurationMilliseconds(currentMsg->durationMs)))
+                    | color(theme_.thinkingColor)
+                );
+            }
+            lines.push_back(hbox(std::move(header)));
+            lines.push_back(
+                renderMarkdown(currentToken_, theme_.thinkingColor, theme_.markdownTheme)
+            );
+            block = vbox(std::move(lines));
+        } else {
+            block = renderMarkdown(currentToken_, theme_.assistantColor, theme_.markdownTheme);
+        }
+        items.push_back(ScrollItem{std::move(block), false});
+        messageItemMeta_.push_back(MessageItemMeta{currentTokenRole_, false, -1});
+    }
+
+    return items;
 }

@@ -81,8 +81,8 @@ private:
         std::string toolCallId;
         std::string toolResult;
         bool        toolFinished = false;
-        bool        toolHasError = false;
-        bool        collapsed    = false; // 折叠/展开 (Thinking/Tool 默认折叠)
+
+        bool collapsed = false; // 折叠/展开 (Thinking/Tool 默认折叠)
 
         // 运行时长统计 (毫秒)
         int64_t durationMs = 0;
@@ -106,10 +106,25 @@ private:
     struct SidebarTab {
         std::string id;
         std::string title;
-        /// 可滚动主体内容 (经 sidebarScrollable_ 渲染)
-        std::function<ftxui::Element()> render;
+        /// 可滚动主体内容 (经 sidebarScrollable_ 懒加载 viewport 渲染)
+        std::function<std::vector<ScrollItem>()> render;
         /// 底部常驻内容 (渲染于滚动区之外, 不随内容滚动; 为空则无)
         std::function<ftxui::Element()> footer;
+    };
+
+    /// 消息元素缓存 (仿 Flutter Widget 重建: 仅内容/状态变化的消息才重建 Element,
+    /// 避免每帧对全部消息重复解析 markdown)
+    struct MessageCache {
+        ftxui::Element element; // 缓存的渲染元素
+        int64_t        sig = 0; // 内容签名 (64 位哈希, 变化时重建)
+    };
+
+    /// 消息列表子项元数据 (与 buildMessageItems 返回的 items 一一对应),
+    /// 用于由 viewport 可见区域反推可折叠消息的鼠标命中区域
+    struct MessageItemMeta {
+        Message::Role role;
+        bool          collapsible;  // 是否可点击折叠/展开 (Thinking/Tool)
+        int           messageIndex; // 对应 messages_ 索引 (流式 token 为 -1)
     };
 
     std::mutex           mutex_;
@@ -118,10 +133,21 @@ private:
     Message::Role        currentTokenRole_ = Message::Role::Assistant;
     bool                 isStreaming_      = false;
 
-    /// 可滚动的消息列表组件
+    /// 暂存的当前流式 token 时间信息 (由 NodeEnd 设置, pushCurrentTokenLocked 时应用)
+    int64_t pendingTokenDurationMs_  = 0;
+    int64_t pendingTokenStartTimeMs_ = 0;
+
+    /// 可滚动的消息列表组件 (ListView 风格 viewport 局部绘制)
     std::shared_ptr<Scrollable> messagesScrollable_;
-    /// 侧边栏内容可滚动组件
+    /// 侧边栏内容可滚动组件 (ListView 风格 viewport 局部绘制)
     std::shared_ptr<Scrollable> sidebarScrollable_;
+
+    /// 消息元素缓存 (按 messages_ 索引; 仅内容变化的消息重建 Element)
+    std::vector<MessageCache> messageCache_;
+    /// 消息列表子项元数据 (每帧由 buildMessageItems 填充)
+    std::vector<MessageItemMeta> messageItemMeta_;
+    /// 日志行元素缓存 (日志仅追加, 按行索引缓存避免每帧重建)
+    std::vector<ftxui::Element> logLineCache_;
 
     std::string                      inputText_;
     std::optional<PermissionRequest> pendingPermission_;
@@ -221,8 +247,14 @@ private:
     /// 程序版本号 (与 CMake project VERSION 保持一致)
     static constexpr const char* kAgentxxVersion = "0.1.0";
 
-    void           postRedraw();
-    ftxui::Element renderMessages();
+    void postRedraw();
+    /// 构建消息列表子项 (ListView 风格): 返回各消息块 + 流式 token,
+    /// 同时填充 messageItemMeta_ 与 messageCache_ (仅重建内容变化的消息)
+    std::vector<ScrollItem> buildMessageItems();
+    /// 构建单条消息的渲染块 (不含末尾空行); 仅在消息签名变化时调用并缓存
+    ftxui::Element buildMessageBlock(const Message& msg);
+    /// 计算消息内容签名 (64 位哈希; 签名不变则复用缓存元素)
+    static int64_t messageSignature(const Message& msg);
     /// 特化渲染 filesystem_edit_text_file (git diff 对比), 实现见 tui_render_edittool.cpp
     /// - 折叠态: 在 header 追加文件路径预览
     void appendEditToolHeader(const Message& msg, ftxui::Elements& header);
@@ -241,10 +273,10 @@ private:
     ftxui::Element renderStatusBar();
     /// 右侧边栏: 顶部 tab 栏 + 当前 tab 内容; 无 tab 时不应调用
     ftxui::Element renderSidebar();
-    /// 日志窗口内容
-    ftxui::Element renderLogWindow();
+    /// 日志窗口内容 (ListView 子项; 按行缓存)
+    std::vector<ScrollItem> renderLogWindow();
     /// 信息侧边栏可滚动主体: planning 特化渲染 + MCP/Skill/Memory 统计 (组成单一滚动列表)
-    ftxui::Element renderInfoSidebar();
+    std::vector<ScrollItem> renderInfoSidebar();
     /// 信息侧边栏底部常驻内容: 工作目录 + 版本/运行模式 (不随主体滚动)
     ftxui::Element renderInfoSidebarFooter();
     /// 日志侧边栏底部常驻内容: 当前执行节点名 + "上下文" 按钮
@@ -268,16 +300,20 @@ private:
     /// channel)
     /// - 调用方须持有 mutex_
     void sendUserInputLocked(std::string text);
+    /// 将当前流式 token 推入 messages_ (角色切换/轮次结束时调用);
+    /// 同时应用暂存的时间信息 (pendingTokenDurationMs_/pendingTokenStartTimeMs_)
+    /// - 调用方须持有 mutex_
+    void pushCurrentTokenLocked();
     /// 若空闲且输入队列非空, 取队首发送 (轮次结束自动派发); 调用方须持有 mutex_
     void dispatchNextPendingInput();
 
     /// 侧边栏 tab 管理
     /// - render: 可滚动主体内容; footer: 底部常驻内容 (可选, 渲染于滚动区之外)
     void addSidebarTab(
-        std::string_view                id,
-        std::string_view                title,
-        std::function<ftxui::Element()> render,
-        std::function<ftxui::Element()> footer = nullptr
+        std::string_view                         id,
+        std::string_view                         title,
+        std::function<std::vector<ScrollItem>()> render,
+        std::function<ftxui::Element()>          footer = nullptr
     );
     void removeSidebarTab(std::string_view id);
     bool hasSidebarTab(std::string_view id) const;
