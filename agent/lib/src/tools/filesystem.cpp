@@ -169,6 +169,50 @@ std::string asciiCaseFoldPattern(std::string_view pattern) {
     return out;
 }
 
+/// 将文本中的 CRLF (`\r\n`) 规范化为 LF (`\n`), 返回规范化的副本。
+/// 用于生成 edit 匹配候选变体 (LF 形式)。
+std::string crlfToLfCopy(std::string_view text) {
+    if (text.find("\r\n") == std::string::npos) {
+        return std::string{text};
+    }
+    std::string out;
+    out.reserve(text.size());
+    for (size_t i = 0; i < text.size();) {
+        if (text[i] == '\r' && i + 1 < text.size() && text[i + 1] == '\n') {
+            out += '\n';
+            i   += 2;
+        } else {
+            out += text[i++];
+        }
+    }
+    return out;
+}
+
+/// 将文本中的 CRLF (`\r\n`) 行尾统一规范化为 LF (`\n`)。
+/// 仅在文本已被转换为 UTF-8 后调用, 避免影响其它编码 (如 UTF-16) 下的原始字节序列。
+void normalizeCrlfToLf(std::string& text) {
+    if (text.find("\r\n") == std::string::npos) {
+        return;
+    }
+    auto normalized = crlfToLfCopy(text);
+    text.swap(normalized);
+}
+
+/// 将文本中的 LF (`\n`) 行尾统一转换为 CRLF (`\r\n`)。
+/// 已存在的 CRLF 保持原样 (不会产生 `\r\r\n`)。
+std::string lfToCrlf(std::string_view text) {
+    std::string out;
+    out.reserve(text.size() + 8);
+    for (size_t i = 0; i < text.size(); ++i) {
+        if (text[i] == '\n' && (i == 0 || text[i - 1] != '\r')) {
+            // 仅当 `\n` 前一个字符不是 `\r` 时才补 `\r`, 避免 `\r\n` -> `\r\r\n`
+            out += '\r';
+        }
+        out += text[i];
+    }
+    return out;
+}
+
 /// 解析 `type` 参数为类型集合。支持 string 或 array 两种形式。
 /// 返回空集合表示 "any" (不按类型过滤)。合法值: file / dir / symlink / other / any。
 std::set<std::string> collectTypeFilter(const neograph::json& typeArg) {
@@ -589,6 +633,7 @@ asio::awaitable<std::string>
 
             auto rawStr = result.str();
             if (agentxx::util::autoConvertToUtf8(rawStr)) {
+                // 保留原始的 crlf 或 \n 换行符不转换
                 co_return rawStr;
             }
             co_return rawStr;
@@ -607,6 +652,7 @@ asio::awaitable<std::string>
         }
         stream.close();
         if (agentxx::util::autoConvertToUtf8(data)) {
+            // 保留原始的 crlf 或 \n 换行符不转换
             co_return data;
         }
         co_return data;
@@ -659,6 +705,7 @@ asio::awaitable<std::string>
 
             auto rawStr = result.str();
             if (agentxx::util::autoConvertToUtf8(rawStr)) {
+                // 保留原始的 crlf 或 \n 换行符不转换
                 co_return rawStr;
             }
             co_return rawStr;
@@ -669,6 +716,7 @@ asio::awaitable<std::string>
             = std::string{std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>()};
         stream.close();
         if (agentxx::util::autoConvertToUtf8(result)) {
+            // 保留原始的 crlf 或 \n 换行符不转换
             co_return result;
         }
         co_return result;
@@ -1158,6 +1206,12 @@ asio::awaitable<std::string>
     auto new_str       = arguments.value<std::string>("new_str", std::string{});
     auto multi_replace = arguments.value<bool>("multi_replace", false);
 
+    // 统一到 \n 换行符
+    // - 与 filesystem_read 的逻辑不同，read 应当保留原始的内容，edit 应当尽可能保证修改成功，如果
+    // llm 需要写回 crlf，可使用 shell
+    normalizeCrlfToLf(old_str);
+    normalizeCrlfToLf(new_str);
+
 #if ASIO_HAS_FILE || BOOST_ASIO_HAS_FILE
     {
         auto currentIoCtx = co_await asio::this_coro::executor;
@@ -1187,6 +1241,7 @@ asio::awaitable<std::string>
             throw std::system_error{errCode};
         }
         stream.close();
+        normalizeCrlfToLf(content);
 
         int    replaceHit = 0;
         size_t pos        = 0;
@@ -1206,15 +1261,19 @@ asio::awaitable<std::string>
             };
         }
 
-        // 覆盖写入文件内容
+        // 原子写: 先写同目录临时文件, 成功后 rename 覆盖原文件,
+        // 避免直接 truncate 原文件后写入中途失败导致原内容永久丢失
+        static std::atomic<uint64_t> s_editTmpSeq{0};
+        const auto                   tmpPath = systemCharsetFilePath
+                             + fmt::format(".agentxx_edit_tmp_{}", s_editTmpSeq.fetch_add(1));
         stream.open(
-            systemCharsetFilePath,
+            tmpPath,
             asio::stream_file::write_only | asio::stream_file::create | asio::stream_file::truncate,
             errCode
         );
         if (false == stream.is_open()) {
             throw std::runtime_error{
-                fmt::format(R"(Can not open file to write: {}")", errCode.message())
+                fmt::format(R"(Can not open temp file to write: {}")", errCode.message())
             };
         }
         co_await asio::async_write(
@@ -1222,11 +1281,22 @@ asio::awaitable<std::string>
             asio::buffer(content),
             asio::redirect_error(asio::use_awaitable, errCode)
         );
+        stream.close();
         if (errCode) {
+            std::error_code rmEc;
+            std::filesystem::remove(tmpPath, rmEc);
             throw std::system_error{errCode};
         }
+        std::error_code renameEc;
+        std::filesystem::rename(tmpPath, systemCharsetFilePath, renameEc);
+        if (renameEc) {
+            std::error_code rmEc;
+            std::filesystem::remove(tmpPath, rmEc);
+            throw std::runtime_error{
+                fmt::format(R"(Failed to replace original file: {})", renameEc.message())
+            };
+        }
 
-        stream.close();
         if (multi_replace) {
             co_return fmt::format(R"(Success, Replace {} times)", replaceHit);
         } else {
@@ -1251,6 +1321,7 @@ asio::awaitable<std::string>
         std::ostringstream output;
         output << stream.rdbuf();
         std::string content = output.str();
+        normalizeCrlfToLf(content);
 
         int    replaceHit = 0;
         size_t pos        = 0;
@@ -1726,11 +1797,11 @@ asio::awaitable<std::string> FilesystemGrepTool::execute_async(const neograph::j
             // 将 glob 阻塞操作卸载到线程池, 支持取消传播:
             // 当父协程被 CancelToken 取消或超时时, cancelFlag 被置 true, 工作线程检测后提前退出
             auto relist = co_await agentxx::util::offloadCancellableAsync<
-                std::vector<std::filesystem::__cxx11::path>>(
+                std::vector<std::filesystem::path>>(
                 pool,
                 cancelFlag,
                 [file_patterns](std::atomic<bool>& cancelFlag
-                ) -> asio::awaitable<std::vector<std::filesystem::__cxx11::path>> {
+                ) -> asio::awaitable<std::vector<std::filesystem::path>> {
                     // 智能选择 glob/rglob: 含 `**` 的模式使用 rglob (递归), 否则使用 glob
                     // (仅当前目录)
                     std::vector<std::filesystem::path> resultList;

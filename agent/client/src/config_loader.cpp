@@ -233,7 +233,7 @@ YamlAppConfig loadYamlConfig(
             }
             if (node["read_timeout"]) {
                 mc.readTimeoutSeconds = std::stoi(resolveEnvVars(
-                    node["read_timeout"].as<std::string>("24"),
+                    node["read_timeout"].as<std::string>("30"),
                     dotEnvVars,
                     overrideEnvVars
                 ));

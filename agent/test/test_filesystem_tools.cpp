@@ -614,6 +614,154 @@ asio::awaitable<void>
 }
 
 asio::awaitable<void>
+    test_read_text_file_crlf(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    auto filePath = testDir + "/crlf_read_test.txt";
+    {
+        std::ofstream f(filePath, std::ios::binary);
+        f << "alpha\r\nbeta\r\ngamma\r\n";
+    }
+    auto tool = agentxx::tools::FilesystemReadTextFileTool{agentContext};
+
+    // 完整读取: 应统一输出 LF, 不含 `\r`
+    auto args = neograph::json{
+        {"path", filePath}
+    };
+    auto full  = co_await tool.execute_async(args);
+    auto hasCR = full.find('\r') != std::string::npos;
+    if (!hasCR && full.find("alpha\nbeta\ngamma\n") != std::string::npos) {
+        g_fs_passed++;
+        TEST_PASS << "read_text_file normalizes CRLF to LF on full read" << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "read_text_file CRLF full read failed, got: '" << full << "'" << std::endl;
+    }
+
+    // offset/limit 读取: 同样不含 `\r`
+    auto args2 = neograph::json{
+        {"path",        filePath},
+        {"line_offset", 1       },
+        {"line_limit",  1       },
+    };
+    auto part   = co_await tool.execute_async(args2);
+    auto hasCR2 = part.find('\r') != std::string::npos;
+    if (!hasCR2 && part.find("beta") != std::string::npos
+        && part.find("alpha") == std::string::npos) {
+        g_fs_passed++;
+        TEST_PASS << "read_text_file normalizes CRLF to LF on offset/limit read" << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "read_text_file CRLF offset/limit read failed, got: '" << part << "'"
+                  << std::endl;
+    }
+    co_return;
+}
+
+asio::awaitable<void>
+    test_edit_text_file_crlf_file(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    // CRLF 文件 + LF 形式的 old_str/new_str: 应匹配成功并保持文件为 \n
+    auto filePath = testDir + "/crlf_edit_test.txt";
+    {
+        std::ofstream f(filePath, std::ios::binary);
+        f << "hello world\r\nfoo bar\r\n";
+    }
+
+    auto tool = agentxx::tools::FilesystemEditTextFileTool{agentContext};
+    auto args = neograph::json{
+        {"path",    filePath              },
+        {"old_str", "hello world\nfoo bar"},
+        {"new_str", "hi universe\nfoo bar"},
+    };
+    auto result = co_await tool.execute_async(args);
+    if (result == "success") {
+        std::ifstream in(filePath, std::ios::binary);
+        std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        if (content == "hi universe\nfoo bar\n") {
+            g_fs_passed++;
+            TEST_PASS << "edit_text_file matches LF old_str in CRLF file and keeps CRLF"
+                      << std::endl;
+        } else {
+            g_fs_failed++;
+            TEST_FAIL << "edit_text_file CRLF edit wrong content: '" << content << "'" << std::endl;
+        }
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "edit_text_file CRLF edit failed: " << result << std::endl;
+    }
+    co_return;
+}
+
+asio::awaitable<void>
+    test_edit_text_file_lf_file_crlf_old(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    // LF 文件 + CRLF 形式的 old_str/new_str: 应匹配成功并保持文件为 LF
+    auto filePath = testDir + "/lf_edit_crlf_old_test.txt";
+    {
+        std::ofstream f(filePath, std::ios::binary);
+        f << "alpha\nbeta\ngamma\n";
+    }
+
+    auto tool = agentxx::tools::FilesystemEditTextFileTool{agentContext};
+    auto args = neograph::json{
+        {"path",    filePath       },
+        {"old_str", "alpha\r\nbeta"},
+        {"new_str", "AA\r\nBB"     },
+    };
+    auto result = co_await tool.execute_async(args);
+    if (result == "success") {
+        std::ifstream in(filePath, std::ios::binary);
+        std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        if (content == "AA\nBB\ngamma\n") {
+            g_fs_passed++;
+            TEST_PASS << "edit_text_file matches CRLF old_str in LF file and keeps LF" << std::endl;
+        } else {
+            g_fs_failed++;
+            TEST_FAIL << "edit_text_file LF file CRLF old_str wrong content: '" << content << "'"
+                      << std::endl;
+        }
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "edit_text_file LF file CRLF old_str edit failed: " << result << std::endl;
+    }
+    co_return;
+}
+
+asio::awaitable<void>
+    test_edit_text_file_crlf_multi_replace(std::weak_ptr<agentxx::agent::AgentContext> agentContext
+    ) {
+    // CRLF 文件 + multi_replace: LF 形式 old_str 应替换全部并保持 \n
+    auto filePath = testDir + "/crlf_edit_multi_test.txt";
+    {
+        std::ofstream f(filePath, std::ios::binary);
+        f << "foo\r\nfoo\r\nfoo\r\n";
+    }
+
+    auto tool = agentxx::tools::FilesystemEditTextFileTool{agentContext};
+    auto args = neograph::json{
+        {"path",          filePath},
+        {"old_str",       "foo"   },
+        {"new_str",       "baz"   },
+        {"multi_replace", true    },
+    };
+    auto result = co_await tool.execute_async(args);
+    if (result.find("Replace 3 times") != std::string::npos) {
+        std::ifstream in(filePath, std::ios::binary);
+        std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        if (content == "baz\nbaz\nbaz\n") {
+            g_fs_passed++;
+            TEST_PASS << "edit_text_file multi_replace works on CRLF file and keeps CRLF"
+                      << std::endl;
+        } else {
+            g_fs_failed++;
+            TEST_FAIL << "edit_text_file CRLF multi_replace wrong content: '" << content << "'"
+                      << std::endl;
+        }
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "edit_text_file CRLF multi_replace failed: " << result << std::endl;
+    }
+    co_return;
+}
+
+asio::awaitable<void>
     test_glob_get_definition(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FilesystemGlobTool{agentContext};
     auto def  = tool.get_definition();
@@ -849,7 +997,7 @@ asio::awaitable<void>
     auto tool = agentxx::tools::FilesystemGrepTool{agentContext};
     // test1.txt 有 line1~line5, 搜索 "line" 应匹配 5 次, 限制 max_count_per_file=2
     auto args = neograph::json{
-        {"text_patterns_is_regex", false                                           },
+        {"text_patterns_is_regex", false                                          },
         {"text_patterns",          neograph::json::array({"line"})                },
         {"file_patterns",          neograph::json::array({testDir + "/test1.txt"})},
         {"output_mode",            "files_with_matches"                           },
@@ -873,7 +1021,7 @@ asio::awaitable<void>
     // test1.txt: line1\nline2\nline3\nline4\nline5\n
     // 搜索 "line3", context_lines=1, 应输出第 2,3,4 行
     auto args = neograph::json{
-        {"text_patterns_is_regex", false                                           },
+        {"text_patterns_is_regex", false                                          },
         {"text_patterns",          neograph::json::array({"line3"})               },
         {"file_patterns",          neograph::json::array({testDir + "/test1.txt"})},
         {"output_mode",            "content"                                      },
@@ -894,8 +1042,8 @@ asio::awaitable<void>
     co_return;
 }
 
-asio::awaitable<void>
-    test_glob_type_filter(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+asio::awaitable<void> test_glob_type_filter(std::weak_ptr<agentxx::agent::AgentContext> agentContext
+) {
     auto tool = agentxx::tools::FilesystemGlobTool{agentContext};
     // 只匹配目录
     auto args = neograph::json{
@@ -920,8 +1068,8 @@ asio::awaitable<void>
     auto tool = agentxx::tools::FilesystemGlobTool{agentContext};
     // 匹配所有 txt, 排除 test1.txt
     auto args = neograph::json{
-        {"file_patterns",    neograph::json::array({testDir + "/*.txt"})       },
-        {"exclude_patterns", neograph::json::array({testDir + "/test1.txt"})   },
+        {"file_patterns",    neograph::json::array({testDir + "/*.txt"})    },
+        {"exclude_patterns", neograph::json::array({testDir + "/test1.txt"})},
     };
     auto result = co_await tool.execute_async(args);
     // 应包含 test2.txt, 不应包含 test1.txt
@@ -1000,6 +1148,10 @@ asio::awaitable<TestResult>
     co_await run(test_edit_text_file_single_replace);
     co_await run(test_edit_text_file_multi_replace);
     co_await run(test_edit_text_file_no_match);
+    co_await run(test_read_text_file_crlf);
+    co_await run(test_edit_text_file_crlf_file);
+    co_await run(test_edit_text_file_lf_file_crlf_old);
+    co_await run(test_edit_text_file_crlf_multi_replace);
 
     co_await run(test_glob_get_definition);
     co_await run(test_glob_empty_patterns);
