@@ -23,16 +23,18 @@ TUITheme TUITheme::darkTheme() {
         .markdownTheme         = markdown::Theme{
             .name        = "Dark",
             .syntax      = ftxui::color(ftxui::Color::Yellow) | ftxui::dim,
-            .gutter      = ftxui::dim,
+            .gutter      = ftxui::color(ftxui::Color::RGB(117, 125, 138)),
             .heading1    = ftxui::Decorator(ftxui::bold) | ftxui::underlined
                         | ftxui::color(ftxui::Color::RGB(102, 204, 255)),
-            .heading2    = ftxui::bold
-                        | ftxui::color(ftxui::Color::RGB(102, 204, 255)),
+            .heading2    = ftxui::color(ftxui::Color::RGB(102, 204, 255)) | ftxui::bold,
             .heading3    = ftxui::Decorator(ftxui::bold) | ftxui::dim,
             .link        = ftxui::color(ftxui::Color::Cyan),
             .code_inline = ftxui::color(ftxui::Color::RGB(255, 175, 95)),
-            .code_block  = ftxui::color(ftxui::Color::RGB(180, 180, 180)),
-            .blockquote  = ftxui::dim,
+            .code_block  = ftxui::bgcolor(ftxui::Color::RGB(18, 18, 18)) // blockColor #121212
+                        | ftxui::color(ftxui::Color::RGB(180, 180, 180)),
+            .blockquote  = ftxui::color(ftxui::Color::RGB(117, 125, 138)),
+            .table_header = ftxui::color(ftxui::Color::RGB(255, 255, 255)) | ftxui::bold,
+            .table_border = ftxui::color(ftxui::Color::RGB(255, 255, 255)),
         },
     };
 }
@@ -67,8 +69,11 @@ TUITheme TUITheme::lightTheme() {
             .heading3    = ftxui::Decorator(ftxui::bold) | ftxui::color(ftxui::Color::Grey37),
             .link        = ftxui::color(ftxui::Color::Blue3),
             .code_inline = ftxui::color(ftxui::Color::RGB(150, 80, 0)),
-            .code_block  = ftxui::color(ftxui::Color::RGB(50, 50, 50)),
-            .blockquote  = ftxui::color(ftxui::Color::Grey37),
+            .code_block  = ftxui::bgcolor(ftxui::Color::RGB(246, 247, 252)) // blockColor #f6f7fc
+                        | ftxui::color(ftxui::Color::RGB(50, 50, 50)),
+            .blockquote  = ftxui::color(ftxui::Color::RGB(135, 136, 137)),  // 引用
+            .table_header = ftxui::color(ftxui::Color::RGB(50, 50, 50)) | ftxui::bold, // 表格
+            .table_border = ftxui::color(ftxui::Color::RGB(50, 50, 50)),
         },
     };
 }
