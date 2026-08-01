@@ -27,6 +27,7 @@
 #include "test_lockless.h"
 #include "test_mcp.h"
 #include "test_misc_fixes.h"
+#include "test_network_timeout.h"
 #include "test_openai_provider.h"
 #include "test_rag_search_tools.h"
 #include "test_regex.h"
@@ -185,6 +186,7 @@ int main(int argn, char** argv) {
             co_await runCtx("codegraph", agentxx::test::run_codegraph_tools_tests, agentContext);
             co_await run("cpu_gpu", agentxx::test::run_cpu_gpu_use_tests);
             co_await run("http", agentxx::test::run_http_client_tests);
+            co_await run("network_timeout", agentxx::test::run_network_timeout_tests);
             co_await run("websocket", agentxx::test::run_websocket_tests);
             co_await run("remote_agent", agentxx::test::run_remote_agent_tests);
             co_await run("mcp", agentxx::test::run_mcp_tests);

@@ -121,6 +121,9 @@ asio::awaitable<std::string> StringRegexpTool::execute_async(const neograph::jso
     }
 
     auto regex = agentxx::util::XXRegex::createRegex(match_exps);
+    if (!regex) {
+        co_return "[Error] Regex compilation failed";
+    }
     if (match_opt == std::string_view{"search"}) {
         auto results = std::vector<agentxx::util::XXRegexMatchResult>{};
         if (regex->match(content, results)) {

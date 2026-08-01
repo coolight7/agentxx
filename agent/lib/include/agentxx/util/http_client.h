@@ -54,14 +54,18 @@ struct HttpResponse {
 inline constexpr uint64_t kDefaultMaxResponseBody = 10 * 1024 * 1024;
 
 /// Per-request configuration for the less frequently customized options.
-/// - connectTimeout: bounds DNS resolve + TCP connect + TLS handshake.
+/// - connectTimeout: total deadline for DNS resolve + TCP connect + TLS handshake
+///   combined. The three phases share a single deadline so the worst-case total
+///   is exactly connectTimeout (not 3x as with per-phase limits).
 /// - sslVerify: enables TLS certificate verification for this request; nullopt
 ///   falls back to the global default (see HttpClient::setSslVerify).
 /// - sendTimeout: bounds writing the request; nullopt auto-derives it from the
 ///   request body size (see HttpClient::calcTimeoutBySize).
 /// - readTimeout: bounds the gap between successive incoming data chunks; if no
 ///   new data arrives within readTimeout the request is treated as timed out
-///   (the timer resets every time new data is received).
+///   (the timer resets every time new data is received). This is a per-chunk
+///   timeout, NOT a total response timeout — as long as data keeps flowing the
+///   connection stays alive.
 struct RequestConfig {
     std::chrono::milliseconds                connectTimeout  = std::chrono::seconds{30};
     std::optional<std::chrono::milliseconds> sendTimeout     = std::nullopt;
