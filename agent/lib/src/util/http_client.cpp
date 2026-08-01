@@ -520,7 +520,7 @@ asio::awaitable<void> HttpClient::requestSseAsync(
             stream,
             buf,
             parser,
-            asio::cancel_after(config.readTimeout, asio::use_awaitable)
+            asio::cancel_after(config.readChunkTimeout, asio::use_awaitable)
         );
 
         if (parser.get().result_int() == 429) {
@@ -528,7 +528,7 @@ asio::awaitable<void> HttpClient::requestSseAsync(
                 stream,
                 buf,
                 parser,
-                asio::cancel_after(config.readTimeout, asio::use_awaitable)
+                asio::cancel_after(config.readChunkTimeout, asio::use_awaitable)
             );
             auto resp       = parser.release();
             auto raw        = resp[http::field::retry_after];
@@ -548,7 +548,7 @@ asio::awaitable<void> HttpClient::requestSseAsync(
                 stream,
                 buf,
                 parser,
-                asio::cancel_after(config.readTimeout, asio::use_awaitable)
+                asio::cancel_after(config.readChunkTimeout, asio::use_awaitable)
             );
             auto resp = parser.release();
             throw std::runtime_error(
@@ -577,7 +577,7 @@ asio::awaitable<void> HttpClient::requestSseAsync(
                 buf,
                 parser,
                 asio::cancel_after(
-                    config.readTimeout,
+                    config.readChunkTimeout,
                     asio::redirect_error(asio::use_awaitable, ec)
                 )
             );
@@ -587,7 +587,7 @@ asio::awaitable<void> HttpClient::requestSseAsync(
                 }
                 if (ec == asio::error::operation_aborted) {
                     throw std::runtime_error(
-                        "SSE stream read timeout: no data received within readTimeout"
+                        "SSE stream read timeout: no data received within readChunkTimeout"
                     );
                 }
                 throw neograph_asio_system_error(ec, "SSE stream read");

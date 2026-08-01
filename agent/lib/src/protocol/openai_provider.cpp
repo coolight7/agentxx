@@ -122,9 +122,9 @@ asio::awaitable<neograph::ChatCompletion>
         "application/json",
         headers,
         HttpClient::RequestConfig{
-            .connectTimeout = std::chrono::seconds{config_.connectTimeoutSeconds},
-            .readTimeout    = std::chrono::seconds{config_.readTimeoutSeconds},
-            .sslVerify      = config_.sslVerify,
+            .connectTimeout   = std::chrono::seconds{config_.connectTimeoutSeconds},
+            .readChunkTimeout = std::chrono::seconds{config_.readChunkTimeoutSeconds},
+            .sslVerify        = config_.sslVerify,
         }
     );
 
@@ -209,14 +209,21 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStream(
         "application/json",
         headers,
         HttpClient::RequestConfig{
-            .connectTimeout = std::chrono::seconds{config_.connectTimeoutSeconds},
-            .readTimeout    = std::chrono::seconds{config_.readTimeoutSeconds},
-            .sslVerify      = config_.sslVerify,
+            .connectTimeout   = std::chrono::seconds{config_.connectTimeoutSeconds},
+            .readChunkTimeout = std::chrono::seconds{config_.readChunkTimeoutSeconds},
+            .sslVerify        = config_.sslVerify,
         },
         [&](std::string_view chunk) {
             lineBuffer += chunk;
             try {
-                processSseBuffer(lineBuffer, completion, fullContent, fullThinking, tcMap, on_chunk);
+                processSseBuffer(
+                    lineBuffer,
+                    completion,
+                    fullContent,
+                    fullThinking,
+                    tcMap,
+                    on_chunk
+                );
             } catch (const std::exception&) {
             }
         }

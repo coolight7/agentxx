@@ -187,7 +187,7 @@ asio::awaitable<void> test_acp_server_integration() {
             "not valid json",
             "application/json",
             headers,
-            HttpClient::RequestConfig{.readTimeout = std::chrono::seconds{5}}
+            HttpClient::RequestConfig{.readChunkTimeout = std::chrono::seconds{5}}
         );
         XX_TEST_EXPECT_HAS_VALUE(resp);
         if (resp.has_value()) {
@@ -426,7 +426,7 @@ asio::awaitable<void> test_acp_server_http_errors() {
             baseUrl + "/acp",
             req,
             {},
-            HttpClient::RequestConfig{.readTimeout = std::chrono::seconds{6}}
+            HttpClient::RequestConfig{.readChunkTimeout = std::chrono::seconds{6}}
         );
         XX_TEST_EXPECT_HAS_VALUE(resp);
         if (resp.has_value()) {
@@ -450,7 +450,7 @@ asio::awaitable<void> test_acp_server_http_errors() {
             baseUrl + "/acp",
             req,
             {},
-            HttpClient::RequestConfig{.readTimeout = std::chrono::seconds{6}}
+            HttpClient::RequestConfig{.readChunkTimeout = std::chrono::seconds{6}}
         );
         XX_TEST_EXPECT_HAS_VALUE(resp);
         if (resp.has_value()) {

@@ -49,10 +49,12 @@ static asio::awaitable<void> test_http_read_timeout() {
     });
 
     // Register a handler that sleeps forever (simulates slow backend)
-    server.router().add("/slow", 0,
+    server.router().add(
+        "/slow",
+        0,
         std::make_shared<HttpServer::Handler>(
-            [](HttpServer::Request&, HttpServer::Response&, std::string_view)
-                -> asio::awaitable<void> {
+            [](HttpServer::Request&, HttpServer::Response&, std::string_view
+            ) -> asio::awaitable<void> {
                 // Never respond — just wait until cancelled
                 asio::steady_timer timer(co_await asio::this_coro::executor);
                 timer.expires_after(std::chrono::seconds{300});
@@ -63,7 +65,9 @@ static asio::awaitable<void> test_http_read_timeout() {
         )
     );
 
-    std::thread serverThread([&server]() { server.start(); });
+    std::thread serverThread([&server]() {
+        server.start();
+    });
     uint16_t    port = waitServerPort(server);
     if (port == 0) {
         TEST_FAIL << "test_http_read_timeout: server failed to start" << std::endl;
@@ -77,10 +81,12 @@ static asio::awaitable<void> test_http_read_timeout() {
 
     // Use a very short readTimeout (500ms) — should trigger timeout
     auto start  = std::chrono::steady_clock::now();
-    auto result = co_await HttpClient::getAsync(url, {},
+    auto result = co_await HttpClient::getAsync(
+        url,
+        {},
         HttpClient::RequestConfig{
-            .connectTimeout = 5s,
-            .readTimeout    = 500ms,
+            .connectTimeout   = 5s,
+            .readChunkTimeout = 500ms,
         }
     );
     auto elapsed = std::chrono::steady_clock::now() - start;
@@ -104,11 +110,13 @@ static asio::awaitable<void> test_http_read_timeout() {
 static asio::awaitable<void> test_http_connect_timeout_total() {
     // Connect to a non-routable address to trigger connect timeout
     // 192.0.2.1 is TEST-NET-1 (RFC 5737), guaranteed non-routable
-    auto start = std::chrono::steady_clock::now();
-    auto result = co_await HttpClient::getAsync("http://192.0.2.1:9999/test", {},
+    auto start  = std::chrono::steady_clock::now();
+    auto result = co_await HttpClient::getAsync(
+        "http://192.0.2.1:9999/test",
+        {},
         HttpClient::RequestConfig{
-            .connectTimeout = 1s,
-            .readTimeout    = 1s,
+            .connectTimeout   = 1s,
+            .readChunkTimeout = 1s,
         }
     );
     auto elapsed = std::chrono::steady_clock::now() - start;
@@ -119,8 +127,8 @@ static asio::awaitable<void> test_http_connect_timeout_total() {
     XX_TEST_EXPECT_TRUE(elapsed < 2s);
 
     TEST_INFO << "connect timeout elapsed: "
-              << std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count()
-              << "ms" << std::endl;
+              << std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count() << "ms"
+              << std::endl;
 }
 
 // ===========================================================================
@@ -146,7 +154,9 @@ static asio::awaitable<void> test_ws_recv_timeout_keeps_connection() {
         }
     });
 
-    std::thread serverThread([&server]() { server.start(); });
+    std::thread serverThread([&server]() {
+        server.start();
+    });
     uint16_t    port = waitServerPort(server);
     if (port == 0) {
         TEST_FAIL << "test_ws_recv_timeout: server failed to start" << std::endl;
@@ -215,7 +225,9 @@ static asio::awaitable<void> test_ws_ping_uses_config_timeout() {
         }
     });
 
-    std::thread serverThread([&server]() { server.start(); });
+    std::thread serverThread([&server]() {
+        server.start();
+    });
     uint16_t    port = waitServerPort(server);
     if (port == 0) {
         TEST_FAIL << "test_ws_ping: server failed to start" << std::endl;
@@ -256,17 +268,19 @@ static asio::awaitable<void> test_ws_ping_uses_config_timeout() {
 static asio::awaitable<void> test_http_max_requests_per_connection() {
     // Server allows only 2 requests per connection
     HttpServer server({
-        .address                   = "127.0.0.1",
-        .port                      = 0,
-        .ioThreads                 = 1,
-        .requestTimeout            = std::chrono::seconds{5},
-        .maxRequestsPerConnection  = 2,
+        .address                  = "127.0.0.1",
+        .port                     = 0,
+        .ioThreads                = 1,
+        .requestTimeout           = std::chrono::seconds{5},
+        .maxRequestsPerConnection = 2,
     });
 
-    server.router().add("/count", 0,
+    server.router().add(
+        "/count",
+        0,
         std::make_shared<HttpServer::Handler>(
-            [](HttpServer::Request&, HttpServer::Response& resp, std::string_view)
-                -> asio::awaitable<void> {
+            [](HttpServer::Request&, HttpServer::Response& resp, std::string_view
+            ) -> asio::awaitable<void> {
                 resp.result(boost::beast::http::status::ok);
                 resp.set(boost::beast::http::field::content_type, "text/plain");
                 resp.body() = "ok";
@@ -276,7 +290,9 @@ static asio::awaitable<void> test_http_max_requests_per_connection() {
         )
     );
 
-    std::thread serverThread([&server]() { server.start(); });
+    std::thread serverThread([&server]() {
+        server.start();
+    });
     uint16_t    port = waitServerPort(server);
     if (port == 0) {
         TEST_FAIL << "test_max_requests: server failed to start" << std::endl;
@@ -290,19 +306,28 @@ static asio::awaitable<void> test_http_max_requests_per_connection() {
 
     // With keepAlive=true, the server should close after 2 requests
     // First request should succeed
-    auto r1 = co_await HttpClient::getAsync(url, {},
-        HttpClient::RequestConfig{.connectTimeout = 2s, .readTimeout = 2s, .keepAlive = true});
+    auto r1 = co_await HttpClient::getAsync(
+        url,
+        {},
+        HttpClient::RequestConfig{.connectTimeout = 2s, .readChunkTimeout = 2s, .keepAlive = true}
+    );
     XX_TEST_EXPECT_TRUE(r1.has_value());
 
     // Second request on a new connection should also succeed
-    auto r2 = co_await HttpClient::getAsync(url, {},
-        HttpClient::RequestConfig{.connectTimeout = 2s, .readTimeout = 2s, .keepAlive = true});
+    auto r2 = co_await HttpClient::getAsync(
+        url,
+        {},
+        HttpClient::RequestConfig{.connectTimeout = 2s, .readChunkTimeout = 2s, .keepAlive = true}
+    );
     XX_TEST_EXPECT_TRUE(r2.has_value());
 
     // Third request should also succeed (new connection each time since client
     // doesn't pool connections), but the server enforces the limit per connection
-    auto r3 = co_await HttpClient::getAsync(url, {},
-        HttpClient::RequestConfig{.connectTimeout = 2s, .readTimeout = 2s, .keepAlive = true});
+    auto r3 = co_await HttpClient::getAsync(
+        url,
+        {},
+        HttpClient::RequestConfig{.connectTimeout = 2s, .readChunkTimeout = 2s, .keepAlive = true}
+    );
     XX_TEST_EXPECT_TRUE(r3.has_value());
 
     server.stop();
@@ -322,9 +347,10 @@ static asio::awaitable<void> test_sse_writer_timeout_config() {
         .sseWriteTimeout = std::chrono::seconds{2},
     });
 
-    server.addSseRoute("/sse",
-        [](HttpServer::Request&, std::shared_ptr<HttpServer::SseWriter> writer)
-            -> asio::awaitable<void> {
+    server.addSseRoute(
+        "/sse",
+        [](HttpServer::Request&,
+           std::shared_ptr<HttpServer::SseWriter> writer) -> asio::awaitable<void> {
             // Send one event then stop
             bool ok = co_await writer->writeEvent("message", "hello sse");
             if (!ok) {
@@ -334,7 +360,9 @@ static asio::awaitable<void> test_sse_writer_timeout_config() {
         }
     );
 
-    std::thread serverThread([&server]() { server.start(); });
+    std::thread serverThread([&server]() {
+        server.start();
+    });
     uint16_t    port = waitServerPort(server);
     if (port == 0) {
         TEST_FAIL << "test_sse_timeout: server failed to start" << std::endl;
@@ -350,9 +378,15 @@ static asio::awaitable<void> test_sse_writer_timeout_config() {
     std::string received;
     try {
         co_await HttpClient::requestSseAsync(
-            "GET", url, {}, "", {},
-            HttpClient::RequestConfig{.connectTimeout = 2s, .readTimeout = 3s},
-            [&](std::string_view chunk) { received.append(chunk); }
+            "GET",
+            url,
+            {},
+            "",
+            {},
+            HttpClient::RequestConfig{.connectTimeout = 2s, .readChunkTimeout = 3s},
+            [&](std::string_view chunk) {
+                received.append(chunk);
+            }
         );
     } catch (const std::exception&) {
         // SSE stream may end with an error after close, that's ok
@@ -372,13 +406,9 @@ static asio::awaitable<void> test_ws_connect_timeout() {
     WsClientConfig cfg;
     cfg.connectTimeout = 1s;
 
-    auto start  = std::chrono::steady_clock::now();
-    auto result = co_await wsConnect(
-        co_await asio::this_coro::executor,
-        "ws://192.0.2.1:9999/ws",
-        {},
-        cfg
-    );
+    auto start = std::chrono::steady_clock::now();
+    auto result
+        = co_await wsConnect(co_await asio::this_coro::executor, "ws://192.0.2.1:9999/ws", {}, cfg);
     auto elapsed = std::chrono::steady_clock::now() - start;
 
     XX_TEST_EXPECT_FALSE(result.has_value());
@@ -389,8 +419,8 @@ static asio::awaitable<void> test_ws_connect_timeout() {
     XX_TEST_EXPECT_TRUE(elapsed < 3s);
 
     TEST_INFO << "ws connect timeout elapsed: "
-              << std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count()
-              << "ms" << std::endl;
+              << std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count() << "ms"
+              << std::endl;
 }
 
 // ===========================================================================
@@ -416,7 +446,7 @@ static void test_calc_timeout_by_size() {
 static void test_request_config_defaults() {
     RequestConfig cfg;
     XX_TEST_EXPECT_EQ(cfg.connectTimeout.count(), 30000);
-    XX_TEST_EXPECT_EQ(cfg.readTimeout.count(), 30000);
+    XX_TEST_EXPECT_EQ(cfg.readChunkTimeout.count(), 30000);
     XX_TEST_EXPECT_FALSE(cfg.sendTimeout.has_value());
     XX_TEST_EXPECT_FALSE(cfg.sslVerify.has_value());
     XX_TEST_EXPECT_EQ(cfg.followRedirect, (size_t)3);

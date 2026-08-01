@@ -784,7 +784,10 @@ asio::awaitable<void> test_http_client_beast_server() {
         auto resp = co_await HttpClient::getAsync(
             baseUrl + "/redirect-me",
             {},
-            HttpClient::RequestConfig{.readTimeout = std::chrono::seconds{10}, .followRedirect = 0}
+            HttpClient::RequestConfig{
+                .readChunkTimeout = std::chrono::seconds{10},
+                .followRedirect   = 0
+            }
         );
         XX_TEST_EXPECT_HAS_VALUE(resp);
         if (resp.has_value()) {
@@ -798,7 +801,10 @@ asio::awaitable<void> test_http_client_beast_server() {
         auto resp = co_await HttpClient::getAsync(
             baseUrl + "/redirect-me",
             {},
-            HttpClient::RequestConfig{.readTimeout = std::chrono::seconds{10}, .followRedirect = 1}
+            HttpClient::RequestConfig{
+                .readChunkTimeout = std::chrono::seconds{10},
+                .followRedirect   = 1
+            }
         );
         XX_TEST_EXPECT_HAS_VALUE(resp);
         if (resp.has_value()) {
@@ -811,7 +817,10 @@ asio::awaitable<void> test_http_client_beast_server() {
         auto resp = co_await HttpClient::getAsync(
             baseUrl + "/redirect-loop",
             {},
-            HttpClient::RequestConfig{.readTimeout = std::chrono::seconds{10}, .followRedirect = 3}
+            HttpClient::RequestConfig{
+                .readChunkTimeout = std::chrono::seconds{10},
+                .followRedirect   = 3
+            }
         );
         XX_TEST_EXPECT_HAS_VALUE(resp);
         if (resp.has_value()) {
@@ -868,9 +877,9 @@ asio::awaitable<void> test_http_client_beast_server() {
             baseUrl + "/big-body?size=100",
             {},
             HttpClient::RequestConfig{
-                .readTimeout     = std::chrono::seconds{5},
-                .followRedirect  = 3,
-                .maxResponseBody = 50
+                .readChunkTimeout = std::chrono::seconds{5},
+                .followRedirect   = 3,
+                .maxResponseBody  = 50
             }
         );
         // Body limit exceeded should result in an error (no value)
@@ -883,9 +892,9 @@ asio::awaitable<void> test_http_client_beast_server() {
             baseUrl + "/big-body?size=100",
             {},
             HttpClient::RequestConfig{
-                .readTimeout     = std::chrono::seconds{5},
-                .followRedirect  = 3,
-                .maxResponseBody = 200
+                .readChunkTimeout = std::chrono::seconds{5},
+                .followRedirect   = 3,
+                .maxResponseBody  = 200
             }
         );
         XX_TEST_EXPECT_HAS_VALUE(resp);
@@ -912,7 +921,7 @@ asio::awaitable<void> test_http_client_beast_server() {
         // fetchMarkdown should return error (not UB) for 404
         auto result = co_await HttpClient::fetchMarkdown(
             baseUrl + "/nonexistent",
-            HttpClient::RequestConfig{.readTimeout = std::chrono::seconds{5}}
+            HttpClient::RequestConfig{.readChunkTimeout = std::chrono::seconds{5}}
         );
         XX_TEST_EXPECT_FALSE(result.has_value());
     }
@@ -923,7 +932,7 @@ asio::awaitable<void> test_http_client_beast_server() {
         // fetchMarkdown checks success status, not content-type
         auto result = co_await HttpClient::fetchMarkdown(
             baseUrl + "/hello",
-            HttpClient::RequestConfig{.readTimeout = std::chrono::seconds{5}}
+            HttpClient::RequestConfig{.readChunkTimeout = std::chrono::seconds{5}}
         );
         XX_TEST_EXPECT_HAS_VALUE(result);
     }

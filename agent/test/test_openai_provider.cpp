@@ -36,12 +36,12 @@ agentxx::agent::ModelConfig makeOaiCfg(
     bool               sendThinking = false
 ) {
     agentxx::agent::ModelConfig mc;
-    mc.name                  = "test";
-    mc.apiKey                = apiKey;
-    mc.baseUrl               = baseUrl;
-    mc.connectTimeoutSeconds = connectTO;
-    mc.readTimeoutSeconds    = readTO;
-    mc.sendThinking          = sendThinking;
+    mc.name                    = "test";
+    mc.apiKey                  = apiKey;
+    mc.baseUrl                 = baseUrl;
+    mc.connectTimeoutSeconds   = connectTO;
+    mc.readChunkTimeoutSeconds = readTO;
+    mc.sendThinking            = sendThinking;
     return mc;
 }
 } // namespace

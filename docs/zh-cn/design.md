@@ -227,7 +227,7 @@ models:
     model_name: "gpt-4"
     send_thinking: false
     connect_timeout: 16
-    read_timeout: 24
+    read_chunk_timeout: 24
     model_support_max_token: 128000
     extra_api_config:           # 合并到请求 body 的扩展配置
       temperature: 0.7
