@@ -26,10 +26,14 @@ struct WsClient::Impl {
         config(std::move(cfg)) {}
 
     void configureStream() {
+        // 禁用 Beast 内部 idle_timeout: 由外部 cancel_after(recvTimeout/sendTimeout) 统一控制,
+        // 避免 Beast suggested timeout (默认 30s) 与用户配置的 recvTimeout 冲突
         if (isSsl) {
-            wss->set_option(boost::beast::websocket::stream_base::timeout::suggested(
-                boost::beast::role_type::client
-            ));
+            wss->set_option(boost::beast::websocket::stream_base::timeout{
+                .handshake_timeout = std::chrono::seconds{30},
+                .idle_timeout      = boost::beast::websocket::stream_base::none(),
+                .keep_alive_pings  = false,
+            });
             wss->set_option(boost::beast::websocket::stream_base::decorator(
                 [](boost::beast::websocket::request_type& req) {
                     req.set(boost::beast::http::field::user_agent, "agentxx-ws/1.0");
@@ -37,9 +41,11 @@ struct WsClient::Impl {
             ));
             wss->read_message_max(config.maxMessageSize);
         } else {
-            ws->set_option(boost::beast::websocket::stream_base::timeout::suggested(
-                boost::beast::role_type::client
-            ));
+            ws->set_option(boost::beast::websocket::stream_base::timeout{
+                .handshake_timeout = std::chrono::seconds{30},
+                .idle_timeout      = boost::beast::websocket::stream_base::none(),
+                .keep_alive_pings  = false,
+            });
             ws->set_option(boost::beast::websocket::stream_base::decorator(
                 [](boost::beast::websocket::request_type& req) {
                     req.set(boost::beast::http::field::user_agent, "agentxx-ws/1.0");
@@ -166,19 +172,16 @@ asio::awaitable<std::expected<void, std::string>> WsClient::sendPing(std::string
         co_return std::unexpected{std::string{"connection closed"}};
     }
     try {
-        auto timeout = std::max(
-            std::chrono::seconds{30},
-            std::chrono::seconds{static_cast<int64_t>(payload.size()) / (64 * 1024)}
-        );
+        // ping payload 协议限制最大 125 字节, 直接使用配置的 sendTimeout
         if (impl_->isSsl) {
             co_await impl_->wss->async_ping(
                 boost::beast::websocket::ping_data{payload},
-                asio::cancel_after(timeout, asio::use_awaitable)
+                asio::cancel_after(impl_->config.sendTimeout, asio::use_awaitable)
             );
         } else {
             co_await impl_->ws->async_ping(
                 boost::beast::websocket::ping_data{payload},
-                asio::cancel_after(timeout, asio::use_awaitable)
+                asio::cancel_after(impl_->config.sendTimeout, asio::use_awaitable)
             );
         }
         co_return std::expected<void, std::string>{};
@@ -256,8 +259,10 @@ asio::awaitable<std::expected<WsMessage, std::string>> WsClient::recv() {
             co_return std::expected<WsMessage, std::string>{std::move(msg)};
         }
         if (e.code() == asio::error::operation_aborted) {
-            // 接收超时 (空闲超过 recvTimeout): 连接本身仍健康, 不能标记 closed,
-            // 否则一次普通超时即永久废弃健康连接, 之后所有 send/recv 都报 "connection closed"
+            // 接收超时 (空闲超过 recvTimeout): Beast websocket stream 在 async_read_some
+            // 被 cancel 后内部状态机 (帧缓冲/解压上下文) 不可恢复, 后续操作必然失败,
+            // 因此必须标记 closed。调用方应重建连接。
+            impl_->closed_ = true;
             co_return std::unexpected{std::string{"recv timeout"}};
         }
         impl_->closed_ = true;
@@ -426,9 +431,12 @@ std::unique_ptr<WsClient> wrapAcceptedWs(
     auto impl   = std::make_unique<WsClient::Impl>(std::move(ex), std::move(config));
     impl->isSsl = false;
     impl->ws    = std::make_unique<WsClient::Impl::WsStream>(std::move(ws));
-    impl->ws->set_option(
-        boost::beast::websocket::stream_base::timeout::suggested(boost::beast::role_type::server)
-    );
+    // 禁用 Beast 内部 idle_timeout, 由外部 cancel_after 统一控制超时
+    impl->ws->set_option(boost::beast::websocket::stream_base::timeout{
+        .handshake_timeout = std::chrono::seconds{30},
+        .idle_timeout      = boost::beast::websocket::stream_base::none(),
+        .keep_alive_pings  = false,
+    });
     impl->ws->read_message_max(impl->config.maxMessageSize);
     return std::unique_ptr<WsClient>(new WsClient(std::move(impl)));
 }
@@ -441,9 +449,12 @@ std::unique_ptr<WsClient> wrapAcceptedWss(
     auto impl   = std::make_unique<WsClient::Impl>(std::move(ex), std::move(config));
     impl->isSsl = true;
     impl->wss   = std::make_unique<WsClient::Impl::WssStream>(std::move(wss));
-    impl->wss->set_option(
-        boost::beast::websocket::stream_base::timeout::suggested(boost::beast::role_type::server)
-    );
+    // 禁用 Beast 内部 idle_timeout, 由外部 cancel_after 统一控制超时
+    impl->wss->set_option(boost::beast::websocket::stream_base::timeout{
+        .handshake_timeout = std::chrono::seconds{30},
+        .idle_timeout      = boost::beast::websocket::stream_base::none(),
+        .keep_alive_pings  = false,
+    });
     impl->wss->read_message_max(impl->config.maxMessageSize);
     return std::unique_ptr<WsClient>(new WsClient(std::move(impl)));
 }

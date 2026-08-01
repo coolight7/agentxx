@@ -348,6 +348,21 @@ asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::requestAsy
                         asio::cancel_after(config.connectTimeout, asio::use_awaitable)
                     );
 
+                    // connectTimeout 是 DNS + TCP + TLS 的总上限:
+                    // 用 deadline 记录起始时刻, 后续阶段使用剩余时间, 避免三阶段各用满导致总耗时 3
+                    // 倍
+                    auto connectDeadline = std::chrono::steady_clock::now() + config.connectTimeout;
+                    auto remainingTimeout = [&]() -> std::chrono::milliseconds {
+                        auto now = std::chrono::steady_clock::now();
+                        if (now >= connectDeadline) {
+                            // 留一点时间
+                            return std::chrono::seconds{1};
+                        }
+                        return std::chrono::duration_cast<std::chrono::milliseconds>(
+                            connectDeadline - now
+                        );
+                    };
+
                     if (isHttps) {
                         bool verify = config.sslVerify.value_or(
                             sslVerifyEnabled_.load(std::memory_order_relaxed)
@@ -363,27 +378,29 @@ asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::requestAsy
                         co_await asio::async_connect(
                             stream.lowest_layer(),
                             endpoints,
-                            asio::cancel_after(config.connectTimeout, asio::use_awaitable)
+                            asio::cancel_after(remainingTimeout(), asio::use_awaitable)
                         );
                         neograph_asio_error_code tcpEc;
                         stream.lowest_layer().set_option(asio::ip::tcp::no_delay(true), tcpEc);
                         co_await stream.async_handshake(
                             asio::ssl::stream_base::client,
-                            asio::cancel_after(config.connectTimeout, asio::use_awaitable)
+                            asio::cancel_after(remainingTimeout(), asio::use_awaitable)
                         );
                         result = co_await exchange(stream, req, config);
                         // shutdown 失败 (如对端已提前关闭) 不影响已成功获取的响应,
                         // 用 redirect_error 捕获并忽略, 避免异常丢弃上面的成功 result
+                        // 加 cancel_after 防止对端不响应 close_notify 时永久挂起
                         neograph_asio_error_code sslEc;
-                        co_await stream.async_shutdown(
+                        co_await stream.async_shutdown(asio::cancel_after(
+                            std::chrono::seconds{5},
                             asio::redirect_error(asio::use_awaitable, sslEc)
-                        );
+                        ));
                     } else {
                         tcp::socket stream(executor);
                         co_await asio::async_connect(
                             stream,
                             endpoints,
-                            asio::cancel_after(config.connectTimeout, asio::use_awaitable)
+                            asio::cancel_after(remainingTimeout(), asio::use_awaitable)
                         );
                         neograph_asio_error_code tcpEc;
                         stream.set_option(asio::ip::tcp::no_delay(true), tcpEc);
@@ -568,6 +585,11 @@ asio::awaitable<void> HttpClient::requestSseAsync(
                 if (ec == asio::error::eof || ec == http::error::end_of_stream) {
                     break;
                 }
+                if (ec == asio::error::operation_aborted) {
+                    throw std::runtime_error(
+                        "SSE stream read timeout: no data received within readTimeout"
+                    );
+                }
                 throw neograph_asio_system_error(ec, "SSE stream read");
             }
             flushBody();
@@ -582,16 +604,25 @@ asio::awaitable<void> HttpClient::requestSseAsync(
         if (!parsed->host.empty()) {
             ::SSL_set_tlsext_host_name(stream.native_handle(), parsed->host.c_str());
         }
+        // connectTimeout 是 DNS + TCP + TLS 的总上限 (DNS 已在上方消耗部分时间)
+        auto connectDeadline = std::chrono::steady_clock::now() + config.connectTimeout;
+        auto remainingMs     = [&]() -> std::chrono::milliseconds {
+            auto now = std::chrono::steady_clock::now();
+            if (now >= connectDeadline) {
+                return std::chrono::seconds{1};
+            }
+            return std::chrono::duration_cast<std::chrono::milliseconds>(connectDeadline - now);
+        };
         co_await asio::async_connect(
             stream.lowest_layer(),
             endpoints,
-            asio::cancel_after(config.connectTimeout, asio::use_awaitable)
+            asio::cancel_after(remainingMs(), asio::use_awaitable)
         );
         neograph_asio_error_code tcpEc;
         stream.lowest_layer().set_option(asio::ip::tcp::no_delay(true), tcpEc);
         co_await stream.async_handshake(
             asio::ssl::stream_base::client,
-            asio::cancel_after(config.connectTimeout, asio::use_awaitable)
+            asio::cancel_after(remainingMs(), asio::use_awaitable)
         );
         co_await doSseExchange(stream);
         neograph_asio_error_code sslEc;

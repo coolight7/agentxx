@@ -1909,6 +1909,9 @@ asio::awaitable<std::string> FilesystemGrepTool::execute_async(const neograph::j
                 }
                 regex = agentxx::util::XXRegex::createRegex(foldedPatterns);
             }
+            if (!regex) {
+                co_return "[Error] Regex compilation failed";
+            }
 
             for (const auto& item : refilelist) {
                 // 检查取消/超时标志, 提前退出

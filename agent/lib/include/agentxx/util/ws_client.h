@@ -40,7 +40,11 @@ struct WsClientConfig {
     inline static constexpr size_t kTimeoutChunkBytes = 64 * 1024;
 
     std::chrono::milliseconds connectTimeout = std::chrono::seconds{16};
+    /// 接收超时: 两次 async_read_some 之间的最大间隔 (per-chunk 语义)。
+    /// 只要数据持续到达, 大消息的总接收时间可以远超此值。
+    /// 超时不会关闭连接 (连接仍健康), 仅当次 recv() 返回错误。
     std::chrono::milliseconds recvTimeout    = std::chrono::seconds{60};
+    /// 发送超时: 两次 async_write_some 之间的最大间隔 (per-chunk 语义)。
     std::chrono::milliseconds sendTimeout    = std::chrono::seconds{60};
     bool                      sslVerify      = false;
     size_t                    maxMessageSize = 16 * 1024 * 1024;

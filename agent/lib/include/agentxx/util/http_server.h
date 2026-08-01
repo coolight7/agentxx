@@ -82,11 +82,17 @@ public:
         unsigned             ioThreads = 0; // 0 = hardware_concurrency
         std::chrono::seconds requestTimeout{30};
 
+        /// SSE 写入超时: 两次 SSE event 推送之间的最大间隔 (默认 120s, 适应 LLM 长思考)
+        std::chrono::seconds sseWriteTimeout{120};
+
         // SSL (optional – set both to enable)
         std::string sslCertFile;
         std::string sslKeyFile;
 
         size_t maxConnections = 8192;
+
+        /// 单个 keep-alive 连接的最大请求数 (0 = 无限制); 防止恶意客户端永久占用连接
+        size_t maxRequestsPerConnection = 1024;
 
         // DoS protection: reject requests with oversized headers or bodies
         uint32_t maxHeaderSize  = 8192;            // default 8 KB header limit
@@ -292,8 +298,16 @@ private:
         bool                      readError = false;
         std::string               readErrorMsg;
         http::status              readErrorStatus = http::status::bad_request;
+        size_t                    requestCount    = 0; // 连接级请求计数 (防永久占用)
 
         do {
+            // 连接级请求数限制: 防止恶意客户端通过 keep-alive 永久占用连接资源
+            if (config_.maxRequestsPerConnection > 0
+                && requestCount >= config_.maxRequestsPerConnection) {
+                break;
+            }
+            ++requestCount;
+
             // Read one request with body/header size limits for DoS protection
             readError = false;
             Request req;
@@ -361,7 +375,7 @@ private:
                     try {
                         auto writer = std::make_shared<SseWriterImpl<Stream>>(
                             stream,
-                            std::chrono::seconds{30}
+                            config_.sseWriteTimeout
                         );
                         co_await sseIt->second(req, writer);
                         handled = true;
