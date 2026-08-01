@@ -68,6 +68,12 @@ public:
         return viewportHeight_;
     }
 
+    /// 内容可用宽度 (终端列数; 已扣除滚动条 gutter)。
+    /// 首帧布局前返回 -1 (尚未测量)。
+    int contentWidth() const {
+        return measuredWidth_;
+    }
+
     /// 上一帧各子项的可见屏幕区域 (索引与 render 返回的 items 对应)。
     /// 不可见子项为空 Box (IsEmpty() 为 true)。供外部鼠标命中检测。
     const std::vector<ftxui::Box>& visibleBoxes() const {

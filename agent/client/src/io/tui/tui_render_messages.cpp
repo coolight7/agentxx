@@ -10,14 +10,19 @@ namespace {
 
 /// 渲染 markdown 并返回元素 + DomBuilder (builder 内部 Box 被 reflect() 引用,
 /// 必须与返回的 element 同生命周期, 否则 SetBox 写入悬空引用 → UAF)
+/// maxWidth: 可用渲染宽度 (终端列数), 用于限制表格等宽元素; <= 0 表示不限制
 std::pair<ftxui::Element, std::unique_ptr<markdown::DomBuilder>>
-    renderMarkdown(std::string_view text, ftxui::Color color, markdown::Theme const& mdTheme) {
+    renderMarkdown(std::string_view text, ftxui::Color color, markdown::Theme const& mdTheme,
+                   int maxWidth = 0) {
     if (text.empty()) {
         return {ftxui::text(""), nullptr};
     }
     auto parser  = markdown::make_cmark_parser();
     auto ast     = parser->parse(text);
     auto builder = std::make_unique<markdown::DomBuilder>();
+    if (maxWidth > 0) {
+        builder->set_max_width(maxWidth);
+    }
     auto el      = builder->build(ast, -1, mdTheme);
     return {el | ftxui::color(color), std::move(builder)};
 }
@@ -45,8 +50,10 @@ int64_t AgentTUI::messageSignature(const Message& msg) {
 
 // 构建单条消息的渲染块 (不含末尾空行)。
 // 由 buildMessageItems 在消息签名变化时调用并缓存。
+// maxWidth: 消息列表可用宽度 (终端列数), 用于限制表格宽度; <= 0 表示不限制
 ftxui::Element AgentTUI::buildMessageBlock(
     const Message&                                      msg,
+    int                                                 maxWidth,
     std::vector<std::unique_ptr<markdown::DomBuilder>>& mdBuilders
 ) {
     switch (msg.role) {
@@ -57,7 +64,7 @@ ftxui::Element AgentTUI::buildMessageBlock(
             });
         case Message::Role::Assistant: {
             auto [el, builder]
-                = renderMarkdown(msg.text, theme_.assistantColor, theme_.markdownTheme);
+                = renderMarkdown(msg.text, theme_.assistantColor, theme_.markdownTheme, maxWidth);
             if (builder) {
                 mdBuilders.push_back(std::move(builder));
             }
@@ -94,7 +101,7 @@ ftxui::Element AgentTUI::buildMessageBlock(
             lines.push_back(hbox(std::move(header)));
             if (expanded) {
                 auto [el, builder]
-                    = renderMarkdown(msg.text, theme_.thinkingColor, theme_.markdownTheme);
+                    = renderMarkdown(msg.text, theme_.thinkingColor, theme_.markdownTheme, maxWidth);
                 if (builder) {
                     mdBuilders.push_back(std::move(builder));
                 }
@@ -154,6 +161,9 @@ ftxui::Element AgentTUI::buildMessageBlock(
 std::vector<ScrollItem> AgentTUI::buildMessageItems() {
     messageItemMeta_.clear();
 
+    // 获取消息列表可用宽度 (用于限制表格等宽元素); 首帧尚未布局时为 -1, 不限制
+    const int msgListWidth = messagesScrollable_ ? messagesScrollable_->contentWidth() : -1;
+
     // 空状态: 单个占满视口的欢迎横幅 (fillViewport 居中)
     const bool hasStreamingToken = isStreaming_ && !currentToken_.empty();
     if (messages_.empty() && !hasStreamingToken) {
@@ -192,14 +202,15 @@ std::vector<ScrollItem> AgentTUI::buildMessageItems() {
         const auto& msg   = messages_[i];
         auto&       cache = messageCache_[i];
         int64_t     sig   = messageSignature(msg);
-        if (cache.sig != sig || !cache.element) {
-            // 内容/状态变化 -> 重建块元素 (markdown 仅在此解析)
+        // 内容/状态变化 或 可用宽度变化 (表格换行依赖宽度) -> 重建块元素
+        if (cache.sig != sig || cache.cachedWidth != msgListWidth || !cache.element) {
             cache.mdBuilders.clear();
             cache.element = vbox({
-                buildMessageBlock(msg, cache.mdBuilders),
+                buildMessageBlock(msg, msgListWidth, cache.mdBuilders),
                 text(""),
             });
-            cache.sig     = sig;
+            cache.sig         = sig;
+            cache.cachedWidth = msgListWidth;
         }
         items.push_back(ScrollItem{cache.element, false});
 
@@ -234,7 +245,7 @@ std::vector<ScrollItem> AgentTUI::buildMessageItems() {
             }
             lines.push_back(hbox(std::move(header)));
             auto [el, builder]
-                = renderMarkdown(currentToken_, theme_.thinkingColor, theme_.markdownTheme);
+                = renderMarkdown(currentToken_, theme_.thinkingColor, theme_.markdownTheme, msgListWidth);
             if (builder) {
                 streamingMdBuilders_.push_back(std::move(builder));
             }
@@ -242,7 +253,7 @@ std::vector<ScrollItem> AgentTUI::buildMessageItems() {
             block = vbox(std::move(lines));
         } else {
             auto [el, builder]
-                = renderMarkdown(currentToken_, theme_.assistantColor, theme_.markdownTheme);
+                = renderMarkdown(currentToken_, theme_.assistantColor, theme_.markdownTheme, msgListWidth);
             if (builder) {
                 streamingMdBuilders_.push_back(std::move(builder));
             }
