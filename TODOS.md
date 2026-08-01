@@ -1,11 +1,13 @@
 # TODO
 - tui 特化各种 toolcall 渲染
-- node 可支持插件化加载动态库 + graph json定义
-- 拆分需要区分不同线程，继承出不同class，屏蔽不可用函数或检查
+- node 可支持插件化加载动态库 + graph json 定义
 - BaseAgent 增加支持 usage 统计
 - 侧边栏显示cpu占用和内存占用
-
+- release 编译警告 ODR
 - 优化各种tool的效果，贴近命令行
+- tui 表格限制可用宽度
+- tui 重构鼠标点击处理
+- file read 支持 CRLF 换行符
 
 ## 提示词优化
 - 建议对大的操作、改动先进行规划，每完成一步更新规划，最后测试完成后 -> 回顾修改的代码检查是否有问题 -> 最终整体总结

@@ -8,17 +8,6 @@ using namespace ftxui;
 
 namespace {
 
-std::string oneLinePreview(std::string_view s, size_t max = 60) {
-    const auto  nl = s.find('\n');
-    std::string line{(nl == std::string_view::npos) ? s : s.substr(0, nl)};
-    const auto  idx = agentxx::util::findIndexByUtf8Length(line, max);
-    if (idx > 0 && idx < line.size()) {
-        line.resize(idx);
-        line += "...";
-    }
-    return line;
-}
-
 /// 渲染 markdown 并返回元素 + DomBuilder (builder 内部 Box 被 reflect() 引用,
 /// 必须与返回的 element 同生命周期, 否则 SetBox 写入悬空引用 → UAF)
 std::pair<ftxui::Element, std::unique_ptr<markdown::DomBuilder>>
@@ -31,33 +20,6 @@ std::pair<ftxui::Element, std::unique_ptr<markdown::DomBuilder>>
     auto builder = std::make_unique<markdown::DomBuilder>();
     auto el      = builder->build(ast, -1, mdTheme);
     return {el | ftxui::color(color), std::move(builder)};
-}
-
-// 格式化毫秒到可读字符串，自动选择最合适的单位
-// < 60s: "X.Xs" (如 "3.2s")
-// < 3600s (1h): "Xm Ys" (如 "2m 15s")
-// >= 3600s: "Xh Ym Zs" (如 "1h 2m 30s")
-std::string formatDurationMilliseconds(int64_t milliseconds) {
-    if (milliseconds < 0) {
-        return "0.0s";
-    }
-    const int64_t totalSec = milliseconds / 1000;
-    const int64_t hours    = totalSec / 3600;
-    const int64_t minutes  = (totalSec % 3600) / 60;
-    const int64_t seconds  = totalSec % 60;
-
-    if (hours > 0) {
-        return fmt::format("{}h{}m{}s", hours, minutes, seconds);
-    }
-    if (minutes > 0) {
-        if (seconds > 0) {
-            return fmt::format("{}m{}s", minutes, seconds);
-        }
-        return fmt::format("{}m0s", minutes);
-    }
-    // 不足一分钟：显示秒+毫秒
-    const double sec = static_cast<double>(milliseconds) / 1000.0;
-    return fmt::format("{:.1f}s", sec);
 }
 
 } // namespace

@@ -6,6 +6,7 @@
 #include <markdown/dom_builder.hpp>
 #include "agentxx/agent/context.h"
 #include "agentxx/util/log.h"
+#include "agentxx/util/string_util.h"
 #include "asio/awaitable.hpp"
 #include "asio/experimental/concurrent_channel.hpp"
 #include "ftxui/component/component.hpp"
@@ -13,16 +14,76 @@
 #include "ftxui/component/screen_interactive.hpp"
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/box.hpp"
+#include "fmt/format.h"
 #include "neograph/api.h"
 #include <atomic>
+#include <chrono>
 #include <deque>
+#include <format>
 #include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
+
+// ---------------------------------------------------------------------------
+// TUI 共享工具函数 (多个渲染 TU 共用, 定义为 inline 避免重复实现)
+// ---------------------------------------------------------------------------
+
+/// 格式化毫秒到可读字符串，自动选择最合适的单位
+/// < 60s: "X.Xs" (如 "3.2s")
+/// < 3600s (1h): "Xm Ys" (如 "2m 15s")
+/// >= 3600s: "Xh Ym Zs" (如 "1h 2m 30s")
+inline std::string formatDurationMilliseconds(int64_t milliseconds) {
+    if (milliseconds < 0) {
+        return "0.0s";
+    }
+    const int64_t totalSec = milliseconds / 1000;
+    const int64_t hours    = totalSec / 3600;
+    const int64_t minutes  = (totalSec % 3600) / 60;
+    const int64_t seconds  = totalSec % 60;
+
+    if (hours > 0) {
+        return fmt::format("{}h{}m{}s", hours, minutes, seconds);
+    }
+    if (minutes > 0) {
+        if (seconds > 0) {
+            return fmt::format("{}m{}s", minutes, seconds);
+        }
+        return fmt::format("{}m0s", minutes);
+    }
+    // 不足一分钟：显示秒+毫秒
+    const double sec = static_cast<double>(milliseconds) / 1000.0;
+    return fmt::format("{:.1f}s", sec);
+}
+
+/// 格式化时间戳为本地时间 (HH:MM:SS)
+inline std::string formatTimestampMilliseconds(int64_t timestamp_ms) {
+    if (timestamp_ms <= 0) {
+        return "00:00:00";
+    }
+    std::chrono::zoned_time time{
+        std::chrono::current_zone(),
+        std::chrono::sys_time{std::chrono::seconds(timestamp_ms / 1000)}
+    };
+
+    return std::format("{:%H:%M:%S}", time);
+}
+
+/// 取首行并按 utf8 长度截断 (用于消息/待发送项折叠为一行)
+inline std::string oneLinePreview(std::string_view s, size_t max = 60) {
+    const auto  nl = s.find('\n');
+    std::string line{(nl == std::string_view::npos) ? s : s.substr(0, nl)};
+    const auto  idx = agentxx::util::findIndexByUtf8Length(line, max);
+    if (idx > 0 && idx < line.size()) {
+        line.resize(idx);
+        line += "...";
+    }
+    return line;
+}
 
 /// TUI 日志接收器
 /// - 注册到 agentxx::util::LogDispatcher 以接收 XX_LOG 系列日志
@@ -61,8 +122,6 @@ public:
 
     using LineChannel
         = asio::experimental::concurrent_channel<void(neograph_asio_error_code, std::string)>;
-    using BoolChannel
-        = asio::experimental::concurrent_channel<void(neograph_asio_error_code, bool)>;
 
 private:
 
@@ -88,12 +147,6 @@ private:
         int64_t durationMs = 0;
         // 开始时间戳 (毫秒)
         int64_t startTimeMs = 0;
-    };
-
-    struct PermissionRequest {
-        std::string toolName;
-        std::string category;
-        std::string target;
     };
 
     /// 排队等待发送的用户输入 (BaseAgent 执行中收到, 轮次结束后自动逐个发送)
@@ -155,7 +208,6 @@ private:
     std::vector<ftxui::Element> logLineCache_;
 
     std::string                      inputText_;
-    std::optional<PermissionRequest> pendingPermission_;
 
     /// 模型选择器状态
     bool                     showModelSelector_  = false;
@@ -232,7 +284,6 @@ private:
     std::atomic<bool> awaitingInterruptInput_{false};
 
     std::shared_ptr<LineChannel> inputChannel_;
-    std::shared_ptr<BoolChannel> permissionChannel_;
     std::shared_ptr<TUILogSink>  logSink_;
 
     /// 远程 Agentxx 地址 (空表示内置 Agentxx; 非空为远程 http[s]://ip:port)
@@ -270,7 +321,6 @@ private:
     void appendEditToolBody(const Message& msg, ftxui::Elements& lines);
     /// - diff 对比块 (屏幕足够宽时左右对比, 不足时单块内对比)
     ftxui::Element renderEditToolDiff(std::string_view oldStr, std::string_view newStr);
-    ftxui::Element renderPermissionOverlay();
     ftxui::Element renderModelSelectorOverlay();
     ftxui::Element renderSettingsOverlay();
     /// 待发送消息队列弹窗 (顶部清空按钮, 每条消息折叠为一行 + 删除按钮)
