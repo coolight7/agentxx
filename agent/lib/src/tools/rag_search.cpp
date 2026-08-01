@@ -607,7 +607,7 @@ RAGSearchTool::RAGSearchTool(
     std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
 ) :
     XXToolBase("rag_search", in_agentContext, false, true),
-    store(in_store) {}
+    store(std::move(in_store)) {}
 
 neograph::ChatTool RAGSearchTool::get_definition() const {
     auto        agentPtr = agentContext.lock();

@@ -63,7 +63,7 @@ json AcpProtocolHandler::handleMessage(const json& env) {
         if (env.contains("id")) {
             auto    idV = env["id"];
             int64_t id  = idV.is_number_integer() ? idV.get<int64_t>() : -1;
-            std::shared_ptr<std::promise<json>> p;
+            std::shared_ptr<std::promise<json>> p = nullptr;
             {
                 std::lock_guard lk(pendingMu_);
                 auto            it = pending_.find(id);
