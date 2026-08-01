@@ -48,47 +48,64 @@ ftxui::Element AgentTUI::renderSidebar() {
            | size(WIDTH, EQUAL, sidebarWidth_) | bgcolor(theme_.blockColor);
 }
 
-ftxui::Element AgentTUI::renderLogWindow() {
-    auto     lines = logSink_ ? logSink_->snapshot() : std::vector<TUILogSink::Line>{};
-    Elements elements;
-    for (const auto& line : lines) {
-        ftxui::Color c = theme_.assistantColor;
-        std::string  prefix;
-        switch (line.level) {
-            case agentxx::util::LogLevel::Debug:
-                c      = theme_.hintColor;
-                prefix = "[D] ";
-                break;
-            case agentxx::util::LogLevel::Info:
-                c      = theme_.statusColor;
-                prefix = "[I] ";
-                break;
-            case agentxx::util::LogLevel::Warn:
-                c      = theme_.thinkingColor;
-                prefix = "[W] ";
-                break;
-            case agentxx::util::LogLevel::Error:
-                c      = theme_.errorColor;
-                prefix = "[E] ";
-                break;
-            case agentxx::util::LogLevel::Out:
-                c      = theme_.assistantColor;
-                prefix = "";
-                break;
-        }
-        elements.push_back(paragraph(prefix + line.text) | color(c));
+namespace {
+
+// 构建单行日志元素 (按日志级别着色 + 前缀)
+ftxui::Element buildLogLine(const TUILogSink::Line& line, const TUITheme& theme) {
+    ftxui::Color c      = theme.assistantColor;
+    std::string  prefix;
+    switch (line.level) {
+        case agentxx::util::LogLevel::Debug:
+            c      = theme.hintColor;
+            prefix = "[D] ";
+            break;
+        case agentxx::util::LogLevel::Info:
+            c      = theme.statusColor;
+            prefix = "[I] ";
+            break;
+        case agentxx::util::LogLevel::Warn:
+            c      = theme.thinkingColor;
+            prefix = "[W] ";
+            break;
+        case agentxx::util::LogLevel::Error:
+            c      = theme.errorColor;
+            prefix = "[E] ";
+            break;
+        case agentxx::util::LogLevel::Out:
+            c      = theme.assistantColor;
+            prefix = "";
+            break;
     }
-    if (elements.empty()) {
-        return text(" (no logs) ") | dim;
+    return paragraph(prefix + line.text) | color(c);
+}
+
+} // namespace
+
+std::vector<ScrollItem> AgentTUI::renderLogWindow() {
+    auto lines = logSink_ ? logSink_->snapshot() : std::vector<TUILogSink::Line>{};
+    if (lines.empty()) {
+        return {ScrollItem{text(" (no logs) ") | dim, false}};
     }
-    return vbox(std::move(elements));
+    // 日志仅追加: 按行索引缓存元素, 仅构建新增行 (避免每帧重建全部日志行)
+    if (logLineCache_.size() > lines.size()) {
+        logLineCache_.clear();
+    }
+    while (logLineCache_.size() < lines.size()) {
+        logLineCache_.push_back(buildLogLine(lines[logLineCache_.size()], theme_));
+    }
+    std::vector<ScrollItem> items;
+    items.reserve(logLineCache_.size());
+    for (auto& el : logLineCache_) {
+        items.push_back(ScrollItem{el, false});
+    }
+    return items;
 }
 
 void AgentTUI::addSidebarTab(
-    std::string_view                id,
-    std::string_view                title,
-    std::function<ftxui::Element()> render,
-    std::function<ftxui::Element()> footer
+    std::string_view                         id,
+    std::string_view                         title,
+    std::function<std::vector<ScrollItem>()> render,
+    std::function<ftxui::Element()>          footer
 ) {
     for (auto& tab : sidebarTabs_) {
         if (tab.id == id) {
@@ -276,7 +293,7 @@ std::optional<ftxui::Element> AgentTUI::renderPlanningInfo() {
     return vbox(std::move(lines));
 }
 
-ftxui::Element AgentTUI::renderInfoSidebar() {
+std::vector<ScrollItem> AgentTUI::renderInfoSidebar() {
     Elements elements;
 
     // planning 特化渲染 (存在 planning_write toolcall 时)
@@ -340,7 +357,12 @@ ftxui::Element AgentTUI::renderInfoSidebar() {
     }
 
     // planning 与统计信息共同组成单一可滚动列表 (滚动由 sidebarScrollable_ 提供)
-    return vbox(std::move(elements));
+    std::vector<ScrollItem> items;
+    items.reserve(elements.size());
+    for (auto& el : elements) {
+        items.push_back(ScrollItem{std::move(el), false});
+    }
+    return items;
 }
 
 ftxui::Element AgentTUI::renderInfoSidebarFooter() {

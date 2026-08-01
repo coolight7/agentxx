@@ -165,6 +165,9 @@ void AgentTUI::applyThemeSelection() {
     } else if (selectedSettingIndex_ == 1) {
         theme_ = TUITheme::lightTheme();
     }
+    // 主题变化后, 已缓存的消息/日志元素颜色已过时, 清空缓存强制下帧重建
+    messageCache_.clear();
+    logLineCache_.clear();
     showSettings_ = false;
 }
 
@@ -256,10 +259,17 @@ ftxui::Element AgentTUI::renderContextOverlay() {
     if (!msgs.is_array() || msgs.empty()) {
         items.push_back(text(" (empty) ") | dim);
     } else {
-        size_t idx = 0;
-        for (const auto& m : msgs) {
-            auto role    = m.value("role", std::string{});
-            auto content = m.value("content", std::string{});
+        const int totalItems = static_cast<int>(msgs.size());
+        // clamp scroll offset
+        const int maxScroll = std::max(0, totalItems - maxVisible);
+        contextScrollOffset_ = std::clamp(contextScrollOffset_, 0, maxScroll);
+
+        // 仅渲染可见范围内的条目 (手动滚动, 无需 focus/yframe)
+        const int end = std::min(totalItems, contextScrollOffset_ + maxVisible);
+        for (int i = contextScrollOffset_; i < end; ++i) {
+            const auto& m        = msgs[static_cast<size_t>(i)];
+            auto        role     = m.value("role", std::string{});
+            auto        content  = m.value("content", std::string{});
 
             ftxui::Color roleColor = theme_.assistantColor;
             if (role == "user") {
@@ -286,11 +296,10 @@ ftxui::Element AgentTUI::renderContextOverlay() {
             }
 
             items.push_back(hbox({
-                text(fmt::format("{:>3} ", idx)) | color(theme_.hintColor),
+                text(fmt::format("{:>3} ", i)) | color(theme_.hintColor),
                 text(fmt::format("[{}] ", role)) | color(roleColor) | bold,
                 text(preview) | color(theme_.assistantColor) | flex,
             }));
-            ++idx;
         }
     }
 
@@ -299,10 +308,9 @@ ftxui::Element AgentTUI::renderContextOverlay() {
     return vbox({
                text(title) | bold | inverted,
                separator(),
-               vbox(std::move(items)) | yframe | vscroll_indicator
-                   | size(HEIGHT, LESS_THAN, maxVisible),
+               vbox(std::move(items)) | size(HEIGHT, LESS_THAN, maxVisible),
                separator(),
-               text(" [Up/Down] Scroll  [Esc] Close ") | center | dim,
+               text(" [Up/Down] Scroll  [PgUp/PgDn] Page  [Esc] Close ") | center | dim,
            })
            | border | size(WIDTH, LESS_THAN, 100) | size(WIDTH, GREATER_THAN, 50)
            | color(theme_.accentColor);

@@ -73,7 +73,7 @@ struct Delta {
     uint64_t    historyCount = 0;
     std::string tailHash;
 
-    // 运行时统计 (仅 TurnEnd 使用)
+    // 运行时长统计
     int64_t startTimeMs = 0; // 开始时间戳 (毫秒)
     int64_t durationMs  = 0; // 运行时长 (毫秒)
 };
