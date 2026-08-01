@@ -167,6 +167,36 @@ void test_makeUnifiedDiff_full() {
     );
 }
 
+void test_computeLineDiff_large_input_degrades() {
+    // 回归: 超大输入触发规模保护降级 (避免 (n+1)*(m+1) DP 表 OOM/极慢)。
+    // 5000x5000 > 16M 阈值 -> 降级为"全删除 + 全新增", 结果仍正确表示完整变更。
+    std::string oldText;
+    std::string newText;
+    const int   N = 5000;
+    for (int i = 0; i < N; ++i) {
+        oldText += "old_line_" + std::to_string(i) + "\n";
+        newText += "new_line_" + std::to_string(i) + "\n";
+    }
+    auto diff = computeLineDiff(oldText, newText);
+    XX_TEST_EXPECT_EQ(countType(diff, DiffLineType::Delete), N);
+    XX_TEST_EXPECT_EQ(countType(diff, DiffLineType::Add), N);
+    XX_TEST_EXPECT_EQ(countType(diff, DiffLineType::Context), 0);
+}
+
+void test_computeLineDiff_moderate_input_normal() {
+    // 中等规模 (远低于阈值) 仍走正常 LCS, 能识别公共行
+    std::string oldText;
+    std::string newText;
+    for (int i = 0; i < 100; ++i) {
+        oldText += "common_" + std::to_string(i) + "\n";
+        newText += "common_" + std::to_string(i) + "\n";
+    }
+    auto diff = computeLineDiff(oldText, newText);
+    XX_TEST_EXPECT_EQ(countType(diff, DiffLineType::Context), 100);
+    XX_TEST_EXPECT_EQ(countType(diff, DiffLineType::Delete), 0);
+    XX_TEST_EXPECT_EQ(countType(diff, DiffLineType::Add), 0);
+}
+
 namespace agentxx {
 namespace test {
 
@@ -185,6 +215,8 @@ TestResult testDiffUtil() {
     test_computeLineDiff_completely_different();
     test_computeLineDiff_line_order();
     test_makeUnifiedDiff_full();
+    test_computeLineDiff_large_input_degrades();
+    test_computeLineDiff_moderate_input_normal();
     return TestResult{g_diff_passed, g_diff_failed};
 }
 
