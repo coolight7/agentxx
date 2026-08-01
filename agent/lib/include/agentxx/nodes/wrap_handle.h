@@ -306,7 +306,7 @@ public:
             }
         }
 
-        if (nullptr != errorPtr) {
+        if (errorRethrow) {
             // 保存此时的上下文，如果直接抛异常到 neograph::engine，会丢失本轮 session 增加的上下文
             auto session = agentCtxPtr->getSession(in.ctx.thread_id);
             agentCtxPtr->middlewareHandleContext->setGraphDataItemValue(
@@ -314,8 +314,6 @@ public:
                 agentxx::middleware::MiddlewareContext::graphDataKey_tempMessages,
                 session->llmMessages
             );
-        }
-        if (errorRethrow) {
             std::rethrow_exception(errorPtr);
         }
 
