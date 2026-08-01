@@ -239,7 +239,7 @@ private:
     // SSE broadcast
     // -----------------------------------------------------------------------
 
-    asio::awaitable<void> broadcastSSE(std::string_view data);
+    asio::awaitable<void> broadcastSSE(std::string data);
     asio::awaitable<void> stopSSE();
 
     // -----------------------------------------------------------------------
@@ -277,14 +277,24 @@ private:
 
     struct SSEClient {
         std::shared_ptr<util::HttpServer::SseWriter> writer;
-        bool                                         closed = false;
+        std::atomic<bool>                            closed{false};
     };
 
     std::mutex                              sseClientsMutex_;
     std::vector<std::shared_ptr<SSEClient>> sseClients_;
 
-    std::mutex               workersMutex_;
-    std::vector<std::thread> workers_;
+    /// worker 线程句柄: done 标志用于在运行期回收已结束的线程, 避免 workers_ 无限增长
+    struct WorkerHandle {
+        std::thread                        thread;
+        std::shared_ptr<std::atomic<bool>> done = std::make_shared<std::atomic<bool>>(false);
+    };
+
+    std::mutex                workersMutex_;
+    std::vector<WorkerHandle> workers_;
+
+    /// 串行化对共享 BaseAgent 的访问: BaseAgent 设计为单线程/多协程交错执行,
+    /// 多个 worker 线程并发驱动同一 engine 会产生数据竞争, 故以互斥锁序列化任务执行
+    std::mutex agentRunMutex_;
 
     std::atomic<bool> stopped_{false};
 };
