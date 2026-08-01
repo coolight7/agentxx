@@ -18,46 +18,6 @@
 
 using namespace ftxui;
 
-// 格式化毫秒到可读字符串，自动选择最合适的单位
-// < 60s: "X.Xs" (如 "3.2s")
-// < 3600s (1h): "Xm Ys" (如 "2m 15s")
-// >= 3600s: "Xh Ym Zs" (如 "1h 2m 30s")
-static std::string formatDurationMilliseconds(int64_t milliseconds) {
-    if (milliseconds < 0) {
-        return "0.0s";
-    }
-    const int64_t totalSec = milliseconds / 1000;
-    const int64_t hours    = totalSec / 3600;
-    const int64_t minutes  = (totalSec % 3600) / 60;
-    const int64_t seconds  = totalSec % 60;
-
-    if (hours > 0) {
-        return fmt::format("{}h{}m{}s", hours, minutes, seconds);
-    }
-    if (minutes > 0) {
-        if (seconds > 0) {
-            return fmt::format("{}m{}s", minutes, seconds);
-        }
-        return fmt::format("{}m0s", minutes);
-    }
-    // 不足一分钟：显示秒+毫秒
-    const double sec = static_cast<double>(milliseconds) / 1000.0;
-    return fmt::format("{:.1f}s", sec);
-}
-
-// 格式化时间戳为本地时间 (HH:MM:SS)
-static std::string formatTimestampMilliseconds(int64_t timestamp_ms) {
-    if (timestamp_ms <= 0) {
-        return "00:00:00";
-    }
-    std::chrono::zoned_time time{
-        std::chrono::current_zone(),
-        std::chrono::sys_time{std::chrono::seconds(timestamp_ms / 1000)}
-    };
-
-    return std::format("{:%H:%M:%S}", time);
-}
-
 AgentTUI::AgentTUI(
     asio::any_io_executor                         ex,
     std::shared_ptr<agentxx::agent::AgentContext> agentContext,
@@ -69,7 +29,6 @@ AgentTUI::AgentTUI(
     threadId_(std::move(threadId)),
     ex_(ex),
     inputChannel_(std::make_shared<LineChannel>(ex, 64)),
-    permissionChannel_(std::make_shared<BoolChannel>(ex, 4)),
     logSink_(std::make_shared<TUILogSink>()) {
     if (agentContext_) {
         session_ = agentContext_->getSession(threadId_);
@@ -168,7 +127,7 @@ void AgentTUI::start() {
 
             // 指示器状态显示
             Element indicator;
-            if (pendingPermission_) {
+            if (awaitingInterruptInput_) {
                 indicator
                     = text("!") | bgcolor(theme_.errorColor) | color(Color::White) | bold | blink;
             } else if (isStreaming_) {
@@ -251,9 +210,7 @@ void AgentTUI::start() {
             }
 
             Element result = body;
-            if (pendingPermission_.has_value()) {
-                result = renderPermissionOverlay() | center;
-            } else if (showModelSelector_) {
+            if (showModelSelector_) {
                 result = renderModelSelectorOverlay() | center;
             } else if (showSettings_) {
                 result = renderSettingsOverlay() | center;
@@ -279,31 +236,6 @@ void AgentTUI::start() {
             }
 
             std::lock_guard<std::mutex> lock(mutex_);
-
-            if (pendingPermission_.has_value()) {
-                if (event == Event::Character('y') || event == Event::Character('Y')) {
-                    pendingPermission_.reset();
-                    permissionChannel_->async_send(
-                        neograph_asio_error_code{},
-                        true,
-                        [](neograph_asio_error_code) {}
-                    );
-                    postRedraw();
-                    return true;
-                }
-                if (event == Event::Character('n') || event == Event::Character('N')
-                    || event == Event::Escape) {
-                    pendingPermission_.reset();
-                    permissionChannel_->async_send(
-                        neograph_asio_error_code{},
-                        false,
-                        [](neograph_asio_error_code) {}
-                    );
-                    postRedraw();
-                    return true;
-                }
-                return true;
-            }
 
             if (showModelSelector_) {
                 if (event == Event::ArrowUp) {
@@ -474,7 +406,8 @@ void AgentTUI::start() {
                 postRedraw();
                 return true;
             }
-            if (event == Event::CtrlI) {
+            if (event == Event::F3) {
+                // 注意: 不能用 Ctrl+I (与 Event::Tab 同为 \x09, 会吞掉 Tab 键)
                 selectedSettingIndex_ = 0;
                 showSettings_         = true;
                 postRedraw();
@@ -773,9 +706,6 @@ void AgentTUI::onDelta(const agentxx::agent::Delta& delta) {
         } break;
         case Type::NodeEnd: {
             std::lock_guard<std::mutex> lock(mutex_);
-            for (auto msg = messages_.rbegin(); msg != messages_.rend(); ++msg) {
-                msg->role;
-            }
             if (currentNodeName_ == delta.nodeName) {
                 currentNodeName_.clear();
             }
@@ -829,7 +759,10 @@ void AgentTUI::onSync(const agentxx::agent::SyncPayload& payload) {
         std::lock_guard<std::mutex> lock(mutex_);
         messages_.clear();
         currentToken_.clear();
-        isStreaming_ = false;
+        // 清空暂存的流式 token 时间信息, 避免残留值错误应用到同步后的首条消息
+        pendingTokenDurationMs_  = 0;
+        pendingTokenStartTimeMs_ = 0;
+        isStreaming_             = false;
         for (const auto& hm : payload.messages) {
             const auto& d    = hm.data;
             auto        role = d.value("role", std::string{});

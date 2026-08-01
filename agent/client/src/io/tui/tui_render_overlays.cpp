@@ -6,20 +6,6 @@
 
 using namespace ftxui;
 
-namespace {
-/// 取首行并按 utf8 长度截断 (用于待发送消息折叠为一行)
-std::string oneLine(std::string_view s, size_t max = 60) {
-    const auto  nl = s.find('\n');
-    std::string line{(nl == std::string::npos) ? s : s.substr(0, nl)};
-    const auto  idx = agentxx::util::findIndexByUtf8Length(line, max);
-    if (idx > 0 && idx < line.size()) {
-        line.resize(idx);
-        line += "...";
-    }
-    return line;
-}
-} // namespace
-
 ftxui::Element AgentTUI::renderModelSelectorOverlay() {
     const int maxVisible = std::max(5, ftxui::Terminal::Size().dimy / 2);
 
@@ -51,20 +37,6 @@ ftxui::Element AgentTUI::renderModelSelectorOverlay() {
                text(" [Up/Down] Move  [Enter] Select  [Esc] Cancel ") | center | dim,
            })
            | border | size(WIDTH, LESS_THAN, 50) | color(theme_.accentColor);
-}
-
-ftxui::Element AgentTUI::renderPermissionOverlay() {
-    const auto& req = pendingPermission_.value();
-    return vbox({
-               text(" Permission Request ") | bold | inverted,
-               separator(),
-               hbox({text(" Tool    : ") | bold, text(req.toolName)}),
-               hbox({text(" Category: ") | bold, text(req.category)}),
-               hbox({text(" Target  : ") | bold, text(req.target)}),
-               separator(),
-               text(" [y] Allow  [n/Esc] Deny ") | center,
-           })
-           | border | size(WIDTH, LESS_THAN, 60) | color(theme_.systemColor);
 }
 
 ftxui::Element AgentTUI::renderStatusBar() {
@@ -107,7 +79,7 @@ ftxui::Element AgentTUI::renderStatusBar() {
         text(" "),
         filler(),
         text(" "),
-        text("[Ctrl+I] Settings") | color(theme_.hintColor),
+        text("[F3] Settings") | color(theme_.hintColor),
         text(" "),
     });
 }
@@ -205,7 +177,7 @@ ftxui::Element AgentTUI::renderPendingInputsOverlay() {
         } else {
             row = hbox({
                 text("+ ") | color(theme_.hintColor),
-                text(oneLine(pi.text)) | color(theme_.assistantColor) | flex,
+                text(oneLinePreview(pi.text)) | color(theme_.assistantColor) | flex,
                 delBtn,
             });
         }
@@ -282,7 +254,7 @@ ftxui::Element AgentTUI::renderContextOverlay() {
                 roleColor = theme_.thinkingColor;
             }
 
-            std::string preview = oneLine(content, 80);
+            std::string preview = oneLinePreview(content, sidebarWidth_ - 5);
             if (m.contains("tool_calls")) {
                 auto toolCalls = m["tool_calls"];
                 if (toolCalls.is_array() && !toolCalls.empty()) {
