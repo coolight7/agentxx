@@ -28,6 +28,20 @@ void test_compareExtend() {
     // shiftCompareExtend(" #= 你 77", " #= 你 234", 77 - 234);
     shiftCompareExtend(" #= 2 kkk", " #= 7", 2 - 7);
     // shiftCompareExtend("123 cool q", "123 cool 七八九", -2);
+
+    // 回归: 大数字段不应整数溢出 (原 int 累加对 >10 位数字是 UB)。
+    // 饱和截断时 INT_MIN/INT_MAX 不对称, 故用符号断言而非 shiftCompareExtend。
+    {
+        // 10 位大数 (> INT_MAX) vs 小数: 符号正确
+        XX_TEST_EXPECT_TRUE(agentxx::util::compareExtend("file9999999999", "file1") > 0);
+        XX_TEST_EXPECT_TRUE(agentxx::util::compareExtend("file1", "file9999999999") < 0);
+        // int64 范围内大数精确比较: 9999999999 - 9999999998 = 1
+        XX_TEST_EXPECT_EQ(agentxx::util::compareExtend("x9999999999", "x9999999998"), 1);
+        XX_TEST_EXPECT_EQ(agentxx::util::compareExtend("x9999999998", "x9999999999"), -1);
+        // 超 int64 范围 (饱和处理): 不崩溃, 大数仍 > 小数
+        XX_TEST_EXPECT_TRUE(agentxx::util::compareExtend("file99999999999999999999", "file1") > 0);
+        XX_TEST_EXPECT_TRUE(agentxx::util::compareExtend("file1", "file99999999999999999999") < 0);
+    }
 }
 
 void test_toStandardPath() {

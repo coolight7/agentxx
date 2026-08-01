@@ -3,8 +3,10 @@
 #include "uchardet/uchardet.h"
 #include <algorithm>
 #include <cerrno>
+#include <cstdint>
 #include <cstring>
 #include <iconv.h>
+#include <limits>
 #include <map>
 #include <mutex>
 #include <set>
@@ -482,18 +484,31 @@ int agentxx::util::compareExtend(std::string_view left, std::string_view right) 
         }
 
         if (leftIsNum) {
-            int leftSum = 0;
+            // 用 int64 累加数字段, 避免原 int 累加在超长数字串(如 file99999999999)下溢出(UB);
+            // 保持返回"数值差"的原有语义(测试依赖精确差值), 超出 int 范围时饱和截断(符号仍正确)。
+            constexpr int64_t kInt64Max  = std::numeric_limits<int64_t>::max();
+            constexpr int64_t kSafeBound = kInt64Max / 10;
+            int64_t           leftSum    = 0;
             while (i < left.size() && isCode_num(static_cast<unsigned char>(left[i]))) {
-                leftSum = leftSum * 10 + (static_cast<unsigned char>(left[i]) - CODE_0);
+                const int d = static_cast<unsigned char>(left[i]) - CODE_0;
+                leftSum     = (leftSum > kSafeBound) ? kInt64Max : (leftSum * 10 + d);
                 i++;
             }
-            int rightSum = 0;
+            int64_t rightSum = 0;
             while (j < right.size() && isCode_num(static_cast<unsigned char>(right[j]))) {
-                rightSum = rightSum * 10 + (static_cast<unsigned char>(right[j]) - CODE_0);
+                const int d = static_cast<unsigned char>(right[j]) - CODE_0;
+                rightSum    = (rightSum > kSafeBound) ? kInt64Max : (rightSum * 10 + d);
                 j++;
             }
             if (leftSum != rightSum) {
-                return leftSum - rightSum;
+                const int64_t diff = leftSum - rightSum;
+                if (diff > std::numeric_limits<int>::max()) {
+                    return std::numeric_limits<int>::max();
+                }
+                if (diff < std::numeric_limits<int>::min()) {
+                    return std::numeric_limits<int>::min();
+                }
+                return static_cast<int>(diff);
             }
             continue;
         }
@@ -524,7 +539,15 @@ int agentxx::util::compareExtend(std::string_view left, std::string_view right) 
     }
 
     if (i < left.size() || j < right.size()) {
-        return static_cast<int>(left.size() - right.size());
+        // 保持返回"总长度差"的原有语义; 经 int64 相减避免 size_t 下溢(right 更长时), 超 int 范围饱和截断
+        const int64_t diff = static_cast<int64_t>(left.size()) - static_cast<int64_t>(right.size());
+        if (diff > std::numeric_limits<int>::max()) {
+            return std::numeric_limits<int>::max();
+        }
+        if (diff < std::numeric_limits<int>::min()) {
+            return std::numeric_limits<int>::min();
+        }
+        return static_cast<int>(diff);
     }
     return 0;
 }

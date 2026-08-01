@@ -250,6 +250,67 @@ void testAsyncMutex() {
     XX_TEST_EXPECT_EQ(sharedCounter, kCoros * kIter * 2);
 }
 
+// 回归: Guard 移动赋值须先归还已持有的令牌, 否则令牌泄漏导致该锁永久死锁。
+// (修复前 operator=(Guard&&) 直接覆盖 ch_, 未 try_send 归还旧令牌)
+void testAsyncMutexGuardMoveAssign() {
+    using namespace agentxx::util;
+
+    asio::io_context ioc;
+    auto             ex = asio::any_io_executor(ioc.get_executor());
+    AsyncMutex       mtx1(ex);
+    AsyncMutex       mtx2(ex);
+
+    bool mainDone     = false;
+    bool relockedMtx1 = false;
+
+    asio::co_spawn(
+        ioc,
+        [&]() -> asio::awaitable<void> {
+            auto guardA = co_await mtx1.lock(); // 持有 mtx1 令牌
+            {
+                auto guardB = co_await mtx2.lock(); // 持有 mtx2 令牌
+                guardA = std::move(guardB); // 移动赋值: 修复后须先归还 mtx1 令牌
+            }
+            mainDone = true;
+            // guardA (现持 mtx2) 于协程结束析构, 归还 mtx2
+        },
+        asio::detached
+    );
+
+    // 等主协程完成移动赋值后尝试再锁 mtx1: 修复后令牌已归还 → 立即成功; 泄漏则挂起
+    asio::co_spawn(
+        ioc,
+        [&]() -> asio::awaitable<void> {
+            asio::steady_timer t(co_await asio::this_coro::executor);
+            t.expires_after(std::chrono::milliseconds(10));
+            co_await t.async_wait(asio::use_awaitable);
+            if (!mainDone) {
+                co_return;
+            }
+            auto g   = co_await mtx1.lock();
+            relockedMtx1 = true;
+        },
+        asio::detached
+    );
+
+    // 看门狗: 超时停止 io_context, 防止令牌泄漏时 lock 永久挂起拖死测试
+    asio::co_spawn(
+        ioc,
+        [&]() -> asio::awaitable<void> {
+            asio::steady_timer t(co_await asio::this_coro::executor);
+            t.expires_after(std::chrono::milliseconds(300));
+            co_await t.async_wait(asio::use_awaitable);
+            ioc.stop();
+        },
+        asio::detached
+    );
+
+    ioc.run();
+
+    XX_TEST_EXPECT_TRUE(mainDone);
+    XX_TEST_EXPECT_TRUE(relockedMtx1); // 修复前为 false (mtx1 令牌泄漏, 再锁挂起)
+}
+
 // ---------------------------------------------------------------------------
 // AsyncOffload: 阻塞任务卸载到线程池
 // ---------------------------------------------------------------------------
@@ -358,6 +419,7 @@ TestResult testConcurrency() {
     testModelRegistryConcurrency();
     testMcpServerRegistrationConcurrency();
     testAsyncMutex();
+    testAsyncMutexGuardMoveAssign();
     testAsyncOffload();
 
     return TestResult{g_conc_passed, g_conc_failed};

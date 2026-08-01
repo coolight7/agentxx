@@ -458,7 +458,8 @@ static asio::awaitable<void> test_session_controller_replay() {
     agentxx::agent::WireHello hello{"session", "", 3, ""};
     sc->handleHello(hello);
 
-    // 从 client 端读取: 应有 delta(4), delta(5), helloAck
+    // 从 client 端读取: HelloAck 须最先到达, 随后增量重放 delta(4), delta(5)。
+    // (客户端握手循环会丢弃 HelloAck 之前的消息, 故服务端必须先发 HelloAck 再重放)
     std::vector<agentxx::agent::WireMessage> received;
     for (int i = 0; i < 3; ++i) {
         auto msg = co_await clientT->recv();
@@ -470,18 +471,18 @@ static asio::awaitable<void> test_session_controller_replay() {
 
     XX_TEST_EXPECT_EQ(received.size(), size_t{3});
     if (received.size() >= 3) {
-        auto* d0 = std::get_if<agentxx::agent::Delta>(&received[0]);
-        auto* d1 = std::get_if<agentxx::agent::Delta>(&received[1]);
+        auto* ack = std::get_if<agentxx::agent::WireHelloAck>(&received[0]);
+        XX_TEST_EXPECT_TRUE(ack != nullptr);
+        if (ack) {
+            XX_TEST_EXPECT_TRUE(ack->ok);
+        }
+        auto* d0 = std::get_if<agentxx::agent::Delta>(&received[1]);
+        auto* d1 = std::get_if<agentxx::agent::Delta>(&received[2]);
         XX_TEST_EXPECT_TRUE(d0 != nullptr);
         XX_TEST_EXPECT_TRUE(d1 != nullptr);
         if (d0 && d1) {
             XX_TEST_EXPECT_EQ(d0->seq, uint64_t{4});
             XX_TEST_EXPECT_EQ(d1->seq, uint64_t{5});
-        }
-        auto* ack = std::get_if<agentxx::agent::WireHelloAck>(&received[2]);
-        XX_TEST_EXPECT_TRUE(ack != nullptr);
-        if (ack) {
-            XX_TEST_EXPECT_TRUE(ack->ok);
         }
     }
     co_return;
@@ -516,6 +517,12 @@ static asio::awaitable<void> test_session_controller_replay_fallback() {
     agentxx::agent::WireHello hello{"session", "", 2, ""};
     sc->handleHello(hello);
 
+    // HelloAck 须最先到达, 随后全量 SyncPayload
+    auto ackMsg = co_await clientT->recv();
+    XX_TEST_EXPECT_TRUE(ackMsg.has_value());
+    if (ackMsg) {
+        XX_TEST_EXPECT_TRUE(std::get_if<agentxx::agent::WireHelloAck>(&*ackMsg) != nullptr);
+    }
     auto msg = co_await clientT->recv();
     XX_TEST_EXPECT_TRUE(msg.has_value());
     if (msg) {

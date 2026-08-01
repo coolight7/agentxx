@@ -69,8 +69,8 @@ asio::awaitable<void> test_crossagent_no_running_agent() {
     agentContext->bus
         = std::make_shared<agentxx::middleware::EventBus>(co_await asio::this_coro::executor);
 
-    agentxx::middleware::SubagentSupervisor supervisor{agentContext};
-    co_await supervisor.start();
+    auto supervisor = std::make_shared<agentxx::middleware::SubagentSupervisor>(agentContext);
+    co_await supervisor->start();
 
     // 无 subagent 运行中, 查询应返回错误
     auto resp = co_await agentContext->bus->request<events::ReqCrossAgent, events::RespCrossAgent>(
@@ -90,7 +90,7 @@ asio::awaitable<void> test_crossagent_no_running_agent() {
         XX_TEST_EXPECT_TRUE(resp->errorMessage.find("not running") != std::string::npos);
     }
 
-    supervisor.stop();
+    supervisor->stop();
     co_return;
 }
 
@@ -180,8 +180,8 @@ asio::awaitable<void> test_subagent_batch_empty() {
         = std::make_shared<agentxx::middleware::EventBus>(co_await asio::this_coro::executor);
 
     // SubagentSupervisor 的 batch server 处理空任务
-    agentxx::middleware::SubagentSupervisor supervisor{agentContext};
-    co_await supervisor.start();
+    auto supervisor = std::make_shared<agentxx::middleware::SubagentSupervisor>(agentContext);
+    co_await supervisor->start();
 
     auto resp
         = co_await agentContext->bus->request<events::ReqSubagentBatch, events::RespSubagentBatch>(
@@ -198,7 +198,7 @@ asio::awaitable<void> test_subagent_batch_empty() {
         XX_TEST_EXPECT_EQ(resp->results.size(), size_t{0});
     }
 
-    supervisor.stop();
+    supervisor->stop();
     co_return;
 }
 
