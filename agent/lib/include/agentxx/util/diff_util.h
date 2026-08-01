@@ -50,6 +50,24 @@ namespace detail {
     const auto n        = oldLines.size();
     const auto m        = newLines.size();
 
+    // 规模保护: LCS DP 表为 (n+1)*(m+1) 个 uint32, 超大输入会内存暴涨且 O(n*m) 极慢。
+    // 超过阈值时降级为朴素 diff (全部删除 + 全部新增): 结果仍正确(表示完整变更),
+    // 只是非最小编辑, 以此避免大文件(如万行级)导致资源耗尽。
+    constexpr size_t kMaxDpCells = 16'000'000; // ~64MB (uint32), 约允许 4000x4000
+    if (m + 1 > 0 && (n + 1) > kMaxDpCells / (m + 1)) {
+        std::vector<DiffLine> result;
+        result.reserve(n + m);
+        int oldNo = 1;
+        for (const auto& l : oldLines) {
+            result.push_back({DiffLineType::Delete, l, oldNo++, 0});
+        }
+        int newNo = 1;
+        for (const auto& l : newLines) {
+            result.push_back({DiffLineType::Add, l, 0, newNo++});
+        }
+        return result;
+    }
+
     // LCS 长度表 (n+1) x (m+1)
     std::vector<std::vector<uint32_t>> dp(n + 1, std::vector<uint32_t>(m + 1, 0));
     for (size_t i = 1; i <= n; ++i) {
