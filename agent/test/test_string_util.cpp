@@ -391,6 +391,388 @@ void test_utf8Check() {
         // 在 '\0' 处 break, 计到 "ab" 共 2 个字符
         XX_TEST_EXPECT_EQ(agentxx::util::utf8GetLengthCheckAvail(withNull), 2u);
     }
+
+    // 更多边界: 5/6 字节头非法; 非最短编码 (0xF0 0x80..) 非法; 替换字符 EF BF BD 非法
+    XX_TEST_EXPECT_EQ(agentxx::util::utf8GetLengthCheckAvail(std::string("\xF8\x88\x80\x80\x80", 5)), 0u);
+    XX_TEST_EXPECT_EQ(agentxx::util::utf8GetLengthCheckAvail(std::string("\xFC\x84\x80\x80\x80\x80", 6)), 0u);
+    XX_TEST_EXPECT_EQ(agentxx::util::utf8GetLengthCheckAvail(std::string("\xF0\x80\x80\x80", 4)), 0u);
+    XX_TEST_EXPECT_EQ(agentxx::util::utf8GetLengthCheckAvail(std::string("\xE0\x80\x80", 3)), 0u);
+    XX_TEST_EXPECT_EQ(agentxx::util::utf8GetLengthCheckAvail(std::string("\xEF\xBF\xBD", 3)), 0u);
+    // 合法 4 字节 (emoji)
+    XX_TEST_EXPECT_EQ(agentxx::util::utf8GetLengthCheckAvail(std::string("\xF0\x9F\x98\x80", 4)), 1u);
+    XX_TEST_EXPECT_TRUE(agentxx::util::utf8IsAvail(std::string("\xF0\x9F\x98\x80", 4)));
+    // 截断的 4 字节序列
+    XX_TEST_EXPECT_EQ(agentxx::util::utf8GetLengthCheckAvail(std::string("\xF0\x9F\x98", 3)), 0u);
+    // 连续字符计数
+    XX_TEST_EXPECT_EQ(agentxx::util::utf8GetLengthCheckAvail(std::string("\xE4\xB8\xAD\xE6\x96\x87", 6)), 2u);
+}
+
+void test_compareExtend_pinyin() {
+    // 中文拼音比较依赖全局 s_pinyinCallback; 设置后测试并恢复
+    auto oldCallback = agentxx::util::s_pinyinCallback;
+    agentxx::util::s_pinyinCallback = [](std::string_view str) -> std::string {
+        if (str.starts_with("你")) return "ni";
+        if (str.starts_with("我")) return "wo";
+        if (str.starts_with("七")) return "qi";
+        if (str.starts_with("八")) return "ba";
+        if (str.starts_with("二")) return "er";
+        if (str.starts_with("九")) return "jiu";
+        return "";
+    };
+
+    // 中文按拼音比较: 你(ni) < 我(wo)
+    XX_TEST_EXPECT_TRUE(agentxx::util::compareExtend("你", "我") < 0);
+    XX_TEST_EXPECT_TRUE(agentxx::util::compareExtend("我", "你") > 0);
+    // 首字相同, 次字按拼音: 八(ba) < 二(er)
+    XX_TEST_EXPECT_TRUE(agentxx::util::compareExtend("七八九", "七二一") < 0);
+    XX_TEST_EXPECT_TRUE(agentxx::util::compareExtend("七二一", "七八九") > 0);
+    // 中文与数字: 数字优先
+    XX_TEST_EXPECT_TRUE(agentxx::util::compareExtend("1", "你") < 0);
+    XX_TEST_EXPECT_TRUE(agentxx::util::compareExtend("你", "1") > 0);
+    // 中文与英文拼音首字母
+    XX_TEST_EXPECT_TRUE(agentxx::util::compareExtend("你", "a") > 0);  // n > a
+    XX_TEST_EXPECT_TRUE(agentxx::util::compareExtend("你", "z") < 0);  // n < z
+    // 混排场景 (原注释掉的用例)
+    shiftCompareExtend(" #= 你 77", " #= 你 234", 77 - 234);
+
+    agentxx::util::s_pinyinCallback = oldCallback;
+}
+
+void test_toUpperLower() {
+    XX_TEST_EXPECT_EQ(agentxx::util::toUpper(""), "");
+    XX_TEST_EXPECT_EQ(agentxx::util::toUpper("aBc123!@#"), "ABC123!@#");
+    XX_TEST_EXPECT_EQ(agentxx::util::toUpper("中文abc"), "中文ABC");
+    XX_TEST_EXPECT_EQ(agentxx::util::toLower(""), "");
+    XX_TEST_EXPECT_EQ(agentxx::util::toLower("AbC123!@#"), "abc123!@#");
+    XX_TEST_EXPECT_EQ(agentxx::util::toLower("中文ABC"), "中文abc");
+
+    // in-place 版本
+    std::string s1 = "aBc123";
+    agentxx::util::toUpperSelf(s1);
+    XX_TEST_EXPECT_EQ(s1, "ABC123");
+    std::string s2 = "AbC123";
+    agentxx::util::toLowerSelf(s2);
+    XX_TEST_EXPECT_EQ(s2, "abc123");
+}
+
+void test_charOps() {
+    XX_TEST_EXPECT_EQ(agentxx::util::charToLower('A'), 'a');
+    XX_TEST_EXPECT_EQ(agentxx::util::charToLower('z'), 'z');
+    XX_TEST_EXPECT_EQ(agentxx::util::charToLower('1'), '1');
+    XX_TEST_EXPECT_EQ(agentxx::util::charToUpper('a'), 'A');
+    XX_TEST_EXPECT_EQ(agentxx::util::charToUpper('Z'), 'Z');
+    XX_TEST_EXPECT_EQ(agentxx::util::charToUpper('1'), '1');
+
+    XX_TEST_EXPECT_TRUE(agentxx::util::charIsSpace(' '));
+    XX_TEST_EXPECT_TRUE(agentxx::util::charIsSpace('\t'));
+    XX_TEST_EXPECT_TRUE(agentxx::util::charIsSpace('\n'));
+    XX_TEST_EXPECT_TRUE(agentxx::util::charIsSpace('\r'));
+    XX_TEST_EXPECT_TRUE(agentxx::util::charIsSpace('\v'));
+    XX_TEST_EXPECT_TRUE(agentxx::util::charIsSpace('\f'));
+    XX_TEST_EXPECT_FALSE(agentxx::util::charIsSpace('a'));
+    XX_TEST_EXPECT_FALSE(agentxx::util::charIsSpace('0'));
+
+    XX_TEST_EXPECT_TRUE(agentxx::util::isCode_num('0'));
+    XX_TEST_EXPECT_TRUE(agentxx::util::isCode_num('9'));
+    XX_TEST_EXPECT_FALSE(agentxx::util::isCode_num('a'));
+    XX_TEST_EXPECT_TRUE(agentxx::util::isCode_AZ('A'));
+    XX_TEST_EXPECT_TRUE(agentxx::util::isCode_AZ('Z'));
+    XX_TEST_EXPECT_FALSE(agentxx::util::isCode_AZ('a'));
+    XX_TEST_EXPECT_TRUE(agentxx::util::isCode_az('a'));
+    XX_TEST_EXPECT_TRUE(agentxx::util::isCode_az('z'));
+    XX_TEST_EXPECT_FALSE(agentxx::util::isCode_az('A'));
+    XX_TEST_EXPECT_TRUE(agentxx::util::isCode_AZaz('a'));
+    XX_TEST_EXPECT_TRUE(agentxx::util::isCode_AZaz('Z'));
+    XX_TEST_EXPECT_FALSE(agentxx::util::isCode_AZaz('1'));
+
+    XX_TEST_EXPECT_EQ(agentxx::util::toCode_tryAZ('a').value(), 'A');
+    XX_TEST_EXPECT_EQ(agentxx::util::toCode_tryAZ('A').value(), 'A');
+    XX_TEST_EXPECT_NULLOPT(agentxx::util::toCode_tryAZ('1'));
+    XX_TEST_EXPECT_EQ(agentxx::util::toCode_tryaz('A').value(), 'a');
+    XX_TEST_EXPECT_EQ(agentxx::util::toCode_tryaz('a').value(), 'a');
+    XX_TEST_EXPECT_NULLOPT(agentxx::util::toCode_tryaz('1'));
+    XX_TEST_EXPECT_EQ(agentxx::util::toCode_mayAZ('b'), 'B');
+    XX_TEST_EXPECT_EQ(agentxx::util::toCode_mayAZ('1'), '1');
+    XX_TEST_EXPECT_EQ(agentxx::util::toCode_mayaz('B'), 'b');
+    XX_TEST_EXPECT_EQ(agentxx::util::toCode_mayaz('1'), '1');
+    XX_TEST_EXPECT_EQ(agentxx::util::toCode_AZ('a'), 'A');
+    XX_TEST_EXPECT_EQ(agentxx::util::toCode_AZ('A'), 'A');
+    XX_TEST_EXPECT_EQ(agentxx::util::toCode_az('A'), 'a');
+    XX_TEST_EXPECT_EQ(agentxx::util::toCode_az('a'), 'a');
+}
+
+void test_utf8GetLength() {
+    XX_TEST_EXPECT_EQ(agentxx::util::utf8GetLength(""), 0u);
+    XX_TEST_EXPECT_EQ(agentxx::util::utf8GetLength("abc"), 3u);
+    XX_TEST_EXPECT_EQ(agentxx::util::utf8GetLength("中文abc"), 5u);
+    // emoji 4 字节
+    XX_TEST_EXPECT_EQ(agentxx::util::utf8GetLength(std::string("\xF0\x9F\x98\x80", 4)), 1u);
+    // 混合
+    XX_TEST_EXPECT_EQ(
+        agentxx::util::utf8GetLength(std::string("a\xE4\xB8\xAD\xF0\x9F\x98\x80", 6)),
+        3u
+    );
+}
+
+void test_findIndexByUtf8Length() {
+    // "中文abc": 中(3) 文(3) a b c -> 字节偏移 0,3,6,7,8,9
+    XX_TEST_EXPECT_EQ(agentxx::util::findIndexByUtf8Length("中文abc", 1), 3u);
+    XX_TEST_EXPECT_EQ(agentxx::util::findIndexByUtf8Length("中文abc", 2), 6u);
+    XX_TEST_EXPECT_EQ(agentxx::util::findIndexByUtf8Length("中文abc", 3), 7u);
+    XX_TEST_EXPECT_EQ(agentxx::util::findIndexByUtf8Length("中文abc", 5), 9u);
+    // 超出长度: 返回 0
+    XX_TEST_EXPECT_EQ(agentxx::util::findIndexByUtf8Length("中文abc", 6), 0u);
+    // 空输入
+    XX_TEST_EXPECT_EQ(agentxx::util::findIndexByUtf8Length("", 1), 0u);
+    // 从 start 偏移开始
+    XX_TEST_EXPECT_EQ(agentxx::util::findIndexByUtf8Length("中文abc", 1, 3), 6u);
+}
+
+void test_findIndexAndLastLineIndexByUtf8Length() {
+    // "a\nb\nc": a(0) \n(1) b(2) \n(3) c(4)
+    auto r1 = agentxx::util::findIndexAndLastLineIndexByUtf8Length("a\nb\nc", 3);
+    XX_TEST_EXPECT_EQ(std::get<0>(r1), 3u); // 第3字符 'b' 后
+    XX_TEST_EXPECT_EQ(std::get<1>(r1), 1u); // 遇到 1 个换行
+    XX_TEST_EXPECT_EQ(std::get<2>(r1), 1u); // 最后换行在 index 1
+
+    // 超出长度: 返回 {0,0,0}
+    auto r2 = agentxx::util::findIndexAndLastLineIndexByUtf8Length("a\nb\nc", 10);
+    XX_TEST_EXPECT_EQ(std::get<0>(r2), 0u);
+    XX_TEST_EXPECT_EQ(std::get<1>(r2), 0u);
+    XX_TEST_EXPECT_EQ(std::get<2>(r2), 0u);
+
+    // 空输入
+    auto r3 = agentxx::util::findIndexAndLastLineIndexByUtf8Length("", 1);
+    XX_TEST_EXPECT_EQ(std::get<0>(r3), 0u);
+
+    // 精确取到换行符本身
+    auto r4 = agentxx::util::findIndexAndLastLineIndexByUtf8Length("a\nb", 2);
+    XX_TEST_EXPECT_EQ(std::get<0>(r4), 2u);
+    XX_TEST_EXPECT_EQ(std::get<1>(r4), 1u);
+    XX_TEST_EXPECT_EQ(std::get<2>(r4), 1u);
+}
+
+void test_strSplit() {
+    auto r1 = agentxx::util::strSplit("a,b,c", ',');
+    XX_TEST_EXPECT_EQ(r1.size(), (size_t)3);
+    XX_TEST_EXPECT_EQ(r1[0], std::string_view("a"));
+    XX_TEST_EXPECT_EQ(r1[1], std::string_view("b"));
+    XX_TEST_EXPECT_EQ(r1[2], std::string_view("c"));
+
+    // 空串: split 空输入产生空结果 (无元素)
+    auto r2 = agentxx::util::strSplit("", ',');
+    XX_TEST_EXPECT_EQ(r2.size(), (size_t)0);
+
+    // 单元素无分隔符
+    auto r2b = agentxx::util::strSplit("a", ',');
+    XX_TEST_EXPECT_EQ(r2b.size(), (size_t)1);
+    XX_TEST_EXPECT_EQ(r2b[0], std::string_view("a"));
+
+    // 连续分隔符 -> 空元素
+    auto r3 = agentxx::util::strSplit("a,,b", ',');
+    XX_TEST_EXPECT_EQ(r3.size(), (size_t)3);
+    XX_TEST_EXPECT_EQ(r3[1], std::string_view(""));
+
+    // 首尾分隔符
+    auto r4 = agentxx::util::strSplit(",a,", ',');
+    XX_TEST_EXPECT_EQ(r4.size(), (size_t)3);
+    XX_TEST_EXPECT_EQ(r4[0], std::string_view(""));
+    XX_TEST_EXPECT_EQ(r4[2], std::string_view(""));
+
+    // 无分隔符
+    auto r5 = agentxx::util::strSplit("abc", ',');
+    XX_TEST_EXPECT_EQ(r5.size(), (size_t)1);
+    XX_TEST_EXPECT_EQ(r5[0], std::string_view("abc"));
+
+    // 拷贝版本
+    auto r6 = agentxx::util::strSplitCopid("a;b;c", ';');
+    XX_TEST_EXPECT_EQ(r6.size(), (size_t)3);
+    XX_TEST_EXPECT_EQ(r6[1], std::string("b"));
+}
+
+void test_stringVectorJoin() {
+    XX_TEST_EXPECT_EQ(agentxx::util::stringVectorJoin(std::vector<std::string>{}), "");
+    XX_TEST_EXPECT_EQ(
+        agentxx::util::stringVectorJoin(std::vector<std::string>{"a", "b", "c"}),
+        "a, b, c"
+    );
+    XX_TEST_EXPECT_EQ(
+        agentxx::util::stringVectorJoin(std::vector<std::string>{"a"}, "-"),
+        "a"
+    );
+    // 非字符串元素
+    XX_TEST_EXPECT_EQ(agentxx::util::stringVectorJoin(std::vector<int>{1, 2, 3}, "-"), "1-2-3");
+}
+
+void test_toStringNotNull() {
+    XX_TEST_EXPECT_EQ(agentxx::util::toStringNotNull(nullptr), std::string_view(""));
+    XX_TEST_EXPECT_EQ(agentxx::util::toStringNotNull("abc"), std::string_view("abc"));
+    XX_TEST_EXPECT_EQ(agentxx::util::toStringNotNull(""), std::string_view(""));
+}
+
+void test_parseNumberFromString() {
+    int    iv    = 0;
+    double dv    = 0.0;
+    auto   r1    = agentxx::util::parseNumberFromString("123", iv);
+    XX_TEST_EXPECT_EQ(r1.ec, std::errc{});
+    XX_TEST_EXPECT_EQ(iv, 123);
+
+    // 前导空格: from_chars 不接受 -> 失败
+    auto r2 = agentxx::util::parseNumberFromString("  123", iv);
+    XX_TEST_EXPECT_TRUE(r2.ec != std::errc{});
+
+    // 部分解析: "12a" 解析出 12, ptr 停在 'a'
+    auto r3 = agentxx::util::parseNumberFromString("12a", iv);
+    XX_TEST_EXPECT_EQ(r3.ec, std::errc{});
+    XX_TEST_EXPECT_EQ(iv, 12);
+    XX_TEST_EXPECT_EQ(r3.ptr, std::string_view("12a").data() + 2);
+
+    // 非法输入
+    auto r4 = agentxx::util::parseNumberFromString("abc", iv);
+    XX_TEST_EXPECT_TRUE(r4.ec != std::errc{});
+
+    // double 解析
+    auto r5 = agentxx::util::parseNumberFromString("3.14", dv);
+    XX_TEST_EXPECT_EQ(r5.ec, std::errc{});
+    XX_TEST_EXPECT_TRUE(dv > 3.13 && dv < 3.15);
+
+    // 空串
+    auto r6 = agentxx::util::parseNumberFromString("", iv);
+    XX_TEST_EXPECT_TRUE(r6.ec != std::errc{});
+
+    // 负数和溢出
+    int neg = 0;
+    auto r7 = agentxx::util::parseNumberFromString("-42", neg);
+    XX_TEST_EXPECT_EQ(r7.ec, std::errc{});
+    XX_TEST_EXPECT_EQ(neg, -42);
+    int ov = 0;
+    auto r8 = agentxx::util::parseNumberFromString("99999999999999999999", ov);
+    XX_TEST_EXPECT_TRUE(r8.ec == std::errc::result_out_of_range);
+}
+
+void test_formatSize() {
+    XX_TEST_EXPECT_EQ(agentxx::util::formatSize(0), std::string("0"));
+    XX_TEST_EXPECT_EQ(agentxx::util::formatSize(1), std::string("1"));
+    XX_TEST_EXPECT_EQ(agentxx::util::formatSize(999), std::string("999"));
+    XX_TEST_EXPECT_EQ(agentxx::util::formatSize(1023), std::string("1023"));
+    // 整数单位: 无小数 (修复: 原 "1.0K" 显示不合理)
+    XX_TEST_EXPECT_EQ(agentxx::util::formatSize(1024), std::string("1K"));
+    XX_TEST_EXPECT_EQ(agentxx::util::formatSize(1536), std::string("1.5K"));
+    XX_TEST_EXPECT_EQ(agentxx::util::formatSize(102400), std::string("100K"));
+    XX_TEST_EXPECT_EQ(
+        agentxx::util::formatSize(1024ull * 1024),
+        std::string("1M")
+    );
+    XX_TEST_EXPECT_EQ(
+        agentxx::util::formatSize(1024ull * 1024 * 1024),
+        std::string("1G")
+    );
+    // 非整数中间值保留一位小数
+    XX_TEST_EXPECT_EQ(agentxx::util::formatSize(1024 + 512), std::string("1.5K"));
+    // 十进制基数
+    XX_TEST_EXPECT_EQ(agentxx::util::formatSize(1000, 1000), std::string("1K"));
+    XX_TEST_EXPECT_EQ(agentxx::util::formatSize(999, 1000), std::string("999"));
+    // 大数值跨到 T
+    XX_TEST_EXPECT_EQ(
+        agentxx::util::formatSize(1024ull * 1024 * 1024 * 1024),
+        std::string("1T")
+    );
+}
+
+void test_collapsePaths() {
+    XX_TEST_EXPECT_EQ(agentxx::util::collapseSlashes(""), "");
+    XX_TEST_EXPECT_EQ(agentxx::util::collapseSlashes("a//b///c"), "a/b/c");
+    XX_TEST_EXPECT_EQ(agentxx::util::collapseSlashes("///a"), "/a");
+    XX_TEST_EXPECT_EQ(agentxx::util::collapseSlashes("a///"), "a/");
+
+    XX_TEST_EXPECT_EQ(agentxx::util::collapseBackslashes(""), "");
+    XX_TEST_EXPECT_EQ(agentxx::util::collapseBackslashes("a\\\\b\\\\\\c"), "a\\b\\c");
+
+    XX_TEST_EXPECT_EQ(agentxx::util::collapseMixedSlashes(""), "");
+    // 连续 2+ 混合分隔符合并为 '\\', 单个保留
+    XX_TEST_EXPECT_EQ(agentxx::util::collapseMixedSlashes("a//b\\\\c"), "a\\b\\c");
+    XX_TEST_EXPECT_EQ(agentxx::util::collapseMixedSlashes("a///b"), "a\\b");
+    XX_TEST_EXPECT_EQ(agentxx::util::collapseMixedSlashes("a/b\\c"), "a/b\\c");
+    XX_TEST_EXPECT_EQ(agentxx::util::collapseMixedSlashes("a/\\b"), "a\\b");
+    XX_TEST_EXPECT_EQ(agentxx::util::collapseMixedSlashes("///a"), "\\a");
+
+    XX_TEST_EXPECT_EQ(agentxx::util::toWindowsStandardPath(""), "");
+    XX_TEST_EXPECT_EQ(agentxx::util::toWindowsStandardPath("a/b\\c"), "a\\b\\c");
+    XX_TEST_EXPECT_EQ(agentxx::util::toWindowsStandardPath("a//b"), "a\\b");
+
+    XX_TEST_EXPECT_EQ(agentxx::util::toUnixStandardDirPath(""), "");
+    XX_TEST_EXPECT_EQ(agentxx::util::toUnixStandardDirPath("a/b"), "a/b/");
+    XX_TEST_EXPECT_EQ(agentxx::util::toUnixStandardDirPath("a/b/"), "a/b/");
+    XX_TEST_EXPECT_EQ(agentxx::util::toUnixStandardDirPath("a"), "a/");
+}
+
+void test_toCurrentSystemStandardPath() {
+#if XX_IS_WIN_D
+    XX_TEST_EXPECT_EQ(agentxx::util::toCurrentSystemStandardPath("a/b\\c"), "a\\b\\c");
+    XX_TEST_EXPECT_EQ(agentxx::util::toCurrentSystemStandardPath("a//b"), "a\\b");
+#else
+    // WSL/Linux: 盘符路径转为 /mnt/<drive>/
+    XX_TEST_EXPECT_EQ(
+        agentxx::util::toCurrentSystemStandardPath("C:/Users/x"),
+        "/mnt/c/Users/x"
+    );
+    XX_TEST_EXPECT_EQ(
+        agentxx::util::toCurrentSystemStandardPath("D:\\work\\a"),
+        "/mnt/d/work/a"
+    );
+    XX_TEST_EXPECT_EQ(agentxx::util::toCurrentSystemStandardPath("a/b\\c"), "a/b/c");
+    // 小写盘符
+    XX_TEST_EXPECT_EQ(
+        agentxx::util::toCurrentSystemStandardPath("e:/x"),
+        "/mnt/e/x"
+    );
+#endif
+}
+
+void test_ignoreCaseContainers() {
+    // IgnoreCaseSet
+    agentxx::util::IgnoreCaseSet set;
+    set.insert("Hello");
+    XX_TEST_EXPECT_TRUE(set.contains("hello"));
+    XX_TEST_EXPECT_TRUE(set.contains("HELLO"));
+    XX_TEST_EXPECT_TRUE(set.contains("HeLLo"));
+    XX_TEST_EXPECT_FALSE(set.contains("world"));
+
+    // IgnoreCaseMap
+    agentxx::util::IgnoreCaseMap<int> map;
+    map["Key"] = 42;
+    XX_TEST_EXPECT_TRUE(map.contains("KEY"));
+    XX_TEST_EXPECT_TRUE(map.contains("key"));
+    XX_TEST_EXPECT_EQ(map.at("kEy"), 42);
+    XX_TEST_EXPECT_FALSE(map.contains("other"));
+
+    // 透明查找 (string_view)
+    std::string_view sv = "KEY";
+    XX_TEST_EXPECT_TRUE(map.contains(sv));
+    XX_TEST_EXPECT_TRUE(set.contains(std::string_view("HeLLo")));
+}
+
+void test_getFileNameMore() {
+    // 隐藏文件: 不剥离扩展名
+    XX_TEST_EXPECT_EQ(agentxx::util::getFileName("a/b/.hidden", true), ".hidden");
+    XX_TEST_EXPECT_EQ(agentxx::util::getFileName("a/b/.hidden"), ".hidden");
+    // 常规去扩展名
+    XX_TEST_EXPECT_EQ(agentxx::util::getFileName("a/b/c.txt", true), "c");
+    XX_TEST_EXPECT_EQ(agentxx::util::getFileName("a/b/c.txt"), "c.txt");
+    XX_TEST_EXPECT_EQ(agentxx::util::getFileName("a/b/c.tar.gz", true), "c.tar");
+    // 多级目录 + 尾分隔符
+    XX_TEST_EXPECT_EQ(agentxx::util::getFileName("/a/b/c.txt/", true), "c.txt");
+    // 仅扩展名
+    XX_TEST_EXPECT_EQ(agentxx::util::getFileNameEXT("file.txt").value(), "txt");
+    // useRigthDot=false: 使用最左侧点
+    XX_TEST_EXPECT_EQ(
+        agentxx::util::getFileName("a.b.c", true, false),
+        "a"
+    );
+    XX_TEST_EXPECT_EQ(
+        agentxx::util::getFileName("a.b.c", true, true),
+        "a.b"
+    );
 }
 
 namespace agentxx {
@@ -411,6 +793,21 @@ TestResult testStringUtil() {
     test_base64();
     test_convertCharset();
     test_utf8Check();
+    test_compareExtend_pinyin();
+    test_toUpperLower();
+    test_charOps();
+    test_utf8GetLength();
+    test_findIndexByUtf8Length();
+    test_findIndexAndLastLineIndexByUtf8Length();
+    test_strSplit();
+    test_stringVectorJoin();
+    test_toStringNotNull();
+    test_parseNumberFromString();
+    test_formatSize();
+    test_collapsePaths();
+    test_toCurrentSystemStandardPath();
+    test_ignoreCaseContainers();
+    test_getFileNameMore();
 
     return TestResult{g_su_passed, g_su_failed};
 }

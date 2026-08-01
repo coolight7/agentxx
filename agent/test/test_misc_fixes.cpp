@@ -54,6 +54,93 @@ static void test_lru_cache() {
     XX_TEST_EXPECT_EQ(c.size(), 0u);
 }
 
+static void test_lru_cache_more() {
+    // capacity=1: 每次 put 都淘汰旧值
+    {
+        agentxx::util::LruCache<int, int> c(1);
+        c.put(1, 10);
+        XX_TEST_EXPECT_EQ(c.size(), 1u);
+        c.put(2, 20);
+        XX_TEST_EXPECT_EQ(c.size(), 1u);
+        XX_TEST_EXPECT_FALSE(c.get(1).has_value());
+        XX_TEST_EXPECT_TRUE(c.get(2).has_value());
+        XX_TEST_EXPECT_EQ(c.get(2).value(), 20);
+    }
+
+    // 重复 put 已存在 key: 更新值, 不增加大小, 且提升到最新
+    {
+        agentxx::util::LruCache<int, int> c(2);
+        c.put(1, 10);
+        c.put(2, 20);
+        c.put(1, 100); // 更新 1
+        XX_TEST_EXPECT_EQ(c.size(), 2u);
+        XX_TEST_EXPECT_EQ(c.get(1).value(), 100);
+        // 1 是最新, 再 put 3 应淘汰 2
+        c.put(3, 30);
+        XX_TEST_EXPECT_TRUE(c.get(1).has_value());
+        XX_TEST_EXPECT_FALSE(c.get(2).has_value());
+        XX_TEST_EXPECT_TRUE(c.get(3).has_value());
+    }
+
+    // evict: 显式驱逐最久未用
+    {
+        agentxx::util::LruCache<int, int> c(3);
+        XX_TEST_EXPECT_FALSE(c.evict()); // 空缓存 evict 失败
+        c.put(1, 10);
+        c.put(2, 20);
+        c.put(3, 30);
+        XX_TEST_EXPECT_TRUE(c.evict()); // 驱逐 1
+        XX_TEST_EXPECT_FALSE(c.get(1).has_value());
+        XX_TEST_EXPECT_TRUE(c.get(2).has_value());
+        XX_TEST_EXPECT_EQ(c.size(), 2u);
+    }
+
+    // 大量元素循环 + 淘汰 (压力)
+    {
+        agentxx::util::LruCache<int, int> c(64);
+        for (int i = 0; i < 1000; ++i) {
+            c.put(i, i);
+        }
+        XX_TEST_EXPECT_EQ(c.size(), 64u);
+        // 最近 64 个保留
+        XX_TEST_EXPECT_TRUE(c.get(999).has_value());
+        XX_TEST_EXPECT_FALSE(c.get(0).has_value());
+        XX_TEST_EXPECT_FALSE(c.get(935).has_value()); // 999-64=935 之前被淘汰
+    }
+
+    // 字符串 key
+    {
+        agentxx::util::LruCache<std::string, int> c(2);
+        c.put("key1", 1);
+        c.put("key2", 2);
+        XX_TEST_EXPECT_EQ(c.get("key1").value(), 1);
+        c.put("key3", 3);
+        XX_TEST_EXPECT_FALSE(c.get("key2").has_value()); // key1 被访问过, 淘汰 key2
+        XX_TEST_EXPECT_TRUE(c.get("key1").has_value());
+        XX_TEST_EXPECT_TRUE(c.get("key3").has_value());
+    }
+
+    // 空键 / 空值
+    {
+        agentxx::util::LruCache<std::string, std::string> c(2);
+        c.put("", "");
+        XX_TEST_EXPECT_TRUE(c.get("").has_value());
+        XX_TEST_EXPECT_EQ(c.get("").value(), std::string(""));
+        XX_TEST_EXPECT_TRUE(c.exists(""));
+    }
+
+    // 重复 put 空串提升新鲜度
+    {
+        agentxx::util::LruCache<std::string, int> c(2);
+        c.put("a", 1);
+        c.put("b", 2);
+        c.put("a", 3); // 更新
+        c.put("c", 4); // 应淘汰 b
+        XX_TEST_EXPECT_TRUE(c.get("a").has_value());
+        XX_TEST_EXPECT_FALSE(c.get("b").has_value());
+    }
+}
+
 static void test_router() {
     XXRouter<int, 8> router;
     router.add("/foo/bar", 0, std::make_shared<int>(42));
@@ -88,6 +175,98 @@ static void test_router() {
     XX_TEST_EXPECT_TRUE(removed != nullptr);
     auto hRemoved = router.get("/baz", 2, re_path);
     XX_TEST_EXPECT_TRUE(hRemoved == nullptr);
+}
+
+static void test_router_more() {
+    XXRouter<int, 8> router;
+
+    // 多级精确路径
+    router.add("/a/b/c", 0, std::make_shared<int>(1));
+    std::string re_path;
+    auto        h = router.get("/a/b/c", 0, re_path);
+    XX_TEST_EXPECT_TRUE(h != nullptr);
+    if (h) {
+        XX_TEST_EXPECT_EQ(*h, 1);
+        XX_TEST_EXPECT_EQ(re_path, std::string("/a/b/c"));
+    }
+
+    // 末尾通配符: /api/* 匹配任意子路径 (支持多级)
+    router.add("/api/*", 0, std::make_shared<int>(2));
+    auto hWild = router.get("/api/v1", 0, re_path);
+    XX_TEST_EXPECT_TRUE(hWild != nullptr);
+    if (hWild) {
+        XX_TEST_EXPECT_EQ(*hWild, 2);
+        XX_TEST_EXPECT_EQ(re_path, std::string("/api/*"));
+    }
+    // 通配符匹配多级子路径
+    auto hWildMulti = router.get("/api/v1/users", 0, re_path);
+    XX_TEST_EXPECT_TRUE(hWildMulti != nullptr);
+    if (hWildMulti) {
+        XX_TEST_EXPECT_EQ(*hWildMulti, 2);
+    }
+    // 不匹配无通配的路径段
+    auto hNoMatch = router.get("/other/x", 0, re_path);
+    XX_TEST_EXPECT_TRUE(hNoMatch == nullptr);
+
+    // 精确路径优先于通配符
+    router.add("/api/v1", 0, std::make_shared<int>(5));
+    auto hExact = router.get("/api/v1", 0, re_path);
+    XX_TEST_EXPECT_TRUE(hExact != nullptr);
+    if (hExact) {
+        XX_TEST_EXPECT_EQ(*hExact, 5);
+        XX_TEST_EXPECT_EQ(re_path, std::string("/api/v1"));
+    }
+
+    // 尾部通配符: /files/* 匹配任意子路径
+    router.add("/files/*", 0, std::make_shared<int>(3));
+    auto hFiles = router.get("/files/a/b/c.txt", 0, re_path);
+    XX_TEST_EXPECT_TRUE(hFiles != nullptr);
+    if (hFiles) {
+        XX_TEST_EXPECT_EQ(*hFiles, 3);
+    }
+
+    // 连续斜杠等效: add "/x//y" 后 get "/x/y" 命中
+    router.add("/x//y", 0, std::make_shared<int>(4));
+    auto hXY = router.get("/x/y", 0, re_path);
+    XX_TEST_EXPECT_TRUE(hXY != nullptr);
+
+    // getNocache 不走缓存, 结果一致
+    auto hNC = router.getNocache("/a/b/c", 0, re_path);
+    XX_TEST_EXPECT_TRUE(hNC != nullptr);
+    if (hNC) {
+        XX_TEST_EXPECT_EQ(*hNC, 1);
+    }
+
+    // clearCache 后 get 仍正确 (重建查找)
+    router.clearCache();
+    auto hAfterClearCache = router.get("/a/b/c", 0, re_path);
+    XX_TEST_EXPECT_TRUE(hAfterClearCache != nullptr);
+
+    // 指定方法索引无处理函数: 返回 nullptr, re_path 仍应有值
+    auto hNoHandle = router.get("/a/b/c", 7, re_path);
+    XX_TEST_EXPECT_TRUE(hNoHandle == nullptr);
+    XX_TEST_EXPECT_EQ(re_path, std::string("/a/b/c"));
+
+    // 不存在的路径: nullptr 且 re_path 清空
+    auto hMissing = router.get("/not/exist", 0, re_path);
+    XX_TEST_EXPECT_TRUE(hMissing == nullptr);
+    XX_TEST_EXPECT_TRUE(re_path.empty());
+
+    // 通配符路径 remove 后不再命中 (未精确注册的路径回退到通配符)
+    auto removedWild = router.remove("/api/*", 0);
+    XX_TEST_EXPECT_TRUE(removedWild != nullptr);
+    auto hWildAfterRemove = router.get("/api/v2", 0, re_path);
+    XX_TEST_EXPECT_TRUE(hWildAfterRemove == nullptr);
+    // 精确注册的路径不受通配符 remove 影响
+    auto hExactAfter = router.get("/api/v1", 0, re_path);
+    XX_TEST_EXPECT_TRUE(hExactAfter != nullptr);
+
+    // clear 后缓存同步失效 (UAF 回归)
+    auto hBefore = router.get("/files/a.txt", 0, re_path);
+    XX_TEST_EXPECT_TRUE(hBefore != nullptr);
+    router.clear();
+    auto hAfter = router.get("/files/a.txt", 0, re_path);
+    XX_TEST_EXPECT_TRUE(hAfter == nullptr);
 }
 
 static void test_chain_hash() {
@@ -125,7 +304,9 @@ TestResult testMiscFixes() {
     g_mf_failed = 0;
 
     test_lru_cache();
+    test_lru_cache_more();
     test_router();
+    test_router_more();
     test_chain_hash();
 
     return TestResult{g_mf_passed, g_mf_failed};
