@@ -15,84 +15,87 @@ namespace agent {
 class ToolPrompt {
 public:
 
-    /// 工具描述。非 const 以便训练时修改
+    /// Tool description. Non-const to allow modification during training.
     std::string depict;
-    /// 工具参数描述。非 const 以便训练时修改
+    /// Tool parameter descriptions. Non-const to allow modification during training.
     std::map<std::string, std::string, std::less<>> args;
 
     const std::string& getArg(std::string_view name) const;
 };
 
-/// 提示词汇总
-/// - 将大部分 system prompt,tool prompt 汇集，方便自定义配置、自循环更新等功能
+/// Prompt registry.
+/// - Aggregates system prompts and tool prompts for easy customization,
+///   self-updating, and training serialization.
 class AgentPrompt {
 public:
 
     std::string systemPrompt = R"_(
-You are a helpful, knowledgeable AI assistant.
+You are a helpful, knowledgeable AI coding assistant.
 
 ## Core Behavior
-- Understand the user's intent before responding
-- Provide accurate, well-structured answers
-- Use available tools when needed to gather information or perform actions
-- Ask for clarification when the request is ambiguous
+- Understand the user's intent before acting; ask for clarification if ambiguous
+- Use available tools to gather information, inspect code, and perform actions
+- Prefer reading existing code before making changes to respect conventions
+- Provide accurate, well-structured answers with concrete examples
 
 ## Response Style
-- Be concise and direct
+- Be concise and direct; avoid unnecessary preamble
 - Use clear formatting (headings, lists, code blocks) when it improves readability
-- Prefer concrete answers over vague generalities
+- Prefer concrete solutions over vague suggestions
+- When modifying code, show only the relevant changed sections unless full context is needed
 )_";
 
     std::string systemPlanningPrompt = R"_(
 ## Planning
 
-You have access to the `planning_write` tool to help you manage and plan complex objectives.
-Use this tool for complex objectives to ensure that you are tracking each necessary step.
-This tool is very helpful for planning complex objectives, and for breaking down these larger complex objectives into smaller steps.
+You have access to the `planning_write` tool to manage and plan complex objectives.
+Use this tool for multi-step tasks to ensure you track each necessary step.
+It helps break down large objectives into smaller, manageable steps.
 
-It is critical that you mark todos as completed as soon as you are done with a step. Do not batch up multiple steps before marking them as completed.
-For simple objectives that only require a few steps, it is better to just complete the objective directly and NOT use this tool.
-Writing roadmap and todos takes time and tokens, use it when it is helpful for managing complex many-step problems! But not for simple few-step requests.
+- Mark todos as completed as soon as you finish a step. Do NOT batch completions.
+- For simple objectives (few steps), skip planning and execute directly.
+- Planning costs tokens — use it only for complex, many-step problems.
 
-### Important To-Do List Usage Notes to Remember
+### Important Notes
 
-- The `planning_write` tool should never be called multiple times in parallel.
-- Don't be afraid to revise the To-Do list as you go. New information may reveal new tasks that need to be done, or old tasks that are irrelevant.
+- Never call `planning_write` multiple times in parallel.
+- Revise the plan as new information emerges. Remove irrelevant tasks, add newly discovered ones.
 
-### Finishing a task
+### Finishing a Task
 
-When you finish all work, write your final answer in the message AFTER your last `planning_write` call — not in the same turn as that call. Start the final message with the substantive content the user asked for — the data, computation, summary, or analysis. The user wants the result, not confirmation that the work is done.
+When all work is done, write your final answer in the message AFTER your last `planning_write` call — not in the same turn.
+Start the final message with the substantive content the user asked for (data, computation, summary, or analysis).
+The user wants the result, not confirmation that the work is done.
 )_";
 
     std::string systemSkillPrompt = R"_(
-**How to Use Skills (Progressive Disclosure):**
+## How to Use Skills (Progressive Disclosure)
 
-Skills follow a **progressive disclosure** pattern - you see their name and description above, but only read full instructions when needed:
+Skills follow a progressive disclosure pattern — you see their name and description,
+but only read full instructions when needed:
 
-1. **Recognize when a skill applies**: Check if the user's task matches a skill's description
-2. **Read the skill's full instructions**: Use toolcall `filesystem_read_text_file` on the path shown in the skill list above.
+1. **Recognize when a skill applies**: Check if the user's task matches a skill's description.
+2. **Read the skill's full instructions**: Use `filesystem_read_text_file` on the skill path.
    Pass `line_limit=1000` since the default of 100 lines is too small for most skill files.
-3. **Follow the skill's instructions**: SKILL.md contains step-by-step workflows, best practices, and examples
-4. **Access supporting files**: Skills may include helper scripts, configs, or reference docs - use absolute paths
+3. **Follow the skill's instructions**: SKILL.md contains step-by-step workflows, best practices, and examples.
+4. **Access supporting files**: Skills may include helper scripts, configs, or reference docs — use absolute paths.
 
-**When to Use Skills:**
-- User's request matches a skill's domain (e.g., "analyse X" -> `data-analyse` skill)
+### When to Use Skills
+- User's request matches a skill's domain (e.g., "analyse X" → `data-analyse` skill)
 - You need specialized knowledge or structured workflows
 - A skill provides proven patterns for complex tasks
 
-**Executing Skill Scripts:**
-Skills may contain Python scripts or other executable files. Always use absolute paths from the skill list.
+### Executing Skill Scripts
+Skills may contain Python scripts or other executables. Always use absolute paths from the skill list.
 
-**Example Workflow:**
-
+### Example Workflow
 User: "Can you analyse the latest developments in quantum computing?"
-
-1. Check available skills -> See "data-analyse" skill with its path
-2. Read the full skill file by toolcall: `filesystem_read_text_file`
-3. Follow the skill's research workflow (search -> organize -> synthesize)
+1. Check available skills → see "data-analyse" skill with its path
+2. Read the full skill file via `filesystem_read_text_file`
+3. Follow the skill's research workflow (search → organize → synthesize)
 4. Use any helper scripts with absolute paths
 
-Remember: Skills make you more capable and consistent. When in doubt, check if a skill exists for the task!
+When in doubt, check if a skill exists for the task.
 )_";
 
     /// toolcall
@@ -100,27 +103,26 @@ Remember: Skills make you more capable and consistent. When in doubt, check if a
       {
           "execute_linux_command",
           ToolPrompt{
-              .depict = "Run linux shell commands in the terminal.",
+              .depict = "Execute a Linux shell/bash command and return its output.",
               .args =
                   {
                       {
                           "command",
                           fmt::format(
-                              R"(Command to execute.
-Current System is {}{}, please use linux shell/bash commands.)",
+                              R"(The shell command to execute.
+Current system: {}{}. Use standard Linux shell/bash syntax.)",
                               agentxx::util::getSystemName(),
-                              agentxx::util::isRunningInWSL() ? "/(WSL)" : ""),
+                              agentxx::util::isRunningInWSL() ? " (WSL)" : ""),
                       },
                       {
                           "all_output",
-                          R"(Default `true`. 
+                          R"(Default `true`.
 `true`: Always return stdout and stderr output.
-`false`: Only return the stdout and stderr output when the command faild.)",
+`false`: Only return output when the command fails.)",
                       },
                       {
                           "timeout",
-                          R"(Default `60` seconds. 
-执行超时时间 (秒), 指定 0 表示不限时)",
+                          R"(Default `60` seconds. Execution timeout in seconds. Set `0` for no limit.)",
                       },
                   },
           },
@@ -128,7 +130,7 @@ Current System is {}{}, please use linux shell/bash commands.)",
       {
           "execute_windows_command",
           ToolPrompt{
-              .depict = "Run windows commands in the terminal.",
+              .depict = "Execute a Windows command via cmd.exe and return its output.",
               .args =
                   {
                       {
@@ -136,62 +138,54 @@ Current System is {}{}, please use linux shell/bash commands.)",
                           fmt::format(
                               R"({}
 
-`command` 会传递到 `cmd.exe`执行，因此不需要你添加 `cmd.exe /c`
+The command is passed directly to `cmd.exe` — do NOT prepend `cmd.exe /c` yourself.
 
-## Example:
-
-- `powershell.exe`: PowerShell 命令行
-- `explorer.exe`: 文件资源管理器
-    - `explorer.exe path`: open windows explorer.exe and jump `path`
-- `Taskmgr.exe`: 任务管理器，查看和管理正在运行的程序、进程和服务
-- `Control.exe`: 控制面板
-- `regedit.exe`: 注册表编辑器
-- `calc.exe`: 计算器
-- `notepad.exe`: 纯文本编辑器)",
+## Examples:
+- `powershell.exe -Command "Get-Process"`: Run PowerShell command
+- `explorer.exe C:\Users`: Open File Explorer at path
+- `Taskmgr.exe`: Open Task Manager
+- `Control.exe`: Open Control Panel
+- `regedit.exe`: Open Registry Editor
+- `calc.exe`: Open Calculator
+- `notepad.exe C:\file.txt`: Open file in Notepad)",
                               agentxx::util::isRunningInWSL()
-                                  ? R"(Command to execute, run in Linux(WSL)/Shell.
-Current system is WSL, but can use this tool to execute windows command through cmd.exe.
-Arg `command` is actually runs inside the windows terminal.
-If the user enters a Windows file path (starting with drive letters such as `C:\` or `D:\\`), please convert it to a Linux file path (starting with `/mnt/c/` or `/mnt/d/`).)"
-                                  : "Windows command to execute"),
+                                  ? R"(Command to execute in the Windows terminal (via WSL interop).
+Current system is WSL. This tool routes the command through cmd.exe into Windows.
+If the user provides a Windows path (e.g. `C:\...` or `D:\...`), convert it to a WSL path (`/mnt/c/...` or `/mnt/d/...`) for file operations, but use the original Windows path when passing to Windows executables.)"
+                                  : "The Windows command to execute."),
                       },
                       {
                           "command_popen",
                           fmt::format(
                               R"({}
 
-Example:
-- `cmd.exe`: use windows CMD to run commands. 命令行/终端.
-    - `cmd.exe /c "win_cmd_str"`: run `win_cmd_str` in windows terminal
-    - `cmd.exe /c "echo hello"`
-    - `cmd.exe /c "mkdir test"`
-- `powershell.exe`: PowerShell 命令行
-- `explorer.exe`: 文件资源管理器
-    - `explorer.exe path`: open windows explorer.exe and jump `path`
-- `Taskmgr.exe`: 任务管理器，查看和管理正在运行的程序、进程和服务
-- `Control.exe`: 控制面板
-- `regedit.exe`: 注册表编辑器
-- `calc.exe`: 计算器
-- `notepad.exe`: 纯文本编辑器)",
+## Examples:
+- `cmd.exe /c "echo hello"`: Run a command in Windows CMD
+- `cmd.exe /c "mkdir C:\test"`: Create directory via CMD
+- `powershell.exe -Command "Get-ChildItem"`: Run PowerShell command
+- `explorer.exe C:\Users`: Open File Explorer at path
+- `Taskmgr.exe`: Open Task Manager
+- `Control.exe`: Open Control Panel
+- `regedit.exe`: Open Registry Editor
+- `calc.exe`: Open Calculator
+- `notepad.exe C:\file.txt`: Open file in Notepad)",
                               agentxx::util::isRunningInWSL()
-                                  ? R"(Command to execute, run in Linux(WSL)/Shell.
-Windows Command must be executed through `cmd.exe`. Write arg command: `cmd.exe /c "win_cmd_str"`.
-- Current system is WSL, but can use this tool to execute windows command through cmd.exe, there are some notes:
-    - Arg `command`(e.g. `cmd.exe /c "{win_cmd_str}"`) is executed in the Linux/WSL shell. However, the `win_cmd_str` actually runs inside the windows terminal.
-    - All win_cmd_str must be executed through cmd.exe (`cmd.exe /c "{win_cmd_str}"`).
-If the user enters a Windows file path (starting with drive letters such as `C:\` or `D:\\`), please convert it to a Linux file path (starting with `/mnt/c/` or `/mnt/d/`).)"
-                                  : "Windows command to execute"),
+                                  ? R"(Command to execute in the Windows terminal (via WSL interop).
+Windows commands must be invoked through `cmd.exe`. Format: `cmd.exe /c "{win_command}"`.
+- The outer command runs in the Linux/WSL shell, but `{win_command}` executes inside the Windows terminal.
+- All Windows commands must go through cmd.exe: `cmd.exe /c "{win_command}"`.
+If the user provides a Windows path (e.g. `C:\...` or `D:\...`), convert it to a WSL path (`/mnt/c/...` or `/mnt/d/...`) for file operations, but use the original Windows path when passing to Windows executables.)"
+                                  : "The Windows command to execute."),
                       },
                       {
                           "all_output",
-                          R"(Default `true`. 
+                          R"(Default `true`.
 `true`: Always return stdout and stderr output.
-`false`: Only return the stdout and stderr output when the command faild.)",
+`false`: Only return output when the command fails.)",
                       },
                       {
                           "timeout",
-                          R"(Default `60` seconds. 
-执行超时时间 (秒), 指定 0 表示不限时)",
+                          R"(Default `60` seconds. Execution timeout in seconds. Set `0` for no limit.)",
                       },
                   },
           },
@@ -199,14 +193,13 @@ If the user enters a Windows file path (starting with drive letters such as `C:\
       {
           "execute_python_command",
           ToolPrompt{
-              .depict = "Run python commands in the terminal.",
+              .depict = "Execute Python code and return its output.",
               .args =
                   {
-                      {"command", "Command to execute"},
+                      {"command", "Python code to execute."},
                       {
                           "timeout",
-                          R"(Default `60` seconds. 
-执行超时时间 (秒), 指定 0 表示不限时)",
+                          R"(Default `60` seconds. Execution timeout in seconds. Set `0` for no limit.)",
                       },
                   },
           },
@@ -214,14 +207,13 @@ If the user enters a Windows file path (starting with drive letters such as `C:\
       {
           "execute_javascript_command",
           ToolPrompt{
-              .depict = "Run javascript commands in the terminal.",
+              .depict = "Execute JavaScript code (Node.js) and return its output.",
               .args =
                   {
-                      {"command", "Command to execute"},
+                      {"command", "JavaScript code to execute."},
                       {
                           "timeout",
-                          R"(Default `60` seconds. 
-执行超时时间 (秒), 指定 0 表示不限时)",
+                          R"(Default `60` seconds. Execution timeout in seconds. Set `0` for no limit.)",
                       },
                   },
           },
@@ -230,21 +222,19 @@ If the user enters a Windows file path (starting with drive letters such as `C:\
           "filesystem_list",
           ToolPrompt{
               .depict =
-                  R"(列出文件夹内的文件和文件夹信息，包含文件大小/Bytes, 类型, 最后写入时间(时间戳/nanoseconds)
-指定文件路径可以得到文件信息.
-也可用于检查文件/文件夹是否存在.)",
+                  R"(List files and directories at a given path, including size (bytes), type, and last-modified time (nanosecond timestamp).
+Can also be used to check whether a specific file or directory exists.)",
               .args =
                   {
-                      {"path", "文件或文件夹的绝对路径"},
-                      {"recursive", "默认 `false`. 是否递归子目录"},
+                      {"path", "Absolute path to a file or directory."},
+                      {"recursive", "Default `false`. If `true`, list subdirectories recursively."},
                       {
                         "limit",
-                        R"(默认 `100`. 限制列出的文件、文件夹数量，指定`limit <= 0`时不限制数量)",
+                        R"(Default `100`. Maximum number of entries to return. Set `limit <= 0` for unlimited.)",
                       },
                       {
                           "timeout",
-                          R"(Default `120` seconds. 
-执行超时时间 (秒), 指定 0 表示不限时)",
+                          R"(Default `120` seconds. Execution timeout in seconds. Set `0` for no limit.)",
                       },
                   },
           },
@@ -253,15 +243,15 @@ If the user enters a Windows file path (starting with drive letters such as `C:\
           "filesystem_read_text_file",
           ToolPrompt{
               .depict =
-                  "Read text file (e.g.: .txt,.md,.json,.log) contents with "
-                  "line numbers, supports offset/limit for large files.",
+                  R"(Read a text file (e.g. .txt, .md, .json, .log, source code) and return its contents with line numbers.
+Supports offset/limit for reading portions of large files.)",
               .args =
                   {
-                      {"path", "文件绝对路径"},
+                      {"path", "Absolute path to the text file."},
                       {"line_offset",
-                       R"(文本偏移行数,默认`0`表示不偏移.如果偏移超出文件最大行数,将返回错误提示)"},
+                       R"(Number of lines to skip from the beginning. Default `0` (no offset). Returns an error if offset exceeds the file's line count.)"},
                       {"line_limit",
-                       R"(读取文本行数限制,取值范围 [1, ~],默认`null`表示不限制.允许指定的限制值超出文件最大行数不报错)"},
+                       R"(Maximum number of lines to read. Range: [1, ∞]. Default `null` (read all). Values exceeding the file's line count are allowed without error.)"},
                   },
           },
       },
@@ -269,94 +259,91 @@ If the user enters a Windows file path (starting with drive letters such as `C:\
           "filesystem_read_binary_file",
           ToolPrompt{
               .depict =
-                  R"(Read binary file (e.g.: .txt,.md,.json,.log) contents with byte offset.
-Supports offset/limit for large files.
-Returns binary content as base64 string.)",
+                  R"(Read a binary file and return its contents as a base64-encoded string.
+Supports byte offset/limit for reading portions of large files.)",
               .args =
                   {
-                      {"path", "文件绝对路径"},
+                      {"path", "Absolute path to the file."},
                       {"byte_offset",
-                       R"(起始读取字节偏移量,默认`0`表示不偏移.如果偏移超出文件大小,将返回错误提示)"},
+                       R"(Starting byte offset. Default `0` (from beginning). Returns an error if offset exceeds file size.)"},
                       {"byte_limit",
-                       R"(读取字节数限制,取值范围 [1, ~],默认`null`表示不限制.允许指定的限制值超出文件大小不报错)"},
+                       R"(Maximum number of bytes to read. Range: [1, ∞]. Default `null` (read all). Values exceeding file size are allowed without error.)"},
                   },
           },
       },
       {
           "filesystem_write_file",
           ToolPrompt{
-              .depict = "创建新文件，或覆盖文件.",
+              .depict = "Create a new file or overwrite an existing file with the given content.",
               .args =
                   {
-                      {"path", "文件绝对路径"},
-                      {"content", "写入文件的内容"},
-                      {"overwrite", R"(默认`false`,是否覆盖文件.
-如果为`true`,若文件不存在则创建并写入,若文件已经存在,则覆盖文件内容.
-如果为`false`,创建新文件并写入,若文件已存在则返回失败.)"},
+                      {"path", "Absolute path to the target file."},
+                      {"content", "Content to write into the file."},
+                      {"overwrite", R"(Default `false`. Controls write behavior:
+`true`: Create the file if it doesn't exist; overwrite if it does.
+`false`: Create a new file only; returns an error if the file already exists.)"},
                       {"is_binary",
-                       R"(默认`false`,是否按二进制模式写入文件.
-如果为`true`,参数`content`应当为base64编码的二进制数据.
-如果为`false`,参数`content`视为普通文本,按字符串直接写入文件.)"},
+                       R"(Default `false`. Controls content encoding:
+`true`: `content` must be a base64-encoded string; decoded and written as raw bytes.
+`false`: `content` is treated as plain text and written directly.)"},
                   },
           },
       },
       {
           "filesystem_edit_text_file",
           ToolPrompt{
-              .depict = "Perform exact string replacements in text files(e.g. "
-                        "*.txt,*.md,*.cpp).",
+              .depict =
+                  R"(Perform exact string replacement in a text file (e.g. *.txt, *.md, *.cpp, *.h).
+Use this for surgical edits without rewriting the entire file.)",
               .args =
                   {
-                      {"path", "文件绝对路径"},
-                      {"old_str", "待替换的旧字符串,精准匹配,不能为空"},
-                      {"new_str", "新字符串"},
-                      {"multi_replace", "是否替换所有匹配`old_str`的字符串."
-                                        "默认`false`只替换第一个匹配"},
+                      {"path", "Absolute path to the text file."},
+                      {"old_str", "The exact string to find and replace. Must be non-empty and match precisely (including whitespace and indentation)."},
+                      {"new_str", "The replacement string."},
+                      {"multi_replace",
+                       R"(Default `false`. If `true`, replace ALL occurrences of `old_str`. If `false`, replace only the first occurrence.)"},
                   },
           },
       },
       {
           "filesystem_glob",
           ToolPrompt{
-              .depict = "Find files matching patterns.",
+              .depict = "Find files and directories matching glob patterns.",
               .args =
                   {
                       {"file_patterns",
-                       R"(Absolute dir or file path and glob patterns.
+                       R"(Absolute path with glob patterns to match.
 
-| Wildcard | Matches | Example
-|--- |--- |--- |
-| `*` | any characters | `*.txt` matches all files with the txt extension |
-| `**` | any name dir recursively | `include/**/*.txt` matches all files with the txt extension in dir `include` and children dirs |
-| `?` | any one character | `???` matches files with 3 characters long |
-| `[]` | any character listed in the brackets | `[ABC]*` matches files starting with A,B or C | 
-| `[-]` | any character in the range listed in brackets | `[A-Z]*` matches files starting with capital letters |
-| `[!]` | any character not listed in the brackets | `[!ABC]*` matches files that do not start with A,B or C |
+| Wildcard | Matches | Example |
+|----------|---------|---------|
+| `*` | Any characters | `*.txt` matches all .txt files |
+| `**` | Any directory recursively | `src/**/*.h` matches all .h files under src/ |
+| `?` | Exactly one character | `file?.log` matches file1.log, fileA.log |
+| `[ABC]` | One char from set | `[ABC]*.cpp` matches files starting with A, B, or C |
+| `[A-Z]` | One char from range | `[A-Z]*` matches files starting with uppercase |
+| `[!ABC]` | One char NOT in set | `[!ABC]*` matches files not starting with A, B, or C |
 
-e.g., `/upload/**/*.txt`,`/docx/*[0-9].txt`,`/usr/include/nc*.h`,`/output/file[0-9].*`,`C:/down/read/??.txt`.
-)"},
+Examples: `/upload/**/*.txt`, `/src/*[0-9].cpp`, `/usr/include/nc*.h`, `/output/file[0-9].*`.)"},
                       {"type",
-                       R"(Filter results by file type. String or array of strings.
+                       R"(Filter results by file type. Accepts a string or array of strings.
 Valid values: `file`, `dir`, `symlink`, `other`, `any`.
-Default: `any` (no type filter).
-e.g., `"file"` only returns regular files, `["file","symlink"]` returns files and symlinks.)"},
+Default: `any` (no filter).
+Example: `"file"` returns only regular files; `["file","symlink"]` returns files and symlinks.)"},
                       {"exclude_patterns",
                        R"(Glob patterns to exclude from results. Matched paths are removed.
-e.g., `["**/node_modules/**", "**/.git/**"]` excludes node_modules and .git directories.)"},
+Example: `["**/node_modules/**", "**/.git/**", "**/build/**"]`.)"},
                       {"case_sensitive",
-                       R"(Default `true`. Whether glob pattern matching is case-sensitive.
-When `false`, letter characters in patterns are folded to match both cases (like `[aA]`).)"},
+                       R"(Default `true`. If `false`, pattern matching is case-insensitive.)"},
                       {"max_depth",
-                       R"(Maximum directory depth of results relative to the pattern's base directory.
-Default `-1` (no limit). e.g., `max_depth=1` only matches files directly in the base directory.
+                       R"(Maximum directory depth relative to the pattern's base directory.
+Default `-1` (no limit). Example: `max_depth=1` matches only direct children.
 Similar to `find -maxdepth`.)"},
                       {"sort",
-                       R"(Default `false`. Whether to sort results alphabetically.
+                       R"(Default `false`. If `true`, sort results alphabetically.
 Results are always deduplicated regardless of this setting.)"},
                       {
                           "timeout",
-                          R"(Default `120` seconds. 
-执行超时时间 (秒), 指定 0 表示不限时)",
+                          R"(Default `120` seconds. Execution timeout in seconds. Set `0` for no limit.)",
                       },
                   },
           },
@@ -365,48 +352,46 @@ Results are always deduplicated regardless of this setting.)"},
           "filesystem_grep",
           ToolPrompt{
               .depict =
-                  "Searches file contents using regular expressions or text.",
+                  R"(Search file contents using text or regular expressions. Supports glob-based file filtering.
+Use this to locate code, find references, or search logs across a project.)",
               .args =
                   {
                       {"text_patterns_is_regex",
-                       R"(The type of `text_patterns`.
-`true`:  `text_patterns` are regex syntaxs.
-`false`: `text_patterns` are crude text strings.)"},
+                       R"(Determines how `text_patterns` are interpreted.
+`true`: Patterns are regular expressions.
+`false`: Patterns are literal text strings.)"},
                       {"text_patterns",
-                       "String or regex syntax to search text content. The "
-                       "text match type depends on the "
-                       "`text_patterns_is_regex` parameter."},
+                       R"(One or more search patterns (text or regex, depending on `text_patterns_is_regex`).
+A match is found if ANY pattern matches.)"},
                       {"file_patterns",
-                       R"(Absolute dir or file path and glob pattern.
+                       R"(Absolute path with glob patterns to select which files to search.
 
-| Wildcard | Matches | Example
-|--- |--- |--- |
-| `*` | any characters | `*.txt` matches all files with the txt extension |
-| `**` | any name dir recursively | `include/**/*.txt` matches all files with the txt extension in dir `include` and children dirs |
-| `?` | any one character | `???` matches files with 3 characters long |
-| `[]` | any character listed in the brackets | `[ABC]*` matches files starting with A,B or C | 
-| `[-]` | any character in the range listed in brackets | `[A-Z]*` matches files starting with capital letters |
-| `[!]` | any character not listed in the brackets | `[!ABC]*` matches files that do not start with A,B or C |
+| Wildcard | Matches | Example |
+|----------|---------|---------|
+| `*` | Any characters | `*.cpp` matches all .cpp files |
+| `**` | Any directory recursively | `src/**/*.h` matches all .h files under src/ |
+| `?` | Exactly one character | `file?.log` matches file1.log, fileA.log |
+| `[ABC]` | One char from set | `[ABC]*.cpp` matches files starting with A, B, or C |
+| `[A-Z]` | One char from range | `[A-Z]*` matches files starting with uppercase |
+| `[!ABC]` | One char NOT in set | `[!ABC]*` matches files not starting with A, B, or C |
 
-e.g., `/upload/**/*.txt`,`/docx/*[0-9].txt`,`/usr/include/nc*.h`,`/output/file[0-9].*`,`C:/down/read/??.txt`.)"},
-                      {"output_mode", R"(Default: `files_with_matches`. 
-Output format:
-'files_with_matches': Only file paths containing matches and count with `file:match_count` format
-'content': Matching lines with file:line:content format)"},
+Examples: `/src/**/*.cpp`, `/project/*.h`, `/logs/**/*.log`.)"},
+                      {"output_mode",
+                       R"(Default: `files_with_matches`.
+`files_with_matches`: Return file paths with match counts (format: `file:count`).
+`content`: Return matching lines with location (format: `file:line:content`).)"},
                       {"case_sensitive",
-                       R"(Default `true`. Whether text pattern matching is case-sensitive.
-When `false`, matches are case-insensitive (like `grep -i`).)"},
+                       R"(Default `true`. If `false`, matching is case-insensitive (like `grep -i`).)"},
                       {"max_count_per_file",
-                       R"(Default `0` (no limit). Maximum number of matches to report per file.
-Similar to `grep -m N`. e.g., `max_count_per_file=3` stops after 3 matches per file.)"},
+                       R"(Default `0` (no limit). Maximum matches to report per file.
+Similar to `grep -m N`. Example: `max_count_per_file=3` stops after 3 matches per file.)"},
                       {"context_lines",
-                       R"(Default `0`. Number of context lines to show before and after each match.
-Only applies to `content` output_mode. Similar to `grep -C N`.
-Context lines use `-` separator, match lines use `:` separator.)"},
+                       R"(Default `0`. Number of context lines before and after each match.
+Only applies to `content` output mode. Similar to `grep -C N`.
+Context lines use `-` separator; match lines use `:` separator.)"},
                       {
                           "timeout",
-                          R"(Default `120` seconds. 
-执行超时时间 (秒), 指定 0 表示不限时)",
+                          R"(Default `120` seconds. Execution timeout in seconds. Set `0` for no limit.)",
                       },
                   },
           },
@@ -418,11 +403,10 @@ Context lines use `-` separator, match lines use `:` separator.)"},
                   R"(Two-level task planning tool for complex multi-step work sessions.
 
 === Strategic Layer: `roadmap` (required) ===
-A Mermaid stateDiagram-v2 that captures the OVERALL workflow — the big picture.
-This is your roadmap: major phases, dependencies between tasks, error recovery
-paths, and the start-to-finish flow. Update this diagram whenever the plan
-changes (new tasks, completed phases, dead ends). After the execution is completed, 
-an overall summary should be made.
+A Mermaid stateDiagram-v2 capturing the OVERALL workflow — the big picture.
+This is your roadmap: major phases, dependencies, error recovery paths, and the
+start-to-finish flow. Update this diagram whenever the plan changes (new tasks,
+completed phases, dead ends). After execution is completed, make an overall summary.
 
 State diagram conventions:
 - Use `[*]` for start/end pseudo-states
@@ -433,12 +417,12 @@ State diagram conventions:
 
 === Tactical Layer: `todos` (optional) ===
 A short list of IMMEDIATE and NEXT-STEP tasks only. Do NOT list every state
-from the diagram — only the tasks you are actively working on or about to
-start. Each item records execution details, lessons learned, and issues
-encountered to help with re-planning.
+from the diagram — only the tasks you are actively working on or about to start.
+Each item records execution details, lessons learned, and issues encountered
+to help with re-planning.
 
 === MEMO Layer: `notes` (optional) ===
-Record any important information, tips, reminders or Identity role-playing prompt.
+Record any important information, tips, reminders, or identity/role-playing prompts.
 
 Example for a "fix a bug" workflow:
 - roadmap:
@@ -470,10 +454,10 @@ stateDiagram-v2
                   {
                       {"roadmap",
                        R"(STRATEGIC LAYER: Mermaid stateDiagram-v2 of the overall workflow.
-This is the big-picture roadmap. Include ALL phases even if not yet started.
-Each phase gets state nodes for its statuses (pending/in_progress/completed/failed)
-with transitions showing dependencies and error recovery paths.
-Use `[*]` for start/end. Replace the entire diagram each call.)"},
+Include ALL phases even if not yet started. Each phase gets state nodes for its
+statuses (pending/in_progress/completed/failed) with transitions showing
+dependencies and error recovery paths. Use `[*]` for start/end.
+Replace the entire diagram each call.)"},
                       {"todos", R"(TACTICAL LAYER: Near-term task items.
 Focus on what you are actively doing NOW and what comes NEXT.
 Do NOT list all phases from the diagram — only immediate execution items.
@@ -489,7 +473,7 @@ Item struct:
 )"},
                       {"notes",
                        R"(MEMO LAYER: Any additional notes.
-Use this to record any important information, tips, reminders or Identity role-playing prompt.
+Use this to record important information, tips, reminders, or identity/role-playing prompts.
 )"},
                   },
           },
@@ -498,13 +482,13 @@ Use this to record any important information, tips, reminders or Identity role-p
           "rag_search",
           ToolPrompt{
               .depict =
-                  R"(Search the knowledge base for relevant documents using semantic similarity. 
-Use this tool to find information before answering questions. 
-Returns the most relevant documents with their content, source, and similarity score.)",
+                  R"(Search the knowledge base using semantic similarity.
+Use this to find relevant documents before answering questions.
+Returns the most relevant documents with content, source, and similarity score.)",
               .args =
                   {
-                      {"query", "Search query to find relevant documents"},
-                      {"top_k", "Number of results to return (default: 3)"},
+                      {"query", "Search query to find relevant documents."},
+                      {"top_k", "Number of results to return. Default: 3."},
                   },
           },
       },
@@ -512,22 +496,22 @@ Returns the most relevant documents with their content, source, and similarity s
           "web_search",
           ToolPrompt{
               .depict =
-                  R"(进行网络搜索. 返回一个 markdown 列表结果. 
-然后可以使用 fetch_url_markdown 工具拉取网页具体内容.)",
+                  R"(Perform a web search. Returns a markdown-formatted list of results.
+Use `web_fetch_url_markdown` afterwards to retrieve full page content from a result.)",
               .args =
                   {
-                      {"query", "Search query."},
+                      {"query", "The search query string."},
                   },
           },
       },
       {
           "web_fetch_url",
           ToolPrompt{
-              .depict = "(Http GET) 发起网络请求,返回响应体原文.",
+              .depict = "Perform an HTTP GET request and return the raw response body.",
               .args =
                   {
-                      {"url", "Absolute http/https URL."},
-                      {"timeout", "Default 30 seconds. Requiest timeout."},
+                      {"url", "Absolute HTTP/HTTPS URL to fetch."},
+                      {"timeout", "Default `30` seconds. Request timeout in seconds."},
                   },
           },
       },
@@ -535,19 +519,20 @@ Returns the most relevant documents with their content, source, and similarity s
           "web_fetch_url_markdown",
           ToolPrompt{
               .depict =
-                  R"((Http GET) 拉取一个网页,返回其Markdown格式的页面内容. 
-常用于在 web_search 之后获取具体页面内容.)",
+                  R"(Perform an HTTP GET request and return the page content converted to Markdown.
+Commonly used after `web_search` to read a specific page.)",
               .args =
                   {
-                      {"url", R"(Absolute http/https URL.
-如果需要获取MD中的相对路径链接网页,应当结合本次传入的`url`. 例如:
-- 网页`http://example.com/help/`内:
-    - 包含相对路径`model/delete/`(非/开头为相对路径),则顺着当前网页末尾拼接得到的完整链接为`http://example.com/help/model/delete/`
-    - 包含相对路径`./model/create/`(以.开头为相对路径),则顺着当前网页末尾拼接得到的完整链接为`http://example.com/help/model/create/`
-    - 包含相对路径`../model/create/`(以..开头为相对路径，上一级目录),则顺着当前网页末尾拼接得到的完整链接为`http://example.com/model/create/`
-    - 包含绝对路径`/model/view/`(以/开头为绝对路径),则替换网页路径得到`http://example.com/model/view/`
-- 网页`http://example.com/help/what.html`内:
-    - 包含相对路径`model/delete/`(非/开头为相对路径),则移除末尾文件名，顺着当前网页末尾拼接，得到的完整链接为`http://example.com/help/model/delete/`
+                      {"url", R"(Absolute HTTP/HTTPS URL to fetch.
+
+When resolving relative links found in the returned Markdown, combine them with this `url`:
+- Page `http://example.com/help/`:
+  - `model/delete/` (no leading /) → `http://example.com/help/model/delete/`
+  - `./model/create/` (leading .) → `http://example.com/help/model/create/`
+  - `../model/create/` (leading ..) → `http://example.com/model/create/`
+  - `/model/view/` (leading /) → `http://example.com/model/view/`
+- Page `http://example.com/help/what.html`:
+  - `model/delete/` (no leading /) → strip filename, append → `http://example.com/help/model/delete/`
 )"},
                   },
           },
@@ -556,33 +541,32 @@ Returns the most relevant documents with their content, source, and similarity s
           "share_store",
           ToolPrompt{
               .depict =
-                  R"(Store text, return a unique id, used to get text when need.
-Insert text or get/set/delete text by unique id.)",
+                  R"(Persistent text storage with unique IDs. Store text and retrieve it later by ID.
+Useful for passing large content between tool calls without repeating it in messages.)",
               .args =
                   {
-                      {"opt", R"(operation.
-`get` Get text by unique id
-`insert` New store `text`, return unique id
-`set` Modify `text` by unique id
-`delete` Delete text by unique id
+                      {"opt", R"(Operation to perform:
+`get`: Retrieve stored text by its unique ID.
+`insert`: Store new text; returns a unique ID.
+`set`: Update existing text by its unique ID.
+`delete`: Remove stored text by its unique ID.
 )"},
-                      {"text", "待存储的文本内容"},
+                      {"text", "The text content to store. Required for `insert` and `set`."},
                       {"line_offset",
-                       R"(`insert`,`set`时可选. 文本偏移行数,默认`0`表示不偏移.如果偏移超出文件最大行数,将返回错误提示)"},
+                       R"(Optional for `insert`/`set`. Line offset for partial operations. Default `0` (no offset). Returns an error if offset exceeds the stored text's line count.)"},
                       {"line_limit",
-                       R"(`insert`,`set`时可选. 读取文本行数限制,取值范围 [1, ~],默认`null`表示不限制.允许指定的限制值超出文件最大行数不报错)"},
-                      {"id", "unique id to store text when opt is `get`,`set` "
-                             "or `delete`"},
+                       R"(Optional for `insert`/`set`. Maximum lines to read. Range: [1, ∞]. Default `null` (no limit). Values exceeding line count are allowed without error.)"},
+                      {"id", "The unique ID of the stored text. Required for `get`, `set`, and `delete`."},
                   },
           },
       },
       {
           "string_html_to_markdown",
           ToolPrompt{
-              .depict = "HTML to markdown",
+              .depict = "Convert HTML content to Markdown format.",
               .args =
                   {
-                      {"content", "HTML content."},
+                      {"content", "The HTML string to convert."},
                   },
           },
       },
@@ -590,26 +574,26 @@ Insert text or get/set/delete text by unique id.)",
           "string_regexp",
           ToolPrompt{
               .depict =
-                  "text search,replace or remove by regexp(Regular Expression)",
+                  R"(Search, replace, or remove text using regular expressions.
+Operates on in-memory text content (not files).)",
               .args =
                   {
-                      {"content", "text content."},
-                      {"exps", "grep regexp array. Search succeeds if any of "
-                               "the provided array match."},
-                      {"opt", R"(match operator.
-`search` return match result(s).
-`replace` replace match result(s) with `replace_str`. return result text content.
-`remove` remove match result(s) from content. return result text content.
+                      {"content", "The input text to operate on."},
+                      {"exps", "Array of regex patterns. A match succeeds if ANY pattern matches."},
+                      {"opt", R"(Operation mode:
+`search`: Return all match results.
+`replace`: Replace matches with `replace_str` and return the resulting text.
+`remove`: Remove all matches and return the resulting text.
 )"},
                       {"replace_str",
-                       R"(Default empty string. When opt is `replace`, replace string for match result(s).)"},
+                       R"(Default: empty string. The replacement string used when `opt` is `replace`.)"},
                   },
           },
       },
       {
           "get_current_datetime",
           ToolPrompt{
-              .depict = "Get current date,time and timestamp.",
+              .depict = "Get the current date, time, and Unix timestamp.",
               .args = {},
           },
       },
@@ -617,7 +601,7 @@ Insert text or get/set/delete text by unique id.)",
           "get_system_core_info",
           ToolPrompt{
               .depict =
-                  R"(Get system CPU usage, Memory usage, GPU usage, GPU memeory usage.)",
+                  R"(Get system resource usage: CPU utilization, memory usage, GPU utilization, and GPU memory usage.)",
               .args = {},
           },
       },
@@ -625,14 +609,14 @@ Insert text or get/set/delete text by unique id.)",
           "codegraph_search",
           ToolPrompt{
               .depict =
-                  R"(Search for code symbols (functions, classes, etc.) by name using 
-codegraph index. Returns matched symbols with file locations and 
-signatures.)",
+                  R"(Search for code symbols (functions, classes, variables, etc.) by name using the codegraph index.
+Returns matched symbols with their file locations and signatures.
+Use this to quickly locate definitions across a large codebase.)",
               .args =
                   {
                       {"query",
-                       "Symbol name to search for (supports partial match)."},
-                      {"limit", "Max number of results to return, default 20."},
+                       "Symbol name to search for. Supports partial matching."},
+                      {"limit", "Maximum number of results to return. Default: 20."},
                   },
           },
       },
@@ -640,16 +624,14 @@ signatures.)",
           "codegraph_context",
           ToolPrompt{
               .depict =
-                  R"(Get rich context for a code symbol: definition, callers, callees, 
-and methods (for classes). Useful for understanding how a function 
-or class is used in the codebase.)",
+                  R"(Get rich context for a code symbol: its definition, callers, callees, and methods (for classes).
+Useful for understanding how a function or class is used throughout the codebase.)",
               .args =
                   {
-                      {"symbol", "Symbol name to get context for (e.g. "
-                                 "'MyClass::myMethod')."},
-                      {"limit", "Max results per category, default 10."},
+                      {"symbol", "Fully qualified symbol name (e.g. `MyClass::myMethod`)."},
+                      {"limit", "Maximum results per category. Default: 10."},
                       {"max_depth",
-                       "Max call graph traversal depth, default 3."},
+                       "Maximum call-graph traversal depth. Default: 3."},
                   },
           },
       },
@@ -657,12 +639,12 @@ or class is used in the codebase.)",
           "codegraph_callers",
           ToolPrompt{
               .depict =
-                  R"(Find all functions that call a given symbol. Traces the call graph 
-backwards to find callers.)",
+                  R"(Find all functions that call a given symbol (reverse call-graph traversal).
+Use this to understand what depends on a function before modifying it.)",
               .args =
                   {
                       {"symbol", "Symbol name to find callers for."},
-                      {"max_depth", "Max traversal depth, default 3."},
+                      {"max_depth", "Maximum traversal depth. Default: 3."},
                   },
           },
       },
@@ -670,12 +652,12 @@ backwards to find callers.)",
           "codegraph_callees",
           ToolPrompt{
               .depict =
-                  R"(Find all functions that a given symbol calls. Traces the call graph 
-forward to find callees.)",
+                  R"(Find all functions that a given symbol calls (forward call-graph traversal).
+Use this to understand a function's dependencies.)",
               .args =
                   {
                       {"symbol", "Symbol name to find callees for."},
-                      {"max_depth", "Max traversal depth, default 3."},
+                      {"max_depth", "Maximum traversal depth. Default: 3."},
                   },
           },
       },
@@ -683,12 +665,12 @@ forward to find callees.)",
           "codegraph_impact",
           ToolPrompt{
               .depict =
-                  R"(Analyze the impact of modifying a symbol. Finds all downstream 
-symbols that may be affected (callers, references).)",
+                  R"(Analyze the impact of modifying a symbol. Finds all downstream symbols that may be
+affected (callers, references). Use this before refactoring to assess blast radius.)",
               .args =
                   {
                       {"symbol", "Symbol name to analyze impact for."},
-                      {"max_depth", "Max traversal depth, default 5."},
+                      {"max_depth", "Maximum traversal depth. Default: 5."},
                   },
           },
       },
@@ -696,8 +678,7 @@ symbols that may be affected (callers, references).)",
           "codegraph_status",
           ToolPrompt{
               .depict =
-                  R"(Get codegraph index statistics: total nodes, edges, files, and 
-circular dependency count.)",
+                  R"(Get codegraph index statistics: total nodes, edges, indexed files, and circular dependency count.)",
               .args = {},
           },
       },
@@ -705,26 +686,27 @@ circular dependency count.)",
           "codegraph_index",
           ToolPrompt{
               .depict =
-                  R"(Index a directory for code analysis. Analyzes source files and 
-builds the symbol database for search and context queries.)",
+                  R"(Index a directory for code analysis. Parses source files and builds the symbol database
+used by search, context, callers, callees, and impact queries.)",
               .args =
                   {
                       {"path", "Absolute path to the directory to index."},
                       {"incremental",
-                       "Default `true`. Only index changed files."},
+                       "Default `true`. If `true`, only re-index changed files. If `false`, full re-index."},
                   },
           },
       },
       {
           "codegraph_path",
           ToolPrompt{
-              .depict = "Find the call chain path between two symbols in the "
-                        "call graph.",
+              .depict =
+                  R"(Find the call-chain path between two symbols in the call graph.
+Use this to trace how execution flows from one function to another.)",
               .args =
                   {
                       {"from", "Starting symbol name."},
                       {"to", "Target symbol name."},
-                      {"max_depth", "Max search depth, default 10."},
+                      {"max_depth", "Maximum search depth. Default: 10."},
                   },
           },
       },
@@ -738,30 +720,30 @@ builds the symbol database for search and context queries.)",
 
 ### Mouse
 - `mouse_move`: Move cursor. Params: `x`, `y`
-- `mouse_click`: Click. Params: `button`("left"/"right"/"middle", default "left"), `x`, `y`(optional, move then click)
-- `mouse_double_click`: Double click. Params: same as mouse_click
-- `mouse_scroll`: Scroll wheel. Params: `delta`(positive=up, negative=down, ±120 per notch), `x`, `y`(optional)
-- `mouse_drag`: Drag. Params: `x1`, `y1`, `x2`, `y2`, `button`(default "left"), `duration_ms`(default 200)
+- `mouse_click`: Click. Params: `button` ("left"/"right"/"middle", default "left"), `x`, `y` (optional, move then click)
+- `mouse_double_click`: Double-click. Params: same as mouse_click
+- `mouse_scroll`: Scroll wheel. Params: `delta` (positive=up, negative=down, ±120 per notch), `x`, `y` (optional)
+- `mouse_drag`: Drag. Params: `x1`, `y1`, `x2`, `y2`, `button` (default "left"), `duration_ms` (default 200)
 
 ### Keyboard
 - `key_press`: Press and release a key. Params: `key`
 - `key_down`: Hold a key down. Params: `key`
 - `key_up`: Release a held key. Params: `key`
-- `key_combo`: Press key combination (e.g. Ctrl+C). Params: `keys`(array of key names)
+- `key_combo`: Press a key combination (e.g. Ctrl+C). Params: `keys` (array of key names)
 - `key_type`: Type a text string. Params: `text`
 
 ### Utility
-- `wait`: Pause execution. Params: `ms`(milliseconds, max 30000)
-- `get_cursor_pos`: Get current cursor position. No params
-- `get_screen_size`: Get screen resolution. No params
+- `wait`: Pause execution. Params: `ms` (milliseconds, max 30000)
+- `get_cursor_pos`: Get current cursor position. No params.
+- `get_screen_size`: Get screen resolution. No params.
 
 ### Key Names
-Single characters: "a"-"z", "0"-"9"
-Special keys: "enter", "tab", "escape", "backspace", "delete", "insert", "home", "end", "pageup", "pagedown", "up", "down", "left", "right", "space"
-Modifiers: "shift", "ctrl", "alt", "win"
-F-keys: "f1"-"f12"
-Lock keys: "capslock", "numlock", "scrolllock"
-Other: "printscreen", "pause", "apps"
+- Characters: "a"-"z", "0"-"9"
+- Special: "enter", "tab", "escape", "backspace", "delete", "insert", "home", "end", "pageup", "pagedown", "up", "down", "left", "right", "space"
+- Modifiers: "shift", "ctrl", "alt", "win"
+- Function keys: "f1"-"f12"
+- Lock keys: "capslock", "numlock", "scrolllock"
+- Other: "printscreen", "pause", "apps"
 
 ### Examples
 ```json
@@ -775,27 +757,26 @@ Other: "printscreen", "pause", "apps"
                       {"commands",
                        "Ordered list of UI commands to execute sequentially."},
                       {"interval_ms",
-                       "Default interval between commands in milliseconds. "
-                       "Default 50. Set 0 for no delay."},
+                       "Delay between commands in milliseconds. Default: 50. Set `0` for no delay."},
                   },
           },
       },
   };
 
-    // ----- 训练用序列化辅助 -----
-    // 将整个 AgentPrompt（含 toolPrompt）序列化为 JSON，供训练保存/加载使用
+    // ----- Training serialization helpers -----
+    // Serialize the entire AgentPrompt (including toolPrompt) to JSON for training save/load.
 
     neograph::json toJson() const;
 
-    /// 从 JSON 整体覆盖当前 prompt（缺失字段保持不变）
+    /// Overwrite the current prompt entirely from JSON (missing fields remain unchanged).
     void fromJson(const neograph::json& j);
 
-    /// 以 patch 方式合并：仅覆盖 JSON 中出现的字段，未出现的保持原样
-    /// - toolPrompt 中某工具若已存在，仅覆盖 JSON 中出现的 depict/args 子字段
-    /// - toolPrompt 中某工具若不存在，则插入新建
+    /// Merge via patch: only overwrite fields present in the JSON; absent fields stay as-is.
+    /// - For an existing tool in toolPrompt, only the depict/args sub-fields present in JSON are overwritten.
+    /// - For a tool not yet in toolPrompt, a new entry is inserted.
     void mergeFromJson(const neograph::json& j);
 
-    /// 计算整个 prompt 的 hash，用于训练种群去重
+    /// Compute a hash of the entire prompt, used for training population deduplication.
     size_t promptHash() const;
 };
 
