@@ -1325,8 +1325,13 @@ asio::awaitable<std::string> FilesystemGrepTool::execute_async(const neograph::j
     // 外部提供 cancelFlag, 超时时由定时器设置, 通知 glob 工作线程提前退出
     auto cancelFlag = std::make_shared<std::atomic<bool>>(false);
 
-    // 将整个 grep 操作 (glob + 逐文件搜索) 包装为子协程, 与超时定时器竞争
-    auto workFuture
+    // 将整个 grep 操作 (glob + 逐文件搜索) 包装为子协程, 与超时定时器竞争。
+    // 注意: 必须用"具名 lambda + 调用", 不能写"临时 lambda 立即调用 ([...](){...}())"。
+    // 因为 asio::awaitable 是惰性协程, 调用时不执行协程体, 其协程帧通过隐式对象指针引用
+    // lambda 闭包 (捕获项 this/cancelFlag/...); 若 lambda 是临时对象, 会在本语句结束即析构,
+    // 待下方 co_await 真正恢复协程时捕获项已失效 -> stack-use-after-return。
+    // 具名 lambda work 作为本协程局部变量, 存活至 execute_async 结束, 覆盖整个 co_await 周期。
+    auto work
         = [this, file_patterns, text_patterns, text_patterns_is_regex, output_mode, cancelFlag](
           ) -> asio::awaitable<std::string> {
         std::vector<std::filesystem::path> refilelist{};
@@ -1469,7 +1474,8 @@ asio::awaitable<std::string> FilesystemGrepTool::execute_async(const neograph::j
                 )};
             }
         }
-    }();
+    };
+    auto workFuture = work();
 
     if (timeout > 0) {
         // 超时竞争: 工作协程 vs 定时器, 谁先完成取谁
