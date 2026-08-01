@@ -20,17 +20,15 @@ public:
     std::string name;            ///< 模型标识名称（来自配置文件 key）
     std::string type = "openai"; ///< 模型类型："openai" 或 "anthropic"
     std::string baseUrl;         ///< API 地址，为空时使用 provider 默认官方地址
-    std::string apiKey                = "EMPTY";
-    std::string modelName             = "Agentxx"; ///< 发送请求时的 model 字段值
-    int         connectTimeoutSeconds = 16;
-    int         readTimeoutSeconds    = 30;
+    std::string apiKey                  = "EMPTY";
+    std::string modelName               = "Agentxx"; ///< 发送请求时的 model 字段值
+    int         connectTimeoutSeconds   = 16;
+    int         readChunkTimeoutSeconds = 60;
     /// 是否在发送 LLM 请求时携带 thinking 内容
     bool                sendThinking = false;
     std::optional<bool> sslVerify    = std::nullopt;
     /// Anthropic API version（仅 Anthropic 使用）
     std::string anthropicVersion = "2023-06-01";
-    /// max_tokens
-    int maxTokens = 8096;
     /// 从 content 文本中尝试提取 tool call（当 LLM 未正确使用 tool_calls API 时的兜底方案）
     bool extractToolCallsFromContent = false;
     /// 模型支持的最大上下文 token 数

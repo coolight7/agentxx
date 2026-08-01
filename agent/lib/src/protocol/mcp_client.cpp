@@ -877,7 +877,7 @@ asio::awaitable<void> McpClient::discoverSseEndpoint() {
     auto resp = co_await util::HttpClient::getAsync(
         sseUrl,
         headers,
-        util::HttpClient::RequestConfig{.readTimeout = config_.initTimeout}
+        util::HttpClient::RequestConfig{.readChunkTimeout = config_.initTimeout}
     );
 
     if (!resp.has_value()) {
@@ -960,7 +960,7 @@ asio::awaitable<std::expected<json, std::string>>
         httpMessageUrl_,
         req,
         headers,
-        util::HttpClient::RequestConfig{.readTimeout = config_.requestTimeout}
+        util::HttpClient::RequestConfig{.readChunkTimeout = config_.requestTimeout}
     );
 
     if (!resp.has_value()) {
@@ -1151,7 +1151,7 @@ asio::awaitable<void> McpClient::sendRawNotification(std::string_view method, co
             url,
             req,
             buildHttpHeaders(),
-            util::HttpClient::RequestConfig{.readTimeout = config_.requestTimeout}
+            util::HttpClient::RequestConfig{.readChunkTimeout = config_.requestTimeout}
         );
     } else if (config_.isStdio()) {
         auto reqStr = req.dump() + "\n";

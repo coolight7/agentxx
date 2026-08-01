@@ -61,19 +61,19 @@ inline constexpr uint64_t kDefaultMaxResponseBody = 10 * 1024 * 1024;
 ///   falls back to the global default (see HttpClient::setSslVerify).
 /// - sendTimeout: bounds writing the request; nullopt auto-derives it from the
 ///   request body size (see HttpClient::calcTimeoutBySize).
-/// - readTimeout: bounds the gap between successive incoming data chunks; if no
-///   new data arrives within readTimeout the request is treated as timed out
+/// - readChunkTimeout: bounds the gap between successive incoming data chunks; if no
+///   new data arrives within readChunkTimeout the request is treated as timed out
 ///   (the timer resets every time new data is received). This is a per-chunk
 ///   timeout, NOT a total response timeout — as long as data keeps flowing the
 ///   connection stays alive.
 struct RequestConfig {
-    std::chrono::milliseconds                connectTimeout  = std::chrono::seconds{30};
-    std::optional<std::chrono::milliseconds> sendTimeout     = std::nullopt;
-    std::chrono::milliseconds                readTimeout     = std::chrono::seconds{30};
-    std::optional<bool>                      sslVerify       = std::nullopt;
-    size_t                                   followRedirect  = 3;
-    bool                                     keepAlive       = false;
-    uint64_t                                 maxResponseBody = kDefaultMaxResponseBody;
+    std::chrono::milliseconds                connectTimeout   = std::chrono::seconds{30};
+    std::optional<std::chrono::milliseconds> sendTimeout      = std::nullopt;
+    std::chrono::milliseconds                readChunkTimeout = std::chrono::seconds{30};
+    std::optional<bool>                      sslVerify        = std::nullopt;
+    size_t                                   followRedirect   = 3;
+    bool                                     keepAlive        = false;
+    uint64_t                                 maxResponseBody  = kDefaultMaxResponseBody;
 };
 
 class HttpClient {
@@ -147,7 +147,7 @@ public:
                 stream,
                 buffer,
                 parser,
-                asio::cancel_after(config.readTimeout, asio::use_awaitable)
+                asio::cancel_after(config.readChunkTimeout, asio::use_awaitable)
             );
         }
 
@@ -171,7 +171,7 @@ public:
     );
 
     /// SSE 流式请求: 连接、发送、读取响应头后逐块回调 body 数据。
-    /// - 每次收到新数据块时调用 onChunk (分块间隔受 readTimeout 约束)
+    /// - 每次收到新数据块时调用 onChunk (分块间隔受 readChunkTimeout 约束)
     /// - HTTP 429 时抛出 neograph::RateLimitError (解析 retry-after)
     /// - 其他非 2xx 时抛出 std::runtime_error
     /// - 网络/超时错误抛出 boost::system::system_error
@@ -248,8 +248,10 @@ public:
 
     static asio::awaitable<std::expected<std::string, std::string>> fetchMarkdown(
         std::string_view     url,
-        const RequestConfig& config
-        = RequestConfig{.connectTimeout = std::chrono::seconds{15}, .readTimeout = std::chrono::seconds{15}}
+        const RequestConfig& config = RequestConfig{
+            .connectTimeout = std::chrono::seconds{15}, 
+            .readChunkTimeout = std::chrono::seconds{15},
+        }
     );
 };
 } // namespace util

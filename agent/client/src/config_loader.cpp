@@ -231,9 +231,9 @@ YamlAppConfig loadYamlConfig(
                     overrideEnvVars
                 ));
             }
-            if (node["read_timeout"]) {
-                mc.readTimeoutSeconds = std::stoi(resolveEnvVars(
-                    node["read_timeout"].as<std::string>("30"),
+            if (node["read_chunk_timeout"]) {
+                mc.readChunkTimeoutSeconds = std::stoi(resolveEnvVars(
+                    node["read_chunk_timeout"].as<std::string>("60"),
                     dotEnvVars,
                     overrideEnvVars
                 ));

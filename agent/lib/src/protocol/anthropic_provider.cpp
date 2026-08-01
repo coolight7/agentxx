@@ -191,8 +191,10 @@ AnthropicProvider::AnthropicProvider(agentxx::agent::ModelConfig config) :
 
 neograph::json AnthropicProvider::buildBody(const neograph::CompletionParams& params) const {
     neograph::json body;
-    body["model"]      = params.model.empty() ? config_.modelName : params.model;
-    body["max_tokens"] = config_.maxTokens;
+    body["model"] = params.model.empty() ? config_.modelName : params.model;
+    if (config_.modelSupportMaxToken > 0) {
+        body["max_tokens"] = config_.modelSupportMaxToken;
+    }
 
     auto [system, messages] = convertMessages(params.messages, config_.sendThinking);
     body["messages"]        = std::move(messages);
@@ -246,9 +248,9 @@ asio::awaitable<neograph::ChatCompletion>
         "application/json",
         headers,
         HttpClient::RequestConfig{
-            .connectTimeout = std::chrono::seconds{config_.connectTimeoutSeconds},
-            .readTimeout    = std::chrono::seconds{config_.readTimeoutSeconds},
-            .sslVerify      = config_.sslVerify,
+            .connectTimeout   = std::chrono::seconds{config_.connectTimeoutSeconds},
+            .readChunkTimeout = std::chrono::seconds{config_.readChunkTimeoutSeconds},
+            .sslVerify        = config_.sslVerify,
         }
     );
 
@@ -315,9 +317,9 @@ asio::awaitable<neograph::ChatCompletion> AnthropicProvider::doStream(
         "application/json",
         headers,
         HttpClient::RequestConfig{
-            .connectTimeout = std::chrono::seconds{config_.connectTimeoutSeconds},
-            .readTimeout    = std::chrono::seconds{config_.readTimeoutSeconds},
-            .sslVerify      = config_.sslVerify,
+            .connectTimeout   = std::chrono::seconds{config_.connectTimeoutSeconds},
+            .readChunkTimeout = std::chrono::seconds{config_.readChunkTimeoutSeconds},
+            .sslVerify        = config_.sslVerify,
         },
         [&](std::string_view chunk) {
             lineBuffer += chunk;

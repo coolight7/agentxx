@@ -401,7 +401,7 @@ asio::awaitable<void> test_mcp_server_integration() {
             "not json",
             "application/json",
             headers,
-            HttpClient::RequestConfig{.readTimeout = std::chrono::seconds{5}}
+            HttpClient::RequestConfig{.readChunkTimeout = std::chrono::seconds{5}}
         );
         XX_TEST_EXPECT_HAS_VALUE(resp);
         if (resp.has_value()) {
@@ -2051,7 +2051,7 @@ asio::awaitable<void> test_mcp_server_accept_sse() {
             baseUrl + "/mcp",
             req,
             headers,
-            HttpClient::RequestConfig{.readTimeout = std::chrono::seconds{5}}
+            HttpClient::RequestConfig{.readChunkTimeout = std::chrono::seconds{5}}
         );
         XX_TEST_EXPECT_HAS_VALUE(resp);
         if (resp.has_value()) {
@@ -2073,7 +2073,7 @@ asio::awaitable<void> test_mcp_server_accept_sse() {
             baseUrl + "/mcp",
             req,
             headers,
-            HttpClient::RequestConfig{.readTimeout = std::chrono::seconds{5}}
+            HttpClient::RequestConfig{.readChunkTimeout = std::chrono::seconds{5}}
         );
         XX_TEST_EXPECT_HAS_VALUE(resp);
         if (resp.has_value()) {
@@ -2111,7 +2111,7 @@ asio::awaitable<void> test_mcp_server_accept_sse() {
             baseUrl + "/mcp",
             req,
             headers,
-            HttpClient::RequestConfig{.readTimeout = std::chrono::seconds{5}}
+            HttpClient::RequestConfig{.readChunkTimeout = std::chrono::seconds{5}}
         );
         XX_TEST_EXPECT_HAS_VALUE(resp);
         if (resp.has_value()) {
@@ -2132,7 +2132,7 @@ asio::awaitable<void> test_mcp_server_accept_sse() {
         auto resp = co_await HttpClient::getAsync(
             baseUrl + "/mcp/sse",
             headers,
-            HttpClient::RequestConfig{.readTimeout = std::chrono::seconds{5}}
+            HttpClient::RequestConfig{.readChunkTimeout = std::chrono::seconds{5}}
         );
         XX_TEST_EXPECT_HAS_VALUE(resp);
         if (resp.has_value()) {
@@ -2163,7 +2163,7 @@ asio::awaitable<void> test_mcp_server_accept_sse() {
         auto resp = co_await HttpClient::getAsync(
             baseUrl + "/mcp/sse",
             headers,
-            HttpClient::RequestConfig{.readTimeout = std::chrono::seconds{5}}
+            HttpClient::RequestConfig{.readChunkTimeout = std::chrono::seconds{5}}
         );
         // Connection is closed immediately by the server; the request may fail
         // or return an incomplete response – either is acceptable.
@@ -2186,7 +2186,7 @@ asio::awaitable<void> test_mcp_server_accept_sse() {
             baseUrl + "/mcp",
             req,
             headers,
-            HttpClient::RequestConfig{.readTimeout = std::chrono::seconds{5}}
+            HttpClient::RequestConfig{.readChunkTimeout = std::chrono::seconds{5}}
         );
         XX_TEST_EXPECT_HAS_VALUE(resp);
         if (resp.has_value()) {

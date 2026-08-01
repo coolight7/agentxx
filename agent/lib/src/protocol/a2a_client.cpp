@@ -18,7 +18,7 @@ asio::awaitable<std::expected<json, std::string>> A2aClient::fetchAgentCard() {
         url,
         util::HeaderMap{},
         util::RequestConfig{
-            .readTimeout = config_.requestTimeout,
+            .readChunkTimeout = config_.requestTimeout,
         }
     );
     if (!resp.has_value()) {
@@ -102,7 +102,7 @@ asio::awaitable<std::expected<json, std::string>>
         "application/json",
         headers,
         util::RequestConfig{
-            .readTimeout = config_.requestTimeout,
+            .readChunkTimeout = config_.requestTimeout,
         }
     );
 

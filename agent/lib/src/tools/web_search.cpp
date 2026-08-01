@@ -57,7 +57,7 @@ asio::awaitable<std::string> WebSearchTool::execute_async(const neograph::json& 
         auto resp = co_await agentxx::util::HttpClient::getAsync(
             search_url,
             {},
-            agentxx::util::HttpClient::RequestConfig{.readTimeout = std::chrono::seconds{15}}
+            agentxx::util::HttpClient::RequestConfig{.readChunkTimeout = std::chrono::seconds{15}}
         );
         out_resp_err = resp.error_or("unknown");
         if (resp.has_value()) {
@@ -137,7 +137,7 @@ asio::awaitable<std::string> WebFetchUrlTool::execute_async(const neograph::json
     auto resp = co_await agentxx::util::HttpClient::getAsync(
         url,
         {},
-        agentxx::util::HttpClient::RequestConfig{.readTimeout = std::chrono::seconds(timeout)}
+        agentxx::util::HttpClient::RequestConfig{.readChunkTimeout = std::chrono::seconds(timeout)}
     );
     if (resp.has_value()) {
         if (false == agentxx::util::HttpClient::respIsSucc(resp.value())) {
