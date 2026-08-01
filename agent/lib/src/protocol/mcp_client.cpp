@@ -53,6 +53,8 @@ struct McpClient::StdioTransport {
     std::optional<asio::writable_pipe>     stdinPipe;
     std::optional<asio::readable_pipe>     stdoutPipe;
     std::atomic<bool>                      running{false};
+    /// readerLoop 协程是否已结束 (close 时等待其结束再销毁 pipe, 避免 UAF)
+    std::atomic<bool> readerDone{true};
 
     bool start(
         asio::any_io_executor           executor,
@@ -89,6 +91,17 @@ struct McpClient::StdioTransport {
     }
 
     asio::awaitable<void> readerLoop(std::shared_ptr<McpClient> client) {
+        // 协程退出时标记 readerDone, 供 close() 等待后再销毁 pipe
+        struct DoneGuard {
+            std::atomic<bool>* d;
+
+            ~DoneGuard() {
+                d->store(true, std::memory_order_release);
+            }
+        } doneGuard{&readerDone};
+
+        readerDone.store(false, std::memory_order_release);
+
         std::string buffer;
         while (running.load()) {
             neograph_asio_error_code ec;
@@ -136,10 +149,16 @@ struct McpClient::StdioTransport {
             stdinPipe->close(ec);
         }
         if (stdoutPipe.has_value()) {
+            // 关闭 stdoutPipe 使 readerLoop 挂起的 async_read_until 以错误返回并退出
             stdoutPipe->close(ec);
         }
         process->terminate(ec);
         process->wait(ec);
+        // 等待 readerLoop 协程结束: 否则其仍挂在 async_read_until 上时销毁 pipe → UAF。
+        // (关闭 pipe 后 readerLoop 会很快退出; 此处有界等待, 超时亦继续以免死等)
+        for (int i = 0; i < 200 && !readerDone.load(std::memory_order_acquire); ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
         stdinPipe.reset();
         stdoutPipe.reset();
         process.reset();
@@ -1081,14 +1100,34 @@ asio::awaitable<std::expected<json, std::string>>
     auto executor = co_await asio::this_coro::executor;
     json response;
 
+    // 带超时的轮询等待: 子进程卡死或不返回对应 id 时, 超过 requestTimeout 即返回错误,
+    // 否则该协程将永久挂起 (原实现完全忽略 requestTimeout)
+    const auto deadline = std::chrono::steady_clock::now() + config_.requestTimeout;
+    bool       ready    = false;
     while (true) {
         if (future.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
             response = future.get();
+            ready    = true;
+            break;
+        }
+        if (std::chrono::steady_clock::now() >= deadline) {
             break;
         }
         asio::steady_timer timer(executor);
         timer.expires_after(std::chrono::milliseconds(5));
         co_await timer.async_wait(asio::redirect_error(asio::use_awaitable, ignoreEc_));
+    }
+
+    if (!ready) {
+        {
+            std::lock_guard lock(pendingMutex_);
+            pending_.erase(id);
+        }
+        co_return std::unexpected{fmt::format(
+            "stdio request `{}` timed out after {}ms",
+            method,
+            config_.requestTimeout.count()
+        )};
     }
 
     auto err = getErrorFromResponse(response);

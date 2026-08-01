@@ -177,9 +177,14 @@ void SummarizationMiddlewareHandle::doSummarizeToolcall(std::vector<neograph::Ch
 
                 neograph::json args;
                 if (toolcallIndex >= 0) {
-                    args = neograph::json::parse(
-                        messages[lastMsgIndex].tool_calls[toolcallIndex].arguments
-                    );
+                    try {
+                        args = neograph::json::parse(
+                            messages[lastMsgIndex].tool_calls[toolcallIndex].arguments
+                        );
+                    } catch (const std::exception&) {
+                        // 非法 JSON 参数: 跳过该条而非中断整轮压缩
+                        args = neograph::json{};
+                    }
                 }
 
                 auto key = itemHandleIt->second.generateDeduplicationKey(args);
@@ -198,8 +203,14 @@ void SummarizationMiddlewareHandle::doSummarizeToolcall(std::vector<neograph::Ch
                 if (itemHandleIt != summarizationToolHandles.end()
                     && itemHandleIt->second.generateDeduplicationKey
                     && itemHandleIt->second.truncateRequest) {
-                    auto args = neograph::json::parse(tc.arguments);
-                    auto key  = itemHandleIt->second.generateDeduplicationKey(args);
+                    neograph::json args;
+                    try {
+                        args = neograph::json::parse(tc.arguments);
+                    } catch (const std::exception&) {
+                        // 非法 JSON 参数: 跳过该条而非中断整轮压缩
+                        args = neograph::json{};
+                    }
+                    auto key = itemHandleIt->second.generateDeduplicationKey(args);
                     if (key.has_value()) {
                         if (lastWriteIndex.contains(*key)) {
                             itemHandleIt->second.truncateRequest(tc);
@@ -296,8 +307,14 @@ asio::awaitable<void>
                 // - 如果 llm 未压缩，则仍为原消息顺序，截取到哪里都可以.
                 const auto& role = messages[i].role;
                 if ("tool" == role || "user" == role) {
+                    oldEnd = i;
                     break;
                 }
+            }
+            // 若 recent 段以 tool 消息开头, 说明切在了 tool 交换中间: 向前回退到发起这组 tool 的
+            // assistant(tool_calls), 把整组纳入 recent, 避免产生孤儿 tool 结果 / 悬空 tool_calls
+            while (oldEnd > systemCount && "tool" == messages[oldEnd].role) {
+                --oldEnd;
             }
 
             const size_t oldStart = systemCount;

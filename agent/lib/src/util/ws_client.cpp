@@ -248,16 +248,19 @@ asio::awaitable<std::expected<WsMessage, std::string>> WsClient::recv() {
         msg.payload      = std::move(payload);
         co_return std::expected<WsMessage, std::string>{std::move(msg)};
     } catch (const boost::system::system_error& e) {
-        impl_->closed_ = true;
         if (e.code() == boost::beast::websocket::error::closed) {
+            impl_->closed_ = true;
             WsMessage msg;
             msg.type      = WsMessage::Type::Close;
             msg.closeCode = 1000;
             co_return std::expected<WsMessage, std::string>{std::move(msg)};
         }
         if (e.code() == asio::error::operation_aborted) {
+            // 接收超时 (空闲超过 recvTimeout): 连接本身仍健康, 不能标记 closed,
+            // 否则一次普通超时即永久废弃健康连接, 之后所有 send/recv 都报 "connection closed"
             co_return std::unexpected{std::string{"recv timeout"}};
         }
+        impl_->closed_ = true;
         co_return std::unexpected{std::string{e.what()}};
     }
 }

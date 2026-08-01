@@ -117,12 +117,14 @@ asio::awaitable<std::string>
     ToolcallWrapNode::execTool(neograph::Tool* tool, neograph::json& args) const {
     auto agentCtxPtr = agentContext.lock();
     {
-        // 权限检查
-        auto it = agentCtxPtr->permissionMiddleware->handles.find(tool->get_name());
-        if (it != agentCtxPtr->permissionMiddleware->handles.end()) {
-            auto allow = co_await it->second(*tool, args);
-            if (false == allow) {
-                co_return "[Permission denied]";
+        // 权限检查 (permissionMiddleware 默认 nullptr, 未配置权限中间件时跳过)
+        if (agentCtxPtr && agentCtxPtr->permissionMiddleware) {
+            auto it = agentCtxPtr->permissionMiddleware->handles.find(tool->get_name());
+            if (it != agentCtxPtr->permissionMiddleware->handles.end()) {
+                auto allow = co_await it->second(*tool, args);
+                if (false == allow) {
+                    co_return "[Permission denied]";
+                }
             }
         }
     }

@@ -211,7 +211,17 @@ void HttpServer::startAsync(asio::any_io_executor executor) {
 
 asio::awaitable<void> HttpServer::serveTcp(std::shared_ptr<boost::beast::tcp_stream> stream) {
     ConnectionGuard guard{activeConnections_};
-    co_await serve(std::move(*stream));
+    // 与 SSL 路径一致: 捕获异常, 避免客户端在读写期间断开时异常逃逸 detached 协程 → terminate
+    try {
+        co_await serve(std::move(*stream));
+    } catch (const boost::system::system_error& e) {
+        if (e.code() != asio::error::operation_aborted
+            && e.code() != asio::ssl::error::stream_truncated) {
+            XX_LOGE("[server] TCP error: {}", agentxx::util::autoTryConvertToUtf8(e.what()));
+        }
+    } catch (const std::exception& e) {
+        XX_LOGE("[server] TCP serve error: {}", e.what());
+    }
 }
 
 asio::awaitable<void>

@@ -372,8 +372,12 @@ asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::requestAsy
                             asio::cancel_after(config.connectTimeout, asio::use_awaitable)
                         );
                         result = co_await exchange(stream, req, config);
+                        // shutdown 失败 (如对端已提前关闭) 不影响已成功获取的响应,
+                        // 用 redirect_error 捕获并忽略, 避免异常丢弃上面的成功 result
                         neograph_asio_error_code sslEc;
-                        co_await stream.async_shutdown(asio::use_awaitable);
+                        co_await stream.async_shutdown(
+                            asio::redirect_error(asio::use_awaitable, sslEc)
+                        );
                     } else {
                         tcp::socket stream(executor);
                         co_await asio::async_connect(
@@ -542,8 +546,11 @@ asio::awaitable<void> HttpClient::requestSseAsync(
             auto& respBody = parser.get().body();
             if (respBody.size() > processed) {
                 onChunk(std::string_view{respBody}.substr(processed));
-                processed = respBody.size();
             }
+            // 清空已读 body 并重置偏移: SSE 为长连接流, 若只移动偏移不裁剪,
+            // string_body 会随流持续无限增长 → OOM
+            respBody.clear();
+            processed = 0;
         };
 
         flushBody();
