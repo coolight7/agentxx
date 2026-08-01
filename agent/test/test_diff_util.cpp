@@ -161,10 +161,7 @@ void test_computeLineDiff_line_order() {
 void test_makeUnifiedDiff_full() {
     // 完整输出匹配 (含上下文行与变更行)
     auto out = makeUnifiedDiff("a\nb", "a\nx\nb", "f.txt");
-    XX_TEST_EXPECT_EQ(
-        out,
-        std::string("--- a/f.txt\n+++ b/f.txt\n@@ -1,2 +1,3 @@\n a\n+x\n b\n")
-    );
+    XX_TEST_EXPECT_EQ(out, std::string("--- a/f.txt\n+++ b/f.txt\n@@ -1,2 +1,3 @@\n a\n+x\n b\n"));
 }
 
 void test_computeLineDiff_large_input_degrades() {

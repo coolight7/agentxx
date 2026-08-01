@@ -269,7 +269,7 @@ void testAsyncMutexGuardMoveAssign() {
             auto guardA = co_await mtx1.lock(); // 持有 mtx1 令牌
             {
                 auto guardB = co_await mtx2.lock(); // 持有 mtx2 令牌
-                guardA = std::move(guardB); // 移动赋值: 修复后须先归还 mtx1 令牌
+                guardA      = std::move(guardB); // 移动赋值: 修复后须先归还 mtx1 令牌
             }
             mainDone = true;
             // guardA (现持 mtx2) 于协程结束析构, 归还 mtx2
@@ -287,7 +287,7 @@ void testAsyncMutexGuardMoveAssign() {
             if (!mainDone) {
                 co_return;
             }
-            auto g   = co_await mtx1.lock();
+            auto g       = co_await mtx1.lock();
             relockedMtx1 = true;
         },
         asio::detached
@@ -320,9 +320,9 @@ void testAsyncOffload() {
 
     // 1. offloadAsync: 卸载到线程池执行并返回结果
     {
-        asio::io_context   ioc;
-        asio::thread_pool  pool(2);
-        std::atomic<bool>  ranOnWorker{false};
+        asio::io_context  ioc;
+        asio::thread_pool pool(2);
+        std::atomic<bool> ranOnWorker{false};
 
         asio::co_spawn(
             ioc,
@@ -366,10 +366,10 @@ void testAsyncOffload() {
 
     // 3. offloadCancellableAsync 外部 cancelFlag 版本: 工作线程轮询检测取消并提前退出
     {
-        asio::io_context   ioc;
-        asio::thread_pool  pool(1);
-        auto               flag = std::make_shared<std::atomic<bool>>(false);
-        std::atomic<bool>  workerSawCancel{false};
+        asio::io_context  ioc;
+        asio::thread_pool pool(1);
+        auto              flag = std::make_shared<std::atomic<bool>>(false);
+        std::atomic<bool> workerSawCancel{false};
 
         asio::co_spawn(
             ioc,

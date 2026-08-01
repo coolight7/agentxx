@@ -14,7 +14,7 @@ namespace {
 
 /// 便捷: 提取匹配区间 (start, end) 列表
 std::vector<std::pair<size_t, size_t>> ranges(const AhoCorasick<>& ac, std::string_view text) {
-    auto                               matches = ac.search(text);
+    auto                                   matches = ac.search(text);
     std::vector<std::pair<size_t, size_t>> result;
     result.reserve(matches.size());
     for (const auto& m : matches) {

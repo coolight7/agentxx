@@ -311,7 +311,7 @@ void test_regex_word_no_newline() {
 }
 
 void test_regex_only_contains_behavior() {
-    auto                            re = XXRegex::createRegex("hello", XXRegex::defHSFlags_onlyContains);
+    auto re = XXRegex::createRegex("hello", XXRegex::defHSFlags_onlyContains);
     std::vector<XXRegexMatchResult> results;
 
     // 存在即匹配
