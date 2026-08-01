@@ -147,6 +147,24 @@ asio::awaitable<void> test_requestresponse_noserver() {
     co_return;
 }
 
+/// 回归: server 处理器抛异常时, request 须返回 unexpected(错误),
+/// 而非默认构造的"成功"响应 (修复前 catch 仅记日志, out 保持默认成功值 → 误判成功)
+asio::awaitable<void> test_requestresponse_server_exception() {
+    auto  bus = agentxx::middleware::EventBus{co_await asio::this_coro::executor};
+    auto& rr  = bus.getRR<TestReq, TestResp>("test.qa.throw");
+
+    // server 处理器抛异常 -> 经 channel_cancelled 传回, 请求方 waitResp 抛异常
+    rr.serve([](const TestReq&, size_t) -> asio::awaitable<TestResp> {
+        throw std::runtime_error("handler boom");
+        co_return TestResp{.answer = "unreachable"};
+    });
+
+    auto resp = co_await rr.request(TestReq{.question = "x"}, std::chrono::seconds(5));
+    XX_TEST_EXPECT_FALSE(resp.has_value());
+
+    co_return;
+}
+
 /// 5. 定时器事件流: once 触发一次且不阻塞调用者
 asio::awaitable<void> test_timer_once() {
     auto             bus = agentxx::middleware::EventBus{co_await asio::this_coro::executor};
@@ -209,6 +227,7 @@ asio::awaitable<TestResult> run_event_stream_tests() {
         co_await test_requestresponse_normal();
         co_await test_requestresponse_timeout();
         co_await test_requestresponse_noserver();
+        co_await test_requestresponse_server_exception();
         co_await test_timer_once();
         co_await test_eventbus_convenience();
     } catch (const std::exception& e) {

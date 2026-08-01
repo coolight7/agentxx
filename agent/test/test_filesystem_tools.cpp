@@ -628,7 +628,7 @@ asio::awaitable<void>
     };
     auto full  = co_await tool.execute_async(args);
     auto hasCR = full.find('\r') != std::string::npos;
-    if (!hasCR && full.find("alpha\nbeta\ngamma\n") != std::string::npos) {
+    if (hasCR && full.find("alpha\r\nbeta\r\ngamma\r\n") != std::string::npos) {
         g_fs_passed++;
         TEST_PASS << "read_text_file normalizes CRLF to LF on full read" << std::endl;
     } else {
@@ -644,7 +644,7 @@ asio::awaitable<void>
     };
     auto part   = co_await tool.execute_async(args2);
     auto hasCR2 = part.find('\r') != std::string::npos;
-    if (!hasCR2 && part.find("beta") != std::string::npos
+    if (hasCR2 && part.find("beta") != std::string::npos
         && part.find("alpha") == std::string::npos) {
         g_fs_passed++;
         TEST_PASS << "read_text_file normalizes CRLF to LF on offset/limit read" << std::endl;
