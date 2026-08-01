@@ -118,7 +118,7 @@ asio::awaitable<T> offloadCancellableAsync(
 template<typename T>
 asio::awaitable<T> offloadCancellableAsync(
     asio::thread_pool&                                    pool,
-    std::shared_ptr<std::atomic<bool>>&                   cancelFlag,
+    std::shared_ptr<std::atomic<bool>>                    cancelFlag,
     std::function<asio::awaitable<T>(std::atomic<bool>&)> fn
 ) {
     try {
