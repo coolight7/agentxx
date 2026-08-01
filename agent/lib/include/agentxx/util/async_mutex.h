@@ -50,7 +50,12 @@ public:
         Guard& operator=(const Guard&) = delete;
 
         Guard& operator=(Guard&& o) noexcept {
-            ch_ = std::move(o.ch_);
+            if (this != &o) {
+                if (ch_) {
+                    ch_->try_send(ErrorCode{}); // 归还本对象已持有的令牌, 避免泄漏导致死锁
+                }
+                ch_ = std::move(o.ch_);
+            }
             return *this;
         }
 
