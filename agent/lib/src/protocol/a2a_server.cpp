@@ -58,9 +58,9 @@ asio::awaitable<void> A2aServer::stop() {
     httpServer_->stop();
     {
         std::lock_guard<std::mutex> lock(workersMutex_);
-        for (auto& t : workers_) {
-            if (t.joinable()) {
-                t.join();
+        for (auto& w : workers_) {
+            if (w.thread.joinable()) {
+                w.thread.join();
             }
         }
         workers_.clear();
@@ -206,12 +206,13 @@ asio::awaitable<void> A2aServer::handleSseRequest(
         sseClients_.push_back(client);
     }
 
-    while (!client->closed && !stopped_.load(std::memory_order_acquire)) {
-        co_await asio::steady_timer(
-            co_await asio::this_coro::executor,
-            std::chrono::milliseconds(100)
-        )
-            .async_wait(asio::use_awaitable);
+    while (!client->closed.load(std::memory_order_acquire)
+           && !stopped_.load(std::memory_order_acquire)) {
+        // 须用具名 timer: 临时 steady_timer 在 co_await 挂起时即被销毁,
+        // 而异步等待操作仍需引用它 → UAF
+        asio::steady_timer timer(co_await asio::this_coro::executor);
+        timer.expires_after(std::chrono::milliseconds(100));
+        co_await timer.async_wait(asio::use_awaitable);
     }
 
     {
@@ -472,7 +473,16 @@ json A2aServer::handleCancelTask(const json& id, const json& params) {
 // ---------------------------------------------------------------------------
 
 void A2aServer::executeTask(std::string_view taskId, std::string_view userInput) {
-    std::thread worker([this, taskId = std::string(taskId), userInput = std::string(userInput)]() {
+    auto done = std::make_shared<std::atomic<bool>>(false);
+    std::thread worker([this, done, taskId = std::string(taskId), userInput = std::string(userInput)]() {
+        // RAII: 无论从何路径退出都标记完成, 供运行期回收线程 (避免 workers_ 无限增长)
+        struct DoneGuard {
+            std::shared_ptr<std::atomic<bool>> d;
+            ~DoneGuard() {
+                d->store(true, std::memory_order_release);
+            }
+        } doneGuard{done};
+
         auto task = findTask(taskId);
         if (!task) {
             return;
@@ -492,6 +502,9 @@ void A2aServer::executeTask(std::string_view taskId, std::string_view userInput)
         std::string threadId = fmt::format("a2a_{}", taskId);
         std::string collected;
 
+        // 串行化对共享 BaseAgent 的访问: BaseAgent 设计为单线程/多协程交错执行,
+        // 多 worker 并发驱动同一 engine 会数据竞争, 故持锁执行 agent 轮次
+        std::unique_lock<std::mutex> agentLock(agentRunMutex_);
         auto ioCtx = std::make_shared<asio::io_context>();
         try {
             asio::co_spawn(
@@ -541,6 +554,8 @@ void A2aServer::executeTask(std::string_view taskId, std::string_view userInput)
             updateTaskState(taskId, A2aTaskState::Canceled);
             return;
         }
+        // agent 轮次完成, 释放锁后再做任务状态更新与 SSE 广播 (无需占用 agent)
+        agentLock.unlock();
 
         {
             std::lock_guard<std::mutex> lock(tasksMutex_);
@@ -577,8 +592,8 @@ void A2aServer::executeTask(std::string_view taskId, std::string_view userInput)
         };
         asio::co_spawn(
             *ioCtx,
-            [&]() -> asio::awaitable<void> {
-                co_await broadcastSSE(sseMsg.dump());
+            [this, msg = sseMsg.dump()]() -> asio::awaitable<void> {
+                co_await broadcastSSE(msg);
             },
             asio::detached
         );
@@ -586,21 +601,22 @@ void A2aServer::executeTask(std::string_view taskId, std::string_view userInput)
     });
     {
         std::lock_guard<std::mutex> lock(workersMutex_);
-        // 清理已完成的 worker
+        // 回收已完成的 worker: join 已结束的线程并移除, 避免 workers_ 随任务数无限增长
         workers_.erase(
             std::remove_if(
                 workers_.begin(),
                 workers_.end(),
-                [](std::thread& t) {
-                    if (t.joinable()) {
-                        return false;
+                [](WorkerHandle& w) {
+                    if (w.done->load(std::memory_order_acquire) && w.thread.joinable()) {
+                        w.thread.join();
+                        return true;
                     }
-                    return true;
+                    return false;
                 }
             ),
             workers_.end()
         );
-        workers_.push_back(std::move(worker));
+        workers_.push_back(WorkerHandle{std::move(worker), done});
     }
 }
 
@@ -608,24 +624,34 @@ void A2aServer::executeTask(std::string_view taskId, std::string_view userInput)
 // SSE
 // ---------------------------------------------------------------------------
 
-asio::awaitable<void> A2aServer::broadcastSSE(std::string_view data) {
-    std::lock_guard<std::mutex> lock(sseClientsMutex_);
-    for (auto& client : sseClients_) {
-        if (!client->closed && client->writer) {
+asio::awaitable<void> A2aServer::broadcastSSE(std::string data) {
+    // 仅在锁内拷贝客户端快照, 释放锁后再逐个 co_await 写入,
+    // 避免持有 std::mutex 跨越 co_await 挂起点导致死锁
+    std::vector<std::shared_ptr<SSEClient>> snapshot;
+    {
+        std::lock_guard<std::mutex> lock(sseClientsMutex_);
+        snapshot = sseClients_;
+    }
+    for (auto& client : snapshot) {
+        if (!client->closed.load(std::memory_order_acquire) && client->writer) {
             co_await client->writer->writeEvent("message", data);
         }
     }
 }
 
 asio::awaitable<void> A2aServer::stopSSE() {
-    std::lock_guard<std::mutex> lock(sseClientsMutex_);
-    for (auto& client : sseClients_) {
-        client->closed = true;
+    // 锁内取走全部客户端, 锁外关闭, 避免持锁跨越 co_await
+    std::vector<std::shared_ptr<SSEClient>> snapshot;
+    {
+        std::lock_guard<std::mutex> lock(sseClientsMutex_);
+        snapshot.swap(sseClients_);
+    }
+    for (auto& client : snapshot) {
+        client->closed.store(true, std::memory_order_release);
         if (client->writer) {
             co_await client->writer->close();
         }
     }
-    sseClients_.clear();
 }
 
 // ---------------------------------------------------------------------------
@@ -728,13 +754,19 @@ json A2aServer::makeVersionNotSupported(const json& id, std::string_view version
 }
 
 std::string A2aServer::generateId() {
-    static std::atomic<uint64_t>                   counter{0};
-    static std::random_device                      rd;
-    static std::mt19937_64                         gen(rd());
-    static std::uniform_int_distribution<uint64_t> dist;
+    static std::atomic<uint64_t> counter{0};
 
-    auto ts  = std::chrono::steady_clock::now().time_since_epoch().count();
-    auto rnd = dist(gen);
+    auto ts = std::chrono::steady_clock::now().time_since_epoch().count();
+    // mt19937 非线程安全, 多 worker/请求线程并发调用会数据竞争, 故加锁保护
+    uint64_t rnd;
+    {
+        static std::mutex                            rngMutex;
+        static std::random_device                    rd;
+        static std::mt19937_64                       gen(rd());
+        static std::uniform_int_distribution<uint64_t> dist;
+        std::lock_guard<std::mutex> lk(rngMutex);
+        rnd = dist(gen);
+    }
     auto cnt = counter.fetch_add(1, std::memory_order_relaxed);
 
     std::ostringstream oss;
