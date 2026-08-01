@@ -378,7 +378,8 @@ public:
         size_t                        storeId = 1;
 
         size_t getNextId() {
-            return storeId++;
+            storeId++;
+            return storeId;
         }
     };
 

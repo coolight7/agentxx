@@ -2,9 +2,7 @@
 - tui 特化各种 toolcall 渲染
 - node 可支持插件化加载动态库 + graph json定义
 - 拆分需要区分不同线程，继承出不同class，屏蔽不可用函数或检查
-- exec: 支持指定多条指令
 - BaseAgent 增加支持 usage 统计
-- 添加测试 provide llm api 响应 toolcall 时没有 toolcall_id
 - 侧边栏显示cpu占用和内存占用
 - 修复 tui markdown 不渲染列表
 
