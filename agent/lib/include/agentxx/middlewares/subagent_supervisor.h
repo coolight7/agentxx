@@ -16,7 +16,9 @@ namespace middleware {
 /// - service.crossagent: 跨 agent 查询路由 (ReqCrossAgent -> RespCrossAgent)
 ///   - 维护当前运行中 subagent 的注册表, 查询按 toAgent 路由
 /// - 把 subagent 的 GraphEvent 转成 SubagentProgress 发布到总线
-class SubagentSupervisor {
+/// - 须经 shared_ptr 持有 (enable_shared_from_this): 总线 handler 以 weak_ptr 捕获,
+///   避免 supervisor 析构后在飞 handler 协程访问悬空 this
+class SubagentSupervisor : public std::enable_shared_from_this<SubagentSupervisor> {
 public:
 
     std::weak_ptr<agentxx::agent::AgentContext> agentContext;

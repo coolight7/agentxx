@@ -54,8 +54,9 @@ static std::shared_ptr<agent::SessionController> setupLocalUnifiedDirect(
         *agent->ioCtx,
         [agent, controller]() -> asio::awaitable<void> {
             co_await agent->init();
-            auto supervisor = middleware::SubagentSupervisor{agent->agentContext};
-            co_await supervisor.start();
+            // 须经 shared_ptr 持有: 总线 handler 以 weak_ptr 捕获, 避免悬空 this
+            auto supervisor = std::make_shared<middleware::SubagentSupervisor>(agent->agentContext);
+            co_await supervisor->start();
             // 并发运行: transport 接收循环 + 会话驱动循环
             co_await controller->runTransportLoop();
         },

@@ -124,8 +124,8 @@ asio::awaitable<void> test_subagent_supervisor_notfound() {
     // 不设置 subagentManagerToolPtr (或设为空)
     // SubagentSupervisor 应返回错误而非崩溃
 
-    agentxx::middleware::SubagentSupervisor supervisor{agentContext};
-    co_await supervisor.start();
+    auto supervisor = std::make_shared<agentxx::middleware::SubagentSupervisor>(agentContext);
+    co_await supervisor->start();
 
     auto resp
         = co_await agentContext->bus->request<events::ReqSubagentStart, events::RespSubagentResult>(
@@ -146,7 +146,7 @@ asio::awaitable<void> test_subagent_supervisor_notfound() {
         XX_TEST_EXPECT_TRUE(resp->hasError);
     }
 
-    supervisor.stop();
+    supervisor->stop();
     co_return;
 }
 
