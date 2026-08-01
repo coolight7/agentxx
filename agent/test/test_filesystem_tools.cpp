@@ -783,37 +783,176 @@ asio::awaitable<void>
         {"file_patterns",          neograph::json::array({testDir + "/test2.txt"})},
         {"output_mode",            "content"                                      },
     };
-    auto result     = co_await tool.execute_async(args);
-    auto jsonResult = neograph::json::parse(result);
-    if (false == (jsonResult.is_array() && jsonResult.size() > 0)) {
-        g_fs_failed++;
-        TEST_FAIL << "FilesystemGrepTool content mode failed, got: " << result << std::endl;
-        co_return;
-    }
-    g_fs_passed++;
-
-    // #3: content 字段必须是匹配到的子串 (字符串), 而非整个 patterns 数组
-    bool contentOk = true;
-    for (const auto& fileEntry : jsonResult) {
-        if (!fileEntry.contains("matchs") || !fileEntry["matchs"].is_array()) {
-            contentOk = false;
-            break;
-        }
-        for (const auto& match : fileEntry["matchs"]) {
-            if (!match.contains("content") || !match["content"].is_string()
-                || match["content"].get<std::string>() != "hello") {
-                contentOk = false;
-                break;
-            }
-        }
-    }
-    if (contentOk) {
+    auto result = co_await tool.execute_async(args);
+    // content 模式现在返回文本格式: file:line:整行内容 (对齐 grep -n)
+    // test2.txt 第 1 行是 "hello world", 应输出 file:1:hello world
+    if (result.find("test2.txt:1:hello world") != std::string::npos) {
         g_fs_passed++;
-        TEST_PASS << "FilesystemGrepTool content mode returns matched substring" << std::endl;
+        TEST_PASS << "FilesystemGrepTool content mode returns file:line:content format"
+                  << std::endl;
     } else {
         g_fs_failed++;
-        TEST_FAIL << "FilesystemGrepTool content field is not the matched substring, got: "
-                  << result << std::endl;
+        TEST_FAIL << "FilesystemGrepTool content mode format incorrect, got: " << result
+                  << std::endl;
+    }
+    co_return;
+}
+
+asio::awaitable<void>
+    test_grep_case_insensitive(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    auto tool = agentxx::tools::FilesystemGrepTool{agentContext};
+    // 搜索 "HELLO" (大写), case_sensitive=false 应匹配到 "hello world"
+    auto args = neograph::json{
+        {"text_patterns_is_regex", false                                          },
+        {"text_patterns",          neograph::json::array({"HELLO"})               },
+        {"file_patterns",          neograph::json::array({testDir + "/test2.txt"})},
+        {"output_mode",            "files_with_matches"                           },
+        {"case_sensitive",         false                                          },
+    };
+    auto result = co_await tool.execute_async(args);
+    if (result.find("test2.txt") != std::string::npos) {
+        g_fs_passed++;
+        TEST_PASS << "FilesystemGrepTool case_insensitive search works" << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "FilesystemGrepTool case_insensitive search failed, got: " << result
+                  << std::endl;
+    }
+    co_return;
+}
+
+asio::awaitable<void>
+    test_grep_case_sensitive_default(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    auto tool = agentxx::tools::FilesystemGrepTool{agentContext};
+    // 搜索 "HELLO" (大写), 默认 case_sensitive=true 不应匹配到 "hello world"
+    auto args = neograph::json{
+        {"text_patterns_is_regex", false                                          },
+        {"text_patterns",          neograph::json::array({"HELLO"})               },
+        {"file_patterns",          neograph::json::array({testDir + "/test2.txt"})},
+        {"output_mode",            "files_with_matches"                           },
+    };
+    auto result = co_await tool.execute_async(args);
+    // 应该报错 (无匹配), 而不是返回 test2.txt
+    if (result.find("test2.txt") == std::string::npos) {
+        g_fs_passed++;
+        TEST_PASS << "FilesystemGrepTool default case_sensitive=true works" << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "FilesystemGrepTool should not match with wrong case, got: " << result
+                  << std::endl;
+    }
+    co_return;
+}
+
+asio::awaitable<void>
+    test_grep_max_count_per_file(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    auto tool = agentxx::tools::FilesystemGrepTool{agentContext};
+    // test1.txt 有 line1~line5, 搜索 "line" 应匹配 5 次, 限制 max_count_per_file=2
+    auto args = neograph::json{
+        {"text_patterns_is_regex", false                                           },
+        {"text_patterns",          neograph::json::array({"line"})                },
+        {"file_patterns",          neograph::json::array({testDir + "/test1.txt"})},
+        {"output_mode",            "files_with_matches"                           },
+        {"max_count_per_file",     2                                              },
+    };
+    auto result = co_await tool.execute_async(args);
+    // 应输出 test1.txt:2 (限制为 2)
+    if (result.find("test1.txt:2") != std::string::npos) {
+        g_fs_passed++;
+        TEST_PASS << "FilesystemGrepTool max_count_per_file works" << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "FilesystemGrepTool max_count_per_file failed, got: " << result << std::endl;
+    }
+    co_return;
+}
+
+asio::awaitable<void>
+    test_grep_context_lines(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    auto tool = agentxx::tools::FilesystemGrepTool{agentContext};
+    // test1.txt: line1\nline2\nline3\nline4\nline5\n
+    // 搜索 "line3", context_lines=1, 应输出第 2,3,4 行
+    auto args = neograph::json{
+        {"text_patterns_is_regex", false                                           },
+        {"text_patterns",          neograph::json::array({"line3"})               },
+        {"file_patterns",          neograph::json::array({testDir + "/test1.txt"})},
+        {"output_mode",            "content"                                      },
+        {"context_lines",          1                                              },
+    };
+    auto result = co_await tool.execute_async(args);
+    // 匹配行用 `:` 分隔, 上下文行用 `-` 分隔 (对齐 grep -C)
+    bool hasMatchLine   = result.find(":3:line3") != std::string::npos;
+    bool hasContextPrev = result.find("-2-line2") != std::string::npos;
+    bool hasContextNext = result.find("-4-line4") != std::string::npos;
+    if (hasMatchLine && hasContextPrev && hasContextNext) {
+        g_fs_passed++;
+        TEST_PASS << "FilesystemGrepTool context_lines works" << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "FilesystemGrepTool context_lines failed, got: " << result << std::endl;
+    }
+    co_return;
+}
+
+asio::awaitable<void>
+    test_glob_type_filter(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    auto tool = agentxx::tools::FilesystemGlobTool{agentContext};
+    // 只匹配目录
+    auto args = neograph::json{
+        {"file_patterns", neograph::json::array({testDir + "/*"})},
+        {"type",          "dir"                                  },
+    };
+    auto result = co_await tool.execute_async(args);
+    // 应包含 subdir, 不应包含 test1.txt
+    if (result.find("subdir") != std::string::npos
+        && result.find("test1.txt") == std::string::npos) {
+        g_fs_passed++;
+        TEST_PASS << "FilesystemGlobTool type filter works" << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "FilesystemGlobTool type filter failed, got: " << result << std::endl;
+    }
+    co_return;
+}
+
+asio::awaitable<void>
+    test_glob_exclude_patterns(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    auto tool = agentxx::tools::FilesystemGlobTool{agentContext};
+    // 匹配所有 txt, 排除 test1.txt
+    auto args = neograph::json{
+        {"file_patterns",    neograph::json::array({testDir + "/*.txt"})       },
+        {"exclude_patterns", neograph::json::array({testDir + "/test1.txt"})   },
+    };
+    auto result = co_await tool.execute_async(args);
+    // 应包含 test2.txt, 不应包含 test1.txt
+    if (result.find("test2.txt") != std::string::npos
+        && result.find("test1.txt") == std::string::npos) {
+        g_fs_passed++;
+        TEST_PASS << "FilesystemGlobTool exclude_patterns works" << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "FilesystemGlobTool exclude_patterns failed, got: " << result << std::endl;
+    }
+    co_return;
+}
+
+asio::awaitable<void>
+    test_glob_non_recursive(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    auto tool = agentxx::tools::FilesystemGlobTool{agentContext};
+    // 不含 `**` 的模式不应递归: *.txt 只匹配当前目录
+    auto args = neograph::json{
+        {"file_patterns", neograph::json::array({testDir + "/*.txt"})},
+    };
+    auto result = co_await tool.execute_async(args);
+    // 应包含 test1.txt, test2.txt, 不应包含 subdir/subtest.txt
+    if (result.find("test1.txt") != std::string::npos
+        && result.find("subtest.txt") == std::string::npos) {
+        g_fs_passed++;
+        TEST_PASS << "FilesystemGlobTool non-recursive glob does not descend into subdirs"
+                  << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "FilesystemGlobTool non-recursive glob failed, got: " << result << std::endl;
     }
     co_return;
 }
@@ -866,6 +1005,9 @@ asio::awaitable<TestResult>
     co_await run(test_glob_empty_patterns);
     co_await run(test_glob_find_files);
     co_await run(test_glob_recursive);
+    co_await run(test_glob_non_recursive);
+    co_await run(test_glob_type_filter);
+    co_await run(test_glob_exclude_patterns);
 
     co_await run(test_grep_get_definition);
     co_await run(test_grep_empty_text_patterns);
@@ -873,6 +1015,10 @@ asio::awaitable<TestResult>
     co_await run(test_grep_text_search);
     co_await run(test_grep_regex_search);
     co_await run(test_grep_content_mode);
+    co_await run(test_grep_case_insensitive);
+    co_await run(test_grep_case_sensitive_default);
+    co_await run(test_grep_max_count_per_file);
+    co_await run(test_grep_context_lines);
 
     cleanupTestDir();
     co_return TestResult{g_fs_passed, g_fs_failed};

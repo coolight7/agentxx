@@ -334,7 +334,25 @@ Returns binary content as base64 string.)",
 | `[!]` | any character not listed in the brackets | `[!ABC]*` matches files that do not start with A,B or C |
 
 e.g., `/upload/**/*.txt`,`/docx/*[0-9].txt`,`/usr/include/nc*.h`,`/output/file[0-9].*`,`C:/down/read/??.txt`.
-)"}, 
+)"},
+                      {"type",
+                       R"(Filter results by file type. String or array of strings.
+Valid values: `file`, `dir`, `symlink`, `other`, `any`.
+Default: `any` (no type filter).
+e.g., `"file"` only returns regular files, `["file","symlink"]` returns files and symlinks.)"},
+                      {"exclude_patterns",
+                       R"(Glob patterns to exclude from results. Matched paths are removed.
+e.g., `["**/node_modules/**", "**/.git/**"]` excludes node_modules and .git directories.)"},
+                      {"case_sensitive",
+                       R"(Default `true`. Whether glob pattern matching is case-sensitive.
+When `false`, letter characters in patterns are folded to match both cases (like `[aA]`).)"},
+                      {"max_depth",
+                       R"(Maximum directory depth of results relative to the pattern's base directory.
+Default `-1` (no limit). e.g., `max_depth=1` only matches files directly in the base directory.
+Similar to `find -maxdepth`.)"},
+                      {"sort",
+                       R"(Default `false`. Whether to sort results alphabetically.
+Results are always deduplicated regardless of this setting.)"},
                       {
                           "timeout",
                           R"(Default `120` seconds. 
@@ -375,6 +393,16 @@ e.g., `/upload/**/*.txt`,`/docx/*[0-9].txt`,`/usr/include/nc*.h`,`/output/file[0
 Output format:
 'files_with_matches': Only file paths containing matches and count with `file:match_count` format
 'content': Matching lines with file:line:content format)"},
+                      {"case_sensitive",
+                       R"(Default `true`. Whether text pattern matching is case-sensitive.
+When `false`, matches are case-insensitive (like `grep -i`).)"},
+                      {"max_count_per_file",
+                       R"(Default `0` (no limit). Maximum number of matches to report per file.
+Similar to `grep -m N`. e.g., `max_count_per_file=3` stops after 3 matches per file.)"},
+                      {"context_lines",
+                       R"(Default `0`. Number of context lines to show before and after each match.
+Only applies to `content` output_mode. Similar to `grep -C N`.
+Context lines use `-` separator, match lines use `:` separator.)"},
                       {
                           "timeout",
                           R"(Default `120` seconds. 
