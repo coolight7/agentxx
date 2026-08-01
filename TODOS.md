@@ -13,8 +13,4 @@
 - 建议当需要通读一个大项目时，可以先由一个 subagent 总结出大致的 wiki，然后分析划分模块化，再分享 wiki 给多个 subagent 各自负责模块解决问题
 
 ## 问题
-重构 tui，通读 ftxui 了解正确使用方式，然后参考 flutter 的Widget和渲染，拆分组件，隔离重绘区域，避免每次都需要请求整个屏幕重绘。重构scrollable，仿照 flutter 的 ListView 实现可见范围内 viewport 局部绘制，提升性能，优化跟随鼠标滚动速度，固定每次滚动1行高度
-
-通读 ftxui，然后分析 tui 写的是否正确 /home/coolight/program/agentxx/agent/client/src/io/tui
-
-请修复 tui的 messages 折叠状态时鼠标点击不会展开了；以及 thinking 消息 完成时没有显示思考时长
+通读 ftxui 源码，重构 tui，拆分组件的鼠标点击事件处理，封装到每个组件构造时拦截判断鼠标点击，而不是堆积在主函数一起处理
