@@ -11,9 +11,12 @@ namespace {
 /// 渲染 markdown 并返回元素 + DomBuilder (builder 内部 Box 被 reflect() 引用,
 /// 必须与返回的 element 同生命周期, 否则 SetBox 写入悬空引用 → UAF)
 /// maxWidth: 可用渲染宽度 (终端列数), 用于限制表格等宽元素; <= 0 表示不限制
-std::pair<ftxui::Element, std::unique_ptr<markdown::DomBuilder>>
-    renderMarkdown(std::string_view text, ftxui::Color color, markdown::Theme const& mdTheme,
-                   int maxWidth = 0) {
+std::pair<ftxui::Element, std::unique_ptr<markdown::DomBuilder>> renderMarkdown(
+    std::string_view       text,
+    ftxui::Color           color,
+    markdown::Theme const& mdTheme,
+    int                    maxWidth = 0
+) {
     if (text.empty()) {
         return {ftxui::text(""), nullptr};
     }
@@ -23,7 +26,7 @@ std::pair<ftxui::Element, std::unique_ptr<markdown::DomBuilder>>
     if (maxWidth > 0) {
         builder->set_max_width(maxWidth);
     }
-    auto el      = builder->build(ast, -1, mdTheme);
+    auto el = builder->build(ast, -1, mdTheme);
     return {el | ftxui::color(color), std::move(builder)};
 }
 
@@ -100,8 +103,12 @@ ftxui::Element AgentTUI::buildMessageBlock(
             }
             lines.push_back(hbox(std::move(header)));
             if (expanded) {
-                auto [el, builder]
-                    = renderMarkdown(msg.text, theme_.thinkingColor, theme_.markdownTheme, maxWidth);
+                auto [el, builder] = renderMarkdown(
+                    msg.text,
+                    theme_.thinkingColor,
+                    theme_.markdownTheme,
+                    maxWidth
+                );
                 if (builder) {
                     mdBuilders.push_back(std::move(builder));
                 }
@@ -205,7 +212,7 @@ std::vector<ScrollItem> AgentTUI::buildMessageItems() {
         // 内容/状态变化 或 可用宽度变化 (表格换行依赖宽度) -> 重建块元素
         if (cache.sig != sig || cache.cachedWidth != msgListWidth || !cache.element) {
             cache.mdBuilders.clear();
-            cache.element = vbox({
+            cache.element     = vbox({
                 buildMessageBlock(msg, msgListWidth, cache.mdBuilders),
                 text(""),
             });
@@ -244,16 +251,24 @@ std::vector<ScrollItem> AgentTUI::buildMessageItems() {
                 );
             }
             lines.push_back(hbox(std::move(header)));
-            auto [el, builder]
-                = renderMarkdown(currentToken_, theme_.thinkingColor, theme_.markdownTheme, msgListWidth);
+            auto [el, builder] = renderMarkdown(
+                currentToken_,
+                theme_.thinkingColor,
+                theme_.markdownTheme,
+                msgListWidth
+            );
             if (builder) {
                 streamingMdBuilders_.push_back(std::move(builder));
             }
             lines.push_back(std::move(el));
             block = vbox(std::move(lines));
         } else {
-            auto [el, builder]
-                = renderMarkdown(currentToken_, theme_.assistantColor, theme_.markdownTheme, msgListWidth);
+            auto [el, builder] = renderMarkdown(
+                currentToken_,
+                theme_.assistantColor,
+                theme_.markdownTheme,
+                msgListWidth
+            );
             if (builder) {
                 streamingMdBuilders_.push_back(std::move(builder));
             }

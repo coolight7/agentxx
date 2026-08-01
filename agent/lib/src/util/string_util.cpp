@@ -539,7 +539,8 @@ int agentxx::util::compareExtend(std::string_view left, std::string_view right) 
     }
 
     if (i < left.size() || j < right.size()) {
-        // 保持返回"总长度差"的原有语义; 经 int64 相减避免 size_t 下溢(right 更长时), 超 int 范围饱和截断
+        // 保持返回"总长度差"的原有语义; 经 int64 相减避免 size_t 下溢(right 更长时), 超 int
+        // 范围饱和截断
         const int64_t diff = static_cast<int64_t>(left.size()) - static_cast<int64_t>(right.size());
         if (diff > std::numeric_limits<int>::max()) {
             return std::numeric_limits<int>::max();

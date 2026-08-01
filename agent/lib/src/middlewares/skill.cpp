@@ -112,7 +112,7 @@ asio::awaitable<void> SkillMiddlewareHandle::onAgentcallStartFunc(neograph::grap
 
         decltype(skillCache.skillData)  loadedData;
         decltype(skillCache.loadErrors) loadedErrors;
-        auto skillQueue
+        auto                            skillQueue
             = std::vector<std::string>{initSkillDirPaths.begin(), initSkillDirPaths.end()};
         for (size_t i = 0; i < skillQueue.size(); ++i) {
             auto& itempath = skillQueue[i];

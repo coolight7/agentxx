@@ -3,24 +3,24 @@
 #include "agentxx-client/io/tui/scrollable.h"
 #include "agentxx-client/io/tui/tui_theme.h"
 #include "agentxx/agent/agent_io.h"
-#include <markdown/dom_builder.hpp>
 #include "agentxx/agent/context.h"
 #include "agentxx/util/log.h"
 #include "agentxx/util/string_util.h"
 #include "asio/awaitable.hpp"
 #include "asio/experimental/concurrent_channel.hpp"
+#include "fmt/format.h"
 #include "ftxui/component/component.hpp"
 #include "ftxui/component/mouse.hpp"
 #include "ftxui/component/screen_interactive.hpp"
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/box.hpp"
-#include "fmt/format.h"
 #include "neograph/api.h"
 #include <atomic>
 #include <chrono>
 #include <deque>
 #include <format>
 #include <functional>
+#include <markdown/dom_builder.hpp>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -170,7 +170,7 @@ private:
     struct MessageCache {
         ftxui::Element element; // 缓存的渲染元素
         int64_t        sig = 0; // 内容签名 (64 位哈希, 变化时重建)
-        int            cachedWidth = -1; // 构建时的可用宽度 (变化时重建, 表格换行依赖宽度)
+        int cachedWidth = -1; // 构建时的可用宽度 (变化时重建, 表格换行依赖宽度)
         /// markdown DomBuilder 持有 reflect() 引用的 Box (LinkTarget::boxes),
         /// 必须与 element 同生命周期, 否则 reflect 写入悬空引用 → UAF
         std::vector<std::unique_ptr<markdown::DomBuilder>> mdBuilders;
@@ -208,7 +208,7 @@ private:
     /// 日志行元素缓存 (日志仅追加, 按行索引缓存避免每帧重建)
     std::vector<ftxui::Element> logLineCache_;
 
-    std::string                      inputText_;
+    std::string inputText_;
 
     /// 模型选择器状态
     bool                     showModelSelector_  = false;
@@ -275,10 +275,10 @@ private:
     // screen_ 由 UI 线程创建/销毁, agent/日志线程经 postRedraw 读;
     // 经 screenMutex_ + shared_ptr 保护: 并发读取方持有引用计数,
     // 确保 UI 线程退出并销毁 App 期间 postRedraw 不会访问已销毁对象 (UAF)
-    std::mutex                                    screenMutex_;
+    std::mutex                                screenMutex_;
     std::shared_ptr<ftxui::ScreenInteractive> screen_;
-    std::thread                                  uiThread_;
-    std::atomic<bool>                            running_{false};
+    std::thread                               uiThread_;
+    std::atomic<bool>                         running_{false};
 
     /// handleInterrupt 正在等待用户输入时为 true;
     /// 此时 Enter 须把输入直接送入 inputChannel_ (而非 isStreaming_ 待发送队列), 否则死锁
@@ -311,8 +311,8 @@ private:
     /// maxWidth: 消息列表可用宽度 (终端列数), 用于限制表格宽度; <= 0 表示不限制
     /// mdBuilders 收集 markdown DomBuilder (其内部 Box 被 reflect() 引用, 须与 element 同生命周期)
     ftxui::Element buildMessageBlock(
-        const Message&                                   msg,
-        int                                              maxWidth,
+        const Message&                                      msg,
+        int                                                 maxWidth,
         std::vector<std::unique_ptr<markdown::DomBuilder>>& mdBuilders
     );
     /// 计算消息内容签名 (64 位哈希; 签名不变则复用缓存元素)

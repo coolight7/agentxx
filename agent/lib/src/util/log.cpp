@@ -66,7 +66,9 @@ void LogSink::onDropped(uint64_t count) {
 // ---------------------------------------------------------------------------
 
 ThreadedLogSink::ThreadedLogSink() :
-    thread_([this] { threadLoop(); }) {}
+    thread_([this] {
+        threadLoop();
+    }) {}
 
 ThreadedLogSink::~ThreadedLogSink() {
     {
@@ -84,7 +86,9 @@ void ThreadedLogSink::threadLoop() {
         std::deque<std::shared_ptr<const LogEntry>> batch;
         {
             std::unique_lock<std::mutex> lock(mutex_);
-            cv_.wait(lock, [this] { return !queue_.empty() || !running_; });
+            cv_.wait(lock, [this] {
+                return !queue_.empty() || !running_;
+            });
             if (!running_ && queue_.empty()) {
                 break;
             }
@@ -104,7 +108,9 @@ void ThreadedLogSink::threadLoop() {
 
 void ThreadedLogSink::flush() {
     std::unique_lock<std::mutex> lock(mutex_);
-    cv_.wait(lock, [this] { return queue_.empty() && idle_; });
+    cv_.wait(lock, [this] {
+        return queue_.empty() && idle_;
+    });
 }
 
 // ---------------------------------------------------------------------------

@@ -473,8 +473,11 @@ json A2aServer::handleCancelTask(const json& id, const json& params) {
 // ---------------------------------------------------------------------------
 
 void A2aServer::executeTask(std::string_view taskId, std::string_view userInput) {
-    auto done = std::make_shared<std::atomic<bool>>(false);
-    std::thread worker([this, done, taskId = std::string(taskId), userInput = std::string(userInput)]() {
+    auto        done = std::make_shared<std::atomic<bool>>(false);
+    std::thread worker([this,
+                        done,
+                        taskId    = std::string(taskId),
+                        userInput = std::string(userInput)]() {
         // RAII: 无论从何路径退出都标记完成, 供运行期回收线程 (避免 workers_ 无限增长)
         struct DoneGuard {
             std::shared_ptr<std::atomic<bool>> d;
@@ -505,7 +508,7 @@ void A2aServer::executeTask(std::string_view taskId, std::string_view userInput)
         // 串行化对共享 BaseAgent 的访问: BaseAgent 设计为单线程/多协程交错执行,
         // 多 worker 并发驱动同一 engine 会数据竞争, 故持锁执行 agent 轮次
         std::unique_lock<std::mutex> agentLock(agentRunMutex_);
-        auto ioCtx = std::make_shared<asio::io_context>();
+        auto                         ioCtx = std::make_shared<asio::io_context>();
         try {
             asio::co_spawn(
                 *ioCtx,
@@ -760,11 +763,11 @@ std::string A2aServer::generateId() {
     // mt19937 非线程安全, 多 worker/请求线程并发调用会数据竞争, 故加锁保护
     uint64_t rnd;
     {
-        static std::mutex                            rngMutex;
-        static std::random_device                    rd;
-        static std::mt19937_64                       gen(rd());
+        static std::mutex                              rngMutex;
+        static std::random_device                      rd;
+        static std::mt19937_64                         gen(rd());
         static std::uniform_int_distribution<uint64_t> dist;
-        std::lock_guard<std::mutex> lk(rngMutex);
+        std::lock_guard<std::mutex>                    lk(rngMutex);
         rnd = dist(gen);
     }
     auto cnt = counter.fetch_add(1, std::memory_order_relaxed);

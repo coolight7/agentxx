@@ -89,10 +89,10 @@ private:
     RenderFunc render_;
 
     // 子项缓存 (与 render_ 最近一次返回的 items 一一对应)
-    std::vector<ScrollItem>       items_;
-    std::vector<int>              heights_;         // 各子项缓存高度 (-1 = 待测量)
-    std::vector<ftxui::Element>   cachedElements_;  // 上次元素指针 (检测内容变化)
-    std::vector<bool>             cachedFill_;      // 上次 fillViewport 标记
+    std::vector<ScrollItem>     items_;
+    std::vector<int>            heights_;        // 各子项缓存高度 (-1 = 待测量)
+    std::vector<ftxui::Element> cachedElements_; // 上次元素指针 (检测内容变化)
+    std::vector<bool>           cachedFill_;     // 上次 fillViewport 标记
 
     int  scrollOffset_   = 0;    // 滚动偏移 (行)
     bool stickToBottom_  = true; // 吸附底部

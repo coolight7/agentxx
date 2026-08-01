@@ -25,12 +25,12 @@ int layoutAndMeasure(const Element& el, Box box) {
     }
     Node::Status status;
     el->Check(&status);
-    int iteration = 0;
-    bool laidOut = false;
+    int  iteration = 0;
+    bool laidOut   = false;
     while (status.need_iteration && iteration < kMaxLayoutIteration) {
         el->ComputeRequirement();
         el->SetBox(box);
-        laidOut                 = true;
+        laidOut               = true;
         status.need_iteration = false;
         status.iteration++;
         el->Check(&status);
@@ -70,7 +70,7 @@ public:
 
     void ComputeRequirement() override {
         // 父级以 |flex 撑满视口, 不依赖内容的 min_x/min_y; 不递归子项 (惰性)
-        requirement_         = Requirement{};
+        requirement_       = Requirement{};
         requirement_.min_x = 0;
         requirement_.min_y = 0;
     }
@@ -85,9 +85,9 @@ public:
         *st_.viewportHeight = vh;
 
         // 预留 1 列滚动条 gutter (与 vscroll_indicator 行为一致), 内容宽度相应减 1
-        const bool hasGutter      = vw >= 2;
-        const int  contentWidth   = hasGutter ? vw - 1 : vw;
-        const int  contentXMax    = hasGutter ? box.x_max - 1 : box.x_max;
+        const bool hasGutter    = vw >= 2;
+        const int  contentWidth = hasGutter ? vw - 1 : vw;
+        const int  contentXMax  = hasGutter ? box.x_max - 1 : box.x_max;
 
         auto& items   = *st_.items;
         auto& heights = *st_.heights;
@@ -134,7 +134,7 @@ public:
         if (*st_.stickToBottom) {
             *st_.scrollOffset = maxOffset;
         }
-        *st_.scrollOffset  = std::clamp(*st_.scrollOffset, 0, maxOffset);
+        *st_.scrollOffset      = std::clamp(*st_.scrollOffset, 0, maxOffset);
         const int scrollOffset = *st_.scrollOffset;
 
         // === Pass 2: 定位并布局可见子项 ===
@@ -200,33 +200,33 @@ private:
             return;
         }
         // 半行精度的 thumb 高度与起始位置 (算法同 ftxui vscroll_indicator)
-        int thumbSize = 2 * vh * vh / scrollbarTotal_;
-        thumbSize     = std::max(thumbSize, 1);
+        int thumbSize   = 2 * vh * vh / scrollbarTotal_;
+        thumbSize       = std::max(thumbSize, 1);
         const int start = 2 * scrollbarOffset_ * vh / scrollbarTotal_;
         const int x     = scrollbarX_;
         for (int y = box_.y_min; y <= box_.y_max; ++y) {
-            const int yUp   = 2 * (y - box_.y_min) + 0;
-            const int yDown = 2 * (y - box_.y_min) + 1;
-            const bool up   = (start <= yUp) && (yUp <= start + thumbSize);
-            const bool down = (start <= yDown) && (yDown <= start + thumbSize);
-            const char* c   = up ? (down ? "┃" : "╹") : (down ? "╻" : " ");
+            const int   yUp               = 2 * (y - box_.y_min) + 0;
+            const int   yDown             = 2 * (y - box_.y_min) + 1;
+            const bool  up                = (start <= yUp) && (yUp <= start + thumbSize);
+            const bool  down              = (start <= yDown) && (yDown <= start + thumbSize);
+            const char* c                 = up ? (down ? "┃" : "╹") : (down ? "╻" : " ");
             screen.CellAt(x, y).character = c;
         }
     }
 
-    ListViewState         st_;
-    std::vector<size_t>   visibleIndices_;
-    bool                  drawScrollbarInfo_ = false;
-    int                   scrollbarX_        = 0;
-    int                   scrollbarTotal_    = 0;
-    int                   scrollbarOffset_   = 0;
+    ListViewState       st_;
+    std::vector<size_t> visibleIndices_;
+    bool                drawScrollbarInfo_ = false;
+    int                 scrollbarX_        = 0;
+    int                 scrollbarTotal_    = 0;
+    int                 scrollbarOffset_   = 0;
 };
 
 } // namespace
 
 ftxui::Element Scrollable::OnRender() {
-    auto items = render_();
-    const size_t n = items.size();
+    auto         items = render_();
+    const size_t n     = items.size();
 
     // 同步缓存大小: resize 保留已有条目 (仅新增项置空/待测),
     // 避免列表增长时把全部子项误判为变化而全量重测高度

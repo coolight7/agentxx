@@ -407,30 +407,57 @@ void test_utf8Check() {
     }
 
     // 更多边界: 5/6 字节头非法; 非最短编码 (0xF0 0x80..) 非法; 替换字符 EF BF BD 非法
-    XX_TEST_EXPECT_EQ(agentxx::util::utf8GetLengthCheckAvail(std::string("\xF8\x88\x80\x80\x80", 5)), 0u);
-    XX_TEST_EXPECT_EQ(agentxx::util::utf8GetLengthCheckAvail(std::string("\xFC\x84\x80\x80\x80\x80", 6)), 0u);
-    XX_TEST_EXPECT_EQ(agentxx::util::utf8GetLengthCheckAvail(std::string("\xF0\x80\x80\x80", 4)), 0u);
+    XX_TEST_EXPECT_EQ(
+        agentxx::util::utf8GetLengthCheckAvail(std::string("\xF8\x88\x80\x80\x80", 5)),
+        0u
+    );
+    XX_TEST_EXPECT_EQ(
+        agentxx::util::utf8GetLengthCheckAvail(std::string("\xFC\x84\x80\x80\x80\x80", 6)),
+        0u
+    );
+    XX_TEST_EXPECT_EQ(
+        agentxx::util::utf8GetLengthCheckAvail(std::string("\xF0\x80\x80\x80", 4)),
+        0u
+    );
     XX_TEST_EXPECT_EQ(agentxx::util::utf8GetLengthCheckAvail(std::string("\xE0\x80\x80", 3)), 0u);
     XX_TEST_EXPECT_EQ(agentxx::util::utf8GetLengthCheckAvail(std::string("\xEF\xBF\xBD", 3)), 0u);
     // 合法 4 字节 (emoji)
-    XX_TEST_EXPECT_EQ(agentxx::util::utf8GetLengthCheckAvail(std::string("\xF0\x9F\x98\x80", 4)), 1u);
+    XX_TEST_EXPECT_EQ(
+        agentxx::util::utf8GetLengthCheckAvail(std::string("\xF0\x9F\x98\x80", 4)),
+        1u
+    );
     XX_TEST_EXPECT_TRUE(agentxx::util::utf8IsAvail(std::string("\xF0\x9F\x98\x80", 4)));
     // 截断的 4 字节序列
     XX_TEST_EXPECT_EQ(agentxx::util::utf8GetLengthCheckAvail(std::string("\xF0\x9F\x98", 3)), 0u);
     // 连续字符计数
-    XX_TEST_EXPECT_EQ(agentxx::util::utf8GetLengthCheckAvail(std::string("\xE4\xB8\xAD\xE6\x96\x87", 6)), 2u);
+    XX_TEST_EXPECT_EQ(
+        agentxx::util::utf8GetLengthCheckAvail(std::string("\xE4\xB8\xAD\xE6\x96\x87", 6)),
+        2u
+    );
 }
 
 void test_compareExtend_pinyin() {
     // 中文拼音比较依赖全局 s_pinyinCallback; 设置后测试并恢复
-    auto oldCallback = agentxx::util::s_pinyinCallback;
+    auto oldCallback                = agentxx::util::s_pinyinCallback;
     agentxx::util::s_pinyinCallback = [](std::string_view str) -> std::string {
-        if (str.starts_with("你")) return "ni";
-        if (str.starts_with("我")) return "wo";
-        if (str.starts_with("七")) return "qi";
-        if (str.starts_with("八")) return "ba";
-        if (str.starts_with("二")) return "er";
-        if (str.starts_with("九")) return "jiu";
+        if (str.starts_with("你")) {
+            return "ni";
+        }
+        if (str.starts_with("我")) {
+            return "wo";
+        }
+        if (str.starts_with("七")) {
+            return "qi";
+        }
+        if (str.starts_with("八")) {
+            return "ba";
+        }
+        if (str.starts_with("二")) {
+            return "er";
+        }
+        if (str.starts_with("九")) {
+            return "jiu";
+        }
         return "";
     };
 
@@ -444,8 +471,8 @@ void test_compareExtend_pinyin() {
     XX_TEST_EXPECT_TRUE(agentxx::util::compareExtend("1", "你") < 0);
     XX_TEST_EXPECT_TRUE(agentxx::util::compareExtend("你", "1") > 0);
     // 中文与英文拼音首字母
-    XX_TEST_EXPECT_TRUE(agentxx::util::compareExtend("你", "a") > 0);  // n > a
-    XX_TEST_EXPECT_TRUE(agentxx::util::compareExtend("你", "z") < 0);  // n < z
+    XX_TEST_EXPECT_TRUE(agentxx::util::compareExtend("你", "a") > 0); // n > a
+    XX_TEST_EXPECT_TRUE(agentxx::util::compareExtend("你", "z") < 0); // n < z
     // 混排场景 (原注释掉的用例)
     shiftCompareExtend(" #= 你 77", " #= 你 234", 77 - 234);
 
@@ -610,10 +637,7 @@ void test_stringVectorJoin() {
         agentxx::util::stringVectorJoin(std::vector<std::string>{"a", "b", "c"}),
         "a, b, c"
     );
-    XX_TEST_EXPECT_EQ(
-        agentxx::util::stringVectorJoin(std::vector<std::string>{"a"}, "-"),
-        "a"
-    );
+    XX_TEST_EXPECT_EQ(agentxx::util::stringVectorJoin(std::vector<std::string>{"a"}, "-"), "a");
     // 非字符串元素
     XX_TEST_EXPECT_EQ(agentxx::util::stringVectorJoin(std::vector<int>{1, 2, 3}, "-"), "1-2-3");
 }
@@ -625,9 +649,9 @@ void test_toStringNotNull() {
 }
 
 void test_parseNumberFromString() {
-    int    iv    = 0;
-    double dv    = 0.0;
-    auto   r1    = agentxx::util::parseNumberFromString("123", iv);
+    int    iv = 0;
+    double dv = 0.0;
+    auto   r1 = agentxx::util::parseNumberFromString("123", iv);
     XX_TEST_EXPECT_EQ(r1.ec, std::errc{});
     XX_TEST_EXPECT_EQ(iv, 123);
 
@@ -655,11 +679,11 @@ void test_parseNumberFromString() {
     XX_TEST_EXPECT_TRUE(r6.ec != std::errc{});
 
     // 负数和溢出
-    int neg = 0;
-    auto r7 = agentxx::util::parseNumberFromString("-42", neg);
+    int  neg = 0;
+    auto r7  = agentxx::util::parseNumberFromString("-42", neg);
     XX_TEST_EXPECT_EQ(r7.ec, std::errc{});
     XX_TEST_EXPECT_EQ(neg, -42);
-    int ov = 0;
+    int  ov = 0;
     auto r8 = agentxx::util::parseNumberFromString("99999999999999999999", ov);
     XX_TEST_EXPECT_TRUE(r8.ec == std::errc::result_out_of_range);
 }
@@ -673,24 +697,15 @@ void test_formatSize() {
     XX_TEST_EXPECT_EQ(agentxx::util::formatSize(1024), std::string("1K"));
     XX_TEST_EXPECT_EQ(agentxx::util::formatSize(1536), std::string("1.5K"));
     XX_TEST_EXPECT_EQ(agentxx::util::formatSize(102400), std::string("100K"));
-    XX_TEST_EXPECT_EQ(
-        agentxx::util::formatSize(1024ull * 1024),
-        std::string("1M")
-    );
-    XX_TEST_EXPECT_EQ(
-        agentxx::util::formatSize(1024ull * 1024 * 1024),
-        std::string("1G")
-    );
+    XX_TEST_EXPECT_EQ(agentxx::util::formatSize(1024ull * 1024), std::string("1M"));
+    XX_TEST_EXPECT_EQ(agentxx::util::formatSize(1024ull * 1024 * 1024), std::string("1G"));
     // 非整数中间值保留一位小数
     XX_TEST_EXPECT_EQ(agentxx::util::formatSize(1024 + 512), std::string("1.5K"));
     // 十进制基数
     XX_TEST_EXPECT_EQ(agentxx::util::formatSize(1000, 1000), std::string("1K"));
     XX_TEST_EXPECT_EQ(agentxx::util::formatSize(999, 1000), std::string("999"));
     // 大数值跨到 T
-    XX_TEST_EXPECT_EQ(
-        agentxx::util::formatSize(1024ull * 1024 * 1024 * 1024),
-        std::string("1T")
-    );
+    XX_TEST_EXPECT_EQ(agentxx::util::formatSize(1024ull * 1024 * 1024 * 1024), std::string("1T"));
 }
 
 void test_collapsePaths() {
@@ -726,20 +741,11 @@ void test_toCurrentSystemStandardPath() {
     XX_TEST_EXPECT_EQ(agentxx::util::toCurrentSystemStandardPath("a//b"), "a\\b");
 #else
     // WSL/Linux: 盘符路径转为 /mnt/<drive>/
-    XX_TEST_EXPECT_EQ(
-        agentxx::util::toCurrentSystemStandardPath("C:/Users/x"),
-        "/mnt/c/Users/x"
-    );
-    XX_TEST_EXPECT_EQ(
-        agentxx::util::toCurrentSystemStandardPath("D:\\work\\a"),
-        "/mnt/d/work/a"
-    );
+    XX_TEST_EXPECT_EQ(agentxx::util::toCurrentSystemStandardPath("C:/Users/x"), "/mnt/c/Users/x");
+    XX_TEST_EXPECT_EQ(agentxx::util::toCurrentSystemStandardPath("D:\\work\\a"), "/mnt/d/work/a");
     XX_TEST_EXPECT_EQ(agentxx::util::toCurrentSystemStandardPath("a/b\\c"), "a/b/c");
     // 小写盘符
-    XX_TEST_EXPECT_EQ(
-        agentxx::util::toCurrentSystemStandardPath("e:/x"),
-        "/mnt/e/x"
-    );
+    XX_TEST_EXPECT_EQ(agentxx::util::toCurrentSystemStandardPath("e:/x"), "/mnt/e/x");
 #endif
 }
 
@@ -779,14 +785,8 @@ void test_getFileNameMore() {
     // 仅扩展名
     XX_TEST_EXPECT_EQ(agentxx::util::getFileNameEXT("file.txt").value(), "txt");
     // useRigthDot=false: 使用最左侧点
-    XX_TEST_EXPECT_EQ(
-        agentxx::util::getFileName("a.b.c", true, false),
-        "a"
-    );
-    XX_TEST_EXPECT_EQ(
-        agentxx::util::getFileName("a.b.c", true, true),
-        "a.b"
-    );
+    XX_TEST_EXPECT_EQ(agentxx::util::getFileName("a.b.c", true, false), "a");
+    XX_TEST_EXPECT_EQ(agentxx::util::getFileName("a.b.c", true, true), "a.b");
 }
 
 namespace agentxx {
