@@ -51,11 +51,15 @@ namespace util {
 /// 将同步阻塞函数卸载到线程池执行, 主协程挂起等待结果
 /// - fn: 无参可调用对象, 返回 T
 /// - 不支持取消 (fn 无法感知取消请求); 若需要取消支持请用 offloadCancellableAsync
+///
+/// 注意: fn 必须按值传入。本函数是惰性协程 (asio::awaitable), 调用时不会立即执行协程体,
+/// 若 fn 用右值引用参数, 其引用的临时对象可能在协程体真正执行前已析构 (use-after-return)。
+/// 按值传入会在调用时把 fn 移入协程帧, 保证其生命周期覆盖整个协程。
 template<typename T>
-asio::awaitable<T> offloadAsync(asio::thread_pool& pool, std::function<asio::awaitable<T>()>&& fn) {
+asio::awaitable<T> offloadAsync(asio::thread_pool& pool, std::function<asio::awaitable<T>()> fn) {
     co_return co_await asio::co_spawn(
         pool.get_executor(),
-        [fn = std::forward<std::function<asio::awaitable<T>()>>(fn)]() -> asio::awaitable<T> {
+        [fn = std::move(fn)]() -> asio::awaitable<T> {
             co_return co_await fn();
         },
         asio::use_awaitable
@@ -70,12 +74,14 @@ asio::awaitable<T> offloadAsync(asio::thread_pool& pool, std::function<asio::awa
 ///   2. 抛出 CancelledException, 沿协程栈向上传播
 /// - 工作线程检测到 cancel_flag 后应尽快退出, 释放线程资源
 ///
+/// 注意: fn 按值传入 (理由同 offloadAsync, 避免惰性协程引用已析构的临时对象)。
+///
 /// @tparam T 返回值类型
 /// @tparam F 可调用类型, 签名: T(std::atomic<bool>&)
 template<typename T>
 asio::awaitable<T> offloadCancellableAsync(
-    asio::thread_pool&                                      pool,
-    std::function<asio::awaitable<T>(std::atomic<bool>&)>&& fn
+    asio::thread_pool&                                    pool,
+    std::function<asio::awaitable<T>(std::atomic<bool>&)> fn
 ) {
     // 共享取消标志: 父协程 (io_context 线程) 写, 工作线程读
     auto cancelFlag = std::make_shared<std::atomic<bool>>(false);
@@ -83,8 +89,7 @@ asio::awaitable<T> offloadCancellableAsync(
     try {
         co_return co_await asio::co_spawn(
             pool.get_executor(),
-            [fn = std::forward<std::function<asio::awaitable<T>(std::atomic<bool>&)>>(fn),
-             cancelFlag]() -> asio::awaitable<T> {
+            [fn = std::move(fn), cancelFlag]() -> asio::awaitable<T> {
                 co_return co_await fn(*cancelFlag);
             },
             asio::use_awaitable
@@ -100,6 +105,11 @@ asio::awaitable<T> offloadCancellableAsync(
 /// - 与上面的重载相同, 但 cancelFlag 由调用方提供, 允许外部 (如超时定时器) 设置取消标志
 /// - 当父协程被取消或外部设置 cancelFlag 时, 工作线程检测后提前退出
 ///
+/// 注意:
+/// - fn 按值传入 (理由同 offloadAsync, 避免惰性协程引用已析构的临时对象)。
+/// - 工作协程按值捕获 cancelFlag (shared_ptr 拷贝), 保证工作线程持有有效的取消标志;
+///   不能按引用捕获协程参数, 否则协程结束/挂起时引用可能失效。
+///
 /// - pool 线程池
 /// - [cancelFlag] 外部提供的共享取消标志
 /// - fn 可调用对象, 签名: awaitable<T>(std::atomic<bool>&)
@@ -107,15 +117,14 @@ asio::awaitable<T> offloadCancellableAsync(
 /// return T 返回值类型
 template<typename T>
 asio::awaitable<T> offloadCancellableAsync(
-    asio::thread_pool&                                      pool,
-    std::shared_ptr<std::atomic<bool>>                      cancelFlag,
-    std::function<asio::awaitable<T>(std::atomic<bool>&)>&& fn
+    asio::thread_pool&                                    pool,
+    std::shared_ptr<std::atomic<bool>>&                   cancelFlag,
+    std::function<asio::awaitable<T>(std::atomic<bool>&)> fn
 ) {
     try {
         co_return co_await asio::co_spawn(
             pool.get_executor(),
-            [fn = std::forward<std::function<asio::awaitable<T>(std::atomic<bool>&)>>(fn),
-             &cancelFlag]() -> asio::awaitable<T> {
+            [fn = std::move(fn), cancelFlag]() -> asio::awaitable<T> {
                 co_return co_await fn(*cancelFlag);
             },
             asio::use_awaitable
