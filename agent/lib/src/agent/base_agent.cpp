@@ -420,6 +420,7 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                 }
                 bool hasLLMOutput = false;
                 for (const auto& jm : value) {
+                    session->llmMessages.push_back(jm);
                     auto role = jm.value("role", std::string{});
                     if (role == "assistant" && jm.contains("tool_calls")) {
                         hasLLMOutput = true;
