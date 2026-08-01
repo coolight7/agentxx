@@ -116,14 +116,21 @@ private:
 /// - [自动滚动] 靠近消息列表底部时，自动吸附到底部
 /// - [自动折叠] Thinking/Tool
 /// 的消息在末尾输出中时自动展开显示，输出完成后自动折叠
+///
+/// 线程模型与锁设计:
+/// - client 线程 (asio executor): 运行 runTransportLoop, 调用 onDelta/onSync/onPeerMessage
+///   写入共享状态 (经 mutex_ 短临界区 + COW)
+/// - UI 线程 (uiThread_): FTXUI Loop 渲染 + 事件处理;
+///   每帧开头短锁拷贝 state_ 快照到 frameState_, 之后无锁渲染;
+///   事件处理短锁 COW 修改 state_
+/// - 共享状态收敛于 RenderState (shared_ptr 持有), 消息体经 shared_ptr<Message> 结构共享:
+///   追加/修改仅拷贝 vector 结构 (指针数组) 或被改的单条 Message, 未改消息零拷贝
 class AgentTUI : public agentxx::agent::AgentIOBase,
                  public std::enable_shared_from_this<AgentTUI> {
 public:
 
     using LineChannel
         = asio::experimental::concurrent_channel<void(neograph_asio_error_code, std::string)>;
-
-private:
 
     struct Message {
         enum class Role {
@@ -155,6 +162,8 @@ private:
         bool        expanded = false; // 弹窗中是否展开为多行 (默认折叠为一行)
     };
 
+private:
+
     /// 右侧边栏 tab (类似浏览器 tab)
     struct SidebarTab {
         std::string id;
@@ -184,22 +193,72 @@ private:
         int           messageIndex; // 对应 messages_ 索引 (流式 token 为 -1)
     };
 
-    std::mutex           mutex_;
-    std::vector<Message> messages_;
-    std::string          currentToken_;
-    Message::Role        currentTokenRole_ = Message::Role::Assistant;
-    bool                 isStreaming_      = false;
+    // -----------------------------------------------------------------------
+    // 跨线程共享状态 (RenderState)
+    //
+    // 所有被 client 线程 (onDelta/onSync/onPeerMessage) 和 UI 线程 (渲染/事件)
+    // 并发访问的数据收敛于此结构, 经 shared_ptr + mutex_ 保护:
+    // - 写方 (client/UI 事件): 短锁 + COW (mutableStateLocked) 后修改
+    // - 读方 (UI 渲染): 短锁拷贝 shared_ptr 快照 (snapshotStateLocked), 之后无锁渲染
+    //
+    // 消息体经 shared_ptr<Message> 结构共享: 追加/修改仅拷贝 vector 结构 (指针数组)
+    // 或被改的单条 Message, 未改消息零拷贝
+    // -----------------------------------------------------------------------
+    struct RenderState {
+        std::vector<std::shared_ptr<Message>> messages;
+        std::string                           currentToken;
+        Message::Role                         currentTokenRole = Message::Role::Assistant;
+        bool                                  isStreaming      = false;
 
-    /// 暂存的当前流式 token 时间信息 (由 NodeEnd 设置, pushCurrentTokenLocked 时应用)
-    int64_t pendingTokenDurationMs_  = 0;
-    int64_t pendingTokenStartTimeMs_ = 0;
+        /// 暂存的当前流式 token 时间信息 (由 NodeEnd 设置, pushCurrentTokenLocked 时应用)
+        int64_t pendingTokenDurationMs  = 0;
+        int64_t pendingTokenStartTimeMs = 0;
+
+        /// 当前正在执行的节点名称 (由 NodeStart/NodeEnd Delta 更新)
+        std::string currentNodeName;
+
+        /// 模型选择器: 可用模型列表 + 当前模型显示名
+        std::vector<std::string> modelNames;
+        std::string              cachedModelName;
+
+        /// 用户输入队列: BaseAgent 执行中收到的用户输入排队, 轮次结束后自动逐个发送
+        std::deque<PendingInput> pendingInputs;
+
+        /// 从 server 收到的 llm messages 缓存 (上下文弹窗展示用)
+        neograph::json contextMessages = neograph::json::array();
+        /// 上下文弹窗是否打开 (client 线程收到 WireContextMessages 时置 true)
+        bool showContextOverlay = false;
+
+        /// 会话加载的组件明细 (MCP/Skill/Memory), 供信息侧边栏渲染
+        std::vector<agentxx::agent::AppendComponentNotification> appendComponents;
+    };
+
+    /// 跨线程共享状态 (mutex_ 保护)
+    std::mutex                            mutex_;
+    std::shared_ptr<RenderState>          state_ = std::make_shared<RenderState>();
+    /// UI 线程本帧快照 (每帧开头由 snapshotStateLocked 填充, 渲染期间无锁读取)
+    std::shared_ptr<RenderState>          frameState_;
+
+    /// COW: 获取 state_ 的可写引用; 若被 UI 线程快照共享 (use_count > 1) 则深拷贝结构
+    /// - 调用方须持有 mutex_
+    RenderState& mutableStateLocked();
+    /// COW: 获取 messages[idx] 的可写引用; 若被快照共享则拷贝该条 Message
+    /// - 调用方须持有 mutex_
+    Message& mutableMessageLocked(RenderState& st, size_t idx);
+    /// 快照: 拷贝 state_ 的 shared_ptr (纳秒级), 供 UI 线程本帧无锁渲染
+    /// - 调用方须持有 mutex_
+    std::shared_ptr<RenderState> snapshotStateLocked();
 
     /// 可滚动的消息列表组件 (ListView 风格 viewport 局部绘制)
     std::shared_ptr<Scrollable> messagesScrollable_;
     /// 侧边栏内容可滚动组件 (ListView 风格 viewport 局部绘制)
     std::shared_ptr<Scrollable> sidebarScrollable_;
 
-    /// 消息元素缓存 (按 messages_ 索引; 仅内容变化的消息重建 Element)
+    // -----------------------------------------------------------------------
+    // UI 线程独占状态 (仅 uiThread_ 访问, 无需锁)
+    // -----------------------------------------------------------------------
+
+    /// 消息元素缓存 (按 messages 索引; 仅内容变化的消息重建 Element)
     std::vector<MessageCache> messageCache_;
     /// 流式 token 的 markdown DomBuilder (每帧重建, 须与帧内 element 同生命周期)
     std::vector<std::unique_ptr<markdown::DomBuilder>> streamingMdBuilders_;
@@ -210,27 +269,18 @@ private:
 
     std::string inputText_;
 
-    /// 模型选择器状态
-    bool                     showModelSelector_  = false;
-    int                      selectedModelIndex_ = 0;
-    std::vector<std::string> modelNames_;
+    /// 模型选择器弹窗状态 (UI-only; 模型数据在 RenderState 中)
+    bool showModelSelector_  = false;
+    int  selectedModelIndex_ = 0;
 
     /// 设置弹窗状态
     bool showSettings_         = false;
     int  selectedSettingIndex_ = 0;
 
-    /// 上下文弹窗状态 (查看当前会话 llm messages)
-    bool showContextOverlay_  = false;
-    int  contextScrollOffset_ = 0;
-    /// 从 server 收到的 llm messages 缓存 (弹窗展示用)
-    neograph::json contextMessages_ = neograph::json::array();
+    /// 上下文弹窗滚动偏移 (UI-only; 数据与开关在 RenderState 中)
+    int contextScrollOffset_ = 0;
 
-    /// 当前正在执行的节点名称 (由 NodeStart/NodeEnd Delta 更新)
-    std::string currentNodeName_;
-
-    /// 用户输入队列: BaseAgent 执行中收到的用户输入排队, 轮次结束后自动逐个发送
-    std::deque<PendingInput> pendingInputs_;
-    /// 待发送消息队列弹窗开关
+    /// 待发送消息队列弹窗开关 (UI-only; 队列数据在 RenderState 中)
     bool showPendingInputs_ = false;
     /// 弹窗内各消息行 / 删除按钮 / 清空按钮 及输入框上方计数行的渲染区域 (鼠标点击检测)
     std::vector<ftxui::Box> pendingInputBoxes_;
@@ -254,7 +304,7 @@ private:
     /// 侧边栏左侧拖拽手柄的渲染区域 (渲染时经 reflect 填充)
     ftxui::Box sidebarHandleBox_;
 
-    /// 各可折叠消息块 (Thinking/Tool) 的渲染区域与对应 messages_ 索引,
+    /// 各可折叠消息块 (Thinking/Tool) 的渲染区域与对应 messages 索引,
     /// 用于鼠标点击展开/折叠 (渲染时经 reflect 填充)
     std::vector<ftxui::Box> collapsibleBoxes_;
     std::vector<size_t>     collapsibleMsgIndices_;
@@ -267,8 +317,6 @@ private:
     TUITheme                                      theme_;
     /// 本 TUI 绑定的会话 thread_id (按 thread_id 取会话状态)
     std::string threadId_;
-    /// 缓存的模型显示名称 (避免 render 热路径频繁加锁)
-    std::string cachedModelName_;
     /// 本 TUI 绑定的 executor (供 onPeerMessage 中 co_spawn 使用)
     asio::any_io_executor ex_;
 
@@ -281,7 +329,7 @@ private:
     std::atomic<bool>                         running_{false};
 
     /// handleInterrupt 正在等待用户输入时为 true;
-    /// 此时 Enter 须把输入直接送入 inputChannel_ (而非 isStreaming_ 待发送队列), 否则死锁
+    /// 此时 Enter 须把输入直接送入 inputChannel_ (而非 isStreaming 待发送队列), 否则死锁
     std::atomic<bool> awaitingInterruptInput_{false};
 
     std::shared_ptr<LineChannel> inputChannel_;
@@ -306,6 +354,7 @@ private:
     void postRedraw();
     /// 构建消息列表子项 (ListView 风格): 返回各消息块 + 流式 token,
     /// 同时填充 messageItemMeta_ 与 messageCache_ (仅重建内容变化的消息)
+    /// - 使用 frameState_ (本帧快照, 无锁)
     std::vector<ScrollItem> buildMessageItems();
     /// 构建单条消息的渲染块 (不含末尾空行); 仅在消息签名变化时调用并缓存
     /// maxWidth: 消息列表可用宽度 (终端列数), 用于限制表格宽度; <= 0 表示不限制
@@ -343,6 +392,7 @@ private:
     /// 日志侧边栏底部常驻内容: 当前执行节点名 + "上下文" 按钮
     ftxui::Element renderLogSidebarFooter();
     /// planning 特化渲染 (取最新 planning_write toolcall 的 todos/notes); 无规划时返回空
+    /// - 使用 frameState_ (本帧快照, 无锁)
     std::optional<ftxui::Element> renderPlanningInfo();
 
     /// 获取本 TUI 绑定的会话
@@ -355,18 +405,18 @@ private:
     /// 应用设置中的主题选择
     void applyThemeSelection();
     /// 取消当前正在执行的轮次; 调用方须持有 mutex_
-    void cancelCurrentRunLocked();
+    void cancelCurrentRunLocked(RenderState& st);
 
     /// 发送一条用户输入到 BaseAgent (刷新 currentToken / 追加 User 消息 / 置 streaming / 入
     /// channel)
     /// - 调用方须持有 mutex_
-    void sendUserInputLocked(std::string text);
-    /// 将当前流式 token 推入 messages_ (角色切换/轮次结束时调用);
-    /// 同时应用暂存的时间信息 (pendingTokenDurationMs_/pendingTokenStartTimeMs_)
+    void sendUserInputLocked(RenderState& st, std::string text);
+    /// 将当前流式 token 推入 messages (角色切换/轮次结束时调用);
+    /// 同时应用暂存的时间信息 (pendingTokenDurationMs/pendingTokenStartTimeMs)
     /// - 调用方须持有 mutex_
-    void pushCurrentTokenLocked();
+    void pushCurrentTokenLocked(RenderState& st);
     /// 若空闲且输入队列非空, 取队首发送 (轮次结束自动派发); 调用方须持有 mutex_
-    void dispatchNextPendingInput();
+    void dispatchNextPendingInput(RenderState& st);
 
     /// 侧边栏 tab 管理
     /// - render: 可滚动主体内容; footer: 底部常驻内容 (可选, 渲染于滚动区之外)
@@ -393,9 +443,6 @@ private:
 
     /// 缓存的本会话指针 (构造时初始化，避免反复查找 SessionStore)
     std::shared_ptr<agentxx::agent::Session> session_;
-
-    // 会话加载的组件明细 (MCP/Skill/Memory), 供信息侧边栏渲染
-    std::vector<agentxx::agent::AppendComponentNotification> appendComponents_;
 
 public:
 

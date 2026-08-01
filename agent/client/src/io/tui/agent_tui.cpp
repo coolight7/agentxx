@@ -18,6 +18,35 @@
 
 using namespace ftxui;
 
+// ---------------------------------------------------------------------------
+// COW 辅助
+// ---------------------------------------------------------------------------
+
+AgentTUI::RenderState& AgentTUI::mutableStateLocked() {
+    // 若被 UI 线程快照共享 (use_count > 1), 深拷贝结构 (vector<shared_ptr<Message>>
+    // 仅拷贝指针数组, 消息体共享; 其余标量/字符串拷贝开销极小)
+    if (state_.use_count() > 1) {
+        state_ = std::make_shared<RenderState>(*state_);
+    }
+    return *state_;
+}
+
+AgentTUI::Message& AgentTUI::mutableMessageLocked(RenderState& st, size_t idx) {
+    // 若该条 Message 被快照共享, 拷贝该条 (其余消息零拷贝)
+    if (st.messages[idx].use_count() > 1) {
+        st.messages[idx] = std::make_shared<Message>(*st.messages[idx]);
+    }
+    return *st.messages[idx];
+}
+
+std::shared_ptr<AgentTUI::RenderState> AgentTUI::snapshotStateLocked() {
+    return state_;
+}
+
+// ---------------------------------------------------------------------------
+// 构造 / 析构
+// ---------------------------------------------------------------------------
+
 AgentTUI::AgentTUI(
     asio::any_io_executor                         ex,
     std::shared_ptr<agentxx::agent::AgentContext> agentContext,
@@ -34,13 +63,18 @@ AgentTUI::AgentTUI(
         session_ = agentContext_->getSession(threadId_);
     }
     if (session_ && agentContext_ && agentContext_->modelRegistry) {
-        cachedModelName_ = agentContext_->modelRegistry->resolveModelName(session_->getModelName());
+        state_->cachedModelName
+            = agentContext_->modelRegistry->resolveModelName(session_->getModelName());
     }
 }
 
 AgentTUI::~AgentTUI() {
     stop();
 }
+
+// ---------------------------------------------------------------------------
+// postRedraw
+// ---------------------------------------------------------------------------
 
 void AgentTUI::postRedraw() {
     std::shared_ptr<ftxui::ScreenInteractive> s;
@@ -57,6 +91,10 @@ void AgentTUI::postRedraw() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// start / stop
+// ---------------------------------------------------------------------------
+
 void AgentTUI::start() {
     running_ = true;
     if (logSink_) {
@@ -71,21 +109,17 @@ void AgentTUI::start() {
         }
 
         // 屏幕足够宽时默认显示信息侧边栏
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            if (ftxui::Terminal::Size().dimx >= kInfoSidebarMinWidth
-                && !hasSidebarTab(kInfoTabId)) {
-                addSidebarTab(
-                    kInfoTabId,
-                    "Info",
-                    [this]() {
-                        return renderInfoSidebar();
-                    },
-                    [this]() {
-                        return renderInfoSidebarFooter();
-                    }
-                );
-            }
+        if (ftxui::Terminal::Size().dimx >= kInfoSidebarMinWidth && !hasSidebarTab(kInfoTabId)) {
+            addSidebarTab(
+                kInfoTabId,
+                "Info",
+                [this]() {
+                    return renderInfoSidebar();
+                },
+                [this]() {
+                    return renderInfoSidebarFooter();
+                }
+            );
         }
 
         // 使用 Component 构建主 UI 树
@@ -123,14 +157,19 @@ void AgentTUI::start() {
 
         // 主渲染器组件
         auto main_renderer = Renderer(stacked, [&]() -> Element {
-            std::lock_guard<std::mutex> lock(mutex_);
+            // 每帧开头: 短锁拷贝快照, 之后无锁渲染
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                frameState_ = snapshotStateLocked();
+            }
+            const auto& st = *frameState_;
 
             // 指示器状态显示
             Element indicator;
             if (awaitingInterruptInput_) {
                 indicator
                     = text("!") | bgcolor(theme_.errorColor) | color(Color::White) | bold | blink;
-            } else if (isStreaming_) {
+            } else if (st.isStreaming) {
                 indicator = text("~") | color(theme_.accentColor) | bold;
             } else {
                 indicator = text(">") | color(theme_.promptColor) | bold;
@@ -156,10 +195,10 @@ void AgentTUI::start() {
             });
 
             Element pendingBar = text("");
-            if (!pendingInputs_.empty()) {
+            if (!st.pendingInputs.empty()) {
                 pendingBar = hbox({
                     text(" "),
-                    text("待发送消息: " + std::to_string(pendingInputs_.size()))
+                    text("待发送消息: " + std::to_string(st.pendingInputs.size()))
                         | color(theme_.accentColor) | bold | reflect(pendingInputCounterBox_),
                     filler(),
                 });
@@ -216,7 +255,7 @@ void AgentTUI::start() {
                 result = renderSettingsOverlay() | center;
             } else if (showPendingInputs_) {
                 result = renderPendingInputsOverlay() | center;
-            } else if (showContextOverlay_) {
+            } else if (st.showContextOverlay) {
                 result = renderContextOverlay() | center;
             }
             return result | bold | bgcolor(theme_.backgroundColor);
@@ -235,8 +274,7 @@ void AgentTUI::start() {
                 return true;
             }
 
-            std::lock_guard<std::mutex> lock(mutex_);
-
+            // 弹窗: 模型选择器 (UI-only 状态 + 短锁读模型列表)
             if (showModelSelector_) {
                 if (event == Event::ArrowUp) {
                     if (selectedModelIndex_ > 0) {
@@ -246,7 +284,8 @@ void AgentTUI::start() {
                     return true;
                 }
                 if (event == Event::ArrowDown) {
-                    if (selectedModelIndex_ + 1 < static_cast<int>(modelNames_.size())) {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    if (selectedModelIndex_ + 1 < static_cast<int>(state_->modelNames.size())) {
                         ++selectedModelIndex_;
                     }
                     postRedraw();
@@ -306,51 +345,57 @@ void AgentTUI::start() {
                 return true; // 弹窗打开时屏蔽其余输入
             }
 
-            if (showContextOverlay_) {
-                if (event == Event::Escape) {
-                    showContextOverlay_ = false;
-                    postRedraw();
-                    return true;
-                }
-                // 键盘/鼠标滚动上下文列表
-                const int totalItems
-                    = contextMessages_.is_array() ? static_cast<int>(contextMessages_.size()) : 0;
-                const int maxVisible = std::max(8, ftxui::Terminal::Size().dimy - 10);
-                const int maxScroll  = std::max(0, totalItems - maxVisible);
-                if (event == Event::ArrowUp) {
-                    contextScrollOffset_ = std::max(0, contextScrollOffset_ - 1);
-                    postRedraw();
-                    return true;
-                }
-                if (event == Event::ArrowDown) {
-                    contextScrollOffset_ = std::min(maxScroll, contextScrollOffset_ + 1);
-                    postRedraw();
-                    return true;
-                }
-                if (event == Event::PageUp) {
-                    contextScrollOffset_ = std::max(0, contextScrollOffset_ - maxVisible);
-                    postRedraw();
-                    return true;
-                }
-                if (event == Event::PageDown) {
-                    contextScrollOffset_ = std::min(maxScroll, contextScrollOffset_ + maxVisible);
-                    postRedraw();
-                    return true;
-                }
-                if (event.is_mouse()) {
-                    const auto& mouse = event.mouse();
-                    if (mouse.button == Mouse::WheelUp) {
-                        contextScrollOffset_ = std::max(0, contextScrollOffset_ - 3);
+            // 上下文弹窗 (数据在 RenderState, 滚动偏移 UI-only)
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                if (state_->showContextOverlay) {
+                    if (event == Event::Escape) {
+                        auto& st            = mutableStateLocked();
+                        st.showContextOverlay = false;
                         postRedraw();
                         return true;
                     }
-                    if (mouse.button == Mouse::WheelDown) {
-                        contextScrollOffset_ = std::min(maxScroll, contextScrollOffset_ + 3);
+                    // 键盘/鼠标滚动上下文列表
+                    const int totalItems = state_->contextMessages.is_array()
+                                               ? static_cast<int>(state_->contextMessages.size())
+                                               : 0;
+                    const int maxVisible = std::max(8, ftxui::Terminal::Size().dimy - 10);
+                    const int maxScroll  = std::max(0, totalItems - maxVisible);
+                    if (event == Event::ArrowUp) {
+                        contextScrollOffset_ = std::max(0, contextScrollOffset_ - 1);
                         postRedraw();
                         return true;
                     }
+                    if (event == Event::ArrowDown) {
+                        contextScrollOffset_ = std::min(maxScroll, contextScrollOffset_ + 1);
+                        postRedraw();
+                        return true;
+                    }
+                    if (event == Event::PageUp) {
+                        contextScrollOffset_ = std::max(0, contextScrollOffset_ - maxVisible);
+                        postRedraw();
+                        return true;
+                    }
+                    if (event == Event::PageDown) {
+                        contextScrollOffset_ = std::min(maxScroll, contextScrollOffset_ + maxVisible);
+                        postRedraw();
+                        return true;
+                    }
+                    if (event.is_mouse()) {
+                        const auto& mouse = event.mouse();
+                        if (mouse.button == Mouse::WheelUp) {
+                            contextScrollOffset_ = std::max(0, contextScrollOffset_ - 3);
+                            postRedraw();
+                            return true;
+                        }
+                        if (mouse.button == Mouse::WheelDown) {
+                            contextScrollOffset_ = std::min(maxScroll, contextScrollOffset_ + 3);
+                            postRedraw();
+                            return true;
+                        }
+                    }
+                    return true;
                 }
-                return true;
             }
 
             {
@@ -374,12 +419,16 @@ void AgentTUI::start() {
                         text = text.substr(start);
                     }
                     if (!text.empty()) {
+                        std::lock_guard<std::mutex> lock(mutex_);
+                        auto&                       st = mutableStateLocked();
                         if (awaitingInterruptInput_.load(std::memory_order_acquire)) {
                             // 中断等待输入: 直接送入 inputChannel_ 供 handleInterrupt 的
-                            // getInput() 接收; 不能走 isStreaming_ 待发送队列, 否则 getInput
+                            // getInput() 接收; 不能走 isStreaming 待发送队列, 否则 getInput
                             // 永久阻塞导致死锁
-                            pushCurrentTokenLocked();
-                            messages_.push_back({Message::Role::User, text});
+                            pushCurrentTokenLocked(st);
+                            st.messages.push_back(
+                                std::make_shared<Message>(Message{Message::Role::User, text})
+                            );
                             if (messagesScrollable_) {
                                 messagesScrollable_->setStickToBottom(true);
                             }
@@ -388,11 +437,11 @@ void AgentTUI::start() {
                                 std::move(text),
                                 [](neograph_asio_error_code) {}
                             );
-                        } else if (isStreaming_) {
+                        } else if (st.isStreaming) {
                             // BaseAgent 执行中 -> 加入待发送队列, 轮次结束后自动发送
-                            pendingInputs_.push_back(PendingInput{std::move(text), false});
+                            st.pendingInputs.push_back(PendingInput{std::move(text), false});
                         } else {
-                            sendUserInputLocked(std::move(text));
+                            sendUserInputLocked(st, std::move(text));
                         }
                         inputText_.clear();
                     }
@@ -426,12 +475,15 @@ void AgentTUI::start() {
                     postRedraw();
                     return true;
                 }
-                if (mouse.button == Mouse::Left && mouse.motion == Mouse::Released
-                    && !pendingInputs_.empty()
-                    && pendingInputCounterBox_.Contain(mouse.x, mouse.y)) {
-                    showPendingInputs_ = true;
-                    postRedraw();
-                    return true;
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    if (mouse.button == Mouse::Left && mouse.motion == Mouse::Released
+                        && !state_->pendingInputs.empty()
+                        && pendingInputCounterBox_.Contain(mouse.x, mouse.y)) {
+                        showPendingInputs_ = true;
+                        postRedraw();
+                        return true;
+                    }
                 }
                 if (handleCollapsibleMouse(mouse)) {
                     postRedraw();
@@ -442,8 +494,10 @@ void AgentTUI::start() {
                     if (transport_) {
                         sendToPeer(agentxx::agent::WireGetContext{threadId_});
                     } else if (session_) {
-                        contextMessages_    = session_->llmMessages;
-                        showContextOverlay_ = true;
+                        std::lock_guard<std::mutex> lock(mutex_);
+                        auto& st = mutableStateLocked();
+                        st.contextMessages    = session_->llmMessages;
+                        st.showContextOverlay = true;
                     }
                     postRedraw();
                     return true;
@@ -455,10 +509,14 @@ void AgentTUI::start() {
 
                 return false;
             }
-            if (event == Event::Escape && isStreaming_) {
-                cancelCurrentRunLocked();
-                postRedraw();
-                return true;
+            if (event == Event::Escape) {
+                std::lock_guard<std::mutex> lock(mutex_);
+                if (state_->isStreaming) {
+                    auto& st = mutableStateLocked();
+                    cancelCurrentRunLocked(st);
+                    postRedraw();
+                    return true;
+                }
             }
             return false;
         });
@@ -500,6 +558,10 @@ void AgentTUI::stop() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// requestCancel / requestSelectModel
+// ---------------------------------------------------------------------------
+
 void AgentTUI::requestCancel(std::string_view threadId) {
     if (transport_) {
         sendToPeer(agentxx::agent::WireCancel{std::string{threadId}});
@@ -512,6 +574,10 @@ void AgentTUI::requestSelectModel(std::string_view threadId, std::string_view mo
     }
 }
 
+// ---------------------------------------------------------------------------
+// onPeerMessage (client 线程)
+// ---------------------------------------------------------------------------
+
 void AgentTUI::onPeerMessage(agentxx::agent::WireMessage msg) {
     std::visit(
         [this](auto&& m) {
@@ -521,12 +587,17 @@ void AgentTUI::onPeerMessage(agentxx::agent::WireMessage msg) {
             } else if constexpr (std::is_same_v<T, agentxx::agent::SyncPayload>) {
                 onSync(m);
             } else if constexpr (std::is_same_v<T, agentxx::agent::WireTurnResult>) {
-                std::lock_guard<std::mutex> lock(mutex_);
-                isStreaming_ = false;
-                if (m.hasError && !m.errorMessage.empty()) {
-                    messages_.push_back({Message::Role::System, "[Error] " + m.errorMessage});
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    auto&                       st = mutableStateLocked();
+                    st.isStreaming                 = false;
+                    if (m.hasError && !m.errorMessage.empty()) {
+                        st.messages.push_back(std::make_shared<Message>(
+                            Message{Message::Role::System, "[Error] " + m.errorMessage}
+                        ));
+                    }
+                    dispatchNextPendingInput(st);
                 }
-                dispatchNextPendingInput();
                 postRedraw();
             } else if constexpr (std::is_same_v<T, agentxx::agent::WireContextStats>) {
                 if (session_ && session_->contextStats) {
@@ -558,27 +629,33 @@ void AgentTUI::onPeerMessage(agentxx::agent::WireMessage msg) {
                     m.message
                 );
             } else if constexpr (std::is_same_v<T, agentxx::agent::WireModelInfo>) {
-                std::lock_guard<std::mutex> lock(mutex_);
-                if (!m.models.empty()) {
-                    modelNames_ = m.models;
-                }
-                if (!m.currentModel.empty()) {
-                    cachedModelName_ = m.currentModel;
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    auto&                       st = mutableStateLocked();
+                    if (!m.models.empty()) {
+                        st.modelNames = m.models;
+                    }
+                    if (!m.currentModel.empty()) {
+                        st.cachedModelName = m.currentModel;
+                    }
                 }
                 postRedraw();
             } else if constexpr (std::is_same_v<T, agentxx::agent::WireAppendComponentInfo>) {
-                // 客户端拉取的启动信息: 整批更新统计与明细
                 {
                     std::lock_guard<std::mutex> lock(mutex_);
+                    auto&                       st = mutableStateLocked();
                     for (const auto& notif : m.notifications) {
-                        appendComponents_.push_back(notif);
+                        st.appendComponents.push_back(notif);
                     }
                 }
                 postRedraw();
             } else if constexpr (std::is_same_v<T, agentxx::agent::WireContextMessages>) {
-                std::lock_guard<std::mutex> lock(mutex_);
-                contextMessages_    = m.messages;
-                showContextOverlay_ = true;
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    auto&                       st = mutableStateLocked();
+                    st.contextMessages             = m.messages;
+                    st.showContextOverlay          = true;
+                }
                 postRedraw();
             }
         },
@@ -586,34 +663,40 @@ void AgentTUI::onPeerMessage(agentxx::agent::WireMessage msg) {
     );
 }
 
-void AgentTUI::pushCurrentTokenLocked() {
-    if (currentToken_.empty()) {
+// ---------------------------------------------------------------------------
+// 内部辅助 (调用方须持有 mutex_)
+// ---------------------------------------------------------------------------
+
+void AgentTUI::pushCurrentTokenLocked(RenderState& st) {
+    if (st.currentToken.empty()) {
         return;
     }
-    messages_.push_back(AgentTUI::Message{
-        .role        = currentTokenRole_,
-        .text        = currentToken_,
-        .collapsed   = (currentTokenRole_ == Message::Role::Thinking),
-        .durationMs  = pendingTokenDurationMs_,
-        .startTimeMs = pendingTokenStartTimeMs_,
-    });
-    pendingTokenDurationMs_  = 0;
-    pendingTokenStartTimeMs_ = 0;
-    currentToken_.clear();
+    auto msg          = std::make_shared<Message>();
+    msg->role         = st.currentTokenRole;
+    msg->text         = st.currentToken;
+    msg->collapsed    = (st.currentTokenRole == Message::Role::Thinking);
+    msg->durationMs   = st.pendingTokenDurationMs;
+    msg->startTimeMs  = st.pendingTokenStartTimeMs;
+    st.messages.push_back(std::move(msg));
+    st.pendingTokenDurationMs  = 0;
+    st.pendingTokenStartTimeMs = 0;
+    st.currentToken.clear();
 }
 
-void AgentTUI::cancelCurrentRunLocked() {
+void AgentTUI::cancelCurrentRunLocked(RenderState& st) {
     requestCancel(threadId_);
-    pushCurrentTokenLocked();
-    messages_.push_back({Message::Role::System, "[Cancel Request]"});
-    isStreaming_ = false;
-    dispatchNextPendingInput();
+    pushCurrentTokenLocked(st);
+    st.messages.push_back(
+        std::make_shared<Message>(Message{Message::Role::System, "[Cancel Request]"})
+    );
+    st.isStreaming = false;
+    dispatchNextPendingInput(st);
 }
 
-void AgentTUI::sendUserInputLocked(std::string text) {
-    pushCurrentTokenLocked();
-    messages_.push_back({Message::Role::User, text});
-    isStreaming_ = true;
+void AgentTUI::sendUserInputLocked(RenderState& st, std::string text) {
+    pushCurrentTokenLocked(st);
+    st.messages.push_back(std::make_shared<Message>(Message{Message::Role::User, text}));
+    st.isStreaming = true;
     if (messagesScrollable_) {
         messagesScrollable_->setStickToBottom(true);
     }
@@ -628,125 +711,129 @@ void AgentTUI::sendUserInputLocked(std::string text) {
     }
 }
 
-void AgentTUI::dispatchNextPendingInput() {
-    if (isStreaming_ || pendingInputs_.empty()) {
+void AgentTUI::dispatchNextPendingInput(RenderState& st) {
+    if (st.isStreaming || st.pendingInputs.empty()) {
         return;
     }
-    std::string next = std::move(pendingInputs_.front().text);
-    pendingInputs_.pop_front();
-    sendUserInputLocked(std::move(next));
+    std::string next = std::move(st.pendingInputs.front().text);
+    st.pendingInputs.pop_front();
+    sendUserInputLocked(st, std::move(next));
 }
 
 std::shared_ptr<agentxx::agent::Session> AgentTUI::currentSession() {
     return session_;
 }
 
+// ---------------------------------------------------------------------------
+// onDelta (client 线程)
+// ---------------------------------------------------------------------------
+
 void AgentTUI::onDelta(const agentxx::agent::Delta& delta) {
     using Type = agentxx::agent::Delta::Type;
-    switch (delta.type) {
-        case Type::TextToken:
-        case Type::ThinkingToken: {
-            std::lock_guard<std::mutex> lock(mutex_);
-            auto role = (delta.type == Type::ThinkingToken) ? Message::Role::Thinking
-                                                            : Message::Role::Assistant;
-            if (currentTokenRole_ != role && !currentToken_.empty()) {
-                pendingTokenStartTimeMs_ = delta.startTimeMs;
-                pendingTokenDurationMs_  = delta.durationMs;
-                pushCurrentTokenLocked();
-            }
-            currentTokenRole_  = role;
-            currentToken_     += delta.text;
-            isStreaming_       = true;
-        } break;
-        case Type::ToolStart: {
-            std::lock_guard<std::mutex> lock(mutex_);
-            pushCurrentTokenLocked();
-            Message m;
-            m.role         = Message::Role::Tool;
-            m.toolName     = delta.toolName;
-            m.toolCallId   = delta.toolCallId;
-            m.text         = delta.arguments;
-            m.toolFinished = false;
-            m.collapsed    = false;
-            m.startTimeMs  = delta.startTimeMs;
-            messages_.push_back(std::move(m));
-            isStreaming_ = true;
-        } break;
-        case Type::ToolEnd: {
-            std::lock_guard<std::mutex> lock(mutex_);
-            bool                        found = false;
-            for (auto it = messages_.rbegin(); it != messages_.rend(); ++it) {
-                if (it->role == Message::Role::Tool && it->toolCallId == delta.toolCallId
-                    && !it->toolFinished) {
-                    it->toolResult   = delta.result;
-                    it->toolFinished = true;
-                    it->collapsed    = true;
-                    it->startTimeMs  = delta.startTimeMs;
-                    it->durationMs   = delta.durationMs;
-                    found            = true;
-                    break;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto&                       st = mutableStateLocked();
+        switch (delta.type) {
+            case Type::TextToken:
+            case Type::ThinkingToken: {
+                auto role = (delta.type == Type::ThinkingToken) ? Message::Role::Thinking
+                                                                : Message::Role::Assistant;
+                if (st.currentTokenRole != role && !st.currentToken.empty()) {
+                    st.pendingTokenStartTimeMs = delta.startTimeMs;
+                    st.pendingTokenDurationMs  = delta.durationMs;
+                    pushCurrentTokenLocked(st);
                 }
-            }
-            if (!found) {
-                Message m;
-                m.role         = Message::Role::Tool;
-                m.toolName     = delta.toolName;
-                m.toolCallId   = delta.toolCallId;
-                m.toolResult   = delta.result;
-                m.toolFinished = true;
-                m.startTimeMs  = delta.startTimeMs;
-                m.durationMs   = delta.durationMs;
-                m.collapsed    = true;
-                messages_.push_back(std::move(m));
-            }
-        } break;
-        case Type::NodeStart: {
-            std::lock_guard<std::mutex> lock(mutex_);
-            currentNodeName_ = delta.nodeName;
-        } break;
-        case Type::NodeEnd: {
-            std::lock_guard<std::mutex> lock(mutex_);
-            if (currentNodeName_ == delta.nodeName) {
-                currentNodeName_.clear();
-            }
-            if (!currentToken_.empty()) {
-                // 当前正在流式输出 (Thinking/Assistant): 暂存时间信息,
-                // 待 pushCurrentTokenLocked() 时应用到对应消息
-                pendingTokenStartTimeMs_ = delta.startTimeMs;
-                pendingTokenDurationMs_  = delta.durationMs;
-            } else if (!messages_.empty()) {
-                // 当前无流式 token (如 Tool 已完成): 直接设到最近的消息
-                messages_.back().startTimeMs = delta.startTimeMs;
-                messages_.back().durationMs  = delta.durationMs;
-            }
-        } break;
-        case Type::TurnStart: {
-            std::lock_guard<std::mutex> lock(mutex_);
-            isStreaming_ = true;
-        } break;
-        case Type::TurnEnd: {
-            std::lock_guard<std::mutex> lock(mutex_);
-            pushCurrentTokenLocked();
-            isStreaming_ = false;
+                st.currentTokenRole = role;
+                st.currentToken    += delta.text;
+                st.isStreaming      = true;
+            } break;
+            case Type::ToolStart: {
+                pushCurrentTokenLocked(st);
+                auto m           = std::make_shared<Message>();
+                m->role          = Message::Role::Tool;
+                m->toolName      = delta.toolName;
+                m->toolCallId    = delta.toolCallId;
+                m->text          = delta.arguments;
+                m->toolFinished  = false;
+                m->collapsed     = false;
+                m->startTimeMs   = delta.startTimeMs;
+                st.messages.push_back(std::move(m));
+                st.isStreaming = true;
+            } break;
+            case Type::ToolEnd: {
+                bool found = false;
+                for (size_t i = st.messages.size(); i > 0; --i) {
+                    auto& msg = *st.messages[i - 1];
+                    if (msg.role == Message::Role::Tool && msg.toolCallId == delta.toolCallId
+                        && !msg.toolFinished) {
+                        auto& m      = mutableMessageLocked(st, i - 1);
+                        m.toolResult   = delta.result;
+                        m.toolFinished = true;
+                        m.collapsed    = true;
+                        m.startTimeMs  = delta.startTimeMs;
+                        m.durationMs   = delta.durationMs;
+                        found          = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    auto m           = std::make_shared<Message>();
+                    m->role          = Message::Role::Tool;
+                    m->toolName      = delta.toolName;
+                    m->toolCallId    = delta.toolCallId;
+                    m->toolResult    = delta.result;
+                    m->toolFinished  = true;
+                    m->startTimeMs   = delta.startTimeMs;
+                    m->durationMs    = delta.durationMs;
+                    m->collapsed     = true;
+                    st.messages.push_back(std::move(m));
+                }
+            } break;
+            case Type::NodeStart: {
+                st.currentNodeName = delta.nodeName;
+            } break;
+            case Type::NodeEnd: {
+                if (st.currentNodeName == delta.nodeName) {
+                    st.currentNodeName.clear();
+                }
+                if (!st.currentToken.empty()) {
+                    // 当前正在流式输出 (Thinking/Assistant): 暂存时间信息,
+                    // 待 pushCurrentTokenLocked() 时应用到对应消息
+                    st.pendingTokenStartTimeMs = delta.startTimeMs;
+                    st.pendingTokenDurationMs  = delta.durationMs;
+                } else if (!st.messages.empty()) {
+                    // 当前无流式 token (如 Tool 已完成): 直接设到最近的消息
+                    auto& m       = mutableMessageLocked(st, st.messages.size() - 1);
+                    m.startTimeMs = delta.startTimeMs;
+                    m.durationMs  = delta.durationMs;
+                }
+            } break;
+            case Type::TurnStart: {
+                st.isStreaming = true;
+            } break;
+            case Type::TurnEnd: {
+                pushCurrentTokenLocked(st);
+                st.isStreaming = false;
 
-            // 创建一条系统消息记录本轮运行的统计信息
-            if (delta.durationMs > 0 || delta.startTimeMs > 0) {
-                Message statMsg;
-                statMsg.role = Message::Role::System;
-                statMsg.text = fmt::format(
-                    "{} · {} · {}",
-                    cachedModelName_,
-                    formatDurationMilliseconds(delta.durationMs),
-                    formatTimestampMilliseconds(delta.startTimeMs + delta.durationMs)
-                );
-                statMsg.durationMs  = delta.durationMs;
-                statMsg.startTimeMs = delta.startTimeMs;
-                messages_.push_back(std::move(statMsg));
-            }
+                // 创建一条系统消息记录本轮运行的统计信息
+                if (delta.durationMs > 0 || delta.startTimeMs > 0) {
+                    auto statMsg          = std::make_shared<Message>();
+                    statMsg->role         = Message::Role::System;
+                    statMsg->text         = fmt::format(
+                        "{} · {} · {}",
+                        st.cachedModelName,
+                        formatDurationMilliseconds(delta.durationMs),
+                        formatTimestampMilliseconds(delta.startTimeMs + delta.durationMs)
+                    );
+                    statMsg->durationMs  = delta.durationMs;
+                    statMsg->startTimeMs = delta.startTimeMs;
+                    st.messages.push_back(std::move(statMsg));
+                }
 
-            // 轮次结束 -> 自动派发下一个排队输入
-            dispatchNextPendingInput();
-        } break;
+                // 轮次结束 -> 自动派发下一个排队输入
+                dispatchNextPendingInput(st);
+            } break;
+        }
     }
 
     // stickToBottom 由 Scrollable 布局阶段自动处理:
@@ -754,95 +841,104 @@ void AgentTUI::onDelta(const agentxx::agent::Delta& delta) {
     postRedraw();
 }
 
+// ---------------------------------------------------------------------------
+// onSync (client 线程)
+// ---------------------------------------------------------------------------
+
 void AgentTUI::onSync(const agentxx::agent::SyncPayload& payload) {
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        messages_.clear();
-        currentToken_.clear();
-        // 清空暂存的流式 token 时间信息, 避免残留值错误应用到同步后的首条消息
-        pendingTokenDurationMs_  = 0;
-        pendingTokenStartTimeMs_ = 0;
-        isStreaming_             = false;
+        // 整体重建: 直接替换为新 state (旧快照由 UI 线程持有, 自然释放)
+        auto st            = std::make_shared<RenderState>();
+        st->cachedModelName = state_->cachedModelName;
+        st->modelNames      = state_->modelNames;
+        st->appendComponents = state_->appendComponents;
+        st->pendingInputs   = state_->pendingInputs;
+        st->isStreaming     = false;
+
         for (const auto& hm : payload.messages) {
             const auto& d    = hm.data;
             auto        role = d.value("role", std::string{});
-            Message     m;
+            auto        m    = std::make_shared<Message>();
             bool        skipPush = false;
             if (role == "user") {
-                m.role = Message::Role::User;
-                m.text = d.value("content", std::string{});
+                m->role = Message::Role::User;
+                m->text = d.value("content", std::string{});
             } else if (role == "assistant") {
                 if (d.contains("tool_calls")) {
                     for (const auto& tc : d["tool_calls"]) {
-                        Message tm;
-                        tm.role         = Message::Role::Tool;
-                        tm.toolName     = tc.value("name", std::string{});
-                        tm.toolCallId   = tc.value("id", std::string{});
-                        tm.text         = tc.value("arguments", std::string{});
-                        tm.toolFinished = false;
-                        tm.collapsed    = true;
-                        messages_.push_back(std::move(tm));
+                        auto tm           = std::make_shared<Message>();
+                        tm->role          = Message::Role::Tool;
+                        tm->toolName      = tc.value("name", std::string{});
+                        tm->toolCallId    = tc.value("id", std::string{});
+                        tm->text          = tc.value("arguments", std::string{});
+                        tm->toolFinished  = false;
+                        tm->collapsed     = true;
+                        st->messages.push_back(std::move(tm));
                     }
                     auto content = d.value("content", std::string{});
                     if (!content.empty()) {
-                        m.role = Message::Role::Assistant;
-                        m.text = content;
+                        m->role = Message::Role::Assistant;
+                        m->text = content;
                     } else {
                         continue;
                     }
                 } else {
-                    m.role         = Message::Role::Assistant;
-                    m.text         = d.value("content", std::string{});
-                    auto reasoning = d.value("reasoning_content", std::string{});
+                    m->role         = Message::Role::Assistant;
+                    m->text         = d.value("content", std::string{});
+                    auto reasoning  = d.value("reasoning_content", std::string{});
                     if (!reasoning.empty()) {
-                        Message thinkMsg;
-                        thinkMsg.role      = Message::Role::Thinking;
-                        thinkMsg.text      = reasoning;
-                        thinkMsg.collapsed = true;
-                        // 从原始数据中读取时间信息（如果有）
-                        thinkMsg.startTimeMs = d.value("start_time_ms", int64_t{0});
-                        thinkMsg.durationMs  = d.value("duration_ms", int64_t{0});
-                        messages_.push_back(std::move(thinkMsg));
+                        auto thinkMsg       = std::make_shared<Message>();
+                        thinkMsg->role      = Message::Role::Thinking;
+                        thinkMsg->text      = reasoning;
+                        thinkMsg->collapsed = true;
+                        thinkMsg->startTimeMs = d.value("start_time_ms", int64_t{0});
+                        thinkMsg->durationMs  = d.value("duration_ms", int64_t{0});
+                        st->messages.push_back(std::move(thinkMsg));
                     }
                 }
             } else if (role == "tool") {
-                m.role         = Message::Role::Tool;
-                m.toolName     = d.value("tool_name", std::string{});
-                m.toolCallId   = d.value("tool_call_id", std::string{});
-                m.toolResult   = d.value("content", std::string{});
-                m.toolFinished = true;
-                m.collapsed    = true;
-                // 从原始数据中读取时间信息（如果有）
-                m.startTimeMs = d.value("start_time_ms", int64_t{0});
-                m.durationMs  = d.value("duration_ms", int64_t{0});
-                for (auto it = messages_.rbegin(); it != messages_.rend(); ++it) {
-                    if (it->role == Message::Role::Tool && it->toolCallId == m.toolCallId
-                        && !it->toolFinished) {
-                        it->toolResult   = m.toolResult;
-                        it->toolFinished = true;
-                        it->collapsed    = true;
-                        skipPush         = true;
+                m->role         = Message::Role::Tool;
+                m->toolName     = d.value("tool_name", std::string{});
+                m->toolCallId   = d.value("tool_call_id", std::string{});
+                m->toolResult   = d.value("content", std::string{});
+                m->toolFinished = true;
+                m->collapsed    = true;
+                m->startTimeMs  = d.value("start_time_ms", int64_t{0});
+                m->durationMs   = d.value("duration_ms", int64_t{0});
+                for (size_t i = st->messages.size(); i > 0; --i) {
+                    auto& prev = *st->messages[i - 1];
+                    if (prev.role == Message::Role::Tool && prev.toolCallId == m->toolCallId
+                        && !prev.toolFinished) {
+                        prev.toolResult   = m->toolResult;
+                        prev.toolFinished = true;
+                        prev.collapsed    = true;
+                        skipPush          = true;
                         break;
                     }
                 }
             } else {
-                m.role = Message::Role::System;
-                m.text = d.value("content", std::string{});
-                // 从原始数据中读取时间信息（如果有）
-                m.startTimeMs = d.value("start_time_ms", int64_t{0});
-                m.durationMs  = d.value("duration_ms", int64_t{0});
+                m->role         = Message::Role::System;
+                m->text         = d.value("content", std::string{});
+                m->startTimeMs  = d.value("start_time_ms", int64_t{0});
+                m->durationMs   = d.value("duration_ms", int64_t{0});
             }
 
             if (false == skipPush) {
-                messages_.push_back(std::move(m));
+                st->messages.push_back(std::move(m));
             }
         }
+        state_ = std::move(st);
     }
     if (messagesScrollable_) {
         messagesScrollable_->onContentUpdate();
     }
     postRedraw();
 }
+
+// ---------------------------------------------------------------------------
+// handleInterrupt (client 线程, co_spawn)
+// ---------------------------------------------------------------------------
 
 asio::awaitable<neograph::json> AgentTUI::handleInterrupt(
     std::string_view threadId,
@@ -863,12 +959,13 @@ asio::awaitable<neograph::json> AgentTUI::handleInterrupt(
 
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        auto&                       st  = mutableStateLocked();
         std::string                 msg
             = fmt::format("Interrupted at: {}\nValue: {}", interruptNode, interruptValue);
         if (!handleArg.name.empty()) {
             msg += "\nHandle: " + handleArg.name;
         }
-        messages_.push_back({Message::Role::System, msg});
+        st.messages.push_back(std::make_shared<Message>(Message{Message::Role::System, msg}));
     }
     postRedraw();
 
@@ -887,7 +984,10 @@ asio::awaitable<neograph::json> AgentTUI::handleInterrupt(
 
             {
                 std::lock_guard<std::mutex> lock(mutex_);
-                messages_.push_back({Message::Role::System, prompt});
+                auto&                       st = mutableStateLocked();
+                st.messages.push_back(
+                    std::make_shared<Message>(Message{Message::Role::System, prompt})
+                );
             }
             postRedraw();
 
@@ -938,9 +1038,10 @@ asio::awaitable<neograph::json> AgentTUI::handleInterrupt(
                 } else {
                     {
                         std::lock_guard<std::mutex> lock(mutex_);
-                        messages_.push_back(
-                            {Message::Role::System, "Invalid input, please try again."}
-                        );
+                        auto&                       st = mutableStateLocked();
+                        st.messages.push_back(std::make_shared<Message>(
+                            Message{Message::Role::System, "Invalid input, please try again."}
+                        ));
                     }
                     postRedraw();
                 }
