@@ -96,5 +96,11 @@ path/to/agentxx_test string_util regex
 - 为了减少编译输出内容展示，只捕捉关键词，可以参考: `./path/to/linux_debug_build.sh 2>&1 | grep -E -i "Built target|error|warn" | tail -10`
 
 ## 常见问题
-- 如果遇到编译器崩溃 (ICE)，直接重新运行编译尝试即可，如果多次运行都崩溃，则可能确实代码有问题，需要重新检查一下。
+- 如果遇到编译器崩溃 (ICE)，直接重新运行编译尝试即可; 也可能是内存不足或内存中的缓存占用太多了，可以清理一下再编译试试; 如果多次运行都崩溃，则可能确实代码有问题，需要重新检查一下。
+```sh
+# 清理内存缓存
+sudo echo 1 > /proc/sys/vm/drop_caches
+sudo echo 2 > /proc/sys/vm/drop_caches
+sudo echo 3 > /proc/sys/vm/drop_caches
+```
 - 编译如果警告`不应忽略函数返回值`时，如果函数返回值是协程值(比如asio::awaitable<>)则必须处理，需要 co_await，否则该协程函数没有启动执行，相当于没调用

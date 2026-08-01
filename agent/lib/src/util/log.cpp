@@ -17,9 +17,107 @@
 namespace agentxx {
 namespace util {
 
+// ---------------------------------------------------------------------------
+// LogSink
+// ---------------------------------------------------------------------------
+
+void LogSink::enqueue(std::shared_ptr<const LogEntry> entry) {
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (queue_.size() >= maxQueue_) {
+            dropped_.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+        queue_.push_back(std::move(entry));
+    }
+    cv_.notify_one();
+}
+
+size_t LogSink::pump() {
+    std::deque<std::shared_ptr<const LogEntry>> batch;
+    uint64_t                                    dropped = 0;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        batch.swap(queue_);
+        dropped = dropped_.exchange(0, std::memory_order_relaxed);
+    }
+    for (const auto& e : batch) {
+        onLog(*e);
+    }
+    if (dropped > 0) {
+        onDropped(dropped);
+    }
+    return batch.size();
+}
+
+void LogSink::flush() {
+    while (pump() > 0) {
+        std::this_thread::yield();
+    }
+}
+
+void LogSink::onDropped(uint64_t count) {
+    // 默认写 stderr (不走日志系统, 避免递归)
+    std::cerr << "[log] dropped " << count << " entries (queue full)\n";
+}
+
+// ---------------------------------------------------------------------------
+// ThreadedLogSink
+// ---------------------------------------------------------------------------
+
+ThreadedLogSink::ThreadedLogSink() :
+    thread_([this] { threadLoop(); }) {}
+
+ThreadedLogSink::~ThreadedLogSink() {
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        running_ = false;
+    }
+    cv_.notify_one();
+    if (thread_.joinable()) {
+        thread_.join();
+    }
+}
+
+void ThreadedLogSink::threadLoop() {
+    while (true) {
+        std::deque<std::shared_ptr<const LogEntry>> batch;
+        {
+            std::unique_lock<std::mutex> lock(mutex_);
+            cv_.wait(lock, [this] { return !queue_.empty() || !running_; });
+            if (!running_ && queue_.empty()) {
+                break;
+            }
+            batch.swap(queue_);
+            idle_ = false;
+        }
+        for (const auto& e : batch) {
+            onLog(*e);
+        }
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            idle_ = true;
+        }
+        cv_.notify_all();
+    }
+}
+
+void ThreadedLogSink::flush() {
+    std::unique_lock<std::mutex> lock(mutex_);
+    cv_.wait(lock, [this] { return queue_.empty() && idle_; });
+}
+
+// ---------------------------------------------------------------------------
+// LogDispatcher
+// ---------------------------------------------------------------------------
+
 LogDispatcher& LogDispatcher::instance() {
     static LogDispatcher inst;
     return inst;
+}
+
+LogDispatcher::~LogDispatcher() {
+    flush();
 }
 
 void LogDispatcher::addSink(std::shared_ptr<LogSink> sink) {
@@ -51,23 +149,36 @@ void LogDispatcher::removeSink(const std::shared_ptr<LogSink>& sink) {
     sinks_.store(std::move(next), std::memory_order_release);
 }
 
-void LogDispatcher::dispatch(LogLevel level, std::string_view message) {
-    // 无锁加载快照 (copy-on-write); 多线程并发 dispatch 互不阻塞, 且不持锁回调 sink
+void LogDispatcher::dispatch(LogLevel level, std::string message) {
+    auto entry = std::make_shared<const LogEntry>(LogEntry{
+        level,
+        seq_.fetch_add(1, std::memory_order_relaxed),
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::system_clock::now().time_since_epoch()
+        )
+            .count(),
+        std::move(message),
+    });
+    // 无锁加载快照 (copy-on-write); 多线程并发 dispatch 互不阻塞
     auto snapshot = sinks_.load(std::memory_order_acquire);
     for (const auto& wp : *snapshot) {
         if (auto sp = wp.lock()) {
-            try {
-                sp->onLog(level, message);
-            } catch (...) {
-                // 忽略 sink 异常, 避免影响日志输出
-            }
+            sp->enqueue(entry);
         }
     }
 }
 
-void xxLogPrint(LogLevel level, std::string_view message) {
-    // std::cerr << message << std::endl;
-    LogDispatcher::instance().dispatch(level, message);
+void LogDispatcher::flush() {
+    auto snapshot = sinks_.load(std::memory_order_acquire);
+    for (const auto& wp : *snapshot) {
+        if (auto sp = wp.lock()) {
+            sp->flush();
+        }
+    }
+}
+
+void xxLogPrint(LogLevel level, std::string message) {
+    LogDispatcher::instance().dispatch(level, std::move(message));
 }
 
 #if XX_IS_LINUX_D

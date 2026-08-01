@@ -13,15 +13,16 @@ namespace agent {
 namespace remote {
 
 /// 将服务端日志经 transport 转发给远程客户端的 LogSink
-class TransportLogSink : public util::LogSink {
+/// 继承 ThreadedLogSink: 后台线程串行消费, send 无需额外加锁
+class TransportLogSink : public util::ThreadedLogSink {
 public:
 
     explicit TransportLogSink(std::shared_ptr<AgentIOTransportBase> transport) :
         transport_(std::move(transport)) {}
 
-    void onLog(util::LogLevel level, std::string_view message) override {
+    void onLog(const util::LogEntry& entry) override {
         if (auto t = transport_.lock()) {
-            t->send(WireLog{static_cast<int>(level), std::string{message}});
+            t->send(WireLog{static_cast<int>(entry.level), entry.message});
         }
     }
 
