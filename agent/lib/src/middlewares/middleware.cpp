@@ -346,10 +346,10 @@ asio::awaitable<neograph::json> MiddlewareContext::requestInterrupt(
     const std::function<InterruptHandleArg()>& onCreateArg,
     const neograph::json&                      msgs
 ) {
-    auto& result = getGraphDataItemValue<neograph::json>(
+    auto result = std::move(getGraphDataItemValue<neograph::json>(
         thread_id,
         MiddlewareContext::graphDataKey_interruptResult
-    );
+    ));
     removeGraphDataItem(thread_id, MiddlewareContext::graphDataKey_interruptResult);
     if (false == result.is_null()) {
         co_return result;

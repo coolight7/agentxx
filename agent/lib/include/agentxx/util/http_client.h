@@ -65,7 +65,7 @@ inline constexpr uint64_t kDefaultMaxResponseBody = 10 * 1024 * 1024;
 struct RequestConfig {
     std::chrono::milliseconds                connectTimeout  = std::chrono::seconds{30};
     std::optional<std::chrono::milliseconds> sendTimeout     = std::nullopt;
-    std::chrono::milliseconds                readTimeout     = std::chrono::seconds{60};
+    std::chrono::milliseconds                readTimeout     = std::chrono::seconds{30};
     std::optional<bool>                      sslVerify       = std::nullopt;
     size_t                                   followRedirect  = 3;
     bool                                     keepAlive       = false;

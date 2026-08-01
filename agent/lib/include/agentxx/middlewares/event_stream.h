@@ -284,6 +284,7 @@ public:
             // index 1 = monostate = 超时
         } catch (const std::exception& e) {
             XX_LOGE("RequestResponseStream `{}` request await failed: {}", name, e.what());
+            out = std::unexpected{fmt::format("exception: {}", e.what())};
         }
 
         // 超时或异常时关闭 channel, 使 server 的 async_send 失败并自然结束协程,
