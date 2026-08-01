@@ -170,6 +170,7 @@ private:
     struct MessageCache {
         ftxui::Element element; // 缓存的渲染元素
         int64_t        sig = 0; // 内容签名 (64 位哈希, 变化时重建)
+        int            cachedWidth = -1; // 构建时的可用宽度 (变化时重建, 表格换行依赖宽度)
         /// markdown DomBuilder 持有 reflect() 引用的 Box (LinkTarget::boxes),
         /// 必须与 element 同生命周期, 否则 reflect 写入悬空引用 → UAF
         std::vector<std::unique_ptr<markdown::DomBuilder>> mdBuilders;
@@ -307,9 +308,11 @@ private:
     /// 同时填充 messageItemMeta_ 与 messageCache_ (仅重建内容变化的消息)
     std::vector<ScrollItem> buildMessageItems();
     /// 构建单条消息的渲染块 (不含末尾空行); 仅在消息签名变化时调用并缓存
+    /// maxWidth: 消息列表可用宽度 (终端列数), 用于限制表格宽度; <= 0 表示不限制
     /// mdBuilders 收集 markdown DomBuilder (其内部 Box 被 reflect() 引用, 须与 element 同生命周期)
     ftxui::Element buildMessageBlock(
         const Message&                                   msg,
+        int                                              maxWidth,
         std::vector<std::unique_ptr<markdown::DomBuilder>>& mdBuilders
     );
     /// 计算消息内容签名 (64 位哈希; 签名不变则复用缓存元素)
