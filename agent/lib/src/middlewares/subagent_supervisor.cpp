@@ -10,6 +10,23 @@
 namespace agentxx {
 namespace middleware {
 
+namespace {
+
+/// 析构时向 batch 完成 channel 发送本子任务索引, 保证无论协程如何退出
+/// (成功/异常/取消) 都恰好发送一次 —— 否则主协程永远收不满 n 个信号 → 死锁
+struct BatchDoneGuard {
+    std::shared_ptr<asio::experimental::channel<void(neograph_asio_error_code, size_t)>> ch;
+    size_t                                                                               idx;
+
+    ~BatchDoneGuard() {
+        if (ch) {
+            ch->async_send(neograph_asio_error_code{}, idx, [](neograph_asio_error_code) {});
+        }
+    }
+};
+
+} // namespace
+
 SubagentSupervisor::SubagentSupervisor(std::weak_ptr<agentxx::agent::AgentContext> ctx) :
     agentContext(std::move(ctx)) {}
 
@@ -23,19 +40,26 @@ asio::awaitable<void> SubagentSupervisor::start() {
         co_return;
     }
 
+    // 以 weak_ptr 捕获, 避免 supervisor 析构后在飞 handler 协程访问悬空 this;
+    // handler 被总线拷贝进 detached 协程, 可能在本对象销毁后才恢复执行
+    std::weak_ptr<SubagentSupervisor> self = weak_from_this();
+
     // 单个 subagent 处理服务 ===
     auto& rr = ctxPtr->bus->getRR<events::ReqSubagentStart, events::RespSubagentResult>(
         events::Topic::Subagent
     );
     serverId = rr.serve(
-        [this](const events::ReqSubagentStart& req, size_t)
+        [self](const events::ReqSubagentStart& req, size_t)
             -> asio::awaitable<events::RespSubagentResult> {
-            co_return co_await runSubagent(
-                req.subagentName,
-                req.systemPrompt,
-                req.message,
-                req.parentThreadId
-            );
+            auto ptr = self.lock();
+            if (!ptr) {
+                co_return events::RespSubagentResult{
+                    .hasError     = true,
+                    .errorMessage = "SubagentSupervisor no longer available",
+                };
+            }
+            co_return co_await ptr
+                ->runSubagent(req.subagentName, req.systemPrompt, req.message, req.parentThreadId);
         }
     );
 
@@ -44,9 +68,13 @@ asio::awaitable<void> SubagentSupervisor::start() {
         events::Topic::SubagentBatch
     );
     batchServerId = batchRR.serve(
-        [this](const events::ReqSubagentBatch& req, size_t)
+        [self](const events::ReqSubagentBatch& req, size_t)
             -> asio::awaitable<events::RespSubagentBatch> {
-            co_return co_await runBatch(req);
+            auto ptr = self.lock();
+            if (!ptr) {
+                co_return events::RespSubagentBatch{};
+            }
+            co_return co_await ptr->runBatch(req);
         }
     );
 
@@ -55,9 +83,16 @@ asio::awaitable<void> SubagentSupervisor::start() {
         events::Topic::CrossAgent
     );
     crossAgentServerId = crossRR.serve(
-        [this](const events::ReqCrossAgent& req, size_t)
+        [self](const events::ReqCrossAgent& req, size_t)
             -> asio::awaitable<events::RespCrossAgent> {
-            co_return co_await handleCrossAgent(req);
+            auto ptr = self.lock();
+            if (!ptr) {
+                co_return events::RespCrossAgent{
+                    .hasError     = true,
+                    .errorMessage = "SubagentSupervisor no longer available",
+                };
+            }
+            co_return co_await ptr->handleCrossAgent(req);
         }
     );
 
@@ -250,20 +285,35 @@ asio::awaitable<events::RespSubagentBatch>
             ex,
             [this, task, &results, i, doneChannel, parentThreadId = req.parentThreadId](
             ) -> asio::awaitable<void> {
-                auto r = co_await runSubagent(
-                    task.subagentName,
-                    task.systemPrompt,
-                    task.message,
-                    parentThreadId
-                );
-                results[i] = ItemResult{
-                    .resultId     = task.resultId,
-                    .content      = r.content,
-                    .hasError     = r.hasError,
-                    .errorMessage = r.errorMessage,
-                };
-                doneChannel
-                    ->async_send(neograph_asio_error_code{}, i, [](neograph_asio_error_code) {});
+                // RAII 守卫: 无论 runSubagent 抛出何种异常都保证发送完成信号,
+                // 避免主协程收不满 n 个信号而死锁, 并防止异常逃逸 detached 协程 → terminate
+                BatchDoneGuard guard{doneChannel, i};
+                try {
+                    auto r = co_await runSubagent(
+                        task.subagentName,
+                        task.systemPrompt,
+                        task.message,
+                        parentThreadId
+                    );
+                    results[i] = ItemResult{
+                        .resultId     = task.resultId,
+                        .content      = r.content,
+                        .hasError     = r.hasError,
+                        .errorMessage = r.errorMessage,
+                    };
+                } catch (const std::exception& e) {
+                    results[i] = ItemResult{
+                        .resultId     = task.resultId,
+                        .hasError     = true,
+                        .errorMessage = fmt::format("Sub-agent failed: {}", e.what()),
+                    };
+                } catch (...) {
+                    results[i] = ItemResult{
+                        .resultId     = task.resultId,
+                        .hasError     = true,
+                        .errorMessage = "Sub-agent failed with unknown error",
+                    };
+                }
             },
             asio::detached
         );
