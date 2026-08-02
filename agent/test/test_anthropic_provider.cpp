@@ -1703,6 +1703,8 @@ void test_anthropic_sse_parsing_edge_cases() {
         std::string                       content, thinking;
         std::map<int, neograph::ToolCall> tcMap;
         std::map<int, std::string>        blockTypes;
+        std::map<int, std::string>        thinkingTexts;
+        std::map<int, std::string>        blockSignatures;
         AnthropicProvider::processSseBuffer(
             buf,
             completion,
@@ -1710,6 +1712,8 @@ void test_anthropic_sse_parsing_edge_cases() {
             thinking,
             tcMap,
             blockTypes,
+            thinkingTexts,
+            blockSignatures,
             nullptr
         );
         XX_TEST_EXPECT_EQ(content, "Hi");
@@ -1724,6 +1728,8 @@ void test_anthropic_sse_parsing_edge_cases() {
         std::string                       content, thinking;
         std::map<int, neograph::ToolCall> tcMap;
         std::map<int, std::string>        blockTypes;
+        std::map<int, std::string>        thinkingTexts;
+        std::map<int, std::string>        blockSignatures;
         AnthropicProvider::processSseBuffer(
             buf,
             completion,
@@ -1731,6 +1737,8 @@ void test_anthropic_sse_parsing_edge_cases() {
             thinking,
             tcMap,
             blockTypes,
+            thinkingTexts,
+            blockSignatures,
             nullptr
         );
         // 修复前仅保留最后一个 data: 行 -> 非法 JSON -> content 为空
@@ -1747,6 +1755,8 @@ void test_anthropic_sse_parsing_edge_cases() {
         std::string                       content, thinking;
         std::map<int, neograph::ToolCall> tcMap;
         std::map<int, std::string>        blockTypes;
+        std::map<int, std::string>        thinkingTexts;
+        std::map<int, std::string>        blockSignatures;
         // finalFlush=false: 事件不完整, 暂不解析
         AnthropicProvider::processSseBuffer(
             buf,
@@ -1755,6 +1765,8 @@ void test_anthropic_sse_parsing_edge_cases() {
             thinking,
             tcMap,
             blockTypes,
+            thinkingTexts,
+            blockSignatures,
             nullptr,
             /*finalFlush=*/false
         );
@@ -1767,11 +1779,163 @@ void test_anthropic_sse_parsing_edge_cases() {
             thinking,
             tcMap,
             blockTypes,
+            thinkingTexts,
+            blockSignatures,
             nullptr,
             /*finalFlush=*/true
         );
         XX_TEST_EXPECT_EQ(content, "End");
     }
+}
+
+/// tool 消息映射为 user 后可能出现连续同 role, 必须合并以满足 Anthropic 的交替 role 要求
+void test_convert_messages_merges_consecutive_roles() {
+    std::vector<neograph::ChatMessage> msgs = {
+        {.role = "user", .content = "Q?"},
+        {.role    = "assistant",
+         .content = "",
+         .tool_calls
+         = {{.id = "c1", .name = "t1", .arguments = "{}"},
+            {.id = "c2", .name = "t2", .arguments = "{}"}}},
+        {.role = "tool", .content = "R1", .tool_call_id = "c1"},
+        {.role = "tool", .content = "R2", .tool_call_id = "c2"},
+        {.role = "user", .content = "Follow-up"},
+    };
+    auto [system, arr] = server::AnthropicProvider::convertMessages(msgs);
+    // user, assistant, user (合并: 2 个 tool_result + follow-up 文本)
+    XX_TEST_EXPECT_EQ(arr.size(), (size_t)3);
+    XX_TEST_EXPECT_EQ(arr[2]["role"].get<std::string>(), "user");
+    XX_TEST_EXPECT_TRUE(arr[2]["content"].is_array());
+    XX_TEST_EXPECT_EQ(arr[2]["content"].size(), (size_t)3);
+    XX_TEST_EXPECT_EQ(arr[2]["content"][0]["type"].get<std::string>(), "tool_result");
+    XX_TEST_EXPECT_EQ(arr[2]["content"][0]["tool_use_id"].get<std::string>(), "c1");
+    XX_TEST_EXPECT_EQ(arr[2]["content"][1]["type"].get<std::string>(), "tool_result");
+    XX_TEST_EXPECT_EQ(arr[2]["content"][1]["tool_use_id"].get<std::string>(), "c2");
+    XX_TEST_EXPECT_EQ(arr[2]["content"][2]["type"].get<std::string>(), "text");
+    XX_TEST_EXPECT_EQ(arr[2]["content"][2]["text"].get<std::string>(), "Follow-up");
+}
+
+/// sendThinking 时应优先原样回传从响应中捕获的带 signature 的 thinking 块
+void test_convert_messages_thinking_signature_roundtrip() {
+    neograph::ChatMessage msg;
+    msg.role                        = "assistant";
+    msg.content                     = "Answer";
+    msg.reasoning_content           = "Thinking text";
+    msg.extra[server::AnthropicProvider::kThinkingBlocksKey] = neograph::json::parse(R"([
+        {"type":"thinking","thinking":"Thinking text","signature":"sig123"},
+        {"type":"redacted_thinking","data":"redacted-data"}
+    ])");
+    std::vector<neograph::ChatMessage> msgs = {msg};
+    auto [system, arr] = server::AnthropicProvider::convertMessages(msgs, true);
+    XX_TEST_EXPECT_TRUE(arr[0]["content"].is_array());
+    const auto& blocks = arr[0]["content"];
+    XX_TEST_EXPECT_EQ(blocks.size(), (size_t)3);
+    XX_TEST_EXPECT_EQ(blocks[0]["type"].get<std::string>(), "thinking");
+    XX_TEST_EXPECT_EQ(blocks[0]["signature"].get<std::string>(), "sig123");
+    XX_TEST_EXPECT_EQ(blocks[1]["type"].get<std::string>(), "redacted_thinking");
+    XX_TEST_EXPECT_EQ(blocks[1]["data"].get<std::string>(), "redacted-data");
+    XX_TEST_EXPECT_EQ(blocks[2]["type"].get<std::string>(), "text");
+    XX_TEST_EXPECT_EQ(blocks[2]["text"].get<std::string>(), "Answer");
+}
+
+/// 非流式响应解析: 带 signature 的 thinking 块与 redacted_thinking 块应存入 extra 以便回传
+void test_parse_response_thinking_signature() {
+    auto resp       = neograph::json::parse(R"({
+        "content": [
+            {"type":"thinking","thinking":"Hmm...","signature":"sig-abc"},
+            {"type":"redacted_thinking","data":"EQo=="},
+            {"type":"text","text":"Ok"}
+        ],
+        "usage": {"input_tokens": 1, "output_tokens": 1}
+    })");
+    auto completion = server::AnthropicProvider::parseResponse(resp);
+    XX_TEST_EXPECT_EQ(completion.message.reasoning_content, "Hmm...");
+    XX_TEST_EXPECT_EQ(completion.message.content, "Ok");
+    XX_TEST_EXPECT_TRUE(
+        completion.message.extra.contains(server::AnthropicProvider::kThinkingBlocksKey)
+    );
+    const auto& blocks
+        = completion.message.extra[server::AnthropicProvider::kThinkingBlocksKey];
+    XX_TEST_EXPECT_EQ(blocks.size(), (size_t)2);
+    XX_TEST_EXPECT_EQ(blocks[0]["type"].get<std::string>(), "thinking");
+    XX_TEST_EXPECT_EQ(blocks[0]["signature"].get<std::string>(), "sig-abc");
+    XX_TEST_EXPECT_EQ(blocks[1]["type"].get<std::string>(), "redacted_thinking");
+    XX_TEST_EXPECT_EQ(blocks[1]["data"].get<std::string>(), "EQo==");
+}
+
+/// 流式 SSE: signature_delta 累积, content_block_stop 时组装带 signature 的 thinking 块
+void test_anthropic_sse_signature_capture() {
+    using server::AnthropicProvider;
+    std::string buf
+        = "event: content_block_start\n"
+          "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\","
+          "\"thinking\":\"\"}}\n\n"
+          "event: content_block_delta\n"
+          "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\","
+          "\"thinking\":\"Let me\"}}\n\n"
+          "event: content_block_delta\n"
+          "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\","
+          "\"thinking\":\" think\"}}\n\n"
+          "event: content_block_delta\n"
+          "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"signature_delta\","
+          "\"signature\":\"sig-xyz\"}}\n\n"
+          "event: content_block_stop\n"
+          "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n";
+    neograph::ChatCompletion          completion;
+    std::string                       content, thinking;
+    std::map<int, neograph::ToolCall> tcMap;
+    std::map<int, std::string>        blockTypes;
+    std::map<int, std::string>        thinkingTexts;
+    std::map<int, std::string>        blockSignatures;
+    AnthropicProvider::processSseBuffer(
+        buf,
+        completion,
+        content,
+        thinking,
+        tcMap,
+        blockTypes,
+        thinkingTexts,
+        blockSignatures,
+        nullptr
+    );
+    XX_TEST_EXPECT_EQ(thinking, "Let me think");
+    XX_TEST_EXPECT_TRUE(completion.message.extra.contains(AnthropicProvider::kThinkingBlocksKey));
+    const auto& blocks = completion.message.extra[AnthropicProvider::kThinkingBlocksKey];
+    XX_TEST_EXPECT_EQ(blocks.size(), (size_t)1);
+    XX_TEST_EXPECT_EQ(blocks[0]["type"].get<std::string>(), "thinking");
+    XX_TEST_EXPECT_EQ(blocks[0]["thinking"].get<std::string>(), "Let me think");
+    XX_TEST_EXPECT_EQ(blocks[0]["signature"].get<std::string>(), "sig-xyz");
+}
+
+/// 事件分隔符为 "\r\n\r\n" (部分代理使用 CRLF 行结尾) 时也必须正确切分
+void test_anthropic_sse_crlf_separator() {
+    using server::AnthropicProvider;
+    std::string buf
+        = "event: content_block_delta\r\n"
+          "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\","
+          "\"text\":\"CRLF\"}}\r\n\r\n"
+          "event: content_block_delta\r\n"
+          "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\","
+          "\"text\":\" ok\"}}\r\n\r\n";
+    neograph::ChatCompletion          completion;
+    std::string                       content, thinking;
+    std::map<int, neograph::ToolCall> tcMap;
+    std::map<int, std::string>        blockTypes;
+    std::map<int, std::string>        thinkingTexts;
+    std::map<int, std::string>        blockSignatures;
+    AnthropicProvider::processSseBuffer(
+        buf,
+        completion,
+        content,
+        thinking,
+        tcMap,
+        blockTypes,
+        thinkingTexts,
+        blockSignatures,
+        nullptr
+    );
+    XX_TEST_EXPECT_EQ(content, "CRLF ok");
+    XX_TEST_EXPECT_TRUE(buf.empty());
 }
 
 asio::awaitable<TestResult> run_anthropic_provider_tests() {
@@ -1800,6 +1964,11 @@ asio::awaitable<TestResult> run_anthropic_provider_tests() {
     test_parse_response_mixed();
     test_parse_response_usage();
     test_anthropic_sse_parsing_edge_cases();
+    test_convert_messages_merges_consecutive_roles();
+    test_convert_messages_thinking_signature_roundtrip();
+    test_parse_response_thinking_signature();
+    test_anthropic_sse_signature_capture();
+    test_anthropic_sse_crlf_separator();
 
     // Integration tests
     uint16_t port = 0;

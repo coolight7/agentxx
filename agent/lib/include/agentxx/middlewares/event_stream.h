@@ -224,20 +224,17 @@ public:
              req        = std::move(req),
              correlationId,
              channel]() -> asio::awaitable<void> {
-                co_await agentxx::util::catchErrorAsync<void>(
-                    [&]() -> asio::awaitable<void> {
-                        try {
-                            auto resp = co_await handler(req, correlationId);
-                            channel->async_send(
-                                neograph_asio_error_code{},
-                                std::move(resp),
-                                [](neograph_asio_error_code) {}
-                            );
-                        } catch (const neograph::graph::CancelledException&) {
-                            // 超时取消, 不必发错误到 channel (请求方已超时返回)
-                        }
+                co_await agentxx::util::catchErrorAsync<bool>(
+                    [&]() -> asio::awaitable<bool> {
+                        auto resp = co_await handler(req, correlationId);
+                        channel->async_send(
+                            neograph_asio_error_code{},
+                            std::move(resp),
+                            [](neograph_asio_error_code) {}
+                        );
+                        co_return true;
                     },
-                    [&](std::string errinfo) -> asio::awaitable<void> {
+                    [&](std::string errinfo) -> asio::awaitable<bool> {
                         XX_LOGE(
                             "RequestResponseStream `{}` server exception: {}",
                             streamName,
@@ -248,7 +245,11 @@ public:
                             RespType{},
                             [](neograph_asio_error_code) {}
                         );
-                        co_return;
+                        co_return true;
+                    },
+                    [&](std::string& errmsg) -> std::optional<bool> {
+                        // 手动取消, 不必发错误到 channel (请求方已超时返回)
+                        return true;
                     }
                 );
             },

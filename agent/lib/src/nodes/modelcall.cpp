@@ -288,7 +288,7 @@ void ModelCallWrapNode::repairMessages(neograph::graph::NodeInput& in) {
         };
         auto userMsgJson = neograph::json{};
         neograph::to_json(userMsgJson, userMsg);
-        in.state.write("messages", userMsgJson);
+        in.state.write("messages", neograph::json::array({userMsgJson}));
     }
 
     auto agentCtxPtr = agentContext.lock();
@@ -297,11 +297,15 @@ void ModelCallWrapNode::repairMessages(neograph::graph::NodeInput& in) {
         for (const auto& msg : msgs) {
             bool doPrint = false;
             // 检查消息非空
-            if (msg.content.empty() && msg.tool_calls.empty()) {
+            if (msg.reasoning_content.empty() && msg.content.empty() && msg.tool_calls.empty()) {
                 XX_LOGE("  - Message is Empty: ");
                 doPrint = true;
             }
             // 检查是否符合 utf8
+            if (false == agentxx::util::utf8IsAvail(msg.reasoning_content)) {
+                XX_LOGE("  - Message.reasoning_content is not utf8 available: ");
+                doPrint = true;
+            }
             if (false == agentxx::util::utf8IsAvail(msg.content)) {
                 XX_LOGE("  - Message.content is not utf8 available: ");
                 doPrint = true;
@@ -425,6 +429,7 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
             errInfo  = boost::diagnostic_information(e);
             errorPtr = std::current_exception();
         } catch (...) {
+            errInfo  = "unknown";
             errorPtr = std::current_exception();
         }
 
@@ -437,7 +442,7 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
             in.ctx.thread_id,
             agentxx::middleware::MiddlewareContext::graphDataKey_tempLLMContent
         );
-        if (lastMsgThinking.size() >= 512 || lastMsgContent.size() >= 512) {
+        if (lastMsgThinking.size() + lastMsgContent.size() >= 512) {
             // - 保留已有的 llm 消息，而不是丢弃
             // - 插入 assistant 消息，此时末尾消息未 assistant, 将在下一次进入
             // baseRun 时自动修复上下文角色顺序 [repairMessages]
@@ -454,7 +459,7 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
             };
             auto msgJson = neograph::json{};
             neograph::to_json(msgJson, msg);
-            in.state.write("messages", msgJson);
+            in.state.write("messages", neograph::json::array({msgJson}));
         }
 
         if (isCancel || retry >= agentCtxPtr->agentConfig->llmMaxRetry) {

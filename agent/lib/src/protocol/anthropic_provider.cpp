@@ -59,6 +59,32 @@ std::pair<std::string, neograph::json> AnthropicProvider::convertMessages(
     std::string    system;
     neograph::json arr = neograph::json::array();
 
+    // 是否携带从 Anthropic 响应中捕获的带 signature 的 thinking 块
+    auto hasThinkingBlocks = [](const neograph::ChatMessage& msg) {
+        return msg.extra.contains(kThinkingBlocksKey)
+            && msg.extra[kThinkingBlocksKey].is_array()
+            && !msg.extra[kThinkingBlocksKey].empty();
+    };
+    // 追加 thinking 相关块: 优先使用响应中捕获的原始块 (含 signature, Anthropic 要求回传
+    // thinking 时携带原始 signature); 无捕获时降级使用 reasoning_content (跨 provider/旧历史)
+    auto appendThinkingBlocks = [&](neograph::json& contentArr, const neograph::ChatMessage& msg) {
+        if (!sendThinking) {
+            return;
+        }
+        if (hasThinkingBlocks(msg)) {
+            for (const auto& b : msg.extra[kThinkingBlocksKey]) {
+                contentArr.push_back(b);
+            }
+            return;
+        }
+        if (!msg.reasoning_content.empty()) {
+            contentArr.push_back({
+                {"type",     "thinking"           },
+                {"thinking", msg.reasoning_content}
+            });
+        }
+    };
+
     for (const auto& msg : messages) {
         if (msg.role == "system") {
             if (!system.empty()) {
@@ -83,12 +109,7 @@ std::pair<std::string, neograph::json> AnthropicProvider::convertMessages(
             neograph::json j;
             j["role"]                  = "assistant";
             neograph::json content_arr = neograph::json::array();
-            if (sendThinking && !msg.reasoning_content.empty()) {
-                content_arr.push_back({
-                    {"type",     "thinking"           },
-                    {"thinking", msg.reasoning_content}
-                });
-            }
+            appendThinkingBlocks(content_arr, msg);
             if (!msg.content.empty()) {
                 content_arr.push_back({
                     {"type", "text"     },
@@ -109,14 +130,12 @@ std::pair<std::string, neograph::json> AnthropicProvider::convertMessages(
             }
             j["content"] = std::move(content_arr);
             arr.push_back(std::move(j));
-        } else if (sendThinking && msg.role == "assistant" && !msg.reasoning_content.empty()) {
+        } else if (sendThinking && msg.role == "assistant"
+                   && (!msg.reasoning_content.empty() || hasThinkingBlocks(msg))) {
             neograph::json j;
             j["role"]                  = "assistant";
             neograph::json content_arr = neograph::json::array();
-            content_arr.push_back({
-                {"type",     "thinking"           },
-                {"thinking", msg.reasoning_content}
-            });
+            appendThinkingBlocks(content_arr, msg);
             if (!msg.content.empty()) {
                 content_arr.push_back({
                     {"type", "text"     },
@@ -133,7 +152,50 @@ std::pair<std::string, neograph::json> AnthropicProvider::convertMessages(
         }
     }
 
-    return {system, std::move(arr)};
+    // Anthropic 要求 user/assistant 严格交替出现: "tool" 消息映射为 user 后可能出现连续
+    // 同 role (如多个连续 tool 结果、user 后紧跟 tool 结果), 合并相邻同 role 消息,
+    // 合并时将 content 统一规范化为 block 数组再拼接。
+    // 注: neograph::json 为值语义 (back()/迭代返回深拷贝), 用 pending 暂存待合并消息
+    auto normalizeContent = [](neograph::json m) -> neograph::json {
+        if (!m["content"].is_array()) {
+            std::string text = m["content"].is_string() ? m["content"].get<std::string>()
+                                                        : m["content"].dump();
+            m["content"] = neograph::json::array();
+            if (!text.empty()) {
+                m["content"].push_back({
+                    {"type", "text"},
+                    {"text", text }
+                });
+            }
+        }
+        return m;
+    };
+    neograph::json merged = neograph::json::array();
+    bool           hasPending = false;
+    neograph::json pending;
+    auto           flushPending = [&]() {
+        if (hasPending) {
+            merged.push_back(std::move(pending));
+            hasPending = false;
+        }
+    };
+    for (auto msg : arr) {
+        auto role = msg["role"].get<std::string>();
+        if (hasPending && pending["role"].get<std::string>() == role) {
+            pending = normalizeContent(std::move(pending));
+            msg     = normalizeContent(std::move(msg));
+            for (auto block : msg["content"]) {
+                pending["content"].push_back(std::move(block));
+            }
+        } else {
+            flushPending();
+            pending    = std::move(msg);
+            hasPending = true;
+        }
+    }
+    flushPending();
+
+    return {system, std::move(merged)};
 }
 
 neograph::json AnthropicProvider::convertTools(const std::vector<neograph::ChatTool>& tools) {
@@ -167,6 +229,14 @@ neograph::ChatCompletion AnthropicProvider::parseResponse(const neograph::json& 
                 completion.message.tool_calls.push_back(std::move(tc));
             } else if (type == "thinking") {
                 completion.message.reasoning_content += block.value("thinking", std::string{});
+                // 记录带 signature 的原始块, 多轮对话时原样回传 (Anthropic 要求携带 signature)
+                if (block.contains("signature") && block["signature"].is_string()
+                    && !block["signature"].get<std::string>().empty()) {
+                    appendThinkingBlock(completion, block);
+                }
+            } else if (type == "redacted_thinking") {
+                // redacted_thinking 块必须原样回传
+                appendThinkingBlock(completion, block);
             }
         }
     }
@@ -226,6 +296,11 @@ neograph::json AnthropicProvider::buildBody(const neograph::CompletionParams& pa
         for (const auto& [key, val] : params.extra_fields.items()) {
             body[key] = val;
         }
+    }
+
+    // Anthropic 强制要求 max_tokens, 缺失会返回 400; config/params/extra 均未指定时使用保守默认值
+    if (!body.contains("max_tokens")) {
+        body["max_tokens"] = 8192;
     }
 
     return body;
@@ -308,6 +383,8 @@ asio::awaitable<neograph::ChatCompletion> AnthropicProvider::doStream(
     std::string                       fullThinking;
     std::map<int, neograph::ToolCall> tcMap;
     std::map<int, std::string>        blockTypes;
+    std::map<int, std::string>        thinkingTexts;
+    std::map<int, std::string>        blockSignatures;
     std::string                       lineBuffer;
 
     co_await HttpClient::requestSseAsync(
@@ -330,6 +407,8 @@ asio::awaitable<neograph::ChatCompletion> AnthropicProvider::doStream(
                 fullThinking,
                 tcMap,
                 blockTypes,
+                thinkingTexts,
+                blockSignatures,
                 on_chunk
             );
         }
@@ -343,6 +422,8 @@ asio::awaitable<neograph::ChatCompletion> AnthropicProvider::doStream(
             fullThinking,
             tcMap,
             blockTypes,
+            thinkingTexts,
+            blockSignatures,
             on_chunk,
             /*finalFlush=*/true
         );

@@ -116,7 +116,13 @@ public:
             return;
         }
 
-        neograph::json j = neograph::json::parse(payload);
+        // 畸形 data 行 (部分代理/网关会注入非 JSON 内容) 应跳过而不是中断整个流
+        neograph::json j;
+        try {
+            j = neograph::json::parse(payload);
+        } catch (...) {
+            return;
+        }
 
         if (j.contains("usage") && !j["usage"].is_null()) {
             auto u                             = j["usage"];

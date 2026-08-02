@@ -23,6 +23,11 @@ namespace server {
 class AnthropicProvider : public neograph::Provider {
 public:
 
+    /// ChatMessage.extra 中保存带 signature 的 thinking/redacted_thinking 原始块的键。
+    /// Anthropic 要求多轮对话回传 thinking 块时携带响应中的原始 signature, 故解析响应时
+    /// 按序存入 extra, convertMessages 时原样回传。
+    static constexpr const char* kThinkingBlocksKey = "anthropic_thinking_blocks";
+
     static std::unique_ptr<AnthropicProvider> create(const agentxx::agent::ModelConfig& config);
 
     static std::shared_ptr<neograph::Provider>
@@ -58,7 +63,19 @@ public:
     /// Parse a non-streaming Anthropic response.
     static neograph::ChatCompletion parseResponse(const neograph::json& resp);
 
+    /// 向 completion.message.extra[kThinkingBlocksKey] 追加一个 thinking 相关块
+    /// (thinking/redacted_thinking), 首次追加时初始化为数组
+    static void appendThinkingBlock(neograph::ChatCompletion& completion, neograph::json block) {
+        if (!completion.message.extra.contains(kThinkingBlocksKey)) {
+            completion.message.extra[kThinkingBlocksKey] = neograph::json::array();
+        }
+        completion.message.extra[kThinkingBlocksKey].push_back(std::move(block));
+    }
+
     /// Process Anthropic SSE buffer.
+    /// - 事件分隔符同时支持 "\n\n" 与 "\r\n\r\n" (SSE 规范允许 \r\n 行结尾)
+    /// - thinkingTexts/blockSignatures: 按 block index 累积 thinking 文本与 signature,
+    ///   content_block_stop 时组装为带 signature 的 thinking 块存入 completion.message.extra
     /// - finalFlush: 连接关闭时对末尾未以 "\n\n" 结尾的最后一个事件块也进行解析
     static void processSseBuffer(
         std::string&                       buf,
@@ -67,13 +84,28 @@ public:
         std::string&                       fullThinking,
         std::map<int, neograph::ToolCall>& tcMap,
         std::map<int, std::string>&        blockTypes,
+        std::map<int, std::string>&        thinkingTexts,
+        std::map<int, std::string>&        blockSignatures,
         neograph::FormatDataStreamCallback on_chunk,
         bool                               finalFlush = false
     ) {
-        size_t pos;
-        while ((pos = buf.find("\n\n")) != std::string::npos) {
+        while (true) {
+            // SSE 规范允许 \n 或 \r\n 行结尾, 事件分隔符相应可能是 "\n\n" 或 "\r\n\r\n",
+            // 取最先出现者为界
+            auto   posLf   = buf.find("\n\n");
+            auto   posCrlf = buf.find("\r\n\r\n");
+            size_t pos, sepLen;
+            if (posCrlf != std::string::npos && (posLf == std::string::npos || posCrlf < posLf)) {
+                pos    = posCrlf;
+                sepLen = 4;
+            } else if (posLf != std::string::npos) {
+                pos    = posLf;
+                sepLen = 2;
+            } else {
+                break;
+            }
             std::string block = buf.substr(0, pos);
-            buf.erase(0, pos + 2);
+            buf.erase(0, pos + sepLen);
             processSseBlock(
                 block,
                 completion,
@@ -81,6 +113,8 @@ public:
                 fullThinking,
                 tcMap,
                 blockTypes,
+                thinkingTexts,
+                blockSignatures,
                 on_chunk
             );
         }
@@ -95,6 +129,8 @@ public:
                 fullThinking,
                 tcMap,
                 blockTypes,
+                thinkingTexts,
+                blockSignatures,
                 on_chunk
             );
         }
@@ -108,6 +144,8 @@ public:
         std::string&                       fullThinking,
         std::map<int, neograph::ToolCall>& tcMap,
         std::map<int, std::string>&        blockTypes,
+        std::map<int, std::string>&        thinkingTexts,
+        std::map<int, std::string>&        blockSignatures,
         neograph::FormatDataStreamCallback on_chunk
     ) {
         std::string currentEvent;
@@ -170,6 +208,12 @@ public:
                 if (type == "tool_use") {
                     tcMap[idx].id   = j["content_block"].value("id", std::string{});
                     tcMap[idx].name = j["content_block"].value("name", std::string{});
+                } else if (type == "redacted_thinking") {
+                    // redacted_thinking 块必须在多轮对话中原样回传
+                    neograph::json b;
+                    b["type"] = "redacted_thinking";
+                    b["data"] = j["content_block"].value("data", std::string{});
+                    appendThinkingBlock(completion, std::move(b));
                 }
             }
         } else if (currentEvent == "content_block_delta") {
@@ -186,17 +230,35 @@ public:
                         });
                     }
                 } else if (deltaType == "thinking_delta") {
-                    auto thinking  = j["delta"].value("thinking", std::string{});
-                    fullThinking  += thinking;
+                    auto thinking     = j["delta"].value("thinking", std::string{});
+                    fullThinking     += thinking;
+                    thinkingTexts[idx] += thinking;
                     if (on_chunk) {
                         on_chunk(neograph::ChatStreamChunk{
                             neograph::ChatStreamChunk::TYPE_THINKING,
                             thinking
                         });
                     }
+                } else if (deltaType == "signature_delta") {
+                    // thinking 块的 signature, 多轮对话回传 thinking 时 Anthropic 要求携带
+                    blockSignatures[idx] += j["delta"].value("signature", std::string{});
                 } else if (deltaType == "input_json_delta") {
                     auto partialJson      = j["delta"].value("partial_json", std::string{});
                     tcMap[idx].arguments += partialJson;
+                }
+            }
+        } else if (currentEvent == "content_block_stop") {
+            int  idx = j.value("index", 0);
+            auto it  = blockTypes.find(idx);
+            if (it != blockTypes.end() && it->second == "thinking") {
+                auto sigIt = blockSignatures.find(idx);
+                // 仅保存带 signature 的 thinking 块: 无 signature 的 thinking 回传会被 API 拒绝
+                if (sigIt != blockSignatures.end() && !sigIt->second.empty()) {
+                    neograph::json b;
+                    b["type"]      = "thinking";
+                    b["thinking"]  = thinkingTexts[idx];
+                    b["signature"] = sigIt->second;
+                    appendThinkingBlock(completion, std::move(b));
                 }
             }
         } else if (currentEvent == "message_delta") {

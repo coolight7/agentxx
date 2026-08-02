@@ -233,6 +233,47 @@ void test_http_client_unit() {
     }
 
     {
+        auto p1 = HttpClient::parseUrl("https://example.com/a/b");
+        XX_TEST_EXPECT_HAS_VALUE(p1);
+        XX_TEST_EXPECT_EQ(p1->scheme, "https");
+        XX_TEST_EXPECT_EQ(p1->host, "example.com");
+        XX_TEST_EXPECT_EQ(p1->port, 443);
+        XX_TEST_EXPECT_EQ(p1->path, "/a/b");
+
+        auto p2 = HttpClient::parseUrl("http://example.com:8080/x");
+        XX_TEST_EXPECT_HAS_VALUE(p2);
+        XX_TEST_EXPECT_EQ(p2->scheme, "http");
+        XX_TEST_EXPECT_EQ(p2->host, "example.com");
+        XX_TEST_EXPECT_EQ(p2->port, 8080);
+        XX_TEST_EXPECT_EQ(p2->path, "/x");
+
+        auto p3 = HttpClient::parseUrl("http://example.com");
+        XX_TEST_EXPECT_HAS_VALUE(p3);
+        XX_TEST_EXPECT_EQ(p3->port, 80);
+        XX_TEST_EXPECT_EQ(p3->path, "/");
+
+        // IPv6 字面量: host 应去掉方括号以便 DNS 解析
+        auto p4 = HttpClient::parseUrl("http://[::1]:8080/v6");
+        XX_TEST_EXPECT_HAS_VALUE(p4);
+        XX_TEST_EXPECT_EQ(p4->host, "::1");
+        XX_TEST_EXPECT_EQ(p4->port, 8080);
+        XX_TEST_EXPECT_EQ(p4->path, "/v6");
+
+        auto p5 = HttpClient::parseUrl("https://[2001:db8::1]/");
+        XX_TEST_EXPECT_HAS_VALUE(p5);
+        XX_TEST_EXPECT_EQ(p5->host, "2001:db8::1");
+        XX_TEST_EXPECT_EQ(p5->port, 443);
+        XX_TEST_EXPECT_EQ(p5->path, "/");
+
+        XX_TEST_EXPECT_FALSE(HttpClient::parseUrl("ftp://example.com").has_value());
+        XX_TEST_EXPECT_FALSE(HttpClient::parseUrl("example.com/path").has_value());
+        XX_TEST_EXPECT_FALSE(HttpClient::parseUrl("http://").has_value());
+        XX_TEST_EXPECT_FALSE(HttpClient::parseUrl("http://[::1").has_value());
+        XX_TEST_EXPECT_FALSE(HttpClient::parseUrl("http://host:99999/").has_value());
+        XX_TEST_EXPECT_FALSE(HttpClient::parseUrl("http://:8080/").has_value());
+    }
+
+    {
         XX_TEST_EXPECT_EQ(HttpClient::urlEncode("hello"), "hello");
         XX_TEST_EXPECT_EQ(HttpClient::urlEncode("hello world"), "hello+world");
         XX_TEST_EXPECT_EQ(HttpClient::urlEncode("abc123"), "abc123");

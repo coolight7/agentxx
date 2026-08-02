@@ -148,8 +148,8 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
 
     /// MCP tool
     for (const auto& [mcpNamespace, url] : config->mcpServerUrls) {
-        co_await agentxx::util::catchErrorAsync<void>(
-            [&]() -> asio::awaitable<void> {
+        co_await agentxx::util::catchErrorAsync<bool>(
+            [&]() -> asio::awaitable<bool> {
                 XX_LOGD("load mcp tool: {} | {}", mcpNamespace, url);
                 auto mcpClient = std::make_shared<agentxx::server::McpClient>(
                     agentxx::server::McpClient::Config{
@@ -179,11 +179,11 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
                 } else {
                     XX_LOGE("load mcp tool error: {} | {} | {}", mcpNamespace, url, result.error());
                 }
-                co_return;
+                co_return true;
             },
-            [&](std::string errmsg) -> asio::awaitable<void> {
+            [&](std::string errmsg) -> asio::awaitable<bool> {
                 XX_LOGE("[agentxx] Append mcp tool error: {} | {} | {}", mcpNamespace, url, errmsg);
-                co_return;
+                co_return true;
             }
         );
     }

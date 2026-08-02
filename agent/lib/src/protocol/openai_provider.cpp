@@ -402,7 +402,9 @@ void OpenAIProvider::extractThinkTags(std::string& content, std::string& thinkin
         auto end  = content.find("</think>", start + 7);
         if (end == std::string::npos) {
             thinking += content.substr(start + 7);
-            content.erase(start);
+            // 必须用已清理的前缀覆盖 content: 此前已处理过的闭合 think 标签只存在于 cleaned 中,
+            // 若用 content.erase(start) 会把原始字符串里已提取的标签残留在 content 中
+            content = cleaned;
             return;
         }
         thinking += content.substr(start + 7, end - start - 7);

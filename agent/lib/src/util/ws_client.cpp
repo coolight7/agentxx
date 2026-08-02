@@ -1,8 +1,8 @@
 #include "agentxx/util/ws_client.h"
 
+#include "agentxx/util/exception.h"
 #include "agentxx/util/http_client.h"
 #include <algorithm>
-#include <asio/redirect_error.hpp>
 #include <openssl/ssl.h>
 
 namespace agentxx {
@@ -95,38 +95,43 @@ asio::awaitable<std::expected<void, std::string>> WsClient::sendText(std::string
     if (!impl_ || impl_->closed_) {
         co_return std::unexpected{std::string{"connection closed"}};
     }
-    try {
-        size_t offset = 0;
-        if (impl_->isSsl) {
-            impl_->wss->text(true);
-            do {
-                size_t len = std::min(WsClientConfig::kTimeoutChunkBytes, payload.size() - offset);
-                bool   fin = (offset + len >= payload.size());
-                auto   n   = co_await impl_->wss->async_write_some(
-                    fin,
-                    asio::buffer(payload.data() + offset, len),
-                    asio::cancel_after(impl_->config.sendTimeout, asio::use_awaitable)
-                );
-                offset += n;
-            } while (offset < payload.size());
-        } else {
-            impl_->ws->text(true);
-            do {
-                size_t len = std::min(WsClientConfig::kTimeoutChunkBytes, payload.size() - offset);
-                bool   fin = (offset + len >= payload.size());
-                auto   n   = co_await impl_->ws->async_write_some(
-                    fin,
-                    asio::buffer(payload.data() + offset, len),
-                    asio::cancel_after(impl_->config.sendTimeout, asio::use_awaitable)
-                );
-                offset += n;
-            } while (offset < payload.size());
+    co_return co_await agentxx::util::catchErrorAsync<std::expected<void, std::string>>(
+        [&]() -> asio::awaitable<std::expected<void, std::string>> {
+            size_t offset = 0;
+            if (impl_->isSsl) {
+                impl_->wss->text(true);
+                do {
+                    size_t len
+                        = std::min(WsClientConfig::kTimeoutChunkBytes, payload.size() - offset);
+                    bool fin = (offset + len >= payload.size());
+                    auto n   = co_await impl_->wss->async_write_some(
+                        fin,
+                        asio::buffer(payload.data() + offset, len),
+                        asio::cancel_after(impl_->config.sendTimeout, asio::use_awaitable)
+                    );
+                    offset += n;
+                } while (offset < payload.size());
+            } else {
+                impl_->ws->text(true);
+                do {
+                    size_t len
+                        = std::min(WsClientConfig::kTimeoutChunkBytes, payload.size() - offset);
+                    bool fin = (offset + len >= payload.size());
+                    auto n   = co_await impl_->ws->async_write_some(
+                        fin,
+                        asio::buffer(payload.data() + offset, len),
+                        asio::cancel_after(impl_->config.sendTimeout, asio::use_awaitable)
+                    );
+                    offset += n;
+                } while (offset < payload.size());
+            }
+            co_return std::expected<void, std::string>{};
+        },
+        [&](std::string errinfo) -> asio::awaitable<std::expected<void, std::string>> {
+            impl_->closed_ = true;
+            co_return std::unexpected{std::move(errinfo)};
         }
-        co_return std::expected<void, std::string>{};
-    } catch (const boost::system::system_error& e) {
-        impl_->closed_ = true;
-        co_return std::unexpected{std::string{e.what()}};
-    }
+    );
 }
 
 asio::awaitable<std::expected<void, std::string>> WsClient::sendBinary(std::string_view payload) {
