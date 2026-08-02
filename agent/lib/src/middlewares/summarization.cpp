@@ -409,8 +409,7 @@ asio::awaitable<void>
                 apiTokenUsage,
                 countTokenUsage,
                 tokenUsage,
-                modelSupportMaxToken,
-                countTokens(appendSystemPromptList, in.state.get_messages())
+                modelSupportMaxToken
             );
         }
     }

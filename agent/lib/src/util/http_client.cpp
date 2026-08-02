@@ -1,11 +1,46 @@
 #include "agentxx/util/http_client.h"
 #include "agentxx/util/exception.h"
 #include "html2md/html2md.h"
+#include <asio/detail/socket_option.hpp>
 #include <neograph/provider.h>
 #include <openssl/ssl.h>
 
+// 仅提供 TCP_KEEPIDLE/TCP_KEEPINTVL/TCP_KEEPCNT 选项号常量, 设置经由 asio 接口完成
+#if defined(_WIN32)
+#include <mstcpip.h>
+#else
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#endif
+
 namespace agentxx {
 namespace util {
+
+namespace {
+
+/// 启用 TCP keepalive 并缩短探测间隔 (OS 默认 idle 常为 2 小时, 毫无作用)。
+/// LLM 流式响应存在长时间无数据的空窗期 (如 content 结束后等待 tool_call 下发),
+/// 中间 NAT/负载均衡/网关会静默丢弃空闲连接, 导致 stream truncated / connection
+/// reset 等错误; keepalive 探测包可在空窗期维持中间设备状态, 避免连接被丢弃。
+/// best-effort: 设置失败不影响正常请求。
+template<typename Socket>
+void enableTcpKeepalive(Socket& sock) noexcept {
+    neograph_asio_error_code ec;
+    sock.set_option(asio::socket_base::keep_alive(true), ec);
+#if defined(TCP_KEEPIDLE) && defined(TCP_KEEPINTVL) && defined(TCP_KEEPCNT)
+    // asio 未预定义 keepalive 探测选项, 按 asio 文档 Custom socket option 的方式用
+    // asio::detail::socket_option::integer 定义平台选项 (Linux/Android/Windows10+
+    // 均支持这三个选项, 单位秒): 空闲 30 秒后开始探测, 每 10 秒一次, 连续 3 次无响应判定断开
+    asio::detail::socket_option::integer<IPPROTO_TCP, TCP_KEEPIDLE>  idle{30};
+    asio::detail::socket_option::integer<IPPROTO_TCP, TCP_KEEPINTVL> interval{10};
+    asio::detail::socket_option::integer<IPPROTO_TCP, TCP_KEEPCNT>   count{3};
+    sock.set_option(idle, ec);
+    sock.set_option(interval, ec);
+    sock.set_option(count, ec);
+#endif
+}
+
+} // namespace
 
 std::string_view HttpResponse::findHeader(std::string_view name) const noexcept {
     return headers.getSingle(name);
@@ -377,9 +412,10 @@ asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::requestAsy
                         endpoints,
                         asio::cancel_after(remainingTimeout(), asio::use_awaitable)
                     );
-                    neograph_asio_error_code tcpEc;
-                    stream.lowest_layer().set_option(asio::ip::tcp::no_delay(true), tcpEc);
-                    co_await stream.async_handshake(
+                        neograph_asio_error_code tcpEc;
+                        stream.lowest_layer().set_option(asio::ip::tcp::no_delay(true), tcpEc);
+                        enableTcpKeepalive(stream.lowest_layer());
+                        co_await stream.async_handshake(
                         asio::ssl::stream_base::client,
                         asio::cancel_after(remainingTimeout(), asio::use_awaitable)
                     );
@@ -399,9 +435,10 @@ asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::requestAsy
                         endpoints,
                         asio::cancel_after(remainingTimeout(), asio::use_awaitable)
                     );
-                    neograph_asio_error_code tcpEc;
-                    stream.set_option(asio::ip::tcp::no_delay(true), tcpEc);
-                    result = co_await exchange(stream, req, config);
+                        neograph_asio_error_code tcpEc;
+                        stream.set_option(asio::ip::tcp::no_delay(true), tcpEc);
+                        enableTcpKeepalive(stream);
+                        result = co_await exchange(stream, req, config);
                 }
                 co_return true;
             },
@@ -590,6 +627,7 @@ asio::awaitable<void> HttpClient::requestSseAsync(
         );
         neograph_asio_error_code tcpEc;
         stream.lowest_layer().set_option(asio::ip::tcp::no_delay(true), tcpEc);
+        enableTcpKeepalive(stream.lowest_layer());
         co_await stream.async_handshake(
             asio::ssl::stream_base::client,
             asio::cancel_after(remainingMs(), asio::use_awaitable)
@@ -606,6 +644,7 @@ asio::awaitable<void> HttpClient::requestSseAsync(
         );
         neograph_asio_error_code tcpEc;
         stream.set_option(asio::ip::tcp::no_delay(true), tcpEc);
+        enableTcpKeepalive(stream);
         co_await doSseExchange(stream);
     }
 }

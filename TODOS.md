@@ -16,4 +16,4 @@
 
 ## 问题
 分析一下 这些 cmakelist 有没有问题 /home/coolight/program/agentxx/agent/CMakeLists.txt、/home/coolight/program/agentxx/agent/lib/CMakeLists.txt、/home/coolight/program/agentxx/agent/client/CMakeLists.txt、/home/coolight/program/agentxx/agent/test/CMakeLists.txt
-通读 ftxui 的源码，了解其正确使用方式，然后重构 tui，目前的 tui 实现太繁杂了，组件的事件杂糅在一起处理、要自己做渲染缓存等问题
+通读 ftxui 的源码，了解其正确使用方式，然后重构 tui，目前的 tui 实现太繁杂了，组件的事件杂糅在一起处理、要自己做渲染缓存等问题。请仔细思考并给出tui重构方案后，先告诉我跟我沟通确认
