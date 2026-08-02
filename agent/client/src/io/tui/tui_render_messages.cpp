@@ -205,6 +205,22 @@ std::vector<ScrollItem> AgentTUI::buildMessageItems() {
         messageCache_.push_back(MessageCache{});
     }
 
+    // 滑动窗口淘汰: 消息增长时, 释放超出窗口的旧消息的重量级缓存
+    // (Element 树 + markdown DomBuilder), 避免长会话内存无限增长。
+    // 被淘汰的消息在滚动回视口时按需重建 (sig 保留, 内容未变则仅重建一次)。
+    if (st.messages.size() > prevMessageCount_ && messageCache_.size() > kMaxMessageCache) {
+        const size_t evictEnd = messageCache_.size() - kMaxMessageCache;
+        for (size_t i = 0; i < evictEnd; ++i) {
+            auto& c = messageCache_[i];
+            if (c.element) {
+                c.element = nullptr;
+                c.mdBuilders.clear();
+                // 保留 sig/cachedWidth: 内容未变时滚动回仅需重建一次
+            }
+        }
+    }
+    prevMessageCount_ = st.messages.size();
+
     std::vector<ScrollItem> items;
     items.reserve(st.messages.size() + 1);
 
@@ -212,7 +228,7 @@ std::vector<ScrollItem> AgentTUI::buildMessageItems() {
         const auto& msg   = *st.messages[i];
         auto&       cache = messageCache_[i];
         int64_t     sig   = messageSignature(msg);
-        // 内容/状态变化 或 可用宽度变化 (表格换行依赖宽度) -> 重建块元素
+        // 内容/状态变化 或 可用宽度变化 (表格换行依赖宽度) 或 已被淘汰 -> 重建块元素
         if (cache.sig != sig || cache.cachedWidth != msgListWidth || !cache.element) {
             cache.mdBuilders.clear();
             cache.element     = vbox({
