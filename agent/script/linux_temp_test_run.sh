@@ -10,7 +10,7 @@ OPENSSL_ROOT_DIR=$(cd "$src_dir/third_party/OpenSSL/$abi" && pwd)
 cmake -B "$build_dir" -S "$src_dir" \
     -DAGENTXX_BUILD_CLIENT=ON \
     -DAGENTXX_BUILD_TEST=ON \
-    -DXX_BUILD_TYPE=DEBUG -DCMAKE_BUILD_TYPE=Debug
+    -DXX_IS_RELEASE_D=0 -DCMAKE_BUILD_TYPE=Debug
 
 if [[ $? -ne 0 ]]; then
     echo "cmake config failed!"
