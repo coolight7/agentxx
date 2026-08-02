@@ -1,6 +1,7 @@
 #include "agentxx-client/io/tui/agent_tui.h"
 #include "agentxx/agent/model_registry.h"
 #include "agentxx/middlewares/middleware.h"
+#include "agentxx/util/exception.h"
 #include "agentxx/util/string_util.h"
 #include "asio/as_tuple.hpp"
 #include "asio/co_spawn.hpp"
@@ -350,7 +351,7 @@ void AgentTUI::start() {
                 std::lock_guard<std::mutex> lock(mutex_);
                 if (state_->showContextOverlay) {
                     if (event == Event::Escape) {
-                        auto& st            = mutableStateLocked();
+                        auto& st              = mutableStateLocked();
                         st.showContextOverlay = false;
                         postRedraw();
                         return true;
@@ -377,7 +378,8 @@ void AgentTUI::start() {
                         return true;
                     }
                     if (event == Event::PageDown) {
-                        contextScrollOffset_ = std::min(maxScroll, contextScrollOffset_ + maxVisible);
+                        contextScrollOffset_
+                            = std::min(maxScroll, contextScrollOffset_ + maxVisible);
                         postRedraw();
                         return true;
                     }
@@ -495,9 +497,9 @@ void AgentTUI::start() {
                         sendToPeer(agentxx::agent::WireGetContext{threadId_});
                     } else if (session_) {
                         std::lock_guard<std::mutex> lock(mutex_);
-                        auto& st = mutableStateLocked();
-                        st.contextMessages    = session_->llmMessages;
-                        st.showContextOverlay = true;
+                        auto&                       st = mutableStateLocked();
+                        st.contextMessages             = session_->llmMessages;
+                        st.showContextOverlay          = true;
                     }
                     postRedraw();
                     return true;
@@ -671,12 +673,12 @@ void AgentTUI::pushCurrentTokenLocked(RenderState& st) {
     if (st.currentToken.empty()) {
         return;
     }
-    auto msg          = std::make_shared<Message>();
-    msg->role         = st.currentTokenRole;
-    msg->text         = st.currentToken;
-    msg->collapsed    = (st.currentTokenRole == Message::Role::Thinking);
-    msg->durationMs   = st.pendingTokenDurationMs;
-    msg->startTimeMs  = st.pendingTokenStartTimeMs;
+    auto msg         = std::make_shared<Message>();
+    msg->role        = st.currentTokenRole;
+    msg->text        = st.currentToken;
+    msg->collapsed   = (st.currentTokenRole == Message::Role::Thinking);
+    msg->durationMs  = st.pendingTokenDurationMs;
+    msg->startTimeMs = st.pendingTokenStartTimeMs;
     st.messages.push_back(std::move(msg));
     st.pendingTokenDurationMs  = 0;
     st.pendingTokenStartTimeMs = 0;
@@ -743,20 +745,20 @@ void AgentTUI::onDelta(const agentxx::agent::Delta& delta) {
                     st.pendingTokenDurationMs  = delta.durationMs;
                     pushCurrentTokenLocked(st);
                 }
-                st.currentTokenRole = role;
-                st.currentToken    += delta.text;
-                st.isStreaming      = true;
+                st.currentTokenRole  = role;
+                st.currentToken     += delta.text;
+                st.isStreaming       = true;
             } break;
             case Type::ToolStart: {
                 pushCurrentTokenLocked(st);
-                auto m           = std::make_shared<Message>();
-                m->role          = Message::Role::Tool;
-                m->toolName      = delta.toolName;
-                m->toolCallId    = delta.toolCallId;
-                m->text          = delta.arguments;
-                m->toolFinished  = false;
-                m->collapsed     = false;
-                m->startTimeMs   = delta.startTimeMs;
+                auto m          = std::make_shared<Message>();
+                m->role         = Message::Role::Tool;
+                m->toolName     = delta.toolName;
+                m->toolCallId   = delta.toolCallId;
+                m->text         = delta.arguments;
+                m->toolFinished = false;
+                m->collapsed    = false;
+                m->startTimeMs  = delta.startTimeMs;
                 st.messages.push_back(std::move(m));
                 st.isStreaming = true;
             } break;
@@ -766,7 +768,7 @@ void AgentTUI::onDelta(const agentxx::agent::Delta& delta) {
                     auto& msg = *st.messages[i - 1];
                     if (msg.role == Message::Role::Tool && msg.toolCallId == delta.toolCallId
                         && !msg.toolFinished) {
-                        auto& m      = mutableMessageLocked(st, i - 1);
+                        auto& m        = mutableMessageLocked(st, i - 1);
                         m.toolResult   = delta.result;
                         m.toolFinished = true;
                         m.collapsed    = true;
@@ -777,15 +779,15 @@ void AgentTUI::onDelta(const agentxx::agent::Delta& delta) {
                     }
                 }
                 if (!found) {
-                    auto m           = std::make_shared<Message>();
-                    m->role          = Message::Role::Tool;
-                    m->toolName      = delta.toolName;
-                    m->toolCallId    = delta.toolCallId;
-                    m->toolResult    = delta.result;
-                    m->toolFinished  = true;
-                    m->startTimeMs   = delta.startTimeMs;
-                    m->durationMs    = delta.durationMs;
-                    m->collapsed     = true;
+                    auto m          = std::make_shared<Message>();
+                    m->role         = Message::Role::Tool;
+                    m->toolName     = delta.toolName;
+                    m->toolCallId   = delta.toolCallId;
+                    m->toolResult   = delta.result;
+                    m->toolFinished = true;
+                    m->startTimeMs  = delta.startTimeMs;
+                    m->durationMs   = delta.durationMs;
+                    m->collapsed    = true;
                     st.messages.push_back(std::move(m));
                 }
             } break;
@@ -817,9 +819,9 @@ void AgentTUI::onDelta(const agentxx::agent::Delta& delta) {
 
                 // 创建一条系统消息记录本轮运行的统计信息
                 if (delta.durationMs > 0 || delta.startTimeMs > 0) {
-                    auto statMsg          = std::make_shared<Message>();
-                    statMsg->role         = Message::Role::System;
-                    statMsg->text         = fmt::format(
+                    auto statMsg  = std::make_shared<Message>();
+                    statMsg->role = Message::Role::System;
+                    statMsg->text = fmt::format(
                         "{} · {} · {}",
                         st.cachedModelName,
                         formatDurationMilliseconds(delta.durationMs),
@@ -849,17 +851,17 @@ void AgentTUI::onSync(const agentxx::agent::SyncPayload& payload) {
     {
         std::lock_guard<std::mutex> lock(mutex_);
         // 整体重建: 直接替换为新 state (旧快照由 UI 线程持有, 自然释放)
-        auto st            = std::make_shared<RenderState>();
-        st->cachedModelName = state_->cachedModelName;
-        st->modelNames      = state_->modelNames;
+        auto st              = std::make_shared<RenderState>();
+        st->cachedModelName  = state_->cachedModelName;
+        st->modelNames       = state_->modelNames;
         st->appendComponents = state_->appendComponents;
-        st->pendingInputs   = state_->pendingInputs;
-        st->isStreaming     = false;
+        st->pendingInputs    = state_->pendingInputs;
+        st->isStreaming      = false;
 
         for (const auto& hm : payload.messages) {
-            const auto& d    = hm.data;
-            auto        role = d.value("role", std::string{});
-            auto        m    = std::make_shared<Message>();
+            const auto& d        = hm.data;
+            auto        role     = d.value("role", std::string{});
+            auto        m        = std::make_shared<Message>();
             bool        skipPush = false;
             if (role == "user") {
                 m->role = Message::Role::User;
@@ -867,13 +869,13 @@ void AgentTUI::onSync(const agentxx::agent::SyncPayload& payload) {
             } else if (role == "assistant") {
                 if (d.contains("tool_calls")) {
                     for (const auto& tc : d["tool_calls"]) {
-                        auto tm           = std::make_shared<Message>();
-                        tm->role          = Message::Role::Tool;
-                        tm->toolName      = tc.value("name", std::string{});
-                        tm->toolCallId    = tc.value("id", std::string{});
-                        tm->text          = tc.value("arguments", std::string{});
-                        tm->toolFinished  = false;
-                        tm->collapsed     = true;
+                        auto tm          = std::make_shared<Message>();
+                        tm->role         = Message::Role::Tool;
+                        tm->toolName     = tc.value("name", std::string{});
+                        tm->toolCallId   = tc.value("id", std::string{});
+                        tm->text         = tc.value("arguments", std::string{});
+                        tm->toolFinished = false;
+                        tm->collapsed    = true;
                         st->messages.push_back(std::move(tm));
                     }
                     auto content = d.value("content", std::string{});
@@ -884,14 +886,14 @@ void AgentTUI::onSync(const agentxx::agent::SyncPayload& payload) {
                         continue;
                     }
                 } else {
-                    m->role         = Message::Role::Assistant;
-                    m->text         = d.value("content", std::string{});
-                    auto reasoning  = d.value("reasoning_content", std::string{});
+                    m->role        = Message::Role::Assistant;
+                    m->text        = d.value("content", std::string{});
+                    auto reasoning = d.value("reasoning_content", std::string{});
                     if (!reasoning.empty()) {
-                        auto thinkMsg       = std::make_shared<Message>();
-                        thinkMsg->role      = Message::Role::Thinking;
-                        thinkMsg->text      = reasoning;
-                        thinkMsg->collapsed = true;
+                        auto thinkMsg         = std::make_shared<Message>();
+                        thinkMsg->role        = Message::Role::Thinking;
+                        thinkMsg->text        = reasoning;
+                        thinkMsg->collapsed   = true;
                         thinkMsg->startTimeMs = d.value("start_time_ms", int64_t{0});
                         thinkMsg->durationMs  = d.value("duration_ms", int64_t{0});
                         st->messages.push_back(std::move(thinkMsg));
@@ -918,10 +920,10 @@ void AgentTUI::onSync(const agentxx::agent::SyncPayload& payload) {
                     }
                 }
             } else {
-                m->role         = Message::Role::System;
-                m->text         = d.value("content", std::string{});
-                m->startTimeMs  = d.value("start_time_ms", int64_t{0});
-                m->durationMs   = d.value("duration_ms", int64_t{0});
+                m->role        = Message::Role::System;
+                m->text        = d.value("content", std::string{});
+                m->startTimeMs = d.value("start_time_ms", int64_t{0});
+                m->durationMs  = d.value("duration_ms", int64_t{0});
             }
 
             if (false == skipPush) {
@@ -946,9 +948,17 @@ asio::awaitable<neograph::json> AgentTUI::handleInterrupt(
     std::string_view interruptValue,
     std::string_view interruptArgJson
 ) {
-    auto argOpt
-        = agentxx::middleware::InterruptHandleArg::fromJson(neograph::json::parse(interruptArgJson)
-        );
+    std::optional<agentxx::middleware::InterruptHandleArg> argOpt;
+    agentxx::util::catchError<void>(
+        [&]() {
+            argOpt = agentxx::middleware::InterruptHandleArg::fromJson(
+                neograph::json::parse(interruptArgJson)
+            );
+        },
+        [](std::string errinfo) {
+            XX_LOGE("AgentTUI::handleInterrupt json::parse failed: {}", errinfo);
+        }
+    );
     if (!argOpt.has_value()) {
         co_return neograph::json::array();
     }
@@ -959,7 +969,7 @@ asio::awaitable<neograph::json> AgentTUI::handleInterrupt(
 
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        auto&                       st  = mutableStateLocked();
+        auto&                       st = mutableStateLocked();
         std::string                 msg
             = fmt::format("Interrupted at: {}\nValue: {}", interruptNode, interruptValue);
         if (!handleArg.name.empty()) {

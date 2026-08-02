@@ -22,12 +22,12 @@ TUITheme TUITheme::darkTheme() {
         .buttonActiveTextColor = ftxui::Color::RGB(0, 0, 0),       // #000
         .markdownTheme         = markdown::Theme{
             .name        = "Dark",
-            .syntax      = ftxui::color(ftxui::Color::Yellow) | ftxui::dim,
+            .syntax      = ftxui::color(ftxui::Color::Yellow),
             .gutter      = ftxui::color(ftxui::Color::RGB(117, 125, 138)),
             .heading1    = ftxui::Decorator(ftxui::bold) | ftxui::underlined
                         | ftxui::color(ftxui::Color::RGB(102, 204, 255)),
             .heading2    = ftxui::color(ftxui::Color::RGB(102, 204, 255)) | ftxui::bold,
-            .heading3    = ftxui::Decorator(ftxui::bold) | ftxui::dim,
+            .heading3    = ftxui::Decorator(ftxui::bold),
             .link        = ftxui::color(ftxui::Color::Cyan),
             .code_inline = ftxui::color(ftxui::Color::RGB(255, 175, 95)),
             .code_block  = ftxui::bgcolor(ftxui::Color::RGB(18, 18, 18)) // blockColor #121212
