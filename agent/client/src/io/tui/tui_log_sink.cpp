@@ -4,6 +4,7 @@ void TUILogSink::onLog(const agentxx::util::LogEntry& entry) {
     lines_.push_back(Line{entry.level, entry.message});
     while (lines_.size() > maxLines_) {
         lines_.pop_front();
+        ++poppedCount_;
     }
 }
 

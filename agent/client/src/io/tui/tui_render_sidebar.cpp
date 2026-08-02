@@ -88,6 +88,13 @@ std::vector<ScrollItem> AgentTUI::renderLogWindow() {
             ScrollItem{text(" (no logs) ") | dim, false}
         };
     }
+    // 检测 pop_front 导致的缓存错位: TUILogSink 超限后 pop_front,
+    // 行索引整体偏移, 已缓存的元素对应旧内容, 须整体重建
+    const uint64_t curPopped = logSink_ ? logSink_->poppedCount() : 0;
+    if (curPopped != logCachePoppedCount_) {
+        logLineCache_.clear();
+        logCachePoppedCount_ = curPopped;
+    }
     // 日志仅追加: 按行索引缓存元素, 仅构建新增行 (避免每帧重建全部日志行)
     if (logLineCache_.size() > lines.size()) {
         logLineCache_.clear();

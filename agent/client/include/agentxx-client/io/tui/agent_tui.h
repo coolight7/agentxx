@@ -101,6 +101,11 @@ public:
 
     void clear();
 
+    /// 已弹出的行累计数 (单调递增); 用于检测缓存错位 (pop_front 后索引偏移)
+    uint64_t poppedCount() const {
+        return poppedCount_;
+    }
+
 protected:
 
     /// UI 线程串行调用 (经 pump), 无需加锁
@@ -109,7 +114,8 @@ protected:
 private:
 
     std::deque<Line> lines_;
-    size_t           maxLines_ = 2000;
+    size_t           maxLines_   = 2000;
+    uint64_t         poppedCount_ = 0; ///< 因超限而被 pop_front 的行累计数
 };
 
 /// TUI
@@ -259,13 +265,19 @@ private:
     // -----------------------------------------------------------------------
 
     /// 消息元素缓存 (按 messages 索引; 仅内容变化的消息重建 Element)
+    /// 滑动窗口淘汰: 仅保留最近 kMaxMessageCache 条的完整缓存 (Element + mdBuilders),
+    /// 更早的消息释放重量级对象 (markdown AST/Element 树), 滚动回时按需重建
     std::vector<MessageCache> messageCache_;
+    /// 上一帧消息数量 (检测增长, 仅在增长时触发淘汰, 避免每帧重复清理)
+    size_t prevMessageCount_ = 0;
     /// 流式 token 的 markdown DomBuilder (每帧重建, 须与帧内 element 同生命周期)
     std::vector<std::unique_ptr<markdown::DomBuilder>> streamingMdBuilders_;
     /// 消息列表子项元数据 (每帧由 buildMessageItems 填充)
     std::vector<MessageItemMeta> messageItemMeta_;
     /// 日志行元素缓存 (日志仅追加, 按行索引缓存避免每帧重建)
     std::vector<ftxui::Element> logLineCache_;
+    /// 上次构建 logLineCache_ 时的 poppedCount (检测 pop_front 导致的缓存错位)
+    uint64_t logCachePoppedCount_ = 0;
 
     std::string inputText_;
 
@@ -348,6 +360,9 @@ private:
     static constexpr int kSidebarMinWidth     = 24;
     static constexpr int kSidebarMaxWidth     = 120;
     static constexpr int kSidebarDefaultWidth = 40;
+    /// 消息元素缓存滑动窗口大小: 仅保留最近 N 条的完整缓存 (Element + mdBuilders),
+    /// 更早的消息释放重量级对象, 滚动回时按需重建 (避免长会话内存无限增长)
+    static constexpr size_t kMaxMessageCache = 200;
     /// 程序版本号 (与 CMake project VERSION 保持一致)
     static constexpr const char* kAgentxxVersion = "0.1.0";
 
