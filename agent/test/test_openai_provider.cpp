@@ -666,6 +666,24 @@ void test_extract_think_tags_only_think() {
     XX_TEST_EXPECT_EQ(thinking, "Only thinking, no visible content");
 }
 
+/// 闭合 think 标签之后又出现未闭合标签: 已提取的闭合标签不应残留在 content 中
+void test_extract_think_tags_closed_then_unclosed() {
+    std::string content  = "A<think>B</think>C<think>D";
+    std::string thinking;
+    server::OpenAIProvider::extractThinkTags(content, thinking);
+    XX_TEST_EXPECT_EQ(thinking, "BD");
+    XX_TEST_EXPECT_EQ(content, "AC");
+}
+
+/// 直接调用实现函数验证单个未闭合标签场景
+void test_extract_think_tags_unclosed_direct() {
+    std::string content  = "Start<think>Unclosed thinking";
+    std::string thinking;
+    server::OpenAIProvider::extractThinkTags(content, thinking);
+    XX_TEST_EXPECT_EQ(thinking, "Unclosed thinking");
+    XX_TEST_EXPECT_EQ(content, "Start");
+}
+
 // ---------------------------------------------------------------------------
 // Integration tests
 // ---------------------------------------------------------------------------
@@ -2087,6 +2105,8 @@ asio::awaitable<TestResult> run_openai_provider_tests() {
     test_extract_think_tags_multiple_blocks();
     test_extract_think_tags_empty_block();
     test_extract_think_tags_only_think();
+    test_extract_think_tags_closed_then_unclosed();
+    test_extract_think_tags_unclosed_direct();
 
     // Integration tests with mock server
     uint16_t port = 0;

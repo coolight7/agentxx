@@ -949,14 +949,16 @@ asio::awaitable<neograph::json> AgentTUI::handleInterrupt(
     std::string_view interruptArgJson
 ) {
     std::optional<agentxx::middleware::InterruptHandleArg> argOpt;
-    agentxx::util::catchError<void>(
-        [&]() {
+    agentxx::util::catchError<bool>(
+        [&]() -> bool {
             argOpt = agentxx::middleware::InterruptHandleArg::fromJson(
                 neograph::json::parse(interruptArgJson)
             );
+            return true;
         },
-        [](std::string errinfo) {
+        [](std::string errinfo) -> bool {
             XX_LOGE("AgentTUI::handleInterrupt json::parse failed: {}", errinfo);
+            return true;
         }
     );
     if (!argOpt.has_value()) {

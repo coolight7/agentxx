@@ -232,7 +232,9 @@ std::optional<HttpClient::ParsedUrl> HttpClient::parseUrl(std::string_view url) 
         if (cb == std::string::npos) {
             return std::nullopt;
         }
-        host = std::string{hostPort.substr(0, cb + 1)};
+        // 去掉方括号: DNS 解析 (getaddrinfo) 与 SNI 不接受带括号的 IPv6 字面量,
+        // 构造 Host 头时再按 HTTP 规范加回 (见 buildHostHeader)
+        host = std::string{hostPort.substr(1, cb - 1)};
         if (cb + 1 < hostPort.size() && hostPort[cb + 1] == ':') {
             auto portStart = hostPort.data() + cb + 2;
             auto portEnd   = hostPort.data() + hostPort.size();
@@ -265,6 +267,18 @@ std::optional<HttpClient::ParsedUrl> HttpClient::parseUrl(std::string_view url) 
     return ParsedUrl{std::move(scheme), std::move(host), port, std::move(path)};
 }
 
+std::string HttpClient::buildHostHeader(const ParsedUrl& parsed) {
+    bool isHttps     = parsed.scheme == "https";
+    bool defaultPort = (isHttps && parsed.port == 443) || (!isHttps && parsed.port == 80);
+    // IPv6 字面量 (host 含 ':') 在 Host 头中必须带方括号
+    std::string hostHeader
+        = (parsed.host.find(':') != std::string::npos) ? "[" + parsed.host + "]" : parsed.host;
+    if (!defaultPort) {
+        hostHeader += ":" + std::to_string(parsed.port);
+    }
+    return hostHeader;
+}
+
 std::chrono::seconds HttpClient::calcTimeoutBySize(size_t bodyBytes) {
     int64_t seconds = (static_cast<int64_t>(bodyBytes) + 65535) / 65536;
     return std::chrono::seconds{std::max<int64_t>(30, seconds)};
@@ -292,136 +306,108 @@ asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::requestAsy
     std::expected<HttpResponse, std::string> result;
     for (size_t redirectCount = 0;; ++redirectCount) {
         result = std::unexpected{std::string{"unknown error"}};
-        co_await agentxx::util::catchErrorAsync<void>(
-            [&]() -> asio::awaitable<void> {
-                try {
-                    auto parsed = parseUrl(currentUrl);
-                    if (!parsed) {
-                        throw std::runtime_error{"invalid url: " + currentUrl};
-                    }
-                    bool isHttps = parsed->scheme == "https";
-                    bool defaultPort
-                        = (isHttps && parsed->port == 443) || (!isHttps && parsed->port == 80);
-                    std::string hostHeader = parsed->host;
-                    if (!defaultPort) {
-                        hostHeader += ":" + std::to_string(parsed->port);
-                    }
-
-                    http::request<http::string_body> req{
-                        http::string_to_verb(currentMethod),
-                        parsed->path,
-                        11
-                    };
-                    bool hasHost = extraHeaders.contains("host");
-                    if (!hasHost) {
-                        req.set(http::field::host, hostHeader);
-                    }
-                    req.set(
-                        http::field::user_agent,
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                        "AppleWebKit/537.36 (KHTML, like Gecko) "
-                        "Chrome/119.0.6045.160 Safari/537.36"
-                    );
-                    req.set(http::field::accept, "*/*");
-                    req.set(http::field::accept_encoding, "identity");
-                    if (!config.keepAlive) {
-                        req.set(http::field::connection, "close");
-                    }
-
-                    for (const auto& [k, v] : extraHeaders.data) {
-                        if (isIgnoreCaseEqual(k, "host")) {
-                            continue;
-                        }
-                        req.set(k, stringVectorJoin(v, "; "));
-                    }
-                    if (!currentBody.empty()) {
-                        if (!currentContentType.empty()) {
-                            req.set(http::field::content_type, currentContentType);
-                        }
-                        req.body() = currentBody;
-                        req.prepare_payload();
-                    }
-
-                    auto endpoints = co_await resolver.async_resolve(
-                        parsed->host,
-                        std::to_string(parsed->port),
-                        asio::cancel_after(config.connectTimeout, asio::use_awaitable)
-                    );
-
-                    // connectTimeout 是 DNS + TCP + TLS 的总上限:
-                    // 用 deadline 记录起始时刻, 后续阶段使用剩余时间, 避免三阶段各用满导致总耗时 3
-                    // 倍
-                    auto connectDeadline = std::chrono::steady_clock::now() + config.connectTimeout;
-                    auto remainingTimeout = [&]() -> std::chrono::milliseconds {
-                        auto now = std::chrono::steady_clock::now();
-                        if (now >= connectDeadline) {
-                            // 留一点时间
-                            return std::chrono::seconds{1};
-                        }
-                        return std::chrono::duration_cast<std::chrono::milliseconds>(
-                            connectDeadline - now
-                        );
-                    };
-
-                    if (isHttps) {
-                        bool verify = config.sslVerify.value_or(
-                            sslVerifyEnabled_.load(std::memory_order_relaxed)
-                        );
-                        auto&                          sslCtx = sharedSslCtx(verify);
-                        asio::ssl::stream<tcp::socket> stream(executor, sslCtx);
-                        if (!parsed->host.empty()) {
-                            ::SSL_set_tlsext_host_name(
-                                stream.native_handle(),
-                                parsed->host.c_str()
-                            );
-                        }
-                        co_await asio::async_connect(
-                            stream.lowest_layer(),
-                            endpoints,
-                            asio::cancel_after(remainingTimeout(), asio::use_awaitable)
-                        );
-                        neograph_asio_error_code tcpEc;
-                        stream.lowest_layer().set_option(asio::ip::tcp::no_delay(true), tcpEc);
-                        co_await stream.async_handshake(
-                            asio::ssl::stream_base::client,
-                            asio::cancel_after(remainingTimeout(), asio::use_awaitable)
-                        );
-                        result = co_await exchange(stream, req, config);
-                        // shutdown 失败 (如对端已提前关闭) 不影响已成功获取的响应,
-                        // 用 redirect_error 捕获并忽略, 避免异常丢弃上面的成功 result
-                        // 加 cancel_after 防止对端不响应 close_notify 时永久挂起
-                        neograph_asio_error_code sslEc;
-                        co_await stream.async_shutdown(asio::cancel_after(
-                            std::chrono::seconds{5},
-                            asio::redirect_error(asio::use_awaitable, sslEc)
-                        ));
-                    } else {
-                        tcp::socket stream(executor);
-                        co_await asio::async_connect(
-                            stream,
-                            endpoints,
-                            asio::cancel_after(remainingTimeout(), asio::use_awaitable)
-                        );
-                        neograph_asio_error_code tcpEc;
-                        stream.set_option(asio::ip::tcp::no_delay(true), tcpEc);
-                        result = co_await exchange(stream, req, config);
-                    }
-                    co_return;
-                } catch (const boost::system::system_error& e) {
-                    auto ec      = e.code();
-                    auto errInfo = std::string{e.what()};
-                    agentxx::util::autoConvertToUtf8(errInfo);
-                    if (ec == asio::error::operation_aborted) {
-                        result = std::unexpected{fmt::format("timeout: {}", errInfo)};
-                    } else {
-                        result = std::unexpected{errInfo};
-                    }
+        co_await agentxx::util::catchErrorAsync<bool>(
+            [&]() -> asio::awaitable<bool> {
+                auto parsed = parseUrl(currentUrl);
+                if (!parsed) {
+                    throw std::runtime_error{"invalid url: " + currentUrl};
                 }
-                co_return;
+                bool isHttps = parsed->scheme == "https";
+
+                http::request<http::string_body> req{
+                    http::string_to_verb(currentMethod),
+                    parsed->path,
+                    11
+                };
+                // 先设置计算的 Host 与默认头, extraHeaders 在最后统一覆盖
+                // (beast::set 大小写不敏感地替换同名字段, 因此调用方自定义的 Host 等可生效)
+                req.set(http::field::host, buildHostHeader(*parsed));
+                for (const auto& [k, v] : defaultHeaders().data) {
+                    req.set(k, stringVectorJoin(v, "; "));
+                }
+                req.set(http::field::accept_encoding, "identity");
+                if (!config.keepAlive) {
+                    req.set(http::field::connection, "close");
+                }
+
+                for (const auto& [k, v] : extraHeaders.data) {
+                    req.set(k, stringVectorJoin(v, "; "));
+                }
+                if (!currentBody.empty()) {
+                    if (!currentContentType.empty()) {
+                        req.set(http::field::content_type, currentContentType);
+                    }
+                    req.body() = currentBody;
+                    req.prepare_payload();
+                }
+
+                // connectTimeout 是 DNS + TCP + TLS 的总上限:
+                // 用 deadline 记录起始时刻, 后续各阶段 (含 DNS) 使用剩余时间,
+                // 避免各阶段各用满导致总耗时成倍放大
+                auto connectDeadline  = std::chrono::steady_clock::now() + config.connectTimeout;
+                auto remainingTimeout = [&]() -> std::chrono::milliseconds {
+                    auto now = std::chrono::steady_clock::now();
+                    if (now >= connectDeadline) {
+                        // 留一点时间
+                        return std::chrono::seconds{1};
+                    }
+                    return std::chrono::duration_cast<std::chrono::milliseconds>(
+                        connectDeadline - now
+                    );
+                };
+
+                auto endpoints = co_await resolver.async_resolve(
+                    parsed->host,
+                    std::to_string(parsed->port),
+                    asio::cancel_after(remainingTimeout(), asio::use_awaitable)
+                );
+
+                if (isHttps) {
+                    bool verify
+                        = config.sslVerify.value_or(sslVerifyEnabled_.load(std::memory_order_relaxed
+                        ));
+                    auto&                          sslCtx = sharedSslCtx(verify);
+                    asio::ssl::stream<tcp::socket> stream(executor, sslCtx);
+                    // SNI 只能是域名, IP 字面量 (IPv6 含 ':') 不支持 SNI
+                    if (!parsed->host.empty() && parsed->host.find(':') == std::string::npos) {
+                        ::SSL_set_tlsext_host_name(stream.native_handle(), parsed->host.c_str());
+                    }
+                    co_await asio::async_connect(
+                        stream.lowest_layer(),
+                        endpoints,
+                        asio::cancel_after(remainingTimeout(), asio::use_awaitable)
+                    );
+                    neograph_asio_error_code tcpEc;
+                    stream.lowest_layer().set_option(asio::ip::tcp::no_delay(true), tcpEc);
+                    co_await stream.async_handshake(
+                        asio::ssl::stream_base::client,
+                        asio::cancel_after(remainingTimeout(), asio::use_awaitable)
+                    );
+                    result = co_await exchange(stream, req, config);
+                    // shutdown 失败 (如对端已提前关闭) 不影响已成功获取的响应,
+                    // 用 redirect_error 捕获并忽略, 避免异常丢弃上面的成功 result
+                    // 加 cancel_after 防止对端不响应 close_notify 时永久挂起
+                    neograph_asio_error_code sslEc;
+                    co_await stream.async_shutdown(asio::cancel_after(
+                        std::chrono::seconds{5},
+                        asio::redirect_error(asio::use_awaitable, sslEc)
+                    ));
+                } else {
+                    tcp::socket stream(executor);
+                    co_await asio::async_connect(
+                        stream,
+                        endpoints,
+                        asio::cancel_after(remainingTimeout(), asio::use_awaitable)
+                    );
+                    neograph_asio_error_code tcpEc;
+                    stream.set_option(asio::ip::tcp::no_delay(true), tcpEc);
+                    result = co_await exchange(stream, req, config);
+                }
+                co_return true;
             },
-            [&](std::string errInfo) -> asio::awaitable<void> {
+            [&](std::string errInfo) -> asio::awaitable<bool> {
                 result = std::unexpected{errInfo};
-                co_return;
+                co_return true;
             }
         );
 
@@ -466,26 +452,20 @@ asio::awaitable<void> HttpClient::requestSseAsync(
     if (!parsed) {
         throw std::runtime_error{"invalid url: " + std::string(url)};
     }
-    bool        isHttps     = parsed->scheme == "https";
-    bool        defaultPort = (isHttps && parsed->port == 443) || (!isHttps && parsed->port == 80);
-    std::string hostHeader  = parsed->host;
-    if (!defaultPort) {
-        hostHeader += ":" + std::to_string(parsed->port);
-    }
+    bool isHttps = parsed->scheme == "https";
 
     http::request<http::string_body> req{http::string_to_verb(method), parsed->path, 11};
-    bool                             hasHost = extraHeaders.contains("host");
-    if (!hasHost) {
-        req.set(http::field::host, hostHeader);
+    // 先设置计算的 Host 与默认头, extraHeaders 在最后统一覆盖
+    // (beast::set 大小写不敏感地替换同名字段, 因此调用方自定义的 Host 等可生效)
+    req.set(http::field::host, buildHostHeader(*parsed));
+    for (const auto& [k, v] : defaultHeaders().data) {
+        req.set(k, stringVectorJoin(v, "; "));
     }
-    req.set(http::field::user_agent, "agentxx/1.0");
     req.set(http::field::accept, "text/event-stream");
+    req.set(http::field::accept_encoding, "identity");
     req.set(http::field::connection, "keep-alive");
 
     for (const auto& [k, v] : extraHeaders.data) {
-        if (isIgnoreCaseEqual(k, "host")) {
-            continue;
-        }
         req.set(k, stringVectorJoin(v, "; "));
     }
     if (!body.empty()) {
@@ -498,10 +478,21 @@ asio::awaitable<void> HttpClient::requestSseAsync(
 
     auto          executor = co_await asio::this_coro::executor;
     tcp::resolver resolver(executor);
-    auto          endpoints = co_await resolver.async_resolve(
+
+    // connectTimeout 是 DNS + TCP + TLS 的总上限: 各阶段 (含 DNS) 共用剩余时间
+    auto connectDeadline = std::chrono::steady_clock::now() + config.connectTimeout;
+    auto remainingMs     = [&]() -> std::chrono::milliseconds {
+        auto now = std::chrono::steady_clock::now();
+        if (now >= connectDeadline) {
+            return std::chrono::seconds{1};
+        }
+        return std::chrono::duration_cast<std::chrono::milliseconds>(connectDeadline - now);
+    };
+
+    auto endpoints = co_await resolver.async_resolve(
         parsed->host,
         std::to_string(parsed->port),
-        asio::cancel_after(config.connectTimeout, asio::use_awaitable)
+        asio::cancel_after(remainingMs(), asio::use_awaitable)
     );
 
     auto sendTimeout = config.sendTimeout.value_or(calcTimeoutBySize(req.body().size()));
@@ -577,25 +568,8 @@ asio::awaitable<void> HttpClient::requestSseAsync(
                 stream,
                 buf,
                 parser,
-                asio::cancel_after(
-                    config.readChunkTimeout,
-                    asio::redirect_error(asio::use_awaitable, ec)
-                )
+                asio::cancel_after(config.readChunkTimeout, asio::use_awaitable)
             );
-            if (ec) {
-                // stream_truncated: 对端关闭 TLS 时未发送 close_notify,
-                // 在 LB/代理/多数 API 服务器中极为常见, 视为正常结束
-                if (ec == asio::error::eof || ec == http::error::end_of_stream
-                    || ec == asio::ssl::error::stream_truncated) {
-                    break;
-                }
-                if (ec == asio::error::operation_aborted) {
-                    throw std::runtime_error(
-                        "SSE stream read timeout: no data received within readChunkTimeout"
-                    );
-                }
-                throw neograph_asio_system_error(ec, "SSE stream read");
-            }
             flushBody();
         }
         flushBody();
@@ -605,18 +579,10 @@ asio::awaitable<void> HttpClient::requestSseAsync(
         bool  verify = config.sslVerify.value_or(sslVerifyEnabled_.load(std::memory_order_relaxed));
         auto& sslCtx = sharedSslCtx(verify);
         asio::ssl::stream<tcp::socket> stream(executor, sslCtx);
-        if (!parsed->host.empty()) {
+        // SNI 只能是域名, IP 字面量 (IPv6 含 ':') 不支持 SNI
+        if (!parsed->host.empty() && parsed->host.find(':') == std::string::npos) {
             ::SSL_set_tlsext_host_name(stream.native_handle(), parsed->host.c_str());
         }
-        // connectTimeout 是 DNS + TCP + TLS 的总上限 (DNS 已在上方消耗部分时间)
-        auto connectDeadline = std::chrono::steady_clock::now() + config.connectTimeout;
-        auto remainingMs     = [&]() -> std::chrono::milliseconds {
-            auto now = std::chrono::steady_clock::now();
-            if (now >= connectDeadline) {
-                return std::chrono::seconds{1};
-            }
-            return std::chrono::duration_cast<std::chrono::milliseconds>(connectDeadline - now);
-        };
         co_await asio::async_connect(
             stream.lowest_layer(),
             endpoints,
@@ -636,7 +602,7 @@ asio::awaitable<void> HttpClient::requestSseAsync(
         co_await asio::async_connect(
             stream,
             endpoints,
-            asio::cancel_after(config.connectTimeout, asio::use_awaitable)
+            asio::cancel_after(remainingMs(), asio::use_awaitable)
         );
         neograph_asio_error_code tcpEc;
         stream.set_option(asio::ip::tcp::no_delay(true), tcpEc);

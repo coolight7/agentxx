@@ -4,18 +4,56 @@
 #include "boost/exception/diagnostic_information.hpp"
 #include "boost/exception/exception.hpp"
 #include "neograph/api.h"
+#include "neograph/graph/cancel.h"
+#include "neograph/graph/types.h"
 #include <exception>
 #include <functional>
+#include <optional>
 #include <string>
 
 namespace agentxx {
 namespace util {
 
 template<typename T>
-T catchError(std::function<T()> func, std::function<T(std::string)> onError) {
+T catchError(
+    std::function<T()>                            func,
+    std::function<T(std::string)>                 onError,
+    std::function<std::optional<T>(std::string&)> onRethrow = nullptr
+) {
     std::string errmsg;
     try {
         return func();
+    } catch (const neograph::graph::CancelledException& e) {
+        if (nullptr == onRethrow) {
+            throw;
+        }
+        auto errInfo = std::string{e.what()};
+        agentxx::util::autoConvertToUtf8(errInfo);
+        auto result = onRethrow(errInfo);
+        if (result.has_value()) {
+            return result.value();
+        }
+        errmsg = fmt::format("Cancelled: {}", errInfo);
+    } catch (const neograph::graph::NodeInterrupt& e) {
+        if (nullptr == onRethrow) {
+            throw;
+        }
+        auto errInfo = std::string{e.what()};
+        agentxx::util::autoConvertToUtf8(errInfo);
+        auto result = onRethrow(errInfo);
+        if (result.has_value()) {
+            return result.value();
+        }
+        errmsg = fmt::format("NodeInterrupt: {}", errInfo);
+    } catch (const boost::system::system_error& e) {
+        auto ec      = e.code();
+        auto errInfo = std::string{e.what()};
+        agentxx::util::autoConvertToUtf8(errInfo);
+        if (ec == asio::error::operation_aborted) {
+            errmsg = fmt::format("timeout: {}", errInfo);
+        } else {
+            errmsg = errInfo;
+        }
     } catch (const std::exception& e) {
         // - 部分系统上，系统函数返回的
         // 异常消息字符编码是系统环境的字符编码 (windows)，而非总是utf8，因此这里需要转换
@@ -33,11 +71,43 @@ T catchError(std::function<T()> func, std::function<T(std::string)> onError) {
 template<typename T>
 asio::awaitable<T> catchErrorAsync(
     std::function<asio::awaitable<T>()>            func,
-    std::function<asio::awaitable<T>(std::string)> onError
+    std::function<asio::awaitable<T>(std::string)> onError,
+    std::function<std::optional<T>(std::string&)>  onRethrow = nullptr
 ) {
     std::string errmsg;
     try {
         co_return co_await func();
+    } catch (const neograph::graph::CancelledException& e) {
+        if (nullptr == onRethrow) {
+            throw;
+        }
+        auto errInfo = std::string{e.what()};
+        agentxx::util::autoConvertToUtf8(errInfo);
+        auto result = onRethrow(errInfo);
+        if (result.has_value()) {
+            co_return result.value();
+        }
+        errmsg = fmt::format("Cancelled: {}", errInfo);
+    } catch (const neograph::graph::NodeInterrupt& e) {
+        if (nullptr == onRethrow) {
+            throw;
+        }
+        auto errInfo = std::string{e.what()};
+        agentxx::util::autoConvertToUtf8(errInfo);
+        auto result = onRethrow(errInfo);
+        if (result.has_value()) {
+            co_return result.value();
+        }
+        errmsg = fmt::format("NodeInterrupt: {}", errInfo);
+    } catch (const boost::system::system_error& e) {
+        auto ec      = e.code();
+        auto errInfo = std::string{e.what()};
+        agentxx::util::autoConvertToUtf8(errInfo);
+        if (ec == asio::error::operation_aborted) {
+            errmsg = fmt::format("timeout: {}", errInfo);
+        } else {
+            errmsg = errInfo;
+        }
     } catch (const std::exception& e) {
         errmsg = e.what();
         agentxx::util::autoConvertToUtf8(errmsg);

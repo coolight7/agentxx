@@ -111,10 +111,13 @@ private:
 
     struct ParsedUrl {
         std::string scheme;
-        std::string host;
+        std::string host;  // IPv6 字面量不含方括号 (如 "::1"), 便于直接用于 DNS 解析
         uint16_t    port;
         std::string path;
     };
+
+    /// 按 HTTP 规范构造 Host 头: IPv6 字面量需重新加上方括号, 非默认端口附加 ":port"
+    static std::string buildHostHeader(const ParsedUrl& parsed);
 
     static inline std::atomic<bool> sslVerifyEnabled_{false};
 
@@ -142,6 +145,8 @@ public:
         boost::beast::flat_buffer                buffer;
         http::response_parser<http::string_body> parser;
         parser.body_limit(config.maxResponseBody);
+        // 连接关闭但响应未解析完整时, async_read_some 会抛出 eof 错误 (由调用方捕获),
+        // 不会返回截断的 body
         while (!parser.is_done()) {
             co_await http::async_read_some(
                 stream,
@@ -149,10 +154,6 @@ public:
                 parser,
                 asio::cancel_after(config.readChunkTimeout, asio::use_awaitable)
             );
-        }
-        // 连接关闭但响应未解析完整 → 视为传输错误, 避免返回截断的 body
-        if (!parser.is_done()) {
-            co_return std::unexpected{std::string{"connection closed before response complete"}};
         }
 
         auto         res = parser.release();

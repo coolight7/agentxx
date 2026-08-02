@@ -84,12 +84,14 @@ void BaseMiddlewareHandleInterface::printMessage(const neograph::ChatMessage& ms
 ┏━━━━━━ Message/{} ━━━━━━┓
 ┣━ Role: {}
 {}
+┣━ Thinking: {}
 ┣━ Content: {}
 ┗━━━━━━ Message/{} ━━━━━━┛
 )",
         index,
         msg.role,
         toollist,
+        msg.reasoning_content,
         msg.content,
         index
     );

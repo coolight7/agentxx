@@ -278,8 +278,8 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
             tool_msg.content = R"({"error": "Tool not found: )" + tc.name + "\"}";
         } else {
             std::exception_ptr errorPtr;
-            co_await agentxx::util::catchErrorAsync<void>(
-                [&]() -> asio::awaitable<void> {
+            co_await agentxx::util::catchErrorAsync<bool>(
+                [&]() -> asio::awaitable<bool> {
                     try {
                         auto args = neograph::json::parse(tc.arguments);
                         if (args.is_object()) {
@@ -301,13 +301,13 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
                         tool_msg.flags   |= neograph::MessageFlag::Interrupt;
                         tool_msg.content  = "[Interrupt]";
                     }
-                    co_return;
+                    co_return true;
                 },
-                [&](std::string errinfo) -> asio::awaitable<void> {
+                [&](std::string errinfo) -> asio::awaitable<bool> {
                     tool_msg.content = neograph::json{
                         {"error", std::move(errinfo)}
                     }.dump();
-                    co_return;
+                    co_return true;
                 }
             );
             if (errorPtr) {
