@@ -150,6 +150,10 @@ public:
                 asio::cancel_after(config.readChunkTimeout, asio::use_awaitable)
             );
         }
+        // 连接关闭但响应未解析完整 → 视为传输错误, 避免返回截断的 body
+        if (!parser.is_done()) {
+            co_return std::unexpected{std::string{"connection closed before response complete"}};
+        }
 
         auto         res = parser.release();
         HttpResponse resp;

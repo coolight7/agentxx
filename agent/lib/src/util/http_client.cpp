@@ -408,9 +408,10 @@ asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::requestAsy
                     }
                     co_return;
                 } catch (const boost::system::system_error& e) {
+                    auto ec      = e.code();
                     auto errInfo = std::string{e.what()};
                     agentxx::util::autoConvertToUtf8(errInfo);
-                    if (e.code() == asio::error::operation_aborted) {
+                    if (ec == asio::error::operation_aborted) {
                         result = std::unexpected{fmt::format("timeout: {}", errInfo)};
                     } else {
                         result = std::unexpected{errInfo};
@@ -556,8 +557,7 @@ asio::awaitable<void> HttpClient::requestSseAsync(
             );
         }
 
-        size_t                   processed = 0;
-        neograph_asio_error_code ec;
+        size_t processed = 0;
 
         auto flushBody = [&]() {
             auto& respBody = parser.get().body();
@@ -571,6 +571,7 @@ asio::awaitable<void> HttpClient::requestSseAsync(
         };
 
         flushBody();
+        neograph_asio_error_code ec;
         while (!parser.is_done()) {
             co_await http::async_read_some(
                 stream,
@@ -582,7 +583,10 @@ asio::awaitable<void> HttpClient::requestSseAsync(
                 )
             );
             if (ec) {
-                if (ec == asio::error::eof || ec == http::error::end_of_stream) {
+                // stream_truncated: 对端关闭 TLS 时未发送 close_notify,
+                // 在 LB/代理/多数 API 服务器中极为常见, 视为正常结束
+                if (ec == asio::error::eof || ec == http::error::end_of_stream
+                    || ec == asio::ssl::error::stream_truncated) {
                     break;
                 }
                 if (ec == asio::error::operation_aborted) {

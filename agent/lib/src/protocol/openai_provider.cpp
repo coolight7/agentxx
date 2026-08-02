@@ -215,33 +215,20 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStream(
         },
         [&](std::string_view chunk) {
             lineBuffer += chunk;
-            try {
-                processSseBuffer(
-                    lineBuffer,
-                    completion,
-                    fullContent,
-                    fullThinking,
-                    tcMap,
-                    on_chunk
-                );
-            } catch (const std::exception&) {
-            }
+            processSseBuffer(lineBuffer, completion, fullContent, fullThinking, tcMap, on_chunk);
         }
     );
 
     if (!lineBuffer.empty()) {
-        try {
-            processSseBuffer(
-                lineBuffer,
-                completion,
-                fullContent,
-                fullThinking,
-                tcMap,
-                on_chunk,
-                /*finalFlush=*/true
-            );
-        } catch (const std::exception&) {
-        }
+        processSseBuffer(
+            lineBuffer,
+            completion,
+            fullContent,
+            fullThinking,
+            tcMap,
+            on_chunk,
+            /*finalFlush=*/true
+        );
     }
 
     if (fullThinking.empty()) {
@@ -297,7 +284,11 @@ void OpenAIProvider::extractToolCalls(
         if (trimmed.empty()) {
             return false;
         }
-        neograph::json j = neograph::json::parse(trimmed);
+        neograph::json j;
+        try {
+            j = neograph::json::parse(trimmed);
+        } catch (...) {
+        }
         if (!j.is_object()) {
             return false;
         }

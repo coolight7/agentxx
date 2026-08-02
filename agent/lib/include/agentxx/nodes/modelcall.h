@@ -13,11 +13,11 @@ class NEOGRAPH_API ModelCallWrapNode : public WrapHandleBaseNode<neograph::graph
 protected:
 public:
 
-    inline static constexpr auto defNodeType = std::string_view{"xx_ModelCallWrap"};
+    inline static const auto defNodeType = std::string{"xx_ModelCallWrap"};
 
     /// NodeContext.extra_config 中标记是否启用运行时动态模型切换的 key
     /// - 仅主 agent 的 llm 节点启用; subagent 使用自身固定的 provider
-    inline static constexpr auto defUseModelRegistryKey = std::string_view{"xx_useModelRegistry"};
+    inline static const auto defUseModelRegistryKey = std::string{"xx_useModelRegistry"};
 
 protected:
 

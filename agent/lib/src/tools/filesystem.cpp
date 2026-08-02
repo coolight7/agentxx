@@ -200,7 +200,7 @@ void normalizeCrlfToLf(std::string& text) {
 
 /// 将文本中的 LF (`\n`) 行尾统一转换为 CRLF (`\r\n`)。
 /// 已存在的 CRLF 保持原样 (不会产生 `\r\r\n`)。
-std::string lfToCrlf(std::string_view text) {
+[[maybe_unused]] std::string lfToCrlf(std::string_view text) {
     std::string out;
     out.reserve(text.size() + 8);
     for (size_t i = 0; i < text.size(); ++i) {

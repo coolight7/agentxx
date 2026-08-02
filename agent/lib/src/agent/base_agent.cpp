@@ -63,7 +63,7 @@ asio::awaitable<void> BaseAgent::init() {
     nodeContext.instructions = config->prompt.systemPrompt;
     nodeContext.provider     = ModelProviderRegistry::createProvider(config->model);
     nodeContext.extra_config = neograph::json{
-        {std::string{agentxx::nodes::ModelCallWrapNode::defUseModelRegistryKey}, true},
+        {agentxx::nodes::ModelCallWrapNode::defUseModelRegistryKey, true},
     };
 
     std::vector<neograph::Tool*> toolPtrs;
