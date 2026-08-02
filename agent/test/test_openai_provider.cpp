@@ -2235,6 +2235,23 @@ void test_openai_sse_done_flag() {
         );
         XX_TEST_EXPECT_TRUE(done);
     }
+
+    // [DONE] 行尾被网关附加空白时也应识别
+    {
+        std::string                       buf = "data: [DONE] \t\n\n";
+        neograph::ChatCompletion          completion;
+        std::string                       content, thinking;
+        std::map<int, neograph::ToolCall> tcMap;
+        bool done = OpenAIProvider::processSseBuffer(
+            buf,
+            completion,
+            content,
+            thinking,
+            tcMap,
+            nullptr
+        );
+        XX_TEST_EXPECT_TRUE(done);
+    }
 }
 
 asio::awaitable<TestResult> run_openai_provider_tests() {

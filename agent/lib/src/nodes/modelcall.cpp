@@ -289,6 +289,7 @@ void ModelCallWrapNode::repairMessages(neograph::graph::NodeInput& in) {
         auto userMsgJson = neograph::json{};
         neograph::to_json(userMsgJson, userMsg);
         in.state.write("messages", neograph::json::array({userMsgJson}));
+        // 无需通知 [CHANNEL_WRITE]，避免在 UI 层插入该消息
     }
 
     auto agentCtxPtr = agentContext.lock();
@@ -444,21 +445,28 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
         );
         if (lastMsgThinking.size() + lastMsgContent.size() >= 512) {
             // - 保留已有的 llm 消息，而不是丢弃
-            // - 插入 assistant 消息，此时末尾消息未 assistant, 将在下一次进入
+            // - 插入 assistant 消息，此时末尾消息为 assistant, 将在下一次进入
             // baseRun 时自动修复上下文角色顺序 [repairMessages]
             // TODO: 修正消息上下文，应当与客户端同步信息
             auto msg = neograph::ChatMessage{
                 .role    = "assistant",
                 .content = fmt::format(
                     "{}\n{}",
-                    lastMsgContent,
+                    std::move(lastMsgContent),
                     isCancel ? "[User cancelled]" : "[Exception aborted]"
                 ),
-                .reasoning_content = lastMsgThinking,
+                .reasoning_content = std::move(lastMsgThinking),
                 .flags             = neograph::MessageFlag::AutoInserted,
             };
             auto msgJson = neograph::json{};
             neograph::to_json(msgJson, msg);
+            if (nullptr != in.stream_cb) {
+                (*in.stream_cb)(neograph::graph::GraphEvent{
+                    neograph::graph::GraphEvent::Type::CHANNEL_WRITE,
+                    nodeName,
+                    neograph::json::array({msgJson}),
+                });
+            }
             in.state.write("messages", neograph::json::array({msgJson}));
         }
 

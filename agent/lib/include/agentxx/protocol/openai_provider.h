@@ -116,6 +116,10 @@ public:
             payload.erase(0, 1);
         }
 
+        // 部分网关会在行尾附加空白, 容忍后再判断结束标记
+        while (!payload.empty() && (payload.back() == ' ' || payload.back() == '\t')) {
+            payload.pop_back();
+        }
         if (payload == "[DONE]") {
             return true;
         }
