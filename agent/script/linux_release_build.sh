@@ -18,7 +18,7 @@ cmake -B "$build_dir" -S "$src_dir" \
     -DAGENTXX_ENABLE_HYPERSCAN=OFF \
     -DAGENTXX_ENABLE_CODEGRAPH=OFF \
     -DAGENTXX_ENABLE_BOOST_PROCESS=ON \
-    -DXX_BUILD_TYPE=RELEASE \
+    -DXX_IS_RELEASE_D=1 \
     -DCMAKE_BUILD_TYPE=Release
 
 if [[ $? -ne 0 ]]; then

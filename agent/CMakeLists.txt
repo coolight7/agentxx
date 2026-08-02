@@ -25,7 +25,7 @@ set(CMAKE_FIND_DEBUG_MODE OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # option ==========
-option(XX_BUILD_TYPE "Generate the client target." "RELEASE")
+option(XX_IS_RELEASE_D "Release Build." ON)
 option(AGENTXX_BUILD_CLIENT "Generate the client target." OFF)
 option(AGENTXX_BUILD_TEST "Generate the test target." OFF)
 option(AGENTXX_BUILD_BENCHMARK "Generate the benchmark target." OFF)
@@ -37,10 +37,10 @@ option(AGENTXX_ENABLE_BOOST_PROCESS "Use Boost.process for execute command toolc
 # 仅用于指示是否编译用于调试用途，不代表真实编译类型
 # - [XX_IS_DEBUG_D] == 1 时，启用大部分调试日志等信息，因此 profile 之类注重
 # 性能的编译将视为 release
-set(XX_IS_DEBUG_D    0)
-set(XX_IS_RELEASE_D  1)
-
-if (XX_BUILD_TYPE MATCHES "DEBUG")
+if (XX_IS_RELEASE_D)
+  set(XX_IS_DEBUG_D    0)
+  set(XX_IS_RELEASE_D  1)
+else()
   set(XX_IS_DEBUG_D    1)
   set(XX_IS_RELEASE_D  0)
 endif()
@@ -65,13 +65,15 @@ elseif (APPLE AND CMAKE_SYSTEM_NAME STREQUAL "iOS")
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   set(XX_IS_LINUX_D 1)
 
-  # 检查是否支持 [AGENTXX_LINUX_IO_URING_SUPPORTED]
-  file(READ "/usr/include/linux/version.h" _linux_version_h)
-  string(REGEX MATCH "#define LINUX_VERSION_CODE ([0-9]+)" _match "${_linux_version_h}")
-  if(_match AND (CMAKE_MATCH_1 GREATER_EQUAL 330240))  # >= 5.10.0
-      set(AGENTXX_LINUX_IO_URING_SUPPORTED ON)
-  else()
-      set(AGENTXX_LINUX_IO_URING_SUPPORTED OFF)
+  if (EXISTS "/usr/include/linux/version.h")
+    # 检查是否支持 [AGENTXX_LINUX_IO_URING_SUPPORTED]
+    file(READ "/usr/include/linux/version.h" _linux_version_h)
+    string(REGEX MATCH "#define LINUX_VERSION_CODE ([0-9]+)" _match "${_linux_version_h}")
+    if(_match AND (CMAKE_MATCH_1 GREATER_EQUAL 330240))  # >= 5.10.0
+        set(AGENTXX_LINUX_IO_URING_SUPPORTED ON)
+    else()
+        set(AGENTXX_LINUX_IO_URING_SUPPORTED OFF)
+    endif()
   endif()
 endif ()
 
@@ -87,8 +89,7 @@ elseif (CMAKE_C_COMPILER_ID MATCHES "GNU")
 elseif (CMAKE_C_COMPILER_ID MATCHES "Clang")
   set(XX_IS_CLANG_D 1)
 else ()
-  message("[agentxx] 不支持的编译器: ${CMAKE_C_COMPILER_ID}")
-  return()
+  message(FATAL_ERROR "[agentxx] 不支持的编译器: ${CMAKE_C_COMPILER_ID}")
 endif ()
 
 message("[agentxx] Test Utf8 Log: 你好！")
@@ -169,10 +170,10 @@ if (XX_IS_MSVC_D)
   set(CMAKE_CXX_FLAGS_DEBUG          "${CMAKE_CXX_FLAGS_DEBUG}          ${_AGENTXX_CXX_FLAGS}")
 
   if (XX_IS_RELEASE_D)
-    set(LDFLAGS "${LDFLAGS} /OPT:REF /OPT:ICF")
+    set(_AGENTXX_LDFLAGS "${LDFLAGS} ${_AGENTXX_LDFLAGS} /OPT:REF /OPT:ICF")
   else ()
     # windows/msvc 使用 /fsanitize=address 时可能导致链接错误 (uchatdet)
-    set(LDFLAGS "${LDFLAGS}")
+    set(_AGENTXX_LDFLAGS "${LDFLAGS} ${_AGENTXX_LDFLAGS}")
   endif()
 
   # set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
@@ -191,11 +192,13 @@ else ()
   set(CMAKE_CXX_FLAGS_DEBUG          "${_AGENTXX_CXX_FLAGS} -fsanitize=address -g -fno-omit-frame-pointer -fno-optimize-sibling-calls ${CMAKE_CXX_FLAGS_DEBUG}")
 
   if (XX_IS_RELEASE_D)
-    set(LDFLAGS "${LDFLAGS} -Wl,--gc-sections")
+    set(_AGENTXX_LDFLAGS "${LDFLAGS} ${_AGENTXX_LDFLAGS} -Wl,--gc-sections -flto")
   else ()
-    set(LDFLAGS "${LDFLAGS} -fsanitize=address")
+    set(_AGENTXX_LDFLAGS "${LDFLAGS} ${_AGENTXX_LDFLAGS} -fsanitize=address")
   endif ()
 endif ()
+string(APPEND CMAKE_EXE_LINKER_FLAGS    " ${_AGENTXX_LDFLAGS}")
+string(APPEND CMAKE_SHARED_LINKER_FLAGS " ${_AGENTXX_LDFLAGS}")
 
 unset(_AGENTXX_COMMON_C_CXX_FLAGS)
 unset(_AGENTXX_C_FLAGS)
@@ -223,7 +226,7 @@ endif()
 # 下载 release/boost-xxx.7z 解压到 agent/third_party/boost/
 # 自行按文档编译参考: /docs/build/linux.md 或 /docs/build/windows.md
 set (Boost_USE_STATIC_LIBS ON)
-set (Boost_USE_STATIC_RUNTIME OFF) # 静态链接标准库
+set (Boost_USE_STATIC_RUNTIME OFF) # 是否静态链接标准库
 set (Boost_USE_DEBUG_LIBS ${XX_IS_DEBUG_D})
 set (Boost_USE_RELEASE_LIBS ${XX_IS_RELEASE_D})
 set (Boost_USE_DEBUG_RUNTIME ${XX_IS_DEBUG_D})
@@ -266,7 +269,7 @@ set(_AGENTXX_COMMON_CMAKE_CACHE_ARGS
     "-DBOOST_ROOT:PATH=${BOOST_ROOT}"
     "-DBoost_ROOT:PATH=${BOOST_ROOT}"
     "-DOPENSSL_ROOT_DIR:PATH=${OPENSSL_ROOT_DIR}"
-    "-DLDFLAGS:STRING=${LDFLAGS}"
+    "-DLDFLAGS:STRING=${_AGENTXX_LDFLAGS}"
 )
 set(_AGENTXX_COMMON_CMAKE_ARGS
     # "-DCMAKE_SYSTEM_NAME=${CMAKE_SYSTEM_NAME}" # 传递后会导致 sqlite 编译检查出错
@@ -314,8 +317,6 @@ set(_AGENTXX_COMMON_CMAKE_ARGS
     "-DOPENSSL_ROOT_DIR:PATH=${OPENSSL_ROOT_DIR}"
     -DOPENSSL_USE_STATIC_LIBS=${OPENSSL_USE_STATIC_LIBS}
     -DYAML_CPP_STATIC_DEFINE=ON
-
-    -DXX_BUILD_TYPE=${XX_BUILD_TYPE}
     
     -DXX_IS_DEBUG_D=${XX_IS_DEBUG_D}
     -DXX_IS_RELEASE_D=${XX_IS_RELEASE_D}
@@ -326,9 +327,9 @@ set(_AGENTXX_COMMON_CMAKE_ARGS
     -DXX_IS_ANDROID_D=${XX_IS_ANDROID_D}
     -DXX_IS_IOS_D=${XX_IS_IOS_D}
 
-    -DXX_IS_MSVC=${XX_IS_MSVC_D}
-    -DXX_IS_GCC=${XX_IS_GCC_D}
-    -DXX_IS_CLANG=${XX_IS_CLANG_D}
+    -DXX_IS_MSVC_D=${XX_IS_MSVC_D}
+    -DXX_IS_GCC_D=${XX_IS_GCC_D}
+    -DXX_IS_CLANG_D=${XX_IS_CLANG_D}
 
     "-DAGENTXX_INSTALL_DIR=${AGENTXX_INSTALL_DIR}"
     -DAGENTXX_ENABLE_VECTORSCAN=${AGENTXX_ENABLE_VECTORSCAN}
@@ -342,10 +343,6 @@ set(_AGENTXX_COMMON_CMAKE_ARGS
     -DAGENTXX_WINDOWS_IOCP_SUPPORTED=${AGENTXX_WINDOWS_IOCP_SUPPORTED}
 )
 if (ANDROID_PLATFORM)
-  if (NOT ANDROID_ABI)
-    # 默认取 android SDK 21
-    set (ANDROID_ABI 21)
-  endif()
   list(APPEND _AGENTXX_COMMON_CMAKE_ARGS
     "-DCMAKE_SYSTEM_NAME=${CMAKE_SYSTEM_NAME}"
     -DANDROID_ABI=${ANDROID_ABI}
@@ -520,7 +517,6 @@ ExternalProject_Add(
     ${_AGENTXX_COMMON_CMAKE_ARGS}
     -DBUILD_CURL_EXE=OFF
     -DCURL_DISABLE_INSTALL=OFF
-    -DBUILD_CURL_EXE=OFF
     -DCURL_BUILD_EVERYTHING=OFF
     -DENABLE_UNICODE=ON
     -DCURL_LTO=ON
@@ -607,7 +603,7 @@ if (AGENTXX_ENABLE_VECTORSCAN)
       -DFAT_RUNTIME=OFF
       -DUSE_CPU_NATIVE=ON 
       -DBUILD_AVX2=ON 
-      -DBUILD_AVX512=${COMPILER_SUPPORTS_AVX512VBMI}
+      -DBUILD_AVX512=${COMPILER_SUPPORTS_AVX512F}
       -DBUILD_AVX512VBMI=${COMPILER_SUPPORTS_AVX512VBMI}
       -DBUILD_SIMDE_BACKEND=OFF
       -DBUILD_SIMDE_NATIVE=OFF
@@ -854,7 +850,6 @@ if (AGENTXX_BUILD_TEST)
     agentxx_test_repo
     DEPENDS 
       agentxx_lib_repo
-      agentxx_client_repo
     SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/test/"
     INSTALL_DIR "${AGENTXX_INSTALL_DIR}"
     BUILD_ALWAYS TRUE
@@ -866,6 +861,9 @@ if (AGENTXX_BUILD_TEST)
       ${_AGENTXX_COMMON_CMAKE_CACHE_ARGS}
     TEST_COMMAND ""
   )
+  if (AGENTXX_BUILD_CLIENT)
+    add_dependencies(agentxx_test_repo agentxx_client_repo)
+  endif()
 endif()
 if (AGENTXX_BUILD_BENCHMARK)
   ExternalProject_Add(

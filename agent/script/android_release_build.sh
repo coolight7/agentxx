@@ -50,7 +50,7 @@ for abi in ${abi_list[@]}; do
         -DCMAKE_BUILD_TYPE=Release \
         -DBOOST_ROOT="${BOOST_ROOT}" \
         -DOPENSSL_ROOT_DIR="${OPENSSL_ROOT_DIR}" \
-        -DXX_BUILD_TYPE=RELEASE \
+        -DXX_IS_RELEASE_D=1 \
         -DAGENTXX_BUILD_CLIENT=OFF \
         -DAGENTXX_BUILD_TEST=OFF \
         -DAGENTXX_ENABLE_CLIENT_TUI=OFF \

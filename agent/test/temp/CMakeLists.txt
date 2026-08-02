@@ -9,23 +9,22 @@ set(CMAKE_C_STANDARD 23)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-option(XX_BUILD_TYPE "Generate the client target." "RELEASE")
+option(XX_IS_RELEASE_D "Generate the client target." ON)
 option(AGENTXX_BUILD_CLIENT "Generate the client target." OFF)
 option(AGENTXX_BUILD_TEST "Generate the test target." OFF)
 
 # 仅用于指示是否编译用于调试用途，不代表真实编译类型
 # - [XX_IS_DEBUG_D] == 1 时，启用大部分调试日志等信息，因此 profile 之类注重
 # 性能的编译将视为 release
-set(XX_IS_DEBUG_D    0)
-set(XX_IS_RELEASE_D  1)
-
-if (XX_BUILD_TYPE MATCHES "DEBUG")
+if (XX_IS_RELEASE_D)
+  set(XX_IS_DEBUG_D    0)
+  set(XX_IS_RELEASE_D  1)
+else()
   set(XX_IS_DEBUG_D    1)
   set(XX_IS_RELEASE_D  0)
 endif()
 add_definitions(-DXX_IS_DEBUG_D=${XX_IS_DEBUG_D})
 add_definitions(-DXX_IS_RELEASE_D=${XX_IS_RELEASE_D})
-add_definitions(-DXX_BUILD_TYPE=${XX_BUILD_TYPE})
 
 set(XX_IS_LINUX_D    0)
 set(XX_IS_WIN_D      0)

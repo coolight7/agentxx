@@ -15,4 +15,5 @@
 - 建议当需要通读一个大项目时，可以先由一个 subagent 总结出大致的 wiki，然后分析划分模块化，再分享 wiki 给多个 subagent 各自负责模块解决问题
 
 ## 问题
-通读本项目的源码，分析一下测试用例写的有没有问题，然后补充完善一些边界情况、常用情况的测试用例，提高稳定性
+分析一下 这些 cmakelist 有没有问题 /home/coolight/program/agentxx/agent/CMakeLists.txt、/home/coolight/program/agentxx/agent/lib/CMakeLists.txt、/home/coolight/program/agentxx/agent/client/CMakeLists.txt、/home/coolight/program/agentxx/agent/test/CMakeLists.txt
+通读 ftxui 的源码，了解其正确使用方式，然后重构 tui，目前的 tui 实现太繁杂了，组件的事件杂糅在一起处理、要自己做渲染缓存等问题

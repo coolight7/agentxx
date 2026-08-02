@@ -48,7 +48,6 @@ target_compile_definitions(agentxx_shared PUBLIC
   __STDC_CONSTANT_MACROS
   XX_IS_DEBUG_D=${XX_IS_DEBUG_D}
   XX_IS_RELEASE_D=${XX_IS_RELEASE_D}
-  XX_BUILD_TYPE=${XX_BUILD_TYPE}
 
   XX_IS_LINUX_D=${XX_IS_LINUX_D}
   XX_IS_WIN_D=${XX_IS_WIN_D}
@@ -64,7 +63,6 @@ target_compile_definitions(agentxx_static PUBLIC
   __STDC_CONSTANT_MACROS
   XX_IS_DEBUG_D=${XX_IS_DEBUG_D}
   XX_IS_RELEASE_D=${XX_IS_RELEASE_D}
-  XX_BUILD_TYPE=${XX_BUILD_TYPE}
 
   XX_IS_LINUX_D=${XX_IS_LINUX_D}
   XX_IS_WIN_D=${XX_IS_WIN_D}
