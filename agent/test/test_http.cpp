@@ -4,15 +4,22 @@
 #include <asio/awaitable.hpp>
 #include <asio/detached.hpp>
 #include <asio/io_context.hpp>
+#include <asio/ip/tcp.hpp>
+#include <asio/read.hpp>
 #include <asio/redirect_error.hpp>
 #include <asio/steady_timer.hpp>
 #include <asio/use_awaitable.hpp>
+#include <asio/write.hpp>
+#include <atomic>
+#include <boost/beast/core.hpp>
+#include <boost/beast/http.hpp>
 #include <chrono>
 #include <fmt/format.h>
 #include <iostream>
 #include <string>
 #include <string_view>
 #include <thread>
+#include <vector>
 
 namespace agentxx {
 namespace test {
@@ -982,11 +989,242 @@ asio::awaitable<void> test_http_client_beast_server() {
     serverThread.join();
 }
 
+/// 原始 socket SSE 测试服务器: 用于模拟 HttpClient::requestSseAsync 的各种异常场景
+/// - Complete:    正常发完事件并发送 chunked 终止块
+/// - AbruptClose: 发送部分事件后直接关闭连接 (不发 chunked 终止块, 模拟对端中断)
+/// - Stall:       发送部分事件后保持静默 (模拟卡死, 用于触发 readChunkTimeout)
+class SseTestServer {
+public:
+
+    enum class Mode {
+        Complete,
+        AbruptClose,
+        Stall,
+    };
+
+    std::thread              thread;
+    uint16_t                 boundPort = 0;
+    Mode                     mode      = Mode::Complete;
+    std::vector<std::string> events;  // 原始 SSE 事件块 (含结尾 "\n\n")
+    std::atomic<bool>        stopped{false};
+
+private:
+
+    asio::io_context                         ioCtx;
+    std::unique_ptr<asio::ip::tcp::acceptor> acceptor;
+    asio::ip::tcp::endpoint                  ep;
+
+public:
+
+    void start() {
+        acceptor = std::make_unique<asio::ip::tcp::acceptor>(
+            ioCtx,
+            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0)
+        );
+        ep        = acceptor->local_endpoint();
+        boundPort = ep.port();
+
+        thread = std::thread([this]() {
+            while (!stopped.load()) {
+                neograph_asio_error_code ec;
+                asio::ip::tcp::socket    sock(ioCtx);
+                acceptor->accept(sock, ec);
+                if (ec) {
+                    break;
+                }
+                if (stopped.load()) {
+                    break;
+                }
+                handleConn(sock);
+            }
+        });
+    }
+
+    void stop() {
+        stopped.store(true);
+        if (acceptor) {
+            neograph_asio_error_code ec;
+            asio::ip::tcp::socket    dummy(ioCtx);
+            dummy.connect(ep, ec);
+            acceptor->close(ec);
+        }
+        if (thread.joinable()) {
+            thread.join();
+        }
+    }
+
+private:
+
+    static std::string chunkFrame(const std::string& payload) {
+        return fmt::format("{:x}\r\n{}\r\n", payload.size(), payload);
+    }
+
+    void handleConn(asio::ip::tcp::socket& sock) {
+        namespace http = boost::beast::http;
+        neograph_asio_error_code ec;
+
+        boost::beast::flat_buffer        buf;
+        http::request<http::string_body> req;
+        http::read(sock, buf, req, ec);
+        if (ec) {
+            return;
+        }
+
+        std::string header = "HTTP/1.1 200 OK\r\n"
+                             "Content-Type: text/event-stream\r\n"
+                             "Transfer-Encoding: chunked\r\n"
+                             "\r\n";
+        asio::write(sock, asio::buffer(header), ec);
+        if (ec) {
+            return;
+        }
+
+        for (const auto& ev : events) {
+            auto framed = chunkFrame(ev);
+            asio::write(sock, asio::buffer(framed), ec);
+            if (ec) {
+                return;
+            }
+        }
+
+        switch (mode) {
+            case Mode::Complete: {
+                // chunked 终止块, 正常结束响应
+                asio::write(sock, asio::buffer(std::string{"0\r\n\r\n"}), ec);
+                break;
+            }
+            case Mode::AbruptClose:
+                // 不发终止块直接关闭 (FIN), 客户端应收到 eof/partial_message 错误
+                break;
+            case Mode::Stall:
+                for (int i = 0; i < 300 && !stopped.load(); ++i) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                }
+                break;
+        }
+    }
+};
+
+/// requestSseAsync: 正常完成 / 中途连接中断 / 无数据超时 三种场景
+asio::awaitable<void> test_http_client_sse_interruption() {
+    // 1) 正常完成: 所有事件都应通过 onChunk 送达, 不抛异常
+    {
+        SseTestServer srv;
+        srv.mode   = SseTestServer::Mode::Complete;
+        srv.events = {"data: one\n\n", "data: two\n\n"};
+        srv.start();
+
+        std::string url      = "http://127.0.0.1:" + std::to_string(srv.boundPort) + "/sse";
+        std::string received;
+        bool        threw = false;
+        try {
+            co_await HttpClient::requestSseAsync(
+                "POST",
+                url,
+                "{}",
+                "application/json",
+                {},
+                HttpClient::RequestConfig{
+                    .connectTimeout   = std::chrono::seconds{5},
+                    .readChunkTimeout = std::chrono::seconds{5},
+                },
+                [&](std::string_view chunk) {
+                    received += chunk;
+                }
+            );
+        } catch (const std::exception& e) {
+            threw = true;
+            TEST_FAIL << "sse complete case threw: " << e.what() << std::endl;
+        }
+        XX_TEST_EXPECT_FALSE(threw);
+        XX_TEST_EXPECT_EQ(received, "data: one\n\ndata: two\n\n");
+
+        srv.stop();
+    }
+
+    // 2) 中途连接突然中断: 已发送的部分事件应先送达 onChunk, 随后抛出传输错误
+    {
+        SseTestServer srv;
+        srv.mode   = SseTestServer::Mode::AbruptClose;
+        srv.events = {"data: partial\n\n"};
+        srv.start();
+
+        std::string url      = "http://127.0.0.1:" + std::to_string(srv.boundPort) + "/sse";
+        std::string received;
+        bool        threw = false;
+        try {
+            co_await HttpClient::requestSseAsync(
+                "POST",
+                url,
+                "{}",
+                "application/json",
+                {},
+                HttpClient::RequestConfig{
+                    .connectTimeout   = std::chrono::seconds{5},
+                    .readChunkTimeout = std::chrono::seconds{5},
+                },
+                [&](std::string_view chunk) {
+                    received += chunk;
+                }
+            );
+        } catch (const std::exception&) {
+            threw = true;
+        }
+        XX_TEST_EXPECT_TRUE(threw);
+        XX_TEST_EXPECT_TRUE(received.find("data: partial") != std::string::npos);
+
+        srv.stop();
+    }
+
+    // 3) 服务端发送部分事件后卡死: readChunkTimeout 内无新数据应超时抛错,
+    //    且超时前已送达的数据不丢失
+    {
+        SseTestServer srv;
+        srv.mode   = SseTestServer::Mode::Stall;
+        srv.events = {"data: first\n\n"};
+        srv.start();
+
+        std::string url      = "http://127.0.0.1:" + std::to_string(srv.boundPort) + "/sse";
+        std::string received;
+        bool        threw = false;
+        auto        start = std::chrono::steady_clock::now();
+        try {
+            co_await HttpClient::requestSseAsync(
+                "POST",
+                url,
+                "{}",
+                "application/json",
+                {},
+                HttpClient::RequestConfig{
+                    .connectTimeout   = std::chrono::seconds{5},
+                    .readChunkTimeout = std::chrono::milliseconds{800},
+                },
+                [&](std::string_view chunk) {
+                    received += chunk;
+                }
+            );
+        } catch (const std::exception&) {
+            threw = true;
+        }
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                           std::chrono::steady_clock::now() - start
+        )
+                           .count();
+        XX_TEST_EXPECT_TRUE(threw);
+        XX_TEST_EXPECT_TRUE(received.find("data: first") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(elapsed >= 700);
+        XX_TEST_EXPECT_TRUE(elapsed < 5000);
+
+        srv.stop();
+    }
+}
+
 asio::awaitable<TestResult> run_http_client_tests() {
     test_http_client_unit();
     test_http_server_unit();
     co_await test_http_client();
     co_await test_http_client_beast_server();
+    co_await test_http_client_sse_interruption();
     co_return TestResult{g_http_passed, g_http_failed};
 }
 

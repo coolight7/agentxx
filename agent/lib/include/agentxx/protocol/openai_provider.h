@@ -67,7 +67,8 @@ public:
 
     /// 处理 OpenAI SSE 缓冲区 (public 以便单测)
     /// - finalFlush: 连接关闭时对末尾未以 "\n" 结尾的最后一行也进行解析
-    static void processSseBuffer(
+    /// - 返回本次调用是否处理到了 "data: [DONE]" 结束标记 (用于检测流截断)
+    static bool processSseBuffer(
         std::string&                       buf,
         neograph::ChatCompletion&          completion,
         std::string&                       fullContent,
@@ -76,21 +77,24 @@ public:
         neograph::FormatDataStreamCallback on_chunk,
         bool                               finalFlush = false
     ) {
+        bool   done = false;
         size_t pos;
         while ((pos = buf.find('\n')) != std::string::npos) {
             std::string line = buf.substr(0, pos);
             buf.erase(0, pos + 1);
-            processSseLine(line, completion, fullContent, fullThinking, tcMap, on_chunk);
+            done |= processSseLine(line, completion, fullContent, fullThinking, tcMap, on_chunk);
         }
         if (finalFlush && !buf.empty()) {
             // 连接 abrupt 关闭时, 最后一行可能没有 trailing "\n", 此处补解析
             std::string line = std::move(buf);
             buf.clear();
-            processSseLine(line, completion, fullContent, fullThinking, tcMap, on_chunk);
+            done |= processSseLine(line, completion, fullContent, fullThinking, tcMap, on_chunk);
         }
+        return done;
     }
 
-    static void processSseLine(
+    /// 解析单行 SSE, 返回该行是否为 "data: [DONE]" 结束标记
+    static bool processSseLine(
         std::string_view                   line_in,
         neograph::ChatCompletion&          completion,
         std::string&                       fullContent,
@@ -105,7 +109,7 @@ public:
 
         // SSE 规范: "data:" 后的单个前导空格可选
         if (line.rfind("data:", 0) != 0) {
-            return;
+            return false;
         }
         std::string payload = line.substr(5);
         if (!payload.empty() && payload.front() == ' ') {
@@ -113,7 +117,7 @@ public:
         }
 
         if (payload == "[DONE]") {
-            return;
+            return true;
         }
 
         // 畸形 data 行 (部分代理/网关会注入非 JSON 内容) 应跳过而不是中断整个流
@@ -121,7 +125,7 @@ public:
         try {
             j = neograph::json::parse(payload);
         } catch (...) {
-            return;
+            return false;
         }
 
         if (j.contains("usage") && !j["usage"].is_null()) {
@@ -135,7 +139,7 @@ public:
         }
 
         if (!j.contains("choices") || !j["choices"].is_array() || j["choices"].empty()) {
-            return;
+            return false;
         }
         auto delta = j["choices"][0]["delta"];
 
@@ -189,6 +193,7 @@ public:
                 }
             }
         }
+        return false;
     }
 
     static void extractThinkTags(std::string& content, std::string& thinking);

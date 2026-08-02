@@ -1223,6 +1223,56 @@ asio::awaitable<void>
     }
 }
 
+/// 流未收到 message_stop 就结束 (HTTP 层完整但 SSE 协议层被截断) 必须报错,
+/// 不能把截断的响应静默当作正常结果返回
+asio::awaitable<void>
+    test_streaming_missing_message_stop_throws(MockAnthropicServer& mock, uint16_t port) {
+    std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
+    mock.mode           = AnthropicMockMode::Streaming;
+
+    mock.sseChunks = {
+        MockAnthropicServer::sseEvent(
+            "message_start",
+            R"({"type":"message_start","message":{"id":"msg_t2","type":"message","role":"assistant","usage":{"input_tokens":3}}})"
+        ),
+        MockAnthropicServer::sseEvent(
+            "content_block_start",
+            R"({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}})"
+        ),
+        MockAnthropicServer::sseEvent(
+            "content_block_delta",
+            R"({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Partial"}})"
+        ),
+        // 故意不包含 message_stop: 模拟长输出被中间代理截断
+    };
+
+    auto provider = server::AnthropicProvider::create(makeAntCfg("sk-ant-test", baseUrl));
+
+    neograph::CompletionParams params;
+    params.model    = "claude-sonnet-4-20250514";
+    params.messages = {
+        neograph::ChatMessage{.role = "user", .content = "Truncation test"}
+    };
+
+    std::string              accumulated;
+    neograph::StreamCallback onChunk = [&](const std::string& chunk) {
+        accumulated += chunk;
+    };
+
+    bool        threw = false;
+    std::string errMsg;
+    try {
+        co_await provider->invoke(params, onChunk);
+    } catch (const std::exception& e) {
+        threw  = true;
+        errMsg = e.what();
+    }
+    XX_TEST_EXPECT_TRUE(threw);
+    XX_TEST_EXPECT_TRUE(errMsg.find("truncated") != std::string::npos);
+    // 截断前已送达的增量数据仍应已回调给调用方 (用于 UI 展示)
+    XX_TEST_EXPECT_EQ(accumulated, "Partial");
+}
+
 asio::awaitable<void> test_thinking_callback_separation(MockAnthropicServer& mock, uint16_t port) {
     std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
     mock.mode           = AnthropicMockMode::StreamingThinking;
@@ -1490,6 +1540,7 @@ public:
     enum class Mode {
         NeverReadBody,
         PartialThenStall,
+        AbortAfterChunks,  // 发完 partialChunks 后直接断开 (不发 chunked 终止块)
     };
 
     std::thread              thread;
@@ -1578,6 +1629,11 @@ private:
             if (ec) {
                 return;
             }
+        }
+
+        if (mode == Mode::AbortAfterChunks) {
+            // 不发 chunked 终止块直接关闭 (FIN), 模拟长输出末尾连接被对端中断
+            return;
         }
 
         for (int i = 0; i < 1200 && !stopped.load(); ++i) {
@@ -1673,6 +1729,76 @@ void test_anthropic_read_timeout_streaming() {
     XX_TEST_EXPECT_EQ(accumulated, "Par");
     XX_TEST_EXPECT_TRUE(elapsed >= 1500);
     XX_TEST_EXPECT_TRUE(elapsed < 8000);
+
+    srv->stop();
+}
+
+/// 已收到 message_stop 后连接层报错 (如 stream_truncated/连接被中断) 不应使请求失败,
+/// 应忽略传输错误并返回已完整接收的结果
+void test_anthropic_streaming_abort_after_message_stop_ignored() {
+    auto srv           = std::make_unique<AnthropicStallServer>();
+    srv->mode          = AnthropicStallServer::Mode::AbortAfterChunks;
+    srv->partialChunks = {
+        "event: message_start\ndata: "
+        "{\"type\":\"message_start\",\"message\":{\"id\":\"msg_a\",\"type\":"
+        "\"message\",\"role\":\"assistant\",\"usage\":{\"input_tokens\":4}}}\n\n",
+        "event: content_block_start\ndata: "
+        "{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{"
+        "\"type\":\"text\",\"text\":\"\"}}\n\n",
+        "event: content_block_delta\ndata: "
+        "{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":"
+        "\"text_delta\",\"text\":\"Full\"}}\n\n",
+        "event: content_block_delta\ndata: "
+        "{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":"
+        "\"text_delta\",\"text\":\" text\"}}\n\n",
+        "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+        "event: message_delta\ndata: "
+        "{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},"
+        "\"usage\":{\"output_tokens\":2}}\n\n",
+        "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+        // 无 chunked 终止块, 服务端直接断开 → 客户端传输层报错, 但 message_stop 已收到
+    };
+    srv->start();
+
+    std::string baseUrl = "http://127.0.0.1:" + std::to_string(srv->boundPort);
+    auto provider = server::AnthropicProvider::create(makeAntCfg("sk-ant-test", baseUrl, 5, 5));
+
+    neograph::CompletionParams params;
+    params.model    = "claude-sonnet-4-20250514";
+    params.messages = {
+        neograph::ChatMessage{.role = "user", .content = "Stream abort test"}
+    };
+
+    std::string              accumulated;
+    neograph::StreamCallback onChunk = [&](const std::string& chunk) {
+        accumulated += chunk;
+    };
+
+    bool             threw = false;
+    std::string      content;
+    int              totalTokens = 0;
+    asio::io_context ctx;
+    asio::co_spawn(
+        ctx,
+        [&]() -> asio::awaitable<void> {
+            try {
+                auto result = co_await provider->invoke(params, onChunk);
+                content     = result.message.content;
+                totalTokens = result.usage.total_tokens;
+            } catch (const std::exception& e) {
+                threw = true;
+                TEST_FAIL << "abort-after-message_stop should be ignored, but threw: " << e.what()
+                          << std::endl;
+            }
+        },
+        asio::detached
+    );
+    ctx.run();
+
+    XX_TEST_EXPECT_FALSE(threw);
+    XX_TEST_EXPECT_EQ(content, "Full text");
+    XX_TEST_EXPECT_EQ(accumulated, "Full text");
+    XX_TEST_EXPECT_EQ(totalTokens, 6);
 
     srv->stop();
 }
@@ -1938,6 +2064,49 @@ void test_anthropic_sse_crlf_separator() {
     XX_TEST_EXPECT_TRUE(buf.empty());
 }
 
+/// processSseBuffer 返回值: 仅当处理到 "message_stop" 事件时为 true (流截断检测依据)
+void test_anthropic_sse_message_stop_flag() {
+    using server::AnthropicProvider;
+
+    auto run = [](const std::string& input, bool finalFlush = false) {
+        std::string                       buf = input;
+        neograph::ChatCompletion          completion;
+        std::string                       content, thinking;
+        std::map<int, neograph::ToolCall> tcMap;
+        std::map<int, std::string>        blockTypes, thinkingTexts, blockSignatures;
+        return AnthropicProvider::processSseBuffer(
+            buf,
+            completion,
+            content,
+            thinking,
+            tcMap,
+            blockTypes,
+            thinkingTexts,
+            blockSignatures,
+            nullptr,
+            finalFlush
+        );
+    };
+
+    // 普通事件 → false
+    XX_TEST_EXPECT_FALSE(run(
+        "event: content_block_delta\n"
+        "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\","
+        "\"text\":\"Hi\"}}\n\n"
+    ));
+
+    // 含 message_stop → true
+    XX_TEST_EXPECT_TRUE(run(
+        "event: message_delta\n"
+        "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},"
+        "\"usage\":{\"output_tokens\":1}}\n\n"
+        "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
+    ));
+
+    // message_stop 无结尾分隔符, finalFlush 时也应识别
+    XX_TEST_EXPECT_TRUE(run("event: message_stop\ndata: {\"type\":\"message_stop\"}", true));
+}
+
 asio::awaitable<TestResult> run_anthropic_provider_tests() {
     g_anthropic_passed = 0;
     g_anthropic_failed = 0;
@@ -1969,6 +2138,7 @@ asio::awaitable<TestResult> run_anthropic_provider_tests() {
     test_parse_response_thinking_signature();
     test_anthropic_sse_signature_capture();
     test_anthropic_sse_crlf_separator();
+    test_anthropic_sse_message_stop_flag();
 
     // Integration tests
     uint16_t port = 0;
@@ -1994,6 +2164,7 @@ asio::awaitable<TestResult> run_anthropic_provider_tests() {
     co_await test_streaming_mixed_thinking_and_content(*mock, port);
     co_await test_streaming_usage(*mock, port);
     co_await test_streaming_malformed_event_skipped(*mock, port);
+    co_await test_streaming_missing_message_stop_throws(*mock, port);
     co_await test_sendthinking_in_request_body(*mock, port);
     co_await test_thinking_callback_separation(*mock, port);
 
@@ -2004,6 +2175,7 @@ asio::awaitable<TestResult> run_anthropic_provider_tests() {
     test_anthropic_send_timeout_calculation();
     test_anthropic_connect_timeout();
     test_anthropic_read_timeout_streaming();
+    test_anthropic_streaming_abort_after_message_stop_ignored();
 
     mock->server->stop();
     mock->thread.join();

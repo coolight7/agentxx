@@ -77,7 +77,8 @@ public:
     /// - thinkingTexts/blockSignatures: 按 block index 累积 thinking 文本与 signature,
     ///   content_block_stop 时组装为带 signature 的 thinking 块存入 completion.message.extra
     /// - finalFlush: 连接关闭时对末尾未以 "\n\n" 结尾的最后一个事件块也进行解析
-    static void processSseBuffer(
+    /// - 返回本次调用是否处理到了 "message_stop" 结束事件 (用于检测流截断)
+    static bool processSseBuffer(
         std::string&                       buf,
         neograph::ChatCompletion&          completion,
         std::string&                       fullContent,
@@ -89,6 +90,7 @@ public:
         neograph::FormatDataStreamCallback on_chunk,
         bool                               finalFlush = false
     ) {
+        bool done = false;
         while (true) {
             // SSE 规范允许 \n 或 \r\n 行结尾, 事件分隔符相应可能是 "\n\n" 或 "\r\n\r\n",
             // 取最先出现者为界
@@ -106,7 +108,7 @@ public:
             }
             std::string block = buf.substr(0, pos);
             buf.erase(0, pos + sepLen);
-            processSseBlock(
+            done |= processSseBlock(
                 block,
                 completion,
                 fullContent,
@@ -122,7 +124,7 @@ public:
             // 连接 abrupt 关闭时, 最后一个事件可能没有 trailing "\n\n", 此处补解析
             std::string block = std::move(buf);
             buf.clear();
-            processSseBlock(
+            done |= processSseBlock(
                 block,
                 completion,
                 fullContent,
@@ -134,10 +136,12 @@ public:
                 on_chunk
             );
         }
+        return done;
     }
 
     /// 解析单个 SSE 事件块 (以 "\n\n" 分隔的一块, 含若干 event:/data: 行)
-    static void processSseBlock(
+    /// 返回该事件块是否为 "message_stop" 结束事件
+    static bool processSseBlock(
         std::string_view                   block,
         neograph::ChatCompletion&          completion,
         std::string&                       fullContent,
@@ -184,14 +188,14 @@ public:
         }
 
         if (payload.empty()) {
-            return;
+            return false;
         }
 
         neograph::json j;
         try {
             j = neograph::json::parse(payload);
         } catch (...) {
-            return;
+            return false;
         }
 
         // 允许异常时字节抛出给到 ModelCallNode ，以便自动处理
@@ -268,6 +272,7 @@ public:
                     = completion.usage.prompt_tokens + completion.usage.completion_tokens;
             }
         }
+        return currentEvent == "message_stop";
     }
 
 private:
