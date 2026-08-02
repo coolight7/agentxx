@@ -386,21 +386,53 @@ asio::awaitable<neograph::ChatCompletion> AnthropicProvider::doStream(
     std::map<int, std::string>        thinkingTexts;
     std::map<int, std::string>        blockSignatures;
     std::string                       lineBuffer;
+    // 是否收到 Anthropic SSE 结束事件 "message_stop", 用于检测流截断
+    bool                              messageStopReceived = false;
 
-    co_await HttpClient::requestSseAsync(
-        "POST",
-        config_.baseUrl + "/v1/messages",
-        bodyStr,
-        "application/json",
-        headers,
-        HttpClient::RequestConfig{
-            .connectTimeout   = std::chrono::seconds{config_.connectTimeoutSeconds},
-            .readChunkTimeout = std::chrono::seconds{config_.readChunkTimeoutSeconds},
-            .sslVerify        = config_.sslVerify,
-        },
-        [&](std::string_view chunk) {
-            lineBuffer += chunk;
-            processSseBuffer(
+    try {
+        co_await HttpClient::requestSseAsync(
+            "POST",
+            config_.baseUrl + "/v1/messages",
+            bodyStr,
+            "application/json",
+            headers,
+            HttpClient::RequestConfig{
+                .connectTimeout   = std::chrono::seconds{config_.connectTimeoutSeconds},
+                .readChunkTimeout = std::chrono::seconds{config_.readChunkTimeoutSeconds},
+                .sslVerify        = config_.sslVerify,
+            },
+            [&](std::string_view chunk) {
+                lineBuffer += chunk;
+                if (processSseBuffer(
+                        lineBuffer,
+                        completion,
+                        fullContent,
+                        fullThinking,
+                        tcMap,
+                        blockTypes,
+                        thinkingTexts,
+                        blockSignatures,
+                        on_chunk
+                    )) {
+                    messageStopReceived = true;
+                }
+            }
+        );
+    } catch (const std::exception& e) {
+        // 已收到 message_stop 说明消息已结束、业务数据已全部送达, 连接层在收尾阶段的
+        // 错误 (如 ssl stream_truncated: 对端未发 close_notify 就关闭连接) 不应使请求失败
+        if (!messageStopReceived) {
+            throw;
+        }
+        XX_LOGW(
+            "LLM stream transport error after message_stop, ignored | model={} err={}",
+            params.model.empty() ? config_.modelName : params.model,
+            e.what()
+        );
+    }
+
+    if (!lineBuffer.empty()) {
+        if (processSseBuffer(
                 lineBuffer,
                 completion,
                 fullContent,
@@ -409,24 +441,22 @@ asio::awaitable<neograph::ChatCompletion> AnthropicProvider::doStream(
                 blockTypes,
                 thinkingTexts,
                 blockSignatures,
-                on_chunk
-            );
+                on_chunk,
+                /*finalFlush=*/true
+            )) {
+            messageStopReceived = true;
         }
-    );
+    }
 
-    if (!lineBuffer.empty()) {
-        processSseBuffer(
-            lineBuffer,
-            completion,
-            fullContent,
-            fullThinking,
-            tcMap,
-            blockTypes,
-            thinkingTexts,
-            blockSignatures,
-            on_chunk,
-            /*finalFlush=*/true
-        );
+    // 未收到 message_stop 即视为流被截断: 长连接被中间代理/网关中断、或对端提前关闭
+    // connection-close 定长的响应时, HTTP 层可能仍判定"完整", 必须在 SSE 协议层检测,
+    // 否则会把截断的响应静默当作正常结果返回
+    if (!messageStopReceived) {
+        throw std::runtime_error(fmt::format(
+            "SSE stream truncated: missing message_stop event | model={} content_chars={}",
+            params.model.empty() ? config_.modelName : params.model,
+            fullContent.size()
+        ));
     }
 
     completion.message.content           = fullContent;

@@ -1461,6 +1461,46 @@ asio::awaitable<void>
     }
 }
 
+/// 流未收到 [DONE] 就结束 (HTTP 层完整但 SSE 协议层被截断) 必须报错,
+/// 不能把截断的响应静默当作正常结果返回
+asio::awaitable<void> test_streaming_missing_done_throws(MockOpenAIServer& mock, uint16_t port) {
+    std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
+    mock.mode           = MockMode::Streaming;
+    mock.sseChunks      = {
+        MockOpenAIServer::sseData(
+            R"({"choices":[{"index":0,"delta":{"role":"assistant","content":""}}]})"
+        ),
+        MockOpenAIServer::sseData(R"({"choices":[{"index":0,"delta":{"content":"Partial"}}]})"),
+        // 故意不包含 sseDone(): 模拟长输出被中间代理截断
+    };
+
+    auto provider = server::OpenAIProvider::create(makeOaiCfg("sk-test", baseUrl));
+
+    neograph::CompletionParams params;
+    params.model    = "gpt-4o-mini";
+    params.messages = {
+        neograph::ChatMessage{.role = "user", .content = "Truncation test"}
+    };
+
+    std::string              accumulated;
+    neograph::StreamCallback onChunk = [&](const std::string& chunk) {
+        accumulated += chunk;
+    };
+
+    bool        threw = false;
+    std::string errMsg;
+    try {
+        co_await provider->invoke(params, onChunk);
+    } catch (const std::exception& e) {
+        threw  = true;
+        errMsg = e.what();
+    }
+    XX_TEST_EXPECT_TRUE(threw);
+    XX_TEST_EXPECT_TRUE(errMsg.find("truncated") != std::string::npos);
+    // 截断前已送达的增量数据仍应已回调给调用方 (用于 UI 展示)
+    XX_TEST_EXPECT_EQ(accumulated, "Partial");
+}
+
 // ---------------------------------------------------------------------------
 // Integration tests — <think> tag in content field
 // ---------------------------------------------------------------------------
@@ -1838,6 +1878,7 @@ public:
     enum class Mode {
         NeverReadBody,
         PartialThenStall,
+        AbortAfterChunks,  // 发完 partialChunks 后直接断开 (不发 chunked 终止块)
     };
 
     std::thread              thread;
@@ -1926,6 +1967,11 @@ private:
             if (ec) {
                 return;
             }
+        }
+
+        if (mode == Mode::AbortAfterChunks) {
+            // 不发 chunked 终止块直接关闭 (FIN), 模拟长输出末尾连接被对端中断
+            return;
         }
 
         for (int i = 0; i < 1200 && !stopped.load(); ++i) {
@@ -2017,6 +2063,65 @@ void test_read_timeout_streaming() {
     srv->stop();
 }
 
+/// 已收到 [DONE] 后连接层报错 (如 stream_truncated/连接被中断) 不应使请求失败,
+/// 应忽略传输错误并返回已完整接收的结果
+void test_streaming_abort_after_done_ignored() {
+    auto srv           = std::make_unique<StallServer>();
+    srv->mode          = StallServer::Mode::AbortAfterChunks;
+    srv->partialChunks = {
+        "data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"\"}}]}\n\n",
+        "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Full\"}}]}\n\n",
+        "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\" text\"}}]}\n\n",
+        "data: {\"choices\":[{\"index\":0,\"delta\":{}}],\"usage\":{\"prompt_tokens\":3,"
+        "\"completion_tokens\":2,\"total_tokens\":5}}\n\n",
+        "data: [DONE]\n\n",
+        // 无 chunked 终止块, 服务端直接断开 → 客户端传输层报错, 但 [DONE] 已收到
+    };
+    srv->start();
+
+    std::string baseUrl  = "http://127.0.0.1:" + std::to_string(srv->boundPort);
+    auto        provider = server::OpenAIProvider::create(makeOaiCfg("sk-test", baseUrl, 5, 5));
+
+    neograph::CompletionParams params;
+    params.model    = "gpt-4o-mini";
+    params.messages = {
+        neograph::ChatMessage{.role = "user", .content = "Stream abort test"}
+    };
+
+    std::string              accumulated;
+    neograph::StreamCallback onChunk = [&](const std::string& chunk) {
+        accumulated += chunk;
+    };
+
+    bool             threw = false;
+    std::string      content;
+    int              totalTokens = 0;
+    asio::io_context ctx;
+    asio::co_spawn(
+        ctx,
+        [&]() -> asio::awaitable<void> {
+            try {
+                auto result = co_await provider->invoke(params, onChunk);
+                content     = result.message.content;
+                totalTokens = result.usage.total_tokens;
+            } catch (const std::exception& e) {
+                threw = true;
+                TEST_FAIL << "abort-after-done should be ignored, but threw: " << e.what()
+                          << std::endl;
+            }
+        },
+        asio::detached
+    );
+    ctx.run();
+
+    XX_TEST_EXPECT_FALSE(threw);
+    XX_TEST_EXPECT_EQ(content, "Full text");
+    XX_TEST_EXPECT_EQ(accumulated, "Full text");
+    XX_TEST_EXPECT_EQ(totalTokens, 5);
+
+    srv->stop();
+}
+
 void test_send_timeout_calculation() {
     XX_TEST_EXPECT_EQ(agentxx::util::HttpClient::calcTimeoutBySize(0).count(), 30);
     XX_TEST_EXPECT_EQ(agentxx::util::HttpClient::calcTimeoutBySize(1024).count(), 30);
@@ -2073,6 +2178,65 @@ void test_openai_sse_parsing_edge_cases() {
     }
 }
 
+/// processSseBuffer 返回值: 仅当处理到 "data: [DONE]" 时为 true (流截断检测依据)
+void test_openai_sse_done_flag() {
+    using server::OpenAIProvider;
+
+    // 普通数据行 → false
+    {
+        std::string buf = "data: {\"choices\":[{\"delta\":{\"content\":\"Hi\"}}]}\n\n";
+        neograph::ChatCompletion          completion;
+        std::string                       content, thinking;
+        std::map<int, neograph::ToolCall> tcMap;
+        bool done = OpenAIProvider::processSseBuffer(
+            buf,
+            completion,
+            content,
+            thinking,
+            tcMap,
+            nullptr
+        );
+        XX_TEST_EXPECT_FALSE(done);
+        XX_TEST_EXPECT_EQ(content, "Hi");
+    }
+
+    // 含 [DONE] → true
+    {
+        std::string buf
+            = "data: {\"choices\":[{\"delta\":{\"content\":\"Ok\"}}]}\n\ndata: [DONE]\n\n";
+        neograph::ChatCompletion          completion;
+        std::string                       content, thinking;
+        std::map<int, neograph::ToolCall> tcMap;
+        bool done = OpenAIProvider::processSseBuffer(
+            buf,
+            completion,
+            content,
+            thinking,
+            tcMap,
+            nullptr
+        );
+        XX_TEST_EXPECT_TRUE(done);
+    }
+
+    // [DONE] 无结尾换行, finalFlush 时也应识别
+    {
+        std::string                       buf = "data: [DONE]";
+        neograph::ChatCompletion          completion;
+        std::string                       content, thinking;
+        std::map<int, neograph::ToolCall> tcMap;
+        bool done = OpenAIProvider::processSseBuffer(
+            buf,
+            completion,
+            content,
+            thinking,
+            tcMap,
+            nullptr,
+            /*finalFlush=*/true
+        );
+        XX_TEST_EXPECT_TRUE(done);
+    }
+}
+
 asio::awaitable<TestResult> run_openai_provider_tests() {
     g_openai_passed = 0;
     g_openai_failed = 0;
@@ -2082,6 +2246,7 @@ asio::awaitable<TestResult> run_openai_provider_tests() {
     test_config_defaults();
     test_extra_body_with_custom_params();
     test_openai_sse_parsing_edge_cases();
+    test_openai_sse_done_flag();
 
     // ModelProviderRegistry::createProvider tests
     test_create_provider_openai();
@@ -2140,6 +2305,7 @@ asio::awaitable<TestResult> run_openai_provider_tests() {
     co_await test_streaming_reasoning_preferred_over_thinking(*mock, port);
     co_await test_streaming_reasoning_only_no_content(*mock, port);
     co_await test_streaming_malformed_chunk_skipped(*mock, port);
+    co_await test_streaming_missing_done_throws(*mock, port);
 
     // <think> tag tests
     co_await test_non_streaming_think_tags_in_content(*mock, port);
@@ -2158,6 +2324,7 @@ asio::awaitable<TestResult> run_openai_provider_tests() {
     test_send_timeout_calculation();
     test_connect_timeout();
     test_read_timeout_streaming();
+    test_streaming_abort_after_done_ignored();
 
     mock->server->stop();
     mock->thread.join();
