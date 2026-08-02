@@ -388,7 +388,9 @@ public:
     inline static const std::string channel_savedGraphData{"xx_savedGraphData"};
 
     inline static const std::string graphDataKey_systemMessage{"systemMessage"};
-    inline static const std::string graphDataKey_tempLLMMessage{"xx_ModelCallWrap_tempLLMMessage"};
+    inline static const std::string graphDataKey_tempLLMThinking{"xx_ModelCallWrap_tempLLMThinking"
+    };
+    inline static const std::string graphDataKey_tempLLMContent{"xx_ModelCallWrap_tempLLMContent"};
     inline static const std::string graphDataKey_LLMTokenUsage{"xx_ModelCallWrap_LLMTokenUsage"};
     /// 存储 中断、异常、取消 时的 messages
     inline static const std::string graphDataKey_tempMessages{"xx_tempMessages"};

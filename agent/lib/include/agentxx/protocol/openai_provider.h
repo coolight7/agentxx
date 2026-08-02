@@ -116,12 +116,7 @@ public:
             return;
         }
 
-        neograph::json j;
-        try {
-            j = neograph::json::parse(payload);
-        } catch (...) {
-            return;
-        }
+        neograph::json j = neograph::json::parse(payload);
 
         if (j.contains("usage") && !j["usage"].is_null()) {
             auto u                             = j["usage"];

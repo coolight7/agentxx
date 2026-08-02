@@ -31,9 +31,8 @@ ModelCallWrapNode::ModelCallWrapNode(
     std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
 ) :
     WrapHandleBaseNode<neograph::graph::LLMCallNode>(name, in_agentContext, ctx) {
-    if (ctx.extra_config.is_object()
-        && ctx.extra_config.contains(std::string{defUseModelRegistryKey})) {
-        useDynamicModel_ = ctx.extra_config.at(std::string{defUseModelRegistryKey}).get<bool>();
+    if (ctx.extra_config.is_object() && ctx.extra_config.contains(defUseModelRegistryKey)) {
+        useDynamicModel_ = ctx.extra_config.at(defUseModelRegistryKey).get<bool>();
     }
 }
 
@@ -87,14 +86,21 @@ asio::awaitable<neograph::ChatCompletion> ModelCallWrapNode::onReceiveToken(
                     // 记录 本次请求的临时LLM消息，以便触发异常时处理
                     ctxPtr->modifyGraphDataItemValue<std::string>(
                         input.ctx.thread_id,
-                        agentxx::middleware::MiddlewareContext::graphDataKey_tempLLMMessage,
+                        agentxx::middleware::MiddlewareContext::graphDataKey_tempLLMContent,
                         [&token](std::string& msg) {
                             msg += token.data;
                         }
                     );
                 } break;
-                case neograph::ChatStreamChunk::TYPE_THINKING:
-                    break;
+                case neograph::ChatStreamChunk::TYPE_THINKING: {
+                    ctxPtr->modifyGraphDataItemValue<std::string>(
+                        input.ctx.thread_id,
+                        agentxx::middleware::MiddlewareContext::graphDataKey_tempLLMThinking,
+                        [&token](std::string& msg) {
+                            msg += token.data;
+                        }
+                    );
+                } break;
             }
 
             if (nullptr != callback) {
@@ -383,7 +389,11 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
         // 清理过时的 临时 LLM 消息
         ctxPtr->removeGraphDataItem(
             in.ctx.thread_id,
-            agentxx::middleware::MiddlewareContext::graphDataKey_tempLLMMessage
+            agentxx::middleware::MiddlewareContext::graphDataKey_tempLLMThinking
+        );
+        ctxPtr->removeGraphDataItem(
+            in.ctx.thread_id,
+            agentxx::middleware::MiddlewareContext::graphDataKey_tempLLMContent
         );
         // 重试时 messages 可能已经发生更改，因此允许在重试时再次执行
         // 但要实现 [handle->onModelcallRunFunc] 的地方自己保证重复执行没有问题
@@ -419,11 +429,15 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
         }
 
         // 触发异常
-        auto lastMsg = ctxPtr->getGraphDataItemValue<std::string>(
+        auto lastMsgThinking = ctxPtr->getGraphDataItemValue<std::string>(
             in.ctx.thread_id,
-            agentxx::middleware::MiddlewareContext::graphDataKey_tempLLMMessage
+            agentxx::middleware::MiddlewareContext::graphDataKey_tempLLMThinking
         );
-        if (lastMsg.size() >= 512) {
+        auto lastMsgContent = ctxPtr->getGraphDataItemValue<std::string>(
+            in.ctx.thread_id,
+            agentxx::middleware::MiddlewareContext::graphDataKey_tempLLMContent
+        );
+        if (lastMsgThinking.size() >= 512 || lastMsgContent.size() >= 512) {
             // - 保留已有的 llm 消息，而不是丢弃
             // - 插入 assistant 消息，此时末尾消息未 assistant, 将在下一次进入
             // baseRun 时自动修复上下文角色顺序 [repairMessages]
@@ -432,10 +446,11 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
                 .role    = "assistant",
                 .content = fmt::format(
                     "{}\n{}",
-                    nodeName,
+                    lastMsgContent,
                     isCancel ? "[User cancelled]" : "[Exception aborted]"
                 ),
-                .flags = neograph::MessageFlag::AutoInserted,
+                .reasoning_content = lastMsgThinking,
+                .flags             = neograph::MessageFlag::AutoInserted,
             };
             auto msgJson = neograph::json{};
             neograph::to_json(msgJson, msg);

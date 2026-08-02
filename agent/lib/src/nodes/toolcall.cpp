@@ -277,30 +277,41 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
         if (it == tools_.end()) {
             tool_msg.content = R"({"error": "Tool not found: )" + tc.name + "\"}";
         } else {
-            try {
-                auto args = neograph::json::parse(tc.arguments);
-                if (args.is_object()) {
-                    // append arg `thread_id`
-                    args["thread_id"] = in.ctx.thread_id;
-                    // - 注入 tool_call_id 供 tool 使用 (如 subagent_switch 的中断
-                    // resultId)
-                    args["tool_call_id"] = tc.id;
+            std::exception_ptr errorPtr;
+            co_await agentxx::util::catchErrorAsync<void>(
+                [&]() -> asio::awaitable<void> {
+                    try {
+                        auto args = neograph::json::parse(tc.arguments);
+                        if (args.is_object()) {
+                            // append arg `thread_id`
+                            args["thread_id"] = in.ctx.thread_id;
+                            // - 注入 tool_call_id 供 tool 使用 (如 subagent_switch 的中断
+                            // resultId)
+                            args["tool_call_id"] = tc.id;
+                        }
+                        tool_msg.content = co_await execTool(*it, args);
+                    } catch (const neograph::graph::CancelledException&) {
+                        // TODO: 保存已有的 toolcall 结果再重新抛出异常
+                        errorPtr = std::current_exception();
+                    } catch (const neograph::graph::NodeInterrupt&) {
+                        // tool触发中断
+                        // - 不应在这里提取中断参数，协程并发等 co_await
+                        // 执行完成时可能参数数组已经不是单一值
+                        isInterrupt       = true;
+                        tool_msg.flags   |= neograph::MessageFlag::Interrupt;
+                        tool_msg.content  = "[Interrupt]";
+                    }
+                    co_return;
+                },
+                [&](std::string errinfo) -> asio::awaitable<void> {
+                    tool_msg.content = neograph::json{
+                        {"error", std::move(errinfo)}
+                    }.dump();
+                    co_return;
                 }
-                tool_msg.content = co_await execTool(*it, args);
-            } catch (const neograph::graph::CancelledException&) {
-                // TODO: 保存已有的 toolcall 结果再重新抛出异常
-                throw;
-            } catch (const neograph::graph::NodeInterrupt&) {
-                // tool触发中断
-                // - 不应在这里提取中断参数，协程并发等 co_await
-                // 执行完成时可能参数数组已经不是单一值
-                isInterrupt       = true;
-                tool_msg.flags   |= neograph::MessageFlag::Interrupt;
-                tool_msg.content  = "[Interrupt]";
-            } catch (const std::exception& e) {
-                tool_msg.content = neograph::json{
-                    {"error", std::string(e.what())}
-                }.dump();
+            );
+            if (errorPtr) {
+                std::rethrow_exception(errorPtr);
             }
         }
         co_return tool_msg;
