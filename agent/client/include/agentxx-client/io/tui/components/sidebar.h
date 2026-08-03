@@ -1,0 +1,74 @@
+#pragma once
+
+#include "agentxx-client/io/tui/framework/dirty_component.h"
+#include "agentxx-client/io/tui/framework/tui_context.h"
+#include "agentxx-client/io/tui/scrollable.h"
+#include "ftxui/component/component_base.hpp"
+#include "ftxui/dom/elements.hpp"
+#include <functional>
+#include <memory>
+#include <string>
+#include <vector>
+
+/// 右侧边栏组件: tab 栏 + 可滚动内容 + 底部常驻 + 左侧拖拽手柄
+///
+/// 事件处理:
+/// - tab 左键点击切换, 右键关闭
+/// - 左侧手柄拖拽调整宽度
+/// - 滚轮由内部 Scrollable 处理
+class SidebarComponent : public ftxui::ComponentBase {
+public:
+
+    struct Tab {
+        std::string id;
+        std::string title;
+        std::function<std::vector<ScrollItem>()> render;
+        std::function<ftxui::Element()> footer;
+    };
+
+    explicit SidebarComponent(TUICtx& ctx);
+
+    void addTab(std::string_view id, std::string_view title,
+                std::function<std::vector<ScrollItem>()> render,
+                std::function<ftxui::Element()> footer = nullptr);
+    void removeTab(std::string_view id);
+    bool hasTab(std::string_view id) const;
+    bool empty() const { return tabs_.empty(); }
+
+    /// 侧边栏宽度 (供外部布局使用)
+    int width() const { return width_; }
+
+    /// 设置 footer 区域点击回调 (如 "上下文" 按钮)
+    void onFooterClick(std::function<bool(const ftxui::Mouse&)> fn) {
+        onFooterClick_ = std::move(fn);
+    }
+
+    ftxui::Element OnRender() override;
+    bool OnEvent(ftxui::Event event) override;
+
+private:
+
+    bool handleTabMouse(const ftxui::Mouse& mouse);
+    bool handleResizeMouse(const ftxui::Mouse& mouse);
+
+    TUICtx& ctx_;
+    std::shared_ptr<Scrollable> scrollable_;
+
+    std::vector<Tab> tabs_;
+    int              activeTab_ = 0;
+
+    int  width_         = kDefaultWidth;
+    bool resizing_      = false;
+    int  resizeStartX_  = 0;
+    int  resizeStartW_  = 0;
+
+    std::vector<ftxui::Box> tabBoxes_;
+    ftxui::Box              handleBox_;
+    ftxui::Box              footerBox_;
+
+    std::function<bool(const ftxui::Mouse&)> onFooterClick_;
+
+    static constexpr int kMinWidth     = 24;
+    static constexpr int kMaxWidth     = 120;
+    static constexpr int kDefaultWidth = 40;
+};
