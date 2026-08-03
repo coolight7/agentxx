@@ -372,8 +372,8 @@ agent.ioCtx->run();
 │       │              │                   │                      │
 │       └──────────────┼───────────────────┘                      │
 │                      │ AgentIOBase                              │
-│                      │ (onDelta/onSync/getInput/handleInterrupt │
-│                      │  registerOnBus/sendToPeer/requestCancel) │
+│                      │ (sendToPeer/onPeerMessage/getInput/      │
+│                      │  handleInterrupt/registerOnBus)          │
 ├──────────────────────┼──────────────────────────────────────────┤
 │               Transport 层 (AgentIOTransportBase)               │
 │  ┌─────────────────────────────────────────────────────────┐    │
@@ -462,10 +462,10 @@ User Input → AgentTUI/AgentStdIO
             → ModelCallWrapNode → OpenAI/Anthropic Provider → LLM API
             → ToolcallWrapNode → Tools (filesystem/command/web/...)
         → Delta 事件流
-    → SessionController.onDelta()
+    → SessionController.sendToPeer() (新 delta 写入重放缓冲后转发)
     → ChannelAgentIOTransport::send() (server 端)
     → ChannelAgentIOTransport::recv() (client 端)
-    → AgentTUI/AgentStdIO.onDelta()
+    → AgentTUI/AgentStdIO.onPeerMessage() → onDelta() (protected 被动回调)
     → UI 渲染
 ```
 
@@ -480,13 +480,18 @@ User Input → AgentTUI/AgentStdIO
     → WsAgentIOTransport::recv() (server, JSON 反序列化)
     → SessionController.onPeerMessage()
     → ... (同上)
-    → SessionController.onDelta()
+    → SessionController.sendToPeer() (新 delta 写入重放缓冲后转发)
     → WsAgentIOTransport::send() (server, JSON 序列化)
     → WebSocket 网络传输
     → WsAgentIOTransport::recv() (client, JSON 反序列化)
-    → AgentTUI/AgentStdIO.onDelta()
+    → AgentTUI/AgentStdIO.onPeerMessage() → onDelta() (protected 被动回调)
     → UI 渲染
 ```
+
+> 两种模式拓扑完全一致 (client 端点 + server 端点 + transport), 仅 transport
+> 实现不同。**强制 transport**: 端点间通信必须经 transport, 不存在无 transport
+> 的直连模式; `runConversationTurnAsync(io=nullptr)` 的 headless 场景除外
+> (无 io 即无事件输出)。
 
 ### 核心设计模式
 
@@ -526,27 +531,45 @@ end1  ←   end2  ←   end3
 
 #### 3. AgentIOBase 端点模型 + Transport 层
 
-Client 和 Server 都继承 `AgentIOBase`，通过 `AgentIOTransportBase` 传输层通信：
+Client 和 Server 都继承 `AgentIOBase`，通过 `AgentIOTransportBase` 传输层通信。
+两端点之间为对称消息传递: **发送经 `sendToPeer()` (唯一出站口), 接收经
+`runTransportLoop()` → `onPeerMessage()` 分发到 protected 被动回调**。
+接口按角色标注: [双向] / [client] / [server]：
 
 ```
+AgentIOBase (公共契约)
+    ├── sendToPeer() [双向]        → 发送 WireMessage 到对端 (virtual, 唯一出站口;
+    │                                 须已设置 transport, 否则记错误日志并丢弃)
+    ├── requestCancel() [client]   → 请求取消
+    ├── requestSelectModel() [client] → 切换模型
+    ├── requestAppendComponentInfo() [client] → 拉取启动信息 (MCP/Skill/Memory)
+    ├── sendUserInput() [client]   → 发送用户输入
+    ├── getInput() [双向]          → 提供用户输入 (server 侧被 BaseAgent 驱动循环拉取,
+    │                                 client 侧被本端输入循环调用)
+    ├── handleInterrupt() [双向]   → HIL 交互 (server 侧经会话总线被 BaseAgent 调用,
+    │                                 client 侧收到 WireInterruptRequest 后调用)
+    ├── registerOnBus() [server]   → 与会话级 EventBus 绑定 (注册 interrupt/permission handler)
+    ├── setTransport()/runTransportLoop() [双向] → transport 装配与接收循环
+    └── (protected)
+        ├── onPeerMessage() [双向] → 收消息分发 (默认分发到下面四个回调, 子类覆写扩展)
+        ├── onDelta() [client]     ← 增量事件 (仅由 onPeerMessage 分发, 外部不得直调)
+        ├── onSync() [client]      ← 全量同步 (校准)
+        ├── onTurnResult() [client] ← 轮次结束通知
+        └── onContextStats() [client] ← 上下文统计更新
+
 AgentIOBase (客户端端点: AgentTUI / AgentStdIO)
-    ├── onDelta()          ← 接收增量事件 (来自对端)
-    ├── onSync()           ← 接收全量同步 (校准)
-    ├── onTurnResult()     ← 轮次结束通知
-    ├── onContextStats()   ← 上下文统计更新
-    ├── getInput()         → 提供用户输入 (被对端拉取)
-    ├── handleInterrupt()  → 处理 HIL 交互 (权限/中断)
-    ├── registerOnBus()    → 与会话级 EventBus 绑定 (注册 interrupt/permission handler)
-    ├── sendToPeer()       → 发送 WireMessage 到对端
-    ├── requestCancel()    → 主动请求取消
-    ├── requestSelectModel() → 切换模型
-    └── runTransportLoop() ← 接收循环 (从 transport 读消息 → dispatch)
+    ├── onDelta/onSync/onTurnResult/onContextStats (protected) ← 收对端事件 → 渲染
+    ├── getInput()         → 从 stdin/FTXUI 读输入
+    ├── handleInterrupt()  → 弹出交互框收集用户响应
+    └── onPeerMessage()    → 覆写: 额外处理 InterruptRequest/Log/ModelInfo 等
 
 AgentIOBase (服务端端点: SessionController)
-    ├── onDelta()          ← BaseAgent 产出 → 经 transport 发给客户端
-    ├── onSync()           ← 同步 fullHistory
-    ├── getInput()         → 从 transport 等待客户端输入
+    ├── sendToPeer()       → 覆写: 新产出的 Delta (seq 单调守卫) 先写入重放缓冲再转发,
+    │                          重放 delta (seq <= 缓冲尾) 不重复入缓冲
+    ├── onDelta/onSync     → protected 空实现 (server 不会从 client 收到, 满足纯虚契约)
+    ├── getInput()         → 从 inputChannel_ 等待客户端输入
     ├── handleInterrupt()  → 发送 InterruptRequest，等待客户端响应
+    ├── onPeerMessage()    → 覆写: 处理 UserInput/Cancel/Hello/SelectModel 等
     └── run()              → 驱动循环: 取输入 → 执行轮次 → 推送结果
 
 AgentIOTransportBase (传输层抽象)
@@ -556,6 +579,11 @@ AgentIOTransportBase (传输层抽象)
     ├── close()            → 关闭传输
     └── alive()            → 传输是否存活
 ```
+
+事件产出路径: `BaseAgent` 进程内直调其驱动的端点 (server 端点) ——
+增量事件经 `io->sendToPeer(Delta)` 推送 (server 端点缓冲并经 transport 转发
+client), 上下文统计经 `io->sendToPeer(WireContextStats)`; BaseAgent 不感知
+transport 细节。`runConversationTurnAsync(io=nullptr)` 为 headless 模式, 不产出事件。
 
 #### 4. EventBus 强类型事件
 

@@ -29,19 +29,36 @@ SessionController::~SessionController() {
 }
 
 // ---------------------------------------------------------------------------
-// AgentIOBase: BaseAgent 产出的事件, 经 transport 发给客户端
+// AgentIOBase: 主动发送 (BaseAgent 产出的事件经此转发给客户端)
 // ---------------------------------------------------------------------------
 
-void SessionController::onDelta(const Delta& delta) {
-    deltaBuffer_.push_back(delta);
-    while (deltaBuffer_.size() > config_.deltaBufferCap) {
-        deltaBuffer_.pop_front();
+void SessionController::sendToPeer(WireMessage msg) {
+    // 新产出的 delta 写入重放缓冲, 供断线重连 hello 时按 seq 增量重放。
+    // 以 seq 单调性区分两类 delta:
+    // - 新 delta: seq 由 BaseAgent deltaSeq 单调递增分配, 严格大于缓冲尾 seq → 入缓冲
+    // - 重放 delta: 来自缓冲内部 (handleHello 重放), seq <= 缓冲尾 seq → 不重复入缓冲
+    // 由此重放路径无需特殊发送通道, 也不会污染缓冲
+    if (const auto* d = std::get_if<Delta>(&msg)) {
+        if (deltaBuffer_.empty() || d->seq > deltaBuffer_.back().seq) {
+            deltaBuffer_.push_back(*d);
+            while (deltaBuffer_.size() > config_.deltaBufferCap) {
+                deltaBuffer_.pop_front();
+            }
+        }
     }
-    sendToPeer(delta);
+    AgentIOBase::sendToPeer(std::move(msg));
 }
 
-void SessionController::onSync(const SyncPayload& payload) {
-    sendToPeer(payload);
+// ---------------------------------------------------------------------------
+// AgentIOBase: 被动接收回调 (server 端点不会从 client 收到这些消息)
+// ---------------------------------------------------------------------------
+
+void SessionController::onDelta(const Delta& /*delta*/) {
+    // 空实现仅满足纯虚契约; client→server 协议不包含 Delta
+}
+
+void SessionController::onSync(const SyncPayload& /*payload*/) {
+    // 空实现仅满足纯虚契约; client→server 协议不包含 SyncPayload
 }
 
 asio::awaitable<std::optional<std::string>> SessionController::getInput() {

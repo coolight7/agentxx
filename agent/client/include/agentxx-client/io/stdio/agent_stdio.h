@@ -24,10 +24,6 @@ private:
 
 public:
 
-    void onDelta(const agentxx::agent::Delta& delta) override;
-
-    void onSync(const agentxx::agent::SyncPayload& payload) override;
-
     asio::awaitable<std::optional<std::string>> getInput() override;
 
     asio::awaitable<neograph::json> handleInterrupt(
@@ -41,6 +37,11 @@ public:
     ~AgentStdIO() override;
 
 protected:
+
+    // ---- AgentIOBase 被动接收回调 (client 端点实现; 仅由 onPeerMessage 分发) ----
+    void onDelta(const agentxx::agent::Delta& delta) override;
+
+    void onSync(const agentxx::agent::SyncPayload& payload) override;
 
     /// 处理对端消息: 拦截 WireAppendComponentInfo (启动信息统计), 其余委托基类
     void onPeerMessage(agentxx::agent::WireMessage msg) override;

@@ -34,10 +34,13 @@
 - `agent/client`: 编译结果 {build}/exec/agentxx_cli
     - 命令行可执行程序，用于启动 agent 服务、实现命令行 cli/TUI 交互
     - `agent/client/main.cpp` 通过 --agent 启动时
-    - IO交互继承于 [AgentIOBase](agent/lib/include/agentxx/agent/agent_io.h)
+    - IO交互继承于 [AgentIOBase](agent/lib/include/agentxx/agent/agent_io.h) (端点基类)
         - `agent/client/include/agentxx-client/io/stdio` 采用 stdin、stdout、stderr 作为输入输出 `agentxx_cli cli`
         - `agent/client/include/agentxx-client/io/tui` 采用 TUI 作为终端渲染界面交互
-        - [RemoteClientAgentIO](agent/lib/include/agentxx/agent/remote/remote_client_io.h) 和 [RemoteServerAgentIO](agent/lib/include/agentxx/agent/remote/remote_server_io.h) 用于包装
+        - client/server 为两个 AgentIOBase 端点, 经 transport 双向通信 (进程内 Channel / 远程 WS);
+          发送经 `sendToPeer()`, 接收经 `onPeerMessage()` 分发到 protected 被动回调 (onDelta 等)
+        - 服务端点为 [SessionController](agent/lib/include/agentxx/agent/remote/session_controller.h)
+          (被 BaseAgent 驱动, delta 缓冲/重连重放)
 - `agent/test`: 编译结果 {build}/exec/agentxx_test
     - 测试
     - 运行测试示例:
