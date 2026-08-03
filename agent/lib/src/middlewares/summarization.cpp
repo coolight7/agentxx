@@ -140,8 +140,11 @@ void SummarizationMiddlewareHandle::offloadLongContentToTempStore(
     if (msg.content.size() <= longContentByteThreshold) {
         return;
     }
-    auto id                  = ctx->addShareStoreItemValue(thread_id, msg.content);
-    msg.content              = fmt::format("[Content offloaded to tool/`share_store`, id={}]", id);
+    auto id     = ctx->addShareStoreItemValue(thread_id, msg.content);
+    msg.content = fmt::format(
+        "[Content offloaded. Use the `share_store` tool to fetch the full content by ID {}]",
+        id
+    );
     msg.flags               |= neograph::MessageFlag::ContentOffloaded;
     msg.extra["offload_id"]  = id;
 }
