@@ -1,6 +1,7 @@
 #include "test_filesystem_tools.h"
 #include "agentxx/agent/context.h"
 #include "agentxx/tools/filesystem.h"
+#include <chrono>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -1084,8 +1085,8 @@ asio::awaitable<void>
     co_return;
 }
 
-asio::awaitable<void>
-    test_glob_non_recursive(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+asio::awaitable<void> test_glob_non_recursive(std::weak_ptr<agentxx::agent::AgentContext> agentContext
+) {
     auto tool = agentxx::tools::FilesystemGlobTool{agentContext};
     // 不含 `**` 的模式不应递归: *.txt 只匹配当前目录
     auto args = neograph::json{
@@ -1101,6 +1102,58 @@ asio::awaitable<void>
     } else {
         g_fs_failed++;
         TEST_FAIL << "FilesystemGlobTool non-recursive glob failed, got: " << result << std::endl;
+    }
+    co_return;
+}
+
+/// 回归测试: 工作协程快速失败 (file_patterns 无匹配) 时, 必须立即返回真实错误,
+/// 而不能被 `workFuture || timer` 的 wait_for_one_success 语义拖到满超时才返回
+asio::awaitable<void>
+    test_grep_no_match_fail_fast(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    auto tool = agentxx::tools::FilesystemGrepTool{agentContext};
+    auto args = neograph::json{
+        {"text_patterns_is_regex", false                                           },
+        {"text_patterns",          neograph::json::array({"never_match_any_text"}) },
+        {"file_patterns",          neograph::json::array({testDir + "/no_such_dir/**"})},
+        {"timeout",                60                                               }, // 修复前会白等 60s
+    };
+    auto t0     = std::chrono::steady_clock::now();
+    auto result = co_await tool.execute_async(args);
+    auto ms     = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - t0
+    )
+                      .count();
+    // 应返回真实错误而不是 "timed out", 且耗时远小于 timeout
+    if (result.find("No match") != std::string::npos && ms < 10000) {
+        g_fs_passed++;
+        TEST_PASS << "FilesystemGrepTool fail-fast returns real error in " << ms << " ms"
+                  << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "FilesystemGrepTool should return real error immediately, got: " << result
+                  << " elapsed: " << ms << " ms" << std::endl;
+    }
+    co_return;
+}
+
+/// 回归测试: `**/*` 模式会匹配到目录, grep 应跳过目录继续搜索文件, 而不是报错
+asio::awaitable<void>
+    test_grep_skip_directories(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    auto tool = agentxx::tools::FilesystemGrepTool{agentContext};
+    auto args = neograph::json{
+        {"text_patterns_is_regex", false                                    },
+        {"text_patterns",          neograph::json::array({"hello world"})   },
+        {"file_patterns",          neograph::json::array({testDir + "/**/*"})},
+        {"output_mode",            "files_with_matches"                     },
+    };
+    auto result = co_await tool.execute_async(args);
+    if (result.find("test2.txt") != std::string::npos && result.find("[Error]") == std::string::npos) {
+        g_fs_passed++;
+        TEST_PASS << "FilesystemGrepTool skips directories in glob results" << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "FilesystemGrepTool should skip dirs and search files, got: " << result
+                  << std::endl;
     }
     co_return;
 }
@@ -1171,6 +1224,8 @@ asio::awaitable<TestResult>
     co_await run(test_grep_case_sensitive_default);
     co_await run(test_grep_max_count_per_file);
     co_await run(test_grep_context_lines);
+    co_await run(test_grep_no_match_fail_fast);
+    co_await run(test_grep_skip_directories);
 
     cleanupTestDir();
     co_return TestResult{g_fs_passed, g_fs_failed};

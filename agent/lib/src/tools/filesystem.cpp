@@ -1491,14 +1491,14 @@ asio::awaitable<std::string> FilesystemGlobTool::execute_async(const neograph::j
                     throw neograph::graph::CancelledException("filesystem_glob cancelled");
                 }
                 if (globPatternHasRecursiveSegment(pattern)) {
-                    auto matched = glob::rglob(pattern);
+                    auto matched = glob::rglob(pattern, cancelFlag);
                     resultList.insert(
                         resultList.end(),
                         std::make_move_iterator(matched.begin()),
                         std::make_move_iterator(matched.end())
                     );
                 } else {
-                    auto matched = glob::glob(pattern);
+                    auto matched = glob::glob(pattern, cancelFlag);
                     resultList.insert(
                         resultList.end(),
                         std::make_move_iterator(matched.begin()),
@@ -1810,14 +1810,14 @@ asio::awaitable<std::string> FilesystemGrepTool::execute_async(const neograph::j
                             throw neograph::graph::CancelledException("filesystem_grep cancelled");
                         }
                         if (globPatternHasRecursiveSegment(pattern)) {
-                            auto matched = glob::rglob(pattern);
+                            auto matched = glob::rglob(pattern, cancelFlag);
                             resultList.insert(
                                 resultList.end(),
                                 std::make_move_iterator(matched.begin()),
                                 std::make_move_iterator(matched.end())
                             );
                         } else {
-                            auto matched = glob::glob(pattern);
+                            auto matched = glob::glob(pattern, cancelFlag);
                             resultList.insert(
                                 resultList.end(),
                                 std::make_move_iterator(matched.begin()),
@@ -1919,6 +1919,11 @@ asio::awaitable<std::string> FilesystemGrepTool::execute_async(const neograph::j
                     throw neograph::graph::CancelledException("filesystem_grep cancelled");
                 }
                 auto filepath = item.generic_string();
+                // glob 模式可能匹配到目录 (如 `**/*`), grep 只搜索普通文件
+                std::error_code fec;
+                if (!std::filesystem::is_regular_file(filepath, fec)) {
+                    continue;
+                }
                 auto filetext = co_await readFileContent(filepath);
                 auto matchs   = std::vector<agentxx::util::XXRegexMatchResult>{};
                 if (regex->match(filetext, matchs)) {
@@ -1988,6 +1993,11 @@ asio::awaitable<std::string> FilesystemGrepTool::execute_async(const neograph::j
                     throw neograph::graph::CancelledException("filesystem_grep cancelled");
                 }
                 auto filepath = item.generic_string();
+                // glob 模式可能匹配到目录 (如 `**/*`), grep 只搜索普通文件
+                std::error_code fec;
+                if (!std::filesystem::is_regular_file(filepath, fec)) {
+                    continue;
+                }
                 auto filetext = co_await readFileContent(filepath);
                 auto matchs   = search.search(filetext);
                 if (false == matchs.empty()) {
