@@ -73,10 +73,7 @@ void ToolcallWrapNode::onHandleBaseRunError(
     if (false == errorRethrow && isCurrentError) {
         auto msg = neograph::ChatMessage{
             .role    = "tool",
-            .content = neograph::json{
-                           {"error", fmt::format("{}/run exception: {}", nodeName, exceptionStr)},
-            }
-                           .dump(),
+            .content = fmt::format("[Exception aborted: {}]", exceptionStr),
             .flags   = neograph::MessageFlag::AutoInserted,
         };
         // 回填 tool_call_id/tool_name，确保 ToolEnd 能正确关联

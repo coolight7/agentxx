@@ -36,6 +36,7 @@
  */
 
 #include "asio/co_spawn.hpp"
+#include "asio/error.hpp"
 #include "asio/thread_pool.hpp"
 #include "asio/use_awaitable.hpp"
 #include "neograph/define.h"
@@ -43,6 +44,7 @@
 #include <atomic>
 #include <functional>
 #include <memory>
+#include <system_error>
 #include <utility>
 
 namespace agentxx {
@@ -94,8 +96,8 @@ asio::awaitable<T> offloadCancellableAsync(
             },
             asio::use_awaitable
         );
-    } catch (const neograph::graph::CancelledException& e) {
-        // 父协程被取消 → 通知工作线程退出
+    } catch (...) {
+        // 异常，通知工作线程退出
         cancelFlag->store(true, std::memory_order_release);
         throw;
     }
@@ -129,8 +131,8 @@ asio::awaitable<T> offloadCancellableAsync(
             },
             asio::use_awaitable
         );
-    } catch (const neograph::graph::CancelledException& e) {
-        // 父协程被取消 → 通知工作线程退出
+    } catch (...) {
+        // 异常，通知工作线程退出
         cancelFlag->store(true, std::memory_order_release);
         throw;
     }

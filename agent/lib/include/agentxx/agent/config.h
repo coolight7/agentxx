@@ -18,7 +18,7 @@ class ModelConfig {
 public:
 
     std::string name;            ///< 模型标识名称（来自配置文件 key）
-    std::string type = "openai"; ///< 模型类型："openai" 或 "anthropic"
+    std::string type = "openai"; ///< 模型类型："openai" / "anthropic" / "codex"
     std::string baseUrl;         ///< API 地址，为空时使用 provider 默认官方地址
     std::string apiKey                  = "EMPTY";
     std::string modelName               = "Agentxx"; ///< 发送请求时的 model 字段值
@@ -29,16 +29,25 @@ public:
     std::optional<bool> sslVerify    = std::nullopt;
     /// Anthropic API version（仅 Anthropic 使用）
     std::string anthropicVersion = "2023-06-01";
+    /// 自定义 API 路径（如 "/v1/chat/completions"）
+    /// - 为空时使用 provider 默认路径: openai 为 "/chat/completions", codex/responses 为
+    /// "/v1/responses"
+    /// - 用于适配各种 OpenAI 兼容服务 (DeepSeek/Moonshot/Ollama/Azure 等) 的不同端点路径
+    std::string apiPath;
+    /// 额外 HTTP 请求头 (如自定义鉴权头/网关透传头)
+    std::map<std::string, std::string> extraHeaders;
     /// 从 content 文本中尝试提取 tool call（当 LLM 未正确使用 tool_calls API 时的兜底方案）
     bool extractToolCallsFromContent = false;
     /// 模型支持的最大上下文 token 数
     /// - 0 表示未指定, 此时上下文压缩中间件使用其默认值
     ///   [agentxx::middleware::SummarizationMiddlewareHandle::defaultModelSupportMaxToken]
-    size_t modelSupportMaxToken = 0;
+    size_t modelContenxtMaxToken = 0;
     /// 扩展 JSON 配置，合并到请求 body
     neograph::json extra_config;
 
     bool isValid() const;
+
+    bool isCodexResponseApi() const;
 };
 
 class AgentConfig {
