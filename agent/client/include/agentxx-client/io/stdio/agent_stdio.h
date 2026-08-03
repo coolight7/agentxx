@@ -1,6 +1,6 @@
 #pragma once
 
-#include "agentxx/agent/agent_io.h"
+#include "agentxx/agent/io/agent_io.h"
 #include "asio/awaitable.hpp"
 #include "neograph/json.h"
 #include <iostream>
@@ -16,7 +16,7 @@ public:
     }
 };
 
-class AgentStdIO : public agentxx::agent::AgentIOBase {
+class StdIOClientAgentIO : public agentxx::agent::AgentIOBase {
 private:
 
     std::shared_ptr<StderrLogSink> logSink_;
@@ -33,8 +33,8 @@ public:
         std::string_view interruptArgJson
     ) override;
 
-    AgentStdIO();
-    ~AgentStdIO() override;
+    StdIOClientAgentIO();
+    ~StdIOClientAgentIO() override;
 
 protected:
 

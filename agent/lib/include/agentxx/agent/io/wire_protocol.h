@@ -10,7 +10,7 @@
 
 namespace agentxx {
 namespace agent {
-namespace remote {
+namespace io {
 
 /// 双向 WS JSON 消息类型常量
 /// - 约定: {"type": "<msgType>", "id": <opt requestId>, "thread": <threadId>, ...payload}
@@ -498,6 +498,6 @@ inline std::string msgType(const neograph::json& j) {
     return j.is_object() ? j.value("type", std::string{}) : std::string{};
 }
 
-} // namespace remote
+} // namespace io
 } // namespace agent
 } // namespace agentxx

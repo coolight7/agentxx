@@ -5,7 +5,7 @@
 #include "agentxx-client/train/train.h"
 #include "agentxx-client/util/util.h"
 #include "agentxx/agent/code_agent.h"
-#include "agentxx/agent/remote/agent_server.h"
+#include "agentxx/agent/io/agent_server.h"
 #include "agentxx/protocol/acp_server.h"
 #include "agentxx/util/exception.h"
 #include "asio/co_spawn.hpp"
@@ -278,13 +278,13 @@ Options:
 
         auto agent = std::make_shared<agentxx::agent::CodeAgent>(config);
 
-        agentxx::agent::remote::AgentServer::Config srvCfg;
+        agentxx::agent::io::AgentServer::Config srvCfg;
         srvCfg.http.address     = srvHost;
         srvCfg.http.port        = srvPort;
         srvCfg.http.sslCertFile = sslCertFile;
         srvCfg.http.sslKeyFile  = sslKeyFile;
         srvCfg.token            = agentToken;
-        auto server = std::make_shared<agentxx::agent::remote::AgentServer>(agent, srvCfg);
+        auto server             = std::make_shared<agentxx::agent::io::AgentServer>(agent, srvCfg);
 
         asio::co_spawn(
             *agent->ioCtx,

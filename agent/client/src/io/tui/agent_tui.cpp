@@ -29,7 +29,7 @@ using namespace ftxui;
 // 构造 / 析构
 // ---------------------------------------------------------------------------
 
-AgentTUI::AgentTUI(
+TUIClientAgentIO::TUIClientAgentIO(
     asio::any_io_executor                         ex,
     std::shared_ptr<agentxx::agent::AgentContext> agentContext,
     std::string                                   threadId,
@@ -52,7 +52,7 @@ AgentTUI::AgentTUI(
     }
 }
 
-AgentTUI::~AgentTUI() {
+TUIClientAgentIO::~TUIClientAgentIO() {
     stop();
 }
 
@@ -60,7 +60,7 @@ AgentTUI::~AgentTUI() {
 // postRedraw
 // ---------------------------------------------------------------------------
 
-void AgentTUI::postRedraw() {
+void TUIClientAgentIO::postRedraw() {
     std::shared_ptr<ScreenInteractive> s;
     {
         std::lock_guard<std::mutex> lock(screenMutex_);
@@ -75,7 +75,7 @@ void AgentTUI::postRedraw() {
 // start / stop
 // ---------------------------------------------------------------------------
 
-void AgentTUI::start() {
+void TUIClientAgentIO::start() {
     running_ = true;
     if (logSink_) {
         agentxx::util::LogDispatcher::instance().addSink(logSink_);
@@ -279,7 +279,7 @@ void AgentTUI::start() {
     });
 }
 
-void AgentTUI::stop() {
+void TUIClientAgentIO::stop() {
     if (logSink_) {
         agentxx::util::LogDispatcher::instance().removeSink(logSink_);
     }
@@ -302,7 +302,7 @@ void AgentTUI::stop() {
 // 模态管理
 // ---------------------------------------------------------------------------
 
-void AgentTUI::openModelSelector() {
+void TUIClientAgentIO::openModelSelector() {
     if (transport_) {
         sendToPeer(agentxx::agent::WireGetModel{threadId_});
     }
@@ -324,7 +324,7 @@ void AgentTUI::openModelSelector() {
     postRedraw();
 }
 
-void AgentTUI::openSettings() {
+void TUIClientAgentIO::openSettings() {
     auto overlay = std::make_shared<SettingsOverlay>(ctx_);
     overlay->onClose([this] {
         modal_->popModal();
@@ -338,7 +338,7 @@ void AgentTUI::openSettings() {
     postRedraw();
 }
 
-void AgentTUI::toggleLogWindow() {
+void TUIClientAgentIO::toggleLogWindow() {
     if (sidebar_->hasTab(kLogTabId)) {
         sidebar_->removeTab(kLogTabId);
     } else {
@@ -360,13 +360,13 @@ void AgentTUI::toggleLogWindow() {
 // requestCancel / requestSelectModel
 // ---------------------------------------------------------------------------
 
-void AgentTUI::requestCancel(std::string_view threadId) {
+void TUIClientAgentIO::requestCancel(std::string_view threadId) {
     if (transport_) {
         sendToPeer(agentxx::agent::WireCancel{std::string{threadId}});
     }
 }
 
-void AgentTUI::requestSelectModel(std::string_view threadId, std::string_view model) {
+void TUIClientAgentIO::requestSelectModel(std::string_view threadId, std::string_view model) {
     if (transport_) {
         sendToPeer(agentxx::agent::WireSelectModel{std::string{threadId}, std::string{model}});
     }
@@ -376,7 +376,7 @@ void AgentTUI::requestSelectModel(std::string_view threadId, std::string_view mo
 // onPeerMessage (client 线程)
 // ---------------------------------------------------------------------------
 
-void AgentTUI::onPeerMessage(agentxx::agent::WireMessage msg) {
+void TUIClientAgentIO::onPeerMessage(agentxx::agent::WireMessage msg) {
     std::visit(
         [this](auto&& m) {
             using T = std::decay_t<decltype(m)>;
@@ -452,7 +452,7 @@ void AgentTUI::onPeerMessage(agentxx::agent::WireMessage msg) {
 // 协议处理辅助 (调用方须持有 sharedState_.mutex())
 // ---------------------------------------------------------------------------
 
-void AgentTUI::pushCurrentTokenLocked(TUIRenderState& st) {
+void TUIClientAgentIO::pushCurrentTokenLocked(TUIRenderState& st) {
     if (st.currentToken.empty()) {
         return;
     }
@@ -468,7 +468,7 @@ void AgentTUI::pushCurrentTokenLocked(TUIRenderState& st) {
     st.currentToken.clear();
 }
 
-void AgentTUI::cancelCurrentRunLocked(TUIRenderState& st) {
+void TUIClientAgentIO::cancelCurrentRunLocked(TUIRenderState& st) {
     requestCancel(threadId_);
     pushCurrentTokenLocked(st);
     st.messages.push_back(
@@ -478,7 +478,7 @@ void AgentTUI::cancelCurrentRunLocked(TUIRenderState& st) {
     dispatchNextPendingInput(st);
 }
 
-void AgentTUI::sendUserInputLocked(TUIRenderState& st, std::string text) {
+void TUIClientAgentIO::sendUserInputLocked(TUIRenderState& st, std::string text) {
     pushCurrentTokenLocked(st);
     st.messages.push_back(std::make_shared<TUIMessage>(TUIMessage{TUIMessage::Role::User, text}));
     st.isStreaming = true;
@@ -496,7 +496,7 @@ void AgentTUI::sendUserInputLocked(TUIRenderState& st, std::string text) {
     }
 }
 
-void AgentTUI::dispatchNextPendingInput(TUIRenderState& st) {
+void TUIClientAgentIO::dispatchNextPendingInput(TUIRenderState& st) {
     if (st.isStreaming || st.pendingInputs.empty()) {
         return;
     }
@@ -509,7 +509,7 @@ void AgentTUI::dispatchNextPendingInput(TUIRenderState& st) {
 // onDelta (client 线程)
 // ---------------------------------------------------------------------------
 
-void AgentTUI::onDelta(const agentxx::agent::Delta& delta) {
+void TUIClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
     using Type = agentxx::agent::Delta::Type;
     {
         std::lock_guard<std::mutex> lock(sharedState_.mutex());
@@ -616,7 +616,7 @@ void AgentTUI::onDelta(const agentxx::agent::Delta& delta) {
 // onSync (client 线程)
 // ---------------------------------------------------------------------------
 
-void AgentTUI::onSync(const agentxx::agent::SyncPayload& payload) {
+void TUIClientAgentIO::onSync(const agentxx::agent::SyncPayload& payload) {
     {
         std::lock_guard<std::mutex> lock(sharedState_.mutex());
         auto                        st   = std::make_shared<TUIRenderState>();
@@ -713,7 +713,7 @@ void AgentTUI::onSync(const agentxx::agent::SyncPayload& payload) {
 // onTurnResult / onContextStats (client 线程)
 // ---------------------------------------------------------------------------
 
-void AgentTUI::onTurnResult(const agentxx::agent::WireTurnResult& result) {
+void TUIClientAgentIO::onTurnResult(const agentxx::agent::WireTurnResult& result) {
     {
         std::lock_guard<std::mutex> lock(sharedState_.mutex());
         auto&                       st = sharedState_.mutableState();
@@ -728,7 +728,7 @@ void AgentTUI::onTurnResult(const agentxx::agent::WireTurnResult& result) {
     postRedraw();
 }
 
-void AgentTUI::onContextStats(const agentxx::agent::WireContextStats& stats) {
+void TUIClientAgentIO::onContextStats(const agentxx::agent::WireContextStats& stats) {
     if (session_ && session_->contextStats) {
         session_->contextStats->contextTokens.store(stats.contextTokens, std::memory_order_relaxed);
         session_->contextStats->maxContextTokens.store(
@@ -743,7 +743,7 @@ void AgentTUI::onContextStats(const agentxx::agent::WireContextStats& stats) {
 // handleInterrupt (client 线程, co_spawn)
 // ---------------------------------------------------------------------------
 
-asio::awaitable<neograph::json> AgentTUI::handleInterrupt(
+asio::awaitable<neograph::json> TUIClientAgentIO::handleInterrupt(
     std::string_view threadId,
     std::string_view interruptNode,
     std::string_view interruptValue,
@@ -758,7 +758,7 @@ asio::awaitable<neograph::json> AgentTUI::handleInterrupt(
             return true;
         },
         [](std::string errinfo) -> bool {
-            XX_LOGE("AgentTUI::handleInterrupt json::parse failed: {}", errinfo);
+            XX_LOGE("TUIClientAgentIO::handleInterrupt json::parse failed: {}", errinfo);
             return true;
         }
     );
@@ -858,7 +858,7 @@ asio::awaitable<neograph::json> AgentTUI::handleInterrupt(
     co_return result;
 }
 
-asio::awaitable<std::optional<std::string>> AgentTUI::getInput() {
+asio::awaitable<std::optional<std::string>> TUIClientAgentIO::getInput() {
     auto [ec, line] = co_await inputChannel_->async_receive(asio::as_tuple(asio::use_awaitable));
     if (ec) {
         co_return std::nullopt;

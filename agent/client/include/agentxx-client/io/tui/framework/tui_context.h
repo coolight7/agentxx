@@ -9,8 +9,8 @@
 
 /// TUI 组件共享上下文 (类似 Flutter 的 BuildContext / InheritedWidget)
 ///
-/// 所有 TUI 组件通过此结构访问共享状态, 避免直接依赖 AgentTUI 全部接口。
-/// AgentTUI 在 start() 时构建并传递给各组件。
+/// 所有 TUI 组件通过此结构访问共享状态, 避免直接依赖 TUIClientAgentIO 全部接口。
+/// TUIClientAgentIO 在 start() 时构建并传递给各组件。
 ///
 /// 线程模型不变:
 /// - 渲染阶段: 读取 frameState (本帧快照, 无锁)

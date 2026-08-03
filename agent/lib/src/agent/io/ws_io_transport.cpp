@@ -1,6 +1,6 @@
-#include "agentxx/agent/ws_io_transport.h"
+#include "agentxx/agent/io/ws_io_transport.h"
 
-#include "agentxx/agent/remote/wire_protocol.h"
+#include "agentxx/agent/io/wire_protocol.h"
 #include "agentxx/util/log.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
@@ -97,7 +97,7 @@ asio::awaitable<bool> WsAgentIOTransport::connect(const WireHello& hello) {
 
     // 客户端模式：发送 hello 并等待 helloAck
     // 注意：HelloAck 在此处被消费 (仅用于握手判断), 不会传递给 runTransportLoop 的调用方
-    auto helloJson = remote::makeHello(hello.threadId, hello.token, hello.lastSeq, hello.tailHash);
+    auto helloJson = io::makeHello(hello.threadId, hello.token, hello.lastSeq, hello.tailHash);
     writeQueue_->try_send(ErrorCode{}, helloJson.dump());
 
     try {
@@ -292,7 +292,7 @@ asio::awaitable<void> WsAgentIOTransport::readLoop() {
             );
 
             // 重连后发送 hello (携带 token/threadId/lastSeq 供鉴权与增量重放)
-            auto helloJson = remote::makeHello(
+            auto helloJson = io::makeHello(
                 helloThreadId_,
                 token_,
                 lastDeltaSeq_.load(std::memory_order_acquire),
@@ -329,7 +329,7 @@ asio::awaitable<void> WsAgentIOTransport::heartbeatLoop() {
         )
                        .count();
         if (writeQueue_) {
-            writeQueue_->try_send(ErrorCode{}, remote::makePing(now).dump());
+            writeQueue_->try_send(ErrorCode{}, io::makePing(now).dump());
         }
     }
 }
@@ -375,26 +375,26 @@ std::string WsAgentIOTransport::serialize(const WireMessage& msg) {
         [](const auto& m) -> std::string {
             using T = std::decay_t<decltype(m)>;
             if constexpr (std::is_same_v<T, WireHello>) {
-                return remote::makeHello(m.threadId, m.token, m.lastSeq, m.tailHash).dump();
+                return io::makeHello(m.threadId, m.token, m.lastSeq, m.tailHash).dump();
             } else if constexpr (std::is_same_v<T, WireHelloAck>) {
-                return remote::makeHelloAck(m.ok, m.threadId, m.tailHash, m.models).dump();
+                return io::makeHelloAck(m.ok, m.threadId, m.tailHash, m.models).dump();
             } else if constexpr (std::is_same_v<T, WireUserInput>) {
-                return remote::makeUserInput(m.threadId, m.text).dump();
+                return io::makeUserInput(m.threadId, m.text).dump();
             } else if constexpr (std::is_same_v<T, WireCancel>) {
-                return remote::makeCancel(m.threadId).dump();
+                return io::makeCancel(m.threadId).dump();
             } else if constexpr (std::is_same_v<T, WireSelectModel>) {
-                return remote::makeSelectModel(m.threadId, m.model).dump();
+                return io::makeSelectModel(m.threadId, m.model).dump();
             } else if constexpr (std::is_same_v<T, WireInterruptRequest>) {
-                return remote::makeInterruptRequest(m.id, m.threadId, m.node, m.value, m.argJson)
+                return io::makeInterruptRequest(m.id, m.threadId, m.node, m.value, m.argJson)
                     .dump();
             } else if constexpr (std::is_same_v<T, WireInterruptResponse>) {
-                return remote::makeInterruptResponse(m.id, m.result).dump();
+                return io::makeInterruptResponse(m.id, m.result).dump();
             } else if constexpr (std::is_same_v<T, Delta>) {
-                return remote::makeDeltaMsg(m).dump();
+                return io::makeDeltaMsg(m).dump();
             } else if constexpr (std::is_same_v<T, SyncPayload>) {
-                return remote::makeSyncMsg(m).dump();
+                return io::makeSyncMsg(m).dump();
             } else if constexpr (std::is_same_v<T, WireTurnResult>) {
-                return remote::makeTurnResult(
+                return io::makeTurnResult(
                            m.threadId,
                            m.hasError,
                            m.errorMessage,
@@ -404,23 +404,23 @@ std::string WsAgentIOTransport::serialize(const WireMessage& msg) {
                 )
                     .dump();
             } else if constexpr (std::is_same_v<T, WireContextStats>) {
-                return remote::makeContextStats(m.contextTokens, m.maxContextTokens).dump();
+                return io::makeContextStats(m.contextTokens, m.maxContextTokens).dump();
             } else if constexpr (std::is_same_v<T, WireError>) {
-                return remote::makeError(m.code, m.message).dump();
+                return io::makeError(m.code, m.message).dump();
             } else if constexpr (std::is_same_v<T, WireLog>) {
-                return remote::makeLog(m.level, m.message).dump();
+                return io::makeLog(m.level, m.message).dump();
             } else if constexpr (std::is_same_v<T, WireGetModel>) {
-                return remote::makeGetModel(m.threadId).dump();
+                return io::makeGetModel(m.threadId).dump();
             } else if constexpr (std::is_same_v<T, WireModelInfo>) {
-                return remote::makeModelInfo(m.currentModel, m.models).dump();
+                return io::makeModelInfo(m.currentModel, m.models).dump();
             } else if constexpr (std::is_same_v<T, WireGetAppendComponentInfo>) {
-                return remote::makeGetAppendComponentInfo(m.threadId).dump();
+                return io::makeGetAppendComponentInfo(m.threadId).dump();
             } else if constexpr (std::is_same_v<T, WireAppendComponentInfo>) {
-                return remote::makeAppendComponentInfo(m.notifications).dump();
+                return io::makeAppendComponentInfo(m.notifications).dump();
             } else if constexpr (std::is_same_v<T, WireGetContext>) {
-                return remote::makeGetContext(m.threadId).dump();
+                return io::makeGetContext(m.threadId).dump();
             } else if constexpr (std::is_same_v<T, WireContextMessages>) {
-                return remote::makeContextMessages(m.messages).dump();
+                return io::makeContextMessages(m.messages).dump();
             } else {
                 return "{}";
             }
@@ -440,19 +440,19 @@ std::optional<WireMessage> WsAgentIOTransport::deserialize(std::string_view json
         return std::nullopt;
     }
 
-    auto t = remote::msgType(j);
+    auto t = io::msgType(j);
 
-    if (t == remote::MsgType::DeltaMsg) {
-        auto d = remote::deltaMsgFromJson(j);
+    if (t == io::MsgType::DeltaMsg) {
+        auto d = io::deltaMsgFromJson(j);
         if (d.has_value()) {
             return WireMessage{std::move(d.value())};
         }
-    } else if (t == remote::MsgType::SyncMsg) {
-        auto s = remote::syncMsgFromJson(j);
+    } else if (t == io::MsgType::SyncMsg) {
+        auto s = io::syncMsgFromJson(j);
         if (s.has_value()) {
             return WireMessage{std::move(s.value())};
         }
-    } else if (t == remote::MsgType::InterruptRequest) {
+    } else if (t == io::MsgType::InterruptRequest) {
         WireInterruptRequest req;
         req.id       = j.value("id", int64_t{0});
         req.threadId = j.value("thread", std::string{});
@@ -460,19 +460,19 @@ std::optional<WireMessage> WsAgentIOTransport::deserialize(std::string_view json
         req.value    = j.value("value", std::string{});
         req.argJson  = j.value("arg_json", std::string{});
         return WireMessage{std::move(req)};
-    } else if (t == remote::MsgType::InterruptResponse) {
+    } else if (t == io::MsgType::InterruptResponse) {
         WireInterruptResponse resp;
         resp.id     = j.value("id", int64_t{0});
         resp.result = j.value("result", neograph::json{});
         return WireMessage{std::move(resp)};
-    } else if (t == remote::MsgType::TurnResult) {
+    } else if (t == io::MsgType::TurnResult) {
         WireTurnResult r;
         r.threadId     = j.value("thread", std::string{});
         r.hasError     = j.value("has_error", false);
         r.errorMessage = j.value("error_message", std::string{});
         r.interrupted  = j.value("interrupted", false);
         return WireMessage{std::move(r)};
-    } else if (t == remote::MsgType::HelloAck) {
+    } else if (t == io::MsgType::HelloAck) {
         WireHelloAck ack;
         ack.ok       = j.value("ok", false);
         ack.threadId = j.value("thread", std::string{});
@@ -485,47 +485,47 @@ std::optional<WireMessage> WsAgentIOTransport::deserialize(std::string_view json
             }
         }
         return WireMessage{std::move(ack)};
-    } else if (t == remote::MsgType::Hello) {
+    } else if (t == io::MsgType::Hello) {
         WireHello hello;
         hello.threadId = j.value("thread", std::string{});
         hello.token    = j.value("token", std::string{});
         hello.lastSeq  = j.value("last_seq", uint64_t{0});
         hello.tailHash = j.value("tail_hash", std::string{});
         return WireMessage{std::move(hello)};
-    } else if (t == remote::MsgType::UserInput) {
+    } else if (t == io::MsgType::UserInput) {
         WireUserInput input;
         input.threadId = j.value("thread", std::string{});
         input.text     = j.value("text", std::string{});
         return WireMessage{std::move(input)};
-    } else if (t == remote::MsgType::Cancel) {
+    } else if (t == io::MsgType::Cancel) {
         WireCancel cancel;
         cancel.threadId = j.value("thread", std::string{});
         return WireMessage{std::move(cancel)};
-    } else if (t == remote::MsgType::SelectModel) {
+    } else if (t == io::MsgType::SelectModel) {
         WireSelectModel sm;
         sm.threadId = j.value("thread", std::string{});
         sm.model    = j.value("model", std::string{});
         return WireMessage{std::move(sm)};
-    } else if (t == remote::MsgType::ContextStats) {
+    } else if (t == io::MsgType::ContextStats) {
         WireContextStats stats;
         stats.contextTokens    = j.value("context_tokens", uint64_t{0});
         stats.maxContextTokens = j.value("max_context_tokens", uint64_t{0});
         return WireMessage{std::move(stats)};
-    } else if (t == remote::MsgType::ErrorMsg) {
+    } else if (t == io::MsgType::ErrorMsg) {
         WireError err;
         err.code    = j.value("code", 0);
         err.message = j.value("message", std::string{});
         return WireMessage{std::move(err)};
-    } else if (t == remote::MsgType::LogMsg) {
+    } else if (t == io::MsgType::LogMsg) {
         WireLog log;
         log.level   = j.value("level", 0);
         log.message = j.value("message", std::string{});
         return WireMessage{std::move(log)};
-    } else if (t == remote::MsgType::GetModel) {
+    } else if (t == io::MsgType::GetModel) {
         WireGetModel req;
         req.threadId = j.value("thread", std::string{});
         return WireMessage{std::move(req)};
-    } else if (t == remote::MsgType::ModelInfo) {
+    } else if (t == io::MsgType::ModelInfo) {
         WireModelInfo info;
         info.currentModel = j.value("current_model", std::string{});
         if (j.contains("models") && j["models"].is_array()) {
@@ -536,19 +536,19 @@ std::optional<WireMessage> WsAgentIOTransport::deserialize(std::string_view json
             }
         }
         return WireMessage{std::move(info)};
-    } else if (t == remote::MsgType::GetAppendComponentInfo) {
+    } else if (t == io::MsgType::GetAppendComponentInfo) {
         WireGetAppendComponentInfo req;
         req.threadId = j.value("thread", std::string{});
         return WireMessage{std::move(req)};
-    } else if (t == remote::MsgType::AppendComponentInfo) {
+    } else if (t == io::MsgType::AppendComponentInfo) {
         WireAppendComponentInfo info;
-        info.notifications = remote::appendComponentInfoFromJson(j);
+        info.notifications = io::appendComponentInfoFromJson(j);
         return WireMessage{std::move(info)};
-    } else if (t == remote::MsgType::GetContext) {
+    } else if (t == io::MsgType::GetContext) {
         WireGetContext req;
         req.threadId = j.value("thread", std::string{});
         return WireMessage{std::move(req)};
-    } else if (t == remote::MsgType::ContextMessages) {
+    } else if (t == io::MsgType::ContextMessages) {
         WireContextMessages resp;
         resp.messages = j.value("messages", neograph::json::array());
         return WireMessage{std::move(resp)};

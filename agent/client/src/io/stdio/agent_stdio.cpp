@@ -21,18 +21,18 @@ static int               g_mcpCount    = 0;
 static int               g_skillCount  = 0;
 static int               g_memoryCount = 0;
 
-AgentStdIO::AgentStdIO() :
+StdIOClientAgentIO::StdIOClientAgentIO() :
     logSink_(std::make_shared<StderrLogSink>()) {
     agentxx::util::LogDispatcher::instance().addSink(logSink_);
 }
 
-AgentStdIO::~AgentStdIO() {
+StdIOClientAgentIO::~StdIOClientAgentIO() {
     if (logSink_) {
         agentxx::util::LogDispatcher::instance().removeSink(logSink_);
     }
 }
 
-void AgentStdIO::onDelta(const agentxx::agent::Delta& delta) {
+void StdIOClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
     using Type = agentxx::agent::Delta::Type;
     switch (delta.type) {
         case Type::TextToken:
@@ -96,7 +96,7 @@ void AgentStdIO::onDelta(const agentxx::agent::Delta& delta) {
     }
 }
 
-void AgentStdIO::onSync(const agentxx::agent::SyncPayload& payload) {
+void StdIOClientAgentIO::onSync(const agentxx::agent::SyncPayload& payload) {
     for (const auto& hm : payload.messages) {
         auto role    = hm.data.value("role", std::string{});
         auto content = hm.data.value("content", std::string{});
@@ -108,7 +108,7 @@ void AgentStdIO::onSync(const agentxx::agent::SyncPayload& payload) {
     }
 }
 
-void AgentStdIO::onPeerMessage(agentxx::agent::WireMessage msg) {
+void StdIOClientAgentIO::onPeerMessage(agentxx::agent::WireMessage msg) {
     // 拦截启动信息响应: 整批统计 MCP/Skill/Memory, 其余消息委托基类分发
     if (auto* info = std::get_if<agentxx::agent::WireAppendComponentInfo>(&msg)) {
         using Type = agentxx::agent::AppendComponentNotification::Type;
@@ -136,12 +136,12 @@ void AgentStdIO::onPeerMessage(agentxx::agent::WireMessage msg) {
     agentxx::agent::AgentIOBase::onPeerMessage(std::move(msg));
 }
 
-asio::awaitable<std::optional<std::string>> AgentStdIO::getInput() {
+asio::awaitable<std::optional<std::string>> StdIOClientAgentIO::getInput() {
     auto& stdinReader = StdinReader::instance(co_await asio::this_coro::executor);
     co_return co_await stdinReader.readLine();
 }
 
-asio::awaitable<neograph::json> AgentStdIO::handleInterrupt(
+asio::awaitable<neograph::json> StdIOClientAgentIO::handleInterrupt(
     std::string_view threadId,
     std::string_view interruptNode,
     std::string_view interruptValue,

@@ -366,7 +366,7 @@ agent.ioCtx->run();
 ┌─────────────────────────────────────────────────────────────────┐
 │                        Client 层                                │
 │  ┌──────────┐  ┌──────────┐  ┌──────────────────────────────┐  │
-│  │ AgentTUI │  │AgentStdIO│  │   Remote Client (WS)         │  │
+│  │ TUIClientAgentIO │  │StdIOClientAgentIO│  │   Remote Client (WS)         │  │
 │  │  (FTXUI) │  │ (stdio)  │  │   WsAgentIOTransport         │  │
 │  └────┬─────┘  └────┬─────┘  └──────────┬───────────────────┘  │
 │       │              │                   │                      │
@@ -384,8 +384,8 @@ agent.ioCtx->run();
 ├─────────────────────────────────────────────────────────────────┤
 │                        Agent 层                                 │
 │  ┌─────────────────────────────────────────────────────────┐    │
-│  │  AgentServer (WS 服务) / SessionController (会话驱动)    │    │
-│  │  SessionController: delta 缓冲/重连重放/grace period    │    │
+│  │  AgentServer (WS 服务) / SessionServerAgentIO (会话驱动)    │    │
+│  │  SessionServerAgentIO: delta 缓冲/重连重放/grace period    │    │
 │  └──────────────────────┬──────────────────────────────────┘    │
 │                         │                                       │
 │  ┌──────────────────────▼──────────────────────────────────┐    │
@@ -452,39 +452,39 @@ agent.ioCtx->run();
 #### 同进程模式 (Channel 直连)
 
 ```
-User Input → AgentTUI/AgentStdIO
+User Input → TUIClientAgentIO/StdIOClientAgentIO
     → AgentIOBase.sendUserInput()
     → ChannelAgentIOTransport::send() (client 端, 零序列化)
     → ChannelAgentIOTransport::recv() (server 端)
-    → SessionController.onPeerMessage()
-    → SessionController.run() → BaseAgent.runConversationTurnAsync()
+    → SessionServerAgentIO.onPeerMessage()
+    → SessionServerAgentIO.run() → BaseAgent.runConversationTurnAsync()
         → GraphEngine (ReAct Loop)
             → ModelCallWrapNode → OpenAI/Anthropic Provider → LLM API
             → ToolcallWrapNode → Tools (filesystem/command/web/...)
         → Delta 事件流
-    → SessionController.sendToPeer() (新 delta 写入重放缓冲后转发)
+    → SessionServerAgentIO.sendToPeer() (新 delta 写入重放缓冲后转发)
     → ChannelAgentIOTransport::send() (server 端)
     → ChannelAgentIOTransport::recv() (client 端)
-    → AgentTUI/AgentStdIO.onPeerMessage() → onDelta() (protected 被动回调)
+    → TUIClientAgentIO/StdIOClientAgentIO.onPeerMessage() → onDelta() (protected 被动回调)
     → UI 渲染
 ```
 
 #### 远程模式 (WebSocket)
 
 ```
-User Input → AgentTUI/AgentStdIO
+User Input → TUIClientAgentIO/StdIOClientAgentIO
     → AgentIOBase.sendUserInput()
     → WsAgentIOTransport::send() (client, JSON 序列化)
     → WebSocket 网络传输
     → AgentServer.handleWs()
     → WsAgentIOTransport::recv() (server, JSON 反序列化)
-    → SessionController.onPeerMessage()
+    → SessionServerAgentIO.onPeerMessage()
     → ... (同上)
-    → SessionController.sendToPeer() (新 delta 写入重放缓冲后转发)
+    → SessionServerAgentIO.sendToPeer() (新 delta 写入重放缓冲后转发)
     → WsAgentIOTransport::send() (server, JSON 序列化)
     → WebSocket 网络传输
     → WsAgentIOTransport::recv() (client, JSON 反序列化)
-    → AgentTUI/AgentStdIO.onPeerMessage() → onDelta() (protected 被动回调)
+    → TUIClientAgentIO/StdIOClientAgentIO.onPeerMessage() → onDelta() (protected 被动回调)
     → UI 渲染
 ```
 
@@ -557,13 +557,13 @@ AgentIOBase (公共契约)
         ├── onTurnResult() [client] ← 轮次结束通知
         └── onContextStats() [client] ← 上下文统计更新
 
-AgentIOBase (客户端端点: AgentTUI / AgentStdIO)
+AgentIOBase (客户端端点: TUIClientAgentIO / StdIOClientAgentIO)
     ├── onDelta/onSync/onTurnResult/onContextStats (protected) ← 收对端事件 → 渲染
     ├── getInput()         → 从 stdin/FTXUI 读输入
     ├── handleInterrupt()  → 弹出交互框收集用户响应
     └── onPeerMessage()    → 覆写: 额外处理 InterruptRequest/Log/ModelInfo 等
 
-AgentIOBase (服务端端点: SessionController)
+AgentIOBase (服务端端点: SessionServerAgentIO)
     ├── sendToPeer()       → 覆写: 新产出的 Delta (seq 单调守卫) 先写入重放缓冲再转发,
     │                          重放 delta (seq <= 缓冲尾) 不重复入缓冲
     ├── onDelta/onSync     → protected 空实现 (server 不会从 client 收到, 满足纯虚契约)
@@ -664,7 +664,7 @@ Client                              Server
   │──── Hello (thread, token, seq,    │
   │      tailHash, model) ───────────→│
   │                                    │ 验证 token
-  │                                    │ 查找/创建 SessionController
+  │                                    │ 查找/创建 SessionServerAgentIO
   │←── HelloAck (ok, models, hash) ───│
   │                                    │
   │──── UserInput (text) ────────────→│
@@ -724,10 +724,6 @@ agent/
 │   │   ├── agent/                # Agent 核心
 │   │   │   ├── base_agent.h      # BaseAgent 基类 (核心基础设施 + ReAct 循环 + 会话执行)
 │   │   │   ├── code_agent.h      # CodeAgent (继承 BaseAgent, 编程工具/中间件)
-│   │   │   ├── agent_io.h        # AgentIOBase 端点基类 (client/server 操作契约)
-│   │   │   ├── agent_io_transport.h # 传输层抽象基类 (connect/recv/send/close/alive)
-│   │   │   ├── channel_io_transport.h # 进程内 Channel 传输 (零序列化)
-│   │   │   ├── ws_io_transport.h  # WebSocket 传输 (JSON 编解码/心跳/重连)
 │   │   │   ├── config.h          # AgentConfig / ModelConfig 配置
 │   │   │   ├── config_static.h   # 静态路径配置
 │   │   │   ├── context.h         # AgentContext / Session / SessionStore / ContextStats
@@ -737,10 +733,14 @@ agent/
 │   │   │   ├── model_registry.h  # ModelProviderRegistry (运行时模型切换)
 │   │   │   ├── prompt.h          # AgentPrompt / ToolPrompt 提示词管理
 │   │   │   ├── training.h        # EvolutionTrainingAgent 进化训练 (变异/评估/优化/收敛检测)
-│   │   │   └── remote/           # 远程通信
+│   │   │   └── io/           # 远程通信
 │   │   │       ├── agent_server.h    # AgentServer (WS 服务, token 鉴权)
-│   │   │       ├── session_controller.h # SessionController (会话驱动, delta 缓冲/重放, grace)
-│   │   │       └── wire_protocol.h   # Wire Protocol 消息类型与序列化
+│   │   │       ├── session_server_agent_io.h # SessionServerAgentIO (会话驱动, delta 缓冲/重放, grace)
+│   │   │       ├── wire_protocol.h   # Wire Protocol 消息类型与序列化
+│   │   │       ├── agent_io.h        # AgentIOBase 端点基类 (client/server 操作契约)
+│   │   │       ├── agent_io_transport.h # 传输层抽象基类 (connect/recv/send/close/alive)
+│   │   │       ├── channel_io_transport.h # 进程内 Channel 传输 (零序列化)
+│   │   │       └── ws_io_transport.h  # WebSocket 传输 (JSON 编解码/心跳/重连)
 │   │   ├── deps/                 # 依赖注入
 │   │   │   └── injector.h        # DependencyContainer (工厂/单例/有名称注册)
 │   │   ├── nodes/                # Graph 节点
@@ -811,10 +811,10 @@ agent/
 │   │   ├── mode_runners.h        # 运行模式入口 (local/remote × tui/cli, 统一调用)
 │   │   ├── io/
 │   │   │   ├── stdio/
-│   │   │   │   ├── agent_stdio.h # AgentStdIO (stdin/stdout 交互)
+│   │   │   │   ├── agent_stdio.h # StdIOClientAgentIO (stdin/stdout 交互)
 │   │   │   │   └── stdin_reader.h # 异步 stdin 读取器
 │   │   │   └── tui/
-│   │   │       ├── agent_tui.h   # AgentTUI (FTXUI 终端 UI, 接收/显示/排队/权限/日志)
+│   │   │       ├── agent_tui.h   # TUIClientAgentIO (FTXUI 终端 UI, 接收/显示/排队/权限/日志)
 │   │   │       ├── scrollable.h  # Scrollable (可复用的自动滚动容器组件)
 │   │   │       └── tui_theme.h   # TUI 主题配色
 │   │   ├── train/                # 训练模式
@@ -849,7 +849,7 @@ agent/
 │   ├── test_concurrency.*        # 并发测试
 │   ├── test_lockless.*           # Session 无锁快照测试
 │   ├── test_session_concurrency.* # Session 跨线程只读快照测试
-│   ├── test_remote_agent.*       # 远程 Agent (WS 传输 / SessionController) 测试
+│   ├── test_remote_agent.*       # 远程 Agent (WS 传输 / SessionServerAgentIO) 测试
 │   ├── test_mcp.*                # MCP 协议测试 (多版本/HTTP/stdio)
 │   ├── test_a2a.*                # A2A 协议测试
 │   ├── test_acp.*                # ACP 协议测试
@@ -929,14 +929,14 @@ CodeAgent (继承 BaseAgent)
   ├── 工具: Filesystem | Command | Web | RAG | SubAgent | MCP | CodeGraph | ...
   └── 中间件: Permission → Skill → MemoryFile → Summarization → Planning → LogPrint
 
-SessionController (远程会话驱动)
+SessionServerAgentIO (远程会话驱动)
   ├── AgentIOBase (服务端端点)
   ├── BaseAgent.runConversationTurnAsync()
   ├── deltaBuf (断线缓冲) + grace timer
   └── AgentIOTransportBase (从 AgentServer 传入)
 
 Client (agentxx_cli)
-  ├── AgentTUI / AgentStdIO → AgentIOBase
+  ├── TUIClientAgentIO / StdIOClientAgentIO → AgentIOBase
   ├── ChannelAgentIOTransport / WsAgentIOTransport → AgentIOTransportBase
   ├── ConfigLoader → YAML + .env
   └── ModeRunners → local/remote × tui/cli 组合

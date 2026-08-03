@@ -14,7 +14,7 @@
 /// - Enter: 发送 (经 onSend 回调)
 /// - Ctrl+C: 清空输入或退出 (经 onCtrlC 回调)
 ///
-/// 发送逻辑由外部 (AgentTUI) 通过 onSend 回调实现,
+/// 发送逻辑由外部 (TUIClientAgentIO) 通过 onSend 回调实现,
 /// 本组件仅负责 UI 交互与文本管理。
 class InputComponent : public ftxui::ComponentBase {
 public:
@@ -32,7 +32,7 @@ public:
 
     InputComponent(TUICtx& ctx, Config config);
 
-    bool OnEvent(ftxui::Event event) override;
+    bool           OnEvent(ftxui::Event event) override;
     ftxui::Element OnRender() override;
 
     /// 清空输入框
@@ -46,8 +46,8 @@ public:
 
 private:
 
-    TUICtx&           ctx_;
-    Config            config_;
-    std::string       inputText_;
-    ftxui::Component  input_;
+    TUICtx&          ctx_;
+    Config           config_;
+    std::string      inputText_;
+    ftxui::Component input_;
 };

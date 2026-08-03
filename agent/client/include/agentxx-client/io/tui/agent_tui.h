@@ -5,8 +5,8 @@
 #include "agentxx-client/io/tui/framework/tui_state.h"
 #include "agentxx-client/io/tui/scrollable.h"
 #include "agentxx-client/io/tui/tui_theme.h"
-#include "agentxx/agent/agent_io.h"
 #include "agentxx/agent/context.h"
+#include "agentxx/agent/io/agent_io.h"
 #include "agentxx/util/log.h"
 #include "agentxx/util/string_util.h"
 #include "asio/awaitable.hpp"
@@ -85,7 +85,8 @@ public:
     };
 
     std::vector<Line> snapshot() const;
-    void clear();
+    void              clear();
+
     uint64_t poppedCount() const {
         return poppedCount_;
     }
@@ -124,8 +125,8 @@ class InputComponent;
 /// 线程模型 (不变):
 /// - client 线程: onDelta/onSync/onPeerMessage → sharedState_.mutate()
 /// - UI 线程: FTXUI Loop 渲染 + 事件; 每帧 readSnapshot() 后无锁渲染
-class AgentTUI : public agentxx::agent::AgentIOBase,
-                 public std::enable_shared_from_this<AgentTUI> {
+class TUIClientAgentIO : public agentxx::agent::AgentIOBase,
+                         public std::enable_shared_from_this<TUIClientAgentIO> {
 public:
 
     using LineChannel
@@ -136,13 +137,13 @@ public:
     using PendingInput = TUIPendingInput;
     using RenderState  = TUIRenderState;
 
-    explicit AgentTUI(
+    explicit TUIClientAgentIO(
         asio::any_io_executor                         ex,
         std::shared_ptr<agentxx::agent::AgentContext> agentContext,
         std::string                                   threadId = "session",
         TUITheme                                      theme    = TUITheme::darkTheme()
     );
-    ~AgentTUI() override;
+    ~TUIClientAgentIO() override;
 
     void start();
     void stop();
@@ -166,7 +167,9 @@ public:
     void requestSelectModel(std::string_view threadId, std::string_view model) override;
 
     /// 供组件访问共享状态 (UI 线程渲染/事件时使用)
-    TUISharedState& sharedState() { return sharedState_; }
+    TUISharedState& sharedState() {
+        return sharedState_;
+    }
 
 protected:
 
@@ -198,10 +201,10 @@ private:
     void toggleLogWindow();
 
     /// 侧边栏渲染辅助
-    std::vector<ScrollItem> renderLogWindow();
-    std::vector<ScrollItem> renderInfoSidebar();
-    ftxui::Element renderInfoSidebarFooter();
-    ftxui::Element renderLogSidebarFooter();
+    std::vector<ScrollItem>       renderLogWindow();
+    std::vector<ScrollItem>       renderInfoSidebar();
+    ftxui::Element                renderInfoSidebarFooter();
+    ftxui::Element                renderLogSidebarFooter();
     std::optional<ftxui::Element> renderPlanningInfo();
 
     // -----------------------------------------------------------------------
@@ -227,12 +230,12 @@ private:
     std::shared_ptr<agentxx::agent::Session> session_;
 
     /// UI 线程组件 (start() 中创建, UI 线程独占)
-    TUICtx                                     ctx_;
-    std::shared_ptr<MessageListComponent>      messageList_;
-    std::shared_ptr<SidebarComponent>          sidebar_;
-    std::shared_ptr<StatusBarComponent>        statusBar_;
-    std::shared_ptr<InputComponent>            inputBar_;
-    std::shared_ptr<ModalContainer>            modal_;
+    TUICtx                                ctx_;
+    std::shared_ptr<MessageListComponent> messageList_;
+    std::shared_ptr<SidebarComponent>     sidebar_;
+    std::shared_ptr<StatusBarComponent>   statusBar_;
+    std::shared_ptr<InputComponent>       inputBar_;
+    std::shared_ptr<ModalContainer>       modal_;
 
     /// 日志行缓存 (UI 线程, 供 renderLogWindow 使用)
     std::vector<ftxui::Element> logLineCache_;
@@ -242,8 +245,8 @@ private:
     ftxui::Box pendingCounterBox_;
     ftxui::Box contextButtonBox_;
 
-    static constexpr const char* kLogTabId           = "xx_logs";
-    static constexpr const char* kInfoTabId          = "xx_info";
+    static constexpr const char* kLogTabId            = "xx_logs";
+    static constexpr const char* kInfoTabId           = "xx_info";
     static constexpr int         kInfoSidebarMinWidth = 120;
-    static constexpr const char* kAgentxxVersion     = "0.1.0";
+    static constexpr const char* kAgentxxVersion      = "0.1.0";
 };

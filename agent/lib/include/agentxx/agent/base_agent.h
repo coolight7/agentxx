@@ -1,8 +1,8 @@
 #pragma once
 
-#include "agentxx/agent/agent_io.h"
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/context.h"
+#include "agentxx/agent/io/agent_io.h"
 #include "agentxx/agent/model_registry.h"
 #include "agentxx/middlewares/event_stream.h"
 #include "agentxx/middlewares/events.h"
