@@ -14,7 +14,7 @@
 	url = https://github.com/tim-gromeyer/html2md
 [submodule "agent/third_party/glob"]
 	path = agent/third_party/glob
-	url = https://github.com/p-ranav/glob
+	url = https://github.com/coolight7/glob
 [submodule "agent/third_party/vectorscan"]
 	path = agent/third_party/vectorscan
 	url = https://github.com/VectorCamp/vectorscan

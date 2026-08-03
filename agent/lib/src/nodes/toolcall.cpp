@@ -187,14 +187,14 @@ asio::awaitable<std::string>
             // `share_store` 分页按行取值 否则取总摘要
             if (lastLineIndex >= targetIndex / 3) {
                 co_return fmt::format(
-                    R"([Content offloaded to `share_store`, id={}; Summary {} lines:] {}...)",
+                    R"([Content offloaded to tool/`share_store`, id={}; Summary {} lines:]\n{}\n...)",
                     storeId,
                     lineCount,
                     std::string_view{result}.substr(0, lastLineIndex)
                 );
             } else {
                 co_return fmt::format(
-                    R"([Content offloaded to `share_store`, id={}; Summary:] {}...)",
+                    R"([Content offloaded to tool/`share_store`, id={}; Summary:]\n{}\n...)",
                     storeId,
                     std::string_view{result}.substr(0, targetIndex)
                 );
