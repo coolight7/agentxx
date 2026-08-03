@@ -13,6 +13,10 @@
 namespace agentxx {
 namespace nodes {
 
+inline static constexpr std::string_view defaultExceptionTip{"[Exception aborted]"};
+inline static constexpr std::string_view defaultUserCancelTip{"[User cancelled]"};
+inline static constexpr std::string_view defaultContinueTip{"[Please continue]"};
+
 // 限速
 inline static const auto defaultRateLimitTag = agentxx::util::AhoCorasick<char>{
     std::vector<std::string>{
@@ -226,16 +230,7 @@ void ModelCallWrapNode::onHandleStartError(
     if (false == errorRethrow && isCurrentError) {
         auto msg = neograph::ChatMessage{
             .role    = "assistant",
-            .content = neograph::json{
-                           {"error",
-                            fmt::format(
-                                "{}/Start call `{}` exception: {}",
-                                nodeName,
-                                item.name,
-                                exceptionStr
-                            )},
-            }
-                           .dump(),
+            .content = std::string{defaultExceptionTip},
         };
         auto msgJson = neograph::json{};
         neograph::to_json(msgJson, msg);
@@ -257,7 +252,7 @@ void ModelCallWrapNode::onHandleBaseRunError(
     if (false == errorRethrow && isCurrentError) {
         auto msg = neograph::ChatMessage{
             .role    = "assistant",
-            .content = fmt::format("[Exception aborted]"),
+            .content = std::string{defaultExceptionTip},
             .flags   = neograph::MessageFlag::AutoInserted,
         };
         auto msgJson = neograph::json{};
@@ -280,7 +275,7 @@ void ModelCallWrapNode::repairMessages(neograph::graph::NodeInput& in) {
         // 插入 user msg 修正消息顺序
         auto userMsg = neograph::ChatMessage{
             .role    = "user",
-            .content = "[Please continue]",
+            .content = std::string{defaultContinueTip},
             .flags   = neograph::MessageFlag::AutoInserted,
         };
         auto userMsgJson = neograph::json{};
@@ -450,7 +445,7 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
                 .content = fmt::format(
                     "{}\n{}",
                     std::move(lastMsgContent),
-                    isCancel ? "[User cancelled]" : "[Exception aborted]"
+                    isCancel ? defaultUserCancelTip : defaultExceptionTip
                 ),
                 .reasoning_content = std::move(lastMsgThinking),
                 .flags             = neograph::MessageFlag::AutoInserted,
@@ -466,6 +461,8 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
                     std::move(appendMsgJsons),
                 });
             }
+            // 有部分响应成功，重置重试次数
+            retry = 0;
         }
 
         if (isCancel || retry >= agentCtxPtr->agentConfig->llmMaxRetry) {

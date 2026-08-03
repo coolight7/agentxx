@@ -44,7 +44,9 @@ ftxui::Element buildLogLine(const TUILogSink::Line& line, const TUITheme& theme)
 std::vector<ScrollItem> AgentTUI::renderLogWindow() {
     auto lines = logSink_ ? logSink_->snapshot() : std::vector<TUILogSink::Line>{};
     if (lines.empty()) {
-        return {ScrollItem{text(" (no logs) ") | dim, false}};
+        return {
+            ScrollItem{text(" (no logs) ") | dim, false}
+        };
     }
     const uint64_t curPopped = logSink_ ? logSink_->poppedCount() : 0;
     if (curPopped != logCachePoppedCount_) {
@@ -142,26 +144,29 @@ std::vector<ScrollItem> AgentTUI::renderInfoSidebar() {
         Elements appendEls;
         appendEls.push_back(text("Append Components") | color(theme_.accentColor));
 
-        auto appendGroup = [&](std::string_view                                      label,
+        auto appendGroup = [&](std::string_view                                  label,
                                agentxx::agent::AppendComponentNotification::Type type,
                                bool                                              splitName) {
             size_t   count = 0;
             Elements elems;
             for (const auto& notif : st.appendComponents) {
-                if (notif.type != type) continue;
+                if (notif.type != type) {
+                    continue;
+                }
                 ++count;
                 elems.push_back(
                     (splitName ? hbox({text(fmt::format(
-                                       "│   {}·{}",
-                                       agentxx::util::getFileName(notif.name), notif.name
-                                   ))})
-                               : hbox({text("│   "), text(notif.name)}))
+                                     "|  {}·{}",
+                                     agentxx::util::getFileName(notif.name),
+                                     notif.name
+                                 ))})
+                               : hbox({text("|  "), text(notif.name)}))
                     | color(notif.success ? theme_.assistantColor : theme_.systemColor)
                 );
             }
             if (count > 0) {
                 appendEls.push_back(
-                    hbox({text("┣━ "), text(fmt::format("{}: {}", label, count))})
+                    hbox({text("|- "), text(fmt::format("{}: {}", label, count))})
                     | color(theme_.assistantColor)
                 );
                 appendEls.push_back(vbox(elems));
@@ -221,8 +226,8 @@ ftxui::Element AgentTUI::renderLogSidebarFooter() {
     }
     row.push_back(filler());
 
-    auto ctxBtn = text(" 上下文 ") | bgcolor(theme_.buttonBgColor) | color(theme_.buttonTextColor)
-                  | reflect(contextButtonBox_);
+    auto ctxBtn = text(" LLM Context ") | bgcolor(theme_.buttonBgColor)
+                  | color(theme_.buttonTextColor) | reflect(contextButtonBox_);
     row.push_back(ctxBtn);
 
     return hbox(std::move(row));
