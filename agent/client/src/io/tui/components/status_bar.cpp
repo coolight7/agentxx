@@ -46,7 +46,7 @@ Element StatusBarComponent::OnRender() {
         text(" "),
         filler(),
         text(" "),
-        text("[F3] Settings") | color(theme.hintColor),
+        text("[F3] Settings") | color(theme.hintColor) | reflect(settingsBox_),
         text(" "),
     });
 }

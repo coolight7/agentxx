@@ -246,6 +246,11 @@ void TUIClientAgentIO::start() {
                         postRedraw();
                         return true;
                     }
+                    // 状态栏 "Settings" 按钮点击 → 打开设置弹窗
+                    if (statusBar_ && statusBar_->settingsBox().Contain(mouse.x, mouse.y)) {
+                        openSettings();
+                        return true;
+                    }
                 }
                 return false;
             }
