@@ -173,6 +173,8 @@ enum class MockMode {
     ResponsesToolCall,
     ResponsesStreaming,
     ResponsesStreamingToolCall,
+    // 原始响应: 使用 rawStatus + rawBody (测试畸形/非标准响应容错)
+    Raw,
 };
 
 class MockOpenAIServer {
@@ -190,6 +192,11 @@ public:
 
     // Optional override: when non-null, used for the next non-streaming response
     std::optional<neograph::json> customResponse;
+
+    // MockMode::Raw 使用的原始状态码与 body
+    int         rawStatus = 200;
+    std::string rawBody;
+    std::string rawContentType = "application/json";
 
     static std::string sseData(std::string_view json) {
         return "data: " + std::string(json) + "\n\n";
@@ -448,6 +455,16 @@ std::unique_ptr<MockOpenAIServer> startMockServer(uint16_t& outPort) {
                         resp.result(boost::beast::http::status::ok);
                         resp.set(boost::beast::http::field::content_type, "application/json");
                         resp.body() = mock->makeResponsesToolCallResponse().dump();
+                        resp.prepare_payload();
+                        break;
+
+                    case MockMode::Raw:
+                        resp.result(static_cast<boost::beast::http::status>(mock->rawStatus));
+                        resp.set(
+                            boost::beast::http::field::content_type,
+                            mock->rawContentType
+                        );
+                        resp.body() = mock->rawBody;
                         resp.prepare_payload();
                         break;
 
@@ -2529,6 +2546,112 @@ void test_responses_sse_parsing_edge_cases() {
     }
 }
 
+/// 畸形 SSE chunk 容错: 非标准字段类型不应抛异常中断流
+void test_openai_sse_malformed_types_tolerated() {
+    using server::OpenAIProvider;
+
+    // 数字 tool_call id / 字符串 index: 应转换为字符串 id 并按 index 归组
+    {
+        std::string buf
+            = "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":\"0\",\"id\":12345,"
+              "\"function\":{\"name\":\"get_weather\",\"arguments\":\"{\\\"a\\\":1}\"}}]}}]}\n\n";
+        neograph::ChatCompletion          completion;
+        std::string                       content, thinking;
+        std::map<int, neograph::ToolCall> tcMap;
+        OpenAIProvider::processSseBuffer(buf, completion, content, thinking, tcMap, nullptr);
+        XX_TEST_EXPECT_EQ(tcMap.size(), (size_t)1);
+        if (!tcMap.empty()) {
+            XX_TEST_EXPECT_EQ(tcMap[0].id, "12345");
+            XX_TEST_EXPECT_EQ(tcMap[0].name, "get_weather");
+        }
+    }
+
+    // 非字符串 finish_reason / 非字符串 content / 非数组 tool_calls / 非对象 choices[0]:
+    // 全部跳过且不抛异常
+    {
+        std::string buf
+            = "data: {\"choices\":[{\"finish_reason\":3,\"delta\":{\"content\":42,"
+              "\"tool_calls\":{\"bad\":\"shape\"}}}]}\n"
+              "data: {\"choices\":[\"not-an-object\"]}\n"
+              "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n";
+        neograph::ChatCompletion          completion;
+        std::string                       content, thinking;
+        std::map<int, neograph::ToolCall> tcMap;
+        bool                              done = false;
+        try {
+            done = OpenAIProvider::processSseBuffer(
+                buf,
+                completion,
+                content,
+                thinking,
+                tcMap,
+                nullptr
+            );
+        } catch (...) {
+            XX_TEST_FAILED++;
+            TEST_FAIL << "malformed sse types should not throw" << std::endl;
+        }
+        XX_TEST_EXPECT_FALSE(done);
+        XX_TEST_EXPECT_EQ(content, "ok");
+    }
+
+    // usage 为字符串数字时也应解析
+    {
+        std::string buf
+            = "data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}],"
+              "\"usage\":{\"prompt_tokens\":\"7\",\"completion_tokens\":\"3\","
+              "\"total_tokens\":\"10\"}}\n";
+        neograph::ChatCompletion          completion;
+        std::string                       content, thinking;
+        std::map<int, neograph::ToolCall> tcMap;
+        OpenAIProvider::processSseBuffer(buf, completion, content, thinking, tcMap, nullptr);
+        XX_TEST_EXPECT_EQ(completion.usage.prompt_tokens, 7);
+        XX_TEST_EXPECT_EQ(completion.usage.completion_tokens, 3);
+        XX_TEST_EXPECT_EQ(completion.usage.total_tokens, 10);
+    }
+
+    // usage 为非对象 (如字符串) 时跳过不抛异常
+    {
+        std::string              buf = "data: {\"choices\":[{\"delta\":{\"content\":\"y\"}}],"
+                                        "\"usage\":\"weird\"}\n";
+        neograph::ChatCompletion completion;
+        std::string              content, thinking;
+        std::map<int, neograph::ToolCall> tcMap;
+        try {
+            OpenAIProvider::processSseBuffer(buf, completion, content, thinking, tcMap, nullptr);
+            XX_TEST_EXPECT_EQ(content, "y");
+        } catch (...) {
+            XX_TEST_FAILED++;
+            TEST_FAIL << "non-object usage should not throw" << std::endl;
+        }
+    }
+}
+
+/// Responses API: response.incomplete (max_output_tokens 截断) 也视为正常结束标记
+void test_responses_sse_incomplete_done() {
+    using server::OpenAIProvider;
+
+    std::string buf
+        = "event: response.output_text.delta\n"
+          "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Partial\"}\n\n"
+          "event: response.incomplete\n"
+          "data: {\"type\":\"response.incomplete\",\"response\":{\"id\":\"resp_x\","
+          "\"status\":\"incomplete\"}}\n\n";
+    neograph::ChatCompletion          completion;
+    std::string                       content, thinking;
+    std::map<int, neograph::ToolCall> tcMap;
+    bool                              done = OpenAIProvider::processResponsesSseBuffer(
+        buf,
+        completion,
+        content,
+        thinking,
+        tcMap,
+        nullptr
+    );
+    XX_TEST_EXPECT_TRUE(done);
+    XX_TEST_EXPECT_EQ(content, "Partial");
+}
+
 asio::awaitable<void> test_max_tokens_sent(MockOpenAIServer& mock, uint16_t port) {
     std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
     mock.mode           = MockMode::Normal;
@@ -2961,6 +3084,148 @@ asio::awaitable<void> test_responses_server_error(MockOpenAIServer& mock, uint16
 }
 
 // ---------------------------------------------------------------------------
+// Integration tests — 畸形/非标准响应容错
+// ---------------------------------------------------------------------------
+
+/// 200 但 body 非 JSON (如网关返回 HTML 错误页): 应抛可读错误而不是 json 异常
+asio::awaitable<void> test_invalid_json_response(MockOpenAIServer& mock, uint16_t port) {
+    std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
+    mock.mode           = MockMode::Raw;
+    mock.rawStatus      = 200;
+    mock.rawBody        = "<html><body>502 Bad Gateway</body></html>";
+    mock.rawContentType = "text/html";
+
+    auto provider = server::OpenAIProvider::create(makeOaiCfg("sk-test", baseUrl));
+
+    neograph::CompletionParams params;
+    params.model    = "gpt-4o-mini";
+    params.messages = {
+        neograph::ChatMessage{.role = "user", .content = "hi"}
+    };
+
+    bool        caught = false;
+    std::string errMsg;
+    try {
+        co_await provider->invoke(params, nullptr);
+    } catch (const std::exception& e) {
+        caught = true;
+        errMsg = e.what();
+    }
+    XX_TEST_EXPECT_TRUE(caught);
+    XX_TEST_EXPECT_TRUE(errMsg.find("invalid JSON") != std::string::npos);
+}
+
+/// 200 合法 JSON 但缺失 choices: 应抛可读错误
+asio::awaitable<void> test_missing_choices_response(MockOpenAIServer& mock, uint16_t port) {
+    std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
+    mock.mode           = MockMode::Raw;
+    mock.rawStatus      = 200;
+    mock.rawBody        = R"({"id":"x","object":"chat.completion","data":[]})";
+    mock.rawContentType = "application/json";
+
+    auto provider = server::OpenAIProvider::create(makeOaiCfg("sk-test", baseUrl));
+
+    neograph::CompletionParams params;
+    params.model    = "gpt-4o-mini";
+    params.messages = {
+        neograph::ChatMessage{.role = "user", .content = "hi"}
+    };
+
+    bool        caught = false;
+    std::string errMsg;
+    try {
+        co_await provider->invoke(params, nullptr);
+    } catch (const std::exception& e) {
+        caught = true;
+        errMsg = e.what();
+    }
+    XX_TEST_EXPECT_TRUE(caught);
+    XX_TEST_EXPECT_TRUE(errMsg.find("choices") != std::string::npos);
+}
+
+/// 部分网关返回 201/202 等其它 2xx 状态码也应视为成功
+asio::awaitable<void> test_non_200_2xx_accepted(MockOpenAIServer& mock, uint16_t port) {
+    std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
+    mock.mode           = MockMode::Raw;
+    mock.rawStatus      = 201;
+    mock.rawBody        = MockOpenAIServer{}.makeCompletionResponse("Created ok").dump();
+    mock.rawContentType = "application/json";
+
+    auto provider = server::OpenAIProvider::create(makeOaiCfg("sk-test", baseUrl));
+
+    neograph::CompletionParams params;
+    params.model    = "gpt-4o-mini";
+    params.messages = {
+        neograph::ChatMessage{.role = "user", .content = "hi"}
+    };
+
+    try {
+        auto result = co_await provider->invoke(params, nullptr);
+        XX_TEST_EXPECT_EQ(result.message.content, "Created ok");
+    } catch (const std::exception& e) {
+        XX_TEST_FAILED++;
+        TEST_FAIL << "2xx (201) response should succeed: " << e.what() << std::endl;
+    }
+}
+
+/// 错误 body 使用顶层 {"message": ...} (无 error 包裹) 时也应提取
+asio::awaitable<void> test_error_top_level_message(MockOpenAIServer& mock, uint16_t port) {
+    std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
+    mock.mode           = MockMode::Raw;
+    mock.rawStatus      = 500;
+    mock.rawBody        = R"({"message":"upstream model overloaded"})";
+    mock.rawContentType = "application/json";
+
+    auto provider = server::OpenAIProvider::create(makeOaiCfg("sk-test", baseUrl));
+
+    neograph::CompletionParams params;
+    params.model    = "gpt-4o-mini";
+    params.messages = {
+        neograph::ChatMessage{.role = "user", .content = "hi"}
+    };
+
+    bool        caught = false;
+    std::string errMsg;
+    try {
+        co_await provider->invoke(params, nullptr);
+    } catch (const std::exception& e) {
+        caught = true;
+        errMsg = e.what();
+    }
+    XX_TEST_EXPECT_TRUE(caught);
+    XX_TEST_EXPECT_TRUE(errMsg.find("upstream model overloaded") != std::string::npos);
+}
+
+/// Responses API: 200 + status="failed" 应报错而不是静默返回空结果
+asio::awaitable<void> test_responses_status_failed(MockOpenAIServer& mock, uint16_t port) {
+    std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
+    mock.mode           = MockMode::ResponsesNormal;
+    mock.customResponse = neograph::json::parse(
+        R"({"id":"resp_failed","object":"response","status":"failed",
+            "error":{"message":"content policy violation","code":"content_filter"}})"
+    );
+
+    auto provider = server::OpenAIProvider::create(makeCodexCfg(baseUrl));
+
+    neograph::CompletionParams params;
+    params.model    = "gpt-5-codex";
+    params.messages = {
+        neograph::ChatMessage{.role = "user", .content = "hi"}
+    };
+
+    bool        caught = false;
+    std::string errMsg;
+    try {
+        co_await provider->invoke(params, nullptr);
+    } catch (const std::exception& e) {
+        caught = true;
+        errMsg = e.what();
+    }
+    XX_TEST_EXPECT_TRUE(caught);
+    XX_TEST_EXPECT_TRUE(errMsg.find("content policy violation") != std::string::npos);
+}
+
+// ---------------------------------------------------------------------------
 // Test runner
 // ---------------------------------------------------------------------------
 
@@ -3076,6 +3341,8 @@ asio::awaitable<TestResult> run_openai_provider_tests() {
     test_extra_body_with_custom_params();
     test_openai_sse_parsing_edge_cases();
     test_openai_sse_done_flag();
+    test_openai_sse_malformed_types_tolerated();
+    test_responses_sse_incomplete_done();
 
     // ModelProviderRegistry::createProvider tests
     test_create_provider_openai();
@@ -3159,6 +3426,13 @@ asio::awaitable<TestResult> run_openai_provider_tests() {
     co_await test_responses_streaming_tool_call(*mock, port);
     co_await test_responses_rate_limit(*mock, port);
     co_await test_responses_server_error(*mock, port);
+
+    // 畸形/非标准响应容错测试
+    co_await test_invalid_json_response(*mock, port);
+    co_await test_missing_choices_response(*mock, port);
+    co_await test_non_200_2xx_accepted(*mock, port);
+    co_await test_error_top_level_message(*mock, port);
+    co_await test_responses_status_failed(*mock, port);
 
     // Reasoning/thinking content tests
     co_await test_non_streaming_reasoning_content(*mock, port);

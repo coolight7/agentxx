@@ -140,6 +140,7 @@
     - LLM 总结压缩
     - 保留最近消息
 - ⬜**Memory**
+    - ✅自定义加载 Memory 文件
     - 持久记忆
     - 总结共享记忆
     - 自定义加载记忆消息
@@ -156,11 +157,16 @@
     - 空闲时自动优化 skill、prompt
 - ✅**LLM Api**
     - Openai API
+    - Openai Response API
     - Anthropic API
+    - 支持开启发送 Thinking 内容
     - 自定义 (BaseUrl/ApiKey/ModelName/ExtraConfig)
 - ✅**自定义配置**
     - 支持启动时从 agentxx-config.yaml、.env 加载配置文件
     - 分离 System/Tool Prompt 到独立配置，以便支持自定义和`Self-upgrade`自动调整适配
+- ✅**网络超时与SSL验证**
+    - 支持配置连接超时、自动根据请求体大小动态计算发送超时、流式间隔接收超时
+    - 支持关闭SSL验证
 - **队列等待输入**
     - 正在运行会话时增加用户输入，则添加到队列中，等待会话完成自动插入
     - ✅TUI输入队列
@@ -216,7 +222,7 @@
 ### Server
 - ✅MCP server
 - ✅ACP Server
-- A2A Server
+- ✅A2A Server
 
 ### 测试
 - Agent 整体稳定性测试
