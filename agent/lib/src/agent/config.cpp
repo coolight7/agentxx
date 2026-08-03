@@ -7,8 +7,8 @@ bool ModelConfig::isValid() const {
     return !baseUrl.empty() || apiKey != "EMPTY";
 }
 
-bool ModelConfig::isCodexResponseApi() const {
-    return (type == "codex");
+bool ModelConfig::isOpenaiResponseApi() const {
+    return type == "openai-responses";
 }
 
 const ModelConfig& AgentConfig::getSubagentModel() const {

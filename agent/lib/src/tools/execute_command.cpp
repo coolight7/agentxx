@@ -1,5 +1,6 @@
 #include "agentxx/tools/execute_command.h"
 
+#include "agentxx/util/async_offload.h"
 #include "agentxx/util/string_util.h"
 #include "agentxx/util/util.h"
 #include "asio/dispatch.hpp"
@@ -152,15 +153,24 @@ asio::awaitable<std::string> ExecuteLinuxCommandTool::execute_async(const neogra
         // assert(!ec || (ec == asio::error::eof));
         if (timeout > 0) {
             using namespace asio::experimental::awaitable_operators;
-            asio::steady_timer timer(ctx, std::chrono::seconds(timeout));
-            auto               res = co_await (
-                (std::move(readStdOutFuture) && std::move(readStdErrFuture)
-                 && proc.async_wait(asio::use_awaitable))
-                || timer.async_wait(asio::use_awaitable)
+            bool isTimeout = false;
+            co_await agentxx::util::asyncWithTimeout<void>(
+                [&]() -> asio::awaitable<void> {
+                    co_await (
+                        std::move(readStdOutFuture) && std::move(readStdErrFuture)
+                        && proc.async_wait(asio::use_awaitable)
+                    );
+                },
+                std::chrono::seconds{timeout},
+                [&]() {
+                    isTimeout = true;
+                }
             );
-            if (res.index() == 1) {
+            if (isTimeout) {
                 neograph_asio_error_code ec;
                 proc.terminate(ec);
+                // 回收子进程避免僵尸
+                co_await proc.async_wait(asio::redirect_error(asio::use_awaitable, ec));
                 co_return makeTimeoutResult(timeout, strout, strerr);
             }
         } else {
@@ -201,9 +211,6 @@ asio::awaitable<std::string> ExecuteLinuxCommandTool::execute_async(const neogra
             .dump();
     }
 
-    // TODO: 压缩
-    // TODO: 太长则暂存到 share_store
-    // TODO: 超长时存入文件，不在内存逗留
     std::array<char, 1024> buffer{};
     std::ostringstream     result;
     while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
@@ -314,13 +321,20 @@ asio::awaitable<std::string>
         // assert(!ec || (ec == asio::error::eof));
         if (timeout > 0) {
             using namespace asio::experimental::awaitable_operators;
-            asio::steady_timer timer(ctx, std::chrono::seconds(timeout));
-            auto               res = co_await (
-                (proc.async_wait(asio::use_awaitable) && std::move(readStdOutFuture)
-                 && std::move(readStdErrFuture))
-                || timer.async_wait(asio::use_awaitable)
+            bool isTimeout = false;
+            co_await agentxx::util::asyncWithTimeout<void>(
+                [&]() -> asio::awaitable<void> {
+                    co_await (
+                        std::move(readStdOutFuture) && std::move(readStdErrFuture)
+                        && proc.async_wait(asio::use_awaitable)
+                    );
+                },
+                std::chrono::seconds{timeout},
+                [&]() {
+                    isTimeout = true;
+                }
             );
-            if (res.index() == 1) {
+            if (isTimeout) {
                 neograph_asio_error_code ec;
                 proc.terminate(ec);
                 // 回收子进程避免僵尸

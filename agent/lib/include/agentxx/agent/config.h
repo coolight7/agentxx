@@ -18,7 +18,7 @@ class ModelConfig {
 public:
 
     std::string name;            ///< 模型标识名称（来自配置文件 key）
-    std::string type = "openai"; ///< 模型类型："openai" / "anthropic" / "codex"
+    std::string type = "openai"; ///< 模型类型："openai" / "openai-responses" / "anthropic"
     std::string baseUrl;         ///< API 地址，为空时使用 provider 默认官方地址
     std::string apiKey                  = "EMPTY";
     std::string modelName               = "Agentxx"; ///< 发送请求时的 model 字段值
@@ -47,7 +47,7 @@ public:
 
     bool isValid() const;
 
-    bool isCodexResponseApi() const;
+    bool isOpenaiResponseApi() const;
 };
 
 class AgentConfig {

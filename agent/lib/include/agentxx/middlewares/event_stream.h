@@ -3,11 +3,11 @@
 #include "agentxx/agent/context.h"
 #include "agentxx/middlewares/events.h"
 #include "agentxx/middlewares/middleware.h"
+#include "agentxx/util/async_offload.h"
 #include "agentxx/util/exception.h"
 #include "asio/as_tuple.hpp"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
-#include "asio/experimental/awaitable_operators.hpp"
 #include "asio/experimental/channel.hpp"
 #include "asio/experimental/channel_traits.hpp"
 #include "asio/io_context.hpp"
@@ -29,10 +29,6 @@
 
 namespace agentxx {
 namespace middleware {
-
-namespace evs_detail {
-using namespace ::asio::experimental::awaitable_operators;
-} // namespace evs_detail
 
 /// 仅用作 EventStream<> 模板参数的类型擦除基类
 /// - 所有具体事件流都是 EventStream<T> 或 RequestResponseStream<TReq,TResp>
@@ -256,36 +252,24 @@ public:
             asio::detached
         );
 
-        // 等待响应或超时
-        // - operator|| (wait_for_one_success): 先成功者胜, 取消另一者
-        // - T=RespType, U=void -> 结果 std::variant<RespType, std::monostate>
-        // - 响应先到: index 0 = RespType; 超时先到: index 1 = monostate -> nullopt
-        auto timer = asio::steady_timer(ex, timeout);
-        using namespace evs_detail;
-        auto waitResp = [channel]() -> asio::awaitable<RespType> {
-            auto [ec, resp] = co_await channel->async_receive(asio::as_tuple(asio::use_awaitable));
-            if (ec) {
-                throw std::runtime_error("response channel closed");
+        auto out = co_await agentxx::util::catchErrorToUnexpectedAsync<RespType>(
+            [&]() -> asio::awaitable<std::expected<RespType, std::string>> {
+                auto result = co_await agentxx::util::asyncWithTimeout<RespType>(
+                    [&]() -> asio::awaitable<RespType> {
+                        auto [ec, resp]
+                            = co_await channel->async_receive(asio::as_tuple(asio::use_awaitable));
+                        if (ec && ec != asio::error::eof) {
+                            throw std::runtime_error("response channel closed");
+                        }
+                        co_return std::move(resp);
+                    },
+                    timeout
+                );
+                co_return std::expected<RespType, std::string>{std::move(result)};
             }
-            co_return std::move(resp);
-        };
-        auto waitTimeout = [&timer]() -> asio::awaitable<void> {
-            co_await timer.async_wait(asio::use_awaitable);
-        };
-
-        std::expected<RespType, std::string> out;
-        try {
-            auto result = co_await (waitResp() || waitTimeout());
-            if (result.index() == 0) {
-                out = std::expected<RespType, std::string>{std::move(std::get<0>(std::move(result)))
-                };
-            } else {
-                out = std::unexpected{"Timeout"};
-            }
-            // index 1 = monostate = 超时
-        } catch (const std::exception& e) {
-            XX_LOGE("RequestResponseStream `{}` request await failed: {}", name, e.what());
-            out = std::unexpected{fmt::format("exception: {}", e.what())};
+        );
+        if (false == out.has_value()) {
+            XX_LOGE("RequestResponseStream `{}` request await failed: {}", name, out.error());
         }
 
         // 超时或异常时关闭 channel, 使 server 的 async_send 失败并自然结束协程,
