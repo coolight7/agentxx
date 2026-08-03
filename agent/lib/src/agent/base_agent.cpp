@@ -412,7 +412,6 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                 });
             } break;
             case T::CHANNEL_WRITE: {
-                // TODO: 改为使用 LLM_TOKEN 实现
                 auto chan  = event.data.value("channel", std::string{});
                 auto value = event.data.value("value", neograph::json{});
                 if (chan != "messages" || !value.is_array()) {
@@ -511,6 +510,7 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                 });
             } break;
             case T::NODE_END: {
+                lastChatChunkType = neograph::ChatStreamChunk::TYPE_UNKNOWN;
                 // 计算持续时间
                 const int64_t duration_ms
                     = static_cast<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -795,10 +795,10 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
         );
         if (im.is_array()) {
             session->llmMessages = im;
+            engine->update_state(std::string{threadId}, [&](neograph::graph::GraphState& state) {
+                state.overwrite("messages", session->llmMessages);
+            });
         }
-        engine->update_state(std::string{threadId}, [&](neograph::graph::GraphState& state) {
-            state.overwrite("messages", session->llmMessages);
-        });
     }
 
     engine->update_state(std::string{threadId}, [&](neograph::graph::GraphState& state) {
