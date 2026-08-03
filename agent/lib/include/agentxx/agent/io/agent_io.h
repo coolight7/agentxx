@@ -1,7 +1,7 @@
 #pragma once
 
-#include "agentxx/agent/agent_io_transport.h"
 #include "agentxx/agent/conversation_types.h"
+#include "agentxx/agent/io/agent_io_transport.h"
 #include "agentxx/util/log.h"
 #include "asio/awaitable.hpp"
 #include "asio/this_coro.hpp"
@@ -22,18 +22,18 @@ namespace agent {
 ///
 /// 拓扑 (强制 transport: 两端点之间必须经 transport 连接, 进程内用 Channel):
 ///
-///   BaseAgent ──进程内直调──▶ server 端点 (SessionController)
+///   BaseAgent ──进程内直调──▶ server 端点 (SessionServerAgentIO)
 ///            sendToPeer(事件)/        │ transport (Channel | WebSocket)
 ///            getInput/handleInterrupt ▼
-///                                client 端点 (AgentTUI / AgentStdIO)
+///                                client 端点 (TUIClientAgentIO / StdIOClientAgentIO)
 ///
 /// 两端点之间为对称的消息传递模型:
 /// - 发送: 本端调用 sendToPeer() 经 transport 发送 WireMessage 到对端
 /// - 接收: runTransportLoop() 收对端消息 → onPeerMessage() 分发到 onXXX 被动回调
 ///
 /// 子类:
-/// - AgentTUI / AgentStdIO: 客户端渲染端点
-/// - SessionController: 服务端会话驱动端点 (被 BaseAgent 驱动)
+/// - TUIClientAgentIO / StdIOClientAgentIO: 客户端渲染端点
+/// - SessionServerAgentIO: 服务端会话驱动端点 (被 BaseAgent 驱动)
 ///
 /// 下文按接口角色标注:
 /// - [双向]   client/server 端点都可用/需实现
@@ -50,7 +50,7 @@ public:
 
     /// 向对端发送消息 (经 transport)
     /// - 必须先 setTransport; 未设置时记录错误日志并丢弃
-    /// - virtual: 服务端点 (SessionController) 覆写以对 Delta 追加缓冲等本地处理
+    /// - virtual: 服务端点 (SessionServerAgentIO) 覆写以对 Delta 追加缓冲等本地处理
     virtual void sendToPeer(WireMessage msg);
 
     /// 请求取消指定会话当前轮次 [client]

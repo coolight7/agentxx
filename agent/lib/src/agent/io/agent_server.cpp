@@ -1,6 +1,6 @@
-#include "agentxx/agent/remote/agent_server.h"
+#include "agentxx/agent/io/agent_server.h"
 
-#include "agentxx/agent/ws_io_transport.h"
+#include "agentxx/agent/io/ws_io_transport.h"
 #include "agentxx/util/log.h"
 #include "agentxx/util/ws_client.h"
 #include "asio/co_spawn.hpp"
@@ -10,7 +10,7 @@
 
 namespace agentxx {
 namespace agent {
-namespace remote {
+namespace io {
 
 /// 将服务端日志经 transport 转发给远程客户端的 LogSink
 /// 继承 ThreadedLogSink: 后台线程串行消费, send 无需额外加锁
@@ -98,19 +98,20 @@ uint16_t AgentServer::port() const {
     return http_ ? http_->port() : 0;
 }
 
-std::shared_ptr<SessionController> AgentServer::getOrCreateController(std::string_view threadId) {
+std::shared_ptr<SessionServerAgentIO> AgentServer::getOrCreateController(std::string_view threadId
+) {
     auto it = controllers_.find(threadId); // 无锁查找
     if (it != controllers_.end()) {
         return it->second;
     }
 
-    SessionController::Config cfg;
+    SessionServerAgentIO::Config cfg;
     cfg.threadId         = std::string{threadId};
     cfg.interruptTimeout = config_.interruptTimeout;
     cfg.gracePeriod      = config_.gracePeriod;
     cfg.deltaBufferCap   = config_.deltaBufferCap;
 
-    auto ctrl                           = std::make_shared<SessionController>(ex_, agent_, cfg);
+    auto ctrl                           = std::make_shared<SessionServerAgentIO>(ex_, agent_, cfg);
     controllers_[std::string{threadId}] = ctrl;
 
     asio::co_spawn(ex_, ctrl->run(), [ctrl, threadId](std::exception_ptr ep) {
@@ -192,6 +193,6 @@ asio::awaitable<void> AgentServer::serveTransport(std::shared_ptr<AgentIOTranspo
     ctrl->onDisconnect();
 }
 
-} // namespace remote
+} // namespace io
 } // namespace agent
 } // namespace agentxx

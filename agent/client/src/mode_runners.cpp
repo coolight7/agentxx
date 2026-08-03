@@ -2,11 +2,11 @@
 
 #include "agentxx-client/io/stdio/agent_stdio.h"
 #include "agentxx-client/io/tui/agent_tui.h"
-#include "agentxx/agent/channel_io_transport.h"
+#include "agentxx/agent/io/agent_server.h"
+#include "agentxx/agent/io/channel_io_transport.h"
+#include "agentxx/agent/io/session_server_agent_io.h"
+#include "agentxx/agent/io/ws_io_transport.h"
 #include "agentxx/agent/model_registry.h"
-#include "agentxx/agent/remote/agent_server.h"
-#include "agentxx/agent/remote/session_controller.h"
-#include "agentxx/agent/ws_io_transport.h"
 #include "agentxx/middlewares/subagent_supervisor.h"
 #include "agentxx/util/log.h"
 #include "agentxx/util/ws_client.h"
@@ -23,12 +23,12 @@ namespace agentxx {
 namespace client {
 
 // ---------------------------------------------------------------------------
-// Local unified DIRECT (ChannelAgentIOTransport 直连 TUI ↔ SessionController)
+// Local unified DIRECT (ChannelAgentIOTransport 直连 TUI ↔ SessionServerAgentIO)
 // ---------------------------------------------------------------------------
 
-/// TUI 持有 client transport, SessionController 持有 server transport
+/// TUI 持有 client transport, SessionServerAgentIO 持有 server transport
 /// 两端点经 Channel 直连, 无中间包装层
-static std::shared_ptr<agent::SessionController> setupLocalUnifiedDirect(
+static std::shared_ptr<agent::SessionServerAgentIO> setupLocalUnifiedDirect(
     asio::any_io_executor               clientEx,
     std::shared_ptr<agent::CodeAgent>   agent,
     std::shared_ptr<agent::AgentIOBase> clientIO,
@@ -42,14 +42,14 @@ static std::shared_ptr<agent::SessionController> setupLocalUnifiedDirect(
     clientIO->setTransport(std::shared_ptr<agent::AgentIOTransportBase>(std::move(clientTransport))
     );
 
-    // 服务端: SessionController 持有 server transport
-    agent::SessionController::Config scCfg;
+    // 服务端: SessionServerAgentIO 持有 server transport
+    agent::SessionServerAgentIO::Config scCfg;
     scCfg.threadId  = threadId;
-    auto controller = std::make_shared<agent::SessionController>(agentEx, agent, scCfg);
+    auto controller = std::make_shared<agent::SessionServerAgentIO>(agentEx, agent, scCfg);
     controller->setTransport(std::shared_ptr<agent::AgentIOTransportBase>(std::move(serverTransport)
     ));
 
-    // 在 agent 线程启动: init -> supervisor -> SessionController 驱动循环 + transport 接收循环
+    // 在 agent 线程启动: init -> supervisor -> SessionServerAgentIO 驱动循环 + transport 接收循环
     asio::co_spawn(
         *agent->ioCtx,
         [agent, controller]() -> asio::awaitable<void> {
@@ -108,7 +108,7 @@ static void runLocalUnifiedMain(std::shared_ptr<agent::CodeAgent> agent, Coro co
 
 static asio::awaitable<void> runLocalCliUnifiedAsync(std::shared_ptr<agent::CodeAgent> agent) {
     auto clientEx = co_await asio::this_coro::executor;
-    auto io       = std::make_shared<AgentStdIO>();
+    auto io       = std::make_shared<StdIOClientAgentIO>();
     XX_OUT("======= Agentxx Client (CLI, in-process unified) =======");
     setupLocalUnifiedDirect(clientEx, agent, io, "session");
     // CLI 输入循环: 从 stdin 读取并发送
@@ -152,7 +152,7 @@ static asio::awaitable<void> runLocalTuiUnifiedAsync(
         }
         ctx->modelRegistry = std::move(registry);
     }
-    auto tui = std::make_shared<AgentTUI>(clientEx, ctx, threadId);
+    auto tui = std::make_shared<TUIClientAgentIO>(clientEx, ctx, threadId);
     tui->start();
 
     setupLocalUnifiedDirect(clientEx, agent, tui, threadId);
@@ -181,7 +181,7 @@ void runLocalTuiUnified(
 static asio::awaitable<void>
     runRemoteCliAsync(std::string url, std::string token, std::string model) {
     auto ex = co_await asio::this_coro::executor;
-    auto io = std::make_shared<AgentStdIO>();
+    auto io = std::make_shared<StdIOClientAgentIO>();
 
     agent::WsAgentIOTransport::Config transportCfg;
     util::WsClientConfig              wsCfg;
@@ -251,7 +251,7 @@ static asio::awaitable<void> runRemoteTuiAsync(
 
     auto ctx         = std::make_shared<agent::AgentContext>();
     ctx->agentConfig = config;
-    auto io          = std::make_shared<AgentTUI>(ex, ctx, "session");
+    auto io          = std::make_shared<TUIClientAgentIO>(ex, ctx, "session");
     io->setRemoteUrl(url);
     io->start();
 

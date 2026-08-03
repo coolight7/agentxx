@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-/// TUI 消息模型 (从 AgentTUI 提取, 供各组件共享)
+/// TUI 消息模型 (从 TUIClientAgentIO 提取, 供各组件共享)
 struct TUIMessage {
     enum class Role {
         User,
@@ -117,6 +117,6 @@ public:
 
 private:
 
-    std::mutex                   mutex_;
+    std::mutex                      mutex_;
     std::shared_ptr<TUIRenderState> state_;
 };

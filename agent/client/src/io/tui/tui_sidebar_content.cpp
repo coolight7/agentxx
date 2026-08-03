@@ -41,7 +41,7 @@ ftxui::Element buildLogLine(const TUILogSink::Line& line, const TUITheme& theme)
 
 } // namespace
 
-std::vector<ScrollItem> AgentTUI::renderLogWindow() {
+std::vector<ScrollItem> TUIClientAgentIO::renderLogWindow() {
     auto lines = logSink_ ? logSink_->snapshot() : std::vector<TUILogSink::Line>{};
     if (lines.empty()) {
         return {
@@ -67,7 +67,7 @@ std::vector<ScrollItem> AgentTUI::renderLogWindow() {
     return items;
 }
 
-std::optional<ftxui::Element> AgentTUI::renderPlanningInfo() {
+std::optional<ftxui::Element> TUIClientAgentIO::renderPlanningInfo() {
     const auto& st = *ctx_.frameState;
 
     const TUIMessage* plan = nullptr;
@@ -130,7 +130,7 @@ std::optional<ftxui::Element> AgentTUI::renderPlanningInfo() {
     return vbox(std::move(lines));
 }
 
-std::vector<ScrollItem> AgentTUI::renderInfoSidebar() {
+std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
     const auto& st = *ctx_.frameState;
 
     Elements elements;
@@ -191,7 +191,7 @@ std::vector<ScrollItem> AgentTUI::renderInfoSidebar() {
     return items;
 }
 
-ftxui::Element AgentTUI::renderInfoSidebarFooter() {
+ftxui::Element TUIClientAgentIO::renderInfoSidebarFooter() {
     Elements elements;
 
     std::string cwd;
@@ -215,7 +215,7 @@ ftxui::Element AgentTUI::renderInfoSidebarFooter() {
     return vbox(std::move(elements));
 }
 
-ftxui::Element AgentTUI::renderLogSidebarFooter() {
+ftxui::Element TUIClientAgentIO::renderLogSidebarFooter() {
     const auto& st = *ctx_.frameState;
 
     Elements row;

@@ -1,4 +1,4 @@
-#include "agentxx/agent/remote/session_controller.h"
+#include "agentxx/agent/io/session_server_agent_io.h"
 
 #include "agentxx/agent/base_agent.h"
 #include "agentxx/agent/context.h"
@@ -14,7 +14,7 @@
 namespace agentxx {
 namespace agent {
 
-SessionController::SessionController(
+SessionServerAgentIO::SessionServerAgentIO(
     asio::any_io_executor    ex,
     std::weak_ptr<BaseAgent> agent,
     Config                   config
@@ -24,7 +24,7 @@ SessionController::SessionController(
     config_(std::move(config)),
     inputChannel_(std::make_shared<InputChannel>(ex_, 64)) {}
 
-SessionController::~SessionController() {
+SessionServerAgentIO::~SessionServerAgentIO() {
     stopImpl();
 }
 
@@ -32,7 +32,7 @@ SessionController::~SessionController() {
 // AgentIOBase: 主动发送 (BaseAgent 产出的事件经此转发给客户端)
 // ---------------------------------------------------------------------------
 
-void SessionController::sendToPeer(WireMessage msg) {
+void SessionServerAgentIO::sendToPeer(WireMessage msg) {
     // 新产出的 delta 写入重放缓冲, 供断线重连 hello 时按 seq 增量重放。
     // 以 seq 单调性区分两类 delta:
     // - 新 delta: seq 由 BaseAgent deltaSeq 单调递增分配, 严格大于缓冲尾 seq → 入缓冲
@@ -53,19 +53,19 @@ void SessionController::sendToPeer(WireMessage msg) {
 // AgentIOBase: 被动接收回调 (server 端点不会从 client 收到这些消息)
 // ---------------------------------------------------------------------------
 
-void SessionController::onDelta(const Delta& /*delta*/) {
+void SessionServerAgentIO::onDelta(const Delta& /*delta*/) {
     // 空实现仅满足纯虚契约; client→server 协议不包含 Delta
 }
 
-void SessionController::onSync(const SyncPayload& /*payload*/) {
+void SessionServerAgentIO::onSync(const SyncPayload& /*payload*/) {
     // 空实现仅满足纯虚契约; client→server 协议不包含 SyncPayload
 }
 
-asio::awaitable<std::optional<std::string>> SessionController::getInput() {
+asio::awaitable<std::optional<std::string>> SessionServerAgentIO::getInput() {
     co_return co_await waitInput();
 }
 
-asio::awaitable<std::optional<std::string>> SessionController::waitInput() {
+asio::awaitable<std::optional<std::string>> SessionServerAgentIO::waitInput() {
     try {
         co_return co_await inputChannel_->async_receive(asio::use_awaitable);
     } catch (...) {
@@ -73,7 +73,7 @@ asio::awaitable<std::optional<std::string>> SessionController::waitInput() {
     }
 }
 
-asio::awaitable<neograph::json> SessionController::handleInterrupt(
+asio::awaitable<neograph::json> SessionServerAgentIO::handleInterrupt(
     std::string_view /*threadId*/,
     std::string_view interruptNode,
     std::string_view interruptValue,
@@ -112,7 +112,7 @@ asio::awaitable<neograph::json> SessionController::handleInterrupt(
 // AgentIOBase: 对端 (客户端) 发来的消息分发
 // ---------------------------------------------------------------------------
 
-void SessionController::onPeerMessage(WireMessage msg) {
+void SessionServerAgentIO::onPeerMessage(WireMessage msg) {
     std::visit(
         [this](auto&& m) {
             using T = std::decay_t<decltype(m)>;
@@ -170,7 +170,7 @@ void SessionController::onPeerMessage(WireMessage msg) {
 // 连接管理
 // ---------------------------------------------------------------------------
 
-void SessionController::handleHello(const WireHello& hello, std::vector<std::string> models) {
+void SessionServerAgentIO::handleHello(const WireHello& hello, std::vector<std::string> models) {
     cancelGraceTimer();
 
     std::vector<Delta>                replayDeltas;
@@ -228,20 +228,20 @@ void SessionController::handleHello(const WireHello& hello, std::vector<std::str
     }
 }
 
-void SessionController::onDisconnect() {
+void SessionServerAgentIO::onDisconnect() {
     if (turnActive_.load(std::memory_order_acquire)) {
         startGraceTimer();
     }
 }
 
-void SessionController::resolveInterrupt(int64_t id, neograph::json result) {
+void SessionServerAgentIO::resolveInterrupt(int64_t id, neograph::json result) {
     auto it = pending_.find(id);
     if (it != pending_.end()) {
         it->second.ch->try_send(ErrorCode{}, std::move(result));
     }
 }
 
-void SessionController::onCancel() {
+void SessionServerAgentIO::onCancel() {
     auto sess = session();
     if (sess) {
         auto token = sess->getCancelToken();
@@ -255,7 +255,7 @@ void SessionController::onCancel() {
 // 驱动循环
 // ---------------------------------------------------------------------------
 
-asio::awaitable<void> SessionController::run() {
+asio::awaitable<void> SessionServerAgentIO::run() {
     running_.store(true, std::memory_order_release);
     while (!stopped_.load(std::memory_order_acquire)) {
         auto input = co_await waitInput();
@@ -303,7 +303,7 @@ asio::awaitable<void> SessionController::run() {
     running_.store(false, std::memory_order_release);
 }
 
-void SessionController::stop() {
+void SessionServerAgentIO::stop() {
     if (stopped_.load(std::memory_order_acquire)) {
         return;
     }
@@ -312,7 +312,7 @@ void SessionController::stop() {
     });
 }
 
-void SessionController::stopImpl() {
+void SessionServerAgentIO::stopImpl() {
     bool expected = false;
     if (!stopped_.compare_exchange_strong(expected, true)) {
         return;
@@ -330,7 +330,7 @@ void SessionController::stopImpl() {
 // 推送 / 缓冲
 // ---------------------------------------------------------------------------
 
-std::optional<std::vector<Delta>> SessionController::deltasSince(uint64_t seq) {
+std::optional<std::vector<Delta>> SessionServerAgentIO::deltasSince(uint64_t seq) {
     if (deltaBuffer_.empty()) {
         return std::nullopt;
     }
@@ -347,7 +347,7 @@ std::optional<std::vector<Delta>> SessionController::deltasSince(uint64_t seq) {
     return out;
 }
 
-SyncPayload SessionController::buildFullSync() {
+SyncPayload SessionServerAgentIO::buildFullSync() {
     SyncPayload p;
     p.fromIndex = 0;
     auto sess   = session();
@@ -358,12 +358,12 @@ SyncPayload SessionController::buildFullSync() {
     return p;
 }
 
-std::string SessionController::currentTailHash() {
+std::string SessionServerAgentIO::currentTailHash() {
     auto sess = session();
     return sess ? sess->getHashInfo().tailHex : std::string{};
 }
 
-void SessionController::sendContextStats() {
+void SessionServerAgentIO::sendContextStats() {
     auto sess = session();
     if (!sess || !sess->contextStats) {
         return;
@@ -373,7 +373,7 @@ void SessionController::sendContextStats() {
     sendToPeer(WireContextStats{ctxTokens, maxTokens});
 }
 
-std::shared_ptr<Session> SessionController::session() {
+std::shared_ptr<Session> SessionServerAgentIO::session() {
     auto agent = agent_.lock();
     if (agent && agent->agentContext) {
         return agent->agentContext->getSession(config_.threadId);
@@ -385,7 +385,7 @@ std::shared_ptr<Session> SessionController::session() {
 // grace / pending
 // ---------------------------------------------------------------------------
 
-void SessionController::startGraceTimer() {
+void SessionServerAgentIO::startGraceTimer() {
     if (config_.gracePeriod.count() <= 0) {
         onCancel();
         failAllPending();
@@ -418,7 +418,7 @@ void SessionController::startGraceTimer() {
     );
 }
 
-void SessionController::cancelGraceTimer() {
+void SessionServerAgentIO::cancelGraceTimer() {
     auto t = std::move(graceTimer_);
     graceTimer_.reset();
     if (t) {
@@ -426,7 +426,7 @@ void SessionController::cancelGraceTimer() {
     }
 }
 
-void SessionController::failAllPending() {
+void SessionServerAgentIO::failAllPending() {
     for (auto& [id, p] : pending_) {
         p.ch->close();
     }

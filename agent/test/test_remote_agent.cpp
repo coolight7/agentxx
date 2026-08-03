@@ -1,10 +1,10 @@
 #include "test_remote_agent.h"
-#include "agentxx/agent/agent_io.h"
-#include "agentxx/agent/channel_io_transport.h"
-#include "agentxx/agent/remote/agent_server.h"
-#include "agentxx/agent/remote/session_controller.h"
-#include "agentxx/agent/remote/wire_protocol.h"
-#include "agentxx/agent/ws_io_transport.h"
+#include "agentxx/agent/io/agent_io.h"
+#include "agentxx/agent/io/agent_server.h"
+#include "agentxx/agent/io/channel_io_transport.h"
+#include "agentxx/agent/io/session_server_agent_io.h"
+#include "agentxx/agent/io/wire_protocol.h"
+#include "agentxx/agent/io/ws_io_transport.h"
 #include "agentxx/util/http_server.h"
 #include "agentxx/util/ws_client.h"
 #include <asio/co_spawn.hpp>
@@ -28,8 +28,8 @@ namespace agentxx {
 namespace test {
 
 using namespace agentxx::util;
-namespace remote = agentxx::agent::remote;
-using agentxx::agent::SessionController;
+namespace io = agentxx::agent::io;
+using agentxx::agent::SessionServerAgentIO;
 
 int g_remote_passed = 0;
 int g_remote_failed = 0;
@@ -256,7 +256,7 @@ static asio::awaitable<void> test_remote_transport_loopback() {
         }
         co_await wsSendJson(
             ws,
-            remote::makeHelloAck(true, hello->value("thread", std::string{}), "", {})
+            io::makeHelloAck(true, hello->value("thread", std::string{}), "", {})
         );
         for (;;) {
             auto j = co_await wsRecvJson(ws);
@@ -321,10 +321,7 @@ static asio::awaitable<void> fakeAgentHandler(HttpServer::WsStream& ws) {
         co_return;
     }
     bool ok = (hello->value("token", std::string{}) == "test-token");
-    co_await wsSendJson(
-        ws,
-        remote::makeHelloAck(ok, hello->value("thread", std::string{}), "", {})
-    );
+    co_await wsSendJson(ws, io::makeHelloAck(ok, hello->value("thread", std::string{}), "", {}));
     if (!ok) {
         co_return;
     }
@@ -333,19 +330,19 @@ static asio::awaitable<void> fakeAgentHandler(HttpServer::WsStream& ws) {
         if (!j) {
             co_return;
         }
-        auto t = remote::msgType(*j);
-        if (t == remote::MsgType::UserInput) {
+        auto t = io::msgType(*j);
+        if (t == io::MsgType::UserInput) {
             agentxx::agent::Delta d;
             d.type = agentxx::agent::Delta::Type::TextToken;
             d.seq  = 1;
             d.text = "hello from server";
-            co_await wsSendJson(ws, remote::makeDeltaMsg(d));
+            co_await wsSendJson(ws, io::makeDeltaMsg(d));
             co_await wsSendJson(
                 ws,
-                remote::makeTurnResult(j->value("thread", std::string{}), false, "", false)
+                io::makeTurnResult(j->value("thread", std::string{}), false, "", false)
             );
-        } else if (t == remote::MsgType::Ping) {
-            co_await wsSendJson(ws, remote::makePong(j->value("t", int64_t{0})));
+        } else if (t == io::MsgType::Ping) {
+            co_await wsSendJson(ws, io::makePong(j->value("t", int64_t{0})));
         }
     }
 }
@@ -428,7 +425,7 @@ static asio::awaitable<void> test_remote_client_handshake() {
 }
 
 // ---------------------------------------------------------------------------
-// 4. SessionController: delta 环形缓冲 + 增量重放 (经 ChannelAgentIOTransport)
+// 4. SessionServerAgentIO: delta 环形缓冲 + 增量重放 (经 ChannelAgentIOTransport)
 // ---------------------------------------------------------------------------
 
 static asio::awaitable<void> test_session_controller_replay() {
@@ -436,11 +433,14 @@ static asio::awaitable<void> test_session_controller_replay() {
 
     auto [clientT, serverT] = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
 
-    SessionController::Config cfg;
+    SessionServerAgentIO::Config cfg;
     cfg.threadId       = "session";
     cfg.deltaBufferCap = 100;
-    auto sc
-        = std::make_shared<SessionController>(ex, std::weak_ptr<agentxx::agent::BaseAgent>{}, cfg);
+    auto sc            = std::make_shared<SessionServerAgentIO>(
+        ex,
+        std::weak_ptr<agentxx::agent::BaseAgent>{},
+        cfg
+    );
 
     // 强制 transport: 先装配再产出事件 (sendToPeer 同时写缓冲并实时转发 client)
     sc->setTransport(std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(serverT)));
@@ -497,7 +497,7 @@ static asio::awaitable<void> test_session_controller_replay() {
 }
 
 // ---------------------------------------------------------------------------
-// 5. SessionController: 缓冲过旧 -> 回退全量 sync
+// 5. SessionServerAgentIO: 缓冲过旧 -> 回退全量 sync
 // ---------------------------------------------------------------------------
 
 static asio::awaitable<void> test_session_controller_replay_fallback() {
@@ -505,11 +505,14 @@ static asio::awaitable<void> test_session_controller_replay_fallback() {
 
     auto [clientT, serverT] = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
 
-    SessionController::Config cfg;
+    SessionServerAgentIO::Config cfg;
     cfg.threadId       = "session";
     cfg.deltaBufferCap = 3;
-    auto sc
-        = std::make_shared<SessionController>(ex, std::weak_ptr<agentxx::agent::BaseAgent>{}, cfg);
+    auto sc            = std::make_shared<SessionServerAgentIO>(
+        ex,
+        std::weak_ptr<agentxx::agent::BaseAgent>{},
+        cfg
+    );
 
     // 强制 transport: 先装配再产出事件
     sc->setTransport(std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(serverT)));
@@ -547,17 +550,20 @@ static asio::awaitable<void> test_session_controller_replay_fallback() {
 }
 
 // ---------------------------------------------------------------------------
-// 6. SessionController: 请求级超时 (handleInterrupt 无响应 -> 超时返回)
+// 6. SessionServerAgentIO: 请求级超时 (handleInterrupt 无响应 -> 超时返回)
 // ---------------------------------------------------------------------------
 
 static asio::awaitable<void> test_session_controller_interrupt_timeout() {
     auto ex = co_await asio::this_coro::executor;
 
-    SessionController::Config cfg;
+    SessionServerAgentIO::Config cfg;
     cfg.threadId         = "session";
     cfg.interruptTimeout = std::chrono::milliseconds{300};
-    auto sc
-        = std::make_shared<SessionController>(ex, std::weak_ptr<agentxx::agent::BaseAgent>{}, cfg);
+    auto sc              = std::make_shared<SessionServerAgentIO>(
+        ex,
+        std::weak_ptr<agentxx::agent::BaseAgent>{},
+        cfg
+    );
 
     auto start   = std::chrono::steady_clock::now();
     auto result  = co_await sc->handleInterrupt("session", "node", "val", "{}");
@@ -571,7 +577,7 @@ static asio::awaitable<void> test_session_controller_interrupt_timeout() {
 }
 
 // ---------------------------------------------------------------------------
-// 7. SessionController: grace period 断线 -> 宽限期满失败挂起请求
+// 7. SessionServerAgentIO: grace period 断线 -> 宽限期满失败挂起请求
 // ---------------------------------------------------------------------------
 
 static asio::awaitable<void> test_session_controller_grace() {
@@ -579,12 +585,15 @@ static asio::awaitable<void> test_session_controller_grace() {
 
     auto [clientT, serverT] = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
 
-    SessionController::Config cfg;
+    SessionServerAgentIO::Config cfg;
     cfg.threadId         = "session";
     cfg.gracePeriod      = std::chrono::milliseconds{200};
     cfg.interruptTimeout = std::chrono::seconds{10};
-    auto sc
-        = std::make_shared<SessionController>(ex, std::weak_ptr<agentxx::agent::BaseAgent>{}, cfg);
+    auto sc              = std::make_shared<SessionServerAgentIO>(
+        ex,
+        std::weak_ptr<agentxx::agent::BaseAgent>{},
+        cfg
+    );
     sc->setTransport(std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(serverT)));
     sc->setTurnActiveForTest(true);
 
@@ -631,7 +640,7 @@ static asio::awaitable<void> test_remote_client_reconnect() {
         }
         co_await wsSendJson(
             ws,
-            remote::makeHelloAck(true, hello->value("thread", std::string{}), "", {})
+            io::makeHelloAck(true, hello->value("thread", std::string{}), "", {})
         );
         if (myConn == 1) {
             auto j = co_await wsRecvJson(ws);
@@ -640,10 +649,10 @@ static asio::awaitable<void> test_remote_client_reconnect() {
                 d.type = agentxx::agent::Delta::Type::TextToken;
                 d.seq  = 1;
                 d.text = "before-drop";
-                co_await wsSendJson(ws, remote::makeDeltaMsg(d));
+                co_await wsSendJson(ws, io::makeDeltaMsg(d));
                 co_await wsSendJson(
                     ws,
-                    remote::makeTurnResult(j->value("thread", std::string{}), false, "", false)
+                    io::makeTurnResult(j->value("thread", std::string{}), false, "", false)
                 );
             }
             co_return;
@@ -653,13 +662,13 @@ static asio::awaitable<void> test_remote_client_reconnect() {
             if (!j) {
                 co_return;
             }
-            if (remote::msgType(*j) == remote::MsgType::UserInput) {
+            if (io::msgType(*j) == io::MsgType::UserInput) {
                 co_await wsSendJson(
                     ws,
-                    remote::makeTurnResult(j->value("thread", std::string{}), false, "", false)
+                    io::makeTurnResult(j->value("thread", std::string{}), false, "", false)
                 );
-            } else if (remote::msgType(*j) == remote::MsgType::Ping) {
-                co_await wsSendJson(ws, remote::makePong(j->value("t", int64_t{0})));
+            } else if (io::msgType(*j) == io::MsgType::Ping) {
+                co_await wsSendJson(ws, io::makePong(j->value("t", int64_t{0})));
             }
         }
     });
@@ -762,9 +771,9 @@ static asio::awaitable<void> test_remote_client_context_stats() {
         }
         co_await wsSendJson(
             ws,
-            remote::makeHelloAck(true, hello->value("thread", std::string{}), "", {})
+            io::makeHelloAck(true, hello->value("thread", std::string{}), "", {})
         );
-        co_await wsSendJson(ws, remote::makeContextStats(1234, 5678));
+        co_await wsSendJson(ws, io::makeContextStats(1234, 5678));
         for (;;) {
             auto j = co_await wsRecvJson(ws);
             if (!j) {
@@ -888,7 +897,7 @@ static asio::awaitable<void> test_remote_echo() {
         }
         co_await wsSendJson(
             ws,
-            remote::makeHelloAck(true, hello->value("thread", std::string{}), "", {})
+            io::makeHelloAck(true, hello->value("thread", std::string{}), "", {})
         );
         uint64_t seq = 0;
         for (;;) {
@@ -896,19 +905,19 @@ static asio::awaitable<void> test_remote_echo() {
             if (!j) {
                 co_return;
             }
-            if (remote::msgType(*j) == remote::MsgType::UserInput) {
+            if (io::msgType(*j) == io::MsgType::UserInput) {
                 auto                  text = j->value("text", std::string{});
                 agentxx::agent::Delta d;
                 d.type = agentxx::agent::Delta::Type::TextToken;
                 d.seq  = ++seq;
                 d.text = "echo:" + text;
-                co_await wsSendJson(ws, remote::makeDeltaMsg(d));
+                co_await wsSendJson(ws, io::makeDeltaMsg(d));
                 co_await wsSendJson(
                     ws,
-                    remote::makeTurnResult(j->value("thread", std::string{}), false, "", false)
+                    io::makeTurnResult(j->value("thread", std::string{}), false, "", false)
                 );
-            } else if (remote::msgType(*j) == remote::MsgType::Ping) {
-                co_await wsSendJson(ws, remote::makePong(j->value("t", int64_t{0})));
+            } else if (io::msgType(*j) == io::MsgType::Ping) {
+                co_await wsSendJson(ws, io::makePong(j->value("t", int64_t{0})));
             }
         }
     });
@@ -1018,7 +1027,7 @@ static asio::awaitable<void> test_remote_multi_reconnect() {
         }
         co_await wsSendJson(
             ws,
-            remote::makeHelloAck(true, hello->value("thread", std::string{}), "", {})
+            io::makeHelloAck(true, hello->value("thread", std::string{}), "", {})
         );
         if (myConn <= dropTimes) {
             co_return;
@@ -1028,10 +1037,10 @@ static asio::awaitable<void> test_remote_multi_reconnect() {
             if (!j) {
                 co_return;
             }
-            if (remote::msgType(*j) == remote::MsgType::UserInput) {
+            if (io::msgType(*j) == io::MsgType::UserInput) {
                 co_await wsSendJson(
                     ws,
-                    remote::makeTurnResult(j->value("thread", std::string{}), false, "", false)
+                    io::makeTurnResult(j->value("thread", std::string{}), false, "", false)
                 );
             }
         }
@@ -1097,21 +1106,21 @@ static asio::awaitable<void> test_remote_cancel() {
         }
         co_await wsSendJson(
             ws,
-            remote::makeHelloAck(true, hello->value("thread", std::string{}), "", {})
+            io::makeHelloAck(true, hello->value("thread", std::string{}), "", {})
         );
         for (;;) {
             auto j = co_await wsRecvJson(ws);
             if (!j) {
                 co_return;
             }
-            auto t = remote::msgType(*j);
-            if (t == remote::MsgType::UserInput) {
+            auto t = io::msgType(*j);
+            if (t == io::MsgType::UserInput) {
                 // 不立即回应, 等待 cancel
-            } else if (t == remote::MsgType::Cancel) {
+            } else if (t == io::MsgType::Cancel) {
                 gotCancel.store(true);
                 co_await wsSendJson(
                     ws,
-                    remote::makeTurnResult(j->value("thread", std::string{}), false, "", true)
+                    io::makeTurnResult(j->value("thread", std::string{}), false, "", true)
                 );
             }
         }
@@ -1174,7 +1183,7 @@ static asio::awaitable<void> test_remote_reconnect_sync() {
         }
         co_await wsSendJson(
             ws,
-            remote::makeHelloAck(true, hello->value("thread", std::string{}), "", {})
+            io::makeHelloAck(true, hello->value("thread", std::string{}), "", {})
         );
         if (myConn == 1) {
             auto j = co_await wsRecvJson(ws);
@@ -1183,26 +1192,26 @@ static asio::awaitable<void> test_remote_reconnect_sync() {
                 d.type = agentxx::agent::Delta::Type::TextToken;
                 d.seq  = 1;
                 d.text = "x";
-                co_await wsSendJson(ws, remote::makeDeltaMsg(d));
+                co_await wsSendJson(ws, io::makeDeltaMsg(d));
                 co_await wsSendJson(
                     ws,
-                    remote::makeTurnResult(j->value("thread", std::string{}), false, "", false)
+                    io::makeTurnResult(j->value("thread", std::string{}), false, "", false)
                 );
             }
             co_return;
         }
         agentxx::agent::SyncPayload sp;
         sp.tailHash = "reconnect-sync";
-        co_await wsSendJson(ws, remote::makeSyncMsg(sp, 1));
+        co_await wsSendJson(ws, io::makeSyncMsg(sp, 1));
         for (;;) {
             auto j = co_await wsRecvJson(ws);
             if (!j) {
                 co_return;
             }
-            if (remote::msgType(*j) == remote::MsgType::UserInput) {
+            if (io::msgType(*j) == io::MsgType::UserInput) {
                 co_await wsSendJson(
                     ws,
-                    remote::makeTurnResult(j->value("thread", std::string{}), false, "", false)
+                    io::makeTurnResult(j->value("thread", std::string{}), false, "", false)
                 );
             }
         }

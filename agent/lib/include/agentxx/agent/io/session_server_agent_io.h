@@ -1,6 +1,6 @@
 #pragma once
 
-#include "agentxx/agent/agent_io.h"
+#include "agentxx/agent/io/agent_io.h"
 #include "asio/any_io_executor.hpp"
 #include "asio/awaitable.hpp"
 #include "asio/experimental/concurrent_channel.hpp"
@@ -26,16 +26,16 @@ class Session;
 
 /// 按 threadId 持久的会话控制器 (服务端 AgentIOBase 端点)
 ///
-/// 数据流: BaseAgent → SessionController → transport → 客户端 AgentIOBase
-///         客户端 AgentIOBase → transport → SessionController → BaseAgent
+/// 数据流: BaseAgent → SessionServerAgentIO → transport → 客户端 AgentIOBase
+///         客户端 AgentIOBase → transport → SessionServerAgentIO → BaseAgent
 ///
 /// - 作为 AgentIOBase 被 BaseAgent 驱动; 驱动循环独立于连接存在
 /// - 持有 delta 环形缓冲, 供重连时增量重放 (seq 连续则重放, 否则回退全量 sync)
 /// - 通过 transport 与客户端端点通信 (Channel 或 WS)
 /// - 线程模型: 所有成员状态 (deltaBuffer_/pending_/graceTimer_) 仅在 ex_ 线程访问，
 ///   无需锁保护; stop() 通过 asio::dispatch(ex_) 保证在 ex_ 线程执行清理
-class SessionController : public AgentIOBase,
-                          public std::enable_shared_from_this<SessionController> {
+class SessionServerAgentIO : public AgentIOBase,
+                             public std::enable_shared_from_this<SessionServerAgentIO> {
 public:
 
     struct Config {
@@ -47,9 +47,9 @@ public:
         size_t deltaBufferCap = 4096;
     };
 
-    SessionController(asio::any_io_executor ex, std::weak_ptr<BaseAgent> agent, Config config);
+    SessionServerAgentIO(asio::any_io_executor ex, std::weak_ptr<BaseAgent> agent, Config config);
 
-    ~SessionController() override;
+    ~SessionServerAgentIO() override;
 
     // ----- AgentIOBase: 主动发送 (覆写: 新产出的 Delta 先写入重放缓冲再转发客户端) -----
     void sendToPeer(WireMessage msg) override;

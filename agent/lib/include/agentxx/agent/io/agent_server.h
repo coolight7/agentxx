@@ -1,8 +1,8 @@
 #pragma once
 
-#include "agentxx/agent/agent_io_transport.h"
 #include "agentxx/agent/base_agent.h"
-#include "agentxx/agent/remote/session_controller.h"
+#include "agentxx/agent/io/agent_io_transport.h"
+#include "agentxx/agent/io/session_server_agent_io.h"
 #include "agentxx/util/http_server.h"
 #include "asio/any_io_executor.hpp"
 #include "asio/awaitable.hpp"
@@ -14,11 +14,11 @@
 
 namespace agentxx {
 namespace agent {
-namespace remote {
+namespace io {
 
 /// Agent 服务
 /// - 单 io_context/单线程多协程: 复用 BaseAgent.ioCtx
-/// - 每个 threadId 一个 SessionController (与连接解耦, 支持断线 grace 重挂 + 增量重放)
+/// - 每个 threadId 一个 SessionServerAgentIO (与连接解耦, 支持断线 grace 重挂 + 增量重放)
 /// - 两种接入方式:
 ///   - WS/WSS 服务: start(ex) 启动 HttpServer, 每个 WS 连接 -> serveTransport
 ///   - 进程内: 直接 serveTransport(ChannelAgentIOTransport) 服务单个进程内连接
@@ -69,8 +69,8 @@ private:
     asio::awaitable<void> handleWs(util::HttpServer::WsStream& ws);
     asio::awaitable<void> handleWss(util::HttpServer::WssStream& ws);
 
-    /// 取/建指定 threadId 的 SessionController (并启动其驱动循环)
-    std::shared_ptr<SessionController> getOrCreateController(std::string_view threadId);
+    /// 取/建指定 threadId 的 SessionServerAgentIO (并启动其驱动循环)
+    std::shared_ptr<SessionServerAgentIO> getOrCreateController(std::string_view threadId);
 
     std::shared_ptr<BaseAgent>        agent_;
     Config                            config_;
@@ -78,9 +78,9 @@ private:
     asio::any_io_executor             ex_;
 
     // 控制器映射：单线程访问，无需锁
-    std::map<std::string, std::shared_ptr<SessionController>, std::less<>> controllers_;
+    std::map<std::string, std::shared_ptr<SessionServerAgentIO>, std::less<>> controllers_;
 };
 
-} // namespace remote
+} // namespace io
 } // namespace agent
 } // namespace agentxx
