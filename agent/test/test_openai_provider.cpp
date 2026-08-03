@@ -460,10 +460,7 @@ std::unique_ptr<MockOpenAIServer> startMockServer(uint16_t& outPort) {
 
                     case MockMode::Raw:
                         resp.result(static_cast<boost::beast::http::status>(mock->rawStatus));
-                        resp.set(
-                            boost::beast::http::field::content_type,
-                            mock->rawContentType
-                        );
+                        resp.set(boost::beast::http::field::content_type, mock->rawContentType);
                         resp.body() = mock->rawBody;
                         resp.prepare_payload();
                         break;
@@ -2569,11 +2566,10 @@ void test_openai_sse_malformed_types_tolerated() {
     // 非字符串 finish_reason / 非字符串 content / 非数组 tool_calls / 非对象 choices[0]:
     // 全部跳过且不抛异常
     {
-        std::string buf
-            = "data: {\"choices\":[{\"finish_reason\":3,\"delta\":{\"content\":42,"
-              "\"tool_calls\":{\"bad\":\"shape\"}}}]}\n"
-              "data: {\"choices\":[\"not-an-object\"]}\n"
-              "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n";
+        std::string buf = "data: {\"choices\":[{\"finish_reason\":3,\"delta\":{\"content\":42,"
+                          "\"tool_calls\":{\"bad\":\"shape\"}}}]}\n"
+                          "data: {\"choices\":[\"not-an-object\"]}\n"
+                          "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n";
         neograph::ChatCompletion          completion;
         std::string                       content, thinking;
         std::map<int, neograph::ToolCall> tcMap;
@@ -2597,12 +2593,11 @@ void test_openai_sse_malformed_types_tolerated() {
 
     // usage 为字符串数字时也应解析
     {
-        std::string buf
-            = "data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}],"
-              "\"usage\":{\"prompt_tokens\":\"7\",\"completion_tokens\":\"3\","
-              "\"total_tokens\":\"10\"}}\n";
-        neograph::ChatCompletion          completion;
-        std::string                       content, thinking;
+        std::string              buf = "data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}],"
+                                       "\"usage\":{\"prompt_tokens\":\"7\",\"completion_tokens\":\"3\","
+                                       "\"total_tokens\":\"10\"}}\n";
+        neograph::ChatCompletion completion;
+        std::string              content, thinking;
         std::map<int, neograph::ToolCall> tcMap;
         OpenAIProvider::processSseBuffer(buf, completion, content, thinking, tcMap, nullptr);
         XX_TEST_EXPECT_EQ(completion.usage.prompt_tokens, 7);
@@ -2613,7 +2608,7 @@ void test_openai_sse_malformed_types_tolerated() {
     // usage 为非对象 (如字符串) 时跳过不抛异常
     {
         std::string              buf = "data: {\"choices\":[{\"delta\":{\"content\":\"y\"}}],"
-                                        "\"usage\":\"weird\"}\n";
+                                       "\"usage\":\"weird\"}\n";
         neograph::ChatCompletion completion;
         std::string              content, thinking;
         std::map<int, neograph::ToolCall> tcMap;
@@ -2631,12 +2626,11 @@ void test_openai_sse_malformed_types_tolerated() {
 void test_responses_sse_incomplete_done() {
     using server::OpenAIProvider;
 
-    std::string buf
-        = "event: response.output_text.delta\n"
-          "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Partial\"}\n\n"
-          "event: response.incomplete\n"
-          "data: {\"type\":\"response.incomplete\",\"response\":{\"id\":\"resp_x\","
-          "\"status\":\"incomplete\"}}\n\n";
+    std::string                       buf = "event: response.output_text.delta\n"
+                                            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Partial\"}\n\n"
+                                            "event: response.incomplete\n"
+                                            "data: {\"type\":\"response.incomplete\",\"response\":{\"id\":\"resp_x\","
+                                            "\"status\":\"incomplete\"}}\n\n";
     neograph::ChatCompletion          completion;
     std::string                       content, thinking;
     std::map<int, neograph::ToolCall> tcMap;

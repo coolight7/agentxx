@@ -5,7 +5,8 @@
 using namespace ftxui;
 
 InputComponent::InputComponent(TUICtx& ctx, Config config) :
-    ctx_(ctx), config_(std::move(config)) {
+    ctx_(ctx),
+    config_(std::move(config)) {
     auto option            = InputOption();
     option.multiline       = true;
     option.insert          = true;
@@ -48,8 +49,7 @@ Element InputComponent::OnRender() {
             }),
             text(" "),
         }) | bgcolor(theme.inputBgColor)
-            | xflex | size(HEIGHT, GREATER_THAN, 3)
-            | size(HEIGHT, LESS_THAN, maxInputTotalLines),
+            | xflex | size(HEIGHT, GREATER_THAN, 3) | size(HEIGHT, LESS_THAN, maxInputTotalLines),
         text(" "),
     });
 }

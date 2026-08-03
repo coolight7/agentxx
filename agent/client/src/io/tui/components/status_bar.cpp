@@ -4,7 +4,7 @@
 using namespace ftxui;
 
 Element StatusBarComponent::OnRender() {
-    const auto& st = *ctx_.frameState;
+    const auto& st    = *ctx_.frameState;
     const auto& theme = *ctx_.theme;
 
     std::string modelName = st.cachedModelName;

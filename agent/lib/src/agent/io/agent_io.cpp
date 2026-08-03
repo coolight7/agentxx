@@ -144,7 +144,7 @@ void AgentIOBase::registerOnBus(std::shared_ptr<agentxx::middleware::EventBus> s
         [this](const events::ReqPermission& req, size_t /*corrId*/)
             -> asio::awaitable<events::RespPermission> {
             auto inputItem   = agentxx::middleware::InterruptHandleArg::InterruptHandleInputItem{};
-            inputItem.label = fmt::format("{} {}", req.toolName, req.category);
+            inputItem.label  = fmt::format("{} {}", req.toolName, req.category);
             inputItem.depict = req.target;
             inputItem.type   = "bool";
             inputItem.defaultValue = "no";

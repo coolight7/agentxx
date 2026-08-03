@@ -13,7 +13,9 @@ SidebarComponent::SidebarComponent(TUICtx& ctx) :
         if (activeTab_ >= 0 && activeTab_ < static_cast<int>(tabs_.size())) {
             return tabs_[activeTab_].render();
         }
-        return {ScrollItem{text(" "), false}};
+        return {
+            ScrollItem{text(" "), false}
+        };
     });
     Add(scrollable_);
 }
@@ -65,8 +67,8 @@ Element SidebarComponent::OnRender() {
     for (size_t i = 0; i < tabs_.size(); ++i) {
         auto label = text(fmt::format(" {} ", tabs_[i].title));
         if (static_cast<int>(i) == activeTab_) {
-            label = label | bgcolor(theme.buttonActiveBgColor)
-                    | color(theme.buttonActiveTextColor) | bold;
+            label = label | bgcolor(theme.buttonActiveBgColor) | color(theme.buttonActiveTextColor)
+                    | bold;
         } else {
             label = label | color(theme.hintColor);
         }
@@ -90,8 +92,8 @@ Element SidebarComponent::OnRender() {
         layout.push_back(text(" "));
     }
 
-    auto handle = separatorStyled(BorderStyle::LIGHT) | color(theme.inputBgColor)
-                  | reflect(handleBox_);
+    auto handle
+        = separatorStyled(BorderStyle::LIGHT) | color(theme.inputBgColor) | reflect(handleBox_);
 
     return hbox({
                handle,

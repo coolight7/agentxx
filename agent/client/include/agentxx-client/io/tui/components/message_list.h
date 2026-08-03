@@ -24,7 +24,7 @@ public:
     explicit MessageListComponent(TUICtx& ctx);
 
     ftxui::Element OnRender() override;
-    bool OnEvent(ftxui::Event event) override;
+    bool           OnEvent(ftxui::Event event) override;
 
     void setStickToBottom(bool v) {
         scrollable_->setStickToBottom(v);
@@ -47,9 +47,9 @@ public:
 private:
 
     struct MessageCache {
-        ftxui::Element element;
-        int64_t        sig         = 0;
-        int            cachedWidth = -1;
+        ftxui::Element                                     element;
+        int64_t                                            sig         = 0;
+        int                                                cachedWidth = -1;
         std::vector<std::unique_ptr<markdown::DomBuilder>> mdBuilders;
     };
 
@@ -60,23 +60,24 @@ private:
     };
 
     std::vector<ScrollItem> buildItems();
-    ftxui::Element buildMessageBlock(
-        const TUIMessage& msg, int maxWidth,
-        std::vector<std::unique_ptr<markdown::DomBuilder>>& mdBuilders
-    );
+    ftxui::Element          buildMessageBlock(
+                 const TUIMessage&                                   msg,
+                 int                                                 maxWidth,
+                 std::vector<std::unique_ptr<markdown::DomBuilder>>& mdBuilders
+             );
     static int64_t messageSignature(const TUIMessage& msg);
 
-    void appendEditToolHeader(const TUIMessage& msg, ftxui::Elements& header);
-    void appendEditToolBody(const TUIMessage& msg, ftxui::Elements& lines);
+    void           appendEditToolHeader(const TUIMessage& msg, ftxui::Elements& header);
+    void           appendEditToolBody(const TUIMessage& msg, ftxui::Elements& lines);
     ftxui::Element renderEditToolDiff(std::string_view oldStr, std::string_view newStr);
 
     TUICtx&                     ctx_;
     std::shared_ptr<Scrollable> scrollable_;
 
-    std::vector<MessageCache> cache_;
-    size_t                    prevMsgCount_ = 0;
+    std::vector<MessageCache>                          cache_;
+    size_t                                             prevMsgCount_ = 0;
     std::vector<std::unique_ptr<markdown::DomBuilder>> streamingMdBuilders_;
-    std::vector<ItemMeta>     itemMeta_;
+    std::vector<ItemMeta>                              itemMeta_;
 
     std::vector<ftxui::Box> collapsibleBoxes_;
     std::vector<size_t>     collapsibleIndices_;

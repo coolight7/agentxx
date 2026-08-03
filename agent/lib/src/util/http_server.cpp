@@ -30,9 +30,8 @@ int httpMethodIndex(boost::beast::http::verb v) noexcept {
 }
 
 std::string_view httpMethodName(int methodIdx) noexcept {
-    static constexpr std::array<std::string_view, 9> names{
-        "GET", "HEAD", "POST", "PUT", "DELETE", "CONNECT", "OPTIONS", "TRACE", "PATCH"
-    };
+    static constexpr std::array<std::string_view, 9>
+        names{"GET", "HEAD", "POST", "PUT", "DELETE", "CONNECT", "OPTIONS", "TRACE", "PATCH"};
     if (methodIdx < 0 || methodIdx >= static_cast<int>(names.size())) {
         return "UNKNOWN";
     }
@@ -79,8 +78,8 @@ asio::ip::address resolveBindAddress(const std::string& address) {
     if (!ec) {
         return addr;
     }
-    asio::io_context    ctx;
-    asio::ip::tcp::resolver resolver(ctx);
+    asio::io_context         ctx;
+    asio::ip::tcp::resolver  resolver(ctx);
     neograph_asio_error_code resolveEc;
     auto                     results = resolver.resolve(address, "0", resolveEc);
     if (resolveEc || results.empty()) {

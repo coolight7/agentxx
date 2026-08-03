@@ -166,9 +166,10 @@ asio::awaitable<std::expected<void, std::string>> WsClient::sendBinary(std::stri
             if (impl_->isSsl) {
                 impl_->wss->binary(true);
                 do {
-                    size_t len = std::min(WsClientConfig::kTimeoutChunkBytes, payload.size() - offset);
-                    bool   fin = (offset + len >= payload.size());
-                    auto   n   = co_await impl_->wss->async_write_some(
+                    size_t len
+                        = std::min(WsClientConfig::kTimeoutChunkBytes, payload.size() - offset);
+                    bool fin = (offset + len >= payload.size());
+                    auto n   = co_await impl_->wss->async_write_some(
                         fin,
                         asio::buffer(payload.data() + offset, len),
                         asio::cancel_after(impl_->config.sendTimeout, asio::use_awaitable)
@@ -178,9 +179,10 @@ asio::awaitable<std::expected<void, std::string>> WsClient::sendBinary(std::stri
             } else {
                 impl_->ws->binary(true);
                 do {
-                    size_t len = std::min(WsClientConfig::kTimeoutChunkBytes, payload.size() - offset);
-                    bool   fin = (offset + len >= payload.size());
-                    auto   n   = co_await impl_->ws->async_write_some(
+                    size_t len
+                        = std::min(WsClientConfig::kTimeoutChunkBytes, payload.size() - offset);
+                    bool fin = (offset + len >= payload.size());
+                    auto n   = co_await impl_->ws->async_write_some(
                         fin,
                         asio::buffer(payload.data() + offset, len),
                         asio::cancel_after(impl_->config.sendTimeout, asio::use_awaitable)
@@ -299,7 +301,7 @@ asio::awaitable<std::expected<WsMessage, std::string>> WsClient::recv() {
                 if (e.code() == boost::beast::websocket::error::closed) {
                     impl_->closed_ = true;
                     // 透传对端 close 帧携带的 code/reason (reason() 在 close 处理后可用)
-                    auto cr = impl_->isSsl ? impl_->wss->reason() : impl_->ws->reason();
+                    auto      cr = impl_->isSsl ? impl_->wss->reason() : impl_->ws->reason();
                     WsMessage msg;
                     msg.type        = WsMessage::Type::Close;
                     msg.closeCode   = (cr.code != 0) ? cr.code : 1000;
@@ -410,10 +412,11 @@ asio::awaitable<std::expected<std::unique_ptr<WsClient>, std::string>> wsConnect
     };
 
     // Host 头: IPv6 字面量必须带方括号, 非默认端口附加 ":port"
-    bool        defaultPort   = (isSsl && port == "443") || (!isSsl && port == "80");
+    bool        defaultPort = (isSsl && port == "443") || (!isSsl && port == "80");
     std::string hostForHeader
         = (host.find(':') != std::string::npos) ? fmt::format("[{}]", host) : std::string(host);
-    std::string hostHeader = defaultPort ? hostForHeader : fmt::format("{}:{}", hostForHeader, port);
+    std::string hostHeader
+        = defaultPort ? hostForHeader : fmt::format("{}:{}", hostForHeader, port);
 
     // UA + 自定义头统一在一个 decorator 内设置 (set_option(decorator) 是覆盖语义,
     // 分两次设置会丢失先设置的部分)
@@ -429,74 +432,74 @@ asio::awaitable<std::expected<std::unique_ptr<WsClient>, std::string>> wsConnect
     // CancelledException/NodeInterrupt 保持抛出, 不阻断 BaseAgent 取消处理
     co_return co_await agentxx::util::catchErrorToUnexpectedAsync<std::unique_ptr<WsClient>>(
         [&]() -> asio::awaitable<std::expected<std::unique_ptr<WsClient>, std::string>> {
-        tcp::resolver resolver(executor);
-        auto          endpoints = co_await resolver.async_resolve(
-            host,
-            port,
-            asio::cancel_after(remainingMs(), asio::use_awaitable)
-        );
+            tcp::resolver resolver(executor);
+            auto          endpoints = co_await resolver.async_resolve(
+                host,
+                port,
+                asio::cancel_after(remainingMs(), asio::use_awaitable)
+            );
 
-        if (isSsl) {
-            auto& sslCtx    = HttpClient::sharedSslCtx(config.sslVerify);
-            auto  sslStream = beast::ssl_stream<beast::tcp_stream>(executor, sslCtx);
-            // SNI 与证书验证相互独立: 即使关闭验证也必须发送 SNI,
-            // 否则 CDN/网关按 SNI 路由时握手直接失败; IP 字面量 (含 ':') 不支持 SNI
-            if (host.find(':') == std::string::npos) {
-                ::SSL_set_tlsext_host_name(sslStream.native_handle(), host.c_str());
+            if (isSsl) {
+                auto& sslCtx    = HttpClient::sharedSslCtx(config.sslVerify);
+                auto  sslStream = beast::ssl_stream<beast::tcp_stream>(executor, sslCtx);
+                // SNI 与证书验证相互独立: 即使关闭验证也必须发送 SNI,
+                // 否则 CDN/网关按 SNI 路由时握手直接失败; IP 字面量 (含 ':') 不支持 SNI
+                if (host.find(':') == std::string::npos) {
+                    ::SSL_set_tlsext_host_name(sslStream.native_handle(), host.c_str());
+                }
+                if (!config.sslVerify) {
+                    ::SSL_set_verify(sslStream.native_handle(), SSL_VERIFY_NONE, nullptr);
+                }
+
+                co_await beast::get_lowest_layer(sslStream).async_connect(
+                    endpoints,
+                    asio::cancel_after(remainingMs(), asio::use_awaitable)
+                );
+
+                neograph_asio_error_code tcpEc;
+                beast::get_lowest_layer(sslStream).socket().set_option(tcp::no_delay(true), tcpEc);
+                enableWsKeepalive(beast::get_lowest_layer(sslStream).socket());
+
+                co_await sslStream.async_handshake(
+                    asio::ssl::stream_base::client,
+                    asio::cancel_after(remainingMs(), asio::use_awaitable)
+                );
+
+                impl->wss = std::make_unique<WsClient::Impl::WssStream>(std::move(sslStream));
+                impl->configureStream();
+                impl->wss->set_option(beast::websocket::stream_base::decorator(decorateRequest));
+
+                co_await impl->wss->async_handshake(
+                    hostHeader,
+                    path,
+                    asio::cancel_after(remainingMs(), asio::use_awaitable)
+                );
+            } else {
+                beast::tcp_stream tcpStream(executor);
+
+                co_await tcpStream.async_connect(
+                    endpoints,
+                    asio::cancel_after(remainingMs(), asio::use_awaitable)
+                );
+
+                neograph_asio_error_code tcpEc;
+                tcpStream.socket().set_option(tcp::no_delay(true), tcpEc);
+                enableWsKeepalive(tcpStream.socket());
+
+                impl->ws = std::make_unique<WsClient::Impl::WsStream>(std::move(tcpStream));
+                impl->configureStream();
+                impl->ws->set_option(beast::websocket::stream_base::decorator(decorateRequest));
+
+                co_await impl->ws->async_handshake(
+                    hostHeader,
+                    path,
+                    asio::cancel_after(remainingMs(), asio::use_awaitable)
+                );
             }
-            if (!config.sslVerify) {
-                ::SSL_set_verify(sslStream.native_handle(), SSL_VERIFY_NONE, nullptr);
-            }
 
-            co_await beast::get_lowest_layer(sslStream).async_connect(
-                endpoints,
-                asio::cancel_after(remainingMs(), asio::use_awaitable)
-            );
-
-            neograph_asio_error_code tcpEc;
-            beast::get_lowest_layer(sslStream).socket().set_option(tcp::no_delay(true), tcpEc);
-            enableWsKeepalive(beast::get_lowest_layer(sslStream).socket());
-
-            co_await sslStream.async_handshake(
-                asio::ssl::stream_base::client,
-                asio::cancel_after(remainingMs(), asio::use_awaitable)
-            );
-
-            impl->wss = std::make_unique<WsClient::Impl::WssStream>(std::move(sslStream));
-            impl->configureStream();
-            impl->wss->set_option(beast::websocket::stream_base::decorator(decorateRequest));
-
-            co_await impl->wss->async_handshake(
-                hostHeader,
-                path,
-                asio::cancel_after(remainingMs(), asio::use_awaitable)
-            );
-        } else {
-            beast::tcp_stream tcpStream(executor);
-
-            co_await tcpStream.async_connect(
-                endpoints,
-                asio::cancel_after(remainingMs(), asio::use_awaitable)
-            );
-
-            neograph_asio_error_code tcpEc;
-            tcpStream.socket().set_option(tcp::no_delay(true), tcpEc);
-            enableWsKeepalive(tcpStream.socket());
-
-            impl->ws = std::make_unique<WsClient::Impl::WsStream>(std::move(tcpStream));
-            impl->configureStream();
-            impl->ws->set_option(beast::websocket::stream_base::decorator(decorateRequest));
-
-            co_await impl->ws->async_handshake(
-                hostHeader,
-                path,
-                asio::cancel_after(remainingMs(), asio::use_awaitable)
-            );
-        }
-
-        co_return std::expected<std::unique_ptr<WsClient>, std::string>{
-            std::unique_ptr<WsClient>(new WsClient(std::move(impl)))
-        };
+            co_return std::expected<std::unique_ptr<WsClient>, std::string>{
+                std::unique_ptr<WsClient>(new WsClient(std::move(impl)))
+            };
         }
     );
 }

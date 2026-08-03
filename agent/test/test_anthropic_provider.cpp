@@ -1540,7 +1540,7 @@ public:
     enum class Mode {
         NeverReadBody,
         PartialThenStall,
-        AbortAfterChunks,  // 发完 partialChunks 后直接断开 (不发 chunked 终止块)
+        AbortAfterChunks, // 发完 partialChunks 后直接断开 (不发 chunked 终止块)
     };
 
     std::thread              thread;
@@ -1944,14 +1944,14 @@ void test_convert_messages_merges_consecutive_roles() {
 /// sendThinking 时应优先原样回传从响应中捕获的带 signature 的 thinking 块
 void test_convert_messages_thinking_signature_roundtrip() {
     neograph::ChatMessage msg;
-    msg.role                        = "assistant";
-    msg.content                     = "Answer";
-    msg.reasoning_content           = "Thinking text";
+    msg.role                                                 = "assistant";
+    msg.content                                              = "Answer";
+    msg.reasoning_content                                    = "Thinking text";
     msg.extra[server::AnthropicProvider::kThinkingBlocksKey] = neograph::json::parse(R"([
         {"type":"thinking","thinking":"Thinking text","signature":"sig123"},
         {"type":"redacted_thinking","data":"redacted-data"}
     ])");
-    std::vector<neograph::ChatMessage> msgs = {msg};
+    std::vector<neograph::ChatMessage> msgs                  = {msg};
     auto [system, arr] = server::AnthropicProvider::convertMessages(msgs, true);
     XX_TEST_EXPECT_TRUE(arr[0]["content"].is_array());
     const auto& blocks = arr[0]["content"];
@@ -1980,8 +1980,7 @@ void test_parse_response_thinking_signature() {
     XX_TEST_EXPECT_TRUE(
         completion.message.extra.contains(server::AnthropicProvider::kThinkingBlocksKey)
     );
-    const auto& blocks
-        = completion.message.extra[server::AnthropicProvider::kThinkingBlocksKey];
+    const auto& blocks = completion.message.extra[server::AnthropicProvider::kThinkingBlocksKey];
     XX_TEST_EXPECT_EQ(blocks.size(), (size_t)2);
     XX_TEST_EXPECT_EQ(blocks[0]["type"].get<std::string>(), "thinking");
     XX_TEST_EXPECT_EQ(blocks[0]["signature"].get<std::string>(), "sig-abc");
@@ -2096,12 +2095,12 @@ void test_anthropic_sse_message_stop_flag() {
     ));
 
     // 含 message_stop → true
-    XX_TEST_EXPECT_TRUE(run(
-        "event: message_delta\n"
-        "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},"
-        "\"usage\":{\"output_tokens\":1}}\n\n"
-        "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
-    ));
+    XX_TEST_EXPECT_TRUE(
+        run("event: message_delta\n"
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},"
+            "\"usage\":{\"output_tokens\":1}}\n\n"
+            "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+    );
 
     // message_stop 无结尾分隔符, finalFlush 时也应识别
     XX_TEST_EXPECT_TRUE(run("event: message_stop\ndata: {\"type\":\"message_stop\"}", true));
