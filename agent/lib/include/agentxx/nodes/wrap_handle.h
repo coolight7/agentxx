@@ -312,7 +312,7 @@ public:
             agentCtxPtr->middlewareHandleContext->setGraphDataItemValue(
                 in.ctx.thread_id,
                 agentxx::middleware::MiddlewareContext::graphDataKey_tempMessages,
-                session->llmMessages
+                in.state.get("messages")
             );
             std::rethrow_exception(errorPtr);
         }
