@@ -682,7 +682,7 @@ protected:
         for (int cardIdx = 0;; ++cardIdx) {
             auto devicePath = fmt::format("/sys/class/drm/card{}/device", cardIdx);
 
-            std::string vendorContent = co_await readFileContent(devicePath + "/vendor");
+            std::string vendorContent = co_await readFileContent(fmt::format("{}/vendor", devicePath));
             if (vendorContent.empty()) {
                 break;
             }
@@ -691,12 +691,12 @@ protected:
             entry.devicePath = devicePath;
             entry.vendorId   = parseHexSysfs(vendorContent);
 
-            co_await readSysfsString(devicePath + "/product_name", entry.name);
+            co_await readSysfsString(fmt::format("{}/product_name", devicePath), entry.name);
 
             if (entry.vendorId == 0x1002) {
                 entry.isAmd = true;
                 co_await readSysfsUint64(
-                    devicePath + "/mem_info_vram_total",
+                    fmt::format("{}/mem_info_vram_total", devicePath),
                     entry.dedicatedVramMB
                 );
                 entry.dedicatedVramMB /= (1024 * 1024);
@@ -706,7 +706,7 @@ protected:
             }
 
             if (entry.name.empty()) {
-                entry.name = "GPU " + std::to_string(cardIdx);
+                entry.name = fmt::format("GPU {}", cardIdx);
             }
 
             cache.entries.push_back(std::move(entry));
@@ -789,7 +789,7 @@ protected:
         std::string     pciAddr       = ec ? std::string{} : symlinkTarget.filename().string();
         if (!pciAddr.empty()) {
             std::string infoContent = co_await readFileContent(
-                std::string("/proc/driver/nvidia/gpus/") + pciAddr + "/information"
+                fmt::format("/proc/driver/nvidia/gpus/{}/information", pciAddr)
             );
             if (!infoContent.empty()) {
                 parseInformation(infoContent);
@@ -800,7 +800,7 @@ protected:
         // 退化: 遍历各 GPU 目录取第一个有效项 (保持旧行为, 兼容无法解析 PCI 地址的情况)
         for (const auto& name : gpuDirs) {
             std::string infoContent = co_await readFileContent(
-                std::string("/proc/driver/nvidia/gpus/") + name + "/information"
+                fmt::format("/proc/driver/nvidia/gpus/{}/information", name)
             );
             if (infoContent.empty()) {
                 continue;

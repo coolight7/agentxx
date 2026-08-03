@@ -28,7 +28,7 @@ std::shared_ptr<agentxx::agent::AgentConfig> makeSubAgentConfig(
 ) {
     auto cfg                                   = std::make_shared<agentxx::agent::AgentConfig>();
     cfg->model                                 = base->getSubagentModel();
-    cfg->agentName                             = base->agentName + "_sub";
+    cfg->agentName                             = fmt::format("{}_sub", base->agentName);
     cfg->agentNameView                         = base->agentNameView;
     cfg->prompt.systemPrompt                   = systemPrompt;
     cfg->logPrintToolcall                      = false;

@@ -114,7 +114,7 @@ std::optional<ftxui::Element> TUIClientAgentIO::renderPlanningInfo() {
                 c    = theme_.errorColor;
             }
             lines.push_back(hbox({
-                text(icon + " ") | color(c),
+                text(fmt::format("{} ", icon)) | color(c),
                 paragraph(content) | color(c),
             }));
         }
@@ -222,7 +222,7 @@ ftxui::Element TUIClientAgentIO::renderLogSidebarFooter() {
     if (st.currentNodeName.empty()) {
         row.push_back(text(" idle") | color(theme_.hintColor));
     } else {
-        row.push_back(text(" > " + st.currentNodeName) | color(theme_.accentColor));
+        row.push_back(text(fmt::format(" > {}", st.currentNodeName)) | color(theme_.accentColor));
     }
     row.push_back(filler());
 

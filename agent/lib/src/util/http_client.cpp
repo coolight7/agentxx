@@ -318,10 +318,11 @@ std::string HttpClient::buildHostHeader(const ParsedUrl& parsed) {
     bool isHttps     = parsed.scheme == "https";
     bool defaultPort = (isHttps && parsed.port == 443) || (!isHttps && parsed.port == 80);
     // IPv6 字面量 (host 含 ':') 在 Host 头中必须带方括号
-    std::string hostHeader
-        = (parsed.host.find(':') != std::string::npos) ? "[" + parsed.host + "]" : parsed.host;
+    std::string hostHeader = (parsed.host.find(':') != std::string::npos)
+                                 ? fmt::format("[{}]", parsed.host)
+                                 : parsed.host;
     if (!defaultPort) {
-        hostHeader += ":" + std::to_string(parsed.port);
+        hostHeader += fmt::format(":{}", parsed.port);
     }
     return hostHeader;
 }
@@ -357,7 +358,7 @@ asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::requestAsy
             [&]() -> asio::awaitable<bool> {
                 auto parsed = parseUrl(currentUrl);
                 if (!parsed) {
-                    throw std::runtime_error{"invalid url: " + currentUrl};
+                    throw std::runtime_error{fmt::format("invalid url: {}", currentUrl)};
                 }
                 bool isHttps = parsed->scheme == "https";
 
@@ -386,9 +387,8 @@ asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::requestAsy
                     }
                     req.body() = currentBody;
                     req.prepare_payload();
-                } else if (
-                    currentMethod == "POST" || currentMethod == "PUT" || currentMethod == "PATCH"
-                ) {
+                } else if (currentMethod == "POST" || currentMethod == "PUT"
+                           || currentMethod == "PATCH") {
                     // 空 body 也必须携带 Content-Length: 0, 否则部分服务器/代理会一直等待
                     // body 数据或拒绝请求 (RFC 7230 §3.3.2)
                     if (!currentContentType.empty()) {
@@ -433,10 +433,10 @@ asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::requestAsy
                         endpoints,
                         asio::cancel_after(remainingTimeout(), asio::use_awaitable)
                     );
-                        neograph_asio_error_code tcpEc;
-                        stream.lowest_layer().set_option(asio::ip::tcp::no_delay(true), tcpEc);
-                        enableTcpKeepalive(stream.lowest_layer());
-                        co_await stream.async_handshake(
+                    neograph_asio_error_code tcpEc;
+                    stream.lowest_layer().set_option(asio::ip::tcp::no_delay(true), tcpEc);
+                    enableTcpKeepalive(stream.lowest_layer());
+                    co_await stream.async_handshake(
                         asio::ssl::stream_base::client,
                         asio::cancel_after(remainingTimeout(), asio::use_awaitable)
                     );
@@ -456,10 +456,10 @@ asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::requestAsy
                         endpoints,
                         asio::cancel_after(remainingTimeout(), asio::use_awaitable)
                     );
-                        neograph_asio_error_code tcpEc;
-                        stream.set_option(asio::ip::tcp::no_delay(true), tcpEc);
-                        enableTcpKeepalive(stream);
-                        result = co_await exchange(stream, req, config);
+                    neograph_asio_error_code tcpEc;
+                    stream.set_option(asio::ip::tcp::no_delay(true), tcpEc);
+                    enableTcpKeepalive(stream);
+                    result = co_await exchange(stream, req, config);
                 }
                 co_return true;
             },
@@ -508,7 +508,7 @@ asio::awaitable<void> HttpClient::requestSseAsync(
 
     auto parsed = parseUrl(url);
     if (!parsed) {
-        throw std::runtime_error{"invalid url: " + std::string(url)};
+        throw std::runtime_error{fmt::format("invalid url: {}", url)};
     }
     bool isHttps = parsed->scheme == "https";
 
@@ -590,7 +590,10 @@ asio::awaitable<void> HttpClient::requestSseAsync(
                     retryAfter = seconds;
                 }
             }
-            throw neograph::RateLimitError("API error (HTTP 429): " + resp.body(), retryAfter);
+            throw neograph::RateLimitError(
+                fmt::format("API error (HTTP 429): {}", resp.body()),
+                retryAfter
+            );
         }
 
         // 部分网关对 SSE 返回 201/202 等其它 2xx 状态码也视为成功流,
@@ -610,7 +613,7 @@ asio::awaitable<void> HttpClient::requestSseAsync(
                 errBody.resize(kMaxErrorBody);
             }
             throw std::runtime_error(
-                "API error (HTTP " + std::to_string(resp.result_int()) + "): " + errBody
+                fmt::format("API error (HTTP {}): {}", resp.result_int(), errBody)
             );
         }
 

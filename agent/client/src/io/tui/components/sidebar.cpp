@@ -1,4 +1,5 @@
 #include "agentxx-client/io/tui/components/sidebar.h"
+#include "fmt/format.h"
 #include "ftxui/component/event.hpp"
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/terminal.hpp"
@@ -62,7 +63,7 @@ Element SidebarComponent::OnRender() {
     tabBoxes_.assign(tabs_.size(), Box{});
     Elements tabEls;
     for (size_t i = 0; i < tabs_.size(); ++i) {
-        auto label = text(" " + tabs_[i].title + " ");
+        auto label = text(fmt::format(" {} ", tabs_[i].title));
         if (static_cast<int>(i) == activeTab_) {
             label = label | bgcolor(theme.buttonActiveBgColor)
                     | color(theme.buttonActiveTextColor) | bold;

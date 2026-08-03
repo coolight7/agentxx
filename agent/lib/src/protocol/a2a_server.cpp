@@ -96,7 +96,7 @@ json A2aServer::agentCard() const {
     json interfaces = json::array();
     {
         json iface;
-        iface["url"] = "http://localhost:" + std::to_string(port()) + config_.a2aEndpoint;
+        iface["url"] = fmt::format("http://localhost:{}{}", port(), config_.a2aEndpoint);
         iface["protocolBinding"] = "JSONRPC";
         iface["protocolVersion"] = kA2aVersion;
         interfaces.push_back(std::move(iface));
@@ -269,7 +269,7 @@ json A2aServer::processJsonRpc(const json& request) {
         return handleCancelTask(id, params);
     }
 
-    return jsonRpcError(id, -32601, "Method not found: " + method);
+    return jsonRpcError(id, -32601, fmt::format("Method not found: {}", method));
 }
 
 // ---------------------------------------------------------------------------

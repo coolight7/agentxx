@@ -352,7 +352,7 @@ asio::awaitable<void>
                     });
                     newMessages.push_back(neograph::ChatMessage{
                         .role    = "assistant",
-                        .content = "[Previous conversation summary]: \n" + summary,
+                        .content = fmt::format("[Previous conversation summary]: \n{}", summary),
                         .flags
                         = neograph::MessageFlag::AutoInserted | neograph::MessageFlag::Summarized,
                     });

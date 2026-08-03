@@ -1,6 +1,7 @@
 #pragma once
 #include "agentxx/util/lru_cache.h"
 #include <array>
+#include <fmt/format.h>
 #include <map>
 #include <memory>
 #include <string>
@@ -91,7 +92,7 @@ protected:
                 auto re_ptr = it->second->getChild(nextptr, re_path, do_add);
                 if (re_ptr != nullptr) {
                     // 有找到匹配的路径
-                    re_path = str + "/" + re_path;
+                    re_path = fmt::format("{}/{}", str, re_path);
                 }
                 return re_ptr;
             } else {
@@ -101,7 +102,7 @@ protected:
                     child[str]   = treeptr;
                     auto re_ptr  = treeptr->getChild(nextptr, re_path, do_add);
                     if (re_ptr != nullptr) {
-                        re_path = str + "/" + re_path;
+                        re_path = fmt::format("{}/{}", str, re_path);
                     }
                     return re_ptr;
                 } else {
@@ -195,7 +196,7 @@ protected:
         }
         auto treep = this->routerTree.getChild(strp, re_path);
         if (false == re_path.empty()) {
-            re_path = "/" + re_path;
+            re_path = fmt::format("/{}", re_path);
         }
         return treep;
     }

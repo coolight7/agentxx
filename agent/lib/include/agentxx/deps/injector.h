@@ -1,6 +1,7 @@
 #pragma once
 
 #include <any>
+#include <fmt/format.h>
 #include <functional>
 #include <memory>
 #include <string>
@@ -53,7 +54,7 @@ public:
         // 构建复合 key: "TypeId::Name"
         std::string compositeKey = typeId;
         if (!name.empty()) {
-            compositeKey += "::" + name;
+            compositeKey += fmt::format("::{}", name);
         }
 
         registrations_[compositeKey]  = std::move(factory);
@@ -85,7 +86,7 @@ public:
     template<typename T>
     std::shared_ptr<T> resolveNamed(std::string_view name) {
         auto        typeId       = typeid(T).name();
-        std::string compositeKey = typeId + "::" + std::string(name);
+        std::string compositeKey = fmt::format("{}::{}", typeId, name);
         return resolveTyped<T>(compositeKey);
     }
 
@@ -107,7 +108,7 @@ public:
     template<typename T>
     bool hasNamed(std::string_view name) const {
         auto        typeId       = typeid(T).name();
-        std::string compositeKey = typeId + "::" + std::string(name);
+        std::string compositeKey = fmt::format("{}::{}", typeId, name);
         return registrations_.find(compositeKey) != registrations_.end();
     }
 
@@ -118,7 +119,7 @@ private:
     std::shared_ptr<T> resolveTyped(std::string_view key) {
         auto it = registrations_.find(std::string(key));
         if (it == registrations_.end()) {
-            throw std::runtime_error("Dependency not registered: " + std::string(key));
+            throw std::runtime_error(fmt::format("Dependency not registered: {}", key));
         }
 
         auto instance = it->second();
@@ -126,7 +127,7 @@ private:
             return std::dynamic_pointer_cast<T>(std::any_cast<std::shared_ptr<void>>(instance));
         } catch (...) {
             throw std::runtime_error(
-                "Cannot cast dependency to requested type: " + std::string(key)
+                fmt::format("Cannot cast dependency to requested type: {}", key)
             );
         }
     }

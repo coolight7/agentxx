@@ -233,7 +233,7 @@ asio::awaitable<TrainingScore> EvolutionTrainingAgent::defaultScoringWithSubAgen
             }
         } else {
             result.score    = 0.0;
-            result.feedback = "Scorer returned non-JSON: " + content;
+            result.feedback = fmt::format("Scorer returned non-JSON: {}", content);
             result.passed   = false;
         }
     } catch (const std::exception& e) {
@@ -455,7 +455,9 @@ asio::awaitable<EvolutionTrainingAgent::EvaluationResult> EvolutionTrainingAgent
                 "[EvolutionTraining] [{}] Output (len={}): {}",
                 generationCounter,
                 agentOutput.size(),
-                agentOutput.size() > 200 ? agentOutput.substr(0, 200) + "..." : agentOutput
+                agentOutput.size() > 200
+                    ? fmt::format("{}...", std::string_view{agentOutput}.substr(0, 200))
+                    : agentOutput
             );
         }
 
@@ -820,7 +822,7 @@ asio::awaitable<void> EvolutionTrainingAgent::runEvolutionLoop(const EvolutionTr
                 "[EvolutionTraining] [{}] Best prompt (score={:.4f}):\n{}",
                 generationCounter,
                 best.averageScore(),
-                sp.size() > 300 ? sp.substr(0, 300) + "..." : sp
+                sp.size() > 300 ? fmt::format("{}...", sp.substr(0, 300)) : sp
             );
         }
 

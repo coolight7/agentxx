@@ -188,7 +188,7 @@ asio::awaitable<neograph::json> StdIOClientAgentIO::handleInterrupt(
                 } else if ("enum" == input.type) {
                     std::string vals;
                     for (const auto& val : input.enumValues) {
-                        vals += val + ", ";
+                        vals += fmt::format("{}, ", val);
                     }
                     typeHint = fmt::format("  ┣━ Type | enum | value of [{}]\n", vals);
                 } else {

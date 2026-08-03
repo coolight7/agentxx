@@ -276,7 +276,7 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
             return t->get_name() == tc.name;
         });
         if (it == tools_.end()) {
-            tool_msg.content = R"({"error": "Tool not found: )" + tc.name + "\"}";
+            tool_msg.content = fmt::format(R"([Error] Tool not found: {})", tc.name);
         } else {
             std::exception_ptr errorPtr;
             co_await agentxx::util::catchErrorAsync<bool>(

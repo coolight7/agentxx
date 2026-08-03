@@ -56,8 +56,12 @@ Element MessageListComponent::OnRender() {
         const auto& vboxes = scrollable_->visibleBoxes();
         for (size_t i = 0; i < itemMeta_.size() && i < vboxes.size(); ++i) {
             const auto& meta = itemMeta_[i];
-            if (!meta.collapsible || meta.messageIndex < 0) continue;
-            if (vboxes[i].IsEmpty()) continue;
+            if (!meta.collapsible || meta.messageIndex < 0) {
+                continue;
+            }
+            if (vboxes[i].IsEmpty()) {
+                continue;
+            }
             collapsibleBoxes_.push_back(vboxes[i]);
             collapsibleIndices_.push_back(static_cast<size_t>(meta.messageIndex));
         }
@@ -96,7 +100,7 @@ bool MessageListComponent::handleCollapsibleClick(const Mouse& mouse) {
         if (mouse.y < collapsibleBoxes_[k].y_min || mouse.y > collapsibleBoxes_[k].y_max) {
             continue;
         }
-        const size_t mi = collapsibleIndices_[k];
+        const size_t mi      = collapsibleIndices_[k];
         bool         handled = false;
         ctx_.state->mutate([&](TUIRenderState& st) {
             if (mi < st.messages.size()) {
@@ -131,8 +135,8 @@ int64_t MessageListComponent::messageSignature(const TUIMessage& msg) {
 
 std::vector<ScrollItem> MessageListComponent::buildItems() {
     itemMeta_.clear();
-    const auto& st    = *ctx_.frameState;
-    const auto& theme = *ctx_.theme;
+    const auto& st           = *ctx_.frameState;
+    const auto& theme        = *ctx_.theme;
     const int   msgListWidth = scrollable_->contentWidth();
 
     const bool hasStreamingToken = st.isStreaming && !st.currentToken.empty();
@@ -152,7 +156,9 @@ std::vector<ScrollItem> MessageListComponent::buildItems() {
                 | dim | center,
             filler(),
         });
-        return {ScrollItem{std::move(banner), true}};
+        return {
+            ScrollItem{std::move(banner), true}
+        };
     }
 
     if (cache_.size() > st.messages.size()) {
@@ -214,22 +220,32 @@ std::vector<ScrollItem> MessageListComponent::buildItems() {
             header.push_back(text("- [Thinking] ") | color(theme.thinkingColor));
             if (currentMsg && currentMsg->durationMs > 0) {
                 header.push_back(
-                    text(fmt::format("({}) ", formatDurationMilliseconds(currentMsg->durationMs)))
+                    text(fmt::format("{} ", formatDurationMilliseconds(currentMsg->durationMs)))
                     | color(theme.thinkingColor)
                 );
             }
             lines.push_back(hbox(std::move(header)));
             auto [el, builder] = renderMarkdown(
-                st.currentToken, theme.thinkingColor, theme.markdownTheme, msgListWidth
+                st.currentToken,
+                theme.thinkingColor,
+                theme.markdownTheme,
+                msgListWidth
             );
-            if (builder) streamingMdBuilders_.push_back(std::move(builder));
+            if (builder) {
+                streamingMdBuilders_.push_back(std::move(builder));
+            }
             lines.push_back(std::move(el));
             block = vbox(std::move(lines));
         } else {
             auto [el, builder] = renderMarkdown(
-                st.currentToken, theme.assistantColor, theme.markdownTheme, msgListWidth
+                st.currentToken,
+                theme.assistantColor,
+                theme.markdownTheme,
+                msgListWidth
             );
-            if (builder) streamingMdBuilders_.push_back(std::move(builder));
+            if (builder) {
+                streamingMdBuilders_.push_back(std::move(builder));
+            }
             block = std::move(el);
         }
         items.push_back(ScrollItem{std::move(block), false});
@@ -255,7 +271,9 @@ Element MessageListComponent::buildMessageBlock(
         case TUIMessage::Role::Assistant: {
             auto [el, builder]
                 = renderMarkdown(msg.text, theme.assistantColor, theme.markdownTheme, maxWidth);
-            if (builder) mdBuilders.push_back(std::move(builder));
+            if (builder) {
+                mdBuilders.push_back(std::move(builder));
+            }
             return el;
         }
         case TUIMessage::Role::System:
@@ -270,7 +288,9 @@ Element MessageListComponent::buildMessageBlock(
             header.push_back(text(expanded ? "- " : "+ ") | color(theme.thinkingColor));
             header.push_back(text("[Thinking] ") | color(theme.thinkingColor));
             if (msg.durationMs > 0) {
-                header.push_back(text(formatDurationMilliseconds(msg.durationMs)) | color(theme.thinkingColor));
+                header.push_back(
+                    text(formatDurationMilliseconds(msg.durationMs)) | color(theme.thinkingColor)
+                );
                 header.push_back(text(" "));
             }
             if (!expanded) {
@@ -278,10 +298,11 @@ Element MessageListComponent::buildMessageBlock(
             }
             lines.push_back(hbox(std::move(header)));
             if (expanded) {
-                auto [el, builder] = renderMarkdown(
-                    msg.text, theme.thinkingColor, theme.markdownTheme, maxWidth
-                );
-                if (builder) mdBuilders.push_back(std::move(builder));
+                auto [el, builder]
+                    = renderMarkdown(msg.text, theme.thinkingColor, theme.markdownTheme, maxWidth);
+                if (builder) {
+                    mdBuilders.push_back(std::move(builder));
+                }
                 lines.push_back(std::move(el));
             }
             return vbox(std::move(lines));
@@ -371,7 +392,7 @@ void MessageListComponent::appendEditToolBody(const TUIMessage& msg, Elements& l
 Element MessageListComponent::renderEditToolDiff(std::string_view oldStr, std::string_view newStr) {
     using agentxx::util::DiffLineType;
     const auto& theme = *ctx_.theme;
-    auto diff = agentxx::util::computeLineDiff(oldStr, newStr);
+    auto        diff  = agentxx::util::computeLineDiff(oldStr, newStr);
     if (diff.empty()) {
         return text("  (no changes)") | color(theme.hintColor);
     }

@@ -754,9 +754,9 @@ std::optional<std::string> McpClient::getErrorFromResponse(const json& response)
         int         code = err.value("code", 0);
         std::string msg  = err.value("message", "unknown error");
         if (err.contains("data") && !err["data"].is_null()) {
-            msg += " (data: " + err["data"].dump() + ")";
+            msg += fmt::format(" (data: {})", err["data"].dump());
         }
-        return "JSON-RPC error " + std::to_string(code) + ": " + msg;
+        return fmt::format("JSON-RPC error {}: {}", code, msg);
     }
     return std::nullopt;
 }
@@ -809,7 +809,7 @@ std::string McpClient::buildSseUrl(std::string_view serverUrl) {
     while (!url.empty() && url.back() == '/') {
         url.pop_back();
     }
-    return url + "/sse";
+    return fmt::format("{}/sse", url);
 }
 
 std::vector<McpClient::SseEvent> McpClient::parseSseEvents(std::string_view body) {
@@ -977,7 +977,7 @@ asio::awaitable<std::expected<json, std::string>>
 
     if (httpResp.status / 100 != 2) {
         co_return std::unexpected{
-            "HTTP " + std::to_string(httpResp.status) + ": " + httpResp.body.substr(0, 256)
+            fmt::format("HTTP {}: {}", httpResp.status, httpResp.body.substr(0, 256))
         };
     }
 
@@ -1010,13 +1010,13 @@ asio::awaitable<std::expected<json, std::string>>
             }
         }
         co_return std::unexpected{
-            "no matching response in SSE stream for id " + std::to_string(id)
+            fmt::format("no matching response in SSE stream for id {}", id)
         };
     }
 
     auto bodyJson = httpResp.bodyJson();
     if (!bodyJson.has_value()) {
-        co_return std::unexpected{"invalid JSON response: " + httpResp.body.substr(0, 256)};
+        co_return std::unexpected{fmt::format("invalid JSON response: {}", httpResp.body.substr(0, 256))};
     }
 
     json j   = bodyJson.value();
@@ -1045,7 +1045,7 @@ asio::awaitable<std::expected<json, std::string>>
 asio::awaitable<std::expected<json, std::string>>
     McpClient::sendStdioRequest(int64_t id, std::string_view method, const json& params) {
     auto req    = makeRequest(id, method, params);
-    auto reqStr = req.dump() + "\n";
+    auto reqStr = fmt::format("{}\n", req.dump());
 
     auto promise = std::make_shared<PendingRequest>();
     auto future  = promise->promise.get_future();
@@ -1067,7 +1067,7 @@ asio::awaitable<std::expected<json, std::string>>
         if (wec) {
             std::lock_guard lock2(pendingMutex_);
             pending_.erase(id);
-            co_return std::unexpected{"write to subprocess stdin failed: " + wec.message()};
+            co_return std::unexpected{fmt::format("write to subprocess stdin failed: {}", wec.message())};
         }
     }
 #else
@@ -1154,7 +1154,7 @@ asio::awaitable<void> McpClient::sendRawNotification(std::string_view method, co
             util::HttpClient::RequestConfig{.readChunkTimeout = config_.requestTimeout}
         );
     } else if (config_.isStdio()) {
-        auto reqStr = req.dump() + "\n";
+        auto reqStr = fmt::format("{}\n", req.dump());
         auto wguard = co_await stdioWriteMutex_->lock();
 #if defined(BOOST_PROCESS_V2_PROCESS_HPP)
         neograph_asio_error_code wec;
@@ -1299,7 +1299,7 @@ neograph::ChatTool McpClientTool::get_definition() const {
 asio::awaitable<std::string> McpClientTool::execute_async(const neograph::json& arguments) {
     auto result = co_await client_->callTool(def_.name, arguments);
     if (!result.has_value()) {
-        throw std::runtime_error("MCP tool call [" + def_.name + "] failed: " + result.error());
+        throw std::runtime_error(fmt::format("MCP tool call [{}] failed: {}", def_.name, result.error()));
     }
     json resp = result.value();
 
@@ -1317,18 +1317,20 @@ asio::awaitable<std::string> McpClientTool::execute_async(const neograph::json& 
                     combined += "\n";
                 }
                 combined
-                    += "[content type: " + type + ", mimeType: " + c.value("mimeType", "") + "]";
+                    += fmt::format("[content type: {}, mimeType: {}]", type, c.value("mimeType", ""));
             } else if (type == "resource") {
                 if (!combined.empty()) {
                     combined += "\n";
                 }
-                combined += "[embedded resource: "
-                            + c.value("resource", json::object()).value("uri", "unknown") + "]";
+                combined += fmt::format(
+                    "[embedded resource: {}]",
+                    c.value("resource", json::object()).value("uri", "unknown")
+                );
             } else if (type == "resource_link") {
                 if (!combined.empty()) {
                     combined += "\n";
                 }
-                combined += "[resource link: " + c.value("uri", "") + "]";
+                combined += fmt::format("[resource link: {}]", c.value("uri", ""));
             }
         }
         if (!combined.empty()) {
@@ -1337,7 +1339,7 @@ asio::awaitable<std::string> McpClientTool::execute_async(const neograph::json& 
     }
 
     if (resp.contains("structuredContent") && !resp["structuredContent"].is_null()) {
-        co_return "[structuredContent]: " + resp["structuredContent"].dump();
+        co_return fmt::format("[structuredContent]: {}", resp["structuredContent"].dump());
     }
 
     co_return resp.dump();

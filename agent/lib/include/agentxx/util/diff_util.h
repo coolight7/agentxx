@@ -116,17 +116,17 @@ namespace detail {
     std::string out;
     out += fmt::format("--- a/{}\n", path);
     out += fmt::format("+++ b/{}\n", path);
-    out += "@@ -1," + std::to_string(oldCount) + " +1," + std::to_string(newCount) + " @@\n";
+    out += fmt::format("@@ -1,{} +1,{} @@\n", oldCount, newCount);
     for (const auto& l : diff) {
         switch (l.type) {
             case DiffLineType::Context:
-                out += " " + l.text + "\n";
+                out += fmt::format(" {}\n", l.text);
                 break;
             case DiffLineType::Delete:
-                out += "-" + l.text + "\n";
+                out += fmt::format("-{}\n", l.text);
                 break;
             case DiffLineType::Add:
-                out += "+" + l.text + "\n";
+                out += fmt::format("+{}\n", l.text);
                 break;
         }
     }

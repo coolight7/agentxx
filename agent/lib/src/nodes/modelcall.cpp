@@ -188,7 +188,7 @@ asio::awaitable<neograph::graph::NodeOutput>
     for (size_t i = 0; i < completion.message.tool_calls.size(); ++i) {
         auto& tc = completion.message.tool_calls[i];
         if (tc.id.empty()) {
-            tc.id = "call_" + std::to_string(i);
+            tc.id = fmt::format("call_{}", i);
         }
     }
 

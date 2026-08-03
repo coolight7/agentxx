@@ -270,7 +270,7 @@ std::vector<std::string> RAGSearchTool::VectorStore::splitByStructure(std::strin
                               && blocks[i][1] == ' ';
         if (blockIsHeading && i + 1 < blocks.size() && !blocks[i + 1].empty()
             && blocks[i + 1][0] != '#') {
-            std::string mergedBlock = blocks[i] + "\n\n" + blocks[i + 1];
+            std::string mergedBlock = fmt::format("{}\n\n{}", blocks[i], blocks[i + 1]);
             merged.push_back(std::move(mergedBlock));
             i += 2;
         } else {
@@ -653,7 +653,7 @@ asio::awaitable<std::string> RAGSearchTool::execute_async(const neograph::json& 
         co_return fmt::format("Search error: {}", results.error());
     }
     if (results->empty()) {
-        co_return "No relevant documents found for: " + query;
+        co_return fmt::format("No relevant documents found for: {}", query);
     }
 
     auto output = neograph::json::array();

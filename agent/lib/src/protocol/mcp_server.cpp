@@ -336,7 +336,7 @@ asio::awaitable<void>
         resp.set(http::field::content_type, "text/event-stream");
         resp.set(http::field::cache_control, "no-cache");
         resp.set("X-Accel-Buffering", "no");
-        std::string sseBody = "event: message\ndata: " + response.dump() + "\n\n";
+        std::string sseBody = fmt::format("event: message\ndata: {}\n\n", response.dump());
         resp.body()         = std::move(sseBody);
         resp.prepare_payload();
         co_return;

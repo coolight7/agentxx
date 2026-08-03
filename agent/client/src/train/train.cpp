@@ -89,8 +89,8 @@ void runTrainingMode(
     auto optimizerAgent = std::make_shared<agentxx::agent::CodeAgent>(optimizerConfig);
 
     std::string projectRoot = findProjectRoot();
-    std::string dataDir     = projectRoot + "/resource/train/data";
-    std::string resultsDir  = projectRoot + "/resource/train/results";
+    std::string dataDir     = fmt::format("{}/resource/train/data", projectRoot);
+    std::string resultsDir  = fmt::format("{}/resource/train/results", projectRoot);
 
     agentxx::agent::EvolutionTrainingConfig trainCfg;
 

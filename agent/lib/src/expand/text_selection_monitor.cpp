@@ -1141,7 +1141,7 @@ private:
             return {};
         }
 
-        std::string wsPath = "/devtools/page/" + targetId;
+        std::string wsPath = fmt::format("/devtools/page/{}", targetId);
         SOCKET      sock   = wsConnect(port, wsPath);
         if (sock == INVALID_SOCKET) {
             return {};
