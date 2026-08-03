@@ -1009,14 +1009,14 @@ asio::awaitable<std::expected<json, std::string>>
                 }
             }
         }
-        co_return std::unexpected{
-            fmt::format("no matching response in SSE stream for id {}", id)
-        };
+        co_return std::unexpected{fmt::format("no matching response in SSE stream for id {}", id)};
     }
 
     auto bodyJson = httpResp.bodyJson();
     if (!bodyJson.has_value()) {
-        co_return std::unexpected{fmt::format("invalid JSON response: {}", httpResp.body.substr(0, 256))};
+        co_return std::unexpected{
+            fmt::format("invalid JSON response: {}", httpResp.body.substr(0, 256))
+        };
     }
 
     json j   = bodyJson.value();
@@ -1067,7 +1067,9 @@ asio::awaitable<std::expected<json, std::string>>
         if (wec) {
             std::lock_guard lock2(pendingMutex_);
             pending_.erase(id);
-            co_return std::unexpected{fmt::format("write to subprocess stdin failed: {}", wec.message())};
+            co_return std::unexpected{
+                fmt::format("write to subprocess stdin failed: {}", wec.message())
+            };
         }
     }
 #else
@@ -1299,7 +1301,9 @@ neograph::ChatTool McpClientTool::get_definition() const {
 asio::awaitable<std::string> McpClientTool::execute_async(const neograph::json& arguments) {
     auto result = co_await client_->callTool(def_.name, arguments);
     if (!result.has_value()) {
-        throw std::runtime_error(fmt::format("MCP tool call [{}] failed: {}", def_.name, result.error()));
+        throw std::runtime_error(
+            fmt::format("MCP tool call [{}] failed: {}", def_.name, result.error())
+        );
     }
     json resp = result.value();
 
@@ -1316,8 +1320,11 @@ asio::awaitable<std::string> McpClientTool::execute_async(const neograph::json& 
                 if (!combined.empty()) {
                     combined += "\n";
                 }
-                combined
-                    += fmt::format("[content type: {}, mimeType: {}]", type, c.value("mimeType", ""));
+                combined += fmt::format(
+                    "[content type: {}, mimeType: {}]",
+                    type,
+                    c.value("mimeType", "")
+                );
             } else if (type == "resource") {
                 if (!combined.empty()) {
                     combined += "\n";

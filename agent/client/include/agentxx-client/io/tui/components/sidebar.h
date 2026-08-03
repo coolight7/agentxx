@@ -20,23 +20,31 @@ class SidebarComponent : public ftxui::ComponentBase {
 public:
 
     struct Tab {
-        std::string id;
-        std::string title;
+        std::string                              id;
+        std::string                              title;
         std::function<std::vector<ScrollItem>()> render;
-        std::function<ftxui::Element()> footer;
+        std::function<ftxui::Element()>          footer;
     };
 
     explicit SidebarComponent(TUICtx& ctx);
 
-    void addTab(std::string_view id, std::string_view title,
-                std::function<std::vector<ScrollItem>()> render,
-                std::function<ftxui::Element()> footer = nullptr);
+    void addTab(
+        std::string_view                         id,
+        std::string_view                         title,
+        std::function<std::vector<ScrollItem>()> render,
+        std::function<ftxui::Element()>          footer = nullptr
+    );
     void removeTab(std::string_view id);
     bool hasTab(std::string_view id) const;
-    bool empty() const { return tabs_.empty(); }
+
+    bool empty() const {
+        return tabs_.empty();
+    }
 
     /// 侧边栏宽度 (供外部布局使用)
-    int width() const { return width_; }
+    int width() const {
+        return width_;
+    }
 
     /// 设置 footer 区域点击回调 (如 "上下文" 按钮)
     void onFooterClick(std::function<bool(const ftxui::Mouse&)> fn) {
@@ -44,23 +52,23 @@ public:
     }
 
     ftxui::Element OnRender() override;
-    bool OnEvent(ftxui::Event event) override;
+    bool           OnEvent(ftxui::Event event) override;
 
 private:
 
     bool handleTabMouse(const ftxui::Mouse& mouse);
     bool handleResizeMouse(const ftxui::Mouse& mouse);
 
-    TUICtx& ctx_;
+    TUICtx&                     ctx_;
     std::shared_ptr<Scrollable> scrollable_;
 
     std::vector<Tab> tabs_;
     int              activeTab_ = 0;
 
-    int  width_         = kDefaultWidth;
-    bool resizing_      = false;
-    int  resizeStartX_  = 0;
-    int  resizeStartW_  = 0;
+    int  width_        = kDefaultWidth;
+    bool resizing_     = false;
+    int  resizeStartX_ = 0;
+    int  resizeStartW_ = 0;
 
     std::vector<ftxui::Box> tabBoxes_;
     ftxui::Box              handleBox_;

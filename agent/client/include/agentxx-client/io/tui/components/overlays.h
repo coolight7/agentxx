@@ -27,7 +27,7 @@ public:
         onConfirm_ = std::move(fn);
     }
 
-    bool OnEvent(ftxui::Event event) override;
+    bool           OnEvent(ftxui::Event event) override;
     ftxui::Element OnRender() override;
 
 private:
@@ -51,7 +51,7 @@ public:
         onClose_ = std::move(fn);
     }
 
-    bool OnEvent(ftxui::Event event) override;
+    bool           OnEvent(ftxui::Event event) override;
     ftxui::Element OnRender() override;
 
 private:
@@ -72,7 +72,7 @@ public:
         onClose_ = std::move(fn);
     }
 
-    bool OnEvent(ftxui::Event event) override;
+    bool           OnEvent(ftxui::Event event) override;
     ftxui::Element OnRender() override;
 
 private:
@@ -98,7 +98,7 @@ public:
         onClose_ = std::move(fn);
     }
 
-    bool OnEvent(ftxui::Event event) override;
+    bool           OnEvent(ftxui::Event event) override;
     ftxui::Element OnRender() override;
 
 private:

@@ -111,7 +111,7 @@ private:
 
     struct ParsedUrl {
         std::string scheme;
-        std::string host;  // IPv6 字面量不含方括号 (如 "::1"), 便于直接用于 DNS 解析
+        std::string host; // IPv6 字面量不含方括号 (如 "::1"), 便于直接用于 DNS 解析
         uint16_t    port;
         std::string path;
     };

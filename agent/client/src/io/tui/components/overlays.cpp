@@ -11,16 +11,16 @@ using namespace ftxui;
 // ---------------------------------------------------------------------------
 
 Element ModelSelectorOverlay::OnRender() {
-    const auto& st    = *ctx_.frameState;
-    const auto& theme = *ctx_.theme;
+    const auto& st         = *ctx_.frameState;
+    const auto& theme      = *ctx_.theme;
     const int   maxVisible = std::max(5, Terminal::Size().dimy / 2);
 
     Elements items;
     for (size_t i = 0; i < st.modelNames.size(); ++i) {
         auto entry = text(fmt::format(" {} ", st.modelNames[i]));
         if (static_cast<int>(i) == selectedIndex_) {
-            entry = entry | bgcolor(theme.buttonActiveBgColor)
-                    | color(theme.buttonActiveTextColor) | bold | focus;
+            entry = entry | bgcolor(theme.buttonActiveBgColor) | color(theme.buttonActiveTextColor)
+                    | bold | focus;
         } else {
             entry = entry | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor);
         }
@@ -64,12 +64,16 @@ bool ModelSelectorOverlay::OnEvent(Event event) {
     if (event == Event::Return) {
         confirmSelection();
         ctx_.postRedraw();
-        if (onClose_) onClose_();
+        if (onClose_) {
+            onClose_();
+        }
         return true;
     }
     if (event == Event::Escape) {
         ctx_.postRedraw();
-        if (onClose_) onClose_();
+        if (onClose_) {
+            onClose_();
+        }
         return true;
     }
     return true;
@@ -102,8 +106,8 @@ Element SettingsOverlay::OnRender() {
     for (int i = 0; i < themeCount; ++i) {
         auto entry = text(fmt::format(" {} ", themeNames[i]));
         if (i == selectedIndex_) {
-            entry = entry | bgcolor(theme.buttonActiveBgColor)
-                    | color(theme.buttonActiveTextColor) | bold | focus;
+            entry = entry | bgcolor(theme.buttonActiveBgColor) | color(theme.buttonActiveTextColor)
+                    | bold | focus;
         } else {
             entry = entry | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor);
         }
@@ -142,12 +146,16 @@ bool SettingsOverlay::OnEvent(Event event) {
             *ctx_.theme = TUITheme::lightTheme();
         }
         ctx_.postRedraw();
-        if (onClose_) onClose_();
+        if (onClose_) {
+            onClose_();
+        }
         return true;
     }
     if (event == Event::Escape) {
         ctx_.postRedraw();
-        if (onClose_) onClose_();
+        if (onClose_) {
+            onClose_();
+        }
         return true;
     }
     return true;
@@ -178,9 +186,9 @@ Element PendingInputsOverlay::OnRender() {
         items.push_back(text(" (空) ") | dim);
     }
     for (size_t i = 0; i < st.pendingInputs.size(); ++i) {
-        const auto& pi = st.pendingInputs[i];
-        auto delBtn    = text(" ✕ ") | bgcolor(theme.buttonBgColor) | color(theme.systemColor)
-                       | reflect(delBoxes_[i]);
+        const auto& pi     = st.pendingInputs[i];
+        auto        delBtn = text(" ✕ ") | bgcolor(theme.buttonBgColor) | color(theme.systemColor)
+                      | reflect(delBoxes_[i]);
         Element row;
         if (pi.expanded) {
             row = hbox({
@@ -214,7 +222,9 @@ Element PendingInputsOverlay::OnRender() {
 bool PendingInputsOverlay::OnEvent(Event event) {
     if (event == Event::Escape) {
         ctx_.postRedraw();
-        if (onClose_) onClose_();
+        if (onClose_) {
+            onClose_();
+        }
         return true;
     }
     if (event.is_mouse() && handleMouse(event.mouse())) {
@@ -232,7 +242,9 @@ bool PendingInputsOverlay::handleMouse(const Mouse& mouse) {
         ctx_.state->mutate([](TUIRenderState& st) {
             st.pendingInputs.clear();
         });
-        if (onClose_) onClose_();
+        if (onClose_) {
+            onClose_();
+        }
         return true;
     }
     bool handled = false;
@@ -247,7 +259,7 @@ bool PendingInputsOverlay::handleMouse(const Mouse& mouse) {
         for (size_t i = 0; i < itemBoxes_.size() && i < st.pendingInputs.size(); ++i) {
             if (itemBoxes_[i].Contain(mouse.x, mouse.y)) {
                 st.pendingInputs[i].expanded = !st.pendingInputs[i].expanded;
-                handled = true;
+                handled                      = true;
                 return;
             }
         }
@@ -331,13 +343,14 @@ bool ContextOverlay::OnEvent(Event event) {
             st.showContextOverlay = false;
         });
         ctx_.postRedraw();
-        if (onClose_) onClose_();
+        if (onClose_) {
+            onClose_();
+        }
         return true;
     }
-    auto snap       = ctx_.state->readSnapshot();
-    const int total = snap->contextMessages.is_array()
-                          ? static_cast<int>(snap->contextMessages.size())
-                          : 0;
+    auto      snap = ctx_.state->readSnapshot();
+    const int total
+        = snap->contextMessages.is_array() ? static_cast<int>(snap->contextMessages.size()) : 0;
     const int maxVisible = std::max(8, Terminal::Size().dimy - 10);
     const int maxScroll  = std::max(0, total - maxVisible);
 

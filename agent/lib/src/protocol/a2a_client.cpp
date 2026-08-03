@@ -25,9 +25,7 @@ asio::awaitable<std::expected<json, std::string>> A2aClient::fetchAgentCard() {
         co_return std::unexpected(fmt::format("Failed to fetch agent card: {}", resp.error()));
     }
     if (!resp->isSuccess()) {
-        co_return std::unexpected(
-            fmt::format("Failed to fetch agent card: HTTP {}", resp->status)
-        );
+        co_return std::unexpected(fmt::format("Failed to fetch agent card: HTTP {}", resp->status));
     }
     auto parsed = resp->bodyJson();
     if (!parsed.has_value()) {

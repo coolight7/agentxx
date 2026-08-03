@@ -772,7 +772,8 @@ Use this to trace how execution flows from one function to another.)",
     void fromJson(const neograph::json& j);
 
     /// Merge via patch: only overwrite fields present in the JSON; absent fields stay as-is.
-    /// - For an existing tool in toolPrompt, only the depict/args sub-fields present in JSON are overwritten.
+    /// - For an existing tool in toolPrompt, only the depict/args sub-fields present in JSON are
+    /// overwritten.
     /// - For a tool not yet in toolPrompt, a new entry is inserted.
     void mergeFromJson(const neograph::json& j);
 

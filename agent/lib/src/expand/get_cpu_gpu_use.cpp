@@ -682,7 +682,8 @@ protected:
         for (int cardIdx = 0;; ++cardIdx) {
             auto devicePath = fmt::format("/sys/class/drm/card{}/device", cardIdx);
 
-            std::string vendorContent = co_await readFileContent(fmt::format("{}/vendor", devicePath));
+            std::string vendorContent
+                = co_await readFileContent(fmt::format("{}/vendor", devicePath));
             if (vendorContent.empty()) {
                 break;
             }

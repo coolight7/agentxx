@@ -25,8 +25,8 @@ class ModalContainer : public ftxui::ComponentBase {
 public:
 
     static std::shared_ptr<ModalContainer> Create(ftxui::Component main) {
-        auto self    = std::make_shared<ModalContainer>();
-        self->main_  = std::move(main);
+        auto self   = std::make_shared<ModalContainer>();
+        self->main_ = std::move(main);
         self->Add(self->main_);
         return self;
     }

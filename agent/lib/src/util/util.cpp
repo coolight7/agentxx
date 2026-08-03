@@ -82,7 +82,9 @@ std::string agentxx::util::getSystemName() {
         if (RtlGetVersion && RtlGetVersion((PRTL_OSVERSIONINFOW)&info) == 0) {
             systemName_ = fmt::format(
                 "Windows {}.{} (build {})",
-                info.dwMajorVersion, info.dwMinorVersion, info.dwBuildNumber
+                info.dwMajorVersion,
+                info.dwMinorVersion,
+                info.dwBuildNumber
             );
             return *systemName_;
         }

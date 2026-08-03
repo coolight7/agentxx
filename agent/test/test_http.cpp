@@ -1105,7 +1105,7 @@ asio::awaitable<void> test_http_server_expect_100_continue() {
     std::thread serverThread([&server]() {
         server.start();
     });
-    uint16_t port = 0;
+    uint16_t    port = 0;
     for (int i = 0; i < 100; ++i) {
         port = server.port();
         if (port != 0) {
@@ -1157,7 +1157,7 @@ asio::awaitable<void> test_http_server_expect_100_continue() {
         co_await asio::async_write(sock, asio::buffer("hello-100ca"), asio::use_awaitable);
 
         // 读取最终响应 (Connection: close, 读到 EOF)
-        std::string finalResp = interim;
+        std::string              finalResp = interim;
         neograph_asio_error_code ec;
         for (;;) {
             size_t n = co_await sock.async_read_some(
@@ -1204,7 +1204,7 @@ asio::awaitable<void> test_http_server_absolute_form_target() {
     std::thread serverThread([&server]() {
         server.start();
     });
-    uint16_t port = 0;
+    uint16_t    port = 0;
     for (int i = 0; i < 100; ++i) {
         port = server.port();
         if (port != 0) {
@@ -1237,8 +1237,8 @@ asio::awaitable<void> test_http_server_absolute_form_target() {
         );
         co_await asio::async_write(sock, asio::buffer(req), asio::use_awaitable);
 
-        std::string resp;
-        char        buf[2048];
+        std::string              resp;
+        char                     buf[2048];
         neograph_asio_error_code ec;
         for (;;) {
             size_t n = co_await sock.async_read_some(
@@ -1279,7 +1279,7 @@ public:
     std::thread              thread;
     uint16_t                 boundPort = 0;
     Mode                     mode      = Mode::Complete;
-    std::vector<std::string> events;  // 原始 SSE 事件块 (含结尾 "\n\n")
+    std::vector<std::string> events; // 原始 SSE 事件块 (含结尾 "\n\n")
     std::atomic<bool>        stopped{false};
 
 private:
@@ -1388,7 +1388,7 @@ asio::awaitable<void> test_http_client_sse_interruption() {
         srv.events = {"data: one\n\n", "data: two\n\n"};
         srv.start();
 
-        std::string url      = "http://127.0.0.1:" + std::to_string(srv.boundPort) + "/sse";
+        std::string url = "http://127.0.0.1:" + std::to_string(srv.boundPort) + "/sse";
         std::string received;
         bool        threw = false;
         try {
@@ -1423,7 +1423,7 @@ asio::awaitable<void> test_http_client_sse_interruption() {
         srv.events = {"data: partial\n\n"};
         srv.start();
 
-        std::string url      = "http://127.0.0.1:" + std::to_string(srv.boundPort) + "/sse";
+        std::string url = "http://127.0.0.1:" + std::to_string(srv.boundPort) + "/sse";
         std::string received;
         bool        threw = false;
         try {
@@ -1458,7 +1458,7 @@ asio::awaitable<void> test_http_client_sse_interruption() {
         srv.events = {"data: first\n\n"};
         srv.start();
 
-        std::string url      = "http://127.0.0.1:" + std::to_string(srv.boundPort) + "/sse";
+        std::string url = "http://127.0.0.1:" + std::to_string(srv.boundPort) + "/sse";
         std::string received;
         bool        threw = false;
         auto        start = std::chrono::steady_clock::now();
