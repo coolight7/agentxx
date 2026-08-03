@@ -160,38 +160,41 @@ asio::awaitable<std::expected<void, std::string>> WsClient::sendBinary(std::stri
     if (!impl_ || impl_->closed_) {
         co_return std::unexpected{std::string{"connection closed"}};
     }
-    try {
-        size_t offset = 0;
-        if (impl_->isSsl) {
-            impl_->wss->binary(true);
-            do {
-                size_t len = std::min(WsClientConfig::kTimeoutChunkBytes, payload.size() - offset);
-                bool   fin = (offset + len >= payload.size());
-                auto   n   = co_await impl_->wss->async_write_some(
-                    fin,
-                    asio::buffer(payload.data() + offset, len),
-                    asio::cancel_after(impl_->config.sendTimeout, asio::use_awaitable)
-                );
-                offset += n;
-            } while (offset < payload.size());
-        } else {
-            impl_->ws->binary(true);
-            do {
-                size_t len = std::min(WsClientConfig::kTimeoutChunkBytes, payload.size() - offset);
-                bool   fin = (offset + len >= payload.size());
-                auto   n   = co_await impl_->ws->async_write_some(
-                    fin,
-                    asio::buffer(payload.data() + offset, len),
-                    asio::cancel_after(impl_->config.sendTimeout, asio::use_awaitable)
-                );
-                offset += n;
-            } while (offset < payload.size());
+    co_return co_await agentxx::util::catchErrorAsync<std::expected<void, std::string>>(
+        [&]() -> asio::awaitable<std::expected<void, std::string>> {
+            size_t offset = 0;
+            if (impl_->isSsl) {
+                impl_->wss->binary(true);
+                do {
+                    size_t len = std::min(WsClientConfig::kTimeoutChunkBytes, payload.size() - offset);
+                    bool   fin = (offset + len >= payload.size());
+                    auto   n   = co_await impl_->wss->async_write_some(
+                        fin,
+                        asio::buffer(payload.data() + offset, len),
+                        asio::cancel_after(impl_->config.sendTimeout, asio::use_awaitable)
+                    );
+                    offset += n;
+                } while (offset < payload.size());
+            } else {
+                impl_->ws->binary(true);
+                do {
+                    size_t len = std::min(WsClientConfig::kTimeoutChunkBytes, payload.size() - offset);
+                    bool   fin = (offset + len >= payload.size());
+                    auto   n   = co_await impl_->ws->async_write_some(
+                        fin,
+                        asio::buffer(payload.data() + offset, len),
+                        asio::cancel_after(impl_->config.sendTimeout, asio::use_awaitable)
+                    );
+                    offset += n;
+                } while (offset < payload.size());
+            }
+            co_return std::expected<void, std::string>{};
+        },
+        [&](std::string errinfo) -> asio::awaitable<std::expected<void, std::string>> {
+            impl_->closed_ = true;
+            co_return std::unexpected{std::move(errinfo)};
         }
-        co_return std::expected<void, std::string>{};
-    } catch (const boost::system::system_error& e) {
-        impl_->closed_ = true;
-        co_return std::unexpected{std::string{e.what()}};
-    }
+    );
 }
 
 asio::awaitable<std::expected<void, std::string>> WsClient::sendPing(std::string_view payload) {
@@ -202,23 +205,26 @@ asio::awaitable<std::expected<void, std::string>> WsClient::sendPing(std::string
     if (payload.size() > 125) {
         co_return std::unexpected{std::string{"ping payload too large (max 125 bytes)"}};
     }
-    try {
-        if (impl_->isSsl) {
-            co_await impl_->wss->async_ping(
-                boost::beast::websocket::ping_data{payload},
-                asio::cancel_after(impl_->config.sendTimeout, asio::use_awaitable)
-            );
-        } else {
-            co_await impl_->ws->async_ping(
-                boost::beast::websocket::ping_data{payload},
-                asio::cancel_after(impl_->config.sendTimeout, asio::use_awaitable)
-            );
+    co_return co_await agentxx::util::catchErrorAsync<std::expected<void, std::string>>(
+        [&]() -> asio::awaitable<std::expected<void, std::string>> {
+            if (impl_->isSsl) {
+                co_await impl_->wss->async_ping(
+                    boost::beast::websocket::ping_data{payload},
+                    asio::cancel_after(impl_->config.sendTimeout, asio::use_awaitable)
+                );
+            } else {
+                co_await impl_->ws->async_ping(
+                    boost::beast::websocket::ping_data{payload},
+                    asio::cancel_after(impl_->config.sendTimeout, asio::use_awaitable)
+                );
+            }
+            co_return std::expected<void, std::string>{};
+        },
+        [&](std::string errinfo) -> asio::awaitable<std::expected<void, std::string>> {
+            impl_->closed_ = true;
+            co_return std::unexpected{std::move(errinfo)};
         }
-        co_return std::expected<void, std::string>{};
-    } catch (const boost::system::system_error& e) {
-        impl_->closed_ = true;
-        co_return std::unexpected{std::string{e.what()}};
-    }
+    );
 }
 
 asio::awaitable<std::expected<void, std::string>>
@@ -227,80 +233,96 @@ asio::awaitable<std::expected<void, std::string>>
         co_return std::expected<void, std::string>{};
     }
     impl_->closed_ = true;
-    try {
-        boost::beast::websocket::close_reason cr;
-        cr.code   = code;
-        cr.reason = std::string(reason);
-        if (impl_->isSsl) {
-            co_await impl_->wss->async_close(
-                cr,
-                asio::cancel_after(std::chrono::seconds{5}, asio::use_awaitable)
-            );
-        } else {
-            co_await impl_->ws->async_close(
-                cr,
-                asio::cancel_after(std::chrono::seconds{5}, asio::use_awaitable)
-            );
+    co_return co_await agentxx::util::catchErrorAsync<std::expected<void, std::string>>(
+        [&]() -> asio::awaitable<std::expected<void, std::string>> {
+            boost::beast::websocket::close_reason cr;
+            cr.code   = code;
+            cr.reason = std::string(reason);
+            if (impl_->isSsl) {
+                co_await impl_->wss->async_close(
+                    cr,
+                    asio::cancel_after(std::chrono::seconds{5}, asio::use_awaitable)
+                );
+            } else {
+                co_await impl_->ws->async_close(
+                    cr,
+                    asio::cancel_after(std::chrono::seconds{5}, asio::use_awaitable)
+                );
+            }
+            co_return std::expected<void, std::string>{};
+        },
+        // close 握手失败 (如对端已断开) 不影响关闭语义, 仍视为成功
+        [](std::string) -> asio::awaitable<std::expected<void, std::string>> {
+            co_return std::expected<void, std::string>{};
         }
-        co_return std::expected<void, std::string>{};
-    } catch (const boost::system::system_error&) {
-        co_return std::expected<void, std::string>{};
-    }
+    );
 }
 
 asio::awaitable<std::expected<WsMessage, std::string>> WsClient::recv() {
     if (!impl_ || impl_->closed_) {
         co_return std::unexpected{std::string{"connection closed"}};
     }
-    try {
-        std::string payload;
-        std::string chunk;
-        chunk.resize(4096);
+    co_return co_await agentxx::util::catchErrorAsync<std::expected<WsMessage, std::string>>(
+        [&]() -> asio::awaitable<std::expected<WsMessage, std::string>> {
+            try {
+                std::string payload;
+                std::string chunk;
+                chunk.resize(4096);
 
-        if (impl_->isSsl) {
-            do {
-                auto n = co_await impl_->wss->async_read_some(
-                    asio::buffer(chunk, chunk.size()),
-                    asio::cancel_after(impl_->config.recvTimeout, asio::use_awaitable)
-                );
-                payload.append(chunk.data(), n);
-            } while (!impl_->wss->is_message_done());
-        } else {
-            do {
-                auto n = co_await impl_->ws->async_read_some(
-                    asio::buffer(chunk, chunk.size()),
-                    asio::cancel_after(impl_->config.recvTimeout, asio::use_awaitable)
-                );
-                payload.append(chunk.data(), n);
-            } while (!impl_->ws->is_message_done());
-        }
+                if (impl_->isSsl) {
+                    do {
+                        auto n = co_await impl_->wss->async_read_some(
+                            asio::buffer(chunk, chunk.size()),
+                            asio::cancel_after(impl_->config.recvTimeout, asio::use_awaitable)
+                        );
+                        payload.append(chunk.data(), n);
+                    } while (!impl_->wss->is_message_done());
+                } else {
+                    do {
+                        auto n = co_await impl_->ws->async_read_some(
+                            asio::buffer(chunk, chunk.size()),
+                            asio::cancel_after(impl_->config.recvTimeout, asio::use_awaitable)
+                        );
+                        payload.append(chunk.data(), n);
+                    } while (!impl_->ws->is_message_done());
+                }
 
-        WsMessage msg;
-        bool      isText = impl_->isSsl ? impl_->wss->got_text() : impl_->ws->got_text();
-        msg.type         = isText ? WsMessage::Type::Text : WsMessage::Type::Binary;
-        msg.payload      = std::move(payload);
-        co_return std::expected<WsMessage, std::string>{std::move(msg)};
-    } catch (const boost::system::system_error& e) {
-        if (e.code() == boost::beast::websocket::error::closed) {
+                WsMessage msg;
+                bool      isText = impl_->isSsl ? impl_->wss->got_text() : impl_->ws->got_text();
+                msg.type         = isText ? WsMessage::Type::Text : WsMessage::Type::Binary;
+                msg.payload      = std::move(payload);
+                co_return std::expected<WsMessage, std::string>{std::move(msg)};
+            } catch (const boost::system::system_error& e) {
+                // close 帧是协议正常结束而非错误: 转为 Close 消息返回。
+                // 需要错误码以读取对端 close code/reason, 因此在此特判,
+                // 其余错误交由 catchErrorAsync 统一处理
+                if (e.code() == boost::beast::websocket::error::closed) {
+                    impl_->closed_ = true;
+                    // 透传对端 close 帧携带的 code/reason (reason() 在 close 处理后可用)
+                    auto cr = impl_->isSsl ? impl_->wss->reason() : impl_->ws->reason();
+                    WsMessage msg;
+                    msg.type        = WsMessage::Type::Close;
+                    msg.closeCode   = (cr.code != 0) ? cr.code : 1000;
+                    msg.closeReason = std::string(cr.reason);
+                    co_return std::expected<WsMessage, std::string>{std::move(msg)};
+                }
+                // 接收超时 (空闲超过 recvTimeout): 以专用消息报错。
+                // Beast websocket stream 在 async_read_some 被 cancel 后内部状态机
+                // (帧缓冲/解压上下文) 不可恢复, 后续操作必然失败, 必须标记 closed,
+                // 调用方应重建连接
+                if (e.code() == asio::error::operation_aborted) {
+                    impl_->closed_ = true;
+                    co_return std::unexpected{std::string{"recv timeout"}};
+                }
+                throw;
+            }
+        },
+        [&](std::string errinfo) -> asio::awaitable<std::expected<WsMessage, std::string>> {
+            // 其它传输错误: 连接状态同样不可恢复, 标记 closed
             impl_->closed_ = true;
-            // 透传对端 close 帧携带的 code/reason (reason() 在 close 处理后可用)
-            auto cr = impl_->isSsl ? impl_->wss->reason() : impl_->ws->reason();
-            WsMessage msg;
-            msg.type        = WsMessage::Type::Close;
-            msg.closeCode   = (cr.code != 0) ? cr.code : 1000;
-            msg.closeReason = std::string(cr.reason);
-            co_return std::expected<WsMessage, std::string>{std::move(msg)};
+            co_return std::unexpected{std::move(errinfo)};
         }
-        if (e.code() == asio::error::operation_aborted) {
-            // 接收超时 (空闲超过 recvTimeout): Beast websocket stream 在 async_read_some
-            // 被 cancel 后内部状态机 (帧缓冲/解压上下文) 不可恢复, 后续操作必然失败,
-            // 因此必须标记 closed。调用方应重建连接。
-            impl_->closed_ = true;
-            co_return std::unexpected{std::string{"recv timeout"}};
-        }
-        impl_->closed_ = true;
-        co_return std::unexpected{std::string{e.what()}};
-    }
+    );
 }
 
 asio::awaitable<std::expected<std::unique_ptr<WsClient>, std::string>> wsConnect(
@@ -401,7 +423,11 @@ asio::awaitable<std::expected<std::unique_ptr<WsClient>, std::string>> wsConnect
         }
     };
 
-    try {
+    // 连接各阶段错误 (DNS/TCP/TLS/WS 握手超时、系统错误等) 统一经
+    // catchErrorToUnexpectedAsync 转为错误字符串 (含 UTF-8 转换);
+    // CancelledException/NodeInterrupt 保持抛出, 不阻断 BaseAgent 取消处理
+    co_return co_await agentxx::util::catchErrorToUnexpectedAsync<std::unique_ptr<WsClient>>(
+        [&]() -> asio::awaitable<std::expected<std::unique_ptr<WsClient>, std::string>> {
         tcp::resolver resolver(executor);
         auto          endpoints = co_await resolver.async_resolve(
             host,
@@ -466,22 +492,12 @@ asio::awaitable<std::expected<std::unique_ptr<WsClient>, std::string>> wsConnect
                 asio::cancel_after(remainingMs(), asio::use_awaitable)
             );
         }
-    } catch (const boost::system::system_error& e) {
-        if (e.code() == asio::error::operation_aborted) {
-            co_return std::unexpected<std::string>{"ws connect timeout"};
-        }
-        auto errInfo = std::string{e.what()};
-        agentxx::util::autoConvertToUtf8(errInfo);
-        co_return std::unexpected<std::string>{errInfo};
-    } catch (const std::exception& e) {
-        auto errInfo = std::string{e.what()};
-        agentxx::util::autoConvertToUtf8(errInfo);
-        co_return std::unexpected<std::string>{errInfo};
-    }
 
-    co_return std::expected<std::unique_ptr<WsClient>, std::string>{
-        std::unique_ptr<WsClient>(new WsClient(std::move(impl)))
-    };
+        co_return std::expected<std::unique_ptr<WsClient>, std::string>{
+            std::unique_ptr<WsClient>(new WsClient(std::move(impl)))
+        };
+        }
+    );
 }
 
 std::unique_ptr<WsClient> wrapAcceptedWs(

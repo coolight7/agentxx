@@ -32,7 +32,8 @@ T catchError(
         agentxx::util::autoConvertToUtf8(errInfo);
         auto result = onRethrow(errInfo);
         if (result.has_value()) {
-            return result.value();
+            // std::move: 兼容 move-only 返回类型 (如 expected<unique_ptr>)
+            return std::move(result.value());
         }
         errmsg = fmt::format("Cancelled: {}", errInfo);
     } catch (const neograph::graph::NodeInterrupt& e) {
@@ -43,7 +44,7 @@ T catchError(
         agentxx::util::autoConvertToUtf8(errInfo);
         auto result = onRethrow(errInfo);
         if (result.has_value()) {
-            return result.value();
+            return std::move(result.value());
         }
         errmsg = fmt::format("NodeInterrupt: {}", errInfo);
     } catch (const boost::system::system_error& e) {
@@ -86,7 +87,8 @@ asio::awaitable<T> catchErrorAsync(
         agentxx::util::autoConvertToUtf8(errInfo);
         auto result = onRethrow(errInfo);
         if (result.has_value()) {
-            co_return result.value();
+            // std::move: 兼容 move-only 返回类型 (如 expected<unique_ptr>)
+            co_return std::move(result.value());
         }
         errmsg = fmt::format("Cancelled: {}", errInfo);
     } catch (const neograph::graph::NodeInterrupt& e) {
@@ -97,7 +99,7 @@ asio::awaitable<T> catchErrorAsync(
         agentxx::util::autoConvertToUtf8(errInfo);
         auto result = onRethrow(errInfo);
         if (result.has_value()) {
-            co_return result.value();
+            co_return std::move(result.value());
         }
         errmsg = fmt::format("NodeInterrupt: {}", errInfo);
     } catch (const boost::system::system_error& e) {

@@ -1,4 +1,5 @@
 #include "agentxx/protocol/openai_provider.h"
+#include "agentxx/util/exception.h"
 
 namespace agentxx {
 namespace server {
@@ -174,36 +175,41 @@ std::string OpenAIProvider::mapStopReason(std::string_view finishReason) {
 }
 
 std::string OpenAIProvider::extractApiError(const std::string& body) {
-    try {
-        auto j = neograph::json::parse(body);
-        if (j.is_object() && j.contains("error")) {
-            auto e = j["error"];
-            if (e.is_object()) {
-                std::string msg = e.value("message", std::string{});
-                if (e.contains("code") && !e["code"].is_null()) {
-                    std::string code
-                        = e["code"].is_string() ? e["code"].get<std::string>() : e["code"].dump();
-                    if (!code.empty()) {
-                        msg += " (code: " + code + ")";
+    // 解析/提取失败 (非法 JSON、字段类型异常) 时回退返回原 body
+    return agentxx::util::catchError<std::string>(
+        [&body]() -> std::string {
+            auto j = neograph::json::parse(body);
+            if (j.is_object() && j.contains("error")) {
+                auto e = j["error"];
+                if (e.is_object()) {
+                    std::string msg = e.value("message", std::string{});
+                    if (e.contains("code") && !e["code"].is_null()) {
+                        std::string code = e["code"].is_string() ? e["code"].get<std::string>()
+                                                                 : e["code"].dump();
+                        if (!code.empty()) {
+                            msg += " (code: " + code + ")";
+                        }
                     }
+                    if (!msg.empty()) {
+                        return msg;
+                    }
+                } else if (e.is_string()) {
+                    return e.get<std::string>();
                 }
+            }
+            // 部分网关使用顶层 {"message": "..."} (无 error 包裹)
+            if (j.is_object() && j.contains("message") && j["message"].is_string()) {
+                auto msg = j["message"].get<std::string>();
                 if (!msg.empty()) {
                     return msg;
                 }
-            } else if (e.is_string()) {
-                return e.get<std::string>();
             }
+            return body;
+        },
+        [&body](std::string) {
+            return body;
         }
-        // 部分网关使用顶层 {"message": "..."} (无 error 包裹)
-        if (j.is_object() && j.contains("message") && j["message"].is_string()) {
-            auto msg = j["message"].get<std::string>();
-            if (!msg.empty()) {
-                return msg;
-            }
-        }
-    } catch (...) {
-    }
-    return body;
+    );
 }
 
 void OpenAIProvider::fillMissingToolCallIds(neograph::ChatCompletion& completion) {
@@ -436,15 +442,17 @@ asio::awaitable<neograph::ChatCompletion>
     }
 
     // 网关可能在 200 响应中返回 HTML 错误页/截断的 JSON, 解析失败需给出可读错误
-    neograph::json respJson;
-    try {
-        respJson = neograph::json::parse(r.body);
-    } catch (const std::exception&) {
-        throw std::runtime_error(
-            "API error (HTTP " + std::to_string(r.status) + "): invalid JSON response: "
-            + r.body.substr(0, 512)
-        );
-    }
+    auto respJson = agentxx::util::catchError<neograph::json>(
+        [&r]() -> neograph::json {
+            return neograph::json::parse(r.body);
+        },
+        [&r](std::string errInfo) -> neograph::json {
+            throw std::runtime_error(
+                "API error (HTTP " + std::to_string(r.status) + "): invalid JSON response ("
+                + errInfo + "): " + r.body.substr(0, 512)
+            );
+        }
+    );
 
     // 校验响应形状: 缺失 choices 时给出可读错误, 而不是让 .at() 抛出晦涩的 json 异常
     if (!respJson.is_object() || !respJson.contains("choices") || !respJson["choices"].is_array()
@@ -547,15 +555,17 @@ asio::awaitable<neograph::ChatCompletion>
         );
     }
 
-    neograph::json respJson;
-    try {
-        respJson = neograph::json::parse(r.body);
-    } catch (const std::exception&) {
-        throw std::runtime_error(
-            "API error (HTTP " + std::to_string(r.status) + "): invalid JSON response: "
-            + r.body.substr(0, 512)
-        );
-    }
+    auto respJson = agentxx::util::catchError<neograph::json>(
+        [&r]() -> neograph::json {
+            return neograph::json::parse(r.body);
+        },
+        [&r](std::string errInfo) -> neograph::json {
+            throw std::runtime_error(
+                "API error (HTTP " + std::to_string(r.status) + "): invalid JSON response ("
+                + errInfo + "): " + r.body.substr(0, 512)
+            );
+        }
+    );
 
     // Responses API 错误可能以 200 + status="failed"/顶层 error 对象的形式返回
     if (respJson.is_object()) {
@@ -933,12 +943,15 @@ bool OpenAIProvider::processSseLine(
     }
 
     // 畸形 data 行 (部分代理/网关会注入非 JSON 内容) 应跳过而不是中断整个流
-    neograph::json j;
-    try {
-        j = neograph::json::parse(payload);
-    } catch (...) {
-        return false;
-    }
+    // (解析失败返回 null json, 后续 contains() 检查自然跳过)
+    auto j = agentxx::util::catchError<neograph::json>(
+        [&payload] {
+            return neograph::json::parse(payload);
+        },
+        [](std::string) {
+            return neograph::json{};
+        }
+    );
 
     if (j.contains("usage") && j["usage"].is_object()) {
         auto u                             = j["usage"];
@@ -1124,12 +1137,16 @@ bool OpenAIProvider::processResponsesSseLine(
         return true;
     }
 
-    neograph::json j;
-    try {
-        j = neograph::json::parse(payload);
-    } catch (...) {
-        return false;
-    }
+    // 畸形 data 行应跳过而不是中断整个流
+    // (解析失败返回 null json, 后续 contains()/jsonStrField 检查自然跳过)
+    auto j = agentxx::util::catchError<neograph::json>(
+        [&payload] {
+            return neograph::json::parse(payload);
+        },
+        [](std::string) {
+            return neograph::json{};
+        }
+    );
 
     // usage: response.completed / response.usage 事件携带 (input/output/total tokens)
     if (j.contains("usage") && j["usage"].is_object()) {
@@ -1288,11 +1305,14 @@ void OpenAIProvider::extractToolCalls(
                 // 模型只输出了函数名: 按空参数对象处理, 避免下游 json::parse 抛错
                 tc.arguments = "{}";
             } else {
-                neograph::json j;
-                try {
-                    j = neograph::json::parse(body);
-                } catch (...) {
-                }
+                auto j = agentxx::util::catchError<neograph::json>(
+                    [&body] {
+                        return neograph::json::parse(body);
+                    },
+                    [](std::string) {
+                        return neograph::json{};
+                    }
+                );
                 if (j.is_object()) {
                     tc.arguments = j.dump();
                 } else if (j.is_string()) {
@@ -1315,11 +1335,14 @@ void OpenAIProvider::extractToolCalls(
         if (trimmed.empty()) {
             return false;
         }
-        neograph::json j;
-        try {
-            j = neograph::json::parse(trimmed);
-        } catch (...) {
-        }
+        auto j = agentxx::util::catchError<neograph::json>(
+            [&trimmed] {
+                return neograph::json::parse(trimmed);
+            },
+            [](std::string) {
+                return neograph::json{};
+            }
+        );
         if (!j.is_object()) {
             return false;
         }

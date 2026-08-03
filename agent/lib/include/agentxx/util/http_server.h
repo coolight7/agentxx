@@ -1,5 +1,6 @@
 #pragma once
 
+#include "agentxx/util/exception.h"
 #include "agentxx/util/log.h"
 #include "agentxx/util/router.h"
 #include "agentxx/util/string_util.h"
@@ -398,31 +399,40 @@ private:
             if (methodIdx == 0) { // GET
                 auto sseIt = sseRoutes_.find(path);
                 if (sseIt != sseRoutes_.end()) {
-                    try {
-                        auto writer = std::make_shared<SseWriterImpl<Stream>>(
-                            stream,
-                            config_.sseWriteTimeout
-                        );
-                        co_await sseIt->second(req, writer);
+                    // handler 异常统一经 catchErrorAsync 转为 500 (错误消息含 UTF-8
+                    // 转换); CancelledException/NodeInterrupt 保持抛出以终止本连接
+                    auto sseOk = co_await agentxx::util::catchErrorAsync<bool>(
+                        [&]() -> asio::awaitable<bool> {
+                            auto writer = std::make_shared<SseWriterImpl<Stream>>(
+                                stream,
+                                config_.sseWriteTimeout
+                            );
+                            co_await sseIt->second(req, writer);
+                            co_return true;
+                        },
+                        [&](std::string errInfo) -> asio::awaitable<bool> {
+                            XX_LOGE(
+                                "[server] SSE handler error [{} {}]: {}",
+                                req.method_string(),
+                                req.target(),
+                                errInfo
+                            );
+                            fillError(
+                                resp,
+                                req.version(),
+                                http::status::internal_server_error,
+                                "Internal Server Error"
+                            );
+                            co_return false;
+                        }
+                    );
+                    if (sseOk) {
                         handled = true;
                         // SSE streaming handled, skip normal response write
                         // The connection is kept alive by the SseWriter
                         // But we still need to let serve() know not to continue
                         // We'll set a flag and break out
                         break;
-                    } catch (const std::exception& e) {
-                        XX_LOGE(
-                            "[server] SSE handler error [{} {}]: {}",
-                            req.method_string(),
-                            req.target(),
-                            e.what()
-                        );
-                        fillError(
-                            resp,
-                            req.version(),
-                            http::status::internal_server_error,
-                            "Internal Server Error"
-                        );
                     }
                 }
             }
@@ -432,62 +442,71 @@ private:
                 auto upgradeIt = req.find(http::field::upgrade);
                 if (upgradeIt != req.end()
                     && boost::beast::iequals(upgradeIt->value(), "websocket")) {
-                    try {
-                        if constexpr (std::is_same_v<Stream, boost::beast::tcp_stream>) {
-                            auto wsIt = wsRoutes_.find(path);
-                            if (wsIt != wsRoutes_.end()) {
-                                streamMoved = true;
-                                boost::beast::websocket::stream<boost::beast::tcp_stream> ws(
-                                    std::move(stream)
-                                );
-                                ws.set_option(
-                                    boost::beast::websocket::stream_base::timeout::suggested(
-                                        boost::beast::role_type::server
-                                    )
-                                );
-                                co_await ws.async_accept(
-                                    req,
-                                    asio::cancel_after(
-                                        std::chrono::seconds{10},
-                                        asio::use_awaitable
-                                    )
-                                );
-                                co_await wsIt->second(ws);
-                                handled = true;
-                                break;
+                    // WS 升级/处理异常统一经 catchErrorAsync 转换;
+                    // CancelledException/NodeInterrupt 保持抛出
+                    auto wsOk = co_await agentxx::util::catchErrorAsync<bool>(
+                        [&]() -> asio::awaitable<bool> {
+                            if constexpr (std::is_same_v<Stream, boost::beast::tcp_stream>) {
+                                auto wsIt = wsRoutes_.find(path);
+                                if (wsIt != wsRoutes_.end()) {
+                                    streamMoved = true;
+                                    boost::beast::websocket::stream<boost::beast::tcp_stream> ws(
+                                        std::move(stream)
+                                    );
+                                    ws.set_option(
+                                        boost::beast::websocket::stream_base::timeout::suggested(
+                                            boost::beast::role_type::server
+                                        )
+                                    );
+                                    co_await ws.async_accept(
+                                        req,
+                                        asio::cancel_after(
+                                            std::chrono::seconds{10},
+                                            asio::use_awaitable
+                                        )
+                                    );
+                                    co_await wsIt->second(ws);
+                                    co_return true;
+                                }
+                            } else {
+                                auto wsIt = wsSslRoutes_.find(path);
+                                if (wsIt != wsSslRoutes_.end()) {
+                                    streamMoved = true;
+                                    boost::beast::websocket::stream<
+                                        boost::beast::ssl_stream<boost::beast::tcp_stream>>
+                                        ws(std::move(stream));
+                                    ws.set_option(
+                                        boost::beast::websocket::stream_base::timeout::suggested(
+                                            boost::beast::role_type::server
+                                        )
+                                    );
+                                    co_await ws.async_accept(
+                                        req,
+                                        asio::cancel_after(
+                                            std::chrono::seconds{10},
+                                            asio::use_awaitable
+                                        )
+                                    );
+                                    co_await wsIt->second(ws);
+                                    co_return true;
+                                }
                             }
-                        } else {
-                            auto wsIt = wsSslRoutes_.find(path);
-                            if (wsIt != wsSslRoutes_.end()) {
-                                streamMoved = true;
-                                boost::beast::websocket::stream<
-                                    boost::beast::ssl_stream<boost::beast::tcp_stream>>
-                                    ws(std::move(stream));
-                                ws.set_option(
-                                    boost::beast::websocket::stream_base::timeout::suggested(
-                                        boost::beast::role_type::server
-                                    )
-                                );
-                                co_await ws.async_accept(
-                                    req,
-                                    asio::cancel_after(
-                                        std::chrono::seconds{10},
-                                        asio::use_awaitable
-                                    )
-                                );
-                                co_await wsIt->second(ws);
-                                handled = true;
-                                break;
-                            }
+                            co_return false;
+                        },
+                        [&](std::string errInfo) -> asio::awaitable<bool> {
+                            XX_LOGE("[server] WS upgrade error [{}]: {}", req.target(), errInfo);
+                            fillError(
+                                resp,
+                                req.version(),
+                                http::status::internal_server_error,
+                                "WebSocket Error"
+                            );
+                            co_return false;
                         }
-                    } catch (const std::exception& e) {
-                        XX_LOGE("[server] WS upgrade error [{}]: {}", req.target(), e.what());
-                        fillError(
-                            resp,
-                            req.version(),
-                            http::status::internal_server_error,
-                            "WebSocket Error"
-                        );
+                    );
+                    if (wsOk) {
+                        handled = true;
+                        break;
                     }
                 }
             }
@@ -500,23 +519,29 @@ private:
                     handler = router_->get(path, 0, matchedPath);
                 }
                 if (handler && *handler) {
-                    try {
-                        co_await (*handler)(req, resp, matchedPath);
-                        handled = true;
-                    } catch (const std::exception& e) {
-                        XX_LOGE(
-                            "[server] Handler error [{} {}]: {}",
-                            req.method_string(),
-                            req.target(),
-                            e.what()
-                        );
-                        fillError(
-                            resp,
-                            req.version(),
-                            http::status::internal_server_error,
-                            "Internal Server Error"
-                        );
-                    }
+                    // handler 异常统一经 catchErrorAsync 转为 500;
+                    // CancelledException/NodeInterrupt 保持抛出
+                    handled = co_await agentxx::util::catchErrorAsync<bool>(
+                        [&]() -> asio::awaitable<bool> {
+                            co_await (*handler)(req, resp, matchedPath);
+                            co_return true;
+                        },
+                        [&](std::string errInfo) -> asio::awaitable<bool> {
+                            XX_LOGE(
+                                "[server] Handler error [{} {}]: {}",
+                                req.method_string(),
+                                req.target(),
+                                errInfo
+                            );
+                            fillError(
+                                resp,
+                                req.version(),
+                                http::status::internal_server_error,
+                                "Internal Server Error"
+                            );
+                            co_return false;
+                        }
+                    );
                 }
             }
 
