@@ -1,4 +1,5 @@
 #include "agentxx/util/http_server.h"
+#include <array>
 
 namespace agentxx {
 namespace util {
@@ -28,8 +29,29 @@ int httpMethodIndex(boost::beast::http::verb v) noexcept {
     }
 }
 
+std::string_view httpMethodName(int methodIdx) noexcept {
+    static constexpr std::array<std::string_view, 9> names{
+        "GET", "HEAD", "POST", "PUT", "DELETE", "CONNECT", "OPTIONS", "TRACE", "PATCH"
+    };
+    if (methodIdx < 0 || methodIdx >= static_cast<int>(names.size())) {
+        return "UNKNOWN";
+    }
+    return names[static_cast<size_t>(methodIdx)];
+}
+
 std::string_view requestPath(std::string_view target) noexcept {
-    auto q = target.find('?');
+    // 兼容 absolute-form 请求 (代理风格, RFC 7230 §5.3.2):
+    // "GET http://host:port/path?q=1 HTTP/1.1" → "/path"
+    if (target.starts_with("http://") || target.starts_with("https://")) {
+        auto schemeEnd = target.find("://");
+        auto pathStart = target.find('/', schemeEnd + 3);
+        if (pathStart == std::string_view::npos) {
+            return "/";
+        }
+        target = target.substr(pathStart);
+    }
+    // 去除 query string; 容忍非法携带的 fragment (请求目标中不应出现 '#', 但防御性处理)
+    auto q = target.find_first_of("?#");
     return q == std::string_view::npos ? target : target.substr(0, q);
 }
 
@@ -46,6 +68,30 @@ std::string formatHttpDate(std::time_t t) noexcept {
 #endif
     return buf;
 }
+
+namespace {
+
+/// 解析监听地址: 优先按 IP 字面量解析; 主机名 (如 "localhost") 走 DNS 解析取首个结果,
+/// 避免 make_address 直接抛异常导致服务无法启动
+asio::ip::address resolveBindAddress(const std::string& address) {
+    neograph_asio_error_code ec;
+    auto                     addr = asio::ip::make_address(address, ec);
+    if (!ec) {
+        return addr;
+    }
+    asio::io_context    ctx;
+    asio::ip::tcp::resolver resolver(ctx);
+    neograph_asio_error_code resolveEc;
+    auto                     results = resolver.resolve(address, "0", resolveEc);
+    if (resolveEc || results.empty()) {
+        throw std::runtime_error{
+            fmt::format("[server] invalid bind address: {} ({})", address, resolveEc.message())
+        };
+    }
+    return results.begin()->endpoint().address();
+}
+
+} // namespace
 
 HttpServer::HttpServer(Config config) :
     config_(std::move(config)) {
@@ -94,7 +140,7 @@ void HttpServer::start() {
     auto& mainCtx = workers_[0]->ioCtx;
 
     // Acceptor — runs on the first worker's io_context
-    auto const    address = asio::ip::make_address(config_.address);
+    auto const    address = resolveBindAddress(config_.address);
     tcp::endpoint endpoint(address, config_.port);
     acceptor_ = std::make_unique<tcp::acceptor>(mainCtx);
     acceptor_->open(endpoint.protocol());
@@ -185,7 +231,7 @@ void HttpServer::startAsync(asio::any_io_executor executor) {
 
     using tcp = asio::ip::tcp;
 
-    auto const    address = asio::ip::make_address(config_.address);
+    auto const    address = resolveBindAddress(config_.address);
     tcp::endpoint endpoint(address, config_.port);
     acceptor_ = std::make_unique<tcp::acceptor>(executor);
     acceptor_->open(endpoint.protocol());
@@ -273,9 +319,22 @@ asio::awaitable<void> HttpServer::acceptLoop() {
         size_t idx          = nextWorker_++ % workers_.size();
         auto&  targetWorker = *workers_[idx];
 
-        auto        protocol = acceptor_->local_endpoint().protocol();
+        // 用 ec 重载: stop() 与本处存在竞态, acceptor 可能已被关闭,
+        // 抛异常版本会使异常逃逸 detached 协程导致 terminate
+        neograph_asio_error_code epEc;
+        auto                     localEp = acceptor_->local_endpoint(epEc);
+        if (epEc) {
+            activeConnections_.fetch_sub(1, std::memory_order_relaxed);
+            neograph_asio_error_code closeEc;
+            socket.shutdown(tcp::socket::shutdown_both, closeEc);
+            socket.close(closeEc);
+            if (stopped_) {
+                co_return;
+            }
+            continue;
+        }
         tcp::socket workerSocket(targetWorker.ioCtx);
-        workerSocket.assign(protocol, socket.release());
+        workerSocket.assign(localEp.protocol(), socket.release());
 
         if (sslCtx_) {
             auto sslStream = std::make_shared<boost::beast::ssl_stream<boost::beast::tcp_stream>>(

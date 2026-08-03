@@ -35,6 +35,9 @@ namespace util {
 /// HTTP method index for the router (0-8 maps to standard methods)
 int httpMethodIndex(boost::beast::http::verb v) noexcept;
 
+/// HTTP method name by router index (0-8); returns "UNKNOWN" for invalid index
+std::string_view httpMethodName(int methodIdx) noexcept;
+
 /// Strip query string from a request target, returning just the path portion
 std::string_view requestPath(std::string_view target) noexcept;
 
@@ -299,6 +302,8 @@ private:
         std::string               readErrorMsg;
         http::status              readErrorStatus = http::status::bad_request;
         size_t                    requestCount    = 0; // 连接级请求计数 (防永久占用)
+        // WebSocket 升级后 stream 已被移入 ws stream, 收尾 shutdown 必须跳过
+        bool streamMoved = false;
 
         do {
             // 连接级请求数限制: 防止恶意客户端通过 keep-alive 永久占用连接资源
@@ -315,6 +320,27 @@ private:
                 http::request_parser<http::string_body> parser;
                 parser.header_limit(config_.maxHeaderSize);
                 parser.body_limit(config_.maxRequestBody);
+                // 先只读头部: 携带 Expect: 100-continue 的客户端 (curl/Go net/http 等)
+                // 会等待服务端回复 100 Continue 后才发送 body, 若直接整体读取会阻塞到
+                // 客户端超时回退 (甚至永久挂起)
+                co_await http::async_read_header(
+                    stream,
+                    buffer,
+                    parser,
+                    asio::cancel_after(config_.requestTimeout, asio::use_awaitable)
+                );
+                auto expectIt = parser.get().find(http::field::expect);
+                if (expectIt != parser.get().end()
+                    && boost::beast::iequals(expectIt->value(), "100-continue")) {
+                    http::response<http::empty_body> continueResp;
+                    continueResp.version(parser.get().version());
+                    continueResp.result(http::status::continue_);
+                    co_await http::async_write(
+                        stream,
+                        continueResp,
+                        asio::cancel_after(std::chrono::seconds{5}, asio::use_awaitable)
+                    );
+                }
                 co_await http::async_read(
                     stream,
                     buffer,
@@ -410,6 +436,7 @@ private:
                         if constexpr (std::is_same_v<Stream, boost::beast::tcp_stream>) {
                             auto wsIt = wsRoutes_.find(path);
                             if (wsIt != wsRoutes_.end()) {
+                                streamMoved = true;
                                 boost::beast::websocket::stream<boost::beast::tcp_stream> ws(
                                     std::move(stream)
                                 );
@@ -432,6 +459,7 @@ private:
                         } else {
                             auto wsIt = wsSslRoutes_.find(path);
                             if (wsIt != wsSslRoutes_.end()) {
+                                streamMoved = true;
                                 boost::beast::websocket::stream<
                                     boost::beast::ssl_stream<boost::beast::tcp_stream>>
                                     ws(std::move(stream));
@@ -466,6 +494,11 @@ private:
 
             if (methodIdx >= 0 && !handled) {
                 auto handler = router_->get(path, methodIdx, matchedPath);
+                // HEAD 兼容: 未注册专用 HEAD handler 时回退到 GET handler
+                // (RFC 7231 §4.3.2: HEAD 与 GET 语义相同, 响应 body 在写出时剥离)
+                if (!handler && methodIdx == 1) {
+                    handler = router_->get(path, 0, matchedPath);
+                }
                 if (handler && *handler) {
                     try {
                         co_await (*handler)(req, resp, matchedPath);
@@ -489,24 +522,24 @@ private:
 
             if (!handled) {
                 std::string dummyPath;
-                bool        hasAnyRoute = false;
+                // RFC 7231 §6.5.5: 405 响应必须携带 Allow 头, 列出该资源实际支持的方法
+                std::string allowMethods;
                 for (int m = 0; m < 9; ++m) {
-                    if (m == methodIdx) {
-                        continue;
-                    }
                     if (router_->getNocache(path, m, dummyPath)) {
-                        hasAnyRoute = true;
-                        break;
+                        if (!allowMethods.empty()) {
+                            allowMethods += ", ";
+                        }
+                        allowMethods += httpMethodName(m);
                     }
                 }
-                if (hasAnyRoute) {
+                if (!allowMethods.empty()) {
                     fillError(
                         resp,
                         req.version(),
                         http::status::method_not_allowed,
                         "Method Not Allowed"
                     );
-                    resp.set(http::field::allow, "GET, HEAD, POST, PUT, DELETE, PATCH, OPTIONS");
+                    resp.set(http::field::allow, allowMethods);
                 } else {
                     fillError(resp, req.version(), http::status::not_found, "Not Found");
                 }
@@ -528,11 +561,27 @@ private:
             resp.set(http::field::connection, keepAlive ? "keep-alive" : "close");
 
             // Send response
-            co_await http::async_write(
-                stream,
-                resp,
-                asio::cancel_after(config_.requestTimeout, asio::use_awaitable)
-            );
+            if (req.method() == http::verb::head) {
+                // HEAD 响应只发送头部 (含 Content-Length), 不发送 body (RFC 7231 §4.3.2);
+                // 发送 body 会使 keep-alive 连接上的后续请求解析错位
+                http::response<http::empty_body> headResp;
+                headResp.version(resp.version());
+                headResp.result(resp.result());
+                for (auto const& f : resp) {
+                    headResp.insert(f.name_string(), f.value());
+                }
+                co_await http::async_write(
+                    stream,
+                    headResp,
+                    asio::cancel_after(config_.requestTimeout, asio::use_awaitable)
+                );
+            } else {
+                co_await http::async_write(
+                    stream,
+                    resp,
+                    asio::cancel_after(config_.requestTimeout, asio::use_awaitable)
+                );
+            }
 
             // Per-request access log (compiled out in release via XX_LOGI)
             if (config_.accessLogEnabled) {
@@ -548,11 +597,14 @@ private:
         } while (keepAlive && !stopped_);
 
         // Graceful close: shutdown send side, ignore errors
-        ec = {};
-        boost::beast::get_lowest_layer(stream).socket().shutdown(
-            asio::ip::tcp::socket::shutdown_send,
-            ec
-        );
+        // (WebSocket 升级后 stream 已被移走, 由 ws stream 负责关闭)
+        if (!streamMoved) {
+            ec = {};
+            boost::beast::get_lowest_layer(stream).socket().shutdown(
+                asio::ip::tcp::socket::shutdown_send,
+                ec
+            );
+        }
     }
 
     // -----------------------------------------------------------------------

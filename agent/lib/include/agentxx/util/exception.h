@@ -24,6 +24,7 @@ T catchError(
     try {
         return func();
     } catch (const neograph::graph::CancelledException& e) {
+        // 保留抛出，避免影响 BaseAgent 的取消、中断处理
         if (nullptr == onRethrow) {
             throw;
         }

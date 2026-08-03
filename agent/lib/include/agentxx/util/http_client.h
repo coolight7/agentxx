@@ -145,6 +145,11 @@ public:
         boost::beast::flat_buffer                buffer;
         http::response_parser<http::string_body> parser;
         parser.body_limit(config.maxResponseBody);
+        // HEAD 响应按 RFC 7231 §4.3.2 只返回头部、不携带 body (但 Content-Length 保留),
+        // 解析器不知道请求方法, 必须显式 skip, 否则会一直等待永远不会到达的 body 直到超时
+        if (req.method() == http::verb::head) {
+            parser.skip(true);
+        }
         // 连接关闭但响应未解析完整时, async_read_some 会抛出 eof 错误 (由调用方捕获),
         // 不会返回截断的 body
         while (!parser.is_done()) {

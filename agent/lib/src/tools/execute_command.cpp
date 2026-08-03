@@ -152,10 +152,10 @@ asio::awaitable<std::string> ExecuteLinuxCommandTool::execute_async(const neogra
         );
         // assert(!ec || (ec == asio::error::eof));
         if (timeout > 0) {
-            using namespace asio::experimental::awaitable_operators;
             bool isTimeout = false;
             co_await agentxx::util::asyncWithTimeout<void>(
                 [&]() -> asio::awaitable<void> {
+                    using namespace asio::experimental::awaitable_operators;
                     co_await (
                         std::move(readStdOutFuture) && std::move(readStdErrFuture)
                         && proc.async_wait(asio::use_awaitable)
@@ -320,10 +320,10 @@ asio::awaitable<std::string>
         );
         // assert(!ec || (ec == asio::error::eof));
         if (timeout > 0) {
-            using namespace asio::experimental::awaitable_operators;
             bool isTimeout = false;
             co_await agentxx::util::asyncWithTimeout<void>(
                 [&]() -> asio::awaitable<void> {
+                    using namespace asio::experimental::awaitable_operators;
                     co_await (
                         std::move(readStdOutFuture) && std::move(readStdErrFuture)
                         && proc.async_wait(asio::use_awaitable)
