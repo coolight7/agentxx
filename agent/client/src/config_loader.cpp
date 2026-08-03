@@ -216,6 +216,8 @@ YamlAppConfig loadYamlConfig(
                 dotEnvVars,
                 overrideEnvVars
             );
+            mc.apiPath
+                = resolveEnvVars(node["api_path"].as<std::string>(""), dotEnvVars, overrideEnvVars);
             if (node["send_thinking"]) {
                 mc.sendThinking = resolveEnvVars(
                                       (node["send_thinking"]).as<std::string>("false"),
@@ -223,6 +225,19 @@ YamlAppConfig loadYamlConfig(
                                       overrideEnvVars
                                   )
                                   == "true";
+            }
+            if (node["extra_headers"] && node["extra_headers"].IsMap()) {
+                for (const auto& kv : node["extra_headers"]) {
+                    auto k = kv.first.as<std::string>("");
+                    if (k.empty()) {
+                        continue;
+                    }
+                    mc.extraHeaders[k] = resolveEnvVars(
+                        kv.second.as<std::string>(""),
+                        dotEnvVars,
+                        overrideEnvVars
+                    );
+                }
             }
             if (node["connect_timeout"]) {
                 mc.connectTimeoutSeconds = std::stoi(resolveEnvVars(
@@ -259,9 +274,9 @@ YamlAppConfig loadYamlConfig(
                       )
                       == "true";
             }
-            if (node["model_support_max_token"]) {
-                mc.modelSupportMaxToken = static_cast<size_t>(std::stoull(resolveEnvVars(
-                    node["model_support_max_token"].as<std::string>("0"),
+            if (node["model_context_max_token"]) {
+                mc.modelContenxtMaxToken = static_cast<size_t>(std::stoull(resolveEnvVars(
+                    node["model_context_max_token"].as<std::string>("0"),
                     dotEnvVars,
                     overrideEnvVars
                 )));

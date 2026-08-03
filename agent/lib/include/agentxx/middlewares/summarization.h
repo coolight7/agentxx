@@ -48,7 +48,7 @@ protected:
 public:
 
     /// 模型支持的最大 token 默认值 (256k)
-    /// - 当模型配置未指定 [agentxx::agent::ModelConfig::modelSupportMaxToken] 时使用
+    /// - 当模型配置未指定 [agentxx::agent::ModelConfig::modelContenxtMaxToken] 时使用
     static constexpr size_t defaultModelSupportMaxToken = 256 * 1024;
 
 protected:

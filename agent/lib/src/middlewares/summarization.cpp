@@ -262,15 +262,15 @@ asio::awaitable<void>
     const auto& thread_id = in.ctx.thread_id;
 
     // 从会话的模型配置提取模型支持的最大 token, 模型配置未指定时使用默认值
-    const size_t modelSupportMaxToken = [&]() {
+    const size_t modelContenxtMaxToken = [&]() {
         if (agentCtxPtr->modelRegistry) {
             std::string modelName;
             if (auto session = agentCtxPtr->sessions->get(thread_id)) {
                 modelName = session->getModelName();
             }
             auto mc = agentCtxPtr->modelRegistry->getModelConfig(modelName);
-            if (mc.modelSupportMaxToken > 0) {
-                return mc.modelSupportMaxToken;
+            if (mc.modelContenxtMaxToken > 0) {
+                return mc.modelContenxtMaxToken;
             }
         }
         return modelSupportMaxTokenDefault;
@@ -280,12 +280,12 @@ asio::awaitable<void>
     if (auto session = agentCtxPtr->sessions->get(thread_id)) {
         if (session->contextStats) {
             session->contextStats->contextTokens.store(tokenUsage);
-            session->contextStats->maxContextTokens.store(modelSupportMaxToken);
+            session->contextStats->maxContextTokens.store(modelContenxtMaxToken);
         }
     }
 
     neograph::json newMsgsJson;
-    if (tokenUsage >= modelSupportMaxToken * 0.65) {
+    if (tokenUsage >= modelContenxtMaxToken * 0.65) {
         doSummarizeToolcall(messages);
         {
             for (auto& msg : messages) {
@@ -295,7 +295,7 @@ asio::awaitable<void>
         neograph::to_json(newMsgsJson, messages);
     }
 
-    if (tokenUsage >= modelSupportMaxToken * 0.9) {
+    if (tokenUsage >= modelContenxtMaxToken * 0.9) {
         const size_t systemCount = (!messages.empty() && messages[0].role == "system") ? 1 : 0;
         // TODO: 如果最近消息+system 已经超过，则无法压缩
         if (messages.size() > keepRecentMessageCount + systemCount) {
@@ -390,7 +390,7 @@ asio::awaitable<void>
                 apiTokenUsage,
                 countTokenUsage,
                 tokenUsage,
-                modelSupportMaxToken,
+                modelContenxtMaxToken,
                 countTokens(appendSystemPromptList, in.state.get_messages())
             );
         }
@@ -409,7 +409,7 @@ asio::awaitable<void>
                 apiTokenUsage,
                 countTokenUsage,
                 tokenUsage,
-                modelSupportMaxToken
+                modelContenxtMaxToken
             );
         }
     }

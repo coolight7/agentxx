@@ -61,9 +61,8 @@ std::pair<std::string, neograph::json> AnthropicProvider::convertMessages(
 
     // 是否携带从 Anthropic 响应中捕获的带 signature 的 thinking 块
     auto hasThinkingBlocks = [](const neograph::ChatMessage& msg) {
-        return msg.extra.contains(kThinkingBlocksKey)
-            && msg.extra[kThinkingBlocksKey].is_array()
-            && !msg.extra[kThinkingBlocksKey].empty();
+        return msg.extra.contains(kThinkingBlocksKey) && msg.extra[kThinkingBlocksKey].is_array()
+               && !msg.extra[kThinkingBlocksKey].empty();
     };
     // 追加 thinking 相关块: 优先使用响应中捕获的原始块 (含 signature, Anthropic 要求回传
     // thinking 时携带原始 signature); 无捕获时降级使用 reasoning_content (跨 provider/旧历史)
@@ -158,19 +157,19 @@ std::pair<std::string, neograph::json> AnthropicProvider::convertMessages(
     // 注: neograph::json 为值语义 (back()/迭代返回深拷贝), 用 pending 暂存待合并消息
     auto normalizeContent = [](neograph::json m) -> neograph::json {
         if (!m["content"].is_array()) {
-            std::string text = m["content"].is_string() ? m["content"].get<std::string>()
-                                                        : m["content"].dump();
+            std::string text
+                = m["content"].is_string() ? m["content"].get<std::string>() : m["content"].dump();
             m["content"] = neograph::json::array();
             if (!text.empty()) {
                 m["content"].push_back({
                     {"type", "text"},
-                    {"text", text }
+                    {"text", text  }
                 });
             }
         }
         return m;
     };
-    neograph::json merged = neograph::json::array();
+    neograph::json merged     = neograph::json::array();
     bool           hasPending = false;
     neograph::json pending;
     auto           flushPending = [&]() {
@@ -262,8 +261,8 @@ AnthropicProvider::AnthropicProvider(agentxx::agent::ModelConfig config) :
 neograph::json AnthropicProvider::buildBody(const neograph::CompletionParams& params) const {
     neograph::json body;
     body["model"] = params.model.empty() ? config_.modelName : params.model;
-    if (config_.modelSupportMaxToken > 0) {
-        body["max_tokens"] = config_.modelSupportMaxToken;
+    if (config_.modelContenxtMaxToken > 0) {
+        body["max_tokens"] = config_.modelContenxtMaxToken;
     }
 
     auto [system, messages] = convertMessages(params.messages, config_.sendThinking);
@@ -387,7 +386,7 @@ asio::awaitable<neograph::ChatCompletion> AnthropicProvider::doStream(
     std::map<int, std::string>        blockSignatures;
     std::string                       lineBuffer;
     // 是否收到 Anthropic SSE 结束事件 "message_stop", 用于检测流截断
-    bool                              messageStopReceived = false;
+    bool messageStopReceived = false;
 
     try {
         co_await HttpClient::requestSseAsync(

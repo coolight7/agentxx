@@ -257,10 +257,7 @@ void ModelCallWrapNode::onHandleBaseRunError(
     if (false == errorRethrow && isCurrentError) {
         auto msg = neograph::ChatMessage{
             .role    = "assistant",
-            .content = neograph::json{
-                           {"error", fmt::format("{}/run exception: {}", nodeName, exceptionStr)},
-            }
-                           .dump(),
+            .content = fmt::format("[Exception aborted]"),
             .flags   = neograph::MessageFlag::AutoInserted,
         };
         auto msgJson = neograph::json{};
@@ -460,14 +457,15 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
             };
             auto msgJson = neograph::json{};
             neograph::to_json(msgJson, msg);
+            auto appendMsgJsons = neograph::json::array({msgJson});
+            in.state.write("messages", appendMsgJsons);
             if (nullptr != in.stream_cb) {
                 (*in.stream_cb)(neograph::graph::GraphEvent{
                     neograph::graph::GraphEvent::Type::CHANNEL_WRITE,
                     nodeName,
-                    neograph::json::array({msgJson}),
+                    std::move(appendMsgJsons),
                 });
             }
-            in.state.write("messages", neograph::json::array({msgJson}));
         }
 
         if (isCancel || retry >= agentCtxPtr->agentConfig->llmMaxRetry) {

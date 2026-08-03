@@ -234,8 +234,8 @@ public:
                         });
                     }
                 } else if (deltaType == "thinking_delta") {
-                    auto thinking     = j["delta"].value("thinking", std::string{});
-                    fullThinking     += thinking;
+                    auto thinking       = j["delta"].value("thinking", std::string{});
+                    fullThinking       += thinking;
                     thinkingTexts[idx] += thinking;
                     if (on_chunk) {
                         on_chunk(neograph::ChatStreamChunk{
@@ -277,7 +277,7 @@ public:
 
 private:
 
-    static constexpr const char* kDefaultBaseUrl = "https://api.anthropic.com";
+    static constexpr std::string_view kDefaultBaseUrl{"https://api.anthropic.com"};
 
     explicit AnthropicProvider(agentxx::agent::ModelConfig config);
 
