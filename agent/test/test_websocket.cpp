@@ -1025,6 +1025,295 @@ static asio::awaitable<void> test_ws_send_after_close() {
     serverThread.join();
 }
 
+/// 对端 close 帧的 code/reason 应透传给调用方
+static asio::awaitable<void> test_ws_close_code_reason() {
+    HttpServer server({.address = "127.0.0.1", .port = 0, .ioThreads = 1});
+
+    server.enableWebSocket("/ws", [](HttpServer::WsStream& ws) -> asio::awaitable<void> {
+        boost::beast::flat_buffer buf;
+        neograph_asio_error_code  ec;
+        co_await ws.async_read(buf, asio::redirect_error(asio::use_awaitable, ec));
+        if (ec) {
+            co_return;
+        }
+        boost::beast::websocket::close_reason cr;
+        cr.code   = 4001;
+        cr.reason = "custom reason";
+        co_await ws.async_close(cr, asio::redirect_error(asio::use_awaitable, ec));
+    });
+
+    std::thread serverThread([&server]() {
+        server.start();
+    });
+    uint16_t port = 0;
+    for (int i = 0; i < 100; ++i) {
+        port = server.port();
+        if (port != 0) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    if (port == 0) {
+        g_websocket_failed++;
+        server.stop();
+        serverThread.join();
+        co_return;
+    }
+
+    std::string wsUrl = "ws://127.0.0.1:" + std::to_string(port) + "/ws";
+
+    {
+        auto result = co_await wsConnect(co_await asio::this_coro::executor, wsUrl);
+        XX_TEST_EXPECT_TRUE(result.has_value());
+        if (result.has_value()) {
+            auto& client = result.value();
+            co_await client->sendText("trigger-close");
+
+            auto rr = co_await client->recv();
+            XX_TEST_EXPECT_TRUE(rr.has_value());
+            if (rr.has_value()) {
+                XX_TEST_EXPECT_TRUE(rr.value().type == WsMessage::Type::Close);
+                XX_TEST_EXPECT_EQ(rr.value().closeCode, (uint16_t)4001);
+                XX_TEST_EXPECT_EQ(rr.value().closeReason, "custom reason");
+            }
+            XX_TEST_EXPECT_FALSE(client->isOpen());
+        }
+    }
+
+    server.stop();
+    serverThread.join();
+}
+
+/// ping payload 超过协议上限 125 字节应直接报错
+static asio::awaitable<void> test_ws_ping_too_large() {
+    HttpServer server({.address = "127.0.0.1", .port = 0, .ioThreads = 1});
+
+    server.enableWebSocket("/ws", [](HttpServer::WsStream& ws) -> asio::awaitable<void> {
+        boost::beast::flat_buffer buf;
+        neograph_asio_error_code  ec;
+        co_await ws.async_read(buf, asio::redirect_error(asio::use_awaitable, ec));
+    });
+
+    std::thread serverThread([&server]() {
+        server.start();
+    });
+    uint16_t port = 0;
+    for (int i = 0; i < 100; ++i) {
+        port = server.port();
+        if (port != 0) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    if (port == 0) {
+        g_websocket_failed++;
+        server.stop();
+        serverThread.join();
+        co_return;
+    }
+
+    std::string wsUrl = "ws://127.0.0.1:" + std::to_string(port) + "/ws";
+
+    {
+        auto result = co_await wsConnect(co_await asio::this_coro::executor, wsUrl);
+        XX_TEST_EXPECT_TRUE(result.has_value());
+        if (result.has_value()) {
+            auto& client = result.value();
+
+            // 125 字节是协议允许的最大 ping payload, 应成功
+            auto okPing = co_await client->sendPing(std::string(125, 'x'));
+            XX_TEST_EXPECT_TRUE(okPing.has_value());
+
+            // 126 字节超限, 应报错而不是发出非法帧
+            auto badPing = co_await client->sendPing(std::string(126, 'x'));
+            XX_TEST_EXPECT_FALSE(badPing.has_value());
+
+            co_await client->sendClose();
+        }
+    }
+
+    server.stop();
+    serverThread.join();
+}
+
+/// ws url 边界情况: 非法端口 / 未闭合的 IPv6 方括号
+static asio::awaitable<void> test_ws_url_edge_cases() {
+    auto executor = co_await asio::this_coro::executor;
+
+    {
+        // 端口非数字
+        auto result = co_await wsConnect(
+            executor,
+            "ws://127.0.0.1:abc/ws",
+            {},
+            WsClientConfig{.connectTimeout = std::chrono::milliseconds{500}}
+        );
+        XX_TEST_EXPECT_FALSE(result.has_value());
+    }
+    {
+        // IPv6 方括号未闭合
+        auto result = co_await wsConnect(
+            executor,
+            "ws://[::1/ws",
+            {},
+            WsClientConfig{.connectTimeout = std::chrono::milliseconds{500}}
+        );
+        XX_TEST_EXPECT_FALSE(result.has_value());
+    }
+    {
+        // 空 host
+        auto result = co_await wsConnect(
+            executor,
+            "ws://:8080/ws",
+            {},
+            WsClientConfig{.connectTimeout = std::chrono::milliseconds{500}}
+        );
+        XX_TEST_EXPECT_FALSE(result.has_value());
+    }
+}
+
+/// IPv6 字面量 URL: ws://[::1]:port/ws 解析 + 带方括号的 Host 头
+static asio::awaitable<void> test_ws_ipv6_url() {
+    // 先探测本机 IPv6 loopback 是否可用, 不可用则跳过
+    {
+        asio::io_context       probeCtx;
+        neograph_asio_error_code ec;
+        asio::ip::tcp::acceptor probe(probeCtx);
+        probe.open(asio::ip::tcp::v6(), ec);
+        if (!ec) {
+            probe.bind(asio::ip::tcp::endpoint(asio::ip::make_address_v6("::1"), 0), ec);
+        }
+        probe.close();
+        if (ec) {
+            TEST_INFO << "ws ipv6 test skipped (no IPv6 loopback)" << std::endl;
+            co_return;
+        }
+    }
+
+    HttpServer server({.address = "::1", .port = 0, .ioThreads = 1});
+
+    server.enableWebSocket("/ws", [](HttpServer::WsStream& ws) -> asio::awaitable<void> {
+        boost::beast::flat_buffer buf;
+        for (;;) {
+            buf.clear();
+            neograph_asio_error_code ec;
+            co_await ws.async_read(buf, asio::redirect_error(asio::use_awaitable, ec));
+            if (ec) {
+                co_return;
+            }
+            ws.text(ws.got_text());
+            co_await ws.async_write(buf.data(), asio::redirect_error(asio::use_awaitable, ec));
+            if (ec) {
+                co_return;
+            }
+        }
+    });
+
+    std::thread serverThread([&server]() {
+        server.start();
+    });
+    uint16_t port = 0;
+    for (int i = 0; i < 100; ++i) {
+        port = server.port();
+        if (port != 0) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    if (port == 0) {
+        g_websocket_failed++;
+        server.stop();
+        serverThread.join();
+        co_return;
+    }
+
+    std::string wsUrl = "ws://[::1]:" + std::to_string(port) + "/ws";
+
+    {
+        auto result = co_await wsConnect(co_await asio::this_coro::executor, wsUrl);
+        XX_TEST_EXPECT_TRUE(result.has_value());
+        if (result.has_value()) {
+            auto& client = result.value();
+            auto  sr     = co_await client->sendText("ipv6 echo");
+            XX_TEST_EXPECT_TRUE(sr.has_value());
+            auto rr = co_await client->recv();
+            XX_TEST_EXPECT_TRUE(rr.has_value());
+            if (rr.has_value()) {
+                XX_TEST_EXPECT_EQ(rr.value().payload, "ipv6 echo");
+            }
+            co_await client->sendClose();
+        }
+    }
+
+    server.stop();
+    serverThread.join();
+}
+
+/// 自定义握手请求头不应破坏连接 (decorator 合并 UA + 自定义头)
+static asio::awaitable<void> test_ws_custom_headers() {
+    HttpServer server({.address = "127.0.0.1", .port = 0, .ioThreads = 1});
+
+    server.enableWebSocket("/ws", [](HttpServer::WsStream& ws) -> asio::awaitable<void> {
+        boost::beast::flat_buffer buf;
+        for (;;) {
+            buf.clear();
+            neograph_asio_error_code ec;
+            co_await ws.async_read(buf, asio::redirect_error(asio::use_awaitable, ec));
+            if (ec) {
+                co_return;
+            }
+            ws.text(ws.got_text());
+            co_await ws.async_write(buf.data(), asio::redirect_error(asio::use_awaitable, ec));
+            if (ec) {
+                co_return;
+            }
+        }
+    });
+
+    std::thread serverThread([&server]() {
+        server.start();
+    });
+    uint16_t port = 0;
+    for (int i = 0; i < 100; ++i) {
+        port = server.port();
+        if (port != 0) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    if (port == 0) {
+        g_websocket_failed++;
+        server.stop();
+        serverThread.join();
+        co_return;
+    }
+
+    std::string wsUrl = "ws://127.0.0.1:" + std::to_string(port) + "/ws";
+
+    {
+        std::vector<std::pair<std::string, std::string>> headers = {
+            {"X-Auth-Token", "test-token-123"},
+            {"X-Client-Id",  "agentxx-test"  },
+        };
+        auto result = co_await wsConnect(co_await asio::this_coro::executor, wsUrl, headers);
+        XX_TEST_EXPECT_TRUE(result.has_value());
+        if (result.has_value()) {
+            auto& client = result.value();
+            auto  sr     = co_await client->sendText("with headers");
+            XX_TEST_EXPECT_TRUE(sr.has_value());
+            auto rr = co_await client->recv();
+            XX_TEST_EXPECT_TRUE(rr.has_value());
+            if (rr.has_value()) {
+                XX_TEST_EXPECT_EQ(rr.value().payload, "with headers");
+            }
+            co_await client->sendClose();
+        }
+    }
+
+    server.stop();
+    serverThread.join();
+}
+
 asio::awaitable<TestResult> run_websocket_tests() {
     std::cout << "  [ws] echo..." << std::endl;
     co_await test_ws_echo();
@@ -1076,6 +1365,21 @@ asio::awaitable<TestResult> run_websocket_tests() {
 
     std::cout << "  [ws] send after close..." << std::endl;
     co_await test_ws_send_after_close();
+
+    std::cout << "  [ws] close code/reason..." << std::endl;
+    co_await test_ws_close_code_reason();
+
+    std::cout << "  [ws] ping too large..." << std::endl;
+    co_await test_ws_ping_too_large();
+
+    std::cout << "  [ws] url edge cases..." << std::endl;
+    co_await test_ws_url_edge_cases();
+
+    std::cout << "  [ws] ipv6 url..." << std::endl;
+    co_await test_ws_ipv6_url();
+
+    std::cout << "  [ws] custom headers..." << std::endl;
+    co_await test_ws_custom_headers();
 
     co_return TestResult{g_websocket_passed, g_websocket_failed};
 }

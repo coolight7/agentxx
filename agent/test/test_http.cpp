@@ -353,6 +353,29 @@ void test_http_server_unit() {
         XX_TEST_EXPECT_EQ(requestPath("/a/b/c?x=y&z=w"), "/a/b/c");
         XX_TEST_EXPECT_EQ(requestPath(""), "");
         XX_TEST_EXPECT_EQ(requestPath("?alone"), "");
+        // absolute-form (代理风格请求目标)
+        XX_TEST_EXPECT_EQ(requestPath("http://example.com/path"), "/path");
+        XX_TEST_EXPECT_EQ(requestPath("http://example.com/path?q=1"), "/path");
+        XX_TEST_EXPECT_EQ(requestPath("https://example.com:8080/a/b"), "/a/b");
+        XX_TEST_EXPECT_EQ(requestPath("http://example.com"), "/");
+        XX_TEST_EXPECT_EQ(requestPath("http://example.com?root-query"), "/");
+        // 容忍非法携带的 fragment
+        XX_TEST_EXPECT_EQ(requestPath("/path#frag"), "/path");
+        XX_TEST_EXPECT_EQ(requestPath("/path?q=1#frag"), "/path");
+    }
+
+    {
+        XX_TEST_EXPECT_EQ(httpMethodName(0), "GET");
+        XX_TEST_EXPECT_EQ(httpMethodName(1), "HEAD");
+        XX_TEST_EXPECT_EQ(httpMethodName(2), "POST");
+        XX_TEST_EXPECT_EQ(httpMethodName(3), "PUT");
+        XX_TEST_EXPECT_EQ(httpMethodName(4), "DELETE");
+        XX_TEST_EXPECT_EQ(httpMethodName(5), "CONNECT");
+        XX_TEST_EXPECT_EQ(httpMethodName(6), "OPTIONS");
+        XX_TEST_EXPECT_EQ(httpMethodName(7), "TRACE");
+        XX_TEST_EXPECT_EQ(httpMethodName(8), "PATCH");
+        XX_TEST_EXPECT_EQ(httpMethodName(-1), "UNKNOWN");
+        XX_TEST_EXPECT_EQ(httpMethodName(9), "UNKNOWN");
     }
 
     {
@@ -401,6 +424,19 @@ void test_http_server_unit() {
         XX_TEST_EXPECT_EQ(
             HttpClient::resolveRedirectUrl("http://example.com/a/b/c", "/"),
             "http://example.com/"
+        );
+        // fragment 应被去除 (RFC 7231: Location 中的 fragment 不参与资源定位)
+        XX_TEST_EXPECT_EQ(
+            HttpClient::resolveRedirectUrl("http://example.com/a", "/b#section-2"),
+            "http://example.com/b"
+        );
+        XX_TEST_EXPECT_EQ(
+            HttpClient::resolveRedirectUrl("http://example.com/a", "http://other.com/c#frag"),
+            "http://other.com/c"
+        );
+        XX_TEST_EXPECT_EQ(
+            HttpClient::resolveRedirectUrl("http://example.com/a", "#only-fragment"),
+            "http://example.com/a"
         );
     }
 }
@@ -714,6 +750,39 @@ asio::awaitable<void> test_http_client_beast_server() {
     }
 
     {
+        // HEAD: 服务端只发头部不发 body, 客户端 parser.skip 不等待 body,
+        // 双方都符合 RFC 7231 §4.3.2, 不会挂起
+        auto resp = co_await HttpClient::headAsync(baseUrl + "/hello");
+        XX_TEST_EXPECT_HAS_VALUE(resp);
+        if (resp.has_value()) {
+            XX_TEST_EXPECT_EQ(resp.value().status, 200);
+            XX_TEST_EXPECT_EQ(resp.value().body, "");
+            // Content-Length 保留 GET 响应的 body 长度
+            XX_TEST_EXPECT_EQ(resp.value().findHeader("content-length"), "11");
+        }
+    }
+
+    {
+        // HEAD 未注册专用 handler 时回退到 GET handler (RFC 7231)
+        auto resp = co_await HttpClient::headAsync(baseUrl + "/json");
+        XX_TEST_EXPECT_HAS_VALUE(resp);
+        if (resp.has_value()) {
+            XX_TEST_EXPECT_EQ(resp.value().status, 200);
+            XX_TEST_EXPECT_EQ(resp.value().body, "");
+        }
+    }
+
+    {
+        // 空 body 的 POST 也必须携带 Content-Length: 0, 服务端可正常处理
+        auto resp = co_await HttpClient::postAsync(baseUrl + "/echo", "", "text/plain");
+        XX_TEST_EXPECT_HAS_VALUE(resp);
+        if (resp.has_value()) {
+            XX_TEST_EXPECT_EQ(resp.value().status, 200);
+            XX_TEST_EXPECT_EQ(resp.value().body, "");
+        }
+    }
+
+    {
         auto resp = co_await HttpClient::getAsync(baseUrl + "/empty");
         XX_TEST_EXPECT_HAS_VALUE(resp);
         if (resp.has_value()) {
@@ -775,6 +844,9 @@ asio::awaitable<void> test_http_client_beast_server() {
         XX_TEST_EXPECT_HAS_VALUE(resp);
         if (resp.has_value()) {
             XX_TEST_EXPECT_EQ(resp.value().status, 405);
+            // 405 必须携带 Allow 头, 且只列出该资源实际注册的方法
+            auto allow = resp.value().findHeader("allow");
+            XX_TEST_EXPECT_EQ(allow, "DELETE");
         }
     }
 
@@ -804,6 +876,8 @@ asio::awaitable<void> test_http_client_beast_server() {
         if (resp.has_value()) {
             XX_TEST_EXPECT_EQ(resp.value().status, 405);
             XX_TEST_EXPECT_FALSE(resp.value().isSuccess());
+            // /hello 注册了 GET 与 HEAD
+            XX_TEST_EXPECT_EQ(resp.value().findHeader("allow"), "GET, HEAD");
         }
     }
 
@@ -983,6 +1057,206 @@ asio::awaitable<void> test_http_client_beast_server() {
             HttpClient::RequestConfig{.readChunkTimeout = std::chrono::seconds{5}}
         );
         XX_TEST_EXPECT_HAS_VALUE(result);
+    }
+
+    {
+        // requestSseAsync: 非 2xx 响应 (404) 应抛异常并报出状态码
+        bool threw = false;
+        try {
+            co_await HttpClient::requestSseAsync(
+                "GET",
+                baseUrl + "/nonexistent",
+                "",
+                "",
+                {},
+                HttpClient::RequestConfig{.readChunkTimeout = std::chrono::seconds{5}},
+                [](std::string_view) {}
+            );
+        } catch (const std::exception& e) {
+            threw = true;
+            XX_TEST_EXPECT_TRUE(std::string(e.what()).find("404") != std::string::npos);
+        }
+        XX_TEST_EXPECT_TRUE(threw);
+    }
+
+    server.stop();
+    serverThread.join();
+}
+
+/// Expect: 100-continue 兼容: 服务端必须先回 100 Continue, 客户端才发送 body
+asio::awaitable<void> test_http_server_expect_100_continue() {
+    using Server = HttpServer;
+    Server server({.address = "127.0.0.1", .port = 0, .ioThreads = 1});
+    server.router().add(
+        "/echo",
+        2,
+        std::make_shared<Server::Handler>(
+            [](Server::Request& req, Server::Response& resp, std::string_view
+            ) -> asio::awaitable<void> {
+                resp.result(boost::beast::http::status::ok);
+                resp.set(boost::beast::http::field::content_type, "text/plain");
+                resp.body() = req.body();
+                resp.prepare_payload();
+                co_return;
+            }
+        )
+    );
+
+    std::thread serverThread([&server]() {
+        server.start();
+    });
+    uint16_t port = 0;
+    for (int i = 0; i < 100; ++i) {
+        port = server.port();
+        if (port != 0) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    if (port == 0) {
+        XX_TEST_FAILED++;
+        server.stop();
+        serverThread.join();
+        co_return;
+    }
+
+    auto executor = co_await asio::this_coro::executor;
+    try {
+        asio::ip::tcp::socket sock(executor);
+        co_await sock.async_connect(
+            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), port),
+            asio::use_awaitable
+        );
+
+        // 只发头部, 携带 Expect: 100-continue, body 等收到 100 后再发
+        std::string head = fmt::format(
+            "POST /echo HTTP/1.1\r\n"
+            "Host: 127.0.0.1:{}\r\n"
+            "Content-Type: text/plain\r\n"
+            "Content-Length: 11\r\n"
+            "Expect: 100-continue\r\n"
+            "Connection: close\r\n"
+            "\r\n",
+            port
+        );
+        co_await asio::async_write(sock, asio::buffer(head), asio::use_awaitable);
+
+        // 读取到 100 响应 (空行结尾) 为止
+        std::string interim;
+        char        buf[2048];
+        while (interim.find("\r\n\r\n") == std::string::npos) {
+            size_t n = co_await sock.async_read_some(asio::buffer(buf), asio::use_awaitable);
+            if (n == 0) {
+                break;
+            }
+            interim.append(buf, n);
+        }
+        XX_TEST_EXPECT_TRUE(interim.find("100") != std::string::npos);
+
+        // 收到 100 后再发送 body
+        co_await asio::async_write(sock, asio::buffer("hello-100ca"), asio::use_awaitable);
+
+        // 读取最终响应 (Connection: close, 读到 EOF)
+        std::string finalResp = interim;
+        neograph_asio_error_code ec;
+        for (;;) {
+            size_t n = co_await sock.async_read_some(
+                asio::buffer(buf),
+                asio::redirect_error(asio::use_awaitable, ec)
+            );
+            if (n > 0) {
+                finalResp.append(buf, n);
+            }
+            if (ec || n == 0) {
+                break;
+            }
+        }
+        XX_TEST_EXPECT_TRUE(finalResp.find("200") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(finalResp.find("hello-100ca") != std::string::npos);
+    } catch (const std::exception& e) {
+        XX_TEST_FAILED++;
+        TEST_FAIL << "expect 100-continue test failed: " << e.what() << std::endl;
+    }
+
+    server.stop();
+    serverThread.join();
+}
+
+/// absolute-form 请求目标 (代理风格): "GET http://host/path HTTP/1.1" 应正确路由
+asio::awaitable<void> test_http_server_absolute_form_target() {
+    using Server = HttpServer;
+    Server server({.address = "127.0.0.1", .port = 0, .ioThreads = 1});
+    server.router().add(
+        "/hello",
+        0,
+        std::make_shared<Server::Handler>(
+            [](Server::Request&, Server::Response& resp, std::string_view
+            ) -> asio::awaitable<void> {
+                resp.result(boost::beast::http::status::ok);
+                resp.set(boost::beast::http::field::content_type, "text/plain");
+                resp.body() = "hello world";
+                resp.prepare_payload();
+                co_return;
+            }
+        )
+    );
+
+    std::thread serverThread([&server]() {
+        server.start();
+    });
+    uint16_t port = 0;
+    for (int i = 0; i < 100; ++i) {
+        port = server.port();
+        if (port != 0) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    if (port == 0) {
+        XX_TEST_FAILED++;
+        server.stop();
+        serverThread.join();
+        co_return;
+    }
+
+    auto executor = co_await asio::this_coro::executor;
+    try {
+        asio::ip::tcp::socket sock(executor);
+        co_await sock.async_connect(
+            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), port),
+            asio::use_awaitable
+        );
+
+        std::string req = fmt::format(
+            "GET http://127.0.0.1:{}/hello?q=1 HTTP/1.1\r\n"
+            "Host: 127.0.0.1:{}\r\n"
+            "Connection: close\r\n"
+            "\r\n",
+            port,
+            port
+        );
+        co_await asio::async_write(sock, asio::buffer(req), asio::use_awaitable);
+
+        std::string resp;
+        char        buf[2048];
+        neograph_asio_error_code ec;
+        for (;;) {
+            size_t n = co_await sock.async_read_some(
+                asio::buffer(buf),
+                asio::redirect_error(asio::use_awaitable, ec)
+            );
+            if (n > 0) {
+                resp.append(buf, n);
+            }
+            if (ec || n == 0) {
+                break;
+            }
+        }
+        XX_TEST_EXPECT_TRUE(resp.find("200") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(resp.find("hello world") != std::string::npos);
+    } catch (const std::exception& e) {
+        XX_TEST_FAILED++;
+        TEST_FAIL << "absolute-form target test failed: " << e.what() << std::endl;
     }
 
     server.stop();
@@ -1224,6 +1498,8 @@ asio::awaitable<TestResult> run_http_client_tests() {
     test_http_server_unit();
     co_await test_http_client();
     co_await test_http_client_beast_server();
+    co_await test_http_server_expect_100_continue();
+    co_await test_http_server_absolute_form_target();
     co_await test_http_client_sse_interruption();
     co_return TestResult{g_http_passed, g_http_failed};
 }

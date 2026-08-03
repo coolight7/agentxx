@@ -3,10 +3,40 @@
 #include "agentxx/util/exception.h"
 #include "agentxx/util/http_client.h"
 #include <algorithm>
+#include <asio/detail/socket_option.hpp>
+#include <cctype>
 #include <openssl/ssl.h>
+
+// 仅提供 TCP_KEEPIDLE/TCP_KEEPINTVL/TCP_KEEPCNT 选项号常量, 设置经由 asio 接口完成
+#if defined(_WIN32)
+#include <mstcpip.h>
+#else
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#endif
 
 namespace agentxx {
 namespace util {
+
+namespace {
+
+/// 启用 TCP keepalive 并缩短探测间隔: WebSocket 长连接在业务空窗期极易被
+/// NAT/网关静默丢弃, keepalive 探测包可维持中间设备状态 (best-effort)
+template<typename Socket>
+void enableWsKeepalive(Socket& sock) noexcept {
+    neograph_asio_error_code ec;
+    sock.set_option(asio::socket_base::keep_alive(true), ec);
+#if defined(TCP_KEEPIDLE) && defined(TCP_KEEPINTVL) && defined(TCP_KEEPCNT)
+    asio::detail::socket_option::integer<IPPROTO_TCP, TCP_KEEPIDLE>  idle{30};
+    asio::detail::socket_option::integer<IPPROTO_TCP, TCP_KEEPINTVL> interval{10};
+    asio::detail::socket_option::integer<IPPROTO_TCP, TCP_KEEPCNT>   count{3};
+    sock.set_option(idle, ec);
+    sock.set_option(interval, ec);
+    sock.set_option(count, ec);
+#endif
+}
+
+} // namespace
 
 struct WsClient::Impl {
     asio::any_io_executor executor;
@@ -28,17 +58,14 @@ struct WsClient::Impl {
     void configureStream() {
         // 禁用 Beast 内部 idle_timeout: 由外部 cancel_after(recvTimeout/sendTimeout) 统一控制,
         // 避免 Beast suggested timeout (默认 30s) 与用户配置的 recvTimeout 冲突
+        // 注: 请求头 decorator (UA + 自定义头) 由 wsConnect 统一设置, 避免二次 set_option
+        // 覆盖导致自定义头/UA 丢失
         if (isSsl) {
             wss->set_option(boost::beast::websocket::stream_base::timeout{
                 .handshake_timeout = std::chrono::seconds{30},
                 .idle_timeout      = boost::beast::websocket::stream_base::none(),
                 .keep_alive_pings  = false,
             });
-            wss->set_option(boost::beast::websocket::stream_base::decorator(
-                [](boost::beast::websocket::request_type& req) {
-                    req.set(boost::beast::http::field::user_agent, "agentxx-ws/1.0");
-                }
-            ));
             wss->read_message_max(config.maxMessageSize);
         } else {
             ws->set_option(boost::beast::websocket::stream_base::timeout{
@@ -46,11 +73,6 @@ struct WsClient::Impl {
                 .idle_timeout      = boost::beast::websocket::stream_base::none(),
                 .keep_alive_pings  = false,
             });
-            ws->set_option(boost::beast::websocket::stream_base::decorator(
-                [](boost::beast::websocket::request_type& req) {
-                    req.set(boost::beast::http::field::user_agent, "agentxx-ws/1.0");
-                }
-            ));
             ws->read_message_max(config.maxMessageSize);
         }
     }
@@ -176,8 +198,11 @@ asio::awaitable<std::expected<void, std::string>> WsClient::sendPing(std::string
     if (!impl_ || impl_->closed_) {
         co_return std::unexpected{std::string{"connection closed"}};
     }
+    // RFC 6455 §5.5: 控制帧 payload 最大 125 字节, 超限直接报错避免协议错误
+    if (payload.size() > 125) {
+        co_return std::unexpected{std::string{"ping payload too large (max 125 bytes)"}};
+    }
     try {
-        // ping payload 协议限制最大 125 字节, 直接使用配置的 sendTimeout
         if (impl_->isSsl) {
             co_await impl_->wss->async_ping(
                 boost::beast::websocket::ping_data{payload},
@@ -258,9 +283,12 @@ asio::awaitable<std::expected<WsMessage, std::string>> WsClient::recv() {
     } catch (const boost::system::system_error& e) {
         if (e.code() == boost::beast::websocket::error::closed) {
             impl_->closed_ = true;
+            // 透传对端 close 帧携带的 code/reason (reason() 在 close 处理后可用)
+            auto cr = impl_->isSsl ? impl_->wss->reason() : impl_->ws->reason();
             WsMessage msg;
-            msg.type      = WsMessage::Type::Close;
-            msg.closeCode = 1000;
+            msg.type        = WsMessage::Type::Close;
+            msg.closeCode   = (cr.code != 0) ? cr.code : 1000;
+            msg.closeReason = std::string(cr.reason);
             co_return std::expected<WsMessage, std::string>{std::move(msg)};
         }
         if (e.code() == asio::error::operation_aborted) {
@@ -310,104 +338,132 @@ asio::awaitable<std::expected<std::unique_ptr<WsClient>, std::string>> wsConnect
         path     = urlStr.substr(pathStart);
     }
 
-    auto colon = hostPort.rfind(':');
-    if (colon != std::string::npos) {
-        host = hostPort.substr(0, colon);
-        port = hostPort.substr(colon + 1);
+    // 解析 host[:port]: IPv6 字面量带方括号 (ws://[::1]:8080/),
+    // 直接 rfind(':') 会错误切割 IPv6 地址内的冒号
+    if (hostPort.starts_with('[')) {
+        auto cb = hostPort.find(']');
+        if (cb == std::string::npos) {
+            co_return std::unexpected<std::string>{"invalid ws url: unclosed '[' in host"};
+        }
+        host = hostPort.substr(1, cb - 1);
+        if (cb + 1 < hostPort.size()) {
+            if (hostPort[cb + 1] != ':') {
+                co_return std::unexpected<std::string>{"invalid ws url: expected ':' after ']'"};
+            }
+            port = hostPort.substr(cb + 2);
+        }
     } else {
-        host = hostPort;
+        auto colon = hostPort.rfind(':');
+        if (colon != std::string::npos) {
+            host = hostPort.substr(0, colon);
+            port = hostPort.substr(colon + 1);
+        }
+    }
+    if (port.empty()) {
         port = isSsl ? "443" : "80";
     }
 
     if (host.empty()) {
         co_return std::unexpected<std::string>{"empty host in ws url"};
     }
+    // 端口必须是纯数字, 否则 resolver 会把 "host:abc" 当服务名解析, 报错不可读
+    for (char c : port) {
+        if (!std::isdigit(static_cast<unsigned char>(c))) {
+            co_return std::unexpected<std::string>{"invalid port in ws url: " + port};
+        }
+    }
 
     auto impl   = std::make_unique<WsClient::Impl>(executor, config);
     impl->isSsl = isSsl;
+
+    // connectTimeout 是 DNS + TCP + TLS + WS 握手四个阶段的总上限:
+    // 共用同一个 deadline, 避免各阶段各用满导致总耗时成倍放大
+    auto connectDeadline = std::chrono::steady_clock::now() + config.connectTimeout;
+    auto remainingMs     = [&]() -> std::chrono::milliseconds {
+        auto now = std::chrono::steady_clock::now();
+        if (now >= connectDeadline) {
+            return std::chrono::milliseconds{1};
+        }
+        return std::chrono::duration_cast<std::chrono::milliseconds>(connectDeadline - now);
+    };
+
+    // Host 头: IPv6 字面量必须带方括号, 非默认端口附加 ":port"
+    bool        defaultPort   = (isSsl && port == "443") || (!isSsl && port == "80");
+    std::string hostForHeader = (host.find(':') != std::string::npos) ? "[" + host + "]" : host;
+    std::string hostHeader    = hostForHeader + (defaultPort ? "" : ":" + port);
+
+    // UA + 自定义头统一在一个 decorator 内设置 (set_option(decorator) 是覆盖语义,
+    // 分两次设置会丢失先设置的部分)
+    auto decorateRequest = [headers](ws::request_type& req) {
+        req.set(boost::beast::http::field::user_agent, "agentxx-ws/1.0");
+        for (const auto& [k, v] : headers) {
+            req.set(k, v);
+        }
+    };
 
     try {
         tcp::resolver resolver(executor);
         auto          endpoints = co_await resolver.async_resolve(
             host,
             port,
-            asio::cancel_after(config.connectTimeout, asio::use_awaitable)
+            asio::cancel_after(remainingMs(), asio::use_awaitable)
         );
 
         if (isSsl) {
             auto& sslCtx    = HttpClient::sharedSslCtx(config.sslVerify);
             auto  sslStream = beast::ssl_stream<beast::tcp_stream>(executor, sslCtx);
+            // SNI 与证书验证相互独立: 即使关闭验证也必须发送 SNI,
+            // 否则 CDN/网关按 SNI 路由时握手直接失败; IP 字面量 (含 ':') 不支持 SNI
+            if (host.find(':') == std::string::npos) {
+                ::SSL_set_tlsext_host_name(sslStream.native_handle(), host.c_str());
+            }
             if (!config.sslVerify) {
                 ::SSL_set_verify(sslStream.native_handle(), SSL_VERIFY_NONE, nullptr);
-            } else {
-                ::SSL_set_tlsext_host_name(sslStream.native_handle(), host.c_str());
             }
 
             co_await beast::get_lowest_layer(sslStream).async_connect(
                 endpoints,
-                asio::cancel_after(config.connectTimeout, asio::use_awaitable)
+                asio::cancel_after(remainingMs(), asio::use_awaitable)
             );
 
             neograph_asio_error_code tcpEc;
             beast::get_lowest_layer(sslStream).socket().set_option(tcp::no_delay(true), tcpEc);
+            enableWsKeepalive(beast::get_lowest_layer(sslStream).socket());
 
             co_await sslStream.async_handshake(
                 asio::ssl::stream_base::client,
-                asio::cancel_after(config.connectTimeout, asio::use_awaitable)
+                asio::cancel_after(remainingMs(), asio::use_awaitable)
             );
 
             impl->wss = std::make_unique<WsClient::Impl::WssStream>(std::move(sslStream));
             impl->configureStream();
-
-            std::string hostHeader = host;
-            if ((isSsl && port != "443") || (!isSsl && port != "80")) {
-                hostHeader += ":" + port;
-            }
-
-            impl->wss->set_option(
-                beast::websocket::stream_base::decorator([&headers](ws::request_type& req) {
-                    for (const auto& [k, v] : headers) {
-                        req.set(k, v);
-                    }
-                })
-            );
+            impl->wss->set_option(beast::websocket::stream_base::decorator(decorateRequest));
 
             co_await impl->wss->async_handshake(
                 hostHeader,
                 path,
-                asio::cancel_after(config.connectTimeout, asio::use_awaitable)
+                asio::cancel_after(remainingMs(), asio::use_awaitable)
             );
         } else {
             beast::tcp_stream tcpStream(executor);
 
             co_await tcpStream.async_connect(
                 endpoints,
-                asio::cancel_after(config.connectTimeout, asio::use_awaitable)
+                asio::cancel_after(remainingMs(), asio::use_awaitable)
             );
 
             neograph_asio_error_code tcpEc;
             tcpStream.socket().set_option(tcp::no_delay(true), tcpEc);
+            enableWsKeepalive(tcpStream.socket());
 
             impl->ws = std::make_unique<WsClient::Impl::WsStream>(std::move(tcpStream));
             impl->configureStream();
-
-            std::string hostHeader = host;
-            if (port != "80") {
-                hostHeader += ":" + port;
-            }
-
-            impl->ws->set_option(
-                beast::websocket::stream_base::decorator([&headers](ws::request_type& req) {
-                    for (const auto& [k, v] : headers) {
-                        req.set(k, v);
-                    }
-                })
-            );
+            impl->ws->set_option(beast::websocket::stream_base::decorator(decorateRequest));
 
             co_await impl->ws->async_handshake(
                 hostHeader,
                 path,
-                asio::cancel_after(config.connectTimeout, asio::use_awaitable)
+                asio::cancel_after(remainingMs(), asio::use_awaitable)
             );
         }
     } catch (const boost::system::system_error& e) {
@@ -443,6 +499,7 @@ std::unique_ptr<WsClient> wrapAcceptedWs(
         .keep_alive_pings  = false,
     });
     impl->ws->read_message_max(impl->config.maxMessageSize);
+    enableWsKeepalive(boost::beast::get_lowest_layer(*impl->ws).socket());
     return std::unique_ptr<WsClient>(new WsClient(std::move(impl)));
 }
 
@@ -461,6 +518,7 @@ std::unique_ptr<WsClient> wrapAcceptedWss(
         .keep_alive_pings  = false,
     });
     impl->wss->read_message_max(impl->config.maxMessageSize);
+    enableWsKeepalive(boost::beast::get_lowest_layer(*impl->wss).socket());
     return std::unique_ptr<WsClient>(new WsClient(std::move(impl)));
 }
 

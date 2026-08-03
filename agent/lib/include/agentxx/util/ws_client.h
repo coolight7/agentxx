@@ -34,6 +34,8 @@ struct WsMessage {
     Type        type = Type::Text;
     std::string payload;
     uint16_t    closeCode = 0;
+    /// 对端 close 帧携带的原因 (仅 Type::Close 时有意义, 可能为空)
+    std::string closeReason;
 };
 
 struct WsClientConfig {

@@ -122,11 +122,11 @@ std::optional<std::string> HttpResponse::bodyText() const {
 
 std::pair<std::string, std::string> HttpClient::splitUrl(std::string_view url) {
     auto scheme_end = url.find("://");
-    if (scheme_end == std::string::npos) {
+    if (scheme_end == std::string_view::npos) {
         return std::pair<std::string, std::string>{url, "/"};
     }
     auto path_start = url.find('/', scheme_end + 3);
-    if (path_start == std::string::npos) {
+    if (path_start == std::string_view::npos) {
         return std::pair<std::string, std::string>{url, "/"};
     }
     return std::pair<std::string, std::string>{url.substr(0, path_start), url.substr(path_start)};
@@ -160,7 +160,7 @@ bool HttpClient::isValidUrl(std::string_view url) noexcept {
         return false;
     }
     auto scheme_end = url.find("://");
-    if (scheme_end == std::string::npos) {
+    if (scheme_end == std::string_view::npos) {
         return true;
     }
     auto scheme = url.substr(0, scheme_end);
@@ -183,6 +183,14 @@ std::string HttpClient::resolveRedirectUrl(
     std::string_view originalUrl,
     std::string_view location
 ) noexcept {
+    // RFC 7231: Location 中的 fragment (#...) 不属于资源定位, 跟随重定向前应去除
+    if (auto hash = location.find('#'); hash != std::string_view::npos) {
+        location = location.substr(0, hash);
+    }
+    // 空 Location (或仅含 fragment): 指向原资源自身
+    if (location.empty()) {
+        return std::string(originalUrl);
+    }
     if (location.find("://") != std::string_view::npos) {
         return std::string(location);
     }
@@ -373,6 +381,15 @@ asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::requestAsy
                         req.set(http::field::content_type, currentContentType);
                     }
                     req.body() = currentBody;
+                    req.prepare_payload();
+                } else if (
+                    currentMethod == "POST" || currentMethod == "PUT" || currentMethod == "PATCH"
+                ) {
+                    // 空 body 也必须携带 Content-Length: 0, 否则部分服务器/代理会一直等待
+                    // body 数据或拒绝请求 (RFC 7230 §3.3.2)
+                    if (!currentContentType.empty()) {
+                        req.set(http::field::content_type, currentContentType);
+                    }
                     req.prepare_payload();
                 }
 
@@ -572,7 +589,9 @@ asio::awaitable<void> HttpClient::requestSseAsync(
             throw neograph::RateLimitError("API error (HTTP 429): " + resp.body(), retryAfter);
         }
 
-        if (parser.get().result_int() != 200) {
+        // 部分网关对 SSE 返回 201/202 等其它 2xx 状态码也视为成功流,
+        // 因此仅拒绝非 2xx (429 已在上面单独处理)
+        if (parser.get().result_int() / 100 != 2) {
             co_await http::async_read(
                 stream,
                 buf,
@@ -580,8 +599,14 @@ asio::awaitable<void> HttpClient::requestSseAsync(
                 asio::cancel_after(config.readChunkTimeout, asio::use_awaitable)
             );
             auto resp = parser.release();
+            // 错误 body 可能很大 (如 HTML 错误页), 截断避免异常消息爆炸
+            constexpr size_t kMaxErrorBody = 2048;
+            auto             errBody       = resp.body();
+            if (errBody.size() > kMaxErrorBody) {
+                errBody.resize(kMaxErrorBody);
+            }
             throw std::runtime_error(
-                "API error (HTTP " + std::to_string(resp.result_int()) + "): " + resp.body()
+                "API error (HTTP " + std::to_string(resp.result_int()) + "): " + errBody
             );
         }
 
