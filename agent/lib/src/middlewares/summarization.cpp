@@ -141,7 +141,7 @@ void SummarizationMiddlewareHandle::offloadLongContentToTempStore(
         return;
     }
     auto id                  = ctx->addShareStoreItemValue(thread_id, msg.content);
-    msg.content              = fmt::format("[Content offloaded to `share_store`, id={}]", id);
+    msg.content              = fmt::format("[Content offloaded to tool/`share_store`, id={}]", id);
     msg.flags               |= neograph::MessageFlag::ContentOffloaded;
     msg.extra["offload_id"]  = id;
 }
