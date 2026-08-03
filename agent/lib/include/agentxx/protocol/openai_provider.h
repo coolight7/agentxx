@@ -30,8 +30,12 @@ namespace server {
 ///   - 发送 params.max_tokens (支持 max_completion_tokens 字段切换)
 ///   - finish_reason → stop_reason 归一化
 ///   - tool_calls 缺失 id 时自动回填 call_N (流式/非流式一致)
-///   - 非 200 响应自动解析 error.message / error.code 提升报错可读性
+///   - 非 2xx 响应自动解析 error.message / error.code 提升报错可读性
 ///   - extraHeaders 支持自定义 HTTP 请求头
+///   - 接受任意 2xx 状态码 (部分网关返回 201/202)
+///   - 畸形响应容错: 非法 JSON / 缺失 choices / 非标准字段类型
+///     (数字 tool_call id、字符串 usage、字符串 index 等) 不抛异常, 给出可读错误
+///   - Responses API: status="failed" / response.incomplete / 顶层 error 对象处理
 class OpenAIProvider : public neograph::Provider {
 public:
 
