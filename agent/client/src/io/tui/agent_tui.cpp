@@ -91,11 +91,13 @@ void AgentTUI::start() {
         // 构建组件共享上下文
         ctx_.state      = &sharedState_;
         ctx_.frameState = sharedState_.readSnapshot();
-        ctx_.postRedraw = [this] { postRedraw(); };
-        ctx_.theme      = &theme_;
-        ctx_.session    = session_;
-        ctx_.threadId   = threadId_;
-        ctx_.remoteUrl  = remoteUrl_;
+        ctx_.postRedraw = [this] {
+            postRedraw();
+        };
+        ctx_.theme     = &theme_;
+        ctx_.session   = session_;
+        ctx_.threadId  = threadId_;
+        ctx_.remoteUrl = remoteUrl_;
 
         // 创建组件
         messageList_ = std::make_shared<MessageListComponent>(ctx_);
@@ -105,7 +107,7 @@ void AgentTUI::start() {
         InputComponent::Config inputCfg;
         inputCfg.onSend = [this](std::string text) {
             std::lock_guard<std::mutex> lock(sharedState_.mutex());
-            auto& st = sharedState_.mutableState();
+            auto&                       st = sharedState_.mutableState();
             if (awaitingInterruptInput_.load(std::memory_order_acquire)) {
                 pushCurrentTokenLocked(st);
                 st.messages.push_back(
@@ -113,7 +115,9 @@ void AgentTUI::start() {
                 );
                 messageList_->setStickToBottom(true);
                 inputChannel_->async_send(
-                    neograph_asio_error_code{}, std::move(text), [](neograph_asio_error_code) {}
+                    neograph_asio_error_code{},
+                    std::move(text),
+                    [](neograph_asio_error_code) {}
                 );
             } else if (st.isStreaming) {
                 st.pendingInputs.push_back(TUIPendingInput{std::move(text), false});
@@ -137,9 +141,14 @@ void AgentTUI::start() {
         // 屏幕足够宽时默认显示信息侧边栏
         if (Terminal::Size().dimx >= kInfoSidebarMinWidth && !sidebar_->hasTab(kInfoTabId)) {
             sidebar_->addTab(
-                kInfoTabId, "Info",
-                [this]() { return renderInfoSidebar(); },
-                [this]() { return renderInfoSidebarFooter(); }
+                kInfoTabId,
+                "Info",
+                [this]() {
+                    return renderInfoSidebar();
+                },
+                [this]() {
+                    return renderInfoSidebarFooter();
+                }
             );
         }
 
@@ -149,23 +158,25 @@ void AgentTUI::start() {
                 sendToPeer(agentxx::agent::WireGetContext{threadId_});
             } else if (session_) {
                 std::lock_guard<std::mutex> lock(sharedState_.mutex());
-                auto& st = sharedState_.mutableState();
-                st.contextMessages    = session_->llmMessages;
-                st.showContextOverlay = true;
+                auto&                       st = sharedState_.mutableState();
+                st.contextMessages             = session_->llmMessages;
+                st.showContextOverlay          = true;
             }
             if (modal_ && !modal_->hasModal()) {
                 auto overlay = std::make_shared<ContextOverlay>(ctx_);
-                overlay->onClose([this] { modal_->popModal(); });
+                overlay->onClose([this] {
+                    modal_->popModal();
+                });
                 modal_->pushModal(overlay);
             }
             return true;
         });
 
         // 主布局: Stacked 让子组件接收事件, Renderer 组合渲染
-        auto stacked = Container::Stacked({messageList_, sidebar_, inputBar_});
+        auto stacked      = Container::Stacked({messageList_, sidebar_, inputBar_});
         auto mainRenderer = Renderer(stacked, [&]() -> Element {
             ctx_.frameState = sharedState_.readSnapshot();
-            const auto& st = *ctx_.frameState;
+            const auto& st  = *ctx_.frameState;
 
             Element pendingBar = text("");
             if (!st.pendingInputs.empty()) {
@@ -228,26 +239,10 @@ void AgentTUI::start() {
                     if (!ctx_.frameState->pendingInputs.empty()
                         && pendingCounterBox_.Contain(mouse.x, mouse.y)) {
                         auto overlay = std::make_shared<PendingInputsOverlay>(ctx_);
-                        overlay->onClose([this] { modal_->popModal(); });
+                        overlay->onClose([this] {
+                            modal_->popModal();
+                        });
                         modal_->pushModal(overlay);
-                        postRedraw();
-                        return true;
-                    }
-                    // 侧边栏 "上下文" 按钮点击
-                    if (contextButtonBox_.Contain(mouse.x, mouse.y)) {
-                        if (transport_) {
-                            sendToPeer(agentxx::agent::WireGetContext{threadId_});
-                        } else if (session_) {
-                            std::lock_guard<std::mutex> lock(sharedState_.mutex());
-                            auto& st = sharedState_.mutableState();
-                            st.contextMessages    = session_->llmMessages;
-                            st.showContextOverlay = true;
-                        }
-                        if (modal_ && !modal_->hasModal()) {
-                            auto overlay = std::make_shared<ContextOverlay>(ctx_);
-                            overlay->onClose([this] { modal_->popModal(); });
-                            modal_->pushModal(overlay);
-                        }
                         postRedraw();
                         return true;
                     }
@@ -256,7 +251,7 @@ void AgentTUI::start() {
             }
             if (event == Event::Escape) {
                 std::lock_guard<std::mutex> lock(sharedState_.mutex());
-                auto snap = sharedState_.snapshot();
+                auto                        snap = sharedState_.snapshot();
                 if (snap->isStreaming) {
                     auto& st = sharedState_.mutableState();
                     cancelCurrentRunLocked(st);
@@ -312,7 +307,7 @@ void AgentTUI::openModelSelector() {
         sendToPeer(agentxx::agent::WireGetModel{threadId_});
     }
     auto overlay = std::make_shared<ModelSelectorOverlay>(ctx_);
-    auto snap = sharedState_.readSnapshot();
+    auto snap    = sharedState_.readSnapshot();
     for (size_t i = 0; i < snap->modelNames.size(); ++i) {
         if (snap->modelNames[i] == snap->cachedModelName) {
             overlay->setInitialIndex(static_cast<int>(i));
@@ -322,7 +317,9 @@ void AgentTUI::openModelSelector() {
     overlay->onConfirm([this](std::string model) {
         requestSelectModel(threadId_, model);
     });
-    overlay->onClose([this] { modal_->popModal(); });
+    overlay->onClose([this] {
+        modal_->popModal();
+    });
     modal_->pushModal(overlay);
     postRedraw();
 }
@@ -332,7 +329,9 @@ void AgentTUI::openSettings() {
     overlay->onClose([this] {
         modal_->popModal();
         // 主题变化后清空消息缓存
-        if (messageList_) messageList_->invalidateCache();
+        if (messageList_) {
+            messageList_->invalidateCache();
+        }
         logLineCache_.clear();
     });
     modal_->pushModal(overlay);
@@ -344,9 +343,14 @@ void AgentTUI::toggleLogWindow() {
         sidebar_->removeTab(kLogTabId);
     } else {
         sidebar_->addTab(
-            kLogTabId, "Logs",
-            [this]() { return renderLogWindow(); },
-            [this]() { return renderLogSidebarFooter(); }
+            kLogTabId,
+            "Logs",
+            [this]() {
+                return renderLogWindow();
+            },
+            [this]() {
+                return renderLogSidebarFooter();
+            }
         );
     }
     postRedraw();
@@ -383,8 +387,8 @@ void AgentTUI::onPeerMessage(agentxx::agent::WireMessage msg) {
             } else if constexpr (std::is_same_v<T, agentxx::agent::WireTurnResult>) {
                 {
                     std::lock_guard<std::mutex> lock(sharedState_.mutex());
-                    auto& st = sharedState_.mutableState();
-                    st.isStreaming = false;
+                    auto&                       st = sharedState_.mutableState();
+                    st.isStreaming                 = false;
                     if (m.hasError && !m.errorMessage.empty()) {
                         st.messages.push_back(std::make_shared<TUIMessage>(
                             TUIMessage{TUIMessage::Role::System, "[Error] " + m.errorMessage}
@@ -396,10 +400,12 @@ void AgentTUI::onPeerMessage(agentxx::agent::WireMessage msg) {
             } else if constexpr (std::is_same_v<T, agentxx::agent::WireContextStats>) {
                 if (session_ && session_->contextStats) {
                     session_->contextStats->contextTokens.store(
-                        m.contextTokens, std::memory_order_relaxed
+                        m.contextTokens,
+                        std::memory_order_relaxed
                     );
                     session_->contextStats->maxContextTokens.store(
-                        m.maxContextTokens, std::memory_order_relaxed
+                        m.maxContextTokens,
+                        std::memory_order_relaxed
                     );
                 }
                 postRedraw();
@@ -417,12 +423,13 @@ void AgentTUI::onPeerMessage(agentxx::agent::WireMessage msg) {
                 );
             } else if constexpr (std::is_same_v<T, agentxx::agent::WireLog>) {
                 agentxx::util::LogDispatcher::instance().dispatch(
-                    static_cast<agentxx::util::LogLevel>(m.level), m.message
+                    static_cast<agentxx::util::LogLevel>(m.level),
+                    m.message
                 );
             } else if constexpr (std::is_same_v<T, agentxx::agent::WireModelInfo>) {
                 {
                     std::lock_guard<std::mutex> lock(sharedState_.mutex());
-                    auto& st = sharedState_.mutableState();
+                    auto&                       st = sharedState_.mutableState();
                     if (!m.models.empty()) {
                         st.modelNames = m.models;
                     }
@@ -434,7 +441,7 @@ void AgentTUI::onPeerMessage(agentxx::agent::WireMessage msg) {
             } else if constexpr (std::is_same_v<T, agentxx::agent::WireAppendComponentInfo>) {
                 {
                     std::lock_guard<std::mutex> lock(sharedState_.mutex());
-                    auto& st = sharedState_.mutableState();
+                    auto&                       st = sharedState_.mutableState();
                     for (const auto& notif : m.notifications) {
                         st.appendComponents.push_back(notif);
                     }
@@ -443,14 +450,16 @@ void AgentTUI::onPeerMessage(agentxx::agent::WireMessage msg) {
             } else if constexpr (std::is_same_v<T, agentxx::agent::WireContextMessages>) {
                 {
                     std::lock_guard<std::mutex> lock(sharedState_.mutex());
-                    auto& st = sharedState_.mutableState();
-                    st.contextMessages    = m.messages;
-                    st.showContextOverlay = true;
+                    auto&                       st = sharedState_.mutableState();
+                    st.contextMessages             = m.messages;
+                    st.showContextOverlay          = true;
                 }
                 // 打开上下文弹窗
                 if (modal_ && !modal_->hasModal()) {
                     auto overlay = std::make_shared<ContextOverlay>(ctx_);
-                    overlay->onClose([this] { modal_->popModal(); });
+                    overlay->onClose([this] {
+                        modal_->popModal();
+                    });
                     modal_->pushModal(overlay);
                 }
                 postRedraw();
@@ -501,7 +510,9 @@ void AgentTUI::sendUserInputLocked(TUIRenderState& st, std::string text) {
         sendToPeer(agentxx::agent::WireUserInput{threadId_, text});
     } else {
         inputChannel_->async_send(
-            neograph_asio_error_code{}, std::move(text), [](neograph_asio_error_code) {}
+            neograph_asio_error_code{},
+            std::move(text),
+            [](neograph_asio_error_code) {}
         );
     }
 }
@@ -523,7 +534,7 @@ void AgentTUI::onDelta(const agentxx::agent::Delta& delta) {
     using Type = agentxx::agent::Delta::Type;
     {
         std::lock_guard<std::mutex> lock(sharedState_.mutex());
-        auto& st = sharedState_.mutableState();
+        auto&                       st = sharedState_.mutableState();
         switch (delta.type) {
             case Type::TextToken:
             case Type::ThinkingToken: {
@@ -534,9 +545,9 @@ void AgentTUI::onDelta(const agentxx::agent::Delta& delta) {
                     st.pendingTokenDurationMs  = delta.durationMs;
                     pushCurrentTokenLocked(st);
                 }
-                st.currentTokenRole = role;
-                st.currentToken    += delta.text;
-                st.isStreaming      = true;
+                st.currentTokenRole  = role;
+                st.currentToken     += delta.text;
+                st.isStreaming       = true;
             } break;
             case Type::ToolStart: {
                 pushCurrentTokenLocked(st);
@@ -629,13 +640,13 @@ void AgentTUI::onDelta(const agentxx::agent::Delta& delta) {
 void AgentTUI::onSync(const agentxx::agent::SyncPayload& payload) {
     {
         std::lock_guard<std::mutex> lock(sharedState_.mutex());
-        auto st              = std::make_shared<TUIRenderState>();
-        auto prev            = sharedState_.snapshot();
-        st->cachedModelName  = prev->cachedModelName;
-        st->modelNames       = prev->modelNames;
-        st->appendComponents = prev->appendComponents;
-        st->pendingInputs    = prev->pendingInputs;
-        st->isStreaming      = false;
+        auto                        st   = std::make_shared<TUIRenderState>();
+        auto                        prev = sharedState_.snapshot();
+        st->cachedModelName              = prev->cachedModelName;
+        st->modelNames                   = prev->modelNames;
+        st->appendComponents             = prev->appendComponents;
+        st->pendingInputs                = prev->pendingInputs;
+        st->isStreaming                  = false;
 
         for (const auto& hm : payload.messages) {
             const auto& d        = hm.data;
@@ -751,13 +762,14 @@ asio::awaitable<neograph::json> AgentTUI::handleInterrupt(
 
     {
         std::lock_guard<std::mutex> lock(sharedState_.mutex());
-        auto& st = sharedState_.mutableState();
-        std::string msg
+        auto&                       st = sharedState_.mutableState();
+        std::string                 msg
             = fmt::format("Interrupted at: {}\nValue: {}", interruptNode, interruptValue);
         if (!handleArg.name.empty()) {
             msg += "\nHandle: " + handleArg.name;
         }
-        st.messages.push_back(std::make_shared<TUIMessage>(TUIMessage{TUIMessage::Role::System, msg}));
+        st.messages.push_back(std::make_shared<TUIMessage>(TUIMessage{TUIMessage::Role::System, msg}
+        ));
     }
     postRedraw();
 
@@ -767,14 +779,15 @@ asio::awaitable<neograph::json> AgentTUI::handleInterrupt(
         do {
             std::string prompt = fmt::format(
                 "[Input] {}: {}\n{}",
-                input.label, input.depict,
+                input.label,
+                input.depict,
                 input.type.empty()
                     ? ""
                     : fmt::format("Type ({}), default: {}: ", input.type, input.defaultValue)
             );
             {
                 std::lock_guard<std::mutex> lock(sharedState_.mutex());
-                auto& st = sharedState_.mutableState();
+                auto&                       st = sharedState_.mutableState();
                 st.messages.push_back(
                     std::make_shared<TUIMessage>(TUIMessage{TUIMessage::Role::System, prompt})
                 );
@@ -823,7 +836,7 @@ asio::awaitable<neograph::json> AgentTUI::handleInterrupt(
                     result.push_back(inputValue);
                 } else {
                     std::lock_guard<std::mutex> lock(sharedState_.mutex());
-                    auto& st = sharedState_.mutableState();
+                    auto&                       st = sharedState_.mutableState();
                     st.messages.push_back(std::make_shared<TUIMessage>(
                         TUIMessage{TUIMessage::Role::System, "Invalid input, please try again."}
                     ));
