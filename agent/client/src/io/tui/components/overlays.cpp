@@ -17,7 +17,7 @@ Element ModelSelectorOverlay::OnRender() {
 
     Elements items;
     for (size_t i = 0; i < st.modelNames.size(); ++i) {
-        auto entry = text(" " + st.modelNames[i] + " ");
+        auto entry = text(fmt::format(" {} ", st.modelNames[i]));
         if (static_cast<int>(i) == selectedIndex_) {
             entry = entry | bgcolor(theme.buttonActiveBgColor)
                     | color(theme.buttonActiveTextColor) | bold | focus;
@@ -100,7 +100,7 @@ Element SettingsOverlay::OnRender() {
     Elements items;
     items.push_back(text(" Theme ") | color(theme.hintColor));
     for (int i = 0; i < themeCount; ++i) {
-        auto entry = text(" " + std::string(themeNames[i]) + " ");
+        auto entry = text(fmt::format(" {} ", themeNames[i]));
         if (i == selectedIndex_) {
             entry = entry | bgcolor(theme.buttonActiveBgColor)
                     | color(theme.buttonActiveTextColor) | bold | focus;
@@ -300,7 +300,7 @@ Element ContextOverlay::OnRender() {
                         }
                         names += tc.value("name", std::string{});
                     }
-                    preview = "[tool_calls: " + names + "]";
+                    preview = fmt::format("[tool_calls: {}]", names);
                 }
             }
 

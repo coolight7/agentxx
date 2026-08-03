@@ -106,7 +106,7 @@ json AcpProtocolHandler::handleMessage(const json& env) {
     } catch (const std::exception& e) {
         XX_LOGE("[acp] error handling '{}': {}", method, e.what());
         if (!isNotification) {
-            return jsonRpcError(id, -32602, "Invalid params: " + std::string(e.what()));
+            return jsonRpcError(id, -32602, fmt::format("Invalid params: {}", e.what()));
         }
         return {};
     }
@@ -114,7 +114,7 @@ json AcpProtocolHandler::handleMessage(const json& env) {
     if (isNotification) {
         return {};
     }
-    return jsonRpcError(id, -32601, "Method not found: " + method);
+    return jsonRpcError(id, -32601, fmt::format("Method not found: {}", method));
 }
 
 json AcpProtocolHandler::callClient(
@@ -152,7 +152,9 @@ json AcpProtocolHandler::callClient(
     }
     auto resp = fut.get();
     if (resp.contains("error")) {
-        throw std::runtime_error("AcpProtocolHandler::callClient: error: " + resp["error"].dump());
+        throw std::runtime_error(
+            fmt::format("AcpProtocolHandler::callClient: error: {}", resp["error"].dump())
+        );
     }
     return resp.contains("result") ? resp["result"] : json::object();
 }
@@ -283,8 +285,10 @@ void AcpProtocolHandler::handleSessionPrompt(const json& env, const json& params
         auto err = jsonRpcError(
             id,
             -32000,
-            "ACP server overloaded: " + std::to_string(config_.maxInflightPrompts)
-                + " concurrent prompts in flight; retry shortly"
+            fmt::format(
+                "ACP server overloaded: {} concurrent prompts in flight; retry shortly",
+                config_.maxInflightPrompts
+            )
         );
         emit(err);
         return;
@@ -309,9 +313,11 @@ void AcpProtocolHandler::handleSessionPrompt(const json& env, const json& params
             auto err = jsonRpcError(
                 id,
                 -32000,
-                "session_id " + sessionId
-                    + " already has a prompt in flight; "
-                      "ACP requires single-flight per session"
+                fmt::format(
+                    "session_id {} already has a prompt in flight; "
+                    "ACP requires single-flight per session",
+                    sessionId
+                )
             );
             emit(err);
             return;
@@ -409,7 +415,7 @@ void AcpProtocolHandler::workerRunPrompt(
         ));
     } catch (const std::exception& e) {
         XX_LOGE("[acp] worker error: {}", e.what());
-        emitAgentMessageChunk(sessionId, "(graph error: " + std::string(e.what()) + ")");
+        emitAgentMessageChunk(sessionId, fmt::format("(graph error: {})", e.what()));
         emit(jsonRpcResult(
             id,
             {
@@ -540,7 +546,7 @@ void HttpAcpServer::setupHandlerSink() {
         bool        isResponse
             = !envelope.contains("method") && envelope.contains("id") && !envelope["id"].is_null();
         if (isResponse) {
-            sseData = "data: " + envelope.dump() + "\n\n";
+            sseData = fmt::format("data: {}\n\n", envelope.dump());
         } else {
             std::string method    = envelope.value("method", "");
             std::string eventType = method;
@@ -550,9 +556,9 @@ void HttpAcpServer::setupHandlerSink() {
                         c = '_';
                     }
                 }
-                sseData = "event: " + eventType + "\ndata: " + envelope.dump() + "\n\n";
+                sseData = fmt::format("event: {}\ndata: {}\n\n", eventType, envelope.dump());
             } else {
-                sseData = "data: " + envelope.dump() + "\n\n";
+                sseData = fmt::format("data: {}\n\n", envelope.dump());
             }
         }
 
@@ -624,7 +630,7 @@ asio::awaitable<void> HttpAcpServer::handleAcpRequest(
         writeJsonResponse(
             resp,
             http::status::internal_server_error,
-            jsonRpcError(id, -32603, "Internal error: " + std::string(e.what()))
+            jsonRpcError(id, -32603, fmt::format("Internal error: {}", e.what()))
         );
         isError = true;
     }
@@ -713,7 +719,7 @@ asio::awaitable<void> HttpAcpServer::handleSseRequest(
     resp.set(boost::beast::http::field::connection, "keep-alive");
     resp.set("X-Accel-Buffering", "no");
 
-    resp.body() = "event: endpoint\ndata: " + config_.acpEndpoint + "\n\n";
+    resp.body() = fmt::format("event: endpoint\ndata: {}\n\n", config_.acpEndpoint);
     resp.prepare_payload();
     co_return;
 }

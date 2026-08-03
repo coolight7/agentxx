@@ -24,7 +24,7 @@ std::string SkillMiddlewareHandle::formatSkillsMetadataList() {
             item.second.description,
             item.second.compatibility,
             agentxx::util::stringVectorJoin(item.second.allowed_tools),
-            item.first + "/SKILL.md"
+            fmt::format("{}/SKILL.md", item.first)
         );
     }
     return oss.str();
@@ -119,7 +119,7 @@ asio::awaitable<void> SkillMiddlewareHandle::onAgentcallStartFunc(neograph::grap
             try {
                 auto dir = std::filesystem::directory_entry{itempath};
                 if (dir.is_directory()) {
-                    if (std::filesystem::is_regular_file(itempath + "/SKILL.md")) {
+                    if (std::filesystem::is_regular_file(fmt::format("{}/SKILL.md", itempath))) {
                         // load skill metadata
                         const auto [err, metadata] = co_await readSkillFile(itempath);
                         if (err.empty()) {

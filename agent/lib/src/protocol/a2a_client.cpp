@@ -13,7 +13,7 @@ A2aClient::A2aClient(Config config) :
 // ---------------------------------------------------------------------------
 
 asio::awaitable<std::expected<json, std::string>> A2aClient::fetchAgentCard() {
-    auto url  = config_.baseUrl + config_.agentCardPath;
+    auto url  = fmt::format("{}{}", config_.baseUrl, config_.agentCardPath);
     auto resp = co_await util::HttpClient::getAsync(
         url,
         util::HeaderMap{},
@@ -22,11 +22,11 @@ asio::awaitable<std::expected<json, std::string>> A2aClient::fetchAgentCard() {
         }
     );
     if (!resp.has_value()) {
-        co_return std::unexpected("Failed to fetch agent card: " + resp.error());
+        co_return std::unexpected(fmt::format("Failed to fetch agent card: {}", resp.error()));
     }
     if (!resp->isSuccess()) {
         co_return std::unexpected(
-            "Failed to fetch agent card: HTTP " + std::to_string(resp->status)
+            fmt::format("Failed to fetch agent card: HTTP {}", resp->status)
         );
     }
     auto parsed = resp->bodyJson();
@@ -107,10 +107,10 @@ asio::awaitable<std::expected<json, std::string>>
     );
 
     if (!resp.has_value()) {
-        co_return std::unexpected("HTTP request failed: " + resp.error());
+        co_return std::unexpected(fmt::format("HTTP request failed: {}", resp.error()));
     }
     if (!resp->isSuccess()) {
-        co_return std::unexpected("HTTP error " + std::to_string(resp->status) + ": " + resp->body);
+        co_return std::unexpected(fmt::format("HTTP error {}: {}", resp->status, resp->body));
     }
 
     auto parsed = resp->bodyJson();
@@ -122,7 +122,7 @@ asio::awaitable<std::expected<json, std::string>>
     if (response.contains("error") && !response["error"].is_null()) {
         auto code = response["error"].value("code", 0);
         auto msg  = response["error"].value("message", std::string{"Unknown error"});
-        co_return std::unexpected("JSON-RPC error " + std::to_string(code) + ": " + msg);
+        co_return std::unexpected(fmt::format("JSON-RPC error {}: {}", code, msg));
     }
 
     if (!response.contains("result")) {

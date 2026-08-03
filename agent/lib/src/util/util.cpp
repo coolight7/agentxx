@@ -39,7 +39,7 @@ std::string agentxx::util::getSystemName() {
     // 备选：uname 系统调用
     struct utsname buf;
     if (uname(&buf) == 0) {
-        systemName_ = std::string(buf.sysname) + " " + buf.release;
+        systemName_ = fmt::format("{} {}", buf.sysname, buf.release);
         return *systemName_;
     }
     systemName_ = "Linux";
@@ -80,9 +80,10 @@ std::string agentxx::util::getSystemName() {
         typedef LONG(WINAPI * RtlGetVersionPtr)(PRTL_OSVERSIONINFOW);
         auto RtlGetVersion = (RtlGetVersionPtr)GetProcAddress(hNtDll, "RtlGetVersion");
         if (RtlGetVersion && RtlGetVersion((PRTL_OSVERSIONINFOW)&info) == 0) {
-            systemName_ = "Windows " + std::to_string(info.dwMajorVersion) + "."
-                          + std::to_string(info.dwMinorVersion) + " (build "
-                          + std::to_string(info.dwBuildNumber) + ")";
+            systemName_ = fmt::format(
+                "Windows {}.{} (build {})",
+                info.dwMajorVersion, info.dwMinorVersion, info.dwBuildNumber
+            );
             return *systemName_;
         }
     }

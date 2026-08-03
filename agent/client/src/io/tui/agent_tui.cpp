@@ -182,7 +182,7 @@ void TUIClientAgentIO::start() {
             if (!st.pendingInputs.empty()) {
                 pendingBar = hbox({
                     text(" "),
-                    text("待发送消息: " + std::to_string(st.pendingInputs.size()))
+                    text(fmt::format("待发送消息: {}", st.pendingInputs.size()))
                         | color(theme_.accentColor) | bold | reflect(pendingCounterBox_),
                     filler(),
                 });
@@ -720,7 +720,7 @@ void TUIClientAgentIO::onTurnResult(const agentxx::agent::WireTurnResult& result
         st.isStreaming                 = false;
         if (result.hasError && !result.errorMessage.empty()) {
             st.messages.push_back(std::make_shared<TUIMessage>(
-                TUIMessage{TUIMessage::Role::System, "[Error] " + result.errorMessage}
+                TUIMessage{TUIMessage::Role::System, fmt::format("[Error] {}", result.errorMessage)}
             ));
         }
         dispatchNextPendingInput(st);
@@ -775,7 +775,7 @@ asio::awaitable<neograph::json> TUIClientAgentIO::handleInterrupt(
         std::string                 msg
             = fmt::format("Interrupted at: {}\nValue: {}", interruptNode, interruptValue);
         if (!handleArg.name.empty()) {
-            msg += "\nHandle: " + handleArg.name;
+            msg += fmt::format("\nHandle: {}", handleArg.name);
         }
         st.messages.push_back(std::make_shared<TUIMessage>(TUIMessage{TUIMessage::Role::System, msg}
         ));

@@ -371,7 +371,7 @@ private:
                 errResp.version(11);
                 errResp.result(readErrorStatus);
                 errResp.set(http::field::content_type, "text/plain");
-                errResp.body() = "Bad Request: " + readErrorMsg;
+                errResp.body() = fmt::format("Bad Request: {}", readErrorMsg);
                 errResp.prepare_payload();
                 errResp.keep_alive(false);
                 co_await http::async_write(

@@ -391,7 +391,7 @@ asio::awaitable<std::expected<std::unique_ptr<WsClient>, std::string>> wsConnect
     // 端口必须是纯数字, 否则 resolver 会把 "host:abc" 当服务名解析, 报错不可读
     for (char c : port) {
         if (!std::isdigit(static_cast<unsigned char>(c))) {
-            co_return std::unexpected<std::string>{"invalid port in ws url: " + port};
+            co_return std::unexpected<std::string>{fmt::format("invalid port in ws url: {}", port)};
         }
     }
 
@@ -411,8 +411,9 @@ asio::awaitable<std::expected<std::unique_ptr<WsClient>, std::string>> wsConnect
 
     // Host 头: IPv6 字面量必须带方括号, 非默认端口附加 ":port"
     bool        defaultPort   = (isSsl && port == "443") || (!isSsl && port == "80");
-    std::string hostForHeader = (host.find(':') != std::string::npos) ? "[" + host + "]" : host;
-    std::string hostHeader    = hostForHeader + (defaultPort ? "" : ":" + port);
+    std::string hostForHeader
+        = (host.find(':') != std::string::npos) ? fmt::format("[{}]", host) : std::string(host);
+    std::string hostHeader = defaultPort ? hostForHeader : fmt::format("{}:{}", hostForHeader, port);
 
     // UA + 自定义头统一在一个 decorator 内设置 (set_option(decorator) 是覆盖语义,
     // 分两次设置会丢失先设置的部分)

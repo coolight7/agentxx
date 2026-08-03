@@ -317,7 +317,7 @@ asio::awaitable<neograph::ChatCompletion>
     headers.set("anthropic-version", config_.anthropicVersion);
 
     auto resp = co_await HttpClient::postAsync(
-        config_.baseUrl + "/v1/messages",
+        fmt::format("{}/v1/messages", config_.baseUrl),
         bodyStr,
         "application/json",
         headers,
@@ -329,7 +329,7 @@ asio::awaitable<neograph::ChatCompletion>
     );
 
     if (!resp.has_value()) {
-        throw std::runtime_error("HTTP request failed: " + resp.error());
+        throw std::runtime_error(fmt::format("HTTP request failed: {}", resp.error()));
     }
 
     auto& r = resp.value();
@@ -344,11 +344,11 @@ asio::awaitable<neograph::ChatCompletion>
                 retryAfter = seconds;
             }
         }
-        throw neograph::RateLimitError("API error (HTTP 429): " + r.body, retryAfter);
+        throw neograph::RateLimitError(fmt::format("API error (HTTP 429): {}", r.body), retryAfter);
     }
 
     if (r.status != 200) {
-        throw std::runtime_error("API error (HTTP " + std::to_string(r.status) + "): " + r.body);
+        throw std::runtime_error(fmt::format("API error (HTTP {}): {}", r.status, r.body));
     }
 
     auto respJson   = neograph::json::parse(r.body);
@@ -391,7 +391,7 @@ asio::awaitable<neograph::ChatCompletion> AnthropicProvider::doStream(
     try {
         co_await HttpClient::requestSseAsync(
             "POST",
-            config_.baseUrl + "/v1/messages",
+            fmt::format("{}/v1/messages", config_.baseUrl),
             bodyStr,
             "application/json",
             headers,
@@ -462,7 +462,7 @@ asio::awaitable<neograph::ChatCompletion> AnthropicProvider::doStream(
     completion.message.reasoning_content = fullThinking;
     for (auto& [idx, tc] : tcMap) {
         if (tc.id.empty()) {
-            tc.id = "call_" + std::to_string(idx);
+            tc.id = fmt::format("call_{}", idx);
         }
         completion.message.tool_calls.push_back(std::move(tc));
     }

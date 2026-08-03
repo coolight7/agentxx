@@ -83,15 +83,15 @@ std::string OpenAIProvider::apiUrl() const {
     }
     // 确保以 '/' 开头
     if (path.empty() || path.front() != '/') {
-        path = "/" + path;
+        path = fmt::format("/{}", path);
     }
-    return config_.baseUrl + path;
+    return fmt::format("{}{}", config_.baseUrl, path);
 }
 
 void OpenAIProvider::applyHeaders(agentxx::util::HeaderMap& headers) const {
     // apiKey 为空时不发送 Authorization (部分本地服务/网关对空 Bearer 报错)
     if (!config_.apiKey.empty()) {
-        headers.set("Authorization", "Bearer " + config_.apiKey);
+        headers.set("Authorization", fmt::format("Bearer {}", config_.apiKey));
     }
     // 自定义请求头 (可覆盖 Authorization, 适配网关/自定义鉴权)
     for (const auto& [k, v] : config_.extraHeaders) {
@@ -135,7 +135,7 @@ static int jsonIntField(const neograph::json& obj, const char* key, int def = 0)
             return static_cast<int>(v.get<double>());
         }
         if (v.is_string()) {
-            std::string s  = v.get<std::string>();
+            std::string s   = v.get<std::string>();
             int         out = def;
             auto [ptr, ec]  = std::from_chars(s.data(), s.data() + s.size(), out);
             if (ec == std::errc{}) {
@@ -187,7 +187,7 @@ std::string OpenAIProvider::extractApiError(const std::string& body) {
                         std::string code = e["code"].is_string() ? e["code"].get<std::string>()
                                                                  : e["code"].dump();
                         if (!code.empty()) {
-                            msg += " (code: " + code + ")";
+                            msg += fmt::format(" (code: {})", code);
                         }
                     }
                     if (!msg.empty()) {
@@ -215,7 +215,7 @@ std::string OpenAIProvider::extractApiError(const std::string& body) {
 void OpenAIProvider::fillMissingToolCallIds(neograph::ChatCompletion& completion) {
     for (size_t i = 0; i < completion.message.tool_calls.size(); ++i) {
         if (completion.message.tool_calls[i].id.empty()) {
-            completion.message.tool_calls[i].id = "call_" + std::to_string(i);
+            completion.message.tool_calls[i].id = fmt::format("call_{}", i);
         }
     }
 }
@@ -288,7 +288,9 @@ neograph::json OpenAIProvider::buildResponsesBody(const neograph::CompletionPara
     // Codex/Responses API 默认行为: 不落盘 + 高推理强度,
     // 可通过 extra_api_config / params.extra_fields 覆盖
     body["store"]     = false;
-    body["reasoning"] = neograph::json{{"effort", "high"}};
+    body["reasoning"] = neograph::json{
+        {"effort", "high"}
+    };
 
     // system 消息 → instructions; 其余 → input 数组 (含 function_call / function_call_output)
     // Responses API 不支持回传 reasoning_content, 因此不携带历史推理内容
@@ -416,7 +418,7 @@ asio::awaitable<neograph::ChatCompletion>
     );
 
     if (!resp.has_value()) {
-        throw std::runtime_error("HTTP request failed: " + resp.error());
+        throw std::runtime_error(fmt::format("HTTP request failed: {}", resp.error()));
     }
 
     auto& r = resp.value();
@@ -431,13 +433,13 @@ asio::awaitable<neograph::ChatCompletion>
                 retryAfter = seconds;
             }
         }
-        throw neograph::RateLimitError("API error (HTTP 429): " + r.body, retryAfter);
+        throw neograph::RateLimitError(fmt::format("API error (HTTP 429): {}", r.body), retryAfter);
     }
 
     // 部分网关返回 201/202 等其它 2xx 状态码也视为成功
     if (r.status / 100 != 2) {
         throw std::runtime_error(
-            "API error (HTTP " + std::to_string(r.status) + "): " + extractApiError(r.body)
+            fmt::format("API error (HTTP {}): {}", r.status, extractApiError(r.body))
         );
     }
 
@@ -447,27 +449,30 @@ asio::awaitable<neograph::ChatCompletion>
             return neograph::json::parse(r.body);
         },
         [&r](std::string errInfo) -> neograph::json {
-            throw std::runtime_error(
-                "API error (HTTP " + std::to_string(r.status) + "): invalid JSON response ("
-                + errInfo + "): " + r.body.substr(0, 512)
-            );
+            throw std::runtime_error(fmt::format(
+                "API error (HTTP {}): invalid JSON response ({}): {}",
+                r.status,
+                errInfo,
+                std::string_view{r.body}.substr(0, 512)
+            ));
         }
     );
 
     // 校验响应形状: 缺失 choices 时给出可读错误, 而不是让 .at() 抛出晦涩的 json 异常
     if (!respJson.is_object() || !respJson.contains("choices") || !respJson["choices"].is_array()
         || respJson["choices"].empty()) {
-        throw std::runtime_error(
-            "API error (HTTP " + std::to_string(r.status)
-            + "): malformed response, missing choices: " + extractApiError(r.body)
-        );
+        throw std::runtime_error(fmt::format(
+            "API error (HTTP {}): malformed response, missing choices: {}",
+            r.status,
+            extractApiError(r.body)
+        ));
     }
     auto choice = respJson["choices"][0];
     if (!choice.is_object() || !choice.contains("message") || !choice["message"].is_object()) {
-        throw std::runtime_error(
-            "API error (HTTP " + std::to_string(r.status)
-            + "): malformed response, missing message in choice[0]"
-        );
+        throw std::runtime_error(fmt::format(
+            "API error (HTTP {}): malformed response, missing message in choice[0]",
+            r.status
+        ));
     }
 
     neograph::ChatCompletion completion;
@@ -530,7 +535,7 @@ asio::awaitable<neograph::ChatCompletion>
     );
 
     if (!resp.has_value()) {
-        throw std::runtime_error("HTTP request failed: " + resp.error());
+        throw std::runtime_error(fmt::format("HTTP request failed: {}", resp.error()));
     }
 
     auto& r = resp.value();
@@ -545,13 +550,13 @@ asio::awaitable<neograph::ChatCompletion>
                 retryAfter = seconds;
             }
         }
-        throw neograph::RateLimitError("API error (HTTP 429): " + r.body, retryAfter);
+        throw neograph::RateLimitError(fmt::format("API error (HTTP 429): {}", r.body), retryAfter);
     }
 
     // 部分网关返回 201/202 等其它 2xx 状态码也视为成功
     if (r.status / 100 != 2) {
         throw std::runtime_error(
-            "API error (HTTP " + std::to_string(r.status) + "): " + extractApiError(r.body)
+            fmt::format("API error (HTTP {}): {}", r.status, extractApiError(r.body))
         );
     }
 
@@ -560,10 +565,12 @@ asio::awaitable<neograph::ChatCompletion>
             return neograph::json::parse(r.body);
         },
         [&r](std::string errInfo) -> neograph::json {
-            throw std::runtime_error(
-                "API error (HTTP " + std::to_string(r.status) + "): invalid JSON response ("
-                + errInfo + "): " + r.body.substr(0, 512)
-            );
+            throw std::runtime_error(fmt::format(
+                "API error (HTTP {}): invalid JSON response ({}): {}",
+                r.status,
+                errInfo,
+                r.body.substr(0, 512)
+            ));
         }
     );
 
@@ -573,7 +580,7 @@ asio::awaitable<neograph::ChatCompletion>
         if (respStatus == "failed"
             || (respJson.contains("error") && !respJson["error"].is_null())) {
             throw std::runtime_error(
-                "API error (HTTP " + std::to_string(r.status) + "): " + extractApiError(r.body)
+                fmt::format("API error (HTTP {}): {}", r.status, extractApiError(r.body))
             );
         }
     }
@@ -634,8 +641,9 @@ asio::awaitable<neograph::ChatCompletion>
     // Responses API usage: input_tokens / output_tokens / total_tokens
     // (兼容部分网关沿用 Chat Completions 的 prompt_tokens/completion_tokens 命名)
     if (respJson.contains("usage") && respJson["usage"].is_object()) {
-        auto u                         = respJson["usage"];
-        completion.usage.prompt_tokens = jsonIntField(u, "input_tokens", jsonIntField(u, "prompt_tokens"));
+        auto u = respJson["usage"];
+        completion.usage.prompt_tokens
+            = jsonIntField(u, "input_tokens", jsonIntField(u, "prompt_tokens"));
         completion.usage.completion_tokens
             = jsonIntField(u, "output_tokens", jsonIntField(u, "completion_tokens"));
         completion.usage.total_tokens = jsonIntField(
@@ -752,7 +760,7 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStream(
     completion.message.reasoning_content = fullThinking;
     for (auto& [idx, tc] : tcMap) {
         if (tc.id.empty()) {
-            tc.id = "call_" + std::to_string(idx);
+            tc.id = fmt::format("call_{}", idx);
         }
         completion.message.tool_calls.push_back(std::move(tc));
     }
@@ -846,7 +854,7 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStreamResponses(
 
     // 服务端通过 response.failed / error 事件上报错误
     if (!apiError.empty()) {
-        throw std::runtime_error("Responses API stream error: " + apiError);
+        throw std::runtime_error(fmt::format("Responses API stream error: {}", apiError));
     }
 
     if (!doneReceived) {
@@ -868,7 +876,7 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStreamResponses(
     completion.message.reasoning_content = fullThinking;
     for (auto& [idx, tc] : tcMap) {
         if (tc.id.empty()) {
-            tc.id = "call_" + std::to_string(idx);
+            tc.id = fmt::format("call_{}", idx);
         }
         completion.message.tool_calls.push_back(std::move(tc));
     }
@@ -1030,11 +1038,8 @@ bool OpenAIProvider::processSseLine(
                     idx = tc["index"].get<int>();
                 } else if (tc["index"].is_string()) {
                     std::string idxStr = tc["index"].get<std::string>();
-                    auto [ptr, ec]     = std::from_chars(
-                        idxStr.data(),
-                        idxStr.data() + idxStr.size(),
-                        idx
-                    );
+                    auto [ptr, ec]
+                        = std::from_chars(idxStr.data(), idxStr.data() + idxStr.size(), idx);
                     if (ec != std::errc{}) {
                         idx = 0;
                     }
@@ -1150,8 +1155,9 @@ bool OpenAIProvider::processResponsesSseLine(
 
     // usage: response.completed / response.usage 事件携带 (input/output/total tokens)
     if (j.contains("usage") && j["usage"].is_object()) {
-        auto u                         = j["usage"];
-        completion.usage.prompt_tokens = jsonIntField(u, "input_tokens", jsonIntField(u, "prompt_tokens"));
+        auto u = j["usage"];
+        completion.usage.prompt_tokens
+            = jsonIntField(u, "input_tokens", jsonIntField(u, "prompt_tokens"));
         completion.usage.completion_tokens
             = jsonIntField(u, "output_tokens", jsonIntField(u, "completion_tokens"));
         completion.usage.total_tokens = jsonIntField(
@@ -1221,9 +1227,9 @@ bool OpenAIProvider::processResponsesSseLine(
         if (j.contains("item") && j["item"].is_object()) {
             auto item = j["item"];
             if (jsonStrField(item, "type") == "function_call") {
-                int       idx = safeOutputIndex(j);
-                auto&     tc  = tcMap[idx];
-                std::string id = jsonStrField(item, "call_id");
+                int         idx = safeOutputIndex(j);
+                auto&       tc  = tcMap[idx];
+                std::string id  = jsonStrField(item, "call_id");
                 if (id.empty()) {
                     id = jsonStrField(item, "id");
                 }
@@ -1322,7 +1328,7 @@ void OpenAIProvider::extractToolCalls(
                     tc.arguments = std::move(body);
                 }
             }
-            tc.id = "extr_" + std::to_string(toolCalls.size());
+            tc.id = fmt::format("extr_{}", toolCalls.size());
             toolCalls.push_back(std::move(tc));
             found = true;
             from  = closeTag == std::string::npos ? xmlStr.size() : closeTag + 11;
@@ -1382,7 +1388,7 @@ void OpenAIProvider::extractToolCalls(
         }
 
         if (found) {
-            tc.id = "extr_" + std::to_string(toolCalls.size());
+            tc.id = fmt::format("extr_{}", toolCalls.size());
             toolCalls.push_back(std::move(tc));
             return true;
         }
@@ -1462,7 +1468,7 @@ void OpenAIProvider::extractToolCalls(
             auto   close   = lower.find("</function>", gt + 1);
             size_t bodyEnd = close == std::string::npos ? cleaned.size() : close;
             // 复用 tryExtractXml 解析: 拼成完整 <function=name>body</function> 片段
-            std::string piece = std::string(cleaned, open, bodyEnd - open) + "</function>";
+            std::string piece = fmt::format("{}</function>", cleaned.substr(open, bodyEnd - open));
             if (tryExtractXml(piece, agentxx::util::toLower(piece))) {
                 ++numFound;
             } else {
@@ -1500,7 +1506,7 @@ void OpenAIProvider::extractToolCalls(
         if (tryExtract(jsonStr)) {
             ++numFound;
         } else if (!trim(jsonStr).empty()) {
-            cleaned += "```json\n" + jsonStr + "\n```";
+            cleaned += fmt::format("```json\n{}\n```", jsonStr);
         }
 
         pos = fenceEnd + 3;
