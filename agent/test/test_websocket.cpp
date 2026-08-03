@@ -1045,7 +1045,7 @@ static asio::awaitable<void> test_ws_close_code_reason() {
     std::thread serverThread([&server]() {
         server.start();
     });
-    uint16_t port = 0;
+    uint16_t    port = 0;
     for (int i = 0; i < 100; ++i) {
         port = server.port();
         if (port != 0) {
@@ -1097,7 +1097,7 @@ static asio::awaitable<void> test_ws_ping_too_large() {
     std::thread serverThread([&server]() {
         server.start();
     });
-    uint16_t port = 0;
+    uint16_t    port = 0;
     for (int i = 0; i < 100; ++i) {
         port = server.port();
         if (port != 0) {
@@ -1176,9 +1176,9 @@ static asio::awaitable<void> test_ws_url_edge_cases() {
 static asio::awaitable<void> test_ws_ipv6_url() {
     // 先探测本机 IPv6 loopback 是否可用, 不可用则跳过
     {
-        asio::io_context       probeCtx;
+        asio::io_context         probeCtx;
         neograph_asio_error_code ec;
-        asio::ip::tcp::acceptor probe(probeCtx);
+        asio::ip::tcp::acceptor  probe(probeCtx);
         probe.open(asio::ip::tcp::v6(), ec);
         if (!ec) {
             probe.bind(asio::ip::tcp::endpoint(asio::ip::make_address_v6("::1"), 0), ec);
@@ -1212,7 +1212,7 @@ static asio::awaitable<void> test_ws_ipv6_url() {
     std::thread serverThread([&server]() {
         server.start();
     });
-    uint16_t port = 0;
+    uint16_t    port = 0;
     for (int i = 0; i < 100; ++i) {
         port = server.port();
         if (port != 0) {
@@ -1273,7 +1273,7 @@ static asio::awaitable<void> test_ws_custom_headers() {
     std::thread serverThread([&server]() {
         server.start();
     });
-    uint16_t port = 0;
+    uint16_t    port = 0;
     for (int i = 0; i < 100; ++i) {
         port = server.port();
         if (port != 0) {
