@@ -28,7 +28,7 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
 
 - **多轮对话**: 支持完整的多轮对话管理，维护 `fullHistory` (append-only 完整历史) 和 `llmMessages` (可压缩的 LLM 上下文) 双消息集
 - **流式输出**: LLM 响应以增量 Delta 事件推送 (TextToken / ThinkingToken / ToolStart / ToolEnd / TurnStart / TurnEnd / NodeStart / NodeEnd)，每个 Delta 携带单调递增 seq 用于重放与同步
-- **多模型支持**: 运行时按会话 (thread_id) 动态切换模型，支持 OpenAI 和 Anthropic 两种 Provider 协议
+- **多模型支持**: 运行时按会话 (thread_id) 动态切换模型，支持 OpenAI Chat Completions、Anthropic Messages、OpenAI Responses (Codex) 三种 Provider 协议
 - **上下文压缩**: SummarizationMiddleware 在上下文接近模型 token 上限时自动压缩历史消息，支持 toolcall 输出去重与截断
 - **思维链展示**: 支持 LLM 的 thinking/reasoning_content 流式输出与展示
 - **节点级事件**: NodeStart/NodeEnd 事件标记 Graph 节点执行生命周期，便于 UI 展示进度
@@ -221,16 +221,22 @@ path/to/agentxx_test string_util regex agent
 ```yaml
 models:
   - name: "my-model"
-    type: "openai"              # 或 "anthropic"
+    type: "openai"              # "openai" / "anthropic" / "openai-responses"
     base_url: "https://api.example.com"
     api_key: "${MY_API_KEY}"    # 从 .env 或系统环境变量解析
     model_name: "gpt-4"
+    api_path: ""                # 自定义 API 路径 (如 "/v1/chat/completions"); 空则用默认
     send_thinking: false
+    send_temperature: true      # 部分推理模型不接受 temperature, 可设 false 关闭
     connect_timeout: 16
     read_chunk_timeout: 24
-    model_support_max_token: 128000
+    model_context_max_token: 128000
+    extra_headers:              # 额外 HTTP 请求头 (如自定义鉴权/网关透传)
+      x-custom-header: "value"
     extra_api_config:           # 合并到请求 body 的扩展配置
       temperature: 0.7
+    # 输出 token 上限自动发送 params.max_tokens: 普通模型发送 max_tokens,
+    # 新模型 (o1/o3/o4/gpt-5 等) 自动切换为 max_completion_tokens 字段
 
 use_model:
   default: "my-model"           # 主模型
@@ -245,6 +251,19 @@ mcp_servers:
   - namespace: "my_mcp"
     url: "http://localhost:3000/mcp"
 ```
+
+> **Codex (Responses API) 配置示例**:
+> ```yaml
+> models:
+>   - name: "openai-responses"
+>     type: "openai-responses"                       # 使用 OpenAI Responses API (/v1/responses)
+>     base_url: "https://api.openai.com"  # 或 ChatGPT Codex 兼容网关
+>     api_key: "${CODEX_API_KEY}"
+>     model_name: "gpt-5-codex"
+>     extra_api_config:                   # 可选覆盖: 推理强度 / 是否落盘等
+>       reasoning:
+>         effort: "high"
+> ```
 
 环境变量加载优先级: `--env 覆盖文件` > `系统环境变量` > `.env 文件`
 

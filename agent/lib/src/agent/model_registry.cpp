@@ -46,10 +46,9 @@ std::shared_ptr<neograph::Provider> ModelProviderRegistry::createProvider(const 
     if (mc.type == "anthropic") {
         return agentxx::server::AnthropicProvider::create_shared(mc);
     }
-    if (mc.type == "codex") {
-        // Codex 使用 OpenAI Responses API: 复用 OpenAIProvider, 开启 responses 模式
-        ModelConfig codex = mc;
-        return agentxx::server::OpenAIProvider::create_shared(codex);
+    if (mc.type == "openai-responses") {
+        // 通用 OpenAI Responses API (/v1/responses): 与 codex 一样复用 OpenAIProvider
+        return agentxx::server::OpenAIProvider::create_shared(mc);
     }
     return agentxx::server::OpenAIProvider::create_shared(mc);
 }

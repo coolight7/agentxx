@@ -6,20 +6,23 @@
 #
 # 可选的 .env 文件（--env 指定文件/当前目录/配置文件同目录）:
 #   LLM_API_KEY=sk-your-key-here
+#
+# 加载实现源码见 [agent/client/src/config_loader.cpp]
 
 models:
   # 声明模型，[name] 取 [default] 仅是自定义名称，并不会被默认使用，应当在 [use_model] 中指定
   - name: full_example
-    type: "openai" # 模型类型，根据 api 类型选择 openai 或 anthropic
-    base_url: "https://api.openai.com/v1"
-    api_key: "${OPENAI_API_KEY}"
-    model_name: "qwen3.8-max-preview"
-    send_thinking: true
-    connect_timeout: 30 # seconds 建立连接时的超时限制 
+    type: "openai" # 必选；模型类型，根据 api 类型选择 openai / openai-responses / anthropic
+    base_url: "https://api.openai.com/v1" # 可选；默认根据 [type] 选择
+    api_path: "/chat/completions" # 可选；自定义路径，默认自动根据 [type] 选择
+    api_key: "${OPENAI_API_KEY}" # 可选；如果不需要验证，可以填 EMPTY 等任意字符串
+    model_name: "qwen3.8-max-preview" # 可选；使用的模型名称，建议填写
+    send_thinking: false # 可选，默认 false；是否发送 thinking，部分模型要求发送才能正常使用
+    connect_timeout: 30 # seconds 建立连接时的超时限制
     read_chunk_timeout: 30 # seconds 接收数据时，超过该时长`未收到新数据`时判断为响应超时，即相邻数据间隔应当小于该时长
     ssl_verify: true # 是否验证 TLS 证书；不指定时使用全局默认值
-    extract_tool_calls_from_content: false # 从 content 文本中提取 tool call（LLM 未正确使用 tool_calls API 时的兜底）
-    model_support_max_token: 262144 # 模型支持的最大上下文 token 数；不指定时上下文压缩使用默认值 256k
+    extract_tool_calls_from_content: false # 从 thinking/content 文本中提取 tool call（LLM 未正确使用 tool_calls API 时的兜底，对于小模型可开启）
+    model_context_max_token: 262144 # 模型支持的最大上下文 token 数；不指定时上下文压缩使用默认值 256k
     extra_api_config:
       stream: true
 
@@ -29,7 +32,7 @@ models:
     api_key: "${QWENAI_API_KEY}"
     model_name: "qwen3.8-max-preview"
     send_thinking: true
-    model_support_max_token: 1000000
+    model_context_max_token: 1000000
     extra_api_config:
       stream: true
   - name: opencode-ds-v4-flash
@@ -38,7 +41,7 @@ models:
     api_key: "${OPENCODE_API_KEY}"
     model_name: "deepseek-v4-flash"
     send_thinking: true
-    model_support_max_token: 1000000
+    model_context_max_token: 1000000
     extra_api_config:
       stream: true
   - name: local
@@ -46,7 +49,8 @@ models:
     base_url: "http://172.29.48.1:7070/v1"
     api_key: "EMPTY"
     model_name: "Agentxx"
-    model_support_max_token: 1000000
+    model_context_max_token: 200000
+    extract_tool_calls_from_content: true
     extra_api_config:
       stream: true
 
@@ -84,9 +88,9 @@ models:
 
 # 指定各模式下使用的模型名称（对应上面 models 中的 name）
 use_model:
-  # default: local
+  default: local
   # default: qwenai-qwen3.8-max-preview
-  default: opencode-ds-v4-flash
+  # default: opencode-ds-v4-flash
   acp: acp
   # train: train
   train: local
@@ -98,8 +102,8 @@ use_model:
 #              命名空间重复时会警告，且后出现的 url 覆盖先前的
 # - url:       MCP 服务器地址
 mcp_servers:
-  # - namespace: musicxx
-  #   url: "http://172.29.48.1:17001/mcp"
+  - namespace: musicxx
+    url: "http://172.29.48.1:17001/mcp"
   # - namespace: exa
   #   url: "https://mcp.exa.ai"
 

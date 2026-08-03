@@ -2,11 +2,13 @@
 
 #include "agentxx/util/aho_corasick.h"
 #include "agentxx/util/async_offload.h"
+#include "agentxx/util/exception.h"
 #include "agentxx/util/log.h"
 #include "agentxx/util/regex.h"
 #include "agentxx/util/string_util.h"
 #include "asio/as_tuple.hpp"
-#include "asio/experimental/awaitable_operators.hpp"
+#include "asio/co_spawn.hpp"
+#include "asio/deferred.hpp"
 #include "asio/random_access_file.hpp"
 #include "asio/read.hpp"
 #include "asio/read_at.hpp"
@@ -485,20 +487,20 @@ asio::awaitable<std::string> FileSystemListTool::execute_async(const neograph::j
     );
 
     if (timeout > 0) {
-        // 超时竞争: 工作协程 vs 定时器, 谁先完成取谁
-        using namespace asio::experimental::awaitable_operators;
-        auto               ctx = co_await asio::this_coro::executor;
-        asio::steady_timer timer(ctx, std::chrono::seconds(timeout));
-        auto res = co_await (std::move(workFuture) || timer.async_wait(asio::use_awaitable));
-        if (res.index() == 1) {
-            // 超时, 通知工作线程退出
-            cancelFlag->store(true, std::memory_order_release);
-            co_return fmt::format(
-                R"([Error] filesystem_list timed out after {} seconds. Try narrowing the path or setting a limit.)",
-                timeout
-            );
-        }
-        co_return std::get<0>(res).dump();
+        co_return co_await agentxx::util::asyncWithTimeout<std::string>(
+            [&]() -> asio::awaitable<std::string> {
+                auto result = co_await std::move(workFuture);
+                co_return result.dump();
+            },
+            std::chrono::seconds{timeout},
+            [&]() {
+                cancelFlag->store(true, std::memory_order_release);
+                return fmt::format(
+                    R"([Error] Timed out after {} seconds. Try narrowing the path or setting a limit.)",
+                    timeout
+                );
+            }
+        );
     } else {
         auto result = co_await std::move(workFuture);
         co_return result.dump();
@@ -1590,20 +1592,19 @@ asio::awaitable<std::string> FilesystemGlobTool::execute_async(const neograph::j
     );
 
     if (timeout > 0) {
-        // 超时竞争: 工作协程 vs 定时器, 谁先完成取谁
-        using namespace asio::experimental::awaitable_operators;
-        auto               ctx = co_await asio::this_coro::executor;
-        asio::steady_timer timer(ctx, std::chrono::seconds(timeout));
-        auto res = co_await (std::move(workFuture) || timer.async_wait(asio::use_awaitable));
-        if (res.index() == 1) {
-            // 超时, 通知工作线程退出
-            cancelFlag->store(true, std::memory_order_release);
-            co_return fmt::format(
-                R"([Error] filesystem_glob timed out after {} seconds. Try narrowing the file_patterns.)",
-                timeout
-            );
-        }
-        co_return std::get<0>(res);
+        co_return co_await agentxx::util::asyncWithTimeout<std::string>(
+            [&]() -> asio::awaitable<std::string> {
+                co_return co_await std::move(workFuture);
+            },
+            std::chrono::seconds{timeout},
+            [&]() {
+                cancelFlag->store(true, std::memory_order_release);
+                return fmt::format(
+                    R"([Error] Timed out after {} seconds. Try narrowing the file_patterns.)",
+                    timeout
+                );
+            }
+        );
     } else {
         co_return co_await std::move(workFuture);
     }
@@ -1916,7 +1917,7 @@ asio::awaitable<std::string> FilesystemGrepTool::execute_async(const neograph::j
             for (const auto& item : refilelist) {
                 // 检查取消/超时标志, 提前退出
                 if (cancelFlag->load(std::memory_order_acquire)) {
-                    throw neograph::graph::CancelledException("filesystem_grep cancelled");
+                    throw neograph::graph::CancelledException("[Cancelled]");
                 }
                 auto filepath = item.generic_string();
                 // glob 模式可能匹配到目录 (如 `**/*`), grep 只搜索普通文件
@@ -2069,20 +2070,28 @@ asio::awaitable<std::string> FilesystemGrepTool::execute_async(const neograph::j
     auto workFuture = work();
 
     if (timeout > 0) {
-        // 超时竞争: 工作协程 vs 定时器, 谁先完成取谁
-        using namespace asio::experimental::awaitable_operators;
-        auto               ctx = co_await asio::this_coro::executor;
-        asio::steady_timer timer(ctx, std::chrono::seconds(timeout));
-        auto res = co_await (std::move(workFuture) || timer.async_wait(asio::use_awaitable));
-        if (res.index() == 1) {
-            // 超时, 通知工作线程退出
-            cancelFlag->store(true, std::memory_order_release);
-            co_return fmt::format(
-                R"([Error] filesystem_grep timed out after {} seconds. Try narrowing the file_patterns or text_patterns.)",
-                timeout
-            );
-        }
-        co_return std::get<0>(res);
+        co_return co_await agentxx::util::asyncWithTimeout<std::string>(
+            [&]() -> asio::awaitable<std::string> {
+                // 工作协程异常转为错误字符串返回 (与工具"返回错误文本而非抛异常"的约定一致);
+                // 取消类异常 (CancelledException/NodeInterrupt) 由 catchErrorAsync 原样抛出
+                return agentxx::util::catchErrorAsync<std::string>(
+                    [&]() -> asio::awaitable<std::string> {
+                        co_return co_await std::move(workFuture);
+                    },
+                    [&](std::string errmsg) -> asio::awaitable<std::string> {
+                        co_return fmt::format("[Error] {}", errmsg);
+                    }
+                );
+            },
+            std::chrono::seconds{timeout},
+            [&]() {
+                cancelFlag->store(true, std::memory_order_release);
+                return fmt::format(
+                    R"([Error] Timed out after {} seconds. Try narrowing the file_patterns or text_patterns.)",
+                    timeout
+                );
+            }
+        );
     } else {
         co_return co_await std::move(workFuture);
     }

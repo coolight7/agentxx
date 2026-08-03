@@ -44,6 +44,15 @@ agentxx::agent::ModelConfig makeOaiCfg(
     mc.sendThinking            = sendThinking;
     return mc;
 }
+
+/// Codex (Responses API) 配置
+agentxx::agent::ModelConfig makeCodexCfg(const std::string& baseUrl) {
+    auto mc      = makeOaiCfg("sk-codex", baseUrl);
+    mc.name      = "codex-test";
+    mc.type      = "openai-responses";
+    mc.modelName = "gpt-5-codex";
+    return mc;
+}
 } // namespace
 
 int g_openai_passed = 0;
@@ -159,6 +168,11 @@ enum class MockMode {
     ServerError,
     Streaming,
     StreamingToolCall,
+    // OpenAI Responses API (/v1/responses)
+    ResponsesNormal,
+    ResponsesToolCall,
+    ResponsesStreaming,
+    ResponsesStreamingToolCall,
 };
 
 class MockOpenAIServer {
@@ -168,6 +182,8 @@ public:
     std::thread                 thread;
     MockMode                    mode = MockMode::Normal;
     std::string                 lastRequestBody;
+    std::string                 lastAuthHeader;
+    std::string                 lastCustomHeader;
 
     // SSE chunks to emit in streaming mode
     std::vector<std::string> sseChunks;
@@ -177,6 +193,10 @@ public:
 
     static std::string sseData(std::string_view json) {
         return "data: " + std::string(json) + "\n\n";
+    }
+
+    static std::string sseEvent(std::string_view event, std::string_view json) {
+        return "event: " + std::string(event) + "\ndata: " + std::string(json) + "\n\n";
     }
 
     static std::string sseDone() {
@@ -241,6 +261,117 @@ public:
         resp["choices"] = choices;
         return resp;
     }
+
+    // ------------------------------------------------------------------
+    // OpenAI Responses API (/v1/responses) response builders
+    // ------------------------------------------------------------------
+
+    neograph::json
+        makeResponsesResponse(std::string_view content, int prompt = 10, int completion = 5) const {
+        auto textPart           = neograph::json::object();
+        textPart["type"]        = "output_text";
+        textPart["text"]        = std::string(content);
+        textPart["annotations"] = neograph::json::array();
+        auto contentArr         = neograph::json::array();
+        contentArr.push_back(textPart);
+
+        auto msgItem       = neograph::json::object();
+        msgItem["type"]    = "message";
+        msgItem["role"]    = "assistant";
+        msgItem["content"] = contentArr;
+
+        auto output = neograph::json::array();
+        output.push_back(msgItem);
+
+        neograph::json resp;
+        resp["id"]     = "resp_mock";
+        resp["object"] = "response";
+        resp["status"] = "completed";
+        resp["output"] = output;
+        resp["usage"]  = {
+            {"input_tokens",  prompt             },
+            {"output_tokens", completion         },
+            {"total_tokens",  prompt + completion}
+        };
+        return resp;
+    }
+
+    neograph::json makeResponsesToolCallResponse() const {
+        auto fcItem         = neograph::json::object();
+        fcItem["type"]      = "function_call";
+        fcItem["id"]        = "fc_1";
+        fcItem["call_id"]   = "call_abc123";
+        fcItem["name"]      = "get_weather";
+        fcItem["arguments"] = R"({"location":"Tokyo"})";
+        fcItem["status"]    = "completed";
+
+        auto output = neograph::json::array();
+        output.push_back(fcItem);
+
+        neograph::json resp;
+        resp["id"]     = "resp_tool";
+        resp["object"] = "response";
+        resp["status"] = "completed";
+        resp["output"] = output;
+        resp["usage"]  = {
+            {"input_tokens",  8 },
+            {"output_tokens", 4 },
+            {"total_tokens",  12}
+        };
+        return resp;
+    }
+
+    /// 默认的 Responses 流式 SSE 事件序列
+    void setDefaultResponsesSseChunks() {
+        sseChunks = {
+            sseEvent(
+                "response.created",
+                R"({"type":"response.created","response":{"id":"resp_mock"}})"
+            ),
+            sseEvent(
+                "response.output_text.delta",
+                R"({"type":"response.output_text.delta","item_id":"msg_1","output_index":0,"delta":"Hello"})"
+            ),
+            sseEvent(
+                "response.output_text.delta",
+                R"({"type":"response.output_text.delta","item_id":"msg_1","output_index":0,"delta":" world"})"
+            ),
+            sseEvent(
+                "response.reasoning_text.delta",
+                R"({"type":"response.reasoning_text.delta","item_id":"rs_1","output_index":0,"delta":"deep thought"})"
+            ),
+            sseEvent(
+                "response.completed",
+                R"({"type":"response.completed","response":{"id":"resp_mock","status":"completed"},"usage":{"input_tokens":5,"output_tokens":3,"total_tokens":8}})"
+            ),
+        };
+    }
+
+    /// 默认的 Responses 流式 tool_call SSE 事件序列
+    void setDefaultResponsesToolCallSseChunks() {
+        sseChunks = {
+            sseEvent(
+                "response.output_item.added",
+                R"({"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_abc123","name":"get_weather","arguments":"","status":"in_progress"}})"
+            ),
+            sseEvent(
+                "response.function_call_arguments.delta",
+                R"({"type":"response.function_call_arguments.delta","item_id":"fc_1","output_index":0,"delta":"{\"location\":"})"
+            ),
+            sseEvent(
+                "response.function_call_arguments.delta",
+                R"({"type":"response.function_call_arguments.delta","item_id":"fc_1","output_index":0,"delta":"\"Tokyo\"}"})"
+            ),
+            sseEvent(
+                "response.function_call_arguments.done",
+                R"({"type":"response.function_call_arguments.done","item_id":"fc_1","output_index":0,"arguments":"{\"location\":\"Tokyo\"}"})"
+            ),
+            sseEvent(
+                "response.completed",
+                R"({"type":"response.completed","response":{"id":"resp_tool","status":"completed"},"usage":{"input_tokens":8,"output_tokens":4,"total_tokens":12}})"
+            ),
+        };
+    }
 };
 
 std::unique_ptr<MockOpenAIServer> startMockServer(uint16_t& outPort) {
@@ -269,14 +400,13 @@ std::unique_ptr<MockOpenAIServer> startMockServer(uint16_t& outPort) {
     );
 
     // Single handler for /chat/completions that dispatches by mode
-    mock->server->router().add(
-        "/chat/completions",
-        2,
-        std::make_shared<HttpServer::Handler>(
-            [mock = mock.get(
-             )](HttpServer::Request& req, HttpServer::Response& resp, std::string_view
-            ) -> asio::awaitable<void> {
-                mock->lastRequestBody = req.body();
+    auto makeHandler = [mock = mock.get()]() {
+        return std::make_shared<HttpServer::Handler>(
+            [mock](HttpServer::Request& req, HttpServer::Response& resp, std::string_view)
+                -> asio::awaitable<void> {
+                mock->lastRequestBody  = req.body();
+                mock->lastAuthHeader   = std::string(req["authorization"]);
+                mock->lastCustomHeader = std::string(req["x-custom-test"]);
 
                 switch (mock->mode) {
                     case MockMode::RateLimit:
@@ -301,8 +431,30 @@ std::unique_ptr<MockOpenAIServer> startMockServer(uint16_t& outPort) {
                         resp.prepare_payload();
                         break;
 
+                    case MockMode::ResponsesNormal:
+                        resp.result(boost::beast::http::status::ok);
+                        resp.set(boost::beast::http::field::content_type, "application/json");
+                        if (mock->customResponse.has_value()) {
+                            resp.body() = mock->customResponse->dump();
+                            mock->customResponse.reset();
+                        } else {
+                            resp.body()
+                                = mock->makeResponsesResponse("Hello from responses!").dump();
+                        }
+                        resp.prepare_payload();
+                        break;
+
+                    case MockMode::ResponsesToolCall:
+                        resp.result(boost::beast::http::status::ok);
+                        resp.set(boost::beast::http::field::content_type, "application/json");
+                        resp.body() = mock->makeResponsesToolCallResponse().dump();
+                        resp.prepare_payload();
+                        break;
+
                     case MockMode::Streaming:
-                    case MockMode::StreamingToolCall: {
+                    case MockMode::StreamingToolCall:
+                    case MockMode::ResponsesStreaming:
+                    case MockMode::ResponsesStreamingToolCall: {
                         resp.result(boost::beast::http::status::ok);
                         resp.set(boost::beast::http::field::content_type, "text/event-stream");
                         resp.set(boost::beast::http::field::cache_control, "no-cache");
@@ -331,8 +483,15 @@ std::unique_ptr<MockOpenAIServer> startMockServer(uint16_t& outPort) {
                 }
                 co_return;
             }
-        )
-    );
+        );
+    };
+
+    // Chat Completions API 路由
+    mock->server->router().add("/chat/completions", 2, makeHandler());
+    // Responses API 路由 (Codex)
+    mock->server->router().add("/v1/responses", 2, makeHandler());
+    // 自定义 api_path 测试路由
+    mock->server->router().add("/v1/chat/completions", 2, makeHandler());
 
     // Start server
     mock->thread = std::thread([s = mock->server.get()]() {
@@ -668,7 +827,7 @@ void test_extract_think_tags_only_think() {
 
 /// 闭合 think 标签之后又出现未闭合标签: 已提取的闭合标签不应残留在 content 中
 void test_extract_think_tags_closed_then_unclosed() {
-    std::string content  = "A<think>B</think>C<think>D";
+    std::string content = "A<think>B</think>C<think>D";
     std::string thinking;
     server::OpenAIProvider::extractThinkTags(content, thinking);
     XX_TEST_EXPECT_EQ(thinking, "BD");
@@ -677,11 +836,167 @@ void test_extract_think_tags_closed_then_unclosed() {
 
 /// 直接调用实现函数验证单个未闭合标签场景
 void test_extract_think_tags_unclosed_direct() {
-    std::string content  = "Start<think>Unclosed thinking";
+    std::string content = "Start<think>Unclosed thinking";
     std::string thinking;
     server::OpenAIProvider::extractThinkTags(content, thinking);
     XX_TEST_EXPECT_EQ(thinking, "Unclosed thinking");
     XX_TEST_EXPECT_EQ(content, "Start");
+}
+
+// ---------------------------------------------------------------------------
+// Unit tests for extractToolCallsFromContent (XML 风格 <tool_call> 兼容)
+// ---------------------------------------------------------------------------
+
+/// llama.cpp 本地模型在 content 末尾输出
+/// `<tool_call> <function=musicxx_GetMediaInfo> </function> </tool_call>` 的兼容场景
+void test_extract_tool_calls_xml_in_content() {
+    std::string content
+        = "让我查一下这首歌的信息。<tool_call> <function=musicxx_GetMediaInfo> </function> "
+          "</tool_call>";
+    std::vector<neograph::ToolCall> calls;
+    server::OpenAIProvider::extractToolCalls(content, calls);
+    XX_TEST_EXPECT_EQ(calls.size(), (size_t)1);
+    if (calls.size() == 1) {
+        XX_TEST_EXPECT_EQ(calls[0].name, "musicxx_GetMediaInfo");
+        // 缺失参数时按空对象处理, 保证下游 json::parse 可用
+        XX_TEST_EXPECT_EQ(calls[0].arguments, "{}");
+    }
+    // 提取后从 content 中移除
+    XX_TEST_EXPECT_TRUE(content.find("tool_call") == std::string::npos);
+    XX_TEST_EXPECT_TRUE(content.find("musicxx_GetMediaInfo") == std::string::npos);
+    XX_TEST_EXPECT_EQ(content, "让我查一下这首歌的信息。");
+}
+
+/// XML 风格 + JSON 参数: <tool_call><function=name>{...}</function></tool_call>
+void test_extract_tool_calls_xml_with_args() {
+    std::string content
+        = "<tool_call><function=get_weather>{\"location\":\"Tokyo\",\"unit\":\"c\"}</function></"
+          "tool_call>";
+    std::vector<neograph::ToolCall> calls;
+    server::OpenAIProvider::extractToolCalls(content, calls);
+    XX_TEST_EXPECT_EQ(calls.size(), (size_t)1);
+    if (calls.size() == 1) {
+        XX_TEST_EXPECT_EQ(calls[0].name, "get_weather");
+        auto args = neograph::json::parse(calls[0].arguments);
+        XX_TEST_EXPECT_EQ(args["location"].get<std::string>(), "Tokyo");
+        XX_TEST_EXPECT_EQ(args["unit"].get<std::string>(), "c");
+    }
+    XX_TEST_EXPECT_TRUE(content.empty());
+}
+
+/// 未用 <tool_call> 包裹的裸 <function=...> 标签
+void test_extract_tool_calls_xml_bare_function() {
+    std::string content = "请稍等<function=musicxx_GetMediaInfo>{\"id\":42}</function>";
+    std::vector<neograph::ToolCall> calls;
+    server::OpenAIProvider::extractToolCalls(content, calls);
+    XX_TEST_EXPECT_EQ(calls.size(), (size_t)1);
+    if (calls.size() == 1) {
+        XX_TEST_EXPECT_EQ(calls[0].name, "musicxx_GetMediaInfo");
+        auto args = neograph::json::parse(calls[0].arguments);
+        XX_TEST_EXPECT_EQ(args["id"].get<int>(), 42);
+    }
+    XX_TEST_EXPECT_EQ(content, "请稍等");
+}
+
+/// 未闭合的 <tool_call> (截断输出): 仍应提取到 content 末尾
+void test_extract_tool_calls_xml_unclosed() {
+    std::string content = "思考...<tool_call> <function=musicxx_GetMediaInfo>";
+    std::vector<neograph::ToolCall> calls;
+    server::OpenAIProvider::extractToolCalls(content, calls);
+    XX_TEST_EXPECT_EQ(calls.size(), (size_t)1);
+    if (calls.size() == 1) {
+        XX_TEST_EXPECT_EQ(calls[0].name, "musicxx_GetMediaInfo");
+        XX_TEST_EXPECT_EQ(calls[0].arguments, "{}");
+    }
+    XX_TEST_EXPECT_EQ(content, "思考...");
+}
+
+/// 标签不区分大小写
+void test_extract_tool_calls_xml_case_insensitive() {
+    std::string content = "<TOOL_CALL><FUNCTION=musicxx_GetMediaInfo></FUNCTION></TOOL_CALL>";
+    std::vector<neograph::ToolCall> calls;
+    server::OpenAIProvider::extractToolCalls(content, calls);
+    XX_TEST_EXPECT_EQ(calls.size(), (size_t)1);
+    if (calls.size() == 1) {
+        XX_TEST_EXPECT_EQ(calls[0].name, "musicxx_GetMediaInfo");
+    }
+    XX_TEST_EXPECT_TRUE(content.empty());
+}
+
+/// <tool_call> 内直接是 JSON (未使用 <function=...> 包裹)
+void test_extract_tool_calls_xml_with_json_block() {
+    std::string content
+        = "<tool_call>{\"name\":\"get_weather\",\"arguments\":{\"city\":\"Beijing\"}}</tool_call>";
+    std::vector<neograph::ToolCall> calls;
+    server::OpenAIProvider::extractToolCalls(content, calls);
+    XX_TEST_EXPECT_EQ(calls.size(), (size_t)1);
+    if (calls.size() == 1) {
+        XX_TEST_EXPECT_EQ(calls[0].name, "get_weather");
+        auto args = neograph::json::parse(calls[0].arguments);
+        XX_TEST_EXPECT_EQ(args["city"].get<std::string>(), "Beijing");
+    }
+    XX_TEST_EXPECT_TRUE(content.empty());
+}
+
+/// 无 tool call 时文本保持原样
+void test_extract_tool_calls_xml_no_call_keeps_text() {
+    std::string content = "普通回复, 没有调用任何工具。<tool_call> </tool_call>";
+    std::vector<neograph::ToolCall> calls;
+    server::OpenAIProvider::extractToolCalls(content, calls);
+    XX_TEST_EXPECT_TRUE(calls.empty());
+    XX_TEST_EXPECT_EQ(content, "普通回复, 没有调用任何工具。<tool_call> </tool_call>");
+}
+
+/// thinking 内容中的 XML 风格 tool call (reasoning_content 同样适用)
+void test_extract_tool_calls_xml_in_thinking() {
+    std::string content
+        = "先获取歌曲信息。<tool_call> <function=musicxx_GetMediaInfo> {\"song\":\"test\"} </function> </tool_call>";
+    std::vector<neograph::ToolCall> calls;
+    server::OpenAIProvider::extractToolCalls(content, calls);
+    XX_TEST_EXPECT_EQ(calls.size(), (size_t)1);
+    if (calls.size() == 1) {
+        XX_TEST_EXPECT_EQ(calls[0].name, "musicxx_GetMediaInfo");
+        auto args = neograph::json::parse(calls[0].arguments);
+        XX_TEST_EXPECT_EQ(args["song"].get<std::string>(), "test");
+    }
+    XX_TEST_EXPECT_EQ(content, "先获取歌曲信息。");
+}
+
+/// 多个 <tool_call> 块全部提取
+void test_extract_tool_calls_xml_multiple() {
+    std::string content
+        = "<tool_call><function=musicxx_GetMediaInfo></function></tool_call> 然后 <tool_call><function=musicxx_GetLyric></function></tool_call>";
+    std::vector<neograph::ToolCall> calls;
+    server::OpenAIProvider::extractToolCalls(content, calls);
+    XX_TEST_EXPECT_EQ(calls.size(), (size_t)2);
+    if (calls.size() == 2) {
+        XX_TEST_EXPECT_EQ(calls[0].name, "musicxx_GetMediaInfo");
+        XX_TEST_EXPECT_EQ(calls[1].name, "musicxx_GetLyric");
+    }
+    XX_TEST_EXPECT_EQ(content, "然后");
+}
+
+/// 提取后 block 之后的文本保留 (含 提取失败 时 block 原样保留)
+void test_extract_tool_calls_xml_trailing_text() {
+    {
+        std::string content
+            = "<tool_call><function=musicxx_GetMediaInfo></function></tool_call>以上完成";
+        std::vector<neograph::ToolCall> calls;
+        server::OpenAIProvider::extractToolCalls(content, calls);
+        XX_TEST_EXPECT_EQ(calls.size(), (size_t)1);
+        if (calls.size() == 1) {
+            XX_TEST_EXPECT_EQ(calls[0].name, "musicxx_GetMediaInfo");
+        }
+        XX_TEST_EXPECT_EQ(content, "以上完成");
+    }
+    {
+        // 提取失败: 保留 block 原文及前后文本
+        std::string content = "前文<tool_call> 无有效内容 </tool_call>后文";
+        std::vector<neograph::ToolCall> calls;
+        server::OpenAIProvider::extractToolCalls(content, calls);
+        XX_TEST_EXPECT_TRUE(calls.empty());
+        XX_TEST_EXPECT_EQ(content, "前文<tool_call> 无有效内容 </tool_call>后文");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -821,9 +1136,8 @@ asio::awaitable<void>
             XX_TEST_EXPECT_TRUE(
                 result.message.tool_calls[0].arguments.find("Beijing") != std::string::npos
             );
-            // 非流式路径: parse_response_message 使用 tc.value("id", "")
-            // 缺少 id 时应为空字符串
-            XX_TEST_EXPECT_TRUE(result.message.tool_calls[0].id.empty());
+            // 兼容性增强: 非流式路径缺失 id 时同样回填 "call_N" (与流式路径一致)
+            XX_TEST_EXPECT_EQ(result.message.tool_calls[0].id, "call_0");
         }
     } catch (const std::exception& e) {
         XX_TEST_FAILED++;
@@ -1878,7 +2192,7 @@ public:
     enum class Mode {
         NeverReadBody,
         PartialThenStall,
-        AbortAfterChunks,  // 发完 partialChunks 后直接断开 (不发 chunked 终止块)
+        AbortAfterChunks, // 发完 partialChunks 后直接断开 (不发 chunked 终止块)
     };
 
     std::thread              thread;
@@ -2131,6 +2445,522 @@ void test_send_timeout_calculation() {
 }
 
 // ---------------------------------------------------------------------------
+// Tests — OpenAI provider compatibility enhancements
+// ---------------------------------------------------------------------------
+
+void test_create_provider_codex() {
+    agentxx::agent::ModelConfig mc;
+    mc.name    = "codex-test";
+    mc.apiKey  = "sk-codex";
+    mc.baseUrl = "http://localhost:8080";
+    mc.type    = "openai-responses";
+    auto p     = agentxx::agent::ModelProviderRegistry::createProvider(mc);
+    XX_TEST_EXPECT_TRUE(p != nullptr);
+    XX_TEST_EXPECT_EQ(p->get_name(), "openai-responses");
+}
+
+void test_create_provider_openai_responses_flag() {
+    agentxx::agent::ModelConfig mc;
+    mc.name    = "resp-test";
+    mc.apiKey  = "sk-test";
+    mc.baseUrl = "http://localhost:8080";
+    mc.type    = "openai-responses";
+    auto p     = agentxx::agent::ModelProviderRegistry::createProvider(mc);
+    XX_TEST_EXPECT_TRUE(p != nullptr);
+    XX_TEST_EXPECT_EQ(p->get_name(), "openai-responses");
+}
+
+void test_responses_sse_parsing_edge_cases() {
+    using server::OpenAIProvider;
+
+    // [DONE] 兼容标记
+    {
+        std::string                       buf = "data: [DONE]\n\n";
+        neograph::ChatCompletion          completion;
+        std::string                       content, thinking;
+        std::map<int, neograph::ToolCall> tcMap;
+        bool                              done = OpenAIProvider::processResponsesSseBuffer(
+            buf,
+            completion,
+            content,
+            thinking,
+            tcMap,
+            nullptr
+        );
+        XX_TEST_EXPECT_TRUE(done);
+    }
+
+    // 末尾无换行, finalFlush 补解析
+    {
+        std::string buf = R"(data: {"type":"response.output_text.delta","delta":"End"})";
+        neograph::ChatCompletion          completion;
+        std::string                       content, thinking;
+        std::map<int, neograph::ToolCall> tcMap;
+        OpenAIProvider::processResponsesSseBuffer(
+            buf,
+            completion,
+            content,
+            thinking,
+            tcMap,
+            nullptr,
+            /*finalFlush=*/true
+        );
+        XX_TEST_EXPECT_EQ(content, "End");
+    }
+
+    // error 事件写入 errOut
+    {
+        std::string              buf = "data: {\"type\":\"error\",\"message\":\"boom\"}\n\n";
+        neograph::ChatCompletion completion;
+        std::string              content, thinking;
+        std::map<int, neograph::ToolCall> tcMap;
+        std::string                       err;
+        OpenAIProvider::processResponsesSseBuffer(
+            buf,
+            completion,
+            content,
+            thinking,
+            tcMap,
+            nullptr,
+            /*finalFlush=*/false,
+            &err
+        );
+        XX_TEST_EXPECT_EQ(err, "boom");
+    }
+}
+
+asio::awaitable<void> test_max_tokens_sent(MockOpenAIServer& mock, uint16_t port) {
+    std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
+    mock.mode           = MockMode::Normal;
+
+    auto provider = server::OpenAIProvider::create(makeOaiCfg("sk-test", baseUrl));
+
+    neograph::CompletionParams params;
+    params.model      = "gpt-4o-mini";
+    params.max_tokens = 1024;
+    params.messages   = {
+        neograph::ChatMessage{.role = "user", .content = "hi"}
+    };
+
+    try {
+        co_await provider->invoke(params, nullptr);
+        auto sent = neograph::json::parse(mock.lastRequestBody);
+        XX_TEST_EXPECT_TRUE(sent.contains("max_tokens"));
+        XX_TEST_EXPECT_EQ(sent["max_tokens"].get<int>(), 1024);
+    } catch (const std::exception& e) {
+        XX_TEST_FAILED++;
+        TEST_FAIL << "max_tokens test failed: " << e.what() << std::endl;
+    }
+}
+
+asio::awaitable<void> test_max_completion_tokens_sent(MockOpenAIServer& mock, uint16_t port) {
+    std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
+    mock.mode           = MockMode::Normal;
+
+    auto mc       = makeOaiCfg("sk-test", baseUrl);
+    auto provider = server::OpenAIProvider::create(mc);
+
+    neograph::CompletionParams params;
+    params.model      = "gpt-5";
+    params.max_tokens = 512;
+    params.messages   = {
+        neograph::ChatMessage{.role = "user", .content = "hi"}
+    };
+
+    try {
+        co_await provider->invoke(params, nullptr);
+        auto sent = neograph::json::parse(mock.lastRequestBody);
+        XX_TEST_EXPECT_TRUE(sent.contains("max_completion_tokens"));
+        XX_TEST_EXPECT_EQ(sent["max_completion_tokens"].get<int>(), 512);
+        XX_TEST_EXPECT_FALSE(sent.contains("max_tokens"));
+    } catch (const std::exception& e) {
+        XX_TEST_FAILED++;
+        TEST_FAIL << "max_completion_tokens test failed: " << e.what() << std::endl;
+    }
+}
+
+asio::awaitable<void> test_stop_reason_mapping(MockOpenAIServer& mock, uint16_t port) {
+    std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
+    mock.mode           = MockMode::Normal;
+
+    auto provider = server::OpenAIProvider::create(makeOaiCfg("sk-test", baseUrl));
+
+    neograph::CompletionParams params;
+    params.model    = "gpt-4o";
+    params.messages = {
+        neograph::ChatMessage{.role = "user", .content = "hi"}
+    };
+
+    // finish_reason = tool_calls → stop_reason = tool_use
+    mock.customResponse = mock.makeToolCallResponse();
+    try {
+        auto result = co_await provider->invoke(params, nullptr);
+        XX_TEST_EXPECT_EQ(result.stop_reason, "tool_use");
+    } catch (const std::exception& e) {
+        XX_TEST_FAILED++;
+        TEST_FAIL << "stop_reason(tool_calls) failed: " << e.what() << std::endl;
+    }
+
+    // finish_reason = stop → stop_reason = end_turn
+    mock.customResponse = mock.makeCompletionResponse("ok");
+    try {
+        auto result = co_await provider->invoke(params, nullptr);
+        XX_TEST_EXPECT_EQ(result.stop_reason, "end_turn");
+    } catch (const std::exception& e) {
+        XX_TEST_FAILED++;
+        TEST_FAIL << "stop_reason(stop) failed: " << e.what() << std::endl;
+    }
+}
+
+asio::awaitable<void> test_custom_api_path(MockOpenAIServer& mock, uint16_t port) {
+    std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
+    mock.mode           = MockMode::Normal;
+
+    auto mc       = makeOaiCfg("sk-test", baseUrl);
+    mc.apiPath    = "/v1/chat/completions";
+    auto provider = server::OpenAIProvider::create(mc);
+
+    neograph::CompletionParams params;
+    params.model    = "gpt-4o-mini";
+    params.messages = {
+        neograph::ChatMessage{.role = "user", .content = "path test"}
+    };
+
+    try {
+        co_await provider->invoke(params, nullptr);
+        // 请求到达 /v1/chat/completions 路由则 lastRequestBody 会被填充
+        auto sent = neograph::json::parse(mock.lastRequestBody);
+        XX_TEST_EXPECT_EQ(sent["model"].get<std::string>(), "gpt-4o-mini");
+    } catch (const std::exception& e) {
+        XX_TEST_FAILED++;
+        TEST_FAIL << "custom api_path test failed: " << e.what() << std::endl;
+    }
+}
+
+asio::awaitable<void> test_send_temperature_disabled(MockOpenAIServer& mock, uint16_t port) {
+    std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
+    mock.mode           = MockMode::Normal;
+
+    auto mc       = makeOaiCfg("sk-test", baseUrl);
+    auto provider = server::OpenAIProvider::create(mc);
+
+    neograph::CompletionParams params;
+    params.model       = "deepseek-reasoner";
+    params.temperature = 0.9;
+    params.messages    = {
+        neograph::ChatMessage{.role = "user", .content = "hi"}
+    };
+
+    try {
+        co_await provider->invoke(params, nullptr);
+        auto sent = neograph::json::parse(mock.lastRequestBody);
+        XX_TEST_EXPECT_FALSE(sent.contains("temperature"));
+    } catch (const std::exception& e) {
+        XX_TEST_FAILED++;
+        TEST_FAIL << "send_temperature disabled test failed: " << e.what() << std::endl;
+    }
+}
+
+asio::awaitable<void> test_extra_headers_sent(MockOpenAIServer& mock, uint16_t port) {
+    std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
+    mock.mode           = MockMode::Normal;
+
+    auto mc                          = makeOaiCfg("sk-test", baseUrl);
+    mc.extraHeaders["x-custom-test"] = "custom-value";
+    auto provider                    = server::OpenAIProvider::create(mc);
+
+    neograph::CompletionParams params;
+    params.model    = "gpt-4o-mini";
+    params.messages = {
+        neograph::ChatMessage{.role = "user", .content = "header test"}
+    };
+
+    try {
+        co_await provider->invoke(params, nullptr);
+        XX_TEST_EXPECT_EQ(mock.lastCustomHeader, "custom-value");
+        XX_TEST_EXPECT_TRUE(mock.lastAuthHeader.find("sk-test") != std::string::npos);
+    } catch (const std::exception& e) {
+        XX_TEST_FAILED++;
+        TEST_FAIL << "extra headers test failed: " << e.what() << std::endl;
+    }
+}
+
+/// 非流式响应: content 含 XML 风格 <tool_call> 时, 开启 extractToolCallsFromContent
+/// 应提取 tool call 并从 content 移除 (llama.cpp 本地模型兼容)
+asio::awaitable<void>
+    test_extract_tool_calls_from_content_xml(MockOpenAIServer& mock, uint16_t port) {
+    std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
+    mock.mode           = MockMode::Normal;
+
+    auto mc                        = makeOaiCfg("sk-test", baseUrl);
+    mc.extractToolCallsFromContent = true;
+    auto provider                  = server::OpenAIProvider::create(mc);
+
+    neograph::CompletionParams params;
+    params.model    = "gpt-4o-mini";
+    params.messages = {
+        neograph::ChatMessage{.role = "user", .content = "查询歌曲信息"}
+    };
+
+    // 模型在 content 末尾输出 XML 风格 tool call (不带参数)
+    mock.customResponse = mock.makeCompletionResponse(
+        "让我查询一下。<tool_call> <function=musicxx_GetMediaInfo> </function> </tool_call>"
+    );
+    try {
+        auto result = co_await provider->invoke(params, nullptr);
+        XX_TEST_EXPECT_EQ(result.message.tool_calls.size(), (size_t)1);
+        if (result.message.tool_calls.size() == 1) {
+            XX_TEST_EXPECT_EQ(result.message.tool_calls[0].name, "musicxx_GetMediaInfo");
+            XX_TEST_EXPECT_EQ(result.message.tool_calls[0].arguments, "{}");
+        }
+        XX_TEST_EXPECT_EQ(result.message.content, "让我查询一下。");
+    } catch (const std::exception& e) {
+        XX_TEST_FAILED++;
+        TEST_FAIL << "extract tool calls from content (XML) failed: " << e.what() << std::endl;
+    }
+}
+
+/// 非流式响应: content 含 JSON 风格 tool call 仍可提取 (原兼容逻辑不回归)
+asio::awaitable<void>
+    test_extract_tool_calls_from_content_json(MockOpenAIServer& mock, uint16_t port) {
+    std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
+    mock.mode           = MockMode::Normal;
+
+    auto mc                        = makeOaiCfg("sk-test", baseUrl);
+    mc.extractToolCallsFromContent = true;
+    auto provider                  = server::OpenAIProvider::create(mc);
+
+    neograph::CompletionParams params;
+    params.model    = "gpt-4o-mini";
+    params.messages = {
+        neograph::ChatMessage{.role = "user", .content = "查询天气"}
+    };
+
+    mock.customResponse = mock.makeCompletionResponse(
+        "```json\n{\"name\":\"get_weather\",\"arguments\":{\"location\":\"Tokyo\"}}\n```"
+    );
+    try {
+        auto result = co_await provider->invoke(params, nullptr);
+        XX_TEST_EXPECT_EQ(result.message.tool_calls.size(), (size_t)1);
+        if (result.message.tool_calls.size() == 1) {
+            XX_TEST_EXPECT_EQ(result.message.tool_calls[0].name, "get_weather");
+            auto args = neograph::json::parse(result.message.tool_calls[0].arguments);
+            XX_TEST_EXPECT_EQ(args["location"].get<std::string>(), "Tokyo");
+        }
+    } catch (const std::exception& e) {
+        XX_TEST_FAILED++;
+        TEST_FAIL << "extract tool calls from content (JSON) failed: " << e.what() << std::endl;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests — OpenAI Responses API (Codex)
+// ---------------------------------------------------------------------------
+
+asio::awaitable<void> test_responses_non_streaming(MockOpenAIServer& mock, uint16_t port) {
+    std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
+    mock.mode           = MockMode::ResponsesNormal;
+
+    auto provider = server::OpenAIProvider::create(makeCodexCfg(baseUrl));
+
+    neograph::CompletionParams params;
+    params.model    = "gpt-5-codex";
+    params.messages = {
+        neograph::ChatMessage{.role = "user", .content = "Hi"}
+    };
+
+    try {
+        auto result = co_await provider->invoke(params, nullptr);
+        XX_TEST_EXPECT_EQ(result.message.role, "assistant");
+        XX_TEST_EXPECT_TRUE(
+            result.message.content.find("Hello from responses!") != std::string::npos
+        );
+        XX_TEST_EXPECT_TRUE(result.usage.total_tokens > 0);
+        XX_TEST_EXPECT_EQ(result.stop_reason, "end_turn");
+
+        auto sent = neograph::json::parse(mock.lastRequestBody);
+        XX_TEST_EXPECT_EQ(sent["model"].get<std::string>(), "gpt-5-codex");
+        // codex 默认: store=false + reasoning effort=high
+        XX_TEST_EXPECT_TRUE(sent.contains("store"));
+        XX_TEST_EXPECT_EQ(sent["store"].get<bool>(), false);
+        XX_TEST_EXPECT_TRUE(sent.contains("reasoning"));
+        XX_TEST_EXPECT_EQ(sent["reasoning"]["effort"].get<std::string>(), "high");
+        // 无 system 消息时不应发送 instructions
+        XX_TEST_EXPECT_FALSE(sent.contains("instructions"));
+    } catch (const std::exception& e) {
+        XX_TEST_FAILED++;
+        TEST_FAIL << "responses non-streaming failed: " << e.what() << std::endl;
+    }
+}
+
+asio::awaitable<void>
+    test_responses_non_streaming_tool_call(MockOpenAIServer& mock, uint16_t port) {
+    std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
+    mock.mode           = MockMode::ResponsesToolCall;
+
+    auto provider = server::OpenAIProvider::create(makeCodexCfg(baseUrl));
+
+    neograph::CompletionParams params;
+    params.model    = "gpt-5-codex";
+    params.messages = {
+        neograph::ChatMessage{.role = "user", .content = "Weather?"}
+    };
+    params.tools = {
+        neograph::ChatTool{
+                           .name        = "get_weather",
+                           .description = "Get weather for a location",
+                           .parameters  = neograph::json::parse(
+                R"({"type":"object","properties":{"location":{"type":"string"}}})"
+            )
+        }
+    };
+
+    try {
+        auto result = co_await provider->invoke(params, nullptr);
+        XX_TEST_EXPECT_FALSE(result.message.tool_calls.empty());
+        if (!result.message.tool_calls.empty()) {
+            XX_TEST_EXPECT_EQ(result.message.tool_calls[0].name, "get_weather");
+            XX_TEST_EXPECT_EQ(result.message.tool_calls[0].id, "call_abc123");
+            XX_TEST_EXPECT_TRUE(
+                result.message.tool_calls[0].arguments.find("Tokyo") != std::string::npos
+            );
+        }
+        XX_TEST_EXPECT_EQ(result.stop_reason, "tool_use");
+    } catch (const std::exception& e) {
+        XX_TEST_FAILED++;
+        TEST_FAIL << "responses non-streaming tool call failed: " << e.what() << std::endl;
+    }
+}
+
+asio::awaitable<void> test_responses_streaming(MockOpenAIServer& mock, uint16_t port) {
+    std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
+    mock.mode           = MockMode::ResponsesStreaming;
+    mock.setDefaultResponsesSseChunks();
+
+    auto provider = server::OpenAIProvider::create(makeCodexCfg(baseUrl));
+
+    neograph::CompletionParams params;
+    params.model    = "gpt-5-codex";
+    params.messages = {
+        neograph::ChatMessage{.role = "user", .content = "Stream"}
+    };
+
+    std::string              accumulated;
+    neograph::StreamCallback onChunk = [&](const std::string& chunk) {
+        accumulated += chunk;
+    };
+
+    try {
+        auto result = co_await provider->invoke(params, onChunk);
+        XX_TEST_EXPECT_EQ(result.message.content, "Hello world");
+        XX_TEST_EXPECT_EQ(result.message.reasoning_content, "deep thought");
+        XX_TEST_EXPECT_EQ(accumulated, "Hello world");
+        XX_TEST_EXPECT_EQ(result.usage.total_tokens, 8);
+        XX_TEST_EXPECT_EQ(result.stop_reason, "end_turn");
+    } catch (const std::exception& e) {
+        XX_TEST_FAILED++;
+        TEST_FAIL << "responses streaming failed: " << e.what() << std::endl;
+    }
+}
+
+asio::awaitable<void> test_responses_streaming_tool_call(MockOpenAIServer& mock, uint16_t port) {
+    std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
+    mock.mode           = MockMode::ResponsesStreamingToolCall;
+    mock.setDefaultResponsesToolCallSseChunks();
+
+    auto provider = server::OpenAIProvider::create(makeCodexCfg(baseUrl));
+
+    neograph::CompletionParams params;
+    params.model    = "gpt-5-codex";
+    params.messages = {
+        neograph::ChatMessage{.role = "user", .content = "Weather?"}
+    };
+    params.tools = {
+        neograph::ChatTool{
+                           .name        = "get_weather",
+                           .description = "Get weather for a location",
+                           .parameters  = neograph::json::parse(
+                R"({"type":"object","properties":{"location":{"type":"string"}}})"
+            )
+        }
+    };
+
+    std::string accumulated;
+    try {
+        auto result = co_await provider->invoke(
+            params,
+            neograph::StreamCallback{[&](const std::string& chunk) {
+                accumulated += chunk;
+            }}
+        );
+        XX_TEST_EXPECT_FALSE(result.message.tool_calls.empty());
+        if (!result.message.tool_calls.empty()) {
+            XX_TEST_EXPECT_EQ(result.message.tool_calls[0].name, "get_weather");
+            XX_TEST_EXPECT_EQ(result.message.tool_calls[0].id, "call_abc123");
+            XX_TEST_EXPECT_TRUE(
+                result.message.tool_calls[0].arguments.find("Tokyo") != std::string::npos
+            );
+        }
+        XX_TEST_EXPECT_EQ(result.stop_reason, "tool_use");
+    } catch (const std::exception& e) {
+        XX_TEST_FAILED++;
+        TEST_FAIL << "responses streaming tool call failed: " << e.what() << std::endl;
+    }
+}
+
+asio::awaitable<void> test_responses_rate_limit(MockOpenAIServer& mock, uint16_t port) {
+    std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
+    mock.mode           = MockMode::RateLimit;
+
+    auto provider = server::OpenAIProvider::create(makeCodexCfg(baseUrl));
+
+    neograph::CompletionParams params;
+    params.model    = "gpt-5-codex";
+    params.messages = {
+        neograph::ChatMessage{.role = "user", .content = "hi"}
+    };
+
+    bool caught     = false;
+    int  retryAfter = -2;
+    try {
+        co_await provider->invoke(params, nullptr);
+    } catch (const neograph::RateLimitError& e) {
+        caught     = true;
+        retryAfter = e.retry_after_seconds();
+    } catch (const std::exception& e) {
+        TEST_INFO << "responses rate limit caught generic error: " << e.what() << std::endl;
+    }
+    XX_TEST_EXPECT_TRUE(caught);
+    XX_TEST_EXPECT_EQ(retryAfter, 5);
+}
+
+asio::awaitable<void> test_responses_server_error(MockOpenAIServer& mock, uint16_t port) {
+    std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
+    mock.mode           = MockMode::ServerError;
+
+    auto provider = server::OpenAIProvider::create(makeCodexCfg(baseUrl));
+
+    neograph::CompletionParams params;
+    params.model    = "gpt-5-codex";
+    params.messages = {
+        neograph::ChatMessage{.role = "user", .content = "err"}
+    };
+
+    bool caught = false;
+    try {
+        co_await provider->invoke(params, nullptr);
+    } catch (const std::runtime_error& e) {
+        caught = true;
+        // extractApiError 应提取 error.message
+        XX_TEST_EXPECT_TRUE(
+            std::string(e.what()).find("Internal server error") != std::string::npos
+        );
+    } catch (...) {
+    }
+    XX_TEST_EXPECT_TRUE(caught);
+}
+
+// ---------------------------------------------------------------------------
 // Test runner
 // ---------------------------------------------------------------------------
 
@@ -2184,18 +3014,12 @@ void test_openai_sse_done_flag() {
 
     // 普通数据行 → false
     {
-        std::string buf = "data: {\"choices\":[{\"delta\":{\"content\":\"Hi\"}}]}\n\n";
-        neograph::ChatCompletion          completion;
-        std::string                       content, thinking;
+        std::string              buf = "data: {\"choices\":[{\"delta\":{\"content\":\"Hi\"}}]}\n\n";
+        neograph::ChatCompletion completion;
+        std::string              content, thinking;
         std::map<int, neograph::ToolCall> tcMap;
-        bool done = OpenAIProvider::processSseBuffer(
-            buf,
-            completion,
-            content,
-            thinking,
-            tcMap,
-            nullptr
-        );
+        bool                              done
+            = OpenAIProvider::processSseBuffer(buf, completion, content, thinking, tcMap, nullptr);
         XX_TEST_EXPECT_FALSE(done);
         XX_TEST_EXPECT_EQ(content, "Hi");
     }
@@ -2207,14 +3031,8 @@ void test_openai_sse_done_flag() {
         neograph::ChatCompletion          completion;
         std::string                       content, thinking;
         std::map<int, neograph::ToolCall> tcMap;
-        bool done = OpenAIProvider::processSseBuffer(
-            buf,
-            completion,
-            content,
-            thinking,
-            tcMap,
-            nullptr
-        );
+        bool                              done
+            = OpenAIProvider::processSseBuffer(buf, completion, content, thinking, tcMap, nullptr);
         XX_TEST_EXPECT_TRUE(done);
     }
 
@@ -2224,7 +3042,7 @@ void test_openai_sse_done_flag() {
         neograph::ChatCompletion          completion;
         std::string                       content, thinking;
         std::map<int, neograph::ToolCall> tcMap;
-        bool done = OpenAIProvider::processSseBuffer(
+        bool                              done = OpenAIProvider::processSseBuffer(
             buf,
             completion,
             content,
@@ -2242,14 +3060,8 @@ void test_openai_sse_done_flag() {
         neograph::ChatCompletion          completion;
         std::string                       content, thinking;
         std::map<int, neograph::ToolCall> tcMap;
-        bool done = OpenAIProvider::processSseBuffer(
-            buf,
-            completion,
-            content,
-            thinking,
-            tcMap,
-            nullptr
-        );
+        bool                              done
+            = OpenAIProvider::processSseBuffer(buf, completion, content, thinking, tcMap, nullptr);
         XX_TEST_EXPECT_TRUE(done);
     }
 }
@@ -2269,6 +3081,11 @@ asio::awaitable<TestResult> run_openai_provider_tests() {
     test_create_provider_openai();
     test_create_provider_anthropic();
     test_create_provider_default_type();
+    test_create_provider_codex();
+    test_create_provider_openai_responses_flag();
+
+    // Responses API SSE 解析单测
+    test_responses_sse_parsing_edge_cases();
 
     // Unit tests for reasoning/thinking parsing (no server needed)
     test_parse_response_message_with_reasoning();
@@ -2290,6 +3107,18 @@ asio::awaitable<TestResult> run_openai_provider_tests() {
     test_extract_think_tags_closed_then_unclosed();
     test_extract_think_tags_unclosed_direct();
 
+    // Unit tests for XML 风格 <tool_call> 提取 (no server needed)
+    test_extract_tool_calls_xml_in_content();
+    test_extract_tool_calls_xml_with_args();
+    test_extract_tool_calls_xml_bare_function();
+    test_extract_tool_calls_xml_unclosed();
+    test_extract_tool_calls_xml_case_insensitive();
+    test_extract_tool_calls_xml_with_json_block();
+    test_extract_tool_calls_xml_no_call_keeps_text();
+    test_extract_tool_calls_xml_in_thinking();
+    test_extract_tool_calls_xml_multiple();
+    test_extract_tool_calls_xml_trailing_text();
+
     // Integration tests with mock server
     uint16_t port = 0;
     auto     mock = startMockServer(port);
@@ -2310,6 +3139,26 @@ asio::awaitable<TestResult> run_openai_provider_tests() {
     co_await test_extra_body_passthrough(*mock, port);
     co_await test_per_call_extra_fields(*mock, port);
     co_await test_streaming_completion(*mock, port);
+
+    // OpenAI 兼容性增强测试
+    co_await test_max_tokens_sent(*mock, port);
+    co_await test_max_completion_tokens_sent(*mock, port);
+    co_await test_stop_reason_mapping(*mock, port);
+    co_await test_custom_api_path(*mock, port);
+    co_await test_send_temperature_disabled(*mock, port);
+    co_await test_extra_headers_sent(*mock, port);
+
+    // extractToolCallsFromContent 兼容测试
+    co_await test_extract_tool_calls_from_content_xml(*mock, port);
+    co_await test_extract_tool_calls_from_content_json(*mock, port);
+
+    // Responses API (Codex) 测试
+    co_await test_responses_non_streaming(*mock, port);
+    co_await test_responses_non_streaming_tool_call(*mock, port);
+    co_await test_responses_streaming(*mock, port);
+    co_await test_responses_streaming_tool_call(*mock, port);
+    co_await test_responses_rate_limit(*mock, port);
+    co_await test_responses_server_error(*mock, port);
 
     // Reasoning/thinking content tests
     co_await test_non_streaming_reasoning_content(*mock, port);

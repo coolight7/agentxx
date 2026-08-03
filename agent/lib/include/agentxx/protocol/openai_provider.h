@@ -18,6 +18,20 @@
 namespace agentxx {
 namespace server {
 
+/// OpenAI 协议 Provider
+///
+/// 支持两种 API 形态 (由 type 控制):
+///   - Chat Completions API  (`POST /chat/completions`, 默认)
+///   - Responses API       (`POST /v1/responses`, 即 Codex 使用的 API)
+///
+/// 兼容性增强:
+///   - baseUrl 自动去除末尾 '/'，避免拼接出 `//chat/completions` 双斜杠
+///   - apiPath 可自定义端点路径 (适配 DeepSeek/Moonshot/Ollama/Azure 等兼容服务)
+///   - 发送 params.max_tokens (支持 max_completion_tokens 字段切换)
+///   - finish_reason → stop_reason 归一化
+///   - tool_calls 缺失 id 时自动回填 call_N (流式/非流式一致)
+///   - 非 200 响应自动解析 error.message / error.code 提升报错可读性
+///   - extraHeaders 支持自定义 HTTP 请求头
 class OpenAIProvider : public neograph::Provider {
 public:
 
@@ -40,32 +54,15 @@ public:
         neograph::FormatDataStreamCallback on_chunk = nullptr
     ) override;
 
-    /// 从 content 文本中提取嵌入的 tool call JSON（LLM 未正确使用 tool_calls API 时的兜底）
+    /// 从 content 文本中提取嵌入的 tool call（LLM 未正确使用 tool_calls API 时的兜底）
     /// - 支持 ```json 代码块和行内 JSON 两种格式
+    /// - 兼容 llama.cpp 等本地模型的 XML 风格输出:
+    ///   <tool_call><function=name>args</function></tool_call> (含缺失参数/未闭合标签场景)
     /// - 匹配模式: {"name":"...","arguments":...} 或 {"function":{"name":"...","arguments":...}}
     /// - 成功提取后从 content 中移除匹配的文本
     static void extractToolCalls(std::string& content, std::vector<neograph::ToolCall>& toolCalls);
 
-private:
-
-    static constexpr const char* kDefaultBaseUrl = "https://api.openai.com";
-
-    explicit OpenAIProvider(agentxx::agent::ModelConfig config);
-
-    neograph::json buildBody(const neograph::CompletionParams& params) const;
-
-    asio::awaitable<neograph::ChatCompletion> completeAsync(const neograph::CompletionParams& params
-    );
-
-    asio::awaitable<neograph::ChatCompletion> doStream(
-        const neograph::CompletionParams&  params,
-        const neograph::json&              body,
-        neograph::FormatDataStreamCallback on_chunk
-    );
-
-public:
-
-    /// 处理 OpenAI SSE 缓冲区 (public 以便单测)
+    /// 处理 Chat Completions API 的 SSE 缓冲区 (public 以便单测)
     /// - finalFlush: 连接关闭时对末尾未以 "\n" 结尾的最后一行也进行解析
     /// - 返回本次调用是否处理到了 "data: [DONE]" 结束标记 (用于检测流截断)
     static bool processSseBuffer(
@@ -76,24 +73,9 @@ public:
         std::map<int, neograph::ToolCall>& tcMap,
         neograph::FormatDataStreamCallback on_chunk,
         bool                               finalFlush = false
-    ) {
-        bool   done = false;
-        size_t pos;
-        while ((pos = buf.find('\n')) != std::string::npos) {
-            std::string line = buf.substr(0, pos);
-            buf.erase(0, pos + 1);
-            done |= processSseLine(line, completion, fullContent, fullThinking, tcMap, on_chunk);
-        }
-        if (finalFlush && !buf.empty()) {
-            // 连接 abrupt 关闭时, 最后一行可能没有 trailing "\n", 此处补解析
-            std::string line = std::move(buf);
-            buf.clear();
-            done |= processSseLine(line, completion, fullContent, fullThinking, tcMap, on_chunk);
-        }
-        return done;
-    }
+    );
 
-    /// 解析单行 SSE, 返回该行是否为 "data: [DONE]" 结束标记
+    /// 解析 Chat Completions API 单行 SSE, 返回该行是否为 "data: [DONE]" 结束标记
     static bool processSseLine(
         std::string_view                   line_in,
         neograph::ChatCompletion&          completion,
@@ -101,106 +83,82 @@ public:
         std::string&                       fullThinking,
         std::map<int, neograph::ToolCall>& tcMap,
         neograph::FormatDataStreamCallback on_chunk
-    ) {
-        std::string line{line_in};
-        if (!line.empty() && line.back() == '\r') {
-            line.pop_back();
-        }
+    );
 
-        // SSE 规范: "data:" 后的单个前导空格可选
-        if (line.rfind("data:", 0) != 0) {
-            return false;
-        }
-        std::string payload = line.substr(5);
-        if (!payload.empty() && payload.front() == ' ') {
-            payload.erase(0, 1);
-        }
+    /// 处理 Responses API 的 SSE 缓冲区 (public 以便单测)
+    /// - 与 processSseBuffer 相同语义; errOut 非空时记录 API 错误事件 (response.failed/error)
+    /// - 返回是否处理到了结束标记 (response.completed 或 [DONE])
+    static bool processResponsesSseBuffer(
+        std::string&                       buf,
+        neograph::ChatCompletion&          completion,
+        std::string&                       fullContent,
+        std::string&                       fullThinking,
+        std::map<int, neograph::ToolCall>& tcMap,
+        neograph::FormatDataStreamCallback on_chunk,
+        bool                               finalFlush = false,
+        std::string*                       errOut     = nullptr
+    );
 
-        // 部分网关会在行尾附加空白, 容忍后再判断结束标记
-        while (!payload.empty() && (payload.back() == ' ' || payload.back() == '\t')) {
-            payload.pop_back();
-        }
-        if (payload == "[DONE]") {
-            return true;
-        }
+    /// 解析 Responses API 单行 SSE
+    /// - 返回该行是否为结束标记 (response.completed / [DONE])
+    /// - errOut 非空时记录 API 错误事件 (response.failed/error)
+    static bool processResponsesSseLine(
+        std::string_view                   line_in,
+        neograph::ChatCompletion&          completion,
+        std::string&                       fullContent,
+        std::string&                       fullThinking,
+        std::map<int, neograph::ToolCall>& tcMap,
+        neograph::FormatDataStreamCallback on_chunk,
+        std::string*                       errOut = nullptr
+    );
 
-        // 畸形 data 行 (部分代理/网关会注入非 JSON 内容) 应跳过而不是中断整个流
-        neograph::json j;
-        try {
-            j = neograph::json::parse(payload);
-        } catch (...) {
-            return false;
-        }
+    /// tool_calls 缺失 id 时回填 call_N (与流式路径行为一致)
+    static void fillMissingToolCallIds(neograph::ChatCompletion& completion);
 
-        if (j.contains("usage") && !j["usage"].is_null()) {
-            auto u                             = j["usage"];
-            completion.usage.prompt_tokens     = u.value("prompt_tokens", 0);
-            completion.usage.completion_tokens = u.value("completion_tokens", 0);
-            completion.usage.total_tokens      = u.value(
-                "total_tokens",
-                completion.usage.prompt_tokens + completion.usage.completion_tokens
-            );
-        }
-
-        if (!j.contains("choices") || !j["choices"].is_array() || j["choices"].empty()) {
-            return false;
-        }
-        auto delta = j["choices"][0]["delta"];
-
-        if (delta.contains("content") && !delta["content"].is_null()) {
-            std::string token = delta["content"].get<std::string>();
-            if (!token.empty()) {
-                fullContent += token;
-                if (on_chunk) {
-                    on_chunk(
-                        neograph::ChatStreamChunk{neograph::ChatStreamChunk::TYPE_CONTENT, token}
-                    );
-                }
-            }
-        }
-
-        if (delta.contains("reasoning_content") && delta["reasoning_content"].is_string()) {
-            auto token = delta["reasoning_content"].get<std::string>();
-            if (!token.empty()) {
-                fullThinking += token;
-                if (on_chunk) {
-                    on_chunk(
-                        neograph::ChatStreamChunk{neograph::ChatStreamChunk::TYPE_THINKING, token}
-                    );
-                }
-            }
-        } else if (delta.contains("thinking") && delta["thinking"].is_string()) {
-            auto token = delta["thinking"].get<std::string>();
-            if (!token.empty()) {
-                fullThinking += token;
-                if (on_chunk) {
-                    on_chunk(
-                        neograph::ChatStreamChunk{neograph::ChatStreamChunk::TYPE_THINKING, token}
-                    );
-                }
-            }
-        }
-
-        if (delta.contains("tool_calls")) {
-            for (const auto& tc : delta["tool_calls"]) {
-                int idx = tc.value("index", 0);
-                if (tc.contains("id")) {
-                    tcMap[idx].id = tc["id"].get<std::string>();
-                }
-                if (tc.contains("function")) {
-                    if (tc["function"].contains("name")) {
-                        tcMap[idx].name += tc["function"]["name"].get<std::string>();
-                    }
-                    if (tc["function"].contains("arguments")) {
-                        tcMap[idx].arguments += tc["function"]["arguments"].get<std::string>();
-                    }
-                }
-            }
-        }
-        return false;
-    }
-
+    /// 从 content 中提取 <think>...</think> 标签到 thinking (public 以便单测)
     static void extractThinkTags(std::string& content, std::string& thinking);
+
+private:
+
+    inline static constexpr std::string_view kDefaultBaseUrl{"https://api.openai.com"};
+    inline static constexpr std::string_view kDefaultApiPath{"/chat/completions"};
+    inline static constexpr std::string_view kDefaultResponsesPath{"/v1/responses"};
+
+    explicit OpenAIProvider(agentxx::agent::ModelConfig config);
+
+    /// 组装请求 URL: baseUrl (去尾 '/') + apiPath (默认按 API 形态选择)
+    std::string apiUrl() const;
+
+    /// 填充请求头: Authorization + extraHeaders
+    void applyHeaders(agentxx::util::HeaderMap& headers) const;
+
+    /// 归一化 finish_reason → stop_reason
+    static std::string mapStopReason(std::string_view finishReason);
+
+    /// 从错误响应 body 中提取 error.message / error.code, 失败时返回原 body
+    static std::string extractApiError(const std::string& body);
+
+    neograph::json buildBody(const neograph::CompletionParams& params) const;
+
+    neograph::json buildResponsesBody(const neograph::CompletionParams& params) const;
+
+    asio::awaitable<neograph::ChatCompletion> completeAsync(const neograph::CompletionParams& params
+    );
+
+    asio::awaitable<neograph::ChatCompletion>
+        completeAsyncResponses(const neograph::CompletionParams& params);
+
+    asio::awaitable<neograph::ChatCompletion> doStream(
+        const neograph::CompletionParams&  params,
+        const neograph::json&              body,
+        neograph::FormatDataStreamCallback on_chunk
+    );
+
+    asio::awaitable<neograph::ChatCompletion> doStreamResponses(
+        const neograph::CompletionParams&  params,
+        const neograph::json&              body,
+        neograph::FormatDataStreamCallback on_chunk
+    );
 
 private:
 

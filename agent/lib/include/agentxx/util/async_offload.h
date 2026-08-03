@@ -37,6 +37,11 @@
 
 #include "asio/co_spawn.hpp"
 #include "asio/error.hpp"
+#include "asio/experimental/awaitable_operators.hpp"
+#include "asio/experimental/cancellation_condition.hpp"
+#include "asio/experimental/parallel_group.hpp"
+#include "asio/steady_timer.hpp"
+#include "asio/this_coro.hpp"
 #include "asio/thread_pool.hpp"
 #include "asio/use_awaitable.hpp"
 #include "neograph/define.h"
@@ -136,6 +141,52 @@ asio::awaitable<T> offloadCancellableAsync(
         cancelFlag->store(true, std::memory_order_release);
         throw;
     }
+}
+
+/// 超时等待协程完成
+/// - timeout 使用毫秒精度, 秒级调用方可隐式转换 (秒->毫秒不损失精度, 反之则不能隐式转换)
+template<typename T>
+asio::awaitable<T> asyncWithTimeout(
+    std::function<asio::awaitable<T>()> future,
+    std::chrono::milliseconds           timeout,
+    std::function<T()>                  onTimeout = nullptr
+) {
+    auto               ctx = co_await asio::this_coro::executor;
+    asio::steady_timer timer(ctx, timeout);
+    // 注意: 不能使用 `operator||` (其内部是 wait_for_one_success 语义) —— 当工作协程
+    // 快速失败 (如 file_patterns 无匹配、文件读取错误) 时, 该语义不会立即返回, 而是继续
+    // 等待另一个操作"成功" (定时器要等满 timeout 才成功), 导致真实错误被拖到满超时才
+    // 返回 (表现为 "timed out")。因此这里改用 parallel_group + wait_for_one:
+    // 协程先完成 (无论成功/失败) 都立即返回; 定时器仅在工作协程挂起过久时胜出。
+    // - 本 asio 版本中 co_spawn(awaitable<T>) 的完成签名为 void(exception_ptr, T),
+    //   定时器协程与 void 协程则仅携带 void(exception_ptr), 故结果元组元素个数随 T 变化,
+    //   无法用固定的结构化绑定解构, 只能按索引 std::get 访问:
+    //   [0]=completion_order, [1]=工作协程异常, [2]=工作协程结果(非 void 时), 末位=定时器异常
+    auto groupResult
+        = co_await asio::experimental::make_parallel_group(
+              asio::co_spawn(ctx, future(), asio::deferred),
+              asio::co_spawn(ctx, timer.async_wait(asio::use_awaitable), asio::deferred)
+        )
+              .async_wait(asio::experimental::wait_for_one(), asio::deferred);
+    auto& order = std::get<0>(groupResult);
+
+    if (order[0] == 0) {
+        // 工作协程先完成 (无论成功/失败)
+        if (std::get<1>(groupResult)) {
+            std::rethrow_exception(std::get<1>(groupResult));
+        }
+        if constexpr (std::is_void_v<T>) {
+            co_return;
+        } else {
+            co_return std::move(std::get<2>(groupResult));
+        }
+    }
+
+    // 定时器先完成 -> 超时 (工作协程已被取消, 其结果/异常不再有意义)
+    if (nullptr != onTimeout) {
+        co_return onTimeout();
+    }
+    throw std::runtime_error{"[timeout]"};
 }
 
 } // namespace util
