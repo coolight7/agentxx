@@ -155,8 +155,6 @@ public:
         remoteUrl_ = std::move(url);
     }
 
-    void onDelta(const agentxx::agent::Delta& delta) override;
-    void onSync(const agentxx::agent::SyncPayload& payload) override;
     asio::awaitable<std::optional<std::string>> getInput() override;
     asio::awaitable<neograph::json>             handleInterrupt(
                     std::string_view threadId,
@@ -171,6 +169,12 @@ public:
     TUISharedState& sharedState() { return sharedState_; }
 
 protected:
+
+    // ---- AgentIOBase 被动接收回调 (client 端点实现; 仅由 onPeerMessage 分发) ----
+    void onDelta(const agentxx::agent::Delta& delta) override;
+    void onSync(const agentxx::agent::SyncPayload& payload) override;
+    void onTurnResult(const agentxx::agent::WireTurnResult& result) override;
+    void onContextStats(const agentxx::agent::WireContextStats& stats) override;
 
     void onPeerMessage(agentxx::agent::WireMessage msg) override;
 

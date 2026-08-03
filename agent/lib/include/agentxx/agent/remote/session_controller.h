@@ -51,9 +51,8 @@ public:
 
     ~SessionController() override;
 
-    // ----- AgentIOBase: 对端推给我的 (BaseAgent 产出, 经 transport 发给客户端) -----
-    void onDelta(const Delta& delta) override;
-    void onSync(const SyncPayload& payload) override;
+    // ----- AgentIOBase: 主动发送 (覆写: 新产出的 Delta 先写入重放缓冲再转发客户端) -----
+    void sendToPeer(WireMessage msg) override;
 
     // ----- AgentIOBase: 对端从我这拉取的 (BaseAgent 调用) -----
     asio::awaitable<std::optional<std::string>> getInput() override;
@@ -101,6 +100,13 @@ public:
     /// 当前 fullHistory 的链式哈希尾 (供 hello_ack/sync)
     std::string currentTailHash();
 
+protected:
+
+    // ----- AgentIOBase: 被动接收回调 (server 端点不会从 client 收到这些消息,
+    //       空实现仅用于满足纯虚契约) -----
+    void onDelta(const Delta& delta) override;
+    void onSync(const SyncPayload& payload) override;
+
 private:
 
     using ErrorCode = neograph_asio_error_code;
@@ -140,7 +146,7 @@ private:
     std::weak_ptr<BaseAgent> agent_;
     Config                   config_;
 
-    // delta 环形缓冲 (仅 ex_ 线程访问: onDelta 写, handleHello 读)
+    // delta 环形缓冲 (仅 ex_ 线程访问: sendToPeer 写, handleHello 读)
     std::deque<Delta> deltaBuffer_;
 
     // 输入 channel (concurrent_channel 内部线程安全)

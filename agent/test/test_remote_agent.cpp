@@ -442,26 +442,25 @@ static asio::awaitable<void> test_session_controller_replay() {
     auto sc
         = std::make_shared<SessionController>(ex, std::weak_ptr<agentxx::agent::BaseAgent>{}, cfg);
 
-    // 先喂入 delta (此时无 transport, 仅记录缓冲)
+    // 强制 transport: 先装配再产出事件 (sendToPeer 同时写缓冲并实时转发 client)
+    sc->setTransport(std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(serverT)));
+
     for (uint64_t s = 1; s <= 5; ++s) {
         agentxx::agent::Delta d;
         d.type = agentxx::agent::Delta::Type::TextToken;
         d.seq  = s;
         d.text = "t" + std::to_string(s);
-        sc->onDelta(d);
+        sc->sendToPeer(d);
     }
-
-    // 设置 transport 后再 handleHello (触发增量重放)
-    sc->setTransport(std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(serverT)));
 
     // lastSeq=3 -> 应增量重放 seq 4,5
     agentxx::agent::WireHello hello{"session", "", 3, ""};
     sc->handleHello(hello);
 
-    // 从 client 端读取: HelloAck 须最先到达, 随后增量重放 delta(4), delta(5)。
+    // 从 client 端读取: 先收到 5 条实时 delta, 随后 HelloAck, 最后增量重放 delta(4), delta(5)。
     // (客户端握手循环会丢弃 HelloAck 之前的消息, 故服务端必须先发 HelloAck 再重放)
     std::vector<agentxx::agent::WireMessage> received;
-    for (int i = 0; i < 3; ++i) {
+    for (int i = 0; i < 8; ++i) {
         auto msg = co_await clientT->recv();
         if (!msg) {
             break;
@@ -469,15 +468,24 @@ static asio::awaitable<void> test_session_controller_replay() {
         received.push_back(std::move(*msg));
     }
 
-    XX_TEST_EXPECT_EQ(received.size(), size_t{3});
-    if (received.size() >= 3) {
-        auto* ack = std::get_if<agentxx::agent::WireHelloAck>(&received[0]);
+    XX_TEST_EXPECT_EQ(received.size(), size_t{8});
+    if (received.size() >= 8) {
+        // 前 5 条为实时转发的 delta
+        for (uint64_t s = 1; s <= 5; ++s) {
+            auto* d = std::get_if<agentxx::agent::Delta>(&received[s - 1]);
+            XX_TEST_EXPECT_TRUE(d != nullptr);
+            if (d) {
+                XX_TEST_EXPECT_EQ(d->seq, s);
+            }
+        }
+        auto* ack = std::get_if<agentxx::agent::WireHelloAck>(&received[5]);
         XX_TEST_EXPECT_TRUE(ack != nullptr);
         if (ack) {
             XX_TEST_EXPECT_TRUE(ack->ok);
         }
-        auto* d0 = std::get_if<agentxx::agent::Delta>(&received[1]);
-        auto* d1 = std::get_if<agentxx::agent::Delta>(&received[2]);
+        // 重放的 delta 不应重复写入缓冲 (seq 守卫), 此处收到重放 seq 4,5
+        auto* d0 = std::get_if<agentxx::agent::Delta>(&received[6]);
+        auto* d1 = std::get_if<agentxx::agent::Delta>(&received[7]);
         XX_TEST_EXPECT_TRUE(d0 != nullptr);
         XX_TEST_EXPECT_TRUE(d1 != nullptr);
         if (d0 && d1) {
@@ -503,19 +511,25 @@ static asio::awaitable<void> test_session_controller_replay_fallback() {
     auto sc
         = std::make_shared<SessionController>(ex, std::weak_ptr<agentxx::agent::BaseAgent>{}, cfg);
 
+    // 强制 transport: 先装配再产出事件
+    sc->setTransport(std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(serverT)));
+
     for (uint64_t s = 1; s <= 10; ++s) {
         agentxx::agent::Delta d;
         d.type = agentxx::agent::Delta::Type::TextToken;
         d.seq  = s;
-        sc->onDelta(d);
+        sc->sendToPeer(d);
     }
-
-    // 设置 transport 后再 handleHello
-    sc->setTransport(std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(serverT)));
 
     // lastSeq=2 -> 缓冲保留 8,9,10; 2+1=3 < 8 -> 全量 sync
     agentxx::agent::WireHello hello{"session", "", 2, ""};
     sc->handleHello(hello);
+
+    // 先排空 10 条实时转发的 delta
+    for (int i = 0; i < 10; ++i) {
+        auto liveMsg = co_await clientT->recv();
+        XX_TEST_EXPECT_TRUE(liveMsg.has_value());
+    }
 
     // HelloAck 须最先到达, 随后全量 SyncPayload
     auto ackMsg = co_await clientT->recv();

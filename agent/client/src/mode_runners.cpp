@@ -27,7 +27,7 @@ namespace client {
 // ---------------------------------------------------------------------------
 
 /// TUI 持有 client transport, SessionController 持有 server transport
-/// 无 RemoteClientAgentIO / RemoteServerAgentIO 中间层
+/// 两端点经 Channel 直连, 无中间包装层
 static std::shared_ptr<agent::SessionController> setupLocalUnifiedDirect(
     asio::any_io_executor               clientEx,
     std::shared_ptr<agent::CodeAgent>   agent,

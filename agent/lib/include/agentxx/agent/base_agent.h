@@ -63,7 +63,8 @@ public:
 
     /// 执行一轮对话
     /// - 消息由 Session 内部管理 (fullHistory + llmMessages 双消息集)
-    /// - 增量事件经 io->onDelta() 推送; 状态不一致时经 io->onSync() 校准
+    /// - 增量事件经 io->sendToPeer(Delta) 推送 (io 端点须已设置 transport);
+    ///   io 传 nullptr 时为 headless 模式, 不产出事件
     asio::awaitable<ConversationTurnResult> runConversationTurnAsync(
         std::string_view             threadId,
         std::string_view             userInput,

@@ -385,30 +385,9 @@ void AgentTUI::onPeerMessage(agentxx::agent::WireMessage msg) {
             } else if constexpr (std::is_same_v<T, agentxx::agent::SyncPayload>) {
                 onSync(m);
             } else if constexpr (std::is_same_v<T, agentxx::agent::WireTurnResult>) {
-                {
-                    std::lock_guard<std::mutex> lock(sharedState_.mutex());
-                    auto&                       st = sharedState_.mutableState();
-                    st.isStreaming                 = false;
-                    if (m.hasError && !m.errorMessage.empty()) {
-                        st.messages.push_back(std::make_shared<TUIMessage>(
-                            TUIMessage{TUIMessage::Role::System, "[Error] " + m.errorMessage}
-                        ));
-                    }
-                    dispatchNextPendingInput(st);
-                }
-                postRedraw();
+                onTurnResult(m);
             } else if constexpr (std::is_same_v<T, agentxx::agent::WireContextStats>) {
-                if (session_ && session_->contextStats) {
-                    session_->contextStats->contextTokens.store(
-                        m.contextTokens,
-                        std::memory_order_relaxed
-                    );
-                    session_->contextStats->maxContextTokens.store(
-                        m.maxContextTokens,
-                        std::memory_order_relaxed
-                    );
-                }
-                postRedraw();
+                onContextStats(m);
             } else if constexpr (std::is_same_v<T, agentxx::agent::WireInterruptRequest>) {
                 auto self = shared_from_this();
                 asio::co_spawn(
@@ -726,6 +705,36 @@ void AgentTUI::onSync(const agentxx::agent::SyncPayload& payload) {
     }
     if (messageList_) {
         messageList_->setStickToBottom(true);
+    }
+    postRedraw();
+}
+
+// ---------------------------------------------------------------------------
+// onTurnResult / onContextStats (client 线程)
+// ---------------------------------------------------------------------------
+
+void AgentTUI::onTurnResult(const agentxx::agent::WireTurnResult& result) {
+    {
+        std::lock_guard<std::mutex> lock(sharedState_.mutex());
+        auto&                       st = sharedState_.mutableState();
+        st.isStreaming                 = false;
+        if (result.hasError && !result.errorMessage.empty()) {
+            st.messages.push_back(std::make_shared<TUIMessage>(
+                TUIMessage{TUIMessage::Role::System, "[Error] " + result.errorMessage}
+            ));
+        }
+        dispatchNextPendingInput(st);
+    }
+    postRedraw();
+}
+
+void AgentTUI::onContextStats(const agentxx::agent::WireContextStats& stats) {
+    if (session_ && session_->contextStats) {
+        session_->contextStats->contextTokens.store(stats.contextTokens, std::memory_order_relaxed);
+        session_->contextStats->maxContextTokens.store(
+            stats.maxContextTokens,
+            std::memory_order_relaxed
+        );
     }
     postRedraw();
 }

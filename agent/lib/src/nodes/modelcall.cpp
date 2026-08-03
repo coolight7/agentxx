@@ -484,7 +484,7 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
             errInfo
         );
         // 逐渐延长延时等待
-        timer.expires_after(std::chrono::milliseconds((retry + appendDelay) * 1000));
+        timer.expires_after(std::chrono::milliseconds((retry + appendDelay) * 3 * 1000));
         co_await timer.async_wait(asio::use_awaitable);
     } while (true);
 }

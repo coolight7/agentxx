@@ -14,7 +14,8 @@ namespace test {
 int g_da_passed = 0;
 int g_da_failed = 0;
 
-/// 测试用 IO: 记录 onDelta/onSync/getInput 调用，供验证使用
+/// 测试用 IO: 记录 sendToPeer 产出的事件与 getInput 调用，供验证使用
+/// - 由 BaseAgent 直接驱动 (无 transport/无真实对端), 覆写 sendToPeer 拦截记录事件
 class TestAgentIO : public agentxx::agent::AgentIOBase {
 public:
 
@@ -23,14 +24,25 @@ public:
     std::atomic<int>                   syncCount{0};
     bool                               failGetInput = false;
 
-    void onDelta(const agentxx::agent::Delta& delta) override {
-        deltas.push_back(delta);
-        deltaCount++;
+    void sendToPeer(agentxx::agent::WireMessage msg) override {
+        std::visit(
+            [this](auto&& m) {
+                using T = std::decay_t<decltype(m)>;
+                if constexpr (std::is_same_v<T, agentxx::agent::Delta>) {
+                    deltas.push_back(std::move(m));
+                    deltaCount++;
+                } else if constexpr (std::is_same_v<T, agentxx::agent::SyncPayload>) {
+                    syncCount++;
+                }
+            },
+            std::move(msg)
+        );
     }
 
-    void onSync(const agentxx::agent::SyncPayload& /*payload*/) override {
-        syncCount++;
-    }
+    // 被动接收回调: 测试中不会被调用 (无对端消息), 空实现满足纯虚契约
+    void onDelta(const agentxx::agent::Delta& /*delta*/) override {}
+
+    void onSync(const agentxx::agent::SyncPayload& /*payload*/) override {}
 
     asio::awaitable<std::optional<std::string>> getInput() override {
         if (failGetInput) {
@@ -454,7 +466,7 @@ asio::awaitable<void> test_agent_io_session_bus() {
     // IO 应已注册到 session
     XX_TEST_EXPECT_TRUE(session->io != nullptr);
 
-    // onDelta 应在 turn 开始时被调用 (TurnStart)
+    // turn 开始时应经 sendToPeer 产出 TurnStart delta
     XX_TEST_EXPECT_TRUE(io->deltaCount > 0);
 
     co_return;
