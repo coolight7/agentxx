@@ -822,19 +822,6 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
         .durationMs   = duration_ms,
     });
 
-    // 通过 ioPtr 发送 TurnResult (供远程模式使用)
-    if (ioPtr) {
-        auto resultMsg = WireTurnResult{
-            .threadId     = std::string{threadId},
-            .hasError     = turnResult.hasError,
-            .errorMessage = turnResult.errorMessage,
-            .interrupted  = turnResult.interrupted,
-            .startTimeMs  = start_time_ms,
-            .durationMs   = duration_ms,
-        };
-        ioPtr->sendToPeer(std::move(resultMsg));
-    }
-
     co_return turnResult;
 }
 

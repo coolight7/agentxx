@@ -105,11 +105,15 @@ std::optional<neograph::json> HttpResponse::bodyJson() const {
     if (body.empty()) {
         return std::nullopt;
     }
-    try {
-        return neograph::json::parse(body);
-    } catch (const neograph::json::parse_error&) {
-        return std::nullopt;
-    }
+    // 解析失败 (非法 JSON) 返回 nullopt 而不是抛异常
+    return agentxx::util::catchError<std::optional<neograph::json>>(
+        [this]() -> std::optional<neograph::json> {
+            return neograph::json::parse(body);
+        },
+        [](std::string) -> std::optional<neograph::json> {
+            return std::nullopt;
+        }
+    );
 }
 
 std::optional<std::string> HttpResponse::bodyText() const {
