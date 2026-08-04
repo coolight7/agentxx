@@ -2763,7 +2763,7 @@ asio::awaitable<void> test_send_temperature_disabled(MockOpenAIServer& mock, uin
 
     neograph::CompletionParams params;
     params.model       = "deepseek-reasoner";
-    params.temperature = 0.9;
+    params.temperature = static_cast<float>(0.9);
     params.messages    = {
         neograph::ChatMessage{.role = "user", .content = "hi"}
     };

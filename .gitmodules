@@ -58,4 +58,4 @@
 [submodule "agent/third_party/cmark_gfm"]
 	path = agent/third_party/cmark_gfm
 	url = https://github.com/github/cmark-gfm
-	branch = 0.29.0.gfm.13
+	branch = 499789b49373bfa045d0e7547e5ee63444c77bca

@@ -1,17 +1,19 @@
-#include "agentxx/util/http_client.h"
-#include "agentxx/util/exception.h"
-#include "html2md/html2md.h"
 #include <asio/detail/socket_option.hpp>
-#include <neograph/provider.h>
-#include <openssl/ssl.h>
-
 // 仅提供 TCP_KEEPIDLE/TCP_KEEPINTVL/TCP_KEEPCNT 选项号常量, 设置经由 asio 接口完成
-#if defined(_WIN32)
+#if defined(XX_IS_WIN_D)
+#include <windows.h>
+// ---
 #include <mstcpip.h>
 #else
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #endif
+
+#include "agentxx/util/exception.h"
+#include "agentxx/util/http_client.h"
+#include "html2md/html2md.h"
+#include <neograph/provider.h>
+#include <openssl/ssl.h>
 
 namespace agentxx {
 namespace util {
@@ -387,8 +389,7 @@ asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::requestAsy
                     }
                     req.body() = currentBody;
                     req.prepare_payload();
-                } else if (currentMethod == "POST" || currentMethod == "PUT"
-                           || currentMethod == "PATCH") {
+                } else if (currentMethod == "POST" || currentMethod == "PUT" || currentMethod == "PATCH") {
                     // 空 body 也必须携带 Content-Length: 0, 否则部分服务器/代理会一直等待
                     // body 数据或拒绝请求 (RFC 7230 §3.3.2)
                     if (!currentContentType.empty()) {
