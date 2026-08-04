@@ -77,7 +77,7 @@ asio::awaitable<void> ToolSkillSearchSubAgentTask::onSubagentEnd(std::string& re
         //                   ->getGraphDataItemValue<std::vector<std::string>>(
         //                       "session",
         //                       agentxx::middleware::MiddlewareContext::
-        //                           graphDataKey_systemMessage);
+        //                           graphDataKey_appendSystemMessage);
         //           systemMsgList.push_back(fmt::format(
         //               "\n## Loaded Skill: {}\n\n{}", skillPath, content));
         //         }

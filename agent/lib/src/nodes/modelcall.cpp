@@ -9,6 +9,7 @@
 #include "asio/steady_timer.hpp"
 #include "asio/use_awaitable.hpp"
 #include "fmt/format.h"
+#include "fmt/ranges.h"
 
 namespace agentxx {
 namespace nodes {
@@ -270,40 +271,55 @@ void ModelCallWrapNode::repairMessages(neograph::graph::NodeInput& in) {
     if (lastMsg.has_value()) {
         const auto& role = lastMsg.value().role;
         if ("system" == role || "user" == role || "tool" == role) {
-            return;
+            // 无需修复
+        } else {
+            // 插入 user msg 修正消息顺序
+            auto userMsg = neograph::ChatMessage{
+                .role    = "user",
+                .content = std::string{defaultContinueTip},
+                .flags   = neograph::MessageFlag::AutoInserted,
+            };
+            auto userMsgJson = neograph::json{};
+            neograph::to_json(userMsgJson, userMsg);
+            in.state.write("messages", neograph::json::array({userMsgJson}));
+            // 无需通知 [CHANNEL_WRITE]，避免在 UI 层插入该消息
         }
-        // 插入 user msg 修正消息顺序
-        auto userMsg = neograph::ChatMessage{
-            .role    = "user",
-            .content = std::string{defaultContinueTip},
-            .flags   = neograph::MessageFlag::AutoInserted,
-        };
-        auto userMsgJson = neograph::json{};
-        neograph::to_json(userMsgJson, userMsg);
-        in.state.write("messages", neograph::json::array({userMsgJson}));
-        // 无需通知 [CHANNEL_WRITE]，避免在 UI 层插入该消息
     }
 
     auto agentCtxPtr = agentContext.lock();
     if (agentCtxPtr->agentConfig->checkMessagesBeforeLLM) {
         auto msgs = in.state.get_messages();
+
+        auto checkInfo
+            = agentCtxPtr->middlewareHandleContext->getGraphDataItemValue<neograph::json>(
+                in.ctx.thread_id,
+                agentxx::middleware::MiddlewareContext::graphDataKey_messageCheckInfo
+            );
+
+        if (checkInfo.contains("message_length") && checkInfo["message_length"].is_number_integer()
+            && checkInfo.value<size_t>("message_length", 0) > msgs.size()) {
+            XX_LOGE(
+                "LLM Messages length reduce: old({}) -> current({})",
+                checkInfo.value<size_t>("message_length", 0),
+                msgs.size()
+            );
+        }
+        checkInfo["message_length"] = msgs.size();
+
         for (const auto& msg : msgs) {
             bool doPrint = false;
             if (msg.role == "system") {
-                agentCtxPtr->middlewareHandleContext->modifyGraphDataItemValue<size_t>(
-                    in.ctx.thread_id,
-                    agentxx::middleware::MiddlewareContext::graphDataKey_systemMessageCheckInfo,
-                    [&](size_t& val) {
-                        if (val > 0 && val != msg.content.size()) {
-                            XX_LOGE(
-                                "LLM system message content length is changed: {}|{}",
-                                val,
-                                msg.content.size()
-                            );
-                        }
-                        val = msg.content.size();
-                    }
-                );
+                if (checkInfo.contains("system_message_length")
+                    && checkInfo["system_message_length"].is_number_integer()
+                    && checkInfo.value<size_t>("system_message_length", 0) != msg.content.size()) {
+                    XX_LOGE(
+                        "LLM System-Message content length changed: old({}) -> current({})",
+                        checkInfo.value<size_t>("system_message_length", 0),
+                        msg.content.size()
+                    );
+                    doPrint = true;
+                }
+                checkInfo["system_message_length"] = msg.content.size();
             }
             // 检查消息非空
             if (msg.reasoning_content.empty() && msg.content.empty() && msg.tool_calls.empty()) {
@@ -333,6 +349,11 @@ void ModelCallWrapNode::repairMessages(neograph::graph::NodeInput& in) {
                 agentxx::middleware::BaseMiddlewareHandleInterface::printMessage(msg);
             }
         }
+        agentCtxPtr->middlewareHandleContext->setGraphDataItemValue<neograph::json>(
+            in.ctx.thread_id,
+            agentxx::middleware::MiddlewareContext::graphDataKey_messageCheckInfo,
+            std::move(checkInfo)
+        );
     }
 }
 
@@ -362,19 +383,15 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
                 = agentCtxPtr->middlewareHandleContext
                       ->getGraphDataItemValue<std::vector<std::string>>(
                           in.ctx.thread_id,
-                          agentxx::middleware::MiddlewareContext::graphDataKey_systemMessage
+                          agentxx::middleware::MiddlewareContext::graphDataKey_appendSystemMessage
                       );
 
-            // 清空原本的 content
-            newSystemMsg.content = "";
-            std::ostringstream oss;
-            oss << agentCtxPtr->agentConfig->prompt.systemPrompt;
-
-            for (const auto& item : appendSystemMsgList) {
-                oss << item << "\n";
-            }
-
-            newSystemMsg.content = oss.str();
+            // 清空替换 content
+            newSystemMsg.content = fmt::format(
+                "{}\n{}",
+                agentCtxPtr->agentConfig->prompt.systemPrompt,
+                fmt::join(appendSystemMsgList, "\n")
+            );
         }
 
         neograph::json sysMsgJson;

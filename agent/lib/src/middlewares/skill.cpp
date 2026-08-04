@@ -103,6 +103,7 @@ asio::awaitable<void> SkillMiddlewareHandle::onAgentcallStartFunc(neograph::grap
     if (initSkillDirPaths.empty()) {
         co_return;
     }
+
     // list skills / load skill metadata
     if (false == haveLoadSkillMetadata) {
         // 先置位防止并发会话重复进入加载; 但加载结果先写入局部变量, 完成后再整体替换 skillCache。
@@ -170,14 +171,8 @@ asio::awaitable<void> SkillMiddlewareHandle::onAgentcallStartFunc(neograph::grap
             content
         );
     }
-    co_return;
-}
 
-asio::awaitable<void> SkillMiddlewareHandle::onModelcallStartFunc(neograph::graph::NodeInput& in) {
-    if (initSkillDirPaths.empty()) {
-        co_return;
-    }
-
+    // insert
     auto skillState = co_await getStateItem(in.ctx.thread_id);
 
     {
@@ -204,7 +199,7 @@ You have access to a skills library that provides specialized capabilities and d
         auto& appendSystemMsgList
             = agentCtxPtr->middlewareHandleContext->getGraphDataItemValue<std::vector<std::string>>(
                 in.ctx.thread_id,
-                agentxx::middleware::MiddlewareContext::graphDataKey_systemMessage
+                agentxx::middleware::MiddlewareContext::graphDataKey_appendSystemMessage
             );
         appendSystemMsgList.push_back(skillState->cacheFormatSkillPrompt);
     }

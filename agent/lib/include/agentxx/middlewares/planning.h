@@ -27,7 +27,7 @@ public:
         BaseMiddlewareHandle<PlanningMiddlewareState>("PlanningMiddlewareHandle", in_agentContext) {
     }
 
-    asio::awaitable<void> onModelcallStartFunc(neograph::graph::NodeInput& in) override;
+    asio::awaitable<void> onAgentcallStartFunc(neograph::graph::NodeInput& in) override;
 };
 
 } // namespace middleware

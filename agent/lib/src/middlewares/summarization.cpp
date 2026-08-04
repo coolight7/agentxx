@@ -249,18 +249,9 @@ asio::awaitable<void>
         }
     }
 
-    const auto& appendSystemPromptList
-        = agentCtxPtr->middlewareHandleContext
-              ->getGraphDataItemValue<neograph::json>(
-                  in.ctx.thread_id,
-                  agentxx::middleware::MiddlewareContext::graphDataKey_systemMessage
-              )
-              .get<std::vector<std::string>>();
-
     size_t     countTokenUsage = 0;
-    const auto tokenUsage      = (apiTokenUsage > 0)
-                                     ? static_cast<size_t>(apiTokenUsage)
-                                     : (countTokenUsage = countTokens(appendSystemPromptList, messages));
+    const auto tokenUsage      = (apiTokenUsage > 0) ? static_cast<size_t>(apiTokenUsage)
+                                                     : (countTokenUsage = countTokens({}, messages));
 
     const auto& thread_id = in.ctx.thread_id;
 
@@ -298,7 +289,7 @@ asio::awaitable<void>
         neograph::to_json(newMsgsJson, messages);
     }
 
-    if (tokenUsage >= modelContenxtMaxToken * 0.9) {
+    if (tokenUsage >= modelContenxtMaxToken * 0.85) {
         const size_t systemCount = (!messages.empty() && messages[0].role == "system") ? 1 : 0;
         // TODO: 如果最近消息+system 已经超过，则无法压缩
         if (messages.size() > keepRecentMessageCount + systemCount) {
@@ -394,7 +385,7 @@ asio::awaitable<void>
                 countTokenUsage,
                 tokenUsage,
                 modelContenxtMaxToken,
-                countTokens(appendSystemPromptList, in.state.get_messages())
+                countTokens({}, in.state.get_messages())
             );
         }
     } else {
