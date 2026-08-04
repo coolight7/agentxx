@@ -323,8 +323,16 @@ Options:
     if (!agentUrl.empty()) {
         agentxx::util::LogDispatcher::instance().removeSink(defaultLogSink);
         if (mode == "tui") {
+            config->logPrintToolcall                       = false;
+            config->logPrintMessagesBeforeLLM              = false;
+            config->logPrintMessagesBeforeLLMWithSystemMsg = false;
+            config->logPrintSummarizationResultTokenCount  = true;
             runRemoteTui(config, agentUrl, agentToken, remoteModel);
         } else {
+            config->logPrintToolcall                       = false;
+            config->logPrintMessagesBeforeLLM              = false;
+            config->logPrintMessagesBeforeLLMWithSystemMsg = false;
+            config->logPrintSummarizationResultTokenCount  = false;
             runRemoteCli(agentUrl, agentToken, remoteModel);
         }
         return 0;

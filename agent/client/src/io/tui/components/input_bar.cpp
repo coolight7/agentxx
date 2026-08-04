@@ -32,7 +32,7 @@ Element InputComponent::OnRender() {
     } else if (config_.isStreaming && config_.isStreaming()) {
         indicator = text("~") | color(theme.accentColor) | bold;
     } else {
-        indicator = text(">") | color(theme.promptColor) | bold;
+        indicator = text(">") | color(theme.accentColor) | bold;
     }
 
     const int maxInputTotalLines = std::max(3, Terminal::Size().dimy / 2);

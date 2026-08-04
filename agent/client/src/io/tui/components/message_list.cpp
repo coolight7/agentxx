@@ -153,7 +153,7 @@ std::vector<ScrollItem> MessageListComponent::buildItems() {
                 | center,
             text("Type a message to start. [F2] switch model, [Esc] cancel, "
                  "[Ctrl+C] quit.")
-                | dim | center,
+                | color(theme.hintColor) | center,
             filler(),
         });
         return {
@@ -239,7 +239,7 @@ std::vector<ScrollItem> MessageListComponent::buildItems() {
         } else {
             auto [el, builder] = renderMarkdown(
                 st.currentToken,
-                theme.assistantColor,
+                theme.normalColor,
                 theme.markdownTheme,
                 msgListWidth
             );
@@ -415,10 +415,10 @@ Element MessageListComponent::renderEditToolDiff(std::string_view oldStr, std::s
             Color       c      = theme.toolColor;
             std::string prefix = " ";
             if (l.type == DiffLineType::Add) {
-                c      = theme.promptColor;
+                c      = theme.accentColor;
                 prefix = "+";
             } else if (l.type == DiffLineType::Delete) {
-                c      = theme.systemColor;
+                c      = theme.errorColor;
                 prefix = "-";
             }
             lines.push_back(hbox({
@@ -470,12 +470,12 @@ Element MessageListComponent::renderEditToolDiff(std::string_view oldStr, std::s
         for (size_t k = 0; k < maxk; ++k) {
             leftLines.push_back(
                 (k < dels.size())
-                    ? makeCell("-", dels[k]->oldLineNo, dels[k]->text, theme.systemColor)
+                    ? makeCell("-", dels[k]->oldLineNo, dels[k]->text, theme.errorColor)
                     : emptyCell()
             );
             rightLines.push_back(
                 (k < adds.size())
-                    ? makeCell("+", adds[k]->newLineNo, adds[k]->text, theme.promptColor)
+                    ? makeCell("+", adds[k]->newLineNo, adds[k]->text, theme.accentColor)
                     : emptyCell()
             );
         }

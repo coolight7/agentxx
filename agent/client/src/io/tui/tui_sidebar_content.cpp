@@ -12,7 +12,7 @@ using namespace ftxui;
 namespace {
 
 ftxui::Element buildLogLine(const TUILogSink::Line& line, const TUITheme& theme) {
-    ftxui::Color c = theme.assistantColor;
+    ftxui::Color c = theme.normalColor;
     std::string  prefix;
     switch (line.level) {
         case agentxx::util::LogLevel::Debug:
@@ -20,7 +20,7 @@ ftxui::Element buildLogLine(const TUILogSink::Line& line, const TUITheme& theme)
             prefix = "[D] ";
             break;
         case agentxx::util::LogLevel::Info:
-            c      = theme.statusColor;
+            c      = theme.accentColor;
             prefix = "[I] ";
             break;
         case agentxx::util::LogLevel::Warn:
@@ -32,7 +32,7 @@ ftxui::Element buildLogLine(const TUILogSink::Line& line, const TUITheme& theme)
             prefix = "[E] ";
             break;
         case agentxx::util::LogLevel::Out:
-            c      = theme.assistantColor;
+            c      = theme.accentColor;
             prefix = "";
             break;
     }
@@ -102,13 +102,13 @@ std::optional<ftxui::Element> TUIClientAgentIO::renderPlanningInfo() {
             const auto   state   = td.value("state", std::string{});
             const auto   content = td.value("content", std::string{});
             std::string  icon    = "[ ]";
-            ftxui::Color c       = theme_.assistantColor;
+            ftxui::Color c       = theme_.hintColor;
             if (state == "in_progress") {
                 icon = "[~]";
                 c    = theme_.thinkingColor;
             } else if (state == "completed") {
                 icon = "[#]";
-                c    = theme_.promptColor;
+                c    = theme_.accentColor;
             } else if (state == "failed") {
                 icon = "[!]";
                 c    = theme_.errorColor;
@@ -124,7 +124,7 @@ std::optional<ftxui::Element> TUIClientAgentIO::renderPlanningInfo() {
     if (!notes.empty()) {
         lines.push_back(text(""));
         lines.push_back(text("Notes") | color(theme_.accentColor));
-        lines.push_back(paragraph(notes) | color(theme_.assistantColor));
+        lines.push_back(paragraph(notes) | color(theme_.hintColor));
     }
 
     return vbox(std::move(lines));
@@ -146,7 +146,7 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
                     text("|- CPU: "),
                     text(fmt::format("{:.1f}%", usage.cpuUsagePercent)),
                 })
-                | color(theme_.assistantColor)
+                | color(theme_.normalColor)
             );
             sysEls.push_back(
                 hbox({
@@ -158,7 +158,7 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
                         agentxx::util::formatSize(usage.memory.totalPhysicalMB * 1024 * 1024)
                     )),
                 })
-                | color(theme_.assistantColor)
+                | color(theme_.normalColor)
             );
         } else {
             sysEls.push_back(text("|- loading...") | color(theme_.hintColor));
@@ -193,13 +193,13 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
                                      notif.name
                                  ))})
                                : hbox({text("|  "), text(notif.name)}))
-                    | color(notif.success ? theme_.assistantColor : theme_.systemColor)
+                    | color(notif.success ? theme_.hintColor : theme_.errorColor)
                 );
             }
             if (count > 0) {
                 appendEls.push_back(
                     hbox({text("|- "), text(fmt::format("{}: {}", label, count))})
-                    | color(theme_.assistantColor)
+                    | color(theme_.normalColor)
                 );
                 appendEls.push_back(vbox(elems));
             }

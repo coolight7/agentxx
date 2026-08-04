@@ -260,8 +260,8 @@ Element PendingInputsOverlay::OnRender() {
             });
         } else {
             row = hbox({
-                text("+ ") | color(theme.hintColor),
-                text(oneLinePreview(pi.text)) | color(theme.assistantColor) | flex,
+                text("+ ") | color(theme.userColor),
+                text(oneLinePreview(pi.text)) | color(theme.userColor) | flex,
                 delBtn,
             });
         }
@@ -356,11 +356,11 @@ Element ContextOverlay::OnRender() {
 
             Color roleColor = theme.assistantColor;
             if (role == "user") {
-                roleColor = theme.promptColor;
+                roleColor = theme.userColor;
             } else if (role == "system") {
-                roleColor = theme.hintColor;
+                roleColor = theme.systemColor;
             } else if (role == "tool") {
-                roleColor = theme.thinkingColor;
+                roleColor = theme.toolColor;
             }
 
             std::string preview = oneLinePreview(content, 60);
@@ -381,7 +381,7 @@ Element ContextOverlay::OnRender() {
             items.push_back(hbox({
                 text(fmt::format("{:>3} ", i)) | color(theme.hintColor),
                 text(fmt::format("[{}] ", role)) | color(roleColor) | bold,
-                text(preview) | color(theme.assistantColor) | flex,
+                text(preview) | color(theme.normalColor) | flex,
             }));
         }
     }
