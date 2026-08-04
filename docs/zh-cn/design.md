@@ -46,10 +46,8 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
 | | `filesystem_edit_text_file` | 精确字符串替换编辑文本文件 |
 | | `filesystem_glob` | 按 glob 模式搜索文件 |
 | | `filesystem_grep` | 按正则/文本搜索文件内容 |
-| **命令执行** | `execute_linux_command` | 执行 Linux shell 命令，支持超时控制 |
-| | `execute_windows_command` | 执行 Windows 命令 (支持 WSL 下调用) |
-| | `execute_python_command` | 执行 Python 命令 |
-| | `execute_javascript_command` | 执行 JavaScript 命令 |
+| **命令执行** | `execute_linux_command` | 执行 Linux shell 命令，支持超时控制 (Linux/macOS) |
+| | `execute_windows_command` | 执行 Windows 命令 (Windows / WSL 下调用) |
 | **网络** | `web_search` | 网络搜索 (DuckDuckGo / 模型搜索) |
 | | `web_fetch_url` | HTTP GET 获取网页原文 |
 | | `web_fetch_url_markdown` | 获取网页并转为 Markdown |
@@ -212,7 +210,7 @@ path/to/agentxx_test --fail-fast
 path/to/agentxx_test string_util regex agent
 ```
 
-可用测试模块: `string_util` `regex` `diff_util` `events` `concurrency` `misc_fixes` `event_stream` `event_bridge` `interrupt_bus` `subagent_bus` `crossagent` `string_tools` `share_store` `rag_search` `datetime` `filesystem` `command` `web_search` `codegraph` `cpu_gpu` `http` `websocket` `remote_agent` `mcp` `acp` `a2a` `openai_provider` `anthropic_provider` `agent` `screen_capture` `text_selection` `lockless` `session_concurrency`
+可用测试模块: `string_util` `regex` `diff_util` `events` `concurrency` `lockless` `misc_fixes` `aho_corasick` `util_misc` `event_stream` `event_bridge` `interrupt_bus` `subagent_bus` `crossagent` `string_tools` `share_store` `rag_search` `datetime` `filesystem` `command` `web_search` `codegraph` `cpu_gpu` `http` `network_timeout` `websocket` `remote_agent` `mcp` `acp` `a2a` `openai_provider` `anthropic_provider` `agent` `screen_capture` `text_selection` `session_concurrency`
 
 ### 配置文件
 
@@ -226,8 +224,9 @@ models:
     api_key: "${MY_API_KEY}"    # 从 .env 或系统环境变量解析
     model_name: "gpt-4"
     api_path: ""                # 自定义 API 路径 (如 "/v1/chat/completions"); 空则用默认
-    send_thinking: false
-    send_temperature: true      # 部分推理模型不接受 temperature, 可设 false 关闭
+    send_thinking: false        # 是否把 thinking/reasoning_content 随上下文发送给模型
+    ssl_verify: null            # true/false 显式控制 TLS 证书验证; 省略用默认策略
+    extract_tool_calls_from_content: false  # 从 content 文本兜底提取 tool call
     connect_timeout: 16
     read_chunk_timeout: 24
     model_context_max_token: 128000
@@ -801,6 +800,8 @@ agent/
 │   │       ├── aho_corasick.h    # Aho-Corasick 多模式匹配
 │   │       ├── router.h          # HTTP 路由器
 │   │       ├── async_mutex.h     # 协程感知异步互斥锁 (基于 concurrent_channel)
+│   │       ├── async_offload.h   # 阻塞操作线程池卸载 (offloadAsync /
+│   │       │                     #   offloadCancellableAsync / asyncWithTimeout)
 │   │       └── util.h            # 通用工具 (系统检测等)
 │   └── src/                      # 实现文件 (与 include 目录结构对应)
 │
@@ -816,7 +817,18 @@ agent/
 │   │   │   └── tui/
 │   │   │       ├── agent_tui.h   # TUIClientAgentIO (FTXUI 终端 UI, 接收/显示/排队/权限/日志)
 │   │   │       ├── scrollable.h  # Scrollable (可复用的自动滚动容器组件)
-│   │   │       └── tui_theme.h   # TUI 主题配色
+│   │   │       ├── tui_theme.h   # TUI 主题配色
+│   │   │       ├── framework/    # TUI 框架层
+│   │   │       │   ├── tui_state.h       # TUI 状态聚合 (消息/侧边栏/排队输入等)
+│   │   │       │   ├── tui_context.h     # TUI 渲染上下文 (theme/state/尺寸)
+│   │   │       │   ├── modal_container.h # 浮层容器 (权限/中断弹窗)
+│   │   │       │   └── dirty_component.h # 脏标记增量渲染组件基类
+│   │   │       └── components/   # TUI 渲染组件
+│   │   │           ├── message_list.h # 消息列表渲染
+│   │   │           ├── sidebar.h      # 右侧边栏 (日志/信息/Planning)
+│   │   │           ├── overlays.h     # 浮层 (权限/中断/模型选择)
+│   │   │           ├── input_bar.h    # 输入栏
+│   │   │           └── status_bar.h   # 状态栏 (上下文占用/活动状态)
 │   │   ├── train/                # 训练模式
 │   │   └── util/                 # 客户端工具
 │   └── src/                      # 实现文件
@@ -828,11 +840,12 @@ agent/
 │       │   └── tui/
 │       │       ├── agent_tui.cpp
 │       │       ├── tui_theme.cpp
-│       │       ├── tui_render_messages.cpp   # 消息列表渲染
-│       │       ├── tui_render_sidebar.cpp    # 右侧边栏渲染
-│       │       ├── tui_render_overlays.cpp   # 浮层渲染 (权限/中断)
-│       │       ├── tui_render_edittool.cpp   # 文件编辑 diff 渲染
-│       │       └── tui_log_sink.cpp          # TUI 日志接收器
+│       │       ├── scrollable.cpp
+│       │       ├── tui_sidebar_content.cpp # 侧边栏内容 (日志/信息/Planning)
+│       │       ├── tui_log_sink.cpp        # TUI 日志接收器
+│       │       ├── framework/              # TUI 框架层实现 (tui_state/modal_container/...)
+│       │       └── components/             # 渲染组件实现: message_list / sidebar /
+│       │                                   #   overlays / input_bar / status_bar
 │       ├── train/train.cpp        # 训练实现
 │       └── util/util.cpp          # 客户端工具实现
 │
@@ -860,6 +873,9 @@ agent/
 │   ├── test_string_util.*        # 字符串工具测试
 │   ├── test_regex.*              # 正则引擎测试
 │   ├── test_diff_util.*          # Diff 工具测试
+│   ├── test_aho_corasick.*       # Aho-Corasick 多模式匹配测试
+│   ├── test_util_misc.*          # 杂项 util 测试
+│   ├── test_network_timeout.*    # 网络超时行为测试
 │   ├── test_filesystem_tools.*   # 文件系统工具测试
 │   ├── test_command_tools.*      # 命令执行工具测试
 │   ├── test_share_store.*        # ShareStore 测试

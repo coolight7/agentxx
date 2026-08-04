@@ -114,7 +114,9 @@ std::shared_ptr<SessionServerAgentIO> AgentServer::getOrCreateController(std::st
     auto ctrl                           = std::make_shared<SessionServerAgentIO>(ex_, agent_, cfg);
     controllers_[std::string{threadId}] = ctrl;
 
-    asio::co_spawn(ex_, ctrl->run(), [ctrl, threadId](std::exception_ptr ep) {
+    // threadId 以 std::string 值捕获: string_view 参数引用的原始字符串
+    // (serveTransport 的局部 WireHello) 可能在本协程完成前已析构
+    asio::co_spawn(ex_, ctrl->run(), [ctrl, threadId = std::string{threadId}](std::exception_ptr ep) {
         if (ep) {
             try {
                 std::rethrow_exception(ep);
@@ -175,6 +177,13 @@ asio::awaitable<void> AgentServer::serveTransport(std::shared_ptr<AgentIOTranspo
         for (const auto& [name, mc] : agent_->agentContext->agentConfig->availableModels) {
             models.push_back(name);
         }
+    }
+
+    // 同一 threadId 已有旧连接时, 先关闭旧 transport:
+    // 否则旧连接的 runTransportLoop 协程继续存活, 两个接收循环并发处理
+    // 同一会话的消息 (输入重复执行/消息交错), 且旧 transport 持续占用资源
+    if (auto oldTransport = ctrl->transport(); oldTransport && oldTransport.get() != transport.get()) {
+        oldTransport->close();
     }
 
     // 绑定 transport 到 controller, 发送 helloAck + 增量重放

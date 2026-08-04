@@ -104,7 +104,7 @@ Options:
     --token <token>      认证 token (也可通过 url 查询串携带)
     --model <model>      远程模型名称
     --host <host>        服务监听地址 (默认: 127.0.0.1)
-    --port <port>        服务监听端口 (默认: 17000)
+    --port <port>        服务监听端口 (默认: 7007)
     --ssl-cert <file>    SSL 证书文件路径
     --ssl-key <file>     SSL 私钥文件路径
 )_");
@@ -129,7 +129,13 @@ Options:
             srvHost = argv[i];
         } else if (arg == "--port" && i + 1 < argn) {
             ++i;
-            srvPort = static_cast<uint16_t>(std::stoi(argv[i]));
+            // 容错解析: 非法值报错退出, 避免 std::stoi 抛异常崩溃
+            auto portArg = std::string_view{argv[i]};
+            if (auto r = agentxx::util::parseNumberFromString(portArg, srvPort);
+                r.ec != std::errc{} || srvPort == 0) {
+                XX_LOGE("Invalid --port value: `{}`", portArg);
+                return 1;
+            }
         } else if (arg == "--ssl-cert" && i + 1 < argn) {
             ++i;
             sslCertFile = argv[i];

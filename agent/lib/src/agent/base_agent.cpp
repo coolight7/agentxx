@@ -527,6 +527,7 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                 });
             } break;
             default:
+                lastChatChunkType = neograph::ChatStreamChunk::TYPE_UNKNOWN;
                 break;
         }
     };
@@ -538,10 +539,11 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
         std::move(internalEventCallback)
     );
     auto cfg = neograph::graph::RunConfig{
-        .thread_id        = std::string{threadId},
-        .input            = {{"messages", session->llmMessages}},
-        .max_steps        = 1024,
-        .stream_mode      = neograph::graph::StreamMode::ALL,
+        .thread_id   = std::string{threadId},
+        .input       = {{"messages", session->llmMessages}},
+        .max_steps   = 1024,
+        .stream_mode = neograph::graph::StreamMode::EVENTS | neograph::graph::StreamMode::TOKENS
+                       | neograph::graph::StreamMode::VALUES | neograph::graph::StreamMode::UPDATES,
         .cancel_token     = cancelToken,
         .resume_if_exists = isFirstMsg,
     };
