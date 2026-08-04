@@ -123,10 +123,10 @@ void testModelRegistryConcurrency() {
             reg.registerModel("dyn_" + std::to_string(i), ModelConfig{});
         }
 
-        auto name = reg.resolveModelName("base");
-        auto cfg  = reg.getModelConfig(name);
-        auto list = reg.listModelNames();
-        auto has  = reg.hasModel("base");
+        auto        name = reg.resolveModelName("base");
+        const auto& cfg  = reg.getModelConfig(name);
+        auto        list = reg.listModelNames();
+        auto        has  = reg.hasModel("base");
         (void)cfg;
 
         XX_TEST_EXPECT_TRUE(reg.size() >= 1);

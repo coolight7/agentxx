@@ -33,11 +33,11 @@ std::string ModelProviderRegistry::resolveModelName(std::string_view name) const
     return defaultName_;
 }
 
-ModelConfig ModelProviderRegistry::getModelConfig(std::string_view name) const {
+const ModelConfig& ModelProviderRegistry::getModelConfig(std::string_view name) const {
     auto effective = (false == name.empty() && models_.contains(name)) ? name : defaultName_;
     auto it        = models_.find(effective);
     if (it == models_.end()) {
-        return ModelConfig{};
+        return ModelConfig::defaultModelConfig;
     }
     return it->second;
 }

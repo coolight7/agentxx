@@ -1,4 +1,5 @@
 #include "agentxx/agent/context.h"
+#include "agentxx/agent/model_registry.h"
 #include <fmt/format.h>
 
 namespace agentxx {
@@ -65,6 +66,23 @@ void SessionStore::remove(std::string_view threadId) {
 
 std::shared_ptr<Session> AgentContext::getSession(std::string_view threadId) {
     return sessions->getOrCreate(threadId);
+}
+
+std::string AgentContext::getSessionCurrentModelName(std::string_view threadId) const {
+    std::string selected;
+    auto        session = sessions->get(threadId);
+    if (session) {
+        selected = session->getModelName();
+    }
+    if (modelRegistry) {
+        return modelRegistry->resolveModelName(selected);
+    } else {
+        return agentConfig->model.modelName;
+    }
+}
+
+const ModelConfig& AgentContext::getSessionCurrentModelConfig(std::string_view threadId) const {
+    return modelRegistry->getModelConfig(getSessionCurrentModelName(threadId));
 }
 
 } // namespace agent

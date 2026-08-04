@@ -3,6 +3,8 @@
 namespace agentxx {
 namespace agent {
 
+const ModelConfig ModelConfig::defaultModelConfig{};
+
 bool ModelConfig::isValid() const {
     return !baseUrl.empty() || apiKey != "EMPTY";
 }

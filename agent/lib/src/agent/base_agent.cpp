@@ -292,14 +292,7 @@ void BaseAgent::collectAppendComponentInfo(std::vector<
 }
 
 std::string BaseAgent::getCurrentModelName(std::string_view threadId) const {
-    std::string selected;
-    if (auto session = agentContext->sessions->get(threadId)) {
-        selected = session->getModelName();
-    }
-    if (agentContext->modelRegistry) {
-        return agentContext->modelRegistry->resolveModelName(selected);
-    }
-    return agentContext->agentConfig->model.modelName;
+    return agentContext->getSessionCurrentModelName(threadId);
 }
 
 asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTurnAsync(
