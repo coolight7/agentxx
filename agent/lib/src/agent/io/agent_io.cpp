@@ -53,20 +53,20 @@ void AgentIOBase::sendToPeer(WireMessage msg) {
 // 默认命令实现 (经 transport 发送)
 // ---------------------------------------------------------------------------
 
-void AgentIOBase::requestCancel(std::string_view threadId) {
-    sendToPeer(WireCancel{std::string{threadId}});
+void AgentIOBase::requestCancel(std::string threadId) {
+    sendToPeer(WireCancel{std::move(threadId)});
 }
 
-void AgentIOBase::requestSelectModel(std::string_view threadId, std::string_view model) {
-    sendToPeer(WireSelectModel{std::string{threadId}, std::string{model}});
+void AgentIOBase::requestSelectModel(std::string threadId, std::string model) {
+    sendToPeer(WireSelectModel{std::move(threadId), std::move(model)});
 }
 
-void AgentIOBase::requestAppendComponentInfo(std::string_view threadId) {
-    sendToPeer(WireGetAppendComponentInfo{std::string{threadId}});
+void AgentIOBase::requestAppendComponentInfo(std::string threadId) {
+    sendToPeer(WireGetAppendComponentInfo{std::move(threadId)});
 }
 
-void AgentIOBase::sendUserInput(std::string_view threadId, std::string_view text) {
-    sendToPeer(WireUserInput{std::string{threadId}, std::string{text}});
+void AgentIOBase::sendUserInput(std::string threadId, std::string text) {
+    sendToPeer(WireUserInput{std::move(threadId), std::move(text)});
 }
 
 // ---------------------------------------------------------------------------

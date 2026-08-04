@@ -448,15 +448,15 @@ void TUIClientAgentIO::toggleLogWindow() {
 // requestCancel / requestSelectModel
 // ---------------------------------------------------------------------------
 
-void TUIClientAgentIO::requestCancel(std::string_view threadId) {
+void TUIClientAgentIO::requestCancel(std::string threadId) {
     if (transport_) {
-        sendToPeer(agentxx::agent::WireCancel{std::string{threadId}});
+        sendToPeer(agentxx::agent::WireCancel{std::move(threadId)});
     }
 }
 
-void TUIClientAgentIO::requestSelectModel(std::string_view threadId, std::string_view model) {
+void TUIClientAgentIO::requestSelectModel(std::string threadId, std::string model) {
     if (transport_) {
-        sendToPeer(agentxx::agent::WireSelectModel{std::string{threadId}, std::string{model}});
+        sendToPeer(agentxx::agent::WireSelectModel{std::move(threadId), std::move(model)});
     }
 }
 

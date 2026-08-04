@@ -54,18 +54,18 @@ public:
     virtual void sendToPeer(WireMessage msg);
 
     /// 请求取消指定会话当前轮次 [client]
-    virtual void requestCancel(std::string_view threadId);
+    virtual void requestCancel(std::string threadId);
 
     /// 请求切换指定会话的模型 [client]
-    virtual void requestSelectModel(std::string_view threadId, std::string_view model);
+    virtual void requestSelectModel(std::string threadId, std::string model);
 
     /// 请求拉取会话启动信息 (MCP/Skill/Memory) [client]
     /// - 客户端启动后调用一次; 服务端以 WireAppendComponentInfo 回应, 由 onPeerMessage 处理
-    virtual void requestAppendComponentInfo(std::string_view threadId);
+    virtual void requestAppendComponentInfo(std::string threadId);
 
     /// 发送用户输入到对端 [client]
     /// - 是否首轮由服务端自行管理; 模型切换经 requestSelectModel
-    virtual void sendUserInput(std::string_view threadId, std::string_view text);
+    virtual void sendUserInput(std::string threadId, std::string text);
 
     // -----------------------------------------------------------------------
     // 拉取接口 [双向] (调用方: server 侧由 BaseAgent 驱动循环调用,
