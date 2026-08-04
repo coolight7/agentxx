@@ -81,14 +81,15 @@ public:
         } catch (const neograph::graph::NodeInterrupt& e) {
             throw;
         } catch (const std::exception& e) {
-            errInfo = e.what();
+            errInfo = agentxx::util::autoTryConvertToUtf8(e.what());
         } catch (const boost::exception& e) {
-            errInfo = boost::diagnostic_information(e);
+            errInfo = agentxx::util::autoTryConvertToUtf8(boost::diagnostic_information(e));
         } catch (...) {
             errInfo = "Unknown error";
         }
 
         neograph::graph::NodeOutput out;
+        // TODO: 确认是否应该写入到 messages
         out.writes.push_back(neograph::graph::ChannelWrite{
             "messages",
             neograph::json{
