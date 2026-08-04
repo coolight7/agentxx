@@ -98,12 +98,14 @@ void ModelSelectorOverlay::confirmSelection() {
 
 Element SettingsOverlay::OnRender() {
     static constexpr const char* themeNames[] = {"Dark", "Light"};
-    const int                    themeCount   = 2;
     const auto&                  theme        = *ctx_.theme;
+
+    // 当前主题对应的条目索引 (供初始高亮; 键盘导航时由 selectedIndex_ 接管)
+    const int curThemeIdx = (theme.name == "Light") ? 1 : 0;
 
     Elements items;
     items.push_back(text(" Theme ") | color(theme.hintColor));
-    for (int i = 0; i < themeCount; ++i) {
+    for (int i = 0; i < 2; ++i) {
         auto entry = text(fmt::format(" {} ", themeNames[i]));
         if (i == selectedIndex_) {
             entry = entry | bgcolor(theme.buttonActiveBgColor) | color(theme.buttonActiveTextColor)
@@ -111,17 +113,34 @@ Element SettingsOverlay::OnRender() {
         } else {
             entry = entry | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor);
         }
-        items.push_back(entry);
+        if (i == curThemeIdx && i != selectedIndex_) {
+            entry = entry | bold;
+        }
+        items.push_back(entry | reflect(themeBoxes_[i]));
     }
+
+    // 系统资源占用显示开关 (Info 侧边栏)
+    const bool showSys
+        = ctx_.showSystemInfo && ctx_.showSystemInfo->load(std::memory_order_relaxed);
+    items.push_back(text(" "));
+    items.push_back(text(" Info Sidebar ") | color(theme.hintColor));
+    auto sysEntry = text(fmt::format(" Show System Resources: {} ", showSys ? "On" : "Off"));
+    if (selectedIndex_ == 2) {
+        sysEntry = sysEntry | bgcolor(theme.buttonActiveBgColor)
+                   | color(theme.buttonActiveTextColor) | bold | focus;
+    } else {
+        sysEntry = sysEntry | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor);
+    }
+    items.push_back(sysEntry | reflect(sysInfoBox_));
 
     return vbox({
                text(" Settings ") | bold | inverted,
                separator(),
                vbox(std::move(items)),
                separator(),
-               text(" [Up/Down] Move  [Enter] Apply  [Esc] Close ") | center | dim,
+               text(" [Up/Down] Move  [Enter] Apply/Toggle  [Esc] Close ") | center | dim,
            })
-           | border | size(WIDTH, LESS_THAN, 40) | color(theme.accentColor);
+           | border | size(WIDTH, LESS_THAN, 80) | color(theme.accentColor);
 }
 
 bool SettingsOverlay::OnEvent(Event event) {
@@ -133,7 +152,7 @@ bool SettingsOverlay::OnEvent(Event event) {
         return true;
     }
     if (event == Event::ArrowDown) {
-        if (selectedIndex_ < 1) {
+        if (selectedIndex_ < 2) {
             ++selectedIndex_;
         }
         ctx_.postRedraw();
@@ -142,12 +161,23 @@ bool SettingsOverlay::OnEvent(Event event) {
     if (event == Event::Return) {
         if (selectedIndex_ == 0) {
             *ctx_.theme = TUITheme::darkTheme();
+            ctx_.postRedraw();
+            if (onClose_) {
+                onClose_();
+            }
         } else if (selectedIndex_ == 1) {
             *ctx_.theme = TUITheme::lightTheme();
-        }
-        ctx_.postRedraw();
-        if (onClose_) {
-            onClose_();
+            ctx_.postRedraw();
+            if (onClose_) {
+                onClose_();
+            }
+        } else if (selectedIndex_ == 2 && ctx_.showSystemInfo) {
+            // 切换后保持弹窗打开, 便于继续调整; 由 [Esc] 关闭
+            ctx_.showSystemInfo->store(
+                !ctx_.showSystemInfo->load(std::memory_order_relaxed),
+                std::memory_order_relaxed
+            );
+            ctx_.postRedraw();
         }
         return true;
     }
@@ -158,7 +188,39 @@ bool SettingsOverlay::OnEvent(Event event) {
         }
         return true;
     }
+    if (event.is_mouse() && handleMouse(event.mouse())) {
+        ctx_.postRedraw();
+        return true;
+    }
     return true;
+}
+
+bool SettingsOverlay::handleMouse(const Mouse& mouse) {
+    if (mouse.button != Mouse::Left || mouse.motion != Mouse::Released) {
+        return false;
+    }
+    if (themeBoxes_[0].Contain(mouse.x, mouse.y)) {
+        *ctx_.theme = TUITheme::darkTheme();
+        if (onClose_) {
+            onClose_();
+        }
+        return true;
+    }
+    if (themeBoxes_[1].Contain(mouse.x, mouse.y)) {
+        *ctx_.theme = TUITheme::lightTheme();
+        if (onClose_) {
+            onClose_();
+        }
+        return true;
+    }
+    if (ctx_.showSystemInfo && sysInfoBox_.Contain(mouse.x, mouse.y)) {
+        ctx_.showSystemInfo->store(
+            !ctx_.showSystemInfo->load(std::memory_order_relaxed),
+            std::memory_order_relaxed
+        );
+        return true;
+    }
+    return false;
 }
 
 // ---------------------------------------------------------------------------

@@ -1197,13 +1197,13 @@ asio::awaitable<std::string>
     auto filepath
         = agentxx::util::toCurrentSystemStandardPath(arguments.value("path", std::string{}));
     if (filepath.empty()) {
-        co_return R"({"error":"Arg `path` is empty"})";
+        co_return "[Error] Arg `path` is empty";
     }
     auto systemCharsetFilePath = filepath;
     agentxx::util::autoConvertToSystemPath(systemCharsetFilePath);
     auto old_str = arguments.value<std::string>("old_str", std::string{});
     if (old_str.empty()) {
-        co_return R"({"error":"Arg `old_str` is empty"})";
+        co_return "[Error] Arg `old_str` is empty";
     }
     auto new_str       = arguments.value<std::string>("new_str", std::string{});
     auto multi_replace = arguments.value<bool>("multi_replace", false);
@@ -1228,7 +1228,7 @@ asio::awaitable<std::string>
         neograph_asio_error_code errCode;
         stream.open(systemCharsetFilePath, asio::stream_file::read_only, errCode);
         if (false == stream.is_open()) {
-            throw std::runtime_error{fmt::format(R"(Can not open file: {}")", errCode.message())};
+            throw std::runtime_error{fmt::format("Can not open file: {}", errCode.message())};
         }
 
         std::string content;
@@ -1300,7 +1300,7 @@ asio::awaitable<std::string>
         }
 
         if (multi_replace) {
-            co_return fmt::format(R"(Success, Replace {} times)", replaceHit);
+            co_return fmt::format(R"(Success, Replace {} hits)", replaceHit);
         } else {
             co_return "success";
         }
@@ -1317,7 +1317,7 @@ asio::awaitable<std::string>
         stream.open(systemCharsetFilePath, std::ios_base::in);
         if (!stream) {
             auto ec = std::error_code{errno, std::system_category()};
-            throw std::runtime_error{fmt::format(R"(Can not open file. Error: {})", ec.message())};
+            throw std::runtime_error{fmt::format("Can not open file. Error: {}", ec.message())};
         }
 
         std::ostringstream output;
@@ -1349,18 +1349,18 @@ asio::awaitable<std::string>
         if (!stream) {
             auto ec = std::error_code{errno, std::system_category()};
             throw std::runtime_error{
-                fmt::format(R"(Can not open file to write. Error: {})", ec.message())
+                fmt::format("Can not open file to write. Error: {}", ec.message())
             };
         }
         stream << content;
         if (!stream) {
             auto ec = std::error_code{errno, std::system_category()};
-            throw std::runtime_error{fmt::format(R"(Edit file failed. Error: {})", ec.message())};
+            throw std::runtime_error{fmt::format("Edit file failed. Error: {}", ec.message())};
         }
 
         stream.close();
         if (multi_replace) {
-            co_return fmt::format(R"(Success, Replace {} times)", replaceHit);
+            co_return fmt::format("Success, Replace {} hits", replaceHit);
         } else {
             co_return "success";
         }

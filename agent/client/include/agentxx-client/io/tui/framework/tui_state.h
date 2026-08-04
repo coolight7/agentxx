@@ -1,6 +1,7 @@
 #pragma once
 
 #include "agentxx/agent/context.h"
+#include "agentxx/expand/get_cpu_gpu_use.h"
 #include "neograph/api.h"
 #include <deque>
 #include <functional>
@@ -61,6 +62,9 @@ struct TUIRenderState {
     bool           showContextOverlay = false;
 
     std::vector<agentxx::agent::AppendComponentNotification> appendComponents;
+
+    /// 系统资源占用快照 (CPU/内存/GPU), 由资源监控线程周期写入; 为 null 表示尚未采集
+    std::shared_ptr<agentxx::expand::CpuGpuUsage> systemUsage;
 };
 
 /// COW 共享状态容器 (封装 mutex + shared_ptr + COW 辅助)

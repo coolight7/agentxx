@@ -5,12 +5,15 @@
 #include "agentxx-client/io/tui/components/sidebar.h"
 #include "agentxx-client/io/tui/components/status_bar.h"
 #include "agentxx/agent/model_registry.h"
+#include "agentxx/expand/get_cpu_gpu_use.h"
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/string_util.h"
 #include "asio/as_tuple.hpp"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
+#include "asio/io_context.hpp"
+#include "asio/steady_timer.hpp"
 #include "asio/use_awaitable.hpp"
 #include "fmt/format.h"
 #include "ftxui/component/event.hpp"
@@ -22,6 +25,7 @@
 #include <charconv>
 #include <cstdint>
 #include <format>
+#include <memory>
 
 using namespace ftxui;
 
@@ -80,6 +84,7 @@ void TUIClientAgentIO::start() {
     if (logSink_) {
         agentxx::util::LogDispatcher::instance().addSink(logSink_);
     }
+    startSystemMonitor();
 
     uiThread_ = std::thread([this]() {
         auto screen = std::make_shared<ScreenInteractive>(ScreenInteractive::Fullscreen());
@@ -94,10 +99,11 @@ void TUIClientAgentIO::start() {
         ctx_.postRedraw = [this] {
             postRedraw();
         };
-        ctx_.theme     = &theme_;
-        ctx_.session   = session_;
-        ctx_.threadId  = threadId_;
-        ctx_.remoteUrl = remoteUrl_;
+        ctx_.theme          = &theme_;
+        ctx_.session        = session_;
+        ctx_.threadId       = threadId_;
+        ctx_.remoteUrl      = remoteUrl_;
+        ctx_.showSystemInfo = &systemInfoEnabled_;
 
         // 创建组件
         messageList_ = std::make_shared<MessageListComponent>(ctx_);
@@ -182,7 +188,7 @@ void TUIClientAgentIO::start() {
             if (!st.pendingInputs.empty()) {
                 pendingBar = hbox({
                     text(" "),
-                    text(fmt::format("待发送消息: {}", st.pendingInputs.size()))
+                    text(fmt::format("  · Message Queue: {}", st.pendingInputs.size()))
                         | color(theme_.accentColor) | bold | reflect(pendingCounterBox_),
                     filler(),
                 });
@@ -300,6 +306,67 @@ void TUIClientAgentIO::stop() {
     }
     if (uiThread_.joinable()) {
         uiThread_.join();
+    }
+    stopSystemMonitor();
+}
+
+// ---------------------------------------------------------------------------
+// 系统资源监控 (每 kSystemInfoIntervalSec 秒采集一次 CPU/内存占用)
+// ---------------------------------------------------------------------------
+
+void TUIClientAgentIO::startSystemMonitor() {
+    if (sysMonitorThread_.joinable()) {
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(sysMonitorMutex_);
+        sysMonitorStop_ = false;
+    }
+    sysMonitorThread_ = std::thread([this]() {
+        // CpuGpuMonitor 内部缓存上次 CPU 采样值, 同一实例连续查询才能得到准确的 CPU 占用率,
+        // 因此在循环外构造一次, 跨采集周期复用
+        agentxx::expand::CpuGpuMonitor monitor;
+        for (;;) {
+            // 显示关闭时跳过采集 (仍保持周期唤醒, 以便随时重新开启)
+            if (systemInfoEnabled_.load(std::memory_order_relaxed)) {
+                // query() 为协程, 需 io_context 驱动; 每次采集使用临时 io_context 同步等待完成
+                asio::io_context io;
+                auto             usage = std::make_shared<agentxx::expand::CpuGpuUsage>();
+                asio::co_spawn(
+                    io,
+                    [&]() -> asio::awaitable<void> {
+                        *usage = co_await monitor.query();
+                    },
+                    asio::detached
+                );
+                io.run();
+                {
+                    std::lock_guard<std::mutex> lock(sharedState_.mutex());
+                    auto&                       st = sharedState_.mutableState();
+                    st.systemUsage                 = std::move(usage);
+                }
+                postRedraw();
+            }
+            // 周期睡眠; stop 时被 cv 唤醒立即退出
+            std::unique_lock<std::mutex> lock(sysMonitorMutex_);
+            sysMonitorCv_.wait_for(lock, std::chrono::seconds(kSystemInfoIntervalSec), [this] {
+                return sysMonitorStop_;
+            });
+            if (sysMonitorStop_) {
+                break;
+            }
+        }
+    });
+}
+
+void TUIClientAgentIO::stopSystemMonitor() {
+    {
+        std::lock_guard<std::mutex> lock(sysMonitorMutex_);
+        sysMonitorStop_ = true;
+    }
+    sysMonitorCv_.notify_all();
+    if (sysMonitorThread_.joinable()) {
+        sysMonitorThread_.join();
     }
 }
 
@@ -632,6 +699,7 @@ void TUIClientAgentIO::onSync(const agentxx::agent::SyncPayload& payload) {
         st->modelNames                   = prev->modelNames;
         st->appendComponents             = prev->appendComponents;
         st->pendingInputs                = prev->pendingInputs;
+        st->systemUsage                  = prev->systemUsage;
         st->isStreaming                  = false;
 
         for (const auto& hm : payload.messages) {

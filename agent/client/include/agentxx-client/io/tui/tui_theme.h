@@ -2,12 +2,15 @@
 
 #include "ftxui/screen/color.hpp"
 #include <markdown/theme.hpp>
+#include <string>
 
 /// TUI 主题配色
 /// - 通过静态函数 darkTheme()/lightTheme() 生成内置主题
 /// - 默认使用黑色主题 darkTheme()
 class TUITheme {
 public:
+
+    std::string name; // 主题名 ("Dark"/"Light"), 供设置弹窗识别当前主题
 
     ftxui::Color userColor;      // 用户消息
     ftxui::Color assistantColor; // 助手消息 (content)

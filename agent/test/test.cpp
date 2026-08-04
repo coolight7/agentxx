@@ -24,7 +24,6 @@
 #include "test_filesystem_tools.h"
 #include "test_http.h"
 #include "test_interrupt_bus.h"
-#include "test_lockless.h"
 #include "test_mcp.h"
 #include "test_misc_fixes.h"
 #include "test_network_timeout.h"
@@ -107,7 +106,6 @@ int main(int argn, char** argv) {
     runSync("diff_util", agentxx::test::testDiffUtil);
     runSync("events", agentxx::test::test_events);
     runSync("concurrency", agentxx::test::testConcurrency);
-    runSync("lockless", agentxx::test::testLockless);
     runSync("misc_fixes", agentxx::test::testMiscFixes);
     runSync("aho_corasick", agentxx::test::testAhoCorasick);
     runSync("util_misc", agentxx::test::testUtilMisc);

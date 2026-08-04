@@ -45,7 +45,7 @@ std::vector<ScrollItem> TUIClientAgentIO::renderLogWindow() {
     auto lines = logSink_ ? logSink_->snapshot() : std::vector<TUILogSink::Line>{};
     if (lines.empty()) {
         return {
-            ScrollItem{text(" (no logs) ") | dim, false}
+            ScrollItem{text("[Empty]") | dim, false}
         };
     }
     const uint64_t curPopped = logSink_ ? logSink_->poppedCount() : 0;
@@ -91,9 +91,9 @@ std::optional<ftxui::Element> TUIClientAgentIO::renderPlanningInfo() {
 
     Elements lines;
     Elements title;
-    title.push_back(text("规划") | color(theme_.accentColor));
+    title.push_back(text("Plan") | color(theme_.accentColor));
     if (!plan->toolFinished) {
-        title.push_back(text("  规划中...") | color(theme_.hintColor) | dim);
+        title.push_back(text(" Planning...") | color(theme_.hintColor));
     }
     lines.push_back(hbox(std::move(title)));
 
@@ -123,8 +123,8 @@ std::optional<ftxui::Element> TUIClientAgentIO::renderPlanningInfo() {
     const auto notes = args.value("notes", std::string{});
     if (!notes.empty()) {
         lines.push_back(text(""));
-        lines.push_back(text("笔记") | color(theme_.accentColor));
-        lines.push_back(paragraph(notes) | color(theme_.hintColor));
+        lines.push_back(text("Notes") | color(theme_.accentColor));
+        lines.push_back(paragraph(notes) | color(theme_.assistantColor));
     }
 
     return vbox(std::move(lines));
@@ -134,6 +134,38 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
     const auto& st = *ctx_.frameState;
 
     Elements elements;
+
+    // 系统资源占用 (CPU/内存), 由资源监控线程周期刷新
+    if (systemInfoEnabled_.load(std::memory_order_relaxed)) {
+        Elements sysEls;
+        sysEls.push_back(text("System") | color(theme_.accentColor));
+        if (st.systemUsage) {
+            const auto& usage = *st.systemUsage;
+            sysEls.push_back(
+                hbox({
+                    text("|- CPU: "),
+                    text(fmt::format("{:.1f}%", usage.cpuUsagePercent)),
+                })
+                | color(theme_.assistantColor)
+            );
+            sysEls.push_back(
+                hbox({
+                    text("|- RAM: "),
+                    text(fmt::format(
+                        "{:.1f}% ({} / {})",
+                        usage.memory.usagePercent,
+                        agentxx::util::formatSize(usage.memory.usedPhysicalMB * 1024 * 1024),
+                        agentxx::util::formatSize(usage.memory.totalPhysicalMB * 1024 * 1024)
+                    )),
+                })
+                | color(theme_.assistantColor)
+            );
+        } else {
+            sysEls.push_back(text("|- loading...") | color(theme_.hintColor));
+        }
+        elements.push_back(vbox(std::move(sysEls)));
+        elements.push_back(text(" "));
+    }
 
     if (auto planning = renderPlanningInfo()) {
         elements.push_back(std::move(*planning));
@@ -180,7 +212,7 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
     }
 
     if (elements.empty()) {
-        elements.push_back(text("(暂无信息)") | color(theme_.hintColor));
+        elements.push_back(text("[Empty]") | color(theme_.hintColor));
     }
 
     std::vector<ScrollItem> items;
@@ -202,7 +234,7 @@ ftxui::Element TUIClientAgentIO::renderInfoSidebarFooter() {
     }
     elements.push_back(text(cwd) | color(theme_.hintColor));
 
-    std::string mode = remoteUrl_.empty() ? "内置服务" : remoteUrl_;
+    std::string mode = remoteUrl_.empty() ? "Inner Server" : remoteUrl_;
     elements.push_back(
         hbox({
             text(fmt::format("Agentxx {} ", kAgentxxVersion)),
