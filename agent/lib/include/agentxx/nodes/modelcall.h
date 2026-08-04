@@ -60,23 +60,6 @@ public:
         neograph::graph::NodeOutput&                        result
     ) override;
 
-    void onHandleStartError(
-        bool                                                errorRethrow,
-        bool                                                isCurrentError,
-        std::string_view                                    exceptionStr,
-        agentxx::middleware::BaseMiddlewareHandleInterface& item,
-        neograph::graph::NodeInput&                         in,
-        neograph::graph::NodeOutput&                        result
-    ) noexcept override;
-
-    void onHandleBaseRunError(
-        bool                         errorRethrow,
-        bool                         isCurrentError,
-        std::string_view             exceptionStr,
-        neograph::graph::NodeInput&  in,
-        neograph::graph::NodeOutput& result
-    ) noexcept override;
-
     void repairMessages(neograph::graph::NodeInput& in);
 
     asio::awaitable<void> baseRun(

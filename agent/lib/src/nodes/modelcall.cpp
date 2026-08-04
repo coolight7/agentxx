@@ -218,53 +218,6 @@ asio::awaitable<void> ModelCallWrapNode::onHandleEnd(
     co_await item.onModelcallEndFunc(in, result);
 }
 
-void ModelCallWrapNode::onHandleStartError(
-    bool                                                errorRethrow,
-    bool                                                isCurrentError,
-    std::string_view                                    exceptionStr,
-    agentxx::middleware::BaseMiddlewareHandleInterface& item,
-    neograph::graph::NodeInput&                         in,
-    neograph::graph::NodeOutput&                        result
-) noexcept {
-    // 插入消息，保证消息顺序正确
-    // 不会记录 toolcall
-    if (false == errorRethrow && isCurrentError) {
-        auto msg = neograph::ChatMessage{
-            .role    = "assistant",
-            .content = std::string{defaultExceptionTip},
-        };
-        auto msgJson = neograph::json{};
-        neograph::to_json(msgJson, msg);
-        result.writes.push_back(neograph::graph::ChannelWrite{
-            "messages",
-            neograph::json::array({msgJson}),
-        });
-    }
-}
-
-void ModelCallWrapNode::onHandleBaseRunError(
-    bool                         errorRethrow,
-    bool                         isCurrentError,
-    std::string_view             exceptionStr,
-    neograph::graph::NodeInput&  in,
-    neograph::graph::NodeOutput& result
-) noexcept {
-    // 插入消息，保证消息顺序正确
-    if (false == errorRethrow && isCurrentError) {
-        auto msg = neograph::ChatMessage{
-            .role    = "assistant",
-            .content = std::string{defaultExceptionTip},
-            .flags   = neograph::MessageFlag::AutoInserted,
-        };
-        auto msgJson = neograph::json{};
-        neograph::to_json(msgJson, msg);
-        result.writes.push_back(neograph::graph::ChannelWrite{
-            "messages",
-            neograph::json::array({msgJson}),
-        });
-    }
-}
-
 void ModelCallWrapNode::repairMessages(neograph::graph::NodeInput& in) {
     // 最后一条消息应当是 system/user/toolcall
     auto lastMsg = agentxx::middleware::BaseMiddlewareHandleInterface::getLastMessage(in);
