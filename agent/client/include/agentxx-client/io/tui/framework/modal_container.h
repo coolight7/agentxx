@@ -68,8 +68,14 @@ public:
     }
 
     bool OnEvent(ftxui::Event event) override {
-        if (activeModal_ && activeModal_->OnEvent(event)) {
-            return true;
+        if (activeModal_) {
+            // 局部持有引用: 模态可能在自身 OnEvent 回调中 popModal()/pushModal() 替换自己,
+            // 导致 activeModal_ 释放、正在执行的回调闭包随模态一起析构 (use-after-free)。
+            // 这里保证模态对象至少存活到本次事件分发结束。
+            auto keepAlive = activeModal_;
+            if (keepAlive->OnEvent(event)) {
+                return true;
+            }
         }
         return main_->OnEvent(event);
     }

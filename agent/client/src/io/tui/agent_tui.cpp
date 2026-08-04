@@ -332,12 +332,14 @@ void TUIClientAgentIO::openModelSelector() {
 void TUIClientAgentIO::openSettings() {
     auto overlay = std::make_shared<SettingsOverlay>(ctx_);
     overlay->onClose([this] {
-        modal_->popModal();
-        // 主题变化后清空消息缓存
+        // 主题变化后清空消息缓存。
+        // 注意: 必须在 popModal() 之前访问成员 —— popModal() 会释放 overlay,
+        // 而当前闭包存储在该 overlay 内, pop 之后闭包已析构, 再访问捕获变量属于 use-after-free。
         if (messageList_) {
             messageList_->invalidateCache();
         }
         logLineCache_.clear();
+        modal_->popModal();
     });
     modal_->pushModal(overlay);
     postRedraw();
