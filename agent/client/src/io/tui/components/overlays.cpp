@@ -124,7 +124,7 @@ Element SettingsOverlay::OnRender() {
         = ctx_.showSystemInfo && ctx_.showSystemInfo->load(std::memory_order_relaxed);
     items.push_back(text(" "));
     items.push_back(text(" Info Sidebar ") | color(theme.hintColor));
-    auto sysEntry = text(fmt::format(" Show System Resources: {} ", showSys ? "On" : "Off"));
+    auto sysEntry = text(fmt::format(" Show System Info: {} ", showSys ? "ON" : "OFF"));
     if (selectedIndex_ == 2) {
         sysEntry = sysEntry | bgcolor(theme.buttonActiveBgColor)
                    | color(theme.buttonActiveTextColor) | bold | focus;

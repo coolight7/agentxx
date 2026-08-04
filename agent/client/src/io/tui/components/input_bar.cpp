@@ -11,7 +11,7 @@ InputComponent::InputComponent(TUICtx& ctx, Config config) :
     option.multiline       = true;
     option.insert          = true;
     option.cursor_position = 0;
-    option.placeholder     = "Type a message... (Enter=send, Alt+Enter=newline)";
+    option.placeholder     = "Type a message... (Enter:Send, Alt+Enter:Newline)";
     option.on_enter        = nullptr;
     option.transform       = [](InputState state) {
         if (state.is_placeholder) {

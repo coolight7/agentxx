@@ -174,7 +174,7 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
 
     if (!st.appendComponents.empty()) {
         Elements appendEls;
-        appendEls.push_back(text("Append Components") | color(theme_.accentColor));
+        appendEls.push_back(text("Append") | color(theme_.accentColor));
 
         auto appendGroup = [&](std::string_view                                  label,
                                agentxx::agent::AppendComponentNotification::Type type,
