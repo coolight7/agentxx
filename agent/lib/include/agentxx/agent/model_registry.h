@@ -32,7 +32,7 @@ public:
     std::string resolveModelName(std::string_view name) const;
 
     /// 指定模型的配置; name 为空/不存在时取默认模型
-    ModelConfig getModelConfig(std::string_view name) const;
+    const ModelConfig& getModelConfig(std::string_view name) const;
 
     /// 根据 ModelConfig::type 创建对应 Provider
     static std::shared_ptr<neograph::Provider> createProvider(const ModelConfig& mc);

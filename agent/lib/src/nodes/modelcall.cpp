@@ -67,7 +67,7 @@ std::string ModelCallWrapNode::resolveCurrentModelName(std::string_view threadId
             if (auto session = ctxPtr->sessions->get(threadId)) {
                 selected = session->getModelName();
             }
-            auto modelName = ctxPtr->modelRegistry->getModelConfig(selected).modelName;
+            const auto& modelName = ctxPtr->modelRegistry->getModelConfig(selected).modelName;
             if (false == modelName.empty()) {
                 return modelName;
             }

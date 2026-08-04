@@ -233,6 +233,10 @@ public:
 
     /// 便捷方法：获取或创建指定 thread_id 的会话
     std::shared_ptr<Session> getSession(std::string_view threadId);
+
+    std::string getSessionCurrentModelName(std::string_view threadId) const;
+    // 可能会变，建议仅在同步代码中使用
+    const ModelConfig& getSessionCurrentModelConfig(std::string_view threadId) const;
 };
 
 } // namespace agent
