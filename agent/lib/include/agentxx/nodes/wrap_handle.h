@@ -309,10 +309,12 @@ public:
         if (errorRethrow) {
             // 保存此时的上下文，如果直接抛异常到 neograph::engine，会丢失本轮 session 增加的上下文
             auto session = agentCtxPtr->getSession(in.ctx.thread_id);
+            auto data    = in.state.get("messages");
+            XX_LOGD("Store(By WrapHandleBaseNode/rethrow) LLM-Messages Context: {}", data.size());
             agentCtxPtr->middlewareHandleContext->setGraphDataItemValue(
                 in.ctx.thread_id,
                 agentxx::middleware::MiddlewareContext::graphDataKey_tempMessages,
-                in.state.get("messages")
+                std::move(data)
             );
             std::rethrow_exception(errorPtr);
         }

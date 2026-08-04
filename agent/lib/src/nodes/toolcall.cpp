@@ -344,7 +344,7 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
         agentCtxPtr->middlewareHandleContext->throwNodeInterruptBase(in.ctx.thread_id, messages);
     }
 
-    out.writes.push_back(neograph::graph::ChannelWrite{"messages", results});
+    out.writes.push_back(neograph::graph::ChannelWrite{"messages", std::move(results)});
     co_return;
 }
 

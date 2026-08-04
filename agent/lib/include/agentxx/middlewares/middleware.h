@@ -129,6 +129,8 @@ public:
     ) :
         BaseMiddlewareHandleInterface(in_name, in_agentContext) {}
 
+    // 如果想添加 system msg，应当在 [onAgentcallStartFunc] 等一轮只执行一次的节点中处理
+    // 否则会被重复添加多次
     asio::awaitable<void> onAgentcallStartFunc(neograph::graph::NodeInput& in) override {
         co_return;
     }
@@ -387,8 +389,8 @@ public:
     /// graphData 需要跨 checkpoint 存储时使用该 state channel key
     inline static const std::string channel_savedGraphData{"xx_savedGraphData"};
 
-    inline static const std::string graphDataKey_systemMessage{"systemMessage"};
-    inline static const std::string graphDataKey_systemMessageCheckInfo{"systemMessageCheckInfo"};
+    inline static const std::string graphDataKey_appendSystemMessage{"xx_appendSystemMessage"};
+    inline static const std::string graphDataKey_messageCheckInfo{"xx_messageCheckInfo"};
     inline static const std::string graphDataKey_tempLLMThinking{"xx_ModelCallWrap_tempLLMThinking"
     };
     inline static const std::string graphDataKey_tempLLMContent{"xx_ModelCallWrap_tempLLMContent"};
@@ -532,13 +534,13 @@ public:
     }
 
     template<typename T>
-    void setGraphDataItemValue(std::string_view thread_id, std::string_view key, const T& value) {
+    void setGraphDataItemValue(std::string_view thread_id, std::string_view key, T value) {
         auto& itemGraphData = graphData[std::string{thread_id}];
         auto  it            = itemGraphData.find(key);
         if (it == itemGraphData.end()) {
-            itemGraphData.insert(std::pair<std::string, std::any>{key, value});
+            itemGraphData.insert(std::pair<std::string, std::any>{key, std::move(value)});
         } else {
-            it->second = value;
+            it->second = std::move(value);
         }
     }
 
@@ -577,7 +579,7 @@ public:
     /// 从 state channel 恢复 graphData (用于中断 resume)
     void setGraphDataFromState(neograph::graph::GraphState& state, std::string_view thread_id);
 
-    void setGraphDataFromState(const neograph::json& j, std::string_view thread_id);
+    void setGraphDataFromState(neograph::json j, std::string_view thread_id);
 };
 
 } // namespace middleware

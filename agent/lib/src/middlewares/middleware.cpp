@@ -389,7 +389,7 @@ void MiddlewareContext::setGraphDataFromState(
     setGraphDataFromState(state.get(channel_savedGraphData), thread_id);
 }
 
-void MiddlewareContext::setGraphDataFromState(const neograph::json& j, std::string_view thread_id) {
+void MiddlewareContext::setGraphDataFromState(neograph::json j, std::string_view thread_id) {
     if (j.is_object()) {
         auto data = std::map<std::string, std::any, std::less<>>{};
         for (auto it = j.begin(); it != j.end(); ++it) {

@@ -143,8 +143,6 @@ public:
         readSkillFile(std::string_view dirpath);
 
     asio::awaitable<void> onAgentcallStartFunc(neograph::graph::NodeInput& in) override;
-
-    asio::awaitable<void> onModelcallStartFunc(neograph::graph::NodeInput& in) override;
 };
 
 } // namespace middleware
