@@ -252,6 +252,11 @@ void TUIClientAgentIO::start() {
                         postRedraw();
                         return true;
                     }
+                    // 状态栏模型区域点击 → 打开模型选择弹窗
+                    if (statusBar_ && statusBar_->modelBox().Contain(mouse.x, mouse.y)) {
+                        openModelSelector();
+                        return true;
+                    }
                     // 状态栏 "Settings" 按钮点击 → 打开设置弹窗
                     if (statusBar_ && statusBar_->settingsBox().Contain(mouse.x, mouse.y)) {
                         openSettings();

@@ -278,9 +278,9 @@ Options:
     // ======================== CodeAgent Websocket Server 服务模式 ========================
     if (mode == "server") {
         config->logPrintToolcall                       = false;
-        config->logPrintMessagesBeforeLLM              = true;
+        config->logPrintMessagesBeforeLLM              = false;
         config->logPrintMessagesBeforeLLMWithSystemMsg = false;
-        config->logPrintSummarizationResultTokenCount  = true;
+        config->logPrintSummarizationResultTokenCount  = false;
 
         auto agent = std::make_shared<agentxx::agent::CodeAgent>(config);
 
