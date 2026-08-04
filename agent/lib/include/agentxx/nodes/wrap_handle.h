@@ -2,6 +2,7 @@
 
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/util/exception.h"
+#include "agentxx/util/string_util.h"
 #include "asio/io_context.hpp"
 #include "fmt/format.h"
 #include <cstdlib>
@@ -217,12 +218,12 @@ public:
                 onHandleStartError(errorRethrow, true, errInfo, *item, in, out);
                 errorPtr = std::current_exception();
             } catch (const std::exception& e) {
-                errInfo = e.what();
+                errInfo = agentxx::util::autoTryConvertToUtf8(e.what());
                 // 替代 baseRun
                 onHandleStartError(errorRethrow, true, errInfo, *item, in, out);
                 errorPtr = std::current_exception();
             } catch (const boost::exception& e) {
-                errInfo = boost::diagnostic_information(e);
+                errInfo = agentxx::util::autoTryConvertToUtf8(boost::diagnostic_information(e));
                 onHandleStartError(errorRethrow, true, errInfo, *item, in, out);
                 errorPtr = std::current_exception();
             } catch (...) {
@@ -252,11 +253,11 @@ public:
                     onHandleBaseRunError(errorRethrow, true, errInfo, in, out);
                     errorPtr = std::current_exception();
                 } catch (const std::exception& e) {
-                    errInfo = e.what();
+                    errInfo = agentxx::util::autoTryConvertToUtf8(e.what());
                     onHandleBaseRunError(errorRethrow, true, errInfo, in, out);
                     errorPtr = std::current_exception();
                 } catch (const boost::exception& e) {
-                    errInfo = boost::diagnostic_information(e);
+                    errInfo = agentxx::util::autoTryConvertToUtf8(boost::diagnostic_information(e));
                     onHandleBaseRunError(errorRethrow, true, errInfo, in, out);
                     errorPtr = std::current_exception();
                 } catch (...) {
@@ -295,14 +296,14 @@ public:
                     onHandleEndError(errorRethrow, true, errInfo, *item, in, out);
                     errorPtr = std::current_exception();
                 } catch (const std::exception& e) {
-                    errInfo = e.what();
+                    errInfo = agentxx::util::autoTryConvertToUtf8(e.what());
                     onHandleEndError(errorRethrow, true, errInfo, *item, in, out);
                     if (false == errorRethrow) {
                         // 避免覆盖之前的错误，导致未重新抛出异常
                         errorPtr = std::current_exception();
                     }
                 } catch (const boost::exception& e) {
-                    errInfo = boost::diagnostic_information(e);
+                    errInfo = agentxx::util::autoTryConvertToUtf8(boost::diagnostic_information(e));
                     onHandleEndError(errorRethrow, true, errInfo, *item, in, out);
                     if (false == errorRethrow) {
                         errorPtr = std::current_exception();
