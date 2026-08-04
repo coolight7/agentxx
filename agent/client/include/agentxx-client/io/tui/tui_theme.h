@@ -18,9 +18,8 @@ public:
     ftxui::Color toolColor;      // toolcall 消息
     ftxui::Color systemColor;    // 系统消息
     ftxui::Color errorColor;     // 错误消息 (红色)
-    ftxui::Color promptColor;    // 输入提示符 ">>>"
     ftxui::Color accentColor;    // 强调 (边框/标题/高亮)
-    ftxui::Color statusColor;    // 状态栏文字
+    ftxui::Color normalColor;    // 普通内容颜色 (文本)
     ftxui::Color hintColor;      // 弱化提示文字
 
     ftxui::Color backgroundColor;       // 整体背景
