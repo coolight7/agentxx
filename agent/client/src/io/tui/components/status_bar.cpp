@@ -34,19 +34,25 @@ Element StatusBarComponent::OnRender() {
         ctxText = text(fmt::format("{}", agentxx::util::formatSize(ctx))) | color(theme.hintColor);
     }
 
+    // 模型区域: 整体作为可点击区域 (点击打开模型选择弹窗)
     auto modelInfo = hbox({
         text("[F2] ") | color(theme.hintColor),
         text(modelName) | color(theme.accentColor),
         text(" · ") | color(theme.hintColor),
         ctxText | color(theme.hintColor),
     });
+    modelInfo      = modelInfo | reflect(modelBox_);
+
+    // Settings 按钮: 可点击打开设置弹窗, 鼠标悬浮时高亮背景
+    auto settingsText = text("[F3] Settings") | color(theme.hintColor);
+
     return hbox({
         text(" "),
         modelInfo,
         text(" "),
         filler(),
         text(" "),
-        text("[F3] Settings") | color(theme.hintColor) | reflect(settingsBox_),
+        settingsText | reflect(settingsBox_),
         text(" "),
     });
 }
