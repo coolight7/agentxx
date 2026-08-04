@@ -219,6 +219,11 @@ void TUIClientAgentIO::start() {
             }
             if (event == Event::CtrlC) {
                 running_ = false;
+                // 关闭 transport 以打断可能阻塞中的 connect/重连/recv 循环,
+                // 使主协程能尽快走到退出分支 (尤其远程模式 server 不可达时 connect 会无限重连)
+                if (transport_) {
+                    transport_->close();
+                }
                 screen->Exit();
                 return true;
             }
@@ -300,6 +305,10 @@ void TUIClientAgentIO::stop() {
         agentxx::util::LogDispatcher::instance().removeSink(logSink_);
     }
     running_ = false;
+    // 关闭 transport, 使 runTransportLoop/connect/重连循环退出, io_context 得以排空
+    if (transport_) {
+        transport_->close();
+    }
     std::shared_ptr<ScreenInteractive> s;
     {
         std::lock_guard<std::mutex> lock(screenMutex_);
