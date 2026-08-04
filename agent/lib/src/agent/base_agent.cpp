@@ -110,8 +110,7 @@ void BaseAgent::setupModelRegistry() {
     if (config->availableModels.empty()) {
         registry->registerModel(config->model.modelName, config->model);
         registry->setDefaultModel(config->model.modelName);
-    } else if (false == config->currentModelName.empty()
-               && registry->hasModel(config->currentModelName)) {
+    } else if (false == config->currentModelName.empty() && registry->hasModel(config->currentModelName)) {
         registry->setDefaultModel(config->currentModelName);
     } else {
         // [currentModelName] 不存在
@@ -351,9 +350,13 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
     if (false == agentContext->middlewareHandleContext->graphData.contains(threadId)) {
         auto data = engine->get_state(std::string{threadId}).value_or(neograph::json{});
         if (data.is_object()
-            && data.contains(agentxx::middleware::MiddlewareContext::channel_savedGraphData)) {
+            && data.contains(agentxx::middleware::MiddlewareContext::channel_savedGraphData)
+            && data[agentxx::middleware::MiddlewareContext::channel_savedGraphData].is_object()) {
             resumeInterrupt = true;
-            agentContext->middlewareHandleContext->setGraphDataFromState(data, threadId);
+            agentContext->middlewareHandleContext->setGraphDataFromState(
+                data[agentxx::middleware::MiddlewareContext::channel_savedGraphData],
+                threadId
+            );
         }
     }
 
@@ -403,14 +406,13 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                                        : Delta::Type::TextToken,
                     .text        = std::move(token),
                     .startTimeMs = node_start_time_ms,
-                    .durationMs  = sendDuration
-                                       ? static_cast<int64_t>(
-                                            std::chrono::duration_cast<std::chrono::milliseconds>(
-                                                std::chrono::system_clock::now() - node_start_time
-                                            )
-                                                .count()
-                                        )
-                                       : 0,
+                    .durationMs  = sendDuration ? static_cast<int64_t>(
+                                      std::chrono::duration_cast<std::chrono::milliseconds>(
+                                          std::chrono::system_clock::now() - node_start_time
+                                      )
+                                          .count()
+                                  )
+                                                : 0,
                 });
             } break;
             case T::CHANNEL_WRITE: {
@@ -571,7 +573,7 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                 // - 中断、异常、取消执行会让 neograph::engine 丢弃本轮 session
                 // 已经产生的上下文，因此这里取 [graphDataKey_tempMessages] 而不是
                 // [result->channel_raw("messages")]
-                auto& im
+                const auto& im
                     = agentContext->middlewareHandleContext->getGraphDataItemValue<neograph::json>(
                         threadId,
                         agentxx::middleware::MiddlewareContext::graphDataKey_tempMessages
@@ -583,7 +585,7 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                 result = co_await engine->run_stream_async(cfg, eventCallback);
 
                 if (result->interrupted) {
-                    auto& im
+                    const auto& im
                         = agentContext->middlewareHandleContext
                               ->getGraphDataItemValue<neograph::json>(
                                   threadId,
@@ -651,8 +653,8 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                         if (interruptArg.name == "subagent") {
                             auto subagentArg = interruptArg.arg;
                             auto resp        = co_await agentContext->bus->request<
-                                       events::ReqSubagentStart,
-                                       events::RespSubagentResult>(
+                                events::ReqSubagentStart,
+                                events::RespSubagentResult>(
                                 events::Topic::Subagent,
                                 events::ReqSubagentStart{
                                     .parentAgentName = agentContext->agentConfig
@@ -762,11 +764,12 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                     if (result->interrupted) {
                         // 中断时 [result] 内的 messages 是被 neograph::engine
                         // 回滚的，本轮 session 的上下文已经被丢弃；应该取中断时保存的 messages
-                        auto& im = agentContext->middlewareHandleContext->getGraphDataItemValue<
-                            neograph::json>(
-                            threadId,
-                            agentxx::middleware::MiddlewareContext::graphDataKey_tempMessages
-                        );
+                        const auto& im
+                            = agentContext->middlewareHandleContext->getGraphDataItemValue<
+                                neograph::json>(
+                                threadId,
+                                agentxx::middleware::MiddlewareContext::graphDataKey_tempMessages
+                            );
                         if (im.is_array()) {
                             session->llmMessages = im;
                         }
@@ -793,11 +796,17 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
     );
     if (turnResult.hasError) {
         // - 出现异常时 state.messages 已经被回滚，提取临时保存的上下文，并写回 state
-        auto& im = agentContext->middlewareHandleContext->getGraphDataItemValue<neograph::json>(
-            threadId,
-            agentxx::middleware::MiddlewareContext::graphDataKey_tempMessages
-        );
+        const auto& im
+            = agentContext->middlewareHandleContext->getGraphDataItemValue<neograph::json>(
+                threadId,
+                agentxx::middleware::MiddlewareContext::graphDataKey_tempMessages
+            );
         if (im.is_array()) {
+            XX_LOGD(
+                "Recover(By exception) LLM-Messages Context: old({}) -> new({})",
+                session->llmMessages.size(),
+                im.size()
+            );
             session->llmMessages = im;
             engine->update_state(std::string{threadId}, [&](neograph::graph::GraphState& state) {
                 state.overwrite("messages", session->llmMessages);
