@@ -81,7 +81,8 @@ public:
 
     size_t countTokens(
         const std::vector<std::string>&           systemMsgs,
-        const std::vector<neograph::ChatMessage>& messages
+        const std::vector<neograph::ChatMessage>& messages,
+        bool                                      countThinking = false
     );
 
     std::string
