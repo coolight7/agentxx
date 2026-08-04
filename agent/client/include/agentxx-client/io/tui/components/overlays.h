@@ -40,7 +40,11 @@ private:
     std::function<void(std::string)> onConfirm_;
 };
 
-/// 设置弹窗组件 (主题切换)
+/// 设置弹窗组件
+/// - 主题切换 (Dark/Light)
+/// - 系统资源占用显示开关 (Info 侧边栏; 默认开启)
+///
+/// 交互: Up/Down 选择条目, Enter 应用/切换; 也支持鼠标点击
 class SettingsOverlay : public ftxui::ComponentBase {
 public:
 
@@ -56,9 +60,15 @@ public:
 
 private:
 
+    bool handleMouse(const ftxui::Mouse& mouse);
+
     TUICtx&               ctx_;
+    /// 条目索引: 0/1 = 主题 Dark/Light, 2 = 系统资源显示开关
     int                   selectedIndex_ = 0;
     std::function<void()> onClose_;
+
+    ftxui::Box themeBoxes_[2]; // Dark/Light 点击区域
+    ftxui::Box sysInfoBox_;    // 系统资源开关点击区域
 };
 
 /// 待发送消息队列弹窗组件

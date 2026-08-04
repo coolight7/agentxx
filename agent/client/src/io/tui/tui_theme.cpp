@@ -2,6 +2,7 @@
 
 TUITheme TUITheme::darkTheme() {
     return TUITheme{
+        .name                  = "Dark",
         .userColor             = ftxui::Color::RGB(102, 204, 255),
         .assistantColor        = ftxui::Color::RGB(255, 255, 255), // #fff
         .thinkingColor         = ftxui::Color::RGB(255, 175, 95),  // #ffaf5f
@@ -41,6 +42,7 @@ TUITheme TUITheme::darkTheme() {
 
 TUITheme TUITheme::lightTheme() {
     return TUITheme{
+        .name                  = "Light",
         .userColor             = ftxui::Color::RGB(60, 80, 130),
         .assistantColor        = ftxui::Color::RGB(50, 50, 50),
         .thinkingColor         = ftxui::Color::Yellow4,

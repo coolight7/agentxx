@@ -11,12 +11,15 @@
 #include "agentxx/util/string_util.h"
 #include "asio/awaitable.hpp"
 #include "asio/experimental/concurrent_channel.hpp"
+#include "asio/io_context.hpp"
+#include "asio/steady_timer.hpp"
 #include "fmt/format.h"
 #include "ftxui/component/component.hpp"
 #include "ftxui/component/screen_interactive.hpp"
 #include "neograph/api.h"
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <deque>
 #include <format>
 #include <functional>
@@ -200,6 +203,11 @@ private:
     /// F12: 切换日志窗口 tab
     void toggleLogWindow();
 
+    /// 启动系统资源监控线程 (每 3 秒采集一次 CPU/内存占用, 写入 sharedState_)
+    void startSystemMonitor();
+    /// 停止系统资源监控线程
+    void stopSystemMonitor();
+
     /// 侧边栏渲染辅助
     std::vector<ScrollItem>       renderLogWindow();
     std::vector<ScrollItem>       renderInfoSidebar();
@@ -241,6 +249,16 @@ private:
     std::vector<ftxui::Element> logLineCache_;
     uint64_t                    logCachePoppedCount_ = 0;
 
+    // ---- 系统资源监控 (每 kSystemInfoIntervalSec 秒采集一次 CPU/内存占用) ----
+    /// Info 侧边栏是否显示系统资源; 默认开启, 可被设置弹窗切换 (UI/监控线程均可读)
+    std::atomic<bool> systemInfoEnabled_{true};
+    /// 监控线程 (独立线程周期采集; 经 cv 睡眠, stop 时可立即唤醒退出)
+    std::thread             sysMonitorThread_;
+    std::condition_variable sysMonitorCv_;
+    std::mutex              sysMonitorMutex_;
+    bool                    sysMonitorStop_ = false;
+    /// 资源采集刷新间隔 (秒)
+    static constexpr int kSystemInfoIntervalSec = 5;
     /// 鼠标命中区域 (渲染时 reflect 填充, 全局事件处理时检测)
     ftxui::Box pendingCounterBox_;
     ftxui::Box contextButtonBox_;

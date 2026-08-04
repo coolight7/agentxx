@@ -3,6 +3,7 @@
 #include "agentxx-client/io/tui/framework/tui_state.h"
 #include "agentxx-client/io/tui/tui_theme.h"
 #include "agentxx/agent/context.h"
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <string>
@@ -28,6 +29,11 @@ struct TUICtx {
 
     /// 当前主题 (UI 线程独占, 渲染/事件时直接读取)
     TUITheme* theme = nullptr;
+
+    /// 是否在 Info 侧边栏显示系统资源占用 (CPU/内存);
+    /// 指向 TUIClientAgentIO::systemInfoEnabled_, 可被设置弹窗切换,
+    /// 渲染线程与资源监控线程均可读取
+    std::atomic<bool>* showSystemInfo = nullptr;
 
     /// 当前会话 (供状态栏等读取 contextStats)
     std::shared_ptr<agentxx::agent::Session> session;

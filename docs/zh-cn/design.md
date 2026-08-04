@@ -210,7 +210,7 @@ path/to/agentxx_test --fail-fast
 path/to/agentxx_test string_util regex agent
 ```
 
-可用测试模块: `string_util` `regex` `diff_util` `events` `concurrency` `lockless` `misc_fixes` `aho_corasick` `util_misc` `event_stream` `event_bridge` `interrupt_bus` `subagent_bus` `crossagent` `string_tools` `share_store` `rag_search` `datetime` `filesystem` `command` `web_search` `codegraph` `cpu_gpu` `http` `network_timeout` `websocket` `remote_agent` `mcp` `acp` `a2a` `openai_provider` `anthropic_provider` `agent` `screen_capture` `text_selection` `session_concurrency`
+可用测试模块: `string_util` `regex` `diff_util` `events` `concurrency` `misc_fixes` `aho_corasick` `util_misc` `event_stream` `event_bridge` `interrupt_bus` `subagent_bus` `crossagent` `string_tools` `share_store` `rag_search` `datetime` `filesystem` `command` `web_search` `codegraph` `cpu_gpu` `http` `network_timeout` `websocket` `remote_agent` `mcp` `acp` `a2a` `openai_provider` `anthropic_provider` `agent` `screen_capture` `text_selection` `session_concurrency`
 
 ### 配置文件
 
@@ -860,7 +860,6 @@ agent/
 │   ├── test_subagent_bus.*       # 子代理总线测试
 │   ├── test_crossagent.*         # 跨代理通信测试
 │   ├── test_concurrency.*        # 并发测试
-│   ├── test_lockless.*           # Session 无锁快照测试
 │   ├── test_session_concurrency.* # Session 跨线程只读快照测试
 │   ├── test_remote_agent.*       # 远程 Agent (WS 传输 / SessionServerAgentIO) 测试
 │   ├── test_mcp.*                # MCP 协议测试 (多版本/HTTP/stdio)
