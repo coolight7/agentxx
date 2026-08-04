@@ -125,6 +125,16 @@ public:
         nodeName(name),
         agentContext(in_agentContext) {}
 
+    virtual asio::awaitable<void> onNodeStart(neograph::graph::NodeInput& in) {
+        co_return;
+    }
+
+    // 触发 中断、取消 等 rethrow 异常时不执行
+    virtual asio::awaitable<void>
+        onNodeEnd(const neograph::graph::NodeInput& in, neograph::graph::NodeOutput& result) {
+        co_return;
+    }
+
     virtual asio::awaitable<void> onHandleStart(
         agentxx::middleware::BaseMiddlewareHandleInterface& item,
         neograph::graph::NodeInput&                         in
@@ -181,6 +191,8 @@ public:
     ///
     /// - start 出现错误时，跳过 baseRun，执行对应的 end
     asio::awaitable<neograph::graph::NodeOutput> run(neograph::graph::NodeInput in) override final {
+        co_await onNodeStart(in);
+
         std::string                 errInfo;
         std::exception_ptr          errorPtr;
         bool                        errorRethrow = false;
@@ -319,6 +331,7 @@ public:
             std::rethrow_exception(errorPtr);
         }
 
+        co_await onNodeEnd(in, out);
         co_return out;
     }
 };

@@ -132,9 +132,9 @@ void BaseAgent::registerNodes(neograph::graph::GraphRegistry& registry) {
         }
     );
     registry.register_type(
-        std::string{agentxx::nodes::MiddlewareWrapAgentEndCallNode::defNodeType},
+        std::string{agentxx::nodes::AgentEndCallWrapNode::defNodeType},
         [ctx](const std::string& name, const neograph::json&, const neograph::graph::NodeContext&) {
-            return std::make_unique<agentxx::nodes::MiddlewareWrapAgentEndCallNode>(name, ctx);
+            return std::make_unique<agentxx::nodes::AgentEndCallWrapNode>(name, ctx);
         }
     );
     registry.register_type(
@@ -198,7 +198,7 @@ neograph::json BaseAgent::buildGraphDefinition() {
                     "agent_end",
                     {{
                         "type",
-                        agentxx::nodes::MiddlewareWrapAgentEndCallNode::defNodeType,
+                        agentxx::nodes::AgentEndCallWrapNode::defNodeType,
                     }},
                 },
                 {
