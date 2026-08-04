@@ -1,6 +1,7 @@
 #include "test_filesystem_tools.h"
 #include "agentxx/agent/context.h"
 #include "agentxx/tools/filesystem.h"
+#include "agentxx/util/string_util.h"
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
@@ -63,7 +64,7 @@ asio::awaitable<void>
         {"path", ""}
     };
     auto result = co_await tool.execute_async(args);
-    if (result.find("\"error\"") != std::string::npos) {
+    if (agentxx::util::isIgnoreCaseContains(result, "error")) {
         g_fs_passed++;
         TEST_PASS << "FileSystemListTool returns error for empty path" << std::endl;
     } else {
@@ -192,7 +193,7 @@ asio::awaitable<void>
     };
     try {
         auto result = co_await tool.execute_async(args);
-        if (result.find("\"error\"") != std::string::npos) {
+        if (agentxx::util::isIgnoreCaseContains(result, "error")) {
             std::cout << "[PASS] FilesystemReadTextFileTool returns error for empty path"
                       << std::endl;
         } else {
@@ -366,7 +367,7 @@ asio::awaitable<void>
         {"path", ""}
     };
     auto result = co_await tool.execute_async(args);
-    if (result.find("\"error\"") != std::string::npos) {
+    if (agentxx::util::isIgnoreCaseContains(result, "error")) {
         g_fs_passed++;
         TEST_PASS << "FilesystemWriteFileTool returns error for empty path" << std::endl;
     } else {
@@ -492,7 +493,7 @@ asio::awaitable<void>
         {"new_str", "b"},
     };
     auto result = co_await tool.execute_async(args);
-    if (result.find("\"error\"") != std::string::npos) {
+    if (agentxx::util::isIgnoreCaseContains(result, "error")) {
         std::cout << "[PASS] FilesystemEditTextFileTool returns error for empty path" << std::endl;
     } else {
         g_fs_failed++;
@@ -512,7 +513,7 @@ asio::awaitable<void>
         {"new_str", "b"                   },
     };
     auto result = co_await tool.execute_async(args);
-    if (result.find("\"error\"") != std::string::npos) {
+    if (agentxx::util::isIgnoreCaseContains(result, "error")) {
         std::cout << "[PASS] FilesystemEditTextFileTool returns error for empty old_str"
                   << std::endl;
     } else {
@@ -575,7 +576,7 @@ asio::awaitable<void>
         {"multi_replace", true    },
     };
     auto result = co_await tool.execute_async(args);
-    if (result.find("Replace 3 times") != std::string::npos) {
+    if (result.find("Replace 3 hits") != std::string::npos) {
         std::ifstream in(filePath);
         std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
         if (content.find("foo") == std::string::npos
@@ -743,7 +744,7 @@ asio::awaitable<void>
         {"multi_replace", true    },
     };
     auto result = co_await tool.execute_async(args);
-    if (result.find("Replace 3 times") != std::string::npos) {
+    if (result.find("Replace 3 hits") != std::string::npos) {
         std::ifstream in(filePath, std::ios::binary);
         std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
         if (content == "baz\nbaz\nbaz\n") {
@@ -783,7 +784,7 @@ asio::awaitable<void>
         {"file_patterns", neograph::json::array()},
     };
     auto result = co_await tool.execute_async(args);
-    if (result.find("\"error\"") != std::string::npos) {
+    if (agentxx::util::isIgnoreCaseContains(result, "error")) {
         std::cout << "[PASS] FilesystemGlobTool returns error for empty file_patterns" << std::endl;
     } else {
         g_fs_failed++;
@@ -852,7 +853,7 @@ asio::awaitable<void>
         {"file_patterns",          neograph::json::array({testDir + "/*.txt"})},
     };
     auto result = co_await tool.execute_async(args);
-    if (result.find("\"error\"") != std::string::npos) {
+    if (agentxx::util::isIgnoreCaseContains(result, "error")) {
         std::cout << "[PASS] FilesystemGrepTool returns error for empty text_patterns" << std::endl;
     } else {
         g_fs_failed++;
@@ -872,7 +873,7 @@ asio::awaitable<void>
         {"file_patterns",          neograph::json::array()         },
     };
     auto result = co_await tool.execute_async(args);
-    if (result.find("\"error\"") != std::string::npos) {
+    if (agentxx::util::isIgnoreCaseContains(result, "error")) {
         std::cout << "[PASS] FilesystemGrepTool returns error for empty file_patterns" << std::endl;
     } else {
         g_fs_failed++;
