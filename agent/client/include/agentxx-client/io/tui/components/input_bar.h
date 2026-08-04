@@ -22,8 +22,6 @@ public:
     struct Config {
         /// 发送回调: 参数为去除首尾换行后的文本
         std::function<void(std::string)> onSend;
-        /// Ctrl+C 回调: 返回 true 表示已处理 (不退出)
-        std::function<bool()> onCtrlC;
         /// 是否处于中断等待输入模式 (影响指示器显示)
         std::function<bool()> isAwaitingInterrupt;
         /// 是否正在流式输出 (影响指示器显示)

@@ -131,11 +131,6 @@ void TUIClientAgentIO::start() {
                 sendUserInputLocked(st, std::move(text));
             }
         };
-        inputCfg.onCtrlC = [this, screen]() -> bool {
-            running_ = false;
-            screen->Exit();
-            return true;
-        };
         inputCfg.isAwaitingInterrupt = [this] {
             return awaitingInterruptInput_.load(std::memory_order_acquire);
         };
@@ -221,6 +216,11 @@ void TUIClientAgentIO::start() {
             // 模态弹窗打开时: 优先让弹窗处理 (Escape 关闭弹窗等), 不拦截
             if (modal_->hasModal()) {
                 return false;
+            }
+            if (event == Event::CtrlC) {
+                running_ = false;
+                screen->Exit();
+                return true;
             }
             if (event == Event::F2) {
                 openModelSelector();
