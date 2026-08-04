@@ -240,18 +240,28 @@ YamlAppConfig loadYamlConfig(
                 }
             }
             if (node["connect_timeout"]) {
-                mc.connectTimeoutSeconds = std::stoi(resolveEnvVars(
+                // std::stoi 对非法值抛异常会导致启动崩溃; 用容错解析, 非法时保留默认
+                auto val = resolveEnvVars(
                     node["connect_timeout"].as<std::string>("16"),
                     dotEnvVars,
                     overrideEnvVars
-                ));
+                );
+                int parsed = mc.connectTimeoutSeconds;
+                if (util::parseNumberFromString(val, parsed).ec == std::errc{}) {
+                    mc.connectTimeoutSeconds = parsed;
+                }
             }
             if (node["read_chunk_timeout"]) {
-                mc.readChunkTimeoutSeconds = std::stoi(resolveEnvVars(
+                // 同上: 容错解析, 避免非法配置导致 std::stoi 抛异常崩溃
+                auto val = resolveEnvVars(
                     node["read_chunk_timeout"].as<std::string>("60"),
                     dotEnvVars,
                     overrideEnvVars
-                ));
+                );
+                int parsed = mc.readChunkTimeoutSeconds;
+                if (util::parseNumberFromString(val, parsed).ec == std::errc{}) {
+                    mc.readChunkTimeoutSeconds = parsed;
+                }
             }
             if (node["ssl_verify"]) {
                 auto val = resolveEnvVars(
@@ -275,11 +285,16 @@ YamlAppConfig loadYamlConfig(
                       == "true";
             }
             if (node["model_context_max_token"]) {
-                mc.modelContenxtMaxToken = static_cast<size_t>(std::stoull(resolveEnvVars(
+                // 同上: 容错解析, 避免非法配置导致 std::stoull 抛异常崩溃
+                auto val = resolveEnvVars(
                     node["model_context_max_token"].as<std::string>("0"),
                     dotEnvVars,
                     overrideEnvVars
-                )));
+                );
+                unsigned long long parsed = 0;
+                if (util::parseNumberFromString(val, parsed).ec == std::errc{}) {
+                    mc.modelContenxtMaxToken = static_cast<size_t>(parsed);
+                }
             }
             if (node["extra_api_config"]) {
                 mc.extra_config = yamlToJson(node["extra_api_config"]);

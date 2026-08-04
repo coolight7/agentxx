@@ -160,8 +160,6 @@ void signalError(std::string_view exepath);
 } // namespace util
 } // namespace agentxx
 
-#if XX_IS_DEBUG_D
-
 #define XX_LOGD(str, ...)                 \
     (::agentxx::util::xxLogPrint(         \
         ::agentxx::util::LogLevel::Debug, \
@@ -179,18 +177,6 @@ void signalError(std::string_view exepath);
         ::agentxx::util::LogLevel::Error, \
         fmt::format(str, ##__VA_ARGS__)   \
     ));
-
-#else
-
-#define XX_LOGD(str, ...) ;
-
-#define XX_LOGI(str, ...) ;
-
-#define XX_LOGW(str, ...) ;
-
-#define XX_LOGE(str, ...) ;
-
-#endif
 
 #define XX_OUT(str, ...) \
     (::agentxx::util::xxLogPrint(::agentxx::util::LogLevel::Out, fmt::format(str, ##__VA_ARGS__)));
