@@ -13,9 +13,10 @@ InputComponent::InputComponent(TUICtx& ctx, Config config) :
     option.cursor_position = 0;
     option.placeholder     = "Type a message... (Enter:Send, Alt+Enter:Newline)";
     option.on_enter        = nullptr;
-    option.transform       = [](InputState state) {
+    option.transform       = [this](InputState state) {
         if (state.is_placeholder) {
-            state.element |= dim;
+            const auto& theme  = *ctx_.theme;
+            state.element     |= color(theme.hintColor);
         }
         return state.element;
     };
@@ -55,13 +56,10 @@ Element InputComponent::OnRender() {
 }
 
 bool InputComponent::OnEvent(Event event) {
-    if (event == Event::CtrlC) {
+    if (event == Event::CtrlL) {
         if (!inputText_.empty()) {
             inputText_.clear();
             ctx_.postRedraw();
-            return true;
-        }
-        if (config_.onCtrlC && config_.onCtrlC()) {
             return true;
         }
         return false;
