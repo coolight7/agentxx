@@ -73,6 +73,7 @@ asio::awaitable<std::optional<WireMessage>> WsAgentIOTransport::recv() {
 }
 
 asio::awaitable<bool> WsAgentIOTransport::connect(const WireHello& hello) {
+    reconnectTimer_ = std::make_shared<asio::steady_timer>(ex_);
     if (clientMode_) {
         bool ok = co_await establishConnection();
         if (!ok) {
@@ -162,6 +163,10 @@ void WsAgentIOTransport::spawnLoops() {
 void WsAgentIOTransport::stopLoops() {
     if (heartbeatTimer_) {
         heartbeatTimer_->cancel();
+    }
+    if (reconnectTimer_) {
+        // 取消重连退避等待, 使 establishConnection/readLoop 重连循环立即检查 stopped_ 退出
+        reconnectTimer_->cancel();
     }
     if (writeQueue_) {
         writeQueue_->close();
@@ -261,10 +266,12 @@ asio::awaitable<void> WsAgentIOTransport::readLoop() {
             if (config_.maxReconnectAttempts > 0 && attempts > config_.maxReconnectAttempts) {
                 break;
             }
-            asio::steady_timer backoff(ex_);
-            backoff.expires_after(config_.reconnectBackoff);
+            if (!reconnectTimer_) {
+                reconnectTimer_ = std::make_shared<asio::steady_timer>(ex_);
+            }
+            reconnectTimer_->expires_after(config_.reconnectBackoff);
             ErrorCode ec;
-            co_await backoff.async_wait(asio::redirect_error(asio::use_awaitable, ec));
+            co_await reconnectTimer_->async_wait(asio::redirect_error(asio::use_awaitable, ec));
             if (stopped_.load(std::memory_order_acquire)) {
                 break;
             }
@@ -355,10 +362,13 @@ asio::awaitable<bool> WsAgentIOTransport::establishConnection() {
                 co_return false;
             }
             XX_LOGW("[ws_transport] connect failed, retry #{}", attempts);
-            asio::steady_timer backoff(ex_);
-            backoff.expires_after(config_.reconnectBackoff);
+            // 使用成员 reconnectTimer_ (而非局部 timer), 便于 close() 取消退避立即退出
+            if (!reconnectTimer_) {
+                reconnectTimer_ = std::make_shared<asio::steady_timer>(ex_);
+            }
+            reconnectTimer_->expires_after(config_.reconnectBackoff);
             ErrorCode ec;
-            co_await backoff.async_wait(asio::redirect_error(asio::use_awaitable, ec));
+            co_await reconnectTimer_->async_wait(asio::redirect_error(asio::use_awaitable, ec));
             continue;
         }
         wsClient_ = std::shared_ptr<util::WsClient>(std::move(client.value()));

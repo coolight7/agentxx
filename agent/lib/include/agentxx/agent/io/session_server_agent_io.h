@@ -92,6 +92,11 @@ public:
         return turnActive_.load(std::memory_order_acquire);
     }
 
+    /// 驱动循环 run() 是否仍在运行 (用于停止时等待其退出)
+    bool running() const noexcept {
+        return running_.load(std::memory_order_acquire);
+    }
+
     /// 测试辅助: 强制设置轮次活动状态
     void setTurnActiveForTest(bool v) noexcept {
         turnActive_.store(v, std::memory_order_release);

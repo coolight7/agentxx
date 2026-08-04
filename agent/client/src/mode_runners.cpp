@@ -110,7 +110,7 @@ static asio::awaitable<void> runLocalCliUnifiedAsync(std::shared_ptr<agent::Code
     auto clientEx = co_await asio::this_coro::executor;
     auto io       = std::make_shared<StdIOClientAgentIO>();
     XX_OUT("======= Agentxx Client (CLI, in-process unified) =======");
-    setupLocalUnifiedDirect(clientEx, agent, io, "session");
+    auto controller = setupLocalUnifiedDirect(clientEx, agent, io, "session");
     // CLI 输入循环: 从 stdin 读取并发送
     std::cout << "\n>>> " << std::flush;
     for (;;) {
@@ -122,6 +122,13 @@ static asio::awaitable<void> runLocalCliUnifiedAsync(std::shared_ptr<agent::Code
             continue;
         }
         io->sendToPeer(agent::WireUserInput{"session", *input});
+    }
+    // 停止服务端点并等待驱动循环退出 (避免 io_context 析构时销毁其协程导致 use-after-free)
+    controller->stop();
+    while (controller->running()) {
+        asio::steady_timer timer(clientEx);
+        timer.expires_after(std::chrono::milliseconds(20));
+        co_await timer.async_wait(asio::use_awaitable);
     }
 }
 
@@ -155,7 +162,7 @@ static asio::awaitable<void> runLocalTuiUnifiedAsync(
     auto tui = std::make_shared<TUIClientAgentIO>(clientEx, ctx, threadId);
     tui->start();
 
-    setupLocalUnifiedDirect(clientEx, agent, tui, threadId);
+    auto controller = setupLocalUnifiedDirect(clientEx, agent, tui, threadId);
 
     // TUI 模式下输入由 FTXUI 事件循环驱动 (sendUserInputLocked 经 transport 发送)
     // 此处等待 TUI 停止
@@ -165,6 +172,16 @@ static asio::awaitable<void> runLocalTuiUnifiedAsync(
         co_await timer.async_wait(asio::use_awaitable);
     }
     tui->stop();
+
+    // 停止服务端点并等待其驱动循环退出, 使其协程释放对 controller 的持有,
+    // 避免 controller(及其 channel transport) 在 agent io_context 析构时才被销毁
+    // 而触发 channel 的 use-after-free
+    controller->stop();
+    while (controller->running()) {
+        asio::steady_timer timer(clientEx);
+        timer.expires_after(std::chrono::milliseconds(20));
+        co_await timer.async_wait(asio::use_awaitable);
+    }
 }
 
 void runLocalTuiUnified(
@@ -218,6 +235,7 @@ static asio::awaitable<void>
     io->requestAppendComponentInfo("session");
 
     // 输入循环
+    std::cout << "\n>>> " << std::flush;
     for (;;) {
         auto input = co_await io->getInput();
         if (!input.has_value()) {
