@@ -107,6 +107,8 @@ private:
     std::shared_ptr<WriteQueue>         writeQueue_;
     std::shared_ptr<RecvQueue>          recvQueue_;
     std::shared_ptr<asio::steady_timer> heartbeatTimer_;
+    /// 重连退避定时器 (成员化以便 close() 时取消, 打断退避等待立即退出)
+    std::shared_ptr<asio::steady_timer> reconnectTimer_;
 
     // 重连增量重放状态
     std::atomic<uint64_t> lastDeltaSeq_{0};
