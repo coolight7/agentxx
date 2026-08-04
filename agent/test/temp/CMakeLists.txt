@@ -5,9 +5,9 @@ cmake_minimum_required(VERSION 3.30)
 
 project(test_temp VERSION 0.1.0 LANGUAGES C CXX)
 
-set(CMAKE_C_STANDARD 23)
-set(CMAKE_CXX_STANDARD 23)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_C_STANDARD 17)
+set(CMAKE_CXX_STANDARD 26)
+set(CMAKE_CXX_STANDARD_REQUIRED OFF)
 
 option(XX_IS_RELEASE_D "Generate the client target." ON)
 option(AGENTXX_BUILD_CLIENT "Generate the client target." OFF)

@@ -1,19 +1,21 @@
-#include "agentxx/util/ws_client.h"
-
-#include "agentxx/util/exception.h"
-#include "agentxx/util/http_client.h"
-#include <algorithm>
 #include <asio/detail/socket_option.hpp>
-#include <cctype>
-#include <openssl/ssl.h>
-
 // 仅提供 TCP_KEEPIDLE/TCP_KEEPINTVL/TCP_KEEPCNT 选项号常量, 设置经由 asio 接口完成
-#if defined(_WIN32)
+#if defined(XX_IS_WIN_D)
+#include <windows.h>
+// ---
 #include <mstcpip.h>
 #else
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #endif
+
+#include "agentxx/util/ws_client.h"
+
+#include "agentxx/util/exception.h"
+#include "agentxx/util/http_client.h"
+#include <algorithm>
+#include <cctype>
+#include <openssl/ssl.h>
 
 namespace agentxx {
 namespace util {

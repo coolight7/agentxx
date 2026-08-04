@@ -56,7 +56,7 @@ std::string_view requestPath(std::string_view target) noexcept {
 
 std::string formatHttpDate(std::time_t t) noexcept {
     char buf[64];
-#if defined(_WIN32)
+#if defined(XX_IS_WIN_D)
     std::tm tm;
     gmtime_s(&tm, &t);
     std::strftime(buf, sizeof(buf), "%a, %d %b %Y %H:%M:%S GMT", &tm);
