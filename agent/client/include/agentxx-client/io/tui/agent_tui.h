@@ -166,8 +166,8 @@ public:
                     std::string_view interruptValue,
                     std::string_view interruptArgJson
                 ) override;
-    void requestCancel(std::string_view threadId) override;
-    void requestSelectModel(std::string_view threadId, std::string_view model) override;
+    void requestCancel(std::string threadId) override;
+    void requestSelectModel(std::string threadId, std::string model) override;
 
     /// 供组件访问共享状态 (UI 线程渲染/事件时使用)
     TUISharedState& sharedState() {
