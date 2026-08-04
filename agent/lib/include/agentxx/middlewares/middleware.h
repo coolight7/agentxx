@@ -388,6 +388,7 @@ public:
     inline static const std::string channel_savedGraphData{"xx_savedGraphData"};
 
     inline static const std::string graphDataKey_systemMessage{"systemMessage"};
+    inline static const std::string graphDataKey_systemMessageCheckInfo{"systemMessageCheckInfo"};
     inline static const std::string graphDataKey_tempLLMThinking{"xx_ModelCallWrap_tempLLMThinking"
     };
     inline static const std::string graphDataKey_tempLLMContent{"xx_ModelCallWrap_tempLLMContent"};
@@ -437,6 +438,11 @@ public:
                 return j.dump();
             }
             return {};
+        } else if constexpr (std::is_same_v<T, bool>) {
+            if (j.is_boolean()) {
+                return j.get<bool>();
+            }
+            return {};
         } else if constexpr (std::is_same_v<T, int>) {
             if (j.is_number_integer()) {
                 return j.get<int>();
@@ -447,14 +453,14 @@ public:
                 return j.get<int64_t>();
             }
             return {};
+        } else if constexpr (std::is_same_v<T, size_t>) {
+            if (j.is_number_integer()) {
+                return j.get<size_t>();
+            }
+            return {};
         } else if constexpr (std::is_same_v<T, double>) {
             if (j.is_number()) {
                 return j.get<double>();
-            }
-            return {};
-        } else if constexpr (std::is_same_v<T, bool>) {
-            if (j.is_boolean()) {
-                return j.get<bool>();
             }
             return {};
         } else if constexpr (std::is_same_v<T, std::vector<std::string>>) {

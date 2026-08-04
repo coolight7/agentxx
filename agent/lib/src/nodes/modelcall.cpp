@@ -289,6 +289,22 @@ void ModelCallWrapNode::repairMessages(neograph::graph::NodeInput& in) {
         auto msgs = in.state.get_messages();
         for (const auto& msg : msgs) {
             bool doPrint = false;
+            if (msg.role == "system") {
+                agentCtxPtr->middlewareHandleContext->modifyGraphDataItemValue<size_t>(
+                    in.ctx.thread_id,
+                    agentxx::middleware::MiddlewareContext::graphDataKey_systemMessageCheckInfo,
+                    [&](size_t& val) {
+                        if (val > 0 && val != msg.content.size()) {
+                            XX_LOGE(
+                                "LLM system message content length is changed: {}|{}",
+                                val,
+                                msg.content.size()
+                            );
+                        }
+                        val = msg.content.size();
+                    }
+                );
+            }
             // 检查消息非空
             if (msg.reasoning_content.empty() && msg.content.empty() && msg.tool_calls.empty()) {
                 XX_LOGE("  - Message is Empty: ");
