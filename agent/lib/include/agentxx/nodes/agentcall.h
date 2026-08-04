@@ -19,6 +19,13 @@ public:
         std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
     );
 
+    asio::awaitable<void> onNodeStart(neograph::graph::NodeInput& in) override;
+
+    asio::awaitable<void> onNodeEnd(
+        const neograph::graph::NodeInput& in,
+        neograph::graph::NodeOutput&      result
+    ) override;
+
     asio::awaitable<void> onHandleStart(
         agentxx::middleware::BaseMiddlewareHandleInterface& item,
         neograph::graph::NodeInput&                         in
@@ -31,17 +38,24 @@ public:
     ) override;
 };
 
-class NEOGRAPH_API MiddlewareWrapAgentEndCallNode
+class NEOGRAPH_API AgentEndCallWrapNode
     : public WrapHandleBaseNode<agentxx::nodes::WrapBaseNodeInterface> {
 protected:
 public:
 
     inline static constexpr auto defNodeType = std::string_view{"xx_MiddlewareWrapAgentEndCall"};
 
-    MiddlewareWrapAgentEndCallNode(
+    AgentEndCallWrapNode(
         std::string_view                            name,
         std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
     );
+
+    asio::awaitable<void> onNodeStart(neograph::graph::NodeInput& in) override;
+
+    asio::awaitable<void> onNodeEnd(
+        const neograph::graph::NodeInput& in,
+        neograph::graph::NodeOutput&      result
+    ) override;
 
     asio::awaitable<void> onHandleStart(
         agentxx::middleware::BaseMiddlewareHandleInterface& item,

@@ -85,7 +85,7 @@ neograph::json SubAgentNormalTask::defCreateSubGraphDefine() {
                     "agent_end",
                     {{
                         "type",
-                        agentxx::nodes::MiddlewareWrapAgentEndCallNode::defNodeType,
+                        agentxx::nodes::AgentEndCallWrapNode::defNodeType,
                     }},
                 },
                 {

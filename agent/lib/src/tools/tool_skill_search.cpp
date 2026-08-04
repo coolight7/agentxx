@@ -152,7 +152,7 @@ neograph::json ToolSkillSearchSubAgentTask::defCreateSubGraphDefine() {
                     "agent_end",
                     {{
                         "type",
-                        agentxx::nodes::MiddlewareWrapAgentEndCallNode::defNodeType,
+                        agentxx::nodes::AgentEndCallWrapNode::defNodeType,
                     }},
                 },
                 {
