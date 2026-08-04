@@ -63,7 +63,8 @@ size_t SummarizationMiddlewareHandle::countTokensForUtf8Str(std::string_view in_
 
 size_t SummarizationMiddlewareHandle::countTokens(
     const std::vector<std::string>&           systemMsgs,
-    const std::vector<neograph::ChatMessage>& messages
+    const std::vector<neograph::ChatMessage>& messages,
+    bool                                      countThinking
 ) {
     size_t count = 0;
     for (const auto& msg : systemMsgs) {
@@ -72,6 +73,9 @@ size_t SummarizationMiddlewareHandle::countTokens(
     for (const auto& item : messages) {
         count += static_cast<size_t>(extraTokensPerMessage) + countTokensForUtf8Str(item.role)
                  + countTokensForUtf8Str(item.content);
+        if (countThinking) {
+            count += countTokensForUtf8Str(item.reasoning_content);
+        }
         for (const auto& tool : item.tool_calls) {
             count += countTokensForUtf8Str(tool.id) + countTokensForUtf8Str(tool.name)
                      + countTokensForUtf8Str(tool.arguments);
@@ -233,47 +237,44 @@ asio::awaitable<void>
     if (messages.empty()) {
         co_return;
     }
+
+    const auto& thread_id = in.ctx.thread_id;
+
+    // 从会话的模型配置提取模型支持的最大 token, 模型配置未指定时使用默认值
+    size_t modelContenxtMaxToken = modelSupportMaxTokenDefault;
+    bool   enableCountThinking   = false;
+    {
+        const auto& currentModelConfig = agentCtxPtr->getSessionCurrentModelConfig(thread_id);
+        if (currentModelConfig.modelContenxtMaxToken > 0) {
+            modelContenxtMaxToken = currentModelConfig.modelContenxtMaxToken;
+        }
+        enableCountThinking = currentModelConfig.sendThinking;
+    }
+
     // - 接口返回的 token usage，可能不准确，因为 llm node
     // 重试时可能会额外附加消息、也可能是上一轮的 api 返回的，本轮开始已经添加了
     // toolcall / userInput 等消息
     size_t apiTokenUsage = 0;
     {
-        auto& apiTokenUsageJson
+        const auto& apiTokenUsageJson
             = agentCtxPtr->middlewareHandleContext->getGraphDataItemValue<neograph::json>(
                 in.ctx.thread_id,
                 agentxx::middleware::MiddlewareContext::graphDataKey_LLMTokenUsage
             );
         if (apiTokenUsageJson.is_number_integer()) {
-            apiTokenUsage     = apiTokenUsageJson.get<size_t>();
-            apiTokenUsageJson = 0;
+            apiTokenUsage = apiTokenUsageJson.get<size_t>();
         }
     }
 
-    size_t     countTokenUsage = 0;
-    const auto tokenUsage      = (apiTokenUsage > 0) ? static_cast<size_t>(apiTokenUsage)
-                                                     : (countTokenUsage = countTokens({}, messages));
-
-    const auto& thread_id = in.ctx.thread_id;
-
-    // 从会话的模型配置提取模型支持的最大 token, 模型配置未指定时使用默认值
-    const size_t modelContenxtMaxToken = [&]() {
-        if (agentCtxPtr->modelRegistry) {
-            std::string modelName;
-            if (auto session = agentCtxPtr->sessions->get(thread_id)) {
-                modelName = session->getModelName();
-            }
-            auto mc = agentCtxPtr->modelRegistry->getModelConfig(modelName);
-            if (mc.modelContenxtMaxToken > 0) {
-                return mc.modelContenxtMaxToken;
-            }
-        }
-        return modelSupportMaxTokenDefault;
-    }();
-
+    const auto countTokenUsage = countTokens({}, messages, enableCountThinking);
+    const auto tokenUsage      = (apiTokenUsage > 0) ? apiTokenUsage : countTokenUsage;
     // 发布上下文统计到对应会话, 供 UI 显示上下文占用百分比
     if (auto session = agentCtxPtr->sessions->get(thread_id)) {
         if (session->contextStats) {
-            session->contextStats->contextTokens.store(tokenUsage);
+            // UI显示优先使用 apiTokenUsage 即可
+            session->contextStats->contextTokens.store(
+                (apiTokenUsage > 0) ? apiTokenUsage : tokenUsage
+            );
             session->contextStats->maxContextTokens.store(modelContenxtMaxToken);
         }
     }
@@ -369,6 +370,7 @@ asio::awaitable<void>
     }
 
     if (newMsgsJson.is_array() && false == newMsgsJson.empty()) {
+        auto msgSize = newMsgsJson.size();
         in.state.overwrite("messages", std::move(newMsgsJson));
         if (agentCtxPtr->agentConfig->logPrintSummarizationResultTokenCount) {
             XX_OUT(
@@ -380,12 +382,12 @@ asio::awaitable<void>
 ┣━ Token Limit: {}/{}
 ┣━ Summary To: {}
 ┗━━━━━━ Summary ━━━━━━┛)_",
-                messages.size(),
+                msgSize,
                 apiTokenUsage,
                 countTokenUsage,
                 tokenUsage,
                 modelContenxtMaxToken,
-                countTokens({}, in.state.get_messages())
+                countTokens({}, in.state.get_messages(), enableCountThinking)
             );
         }
     } else {
