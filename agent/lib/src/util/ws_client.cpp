@@ -1,6 +1,6 @@
 #include <asio/detail/socket_option.hpp>
 // 仅提供 TCP_KEEPIDLE/TCP_KEEPINTVL/TCP_KEEPCNT 选项号常量, 设置经由 asio 接口完成
-#if defined(XX_IS_WIN_D)
+#if XX_IS_WIN_D
 #include <windows.h>
 // ---
 #include <mstcpip.h>
