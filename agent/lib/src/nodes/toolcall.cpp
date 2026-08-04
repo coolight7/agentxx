@@ -152,10 +152,10 @@ asio::awaitable<std::string>
             isCancel = true;
             errorPtr = std::current_exception();
         } catch (const std::exception& e) {
-            errInfo  = e.what();
+            errInfo  = agentxx::util::autoTryConvertToUtf8(e.what());
             errorPtr = std::current_exception();
         } catch (const boost::exception& e) {
-            errInfo  = boost::diagnostic_information(e);
+            errInfo  = agentxx::util::autoTryConvertToUtf8(boost::diagnostic_information(e));
             errorPtr = std::current_exception();
         } catch (...) {
             errorPtr = std::current_exception();
@@ -305,9 +305,7 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
                     co_return true;
                 },
                 [&](std::string errinfo) -> asio::awaitable<bool> {
-                    tool_msg.content = neograph::json{
-                        {"error", std::move(errinfo)}
-                    }.dump();
+                    tool_msg.content = fmt::format("[Exception aborted: {}]", errinfo);
                     co_return true;
                 }
             );
