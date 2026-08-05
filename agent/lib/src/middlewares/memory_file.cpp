@@ -126,7 +126,6 @@ asio::awaitable<void>
                 in.ctx.thread_id,
                 agentxx::middleware::MiddlewareContext::graphDataKey_appendSystemMessage
             );
-        auto size = appendSystemMsgList.size();
         appendSystemMsgList.push_back(state->cacheContextContent);
     }
     co_return;

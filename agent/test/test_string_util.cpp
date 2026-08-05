@@ -593,6 +593,24 @@ void test_findIndexAndLastLineIndexByUtf8Length() {
     XX_TEST_EXPECT_EQ(std::get<2>(r4), 1u);
 }
 
+void test_countLines() {
+    // 空输入
+    XX_TEST_EXPECT_EQ(agentxx::util::countLines(""), 0u);
+    // 单个换行符: 前面空行, 末尾换行后无内容 -> 1 行
+    XX_TEST_EXPECT_EQ(agentxx::util::countLines("\n"), 1u);
+    // 多行且末尾无换行: 最后一个不完整行也算一行
+    XX_TEST_EXPECT_EQ(agentxx::util::countLines("a\nb\nc"), 3u);
+    // 末尾有换行: '\n' 数量即行数
+    XX_TEST_EXPECT_EQ(agentxx::util::countLines("a\nb\nc\n"), 3u);
+    // 连续换行: 空行也计数
+    XX_TEST_EXPECT_EQ(agentxx::util::countLines("\n\n"), 2u);
+    XX_TEST_EXPECT_EQ(agentxx::util::countLines("a\n\nb"), 3u);
+    // 无换行: 单行
+    XX_TEST_EXPECT_EQ(agentxx::util::countLines("hello"), 1u);
+    // 仅末尾换行前有多行内容
+    XX_TEST_EXPECT_EQ(agentxx::util::countLines("line1\nline2\nline3\nline4"), 4u);
+}
+
 void test_strSplit() {
     auto r1 = agentxx::util::strSplit("a,b,c", ',');
     XX_TEST_EXPECT_EQ(r1.size(), (size_t)3);
@@ -813,6 +831,7 @@ TestResult testStringUtil() {
     test_utf8GetLength();
     test_findIndexByUtf8Length();
     test_findIndexAndLastLineIndexByUtf8Length();
+    test_countLines();
     test_strSplit();
     test_stringVectorJoin();
     test_toStringNotNull();

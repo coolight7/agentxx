@@ -86,6 +86,7 @@ public:
     asio::awaitable<std::string> execute_async(const neograph::json& arguments) override;
 };
 
+/// glob
 class FilesystemGlobTool : public XXToolBase {
 public:
 
@@ -96,6 +97,7 @@ public:
     asio::awaitable<std::string> execute_async(const neograph::json& arguments) override;
 };
 
+/// grep
 class FilesystemGrepTool : public XXToolBase {
 public:
 

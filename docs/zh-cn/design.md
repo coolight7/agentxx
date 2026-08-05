@@ -528,6 +528,40 @@ end1  ←   end2  ←   end3
 - 中间件按会话 (thread_id) 维护独立 State
 - CodeAgent 注册的中间件栈: Permission → Skill → MemoryFile → Summarization → Planning → LogPrint
 
+#### 取消设计 (CancelToken 双通道)
+
+取消基于 `neograph::graph::CancelToken` (每轮次创建, 存于 Session)，两条传播路径：
+
+1. **轮询埋点 (主路径)**: 在逻辑边界手动调用 `throw_if_cancelled()` / `is_cancelled()`，
+   取消点可控、异常路径可预期：
+   - graph 每个 super-step 之间 (engine)
+   - toolcall 分发前 / 每个 tool 执行前后 (ToolcallWrapNode)
+   - LLM 调用前、重试等待后 (ModelCallWrapNode)
+2. **asio 信号中断 (仅限可安全中止的耗时 IO)**: `CancelToken::cancel()` 经绑定的
+   executor emit `cancellation_signal`，中断在途 LLM HTTP 流、socket 读写、定时器等，
+   在 co_await 点表现为 `system_error(operation_aborted)`。这是唯一允许产生
+   `operation_aborted` 的场景。
+
+边界转换规则 (exception.h `isCancelAbort` / wrap_handle.h)：
+
+- `operation_aborted` + 令牌已取消 ⇒ 转换为 `CancelledException` 向上传播 (取消语义)；
+  `catchError/catchErrorAsync` 传入 cancelToken 参数启用该转换
+- `operation_aborted` + 令牌未取消/无令牌 ⇒ 按超时错误处理 ("timeout: ...")
+- 所有 catch-all / `catch(std::exception&)` 站点必须先重抛
+  `CancelledException` / `NodeInterrupt`，禁止吞掉取消信号 (EventStream::publish、
+  WrapHandleBaseNode、catchError 等均遵循)
+- tool 经 `ContextualAsyncTool` 接收 `ToolExecutionContext{cancel_token}`，
+  可轮询取消或传播到其传输层；toolcall 被取消时已完成的 tool 结果暂存
+  graphData (interruptToolcallCache) 后再重抛
+- 线程池卸载 (`offloadCancellableAsync`): 工作线程同步执行不挂起, asio 信号无法抢占,
+  等待方 co_await 也不会提前返回 —— 带 CancelToken 的重载额外启动 watcher 协程
+  轮询令牌, 取消时置位 cancelFlag 打通 "会话取消 -> 工作线程轮询退出" 通知链
+  (filesystem_list/glob/grep 已接入)
+
+不可中断段 (收尾/持久化) 不依赖"异常恰好没传到"，需显式防护：
+catch `CancelledException` → 完成必要收尾 → rethrow，或用
+`asio::this_coro::reset_cancellation_state` 过滤取消信号。
+
 #### 3. AgentIOBase 端点模型 + Transport 层
 
 Client 和 Server 都继承 `AgentIOBase`，通过 `AgentIOTransportBase` 传输层通信。

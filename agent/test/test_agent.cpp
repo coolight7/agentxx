@@ -1,8 +1,11 @@
 #include "test_agent.h"
 #include "agentxx/agent/code_agent.h"
+#include "asio/as_tuple.hpp"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/io_context.hpp"
+#include "asio/steady_timer.hpp"
+#include "asio/this_coro.hpp"
 #include "asio/use_awaitable.hpp"
 #include <atomic>
 #include <string>
@@ -68,6 +71,7 @@ std::string    g_da_sim_response_content  = "Hello! I am a simulated LLM respons
 int            g_da_sim_prompt_tokens     = 100;
 int            g_da_sim_completion_tokens = 50;
 neograph::json g_da_sim_tool_calls        = neograph::json::array();
+int            g_da_sim_delay_ms          = 0;
 
 /// 默认模拟器配置
 static DaSimConfig g_defaultSimConfig;
@@ -127,6 +131,20 @@ DaSimServer startDaSimServer() {
                agentxx::util::HttpServer::Response& resp,
                std::string_view) -> asio::awaitable<void> {
                 namespace http = boost::beast::http;
+
+                if (g_da_sim_delay_ms > 0) {
+                    // 模拟慢速 LLM: 延迟后再响应, 供取消测试中断在途请求
+                    asio::steady_timer delayTimer(
+                        co_await asio::this_coro::executor,
+                        std::chrono::milliseconds(g_da_sim_delay_ms)
+                    );
+                    auto [ec] = co_await delayTimer.async_wait(
+                        asio::as_tuple(asio::use_awaitable)
+                    );
+                    if (ec) {
+                        co_return;
+                    }
+                }
 
                 auto j            = neograph::json::parse(req.body());
                 bool stream       = j.value("stream", false);

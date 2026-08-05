@@ -120,13 +120,16 @@ public:
         }
 
         for (auto& sub : snapshot) {
-            try {
-                co_await sub.handle(data);
-            } catch (const std::exception& e) {
-                XX_LOGE("EventStream `{}` listener exception: {}", name, e.what());
-            } catch (...) {
-                XX_LOGE("EventStream `{}` listener unknown exception", name);
-            }
+            co_await agentxx::util::catchErrorAsync<bool>(
+                [&]() -> asio::awaitable<bool> {
+                    co_await sub.handle(data);
+                    co_return true;
+                },
+                [&](std::string errinfo) -> asio::awaitable<bool> {
+                    XX_LOGE("EventStream `{}` listener exception: {}", name, errinfo);
+                    co_return false;
+                }
+            );
         }
     }
 };

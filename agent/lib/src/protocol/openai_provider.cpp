@@ -45,6 +45,7 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::invoke_format_data(
     const neograph::CompletionParams&  params,
     neograph::FormatDataStreamCallback on_chunk
 ) {
+    XX_LOGT("OpenAIProvider::invoke_format_data START");
     if (config_.isOpenaiResponseApi()) {
         if (on_chunk) {
             auto body      = buildResponsesBody(params);
@@ -673,6 +674,7 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStream(
     const neograph::json&              body,
     neograph::FormatDataStreamCallback on_chunk
 ) {
+    XX_LOGT("OpenAIProvider::doStream START");
     using namespace agentxx::util;
 
     auto bodyStr = body.dump();
@@ -689,40 +691,51 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStream(
     // 是否收到 OpenAI SSE 结束标记 "data: [DONE]", 用于检测流截断
     bool doneReceived = false;
 
-    try {
-        co_await HttpClient::requestSseAsync(
-            "POST",
-            apiUrl(),
-            bodyStr,
-            "application/json",
-            headers,
-            HttpClient::RequestConfig{
-                .connectTimeout   = std::chrono::seconds{config_.connectTimeoutSeconds},
-                .readChunkTimeout = std::chrono::seconds{config_.readChunkTimeoutSeconds},
-                .sslVerify        = config_.sslVerify,
-            },
-            [&](std::string_view chunk) {
-                lineBuffer += chunk;
-                if (processSseBuffer(
-                        lineBuffer,
-                        completion,
-                        fullContent,
-                        fullThinking,
-                        tcMap,
-                        on_chunk
-                    )) {
-                    doneReceived = true;
+    co_await agentxx::util::catchErrorAsync<bool>(
+        [&]() -> asio::awaitable<bool> {
+            co_await HttpClient::requestSseAsync(
+                "POST",
+                apiUrl(),
+                bodyStr,
+                "application/json",
+                headers,
+                HttpClient::RequestConfig{
+                    .connectTimeout   = std::chrono::seconds{config_.connectTimeoutSeconds},
+                    .readChunkTimeout = std::chrono::seconds{config_.readChunkTimeoutSeconds},
+                    .sslVerify        = config_.sslVerify,
+                },
+                [&](std::string_view chunk) {
+                    lineBuffer += chunk;
+                    if (processSseBuffer(
+                            lineBuffer,
+                            completion,
+                            fullContent,
+                            fullThinking,
+                            tcMap,
+                            on_chunk
+                        )) {
+                        doneReceived = true;
+                    }
                 }
+            );
+
+            XX_LOGT("OpenAIProvider::doStream [HttpClient::requestSseAsync] DONE");
+            co_return true;
+        },
+        [&](std::string errinfo) -> asio::awaitable<bool> {
+            XX_LOGT(
+                "OpenAIProvider::doStream [HttpClient::requestSseAsync] Exception: {}",
+                errinfo
+            );
+            // 已收到 [DONE] 说明业务数据已全部送达, 连接层在收尾阶段的错误
+            // (如 ssl stream_truncated: 对端未发 close_notify 就关闭连接) 不应使请求失败
+            if (!doneReceived) {
+                throw std::runtime_error{errinfo};
             }
-        );
-    } catch (...) {
-        // 已收到 [DONE] 说明业务数据已全部送达, 连接层在收尾阶段的错误
-        // (如 ssl stream_truncated: 对端未发 close_notify 就关闭连接) 不应使请求失败
-        if (!doneReceived) {
-            throw;
+            XX_LOGW("LLM stream transport error after [DONE], ignored");
+            co_return false;
         }
-        XX_LOGW("LLM stream transport error after [DONE], ignored");
-    }
+    );
 
     if (!lineBuffer.empty()) {
         if (processSseBuffer(
@@ -742,6 +755,7 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStream(
     // connection-close 定长的响应时, HTTP 层可能仍判定"完整", 必须在 SSE 协议层检测,
     // 否则会把截断的响应静默当作正常结果返回
     if (!doneReceived) {
+        XX_LOGT("OpenAIProvider::doStream throw exception: !doneReceived");
         throw std::runtime_error(fmt::format(
             "SSE stream truncated: missing [DONE] marker | model={} content_chars={}",
             params.model.empty() ? config_.modelName : params.model,
@@ -775,6 +789,7 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStream(
         );
     }
 
+    XX_LOGT("OpenAIProvider::doStream END");
     co_return completion;
 }
 

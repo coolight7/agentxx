@@ -178,6 +178,7 @@ neograph::CompletionParams ModelCallWrapNode::build_params(
 
 asio::awaitable<neograph::graph::NodeOutput>
     ModelCallWrapNode::callLLM(neograph::graph::NodeInput& in) {
+    XX_LOGT("ModelCallWrapNode::callLLM START");
     auto params         = build_params(in.state, in.ctx.thread_id);
     params.cancel_token = in.ctx.cancel_token;
 
@@ -200,6 +201,7 @@ asio::awaitable<neograph::graph::NodeOutput>
     out.writes.push_back(
         neograph::graph::ChannelWrite{"messages", neograph::json::array({msg_json})}
     );
+    XX_LOGT("ModelCallWrapNode::callLLM END");
     co_return out;
 }
 
@@ -386,6 +388,11 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
         // 修正上下文角色顺序
         repairMessages(in);
 
+        // 取消埋点: 进入 LLM 调用前检查 (重试路径可能已经处于取消状态)
+        if (in.ctx.cancel_token) {
+            in.ctx.cancel_token->throw_if_cancelled("before llm call");
+        }
+
         bool               isCancel = false;
         std::string        errInfo;
         std::exception_ptr errorPtr;
@@ -470,7 +477,7 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
             errInfo
         );
         // 逐渐延长延时等待
-        timer.expires_after(std::chrono::milliseconds((retry + appendDelay) * 3 * 1000));
+        timer.expires_after(std::chrono::milliseconds(retry * 3 * 1000 + appendDelay));
         co_await timer.async_wait(asio::use_awaitable);
     } while (true);
 }

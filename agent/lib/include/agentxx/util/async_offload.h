@@ -17,6 +17,10 @@
  *     → 工作线程轮询 is_cancelled() 提前退出
  *     → 线程释放, 可执行下一个任务
  *
+ * 注意: 线程池中的工作协程同步执行 (不挂起), asio 取消信号无法抢占, 且等待方
+ * co_await 不会提前返回 —— 因此带 CancelToken 的重载额外启动 watcher 协程
+ * 轮询令牌, 取消时直接置位 cancel_flag 打通通知链。
+ *
  * 用法示例:
  * @code
  *   auto& pool = agentCtx->blockingPool;
@@ -35,7 +39,9 @@
  * @endcode
  */
 
+#include "asio/as_tuple.hpp"
 #include "asio/co_spawn.hpp"
+#include "asio/detached.hpp"
 #include "asio/error.hpp"
 #include "asio/experimental/awaitable_operators.hpp"
 #include "asio/experimental/cancellation_condition.hpp"
@@ -141,6 +147,90 @@ asio::awaitable<T> offloadCancellableAsync(
         cancelFlag->store(true, std::memory_order_release);
         throw;
     }
+}
+
+/// 将同步阻塞函数卸载到线程池执行, 支持取消传播 (cancelFlag + CancelToken 版本)
+/// - 在线程池工作线程中同步执行的代码不会挂起, asio 取消信号无法抢占它,
+///   且等待方 co_await 也不会因取消提前返回 —— 工作线程提前退出的唯一途径是
+///   轮询 cancelFlag。本重载补充监听 CancelToken: 令牌取消时由 watcher 协程
+///   设置 cancelFlag, 打通 "会话取消 -> 线程池工作线程" 的通知链
+/// - watcher 在工作线程结束 (done) 后自行退出, 不会成为常驻协程
+///
+/// - pool 线程池
+/// - [cancelFlag] 外部提供的共享取消标志 (可与超时定时器等共享)
+/// - [cancelToken] 会话取消令牌, nullptr 时退化为无 token 重载
+/// - fn 可调用对象, 签名: awaitable<T>(std::atomic<bool>&)
+template<typename T>
+asio::awaitable<T> offloadCancellableAsync(
+    asio::thread_pool&                                    pool,
+    std::shared_ptr<std::atomic<bool>>                    cancelFlag,
+    std::shared_ptr<neograph::graph::CancelToken>         cancelToken,
+    std::function<asio::awaitable<T>(std::atomic<bool>&)> fn
+) {
+    std::shared_ptr<std::atomic<bool>> watcherDone;
+    if (nullptr != cancelToken) {
+        if (cancelToken->is_cancelled()) {
+            // 已取消: 直接置位, 工作线程轮询检测后退出
+            cancelFlag->store(true, std::memory_order_release);
+        } else {
+            watcherDone = std::make_shared<std::atomic<bool>>(false);
+            auto ex     = co_await asio::this_coro::executor;
+            asio::co_spawn(
+                ex,
+                [cancelFlag, cancelToken, watcherDone]() -> asio::awaitable<void> {
+                    asio::steady_timer timer(co_await asio::this_coro::executor);
+                    while (false == watcherDone->load(std::memory_order_acquire)
+                           && false == cancelToken->is_cancelled()) {
+                        timer.expires_after(std::chrono::milliseconds(20));
+                        auto [ec] = co_await timer.async_wait(
+                            asio::as_tuple(asio::use_awaitable)
+                        );
+                        if (ec) {
+                            co_return;
+                        }
+                    }
+                    if (false == watcherDone->load(std::memory_order_acquire)) {
+                        cancelFlag->store(true, std::memory_order_release);
+                    }
+                },
+                asio::detached
+            );
+        }
+    }
+    try {
+        auto result = co_await asio::co_spawn(
+            pool.get_executor(),
+            [fn = std::move(fn), cancelFlag]() -> asio::awaitable<T> {
+                co_return co_await fn(*cancelFlag);
+            },
+            asio::use_awaitable
+        );
+        if (watcherDone) {
+            watcherDone->store(true, std::memory_order_release);
+        }
+        co_return result;
+    } catch (...) {
+        // 异常，通知工作线程退出、watcher 结束
+        if (watcherDone) {
+            watcherDone->store(true, std::memory_order_release);
+        }
+        cancelFlag->store(true, std::memory_order_release);
+        throw;
+    }
+}
+
+/// 将同步阻塞函数卸载到线程池执行, 支持取消传播 (CancelToken 版本, 内部创建 cancelFlag)
+/// - 语义同上面的重载, 适用于无需与外部 (如超时定时器) 共享 cancelFlag 的场景
+template<typename T>
+asio::awaitable<T> offloadCancellableAsync(
+    asio::thread_pool&                                    pool,
+    std::shared_ptr<neograph::graph::CancelToken>         cancelToken,
+    std::function<asio::awaitable<T>(std::atomic<bool>&)> fn
+) {
+    auto cancelFlag = std::make_shared<std::atomic<bool>>(false);
+    co_return co_await offloadCancellableAsync<T>(
+        pool, std::move(cancelFlag), std::move(cancelToken), std::move(fn)
+    );
 }
 
 /// 超时等待协程完成

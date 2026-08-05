@@ -399,7 +399,8 @@ asio::awaitable<std::string> FileSystemListTool::execute_async(const neograph::j
     auto cancelFlag = std::make_shared<std::atomic<bool>>(false);
 
     // 将所有 std::filesystem 阻塞操作卸载到线程池, 支持取消传播:
-    // 当父协程被 CancelToken 取消或超时时, cancelFlag 被置 true, 工作线程检测后提前退出释放线程
+    // 当会话 CancelToken 取消 (watcher 监听置位) 或超时时, cancelFlag 被置 true,
+    // 工作线程检测后提前退出释放线程
     auto workFuture = agentxx::util::offloadCancellableAsync<neograph::json>(
         pool,
         cancelFlag,
@@ -1475,7 +1476,8 @@ asio::awaitable<std::string> FilesystemGlobTool::execute_async(const neograph::j
     auto cancelFlag = std::make_shared<std::atomic<bool>>(false);
 
     // 将 glob 阻塞操作卸载到线程池, 支持取消传播:
-    // 当父协程被 CancelToken 取消或超时时, cancelFlag 被置 true, 工作线程检测后提前退出释放线程
+    // 当会话 CancelToken 取消 (watcher 监听置位) 或超时时, cancelFlag 被置 true,
+    // 工作线程检测后提前退出释放线程
     auto workFuture = agentxx::util::offloadCancellableAsync<std::string>(
         pool,
         cancelFlag,
@@ -1796,7 +1798,8 @@ asio::awaitable<std::string> FilesystemGrepTool::execute_async(const neograph::j
             auto& pool     = *agentPtr->blockingPool;
 
             // 将 glob 阻塞操作卸载到线程池, 支持取消传播:
-            // 当父协程被 CancelToken 取消或超时时, cancelFlag 被置 true, 工作线程检测后提前退出
+            // 当会话 CancelToken 取消 (watcher 监听置位) 或超时时, cancelFlag 被置 true,
+            // 工作线程检测后提前退出
             auto relist = co_await agentxx::util::offloadCancellableAsync<
                 std::vector<std::filesystem::path>>(
                 pool,
