@@ -1,5 +1,6 @@
 #include "agentxx/agent/base_agent.h"
 
+#include "agentxx/agent/checkpoint_store.h"
 #include "agentxx/middlewares/summarization.h"
 #include "agentxx/util/diff_util.h"
 #include "asio/co_spawn.hpp"
@@ -78,8 +79,13 @@ asio::awaitable<void> BaseAgent::init() {
         = neograph::graph::GraphValidator::require_valid(std::move(topology), *graphRegistry);
 
     neograph::graph::EngineConfig engineConfig;
-    engineConfig.node_context     = std::move(nodeContext);
-    engineConfig.checkpoint_store = std::make_shared<neograph::graph::InMemoryCheckpointStore>();
+    engineConfig.node_context = std::move(nodeContext);
+    // 仅保留每个 thread 最新一个 checkpoint:
+    // - engine 恢复 (resume / update_state) 只依赖最新 checkpoint 与其 pending writes
+    // - 历史 checkpoint 仅用于 fork / 时间旅行, agentxx 未使用
+    // - 避免每轮会话累积 O(super-steps) 的 checkpoint 内存, 无需轮末手动裁剪
+    engineConfig.checkpoint_store
+        = std::make_shared<agentxx::agent::InMemorySingleCheckpointStore>();
 
     neograph::graph::EngineResources resources;
     resources.registry = graphRegistry;
@@ -833,7 +839,9 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
         .durationMs   = duration_ms,
     });
 
-    // TODO: 清理 checkpoint Store
+    // checkpoint store 采用 InMemorySingleCheckpointStore, save 时自动淘汰
+    // 该 thread 的历史 checkpoint, 轮末无需额外裁剪
+
     co_return turnResult;
 }
 

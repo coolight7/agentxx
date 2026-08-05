@@ -624,6 +624,7 @@ asio::awaitable<void> HttpClient::requestSseAsync(
         return std::chrono::duration_cast<std::chrono::milliseconds>(connectDeadline - now);
     };
 
+    XX_LOGT("HttpClient::requestSseAsync: async_resolve");
     auto endpoints = co_await resolver.async_resolve(
         parsed->host,
         std::to_string(parsed->port),
@@ -757,6 +758,7 @@ asio::awaitable<void> HttpClient::requestSseAsync(
         if (!parsed->host.empty() && parsed->host.find(':') == std::string::npos) {
             ::SSL_set_tlsext_host_name(stream.native_handle(), parsed->host.c_str());
         }
+        XX_LOGT("HttpClient::requestSseAsync: HTTPS async_connect");
         co_await asio::async_connect(
             stream.lowest_layer(),
             endpoints,
@@ -765,15 +767,23 @@ asio::awaitable<void> HttpClient::requestSseAsync(
         neograph_asio_error_code tcpEc;
         stream.lowest_layer().set_option(asio::ip::tcp::no_delay(true), tcpEc);
         enableTcpKeepalive(stream.lowest_layer());
+        XX_LOGT("HttpClient::requestSseAsync: HTTPS async_handshake");
         co_await stream.async_handshake(
             asio::ssl::stream_base::client,
             asio::cancel_after(remainingMs(), asio::use_awaitable)
         );
+        XX_LOGT("HttpClient::requestSseAsync: HTTPS doSseExchange");
         co_await doSseExchange(stream);
+        XX_LOGT("HttpClient::requestSseAsync: HTTPS shutdown");
         neograph_asio_error_code sslEc;
-        stream.lowest_layer().shutdown(asio::ip::tcp::socket::shutdown_both, sslEc);
+        co_await stream.async_shutdown(asio::cancel_after(
+            std::chrono::seconds{5},
+            asio::redirect_error(asio::use_awaitable, sslEc)
+        ));
+        XX_LOGT("HttpClient::requestSseAsync: HTTPS DONE");
     } else {
         tcp::socket stream(executor);
+        XX_LOGT("HttpClient::requestSseAsync: HTTP async_connect");
         co_await asio::async_connect(
             stream,
             endpoints,
@@ -782,7 +792,9 @@ asio::awaitable<void> HttpClient::requestSseAsync(
         neograph_asio_error_code tcpEc;
         stream.set_option(asio::ip::tcp::no_delay(true), tcpEc);
         enableTcpKeepalive(stream);
+        XX_LOGT("HttpClient::requestSseAsync: HTTP doSseExchange");
         co_await doSseExchange(stream);
+        XX_LOGT("HttpClient::requestSseAsync: HTTP DONE");
     }
 }
 

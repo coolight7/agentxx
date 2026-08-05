@@ -12,6 +12,7 @@
 #include "test_aho_corasick.h"
 #include "test_anthropic_provider.h"
 #include "test_cancel.h"
+#include "test_checkpoint_store.h"
 #include "test_codegraph_tools.h"
 #include "test_command_tools.h"
 #include "test_concurrency.h"
@@ -193,6 +194,7 @@ int main(int argn, char** argv) {
             co_await run("openai_provider", agentxx::test::run_openai_provider_tests);
             co_await run("anthropic_provider", agentxx::test::run_anthropic_provider_tests);
             co_await run("cancel", agentxx::test::run_cancel_tests);
+            co_await run("checkpoint_store", agentxx::test::run_checkpoint_store_tests);
             co_await run("agent", agentxx::test::run_agent_tests);
 
             ioCtx.stop();
