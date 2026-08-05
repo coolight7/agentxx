@@ -43,7 +43,7 @@ asio::awaitable<void>
                     stream.open(systemCharsetFilePath, asio::stream_file::read_only, errCode);
                     if (false == stream.is_open()) {
                         logContent += fmt::format(
-                            "┣━ ❌ Can not open context file: `{}` | {}\n",
+                            "┣━ ❌ Can not open Memory file: `{}` | {}\n",
                             filepath,
                             errCode.message()
                         );
@@ -66,7 +66,7 @@ asio::awaitable<void>
                     std::ifstream stream(systemCharsetFilePath);
                     if (!stream.is_open()) {
                         logContent
-                            += fmt::format("┣━ ❌ Can not open context file: `{}`\n", filepath);
+                            += fmt::format("┣━ ❌ Can not open Memory file: `{}`\n", filepath);
                         continue;
                     }
                     auto content = std::string{
@@ -75,13 +75,14 @@ asio::awaitable<void>
                     };
                     stream.close();
 #endif
-                    fileContents.emplace_back(filepath, std::move(content));
-                    logContent += fmt::format("┣━ ✅ Loaded context file: `{}`\n", filepath);
+                    agentxx::util::autoConvertToUtf8(content);
+                    fileContents.emplace_back(filepath, content);
+                    logContent += fmt::format("┣━ ✅ Loaded Memory file: `{}`\n", filepath);
                     co_return true;
                 },
                 [&](std::string errmsg) -> asio ::awaitable<bool> {
                     logContent += fmt::format(
-                        "┣━ ❌ Load context file failed: `{}` | {}\n",
+                        "┣━ ❌ Load Memory file failed: `{}` | {}\n",
                         filepath,
                         errmsg
                     );
@@ -105,12 +106,12 @@ asio::awaitable<void>
 
     if (state->cacheContextContent.empty() && !fileContents.empty()) {
         std::ostringstream oss;
-        oss << "\n## Memory Context Files\n\n";
+        oss << "\n## Memory Files\n\n";
         for (const auto& [filepath, content] : fileContents) {
             oss << fmt::format(
-                R"(<MemoryContextFile src="{}">
+                R"(<MemoryFile src="{}">
 {}
-</MemoryContextFile>
+</MemoryFile>
 )",
                 filepath,
                 content

@@ -321,13 +321,14 @@ using IgnoreCaseSet = std::unordered_set<std::string, IgnoreCaseHash, IgnoreCase
                 // 0xE0 0x80~0x9F 对应 0~0x7FF
                 return 0;
             }
-            if (ch == 0xEF && i + 2 < strLen) {
-                unsigned char ch1 = static_cast<unsigned char>(str[i + 1]);
-                unsigned char ch2 = static_cast<unsigned char>(str[i + 2]);
-                if (ch1 == 0xBF && ch2 == 0xBD) {
-                    return 0; // 匹配�，判定为无效UTF-8
-                }
-            }
+            // 部分转换需要用 � 替代非法编码，因此这里放行
+            // if (ch == 0xEF && i + 2 < strLen) {
+            //     unsigned char ch1 = static_cast<unsigned char>(str[i + 1]);
+            //     unsigned char ch2 = static_cast<unsigned char>(str[i + 2]);
+            //     if (ch1 == 0xBF && ch2 == 0xBD) {
+            //         return 0; // 匹配�，判定为无效UTF-8
+            //     }
+            // }
             step = 3;
         } else if (ch >= 0xC0) {
             if (ch == 0xC0 || ch == 0xC1) {
@@ -361,6 +362,100 @@ using IgnoreCaseSet = std::unordered_set<std::string, IgnoreCaseHash, IgnoreCase
         return true;
     }
     return utf8GetLengthCheckAvail(str) != 0;
+}
+
+/// 修复非法 UTF-8: 将每一处非法字节序列 (按 Unicode 推荐的
+/// "maximal subpart" 规则划分的最大非法子部分) 替换为占位符 U+FFFD (EF BF BD)
+/// - 非法序列包括: 孤立延续字节 (10xxxxxx 无前导)、5/6 字节头 (0xF8~0xFF)、
+///   过短编码头 (0xC0/0xC1)、非最短编码序列 (0xE0 0x80..、0xF0 0x80..)、
+///   序列中途出现非延续字节、末尾被截断的多字节序列
+/// - 合法的多字节序列与 ASCII 原样保留; 非法序列只替换为一个 U+FFFD,
+///   且其后紧跟的合法字符 (如 ASCII) 不会被吞掉
+/// @return true 表示输入含非法序列且已被修复, false 表示输入本就合法未做修改
+[[nodiscard]] inline constexpr bool utf8Repair(std::string& str) {
+    constexpr char kReplacement[] = {'\xEF', '\xBF', '\xBD'}; // U+FFFD 的 UTF-8 编码
+    const size_t   size           = str.size();
+
+    // 快速路径: 输入本就合法则不做任何修改直接返回
+    if (size == 0 || utf8GetLengthCheckAvail(str) != 0) {
+        return false;
+    }
+
+    std::string result;
+    result.reserve(size);
+
+    for (size_t i = 0; i < size;) {
+        const unsigned char byte = static_cast<unsigned char>(str[i]);
+
+        if (byte < 0x80) {
+            // ASCII
+            result += str[i++];
+            continue;
+        }
+
+        if (utf8IsContinuationChar(byte)) {
+            // 孤立延续字节: 一个 maximal subpart 只含这一个字节,
+            // 后续字节可能是新的合法序列前导, 不能一并吞掉
+            result.append(kReplacement, 3);
+            ++i;
+            continue;
+        }
+
+        if (byte < 0xC2) {
+            // 0x80~0xBF 已在上方处理, 此处即 0xC0/0xC1:
+            // 过短编码 (只能表示 0~0x7F, 必须用 1 字节 ASCII 表示)
+            result.append(kReplacement, 3);
+            ++i;
+            continue;
+        }
+
+        if (byte >= 0xF8) {
+            // 0xF8~0xFF: 5/6 字节头或无效头, UTF-8 最多 4 字节, 单字节非法
+            result.append(kReplacement, 3);
+            ++i;
+            continue;
+        }
+
+        // 多字节前导: 计算期望序列长度与第二个字节范围要求,
+        // 与 utf8GetLengthCheckAvail 的校验规则保持一致
+        size_t step;
+        if (byte >= 0xF0) {
+            step = 4;
+        } else if (byte >= 0xE0) {
+            step = 3;
+        } else {
+            step = 2; // 0xC2~0xDF
+        }
+
+        size_t j = 1;
+        for (; j < step && i + j < size; ++j) {
+            const unsigned char c = static_cast<unsigned char>(str[i + j]);
+            if (byte == 0xE0 && j == 1 && c < 0xA0) {
+                // 0xE0 0x80~0x9F: 非最短编码 (对应 U+0000~U+07FF)
+                break;
+            }
+            if (byte == 0xF0 && j == 1 && c < 0x90) {
+                // 0xF0 0x80~0x8F: 非最短编码 (对应 U+0000~U+FFFF)
+                break;
+            }
+            if (false == utf8IsContinuationChar(c)) {
+                break;
+            }
+        }
+
+        if (j == step) {
+            // 序列合法, 原样拷贝
+            result.append(str.data() + i, step);
+            i += step;
+        } else {
+            // 非法序列: 替换其 maximal subpart (已消费的 j 个字节)
+            result.append(kReplacement, 3);
+            i += j;
+        }
+    }
+
+    str = std::move(result);
+    return true;
 }
 
 template<typename T>
@@ -430,7 +525,7 @@ template<typename T>
 
 bool autoConvertToUtf8(std::string& str);
 
-std::string autoTryConvertToUtf8(std::string_view str);
+[[nodiscard]] std::string autoTryConvertToUtf8(std::string_view str);
 
 /// 自动转换为系统路径编码
 /// - [windows] UTF-16LE

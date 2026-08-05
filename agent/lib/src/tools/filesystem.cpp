@@ -609,7 +609,8 @@ asio::awaitable<std::string>
 
                 if (errCode == asio::error::eof) {
                     if (lineNum >= offset) {
-                        result << buf;
+                        auto line = std::string_view{buf}.substr(0, readlen);
+                        result << line;
                     }
                     break;
                 } else if (errCode) {
@@ -635,10 +636,8 @@ asio::awaitable<std::string>
             }
 
             auto rawStr = result.str();
-            if (agentxx::util::autoConvertToUtf8(rawStr)) {
-                // 保留原始的 crlf 或 \n 换行符不转换
-                co_return rawStr;
-            }
+            // 保留原始的 crlf 或 \n 换行符不转换
+            agentxx::util::autoConvertToUtf8(rawStr);
             co_return rawStr;
         }
 
@@ -654,10 +653,8 @@ asio::awaitable<std::string>
             throw std::system_error{errCode};
         }
         stream.close();
-        if (agentxx::util::autoConvertToUtf8(data)) {
-            // 保留原始的 crlf 或 \n 换行符不转换
-            co_return data;
-        }
+        // 保留原始的 crlf 或 \n 换行符不转换
+        agentxx::util::autoConvertToUtf8(data);
         co_return data;
     }
 #endif
@@ -707,10 +704,8 @@ asio::awaitable<std::string>
             }
 
             auto rawStr = result.str();
-            if (agentxx::util::autoConvertToUtf8(rawStr)) {
-                // 保留原始的 crlf 或 \n 换行符不转换
-                co_return rawStr;
-            }
+            // 保留原始的 crlf 或 \n 换行符不转换
+            agentxx::util::autoConvertToUtf8(rawStr);
             co_return rawStr;
         }
 
@@ -718,10 +713,8 @@ asio::awaitable<std::string>
         auto result
             = std::string{std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>()};
         stream.close();
-        if (agentxx::util::autoConvertToUtf8(result)) {
-            // 保留原始的 crlf 或 \n 换行符不转换
-            co_return result;
-        }
+        // 保留原始的 crlf 或 \n 换行符不转换
+        agentxx::util::autoConvertToUtf8(result);
         co_return result;
     }
 }
@@ -1244,6 +1237,7 @@ asio::awaitable<std::string>
             throw std::system_error{errCode};
         }
         stream.close();
+        agentxx::util::autoConvertToUtf8(content);
         normalizeCrlfToLf(content);
 
         int    replaceHit = 0;

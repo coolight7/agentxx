@@ -22,6 +22,7 @@
 - 应当使用 [XX_LOG](agent/lib/include/agentxx/util/log.h) 输出日志，而不是 std::cout/cerr，避免影响 TUI 显示
 - 最终的代码实现目标要能稳定运行在生产环境，广泛服务于各种设备和用户，需要仔细思考实现方案、编写足量的常规使用方式测试+各种边界情况测试
 - 非必要不应修改 `agent/third_party/` 内的代码，尽量修改本项目的代码实现功能。如果修改了的话应当删除 build 内对应的目录，让 cmake 重新编译，否则可能不生效
+- 使用 grep、glob 等工具前参考以下代码结构缩小范围，非必要不应去搜索 `agent/**` 整个代码库，里面包含了 build、third_party 等文件夹太大
 
 ## 代码结构
 - `agent`: 
@@ -65,6 +66,7 @@ path/to/agentxx_test string_util regex
         - process
         - exception
     - [codegraph-cpp](agent/third_party/codegraph-cpp/)
+    - [cmark-gfm](agent/third_party/cmark-gfm/)
     - [curl](agent/third_party/curl/)
     - [fmt](agent/third_party/fmt/)
     - [FTXUI](agent/third_party/ftxui/)
@@ -74,6 +76,7 @@ path/to/agentxx_test string_util regex
     - [iconv] | [libiconv-native](agent/third_party/libiconv-native/)
     - [liburing](agent/third_party/liburing/)
     - [NeoGraph](agent/third_party/neograph/)
+    - [Markdown-ui](agent/third_party/markdown-ui/)
     - [OpenSSL](agent/third_party/openssl-4.0.1/)
     - [simdjson](agent/third_party/simdjson/)
     - [sqlite3] | [sqlite3-cmake](agent/third_party/sqlite3-cmake/)

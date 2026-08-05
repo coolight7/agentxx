@@ -42,6 +42,7 @@ asio::awaitable<std::pair<std::string, agentxx::middleware::_SkillMetadata>>
         }
         auto filecontent
             = std::string{std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>()};
+        agentxx::util::autoConvertToUtf8(filecontent);
         stream.close();
         const auto yamlDelimiter = std::string_view{"---"};
         auto       yamlStart     = filecontent.find(yamlDelimiter);

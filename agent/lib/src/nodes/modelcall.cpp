@@ -221,7 +221,7 @@ asio::awaitable<void> ModelCallWrapNode::onHandleEnd(
 }
 
 void ModelCallWrapNode::repairMessages(neograph::graph::NodeInput& in) {
-    // 最后一条消息应当是 system/user/toolcall
+    // 最后一条消息应当是 system/user/tool
     auto lastMsg = agentxx::middleware::BaseMiddlewareHandleInterface::getLastMessage(in);
     if (lastMsg.has_value()) {
         const auto& role = lastMsg.value().role;
@@ -261,7 +261,8 @@ void ModelCallWrapNode::repairMessages(neograph::graph::NodeInput& in) {
         }
         checkInfo["message_length"] = msgs.size();
 
-        for (const auto& msg : msgs) {
+        bool haveChange = false;
+        for (auto& msg : msgs) {
             bool doPrint = false;
             if (msg.role == "system") {
                 if (checkInfo.contains("system_message_length")
@@ -282,16 +283,16 @@ void ModelCallWrapNode::repairMessages(neograph::graph::NodeInput& in) {
                 doPrint = true;
             }
             // 检查是否符合 utf8
-            if (false == agentxx::util::utf8IsAvail(msg.reasoning_content)) {
+            if (agentxx::util::utf8Repair(msg.reasoning_content)) {
                 XX_LOGE("  - Message.reasoning_content is not utf8 available: ");
                 doPrint = true;
             }
-            if (false == agentxx::util::utf8IsAvail(msg.content)) {
+            if (agentxx::util::utf8Repair(msg.content)) {
                 XX_LOGE("  - Message.content is not utf8 available: ");
                 doPrint = true;
             }
-            for (const auto& tool : msg.tool_calls) {
-                if (false == agentxx::util::utf8IsAvail(tool.arguments)) {
+            for (auto& tool : msg.tool_calls) {
+                if (agentxx::util::utf8Repair(tool.arguments)) {
                     XX_LOGE(
                         "  - Message.toolcall is not utf8 available: {}/{}",
                         tool.name,
@@ -301,6 +302,7 @@ void ModelCallWrapNode::repairMessages(neograph::graph::NodeInput& in) {
                 }
             }
             if (doPrint) {
+                haveChange = true;
                 agentxx::middleware::BaseMiddlewareHandleInterface::printMessage(msg);
             }
         }
@@ -309,6 +311,13 @@ void ModelCallWrapNode::repairMessages(neograph::graph::NodeInput& in) {
             agentxx::middleware::MiddlewareContext::graphDataKey_messageCheckInfo,
             std::move(checkInfo)
         );
+
+        if (haveChange) {
+            // 覆盖回 state
+            auto msglist = neograph::json::array();
+            neograph::to_json(msglist, msgs);
+            in.state.overwrite("messages", std::move(msglist));
+        }
     }
 }
 
