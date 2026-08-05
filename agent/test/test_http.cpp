@@ -1070,7 +1070,7 @@ asio::awaitable<void> test_http_client_beast_server() {
                 "",
                 {},
                 HttpClient::RequestConfig{.readChunkTimeout = std::chrono::seconds{5}},
-                [](std::string_view) {}
+                [](std::string_view) -> bool { return false; }
             );
         } catch (const std::exception& e) {
             threw = true;
@@ -1402,8 +1402,9 @@ asio::awaitable<void> test_http_client_sse_interruption() {
                     .connectTimeout   = std::chrono::seconds{5},
                     .readChunkTimeout = std::chrono::seconds{5},
                 },
-                [&](std::string_view chunk) {
+                [&](std::string_view chunk) -> bool {
                     received += chunk;
+                    return false;
                 }
             );
         } catch (const std::exception& e) {
@@ -1437,8 +1438,9 @@ asio::awaitable<void> test_http_client_sse_interruption() {
                     .connectTimeout   = std::chrono::seconds{5},
                     .readChunkTimeout = std::chrono::seconds{5},
                 },
-                [&](std::string_view chunk) {
+                [&](std::string_view chunk) -> bool {
                     received += chunk;
+                    return false;
                 }
             );
         } catch (const std::exception&) {
@@ -1473,8 +1475,9 @@ asio::awaitable<void> test_http_client_sse_interruption() {
                     .connectTimeout   = std::chrono::seconds{5},
                     .readChunkTimeout = std::chrono::milliseconds{800},
                 },
-                [&](std::string_view chunk) {
+                [&](std::string_view chunk) -> bool {
                     received += chunk;
+                    return false;
                 }
             );
         } catch (const std::exception&) {

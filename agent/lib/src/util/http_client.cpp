@@ -42,6 +42,81 @@ void enableTcpKeepalive(Socket& sock) noexcept {
 #endif
 }
 
+/// SSE 阶段操作的超时保护 (发送请求/读响应头/读 body 通用)。
+///
+/// 为什么不用 cancel_after:
+/// - cancel_after 的 terminal 取消信号要穿透 beast composed op -> ssl::detail::io_op
+///   -> socket read/write 整条链; 在 ssl::stream 上存在取消信号丢失的窗口 (timer 触发后
+///   新发起的读/写看不到已发生的取消; 被取消的 SSL 操作还会把 pending_read_/pending_write_
+///   标记 timer 卡在 pos_infin), 会导致协程永久挂起, 既无超时也无异常抛出。
+/// - close 底层连接是唯一能 100% 打断挂起 SSL 读/写的手段; 对 SSE 流而言读取超时本就
+///   意味着连接已不可用, 直接断开由上层 (provider) 重试/报错。
+///
+/// 语义: 在 timeout 内执行 op; 超时则强制关闭连接并抛 std::runtime_error;
+/// op 自身抛出的异常 (eof/stream_truncated 等) 原样传播 (不会退化为等待超时)。
+template<typename Stream, typename Op>
+asio::awaitable<void> runSseOpWithTimeout(
+    Stream&                   stream,
+    std::chrono::milliseconds timeout,
+    std::string_view          stage,
+    Op&&                      op
+) {
+    auto ex = co_await asio::this_coro::executor;
+
+    // 共享状态: timer 回调可能晚于协程迭代/退出执行, 必须堆分配避免悬空引用
+    auto timer    = std::make_shared<asio::steady_timer>(ex, timeout);
+    auto timedOut = std::make_shared<std::atomic<bool>>(false);
+
+    // 协程退出 (正常或异常) 时必须取消计时器, 否则其回调可能晚于 stream 销毁执行
+    struct TimerCleanup {
+        asio::steady_timer& timer;
+
+        ~TimerCleanup() {
+            // 本 asio 版本的 timer::cancel() 只有无参形式 (可能抛异常),
+            // 析构函数中不允许抛出, 因此吞掉
+            try {
+                timer.cancel();
+            } catch (...) {
+            }
+        }
+    } cleanup{*timer};
+
+    timer->async_wait([timer, timedOut, &stream, stage, timeout](const neograph_asio_error_code& ec
+                      ) {
+        if (ec) {
+            return; // 被取消 (操作先完成) 或计时器已销毁
+        }
+        timedOut->store(true);
+        XX_LOGW(
+            "HttpClient::requestSseAsync {} timeout after {} ms, closing connection",
+            stage,
+            timeout.count()
+        );
+        // 强制关闭底层连接: 挂起的读/写会以 operation_aborted 完成, 从而打断协程
+        neograph_asio_error_code ignore;
+        stream.lowest_layer().close(ignore);
+    });
+
+    try {
+        co_await std::forward<Op>(op)();
+    } catch (const neograph_asio_system_error& e) {
+        if (timedOut->load()) {
+            // 超时已发生: close 打断 op 的完成错误 (operation_aborted) 按超时处理,
+            // 而不是作为普通传输错误抛出
+            throw std::runtime_error(
+                fmt::format("SSE {} timeout after {} ms", stage, timeout.count())
+            );
+        }
+        throw;
+    }
+
+    // op 正常完成, 计时器被上方 RAII 取消; 防御性检查: 若恰好同时到期 (单线程
+    // 事件循环下 close 会先于 op 完成执行, 此分支实际不可达) 也按超时处理
+    if (timedOut->load()) {
+        throw std::runtime_error(fmt::format("SSE {} timeout after {} ms", stage, timeout.count()));
+    }
+}
+
 } // namespace
 
 std::string_view HttpResponse::findHeader(std::string_view name) const noexcept {
@@ -503,7 +578,7 @@ asio::awaitable<void> HttpClient::requestSseAsync(
     std::string_view                      contentType,
     const HeaderMap&                      extraHeaders,
     const RequestConfig&                  config,
-    std::function<void(std::string_view)> onChunk
+    std::function<bool(std::string_view)> onChunk
 ) {
     namespace http = boost::beast::http;
     using asio::ip::tcp;
@@ -558,29 +633,38 @@ asio::awaitable<void> HttpClient::requestSseAsync(
     auto sendTimeout = config.sendTimeout.value_or(calcTimeoutBySize(req.body().size()));
 
     auto doSseExchange = [&](auto& stream) -> asio::awaitable<void> {
-        co_await http::async_write(
+        // 发送请求体: 服务器不读 body (如 TCP 窗口阻塞) 时写会长期挂起, 超时直接断开
+        co_await runSseOpWithTimeout(
             stream,
-            req,
-            asio::cancel_after(sendTimeout, asio::use_awaitable)
+            sendTimeout,
+            "write-request",
+            [&]() -> asio::awaitable<void> {
+                co_await http::async_write(stream, req, asio::use_awaitable);
+            }
         );
 
         boost::beast::flat_buffer                buf;
         http::response_parser<http::string_body> parser;
         parser.body_limit(std::numeric_limits<uint64_t>::max());
 
-        co_await http::async_read_header(
+        // 读响应头: 部分服务器/网关收到请求后迟迟不返回响应头, 超时直接断开
+        co_await runSseOpWithTimeout(
             stream,
-            buf,
-            parser,
-            asio::cancel_after(config.readChunkTimeout, asio::use_awaitable)
+            config.readChunkTimeout,
+            "read-header",
+            [&]() -> asio::awaitable<void> {
+                co_await http::async_read_header(stream, buf, parser, asio::use_awaitable);
+            }
         );
 
         if (parser.get().result_int() == 429) {
-            co_await http::async_read(
+            co_await runSseOpWithTimeout(
                 stream,
-                buf,
-                parser,
-                asio::cancel_after(config.readChunkTimeout, asio::use_awaitable)
+                config.readChunkTimeout,
+                "read-body",
+                [&]() -> asio::awaitable<void> {
+                    co_await http::async_read(stream, buf, parser, asio::use_awaitable);
+                }
             );
             auto resp       = parser.release();
             auto raw        = resp[http::field::retry_after];
@@ -601,11 +685,13 @@ asio::awaitable<void> HttpClient::requestSseAsync(
         // 部分网关对 SSE 返回 201/202 等其它 2xx 状态码也视为成功流,
         // 因此仅拒绝非 2xx (429 已在上面单独处理)
         if (parser.get().result_int() / 100 != 2) {
-            co_await http::async_read(
+            co_await runSseOpWithTimeout(
                 stream,
-                buf,
-                parser,
-                asio::cancel_after(config.readChunkTimeout, asio::use_awaitable)
+                config.readChunkTimeout,
+                "read-body",
+                [&]() -> asio::awaitable<void> {
+                    co_await http::async_read(stream, buf, parser, asio::use_awaitable);
+                }
             );
             auto resp = parser.release();
             // 错误 body 可能很大 (如 HTML 错误页), 截断避免异常消息爆炸
@@ -621,29 +707,46 @@ asio::awaitable<void> HttpClient::requestSseAsync(
 
         size_t processed = 0;
 
-        auto flushBody = [&]() {
+        // 返回 true 表示 onChunk 告知流已结束 (如 [DONE]), 应停止读取并断开连接
+        auto flushBody = [&]() -> bool {
             auto& respBody = parser.get().body();
+            bool  stop     = false;
             if (respBody.size() > processed) {
-                onChunk(std::string_view{respBody}.substr(processed));
+                stop = onChunk(std::string_view{respBody}.substr(processed));
             }
             // 清空已读 body 并重置偏移: SSE 为长连接流, 若只移动偏移不裁剪,
             // string_body 会随流持续无限增长 → OOM
             respBody.clear();
             processed = 0;
+            return stop;
         };
 
-        flushBody();
-        neograph_asio_error_code ec;
-        while (!parser.is_done()) {
-            co_await http::async_read_some(
-                stream,
-                buf,
-                parser,
-                asio::cancel_after(config.readChunkTimeout, asio::use_awaitable)
-            );
+        // 初始 flush: 响应头与首个 body 数据可能在同一数据块中到达
+        if (flushBody()) {
+            // 首个数据块即含流结束标记: 直接断开
+            neograph_asio_error_code ignore;
+            stream.lowest_layer().close(ignore);
+        } else {
+            while (!parser.is_done()) {
+                // 读 body: 每次读操作独立计时 (readChunkTimeout = 块间最大间隔), 超时断开
+                co_await runSseOpWithTimeout(
+                    stream,
+                    config.readChunkTimeout,
+                    "read-body",
+                    [&]() -> asio::awaitable<void> {
+                        co_await http::async_read_some(stream, buf, parser, asio::use_awaitable);
+                    }
+                );
+                if (flushBody()) {
+                    // 流已结束 (如收到 [DONE]): 主动断开连接, 避免对端 keep-alive
+                    // 不关闭时白等 readChunkTimeout; 断开后不会再读后续数据
+                    neograph_asio_error_code ignore;
+                    stream.lowest_layer().close(ignore);
+                    break;
+                }
+            }
             flushBody();
         }
-        flushBody();
     };
 
     if (isHttps) {

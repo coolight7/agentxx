@@ -296,7 +296,7 @@ asio::awaitable<std::expected<WsMessage, std::string>> WsClient::recv() {
                 msg.type         = isText ? WsMessage::Type::Text : WsMessage::Type::Binary;
                 msg.payload      = std::move(payload);
                 co_return std::expected<WsMessage, std::string>{std::move(msg)};
-            } catch (const boost::system::system_error& e) {
+            } catch (const neograph_asio_system_error& e) {
                 // close 帧是协议正常结束而非错误: 转为 Close 消息返回。
                 // 需要错误码以读取对端 close code/reason, 因此在此特判,
                 // 其余错误交由 catchErrorAsync 统一处理

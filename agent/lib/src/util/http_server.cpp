@@ -259,7 +259,7 @@ asio::awaitable<void> HttpServer::serveTcp(std::shared_ptr<boost::beast::tcp_str
     // 与 SSL 路径一致: 捕获异常, 避免客户端在读写期间断开时异常逃逸 detached 协程 → terminate
     try {
         co_await serve(std::move(*stream));
-    } catch (const boost::system::system_error& e) {
+    } catch (const neograph_asio_system_error& e) {
         if (e.code() != asio::error::operation_aborted
             && e.code() != asio::ssl::error::stream_truncated) {
             XX_LOGE("[server] TCP error: {}", agentxx::util::autoTryConvertToUtf8(e.what()));
@@ -411,7 +411,7 @@ asio::awaitable<void> HttpServer::sslHandshakeAndServe(
             asio::cancel_after(config_.requestTimeout, asio::use_awaitable)
         );
         co_await serve(std::move(*stream));
-    } catch (const boost::system::system_error& e) {
+    } catch (const neograph_asio_system_error& e) {
         if (e.code() != asio::error::operation_aborted
             && e.code() != asio::ssl::error::stream_truncated) {
             XX_LOGE("[server] SSL error: {}", agentxx::util::autoTryConvertToUtf8(e.what()));

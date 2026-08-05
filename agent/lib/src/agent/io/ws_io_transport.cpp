@@ -67,7 +67,7 @@ asio::awaitable<std::optional<WireMessage>> WsAgentIOTransport::recv() {
     try {
         auto msg = co_await recvQueue_->async_receive(asio::use_awaitable);
         co_return std::move(msg);
-    } catch (const boost::system::system_error&) {
+    } catch (const neograph_asio_system_error&) {
         co_return std::nullopt;
     }
 }
@@ -110,7 +110,7 @@ asio::awaitable<bool> WsAgentIOTransport::connect(const WireHello& hello) {
                 break;
             }
         }
-    } catch (const boost::system::system_error& e) {
+    } catch (const neograph_asio_system_error& e) {
         // 超时或 channel 关闭，确保资源清理
         XX_LOGW("[ws_transport] auth handshake timeout or disconnected: {}", e.what());
         stopLoops(); // 确保所有循环和资源被正确关闭
@@ -189,7 +189,7 @@ asio::awaitable<void> WsAgentIOTransport::writeLoop() {
         std::string text;
         try {
             text = co_await queue->async_receive(asio::use_awaitable);
-        } catch (const boost::system::system_error&) {
+        } catch (const neograph_asio_system_error&) {
             break;
         }
         auto res = co_await client->sendText(text);
