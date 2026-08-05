@@ -406,7 +406,8 @@ void test_utf8Check() {
         XX_TEST_EXPECT_EQ(agentxx::util::utf8GetLengthCheckAvail(withNull), 2u);
     }
 
-    // 更多边界: 5/6 字节头非法; 非最短编码 (0xF0 0x80..) 非法; 替换字符 EF BF BD 非法
+    // 更多边界: 5/6 字节头非法; 非最短编码 (0xF0 0x80..) 非法;
+    // 替换字符 EF BF BD 合法 (部分转换需要用 U+FFFD 替代非法编码, utf8Repair 的产物必须被视为合法)
     XX_TEST_EXPECT_EQ(
         agentxx::util::utf8GetLengthCheckAvail(std::string("\xF8\x88\x80\x80\x80", 5)),
         0u
@@ -420,7 +421,7 @@ void test_utf8Check() {
         0u
     );
     XX_TEST_EXPECT_EQ(agentxx::util::utf8GetLengthCheckAvail(std::string("\xE0\x80\x80", 3)), 0u);
-    XX_TEST_EXPECT_EQ(agentxx::util::utf8GetLengthCheckAvail(std::string("\xEF\xBF\xBD", 3)), 0u);
+    XX_TEST_EXPECT_EQ(agentxx::util::utf8GetLengthCheckAvail(std::string("\xEF\xBF\xBD", 3)), 1u);
     // 合法 4 字节 (emoji)
     XX_TEST_EXPECT_EQ(
         agentxx::util::utf8GetLengthCheckAvail(std::string("\xF0\x9F\x98\x80", 4)),
@@ -434,6 +435,112 @@ void test_utf8Check() {
         agentxx::util::utf8GetLengthCheckAvail(std::string("\xE4\xB8\xAD\xE6\x96\x87", 6)),
         2u
     );
+}
+
+void test_utf8Repair() {
+    const std::string replacement("\xEF\xBF\xBD"); // U+FFFD 的 UTF-8 编码
+
+    // 合法输入: 不做修改, 返回 false
+    {
+        std::string s = "hello中文";
+        XX_TEST_EXPECT_FALSE(agentxx::util::utf8Repair(s));
+        XX_TEST_EXPECT_EQ(s, "hello中文");
+
+        std::string empty;
+        XX_TEST_EXPECT_FALSE(agentxx::util::utf8Repair(empty));
+        XX_TEST_EXPECT_TRUE(empty.empty());
+
+        std::string emoji("\xF0\x9F\x98\x80", 4); // 合法 4 字节
+        XX_TEST_EXPECT_FALSE(agentxx::util::utf8Repair(emoji));
+        XX_TEST_EXPECT_EQ(emoji, std::string("\xF0\x9F\x98\x80", 4));
+    }
+
+    // 孤立延续字节: 替换为单个 U+FFFD
+    {
+        std::string s("\x80", 1);
+        XX_TEST_EXPECT_TRUE(agentxx::util::utf8Repair(s));
+        XX_TEST_EXPECT_EQ(s, replacement);
+
+        std::string s2("\x80\x81", 2);
+        XX_TEST_EXPECT_TRUE(agentxx::util::utf8Repair(s2));
+        XX_TEST_EXPECT_EQ(s2, replacement + replacement);
+    }
+
+    // 末尾截断的多字节序列: 整体替换为一个 U+FFFD
+    {
+        std::string s("\xE4\xB8", 2); // 截断的 3 字节序列
+        XX_TEST_EXPECT_TRUE(agentxx::util::utf8Repair(s));
+        XX_TEST_EXPECT_EQ(s, replacement);
+
+        std::string s4("\xF0\x9F\x98", 3); // 截断的 4 字节序列
+        XX_TEST_EXPECT_TRUE(agentxx::util::utf8Repair(s4));
+        XX_TEST_EXPECT_EQ(s4, replacement);
+    }
+
+    // 过短编码头 0xC0/0xC1: 按 maximal subpart 逐字节替换
+    {
+        std::string s("\xC0\x80", 2);
+        XX_TEST_EXPECT_TRUE(agentxx::util::utf8Repair(s));
+        XX_TEST_EXPECT_EQ(s, replacement + replacement);
+    }
+
+    // 非最短编码序列: 前导字节替换, 后续孤立字节各自替换
+    {
+        std::string s("\xE0\x80\x80", 3);
+        XX_TEST_EXPECT_TRUE(agentxx::util::utf8Repair(s));
+        XX_TEST_EXPECT_EQ(s, replacement + replacement + replacement);
+
+        std::string s4("\xF0\x80\x80\x80", 4);
+        XX_TEST_EXPECT_TRUE(agentxx::util::utf8Repair(s4));
+        XX_TEST_EXPECT_EQ(s4, replacement + replacement + replacement + replacement);
+    }
+
+    // 5/6 字节头及无效头: 逐字节替换
+    {
+        std::string s("\xF8\x88\x80\x80\x80", 5);
+        XX_TEST_EXPECT_TRUE(agentxx::util::utf8Repair(s));
+        XX_TEST_EXPECT_EQ(s, replacement + replacement + replacement + replacement + replacement);
+
+        std::string s2("\xFF\xFE", 2);
+        XX_TEST_EXPECT_TRUE(agentxx::util::utf8Repair(s2));
+        XX_TEST_EXPECT_EQ(s2, replacement + replacement);
+    }
+
+    // 混合: 合法部分保留, 非法被替换且不吞掉后续合法字符
+    {
+        std::string s = "a";
+        s += "\xFF";
+        s += " b中";
+        XX_TEST_EXPECT_TRUE(agentxx::util::utf8Repair(s));
+        XX_TEST_EXPECT_EQ(s, "a" + replacement + " b中");
+    }
+
+    // 截断序列后紧跟合法字符: 合法字符不被吞掉
+    {
+        std::string s("\xE4\xB8", 2);
+        s += "A中";
+        XX_TEST_EXPECT_TRUE(agentxx::util::utf8Repair(s));
+        XX_TEST_EXPECT_EQ(s, replacement + "A中");
+    }
+
+    // 多字节序列中途出现非法字节: 序列前缀替换, 后续合法序列保留
+    {
+        std::string s("\xE4\xB8\xAD", 3); // 中
+        s += "\xFF";
+        s += "\xE6\x96\x87"; // 文
+        XX_TEST_EXPECT_TRUE(agentxx::util::utf8Repair(s));
+        XX_TEST_EXPECT_EQ(s, std::string("\xE4\xB8\xAD", 3) + replacement + std::string("\xE6\x96\x87", 3));
+    }
+
+    // 幂等: 修复后结果为合法 UTF-8, 再次调用返回 false 且不再修改
+    {
+        std::string s("\xE4\xB8\xFF", 3);
+        XX_TEST_EXPECT_TRUE(agentxx::util::utf8Repair(s));
+        XX_TEST_EXPECT_TRUE(agentxx::util::utf8IsAvail(s));
+        const std::string repaired = s;
+        XX_TEST_EXPECT_FALSE(agentxx::util::utf8Repair(s));
+        XX_TEST_EXPECT_EQ(s, repaired);
+    }
 }
 
 void test_compareExtend_pinyin() {
@@ -825,6 +932,7 @@ TestResult testStringUtil() {
     test_base64();
     test_convertCharset();
     test_utf8Check();
+    test_utf8Repair();
     test_compareExtend_pinyin();
     test_toUpperLower();
     test_charOps();
