@@ -97,6 +97,36 @@ message("[agentxx] Current Configure Type: ${CMAKE_CONFIGURATION_TYPES}")
 message("[agentxx] Current Build Type: ${CMAKE_BUILD_TYPE}")
 message("[agentxx] Current Compiler: ${CMAKE_C_COMPILER_ID}")
 
+# windows/MSVC(Visual Studio 生成器) 嵌套构建输出中文乱码修复:
+# - 构建脚本 (script/windows_*_build.bat) 会 `chcp 65001`, 子进程 (cl.exe、嵌套 MSBuild)
+#   写入管道的诊断输出均为 UTF-8 字节;
+# - 但外层 MSBuild 的 CustomBuild/ParallelCustomBuild 任务 (Microsoft.Build.CppTasks.Common.dll)
+#   不支持 CMake 生成的 <UseUtf8Encoding>Always</UseUtf8Encoding> 元数据,
+#   未显式指定 StdOutEncoding/StdErrEncoding 时默认按 OEM 代码页 (中文系统=936/GBK) 解码,
+#   于是 ExternalProject 嵌套构建中编译器/内层 MSBuild 的中文输出被误解为乱码
+#   (如 "内层" 显示为 "鍐呭眰": UTF-8 字节被按 GBK 解读);
+# - MSBuild 会从项目文件所在目录逐级向上查找并自动导入 Directory.Build.targets
+#   (本项目所有 vcxproj 均位于 CMAKE_BINARY_DIR 子树内, 故全部生效),
+#   通过 BeforeTargets=CustomBuild 在构建步骤执行前给 CustomBuild 项注入
+#   StdOutEncoding/StdErrEncoding=UTF-8, 强制按 UTF-8 解码子进程输出;
+# - 仅当构建环境设置了 AgentxxBuildConsoleCP=65001 (见构建脚本) 时启用,
+#   避免非 UTF-8 控制台 (未 chcp 65001) 场景误转码。
+if (XX_IS_WIN_D AND XX_IS_MSVC_D AND CMAKE_GENERATOR MATCHES "Visual Studio")
+  file(WRITE "${CMAKE_BINARY_DIR}/Directory.Build.targets"
+"<Project>\n"
+"  <!-- agentxx: 强制 MSBuild CustomBuild 任务按 UTF-8 解码子进程输出 (配合构建脚本 chcp 65001), 修复嵌套构建中文乱码 -->\n"
+"  <Target Name=\"Agentxx_ForceUtf8CustomBuildOutput\" BeforeTargets=\"CustomBuild\" Condition=\"'$(AgentxxBuildConsoleCP)' == '65001'\">\n"
+"    <ItemGroup>\n"
+"      <CustomBuild>\n"
+"        <StdOutEncoding>UTF-8</StdOutEncoding>\n"
+"        <StdErrEncoding>UTF-8</StdErrEncoding>\n"
+"      </CustomBuild>\n"
+"    </ItemGroup>\n"
+"  </Target>\n"
+"</Project>\n"
+  )
+endif ()
+
 set(_AGENTXX_COMMON_C_CXX_FLAGS "")
 set(_AGENTXX_C_FLAGS "")
 set(_AGENTXX_CXX_FLAGS "")
