@@ -19,11 +19,11 @@ namespace util {
 /// - 当 cancelToken 已取消时, 协程 co_await 点上出现的 operation_aborted 是
 ///   asio cancellation_signal 中断异步 IO 的结果, 属于取消语义而非超时/传输错误
 inline bool isCancelAbort(
-    const boost::system::system_error&                   e,
+    const neograph_asio_system_error&                    e,
     const std::shared_ptr<neograph::graph::CancelToken>& cancelToken
 ) noexcept {
     return e.code() == asio::error::operation_aborted && nullptr != cancelToken
-        && cancelToken->is_cancelled();
+           && cancelToken->is_cancelled();
 }
 
 template<typename T>
@@ -60,7 +60,7 @@ T catchError(
             return std::move(result.value());
         }
         errmsg = fmt::format("NodeInterrupt: {}", errInfo);
-    } catch (const boost::system::system_error& e) {
+    } catch (const neograph_asio_system_error& e) {
         if (isCancelAbort(e, cancelToken)) {
             // 取消信号中断异步 IO 产生的 operation_aborted 按取消语义处理 (同
             // CancelledException 分支), 避免取消被当作普通错误吞掉
@@ -130,7 +130,7 @@ asio::awaitable<T> catchErrorAsync(
             co_return std::move(result.value());
         }
         errmsg = fmt::format("NodeInterrupt: {}", errInfo);
-    } catch (const boost::system::system_error& e) {
+    } catch (const neograph_asio_system_error& e) {
         if (isCancelAbort(e, cancelToken)) {
             // 取消信号中断异步 IO 产生的 operation_aborted 按取消语义处理 (同
             // CancelledException 分支), 避免取消被当作普通错误吞掉

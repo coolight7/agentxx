@@ -400,7 +400,9 @@ asio::awaitable<neograph::ChatCompletion> AnthropicProvider::doStream(
                 .readChunkTimeout = std::chrono::seconds{config_.readChunkTimeoutSeconds},
                 .sslVerify        = config_.sslVerify,
             },
-            [&](std::string_view chunk) {
+            // 返回 true 通知 http 层流已结束 (收到 message_stop): 立即断开连接停止读取,
+            // 避免对端 keep-alive 不关闭时白等 readChunkTimeout
+            [&](std::string_view chunk) -> bool {
                 lineBuffer += chunk;
                 if (processSseBuffer(
                         lineBuffer,
@@ -414,7 +416,9 @@ asio::awaitable<neograph::ChatCompletion> AnthropicProvider::doStream(
                         on_chunk
                     )) {
                     messageStopReceived = true;
+                    return true;
                 }
+                return false;
             }
         );
     } catch (const std::exception& e) {

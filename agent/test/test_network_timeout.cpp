@@ -384,8 +384,9 @@ static asio::awaitable<void> test_sse_writer_timeout_config() {
             "",
             {},
             HttpClient::RequestConfig{.connectTimeout = 2s, .readChunkTimeout = 3s},
-            [&](std::string_view chunk) {
+            [&](std::string_view chunk) -> bool {
                 received.append(chunk);
+                return false;
             }
         );
     } catch (const std::exception&) {

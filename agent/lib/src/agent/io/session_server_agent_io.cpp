@@ -101,7 +101,7 @@ asio::awaitable<neograph::json> SessionServerAgentIO::handleInterrupt(
     neograph::json result = neograph::json::array();
     try {
         result = co_await ch->async_receive(asio::cancel_after(timeout, asio::use_awaitable));
-    } catch (const boost::system::system_error& e) {
+    } catch (const neograph_asio_system_error& e) {
         XX_LOGW("[session_ctrl] interrupt #{} ended early: {}", id, e.what());
     }
     pending_.erase(id);

@@ -79,18 +79,21 @@ asio::awaitable<void> test_isCancelAbort() {
     auto active = std::make_shared<neograph::graph::CancelToken>();
 
     XX_TEST_EXPECT_TRUE(agentxx::util::isCancelAbort(
-        boost::system::system_error(asio::error::operation_aborted), cancelled
+        neograph_asio_system_error(asio::error::operation_aborted),
+        cancelled
     ));
     // 非 operation_aborted 错误码不算取消
-    XX_TEST_EXPECT_FALSE(agentxx::util::isCancelAbort(
-        boost::system::system_error(asio::error::timed_out), cancelled
-    ));
+    XX_TEST_EXPECT_FALSE(
+        agentxx::util::isCancelAbort(neograph_asio_system_error(asio::error::timed_out), cancelled)
+    );
     // 无令牌 / 令牌未取消时按超时处理, 不算取消
     XX_TEST_EXPECT_FALSE(agentxx::util::isCancelAbort(
-        boost::system::system_error(asio::error::operation_aborted), nullptr
+        neograph_asio_system_error(asio::error::operation_aborted),
+        nullptr
     ));
     XX_TEST_EXPECT_FALSE(agentxx::util::isCancelAbort(
-        boost::system::system_error(asio::error::operation_aborted), active
+        neograph_asio_system_error(asio::error::operation_aborted),
+        active
     ));
     co_return;
 }
@@ -102,8 +105,12 @@ asio::awaitable<void> test_catchError_cancel_conversion() {
     bool caughtCancel = false;
     try {
         agentxx::util::catchError<int>(
-            []() -> int { throw boost::system::system_error(asio::error::operation_aborted); },
-            [](std::string) -> int { return -1; },
+            []() -> int {
+                throw neograph_asio_system_error(asio::error::operation_aborted);
+            },
+            [](std::string) -> int {
+                return -1;
+            },
             nullptr,
             token
         );
@@ -113,10 +120,12 @@ asio::awaitable<void> test_catchError_cancel_conversion() {
     XX_TEST_EXPECT_TRUE(caughtCancel);
 
     // 未取消 => 按超时错误处理
-    auto active     = std::make_shared<neograph::graph::CancelToken>();
-    auto errMsg     = std::string{};
-    auto result     = agentxx::util::catchError<int>(
-        []() -> int { throw boost::system::system_error(asio::error::operation_aborted); },
+    auto active = std::make_shared<neograph::graph::CancelToken>();
+    auto errMsg = std::string{};
+    auto result = agentxx::util::catchError<int>(
+        []() -> int {
+            throw neograph_asio_system_error(asio::error::operation_aborted);
+        },
         [&](std::string msg) -> int {
             errMsg = std::move(msg);
             return -1;
@@ -138,10 +147,12 @@ asio::awaitable<void> test_catchErrorAsync_cancel_conversion() {
         try {
             co_await agentxx::util::catchErrorAsync<bool>(
                 []() -> asio::awaitable<bool> {
-                    throw boost::system::system_error(asio::error::operation_aborted);
+                    throw neograph_asio_system_error(asio::error::operation_aborted);
                     co_return true;
                 },
-                [](std::string) -> asio::awaitable<bool> { co_return false; },
+                [](std::string) -> asio::awaitable<bool> {
+                    co_return false;
+                },
                 nullptr,
                 token
             );
@@ -153,15 +164,17 @@ asio::awaitable<void> test_catchErrorAsync_cancel_conversion() {
 
     // 2. 已取消 + operation_aborted + 有 onRethrow => 走取消处理分支
     {
-        auto token        = std::make_shared<neograph::graph::CancelToken>();
+        auto token = std::make_shared<neograph::graph::CancelToken>();
         token->cancel();
         bool rethrowCalled = false;
         auto r             = co_await agentxx::util::catchErrorAsync<int>(
             []() -> asio::awaitable<int> {
-                throw boost::system::system_error(asio::error::operation_aborted);
+                throw neograph_asio_system_error(asio::error::operation_aborted);
                 co_return 0;
             },
-            [](std::string) -> asio::awaitable<int> { co_return -1; },
+            [](std::string) -> asio::awaitable<int> {
+                co_return -1;
+            },
             [&](std::string&) -> std::optional<int> {
                 rethrowCalled = true;
                 return 42;
@@ -177,7 +190,7 @@ asio::awaitable<void> test_catchErrorAsync_cancel_conversion() {
         auto errMsg = std::string{};
         auto r      = co_await agentxx::util::catchErrorAsync<int>(
             []() -> asio::awaitable<int> {
-                throw boost::system::system_error(asio::error::operation_aborted);
+                throw neograph_asio_system_error(asio::error::operation_aborted);
                 co_return 0;
             },
             [&](std::string msg) -> asio::awaitable<int> {
@@ -195,7 +208,7 @@ asio::awaitable<void> test_catchErrorAsync_cancel_conversion() {
         auto errMsg = std::string{};
         auto r      = co_await agentxx::util::catchErrorAsync<int>(
             []() -> asio::awaitable<int> {
-                throw boost::system::system_error(asio::error::operation_aborted);
+                throw neograph_asio_system_error(asio::error::operation_aborted);
                 co_return 0;
             },
             [&](std::string msg) -> asio::awaitable<int> {
@@ -267,7 +280,7 @@ asio::awaitable<void> test_agent_cancel_llm_request() {
                   asio::deferred
               ),
               asio::co_spawn(ex, cancelWatcher(), asio::deferred)
-          )
+        )
               .async_wait(asio::experimental::wait_for_all(), asio::use_awaitable);
     const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
                                std::chrono::steady_clock::now() - startAt
@@ -290,7 +303,8 @@ asio::awaitable<void> test_agent_cancel_llm_request() {
 // ===========================================================================
 
 /// 慢速 tool: 实现 ContextualAsyncTool 接收取消令牌, 模拟耗时异步 IO
-class CancelSlowTool : public agentxx::tools::XXToolBase, public neograph::ContextualAsyncTool {
+class CancelSlowTool : public agentxx::tools::XXToolBase,
+                       public neograph::ContextualAsyncTool {
 public:
 
     CancelSlowTool(
@@ -314,10 +328,8 @@ public:
         co_return co_await execute_async(args, neograph::ToolExecutionContext{});
     }
 
-    asio::awaitable<std::string> execute_async(
-        const neograph::json&,
-        neograph::ToolExecutionContext ctx
-    ) override {
+    asio::awaitable<std::string>
+        execute_async(const neograph::json&, neograph::ToolExecutionContext ctx) override {
         executed_->store(true, std::memory_order_release);
         if (ctx.cancel_token) {
             tokenReceived_->store(true, std::memory_order_release);
@@ -338,11 +350,9 @@ private:
 class CancelMarkerTool : public agentxx::tools::XXToolBase {
 public:
 
-    CancelMarkerTool(
-        std::weak_ptr<agentxx::agent::AgentContext> ctx,
-        std::atomic<bool>*                          executed
-    ) :
-        XXToolBase("test_marker", ctx, false, false), executed_(executed) {}
+    CancelMarkerTool(std::weak_ptr<agentxx::agent::AgentContext> ctx, std::atomic<bool>* executed) :
+        XXToolBase("test_marker", ctx, false, false),
+        executed_(executed) {}
 
     neograph::ChatTool get_definition() const override {
         return neograph::ChatTool{
@@ -405,20 +415,20 @@ asio::awaitable<void> test_agent_cancel_toolcall() {
                        {"id", "call_slow_1"},
                        {"type", "function"},
                        {"function",
-                neograph::json{
-                    {"name", "test_slow"},
-                    {"arguments", "{}"},
-          }},
+             neograph::json{
+                 {"name", "test_slow"},
+                 {"arguments", "{}"},
+             }},
                        },
         neograph::json{
                        {"index", 1},
                        {"id", "call_marker_1"},
                        {"type", "function"},
                        {"function",
-                neograph::json{
-                    {"name", "test_marker"},
-                    {"arguments", "{}"},
-          }},
+             neograph::json{
+                 {"name", "test_marker"},
+                 {"arguments", "{}"},
+             }},
                        },
     });
 
@@ -456,7 +466,7 @@ asio::awaitable<void> test_agent_cancel_toolcall() {
                   asio::deferred
               ),
               asio::co_spawn(ex, cancelWatcher(), asio::deferred)
-          )
+        )
               .async_wait(asio::experimental::wait_for_all(), asio::use_awaitable);
     const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
                                std::chrono::steady_clock::now() - startAt

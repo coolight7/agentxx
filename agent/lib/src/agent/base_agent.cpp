@@ -78,8 +78,8 @@ asio::awaitable<void> BaseAgent::init() {
         = neograph::graph::GraphValidator::require_valid(std::move(topology), *graphRegistry);
 
     neograph::graph::EngineConfig engineConfig;
-    engineConfig.node_context = std::move(nodeContext);
-    // engineConfig.checkpoint_store = std::make_shared<neograph::graph::InMemoryCheckpointStore>();
+    engineConfig.node_context     = std::move(nodeContext);
+    engineConfig.checkpoint_store = std::make_shared<neograph::graph::InMemoryCheckpointStore>();
 
     neograph::graph::EngineResources resources;
     resources.registry = graphRegistry;
@@ -833,6 +833,7 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
         .durationMs   = duration_ms,
     });
 
+    // TODO: 清理 checkpoint Store
     co_return turnResult;
 }
 

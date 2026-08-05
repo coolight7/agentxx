@@ -351,7 +351,7 @@ private:
                     asio::cancel_after(config_.requestTimeout, asio::use_awaitable)
                 );
                 req = parser.release();
-            } catch (const boost::system::system_error& e) {
+            } catch (const neograph_asio_system_error& e) {
                 if (e.code() == http::error::end_of_stream || e.code() == asio::error::eof
                     || e.code() == asio::error::operation_aborted) {
                     break;

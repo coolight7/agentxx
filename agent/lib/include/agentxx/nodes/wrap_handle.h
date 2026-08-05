@@ -225,7 +225,7 @@ public:
                 errInfo      = "interrupt";
                 onHandleStartError(errorRethrow, true, errInfo, *item, in, out);
                 errorPtr = std::current_exception();
-            } catch (const boost::system::system_error& e) {
+            } catch (const neograph_asio_system_error& e) {
                 if (agentxx::util::isCancelAbort(e, in.ctx.cancel_token)) {
                     // asio 取消信号中断 co_await 的异常表现, 转换为取消语义重抛,
                     // 避免被当作普通错误吞掉后继续执行 graph
@@ -276,7 +276,7 @@ public:
                     errInfo      = "interrupt";
                     onHandleBaseRunError(errorRethrow, true, errInfo, in, out);
                     errorPtr = std::current_exception();
-                } catch (const boost::system::system_error& e) {
+                } catch (const neograph_asio_system_error& e) {
                     if (agentxx::util::isCancelAbort(e, in.ctx.cancel_token)) {
                         // asio 取消信号中断 co_await 的异常表现, 转换为取消语义重抛,
                         // 避免被当作普通错误吞掉后继续执行 graph
@@ -334,7 +334,7 @@ public:
                     errInfo      = "interrupt";
                     onHandleEndError(errorRethrow, true, errInfo, *item, in, out);
                     errorPtr = std::current_exception();
-                } catch (const boost::system::system_error& e) {
+                } catch (const neograph_asio_system_error& e) {
                     if (agentxx::util::isCancelAbort(e, in.ctx.cancel_token)) {
                         // asio 取消信号中断 co_await 的异常表现, 转换为取消语义重抛,
                         // 避免被当作普通错误吞掉后继续执行 graph

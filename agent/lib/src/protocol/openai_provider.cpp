@@ -704,7 +704,9 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStream(
                     .readChunkTimeout = std::chrono::seconds{config_.readChunkTimeoutSeconds},
                     .sslVerify        = config_.sslVerify,
                 },
-                [&](std::string_view chunk) {
+                // 返回 true 通知 http 层流已结束 (收到 [DONE]): 立即断开连接停止读取,
+                // 避免对端 keep-alive 不关闭时白等 readChunkTimeout
+                [&](std::string_view chunk) -> bool {
                     lineBuffer += chunk;
                     if (processSseBuffer(
                             lineBuffer,
@@ -715,7 +717,9 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStream(
                             on_chunk
                         )) {
                         doneReceived = true;
+                        return true;
                     }
+                    return false;
                 }
             );
 
@@ -734,7 +738,9 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStream(
             }
             XX_LOGW("LLM stream transport error after [DONE], ignored");
             co_return false;
-        }
+        },
+        /*onRethrow=*/nullptr,
+        /*cancelToken=*/params.cancel_token
     );
 
     if (!lineBuffer.empty()) {
@@ -828,7 +834,8 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStreamResponses(
                     .readChunkTimeout = std::chrono::seconds{config_.readChunkTimeoutSeconds},
                     .sslVerify        = config_.sslVerify,
                 },
-                [&](std::string_view chunk) {
+                // 返回 true 通知 http 层流已结束 (收到 response.completed): 立即断开
+                [&](std::string_view chunk) -> bool {
                     lineBuffer += chunk;
                     if (processResponsesSseBuffer(
                             lineBuffer,
@@ -841,7 +848,9 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStreamResponses(
                             &apiError
                         )) {
                         doneReceived = true;
+                        return true;
                     }
+                    return false;
                 }
             );
 
@@ -860,7 +869,9 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStreamResponses(
             }
             XX_LOGW("LLM stream transport error after response.completed, ignored");
             co_return false;
-        }
+        },
+        /*onRethrow=*/nullptr,
+        /*cancelToken=*/params.cancel_token
     );
 
     if (!lineBuffer.empty()) {

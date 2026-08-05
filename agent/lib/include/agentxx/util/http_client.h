@@ -182,9 +182,11 @@ public:
 
     /// SSE 流式请求: 连接、发送、读取响应头后逐块回调 body 数据。
     /// - 每次收到新数据块时调用 onChunk (分块间隔受 readChunkTimeout 约束)
+    /// - onChunk 返回 true 表示流已结束 (如收到 [DONE]/response.completed/message_stop),
+    ///   此时立即断开连接并停止读取, 避免对端 keep-alive 不关闭时白等 readChunkTimeout
     /// - HTTP 429 时抛出 neograph::RateLimitError (解析 retry-after)
     /// - 其他非 2xx 时抛出 std::runtime_error
-    /// - 网络/超时错误抛出 boost::system::system_error
+    /// - 网络/超时错误抛出 neograph_asio_system_error
     static asio::awaitable<void> requestSseAsync(
         std::string_view                      method,
         std::string_view                      url,
@@ -192,7 +194,7 @@ public:
         std::string_view                      contentType,
         const HeaderMap&                      extraHeaders,
         const RequestConfig&                  config,
-        std::function<void(std::string_view)> onChunk
+        std::function<bool(std::string_view)> onChunk
     );
 
     /// Enable/disable SSL certificate verification (default: enabled).

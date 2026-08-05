@@ -38,7 +38,7 @@ asio::awaitable<std::optional<WireMessage>> ChannelAgentIOTransport::recv() {
     try {
         auto msg = co_await incoming_->async_receive(asio::use_awaitable);
         co_return std::move(msg);
-    } catch (const boost::system::system_error&) {
+    } catch (const neograph_asio_system_error&) {
         co_return std::nullopt;
     }
 }
