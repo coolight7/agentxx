@@ -78,8 +78,8 @@ asio::awaitable<void> BaseAgent::init() {
         = neograph::graph::GraphValidator::require_valid(std::move(topology), *graphRegistry);
 
     neograph::graph::EngineConfig engineConfig;
-    engineConfig.node_context     = std::move(nodeContext);
-    engineConfig.checkpoint_store = std::make_shared<neograph::graph::InMemoryCheckpointStore>();
+    engineConfig.node_context = std::move(nodeContext);
+    // engineConfig.checkpoint_store = std::make_shared<neograph::graph::InMemoryCheckpointStore>();
 
     neograph::graph::EngineResources resources;
     resources.registry = graphRegistry;
@@ -110,7 +110,8 @@ void BaseAgent::setupModelRegistry() {
     if (config->availableModels.empty()) {
         registry->registerModel(config->model.modelName, config->model);
         registry->setDefaultModel(config->model.modelName);
-    } else if (false == config->currentModelName.empty() && registry->hasModel(config->currentModelName)) {
+    } else if (false == config->currentModelName.empty()
+               && registry->hasModel(config->currentModelName)) {
         registry->setDefaultModel(config->currentModelName);
     } else {
         // [currentModelName] 不存在
@@ -399,13 +400,14 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                                        : Delta::Type::TextToken,
                     .text        = std::move(token),
                     .startTimeMs = node_start_time_ms,
-                    .durationMs  = sendDuration ? static_cast<int64_t>(
-                                      std::chrono::duration_cast<std::chrono::milliseconds>(
-                                          std::chrono::system_clock::now() - node_start_time
-                                      )
-                                          .count()
-                                  )
-                                                : 0,
+                    .durationMs  = sendDuration
+                                       ? static_cast<int64_t>(
+                                            std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                std::chrono::system_clock::now() - node_start_time
+                                            )
+                                                .count()
+                                        )
+                                       : 0,
                 });
             } break;
             case T::CHANNEL_WRITE: {
@@ -646,8 +648,8 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                         if (interruptArg.name == "subagent") {
                             auto subagentArg = interruptArg.arg;
                             auto resp        = co_await agentContext->bus->request<
-                                events::ReqSubagentStart,
-                                events::RespSubagentResult>(
+                                       events::ReqSubagentStart,
+                                       events::RespSubagentResult>(
                                 events::Topic::Subagent,
                                 events::ReqSubagentStart{
                                     .parentAgentName = agentContext->agentConfig
