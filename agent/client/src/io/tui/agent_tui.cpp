@@ -678,6 +678,7 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
                 st.isStreaming = true;
             } break;
             case Type::TurnEnd: {
+                st.currentNodeName.clear();
                 pushCurrentTokenLocked(st);
                 st.isStreaming = false;
                 if (delta.durationMs > 0 || delta.startTimeMs > 0) {

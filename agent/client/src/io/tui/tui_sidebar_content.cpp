@@ -15,6 +15,10 @@ ftxui::Element buildLogLine(const TUILogSink::Line& line, const TUITheme& theme)
     ftxui::Color c = theme.normalColor;
     std::string  prefix;
     switch (line.level) {
+        case agentxx::util::LogLevel::Trace:
+            c      = theme.hintColor;
+            prefix = "[T] ";
+            break;
         case agentxx::util::LogLevel::Debug:
             c      = theme.hintColor;
             prefix = "[D] ";

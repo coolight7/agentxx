@@ -20,6 +20,7 @@ namespace util {
 
 /// 日志级别
 enum class LogLevel {
+    Trace,
     Debug,
     Info,
     Warn,
@@ -159,6 +160,12 @@ void signalError(std::string_view exepath);
 
 } // namespace util
 } // namespace agentxx
+
+#define XX_LOGT(str, ...)                 \
+    (::agentxx::util::xxLogPrint(         \
+        ::agentxx::util::LogLevel::Trace, \
+        fmt::format(str, ##__VA_ARGS__)   \
+    ));
 
 #define XX_LOGD(str, ...)                 \
     (::agentxx::util::xxLogPrint(         \
