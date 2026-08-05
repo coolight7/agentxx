@@ -47,7 +47,7 @@
 |---|---|---|---|---|---|
 | **Windows** | 10.7 M | 任务管理器 1.7 M (TUI) / 1.6 M (CLI) | 5.9 M | MSVC 19.51.36247.0/Visual Studio 18 2026 · x86_64 · -O2 | 打包时建议带上msvc运行时 |
 | **Linux** | 13.3 M | top RES 7.7 M / RES - SHR 0.5 M | 17.8 M | GCC 16.1.0 · x86_64 · -O3 · --strip-all | 打包时建议带上 libstdc++.so.6,libgcc_s.so.1 |
-| **Android (-deps)** | - | - | 1.9 M | NDK-r29 · Clang 21.0.0 · android-21-arm64-v8a · -O3 · --strip-all | 打包建议带上 libc++.so |
+| **Android** | - | - | 1.9 M | NDK-r29 · Clang 21.0.0 · android-21-arm64-v8a · -O3 · --strip-all | 打包建议带上 libc++.so |
 
 ## 计划实现
 ### 基础模块
