@@ -1,6 +1,12 @@
 @echo off
 rem set utf8
 chcp 65001 > NUL
+rem Tell the build chain that the console code page is UTF-8(65001).
+rem CMake generates Directory.Build.targets which forces MSBuild CustomBuild
+rem tasks to decode child-process output as UTF-8 (fix garbled CJK in nested builds).
+rem NOTE: keep this batch file pure ASCII, multi-byte chars after chcp 65001 may
+rem trigger cmd.exe batch file-pointer misalignment bug.
+set AgentxxBuildConsoleCP=65001
 
 set "crude_dir=%CD%"
 
