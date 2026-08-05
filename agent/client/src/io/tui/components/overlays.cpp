@@ -336,15 +336,16 @@ bool PendingInputsOverlay::handleMouse(const Mouse& mouse) {
 Element ContextOverlay::OnRender() {
     const auto& st    = *ctx_.frameState;
     const auto& theme = *ctx_.theme;
-    const auto& msgs  = st.contextMessages;
+    const auto& msgsPtr = st.contextMessages;
 
     const int maxVisible = std::max(8, Terminal::Size().dimy - 10);
 
     Elements items;
-    if (!msgs.is_array() || msgs.empty()) {
+    if (!msgsPtr || !msgsPtr->is_array() || msgsPtr->empty()) {
         items.push_back(text(" (empty) ") | dim);
     } else {
-        const int totalItems = static_cast<int>(msgs.size());
+        const auto& msgs      = *msgsPtr;
+        const int   totalItems = static_cast<int>(msgs.size());
         const int maxScroll  = std::max(0, totalItems - maxVisible);
         scrollOffset_        = std::clamp(scrollOffset_, 0, maxScroll);
 
@@ -386,7 +387,10 @@ Element ContextOverlay::OnRender() {
         }
     }
 
-    auto title = fmt::format(" LLM Context ({}) ", (msgs.is_array() ? msgs.size() : 0));
+    auto title = fmt::format(
+        " LLM Context ({}) ",
+        (msgsPtr && msgsPtr->is_array()) ? msgsPtr->size() : 0
+    );
 
     return vbox({
                text(title) | bold | inverted,
@@ -411,8 +415,9 @@ bool ContextOverlay::OnEvent(Event event) {
         return true;
     }
     auto      snap = ctx_.state->readSnapshot();
-    const int total
-        = snap->contextMessages.is_array() ? static_cast<int>(snap->contextMessages.size()) : 0;
+    const int total = (snap->contextMessages && snap->contextMessages->is_array())
+                          ? static_cast<int>(snap->contextMessages->size())
+                          : 0;
     const int maxVisible = std::max(8, Terminal::Size().dimy - 10);
     const int maxScroll  = std::max(0, total - maxVisible);
 

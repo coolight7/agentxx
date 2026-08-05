@@ -139,7 +139,7 @@ std::vector<ScrollItem> MessageListComponent::buildItems() {
     const auto& theme        = *ctx_.theme;
     const int   msgListWidth = scrollable_->contentWidth();
 
-    const bool hasStreamingToken = st.isStreaming && !st.currentToken.empty();
+    const bool hasStreamingToken = st.isStreaming && st.currentToken && !st.currentToken->empty();
     if (st.messages.empty() && !hasStreamingToken) {
         auto banner = vbox({
             filler(),
@@ -213,6 +213,11 @@ std::vector<ScrollItem> MessageListComponent::buildItems() {
             }
         }
 
+        // 流式 markdown 大文本降级: cmark 解析成本随文本线性增长, 每 token 全量
+        // 重解析导致 O(n²); 超过阈值后改为纯文本渲染, 保证长输出时流式渲染流畅
+        constexpr size_t kMaxStreamingMarkdownBytes = 16384;
+        const bool       usePlainStreaming = st.currentToken->size() > kMaxStreamingMarkdownBytes;
+
         Element block;
         if (st.currentTokenRole == TUIMessage::Role::Thinking) {
             Elements lines;
@@ -225,28 +230,37 @@ std::vector<ScrollItem> MessageListComponent::buildItems() {
                 );
             }
             lines.push_back(hbox(std::move(header)));
-            auto [el, builder] = renderMarkdown(
-                st.currentToken,
-                theme.thinkingColor,
-                theme.markdownTheme,
-                msgListWidth
-            );
-            if (builder) {
-                streamingMdBuilders_.push_back(std::move(builder));
+            if (usePlainStreaming) {
+                // 超长流式文本: 纯文本渲染, 避免每 token 全量 cmark 解析
+                lines.push_back(paragraph(*st.currentToken) | color(theme.thinkingColor));
+            } else {
+                auto [el, builder] = renderMarkdown(
+                    *st.currentToken,
+                    theme.thinkingColor,
+                    theme.markdownTheme,
+                    msgListWidth
+                );
+                if (builder) {
+                    streamingMdBuilders_.push_back(std::move(builder));
+                }
+                lines.push_back(std::move(el));
             }
-            lines.push_back(std::move(el));
             block = vbox(std::move(lines));
         } else {
-            auto [el, builder] = renderMarkdown(
-                st.currentToken,
-                theme.normalColor,
-                theme.markdownTheme,
-                msgListWidth
-            );
-            if (builder) {
-                streamingMdBuilders_.push_back(std::move(builder));
+            if (usePlainStreaming) {
+                block = paragraph(*st.currentToken) | color(theme.normalColor);
+            } else {
+                auto [el, builder] = renderMarkdown(
+                    *st.currentToken,
+                    theme.normalColor,
+                    theme.markdownTheme,
+                    msgListWidth
+                );
+                if (builder) {
+                    streamingMdBuilders_.push_back(std::move(builder));
+                }
+                block = std::move(el);
             }
-            block = std::move(el);
         }
         items.push_back(ScrollItem{std::move(block), false});
         itemMeta_.push_back(ItemMeta{st.currentTokenRole, false, -1});
