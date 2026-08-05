@@ -59,28 +59,28 @@ path/to/agentxx_test string_util regex
 - `agent/benchmark`: 编译结果 {build}/exec/agentxx_benchmark
     - 性能测试（一般仅 release 启用编译该模块）
 - `agent/third_party`: 第三方库依赖
-    - [boost]
+    - [boost](agent/third_party/boost/)
         - asio
         - beast
         - process
         - exception
-    - [codegraph-cpp]
-    - [curl]
-    - [fmt]
-    - [FTXUI]
-    - [glob]
-    - [html2md]
-    - [hyperscan]
-    - [iconv] | [libiconv-native]
-    - [liburing]
-    - [NeoGraph]
-    - [OpenSSL]
-    - [simdjson]
-    - [sqlite3] | [sqlite3-cmake]
-    - [uchardet]
-    - [vectorscan]
-    - [yaml-cpp]
-    - [zlib] | [zlib-ng]
+    - [codegraph-cpp](agent/third_party/codegraph-cpp/)
+    - [curl](agent/third_party/curl/)
+    - [fmt](agent/third_party/fmt/)
+    - [FTXUI](agent/third_party/ftxui/)
+    - [glob](agent/third_party/glob/)
+    - [html2md](agent/third_party/html2md/)
+    - [hyperscan](agent/third_party/hyperscan/)
+    - [iconv] | [libiconv-native](agent/third_party/libiconv-native/)
+    - [liburing](agent/third_party/liburing/)
+    - [NeoGraph](agent/third_party/neograph/)
+    - [OpenSSL](agent/third_party/openssl-4.0.1/)
+    - [simdjson](agent/third_party/simdjson/)
+    - [sqlite3] | [sqlite3-cmake](agent/third_party/sqlite3-cmake/)
+    - [uchardet](agent/third_party/uchardet/)
+    - [vectorscan](agent/third_party/verctorscan/)
+    - [yaml-cpp](agent/third_party/yaml-cpp/)
+    - [zlib] | [zlib-ng](agent/third_party/zlib-ng/)
 
 ## 编译
 - Linux:

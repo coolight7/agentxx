@@ -785,7 +785,10 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
             turnResult.hasError     = true;
             turnResult.errorMessage = "Cancelled by user";
             return true;
-        }
+        },
+        // 传入取消令牌: engine 内未被转换的 operation_aborted (asio 取消信号)
+        // 按取消语义处理, 确保 turnResult 报告 "Cancelled by user" 而非普通错误
+        cancelToken
     );
     if (turnResult.hasError) {
         // - 出现异常时 state.messages 已经被回滚，提取临时保存的上下文，并写回 state

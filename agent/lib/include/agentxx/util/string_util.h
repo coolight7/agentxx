@@ -274,6 +274,25 @@ using IgnoreCaseSet = std::unordered_set<std::string, IgnoreCaseHash, IgnoreCase
     return std::tuple<size_t, size_t, size_t>{0, 0, 0};
 }
 
+/// 统计文本的行数: '\n' 数量 + 末尾不以 '\n' 结尾的最后一个不完整行
+/// 与 `share_store` 按行分页取值的行划分方式一致 (逐行读取)
+[[nodiscard]] inline constexpr size_t countLines(std::string_view in_str) {
+    if (in_str.empty()) {
+        return 0;
+    }
+    size_t lineCount = 0;
+    for (const char ch : in_str) {
+        if ('\n' == ch) {
+            ++lineCount;
+        }
+    }
+    if ('\n' != in_str.back()) {
+        // 最后一行没有换行符, 也算一行
+        ++lineCount;
+    }
+    return lineCount;
+}
+
 [[nodiscard]] inline constexpr bool utf8IsContinuationChar(unsigned char ch) {
     return (ch & 0xC0) == 0x80; // 10xxxxxx 的二进制特征：前两位是 10
 }

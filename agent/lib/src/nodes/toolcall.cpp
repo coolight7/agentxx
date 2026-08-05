@@ -110,8 +110,11 @@ asio::awaitable<void> ToolcallWrapNode::onHandleEnd(
     co_await item.onToolcallEndFunc(in, result);
 }
 
-asio::awaitable<std::string>
-    ToolcallWrapNode::execTool(neograph::Tool* tool, neograph::json& args) const {
+asio::awaitable<std::string> ToolcallWrapNode::execTool(
+    neograph::Tool*                                      tool,
+    neograph::json&                                      args,
+    const std::shared_ptr<neograph::graph::CancelToken>& cancelToken
+) const {
     auto agentCtxPtr = agentContext.lock();
     {
         // 权限检查 (permissionMiddleware 默认 nullptr, 未配置权限中间件时跳过)
@@ -124,6 +127,11 @@ asio::awaitable<std::string>
                 }
             }
         }
+    }
+
+    // 权限检查可能 co_await 挂起过, 执行 tool 前检查取消埋点
+    if (cancelToken) {
+        cancelToken->throw_if_cancelled("before tool execution");
     }
 
     size_t maxRetry = 0;
@@ -180,23 +188,31 @@ asio::awaitable<std::string>
             // 超过限制长度，截断并存储原文
             auto storeId
                 = agentCtxPtr->middlewareHandleContext->addShareStoreItemValue(thread_id, result);
+            // 总行数, 写入压缩结果便于后续用 `share_store` 按行分页取值
+            const auto totalLineCount = agentxx::util::countLines(result);
             // - 如果超过总摘要 1/3，按行摘要，留出行数以便后续用
             // `share_store` 分页按行取值 否则取总摘要
             if (lastLineIndex >= targetIndex / 3) {
                 co_return fmt::format(
-                    R"([Content offloaded. Use the `share_store` tool to fetch the full content by ID {}. Summary:{} lines]
+                    R"([Content offloaded. Use the `share_store` tool to fetch the full content by ID {}. Summary:{} lines, total {} lines, truncated {} lines]
 {}
 ...)",
                     storeId,
                     lineCount,
+                    totalLineCount,
+                    totalLineCount - lineCount,
                     std::string_view{result}.substr(0, lastLineIndex)
                 );
             } else {
+                // 无法按行截断时取全部行数 (换行数) 作为截取行数
                 co_return fmt::format(
-                    R"([Content offloaded. Use the `share_store` tool to fetch the full content by ID {}. Summary:]
+                    R"([Content offloaded. Use the `share_store` tool to fetch the full content by ID {}. Summary:{} chars, total {} lines, truncated {} lines]
 {}
 ...)",
                     storeId,
+                    limitLength,
+                    totalLineCount,
+                    lineCount,
                     std::string_view{result}.substr(0, targetIndex)
                 );
             }
@@ -290,9 +306,13 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
                             // resultId)
                             args["tool_call_id"] = tc.id;
                         }
-                        tool_msg.content = co_await execTool(*it, args);
+                        tool_msg.content = co_await execTool(*it, args, in.ctx.cancel_token);
+                        // 取消埋点: tool 执行完成后检查, 避免取消后继续收集/执行后续 tool
+                        if (in.ctx.cancel_token) {
+                            in.ctx.cancel_token->throw_if_cancelled("after tool execution");
+                        }
                     } catch (const neograph::graph::CancelledException&) {
-                        // TODO: 保存已有的 toolcall 结果再重新抛出异常
+                        // TODO: 保存已有的 toolcall 结果由 baseRun 的取消捕获处保存后再重新抛出
                         errorPtr = std::current_exception();
                     } catch (const neograph::graph::NodeInterrupt&) {
                         // tool触发中断
@@ -307,7 +327,11 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
                 [&](std::string errinfo) -> asio::awaitable<bool> {
                     tool_msg.content = fmt::format("[Exception aborted: {}]", errinfo);
                     co_return true;
-                }
+                },
+                nullptr,
+                // 传入取消令牌: tool 被取消信号中断产生的 operation_aborted
+                // 转换为 CancelledException, 避免取消被当作普通 tool 错误吞掉
+                in.ctx.cancel_token
             );
             if (errorPtr) {
                 std::rethrow_exception(errorPtr);
@@ -322,6 +346,10 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
         toolcallResults.emplace_back(onExecTool(tc));
     }
     for (auto& item : toolcallResults) {
+        // 取消埋点: 已取消则不再启动下一个 tool
+        if (in.ctx.cancel_token) {
+            in.ctx.cancel_token->throw_if_cancelled("before tool execution");
+        }
         // TODO: 真正并行
         auto           msg = co_await std::move(item);
         neograph::json msg_json;

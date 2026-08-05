@@ -8,17 +8,30 @@
 #include "neograph/graph/types.h"
 #include <exception>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 
 namespace agentxx {
 namespace util {
 
+/// 判断 system_error 是否为取消信号的作用结果
+/// - 当 cancelToken 已取消时, 协程 co_await 点上出现的 operation_aborted 是
+///   asio cancellation_signal 中断异步 IO 的结果, 属于取消语义而非超时/传输错误
+inline bool isCancelAbort(
+    const boost::system::system_error&                   e,
+    const std::shared_ptr<neograph::graph::CancelToken>& cancelToken
+) noexcept {
+    return e.code() == asio::error::operation_aborted && nullptr != cancelToken
+        && cancelToken->is_cancelled();
+}
+
 template<typename T>
 T catchError(
     std::function<T()>                            func,
     std::function<T(std::string)>                 onError,
-    std::function<std::optional<T>(std::string&)> onRethrow = nullptr
+    std::function<std::optional<T>(std::string&)> onRethrow   = nullptr,
+    std::shared_ptr<neograph::graph::CancelToken> cancelToken = nullptr
 ) {
     std::string errmsg;
     try {
@@ -48,13 +61,27 @@ T catchError(
         }
         errmsg = fmt::format("NodeInterrupt: {}", errInfo);
     } catch (const boost::system::system_error& e) {
-        auto ec      = e.code();
-        auto errInfo = std::string{e.what()};
-        agentxx::util::autoConvertToUtf8(errInfo);
-        if (ec == asio::error::operation_aborted) {
-            errmsg = fmt::format("timeout: {}", errInfo);
+        if (isCancelAbort(e, cancelToken)) {
+            // 取消信号中断异步 IO 产生的 operation_aborted 按取消语义处理 (同
+            // CancelledException 分支), 避免取消被当作普通错误吞掉
+            if (nullptr == onRethrow) {
+                throw neograph::graph::CancelledException("operation aborted");
+            }
+            auto errInfo = std::string{"operation aborted"};
+            auto result  = onRethrow(errInfo);
+            if (result.has_value()) {
+                return std::move(result.value());
+            }
+            errmsg = fmt::format("Cancelled: {}", errInfo);
         } else {
-            errmsg = errInfo;
+            auto ec      = e.code();
+            auto errInfo = std::string{e.what()};
+            agentxx::util::autoConvertToUtf8(errInfo);
+            if (ec == asio::error::operation_aborted) {
+                errmsg = fmt::format("timeout: {}", errInfo);
+            } else {
+                errmsg = errInfo;
+            }
         }
     } catch (const std::exception& e) {
         // - 部分系统上，系统函数返回的
@@ -74,7 +101,8 @@ template<typename T>
 asio::awaitable<T> catchErrorAsync(
     std::function<asio::awaitable<T>()>            func,
     std::function<asio::awaitable<T>(std::string)> onError,
-    std::function<std::optional<T>(std::string&)>  onRethrow = nullptr
+    std::function<std::optional<T>(std::string&)>  onRethrow   = nullptr,
+    std::shared_ptr<neograph::graph::CancelToken>  cancelToken = nullptr
 ) {
     std::string errmsg;
     try {
@@ -103,13 +131,27 @@ asio::awaitable<T> catchErrorAsync(
         }
         errmsg = fmt::format("NodeInterrupt: {}", errInfo);
     } catch (const boost::system::system_error& e) {
-        auto ec      = e.code();
-        auto errInfo = std::string{e.what()};
-        agentxx::util::autoConvertToUtf8(errInfo);
-        if (ec == asio::error::operation_aborted) {
-            errmsg = fmt::format("timeout: {}", errInfo);
+        if (isCancelAbort(e, cancelToken)) {
+            // 取消信号中断异步 IO 产生的 operation_aborted 按取消语义处理 (同
+            // CancelledException 分支), 避免取消被当作普通错误吞掉
+            if (nullptr == onRethrow) {
+                throw neograph::graph::CancelledException("operation aborted");
+            }
+            auto errInfo = std::string{"operation aborted"};
+            auto result  = onRethrow(errInfo);
+            if (result.has_value()) {
+                co_return std::move(result.value());
+            }
+            errmsg = fmt::format("Cancelled: {}", errInfo);
         } else {
-            errmsg = errInfo;
+            auto ec      = e.code();
+            auto errInfo = std::string{e.what()};
+            agentxx::util::autoConvertToUtf8(errInfo);
+            if (ec == asio::error::operation_aborted) {
+                errmsg = fmt::format("timeout: {}", errInfo);
+            } else {
+                errmsg = errInfo;
+            }
         }
     } catch (const std::exception& e) {
         errmsg = e.what();

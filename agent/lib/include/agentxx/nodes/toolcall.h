@@ -48,7 +48,14 @@ public:
         neograph::graph::NodeOutput&                        result
     ) override;
 
-    asio::awaitable<std::string> execTool(neograph::Tool* tool, neograph::json& args) const;
+    /// 执行单个 tool
+    /// - [cancelToken] 当前轮次取消令牌: 传递给 ContextualAsyncTool 以便 tool
+    ///   轮询取消或传播到其传输层; 可为 nullptr (无取消支持)
+    asio::awaitable<std::string> execTool(
+        neograph::Tool*                                    tool,
+        neograph::json&                                    args,
+        const std::shared_ptr<neograph::graph::CancelToken>& cancelToken
+    ) const;
 
     asio::awaitable<void> baseRun(
         std::vector<std::shared_ptr<agentxx::middleware::BaseMiddlewareHandleInterface>>& handles,
