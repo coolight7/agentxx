@@ -94,6 +94,10 @@ public:
         return poppedCount_;
     }
 
+    size_t lineCount() const {
+        return lines_.size();
+    }
+
 protected:
 
     void onLog(const agentxx::util::LogEntry& entry) override;
@@ -248,6 +252,20 @@ private:
     /// 日志行缓存 (UI 线程, 供 renderLogWindow 使用)
     std::vector<ftxui::Element> logLineCache_;
     uint64_t                    logCachePoppedCount_ = 0;
+    /// 上次快照的日志行数 (用于判断日志是否新增, 避免每帧全量 snapshot 拷贝)
+    size_t logCacheLineCount_ = 0;
+
+    /// renderPlanningInfo 的解析缓存: 仅当 plan 消息变化 (指针/文本长度/toolFinished)
+    /// 时重新解析 JSON, 避免 Info 侧边栏每帧重复解析 planning 参数
+    const TUIMessage* planCacheMsgPtr_   = nullptr;
+    size_t            planCacheTextLen_  = 0;
+    bool              planCacheFinished_ = false;
+    bool              planCacheValid_    = false;
+    neograph::json    planCacheArgs_     = neograph::json::array();
+
+    /// 待处理重绘标记: postRedraw() 合并同一时刻的多次请求, 每帧最多触发一次
+    /// 渲染, 避免流式输出每 token 一次完整重绘
+    std::atomic<bool> redrawPending_{false};
 
     // ---- 系统资源监控 (每 kSystemInfoIntervalSec 秒采集一次 CPU/内存占用) ----
     /// Info 侧边栏是否显示系统资源; 默认开启, 可被设置弹窗切换 (UI/监控线程均可读)

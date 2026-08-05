@@ -46,22 +46,32 @@ ftxui::Element buildLogLine(const TUILogSink::Line& line, const TUITheme& theme)
 } // namespace
 
 std::vector<ScrollItem> TUIClientAgentIO::renderLogWindow() {
-    auto lines = logSink_ ? logSink_->snapshot() : std::vector<TUILogSink::Line>{};
-    if (lines.empty()) {
+    if (!logSink_) {
         return {
             ScrollItem{text("[Empty]") | dim, false}
         };
     }
-    const uint64_t curPopped = logSink_ ? logSink_->poppedCount() : 0;
-    if (curPopped != logCachePoppedCount_) {
-        logLineCache_.clear();
+    // 仅当日志内容有变化时才重新 snapshot + 重建缓存:
+    // 日志行可能高达 2000 行, 每帧全量拷贝字符串是浪费 (日志 tab 打开时每帧渲染都触发)
+    const size_t   curCount  = logSink_->lineCount();
+    const uint64_t curPopped = logSink_->poppedCount();
+    if (curCount != logCacheLineCount_ || curPopped != logCachePoppedCount_) {
+        if (curPopped != logCachePoppedCount_ || curCount < logCacheLineCount_) {
+            // 淘汰发生 (popped 增加) 或行数减少 (clear): 缓存整体失效
+            logLineCache_.clear();
+        }
         logCachePoppedCount_ = curPopped;
+        logCacheLineCount_   = curCount;
+        auto lines = logSink_->snapshot();
+        // 增量构建新增行 (未发生淘汰时, 前段与缓存一一对应)
+        while (logLineCache_.size() < lines.size()) {
+            logLineCache_.push_back(buildLogLine(lines[logLineCache_.size()], theme_));
+        }
     }
-    if (logLineCache_.size() > lines.size()) {
-        logLineCache_.clear();
-    }
-    while (logLineCache_.size() < lines.size()) {
-        logLineCache_.push_back(buildLogLine(lines[logLineCache_.size()], theme_));
+    if (logLineCache_.empty()) {
+        return {
+            ScrollItem{text("[Empty]") | dim, false}
+        };
     }
     std::vector<ScrollItem> items;
     items.reserve(logLineCache_.size());
@@ -78,7 +88,7 @@ std::optional<ftxui::Element> TUIClientAgentIO::renderPlanningInfo() {
     for (size_t i = st.messages.size(); i > 0; --i) {
         const auto& m = *st.messages[i - 1];
         if (m.role == TUIMessage::Role::Tool && m.toolName == "planning_write") {
-            plan = &m;
+            plan = st.messages[i - 1].get();
             break;
         }
     }
@@ -86,12 +96,25 @@ std::optional<ftxui::Element> TUIClientAgentIO::renderPlanningInfo() {
         return std::nullopt;
     }
 
-    neograph::json args;
-    try {
-        args = neograph::json::parse(plan->text);
-    } catch (...) {
+    // 解析缓存: plan 消息被修改时 (mutableMessage 总是复制 → 指针变化)
+    // 或文本长度变化时重新解析, 避免每帧重复解析 planning 参数 JSON
+    if (planCacheMsgPtr_ != plan || planCacheTextLen_ != plan->text.size()
+        || planCacheFinished_ != plan->toolFinished) {
+        planCacheMsgPtr_   = plan;
+        planCacheTextLen_  = plan->text.size();
+        planCacheFinished_ = plan->toolFinished;
+        planCacheArgs_     = neograph::json::array();
+        try {
+            planCacheArgs_  = neograph::json::parse(plan->text);
+            planCacheValid_ = true;
+        } catch (...) {
+            planCacheValid_ = false;
+        }
+    }
+    if (!planCacheValid_) {
         return std::nullopt;
     }
+    const auto& args = planCacheArgs_;
 
     Elements lines;
     Elements title;

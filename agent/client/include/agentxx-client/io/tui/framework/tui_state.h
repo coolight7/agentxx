@@ -42,9 +42,16 @@ struct TUIPendingInput {
 /// 收敛于此结构, 经 shared_ptr + mutex 保护:
 /// - 写方: 短锁 + COW (mutableState) 后修改
 /// - 读方: 短锁拷贝 shared_ptr 快照, 之后无锁渲染
+///
+/// 性能设计 (流式输出的热路径):
+/// - currentToken 为 shared_ptr<string>: 流式追加 token 时按需 COW 字符串本体,
+///   避免每 token 深拷贝整个已累积文本 (O(n²) -> O(n))
+/// - contextMessages 为 shared_ptr<json>: neograph::json 拷贝是深拷贝
+///   (yyjson_mut_val_mut_copy 全树复制), 若放在 COW 全量拷贝内,
+///   每 token 都会复制整个上下文 JSON; 指针化后 COW 拷贝仅 O(1)
 struct TUIRenderState {
     std::vector<std::shared_ptr<TUIMessage>> messages;
-    std::string                              currentToken;
+    std::shared_ptr<std::string>             currentToken;
     TUIMessage::Role                         currentTokenRole = TUIMessage::Role::Assistant;
     bool                                     isStreaming      = false;
 
@@ -58,8 +65,10 @@ struct TUIRenderState {
 
     std::deque<TUIPendingInput> pendingInputs;
 
-    neograph::json contextMessages    = neograph::json::array();
-    bool           showContextOverlay = false;
+    /// 上下文消息快照 (弹窗展示用); 为 null 表示尚未获取
+    std::shared_ptr<neograph::json> contextMessages;
+
+    bool showContextOverlay = false;
 
     std::vector<agentxx::agent::AppendComponentNotification> appendComponents;
 
@@ -88,12 +97,18 @@ public:
         return *state_;
     }
 
-    /// COW 写入单条消息: 若被快照共享则拷贝该条
+    /// COW 写入单条消息: 总是复制消息对象
     /// 调用方须持有 lock()
+    ///
+    /// 为什么总是复制 (而非 use_count > 1 时才复制):
+    /// 1. 消除 use_count 读取与修改之间的数据竞争 —— UI 线程渲染结束释放快照时
+    ///    (shared_ptr 析构) 与 client 线程读 use_count 无锁并发, 是未定义行为
+    /// 2. 保证 "消息内容变化 -> 消息对象指针变化" 恒成立: 消息列表渲染缓存
+    ///    以消息指针为失效 key, 指针不变即内容未变, 可直接复用缓存的 Element,
+    ///    免去每帧对全部消息文本重新哈希的开销
+    /// 复制成本: 低频事件 (Tool 结束 / 节点结束 / 折叠点击) 才触发, 可接受
     TUIMessage& mutableMessage(TUIRenderState& st, size_t idx) {
-        if (st.messages[idx].use_count() > 1) {
-            st.messages[idx] = std::make_shared<TUIMessage>(*st.messages[idx]);
-        }
+        st.messages[idx] = std::make_shared<TUIMessage>(*st.messages[idx]);
         return *st.messages[idx];
     }
 

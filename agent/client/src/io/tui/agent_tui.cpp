@@ -65,6 +65,13 @@ TUIClientAgentIO::~TUIClientAgentIO() {
 // ---------------------------------------------------------------------------
 
 void TUIClientAgentIO::postRedraw() {
+    // 合并同一时刻的多次重绘请求: 流式输出时 client 线程每 token 调用一次,
+    // 若每次 Post 都触发完整渲染, 渲染成本被 token 到达频率放大。
+    // 使用 exchange: 仅当之前无待处理重绘 (返回 false) 时才 Post,
+    // UI 线程每帧循环开头 reset, 保证同帧内多次请求只触发一次渲染。
+    if (redrawPending_.exchange(true, std::memory_order_acq_rel)) {
+        return;
+    }
     std::shared_ptr<ScreenInteractive> s;
     {
         std::lock_guard<std::mutex> lock(screenMutex_);
@@ -160,7 +167,8 @@ void TUIClientAgentIO::start() {
             } else if (session_) {
                 std::lock_guard<std::mutex> lock(sharedState_.mutex());
                 auto&                       st = sharedState_.mutableState();
-                st.contextMessages             = session_->llmMessages;
+                // json 拷贝是深拷贝 (yyjson 全树复制), 仅此低频场景一次, 可接受
+                st.contextMessages = std::make_shared<neograph::json>(session_->llmMessages);
                 st.showContextOverlay          = true;
             }
             if (modal_ && !modal_->hasModal()) {
@@ -287,10 +295,25 @@ void TUIClientAgentIO::start() {
         {
             Loop loop(screen.get(), handler);
             while (!loop.HasQuitted()) {
+                // 本帧开始清除重绘合并标记: 允许本帧内新到达的重绘请求重新 Post。
+                // 注意: 必须在 RunOnceBlocking 之前 reset —— client 线程在上一帧渲染
+                // 期间 Post 的重绘请求已被消费, 本帧 reset 后若 client 再次 postRedraw
+                // 会重新 Post, 不会丢失; 渲染期间到达的请求则合并到下一帧。
+                redrawPending_.store(false, std::memory_order_release);
+                // 每帧开头获取状态快照: 事件处理 (CatchEvent/组件 OnEvent) 与渲染
+                // 期间 frameState 始终有效
+                ctx_.frameState = sharedState_.readSnapshot();
                 if (logSink_ && logSink_->pump() > 0) {
                     screen->Post(Event::Custom);
                 }
                 loop.RunOnceBlocking();
+                // 整帧渲染/事件处理完成: 释放本帧状态快照。
+                // 关键性能点: 若帧间隙持续持有快照, client 线程 (onDelta 流式追加)
+                // 每次 mutableState() 都会 COW 深拷贝整个 TUIRenderState (use_count>1),
+                // 每 token 一次全量拷贝; 释放后渲染间隙 use_count==1,
+                // client 线程可原地修改 state, 拷贝成本降为零。
+                // Element 树在 OnRender 中已自包含 (文本已复制), 布局/绘制不依赖快照。
+                ctx_.frameState.reset();
             }
         }
         {
@@ -518,7 +541,7 @@ void TUIClientAgentIO::onPeerMessage(agentxx::agent::WireMessage msg) {
                 {
                     std::lock_guard<std::mutex> lock(sharedState_.mutex());
                     auto&                       st = sharedState_.mutableState();
-                    st.contextMessages             = m.messages;
+                    st.contextMessages = std::make_shared<neograph::json>(std::move(m.messages));
                     st.showContextOverlay          = true;
                 }
                 // 打开上下文弹窗
@@ -541,19 +564,19 @@ void TUIClientAgentIO::onPeerMessage(agentxx::agent::WireMessage msg) {
 // ---------------------------------------------------------------------------
 
 void TUIClientAgentIO::pushCurrentTokenLocked(TUIRenderState& st) {
-    if (st.currentToken.empty()) {
+    if (!st.currentToken || st.currentToken->empty()) {
         return;
     }
     auto msg         = std::make_shared<TUIMessage>();
     msg->role        = st.currentTokenRole;
-    msg->text        = st.currentToken;
+    msg->text        = *st.currentToken;
     msg->collapsed   = (st.currentTokenRole == TUIMessage::Role::Thinking);
     msg->durationMs  = st.pendingTokenDurationMs;
     msg->startTimeMs = st.pendingTokenStartTimeMs;
     st.messages.push_back(std::move(msg));
     st.pendingTokenDurationMs  = 0;
     st.pendingTokenStartTimeMs = 0;
-    st.currentToken.clear();
+    st.currentToken.reset();
 }
 
 void TUIClientAgentIO::cancelCurrentRunLocked(TUIRenderState& st) {
@@ -607,14 +630,22 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
             case Type::ThinkingToken: {
                 auto role = (delta.type == Type::ThinkingToken) ? TUIMessage::Role::Thinking
                                                                 : TUIMessage::Role::Assistant;
-                if (st.currentTokenRole != role && !st.currentToken.empty()) {
+                if (st.currentTokenRole != role && st.currentToken
+                    && !st.currentToken->empty()) {
                     st.pendingTokenStartTimeMs = delta.startTimeMs;
                     st.pendingTokenDurationMs  = delta.durationMs;
                     pushCurrentTokenLocked(st);
                 }
-                st.currentTokenRole  = role;
-                st.currentToken     += delta.text;
-                st.isStreaming       = true;
+                st.currentTokenRole = role;
+                // 按需 COW: 仅当字符串被 UI 快照共享 (渲染期间) 才复制本体,
+                // 避免每 token 深拷贝整个已累积文本 (O(n²) -> O(n))
+                if (!st.currentToken) {
+                    st.currentToken = std::make_shared<std::string>();
+                } else if (st.currentToken.use_count() > 1) {
+                    st.currentToken = std::make_shared<std::string>(*st.currentToken);
+                }
+                st.currentToken->append(delta.text);
+                st.isStreaming = true;
             } break;
             case Type::ToolStart: {
                 pushCurrentTokenLocked(st);
@@ -665,7 +696,7 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
                 if (st.currentNodeName == delta.nodeName) {
                     st.currentNodeName.clear();
                 }
-                if (!st.currentToken.empty()) {
+                if (st.currentToken && !st.currentToken->empty()) {
                     st.pendingTokenStartTimeMs = delta.startTimeMs;
                     st.pendingTokenDurationMs  = delta.durationMs;
                 } else if (!st.messages.empty()) {
@@ -715,6 +746,7 @@ void TUIClientAgentIO::onSync(const agentxx::agent::SyncPayload& payload) {
         st->appendComponents             = prev->appendComponents;
         st->pendingInputs                = prev->pendingInputs;
         st->systemUsage                  = prev->systemUsage;
+        st->contextMessages              = prev->contextMessages;
         st->isStreaming                  = false;
 
         for (const auto& hm : payload.messages) {
