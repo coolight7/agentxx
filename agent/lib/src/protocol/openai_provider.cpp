@@ -815,42 +815,53 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStreamResponses(
     // 是否收到 Responses API 结束事件 "response.completed", 用于检测流截断
     bool doneReceived = false;
 
-    try {
-        co_await HttpClient::requestSseAsync(
-            "POST",
-            apiUrl(),
-            bodyStr,
-            "application/json",
-            headers,
-            HttpClient::RequestConfig{
-                .connectTimeout   = std::chrono::seconds{config_.connectTimeoutSeconds},
-                .readChunkTimeout = std::chrono::seconds{config_.readChunkTimeoutSeconds},
-                .sslVerify        = config_.sslVerify,
-            },
-            [&](std::string_view chunk) {
-                lineBuffer += chunk;
-                if (processResponsesSseBuffer(
-                        lineBuffer,
-                        completion,
-                        fullContent,
-                        fullThinking,
-                        tcMap,
-                        on_chunk,
-                        /*finalFlush=*/false,
-                        &apiError
-                    )) {
-                    doneReceived = true;
+    co_await agentxx::util::catchErrorAsync<bool>(
+        [&]() -> asio::awaitable<bool> {
+            co_await HttpClient::requestSseAsync(
+                "POST",
+                apiUrl(),
+                bodyStr,
+                "application/json",
+                headers,
+                HttpClient::RequestConfig{
+                    .connectTimeout   = std::chrono::seconds{config_.connectTimeoutSeconds},
+                    .readChunkTimeout = std::chrono::seconds{config_.readChunkTimeoutSeconds},
+                    .sslVerify        = config_.sslVerify,
+                },
+                [&](std::string_view chunk) {
+                    lineBuffer += chunk;
+                    if (processResponsesSseBuffer(
+                            lineBuffer,
+                            completion,
+                            fullContent,
+                            fullThinking,
+                            tcMap,
+                            on_chunk,
+                            /*finalFlush=*/false,
+                            &apiError
+                        )) {
+                        doneReceived = true;
+                    }
                 }
+            );
+
+            XX_LOGT("OpenAIProvider::doStreamResponses [HttpClient::requestSseAsync] DONE");
+            co_return true;
+        },
+        [&](std::string errinfo) -> asio::awaitable<bool> {
+            XX_LOGT(
+                "OpenAIProvider::doStreamResponses [HttpClient::requestSseAsync] Exception: {}",
+                errinfo
+            );
+            // 已收到 response.completed 说明业务数据已全部送达, 连接层在收尾阶段的错误
+            // (如 ssl stream_truncated) 不应使请求失败
+            if (!doneReceived) {
+                throw std::runtime_error{errinfo};
             }
-        );
-    } catch (...) {
-        // 已收到 response.completed 说明业务数据已全部送达, 连接层在收尾阶段的错误
-        // (如 ssl stream_truncated) 不应使请求失败
-        if (!doneReceived) {
-            throw;
+            XX_LOGW("LLM stream transport error after response.completed, ignored");
+            co_return false;
         }
-        XX_LOGW("LLM stream transport error after response.completed, ignored");
-    }
+    );
 
     if (!lineBuffer.empty()) {
         if (processResponsesSseBuffer(

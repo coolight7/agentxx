@@ -203,25 +203,27 @@ private:
     private:
 
         asio::awaitable<bool> doWrite(std::string_view data) {
-            try {
-                if (!headerSent_) {
-                    co_return co_await writeWithHeader(data);
+            co_return co_await agentxx::util::catchErrorAsync<bool>(
+                [&]() -> asio::awaitable<bool> {
+                    if (!headerSent_) {
+                        co_return co_await writeWithHeader(data);
+                    }
+                    co_await asio::async_write(
+                        stream_,
+                        asio::buffer(data),
+                        asio::cancel_after(timeout_, asio::use_awaitable)
+                    );
+                    co_return true;
+                },
+                [&](std::string errinfo) -> asio::awaitable<bool> {
+                    XX_LOGE("[sse] write error: {}", errinfo);
+                    co_return false;
+                },
+                [](std::string& errinfo) -> std::optional<bool> {
+                    XX_LOGE("[sse] write error: {}", errinfo);
+                    return false;
                 }
-                co_await asio::async_write(
-                    stream_,
-                    asio::buffer(data),
-                    asio::cancel_after(timeout_, asio::use_awaitable)
-                );
-                co_return true;
-            } catch (const boost::system::system_error& e) {
-                if (e.code() != asio::error::operation_aborted) {
-                    XX_LOGE("[sse] write error: {}", agentxx::util::autoTryConvertToUtf8(e.what()));
-                }
-                co_return false;
-            } catch (const std::exception& e) {
-                XX_LOGE("[sse] write error: {}", agentxx::util::autoTryConvertToUtf8(e.what()));
-                co_return false;
-            }
+            );
         }
 
         asio::awaitable<bool> writeWithHeader(std::string_view data) {
