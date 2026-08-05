@@ -39,6 +39,9 @@
 #include "test_string_util.h"
 #include "test_subagent_bus.h"
 #include "test_text_selection_monitor.h"
+#ifdef AGENTXX_BUILD_CLIENT
+#include "test_tui_settings.h"
+#endif
 #include "test_util_misc.h"
 #include "test_web_search_tools.h"
 #include "test_websocket.h"
@@ -110,6 +113,9 @@ int main(int argn, char** argv) {
     runSync("misc_fixes", agentxx::test::testMiscFixes);
     runSync("aho_corasick", agentxx::test::testAhoCorasick);
     runSync("util_misc", agentxx::test::testUtilMisc);
+#ifdef AGENTXX_BUILD_CLIENT
+    runSync("tui_settings", agentxx::test::testTuiSettings);
+#endif
 
     // ---- 异步测试模块 ----
     asio::co_spawn(

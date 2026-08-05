@@ -104,6 +104,8 @@ if (AGENTXX_LINUX_IO_URING_SUPPORTED)
 endif()
 if (AGENTXX_BUILD_CLIENT)
   target_link_libraries(agentxx_test PRIVATE ftxui::ftxui markdown::markdown-ui)
+  # 供 test.cpp 条件注册依赖 client 的测试模块
+  target_compile_definitions(agentxx_test PRIVATE AGENTXX_BUILD_CLIENT=1)
 endif()
 
 if (XX_IS_MSVC_D)

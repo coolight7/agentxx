@@ -110,7 +110,7 @@ void TUIClientAgentIO::start() {
         ctx_.session        = session_;
         ctx_.threadId       = threadId_;
         ctx_.remoteUrl      = remoteUrl_;
-        ctx_.showSystemInfo = &systemInfoEnabled_;
+        ctx_.showSystemInfo = &TUISettings::instance().showSystemInfoRef();
 
         // 创建组件
         messageList_ = std::make_shared<MessageListComponent>(ctx_);
@@ -365,7 +365,7 @@ void TUIClientAgentIO::startSystemMonitor() {
         agentxx::expand::CpuGpuMonitor monitor;
         for (;;) {
             // 显示关闭时跳过采集 (仍保持周期唤醒, 以便随时重新开启)
-            if (systemInfoEnabled_.load(std::memory_order_relaxed)) {
+            if (TUISettings::instance().showSystemInfo()) {
                 // query() 为协程, 需 io_context 驱动; 每次采集使用临时 io_context 同步等待完成
                 asio::io_context io;
                 auto             usage = std::make_shared<agentxx::expand::CpuGpuUsage>();

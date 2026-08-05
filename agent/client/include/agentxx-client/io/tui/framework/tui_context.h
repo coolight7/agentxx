@@ -31,7 +31,7 @@ struct TUICtx {
     TUITheme* theme = nullptr;
 
     /// 是否在 Info 侧边栏显示系统资源占用 (CPU/内存);
-    /// 指向 TUIClientAgentIO::systemInfoEnabled_, 可被设置弹窗切换,
+    /// 指向全局设置单例 TUISettings::instance() 内的原子量, 可被设置弹窗切换,
     /// 渲染线程与资源监控线程均可读取
     std::atomic<bool>* showSystemInfo = nullptr;
 
