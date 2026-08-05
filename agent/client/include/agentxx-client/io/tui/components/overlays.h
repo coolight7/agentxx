@@ -43,8 +43,9 @@ private:
 /// 设置弹窗组件
 /// - 主题切换 (Dark/Light)
 /// - 系统资源占用显示开关 (Info 侧边栏; 默认开启)
+/// - 动画等级 (Disabled/Low/Medium/High/Ultra; 见 TUISettings)
 ///
-/// 交互: Up/Down 选择条目, Enter 应用/切换; 也支持鼠标点击
+/// 交互: Up/Down 选择条目, Enter 应用/切换 (动画等级循环切换); 也支持鼠标点击
 class SettingsOverlay : public ftxui::ComponentBase {
 public:
 
@@ -62,13 +63,19 @@ private:
 
     bool handleMouse(const ftxui::Mouse& mouse);
 
+    /// 循环切换动画等级: Disabled -> Low -> Medium -> High -> Ultra -> Disabled
+    static void cycleAnimationLevel();
+
     TUICtx&               ctx_;
-    /// 条目索引: 0/1 = 主题 Dark/Light, 2 = 系统资源显示开关
-    int                   selectedIndex_ = 0;
+    /// 条目索引: 0/1 = 主题 Dark/Light, 2 = 系统资源显示开关, 3 = 动画等级
+    /// Enter/鼠标点击索引 3 时循环切换动画等级
+    static constexpr int kItemCount = 4;
+    int                  selectedIndex_ = 0;
     std::function<void()> onClose_;
 
     ftxui::Box themeBoxes_[2]; // Dark/Light 点击区域
     ftxui::Box sysInfoBox_;    // 系统资源开关点击区域
+    ftxui::Box animLevelBox_;  // 动画等级点击区域
 };
 
 /// 待发送消息队列弹窗组件

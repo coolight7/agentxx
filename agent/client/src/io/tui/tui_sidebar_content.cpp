@@ -162,8 +162,8 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
 
     Elements elements;
 
-    // 系统资源占用 (CPU/内存), 由资源监控线程周期刷新
-    if (systemInfoEnabled_.load(std::memory_order_relaxed)) {
+    // 系统资源占用 (CPU/内存), 由资源监控线程周期刷新; 显示开关存储于全局设置单例
+    if (TUISettings::instance().showSystemInfo()) {
         Elements sysEls;
         sysEls.push_back(text("System") | color(theme_.accentColor));
         if (st.systemUsage) {

@@ -1,4 +1,5 @@
 #include "agentxx-client/io/tui/components/input_bar.h"
+#include "agentxx-client/io/tui/framework/tui_settings.h"
 #include "ftxui/component/event.hpp"
 #include "ftxui/screen/terminal.hpp"
 
@@ -29,11 +30,16 @@ Element InputComponent::OnRender() {
 
     Element indicator;
     if (config_.isAwaitingInterrupt && config_.isAwaitingInterrupt()) {
-        indicator = text("!") | bgcolor(theme.errorColor) | color(Color::White) | bold | blink;
+        // 闪烁为 Low 级动画, 动画等级低于 Low (如 Disabled) 时仅静态高亮
+        indicator = text("!") | bgcolor(theme.errorColor) | color(Color::White) | bold;
     } else if (config_.isStreaming && config_.isStreaming()) {
         indicator = text("~") | color(theme.accentColor) | bold;
     } else {
         indicator = text(">") | color(theme.accentColor) | bold;
+    }
+
+    if (TUISettings::instance().isAnimationEnabled(AnimationLevel::Low)) {
+        indicator |= blink;
     }
 
     const int maxInputTotalLines = std::max(3, Terminal::Size().dimy / 2);

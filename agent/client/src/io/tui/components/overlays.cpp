@@ -1,5 +1,6 @@
 #include "agentxx-client/io/tui/components/overlays.h"
 #include "agentxx-client/io/tui/agent_tui.h"
+#include "agentxx-client/io/tui/framework/tui_settings.h"
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/terminal.hpp"
 #include <algorithm>
@@ -133,6 +134,21 @@ Element SettingsOverlay::OnRender() {
     }
     items.push_back(sysEntry | reflect(sysInfoBox_));
 
+    // 动画等级 (Enter/点击循环切换; 组件经 TUISettings::isAnimationEnabled() 判断启用)
+    items.push_back(text(" "));
+    items.push_back(text(" Animation ") | color(theme.hintColor));
+    auto animEntry = text(fmt::format(
+        " Animation Level: {} ",
+        TUISettings::instance().animationLevelName()
+    ));
+    if (selectedIndex_ == 3) {
+        animEntry = animEntry | bgcolor(theme.buttonActiveBgColor)
+                    | color(theme.buttonActiveTextColor) | bold | focus;
+    } else {
+        animEntry = animEntry | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor);
+    }
+    items.push_back(animEntry | reflect(animLevelBox_));
+
     return vbox({
                text(" Settings ") | bold | inverted,
                separator(),
@@ -152,7 +168,7 @@ bool SettingsOverlay::OnEvent(Event event) {
         return true;
     }
     if (event == Event::ArrowDown) {
-        if (selectedIndex_ < 2) {
+        if (selectedIndex_ + 1 < kItemCount) {
             ++selectedIndex_;
         }
         ctx_.postRedraw();
@@ -177,6 +193,10 @@ bool SettingsOverlay::OnEvent(Event event) {
                 !ctx_.showSystemInfo->load(std::memory_order_relaxed),
                 std::memory_order_relaxed
             );
+            ctx_.postRedraw();
+        } else if (selectedIndex_ == 3) {
+            // 动画等级循环切换; 切换后保持弹窗打开, 便于继续调整
+            cycleAnimationLevel();
             ctx_.postRedraw();
         }
         return true;
@@ -220,7 +240,18 @@ bool SettingsOverlay::handleMouse(const Mouse& mouse) {
         );
         return true;
     }
+    if (animLevelBox_.Contain(mouse.x, mouse.y)) {
+        cycleAnimationLevel();
+        return true;
+    }
     return false;
+}
+
+void SettingsOverlay::cycleAnimationLevel() {
+    auto& settings = TUISettings::instance();
+    const int next = (static_cast<int>(settings.animationLevel()) + 1)
+                     % static_cast<int>(TUISettings::kAnimationLevelNames.size());
+    settings.setAnimationLevel(static_cast<AnimationLevel>(next));
 }
 
 // ---------------------------------------------------------------------------

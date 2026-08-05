@@ -2,6 +2,7 @@
 
 #include "agentxx-client/io/tui/framework/modal_container.h"
 #include "agentxx-client/io/tui/framework/tui_context.h"
+#include "agentxx-client/io/tui/framework/tui_settings.h"
 #include "agentxx-client/io/tui/framework/tui_state.h"
 #include "agentxx-client/io/tui/scrollable.h"
 #include "agentxx-client/io/tui/tui_theme.h"
@@ -268,8 +269,9 @@ private:
     std::atomic<bool> redrawPending_{false};
 
     // ---- 系统资源监控 (每 kSystemInfoIntervalSec 秒采集一次 CPU/内存占用) ----
-    /// Info 侧边栏是否显示系统资源; 默认开启, 可被设置弹窗切换 (UI/监控线程均可读)
-    std::atomic<bool> systemInfoEnabled_{true};
+    /// Info 侧边栏系统资源显示开关存储于全局设置单例 TUISettings::showSystemInfo()
+    /// (默认开启, 可被设置弹窗切换; UI/监控线程均可读)
+
     /// 监控线程 (独立线程周期采集; 经 cv 睡眠, stop 时可立即唤醒退出)
     std::thread             sysMonitorThread_;
     std::condition_variable sysMonitorCv_;
