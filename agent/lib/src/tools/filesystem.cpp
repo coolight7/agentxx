@@ -389,7 +389,7 @@ asio::awaitable<std::string> FileSystemListTool::execute_async(const neograph::j
     }
     auto recursive = arguments.value("recursive", false);
     auto limit     = arguments.value<int64_t>("limit", 100);
-    auto timeout   = static_cast<int64_t>(arguments.value<double>("timeout", 120.0));
+    auto timeout   = static_cast<int64_t>(arguments.value<double>("timeout", 60.0));
 
     // 获取阻塞操作卸载线程池, 避免 std::filesystem 同步调用阻塞 io_context 事件循环
     auto  agentPtr = agentContext.lock();
@@ -1447,7 +1447,7 @@ asio::awaitable<std::string> FilesystemGlobTool::execute_async(const neograph::j
     if (file_patterns.empty()) {
         co_return R"({"error":"Arg `file_patterns` is empty"})";
     }
-    auto timeout = static_cast<int64_t>(arguments.value<double>("timeout", 120.0));
+    auto timeout = static_cast<int64_t>(arguments.value<double>("timeout", 60.0));
 
     for (auto& item : file_patterns) {
         item = agentxx::util::toCurrentSystemStandardPath(item);
@@ -1767,7 +1767,7 @@ asio::awaitable<std::string> FilesystemGrepTool::execute_async(const neograph::j
     if (output_mode.empty()) {
         co_return R"({"error":"Arg `output_mode` is empty"})";
     }
-    auto timeout = static_cast<int64_t>(arguments.value<double>("timeout", 120.0));
+    auto timeout = static_cast<int64_t>(arguments.value<double>("timeout", 60.0));
 
     // 新增参数 (对齐 Linux grep 行为)
     auto caseSensitive   = arguments.value<bool>("case_sensitive", true);
