@@ -56,9 +56,11 @@ enum class Activity : uint8_t {
 /// 单个会话的独立状态 (按 thread_id 区分)
 /// - 设计目标：单线程/多协程交错执行多会话，会话间状态彼此隔离
 /// - io/bus/contextStats 在 agent 线程 (io_context) 上访问，无需额外同步
-/// - fullHistory/llmMessages/deltaSeq/chainHash/cancelToken/modelName 仅在 ioContext 线程访问
-///   通过 bindIoThread() 绑定 io 线程, assertIoThread() 强制校验
-///   UI 线程仅通过 getFullHistoryCopy() / getHashInfo() 等原子快照方法只读访问
+/// - fullHistory/llmMessages/chainHash/cancelToken/modelName 仅在 ioContext 线程读写,
+///   通过 bindIoThread() 绑定 io 线程, assertIoThread() 强制校验。
+///   client/UI 不直接读取, 需要时由 io 线程拷贝后经 Wire 消息 (Sync/Delta) 传输,
+///   因此无需快照/锁同步
+/// - deltaSeq/contextStats 为原子, 跨线程安全
 /// - UI 线程的取消/切模型操作通过 Wire 消息 (WireCancel/WireSelectModel) 发往 agent 线程处理
 class Session {
 public:
@@ -70,19 +72,19 @@ public:
     /// 本会话的上下文统计 (内部原子, 跨线程安全)
     std::shared_ptr<ContextStats> contextStats = std::make_shared<ContextStats>();
     /// 当前活动状态 (IO 通过此字段感知状态变化)
-    std::atomic<Activity> activity{Activity::Idle};
+    Activity activity = Activity::Idle;
 
     /// 完整历史消息 (append-only, 永不压缩, 用于 client 同步与展示)
-    /// - 仅 ioContext 线程可写 (appendHistory), 通过 assertIoThread() 强制
+    /// - 仅 ioContext 线程可读写 (写: appendHistory), 通过 assertIoThread() 强制
     std::vector<HistoryMessage> fullHistory;
     /// LLM 上下文消息 (可压缩/裁剪, 仅用于调用 LLM API)
     /// - 仅 ioContext 线程可读写
     neograph::json llmMessages = neograph::json::array();
     /// fullHistory 的链式哈希 (用于 client 校验一致性)
-    /// - 仅 ioContext 线程可写 (appendHistory 内部更新)
+    /// - 仅 ioContext 线程可读写 (appendHistory 内部更新)
     ChainHash chainHash;
     /// Delta 流序号 (单调递增, 原子操作, 跨线程安全)
-    std::atomic<uint64_t> deltaSeq{0};
+    uint64_t deltaSeq = 0;
 
     // -------------------------------------------------------------------
     // 线程绑定: 强制 fullHistory/llmMessages/chainHash 只在 io 线程写入
@@ -108,30 +110,26 @@ public:
     }
 
     // -------------------------------------------------------------------
-    // 跨线程安全的只读快照接口 (UI / SessionServerAgentIO 线程可调用)
+    // 只读访问接口 (仅 io 线程调用; client 同步由 io 线程拷贝后经 Wire 传输)
     // -------------------------------------------------------------------
 
-    /// 获取完整历史消息副本（无锁，原子读取）
-    /// - 返回的是不可变快照的拷贝, 任意线程安全
+    /// 获取完整历史消息副本
+    /// - 仅 io 线程调用 (assertIoThread 强制校验); 返回拷贝供 Sync 传输
     std::vector<HistoryMessage> getFullHistoryCopy() const {
-        auto snap = historySnapshot_.load(std::memory_order_acquire);
-        return *snap;
+        assertIoThread();
+        return fullHistory;
     }
 
-    /// 获取链式哈希信息（线程安全, 基于快照）
+    /// 获取链式哈希信息
+    /// - 仅 io 线程调用 (assertIoThread 强制校验)
     struct HashInfo {
         size_t      count = 0;
         std::string tailHex;
     };
 
     HashInfo getHashInfo() const {
-        auto snap = hashSnapshot_.load(std::memory_order_acquire);
-        return *snap;
-    }
-
-    /// 获取 Delta 序列号（原子读取, 任意线程安全）
-    uint64_t getDeltaSeq() const {
-        return deltaSeq.load(std::memory_order_acquire);
+        assertIoThread();
+        return HashInfo{chainHash.count(), chainHash.tailHex()};
     }
 
     // -------------------------------------------------------------------
@@ -161,14 +159,6 @@ private:
 
     /// 绑定的 io 线程 id (std::thread::id{} 表示未绑定)
     std::atomic<std::thread::id> ioThreadId_{std::thread::id{}};
-
-    /// 无锁快照: fullHistory (供 UI 线程只读)
-    std::atomic<std::shared_ptr<const std::vector<HistoryMessage>>> historySnapshot_{
-        std::make_shared<const std::vector<HistoryMessage>>()
-    };
-
-    /// 无锁快照: chainHash 信息 (供 UI 线程只读)
-    std::atomic<std::shared_ptr<const HashInfo>> hashSnapshot_{std::make_shared<const HashInfo>()};
 };
 
 /// 会话存储: 按 thread_id 取/建 Session

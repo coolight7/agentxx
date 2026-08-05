@@ -9,9 +9,9 @@
 #include "test_a2a.h"
 #include "test_acp.h"
 #include "test_agent.h"
-#include "test_cancel.h"
 #include "test_aho_corasick.h"
 #include "test_anthropic_provider.h"
+#include "test_cancel.h"
 #include "test_codegraph_tools.h"
 #include "test_command_tools.h"
 #include "test_concurrency.h"
@@ -33,7 +33,6 @@
 #include "test_regex.h"
 #include "test_remote_agent.h"
 #include "test_screen_capture.h"
-#include "test_session_concurrency.h"
 #include "test_share_store.h"
 #include "test_string_tools.h"
 #include "test_string_util.h"
@@ -215,9 +214,6 @@ int main(int argn, char** argv) {
             monitor->stop();
         }
     }
-
-    // ---- Session 并发访问测试 ----
-    runSync("session_concurrency", agentxx::test::testSessionConcurrentAccess);
 
     std::cout << "======= Test Done =======" << std::endl;
     std::cout << "Total: passed=" << total.passed << " failed=" << total.failed << std::endl;

@@ -105,7 +105,7 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
 - **SessionStore**: 会话存储，按 thread_id 取/建 Session (仅 agent io_context 线程访问，无需锁保护)
 - **活动状态**: Idle / Streaming / ExecutingTool / WaitingInput 四种状态
 - **链式哈希**: fullHistory 使用 FNV-1a 链式哈希校验一致性
-- **线程绑定与无锁快照**: Session 通过 `bindIoThread()` 绑定 io 线程，`assertIoThread()` 强制校验可变状态 (fullHistory/llmMessages/chainHash) 仅在 io 线程写入；UI 线程通过 `getFullHistoryCopy()` / `getHashInfo()` 等原子快照方法 (基于 `std::atomic<shared_ptr<const T>>`) 只读访问，无需加锁
+- **线程绑定 (单线程读写)**: Session 通过 `bindIoThread()` 绑定 io 线程，`assertIoThread()` 强制校验可变状态 (fullHistory/llmMessages/chainHash) 仅在 io 线程读写；client/UI 不直接读取，需要时由 io 线程拷贝后经 Wire 消息 (Sync/Delta) 传输，因此无需快照/锁同步
 - **取消/切模型**: UI 线程的取消/切模型操作通过 Wire 消息 (WireCancel/WireSelectModel) 发往 agent 线程处理，避免跨线程竞争
 - **异步互斥锁**: `AsyncMutex` 基于 asio concurrent_channel 实现协程感知互斥，不会阻塞线程，适用于协程跨越 co_await 临界区
 
@@ -671,10 +671,8 @@ AgentContext
          │     ├── io                    (AgentIOBase)
          │     ├── bus                   (会话级事件总线)
          │     ├── contextStats          (std::atomic 字段, 跨线程安全)
-         │     ├── activity              (std::atomic<Activity>, 跨线程安全)
-         │     ├── fullHistory + chainHash (io 线程写入, atomic snapshot 供 UI 只读)
-         │     ├── historySnapshot_      (std::atomic<shared_ptr<const vector>>, 无锁快照)
-         │     ├── hashSnapshot_         (std::atomic<shared_ptr<const HashInfo>>, 无锁快照)
+         │     ├── activity              (Activity)
+         │     ├── fullHistory + chainHash (仅 io 线程读写, client 经 Wire 拷贝传输)
          │     ├── deltaSeq              (std::atomic<uint64_t>, 原子递增)
          │     ├── cancelToken           (仅 io 线程读写)
          │     └── modelName             (仅 io 线程读写, 经 Wire 切换)
@@ -682,8 +680,8 @@ AgentContext
                └── ...
 
 线程安全策略:
-  - io 线程: 写入 fullHistory/llmMessages/chainHash (assertIoThread 强制校验)
-  - UI 线程: 通过 atomic snapshot 只读访问 getFullHistoryCopy() / getHashInfo()
+  - io 线程: 读写 fullHistory/llmMessages/chainHash (assertIoThread 强制校验)
+  - client/UI: 不直接读取, 由 io 线程拷贝后经 Wire 消息 (Sync/Delta) 传输
   - 取消/切模型: 经 Wire 消息发往 agent 线程处理
   - SessionStore: 仅在 agent io_context 线程访问, 无需锁
   - AsyncMutex: 协程感知互斥锁, 用于跨越 co_await 的临界区保护
@@ -760,7 +758,7 @@ agent/
 │   │   │   ├── config.h          # AgentConfig / ModelConfig 配置
 │   │   │   ├── config_static.h   # 静态路径配置
 │   │   │   ├── context.h         # AgentContext / Session / SessionStore / ContextStats
-│   │   │   │                     #   Session: 线程绑定 + 无锁快照 (atomic snapshot)
+│   │   │   │                     #   Session: 线程绑定 (fullHistory/chainHash 单线程读写)
 │   │   │   ├── conversation_types.h # Delta(含NodeStart/End/seq/timing) / SyncPayload
 │   │   │   │                     #   HistoryMessage / ChainHash / AppendComponentNotification
 │   │   │   ├── model_registry.h  # ModelProviderRegistry (运行时模型切换)
@@ -894,7 +892,7 @@ agent/
 │   ├── test_subagent_bus.*       # 子代理总线测试
 │   ├── test_crossagent.*         # 跨代理通信测试
 │   ├── test_concurrency.*        # 并发测试
-│   ├── test_session_concurrency.* # Session 跨线程只读快照测试
+│   ├── test_session_concurrency.* # Session 线程模型测试 (fullHistory 单线程读写 + 原子字段并发)
 │   ├── test_remote_agent.*       # 远程 Agent (WS 传输 / SessionServerAgentIO) 测试
 │   ├── test_mcp.*                # MCP 协议测试 (多版本/HTTP/stdio)
 │   ├── test_a2a.*                # A2A 协议测试
@@ -965,7 +963,7 @@ BaseAgent (基类)
   ├── MiddlewareContext → 中间件栈
   ├── AgentContext
   │     ├── SessionStore → Session (per thread_id)
-  │     │     ├── fullHistory + chainHash (io 线程写入, atomic snapshot 供 UI 只读)
+  │     │     ├── fullHistory + chainHash (仅 io 线程读写, client 经 Wire 拷贝传输)
   │     │     ├── llmMessages (io 线程读写)
   │     │     ├── cancelToken / modelName (io 线程读写)
   │     │     ├── activity / deltaSeq / contextStats (atomic, 跨线程安全)

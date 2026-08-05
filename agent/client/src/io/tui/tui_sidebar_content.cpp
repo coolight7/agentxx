@@ -146,22 +146,16 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
         if (st.systemUsage) {
             const auto& usage = *st.systemUsage;
             sysEls.push_back(
-                hbox({
-                    text("|- CPU: "),
-                    text(fmt::format("{:.1f}%", usage.cpuUsagePercent)),
-                })
+                text(fmt::format("|- CPU: {:.1f}%", usage.cpuUsagePercent))
                 | color(theme_.normalColor)
             );
             sysEls.push_back(
-                hbox({
-                    text("|- RAM: "),
-                    text(fmt::format(
-                        "{:.1f}% ({} / {})",
-                        usage.memory.usagePercent,
-                        agentxx::util::formatSize(usage.memory.usedPhysicalMB * 1024 * 1024),
-                        agentxx::util::formatSize(usage.memory.totalPhysicalMB * 1024 * 1024)
-                    )),
-                })
+                text(fmt::format(
+                    "|- RAM: {:.1f}% {}/{}",
+                    usage.memory.usagePercent,
+                    agentxx::util::formatSize(usage.memory.usedPhysicalMB * 1024 * 1024),
+                    agentxx::util::formatSize(usage.memory.totalPhysicalMB * 1024 * 1024)
+                ))
                 | color(theme_.normalColor)
             );
         } else {
