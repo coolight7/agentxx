@@ -1160,6 +1160,78 @@ asio::awaitable<void>
     co_return;
 }
 
+/// 内存压力测试: 循环多次调用 grep, 用于排查内存泄漏/堆损坏
+asio::awaitable<void>
+    test_grep_mem_stress(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    namespace fs = std::filesystem;
+    // 构造较大测试目录: 100 个文件, 便于观察内存行为
+    auto stressDir = testDir + "/stress";
+    fs::create_directories(stressDir);
+    for (int i = 0; i < 100; i++) {
+        std::ofstream f(stressDir + "/f" + std::to_string(i) + ".txt");
+        for (int j = 0; j < 10; j++) {
+            f << "stress line token_" << i << " num " << j << "\n";
+        }
+    }
+    fs::create_directories(stressDir + "/sub");
+    for (int i = 0; i < 10; i++) {
+        std::ofstream f(stressDir + "/sub/s" + std::to_string(i) + ".cpp");
+        f << "int func" << i << "() { return " << i << "; }\n";
+    }
+
+    auto tool = agentxx::tools::FilesystemGrepTool{agentContext};
+
+    auto rssKB = []() -> long {
+        std::ifstream f("/proc/self/status");
+        std::string   line;
+        while (std::getline(f, line)) {
+            if (line.rfind("VmRSS:", 0) == 0) {
+                return std::stol(line.substr(6));
+            }
+        }
+        return -1;
+    };
+
+    // 正则 + files_with_matches
+    auto args = neograph::json{
+        {"text_patterns_is_regex", true},
+        {"text_patterns", neograph::json::array({"token_\\d+", "func\\d+"})},
+        {"file_patterns", neograph::json::array({stressDir + "/**/*"})},
+    };
+    auto rss0 = rssKB();
+    for (int i = 0; i < 30; i++) {
+        auto r = co_await tool.execute_async(args);
+        if (r.empty()) {
+            g_fs_failed++;
+            TEST_FAIL << "grep stress regex iter " << i << " returned empty" << std::endl;
+            co_return;
+        }
+    }
+    auto rss1 = rssKB();
+
+    // 纯文本 (AhoCorasick) + content 模式
+    auto args2 = neograph::json{
+        {"text_patterns_is_regex", false},
+        {"text_patterns", neograph::json::array({"token_5", "func3"})},
+        {"file_patterns", neograph::json::array({stressDir + "/**/*"})},
+        {"output_mode", "content"},
+    };
+    for (int i = 0; i < 30; i++) {
+        auto r = co_await tool.execute_async(args2);
+        if (r.empty()) {
+            g_fs_failed++;
+            TEST_FAIL << "grep stress plain iter " << i << " returned empty" << std::endl;
+            co_return;
+        }
+    }
+    auto rss2 = rssKB();
+
+    TEST_INFO << "grep stress RSS: start=" << rss0 << "KB after_regex30=" << rss1
+              << "KB after_plain30=" << rss2 << "KB" << std::endl;
+    g_fs_passed++;
+    TEST_PASS << "FilesystemGrepTool stress 60 iterations ok" << std::endl;
+}
+
 asio::awaitable<TestResult>
     run_filesystem_tools_tests(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     setupTestDir();
@@ -1228,6 +1300,7 @@ asio::awaitable<TestResult>
     co_await run(test_grep_context_lines);
     co_await run(test_grep_no_match_fail_fast);
     co_await run(test_grep_skip_directories);
+    co_await run(test_grep_mem_stress);
 
     cleanupTestDir();
     co_return TestResult{g_fs_passed, g_fs_failed};

@@ -330,7 +330,7 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
     // 产出增量事件的唯一出站口: 经 sendToPeer 发往对端 (server 端点会缓冲并经
     // transport 转发 client; io 为 nullptr 的 headless 场景则跳过)
     auto emitDelta = [&](Delta delta) {
-        delta.seq = session->deltaSeq.fetch_add(1, std::memory_order_acq_rel) + 1;
+        delta.seq += 1;
         if (ioPtr) {
             ioPtr->sendToPeer(std::move(delta));
         }

@@ -12,16 +12,6 @@ std::string Session::appendHistory(neograph::json msgData) {
     auto id = fmt::format("msg_{:06d}", ++msgIdCounter_);
     chainHash.append(msgData.dump());
     fullHistory.push_back(HistoryMessage{id, std::move(msgData)});
-
-    // 发布 fullHistory 新快照（原子替换，无锁读取）
-    auto snapshot = std::make_shared<const std::vector<HistoryMessage>>(fullHistory);
-    historySnapshot_.store(snapshot, std::memory_order_release);
-
-    // 发布 chainHash 新快照（供 UI 线程无锁读取）
-    auto hashSnap
-        = std::make_shared<const HashInfo>(HashInfo{chainHash.count(), chainHash.tailHex()});
-    hashSnapshot_.store(hashSnap, std::memory_order_release);
-
     return id;
 }
 

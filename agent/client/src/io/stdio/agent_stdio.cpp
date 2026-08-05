@@ -16,10 +16,10 @@
 #include <utility>
 
 // 首次会话启动通知的计数器 (仅用于控制台输出, 单会话场景下无需严格同步)
-static std::atomic<bool> g_firstSessionDone{false};
-static int               g_mcpCount    = 0;
-static int               g_skillCount  = 0;
-static int               g_memoryCount = 0;
+static bool g_firstSessionDone = false;
+static int  g_mcpCount         = 0;
+static int  g_skillCount       = 0;
+static int  g_memoryCount      = 0;
 
 StdIOClientAgentIO::StdIOClientAgentIO() :
     logSink_(std::make_shared<StderrLogSink>()) {
@@ -67,8 +67,9 @@ void StdIOClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
             isThinking_ = false;
 
             // 首次会话结束时输出汇总信息
-            if (!g_firstSessionDone.exchange(true)) {
+            if (!g_firstSessionDone) {
                 if (g_mcpCount > 0 || g_skillCount > 0 || g_memoryCount > 0) {
+                    g_firstSessionDone = true;
                     std::cout << fmt::format(
                         R"_(
 ┏━━━━━━ Session Startup ━━━━━━┓
@@ -81,12 +82,6 @@ void StdIOClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
                         g_skillCount,
                         g_memoryCount
                     ) << std::endl;
-
-                    // 重置计数器，以便下次新会话可以重新显示
-                    g_firstSessionDone = false;
-                    g_mcpCount         = 0;
-                    g_skillCount       = 0;
-                    g_memoryCount      = 0;
                 }
             }
             break;
