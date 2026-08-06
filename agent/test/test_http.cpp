@@ -1078,7 +1078,9 @@ asio::awaitable<void> test_http_client_beast_server() {
                 "",
                 {},
                 HttpClient::RequestConfig{.readChunkTimeout = std::chrono::seconds{5}},
-                [](std::string_view) -> bool { return false; }
+                [](std::string_view) -> bool {
+                    return false;
+                }
             );
         } catch (const std::exception& e) {
             threw = true;
@@ -1528,8 +1530,10 @@ asio::awaitable<void> test_http_client_dns_timeout() {
         std::cout << "[dns_timeout] skip: cannot backup resolv.conf: " << ec.message() << std::endl;
         co_return;
     }
+
     struct RestoreGuard {
         std::filesystem::path backup;
+
         ~RestoreGuard() {
             std::error_code ec2;
             std::filesystem::copy_file(
@@ -1554,7 +1558,8 @@ asio::awaitable<void> test_http_client_dns_timeout() {
     }
 
     // 唯一主机名, 避免 /etc/hosts 命中导致不走 DNS
-    std::string host = "agentxx-dns-hang-" + std::to_string(static_cast<long>(::getpid())) + ".example.com";
+    std::string host
+        = "agentxx-dns-hang-" + std::to_string(static_cast<long>(::getpid())) + ".example.com";
 
     // 1) connectTimeout 到期应立即报 DNS timeout (不等系统 DNS 超时 ~6s)
     {
@@ -1575,11 +1580,13 @@ asio::awaitable<void> test_http_client_dns_timeout() {
                 }
             );
         } catch (const std::exception& e) {
-            auto      elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now() - st
-            ).count();
+            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                               std::chrono::steady_clock::now() - st
+            )
+                               .count();
             std::string msg = e.what();
-            ok = (elapsed >= 700 && elapsed < 2500) && msg.find("DNS resolve timeout") != std::string::npos;
+            ok              = (elapsed >= 700 && elapsed < 2500)
+                 && msg.find("DNS resolve timeout") != std::string::npos;
             if (!ok) {
                 TEST_FAIL << "dns_timeout: expected DNS timeout in [0.7s, 2.5s), got " << elapsed
                           << " ms, err: " << msg << std::endl;
@@ -1630,13 +1637,15 @@ asio::awaitable<void> test_http_client_dns_timeout() {
 
         // 等待协程结束 (最多 3s)
         auto st = std::chrono::steady_clock::now();
-        while (!finished.load() && std::chrono::steady_clock::now() - st < std::chrono::seconds{3}) {
+        while (!finished.load() && std::chrono::steady_clock::now() - st < std::chrono::seconds{3}
+        ) {
             asio::steady_timer poll(ex, std::chrono::milliseconds(20));
             co_await poll.async_wait(asio::use_awaitable);
         }
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - st
-        ).count();
+                           std::chrono::steady_clock::now() - st
+        )
+                           .count();
         bool ok = finished.load() && elapsed < 2500; // 取消后应立即结束, 不允许拖到 connectTimeout
         if (!ok) {
             TEST_FAIL << "dns_timeout: cancel did not abort DNS wait (finished=" << finished.load()
@@ -1649,6 +1658,7 @@ asio::awaitable<void> test_http_client_dns_timeout() {
         }
     }
 #endif
+    co_return;
 }
 
 asio::awaitable<TestResult> run_http_client_tests() {
