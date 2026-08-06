@@ -26,6 +26,7 @@
 #include <charconv>
 #include <cstdint>
 #include <format>
+#include <iostream>
 #include <memory>
 
 using namespace ftxui;
@@ -298,6 +299,11 @@ void TUIClientAgentIO::start() {
         // 自定义 Loop: 每帧 pump 日志
         {
             Loop loop(screen.get(), handler);
+            // 启用括号粘贴 (bracketed paste, \x1B[?2004h): 终端将粘贴内容包裹于
+            // \x1B[200~ ... \x1B[201~ 之间, InputComponent 据此拦截多行粘贴,
+            // 粘贴的换行不会触发发送。与 FTXUI 的 Install() 一致, 控制序列
+            // 无条件发送 (其自身亦不判断 stdout 是否为 tty)。
+            std::cout << "\x1B[?2004h" << std::flush;
             while (!loop.HasQuitted()) {
                 // 本帧请求基线: 帧期间到达 (被合并进本帧渲染) 的重绘请求在帧结束后补帧,
                 // 保证用最新 frameState 重绘。必须在帧开头记录 —— 若在 RunOnceBlocking
@@ -331,6 +337,10 @@ void TUIClientAgentIO::start() {
                 }
             }
         }
+        // Loop 析构已触发 PostMain/Uninstall 恢复终端 (termios);
+        // 但 2004 括号粘贴模式是终端模拟器状态而非 termios, 需在此显式关闭,
+        // 否则残留模式会使后续程序粘贴时收到 \x1B[200~ 标记。
+        std::cout << "\x1B[?2004l" << std::flush;
         {
             std::lock_guard<std::mutex> lock(screenMutex_);
             screen_ = nullptr;
