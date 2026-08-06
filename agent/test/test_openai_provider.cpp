@@ -168,7 +168,7 @@ enum class MockMode {
     ServerError,
     Streaming,
     StreamingToolCall,
-    // OpenAI Responses API (/v1/responses)
+    // OpenAI Responses API (/responses)
     ResponsesNormal,
     ResponsesToolCall,
     ResponsesStreaming,
@@ -270,7 +270,7 @@ public:
     }
 
     // ------------------------------------------------------------------
-    // OpenAI Responses API (/v1/responses) response builders
+    // OpenAI Responses API (/responses) response builders
     // ------------------------------------------------------------------
 
     neograph::json

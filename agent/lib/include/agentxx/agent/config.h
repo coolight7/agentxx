@@ -33,7 +33,7 @@ public:
     std::string anthropicVersion = "2023-06-01";
     /// 自定义 API 路径（如 "/v1/chat/completions"）
     /// - 为空时使用 provider 默认路径: openai 为 "/chat/completions", codex/responses 为
-    /// "/v1/responses"
+    /// "/responses"
     /// - 用于适配各种 OpenAI 兼容服务 (DeepSeek/Moonshot/Ollama/Azure 等) 的不同端点路径
     std::string apiPath;
     /// 额外 HTTP 请求头 (如自定义鉴权头/网关透传头)

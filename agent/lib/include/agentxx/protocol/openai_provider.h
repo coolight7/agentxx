@@ -22,7 +22,7 @@ namespace server {
 ///
 /// 支持两种 API 形态 (由 type 控制):
 ///   - Chat Completions API  (`POST /chat/completions`, 默认)
-///   - Responses API       (`POST /v1/responses`, 即 Codex 使用的 API)
+///   - Responses API       (`POST /responses`, 即 Codex 使用的 API)
 ///
 /// 兼容性增强:
 ///   - baseUrl 自动去除末尾 '/'，避免拼接出 `//chat/completions` 双斜杠
@@ -126,7 +126,7 @@ private:
 
     inline static constexpr std::string_view kDefaultBaseUrl{"https://api.openai.com"};
     inline static constexpr std::string_view kDefaultApiPath{"/chat/completions"};
-    inline static constexpr std::string_view kDefaultResponsesPath{"/v1/responses"};
+    inline static constexpr std::string_view kDefaultResponsesPath{"/responses"};
 
     explicit OpenAIProvider(agentxx::agent::ModelConfig config);
 
