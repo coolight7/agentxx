@@ -8,7 +8,6 @@
 #include "agentxx/middlewares/summarization.h"
 #include "agentxx/protocol/mcp_client.h"
 #include "agentxx/protocol/openai_provider.h"
-#include "agentxx/tools/cross_agent_query.h"
 #include "agentxx/tools/execute_command.h"
 #include "agentxx/tools/filesystem.h"
 #include "agentxx/tools/planning.h"

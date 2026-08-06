@@ -7,6 +7,7 @@
 #include "agentxx/agent/model_registry.h"
 #include "agentxx/expand/get_cpu_gpu_use.h"
 #include "agentxx/middlewares/middleware.h"
+#include "agentxx/util/async_offload.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/string_util.h"
 #include "asio/as_tuple.hpp"
@@ -363,61 +364,73 @@ void TUIClientAgentIO::stop() {
 
 // ---------------------------------------------------------------------------
 // 系统资源监控 (每 kSystemInfoIntervalSec 秒采集一次 CPU/内存占用)
+//
+// 无独立线程: 采集周期由 client io_context 上的协程 (steady_timer) 驱动,
+// 实际的 CpuGpuMonitor::query() 经 util::offloadAsync 投递到 blockingPool
+// 线程池执行, 避免查询期间的等待/文件读取占用 client 事件循环。
 // ---------------------------------------------------------------------------
 
 void TUIClientAgentIO::startSystemMonitor() {
-    if (sysMonitorThread_.joinable()) {
+    if (sysMonitorRunning_.exchange(true, std::memory_order_acq_rel)) {
         return;
     }
-    {
-        std::lock_guard<std::mutex> lock(sysMonitorMutex_);
-        sysMonitorStop_ = false;
-    }
-    sysMonitorThread_ = std::thread([this]() {
-        // CpuGpuMonitor 内部缓存上次 CPU 采样值, 同一实例连续查询才能得到准确的 CPU 占用率,
-        // 因此在循环外构造一次, 跨采集周期复用
-        agentxx::expand::CpuGpuMonitor monitor;
-        for (;;) {
-            // 显示关闭时跳过采集 (仍保持周期唤醒, 以便随时重新开启)
-            if (TUISettings::instance().showSystemInfo()) {
-                // query() 为协程, 需 io_context 驱动; 每次采集使用临时 io_context 同步等待完成
-                asio::io_context io;
-                auto             usage = std::make_shared<agentxx::expand::CpuGpuUsage>();
-                asio::co_spawn(
-                    io,
-                    [&]() -> asio::awaitable<void> {
-                        *usage = co_await monitor.query();
-                    },
-                    asio::detached
-                );
-                io.run();
-                {
-                    std::lock_guard<std::mutex> lock(sharedState_.mutex());
-                    auto&                       st = sharedState_.mutableState();
-                    st.systemUsage                 = std::move(usage);
+    sysMonitorTimer_ = std::make_shared<asio::steady_timer>(ex_);
+    asio::co_spawn(
+        ex_,
+        [this]() -> asio::awaitable<void> {
+            // CpuGpuMonitor 内部缓存上次 CPU 采样值, 同一实例连续查询才能得到准确的
+            // CPU 占用率, 因此在循环外构造一次, 跨采集周期复用
+            auto monitor = std::make_shared<agentxx::expand::CpuGpuMonitor>();
+            auto timer   = sysMonitorTimer_;
+            for (;;) {
+                // 显示关闭时跳过采集 (仍保持周期唤醒, 以便随时重新开启)
+                if (TUISettings::instance().showSystemInfo()) {
+                    auto usage = std::make_shared<agentxx::expand::CpuGpuUsage>();
+                    try {
+                        if (agentContext_ && agentContext_->blockingPool) {
+                            // query() 为协程 (内部含 100ms 采样间隔定时器与文件读取),
+                            // 整体投递到 blockingPool 线程池执行, 不占用 client io_context;
+                            // offloadAsync 完成后自动恢复回 client executor
+                            *usage
+                                = co_await agentxx::util::offloadAsync<agentxx::expand::CpuGpuUsage>(
+                                    *agentContext_->blockingPool,
+                                    [monitor]() -> asio::awaitable<agentxx::expand::CpuGpuUsage> {
+                                        co_return co_await monitor->query();
+                                    }
+                                );
+                        } else {
+                            // 兜底: 无 blockingPool 时直接在 client executor 上执行
+                            // (query() 内部为异步操作, 不阻塞事件循环)
+                            *usage = co_await monitor->query();
+                        }
+                        {
+                            std::lock_guard<std::mutex> lock(sharedState_.mutex());
+                            auto&                       st = sharedState_.mutableState();
+                            st.systemUsage                 = std::move(usage);
+                        }
+                        postRedraw();
+                    } catch (const std::exception& e) {
+                        XX_LOGE("[tui] system monitor query failed: {}", e.what());
+                    }
                 }
-                postRedraw();
+                // 周期等待; stop() 时 cancel() 使本等待立即返回并退出循环
+                timer->expires_after(std::chrono::seconds(kSystemInfoIntervalSec));
+                auto [ec] = co_await timer->async_wait(asio::as_tuple(asio::use_awaitable));
+                if (ec || !sysMonitorRunning_.load(std::memory_order_acquire)) {
+                    break;
+                }
             }
-            // 周期睡眠; stop 时被 cv 唤醒立即退出
-            std::unique_lock<std::mutex> lock(sysMonitorMutex_);
-            sysMonitorCv_.wait_for(lock, std::chrono::seconds(kSystemInfoIntervalSec), [this] {
-                return sysMonitorStop_;
-            });
-            if (sysMonitorStop_) {
-                break;
-            }
-        }
-    });
+        },
+        asio::detached
+    );
 }
 
 void TUIClientAgentIO::stopSystemMonitor() {
-    {
-        std::lock_guard<std::mutex> lock(sysMonitorMutex_);
-        sysMonitorStop_ = true;
-    }
-    sysMonitorCv_.notify_all();
-    if (sysMonitorThread_.joinable()) {
-        sysMonitorThread_.join();
+    sysMonitorRunning_.store(false, std::memory_order_release);
+    // 取消挂起的周期定时器, 使监控协程尽快退出 (detached 协程无法 join,
+    // 依赖 timer cancel + 运行标志结束; 残留定时器会阻塞 client io_context 的 run())
+    if (sysMonitorTimer_) {
+        sysMonitorTimer_->cancel();
     }
 }
 
