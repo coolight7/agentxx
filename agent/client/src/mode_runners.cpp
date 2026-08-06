@@ -16,11 +16,59 @@
 #include "asio/io_context.hpp"
 #include "asio/steady_timer.hpp"
 #include "asio/use_awaitable.hpp"
+#include "fmt/format.h"
+#include <atomic>
+#include <chrono>
+#include <cstdint>
 #include <iostream>
+#include <random>
 #include <thread>
+
+// 获取当前进程 PID: 标准库与 asio 均无公开接口 (asio 内部实现也直接调用
+// ::getpid()/::GetCurrentProcessId(), 如 connect_pipe.ipp), 无更通用的替代;
+// 此为跨平台标准做法, 与 boost.process 内部实现一致。
+#ifdef _WIN32
+#include <windows.h>  // GetCurrentProcessId
+#else
+#include <unistd.h>  // getpid
+#endif
 
 namespace agentxx {
 namespace client {
+
+// ---------------------------------------------------------------------------
+// 会话 threadId 生成
+// ---------------------------------------------------------------------------
+
+/// 随机数兜底: random_device 在极端环境 (部分旧 Android/嵌入式) 可能抛异常,
+/// 退回以时钟为种子, 保证生成函数绝不失败
+static uint32_t randomSeed() {
+    try {
+        std::random_device rd;
+        return rd();
+    } catch (...) {
+        return static_cast<uint32_t>(
+            std::chrono::steady_clock::now().time_since_epoch().count()
+        );
+    }
+}
+
+/// 生成尽量唯一的会话 threadId:
+/// - 高精度时间戳: 区分不同时刻启动的会话 (纳秒级)
+/// - 进程 PID:     区分同一主机上的不同进程 (多次启动 agentxx)
+/// - 随机数:       增加不可预测性, 避免并发启动碰撞
+/// - 自增序号:     同进程内极端同纳秒多次调用亦唯一
+std::string generateUniqueThreadId() {
+    const auto ts = std::chrono::high_resolution_clock::now().time_since_epoch().count();
+#ifdef _WIN32
+    const long pid = static_cast<long>(::GetCurrentProcessId());
+#else
+    const long pid = static_cast<long>(::getpid());
+#endif
+    static std::atomic<uint32_t> seq{0};
+    const uint32_t               cnt = seq.fetch_add(1, std::memory_order_relaxed);
+    return fmt::format("sess-{:x}-{}-{:08x}-{:04x}", ts, pid, randomSeed(), cnt);
+}
 
 // ---------------------------------------------------------------------------
 // Local unified DIRECT (ChannelAgentIOTransport 直连 TUI ↔ SessionServerAgentIO)
@@ -109,8 +157,10 @@ static void runLocalUnifiedMain(std::shared_ptr<agent::CodeAgent> agent, Coro co
 static asio::awaitable<void> runLocalCliUnifiedAsync(std::shared_ptr<agent::CodeAgent> agent) {
     auto clientEx = co_await asio::this_coro::executor;
     auto io       = std::make_shared<StdIOClientAgentIO>();
+    // 每次启动生成唯一会话 id, 避免多实例/多次启动共用 "session" 导致会话串扰
+    const std::string threadId = generateUniqueThreadId();
     XX_OUT("======= Agentxx Client (CLI, in-process unified) =======");
-    auto controller = setupLocalUnifiedDirect(clientEx, agent, io, "session");
+    auto controller = setupLocalUnifiedDirect(clientEx, agent, io, threadId);
     // CLI 输入循环: 从 stdin 读取并发送
     std::cout << "\n>>> " << std::flush;
     for (;;) {
@@ -121,7 +171,7 @@ static asio::awaitable<void> runLocalCliUnifiedAsync(std::shared_ptr<agent::Code
         if (input->empty()) {
             continue;
         }
-        io->sendToPeer(agent::WireUserInput{"session", *input});
+        io->sendToPeer(agent::WireUserInput{threadId, *input});
     }
     // 停止服务端点并等待驱动循环退出 (避免 io_context 析构时销毁其协程导致 use-after-free)
     controller->stop();
@@ -141,7 +191,8 @@ static asio::awaitable<void> runLocalTuiUnifiedAsync(
     std::shared_ptr<agent::AgentConfig> config
 ) {
     auto              clientEx = co_await asio::this_coro::executor;
-    const std::string threadId = "session";
+    // 每次启动生成唯一会话 id, 避免多实例/多次启动共用 "session" 导致会话串扰
+    const std::string threadId = generateUniqueThreadId();
 
     auto ctx         = std::make_shared<agent::AgentContext>();
     ctx->agentConfig = config;
@@ -200,6 +251,10 @@ static asio::awaitable<void>
     auto ex = co_await asio::this_coro::executor;
     auto io = std::make_shared<StdIOClientAgentIO>();
 
+    // 每次启动生成唯一会话 id: 服务端按 threadId 区分会话,
+    // 共用 "session" 会使多个客户端实例挂到同一会话上互相串扰
+    const std::string threadId = generateUniqueThreadId();
+
     agent::WsAgentIOTransport::Config transportCfg;
     util::WsClientConfig              wsCfg;
     wsCfg.recvTimeout = std::chrono::seconds{60};
@@ -216,7 +271,7 @@ static asio::awaitable<void>
     XX_OUT("======= Agentxx Remote Client (CLI, auto-reconnect) =======");
 
     // 连接并握手
-    agent::WireHello hello{"session", token, 0, ""};
+    agent::WireHello hello{threadId, token, 0, ""};
     bool             ok = co_await transport->connect(hello);
     if (!ok) {
         XX_LOGE("[remote_cli] connection failed");
@@ -225,14 +280,14 @@ static asio::awaitable<void>
 
     // 指定模型 (经独立的模型选择通道, 而非随每条输入发送)
     if (!model.empty()) {
-        io->requestSelectModel("session", model);
+        io->requestSelectModel(threadId, model);
     }
 
     // 启动接收循环
     asio::co_spawn(ex, io->runTransportLoop(), asio::detached);
 
     // 客户端启动后拉取一次启动信息 (MCP/Skill/Memory)
-    io->requestAppendComponentInfo("session");
+    io->requestAppendComponentInfo(threadId);
 
     // 输入循环
     std::cout << "\n>>> " << std::flush;
@@ -244,7 +299,7 @@ static asio::awaitable<void>
         if (input->empty()) {
             continue;
         }
-        io->sendToPeer(agent::WireUserInput{"session", *input});
+        io->sendToPeer(agent::WireUserInput{threadId, *input});
     }
     transport->close();
 }
@@ -269,7 +324,10 @@ static asio::awaitable<void> runRemoteTuiAsync(
 
     auto ctx         = std::make_shared<agent::AgentContext>();
     ctx->agentConfig = config;
-    auto io          = std::make_shared<TUIClientAgentIO>(ex, ctx, "session");
+    // 每次启动生成唯一会话 id: 服务端按 threadId 区分会话,
+    // 共用 "session" 会使多个客户端实例挂到同一会话上互相串扰
+    const std::string threadId = generateUniqueThreadId();
+    auto              io       = std::make_shared<TUIClientAgentIO>(ex, ctx, threadId);
     io->setRemoteUrl(url);
     io->start();
 
@@ -282,7 +340,7 @@ static asio::awaitable<void> runRemoteTuiAsync(
     io->setTransport(transport);
 
     // 连接并握手
-    agent::WireHello hello{"session", token, 0, ""};
+    agent::WireHello hello{threadId, token, 0, ""};
     bool             ok = co_await transport->connect(hello);
     if (!ok) {
         XX_LOGE("[remote_tui] connection failed");
@@ -292,14 +350,14 @@ static asio::awaitable<void> runRemoteTuiAsync(
 
     // 指定模型 (经独立的模型选择通道); 先于 GetModel 发送, 使其返回所选模型
     if (!model.empty()) {
-        io->requestSelectModel("session", model);
+        io->requestSelectModel(threadId, model);
     }
 
     // 请求服务端当前模型信息, 待 onPeerMessage 收到 WireModelInfo 后更新显示
-    io->sendToPeer(agent::WireGetModel{"session"});
+    io->sendToPeer(agent::WireGetModel{threadId});
 
     // 客户端启动后拉取一次启动信息 (MCP/Skill/Memory)
-    io->requestAppendComponentInfo("session");
+    io->requestAppendComponentInfo(threadId);
 
     // 启动接收循环
     asio::co_spawn(ex, io->runTransportLoop(), asio::detached);

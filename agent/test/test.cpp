@@ -41,6 +41,7 @@
 #ifdef AGENTXX_BUILD_CLIENT
 #include "test_tui_input.h"
 #include "test_tui_settings.h"
+#include "test_thread_id.h"
 #endif
 #include "test_util_misc.h"
 #include "test_web_search_tools.h"
@@ -116,6 +117,7 @@ int main(int argn, char** argv) {
 #ifdef AGENTXX_BUILD_CLIENT
     runSync("tui_settings", agentxx::test::testTuiSettings);
     runSync("tui_input", agentxx::test::testTuiInput);
+    runSync("thread_id", agentxx::test::testThreadId);
 #endif
 
     // ---- 异步测试模块 ----
