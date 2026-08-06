@@ -508,9 +508,9 @@ void test_utf8Repair() {
 
     // 混合: 合法部分保留, 非法被替换且不吞掉后续合法字符
     {
-        std::string s = "a";
-        s += "\xFF";
-        s += " b中";
+        std::string s  = "a";
+        s             += "\xFF";
+        s             += " b中";
         XX_TEST_EXPECT_TRUE(agentxx::util::utf8Repair(s));
         XX_TEST_EXPECT_EQ(s, "a" + replacement + " b中");
     }
@@ -529,7 +529,10 @@ void test_utf8Repair() {
         s += "\xFF";
         s += "\xE6\x96\x87"; // 文
         XX_TEST_EXPECT_TRUE(agentxx::util::utf8Repair(s));
-        XX_TEST_EXPECT_EQ(s, std::string("\xE4\xB8\xAD", 3) + replacement + std::string("\xE6\x96\x87", 3));
+        XX_TEST_EXPECT_EQ(
+            s,
+            std::string("\xE4\xB8\xAD", 3) + replacement + std::string("\xE6\x96\x87", 3)
+        );
     }
 
     // 幂等: 修复后结果为合法 UTF-8, 再次调用返回 false 且不再修改
@@ -788,7 +791,7 @@ void test_parseNumberFromString() {
     auto r3 = agentxx::util::parseNumberFromString("12a", iv);
     XX_TEST_EXPECT_EQ(r3.ec, std::errc{});
     XX_TEST_EXPECT_EQ(iv, 12);
-    XX_TEST_EXPECT_EQ(r3.ptr, std::string_view("12a").data() + 2);
+    XX_TEST_EXPECT_EQ(std::string_view{r3.ptr}, std::string_view("12a").data() + 2);
 
     // 非法输入
     auto r4 = agentxx::util::parseNumberFromString("abc", iv);

@@ -472,23 +472,26 @@ template<typename T>
     return oss.str();
 }
 
-[[nodiscard]] inline constexpr std::vector<std::string_view>
-    strSplit(std::string_view in_str, char delim) {
+[[nodiscard]] inline std::vector<std::string_view>
+    strSplit(std::string_view in_str, char delim) noexcept {
     auto                          split = in_str | std::views::split(delim);
     std::vector<std::string_view> result;
-    result.reserve(std::ranges::distance(split));
+
     for (auto&& sub : split) {
-        result.emplace_back(&*sub.begin(), std::ranges::distance(sub));
+        if (sub.empty()) {
+            result.emplace_back();
+        } else {
+            result.emplace_back(&*sub.begin(), sub.size());
+        }
     }
     return result;
 }
 
-[[nodiscard]] inline constexpr std::vector<std::string>
-    strSplitCopid(std::string_view in_str, char delim) {
-    auto                     split_view = in_str | std::views::split(delim);
+[[nodiscard]] inline std::vector<std::string> strSplitCopid(std::string_view in_str, char delim) {
+    auto                     split = in_str | std::views::split(delim);
     std::vector<std::string> result;
-    result.reserve(std::ranges::distance(split_view));
-    for (auto sub : split_view) {
+
+    for (const auto& sub : split) {
         result.emplace_back(sub.begin(), sub.end());
     }
     return result;
