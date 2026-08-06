@@ -30,19 +30,8 @@ void ToolcallWrapNode::onHandleStartError(
     neograph::graph::NodeInput&                         in,
     neograph::graph::NodeOutput&                        result
 ) noexcept {
-    // TODO: 更改为在 baseRun 拦截生成 message，这里不知道出错的 toolcall id，生成是不对的
-    // 插入消息，保证消息顺序正确
+    // START 出错，不运行 execTool，直接替换插入消息，保证消息顺序正确
     if (false == errorRethrow && isCurrentError) {
-        auto msg = neograph::ChatMessage{
-            .role    = "tool",
-            .content = fmt::format(
-                R"({{"error": "{}/Start call `{}` exception: {}"}})",
-                nodeName,
-                item.name,
-                exceptionStr
-            ),
-            .flags = neograph::MessageFlag::AutoInserted,
-        };
         // 回填 tool_call_id/tool_name，确保 ToolEnd 能正确关联
         auto  messages = in.state.get_messages();
         auto* assistant_msg
@@ -50,15 +39,24 @@ void ToolcallWrapNode::onHandleStartError(
                 messages
             );
         if (assistant_msg && !assistant_msg->tool_calls.empty()) {
-            msg.tool_call_id = assistant_msg->tool_calls.front().id;
-            msg.tool_name    = assistant_msg->tool_calls.front().name;
+            auto appendToolResult = neograph::json::array();
+            for (const auto& tool : assistant_msg->tool_calls) {
+                auto msg = neograph::ChatMessage{
+                    .role         = "tool",
+                    .content      = fmt::format("[Start/Exception aborted: {}]", exceptionStr),
+                    .tool_call_id = tool.id,
+                    .tool_name    = tool.name,
+                    .flags        = neograph::MessageFlag::AutoInserted,
+                };
+                auto msgJson = neograph::json{};
+                neograph::to_json(msgJson, msg);
+                appendToolResult.push_back(std::move(msgJson));
+            }
+            result.writes.push_back(neograph::graph::ChannelWrite{
+                "messages",
+                std::move(appendToolResult),
+            });
         }
-        auto msgJson = neograph::json{};
-        neograph::to_json(msgJson, msg);
-        result.writes.push_back(neograph::graph::ChannelWrite{
-            "messages",
-            neograph::json::array({msgJson}),
-        });
     }
 }
 
@@ -71,11 +69,6 @@ void ToolcallWrapNode::onHandleBaseRunError(
 ) noexcept {
     // 插入消息，保证消息顺序正确
     if (false == errorRethrow && isCurrentError) {
-        auto msg = neograph::ChatMessage{
-            .role    = "tool",
-            .content = fmt::format("[Exception aborted: {}]", exceptionStr),
-            .flags   = neograph::MessageFlag::AutoInserted,
-        };
         // 回填 tool_call_id/tool_name，确保 ToolEnd 能正确关联
         auto  messages = in.state.get_messages();
         auto* assistant_msg
@@ -83,15 +76,24 @@ void ToolcallWrapNode::onHandleBaseRunError(
                 messages
             );
         if (assistant_msg && !assistant_msg->tool_calls.empty()) {
-            msg.tool_call_id = assistant_msg->tool_calls.front().id;
-            msg.tool_name    = assistant_msg->tool_calls.front().name;
+            auto appendToolResult = neograph::json::array();
+            for (const auto& tool : assistant_msg->tool_calls) {
+                auto msg = neograph::ChatMessage{
+                    .role         = "tool",
+                    .content      = fmt::format("[BaseRun/Exception aborted: {}]", exceptionStr),
+                    .tool_call_id = tool.id,
+                    .tool_name    = tool.name,
+                    .flags        = neograph::MessageFlag::AutoInserted,
+                };
+                auto msgJson = neograph::json{};
+                neograph::to_json(msgJson, msg);
+                appendToolResult.push_back(std::move(msgJson));
+            }
+            result.writes.push_back(neograph::graph::ChannelWrite{
+                "messages",
+                std::move(appendToolResult),
+            });
         }
-        auto msgJson = neograph::json{};
-        neograph::to_json(msgJson, msg);
-        result.writes.push_back(neograph::graph::ChannelWrite{
-            "messages",
-            neograph::json::array({msgJson}),
-        });
     }
 }
 
@@ -346,10 +348,6 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
         toolcallResults.emplace_back(onExecTool(tc));
     }
     for (auto& item : toolcallResults) {
-        // 取消埋点: 已取消则不再启动下一个 tool
-        if (in.ctx.cancel_token) {
-            in.ctx.cancel_token->throw_if_cancelled("before tool execution");
-        }
         // TODO: 真正并行
         auto           msg = co_await std::move(item);
         neograph::json msg_json;
