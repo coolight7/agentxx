@@ -255,7 +255,7 @@ mcp_servers:
 > ```yaml
 > models:
 >   - name: "openai-responses"
->     type: "openai-responses"                       # 使用 OpenAI Responses API (/v1/responses)
+>     type: "openai-responses"                       # 使用 OpenAI Responses API (/responses)
 >     base_url: "https://api.openai.com"  # 或 ChatGPT Codex 兼容网关
 >     api_key: "${CODEX_API_KEY}"
 >     model_name: "gpt-5-codex"

@@ -257,9 +257,6 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
     tools.push_back(std::make_unique<agentxx::tools::ExecuteLinuxCommandTool>(agentContext));
 #endif
 
-    /// Cross-agent query
-    tools.push_back(std::make_unique<agentxx::tools::CrossAgentQueryTool>(agentContext));
-
     /// Subagent
     {
         neograph::graph::NodeContext nodeContext{};
