@@ -18,6 +18,18 @@ int g_fs_failed = 0;
 const std::string testDir
     = (std::filesystem::temp_directory_path() / "agentxx_test_filesystem").generic_string();
 
+/// 计算 testDir 相对当前工作目录的路径 (供"相对路径解析"测试使用)。
+/// 注意: Windows 上 temp 目录 (通常 C:) 与测试进程工作目录可能跨盘,
+/// 此时 MSVC 的 std::filesystem::relative 会返回空路径 (跨盘无相对路径)。
+/// 空则回退为绝对路径 (工具对绝对路径同样支持, 不影响验证目标),
+/// 避免测试在跨盘环境下误报失败。
+std::string testDirRelativeToCwd() {
+    auto rel    = std::filesystem::relative(testDir, std::filesystem::current_path());
+    auto relStr = rel.generic_string();
+    return relStr.empty() ? testDir : relStr;
+}
+
+
 void setupTestDir() {
     namespace fs = std::filesystem;
     if (fs::exists(testDir)) {
@@ -169,11 +181,7 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_list_file_relative_path(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FileSystemListTool{agentContext};
-    auto relPath = std::filesystem::relative(
-                       std::filesystem::path{testDir},
-                       std::filesystem::current_path()
-    )
-                       .generic_string();
+    auto relPath = testDirRelativeToCwd();
     auto args = neograph::json{
         {"path", relPath}
     };
@@ -325,12 +333,8 @@ asio::awaitable<void>
 /// 相对路径读取: 应自动转为绝对路径后成功读取
 asio::awaitable<void>
     test_read_text_file_relative_path(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
-    auto tool = agentxx::tools::FilesystemReadTextFileTool{agentContext};
-    auto relPath = std::filesystem::relative(
-                       std::filesystem::path{testDir + "/test1.txt"},
-                       std::filesystem::current_path()
-    )
-                       .generic_string();
+    auto tool    = agentxx::tools::FilesystemReadTextFileTool{agentContext};
+    auto relPath = testDirRelativeToCwd() + "/test1.txt";
     auto args = neograph::json{
         {"path", relPath}
     };
@@ -911,12 +915,8 @@ asio::awaitable<void> test_glob_recursive(std::weak_ptr<agentxx::agent::AgentCon
 /// 相对 glob 模式: 应自动转为绝对路径后匹配
 asio::awaitable<void>
     test_glob_relative_pattern(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
-    auto tool = agentxx::tools::FilesystemGlobTool{agentContext};
-    auto relDir = std::filesystem::relative(
-                      std::filesystem::path{testDir},
-                      std::filesystem::current_path()
-    )
-                      .generic_string();
+    auto tool   = agentxx::tools::FilesystemGlobTool{agentContext};
+    auto relDir = testDirRelativeToCwd();
     auto args = neograph::json{
         {"file_patterns", neograph::json::array({relDir + "/*.txt"})},
     };

@@ -1404,6 +1404,30 @@ asio::awaitable<std::string> FilesystemGlobTool::execute_async(const neograph::j
 
     // 解析可选参数
     auto caseSensitive   = arguments.value<bool>("case_sensitive", true);
+
+    // 大小写不敏感时, 手动将模式中顶层 ASCII 字母折叠为 [xX] 字符类,
+    // 再以大小写敏感模式调用 glob 库 (折叠后的模式本身已含字符类通配符)。
+    // 不能依赖 glob 库内部的 case-fold: 它会对整个模式折叠, 包括 Windows 盘符
+    // `C:` -> `[cC]:`; 而 `[cC]` 不是合法盘符字符, fs::path 无法再识别该路径为
+    // 绝对路径, 路径退化为相对路径导致 glob 遍历失败 (如 `C:/.../TEST1.TXT`)。
+    // 因此这里折叠后还原 root-name (盘符 `C:` / UNC `\\server\share`), 保持绝对路径有效;
+    // Linux (无盘符) 下 root-name 为空, 不受影响。
+    if (!caseSensitive) {
+        for (auto& item : file_patterns) {
+            auto root   = std::filesystem::path{item}.root_name().generic_string();
+            auto folded = glob::case_fold_pattern(item);
+            if (!root.empty()) {
+                auto foldedRoot = glob::case_fold_pattern(root);
+                if (folded.size() >= foldedRoot.size()
+                    && folded.compare(0, foldedRoot.size(), foldedRoot) == 0) {
+                    folded.replace(0, foldedRoot.size(), root);
+                }
+            }
+            item = std::move(folded);
+        }
+        // 模式已折叠完成, glob 库不再重复折叠
+        caseSensitive = true;
+    }
     auto maxDepth        = arguments.value<int64_t>("max_depth", -1);
     auto doSort          = arguments.value<bool>("sort", false);
     auto typeFilter      = collectTypeFilter(arguments.value("type", neograph::json{}));
