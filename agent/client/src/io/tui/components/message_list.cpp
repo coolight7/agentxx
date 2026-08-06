@@ -213,11 +213,6 @@ std::vector<ScrollItem> MessageListComponent::buildItems() {
             }
         }
 
-        // 流式 markdown 大文本降级: cmark 解析成本随文本线性增长, 每 token 全量
-        // 重解析导致 O(n²); 超过阈值后改为纯文本渲染, 保证长输出时流式渲染流畅
-        constexpr size_t kMaxStreamingMarkdownBytes = 16384;
-        const bool       usePlainStreaming = st.currentToken->size() > kMaxStreamingMarkdownBytes;
-
         Element block;
         if (st.currentTokenRole == TUIMessage::Role::Thinking) {
             Elements lines;
@@ -230,7 +225,7 @@ std::vector<ScrollItem> MessageListComponent::buildItems() {
                 );
             }
             lines.push_back(hbox(std::move(header)));
-            if (usePlainStreaming) {
+            if (false == TUISettings::instance().isAnimationEnabled(AnimationLevel::Ultra)) {
                 // 超长流式文本: 纯文本渲染, 避免每 token 全量 cmark 解析
                 lines.push_back(paragraph(*st.currentToken) | color(theme.thinkingColor));
             } else {
@@ -247,7 +242,7 @@ std::vector<ScrollItem> MessageListComponent::buildItems() {
             }
             block = vbox(std::move(lines));
         } else {
-            if (usePlainStreaming) {
+            if (false == TUISettings::instance().isAnimationEnabled(AnimationLevel::Low)) {
                 block = paragraph(*st.currentToken) | color(theme.normalColor);
             } else {
                 auto [el, builder] = renderMarkdown(
