@@ -234,6 +234,36 @@ void test_regex_case_sensitive() {
     XX_TEST_EXPECT_EQ(results.size(), (size_t)0);
 }
 
+void test_regex_case_insensitive() {
+    // caseInsensitive=true: 大小写不敏感匹配 (Hyperscan: HS_FLAG_CASELESS,
+    // std::regex fallback: icase), 不再依赖外部折叠模式
+    auto                            re = XXRegex::createRegex("hello", XXRegex::defHSFlags_normal, true);
+    std::vector<XXRegexMatchResult> results;
+
+    XX_TEST_EXPECT_TRUE(re->match("Hello World", results));
+    XX_TEST_EXPECT_EQ(results.size(), (size_t)1);
+    XX_TEST_EXPECT_EQ(results[0].start, (size_t)0);
+    XX_TEST_EXPECT_EQ(results[0].end, (size_t)5);
+
+    XX_TEST_EXPECT_TRUE(re->match("heLLo", results));
+    XX_TEST_EXPECT_TRUE(re->match("HELLO", results));
+
+    // 多模式 + 大小写不敏感
+    auto re_multi = XXRegex::createRegex(
+        std::vector<std::string>{"foo", "bar"},
+        XXRegex::defHSFlags_normal,
+        true
+    );
+    XX_TEST_EXPECT_TRUE(re_multi->match("FOO", results));
+    XX_TEST_EXPECT_TRUE(re_multi->match("BaR", results));
+    XX_TEST_EXPECT_FALSE(re_multi->match("baz", results));
+
+    // 大小写不敏感不应影响其他语法 (如字符类内的转义)
+    auto re_class = XXRegex::createRegex("[a-z]+", XXRegex::defHSFlags_normal, true);
+    XX_TEST_EXPECT_TRUE(re_class->match("ABC", results));
+    XX_TEST_EXPECT_TRUE(re_class->match("abc", results));
+}
+
 void test_regex_only_contains() {
     auto re = XXRegex::createRegex("hello", XXRegex::defHSFlags_onlyContains);
     std::vector<XXRegexMatchResult> results;
@@ -440,6 +470,7 @@ TestResult testRegex() {
     test_regex_alternation();
     test_regex_chinese();
     test_regex_case_sensitive();
+    test_regex_case_insensitive();
     test_regex_only_contains();
     test_regex_invalid_pattern();
     test_regex_exact_match();

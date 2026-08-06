@@ -2,7 +2,6 @@
 - tui 特化各种 toolcall 渲染
 - node 可支持插件化加载动态库 + graph json 定义
 - BaseAgent 增加支持 usage 统计
-- 侧边栏显示cpu占用和内存占用
 - 优化各种tool的效果，贴近命令行
 - ctrl+c 结束时卡很久
 - 会话独立日志

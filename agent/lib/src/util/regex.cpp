@@ -24,10 +24,15 @@ public:
     // 初始化Hyperscan数据库
     XXRegexHP(
         const std::string& regstr,
-        unsigned int       flags = agentxx::util::XXRegex::defHSFlags_normal
+        unsigned int       flags          = agentxx::util::XXRegex::defHSFlags_normal,
+        bool               caseInsensitive = false
     ) :
         hs_db(nullptr),
         hs_scratch(nullptr) {
+        // 大小写不敏感: 直接使用 Hyperscan 的 HS_FLAG_CASELESS, 而非外部改写模式
+        if (caseInsensitive) {
+            flags |= HS_FLAG_CASELESS;
+        }
         // 编译正则表达式到Hyperscan数据库
         hs_compile_error_t* compile_err = nullptr;
         hs_error_t          err
@@ -55,13 +60,19 @@ public:
 
     XXRegexHP(
         const std::vector<std::string>& regstrs,
-        unsigned int                    flags = agentxx::util::XXRegex::defHSFlags_normal
+        unsigned int                    flags           = agentxx::util::XXRegex::defHSFlags_normal,
+        bool                            caseInsensitive = false
     ) :
         hs_db(nullptr),
         hs_scratch(nullptr) {
         // 编译正则表达式到Hyperscan数据库
         hs_compile_error_t*       compile_err = nullptr;
         std::vector<unsigned int> flagslist(regstrs.size(), flags);
+        if (caseInsensitive) {
+            for (auto& f : flagslist) {
+                f |= HS_FLAG_CASELESS;
+            }
+        }
         std::vector<const char*>  reglist;
         reglist.reserve(regstrs.size());
         for (const auto& reg : regstrs) {
@@ -241,11 +252,14 @@ private:
     hs_scratch_t*  hs_scratch; // Hyperscan扫描缓冲区
 };
 
-std::shared_ptr<agentxx::util::XXRegex>
-    agentxx::util::XXRegex::createRegex(const std::string& regstr, unsigned int flags) {
+std::shared_ptr<agentxx::util::XXRegex> agentxx::util::XXRegex::createRegex(
+    const std::string& regstr,
+    unsigned int       flags,
+    bool               caseInsensitive
+) {
     return agentxx::util::catchError<std::shared_ptr<agentxx::util::XXRegex>>(
         [&]() -> std::shared_ptr<agentxx::util::XXRegex> {
-            return std::make_shared<XXRegexHP>(regstr, flags);
+            return std::make_shared<XXRegexHP>(regstr, flags, caseInsensitive);
         },
         [&](std::string errinfo) -> std::shared_ptr<agentxx::util::XXRegex> {
             XX_LOGE("Regex compilation failed: {} | {}", errinfo, regstr);
@@ -256,11 +270,12 @@ std::shared_ptr<agentxx::util::XXRegex>
 
 std::shared_ptr<agentxx::util::XXRegex> agentxx::util::XXRegex::createRegex(
     const std::vector<std::string>& regstrs,
-    unsigned int                    flags
+    unsigned int                    flags,
+    bool                            caseInsensitive
 ) {
     return agentxx::util::catchError<std::shared_ptr<agentxx::util::XXRegex>>(
         [&]() -> std::shared_ptr<agentxx::util::XXRegex> {
-            return std::make_shared<XXRegexHP>(regstrs, flags);
+            return std::make_shared<XXRegexHP>(regstrs, flags, caseInsensitive);
         },
         [&](std::string errinfo) -> std::shared_ptr<agentxx::util::XXRegex> {
             XX_LOGE("Regex compilation failed: {} | {}", errinfo, regstrs.size());
@@ -285,12 +300,19 @@ public:
     // 单模式构造函数
     XXRegexStdRegex(
         const std::string& regstr,
-        unsigned int       flags = agentxx::util::XXRegex::defHSFlags_normal
+        unsigned int       flags           = agentxx::util::XXRegex::defHSFlags_normal,
+        bool               caseInsensitive = false
     ) :
         valid_(false),
         multi_mode_(false) {
         try {
-            regex_ = std::regex(regstr, std::regex::ECMAScript | std::regex::optimize);
+            // 大小写不敏感: 使用 std::regex::icase (此前忽略 flags 参数, 导致
+            // HS_FLAG_CASELESS 语义无法用于 fallback 后端)
+            auto reFlags = std::regex::ECMAScript | std::regex::optimize;
+            if (caseInsensitive) {
+                reFlags |= std::regex::icase;
+            }
+            regex_ = std::regex(regstr, reFlags);
             valid_ = true;
         } catch (const std::regex_error& e) {
             XX_LOGE("Regex编译失败: {} | {}", e.what(), regstr);
@@ -300,14 +322,19 @@ public:
     // 多模式构造函数
     XXRegexStdRegex(
         const std::vector<std::string>& regstrs,
-        unsigned int                    flags = agentxx::util::XXRegex::defHSFlags_normal
+        unsigned int                    flags           = agentxx::util::XXRegex::defHSFlags_normal,
+        bool                            caseInsensitive = false
     ) :
         valid_(false),
         multi_mode_(true) {
+        auto reFlags = std::regex::ECMAScript | std::regex::optimize;
+        if (caseInsensitive) {
+            reFlags |= std::regex::icase;
+        }
         regexes_.reserve(regstrs.size());
         for (const auto& str : regstrs) {
             try {
-                regexes_.emplace_back(str, std::regex::ECMAScript | std::regex::optimize);
+                regexes_.emplace_back(str, reFlags);
             } catch (const std::regex_error& e) {
                 XX_LOGE("Regex编译失败: {} | {}", e.what(), str);
                 regexes_.clear();
@@ -431,11 +458,14 @@ private:
     bool                    multi_mode_ = false; // 是否多模式
 };
 
-std::shared_ptr<agentxx::util::XXRegex>
-    agentxx::util::XXRegex::createRegex(const std::string& regstr, unsigned int flags) {
+std::shared_ptr<agentxx::util::XXRegex> agentxx::util::XXRegex::createRegex(
+    const std::string& regstr,
+    unsigned int       flags,
+    bool               caseInsensitive
+) {
     return agentxx::util::catchError<std::shared_ptr<agentxx::util::XXRegex>>(
         [&]() -> std::shared_ptr<agentxx::util::XXRegex> {
-            return std::make_shared<XXRegexStdRegex>(regstr, flags);
+            return std::make_shared<XXRegexStdRegex>(regstr, flags, caseInsensitive);
         },
         [&](std::string errinfo) -> std::shared_ptr<agentxx::util::XXRegex> {
             XX_LOGE("Regex compilation failed: {} | {}", errinfo, regstr);
@@ -446,11 +476,12 @@ std::shared_ptr<agentxx::util::XXRegex>
 
 std::shared_ptr<agentxx::util::XXRegex> agentxx::util::XXRegex::createRegex(
     const std::vector<std::string>& regstrs,
-    unsigned int                    flags
+    unsigned int                    flags,
+    bool                            caseInsensitive
 ) {
     return agentxx::util::catchError<std::shared_ptr<agentxx::util::XXRegex>>(
         [&]() -> std::shared_ptr<agentxx::util::XXRegex> {
-            return std::make_shared<XXRegexStdRegex>(regstrs, flags);
+            return std::make_shared<XXRegexStdRegex>(regstrs, flags, caseInsensitive);
         },
         [&](std::string errinfo) -> std::shared_ptr<agentxx::util::XXRegex> {
             XX_LOGE("Regex compilation failed: {} | {}", errinfo, regstrs.size());
