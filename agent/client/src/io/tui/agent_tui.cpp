@@ -29,26 +29,7 @@
 #include <iostream>
 #include <memory>
 
-#ifdef _WIN32
-#include <io.h>  // _isatty, _fileno
-#else
-#include <unistd.h>  // isatty, STDOUT_FILENO
-#endif
-
 using namespace ftxui;
-
-// ---------------------------------------------------------------------------
-// 终端辅助
-// ---------------------------------------------------------------------------
-
-/// 判断 stdout 是否为终端 (管道/重定向输出时不发送终端控制序列)
-static bool stdoutIsTerminal() {
-#ifdef _WIN32
-    return _isatty(_fileno(stdout)) != 0;
-#else
-    return isatty(STDOUT_FILENO) != 0;
-#endif
-}
 
 // ---------------------------------------------------------------------------
 // 构造 / 析构
@@ -320,11 +301,9 @@ void TUIClientAgentIO::start() {
             Loop loop(screen.get(), handler);
             // 启用括号粘贴 (bracketed paste, \x1B[?2004h): 终端将粘贴内容包裹于
             // \x1B[200~ ... \x1B[201~ 之间, InputComponent 据此拦截多行粘贴,
-            // 粘贴的换行不会触发发送。Loop 构造时已 Install (启用 VT 处理),
-            // 控制序列不占显示区域, 此处输出安全。
-            if (stdoutIsTerminal()) {
-                std::cout << "\x1B[?2004h" << std::flush;
-            }
+            // 粘贴的换行不会触发发送。与 FTXUI 的 Install() 一致, 控制序列
+            // 无条件发送 (其自身亦不判断 stdout 是否为 tty)。
+            std::cout << "\x1B[?2004h" << std::flush;
             while (!loop.HasQuitted()) {
                 // 本帧请求基线: 帧期间到达 (被合并进本帧渲染) 的重绘请求在帧结束后补帧,
                 // 保证用最新 frameState 重绘。必须在帧开头记录 —— 若在 RunOnceBlocking
@@ -361,9 +340,7 @@ void TUIClientAgentIO::start() {
         // Loop 析构已触发 PostMain/Uninstall 恢复终端 (termios);
         // 但 2004 括号粘贴模式是终端模拟器状态而非 termios, 需在此显式关闭,
         // 否则残留模式会使后续程序粘贴时收到 \x1B[200~ 标记。
-        if (stdoutIsTerminal()) {
-            std::cout << "\x1B[?2004l" << std::flush;
-        }
+        std::cout << "\x1B[?2004l" << std::flush;
         {
             std::lock_guard<std::mutex> lock(screenMutex_);
             screen_ = nullptr;
