@@ -45,7 +45,7 @@ models:
     extra_api_config:
       stream: true
   - name: opencode-ds-v4-flash
-    type: "openai"
+    type: "openai-responses"
     base_url: "https://opencode.ai/zen/go/v1"
     api_key: "${OPENCODE_API_KEY}"
     model_name: "deepseek-v4-flash"

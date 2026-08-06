@@ -62,7 +62,6 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
 | **规划** | `planning_write` | 两层任务规划 (Mermaid 状态图 + Todo List + 备忘录) |
 | **子代理** | `sub_agent` | 创建和管理子代理执行委派任务 |
 | | `tool_skill_search` | 延迟加载工具/技能的搜索与发现 |
-| **跨代理** | `cross_agent_query` | Agent 间 Actor 式通信查询 |
 | **数据** | `share_store` | 会话级文本寄存，节省上下文 |
 | | `string_html_to_markdown` | HTML 转 Markdown |
 | | `string_regexp` | 正则搜索/替换/移除 |
@@ -802,7 +801,6 @@ agent/
 │   │   │   ├── share_store.h     # 会话级文本寄存
 │   │   │   ├── string.h          # 字符串工具 (html2md / regexp)
 │   │   │   ├── system.h          # 系统工具 (datetime / cpu_gpu_info)
-│   │   │   ├── cross_agent_query.h # 跨代理查询
 │   │   │   └── ui_control.h      # UI 键鼠控制 (Windows)
 │   │   ├── protocol/             # 协议实现
 │   │   │   ├── openai_provider.h  # OpenAI Chat Completions API (流式/非流式/SSE)

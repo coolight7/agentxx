@@ -20,7 +20,6 @@
 #include "neograph/api.h"
 #include <atomic>
 #include <chrono>
-#include <condition_variable>
 #include <deque>
 #include <format>
 #include <functional>
@@ -274,13 +273,13 @@ private:
 
     // ---- 系统资源监控 (每 kSystemInfoIntervalSec 秒采集一次 CPU/内存占用) ----
     /// Info 侧边栏系统资源显示开关存储于全局设置单例 TUISettings::showSystemInfo()
-    /// (默认开启, 可被设置弹窗切换; UI/监控线程均可读)
+    /// (默认开启, 可被设置弹窗切换; UI/监控协程均可读)
 
-    /// 监控线程 (独立线程周期采集; 经 cv 睡眠, stop 时可立即唤醒退出)
-    std::thread             sysMonitorThread_;
-    std::condition_variable sysMonitorCv_;
-    std::mutex              sysMonitorMutex_;
-    bool                    sysMonitorStop_ = false;
+    /// 监控运行标志: start() 置位, stop() 复位; 监控协程据此决定是否继续下一轮
+    std::atomic<bool> sysMonitorRunning_{false};
+    /// 监控周期定时器: 由监控协程持有; stop() 调用 cancel() 使挂起的协程立即退出,
+    /// 避免残留定时器阻塞 client io_context 的 run()
+    std::shared_ptr<asio::steady_timer> sysMonitorTimer_;
     /// 资源采集刷新间隔 (秒)
     static constexpr int kSystemInfoIntervalSec = 5;
     /// 鼠标命中区域 (渲染时 reflect 填充, 全局事件处理时检测)
