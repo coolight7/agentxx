@@ -8,6 +8,10 @@
 namespace agentxx {
 namespace client {
 
+/// 生成尽量唯一的会话 threadId:
+/// 高精度时间戳 + 进程 PID + 随机数 + 自增序号 (见 mode_runners.cpp 实现注释)
+std::string generateUniqueThreadId();
+
 void runLocalCliUnified(std::shared_ptr<agent::CodeAgent> agent);
 
 void runLocalTuiUnified(
