@@ -231,7 +231,8 @@ If the user provides a Windows path (e.g. `C:\...` or `D:\...`), convert it to a
           "filesystem_list",
           ToolPrompt{
               .depict =
-                  R"(List files and directories at a given path, including size (bytes), type, and last-modified time (nanosecond timestamp).
+                  R"(List files and directories at a given path, output is multi-line text similar to `ls -l`, one entry per line: `type size last-modified-time path`.
+Directory paths end with `/`, symlinks show their target. Types: `d` directory, `-` file, `l` symlink.
 Can also be used to check whether a specific file or directory exists.)",
               .args =
                   {

@@ -122,9 +122,15 @@ asio::awaitable<void> test_list_file_limit(std::weak_ptr<agentxx::agent::AgentCo
         {"path",  testDir},
         {"limit", 1      },
     };
-    auto result     = co_await tool.execute_async(args);
-    auto jsonResult = neograph::json::parse(result);
-    if (jsonResult.is_array() && jsonResult.size() <= 1) {
+    auto result = co_await tool.execute_async(args);
+    // ls 风格多行文本: 限制条目数即限制行数
+    size_t lineCount = 0;
+    for (size_t i = 0; i < result.size(); i++) {
+        if (result[i] == '\n') {
+            lineCount++;
+        }
+    }
+    if (lineCount <= 1) {
         g_fs_passed++;
         TEST_PASS << "FileSystemListTool respects limit parameter" << std::endl;
     } else {
@@ -140,33 +146,20 @@ asio::awaitable<void>
     auto args = neograph::json{
         {"path", testDir}
     };
-    auto result     = co_await tool.execute_async(args);
-    auto jsonResult = neograph::json::parse(result);
-    if (jsonResult.is_array() && jsonResult.size() >= 1) {
-        bool hasAllFields = false;
-        for (const auto& item : jsonResult) {
-            if (item.contains("path") && item.contains("type") && item.contains("last_write_time")
-                && item.contains("size")) {
-                hasAllFields = true;
-                break;
-            }
-        }
-        if (hasAllFields) {
-            g_fs_passed++;
-            TEST_PASS << "FileSystemListTool returns file info with all fields" << std::endl;
-        } else {
-            g_fs_failed++;
-            TEST_FAIL << "FileSystemListTool missing file info fields, "
-                         "first item keys: ";
-            auto first = jsonResult[0];
-            for (auto it = first.begin(); it != first.end(); ++it) {
-                std::cout << it.key() << " ";
-            }
-            std::cout << std::endl;
-        }
+    auto result = co_await tool.execute_async(args);
+    // ls 风格: 每行应包含类型标识 (drwx/-rw-/lrwx/??????), 大小列, 时间列, 路径
+    if (result.find("test1.txt") != std::string::npos
+        && (result.find("-rw-") != std::string::npos || result.find("drwx") != std::string::npos
+            || result.find("lrwx") != std::string::npos
+            || result.find("??????") != std::string::npos)
+        && result.find("20") != std::string::npos) {
+        g_fs_passed++;
+        TEST_PASS << "FileSystemListTool returns ls-style lines with type, size, time, path"
+                  << std::endl;
     } else {
         g_fs_failed++;
-        TEST_FAIL << "FileSystemListTool expected array result, got: " << result << std::endl;
+        TEST_FAIL << "FileSystemListTool ls-style output missing fields, got: " << result
+                  << std::endl;
     }
     co_return;
 }

@@ -237,7 +237,7 @@ std::set<std::string> collectTypeFilter(const neograph::json& typeArg) {
     return types;
 }
 
-/// 获取路径实体的类型字符串 (与 filesystem_list 的 type 字段语义一致)。
+/// 获取路径实体的类型字符串 (与 filesystem_glob 的 type 参数语义一致)。
 /// 先判 symlink 以准确识别符号链接 (即使其指向目录)。
 std::string fileTypeOf(const std::filesystem::path& path) {
     std::error_code ec;
@@ -401,12 +401,14 @@ asio::awaitable<std::string> FileSystemListTool::execute_async(const neograph::j
     // 将所有 std::filesystem 阻塞操作卸载到线程池, 支持取消传播:
     // 当会话 CancelToken 取消 (watcher 监听置位) 或超时时, cancelFlag 被置 true,
     // 工作线程检测后提前退出释放线程
-    auto workFuture = agentxx::util::offloadCancellableAsync<neograph::json>(
+    // - 输出格式: 仿 `ls -l` 的多行文本, 每行一个条目:
+    //   `类型标识  大小  修改时间  路径`
+    auto workFuture = agentxx::util::offloadCancellableAsync<std::string>(
         pool,
         cancelFlag,
         [targetPath, recursive, limit](std::atomic<bool>& cancelFlag
-        ) -> asio::awaitable<neograph::json> {
-            auto result = neograph::json::array();
+        ) -> asio::awaitable<std::string> {
+            std::vector<std::string> lines;
 
             auto onAppendItem = [&](const std::filesystem::directory_entry& entity) {
                 try {
@@ -418,38 +420,44 @@ asio::awaitable<std::string> FileSystemListTool::execute_async(const neograph::j
                             + std::chrono::system_clock::now()
                         );
 
-                    // 提取 Unix 秒数
-                    auto unixtime
-                        = static_cast<size_t>(std::chrono::duration_cast<std::chrono::seconds>(
-                                                  sys_time.time_since_epoch()
-                        )
-                                                  .count());
-                    auto json = neograph::json{
-                        {"path", entity.path().generic_string()},
-                        {"type",
-                         (entity.is_directory()      ? "dir"
-                          : entity.is_regular_file() ? "file"
-                          : entity.is_symlink()      ? "symlink"
-                                                     : "other")},
-                        {"last_write_timestamp", unixtime},
-                        {"last_write_time", std::format("{:%Y-%m-%d %H:%M}", sys_time)},
-                    };
-                    if (entity.is_regular_file()) {
-                        json["size"] = static_cast<size_t>(entity.file_size());
+                    // 类型标识列 (仿 ls -l): 首字符为真实类型 (d/-/l/?),
+                    // 权限位无数据用通用占位
+                    std::string typeStr = "??????????";
+                    std::string sizeStr = "-";
+                    if (entity.is_directory()) {
+                        typeStr = "drwxr-xr-x";
+                    } else if (entity.is_regular_file()) {
+                        typeStr = "-rw-r--r--";
+                        sizeStr = std::to_string(entity.file_size());
+                    } else if (entity.is_symlink()) {
+                        typeStr = "lrwxrwxrwx";
                     }
-                    result.push_back(json);
+
+                    // 路径列: 目录加 `/` 后缀, 符号链接附加指向目标 (对齐 ls -l)
+                    auto pathStr = entity.path().generic_string();
+                    if (entity.is_directory()) {
+                        pathStr += "/";
+                    } else if (entity.is_symlink()) {
+                        std::error_code ec;
+                        auto            target = std::filesystem::read_symlink(entity.path(), ec);
+                        if (!ec) {
+                            pathStr += " -> " + target.generic_string();
+                        }
+                    }
+
+                    auto timeStr = std::format("{:%Y-%m-%d %H:%M}", sys_time);
+                    lines.push_back(
+                        fmt::format("{} {:>10}  {}  {}", typeStr, sizeStr, timeStr, pathStr)
+                    );
                 } catch (const std::exception& e) {
-                    result.push_back(neograph::json{
-                        {"path",  entity.path().generic_string()},
-                        {"error", e.what()                      },
-                    });
+                    lines.push_back(
+                        fmt::format("[Error] {}: {}", entity.path().generic_string(), e.what())
+                    );
                 }
             };
 
             if (false == std::filesystem::exists(targetPath)) {
-                result.push_back(neograph::json{
-                    {"error", "Path not exist"}
-                });
+                lines.push_back("[Error] Path not exist");
             } else if (std::filesystem::is_directory(targetPath)) {
                 if (recursive) {
                     for (const auto& entity :
@@ -459,7 +467,7 @@ asio::awaitable<std::string> FileSystemListTool::execute_async(const neograph::j
                             throw neograph::graph::CancelledException("filesystem_list cancelled");
                         }
                         onAppendItem(entity);
-                        if (limit > 0 && static_cast<int64_t>(result.size()) >= limit) {
+                        if (limit > 0 && static_cast<int64_t>(lines.size()) >= limit) {
                             break;
                         }
                     }
@@ -470,7 +478,7 @@ asio::awaitable<std::string> FileSystemListTool::execute_async(const neograph::j
                             throw neograph::graph::CancelledException("filesystem_list cancelled");
                         }
                         onAppendItem(entity);
-                        if (limit > 0 && static_cast<int64_t>(result.size()) >= limit) {
+                        if (limit > 0 && static_cast<int64_t>(lines.size()) >= limit) {
                             break;
                         }
                     }
@@ -478,12 +486,23 @@ asio::awaitable<std::string> FileSystemListTool::execute_async(const neograph::j
             } else if (std::filesystem::is_regular_file(targetPath)) {
                 onAppendItem(std::filesystem::directory_entry(targetPath));
             } else {
-                result.push_back(neograph::json{
-                    {"error", "Path exist, but is not a directory or file"}
-                });
+                lines.push_back("[Error] Path exist, but is not a directory or file");
             }
 
-            co_return result;
+            // 空目录: 输出提示行, 让 LLM 能区分 "空目录" 与失败
+            if (lines.empty()) {
+                lines.push_back("[Empty]");
+            }
+
+            // 拼接为多行文本 (与命令行 ls 一致)
+            std::string output;
+            for (size_t i = 0; i < lines.size(); ++i) {
+                if (i) {
+                    output += '\n';
+                }
+                output += lines[i];
+            }
+            co_return output;
         }
     );
 
@@ -491,7 +510,7 @@ asio::awaitable<std::string> FileSystemListTool::execute_async(const neograph::j
         co_return co_await agentxx::util::asyncWithTimeout<std::string>(
             [&]() -> asio::awaitable<std::string> {
                 auto result = co_await std::move(workFuture);
-                co_return result.dump();
+                co_return result;
             },
             std::chrono::seconds{timeout},
             [&]() {
@@ -504,7 +523,7 @@ asio::awaitable<std::string> FileSystemListTool::execute_async(const neograph::j
         );
     } else {
         auto result = co_await std::move(workFuture);
-        co_return result.dump();
+        co_return result;
     }
 }
 
