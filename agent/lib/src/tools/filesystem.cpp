@@ -40,153 +40,14 @@ namespace tools {
 
 namespace {
 
-/// 判断 glob 模式是否包含递归段 `**`。
-/// 与 shell globstar / `find -r` 对齐: 只有显式写出 `**` 时才递归遍历子目录,
-/// 否则 `*.txt` 这类模式只匹配当前目录 (不递归)。
-bool globPatternHasRecursiveSegment(std::string_view pattern) {
-    return pattern.find("**") != std::string_view::npos;
-}
-
-/// 提取 glob 模式中第一个通配符 (`*` `?` `[`) 之前的固定目录前缀。
-/// 用于计算 max_depth 的基准目录, 以及 include_hidden 自实现遍历的起点。
-/// 例如 `/a/b/*.txt` -> `/a/b/`; `*.txt` -> `.`; `/a/b/c.txt` -> `/a/b`。
-std::filesystem::path globStaticPrefix(std::string_view pattern) {
-    auto pos = pattern.find_first_of("*?[");
-    if (pos == std::string_view::npos) {
-        // 无通配符: 基准为其父目录
-        return std::filesystem::path{std::string{pattern}}.parent_path();
-    }
-    auto prefix = pattern.substr(0, pos);
-    auto slash  = prefix.find_last_of('/');
-    if (slash == std::string_view::npos) {
-        return std::filesystem::path{"."};
-    }
-    return std::filesystem::path{std::string{prefix.substr(0, slash + 1)}};
-}
-
-/// 计算相对路径的目录深度 (段数)。`.` 与空段不计, `..` 计 1。
-int pathDepth(const std::filesystem::path& rel) {
-    int depth = 0;
-    for (auto seg = rel.begin(); seg != rel.end(); ++seg) {
-        if (*seg != "." && !seg->empty()) {
-            depth++;
-        }
-    }
-    return depth;
-}
-
-/// 将 glob 通配模式转换为等价正则表达式字符串 (用于 exclude 过滤与 include_hidden 匹配)。
-/// 语义从宽: `*` 与 `**` 均匹配任意字符 (含路径分隔符 `/`), `?` 匹配单个字符,
-/// `[...]` 字符类原样传递 (`[!...]` 转为正则 `[^...]`), 其余正则特殊字符转义。
-std::string globToRegexStr(std::string_view pattern) {
-    std::string re;
-    re.reserve(pattern.size() * 2 + 4);
-    re             += '^';
-    const size_t n  = pattern.size();
-    for (size_t i = 0; i < n; ++i) {
-        char c = pattern[i];
-        if (c == '*') {
-            re += ".*";
-            // 吞掉连续的 `*` (含 `**`)
-            while (i + 1 < n && pattern[i + 1] == '*') {
-                i++;
-            }
-        } else if (c == '?') {
-            re += '.';
-        } else if (c == '[') {
-            // 找到配对的 `]`, 字符类整体传递给正则
-            size_t j = i + 1;
-            if (j < n && (pattern[j] == '!' || pattern[j] == '^')) {
-                j++;
-            }
-            if (j < n && pattern[j] == ']') {
-                j++;
-            }
-            while (j < n && pattern[j] != ']') {
-                j++;
-            }
-            if (j >= n) {
-                // 无配对 `]`, 按字面量转义
-                re += "\\[";
-            } else {
-                std::string cls{pattern.substr(i, j - i + 1)};
-                // glob 的 `[!...]` 转正则的 `[^...]`
-                if (cls.size() > 1 && cls[1] == '!') {
-                    cls[1] = '^';
-                }
-                re += cls;
-                i   = j;
-            }
-        } else {
-            // 转义正则特殊字符
-            static const std::string special = R"(\.^$+(){}|)";
-            if (special.find(c) != std::string::npos) {
-                re += '\\';
-            }
-            re += c;
-        }
-    }
-    re += '$';
-    return re;
-}
-
-/// 将模式中顶层 (不在字符类 `[]` 内、且未被 `\` 转义) 的 ASCII 字母折叠为 `[xX]` 字符类,
-/// 实现大小写不敏感匹配。用于:
-///  - glob 模式 (glob 库本身大小写敏感, 无内置忽略大小写选项)
-///  - grep 正则 (兼容 hyperscan 与 std::regex fallback, 避免依赖 HS_FLAG_CASELESS,
-///    因为 std::regex fallback 实现会忽略 flags 参数)
-std::string asciiCaseFoldPattern(std::string_view pattern) {
-    std::string out;
-    out.reserve(pattern.size() * 2);
-    bool inClass = false; // 是否处于字符类 [] 内
-    for (size_t i = 0; i < pattern.size(); ++i) {
-        char c = pattern[i];
-        if (c == '\\' && i + 1 < pattern.size()) {
-            // 转义序列原样保留
-            out += c;
-            out += pattern[++i];
-            continue;
-        }
-        if (c == '[') {
-            inClass  = true;
-            out     += c;
-            continue;
-        }
-        if (c == ']' && inClass) {
-            inClass  = false;
-            out     += c;
-            continue;
-        }
-        if (!inClass && ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'))) {
-            auto lower  = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-            auto upper  = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-            out        += '[';
-            out        += lower;
-            out        += upper;
-            out        += ']';
-        } else {
-            out += c;
-        }
-    }
-    return out;
-}
-
-/// 判断路径是否为绝对路径 (Unix: 以 `/` 开头; Windows: 盘符或 UNC)。
-bool isAbsolutePath(std::string_view path) {
-    if (path.empty()) {
-        return false;
-    }
-#if XX_IS_WIN_D
-    if (path.size() >= 3 && isCode_AZaz(path[0]) && path[1] == ':' && (path[2] == '\\' || path[2] == '/')) {
-        return true;
-    }
-    if (path.size() >= 2 && path[0] == '\\' && path[1] == '\\') {
-        return true; // UNC
-    }
-    return false;
-#else
-    return path.front() == '/';
-#endif
+/// 判断路径是否为绝对路径。
+/// 直接使用标准库 std::filesystem::path::is_absolute():
+///  - Unix: 以 `/` 开头
+///  - Windows: 盘符 + 分隔符 (如 `C:\`) 或 UNC (如 `\\server\share`);
+///    `C:foo` (盘符相对) 返回 false, 与手写判断语义一致
+///  - 空路径返回 false
+bool isAbsolutePath(const std::string& path) {
+    return std::filesystem::path{path}.is_absolute();
 }
 
 /// 展开路径开头的 `~` 为用户主目录 (Unix: $HOME, Windows: %USERPROFILE%)。
@@ -339,7 +200,7 @@ std::vector<std::regex> compileExcludeRegexes(const std::vector<std::string>& ex
     regexes.reserve(excludePatterns.size());
     for (const auto& ep : excludePatterns) {
         try {
-            regexes.emplace_back(globToRegexStr(ep));
+            regexes.emplace_back(glob::to_regex(ep));
         } catch (const std::exception&) {
             // 非法模式忽略
         }
@@ -462,10 +323,9 @@ std::optional<agentxx::middleware::SummarizationToolHandle>
 }
 
 asio::awaitable<std::string> FileSystemListTool::execute_async(const neograph::json& arguments) {
-    auto targetPath
-        = toCurrentSystemAbsolutePath(arguments.value("path", std::string{}));
+    auto targetPath = toCurrentSystemAbsolutePath(arguments.value("path", std::string{}));
     if (targetPath.empty()) {
-        co_return R"({"error":"Arg `path` is empty"})";
+        co_return R"([Error] Arg `path` is empty)";
     }
     auto recursive = arguments.value("recursive", false);
     auto limit     = arguments.value<int64_t>("limit", 100);
@@ -662,10 +522,9 @@ std::optional<agentxx::middleware::SummarizationToolHandle>
 
 asio::awaitable<std::string>
     FilesystemReadTextFileTool::execute_async(const neograph::json& arguments) {
-    auto filepath
-        = toCurrentSystemAbsolutePath(arguments.value("path", std::string{}));
+    auto filepath = toCurrentSystemAbsolutePath(arguments.value("path", std::string{}));
     if (filepath.empty()) {
-        co_return R"({"error":"Arg `path` is empty"})";
+        co_return R"([Error] Arg `path` is empty)";
     }
     auto systemCharsetFilePath = filepath;
     agentxx::util::autoConvertToSystemPath(systemCharsetFilePath);
@@ -873,10 +732,9 @@ std::optional<agentxx::middleware::SummarizationToolHandle>
 
 asio::awaitable<std::string>
     FilesystemReadBinaryFileTool::execute_async(const neograph::json& arguments) {
-    auto filepath
-        = toCurrentSystemAbsolutePath(arguments.value("path", std::string{}));
+    auto filepath = toCurrentSystemAbsolutePath(arguments.value("path", std::string{}));
     if (filepath.empty()) {
-        co_return R"({"error":"Arg `path` is empty"})";
+        co_return R"([Error] Arg `path` is empty)";
     }
     auto systemCharsetFilePath = filepath;
     agentxx::util::autoConvertToSystemPath(systemCharsetFilePath);
@@ -1099,10 +957,9 @@ std::optional<agentxx::middleware::SummarizationToolHandle>
 
 asio::awaitable<std::string> FilesystemWriteFileTool::execute_async(const neograph::json& arguments
 ) {
-    auto filepath
-        = toCurrentSystemAbsolutePath(arguments.value("path", std::string{}));
+    auto filepath = toCurrentSystemAbsolutePath(arguments.value("path", std::string{}));
     if (filepath.empty()) {
-        co_return R"({"error":"Arg `path` is empty"})";
+        co_return R"([Error] Arg `path` is empty)";
     }
     auto systemCharsetFilePath = filepath;
     agentxx::util::autoConvertToSystemPath(systemCharsetFilePath);
@@ -1287,8 +1144,7 @@ std::optional<agentxx::middleware::SummarizationToolHandle>
 
 asio::awaitable<std::string>
     FilesystemEditTextFileTool::execute_async(const neograph::json& arguments) {
-    auto filepath
-        = toCurrentSystemAbsolutePath(arguments.value("path", std::string{}));
+    auto filepath = toCurrentSystemAbsolutePath(arguments.value("path", std::string{}));
     if (filepath.empty()) {
         co_return "[Error] Arg `path` is empty";
     }
@@ -1538,7 +1394,7 @@ neograph::ChatTool FilesystemGlobTool::get_definition() const {
 asio::awaitable<std::string> FilesystemGlobTool::execute_async(const neograph::json& arguments) {
     auto file_patterns = arguments.value("file_patterns", std::vector<std::string>{});
     if (file_patterns.empty()) {
-        co_return R"({"error":"Arg `file_patterns` is empty"})";
+        co_return R"([Error] Arg `file_patterns` is empty)";
     }
     auto timeout = static_cast<int64_t>(arguments.value<double>("timeout", 60.0));
 
@@ -1556,14 +1412,6 @@ asio::awaitable<std::string> FilesystemGlobTool::execute_async(const neograph::j
         item = toCurrentSystemAbsolutePath(item);
     }
 
-    // 大小写不敏感时, 将 glob 模式中的字母折叠为 [xX] 字符类
-    // (glob 库本身大小写敏感, 无内置忽略大小写选项)
-    if (!caseSensitive) {
-        for (auto& item : file_patterns) {
-            item = asciiCaseFoldPattern(item);
-        }
-    }
-
     // 获取阻塞操作卸载线程池, 避免 glob 同步调用阻塞 io_context 事件循环
     auto  agentPtr = agentContext.lock();
     auto& pool     = *agentPtr->blockingPool;
@@ -1577,7 +1425,8 @@ asio::awaitable<std::string> FilesystemGlobTool::execute_async(const neograph::j
     auto workFuture = agentxx::util::offloadCancellableAsync<std::string>(
         pool,
         cancelFlag,
-        [file_patterns, typeFilter, excludePatterns, maxDepth, doSort](std::atomic<bool>& cancelFlag
+        [file_patterns, typeFilter, excludePatterns, maxDepth, doSort, caseSensitive](
+            std::atomic<bool>& cancelFlag
         ) -> asio::awaitable<std::string> {
             if (cancelFlag.load(std::memory_order_acquire)) {
                 throw neograph::graph::CancelledException("filesystem_glob cancelled");
@@ -1585,20 +1434,21 @@ asio::awaitable<std::string> FilesystemGlobTool::execute_async(const neograph::j
 
             // 智能选择 glob/rglob: 含 `**` 的模式使用 rglob (递归), 否则使用 glob (仅当前目录)
             // 对齐 shell globstar 行为: `*.txt` 只匹配当前目录, `**/*.txt` 才递归
+            // 大小写不敏感时由 glob 库内部折叠模式 (case_fold_pattern)
             std::vector<std::filesystem::path> resultList;
             for (const auto& pattern : file_patterns) {
                 if (cancelFlag.load(std::memory_order_acquire)) {
                     throw neograph::graph::CancelledException("filesystem_glob cancelled");
                 }
-                if (globPatternHasRecursiveSegment(pattern)) {
-                    auto matched = glob::rglob(pattern, cancelFlag);
+                if (glob::has_recursive_segment(pattern)) {
+                    auto matched = glob::rglob(pattern, caseSensitive, cancelFlag);
                     resultList.insert(
                         resultList.end(),
                         std::make_move_iterator(matched.begin()),
                         std::make_move_iterator(matched.end())
                     );
                 } else {
-                    auto matched = glob::glob(pattern, cancelFlag);
+                    auto matched = glob::glob(pattern, caseSensitive, cancelFlag);
                     resultList.insert(
                         resultList.end(),
                         std::make_move_iterator(matched.begin()),
@@ -1608,7 +1458,7 @@ asio::awaitable<std::string> FilesystemGlobTool::execute_async(const neograph::j
             }
 
             if (resultList.empty()) {
-                co_return R"({"error":"No match `file_patterns` found"})";
+                co_return R"([Error] No match `file_patterns` found)";
             }
 
             // 默认去重: 多 pattern 可能匹配到相同路径
@@ -1651,13 +1501,13 @@ asio::awaitable<std::string> FilesystemGlobTool::execute_async(const neograph::j
                     // 对每个 pattern 检查深度, 任一 pattern 满足即保留
                     bool keep = false;
                     for (const auto& pattern : file_patterns) {
-                        auto            baseDir = globStaticPrefix(pattern);
+                        auto            baseDir = glob::static_prefix(pattern);
                         std::error_code ec;
                         auto            rel = std::filesystem::relative(p, baseDir, ec);
                         if (ec) {
                             continue;
                         }
-                        if (pathDepth(rel) <= static_cast<int>(maxDepth)) {
+                        if (glob::path_depth(rel) <= static_cast<int>(maxDepth)) {
                             keep = true;
                             break;
                         }
@@ -1675,7 +1525,7 @@ asio::awaitable<std::string> FilesystemGlobTool::execute_async(const neograph::j
             }
 
             if (resultList.empty()) {
-                co_return R"({"error":"No match `file_patterns` found after filtering"})";
+                co_return R"([Error] No match `file_patterns` found after filtering)";
             }
 
             auto oss = std::ostringstream{};
@@ -1850,18 +1700,18 @@ asio::awaitable<std::string> FilesystemGrepTool::execute_async(const neograph::j
     auto text_patterns_is_regex = arguments.value("text_patterns_is_regex", true);
     auto text_patterns          = arguments.value("text_patterns", std::vector<std::string>{});
     if (text_patterns.empty()) {
-        co_return R"({"error":"Arg `text_patterns` is empty"})";
+        co_return R"([Error] Arg `text_patterns` is empty)";
     }
     auto file_patterns = arguments.value("file_patterns", std::vector<std::string>{});
     if (file_patterns.empty()) {
-        co_return R"({"error":"Arg `file_patterns` is empty"})";
+        co_return R"([Error] Arg `file_patterns` is empty)";
     }
     for (auto& item : file_patterns) {
         item = toCurrentSystemAbsolutePath(item);
     }
     auto output_mode = arguments.value("output_mode", std::string{"files_with_matches"});
     if (output_mode.empty()) {
-        co_return R"({"error":"Arg `output_mode` is empty"})";
+        co_return R"([Error] Arg `output_mode` is empty)";
     }
     auto timeout = static_cast<int64_t>(arguments.value<double>("timeout", 60.0));
 
@@ -1909,7 +1759,7 @@ asio::awaitable<std::string> FilesystemGrepTool::execute_async(const neograph::j
                         if (cancelFlag.load(std::memory_order_acquire)) {
                             throw neograph::graph::CancelledException("filesystem_grep cancelled");
                         }
-                        if (globPatternHasRecursiveSegment(pattern)) {
+                        if (glob::has_recursive_segment(pattern)) {
                             auto matched = glob::rglob(pattern, cancelFlag);
                             resultList.insert(
                                 resultList.end(),
@@ -1996,19 +1846,14 @@ asio::awaitable<std::string> FilesystemGrepTool::execute_async(const neograph::j
         };
 
         if (text_patterns_is_regex) {
-            // 正则匹配
-            std::shared_ptr<agentxx::util::XXRegex> regex;
-            if (caseSensitive) {
-                regex = agentxx::util::XXRegex::createRegex(text_patterns);
-            } else {
-                // 大小写不敏感: 将模式中字母折叠为 [xX] 字符类
-                std::vector<std::string> foldedPatterns;
-                foldedPatterns.reserve(text_patterns.size());
-                for (const auto& p : text_patterns) {
-                    foldedPatterns.push_back(asciiCaseFoldPattern(p));
-                }
-                regex = agentxx::util::XXRegex::createRegex(foldedPatterns);
-            }
+            // 正则匹配: 大小写不敏感直接由 XXRegex 后端实现
+            // (Hyperscan 用 HS_FLAG_CASELESS, std::regex fallback 用 icase),
+            // 不再需要外部改写模式
+            auto regex = agentxx::util::XXRegex::createRegex(
+                text_patterns,
+                agentxx::util::XXRegex::defHSFlags_normal,
+                !caseSensitive
+            );
             if (!regex) {
                 co_return "[Error] Regex compilation failed";
             }

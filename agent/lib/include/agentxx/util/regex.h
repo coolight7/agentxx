@@ -23,11 +23,15 @@ public:
     XXRegex(const XXRegex&)            = delete;
     XXRegex& operator=(const XXRegex&) = delete;
 
-    [[nodiscard]] static std::shared_ptr<agentxx::util::XXRegex>
-        createRegex(const std::string& regstr, unsigned int flags = defHSFlags_normal);
+    [[nodiscard]] static std::shared_ptr<agentxx::util::XXRegex> createRegex(
+        const std::string&  regstr,
+        unsigned int        flags          = defHSFlags_normal,
+        bool                caseInsensitive = false
+    );
     [[nodiscard]] static std::shared_ptr<agentxx::util::XXRegex> createRegex(
         const std::vector<std::string>& regstrs,
-        unsigned int                    flags = defHSFlags_normal
+        unsigned int                    flags           = defHSFlags_normal,
+        bool                            caseInsensitive = false
     );
 
     virtual ~XXRegex() {}

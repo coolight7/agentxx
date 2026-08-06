@@ -1188,6 +1188,47 @@ asio::awaitable<void>
     co_return;
 }
 
+/// 大小写不敏感 glob: 大写模式 + case_sensitive=false 应匹配小写文件
+asio::awaitable<void>
+    test_glob_case_insensitive(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    auto tool = agentxx::tools::FilesystemGlobTool{agentContext};
+    auto args = neograph::json{
+        {"file_patterns",  neograph::json::array({testDir + "/TEST1.TXT"})},
+        {"case_sensitive", false                                         },
+    };
+    auto result = co_await tool.execute_async(args);
+    if (result.find("test1.txt") != std::string::npos) {
+        g_fs_passed++;
+        TEST_PASS << "FilesystemGlobTool case_insensitive matches lowercase file" << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "FilesystemGlobTool case_insensitive failed, got: " << result << std::endl;
+    }
+    co_return;
+}
+
+/// max_depth 过滤 (glob 库 static_prefix + path_depth):
+/// `{testDir}/**/*.txt` 递归匹配, max_depth=1 时 subdir/subtest.txt (深度 2) 应被排除
+asio::awaitable<void>
+    test_glob_max_depth(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    auto tool = agentxx::tools::FilesystemGlobTool{agentContext};
+    auto args = neograph::json{
+        {"file_patterns", neograph::json::array({testDir + "/**/*.txt"})},
+        {"max_depth",     1                                             },
+    };
+    auto result = co_await tool.execute_async(args);
+    // 顶层 test1.txt 应保留, subdir/subtest.txt 应被 max_depth 排除
+    if (result.find("test1.txt") != std::string::npos
+        && result.find("subtest.txt") == std::string::npos) {
+        g_fs_passed++;
+        TEST_PASS << "FilesystemGlobTool max_depth excludes deeper entries" << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "FilesystemGlobTool max_depth failed, got: " << result << std::endl;
+    }
+    co_return;
+}
+
 asio::awaitable<void>
     test_glob_non_recursive(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FilesystemGlobTool{agentContext};
@@ -1393,6 +1434,8 @@ asio::awaitable<TestResult>
     co_await run(test_glob_non_recursive);
     co_await run(test_glob_type_filter);
     co_await run(test_glob_exclude_patterns);
+    co_await run(test_glob_case_insensitive);
+    co_await run(test_glob_max_depth);
 
     co_await run(test_grep_get_definition);
     co_await run(test_grep_empty_text_patterns);
