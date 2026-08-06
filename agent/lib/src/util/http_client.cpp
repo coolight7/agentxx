@@ -12,6 +12,9 @@
 #include "agentxx/util/exception.h"
 #include "agentxx/util/http_client.h"
 #include "html2md/html2md.h"
+#include <asio/co_spawn.hpp>
+#include <asio/detached.hpp>
+#include <asio/steady_timer.hpp>
 #include <neograph/provider.h>
 #include <openssl/ssl.h>
 
@@ -118,6 +121,90 @@ asio::awaitable<void> runSseOpWithTimeout(
 }
 
 } // namespace
+
+/// DNS 解析的共享结果状态。
+///
+/// 背景: asio 的 async_resolve 在独立后台线程执行阻塞的 getaddrinfo (受系统
+/// resolv.conf 的 timeout/attempts 控制), 该调用**无法被中断** —— 无论是
+/// cancel_after 超时还是外部的 cancellation_signal, 都只能标记取消, 真正返回
+/// 要等 getaddrinfo 完成。当 DNS 黑洞/服务器无响应时, 这个等待可能长达数十秒
+/// 甚至永不返回, 导致请求挂死、用户取消失效、connectTimeout 形同虚设。
+///
+/// 因此把解析放到独立后台协程执行, 结果写入本状态; 请求协程轮询 done 标志,
+/// 超时/取消时立即放弃等待 (后台协程持有状态直至解析完成自行收尾, 无悬垂)。
+struct DnsResolveState {
+    std::atomic<bool>                          done{false};
+    neograph_asio_error_code                   ec;
+    asio::ip::tcp::resolver::results_type      results;
+};
+
+/// 启动后台 DNS 解析。host/port 按值拷贝: 请求协程可能先于解析完成而销毁。
+std::shared_ptr<DnsResolveState> startDnsResolve(
+    asio::any_io_executor executor,
+    std::string            host,
+    std::string            port
+) {
+    auto state = std::make_shared<DnsResolveState>();
+    asio::co_spawn(
+        executor,
+        [state, host = std::move(host), port = std::move(port)]() -> asio::awaitable<void> {
+            asio::ip::tcp::resolver resolver(co_await asio::this_coro::executor);
+            neograph_asio_error_code ec;
+            auto                     results = co_await resolver.async_resolve(
+                host,
+                port,
+                asio::redirect_error(asio::use_awaitable, ec)
+            );
+            state->ec      = ec;
+            state->results = std::move(results);
+            state->done.store(true, std::memory_order_release);
+        },
+        asio::detached
+    );
+    return state;
+}
+
+/// 等待 DNS 解析完成或超时。
+/// - 解析完成: 有错误抛 neograph_asio_system_error, 否则返回 results
+/// - 超过 connectDeadline: 抛 std::runtime_error 立即返回 (后台解析协程继续
+///   自行完成, 不阻塞本协程; 若 getaddrinfo 永不返回, 该协程作为挂起状态保留,
+///   但不影响后续请求)
+/// - 外部取消: co_await 定时器时抛 operation_aborted, 由上层 catchErrorAsync
+///   按取消语义处理, 立即中止
+asio::awaitable<asio::ip::tcp::resolver::results_type> waitDnsResolve(
+    std::shared_ptr<DnsResolveState>               state,
+    std::chrono::steady_clock::time_point          connectDeadline,
+    std::chrono::milliseconds                      connectTimeout
+) {
+    auto             executor = co_await asio::this_coro::executor;
+    asio::steady_timer pollTimer(executor);
+    while (!state->done.load(std::memory_order_acquire)) {
+        if (std::chrono::steady_clock::now() >= connectDeadline) {
+            throw std::runtime_error(fmt::format(
+                "DNS resolve timeout after {} ms",
+                connectTimeout.count()
+            ));
+        }
+        // 短间隔轮询: 超时上限内的误差可忽略; 同时每次 co_await 都是取消检查点
+        pollTimer.expires_after(std::chrono::milliseconds(10));
+        co_await pollTimer.async_wait(asio::use_awaitable);
+    }
+    if (state->ec) {
+        throw neograph_asio_system_error(state->ec);
+    }
+    co_return std::move(state->results);
+}
+
+asio::awaitable<asio::ip::tcp::resolver::results_type> HttpClient::asyncResolveWithDeadline(
+    std::string_view                     host,
+    std::string_view                     port,
+    std::chrono::steady_clock::time_point connectDeadline,
+    std::chrono::milliseconds            connectTimeout
+) {
+    auto executor = co_await asio::this_coro::executor;
+    auto state    = startDnsResolve(executor, std::string{host}, std::string{port});
+    co_return co_await waitDnsResolve(state, connectDeadline, connectTimeout);
+}
 
 std::string_view HttpResponse::findHeader(std::string_view name) const noexcept {
     return headers.getSingle(name);
@@ -426,7 +513,6 @@ asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::requestAsy
     std::string currentContentType(contentType);
 
     auto          executor = co_await asio::this_coro::executor;
-    tcp::resolver resolver(executor);
 
     std::expected<HttpResponse, std::string> result;
     for (size_t redirectCount = 0;; ++redirectCount) {
@@ -489,10 +575,14 @@ asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::requestAsy
                     );
                 };
 
-                auto endpoints = co_await resolver.async_resolve(
+                // DNS 解析不能直接 co_await: getaddrinfo 阻塞无法被取消/超时中断,
+                // 黑洞 DNS 时会无限挂起。后台协程解析 + 轮询, 超时/取消立即放弃等待
+                // (见 HttpClient::asyncResolveWithDeadline 注释)
+                auto endpoints = co_await HttpClient::asyncResolveWithDeadline(
                     parsed->host,
                     std::to_string(parsed->port),
-                    asio::cancel_after(remainingTimeout(), asio::use_awaitable)
+                    connectDeadline,
+                    config.connectTimeout
                 );
 
                 if (isHttps) {
@@ -612,7 +702,6 @@ asio::awaitable<void> HttpClient::requestSseAsync(
     }
 
     auto          executor = co_await asio::this_coro::executor;
-    tcp::resolver resolver(executor);
 
     // connectTimeout 是 DNS + TCP + TLS 的总上限: 各阶段 (含 DNS) 共用剩余时间
     auto connectDeadline = std::chrono::steady_clock::now() + config.connectTimeout;
@@ -624,11 +713,15 @@ asio::awaitable<void> HttpClient::requestSseAsync(
         return std::chrono::duration_cast<std::chrono::milliseconds>(connectDeadline - now);
     };
 
+    // DNS 解析不能直接 co_await: getaddrinfo 阻塞无法被取消/超时中断, 黑洞 DNS
+    // 时会无限挂起。改为后台协程解析 + 轮询, 超时/取消立即放弃等待 (见
+    // HttpClient::asyncResolveWithDeadline 注释)
     XX_LOGT("HttpClient::requestSseAsync: async_resolve");
-    auto endpoints = co_await resolver.async_resolve(
+    auto endpoints = co_await HttpClient::asyncResolveWithDeadline(
         parsed->host,
         std::to_string(parsed->port),
-        asio::cancel_after(remainingMs(), asio::use_awaitable)
+        connectDeadline,
+        config.connectTimeout
     );
 
     auto sendTimeout = config.sendTimeout.value_or(calcTimeoutBySize(req.body().size()));

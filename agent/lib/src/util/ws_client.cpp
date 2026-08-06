@@ -434,11 +434,14 @@ asio::awaitable<std::expected<std::unique_ptr<WsClient>, std::string>> wsConnect
     // CancelledException/NodeInterrupt 保持抛出, 不阻断 BaseAgent 取消处理
     co_return co_await agentxx::util::catchErrorToUnexpectedAsync<std::unique_ptr<WsClient>>(
         [&]() -> asio::awaitable<std::expected<std::unique_ptr<WsClient>, std::string>> {
-            tcp::resolver resolver(executor);
-            auto          endpoints = co_await resolver.async_resolve(
+            // DNS 解析不能直接 co_await: getaddrinfo 阻塞无法被取消/超时中断,
+            // 黑洞 DNS 时会无限挂起。改为后台协程解析 + 轮询, 超时/取消立即
+            // 放弃等待 (见 HttpClient::asyncResolveWithDeadline 注释)
+            auto endpoints = co_await HttpClient::asyncResolveWithDeadline(
                 host,
                 port,
-                asio::cancel_after(remainingMs(), asio::use_awaitable)
+                connectDeadline,
+                config.connectTimeout
             );
 
             if (isSsl) {

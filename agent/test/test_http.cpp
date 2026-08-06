@@ -2,6 +2,9 @@
 #include "agentxx/util/http_client.h"
 #include "agentxx/util/http_server.h"
 #include <asio/awaitable.hpp>
+#include <asio/bind_cancellation_slot.hpp>
+#include <asio/cancellation_signal.hpp>
+#include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
@@ -14,12 +17,17 @@
 #include <boost/beast/core.hpp>
 #include <boost/beast/http.hpp>
 #include <chrono>
+#include <filesystem>
 #include <fmt/format.h>
+#include <fstream>
 #include <iostream>
 #include <string>
 #include <string_view>
 #include <thread>
 #include <vector>
+#if defined(__linux__)
+#include <unistd.h>
+#endif
 
 namespace agentxx {
 namespace test {
@@ -1496,6 +1504,153 @@ asio::awaitable<void> test_http_client_sse_interruption() {
     }
 }
 
+/// DNS 黑洞下 requestSseAsync / requestAsync 不应无限挂起:
+/// - connectTimeout 到期应立即报 "DNS resolve timeout" (getaddrinfo 阻塞无法被
+///   取消/超时中断, 见 http_client.cpp startDnsResolve 注释, 故解析放后台协程,
+///   请求协程超时即放弃等待)
+/// - 外部取消应立即中止
+///
+/// 需要 root 权限临时替换 /etc/resolv.conf 指向黑洞 DNS, 否则跳过 (不影响其它测试)
+asio::awaitable<void> test_http_client_dns_timeout() {
+#if defined(__linux__)
+    if (geteuid() != 0) {
+        std::cout << "[dns_timeout] skip: need root to swap /etc/resolv.conf" << std::endl;
+        co_return;
+    }
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    if (!fs::exists("/etc/resolv.conf", ec) || ec) {
+        co_return;
+    }
+    auto backup = fs::temp_directory_path(ec) / "agentxx_resolv_backup.conf";
+    fs::copy_file("/etc/resolv.conf", backup, fs::copy_options::overwrite_existing, ec);
+    if (ec) {
+        std::cout << "[dns_timeout] skip: cannot backup resolv.conf: " << ec.message() << std::endl;
+        co_return;
+    }
+    struct RestoreGuard {
+        std::filesystem::path backup;
+        ~RestoreGuard() {
+            std::error_code ec2;
+            std::filesystem::copy_file(
+                backup,
+                "/etc/resolv.conf",
+                std::filesystem::copy_options::overwrite_existing,
+                ec2
+            );
+            if (ec2) {
+                std::cerr << "[dns_timeout] FAILED to restore /etc/resolv.conf: " << ec2.message()
+                          << std::endl;
+            }
+        }
+    } guard{backup};
+
+    // 黑洞 DNS: 指向非路由地址 (UDP 查询无响应, getaddrinfo 阻塞到系统超时)
+    // glibc 对 timeout:3 attempts:1 约 6s 才失败 (A + AAAA 两次查询);
+    // 测试用 connectTimeout=1s < 6s, 确保走 HttpClient 自身的 DNS 超时路径
+    {
+        std::ofstream ofs("/etc/resolv.conf", std::ios::trunc);
+        ofs << "nameserver 10.255.255.1\noptions timeout:3 attempts:1\n";
+    }
+
+    // 唯一主机名, 避免 /etc/hosts 命中导致不走 DNS
+    std::string host = "agentxx-dns-hang-" + std::to_string(static_cast<long>(::getpid())) + ".example.com";
+
+    // 1) connectTimeout 到期应立即报 DNS timeout (不等系统 DNS 超时 ~6s)
+    {
+        HttpClient::RequestConfig cfg;
+        cfg.connectTimeout = std::chrono::seconds{1};
+        auto st            = std::chrono::steady_clock::now();
+        bool ok            = false;
+        try {
+            co_await HttpClient::requestSseAsync(
+                "GET",
+                "http://" + host + "/",
+                "",
+                "",
+                {},
+                cfg,
+                [](std::string_view) -> bool {
+                    return false;
+                }
+            );
+        } catch (const std::exception& e) {
+            auto      elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - st
+            ).count();
+            std::string msg = e.what();
+            ok = (elapsed >= 700 && elapsed < 2500) && msg.find("DNS resolve timeout") != std::string::npos;
+            if (!ok) {
+                TEST_FAIL << "dns_timeout: expected DNS timeout in [0.7s, 2.5s), got " << elapsed
+                          << " ms, err: " << msg << std::endl;
+            }
+        }
+        if (!ok) {
+            ++g_http_failed;
+        } else {
+            ++g_http_passed;
+        }
+    }
+
+    // 2) 外部取消应立即中止挂起的 DNS 解析
+    {
+        HttpClient::RequestConfig cfg;
+        cfg.connectTimeout = std::chrono::seconds{30};
+        asio::cancellation_signal sig;
+        std::atomic<bool>         finished{false};
+        auto                      ex = co_await asio::this_coro::executor;
+        asio::co_spawn(
+            ex,
+            [&]() -> asio::awaitable<void> {
+                try {
+                    co_await HttpClient::requestSseAsync(
+                        "GET",
+                        "http://" + host + "/",
+                        "",
+                        "",
+                        {},
+                        cfg,
+                        [](std::string_view) -> bool {
+                            return false;
+                        }
+                    );
+                } catch (...) {
+                    // 取消产生的 operation_aborted 在此吞掉, 由 finished 标志验证结束
+                }
+                finished.store(true);
+            },
+            asio::bind_cancellation_slot(sig.slot(), asio::detached)
+        );
+
+        // 1s 后取消
+        asio::steady_timer cancelTimer(ex);
+        cancelTimer.expires_after(std::chrono::seconds{1});
+        co_await cancelTimer.async_wait(asio::use_awaitable);
+        sig.emit(asio::cancellation_type::all);
+
+        // 等待协程结束 (最多 3s)
+        auto st = std::chrono::steady_clock::now();
+        while (!finished.load() && std::chrono::steady_clock::now() - st < std::chrono::seconds{3}) {
+            asio::steady_timer poll(ex, std::chrono::milliseconds(20));
+            co_await poll.async_wait(asio::use_awaitable);
+        }
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - st
+        ).count();
+        bool ok = finished.load() && elapsed < 2500; // 取消后应立即结束, 不允许拖到 connectTimeout
+        if (!ok) {
+            TEST_FAIL << "dns_timeout: cancel did not abort DNS wait (finished=" << finished.load()
+                      << ", wait-after-cancel=" << elapsed << " ms)" << std::endl;
+        }
+        if (!ok) {
+            ++g_http_failed;
+        } else {
+            ++g_http_passed;
+        }
+    }
+#endif
+}
+
 asio::awaitable<TestResult> run_http_client_tests() {
     test_http_client_unit();
     test_http_server_unit();
@@ -1504,6 +1659,7 @@ asio::awaitable<TestResult> run_http_client_tests() {
     co_await test_http_server_expect_100_continue();
     co_await test_http_server_absolute_form_target();
     co_await test_http_client_sse_interruption();
+    co_await test_http_client_dns_timeout();
     co_return TestResult{g_http_passed, g_http_failed};
 }
 

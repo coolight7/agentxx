@@ -7,6 +7,7 @@
 - ctrl+c 结束时卡很久
 - 会话独立日志
 - glob、grep 接收相对路径时拼接转换
+- 移除独立的 canceltoken 检查
 
 ## 提示词优化
 - 建议对大的操作、改动先进行规划，每完成一步更新规划，最后测试完成后 -> 回顾修改的代码检查是否有问题 -> 最终整体总结
@@ -15,6 +16,7 @@
 - 使用 grep/glob 时尽量精确到更具体的文件，避开 .gitignore 内定义的目录、third_party、build、node_modules 等
 - 提示生成临时文件的目录
 - 建议当需要通读一个大项目时，可以先由一个 subagent 总结出大致的 wiki，然后分析划分模块化，再分享 wiki 给多个 subagent 各自负责模块解决问题
+- 如果希望查看UTF8无法显示的字符（检查二进制、乱码等情况下），可以将内容保存到文件，然后通过十六进制查看
 
 ## 问题
 分析一下 这些 cmakelist 有没有问题 /home/coolight/program/agentxx/agent/CMakeLists.txt、/home/coolight/program/agentxx/agent/lib/CMakeLists.txt、/home/coolight/program/agentxx/agent/client/CMakeLists.txt、/home/coolight/program/agentxx/agent/test/CMakeLists.txt

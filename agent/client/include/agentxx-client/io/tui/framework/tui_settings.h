@@ -35,21 +35,21 @@ enum class AnimationLevel : int {
 class TUISettings {
 public:
 
-    /// 获取全局单例 (Meyer's singleton, C++11 起线程安全)
-    static TUISettings& instance() {
+    /// 获取全局单例
+    inline static TUISettings& instance() {
         static TUISettings inst;
         return inst;
     }
 
-    TUISettings(const TUISettings&)            = delete;
-    TUISettings& operator=(const TUISettings&) = delete;
-
     /// 动画等级名称 (供设置弹窗展示)
-    static constexpr std::array<const char*, 5> kAnimationLevelNames
+    inline static constexpr std::array<const char*, 5> kAnimationLevelNames
         = {"Disabled", "Low", "Medium", "High", "Ultra"};
 
     /// 默认动画等级: Ultra (启用全部动画)
-    static constexpr AnimationLevel kDefaultAnimationLevel = AnimationLevel::Ultra;
+    inline static constexpr AnimationLevel kDefaultAnimationLevel = AnimationLevel::High;
+
+    TUISettings(const TUISettings&)            = delete;
+    TUISettings& operator=(const TUISettings&) = delete;
 
     /// 获取当前动画等级
     AnimationLevel animationLevel() const noexcept {
@@ -96,7 +96,7 @@ private:
         animationLevel_(static_cast<int>(kDefaultAnimationLevel)) {}
 
     /// 动画等级名称 (越界返回 "Unknown")
-    static constexpr std::string_view levelName(AnimationLevel level) noexcept {
+    inline static constexpr std::string_view levelName(AnimationLevel level) noexcept {
         const int idx = static_cast<int>(level);
         if (idx >= 0 && idx < static_cast<int>(kAnimationLevelNames.size())) {
             return kAnimationLevelNames[static_cast<size_t>(idx)];
