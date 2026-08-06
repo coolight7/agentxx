@@ -5,6 +5,7 @@
 #include "agentxx/util/string_util.h"
 #include "asio/awaitable.hpp"
 #include "asio/cancel_after.hpp"
+#include "asio/ip/tcp.hpp"
 #include "asio/redirect_error.hpp"
 #include "asio/this_coro.hpp"
 #include "asio/use_awaitable.hpp"
@@ -56,7 +57,10 @@ inline constexpr uint64_t kDefaultMaxResponseBody = 10 * 1024 * 1024;
 /// Per-request configuration for the less frequently customized options.
 /// - connectTimeout: total deadline for DNS resolve + TCP connect + TLS handshake
 ///   combined. The three phases share a single deadline so the worst-case total
-///   is exactly connectTimeout (not 3x as with per-phase limits).
+///   is exactly connectTimeout (not 3x as with per-phase limits). Note: DNS
+///   resolution (getaddrinfo) cannot be interrupted once started, so it is run
+///   in a background coroutine and the request gives up waiting at this
+///   deadline (see startDnsResolve/waitDnsResolve in http_client.cpp).
 /// - sslVerify: enables TLS certificate verification for this request; nullopt
 ///   falls back to the global default (see HttpClient::setSslVerify).
 /// - sendTimeout: bounds writing the request; nullopt auto-derives it from the
@@ -195,6 +199,20 @@ public:
         const HeaderMap&                      extraHeaders,
         const RequestConfig&                  config,
         std::function<bool(std::string_view)> onChunk
+    );
+
+    /// DNS 解析 (支持超时/取消)。
+    /// getaddrinfo 阻塞调用无法被中断 (cancel_after / cancellation_signal 都只能
+    /// 标记取消, 真正返回要等系统 DNS 超时), 因此解析放到后台协程执行, 本协程
+    /// 在 connectDeadline 前轮询结果:
+    /// - 超过 connectDeadline 抛 std::runtime_error (立即返回, 后台解析自行收尾)
+    /// - 外部取消经 co_await 传播, 立即中止
+    /// http / websocket 客户端统一使用, 避免黑洞 DNS 时请求/连接无限挂起。
+    static asio::awaitable<asio::ip::tcp::resolver::results_type> asyncResolveWithDeadline(
+        std::string_view                     host,
+        std::string_view                     port,
+        std::chrono::steady_clock::time_point connectDeadline,
+        std::chrono::milliseconds            connectTimeout
     );
 
     /// Enable/disable SSL certificate verification (default: enabled).
