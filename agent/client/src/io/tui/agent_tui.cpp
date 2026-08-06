@@ -67,9 +67,12 @@ TUIClientAgentIO::~TUIClientAgentIO() {
 void TUIClientAgentIO::postRedraw() {
     // 合并同一时刻的多次重绘请求: 流式输出时 client 线程每 token 调用一次,
     // 若每次 Post 都触发完整渲染, 渲染成本被 token 到达频率放大。
-    // 使用 exchange: 仅当之前无待处理重绘 (返回 false) 时才 Post,
-    // UI 线程每帧循环开头 reset, 保证同帧内多次请求只触发一次渲染。
-    if (redrawPending_.exchange(true, std::memory_order_acq_rel)) {
+    // - redrawPosted_: 合并标记, 仅当无在途 Custom 事件时才 Post
+    // - redrawSeq_: 请求计数, UI 线程在帧结束时据此补帧 (见 start() 帧循环):
+    //   帧期间到达的请求可能被合并进本帧渲染, 而本帧 frameState 快照取自帧开头,
+    //   渲染结果可能未反映其状态变更, 需要补一帧以最新快照重绘
+    redrawSeq_.fetch_add(1, std::memory_order_acq_rel);
+    if (redrawPosted_.exchange(true, std::memory_order_acq_rel)) {
         return;
     }
     std::shared_ptr<ScreenInteractive> s;
@@ -295,11 +298,10 @@ void TUIClientAgentIO::start() {
         {
             Loop loop(screen.get(), handler);
             while (!loop.HasQuitted()) {
-                // 本帧开始清除重绘合并标记: 允许本帧内新到达的重绘请求重新 Post。
-                // 注意: 必须在 RunOnceBlocking 之前 reset —— client 线程在上一帧渲染
-                // 期间 Post 的重绘请求已被消费, 本帧 reset 后若 client 再次 postRedraw
-                // 会重新 Post, 不会丢失; 渲染期间到达的请求则合并到下一帧。
-                redrawPending_.store(false, std::memory_order_release);
+                // 本帧请求基线: 帧期间到达 (被合并进本帧渲染) 的重绘请求在帧结束后补帧,
+                // 保证用最新 frameState 重绘。必须在帧开头记录 —— 若在 RunOnceBlocking
+                // 之后才记录, 帧开头到记录点之间到达的请求会丢失。
+                const uint64_t frameBaseline = redrawSeq_.load(std::memory_order_acquire);
                 // 每帧开头获取状态快照: 事件处理 (CatchEvent/组件 OnEvent) 与渲染
                 // 期间 frameState 始终有效
                 ctx_.frameState = sharedState_.readSnapshot();
@@ -314,6 +316,18 @@ void TUIClientAgentIO::start() {
                 // client 线程可原地修改 state, 拷贝成本降为零。
                 // Element 树在 OnRender 中已自包含 (文本已复制), 布局/绘制不依赖快照。
                 ctx_.frameState.reset();
+                // 帧完成: 本帧消费的在途 Custom 已对应一次渲染 (frameState 为本帧开头快照)。
+                // 清除在途标记, 使新的 postRedraw 能重新 Post;
+                // 若帧期间有新请求被合并 (计数 != 帧基线), 说明本帧渲染可能未反映其
+                // 状态变更 (快照取于帧开头), 补 Post 一帧, 保证以最新快照重绘。
+                // 注意: 不能在帧开头 reset —— FTXUI 的 RunUntilIdle 会在同一帧内消费
+                // 事件处理期间 Post 的 Custom, 帧开头 reset 后帧中到达的请求会因合并
+                // 标记为真而被丢弃且无在途事件, 导致重绘丢失 (如模型弹窗列表不刷新)。
+                redrawPosted_.store(false, std::memory_order_release);
+                if (redrawSeq_.load(std::memory_order_acquire) != frameBaseline
+                    && !redrawPosted_.exchange(true, std::memory_order_acq_rel)) {
+                    screen->Post(Event::Custom);
+                }
             }
         }
         {
