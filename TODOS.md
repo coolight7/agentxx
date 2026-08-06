@@ -6,8 +6,6 @@
 - 优化各种tool的效果，贴近命令行
 - ctrl+c 结束时卡很久
 - 会话独立日志
-- filesystem 接收相对路径时拼接转换
-- 修改 ls 响应数据格式
 - eventBus 改为tree，命名空间使用 axx/bxx/cc
 
 ## 提示词优化

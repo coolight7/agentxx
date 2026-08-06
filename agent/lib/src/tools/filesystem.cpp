@@ -171,6 +171,82 @@ std::string asciiCaseFoldPattern(std::string_view pattern) {
     return out;
 }
 
+/// 判断路径是否为绝对路径 (Unix: 以 `/` 开头; Windows: 盘符或 UNC)。
+bool isAbsolutePath(std::string_view path) {
+    if (path.empty()) {
+        return false;
+    }
+#if XX_IS_WIN_D
+    if (path.size() >= 3 && isCode_AZaz(path[0]) && path[1] == ':' && (path[2] == '\\' || path[2] == '/')) {
+        return true;
+    }
+    if (path.size() >= 2 && path[0] == '\\' && path[1] == '\\') {
+        return true; // UNC
+    }
+    return false;
+#else
+    return path.front() == '/';
+#endif
+}
+
+/// 展开路径开头的 `~` 为用户主目录 (Unix: $HOME, Windows: %USERPROFILE%)。
+/// 仅处理 `~` 或 `~/xxx` 形式; `~user` 等其它形式保持原样。
+std::string expandUserHomePath(std::string_view path) {
+    if (path.empty() || path.front() != '~') {
+        return std::string{path};
+    }
+    // `~` 之后必须是路径分隔符或结束, 否则视为普通名称 (如 `~user`) 不展开
+    if (path.size() > 1 && path[1] != '/' && path[1] != '\\') {
+        return std::string{path};
+    }
+#if XX_IS_WIN_D
+    const char* home = std::getenv("USERPROFILE");
+#else
+    const char* home = std::getenv("HOME");
+#endif
+    if (!home || !*home) {
+        return std::string{path};
+    }
+    auto homePath = agentxx::util::toCurrentSystemStandardPath(home);
+    if (path.size() == 1) {
+        return homePath;
+    }
+    // path[1] 为分隔符, 拼接剩余部分
+    auto rest = path.substr(2);
+    if (homePath.empty()) {
+        return std::string{rest};
+    }
+    if (homePath.back() == '/' || homePath.back() == '\\') {
+        return homePath + std::string{rest};
+    }
+    return homePath + "/" + std::string{rest};
+}
+
+/// 将用户提供的路径统一转换为当前系统的绝对路径:
+/// 1. 展开开头的 `~` 为用户主目录
+/// 2. 规范化分隔符/盘符 (toCurrentSystemStandardPath, 含 Windows 盘符 -> /mnt/ 转换)
+/// 3. 相对路径基于进程当前工作目录拼接为绝对路径
+/// 4. 词法规范化 (去除 `./`、多余的 `../` 等, 不访问文件系统, 对不存在的路径安全)
+/// - 供 filesystem 系列工具使用, 使相对路径 (如 `src/main.cpp`、`./a.txt`) 也能稳定工作
+std::string toCurrentSystemAbsolutePath(std::string_view path) {
+    if (path.empty()) {
+        return std::string{path};
+    }
+    auto expanded   = expandUserHomePath(path);
+    auto normalized = agentxx::util::toCurrentSystemStandardPath(expanded);
+    if (isAbsolutePath(normalized)) {
+        return std::filesystem::path{normalized}.lexically_normal().generic_string();
+    }
+    // 相对路径: 基于进程当前工作目录转换为绝对路径
+    std::error_code ec;
+    auto            abs = std::filesystem::absolute(normalized, ec);
+    if (ec) {
+        // absolute 仅在获取 cwd 时可能失败, 回退为原规范化路径
+        return std::filesystem::path{normalized}.lexically_normal().generic_string();
+    }
+    return abs.lexically_normal().generic_string();
+}
+
 /// 将文本中的 CRLF (`\r\n`) 规范化为 LF (`\n`), 返回规范化的副本。
 /// 用于生成 edit 匹配候选变体 (LF 形式)。
 std::string crlfToLfCopy(std::string_view text) {
@@ -287,7 +363,8 @@ std::optional<std::string> _defFileReadGenerateKey(const neograph::json& args) {
     if (!args.is_object() || !args["path"].is_string()) {
         return std::nullopt;
     }
-    auto path        = args["path"].get<std::string>();
+    // 统一使用绝对路径生成 key, 避免同一文件以相对/绝对形式出现时去重失效
+    auto path        = toCurrentSystemAbsolutePath(args["path"].get<std::string>());
     auto line_offset = args.value<int64_t>("line_offset", -1);
     auto line_limit  = args.value<int64_t>("line_limit", -1);
     auto byte_offset = args.value<int64_t>("byte_offset", -1);
@@ -308,7 +385,10 @@ std::optional<std::string> _defFileReadGenerateKey(const neograph::json& args) {
 
 std::optional<std::string> _defFileWriteGenerateKey(const neograph::json& args) {
     if (args.is_object() && args["path"].is_string()) {
-        return fmt::format("filesystem:{}", args["path"].get<std::string>());
+        return fmt::format(
+            "filesystem:{}",
+            toCurrentSystemAbsolutePath(args["path"].get<std::string>())
+        );
     }
     return std::nullopt;
 }
@@ -383,7 +463,7 @@ std::optional<agentxx::middleware::SummarizationToolHandle>
 
 asio::awaitable<std::string> FileSystemListTool::execute_async(const neograph::json& arguments) {
     auto targetPath
-        = agentxx::util::toCurrentSystemStandardPath(arguments.value("path", std::string{}));
+        = toCurrentSystemAbsolutePath(arguments.value("path", std::string{}));
     if (targetPath.empty()) {
         co_return R"({"error":"Arg `path` is empty"})";
     }
@@ -583,7 +663,7 @@ std::optional<agentxx::middleware::SummarizationToolHandle>
 asio::awaitable<std::string>
     FilesystemReadTextFileTool::execute_async(const neograph::json& arguments) {
     auto filepath
-        = agentxx::util::toCurrentSystemStandardPath(arguments.value("path", std::string{}));
+        = toCurrentSystemAbsolutePath(arguments.value("path", std::string{}));
     if (filepath.empty()) {
         co_return R"({"error":"Arg `path` is empty"})";
     }
@@ -794,7 +874,7 @@ std::optional<agentxx::middleware::SummarizationToolHandle>
 asio::awaitable<std::string>
     FilesystemReadBinaryFileTool::execute_async(const neograph::json& arguments) {
     auto filepath
-        = agentxx::util::toCurrentSystemStandardPath(arguments.value("path", std::string{}));
+        = toCurrentSystemAbsolutePath(arguments.value("path", std::string{}));
     if (filepath.empty()) {
         co_return R"({"error":"Arg `path` is empty"})";
     }
@@ -1020,7 +1100,7 @@ std::optional<agentxx::middleware::SummarizationToolHandle>
 asio::awaitable<std::string> FilesystemWriteFileTool::execute_async(const neograph::json& arguments
 ) {
     auto filepath
-        = agentxx::util::toCurrentSystemStandardPath(arguments.value("path", std::string{}));
+        = toCurrentSystemAbsolutePath(arguments.value("path", std::string{}));
     if (filepath.empty()) {
         co_return R"({"error":"Arg `path` is empty"})";
     }
@@ -1208,7 +1288,7 @@ std::optional<agentxx::middleware::SummarizationToolHandle>
 asio::awaitable<std::string>
     FilesystemEditTextFileTool::execute_async(const neograph::json& arguments) {
     auto filepath
-        = agentxx::util::toCurrentSystemStandardPath(arguments.value("path", std::string{}));
+        = toCurrentSystemAbsolutePath(arguments.value("path", std::string{}));
     if (filepath.empty()) {
         co_return "[Error] Arg `path` is empty";
     }
@@ -1463,7 +1543,7 @@ asio::awaitable<std::string> FilesystemGlobTool::execute_async(const neograph::j
     auto timeout = static_cast<int64_t>(arguments.value<double>("timeout", 60.0));
 
     for (auto& item : file_patterns) {
-        item = agentxx::util::toCurrentSystemStandardPath(item);
+        item = toCurrentSystemAbsolutePath(item);
     }
 
     // 解析可选参数
@@ -1472,6 +1552,9 @@ asio::awaitable<std::string> FilesystemGlobTool::execute_async(const neograph::j
     auto doSort          = arguments.value<bool>("sort", false);
     auto typeFilter      = collectTypeFilter(arguments.value("type", neograph::json{}));
     auto excludePatterns = arguments.value("exclude_patterns", std::vector<std::string>{});
+    for (auto& item : excludePatterns) {
+        item = toCurrentSystemAbsolutePath(item);
+    }
 
     // 大小写不敏感时, 将 glob 模式中的字母折叠为 [xX] 字符类
     // (glob 库本身大小写敏感, 无内置忽略大小写选项)
@@ -1774,7 +1857,7 @@ asio::awaitable<std::string> FilesystemGrepTool::execute_async(const neograph::j
         co_return R"({"error":"Arg `file_patterns` is empty"})";
     }
     for (auto& item : file_patterns) {
-        item = agentxx::util::toCurrentSystemStandardPath(item);
+        item = toCurrentSystemAbsolutePath(item);
     }
     auto output_mode = arguments.value("output_mode", std::string{"files_with_matches"});
     if (output_mode.empty()) {

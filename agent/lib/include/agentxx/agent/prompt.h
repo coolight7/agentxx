@@ -236,7 +236,8 @@ Directory paths end with `/`, symlinks show their target. Types: `d` directory, 
 Can also be used to check whether a specific file or directory exists.)",
               .args =
                   {
-                      {"path", "Absolute path to a file or directory."},
+                      {"path",
+                       R"(Path to a file or directory. Relative paths are resolved against the current working directory; `~` expands to the home directory.)"},
                       {"recursive", "Default `false`. If `true`, list subdirectories recursively."},
                       {
                         "limit",
@@ -257,7 +258,8 @@ Can also be used to check whether a specific file or directory exists.)",
 Supports offset/limit for reading portions of large files.)",
               .args =
                   {
-                      {"path", "Absolute path to the text file."},
+                      {"path",
+                       R"(Path to the text file. Relative paths are resolved against the current working directory; `~` expands to the home directory.)"},
                       {"line_offset",
                        R"(Number of lines to skip from the beginning. Default `0` (no offset). Returns an error if offset exceeds the file's line count.)"},
                       {"line_limit",
@@ -273,7 +275,8 @@ Supports offset/limit for reading portions of large files.)",
 Supports byte offset/limit for reading portions of large files.)",
               .args =
                   {
-                      {"path", "Absolute path to the file."},
+                      {"path",
+                       R"(Path to the file. Relative paths are resolved against the current working directory; `~` expands to the home directory.)"},
                       {"byte_offset",
                        R"(Starting byte offset. Default `0` (from beginning). Returns an error if offset exceeds file size.)"},
                       {"byte_limit",
@@ -287,7 +290,8 @@ Supports byte offset/limit for reading portions of large files.)",
               .depict = "Create a new file or overwrite an existing file with the given content.",
               .args =
                   {
-                      {"path", "Absolute path to the target file."},
+                      {"path",
+                       R"(Path to the target file. Relative paths are resolved against the current working directory; `~` expands to the home directory.)"},
                       {"content", "Content to write into the file."},
                       {"overwrite", R"(Default `false`. Controls write behavior:
 `true`: Create the file if it doesn't exist; overwrite if it does.
@@ -308,7 +312,8 @@ Use this for surgical edits without rewriting the entire file.
 Note! This tool will replace all `\r\n` to `\n` when find `old_str` and replace.)",
               .args =
                   {
-                      {"path", "Absolute path to the text file."},
+                      {"path",
+                       R"(Path to the text file. Relative paths are resolved against the current working directory; `~` expands to the home directory.)"},
                       {"old_str", "The exact string to find and replace. Must be non-empty and match precisely (including whitespace and indentation)."},
                       {"new_str", "The replacement string."},
                       {"multi_replace",
@@ -323,7 +328,7 @@ Note! This tool will replace all `\r\n` to `\n` when find `old_str` and replace.
               .args =
                   {
                       {"file_patterns",
-                       R"(Absolute path with glob patterns to match.
+                       R"(Path with glob patterns to match. Relative paths are resolved against the current working directory; `~` expands to the home directory.
 
 | Wildcard | Matches | Example |
 |----------|---------|---------|
@@ -375,7 +380,7 @@ Use this to locate code, find references, or search logs across a project.)",
                        R"(One or more search patterns (text or regex, depending on `text_patterns_is_regex`).
 A match is found if ANY pattern matches.)"},
                       {"file_patterns",
-                       R"(Absolute path with glob patterns to select which files to search.
+                       R"(Path with glob patterns to select which files to search. Relative paths are resolved against the current working directory; `~` expands to the home directory.
 
 | Wildcard | Matches | Example |
 |----------|---------|---------|

@@ -24,7 +24,7 @@
 - 数据安全; Agentxx 不会上传你的数据，如果使用局域网内的 LLM Api Server，完全可以实现全程断网运行; Agentxx 无法确认 LLM Api、MCP、Skill 的数据安全，如果导入需要自行确认
 - 跨系统支持; 优化 windows 兼容，可在 WSL 中直接执行 windows 命令、打开 windows 程序、自动转换文件路径
 - 丰富的 toolcall、内置实现 codegraph 等效果显著的功能
-- UI与Agent可分离，支持 TUI、cli、接入GUI，支持单进程、多进程分别启动 UI 和 Agent Websocket Server服务
+- UI与Agent可分离，支持 TUI、cli、接入GUI、Websocket API，支持单进程、多进程分别启动 UI 和 Agent Websocket Server服务
 - 中断、错误自动处理: 长时间稳定运行、网络重试、动态超时限制、消息上下文角色顺序检查和修正、自动检查和修正字符编码
 
 ## 兼容性

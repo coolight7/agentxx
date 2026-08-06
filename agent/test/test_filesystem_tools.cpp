@@ -164,6 +164,67 @@ asio::awaitable<void>
     co_return;
 }
 
+/// 相对路径应自动转换为绝对路径 (基于进程当前工作目录) 再处理。
+/// 不修改进程 CWD: 计算 testDir 相对当前工作目录的路径传入, 工具内部解析后应能正确列出。
+asio::awaitable<void>
+    test_list_file_relative_path(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    auto tool = agentxx::tools::FileSystemListTool{agentContext};
+    auto relPath = std::filesystem::relative(
+                       std::filesystem::path{testDir},
+                       std::filesystem::current_path()
+    )
+                       .generic_string();
+    auto args = neograph::json{
+        {"path", relPath}
+    };
+    auto result = co_await tool.execute_async(args);
+    if (result.find("test1.txt") != std::string::npos
+        && result.find("test2.txt") != std::string::npos
+        && result.find("subdir") != std::string::npos) {
+        g_fs_passed++;
+        TEST_PASS << "FileSystemListTool resolves relative path to absolute" << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "FileSystemListTool relative path failed, got: " << result
+                  << " relPath: " << relPath << std::endl;
+    }
+    co_return;
+}
+
+/// `~` 前缀应展开为用户主目录。为不污染用户目录, 在主目录下创建临时文件验证后删除。
+asio::awaitable<void>
+    test_list_file_tilde_path(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+#if XX_IS_WIN_D
+    const char* home = std::getenv("USERPROFILE");
+#else
+    const char* home = std::getenv("HOME");
+#endif
+    if (!home || !*home) {
+        g_fs_passed++;
+        TEST_PASS << "skip tilde test: no home env" << std::endl;
+        co_return;
+    }
+    auto homeFile = std::filesystem::path{home} / "agentxx_list_tilde_probe.txt";
+    {
+        std::ofstream f(homeFile);
+        f << "tilde probe\n";
+    }
+    auto tool = agentxx::tools::FileSystemListTool{agentContext};
+    auto args = neograph::json{
+        {"path", "~/agentxx_list_tilde_probe.txt"}
+    };
+    auto result = co_await tool.execute_async(args);
+    std::filesystem::remove(homeFile);
+    if (result.find("agentxx_list_tilde_probe.txt") != std::string::npos) {
+        g_fs_passed++;
+        TEST_PASS << "FileSystemListTool expands ~ to home directory" << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "FileSystemListTool tilde expansion failed, got: " << result << std::endl;
+    }
+    co_return;
+}
+
 asio::awaitable<void>
     test_read_text_file_get_definition(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FilesystemReadTextFileTool{agentContext};
@@ -257,6 +318,30 @@ asio::awaitable<void>
         g_fs_failed++;
         TEST_FAIL << "FilesystemReadTextFileTool line_offset=0 failed, got: " << result
                   << std::endl;
+    }
+    co_return;
+}
+
+/// 相对路径读取: 应自动转为绝对路径后成功读取
+asio::awaitable<void>
+    test_read_text_file_relative_path(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    auto tool = agentxx::tools::FilesystemReadTextFileTool{agentContext};
+    auto relPath = std::filesystem::relative(
+                       std::filesystem::path{testDir + "/test1.txt"},
+                       std::filesystem::current_path()
+    )
+                       .generic_string();
+    auto args = neograph::json{
+        {"path", relPath}
+    };
+    auto result = co_await tool.execute_async(args);
+    if (result.find("line1") != std::string::npos && result.find("line5") != std::string::npos) {
+        g_fs_passed++;
+        TEST_PASS << "FilesystemReadTextFileTool resolves relative path" << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "FilesystemReadTextFileTool relative path failed, got: " << result
+                  << " relPath: " << relPath << std::endl;
     }
     co_return;
 }
@@ -823,6 +908,30 @@ asio::awaitable<void> test_glob_recursive(std::weak_ptr<agentxx::agent::AgentCon
     co_return;
 }
 
+/// 相对 glob 模式: 应自动转为绝对路径后匹配
+asio::awaitable<void>
+    test_glob_relative_pattern(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    auto tool = agentxx::tools::FilesystemGlobTool{agentContext};
+    auto relDir = std::filesystem::relative(
+                      std::filesystem::path{testDir},
+                      std::filesystem::current_path()
+    )
+                      .generic_string();
+    auto args = neograph::json{
+        {"file_patterns", neograph::json::array({relDir + "/*.txt"})},
+    };
+    auto result = co_await tool.execute_async(args);
+    if (result.find("test1.txt") != std::string::npos
+        && result.find("test2.txt") != std::string::npos) {
+        g_fs_passed++;
+        TEST_PASS << "FilesystemGlobTool resolves relative pattern" << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "FilesystemGlobTool relative pattern failed, got: " << result << std::endl;
+    }
+    co_return;
+}
+
 asio::awaitable<void>
     test_grep_get_definition(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FilesystemGrepTool{agentContext};
@@ -1244,12 +1353,15 @@ asio::awaitable<TestResult>
     co_await run(test_list_file_recursive);
     co_await run(test_list_file_limit);
     co_await run(test_list_file_info_fields);
+    co_await run(test_list_file_relative_path);
+    co_await run(test_list_file_tilde_path);
 
     co_await run(test_read_text_file_get_definition);
     co_await run(test_read_text_file_empty_path);
     co_await run(test_read_text_file_not_exist);
     co_await run(test_read_text_file_full);
     co_await run(test_read_text_file_offset);
+    co_await run(test_read_text_file_relative_path);
     co_await run(test_read_text_file_limit);
     co_await run(test_read_text_file_offset_and_limit);
 
@@ -1277,6 +1389,7 @@ asio::awaitable<TestResult>
     co_await run(test_glob_empty_patterns);
     co_await run(test_glob_find_files);
     co_await run(test_glob_recursive);
+    co_await run(test_glob_relative_pattern);
     co_await run(test_glob_non_recursive);
     co_await run(test_glob_type_filter);
     co_await run(test_glob_exclude_patterns);
