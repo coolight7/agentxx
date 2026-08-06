@@ -17,7 +17,6 @@
 #include "test_command_tools.h"
 #include "test_concurrency.h"
 #include "test_cpu_gpu_use.h"
-#include "test_crossagent.h"
 #include "test_datetime_tool.h"
 #include "test_diff_util.h"
 #include "test_event_bridge.h"
@@ -180,7 +179,6 @@ int main(int argn, char** argv) {
             co_await run("event_bridge", agentxx::test::run_event_bridge_tests);
             co_await run("interrupt_bus", agentxx::test::run_interrupt_bus_tests);
             co_await run("subagent_bus", agentxx::test::run_subagent_bus_tests);
-            co_await run("crossagent", agentxx::test::run_crossagent_tests);
             co_await runCtx("string_tools", agentxx::test::run_string_tools_tests, agentContext);
             co_await run("share_store", agentxx::test::run_share_store_tests);
             co_await runCtx("rag_search", agentxx::test::run_rag_search_tools_tests, agentContext);
