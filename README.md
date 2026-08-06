@@ -2,7 +2,7 @@
 [Github agentxx](https://github.com/coolight7/agentxx)
 
 - C++ 协程异步实现的 AI Agent，可编译为`单程序、动态库`直接启动使用。降低内存占用、程序包体积、摆脱庞大的 动态库、python、js 等依赖，为普通性能的手机、电脑等设备上运行设计
-- 实测单轮任务最长自动运行3小时完成，本项目已由 Agentxx 介入开发
+- 实测单轮任务最长自动运行3小时完成，本项目已由 Agentxx 自身介入开发
 
 > - 早期开发中...
 
@@ -21,6 +21,7 @@
 
 ## 特点
 - c++协程异步实现，程序体积和内存占用少且性能高，可选添加 硬件优化的Hyperscan、内置codegraph-cpp 等扩展库
+- 数据安全; Agentxx 不会上传你的数据，如果使用局域网内的 LLM Api Server，完全可以实现全程断网运行; Agentxx 无法确认 LLM Api、MCP、Skill 的数据安全，如果导入需要自行确认
 - 跨系统支持; 优化 windows 兼容，可在 WSL 中直接执行 windows 命令、打开 windows 程序、自动转换文件路径
 - 丰富的 toolcall、内置实现 codegraph 等效果显著的功能
 - UI与Agent可分离，支持 TUI、cli、接入GUI，支持单进程、多进程分别启动 UI 和 Agent Websocket Server服务
