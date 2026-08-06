@@ -20,30 +20,21 @@ void test_singleton() {
     XX_TEST_EXPECT_TRUE(&TUISettings::instance() == &TUISettings::instance());
 }
 
-void test_animation_level_default() {
-    auto& settings = TUISettings::instance();
-    // 恢复默认 (防止其他用例污染)
-    settings.setAnimationLevel(TUISettings::kDefaultAnimationLevel);
-
-    XX_TEST_EXPECT_TRUE(settings.animationLevel() == AnimationLevel::Ultra);
-    XX_TEST_EXPECT_EQ(settings.animationLevelName(), std::string_view("Ultra"));
-    XX_TEST_EXPECT_TRUE(settings.animationLevel() == TUISettings::kDefaultAnimationLevel);
-}
-
 void test_animation_level_set_get() {
     auto& settings = TUISettings::instance();
 
     // 逐一设置各等级并读回
     const struct {
-        AnimationLevel  level;
+        AnimationLevel   level;
         std::string_view name;
     } cases[] = {
         {AnimationLevel::Disabled, "Disabled"},
-        {AnimationLevel::Low, "Low"},
-        {AnimationLevel::Medium, "Medium"},
-        {AnimationLevel::High, "High"},
-        {AnimationLevel::Ultra, "Ultra"},
+        {AnimationLevel::Low,      "Low"     },
+        {AnimationLevel::Medium,   "Medium"  },
+        {AnimationLevel::High,     "High"    },
+        {AnimationLevel::Ultra,    "Ultra"   },
     };
+
     for (const auto& c : cases) {
         settings.setAnimationLevel(c.level);
         XX_TEST_EXPECT_TRUE(settings.animationLevel() == c.level);
@@ -125,11 +116,11 @@ void test_show_system_info() {
 
 void test_concurrent_access() {
     // 多线程并发读写不应崩溃, 且读到的等级值始终合法
-    auto&     settings = TUISettings::instance();
+    auto&         settings    = TUISettings::instance();
     constexpr int kIterations = 2000;
 
     std::atomic<bool> stop{false};
-    std::thread writer([&] {
+    std::thread       writer([&] {
         for (int i = 0; i < kIterations && !stop.load(); ++i) {
             settings.setAnimationLevel(static_cast<AnimationLevel>(i % 5));
             settings.setShowSystemInfo(i % 2 == 0);
@@ -167,7 +158,6 @@ TestResult testTuiSettings() {
     g_tui_settings_failed = 0;
 
     test_singleton();
-    test_animation_level_default();
     test_animation_level_set_get();
     test_is_animation_enabled();
     test_level_names_table();

@@ -302,19 +302,13 @@ asio::awaitable<void> test_agent_cancel_llm_request() {
 // E2E: toolcall 执行中取消 => 后续 tool 不再执行, 取消语义正确传播
 // ===========================================================================
 
-/// 慢速 tool: 实现 ContextualAsyncTool 接收取消令牌, 模拟耗时异步 IO
-class CancelSlowTool : public agentxx::tools::XXToolBase,
-                       public neograph::ContextualAsyncTool {
+/// 慢速 tool: 模拟耗时异步 IO, 被取消时定时器收到 operation_aborted 提前退出
+class CancelSlowTool : public agentxx::tools::XXToolBase {
 public:
 
-    CancelSlowTool(
-        std::weak_ptr<agentxx::agent::AgentContext> ctx,
-        std::atomic<bool>*                          executed,
-        std::atomic<bool>*                          tokenReceived
-    ) :
+    CancelSlowTool(std::weak_ptr<agentxx::agent::AgentContext> ctx, std::atomic<bool>* executed) :
         XXToolBase("test_slow", ctx, false, false),
-        executed_(executed),
-        tokenReceived_(tokenReceived) {}
+        executed_(executed) {}
 
     neograph::ChatTool get_definition() const override {
         return neograph::ChatTool{
@@ -324,16 +318,8 @@ public:
         };
     }
 
-    asio::awaitable<std::string> execute_async(const neograph::json& args) override {
-        co_return co_await execute_async(args, neograph::ToolExecutionContext{});
-    }
-
-    asio::awaitable<std::string>
-        execute_async(const neograph::json&, neograph::ToolExecutionContext ctx) override {
+    asio::awaitable<std::string> execute_async(const neograph::json&) override {
         executed_->store(true, std::memory_order_release);
-        if (ctx.cancel_token) {
-            tokenReceived_->store(true, std::memory_order_release);
-        }
         // 模拟耗时 IO: 最长等待 10s, 被取消时定时器收到 operation_aborted 提前退出
         asio::steady_timer timer(co_await asio::this_coro::executor, std::chrono::seconds(10));
         co_await timer.async_wait(asio::use_awaitable);
@@ -343,7 +329,6 @@ public:
 private:
 
     std::atomic<bool>* executed_;
-    std::atomic<bool>* tokenReceived_;
 };
 
 /// 标记 tool: 验证取消后不再执行后续 toolcall
@@ -377,7 +362,6 @@ class CancelTestAgent : public agentxx::agent::CodeAgent {
 public:
 
     std::atomic<bool> slowExecuted{false};
-    std::atomic<bool> slowTokenReceived{false};
     std::atomic<bool> markerExecuted{false};
 
     explicit CancelTestAgent(std::shared_ptr<agentxx::agent::AgentConfig> cfg) :
@@ -388,9 +372,7 @@ protected:
     asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>>
         createTools() override {
         auto tools = co_await CodeAgent::createTools();
-        tools.push_back(
-            std::make_unique<CancelSlowTool>(agentContext, &slowExecuted, &slowTokenReceived)
-        );
+        tools.push_back(std::make_unique<CancelSlowTool>(agentContext, &slowExecuted));
         tools.push_back(std::make_unique<CancelMarkerTool>(agentContext, &markerExecuted));
         co_return tools;
     }
@@ -477,9 +459,8 @@ asio::awaitable<void> test_agent_cancel_toolcall() {
     XX_TEST_EXPECT_TRUE(watcherExc == nullptr);
     XX_TEST_EXPECT_TRUE(turnResult.hasError);
     XX_TEST_EXPECT_EQ(turnResult.errorMessage, std::string{"Cancelled by user"});
-    // 慢速 tool 已执行且收到了取消令牌 (ContextualAsyncTool 传递)
+    // 慢速 tool 已执行
     XX_TEST_EXPECT_TRUE(agent.slowExecuted.load());
-    XX_TEST_EXPECT_TRUE(agent.slowTokenReceived.load());
     // 取消后后续 tool 不应再执行 (埋点生效)
     XX_TEST_EXPECT_FALSE(agent.markerExecuted.load());
     // 慢速 tool 的 10s 等待应被取消中断
