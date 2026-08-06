@@ -39,6 +39,7 @@
 #include "test_subagent_bus.h"
 #include "test_text_selection_monitor.h"
 #ifdef AGENTXX_BUILD_CLIENT
+#include "test_tui_input.h"
 #include "test_tui_settings.h"
 #endif
 #include "test_util_misc.h"
@@ -114,6 +115,7 @@ int main(int argn, char** argv) {
     runSync("util_misc", agentxx::test::testUtilMisc);
 #ifdef AGENTXX_BUILD_CLIENT
     runSync("tui_settings", agentxx::test::testTuiSettings);
+    runSync("tui_input", agentxx::test::testTuiInput);
 #endif
 
     // ---- 异步测试模块 ----
