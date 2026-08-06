@@ -264,9 +264,13 @@ private:
     bool              planCacheValid_    = false;
     neograph::json    planCacheArgs_     = neograph::json::array();
 
-    /// 待处理重绘标记: postRedraw() 合并同一时刻的多次请求, 每帧最多触发一次
-    /// 渲染, 避免流式输出每 token 一次完整重绘
-    std::atomic<bool> redrawPending_{false};
+    /// 重绘请求合并 (postRedraw 由 client/UI 线程并发调用):
+    /// - redrawPosted_: 在途 Custom 标记, 仅当无在途事件时才 Post, 同帧内多次请求合并为一次
+    /// - redrawSeq_:    请求计数, UI 线程在帧结束时据此判断帧期间是否有请求被合并
+    ///                  (被合并进本帧渲染, 而本帧快照取的是帧开头, 可能未反映其状态变更),
+    ///                  若有则补 Post 一帧, 保证以最新快照重绘, 避免请求丢失
+    std::atomic<uint64_t> redrawSeq_{0};
+    std::atomic<bool>     redrawPosted_{false};
 
     // ---- 系统资源监控 (每 kSystemInfoIntervalSec 秒采集一次 CPU/内存占用) ----
     /// Info 侧边栏系统资源显示开关存储于全局设置单例 TUISettings::showSystemInfo()
