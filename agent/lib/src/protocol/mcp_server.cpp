@@ -48,7 +48,7 @@ void McpServer::runStdio() {
             },
             [&](std::string errmsg) -> bool {
                 json errorResp = jsonRpcErrorResponse(
-                    json{nullptr},
+                    json(nullptr),
                     jsonRpcError(kJsonRpcParseError, std::string("Parse error: ") + errmsg)
                 );
                 std::cout << errorResp.dump() << "\n" << std::flush;
@@ -200,7 +200,7 @@ void McpServer::setupRoutes() {
 json McpServer::processJsonRpc(const json& requestJson) {
     if (!requestJson.is_object()) {
         return jsonRpcErrorResponse(
-            json{nullptr},
+            json(nullptr),
             jsonRpcError(kJsonRpcInvalidRequest, "Request must be a JSON object")
         );
     }
@@ -213,7 +213,7 @@ json McpServer::processJsonRpc(const json& requestJson) {
     }
     if (requestJson.contains("jsonrpc") && !validJsonRpc) {
         return jsonRpcErrorResponse(
-            json{nullptr},
+            json(nullptr),
             jsonRpcError(kJsonRpcInvalidRequest, "Unsupported JSON-RPC version")
         );
     }
@@ -240,7 +240,7 @@ json McpServer::processJsonRpc(const json& requestJson) {
     }
     if (method.empty()) {
         return jsonRpcErrorResponse(
-            json{nullptr},
+            json(nullptr),
             jsonRpcError(kJsonRpcInvalidRequest, "Missing method")
         );
     }
@@ -311,7 +311,7 @@ asio::awaitable<void>
     auto accept = req[http::field::accept];
     if (!isAcceptValid(accept)) {
         json errorResp = jsonRpcErrorResponse(
-            json{nullptr},
+            json(nullptr),
             jsonRpcError(
                 -32000,
                 "Not Acceptable: Client must accept both application/json "
@@ -334,8 +334,8 @@ asio::awaitable<void>
         },
         [&](std::string errmsg) -> bool {
             auto errorResp = jsonRpcErrorResponse(
-                json{nullptr},
-                jsonRpcError(kJsonRpcParseError, std::string("Parse error: ") + errmsg)
+                json(nullptr),
+                jsonRpcError(kJsonRpcParseError, fmt::format("Parse error: {}", errmsg))
             );
             writeJsonResponse(resp, http::status::bad_request, errorResp);
             return false;
@@ -713,7 +713,9 @@ asio::awaitable<void> McpServer::handleSseStream(
         [](std::string) -> asio::awaitable<bool> {
             co_return false;
         },
-        [](std::string&) -> std::optional<bool> { return false; }
+        [](std::string&) -> std::optional<bool> {
+            return false;
+        }
     );
 
     {
