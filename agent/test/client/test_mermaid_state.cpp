@@ -1,6 +1,11 @@
 #include "test_mermaid_state.h"
 
+#include "agentxx-client/io/tui/components/overlays.h"
+#include "agentxx-client/io/tui/framework/tui_context.h"
+#include "agentxx-client/io/tui/framework/tui_state.h"
 #include "agentxx-client/io/tui/mermaid_state.h"
+#include "agentxx-client/io/tui/tui_theme.h"
+#include "ftxui/component/event.hpp"
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/screen.hpp"
 #include <string>
@@ -334,6 +339,121 @@ stateDiagram-v2
     XX_TEST_EXPECT_TRUE(contains(out, "v"));
 }
 
+// ---------------------------------------------------------------------------
+// PlanDiagramOverlay 测试
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// 构造带 planning_write 工具消息的 TUICtx 夹具
+struct OverlayFixture {
+    TUISharedState sharedState;
+    TUITheme       theme = TUITheme::darkTheme();
+    int            redrawCount = 0;
+    TUICtx         ctx;
+
+    OverlayFixture() {
+        ctx.state          = &sharedState;
+        ctx.frameState     = sharedState.readSnapshot();
+        ctx.postRedraw     = [this] { ++redrawCount; };
+        ctx.theme          = &theme;
+        ctx.showSystemInfo = nullptr;
+        ctx.session        = nullptr;
+        ctx.threadId       = "session";
+        ctx.remoteUrl      = "";
+    }
+
+    /// 注入 planning_write 工具消息 (JSON 文本)
+    void pushPlan(std::string_view json) {
+        sharedState.mutate([&](TUIRenderState& st) {
+            auto m          = std::make_shared<TUIMessage>();
+            m->role         = TUIMessage::Role::Tool;
+            m->toolName     = "planning_write";
+            m->toolCallId   = "call_1";
+            m->text         = std::string(json);
+            m->toolFinished = true;
+            st.messages.push_back(std::move(m));
+        });
+        ctx.frameState = sharedState.readSnapshot();
+    }
+
+    /// 渲染 overlay 到固定画布并取回文本
+    static std::string renderOverlay(PlanDiagramOverlay& overlay) {
+        auto el = overlay.OnRender();
+        auto screen = ftxui::Screen::Create(
+            ftxui::Dimension::Fixed(120), ftxui::Dimension::Fixed(50)
+        );
+        ftxui::Render(screen, el);
+        return screen.ToString();
+    }
+};
+
+} // namespace
+
+void test_overlay_renders_plan_diagram() {
+    OverlayFixture f;
+    f.pushPlan(R"({"roadmap":"stateDiagram-v2\n[*] --> A\nA --> B: go\nB --> [*]\n","todos":[]})");
+
+    auto overlay = std::make_shared<PlanDiagramOverlay>(f.ctx);
+    auto out     = OverlayFixture::renderOverlay(*overlay);
+
+    XX_TEST_EXPECT_TRUE(contains(out, "Plan Diagram"));
+    XX_TEST_EXPECT_TRUE(contains(out, "A"));
+    XX_TEST_EXPECT_TRUE(contains(out, "B"));
+    XX_TEST_EXPECT_TRUE(contains(out, "go")); // 边标签
+}
+
+void test_overlay_without_plan_shows_hint() {
+    OverlayFixture f; // 无任何消息
+
+    auto overlay = std::make_shared<PlanDiagramOverlay>(f.ctx);
+    auto out     = OverlayFixture::renderOverlay(*overlay);
+
+    // 无 roadmap: 显示空提示而非崩溃
+    XX_TEST_EXPECT_TRUE(contains(out, "Plan Diagram"));
+    XX_TEST_EXPECT_TRUE(contains(out, "no plan roadmap"));
+}
+
+void test_overlay_invalid_plan_json_no_crash() {
+    OverlayFixture f;
+    f.pushPlan("{invalid json");
+
+    auto overlay = std::make_shared<PlanDiagramOverlay>(f.ctx);
+    auto out     = OverlayFixture::renderOverlay(*overlay);
+
+    // 非法 JSON: 解析失败走缓存无效分支, 显示空提示
+    XX_TEST_EXPECT_TRUE(contains(out, "no plan roadmap"));
+}
+
+void test_overlay_escape_closes() {
+    OverlayFixture f;
+    f.pushPlan(R"({"roadmap":"stateDiagram-v2\n[*] --> A\nA --> [*]\n"})");
+
+    auto overlay = std::make_shared<PlanDiagramOverlay>(f.ctx);
+    int  closeCount = 0;
+    overlay->onClose([&] { ++closeCount; });
+
+    XX_TEST_EXPECT_TRUE(overlay->OnEvent(ftxui::Event::Escape));
+    XX_TEST_EXPECT_EQ(closeCount, 1);
+    XX_TEST_EXPECT_TRUE(overlay->OnEvent(ftxui::Event::ArrowDown)); // 滚动不关闭
+    XX_TEST_EXPECT_EQ(closeCount, 1);
+}
+
+void test_overlay_reparses_on_plan_update() {
+    OverlayFixture f;
+    f.pushPlan(R"({"roadmap":"stateDiagram-v2\n[*] --> A\nA --> [*]\n"})");
+    auto overlay = std::make_shared<PlanDiagramOverlay>(f.ctx);
+    auto out1    = OverlayFixture::renderOverlay(*overlay);
+    XX_TEST_EXPECT_TRUE(contains(out1, "A"));
+    XX_TEST_EXPECT_FALSE(contains(out1, "B"));
+
+    // plan 消息更新 (新指针 + 新内容): 弹窗应反映最新 roadmap
+    f.pushPlan(R"({"roadmap":"stateDiagram-v2\n[*] --> B\nB --> [*]\n"})");
+    auto out2 = OverlayFixture::renderOverlay(*overlay);
+    XX_TEST_EXPECT_TRUE(contains(out2, "B"));
+    XX_TEST_EXPECT_FALSE(contains(out2, "A"));
+}
+
 } // namespace
 
 TestResult testMermaidState() {
@@ -359,6 +479,12 @@ TestResult testMermaidState() {
     test_render_lr_fallback_to_tb_when_too_wide();
     test_render_self_loop_and_backward_in_legend();
     test_render_cjk_label_width();
+    // PlanDiagramOverlay
+    test_overlay_renders_plan_diagram();
+    test_overlay_without_plan_shows_hint();
+    test_overlay_invalid_plan_json_no_crash();
+    test_overlay_escape_closes();
+    test_overlay_reparses_on_plan_update();
 
     return TestResult{g_mermaid_state_passed, g_mermaid_state_failed};
 }

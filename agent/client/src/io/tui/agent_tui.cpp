@@ -270,6 +270,11 @@ void TUIClientAgentIO::start() {
                         postRedraw();
                         return true;
                     }
+                    // Info 侧边栏 Plan 状态图按钮点击 → 打开弹窗
+                    if (planDiagramButtonBox_.Contain(mouse.x, mouse.y)) {
+                        openPlanDiagram();
+                        return true;
+                    }
                     // 状态栏模型区域点击 → 打开模型选择弹窗
                     if (statusBar_ && statusBar_->modelBox().Contain(mouse.x, mouse.y)) {
                         openModelSelector();
@@ -500,6 +505,17 @@ void TUIClientAgentIO::toggleLogWindow() {
                 return renderLogSidebarFooter();
             }
         );
+    }
+    postRedraw();
+}
+
+void TUIClientAgentIO::openPlanDiagram() {
+    if (modal_ && !modal_->hasModal()) {
+        auto overlay = std::make_shared<PlanDiagramOverlay>(ctx_);
+        overlay->onClose([this] {
+            modal_->popModal();
+        });
+        modal_->pushModal(overlay);
     }
     postRedraw();
 }

@@ -206,6 +206,8 @@ private:
     void openSettings();
     /// F12: 切换日志窗口 tab
     void toggleLogWindow();
+    /// 打开 Plan 状态图模态 (Info 侧边栏 [View Plan Diagram] 按钮触发)
+    void openPlanDiagram();
 
     /// 启动系统资源监控线程 (每 3 秒采集一次 CPU/内存占用, 写入 sharedState_)
     void startSystemMonitor();
@@ -285,6 +287,7 @@ private:
     /// 鼠标命中区域 (渲染时 reflect 填充, 全局事件处理时检测)
     ftxui::Box pendingCounterBox_;
     ftxui::Box contextButtonBox_;
+    ftxui::Box planDiagramButtonBox_; // Info 侧边栏 Plan 状态图按钮
 
     static constexpr const char* kLogTabId            = "xx_logs";
     static constexpr const char* kInfoTabId           = "xx_info";
