@@ -26,6 +26,7 @@
 #include "test_http.h"
 #include "test_interrupt_bus.h"
 #include "test_mcp.h"
+#include "test_memgrowth.h"
 #include "test_misc_fixes.h"
 #include "test_network_timeout.h"
 #include "test_openai_provider.h"
@@ -204,6 +205,7 @@ int main(int argn, char** argv) {
             co_await run("cancel", agentxx::test::run_cancel_tests);
             co_await run("checkpoint_store", agentxx::test::run_checkpoint_store_tests);
             co_await run("agent", agentxx::test::run_agent_tests);
+            co_await run("memgrowth", agentxx::test::run_memgrowth_tests);
 
             ioCtx.stop();
         },
