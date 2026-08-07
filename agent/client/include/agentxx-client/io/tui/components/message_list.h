@@ -1,22 +1,27 @@
 #pragma once
 
 #include "agentxx-client/io/tui/framework/tui_context.h"
-#include "agentxx-client/io/tui/scrollable.h"
+#include "agentxx-client/io/tui/lazy_scrollable.h"
 #include "ftxui/component/component_base.hpp"
 #include "ftxui/dom/elements.hpp"
 #include <markdown/dom_builder.hpp>
 #include <memory>
 #include <vector>
 
-/// 消息列表组件: 封装 Scrollable + 消息缓存 + 折叠/展开交互
+/// 消息列表组件 (Flutter ListView.builder 风格)
 ///
-/// 渲染缓存 (统一替代原 messageCache_ + streamingMdBuilders_):
-/// - 按消息签名 (64 位哈希) 判断是否需要重建
-/// - 宽度变化时全部重建 (表格换行依赖宽度)
-/// - 滑动窗口淘汰: 仅保留最近 kMaxCache 条的完整缓存
+/// 渲染架构: 封装 LazyScrollable, 经 itemCount/itemKey/estimateHeight/buildItem
+/// 四个回调描述列表, 仅按需懒构建子项:
+/// - 有界 LRU 缓存 (条数 + 源字节双预算): 窗口外旧消息的渲染缓存被淘汰释放,
+///   内存占用与对话长度解耦 —— 修复旧实现中渲染缓存随对话无限增长的问题
+/// - 视口局部布局/绘制: 仅对可见消息做 markdown 解析与布局, 不可见消息零成本
+/// - 高度估算: 未进入视口的消息使用按文本量估算的高度, 进入视口后实测修正
+/// - itemKey 以消息指针 + 廉价特征构成 (内容变化必然伴随消息指针变化,
+///   见 TUISharedState::mutableMessage), 避免旧实现对全部消息文本逐帧哈希
+/// - 流式增量项 (currentToken) 标记为不可缓存, 每帧重建后即释放
 ///
 /// 事件处理:
-/// - 滚轮: 由内部 Scrollable 处理
+/// - 滚轮: 由内部 LazyScrollable 处理
 /// - 左键点击 Thinking/Tool 消息: 折叠/展开
 class MessageListComponent : public ftxui::ComponentBase {
 public:
@@ -46,42 +51,35 @@ public:
 
 private:
 
-    struct MessageCache {
-        ftxui::Element                                     element;
-        int64_t                                            sig         = 0;
-        int                                                cachedWidth = -1;
-        std::vector<std::unique_ptr<markdown::DomBuilder>> mdBuilders;
-    };
+    // ---- LazyScrollable 回调 ----
+    size_t        itemCount();
+    uint64_t      itemKey(size_t index);
+    int           estimateHeight(size_t index, int width);
+    LazyBuiltItem buildItem(size_t index);
+    bool          fillViewport(size_t index);
 
-    struct ItemMeta {
-        TUIMessage::Role role;
-        bool             collapsible;
-        int              messageIndex;
-    };
+    // ---- 子项构建辅助 ----
+    LazyBuiltItem buildMessageItem(const TUIMessage& msg);
+    LazyBuiltItem buildStreamingItem(const TUIRenderState& st);
+    ftxui::Element buildBanner();
 
-    std::vector<ScrollItem> buildItems();
-    ftxui::Element          buildMessageBlock(
+    bool hasStreamingToken(const TUIRenderState& st) const;
+
+    ftxui::Element buildMessageBlock(
                  const TUIMessage&                                   msg,
                  int                                                 maxWidth,
                  std::vector<std::unique_ptr<markdown::DomBuilder>>& mdBuilders
              );
-    static int64_t messageSignature(const TUIMessage& msg);
 
     void           appendEditToolHeader(const TUIMessage& msg, ftxui::Elements& header);
     void           appendEditToolBody(const TUIMessage& msg, ftxui::Elements& lines);
     ftxui::Element renderEditToolDiff(std::string_view oldStr, std::string_view newStr);
 
-    TUICtx&                     ctx_;
-    std::shared_ptr<Scrollable> scrollable_;
+    TUICtx&                          ctx_;
+    std::shared_ptr<LazyScrollable>  scrollable_;
 
-    std::vector<MessageCache>                          cache_;
-    size_t                                             prevMsgCount_ = 0;
-    std::vector<std::unique_ptr<markdown::DomBuilder>> streamingMdBuilders_;
-    std::vector<ItemMeta>                              itemMeta_;
-
+    // ---- 折叠消息命中检测 (由上一帧 visibleBoxes 反推) ----
     std::vector<ftxui::Box> collapsibleBoxes_;
     std::vector<size_t>     collapsibleIndices_;
     ftxui::Box              areaBox_;
-
-    static constexpr size_t kMaxCache = 200;
 };

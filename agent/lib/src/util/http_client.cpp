@@ -102,7 +102,7 @@ asio::awaitable<void> runSseOpWithTimeout(
 
     try {
         co_await std::forward<Op>(op)();
-    } catch (const neograph_asio_system_error& e) {
+    } catch (const neograph_asio_system_error&) {
         if (timedOut->load()) {
             // 超时已发生: close 打断 op 的完成错误 (operation_aborted) 按超时处理,
             // 而不是作为普通传输错误抛出
@@ -133,22 +133,19 @@ asio::awaitable<void> runSseOpWithTimeout(
 /// 因此把解析放到独立后台协程执行, 结果写入本状态; 请求协程轮询 done 标志,
 /// 超时/取消时立即放弃等待 (后台协程持有状态直至解析完成自行收尾, 无悬垂)。
 struct DnsResolveState {
-    std::atomic<bool>                          done{false};
-    neograph_asio_error_code                   ec;
-    asio::ip::tcp::resolver::results_type      results;
+    std::atomic<bool>                     done{false};
+    neograph_asio_error_code              ec;
+    asio::ip::tcp::resolver::results_type results;
 };
 
 /// 启动后台 DNS 解析。host/port 按值拷贝: 请求协程可能先于解析完成而销毁。
-std::shared_ptr<DnsResolveState> startDnsResolve(
-    asio::any_io_executor executor,
-    std::string            host,
-    std::string            port
-) {
+std::shared_ptr<DnsResolveState>
+    startDnsResolve(asio::any_io_executor executor, std::string host, std::string port) {
     auto state = std::make_shared<DnsResolveState>();
     asio::co_spawn(
         executor,
         [state, host = std::move(host), port = std::move(port)]() -> asio::awaitable<void> {
-            asio::ip::tcp::resolver resolver(co_await asio::this_coro::executor);
+            asio::ip::tcp::resolver  resolver(co_await asio::this_coro::executor);
             neograph_asio_error_code ec;
             auto                     results = co_await resolver.async_resolve(
                 host,
@@ -172,18 +169,17 @@ std::shared_ptr<DnsResolveState> startDnsResolve(
 /// - 外部取消: co_await 定时器时抛 operation_aborted, 由上层 catchErrorAsync
 ///   按取消语义处理, 立即中止
 asio::awaitable<asio::ip::tcp::resolver::results_type> waitDnsResolve(
-    std::shared_ptr<DnsResolveState>               state,
-    std::chrono::steady_clock::time_point          connectDeadline,
-    std::chrono::milliseconds                      connectTimeout
+    std::shared_ptr<DnsResolveState>      state,
+    std::chrono::steady_clock::time_point connectDeadline,
+    std::chrono::milliseconds             connectTimeout
 ) {
-    auto             executor = co_await asio::this_coro::executor;
+    auto               executor = co_await asio::this_coro::executor;
     asio::steady_timer pollTimer(executor);
     while (!state->done.load(std::memory_order_acquire)) {
         if (std::chrono::steady_clock::now() >= connectDeadline) {
-            throw std::runtime_error(fmt::format(
-                "DNS resolve timeout after {} ms",
-                connectTimeout.count()
-            ));
+            throw std::runtime_error(
+                fmt::format("DNS resolve timeout after {} ms", connectTimeout.count())
+            );
         }
         // 短间隔轮询: 超时上限内的误差可忽略; 同时每次 co_await 都是取消检查点
         pollTimer.expires_after(std::chrono::milliseconds(10));
@@ -196,10 +192,10 @@ asio::awaitable<asio::ip::tcp::resolver::results_type> waitDnsResolve(
 }
 
 asio::awaitable<asio::ip::tcp::resolver::results_type> HttpClient::asyncResolveWithDeadline(
-    std::string_view                     host,
-    std::string_view                     port,
+    std::string_view                      host,
+    std::string_view                      port,
     std::chrono::steady_clock::time_point connectDeadline,
-    std::chrono::milliseconds            connectTimeout
+    std::chrono::milliseconds             connectTimeout
 ) {
     auto executor = co_await asio::this_coro::executor;
     auto state    = startDnsResolve(executor, std::string{host}, std::string{port});
@@ -512,7 +508,7 @@ asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::requestAsy
     std::string currentBody(body);
     std::string currentContentType(contentType);
 
-    auto          executor = co_await asio::this_coro::executor;
+    auto executor = co_await asio::this_coro::executor;
 
     std::expected<HttpResponse, std::string> result;
     for (size_t redirectCount = 0;; ++redirectCount) {
@@ -550,8 +546,7 @@ asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::requestAsy
                     }
                     req.body() = currentBody;
                     req.prepare_payload();
-                } else if (currentMethod == "POST" || currentMethod == "PUT"
-                           || currentMethod == "PATCH") {
+                } else if (currentMethod == "POST" || currentMethod == "PUT" || currentMethod == "PATCH") {
                     // 空 body 也必须携带 Content-Length: 0, 否则部分服务器/代理会一直等待
                     // body 数据或拒绝请求 (RFC 7230 §3.3.2)
                     if (!currentContentType.empty()) {
@@ -701,7 +696,7 @@ asio::awaitable<void> HttpClient::requestSseAsync(
         req.prepare_payload();
     }
 
-    auto          executor = co_await asio::this_coro::executor;
+    auto executor = co_await asio::this_coro::executor;
 
     // connectTimeout 是 DNS + TCP + TLS 的总上限: 各阶段 (含 DNS) 共用剩余时间
     auto connectDeadline = std::chrono::steady_clock::now() + config.connectTimeout;

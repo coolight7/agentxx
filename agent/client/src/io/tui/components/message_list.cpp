@@ -1,5 +1,6 @@
 #include "agentxx-client/io/tui/components/message_list.h"
-#include "agentxx-client/io/tui/agent_tui.h"
+#include "agentxx-client/io/tui/agent_tui.h" // formatDurationMilliseconds / oneLinePreview
+#include "agentxx-client/io/tui/framework/tui_settings.h"
 #include "agentxx/util/diff_util.h"
 #include "agentxx/util/string_util.h"
 #include "ftxui/component/event.hpp"
@@ -31,39 +32,86 @@ std::pair<Element, std::unique_ptr<markdown::DomBuilder>> renderMarkdown(
     return {el | ftxui::color(color), std::move(builder)};
 }
 
+/// 估算文本显示行数 (换行符计数 + 按宽度折行估算)。
+/// 仅用于不可见子项的高度估算 (影响滚动条/滚动定位), 子项进入视口后实测修正。
+int estimateLines(std::string_view s, int width) {
+    if (width <= 0) {
+        width = 80;
+    }
+    if (s.empty()) {
+        return 1;
+    }
+    int    lines    = 1;
+    size_t segChars = 0; // 当前行内已计字符数 (按 UTF-8 码点)
+    for (unsigned char c : s) {
+        if ((c & 0xC0) == 0x80) {
+            continue; // UTF-8 续字节, 不独立计数
+        }
+        if (c == '\n') {
+            ++lines;
+            segChars = 0;
+            continue;
+        }
+        if (++segChars >= static_cast<size_t>(width)) {
+            ++lines;
+            segChars = 0;
+        }
+    }
+    return lines;
+}
+
 } // namespace
 
 MessageListComponent::MessageListComponent(TUICtx& ctx) :
     ctx_(ctx) {
-    scrollable_ = std::make_shared<Scrollable>([this]() {
-        return buildItems();
-    });
+    LazyScrollable::CacheBudget budget;
+    budget.maxItems            = 256;                  // 条数预算: 最近 ~256 条消息的渲染缓存
+    budget.maxBytes            = 16 * 1024 * 1024;     // 字节预算: 缓存源文本累计 16MiB
+    budget.byteExemptThreshold = 1024;                 // 短消息不计入字节预算
+    scrollable_                = std::make_shared<LazyScrollable>(
+        [this] {
+            return itemCount();
+        },
+        [this](size_t index) {
+            return itemKey(index);
+        },
+        [this](size_t index, int width) {
+            return estimateHeight(index, width);
+        },
+        [this](size_t index) {
+            return buildItem(index);
+        },
+        budget,
+        [this](size_t index) {
+            return fillViewport(index);
+        }
+    );
     Add(scrollable_);
 }
 
 void MessageListComponent::invalidateCache() {
-    cache_.clear();
-    prevMsgCount_ = 0;
+    scrollable_->clearCache();
 }
 
 Element MessageListComponent::OnRender() {
     // 由上一帧 viewport 可见区域反推可折叠消息的鼠标命中区域。
-    // 必须在 scrollable_->Render() 之前计算: 此时 itemMeta_ 和 visibleBoxes()
-    // 均为上一帧数据, 与用户当前看到的屏幕内容一致。
+    // 必须在 scrollable_->Render() 之前计算: 此时 visibleBoxes() 为上一帧数据,
+    // 与用户当前看到的屏幕内容一致。
+    // (注意: 本组件采用懒构建, OnRender 阶段不构建任何子项, 仅产出布局节点)
     collapsibleBoxes_.clear();
     collapsibleIndices_.clear();
-    {
+    if (ctx_.frameState) {
         const auto& vboxes = scrollable_->visibleBoxes();
-        for (size_t i = 0; i < itemMeta_.size() && i < vboxes.size(); ++i) {
-            const auto& meta = itemMeta_[i];
-            if (!meta.collapsible || meta.messageIndex < 0) {
-                continue;
-            }
-            if (vboxes[i].IsEmpty()) {
+        const auto& msgs   = ctx_.frameState->messages;
+        for (size_t i = 0; i < vboxes.size() && i < msgs.size(); ++i) {
+            const auto& msg = *msgs[i];
+            const bool  collapsible
+                = (msg.role == TUIMessage::Role::Thinking || msg.role == TUIMessage::Role::Tool);
+            if (!collapsible || vboxes[i].IsEmpty()) {
                 continue;
             }
             collapsibleBoxes_.push_back(vboxes[i]);
-            collapsibleIndices_.push_back(static_cast<size_t>(meta.messageIndex));
+            collapsibleIndices_.push_back(i);
         }
     }
 
@@ -117,152 +165,211 @@ bool MessageListComponent::handleCollapsibleClick(const Mouse& mouse) {
     return false;
 }
 
-int64_t MessageListComponent::messageSignature(const TUIMessage& msg) {
-    auto combine = [](uint64_t seed, uint64_t v) -> uint64_t {
-        return seed ^ (v + 0x9e3779b97f4a7c15ULL + (seed << 6) + (seed >> 2));
-    };
-    uint64_t h = 0;
-    h          = combine(h, static_cast<uint64_t>(msg.role));
-    h          = combine(h, msg.collapsed);
-    h          = combine(h, msg.toolFinished);
-    h          = combine(h, msg.durationMs);
-    h          = combine(h, msg.startTimeMs);
-    h          = combine(h, std::hash<std::string>{}(msg.toolName));
-    h          = combine(h, std::hash<std::string>{}(msg.text));
-    h          = combine(h, std::hash<std::string>{}(msg.toolResult));
-    return static_cast<int64_t>(h);
+// ---------------------------------------------------------------------------
+// LazyScrollable 回调
+// ---------------------------------------------------------------------------
+
+bool MessageListComponent::hasStreamingToken(const TUIRenderState& st) const {
+    return st.isStreaming && st.currentToken && !st.currentToken->empty();
 }
 
-std::vector<ScrollItem> MessageListComponent::buildItems() {
-    itemMeta_.clear();
-    const auto& st           = *ctx_.frameState;
-    const auto& theme        = *ctx_.theme;
-    const int   msgListWidth = scrollable_->contentWidth();
+size_t MessageListComponent::itemCount() {
+    const auto& st = *ctx_.frameState;
+    if (st.messages.empty() && !hasStreamingToken(st)) {
+        return 1; // 空状态 banner (fillViewport)
+    }
+    return st.messages.size() + (hasStreamingToken(st) ? 1 : 0);
+}
 
-    const bool hasStreamingToken = st.isStreaming && st.currentToken && !st.currentToken->empty();
-    if (st.messages.empty() && !hasStreamingToken) {
-        auto banner = vbox({
-            filler(),
-            text(R"_(
+uint64_t MessageListComponent::itemKey(size_t index) {
+    const auto& st = *ctx_.frameState;
+    auto        combine = [](uint64_t seed, uint64_t v) -> uint64_t {
+        return seed ^ (v + 0x9e3779b97f4a7c15ULL + (seed << 6) + (seed >> 2));
+    };
+    if (st.messages.empty() && !hasStreamingToken(st)) {
+        return 1; // banner
+    }
+    if (index < st.messages.size()) {
+        // 消息内容变化必然伴随消息指针变化 (见 TUISharedState::mutableMessage /
+        // onSync 整体替换), 故以指针为主 key; 附加廉价 O(1) 特征 (长度/标志)
+        // 防止地址重用 (ABA) —— 内容变则指针变, 长度几乎必然同步变化
+        uint64_t h = reinterpret_cast<uint64_t>(st.messages[index].get());
+        const auto& m = *st.messages[index];
+        h = combine(h, static_cast<uint64_t>(m.role));
+        h = combine(h, m.collapsed);
+        h = combine(h, m.toolFinished);
+        h = combine(h, static_cast<uint64_t>(m.durationMs));
+        h = combine(h, static_cast<uint64_t>(m.startTimeMs));
+        h = combine(h, m.text.size());
+        h = combine(h, m.toolResult.size());
+        h = combine(h, m.toolName.size());
+        return h;
+    }
+    // 流式增量项: token 累积中, 以 (指针, 长度, role) 作为 key 触发高度重估
+    uint64_t h = reinterpret_cast<uint64_t>(st.currentToken.get());
+    h          = combine(h, st.currentToken ? st.currentToken->size() : 0);
+    h          = combine(h, static_cast<uint64_t>(st.currentTokenRole));
+    return h;
+}
+
+int MessageListComponent::estimateHeight(size_t index, int width) {
+    const auto& st = *ctx_.frameState;
+    if (st.messages.empty() && !hasStreamingToken(st)) {
+        return 1; // banner 为 fillViewport, 高度由 LazyScrollable 置为视口高度
+    }
+    if (index < st.messages.size()) {
+        const auto& msg = *st.messages[index];
+        switch (msg.role) {
+            case TUIMessage::Role::User:
+                return estimateLines(msg.text, width);
+            case TUIMessage::Role::Assistant:
+                return estimateLines(msg.text, width);
+            case TUIMessage::Role::System:
+                return estimateLines(msg.text, width);
+            case TUIMessage::Role::Thinking:
+                return msg.collapsed ? 1 : 1 + estimateLines(msg.text, width);
+            case TUIMessage::Role::Tool: {
+                if (msg.collapsed) {
+                    return 1;
+                }
+                int lines = 1; // header
+                if (!msg.text.empty()) {
+                    lines += estimateLines(msg.text, width);
+                }
+                lines += msg.toolFinished ? estimateLines(msg.toolResult, width) : 1;
+                return lines;
+            }
+        }
+        return 1;
+    }
+    // 流式增量项
+    return 1 + estimateLines(*st.currentToken, width);
+}
+
+bool MessageListComponent::fillViewport(size_t index) {
+    const auto& st = *ctx_.frameState;
+    return index == 0 && st.messages.empty() && !hasStreamingToken(st);
+}
+
+LazyBuiltItem MessageListComponent::buildItem(size_t index) {
+    const auto& st = *ctx_.frameState;
+    if (st.messages.empty() && !hasStreamingToken(st)) {
+        LazyBuiltItem out;
+        out.element   = buildBanner();
+        out.cacheable = true;
+        return out;
+    }
+    if (index < st.messages.size()) {
+        return buildMessageItem(*st.messages[index]);
+    }
+    return buildStreamingItem(st);
+}
+
+Element MessageListComponent::buildBanner() {
+    const auto& theme = *ctx_.theme;
+    return vbox({
+        filler(),
+        text(R"_(
     ___   _____________   ________
    /   | / ____/ ____/ | / /_  __/    __    __
   / /| |/ / __/ __/ /  |/ / / /    __/ /___/ /_
  / ___ / /_/ / /___/ /|  / / /    /_  __/_  __/
 /_/  |_\____/_____/_/ |_/ /_/      /_/   /_/
 )_") | bold | color(theme.accentColor)
-                | center,
-            text("Type a message to start. [F2] switch model, [Esc] cancel, "
-                 "[Ctrl+C] quit.")
-                | color(theme.hintColor) | center,
-            filler(),
-        });
-        return {
-            ScrollItem{std::move(banner), true}
-        };
-    }
-
-    if (cache_.size() > st.messages.size()) {
-        cache_.clear();
-    }
-    while (cache_.size() < st.messages.size()) {
-        cache_.push_back(MessageCache{});
-    }
-
-    if (st.messages.size() > prevMsgCount_ && cache_.size() > kMaxCache) {
-        const size_t evictEnd = cache_.size() - kMaxCache;
-        for (size_t i = 0; i < evictEnd; ++i) {
-            auto& c = cache_[i];
-            if (c.element) {
-                c.element = nullptr;
-                c.mdBuilders.clear();
-            }
-        }
-    }
-    prevMsgCount_ = st.messages.size();
-
-    std::vector<ScrollItem> items;
-    items.reserve(st.messages.size() + 1);
-
-    for (size_t i = 0; i < st.messages.size(); ++i) {
-        const auto& msg   = *st.messages[i];
-        auto&       cache = cache_[i];
-        int64_t     sig   = messageSignature(msg);
-        if (cache.sig != sig || cache.cachedWidth != msgListWidth || !cache.element) {
-            cache.mdBuilders.clear();
-            cache.element     = vbox({
-                buildMessageBlock(msg, msgListWidth, cache.mdBuilders),
-                text(""),
-            });
-            cache.sig         = sig;
-            cache.cachedWidth = msgListWidth;
-        }
-        items.push_back(ScrollItem{cache.element, false});
-
-        const bool collapsible
-            = (msg.role == TUIMessage::Role::Thinking || msg.role == TUIMessage::Role::Tool);
-        itemMeta_.push_back(ItemMeta{msg.role, collapsible, static_cast<int>(i)});
-    }
-
-    streamingMdBuilders_.clear();
-    if (hasStreamingToken) {
-        const TUIMessage* currentMsg = nullptr;
-        for (size_t i = st.messages.size(); i > 0; --i) {
-            if (st.messages[i - 1]->role == st.currentTokenRole) {
-                currentMsg = st.messages[i - 1].get();
-                break;
-            }
-        }
-
-        Element block;
-        if (st.currentTokenRole == TUIMessage::Role::Thinking) {
-            Elements lines;
-            Elements header;
-            header.push_back(text("- [Thinking] ") | color(theme.thinkingColor));
-            if (currentMsg && currentMsg->durationMs > 0) {
-                header.push_back(
-                    text(fmt::format("{} ", formatDurationMilliseconds(currentMsg->durationMs)))
-                    | color(theme.thinkingColor)
-                );
-            }
-            lines.push_back(hbox(std::move(header)));
-            if (false == TUISettings::instance().isAnimationEnabled(AnimationLevel::Ultra)) {
-                // 超长流式文本: 纯文本渲染, 避免每 token 全量 cmark 解析
-                lines.push_back(paragraph(*st.currentToken) | color(theme.thinkingColor));
-            } else {
-                auto [el, builder] = renderMarkdown(
-                    *st.currentToken,
-                    theme.thinkingColor,
-                    theme.markdownTheme,
-                    msgListWidth
-                );
-                if (builder) {
-                    streamingMdBuilders_.push_back(std::move(builder));
-                }
-                lines.push_back(std::move(el));
-            }
-            block = vbox(std::move(lines));
-        } else {
-            if (false == TUISettings::instance().isAnimationEnabled(AnimationLevel::Low)) {
-                block = paragraph(*st.currentToken) | color(theme.normalColor);
-            } else {
-                auto [el, builder] = renderMarkdown(
-                    *st.currentToken,
-                    theme.normalColor,
-                    theme.markdownTheme,
-                    msgListWidth
-                );
-                if (builder) {
-                    streamingMdBuilders_.push_back(std::move(builder));
-                }
-                block = std::move(el);
-            }
-        }
-        items.push_back(ScrollItem{std::move(block), false});
-        itemMeta_.push_back(ItemMeta{st.currentTokenRole, false, -1});
-    }
-
-    return items;
+            | center,
+        text("Type a message to start. [F2] switch model, [Esc] cancel, "
+             "[Ctrl+C] quit.")
+            | color(theme.hintColor) | center,
+        filler(),
+    });
 }
+
+LazyBuiltItem MessageListComponent::buildMessageItem(const TUIMessage& msg) {
+    const int maxWidth = std::max(1, scrollable_->contentWidth());
+
+    std::vector<std::unique_ptr<markdown::DomBuilder>> builders;
+    auto block = buildMessageBlock(msg, maxWidth, builders);
+
+    LazyBuiltItem out;
+    out.element     = vbox({std::move(block), text("")});
+    out.sourceBytes = msg.text.size() + msg.toolResult.size() + msg.toolName.size();
+    out.cacheable   = true;
+    // markdown DomBuilder 生命周期与 Element 绑定
+    // (Element 内 reflect 的链接 Box 指向 builder 内部容器)
+    for (auto& b : builders) {
+        out.attachments.push_back(std::move(b));
+    }
+    return out;
+}
+
+LazyBuiltItem MessageListComponent::buildStreamingItem(const TUIRenderState& st) {
+    const auto& theme    = *ctx_.theme;
+    const int   maxWidth = std::max(1, scrollable_->contentWidth());
+
+    LazyBuiltItem out;
+    out.cacheable   = false; // 流式增量每帧都变, 不缓存 (每帧重建后即释放)
+    out.sourceBytes = st.currentToken ? st.currentToken->size() : 0;
+
+    // 与流式角色相同的最近一条消息 (thinking 头部显示其时长)
+    const TUIMessage* currentMsg = nullptr;
+    for (size_t i = st.messages.size(); i > 0; --i) {
+        if (st.messages[i - 1]->role == st.currentTokenRole) {
+            currentMsg = st.messages[i - 1].get();
+            break;
+        }
+    }
+
+    Element block;
+    if (st.currentTokenRole == TUIMessage::Role::Thinking) {
+        Elements lines;
+        Elements header;
+        header.push_back(text("- [Thinking] ") | color(theme.thinkingColor));
+        if (currentMsg && currentMsg->durationMs > 0) {
+            header.push_back(
+                text(fmt::format("{} ", formatDurationMilliseconds(currentMsg->durationMs)))
+                | color(theme.thinkingColor)
+            );
+        }
+        lines.push_back(hbox(std::move(header)));
+        if (false == TUISettings::instance().isAnimationEnabled(AnimationLevel::Ultra)) {
+            // 超长流式文本: 纯文本渲染, 避免每 token 全量 cmark 解析
+            lines.push_back(paragraph(*st.currentToken) | color(theme.thinkingColor));
+        } else {
+            auto [el, builder] = renderMarkdown(
+                *st.currentToken,
+                theme.thinkingColor,
+                theme.markdownTheme,
+                maxWidth
+            );
+            if (builder) {
+                out.attachments.push_back(std::move(builder));
+            }
+            lines.push_back(std::move(el));
+        }
+        block = vbox(std::move(lines));
+    } else {
+        if (false == TUISettings::instance().isAnimationEnabled(AnimationLevel::Low)) {
+            block = paragraph(*st.currentToken) | color(theme.normalColor);
+        } else {
+            auto [el, builder] = renderMarkdown(
+                *st.currentToken,
+                theme.normalColor,
+                theme.markdownTheme,
+                maxWidth
+            );
+            if (builder) {
+                out.attachments.push_back(std::move(builder));
+            }
+            block = std::move(el);
+        }
+    }
+    out.element = std::move(block);
+    return out;
+}
+
+// ---------------------------------------------------------------------------
+// 消息块构建 (与旧实现一致的视觉呈现)
+// ---------------------------------------------------------------------------
 
 Element MessageListComponent::buildMessageBlock(
     const TUIMessage&                                   msg,
