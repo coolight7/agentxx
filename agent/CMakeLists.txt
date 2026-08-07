@@ -210,7 +210,13 @@ if (XX_IS_MSVC_D)
 else ()
   # XX_IS_CLANG_D OR XX_IS_GCC_D
   set(_AGENTXX_C_FLAGS   "${_AGENTXX_COMMON_C_CXX_FLAGS} ${_AGENTXX_C_FLAGS}   -fvisibility=default -ffunction-sections -fdata-sections -Wall -fPIC -pipe -D_GNU_SOURCE")
-  set(_AGENTXX_CXX_FLAGS "${_AGENTXX_COMMON_C_CXX_FLAGS} ${_AGENTXX_CXX_FLAGS} -fvisibility=default -ffunction-sections -fdata-sections -Wall -fPIC -pipe")
+  # -include cstddef: boost::asio 的 config.hpp 推导 BOOST_ASIO_HAS_STD_ALIGNED_ALLOC
+  # 时依赖 libstdc++ 的 _GLIBCXX_HAVE_ALIGNED_ALLOC 宏, 但 config.hpp 自身不 include
+  # 系统头, 该宏是否已定义取决于使用方的 include 顺序, 导致跨 TU 宏状态不一致
+  # (aligned_new 走 operator new 而 aligned_delete 走 std::free → ASAN alloc-dealloc
+  # mismatch / ODR 违反, 链接顺序变化即暴露崩溃)。强制预包含 <cstddef> 使该宏
+  # 在所有 TU 中于 config.hpp 处理前已定义, 统一推导结果。
+  set(_AGENTXX_CXX_FLAGS "${_AGENTXX_COMMON_C_CXX_FLAGS} ${_AGENTXX_CXX_FLAGS} -fvisibility=default -ffunction-sections -fdata-sections -Wall -fPIC -pipe -include cstddef")
   
   set(CMAKE_C_FLAGS_RELEASE          "${_AGENTXX_C_FLAGS}   -O3 -flto ${CMAKE_C_FLAGS_RELEASE}")
   set(CMAKE_CXX_FLAGS_RELEASE        "${_AGENTXX_CXX_FLAGS} -O3 -flto ${CMAKE_CXX_FLAGS_RELEASE}")
