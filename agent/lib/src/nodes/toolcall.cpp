@@ -11,9 +11,224 @@
 #include <iostream>
 #include <map>
 #include <sstream>
+#include <string>
+#include <type_traits>
 
 namespace agentxx {
 namespace nodes {
+namespace {
+
+/// 解析字符串为数值: 容忍首尾空白与一个前导 '+', 要求整个字符串被完整解析
+/// (std::from_chars 不接受空白与前导 '+', 且允许部分解析, 这里做严格校验)
+template <typename T> bool parseFullNumber(std::string_view s, T& out) {
+    size_t b = 0, e = s.size();
+    while (b < e && agentxx::util::charIsSpace(s[b])) {
+        ++b;
+    }
+    while (e > b && agentxx::util::charIsSpace(s[e - 1])) {
+        --e;
+    }
+    s = s.substr(b, e - b);
+    if (s.empty()) {
+        return false;
+    }
+    if (s.front() == '+') {
+        s.remove_prefix(1);
+    }
+    if (s.empty()) {
+        return false;
+    }
+    // 浮点 from_chars (C++23+) 支持 0x 十六进制浮点写法, 这里拒绝, 避免 "0x10" 被
+    // 意外解析为 16.0 (LLM 可能输出十六进制文本, 不应视为十进制数值)
+    if constexpr (std::is_floating_point_v<T>) {
+        if (s.size() >= 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
+            return false;
+        }
+    }
+    T                v;
+    auto             result = std::from_chars(s.data(), s.data() + s.size(), v);
+    if (result.ec == std::errc{} && result.ptr == s.data() + s.size()) {
+        out = v;
+        return true;
+    }
+    return false;
+}
+
+/// 数值 json -> 十进制字符串 (整数用 to_string, 浮点用最短可往返表示)
+std::string numberToJsonString(const neograph::json& v) {
+    if (v.is_number_unsigned()) {
+        return std::to_string(v.get<unsigned long long>());
+    }
+    if (v.is_number_integer()) {
+        return std::to_string(v.get<long long>());
+    }
+    return fmt::format("{}", v.get<double>());
+}
+
+/// schema 声明的类型集合
+struct SchemaTypes {
+    bool isArray   = false;
+    bool isString  = false;
+    bool isNumber  = false; // 声明了 "number"
+    bool isInteger = false; // 声明了 "integer"
+    bool isBool    = false;
+
+    /// 是否声明了数值类型 (number 或 integer)
+    bool isNumeric() const {
+        return isNumber || isInteger;
+    }
+};
+
+SchemaTypes getSchemaTypes(const neograph::json& schema) {
+    SchemaTypes t;
+    if (!schema.is_object()) {
+        return t;
+    }
+    auto check = [&t](std::string_view one) {
+        if ("array" == one) {
+            t.isArray = true;
+        } else if ("string" == one) {
+            t.isString = true;
+        } else if ("number" == one) {
+            t.isNumber = true;
+        } else if ("integer" == one) {
+            t.isInteger = true;
+        } else if ("boolean" == one) {
+            t.isBool = true;
+        }
+    };
+    auto type = schema.value("type", std::string{});
+    if (!type.empty()) {
+        check(type);
+    } else if (schema.contains("type") && schema["type"].is_array()) {
+        // 联合类型, 如 {"type": ["array", "string"]}
+        for (const auto& item : schema["type"]) {
+            if (item.is_string()) {
+                check(item.get<std::string>());
+            }
+        }
+    }
+    return t;
+}
+
+/// 数组元素是否允许为字符串 (items 未声明或声明为 string 时视为字符串数组)
+bool isStringArrayItems(const neograph::json& schema) {
+    auto items = schema["items"];
+    if (items.is_object()) {
+        auto itemType = items.value("type", std::string{});
+        if (!itemType.empty() && "string" != itemType) {
+            return false;
+        }
+    }
+    return true;
+}
+
+} // namespace
+
+/// 根据 tool 的参数 JSON Schema 自动修正参数类型兼容性, 尽量让 arg 类型匹配参数需求:
+/// - string -> 字符串数组: 参数声明为数组 (字符串数组) 而传入单个字符串时, 包装为 `[str]`
+/// - string -> number/integer: 参数声明为数值而传入字符串时, 若字符串可完整解析为数值则转换
+///   (integer 仅接受整数写法; number 支持小数/指数; 前导 '+', 首尾空白会被容忍)
+/// - number/integer -> string: 参数声明为字符串而传入数值时, 转为十进制字符串
+/// - bool -> string / string("true"/"false") -> boolean: 布尔与字符串互相转换
+/// - [单字符串数组] -> string: 参数声明为字符串而传入单元素字符串数组时, 解包为字符串
+/// - 仅当目标类型不包含 arg 当前类型时转换; 无法解析或类型不明确时保持原样
+/// @return 是否发生了参数转换
+bool ToolcallWrapNode::autoFixArgsType(const neograph::ChatTool& def, neograph::json& args) {
+    if (!args.is_object()) {
+        return false;
+    }
+    const auto& params = def.parameters;
+    if (!params.is_object()) {
+        return false;
+    }
+    const auto& props = params["properties"];
+    if (!props.is_object()) {
+        return false;
+    }
+
+    bool changed = false;
+    for (const auto& [name, schema] : props.items()) {
+        // 跳过未传值的参数
+        if (!args.contains(name)) {
+            continue;
+        }
+        const auto&  arg = args[name];
+        const auto   types = getSchemaTypes(schema);
+        // 记录到日志的转换信息
+        std::string  fixInfo;
+
+        if (arg.is_string()) {
+            auto str = arg.get<std::string>();
+            // 1) string -> 字符串数组
+            if (types.isArray && isStringArrayItems(schema)) {
+                auto arr = neograph::json::array();
+                arr.push_back(arg);
+                args[name] = std::move(arr);
+                fixInfo    = "string -> [string]";
+                changed    = true;
+            }
+            // 2) string -> number/integer (目标不含 string 时)
+            else if (types.isNumeric() && !types.isString) {
+                if (types.isNumber) {
+                    // 声明了 number: 按浮点解析 (兼容小数/指数)
+                    double v = 0;
+                    if (parseFullNumber(str, v)) {
+                        args[name] = v;
+                        fixInfo    = "string -> number";
+                        changed    = true;
+                    }
+                } else {
+                    // 仅声明 integer: 只接受纯整数写法 ("3.5" 不转换)
+                    long long v = 0;
+                    if (parseFullNumber(str, v)) {
+                        args[name] = v;
+                        fixInfo    = "string -> integer";
+                        changed    = true;
+                    }
+                }
+            }
+            // 3) string -> boolean (目标不含 string 时)
+            else if (types.isBool && !types.isString) {
+                if ("true" == str) {
+                    args[name] = true;
+                    fixInfo    = "string -> boolean";
+                    changed    = true;
+                } else if ("false" == str) {
+                    args[name] = false;
+                    fixInfo    = "string -> boolean";
+                    changed    = true;
+                }
+            }
+        } else if (arg.is_number()) {
+            // number/integer -> string (目标不含数值时)
+            if (types.isString && !types.isNumeric()) {
+                args[name] = numberToJsonString(arg);
+                fixInfo    = "number -> string";
+                changed    = true;
+            }
+        } else if (arg.is_bool()) {
+            // bool -> string (目标不含 boolean 时)
+            if (types.isString && !types.isBool) {
+                args[name] = arg.get<bool>() ? std::string{"true"} : std::string{"false"};
+                fixInfo    = "bool -> string";
+                changed    = true;
+            }
+        } else if (arg.is_array()) {
+            // [单字符串数组] -> string (目标不含 array 时)
+            if (types.isString && !types.isArray && arg.size() == 1 && arg[0].is_string()) {
+                args[name] = arg[0].get<std::string>();
+                fixInfo    = "[string] -> string";
+                changed    = true;
+            }
+        }
+
+        if (!fixInfo.empty()) {
+            XX_LOGD("Toolcall auto-fix arg type: `{}` {} for tool {}", name, fixInfo, def.name);
+        }
+    }
+    return changed;
+}
 
 ToolcallWrapNode::ToolcallWrapNode(
     std::string_view                            in_name,
@@ -118,6 +333,15 @@ asio::awaitable<std::string> ToolcallWrapNode::execTool(
     const std::shared_ptr<neograph::graph::CancelToken>& cancelToken
 ) const {
     auto agentCtxPtr = agentContext.lock();
+    {
+        // 参数类型自动修正: 根据 tool 参数 JSON Schema 尽量让 arg 类型匹配参数需求
+        // (string<->number/bool, string->字符串数组, [单字符串数组]->string 等)
+        try {
+            autoFixArgsType(tool->get_definition(), args);
+        } catch (const std::exception& e) {
+            XX_LOGW("Toolcall auto-fix arg type failed: {}", e.what());
+        }
+    }
     {
         // 权限检查 (permissionMiddleware 默认 nullptr, 未配置权限中间件时跳过)
         if (agentCtxPtr && agentCtxPtr->permissionMiddleware) {

@@ -64,6 +64,7 @@
 - **Toolcall**
     - ✅返回值自动转换字符编码到 utf8
     - ✅拦截输出，超过限制长度时自动压缩、截取摘要存储到 share_store
+    - ✅自动转换参数类型（String、Array、Number互转），提高兼容性
     - ⬜支持依托`事件流`实现异步获取结果、分块获取结果
     - ✅filesystem (支持 `同步`/`asio io_uring/IOCP 协程异步` 文件读写、超时限制)
         - ls (file/dir/recursive-dir/limit)
@@ -124,6 +125,7 @@
     - 预设文件读写权限限制
     - ⬜沙盒执行 Shell/File RW
 - ✅**异常处理和自动重试**
+    - Toolcall 自动转换参数类型（String、Array、Number互转），提高兼容性
     - Toolcall/LLM 节点支持自动重试，支持自定义重试次数
     - Toolcall/LLM 节点异常时 自动判断保留已生成的消息、补充添加消息到上下文，保持角色消息顺序正确
     - 轮次开始时，自动检查和修复消息上下文角色顺序和内容
