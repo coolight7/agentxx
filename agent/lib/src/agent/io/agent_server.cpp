@@ -116,15 +116,24 @@ std::shared_ptr<SessionServerAgentIO> AgentServer::getOrCreateController(std::st
 
     // threadId 以 std::string 值捕获: string_view 参数引用的原始字符串
     // (serveTransport 的局部 WireHello) 可能在本协程完成前已析构
-    asio::co_spawn(ex_, ctrl->run(), [ctrl, threadId = std::string{threadId}](std::exception_ptr ep) {
-        if (ep) {
-            try {
-                std::rethrow_exception(ep);
-            } catch (const std::exception& e) {
-                XX_LOGE("[agent_server] controller '{}' error: {}", threadId, e.what());
+    asio::co_spawn(
+        ex_,
+        ctrl->run(),
+        [ctrl, threadId = std::string{threadId}](std::exception_ptr ep) {
+            if (ep) {
+                agentxx::util::catchError<bool>(
+                    [&]() {
+                        std::rethrow_exception(ep);
+                        return true;
+                    },
+                    [&](std::string errmsg) {
+                        XX_LOGE("[agent_server] controller '{}' error: {}", threadId, errmsg);
+                        return false;
+                    }
+                );
             }
         }
-    });
+    );
     return ctrl;
 }
 
@@ -182,7 +191,8 @@ asio::awaitable<void> AgentServer::serveTransport(std::shared_ptr<AgentIOTranspo
     // 同一 threadId 已有旧连接时, 先关闭旧 transport:
     // 否则旧连接的 runTransportLoop 协程继续存活, 两个接收循环并发处理
     // 同一会话的消息 (输入重复执行/消息交错), 且旧 transport 持续占用资源
-    if (auto oldTransport = ctrl->transport(); oldTransport && oldTransport.get() != transport.get()) {
+    if (auto oldTransport = ctrl->transport();
+        oldTransport && oldTransport.get() != transport.get()) {
         oldTransport->close();
     }
 

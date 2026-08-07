@@ -3,6 +3,7 @@
 #include "agentxx-client/io/tui/framework/tui_settings.h"
 #include "agentxx-client/io/tui/mermaid_state.h"
 #include "agentxx/util/diff_util.h"
+#include "agentxx/util/exception.h"
 #include "agentxx/util/string_util.h"
 #include "ftxui/component/event.hpp"
 #include "ftxui/dom/elements.hpp"
@@ -582,11 +583,12 @@ Element MessageListComponent::buildMessageBlock(
 
 void MessageListComponent::appendEditToolHeader(const TUIMessage& msg, Elements& header) {
     const auto& theme = *ctx_.theme;
-    std::string path;
-    try {
-        path = neograph::json::parse(msg.text).value("path", std::string{});
-    } catch (...) {
-    }
+    std::string path  = agentxx::util::catchError<std::string>(
+        [&msg]() -> std::string {
+            return neograph::json::parse(msg.text).value("path", std::string{});
+        },
+        [](std::string) -> std::string { return {}; }
+    );
     if (!path.empty()) {
         header.push_back(text(path) | color(theme.toolColor) | dim);
     }
@@ -595,13 +597,16 @@ void MessageListComponent::appendEditToolHeader(const TUIMessage& msg, Elements&
 void MessageListComponent::appendEditToolBody(const TUIMessage& msg, Elements& lines) {
     const auto& theme = *ctx_.theme;
     std::string path, oldStr, newStr;
-    try {
-        auto args = neograph::json::parse(msg.text);
-        path      = args.value("path", std::string{});
-        oldStr    = args.value("old_str", std::string{});
-        newStr    = args.value("new_str", std::string{});
-    } catch (...) {
-    }
+    agentxx::util::catchError<bool>(
+        [&]() -> bool {
+            auto args = neograph::json::parse(msg.text);
+            path      = args.value("path", std::string{});
+            oldStr    = args.value("old_str", std::string{});
+            newStr    = args.value("new_str", std::string{});
+            return true;
+        },
+        [](std::string) -> bool { return false; }
+    );
     if (!path.empty()) {
         lines.push_back(hbox({
             text("  file: ") | color(theme.hintColor),

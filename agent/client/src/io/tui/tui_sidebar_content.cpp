@@ -1,6 +1,7 @@
 #include "agentxx-client/io/tui/agent_tui.h"
 #include "agentxx-client/io/tui/components/message_list.h"
 #include "agentxx-client/io/tui/components/sidebar.h"
+#include "agentxx/util/exception.h"
 #include "agentxx/util/string_util.h"
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/terminal.hpp"
@@ -62,7 +63,7 @@ std::vector<ScrollItem> TUIClientAgentIO::renderLogWindow() {
         }
         logCachePoppedCount_ = curPopped;
         logCacheLineCount_   = curCount;
-        auto lines = logSink_->snapshot();
+        auto lines           = logSink_->snapshot();
         // 增量构建新增行 (未发生淘汰时, 前段与缓存一一对应)
         while (logLineCache_.size() < lines.size()) {
             logLineCache_.push_back(buildLogLine(lines[logLineCache_.size()], theme_));
@@ -106,12 +107,14 @@ std::optional<ftxui::Element> TUIClientAgentIO::renderPlanningInfo() {
         planCacheTextLen_  = plan->text.size();
         planCacheFinished_ = plan->toolFinished;
         planCacheArgs_     = neograph::json::array();
-        try {
-            planCacheArgs_  = neograph::json::parse(plan->text);
-            planCacheValid_ = true;
-        } catch (...) {
-            planCacheValid_ = false;
-        }
+        // 解析失败保持 planCacheValid_ = false, 界面显示占位内容而非异常中断渲染
+        planCacheValid_ = agentxx::util::catchError<bool>(
+            [&]() -> bool {
+                planCacheArgs_ = neograph::json::parse(plan->text);
+                return true;
+            },
+            [](std::string) -> bool { return false; }
+        );
     }
     if (!planCacheValid_) {
         planDiagramButtonBox_ = ftxui::Box{0, -1, 0, -1};
@@ -227,11 +230,9 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
                 }
                 ++count;
                 elems.push_back(
-                    (splitName ? hbox({text(fmt::format(
-                                     "|  {}·{}",
-                                     agentxx::util::getFileName(notif.name),
-                                     notif.name
-                                 ))})
+                    (splitName ? hbox({text(
+                         fmt::format("|  {}·{}", agentxx::util::getFileName(notif.name), notif.name)
+                     )})
                                : hbox({text("|  "), text(notif.name)}))
                     | color(notif.success ? theme_.hintColor : theme_.errorColor)
                 );
@@ -266,12 +267,10 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
 ftxui::Element TUIClientAgentIO::renderInfoSidebarFooter() {
     Elements elements;
 
-    std::string cwd;
-    try {
-        cwd = std::filesystem::current_path().string();
-    } catch (...) {
-        cwd = "(Unknown Work Dir)";
-    }
+    std::string cwd = agentxx::util::catchError<std::string>(
+        []() -> std::string { return std::filesystem::current_path().string(); },
+        [](std::string) -> std::string { return "[Unknown Work Dir]"; }
+    );
     elements.push_back(text(cwd) | color(theme_.hintColor));
 
     std::string mode = remoteUrl_.empty() ? "Inner Server" : remoteUrl_;

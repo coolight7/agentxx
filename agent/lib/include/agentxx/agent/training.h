@@ -6,6 +6,7 @@
 #include "neograph/json.h"
 #include "neograph/llm/openai_provider.h"
 #include "neograph/types.h"
+#include <agentxx/util/exception.h>
 #include <agentxx/util/log.h>
 #include <filesystem>
 #include <fstream>
@@ -33,61 +34,71 @@ struct TrainingTestCase {
 /// 从 JSON 文件中加载测试用例
 inline std::vector<TrainingTestCase> loadTestCasesFromFile(std::string_view filePath) {
     std::vector<TrainingTestCase> cases;
-    try {
-        std::ifstream ifs(std::string{filePath});
-        if (!ifs.is_open()) {
-            XX_LOGE("[Training] Failed to open test case file: {}", filePath);
-            return cases;
-        }
-        std::string content(
-            (std::istreambuf_iterator<char>(ifs)),
-            std::istreambuf_iterator<char>()
-        );
-        ifs.close();
+    agentxx::util::catchError<bool>(
+        [&]() -> bool {
+            std::ifstream ifs(std::string{filePath});
+            if (!ifs.is_open()) {
+                XX_LOGE("[Training] Failed to open test case file: {}", filePath);
+                return true;
+            }
+            std::string content(
+                (std::istreambuf_iterator<char>(ifs)),
+                std::istreambuf_iterator<char>()
+            );
+            ifs.close();
 
-        auto j = neograph::json::parse(content);
-        if (!j.is_array()) {
-            XX_LOGE("[Training] Test case file is not a JSON array: {}", filePath);
-            return cases;
+            auto j = neograph::json::parse(content);
+            if (!j.is_array()) {
+                XX_LOGE("[Training] Test case file is not a JSON array: {}", filePath);
+                return true;
+            }
+            for (const auto& item : j) {
+                TrainingTestCase tc;
+                tc.name           = item.value("name", "");
+                tc.input          = item.value("input", "");
+                tc.expectedOutput = item.value("expectedOutput", "");
+                tc.equalOutput    = item.value("equalOutput", "");
+                tc.extra          = item.value("extra", neograph::json::object());
+                cases.push_back(std::move(tc));
+            }
+            XX_LOGD("[Training] Loaded {} test cases from {}", cases.size(), filePath);
+            return true;
+        },
+        [filePath](std::string errmsg) -> bool {
+            XX_LOGE("[Training] Failed to parse test case file {}: {}", filePath, errmsg);
+            return false;
         }
-        for (const auto& item : j) {
-            TrainingTestCase tc;
-            tc.name           = item.value("name", "");
-            tc.input          = item.value("input", "");
-            tc.expectedOutput = item.value("expectedOutput", "");
-            tc.equalOutput    = item.value("equalOutput", "");
-            tc.extra          = item.value("extra", neograph::json::object());
-            cases.push_back(std::move(tc));
-        }
-        XX_LOGD("[Training] Loaded {} test cases from {}", cases.size(), filePath);
-    } catch (const std::exception& e) {
-        XX_LOGE("[Training] Failed to parse test case file {}: {}", filePath, e.what());
-    }
+    );
     return cases;
 }
 
 /// 从目录中加载所有 JSON 测试用例文件
 inline std::vector<TrainingTestCase> loadTestCasesFromDirectory(std::string_view dirPath) {
     std::vector<TrainingTestCase> allCases;
-    try {
-        for (const auto& entry : std::filesystem::directory_iterator(dirPath)) {
-            if (entry.is_regular_file() && entry.path().extension() == ".json") {
-                auto fileCases = loadTestCasesFromFile(entry.path().string());
-                allCases.insert(
-                    allCases.end(),
-                    std::make_move_iterator(fileCases.begin()),
-                    std::make_move_iterator(fileCases.end())
-                );
+    agentxx::util::catchError<bool>(
+        [&]() -> bool {
+            for (const auto& entry : std::filesystem::directory_iterator(dirPath)) {
+                if (entry.is_regular_file() && entry.path().extension() == ".json") {
+                    auto fileCases = loadTestCasesFromFile(entry.path().string());
+                    allCases.insert(
+                        allCases.end(),
+                        std::make_move_iterator(fileCases.begin()),
+                        std::make_move_iterator(fileCases.end())
+                    );
+                }
             }
+            XX_LOGD(
+                "[Training] Loaded {} total test cases from directory {}",
+                allCases.size(),
+                dirPath
+            );
+            return true;
+        },
+        [dirPath](std::string errmsg) -> bool {
+            XX_LOGE("[Training] Failed to load test cases from directory {}: {}", dirPath, errmsg);
+            return false;
         }
-        XX_LOGD(
-            "[Training] Loaded {} total test cases from directory {}",
-            allCases.size(),
-            dirPath
-        );
-    } catch (const std::exception& e) {
-        XX_LOGE("[Training] Failed to load test cases from directory {}: {}", dirPath, e.what());
-    }
+    );
     return allCases;
 }
 
@@ -121,16 +132,18 @@ inline std::string stripMarkdownCodeBlock(std::string_view content) {
 /// 子串
 inline neograph::json parseJsonFromResponse(std::string_view content) {
     auto stripped = stripMarkdownCodeBlock(content);
-    try {
-        return neograph::json::parse(stripped);
-    } catch (...) {
-        auto first = stripped.find('{');
-        auto last  = stripped.rfind('}');
-        if (first != std::string::npos && last != std::string::npos && last > first) {
-            return neograph::json::parse(stripped.substr(first, last - first + 1));
+    return agentxx::util::catchError<neograph::json>(
+        [&stripped]() -> neograph::json { return neograph::json::parse(stripped); },
+        [&stripped](std::string errmsg) -> neograph::json {
+            auto first = stripped.find('{');
+            auto last  = stripped.rfind('}');
+            if (first != std::string::npos && last != std::string::npos && last > first) {
+                return neograph::json::parse(stripped.substr(first, last - first + 1));
+            }
+            // 两种解析均失败: 以原始错误信息抛出, 由调用方统一处理
+            throw std::runtime_error(std::move(errmsg));
         }
-        throw;
-    }
+    );
 }
 
 /// 评分结果

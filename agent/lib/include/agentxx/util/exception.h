@@ -97,6 +97,7 @@ T catchError(
     return onError(std::move(errmsg));
 }
 
+// 不可传入 void 类型，编译会失败，可以用 bool 占位
 template<typename T>
 asio::awaitable<T> catchErrorAsync(
     std::function<asio::awaitable<T>()>            func,
@@ -173,6 +174,17 @@ asio::awaitable<std::expected<T, std::string>>
         std::move(func),
         [](std::string errmsg) -> asio::awaitable<std::expected<T, std::string>> {
             co_return std::unexpected<std::string>(std::move(errmsg));
+        }
+    );
+}
+
+template<typename T>
+asio::awaitable<std::optional<T>>
+    catchErrorToOptionalAsync(std::function<asio::awaitable<std::optional<T>>()> func) {
+    co_return co_await catchErrorAsync<std::optional<T>>(
+        std::move(func),
+        [](std::string errmsg) -> asio::awaitable<std::optional<T>> {
+            co_return std::nullopt;
         }
     );
 }

@@ -23,6 +23,7 @@
 - 最终的代码实现目标要能稳定运行在生产环境，广泛服务于各种设备和用户，需要仔细思考实现方案、编写足量的常规使用方式测试+各种边界情况测试
 - 非必要不应修改 `agent/third_party/` 内的代码，尽量修改本项目的代码实现功能。如果修改了的话应当删除 build 内对应的目录，让 cmake 重新编译，否则可能不生效
 - 使用 grep、glob 等工具前参考以下代码结构缩小范围，非必要不应去搜索 `agent/**` 整个代码库，里面包含了 build、third_party 等文件夹太大
+- 需要捕获异常时，建议优先考虑 [agentxx::util::catchError 系列](D:\0Acoolight\Program\cpp\agentxx\agent\lib\include\agentxx\util\exception.h)，尤其是协程异常，不应 try {} catch(...) 捕获全部异常，应当使用 `agentxx::util::catchErrorAsync` 放行 取消和中断
 - 如果需要编译或运行测试，一般跑 debug 即可
 
 ## 代码结构

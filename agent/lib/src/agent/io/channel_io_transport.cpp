@@ -1,5 +1,6 @@
 #include "agentxx/agent/io/channel_io_transport.h"
 
+#include "agentxx/util/exception.h"
 #include "asio/use_awaitable.hpp"
 
 namespace agentxx {
@@ -40,12 +41,17 @@ void ChannelAgentIOTransport::send(WireMessage msg) {
 }
 
 asio::awaitable<std::optional<WireMessage>> ChannelAgentIOTransport::recv() {
-    try {
-        auto msg = co_await incoming_->async_receive(asio::use_awaitable);
-        co_return std::move(msg);
-    } catch (const neograph_asio_system_error&) {
-        co_return std::nullopt;
-    }
+    // channel 关闭时 async_receive 抛 system_error, 按"无消息"处理返回 nullopt;
+    // 取消类异常 (CancelledException/NodeInterrupt) 由 catchErrorAsync 原样抛出
+    co_return co_await agentxx::util::catchErrorAsync<std::optional<WireMessage>>(
+        [&]() -> asio::awaitable<std::optional<WireMessage>> {
+            auto msg = co_await incoming_->async_receive(asio::use_awaitable);
+            co_return std::move(msg);
+        },
+        [](std::string) -> asio::awaitable<std::optional<WireMessage>> {
+            co_return std::nullopt;
+        }
+    );
 }
 
 void ChannelAgentIOTransport::close() {

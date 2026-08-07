@@ -1,5 +1,6 @@
 #include "agentxx/protocol/acp_server.h"
 
+#include "agentxx/util/exception.h"
 #include "agentxx/util/log.h"
 #include <fmt/format.h>
 #include <iomanip>
@@ -88,33 +89,44 @@ json AcpProtocolHandler::handleMessage(const json& env) {
     auto id             = env.contains("id") ? env["id"] : json();
     bool isNotification = !env.contains("id");
 
-    try {
-        if (method == "initialize") {
-            return handleInitialize(params, id);
-        }
-        if (method == "session/new") {
-            return handleSessionNew(params, id);
-        }
-        if (method == "session/prompt") {
-            handleSessionPrompt(env, params, id);
+    bool   handled = false;
+    auto   result  = agentxx::util::catchError<json>(
+        [&]() -> json {
+            if (method == "initialize") {
+                handled = true;
+                return handleInitialize(params, id);
+            }
+            if (method == "session/new") {
+                handled = true;
+                return handleSessionNew(params, id);
+            }
+            if (method == "session/prompt") {
+                handled = true;
+                handleSessionPrompt(env, params, id);
+                return {};
+            }
+            if (method == "session/cancel") {
+                handled = true;
+                handleSessionCancel(params);
+                return {};
+            }
+            return {};
+        },
+        [&](std::string errmsg) -> json {
+            XX_LOGE("[acp] error handling '{}': {}", method, errmsg);
+            if (!isNotification) {
+                return jsonRpcError(id, -32602, fmt::format("Invalid params: {}", errmsg));
+            }
             return {};
         }
-        if (method == "session/cancel") {
-            handleSessionCancel(params);
+    );
+    if (!handled) {
+        if (isNotification) {
             return {};
         }
-    } catch (const std::exception& e) {
-        XX_LOGE("[acp] error handling '{}': {}", method, e.what());
-        if (!isNotification) {
-            return jsonRpcError(id, -32602, fmt::format("Invalid params: {}", e.what()));
-        }
-        return {};
+        return jsonRpcError(id, -32601, fmt::format("Method not found: {}", method));
     }
-
-    if (isNotification) {
-        return {};
-    }
-    return jsonRpcError(id, -32601, fmt::format("Method not found: {}", method));
+    return result;
 }
 
 json AcpProtocolHandler::callClient(
@@ -340,89 +352,105 @@ void AcpProtocolHandler::workerRunPrompt(
     const json&                        id,
     std::shared_ptr<std::atomic<bool>> cancelFlag
 ) {
-    try {
-        auto userText = extractUserText(promptBlocks);
+    // catchError: 本函数运行于 detached worker 线程, 取消类异常也须就地转为
+    // 错误消息 (onRethrow), 避免异常逃逸线程 → std::terminate
+    agentxx::util::catchError<bool>(
+        [&]() -> bool {
+            auto userText = extractUserText(promptBlocks);
 
-        auto& engine = agent_->engine;
-        if (!engine) {
-            emitAgentMessageChunk(sessionId, "(graph error: engine is null)");
+            auto& engine = agent_->engine;
+            if (!engine) {
+                emitAgentMessageChunk(sessionId, "(graph error: engine is null)");
+                emit(jsonRpcResult(
+                    id,
+                    {
+                        {"stopReason", "end_turn"}
+                }
+                ));
+                return true;
+            }
+
+            json state;
+            state["prompt"]          = userText;
+            state["_acp_session_id"] = sessionId;
+
+            neograph::graph::RunConfig cfg;
+            cfg.thread_id    = sessionId;
+            cfg.input        = std::move(state);
+            cfg.stream_mode  = neograph::graph::StreamMode::ALL;
+            cfg.cancel_token = std::make_shared<neograph::graph::CancelToken>();
+
+            auto result = engine->run(cfg);
+
+            if (cancelFlag->exchange(false, std::memory_order_acq_rel)) {
+                emit(jsonRpcResult(
+                    id,
+                    {
+                        {"stopReason", "cancelled"}
+                }
+                ));
+                return true;
+            }
+
+            std::string agentText;
+
+            auto channels = result.channel_raw("messages");
+            if (channels.is_array() && !channels.empty()) {
+                auto last = channels[channels.size() - 1];
+                if (last.contains("content")) {
+                    agentText = last["content"].get<std::string>();
+                }
+            }
+            if (agentText.empty()) {
+                auto resp = result.channel_raw("response");
+                if (resp.is_string()) {
+                    agentText = resp.get<std::string>();
+                }
+            }
+
+            if (!agentText.empty()) {
+                json chunk                        = json::object();
+                chunk["session_id"]               = sessionId;
+                chunk["update"]["session_update"] = "agent_message_chunk";
+                chunk["update"]["content"]        = json{
+                           {"type", "text"   },
+                           {"text", agentText}
+                };
+                chunk["update"]["raw"] = chunk["update"];
+                emitNotification("session/update", chunk);
+            }
+
             emit(jsonRpcResult(
                 id,
                 {
                     {"stopReason", "end_turn"}
             }
             ));
-            workerCleanup(sessionId);
-            return;
-        }
-
-        json state;
-        state["prompt"]          = userText;
-        state["_acp_session_id"] = sessionId;
-
-        neograph::graph::RunConfig cfg;
-        cfg.thread_id    = sessionId;
-        cfg.input        = std::move(state);
-        cfg.stream_mode  = neograph::graph::StreamMode::ALL;
-        cfg.cancel_token = std::make_shared<neograph::graph::CancelToken>();
-
-        auto result = engine->run(cfg);
-
-        if (cancelFlag->exchange(false, std::memory_order_acq_rel)) {
+            return true;
+        },
+        [&](std::string errmsg) -> bool {
+            XX_LOGE("[acp] worker error: {}", errmsg);
+            emitAgentMessageChunk(sessionId, fmt::format("(graph error: {})", errmsg));
             emit(jsonRpcResult(
                 id,
                 {
-                    {"stopReason", "cancelled"}
+                    {"stopReason", "end_turn"}
             }
             ));
-            workerCleanup(sessionId);
-            return;
-        }
-
-        std::string agentText;
-
-        auto channels = result.channel_raw("messages");
-        if (channels.is_array() && !channels.empty()) {
-            auto last = channels[channels.size() - 1];
-            if (last.contains("content")) {
-                agentText = last["content"].get<std::string>();
+            return false;
+        },
+        [&](std::string& errmsg) -> std::optional<bool> {
+            XX_LOGE("[acp] worker error: {}", errmsg);
+            emitAgentMessageChunk(sessionId, fmt::format("(graph error: {})", errmsg));
+            emit(jsonRpcResult(
+                id,
+                {
+                    {"stopReason", "end_turn"}
             }
+            ));
+            return false;
         }
-        if (agentText.empty()) {
-            auto resp = result.channel_raw("response");
-            if (resp.is_string()) {
-                agentText = resp.get<std::string>();
-            }
-        }
-
-        if (!agentText.empty()) {
-            json chunk                        = json::object();
-            chunk["session_id"]               = sessionId;
-            chunk["update"]["session_update"] = "agent_message_chunk";
-            chunk["update"]["content"]        = json{
-                       {"type", "text"   },
-                       {"text", agentText}
-            };
-            chunk["update"]["raw"] = chunk["update"];
-            emitNotification("session/update", chunk);
-        }
-
-        emit(jsonRpcResult(
-            id,
-            {
-                {"stopReason", "end_turn"}
-        }
-        ));
-    } catch (const std::exception& e) {
-        XX_LOGE("[acp] worker error: {}", e.what());
-        emitAgentMessageChunk(sessionId, fmt::format("(graph error: {})", e.what()));
-        emit(jsonRpcResult(
-            id,
-            {
-                {"stopReason", "end_turn"}
-        }
-        ));
-    }
+    );
 
     workerCleanup(sessionId);
 }
@@ -593,17 +621,18 @@ asio::awaitable<void> HttpAcpServer::handleAcpRequest(
     namespace http = boost::beast::http;
 
     bool           isError = false;
-    neograph::json requestJson;
-    try {
-        requestJson = neograph::json::parse(req.body());
-    } catch (const neograph::json::parse_error& e) {
-        writeJsonResponse(
-            resp,
-            http::status::bad_request,
-            AcpProtocolHandler::makeParseError(e.what())
-        );
-        isError = true;
-    }
+    neograph::json requestJson = agentxx::util::catchError<neograph::json>(
+        [&req]() -> neograph::json { return neograph::json::parse(req.body()); },
+        [&](std::string errmsg) -> neograph::json {
+            writeJsonResponse(
+                resp,
+                http::status::bad_request,
+                AcpProtocolHandler::makeParseError(std::move(errmsg))
+            );
+            isError = true;
+            return neograph::json{};
+        }
+    );
     if (isError) {
         co_return;
     }
@@ -622,18 +651,19 @@ asio::awaitable<void> HttpAcpServer::handleAcpRequest(
 
     neograph::json id = requestJson.contains("id") ? requestJson["id"] : neograph::json{};
 
-    neograph::json response;
-    try {
-        response = handler_.handleMessage(requestJson);
-    } catch (const std::exception& e) {
-        XX_LOGE("[acp] handleMessage error: {}", e.what());
-        writeJsonResponse(
-            resp,
-            http::status::internal_server_error,
-            jsonRpcError(id, -32603, fmt::format("Internal error: {}", e.what()))
-        );
-        isError = true;
-    }
+    neograph::json response = agentxx::util::catchError<neograph::json>(
+        [&]() -> neograph::json { return handler_.handleMessage(requestJson); },
+        [&](std::string errmsg) -> neograph::json {
+            XX_LOGE("[acp] handleMessage error: {}", errmsg);
+            writeJsonResponse(
+                resp,
+                http::status::internal_server_error,
+                jsonRpcError(id, -32603, fmt::format("Internal error: {}", errmsg))
+            );
+            isError = true;
+            return neograph::json{};
+        }
+    );
     if (isError) {
         co_return;
     }
@@ -814,12 +844,19 @@ void StdioAcpServer::run(std::istream& in, std::ostream& out) {
         }
 
         neograph::json env;
-        try {
-            env = neograph::json::parse(line);
-        } catch (const std::exception&) {
-            std::lock_guard lk(*outMu);
-            (*outPtr) << AcpProtocolHandler::makeParseError("invalid JSON").dump() << '\n';
-            outPtr->flush();
+        bool           parsed = agentxx::util::catchError<bool>(
+            [&]() -> bool {
+                env = neograph::json::parse(line);
+                return true;
+            },
+            [&](std::string) -> bool {
+                std::lock_guard lk(*outMu);
+                (*outPtr) << AcpProtocolHandler::makeParseError("invalid JSON").dump() << '\n';
+                outPtr->flush();
+                return false;
+            }
+        );
+        if (!parsed) {
             continue;
         }
 

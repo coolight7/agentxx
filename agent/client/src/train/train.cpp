@@ -2,6 +2,7 @@
 
 #include "agentxx/agent/code_agent.h"
 #include "agentxx/agent/training.h"
+#include "agentxx/util/exception.h"
 #include "agentxx/util/log.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
@@ -20,27 +21,32 @@
 
 std::vector<agentxx::agent::TrainingTestCase> loadTestCasesRecursive(std::string_view dirPath) {
     std::vector<agentxx::agent::TrainingTestCase> allCases;
-    try {
-        for (const auto& entry : std::filesystem::directory_iterator(dirPath)) {
-            if (entry.is_regular_file() && entry.path().extension() == ".json") {
-                auto fileCases = agentxx::agent::loadTestCasesFromFile(entry.path().string());
-                allCases.insert(
-                    allCases.end(),
-                    std::make_move_iterator(fileCases.begin()),
-                    std::make_move_iterator(fileCases.end())
-                );
-            } else if (entry.is_directory()) {
-                auto subCases = loadTestCasesRecursive(entry.path().string());
-                allCases.insert(
-                    allCases.end(),
-                    std::make_move_iterator(subCases.begin()),
-                    std::make_move_iterator(subCases.end())
-                );
+    agentxx::util::catchError<bool>(
+        [&]() -> bool {
+            for (const auto& entry : std::filesystem::directory_iterator(dirPath)) {
+                if (entry.is_regular_file() && entry.path().extension() == ".json") {
+                    auto fileCases = agentxx::agent::loadTestCasesFromFile(entry.path().string());
+                    allCases.insert(
+                        allCases.end(),
+                        std::make_move_iterator(fileCases.begin()),
+                        std::make_move_iterator(fileCases.end())
+                    );
+                } else if (entry.is_directory()) {
+                    auto subCases = loadTestCasesRecursive(entry.path().string());
+                    allCases.insert(
+                        allCases.end(),
+                        std::make_move_iterator(subCases.begin()),
+                        std::make_move_iterator(subCases.end())
+                    );
+                }
             }
+            return true;
+        },
+        [dirPath](std::string errmsg) -> bool {
+            XX_LOGE("[Training] Failed to load from directory {}:{}", dirPath, errmsg);
+            return false;
         }
-    } catch (const std::exception& e) {
-        XX_LOGE("[Training] Failed to load from directory {}:{}", dirPath, e.what());
-    }
+    );
     return allCases;
 }
 
@@ -128,33 +134,38 @@ void runTrainingMode(
     {
         std::ifstream tcFile("./training_testcases.json");
         if (tcFile.is_open()) {
-            try {
-                std::string content(
-                    (std::istreambuf_iterator<char>(tcFile)),
-                    std::istreambuf_iterator<char>()
-                );
-                auto j = neograph::json::parse(content);
-                if (j.is_array()) {
-                    trainCfg.testCases.clear();
-                    for (const auto& item : j) {
-                        agentxx::agent::TrainingTestCase tc;
-                        tc.name           = item.value("name", "");
-                        tc.input          = item.value("input", "");
-                        tc.expectedOutput = item.value("expectedOutput", "");
-                        tc.equalOutput    = item.value("equalOutput", "");
-                        tc.extra          = item.value("extra", neograph::json::object());
-                        if (!tc.name.empty() && !tc.input.empty()) {
-                            trainCfg.testCases.push_back(std::move(tc));
-                        }
-                    }
-                    XX_OUT(
-                        "[Training] Loaded {} test cases from training_testcases.json",
-                        trainCfg.testCases.size()
+            agentxx::util::catchError<bool>(
+                [&]() -> bool {
+                    std::string content(
+                        (std::istreambuf_iterator<char>(tcFile)),
+                        std::istreambuf_iterator<char>()
                     );
+                    auto j = neograph::json::parse(content);
+                    if (j.is_array()) {
+                        trainCfg.testCases.clear();
+                        for (const auto& item : j) {
+                            agentxx::agent::TrainingTestCase tc;
+                            tc.name           = item.value("name", "");
+                            tc.input          = item.value("input", "");
+                            tc.expectedOutput = item.value("expectedOutput", "");
+                            tc.equalOutput    = item.value("equalOutput", "");
+                            tc.extra          = item.value("extra", neograph::json::object());
+                            if (!tc.name.empty() && !tc.input.empty()) {
+                                trainCfg.testCases.push_back(std::move(tc));
+                            }
+                        }
+                        XX_OUT(
+                            "[Training] Loaded {} test cases from training_testcases.json",
+                            trainCfg.testCases.size()
+                        );
+                    }
+                    return true;
+                },
+                [](std::string errmsg) -> bool {
+                    XX_LOGE("[Training] Failed to parse training_testcases.json: {}", errmsg);
+                    return false;
                 }
-            } catch (const std::exception& e) {
-                XX_LOGE("[Training] Failed to parse training_testcases.json: {}", e.what());
-            }
+            );
         }
     }
 

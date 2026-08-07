@@ -1,4 +1,5 @@
 #include "agentxx/util/util.h"
+#include "agentxx/util/exception.h"
 #include "agentxx/util/log.h"
 #include <filesystem>
 #include <fstream>
@@ -47,17 +48,21 @@ std::string agentxx::util::getSystemName() {
 }
 
 bool agentxx::util::isRunningInWSL() {
-    try {
-        if (isRunningInWSL_.has_value()) {
+    // catchError: 文件系统探测失败按非 WSL 处理, 并记录日志
+    return agentxx::util::catchError<bool>(
+        [&]() -> bool {
+            if (isRunningInWSL_.has_value()) {
+                return *isRunningInWSL_;
+            }
+            isRunningInWSL_ = std::filesystem::exists("/proc/sys/fs/binfmt_misc/WSLInterop");
             return *isRunningInWSL_;
+        },
+        [&](std::string errmsg) -> bool {
+            isRunningInWSL_ = false;
+            XX_LOGD("isRunningInWSL exception: {}", errmsg);
+            return false;
         }
-        isRunningInWSL_ = std::filesystem::exists("/proc/sys/fs/binfmt_misc/WSLInterop");
-        return *isRunningInWSL_;
-    } catch (const std::exception& e) {
-        isRunningInWSL_ = false;
-        XX_LOGD("isRunningInWSL exception: {}", e.what());
-    }
-    return false;
+    );
 }
 
 #elif XX_IS_WIN_D

@@ -1,5 +1,6 @@
 #include "agentxx/expand/codegraph_manager.h"
 #include "agentxx/agent/config_static.h"
+#include "agentxx/util/exception.h"
 #include "agentxx/util/log.h"
 #include <algorithm>
 #include <atomic>
@@ -48,27 +49,33 @@ static bool should_skip(std::string_view file_path) {
 
 static std::vector<std::string> collect_source_files(std::string_view root_path) {
     std::vector<std::string> files;
-    try {
-        for (const auto& entry : fs::recursive_directory_iterator(
-                 root_path,
-                 fs::directory_options::skip_permission_denied
-             )) {
-            if (!entry.is_regular_file()) {
-                continue;
+    // 遍历失败记录日志, 返回已收集到的部分文件
+    agentxx::util::catchError<bool>(
+        [&]() -> bool {
+            for (const auto& entry : fs::recursive_directory_iterator(
+                     root_path,
+                     fs::directory_options::skip_permission_denied
+                 )) {
+                if (!entry.is_regular_file()) {
+                    continue;
+                }
+                std::string path = entry.path().generic_string();
+                if (should_skip(path)) {
+                    continue;
+                }
+                std::string lang = codegraph::detect_language(path);
+                if (lang.empty()) {
+                    continue;
+                }
+                files.push_back(path);
             }
-            std::string path = entry.path().generic_string();
-            if (should_skip(path)) {
-                continue;
-            }
-            std::string lang = codegraph::detect_language(path);
-            if (lang.empty()) {
-                continue;
-            }
-            files.push_back(path);
+            return true;
+        },
+        [](std::string errmsg) -> bool {
+            XX_LOGE("CodeGraphManager: collect_source_files error: {}", errmsg);
+            return false;
         }
-    } catch (const std::exception& e) {
-        XX_LOGE("CodeGraphManager: collect_source_files error: {}", e.what());
-    }
+    );
     return files;
 }
 
@@ -81,15 +88,17 @@ static bool is_changed(
     if (!existing.has_value()) {
         return true;
     }
-    try {
-        auto ftime = fs::last_write_time(entry);
-        auto mtime
-            = std::chrono::duration_cast<std::chrono::seconds>(ftime.time_since_epoch()).count();
-        return existing->mtime != mtime
-               || existing->size != static_cast<int64_t>(fs::file_size(entry));
-    } catch (...) {
-        return true;
-    }
+    // 无法读取文件元信息时按"已变更"处理, 触发重新索引
+    return agentxx::util::catchError<bool>(
+        [&]() -> bool {
+            auto ftime = fs::last_write_time(entry);
+            auto mtime
+                = std::chrono::duration_cast<std::chrono::seconds>(ftime.time_since_epoch()).count();
+            return existing->mtime != mtime
+                   || existing->size != static_cast<int64_t>(fs::file_size(entry));
+        },
+        [](std::string) -> bool { return true; }
+    );
 }
 
 static int score_target(const codegraph::Node& source, const codegraph::Node& candidate) {
@@ -168,22 +177,26 @@ public:
                           / kCodeGraphDbPath;
         std::string index_path = (cg_dir / "index").string();
 
-        try {
-            if (!fs::exists(cg_dir)) {
-                fs::create_directories(cg_dir);
+        // 初始化失败记录日志并返回 false
+        return agentxx::util::catchError<bool>(
+            [&]() -> bool {
+                if (!fs::exists(cg_dir)) {
+                    fs::create_directories(cg_dir);
+                }
+                db_ = std::make_unique<codegraph::Database>(index_path);
+                db_->init_schema();
+                traverser_        = std::make_unique<codegraph::GraphTraverser>(*db_);
+                context_builder_  = std::make_unique<codegraph::ContextBuilder>(*db_, *traverser_);
+                fts_search_       = std::make_unique<codegraph::FtsSearch>(*db_);
+                needs_initialize_ = false;
+                running_.store(true);
+                return true;
+            },
+            [](std::string errmsg) -> bool {
+                XX_LOGE("CodeGraphManager: initialize failed: {}", errmsg);
+                return false;
             }
-            db_ = std::make_unique<codegraph::Database>(index_path);
-            db_->init_schema();
-            traverser_        = std::make_unique<codegraph::GraphTraverser>(*db_);
-            context_builder_  = std::make_unique<codegraph::ContextBuilder>(*db_, *traverser_);
-            fts_search_       = std::make_unique<codegraph::FtsSearch>(*db_);
-            needs_initialize_ = false;
-            running_.store(true);
-            return true;
-        } catch (const std::exception& e) {
-            XX_LOGE("CodeGraphManager: initialize failed: {}", e.what());
-            return false;
-        }
+        );
     }
 
     bool indexDirectory(std::string_view path, bool incremental) {
@@ -211,12 +224,15 @@ public:
             XX_LOGI("CodeGraphManager: processing file [{}]: {}", processed, file_path);
 
             if (incremental) {
-                try {
-                    fs::directory_entry entry(file_path);
-                    if (!is_changed(*db_, entry, file_path)) {
-                        continue;
-                    }
-                } catch (...) {
+                // 条目构建/变更判断失败时按"需重新索引"处理
+                bool changed = agentxx::util::catchError<bool>(
+                    [&]() -> bool {
+                        fs::directory_entry entry(file_path);
+                        return is_changed(*db_, entry, file_path);
+                    },
+                    [](std::string) -> bool { return false; }
+                );
+                if (!changed) {
                     continue;
                 }
             }
@@ -262,11 +278,17 @@ public:
 
         resolveReferences();
 
-        try {
-            db_->rebuild_fts();
-        } catch (const std::exception& e) {
-            XX_LOGW("CodeGraphManager: FTS rebuild failed: {}", e.what());
-        }
+        // FTS 重建失败仅告警, 不影响索引主流程
+        agentxx::util::catchError<bool>(
+            [&]() -> bool {
+                db_->rebuild_fts();
+                return true;
+            },
+            [](std::string errmsg) -> bool {
+                XX_LOGW("CodeGraphManager: FTS rebuild failed: {}", errmsg);
+                return false;
+            }
+        );
 
         return true;
     }
@@ -289,59 +311,64 @@ public:
         }
 
         db_->begin_transaction();
-        try {
-            for (const auto& ref : unresolved) {
-                if (!running_.load()) {
-                    break;
-                }
-
-                auto source_node = db_->get_node(ref.source_node_id);
-                if (!source_node.has_value()) {
-                    continue;
-                }
-
-                auto candidates = db_->find_nodes_by_name(ref.ref_name, 10);
-                if (candidates.empty()) {
-                    continue;
-                }
-
-                if (candidates.size() == 1) {
-                    codegraph::Edge edge;
-                    edge.source_id = source_node->id;
-                    edge.target_id = candidates[0].id;
-                    edge.kind      = codegraph::EdgeKind::Calls;
-                    edge.line      = ref.line;
-                    edge.col       = ref.col;
-                    db_->insert_edge(edge);
-                } else {
-                    codegraph::Node best       = candidates[0];
-                    int             best_score = -1;
-                    for (const auto& cand : candidates) {
-                        int s = score_target(source_node.value(), cand);
-                        if (s > best_score) {
-                            best_score = s;
-                            best       = cand;
-                        }
+        // 引用解析失败回滚事务并返回 false
+        bool resolved = agentxx::util::catchError<bool>(
+            [&]() -> bool {
+                for (const auto& ref : unresolved) {
+                    if (!running_.load()) {
+                        break;
                     }
-                    codegraph::Edge edge;
-                    edge.source_id = source_node->id;
-                    edge.target_id = best.id;
-                    edge.kind      = codegraph::EdgeKind::Calls;
-                    edge.line      = ref.line;
-                    edge.col       = ref.col;
-                    db_->insert_edge(edge);
+
+                    auto source_node = db_->get_node(ref.source_node_id);
+                    if (!source_node.has_value()) {
+                        continue;
+                    }
+
+                    auto candidates = db_->find_nodes_by_name(ref.ref_name, 10);
+                    if (candidates.empty()) {
+                        continue;
+                    }
+
+                    if (candidates.size() == 1) {
+                        codegraph::Edge edge;
+                        edge.source_id = source_node->id;
+                        edge.target_id = candidates[0].id;
+                        edge.kind      = codegraph::EdgeKind::Calls;
+                        edge.line      = ref.line;
+                        edge.col       = ref.col;
+                        db_->insert_edge(edge);
+                    } else {
+                        codegraph::Node best       = candidates[0];
+                        int             best_score = -1;
+                        for (const auto& cand : candidates) {
+                            int s = score_target(source_node.value(), cand);
+                            if (s > best_score) {
+                                best_score = s;
+                                best       = cand;
+                            }
+                        }
+                        codegraph::Edge edge;
+                        edge.source_id = source_node->id;
+                        edge.target_id = best.id;
+                        edge.kind      = codegraph::EdgeKind::Calls;
+                        edge.line      = ref.line;
+                        edge.col       = ref.col;
+                        db_->insert_edge(edge);
+                    }
+
+                    db_->delete_unresolved_ref(ref.id);
                 }
-
-                db_->delete_unresolved_ref(ref.id);
+                db_->commit();
+                return true;
+            },
+            [&](std::string errmsg) -> bool {
+                db_->rollback();
+                XX_LOGE("CodeGraphManager: resolveReferences error: {}", errmsg);
+                return false;
             }
-            db_->commit();
-        } catch (const std::exception& e) {
-            db_->rollback();
-            XX_LOGE("CodeGraphManager: resolveReferences error: {}", e.what());
-            return false;
-        }
+        );
 
-        return true;
+        return resolved;
     }
 
     CodeGraphSearchResult searchSymbols(std::string_view query, int limit) {
@@ -351,12 +378,18 @@ public:
             result.error = "CodeGraph not initialized";
             return result;
         }
-        try {
-            result.nodes   = fts_search_->search(std::string{query}, limit);
-            result.success = true;
-        } catch (const std::exception& e) {
-            result.error = e.what();
-        }
+        // 查询异常转为 result.error, 不向外抛出
+        agentxx::util::catchError<bool>(
+            [&]() -> bool {
+                result.nodes   = fts_search_->search(std::string{query}, limit);
+                result.success = true;
+                return true;
+            },
+            [&](std::string errmsg) -> bool {
+                result.error = std::move(errmsg);
+                return false;
+            }
+        );
         return result;
     }
 
@@ -367,17 +400,23 @@ public:
             result.error = "CodeGraph not initialized";
             return result;
         }
-        try {
-            result.context = context_builder_->build_context(std::string{symbol}, limit, max_depth);
-            if (result.context.contains("error")) {
-                result.error   = result.context["error"].get<std::string>();
-                result.success = false;
-            } else {
-                result.success = true;
+        // 查询异常转为 result.error, 不向外抛出
+        agentxx::util::catchError<bool>(
+            [&]() -> bool {
+                result.context = context_builder_->build_context(std::string{symbol}, limit, max_depth);
+                if (result.context.contains("error")) {
+                    result.error   = result.context["error"].get<std::string>();
+                    result.success = false;
+                } else {
+                    result.success = true;
+                }
+                return true;
+            },
+            [&](std::string errmsg) -> bool {
+                result.error = std::move(errmsg);
+                return false;
             }
-        } catch (const std::exception& e) {
-            result.error = e.what();
-        }
+        );
         return result;
     }
 
@@ -388,17 +427,23 @@ public:
             result.error = "CodeGraph not initialized";
             return result;
         }
-        try {
-            result.impact = context_builder_->get_callers(std::string{symbol}, max_depth);
-            if (result.impact.contains("error")) {
-                result.error   = result.impact["error"].get<std::string>();
-                result.success = false;
-            } else {
-                result.success = true;
+        // 查询异常转为 result.error, 不向外抛出
+        agentxx::util::catchError<bool>(
+            [&]() -> bool {
+                result.impact = context_builder_->get_callers(std::string{symbol}, max_depth);
+                if (result.impact.contains("error")) {
+                    result.error   = result.impact["error"].get<std::string>();
+                    result.success = false;
+                } else {
+                    result.success = true;
+                }
+                return true;
+            },
+            [&](std::string errmsg) -> bool {
+                result.error = std::move(errmsg);
+                return false;
             }
-        } catch (const std::exception& e) {
-            result.error = e.what();
-        }
+        );
         return result;
     }
 
@@ -409,17 +454,23 @@ public:
             result.error = "CodeGraph not initialized";
             return result;
         }
-        try {
-            result.impact = context_builder_->get_callees(std::string{symbol}, max_depth);
-            if (result.impact.contains("error")) {
-                result.error   = result.impact["error"].get<std::string>();
-                result.success = false;
-            } else {
-                result.success = true;
+        // 查询异常转为 result.error, 不向外抛出
+        agentxx::util::catchError<bool>(
+            [&]() -> bool {
+                result.impact = context_builder_->get_callees(std::string{symbol}, max_depth);
+                if (result.impact.contains("error")) {
+                    result.error   = result.impact["error"].get<std::string>();
+                    result.success = false;
+                } else {
+                    result.success = true;
+                }
+                return true;
+            },
+            [&](std::string errmsg) -> bool {
+                result.error = std::move(errmsg);
+                return false;
             }
-        } catch (const std::exception& e) {
-            result.error = e.what();
-        }
+        );
         return result;
     }
 
@@ -430,17 +481,23 @@ public:
             result.error = "CodeGraph not initialized";
             return result;
         }
-        try {
-            result.impact = context_builder_->get_impact(std::string{symbol}, max_depth);
-            if (result.impact.contains("error")) {
-                result.error   = result.impact["error"].get<std::string>();
-                result.success = false;
-            } else {
-                result.success = true;
+        // 查询异常转为 result.error, 不向外抛出
+        agentxx::util::catchError<bool>(
+            [&]() -> bool {
+                result.impact = context_builder_->get_impact(std::string{symbol}, max_depth);
+                if (result.impact.contains("error")) {
+                    result.error   = result.impact["error"].get<std::string>();
+                    result.success = false;
+                } else {
+                    result.success = true;
+                }
+                return true;
+            },
+            [&](std::string errmsg) -> bool {
+                result.error = std::move(errmsg);
+                return false;
             }
-        } catch (const std::exception& e) {
-            result.error = e.what();
-        }
+        );
         return result;
     }
 
@@ -451,33 +508,39 @@ public:
             result.error = "CodeGraph not initialized";
             return result;
         }
-        try {
-            auto from_nodes = db_->find_nodes_by_name(std::string{from}, 1);
-            auto to_nodes   = db_->find_nodes_by_name(std::string{to}, 1);
-            if (from_nodes.empty() || to_nodes.empty()) {
-                result.error = "Symbol not found";
-                return result;
-            }
-            auto path_ids = traverser_->find_path(from_nodes[0].id, to_nodes[0].id, max_depth);
-            if (path_ids.empty()) {
-                result.error = "No path found";
-                return result;
-            }
-            auto                                         nodes = db_->get_nodes_by_ids(path_ids);
-            std::unordered_map<int64_t, codegraph::Node> node_map;
-            for (auto& n : nodes) {
-                node_map[n.id] = n;
-            }
-            for (auto id : path_ids) {
-                auto it = node_map.find(id);
-                if (it != node_map.end()) {
-                    result.path.push_back(it->second);
+        // 查询异常转为 result.error, 不向外抛出
+        agentxx::util::catchError<bool>(
+            [&]() -> bool {
+                auto from_nodes = db_->find_nodes_by_name(std::string{from}, 1);
+                auto to_nodes   = db_->find_nodes_by_name(std::string{to}, 1);
+                if (from_nodes.empty() || to_nodes.empty()) {
+                    result.error = "Symbol not found";
+                    return true;
                 }
+                auto path_ids = traverser_->find_path(from_nodes[0].id, to_nodes[0].id, max_depth);
+                if (path_ids.empty()) {
+                    result.error = "No path found";
+                    return true;
+                }
+                auto                                         nodes = db_->get_nodes_by_ids(path_ids);
+                std::unordered_map<int64_t, codegraph::Node> node_map;
+                for (auto& n : nodes) {
+                    node_map[n.id] = n;
+                }
+                for (auto id : path_ids) {
+                    auto it = node_map.find(id);
+                    if (it != node_map.end()) {
+                        result.path.push_back(it->second);
+                    }
+                }
+                result.success = true;
+                return true;
+            },
+            [&](std::string errmsg) -> bool {
+                result.error = std::move(errmsg);
+                return false;
             }
-            result.success = true;
-        } catch (const std::exception& e) {
-            result.error = e.what();
-        }
+        );
         return result;
     }
 
@@ -488,29 +551,58 @@ public:
             result.error = "CodeGraph not initialized";
             return result;
         }
-        try {
-            result.total_nodes = db_->count_nodes();
-        } catch (const std::exception& e) {
-            result.error = std::string("count_nodes: ") + e.what();
+        // 各统计项失败时带上下文记录错误并提前返回
+        bool ok = agentxx::util::catchError<bool>(
+            [&]() -> bool {
+                result.total_nodes = db_->count_nodes();
+                return true;
+            },
+            [&](std::string errmsg) -> bool {
+                result.error = std::string("count_nodes: ") + std::move(errmsg);
+                return false;
+            }
+        );
+        if (!ok) {
             return result;
         }
-        try {
-            result.total_edges = db_->count_edges();
-        } catch (const std::exception& e) {
-            result.error = std::string("count_edges: ") + e.what();
+        ok = agentxx::util::catchError<bool>(
+            [&]() -> bool {
+                result.total_edges = db_->count_edges();
+                return true;
+            },
+            [&](std::string errmsg) -> bool {
+                result.error = std::string("count_edges: ") + std::move(errmsg);
+                return false;
+            }
+        );
+        if (!ok) {
             return result;
         }
-        try {
-            result.total_files = static_cast<int64_t>(db_->get_all_files().size());
-        } catch (const std::exception& e) {
-            result.error = std::string("get_all_files: ") + e.what();
+        ok = agentxx::util::catchError<bool>(
+            [&]() -> bool {
+                result.total_files = static_cast<int64_t>(db_->get_all_files().size());
+                return true;
+            },
+            [&](std::string errmsg) -> bool {
+                result.error = std::string("get_all_files: ") + std::move(errmsg);
+                return false;
+            }
+        );
+        if (!ok) {
             return result;
         }
-        try {
-            auto cycles          = traverser_->find_circular_dependencies();
-            result.circular_deps = static_cast<int>(cycles.size());
-        } catch (const std::exception& e) {
-            result.error = std::string("find_circular_dependencies: ") + e.what();
+        ok = agentxx::util::catchError<bool>(
+            [&]() -> bool {
+                auto cycles          = traverser_->find_circular_dependencies();
+                result.circular_deps = static_cast<int>(cycles.size());
+                return true;
+            },
+            [&](std::string errmsg) -> bool {
+                result.error = std::string("find_circular_dependencies: ") + std::move(errmsg);
+                return false;
+            }
+        );
+        if (!ok) {
             return result;
         }
         result.success = true;
@@ -523,37 +615,47 @@ public:
             return false;
         }
 
-        try {
-            file_watcher_ = codegraph::FileWatcher::create(project_root_, &running_);
-            file_watcher_->add_watch_recursive(project_root_);
+        // 启动文件监听失败记录日志并返回 false
+        return agentxx::util::catchError<bool>(
+            [&]() -> bool {
+                file_watcher_ = codegraph::FileWatcher::create(project_root_, &running_);
+                file_watcher_->add_watch_recursive(project_root_);
 
-            file_watcher_->set_callback([this, auto_reindex](std::string_view path, uint32_t mask) {
-                if (auto_reindex
-                    && (mask & (codegraph::FILE_EVENT_MODIFIED | codegraph::FILE_EVENT_CREATED))) {
-                    std::string lang = codegraph::detect_language(std::string{path});
-                    if (!lang.empty() && !should_skip(path)) {
-                        this->indexFile(path, lang);
+                file_watcher_->set_callback([this, auto_reindex](std::string_view path, uint32_t mask) {
+                    if (auto_reindex
+                        && (mask & (codegraph::FILE_EVENT_MODIFIED | codegraph::FILE_EVENT_CREATED))) {
+                        std::string lang = codegraph::detect_language(std::string{path});
+                        if (!lang.empty() && !should_skip(path)) {
+                            this->indexFile(path, lang);
+                        }
                     }
-                }
-            });
+                });
 
-            file_watcher_running_ = true;
-            running_.store(true);
-            worker_thread_ = std::thread([this]() {
-                while (running_.load() && file_watcher_running_) {
-                    try {
-                        file_watcher_->poll(1000);
-                    } catch (const std::exception& e) {
-                        XX_LOGE("CodeGraphManager: file watcher poll error: {}", e.what());
+                file_watcher_running_ = true;
+                running_.store(true);
+                worker_thread_ = std::thread([this]() {
+                    while (running_.load() && file_watcher_running_) {
+                        // poll 异常仅记录日志, 线程继续轮询
+                        agentxx::util::catchError<bool>(
+                            [&]() -> bool {
+                                file_watcher_->poll(1000);
+                                return true;
+                            },
+                            [](std::string errmsg) -> bool {
+                                XX_LOGE("CodeGraphManager: file watcher poll error: {}", errmsg);
+                                return false;
+                            }
+                        );
                     }
-                }
-                file_watcher_->stop();
-            });
-            return true;
-        } catch (const std::exception& e) {
-            XX_LOGE("CodeGraphManager: startFileWatcher error: {}", e.what());
-            return false;
-        }
+                    file_watcher_->stop();
+                });
+                return true;
+            },
+            [](std::string errmsg) -> bool {
+                XX_LOGE("CodeGraphManager: startFileWatcher error: {}", errmsg);
+                return false;
+            }
+        );
     }
 
     void stopFileWatcher() {
@@ -577,47 +679,57 @@ public:
         codegraph::ExtractionResult& result
     ) {
         db_->begin_transaction();
-        try {
-            db_->delete_edges_for_file_nodes(std::string{file_path});
-            db_->delete_unresolved_refs_by_file(std::string{file_path});
-            db_->delete_nodes_by_file(std::string{file_path});
+        // 写入失败回滚事务并记录日志, 避免残留半写入数据
+        agentxx::util::catchError<bool>(
+            [&]() -> bool {
+                db_->delete_edges_for_file_nodes(std::string{file_path});
+                db_->delete_unresolved_refs_by_file(std::string{file_path});
+                db_->delete_nodes_by_file(std::string{file_path});
 
-            std::vector<int64_t> id_map;
-            id_map.reserve(result.nodes.size());
-            for (auto& node : result.nodes) {
-                if (node.kind == codegraph::NodeKind::File) {
-                    node.file_path = file_path;
+                std::vector<int64_t> id_map;
+                id_map.reserve(result.nodes.size());
+                for (auto& node : result.nodes) {
+                    if (node.kind == codegraph::NodeKind::File) {
+                        node.file_path = file_path;
+                    }
+                    int64_t id = db_->insert_node(node);
+                    id_map.push_back(id);
                 }
-                int64_t id = db_->insert_node(node);
-                id_map.push_back(id);
-            }
 
-            codegraph::FileRecord fr;
-            fr.path     = file_path;
-            fr.language = lang;
-            try {
-                auto ftime = fs::last_write_time(fs::path(file_path));
-                fr.mtime
-                    = std::chrono::duration_cast<std::chrono::seconds>(ftime.time_since_epoch())
-                          .count();
-                fr.size = fs::file_size(fs::path(file_path));
-            } catch (...) {
-            }
-            db_->insert_file(fr);
+                codegraph::FileRecord fr;
+                fr.path     = file_path;
+                fr.language = lang;
+                // 无法读取文件元信息时使用默认值 (mtime=0), 不中断写入
+                agentxx::util::catchError<bool>(
+                    [&]() -> bool {
+                        auto ftime = fs::last_write_time(fs::path(file_path));
+                        fr.mtime
+                            = std::chrono::duration_cast<std::chrono::seconds>(ftime.time_since_epoch())
+                                  .count();
+                        fr.size = fs::file_size(fs::path(file_path));
+                        return true;
+                    },
+                    [](std::string) -> bool { return false; }
+                );
+                db_->insert_file(fr);
 
-            for (auto ref : result.unresolved) {
-                int original_index = static_cast<int>(-ref.source_node_id) - 1;
-                if (original_index >= 0 && original_index < static_cast<int>(id_map.size())) {
-                    ref.source_node_id = id_map[original_index];
+                for (auto ref : result.unresolved) {
+                    int original_index = static_cast<int>(-ref.source_node_id) - 1;
+                    if (original_index >= 0 && original_index < static_cast<int>(id_map.size())) {
+                        ref.source_node_id = id_map[original_index];
+                    }
+                    db_->insert_unresolved_ref(ref);
                 }
-                db_->insert_unresolved_ref(ref);
-            }
 
-            db_->commit();
-        } catch (const std::exception& e) {
-            db_->rollback();
-            XX_LOGE("CodeGraphManager: write error for {}: {}", file_path, e.what());
-        }
+                db_->commit();
+                return true;
+            },
+            [&](std::string errmsg) -> bool {
+                db_->rollback();
+                XX_LOGE("CodeGraphManager: write error for {}: {}", file_path, errmsg);
+                return false;
+            }
+        );
     }
 
     void indexFile(std::string_view file_path, std::string_view lang) {

@@ -1,5 +1,6 @@
 #include "agentxx/protocol/mcp_client.h"
 
+#include "agentxx/util/exception.h"
 #include <fmt/format.h>
 #include <thread>
 #if AGENTXX_ENABLE_BOOST_PROCESS
@@ -122,19 +123,29 @@ struct McpClient::StdioTransport {
             if (line.empty()) {
                 continue;
             }
-            try {
-                auto response = json::parse(line);
-                client->deliverResponse(response);
-            } catch (const json::parse_error&) {
-                XX_LOGW("[McpClient] ignoring malformed stdout line: {}", line.substr(0, 128));
-            }
+            // 非法 JSON 行直接忽略 (日志警告), 不中断读取循环
+            agentxx::util::catchError<bool>(
+                [&]() -> bool {
+                    auto response = json::parse(line);
+                    client->deliverResponse(response);
+                    return true;
+                },
+                [&](std::string) -> bool {
+                    XX_LOGW("[McpClient] ignoring malformed stdout line: {}", line.substr(0, 128));
+                    return false;
+                }
+            );
         }
         if (!buffer.empty()) {
-            try {
-                auto response = json::parse(buffer);
-                client->deliverResponse(response);
-            } catch (...) {
-            }
+            // 尾部残余数据非法 JSON 时静默忽略
+            agentxx::util::catchError<bool>(
+                [&]() -> bool {
+                    auto response = json::parse(buffer);
+                    client->deliverResponse(response);
+                    return true;
+                },
+                [](std::string) -> bool { return false; }
+            );
         }
         running.store(false);
     }
@@ -337,20 +348,30 @@ struct McpClient::StdioTransport {
                 if (line.empty()) {
                     continue;
                 }
-                try {
-                    auto response = json::parse(line);
-                    client->deliverResponse(response);
-                } catch (const json::parse_error&) {
-                    XX_LOGW("[McpClient] ignoring malformed stdout line: {}", line.substr(0, 128));
-                }
+                // 非法 JSON 行直接忽略 (日志警告), 不中断读取循环
+                agentxx::util::catchError<bool>(
+                    [&]() -> bool {
+                        auto response = json::parse(line);
+                        client->deliverResponse(response);
+                        return true;
+                    },
+                    [&](std::string) -> bool {
+                        XX_LOGW("[McpClient] ignoring malformed stdout line: {}", line.substr(0, 128));
+                        return false;
+                    }
+                );
             }
         }
         if (!buffer.empty()) {
-            try {
-                auto response = json::parse(buffer);
-                client->deliverResponse(response);
-            } catch (...) {
-            }
+            // 尾部残余数据非法 JSON 时静默忽略
+            agentxx::util::catchError<bool>(
+                [&]() -> bool {
+                    auto response = json::parse(buffer);
+                    client->deliverResponse(response);
+                    return true;
+                },
+                [](std::string) -> bool { return false; }
+            );
         }
 #elif XX_IS_WIN_D
         std::string buffer;
@@ -372,11 +393,15 @@ struct McpClient::StdioTransport {
                 if (line.empty()) {
                     continue;
                 }
-                try {
-                    auto response = json::parse(line);
-                    client->deliverResponse(response);
-                } catch (...) {
-                }
+                // 非法 JSON 行直接忽略, 不中断读取循环
+                agentxx::util::catchError<bool>(
+                    [&]() -> bool {
+                        auto response = json::parse(line);
+                        client->deliverResponse(response);
+                        return true;
+                    },
+                    [](std::string) -> bool { return false; }
+                );
             }
         }
 #endif
@@ -986,26 +1011,37 @@ asio::awaitable<std::expected<json, std::string>>
         auto events = parseSseEvents(httpResp.body);
         for (const auto& ev : events) {
             if (ev.event == "message" || ev.event.empty()) {
-                try {
-                    json j = json::parse(ev.data);
-                    if (j.contains("id") && !j["id"].is_null()) {
-                        auto respId  = j["id"];
-                        bool idMatch = false;
-                        if (respId.is_number_integer()) {
-                            idMatch = respId.get<int64_t>() == id;
-                        } else if (respId.is_string()) {
-                            idMatch = respId.get<std::string>() == std::to_string(id);
-                        }
-                        if (idMatch) {
-                            auto err = getErrorFromResponse(j);
-                            if (err.has_value()) {
-                                co_return j;
+                bool matched   = false;
+                json resultJson;
+                // 非法 SSE data 记录日志并跳过, 不中断整个流的处理
+                co_await agentxx::util::catchErrorAsync<bool>(
+                    [&]() -> asio::awaitable<bool> {
+                        json j = json::parse(ev.data);
+                        if (j.contains("id") && !j["id"].is_null()) {
+                            auto respId  = j["id"];
+                            bool idMatch = false;
+                            if (respId.is_number_integer()) {
+                                idMatch = respId.get<int64_t>() == id;
+                            } else if (respId.is_string()) {
+                                idMatch = respId.get<std::string>() == std::to_string(id);
                             }
-                            co_return j;
+                            if (idMatch) {
+                                matched    = true;
+                                resultJson = std::move(j);
+                            }
                         }
+                        co_return true;
+                    },
+                    [&](std::string) -> asio::awaitable<bool> {
+                        XX_LOGW(
+                            "[McpClient] ignoring malformed SSE data: {}",
+                            ev.data.substr(0, 128)
+                        );
+                        co_return false;
                     }
-                } catch (const json::parse_error&) {
-                    XX_LOGW("[McpClient] ignoring malformed SSE data: {}", ev.data.substr(0, 128));
+                );
+                if (matched) {
+                    co_return resultJson;
                 }
             }
         }
@@ -1190,18 +1226,22 @@ bool McpClient::startStdioSubprocess(asio::any_io_executor executor) {
 
     stdioWriteMutex_ = std::make_unique<util::AsyncMutex>(executor);
 
-    try {
-        stdio_ = std::make_unique<StdioTransport>();
-        if (!stdio_->start(executor, config_.serverCommand, shared_from_this())) {
+    bool ok = agentxx::util::catchError<bool>(
+        [&]() -> bool {
+            stdio_ = std::make_unique<StdioTransport>();
+            if (!stdio_->start(executor, config_.serverCommand, shared_from_this())) {
+                stdio_.reset();
+                return false;
+            }
+            return true;
+        },
+        [&](std::string errmsg) -> bool {
+            XX_LOGW("[McpClient] failed to start subprocess: {}", errmsg);
             stdio_.reset();
             return false;
         }
-        return true;
-    } catch (const std::exception& e) {
-        XX_LOGW("[McpClient] failed to start subprocess: {}", e.what());
-        stdio_.reset();
-        return false;
-    }
+    );
+    return ok;
 }
 
 void McpClient::closeInternal() {
@@ -1226,10 +1266,14 @@ void McpClient::closeInternal() {
         errorResp["jsonrpc"] = "2.0";
         errorResp["id"]      = id;
         errorResp["error"]   = jsonRpcError(-32000, "Client closed before response");
-        try {
-            req->promise.set_value(std::move(errorResp));
-        } catch (...) {
-        }
+        // promise 可能已被接收方消费 (重复响应), set_value 抛 future_error 时忽略
+        agentxx::util::catchError<bool>(
+            [&]() -> bool {
+                req->promise.set_value(std::move(errorResp));
+                return true;
+            },
+            [](std::string) -> bool { return false; }
+        );
     }
     pending_.clear();
 }
@@ -1249,9 +1293,14 @@ void McpClient::deliverResponse(const json& response) {
     } else if (respId.is_number_unsigned()) {
         idVal = static_cast<int64_t>(respId.get<uint64_t>());
     } else if (respId.is_string()) {
-        try {
-            idVal = std::stoll(respId.get<std::string>());
-        } catch (...) {
+        bool parsed = agentxx::util::catchError<bool>(
+            [&]() -> bool {
+                idVal = std::stoll(respId.get<std::string>());
+                return true;
+            },
+            [](std::string) -> bool { return false; }
+        );
+        if (!parsed) {
             return;
         }
     } else {
@@ -1269,10 +1318,14 @@ void McpClient::deliverResponse(const json& response) {
         pending_.erase(it);
     }
 
-    try {
-        req->promise.set_value(response);
-    } catch (...) {
-    }
+    // promise 可能已被消费, set_value 抛 future_error 时忽略
+    agentxx::util::catchError<bool>(
+        [&]() -> bool {
+            req->promise.set_value(response);
+            return true;
+        },
+        [](std::string) -> bool { return false; }
+    );
 }
 
 // ---------------------------------------------------------------------------

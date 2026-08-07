@@ -8,6 +8,7 @@
 #include "agentxx/agent/io/ws_io_transport.h"
 #include "agentxx/agent/model_registry.h"
 #include "agentxx/middlewares/subagent_supervisor.h"
+#include "agentxx/util/exception.h"
 #include "agentxx/util/log.h"
 #include "agentxx/util/ws_client.h"
 #include "asio/co_spawn.hpp"
@@ -43,12 +44,15 @@ namespace client {
 /// 随机数兜底: random_device 在极端环境 (部分旧 Android/嵌入式) 可能抛异常,
 /// 退回以时钟为种子, 保证生成函数绝不失败
 static uint32_t randomSeed() {
-    try {
-        std::random_device rd;
-        return rd();
-    } catch (...) {
-        return static_cast<uint32_t>(std::chrono::steady_clock::now().time_since_epoch().count());
-    }
+    return agentxx::util::catchError<uint32_t>(
+        []() -> uint32_t {
+            std::random_device rd;
+            return rd();
+        },
+        [](std::string) -> uint32_t {
+            return static_cast<uint32_t>(std::chrono::steady_clock::now().time_since_epoch().count());
+        }
+    );
 }
 
 /// 生成尽量唯一的会话 threadId:

@@ -1,5 +1,6 @@
 #include "agentxx/tools/rag_search.h"
 
+#include "agentxx/util/exception.h"
 #include "agentxx/util/http_client.h"
 #include "agentxx/util/log.h"
 #include "agentxx/util/string_util.h"
@@ -447,30 +448,35 @@ asio::awaitable<std::vector<RAGSearchTool::Document>>
         auto filepath = std::filesystem::path{path};
         if (filepath.extension() == ".md") {
             std::ifstream stream;
-            try {
-                stream.open(path);
-                if (!stream) {
-                    auto ec = std::error_code{errno, std::system_category()};
-                    throw std::runtime_error{
-                        fmt::format(R"(Can not open file. Error: {})", ec.message())
+            // 单个文件读取失败仅记录日志, 不中断整体扫描
+            return agentxx::util::catchError<bool>(
+                [&]() -> bool {
+                    stream.open(path);
+                    if (!stream) {
+                        auto ec = std::error_code{errno, std::system_category()};
+                        throw std::runtime_error{
+                            fmt::format(R"(Can not open file. Error: {})", ec.message())
+                        };
+                    }
+                    auto content = std::string{
+                        std::istreambuf_iterator<char>(stream),
+                        std::istreambuf_iterator<char>()
                     };
-                }
-                auto content = std::string{
-                    std::istreambuf_iterator<char>(stream),
-                    std::istreambuf_iterator<char>()
-                };
-                stream.close();
+                    stream.close();
 
-                result.push_back(Document{
-                    .id      = std::to_string(result.size()),
-                    .title   = filepath.filename().generic_string(),
-                    .content = VectorStore::splitTextToChunks(content, splitConfig),
-                    .source  = std::string{path},
-                });
-                return true;
-            } catch (const std::exception& e) {
-                XX_LOGD("RAG/scanDocument item exception: {} / {}", path, e.what());
-            }
+                    result.push_back(Document{
+                        .id      = std::to_string(result.size()),
+                        .title   = filepath.filename().generic_string(),
+                        .content = VectorStore::splitTextToChunks(content, splitConfig),
+                        .source  = std::string{path},
+                    });
+                    return true;
+                },
+                [&](std::string errmsg) -> bool {
+                    XX_LOGD("RAG/scanDocument item exception: {} / {}", path, errmsg);
+                    return false;
+                }
+            );
         }
         return false;
     };

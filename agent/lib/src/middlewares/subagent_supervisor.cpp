@@ -1,6 +1,7 @@
 #include "agentxx/middlewares/subagent_supervisor.h"
 
 #include "agentxx/tools/sub_agent.h"
+#include "agentxx/util/exception.h"
 #include "agentxx/util/log.h"
 #include "fmt/format.h"
 #include <neograph/graph/engine.h>
@@ -169,95 +170,100 @@ asio::awaitable<events::RespSubagentResult> SubagentSupervisor::runSubagent(
     // 标记 subagent 运行中 (供跨 agent 查询路由校验)
     runningRegistry_[std::string{subagentName}] = true;
 
-    try {
-        neograph::graph::RunConfig cfg{
-            .thread_id        = fmt::format("session_{}", subagentId),
-            .input            = {{
-                "messages",
-                neograph::json::array({
-                    {{"role", "system"}, {"content", systemPrompt}},
-                    {{"role", "user"}, {"content", message}},
-                }),
-            }},
-            .resume_if_exists = false,
-        };
+    // catchErrorAsync: 取消类异常 (CancelledException/NodeInterrupt) 原样抛出
+    // (交由调用方决定中断还是转为错误); 其余异常转为错误结果返回
+    co_return co_await agentxx::util::catchErrorAsync<events::RespSubagentResult>(
+        [&]() -> asio::awaitable<events::RespSubagentResult> {
+            neograph::graph::RunConfig cfg{
+                .thread_id        = fmt::format("session_{}", subagentId),
+                .input            = {{
+                    "messages",
+                    neograph::json::array({
+                        {{"role", "system"}, {"content", systemPrompt}},
+                        {{"role", "user"}, {"content", message}},
+                    }),
+                }},
+                .resume_if_exists = false,
+            };
 
-        // subagent 会话继承父会话的 IO (供权限询问/中断交互使用)
-        if (false == parentThreadId.empty()) {
-            auto parentSession = ctxPtr->sessions->get(parentThreadId);
-            if (parentSession) {
-                ctxPtr->getSession(cfg.thread_id)->io = parentSession->io;
-            }
-        }
-
-        XX_LOGD("    ## Subagent dispatched - {}", subagent->name);
-
-        std::ostringstream oss;
-        co_await subgraph->run_stream_async(
-            cfg,
-            [&oss, &busPtr, &subagentName, &subagentId](const neograph::graph::GraphEvent& event) {
-                switch (event.type) {
-                    case neograph::graph::GraphEvent::Type::NODE_START:
-                    case neograph::graph::GraphEvent::Type::NODE_END:
-                        break;
-                    case neograph::graph::GraphEvent::Type::LLM_TOKEN: {
-                        std::string token;
-                        std::string kind = "content";
-                        if (event.data.is_string()) {
-                            token = event.data.get<std::string>();
-                        } else if (event.data.is_object()) {
-                            neograph::ChatStreamChunk chunk;
-                            neograph::from_json(event.data, chunk);
-                            token = std::move(chunk.data);
-                            if (chunk.type == neograph::ChatStreamChunk::TYPE_THINKING) {
-                                kind = "thinking";
-                            }
-                        }
-                        // 仅累积 content token
-                        if (kind == "content") {
-                            oss << token;
-                        }
-                        if (busPtr) {
-                            asio::co_spawn(
-                                busPtr->executor(),
-                                [busPtr,
-                                 subagentId,
-                                 agentName = std::string{subagentName},
-                                 token     = std::move(token),
-                                 kind      = std::move(kind)]() -> asio::awaitable<void> {
-                                    co_await busPtr->publish<events::EventSubagentProgress>(
-                                        events::Topic::SubagentProgress,
-                                        events::EventSubagentProgress{
-                                            .subagentId = subagentId,
-                                            .agentName  = agentName,
-                                            .kind       = kind == "thinking" ? "thinking" : "token",
-                                            .data       = token,
-                                        }
-                                    );
-                                },
-                                asio::detached
-                            );
-                        }
-                    } break;
-                    case neograph::graph::GraphEvent::Type::CHANNEL_WRITE:
-                    case neograph::graph::GraphEvent::Type::INTERRUPT:
-                    case neograph::graph::GraphEvent::Type::ERROR:
-                        break;
+            // subagent 会话继承父会话的 IO (供权限询问/中断交互使用)
+            if (false == parentThreadId.empty()) {
+                auto parentSession = ctxPtr->sessions->get(parentThreadId);
+                if (parentSession) {
+                    ctxPtr->getSession(cfg.thread_id)->io = parentSession->io;
                 }
             }
-        );
 
-        auto result = oss.str();
-        co_await subagent->onSubagentEnd(result);
-        runningRegistry_.erase(subagentName);
-        co_return events::RespSubagentResult{.content = result};
-    } catch (const std::exception& e) {
-        runningRegistry_.erase(subagentName);
-        co_return events::RespSubagentResult{
-            .hasError     = true,
-            .errorMessage = fmt::format("Sub-agent failed: {}", e.what()),
-        };
-    }
+            XX_LOGD("    ## Subagent dispatched - {}", subagent->name);
+
+            std::ostringstream oss;
+            co_await subgraph->run_stream_async(
+                cfg,
+                [&oss, &busPtr, &subagentName, &subagentId](const neograph::graph::GraphEvent& event) {
+                    switch (event.type) {
+                        case neograph::graph::GraphEvent::Type::NODE_START:
+                        case neograph::graph::GraphEvent::Type::NODE_END:
+                            break;
+                        case neograph::graph::GraphEvent::Type::LLM_TOKEN: {
+                            std::string token;
+                            std::string kind = "content";
+                            if (event.data.is_string()) {
+                                token = event.data.get<std::string>();
+                            } else if (event.data.is_object()) {
+                                neograph::ChatStreamChunk chunk;
+                                neograph::from_json(event.data, chunk);
+                                token = std::move(chunk.data);
+                                if (chunk.type == neograph::ChatStreamChunk::TYPE_THINKING) {
+                                    kind = "thinking";
+                                }
+                            }
+                            // 仅累积 content token
+                            if (kind == "content") {
+                                oss << token;
+                            }
+                            if (busPtr) {
+                                asio::co_spawn(
+                                    busPtr->executor(),
+                                    [busPtr,
+                                     subagentId,
+                                     agentName = std::string{subagentName},
+                                     token     = std::move(token),
+                                     kind      = std::move(kind)]() -> asio::awaitable<void> {
+                                        co_await busPtr->publish<events::EventSubagentProgress>(
+                                            events::Topic::SubagentProgress,
+                                            events::EventSubagentProgress{
+                                                .subagentId = subagentId,
+                                                .agentName  = agentName,
+                                                .kind       = kind == "thinking" ? "thinking" : "token",
+                                                .data       = token,
+                                            }
+                                        );
+                                    },
+                                    asio::detached
+                                );
+                            }
+                        } break;
+                        case neograph::graph::GraphEvent::Type::CHANNEL_WRITE:
+                        case neograph::graph::GraphEvent::Type::INTERRUPT:
+                        case neograph::graph::GraphEvent::Type::ERROR:
+                            break;
+                    }
+                }
+            );
+
+            auto result = oss.str();
+            co_await subagent->onSubagentEnd(result);
+            runningRegistry_.erase(subagentName);
+            co_return events::RespSubagentResult{.content = result};
+        },
+        [this, &subagentName](std::string errmsg) -> asio::awaitable<events::RespSubagentResult> {
+            runningRegistry_.erase(subagentName);
+            co_return events::RespSubagentResult{
+                .hasError     = true,
+                .errorMessage = fmt::format("Sub-agent failed: {}", errmsg),
+            };
+        }
+    );
 }
 
 asio::awaitable<events::RespSubagentBatch>
@@ -288,32 +294,30 @@ asio::awaitable<events::RespSubagentBatch>
                 // RAII 守卫: 无论 runSubagent 抛出何种异常都保证发送完成信号,
                 // 避免主协程收不满 n 个信号而死锁, 并防止异常逃逸 detached 协程 → terminate
                 BatchDoneGuard guard{doneChannel, i};
-                try {
-                    auto r = co_await runSubagent(
-                        task.subagentName,
-                        task.systemPrompt,
-                        task.message,
-                        parentThreadId
-                    );
-                    results[i] = ItemResult{
-                        .resultId     = task.resultId,
-                        .content      = r.content,
-                        .hasError     = r.hasError,
-                        .errorMessage = r.errorMessage,
-                    };
-                } catch (const std::exception& e) {
-                    results[i] = ItemResult{
-                        .resultId     = task.resultId,
-                        .hasError     = true,
-                        .errorMessage = fmt::format("Sub-agent failed: {}", e.what()),
-                    };
-                } catch (...) {
-                    results[i] = ItemResult{
-                        .resultId     = task.resultId,
-                        .hasError     = true,
-                        .errorMessage = "Sub-agent failed with unknown error",
-                    };
-                }
+                // 取消类异常经 runSubagent 原样抛出, 此处统一转为错误条目
+                // (guard 仍保证发送完成信号, 主协程不会死锁)
+                auto r = co_await agentxx::util::catchErrorAsync<events::RespSubagentResult>(
+                    [&]() -> asio::awaitable<events::RespSubagentResult> {
+                        co_return co_await runSubagent(
+                            task.subagentName,
+                            task.systemPrompt,
+                            task.message,
+                            parentThreadId
+                        );
+                    },
+                    [&](std::string errmsg) -> asio::awaitable<events::RespSubagentResult> {
+                        co_return events::RespSubagentResult{
+                            .hasError     = true,
+                            .errorMessage = fmt::format("Sub-agent failed: {}", std::move(errmsg)),
+                        };
+                    }
+                );
+                results[i] = ItemResult{
+                    .resultId     = task.resultId,
+                    .content      = r.content,
+                    .hasError     = r.hasError,
+                    .errorMessage = r.errorMessage,
+                };
             },
             asio::detached
         );

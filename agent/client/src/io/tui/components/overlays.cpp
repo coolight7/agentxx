@@ -2,6 +2,7 @@
 #include "agentxx-client/io/tui/agent_tui.h"
 #include "agentxx-client/io/tui/framework/tui_settings.h"
 #include "agentxx-client/io/tui/mermaid_state.h"
+#include "agentxx/util/exception.h"
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/terminal.hpp"
 #include <algorithm>
@@ -529,12 +530,14 @@ std::vector<ScrollItem> PlanDiagramOverlay::buildItems() {
             cachedMsgPtr_  = plan;
             cachedTextLen_ = plan->text.size();
             cachedArgs_    = neograph::json::array();
-            cachedValid_   = false;
-            try {
-                cachedArgs_  = neograph::json::parse(plan->text);
-                cachedValid_ = true;
-            } catch (...) {
-            }
+            // 解析失败保持 cachedValid_ = false, 界面显示占位内容而非异常中断渲染
+            cachedValid_ = agentxx::util::catchError<bool>(
+                [&]() -> bool {
+                    cachedArgs_ = neograph::json::parse(plan->text);
+                    return true;
+                },
+                [](std::string) -> bool { return false; }
+            );
         }
         if (cachedValid_) {
             roadmap = cachedArgs_.value("roadmap", std::string{});

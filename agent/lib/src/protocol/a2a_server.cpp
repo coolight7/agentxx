@@ -1,5 +1,6 @@
 #include "agentxx/protocol/a2a_server.h"
 
+#include "agentxx/util/exception.h"
 #include "agentxx/util/log.h"
 #include "agentxx/util/string_util.h"
 #include <fmt/chrono.h>
@@ -179,14 +180,21 @@ asio::awaitable<void>
     }
 
     json request;
-    try {
-        request = json::parse(req.body());
-    } catch (...) {
-        writeJsonResponse(
-            resp,
-            boost::beast::http::status::ok,
-            jsonRpcError(json(nullptr), -32700, "Parse error")
-        );
+    bool parsed = agentxx::util::catchError<bool>(
+        [&]() -> bool {
+            request = json::parse(req.body());
+            return true;
+        },
+        [&](std::string) -> bool {
+            writeJsonResponse(
+                resp,
+                boost::beast::http::status::ok,
+                jsonRpcError(json(nullptr), -32700, "Parse error")
+            );
+            return false;
+        }
+    );
+    if (!parsed) {
         co_return;
     }
 
@@ -509,47 +517,68 @@ void A2aServer::executeTask(std::string_view taskId, std::string_view userInput)
         // 多 worker 并发驱动同一 engine 会数据竞争, 故持锁执行 agent 轮次
         std::unique_lock<std::mutex> agentLock(agentRunMutex_);
         auto                         ioCtx = std::make_shared<asio::io_context>();
-        try {
-            asio::co_spawn(
-                *ioCtx,
-                [this, &threadId, &userInput, &collected, &cancelFlag]() -> asio::awaitable<void> {
-                    std::vector<neograph::ChatMessage> msgs{
-                        neograph::ChatMessage{"user", std::string{userInput}}
-                    };
-                    auto result = co_await agent_->runNonStreamAsync(
-                        threadId,
-                        msgs,
-                        [&collected, &cancelFlag](const neograph::graph::GraphEvent& event) {
-                            if (event.type == neograph::graph::GraphEvent::Type::LLM_TOKEN) {
-                                if (event.data.is_string()) {
-                                    collected += event.data.get<std::string>();
-                                } else if (event.data.is_object()) {
-                                    neograph::ChatStreamChunk chunk;
-                                    neograph::from_json(event.data, chunk);
-                                    if (chunk.type != neograph::ChatStreamChunk::TYPE_THINKING) {
-                                        collected += chunk.data;
+        // catchError: 取消类异常在 onRethrow 中转为 Canceled 任务状态 (不逃逸 worker
+        // 线程); 其余异常转为 Failed 任务状态
+        bool ok = agentxx::util::catchError<bool>(
+            [&]() -> bool {
+                asio::co_spawn(
+                    *ioCtx,
+                    [this, &threadId, &userInput, &collected, &cancelFlag]() -> asio::awaitable<void> {
+                        std::vector<neograph::ChatMessage> msgs{
+                            neograph::ChatMessage{"user", std::string{userInput}}
+                        };
+                        auto result = co_await agent_->runNonStreamAsync(
+                            threadId,
+                            msgs,
+                            [&collected, &cancelFlag](const neograph::graph::GraphEvent& event) {
+                                if (event.type == neograph::graph::GraphEvent::Type::LLM_TOKEN) {
+                                    if (event.data.is_string()) {
+                                        collected += event.data.get<std::string>();
+                                    } else if (event.data.is_object()) {
+                                        neograph::ChatStreamChunk chunk;
+                                        neograph::from_json(event.data, chunk);
+                                        if (chunk.type != neograph::ChatStreamChunk::TYPE_THINKING) {
+                                            collected += chunk.data;
+                                        }
                                     }
                                 }
-                            }
-                        },
-                        ""
-                    );
-                    collected = result;
-                    co_return;
-                },
-                asio::detached
-            );
-            ioCtx->run();
-        } catch (const std::exception& e) {
-            if (cancelFlag && cancelFlag->load(std::memory_order_acquire)) {
-                updateTaskState(taskId, A2aTaskState::Canceled);
-            } else {
-                updateTaskState(
-                    taskId,
-                    A2aTaskState::Failed,
-                    makeMessage("ROLE_AGENT", std::string("Error: ") + e.what())
+                            },
+                            ""
+                        );
+                        collected = result;
+                        co_return;
+                    },
+                    asio::detached
                 );
+                ioCtx->run();
+                return true;
+            },
+            [&](std::string errmsg) -> bool {
+                if (cancelFlag && cancelFlag->load(std::memory_order_acquire)) {
+                    updateTaskState(taskId, A2aTaskState::Canceled);
+                } else {
+                    updateTaskState(
+                        taskId,
+                        A2aTaskState::Failed,
+                        makeMessage("ROLE_AGENT", std::string("Error: ") + errmsg)
+                    );
+                }
+                return false;
+            },
+            [&](std::string& errmsg) -> std::optional<bool> {
+                if (cancelFlag && cancelFlag->load(std::memory_order_acquire)) {
+                    updateTaskState(taskId, A2aTaskState::Canceled);
+                } else {
+                    updateTaskState(
+                        taskId,
+                        A2aTaskState::Failed,
+                        makeMessage("ROLE_AGENT", std::string("Error: ") + errmsg)
+                    );
+                }
+                return false;
             }
+        );
+        if (!ok) {
             return;
         }
 
