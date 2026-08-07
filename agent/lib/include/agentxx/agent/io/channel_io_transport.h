@@ -22,6 +22,10 @@ public:
 
     ChannelAgentIOTransport(std::shared_ptr<Chan> outgoing, std::shared_ptr<Chan> incoming);
 
+    /// 析构时自动 close: 关闭两个 channel, 使挂起在其上的 async_receive 立即完成
+    /// (返回 nullopt), 避免协程帧挂起持有本对象形成泄漏; close 幂等, 已 close 时无副作用
+    ~ChannelAgentIOTransport() override;
+
     /// 创建互连的一对传输: first=client 端, second=server 端
     static std::
         pair<std::unique_ptr<ChannelAgentIOTransport>, std::unique_ptr<ChannelAgentIOTransport>>

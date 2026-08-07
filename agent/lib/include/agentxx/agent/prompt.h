@@ -519,6 +519,10 @@ Use `agentxx_web_fetch_url_markdown` afterwards to retrieve full page content fr
               .args =
                   {
                       {"query", "The search query string."},
+                      {"timeout", "Default `15` seconds. Request timeout in seconds."},
+                      {"header",
+                       R"(Custom HTTP request headers to send, as a JSON object of header name to value.
+Example: {"X-Api-Key": "xxx", "User-Agent": "agentxx"})"},
                   },
           },
       },
@@ -530,6 +534,9 @@ Use `agentxx_web_fetch_url_markdown` afterwards to retrieve full page content fr
                   {
                       {"url", "Absolute HTTP/HTTPS URL to fetch."},
                       {"timeout", "Default `30` seconds. Request timeout in seconds."},
+                      {"header",
+                       R"(Custom HTTP request headers to send, as a JSON object of header name to value.
+Example: {"X-Api-Key": "xxx", "User-Agent": "agentxx"})"},
                   },
           },
       },
@@ -552,6 +559,10 @@ When resolving relative links found in the returned Markdown, combine them with 
 - Page `http://example.com/help/what.html`:
   - `model/delete/` (no leading /) → strip filename, append → `http://example.com/help/model/delete/`
 )"},
+                      {"timeout", "Default `15` seconds. Request timeout in seconds."},
+                      {"header",
+                       R"(Custom HTTP request headers to send, as a JSON object of header name to value.
+Example: {"X-Api-Key": "xxx", "User-Agent": "agentxx"})"},
                   },
           },
       },

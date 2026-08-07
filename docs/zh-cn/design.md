@@ -138,6 +138,7 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
   - 右侧边栏 (日志窗口 / 信息面板 / Planning 展示)
   - 待发送消息队列 (执行中排队，轮次结束自动派发)
   - 文件编辑 diff 对比渲染
+  - Mermaid stateDiagram-v2 状态图渲染 (消息中 ```mermaid 代码块 / Plan 弹窗显示 roadmap 状态图)
   - 上下文 token 占用状态栏
   - 主题切换
   - 自动滚动吸附底部 (Scrollable 组件)
@@ -853,6 +854,7 @@ agent/
 │   │   │       ├── agent_tui.h   # TUIClientAgentIO (FTXUI 终端 UI, 接收/显示/排队/权限/日志)
 │   │   │       ├── scrollable.h  # Scrollable (全量构建的可滚动容器, 侧边栏等短列表用)
 │   │   │       ├── lazy_scrollable.h # LazyScrollable (懒构建+LRU有界缓存+视口局部渲染)
+│   │   │       ├── mermaid_state.h   # Mermaid stateDiagram-v2 解析 + ASCII 分层图渲染
 │   │   │       ├── tui_theme.h   # TUI 主题配色
 │   │   │       ├── framework/    # TUI 框架层
 │   │   │       │   ├── tui_state.h       # TUI 状态聚合 (消息/侧边栏/排队输入等)
@@ -877,6 +879,7 @@ agent/
 │       │       ├── agent_tui.cpp
 │       │       ├── tui_theme.cpp
 │       │       ├── scrollable.cpp
+│       │       ├── mermaid_state.cpp    # Mermaid 状态图解析/渲染实现
 │       │       ├── tui_sidebar_content.cpp # 侧边栏内容 (日志/信息/Planning)
 │       │       ├── tui_log_sink.cpp        # TUI 日志接收器
 │       │       ├── framework/              # TUI 框架层实现 (tui_state/modal_container/...)
