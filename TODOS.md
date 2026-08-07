@@ -1,11 +1,14 @@
 # TODO
-- tui 特化各种 toolcall 渲染
+- tui 特化各种 toolcall 渲染， json 格式化
+- 状态图渲染
 - node 可支持插件化加载动态库 + graph json 定义
 - BaseAgent 增加支持 usage 统计
 - 优化各种tool的效果，贴近命令行
 - 会话独立日志
 - eventBus 改为tree，命名空间使用 axx/bxx/cc
 - 内置tool增加命名空间
+- grep、glob 兼容单string参数
+- agent 发送状态给 tui 插入消息
 
 ## 提示词优化
 - 如果编译需要配置特定参数，写成脚本或者写入到AGENTS.md

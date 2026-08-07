@@ -563,6 +563,7 @@ void TUIClientAgentIO::onPeerMessage(agentxx::agent::WireMessage msg) {
                     if (!m.currentModel.empty()) {
                         st.cachedModelName = m.currentModel;
                     }
+                    st.modelInfoLoaded = true;
                 }
                 postRedraw();
             } else if constexpr (std::is_same_v<T, agentxx::agent::WireAppendComponentInfo>) {
