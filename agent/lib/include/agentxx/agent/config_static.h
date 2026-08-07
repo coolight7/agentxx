@@ -1,5 +1,6 @@
 #pragma once
 
+#include "agentxx/util/exception.h"
 #include "fmt/format.h"
 #include <filesystem>
 #include <optional>
@@ -22,12 +23,13 @@ public:
     }
 
     inline static std::optional<std::string> getCurrentWorkPath() noexcept {
-        try {
-            auto cwd = std::filesystem::current_path();
-            return cwd.string();
-        } catch (...) {
-            return std::nullopt;
-        }
+        return agentxx::util::catchError<std::optional<std::string>>(
+            []() -> std::optional<std::string> {
+                auto cwd = std::filesystem::current_path();
+                return cwd.string();
+            },
+            [](std::string) -> std::optional<std::string> { return std::nullopt; }
+        );
     }
 };
 

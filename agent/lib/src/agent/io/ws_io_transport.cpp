@@ -1,6 +1,7 @@
 #include "agentxx/agent/io/ws_io_transport.h"
 
 #include "agentxx/agent/io/wire_protocol.h"
+#include "agentxx/util/exception.h"
 #include "agentxx/util/log.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
@@ -64,12 +65,17 @@ asio::awaitable<std::optional<WireMessage>> WsAgentIOTransport::recv() {
     if (!recvQueue_) {
         co_return std::nullopt;
     }
-    try {
-        auto msg = co_await recvQueue_->async_receive(asio::use_awaitable);
-        co_return std::move(msg);
-    } catch (const neograph_asio_system_error&) {
-        co_return std::nullopt;
-    }
+    // channel 关闭时 async_receive 抛 system_error, 按"无消息"处理返回 nullopt;
+    // 取消类异常 (CancelledException/NodeInterrupt) 由 catchErrorAsync 原样抛出
+    co_return co_await agentxx::util::catchErrorAsync<std::optional<WireMessage>>(
+        [&]() -> asio::awaitable<std::optional<WireMessage>> {
+            auto msg = co_await recvQueue_->async_receive(asio::use_awaitable);
+            co_return std::move(msg);
+        },
+        [](std::string) -> asio::awaitable<std::optional<WireMessage>> {
+            co_return std::nullopt;
+        }
+    );
 }
 
 asio::awaitable<bool> WsAgentIOTransport::connect(const WireHello& hello) {
@@ -101,21 +107,27 @@ asio::awaitable<bool> WsAgentIOTransport::connect(const WireHello& hello) {
     auto helloJson = io::makeHello(hello.threadId, hello.token, hello.lastSeq, hello.tailHash);
     writeQueue_->try_send(ErrorCode{}, helloJson.dump());
 
-    try {
-        for (;;) {
-            auto msg = co_await recvQueue_->async_receive(
-                asio::cancel_after(config_.authTimeout, asio::use_awaitable)
-            );
-            if (std::get_if<WireHelloAck>(&msg)) {
-                break;
+    // 等待 HelloAck; 超时或 channel 关闭时按连接失败处理
+    co_await agentxx::util::catchErrorAsync<bool>(
+        [&]() -> asio::awaitable<bool> {
+            for (;;) {
+                auto msg = co_await recvQueue_->async_receive(
+                    asio::cancel_after(config_.authTimeout, asio::use_awaitable)
+                );
+                if (std::get_if<WireHelloAck>(&msg)) {
+                    break;
+                }
             }
+            co_return true;
+        },
+        [&](std::string errmsg) -> asio::awaitable<bool> {
+            // 超时或 channel 关闭，确保资源清理
+            XX_LOGW("[ws_transport] auth handshake timeout or disconnected: {}", errmsg);
+            stopLoops(); // 确保所有循环和资源被正确关闭
+            connected_.store(false, std::memory_order_release); // 明确设置连接状态
+            co_return false;
         }
-    } catch (const neograph_asio_system_error& e) {
-        // 超时或 channel 关闭，确保资源清理
-        XX_LOGW("[ws_transport] auth handshake timeout or disconnected: {}", e.what());
-        stopLoops(); // 确保所有循环和资源被正确关闭
-        connected_.store(false, std::memory_order_release); // 明确设置连接状态
-    }
+    );
 
     co_return connected_.load(std::memory_order_acquire);
 }
@@ -186,13 +198,20 @@ asio::awaitable<void> WsAgentIOTransport::writeLoop() {
         co_return;
     }
     for (;;) {
-        std::string text;
-        try {
-            text = co_await queue->async_receive(asio::use_awaitable);
-        } catch (const neograph_asio_system_error&) {
+        // 队列关闭 (transport 停止/重连) 时 async_receive 抛 system_error;
+        // 经 catchErrorAsync 转换为 nullopt 退出写循环
+        auto received = co_await agentxx::util::catchErrorAsync<std::optional<std::string>>(
+            [&]() -> asio::awaitable<std::optional<std::string>> {
+                co_return co_await queue->async_receive(asio::use_awaitable);
+            },
+            [](std::string) -> asio::awaitable<std::optional<std::string>> {
+                co_return std::nullopt;
+            }
+        );
+        if (!received.has_value()) {
             break;
         }
-        auto res = co_await client->sendText(text);
+        auto res = co_await client->sendText(std::move(*received));
         if (!res) {
             connected_.store(false, std::memory_order_release);
             break;
@@ -441,9 +460,14 @@ std::string WsAgentIOTransport::serialize(const WireMessage& msg) {
 
 std::optional<WireMessage> WsAgentIOTransport::deserialize(std::string_view jsonText) {
     neograph::json j;
-    try {
-        j = neograph::json::parse(jsonText);
-    } catch (const std::exception&) {
+    bool           parsed = agentxx::util::catchError<bool>(
+        [&]() -> bool {
+            j = neograph::json::parse(jsonText);
+            return true;
+        },
+        [](std::string) -> bool { return false; }
+    );
+    if (!parsed) {
         return std::nullopt;
     }
     if (!j.is_object()) {

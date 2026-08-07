@@ -3,6 +3,7 @@
 #include "agentxx/agent/checkpoint_store.h"
 #include "agentxx/middlewares/summarization.h"
 #include "agentxx/util/diff_util.h"
+#include "agentxx/util/exception.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "neograph/graph/compiler.h"
@@ -461,17 +462,21 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                                         continue;
                                     }
                                     foundArgs = true;
-                                    try {
-                                        auto args = neograph::json::parse(
-                                            tc.value("arguments", std::string{})
-                                        );
-                                        historyMsg["diff"] = agentxx::util::makeUnifiedDiff(
-                                            args.value("old_str", std::string{}),
-                                            args.value("new_str", std::string{}),
-                                            args.value("path", std::string{})
-                                        );
-                                    } catch (...) {
-                                    }
+                                    // 解析失败的参数 (如非法 JSON) 跳过 diff 渲染
+                                    agentxx::util::catchError<bool>(
+                                        [&]() -> bool {
+                                            auto args = neograph::json::parse(
+                                                tc.value("arguments", std::string{})
+                                            );
+                                            historyMsg["diff"] = agentxx::util::makeUnifiedDiff(
+                                                args.value("old_str", std::string{}),
+                                                args.value("new_str", std::string{}),
+                                                args.value("path", std::string{})
+                                            );
+                                            return true;
+                                        },
+                                        [](std::string) -> bool { return false; }
+                                    );
                                     break;
                                 }
                                 if (foundArgs) {

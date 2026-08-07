@@ -305,18 +305,24 @@ public:
     ) :
         valid_(false),
         multi_mode_(false) {
-        try {
-            // 大小写不敏感: 使用 std::regex::icase (此前忽略 flags 参数, 导致
-            // HS_FLAG_CASELESS 语义无法用于 fallback 后端)
-            auto reFlags = std::regex::ECMAScript | std::regex::optimize;
-            if (caseInsensitive) {
-                reFlags |= std::regex::icase;
+        // 编译失败保持 valid_ = false (调用方按无效正则处理)
+        agentxx::util::catchError<bool>(
+            [&]() -> bool {
+                // 大小写不敏感: 使用 std::regex::icase (此前忽略 flags 参数, 导致
+                // HS_FLAG_CASELESS 语义无法用于 fallback 后端)
+                auto reFlags = std::regex::ECMAScript | std::regex::optimize;
+                if (caseInsensitive) {
+                    reFlags |= std::regex::icase;
+                }
+                regex_ = std::regex(regstr, reFlags);
+                valid_ = true;
+                return true;
+            },
+            [&](std::string errmsg) -> bool {
+                XX_LOGE("Regex编译失败: {} | {}", errmsg, regstr);
+                return false;
             }
-            regex_ = std::regex(regstr, reFlags);
-            valid_ = true;
-        } catch (const std::regex_error& e) {
-            XX_LOGE("Regex编译失败: {} | {}", e.what(), regstr);
-        }
+        );
     }
 
     // 多模式构造函数
@@ -333,10 +339,18 @@ public:
         }
         regexes_.reserve(regstrs.size());
         for (const auto& str : regstrs) {
-            try {
-                regexes_.emplace_back(str, reFlags);
-            } catch (const std::regex_error& e) {
-                XX_LOGE("Regex编译失败: {} | {}", e.what(), str);
+            // 任一模式编译失败则整体判定无效
+            bool ok = agentxx::util::catchError<bool>(
+                [&]() -> bool {
+                    regexes_.emplace_back(str, reFlags);
+                    return true;
+                },
+                [&](std::string errmsg) -> bool {
+                    XX_LOGE("Regex编译失败: {} | {}", errmsg, str);
+                    return false;
+                }
+            );
+            if (!ok) {
                 regexes_.clear();
                 return;
             }

@@ -173,8 +173,8 @@ void TUIClientAgentIO::start() {
                 std::lock_guard<std::mutex> lock(sharedState_.mutex());
                 auto&                       st = sharedState_.mutableState();
                 // json 拷贝是深拷贝 (yyjson 全树复制), 仅此低频场景一次, 可接受
-                st.contextMessages = std::make_shared<neograph::json>(session_->llmMessages);
-                st.showContextOverlay          = true;
+                st.contextMessages    = std::make_shared<neograph::json>(session_->llmMessages);
+                st.showContextOverlay = true;
             }
             if (modal_ && !modal_->hasModal()) {
                 auto overlay = std::make_shared<ContextOverlay>(ctx_);
@@ -401,32 +401,37 @@ void TUIClientAgentIO::startSystemMonitor() {
                 // 显示关闭时跳过采集 (仍保持周期唤醒, 以便随时重新开启)
                 if (TUISettings::instance().showSystemInfo()) {
                     auto usage = std::make_shared<agentxx::expand::CpuGpuUsage>();
-                    try {
-                        if (agentContext_ && agentContext_->blockingPool) {
-                            // query() 为协程 (内部含 100ms 采样间隔定时器与文件读取),
-                            // 整体投递到 blockingPool 线程池执行, 不占用 client io_context;
-                            // offloadAsync 完成后自动恢复回 client executor
-                            *usage
-                                = co_await agentxx::util::offloadAsync<agentxx::expand::CpuGpuUsage>(
+                    co_await agentxx::util::catchErrorAsync<bool>(
+                        [&]() -> asio::awaitable<bool> {
+                            if (agentContext_ && agentContext_->blockingPool) {
+                                // query() 为协程 (内部含 100ms 采样间隔定时器与文件读取),
+                                // 整体投递到 blockingPool 线程池执行, 不占用 client io_context;
+                                // offloadAsync 完成后自动恢复回 client executor
+                                *usage = co_await agentxx::util::offloadAsync<
+                                    agentxx::expand::CpuGpuUsage>(
                                     *agentContext_->blockingPool,
                                     [monitor]() -> asio::awaitable<agentxx::expand::CpuGpuUsage> {
                                         co_return co_await monitor->query();
                                     }
                                 );
-                        } else {
-                            // 兜底: 无 blockingPool 时直接在 client executor 上执行
-                            // (query() 内部为异步操作, 不阻塞事件循环)
-                            *usage = co_await monitor->query();
+                            } else {
+                                // 兜底: 无 blockingPool 时直接在 client executor 上执行
+                                // (query() 内部为异步操作, 不阻塞事件循环)
+                                *usage = co_await monitor->query();
+                            }
+                            {
+                                std::lock_guard<std::mutex> lock(sharedState_.mutex());
+                                auto&                       st = sharedState_.mutableState();
+                                st.systemUsage                 = std::move(usage);
+                            }
+                            postRedraw();
+                            co_return true;
+                        },
+                        [](std::string errmsg) -> asio::awaitable<bool> {
+                            XX_LOGE("[tui] system monitor query failed: {}", errmsg);
+                            co_return false;
                         }
-                        {
-                            std::lock_guard<std::mutex> lock(sharedState_.mutex());
-                            auto&                       st = sharedState_.mutableState();
-                            st.systemUsage                 = std::move(usage);
-                        }
-                        postRedraw();
-                    } catch (const std::exception& e) {
-                        XX_LOGE("[tui] system monitor query failed: {}", e.what());
-                    }
+                    );
                 }
                 // 周期等待; stop() 时 cancel() 使本等待立即返回并退出循环
                 timer->expires_after(std::chrono::seconds(kSystemInfoIntervalSec));
@@ -595,8 +600,8 @@ void TUIClientAgentIO::onPeerMessage(agentxx::agent::WireMessage msg) {
                 {
                     std::lock_guard<std::mutex> lock(sharedState_.mutex());
                     auto&                       st = sharedState_.mutableState();
-                    st.contextMessages = std::make_shared<neograph::json>(std::move(m.messages));
-                    st.showContextOverlay          = true;
+                    st.contextMessages    = std::make_shared<neograph::json>(std::move(m.messages));
+                    st.showContextOverlay = true;
                 }
                 // 打开上下文弹窗
                 if (modal_ && !modal_->hasModal()) {
@@ -684,8 +689,7 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
             case Type::ThinkingToken: {
                 auto role = (delta.type == Type::ThinkingToken) ? TUIMessage::Role::Thinking
                                                                 : TUIMessage::Role::Assistant;
-                if (st.currentTokenRole != role && st.currentToken
-                    && !st.currentToken->empty()) {
+                if (st.currentTokenRole != role && st.currentToken && !st.currentToken->empty()) {
                     st.pendingTokenStartTimeMs = delta.startTimeMs;
                     st.pendingTokenDurationMs  = delta.durationMs;
                     pushCurrentTokenLocked(st);

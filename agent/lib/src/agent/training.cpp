@@ -1,5 +1,6 @@
 #include "agentxx/agent/training.h"
 
+#include "agentxx/util/exception.h"
 #include <algorithm>
 #include <chrono>
 #include <fmt/core.h>
@@ -83,106 +84,121 @@ void EvolutionTrainingAgent::rotateSaveFile(std::string_view path, int keepCount
         return;
     }
     namespace fs = std::filesystem;
-    try {
-        fs::path oldest(fmt::format("{}.{}", path, keepCount));
-        if (fs::exists(oldest)) {
-            fs::remove(oldest);
-        }
-        for (int i = keepCount - 1; i >= 1; --i) {
-            fs::path from(fmt::format("{}.{}", path, i));
-            fs::path to(fmt::format("{}.{}", path, i + 1));
-            if (fs::exists(from)) {
-                fs::rename(from, to);
+    agentxx::util::catchError<bool>(
+        [&]() -> bool {
+            fs::path oldest(fmt::format("{}.{}", path, keepCount));
+            if (fs::exists(oldest)) {
+                fs::remove(oldest);
             }
+            for (int i = keepCount - 1; i >= 1; --i) {
+                fs::path from(fmt::format("{}.{}", path, i));
+                fs::path to(fmt::format("{}.{}", path, i + 1));
+                if (fs::exists(from)) {
+                    fs::rename(from, to);
+                }
+            }
+            fs::path cur(path);
+            if (fs::exists(cur)) {
+                fs::copy_file(cur, fmt::format("{}.1", path), fs::copy_options::overwrite_existing);
+            }
+            return true;
+        },
+        [](std::string errmsg) -> bool {
+            XX_LOGD("[EvolutionTraining] Backup rotation skipped: {}", errmsg);
+            return false;
         }
-        fs::path cur(path);
-        if (fs::exists(cur)) {
-            fs::copy_file(cur, fmt::format("{}.1", path), fs::copy_options::overwrite_existing);
-        }
-    } catch (const std::exception& e) {
-        XX_LOGD("[EvolutionTraining] Backup rotation skipped: {}", e.what());
-    }
+    );
 }
 
 void EvolutionTrainingAgent::savePopulationToFile(std::string_view filePath, int backupCount) {
-    try {
-        if (backupCount > 0) {
-            rotateSaveFile(filePath, backupCount);
-        }
+    agentxx::util::catchError<bool>(
+        [&]() -> bool {
+            if (backupCount > 0) {
+                rotateSaveFile(filePath, backupCount);
+            }
 
-        neograph::json j = neograph::json::array();
-        for (const auto& v : population) {
-            j.push_back(promptVariantToJson(v));
-        }
+            neograph::json j = neograph::json::array();
+            for (const auto& v : population) {
+                j.push_back(promptVariantToJson(v));
+            }
 
-        neograph::json root;
-        root["population"]        = j;
-        root["generationCounter"] = generationCounter;
-        root["savedAt"]           = std::chrono::system_clock::now().time_since_epoch().count();
+            neograph::json root;
+            root["population"]        = j;
+            root["generationCounter"] = generationCounter;
+            root["savedAt"]           = std::chrono::system_clock::now().time_since_epoch().count();
 
-        std::ofstream ofs(std::string{filePath}, std::ios::out | std::ios::trunc);
-        if (ofs.is_open()) {
-            ofs << root.dump(2);
-            ofs.close();
-            XX_LOGD("[EvolutionTraining] Saved {} prompts to {}", population.size(), filePath);
-        } else {
-            XX_LOGE("[EvolutionTraining] Failed to open file for writing: {}", filePath);
+            std::ofstream ofs(std::string{filePath}, std::ios::out | std::ios::trunc);
+            if (ofs.is_open()) {
+                ofs << root.dump(2);
+                ofs.close();
+                XX_LOGD("[EvolutionTraining] Saved {} prompts to {}", population.size(), filePath);
+            } else {
+                XX_LOGE("[EvolutionTraining] Failed to open file for writing: {}", filePath);
+            }
+            return true;
+        },
+        [](std::string errmsg) -> bool {
+            XX_LOGE("[EvolutionTraining] Failed to save population: {}", errmsg);
+            return false;
         }
-    } catch (const std::exception& e) {
-        XX_LOGE("[EvolutionTraining] Failed to save population: {}", e.what());
-    }
+    );
 }
 
 bool EvolutionTrainingAgent::loadPopulationFromFile(std::string_view filePath) {
-    try {
-        std::ifstream ifs(std::string{filePath});
-        if (!ifs.is_open()) {
-            XX_LOGD(
-                "[EvolutionTraining] No existing save file found at {}, "
-                "starting fresh",
-                filePath
-            );
-            return false;
-        }
-
-        std::string content(
-            (std::istreambuf_iterator<char>(ifs)),
-            std::istreambuf_iterator<char>()
-        );
-        ifs.close();
-
-        if (content.empty()) {
-            return false;
-        }
-
-        auto root = neograph::json::parse(content);
-        if (root.contains("population") && root["population"].is_array()) {
-            population.clear();
-            for (const auto& j : root["population"]) {
-                population.push_back(promptVariantFromJson(j));
+    bool loaded = agentxx::util::catchError<bool>(
+        [&]() -> bool {
+            std::ifstream ifs(std::string{filePath});
+            if (!ifs.is_open()) {
+                XX_LOGD(
+                    "[EvolutionTraining] No existing save file found at {}, "
+                    "starting fresh",
+                    filePath
+                );
+                return false;
             }
-            generationCounter = root.value("generationCounter", 0);
 
-            std::sort(
-                population.begin(),
-                population.end(),
-                [](const PromptVariant& a, const PromptVariant& b) {
-                    return a.averageScore() > b.averageScore();
+            std::string content(
+                (std::istreambuf_iterator<char>(ifs)),
+                std::istreambuf_iterator<char>()
+            );
+            ifs.close();
+
+            if (content.empty()) {
+                return false;
+            }
+
+            auto root = neograph::json::parse(content);
+            if (root.contains("population") && root["population"].is_array()) {
+                population.clear();
+                for (const auto& j : root["population"]) {
+                    population.push_back(promptVariantFromJson(j));
                 }
-            );
+                generationCounter = root.value("generationCounter", 0);
 
-            XX_LOGD(
-                "[EvolutionTraining] Loaded {} prompts from {} (generation {})",
-                population.size(),
-                filePath,
-                generationCounter
-            );
-            return true;
+                std::sort(
+                    population.begin(),
+                    population.end(),
+                    [](const PromptVariant& a, const PromptVariant& b) {
+                        return a.averageScore() > b.averageScore();
+                    }
+                );
+
+                XX_LOGD(
+                    "[EvolutionTraining] Loaded {} prompts from {} (generation {})",
+                    population.size(),
+                    filePath,
+                    generationCounter
+                );
+                return true;
+            }
+            return false;
+        },
+        [filePath](std::string errmsg) -> bool {
+            XX_LOGE("[EvolutionTraining] Failed to load population: {}", errmsg);
+            return false;
         }
-    } catch (const std::exception& e) {
-        XX_LOGE("[EvolutionTraining] Failed to load population: {}", e.what());
-    }
-    return false;
+    );
+    return loaded;
 }
 
 asio::awaitable<TrainingScore> EvolutionTrainingAgent::defaultScoringWithSubAgent(
@@ -221,26 +237,38 @@ asio::awaitable<TrainingScore> EvolutionTrainingAgent::defaultScoringWithSubAgen
                        << "\n";
     }
 
-    try {
-        auto content = co_await runLLMAgent(scoreAgent, cfg.scoringPrompt, scoringMessage.str());
-        auto parsed  = parseJsonFromResponse(content);
-        if (parsed.is_object()) {
-            result.score    = parsed.value("score", 0.0);
-            result.feedback = parsed.value("feedback", std::string{});
-            result.passed   = parsed.value("passed", false);
-            if (parsed.contains("extra") && parsed["extra"].is_object()) {
-                result.extra = parsed["extra"];
+    // catchErrorAsync: 评分子代理异常 (含取消/中断类) 转为 0 分反馈, 训练循环继续
+    co_await agentxx::util::catchErrorAsync<bool>(
+        [&]() -> asio::awaitable<bool> {
+            auto content = co_await runLLMAgent(scoreAgent, cfg.scoringPrompt, scoringMessage.str());
+            auto parsed  = parseJsonFromResponse(content);
+            if (parsed.is_object()) {
+                result.score    = parsed.value("score", 0.0);
+                result.feedback = parsed.value("feedback", std::string{});
+                result.passed   = parsed.value("passed", false);
+                if (parsed.contains("extra") && parsed["extra"].is_object()) {
+                    result.extra = parsed["extra"];
+                }
+            } else {
+                result.score    = 0.0;
+                result.feedback = fmt::format("Scorer returned non-JSON: {}", content);
+                result.passed   = false;
             }
-        } else {
+            co_return true;
+        },
+        [&](std::string errmsg) -> asio::awaitable<bool> {
             result.score    = 0.0;
-            result.feedback = fmt::format("Scorer returned non-JSON: {}", content);
+            result.feedback = std::string("Scoring subagent error: ") + std::move(errmsg);
             result.passed   = false;
+            co_return false;
+        },
+        [&](std::string& errmsg) -> std::optional<bool> {
+            result.score    = 0.0;
+            result.feedback = std::string("Scoring subagent error: ") + std::move(errmsg);
+            result.passed   = false;
+            return false;
         }
-    } catch (const std::exception& e) {
-        result.score    = 0.0;
-        result.feedback = std::string("Scoring subagent error: ") + e.what();
-        result.passed   = false;
-    }
+    );
 
     co_return result;
 }
@@ -296,33 +324,43 @@ asio::awaitable<OptimizedPrompts> EvolutionTrainingAgent::optimizeVariantWithLLM
     msg << "Feedback: " << score.feedback << "\n";
     msg << "\nPlease provide improved prompts.";
 
-    try {
-        auto content = co_await runLLMAgent(optimizerAgent, cfg.optimizerPrompt, msg.str());
-        auto parsed  = parseJsonFromResponse(content);
-        if (parsed.is_object()) {
-            // 提取 patch（移除非 prompt 字段）
-            neograph::json patch = neograph::json::object();
-            if (parsed.contains("systemPrompt")) {
-                patch["systemPrompt"] = parsed["systemPrompt"];
+    // catchErrorAsync: 优化器异常 (含取消/中断类) 仅记录日志, 训练循环继续
+    co_await agentxx::util::catchErrorAsync<bool>(
+        [&]() -> asio::awaitable<bool> {
+            auto content = co_await runLLMAgent(optimizerAgent, cfg.optimizerPrompt, msg.str());
+            auto parsed  = parseJsonFromResponse(content);
+            if (parsed.is_object()) {
+                // 提取 patch（移除非 prompt 字段）
+                neograph::json patch = neograph::json::object();
+                if (parsed.contains("systemPrompt")) {
+                    patch["systemPrompt"] = parsed["systemPrompt"];
+                }
+                if (parsed.contains("systemPlanningPrompt")) {
+                    patch["systemPlanningPrompt"] = parsed["systemPlanningPrompt"];
+                }
+                if (parsed.contains("systemSkillPrompt")) {
+                    patch["systemSkillPrompt"] = parsed["systemSkillPrompt"];
+                }
+                if (parsed.contains("toolPrompt")) {
+                    patch["toolPrompt"] = parsed["toolPrompt"];
+                }
+                result.patch    = patch;
+                result.analysis = parsed.value("analysis", std::string{});
+                if (!patch.empty()) {
+                    XX_LOGD("[EvolutionTraining] Optimizer produced prompt patch");
+                }
             }
-            if (parsed.contains("systemPlanningPrompt")) {
-                patch["systemPlanningPrompt"] = parsed["systemPlanningPrompt"];
-            }
-            if (parsed.contains("systemSkillPrompt")) {
-                patch["systemSkillPrompt"] = parsed["systemSkillPrompt"];
-            }
-            if (parsed.contains("toolPrompt")) {
-                patch["toolPrompt"] = parsed["toolPrompt"];
-            }
-            result.patch    = patch;
-            result.analysis = parsed.value("analysis", std::string{});
-            if (!patch.empty()) {
-                XX_LOGD("[EvolutionTraining] Optimizer produced prompt patch");
-            }
+            co_return true;
+        },
+        [](std::string errmsg) -> asio::awaitable<bool> {
+            XX_LOGE("[EvolutionTraining] Optimizer error: {}", errmsg);
+            co_return false;
+        },
+        [](std::string& errmsg) -> std::optional<bool> {
+            XX_LOGE("[EvolutionTraining] Optimizer error: {}", errmsg);
+            return false;
         }
-    } catch (const std::exception& e) {
-        XX_LOGE("[EvolutionTraining] Optimizer error: {}", e.what());
-    }
+    );
     co_return result;
 }
 
@@ -401,23 +439,38 @@ asio::awaitable<PromptVariant> EvolutionTrainingAgent::createChildVariantLLMMut(
     msg << buildPromptContextMessage(parent);
     msg << "\nGenerate a diverse variation of these prompts.";
 
-    try {
-        auto content = co_await runLLMAgent(optimizerAgent, cfg.mutationPrompt, msg.str());
-        auto parsed  = parseJsonFromResponse(content);
-        if (parsed.is_object()) {
-            // 以 patch 方式合并：只覆盖出现的字段
-            child.prompt.mergeFromJson(parsed);
-        } else {
+    // catchErrorAsync: LLM 变异失败 (含取消/中断类) 降级为字符变异, 训练循环继续
+    co_await agentxx::util::catchErrorAsync<bool>(
+        [&]() -> asio::awaitable<bool> {
+            auto content = co_await runLLMAgent(optimizerAgent, cfg.mutationPrompt, msg.str());
+            auto parsed  = parseJsonFromResponse(content);
+            if (parsed.is_object()) {
+                // 以 patch 方式合并：只覆盖出现的字段
+                child.prompt.mergeFromJson(parsed);
+            } else {
+                child = createChildVariantCharMut(parent, cfg.mutationRate);
+            }
+            co_return true;
+        },
+        [&](std::string errmsg) -> asio::awaitable<bool> {
+            XX_LOGD(
+                "[EvolutionTraining] LLM mutation failed, fallback to char mut: "
+                "{}",
+                errmsg
+            );
             child = createChildVariantCharMut(parent, cfg.mutationRate);
+            co_return false;
+        },
+        [&](std::string& errmsg) -> std::optional<bool> {
+            XX_LOGD(
+                "[EvolutionTraining] LLM mutation failed, fallback to char mut: "
+                "{}",
+                errmsg
+            );
+            child = createChildVariantCharMut(parent, cfg.mutationRate);
+            return false;
         }
-    } catch (const std::exception& e) {
-        XX_LOGD(
-            "[EvolutionTraining] LLM mutation failed, fallback to char mut: "
-            "{}",
-            e.what()
-        );
-        child = createChildVariantCharMut(parent, cfg.mutationRate);
-    }
+    );
     co_return child;
 }
 

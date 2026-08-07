@@ -2,6 +2,7 @@
 
 #include "agentxx/agent/base_agent.h"
 #include "agentxx/agent/context.h"
+#include "agentxx/util/exception.h"
 #include "agentxx/util/log.h"
 #include "asio/cancel_after.hpp"
 #include "asio/co_spawn.hpp"
@@ -66,11 +67,11 @@ asio::awaitable<std::optional<std::string>> SessionServerAgentIO::getInput() {
 }
 
 asio::awaitable<std::optional<std::string>> SessionServerAgentIO::waitInput() {
-    try {
-        co_return co_await inputChannel_->async_receive(asio::use_awaitable);
-    } catch (...) {
-        co_return std::nullopt;
-    }
+    co_return co_await agentxx::util::catchErrorToOptionalAsync<std::string>(
+        [&]() -> asio::awaitable<std::optional<std::string>> {
+            co_return co_await inputChannel_->async_receive(asio::use_awaitable);
+        }
+    );
 }
 
 asio::awaitable<neograph::json> SessionServerAgentIO::handleInterrupt(
@@ -99,11 +100,16 @@ asio::awaitable<neograph::json> SessionServerAgentIO::handleInterrupt(
     });
 
     neograph::json result = neograph::json::array();
-    try {
-        result = co_await ch->async_receive(asio::cancel_after(timeout, asio::use_awaitable));
-    } catch (const neograph_asio_system_error& e) {
-        XX_LOGW("[session_ctrl] interrupt #{} ended early: {}", id, e.what());
-    }
+    co_await agentxx::util::catchErrorAsync<bool>(
+        [&]() -> asio::awaitable<bool> {
+            result = co_await ch->async_receive(asio::cancel_after(timeout, asio::use_awaitable));
+            co_return true;
+        },
+        [&](std::string errmsg) -> asio::awaitable<bool> {
+            XX_LOGW("[session_ctrl] interrupt #{} ended early: {}", id, errmsg);
+            co_return false;
+        }
+    );
     pending_.erase(id);
     co_return result;
 }
@@ -273,30 +279,48 @@ asio::awaitable<void> SessionServerAgentIO::run() {
             turnActive_.store(false, std::memory_order_release);
             break;
         }
-        try {
-            auto result = co_await agent->runConversationTurnAsync(
-                config_.threadId,
-                *input,
-                firstTurn_,
-                shared_from_this()
-            );
-            firstTurn_ = false;
-            sendToPeer(WireTurnResult{
-                .threadId     = config_.threadId,
-                .hasError     = result.hasError,
-                .errorMessage = result.errorMessage,
-                .interrupted  = result.interrupted,
-            });
-            sendContextStats();
-        } catch (const std::exception& e) {
-            XX_LOGE("[session_ctrl] turn error: {}", e.what());
-            sendToPeer(WireTurnResult{
-                .threadId     = config_.threadId,
-                .hasError     = true,
-                .errorMessage = e.what(),
-                .interrupted  = false,
-            });
-        }
+        // catchErrorAsync: 取消类异常 (CancelledException/NodeInterrupt) 与普通异常
+        // 一致转为错误消息通知客户端 (onRethrow), 避免异常逃逸 co_spawn 完成处理器;
+        // 其余异常同样转为错误消息
+        co_await agentxx::util::catchErrorAsync<bool>(
+            [&]() -> asio::awaitable<bool> {
+                auto result = co_await agent->runConversationTurnAsync(
+                    config_.threadId,
+                    *input,
+                    firstTurn_,
+                    shared_from_this()
+                );
+                firstTurn_ = false;
+                sendToPeer(WireTurnResult{
+                    .threadId     = config_.threadId,
+                    .hasError     = result.hasError,
+                    .errorMessage = result.errorMessage,
+                    .interrupted  = result.interrupted,
+                });
+                sendContextStats();
+                co_return true;
+            },
+            [&](std::string errmsg) -> asio::awaitable<bool> {
+                XX_LOGE("[session_ctrl] turn error: {}", errmsg);
+                sendToPeer(WireTurnResult{
+                    .threadId     = config_.threadId,
+                    .hasError     = true,
+                    .errorMessage = std::move(errmsg),
+                    .interrupted  = false,
+                });
+                co_return false;
+            },
+            [&](std::string& errmsg) -> std::optional<bool> {
+                XX_LOGE("[session_ctrl] turn error: {}", errmsg);
+                sendToPeer(WireTurnResult{
+                    .threadId     = config_.threadId,
+                    .hasError     = true,
+                    .errorMessage = std::move(errmsg),
+                    .interrupted  = false,
+                });
+                return false;
+            }
+        );
 
         turnActive_.store(false, std::memory_order_release);
     }

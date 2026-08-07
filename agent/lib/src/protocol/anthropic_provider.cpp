@@ -1,5 +1,6 @@
 #include "agentxx/protocol/anthropic_provider.h"
 #include "agentxx/protocol/openai_provider.h"
+#include "agentxx/util/exception.h"
 
 namespace agentxx {
 namespace server {
@@ -120,11 +121,17 @@ std::pair<std::string, neograph::json> AnthropicProvider::convertMessages(
                 tool_use["type"] = "tool_use";
                 tool_use["id"]   = tc.id;
                 tool_use["name"] = tc.name;
-                try {
-                    tool_use["input"] = neograph::json::parse(tc.arguments);
-                } catch (...) {
-                    tool_use["input"] = neograph::json::object();
-                }
+                // 参数非法 JSON 时回退为空对象, 不中断整条消息转换
+                agentxx::util::catchError<bool>(
+                    [&]() -> bool {
+                        tool_use["input"] = neograph::json::parse(tc.arguments);
+                        return true;
+                    },
+                    [&](std::string) -> bool {
+                        tool_use["input"] = neograph::json::object();
+                        return false;
+                    }
+                );
                 content_arr.push_back(std::move(tool_use));
             }
             j["content"] = std::move(content_arr);
@@ -423,51 +430,57 @@ asio::awaitable<neograph::ChatCompletion> AnthropicProvider::doStream(
     // 是否收到 Anthropic SSE 结束事件 "message_stop", 用于检测流截断
     bool messageStopReceived = false;
 
-    try {
-        co_await HttpClient::requestSseAsync(
-            "POST",
-            fmt::format("{}/v1/messages", config_.baseUrl),
-            bodyStr,
-            "application/json",
-            headers,
-            HttpClient::RequestConfig{
-                .connectTimeout   = std::chrono::seconds{config_.connectTimeoutSeconds},
-                .readChunkTimeout = std::chrono::seconds{config_.readChunkTimeoutSeconds},
-                .sslVerify        = config_.sslVerify,
-            },
-            // 返回 true 通知 http 层流已结束 (收到 message_stop): 立即断开连接停止读取,
-            // 避免对端 keep-alive 不关闭时白等 readChunkTimeout
-            [&](std::string_view chunk) -> bool {
-                lineBuffer += chunk;
-                if (processSseBuffer(
-                        lineBuffer,
-                        completion,
-                        fullContent,
-                        fullThinking,
-                        tcMap,
-                        blockTypes,
-                        thinkingTexts,
-                        blockSignatures,
-                        on_chunk
-                    )) {
-                    messageStopReceived = true;
-                    return true;
+    // catchErrorAsync: 已收到 message_stop 说明消息已结束、业务数据已全部送达,
+    // 连接层在收尾阶段的错误 (如 ssl stream_truncated: 对端未发 close_notify 就
+    // 关闭连接) 不应使请求失败; 未收到则原样抛出 (取消类异常同理保持抛出)
+    co_await agentxx::util::catchErrorAsync<bool>(
+        [&]() -> asio::awaitable<bool> {
+            co_await HttpClient::requestSseAsync(
+                "POST",
+                fmt::format("{}/v1/messages", config_.baseUrl),
+                bodyStr,
+                "application/json",
+                headers,
+                HttpClient::RequestConfig{
+                    .connectTimeout   = std::chrono::seconds{config_.connectTimeoutSeconds},
+                    .readChunkTimeout = std::chrono::seconds{config_.readChunkTimeoutSeconds},
+                    .sslVerify        = config_.sslVerify,
+                },
+                // 返回 true 通知 http 层流已结束 (收到 message_stop): 立即断开连接停止读取,
+                // 避免对端 keep-alive 不关闭时白等 readChunkTimeout
+                [&](std::string_view chunk) -> bool {
+                    lineBuffer += chunk;
+                    if (processSseBuffer(
+                            lineBuffer,
+                            completion,
+                            fullContent,
+                            fullThinking,
+                            tcMap,
+                            blockTypes,
+                            thinkingTexts,
+                            blockSignatures,
+                            on_chunk
+                        )) {
+                        messageStopReceived = true;
+                        return true;
+                    }
+                    return false;
                 }
-                return false;
+            );
+            co_return true;
+        },
+        [&](std::string errmsg) -> asio::awaitable<bool> {
+            if (!messageStopReceived) {
+                throw std::runtime_error(std::move(errmsg));
             }
-        );
-    } catch (const std::exception& e) {
-        // 已收到 message_stop 说明消息已结束、业务数据已全部送达, 连接层在收尾阶段的
-        // 错误 (如 ssl stream_truncated: 对端未发 close_notify 就关闭连接) 不应使请求失败
-        if (!messageStopReceived) {
-            throw;
+            XX_LOGW(
+                "LLM stream transport error after message_stop, ignored | model={} err={}",
+                params.model.empty() ? config_.modelName : params.model,
+                errmsg
+            );
+            co_return false;
         }
-        XX_LOGW(
-            "LLM stream transport error after message_stop, ignored | model={} err={}",
-            params.model.empty() ? config_.modelName : params.model,
-            e.what()
-        );
-    }
+    );
 
     if (!lineBuffer.empty()) {
         if (processSseBuffer(

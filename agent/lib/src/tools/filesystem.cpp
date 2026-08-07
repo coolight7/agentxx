@@ -199,11 +199,14 @@ std::vector<std::regex> compileExcludeRegexes(const std::vector<std::string>& ex
     std::vector<std::regex> regexes;
     regexes.reserve(excludePatterns.size());
     for (const auto& ep : excludePatterns) {
-        try {
-            regexes.emplace_back(glob::to_regex(ep));
-        } catch (const std::exception&) {
-            // 非法模式忽略
-        }
+        // 非法模式忽略
+        agentxx::util::catchError<bool>(
+            [&]() -> bool {
+                regexes.emplace_back(glob::to_regex(ep));
+                return true;
+            },
+            [](std::string) -> bool { return false; }
+        );
     }
     return regexes;
 }
@@ -351,49 +354,59 @@ asio::awaitable<std::string> FileSystemListTool::execute_async(const neograph::j
             std::vector<std::string> lines;
 
             auto onAppendItem = [&](const std::filesystem::directory_entry& entity) {
-                try {
-                    auto file_time = entity.last_write_time();
+                // 单个条目处理失败仅记录错误行, 不中断整个列表
+                agentxx::util::catchError<bool>(
+                    [&]() -> bool {
+                        auto file_time = entity.last_write_time();
 
-                    auto sys_time
-                        = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
-                            file_time - std::filesystem::file_time_type::clock::now()
-                            + std::chrono::system_clock::now()
-                        );
+                        auto sys_time
+                            = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+                                file_time - std::filesystem::file_time_type::clock::now()
+                                + std::chrono::system_clock::now()
+                            );
 
-                    // 类型标识列 (仿 ls -l): 首字符为真实类型 (d/-/l/?),
-                    // 权限位无数据用通用占位
-                    std::string typeStr = "??????????";
-                    std::string sizeStr = "-";
-                    if (entity.is_directory()) {
-                        typeStr = "drwxr-xr-x";
-                    } else if (entity.is_regular_file()) {
-                        typeStr = "-rw-r--r--";
-                        sizeStr = std::to_string(entity.file_size());
-                    } else if (entity.is_symlink()) {
-                        typeStr = "lrwxrwxrwx";
-                    }
-
-                    // 路径列: 目录加 `/` 后缀, 符号链接附加指向目标 (对齐 ls -l)
-                    auto pathStr = entity.path().generic_string();
-                    if (entity.is_directory()) {
-                        pathStr += "/";
-                    } else if (entity.is_symlink()) {
-                        std::error_code ec;
-                        auto            target = std::filesystem::read_symlink(entity.path(), ec);
-                        if (!ec) {
-                            pathStr += " -> " + target.generic_string();
+                        // 类型标识列 (仿 ls -l): 首字符为真实类型 (d/-/l/?),
+                        // 权限位无数据用通用占位
+                        std::string typeStr = "??????????";
+                        std::string sizeStr = "-";
+                        if (entity.is_directory()) {
+                            typeStr = "drwxr-xr-x";
+                        } else if (entity.is_regular_file()) {
+                            typeStr = "-rw-r--r--";
+                            sizeStr = std::to_string(entity.file_size());
+                        } else if (entity.is_symlink()) {
+                            typeStr = "lrwxrwxrwx";
                         }
-                    }
 
-                    auto timeStr = std::format("{:%Y-%m-%d %H:%M}", sys_time);
-                    lines.push_back(
-                        fmt::format("{} {:>10}  {}  {}", typeStr, sizeStr, timeStr, pathStr)
-                    );
-                } catch (const std::exception& e) {
-                    lines.push_back(
-                        fmt::format("[Error] {}: {}", entity.path().generic_string(), e.what())
-                    );
-                }
+                        // 路径列: 目录加 `/` 后缀, 符号链接附加指向目标 (对齐 ls -l)
+                        auto pathStr = entity.path().generic_string();
+                        if (entity.is_directory()) {
+                            pathStr += "/";
+                        } else if (entity.is_symlink()) {
+                            std::error_code ec;
+                            auto            target = std::filesystem::read_symlink(entity.path(), ec);
+                            if (!ec) {
+                                pathStr += " -> " + target.generic_string();
+                            }
+                        }
+
+                        auto timeStr = std::format("{:%Y-%m-%d %H:%M}", sys_time);
+                        lines.push_back(
+                            fmt::format("{} {:>10}  {}  {}", typeStr, sizeStr, timeStr, pathStr)
+                        );
+                        return true;
+                    },
+                    [&](std::string errmsg) -> bool {
+                        lines.push_back(
+                            fmt::format(
+                                "[Error] {}: {}",
+                                entity.path().generic_string(),
+                                errmsg
+                            )
+                        );
+                        return false;
+                    }
+                );
             };
 
             if (false == std::filesystem::exists(targetPath)) {

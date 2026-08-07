@@ -1,6 +1,7 @@
 #pragma once
 
 #include "agentxx/agent/config.h"
+#include "agentxx/util/exception.h"
 #include "agentxx/util/http_client.h"
 #include "agentxx/util/log.h"
 #include "agentxx/util/string_util.h"
@@ -193,9 +194,14 @@ public:
         }
 
         neograph::json j;
-        try {
-            j = neograph::json::parse(payload);
-        } catch (...) {
+        bool           parsed = agentxx::util::catchError<bool>(
+            [&]() -> bool {
+                j = neograph::json::parse(payload);
+                return true;
+            },
+            [](std::string) -> bool { return false; }
+        );
+        if (!parsed) {
             return false;
         }
 

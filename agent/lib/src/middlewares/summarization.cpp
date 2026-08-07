@@ -2,6 +2,7 @@
 
 #include "agentxx/agent/model_registry.h"
 #include "agentxx/tools/sub_agent.h"
+#include "agentxx/util/exception.h"
 #include "fmt/format.h"
 #include <algorithm>
 #include <sstream>
@@ -118,25 +119,28 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
         co_return std::string{};
     }
 
-    try {
-        auto args = neograph::json{
-            {"subagent", "subagent_task"},
-            {"system_prompt",
-             R"(
+    co_return co_await agentxx::util::catchErrorAsync<std::string>(
+        [&]() -> asio::awaitable<std::string> {
+            auto args = neograph::json{
+                {"subagent", "subagent_task"},
+                {"system_prompt",
+                 R"(
 You are a conversation summarizer. 
 Summarize the following conversation messages into a concise summary. 
 Preserve key decisions, action items, file paths, and important context. 
 Output ONLY the summary text, no meta-commentary.
 )"},
-            {"message", fmt::format("Summarize the following conversation messages:\n\n{}", prompt)
-            },
-        };
-        // TODO: 剥离 tool /manager，避免直接调用 tool
-        co_return co_await subagentManager->execute_async(args);
-    } catch (const std::exception& e) {
-        XX_LOGE("SummarizationMiddlewareHandle llm 压缩失败: {}", e.what());
-    }
-    co_return std::string{};
+                {"message",
+                 fmt::format("Summarize the following conversation messages:\n\n{}", prompt)},
+            };
+            // TODO: 剥离 tool /manager，避免直接调用 tool
+            co_return co_await subagentManager->execute_async(args);
+        },
+        [](std::string errmsg) -> asio::awaitable<std::string> {
+            XX_LOGE("SummarizationMiddlewareHandle llm 压缩失败: {}", errmsg);
+            co_return "";
+        }
+    );
 }
 
 void SummarizationMiddlewareHandle::offloadLongContentToTempStore(
@@ -186,14 +190,16 @@ void SummarizationMiddlewareHandle::doSummarizeToolcall(std::vector<neograph::Ch
 
                 neograph::json args;
                 if (toolcallIndex >= 0) {
-                    try {
-                        args = neograph::json::parse(
-                            messages[lastMsgIndex].tool_calls[toolcallIndex].arguments
-                        );
-                    } catch (const std::exception&) {
-                        // 非法 JSON 参数: 跳过该条而非中断整轮压缩
-                        args = neograph::json{};
-                    }
+                    // 非法 JSON 参数: 跳过该条而非中断整轮压缩
+                    agentxx::util::catchError<bool>(
+                        [&]() -> bool {
+                            args = neograph::json::parse(
+                                messages[lastMsgIndex].tool_calls[toolcallIndex].arguments
+                            );
+                            return true;
+                        },
+                        [](std::string) -> bool { return false; }
+                    );
                 }
 
                 auto key = itemHandleIt->second.generateDeduplicationKey(args);
@@ -213,12 +219,14 @@ void SummarizationMiddlewareHandle::doSummarizeToolcall(std::vector<neograph::Ch
                     && itemHandleIt->second.generateDeduplicationKey
                     && itemHandleIt->second.truncateRequest) {
                     neograph::json args;
-                    try {
-                        args = neograph::json::parse(tc.arguments);
-                    } catch (const std::exception&) {
-                        // 非法 JSON 参数: 跳过该条而非中断整轮压缩
-                        args = neograph::json{};
-                    }
+                    // 非法 JSON 参数: 跳过该条而非中断整轮压缩
+                    agentxx::util::catchError<bool>(
+                        [&]() -> bool {
+                            args = neograph::json::parse(tc.arguments);
+                            return true;
+                        },
+                        [](std::string) -> bool { return false; }
+                    );
                     auto key = itemHandleIt->second.generateDeduplicationKey(args);
                     if (key.has_value()) {
                         if (lastWriteIndex.contains(*key)) {

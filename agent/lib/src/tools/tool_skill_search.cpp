@@ -4,6 +4,7 @@
 #include "agentxx/nodes/modelcall.h"
 #include "agentxx/nodes/toolcall.h"
 #include "agentxx/nodes/wrap_handle.h"
+#include "agentxx/util/exception.h"
 #include "fmt/format.h"
 #include <memory>
 #include <sstream>
@@ -33,61 +34,66 @@ ToolSkillSearchSubAgentTask::ToolSkillSearchSubAgentTask(
 }
 
 asio::awaitable<void> ToolSkillSearchSubAgentTask::onSubagentEnd(std::string& result) {
-    try {
-        auto jsonResult = neograph::json::parse(result);
-        if (!jsonResult.is_object()) {
-            co_return;
+    // 子代理输出转 JSON 失败则不处理
+    co_await agentxx::util::catchErrorAsync<bool>(
+        [&]() -> asio::awaitable<bool> {
+            auto jsonResult = neograph::json::parse(result);
+            if (!jsonResult.is_object()) {
+                co_return true;
+            }
+
+            auto agentCtxPtr = agentContext.lock();
+            if (!agentCtxPtr) {
+                co_return true;
+            }
+
+            // if (jsonResult["tool"].is_array()) {
+            //   auto &loadedTools =
+            //       agentCtxPtr->getGraphDataItemValue<std::vector<std::string>>(
+            //           "session", graphDataKey_loadedTools);
+            //   for (const auto &item : jsonResult["tool"]) {
+            //     if (item.is_string()) {
+            //       loadedTools.push_back(item.get<std::string>());
+            //     }
+            //   }
+            // }
+
+            // if (jsonResult["skill"].is_array()) {
+            //   auto &loadedSkills =
+            //       agentCtxPtr->getGraphDataItemValue<std::vector<std::string>>(
+            //           "session", graphDataKey_loadedSkills);
+            //   for (const auto &item : jsonResult["skill"]) {
+            //     if (item.is_string()) {
+            //       auto skillPath = item.get<std::string>();
+            //       loadedSkills.push_back(skillPath);
+
+            //       auto skillMdPath = skillPath + "/SKILL.md";
+            //       std::ifstream stream(skillMdPath);
+            //       if (stream) {
+            //         auto content =
+            //         std::string{std::istreambuf_iterator<char>(stream),
+            //                                    std::istreambuf_iterator<char>()};
+            //         stream.close();
+            //         if (!content.empty()) {
+            //           auto &systemMsgList =
+            //               agentCtxPtr
+            //                   ->getGraphDataItemValue<std::vector<std::string>>(
+            //                       "session",
+            //                       agentxx::middleware::MiddlewareContext::
+            //                           graphDataKey_appendSystemMessage);
+            //           systemMsgList.push_back(fmt::format(
+            //               "\n## Loaded Skill: {}\n\n{}", skillPath, content));
+            //         }
+            //       }
+            //     }
+            //   }
+            // }
+            co_return true;
+        },
+        [](std::string) -> asio::awaitable<bool> {
+            co_return false;
         }
-
-        auto agentCtxPtr = agentContext.lock();
-        if (!agentCtxPtr) {
-            co_return;
-        }
-
-        // if (jsonResult["tool"].is_array()) {
-        //   auto &loadedTools =
-        //       agentCtxPtr->getGraphDataItemValue<std::vector<std::string>>(
-        //           "session", graphDataKey_loadedTools);
-        //   for (const auto &item : jsonResult["tool"]) {
-        //     if (item.is_string()) {
-        //       loadedTools.push_back(item.get<std::string>());
-        //     }
-        //   }
-        // }
-
-        // if (jsonResult["skill"].is_array()) {
-        //   auto &loadedSkills =
-        //       agentCtxPtr->getGraphDataItemValue<std::vector<std::string>>(
-        //           "session", graphDataKey_loadedSkills);
-        //   for (const auto &item : jsonResult["skill"]) {
-        //     if (item.is_string()) {
-        //       auto skillPath = item.get<std::string>();
-        //       loadedSkills.push_back(skillPath);
-
-        //       auto skillMdPath = skillPath + "/SKILL.md";
-        //       std::ifstream stream(skillMdPath);
-        //       if (stream) {
-        //         auto content =
-        //         std::string{std::istreambuf_iterator<char>(stream),
-        //                                    std::istreambuf_iterator<char>()};
-        //         stream.close();
-        //         if (!content.empty()) {
-        //           auto &systemMsgList =
-        //               agentCtxPtr
-        //                   ->getGraphDataItemValue<std::vector<std::string>>(
-        //                       "session",
-        //                       agentxx::middleware::MiddlewareContext::
-        //                           graphDataKey_appendSystemMessage);
-        //           systemMsgList.push_back(fmt::format(
-        //               "\n## Loaded Skill: {}\n\n{}", skillPath, content));
-        //         }
-        //       }
-        //     }
-        //   }
-        // }
-    } catch (...) {
-        // 转json失败则不处理
-    }
+    );
     co_return;
 }
 

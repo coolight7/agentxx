@@ -1,5 +1,6 @@
 #include "agentxx/middlewares/skill.h"
 
+#include "agentxx/util/exception.h"
 #include "agentxx/util/string_util.h"
 #include "fmt/format.h"
 #include "yaml-cpp/yaml.h"
@@ -32,72 +33,76 @@ std::string SkillMiddlewareHandle::formatSkillsMetadataList() {
 
 asio::awaitable<std::pair<std::string, agentxx::middleware::_SkillMetadata>>
     SkillMiddlewareHandle::readSkillFile(std::string_view dirpath) {
-    auto          data = agentxx::middleware::_SkillMetadata{.dirpath = std::string{dirpath}};
-    std::ifstream stream;
-    try {
-        stream.open(fmt::format("{}/SKILL.md", dirpath));
-        if (!stream) {
-            auto ec = std::error_code{errno, std::system_category()};
-            throw std::runtime_error{fmt::format(R"(Can not open file. Error: {})", ec.message())};
-        }
-        auto filecontent
-            = std::string{std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>()};
-        agentxx::util::autoConvertToUtf8(filecontent);
-        stream.close();
-        const auto yamlDelimiter = std::string_view{"---"};
-        auto       yamlStart     = filecontent.find(yamlDelimiter);
-        if (yamlStart != filecontent.npos) {
-            auto yamlEnd = filecontent.find(yamlDelimiter, yamlStart + yamlDelimiter.size());
-            if (yamlEnd != filecontent.npos && yamlStart + yamlDelimiter.size() < yamlEnd) {
-                yamlStart += yamlDelimiter.size();
-                // markdown
-                data.mdText = filecontent.substr(yamlEnd + yamlDelimiter.size());
-
-                while (yamlStart < yamlEnd
-                       && (filecontent[yamlStart] == '\r' || filecontent[yamlStart] == '\n')) {
-                    yamlStart++;
-                }
-                while (yamlStart < yamlEnd
-                       && (filecontent[yamlEnd] == '\r' || filecontent[yamlEnd] == '\n')) {
-                    yamlEnd--;
-                }
-
-                auto yamlContent = filecontent.substr(yamlStart, yamlEnd - yamlStart);
-                auto metadata    = YAML::Load(yamlContent);
-
-                if (metadata["name"]) {
-                    data.name = metadata["name"].as<std::string>();
-                }
-                if (metadata["description"]) {
-                    data.description = metadata["description"].as<std::string>();
-                }
-                if (metadata["license"]) {
-                    data.license = metadata["license"].as<std::string>();
-                }
-                if (metadata["compatibility"]) {
-                    data.compatibility = metadata["compatibility"].as<std::string>();
-                }
-                if (metadata["allowed-tools"].IsScalar()) {
-                    data.allowed_tools = agentxx::util::strSplitCopid(
-                        metadata["allowed-tools"].as<std::string>(),
-                        ' '
-                    );
-                }
-                if (metadata["metadata"].IsMap()) {
-                    for (const auto& item : metadata["metadata"]) {
-                        data.metadata[item.first.as<std::string>()] = item.second.as<std::string>();
-                    }
-                }
-                co_return std::make_pair("", data);
+    auto data = agentxx::middleware::_SkillMetadata{.dirpath = std::string{dirpath}};
+    // catchErrorAsync: 读取/解析失败时返回错误消息; 取消类异常原样抛出
+    co_return co_await agentxx::util::catchErrorAsync<std::pair<std::string, _SkillMetadata>>(
+        [&]() -> asio::awaitable<std::pair<std::string, _SkillMetadata>> {
+            std::ifstream stream;
+            stream.open(fmt::format("{}/SKILL.md", dirpath));
+            if (!stream) {
+                auto ec = std::error_code{errno, std::system_category()};
+                throw std::runtime_error{fmt::format(R"(Can not open file. Error: {})", ec.message())};
             }
+            auto filecontent
+                = std::string{std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>()};
+            agentxx::util::autoConvertToUtf8(filecontent);
+            stream.close();
+            const auto yamlDelimiter = std::string_view{"---"};
+            auto       yamlStart     = filecontent.find(yamlDelimiter);
+            if (yamlStart != filecontent.npos) {
+                auto yamlEnd = filecontent.find(yamlDelimiter, yamlStart + yamlDelimiter.size());
+                if (yamlEnd != filecontent.npos && yamlStart + yamlDelimiter.size() < yamlEnd) {
+                    yamlStart += yamlDelimiter.size();
+                    // markdown
+                    data.mdText = filecontent.substr(yamlEnd + yamlDelimiter.size());
+
+                    while (yamlStart < yamlEnd
+                           && (filecontent[yamlStart] == '\r' || filecontent[yamlStart] == '\n')) {
+                        yamlStart++;
+                    }
+                    while (yamlStart < yamlEnd
+                           && (filecontent[yamlEnd] == '\r' || filecontent[yamlEnd] == '\n')) {
+                        yamlEnd--;
+                    }
+
+                    auto yamlContent = filecontent.substr(yamlStart, yamlEnd - yamlStart);
+                    auto metadata    = YAML::Load(yamlContent);
+
+                    if (metadata["name"]) {
+                        data.name = metadata["name"].as<std::string>();
+                    }
+                    if (metadata["description"]) {
+                        data.description = metadata["description"].as<std::string>();
+                    }
+                    if (metadata["license"]) {
+                        data.license = metadata["license"].as<std::string>();
+                    }
+                    if (metadata["compatibility"]) {
+                        data.compatibility = metadata["compatibility"].as<std::string>();
+                    }
+                    if (metadata["allowed-tools"].IsScalar()) {
+                        data.allowed_tools = agentxx::util::strSplitCopid(
+                            metadata["allowed-tools"].as<std::string>(),
+                            ' '
+                        );
+                    }
+                    if (metadata["metadata"].IsMap()) {
+                        for (const auto& item : metadata["metadata"]) {
+                            data.metadata[item.first.as<std::string>()] = item.second.as<std::string>();
+                        }
+                    }
+                    co_return std::make_pair("", data);
+                }
+            }
+            co_return std::make_pair(
+                "load skill metadata failed, can not find `metadata` in SKILL.md file",
+                data
+            );
+        },
+        [&data](std::string errmsg) -> asio::awaitable<std::pair<std::string, _SkillMetadata>> {
+            co_return std::make_pair(std::move(errmsg), data);
         }
-        co_return std::make_pair(
-            "load skill metadata failed, can not find `metadata` in SKILL.md file",
-            data
-        );
-    } catch (const std::exception& e) {
-        co_return std::make_pair(e.what(), data);
-    }
+    );
 }
 
 asio::awaitable<void> SkillMiddlewareHandle::onAgentcallStartFunc(neograph::graph::NodeInput& in) {
@@ -118,29 +123,35 @@ asio::awaitable<void> SkillMiddlewareHandle::onAgentcallStartFunc(neograph::grap
             = std::vector<std::string>{initSkillDirPaths.begin(), initSkillDirPaths.end()};
         for (size_t i = 0; i < skillQueue.size(); ++i) {
             auto& itempath = skillQueue[i];
-            try {
-                auto dir = std::filesystem::directory_entry{itempath};
-                if (dir.is_directory()) {
-                    if (std::filesystem::is_regular_file(fmt::format("{}/SKILL.md", itempath))) {
-                        // load skill metadata
-                        const auto [err, metadata] = co_await readSkillFile(itempath);
-                        if (err.empty()) {
-                            loadedData[itempath] = metadata;
+            // catchErrorAsync: 单个目录处理失败仅记录错误, 不中断整体加载
+            co_await agentxx::util::catchErrorAsync<bool>(
+                [&]() -> asio::awaitable<bool> {
+                    auto dir = std::filesystem::directory_entry{itempath};
+                    if (dir.is_directory()) {
+                        if (std::filesystem::is_regular_file(fmt::format("{}/SKILL.md", itempath))) {
+                            // load skill metadata
+                            const auto [err, metadata] = co_await readSkillFile(itempath);
+                            if (err.empty()) {
+                                loadedData[itempath] = metadata;
+                            } else {
+                                loadedErrors[itempath] = err;
+                            }
                         } else {
-                            loadedErrors[itempath] = err;
-                        }
-                    } else {
-                        // 添加子目录等待加载
-                        for (const auto& entity : std::filesystem::directory_iterator(dir)) {
-                            if (entity.is_directory()) {
-                                skillQueue.push_back(entity.path().string());
+                            // 添加子目录等待加载
+                            for (const auto& entity : std::filesystem::directory_iterator(dir)) {
+                                if (entity.is_directory()) {
+                                    skillQueue.push_back(entity.path().string());
+                                }
                             }
                         }
                     }
+                    co_return true;
+                },
+                [&](std::string errmsg) -> asio::awaitable<bool> {
+                    loadedErrors[itempath] = std::move(errmsg);
+                    co_return false;
                 }
-            } catch (const std::exception& e) {
-                loadedErrors[itempath] = e.what();
-            }
+            );
         }
 
         // 加载完成, 整体替换缓存

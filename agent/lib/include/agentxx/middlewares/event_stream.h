@@ -359,13 +359,21 @@ public:
             ) -> asio::awaitable<void> {
                 auto timer = asio::steady_timer(co_await asio::this_coro::executor, delay);
                 co_await timer.async_wait(asio::use_awaitable);
-                try {
-                    co_await handle(data);
-                } catch (const std::exception& e) {
-                    XX_LOGE("TimerEventStream `{}` id={} exception: {}", streamName, id, e.what());
-                } catch (...) {
-                    XX_LOGE("TimerEventStream `{}` id={} unknown exception", streamName, id);
-                }
+                co_await agentxx::util::catchErrorAsync<bool>(
+                    [&]() -> asio::awaitable<bool> {
+                        co_await handle(data);
+                        co_return true;
+                    },
+                    [&](std::string errmsg) -> asio::awaitable<bool> {
+                        XX_LOGE(
+                            "TimerEventStream `{}` id={} exception: {}",
+                            streamName,
+                            id,
+                            errmsg
+                        );
+                        co_return false;
+                    }
+                );
             },
             asio::detached
         );

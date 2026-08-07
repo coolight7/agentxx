@@ -1,5 +1,6 @@
 #include "agentxx/protocol/mcp_server.h"
 
+#include "agentxx/util/exception.h"
 #include "agentxx/util/log.h"
 #include <algorithm>
 #include <iostream>
@@ -40,14 +41,21 @@ void McpServer::runStdio() {
         }
 
         json requestJson;
-        try {
-            requestJson = json::parse(line);
-        } catch (const json::parse_error& e) {
-            json errorResp = jsonRpcErrorResponse(
-                json{nullptr},
-                jsonRpcError(kJsonRpcParseError, std::string("Parse error: ") + e.what())
-            );
-            std::cout << errorResp.dump() << "\n" << std::flush;
+        bool parsed = agentxx::util::catchError<bool>(
+            [&]() -> bool {
+                requestJson = json::parse(line);
+                return true;
+            },
+            [&](std::string errmsg) -> bool {
+                json errorResp = jsonRpcErrorResponse(
+                    json{nullptr},
+                    jsonRpcError(kJsonRpcParseError, std::string("Parse error: ") + errmsg)
+                );
+                std::cout << errorResp.dump() << "\n" << std::flush;
+                return false;
+            }
+        );
+        if (!parsed) {
             continue;
         }
 
@@ -238,51 +246,57 @@ json McpServer::processJsonRpc(const json& requestJson) {
     }
 
     json response;
-    try {
-        if (method == "initialize") {
-            response = handleInitialize(id, params);
-        } else if (method == "ping") {
-            response = handlePing(id);
-        } else if (method == "tools/list") {
-            response = handleToolsList(id, params);
-        } else if (method == "tools/call") {
-            response = handleToolsCall(id, params);
-        } else if (method == "resources/list") {
-            response = handleResourcesList(id, params);
-        } else if (method == "resources/read") {
-            response = handleResourcesRead(id, params);
-        } else if (method == "resources/subscribe") {
-            response = handleResourcesSubscribe(id, params);
-        } else if (method == "resources/unsubscribe") {
-            response = handleResourcesUnsubscribe(id, params);
-        } else if (method == "resources/templates/list") {
-            response = handleResourceTemplatesList(id, params);
-        } else if (method == "prompts/list") {
-            response = handlePromptsList(id, params);
-        } else if (method == "prompts/get") {
-            response = handlePromptsGet(id, params);
-        } else if (method == "logging/setLevel") {
-            response = handleLoggingSetLevel(id, params);
-        } else if (method == "completion/complete") {
-            response = handleComplete(id, params);
-        } else {
+    // 分发异常统一转为 JSON-RPC 内部错误响应
+    agentxx::util::catchError<bool>(
+        [&]() -> bool {
+            if (method == "initialize") {
+                response = handleInitialize(id, params);
+            } else if (method == "ping") {
+                response = handlePing(id);
+            } else if (method == "tools/list") {
+                response = handleToolsList(id, params);
+            } else if (method == "tools/call") {
+                response = handleToolsCall(id, params);
+            } else if (method == "resources/list") {
+                response = handleResourcesList(id, params);
+            } else if (method == "resources/read") {
+                response = handleResourcesRead(id, params);
+            } else if (method == "resources/subscribe") {
+                response = handleResourcesSubscribe(id, params);
+            } else if (method == "resources/unsubscribe") {
+                response = handleResourcesUnsubscribe(id, params);
+            } else if (method == "resources/templates/list") {
+                response = handleResourceTemplatesList(id, params);
+            } else if (method == "prompts/list") {
+                response = handlePromptsList(id, params);
+            } else if (method == "prompts/get") {
+                response = handlePromptsGet(id, params);
+            } else if (method == "logging/setLevel") {
+                response = handleLoggingSetLevel(id, params);
+            } else if (method == "completion/complete") {
+                response = handleComplete(id, params);
+            } else {
+                response = jsonRpcErrorResponse(
+                    id,
+                    jsonRpcError(kJsonRpcMethodNotFound, std::string("Method not found: ") + method)
+                );
+            }
+            if (!response.is_null() && !meta.is_null() && response.contains("result")) {
+                if (!response["result"].contains("_meta")) {
+                    response["result"]["_meta"] = meta;
+                }
+            }
+            return true;
+        },
+        [&](std::string errmsg) -> bool {
+            XX_LOGE("[mcp] Handler error [{}]: {}", method, errmsg);
             response = jsonRpcErrorResponse(
                 id,
-                jsonRpcError(kJsonRpcMethodNotFound, std::string("Method not found: ") + method)
+                jsonRpcError(kJsonRpcInternalError, std::string("Internal error: ") + errmsg)
             );
+            return false;
         }
-        if (!response.is_null() && !meta.is_null() && response.contains("result")) {
-            if (!response["result"].contains("_meta")) {
-                response["result"]["_meta"] = meta;
-            }
-        }
-    } catch (const std::exception& e) {
-        XX_LOGE("[mcp] Handler error [{}]: {}", method, e.what());
-        response = jsonRpcErrorResponse(
-            id,
-            jsonRpcError(kJsonRpcInternalError, std::string("Internal error: ") + e.what())
-        );
-    }
+    );
 
     if (!hasId) {
         return json{};
@@ -313,14 +327,21 @@ asio::awaitable<void>
     }
 
     json requestJson;
-    try {
-        requestJson = json::parse(req.body());
-    } catch (const json::parse_error& e) {
-        auto errorResp = jsonRpcErrorResponse(
-            json{nullptr},
-            jsonRpcError(kJsonRpcParseError, std::string("Parse error: ") + e.what())
-        );
-        writeJsonResponse(resp, http::status::bad_request, errorResp);
+    bool parsed = agentxx::util::catchError<bool>(
+        [&]() -> bool {
+            requestJson = json::parse(req.body());
+            return true;
+        },
+        [&](std::string errmsg) -> bool {
+            auto errorResp = jsonRpcErrorResponse(
+                json{nullptr},
+                jsonRpcError(kJsonRpcParseError, std::string("Parse error: ") + errmsg)
+            );
+            writeJsonResponse(resp, http::status::bad_request, errorResp);
+            return false;
+        }
+    );
+    if (!parsed) {
         co_return;
     }
 
@@ -453,20 +474,26 @@ json McpServer::handleToolsCall(const json& id, const json& params) {
     }
 
     json result;
-    try {
-        json content      = handler(arguments);
-        result["content"] = json::array();
-        result["content"].push_back(std::move(content));
-        result["isError"] = false;
-    } catch (const std::exception& e) {
-        XX_LOGE("[mcp] Tool execution error [{}]: {}", name, e.what());
-        json content;
-        content["type"]   = "text";
-        content["text"]   = std::string("Error: ") + e.what();
-        result["content"] = json::array();
-        result["content"].push_back(std::move(content));
-        result["isError"] = true;
-    }
+    // 工具执行异常转为 isError 结果返回给客户端
+    agentxx::util::catchError<bool>(
+        [&]() -> bool {
+            json content      = handler(arguments);
+            result["content"] = json::array();
+            result["content"].push_back(std::move(content));
+            result["isError"] = false;
+            return true;
+        },
+        [&](std::string errmsg) -> bool {
+            XX_LOGE("[mcp] Tool execution error [{}]: {}", name, errmsg);
+            json content;
+            content["type"]   = "text";
+            content["text"]   = std::string("Error: ") + errmsg;
+            result["content"] = json::array();
+            result["content"].push_back(std::move(content));
+            result["isError"] = true;
+            return false;
+        }
+    );
 
     return jsonRpcResponse(id, std::move(result));
 }
@@ -669,17 +696,25 @@ asio::awaitable<void> McpServer::handleSseStream(
         co_return;
     }
 
-    try {
-        while (!client->closed && !httpServer_->isStopped()) {
-            co_await writer->writeChunk(": keepalive\n\n");
-            auto               executor = co_await asio::this_coro::executor;
-            asio::steady_timer timer(executor);
-            timer.expires_after(std::chrono::seconds(15));
-            neograph_asio_error_code ec;
-            co_await timer.async_wait(asio::redirect_error(asio::use_awaitable, ec));
-        }
-    } catch (...) {
-    }
+    // keepalive 写失败/中断时静默退出循环 (onRethrow 也吞掉取消类异常),
+    // 确保下方 sseClients_ 清理逻辑必定执行, 客户端不会被残留
+    co_await agentxx::util::catchErrorAsync<bool>(
+        [&]() -> asio::awaitable<bool> {
+            while (!client->closed && !httpServer_->isStopped()) {
+                co_await writer->writeChunk(": keepalive\n\n");
+                auto               executor = co_await asio::this_coro::executor;
+                asio::steady_timer timer(executor);
+                timer.expires_after(std::chrono::seconds(15));
+                neograph_asio_error_code ec;
+                co_await timer.async_wait(asio::redirect_error(asio::use_awaitable, ec));
+            }
+            co_return true;
+        },
+        [](std::string) -> asio::awaitable<bool> {
+            co_return false;
+        },
+        [](std::string&) -> std::optional<bool> { return false; }
+    );
 
     {
         std::unique_lock lock(sseClientsMutex_);
