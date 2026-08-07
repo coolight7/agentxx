@@ -11,6 +11,8 @@
 
 #include "agentxx/util/exception.h"
 #include "agentxx/util/http_client.h"
+// CMake 生成的版本头 (packageProject), 定义 AGENTXX_STATIC_VERSION
+#include "agentxx/version.h"
 #include "html2md/html2md.h"
 #include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>
@@ -380,11 +382,9 @@ std::string HttpClient::resolveRedirectUrl(
 const HeaderMap& HttpClient::defaultHeaders() {
     static const HeaderMap headers = [] {
         HeaderMap h;
-        h.set(
-            "User-Agent",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/119.0.6045.160 Safari/537.36"
-        );
+        // User-Agent 遵循 RFC 9110: product = token ["/" product-version],
+        // 用 Agentxx/<版本号> 标识本客户端身份, 便于服务端识别与统计
+        h.set("User-Agent", "Agentxx/" AGENTXX_STATIC_VERSION);
         h.set("Accept", "*/*");
         h.set("Accept-Language", "zh-CN,zh;q=0.9");
         return h;
@@ -974,7 +974,15 @@ asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::optionsAsy
 
 asio::awaitable<std::expected<std::string, std::string>>
     HttpClient::fetchMarkdown(std::string_view url, const RequestConfig& config) {
-    auto resp = co_await getAsync(url, {}, config);
+    co_return co_await fetchMarkdown(url, {}, config);
+}
+
+asio::awaitable<std::expected<std::string, std::string>> HttpClient::fetchMarkdown(
+    std::string_view     url,
+    const HeaderMap&     extraHeaders,
+    const RequestConfig& config
+) {
+    auto resp = co_await getAsync(url, extraHeaders, config);
     if (!resp.has_value()) {
         XX_LOGE("fetchMarkdown error: {}", resp.error());
         co_return std::unexpected{resp.error()};

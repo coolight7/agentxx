@@ -41,6 +41,7 @@
 #include "test_text_selection_monitor.h"
 #include "test_toolcall_args.h"
 #ifdef AGENTXX_BUILD_CLIENT
+#include "test_mermaid_state.h"
 #include "test_tui_input.h"
 #include "test_tui_settings.h"
 #include "test_thread_id.h"
@@ -121,6 +122,7 @@ int main(int argn, char** argv) {
     runSync("tui_settings", agentxx::test::testTuiSettings);
     runSync("tui_input", agentxx::test::testTuiInput);
     runSync("thread_id", agentxx::test::testThreadId);
+    runSync("mermaid_state", agentxx::test::testMermaidState);
 #endif
 
     // ---- 异步测试模块 ----

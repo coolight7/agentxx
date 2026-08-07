@@ -279,7 +279,17 @@ public:
     static asio::awaitable<std::expected<std::string, std::string>> fetchMarkdown(
         std::string_view     url,
         const RequestConfig& config = RequestConfig{
-            .connectTimeout = std::chrono::seconds{15}, 
+            .connectTimeout = std::chrono::seconds{15},
+            .readChunkTimeout = std::chrono::seconds{15},
+        }
+    );
+
+    /// 带自定义请求头的 fetchMarkdown (如 web_fetch_url_markdown / web_search tool 的 header 参数)
+    static asio::awaitable<std::expected<std::string, std::string>> fetchMarkdown(
+        std::string_view     url,
+        const HeaderMap&     extraHeaders,
+        const RequestConfig& config = RequestConfig{
+            .connectTimeout = std::chrono::seconds{15},
             .readChunkTimeout = std::chrono::seconds{15},
         }
     );

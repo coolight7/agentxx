@@ -493,6 +493,9 @@ static asio::awaitable<void> test_session_controller_replay() {
             XX_TEST_EXPECT_EQ(d1->seq, uint64_t{5});
         }
     }
+    // 显式关闭: 使挂起的 recv 完成, 避免 detached/挂起协程持有 transport 泄漏
+    clientT->close();
+    sc->stop();
     co_return;
 }
 
@@ -546,6 +549,9 @@ static asio::awaitable<void> test_session_controller_replay_fallback() {
         auto* sp = std::get_if<agentxx::agent::SyncPayload>(&*msg);
         XX_TEST_EXPECT_TRUE(sp != nullptr);
     }
+    // 显式关闭: 使挂起的 recv 完成, 避免挂起协程持有 transport 泄漏
+    clientT->close();
+    sc->stop();
     co_return;
 }
 
@@ -617,6 +623,9 @@ static asio::awaitable<void> test_session_controller_grace() {
     co_await testSleep(ex, std::chrono::milliseconds{500});
 
     XX_TEST_EXPECT_TRUE(*done);
+    // 显式关闭: 使挂起的 recv 完成, 避免挂起协程持有 transport 泄漏
+    clientT->close();
+    sc->stop();
     co_return;
 }
 
@@ -755,6 +764,7 @@ static asio::awaitable<void> test_channel_transport_loopback() {
     clientT.close();
     auto r3 = co_await serverT.recv();
     XX_TEST_EXPECT_FALSE(r3.has_value());
+    serverT.close();
     co_return;
 }
 
@@ -881,6 +891,10 @@ static asio::awaitable<void> test_channel_client_integration() {
         XX_TEST_EXPECT_EQ(io->deltaText(0), std::string("chan-reply"));
     }
     XX_TEST_EXPECT_TRUE(io->turnResultCount.load() > 0);
+    // 显式关闭 transport: 打破与无限循环 recv 的 detached 协程之间的循环引用,
+    // 使其 recv 返回 nullopt 退出, 避免持有 transport 泄漏
+    io->transport()->close();
+    co_await testSleep(ex, std::chrono::milliseconds{100});
     co_return;
 }
 
@@ -1007,6 +1021,9 @@ static asio::awaitable<void> test_remote_concurrent_writes() {
         }
     }
     XX_TEST_EXPECT_EQ(seen.size(), size_t{numThreads * perThread});
+    // 显式关闭: 使挂起的 recv 完成, 避免挂起协程持有 transport 泄漏
+    clientT->close();
+    serverT->close();
     co_return;
 }
 
@@ -1356,6 +1373,8 @@ static asio::awaitable<void> test_remote_auth_rejected() {
         }
     }
     co_await testSleep(ex, std::chrono::milliseconds{100});
+    // 显式关闭: 使 detached 协程中挂起的 recv 完成退出, 避免持有 transport 泄漏
+    clientT->close();
     co_return;
 }
 

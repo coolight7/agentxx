@@ -93,6 +93,8 @@ std::optional<ftxui::Element> TUIClientAgentIO::renderPlanningInfo() {
         }
     }
     if (!plan) {
+        // 无 plan: 清空状态图按钮命中区域, 避免残留旧区域导致误触
+        planDiagramButtonBox_ = ftxui::Box{0, -1, 0, -1};
         return std::nullopt;
     }
 
@@ -112,6 +114,7 @@ std::optional<ftxui::Element> TUIClientAgentIO::renderPlanningInfo() {
         }
     }
     if (!planCacheValid_) {
+        planDiagramButtonBox_ = ftxui::Box{0, -1, 0, -1};
         return std::nullopt;
     }
     const auto& args = planCacheArgs_;
@@ -123,6 +126,22 @@ std::optional<ftxui::Element> TUIClientAgentIO::renderPlanningInfo() {
         title.push_back(text(" Planning...") | color(theme_.hintColor));
     }
     lines.push_back(hbox(std::move(title)));
+
+    // Roadmap 状态图按钮: 点击弹窗查看完整状态图 (PlanDiagramOverlay)
+    // 状态图渲染成本高 (解析 + 分层布局), 侧边栏常驻显示仅保留按钮,
+    // 仅在用户点击时才在弹窗中渲染
+    const auto roadmap = args.value("roadmap", std::string{});
+    if (!roadmap.empty()) {
+        lines.push_back(text(" "));
+        lines.push_back(hbox({
+            text(" "),
+            text(" [View Plan Diagram] ") | bgcolor(theme_.buttonBgColor)
+                | color(theme_.buttonTextColor) | bold | reflect(planDiagramButtonBox_),
+        }));
+    } else {
+        // 无 roadmap: 清空按钮命中区域
+        planDiagramButtonBox_ = ftxui::Box{0, -1, 0, -1};
+    }
 
     if (args.contains("todos") && args["todos"].is_array()) {
         for (const auto& td : args["todos"]) {

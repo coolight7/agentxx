@@ -58,6 +58,12 @@ public:
         return scrollOffset_;
     }
 
+    /// 设置滚动偏移 (行, 从顶部计); 越界值在下次布局时被 clamp
+    /// (供外部键盘滚动等场景使用; 通常应同时 setStickToBottom(false))
+    void setScrollOffset(int offset) {
+        scrollOffset_ = std::max(0, offset);
+    }
+
     /// 内容总高度 (行)
     int totalHeight() const {
         return totalHeight_;

@@ -502,8 +502,8 @@ std::unique_ptr<MockOpenAIServer> startMockServer(uint16_t& outPort) {
 
     // Chat Completions API 路由
     mock->server->router().add("/chat/completions", 2, makeHandler());
-    // Responses API 路由 (Codex) — 默认路径 /responses, 兼容网关形态 /v1/responses
-    mock->server->router().add("/v1/responses", 2, makeHandler());
+    // Responses API 路由 (Codex): 默认路径为 /responses 兼容网关形态 /v1/responses (见
+    // kDefaultResponsesPath)
     mock->server->router().add("/responses", 2, makeHandler());
     // 自定义 api_path 测试路由
     mock->server->router().add("/v1/chat/completions", 2, makeHandler());

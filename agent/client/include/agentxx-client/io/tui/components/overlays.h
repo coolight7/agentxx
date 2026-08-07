@@ -1,6 +1,7 @@
 #pragma once
 
 #include "agentxx-client/io/tui/framework/tui_context.h"
+#include "agentxx-client/io/tui/scrollable.h"
 #include "ftxui/component/component_base.hpp"
 #include "ftxui/component/event.hpp"
 #include "ftxui/dom/elements.hpp"
@@ -123,4 +124,41 @@ private:
     TUICtx&               ctx_;
     int                   scrollOffset_ = 0;
     std::function<void()> onClose_;
+};
+
+/// Plan 状态图弹窗组件
+///
+/// 显示 planning_write 工具 roadmap (Mermaid stateDiagram-v2) 的 ASCII 状态图:
+/// - 全宽渲染, 内部 Scrollable 滚动 (滚轮 / Up/Down)
+/// - 节点按 id 状态后缀着色 (_in_progress/_completed/_failed/_pending)
+/// - 弹窗打开期间 plan 消息更新时 (指针/文本长度变化) 重新解析, 其余帧走缓存
+///
+/// 交互: 滚轮 / Up/Down 滚动, 右上 ✕ 或 Esc 关闭
+class PlanDiagramOverlay : public ftxui::ComponentBase {
+public:
+
+    explicit PlanDiagramOverlay(TUICtx& ctx);
+
+    void onClose(std::function<void()> fn) {
+        onClose_ = std::move(fn);
+    }
+
+    bool           OnEvent(ftxui::Event event) override;
+    ftxui::Element OnRender() override;
+
+private:
+
+    std::vector<ScrollItem> buildItems();
+
+    TUICtx&               ctx_;
+    std::shared_ptr<Scrollable> scrollable_;
+    std::function<void()> onClose_;
+    ftxui::Box              closeBox_;
+
+    /// plan 消息 JSON 解析缓存: 仅当消息指针/文本长度变化时重新解析
+    /// (弹窗打开期间 roadmap 随 agent 执行更新, 指针/长度必然变化)
+    const TUIMessage* cachedMsgPtr_ = nullptr;
+    size_t            cachedTextLen_ = 0;
+    bool              cachedValid_    = false;
+    neograph::json    cachedArgs_     = neograph::json::array();
 };

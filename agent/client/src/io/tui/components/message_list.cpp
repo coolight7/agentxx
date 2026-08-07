@@ -1,6 +1,7 @@
 #include "agentxx-client/io/tui/components/message_list.h"
 #include "agentxx-client/io/tui/agent_tui.h" // formatDurationMilliseconds / oneLinePreview
 #include "agentxx-client/io/tui/framework/tui_settings.h"
+#include "agentxx-client/io/tui/mermaid_state.h"
 #include "agentxx/util/diff_util.h"
 #include "agentxx/util/string_util.h"
 #include "ftxui/component/event.hpp"
@@ -10,6 +11,8 @@
 #include <markdown/parser.hpp>
 
 using namespace ftxui;
+
+namespace tui_mermaid = agentxx::client::tui;
 
 namespace {
 
@@ -30,6 +33,109 @@ std::pair<Element, std::unique_ptr<markdown::DomBuilder>> renderMarkdown(
     }
     auto el = builder->build(ast, -1, mdTheme);
     return {el | ftxui::color(color), std::move(builder)};
+}
+
+/// markdown 文本片段: 普通文本或 mermaid 代码块
+struct MarkdownSegment {
+    std::string text;
+    bool        isMermaid = false;
+};
+
+/// 将 markdown 按 ```mermaid 代码块切分 (非 mermaid 代码块整体保留给 markdown 渲染)
+std::vector<MarkdownSegment> splitMermaidBlocks(std::string_view content) {
+    std::vector<MarkdownSegment> segs;
+    size_t                       pos = 0; // 当前待刷出普通段起点
+    while (true) {
+        auto open = content.find("```", pos);
+        if (open == std::string_view::npos) {
+            segs.push_back(MarkdownSegment{std::string(content.substr(pos)), false});
+            break;
+        }
+        auto eol = content.find('\n', open);
+        // 围栏语言名
+        std::string_view lang = (eol == std::string_view::npos)
+                                    ? content.substr(open + 3)
+                                    : content.substr(open + 3, eol - open - 3);
+        while (!lang.empty() && (lang.front() == ' ' || lang.front() == '\t')) {
+            lang.remove_prefix(1);
+        }
+        while (!lang.empty()
+               && (lang.back() == ' ' || lang.back() == '\t' || lang.back() == '\r')) {
+            lang.remove_suffix(1);
+        }
+        if (lang != "mermaid") {
+            // 普通代码块: 整个块仍属当前普通段, 跳过到闭合围栏
+            auto close = content.find("```", open + 3);
+            if (close == std::string_view::npos) {
+                segs.push_back(MarkdownSegment{std::string(content.substr(pos)), false});
+                break;
+            }
+            pos = close + 3;
+            continue;
+        }
+        // mermaid 块
+        if (pos < open) {
+            segs.push_back(MarkdownSegment{std::string(content.substr(pos, open - pos)), false});
+        }
+        if (eol == std::string_view::npos) {
+            // 围栏在最后一行且无换行: 空内容
+            segs.push_back(MarkdownSegment{"", true});
+            break;
+        }
+        auto close = content.find("```", eol + 1);
+        if (close == std::string_view::npos) {
+            // 未闭合: 剩余整段作 mermaid
+            segs.push_back(MarkdownSegment{std::string(content.substr(eol + 1)), true});
+            break;
+        }
+        segs.push_back(MarkdownSegment{
+            std::string(content.substr(eol + 1, close - eol - 1)),
+            true,
+        });
+        pos = close + 3;
+    }
+    return segs;
+}
+
+/// 渲染 markdown; 其中的 ```mermaid 代码块渲染为状态图
+/// mermaid 片段不着色 (继承外层消息颜色装饰)
+std::pair<Element, std::vector<std::unique_ptr<markdown::DomBuilder>>> renderMarkdownWithMermaid(
+    std::string_view       content,
+    Color                  color,
+    markdown::Theme const& mdTheme,
+    int                    maxWidth = 0
+) {
+    auto segs = splitMermaidBlocks(content);
+    if (segs.size() == 1 && !segs[0].isMermaid) {
+        // 快速路径: 无 mermaid 块, 保持原有渲染
+        auto [el, builder] = renderMarkdown(content, color, mdTheme, maxWidth);
+        std::vector<std::unique_ptr<markdown::DomBuilder>> builders;
+        if (builder) {
+            builders.push_back(std::move(builder));
+        }
+        return {std::move(el), std::move(builders)};
+    }
+    std::vector<std::unique_ptr<markdown::DomBuilder>> builders;
+    Elements                                          parts;
+    for (const auto& seg : segs) {
+        if (seg.isMermaid) {
+            if (seg.text.empty()) {
+                continue;
+            }
+            auto dg = tui_mermaid::parseMermaidStateDiagram(seg.text);
+            parts.push_back(tui_mermaid::renderMermaidStateDiagram(dg, maxWidth));
+        } else if (!seg.text.empty()) {
+            auto [el, builder] = renderMarkdown(seg.text, color, mdTheme, maxWidth);
+            if (builder) {
+                builders.push_back(std::move(builder));
+            }
+            parts.push_back(std::move(el));
+        }
+    }
+    if (parts.empty()) {
+        return {ftxui::text(""), std::move(builders)};
+    }
+    return {vbox(std::move(parts)) | ftxui::color(color), std::move(builders)};
 }
 
 /// 估算文本显示行数 (换行符计数 + 按宽度折行估算)。
@@ -385,10 +491,10 @@ Element MessageListComponent::buildMessageBlock(
                 paragraph(msg.text) | color(theme.userColor),
             });
         case TUIMessage::Role::Assistant: {
-            auto [el, builder]
-                = renderMarkdown(msg.text, theme.assistantColor, theme.markdownTheme, maxWidth);
-            if (builder) {
-                mdBuilders.push_back(std::move(builder));
+            auto [el, builders]
+                = renderMarkdownWithMermaid(msg.text, theme.assistantColor, theme.markdownTheme, maxWidth);
+            for (auto& b : builders) {
+                mdBuilders.push_back(std::move(b));
             }
             return el;
         }
@@ -414,10 +520,10 @@ Element MessageListComponent::buildMessageBlock(
             }
             lines.push_back(hbox(std::move(header)));
             if (expanded) {
-                auto [el, builder]
-                    = renderMarkdown(msg.text, theme.thinkingColor, theme.markdownTheme, maxWidth);
-                if (builder) {
-                    mdBuilders.push_back(std::move(builder));
+                auto [el, builders]
+                    = renderMarkdownWithMermaid(msg.text, theme.thinkingColor, theme.markdownTheme, maxWidth);
+                for (auto& b : builders) {
+                    mdBuilders.push_back(std::move(b));
                 }
                 lines.push_back(std::move(el));
             }

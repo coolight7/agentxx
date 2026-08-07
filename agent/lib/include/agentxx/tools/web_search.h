@@ -1,19 +1,12 @@
 #pragma once
 
+#include "agentxx/agent/config.h"
 #include "agentxx/tools/tool.h"
 #include <memory>
 #include <string>
 #include <string_view>
 
 namespace agentxx {
-namespace agent {
-class ModelConfig;
-} // namespace agent
-
-namespace server {
-class OpenAIProvider;
-} // namespace server
-
 namespace tools {
 
 class WebSearchTool : public XXToolBase {
@@ -58,10 +51,12 @@ public:
 /// 使用模型进行网络搜索的 Tool
 /// - 通过调用支持联网搜索的模型（如 OpenAI web_search 等）获取搜索结果
 /// - 由 [AgentConfig::websearchModel] 配置驱动
+/// - 执行时支持 `timeout` / `header` 参数覆盖模型请求的超时与自定义请求头
 class ModelWebSearchTool : public XXToolBase {
 protected:
 
-    std::shared_ptr<agentxx::server::OpenAIProvider> provider;
+    /// 基础模型配置 (每次执行时复制一份, 应用 timeout/header 参数覆盖后再创建 provider)
+    agentxx::agent::ModelConfig modelCfg;
 
 public:
 
