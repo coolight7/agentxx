@@ -12,6 +12,11 @@ ChannelAgentIOTransport::ChannelAgentIOTransport(
     outgoing_(std::move(outgoing)),
     incoming_(std::move(incoming)) {}
 
+ChannelAgentIOTransport::~ChannelAgentIOTransport() {
+    // 见头文件注释: 关闭 channel 使挂起的 async_receive 完成, 防止协程帧挂起持有本对象
+    close();
+}
+
 std::pair<std::unique_ptr<ChannelAgentIOTransport>, std::unique_ptr<ChannelAgentIOTransport>>
     ChannelAgentIOTransport::makePair(
         asio::any_io_executor clientEx,
