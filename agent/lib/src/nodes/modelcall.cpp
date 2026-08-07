@@ -279,6 +279,8 @@ void ModelCallWrapNode::repairMessages(neograph::graph::NodeInput& in) {
             }
             // 检查消息非空
             if (msg.reasoning_content.empty() && msg.content.empty() && msg.tool_calls.empty()) {
+                // 修正
+                msg.content = "[Empty]";
                 XX_LOGE("  - Message is Empty: ");
                 doPrint = true;
             }
