@@ -3266,11 +3266,11 @@ asio::awaitable<void> test_responses_send_thinking(MockOpenAIServer& mock, uint1
         co_await provider->invoke(params, nullptr);
         auto sent = neograph::json::parse(mock.lastRequestBody);
 
-        // 请求 reasoning 摘要
+        // 请求 reasoning 摘要 (官方 include 值: reasoning.summary_text)
         XX_TEST_EXPECT_TRUE(sent.contains("include"));
         XX_TEST_EXPECT_TRUE(sent["include"].is_array());
         XX_TEST_EXPECT_EQ(sent["include"].size(), (size_t)1);
-        XX_TEST_EXPECT_EQ(sent["include"][0].get<std::string>(), "reasoning.summary");
+        XX_TEST_EXPECT_EQ(sent["include"][0].get<std::string>(), "reasoning.summary_text");
 
         // assistant 消息回传 reasoning item (summary 形式)
         const auto& input = sent["input"];

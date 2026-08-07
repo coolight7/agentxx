@@ -20,7 +20,8 @@ namespace {
 
 /// 解析字符串为数值: 容忍首尾空白与一个前导 '+', 要求整个字符串被完整解析
 /// (std::from_chars 不接受空白与前导 '+', 且允许部分解析, 这里做严格校验)
-template <typename T> bool parseFullNumber(std::string_view s, T& out) {
+template<typename T>
+bool parseFullNumber(std::string_view s, T& out) {
     size_t b = 0, e = s.size();
     while (b < e && agentxx::util::charIsSpace(s[b])) {
         ++b;
@@ -45,8 +46,8 @@ template <typename T> bool parseFullNumber(std::string_view s, T& out) {
             return false;
         }
     }
-    T                v;
-    auto             result = std::from_chars(s.data(), s.data() + s.size(), v);
+    T    v;
+    auto result = std::from_chars(s.data(), s.data() + s.size(), v);
     if (result.ec == std::errc{} && result.ptr == s.data() + s.size()) {
         out = v;
         return true;
@@ -153,10 +154,10 @@ bool ToolcallWrapNode::autoFixArgsType(const neograph::ChatTool& def, neograph::
         if (!args.contains(name)) {
             continue;
         }
-        const auto&  arg = args[name];
-        const auto   types = getSchemaTypes(schema);
+        const auto& arg   = args[name];
+        const auto  types = getSchemaTypes(schema);
         // 记录到日志的转换信息
-        std::string  fixInfo;
+        std::string fixInfo;
 
         if (arg.is_string()) {
             auto str = arg.get<std::string>();
@@ -420,7 +421,7 @@ asio::awaitable<std::string> ToolcallWrapNode::execTool(
             // `agentxx_share_store` 分页按行取值 否则取总摘要
             if (lastLineIndex >= targetIndex / 3) {
                 co_return fmt::format(
-                    R"([Content offloaded. Use the `agentxx_share_store` tool to fetch the full content by ID {}. Summary:{} lines, total {} lines, truncated {} lines]
+                    R"([Content offloaded. Use the `agentxx_share_store` tool to fetch the full content by ID {}. Show {} lines, total {} lines, truncated {} lines]
 {}
 ...)",
                     storeId,
@@ -432,7 +433,7 @@ asio::awaitable<std::string> ToolcallWrapNode::execTool(
             } else {
                 // 无法按行截断时取全部行数 (换行数) 作为截取行数
                 co_return fmt::format(
-                    R"([Content offloaded. Use the `agentxx_share_store` tool to fetch the full content by ID {}. Summary:{} chars, total {} lines, truncated {} lines]
+                    R"([Content offloaded. Use the `agentxx_share_store` tool to fetch the full content by ID {}. Show {} chars, total {} lines, truncated {} lines]
 {}
 ...)",
                     storeId,

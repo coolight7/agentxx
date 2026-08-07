@@ -26,7 +26,7 @@ models:
       stream: true
 
   - name: openai_response_full_example
-    type: "openai" # 必选；模型类型，根据 api 类型选择 openai / openai-responses / anthropic
+    type: "openai-responses" # 必选；模型类型，根据 api 类型选择 openai / openai-responses / anthropic
     base_url: "https://api.openai.com/v1" # 可选；默认根据 [type] 选择
     api_path: "/responses" # 可选；自定义路径，默认自动根据 [type] 选择
     api_key: "${OPENAI_API_KEY}" # 可选；如果不需要验证，可以填 EMPTY 等任意字符串
@@ -67,9 +67,9 @@ models:
     send_thinking: true
     model_context_max_token: 1000000
     extra_api_config:
-      stream: true
       reasoning:
-        effort: max
+        effort: high
+      stream: true
   - name: local
     type: "openai"
     base_url: "http://172.29.48.1:7070/v1"

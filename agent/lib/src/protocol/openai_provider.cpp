@@ -292,10 +292,12 @@ neograph::json OpenAIProvider::buildResponsesBody(const neograph::CompletionPara
     //   "summary": "detailed|auto|concise"})
     body["store"] = false;
 
-    // 需要回传/展示思考内容时, 请求 reasoning 摘要 (流式事件
-    // response.reasoning_summary_text.delta / 非流式 output 的 reasoning_summary item)
+    // 需要回传/展示思考内容时, 请求 reasoning 摘要:
+    //   include 取官方值 "reasoning.summary_text" (流式事件
+    //   response.reasoning_summary_text.delta / 非流式 output 的 reasoning_summary item);
+    //   "reasoning.summary" 不是合法 include 值, 会导致 API 400
     if (config_.sendThinking) {
-        body["include"] = neograph::json::array({"reasoning.summary"});
+        body["include"] = neograph::json::array({"reasoning.summary_text"});
     }
 
     // system 消息 → instructions; 其余 → input 数组 (含 function_call / function_call_output)
