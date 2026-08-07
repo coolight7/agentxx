@@ -1,7 +1,6 @@
 #include "agentxx-client/io/tui/agent_tui.h"
 #include "agentxx-client/io/tui/components/message_list.h"
 #include "agentxx-client/io/tui/components/sidebar.h"
-#include "agentxx-client/io/tui/mermaid_state.h"
 #include "agentxx/util/string_util.h"
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/terminal.hpp"
@@ -9,8 +8,6 @@
 #include <filesystem>
 
 using namespace ftxui;
-
-namespace tui_mermaid = agentxx::client::tui;
 
 namespace {
 
@@ -96,6 +93,8 @@ std::optional<ftxui::Element> TUIClientAgentIO::renderPlanningInfo() {
         }
     }
     if (!plan) {
+        // 无 plan: 清空状态图按钮命中区域, 避免残留旧区域导致误触
+        planDiagramButtonBox_ = ftxui::Box{0, -1, 0, -1};
         return std::nullopt;
     }
 
@@ -115,6 +114,7 @@ std::optional<ftxui::Element> TUIClientAgentIO::renderPlanningInfo() {
         }
     }
     if (!planCacheValid_) {
+        planDiagramButtonBox_ = ftxui::Box{0, -1, 0, -1};
         return std::nullopt;
     }
     const auto& args = planCacheArgs_;
@@ -127,37 +127,20 @@ std::optional<ftxui::Element> TUIClientAgentIO::renderPlanningInfo() {
     }
     lines.push_back(hbox(std::move(title)));
 
-    // Roadmap 状态图 (Mermaid stateDiagram-v2 → ASCII 分层图)
-    // 按节点 id 的状态后缀着色: phase_N_in_progress/completed/failed/pending
+    // Roadmap 状态图按钮: 点击弹窗查看完整状态图 (PlanDiagramOverlay)
+    // 状态图渲染成本高 (解析 + 分层布局), 侧边栏常驻显示仅保留按钮,
+    // 仅在用户点击时才在弹窗中渲染
     const auto roadmap = args.value("roadmap", std::string{});
     if (!roadmap.empty()) {
-        auto dg = tui_mermaid::parseMermaidStateDiagram(roadmap);
-        if (!dg.nodes.empty()) {
-            int maxW = 0;
-            if (sidebar_) {
-                // 侧边栏内容宽度 ≈ 侧栏宽 - 左右留白(2) - 滚动条 gutter(1) - 余量
-                maxW = std::max(20, sidebar_->width() - 6);
-            }
-            auto colorOf = [this](std::string_view id) -> ftxui::Color {
-                if (id.ends_with("_in_progress")) {
-                    return theme_.thinkingColor;
-                }
-                if (id.ends_with("_completed")) {
-                    return theme_.accentColor;
-                }
-                if (id.ends_with("_failed")) {
-                    return theme_.errorColor;
-                }
-                if (id.ends_with("_pending")) {
-                    return theme_.hintColor;
-                }
-                return ftxui::Color::Default;
-            };
-            lines.push_back(text(" "));
-            lines.push_back(tui_mermaid::renderMermaidStateDiagram(
-                dg, maxW, theme_.normalColor, colorOf
-            ));
-        }
+        lines.push_back(text(" "));
+        lines.push_back(hbox({
+            text(" "),
+            text(" [View Plan Diagram] ") | bgcolor(theme_.buttonBgColor)
+                | color(theme_.buttonTextColor) | bold | reflect(planDiagramButtonBox_),
+        }));
+    } else {
+        // 无 roadmap: 清空按钮命中区域
+        planDiagramButtonBox_ = ftxui::Box{0, -1, 0, -1};
     }
 
     if (args.contains("todos") && args["todos"].is_array()) {

@@ -1,11 +1,14 @@
 #include "agentxx-client/io/tui/components/overlays.h"
 #include "agentxx-client/io/tui/agent_tui.h"
 #include "agentxx-client/io/tui/framework/tui_settings.h"
+#include "agentxx-client/io/tui/mermaid_state.h"
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/terminal.hpp"
 #include <algorithm>
 
 using namespace ftxui;
+
+namespace tui_mermaid = agentxx::client::tui;
 
 // ---------------------------------------------------------------------------
 // ModelSelectorOverlay
@@ -489,6 +492,154 @@ bool ContextOverlay::OnEvent(Event event) {
             ctx_.postRedraw();
             return true;
         }
+    }
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// PlanDiagramOverlay
+// ---------------------------------------------------------------------------
+
+PlanDiagramOverlay::PlanDiagramOverlay(TUICtx& ctx) :
+    ctx_(ctx) {
+    scrollable_ = std::make_shared<Scrollable>([this]() -> std::vector<ScrollItem> {
+        return buildItems();
+    });
+    Add(scrollable_);
+}
+
+std::vector<ScrollItem> PlanDiagramOverlay::buildItems() {
+    const auto& st    = *ctx_.frameState;
+    const auto& theme = *ctx_.theme;
+
+    // 定位最近一次 planning_write 工具消息
+    const TUIMessage* plan = nullptr;
+    for (size_t i = st.messages.size(); i > 0; --i) {
+        const auto& m = *st.messages[i - 1];
+        if (m.role == TUIMessage::Role::Tool && m.toolName == "planning_write") {
+            plan = st.messages[i - 1].get();
+            break;
+        }
+    }
+
+    // plan 消息变化 (mutableMessage 复制 → 指针变化) 或文本长度变化时重新解析
+    std::string roadmap;
+    if (plan) {
+        if (cachedMsgPtr_ != plan || cachedTextLen_ != plan->text.size()) {
+            cachedMsgPtr_  = plan;
+            cachedTextLen_ = plan->text.size();
+            cachedArgs_    = neograph::json::array();
+            cachedValid_   = false;
+            try {
+                cachedArgs_  = neograph::json::parse(plan->text);
+                cachedValid_ = true;
+            } catch (...) {
+            }
+        }
+        if (cachedValid_) {
+            roadmap = cachedArgs_.value("roadmap", std::string{});
+        }
+    }
+
+    auto dg = tui_mermaid::parseMermaidStateDiagram(roadmap);
+    if (dg.nodes.empty()) {
+        return {
+            ScrollItem{text(" (no plan roadmap) ") | dim, false}
+        };
+    }
+
+    // 弹窗宽度: 终端宽 - 弹窗边框/留白; 超宽由渲染器按层截断
+    const int maxW = std::max(40, Terminal::Size().dimx - 10);
+
+    // 按节点 id 状态后缀着色 (与 Info 侧边栏 Plan 展示一致)
+    auto colorOf = [&theme](std::string_view id) -> ftxui::Color {
+        if (id.ends_with("_in_progress")) {
+            return theme.thinkingColor;
+        }
+        if (id.ends_with("_completed")) {
+            return theme.accentColor;
+        }
+        if (id.ends_with("_failed")) {
+            return theme.errorColor;
+        }
+        if (id.ends_with("_pending")) {
+            return theme.hintColor;
+        }
+        return ftxui::Color::Default;
+    };
+
+    return {
+        ScrollItem{
+            tui_mermaid::renderMermaidStateDiagram(dg, maxW, theme.normalColor, colorOf),
+            false,
+        }
+    };
+}
+
+Element PlanDiagramOverlay::OnRender() {
+    const auto& theme = *ctx_.theme;
+
+    auto closeBtn = text(" ✕ ") | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor)
+                    | bold | reflect(closeBox_);
+    auto header = hbox({
+        text(" Plan Diagram ") | bold,
+        filler(),
+        closeBtn,
+        text(" "),
+    });
+
+    const int maxH = std::max(10, Terminal::Size().dimy - 6);
+    return vbox({
+               header,
+               separator(),
+               hbox({text(" "), scrollable_->Render() | flex, text(" ")}) | flex,
+               separator(),
+               text(" [Wheel/Up/Down] Scroll  [✕/Esc] Close ") | center | dim,
+           })
+           | border | size(WIDTH, LESS_THAN, 120) | size(WIDTH, GREATER_THAN, 60)
+           | size(HEIGHT, LESS_THAN, maxH) | color(theme.accentColor);
+}
+
+bool PlanDiagramOverlay::OnEvent(Event event) {
+    if (event == Event::Escape) {
+        ctx_.postRedraw();
+        if (onClose_) {
+            onClose_();
+        }
+        return true;
+    }
+    if (event.is_mouse()) {
+        const auto& mouse = event.mouse();
+        // 右上 ✕ 关闭
+        if (mouse.button == Mouse::Left && mouse.motion == Mouse::Released
+            && closeBox_.Contain(mouse.x, mouse.y)) {
+            ctx_.postRedraw();
+            if (onClose_) {
+                onClose_();
+            }
+            return true;
+        }
+        if (scrollable_->OnEvent(event)) {
+            ctx_.postRedraw();
+            return true;
+        }
+        return true;
+    }
+    // 键盘滚动 (与 ContextOverlay 交互一致)
+    if (event == Event::ArrowUp) {
+        scrollable_->setScrollOffset(scrollable_->scrollOffset() - 1);
+        scrollable_->setStickToBottom(false);
+        ctx_.postRedraw();
+        return true;
+    }
+    if (event == Event::ArrowDown) {
+        scrollable_->setScrollOffset(scrollable_->scrollOffset() + 1);
+        // 滚到底部恢复吸附
+        if (scrollable_->totalHeight() - scrollable_->viewportHeight() <= scrollable_->scrollOffset()) {
+            scrollable_->setStickToBottom(true);
+        }
+        ctx_.postRedraw();
+        return true;
     }
     return true;
 }

@@ -138,7 +138,7 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
   - 右侧边栏 (日志窗口 / 信息面板 / Planning 展示)
   - 待发送消息队列 (执行中排队，轮次结束自动派发)
   - 文件编辑 diff 对比渲染
-  - Mermaid stateDiagram-v2 状态图渲染 (消息中 ```mermaid 代码块 / Info 侧边栏 Planning 的 roadmap)
+  - Mermaid stateDiagram-v2 状态图渲染 (消息中 ```mermaid 代码块 / Plan 弹窗显示 roadmap 状态图)
   - 上下文 token 占用状态栏
   - 主题切换
   - 自动滚动吸附底部 (Scrollable 组件)
