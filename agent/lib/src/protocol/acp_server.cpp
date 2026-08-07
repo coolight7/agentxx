@@ -679,7 +679,7 @@ asio::awaitable<void> HttpAcpServer::handleAcpRequest(
             http::status::accepted,
             neograph::json{
                 {"jsonrpc", "2.0"                   },
-                {"id",      neograph::json{nullptr} },
+                {"id",      neograph::json(nullptr) },
                 {"result",  neograph::json::object()}
         }
         );

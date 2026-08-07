@@ -155,19 +155,24 @@ static neograph::json yamlToJson(const YAML::Node& node) {
     if (node.IsScalar()) {
         int    i;
         double d;
+        // 注意: 必须用圆括号构造标量, 不能用花括号!
+        // neograph::json 存在 json(std::initializer_list<json>) 构造函数,
+        // C++ 花括号初始化优先匹配它, 导致标量被包成单元素数组:
+        //   json{true} -> [true], json{"high"} -> ["high"]
+        // 圆括号才能精确匹配 json(bool)/json(int)/json(double)/json(string) 标量构造。
         if (node.as<std::string>() == "true") {
-            return neograph::json{true};
+            return neograph::json(true);
         }
         if (node.as<std::string>() == "false") {
-            return neograph::json{false};
+            return neograph::json(false);
         }
         if (util::parseNumberFromString(node.as<std::string>(), i).ec == std::errc{}) {
-            return neograph::json{i};
+            return neograph::json(i);
         }
         if (util::parseNumberFromString(node.as<std::string>(), d).ec == std::errc{}) {
-            return neograph::json{d};
+            return neograph::json(d);
         }
-        return neograph::json{node.as<std::string>()};
+        return neograph::json(node.as<std::string>());
     }
     if (node.IsSequence()) {
         neograph::json arr = neograph::json::array();
