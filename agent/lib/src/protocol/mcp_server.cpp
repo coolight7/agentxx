@@ -44,7 +44,7 @@ void McpServer::runStdio() {
             requestJson = json::parse(line);
         } catch (const json::parse_error& e) {
             json errorResp = jsonRpcErrorResponse(
-                json{nullptr},
+                json(nullptr),
                 jsonRpcError(kJsonRpcParseError, std::string("Parse error: ") + e.what())
             );
             std::cout << errorResp.dump() << "\n" << std::flush;
@@ -192,7 +192,7 @@ void McpServer::setupRoutes() {
 json McpServer::processJsonRpc(const json& requestJson) {
     if (!requestJson.is_object()) {
         return jsonRpcErrorResponse(
-            json{nullptr},
+            json(nullptr),
             jsonRpcError(kJsonRpcInvalidRequest, "Request must be a JSON object")
         );
     }
@@ -205,7 +205,7 @@ json McpServer::processJsonRpc(const json& requestJson) {
     }
     if (requestJson.contains("jsonrpc") && !validJsonRpc) {
         return jsonRpcErrorResponse(
-            json{nullptr},
+            json(nullptr),
             jsonRpcError(kJsonRpcInvalidRequest, "Unsupported JSON-RPC version")
         );
     }
@@ -232,7 +232,7 @@ json McpServer::processJsonRpc(const json& requestJson) {
     }
     if (method.empty()) {
         return jsonRpcErrorResponse(
-            json{nullptr},
+            json(nullptr),
             jsonRpcError(kJsonRpcInvalidRequest, "Missing method")
         );
     }
@@ -297,7 +297,7 @@ asio::awaitable<void>
     auto accept = req[http::field::accept];
     if (!isAcceptValid(accept)) {
         json errorResp = jsonRpcErrorResponse(
-            json{nullptr},
+            json(nullptr),
             jsonRpcError(
                 -32000,
                 "Not Acceptable: Client must accept both application/json "
@@ -317,7 +317,7 @@ asio::awaitable<void>
         requestJson = json::parse(req.body());
     } catch (const json::parse_error& e) {
         auto errorResp = jsonRpcErrorResponse(
-            json{nullptr},
+            json(nullptr),
             jsonRpcError(kJsonRpcParseError, std::string("Parse error: ") + e.what())
         );
         writeJsonResponse(resp, http::status::bad_request, errorResp);
