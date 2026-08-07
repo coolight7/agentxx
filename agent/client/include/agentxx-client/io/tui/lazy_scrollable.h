@@ -65,7 +65,7 @@ public:
         ItemKeyFunc        itemKey,
         EstimateHeightFunc estimateHeight,
         BuildFunc          buildItem,
-        CacheBudget        budget       = {},
+        CacheBudget        budget,
         FillViewportFunc   fillViewport = nullptr
     );
 
@@ -118,11 +118,11 @@ private:
 
     /// LRU 缓存条目
     struct Entry {
-        size_t                           index = 0; // 对应子项索引 (淘汰时回写失效标记)
-        ftxui::Element                   element;
+        size_t         index = 0; // 对应子项索引 (淘汰时回写失效标记)
+        ftxui::Element element;
         std::vector<std::shared_ptr<void>> attachments;
-        size_t                           sourceBytes = 0;
-        bool                             bytesCounted = false; // 是否已计入字节预算
+        size_t                             sourceBytes  = 0;
+        bool                               bytesCounted = false; // 是否已计入字节预算
     };
 
     /// 布局阶段 (由布局节点在 SetBox 时调用):
@@ -153,10 +153,10 @@ private:
     CacheBudget        budget_;
 
     // ---- 逐帧布局状态 ----
-    std::vector<int>      heights_;  // 各子项高度 (-1 = 未测量)
-    std::vector<bool>     measured_; // 高度是否已实测
-    std::vector<uint64_t> keys_;     // 各子项上次布局时的 key
-    std::vector<bool>     hasCache_; // 各子项是否有缓存 Element
+    std::vector<int>      heights_;        // 各子项高度 (-1 = 未测量)
+    std::vector<bool>     measured_;       // 高度是否已实测
+    std::vector<uint64_t> keys_;           // 各子项上次布局时的 key
+    std::vector<bool>     hasCache_;       // 各子项是否有缓存 Element
     std::vector<size_t>   visibleIndices_; // 本帧可见子项索引
 
     /// 不可缓存项 (cacheable=false) 的 Element (每帧重建一次, 跨布局迭代复用)
@@ -164,15 +164,16 @@ private:
         size_t        index;
         LazyBuiltItem item;
     };
+
     std::vector<TransientEntry> transientItems_;
-    uint64_t                    frameSeq_         = 0;      // OnRender 递增 (帧边界)
+    uint64_t                    frameSeq_          = 0;     // OnRender 递增 (帧边界)
     uint64_t                    lastPreparedFrame_ = ~0ULL; // transientItems_ 所属帧
 
     int  scrollOffset_   = 0;
     bool stickToBottom_  = true;
     int  totalHeight_    = 0;
     int  viewportHeight_ = 0;
-    int  measuredWidth_  = -1; // 上次布局所用内容宽度 (变化时缓存整体失效)
+    int  measuredWidth_  = -1;    // 上次布局所用内容宽度 (变化时缓存整体失效)
     bool hasGutter_      = false; // 是否预留滚动条列 (影响滚动条绘制判断)
     int  contentXMax_    = 0;     // 内容区右边界 (已扣除 gutter)
 
