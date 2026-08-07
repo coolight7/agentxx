@@ -24,14 +24,14 @@ public:
 
 /// 上下文压缩
 /// - `system prompt`、最近的消息 不压缩
-/// - 可压缩的长消息内容用 `share_store` 暂存，留下 id + depict
+/// - 可压缩的长消息内容用 `agentxx_share_store` 暂存，留下 id + depict
 /// - 选择多条消息总结压缩合并为一条
 class SummarizationMiddlewareHandle : public BaseMiddlewareHandle<_SummarizationMiddlewareState> {
 protected:
 
     /// 保留至少最近 N 条消息不被压缩
     static constexpr size_t keepRecentMessageCount = 4;
-    /// 单条消息内容超过此字节数时考虑暂存到 share_store
+    /// 单条消息内容超过此字节数时考虑暂存到 agentxx_share_store
     static constexpr size_t longContentByteThreshold = 2000;
 
     agentxx::tools::SubAgentManagerTool* subagentManager;

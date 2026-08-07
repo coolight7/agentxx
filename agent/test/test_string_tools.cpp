@@ -15,7 +15,7 @@ asio::awaitable<void>
     test_html_to_markdown_basic(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::StringHtml2MarkdownTool{agentContext};
     auto def  = tool.get_definition();
-    if (def.name == "string_html_to_markdown") {
+    if (def.name == "agentxx_string_html_to_markdown") {
         g_st_passed++;
         TEST_PASS << "StringHtml2MarkdownTool::get_definition() name correct" << std::endl;
     } else {
@@ -83,7 +83,7 @@ asio::awaitable<void>
     test_regexp_get_definition(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::StringRegexpTool{agentContext};
     auto def  = tool.get_definition();
-    if (def.name == "string_regexp") {
+    if (def.name == "agentxx_string_regexp") {
         g_st_passed++;
         TEST_PASS << "StringRegexpTool::get_definition() name correct" << std::endl;
     } else {

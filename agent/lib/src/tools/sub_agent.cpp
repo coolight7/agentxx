@@ -127,7 +127,7 @@ SubAgentManagerTool::SubAgentManagerTool(
     XXToolBase(in_nodeName, in_agentContext, true, false) {}
 
 std::string SubAgentManagerTool::get_name() const {
-    return "subagent_switch";
+    return "agentxx_subagent_switch";
 }
 
 neograph::ChatTool SubAgentManagerTool::get_definition() const {
@@ -139,7 +139,7 @@ neograph::ChatTool SubAgentManagerTool::get_definition() const {
     }
 
     return {
-        "subagent_switch",
+        "agentxx_subagent_switch",
         "Switch a isolation messages context sub-agent to exec.",
         neograph::json{
                        {"type", "object"},

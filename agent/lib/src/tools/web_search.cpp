@@ -17,7 +17,7 @@ WebSearchTool::WebSearchTool(
     bool                                        in_convertHtml2markdown,
     std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
 ) :
-    XXToolBase("web_search", in_agentContext, true, true),
+    XXToolBase("agentxx_web_search", in_agentContext, true, true),
     searchApiUrl(in_searchApiUrl),
     convertHtml2markdown(in_convertHtml2markdown) {}
 
@@ -95,7 +95,7 @@ asio::awaitable<std::string> WebSearchTool::execute_async(const neograph::json& 
 }
 
 WebFetchUrlTool::WebFetchUrlTool(std::weak_ptr<agentxx::agent::AgentContext> in_agentContext) :
-    XXToolBase("web_fetch_url", in_agentContext, true, true) {}
+    XXToolBase("agentxx_web_fetch_url", in_agentContext, true, true) {}
 
 neograph::ChatTool WebFetchUrlTool::get_definition() const {
     auto        agentPtr = agentContext.lock();
@@ -163,7 +163,7 @@ asio::awaitable<std::string> WebFetchUrlTool::execute_async(const neograph::json
 WebFetchUrlMarkdownTool::WebFetchUrlMarkdownTool(
     std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
 ) :
-    XXToolBase("web_fetch_url_markdown", in_agentContext, true, true) {}
+    XXToolBase("agentxx_web_fetch_url_markdown", in_agentContext, true, true) {}
 
 neograph::ChatTool WebFetchUrlMarkdownTool::get_definition() const {
     auto        agentPtr = agentContext.lock();
@@ -215,7 +215,7 @@ ModelWebSearchTool::ModelWebSearchTool(
     const agentxx::agent::ModelConfig&          modelCfg,
     std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
 ) :
-    XXToolBase("web_search", in_agentContext, true, true) {
+    XXToolBase("agentxx_web_search", in_agentContext, true, true) {
     provider = agentxx::server::OpenAIProvider::create(modelCfg);
 }
 

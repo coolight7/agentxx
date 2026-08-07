@@ -408,7 +408,7 @@ public:
 
     /// <thread_id, <id, value>>
     /// - 存储变量内容，留出 id 到 上下文中，llm 需要时可以通过
-    /// toolcall/share_store 读取
+    /// toolcall/agentxx_share_store 读取
     /// - 如: 压缩上下文时会将部分长文本存入这里替换为 id
     std::map<std::string, ThreadShareStore, std::less<>> shareStore{};
 

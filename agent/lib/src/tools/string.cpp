@@ -14,7 +14,7 @@ namespace tools {
 StringHtml2MarkdownTool::StringHtml2MarkdownTool(
     std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
 ) :
-    XXToolBase("string_html_to_markdown", in_agentContext, true, true) {}
+    XXToolBase("agentxx_string_html_to_markdown", in_agentContext, true, true) {}
 
 neograph::ChatTool StringHtml2MarkdownTool::get_definition() const {
     auto        agentPtr = agentContext.lock();
@@ -54,7 +54,7 @@ asio::awaitable<std::string> StringHtml2MarkdownTool::execute_async(const neogra
 }
 
 StringRegexpTool::StringRegexpTool(std::weak_ptr<agentxx::agent::AgentContext> in_agentContext) :
-    XXToolBase("string_regexp", in_agentContext, true) {}
+    XXToolBase("agentxx_string_regexp", in_agentContext, true) {}
 
 neograph::ChatTool StringRegexpTool::get_definition() const {
     auto        agentPtr = agentContext.lock();

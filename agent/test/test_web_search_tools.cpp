@@ -18,7 +18,7 @@ asio::awaitable<void>
     auto tool
         = agentxx::tools::WebSearchTool{"https://example.com/search?q={}", false, agentContext};
     auto def = tool.get_definition();
-    if (def.name == "web_search") {
+    if (def.name == "agentxx_web_search") {
         g_ws_passed++;
         TEST_PASS << "WebSearchTool::get_definition() name correct" << std::endl;
     } else {
@@ -80,7 +80,7 @@ asio::awaitable<void>
     test_web_fetch_url_get_definition(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::WebFetchUrlTool{agentContext};
     auto def  = tool.get_definition();
-    if (def.name == "web_fetch_url") {
+    if (def.name == "agentxx_web_fetch_url") {
         g_ws_passed++;
         TEST_PASS << "WebFetchUrlTool::get_definition() name correct" << std::endl;
     } else {
@@ -130,7 +130,7 @@ asio::awaitable<void> test_web_fetch_url_markdown_get_definition(
 ) {
     auto tool = agentxx::tools::WebFetchUrlMarkdownTool{agentContext};
     auto def  = tool.get_definition();
-    if (def.name == "web_fetch_url_markdown") {
+    if (def.name == "agentxx_web_fetch_url_markdown") {
         g_ws_passed++;
         TEST_PASS << "WebFetchUrlMarkdownTool::get_definition() name correct" << std::endl;
     } else {
@@ -183,7 +183,7 @@ asio::awaitable<void>
     auto tool
         = agentxx::tools::WebSearchTool{"https://example.com/search?q={}", true, agentContext};
     auto def = tool.get_definition();
-    if (def.name == "web_search") {
+    if (def.name == "agentxx_web_search") {
         g_ws_passed++;
         TEST_PASS << "WebSearchTool with convertHtml2markdown=true created "
                      "successfully"

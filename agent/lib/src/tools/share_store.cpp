@@ -13,7 +13,7 @@ namespace tools {
 ThreadShareStoreTool::ThreadShareStoreTool(
     std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
 ) :
-    XXToolBase("share_store", in_agentContext, false, false) {}
+    XXToolBase("agentxx_share_store", in_agentContext, false, false) {}
 
 std::optional<agentxx::middleware::SummarizationToolHandle>
     ThreadShareStoreTool::createSummarizationToolHandle() const {

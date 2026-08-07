@@ -13,7 +13,7 @@ namespace tools {
 GetCurrentDateTimeTool::GetCurrentDateTimeTool(
     std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
 ) :
-    XXToolBase("get_current_datetime", in_agentContext, false, true) {}
+    XXToolBase("agentxx_get_current_datetime", in_agentContext, false, true) {}
 
 neograph::ChatTool GetCurrentDateTimeTool::get_definition() const {
     auto        agentPtr = agentContext.lock();
@@ -45,7 +45,7 @@ UTC Time (24Hour): {})",
 GetSystemCoreInfoTool::GetSystemCoreInfoTool(
     std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
 ) :
-    XXToolBase("get_system_core_info", in_agentContext, false, true) {}
+    XXToolBase("agentxx_get_system_core_info", in_agentContext, false, true) {}
 
 neograph::ChatTool GetSystemCoreInfoTool::get_definition() const {
     auto        agentPtr = agentContext.lock();

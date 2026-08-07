@@ -356,7 +356,7 @@ asio::awaitable<void> test_agent_tool_calls() {
                        {"type", "function"},
                        {"function",
                    neograph::json{
-                       {"name", "filesystem_list"},
+                       {"name", "agentxx_filesystem_list"},
                        {"arguments", "{}"},
              }},
                        },
@@ -555,7 +555,7 @@ asio::awaitable<void> test_agent_session_activity_toolcall() {
                        {"type", "function"},
                        {"function",
                    neograph::json{
-                       {"name", "filesystem_list"},
+                       {"name", "agentxx_filesystem_list"},
                        {"arguments", "{}"},
              }},
                        },

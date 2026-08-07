@@ -96,7 +96,7 @@ You have access to a skills library that provides specialized capabilities and d
 Skills follow a **progressive disclosure** pattern - you see their name and description above, but only read full instructions when needed:
 
 1. **Recognize when a skill applies**: Check if the user's task matches a skill's description
-2. **Read the skill's full instructions**: Use toolcall `filesystem_read_text_file` on the path shown in the skill list above.
+2. **Read the skill's full instructions**: Use toolcall `agentxx_filesystem_read_text_file` on the path shown in the skill list above.
    Pass `line_limit=1000` since the default of 100 lines is too small for most skill files.
 3. **Follow the skill's instructions**: SKILL.md contains step-by-step workflows, best practices, and examples
 4. **Access supporting files**: Skills may include helper scripts, configs, or reference docs - use absolute paths
@@ -114,7 +114,7 @@ Skills may contain Python scripts or other executable files. Always use absolute
 User: "Can you analyse the latest developments in quantum computing?"
 
 1. Check available skills -> See "data-analyse" skill with its path
-2. Read the full skill file by toolcall: `filesystem_read_text_file`
+2. Read the full skill file by toolcall: `agentxx_filesystem_read_text_file`
 3. Follow the skill's research workflow (search -> organize -> synthesize)
 4. Use any helper scripts with absolute paths
 

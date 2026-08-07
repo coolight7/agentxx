@@ -425,7 +425,7 @@ Element MessageListComponent::buildMessageBlock(
         }
         case TUIMessage::Role::Tool: {
             const bool expanded   = !msg.collapsed;
-            const bool isEditTool = (msg.toolName == "filesystem_edit_text_file");
+            const bool isEditTool = (msg.toolName == "agentxx_filesystem_edit_text_file");
             Elements   lines;
             Elements   header;
             header.push_back(
@@ -471,7 +471,7 @@ Element MessageListComponent::buildMessageBlock(
 }
 
 // ---------------------------------------------------------------------------
-// filesystem_edit_text_file 特化渲染
+// agentxx_filesystem_edit_text_file 特化渲染
 // ---------------------------------------------------------------------------
 
 void MessageListComponent::appendEditToolHeader(const TUIMessage& msg, Elements& header) {

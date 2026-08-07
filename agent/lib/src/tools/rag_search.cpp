@@ -606,7 +606,7 @@ RAGSearchTool::RAGSearchTool(
     std::shared_ptr<VectorStore>                in_store,
     std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
 ) :
-    XXToolBase("rag_search", in_agentContext, false, true),
+    XXToolBase("agentxx_rag_search", in_agentContext, false, true),
     store(std::move(in_store)) {}
 
 neograph::ChatTool RAGSearchTool::get_definition() const {

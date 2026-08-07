@@ -63,7 +63,7 @@
 ### 基础模块
 - **Toolcall**
     - ✅返回值自动转换字符编码到 utf8
-    - ✅拦截输出，超过限制长度时自动压缩、截取摘要存储到 share_store
+    - ✅拦截输出，超过限制长度时自动压缩、截取摘要存储到 agentxx_share_store
     - ✅自动转换参数类型（String、Array、Number互转），提高兼容性
     - ⬜支持依托`事件流`实现异步获取结果、分块获取结果
     - ✅filesystem (支持 `同步`/`asio io_uring/IOCP 协程异步` 文件读写、超时限制)
@@ -78,16 +78,16 @@
         - 读取文件内容时自动转换字符编码到 utf8
         - ⬜写入文件内容时保持文件原有字符编码
     - ✅execute_command (支持 `同步`/`Boost.process 协程异步`执行、超时限制)
-        - execute_linux_command
+        - agentxx_execute_linux_command
         - execute_windows_command (检测到 WSL 环境时，允许在 linux/wsl 直接执行 windows 命令)
         - ⬜execute_python_command
         - ⬜execute_javascript_command
         - 超时限制
         - 区分 stdout、stderr，自动转换输出字符编码到 Utf8
     - ✅web_search (支持 asio 协程异步网络请求)
-        - web_search (内置 HTML 转 markdown, 支持直接使用普通网页搜索api)
-        - web_fetch_url_markdown (html to markdown)
-        - web_fetch_url (raw resp body)
+        - agentxx_web_search (内置 HTML 转 markdown, 支持直接使用普通网页搜索api)
+        - agentxx_web_fetch_url_markdown (html to markdown)
+        - agentxx_web_fetch_url (raw resp body)
         - ⬜支持 subagent 对接外部 llm api 实现搜索
     - ✅planning
         - 目标规划 + 渐进任务细节 两层任务规划 + 备忘录
@@ -98,12 +98,12 @@
     - ⬜tool_skill_search (延迟加载 tool/skill)
     - ✅ui_control (windows 系统上控制鼠标键盘)
     - ✅get_system_core_info 获取系统 CPU占用、内存、GPU占用、显存
-    - ✅get_current_datetime 获取系统时间戳、本地时间、UTC时间
+    - ✅agentxx_get_current_datetime 获取系统时间戳、本地时间、UTC时间
 - ✅**Tree-Messages**
-    - share_store (允许存取变量，在 llm-messages、skill、tool 之间传递数据)
+    - agentxx_share_store (允许存取变量，在 llm-messages、skill、tool 之间传递数据)
         - 支持 `line_offset`/`line_limit` 文本分页读取
-        - 压缩上下文时会将部分内容存储到 `share_store`
-        - 自动拦截 tool/subagent 返回值，太长时存储原始内容到 `share_store`, 并留下摘要和 id
+        - 压缩上下文时会将部分内容存储到 `agentxx_share_store`
+        - 自动拦截 tool/subagent 返回值，太长时存储原始内容到 `agentxx_share_store`, 并留下摘要和 id
     - 消息分支，支持修改历史消息/模型重新生成消息
     - 多会话和历史会话
 - ✅**事件流**
@@ -145,8 +145,8 @@
 - ✅**压缩上下文** `SummarizationMiddleware`
     - Api TokenUsage / 自动估算 tokens，达到阈值时自动启动压缩
     - toolcall 各自实现压缩处理
-        - 裁剪历史消息中过时的 (filesystem)文件读写、(planning)任务规划、(share_store)变量读写消息
-    - 将部分重要的长消息内容暂存到 `share_store`，而不压缩，模型需要时可以提取
+        - 裁剪历史消息中过时的 (agentxx_filesystem)文件读写、(agentxx_planning_write)任务规划、(agentxx_share_store)变量读写消息
+    - 将部分重要的长消息内容暂存到 `agentxx_share_store`，而不压缩，模型需要时可以提取
     - LLM 总结压缩
     - 保留最近消息
 - ⬜**Memory记忆**
@@ -157,6 +157,7 @@
 - ✅**Skill支持** `SkillMiddleware`
     - 文件夹扫描/metadata读取收集 + `filesystem`文件内容读取 + `execute_command`执行
 - ✅**MCP支持**
+    - 命名空间隔离
     - MCP client
     - Mcp Server
         - ⬜CodeGraph

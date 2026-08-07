@@ -8,7 +8,6 @@
 - 会话独立日志
 - eventBus 改为tree，命名空间使用 axx/bxx/cc
 - 内置tool增加命名空间
-- grep、glob 兼容单string参数
 - agent 发送状态给 tui 插入消息
 
 ## 提示词优化
@@ -16,7 +15,7 @@
 - 自动建议生成、修改、总结一些经验到 AGENTS.md
 - 提示生成临时文件的目录
 - 建议当需要通读一个大项目时，可以先由 subagent 总结出大致的 wiki，然后分析划分模块化，再分享 wiki 给多个 subagent 各自负责模块解决问题
-- 使用 filesystem_grep/filesystem_glob 时尽量缩小扫描范围，避开 .gitignore 内定义的目录、third_party、build、node_modules 等文件夹
+- 使用 agentxx_filesystem_grep/agentxx_filesystem_glob 时尽量缩小扫描范围，避开 .gitignore 内定义的目录、third_party、build、node_modules 等文件夹
 - 软件使用文档说明 skill
 
 ## 问题

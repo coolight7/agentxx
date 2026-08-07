@@ -87,7 +87,7 @@ std::optional<ftxui::Element> TUIClientAgentIO::renderPlanningInfo() {
     const TUIMessage* plan = nullptr;
     for (size_t i = st.messages.size(); i > 0; --i) {
         const auto& m = *st.messages[i - 1];
-        if (m.role == TUIMessage::Role::Tool && m.toolName == "planning_write") {
+        if (m.role == TUIMessage::Role::Tool && m.toolName == "agentxx_planning_write") {
             plan = st.messages[i - 1].get();
             break;
         }

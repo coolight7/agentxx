@@ -15,7 +15,7 @@ CodeGraphSearchTool::CodeGraphSearchTool(
     std::shared_ptr<agentxx::expand::CodeGraphManager> in_codegraph,
     std::weak_ptr<agentxx::agent::AgentContext>        in_agentContext
 ) :
-    XXToolBase("codegraph_search", in_agentContext, true, true),
+    XXToolBase("agentxx_codegraph_search", in_agentContext, true, true),
     codegraph(std::move(in_codegraph)) {}
 
 neograph::ChatTool CodeGraphSearchTool::get_definition() const {
@@ -82,7 +82,7 @@ CodeGraphContextTool::CodeGraphContextTool(
     std::shared_ptr<agentxx::expand::CodeGraphManager> in_codegraph,
     std::weak_ptr<agentxx::agent::AgentContext>        in_agentContext
 ) :
-    XXToolBase("codegraph_context", in_agentContext, true, true),
+    XXToolBase("agentxx_codegraph_context", in_agentContext, true, true),
     codegraph(std::move(in_codegraph)) {}
 
 neograph::ChatTool CodeGraphContextTool::get_definition() const {
@@ -146,7 +146,7 @@ CodeGraphCallersTool::CodeGraphCallersTool(
     std::shared_ptr<agentxx::expand::CodeGraphManager> in_codegraph,
     std::weak_ptr<agentxx::agent::AgentContext>        in_agentContext
 ) :
-    XXToolBase("codegraph_callers", in_agentContext, true, true),
+    XXToolBase("agentxx_codegraph_callers", in_agentContext, true, true),
     codegraph(std::move(in_codegraph)) {}
 
 neograph::ChatTool CodeGraphCallersTool::get_definition() const {
@@ -201,7 +201,7 @@ CodeGraphCalleesTool::CodeGraphCalleesTool(
     std::shared_ptr<agentxx::expand::CodeGraphManager> in_codegraph,
     std::weak_ptr<agentxx::agent::AgentContext>        in_agentContext
 ) :
-    XXToolBase("codegraph_callees", in_agentContext, true, true),
+    XXToolBase("agentxx_codegraph_callees", in_agentContext, true, true),
     codegraph(std::move(in_codegraph)) {}
 
 neograph::ChatTool CodeGraphCalleesTool::get_definition() const {
@@ -256,7 +256,7 @@ CodeGraphImpactTool::CodeGraphImpactTool(
     std::shared_ptr<agentxx::expand::CodeGraphManager> in_codegraph,
     std::weak_ptr<agentxx::agent::AgentContext>        in_agentContext
 ) :
-    XXToolBase("codegraph_impact", in_agentContext, true, true),
+    XXToolBase("agentxx_codegraph_impact", in_agentContext, true, true),
     codegraph(std::move(in_codegraph)) {}
 
 neograph::ChatTool CodeGraphImpactTool::get_definition() const {
@@ -311,7 +311,7 @@ CodeGraphStatusTool::CodeGraphStatusTool(
     std::shared_ptr<agentxx::expand::CodeGraphManager> in_codegraph,
     std::weak_ptr<agentxx::agent::AgentContext>        in_agentContext
 ) :
-    XXToolBase("codegraph_status", in_agentContext, false, true),
+    XXToolBase("agentxx_codegraph_status", in_agentContext, false, true),
     codegraph(std::move(in_codegraph)) {}
 
 neograph::ChatTool CodeGraphStatusTool::get_definition() const {
@@ -349,7 +349,7 @@ CodeGraphIndexTool::CodeGraphIndexTool(
     std::shared_ptr<agentxx::expand::CodeGraphManager> in_codegraph,
     std::weak_ptr<agentxx::agent::AgentContext>        in_agentContext
 ) :
-    XXToolBase("codegraph_index", in_agentContext, false, false),
+    XXToolBase("agentxx_codegraph_index", in_agentContext, false, false),
     codegraph(std::move(in_codegraph)) {}
 
 neograph::ChatTool CodeGraphIndexTool::get_definition() const {
@@ -410,7 +410,7 @@ CodeGraphPathTool::CodeGraphPathTool(
     std::shared_ptr<agentxx::expand::CodeGraphManager> in_codegraph,
     std::weak_ptr<agentxx::agent::AgentContext>        in_agentContext
 ) :
-    XXToolBase("codegraph_path", in_agentContext, true, true),
+    XXToolBase("agentxx_codegraph_path", in_agentContext, true, true),
     codegraph(std::move(in_codegraph)) {}
 
 neograph::ChatTool CodeGraphPathTool::get_definition() const {
