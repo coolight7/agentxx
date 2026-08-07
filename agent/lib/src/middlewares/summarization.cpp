@@ -81,6 +81,9 @@ size_t SummarizationMiddlewareHandle::countTokens(
                      + countTokensForUtf8Str(tool.arguments);
         }
         count += static_cast<size_t>(tokensPerImage * item.image_urls.size());
+        // 音视频附件同样按图片 token 估算 (各家 API 对多媒体计费粒度不一, 粗略按图片计)
+        count += static_cast<size_t>(tokensPerImage * item.audio_urls.size());
+        count += static_cast<size_t>(tokensPerImage * item.video_urls.size());
     }
     return count;
 }

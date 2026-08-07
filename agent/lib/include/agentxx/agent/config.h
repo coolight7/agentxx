@@ -38,8 +38,6 @@ public:
     std::string apiPath;
     /// 额外 HTTP 请求头 (如自定义鉴权头/网关透传头)
     std::map<std::string, std::string> extraHeaders;
-    /// 从 content 文本中尝试提取 tool call（当 LLM 未正确使用 tool_calls API 时的兜底方案）
-    bool extractToolCallsFromContent = false;
     /// 模型支持的最大上下文 token 数
     /// - 0 表示未指定, 此时上下文压缩中间件使用其默认值
     ///   [agentxx::middleware::SummarizationMiddlewareHandle::defaultModelSupportMaxToken]

@@ -19,6 +19,9 @@ namespace agentxx {
 namespace server {
 
 /// OpenAI 协议 Provider
+/// API 文档
+/// - Chat Completions https://vercel.com/docs/ai-gateway/sdks-and-apis/openai-chat-completions
+/// - Response https://vercel.com/docs/ai-gateway/sdks-and-apis/responses
 ///
 /// 支持两种 API 形态 (由 type 控制):
 ///   - Chat Completions API  (`POST /chat/completions`, 默认)

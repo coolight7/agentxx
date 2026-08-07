@@ -502,8 +502,9 @@ std::unique_ptr<MockOpenAIServer> startMockServer(uint16_t& outPort) {
 
     // Chat Completions API 路由
     mock->server->router().add("/chat/completions", 2, makeHandler());
-    // Responses API 路由 (Codex)
+    // Responses API 路由 (Codex) — 默认路径 /responses, 兼容网关形态 /v1/responses
     mock->server->router().add("/v1/responses", 2, makeHandler());
+    mock->server->router().add("/responses", 2, makeHandler());
     // 自定义 api_path 测试路由
     mock->server->router().add("/v1/chat/completions", 2, makeHandler());
 
@@ -565,6 +566,45 @@ void test_parse_response_message_with_reasoning() {
     XX_TEST_EXPECT_EQ(msg.role, "assistant");
     XX_TEST_EXPECT_EQ(msg.content, "Final answer");
     XX_TEST_EXPECT_EQ(msg.reasoning_content, "Step-by-step reasoning...");
+}
+
+/// Vercel AI Gateway / 部分网关把推理内容放在 message.reasoning 字段
+void test_parse_response_message_with_reasoning_field() {
+    auto choice = neograph::json::parse(
+        R"({
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "The meaning of life...",
+          "reasoning": "Let me think about this carefully..."
+        },
+        "finish_reason": "stop"
+      })"
+    );
+
+    auto msg = neograph::parse_response_message(choice);
+    XX_TEST_EXPECT_EQ(msg.role, "assistant");
+    XX_TEST_EXPECT_EQ(msg.content, "The meaning of life...");
+    XX_TEST_EXPECT_EQ(msg.reasoning_content, "Let me think about this carefully...");
+}
+
+/// message.reasoning 为 null 时不应抛异常, 保持空
+void test_parse_response_message_null_reasoning_field() {
+    auto choice = neograph::json::parse(
+        R"({
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "Answer",
+          "reasoning": null
+        },
+        "finish_reason": "stop"
+      })"
+    );
+
+    auto msg = neograph::parse_response_message(choice);
+    XX_TEST_EXPECT_EQ(msg.content, "Answer");
+    XX_TEST_EXPECT_EQ(msg.reasoning_content, "");
 }
 
 void test_parse_response_message_with_thinking_field() {
@@ -682,6 +722,149 @@ void test_messages_to_json_reasoning_roundtrip() {
     auto parsed = neograph::parse_response_message(choice);
     XX_TEST_EXPECT_EQ(parsed.content, original.content);
     XX_TEST_EXPECT_EQ(parsed.reasoning_content, original.reasoning_content);
+}
+
+// ---------------------------------------------------------------------------
+// Unit tests for multimodal messages (image / audio / video)
+// ---------------------------------------------------------------------------
+
+void test_parse_data_url() {
+    // 标准 base64 data URL
+    {
+        auto r = neograph::parse_data_url("data:image/png;base64,aGVsbG8=");
+        XX_TEST_EXPECT_HAS_VALUE(r);
+        if (r) {
+            XX_TEST_EXPECT_EQ(r->first, "image/png");
+            XX_TEST_EXPECT_EQ(r->second, "aGVsbG8=");
+        }
+    }
+    // 带参数 (name=...) 的 data URL
+    {
+        auto r = neograph::parse_data_url("data:audio/wav;name=a.wav;base64,UklGRg==");
+        XX_TEST_EXPECT_HAS_VALUE(r);
+        if (r) {
+            XX_TEST_EXPECT_EQ(r->first, "audio/wav");
+            XX_TEST_EXPECT_EQ(r->second, "UklGRg==");
+        }
+    }
+    // 无 media type (RFC 2397 允许 data:;base64,xxx)
+    {
+        auto r = neograph::parse_data_url("data:;base64,AAAA");
+        XX_TEST_EXPECT_HAS_VALUE(r);
+        if (r) {
+            XX_TEST_EXPECT_EQ(r->first, "");
+            XX_TEST_EXPECT_EQ(r->second, "AAAA");
+        }
+    }
+    // 非 data URL → nullopt
+    XX_TEST_EXPECT_NULLOPT(neograph::parse_data_url("https://example.com/a.png"));
+    XX_TEST_EXPECT_NULLOPT(neograph::parse_data_url("/local/path/a.png"));
+    // 无逗号分隔 → nullopt
+    XX_TEST_EXPECT_NULLOPT(neograph::parse_data_url("data:image/png;base64"));
+    // 非 base64 编码 (percent-encoded) → nullopt
+    XX_TEST_EXPECT_NULLOPT(neograph::parse_data_url("data:text/plain,hello"));
+}
+
+void test_media_format_from_mime() {
+    XX_TEST_EXPECT_EQ(neograph::media_format_from_mime("audio/wav"), "wav");
+    XX_TEST_EXPECT_EQ(neograph::media_format_from_mime("audio/x-wav"), "wav");
+    XX_TEST_EXPECT_EQ(neograph::media_format_from_mime("audio/wave"), "wav");
+    XX_TEST_EXPECT_EQ(neograph::media_format_from_mime("audio/mpeg"), "mp3");
+    XX_TEST_EXPECT_EQ(neograph::media_format_from_mime("audio/mp3"), "mp3");
+    XX_TEST_EXPECT_EQ(neograph::media_format_from_mime("audio/mpga"), "mp3");
+    XX_TEST_EXPECT_EQ(neograph::media_format_from_mime("audio/ogg"), "ogg");
+    XX_TEST_EXPECT_EQ(neograph::media_format_from_mime("audio/aac"), "aac");
+    XX_TEST_EXPECT_EQ(neograph::media_format_from_mime("audio/flac"), "flac");
+    XX_TEST_EXPECT_EQ(neograph::media_format_from_mime("audio/webm"), "webm");
+    XX_TEST_EXPECT_EQ(neograph::media_format_from_mime("video/mp4"), "mp4");
+    XX_TEST_EXPECT_EQ(neograph::media_format_from_mime("video/mpeg"), "mpeg");
+    XX_TEST_EXPECT_EQ(neograph::media_format_from_mime("video/quicktime"), "mov");
+    XX_TEST_EXPECT_EQ(neograph::media_format_from_mime("video/x-msvideo"), "avi");
+    XX_TEST_EXPECT_EQ(neograph::media_format_from_mime("video/x-matroska"), "mkv");
+    XX_TEST_EXPECT_EQ(neograph::media_format_from_mime("video/mp2t"), "mpegts");
+    XX_TEST_EXPECT_EQ(neograph::media_format_from_mime("video/vnd.apple.mpegurl"), "m3u8");
+    // 带 codecs 参数
+    XX_TEST_EXPECT_EQ(neograph::media_format_from_mime("audio/mpeg;codecs=mp3"), "mp3");
+    XX_TEST_EXPECT_EQ(neograph::media_format_from_mime("video/mp4;codecs=avc1.42E01E"), "mp4");
+    // 未知类型: 返回子类型小写
+    XX_TEST_EXPECT_EQ(neograph::media_format_from_mime("audio/amr"), "amr");
+    XX_TEST_EXPECT_EQ(neograph::media_format_from_mime("APPLICATION/PDF"), "pdf");
+}
+
+void test_messages_to_json_multimodal() {
+    neograph::ChatMessage msg;
+    msg.role       = "user";
+    msg.content    = "看图说话";
+    msg.image_urls = {"https://example.com/a.png"};
+    msg.audio_urls = {"data:audio/wav;base64,UklGRg==", "https://example.com/a.wav"};
+    msg.video_urls = {"data:video/mp4;base64,AAAA", "https://example.com/a.mp4"};
+
+    auto arr = neograph::messages_to_json({msg});
+    XX_TEST_EXPECT_EQ(arr.size(), (size_t)1);
+    XX_TEST_EXPECT_TRUE(arr[0]["content"].is_array());
+
+    const auto& parts = arr[0]["content"];
+    // text + image + audio x2 + video x2
+    XX_TEST_EXPECT_EQ(parts.size(), (size_t)6);
+
+    // text
+    XX_TEST_EXPECT_EQ(parts[0]["type"].get<std::string>(), "text");
+    XX_TEST_EXPECT_EQ(parts[0]["text"].get<std::string>(), "看图说话");
+    // image
+    XX_TEST_EXPECT_EQ(parts[1]["type"].get<std::string>(), "image_url");
+    XX_TEST_EXPECT_EQ(parts[1]["image_url"]["url"].get<std::string>(), "https://example.com/a.png");
+    // audio (data URL → input_audio data+format)
+    XX_TEST_EXPECT_EQ(parts[2]["type"].get<std::string>(), "input_audio");
+    XX_TEST_EXPECT_EQ(parts[2]["input_audio"]["data"].get<std::string>(), "UklGRg==");
+    XX_TEST_EXPECT_EQ(parts[2]["input_audio"]["format"].get<std::string>(), "wav");
+    // audio (HTTP URL → url 透传)
+    XX_TEST_EXPECT_EQ(parts[3]["type"].get<std::string>(), "input_audio");
+    XX_TEST_EXPECT_EQ(
+        parts[3]["input_audio"]["url"].get<std::string>(),
+        "https://example.com/a.wav"
+    );
+    // video x2 (data URL + HTTP URL)
+    XX_TEST_EXPECT_EQ(parts[4]["type"].get<std::string>(), "video_url");
+    XX_TEST_EXPECT_EQ(
+        parts[4]["video_url"]["url"].get<std::string>(),
+        "data:video/mp4;base64,AAAA"
+    );
+    XX_TEST_EXPECT_EQ(parts[5]["type"].get<std::string>(), "video_url");
+    XX_TEST_EXPECT_EQ(parts[5]["video_url"]["url"].get<std::string>(), "https://example.com/a.mp4");
+}
+
+void test_messages_to_json_multimodal_empty_content() {
+    // content 为空但只有附件时, 不产生 text 块
+    neograph::ChatMessage msg;
+    msg.role          = "user";
+    msg.audio_urls    = {"data:audio/mpeg;base64,SUQzBAAAAA=="};
+    auto        arr   = neograph::messages_to_json({msg});
+    const auto& parts = arr[0]["content"];
+    XX_TEST_EXPECT_EQ(parts.size(), (size_t)1);
+    XX_TEST_EXPECT_EQ(parts[0]["type"].get<std::string>(), "input_audio");
+    XX_TEST_EXPECT_EQ(parts[0]["input_audio"]["format"].get<std::string>(), "mp3");
+}
+
+void test_messages_to_json_multimodal_roundtrip() {
+    // to_json/from_json (wire 协议) 应保留 audio_urls / video_urls
+    neograph::ChatMessage msg;
+    msg.role       = "user";
+    msg.content    = "hi";
+    msg.image_urls = {"https://example.com/i.png"};
+    msg.audio_urls = {"data:audio/wav;base64,UklGRg=="};
+    msg.video_urls = {"https://example.com/v.mp4"};
+
+    neograph::json j;
+    neograph::to_json(j, msg);
+    neograph::ChatMessage back;
+    neograph::from_json(j, back);
+    XX_TEST_EXPECT_EQ(back.role, "user");
+    XX_TEST_EXPECT_EQ(back.content, "hi");
+    XX_TEST_EXPECT_EQ(back.image_urls.size(), (size_t)1);
+    XX_TEST_EXPECT_EQ(back.audio_urls.size(), (size_t)1);
+    XX_TEST_EXPECT_EQ(back.video_urls.size(), (size_t)1);
+    XX_TEST_EXPECT_EQ(back.audio_urls[0], "data:audio/wav;base64,UklGRg==");
+    XX_TEST_EXPECT_EQ(back.video_urls[0], "https://example.com/v.mp4");
 }
 
 // ---------------------------------------------------------------------------
@@ -856,10 +1039,6 @@ void test_extract_think_tags_unclosed_direct() {
     XX_TEST_EXPECT_EQ(thinking, "Unclosed thinking");
     XX_TEST_EXPECT_EQ(content, "Start");
 }
-
-// ---------------------------------------------------------------------------
-// Unit tests for extractToolCallsFromContent (XML 风格 <tool_call> 兼容)
-// ---------------------------------------------------------------------------
 
 /// llama.cpp 本地模型在 content 末尾输出
 /// `<tool_call> <function=musicxx_GetMediaInfo> </function> </tool_call>` 的兼容场景
@@ -1609,6 +1788,51 @@ asio::awaitable<void> test_streaming_thinking_field_compat(MockOpenAIServer& moc
     } catch (const std::exception& e) {
         XX_TEST_FAILED++;
         TEST_FAIL << "streaming thinking compat test failed: " << e.what() << std::endl;
+    }
+}
+
+/// Vercel AI Gateway / 部分网关使用 delta.reasoning 流式输出推理内容
+asio::awaitable<void> test_streaming_reasoning_field_compat(MockOpenAIServer& mock, uint16_t port) {
+    std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
+    mock.mode           = MockMode::Streaming;
+
+    auto provider = server::OpenAIProvider::create(makeOaiCfg("sk-test", baseUrl));
+
+    neograph::CompletionParams params;
+    params.model    = "vercel-gateway-model";
+    params.messages = {
+        neograph::ChatMessage{.role = "user", .content = "Reason via delta.reasoning"}
+    };
+
+    mock.sseChunks = {
+        MockOpenAIServer::sseData(
+            R"({"choices":[{"index":0,"delta":{"role":"assistant","content":""}}]})"
+        ),
+        MockOpenAIServer::sseData(R"({"choices":[{"index":0,"delta":{"reasoning":"Think hard"}}]})"
+        ),
+        MockOpenAIServer::sseData(
+            R"({"choices":[{"index":0,"delta":{"reasoning":" about the answer"}}]})"
+        ),
+        MockOpenAIServer::sseData(R"({"choices":[{"index":0,"delta":{"content":"It is 7"}}]})"),
+        MockOpenAIServer::sseData(
+            R"({"choices":[{"index":0,"delta":{}}],"usage":{"prompt_tokens":5,"completion_tokens":4,"total_tokens":9}})"
+        ),
+        MockOpenAIServer::sseDone()
+    };
+
+    std::string              accumulated;
+    neograph::StreamCallback onChunk = [&](const std::string& chunk) {
+        accumulated += chunk;
+    };
+
+    try {
+        auto result = co_await provider->invoke(params, onChunk);
+        XX_TEST_EXPECT_EQ(result.message.content, "It is 7");
+        XX_TEST_EXPECT_EQ(result.message.reasoning_content, "Think hard about the answer");
+        XX_TEST_EXPECT_EQ(accumulated, "It is 7");
+    } catch (const std::exception& e) {
+        XX_TEST_FAILED++;
+        TEST_FAIL << "streaming reasoning field compat test failed: " << e.what() << std::endl;
     }
 }
 
@@ -2802,71 +3026,106 @@ asio::awaitable<void> test_extra_headers_sent(MockOpenAIServer& mock, uint16_t p
     }
 }
 
-/// 非流式响应: content 含 XML 风格 <tool_call> 时, 开启 extractToolCallsFromContent
-/// 应提取 tool call 并从 content 移除 (llama.cpp 本地模型兼容)
-asio::awaitable<void>
-    test_extract_tool_calls_from_content_xml(MockOpenAIServer& mock, uint16_t port) {
+/// Chat Completions API: 用户消息携带图片/音频/视频附件时, 请求体应组装为多模态 content parts
+asio::awaitable<void> test_multimodal_body_chat_completions(MockOpenAIServer& mock, uint16_t port) {
     std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
     mock.mode           = MockMode::Normal;
 
-    auto mc                        = makeOaiCfg("sk-test", baseUrl);
-    mc.extractToolCallsFromContent = true;
-    auto provider                  = server::OpenAIProvider::create(mc);
+    auto provider = server::OpenAIProvider::create(makeOaiCfg("sk-test", baseUrl));
 
     neograph::CompletionParams params;
-    params.model    = "gpt-4o-mini";
+    params.model    = "gpt-4o";
     params.messages = {
-        neograph::ChatMessage{.role = "user", .content = "查询歌曲信息"}
+        {.role       = "user",
+         .content    = "描述这个视频",
+         .image_urls = {"https://example.com/cat.png"},
+         .audio_urls = {"data:audio/wav;base64,UklGRg=="},
+         .video_urls = {"https://example.com/cat.mp4"}},
     };
 
-    // 模型在 content 末尾输出 XML 风格 tool call (不带参数)
-    mock.customResponse = mock.makeCompletionResponse(
-        "让我查询一下。<tool_call> <function=musicxx_GetMediaInfo> </function> </tool_call>"
-    );
     try {
-        auto result = co_await provider->invoke(params, nullptr);
-        XX_TEST_EXPECT_EQ(result.message.tool_calls.size(), (size_t)1);
-        if (result.message.tool_calls.size() == 1) {
-            XX_TEST_EXPECT_EQ(result.message.tool_calls[0].name, "musicxx_GetMediaInfo");
-            XX_TEST_EXPECT_EQ(result.message.tool_calls[0].arguments, "{}");
-        }
-        XX_TEST_EXPECT_EQ(result.message.content, "让我查询一下。");
+        co_await provider->invoke(params, nullptr);
+        auto sent = neograph::json::parse(mock.lastRequestBody);
+        XX_TEST_EXPECT_TRUE(sent["messages"].is_array());
+        const auto& content = sent["messages"][0]["content"];
+        XX_TEST_EXPECT_TRUE(content.is_array());
+        XX_TEST_EXPECT_EQ(content.size(), (size_t)4);
+
+        XX_TEST_EXPECT_EQ(content[0]["type"].get<std::string>(), "text");
+        XX_TEST_EXPECT_EQ(content[0]["text"].get<std::string>(), "描述这个视频");
+        XX_TEST_EXPECT_EQ(content[1]["type"].get<std::string>(), "image_url");
+        XX_TEST_EXPECT_EQ(
+            content[1]["image_url"]["url"].get<std::string>(),
+            "https://example.com/cat.png"
+        );
+        XX_TEST_EXPECT_EQ(content[2]["type"].get<std::string>(), "input_audio");
+        XX_TEST_EXPECT_EQ(content[2]["input_audio"]["data"].get<std::string>(), "UklGRg==");
+        XX_TEST_EXPECT_EQ(content[2]["input_audio"]["format"].get<std::string>(), "wav");
+        XX_TEST_EXPECT_EQ(content[3]["type"].get<std::string>(), "video_url");
+        XX_TEST_EXPECT_EQ(
+            content[3]["video_url"]["url"].get<std::string>(),
+            "https://example.com/cat.mp4"
+        );
     } catch (const std::exception& e) {
         XX_TEST_FAILED++;
-        TEST_FAIL << "extract tool calls from content (XML) failed: " << e.what() << std::endl;
+        TEST_FAIL << "multimodal chat.completions body test failed: " << e.what() << std::endl;
     }
 }
 
-/// 非流式响应: content 含 JSON 风格 tool call 仍可提取 (原兼容逻辑不回归)
-asio::awaitable<void>
-    test_extract_tool_calls_from_content_json(MockOpenAIServer& mock, uint16_t port) {
+/// Responses API (Codex): 用户消息携带图片/音频/视频附件时,
+/// 请求体应组装为 input_image / input_audio / input_video
+asio::awaitable<void> test_multimodal_body_responses(MockOpenAIServer& mock, uint16_t port) {
     std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
-    mock.mode           = MockMode::Normal;
+    mock.mode           = MockMode::ResponsesNormal;
 
-    auto mc                        = makeOaiCfg("sk-test", baseUrl);
-    mc.extractToolCallsFromContent = true;
-    auto provider                  = server::OpenAIProvider::create(mc);
+    auto provider = server::OpenAIProvider::create(makeCodexCfg(baseUrl));
 
     neograph::CompletionParams params;
-    params.model    = "gpt-4o-mini";
+    params.model    = "gpt-5-codex";
     params.messages = {
-        neograph::ChatMessage{.role = "user", .content = "查询天气"}
+        {.role       = "user",
+         .content    = "视频里有什么?",
+         .image_urls = {"https://example.com/scene.png"},
+         .audio_urls = {"data:audio/mpeg;base64,SUQzBAAAAA=="},
+         .video_urls = {"https://example.com/scene.mp4", "data:video/mp4;base64,AAAA"}},
     };
 
-    mock.customResponse = mock.makeCompletionResponse(
-        "```json\n{\"name\":\"get_weather\",\"arguments\":{\"location\":\"Tokyo\"}}\n```"
-    );
     try {
-        auto result = co_await provider->invoke(params, nullptr);
-        XX_TEST_EXPECT_EQ(result.message.tool_calls.size(), (size_t)1);
-        if (result.message.tool_calls.size() == 1) {
-            XX_TEST_EXPECT_EQ(result.message.tool_calls[0].name, "get_weather");
-            auto args = neograph::json::parse(result.message.tool_calls[0].arguments);
-            XX_TEST_EXPECT_EQ(args["location"].get<std::string>(), "Tokyo");
-        }
+        co_await provider->invoke(params, nullptr);
+        auto sent = neograph::json::parse(mock.lastRequestBody);
+        XX_TEST_EXPECT_TRUE(sent["input"].is_array());
+
+        const auto& item = sent["input"][0];
+        XX_TEST_EXPECT_EQ(item["role"].get<std::string>(), "user");
+        const auto& content = item["content"];
+        XX_TEST_EXPECT_TRUE(content.is_array());
+        // text + 1 image + 1 audio + 2 video
+        XX_TEST_EXPECT_EQ(content.size(), (size_t)5);
+
+        XX_TEST_EXPECT_EQ(content[0]["type"].get<std::string>(), "input_text");
+        XX_TEST_EXPECT_EQ(content[0]["text"].get<std::string>(), "视频里有什么?");
+        XX_TEST_EXPECT_EQ(content[1]["type"].get<std::string>(), "input_image");
+        XX_TEST_EXPECT_EQ(
+            content[1]["image_url"].get<std::string>(),
+            "https://example.com/scene.png"
+        );
+        XX_TEST_EXPECT_EQ(content[2]["type"].get<std::string>(), "input_audio");
+        XX_TEST_EXPECT_EQ(content[2]["input_audio"]["data"].get<std::string>(), "SUQzBAAAAA==");
+        XX_TEST_EXPECT_EQ(content[2]["input_audio"]["format"].get<std::string>(), "mp3");
+        // HTTP URL 视频: 扁平对象 {type, video_url}, 无 format
+        XX_TEST_EXPECT_EQ(content[3]["type"].get<std::string>(), "input_video");
+        XX_TEST_EXPECT_EQ(
+            content[3]["video_url"].get<std::string>(),
+            "https://example.com/scene.mp4"
+        );
+        XX_TEST_EXPECT_FALSE(content[3].contains("format"));
+        // data URL 视频: video_url + format 推导
+        XX_TEST_EXPECT_EQ(content[4]["type"].get<std::string>(), "input_video");
+        XX_TEST_EXPECT_EQ(content[4]["video_url"].get<std::string>(), "data:video/mp4;base64,AAAA");
+        XX_TEST_EXPECT_EQ(content[4]["format"].get<std::string>(), "mp4");
     } catch (const std::exception& e) {
         XX_TEST_FAILED++;
-        TEST_FAIL << "extract tool calls from content (JSON) failed: " << e.what() << std::endl;
+        TEST_FAIL << "multimodal responses body test failed: " << e.what() << std::endl;
     }
 }
 
@@ -2897,16 +3156,171 @@ asio::awaitable<void> test_responses_non_streaming(MockOpenAIServer& mock, uint1
 
         auto sent = neograph::json::parse(mock.lastRequestBody);
         XX_TEST_EXPECT_EQ(sent["model"].get<std::string>(), "gpt-5-codex");
-        // codex 默认: store=false + reasoning effort=high
+        // codex 默认: store=false; reasoning 不再硬编码, 由 extra_config/extra_fields 控制
         XX_TEST_EXPECT_TRUE(sent.contains("store"));
         XX_TEST_EXPECT_EQ(sent["store"].get<bool>(), false);
-        XX_TEST_EXPECT_TRUE(sent.contains("reasoning"));
-        XX_TEST_EXPECT_EQ(sent["reasoning"]["effort"].get<std::string>(), "high");
+        XX_TEST_EXPECT_FALSE(sent.contains("reasoning"));
+        // sendThinking 关闭时不请求 reasoning 摘要
+        XX_TEST_EXPECT_FALSE(sent.contains("include"));
         // 无 system 消息时不应发送 instructions
         XX_TEST_EXPECT_FALSE(sent.contains("instructions"));
     } catch (const std::exception& e) {
         XX_TEST_FAILED++;
         TEST_FAIL << "responses non-streaming failed: " << e.what() << std::endl;
+    }
+}
+
+/// Responses API: reasoning 参数可通过 extra_config (config 级) 与
+/// params.extra_fields (per-call 级) 配置, 不再硬编码 effort=high
+asio::awaitable<void> test_responses_reasoning_configurable(MockOpenAIServer& mock, uint16_t port) {
+    std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
+    mock.mode           = MockMode::ResponsesNormal;
+
+    // 1) config 级: extra_config.reasoning
+    {
+        auto mc         = makeCodexCfg(baseUrl);
+        mc.extra_config = neograph::json::parse(R"({"reasoning":{"effort":"medium"}})");
+        auto                       provider = server::OpenAIProvider::create(mc);
+        neograph::CompletionParams params;
+        params.model    = "gpt-5-codex";
+        params.messages = {
+            neograph::ChatMessage{.role = "user", .content = "hi"}
+        };
+        try {
+            co_await provider->invoke(params, nullptr);
+            auto sent = neograph::json::parse(mock.lastRequestBody);
+            XX_TEST_EXPECT_TRUE(sent.contains("reasoning"));
+            XX_TEST_EXPECT_EQ(sent["reasoning"]["effort"].get<std::string>(), "medium");
+        } catch (const std::exception& e) {
+            XX_TEST_FAILED++;
+            TEST_FAIL << "responses reasoning via extra_config failed: " << e.what() << std::endl;
+        }
+    }
+
+    // 2) per-call 级: params.extra_fields.reasoning 覆盖 config 级
+    {
+        auto mc         = makeCodexCfg(baseUrl);
+        mc.extra_config = neograph::json::parse(R"({"reasoning":{"effort":"medium"}})");
+        auto                       provider = server::OpenAIProvider::create(mc);
+        neograph::CompletionParams params;
+        params.model    = "gpt-5-codex";
+        params.messages = {
+            neograph::ChatMessage{.role = "user", .content = "hi"}
+        };
+        params.extra_fields = neograph::json::parse(R"({"reasoning":{"effort":"low"}})");
+        try {
+            co_await provider->invoke(params, nullptr);
+            auto sent = neograph::json::parse(mock.lastRequestBody);
+            XX_TEST_EXPECT_TRUE(sent.contains("reasoning"));
+            XX_TEST_EXPECT_EQ(sent["reasoning"]["effort"].get<std::string>(), "low");
+        } catch (const std::exception& e) {
+            XX_TEST_FAILED++;
+            TEST_FAIL << "responses reasoning per-call override failed: " << e.what() << std::endl;
+        }
+    }
+
+    // 3) OpenAI 模型支持的 reasoning.summary (摘要粒度)
+    {
+        auto                       mc       = makeCodexCfg(baseUrl);
+        auto                       provider = server::OpenAIProvider::create(mc);
+        neograph::CompletionParams params;
+        params.model    = "gpt-5-codex";
+        params.messages = {
+            neograph::ChatMessage{.role = "user", .content = "hi"}
+        };
+        params.extra_fields
+            = neograph::json::parse(R"({"reasoning":{"effort":"high","summary":"concise"}})");
+        try {
+            co_await provider->invoke(params, nullptr);
+            auto sent = neograph::json::parse(mock.lastRequestBody);
+            XX_TEST_EXPECT_TRUE(sent.contains("reasoning"));
+            XX_TEST_EXPECT_EQ(sent["reasoning"]["effort"].get<std::string>(), "high");
+            XX_TEST_EXPECT_EQ(sent["reasoning"]["summary"].get<std::string>(), "concise");
+        } catch (const std::exception& e) {
+            XX_TEST_FAILED++;
+            TEST_FAIL << "responses reasoning summary failed: " << e.what() << std::endl;
+        }
+    }
+}
+
+/// Responses API: sendThinking=true 时
+///   - 请求 include=["reasoning.summary"] 获取思考摘要
+///   - assistant 消息携带历史 reasoning_content 时回传 reasoning item (summary 形式)
+asio::awaitable<void> test_responses_send_thinking(MockOpenAIServer& mock, uint16_t port) {
+    std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
+    mock.mode           = MockMode::ResponsesNormal;
+
+    auto mc         = makeCodexCfg(baseUrl);
+    mc.sendThinking = true;
+    auto provider   = server::OpenAIProvider::create(mc);
+
+    neograph::CompletionParams params;
+    params.model    = "gpt-5-codex";
+    params.messages = {
+        {.role = "user", .content = "前一个问题"},
+        {.role = "assistant", .content = "上一个回答", .reasoning_content = "上一轮思考过程"},
+        {.role = "user", .content = "追问"},
+    };
+
+    try {
+        co_await provider->invoke(params, nullptr);
+        auto sent = neograph::json::parse(mock.lastRequestBody);
+
+        // 请求 reasoning 摘要
+        XX_TEST_EXPECT_TRUE(sent.contains("include"));
+        XX_TEST_EXPECT_TRUE(sent["include"].is_array());
+        XX_TEST_EXPECT_EQ(sent["include"].size(), (size_t)1);
+        XX_TEST_EXPECT_EQ(sent["include"][0].get<std::string>(), "reasoning.summary");
+
+        // assistant 消息回传 reasoning item (summary 形式)
+        const auto& input = sent["input"];
+        XX_TEST_EXPECT_TRUE(input.is_array());
+        bool foundReasoningItem = false;
+        for (const auto& item : input) {
+            if (item.is_object() && item.value("type", std::string{}) == "reasoning") {
+                foundReasoningItem  = true;
+                const auto& summary = item["summary"];
+                XX_TEST_EXPECT_TRUE(summary.is_array());
+                XX_TEST_EXPECT_EQ(summary.size(), (size_t)1);
+                XX_TEST_EXPECT_EQ(summary[0]["type"].get<std::string>(), "summary_text");
+                XX_TEST_EXPECT_EQ(summary[0]["text"].get<std::string>(), "上一轮思考过程");
+            }
+        }
+        XX_TEST_EXPECT_TRUE(foundReasoningItem);
+    } catch (const std::exception& e) {
+        XX_TEST_FAILED++;
+        TEST_FAIL << "responses send thinking failed: " << e.what() << std::endl;
+    }
+}
+
+/// Responses API: sendThinking=false 时不应请求 reasoning 摘要、也不回传历史 reasoning
+asio::awaitable<void> test_responses_no_send_thinking(MockOpenAIServer& mock, uint16_t port) {
+    std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
+    mock.mode           = MockMode::ResponsesNormal;
+
+    auto provider = server::OpenAIProvider::create(makeCodexCfg(baseUrl));
+
+    neograph::CompletionParams params;
+    params.model    = "gpt-5-codex";
+    params.messages = {
+        {.role = "assistant", .content = "上一个回答", .reasoning_content = "上一轮思考过程"},
+        {.role = "user", .content = "追问"},
+    };
+
+    try {
+        co_await provider->invoke(params, nullptr);
+        auto sent = neograph::json::parse(mock.lastRequestBody);
+        XX_TEST_EXPECT_FALSE(sent.contains("include"));
+        const auto& input = sent["input"];
+        XX_TEST_EXPECT_TRUE(input.is_array());
+        for (const auto& item : input) {
+            if (item.is_object()) {
+                XX_TEST_EXPECT_FALSE(item.value("type", std::string{}) == "reasoning");
+            }
+        }
+    } catch (const std::exception& e) {
+        XX_TEST_FAILED++;
+        TEST_FAIL << "responses no-send-thinking failed: " << e.what() << std::endl;
     }
 }
 
@@ -3350,6 +3764,8 @@ asio::awaitable<TestResult> run_openai_provider_tests() {
 
     // Unit tests for reasoning/thinking parsing (no server needed)
     test_parse_response_message_with_reasoning();
+    test_parse_response_message_with_reasoning_field();
+    test_parse_response_message_null_reasoning_field();
     test_parse_response_message_with_thinking_field();
     test_parse_response_message_without_reasoning();
     test_parse_response_message_null_reasoning();
@@ -3357,6 +3773,13 @@ asio::awaitable<TestResult> run_openai_provider_tests() {
     test_messages_to_json_with_reasoning();
     test_messages_to_json_without_reasoning();
     test_messages_to_json_reasoning_roundtrip();
+
+    // Unit tests for multimodal messages (image / audio / video)
+    test_parse_data_url();
+    test_media_format_from_mime();
+    test_messages_to_json_multimodal();
+    test_messages_to_json_multimodal_empty_content();
+    test_messages_to_json_multimodal_roundtrip();
 
     // Unit tests for <think> tag extraction (no server needed)
     test_extract_think_tags_basic();
@@ -3409,12 +3832,15 @@ asio::awaitable<TestResult> run_openai_provider_tests() {
     co_await test_send_temperature_disabled(*mock, port);
     co_await test_extra_headers_sent(*mock, port);
 
-    // extractToolCallsFromContent 兼容测试
-    co_await test_extract_tool_calls_from_content_xml(*mock, port);
-    co_await test_extract_tool_calls_from_content_json(*mock, port);
+    // 多模态消息体 (图片/音频/视频附件)
+    co_await test_multimodal_body_chat_completions(*mock, port);
+    co_await test_multimodal_body_responses(*mock, port);
 
     // Responses API (Codex) 测试
     co_await test_responses_non_streaming(*mock, port);
+    co_await test_responses_reasoning_configurable(*mock, port);
+    co_await test_responses_send_thinking(*mock, port);
+    co_await test_responses_no_send_thinking(*mock, port);
     co_await test_responses_non_streaming_tool_call(*mock, port);
     co_await test_responses_streaming(*mock, port);
     co_await test_responses_streaming_tool_call(*mock, port);
@@ -3435,6 +3861,7 @@ asio::awaitable<TestResult> run_openai_provider_tests() {
     co_await test_non_streaming_thinking_at_choice_level(*mock, port);
     co_await test_streaming_reasoning_content(*mock, port);
     co_await test_streaming_thinking_field_compat(*mock, port);
+    co_await test_streaming_reasoning_field_compat(*mock, port);
     co_await test_streaming_reasoning_with_null_skips(*mock, port);
     co_await test_streaming_reasoning_preferred_over_thinking(*mock, port);
     co_await test_streaming_reasoning_only_no_content(*mock, port);
