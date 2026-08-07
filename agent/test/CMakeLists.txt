@@ -23,15 +23,27 @@ endif()
 
 add_executable(agentxx_test)
 
+# 测试源按目录划分:
+# - 根目录: 入口 test.cpp (模块注册)
+# - core/:   agentxx (lib) 核心测试
+# - client/: client (TUI/CLI) 测试, 仅 AGENTXX_BUILD_CLIENT 时编译其中的
+#            client/src 实现源码 (见下方 AGENTXX_BUILD_CLIENT 分支)
 file(GLOB test_SOURCES 
 	CONFIGURE_DEPENDS
 	"*.cpp" "*.cc" "*.cxx"
+	"core/*.cpp" "core/*.cc" "core/*.cxx"
+	"client/*.cpp" "client/*.cc" "client/*.cxx"
 )
 target_sources(agentxx_test PRIVATE
 	${test_SOURCES}
 )
+# include path: 根目录 (test_framework.h 等共享头) + core/ + client/
+# 使 test.cpp 的 #include "test_xxx.h" 与子目录测试的
+# #include "test_framework.h" 均无需改动路径
 target_include_directories(agentxx_test PRIVATE 
   "${CMAKE_CURRENT_SOURCE_DIR}"
+  "${CMAKE_CURRENT_SOURCE_DIR}/core/"
+  "${CMAKE_CURRENT_SOURCE_DIR}/client/"
 )
 
 if (AGENTXX_BUILD_CLIENT)
