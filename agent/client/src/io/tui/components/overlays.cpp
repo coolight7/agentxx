@@ -30,7 +30,12 @@ Element ModelSelectorOverlay::OnRender() {
 
     Element list;
     if (st.modelNames.empty()) {
-        list = text(" (no models available) ") | dim;
+        // 尚未收到服务端模型信息响应 → 加载中; 已收到但为空 → 确实无可用模型
+        if (!st.modelInfoLoaded) {
+            list = text(" Loading models... ") | dim;
+        } else {
+            list = text(" (no models available) ") | dim;
+        }
     } else {
         list = vbox(std::move(items)) | yframe | vscroll_indicator
                | size(HEIGHT, LESS_THAN, maxVisible);

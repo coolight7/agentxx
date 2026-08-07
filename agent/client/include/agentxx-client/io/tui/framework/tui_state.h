@@ -62,6 +62,10 @@ struct TUIRenderState {
 
     std::vector<std::string> modelNames;
     std::string              cachedModelName;
+    /// 是否已收到服务端模型信息响应 (WireModelInfo):
+    /// - false: 模型列表数据尚未加载 (弹窗应显示 loading)
+    /// - true:  已收到响应 (若列表仍为空则说明确实无可用模型)
+    bool modelInfoLoaded = false;
 
     std::deque<TUIPendingInput> pendingInputs;
 
