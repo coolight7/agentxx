@@ -61,6 +61,14 @@ neograph::graph::GraphStreamCallback EventBridge::make(
                 } else {
                     token = event.data.dump();
                 }
+                // 无订阅者时跳过发布: 避免每个 token 创建一次无消费者的协程
+                // (ModelToken topic 当前无生产订阅者, 该检查使热路径零开销)
+                if (false
+                    == bus.hasSubscribers<agentxx::events::EventModelToken>(
+                        agentxx::events::Topic::ModelToken
+                    )) {
+                    break;
+                }
                 asio::co_spawn(
                     bus.executor(),
                     [busPtr, agentName, threadId, token = std::move(token), kind = std::move(kind)](
@@ -88,6 +96,13 @@ neograph::graph::GraphStreamCallback EventBridge::make(
             case T::ERROR: {
                 auto msg
                     = event.data.is_string() ? event.data.get<std::string>() : event.data.dump();
+                // 无订阅者时跳过发布 (与 LLM_TOKEN 一致, 避免无效协程创建)
+                if (false
+                    == bus.hasSubscribers<agentxx::events::EventError>(
+                        agentxx::events::Topic::Error
+                    )) {
+                    break;
+                }
                 asio::co_spawn(
                     bus.executor(),
                     [busPtr, agentName, threadId, msg = std::move(msg), where = event.node_name](

@@ -95,6 +95,13 @@ public:
         return true;
     }
 
+    /// 当前是否有订阅者
+    /// - 供高频发布方 (如 EventBridge 每 token 一次) 在 co_spawn/构造事件前跳过空流,
+    ///   避免无消费者的协程创建与事件构造开销
+    bool hasListeners() const noexcept {
+        return !listeners_.empty();
+    }
+
     /// 发布事件: 顺序派发到每个订阅者
     /// - 单 io_context 协作式调度, 顺序派发在每个 co_await 挂起点让出,
     ///   足够公平且语义清晰; 真并发由 RequestResponseStream 的 co_spawn 承担
@@ -429,6 +436,21 @@ public:
     template<typename _DATA_TYPE>
     asio::awaitable<void> publish(std::string_view topic, const _DATA_TYPE& data) {
         co_await get<_DATA_TYPE>(topic).publish(data);
+    }
+
+    /// 指定 topic 的单向事件流当前是否有订阅者
+    /// - 模板类型参数用于校验类型一致 (同 get<>), 类型不匹配视为无订阅者
+    /// - 供高频发布方在构造事件/co_spawn 前查询, 避免空流上的无效开销
+    template<typename _DATA_TYPE>
+    bool hasSubscribers(std::string_view topic) {
+        auto it = streams_.find(std::string{topic});
+        if (it == streams_.end()) {
+            return false;
+        }
+        if (it->second->elementType_ != typeid(_DATA_TYPE)) {
+            return false;
+        }
+        return static_cast<EventStream<_DATA_TYPE>&>(*it->second).hasListeners();
     }
 
     /// 请求-响应

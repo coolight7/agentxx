@@ -324,10 +324,6 @@ asio::awaitable<void>
                 /// llm 压缩
                 auto summary = co_await doSummarizeWithLLM(oldMessages);
 
-                /// 记录压缩前的历史消息
-                auto statePtr = co_await getStateItem(in.ctx.thread_id);
-                statePtr->summarizationContext.oldMessagesHistory.push_back(oldMessages);
-
                 std::vector<neograph::ChatMessage> newMessages{};
                 if (systemCount > 0) {
                     // 系统消息

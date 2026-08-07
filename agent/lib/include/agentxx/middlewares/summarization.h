@@ -2,7 +2,6 @@
 
 #include "agentxx/middlewares/middleware.h"
 #include "asio/io_context.hpp"
-#include <list>
 #include <map>
 #include <memory>
 #include <neograph/neograph.h>
@@ -17,16 +16,8 @@ class SubAgentManagerTool;
 
 namespace middleware {
 
-class _SummarizationContext {
-public:
-
-    std::list<std::vector<neograph::ChatMessage>> oldMessagesHistory{};
-};
-
 class _SummarizationMiddlewareState : public BaseMiddlewareState {
 public:
-
-    _SummarizationContext summarizationContext{};
 
     _SummarizationMiddlewareState() {}
 };
