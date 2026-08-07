@@ -5,12 +5,102 @@
 #include "agentxx/util/log.h"
 #include "agentxx/util/string_util.h"
 #include "fmt/format.h"
+#include <charconv>
 #include <chrono>
 #include <optional>
 #include <string>
 
 namespace agentxx {
 namespace tools {
+
+namespace {
+
+/// 解析 tool 参数中的 `timeout` (秒)
+/// - 支持数字或数字字符串 (部分模型会传字符串)
+/// - 非法/缺失时返回默认值; 返回值 <= 0 表示未指定, 使用默认配置
+int parseTimeoutArg(const neograph::json& args, int defaultSeconds) {
+    if (!args.is_object()) {
+        return defaultSeconds;
+    }
+    const auto v = args["timeout"];
+    if (v.is_number()) {
+        return static_cast<int>(v.get<double>());
+    }
+    if (v.is_string()) {
+        int         out = 0;
+        std::string s   = v.get<std::string>();
+        auto [ptr, ec]  = std::from_chars(s.data(), s.data() + s.size(), out);
+        if (ec == std::errc{}) {
+            return out;
+        }
+    }
+    return defaultSeconds;
+}
+
+/// 解析 tool 参数中的 `header` 参数为 HTTP 请求头, 支持三种格式:
+/// - JSON 对象: {"User-Agent": "xx", "X-Api-Key": "v"} (非字符串值转为文本)
+/// - JSON 字符串数组: ["User-Agent: xx", "X-Api-Key: v"]
+/// - JSON 字符串: "User-Agent: xx" (多行时按行解析 "Name: value")
+agentxx::util::HeaderMap parseHeaderArg(const neograph::json& args) {
+    agentxx::util::HeaderMap headers;
+    if (!args.is_object()) {
+        return headers;
+    }
+    const auto headerVal = args["header"];
+
+    // 解析单行 "Name: value"
+    auto addHeaderLine = [&headers](std::string line) {
+        line = agentxx::util::removeBetweenSpace(line);
+        if (line.empty()) {
+            return;
+        }
+        const auto pos = line.find(':');
+        if (pos == std::string::npos) {
+            return;
+        }
+        auto name = agentxx::util::removeBetweenSpace(line.substr(0, pos));
+        if (name.empty()) {
+            return;
+        }
+        auto value = agentxx::util::removeBetweenSpace(line.substr(pos + 1));
+        headers.set(name, value);
+    };
+
+    if (headerVal.is_object()) {
+        for (const auto& [k, v] : headerVal.items()) {
+            if (v.is_string()) {
+                headers.set(k, v.get<std::string>());
+            } else if (!v.is_null()) {
+                headers.set(k, v.dump());
+            }
+        }
+    } else if (headerVal.is_array()) {
+        for (const auto& item : headerVal) {
+            if (item.is_string()) {
+                addHeaderLine(item.get<std::string>());
+            }
+        }
+    } else if (headerVal.is_string()) {
+        // 按行解析, 兼容 "\n" 与 "\r\n"
+        const std::string str = headerVal.get<std::string>();
+        size_t            pos = 0;
+        while (pos <= str.size()) {
+            const size_t     nl = str.find('\n', pos);
+            std::string_view line;
+            if (nl == std::string::npos) {
+                line = std::string_view{str}.substr(pos);
+                pos  = str.size() + 1;
+            } else {
+                line = std::string_view{str}.substr(pos, nl - pos);
+                pos  = nl + 1;
+            }
+            addHeaderLine(std::string{line});
+        }
+    }
+    return headers;
+}
+
+} // namespace
 
 WebSearchTool::WebSearchTool(
     std::string_view                            in_searchApiUrl,
@@ -38,7 +128,21 @@ neograph::ChatTool WebSearchTool::get_definition() const {
                         {"type", "string"},
                         {"description", prompt.getArg("query")},
                     },
-                }},
+                },
+                 {
+                     "timeout",
+                     {
+                         {"type", "number"},
+                         {"description", prompt.getArg("timeout")},
+                     },
+                 },
+                 {
+                     "header",
+                     {
+                         {"type", "object"},
+                         {"description", prompt.getArg("header")},
+                     },
+                 }},
             }, {"required", neograph::json::array({"query"})},
                        },
     };
@@ -52,13 +156,34 @@ asio::awaitable<std::string> WebSearchTool::execute_async(const neograph::json& 
     auto search_url
         = fmt::format(fmt::runtime(searchApiUrl), agentxx::util::HttpClient::urlEncode(query));
 
+    // 统一的 timeout / header 参数: 支持自定义请求头与请求超时
+    const auto headers = parseHeaderArg(arguments);
+    const int  timeout = parseTimeoutArg(arguments, 15);
+    auto       config  = agentxx::util::HttpClient::RequestConfig{};
+    if (timeout > 0) {
+        config.readChunkTimeout = std::chrono::seconds{timeout};
+    }
+
     std::optional<std::string> out_resp_err;
     if (convertHtml2markdown) {
-        auto resp = co_await agentxx::util::HttpClient::getAsync(
-            search_url,
-            {},
-            agentxx::util::HttpClient::RequestConfig{.readChunkTimeout = std::chrono::seconds{15}}
-        );
+        // 转换 HTML 结果为 Markdown
+        auto resp    = co_await agentxx::util::HttpClient::fetchMarkdown(search_url, headers, config);
+        out_resp_err = resp.error_or("unknown");
+        if (resp.has_value()) {
+            auto& data = resp.value();
+            if (data.empty()) {
+                co_return R"({"error": "Empty search result."})";
+            }
+            const size_t maxLength = 8000;
+            if (data.size() > maxLength) {
+                data.resize(maxLength);
+                data += "\n\n[Too long, truncated]";
+            }
+            co_return data;
+        }
+    } else {
+        // 返回原始响应体
+        auto resp    = co_await agentxx::util::HttpClient::getAsync(search_url, headers, config);
         out_resp_err = resp.error_or("unknown");
         if (resp.has_value()) {
             auto& respVal = resp.value();
@@ -74,21 +199,6 @@ asio::awaitable<std::string> WebSearchTool::execute_async(const neograph::json& 
                 }
                 co_return data;
             }
-        }
-    } else {
-        auto resp    = co_await agentxx::util::HttpClient::fetchMarkdown(search_url);
-        out_resp_err = resp.error_or("unknown");
-        if (resp.has_value()) {
-            auto& data = resp.value();
-            if (data.empty()) {
-                co_return R"({"error": "Empty search result."})";
-            }
-            const size_t maxLength = 8000;
-            if (data.size() > maxLength) {
-                data.resize(maxLength);
-                data += "\n\n[Too long, truncated]";
-            }
-            co_return data;
         }
     }
     throw std::runtime_error(out_resp_err.value_or("[unknown]"));
@@ -121,6 +231,13 @@ neograph::ChatTool WebFetchUrlTool::get_definition() const {
                          {"type", "number"},
                          {"description", prompt.getArg("timeout")},
                      },
+                 },
+                 {
+                     "header",
+                     {
+                         {"type", "object"},
+                         {"description", prompt.getArg("header")},
+                     },
                  }},
             }, {"required", neograph::json::array({"url"})},
                        },
@@ -132,13 +249,16 @@ asio::awaitable<std::string> WebFetchUrlTool::execute_async(const neograph::json
     if (url.empty()) {
         co_return R"({"error":"Arg `url` is empty"})";
     }
-    int timeout = int(arguments.value<double>("timeout", 30.0));
 
-    auto resp = co_await agentxx::util::HttpClient::getAsync(
-        url,
-        {},
-        agentxx::util::HttpClient::RequestConfig{.readChunkTimeout = std::chrono::seconds(timeout)}
-    );
+    // 统一的 timeout / header 参数: 支持自定义请求头与请求超时
+    const auto headers = parseHeaderArg(arguments);
+    const int  timeout = parseTimeoutArg(arguments, 30);
+    auto       config  = agentxx::util::HttpClient::RequestConfig{};
+    if (timeout > 0) {
+        config.readChunkTimeout = std::chrono::seconds{timeout};
+    }
+
+    auto resp = co_await agentxx::util::HttpClient::getAsync(url, headers, config);
     if (resp.has_value()) {
         if (false == agentxx::util::HttpClient::respIsSucc(resp.value())) {
             co_return fmt::format(
@@ -182,7 +302,21 @@ neograph::ChatTool WebFetchUrlMarkdownTool::get_definition() const {
                         {"type", "string"},
                         {"description", prompt.getArg("url")},
                     },
-                }},
+                },
+                 {
+                     "timeout",
+                     {
+                         {"type", "number"},
+                         {"description", prompt.getArg("timeout")},
+                     },
+                 },
+                 {
+                     "header",
+                     {
+                         {"type", "object"},
+                         {"description", prompt.getArg("header")},
+                     },
+                 }},
             }, {"required", neograph::json::array({"url"})},
                        },
     };
@@ -195,7 +329,15 @@ asio::awaitable<std::string> WebFetchUrlMarkdownTool::execute_async(const neogra
         co_return R"({"error":"Arg `url` is empty"})";
     }
 
-    auto resp = co_await agentxx::util::HttpClient::fetchMarkdown(url);
+    // 统一的 timeout / header 参数: 支持自定义请求头与请求超时
+    const auto headers = parseHeaderArg(arguments);
+    const int  timeout = parseTimeoutArg(arguments, 15);
+    auto       config  = agentxx::util::HttpClient::RequestConfig{};
+    if (timeout > 0) {
+        config.readChunkTimeout = std::chrono::seconds{timeout};
+    }
+
+    auto resp = co_await agentxx::util::HttpClient::fetchMarkdown(url, headers, config);
     if (resp.has_value()) {
         auto& data = resp.value();
         if (data.empty()) {
@@ -212,12 +354,11 @@ asio::awaitable<std::string> WebFetchUrlMarkdownTool::execute_async(const neogra
 }
 
 ModelWebSearchTool::ModelWebSearchTool(
-    const agentxx::agent::ModelConfig&          modelCfg,
+    const agentxx::agent::ModelConfig&          in_modelCfg,
     std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
 ) :
-    XXToolBase("web_search", in_agentContext, true, true) {
-    provider = agentxx::server::OpenAIProvider::create(modelCfg);
-}
+    XXToolBase("web_search", in_agentContext, true, true),
+    modelCfg(in_modelCfg) {}
 
 neograph::ChatTool ModelWebSearchTool::get_definition() const {
     auto        agentPtr = agentContext.lock();
@@ -236,7 +377,21 @@ neograph::ChatTool ModelWebSearchTool::get_definition() const {
                         {"type", "string"},
                         {"description", prompt.getArg("query")},
                     },
-                }},
+                },
+                 {
+                     "timeout",
+                     {
+                         {"type", "number"},
+                         {"description", prompt.getArg("timeout")},
+                     },
+                 },
+                 {
+                     "header",
+                     {
+                         {"type", "object"},
+                         {"description", prompt.getArg("header")},
+                     },
+                 }},
             }, {"required", neograph::json::array({"query"})},
                        },
     };
@@ -247,6 +402,23 @@ asio::awaitable<std::string> ModelWebSearchTool::execute_async(const neograph::j
     if (query.empty()) {
         co_return R"({"error":"Arg `query` is empty"})";
     }
+
+    // 统一的 timeout / header 参数: 复制一份模型配置并应用覆盖 (超时 + 自定义请求头)
+    auto        cfg     = modelCfg;
+    const auto  headers = parseHeaderArg(arguments);
+    const int   timeout = parseTimeoutArg(arguments, 60);
+    if (!headers.empty()) {
+        for (const auto& [k, v] : headers.data) {
+            if (!v.empty()) {
+                cfg.extraHeaders[k] = v[0];
+            }
+        }
+    }
+    if (timeout > 0) {
+        cfg.readChunkTimeoutSeconds = timeout;
+    }
+    // 每次执行创建独立的 provider, 避免覆盖配置在多次调用间相互影响
+    auto provider = agentxx::server::OpenAIProvider::create(cfg);
 
     // 构造消息，请求模型进行网络搜索
     neograph::CompletionParams params;
