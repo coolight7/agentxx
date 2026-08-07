@@ -39,6 +39,7 @@
 #include "test_string_util.h"
 #include "test_subagent_bus.h"
 #include "test_text_selection_monitor.h"
+#include "test_toolcall_args.h"
 #ifdef AGENTXX_BUILD_CLIENT
 #include "test_tui_input.h"
 #include "test_tui_settings.h"
@@ -115,6 +116,7 @@ int main(int argn, char** argv) {
     runSync("misc_fixes", agentxx::test::testMiscFixes);
     runSync("aho_corasick", agentxx::test::testAhoCorasick);
     runSync("util_misc", agentxx::test::testUtilMisc);
+    runSync("toolcall_args", agentxx::test::testToolcallArgs);
 #ifdef AGENTXX_BUILD_CLIENT
     runSync("tui_settings", agentxx::test::testTuiSettings);
     runSync("tui_input", agentxx::test::testTuiInput);

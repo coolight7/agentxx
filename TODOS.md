@@ -1,6 +1,7 @@
 # TODO
 - tui 特化各种 toolcall 渲染， json 格式化
-- 状态图渲染
+- Mermaid状态图渲染
+- provider 支持图片音视频
 - node 可支持插件化加载动态库 + graph json 定义
 - BaseAgent 增加支持 usage 统计
 - 优化各种tool的效果，贴近命令行

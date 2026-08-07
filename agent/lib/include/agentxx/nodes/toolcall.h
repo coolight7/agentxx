@@ -57,6 +57,17 @@ public:
         const std::shared_ptr<neograph::graph::CancelToken>& cancelToken
     ) const;
 
+    /// 根据 tool 的参数 JSON Schema 自动修正参数类型兼容性, 尽量让 arg 类型匹配参数需求:
+    /// - string -> 字符串数组: 参数声明为数组 (字符串数组) 而传入单个字符串时, 包装为 `[str]`
+    /// - string -> number/integer: 参数声明为数值而传入字符串时, 若字符串可完整解析为数值则转换
+    ///   (integer 仅接受整数写法; number 支持小数/指数; 前导 '+', 首尾空白会被容忍)
+    /// - number/integer -> string: 参数声明为字符串而传入数值时, 转为十进制字符串
+    /// - bool -> string / string("true"/"false") -> boolean: 布尔与字符串互相转换
+    /// - [单字符串数组] -> string: 参数声明为字符串而传入单元素字符串数组时, 解包为字符串
+    /// - 仅当目标类型不包含 arg 当前类型时转换; 无法解析或类型不明确时保持原样
+    /// @return 是否发生了参数转换
+    static bool autoFixArgsType(const neograph::ChatTool& def, neograph::json& args);
+
     asio::awaitable<void> baseRun(
         std::vector<std::shared_ptr<agentxx::middleware::BaseMiddlewareHandleInterface>>& handles,
         neograph::graph::NodeInput&                                                       in,
