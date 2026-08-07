@@ -3,7 +3,6 @@
 - node 可支持插件化加载动态库 + graph json 定义
 - BaseAgent 增加支持 usage 统计
 - 优化各种tool的效果，贴近命令行
-- ctrl+c 结束时卡很久
 - 会话独立日志
 - eventBus 改为tree，命名空间使用 axx/bxx/cc
 - 内置tool增加命名空间

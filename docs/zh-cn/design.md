@@ -142,6 +142,12 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
   - 主题切换
   - 自动滚动吸附底部 (Scrollable 组件)
 - **TUI 渲染模块化**: 将消息列表、侧边栏、浮层、编辑工具渲染拆分到独立文件
+- **LazyScrollable (Flutter ListView.builder 风格)**: 消息列表采用懒构建渲染架构 ——
+  通过 itemCount/itemKey/estimateHeight/buildItem 回调描述列表，仅构建与视口相交的
+  可见子项并局部布局/绘制；已构建子项按 LRU 有界缓存 (条数 + 源字节双预算)，
+  窗口外旧消息缓存被淘汰，内存占用与对话长度解耦；未进入视口的子项使用估算高度，
+  进入视口后实测修正。失效 key 采用消息指针 + 廉价 O(1) 特征 (内容变化必然伴随
+  指针变化，见 TUISharedState::mutableMessage)，避免对全部消息文本逐帧哈希
 - **TUILogSink**: XX_LOG 日志输出接入 TUI 右侧日志面板
 - **CLI 模式**: 基于 stdin/stdout 的简洁命令行交互
 
@@ -846,7 +852,8 @@ agent/
 │   │   │   │   └── stdin_reader.h # 异步 stdin 读取器
 │   │   │   └── tui/
 │   │   │       ├── agent_tui.h   # TUIClientAgentIO (FTXUI 终端 UI, 接收/显示/排队/权限/日志)
-│   │   │       ├── scrollable.h  # Scrollable (可复用的自动滚动容器组件)
+│   │   │       ├── scrollable.h  # Scrollable (全量构建的可滚动容器, 侧边栏等短列表用)
+│   │   │       ├── lazy_scrollable.h # LazyScrollable (懒构建+LRU有界缓存+视口局部渲染)
 │   │   │       ├── tui_theme.h   # TUI 主题配色
 │   │   │       ├── framework/    # TUI 框架层
 │   │   │       │   ├── tui_state.h       # TUI 状态聚合 (消息/侧边栏/排队输入等)

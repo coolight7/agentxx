@@ -24,7 +24,7 @@
 - 数据安全; Agentxx 不会上传你的数据，如果使用局域网内的 LLM Api Server，完全可以实现全程断网运行; Agentxx 无法确认 LLM Api、MCP、Skill 的数据安全，如果导入需要自行确认
 - 跨系统支持; 优化 windows 兼容，可在 WSL 中直接执行 windows 命令、打开 windows 程序、自动转换文件路径
 - 丰富的 toolcall、内置实现 codegraph 等效果显著的功能
-- UI与Agent可分离，支持 TUI、cli、接入GUI、Websocket API，支持单进程、多进程分别启动 UI 和 Agent Websocket Server服务
+- UI与Agent可分离，支持 TUI、cli、接入GUI、Websocket API、动态库/静态库嵌入App，支持单进程、多进程分别启动 UI 和 Agent Websocket Server服务
 - 中断、错误自动处理: 长时间稳定运行、网络重试、动态超时限制、消息上下文角色顺序检查和修正、自动检查和修正字符编码
 
 ## 兼容性
@@ -65,7 +65,6 @@
     - ✅返回值自动转换字符编码到 utf8
     - ✅拦截输出，超过限制长度时自动压缩、截取摘要存储到 share_store
     - ⬜支持依托`事件流`实现异步获取结果、分块获取结果
-    - ⬜长时间运行时自动警告，并转由`事件流`异步获取结果
     - ✅filesystem (支持 `同步`/`asio io_uring/IOCP 协程异步` 文件读写、超时限制)
         - ls (file/dir/recursive-dir/limit)
         - read_text (full / offset-limit)
@@ -148,7 +147,7 @@
     - 将部分重要的长消息内容暂存到 `share_store`，而不压缩，模型需要时可以提取
     - LLM 总结压缩
     - 保留最近消息
-- ⬜**Memory**
+- ⬜**Memory记忆**
     - ✅自定义加载 Memory 文件
     - 持久记忆
     - 总结共享记忆
