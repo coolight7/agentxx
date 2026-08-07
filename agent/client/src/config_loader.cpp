@@ -275,15 +275,6 @@ YamlAppConfig loadYamlConfig(
                     mc.sslVerify = false;
                 }
             }
-            if (node["extract_tool_calls_from_content"]) {
-                mc.extractToolCallsFromContent
-                    = resolveEnvVars(
-                          node["extract_tool_calls_from_content"].as<std::string>("false"),
-                          dotEnvVars,
-                          overrideEnvVars
-                      )
-                      == "true";
-            }
             if (node["model_context_max_token"]) {
                 // 同上: 容错解析, 避免非法配置导致 std::stoull 抛异常崩溃
                 auto val = resolveEnvVars(

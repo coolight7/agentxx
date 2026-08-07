@@ -129,8 +129,7 @@ std::pair<std::string, neograph::json> AnthropicProvider::convertMessages(
             }
             j["content"] = std::move(content_arr);
             arr.push_back(std::move(j));
-        } else if (sendThinking && msg.role == "assistant"
-                   && (!msg.reasoning_content.empty() || hasThinkingBlocks(msg))) {
+        } else if (sendThinking && msg.role == "assistant" && (!msg.reasoning_content.empty() || hasThinkingBlocks(msg))) {
             neograph::json j;
             j["role"]                  = "assistant";
             neograph::json content_arr = neograph::json::array();
@@ -140,6 +139,49 @@ std::pair<std::string, neograph::json> AnthropicProvider::convertMessages(
                     {"type", "text"     },
                     {"text", msg.content}
                 });
+            }
+            j["content"] = std::move(content_arr);
+            arr.push_back(std::move(j));
+        } else if (!msg.image_urls.empty() || !msg.audio_urls.empty() || !msg.video_urls.empty()) {
+            // 多模态消息: text + image/audio/video 块
+            //   - 图片: {"type":"image","source":{base64|url}}
+            //   - 音频: {"type":"audio","source":{"type":"base64",...}} (Anthropic 仅支持 base64)
+            //   - 视频: {"type":"video","source":{base64|url}}
+            // data URL 解析为 base64 源 (自动推导 media_type); HTTP URL 使用 url 源
+            neograph::json j;
+            j["role"]                   = msg.role;
+            neograph::json content_arr  = neograph::json::array();
+            auto           appendSource = [&](const std::string& url, const std::string& kind) {
+                if (auto parsed = neograph::parse_data_url(url)) {
+                    content_arr.push_back({
+                        {"type",   kind            },
+                        {"source",
+                         {{"type", "base64"},
+                          {"media_type", parsed->first},
+                          {"data", parsed->second}}},
+                    });
+                } else {
+                    // HTTP URL 或无法解析的 data URL: 使用 url 源 (Anthropic 图片/视频支持)
+                    content_arr.push_back({
+                        {"type",   kind                           },
+                        {"source", {{"type", "url"}, {"url", url}}},
+                    });
+                }
+            };
+            if (!msg.content.empty()) {
+                content_arr.push_back({
+                    {"type", "text"     },
+                    {"text", msg.content}
+                });
+            }
+            for (const auto& url : msg.image_urls) {
+                appendSource(url, "image");
+            }
+            for (const auto& url : msg.audio_urls) {
+                appendSource(url, "audio");
+            }
+            for (const auto& url : msg.video_urls) {
+                appendSource(url, "video");
             }
             j["content"] = std::move(content_arr);
             arr.push_back(std::move(j));
@@ -353,13 +395,6 @@ asio::awaitable<neograph::ChatCompletion>
 
     auto respJson   = neograph::json::parse(r.body);
     auto completion = parseResponse(respJson);
-    if (config_.extractToolCallsFromContent && completion.message.tool_calls.empty()) {
-        OpenAIProvider::extractToolCalls(
-            completion.message.reasoning_content,
-            completion.message.tool_calls
-        );
-        OpenAIProvider::extractToolCalls(completion.message.content, completion.message.tool_calls);
-    }
     co_return completion;
 }
 
@@ -469,13 +504,6 @@ asio::awaitable<neograph::ChatCompletion> AnthropicProvider::doStream(
             tc.id = fmt::format("call_{}", idx);
         }
         completion.message.tool_calls.push_back(std::move(tc));
-    }
-    if (config_.extractToolCallsFromContent && completion.message.tool_calls.empty()) {
-        OpenAIProvider::extractToolCalls(completion.message.content, completion.message.tool_calls);
-        OpenAIProvider::extractToolCalls(
-            completion.message.reasoning_content,
-            completion.message.tool_calls
-        );
     }
 
     co_return completion;

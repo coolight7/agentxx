@@ -1964,6 +1964,89 @@ void test_convert_messages_thinking_signature_roundtrip() {
     XX_TEST_EXPECT_EQ(blocks[2]["text"].get<std::string>(), "Answer");
 }
 
+/// 多模态消息: 图片/音频/视频附件应转换为 image/audio/video 内容块
+/// - data URL → base64 source (自动推导 media_type)
+/// - HTTP URL → url source
+void test_convert_messages_multimodal() {
+    std::vector<neograph::ChatMessage> msgs = {
+        {.role        = "user",
+         .content     = "看看这个视频",
+         .image_urls  = {"https://example.com/a.png"},
+         .audio_urls  = {"data:audio/wav;base64,UklGRg=="},
+         .video_urls  = {"data:video/mp4;base64,AAAA", "https://example.com/b.mp4"}},
+    };
+    auto [system, arr] = server::AnthropicProvider::convertMessages(msgs);
+    XX_TEST_EXPECT_TRUE(system.empty());
+    XX_TEST_EXPECT_EQ(arr.size(), (size_t)1);
+    XX_TEST_EXPECT_EQ(arr[0]["role"].get<std::string>(), "user");
+    XX_TEST_EXPECT_TRUE(arr[0]["content"].is_array());
+
+    const auto& blocks = arr[0]["content"];
+    // text + image + audio + video x2
+    XX_TEST_EXPECT_EQ(blocks.size(), (size_t)5);
+
+    // text
+    XX_TEST_EXPECT_EQ(blocks[0]["type"].get<std::string>(), "text");
+    XX_TEST_EXPECT_EQ(blocks[0]["text"].get<std::string>(), "看看这个视频");
+    // image (HTTP URL → url source)
+    XX_TEST_EXPECT_EQ(blocks[1]["type"].get<std::string>(), "image");
+    XX_TEST_EXPECT_EQ(blocks[1]["source"]["type"].get<std::string>(), "url");
+    XX_TEST_EXPECT_EQ(blocks[1]["source"]["url"].get<std::string>(), "https://example.com/a.png");
+    // audio (data URL → base64 source)
+    XX_TEST_EXPECT_EQ(blocks[2]["type"].get<std::string>(), "audio");
+    XX_TEST_EXPECT_EQ(blocks[2]["source"]["type"].get<std::string>(), "base64");
+    XX_TEST_EXPECT_EQ(blocks[2]["source"]["media_type"].get<std::string>(), "audio/wav");
+    XX_TEST_EXPECT_EQ(blocks[2]["source"]["data"].get<std::string>(), "UklGRg==");
+    // video (data URL → base64 source)
+    XX_TEST_EXPECT_EQ(blocks[3]["type"].get<std::string>(), "video");
+    XX_TEST_EXPECT_EQ(blocks[3]["source"]["type"].get<std::string>(), "base64");
+    XX_TEST_EXPECT_EQ(blocks[3]["source"]["media_type"].get<std::string>(), "video/mp4");
+    XX_TEST_EXPECT_EQ(blocks[3]["source"]["data"].get<std::string>(), "AAAA");
+    // video (HTTP URL → url source)
+    XX_TEST_EXPECT_EQ(blocks[4]["type"].get<std::string>(), "video");
+    XX_TEST_EXPECT_EQ(blocks[4]["source"]["type"].get<std::string>(), "url");
+    XX_TEST_EXPECT_EQ(blocks[4]["source"]["url"].get<std::string>(), "https://example.com/b.mp4");
+}
+
+/// 多模态消息: 无文本时不应产生 text 块
+void test_convert_messages_multimodal_no_text() {
+    std::vector<neograph::ChatMessage> msgs = {
+        {.role       = "user",
+         .audio_urls = {"data:audio/mpeg;base64,SUQzBAAAAA=="}},
+    };
+    auto [system, arr] = server::AnthropicProvider::convertMessages(msgs);
+    const auto& blocks = arr[0]["content"];
+    XX_TEST_EXPECT_EQ(blocks.size(), (size_t)1);
+    XX_TEST_EXPECT_EQ(blocks[0]["type"].get<std::string>(), "audio");
+    XX_TEST_EXPECT_EQ(blocks[0]["source"]["media_type"].get<std::string>(), "audio/mpeg");
+}
+
+/// 多模态消息合并: 相邻同 role 多模态消息的 content 块应正确拼接
+void test_convert_messages_multimodal_merge() {
+    std::vector<neograph::ChatMessage> msgs = {
+        {.role       = "user",
+         .content    = "图1",
+         .image_urls = {"https://example.com/1.png"}},
+        {.role       = "user",
+         .content    = "图2",
+         .image_urls = {"https://example.com/2.png"}},
+    };
+    auto [system, arr] = server::AnthropicProvider::convertMessages(msgs);
+    // 相邻同 role 合并为一条
+    XX_TEST_EXPECT_EQ(arr.size(), (size_t)1);
+    const auto& blocks = arr[0]["content"];
+    XX_TEST_EXPECT_TRUE(blocks.is_array());
+    XX_TEST_EXPECT_EQ(blocks.size(), (size_t)4);
+    XX_TEST_EXPECT_EQ(blocks[0]["type"].get<std::string>(), "text");
+    XX_TEST_EXPECT_EQ(blocks[0]["text"].get<std::string>(), "图1");
+    XX_TEST_EXPECT_EQ(blocks[1]["type"].get<std::string>(), "image");
+    XX_TEST_EXPECT_EQ(blocks[1]["source"]["url"].get<std::string>(), "https://example.com/1.png");
+    XX_TEST_EXPECT_EQ(blocks[2]["type"].get<std::string>(), "text");
+    XX_TEST_EXPECT_EQ(blocks[2]["text"].get<std::string>(), "图2");
+    XX_TEST_EXPECT_EQ(blocks[3]["type"].get<std::string>(), "image");
+    XX_TEST_EXPECT_EQ(blocks[3]["source"]["url"].get<std::string>(), "https://example.com/2.png");
+}
+
 /// 非流式响应解析: 带 signature 的 thinking 块与 redacted_thinking 块应存入 extra 以便回传
 void test_parse_response_thinking_signature() {
     auto resp       = neograph::json::parse(R"({
@@ -2134,6 +2217,9 @@ asio::awaitable<TestResult> run_anthropic_provider_tests() {
     test_anthropic_sse_parsing_edge_cases();
     test_convert_messages_merges_consecutive_roles();
     test_convert_messages_thinking_signature_roundtrip();
+    test_convert_messages_multimodal();
+    test_convert_messages_multimodal_no_text();
+    test_convert_messages_multimodal_merge();
     test_parse_response_thinking_signature();
     test_anthropic_sse_signature_capture();
     test_anthropic_sse_crlf_separator();

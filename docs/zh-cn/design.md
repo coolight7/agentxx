@@ -231,7 +231,6 @@ models:
     api_path: ""                # 自定义 API 路径 (如 "/v1/chat/completions"); 空则用默认
     send_thinking: false        # 是否把 thinking/reasoning_content 随上下文发送给模型
     ssl_verify: null            # true/false 显式控制 TLS 证书验证; 省略用默认策略
-    extract_tool_calls_from_content: false  # 从 content 文本兜底提取 tool call
     connect_timeout: 16
     read_chunk_timeout: 24
     model_context_max_token: 128000

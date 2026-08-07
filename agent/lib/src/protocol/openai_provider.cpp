@@ -286,15 +286,19 @@ neograph::json OpenAIProvider::buildResponsesBody(const neograph::CompletionPara
     neograph::json body;
     body["model"] = params.model.empty() ? config_.modelName : params.model;
 
-    // Codex/Responses API 默认行为: 不落盘 + 高推理强度,
-    // 可通过 extra_api_config / params.extra_fields 覆盖
-    body["store"]     = false;
-    body["reasoning"] = neograph::json{
-        {"effort", "high"}
-    };
+    // Codex/Responses API 默认行为: 不落盘
+    // (reasoning 思考配置不再硬编码, 通过 extra_config / params.extra_fields 的
+    //  "reasoning" 字段控制: {"effort": "none|minimal|low|medium|high|xhigh",
+    //   "summary": "detailed|auto|concise"})
+    body["store"] = false;
+
+    // 需要回传/展示思考内容时, 请求 reasoning 摘要 (流式事件
+    // response.reasoning_summary_text.delta / 非流式 output 的 reasoning_summary item)
+    if (config_.sendThinking) {
+        body["include"] = neograph::json::array({"reasoning.summary"});
+    }
 
     // system 消息 → instructions; 其余 → input 数组 (含 function_call / function_call_output)
-    // Responses API 不支持回传 reasoning_content, 因此不携带历史推理内容
     std::string instructions;
     auto        input = neograph::json::array();
     for (const auto& msg : params.messages) {
@@ -308,7 +312,7 @@ neograph::json OpenAIProvider::buildResponsesBody(const neograph::CompletionPara
         if (msg.role == "user") {
             neograph::json item;
             item["role"] = "user";
-            if (!msg.image_urls.empty()) {
+            if (!msg.image_urls.empty() || !msg.audio_urls.empty() || !msg.video_urls.empty()) {
                 neograph::json parts = neograph::json::array();
                 if (!msg.content.empty()) {
                     parts.push_back({
@@ -317,10 +321,40 @@ neograph::json OpenAIProvider::buildResponsesBody(const neograph::CompletionPara
                     });
                 }
                 for (const auto& url : msg.image_urls) {
+                    // Responses API 的 input_image: image_url 为字符串 + 可选 detail
                     parts.push_back({
                         {"type",      "input_image"},
-                        {"image_url", url          }
+                        {"image_url", url          },
+                        {"detail",    "auto"       }
                     });
+                }
+                // Responses API 的 input_audio 只接受 base64 data + format,
+                // data URL 解析后转换; HTTP URL 以 url 扩展字段透传 (兼容网关)
+                for (const auto& url : msg.audio_urls) {
+                    if (auto parsed = neograph::parse_data_url(url)) {
+                        parts.push_back({
+                            {"type",        "input_audio"                                 },
+                            {"input_audio",
+                             {{"data", parsed->second},
+                              {"format", neograph::media_format_from_mime(parsed->first)}}},
+                        });
+                    } else {
+                        parts.push_back({
+                            {"type",        "input_audio" },
+                            {"input_audio", {{"url", url}}},
+                        });
+                    }
+                }
+                // Responses API 的 input_video: video_url 接受 HTTP URL 或 data URL,
+                // format 由 data URL 的 media type 推导; HTTP URL 无 mime 信息时省略 format
+                for (const auto& url : msg.video_urls) {
+                    neograph::json video = neograph::json::object();
+                    video["type"]        = "input_video";
+                    video["video_url"]   = url;
+                    if (auto parsed = neograph::parse_data_url(url)) {
+                        video["format"] = neograph::media_format_from_mime(parsed->first);
+                    }
+                    parts.push_back(std::move(video));
                 }
                 item["content"] = std::move(parts);
             } else {
@@ -338,6 +372,18 @@ neograph::json OpenAIProvider::buildResponsesBody(const neograph::CompletionPara
                 item["role"]    = "assistant";
                 item["content"] = std::move(content);
                 input.push_back(std::move(item));
+            }
+            // 回传历史 thinking 内容 (仅 sendThinking 开启时):
+            // Responses API 的 reasoning item 采用 summary 形式,
+            // 缺失原始 id 时网关按摘要处理; 不回传完整 reasoning 文本
+            if (config_.sendThinking && !msg.reasoning_content.empty()) {
+                input.push_back({
+                    {"type",    "reasoning"},
+                    {"summary",
+                     neograph::json::array(
+                         {{{"type", "summary_text"}, {"text", msg.reasoning_content}}}
+                     )                     },
+                });
             }
             for (const auto& tc : msg.tool_calls) {
                 input.push_back({
@@ -486,10 +532,6 @@ asio::awaitable<neograph::ChatCompletion>
 
     if (completion.message.reasoning_content.empty()) {
         extractThinkTags(completion.message.content, completion.message.reasoning_content);
-    }
-    if (config_.extractToolCallsFromContent && completion.message.tool_calls.empty()) {
-        extractToolCalls(completion.message.reasoning_content, completion.message.tool_calls);
-        extractToolCalls(completion.message.content, completion.message.tool_calls);
     }
 
     if (completion.message.reasoning_content.empty()) {
@@ -659,10 +701,6 @@ asio::awaitable<neograph::ChatCompletion>
     if (completion.message.reasoning_content.empty()) {
         extractThinkTags(completion.message.content, completion.message.reasoning_content);
     }
-    if (config_.extractToolCallsFromContent && completion.message.tool_calls.empty()) {
-        extractToolCalls(completion.message.reasoning_content, completion.message.tool_calls);
-        extractToolCalls(completion.message.content, completion.message.tool_calls);
-    }
 
     completion.stop_reason = hasToolCall ? "tool_use" : "end_turn";
 
@@ -771,10 +809,6 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStream(
 
     if (fullThinking.empty()) {
         extractThinkTags(fullContent, fullThinking);
-    }
-    if (config_.extractToolCallsFromContent && tcMap.empty()) {
-        extractToolCalls(fullThinking, completion.message.tool_calls);
-        extractToolCalls(fullContent, completion.message.tool_calls);
     }
     completion.message.content           = fullContent;
     completion.message.reasoning_content = fullThinking;
@@ -904,10 +938,6 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStreamResponses(
 
     if (fullThinking.empty()) {
         extractThinkTags(fullContent, fullThinking);
-    }
-    if (config_.extractToolCallsFromContent && tcMap.empty()) {
-        extractToolCalls(fullThinking, completion.message.tool_calls);
-        extractToolCalls(fullContent, completion.message.tool_calls);
     }
     completion.message.content           = fullContent;
     completion.message.reasoning_content = fullThinking;
@@ -1054,6 +1084,16 @@ bool OpenAIProvider::processSseLine(
         }
     } else if (delta.contains("thinking") && delta["thinking"].is_string()) {
         auto token = delta["thinking"].get<std::string>();
+        if (!token.empty()) {
+            fullThinking += token;
+            if (on_chunk) {
+                on_chunk(neograph::ChatStreamChunk{neograph::ChatStreamChunk::TYPE_THINKING, token}
+                );
+            }
+        }
+    } else if (delta.contains("reasoning") && delta["reasoning"].is_string()) {
+        // Vercel AI Gateway / 部分网关使用 delta.reasoning 流式输出推理内容
+        auto token = delta["reasoning"].get<std::string>();
         if (!token.empty()) {
             fullThinking += token;
             if (on_chunk) {

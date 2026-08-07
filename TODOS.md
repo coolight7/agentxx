@@ -1,13 +1,9 @@
 # TODO
 - tui 特化各种 toolcall 渲染， json 格式化
-- Mermaid状态图渲染
-- provider 支持图片音视频
 - node 可支持插件化加载动态库 + graph json 定义
 - BaseAgent 增加支持 usage 统计
-- 优化各种tool的效果，贴近命令行
 - 会话独立日志
 - eventBus 改为tree，命名空间使用 axx/bxx/cc
-- 内置tool增加命名空间
 - agent 发送状态给 tui 插入消息
 
 ## 提示词优化
@@ -19,4 +15,3 @@
 - 软件使用文档说明 skill
 
 ## 问题
-- 请排查一下 tui本地模式启动时（agentxx_cli tui）内存占用会随着对话持续大幅增加的问题，看看是内存泄漏还是什么代码申请的内存太多了

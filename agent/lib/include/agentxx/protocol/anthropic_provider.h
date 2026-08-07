@@ -19,6 +19,7 @@ namespace agentxx {
 namespace server {
 
 /// Anthropic Messages API provider.
+/// 文档 https://vercel.com/docs/ai-gateway/sdks-and-apis/anthropic-messages-api
 /// Supports non-streaming, streaming, tool_use, and extended thinking.
 class AnthropicProvider : public neograph::Provider {
 public:
