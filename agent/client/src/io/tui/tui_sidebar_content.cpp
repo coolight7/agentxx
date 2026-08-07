@@ -1,6 +1,7 @@
 #include "agentxx-client/io/tui/agent_tui.h"
 #include "agentxx-client/io/tui/components/message_list.h"
 #include "agentxx-client/io/tui/components/sidebar.h"
+#include "agentxx-client/io/tui/mermaid_state.h"
 #include "agentxx/util/string_util.h"
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/terminal.hpp"
@@ -8,6 +9,8 @@
 #include <filesystem>
 
 using namespace ftxui;
+
+namespace tui_mermaid = agentxx::client::tui;
 
 namespace {
 
@@ -123,6 +126,39 @@ std::optional<ftxui::Element> TUIClientAgentIO::renderPlanningInfo() {
         title.push_back(text(" Planning...") | color(theme_.hintColor));
     }
     lines.push_back(hbox(std::move(title)));
+
+    // Roadmap 状态图 (Mermaid stateDiagram-v2 → ASCII 分层图)
+    // 按节点 id 的状态后缀着色: phase_N_in_progress/completed/failed/pending
+    const auto roadmap = args.value("roadmap", std::string{});
+    if (!roadmap.empty()) {
+        auto dg = tui_mermaid::parseMermaidStateDiagram(roadmap);
+        if (!dg.nodes.empty()) {
+            int maxW = 0;
+            if (sidebar_) {
+                // 侧边栏内容宽度 ≈ 侧栏宽 - 左右留白(2) - 滚动条 gutter(1) - 余量
+                maxW = std::max(20, sidebar_->width() - 6);
+            }
+            auto colorOf = [this](std::string_view id) -> ftxui::Color {
+                if (id.ends_with("_in_progress")) {
+                    return theme_.thinkingColor;
+                }
+                if (id.ends_with("_completed")) {
+                    return theme_.accentColor;
+                }
+                if (id.ends_with("_failed")) {
+                    return theme_.errorColor;
+                }
+                if (id.ends_with("_pending")) {
+                    return theme_.hintColor;
+                }
+                return ftxui::Color::Default;
+            };
+            lines.push_back(text(" "));
+            lines.push_back(tui_mermaid::renderMermaidStateDiagram(
+                dg, maxW, theme_.normalColor, colorOf
+            ));
+        }
+    }
 
     if (args.contains("todos") && args["todos"].is_array()) {
         for (const auto& td : args["todos"]) {
