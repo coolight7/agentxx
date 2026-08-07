@@ -54,7 +54,7 @@ Command timed out after {} seconds. If this command is expected to take longer a
 ExecuteLinuxCommandTool::ExecuteLinuxCommandTool(
     std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
 ) :
-    XXToolBase("execute_linux_command", in_agentContext, true, false) {}
+    XXToolBase("agentxx_execute_linux_command", in_agentContext, true, false) {}
 
 neograph::ChatTool ExecuteLinuxCommandTool::get_definition() const {
     auto        agentPtr = agentContext.lock();
@@ -223,7 +223,7 @@ asio::awaitable<std::string> ExecuteLinuxCommandTool::execute_async(const neogra
 ExecuteWindowsCommandTool::ExecuteWindowsCommandTool(
     std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
 ) :
-    XXToolBase("execute_windows_command", in_agentContext, true, false) {}
+    XXToolBase("agentxx_execute_windows_command", in_agentContext, true, false) {}
 
 neograph::ChatTool ExecuteWindowsCommandTool::get_definition() const {
     auto        agentPtr = agentContext.lock();
@@ -391,7 +391,7 @@ asio::awaitable<std::string>
 }
 
 ExecutePythonTool::ExecutePythonTool(std::weak_ptr<agentxx::agent::AgentContext> in_agentContext) :
-    XXToolBase("execute_python_command", in_agentContext, true, false) {}
+    XXToolBase("agentxx_execute_python_command", in_agentContext, true, false) {}
 
 neograph::ChatTool ExecutePythonTool::get_definition() const {
     auto        agentPtr = agentContext.lock();
@@ -437,7 +437,7 @@ asio::awaitable<std::string> ExecutePythonTool::execute_async(const neograph::js
 ExecuteJavaScriptTool::ExecuteJavaScriptTool(
     std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
 ) :
-    XXToolBase("execute_javascript_command", in_agentContext, true, false) {}
+    XXToolBase("agentxx_execute_javascript_command", in_agentContext, true, false) {}
 
 neograph::ChatTool ExecuteJavaScriptTool::get_definition() const {
     auto        agentPtr = agentContext.lock();

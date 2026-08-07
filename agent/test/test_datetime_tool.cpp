@@ -17,7 +17,7 @@ asio::awaitable<void>
     test_datetime_get_definition(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::GetCurrentDateTimeTool{agentContext};
     auto def  = tool.get_definition();
-    if (def.name == "get_current_datetime") {
+    if (def.name == "agentxx_get_current_datetime") {
         g_dt_passed++;
         TEST_PASS << "GetCurrentDateTimeTool::get_definition() name correct" << std::endl;
     } else {

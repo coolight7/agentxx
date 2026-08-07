@@ -857,7 +857,7 @@ asio::awaitable<void>
     auto tool      = agentxx::tools::CodeGraphSearchTool{codegraph, agentContext};
 
     auto def = tool.get_definition();
-    if (def.name == "codegraph_search") {
+    if (def.name == "agentxx_codegraph_search") {
         g_cg_passed++;
         TEST_PASS << "CodeGraphSearchTool::get_definition name correct" << std::endl;
     } else {
@@ -874,7 +874,7 @@ asio::awaitable<void>
     auto tool      = agentxx::tools::CodeGraphContextTool{codegraph, agentContext};
 
     auto def = tool.get_definition();
-    if (def.name == "codegraph_context") {
+    if (def.name == "agentxx_codegraph_context") {
         g_cg_passed++;
         TEST_PASS << "CodeGraphContextTool::get_definition name correct" << std::endl;
     } else {
@@ -891,7 +891,7 @@ asio::awaitable<void>
     auto tool      = agentxx::tools::CodeGraphCallersTool{codegraph, agentContext};
 
     auto def = tool.get_definition();
-    if (def.name == "codegraph_callers") {
+    if (def.name == "agentxx_codegraph_callers") {
         g_cg_passed++;
         TEST_PASS << "CodeGraphCallersTool::get_definition name correct" << std::endl;
     } else {
@@ -908,7 +908,7 @@ asio::awaitable<void>
     auto tool      = agentxx::tools::CodeGraphCalleesTool{codegraph, agentContext};
 
     auto def = tool.get_definition();
-    if (def.name == "codegraph_callees") {
+    if (def.name == "agentxx_codegraph_callees") {
         g_cg_passed++;
         TEST_PASS << "CodeGraphCalleesTool::get_definition name correct" << std::endl;
     } else {
@@ -925,7 +925,7 @@ asio::awaitable<void>
     auto tool      = agentxx::tools::CodeGraphImpactTool{codegraph, agentContext};
 
     auto def = tool.get_definition();
-    if (def.name == "codegraph_impact") {
+    if (def.name == "agentxx_codegraph_impact") {
         g_cg_passed++;
         TEST_PASS << "CodeGraphImpactTool::get_definition name correct" << std::endl;
     } else {
@@ -942,7 +942,7 @@ asio::awaitable<void>
     auto tool      = agentxx::tools::CodeGraphStatusTool{codegraph, agentContext};
 
     auto def = tool.get_definition();
-    if (def.name == "codegraph_status") {
+    if (def.name == "agentxx_codegraph_status") {
         g_cg_passed++;
         TEST_PASS << "CodeGraphStatusTool::get_definition name correct" << std::endl;
     } else {
@@ -958,7 +958,7 @@ asio::awaitable<void>
     auto tool      = agentxx::tools::CodeGraphIndexTool{codegraph, agentContext};
 
     auto def = tool.get_definition();
-    if (def.name == "codegraph_index") {
+    if (def.name == "agentxx_codegraph_index") {
         g_cg_passed++;
         TEST_PASS << "CodeGraphIndexTool::get_definition name correct" << std::endl;
     } else {
@@ -974,7 +974,7 @@ asio::awaitable<void>
     auto tool      = agentxx::tools::CodeGraphPathTool{codegraph, agentContext};
 
     auto def = tool.get_definition();
-    if (def.name == "codegraph_path") {
+    if (def.name == "agentxx_codegraph_path") {
         g_cg_passed++;
         TEST_PASS << "CodeGraphPathTool::get_definition name correct" << std::endl;
     } else {

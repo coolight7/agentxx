@@ -38,8 +38,8 @@ If neither tools nor skills are suitable, output `{{"tool": [], "skill": []}}`.
 
 ## Workflow:
 1. Analyze the user's requirements to understand what capabilities are needed
-2. Use `filesystem_glob` or `filesystem_listfile` to search for SKILL.md files in the skill directories
-3. Use `filesystem_read_text_file` to read potentially relevant SKILL.md files (use line_limit=1000)
+2. Use `agentxx_filesystem_glob` or `agentxx_filesystem_list` to search for SKILL.md files in the skill directories
+3. Use `agentxx_filesystem_read_text_file` to read potentially relevant SKILL.md files (use line_limit=1000)
 4. Compare skill content against the user's needs and decide which skills to load
 5. Determine which delay-loadable tools would also help
 6. Output the final JSON with selected tools and skills

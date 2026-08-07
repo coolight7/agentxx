@@ -948,14 +948,14 @@ static asio::awaitable<UICmdResult> uiControlExecuteOne(const neograph::json& cm
 UIControlKeyboardMouseTool::UIControlKeyboardMouseTool(
     std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
 ) :
-    XXToolBase("ui_control_keyboard_mouse", in_agentContext, false, true) {}
+    XXToolBase("agentxx_ui_control_keyboard_mouse", in_agentContext, false, true) {}
 
 neograph::ChatTool UIControlKeyboardMouseTool::get_definition() const {
     auto        agentPtr = agentContext.lock();
-    const auto& prompt   = agentPtr->agentConfig->prompt.toolPrompt["ui_control_keyboard_mouse"];
+    const auto& prompt   = agentPtr->agentConfig->prompt.toolPrompt["agentxx_ui_control_keyboard_mouse"];
 
     return {
-        "ui_control_keyboard_mouse",
+        "agentxx_ui_control_keyboard_mouse",
         prompt.depict,
         {
                  {"type", "object"},
@@ -1107,7 +1107,7 @@ asio::awaitable<std::string>
 
     co_return results.dump();
 #else
-    co_return R"({"error":"ui_control_keyboard_mouse is not available on current system"})";
+    co_return R"({"error":"agentxx_ui_control_keyboard_mouse is not available on current system"})";
 #endif
 }
 

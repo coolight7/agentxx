@@ -18,7 +18,7 @@ asio::awaitable<void>
     test_linux_command_get_definition(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::ExecuteLinuxCommandTool{agentContext};
     auto def  = tool.get_definition();
-    if (def.name == "execute_linux_command") {
+    if (def.name == "agentxx_execute_linux_command") {
         g_cmd_passed++;
         TEST_PASS << "ExecuteLinuxCommandTool::get_definition() name correct" << std::endl;
     } else {
@@ -117,7 +117,7 @@ asio::awaitable<void>
     test_windows_command_get_definition(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::ExecuteWindowsCommandTool{agentContext};
     auto def  = tool.get_definition();
-    if (def.name == "execute_windows_command") {
+    if (def.name == "agentxx_execute_windows_command") {
         std::cout << "[PASS] ExecuteWindowsCommandTool::get_definition() name correct" << std::endl;
     } else {
         std::cout << "[FAIL] ExecuteWindowsCommandTool::get_definition() name incorrect"
@@ -148,7 +148,7 @@ asio::awaitable<void>
     test_python_command_get_definition(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::ExecutePythonTool{agentContext};
     auto def  = tool.get_definition();
-    if (def.name == "execute_python_command") {
+    if (def.name == "agentxx_execute_python_command") {
         g_cmd_passed++;
         TEST_PASS << "ExecutePythonTool::get_definition() name correct" << std::endl;
     } else {
@@ -181,7 +181,7 @@ asio::awaitable<void>
     ) {
     auto tool = agentxx::tools::ExecuteJavaScriptTool{agentContext};
     auto def  = tool.get_definition();
-    if (def.name == "execute_javascript_command") {
+    if (def.name == "agentxx_execute_javascript_command") {
         g_cmd_passed++;
         TEST_PASS << "ExecuteJavaScriptTool::get_definition() name correct" << std::endl;
     } else {
@@ -218,7 +218,7 @@ asio::awaitable<void>
     auto tool = agentxx::tools::ExecuteLinuxCommandTool{agentContext};
     auto def  = tool.get_definition();
 
-    XX_TEST_EXPECT_EQ(def.name, "execute_linux_command");
+    XX_TEST_EXPECT_EQ(def.name, "agentxx_execute_linux_command");
     auto params = def.parameters;
 
     auto props = params["properties"];
@@ -251,7 +251,7 @@ asio::awaitable<void>
     auto tool = agentxx::tools::ExecuteWindowsCommandTool{agentContext};
     auto def  = tool.get_definition();
 
-    XX_TEST_EXPECT_EQ(def.name, "execute_windows_command");
+    XX_TEST_EXPECT_EQ(def.name, "agentxx_execute_windows_command");
     auto props = def.parameters["properties"];
     XX_TEST_EXPECT_TRUE(props.contains("timeout"));
     XX_TEST_EXPECT_EQ(props["timeout"]["type"].get<std::string>(), "integer");
@@ -265,7 +265,7 @@ asio::awaitable<void>
     auto tool = agentxx::tools::ExecutePythonTool{agentContext};
     auto def  = tool.get_definition();
 
-    XX_TEST_EXPECT_EQ(def.name, "execute_python_command");
+    XX_TEST_EXPECT_EQ(def.name, "agentxx_execute_python_command");
     auto props = def.parameters["properties"];
     XX_TEST_EXPECT_TRUE(props.contains("timeout"));
     XX_TEST_EXPECT_EQ(props["timeout"]["type"].get<std::string>(), "integer");
@@ -279,7 +279,7 @@ asio::awaitable<void> test_javascript_get_definition_properties(
     auto tool = agentxx::tools::ExecuteJavaScriptTool{agentContext};
     auto def  = tool.get_definition();
 
-    XX_TEST_EXPECT_EQ(def.name, "execute_javascript_command");
+    XX_TEST_EXPECT_EQ(def.name, "agentxx_execute_javascript_command");
     auto props = def.parameters["properties"];
     XX_TEST_EXPECT_TRUE(props.contains("timeout"));
     XX_TEST_EXPECT_EQ(props["timeout"]["type"].get<std::string>(), "integer");

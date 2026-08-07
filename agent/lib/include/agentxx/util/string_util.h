@@ -275,7 +275,7 @@ using IgnoreCaseSet = std::unordered_set<std::string, IgnoreCaseHash, IgnoreCase
 }
 
 /// 统计文本的行数: '\n' 数量 + 末尾不以 '\n' 结尾的最后一个不完整行
-/// 与 `share_store` 按行分页取值的行划分方式一致 (逐行读取)
+/// 与 `agentxx_share_store` 按行分页取值的行划分方式一致 (逐行读取)
 [[nodiscard]] inline constexpr size_t countLines(std::string_view in_str) {
     if (in_str.empty()) {
         return 0;

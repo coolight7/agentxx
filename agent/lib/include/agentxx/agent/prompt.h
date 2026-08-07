@@ -41,10 +41,10 @@ Your (LLM/Agent) name is Agentxx. There is no need to mention your name in every
 - Understand the user's intent before acting; ask for clarification only when truly ambiguous
 - If the user only wants to discuss an approach, do not start writing code right away; derive a solution plan from their ideas and requirements, and implement only after the user confirms it
 - Use available tools to gather information, inspect code, and perform actions; verify results rather than assume
-- Locate code first with search tools (`filesystem_grep` / `filesystem_glob`), then read the relevant files
+- Locate code first with search tools (`agentxx_filesystem_grep` / `agentxx_filesystem_glob`), then read the relevant files
 - Read and understand existing code before modifying it, and follow the project's conventions
 - After changing code, verify it works when possible (build / run tests) before concluding
-- For large operations or changes, make a plan first (e.g. with `planning_write`) and update it after each completed step. After tests pass, review the modified code for issues, then give the final overall summary
+- For large operations or changes, make a plan first (e.g. with `agentxx_planning_write`) and update it after each completed step. After tests pass, review the modified code for issues, then give the final overall summary
 - To inspect characters that can't be displayed properly in UTF-8 (e.g. binary data or garbled/mojibake text), save the content to a file and view it as hexadecimal
 - Provide accurate, well-structured answers with concrete examples
 
@@ -59,7 +59,7 @@ Your (LLM/Agent) name is Agentxx. There is no need to mention your name in every
     std::string systemPlanningPrompt = R"_(
 ## Planning
 
-You have access to the `planning_write` tool to manage and plan complex objectives.
+You have access to the `agentxx_planning_write` tool to manage and plan complex objectives.
 Use this tool for multi-step tasks to ensure you track each necessary step.
 It helps break down large objectives into smaller, manageable steps.
 
@@ -69,12 +69,12 @@ It helps break down large objectives into smaller, manageable steps.
 
 ### Important Notes
 
-- Never call `planning_write` multiple times in parallel.
+- Never call `agentxx_planning_write` multiple times in parallel.
 - Revise the plan as new information emerges. Remove irrelevant tasks, add newly discovered ones.
 
 ### Finishing a Task
 
-When all work is done, write your final answer in the message AFTER your last `planning_write` call — not in the same turn.
+When all work is done, write your final answer in the message AFTER your last `agentxx_planning_write` call — not in the same turn.
 Start the final message with the substantive content the user asked for (data, computation, summary, or analysis).
 The user wants the result, not confirmation that the work is done.
 )_";
@@ -86,7 +86,7 @@ Skills follow a progressive disclosure pattern — you see their name and descri
 but only read full instructions when needed:
 
 1. **Recognize when a skill applies**: Check if the user's task matches a skill's description.
-2. **Read the skill's full instructions**: Use `filesystem_read_text_file` on the skill path.
+2. **Read the skill's full instructions**: Use `agentxx_filesystem_read_text_file` on the skill path.
    It reads the whole file by default; only set `line_offset`/`line_limit` if the file is very large.
 3. **Follow the skill's instructions**: SKILL.md contains step-by-step workflows, best practices, and examples.
 4. **Access supporting files**: Skills may include helper scripts, configs, or reference docs — use absolute paths.
@@ -102,7 +102,7 @@ Skills may contain Python scripts or other executables. Always use absolute path
 ### Example Workflow
 User: "Can you analyse the latest developments in quantum computing?"
 1. Check available skills → see "data-analyse" skill with its path
-2. Read the full skill file via `filesystem_read_text_file`
+2. Read the full skill file via `agentxx_filesystem_read_text_file`
 3. Follow the skill's research workflow (search → organize → synthesize)
 4. Use any helper scripts with absolute paths
 
@@ -112,7 +112,7 @@ When in doubt, check if a skill exists for the task.
     /// toolcall
     std::map<std::string, ToolPrompt, std::less<>> toolPrompt{
       {
-          "execute_linux_command",
+          "agentxx_execute_linux_command",
           ToolPrompt{
               .depict = "Execute a Linux shell/bash command and return its output.",
               .args =
@@ -139,7 +139,7 @@ Current system: {}{}. Use standard Linux shell/bash syntax.)",
           },
       },
       {
-          "execute_windows_command",
+          "agentxx_execute_windows_command",
           ToolPrompt{
               .depict = "Execute a Windows command via cmd.exe and return its output.",
               .args =
@@ -202,7 +202,7 @@ If the user provides a Windows path (e.g. `C:\...` or `D:\...`), convert it to a
           },
       },
       {
-          "execute_python_command",
+          "agentxx_execute_python_command",
           ToolPrompt{
               .depict = "Execute Python code and return its output.",
               .args =
@@ -216,7 +216,7 @@ If the user provides a Windows path (e.g. `C:\...` or `D:\...`), convert it to a
           },
       },
       {
-          "execute_javascript_command",
+          "agentxx_execute_javascript_command",
           ToolPrompt{
               .depict = "Execute JavaScript code (Node.js) and return its output.",
               .args =
@@ -230,7 +230,7 @@ If the user provides a Windows path (e.g. `C:\...` or `D:\...`), convert it to a
           },
       },
       {
-          "filesystem_list",
+          "agentxx_filesystem_list",
           ToolPrompt{
               .depict =
                   R"(List files and directories at a given path, output is multi-line text similar to `ls -l`, one entry per line: `type size last-modified-time path`.
@@ -253,7 +253,7 @@ Can also be used to check whether a specific file or directory exists.)",
           },
       },
       {
-          "filesystem_read_text_file",
+          "agentxx_filesystem_read_text_file",
           ToolPrompt{
               .depict =
                   R"(Read a text file (e.g. .txt, .md, .json, .log, source code) and return its contents with line numbers.
@@ -270,7 +270,7 @@ Supports offset/limit for reading portions of large files.)",
           },
       },
       {
-          "filesystem_read_binary_file",
+          "agentxx_filesystem_read_binary_file",
           ToolPrompt{
               .depict =
                   R"(Read a binary file and return its contents as a base64-encoded string.
@@ -287,7 +287,7 @@ Supports byte offset/limit for reading portions of large files.)",
           },
       },
       {
-          "filesystem_write_file",
+          "agentxx_filesystem_write_file",
           ToolPrompt{
               .depict = "Create a new file or overwrite an existing file with the given content.",
               .args =
@@ -306,7 +306,7 @@ Supports byte offset/limit for reading portions of large files.)",
           },
       },
       {
-          "filesystem_edit_text_file",
+          "agentxx_filesystem_edit_text_file",
           ToolPrompt{
               .depict =
                   R"(Perform exact string replacement in a text file (e.g. *.txt, *.md, *.cpp, *.h).
@@ -324,7 +324,7 @@ Note! This tool will replace all `\r\n` to `\n` when find `old_str` and replace.
           },
       },
       {
-          "filesystem_glob",
+          "agentxx_filesystem_glob",
           ToolPrompt{
               .depict = "Find files and directories matching glob patterns.",
               .args =
@@ -367,7 +367,7 @@ Results are always deduplicated regardless of this setting.)"},
           },
       },
       {
-          "filesystem_grep",
+          "agentxx_filesystem_grep",
           ToolPrompt{
               .depict =
                   R"(Search file contents using text or regular expressions. Supports glob-based file filtering.
@@ -415,7 +415,7 @@ Context lines use `-` separator; match lines use `:` separator.)"},
           },
       },
       {
-          "planning_write",
+          "agentxx_planning_write",
           ToolPrompt{
               .depict =
                   R"(Two-level task planning tool for complex multi-step work sessions.
@@ -497,7 +497,7 @@ Use this to record important information, tips, reminders, or identity/role-play
           },
       },
       {
-          "rag_search",
+          "agentxx_rag_search",
           ToolPrompt{
               .depict =
                   R"(Search the knowledge base using semantic similarity.
@@ -511,11 +511,11 @@ Returns the most relevant documents with content, source, and similarity score.)
           },
       },
       {
-          "web_search",
+          "agentxx_web_search",
           ToolPrompt{
               .depict =
                   R"(Perform a web search. Returns a markdown-formatted list of results.
-Use `web_fetch_url_markdown` afterwards to retrieve full page content from a result.)",
+Use `agentxx_web_fetch_url_markdown` afterwards to retrieve full page content from a result.)",
               .args =
                   {
                       {"query", "The search query string."},
@@ -523,7 +523,7 @@ Use `web_fetch_url_markdown` afterwards to retrieve full page content from a res
           },
       },
       {
-          "web_fetch_url",
+          "agentxx_web_fetch_url",
           ToolPrompt{
               .depict = "Perform an HTTP GET request and return the raw response body.",
               .args =
@@ -534,11 +534,11 @@ Use `web_fetch_url_markdown` afterwards to retrieve full page content from a res
           },
       },
       {
-          "web_fetch_url_markdown",
+          "agentxx_web_fetch_url_markdown",
           ToolPrompt{
               .depict =
                   R"(Perform an HTTP GET request and return the page content converted to Markdown.
-Commonly used after `web_search` to read a specific page.)",
+Commonly used after `agentxx_web_search` to read a specific page.)",
               .args =
                   {
                       {"url", R"(Absolute HTTP/HTTPS URL to fetch.
@@ -556,7 +556,7 @@ When resolving relative links found in the returned Markdown, combine them with 
           },
       },
       {
-          "share_store",
+          "agentxx_share_store",
           ToolPrompt{
               .depict =
                   R"(Persistent text storage with unique IDs. Store text and retrieve it later by ID.
@@ -579,7 +579,7 @@ Useful for passing large content between tool calls without repeating it in mess
           },
       },
       {
-          "string_html_to_markdown",
+          "agentxx_string_html_to_markdown",
           ToolPrompt{
               .depict = "Convert HTML content to Markdown format.",
               .args =
@@ -589,7 +589,7 @@ Useful for passing large content between tool calls without repeating it in mess
           },
       },
       {
-          "string_regexp",
+          "agentxx_string_regexp",
           ToolPrompt{
               .depict =
                   R"(Search, replace, or remove text using regular expressions.
@@ -609,14 +609,14 @@ Operates on in-memory text content (not files).)",
           },
       },
       {
-          "get_current_datetime",
+          "agentxx_get_current_datetime",
           ToolPrompt{
               .depict = "Get the current date, time, and Unix timestamp.",
               .args = {},
           },
       },
       {
-          "get_system_core_info",
+          "agentxx_get_system_core_info",
           ToolPrompt{
               .depict =
                   R"(Get system resource usage: CPU utilization, memory usage, GPU utilization, and GPU memory usage.)",
@@ -624,7 +624,7 @@ Operates on in-memory text content (not files).)",
           },
       },
       {
-          "codegraph_search",
+          "agentxx_codegraph_search",
           ToolPrompt{
               .depict =
                   R"(Search for code symbols (functions, classes, variables, etc.) by name using the codegraph index.
@@ -639,7 +639,7 @@ Use this to quickly locate definitions across a large codebase.)",
           },
       },
       {
-          "codegraph_context",
+          "agentxx_codegraph_context",
           ToolPrompt{
               .depict =
                   R"(Get rich context for a code symbol: its definition, callers, callees, and methods (for classes).
@@ -654,7 +654,7 @@ Useful for understanding how a function or class is used throughout the codebase
           },
       },
       {
-          "codegraph_callers",
+          "agentxx_codegraph_callers",
           ToolPrompt{
               .depict =
                   R"(Find all functions that call a given symbol (reverse call-graph traversal).
@@ -667,7 +667,7 @@ Use this to understand what depends on a function before modifying it.)",
           },
       },
       {
-          "codegraph_callees",
+          "agentxx_codegraph_callees",
           ToolPrompt{
               .depict =
                   R"(Find all functions that a given symbol calls (forward call-graph traversal).
@@ -680,7 +680,7 @@ Use this to understand a function's dependencies.)",
           },
       },
       {
-          "codegraph_impact",
+          "agentxx_codegraph_impact",
           ToolPrompt{
               .depict =
                   R"(Analyze the impact of modifying a symbol. Finds all downstream symbols that may be
@@ -693,7 +693,7 @@ affected (callers, references). Use this before refactoring to assess blast radi
           },
       },
       {
-          "codegraph_status",
+          "agentxx_codegraph_status",
           ToolPrompt{
               .depict =
                   R"(Get codegraph index statistics: total nodes, edges, indexed files, and circular dependency count.)",
@@ -701,7 +701,7 @@ affected (callers, references). Use this before refactoring to assess blast radi
           },
       },
       {
-          "codegraph_index",
+          "agentxx_codegraph_index",
           ToolPrompt{
               .depict =
                   R"(Index a directory for code analysis. Parses source files and builds the symbol database
@@ -715,7 +715,7 @@ used by search, context, callers, callees, and impact queries.)",
           },
       },
       {
-          "codegraph_path",
+          "agentxx_codegraph_path",
           ToolPrompt{
               .depict =
                   R"(Find the call-chain path between two symbols in the call graph.
@@ -729,7 +729,7 @@ Use this to trace how execution flows from one function to another.)",
           },
       },
       {
-          "ui_control_keyboard_mouse",
+          "agentxx_ui_control_keyboard_mouse",
           ToolPrompt{
               .depict =
                   R"(Control mouse and keyboard on Windows. Accepts a list of UI commands and executes them sequentially.

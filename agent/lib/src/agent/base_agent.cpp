@@ -445,7 +445,7 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                             continue;
                         }
                         auto historyMsg = jm;
-                        if (toolName == "filesystem_edit_text_file") {
+                        if (toolName == "agentxx_filesystem_edit_text_file") {
                             // 生成 diff 记录
                             for (auto it = session->fullHistory.rbegin();
                                  it != session->fullHistory.rend();

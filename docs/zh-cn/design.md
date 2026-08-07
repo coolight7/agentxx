@@ -39,35 +39,35 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
 
 | 分类 | 工具 | 说明 |
 |------|------|------|
-| **文件系统** | `filesystem_list` | 列出文件/文件夹信息 (大小、类型、修改时间)，支持递归 |
-| | `filesystem_read_text_file` | 按行读取文本文件，支持 offset/limit |
-| | `filesystem_read_binary_file` | 按字节读取二进制文件，返回 base64 |
-| | `filesystem_write_file` | 创建/覆盖文件，支持二进制 (base64) 写入 |
-| | `filesystem_edit_text_file` | 精确字符串替换编辑文本文件 |
-| | `filesystem_glob` | 按 glob 模式搜索文件 |
-| | `filesystem_grep` | 按正则/文本搜索文件内容 |
-| **命令执行** | `execute_linux_command` | 执行 Linux shell 命令，支持超时控制 (Linux/macOS) |
-| | `execute_windows_command` | 执行 Windows 命令 (Windows / WSL 下调用) |
-| **网络** | `web_search` | 网络搜索 (DuckDuckGo / 模型搜索) |
-| | `web_fetch_url` | HTTP GET 获取网页原文 |
-| | `web_fetch_url_markdown` | 获取网页并转为 Markdown |
-| **知识检索** | `rag_search` | 基于向量相似度的知识库语义搜索 |
-| **代码分析** | `codegraph_search` | 按名称搜索代码符号 |
-| | `codegraph_context` | 获取符号的定义、调用者、被调用者 |
-| | `codegraph_callers` / `codegraph_callees` | 调用图正向/反向追踪 |
-| | `codegraph_impact` | 修改影响分析 |
-| | `codegraph_index` | 索引目录构建符号数据库 |
-| | `codegraph_path` | 查找两符号间的调用链路径 |
-| | `codegraph_status` | 索引统计信息 |
-| **规划** | `planning_write` | 两层任务规划 (Mermaid 状态图 + Todo List + 备忘录) |
-| **子代理** | `sub_agent` | 创建和管理子代理执行委派任务 |
+| **文件系统** | `agentxx_filesystem_list` | 列出文件/文件夹信息 (大小、类型、修改时间)，支持递归 |
+| | `agentxx_filesystem_read_text_file` | 按行读取文本文件，支持 offset/limit |
+| | `agentxx_filesystem_read_binary_file` | 按字节读取二进制文件，返回 base64 |
+| | `agentxx_filesystem_write_file` | 创建/覆盖文件，支持二进制 (base64) 写入 |
+| | `agentxx_filesystem_edit_text_file` | 精确字符串替换编辑文本文件 |
+| | `agentxx_filesystem_glob` | 按 glob 模式搜索文件 |
+| | `agentxx_filesystem_grep` | 按正则/文本搜索文件内容 |
+| **命令执行** | `agentxx_execute_linux_command` | 执行 Linux shell 命令，支持超时控制 (Linux/macOS) |
+| | `agentxx_execute_windows_command` | 执行 Windows 命令 (Windows / WSL 下调用) |
+| **网络** | `agentxx_web_search` | 网络搜索 (DuckDuckGo / 模型搜索) |
+| | `agentxx_web_fetch_url` | HTTP GET 获取网页原文 |
+| | `agentxx_web_fetch_url_markdown` | 获取网页并转为 Markdown |
+| **知识检索** | `agentxx_rag_search` | 基于向量相似度的知识库语义搜索 |
+| **代码分析** | `agentxx_codegraph_search` | 按名称搜索代码符号 |
+| | `agentxx_codegraph_context` | 获取符号的定义、调用者、被调用者 |
+| | `agentxx_codegraph_callers` / `agentxx_codegraph_callees` | 调用图正向/反向追踪 |
+| | `agentxx_codegraph_impact` | 修改影响分析 |
+| | `agentxx_codegraph_index` | 索引目录构建符号数据库 |
+| | `agentxx_codegraph_path` | 查找两符号间的调用链路径 |
+| | `agentxx_codegraph_status` | 索引统计信息 |
+| **规划** | `agentxx_planning_write` | 两层任务规划 (Mermaid 状态图 + Todo List + 备忘录) |
+| **子代理** | `agentxx_subagent_switch` | 创建和管理子代理执行委派任务 |
 | | `tool_skill_search` | 延迟加载工具/技能的搜索与发现 |
-| **数据** | `share_store` | 会话级文本寄存，节省上下文 |
-| | `string_html_to_markdown` | HTML 转 Markdown |
-| | `string_regexp` | 正则搜索/替换/移除 |
-| **系统** | `get_current_datetime` | 获取当前日期时间 |
-| | `get_system_core_info` | 获取 CPU/内存/GPU 使用率 |
-| **UI 控制** | `ui_control_keyboard_mouse` | Windows 键鼠控制 (仅 Windows) |
+| **数据** | `agentxx_share_store` | 会话级文本寄存，节省上下文 |
+| | `agentxx_string_html_to_markdown` | HTML 转 Markdown |
+| | `agentxx_string_regexp` | 正则搜索/替换/移除 |
+| **系统** | `agentxx_get_current_datetime` | 获取当前日期时间 |
+| | `agentxx_get_system_core_info` | 获取 CPU/内存/GPU 使用率 |
+| **UI 控制** | `agentxx_ui_control_keyboard_mouse` | Windows 键鼠控制 (仅 Windows) |
 
 工具特性：
 - **自动压缩**: 工具输出超过阈值时自动调用 LLM 压缩摘要

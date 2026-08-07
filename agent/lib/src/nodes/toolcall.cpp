@@ -414,13 +414,13 @@ asio::awaitable<std::string> ToolcallWrapNode::execTool(
             // 超过限制长度，截断并存储原文
             auto storeId
                 = agentCtxPtr->middlewareHandleContext->addShareStoreItemValue(thread_id, result);
-            // 总行数, 写入压缩结果便于后续用 `share_store` 按行分页取值
+            // 总行数, 写入压缩结果便于后续用 `agentxx_share_store` 按行分页取值
             const auto totalLineCount = agentxx::util::countLines(result);
             // - 如果超过总摘要 1/3，按行摘要，留出行数以便后续用
-            // `share_store` 分页按行取值 否则取总摘要
+            // `agentxx_share_store` 分页按行取值 否则取总摘要
             if (lastLineIndex >= targetIndex / 3) {
                 co_return fmt::format(
-                    R"([Content offloaded. Use the `share_store` tool to fetch the full content by ID {}. Summary:{} lines, total {} lines, truncated {} lines]
+                    R"([Content offloaded. Use the `agentxx_share_store` tool to fetch the full content by ID {}. Summary:{} lines, total {} lines, truncated {} lines]
 {}
 ...)",
                     storeId,
@@ -432,7 +432,7 @@ asio::awaitable<std::string> ToolcallWrapNode::execTool(
             } else {
                 // 无法按行截断时取全部行数 (换行数) 作为截取行数
                 co_return fmt::format(
-                    R"([Content offloaded. Use the `share_store` tool to fetch the full content by ID {}. Summary:{} chars, total {} lines, truncated {} lines]
+                    R"([Content offloaded. Use the `agentxx_share_store` tool to fetch the full content by ID {}. Summary:{} chars, total {} lines, truncated {} lines]
 {}
 ...)",
                     storeId,
@@ -528,7 +528,7 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
                         if (args.is_object()) {
                             // append arg `thread_id`
                             args["thread_id"] = in.ctx.thread_id;
-                            // - 注入 tool_call_id 供 tool 使用 (如 subagent_switch 的中断
+                            // - 注入 tool_call_id 供 tool 使用 (如 agentxx_subagent_switch 的中断
                             // resultId)
                             args["tool_call_id"] = tc.id;
                         }

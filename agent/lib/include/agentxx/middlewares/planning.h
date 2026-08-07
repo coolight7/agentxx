@@ -13,7 +13,7 @@ class PlanningMiddlewareState : public BaseMiddlewareState {
 public:
 
     /// <thread_id, todoListJson>
-    /// [会话独立] 任务规划列表，由 `planning_write` 读写
+    /// [会话独立] 任务规划列表，由 `agentxx_planning_write` 读写
     std::map<std::string, neograph::json> plannings{};
 
     PlanningMiddlewareState() {}

@@ -146,7 +146,7 @@ void SummarizationMiddlewareHandle::offloadLongContentToTempStore(
     }
     auto id     = ctx->addShareStoreItemValue(thread_id, msg.content);
     msg.content = fmt::format(
-        "[Content offloaded. Use the `share_store` tool to fetch the full content by ID {}]",
+        "[Content offloaded. Use the `agentxx_share_store` tool to fetch the full content by ID {}]",
         id
     );
     msg.flags               |= neograph::MessageFlag::ContentOffloaded;
