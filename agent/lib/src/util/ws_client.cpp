@@ -13,6 +13,8 @@
 
 #include "agentxx/util/exception.h"
 #include "agentxx/util/http_client.h"
+// CMake 生成的版本头 (packageProject), 定义 AGENTXX_STATIC_VERSION
+#include "agentxx/version.h"
 #include <algorithm>
 #include <cctype>
 #include <openssl/ssl.h>
@@ -422,8 +424,9 @@ asio::awaitable<std::expected<std::unique_ptr<WsClient>, std::string>> wsConnect
 
     // UA + 自定义头统一在一个 decorator 内设置 (set_option(decorator) 是覆盖语义,
     // 分两次设置会丢失先设置的部分)
+    // User-Agent 遵循 RFC 9110: product = token ["/" product-version]
     auto decorateRequest = [headers](ws::request_type& req) {
-        req.set(boost::beast::http::field::user_agent, "agentxx-ws/1.0");
+        req.set(boost::beast::http::field::user_agent, "agentxx-ws/" AGENTXX_STATIC_VERSION);
         for (const auto& [k, v] : headers) {
             req.set(k, v);
         }
