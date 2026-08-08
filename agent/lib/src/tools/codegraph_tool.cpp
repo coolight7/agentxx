@@ -3,6 +3,7 @@
 #if AGENTXX_ENABLE_CODEGRAPH
 
 #include "agentxx/expand/codegraph_manager.h"
+#include "agentxx/util/async_offload.h"
 #include "fmt/format.h"
 #include <memory>
 #include <string>
@@ -391,19 +392,41 @@ asio::awaitable<std::string> CodeGraphIndexTool::execute_async(const neograph::j
     }
     bool incremental = arguments.value("incremental", true);
 
-    bool ok     = codegraph->indexDirectory(path, incremental);
+    // 索引是同步阻塞操作 (遍历+解析整个目录), 卸载到线程池避免阻塞 io_context 事件循环
+    // (否则大仓库索引期间所有会话的事件循环都会卡死)
+    auto  agentPtr = agentContext.lock();
+    auto& pool     = *agentPtr->blockingPool;
+    bool  ok       = co_await agentxx::util::offloadAsync<bool>(
+        pool,
+        [codegraph = codegraph, path, incremental]() -> asio::awaitable<bool> {
+            co_return codegraph->indexDirectory(path, incremental);
+        }
+    );
     auto status = codegraph->getStatus();
 
     if (ok) {
-        co_return fmt::format(
-            R"({{"success":true,"total_nodes":{},"total_edges":{},"total_files":{}}})",
-            status.total_nodes,
-            status.total_edges,
-            status.total_files
-        );
-    } else {
-        co_return R"({"error":"Indexing failed"})";
+        if (status.success) {
+            co_return fmt::format(
+                R"({{"success":true,"total_nodes":{},"total_edges":{},"total_files":{}}})",
+                status.total_nodes,
+                status.total_edges,
+                status.total_files
+            );
+        }
+        // 索引成功但状态查询失败 (罕见): 返回具体原因
+        co_return neograph::json{
+            {"error", fmt::format("Indexing done, but status query failed: {}", status.error)},
+        }
+            .dump();
     }
+    // 索引失败: 返回具体原因 (如未初始化), 便于 LLM 诊断
+    if (false == status.success && false == status.error.empty()) {
+        co_return neograph::json{
+            {"error", fmt::format("Indexing failed: {}", status.error)},
+        }
+            .dump();
+    }
+    co_return R"({"error":"Indexing failed"})";
 }
 
 CodeGraphPathTool::CodeGraphPathTool(
