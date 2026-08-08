@@ -83,13 +83,14 @@ T catchError(
                 errmsg = errInfo;
             }
         }
+    } catch (const boost::exception& e) {
+        // boost::exception 在 std::exception 之前捕获, 保留完整诊断信息
+        errmsg = boost::diagnostic_information(e);
+        agentxx::util::autoConvertToUtf8(errmsg);
     } catch (const std::exception& e) {
         // - 部分系统上，系统函数返回的
         // 异常消息字符编码是系统环境的字符编码 (windows)，而非总是utf8，因此这里需要转换
         errmsg = e.what();
-        agentxx::util::autoConvertToUtf8(errmsg);
-    } catch (const boost::exception& e) {
-        errmsg = boost::diagnostic_information(e);
         agentxx::util::autoConvertToUtf8(errmsg);
     } catch (...) {
         errmsg = "unknown exception";
@@ -154,11 +155,12 @@ asio::awaitable<T> catchErrorAsync(
                 errmsg = errInfo;
             }
         }
+    } catch (const boost::exception& e) {
+        // boost::exception 在 std::exception 之前捕获, 保留完整诊断信息
+        errmsg = boost::diagnostic_information(e);
+        agentxx::util::autoConvertToUtf8(errmsg);
     } catch (const std::exception& e) {
         errmsg = e.what();
-        agentxx::util::autoConvertToUtf8(errmsg);
-    } catch (const boost::exception& e) {
-        errmsg = boost::diagnostic_information(e);
         agentxx::util::autoConvertToUtf8(errmsg);
     } catch (...) {
         errmsg = "unknown exception";
