@@ -24,6 +24,11 @@ struct YamlAppConfig {
     std::string                               useModelTrain;
     std::string                               useModelTrainScorer;
     std::string                               useModelTrainOptimizer;
+    /// 是否启用 CodeGraph 代码分析 (默认关闭)
+    /// - 索引项目根目录固定为当前程序工作目录
+    /// - 索引数据库: ~/.agentxx/sqlite/codegraph/<折叠路径>/index.db
+    ///   (深层路径折叠 + 单段截断控制长度, 子目录可前缀复用最近父级索引)
+    bool enableCodeGraph = true;
 };
 
 std::map<std::string, std::string> loadDotEnv(std::string_view path);

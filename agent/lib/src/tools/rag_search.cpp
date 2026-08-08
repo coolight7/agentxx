@@ -651,7 +651,11 @@ neograph::ChatTool RAGSearchTool::get_definition() const {
 
 asio::awaitable<std::string> RAGSearchTool::execute_async(const neograph::json& arguments) {
     auto query = arguments.value("query", "");
-    int  top_k = arguments.value("top_k", 3);
+    if (query.empty()) {
+        co_return R"({"error":"Arg `query` is empty"})";
+    }
+    // 限制 top_k 范围: 过大的 top_k 会把海量结果灌入上下文, 且可能超出文档数量
+    int top_k = std::clamp(arguments.value("top_k", 3), 1, 50);
 
     auto results = co_await store->search(query, top_k);
 

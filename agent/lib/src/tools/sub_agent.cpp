@@ -131,6 +131,9 @@ std::string SubAgentManagerTool::get_name() const {
 }
 
 neograph::ChatTool SubAgentManagerTool::get_definition() const {
+    auto               agentPtr = agentContext.lock();
+    const auto&        prompt   = agentPtr->agentConfig->prompt.toolPrompt[get_name()];
+
     auto               subagentNameList = std::vector<std::string>{};
     std::ostringstream subagentNameDepict;
     for (const auto& item : subAgentList) {
@@ -140,7 +143,7 @@ neograph::ChatTool SubAgentManagerTool::get_definition() const {
 
     return {
         "agentxx_subagent_switch",
-        "Switch a isolation messages context sub-agent to exec.",
+        prompt.depict,
         neograph::json{
                        {"type", "object"},
                        {
@@ -153,7 +156,11 @@ neograph::ChatTool SubAgentManagerTool::get_definition() const {
                             {"enum", neograph::json{subagentNameList}},
                             {
                                 "description",
-                                fmt::format("Target sub-agent name.\n{}", subagentNameDepict.str()),
+                                fmt::format(
+                                    "{}\n{}",
+                                    prompt.getArg("subagent"),
+                                    subagentNameDepict.str()
+                                ),
                             },
                         },
                     },
@@ -161,14 +168,14 @@ neograph::ChatTool SubAgentManagerTool::get_definition() const {
                         "system_prompt",
                         {
                             {"type", "string"},
-                            {"description", "Sub-agent system prompt if subagent not set"},
+                            {"description", prompt.getArg("system_prompt")},
                         },
                     },
                     {
                         "message",
                         {
                             {"type", "string"},
-                            {"description", "Task content as a user message"},
+                            {"description", prompt.getArg("message")},
                         },
                     },
                 },

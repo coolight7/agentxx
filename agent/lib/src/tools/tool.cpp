@@ -6,6 +6,24 @@
 namespace agentxx {
 namespace tools {
 
+std::shared_ptr<neograph::graph::CancelToken> getSessionCancelToken(
+    const std::shared_ptr<agentxx::agent::AgentContext>& agentCtx,
+    const neograph::json&                                 args
+) {
+    if (nullptr == agentCtx || nullptr == agentCtx->sessions) {
+        return nullptr;
+    }
+    auto thread_id = args.value("thread_id", std::string{});
+    if (thread_id.empty()) {
+        return nullptr;
+    }
+    auto sess = agentCtx->sessions->get(thread_id);
+    if (nullptr == sess) {
+        return nullptr;
+    }
+    return sess->getCancelToken();
+}
+
 XXToolBase::XXToolBase(
     std::string_view                            in_name,
     std::weak_ptr<agentxx::agent::AgentContext> in_agentContext,

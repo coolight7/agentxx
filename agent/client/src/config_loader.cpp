@@ -381,6 +381,16 @@ YamlAppConfig loadYamlConfig(
         }
     }
 
+    // CodeGraph 代码分析
+    if (root["enable_codegraph"]) {
+        cfg.enableCodeGraph = resolveEnvVars(
+                                  root["enable_codegraph"].as<std::string>("false"),
+                                  dotEnvVars,
+                                  overrideEnvVars
+                              )
+                              == "true";
+    }
+
     return cfg;
 }
 

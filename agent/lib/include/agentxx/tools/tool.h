@@ -1,9 +1,11 @@
 #pragma once
 
+#include "agentxx/agent/context.h"
 #include "agentxx/middlewares/middleware.h"
 #include "asio/io_context.hpp"
 #include "fmt/base.h"
 #include "fmt/format.h"
+#include "neograph/graph/cancel.h"
 #include <functional>
 #include <neograph/llm/rate_limited_provider.h>
 #include <neograph/llm/schema_provider.h>
@@ -17,6 +19,14 @@ namespace asio = ::boost::asio;
 
 namespace agentxx {
 namespace tools {
+
+/// 从 tool 参数中取 thread_id 并获取对应会话的取消令牌
+/// - thread_id 由 ToolCallNode 在调用工具前注入 arguments
+/// - 会话不存在 (如非 toolcall 路径调用) 或令牌为空时返回 nullptr (无取消支持)
+std::shared_ptr<neograph::graph::CancelToken> getSessionCancelToken(
+    const std::shared_ptr<agentxx::agent::AgentContext>& agentCtx,
+    const neograph::json&                                 args
+);
 
 class XXToolBase : public neograph::AsyncTool {
 protected:

@@ -120,11 +120,16 @@ asio::awaitable<std::string> ThreadShareStoreTool::execute_async(const neograph:
         co_return R"({"error":"Arg `opt` is empty"})";
     }
 
-    if (text_line_offset >= 0 || text_line_limit > 0) {
+    // 分页切片: 对 `get` 取回的存储内容 / `set`·`insert` 的入参文本统一应用
+    // line_offset/line_limit (修正: 原实现对 get 无效, 因为切片作用在空入参 text 上,
+    // 而 get 分支直接返回了存储的完整内容)
+    auto sliceByLine = [&](std::string input) -> std::string {
+        if (text_line_offset < 0 && text_line_limit <= 0) {
+            return input;
+        }
         const auto offset = (text_line_offset >= 0) ? static_cast<size_t>(text_line_offset) : 0;
         const auto limit  = (text_line_limit > 0) ? static_cast<size_t>(text_line_limit)
                                                   : std::numeric_limits<size_t>::max();
-        auto       stream = std::istringstream{text};
         std::stringstream result{};
         size_t            lineNum = 0;
         size_t            endLine = offset;
@@ -135,6 +140,7 @@ asio::awaitable<std::string> ThreadShareStoreTool::execute_async(const neograph:
             endLine = std::numeric_limits<size_t>::max();
         }
 
+        auto stream = std::istringstream{std::move(input)};
         for (std::string buf; lineNum < endLine; lineNum++) {
             if (!std::getline(stream, buf)) {
                 // EOF/错误: getline 会先清空 buf, 此处 buf 必为空, 无需再追加
@@ -146,22 +152,28 @@ asio::awaitable<std::string> ThreadShareStoreTool::execute_async(const neograph:
             }
         }
 
+        if (lineNum == 0 && offset == 0) {
+            // 空文本: 第 0 行视为空行, 返回空串而非报错
+            return "";
+        }
         if (lineNum <= offset) {
-            // offset 超出文件行数
+            // offset 超出文本行数
             throw std::runtime_error{fmt::format(
-                R"(Arg `line_offset`({} lines) is out of range of file lines({} lines).)",
+                R"(Arg `line_offset`({} lines) is out of range of text lines({} lines).)",
                 offset,
                 lineNum
             )};
         }
 
-        text = result.str();
-    }
+        return result.str();
+    };
 
     auto agentContextPtr = agentContext.lock();
     if (text_opt == std::string_view{"insert"}) {
-        auto reId
-            = agentContextPtr->middlewareHandleContext->addShareStoreItemValue(thread_id, text);
+        auto reId = agentContextPtr->middlewareHandleContext->addShareStoreItemValue(
+            thread_id,
+            sliceByLine(std::move(text))
+        );
         co_return neograph::json{
             {"id", reId},
         }
@@ -172,12 +184,20 @@ asio::awaitable<std::string> ThreadShareStoreTool::execute_async(const neograph:
         }
         auto result
             = agentContextPtr->middlewareHandleContext->getShareStoreItemValue(thread_id, text_id);
-        co_return result.value_or(R"({"error":"Not found"})");
+        if (false == result.has_value()) {
+            co_return R"({"error":"Not found"})";
+        }
+        // 分页: 对存储的完整内容按行切片返回
+        co_return sliceByLine(std::move(result.value()));
     } else if (text_opt == std::string_view{"set"}) {
         if (text_id <= 0) {
             co_return R"({"error":"Arg `id` is empty"})";
         }
-        agentContextPtr->middlewareHandleContext->setShareStoreItemValue(thread_id, text_id, text);
+        agentContextPtr->middlewareHandleContext->setShareStoreItemValue(
+            thread_id,
+            text_id,
+            sliceByLine(std::move(text))
+        );
         co_return "success";
     } else if (text_opt == std::string_view{"delete"}) {
         if (text_id <= 0) {

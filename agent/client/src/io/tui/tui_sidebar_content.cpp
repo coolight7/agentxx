@@ -127,24 +127,22 @@ std::optional<ftxui::Element> TUIClientAgentIO::renderPlanningInfo() {
     Elements lines;
     Elements title;
     title.push_back(text("Plan") | color(theme_.accentColor));
-    if (!plan->toolFinished) {
-        title.push_back(text(" Planning...") | color(theme_.hintColor));
-    }
-    lines.push_back(hbox(std::move(title)));
-
     // Roadmap 状态图按钮: 点击弹窗查看完整状态图 (PlanDiagramOverlay)
     // 状态图渲染成本高 (解析 + 分层布局), 侧边栏常驻显示仅保留按钮,
     // 仅在用户点击时才在弹窗中渲染
     const auto roadmap = args.value("roadmap", std::string{});
-    if (!roadmap.empty()) {
-        lines.push_back(
-            text(" [View Plan Diagram] ") | bgcolor(theme_.buttonBgColor)
-            | color(theme_.buttonTextColor) | bold | reflect(planDiagramButtonBox_)
+    if (!plan->toolFinished) {
+        title.push_back(text(" Planning...") | color(theme_.hintColor));
+    } else if (!roadmap.empty()) {
+        title.push_back(
+            text(" Graph ") | bgcolor(theme_.buttonBgColor) | color(theme_.buttonTextColor)
+            | reflect(planDiagramButtonBox_)
         );
     } else {
         // 无 roadmap: 清空按钮命中区域
         planDiagramButtonBox_ = ftxui::Box{0, -1, 0, -1};
     }
+    lines.push_back(hbox(std::move(title)));
 
     if (args.contains("todos") && args["todos"].is_array()) {
         for (const auto& td : args["todos"]) {
