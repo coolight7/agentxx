@@ -89,6 +89,13 @@ public:
     std::map<std::string, std::string> mcpServerUrls{};
     std::vector<std::string>           ragDocsPaths{};
 
+    /// 是否启用 CodeGraph 代码分析 (需编译时启用 AGENTXX_ENABLE_CODEGRAPH)
+    /// - 配置启用且编译启用时, CodeAgent 才会注册 codegraph 系列 tool
+    /// - 索引项目根目录固定为当前程序工作目录
+    /// - 索引数据库: ~/.agentxx/sqlite/codegraph/<折叠路径>/index.db
+    ///   (深层路径折叠 + 单段截断控制长度, 子目录可前缀复用最近父级索引)
+    bool enableCodeGraph = true;
+
     /// LLM 节点最大重试次数
     /// - 最多执行 1 + 5(retry) = 6 次
     size_t llmMaxRetry = 5;
