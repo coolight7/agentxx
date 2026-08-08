@@ -350,8 +350,6 @@ Example: `"file"` returns only regular files; `["file","symlink"]` returns files
                       {"exclude_patterns",
                        R"(Glob patterns to exclude from results. Matched paths are removed.
 Example: `["**/node_modules/**", "**/.git/**", "**/build/**"]`.)"},
-                      {"case_sensitive",
-                       R"(Default `true`. If `false`, pattern matching is case-insensitive.)"},
                       {"max_depth",
                        R"(Maximum directory depth relative to the pattern's base directory.
 Default `-1` (no limit). Example: `max_depth=1` matches only direct children.
@@ -787,6 +785,28 @@ Use this to trace how execution flows from one function to another.)",
                        "Ordered list of UI commands to execute sequentially."},
                       {"interval_ms",
                        "Delay between commands in milliseconds. Default: 50. Set `0` for no delay."},
+                  },
+          },
+      },
+      {
+          "agentxx_subagent_switch",
+          ToolPrompt{
+              .depict =
+                  R"(Switch a isolation messages context sub-agent to exec.
+The sub-agent runs with an isolated message context: it cannot see the parent conversation history, and its final output is returned to the parent as the tool result.
+
+## Notes
+- The sub-agent runs synchronously: the parent agent pauses until the sub-agent finishes.
+- Provide a clear, self-contained task description in `message`; the sub-agent has no access to the parent's conversation context.
+- `subagent` must be one of the registered sub-agent names (see the enum).
+- `system_prompt` is optional; when `subagent` is not set, it is used as the sub-agent's system prompt.)",
+              .args =
+                  {
+                      {"subagent",
+                       "Target sub-agent name. Choose from the registered sub-agent list (see enum values)."},
+                      {"system_prompt",
+                       "Optional. Custom system prompt for the sub-agent when `subagent` is not set."},
+                      {"message", "Task content as a user message for the sub-agent."},
                   },
           },
       },
