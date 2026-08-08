@@ -452,12 +452,18 @@ static void uiControlPrepareKeyInput(INPUT& input, WORD vk, DWORD flags) {
 }
 
 static asio::awaitable<void> uiControlMouseMoveTo(int x, int y) {
-    int   screenW        = GetSystemMetrics(SM_CXSCREEN);
-    int   screenH        = GetSystemMetrics(SM_CYSCREEN);
-    INPUT input          = {};
-    input.type           = INPUT_MOUSE;
-    input.mi.dx          = static_cast<LONG>((static_cast<LONGLONG>(x) * 65535) / screenW);
-    input.mi.dy          = static_cast<LONG>((static_cast<LONGLONG>(y) * 65535) / screenH);
+    // 多显示器: 使用虚拟屏幕坐标系 (覆盖所有显示器), 支持副屏的负坐标。
+    // 绝对坐标归一化按虚拟屏尺寸计算, 越界坐标 clamp 到虚拟屏范围避免溢出
+    const int vx = GetSystemMetrics(SM_XVIRTUALSCREEN);
+    const int vy = GetSystemMetrics(SM_YVIRTUALSCREEN);
+    const int vw = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+    const int vh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+    x            = std::clamp(x, vx, vx + vw - 1);
+    y            = std::clamp(y, vy, vy + vh - 1);
+    INPUT input  = {};
+    input.type   = INPUT_MOUSE;
+    input.mi.dx  = static_cast<LONG>((static_cast<LONGLONG>(x - vx) * 65535) / (vw - 1));
+    input.mi.dy  = static_cast<LONG>((static_cast<LONGLONG>(y - vy) * 65535) / (vh - 1));
     input.mi.mouseData   = 0;
     input.mi.dwFlags     = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE;
     input.mi.time        = 0;
@@ -613,21 +619,37 @@ static asio::awaitable<UICmdResult>
     };
 }
 
-static asio::awaitable<UICmdResult> uiControlKeyDown(WORD vk) {
+static asio::awaitable<UICmdResult> uiControlKeyDown(WORD vk, bool withShift = false) {
+    if (withShift) {
+        INPUT shift = {};
+        uiControlPrepareKeyInput(shift, VK_LSHIFT, 0);
+        co_await uiControlSendInputAsync(1, &shift, sizeof(INPUT));
+    }
     INPUT input = {};
     uiControlPrepareKeyInput(input, vk, 0);
     co_await uiControlSendInputAsync(1, &input, sizeof(INPUT));
     co_return UICmdResult{true, fmt::format("key_down [{}]", uiControlVkToKeyName(vk))};
 }
 
-static asio::awaitable<UICmdResult> uiControlKeyUp(WORD vk) {
+static asio::awaitable<UICmdResult> uiControlKeyUp(WORD vk, bool withShift = false) {
     INPUT input = {};
     uiControlPrepareKeyInput(input, vk, KEYEVENTF_KEYUP);
     co_await uiControlSendInputAsync(1, &input, sizeof(INPUT));
+    if (withShift) {
+        INPUT shift = {};
+        uiControlPrepareKeyInput(shift, VK_LSHIFT, KEYEVENTF_KEYUP);
+        co_await uiControlSendInputAsync(1, &shift, sizeof(INPUT));
+    }
     co_return UICmdResult{true, fmt::format("key_up [{}]", uiControlVkToKeyName(vk))};
 }
 
-static asio::awaitable<UICmdResult> uiControlKeyPress(WORD vk) {
+static asio::awaitable<UICmdResult> uiControlKeyPress(WORD vk, bool withShift = false) {
+    if (withShift) {
+        INPUT shift = {};
+        uiControlPrepareKeyInput(shift, VK_LSHIFT, 0);
+        co_await uiControlSendInputAsync(1, &shift, sizeof(INPUT));
+    }
+
     INPUT keyDown = {};
     uiControlPrepareKeyInput(keyDown, vk, 0);
     co_await uiControlSendInputAsync(1, &keyDown, sizeof(INPUT));
@@ -637,6 +659,12 @@ static asio::awaitable<UICmdResult> uiControlKeyPress(WORD vk) {
     INPUT keyUp = {};
     uiControlPrepareKeyInput(keyUp, vk, KEYEVENTF_KEYUP);
     co_await uiControlSendInputAsync(1, &keyUp, sizeof(INPUT));
+
+    if (withShift) {
+        INPUT shift = {};
+        uiControlPrepareKeyInput(shift, VK_LSHIFT, KEYEVENTF_KEYUP);
+        co_await uiControlSendInputAsync(1, &shift, sizeof(INPUT));
+    }
 
     co_return UICmdResult{true, fmt::format("key_press [{}]", uiControlVkToKeyName(vk))};
 }
@@ -678,11 +706,38 @@ static asio::awaitable<UICmdResult> uiControlKeyType(std::string_view text) {
         co_return UICmdResult{true, "key_type [0 chars]"};
     }
 
-    std::vector<INPUT> inputs;
-    inputs.reserve(text.size() * 2);
+    // UTF-8 -> UTF-16 (Windows 宽字符编码): 逐字节发送 UTF-8 会让中文等多字节
+    // 字符变成多个乱码字符, 必须先解码为 UTF-16 码元再经 KEYEVENTF_UNICODE 发送
+    std::wstring wtext;
+    const int    wlen = MultiByteToWideChar(
+        CP_UTF8,
+        0,
+        text.data(),
+        static_cast<int>(text.size()),
+        nullptr,
+        0
+    );
+    if (wlen > 0) {
+        wtext.resize(static_cast<size_t>(wlen));
+        MultiByteToWideChar(
+            CP_UTF8,
+            0,
+            text.data(),
+            static_cast<int>(text.size()),
+            wtext.data(),
+            wlen
+        );
+    }
+    // 转换失败 (非 UTF-8 输入) 时降级为逐字节原样发送, 保证不丢内容
+    if (wtext.empty()) {
+        wtext.assign(text.begin(), text.end());
+    }
 
-    for (char ch : text) {
-        if (ch == '\n' || ch == '\r') {
+    std::vector<INPUT> inputs;
+    inputs.reserve(wtext.size() * 2);
+
+    for (wchar_t wch : wtext) {
+        if (wch == L'\n' || wch == L'\r') {
             if (!inputs.empty()) {
                 co_await uiControlSendInputAsync(
                     static_cast<UINT>(inputs.size()),
@@ -703,7 +758,7 @@ static asio::awaitable<UICmdResult> uiControlKeyType(std::string_view text) {
             continue;
         }
 
-        if (ch == '\t') {
+        if (wch == L'\t') {
             if (!inputs.empty()) {
                 co_await uiControlSendInputAsync(
                     static_cast<UINT>(inputs.size()),
@@ -724,7 +779,7 @@ static asio::awaitable<UICmdResult> uiControlKeyType(std::string_view text) {
             continue;
         }
 
-        if (ch == '\b') {
+        if (wch == L'\b') {
             if (!inputs.empty()) {
                 co_await uiControlSendInputAsync(
                     static_cast<UINT>(inputs.size()),
@@ -745,7 +800,7 @@ static asio::awaitable<UICmdResult> uiControlKeyType(std::string_view text) {
             continue;
         }
 
-        if (ch == '\x1b') {
+        if (wch == L'\x1b') {
             if (!inputs.empty()) {
                 co_await uiControlSendInputAsync(
                     static_cast<UINT>(inputs.size()),
@@ -766,15 +821,17 @@ static asio::awaitable<UICmdResult> uiControlKeyType(std::string_view text) {
             continue;
         }
 
-        unsigned char uch = static_cast<unsigned char>(ch);
-        if (uch < 32) {
+        if (wch < 32) {
             continue;
         }
+
+        // UTF-16 码元 (代理对如 emoji 会分两个码元发送, KEYEVENTF_UNICODE 支持)
+        const unsigned short codeUnit = static_cast<unsigned short>(wch);
 
         INPUT keyDown          = {};
         keyDown.type           = INPUT_KEYBOARD;
         keyDown.ki.wVk         = 0;
-        keyDown.ki.wScan       = uch;
+        keyDown.ki.wScan       = codeUnit;
         keyDown.ki.dwFlags     = KEYEVENTF_UNICODE;
         keyDown.ki.time        = 0;
         keyDown.ki.dwExtraInfo = 0;
@@ -783,7 +840,7 @@ static asio::awaitable<UICmdResult> uiControlKeyType(std::string_view text) {
         INPUT keyUp          = {};
         keyUp.type           = INPUT_KEYBOARD;
         keyUp.ki.wVk         = 0;
-        keyUp.ki.wScan       = uch;
+        keyUp.ki.wScan       = codeUnit;
         keyUp.ki.dwFlags     = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP;
         keyUp.ki.time        = 0;
         keyUp.ki.dwExtraInfo = 0;
@@ -807,9 +864,11 @@ static UICmdResult uiControlGetCursorPos() {
 }
 
 static UICmdResult uiControlGetScreenSize() {
-    int w = GetSystemMetrics(SM_CXSCREEN);
-    int h = GetSystemMetrics(SM_CYSCREEN);
-    return {true, fmt::format("screen_size: {}x{}", w, h)};
+    // 返回虚拟屏幕尺寸 (覆盖所有显示器), 与 mouse_move/get_cursor_pos 的
+    // 虚拟屏坐标系一致; 多显示器时主屏仅是虚拟屏的一部分
+    int vw = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+    int vh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+    return {true, fmt::format("screen_size: {}x{} (virtual screen, covers all monitors)", vw, vh)};
 }
 
 static asio::awaitable<UICmdResult> uiControlExecuteOne(const neograph::json& cmd) {
@@ -875,7 +934,9 @@ static asio::awaitable<UICmdResult> uiControlExecuteOne(const neograph::json& cm
         if (vk == 0) {
             co_return UICmdResult{false, fmt::format("unknown key: {}", key)};
         }
-        co_return co_await uiControlKeyPress(vk);
+        // 符号字符 (如 `!` `@`) 需要按住 Shift 才能输入
+        bool withShift = (key.size() == 1 && uiControlNeedsShift(key[0]));
+        co_return co_await uiControlKeyPress(vk, withShift);
     }
 
     if (action == "key_down") {
@@ -887,7 +948,8 @@ static asio::awaitable<UICmdResult> uiControlExecuteOne(const neograph::json& cm
         if (vk == 0) {
             co_return UICmdResult{false, fmt::format("unknown key: {}", key)};
         }
-        co_return co_await uiControlKeyDown(vk);
+        bool withShift = (key.size() == 1 && uiControlNeedsShift(key[0]));
+        co_return co_await uiControlKeyDown(vk, withShift);
     }
 
     if (action == "key_up") {
@@ -899,7 +961,8 @@ static asio::awaitable<UICmdResult> uiControlExecuteOne(const neograph::json& cm
         if (vk == 0) {
             co_return UICmdResult{false, fmt::format("unknown key: {}", key)};
         }
-        co_return co_await uiControlKeyUp(vk);
+        bool withShift = (key.size() == 1 && uiControlNeedsShift(key[0]));
+        co_return co_await uiControlKeyUp(vk, withShift);
     }
 
     if (action == "key_combo") {
@@ -907,13 +970,22 @@ static asio::awaitable<UICmdResult> uiControlExecuteOne(const neograph::json& cm
             co_return UICmdResult{false, "key_combo requires `keys` array"};
         }
         std::vector<WORD> vks;
+        bool              needShift = false;
         for (const auto& k : cmd["keys"]) {
             auto keyStr = k.get<std::string>();
             WORD vk     = uiControlKeyNameToVk(keyStr);
             if (vk == 0) {
                 co_return UICmdResult{false, fmt::format("unknown key in combo: {}", keyStr)};
             }
+            // 组合中含符号字符 (如 `!` `?`) 时自动补 Shift
+            if (keyStr.size() == 1 && uiControlNeedsShift(keyStr[0])) {
+                needShift = true;
+            }
             vks.push_back(vk);
+        }
+        if (needShift) {
+            // Shift 在组合最前按下、最后松开 (key_combo 的松开顺序为逆序)
+            vks.insert(vks.begin(), VK_LSHIFT);
         }
         co_return co_await uiControlKeyCombo(vks);
     }
@@ -1076,7 +1148,6 @@ asio::awaitable<std::string>
 #if XX_IS_WIN_D
     int                interval_ms = arguments.value<int>("interval_ms", 50);
     asio::steady_timer timer{co_await asio::this_coro::executor};
-    timer.expires_after(std::chrono::milliseconds(interval_ms));
 
     neograph::json results    = neograph::json::array();
     int            ok_count   = 0;
@@ -1101,6 +1172,9 @@ asio::awaitable<std::string>
         }
 
         if (interval_ms > 0 && i < cmds.size() - 1) {
+            // 每次等待前重新 arm 定时器: steady_timer 过期后 async_wait 会立即返回,
+            // 若只在循环外 expires_after 一次, 后续命令之间将没有间隔
+            timer.expires_after(std::chrono::milliseconds(interval_ms));
             co_await timer.async_wait(asio::use_awaitable);
         }
     }
