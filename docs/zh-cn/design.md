@@ -102,11 +102,42 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
 
 - **Session 隔离**: 每个 thread_id 独立的 Session，包含 IO、EventBus、ContextStats、CancelToken、模型选择、消息历史
 - **SessionStore**: 会话存储，按 thread_id 取/建 Session (仅 agent io_context 线程访问，无需锁保护)
+- **单检查点存储**: engine 使用 `InMemorySingleCheckpointStore` (SingleCheckpointStore 策略基类,
+  模板方法 save = saveImpl 持久化最新 + evictImpl 淘汰历史)。agentxx 只依赖
+  load_latest 的最新 checkpoint 与挂载其上的 pending writes (中断/resume 恢复),
+  不使用 fork / 时间旅行 (get_state_history), 因此每 thread 仅保留最新 checkpoint,
+  存储开销从 O(super-steps) 降为 O(threads), 轮末无需手动裁剪
 - **活动状态**: Idle / Streaming / ExecutingTool / WaitingInput 四种状态
 - **链式哈希**: fullHistory 使用 FNV-1a 链式哈希校验一致性
 - **线程绑定 (单线程读写)**: Session 通过 `bindIoThread()` 绑定 io 线程，`assertIoThread()` 强制校验可变状态 (fullHistory/llmMessages/chainHash) 仅在 io 线程读写；client/UI 不直接读取，需要时由 io 线程拷贝后经 Wire 消息 (Sync/Delta) 传输，因此无需快照/锁同步
 - **取消/切模型**: UI 线程的取消/切模型操作通过 Wire 消息 (WireCancel/WireSelectModel) 发往 agent 线程处理，避免跨线程竞争
 - **异步互斥锁**: `AsyncMutex` 基于 asio concurrent_channel 实现协程感知互斥，不会阻塞线程，适用于协程跨越 co_await 临界区
+
+#### Subagent 执行链路 (NodeInterrupt → 总线派发 → 独立引擎运行)
+
+```
+父 agent LLM 发起 agentxx_subagent_switch
+  → SubAgentManagerTool::execute_async
+      → MiddlewareContext::requestInterrupt: 首次存储中断参数到 graphData,
+        抛出 NodeInterrupt → engine checkpoint 暂停父图
+  → BaseAgent::runConversationTurnAsync 中断处理循环:
+      → 逐个解析 graphData 中的 interrupt args
+      → "subagent" 参数: 经全局总线 service.subagent 委派
+      → "subagent_batch": 经 service.subagent.batch 批量并发委派
+  → SubagentSupervisor::runSubagent:
+      → 从 subAgentList 取 SubAgentNormalTask (独立编译的 subgraph,
+        复用父 agent 的 tools 指针列表与 graphRegistry)
+      → 以独立 thread_id (session_subagent_{name}) 运行 subgraph
+        (resume_if_exists=false, 每次全新运行; 继承父会话 io 供权限/中断交互)
+      → 结果经 interruptResult channel 写回 graphData
+  → engine->resume_async 恢复父图, execute_async 从 interruptResult 按
+    resultId 提取结果返回
+```
+
+- 父图与 subagent 图是两套 GraphEngine 实例, 消息上下文完全隔离
+- 中断结果按 resultId (默认取 tool_call_id) 关联, 支持同轮多个 subagent
+- 跨 agent 查询 (service.crossagent) 当前为显式 "not implemented"
+  (被动消息注入需持久会话模式, 未实现)
 
 ### 远程通信
 
@@ -623,6 +654,41 @@ AgentIOTransportBase (传输层抽象)
 client), 上下文统计经 `io->sendToPeer(WireContextStats)`; BaseAgent 不感知
 transport 细节。`runConversationTurnAsync(io=nullptr)` 为 headless 模式, 不产出事件。
 
+##### EventBridge: GraphEvent → 会话增量 Delta + EventBus 适配层
+
+`EventBridge` 是 BaseAgent 与 neograph 引擎之间的唯一事件翻译器
+(替代旧版散落在 BaseAgent 里的 llm callback 逻辑):
+
+```
+neograph GraphEngine (run_stream_async)
+    └── GraphStreamCallback (每事件一次)
+          └── EventBridge::operator()(GraphEvent)
+                ├── 1. 转发原始回调 origCb (若存在)
+                ├── 2. 按事件类型分派:
+                │     ├── LLM_TOKEN     → publishModelToken (总线, 无订阅者零开销)
+                │     │                   + emitDelta(TextToken/ThinkingToken,
+                │     │                   切换 chunk 类型时附带节点内计时)
+                │     ├── CHANNEL_WRITE → handleChannelWrite:
+                │     │                   - "message_tip" 通道 → Delta::MessageTip
+                │     │                   - "messages" 通道:
+                │     │                     assistant(tool_calls) → appendHistory
+                │     │                       + Delta::ToolStart 流
+                │     │                     tool → appendHistory (edit 工具附带
+                │     │                       diff 渲染字段) + Delta::ToolEnd 流
+                │     │                     assistant → appendHistory
+                │     │                   - 含 LLM 输出时推送 WireContextStats
+                │     ├── NODE_START/END → 节点计时 + Delta::NodeStart/NodeEnd
+                │     └── ERROR          → publishError (总线, 不产 Delta,
+                │                         由 WireTurnResult 统一报告)
+                └── emitDelta: 分配会话级单调递增 seq (++session->deltaSeq)
+                               后经 io->sendToPeer 发送; io 为空 (headless) 时丢弃
+```
+
+- 有状态: 维护最近 chunk 类型 (content/thinking 切换计时)、节点开始时间
+- 生命周期: `makeCallback()` 经 `shared_from_this` 持有, 回调期间本对象存活;
+  AgentContext 以 weak_ptr 持有, 总线发布前 lock 检查
+- 新增 GraphEvent 处理只需扩展本类, 无需修改 BaseAgent
+
 #### 4. EventBus 强类型事件
 
 ```cpp
@@ -678,21 +744,43 @@ AgentContext
          │     ├── contextStats          (std::atomic 字段, 跨线程安全)
          │     ├── activity              (Activity)
          │     ├── fullHistory + chainHash (仅 io 线程读写, client 经 Wire 拷贝传输)
-         │     ├── deltaSeq              (std::atomic<uint64_t>, 原子递增)
+         │     ├── deltaSeq              (普通 uint64_t, 仅 io 线程递增; EventBridge 分配)
          │     ├── cancelToken           (仅 io 线程读写)
          │     └── modelName             (仅 io 线程读写, 经 Wire 切换)
          └── "thread_2" → Session
                └── ...
 
 线程安全策略:
-  - io 线程: 读写 fullHistory/llmMessages/chainHash (assertIoThread 强制校验)
+  - io 线程: 读写 fullHistory/llmMessages/chainHash/deltaSeq (assertIoThread 强制校验)
   - client/UI: 不直接读取, 由 io 线程拷贝后经 Wire 消息 (Sync/Delta) 传输
   - 取消/切模型: 经 Wire 消息发往 agent 线程处理
   - SessionStore: 仅在 agent io_context 线程访问, 无需锁
+  - contextStats: std::atomic 字段, 跨线程可读 (Summarization 写, IO 经 Wire 推送)
   - AsyncMutex: 协程感知互斥锁, 用于跨越 co_await 的临界区保护
 ```
 
 ### 连接与重连机制
+
+#### WsAgentIOTransport 内部结构 (客户端模式)
+
+```
+客户端 (WsAgentIOTransport)
+  ├── establishConnection(): wsConnect + 失败重试 (退避 reconnectBackoff, 可取消)
+  ├── writeLoop():    writeQueue (concurrent_channel, cap=4096) → ws send
+  ├── readLoop():     ws recv → 反序列化 → recvQueue (concurrent_channel, cap=256)
+  │                     → recv() 消费; 断线后进入自动重连循环:
+  │                       重连 → 重建 writeQueue → 发送 Hello(lastSeq, tailHash)
+  │                       → 服务端增量重放 (seq 不连续时回退全量 Sync)
+  ├── heartbeatLoop(): 每 heartbeatInterval 发送 Ping
+  └── Delta 去重: 收到 delta 时更新 lastDeltaSeq_, 重放重复投递的
+      seq <= last 直接丢弃, 避免 UI 重复渲染
+```
+
+- 写/读队列均为有界 concurrent_channel, `try_send` 失败即丢弃 (见"已知问题"
+  问题 3); 队列关闭使挂起的 async_receive 抛异常, 循环自然退出
+- HelloAck 在 connect() 握手阶段被消费, 不进入 runTransportLoop 的消息流
+- 服务端模式 (AgentServer 注入已建立的 WsClient): 不发送 hello, 不重连,
+  握手由 AgentServer::serveTransport 完成
 
 ```
 Client                              Server
@@ -764,6 +852,9 @@ agent/
 │   │   │   ├── config_static.h   # 静态路径配置
 │   │   │   ├── context.h         # AgentContext / Session / SessionStore / ContextStats
 │   │   │   │                     #   Session: 线程绑定 (fullHistory/chainHash 单线程读写)
+│   │   │   ├── checkpoint_store.h # 单检查点存储: SingleCheckpointStore 策略基类 +
+│   │   │   │                     #   InMemorySingleCheckpointStore (每 thread 仅最新,
+│   │   │   │                     #   save 时自动淘汰历史, O(super-steps) -> O(threads))
 │   │   │   ├── conversation_types.h # Delta(含NodeStart/End/seq/timing) / SyncPayload
 │   │   │   │                     #   HistoryMessage / ChainHash / AppendComponentNotification
 │   │   │   ├── model_registry.h  # ModelProviderRegistry (运行时模型切换)
@@ -859,6 +950,7 @@ agent/
 │   │   │       ├── framework/    # TUI 框架层
 │   │   │       │   ├── tui_state.h       # TUI 状态聚合 (消息/侧边栏/排队输入等)
 │   │   │       │   ├── tui_context.h     # TUI 渲染上下文 (theme/state/尺寸)
+│   │   │       │   ├── tui_settings.h    # TUI 全局设置单例 (主题/系统资源显示开关等)
 │   │   │       │   ├── modal_container.h # 浮层容器 (权限/中断弹窗)
 │   │   │       │   └── dirty_component.h # 脏标记增量渲染组件基类
 │   │   │       └── components/   # TUI 渲染组件
@@ -973,7 +1065,8 @@ BaseAgent (基类)
   │     │     ├── fullHistory + chainHash (仅 io 线程读写, client 经 Wire 拷贝传输)
   │     │     ├── llmMessages (io 线程读写)
   │     │     ├── cancelToken / modelName (io 线程读写)
-  │     │     ├── activity / deltaSeq / contextStats (atomic, 跨线程安全)
+  │     │     ├── activity / contextStats (atomic, 跨线程安全)
+  │     │     ├── deltaSeq (普通 uint64_t, 仅 io 线程递增)
   │     │     └── io / bus (会话级)
   │     ├── ModelProviderRegistry
   │     └── EventBus
