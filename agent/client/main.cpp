@@ -236,6 +236,7 @@ Options:
         applyModelToConfig(config, yamlCfg.models, yamlCfg.useModelAcp);
         applySubagentModelToConfig(config, yamlCfg.models, yamlCfg.useModelSubagent);
         applyWebSearchModelToConfig(config, yamlCfg.models, yamlCfg.useModelWebSearch);
+        config->enableCodeGraph = yamlCfg.enableCodeGraph;
         auto agent = std::make_shared<agentxx::agent::CodeAgent>(config);
         asio::co_spawn(
             *agent->ioCtx,
@@ -274,6 +275,8 @@ Options:
     for (const auto& p : yamlCfg.memoryFilePaths) {
         config->memoryFilePaths.push_back(resolvePath(p));
     }
+    // CodeGraph 代码分析 (索引项目根目录固定为当前程序工作目录)
+    config->enableCodeGraph = yamlCfg.enableCodeGraph;
 
     // ======================== CodeAgent Websocket Server 服务模式 ========================
     if (mode == "server") {

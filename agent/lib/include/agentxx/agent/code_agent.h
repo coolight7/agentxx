@@ -21,6 +21,7 @@ namespace agent {
 /// - RAG 知识库搜索
 /// - 子代理管理
 /// - MCP 外部工具
+/// - CodeGraph 代码分析 (配置 enableCodeGraph 且编译启用 AGENTXX_ENABLE_CODEGRAPH 时注册)
 /// - 权限控制 / 技能发现 / 上下文压缩 / 任务规划
 class CodeAgent : public BaseAgent {
 public:

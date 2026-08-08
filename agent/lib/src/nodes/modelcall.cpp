@@ -424,7 +424,11 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
 
     auto   ctxPtr = agentContext.lock()->middlewareHandleContext;
     auto   timer  = asio::steady_timer(co_await asio::this_coro::executor);
-    size_t retry  = 0;
+    // 连续重试次数 (用于退避延时计算; 部分输出成功后会重置)
+    size_t retry = 0;
+    // 总尝试次数 (每次调用失败都递增, 不重置): 限制 LLM 调用失败的总次数,
+    // 防止 "流式输出 ≥512 字符后失败 -> 插入部分消息并重置 retry" 导致无限重试
+    size_t totalAttempts = 0;
 
     do {
         // 清理过时的 临时 LLM 消息
@@ -464,18 +468,21 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
             // } catch (const neograph::graph::NodeInterrupt&) {
             // isCancel = true;
             // llm node 无 Interrupt
+        } catch (const boost::exception& e) {
+            // 注意: boost::exception 需在 std::exception 之前捕获,
+            // 同时继承两者的异常 (如 boost::system::system_error) 才能取到完整诊断信息
+            errInfo  = agentxx::util::autoTryConvertToUtf8(boost::diagnostic_information(e));
+            errorPtr = std::current_exception();
         } catch (const std::exception& e) {
             errInfo  = agentxx::util::autoTryConvertToUtf8(e.what());
-            errorPtr = std::current_exception();
-        } catch (const boost::exception& e) {
-            errInfo  = agentxx::util::autoTryConvertToUtf8(boost::diagnostic_information(e));
             errorPtr = std::current_exception();
         } catch (...) {
             errInfo  = "unknown";
             errorPtr = std::current_exception();
         }
 
-        // 触发异常
+        // 触发异常: 本次调用失败, 总尝试次数递增 (不随部分输出重置)
+        ++totalAttempts;
         auto lastMsgThinking = ctxPtr->getGraphDataItemValue<std::string>(
             in.ctx.thread_id,
             agentxx::middleware::MiddlewareContext::graphDataKey_tempLLMThinking
@@ -510,11 +517,16 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
                     std::move(appendMsgJsons),
                 });
             }
-            // 有部分响应成功，重置重试次数
+            // 有部分响应成功，重置连续重试次数 (退避延时重新从短开始)
             retry = 0;
         }
 
-        if (isCancel || retry >= agentCtxPtr->agentConfig->llmMaxRetry) {
+        // - 连续重试达到配置上限, 或
+        // - 总尝试次数达到配置上限 * 3 (防止部分输出后 retry 被反复重置导致无限重试)
+        //   时, 停止重试并抛出原始异常
+        if (isCancel
+            || retry >= agentCtxPtr->agentConfig->llmMaxRetry
+            || totalAttempts >= agentCtxPtr->agentConfig->llmMaxRetry * 3) {
             std::rethrow_exception(errorPtr);
         }
 
@@ -556,8 +568,10 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
                 std::move(tipJson),
             });
         }
-        // 逐渐延长延时等待
-        timer.expires_after(std::chrono::milliseconds(retry * 3 * 1000 + appendDelay));
+        // 逐渐延长延时等待 (appendDelay 单位: 秒, 与 UI 提示 delaySec 一致)
+        timer.expires_after(
+            std::chrono::seconds(retry * 3) + std::chrono::seconds(appendDelay)
+        );
         co_await timer.async_wait(asio::use_awaitable);
     } while (true);
 }

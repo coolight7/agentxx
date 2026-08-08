@@ -42,7 +42,8 @@ public:
     std::string resolveCurrentModelName(std::string_view threadId) const;
 
     asio::awaitable<neograph::ChatCompletion>
-        onReceiveToken(neograph::CompletionParams& params, neograph::graph::NodeInput& input);
+        onReceiveToken(neograph::CompletionParams& params, neograph::graph::NodeInput& input)
+        override;
 
     neograph::CompletionParams
         build_params(const neograph::graph::GraphState& state, std::string_view threadId) const;

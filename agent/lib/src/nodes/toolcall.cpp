@@ -392,11 +392,12 @@ asio::awaitable<std::string> ToolcallWrapNode::execTool(
         } catch (const neograph::graph::NodeInterrupt&) {
             isCancel = true;
             errorPtr = std::current_exception();
+        } catch (const boost::exception& e) {
+            // boost::exception 在 std::exception 之前捕获, 保留完整诊断信息
+            errInfo  = agentxx::util::autoTryConvertToUtf8(boost::diagnostic_information(e));
+            errorPtr = std::current_exception();
         } catch (const std::exception& e) {
             errInfo  = agentxx::util::autoTryConvertToUtf8(e.what());
-            errorPtr = std::current_exception();
-        } catch (const boost::exception& e) {
-            errInfo  = agentxx::util::autoTryConvertToUtf8(boost::diagnostic_information(e));
             errorPtr = std::current_exception();
         } catch (...) {
             errorPtr = std::current_exception();

@@ -513,11 +513,11 @@ std::vector<ScrollItem> PlanDiagramOverlay::buildItems() {
     const auto& st    = *ctx_.frameState;
     const auto& theme = *ctx_.theme;
 
-    // 定位最近一次 planning_write 工具消息
+    // 定位最近一次 agentxx_planning_write 工具消息 (与 Info 侧边栏 Plan 展示一致)
     const TUIMessage* plan = nullptr;
     for (size_t i = st.messages.size(); i > 0; --i) {
         const auto& m = *st.messages[i - 1];
-        if (m.role == TUIMessage::Role::Tool && m.toolName == "planning_write") {
+        if (m.role == TUIMessage::Role::Tool && m.toolName == "agentxx_planning_write") {
             plan = st.messages[i - 1].get();
             break;
         }
@@ -591,7 +591,11 @@ Element PlanDiagramOverlay::OnRender() {
         text(" "),
     });
 
-    const int maxH = std::max(10, Terminal::Size().dimy - 6);
+    // 默认全屏大小保留一圈边距 (上下左右各 2 字符): 弹窗在 ModalContainer 中居中,
+    // 四周自然露出背景色边距; 宽度下限 40 与状态图渲染预算保持一致
+    const int margin = 2;
+    const int maxW   = std::max(40, Terminal::Size().dimx - margin * 2);
+    const int maxH   = std::max(10, Terminal::Size().dimy - margin * 2);
     return vbox({
                header,
                separator(),
@@ -599,7 +603,7 @@ Element PlanDiagramOverlay::OnRender() {
                separator(),
                text(" [Wheel/Up/Down] Scroll  [✕/Esc] Close ") | center | dim,
            })
-           | border | size(WIDTH, LESS_THAN, 120) | size(WIDTH, GREATER_THAN, 60)
+           | border | size(WIDTH, LESS_THAN, maxW) | size(WIDTH, GREATER_THAN, 40)
            | size(HEIGHT, LESS_THAN, maxH) | color(theme.accentColor);
 }
 

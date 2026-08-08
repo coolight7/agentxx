@@ -21,6 +21,7 @@
 #include "asio/write.hpp"
 #include "fmt/format.h"
 #include "glob/glob.h"
+#include "neograph/graph/cancel.h"
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
@@ -337,6 +338,8 @@ asio::awaitable<std::string> FileSystemListTool::execute_async(const neograph::j
     // 获取阻塞操作卸载线程池, 避免 std::filesystem 同步调用阻塞 io_context 事件循环
     auto  agentPtr = agentContext.lock();
     auto& pool     = *agentPtr->blockingPool;
+    // 会话取消令牌: 取消时由 watcher 置位 cancelFlag, 工作线程提前退出
+    auto cancelToken = agentxx::tools::getSessionCancelToken(agentPtr, arguments);
 
     // 外部提供 cancelFlag, 超时时由定时器设置, 通知工作线程提前退出
     auto cancelFlag = std::make_shared<std::atomic<bool>>(false);
@@ -349,6 +352,7 @@ asio::awaitable<std::string> FileSystemListTool::execute_async(const neograph::j
     auto workFuture = agentxx::util::offloadCancellableAsync<std::string>(
         pool,
         cancelFlag,
+        cancelToken,
         [targetPath, recursive, limit](std::atomic<bool>& cancelFlag
         ) -> asio::awaitable<std::string> {
             std::vector<std::string> lines;
@@ -413,8 +417,11 @@ asio::awaitable<std::string> FileSystemListTool::execute_async(const neograph::j
                 lines.push_back("[Error] Path not exist");
             } else if (std::filesystem::is_directory(targetPath)) {
                 if (recursive) {
-                    for (const auto& entity :
-                         std::filesystem::recursive_directory_iterator(targetPath)) {
+                    // skip_permission_denied: 单个不可读目录被跳过而非中断整个列表
+                    for (const auto& entity : std::filesystem::recursive_directory_iterator(
+                             targetPath,
+                             std::filesystem::directory_options::skip_permission_denied
+                         )) {
                         // 检查取消标志, 提前退出释放线程
                         if (cancelFlag.load(std::memory_order_acquire)) {
                             throw neograph::graph::CancelledException("filesystem_list cancelled");
@@ -425,7 +432,10 @@ asio::awaitable<std::string> FileSystemListTool::execute_async(const neograph::j
                         }
                     }
                 } else {
-                    for (const auto& entity : std::filesystem::directory_iterator(targetPath)) {
+                    for (const auto& entity : std::filesystem::directory_iterator(
+                             targetPath,
+                             std::filesystem::directory_options::skip_permission_denied
+                         )) {
                         // 检查取消标志, 提前退出释放线程
                         if (cancelFlag.load(std::memory_order_acquire)) {
                             throw neograph::graph::CancelledException("filesystem_list cancelled");
@@ -553,7 +563,7 @@ asio::awaitable<std::string>
         neograph_asio_error_code errCode;
         stream.open(systemCharsetFilePath, asio::stream_file::read_only, errCode);
         if (false == stream.is_open()) {
-            throw std::runtime_error{fmt::format(R"(Can not open file: {}")", errCode.message())};
+            throw std::runtime_error{fmt::format(R"(Can not open file: {})", errCode.message())};
         }
 
         if (text_line_offset >= 0 || text_line_limit > 0) {
@@ -597,6 +607,10 @@ asio::awaitable<std::string>
             }
 
             stream.close();
+            if (lineNum == 0 && offset == 0) {
+                // 空文件: 第 0 行视为空行, 返回空串而非报错
+                co_return "";
+            }
             if (lineNum <= offset) {
                 // offset 超出文件行数
                 throw std::runtime_error{fmt::format(
@@ -665,6 +679,10 @@ asio::awaitable<std::string>
             }
 
             stream.close();
+            if (lineNum == 0 && offset == 0) {
+                // 空文件: 第 0 行视为空行, 返回空串而非报错
+                co_return "";
+            }
             if (lineNum <= offset) {
                 // offset 超出文件行数
                 throw std::runtime_error{fmt::format(
@@ -764,7 +782,7 @@ asio::awaitable<std::string>
             neograph_asio_error_code errCode;
             stream.open(systemCharsetFilePath, asio::random_access_file::read_only, errCode);
             if (false == stream.is_open()) {
-                throw std::runtime_error{fmt::format(R"(Can not open file: {}")", errCode.message())
+                throw std::runtime_error{fmt::format(R"(Can not open file: {})", errCode.message())
                 };
             }
 
@@ -815,7 +833,7 @@ asio::awaitable<std::string>
         neograph_asio_error_code errCode;
         stream.open(systemCharsetFilePath, asio::stream_file::read_only, errCode);
         if (false == stream.is_open()) {
-            throw std::runtime_error{fmt::format(R"(Can not open file: {}")", errCode.message())};
+            throw std::runtime_error{fmt::format(R"(Can not open file: {})", errCode.message())};
         }
 
         std::string result;
@@ -886,9 +904,21 @@ asio::awaitable<std::string>
             std::streamsize realBytesRead = stream.gcount();
 
             stream.close();
+            if (realBytesRead <= 0) {
+                throw std::runtime_error{fmt::format(
+                    R"(Read {} bytes from file failed. Error: {})",
+                    offset,
+                    stream.bad() ? std::error_code{errno, std::system_category()}.message()
+                                 : "no data read"
+                )};
+            }
             co_return neograph::json{
-                {"bytes_read_len", realBytesRead                      },
-                {"base64_data",    agentxx::util::base64Encode(result)},
+                {"bytes_read_len", realBytesRead},
+                // 仅编码实际读到的字节, 避免预分配 buffer 中未读到的零填充字节被编码
+                {"base64_data",
+                 agentxx::util::base64Encode(
+                     std::string_view{result}.substr(0, static_cast<size_t>(realBytesRead))
+                 )},
             }
                 .dump();
         }
@@ -1008,7 +1038,7 @@ asio::awaitable<std::string> FilesystemWriteFileTool::execute_async(const neogra
             errCode
         );
         if (false == stream.is_open()) {
-            throw std::runtime_error{fmt::format(R"(Can not open file: {}")", errCode.message())};
+            throw std::runtime_error{fmt::format(R"(Can not open file: {})", errCode.message())};
         }
 
         if (false == content.empty()) {
@@ -1238,7 +1268,7 @@ asio::awaitable<std::string>
         );
         if (false == stream.is_open()) {
             throw std::runtime_error{
-                fmt::format(R"(Can not open temp file to write: {}")", errCode.message())
+                fmt::format(R"(Can not open temp file to write: {})", errCode.message())
             };
         }
         co_await asio::async_write(
@@ -1286,6 +1316,8 @@ asio::awaitable<std::string>
         std::ostringstream output;
         output << stream.rdbuf();
         std::string content = output.str();
+        // 与异步分支行为一致: 先转 UTF-8 (GBK 等编码文件可正常匹配), 再统一换行符
+        agentxx::util::autoConvertToUtf8(content);
         normalizeCrlfToLf(content);
 
         int    replaceHit = 0;
@@ -1371,13 +1403,6 @@ neograph::ChatTool FilesystemGlobTool::get_definition() const {
                         },
                     },
                     {
-                        "case_sensitive",
-                        {
-                            {"type", "boolean"},
-                            {"description", prompt.getArg("case_sensitive")},
-                        },
-                    },
-                    {
                         "max_depth",
                         {
                             {"type", "number"},
@@ -1415,32 +1440,11 @@ asio::awaitable<std::string> FilesystemGlobTool::execute_async(const neograph::j
         item = toCurrentSystemAbsolutePath(item);
     }
 
-    // 解析可选参数
-    auto caseSensitive   = arguments.value<bool>("case_sensitive", true);
-
-    // 大小写不敏感时, 手动将模式中顶层 ASCII 字母折叠为 [xX] 字符类,
-    // 再以大小写敏感模式调用 glob 库 (折叠后的模式本身已含字符类通配符)。
-    // 不能依赖 glob 库内部的 case-fold: 它会对整个模式折叠, 包括 Windows 盘符
-    // `C:` -> `[cC]:`; 而 `[cC]` 不是合法盘符字符, fs::path 无法再识别该路径为
-    // 绝对路径, 路径退化为相对路径导致 glob 遍历失败 (如 `C:/.../TEST1.TXT`)。
-    // 因此这里折叠后还原 root-name (盘符 `C:` / UNC `\\server\share`), 保持绝对路径有效;
-    // Linux (无盘符) 下 root-name 为空, 不受影响。
-    if (!caseSensitive) {
-        for (auto& item : file_patterns) {
-            auto root   = std::filesystem::path{item}.root_name().generic_string();
-            auto folded = glob::case_fold_pattern(item);
-            if (!root.empty()) {
-                auto foldedRoot = glob::case_fold_pattern(root);
-                if (folded.size() >= foldedRoot.size()
-                    && folded.compare(0, foldedRoot.size(), foldedRoot) == 0) {
-                    folded.replace(0, foldedRoot.size(), root);
-                }
-            }
-            item = std::move(folded);
-        }
-        // 模式已折叠完成, glob 库不再重复折叠
-        caseSensitive = true;
-    }
+    // 注: 路径匹配固定为大小写敏感 (移除 case-insensitive 支持)。
+    // 历史原因: 曾用 glob::case_fold_pattern 折叠模式以支持忽略大小写, 但折叠后的
+    // `[xX]` 字符类会让 glob::static_prefix 在 `[` 处截断前缀, 导致 max_depth 深度
+    // 计算基准目录失效 (过滤结果错误), 且 Windows 盘符折叠后无法再识别为绝对路径。
+    // 若需忽略大小写匹配, 可先用 filesystem_list 列出候选路径再精确匹配。
     auto maxDepth        = arguments.value<int64_t>("max_depth", -1);
     auto doSort          = arguments.value<bool>("sort", false);
     auto typeFilter      = collectTypeFilter(arguments.value("type", neograph::json{}));
@@ -1452,6 +1456,8 @@ asio::awaitable<std::string> FilesystemGlobTool::execute_async(const neograph::j
     // 获取阻塞操作卸载线程池, 避免 glob 同步调用阻塞 io_context 事件循环
     auto  agentPtr = agentContext.lock();
     auto& pool     = *agentPtr->blockingPool;
+    // 会话取消令牌: 取消时由 watcher 置位 cancelFlag, 工作线程提前退出
+    auto cancelToken = agentxx::tools::getSessionCancelToken(agentPtr, arguments);
 
     // 外部提供 cancelFlag, 超时时由定时器设置, 通知工作线程提前退出
     auto cancelFlag = std::make_shared<std::atomic<bool>>(false);
@@ -1462,7 +1468,8 @@ asio::awaitable<std::string> FilesystemGlobTool::execute_async(const neograph::j
     auto workFuture = agentxx::util::offloadCancellableAsync<std::string>(
         pool,
         cancelFlag,
-        [file_patterns, typeFilter, excludePatterns, maxDepth, doSort, caseSensitive](
+        cancelToken,
+        [file_patterns, typeFilter, excludePatterns, maxDepth, doSort](
             std::atomic<bool>& cancelFlag
         ) -> asio::awaitable<std::string> {
             if (cancelFlag.load(std::memory_order_acquire)) {
@@ -1471,21 +1478,21 @@ asio::awaitable<std::string> FilesystemGlobTool::execute_async(const neograph::j
 
             // 智能选择 glob/rglob: 含 `**` 的模式使用 rglob (递归), 否则使用 glob (仅当前目录)
             // 对齐 shell globstar 行为: `*.txt` 只匹配当前目录, `**/*.txt` 才递归
-            // 大小写不敏感时由 glob 库内部折叠模式 (case_fold_pattern)
+            // 路径匹配固定为大小写敏感
             std::vector<std::filesystem::path> resultList;
             for (const auto& pattern : file_patterns) {
                 if (cancelFlag.load(std::memory_order_acquire)) {
                     throw neograph::graph::CancelledException("filesystem_glob cancelled");
                 }
                 if (glob::has_recursive_segment(pattern)) {
-                    auto matched = glob::rglob(pattern, caseSensitive, cancelFlag);
+                    auto matched = glob::rglob(pattern, true, cancelFlag);
                     resultList.insert(
                         resultList.end(),
                         std::make_move_iterator(matched.begin()),
                         std::make_move_iterator(matched.end())
                     );
                 } else {
-                    auto matched = glob::glob(pattern, caseSensitive, cancelFlag);
+                    auto matched = glob::glob(pattern, true, cancelFlag);
                     resultList.insert(
                         resultList.end(),
                         std::make_move_iterator(matched.begin()),
@@ -1767,6 +1774,7 @@ asio::awaitable<std::string> FilesystemGrepTool::execute_async(const neograph::j
     // 待下方 co_await 真正恢复协程时捕获项已失效 -> stack-use-after-return。
     // 具名 lambda work 作为本协程局部变量, 存活至 execute_async 结束, 覆盖整个 co_await 周期。
     auto work = [this,
+                 arguments,
                  file_patterns,
                  text_patterns,
                  text_patterns_is_regex,
@@ -1779,6 +1787,8 @@ asio::awaitable<std::string> FilesystemGrepTool::execute_async(const neograph::j
         {
             auto  agentPtr = agentContext.lock();
             auto& pool     = *agentPtr->blockingPool;
+            // 会话取消令牌: 取消时由 watcher 置位 cancelFlag, 工作线程提前退出
+            auto cancelToken = agentxx::tools::getSessionCancelToken(agentPtr, arguments);
 
             // 将 glob 阻塞操作卸载到线程池, 支持取消传播:
             // 当会话 CancelToken 取消 (watcher 监听置位) 或超时时, cancelFlag 被置 true,
@@ -1787,24 +1797,25 @@ asio::awaitable<std::string> FilesystemGrepTool::execute_async(const neograph::j
                 std::vector<std::filesystem::path>>(
                 pool,
                 cancelFlag,
+                cancelToken,
                 [file_patterns](std::atomic<bool>& cancelFlag
                 ) -> asio::awaitable<std::vector<std::filesystem::path>> {
                     // 智能选择 glob/rglob: 含 `**` 的模式使用 rglob (递归), 否则使用 glob
-                    // (仅当前目录)
+                    // (仅当前目录); 路径匹配固定为大小写敏感
                     std::vector<std::filesystem::path> resultList;
                     for (const auto& pattern : file_patterns) {
                         if (cancelFlag.load(std::memory_order_acquire)) {
                             throw neograph::graph::CancelledException("filesystem_grep cancelled");
                         }
                         if (glob::has_recursive_segment(pattern)) {
-                            auto matched = glob::rglob(pattern, cancelFlag);
+                            auto matched = glob::rglob(pattern, true, cancelFlag);
                             resultList.insert(
                                 resultList.end(),
                                 std::make_move_iterator(matched.begin()),
                                 std::make_move_iterator(matched.end())
                             );
                         } else {
-                            auto matched = glob::glob(pattern, cancelFlag);
+                            auto matched = glob::glob(pattern, true, cancelFlag);
                             resultList.insert(
                                 resultList.end(),
                                 std::make_move_iterator(matched.begin()),
@@ -1816,6 +1827,19 @@ asio::awaitable<std::string> FilesystemGrepTool::execute_async(const neograph::j
                     std::sort(resultList.begin(), resultList.end());
                     resultList.erase(
                         std::unique(resultList.begin(), resultList.end()),
+                        resultList.end()
+                    );
+                    // 仅保留普通文件: glob 模式可能匹配到目录 (如 `**/*`), 在此过滤
+                    // 避免在 io_context 线程上逐个同步 is_regular_file 检查阻塞事件循环
+                    resultList.erase(
+                        std::remove_if(
+                            resultList.begin(),
+                            resultList.end(),
+                            [](const std::filesystem::path& p) {
+                                std::error_code ec;
+                                return false == std::filesystem::is_regular_file(p, ec);
+                            }
+                        ),
                         resultList.end()
                     );
                     co_return resultList;
@@ -1834,36 +1858,40 @@ asio::awaitable<std::string> FilesystemGrepTool::execute_async(const neograph::j
         bool isContentMode = ("content" == output_mode);
         auto resultStr     = std::ostringstream{};
 
-        /// 辅助: 计算 text[0..pos) 中的换行符数量, 即 pos 所在的行号 (0-based)
-        auto lineNumberOf = [](std::string_view text, size_t pos) -> size_t {
-            size_t count = 0;
-            for (size_t i = 0; i < pos && i < text.size(); ++i) {
+        // ---- 行索引辅助 (优化): 每文件只扫描一次构建"行起始偏移索引", 行号查询
+        // 二分 O(log n), 替代原实现对每个 match 全文本扫描 O(n) 的 lineNumberOf ----
+
+        /// 构建行起始偏移索引 (0-based): lineStarts[i] 为第 i 行的起始字节偏移
+        auto buildLineStarts = [](std::string_view text) -> std::vector<size_t> {
+            std::vector<size_t> lineStarts;
+            lineStarts.reserve(text.size() / 40 + 1);
+            lineStarts.push_back(0);
+            for (size_t i = 0; i < text.size(); ++i) {
                 if (text[i] == '\n') {
-                    ++count;
+                    lineStarts.push_back(i + 1);
                 }
             }
-            return count;
+            return lineStarts;
         };
 
-        /// 辅助: 提取 text 中第 lineIdx 行 (0-based) 的内容 (不含末尾换行符)
-        auto extractLine = [](std::string_view text, size_t lineIdx) -> std::string_view {
-            size_t start   = 0;
-            size_t curLine = 0;
-            // 找到第 lineIdx 行的起始位置
-            while (curLine < lineIdx && start < text.size()) {
-                if (text[start] == '\n') {
-                    ++curLine;
-                }
-                ++start;
-            }
-            if (start >= text.size()) {
+        /// 计算 pos 所在的行号 (0-based)
+        auto lineNumberOf = [](const std::vector<size_t>& lineStarts, size_t pos) -> size_t {
+            auto it = std::upper_bound(lineStarts.begin(), lineStarts.end(), pos);
+            return static_cast<size_t>(it - lineStarts.begin()) - 1;
+        };
+
+        /// 提取 text 中第 lineIdx 行 (0-based) 的内容 (不含末尾换行符)
+        auto extractLine = [](std::string_view                            text,
+                              const std::vector<size_t>&                  lineStarts,
+                              size_t                                       lineIdx
+                          ) -> std::string_view {
+            if (lineIdx >= lineStarts.size()) {
                 return {};
             }
-            // 找到行尾
-            size_t end = text.find('\n', start);
-            if (end == std::string_view::npos) {
-                end = text.size();
-            }
+            const size_t start = lineStarts[lineIdx];
+            // lineStarts[i+1] 为下一行行首 (本行 `\n` 后一字节), 减 1 排除换行符
+            const size_t end   = (lineIdx + 1 < lineStarts.size()) ? lineStarts[lineIdx + 1] - 1
+                                                                   : text.size();
             return text.substr(start, end - start);
         };
 
@@ -1880,6 +1908,22 @@ asio::awaitable<std::string> FilesystemGrepTool::execute_async(const neograph::j
                 --count;
             }
             return count;
+        };
+
+        /// 加载并预处理文本文件: 跳过二进制文件 (含 NUL 字节), 非 UTF-8 编码
+        /// (GBK 等) 转换为 UTF-8, 转换失败视为非文本跳过
+        auto loadSearchableText = [&](const std::string& filepath
+                                   ) -> asio::awaitable<std::optional<std::string>> {
+            auto filetext = co_await readFileContent(filepath);
+            // 仅搜索文本文件: 含 NUL 字节视为二进制, 跳过
+            if (filetext.find('\0') != std::string::npos) {
+                co_return std::nullopt;
+            }
+            // 非 UTF-8 编码文本转 UTF-8; 转换失败视为非文本, 跳过
+            if (false == agentxx::util::autoConvertToUtf8(filetext)) {
+                co_return std::nullopt;
+            }
+            co_return filetext;
         };
 
         if (text_patterns_is_regex) {
@@ -1901,13 +1945,13 @@ asio::awaitable<std::string> FilesystemGrepTool::execute_async(const neograph::j
                     throw neograph::graph::CancelledException("[Cancelled]");
                 }
                 auto filepath = item.generic_string();
-                // glob 模式可能匹配到目录 (如 `**/*`), grep 只搜索普通文件
-                std::error_code fec;
-                if (!std::filesystem::is_regular_file(filepath, fec)) {
+                // 读取并预处理: 跳过二进制/非文本文件 (glob 阶段已过滤目录)
+                auto filetextOpt = co_await loadSearchableText(filepath);
+                if (false == filetextOpt.has_value()) {
                     continue;
                 }
-                auto filetext = co_await readFileContent(filepath);
-                auto matchs   = std::vector<agentxx::util::XXRegexMatchResult>{};
+                auto& filetext = filetextOpt.value();
+                auto  matchs   = std::vector<agentxx::util::XXRegexMatchResult>{};
                 if (regex->match(filetext, matchs)) {
                     // 应用 max_count_per_file 限制 (对齐 grep -m)
                     size_t effectiveCount = matchs.size();
@@ -1921,13 +1965,15 @@ asio::awaitable<std::string> FilesystemGrepTool::execute_async(const neograph::j
                         resultStr << filepath << ":" << effectiveCount << "\n";
                     } else {
                         // content 模式: 输出匹配整行, 格式 file:line:content (对齐 grep -n)
+                        // 构建行索引, 行号/行内容查询 O(log n)
+                        auto lineStarts = buildLineStarts(filetext);
                         // 收集需要输出的行号 (含上下文), 去重后按行号排序输出
                         std::set<size_t> matchLineSet;   // 匹配行
                         std::set<size_t> contextLineSet; // 上下文行
                         size_t           fileLines = totalLines(filetext);
 
                         for (size_t mi = 0; mi < effectiveCount; ++mi) {
-                            size_t lineIdx = lineNumberOf(filetext, matchs[mi].start);
+                            size_t lineIdx = lineNumberOf(lineStarts, matchs[mi].start);
                             matchLineSet.insert(lineIdx);
                             if (contextLines > 0) {
                                 size_t ctxStart = (lineIdx > static_cast<size_t>(contextLines))
@@ -1956,7 +2002,7 @@ asio::awaitable<std::string> FilesystemGrepTool::execute_async(const neograph::j
                             }
                             first = false;
 
-                            auto lineContent = extractLine(filetext, lineIdx);
+                            auto lineContent = extractLine(filetext, lineStarts, lineIdx);
                             // 匹配行用 `:` 分隔, 上下文行用 `-` 分隔 (对齐 grep -n -C)
                             char sep = matchLineSet.count(lineIdx) ? ':' : '-';
                             resultStr << filepath << sep << (lineIdx + 1) << sep << lineContent
@@ -1975,13 +2021,13 @@ asio::awaitable<std::string> FilesystemGrepTool::execute_async(const neograph::j
                     throw neograph::graph::CancelledException("filesystem_grep cancelled");
                 }
                 auto filepath = item.generic_string();
-                // glob 模式可能匹配到目录 (如 `**/*`), grep 只搜索普通文件
-                std::error_code fec;
-                if (!std::filesystem::is_regular_file(filepath, fec)) {
+                // 读取并预处理: 跳过二进制/非文本文件 (glob 阶段已过滤目录)
+                auto filetextOpt = co_await loadSearchableText(filepath);
+                if (false == filetextOpt.has_value()) {
                     continue;
                 }
-                auto filetext = co_await readFileContent(filepath);
-                auto matchs   = search.search(filetext);
+                auto& filetext = filetextOpt.value();
+                auto  matchs   = search.search(filetext);
                 if (false == matchs.empty()) {
                     // 应用 max_count_per_file 限制 (对齐 grep -m)
                     size_t effectiveCount = matchs.size();
@@ -1995,12 +2041,14 @@ asio::awaitable<std::string> FilesystemGrepTool::execute_async(const neograph::j
                         resultStr << filepath << ":" << effectiveCount << "\n";
                     } else {
                         // content 模式: 输出匹配整行, 格式 file:line:content (对齐 grep -n)
+                        // 构建行索引, 行号/行内容查询 O(log n)
+                        auto lineStarts = buildLineStarts(filetext);
                         std::set<size_t> matchLineSet;
                         std::set<size_t> contextLineSet;
                         size_t           fileLines = totalLines(filetext);
 
                         for (size_t mi = 0; mi < effectiveCount; ++mi) {
-                            size_t lineIdx = lineNumberOf(filetext, matchs[mi].start);
+                            size_t lineIdx = lineNumberOf(lineStarts, matchs[mi].start);
                             matchLineSet.insert(lineIdx);
                             if (contextLines > 0) {
                                 size_t ctxStart = (lineIdx > static_cast<size_t>(contextLines))
@@ -2027,7 +2075,7 @@ asio::awaitable<std::string> FilesystemGrepTool::execute_async(const neograph::j
                             }
                             first = false;
 
-                            auto lineContent = extractLine(filetext, lineIdx);
+                            auto lineContent = extractLine(filetext, lineStarts, lineIdx);
                             char sep         = matchLineSet.count(lineIdx) ? ':' : '-';
                             resultStr << filepath << sep << (lineIdx + 1) << sep << lineContent
                                       << "\n";

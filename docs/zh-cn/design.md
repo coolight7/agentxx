@@ -59,6 +59,7 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
 | | `agentxx_codegraph_index` | 索引目录构建符号数据库 |
 | | `agentxx_codegraph_path` | 查找两符号间的调用链路径 |
 | | `agentxx_codegraph_status` | 索引统计信息 |
+| | | `agentxx_codegraph_*` 系列 tool 仅在配置 `enable_codegraph: true` 且编译启用 `AGENTXX_ENABLE_CODEGRAPH` 时注册 |
 | **规划** | `agentxx_planning_write` | 两层任务规划 (Mermaid 状态图 + Todo List + 备忘录) |
 | **子代理** | `agentxx_subagent_switch` | 创建和管理子代理执行委派任务 |
 | | `tool_skill_search` | 延迟加载工具/技能的搜索与发现 |
@@ -200,7 +201,7 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
 | **AudioStream** | 系统音频/麦克风/程序音频流捕获 |
 | **TextSelectionMonitor** | 系统级文本选择事件监听 (Windows UI Automation) |
 | **CpuGpuMonitor** | CPU/内存/GPU 使用率查询 |
-| **CodeGraphManager** | 代码索引与符号分析 (基于 codegraph-cpp) |
+| **CodeGraphManager** | 代码索引与符号分析 (基于 codegraph-cpp)；索引根目录为当前程序工作目录，sqlite 数据库存于 `~/.agentxx/sqlite/codegraph/<折叠路径>/index.db`（深层折叠 + 单段截断控制长度，路径前缀匹配复用） |
 
 ### 依赖注入
 
@@ -285,6 +286,14 @@ use_model:
 mcp_servers:
   - namespace: "my_mcp"
     url: "http://localhost:3000/mcp"
+
+# CodeGraph 代码分析 (需编译启用 AGENTXX_ENABLE_CODEGRAPH)
+enable_codegraph: false           # true 时 CodeAgent 注册 codegraph 系列 tool
+                                  # 索引根目录为当前程序工作目录
+                                  # 数据库: ~/.agentxx/sqlite/codegraph/<折叠路径>/index.db
+                                  # - 前缀复用: 子目录工作自动复用最近父级索引
+                                  # - 长度控制: 深层路径折叠为 hash 段, 单段超长截断,
+                                  #   保证不超系统路径限制 (Windows MAX_PATH=260)
 ```
 
 > **Codex (Responses API) 配置示例**:

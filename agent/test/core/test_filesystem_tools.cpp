@@ -1188,21 +1188,22 @@ asio::awaitable<void>
     co_return;
 }
 
-/// 大小写不敏感 glob: 大写模式 + case_sensitive=false 应匹配小写文件
+/// glob 路径匹配固定为大小写敏感 (case-insensitive 支持已移除):
+/// 大写模式匹配小写文件应失败
 asio::awaitable<void>
-    test_glob_case_insensitive(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    test_glob_case_sensitive(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FilesystemGlobTool{agentContext};
+    // testDir 下只有小写 test1.txt, 大写模式应匹配不到 (大小写敏感)
     auto args = neograph::json{
-        {"file_patterns",  neograph::json::array({testDir + "/TEST1.TXT"})},
-        {"case_sensitive", false                                         },
+        {"file_patterns", neograph::json::array({testDir + "/TEST1.TXT"})},
     };
     auto result = co_await tool.execute_async(args);
-    if (result.find("test1.txt") != std::string::npos) {
+    if (result.find("test1.txt") == std::string::npos) {
         g_fs_passed++;
-        TEST_PASS << "FilesystemGlobTool case_insensitive matches lowercase file" << std::endl;
+        TEST_PASS << "FilesystemGlobTool path matching is case-sensitive" << std::endl;
     } else {
         g_fs_failed++;
-        TEST_FAIL << "FilesystemGlobTool case_insensitive failed, got: " << result << std::endl;
+        TEST_FAIL << "FilesystemGlobTool case-sensitive failed, got: " << result << std::endl;
     }
     co_return;
 }
@@ -1434,7 +1435,7 @@ asio::awaitable<TestResult>
     co_await run(test_glob_non_recursive);
     co_await run(test_glob_type_filter);
     co_await run(test_glob_exclude_patterns);
-    co_await run(test_glob_case_insensitive);
+    co_await run(test_glob_case_sensitive);
     co_await run(test_glob_max_depth);
 
     co_await run(test_grep_get_definition);
