@@ -1,8 +1,12 @@
 #include "agentxx/tools/execute_command.h"
 
+#include "agentxx/agent/context.h"
 #include "agentxx/util/async_offload.h"
 #include "agentxx/util/string_util.h"
 #include "agentxx/util/util.h"
+#include "asio/as_tuple.hpp"
+#include "asio/co_spawn.hpp"
+#include "asio/detached.hpp"
 #include "asio/dispatch.hpp"
 #include "asio/experimental/awaitable_operators.hpp"
 #include "asio/io_context.hpp"
@@ -12,7 +16,10 @@
 #include "asio/steady_timer.hpp"
 #include "asio/use_awaitable.hpp"
 #include "fmt/format.h"
+#include "neograph/graph/cancel.h"
 #include <array>
+#include <atomic>
+#include <csignal>
 #include <cstdlib>
 #include <memory>
 #include <sstream>
@@ -25,6 +32,75 @@
 
 namespace agentxx {
 namespace tools {
+
+#if defined(BOOST_PROCESS_V2_PROCESS_HPP)
+
+/// RAII: 析构时置位 done, 通知取消 watcher 退出循环, 避免其继续引用已析构的 process
+struct ProcCancelGuard {
+    std::shared_ptr<std::atomic<bool>> done;
+    ~ProcCancelGuard() {
+        if (done) {
+            done->store(true, std::memory_order_release);
+        }
+    }
+};
+
+/// 启动会话取消 watcher: 轮询 CancelToken, 会话取消时终止子进程, 避免孤儿进程继续运行
+/// - Linux: 子进程经 setsid 启动 (pgid == pid), `kill(-pid)` 可整组清理 bash 派生的子孙进程
+/// - Windows: proc.terminate()
+/// - 注意: watcher 只终止、不调用 async_wait —— boost.process v2 的 async_wait op 内部
+///   引用共享的 exit_status_ 成员, 与主协程并发 wait 会产生数据竞争; 子进程回收由主协程
+///   负责。若主协程自身被 asio 取消 (异常路径) 未能 wait, 残留僵尸进程在 agent 进程
+///   退出时由系统回收 (比孤儿进程继续运行危害小)
+/// - 返回 RAII guard: execute_async 栈展开 (含异常路径) 时置位 done, watcher 退出
+static ProcCancelGuard startProcCancelWatcher(
+    asio::any_io_executor                                    ctx,
+    boost::process::process&                                 proc,
+    const std::shared_ptr<neograph::graph::CancelToken>&     cancelToken
+) {
+    auto done = std::make_shared<std::atomic<bool>>(false);
+    if (cancelToken && false == cancelToken->is_cancelled()) {
+        asio::co_spawn(
+            ctx,
+            [&proc, cancelToken, done]() -> asio::awaitable<void> {
+                asio::steady_timer timer(co_await asio::this_coro::executor);
+                while (false == done->load(std::memory_order_acquire)
+                       && false == cancelToken->is_cancelled()) {
+                    timer.expires_after(std::chrono::milliseconds(20));
+                    auto [ec] = co_await timer.async_wait(asio::as_tuple(asio::use_awaitable));
+                    if (ec) {
+                        co_return;
+                    }
+                }
+                if (false == done->load(std::memory_order_acquire)) {
+                    // 会话取消: 终止子进程
+#if XX_IS_WIN_D
+                    neograph_asio_error_code ec;
+                    proc.terminate(ec);
+#else
+                    // setsid 启动, pgid == pid; kill 负 pid 整组清理 (含 bash 派生的子孙进程)
+                    ::kill(-static_cast<pid_t>(proc.id()), SIGKILL);
+#endif
+                }
+            },
+            asio::detached
+        );
+    }
+    return ProcCancelGuard{std::move(done)};
+}
+
+/// 终止子进程及其进程组 (Linux: 整组 SIGKILL; Windows: terminate), 用于超时场景
+static void killProcGroup(boost::process::process& proc) {
+#if XX_IS_WIN_D
+    neograph_asio_error_code ec;
+    proc.terminate(ec);
+#else
+    // setsid 启动, pgid == pid; kill 负 pid 整组清理 bash 派生的子孙进程
+    ::kill(-static_cast<pid_t>(proc.id()), SIGKILL);
+#endif
+}
+
+#endif // BOOST_PROCESS_V2_PROCESS_HPP
 
 /// 构造超时错误结果 JSON
 /// - 子进程输出可能含引号/反斜杠/换行或非 UTF-8 字节, 必须经 neograph::json 转义,
@@ -133,8 +209,15 @@ asio::awaitable<std::string> ExecuteLinuxCommandTool::execute_async(const neogra
             procExe,
             procArgs,
             boost::process::process_environment(procEnv),
-            boost::process::process_stdio{.out = outpip, .err = errpip},
+            // stdin 重定向到 null 设备 (Windows: NUL / POSIX: /dev/null),
+            // 避免子进程 (如交互式命令) 抢读 agent 进程的终端输入
+            boost::process::process_stdio{.in = nullptr, .out = outpip, .err = errpip},
         };
+
+        // 会话取消监听: 取消时终止子进程 (含子孙进程), 避免孤儿进程继续运行
+        auto agentCtxPtr = agentContext.lock();
+        auto cancelToken = agentxx::tools::getSessionCancelToken(agentCtxPtr, arguments);
+        auto cancelGuard = startProcCancelWatcher(ctx, proc, cancelToken);
 
         std::string              strout, strerr;
         neograph_asio_error_code errCodeStdOut, errCodeStdErr;
@@ -167,16 +250,21 @@ asio::awaitable<std::string> ExecuteLinuxCommandTool::execute_async(const neogra
                 }
             );
             if (isTimeout) {
-                neograph_asio_error_code ec;
-                proc.terminate(ec);
+                // 超时: 整组终止 (Linux 连子孙进程一起清理), 避免 bash 派生的进程继续运行
+                killProcGroup(proc);
                 // 回收子进程避免僵尸
+                neograph_asio_error_code ec;
                 co_await proc.async_wait(asio::redirect_error(asio::use_awaitable, ec));
                 co_return makeTimeoutResult(timeout, strout, strerr);
             }
         } else {
-            co_await std::move(readStdOutFuture);
-            co_await std::move(readStdErrFuture);
-            co_await proc.async_wait();
+            // 无超时: stdout/stderr/退出 并发等待, 避免串行等待时
+            // 子进程写满 stderr 管道而 stdout 未关闭导致的双方互等死锁
+            using namespace asio::experimental::awaitable_operators;
+            co_await (
+                std::move(readStdOutFuture) && std::move(readStdErrFuture)
+                && proc.async_wait(asio::use_awaitable)
+            );
         }
 
         const auto         exitCode = proc.exit_code();
@@ -301,8 +389,14 @@ asio::awaitable<std::string>
             boost::process::environment::find_executable("cmd.exe"),
             {"/c",          command      },
             boost::process::process_environment(procEnv),
-            boost::process::process_stdio{.out = outpip, .err = errpip}
+            // stdin 重定向到 null 设备, 避免子进程抢读 agent 进程的终端输入
+            boost::process::process_stdio{.in = nullptr, .out = outpip, .err = errpip}
         };
+
+        // 会话取消监听: 取消时终止子进程, 避免孤儿进程继续运行
+        auto agentCtxPtr = agentContext.lock();
+        auto cancelToken = agentxx::tools::getSessionCancelToken(agentCtxPtr, arguments);
+        auto cancelGuard = startProcCancelWatcher(ctx, proc, cancelToken);
 
         std::string              strout, strerr;
         neograph_asio_error_code errCodeStdOut, errCodeStdErr;
@@ -335,16 +429,20 @@ asio::awaitable<std::string>
                 }
             );
             if (isTimeout) {
-                neograph_asio_error_code ec;
-                proc.terminate(ec);
+                killProcGroup(proc);
                 // 回收子进程避免僵尸
+                neograph_asio_error_code ec;
                 co_await proc.async_wait(asio::redirect_error(asio::use_awaitable, ec));
                 co_return makeTimeoutResult(timeout, strout, strerr);
             }
         } else {
-            co_await proc.async_wait(asio::use_awaitable);
-            co_await std::move(readStdOutFuture);
-            co_await std::move(readStdErrFuture);
+            // 无超时: stdout/stderr/退出 并发等待, 避免串行等待时
+            // 子进程写满 stderr 管道而 stdout 未关闭导致的双方互等死锁
+            using namespace asio::experimental::awaitable_operators;
+            co_await (
+                std::move(readStdOutFuture) && std::move(readStdErrFuture)
+                && proc.async_wait(asio::use_awaitable)
+            );
         }
 
         const auto         exitCode = proc.exit_code();
