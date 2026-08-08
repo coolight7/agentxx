@@ -137,7 +137,6 @@ std::optional<ftxui::Element> TUIClientAgentIO::renderPlanningInfo() {
     // 仅在用户点击时才在弹窗中渲染
     const auto roadmap = args.value("roadmap", std::string{});
     if (!roadmap.empty()) {
-        lines.push_back(text(" "));
         lines.push_back(
             text(" [View Plan Diagram] ") | bgcolor(theme_.buttonBgColor)
             | color(theme_.buttonTextColor) | bold | reflect(planDiagramButtonBox_)
@@ -231,9 +230,11 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
                 }
                 ++count;
                 elems.push_back(
-                    (splitName ? hbox({text(
-                         fmt::format("|  {}·{}", agentxx::util::getFileName(notif.name), notif.name)
-                     )})
+                    (splitName ? hbox({text(fmt::format(
+                                     "|  {}·{}",
+                                     agentxx::util::getFileName(notif.name),
+                                     notif.name
+                                 ))})
                                : hbox({text("|  "), text(notif.name)}))
                     | color(notif.success ? theme_.hintColor : theme_.errorColor)
                 );

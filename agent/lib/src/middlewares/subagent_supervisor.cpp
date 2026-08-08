@@ -5,6 +5,7 @@
 #include "agentxx/util/log.h"
 #include "fmt/format.h"
 #include <neograph/graph/engine.h>
+#include <atomic>
 #include <sstream>
 #include <vector>
 
@@ -164,7 +165,16 @@ asio::awaitable<events::RespSubagentResult> SubagentSupervisor::runSubagent(
         }
     }
 
-    auto subagentId = fmt::format("subagent_{}", subagentName);
+    // 每次运行生成唯一 thread_id:
+    // - 单次中断路径 (base_agent 逐个 co_await 处理 interrupt args) 是顺序的,
+    //   固定 id 无冲突; 但批量委派 (runBatch) 并发运行多个 subagent 时, 固定 id
+    //   会导致 SessionStore 会话 / engine graph state / checkpoint 互相覆盖。
+    // - 附加父会话 + 全局自增序号保证唯一 (单线程协作式调度下自增无竞争)
+    static std::atomic<uint64_t> subagentRunSeq{0};
+    const auto                   parentId = std::string{parentThreadId};
+    const auto subagentId = fmt::format(
+        "subagent_{}_{}_{}", subagentName, parentId, subagentRunSeq.fetch_add(1)
+    );
     auto busPtr     = ctxPtr->bus;
 
     // 标记 subagent 运行中 (供跨 agent 查询路由校验)
@@ -175,7 +185,7 @@ asio::awaitable<events::RespSubagentResult> SubagentSupervisor::runSubagent(
     co_return co_await agentxx::util::catchErrorAsync<events::RespSubagentResult>(
         [&]() -> asio::awaitable<events::RespSubagentResult> {
             neograph::graph::RunConfig cfg{
-                .thread_id        = fmt::format("session_{}", subagentId),
+                .thread_id        = subagentId,
                 .input            = {{
                     "messages",
                     neograph::json::array({
