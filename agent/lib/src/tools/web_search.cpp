@@ -174,11 +174,6 @@ asio::awaitable<std::string> WebSearchTool::execute_async(const neograph::json& 
             if (data.empty()) {
                 co_return R"({"error": "Empty search result."})";
             }
-            const size_t maxLength = 8000;
-            if (data.size() > maxLength) {
-                data.resize(maxLength);
-                data += "\n\n[Too long, truncated]";
-            }
             co_return data;
         }
     } else {
@@ -191,11 +186,6 @@ asio::awaitable<std::string> WebSearchTool::execute_async(const neograph::json& 
                 auto& data = respVal.body;
                 if (data.empty()) {
                     co_return R"({"error": "Empty search result."})";
-                }
-                const size_t maxLength = 8000;
-                if (data.size() > maxLength) {
-                    data.resize(maxLength);
-                    data += "\n\n[Too long, truncated]";
                 }
                 co_return data;
             }
@@ -351,11 +341,6 @@ asio::awaitable<std::string> WebFetchUrlMarkdownTool::execute_async(const neogra
         if (data.empty()) {
             co_return R"({"error": "Request Success, but got empty result."})";
         }
-        const size_t maxLength = 8000;
-        if (data.size() > maxLength) {
-            data.resize(maxLength);
-            data += "\n\n[Too long, truncated]";
-        }
         co_return data;
     }
     throw std::runtime_error(resp.error_or("[unknown]"));
@@ -449,11 +434,6 @@ asio::awaitable<std::string> ModelWebSearchTool::execute_async(const neograph::j
     auto& content    = completion.message.content;
     if (content.empty()) {
         co_return R"({"error": "Model web search returned empty result."})";
-    }
-    const size_t maxLength = 8000;
-    if (content.size() > maxLength) {
-        content.resize(maxLength);
-        content += "\n\n[Too long, truncated]";
     }
     co_return content;
 }
