@@ -1,6 +1,7 @@
 #include "agentxx/agent/base_agent.h"
 
 #include "agentxx/agent/checkpoint_store.h"
+#include "agentxx/agent/io/session_server_agent_io.h"
 #include "agentxx/middlewares/summarization.h"
 #include "agentxx/util/diff_util.h"
 #include "agentxx/util/exception.h"
@@ -373,6 +374,17 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
     auto cancelToken = std::make_shared<neograph::graph::CancelToken>();
     session->setCancelToken(cancelToken);
 
+    // 中断等待超时: 优先取 IO 端点配置 (SessionServerAgentIO::interruptTimeout),
+    // 否则使用总线默认 (30s)。避免 HIL 弹窗被总线 30s 默认超时提前截断,
+    // 与 SessionServerAgentIO::Config::interruptTimeout (默认 300s) 的设计意图不一致。
+    auto interruptTimeout = std::chrono::milliseconds{0}; // 0 = 使用总线默认
+    if (session->io) {
+        if (auto* serverIo
+            = dynamic_cast<agentxx::agent::SessionServerAgentIO*>(session->io.get())) {
+            interruptTimeout = serverIo->interruptTimeout();
+        }
+    }
+
     // llm callback: 由 EventBridge 统一处理 GraphEvent -> 会话增量 Delta/历史/总线发布
     auto eventCallback = eventBridge->makeCallback();
     auto cfg = neograph::graph::RunConfig{
@@ -544,23 +556,36 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                         } else {
                             auto session = agentContext->sessions->get(threadId);
                             if (session && session->bus) {
-                                auto resp
-                                    = co_await session->bus
-                                          ->request<events::ReqInterrupt, events::RespInterrupt>(
-                                              events::Topic::Interrupt,
-                                              events::ReqInterrupt{
-                                                  .agentName
-                                                  = agentContext->agentConfig
-                                                        ? agentContext->agentConfig->agentName
-                                                        : std::string{},
-                                                  .threadId          = std::string{threadId},
-                                                  .interruptNode     = interruptNode,
-                                                  .interruptValue    = interruptValue,
-                                                  .handleName        = interruptArg.name,
-                                                  .interruptArgsJson = interruptArg.toJson().dump(),
-                                                  .resultId          = interruptArg.resultId,
-                                              }
-                                          );
+                                // 显式传递中断等待超时: 与 IO 端点
+                                // interruptTimeout 配置一致, 避免被总线默认
+                                // 30s 超时截断 (用户长时间未响应中断弹窗时丢失中断)
+                                auto resp = co_await [&]() -> asio::awaitable<
+                                    std::expected<events::RespInterrupt, std::string>> {
+                                    auto req = events::ReqInterrupt{
+                                        .agentName = agentContext->agentConfig
+                                                         ? agentContext->agentConfig->agentName
+                                                         : std::string{},
+                                        .threadId          = std::string{threadId},
+                                        .interruptNode     = interruptNode,
+                                        .interruptValue    = interruptValue,
+                                        .handleName        = interruptArg.name,
+                                        .interruptArgsJson = interruptArg.toJson().dump(),
+                                        .resultId          = interruptArg.resultId,
+                                    };
+                                    if (interruptTimeout.count() > 0) {
+                                        co_return co_await session->bus
+                                            ->request<events::ReqInterrupt,
+                                                      events::RespInterrupt>(
+                                                events::Topic::Interrupt,
+                                                std::move(req),
+                                                interruptTimeout
+                                            );
+                                    }
+                                    co_return co_await session->bus
+                                        ->request<events::ReqInterrupt, events::RespInterrupt>(
+                                            events::Topic::Interrupt, std::move(req)
+                                        );
+                                }();
                                 if (resp.has_value() && resp->handled) {
                                     interruptResult = neograph::json::parse(resp->resultJson);
                                 }
