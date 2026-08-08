@@ -27,6 +27,7 @@
 #include <string>
 #include <string_view>
 #include <typeinfo>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -543,6 +544,12 @@ private:
     /// 当前节点开始计时 (NODE_START 重置)
     std::chrono::system_clock::time_point nodeStartTime_{};
     int64_t                               nodeStartTimeMs_ = 0;
+
+    /// toolCallId → fullHistory 索引 映射 (加速 edit 工具 diff 渲染)
+    /// - assistant(tool_calls) 消息登记, tool 结果按 id O(1) 定位, 避免每结果
+    ///   从历史末尾线性回扫 O(n²); 未命中时回扫兜底 (如历史来自更早轮次)
+    /// - fullHistory append-only, 索引不失效
+    std::unordered_map<std::string, size_t> toolCallHistoryIndex_;
 };
 
 } // namespace middleware

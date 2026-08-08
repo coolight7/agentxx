@@ -88,6 +88,11 @@ public:
         return config_.threadId;
     }
 
+    /// 中断等待超时 (供 BaseAgent 中断请求显式传递, 避免被总线默认超时截断)
+    std::chrono::milliseconds interruptTimeout() const noexcept {
+        return config_.interruptTimeout;
+    }
+
     bool turnActive() const noexcept {
         return turnActive_.load(std::memory_order_acquire);
     }
