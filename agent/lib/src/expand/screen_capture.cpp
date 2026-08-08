@@ -181,7 +181,9 @@ private:
             && screenIndex < static_cast<int>(dxgiMonitors_.size())
             && dxgiMonitors_[screenIndex].duplication) {
             auto frame = captureScreenDxgi(screenIndex, hMonitor, x, y, width, height);
-            if (frame.width > 0 && frame.height > 0) {
+            // DXGI AcquireNextFrame 超时（桌面无变化）时会返回带宽高但无像素数据的帧，
+            // 此时也应回退 GDI，确保始终能拿到完整像素
+            if (frame.width > 0 && frame.height > 0 && !frame.pixelData.empty()) {
                 return frame;
             }
             XX_LOGW("ScreenCapture: DXGI error for screen {}, falling back to GDI", screenIndex);

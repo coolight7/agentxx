@@ -4,8 +4,6 @@
 - BaseAgent 增加支持 usage 统计
 - 会话独立日志
 - eventBus 改为tree，命名空间使用 axx/bxx/cc
-- agent 发送状态给 tui 插入消息
-- toolcall 取消、错误处理
 
 ## 提示词优化
 - 如果编译需要配置特定参数，写成脚本或者写入到AGENTS.md
