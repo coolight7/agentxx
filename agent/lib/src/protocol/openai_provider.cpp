@@ -147,6 +147,24 @@ static int jsonIntField(const neograph::json& obj, const char* key, int def = 0)
     return def;
 }
 
+/// 从 Responses API 的 usage 对象中提取 token 统计
+/// - 官方字段: input_tokens / output_tokens / total_tokens
+/// - 兼容部分网关沿用 Chat Completions 的 prompt_tokens / completion_tokens 命名
+static void parseResponsesUsage(const neograph::json& u, neograph::ChatCompletion& completion) {
+    if (!u.is_object()) {
+        return;
+    }
+    completion.usage.prompt_tokens
+        = jsonIntField(u, "input_tokens", jsonIntField(u, "prompt_tokens"));
+    completion.usage.completion_tokens
+        = jsonIntField(u, "output_tokens", jsonIntField(u, "completion_tokens"));
+    completion.usage.total_tokens = jsonIntField(
+        u,
+        "total_tokens",
+        completion.usage.prompt_tokens + completion.usage.completion_tokens
+    );
+}
+
 /// 新模型 (o1/o3/o4/gpt-5 等) 只接受 max_completion_tokens 字段, 旧模型使用 max_tokens
 static bool modelUsesMaxCompletionTokens(std::string_view model) {
     if (model.find("gpt-5") != std::string_view::npos) {
@@ -686,16 +704,7 @@ asio::awaitable<neograph::ChatCompletion>
     // Responses API usage: input_tokens / output_tokens / total_tokens
     // (兼容部分网关沿用 Chat Completions 的 prompt_tokens/completion_tokens 命名)
     if (respJson.contains("usage") && respJson["usage"].is_object()) {
-        auto u = respJson["usage"];
-        completion.usage.prompt_tokens
-            = jsonIntField(u, "input_tokens", jsonIntField(u, "prompt_tokens"));
-        completion.usage.completion_tokens
-            = jsonIntField(u, "output_tokens", jsonIntField(u, "completion_tokens"));
-        completion.usage.total_tokens = jsonIntField(
-            u,
-            "total_tokens",
-            completion.usage.prompt_tokens + completion.usage.completion_tokens
-        );
+        parseResponsesUsage(respJson["usage"], completion);
     }
 
     fillMissingToolCallIds(completion);
@@ -1223,7 +1232,7 @@ bool OpenAIProvider::processResponsesSseLine(
 
     // 畸形 data 行应跳过而不是中断整个流
     // (解析失败返回 null json, 后续 contains()/jsonStrField 检查自然跳过)
-    auto j = agentxx::util::catchError<neograph::json>(
+    const auto j = agentxx::util::catchError<neograph::json>(
         [&payload] {
             return neograph::json::parse(payload);
         },
@@ -1232,18 +1241,14 @@ bool OpenAIProvider::processResponsesSseLine(
         }
     );
 
-    // usage: response.completed / response.usage 事件携带 (input/output/total tokens)
+    // usage: 官方 Responses API 在结束事件 (response.completed/response.incomplete) 中
+    // 将 usage 嵌套在 response 对象内, 即
+    // {"type":"response.completed","response":{...,"usage":{...}}}; 部分网关则在事件顶层直接携带
+    // usage, 两者都兼容
     if (j.contains("usage") && j["usage"].is_object()) {
-        auto u = j["usage"];
-        completion.usage.prompt_tokens
-            = jsonIntField(u, "input_tokens", jsonIntField(u, "prompt_tokens"));
-        completion.usage.completion_tokens
-            = jsonIntField(u, "output_tokens", jsonIntField(u, "completion_tokens"));
-        completion.usage.total_tokens = jsonIntField(
-            u,
-            "total_tokens",
-            completion.usage.prompt_tokens + completion.usage.completion_tokens
-        );
+        parseResponsesUsage(j["usage"], completion);
+    } else if (j.contains("response") && j["response"].is_object() && j["response"].contains("usage")) {
+        parseResponsesUsage(j["response"]["usage"], completion);
     }
 
     auto type = jsonStrField(j, "type");

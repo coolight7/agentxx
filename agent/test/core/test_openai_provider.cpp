@@ -349,7 +349,7 @@ public:
             ),
             sseEvent(
                 "response.completed",
-                R"({"type":"response.completed","response":{"id":"resp_mock","status":"completed"},"usage":{"input_tokens":5,"output_tokens":3,"total_tokens":8}})"
+                R"({"type":"response.completed","response":{"id":"resp_mock","status":"completed","usage":{"input_tokens":5,"output_tokens":3,"total_tokens":8}}})"
             ),
         };
     }
@@ -375,7 +375,7 @@ public:
             ),
             sseEvent(
                 "response.completed",
-                R"({"type":"response.completed","response":{"id":"resp_tool","status":"completed"},"usage":{"input_tokens":8,"output_tokens":4,"total_tokens":12}})"
+                R"({"type":"response.completed","response":{"id":"resp_tool","status":"completed","usage":{"input_tokens":8,"output_tokens":4,"total_tokens":12}}})"
             ),
         };
     }
@@ -2764,6 +2764,94 @@ void test_responses_sse_parsing_edge_cases() {
             &err
         );
         XX_TEST_EXPECT_EQ(err, "boom");
+    }
+
+    // usage 官方格式: response.completed 事件中嵌套在 response.usage (含 input/output/total)
+    {
+        std::string buf = "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Hi\"}\n\n"
+                          "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_x\","
+                          "\"status\":\"completed\",\"usage\":{\"input_tokens\":12,"
+                          "\"output_tokens\":7,\"total_tokens\":19}}}\n\n";
+        neograph::ChatCompletion completion;
+        std::string              content, thinking;
+        std::map<int, neograph::ToolCall> tcMap;
+        bool done = OpenAIProvider::processResponsesSseBuffer(
+            buf,
+            completion,
+            content,
+            thinking,
+            tcMap,
+            nullptr
+        );
+        XX_TEST_EXPECT_TRUE(done);
+        XX_TEST_EXPECT_EQ(content, "Hi");
+        XX_TEST_EXPECT_EQ(completion.usage.prompt_tokens, 12);
+        XX_TEST_EXPECT_EQ(completion.usage.completion_tokens, 7);
+        XX_TEST_EXPECT_EQ(completion.usage.total_tokens, 19);
+    }
+
+    // usage 官方格式: 嵌套 usage 缺 total_tokens 时按 input+output 兜底
+    {
+        std::string buf = "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_x\","
+                          "\"status\":\"completed\",\"usage\":{\"input_tokens\":3,"
+                          "\"output_tokens\":4}}}\n\n";
+        neograph::ChatCompletion completion;
+        std::string              content, thinking;
+        std::map<int, neograph::ToolCall> tcMap;
+        OpenAIProvider::processResponsesSseBuffer(
+            buf,
+            completion,
+            content,
+            thinking,
+            tcMap,
+            nullptr
+        );
+        XX_TEST_EXPECT_EQ(completion.usage.prompt_tokens, 3);
+        XX_TEST_EXPECT_EQ(completion.usage.completion_tokens, 4);
+        XX_TEST_EXPECT_EQ(completion.usage.total_tokens, 7);
+    }
+
+    // usage 网关兼容格式: 事件顶层直接携带 usage (部分网关非官方行为)
+    {
+        std::string buf = "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_x\","
+                          "\"status\":\"completed\"},\"usage\":{\"input_tokens\":5,"
+                          "\"output_tokens\":3,\"total_tokens\":8}}\n\n";
+        neograph::ChatCompletion completion;
+        std::string              content, thinking;
+        std::map<int, neograph::ToolCall> tcMap;
+        OpenAIProvider::processResponsesSseBuffer(
+            buf,
+            completion,
+            content,
+            thinking,
+            tcMap,
+            nullptr
+        );
+        XX_TEST_EXPECT_EQ(completion.usage.prompt_tokens, 5);
+        XX_TEST_EXPECT_EQ(completion.usage.completion_tokens, 3);
+        XX_TEST_EXPECT_EQ(completion.usage.total_tokens, 8);
+    }
+
+    // usage 非对象时跳过不抛异常 (顶层与嵌套两种位置)
+    {
+        std::string buf = "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_x\","
+                          "\"status\":\"completed\",\"usage\":\"weird\"}}\n\n";
+        neograph::ChatCompletion completion;
+        std::string              content, thinking;
+        std::map<int, neograph::ToolCall> tcMap;
+        try {
+            OpenAIProvider::processResponsesSseBuffer(
+                buf,
+                completion,
+                content,
+                thinking,
+                tcMap,
+                nullptr
+            );
+        } catch (...) {
+            XX_TEST_FAILED++;
+            TEST_FAIL << "non-object nested usage should not throw" << std::endl;
+        }
     }
 }
 
