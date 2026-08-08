@@ -166,12 +166,19 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
         if (role == "assistant" && jm.contains("tool_calls")) {
             hasLLMOutput = true;
             auto msgId   = session_->appendHistory(jm);
+            // 登记 toolCallId → fullHistory 索引, 供 tool 结果 diff 渲染 O(1) 定位
+            // (fullHistory append-only, 索引不失效)
+            const size_t historyIndex = session_->fullHistory.size() - 1;
             for (const auto& tc : jm["tool_calls"]) {
+                const auto tcId = tc.value("id", std::string{});
+                if (!tcId.empty()) {
+                    toolCallHistoryIndex_[tcId] = historyIndex;
+                }
                 emitDelta(Delta{
                     .type       = Delta::Type::ToolStart,
                     .msgId      = msgId,
                     .toolName   = tc.value("name", std::string{}),
-                    .toolCallId = tc.value("id", std::string{}),
+                    .toolCallId = tcId,
                     .arguments  = tc.value("arguments", std::string{}),
                 });
             }
@@ -185,20 +192,15 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
             auto historyMsg = jm;
             if (toolName == "agentxx_filesystem_edit_text_file") {
                 // 生成 diff 记录
-                for (auto it = session_->fullHistory.rbegin();
-                     it != session_->fullHistory.rend();
-                     ++it) {
-                    const auto& hd = it->data;
-                    if (hd.value("role", std::string{}) != "assistant"
-                        || !hd.contains("tool_calls")) {
-                        continue;
-                    }
-                    bool foundArgs = false;
-                    for (const auto& tc : hd["tool_calls"]) {
+                // - 优先 O(1) 索引定位 (本轮 assistant(tool_calls) 已登记),
+                //   未命中时回扫兜底 (如历史来自更早轮次)
+                const auto tryAppendDiff = [&](const neograph::json& assistantData) -> bool {
+                    const auto& tcs
+                        = assistantData.value("tool_calls", neograph::json::array());
+                    for (const auto& tc : tcs) {
                         if (tc.value("id", std::string{}) != toolCallId) {
                             continue;
                         }
-                        foundArgs = true;
                         // 解析失败的参数 (如非法 JSON) 跳过 diff 渲染
                         agentxx::util::catchError<bool>(
                             [&]() -> bool {
@@ -214,10 +216,29 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
                             },
                             [](std::string) -> bool { return false; }
                         );
-                        break;
+                        return true;
                     }
-                    if (foundArgs) {
-                        break;
+                    return false;
+                };
+
+                bool found = false;
+                if (auto idxIt = toolCallHistoryIndex_.find(toolCallId);
+                    idxIt != toolCallHistoryIndex_.end()
+                    && idxIt->second < session_->fullHistory.size()) {
+                    found = tryAppendDiff(session_->fullHistory[idxIt->second].data);
+                }
+                if (!found) {
+                    for (auto it = session_->fullHistory.rbegin();
+                         it != session_->fullHistory.rend();
+                         ++it) {
+                        const auto& hd = it->data;
+                        if (hd.value("role", std::string{}) != "assistant"
+                            || !hd.contains("tool_calls")) {
+                            continue;
+                        }
+                        if (tryAppendDiff(hd)) {
+                            break;
+                        }
                     }
                 }
             }
