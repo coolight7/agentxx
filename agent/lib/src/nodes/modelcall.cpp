@@ -10,6 +10,8 @@
 #include "asio/use_awaitable.hpp"
 #include "fmt/format.h"
 #include "fmt/ranges.h"
+#include <algorithm>
+#include <set>
 
 namespace agentxx {
 namespace nodes {
@@ -243,7 +245,51 @@ void ModelCallWrapNode::repairMessages(neograph::graph::NodeInput& in) {
 
     auto agentCtxPtr = agentContext.lock();
     if (agentCtxPtr->agentConfig->checkMessagesBeforeLLM) {
+        // - 最终兜底处理，一般生成 message 的代码应该自己处理异常、补充消息
+        // - 这里作为最终的预防处理
         auto msgs = in.state.get_messages();
+
+        bool haveChange = false;
+        // 清理悬挂的 assistant tool_calls:
+        // - 取消/异常后重新从图开始节点执行时, 上下文可能以
+        //   "assistant(tool_calls) 但无对应 tool 结果" 结尾 (如 toolcall 节点执行前被
+        //   取消), 悬挂的 tool_calls 会让 LLM 误以为工具已被调用, 这里清空其 tool_calls
+        // - 若所有声明的 tool_call_id 都已有 tool 结果消息 (如 toolcall 内取消时已由
+        //   ToolcallWrapNode 补齐 [User canceled]), 则不清空
+        {
+            // 找最后一条含 tool_calls 的 assistant 消息
+            int64_t assistantIndex = -1;
+            for (int64_t i = static_cast<int64_t>(msgs.size()) - 1; i >= 0; --i) {
+                if ("assistant" == msgs[i].role && !msgs[i].tool_calls.empty()) {
+                    assistantIndex = i;
+                    break;
+                }
+            }
+            if (assistantIndex >= 0) {
+                std::set<std::string> ids;
+                for (const auto& tc : msgs[assistantIndex].tool_calls) {
+                    if (!tc.id.empty()) {
+                        ids.insert(tc.id);
+                    }
+                }
+                std::set<std::string> replied;
+                for (size_t i = static_cast<size_t>(assistantIndex) + 1; i < msgs.size(); ++i) {
+                    if ("tool" == msgs[i].role && !msgs[i].tool_call_id.empty()) {
+                        replied.insert(msgs[i].tool_call_id);
+                    }
+                }
+                const bool allReplied
+                    = std::all_of(ids.begin(), ids.end(), [&](const std::string& id) {
+                          return replied.count(id) > 0;
+                      });
+                if (!ids.empty() && !allReplied) {
+                    // 存在悬挂的 tool_calls, 清空, 保证上下文角色顺序和内容完整
+                    msgs[assistantIndex].tool_calls.clear();
+                    XX_LOGD("RepairMessages: clear dangling toolcalls before LLM call");
+                    haveChange = true;
+                }
+            }
+        }
 
         auto checkInfo
             = agentCtxPtr->middlewareHandleContext->getGraphDataItemValue<neograph::json>(
@@ -261,7 +307,6 @@ void ModelCallWrapNode::repairMessages(neograph::graph::NodeInput& in) {
         }
         checkInfo["message_length"] = msgs.size();
 
-        bool haveChange = false;
         for (auto& msg : msgs) {
             bool doPrint = false;
             if (msg.role == "system") {
