@@ -128,7 +128,7 @@ private:
 
 /// Plan 状态图弹窗组件
 ///
-/// 显示 planning_write 工具 roadmap (Mermaid stateDiagram-v2) 的 ASCII 状态图:
+/// 显示 agentxx_planning_write 工具 roadmap (Mermaid stateDiagram-v2) 的 ASCII 状态图:
 /// - 全宽渲染, 内部 Scrollable 滚动 (滚轮 / Up/Down)
 /// - 节点按 id 状态后缀着色 (_in_progress/_completed/_failed/_pending)
 /// - 弹窗打开期间 plan 消息更新时 (指针/文本长度变化) 重新解析, 其余帧走缓存
