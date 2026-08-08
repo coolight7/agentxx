@@ -1,5 +1,6 @@
 #include "agentxx/agent/code_agent.h"
 
+#include "agentxx/agent/config_static.h"
 #include "agentxx/middlewares/memory_file.h"
 #include "agentxx/middlewares/permission.h"
 #include "agentxx/middlewares/planning.h"
@@ -18,7 +19,11 @@
 #include "agentxx/tools/tool_skill_search.h"
 #include "agentxx/tools/ui_control.h"
 #include "agentxx/tools/web_search.h"
+// CodeGraph 代码分析 (头文件内部按 AGENTXX_ENABLE_CODEGRAPH 条件编译)
+#include "agentxx/expand/codegraph_manager.h"
+#include "agentxx/tools/codegraph_tool.h"
 #include "neograph/mcp/client.h"
+#include <optional>
 
 namespace agentxx {
 namespace agent {
@@ -254,6 +259,56 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
     }
 #elif XX_IS_MACOS_D
     tools.push_back(std::make_unique<agentxx::tools::ExecuteLinuxCommandTool>(agentContext));
+#endif
+
+    /// CodeGraph 代码分析
+    /// - 仅当配置启用了 codegraph [config->enableCodeGraph] 且编译启用了
+    ///   codegraph [AGENTXX_ENABLE_CODEGRAPH] 时才添加 codegraph 系列 tool
+    /// - 索引项目根目录固定为当前程序工作目录
+    /// - 索引数据库: ~/.agentxx/sqlite/codegraph/<折叠路径>/index.db,
+    ///   深层路径折叠 + 单段截断控制长度, 子目录可前缀复用最近父级索引
+#if AGENTXX_ENABLE_CODEGRAPH
+    if (config->enableCodeGraph) {
+        auto codegraph = std::make_shared<agentxx::expand::CodeGraphManager>();
+        std::optional<std::string> projectRoot
+            = agentxx::agent::AgentConfigStatic::getCurrentWorkPath();
+        if (!projectRoot.has_value()) {
+            XX_LOGE("CodeGraph enabled in config but get current work path failed, skip codegraph tools");
+        } else if (codegraph->initialize(*projectRoot)) {
+            tools.push_back(
+                std::make_unique<agentxx::tools::CodeGraphSearchTool>(codegraph, agentContext)
+            );
+            tools.push_back(
+                std::make_unique<agentxx::tools::CodeGraphContextTool>(codegraph, agentContext)
+            );
+            tools.push_back(
+                std::make_unique<agentxx::tools::CodeGraphCallersTool>(codegraph, agentContext)
+            );
+            tools.push_back(
+                std::make_unique<agentxx::tools::CodeGraphCalleesTool>(codegraph, agentContext)
+            );
+            tools.push_back(
+                std::make_unique<agentxx::tools::CodeGraphImpactTool>(codegraph, agentContext)
+            );
+            tools.push_back(
+                std::make_unique<agentxx::tools::CodeGraphStatusTool>(codegraph, agentContext)
+            );
+            tools.push_back(
+                std::make_unique<agentxx::tools::CodeGraphIndexTool>(codegraph, agentContext)
+            );
+            tools.push_back(
+                std::make_unique<agentxx::tools::CodeGraphPathTool>(codegraph, agentContext)
+            );
+            XX_LOGI(
+                "CodeGraph enabled, added codegraph tools (project root: {})",
+                *projectRoot
+            );
+        } else {
+            XX_LOGE(
+                "CodeGraph enabled in config but initialize failed, skip codegraph tools"
+            );
+        }
+    }
 #endif
 
     /// Subagent

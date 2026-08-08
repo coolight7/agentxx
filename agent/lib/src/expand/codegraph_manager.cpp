@@ -4,10 +4,15 @@
 #include "agentxx/util/log.h"
 #include <algorithm>
 #include <atomic>
+#include <cctype>
+#include <chrono>
 #include <condition_variable>
+#include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <mutex>
+#include <optional>
 #include <queue>
 #include <sstream>
 #include <thread>
@@ -28,12 +33,319 @@ namespace expand {
 
 namespace fs = std::filesystem;
 
-static constexpr std::string_view kCodeGraphDbPath = ".codegraph";
+/// CodeGraph sqlite 数据库存放目录名: ~/.agentxx/sqlite/
+static constexpr std::string_view kCodeGraphSqliteDirName = "sqlite";
+/// CodeGraph 索引数据库子目录: ~/.agentxx/sqlite/codegraph/
+static constexpr std::string_view kCodeGraphSqliteSubDirName = "codegraph";
+/// 单个项目索引数据库文件名
+static constexpr std::string_view kCodeGraphIndexDbName = "index.db";
+
+/// 单段目录名最大长度 (截断后含分隔符与 hash 尾缀)
+/// - Windows 默认 MAX_PATH=260 (未声明 longPathAware), 需控制单段长度与总层级
+/// - Linux 单段 NAME_MAX=255, 整体 PATH_MAX=4096, 深度折叠后远低于限制
+static constexpr size_t kCodeGraphMaxSegLen = 48;
+/// 折叠后保留的尾部路径段数 (超过的部分折叠为 hash 前缀段)
+/// - 最坏存储路径长度 ≈ 主目录(≤40) + 固定前缀(24) + 折叠段(16) + 3*48 + 分隔符 < 260
+static constexpr size_t kCodeGraphMaxTailSegs = 3;
+
+/// FNV-1a 64 位哈希 (截断用低 32 位 hex 输出)
+/// - 仅用于超长段/折叠段的短标识, 确定性跨平台一致
+static uint64_t fnv1a64(std::string_view s) {
+    uint64_t hash = 1469598103934665603ULL;
+    for (unsigned char c : s) {
+        hash ^= c;
+        hash *= 1099511628211ULL;
+    }
+    return hash;
+}
+
+/// 获取用户主目录 (Unix: $HOME, Windows: %USERPROFILE%)
+/// - 未设置时返回空字符串
+static std::string getUserHomeDir() {
+#if XX_IS_WIN_D
+    const char* home = std::getenv("USERPROFILE");
+#else
+    const char* home = std::getenv("HOME");
+#endif
+    if (!home || !*home) {
+        return "";
+    }
+    return std::string{home};
+}
+
+/// CodeGraph sqlite 数据库目录: ~/.agentxx/sqlite/
+/// - 取不到用户主目录时回退到系统临时目录, 保证功能可用
+static std::string getCodeGraphSqliteDir() {
+    auto home = getUserHomeDir();
+    if (!home.empty()) {
+        return (fs::path(home) / agentxx::agent::AgentConfigStatic::agentxxDataDirPath
+                / kCodeGraphSqliteDirName)
+            .string();
+    }
+    return (fs::temp_directory_path() / agentxx::agent::AgentConfigStatic::agentxxDataDirPath
+            / kCodeGraphSqliteDirName)
+        .string();
+}
+
+/// 路径段清洗: 替换文件系统非法字符为 `_`
+/// - Windows 非法字符: < > : " / \ | ? * 及 ASCII 0-31
+static std::string sanitizeSegment(std::string_view seg) {
+    std::string out;
+    out.reserve(seg.size());
+    for (char c : seg) {
+        if (static_cast<unsigned char>(c) < 0x20 || c == '<' || c == '>' || c == ':'
+            || c == '"' || c == '/' || c == '\\' || c == '|' || c == '?' || c == '*') {
+            out.push_back('_');
+        } else {
+            out.push_back(c);
+        }
+    }
+    // 超长段截断: 保留前部可读信息 + 8 位 hex hash 尾缀防碰撞, 总长受控
+    // - 避免单个目录名超过文件系统限制 (NAME_MAX=255) 及撑爆总路径长度
+    if (out.size() > kCodeGraphMaxSegLen) {
+        out = out.substr(0, kCodeGraphMaxSegLen - 9)
+              + fmt::format("_{:08x}", static_cast<uint32_t>(fnv1a64(out) & 0xffffffffu));
+    }
+    return out;
+}
+
+/// Windows 保留设备名 (CON/PRN/AUX/NUL/COM1-9/LPT1-9, 忽略扩展名)
+/// - 用作目录名会导致 Windows 无法创建, 需加前缀规避
+#if XX_IS_WIN_D
+static bool isWindowsReservedName(std::string_view seg) {
+    std::string name{seg};
+    auto        dot = name.find('.');
+    if (dot != std::string::npos) {
+        name = name.substr(0, dot);
+    }
+    for (auto& c : name) {
+        c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    }
+    static const char* kReserved[] = {
+        "CON", "PRN", "AUX", "NUL",
+        "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+        "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    };
+    for (const auto* r : kReserved) {
+        if (name == r) {
+            return true;
+        }
+    }
+    return false;
+}
+#endif
+
+/// 将项目根目录转换为 sqlite 目录下的相对路径段序列
+/// - Linux:   /home/user/proj     -> {home, user, proj}
+/// - Windows: C:\Users\x\proj     -> {c, Users, x, proj}   (盘符去冒号转小写)
+/// - UNC:     \\server\share\proj -> {server_share, proj}  (根名非法字符替换)
+/// 返回完整路径段序列 (长度/深度控制见 foldSegments)
+static std::vector<std::string> projectRootToSegments(std::string_view project_root) {
+    std::vector<std::string> segs;
+
+    // 绝对化并解析 `.` / `..` (weakly_canonical 不要求路径全部存在)
+    fs::path abs;
+    bool ok = agentxx::util::catchError<bool>(
+        [&]() -> bool {
+            abs = fs::weakly_canonical(fs::path(project_root));
+            return true;
+        },
+        [](std::string) -> bool { return false; }
+    );
+    if (!ok || abs.empty()) {
+        abs = fs::absolute(fs::path(project_root));
+    }
+
+    // Windows 盘符 / UNC 根段
+    std::string root_name = abs.root_name().string();
+    if (!root_name.empty()) {
+        std::string seg;
+        for (char c : root_name) {
+            // 去掉冒号与分隔符; 统一转小写 (盘符 C: -> c)
+            if (c == ':' || c == '/' || c == '\\') {
+                continue;
+            }
+            seg.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+        }
+        if (!seg.empty()) {
+            segs.push_back(sanitizeSegment(seg));
+        }
+    }
+
+    // 其余路径段
+    for (const auto& part : abs.relative_path()) {
+        auto seg = sanitizeSegment(part.string());
+        if (seg.empty() || seg == ".") {
+            continue;
+        }
+#if XX_IS_WIN_D
+        if (isWindowsReservedName(seg)) {
+            seg = "_" + seg;
+        }
+#endif
+        segs.push_back(std::move(seg));
+    }
+    return segs;
+}
+
+/// 深度折叠: 段序列超过 [kCodeGraphMaxTailSegs] 时, 前缀部分折叠为 hash 段
+/// - 折叠规则确定性: 相同前缀序列折叠结果一致, 保证前缀匹配可枚举
+/// - 返回段数上限 = kCodeGraphMaxTailSegs + 1 (折叠段)
+/// - 折叠段以 `_h` 开头, 与真实路径段 (sanitize 后) 冲突概率可忽略
+static std::vector<std::string> foldSegments(const std::vector<std::string>& segs) {
+    if (segs.size() <= kCodeGraphMaxTailSegs) {
+        return segs;
+    }
+    std::vector<std::string> folded;
+    // 折叠段: _h + 完整段序列中前缀部分的 hash (低 48 位 hex)
+    std::string prefix;
+    for (size_t i = 0; i + kCodeGraphMaxTailSegs < segs.size(); ++i) {
+        if (!prefix.empty()) {
+            prefix.push_back('/');
+        }
+        prefix += segs[i];
+    }
+    folded.push_back(
+        fmt::format("_h{:012x}", static_cast<uint64_t>(fnv1a64(prefix) & 0xffffffffffffull))
+    );
+    for (size_t i = segs.size() - kCodeGraphMaxTailSegs; i < segs.size(); ++i) {
+        folded.push_back(segs[i]);
+    }
+    return folded;
+}
+
+/// 项目根目录对应的索引数据库路径: ~/.agentxx/sqlite/codegraph/<折叠路径层级>/index.db
+static fs::path getIndexDbPath(std::string_view project_root) {
+    fs::path dir = fs::path(getCodeGraphSqliteDir()) / kCodeGraphSqliteSubDirName;
+    for (const auto& seg : foldSegments(projectRootToSegments(project_root))) {
+        dir /= seg;
+    }
+    return dir / kCodeGraphIndexDbName;
+}
+
+/// 路径前缀匹配: 沿项目路径逐级向上查找最近已存在的索引数据库
+/// - 例如工作目录为 /home/user/proj/sub 时, 若 /home/user/proj 已建索引则复用
+/// - 每个前缀独立应用折叠规则 (确定性), 折叠后路径一致即视为同一前缀
+/// - 未找到任何父级索引时返回 nullopt (将在自身路径下新建)
+static std::optional<fs::path> findNearestExistingIndex(std::string_view project_root) {
+    auto segs = projectRootToSegments(project_root);
+    if (segs.empty()) {
+        return std::nullopt;
+    }
+    fs::path base = fs::path(getCodeGraphSqliteDir()) / kCodeGraphSqliteSubDirName;
+    // 从最深 (最近) 前缀开始逐级缩短检查
+    for (size_t n = segs.size(); n > 0; --n) {
+        std::vector<std::string> prefix(segs.begin(), segs.begin() + static_cast<std::ptrdiff_t>(n));
+        fs::path                 dir = base;
+        for (const auto& seg : foldSegments(prefix)) {
+            dir /= seg;
+        }
+        std::error_code ec;
+        if (fs::exists(dir / kCodeGraphIndexDbName, ec)) {
+            return dir / kCodeGraphIndexDbName;
+        }
+    }
+    return std::nullopt;
+}
+
+/// 带有限重试的操作执行: 应对多进程并发写同一 sqlite 库时的锁竞争 (SQLITE_BUSY)
+/// - sqlite 的写锁竞争是瞬时的 (busy_timeout=5000 等待 + WAL 短事务), 重试后基本必成
+/// - fn 抛异常时由内部 catchError 捕获, 按 attempt 指数退避后重试
+/// - 全部尝试失败返回 false (已记录错误日志)
+template <typename F>
+static bool runWithRetry(std::string_view what, int attempts, F&& fn) {
+    for (int attempt = 1; attempt <= attempts; ++attempt) {
+        bool ok = agentxx::util::catchError<bool>(
+            [&]() -> bool {
+                fn();
+                return true;
+            },
+            [&](std::string errmsg) -> bool {
+                if (attempt < attempts) {
+                    XX_LOGW(
+                        "CodeGraphManager: {} failed (attempt {}/{}), retry: {}",
+                        what,
+                        attempt,
+                        attempts,
+                        errmsg
+                    );
+                    std::this_thread::sleep_for(std::chrono::milliseconds(150 * attempt));
+                } else {
+                    XX_LOGE(
+                        "CodeGraphManager: {} failed after {} attempts: {}",
+                        what,
+                        attempts,
+                        errmsg
+                    );
+                }
+                return false;
+            }
+        );
+        if (ok) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// 带有限重试的事务提交: BEGIN -> fn(写操作) -> COMMIT
+/// - 写锁竞争 (SQLITE_BUSY) 时回滚并重试整个事务, 避免静默丢失该批写入
+/// - fn 仅执行写操作, 不负责事务边界
+template <typename F>
+static bool runTransactionWithRetry(std::string_view what, int attempts, codegraph::Database* db, F&& fn) {
+    for (int attempt = 1; attempt <= attempts; ++attempt) {
+        bool inTx = false;
+        bool ok   = agentxx::util::catchError<bool>(
+            [&]() -> bool {
+                db->begin_transaction();
+                inTx = true;
+                fn();
+                db->commit();
+                inTx = false;
+                return true;
+            },
+            [&](std::string errmsg) -> bool {
+                // 回滚需容错: 若 BEGIN 本身失败则无活跃事务, ROLLBACK 会再抛异常
+                if (inTx) {
+                    agentxx::util::catchError<bool>(
+                        [&]() -> bool {
+                            db->rollback();
+                            return true;
+                        },
+                        [](std::string) -> bool { return false; }
+                    );
+                    inTx = false;
+                }
+                if (attempt < attempts) {
+                    XX_LOGW(
+                        "CodeGraphManager: {} failed (attempt {}/{}), retry: {}",
+                        what,
+                        attempt,
+                        attempts,
+                        errmsg
+                    );
+                    std::this_thread::sleep_for(std::chrono::milliseconds(150 * attempt));
+                } else {
+                    XX_LOGE(
+                        "CodeGraphManager: {} failed after {} attempts: {}",
+                        what,
+                        attempts,
+                        errmsg
+                    );
+                }
+                return false;
+            }
+        );
+        if (ok) {
+            return true;
+        }
+    }
+    return false;
+}
 
 static bool should_skip(std::string_view file_path) {
     static const std::string kSkipAgentxx
         = fmt::format("/{}/", agentxx::agent::AgentConfigStatic::agentxxDataDirPath);
-    static const std::string kSkipCodeGraph = fmt::format("/{}/", kCodeGraphDbPath);
 
     fs::path    p(file_path);
     std::string path_str = p.generic_string();
@@ -43,8 +355,7 @@ static bool should_skip(std::string_view file_path) {
            || path_str.find("/build-") != std::string::npos
            || path_str.find("/__pycache__/") != std::string::npos
            || path_str.find("/.git/") != std::string::npos
-           || path_str.find(kSkipAgentxx) != std::string::npos
-           || path_str.find(kSkipCodeGraph) != std::string::npos;
+           || path_str.find(kSkipAgentxx) != std::string::npos;
 }
 
 static std::vector<std::string> collect_source_files(std::string_view root_path) {
@@ -171,19 +482,39 @@ public:
             return true;
         }
 
-        project_root_   = project_root;
-        fs::path cg_dir = fs::path(project_root)
-                          / agentxx::agent::AgentConfigStatic::agentxxDataDirPath
-                          / kCodeGraphDbPath;
-        std::string index_path = (cg_dir / "index").string();
+        project_root_ = project_root;
+        // 索引数据库: ~/.agentxx/sqlite/codegraph/<折叠路径层级>/index.db
+        // - 目录层级与项目路径层级一一对应 (深层路径折叠为 hash 段, 单段超长截断),
+        //   长度受控不会超过系统路径限制 (Windows MAX_PATH=260 / Linux PATH_MAX)
+        // - 支持路径前缀匹配复用 (findNearestExistingIndex):
+        //   工作目录为已有索引项目的子目录时, 复用最近父级索引, 无需重新索引
+        auto     sqlite_base = fs::path(getCodeGraphSqliteDir()) / kCodeGraphSqliteSubDirName;
+        auto     reused      = findNearestExistingIndex(project_root);
+        fs::path index_path  = reused ? *reused : getIndexDbPath(project_root);
+        if (reused) {
+            XX_LOGI(
+                "CodeGraphManager: reuse existing index db from parent path: {}",
+                index_path.string()
+            );
+        }
 
         // 初始化失败记录日志并返回 false
         return agentxx::util::catchError<bool>(
             [&]() -> bool {
-                if (!fs::exists(cg_dir)) {
-                    fs::create_directories(cg_dir);
+                if (!fs::exists(sqlite_base)) {
+                    fs::create_directories(sqlite_base);
                 }
-                db_ = std::make_unique<codegraph::Database>(index_path);
+                if (!fs::exists(index_path.parent_path())) {
+                    fs::create_directories(index_path.parent_path());
+                }
+                // 多进程同时首次打开同一库时, 构造内的 WAL PRAGMA 可能短暂锁冲突,
+                // 有限重试避免整个 codegraph 工具注册失败
+                bool dbOpened = runWithRetry("open database", 3, [&]() {
+                    db_ = std::make_unique<codegraph::Database>(index_path.string());
+                });
+                if (!dbOpened) {
+                    return false;
+                }
                 db_->init_schema();
                 traverser_        = std::make_unique<codegraph::GraphTraverser>(*db_);
                 context_builder_  = std::make_unique<codegraph::ContextBuilder>(*db_, *traverser_);
@@ -278,17 +609,8 @@ public:
 
         resolveReferences();
 
-        // FTS 重建失败仅告警, 不影响索引主流程
-        agentxx::util::catchError<bool>(
-            [&]() -> bool {
-                db_->rebuild_fts();
-                return true;
-            },
-            [](std::string errmsg) -> bool {
-                XX_LOGW("CodeGraphManager: FTS rebuild failed: {}", errmsg);
-                return false;
-            }
-        );
+        // FTS 重建失败仅告警, 不影响索引主流程; 多进程并发时锁竞争重试
+        runWithRetry("FTS rebuild", 3, [&]() { db_->rebuild_fts(); });
 
         return true;
     }
@@ -310,10 +632,12 @@ public:
             return true;
         }
 
-        db_->begin_transaction();
-        // 引用解析失败回滚事务并返回 false
-        bool resolved = agentxx::util::catchError<bool>(
-            [&]() -> bool {
+        // 多进程并发写时锁竞争 (SQLITE_BUSY) 会导致整个引用解析批次丢失, 重试整个事务
+        return runTransactionWithRetry(
+            "resolveReferences",
+            3,
+            db_.get(),
+            [&]() {
                 for (const auto& ref : unresolved) {
                     if (!running_.load()) {
                         break;
@@ -358,17 +682,8 @@ public:
 
                     db_->delete_unresolved_ref(ref.id);
                 }
-                db_->commit();
-                return true;
-            },
-            [&](std::string errmsg) -> bool {
-                db_->rollback();
-                XX_LOGE("CodeGraphManager: resolveReferences error: {}", errmsg);
-                return false;
             }
         );
-
-        return resolved;
     }
 
     CodeGraphSearchResult searchSymbols(std::string_view query, int limit) {
@@ -678,10 +993,12 @@ public:
         std::string_view             lang,
         codegraph::ExtractionResult& result
     ) {
-        db_->begin_transaction();
-        // 写入失败回滚事务并记录日志, 避免残留半写入数据
-        agentxx::util::catchError<bool>(
-            [&]() -> bool {
+        // 多进程并发写同一库时锁竞争 (SQLITE_BUSY) 会静默丢失该文件索引, 重试整个事务
+        runTransactionWithRetry(
+            fmt::format("write result for {}", file_path),
+            3,
+            db_.get(),
+            [&]() {
                 db_->delete_edges_for_file_nodes(std::string{file_path});
                 db_->delete_unresolved_refs_by_file(std::string{file_path});
                 db_->delete_nodes_by_file(std::string{file_path});
@@ -720,14 +1037,6 @@ public:
                     }
                     db_->insert_unresolved_ref(ref);
                 }
-
-                db_->commit();
-                return true;
-            },
-            [&](std::string errmsg) -> bool {
-                db_->rollback();
-                XX_LOGE("CodeGraphManager: write error for {}: {}", file_path, errmsg);
-                return false;
             }
         );
     }
