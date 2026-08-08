@@ -487,6 +487,30 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
             agentCtxPtr->agentConfig->llmMaxRetry,
             errInfo
         );
+        // 通知 UI 层: LLM API 调用失败, 即将自动重试 (经 base_agent 转为 Delta::MessageTip,
+        // 由 client 端 (TUI/stdio) 插入提示消息)
+        if (nullptr != in.stream_cb) {
+            // 实际等待时长: retry*3 秒 + 限速附加延时 (appendDelay 单位: 秒)
+            const auto delaySec = retry * 3 + appendDelay;
+            auto tipJson = neograph::json{
+                {"channel", "message_tip"},
+                {"value",   neograph::json{
+                    {"tip_type", "warning"},
+                    {"text",     fmt::format(
+                         "LLM API 调用失败，{} 秒后自动重试 ({}/{})，错误: {}",
+                         delaySec,
+                         retry,
+                         agentCtxPtr->agentConfig->llmMaxRetry,
+                         errInfo
+                     )},
+                }},
+            };
+            (*in.stream_cb)(neograph::graph::GraphEvent{
+                neograph::graph::GraphEvent::Type::CHANNEL_WRITE,
+                nodeName,
+                std::move(tipJson),
+            });
+        }
         // 逐渐延长延时等待
         timer.expires_after(std::chrono::milliseconds(retry * 3 * 1000 + appendDelay));
         co_await timer.async_wait(asio::use_awaitable);

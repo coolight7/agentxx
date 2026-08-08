@@ -1,6 +1,7 @@
 #pragma once
 
 #include "agentxx/agent/context.h"
+#include "agentxx/agent/io/agent_io.h"
 #include "agentxx/middlewares/events.h"
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/util/async_offload.h"
@@ -14,6 +15,8 @@
 #include "asio/steady_timer.hpp"
 #include "asio/this_coro.hpp"
 #include "asio/use_awaitable.hpp"
+#include "neograph/graph/types.h"
+#include "neograph/types.h"
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -477,24 +480,69 @@ private:
     std::map<std::string, std::shared_ptr<EventStreamInterface>> streams_{};
 };
 
-/// GraphEvent -> EventBus 适配器
-/// - 把 neograph 的 GraphStreamCallback 翻译成强类型总线事件发布
-/// - 同时可选转发到原始 callback
-/// - 调用者保证 AgentContext 及其 bus 在回调期间存活
-class EventBridge {
+/// GraphEvent -> 会话增量 Delta + EventBus 适配器
+/// - 接替 BaseAgent 的 llm callback 职责: 把 neograph 的 GraphStreamCallback 翻译成:
+///   1. 会话增量 Delta (TextToken/ThinkingToken/ToolStart/ToolEnd/NodeStart/NodeEnd/MessageTip),
+///      经 emitDelta 发送到对端 (TUI/stdio), 并写入会话历史 (appendHistory)
+///   2. 强类型总线事件发布 (EventBus: ModelToken/Error 等)
+///   3. 可选转发到原始 callback (origCb)
+/// - 有状态: 内部维护流式状态 (chunk 类型切换/节点计时/Delta seq)
+/// - 新增 GraphEvent 处理时只需扩展本类, 无需修改 BaseAgent
+/// - 调用者保证 AgentContext 及其 bus、Session、io 在回调期间存活
+///   (makeCallback 内部经 shared_from_this 持有本对象)
+class EventBridge : public std::enable_shared_from_this<EventBridge> {
 public:
 
-    /// 创建一个 GraphStreamCallback, 将 GraphEvent 发布到 bus 并转发 origCb
-    /// - agentName: 当前 agent 名 (事件 source)
-    /// - threadId: 当前会话 id
-    /// - ctx: AgentContext (取 bus; 若 bus 为空则只转发 origCb)
-    /// - origCb: 原始回调 (可空)
-    static neograph::graph::GraphStreamCallback make(
-        std::string                                 agentName,
-        std::string                                 threadId,
-        std::weak_ptr<agentxx::agent::AgentContext> ctx,
-        neograph::graph::GraphStreamCallback        origCb = nullptr
+    /// @param agentName 当前 agent 名 (事件 source)
+    /// @param threadId  当前会话 id
+    /// @param ctx       AgentContext (取 bus; 若 bus 为空则只做 Delta 翻译/转发)
+    /// @param session   会话 (appendHistory/contextStats/deltaSeq)
+    /// @param io        对端 IO (发送 Delta/ContextStats; 为空表示 headless 场景)
+    /// @param origCb    原始回调 (可空)
+    EventBridge(
+        std::string                                   agentName,
+        std::string                                   threadId,
+        std::weak_ptr<agentxx::agent::AgentContext>   ctx,
+        std::shared_ptr<agentxx::agent::Session>      session,
+        std::shared_ptr<agentxx::agent::AgentIOBase>  io,
+        neograph::graph::GraphStreamCallback          origCb = nullptr
     );
+
+    /// 处理一个 GraphEvent (GraphStreamCallback 调用入口)
+    void operator()(const neograph::graph::GraphEvent& event);
+
+    /// 发送增量 Delta 到对端 (分配会话单调递增 seq; io 为空时丢弃)
+    /// - 会话外的增量 (TurnStart/TurnEnd) 也可经此发送, 保证 seq 全局单调
+    void emitDelta(agentxx::agent::Delta delta);
+
+    /// 包装为 GraphStreamCallback (shared_from_this 持有, 回调期间本对象存活)
+    neograph::graph::GraphStreamCallback makeCallback();
+
+private:
+
+    void handleLLMToken(const neograph::graph::GraphEvent& event);
+    void handleChannelWrite(const neograph::graph::GraphEvent& event);
+    void handleNodeStart(const neograph::graph::GraphEvent& event);
+    void handleNodeEnd(const neograph::graph::GraphEvent& event);
+    void handleError(const neograph::graph::GraphEvent& event);
+
+    /// 发布总线事件: LLM_TOKEN -> EventModelToken (无订阅者时跳过, 避免无效协程创建)
+    void publishModelToken(const std::string& token, std::string_view kind);
+    /// 发布总线事件: ERROR -> EventError (无订阅者时跳过)
+    void publishError(std::string message, std::string where);
+
+    std::string                                   agentName_;
+    std::string                                   threadId_;
+    std::weak_ptr<agentxx::agent::AgentContext>   ctx_;
+    std::shared_ptr<agentxx::agent::Session>      session_;
+    std::shared_ptr<agentxx::agent::AgentIOBase>  io_;
+    neograph::graph::GraphStreamCallback          origCb_;
+
+    /// 最近一次 LLM 流式 chunk 类型 (用于切换 content/thinking 时附带时长)
+    int lastChatChunkType_ = neograph::ChatStreamChunk::TYPE_UNKNOWN;
+    /// 当前节点开始计时 (NODE_START 重置)
+    std::chrono::system_clock::time_point nodeStartTime_{};
+    int64_t                               nodeStartTimeMs_ = 0;
 };
 
 } // namespace middleware

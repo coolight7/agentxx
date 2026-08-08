@@ -763,6 +763,26 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
                     m.durationMs  = delta.durationMs;
                 }
             } break;
+            case Type::MessageTip: {
+                // 通用提示消息: 插入 System 提示消息 (按级别区分显示)
+                pushCurrentTokenLocked(st);
+                auto msg  = std::make_shared<TUIMessage>();
+                msg->role = TUIMessage::Role::System;
+                msg->text = delta.text;
+                switch (delta.tipType) {
+                    case agentxx::agent::Delta::TipType::Info:
+                        msg->tipLevel = TUIMessage::TipLevel::Info;
+                        break;
+                    case agentxx::agent::Delta::TipType::Warning:
+                        msg->tipLevel = TUIMessage::TipLevel::Warning;
+                        break;
+                    case agentxx::agent::Delta::TipType::Error:
+                        msg->tipLevel = TUIMessage::TipLevel::Error;
+                        break;
+                }
+                st.messages.push_back(std::move(msg));
+                st.isStreaming = true;
+            } break;
             case Type::TurnStart: {
                 st.isStreaming = true;
             } break;

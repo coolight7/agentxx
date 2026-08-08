@@ -113,7 +113,9 @@ std::optional<ftxui::Element> TUIClientAgentIO::renderPlanningInfo() {
                 planCacheArgs_ = neograph::json::parse(plan->text);
                 return true;
             },
-            [](std::string) -> bool { return false; }
+            [](std::string) -> bool {
+                return false;
+            }
         );
     }
     if (!planCacheValid_) {
@@ -136,11 +138,10 @@ std::optional<ftxui::Element> TUIClientAgentIO::renderPlanningInfo() {
     const auto roadmap = args.value("roadmap", std::string{});
     if (!roadmap.empty()) {
         lines.push_back(text(" "));
-        lines.push_back(hbox({
-            text(" "),
+        lines.push_back(
             text(" [View Plan Diagram] ") | bgcolor(theme_.buttonBgColor)
-                | color(theme_.buttonTextColor) | bold | reflect(planDiagramButtonBox_),
-        }));
+            | color(theme_.buttonTextColor) | bold | reflect(planDiagramButtonBox_)
+        );
     } else {
         // 无 roadmap: 清空按钮命中区域
         planDiagramButtonBox_ = ftxui::Box{0, -1, 0, -1};
@@ -268,8 +269,12 @@ ftxui::Element TUIClientAgentIO::renderInfoSidebarFooter() {
     Elements elements;
 
     std::string cwd = agentxx::util::catchError<std::string>(
-        []() -> std::string { return std::filesystem::current_path().string(); },
-        [](std::string) -> std::string { return "[Unknown Work Dir]"; }
+        []() -> std::string {
+            return std::filesystem::current_path().string();
+        },
+        [](std::string) -> std::string {
+            return "[Unknown Work Dir]";
+        }
     );
     elements.push_back(text(cwd) | color(theme_.hintColor));
 

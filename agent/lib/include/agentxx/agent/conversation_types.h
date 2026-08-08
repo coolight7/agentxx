@@ -44,6 +44,13 @@ private:
 };
 
 struct Delta {
+    /// 提示消息级别 (MessageTip 使用)
+    enum class TipType : uint8_t {
+        Info,    ///< 普通提示
+        Warning, ///< 警告
+        Error,   ///< 错误
+    };
+
     enum class Type : uint8_t {
         TextToken,
         ThinkingToken,
@@ -53,6 +60,7 @@ struct Delta {
         TurnEnd,
         NodeStart,
         NodeEnd,
+        MessageTip, ///< 通用提示消息 (info/warning/error, UI 插入提示消息)
     };
 
     Type     type;
@@ -69,6 +77,9 @@ struct Delta {
     bool        hasError = false;
 
     std::string nodeName;
+
+    // MessageTip: 通用提示消息 (文本复用 text 字段)
+    TipType tipType = TipType::Info; ///< 提示级别 (Info/Warning/Error)
 
     uint64_t    historyCount = 0;
     std::string tailHash;

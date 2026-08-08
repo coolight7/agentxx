@@ -331,19 +331,18 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
     const auto start_time_ms = static_cast<int64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(start_time.time_since_epoch()).count()
     );
-    auto node_start_time    = start_time;
-    auto node_start_time_ms = start_time_ms;
+    // 产出增量事件的唯一出站口: 经 EventBridge 分配会话级递增 seq 后 sendToPeer
+    // 发往对端 (server 端点会缓冲并经 transport 转发 client; io 为 nullptr 的
+    // headless 场景则丢弃)
+    auto eventBridge = std::make_shared<agentxx::middleware::EventBridge>(
+        agentContext->agentConfig->agentName,
+        std::string{threadId},
+        agentContext,
+        session,
+        ioPtr
+    );
 
-    // 产出增量事件的唯一出站口: 经 sendToPeer 发往对端 (server 端点会缓冲并经
-    // transport 转发 client; io 为 nullptr 的 headless 场景则跳过)
-    auto emitDelta = [&](Delta delta) {
-        delta.seq += 1;
-        if (ioPtr) {
-            ioPtr->sendToPeer(std::move(delta));
-        }
-    };
-
-    emitDelta(Delta{.type = Delta::Type::TurnStart});
+    eventBridge->emitDelta(Delta{.type = Delta::Type::TurnStart});
 
     selectModel(threadId, modelName);
 
@@ -374,178 +373,8 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
     auto cancelToken = std::make_shared<neograph::graph::CancelToken>();
     session->setCancelToken(cancelToken);
 
-    auto lastChatChunkType = neograph::ChatStreamChunk::TYPE_UNKNOWN;
-
-    auto internalEventCallback = [session,
-                                  emitDelta,
-                                  ioPtr,
-                                  &lastChatChunkType,
-                                  &start_time,
-                                  &start_time_ms,
-                                  &node_start_time,
-                                  &node_start_time_ms](const neograph::graph::GraphEvent& event) {
-        using T = neograph::graph::GraphEvent::Type;
-        switch (event.type) {
-            case T::LLM_TOKEN: {
-                std::string token;
-                bool        sendDuration = false;
-
-                if (event.data.is_string()) {
-                    token             = event.data.get<std::string>();
-                    lastChatChunkType = neograph::ChatStreamChunk::TYPE_CONTENT;
-                } else if (event.data.is_object()) {
-                    neograph::ChatStreamChunk chunk;
-                    neograph::from_json(event.data, chunk);
-                    token             = std::move(chunk.data);
-                    sendDuration      = (lastChatChunkType != chunk.type);
-                    lastChatChunkType = chunk.type;
-                }
-
-                emitDelta(Delta{
-                    .type        = (lastChatChunkType == neograph::ChatStreamChunk::TYPE_THINKING)
-                                       ? Delta::Type::ThinkingToken
-                                       : Delta::Type::TextToken,
-                    .text        = std::move(token),
-                    .startTimeMs = node_start_time_ms,
-                    .durationMs  = sendDuration
-                                       ? static_cast<int64_t>(
-                                            std::chrono::duration_cast<std::chrono::milliseconds>(
-                                                std::chrono::system_clock::now() - node_start_time
-                                            )
-                                                .count()
-                                        )
-                                       : 0,
-                });
-            } break;
-            case T::CHANNEL_WRITE: {
-                auto chan  = event.data.value("channel", std::string{});
-                auto value = event.data.value("value", neograph::json{});
-                if (chan != "messages" || !value.is_array()) {
-                    break;
-                }
-                bool hasLLMOutput = false;
-                for (const auto& jm : value) {
-                    auto role = jm.value("role", std::string{});
-                    if (role == "assistant" && jm.contains("tool_calls")) {
-                        hasLLMOutput = true;
-                        auto msgId   = session->appendHistory(jm);
-                        for (const auto& tc : jm["tool_calls"]) {
-                            emitDelta(Delta{
-                                .type       = Delta::Type::ToolStart,
-                                .msgId      = msgId,
-                                .toolName   = tc.value("name", std::string{}),
-                                .toolCallId = tc.value("id", std::string{}),
-                                .arguments  = tc.value("arguments", std::string{}),
-                            });
-                        }
-                    } else if (role == "tool") {
-                        auto content    = jm.value("content", std::string{});
-                        auto toolName   = jm.value("tool_name", std::string{});
-                        auto toolCallId = jm.value("tool_call_id", std::string{});
-                        if (toolCallId.empty()) {
-                            continue;
-                        }
-                        auto historyMsg = jm;
-                        if (toolName == "agentxx_filesystem_edit_text_file") {
-                            // 生成 diff 记录
-                            for (auto it = session->fullHistory.rbegin();
-                                 it != session->fullHistory.rend();
-                                 ++it) {
-                                const auto& hd = it->data;
-                                if (hd.value("role", std::string{}) != "assistant"
-                                    || !hd.contains("tool_calls")) {
-                                    continue;
-                                }
-                                bool foundArgs = false;
-                                for (const auto& tc : hd["tool_calls"]) {
-                                    if (tc.value("id", std::string{}) != toolCallId) {
-                                        continue;
-                                    }
-                                    foundArgs = true;
-                                    // 解析失败的参数 (如非法 JSON) 跳过 diff 渲染
-                                    agentxx::util::catchError<bool>(
-                                        [&]() -> bool {
-                                            auto args = neograph::json::parse(
-                                                tc.value("arguments", std::string{})
-                                            );
-                                            historyMsg["diff"] = agentxx::util::makeUnifiedDiff(
-                                                args.value("old_str", std::string{}),
-                                                args.value("new_str", std::string{}),
-                                                args.value("path", std::string{})
-                                            );
-                                            return true;
-                                        },
-                                        [](std::string) -> bool { return false; }
-                                    );
-                                    break;
-                                }
-                                if (foundArgs) {
-                                    break;
-                                }
-                            }
-                        }
-                        session->appendHistory(historyMsg);
-                        emitDelta(Delta{
-                            .type       = Delta::Type::ToolEnd,
-                            .toolName   = toolName,
-                            .toolCallId = toolCallId,
-                            .result     = content,
-                            .hasError   = false,
-                        });
-                    } else if (role == "assistant") {
-                        hasLLMOutput = true;
-                        session->appendHistory(jm);
-                    }
-                }
-                // llm node 执行完成，推送上下文统计更新
-                if (hasLLMOutput && ioPtr && session->contextStats) {
-                    ioPtr->sendToPeer(WireContextStats{
-                        session->contextStats->contextTokens.load(std::memory_order_relaxed),
-                        session->contextStats->maxContextTokens.load(std::memory_order_relaxed),
-                    });
-                }
-            } break;
-            case T::NODE_START: {
-                lastChatChunkType = neograph::ChatStreamChunk::TYPE_UNKNOWN;
-                node_start_time   = std::chrono::system_clock::now();
-                node_start_time_ms
-                    = static_cast<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
-                                               node_start_time.time_since_epoch()
-                    )
-                                               .count());
-                emitDelta(Delta{
-                    .type        = Delta::Type::NodeStart,
-                    .nodeName    = event.node_name,
-                    .startTimeMs = node_start_time_ms,
-                });
-            } break;
-            case T::NODE_END: {
-                lastChatChunkType = neograph::ChatStreamChunk::TYPE_UNKNOWN;
-                // 计算持续时间
-                const int64_t duration_ms
-                    = static_cast<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
-                                               std::chrono::system_clock::now() - node_start_time
-                    )
-                                               .count());
-                emitDelta(Delta{
-                    .type        = Delta::Type::NodeEnd,
-                    .nodeName    = event.node_name,
-                    .startTimeMs = node_start_time_ms,
-                    .durationMs  = duration_ms,
-                });
-            } break;
-            default:
-                lastChatChunkType = neograph::ChatStreamChunk::TYPE_UNKNOWN;
-                break;
-        }
-    };
-
-    auto eventCallback = agentxx::middleware::EventBridge::make(
-        agentContext->agentConfig->agentName,
-        std::string{threadId},
-        agentContext,
-        std::move(internalEventCallback)
-    );
+    // llm callback: 由 EventBridge 统一处理 GraphEvent -> 会话增量 Delta/历史/总线发布
+    auto eventCallback = eventBridge->makeCallback();
     auto cfg = neograph::graph::RunConfig{
         .thread_id   = std::string{threadId},
         .input       = {{"messages", session->llmMessages}},
@@ -836,7 +665,7 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                                    .count());
 
     // 发送 TurnEnd Delta，包含时长统计
-    emitDelta(Delta{
+    eventBridge->emitDelta(Delta{
         .type         = Delta::Type::TurnEnd,
         .historyCount = session->chainHash.count(),
         .tailHash     = session->chainHash.tailHex(),
