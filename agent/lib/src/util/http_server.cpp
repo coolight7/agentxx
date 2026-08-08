@@ -213,6 +213,13 @@ void HttpServer::addSseRoute(
     sseRoutes_[std::string{path}] = std::move(handler);
 }
 
+void HttpServer::addSsePostRoute(
+    std::string_view                                                           path,
+    std::function<asio::awaitable<void>(Request&, std::shared_ptr<SseWriter>)> handler
+) {
+    ssePostRoutes_[std::string{path}] = std::move(handler);
+}
+
 void HttpServer::enableWebSocket(std::string_view path, WsHandler handler) {
     wsRoutes_[std::string{path}] = std::move(handler);
 }

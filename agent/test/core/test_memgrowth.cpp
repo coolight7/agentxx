@@ -211,6 +211,8 @@ asio::awaitable<int> runScenario(
     size_t lastLive = 0;
     (void)lastLive;
     for (size_t turn = 0; turn < turns; ++turn) {
+        std::fprintf(stderr, "[memgrow] turn %zu begin (stream=%d ctx=%d)\n", turn,
+                     (int)!nonStream, (int)runAgentCtx);
         auto input = "User message number " + std::to_string(turn) + " (memory growth probe)";
         bool ok    = true;
         if (runAgentCtx) {
@@ -269,6 +271,7 @@ asio::awaitable<int> runScenario(
             std::fflush(stdout);
             break;
         }
+        std::fprintf(stderr, "[memgrow] turn %zu done ok=%d\n", turn, (int)ok);
 
         if (turn < warmupSkip || (turn + 1) % 5 != 0) {
             continue;

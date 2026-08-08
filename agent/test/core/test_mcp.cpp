@@ -4,12 +4,15 @@
 #include "agentxx/tools/tool.h"
 #include "agentxx/util/http_client.h"
 #include <asio/awaitable.hpp>
+#include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>
 #include <asio/io_context.hpp>
 #include <asio/redirect_error.hpp>
 #include <asio/steady_timer.hpp>
 #include <asio/use_awaitable.hpp>
+#include <asio/use_future.hpp>
 #include <chrono>
+#include <future>
 #include <iostream>
 #include <string>
 #include <thread>
@@ -28,6 +31,7 @@ void test_mcp_version_negotiation_unit() {
     // Directly test the version negotiation algorithm
     auto testNegotiate = [](const std::string& clientVer) -> std::string {
         constexpr std::string_view supported[] = {
+            "2026-07-28",
             "2025-11-25",
             "2025-06-18",
             "2025-03-26",
@@ -60,7 +64,8 @@ void test_mcp_version_negotiation_unit() {
     XX_TEST_EXPECT_EQ(testNegotiate("2025-03-26"), "2025-03-26");
     XX_TEST_EXPECT_EQ(testNegotiate("2024-11-05"), "2024-11-05");
     XX_TEST_EXPECT_EQ(testNegotiate("2025-01-01"), "2025-11-25");
-    XX_TEST_EXPECT_EQ(testNegotiate("2026-01-01"), "2025-11-25");
+    XX_TEST_EXPECT_EQ(testNegotiate("2026-01-01"), "2026-07-28");
+    XX_TEST_EXPECT_EQ(testNegotiate("2026-07-28"), "2026-07-28");
     XX_TEST_EXPECT_EQ(testNegotiate(""), "2024-11-05");
     XX_TEST_EXPECT_EQ(testNegotiate("2024-06-01"), "2024-11-05");
 }
@@ -422,16 +427,32 @@ asio::awaitable<void> test_mcp_server_integration() {
         }
     }
 
-    // Test SSE endpoint
+    // Test SSE endpoint (长连接流: 读取到 endpoint 事件后主动断开)
     {
-        auto resp = co_await HttpClient::getAsync(baseUrl + "/mcp/sse");
-        XX_TEST_EXPECT_HAS_VALUE(resp);
-        if (resp.has_value()) {
-            XX_TEST_EXPECT_EQ(resp.value().status, 200);
-            auto ct = resp.value().findHeader("content-type");
-            XX_TEST_EXPECT_TRUE(ct.find("text/event-stream") != std::string_view::npos);
-            XX_TEST_EXPECT_TRUE(resp.value().body.find("endpoint") != std::string::npos);
-        }
+        std::string sseBody;
+        co_await agentxx::util::catchErrorAsync<bool>(
+            [&]() -> asio::awaitable<bool> {
+                co_await util::HttpClient::requestSseAsync(
+                    "GET",
+                    baseUrl + "/mcp/sse",
+                    "",
+                    "",
+                    {},
+                    util::HttpClient::RequestConfig{.readChunkTimeout = std::chrono::seconds{5}},
+                    [&](std::string_view chunk) -> bool {
+                        sseBody.append(chunk);
+                        // 收到 endpoint 事件即停止读取 (长连接不会自行结束)
+                        return sseBody.find("event: endpoint") != std::string::npos;
+                    }
+                );
+                co_return true;
+            },
+            [](std::string) -> asio::awaitable<bool> {
+                co_return true;
+            }
+        );
+        XX_TEST_EXPECT_TRUE(sseBody.find("event: endpoint") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(sseBody.find("/mcp") != std::string::npos);
     }
 
     // Test resources/list (should return empty array)
@@ -563,10 +584,10 @@ void test_mcp_server_version_negotiation() {
                 responses[5]["result"]["protocolVersion"].get<std::string>(),
                 "2024-11-05"
             );
-            // Future version 2026-01-01 matches newest supported
+            // Future version 2026-01-01 matches newest supported (2026-07-28)
             XX_TEST_EXPECT_EQ(
                 responses[6]["result"]["protocolVersion"].get<std::string>(),
-                "2025-11-25"
+                "2026-07-28"
             );
         }
     }
@@ -1531,16 +1552,16 @@ void test_mcp_server_cross_version_stdio() {
     };
 
     VersionPair pairs[] = {
-        // Client requests known version → server responds with same
+  // Client requests known version → server responds with same
         {"2024-11-05", "2024-11-05"},
         {"2025-03-26", "2025-03-26"},
         {"2025-06-18", "2025-06-18"},
         {"2025-11-25", "2025-11-25"},
-        // Client requests unknown 2025 version → server responds with newest 2025
+ // Client requests unknown 2025 version → server responds with newest 2025
         {"2025-01-01", "2025-11-25"},
-        // Client requests future version → server responds with newest
-        {"2026-01-01", "2025-11-25"},
-        // Client requests older version → server responds with that version
+ // Client requests future version → server responds with newest
+        {"2026-01-01", "2026-07-28"},
+ // Client requests older version → server responds with that version
         {"2024-06-01", "2024-11-05"},
     };
 
@@ -2125,52 +2146,91 @@ asio::awaitable<void> test_mcp_server_accept_sse() {
         }
     }
 
-    // 5. SSE endpoint (GET /mcp/sse) → text/event-stream
+    // 5. SSE endpoint (GET /mcp/sse) → text/event-stream (长连接流式读取)
     {
         HeaderMap headers;
         headers.set("Accept", "text/event-stream");
-        auto resp = co_await HttpClient::getAsync(
-            baseUrl + "/mcp/sse",
-            headers,
-            HttpClient::RequestConfig{.readChunkTimeout = std::chrono::seconds{5}}
+        std::string sseBody;
+        co_await agentxx::util::catchErrorAsync<bool>(
+            [&]() -> asio::awaitable<bool> {
+                co_await util::HttpClient::requestSseAsync(
+                    "GET",
+                    baseUrl + "/mcp/sse",
+                    "",
+                    "",
+                    headers,
+                    util::HttpClient::RequestConfig{.readChunkTimeout = std::chrono::seconds{5}},
+                    [&](std::string_view chunk) -> bool {
+                        sseBody.append(chunk);
+                        // 收到 endpoint 事件即停止读取 (长连接不会自行结束)
+                        return sseBody.find("event: endpoint") != std::string::npos;
+                    }
+                );
+                co_return true;
+            },
+            [](std::string) -> asio::awaitable<bool> {
+                co_return true;
+            }
         );
-        XX_TEST_EXPECT_HAS_VALUE(resp);
-        if (resp.has_value()) {
-            XX_TEST_EXPECT_EQ(resp.value().status, 200);
-            auto ct = resp.value().contentType();
-            XX_TEST_EXPECT_TRUE(ct.find("event-stream") != std::string::npos);
-            // Should contain endpoint event
-            XX_TEST_EXPECT_TRUE(resp.value().body.find("event: endpoint") != std::string::npos);
-            XX_TEST_EXPECT_TRUE(resp.value().body.find("/mcp") != std::string::npos);
-        }
+        // Should contain endpoint event
+        XX_TEST_EXPECT_TRUE(sseBody.find("event: endpoint") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(sseBody.find("/mcp") != std::string::npos);
     }
 
-    // 6. SSE endpoint with */* → also works
+    // 6. SSE endpoint with */* → also works (长连接流式读取)
     {
-        auto resp = co_await HttpClient::getAsync(baseUrl + "/mcp/sse");
-        XX_TEST_EXPECT_HAS_VALUE(resp);
-        if (resp.has_value()) {
-            XX_TEST_EXPECT_EQ(resp.value().status, 200);
-            auto ct = resp.value().contentType();
-            XX_TEST_EXPECT_TRUE(ct.find("event-stream") != std::string::npos);
-        }
+        std::string sseBody;
+        co_await agentxx::util::catchErrorAsync<bool>(
+            [&]() -> asio::awaitable<bool> {
+                co_await util::HttpClient::requestSseAsync(
+                    "GET",
+                    baseUrl + "/mcp/sse",
+                    "",
+                    "",
+                    {},
+                    util::HttpClient::RequestConfig{.readChunkTimeout = std::chrono::seconds{5}},
+                    [&](std::string_view chunk) -> bool {
+                        sseBody.append(chunk);
+                        return sseBody.find("event: endpoint") != std::string::npos;
+                    }
+                );
+                co_return true;
+            },
+            [](std::string) -> asio::awaitable<bool> {
+                co_return true;
+            }
+        );
+        XX_TEST_EXPECT_TRUE(sseBody.find("event: endpoint") != std::string::npos);
     }
 
     // 7. SSE endpoint with wrong Accept → server closes connection
     {
         HeaderMap headers;
         headers.set("Accept", "application/xml");
-        auto resp = co_await HttpClient::getAsync(
-            baseUrl + "/mcp/sse",
-            headers,
-            HttpClient::RequestConfig{.readChunkTimeout = std::chrono::seconds{5}}
+        // 服务器拒绝后立即关闭连接; 读取应快速失败或返回空流
+        bool failed = false;
+        co_await agentxx::util::catchErrorAsync<bool>(
+            [&]() -> asio::awaitable<bool> {
+                co_await util::HttpClient::requestSseAsync(
+                    "GET",
+                    baseUrl + "/mcp/sse",
+                    "",
+                    "",
+                    headers,
+                    util::HttpClient::RequestConfig{.readChunkTimeout = std::chrono::seconds{5}},
+                    [&](std::string_view) -> bool {
+                        return false;
+                    }
+                );
+                co_return true;
+            },
+            [&](std::string) -> asio::awaitable<bool> {
+                failed = true;
+                co_return true;
+            }
         );
-        // Connection is closed immediately by the server; the request may fail
-        // or return an incomplete response – either is acceptable.
-        if (resp.has_value()) {
-            // If we got a response, it should not be a success
-            XX_TEST_EXPECT_FALSE(resp.value().isSuccess());
-        }
+        // 服务器立即关闭 → 客户端读取失败或空流, 两者皆可
+        XX_TEST_EXPECT_TRUE(failed);
     }
 
     // 8. Notification request with correct Accept → 202
@@ -2312,6 +2372,1044 @@ asio::awaitable<void> test_mcp_client_tool_namespace() {
     serverThread.join();
 }
 
+// -----------------------------------------------------------------------
+// 2026-07-28 protocol tests
+// -----------------------------------------------------------------------
+
+// server/discover over stdio: modern request returns supportedVersions etc.
+void test_mcp_server_2026_discover_stdio() {
+    McpServer server;
+
+    std::string input;
+    input
+        += R"({"jsonrpc":"2.0","id":1,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientInfo":{"name":"test","version":"1.0"},"io.modelcontextprotocol/clientCapabilities":{}}}})"
+           "\n";
+
+    auto               oldCin  = std::cin.rdbuf();
+    auto               oldCout = std::cout.rdbuf();
+    std::istringstream in(input);
+    std::ostringstream out;
+    std::cin.rdbuf(in.rdbuf());
+    std::cout.rdbuf(out.rdbuf());
+    server.runStdio();
+    std::cin.rdbuf(oldCin);
+    std::cout.rdbuf(oldCout);
+
+    std::vector<json>  responses;
+    std::istringstream outputStream(out.str());
+    std::string        line;
+    while (std::getline(outputStream, line)) {
+        if (!line.empty()) {
+            responses.push_back(json::parse(line));
+        }
+    }
+
+    XX_TEST_EXPECT_EQ(responses.size(), (size_t)1);
+    if (!responses.empty()) {
+        auto r = responses[0]["result"];
+        // resultType (2026-07-28 必需)
+        XX_TEST_EXPECT_EQ(r["resultType"].get<std::string>(), "complete");
+        // supportedVersions 必须包含 2026-07-28
+        bool has2026 = false;
+        for (const auto& v : r["supportedVersions"]) {
+            if (v.get<std::string>() == "2026-07-28") {
+                has2026 = true;
+            }
+        }
+        XX_TEST_EXPECT_TRUE(has2026);
+        // capabilities + serverInfo
+        XX_TEST_EXPECT_TRUE(r.contains("capabilities"));
+        XX_TEST_EXPECT_TRUE(r["_meta"]["io.modelcontextprotocol/serverInfo"].contains("name"));
+        // CacheableResult
+        XX_TEST_EXPECT_TRUE(r.contains("ttlMs"));
+        XX_TEST_EXPECT_TRUE(r.contains("cacheScope"));
+    }
+}
+
+// Unsupported protocol version → -32022 with supported list
+void test_mcp_server_2026_version_gate() {
+    McpServer server;
+
+    std::string input;
+    // 未知版本 (现代请求, _meta 声明)
+    input
+        += R"({"jsonrpc":"2.0","id":1,"method":"ping","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2099-01-01","io.modelcontextprotocol/clientCapabilities":{}}}})"
+           "\n";
+    // 现代请求缺少必需 _meta 字段 → -32602
+    input
+        += R"({"jsonrpc":"2.0","id":2,"method":"ping","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}})"
+           "\n";
+    // 现代请求移除了 initialize → -32601
+    input
+        += R"({"jsonrpc":"2.0","id":3,"method":"initialize","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}})"
+           "\n";
+    // 现代请求移除了 logging/setLevel → -32601
+    input
+        += R"({"jsonrpc":"2.0","id":4,"method":"logging/setLevel","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}})"
+           "\n";
+    // 现代请求移除了 resources/subscribe → -32601
+    input
+        += R"({"jsonrpc":"2.0","id":5,"method":"resources/subscribe","params":{"uri":"file:///x","_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}})"
+           "\n";
+
+    auto               oldCin  = std::cin.rdbuf();
+    auto               oldCout = std::cout.rdbuf();
+    std::istringstream in(input);
+    std::ostringstream out;
+    std::cin.rdbuf(in.rdbuf());
+    std::cout.rdbuf(out.rdbuf());
+    server.runStdio();
+    std::cin.rdbuf(oldCin);
+    std::cout.rdbuf(oldCout);
+
+    std::vector<json>  responses;
+    std::istringstream outputStream(out.str());
+    std::string        line;
+    while (std::getline(outputStream, line)) {
+        if (!line.empty()) {
+            responses.push_back(json::parse(line));
+        }
+    }
+
+    XX_TEST_EXPECT_EQ(responses.size(), (size_t)5);
+    if (responses.size() >= 5) {
+        // 1: UnsupportedProtocolVersionError
+        XX_TEST_EXPECT_EQ(responses[0]["error"]["code"].get<int>(), -32022);
+        XX_TEST_EXPECT_TRUE(responses[0]["error"]["data"]["supported"].is_array());
+        bool has2026 = false;
+        for (const auto& v : responses[0]["error"]["data"]["supported"]) {
+            if (v.get<std::string>() == "2026-07-28") {
+                has2026 = true;
+            }
+        }
+        XX_TEST_EXPECT_TRUE(has2026);
+        // 2: 缺 clientCapabilities → -32602
+        XX_TEST_EXPECT_EQ(responses[1]["error"]["code"].get<int>(), -32602);
+        // 3-5: 已移除的方法 → -32601
+        XX_TEST_EXPECT_EQ(responses[2]["error"]["code"].get<int>(), -32601);
+        XX_TEST_EXPECT_EQ(responses[3]["error"]["code"].get<int>(), -32601);
+        XX_TEST_EXPECT_EQ(responses[4]["error"]["code"].get<int>(), -32601);
+    }
+}
+
+// Modern results carry resultType/_meta/serverInfo/ttlMs; legacy results don't
+void test_mcp_server_2026_modern_results() {
+    McpServer server;
+
+    std::string input;
+    // modern tools/list
+    input
+        += R"({"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{},"progressToken":"tok-1"}}})"
+           "\n";
+    // legacy tools/list (无 _meta)
+    input += R"({"jsonrpc":"2.0","id":2,"method":"tools/list"})"
+             "\n";
+    // modern ping
+    input
+        += R"({"jsonrpc":"2.0","id":3,"method":"ping","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}})"
+           "\n";
+
+    auto               oldCin  = std::cin.rdbuf();
+    auto               oldCout = std::cout.rdbuf();
+    std::istringstream in(input);
+    std::ostringstream out;
+    std::cin.rdbuf(in.rdbuf());
+    std::cout.rdbuf(out.rdbuf());
+    server.runStdio();
+    std::cin.rdbuf(oldCin);
+    std::cout.rdbuf(oldCout);
+
+    std::vector<json>  responses;
+    std::istringstream outputStream(out.str());
+    std::string        line;
+    while (std::getline(outputStream, line)) {
+        if (!line.empty()) {
+            responses.push_back(json::parse(line));
+        }
+    }
+
+    XX_TEST_EXPECT_EQ(responses.size(), (size_t)3);
+    if (responses.size() >= 3) {
+        // modern: resultType complete + _meta.serverInfo + ttlMs/cacheScope
+        XX_TEST_EXPECT_EQ(responses[0]["result"]["resultType"].get<std::string>(), "complete");
+        XX_TEST_EXPECT_TRUE(
+            responses[0]["result"]["_meta"]["io.modelcontextprotocol/serverInfo"].contains("name")
+        );
+        XX_TEST_EXPECT_TRUE(responses[0]["result"].contains("ttlMs"));
+        XX_TEST_EXPECT_TRUE(responses[0]["result"].contains("cacheScope"));
+        // 请求 _meta 透传 (progressToken)
+        XX_TEST_EXPECT_EQ(
+            responses[0]["result"]["_meta"]["progressToken"].get<std::string>(),
+            "tok-1"
+        );
+        // legacy: 无 resultType
+        XX_TEST_EXPECT_TRUE(responses[1]["result"].contains("tools"));
+        XX_TEST_EXPECT_FALSE(responses[1]["result"].contains("resultType"));
+        // modern ping 也带 resultType
+        XX_TEST_EXPECT_EQ(responses[2]["result"]["resultType"].get<std::string>(), "complete");
+    }
+}
+
+// subscriptions/listen over stdio: ack notification + graceful-end response
+void test_mcp_server_2026_subscriptions_stdio() {
+    McpServer server;
+
+    std::string input;
+    input
+        += R"({"jsonrpc":"2.0","id":7,"method":"subscriptions/listen","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}},"notifications":{"toolsListChanged":true}}})"
+           "\n";
+
+    auto               oldCin  = std::cin.rdbuf();
+    auto               oldCout = std::cout.rdbuf();
+    std::istringstream in(input);
+    std::ostringstream out;
+    std::cin.rdbuf(in.rdbuf());
+    std::cout.rdbuf(out.rdbuf());
+    server.runStdio();
+    std::cin.rdbuf(oldCin);
+    std::cout.rdbuf(oldCout);
+
+    std::vector<json>  messages;
+    std::istringstream outputStream(out.str());
+    std::string        line;
+    while (std::getline(outputStream, line)) {
+        if (!line.empty()) {
+            messages.push_back(json::parse(line));
+        }
+    }
+
+    // 2 条消息: ack 通知 + 优雅结束响应 (stdin EOF)
+    XX_TEST_EXPECT_EQ(messages.size(), (size_t)2);
+    if (messages.size() >= 2) {
+        // 1) ack 通知
+        XX_TEST_EXPECT_EQ(
+            messages[0]["method"].get<std::string>(),
+            "notifications/subscriptions/acknowledged"
+        );
+        XX_TEST_EXPECT_EQ(
+            messages[0]["params"]["_meta"]["io.modelcontextprotocol/subscriptionId"].get<int>(),
+            7
+        );
+        XX_TEST_EXPECT_TRUE(messages[0]["params"]["notifications"]["toolsListChanged"].get<bool>());
+        // 2) 优雅结束: 空 result 响应 (id = 7)
+        XX_TEST_EXPECT_EQ(messages[1]["id"].get<int>(), 7);
+        XX_TEST_EXPECT_EQ(messages[1]["result"]["resultType"].get<std::string>(), "complete");
+        XX_TEST_EXPECT_EQ(
+            messages[1]["result"]["_meta"]["io.modelcontextprotocol/subscriptionId"].get<int>(),
+            7
+        );
+    }
+}
+
+// subscriptions/listen over HTTP: SSE 流 + 变更通知 + 优雅结束
+asio::awaitable<void> test_mcp_server_2026_subscriptions_http() {
+    using Server = McpServer;
+
+    Server::Config cfg;
+    cfg.httpConfig.address          = "127.0.0.1";
+    cfg.httpConfig.port             = 0;
+    cfg.httpConfig.ioThreads        = 1;
+    cfg.httpConfig.accessLogEnabled = false;
+
+    Server server(std::move(cfg));
+
+    std::thread serverThread([&server]() {
+        server.start();
+    });
+
+    uint16_t port = 0;
+    for (int i = 0; i < 100; ++i) {
+        port = server.port();
+        if (port != 0) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    if (port == 0) {
+        TEST_FAIL << "McpServer failed to start for subscriptions test" << std::endl;
+        g_mcp_failed++;
+        server.stop();
+        serverThread.join();
+        co_return;
+    }
+
+    for (int i = 0; i < 100; ++i) {
+        try {
+            asio::io_context      tmpCtx;
+            asio::ip::tcp::socket sock(tmpCtx);
+            sock.connect(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), port));
+            sock.close();
+            break;
+        } catch (...) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+    }
+
+    std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
+
+    json req;
+    req["jsonrpc"]                                                       = "2.0";
+    req["id"]                                                            = 42;
+    req["method"]                                                        = "subscriptions/listen";
+    req["params"]["_meta"]["io.modelcontextprotocol/protocolVersion"]    = "2026-07-28";
+    req["params"]["_meta"]["io.modelcontextprotocol/clientCapabilities"] = json::object();
+    req["params"]["notifications"]["toolsListChanged"]                   = true;
+
+    util::HeaderMap headers;
+    headers.set("MCP-Protocol-Version", "2026-07-28");
+    headers.set("Mcp-Method", "subscriptions/listen");
+    headers.set("Accept", "application/json, text/event-stream");
+
+    std::string sseData;
+    {
+        std::mutex dataMutex;
+        auto       executor = co_await asio::this_coro::executor;
+
+        auto reader = [&]() -> asio::awaitable<void> {
+            co_await agentxx::util::catchErrorAsync<bool>(
+                [&]() -> asio::awaitable<bool> {
+                    co_await util::HttpClient::requestSseAsync(
+                        "POST",
+                        baseUrl + "/mcp",
+                        req.dump(),
+                        "application/json",
+                        headers,
+                        util::HttpClient::RequestConfig{
+                            .readChunkTimeout = std::chrono::seconds{30}
+                        },
+                        [&](std::string_view chunk) -> bool {
+                            std::lock_guard lock(dataMutex);
+                            sseData.append(chunk);
+                            TEST_INFO << "sse chunk: " << chunk.substr(0, 160) << std::endl;
+                            return false; // 持续读, 直到服务端关闭
+                        }
+                    );
+                    co_return true;
+                },
+                [](std::string errmsg) -> asio::awaitable<bool> {
+                    TEST_INFO << "sse reader error: " << errmsg << std::endl;
+                    co_return false;
+                }
+            );
+        };
+
+        auto fut = asio::co_spawn(executor, reader(), asio::use_future);
+
+        auto waitFor = [&](const std::string& needle, int maxMs) -> asio::awaitable<bool> {
+            auto st = std::chrono::steady_clock::now();
+            for (int i = 0; i < maxMs / 20; ++i) {
+                {
+                    std::lock_guard lock(dataMutex);
+                    if (sseData.find(needle) != std::string::npos) {
+                        TEST_INFO << "waitFor(" << needle << ") found after "
+                                  << std::chrono::duration_cast<std::chrono::milliseconds>(
+                                         std::chrono::steady_clock::now() - st
+                                     )
+                                         .count()
+                                  << "ms (total " << sseData.size() << " bytes)" << std::endl;
+                        co_return true;
+                    }
+                }
+                asio::steady_timer timer(executor);
+                timer.expires_after(std::chrono::milliseconds(20));
+                neograph_asio_error_code ec;
+                co_await timer.async_wait(asio::redirect_error(asio::use_awaitable, ec));
+            }
+            TEST_INFO << "waitFor(" << needle << ") TIMEOUT after " << maxMs << "ms (total "
+                      << sseData.size() << " bytes)" << std::endl;
+            co_return false;
+        };
+
+        // 1) ack 通知
+        XX_TEST_EXPECT_TRUE(co_await waitFor("notifications/subscriptions/acknowledged", 5000));
+
+        // 2) 注册工具 → tools/list_changed 通知
+        McpToolDefinition def;
+        def.name        = "sub_tool";
+        def.description = "Subscription test tool";
+        TEST_INFO << "adding tool at "
+                  << std::chrono::duration_cast<std::chrono::milliseconds>(
+                         std::chrono::steady_clock::now().time_since_epoch()
+                     )
+                         .count()
+                  << "ms" << std::endl;
+        server.addTool(def, [](const json&) -> json {
+            json c;
+            c["type"] = "text";
+            c["text"] = "ok";
+            return c;
+        });
+        XX_TEST_EXPECT_TRUE(co_await waitFor("notifications/tools/list_changed", 5000));
+
+        // 3) 服务端停止 → 优雅结束 (空 result, id=42)
+        server.stop();
+        serverThread.join();
+        XX_TEST_EXPECT_TRUE(co_await waitFor("\"id\":42", 5000));
+
+        // 等待读取协程完成 (不能阻塞 io 线程在 future::get 上)
+        bool ended = false;
+        for (int i = 0; i < 500 && !ended; ++i) {
+            if (fut.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
+                ended = true;
+                break;
+            }
+            asio::steady_timer timer(executor);
+            timer.expires_after(std::chrono::milliseconds(20));
+            neograph_asio_error_code ec;
+            co_await timer.async_wait(asio::redirect_error(asio::use_awaitable, ec));
+        }
+        XX_TEST_EXPECT_TRUE(ended);
+        if (ended) {
+            fut.get();
+        }
+    }
+
+    // 校验 SSE 内容: ack 带 subscriptionId
+    XX_TEST_EXPECT_TRUE(
+        sseData.find("\"io.modelcontextprotocol/subscriptionId\":42") != std::string::npos
+    );
+    XX_TEST_EXPECT_TRUE(sseData.find("tools/list_changed") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(sseData.find("\"resultType\":\"complete\"") != std::string::npos);
+}
+
+// HTTP 标准请求头校验 (MCP-Protocol-Version / Mcp-Method / Mcp-Name)
+asio::awaitable<void> test_mcp_server_2026_http_headers() {
+    using Server = McpServer;
+
+    Server::Config cfg;
+    cfg.httpConfig.address          = "127.0.0.1";
+    cfg.httpConfig.port             = 0;
+    cfg.httpConfig.ioThreads        = 1;
+    cfg.httpConfig.accessLogEnabled = false;
+
+    Server            server(std::move(cfg));
+    McpToolDefinition def;
+    def.name        = "echo";
+    def.description = "Echo";
+    def.inputSchema = json::parse(R"({"type":"object","properties":{"text":{"type":"string"}}})");
+    server.addTool(def, [](const json& args) -> json {
+        json content;
+        content["type"] = "text";
+        content["text"] = args.value("text", "");
+        return content;
+    });
+
+    std::thread serverThread([&server]() {
+        server.start();
+    });
+
+    uint16_t port = 0;
+    for (int i = 0; i < 100; ++i) {
+        port = server.port();
+        if (port != 0) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    if (port == 0) {
+        TEST_FAIL << "McpServer failed to start for header test" << std::endl;
+        g_mcp_failed++;
+        server.stop();
+        serverThread.join();
+        co_return;
+    }
+
+    for (int i = 0; i < 100; ++i) {
+        try {
+            asio::io_context      tmpCtx;
+            asio::ip::tcp::socket sock(tmpCtx);
+            sock.connect(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), port));
+            sock.close();
+            break;
+        } catch (...) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+    }
+
+    std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
+
+    auto modernBody = [](const char* method) {
+        json req;
+        req["jsonrpc"]                                                       = "2.0";
+        req["id"]                                                            = 1;
+        req["method"]                                                        = method;
+        req["params"]["_meta"]["io.modelcontextprotocol/protocolVersion"]    = "2026-07-28";
+        req["params"]["_meta"]["io.modelcontextprotocol/clientCapabilities"] = json::object();
+        return req;
+    };
+
+    // 1. 缺少 Mcp-Method → 400 + -32020
+    {
+        util::HeaderMap h;
+        h.set("MCP-Protocol-Version", "2026-07-28");
+        h.set("Accept", "application/json, text/event-stream");
+        auto resp = co_await HttpClient::postAsync(
+            baseUrl + "/mcp",
+            modernBody("ping"),
+            h,
+            HttpClient::RequestConfig{.readChunkTimeout = std::chrono::seconds{5}}
+        );
+        XX_TEST_EXPECT_HAS_VALUE(resp);
+        if (resp.has_value()) {
+            XX_TEST_EXPECT_EQ(resp.value().status, 400);
+            auto j = resp.value().bodyJson();
+            XX_TEST_EXPECT_HAS_VALUE(j);
+            if (j.has_value()) {
+                XX_TEST_EXPECT_EQ((*j)["error"]["code"].get<int>(), -32020);
+            }
+        }
+    }
+
+    // 2. MCP-Protocol-Version 与 body _meta 不一致 → 400 + -32020
+    {
+        util::HeaderMap h;
+        h.set("MCP-Protocol-Version", "2025-11-25");
+        h.set("Mcp-Method", "ping");
+        h.set("Accept", "application/json, text/event-stream");
+        auto resp = co_await HttpClient::postAsync(
+            baseUrl + "/mcp",
+            modernBody("ping"),
+            h,
+            HttpClient::RequestConfig{.readChunkTimeout = std::chrono::seconds{5}}
+        );
+        XX_TEST_EXPECT_HAS_VALUE(resp);
+        if (resp.has_value()) {
+            XX_TEST_EXPECT_EQ(resp.value().status, 400);
+            auto j = resp.value().bodyJson();
+            XX_TEST_EXPECT_HAS_VALUE(j);
+            if (j.has_value()) {
+                XX_TEST_EXPECT_EQ((*j)["error"]["code"].get<int>(), -32020);
+            }
+        }
+    }
+
+    // 3. Mcp-Name 与 body 不一致 (tools/call) → 400 + -32020
+    {
+        util::HeaderMap h;
+        h.set("MCP-Protocol-Version", "2026-07-28");
+        h.set("Mcp-Method", "tools/call");
+        h.set("Mcp-Name", "wrong_name");
+        h.set("Accept", "application/json, text/event-stream");
+        auto req                   = modernBody("tools/call");
+        req["params"]["name"]      = "echo";
+        req["params"]["arguments"] = json::object();
+        auto resp                  = co_await HttpClient::postAsync(
+            baseUrl + "/mcp",
+            req,
+            h,
+            HttpClient::RequestConfig{.readChunkTimeout = std::chrono::seconds{5}}
+        );
+        XX_TEST_EXPECT_HAS_VALUE(resp);
+        if (resp.has_value()) {
+            XX_TEST_EXPECT_EQ(resp.value().status, 400);
+            auto j = resp.value().bodyJson();
+            XX_TEST_EXPECT_HAS_VALUE(j);
+            if (j.has_value()) {
+                XX_TEST_EXPECT_EQ((*j)["error"]["code"].get<int>(), -32020);
+            }
+        }
+    }
+
+    // 4. 正确请求头 → 200
+    {
+        util::HeaderMap h;
+        h.set("MCP-Protocol-Version", "2026-07-28");
+        h.set("Mcp-Method", "tools/list");
+        h.set("Accept", "application/json, text/event-stream");
+        auto resp = co_await HttpClient::postAsync(
+            baseUrl + "/mcp",
+            modernBody("tools/list"),
+            h,
+            HttpClient::RequestConfig{.readChunkTimeout = std::chrono::seconds{5}}
+        );
+        XX_TEST_EXPECT_HAS_VALUE(resp);
+        if (resp.has_value()) {
+            XX_TEST_EXPECT_EQ(resp.value().status, 200);
+            auto j = resp.value().bodyJson();
+            XX_TEST_EXPECT_HAS_VALUE(j);
+            if (j.has_value()) {
+                XX_TEST_EXPECT_EQ((*j)["result"]["resultType"].get<std::string>(), "complete");
+                XX_TEST_EXPECT_EQ((*j)["result"]["tools"].size(), (size_t)1);
+            }
+        }
+    }
+
+    // 5. 未知方法 → 404 (现代协议)
+    {
+        util::HeaderMap h;
+        h.set("MCP-Protocol-Version", "2026-07-28");
+        h.set("Mcp-Method", "no/such/method");
+        h.set("Accept", "application/json, text/event-stream");
+        auto resp = co_await HttpClient::postAsync(
+            baseUrl + "/mcp",
+            modernBody("no/such/method"),
+            h,
+            HttpClient::RequestConfig{.readChunkTimeout = std::chrono::seconds{5}}
+        );
+        XX_TEST_EXPECT_HAS_VALUE(resp);
+        if (resp.has_value()) {
+            XX_TEST_EXPECT_EQ(resp.value().status, 404);
+            auto j = resp.value().bodyJson();
+            XX_TEST_EXPECT_HAS_VALUE(j);
+            if (j.has_value()) {
+                XX_TEST_EXPECT_EQ((*j)["error"]["code"].get<int>(), -32601);
+            }
+        }
+    }
+
+    // 6. 未知协议版本 → 400 + -32022
+    {
+        util::HeaderMap h;
+        h.set("MCP-Protocol-Version", "2099-01-01");
+        h.set("Mcp-Method", "ping");
+        h.set("Accept", "application/json, text/event-stream");
+        auto req                                                          = modernBody("ping");
+        req["params"]["_meta"]["io.modelcontextprotocol/protocolVersion"] = "2099-01-01";
+        auto resp = co_await HttpClient::postAsync(
+            baseUrl + "/mcp",
+            req,
+            h,
+            HttpClient::RequestConfig{.readChunkTimeout = std::chrono::seconds{5}}
+        );
+        XX_TEST_EXPECT_HAS_VALUE(resp);
+        if (resp.has_value()) {
+            XX_TEST_EXPECT_EQ(resp.value().status, 400);
+            auto j = resp.value().bodyJson();
+            XX_TEST_EXPECT_HAS_VALUE(j);
+            if (j.has_value()) {
+                XX_TEST_EXPECT_EQ((*j)["error"]["code"].get<int>(), -32022);
+            }
+        }
+    }
+
+    server.stop();
+    serverThread.join();
+}
+
+// x-mcp-header: 客户端镜像参数为 Mcp-Param-* 头, 服务端校验
+asio::awaitable<void> test_mcp_server_2026_x_mcp_header() {
+    using Server = McpServer;
+
+    Server::Config cfg;
+    cfg.httpConfig.address          = "127.0.0.1";
+    cfg.httpConfig.port             = 0;
+    cfg.httpConfig.ioThreads        = 1;
+    cfg.httpConfig.accessLogEnabled = false;
+
+    Server            server(std::move(cfg));
+    McpToolDefinition def;
+    def.name        = "sql";
+    def.description = "Execute SQL";
+    def.inputSchema = json::parse(R"({
+    "type": "object",
+    "properties": {
+      "region": {"type": "string", "x-mcp-header": "Region"},
+      "query": {"type": "string"}
+    },
+    "required": ["region", "query"]
+  })");
+    server.addTool(def, [](const json& args) -> json {
+        json content;
+        content["type"] = "text";
+        content["text"] = "executed in " + args.value("region", "?");
+        return content;
+    });
+
+    std::thread serverThread([&server]() {
+        server.start();
+    });
+
+    uint16_t port = 0;
+    for (int i = 0; i < 100; ++i) {
+        port = server.port();
+        if (port != 0) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    if (port == 0) {
+        TEST_FAIL << "McpServer failed to start for x-mcp-header test" << std::endl;
+        g_mcp_failed++;
+        server.stop();
+        serverThread.join();
+        co_return;
+    }
+
+    for (int i = 0; i < 100; ++i) {
+        try {
+            asio::io_context      tmpCtx;
+            asio::ip::tcp::socket sock(tmpCtx);
+            sock.connect(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), port));
+            sock.close();
+            break;
+        } catch (...) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+    }
+
+    std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
+
+    // 1. 客户端 (现代) 完整流程: discover → listTools → callTool (自动带 Mcp-Param-Region)
+    {
+        McpClient::Config clientCfg;
+        clientCfg.serverUrl      = baseUrl + "/mcp";
+        clientCfg.requestTimeout = std::chrono::seconds(5);
+        clientCfg.initTimeout    = std::chrono::seconds(5);
+
+        auto client = std::make_shared<McpClient>(std::move(clientCfg));
+        auto init   = co_await client->initialize();
+        XX_TEST_EXPECT_TRUE(init.has_value());
+        if (init.has_value()) {
+            XX_TEST_EXPECT_EQ(init->protocolVersion, "2026-07-28");
+        }
+
+        auto tools = co_await client->listTools();
+        XX_TEST_EXPECT_TRUE(tools.has_value());
+        if (tools.has_value()) {
+            XX_TEST_EXPECT_EQ(tools->size(), (size_t)1);
+        }
+
+        // 先不带 header 直接调用: 服务端应拒绝 (参数有值但缺 Mcp-Param 头)
+        // 客户端实现会自动刷新缓存并重试, 因此最终成功
+        auto result = co_await client->callTool(
+            "sql",
+            {
+                {"region", "us-west1"},
+                {"query",  "SELECT 1"}
+        }
+        );
+        XX_TEST_EXPECT_TRUE(result.has_value());
+        if (result.has_value()) {
+            XX_TEST_EXPECT_TRUE(result->contains("content"));
+            if (result->contains("content")) {
+                XX_TEST_EXPECT_EQ(
+                    (*result)["content"][0].value("text", std::string{}),
+                    "executed in us-west1"
+                );
+            }
+        }
+        co_await client->close();
+    }
+
+    // 2. 裸请求: body 带 region 但无 Mcp-Param-Region 头 → 400 + -32020
+    {
+        json req;
+        req["jsonrpc"]             = "2.0";
+        req["id"]                  = 1;
+        req["method"]              = "tools/call";
+        req["params"]["name"]      = "sql";
+        req["params"]["arguments"] = {
+            {"region", "eu-west1"},
+            {"query",  "SELECT 2"}
+        };
+        req["params"]["_meta"]["io.modelcontextprotocol/protocolVersion"]    = "2026-07-28";
+        req["params"]["_meta"]["io.modelcontextprotocol/clientCapabilities"] = json::object();
+
+        util::HeaderMap h;
+        h.set("MCP-Protocol-Version", "2026-07-28");
+        h.set("Mcp-Method", "tools/call");
+        h.set("Mcp-Name", "sql");
+        h.set("Accept", "application/json, text/event-stream");
+        auto resp = co_await HttpClient::postAsync(
+            baseUrl + "/mcp",
+            req,
+            h,
+            HttpClient::RequestConfig{.readChunkTimeout = std::chrono::seconds{5}}
+        );
+        XX_TEST_EXPECT_HAS_VALUE(resp);
+        if (resp.has_value()) {
+            XX_TEST_EXPECT_EQ(resp.value().status, 400);
+            auto j = resp.value().bodyJson();
+            XX_TEST_EXPECT_HAS_VALUE(j);
+            if (j.has_value()) {
+                XX_TEST_EXPECT_EQ((*j)["error"]["code"].get<int>(), -32020);
+            }
+        }
+    }
+
+    // 3. 带正确 Mcp-Param-Region 头 (Base64 sentinel 编码) → 200
+    {
+        json req;
+        req["jsonrpc"]             = "2.0";
+        req["id"]                  = 2;
+        req["method"]              = "tools/call";
+        req["params"]["name"]      = "sql";
+        req["params"]["arguments"] = {
+            {"region", "eu-west1"},
+            {"query",  "SELECT 3"}
+        };
+        req["params"]["_meta"]["io.modelcontextprotocol/protocolVersion"]    = "2026-07-28";
+        req["params"]["_meta"]["io.modelcontextprotocol/clientCapabilities"] = json::object();
+
+        util::HeaderMap h;
+        h.set("MCP-Protocol-Version", "2026-07-28");
+        h.set("Mcp-Method", "tools/call");
+        h.set("Mcp-Name", "sql");
+        h.set("Mcp-Param-Region", "eu-west1");
+        h.set("Accept", "application/json, text/event-stream");
+        auto resp = co_await HttpClient::postAsync(
+            baseUrl + "/mcp",
+            req,
+            h,
+            HttpClient::RequestConfig{.readChunkTimeout = std::chrono::seconds{5}}
+        );
+        XX_TEST_EXPECT_HAS_VALUE(resp);
+        if (resp.has_value()) {
+            XX_TEST_EXPECT_EQ(resp.value().status, 200);
+            auto j = resp.value().bodyJson();
+            XX_TEST_EXPECT_HAS_VALUE(j);
+            if (j.has_value()) {
+                XX_TEST_EXPECT_EQ(
+                    (*j)["result"]["content"][0].value("text", std::string{}),
+                    "executed in eu-west1"
+                );
+            }
+        }
+    }
+
+    server.stop();
+    serverThread.join();
+}
+
+// McpClient (2026-07-28 默认) 连接现代服务端: discover 完成初始化, 无握手
+asio::awaitable<void> test_mcp_client_2026_modern_http() {
+    using Server = McpServer;
+
+    Server::Config cfg;
+    cfg.httpConfig.address          = "127.0.0.1";
+    cfg.httpConfig.port             = 0;
+    cfg.httpConfig.ioThreads        = 1;
+    cfg.httpConfig.accessLogEnabled = false;
+
+    Server            server(std::move(cfg));
+    McpToolDefinition def;
+    def.name        = "echo";
+    def.description = "Echo";
+    def.inputSchema = json::parse(R"({"type":"object","properties":{"text":{"type":"string"}}})");
+    server.addTool(def, [](const json& args) -> json {
+        json content;
+        content["type"] = "text";
+        content["text"] = args.value("text", "");
+        return content;
+    });
+
+    std::thread serverThread([&server]() {
+        server.start();
+    });
+
+    uint16_t port = 0;
+    for (int i = 0; i < 100; ++i) {
+        port = server.port();
+        if (port != 0) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    if (port == 0) {
+        TEST_FAIL << "McpServer failed to start" << std::endl;
+        g_mcp_failed++;
+        server.stop();
+        serverThread.join();
+        co_return;
+    }
+
+    std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
+
+    for (int i = 0; i < 100; ++i) {
+        try {
+            asio::io_context      tmpCtx;
+            asio::ip::tcp::socket sock(tmpCtx);
+            sock.connect(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), port));
+            sock.close();
+            break;
+        } catch (...) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+    }
+
+    McpClient::Config clientCfg;
+    clientCfg.serverUrl      = baseUrl + "/mcp";
+    clientCfg.requestTimeout = std::chrono::seconds(5);
+    clientCfg.initTimeout    = std::chrono::seconds(5);
+
+    // 默认协议版本 = 2026-07-28
+    XX_TEST_EXPECT_EQ(clientCfg.protocolVersion, "2026-07-28");
+
+    auto client = std::make_shared<McpClient>(std::move(clientCfg));
+
+    // 现代初始化: server/discover, 无 initialize 握手
+    auto init = co_await client->initialize();
+    XX_TEST_EXPECT_TRUE(init.has_value());
+    if (init.has_value()) {
+        XX_TEST_EXPECT_EQ(init->protocolVersion, "2026-07-28");
+        XX_TEST_EXPECT_EQ(init->serverName, "agentxx-mcp");
+        XX_TEST_EXPECT_TRUE(init->capabilities.contains("tools"));
+    }
+
+    // discover() 独立调用
+    auto disc = co_await client->discover();
+    XX_TEST_EXPECT_TRUE(disc.has_value());
+    if (disc.has_value()) {
+        bool has2026 = false;
+        for (const auto& v : disc->supportedVersions) {
+            if (v == "2026-07-28") {
+                has2026 = true;
+            }
+        }
+        XX_TEST_EXPECT_TRUE(has2026);
+        XX_TEST_EXPECT_EQ(disc->serverName, "agentxx-mcp");
+    }
+
+    // ping (我们的双时代服务端保留 ping)
+    auto ping = co_await client->ping();
+    XX_TEST_EXPECT_TRUE(ping.has_value());
+
+    // tools/list + tools/call
+    auto tools = co_await client->listTools();
+    XX_TEST_EXPECT_TRUE(tools.has_value());
+    if (tools.has_value()) {
+        XX_TEST_EXPECT_EQ(tools->size(), (size_t)1);
+        XX_TEST_EXPECT_EQ((*tools)[0].name, "echo");
+    }
+
+    auto echo = co_await client->callTool(
+        "echo",
+        {
+            {"text", "hello 2026"}
+    }
+    );
+    XX_TEST_EXPECT_TRUE(echo.has_value());
+    if (echo.has_value()) {
+        XX_TEST_EXPECT_EQ((*echo)["content"][0].value("text", ""), "hello 2026");
+    }
+
+    co_await client->close();
+    server.stop();
+    serverThread.join();
+}
+
+// McpClient (2026-07-28) 连接 legacy 服务端: discover 失败 → 自动回退 initialize 握手
+asio::awaitable<void> test_mcp_client_2026_legacy_fallback() {
+    using Server = util::HttpServer;
+
+    Server::Config cfg;
+    cfg.address          = "127.0.0.1";
+    cfg.port             = 0;
+    cfg.ioThreads        = 1;
+    cfg.accessLogEnabled = false;
+
+    auto server = std::make_shared<Server>(std::move(cfg));
+
+    using Handler = Server::Handler;
+    auto handler  = std::make_shared<Handler>(
+        [](Server::Request& req, Server::Response& resp, std::string_view
+        ) -> asio::awaitable<void> {
+            namespace http = boost::beast::http;
+
+            json requestJson;
+            try {
+                requestJson = json::parse(req.body());
+            } catch (...) {
+                resp.version(req.version());
+                resp.result(http::status::bad_request);
+                resp.prepare_payload();
+                co_return;
+            }
+
+            json        id     = requestJson.value("id", json{});
+            std::string method = requestJson.value("method", "");
+            json        response;
+            response["jsonrpc"] = "2.0";
+            response["id"]      = id;
+
+            if (method == "server/discover") {
+                // legacy 服务端不认识 discover → -32601
+                response["error"]["code"]    = -32601;
+                response["error"]["message"] = "Method not found";
+            } else if (method == "initialize") {
+                response["result"]["protocolVersion"]       = "2024-11-05";
+                response["result"]["serverInfo"]["name"]    = "legacy-server";
+                response["result"]["serverInfo"]["version"] = "1.0";
+                response["result"]["capabilities"]          = json::object();
+            } else if (method == "ping") {
+                response["result"] = json::object();
+            } else if (method == "tools/list") {
+                response["result"]["tools"] = json::array();
+            } else {
+                response["error"]["code"]    = -32601;
+                response["error"]["message"] = "Method not found";
+            }
+
+            resp.version(req.version());
+            resp.result(http::status::ok);
+            resp.set(http::field::content_type, "application/json");
+            resp.body() = response.dump();
+            resp.prepare_payload();
+        }
+    );
+
+    server->router().add("/mcp", 2, handler);
+
+    std::thread serverThread([server]() {
+        server->start();
+    });
+
+    uint16_t port = 0;
+    for (int i = 0; i < 100; ++i) {
+        port = server->port();
+        if (port != 0) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    if (port == 0) {
+        TEST_FAIL << "Legacy mock server failed to start" << std::endl;
+        g_mcp_failed++;
+        server->stop();
+        serverThread.join();
+        co_return;
+    }
+
+    for (int i = 0; i < 100; ++i) {
+        try {
+            asio::io_context      tmpCtx;
+            asio::ip::tcp::socket sock(tmpCtx);
+            sock.connect(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), port));
+            sock.close();
+            break;
+        } catch (...) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+    }
+
+    std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
+
+    McpClient::Config clientCfg;
+    clientCfg.serverUrl      = baseUrl + "/mcp";
+    clientCfg.requestTimeout = std::chrono::seconds(5);
+    clientCfg.initTimeout    = std::chrono::seconds(5);
+
+    auto client = std::make_shared<McpClient>(std::move(clientCfg));
+
+    // discover 探测失败 → 回退 legacy initialize 握手 → 仍应成功
+    auto init = co_await client->initialize();
+    XX_TEST_EXPECT_TRUE(init.has_value());
+    if (init.has_value()) {
+        XX_TEST_EXPECT_EQ(init->serverName, "legacy-server");
+        XX_TEST_EXPECT_EQ(init->protocolVersion, "2024-11-05");
+    }
+
+    auto ping = co_await client->ping();
+    XX_TEST_EXPECT_TRUE(ping.has_value());
+
+    auto tools = co_await client->listTools();
+    XX_TEST_EXPECT_TRUE(tools.has_value());
+
+    co_await client->close();
+    server->stop();
+    serverThread.join();
+}
+
 asio::awaitable<TestResult> run_mcp_tests() {
     test_mcp_version_negotiation_unit();
     test_mcp_server_unit();
@@ -2332,6 +3430,16 @@ asio::awaitable<TestResult> run_mcp_tests() {
     co_await test_mcp_server_cross_version_http();
     co_await test_mcp_client_accept_header();
     co_await test_mcp_server_accept_sse();
+    // 2026-07-28
+    test_mcp_server_2026_discover_stdio();
+    test_mcp_server_2026_version_gate();
+    test_mcp_server_2026_modern_results();
+    test_mcp_server_2026_subscriptions_stdio();
+    co_await test_mcp_server_2026_subscriptions_http();
+    co_await test_mcp_server_2026_http_headers();
+    co_await test_mcp_server_2026_x_mcp_header();
+    co_await test_mcp_client_2026_modern_http();
+    co_await test_mcp_client_2026_legacy_fallback();
     co_return TestResult{g_mcp_passed, g_mcp_failed};
 }
 
