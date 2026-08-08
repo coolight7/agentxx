@@ -368,7 +368,7 @@ struct OverlayFixture {
         sharedState.mutate([&](TUIRenderState& st) {
             auto m          = std::make_shared<TUIMessage>();
             m->role         = TUIMessage::Role::Tool;
-            m->toolName     = "planning_write";
+            m->toolName     = "agentxx_planning_write";
             m->toolCallId   = "call_1";
             m->text         = std::string(json);
             m->toolFinished = true;

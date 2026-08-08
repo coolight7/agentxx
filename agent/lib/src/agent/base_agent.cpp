@@ -387,14 +387,14 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
 
     // llm callback: 由 EventBridge 统一处理 GraphEvent -> 会话增量 Delta/历史/总线发布
     auto eventCallback = eventBridge->makeCallback();
-    auto cfg = neograph::graph::RunConfig{
-        .thread_id   = std::string{threadId},
-        .input       = {{"messages", session->llmMessages}},
-        .max_steps   = 1024,
-        .stream_mode = neograph::graph::StreamMode::EVENTS | neograph::graph::StreamMode::TOKENS
+    auto cfg           = neograph::graph::RunConfig{
+                  .thread_id   = std::string{threadId},
+                  .input       = {{"messages", session->llmMessages}},
+                  .max_steps   = 1024,
+                  .stream_mode = neograph::graph::StreamMode::EVENTS | neograph::graph::StreamMode::TOKENS
                        | neograph::graph::StreamMode::VALUES | neograph::graph::StreamMode::UPDATES,
-        .cancel_token     = cancelToken,
-        .resume_if_exists = isFirstMsg,
+                  .cancel_token     = cancelToken,
+                  .resume_if_exists = isFirstMsg,
     };
 
     co_await agentxx::util::catchErrorAsync<bool>(
@@ -559,12 +559,13 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                                 // 显式传递中断等待超时: 与 IO 端点
                                 // interruptTimeout 配置一致, 避免被总线默认
                                 // 30s 超时截断 (用户长时间未响应中断弹窗时丢失中断)
-                                auto resp = co_await [&]() -> asio::awaitable<
-                                    std::expected<events::RespInterrupt, std::string>> {
+                                auto resp = co_await
+                                    [&]() -> asio::awaitable<
+                                              std::expected<events::RespInterrupt, std::string>> {
                                     auto req = events::ReqInterrupt{
-                                        .agentName = agentContext->agentConfig
-                                                         ? agentContext->agentConfig->agentName
-                                                         : std::string{},
+                                        .agentName         = agentContext->agentConfig
+                                                                 ? agentContext->agentConfig->agentName
+                                                                 : std::string{},
                                         .threadId          = std::string{threadId},
                                         .interruptNode     = interruptNode,
                                         .interruptValue    = interruptValue,
@@ -574,8 +575,7 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                                     };
                                     if (interruptTimeout.count() > 0) {
                                         co_return co_await session->bus
-                                            ->request<events::ReqInterrupt,
-                                                      events::RespInterrupt>(
+                                            ->request<events::ReqInterrupt, events::RespInterrupt>(
                                                 events::Topic::Interrupt,
                                                 std::move(req),
                                                 interruptTimeout
@@ -583,7 +583,8 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                                     }
                                     co_return co_await session->bus
                                         ->request<events::ReqInterrupt, events::RespInterrupt>(
-                                            events::Topic::Interrupt, std::move(req)
+                                            events::Topic::Interrupt,
+                                            std::move(req)
                                         );
                                 }();
                                 if (resp.has_value() && resp->handled) {
