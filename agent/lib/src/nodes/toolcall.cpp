@@ -510,7 +510,14 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
     auto               results       = neograph::json::array();
     std::exception_ptr cancelErrorPtr;
 
-    auto onExecTool = [&](const neograph::ToolCall& tc) -> asio::awaitable<neograph::ChatMessage> {
+    // 执行单个 toolcall (按值捕获执行所需数据, 不引用 baseRun 帧)
+    auto onExecTool
+        = [this,
+           agentCtxPtr = agentCtxPtr,
+           cancelToken = in.ctx.cancel_token,
+           &toolcallsCache,
+           &isInterrupt,
+           &in](const neograph::ToolCall& tc) -> asio::awaitable<neograph::ChatMessage> {
         neograph::ChatMessage tool_msg;
         tool_msg.role         = "tool";
         tool_msg.tool_call_id = tc.id;
@@ -542,10 +549,11 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
                             // resultId)
                             args["tool_call_id"] = tc.id;
                         }
-                        tool_msg.content = co_await execTool(*it, args, in.ctx.cancel_token);
+                        tool_msg.content
+                            = co_await ToolcallWrapNode::execTool(*it, args, cancelToken);
                         // 取消埋点: tool 执行完成后检查, 避免取消后继续收集/执行后续 tool
-                        if (in.ctx.cancel_token) {
-                            in.ctx.cancel_token->throw_if_cancelled("after tool execution");
+                        if (cancelToken) {
+                            cancelToken->throw_if_cancelled("after tool execution");
                         }
                     } catch (const neograph::graph::CancelledException&) {
                         // TODO: 保存已有的 toolcall 结果由 baseRun 的取消捕获处保存后再重新抛出
@@ -567,7 +575,7 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
                 nullptr,
                 // 传入取消令牌: tool 被取消信号中断产生的 operation_aborted
                 // 转换为 CancelledException, 避免取消被当作普通 tool 错误吞掉
-                in.ctx.cancel_token
+                cancelToken
             );
             if (errorPtr) {
                 std::rethrow_exception(errorPtr);
@@ -680,6 +688,7 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
             results.push_back(std::move(msg_json));
         }
         in.state.write("messages", results);
+        // 往外抛 cancel 异常，由 WrapNode 处理上下文临时保存
         std::rethrow_exception(cancelErrorPtr);
     }
 

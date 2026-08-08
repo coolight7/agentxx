@@ -471,7 +471,9 @@ static asio::awaitable<void> test_remote_client_handshake() {
 static asio::awaitable<void> test_session_controller_replay() {
     auto ex = co_await asio::this_coro::executor;
 
-    auto [clientT, serverT] = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+    auto tp = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+    auto clientT = std::move(tp.first);
+    auto serverT = std::move(tp.second);
 
     SessionServerAgentIO::Config cfg;
     cfg.threadId       = "session";
@@ -546,7 +548,9 @@ static asio::awaitable<void> test_session_controller_replay() {
 static asio::awaitable<void> test_session_controller_replay_fallback() {
     auto ex = co_await asio::this_coro::executor;
 
-    auto [clientT, serverT] = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+    auto tp = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+    auto clientT = std::move(tp.first);
+    auto serverT = std::move(tp.second);
 
     SessionServerAgentIO::Config cfg;
     cfg.threadId       = "session";
@@ -629,7 +633,9 @@ static asio::awaitable<void> test_session_controller_interrupt_timeout() {
 static asio::awaitable<void> test_session_controller_grace() {
     auto ex = co_await asio::this_coro::executor;
 
-    auto [clientT, serverT] = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+    auto gracePair = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+    auto clientT   = std::move(gracePair.first);
+    auto serverT   = std::move(gracePair.second);
 
     SessionServerAgentIO::Config cfg;
     cfg.threadId         = "session";
@@ -877,7 +883,9 @@ static asio::awaitable<void> test_remote_client_context_stats() {
 static asio::awaitable<void> test_channel_client_integration() {
     auto ex = co_await asio::this_coro::executor;
 
-    auto [clientT, serverT] = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+    auto tp = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+    auto clientT = std::move(tp.first);
+    auto serverT = std::move(tp.second);
 
     // fake server (经 channel 说协议)
     asio::co_spawn(
@@ -1028,7 +1036,9 @@ static asio::awaitable<void> test_remote_echo() {
 static asio::awaitable<void> test_remote_concurrent_writes() {
     auto ex = co_await asio::this_coro::executor;
 
-    auto [clientT, serverT] = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex, 8192);
+    auto tp = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex, 8192);
+    auto clientT = std::move(tp.first);
+    auto serverT = std::move(tp.second);
 
     const int                numThreads = 4;
     const int                perThread  = 100;
@@ -1378,7 +1388,9 @@ static asio::awaitable<void> test_remote_auth_timeout() {
 static asio::awaitable<void> test_remote_auth_rejected() {
     auto ex = co_await asio::this_coro::executor;
 
-    auto [clientT, serverT] = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+    auto tp = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+    auto clientT = std::move(tp.first);
+    auto serverT = std::move(tp.second);
 
     // 模拟 AgentServer 鉴权逻辑
     asio::co_spawn(
