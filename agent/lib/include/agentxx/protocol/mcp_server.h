@@ -61,10 +61,16 @@ inline constexpr int kJsonRpcInvalidParams  = -32602;
 inline constexpr int kJsonRpcInternalError  = -32603;
 
 // MCP-specific error codes
+// -32000..-32019: 实现自定义 (legacy, 兼容既有 SDK 用法)
+// -32020..-32099: MCP 规范保留 (2026-07-28 起)
 inline constexpr int kMcpToolNotFound       = -32000;
 inline constexpr int kMcpToolExecutionError = -32001;
-inline constexpr int kMcpResourceNotFound   = -32002;
+inline constexpr int kMcpResourceNotFound   = -32002; // 2025-11-25 及更早; 2026-07-28 起改用 -32602
 inline constexpr int kMcpPromptNotFound     = -32003;
+// 2026-07-28: 规范定义错误码
+inline constexpr int kMcpHeaderMismatch                    = -32020;
+inline constexpr int kMcpMissingRequiredClientCapability   = -32021;
+inline constexpr int kMcpUnsupportedProtocolVersion        = -32022;
 
 // ---------------------------------------------------------------------------
 // Data types
@@ -120,15 +126,26 @@ inline constexpr std::string_view kMcpProtocol2024_11_05   = "2024-11-05";
 inline constexpr std::string_view kMcpProtocol2025_03_26   = "2025-03-26";
 inline constexpr std::string_view kMcpProtocol2025_06_18   = "2025-06-18";
 inline constexpr std::string_view kMcpProtocol2025_11_25   = "2025-11-25";
+inline constexpr std::string_view kMcpProtocol2026_07_28   = "2026-07-28";
 inline constexpr std::string_view kMcpSupportedProtocols[] = {
+    kMcpProtocol2026_07_28,
     kMcpProtocol2025_11_25,
     kMcpProtocol2025_06_18,
     kMcpProtocol2025_03_26,
     kMcpProtocol2024_11_05,
 };
 
+// 2026-07-28 `_meta` 保留键
+inline constexpr std::string_view kMetaProtocolVersion     = "io.modelcontextprotocol/protocolVersion";
+inline constexpr std::string_view kMetaClientInfo          = "io.modelcontextprotocol/clientInfo";
+inline constexpr std::string_view kMetaClientCapabilities  = "io.modelcontextprotocol/clientCapabilities";
+inline constexpr std::string_view kMetaServerInfo          = "io.modelcontextprotocol/serverInfo";
+inline constexpr std::string_view kMetaSubscriptionId      = "io.modelcontextprotocol/subscriptionId";
+inline constexpr std::string_view kMetaLogLevel            = "io.modelcontextprotocol/logLevel";
+
 // ---------------------------------------------------------------------------
 // McpServer
+// https://modelcontextprotocol.io/docs/2026-07-28/getting-started/intro
 // ---------------------------------------------------------------------------
 
 class McpServer {
@@ -137,7 +154,7 @@ public:
     using ToolHandler    = std::function<json(const json& arguments)>;
     using ResourceReader = std::function<std::optional<McpResourceContent>(std::string_view uri)>;
     using PromptHandler  = std::function<
-         std::optional<McpPromptResult>(std::string_view name, const json& arguments)>;
+        std::optional<McpPromptResult>(std::string_view name, const json& arguments)>;
 
     struct Config {
         util::HttpServer::Config httpConfig;
@@ -147,6 +164,22 @@ public:
         std::string              serverVersion = "0.1.0";
         std::chrono::seconds     toolTimeout{60};
         size_t                   maxMessageSize = 4 * 1024 * 1024; // 4 MB
+
+        /// 2026-07-28 Origin 校验: 非空时仅允许列出的 Origin (host[:port] 或完整 URL);
+        /// 为空时默认策略: Origin 与请求 Host 同源则放行, 否则 403 (防 DNS rebinding)。
+        std::vector<std::string> allowedOrigins;
+
+        /// 2026-07-28 CacheableResult: list 类结果 (tools/list 等) 的缓存提示
+        uint64_t    cacheTtlMs = 300000; // 5 分钟
+        std::string cacheScope = "public";
+    };
+
+    /// 2026-07-28 subscriptions/listen 通知过滤器
+    struct SubscriptionFilter {
+        bool                    toolsListChanged     = false;
+        bool                    promptsListChanged   = false;
+        bool                    resourcesListChanged = false;
+        std::vector<std::string> resourceSubscriptions;
     };
 
     explicit McpServer();
@@ -183,6 +216,9 @@ public:
     void addResource(McpResourceDefinition def, ResourceReader reader);
     void removeResource(std::string_view uri);
     std::vector<McpResourceDefinition> listResources() const;
+
+    /// 2026-07-28: 资源内容更新时调用, 通知订阅了该 uri 的 subscriptions/listen 订阅者
+    void notifyResourceUpdated(std::string_view uri);
 
     // -----------------------------------------------------------------------
     // Prompt registration
@@ -228,12 +264,54 @@ private:
         bool                                         closed = false;
     };
 
+    /// 2026-07-28 subscriptions/listen 活跃订阅
+    struct SubscriptionEntry {
+        std::string                                   idKey;  // JSON-RPC id 的规范化 key (数字/字符串)
+        json                                          id;     // 原始 id (回显到通知 _meta)
+        SubscriptionFilter                            filter;
+        std::shared_ptr<util::HttpServer::SseWriter>  writer; // HTTP: SSE 流; stdio 为空
+        std::atomic<bool>                             closed{false};
+        /// HTTP: SSE 协程完成优雅结束 (排空 pending + close) 后置位,
+        /// 供 stop() 等待, 避免 ioCtx 停止取消未完成的终止 result 写入
+        std::atomic<bool>                             done{false};
+        /// HTTP 通知队列: notify* 可从任意线程入队, SSE 循环 (io 线程) 排空下发
+        std::vector<json>                             pending;
+    };
+
+    // -----------------------------------------------------------------------
+    // 请求上下文 (transport 无关的版本/元信息)
+    // -----------------------------------------------------------------------
+
+    struct RequestContext {
+        std::string protocolVersion; // 本次请求声明的协议版本 (空 = 未声明/legacy)
+        bool        isModern = false; // 2026-07-28 及更新
+        // HTTP 特有 (供 header 校验)
+        std::string httpProtocolVersionHeader;
+        std::string httpMcpMethodHeader;
+        std::string httpMcpNameHeader;
+        bool        isHttp = false;
+    };
+
     // -----------------------------------------------------------------------
     // Accept header validation helpers
     // -----------------------------------------------------------------------
 
     static bool isAcceptValid(std::string_view accept);
     static bool prefersSse(std::string_view accept);
+
+    /// 2026-07-28 Origin 校验: 返回 false 时应以 403 拒绝
+    bool isOriginAllowed(std::string_view origin, std::string_view hostHeader) const;
+
+    /// 2026-07-28 HTTP 标准请求头校验 (MCP-Protocol-Version/Mcp-Method/Mcp-Name/
+    /// Mcp-Param-*); 返回错误描述 (nullopt = 通过)
+    std::optional<std::string> validateModernHeaders(
+        const util::HttpServer::Request& req,
+        const json&                      requestJson,
+        const RequestContext&            ctx
+    ) const;
+
+    /// 构造 2026-07-28 服务端能力对象
+    json buildCapabilities() const;
 
     // -----------------------------------------------------------------------
     // Route setup
@@ -245,7 +323,22 @@ private:
     // JSON-RPC request processing (transport-agnostic)
     // -----------------------------------------------------------------------
 
-    json processJsonRpc(const json& requestJson);
+    json processJsonRpc(const json& requestJson, const RequestContext& ctx);
+
+    /// 从请求 params 中提取协议版本: _meta 优先, 其次 HTTP MCP-Protocol-Version 头
+    static std::string extractProtocolVersion(const json& params, const RequestContext& ctx);
+
+    /// 校验协议版本是否受支持; 不支持时返回 -32022 错误响应 (HTTP 400)
+    static bool isSupportedProtocolVersion(std::string_view version);
+
+    /// 构造 UnsupportedProtocolVersionError (-32022)
+    static json unsupportedVersionError(std::string_view requested);
+
+    /// 构造带 serverInfo 的 result._meta (2026-07-28)
+    json serverInfoMeta() const;
+
+    /// 为现代 (2026-07-28) 结果补充 resultType/_meta/缓存字段
+    json decorateModernResult(json result, std::string_view method, const json& requestMeta) const;
 
     // -----------------------------------------------------------------------
     // Main MCP request handler (HTTP)
@@ -254,12 +347,26 @@ private:
     asio::awaitable<void>
         handleMcpRequest(util::HttpServer::Request& req, util::HttpServer::Response& resp);
 
+    /// POST 统一入口: 普通 handler (resp 非空) 与 POST SSE 路由 (writer 非空) 共用
+    asio::awaitable<void> handleMcpPost(
+        util::HttpServer::Request&                    req,
+        util::HttpServer::Response*                   resp,
+        std::shared_ptr<util::HttpServer::SseWriter>  writer
+    );
+
+    /// POST SSE 路由 (subscriptions/listen 长连接流)
+    asio::awaitable<void> handleMcpPostSse(
+        util::HttpServer::Request&                   req,
+        std::shared_ptr<util::HttpServer::SseWriter> writer
+    );
+
     // -----------------------------------------------------------------------
     // Method handlers
     // -----------------------------------------------------------------------
 
     json handleInitialize(const json& id, const json& params);
     json handlePing(const json& id);
+    json handleDiscover(const json& id, const json& params);
     json handleToolsList(const json& id, const json&);
     json handleToolsCall(const json& id, const json& params);
     json handleResourcesList(const json& id, const json&);
@@ -273,8 +380,25 @@ private:
     json handleComplete(const json& id, const json&);
     void handleInitialized(const json&);
 
+    /// 2026-07-28 subscriptions/listen — stdio: 注册订阅并立即返回 (无响应体,
+    /// ack 经 stdout 下发; 优雅结束时回发空 result)
+    std::optional<json> handleSubscriptionsListenStdio(const json& id, const json& params);
+
+    /// 2026-07-28 subscriptions/listen — HTTP: 注册订阅并驱动 SSE 流
+    asio::awaitable<void> handleSubscriptionsListenSse(
+        const json&                                        id,
+        const json&                                        params,
+        std::shared_ptr<util::HttpServer::SseWriter>       writer
+    );
+
+    /// 下发订阅通知 (HTTP 走 SSE 流, stdio 走 stdout)
+    void sendSubscriptionNotification(SubscriptionEntry& sub, const json& notification);
+
+    /// 结束订阅 (HTTP: 发空 result 后关闭流; stdio: 发空 result 行)
+    void endSubscription(SubscriptionEntry& sub);
+
     // -----------------------------------------------------------------------
-    // SSE streaming handler
+    // SSE streaming handler (legacy HTTP+SSE transport, 2024-11-05)
     // -----------------------------------------------------------------------
 
     asio::awaitable<void> handleSseStream(
@@ -296,6 +420,12 @@ private:
     void notifyToolsChanged();
     void notifyResourcesChanged();
     void notifyPromptsChanged();
+    /// 结束所有活跃订阅 (服务端停止/stdio EOF 时调用)
+    void endAllSubscriptions();
+    /// 等待指定 HTTP 订阅 SSE 协程完成优雅结束 (最多 1s, 防止 stop 阻塞过久)
+    void waitSubscriptionsDrained(
+        const std::vector<std::shared_ptr<SubscriptionEntry>>& subs
+    );
 
     // -----------------------------------------------------------------------
     // Response helper
@@ -332,6 +462,14 @@ private:
 
     std::mutex                              sseClientsMutex_;
     std::vector<std::shared_ptr<SSEClient>> sseClients_;
+
+    // 2026-07-28 subscriptions/listen 活跃订阅 (key = idKey)
+    std::mutex                                 subscriptionsMutex_;
+    std::unordered_map<std::string, std::shared_ptr<SubscriptionEntry>> subscriptions_;
+    std::atomic<uint64_t>                                               subscriptionSeq_{1};
+
+    /// stdio 输出 (runStdio 与订阅通知共用)
+    void writeStdioMessage(const json& msg);
 };
 
 } // namespace server

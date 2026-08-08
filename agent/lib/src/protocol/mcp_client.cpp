@@ -23,6 +23,7 @@
 
 #include "agentxx/util/async_mutex.h"
 #include "agentxx/util/log.h"
+#include "agentxx/util/string_util.h"
 #include "asio/cancel_after.hpp"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
@@ -32,6 +33,8 @@
 #include "asio/this_coro.hpp"
 #include "asio/use_awaitable.hpp"
 #include "asio/write.hpp"
+#include <cctype>
+#include <iostream>
 #include <sstream>
 
 namespace agentxx {
@@ -41,6 +44,80 @@ namespace {
 /// 计算命名空间前缀后的对外 tool 名称 (namespace 非空时为 "namespace_name")
 std::string makeNamespacedName(std::string_view toolNamespace, std::string_view name) {
     return toolNamespace.empty() ? std::string{name} : fmt::format("{}_{}", toolNamespace, name);
+}
+
+/// 解析 server/discover 结果
+McpClient::DiscoverResult parseDiscoverResult(const json& r) {
+    McpClient::DiscoverResult d;
+    if (r.contains("supportedVersions") && r["supportedVersions"].is_array()) {
+        for (const auto& v : r["supportedVersions"]) {
+            if (v.is_string()) {
+                d.supportedVersions.push_back(v.get<std::string>());
+            }
+        }
+    }
+    if (r.contains("capabilities") && r["capabilities"].is_object()) {
+        d.capabilities = r["capabilities"];
+    }
+    if (r.contains("_meta") && r["_meta"].is_object()) {
+        auto serverInfo = r["_meta"].value("io.modelcontextprotocol/serverInfo", json::object());
+        if (serverInfo.is_object()) {
+            d.serverName    = serverInfo.value("name", std::string{});
+            d.serverVersion = serverInfo.value("version", std::string{});
+        }
+    }
+    d.instructions = r.value("instructions", std::string{});
+    return d;
+}
+
+/// HTTP header 值安全判定: 仅可见 ASCII (0x20-0x7E) 且无首尾空白
+bool isPlainAsciiHeaderSafe(std::string_view s) {
+    if (s.empty()) {
+        return false;
+    }
+    if (s.front() == ' ' || s.front() == '\t' || s.back() == ' ' || s.back() == '\t') {
+        return false;
+    }
+    for (char c : s) {
+        auto uc = static_cast<unsigned char>(c);
+        if (uc < 0x20 || uc > 0x7E) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/// RFC 9110 tchar (HTTP field-name token 字符)
+bool isHttpTokenChar(char c) {
+    auto uc = static_cast<unsigned char>(c);
+    if ((uc >= 'a' && uc <= 'z') || (uc >= 'A' && uc <= 'Z') || (uc >= '0' && uc <= '9')) {
+        return true;
+    }
+    switch (c) {
+        case '!':
+        case '#':
+        case '$':
+        case '%':
+        case '&':
+        case '\'':
+        case '*':
+        case '+':
+        case '-':
+        case '.':
+        case '^':
+        case '_':
+        case '`':
+        case '|':
+        case '~':
+            return true;
+        default:
+            return false;
+    }
+}
+
+/// 判断字符串是否为 Base64 sentinel 模式 (=?base64?...?=)
+bool isBase64Sentinel(std::string_view s) {
+    return s.size() >= 10 && s.starts_with("=?base64?") && s.ends_with("?=");
 }
 } // namespace
 
@@ -464,6 +541,70 @@ McpClient::~McpClient() {
     closeInternal();
 }
 
+std::string McpClient::effectiveProtocolVersion() const {
+    return negotiatedVersion_.empty() ? config_.protocolVersion : negotiatedVersion_;
+}
+
+json McpClient::buildModernMeta() const {
+    json meta;
+    meta[std::string{agentxx::server::kMetaProtocolVersion}] = effectiveProtocolVersion();
+    json info;
+    info["name"]    = config_.clientName;
+    info["version"] = config_.clientVersion;
+    meta[std::string{agentxx::server::kMetaClientInfo}] = std::move(info);
+    meta[std::string{agentxx::server::kMetaClientCapabilities}] = json::object();
+    return meta;
+}
+
+json McpClient::withModernMeta(const json& params) const {
+    json p = params;
+    if (!p.is_object()) {
+        p = json::object();
+    }
+    json meta = buildModernMeta();
+    if (p.contains("_meta") && p["_meta"].is_object()) {
+        // 合并用户提供的 _meta (如 progressToken), 协议保留键以协议为准
+        for (const auto& item : p["_meta"].items()) {
+            if (!meta.contains(item.first)) {
+                meta[item.first] = item.second;
+            }
+        }
+    }
+    p["_meta"] = std::move(meta);
+    return p;
+}
+
+std::string McpClient::pickMutualVersion(std::string_view requested, const json& serverSupportedVersions) {
+    if (!serverSupportedVersions.is_array()) {
+        return std::string{requested};
+    }
+    // 优先: 服务端支持列表中与请求一致
+    for (const auto& v : serverSupportedVersions) {
+        if (v.is_string() && v.get<std::string>() == requested) {
+            return std::string{requested};
+        }
+    }
+    // 其次: 服务端支持且本客户端也支持的最新版本
+    for (const auto& sv : serverSupportedVersions) {
+        if (!sv.is_string()) {
+            continue;
+        }
+        auto serverVer = sv.get<std::string>();
+        for (const auto& my : kSupportedProtocols) {
+            if (my == serverVer) {
+                return serverVer;
+            }
+        }
+    }
+    // 最后: 服务端声称支持的第一个版本 (未知版本时尝试跟随)
+    for (const auto& v : serverSupportedVersions) {
+        if (v.is_string()) {
+            return v.get<std::string>();
+        }
+    }
+    return std::string{requested};
+}
+
 asio::awaitable<std::expected<McpClient::InitializeResult, std::string>> McpClient::initialize() {
     if (initialized_.load()) {
         co_return std::unexpected{std::string{"already initialized"}};
@@ -475,12 +616,52 @@ asio::awaitable<std::expected<McpClient::InitializeResult, std::string>> McpClie
         }
     }
 
+    // 2026-07-28 (现代) 客户端: 先以 server/discover 探测服务端时代;
+    // 旧版协议版本配置则直接走 initialize 握手
+    if (config_.protocolVersion == kProtocol2026_07_28) {
+        auto disc = co_await probeModern();
+        if (disc.has_value()) {
+            era_   = ProtocolEra::Modern;
+            auto d = std::move(disc.value());
+            // 协商最终版本: 优先配置版本, 否则服务端支持列表中双方共有的最新版本
+            json versions = json::array();
+            for (const auto& v : d.supportedVersions) {
+                versions.push_back(v);
+            }
+            negotiatedVersion_ = pickMutualVersion(config_.protocolVersion, versions);
+
+            InitializeResult info;
+            info.protocolVersion = negotiatedVersion_;
+            info.capabilities    = d.capabilities;
+            info.serverName      = d.serverName;
+            info.serverVersion   = d.serverVersion;
+            serverInfo_          = info;
+            initialized_.store(true);
+            XX_LOGI(
+                "[McpClient] connected (modern protocol {}): server={} {}",
+                negotiatedVersion_,
+                d.serverName,
+                d.serverVersion
+            );
+            co_return std::move(info);
+        }
+        XX_LOGW("[McpClient] modern probe failed ({}), falling back to legacy initialize", disc.error());
+        // 回退: 旧版服务端 (initialize 握手)
+        era_               = ProtocolEra::Legacy;
+        negotiatedVersion_ = std::string{kProtocol2025_11_25};
+    } else {
+        // 显式配置旧版协议: 直接 legacy 握手
+        era_               = ProtocolEra::Legacy;
+        negotiatedVersion_ = config_.protocolVersion;
+    }
+
+    // ---- Legacy initialize handshake ----
     json clientInfo;
     clientInfo["name"]    = config_.clientName;
     clientInfo["version"] = config_.clientVersion;
 
     json params;
-    params["protocolVersion"] = config_.protocolVersion;
+    params["protocolVersion"] = negotiatedVersion_;
     params["capabilities"]    = json::object();
     params["clientInfo"]      = std::move(clientInfo);
 
@@ -509,8 +690,9 @@ asio::awaitable<std::expected<McpClient::InitializeResult, std::string>> McpClie
         info.serverVersion = r["serverInfo"].value("version", std::string{});
     }
 
-    auto negotiated      = negotiateProtocolVersion(config_.protocolVersion, r);
+    auto negotiated      = negotiateProtocolVersion(negotiatedVersion_, r);
     info.protocolVersion = std::move(negotiated);
+    negotiatedVersion_   = info.protocolVersion;
 
     if (!config_.isStdio()) {
         co_await sendRawNotification("notifications/initialized", json::object());
@@ -519,6 +701,81 @@ asio::awaitable<std::expected<McpClient::InitializeResult, std::string>> McpClie
     serverInfo_ = info;
     initialized_.store(true);
     co_return std::move(info);
+}
+
+asio::awaitable<std::expected<McpClient::DiscoverResult, std::string>> McpClient::discover() {
+    if (closed_.load()) {
+        co_return std::unexpected{std::string{"client is closed"}};
+    }
+    auto result = co_await probeModern();
+    if (result.has_value() && era_ == ProtocolEra::Unknown) {
+        era_ = ProtocolEra::Modern;
+    }
+    co_return result;
+}
+
+asio::awaitable<std::expected<McpClient::DiscoverResult, std::string>> McpClient::probeModern() {
+    if (closed_.load()) {
+        co_return std::unexpected{std::string{"client is closed"}};
+    }
+
+    // 探测请求使用配置版本 (通常 2026-07-28)
+    negotiatedVersion_ = config_.protocolVersion;
+
+    json params;
+    params["_meta"] = buildModernMeta();
+
+    // 现代探测请求直接走 raw 发送 (不依赖 era_ 状态)
+    auto probe = [this](const json& p) -> asio::awaitable<std::expected<json, std::string>> {
+        int64_t id = nextId_.fetch_add(1);
+        if (config_.isHttp()) {
+            co_return co_await sendModernHttpRequest(id, "server/discover", p);
+        }
+        co_return co_await sendStdioRequest(id, "server/discover", p);
+    };
+
+    auto resp = co_await probe(params);
+    if (!resp.has_value()) {
+        // HTTP 层失败 (连接/超时): 现代服务端不可能, 视为 legacy 回退
+        co_return std::unexpected{std::move(resp.error())};
+    }
+
+    json j = resp.value();
+    // 现代服务端错误识别
+    if (j.contains("error") && j["error"].is_object()) {
+        int code = j["error"].value("code", 0);
+        if (code == kMcpUnsupportedProtocolVersion) {
+            // 现代服务端但版本不受支持: 从 data.supported 挑选共同版本后重试
+            json data = j["error"].contains("data") ? j["error"]["data"] : json::object();
+            auto mutual = pickMutualVersion(config_.protocolVersion, data.value("supported", json::array()));
+            if (mutual != config_.protocolVersion) {
+                negotiatedVersion_ = mutual;
+                params["_meta"]    = buildModernMeta();
+                auto retry         = co_await probe(params);
+                if (retry.has_value() && retry->contains("result")) {
+                    co_return parseDiscoverResult(retry->operator[]("result"));
+                }
+            }
+            co_return std::unexpected{
+                fmt::format("unsupported protocol version (server supports: {})", data.value("supported", json::array()).dump())
+            };
+        }
+        // HeaderMismatch / MissingRequiredClientCapability: 现代服务端但请求有问题
+        if (code == kMcpHeaderMismatch || code == kMcpMissingRequiredClientCapability) {
+            co_return std::unexpected{
+                fmt::format("modern server rejected request: {}", j["error"].value("message", "unknown error"))
+            };
+        }
+        // 其他错误 (如 -32601/-32602): legacy 服务端特征 → 回退
+        co_return std::unexpected{
+            fmt::format("server responded with error {}: {}", code, j["error"].value("message", "unknown error"))
+        };
+    }
+
+    if (!j.contains("result") || !j["result"].is_object()) {
+        co_return std::unexpected{std::string{"server/discover returned no result"}};
+    }
+    co_return parseDiscoverResult(j["result"]);
 }
 
 asio::awaitable<void> McpClient::close() {
@@ -536,6 +793,10 @@ bool McpClient::isClosed() const {
 
 const McpClient::InitializeResult& McpClient::serverInfo() const {
     return serverInfo_;
+}
+
+const std::string& McpClient::protocolVersion() const {
+    return negotiatedVersion_.empty() ? config_.protocolVersion : negotiatedVersion_;
 }
 
 asio::awaitable<std::expected<bool, std::string>> McpClient::ping() {
@@ -585,6 +846,15 @@ asio::awaitable<std::expected<std::vector<McpToolDefinition>, std::string>> McpC
         if (t.contains("execution") && t["execution"].is_object()) {
             def.execution = t["execution"];
         }
+        // 2026-07-28: 拒绝 x-mcp-header 注解非法的工具 (HTTP 传输)
+        if (config_.isHttp() && !isToolXMcpHeaderValid(def)) {
+            XX_LOGW(
+                "[McpClient] rejecting tool '{}' with invalid x-mcp-header annotation",
+                def.name
+            );
+            continue;
+        }
+        cacheToolDefinition(def);
         tools.push_back(std::move(def));
     }
     co_return tools;
@@ -600,6 +870,25 @@ asio::awaitable<std::expected<json, std::string>>
         co_return std::unexpected{std::move(resp.error())};
     }
     json result = resp.value();
+
+    // 2026-07-28: HeaderMismatch (Mcp-Param-* 缺失/不匹配) → 刷新工具缓存后重试一次
+    if (era_ == ProtocolEra::Modern && result.contains("error")
+        && result["error"].is_object()
+        && result["error"].value("code", 0) == kMcpHeaderMismatch) {
+        XX_LOGW("[McpClient] tool call rejected with HeaderMismatch, refreshing tools cache and retrying");
+        auto refreshed = co_await listTools();
+        if (refreshed.has_value()) {
+            params["name"]      = name;
+            params["arguments"] = arguments;
+            auto retry = co_await sendRequest("tools/call", std::move(params));
+            if (retry.has_value()) {
+                result = std::move(retry.value());
+            }
+        }
+    }
+
+    std::cerr << "[DBG] mcp-client callTool(" << name << ") raw response: " << result.dump()
+              << std::endl;
 
     if (result.contains("error")) {
         co_return result;
@@ -819,6 +1108,20 @@ asio::awaitable<std::expected<json, std::string>>
 
     int64_t id = nextId_.fetch_add(1);
 
+    // 2026-07-28 现代模式: 请求带 _meta + (HTTP) 标准请求头
+    if (era_ == ProtocolEra::Modern) {
+        auto modernParams = withModernMeta(params);
+        if (config_.isHttp()) {
+            auto result = co_await sendModernHttpRequest(id, method, modernParams);
+            co_return std::move(result);
+        } else if (config_.isStdio()) {
+            auto result = co_await sendStdioRequest(id, method, modernParams);
+            co_return std::move(result);
+        }
+        co_return std::unexpected{std::string{"no transport configured"}};
+    }
+
+    // Legacy 或 era 未知 (初始化探测阶段): 原逻辑
     if (config_.isHttp()) {
         auto result = co_await sendHttpRequest(id, method, params);
         co_return std::move(result);
@@ -970,6 +1273,263 @@ util::HeaderMap McpClient::buildHttpHeaders() const {
         headers.set("Mcp-Session-Id", mcpSessionId_);
     }
     return headers;
+}
+
+std::string McpClient::encodeMcpHeaderValue(const json& value) {
+    std::string s;
+    if (value.is_string()) {
+        s = value.get<std::string>();
+    } else if (value.is_boolean()) {
+        s = value.get<bool>() ? "true" : "false";
+    } else if (value.is_number_integer()) {
+        s = std::to_string(value.get<int64_t>());
+    } else if (value.is_number_unsigned()) {
+        s = std::to_string(value.get<uint64_t>());
+    } else if (value.is_number_float()) {
+        s = fmt::format("{}", value.get<double>());
+    }
+    // 非安全字符或与 sentinel 模式冲突时使用 Base64 编码
+    if (!isPlainAsciiHeaderSafe(s) || isBase64Sentinel(s)) {
+        return fmt::format("=?base64?{}?=", agentxx::util::base64Encode(s));
+    }
+    return s;
+}
+
+std::string McpClient::decodeMcpHeaderValue(std::string_view value) {
+    if (isBase64Sentinel(value)) {
+        auto inner = value.substr(9, value.size() - 11); // 去掉 =?base64? 与 ?=
+        auto dec   = agentxx::util::base64Decode(inner);
+        if (dec.has_value()) {
+            return std::move(*dec);
+        }
+    }
+    return std::string{value};
+}
+
+std::unordered_map<std::string, McpClient::XMcpHeaderInfo>
+    McpClient::extractXMcpHeaders(const McpToolDefinition& def) {
+    std::unordered_map<std::string, XMcpHeaderInfo> result; // headerName(小写) -> 信息
+    if (!def.inputSchema.is_object()) {
+        return result;
+    }
+    auto props = def.inputSchema.find("properties");
+    if (props == def.inputSchema.end() || !(*props).is_object()) {
+        return result;
+    }
+    for (const auto& item : (*props).items()) {
+        const auto& param = item.first;
+        const auto& pdef  = item.second;
+        if (!pdef.is_object()) {
+            continue;
+        }
+        auto it = pdef.find("x-mcp-header");
+        if (it != pdef.end() && (*it).is_string()) {
+            auto headerName = (*it).get<std::string>();
+            std::string lower;
+            lower.reserve(headerName.size());
+            for (char c : headerName) {
+                lower.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+            }
+            result[lower] = XMcpHeaderInfo{headerName, param};
+        }
+    }
+    return result;
+}
+
+bool McpClient::isToolXMcpHeaderValid(const McpToolDefinition& def) {
+    if (!def.inputSchema.is_object()) {
+        return true;
+    }
+    auto props = def.inputSchema.find("properties");
+    if (props == def.inputSchema.end() || !(*props).is_object()) {
+        return true;
+    }
+    std::unordered_set<std::string> seen;
+    for (const auto& item : (*props).items()) {
+        const auto& pdef = item.second;
+        if (!pdef.is_object()) {
+            continue;
+        }
+        auto it = pdef.find("x-mcp-header");
+        if (it == pdef.end() || !(*it).is_string()) {
+            continue;
+        }
+        auto headerName = (*it).get<std::string>();
+        // 非空 + tchar token 语法
+        if (headerName.empty()) {
+            return false;
+        }
+        for (char c : headerName) {
+            if (!isHttpTokenChar(c)) {
+                return false;
+            }
+        }
+        // 大小写不敏感唯一
+        std::string lower;
+        lower.reserve(headerName.size());
+        for (char c : headerName) {
+            lower.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+        }
+        if (!seen.insert(lower).second) {
+            return false;
+        }
+        // 仅允许原始类型 (integer/string/boolean)
+        auto type = pdef.find("type");
+        if (type != pdef.end() && (*type).is_string()) {
+            auto t = (*type).get<std::string>();
+            if (t != "string" && t != "integer" && t != "boolean") {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+void McpClient::cacheToolDefinition(const McpToolDefinition& def) {
+    std::lock_guard lock(toolsCacheMutex_);
+    toolsCache_[def.name] = def;
+}
+
+std::optional<McpToolDefinition> McpClient::cachedTool(std::string_view name) const {
+    std::lock_guard lock(toolsCacheMutex_);
+    auto            it = toolsCache_.find(std::string{name});
+    if (it == toolsCache_.end()) {
+        return std::nullopt;
+    }
+    return it->second;
+}
+
+util::HeaderMap
+    McpClient::buildModernHttpHeaders(std::string_view method, const json& params) const {
+    auto headers = config_.extraHeaders;
+    headers.set("MCP-Protocol-Version", effectiveProtocolVersion());
+    headers.set("Mcp-Method", std::string{method});
+    headers.set("Accept", "application/json, text/event-stream");
+
+    // Mcp-Name: tools/call / resources/read / prompts/get 必需
+    if (method == "tools/call" || method == "resources/read" || method == "prompts/get") {
+        std::string name;
+        if (method == "resources/read") {
+            name = params.value("uri", std::string{});
+        } else {
+            name = params.value("name", std::string{});
+        }
+        std::cerr << "[DBG] buildModernHttpHeaders " << method << " name='" << name
+                  << "' params=" << params.dump() << std::endl;
+        // 注意: 必须用圆括号 json(name) 构造字符串 JSON, 花括号 json{name} 会
+        // 匹配 initializer_list 构造函数 → 构造数组 [name], is_string() 为 false,
+        // 导致 header 值被错误地 Base64 编码成空串 (=?base64??=)
+        headers.set("Mcp-Name", encodeMcpHeaderValue(json(name)));
+    }
+
+    // Mcp-Param-*: tools/call 中工具 schema 声明的 x-mcp-header 参数
+    if (method == "tools/call") {
+        auto toolName = params.value("name", std::string{});
+        auto def      = cachedTool(toolName);
+        if (def.has_value()) {
+            auto annotated = extractXMcpHeaders(*def);
+            if (!annotated.empty()) {
+                json args = params.contains("arguments") && params["arguments"].is_object()
+                                ? params["arguments"]
+                                : json::object();
+                for (const auto& [headerLower, info] : annotated) {
+                    if (!args.contains(info.param) || args[info.param].is_null()) {
+                        continue; // 无值 → 省略 header
+                    }
+                    headers.set(
+                        fmt::format("Mcp-Param-{}", info.headerName),
+                        encodeMcpHeaderValue(args[info.param])
+                    );
+                }
+            }
+        }
+    }
+    return headers;
+}
+
+asio::awaitable<std::expected<json, std::string>>
+    McpClient::sendModernHttpRequest(int64_t id, std::string_view method, const json& params) {
+    // 2026-07-28: 直接 POST serverUrl, 无 SSE discovery、无会话头
+    auto req     = makeRequest(id, method, params);
+    auto headers = buildModernHttpHeaders(method, params);
+
+    auto resp = co_await util::HttpClient::postAsync(
+        config_.serverUrl,
+        req,
+        headers,
+        util::HttpClient::RequestConfig{.readChunkTimeout = config_.requestTimeout}
+    );
+
+    if (!resp.has_value()) {
+        co_return std::unexpected{std::move(resp.error())};
+    }
+    auto& httpResp = resp.value();
+
+    // 非 2xx: 解析 JSON-RPC 错误 (现代服务端错误特征)
+    if (httpResp.status / 100 != 2) {
+        auto bodyJson = httpResp.bodyJson();
+        if (bodyJson.has_value() && bodyJson->contains("error") && (*bodyJson)["error"].is_object()) {
+            int code = (*bodyJson)["error"].value("code", 0);
+            if (code == kMcpHeaderMismatch || code == kMcpMissingRequiredClientCapability
+                || code == kMcpUnsupportedProtocolVersion) {
+                co_return std::move(bodyJson.value());
+            }
+        }
+        co_return std::unexpected{
+            fmt::format("HTTP {}: {}", httpResp.status, httpResp.body.substr(0, 256))
+        };
+    }
+
+    auto ct = httpResp.contentType();
+    if (httpResp.isTextContentType(ct) && ct.find("event-stream") != std::string::npos) {
+        // SSE 流响应: 找匹配 id 的 message 事件
+        auto events = parseSseEvents(httpResp.body);
+        for (const auto& ev : events) {
+            if (ev.event == "message" || ev.event.empty()) {
+                bool matched = false;
+                json resultJson;
+                co_await agentxx::util::catchErrorAsync<bool>(
+                    [&]() -> asio::awaitable<bool> {
+                        json j = json::parse(ev.data);
+                        if (j.contains("id") && !j["id"].is_null()) {
+                            auto respId  = j["id"];
+                            bool idMatch = false;
+                            if (respId.is_number_integer()) {
+                                idMatch = respId.get<int64_t>() == id;
+                            } else if (respId.is_string()) {
+                                idMatch = respId.get<std::string>() == std::to_string(id);
+                            }
+                            if (idMatch) {
+                                matched    = true;
+                                resultJson = std::move(j);
+                            }
+                        }
+                        co_return true;
+                    },
+                    [&](std::string) -> asio::awaitable<bool> {
+                        XX_LOGW(
+                            "[McpClient] ignoring malformed SSE data: {}",
+                            ev.data.substr(0, 128)
+                        );
+                        co_return false;
+                    }
+                );
+                if (matched) {
+                    co_return resultJson;
+                }
+            }
+        }
+        co_return std::unexpected{fmt::format("no matching response in SSE stream for id {}", id)};
+    }
+
+    auto bodyJson = httpResp.bodyJson();
+    if (!bodyJson.has_value()) {
+        co_return std::unexpected{
+            fmt::format("invalid JSON response: {}", httpResp.body.substr(0, 256))
+        };
+    }
+
+    co_return std::move(bodyJson.value());
 }
 
 asio::awaitable<std::expected<json, std::string>>
@@ -1175,6 +1735,201 @@ asio::awaitable<std::expected<json, std::string>>
     co_return response;
 }
 
+asio::awaitable<std::expected<void, std::string>> McpClient::listen(
+    const SubscriptionFilter&                      filter,
+    std::function<void(const json& notification)>  onNotification,
+    std::function<void()>                          onEnded
+) {
+    if (closed_.load()) {
+        co_return std::unexpected{std::string{"client is closed"}};
+    }
+    if (era_ != ProtocolEra::Modern) {
+        // 2026-07-28 特性; legacy 服务端请用 resources/subscribe
+        co_return std::unexpected{
+            std::string{"subscriptions/listen requires protocol version 2026-07-28"}
+        };
+    }
+
+    int64_t id  = nextId_.fetch_add(1);
+    listenRequestId_ = id;
+
+    json params;
+    params["_meta"] = buildModernMeta();
+    json notifications;
+    if (filter.toolsListChanged) {
+        notifications["toolsListChanged"] = true;
+    }
+    if (filter.promptsListChanged) {
+        notifications["promptsListChanged"] = true;
+    }
+    if (filter.resourcesListChanged) {
+        notifications["resourcesListChanged"] = true;
+    }
+    if (!filter.resourceSubscriptions.empty()) {
+        json uris = json::array();
+        for (const auto& u : filter.resourceSubscriptions) {
+            uris.push_back(u);
+        }
+        notifications["resourceSubscriptions"] = std::move(uris);
+    }
+    params["notifications"] = std::move(notifications);
+
+    auto req     = makeRequest(id, "subscriptions/listen", params);
+    auto headers = buildModernHttpHeaders("subscriptions/listen", params);
+
+    {
+        std::lock_guard lock(notifyMutex_);
+        notificationHandler_ = std::move(onNotification);
+        subscriptionEnded_   = std::move(onEnded);
+    }
+
+    if (config_.isStdio()) {
+        // stdio: 写请求后立即返回 (服务端仅在优雅结束时才回响应, 不能按普通
+        // 请求等待 requestTimeout); ack/通知经 deliverResponse 分发 (读取线程)
+        auto reqStr = fmt::format("{}\n", req.dump());
+        bool ok     = co_await writeStdioLine(reqStr);
+        if (!ok) {
+            co_return std::unexpected{std::string{"failed to write subscriptions/listen to subprocess"}};
+        }
+        std::expected<void, std::string> okResult;
+        co_return okResult;
+    }
+
+    if (!config_.isHttp()) {
+        co_return std::unexpected{std::string{"no transport configured"}};
+    }
+
+    // HTTP: 驱动长连接 SSE 流, 直到服务端优雅结束或外部取消
+    std::string  sseBuffer;
+    std::atomic<bool> finished{false};
+
+    auto flushEvents = [&](std::string_view block) -> bool {
+        auto events = parseSseEvents(block);
+        for (const auto& ev : events) {
+            if (ev.event != "message" && !ev.event.empty()) {
+                continue; // 忽略非 message 事件
+            }
+            json j;
+            if (!agentxx::util::catchError<bool>(
+                    [&]() -> bool {
+                        j = json::parse(ev.data);
+                        return true;
+                    },
+                    [](std::string) -> bool { return false; }
+                )) {
+                continue; // 非法 JSON (如 keepalive 注释) 忽略
+            }
+            if (j.contains("id") && !j["id"].is_null()) {
+                // 服务端优雅结束: 回发的空 result
+                bool idMatch = false;
+                if (j["id"].is_number_integer()) {
+                    idMatch = j["id"].get<int64_t>() == id;
+                } else if (j["id"].is_string()) {
+                    idMatch = j["id"].get<std::string>() == std::to_string(id);
+                }
+                if (idMatch) {
+                    finished.store(true);
+                    return true; // 结束流
+                }
+                continue;
+            }
+            // 通知 (ack / list_changed / resources/updated)
+            std::function<void(const json&)> handler;
+            {
+                std::lock_guard lock(notifyMutex_);
+                handler = notificationHandler_;
+            }
+            if (handler) {
+                handler(j);
+            }
+        }
+        return false;
+    };
+
+    auto result = co_await agentxx::util::catchErrorAsync<std::expected<void, std::string>>(
+        [&]() -> asio::awaitable<std::expected<void, std::string>> {
+            co_await util::HttpClient::requestSseAsync(
+                "POST",
+                config_.serverUrl,
+                req.dump(),
+                "application/json",
+                headers,
+                util::HttpClient::RequestConfig{.readChunkTimeout = config_.requestTimeout},
+                [&](std::string_view chunk) -> bool {
+                    sseBuffer.append(chunk);
+                    // 按空行切分完整 SSE 事件
+                    size_t pos;
+                    while ((pos = sseBuffer.find("\n\n")) != std::string::npos) {
+                        std::string block = sseBuffer.substr(0, pos + 2);
+                        sseBuffer.erase(0, pos + 2);
+                        if (flushEvents(block)) {
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+            );
+            std::expected<void, std::string> ok;
+            co_return ok;
+        },
+        [&](std::string errmsg) -> asio::awaitable<std::expected<void, std::string>> {
+            co_return std::unexpected{std::move(errmsg)};
+        }
+    );
+
+    if (result.has_value() && finished.load()) {
+        // 优雅结束
+        std::function<void()> ended;
+        {
+            std::lock_guard lock(notifyMutex_);
+            ended = std::move(subscriptionEnded_);
+        }
+        if (ended) {
+            ended();
+        }
+    }
+    co_return result;
+}
+
+asio::awaitable<bool> McpClient::writeStdioLine(const std::string& line) {
+    auto wguard = co_await stdioWriteMutex_->lock();
+#if defined(BOOST_PROCESS_V2_PROCESS_HPP)
+    neograph_asio_error_code wec;
+    co_await asio::async_write(
+        *stdio_->stdinPipe,
+        asio::buffer(line),
+        asio::redirect_error(asio::use_awaitable, wec)
+    );
+    co_return !wec;
+#else
+#if XX_IS_LINUX_D || XX_IS_MACOS_D
+    const char* buf       = line.data();
+    size_t      remaining = line.size();
+    while (remaining > 0) {
+        ssize_t n = ::write(stdio_->stdinFd, buf, remaining);
+        if (n <= 0) {
+            co_return false;
+        }
+        buf       += n;
+        remaining -= static_cast<size_t>(n);
+    }
+    co_return true;
+#elif XX_IS_WIN_D
+    DWORD written = 0;
+    BOOL  ok      = WriteFile(
+        stdio_->stdinHandle,
+        line.data(),
+        static_cast<DWORD>(line.size()),
+        &written,
+        nullptr
+    );
+    co_return ok == TRUE && written == static_cast<DWORD>(line.size());
+#else
+    co_return false;
+#endif
+#endif
+}
+
 asio::awaitable<void> McpClient::sendRawNotification(std::string_view method, const json& params) {
     json req;
     req["jsonrpc"] = "2.0";
@@ -1193,28 +1948,7 @@ asio::awaitable<void> McpClient::sendRawNotification(std::string_view method, co
         );
     } else if (config_.isStdio()) {
         auto reqStr = fmt::format("{}\n", req.dump());
-        auto wguard = co_await stdioWriteMutex_->lock();
-#if defined(BOOST_PROCESS_V2_PROCESS_HPP)
-        neograph_asio_error_code wec;
-        co_await asio::async_write(
-            *stdio_->stdinPipe,
-            asio::buffer(reqStr),
-            asio::redirect_error(asio::use_awaitable, wec)
-        );
-#else
-#if XX_IS_LINUX_D || XX_IS_MACOS_D
-        ::write(stdio_->stdinFd, reqStr.data(), reqStr.size());
-#elif XX_IS_WIN_D
-        DWORD written = 0;
-        WriteFile(
-            stdio_->stdinHandle,
-            reqStr.data(),
-            static_cast<DWORD>(reqStr.size()),
-            &written,
-            nullptr
-        );
-#endif
-#endif
+        co_await writeStdioLine(reqStr);
     }
     co_return;
 }
@@ -1260,6 +1994,12 @@ void McpClient::closeInternal() {
         stdio_->close();
     }
 
+    {
+        std::lock_guard lock(notifyMutex_);
+        notificationHandler_ = nullptr;
+        subscriptionEnded_   = nullptr;
+    }
+
     std::lock_guard lock(pendingMutex_);
     for (auto& [id, req] : pending_) {
         json errorResp;
@@ -1279,13 +2019,31 @@ void McpClient::closeInternal() {
 }
 
 void McpClient::deliverResponse(const json& response) {
-    if (!response.contains("id")) {
+    // 2026-07-28 通知 (subscriptions/listen 的 ack / list_changed 等): 无 id
+    if (!response.contains("id") || response["id"].is_null()) {
+        if (response.contains("method") && response["method"].is_string()) {
+            std::function<void(const json&)> handler;
+            {
+                std::lock_guard lock(notifyMutex_);
+                handler = notificationHandler_;
+            }
+            if (handler) {
+                // stdio: 在子进程读取线程上调用回调
+                agentxx::util::catchError<bool>(
+                    [&]() -> bool {
+                        handler(response);
+                        return true;
+                    },
+                    [](std::string errmsg) -> bool {
+                        XX_LOGW("[McpClient] notification handler error: {}", errmsg);
+                        return false;
+                    }
+                );
+            }
+        }
         return;
     }
     json respId = response["id"];
-    if (respId.is_null()) {
-        return;
-    }
 
     int64_t idVal = -1;
     if (respId.is_number_integer()) {

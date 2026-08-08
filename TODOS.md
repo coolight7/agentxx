@@ -4,6 +4,9 @@
 - BaseAgent 增加支持 usage 统计
 - 会话独立日志
 - eventBus 改为tree，命名空间使用 axx/bxx/cc
+- mcp 超时限制+配置
+- 自动生成设计文档、c++风格提取头文件声明
+- 优化 exec 传入命令的执行成功率
 
 ## 提示词优化
 - 如果编译需要配置特定参数，写成脚本或者写入到AGENTS.md

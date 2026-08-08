@@ -154,7 +154,7 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
                     agentxx::server::McpClient::Config{
                         .serverUrl = url,
                         .protocolVersion
-                        = std::string{agentxx::server::McpClient::kProtocol2025_11_25},
+                        = std::string{agentxx::server::McpClient::kProtocol2026_07_28},
                         .toolNamespace = mcpNamespace,
                     }
                 );

@@ -76,6 +76,15 @@ public:
         virtual asio::awaitable<bool> writeEvent(std::string_view event, std::string_view data) = 0;
         /// Write a raw chunk (must be valid SSE framing).
         virtual asio::awaitable<bool> writeChunk(std::string_view chunk) = 0;
+        /// Write a complete (non-SSE) HTTP response — used to return a plain
+        /// JSON-RPC error/result from a streaming route (e.g. invalid
+        /// subscriptions/listen params). After this the writer must not be
+        /// used again.
+        virtual asio::awaitable<bool> writeResponse(
+            boost::beast::http::status status,
+            std::string_view           contentType,
+            std::string_view           body
+        ) = 0;
         /// Close the SSE stream gracefully.
         virtual asio::awaitable<void> close() = 0;
     };
@@ -148,6 +157,15 @@ public:
         std::function<asio::awaitable<void>(Request&, std::shared_ptr<SseWriter>)> handler
     );
 
+    /// Register a streaming SSE handler for POST requests (e.g. MCP
+    /// `subscriptions/listen`). The response is a long-lived SSE stream
+    /// scoped to that request. Takes precedence over the normal router
+    /// handler registered on the same path.
+    void addSsePostRoute(
+        std::string_view                                                           path,
+        std::function<asio::awaitable<void>(Request&, std::shared_ptr<SseWriter>)> handler
+    );
+
     /// Register a WebSocket endpoint. When a client sends an HTTP GET with
     /// Upgrade: websocket to the given path, the connection is upgraded and
     /// the handler is invoked with the websocket stream.
@@ -170,7 +188,8 @@ private:
     class SseWriterImpl : public SseWriter {
         Stream&              stream_;
         std::chrono::seconds timeout_;
-        bool                 headerSent_ = false;
+        bool                 headerSent_   = false;
+        bool                 responseSent_ = false; // writeResponse 已发送完整响应
 
     public:
 
@@ -191,7 +210,51 @@ private:
             co_return co_await doWrite(chunk);
         }
 
+        asio::awaitable<bool> writeResponse(
+            boost::beast::http::status status,
+            std::string_view           contentType,
+            std::string_view           body
+        ) override {
+            namespace http = boost::beast::http;
+            co_return co_await agentxx::util::catchErrorAsync<bool>(
+                [&]() -> asio::awaitable<bool> {
+                    responseSent_               = true;
+                    http::response<http::string_body> resp;
+                    resp.version(11);
+                    resp.result(status);
+                    resp.set(http::field::content_type, contentType);
+                    resp.set(http::field::connection, "close");
+                    resp.body() = std::string(body);
+                    resp.prepare_payload();
+                    co_await http::async_write(
+                        stream_,
+                        resp,
+                        asio::cancel_after(timeout_, asio::use_awaitable)
+                    );
+                    co_return true;
+                },
+                [&](std::string errinfo) -> asio::awaitable<bool> {
+                    XX_LOGE("[sse] write response error: {}", errinfo);
+                    co_return false;
+                },
+                [](std::string& errinfo) -> std::optional<bool> {
+                    XX_LOGE("[sse] write response error: {}", errinfo);
+                    return false;
+                }
+            );
+        }
+
         asio::awaitable<void> close() override {
+            // SSE 流已开始 (header 已发) 且未发送完整响应时, 写 chunked 终止帧,
+            // 客户端解析器才能正确结束 (否则 keep-alive 连接会一直挂起)
+            if (headerSent_ && !responseSent_) {
+                neograph_asio_error_code ec;
+                co_await asio::async_write(
+                    stream_,
+                    asio::buffer(std::string_view{"0\r\n\r\n"}),
+                    asio::cancel_after(timeout_, asio::redirect_error(asio::use_awaitable, ec))
+                );
+            }
             neograph_asio_error_code ec;
             boost::beast::get_lowest_layer(stream_).socket().shutdown(
                 asio::ip::tcp::socket::shutdown_send,
@@ -208,9 +271,12 @@ private:
                     if (!headerSent_) {
                         co_return co_await writeWithHeader(data);
                     }
+                    // 已声明 Transfer-Encoding: chunked, 后续数据必须按 chunk 帧格式写:
+                    // <hex-size>\r\n<data>\r\n, 否则客户端解析器无法识别
+                    std::string frame = fmt::format("{:x}\r\n{}\r\n", data.size(), data);
                     co_await asio::async_write(
                         stream_,
-                        asio::buffer(data),
+                        asio::buffer(frame),
                         asio::cancel_after(timeout_, asio::use_awaitable)
                     );
                     co_return true;
@@ -229,7 +295,10 @@ private:
         asio::awaitable<bool> writeWithHeader(std::string_view data) {
             namespace http = boost::beast::http;
             headerSent_    = true;
-            http::response<http::string_body> resp;
+            // 只写响应头 (声明 chunked), 不能使用 http::async_write 写完整响应:
+            // 它对 chunked 响应会自动追加终止帧 (0\r\n\r\n), 导致首个事件后流即结束,
+            // 后续 writeEvent 无法送达客户端
+            http::response<http::empty_body> resp;
             resp.version(11);
             resp.result(http::status::ok);
             resp.set(http::field::content_type, "text/event-stream");
@@ -237,11 +306,17 @@ private:
             resp.set(http::field::connection, "keep-alive");
             resp.set("X-Accel-Buffering", "no");
             resp.chunked(true);
-            resp.body() = std::string(data);
-            resp.prepare_payload();
-            co_await http::async_write(
+            http::response_serializer<http::empty_body> sr{resp};
+            co_await http::async_write_header(
                 stream_,
-                resp,
+                sr,
+                asio::cancel_after(timeout_, asio::use_awaitable)
+            );
+            // 第一个 chunk 帧 (与 doWrite 保持一致)
+            std::string frame = fmt::format("{:x}\r\n{}\r\n", data.size(), data);
+            co_await asio::async_write(
+                stream_,
+                asio::buffer(frame),
                 asio::cancel_after(timeout_, asio::use_awaitable)
             );
             co_return true;
@@ -434,6 +509,43 @@ private:
                         // The connection is kept alive by the SseWriter
                         // But we still need to let serve() know not to continue
                         // We'll set a flag and break out
+                        break;
+                    }
+                }
+            }
+
+            // POST SSE streaming route (e.g. MCP subscriptions/listen) —
+            // 长连接响应流, 优先于普通 router handler
+            if (methodIdx == 2) { // POST
+                auto sseIt = ssePostRoutes_.find(path);
+                if (sseIt != ssePostRoutes_.end()) {
+                    auto sseOk = co_await agentxx::util::catchErrorAsync<bool>(
+                        [&]() -> asio::awaitable<bool> {
+                            auto writer = std::make_shared<SseWriterImpl<Stream>>(
+                                stream,
+                                config_.sseWriteTimeout
+                            );
+                            co_await sseIt->second(req, writer);
+                            co_return true;
+                        },
+                        [&](std::string errInfo) -> asio::awaitable<bool> {
+                            XX_LOGE(
+                                "[server] POST SSE handler error [{} {}]: {}",
+                                req.method_string(),
+                                req.target(),
+                                errInfo
+                            );
+                            fillError(
+                                resp,
+                                req.version(),
+                                http::status::internal_server_error,
+                                "Internal Server Error"
+                            );
+                            co_return false;
+                        }
+                    );
+                    if (sseOk) {
+                        handled = true;
                         break;
                     }
                 }
@@ -672,6 +784,12 @@ private:
         std::string,
         std::function<asio::awaitable<void>(Request&, std::shared_ptr<SseWriter>)>>
         sseRoutes_;
+
+    /// SSE streaming routes (POST only) — 长连接响应流 (如 MCP subscriptions/listen)
+    std::unordered_map<
+        std::string,
+        std::function<asio::awaitable<void>(Request&, std::shared_ptr<SseWriter>)>>
+        ssePostRoutes_;
 
     /// WebSocket routes (GET + Upgrade) — keyed by path
     std::unordered_map<std::string, WsHandler> wsRoutes_;

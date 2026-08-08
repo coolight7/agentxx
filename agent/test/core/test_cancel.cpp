@@ -348,6 +348,11 @@ public:
     }
 
     asio::awaitable<std::string> execute_async(const neograph::json&) override {
+        // 与 slow tool 一样模拟耗时异步 IO: toolcall 并行执行时, 取消信号应
+        // 传播到所有在途 tool, marker 的 executed 埋点只在等待完成后才置位,
+        // 从而验证"取消后未完成的 tool 不再继续执行"
+        asio::steady_timer timer(co_await asio::this_coro::executor, std::chrono::seconds(10));
+        co_await timer.async_wait(asio::use_awaitable);
         executed_->store(true, std::memory_order_release);
         co_return "marker";
     }
@@ -433,8 +438,16 @@ asio::awaitable<void> test_agent_cancel_toolcall() {
         if (session) {
             auto token = session->getCancelToken();
             if (token) {
+                std::fprintf(stderr, "[cancel-test-dbg] cancelling token=%p\n", (void*)token.get());
+                std::fflush(stderr);
                 token->cancel();
+            } else {
+                std::fprintf(stderr, "[cancel-test-dbg] NO TOKEN\n");
+                std::fflush(stderr);
             }
+        } else {
+            std::fprintf(stderr, "[cancel-test-dbg] NO SESSION\n");
+            std::fflush(stderr);
         }
         co_return;
     };
