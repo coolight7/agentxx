@@ -38,10 +38,6 @@ Element InputComponent::OnRender() {
         indicator = text(">") | color(theme.accentColor) | bold;
     }
 
-    if (TUISettings::instance().isAnimationEnabled(AnimationLevel::Low)) {
-        indicator |= blink;
-    }
-
     const int maxInputTotalLines = std::max(3, Terminal::Size().dimy / 2);
     return hbox({
         text(" "),
@@ -100,12 +96,11 @@ bool InputComponent::OnEvent(Event event) {
         } else {
             // 累积粘贴内容; 终端粘贴的 CRLF (\r\n) 会解析为两个 Return,
             // 去重保留单个 '\n'
-            if (event == Event::Return && !pasteBuffer_.empty()
-                && pasteBuffer_.back() == '\n') {
+            if (event == Event::Return && !pasteBuffer_.empty() && pasteBuffer_.back() == '\n') {
                 return true;
             }
-            pasteBuffer_ += event.input();
-            lastPasteEventTime_ = now;
+            pasteBuffer_        += event.input();
+            lastPasteEventTime_  = now;
             return true;
         }
     }

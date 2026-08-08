@@ -189,6 +189,46 @@ static asio::awaitable<void> test_remote_protocol_roundtrip() {
         }
     }
     {
+        // MessageTip: 通用提示消息 delta 序列化往返
+        Delta d;
+        d.type    = Delta::Type::MessageTip;
+        d.seq     = 11;
+        d.tipType = Delta::TipType::Warning;
+        d.text    = "LLM API 调用失败，6 秒后自动重试 (2/5)，错误: connection reset";
+        auto back = WsAgentIOTransport::deserialize(WsAgentIOTransport::serialize(WireMessage{d}));
+        XX_TEST_EXPECT_TRUE(back.has_value());
+        if (back) {
+            auto* bd = std::get_if<Delta>(&*back);
+            XX_TEST_EXPECT_TRUE(bd != nullptr);
+            if (bd) {
+                XX_TEST_EXPECT_TRUE(bd->type == Delta::Type::MessageTip);
+                XX_TEST_EXPECT_TRUE(bd->tipType == Delta::TipType::Warning);
+                XX_TEST_EXPECT_EQ(
+                    bd->text,
+                    std::string("LLM API 调用失败，6 秒后自动重试 (2/5)，错误: connection reset")
+                );
+            }
+        }
+    }
+    {
+        // MessageTip: Error 级别往返
+        Delta d;
+        d.type    = Delta::Type::MessageTip;
+        d.tipType = Delta::TipType::Error;
+        d.text    = "something went wrong";
+        auto back = WsAgentIOTransport::deserialize(WsAgentIOTransport::serialize(WireMessage{d}));
+        XX_TEST_EXPECT_TRUE(back.has_value());
+        if (back) {
+            auto* bd = std::get_if<Delta>(&*back);
+            XX_TEST_EXPECT_TRUE(bd != nullptr);
+            if (bd) {
+                XX_TEST_EXPECT_TRUE(bd->type == Delta::Type::MessageTip);
+                XX_TEST_EXPECT_TRUE(bd->tipType == Delta::TipType::Error);
+                XX_TEST_EXPECT_EQ(bd->text, std::string("something went wrong"));
+            }
+        }
+    }
+    {
         SyncPayload p;
         p.fromIndex = 2;
         p.tailHash  = "hash123";

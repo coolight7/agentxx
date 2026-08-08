@@ -19,6 +19,12 @@ struct TUIMessage {
         System,
         Tool
     };
+    /// 提示消息级别 (System 提示消息使用, 与 agentxx::agent::Delta::TipType 对应)
+    enum class TipLevel : uint8_t {
+        Info,
+        Warning,
+        Error
+    };
     Role        role;
     std::string text;
     std::string toolName;
@@ -28,6 +34,7 @@ struct TUIMessage {
     bool        collapsed    = false;
     int64_t     durationMs   = 0;
     int64_t     startTimeMs  = 0;
+    TipLevel    tipLevel     = TipLevel::Info; ///< 仅 System 提示消息使用
 };
 
 /// 排队等待发送的用户输入

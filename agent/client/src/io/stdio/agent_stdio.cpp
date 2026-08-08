@@ -59,6 +59,23 @@ void StdIOClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
                 << fmt::format("[Tool] {} {}", delta.toolName, delta.hasError ? "error" : "done")
                 << std::endl;
             break;
+        case Type::MessageTip: {
+            std::string prefix;
+            using TipType = agentxx::agent::Delta::TipType;
+            switch (delta.tipType) {
+                case TipType::Warning:
+                    prefix = "[Warning] ";
+                    break;
+                case TipType::Error:
+                    prefix = "[Error] ";
+                    break;
+                default:
+                    prefix = "[Info] ";
+                    break;
+            }
+            std::cout << std::endl << prefix << delta.text << std::endl;
+            break;
+        }
         case Type::TurnStart:
             isThinking_ = false;
             break;

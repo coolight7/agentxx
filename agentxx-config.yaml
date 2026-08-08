@@ -39,7 +39,10 @@ models:
     extra_api_config:
       stream: true
       reasoning:
-        effort: max
+        # - 可选; 思考强度，"none|minimal|low|medium|high|xhigh|max" 
+        # 并非所有模型支持的选项都一样，可能有的支持 xhigh 有的支持 max
+        # 可以改一个值然后启动聊聊天，如果请求失败再修改试试
+        effort: high 
 
   - name: qwenai-qwen3.8-max
     type: "openai"
@@ -68,7 +71,7 @@ models:
     model_context_max_token: 1000000
     extra_api_config:
       reasoning:
-        effort: high
+        effort: max
       stream: true
   - name: local
     type: "openai"
@@ -113,9 +116,9 @@ models:
 
 # 指定各模式下使用的模型名称（对应上面 models 中的 name）
 use_model:
-  default: local
+  # default: local
   # default: qwenai-qwen3.8-max-preview
-  # default: opencode-ds-v4-flash
+  default: opencode-ds-v4-flash
   acp: acp
   # train: train
   train: local

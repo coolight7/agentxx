@@ -60,8 +60,8 @@ std::vector<MarkdownSegment> splitMermaidBlocks(std::string_view content) {
         while (!lang.empty() && (lang.front() == ' ' || lang.front() == '\t')) {
             lang.remove_prefix(1);
         }
-        while (!lang.empty()
-               && (lang.back() == ' ' || lang.back() == '\t' || lang.back() == '\r')) {
+        while (!lang.empty() && (lang.back() == ' ' || lang.back() == '\t' || lang.back() == '\r')
+        ) {
             lang.remove_suffix(1);
         }
         if (lang != "mermaid") {
@@ -117,7 +117,7 @@ std::pair<Element, std::vector<std::unique_ptr<markdown::DomBuilder>>> renderMar
         return {std::move(el), std::move(builders)};
     }
     std::vector<std::unique_ptr<markdown::DomBuilder>> builders;
-    Elements                                          parts;
+    Elements                                           parts;
     for (const auto& seg : segs) {
         if (seg.isMermaid) {
             if (seg.text.empty()) {
@@ -172,9 +172,9 @@ int estimateLines(std::string_view s, int width) {
 MessageListComponent::MessageListComponent(TUICtx& ctx) :
     ctx_(ctx) {
     LazyScrollable::CacheBudget budget;
-    budget.maxItems            = 256;                  // 条数预算: 最近 ~256 条消息的渲染缓存
-    budget.maxBytes            = 16 * 1024 * 1024;     // 字节预算: 缓存源文本累计 16MiB
-    budget.byteExemptThreshold = 1024;                 // 短消息不计入字节预算
+    budget.maxItems            = 256; // 条数预算: 最近 ~256 条消息的渲染缓存
+    budget.maxBytes            = 16 * 1024 * 1024; // 字节预算: 缓存源文本累计 16MiB
+    budget.byteExemptThreshold = 1024;             // 短消息不计入字节预算
     scrollable_                = std::make_shared<LazyScrollable>(
         [this] {
             return itemCount();
@@ -289,7 +289,7 @@ size_t MessageListComponent::itemCount() {
 }
 
 uint64_t MessageListComponent::itemKey(size_t index) {
-    const auto& st = *ctx_.frameState;
+    const auto& st      = *ctx_.frameState;
     auto        combine = [](uint64_t seed, uint64_t v) -> uint64_t {
         return seed ^ (v + 0x9e3779b97f4a7c15ULL + (seed << 6) + (seed >> 2));
     };
@@ -300,16 +300,16 @@ uint64_t MessageListComponent::itemKey(size_t index) {
         // 消息内容变化必然伴随消息指针变化 (见 TUISharedState::mutableMessage /
         // onSync 整体替换), 故以指针为主 key; 附加廉价 O(1) 特征 (长度/标志)
         // 防止地址重用 (ABA) —— 内容变则指针变, 长度几乎必然同步变化
-        uint64_t h = reinterpret_cast<uint64_t>(st.messages[index].get());
+        uint64_t    h = reinterpret_cast<uint64_t>(st.messages[index].get());
         const auto& m = *st.messages[index];
-        h = combine(h, static_cast<uint64_t>(m.role));
-        h = combine(h, m.collapsed);
-        h = combine(h, m.toolFinished);
-        h = combine(h, static_cast<uint64_t>(m.durationMs));
-        h = combine(h, static_cast<uint64_t>(m.startTimeMs));
-        h = combine(h, m.text.size());
-        h = combine(h, m.toolResult.size());
-        h = combine(h, m.toolName.size());
+        h             = combine(h, static_cast<uint64_t>(m.role));
+        h             = combine(h, m.collapsed);
+        h             = combine(h, m.toolFinished);
+        h             = combine(h, static_cast<uint64_t>(m.durationMs));
+        h             = combine(h, static_cast<uint64_t>(m.startTimeMs));
+        h             = combine(h, m.text.size());
+        h             = combine(h, m.toolResult.size());
+        h             = combine(h, m.toolName.size());
         return h;
     }
     // 流式增量项: token 累积中, 以 (指针, 长度, role) 作为 key 触发高度重估
@@ -492,18 +492,38 @@ Element MessageListComponent::buildMessageBlock(
                 paragraph(msg.text) | color(theme.userColor),
             });
         case TUIMessage::Role::Assistant: {
-            auto [el, builders]
-                = renderMarkdownWithMermaid(msg.text, theme.assistantColor, theme.markdownTheme, maxWidth);
+            auto [el, builders] = renderMarkdownWithMermaid(
+                msg.text,
+                theme.assistantColor,
+                theme.markdownTheme,
+                maxWidth
+            );
             for (auto& b : builders) {
                 mdBuilders.push_back(std::move(b));
             }
             return el;
         }
-        case TUIMessage::Role::System:
+        case TUIMessage::Role::System: {
+            // 按提示级别区分前缀与颜色 (Info/Warning/Error)
+            std::string  prefix   = "# ";
+            ftxui::Color tipColor = theme.systemColor;
+            switch (msg.tipLevel) {
+                case TUIMessage::TipLevel::Warning:
+                    prefix   = "[Warn] ";
+                    tipColor = theme.thinkingColor;
+                    break;
+                case TUIMessage::TipLevel::Error:
+                    prefix   = "[Error] ";
+                    tipColor = theme.errorColor;
+                    break;
+                case TUIMessage::TipLevel::Info:
+                    break;
+            }
             return hbox({
-                text("# ") | color(theme.systemColor),
-                paragraph(msg.text) | color(theme.systemColor),
+                text(prefix) | color(tipColor),
+                paragraph(msg.text) | color(tipColor),
             });
+        }
         case TUIMessage::Role::Thinking: {
             const bool expanded = !msg.collapsed;
             Elements   lines;
@@ -521,8 +541,12 @@ Element MessageListComponent::buildMessageBlock(
             }
             lines.push_back(hbox(std::move(header)));
             if (expanded) {
-                auto [el, builders]
-                    = renderMarkdownWithMermaid(msg.text, theme.thinkingColor, theme.markdownTheme, maxWidth);
+                auto [el, builders] = renderMarkdownWithMermaid(
+                    msg.text,
+                    theme.thinkingColor,
+                    theme.markdownTheme,
+                    maxWidth
+                );
                 for (auto& b : builders) {
                     mdBuilders.push_back(std::move(b));
                 }
@@ -587,7 +611,9 @@ void MessageListComponent::appendEditToolHeader(const TUIMessage& msg, Elements&
         [&msg]() -> std::string {
             return neograph::json::parse(msg.text).value("path", std::string{});
         },
-        [](std::string) -> std::string { return {}; }
+        [](std::string) -> std::string {
+            return {};
+        }
     );
     if (!path.empty()) {
         header.push_back(text(path) | color(theme.toolColor) | dim);
@@ -605,7 +631,9 @@ void MessageListComponent::appendEditToolBody(const TUIMessage& msg, Elements& l
             newStr    = args.value("new_str", std::string{});
             return true;
         },
-        [](std::string) -> bool { return false; }
+        [](std::string) -> bool {
+            return false;
+        }
     );
     if (!path.empty()) {
         lines.push_back(hbox({
