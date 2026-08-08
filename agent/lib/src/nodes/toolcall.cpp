@@ -10,6 +10,7 @@
 #include <charconv>
 #include <iostream>
 #include <map>
+#include <set>
 #include <sstream>
 #include <string>
 #include <type_traits>
@@ -498,8 +499,12 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
     }
 
     bool isInterrupt   = false;
+    bool isCancel      = false;
     auto interruptArgs = std::map<std::string, neograph::json>{};
     auto results       = neograph::json::array();
+    // 已执行完成的 tool_call_id (取消时用于区分已完成/未完成, 未完成的补 [User canceled])
+    std::set<std::string> completedToolcallIds{};
+    std::exception_ptr    cancelErrorPtr;
 
     auto onExecTool = [&](const neograph::ToolCall& tc) -> asio::awaitable<neograph::ChatMessage> {
         neograph::ChatMessage tool_msg;
@@ -574,10 +579,44 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
     }
     for (auto& item : toolcallResults) {
         // TODO: 真正并行
-        auto           msg = co_await std::move(item);
-        neograph::json msg_json;
-        neograph::to_json(msg_json, msg);
-        results.push_back(msg_json);
+        try {
+            auto           msg = co_await std::move(item);
+            neograph::json msg_json;
+            neograph::to_json(msg_json, msg);
+            results.push_back(msg_json);
+            completedToolcallIds.insert(msg.tool_call_id);
+        } catch (const neograph::graph::CancelledException&) {
+            // - 取消: 停止执行后续 tool, 由下方补齐未完成 tool 的取消提示消息
+            // - 中断 (NodeInterrupt) 已在 onExecTool 内部捕获处理, 不会抛到这里
+            isCancel       = true;
+            cancelErrorPtr = std::current_exception();
+            break;
+        }
+    }
+
+    if (isCancel) {
+        // - 取消后重新从图开始节点执行 (与中断不同, 中断会 resume 到本节点恢复,
+        //   取消不会), 因此需要将本轮的 toolcall 结果直接写入 state,
+        //   wrap_handle 会在 rethrow 前保存到 [graphDataKey_tempMessages],
+        //   避免已完成的 tool 结果因 state 回滚而丢失
+        // - 未完成的 tool 插入 [User canceled] 提示, 保证每条 assistant tool_call
+        //   都有对应的 tool 结果消息, 上下文角色顺序和内容完整
+        for (const auto& tc : assistant_msg->tool_calls) {
+            if (completedToolcallIds.count(tc.id)) {
+                continue;
+            }
+            neograph::ChatMessage tool_msg;
+            tool_msg.role         = "tool";
+            tool_msg.tool_call_id = tc.id;
+            tool_msg.tool_name    = tc.name;
+            tool_msg.content      = "[User canceled]";
+            tool_msg.flags        = neograph::MessageFlag::AutoInserted;
+            neograph::json        msg_json;
+            neograph::to_json(msg_json, tool_msg);
+            results.push_back(std::move(msg_json));
+        }
+        in.state.write("messages", results);
+        std::rethrow_exception(cancelErrorPtr);
     }
 
     if (isInterrupt) {
