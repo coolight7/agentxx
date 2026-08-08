@@ -199,6 +199,14 @@ asio::awaitable<std::string> WebSearchTool::execute_async(const neograph::json& 
                 }
                 co_return data;
             }
+            // 请求成功但返回非 2xx (如 429/403/500): 拼接状态码与错误响应体
+            // (resp.error_or 在有值时返回默认值 "unknown", 因此需手动构造错误信息)
+            auto errBody = respVal.body;
+            if (errBody.size() > 512) {
+                errBody.resize(512);
+                errBody += "...";
+            }
+            out_resp_err = fmt::format("HTTP status {}: {}", respVal.status, errBody);
         }
     }
     throw std::runtime_error(out_resp_err.value_or("[unknown]"));
