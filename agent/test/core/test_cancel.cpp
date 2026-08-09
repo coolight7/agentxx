@@ -349,11 +349,8 @@ public:
     }
 
     asio::awaitable<std::string> execute_async(const neograph::json&) override {
-        // 与 slow tool 一样模拟耗时异步 IO: toolcall 并行执行时, 取消信号应
-        // 传播到所有在途 tool, marker 的 executed 埋点只在等待完成后才置位,
-        // 从而验证"取消后未完成的 tool 不再继续执行"
-        asio::steady_timer timer(co_await asio::this_coro::executor, std::chrono::seconds(10));
-        co_await timer.async_wait(asio::use_awaitable);
+        // 标记 tool: 立即完成 (并行 toolcall 下在取消前快速完成, 验证取消只中断
+        // 在途未完成的 tool, 已完成的 tool 结果保留)
         executed_->store(true, std::memory_order_release);
         co_return "marker";
     }
