@@ -63,8 +63,19 @@ TUIClientAgentIO::~TUIClientAgentIO() {
 }
 
 // ---------------------------------------------------------------------------
-// postRedraw
+// postRedraw / enqueueUiAction
 // ---------------------------------------------------------------------------
+
+void TUIClientAgentIO::enqueueUiAction(std::function<void()> fn) {
+    if (!fn) {
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(uiActionsMutex_);
+        uiActions_.push_back(std::move(fn));
+    }
+    postRedraw();
+}
 
 void TUIClientAgentIO::postRedraw() {
     // 合并同一时刻的多次重绘请求: 流式输出时 client 线程每 token 调用一次,
@@ -226,10 +237,8 @@ void TUIClientAgentIO::start() {
 
         // 全局快捷键 + 鼠标 (F2/F3/F12/Escape/点击): 组件未消费的事件到此处理
         auto handler = CatchEvent(modal_, [&](Event event) -> bool {
-            // 模态弹窗打开时: 优先让弹窗处理 (Escape 关闭弹窗等), 不拦截
-            if (modal_->hasModal()) {
-                return false;
-            }
+            // 全局退出快捷键: 优先处理, 弹窗打开时也放行 (否则模态期间 Ctrl+C 被
+            // 弹窗 OnEvent 无条件消费, 无法退出程序)
             if (event == Event::CtrlC) {
                 running_ = false;
                 // 关闭 transport 以打断可能阻塞中的 connect/重连/recv 循环,
@@ -239,6 +248,10 @@ void TUIClientAgentIO::start() {
                 }
                 screen->Exit();
                 return true;
+            }
+            // 模态弹窗打开时: 优先让弹窗处理 (Escape 关闭弹窗等), 不拦截
+            if (modal_->hasModal()) {
+                return false;
             }
             if (event == Event::F2) {
                 openModelSelector();
@@ -317,6 +330,19 @@ void TUIClientAgentIO::start() {
                 // 每帧开头获取状态快照: 事件处理 (CatchEvent/组件 OnEvent) 与渲染
                 // 期间 frameState 始终有效
                 ctx_.frameState = sharedState_.readSnapshot();
+                // 消费 client 线程投递的 UI 动作 (弹窗开关/消息列表吸附等):
+                // 必须在渲染之前执行, 使本帧渲染反映其效果;
+                // 动作仅访问 UI 线程独占组件 (modal_/messageList_), 不依赖本帧快照
+                {
+                    std::vector<std::function<void()>> actions;
+                    {
+                        std::lock_guard<std::mutex> lock(uiActionsMutex_);
+                        actions.swap(uiActions_);
+                    }
+                    for (auto& fn : actions) {
+                        fn();
+                    }
+                }
                 if (logSink_ && logSink_->pump() > 0) {
                     screen->Post(Event::Custom);
                 }
@@ -362,6 +388,11 @@ void TUIClientAgentIO::stop() {
     if (transport_) {
         transport_->close();
     }
+    // 关闭输入通道: 打断 handleInterrupt 中挂起在 getInput() 上的
+    // async_receive, 使其尽快返回并结束协程 —— 否则中断等待输入期间退出时,
+    // detached 协程残留挂起操作会阻塞 client io_context 的 run(), 进程无法退出。
+    // (close 幂等; 之后 async_send/async_receive 以 channel_closed 错误返回)
+    inputChannel_->close();
     std::shared_ptr<ScreenInteractive> s;
     {
         std::lock_guard<std::mutex> lock(screenMutex_);
@@ -603,14 +634,16 @@ void TUIClientAgentIO::onPeerMessage(agentxx::agent::WireMessage msg) {
                     st.contextMessages    = std::make_shared<neograph::json>(std::move(m.messages));
                     st.showContextOverlay = true;
                 }
-                // 打开上下文弹窗
-                if (modal_ && !modal_->hasModal()) {
-                    auto overlay = std::make_shared<ContextOverlay>(ctx_);
-                    overlay->onClose([this] {
-                        modal_->popModal();
-                    });
-                    modal_->pushModal(overlay);
-                }
+                // 打开上下文弹窗: 组件树由 UI 线程独占, 须投递到 UI 线程执行
+                enqueueUiAction([this]() {
+                    if (modal_ && !modal_->hasModal()) {
+                        auto overlay = std::make_shared<ContextOverlay>(ctx_);
+                        overlay->onClose([this] {
+                            modal_->popModal();
+                        });
+                        modal_->pushModal(overlay);
+                    }
+                });
                 postRedraw();
             }
         },
@@ -652,9 +685,13 @@ void TUIClientAgentIO::sendUserInputLocked(TUIRenderState& st, std::string text)
     pushCurrentTokenLocked(st);
     st.messages.push_back(std::make_shared<TUIMessage>(TUIMessage{TUIMessage::Role::User, text}));
     st.isStreaming = true;
-    if (messageList_) {
-        messageList_->setStickToBottom(true);
-    }
+    // 消息列表吸附到底部: messageList_ 为 UI 线程独占组件, 本函数可能被
+    // client 线程 (dispatchNextPendingInput) 调用, 须投递到 UI 线程执行
+    enqueueUiAction([this]() {
+        if (messageList_) {
+            messageList_->setStickToBottom(true);
+        }
+    });
     if (transport_) {
         sendToPeer(agentxx::agent::WireUserInput{threadId_, text});
     } else {
@@ -690,9 +727,12 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
                 auto role = (delta.type == Type::ThinkingToken) ? TUIMessage::Role::Thinking
                                                                 : TUIMessage::Role::Assistant;
                 if (st.currentTokenRole != role && st.currentToken && !st.currentToken->empty()) {
+                    // 先 push 再更新时间戳: pushCurrentTokenLocked 使用
+                    // st.pendingToken* 的当前值构造消息, 若先覆盖成新角色的
+                    // 时间戳, 旧 token 的时长/开始时间会丢失 (修复)
+                    pushCurrentTokenLocked(st);
                     st.pendingTokenStartTimeMs = delta.startTimeMs;
                     st.pendingTokenDurationMs  = delta.durationMs;
-                    pushCurrentTokenLocked(st);
                 }
                 st.currentTokenRole = role;
                 // 按需 COW: 仅当字符串被 UI 快照共享 (渲染期间) 才复制本体,
@@ -816,96 +856,101 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
 
 void TUIClientAgentIO::onSync(const agentxx::agent::SyncPayload& payload) {
     {
-        std::lock_guard<std::mutex> lock(sharedState_.mutex());
-        auto                        st   = std::make_shared<TUIRenderState>();
-        auto                        prev = sharedState_.snapshot();
-        st->cachedModelName              = prev->cachedModelName;
-        st->modelNames                   = prev->modelNames;
-        st->appendComponents             = prev->appendComponents;
-        st->pendingInputs                = prev->pendingInputs;
-        st->systemUsage                  = prev->systemUsage;
-        st->contextMessages              = prev->contextMessages;
-        st->isStreaming                  = false;
+        // 单次 mutate (内部加锁): 不得在持锁状态下再调 mutate() ——
+        // 旧实现先 lock_guard 再调 mutate() 会对同一非递归 mutex 二次加锁,
+        // 造成客户端线程死锁 (TUI 启动握手即触发, 界面冻结)
+        sharedState_.mutate([&](TUIRenderState& cur) {
+            auto st   = std::make_shared<TUIRenderState>();
+            auto prev = sharedState_.snapshot();
+            st->cachedModelName  = prev->cachedModelName;
+            st->modelNames       = prev->modelNames;
+            st->appendComponents = prev->appendComponents;
+            st->pendingInputs    = prev->pendingInputs;
+            st->systemUsage      = prev->systemUsage;
+            st->contextMessages  = prev->contextMessages;
+            st->isStreaming      = false;
 
-        for (const auto& hm : payload.messages) {
-            const auto& d        = hm.data;
-            auto        role     = d.value("role", std::string{});
-            auto        m        = std::make_shared<TUIMessage>();
-            bool        skipPush = false;
-            if (role == "user") {
-                m->role = TUIMessage::Role::User;
-                m->text = d.value("content", std::string{});
-            } else if (role == "assistant") {
-                if (d.contains("tool_calls")) {
-                    for (const auto& tc : d["tool_calls"]) {
-                        auto tm          = std::make_shared<TUIMessage>();
-                        tm->role         = TUIMessage::Role::Tool;
-                        tm->toolName     = tc.value("name", std::string{});
-                        tm->toolCallId   = tc.value("id", std::string{});
-                        tm->text         = tc.value("arguments", std::string{});
-                        tm->toolFinished = false;
-                        tm->collapsed    = true;
-                        st->messages.push_back(std::move(tm));
-                    }
-                    auto content = d.value("content", std::string{});
-                    if (!content.empty()) {
-                        m->role = TUIMessage::Role::Assistant;
-                        m->text = content;
+            for (const auto& hm : payload.messages) {
+                const auto& d        = hm.data;
+                auto        role     = d.value("role", std::string{});
+                auto        m        = std::make_shared<TUIMessage>();
+                bool        skipPush = false;
+                if (role == "user") {
+                    m->role = TUIMessage::Role::User;
+                    m->text = d.value("content", std::string{});
+                } else if (role == "assistant") {
+                    if (d.contains("tool_calls")) {
+                        for (const auto& tc : d["tool_calls"]) {
+                            auto tm          = std::make_shared<TUIMessage>();
+                            tm->role         = TUIMessage::Role::Tool;
+                            tm->toolName     = tc.value("name", std::string{});
+                            tm->toolCallId   = tc.value("id", std::string{});
+                            tm->text         = tc.value("arguments", std::string{});
+                            tm->toolFinished = false;
+                            tm->collapsed    = true;
+                            st->messages.push_back(std::move(tm));
+                        }
+                        auto content = d.value("content", std::string{});
+                        if (!content.empty()) {
+                            m->role = TUIMessage::Role::Assistant;
+                            m->text = content;
+                        } else {
+                            continue;
+                        }
                     } else {
-                        continue;
+                        m->role        = TUIMessage::Role::Assistant;
+                        m->text        = d.value("content", std::string{});
+                        auto reasoning = d.value("reasoning_content", std::string{});
+                        if (!reasoning.empty()) {
+                            auto thinkMsg         = std::make_shared<TUIMessage>();
+                            thinkMsg->role        = TUIMessage::Role::Thinking;
+                            thinkMsg->text        = reasoning;
+                            thinkMsg->collapsed   = true;
+                            thinkMsg->startTimeMs = d.value("start_time_ms", int64_t{0});
+                            thinkMsg->durationMs  = d.value("duration_ms", int64_t{0});
+                            st->messages.push_back(std::move(thinkMsg));
+                        }
+                    }
+                } else if (role == "tool") {
+                    m->role         = TUIMessage::Role::Tool;
+                    m->toolName     = d.value("tool_name", std::string{});
+                    m->toolCallId   = d.value("tool_call_id", std::string{});
+                    m->toolResult   = d.value("content", std::string{});
+                    m->toolFinished = true;
+                    m->collapsed    = true;
+                    m->startTimeMs  = d.value("start_time_ms", int64_t{0});
+                    m->durationMs   = d.value("duration_ms", int64_t{0});
+                    for (size_t i = st->messages.size(); i > 0; --i) {
+                        auto& prevMsg = *st->messages[i - 1];
+                        if (prevMsg.role == TUIMessage::Role::Tool
+                            && prevMsg.toolCallId == m->toolCallId && !prevMsg.toolFinished) {
+                            prevMsg.toolResult   = m->toolResult;
+                            prevMsg.toolFinished = true;
+                            prevMsg.collapsed    = true;
+                            skipPush             = true;
+                            break;
+                        }
                     }
                 } else {
-                    m->role        = TUIMessage::Role::Assistant;
+                    m->role        = TUIMessage::Role::System;
                     m->text        = d.value("content", std::string{});
-                    auto reasoning = d.value("reasoning_content", std::string{});
-                    if (!reasoning.empty()) {
-                        auto thinkMsg         = std::make_shared<TUIMessage>();
-                        thinkMsg->role        = TUIMessage::Role::Thinking;
-                        thinkMsg->text        = reasoning;
-                        thinkMsg->collapsed   = true;
-                        thinkMsg->startTimeMs = d.value("start_time_ms", int64_t{0});
-                        thinkMsg->durationMs  = d.value("duration_ms", int64_t{0});
-                        st->messages.push_back(std::move(thinkMsg));
-                    }
+                    m->startTimeMs = d.value("start_time_ms", int64_t{0});
+                    m->durationMs  = d.value("duration_ms", int64_t{0});
                 }
-            } else if (role == "tool") {
-                m->role         = TUIMessage::Role::Tool;
-                m->toolName     = d.value("tool_name", std::string{});
-                m->toolCallId   = d.value("tool_call_id", std::string{});
-                m->toolResult   = d.value("content", std::string{});
-                m->toolFinished = true;
-                m->collapsed    = true;
-                m->startTimeMs  = d.value("start_time_ms", int64_t{0});
-                m->durationMs   = d.value("duration_ms", int64_t{0});
-                for (size_t i = st->messages.size(); i > 0; --i) {
-                    auto& prevMsg = *st->messages[i - 1];
-                    if (prevMsg.role == TUIMessage::Role::Tool
-                        && prevMsg.toolCallId == m->toolCallId && !prevMsg.toolFinished) {
-                        prevMsg.toolResult   = m->toolResult;
-                        prevMsg.toolFinished = true;
-                        prevMsg.collapsed    = true;
-                        skipPush             = true;
-                        break;
-                    }
+                if (!skipPush) {
+                    st->messages.push_back(std::move(m));
                 }
-            } else {
-                m->role        = TUIMessage::Role::System;
-                m->text        = d.value("content", std::string{});
-                m->startTimeMs = d.value("start_time_ms", int64_t{0});
-                m->durationMs  = d.value("duration_ms", int64_t{0});
             }
-            if (!skipPush) {
-                st->messages.push_back(std::move(m));
-            }
-        }
-        // 直接替换 (旧快照由 UI 线程持有, 自然释放)
-        sharedState_.mutate([&](TUIRenderState& cur) {
+            // 直接替换 (旧快照由 UI 线程持有, 自然释放)
             cur = std::move(*st);
         });
     }
-    if (messageList_) {
-        messageList_->setStickToBottom(true);
-    }
+    // 消息列表吸附到底部: 组件由 UI 线程独占, 经动作队列投递
+    enqueueUiAction([this]() {
+        if (messageList_) {
+            messageList_->setStickToBottom(true);
+        }
+    });
     postRedraw();
 }
 
@@ -1006,11 +1051,14 @@ asio::awaitable<neograph::json> TUIClientAgentIO::handleInterrupt(
             if (input.type.empty()) {
                 inputSuccess = true;
             } else {
-                auto        inputValueOpt = co_await getInput();
-                std::string inputValue;
-                if (inputValueOpt.has_value()) {
-                    inputValue = inputValueOpt.value();
+                auto inputValueOpt = co_await getInput();
+                if (!inputValueOpt.has_value()) {
+                    // 输入通道已关闭 (TUI 退出/stop): 通道关闭后 async_receive 立即
+                    // 返回错误, 若继续循环会形成忙转; 终止收集并返回已收集结果
+                    awaitingInterruptInput_.store(false, std::memory_order_release);
+                    co_return result;
                 }
+                std::string inputValue = std::move(*inputValueOpt);
                 if (inputValue.empty()) {
                     inputValue = input.defaultValue;
                 }

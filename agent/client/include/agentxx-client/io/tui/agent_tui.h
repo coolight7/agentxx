@@ -198,6 +198,12 @@ private:
     void sendUserInputLocked(TUIRenderState& st, std::string text);
     void dispatchNextPendingInput(TUIRenderState& st);
 
+    /// 将 UI 线程独占的组件操作 (弹窗开关/消息列表状态等) 投递到 UI 线程执行。
+    /// client 线程 (onDelta/onSync/onPeerMessage) 不得直接触碰组件树
+    /// (modal_/messageList_ 等由 UI 线程独占), 必须经本接口排队,
+    /// 由帧循环开头消费, 消除跨线程数据竞争。
+    void enqueueUiAction(std::function<void()> fn);
+
     void postRedraw();
 
     /// 打开模型选择器模态
@@ -272,6 +278,12 @@ private:
     ///                  若有则补 Post 一帧, 保证以最新快照重绘, 避免请求丢失
     std::atomic<uint64_t> redrawSeq_{0};
     std::atomic<bool>     redrawPosted_{false};
+
+    // ---- UI 线程动作队列 ----
+    /// client 线程投递、UI 线程 (帧循环开头) 消费的组件操作队列;
+    /// 与 sharedState_ 无关, 独立加锁 (消费方仅短暂持有, 不嵌套 sharedState 锁)
+    std::mutex                         uiActionsMutex_;
+    std::vector<std::function<void()>> uiActions_;
 
     // ---- 系统资源监控 (每 kSystemInfoIntervalSec 秒采集一次 CPU/内存占用) ----
     /// Info 侧边栏系统资源显示开关存储于全局设置单例 TUISettings::showSystemInfo()
