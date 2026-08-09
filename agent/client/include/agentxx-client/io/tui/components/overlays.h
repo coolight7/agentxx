@@ -1,12 +1,14 @@
 #pragma once
 
 #include "agentxx-client/io/tui/framework/tui_context.h"
+#include "agentxx-client/io/tui/mermaid_state.h"
 #include "agentxx-client/io/tui/scrollable.h"
 #include "ftxui/component/component_base.hpp"
 #include "ftxui/component/event.hpp"
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/box.hpp"
 #include <functional>
+#include <string>
 #include <vector>
 
 /// 模型选择器弹窗组件 (独立处理键盘导航事件; 每帧重建以反映最新状态)
@@ -154,10 +156,17 @@ private:
     std::shared_ptr<Scrollable> scrollable_;
     std::function<void()>       onClose_;
 
-    /// plan 消息 JSON 解析缓存: 仅当消息指针/文本长度变化时重新解析
-    /// (弹窗打开期间 roadmap 随 agent 执行更新, 指针/长度必然变化)
-    const TUIMessage* cachedMsgPtr_  = nullptr;
-    size_t            cachedTextLen_ = 0;
-    bool              cachedValid_   = false;
-    neograph::json    cachedArgs_    = neograph::json::array();
+    /// plan 消息 JSON/状态图渲染缓存:
+    /// 仅当消息指针/文本长度/终端宽度/主题任一变化时重新解析并重建 Element。
+    /// 缓存命中时 buildItems 返回同一个 Element 指针, Scrollable 的
+    /// cachedElements_ 指针比较相等 → 高度缓存不失效、不重测,
+    /// 避免弹窗常驻时每帧全量解析 mermaid + 重建整图 Element 的 O(图大小) 开销。
+    const TUIMessage*                      cachedMsgPtr_  = nullptr;
+    size_t                                 cachedTextLen_ = 0;
+    int                                    cachedMaxW_    = 0;
+    std::string                            cachedThemeName_;
+    bool                                   cachedValid_ = false;
+    neograph::json                         cachedArgs_  = neograph::json::array();
+    agentxx::client::tui::MermaidStateDiagram cachedDiagram_;
+    ftxui::Element                         cachedElement_;
 };

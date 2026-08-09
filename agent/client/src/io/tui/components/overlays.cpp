@@ -502,6 +502,10 @@ PlanDiagramOverlay::PlanDiagramOverlay(TUICtx& ctx) :
     scrollable_ = std::make_shared<Scrollable>([this]() -> std::vector<ScrollItem> {
         return buildItems();
     });
+    // 状态图为静态内容: 打开时从顶部开始显示, 而非吸附到底部
+    // (Scrollable 默认 stickToBottom=true 会把图的下半部分顶到视口,
+    //  图的起始节点/上部分层被裁出视口)
+    scrollable_->setStickToBottom(false);
     Add(scrollable_);
 }
 
@@ -517,36 +521,6 @@ std::vector<ScrollItem> PlanDiagramOverlay::buildItems() {
             plan = st.messages[i - 1].get();
             break;
         }
-    }
-
-    // plan 消息变化 (mutableMessage 复制 → 指针变化) 或文本长度变化时重新解析
-    std::string roadmap;
-    if (plan) {
-        if (cachedMsgPtr_ != plan || cachedTextLen_ != plan->text.size()) {
-            cachedMsgPtr_  = plan;
-            cachedTextLen_ = plan->text.size();
-            cachedArgs_    = neograph::json::array();
-            // 解析失败保持 cachedValid_ = false, 界面显示占位内容而非异常中断渲染
-            cachedValid_ = agentxx::util::catchError<bool>(
-                [&]() -> bool {
-                    cachedArgs_ = neograph::json::parse(plan->text);
-                    return true;
-                },
-                [](std::string) -> bool {
-                    return false;
-                }
-            );
-        }
-        if (cachedValid_) {
-            roadmap = cachedArgs_.value("roadmap", std::string{});
-        }
-    }
-
-    auto dg = tui_mermaid::parseMermaidStateDiagram(roadmap);
-    if (dg.nodes.empty()) {
-        return {
-            ScrollItem{text(" (no plan roadmap) ") | dim, false}
-        };
     }
 
     // 弹窗宽度: 终端宽 - 弹窗边框/留白; 超宽由渲染器按层截断
@@ -569,10 +543,51 @@ std::vector<ScrollItem> PlanDiagramOverlay::buildItems() {
         return ftxui::Color::Default;
     };
 
+    // 缓存失效条件: plan 消息变化 (mutableMessage 复制 → 指针变化; 文本长度变化)
+    // / 终端宽度变化 / 主题变化 (Element 着色)
+    const size_t planTextLen = plan ? plan->text.size() : 0;
+    if (cachedMsgPtr_ != plan || cachedTextLen_ != planTextLen || cachedMaxW_ != maxW
+        || cachedThemeName_ != theme.name) {
+        cachedMsgPtr_    = plan;
+        cachedTextLen_   = planTextLen;
+        cachedMaxW_      = maxW;
+        cachedThemeName_ = theme.name;
+        cachedValid_     = false;
+        cachedDiagram_   = {};
+        cachedElement_   = nullptr;
+        if (plan) {
+            // 解析失败保持 cachedValid_ = false, 界面显示占位内容而非异常中断渲染
+            cachedValid_ = agentxx::util::catchError<bool>(
+                [&]() -> bool {
+                    cachedArgs_ = neograph::json::parse(plan->text);
+                    return true;
+                },
+                [](std::string) -> bool {
+                    return false;
+                }
+            );
+            if (cachedValid_) {
+                const auto roadmap = cachedArgs_.value("roadmap", std::string{});
+                cachedDiagram_     = tui_mermaid::parseMermaidStateDiagram(roadmap);
+                if (!cachedDiagram_.nodes.empty()) {
+                    cachedElement_ = tui_mermaid::renderMermaidStateDiagram(
+                        cachedDiagram_, maxW, theme.normalColor, colorOf
+                    );
+                }
+            }
+        }
+    }
+
+    if (!cachedValid_ || !cachedElement_) {
+        return {
+            ScrollItem{text(" (no plan roadmap) ") | dim, false}
+        };
+    }
+
+    // 返回缓存的 Element (同一指针): Scrollable 据此判定内容未变,
+    // 高度缓存/布局结果跨帧复用, 免去每帧重建与重测
     return {
-        ScrollItem{
-                   tui_mermaid::renderMermaidStateDiagram(dg, maxW, theme.normalColor, colorOf),
-                   false, }
+        ScrollItem{cachedElement_, false}
     };
 }
 
@@ -609,8 +624,7 @@ bool PlanDiagramOverlay::OnEvent(Event event) {
         return true;
     }
     if (event.is_mouse()) {
-        const auto& mouse = event.mouse();
-        // 右上 ✕ 关闭
+        // 滚轮滚动 (Scrollable 内部处理)
         if (scrollable_->OnEvent(event)) {
             ctx_.postRedraw();
             return true;
