@@ -269,6 +269,123 @@ static void test_router_more() {
     XX_TEST_EXPECT_TRUE(hAfter == nullptr);
 }
 
+/// 最长前缀匹配: 文件夹规则对其下任意子路径生效
+static void test_router_prefix_fallback() {
+    XXRouter<int, 8> router;
+
+    // 注册文件夹规则 (带结尾斜杠, 应等价于不带)
+    router.add("/home/user/projects/", 0, std::make_shared<int>(10));
+    // 更深的精确规则
+    router.add("/home/user/projects/secret", 0, std::make_shared<int>(11));
+    // 通配符规则
+    router.add("/tmp/*", 1, std::make_shared<int>(12));
+
+    std::string re_path;
+
+    // 1. 默认模式 (无 prefix_fallback): 子路径不命中文件夹规则
+    auto hNone = router.get("/home/user/projects/file.txt", 0, re_path);
+    XX_TEST_EXPECT_TRUE(hNone == nullptr);
+
+    // 2. 最长前缀匹配: 子路径回退到最深的已注册父节点
+    auto hFolder = router.get("/home/user/projects/file.txt", 0, re_path, true);
+    XX_TEST_EXPECT_TRUE(hFolder != nullptr);
+    if (hFolder) {
+        XX_TEST_EXPECT_EQ(*hFolder, 10);
+        XX_TEST_EXPECT_EQ(re_path, std::string("/home/user/projects"));
+    }
+
+    // 3. 多级子路径同样回退
+    auto hDeep = router.get("/home/user/projects/a/b/c.txt", 0, re_path, true);
+    XX_TEST_EXPECT_TRUE(hDeep != nullptr);
+    if (hDeep) {
+        XX_TEST_EXPECT_EQ(*hDeep, 10);
+        XX_TEST_EXPECT_EQ(re_path, std::string("/home/user/projects"));
+    }
+
+    // 4. 精确注册的更深节点优先
+    auto hSecret = router.get("/home/user/projects/secret/x.txt", 0, re_path, true);
+    XX_TEST_EXPECT_TRUE(hSecret != nullptr);
+    if (hSecret) {
+        XX_TEST_EXPECT_EQ(*hSecret, 11);
+        XX_TEST_EXPECT_EQ(re_path, std::string("/home/user/projects/secret"));
+    }
+
+    // 5. 通配符优先于父级回退
+    auto hTmp = router.get("/tmp/x/y.txt", 1, re_path, true);
+    XX_TEST_EXPECT_TRUE(hTmp != nullptr);
+    if (hTmp) {
+        XX_TEST_EXPECT_EQ(*hTmp, 12);
+        XX_TEST_EXPECT_EQ(re_path, std::string("/tmp/*"));
+    }
+
+    // 6. 父链回退: 中间节点无对应 index 处理函数时沿父链查找
+    router.add("/home", 2, std::make_shared<int>(13));
+    // /home/user/projects 仅注册了 index0, index2 需回退到 /home
+    auto hChain = router.get("/home/user/projects/x.txt", 2, re_path, true);
+    XX_TEST_EXPECT_TRUE(hChain != nullptr);
+    if (hChain) {
+        XX_TEST_EXPECT_EQ(*hChain, 13);
+    }
+    // 但 index0 命中更深的 /home/user/projects
+    auto hChainDeep = router.get("/home/user/projects/x.txt", 0, re_path, true);
+    XX_TEST_EXPECT_TRUE(hChainDeep != nullptr);
+    if (hChainDeep) {
+        XX_TEST_EXPECT_EQ(*hChainDeep, 10);
+    }
+
+    // 7. getNocache 同样支持前缀回退
+    auto hNC = router.getNocache("/home/user/projects/file.txt", 0, re_path, true);
+    XX_TEST_EXPECT_TRUE(hNC != nullptr);
+    if (hNC) {
+        XX_TEST_EXPECT_EQ(*hNC, 10);
+    }
+
+    // 8. 完全未注册的路径 (无任何父节点规则) 回退后仍无结果
+    auto hNothing = router.get("/var/log/syslog", 0, re_path, true);
+    XX_TEST_EXPECT_TRUE(hNothing == nullptr);
+
+    // 9. 缓存一致性: 重复查询结果一致 (缓存命中路径)
+    auto hCached = router.get("/home/user/projects/file.txt", 0, re_path, true);
+    XX_TEST_EXPECT_TRUE(hCached != nullptr);
+    if (hCached) {
+        XX_TEST_EXPECT_EQ(*hCached, 10);
+        XX_TEST_EXPECT_EQ(re_path, std::string("/home/user/projects"));
+    }
+
+    // 10. 父链回退命中的结果不写缓存, 再次查询仍正确
+    auto hChain2 = router.get("/home/user/projects/x.txt", 2, re_path, true);
+    XX_TEST_EXPECT_TRUE(hChain2 != nullptr);
+    if (hChain2) {
+        XX_TEST_EXPECT_EQ(*hChain2, 13);
+    }
+
+    // 11. 结尾斜杠等价: "/home/user/projects/" 命中同一节点
+    auto hSlash = router.get("/home/user/projects/", 0, re_path, true);
+    XX_TEST_EXPECT_TRUE(hSlash != nullptr);
+    if (hSlash) {
+        XX_TEST_EXPECT_EQ(*hSlash, 10);
+        XX_TEST_EXPECT_EQ(re_path, std::string("/home/user/projects"));
+    }
+
+    // 12. remove 使用精确匹配, 不影响父节点规则
+    auto removed = router.remove("/home/user/projects/secret", 0);
+    XX_TEST_EXPECT_TRUE(removed != nullptr);
+    auto hAfterRemove = router.get("/home/user/projects/secret/x.txt", 0, re_path, true);
+    XX_TEST_EXPECT_TRUE(hAfterRemove != nullptr);
+    if (hAfterRemove) {
+        XX_TEST_EXPECT_EQ(*hAfterRemove, 10); // 回退到文件夹规则
+    }
+
+    // 13. 精确路径自身无处理函数时也可沿父链回退
+    // (/home/user/projects 仅注册 index0, 查询 index2 回退到 /home)
+    router.add("/home/user", 0, std::make_shared<int>(14));
+    auto hExactNoHandle = router.get("/home/user/projects", 2, re_path, true);
+    XX_TEST_EXPECT_TRUE(hExactNoHandle != nullptr);
+    if (hExactNoHandle) {
+        XX_TEST_EXPECT_EQ(*hExactNoHandle, 13);
+    }
+}
+
 static void test_chain_hash() {
     agentxx::agent::ChainHash ch;
     XX_TEST_EXPECT_EQ(ch.count(), 0u);
@@ -307,6 +424,7 @@ TestResult testMiscFixes() {
     test_lru_cache_more();
     test_router();
     test_router_more();
+    test_router_prefix_fallback();
     test_chain_hash();
 
     return TestResult{g_mf_passed, g_mf_failed};

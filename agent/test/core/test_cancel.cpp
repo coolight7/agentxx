@@ -339,7 +339,7 @@ private:
     std::atomic<bool>* finished_;
 };
 
-/// 标记 tool: 快速完成 (在取消发生前返回), 验证已完成的 tool 结果保留
+/// 标记 tool: 排在慢速 tool 之后声明, 验证取消后后续 tool 不再执行
 class CancelMarkerTool : public agentxx::tools::XXToolBase {
 public:
 
@@ -356,8 +356,7 @@ public:
     }
 
     asio::awaitable<std::string> execute_async(const neograph::json&) override {
-        // 标记 tool: 立即完成 (并行 toolcall 下在取消前快速完成, 验证取消只中断
-        // 在途未完成的 tool, 已完成的 tool 结果保留)
+        // 标记 tool: 串行 toolcall 下排在 slow 之后, slow 被取消中断后不再执行
         executed_->store(true, std::memory_order_release);
         co_return "marker";
     }
@@ -433,12 +432,11 @@ asio::awaitable<void> test_agent_cancel_toolcall() {
 
     auto cancelWatcher = [&]() -> asio::awaitable<void> {
         asio::steady_timer timer(ex);
-        // 等待两个 tool 都开始执行后再取消, 确保取消发生在 toolcall 执行期间:
-        // - marker (快速) 已完成 → 结果保留
-        // - slow (2s 在途) 未完成 → 取消后自然完成, 经取消埋点补 [User canceled]
+        // 串行 toolcall: 先执行 slow (2s 在途), 取消发生在 slow 执行期间:
+        // - slow 被取消信号立即中断 (未自然完成) → 经取消埋点补 [User canceled]
+        // - marker 排在 slow 之后, 取消后不再执行
         for (int i = 0; i < 2000; ++i) {
-            if (agent.slowExecuted.load(std::memory_order_acquire)
-                && agent.markerExecuted.load(std::memory_order_acquire)) {
+            if (agent.slowExecuted.load(std::memory_order_acquire)) {
                 break;
             }
             timer.expires_after(std::chrono::milliseconds(5));
@@ -485,13 +483,12 @@ asio::awaitable<void> test_agent_cancel_toolcall() {
     // 工具协程绑定 engine 取消信号, 生命周期跟随 engine
     XX_TEST_EXPECT_TRUE(agent.slowExecuted.load());
     XX_TEST_EXPECT_TRUE(agent.slowFinished.load() == false);
-    // 并行执行语义: 慢速与标记 tool 同时启动, 标记 tool 在取消前快速完成
-    // (toolcall 并行执行后不再串行等待, 取消只中断在途未完成的 tool)
-    XX_TEST_EXPECT_TRUE(agent.markerExecuted.load());
+    // 串行执行语义: 标记 tool 排在 slow 之后, slow 被取消中断后不再执行
+    XX_TEST_EXPECT_TRUE(agent.markerExecuted.load() == false);
     // 取消应立即中断会话轮次 (工具随 engine 取消立即中断, 不等待自然完成)
     XX_TEST_EXPECT_TRUE(elapsedMs < 3000);
 
-    // 取消语义: 未完成的 tool 结果丢弃并补 [User canceled], 已完成的保留
+    // 取消语义: 未完成的 tool 结果丢弃并补 [User canceled], 后续 tool 不再执行
     // - 取消时工具协程随 engine 信号立即中断退出, baseRun 等待循环收满完成信号后
     //   走 isCancel 分支保存完整上下文 (wrap_handle 在 rethrow 前写入 tempMessages),
     //   因此这里轮询等待保存完成
@@ -500,15 +497,15 @@ asio::awaitable<void> test_agent_cancel_toolcall() {
         asio::steady_timer poll(ex2);
         neograph::json     im;
         bool               slowCanceled = false;
-        bool               markerKept   = false;
+        bool               markerCanceled = false;
         const auto         deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
         while (std::chrono::steady_clock::now() < deadline) {
             im = agent.agentContext->middlewareHandleContext->getGraphDataItemValue<neograph::json>(
                 "cancel_tool_test",
                 agentxx::middleware::MiddlewareContext::graphDataKey_tempMessages
             );
-            slowCanceled = false;
-            markerKept   = false;
+            slowCanceled   = false;
+            markerCanceled = false;
             if (im.is_array()) {
                 for (const auto& m : im) {
                     if (m.value("role", std::string{}) == "tool"
@@ -516,21 +513,24 @@ asio::awaitable<void> test_agent_cancel_toolcall() {
                         && m.value("content", std::string{}) == "[User canceled]") {
                         slowCanceled = true;
                     }
+                    // 串行下取消发生在 slow 执行期间, marker 未执行, 同样补
+                    // [User canceled] 保证每条 assistant tool_call 都有结果消息;
+                    // 不应出现真实执行结果 "marker"
                     if (m.value("role", std::string{}) == "tool"
                         && m.value("tool_name", std::string{}) == "test_marker"
-                        && m.value("content", std::string{}) == "marker") {
-                        markerKept = true;
+                        && m.value("content", std::string{}) == "[User canceled]") {
+                        markerCanceled = true;
                     }
                 }
             }
-            if (slowCanceled && markerKept) {
+            if (slowCanceled && markerCanceled) {
                 break;
             }
             poll.expires_after(std::chrono::milliseconds(20));
             co_await poll.async_wait(asio::use_awaitable);
         }
         XX_TEST_EXPECT_TRUE(slowCanceled);
-        XX_TEST_EXPECT_TRUE(markerKept);
+        XX_TEST_EXPECT_TRUE(markerCanceled);
     }
 
     co_return;
