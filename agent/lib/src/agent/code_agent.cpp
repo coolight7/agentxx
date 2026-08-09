@@ -44,20 +44,20 @@ asio::awaitable<void> CodeAgent::setupMiddleware() {
         auto permission
             = std::make_shared<agentxx::middleware::PermissionMiddlewareHandle>(agentContext);
         permission->setFilesystemPermission(
-            std::filesystem::current_path().generic_string(),
+            fmt::format("{}/*", std::filesystem::current_path().generic_string()),
             agentxx::middleware::PermissionOperator::ALLOW,
             agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
         );
-        // permission->setFilesystemPermission(
-        //     "/tmp/test/",
-        //     agentxx::middleware::PermissionOperator::DENY,
-        //     agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
-        // );
-        // permission->setFilesystemPermission(
-        //     "/",
-        //     agentxx::middleware::PermissionOperator::INTERRUPT,
-        //     agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
-        // );
+        permission->setFilesystemPermission(
+            "/tmp/test/*",
+            agentxx::middleware::PermissionOperator::DENY,
+            agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
+        );
+        permission->setFilesystemPermission(
+            "/*",
+            agentxx::middleware::PermissionOperator::INTERRUPT,
+            agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
+        );
         // 注册 tool 名 -> 权限处理函数; 未调用则 handles 为空, 权限拦截不会触发
         permission->registerHandles();
         agentContext->permissionMiddleware = permission;
