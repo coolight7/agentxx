@@ -335,12 +335,14 @@ uint64_t MessageListComponent::itemKey(size_t index) {
         h             = combine(h, m.tool ? m.tool->toolName.size() : size_t{0});
         // 中断消息: 状态变化经 mutableMessage 复制 (指针已变), 此处附加
         // 结构特征进一步防 ABA
-        h             = combine(h, static_cast<uint64_t>(
-            m.interrupt ? m.interrupt->interruptStatus : TUIMessage::InterruptStatus::Waiting
-        ));
-        h             = combine(h, m.interrupt ? static_cast<uint64_t>(m.interrupt->inputIndex)
-                                               : uint64_t{0});
-        h             = combine(h, m.interrupt ? m.interrupt->interruptResult.size() : size_t{0});
+        h = combine(
+            h,
+            static_cast<uint64_t>(
+                m.interrupt ? m.interrupt->interruptStatus : TUIMessage::InterruptStatus::Waiting
+            )
+        );
+        h = combine(h, m.interrupt ? static_cast<uint64_t>(m.interrupt->inputIndex) : uint64_t{0});
+        h = combine(h, m.interrupt ? m.interrupt->interruptResult.size() : size_t{0});
         // 中断 UI 状态 (编辑文本/选中项/提示) 变化经 version 递增反映到 key,
         // 触发高度重估 (tip 增删影响估算行数)
         if (m.role == TUIMessage::Role::Interrupt) {
@@ -383,16 +385,17 @@ int MessageListComponent::estimateHeight(size_t index, int width) {
                 if (!msg.text.empty()) {
                     lines += estimateLines(msg.text, width);
                 }
-                const bool finished = msg.tool && msg.tool->toolFinished;
-                lines += finished ? estimateLines(msg.tool->toolResult, width) : 1;
+                const bool finished  = msg.tool && msg.tool->toolFinished;
+                lines               += finished ? estimateLines(msg.tool->toolResult, width) : 1;
                 return lines;
             }
             case TUIMessage::Role::Interrupt: {
                 // 粗略估算 (进入视口后实测修正): 头行 + label + depict +
                 // 控件区 + 提示/状态行 + 尾部空行
                 // (编辑文本/选中项高度恒定, 不参与估算)
-                const bool waiting = msg.interrupt
-                    && msg.interrupt->interruptStatus == TUIMessage::InterruptStatus::Waiting;
+                const bool waiting
+                    = msg.interrupt
+                      && msg.interrupt->interruptStatus == TUIMessage::InterruptStatus::Waiting;
                 if (waiting) {
                     int  lines = 4;
                     auto type  = msg.interrupt->inputType;
@@ -462,12 +465,12 @@ LazyBuiltItem MessageListComponent::buildMessageItem(const TUIMessage& msg, size
     auto block = buildMessageBlock(msg, index, maxWidth, builders);
 
     LazyBuiltItem out;
-    out.element = vbox({std::move(block), text("")});
+    out.element     = vbox({std::move(block), text("")});
     out.sourceBytes = msg.text.size() + (msg.tool ? msg.tool->toolResult.size() : 0)
                       + (msg.tool ? msg.tool->toolName.size() : 0);
     // 中断消息不缓存: 每帧重建以刷新控件 reflect 命中区域 (interruptHits_),
     // 否则缓存命中时控件 Box 丢失, 点击无法命中; 中断消息数量少, 成本可忽略
-    out.cacheable   = (msg.role != TUIMessage::Role::Interrupt);
+    out.cacheable = (msg.role != TUIMessage::Role::Interrupt);
     // markdown DomBuilder 生命周期与 Element 绑定
     // (Element 内 reflect 的链接 Box 指向 builder 内部容器)
     for (auto& b : builders) {
@@ -575,8 +578,7 @@ Element MessageListComponent::buildMessageBlock(
             // 按提示级别区分前缀与颜色 (Info/Warning/Error)
             std::string  prefix   = "# ";
             ftxui::Color tipColor = theme.systemColor;
-            const auto   tipLevel = msg.system ? msg.system->tipLevel
-                                                : TUIMessage::TipLevel::Info;
+            const auto   tipLevel = msg.system ? msg.system->tipLevel : TUIMessage::TipLevel::Info;
             switch (tipLevel) {
                 case TUIMessage::TipLevel::Warning:
                     prefix   = "# [Warn] ";
@@ -677,8 +679,9 @@ Element MessageListComponent::buildMessageBlock(
             // 中断输入消息: 内嵌交互控件, 直接渲染在消息列表中
             Elements lines;
 
-            const bool waiting = msg.interrupt
-                && msg.interrupt->interruptStatus == TUIMessage::InterruptStatus::Waiting;
+            const bool waiting
+                = msg.interrupt
+                  && msg.interrupt->interruptStatus == TUIMessage::InterruptStatus::Waiting;
             if (waiting) {
                 // 头行: 类型 + 进度
                 Elements header;
@@ -728,9 +731,22 @@ Element MessageListComponent::buildMessageBlock(
 // agentxx_filesystem_edit_text_file 特化渲染
 // ---------------------------------------------------------------------------
 
+/// 工具结果文本是否表示失败
+/// 与服务端工具错误约定一致: 工具返回 "[Error] ..." / "[Exception aborted: ...]" 文本,
+/// 中断为 "[Interrupt]"; 成功结果 (如 "Success, Replace N hits") 不以这些前缀开头
+static bool isToolResultError(std::string_view result) {
+    return result.starts_with("[Error]") || result.starts_with("[Exception")
+           || result.starts_with("[Interrupt]") || result.contains("Permission");
+}
+
 void MessageListComponent::appendEditToolHeader(const TUIMessage& msg, Elements& header) {
     const auto& theme = *ctx_.theme;
-    std::string path  = agentxx::util::catchError<std::string>(
+    if (msg.tool && msg.tool->toolFinished && isToolResultError(msg.tool->toolResult)) {
+        // 操作失败: 折叠态显示错误预览而非路径
+        header.push_back(text(oneLinePreview(msg.tool->toolResult)) | color(theme.errorColor));
+        return;
+    }
+    std::string path = agentxx::util::catchError<std::string>(
         [&msg]() -> std::string {
             return neograph::json::parse(msg.text).value("path", std::string{});
         },
@@ -745,6 +761,14 @@ void MessageListComponent::appendEditToolHeader(const TUIMessage& msg, Elements&
 
 void MessageListComponent::appendEditToolBody(const TUIMessage& msg, Elements& lines) {
     const auto& theme = *ctx_.theme;
+    // 操作失败: 渲染错误信息, 不渲染基于请求参数的 diff (避免误导: 文件实际未被修改)
+    if (msg.tool && msg.tool->toolFinished && isToolResultError(msg.tool->toolResult)) {
+        lines.push_back(hbox({
+            text("  result: ") | color(theme.toolColor),
+            paragraph(msg.tool->toolResult) | color(theme.errorColor),
+        }));
+        return;
+    }
     std::string path, oldStr, newStr;
     agentxx::util::catchError<bool>(
         [&]() -> bool {
@@ -1045,7 +1069,7 @@ Element MessageListComponent::buildInterruptControl(const TUIMessage& msg, size_
 // ---------------------------------------------------------------------------
 
 void MessageListComponent::attachInterruptChannel(
-    int64_t                                     wireId,
+    int64_t                                 wireId,
     std::shared_ptr<InterruptResultChannel> ch
 ) {
     interruptChannels_[wireId] = std::move(ch);
@@ -1116,12 +1140,13 @@ MessageListComponent::InterruptUIState&
     return ui;
 }
 
-MessageListComponent::InterruptUIState MessageListComponent::interruptUiState(size_t msgIndex) const {
+MessageListComponent::InterruptUIState MessageListComponent::interruptUiState(size_t msgIndex
+) const {
     const auto& st = *ctx_.frameState;
     if (msgIndex >= st.messages.size()) {
         return {};
     }
-    const auto& msg = *st.messages[msgIndex];
+    const auto&  msg = *st.messages[msgIndex];
     InterruptKey key;
     if (!interruptKeyOf(msg, key)) {
         return {};
@@ -1159,7 +1184,7 @@ bool MessageListComponent::handleInterruptClick(const Mouse& mouse) {
                 // 点击是/否直接确认 (先设置选中, 再确认)
                 ctx_.state->mutate([&](TUIRenderState& st) {
                     if (h.msgIndex < st.messages.size()) {
-                        auto& ui = mutateInterruptUiState(*st.messages[h.msgIndex]);
+                        auto& ui    = mutateInterruptUiState(*st.messages[h.msgIndex]);
                         ui.selected = 0;
                         ui.tip.clear();
                     }
@@ -1170,7 +1195,7 @@ bool MessageListComponent::handleInterruptClick(const Mouse& mouse) {
             case kHitBoolNo:
                 ctx_.state->mutate([&](TUIRenderState& st) {
                     if (h.msgIndex < st.messages.size()) {
-                        auto& ui = mutateInterruptUiState(*st.messages[h.msgIndex]);
+                        auto& ui    = mutateInterruptUiState(*st.messages[h.msgIndex]);
                         ui.selected = 1;
                         ui.tip.clear();
                     }
@@ -1192,7 +1217,7 @@ bool MessageListComponent::handleInterruptClick(const Mouse& mouse) {
                     if (h.msgIndex >= st.messages.size()) {
                         return;
                     }
-                    auto& ui = mutateInterruptUiState(*st.messages[h.msgIndex]);
+                    auto& ui    = mutateInterruptUiState(*st.messages[h.msgIndex]);
                     ui.selected = h.sub;
                     ui.tip.clear();
                 });
@@ -1252,8 +1277,8 @@ bool MessageListComponent::handleInterruptKey(Event event) {
         if (event == Event::ArrowLeft || event == Event::ArrowRight) {
             ctx_.state->mutate([&](TUIRenderState& st) {
                 if (mi < st.messages.size()) {
-                    auto& ui            = mutateInterruptUiState(*st.messages[mi]);
-                    ui.selected         = 1 - ui.selected;
+                    auto& ui    = mutateInterruptUiState(*st.messages[mi]);
+                    ui.selected = 1 - ui.selected;
                 }
             });
             ctx_.postRedraw();
@@ -1273,8 +1298,8 @@ bool MessageListComponent::handleInterruptKey(Event event) {
                 if (mi >= st.messages.size() || !st.messages[mi]->interrupt) {
                     return;
                 }
-                auto& ui   = mutateInterruptUiState(*st.messages[mi]);
-                int   size = static_cast<int>(st.messages[mi]->interrupt->inputEnums.size());
+                auto& ui    = mutateInterruptUiState(*st.messages[mi]);
+                int   size  = static_cast<int>(st.messages[mi]->interrupt->inputEnums.size());
                 ui.selected = std::clamp(ui.selected + delta, 0, size - 1);
             });
             ctx_.postRedraw();
@@ -1337,8 +1362,8 @@ void MessageListComponent::setInterruptActive(size_t mi) {
 }
 
 void MessageListComponent::confirmInterrupt(size_t mi) {
-    std::string value;
-    bool        confirmed = false;
+    std::string  value;
+    bool         confirmed = false;
     InterruptKey key; // 确认成功时记录 (mutate 内收集, 锁外发送结果)
     ctx_.state->mutate([&](TUIRenderState& st) {
         if (mi >= st.messages.size() || !st.messages[mi]->interrupt) {
@@ -1412,7 +1437,7 @@ void MessageListComponent::confirmInterrupt(size_t mi) {
 }
 
 void MessageListComponent::cancelInterrupt(size_t mi) {
-    int64_t id = 0;
+    int64_t      id = 0;
     InterruptKey key; // mutate 内收集, 锁外发送整体取消
     ctx_.state->mutate([&](TUIRenderState& st) {
         if (mi >= st.messages.size() || !st.messages[mi]->interrupt) {
@@ -1467,7 +1492,7 @@ void MessageListComponent::stepInterrupt(size_t mi, double delta) {
         if (type != "int" && type != "double") {
             return;
         }
-        auto& ui = uiStateFor(src);
+        auto&  ui  = uiStateFor(src);
         double val = 0.0;
         if (type == "int") {
             int64_t num = 0;
