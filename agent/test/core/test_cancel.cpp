@@ -302,13 +302,19 @@ asio::awaitable<void> test_agent_cancel_llm_request() {
 // E2E: toolcall 执行中取消 => 后续 tool 不再执行, 取消语义正确传播
 // ===========================================================================
 
-/// 慢速 tool: 模拟耗时异步 IO, 被取消时定时器收到 operation_aborted 提前退出
+/// 慢速 tool: 模拟耗时异步 IO, 取消时定时器收到 operation_aborted 被立即中断
+/// (工具协程绑定 engine 取消信号, 生命周期跟随 engine)
 class CancelSlowTool : public agentxx::tools::XXToolBase {
 public:
 
-    CancelSlowTool(std::weak_ptr<agentxx::agent::AgentContext> ctx, std::atomic<bool>* executed) :
+    CancelSlowTool(
+        std::weak_ptr<agentxx::agent::AgentContext> ctx,
+        std::atomic<bool>*                          executed,
+        std::atomic<bool>*                          finished
+    ) :
         XXToolBase("test_slow", ctx, false, false),
-        executed_(executed) {}
+        executed_(executed),
+        finished_(finished) {}
 
     neograph::ChatTool get_definition() const override {
         return neograph::ChatTool{
@@ -320,19 +326,20 @@ public:
 
     asio::awaitable<std::string> execute_async(const neograph::json&) override {
         executed_->store(true, std::memory_order_release);
-        // 模拟耗时 IO: 最长等待 2s (并行 toolcall 下 detached 工具协程不绑定取消
-        // 信号, 取消后自然完成, 由 ToolDoneGuard 兜底保存结果)
+        // 模拟耗时 IO: 2s 等待, 取消时被 operation_aborted 立即中断
         asio::steady_timer timer(co_await asio::this_coro::executor, std::chrono::seconds(2));
         co_await timer.async_wait(asio::use_awaitable);
+        finished_->store(true, std::memory_order_release);
         co_return "slow done";
     }
 
 private:
 
     std::atomic<bool>* executed_;
+    std::atomic<bool>* finished_;
 };
 
-/// 标记 tool: 验证取消后不再执行后续 toolcall
+/// 标记 tool: 快速完成 (在取消发生前返回), 验证已完成的 tool 结果保留
 class CancelMarkerTool : public agentxx::tools::XXToolBase {
 public:
 
@@ -365,6 +372,7 @@ class CancelTestAgent : public agentxx::agent::CodeAgent {
 public:
 
     std::atomic<bool> slowExecuted{false};
+    std::atomic<bool> slowFinished{false};
     std::atomic<bool> markerExecuted{false};
 
     explicit CancelTestAgent(std::shared_ptr<agentxx::agent::AgentConfig> cfg) :
@@ -375,7 +383,8 @@ protected:
     asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>>
         createTools() override {
         auto tools = co_await CodeAgent::createTools();
-        tools.push_back(std::make_unique<CancelSlowTool>(agentContext, &slowExecuted));
+        tools.push_back(std::make_unique<CancelSlowTool>(agentContext, &slowExecuted, &slowFinished)
+        );
         tools.push_back(std::make_unique<CancelMarkerTool>(agentContext, &markerExecuted));
         co_return tools;
     }
@@ -424,9 +433,12 @@ asio::awaitable<void> test_agent_cancel_toolcall() {
 
     auto cancelWatcher = [&]() -> asio::awaitable<void> {
         asio::steady_timer timer(ex);
-        // 等待慢速 tool 开始执行后再取消, 确保取消发生在 toolcall 执行期间
+        // 等待两个 tool 都开始执行后再取消, 确保取消发生在 toolcall 执行期间:
+        // - marker (快速) 已完成 → 结果保留
+        // - slow (2s 在途) 未完成 → 取消后自然完成, 经取消埋点补 [User canceled]
         for (int i = 0; i < 2000; ++i) {
-            if (agent.slowExecuted.load(std::memory_order_acquire)) {
+            if (agent.slowExecuted.load(std::memory_order_acquire)
+                && agent.markerExecuted.load(std::memory_order_acquire)) {
                 break;
             }
             timer.expires_after(std::chrono::milliseconds(5));
@@ -438,14 +450,13 @@ asio::awaitable<void> test_agent_cancel_toolcall() {
             if (token) {
                 std::fprintf(stderr, "[cancel-test-dbg] cancelling token=%p\n", (void*)token.get());
                 std::fflush(stderr);
+
                 token->cancel();
             } else {
                 std::fprintf(stderr, "[cancel-test-dbg] NO TOKEN\n");
-                std::fflush(stderr);
             }
         } else {
             std::fprintf(stderr, "[cancel-test-dbg] NO SESSION\n");
-            std::fflush(stderr);
         }
         co_return;
     };
@@ -470,26 +481,27 @@ asio::awaitable<void> test_agent_cancel_toolcall() {
     XX_TEST_EXPECT_TRUE(watcherExc == nullptr);
     XX_TEST_EXPECT_TRUE(turnResult.hasError);
     XX_TEST_EXPECT_EQ(turnResult.errorMessage, std::string{"Cancelled by user"});
-    // 慢速 tool 已执行
+    // 慢速 tool 已开始执行, 但被取消立即中断 (未自然完成):
+    // 工具协程绑定 engine 取消信号, 生命周期跟随 engine
     XX_TEST_EXPECT_TRUE(agent.slowExecuted.load());
+    XX_TEST_EXPECT_TRUE(agent.slowFinished.load() == false);
     // 并行执行语义: 慢速与标记 tool 同时启动, 标记 tool 在取消前快速完成
     // (toolcall 并行执行后不再串行等待, 取消只中断在途未完成的 tool)
     XX_TEST_EXPECT_TRUE(agent.markerExecuted.load());
-    // 取消应立即中断会话轮次 (不等待慢速 tool 自然完成)
-    XX_TEST_EXPECT_TRUE(elapsedMs < 8000);
+    // 取消应立即中断会话轮次 (工具随 engine 取消立即中断, 不等待自然完成)
+    XX_TEST_EXPECT_TRUE(elapsedMs < 3000);
 
     // 取消语义: 未完成的 tool 结果丢弃并补 [User canceled], 已完成的保留
-    // - 取消时引擎 terminal 销毁 toolcall 主协程帧 (isCancel 分支不可达),
-    //   wrap_handle 保存的 tempMessages 是回滚前的旧值; 最终结果由最后一个
-    //   退出的工具协程 (ToolDoneGuard) 兜底保存, 因此这里轮询等待保存完成
+    // - 取消时工具协程随 engine 信号立即中断退出, baseRun 等待循环收满完成信号后
+    //   走 isCancel 分支保存完整上下文 (wrap_handle 在 rethrow 前写入 tempMessages),
+    //   因此这里轮询等待保存完成
     {
-        auto ex2 = co_await asio::this_coro::executor;
+        auto               ex2 = co_await asio::this_coro::executor;
         asio::steady_timer poll(ex2);
         neograph::json     im;
         bool               slowCanceled = false;
         bool               markerKept   = false;
-        const auto         deadline
-            = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+        const auto         deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
         while (std::chrono::steady_clock::now() < deadline) {
             im = agent.agentContext->middlewareHandleContext->getGraphDataItemValue<neograph::json>(
                 "cancel_tool_test",

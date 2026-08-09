@@ -4,11 +4,6 @@
 #include "agentxx/tools/tool.h"
 #include "agentxx/util/log.h"
 #include "agentxx/util/string_util.h"
-#include "asio/co_spawn.hpp"
-#include "asio/detached.hpp"
-#include "asio/experimental/channel.hpp"
-#include "asio/this_coro.hpp"
-#include "asio/use_awaitable.hpp"
 #include "fmt/format.h"
 #include <algorithm>
 #include <cassert>
@@ -504,20 +499,15 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
         co_return;
     }
 
-    bool               isInterrupt   = false;
-    bool               isCancel      = false;
-    auto               interruptArgs = std::map<std::string, neograph::json>{};
-    auto               results       = neograph::json::array();
-    std::exception_ptr cancelErrorPtr;
+    bool isInterrupt   = false;
+    bool isCancel      = false;
+    auto interruptArgs = std::map<std::string, neograph::json>{};
+    auto results       = neograph::json::array();
+    // 已执行完成的 tool_call_id (取消时用于区分已完成/未完成, 未完成的补 [User canceled])
+    std::set<std::string> completedToolcallIds{};
+    std::exception_ptr    cancelErrorPtr;
 
-    // 执行单个 toolcall (按值捕获执行所需数据, 不引用 baseRun 帧)
-    auto onExecTool
-        = [this,
-           agentCtxPtr = agentCtxPtr,
-           cancelToken = in.ctx.cancel_token,
-           &toolcallsCache,
-           &isInterrupt,
-           &in](const neograph::ToolCall& tc) -> asio::awaitable<neograph::ChatMessage> {
+    auto onExecTool = [&](const neograph::ToolCall& tc) -> asio::awaitable<neograph::ChatMessage> {
         neograph::ChatMessage tool_msg;
         tool_msg.role         = "tool";
         tool_msg.tool_call_id = tc.id;
@@ -549,11 +539,10 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
                             // resultId)
                             args["tool_call_id"] = tc.id;
                         }
-                        tool_msg.content
-                            = co_await ToolcallWrapNode::execTool(*it, args, cancelToken);
+                        tool_msg.content = co_await execTool(*it, args, in.ctx.cancel_token);
                         // 取消埋点: tool 执行完成后检查, 避免取消后继续收集/执行后续 tool
-                        if (cancelToken) {
-                            cancelToken->throw_if_cancelled("after tool execution");
+                        if (in.ctx.cancel_token) {
+                            in.ctx.cancel_token->throw_if_cancelled("after tool execution");
                         }
                     } catch (const neograph::graph::CancelledException&) {
                         // TODO: 保存已有的 toolcall 结果由 baseRun 的取消捕获处保存后再重新抛出
@@ -575,7 +564,7 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
                 nullptr,
                 // 传入取消令牌: tool 被取消信号中断产生的 operation_aborted
                 // 转换为 CancelledException, 避免取消被当作普通 tool 错误吞掉
-                cancelToken
+                in.ctx.cancel_token
             );
             if (errorPtr) {
                 std::rethrow_exception(errorPtr);
@@ -584,84 +573,25 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
         co_return tool_msg;
     };
 
-    /// 执行 toolcall: 并行启动所有工具, 按声明顺序收集结果
-    /// - 单线程协作式调度: 各工具协程在 co_await 挂起点交替推进, 无数据竞争
-    ///   (co_spawn 协程引用捕获的 baseRun 局部变量在等待期间帧存活)
-    /// - 取消: 取消信号经轮询埋点/传输层传播给已启动的协程, 各自以
-    ///   CancelledException 退出; 已完成的保留, 未完成的补 [User canceled]
-    const size_t                       toolcallCount = assistant_msg->tool_calls.size();
-    std::vector<neograph::ChatMessage> orderedResults(toolcallCount);
-    std::vector<bool>                  toolCompleted(toolcallCount, false);
-    auto                               ex = co_await asio::this_coro::executor;
-    auto                               doneChannel
-        = std::make_shared<asio::experimental::channel<void(neograph_asio_error_code, size_t)>>(
-            ex,
-            static_cast<unsigned>(toolcallCount)
-        );
-
-    for (size_t i = 0; i < toolcallCount; ++i) {
-        asio::co_spawn(
-            ex,
-            [&, i]() -> asio::awaitable<void> {
-                // RAII 守卫: 无论成功/异常/取消都发送完成信号, 避免主协程收不满而死锁,
-                // 并防止异常逃逸 detached 协程 → terminate
-                struct ToolDoneGuard {
-                    std::shared_ptr<
-                        asio::experimental::channel<void(neograph_asio_error_code, size_t)>>
-                           ch;
-                    size_t idx;
-                    ~ToolDoneGuard() {
-                        if (ch) {
-                            ch->async_send(
-                                neograph_asio_error_code{},
-                                idx,
-                                [](neograph_asio_error_code) {}
-                            );
-                        }
-                    }
-                } guard{doneChannel, i};
-                try {
-                    auto msg          = co_await onExecTool(assistant_msg->tool_calls[i]);
-                    orderedResults[i] = std::move(msg);
-                    toolCompleted[i]  = true;
-                } catch (const neograph::graph::CancelledException&) {
-                    // 取消: 记录首个取消异常; 其余协程各自退出 (经轮询埋点/传输层)
-                    if (false == isCancel) {
-                        isCancel       = true;
-                        cancelErrorPtr = std::current_exception();
-                    }
-                }
-            },
-            asio::detached
-        );
+    /// 执行 toolcall
+    std::vector<asio::awaitable<neograph::ChatMessage>> toolcallResults{};
+    for (const auto& tc : assistant_msg->tool_calls) {
+        toolcallResults.emplace_back(onExecTool(tc));
     }
-
-    // 等待全部工具完成 (并行执行, 结果按声明顺序收集)
-    // - 取消信号可能中断 async_receive (operation_aborted), 捕获后继续等待:
-    //   必须收满全部完成信号才能返回, 否则 baseRun 帧提前销毁会使并行协程引用悬空
-    size_t received = 0;
-    while (received < toolcallCount) {
-        co_await agentxx::util::catchErrorAsync<bool>(
-            [&]() -> asio::awaitable<bool> {
-                co_await doneChannel->async_receive(asio::use_awaitable);
-                ++received;
-                co_return true;
-            },
-            [](std::string) -> asio::awaitable<bool> {
-                co_return false; // 异常: 继续等待
-            },
-            [](std::string&) -> std::optional<bool> {
-                return false; // 取消、中断异常: 继续等待
-            },
-            in.ctx.cancel_token
-        );
-    }
-
-    for (size_t i = 0; i < toolcallCount; ++i) {
-        if (toolCompleted[i]) {
+    for (auto& item : toolcallResults) {
+        // TODO: 真正并行
+        try {
+            auto           msg = co_await std::move(item);
             neograph::json msg_json;
-            neograph::to_json(msg_json, orderedResults[i]);
-            results.push_back(std::move(msg_json));
+            neograph::to_json(msg_json, msg);
+            results.push_back(msg_json);
+            completedToolcallIds.insert(msg.tool_call_id);
+        } catch (const neograph::graph::CancelledException&) {
+            // - 取消: 停止执行后续 tool, 由下方补齐未完成 tool 的取消提示消息
+            // - 中断 (NodeInterrupt) 已在 onExecTool 内部捕获处理, 不会抛到这里
+            isCancel       = true;
+            cancelErrorPtr = std::current_exception();
+            break;
         }
     }
 
@@ -672,11 +602,10 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
         //   避免已完成的 tool 结果因 state 回滚而丢失
         // - 未完成的 tool 插入 [User canceled] 提示, 保证每条 assistant tool_call
         //   都有对应的 tool 结果消息, 上下文角色顺序和内容完整
-        for (size_t i = 0; i < toolcallCount; ++i) {
-            if (toolCompleted[i]) {
+        for (const auto& tc : assistant_msg->tool_calls) {
+            if (completedToolcallIds.count(tc.id)) {
                 continue;
             }
-            const auto&           tc = assistant_msg->tool_calls[i];
             neograph::ChatMessage tool_msg;
             tool_msg.role         = "tool";
             tool_msg.tool_call_id = tc.id;

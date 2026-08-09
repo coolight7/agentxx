@@ -67,11 +67,11 @@ private:
     /// 循环切换动画等级: Disabled -> Low -> Medium -> High -> Ultra -> Disabled
     static void cycleAnimationLevel();
 
-    TUICtx&               ctx_;
+    TUICtx& ctx_;
     /// 条目索引: 0/1 = 主题 Dark/Light, 2 = 系统资源显示开关, 3 = 动画等级
     /// Enter/鼠标点击索引 3 时循环切换动画等级
-    static constexpr int kItemCount = 4;
-    int                  selectedIndex_ = 0;
+    static constexpr int  kItemCount     = 4;
+    int                   selectedIndex_ = 0;
     std::function<void()> onClose_;
 
     ftxui::Box themeBoxes_[2]; // Dark/Light 点击区域
@@ -150,15 +150,14 @@ private:
 
     std::vector<ScrollItem> buildItems();
 
-    TUICtx&               ctx_;
+    TUICtx&                     ctx_;
     std::shared_ptr<Scrollable> scrollable_;
-    std::function<void()> onClose_;
-    ftxui::Box              closeBox_;
+    std::function<void()>       onClose_;
 
     /// plan 消息 JSON 解析缓存: 仅当消息指针/文本长度变化时重新解析
     /// (弹窗打开期间 roadmap 随 agent 执行更新, 指针/长度必然变化)
-    const TUIMessage* cachedMsgPtr_ = nullptr;
+    const TUIMessage* cachedMsgPtr_  = nullptr;
     size_t            cachedTextLen_ = 0;
-    bool              cachedValid_    = false;
-    neograph::json    cachedArgs_     = neograph::json::array();
+    bool              cachedValid_   = false;
+    neograph::json    cachedArgs_    = neograph::json::array();
 };
