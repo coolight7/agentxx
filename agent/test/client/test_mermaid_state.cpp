@@ -397,10 +397,21 @@ void test_overlay_renders_plan_diagram() {
     auto overlay = std::make_shared<PlanDiagramOverlay>(f.ctx);
     auto out     = OverlayFixture::renderOverlay(*overlay);
 
+    // 弹窗打开默认显示图顶部 (Scrollable 不吸附底部): 起始伪状态与第一层节点可见
     XX_TEST_EXPECT_TRUE(contains(out, "Plan Diagram"));
     XX_TEST_EXPECT_TRUE(contains(out, "A"));
-    XX_TEST_EXPECT_TRUE(contains(out, "B"));
-    XX_TEST_EXPECT_TRUE(contains(out, "go")); // 边标签
+
+    // 视口高度有限 (弹窗 maxH*2/3 限制), 图下方部分需滚动后可见
+    bool seenB  = contains(out, "B");
+    bool seenGo = contains(out, "go");
+    for (int i = 0; i < 12 && !(seenB && seenGo); ++i) {
+        overlay->OnEvent(ftxui::Event::ArrowDown);
+        out    = OverlayFixture::renderOverlay(*overlay);
+        seenB  = contains(out, "B");
+        seenGo = contains(out, "go");
+    }
+    XX_TEST_EXPECT_TRUE(seenB);
+    XX_TEST_EXPECT_TRUE(seenGo); // 边标签
 }
 
 void test_overlay_without_plan_shows_hint() {
