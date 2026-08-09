@@ -88,7 +88,8 @@ std::optional<ftxui::Element> TUIClientAgentIO::renderPlanningInfo() {
     const TUIMessage* plan = nullptr;
     for (size_t i = st.messages.size(); i > 0; --i) {
         const auto& m = *st.messages[i - 1];
-        if (m.role == TUIMessage::Role::Tool && m.toolName == "agentxx_planning_write") {
+        if (m.role == TUIMessage::Role::Tool && m.tool
+            && m.tool->toolName == "agentxx_planning_write") {
             plan = st.messages[i - 1].get();
             break;
         }
@@ -101,11 +102,12 @@ std::optional<ftxui::Element> TUIClientAgentIO::renderPlanningInfo() {
 
     // 解析缓存: plan 消息被修改时 (mutableMessage 总是复制 → 指针变化)
     // 或文本长度变化时重新解析, 避免每帧重复解析 planning 参数 JSON
+    const bool planFinished = plan->tool && plan->tool->toolFinished;
     if (planCacheMsgPtr_ != plan || planCacheTextLen_ != plan->text.size()
-        || planCacheFinished_ != plan->toolFinished) {
+        || planCacheFinished_ != planFinished) {
         planCacheMsgPtr_   = plan;
         planCacheTextLen_  = plan->text.size();
-        planCacheFinished_ = plan->toolFinished;
+        planCacheFinished_ = planFinished;
         planCacheArgs_     = neograph::json::array();
         // 解析失败保持 planCacheValid_ = false, 界面显示占位内容而非异常中断渲染
         planCacheValid_ = agentxx::util::catchError<bool>(
@@ -131,7 +133,7 @@ std::optional<ftxui::Element> TUIClientAgentIO::renderPlanningInfo() {
     // 状态图渲染成本高 (解析 + 分层布局), 侧边栏常驻显示仅保留按钮,
     // 仅在用户点击时才在弹窗中渲染
     const auto roadmap = args.value("roadmap", std::string{});
-    if (!plan->toolFinished) {
+    if (!planFinished) {
         title.push_back(text(" Planning...") | color(theme_.hintColor));
     } else if (!roadmap.empty()) {
         title.push_back(text(" "));

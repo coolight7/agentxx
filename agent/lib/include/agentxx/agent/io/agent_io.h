@@ -119,7 +119,7 @@ protected:
     /// 增量事件推送 (流式 token、tool 生命周期、轮次边界)
     virtual void onDelta(const Delta& delta) = 0;
 
-    /// 全量/部分同步 (从 fullHistory 校准 client 状态)
+    /// 全量/部分同步 (从 viewMessages 校准 client 状态)
     virtual void onSync(const SyncPayload& payload) = 0;
 
     /// 轮次结束通知

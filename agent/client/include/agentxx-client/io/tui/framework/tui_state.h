@@ -2,40 +2,36 @@
 
 #include "agentxx/agent/context.h"
 #include "agentxx/expand/get_cpu_gpu_use.h"
+#include "asio/experimental/concurrent_channel.hpp"
 #include "neograph/api.h"
+#include "neograph/define.h"
 #include <deque>
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
 
-/// TUI 消息模型 (从 TUIClientAgentIO 提取, 供各组件共享)
-struct TUIMessage {
-    enum class Role {
-        User,
-        Assistant,
-        Thinking,
-        System,
-        Tool
-    };
-    /// 提示消息级别 (System 提示消息使用, 与 agentxx::agent::Delta::TipType 对应)
-    enum class TipLevel : uint8_t {
-        Info,
-        Warning,
-        Error
-    };
-    Role        role;
-    std::string text;
-    std::string toolName;
-    std::string toolCallId;
-    std::string toolResult;
-    bool        toolFinished = false;
-    bool        collapsed    = false;
-    int64_t     durationMs   = 0;
-    int64_t     startTimeMs  = 0;
-    TipLevel    tipLevel     = TipLevel::Info; ///< 仅 System 提示消息使用
-};
+/// 中断输入结果回传通道 (UI 线程 → client 线程):
+/// - 参数 1: 输入项序号 inputIndex (对应 TUIMessage::inputIndex);
+///   负数 (-1) 表示整体取消 (仅当 value 为 nullopt)
+/// - 参数 2: 用户确认值 (bool 规范化 "true"/"false", 其余原样字符串);
+///   nullopt 表示该输入项无结果 (取消/整体取消)
+/// 同一次中断请求的所有输入项共享同一 channel; client 线程 handleInterrupt
+/// 挂起接收, UI 线程 (消息列表控件交互) 确认/取消后发送。
+using InterruptResultChannel = asio::experimental::concurrent_channel<
+    void(neograph_asio_error_code, int, std::optional<std::string>)>;
+
+/// TUI 消息模型: 统一使用 agentxx::agent::ViewMessage
+/// (与 server Session::viewMessages / wire Sync 同型, 见 conversation_types.h)
+///
+/// 设计说明:
+/// - 通用字段 (role/text/startTimeMs/durationMs/collapsed) 平铺,
+///   角色专属字段按 role 放入 optional 子结构 (tool/system/interrupt)
+/// - 纯 UI 交互状态 (中断输入框编辑文本/选中项/校验提示/结果回传通道)
+///   不属于消息内容, 由 MessageListComponent 独立维护 (InterruptUIState 表)
+using TUIMessage = agentxx::agent::ViewMessage;
 
 /// 排队等待发送的用户输入
 struct TUIPendingInput {

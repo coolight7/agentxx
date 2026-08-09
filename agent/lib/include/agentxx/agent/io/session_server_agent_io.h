@@ -107,7 +107,7 @@ public:
         turnActive_.store(v, std::memory_order_release);
     }
 
-    /// 当前 fullHistory 的链式哈希尾 (供 hello_ack/sync)
+    /// 当前 viewMessages 的链式哈希尾 (供 hello_ack/sync)
     std::string currentTailHash();
 
 protected:

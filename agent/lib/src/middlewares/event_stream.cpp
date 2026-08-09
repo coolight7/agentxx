@@ -1,7 +1,6 @@
 #include "agentxx/middlewares/event_stream.h"
 
 #include "agentxx/agent/io/agent_io_transport.h"
-#include "agentxx/util/diff_util.h"
 #include "agentxx/util/log.h"
 #include "fmt/format.h"
 
@@ -123,27 +122,26 @@ void EventBridge::handleLLMToken(const neograph::graph::GraphEvent& event) {
                            : agentxx::agent::Delta::Type::TextToken,
         .text        = std::move(token),
         .startTimeMs = nodeStartTimeMs_,
-        .durationMs  = sendDuration
-                           ? static_cast<int64_t>(
-                                 std::chrono::duration_cast<std::chrono::milliseconds>(
-                                     std::chrono::system_clock::now() - nodeStartTime_
-                                 )
-                                     .count()
-                             )
-                           : 0,
+        .durationMs
+        = sendDuration ? static_cast<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                  std::chrono::system_clock::now() - nodeStartTime_
+                         )
+                                                  .count())
+                       : 0,
     });
 }
 
 void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
     using agentxx::agent::Delta;
+    using agentxx::agent::ViewMessage;
 
     auto chan  = event.data.value("channel", std::string{});
     auto value = event.data.value("value", neograph::json{});
 
     // 通用提示消息: 转发为 Delta::MessageTip, 由 client 端插入提示消息
     if (chan == "message_tip" && value.is_object()) {
-        auto        tipType = Delta::TipType::Info;
-        const auto  tip     = value.value("tip_type", std::string{"info"});
+        auto       tipType = Delta::TipType::Info;
+        const auto tip     = value.value("tip_type", std::string{"info"});
         if (tip == "warning") {
             tipType = Delta::TipType::Warning;
         } else if (tip == "error") {
@@ -165,22 +163,46 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
         auto role = jm.value("role", std::string{});
         if (role == "assistant" && jm.contains("tool_calls")) {
             hasLLMOutput = true;
-            auto msgId   = session_->appendHistory(jm);
-            // 登记 toolCallId → fullHistory 索引, 供 tool 结果 diff 渲染 O(1) 定位
-            // (fullHistory append-only, 索引不失效)
-            const size_t historyIndex = session_->fullHistory.size() - 1;
+            // 展开: 每条 tool_call → 一条 Tool 消息 (未完成, 历史默认折叠);
+            // content 非空 → 一条 Assistant 消息。
+            // 展开语义与渲染端 (TUI) 同步一致: 历史消息直接就是渲染消息,
+            // client 端无需再按 json 拆解
             for (const auto& tc : jm["tool_calls"]) {
-                const auto tcId = tc.value("id", std::string{});
-                if (!tcId.empty()) {
-                    toolCallHistoryIndex_[tcId] = historyIndex;
+                const auto toolName   = tc.value("name", std::string{});
+                const auto toolCallId = tc.value("id", std::string{});
+                const auto arguments  = tc.value("arguments", std::string{});
+
+                ViewMessage m;
+                m.role      = ViewMessage::Role::Tool;
+                m.text      = arguments;
+                m.collapsed = true; // 历史重连默认折叠 (与 onDelta 实时展开不同)
+                m.tool      = ViewMessage::ToolData{};
+                m.tool->toolName   = toolName;
+                m.tool->toolCallId = toolCallId;
+                const auto msgId   = session_->appendHistory(std::move(m));
+                // 登记 toolCallId → viewMessages 索引, 供 tool 结果回填 O(1) 定位
+                // (viewMessages append-only, 索引不失效)
+                const size_t historyIndex = session_->viewMessages.size() - 1;
+                if (!toolCallId.empty()) {
+                    toolCallHistoryIndex_[toolCallId] = historyIndex;
                 }
                 emitDelta(Delta{
                     .type       = Delta::Type::ToolStart,
                     .msgId      = msgId,
-                    .toolName   = tc.value("name", std::string{}),
-                    .toolCallId = tcId,
-                    .arguments  = tc.value("arguments", std::string{}),
+                    .toolName   = toolName,
+                    .toolCallId = toolCallId,
+                    .arguments  = arguments,
                 });
+            }
+            auto content = jm.value("content", std::string{});
+            if (!content.empty()) {
+                auto m = ViewMessage::makeText(
+                    ViewMessage::Role::Assistant,
+                    content,
+                    jm.value("start_time_ms", int64_t{0}),
+                    jm.value("duration_ms", int64_t{0})
+                );
+                session_->appendHistory(std::move(m));
             }
         } else if (role == "tool") {
             auto content    = jm.value("content", std::string{});
@@ -189,60 +211,36 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
             if (toolCallId.empty()) {
                 continue;
             }
-            auto historyMsg = jm;
-            if (toolName == "agentxx_filesystem_edit_text_file") {
-                // 生成 diff 记录
-                // - 优先 O(1) 索引定位 (本轮 assistant(tool_calls) 已登记),
-                //   未命中时回扫兜底 (如历史来自更早轮次)
-                const auto tryAppendDiff = [&](const neograph::json& assistantData) -> bool {
-                    const auto& tcs
-                        = assistantData.value("tool_calls", neograph::json::array());
-                    for (const auto& tc : tcs) {
-                        if (tc.value("id", std::string{}) != toolCallId) {
-                            continue;
-                        }
-                        // 解析失败的参数 (如非法 JSON) 跳过 diff 渲染
-                        agentxx::util::catchError<bool>(
-                            [&]() -> bool {
-                                auto args = neograph::json::parse(
-                                    tc.value("arguments", std::string{})
-                                );
-                                historyMsg["diff"] = agentxx::util::makeUnifiedDiff(
-                                    args.value("old_str", std::string{}),
-                                    args.value("new_str", std::string{}),
-                                    args.value("path", std::string{})
-                                );
-                                return true;
-                            },
-                            [](std::string) -> bool { return false; }
-                        );
-                        return true;
-                    }
-                    return false;
-                };
-
-                bool found = false;
-                if (auto idxIt = toolCallHistoryIndex_.find(toolCallId);
-                    idxIt != toolCallHistoryIndex_.end()
-                    && idxIt->second < session_->fullHistory.size()) {
-                    found = tryAppendDiff(session_->fullHistory[idxIt->second].data);
-                }
-                if (!found) {
-                    for (auto it = session_->fullHistory.rbegin();
-                         it != session_->fullHistory.rend();
-                         ++it) {
-                        const auto& hd = it->data;
-                        if (hd.value("role", std::string{}) != "assistant"
-                            || !hd.contains("tool_calls")) {
-                            continue;
-                        }
-                        if (tryAppendDiff(hd)) {
-                            break;
-                        }
+            // 回填对应的 Tool 消息 (assistant tool_calls 展开时已登记索引):
+            // - 优先 O(1) 索引定位 (本轮已登记)
+            // - 未命中时回扫兜底 (如历史来自更早轮次/恢复中断场景)
+            ViewMessage* target = nullptr;
+            if (auto idxIt = toolCallHistoryIndex_.find(toolCallId);
+                idxIt != toolCallHistoryIndex_.end()
+                && idxIt->second < session_->viewMessages.size()) {
+                target = &session_->viewMessages[idxIt->second];
+            }
+            if (!target) {
+                for (auto it = session_->viewMessages.rbegin();
+                     it != session_->viewMessages.rend();
+                     ++it) {
+                    if (it->role == ViewMessage::Role::Tool && it->tool
+                        && it->tool->toolCallId == toolCallId && !it->tool->toolFinished) {
+                        target = &*it;
+                        break;
                     }
                 }
             }
-            session_->appendHistory(historyMsg);
+            if (target) {
+                if (!target->tool) {
+                    target->tool = ViewMessage::ToolData{}; // 防御: 类型保证下不应为空
+                }
+                target->tool->toolResult   = content;
+                target->tool->toolFinished = true;
+                target->collapsed          = true;
+                // (edit 工具参数 unified diff: 渲染端自行计算, 无消费者, 不再生成;
+                //  ToolData::diff 字段保留供未来)
+            }
             emitDelta(Delta{
                 .type       = Delta::Type::ToolEnd,
                 .toolName   = toolName,
@@ -252,7 +250,29 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
             });
         } else if (role == "assistant") {
             hasLLMOutput = true;
-            session_->appendHistory(jm);
+            // 展开: reasoning_content 非空 → Thinking (折叠); content 非空 → Assistant。
+            // 顺序与渲染端拆解一致: Thinking 在前, Assistant 在后
+            auto reasoning = jm.value("reasoning_content", std::string{});
+            if (!reasoning.empty()) {
+                auto m = ViewMessage::makeText(
+                    ViewMessage::Role::Thinking,
+                    reasoning,
+                    jm.value("start_time_ms", int64_t{0}),
+                    jm.value("duration_ms", int64_t{0})
+                );
+                m.collapsed = true;
+                session_->appendHistory(std::move(m));
+            }
+            auto content = jm.value("content", std::string{});
+            if (!content.empty()) {
+                auto m = ViewMessage::makeText(
+                    ViewMessage::Role::Assistant,
+                    content,
+                    jm.value("start_time_ms", int64_t{0}),
+                    jm.value("duration_ms", int64_t{0})
+                );
+                session_->appendHistory(std::move(m));
+            }
         }
     }
     // llm node 执行完成，推送上下文统计更新
@@ -268,9 +288,7 @@ void EventBridge::handleNodeStart(const neograph::graph::GraphEvent& event) {
     lastChatChunkType_ = neograph::ChatStreamChunk::TYPE_UNKNOWN;
     nodeStartTime_     = std::chrono::system_clock::now();
     nodeStartTimeMs_   = static_cast<int64_t>(
-        std::chrono::duration_cast<std::chrono::milliseconds>(
-            nodeStartTime_.time_since_epoch()
-        )
+        std::chrono::duration_cast<std::chrono::milliseconds>(nodeStartTime_.time_since_epoch())
             .count()
     );
     emitDelta(agentxx::agent::Delta{
@@ -283,12 +301,11 @@ void EventBridge::handleNodeStart(const neograph::graph::GraphEvent& event) {
 void EventBridge::handleNodeEnd(const neograph::graph::GraphEvent& event) {
     lastChatChunkType_ = neograph::ChatStreamChunk::TYPE_UNKNOWN;
     // 计算持续时间
-    const int64_t duration_ms = static_cast<int64_t>(
-        std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::system_clock::now() - nodeStartTime_
+    const int64_t duration_ms
+        = static_cast<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                   std::chrono::system_clock::now() - nodeStartTime_
         )
-            .count()
-    );
+                                   .count());
     emitDelta(agentxx::agent::Delta{
         .type        = agentxx::agent::Delta::Type::NodeEnd,
         .nodeName    = event.node_name,
@@ -314,8 +331,7 @@ void EventBridge::publishModelToken(const std::string& token, std::string_view k
     // 无订阅者时跳过: 避免每个 token 创建一次无消费者的协程
     // (ModelToken topic 当前无生产订阅者, 该检查使热路径零开销)
     if (false
-        == bus.hasSubscribers<agentxx::events::EventModelToken>(
-            agentxx::events::Topic::ModelToken
+        == bus.hasSubscribers<agentxx::events::EventModelToken>(agentxx::events::Topic::ModelToken
         )) {
         return;
     }
@@ -325,7 +341,7 @@ void EventBridge::publishModelToken(const std::string& token, std::string_view k
          agentName = agentName_,
          threadId  = threadId_,
          token, // 捕获副本, 协程生命周期独立于本对象
-         kind     = std::string{kind}]() -> asio::awaitable<void> {
+         kind = std::string{kind}]() -> asio::awaitable<void> {
             co_await busPtr->publish<agentxx::events::EventModelToken>(
                 agentxx::events::Topic::ModelToken,
                 agentxx::events::EventModelToken{
@@ -348,8 +364,7 @@ void EventBridge::publishError(std::string message, std::string where) {
     auto  busPtr = ctxPtr->bus;
     auto& bus    = *busPtr;
     // 无订阅者时跳过 (与 ModelToken 一致, 避免无效协程创建)
-    if (false
-        == bus.hasSubscribers<agentxx::events::EventError>(agentxx::events::Topic::Error)) {
+    if (false == bus.hasSubscribers<agentxx::events::EventError>(agentxx::events::Topic::Error)) {
         return;
     }
     asio::co_spawn(

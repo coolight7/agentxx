@@ -3,6 +3,7 @@
 #include "agentxx-client/io/tui/framework/tui_settings.h"
 #include "agentxx-client/io/tui/mermaid_state.h"
 #include "agentxx/util/exception.h"
+#include "ftxui/component/component.hpp"
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/terminal.hpp"
 #include <algorithm>
@@ -517,7 +518,8 @@ std::vector<ScrollItem> PlanDiagramOverlay::buildItems() {
     const TUIMessage* plan = nullptr;
     for (size_t i = st.messages.size(); i > 0; --i) {
         const auto& m = *st.messages[i - 1];
-        if (m.role == TUIMessage::Role::Tool && m.toolName == "agentxx_planning_write") {
+        if (m.role == TUIMessage::Role::Tool && m.tool
+            && m.tool->toolName == "agentxx_planning_write") {
             plan = st.messages[i - 1].get();
             break;
         }

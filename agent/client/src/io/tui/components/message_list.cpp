@@ -232,6 +232,10 @@ Element MessageListComponent::OnRender() {
         }
     }
 
+    // 中断控件命中区域: 清空后由本帧 scrollable_->Render() 中构建可见
+    // Interrupt 消息时填充 (buildInterruptControl), 供下一帧点击命中检测
+    interruptHits_.clear();
+
     return hbox({
                text("   "),
                scrollable_->Render() | bold | flex,
@@ -241,14 +245,23 @@ Element MessageListComponent::OnRender() {
 }
 
 bool MessageListComponent::OnEvent(Event event) {
-    if (!event.is_mouse()) {
-        return false;
+    if (event.is_mouse()) {
+        const auto& mouse = event.mouse();
+        if (handleCollapsibleClick(mouse)) {
+            return true;
+        }
+        if (handleInterruptClick(mouse)) {
+            return true;
+        }
+        return scrollable_->OnEvent(event);
     }
-    const auto& mouse = event.mouse();
-    if (handleCollapsibleClick(mouse)) {
-        return true;
+    // 键盘: 优先作用于当前激活的中断消息 (输入框编辑/选中切换/确认/取消)
+    if (activeInterruptMsg_ != static_cast<size_t>(-1)) {
+        if (handleInterruptKey(event)) {
+            return true;
+        }
     }
-    return scrollable_->OnEvent(event);
+    return false;
 }
 
 bool MessageListComponent::handleCollapsibleClick(const Mouse& mouse) {
@@ -314,12 +327,29 @@ uint64_t MessageListComponent::itemKey(size_t index) {
         const auto& m = *st.messages[index];
         h             = combine(h, static_cast<uint64_t>(m.role));
         h             = combine(h, m.collapsed);
-        h             = combine(h, m.toolFinished);
+        h             = combine(h, m.tool ? m.tool->toolFinished : false);
         h             = combine(h, static_cast<uint64_t>(m.durationMs));
         h             = combine(h, static_cast<uint64_t>(m.startTimeMs));
         h             = combine(h, m.text.size());
-        h             = combine(h, m.toolResult.size());
-        h             = combine(h, m.toolName.size());
+        h             = combine(h, m.tool ? m.tool->toolResult.size() : size_t{0});
+        h             = combine(h, m.tool ? m.tool->toolName.size() : size_t{0});
+        // 中断消息: 状态变化经 mutableMessage 复制 (指针已变), 此处附加
+        // 结构特征进一步防 ABA
+        h             = combine(h, static_cast<uint64_t>(
+            m.interrupt ? m.interrupt->interruptStatus : TUIMessage::InterruptStatus::Waiting
+        ));
+        h             = combine(h, m.interrupt ? static_cast<uint64_t>(m.interrupt->inputIndex)
+                                               : uint64_t{0});
+        h             = combine(h, m.interrupt ? m.interrupt->interruptResult.size() : size_t{0});
+        // 中断 UI 状态 (编辑文本/选中项/提示) 变化经 version 递增反映到 key,
+        // 触发高度重估 (tip 增删影响估算行数)
+        if (m.role == TUIMessage::Role::Interrupt) {
+            InterruptKey key;
+            if (interruptKeyOf(m, key)) {
+                auto it = interruptUi_.find(key);
+                h       = combine(h, it != interruptUi_.end() ? it->second.version : 0);
+            }
+        }
         return h;
     }
     // 流式增量项: token 累积中, 以 (指针, 长度, role) 作为 key 触发高度重估
@@ -353,8 +383,32 @@ int MessageListComponent::estimateHeight(size_t index, int width) {
                 if (!msg.text.empty()) {
                     lines += estimateLines(msg.text, width);
                 }
-                lines += msg.toolFinished ? estimateLines(msg.toolResult, width) : 1;
+                const bool finished = msg.tool && msg.tool->toolFinished;
+                lines += finished ? estimateLines(msg.tool->toolResult, width) : 1;
                 return lines;
+            }
+            case TUIMessage::Role::Interrupt: {
+                // 粗略估算 (进入视口后实测修正): 头行 + label + depict +
+                // 控件区 + 提示/状态行 + 尾部空行
+                // (编辑文本/选中项高度恒定, 不参与估算)
+                const bool waiting = msg.interrupt
+                    && msg.interrupt->interruptStatus == TUIMessage::InterruptStatus::Waiting;
+                if (waiting) {
+                    int  lines = 4;
+                    auto type  = msg.interrupt->inputType;
+                    if (type == "enum") {
+                        lines += std::min(msg.interrupt->inputEnums.size(), size_t{5});
+                    }
+                    InterruptKey key;
+                    if (interruptKeyOf(msg, key)) {
+                        auto it = interruptUi_.find(key);
+                        if (it != interruptUi_.end() && !it->second.tip.empty()) {
+                            ++lines;
+                        }
+                    }
+                    return lines;
+                }
+                return 2;
             }
         }
         return 1;
@@ -377,7 +431,7 @@ LazyBuiltItem MessageListComponent::buildItem(size_t index) {
         return out;
     }
     if (index < st.messages.size()) {
-        return buildMessageItem(*st.messages[index]);
+        return buildMessageItem(*st.messages[index], index);
     }
     return buildStreamingItem(st);
 }
@@ -401,16 +455,19 @@ Element MessageListComponent::buildBanner() {
     });
 }
 
-LazyBuiltItem MessageListComponent::buildMessageItem(const TUIMessage& msg) {
+LazyBuiltItem MessageListComponent::buildMessageItem(const TUIMessage& msg, size_t index) {
     const int maxWidth = std::max(1, scrollable_->contentWidth());
 
     std::vector<std::unique_ptr<markdown::DomBuilder>> builders;
-    auto block = buildMessageBlock(msg, maxWidth, builders);
+    auto block = buildMessageBlock(msg, index, maxWidth, builders);
 
     LazyBuiltItem out;
-    out.element     = vbox({std::move(block), text("")});
-    out.sourceBytes = msg.text.size() + msg.toolResult.size() + msg.toolName.size();
-    out.cacheable   = true;
+    out.element = vbox({std::move(block), text("")});
+    out.sourceBytes = msg.text.size() + (msg.tool ? msg.tool->toolResult.size() : 0)
+                      + (msg.tool ? msg.tool->toolName.size() : 0);
+    // 中断消息不缓存: 每帧重建以刷新控件 reflect 命中区域 (interruptHits_),
+    // 否则缓存命中时控件 Box 丢失, 点击无法命中; 中断消息数量少, 成本可忽略
+    out.cacheable   = (msg.role != TUIMessage::Role::Interrupt);
     // markdown DomBuilder 生命周期与 Element 绑定
     // (Element 内 reflect 的链接 Box 指向 builder 内部容器)
     for (auto& b : builders) {
@@ -490,6 +547,7 @@ LazyBuiltItem MessageListComponent::buildStreamingItem(const TUIRenderState& st)
 
 Element MessageListComponent::buildMessageBlock(
     const TUIMessage&                                   msg,
+    size_t                                              msgIndex,
     int                                                 maxWidth,
     std::vector<std::unique_ptr<markdown::DomBuilder>>& mdBuilders
 ) {
@@ -517,7 +575,9 @@ Element MessageListComponent::buildMessageBlock(
             // 按提示级别区分前缀与颜色 (Info/Warning/Error)
             std::string  prefix   = "# ";
             ftxui::Color tipColor = theme.systemColor;
-            switch (msg.tipLevel) {
+            const auto   tipLevel = msg.system ? msg.system->tipLevel
+                                                : TUIMessage::TipLevel::Info;
+            switch (tipLevel) {
                 case TUIMessage::TipLevel::Warning:
                     prefix   = "# [Warn] ";
                     tipColor = theme.thinkingColor;
@@ -565,22 +625,28 @@ Element MessageListComponent::buildMessageBlock(
             return vbox(std::move(lines));
         }
         case TUIMessage::Role::Tool: {
-            const bool expanded   = !msg.collapsed;
-            const bool isEditTool = (msg.toolName == "agentxx_filesystem_edit_text_file");
+            // 防御: 类型不变量下 tool 应非空 (fromJson/构造均保证), 缺失时跳过渲染
+            if (!msg.tool) {
+                return text("");
+            }
+            const bool expanded = !msg.collapsed;
+            const bool isEditTool
+                = msg.tool && msg.tool->toolName == "agentxx_filesystem_edit_text_file";
+            const bool finished = msg.tool && msg.tool->toolFinished;
             Elements   lines;
             Elements   header;
             header.push_back(
-                text(fmt::format("{} [Tool] {} ", expanded ? "-" : "+", msg.toolName))
+                text(fmt::format("{} [Tool] {} ", expanded ? "-" : "+", msg.tool->toolName))
                 | color(theme.toolColor)
             );
             if (!expanded) {
-                if (!msg.toolFinished) {
+                if (!finished) {
                     header.push_back(text("running...") | color(theme.toolColor));
                 } else if (isEditTool) {
                     appendEditToolHeader(msg, header);
                 } else {
                     header.push_back(
-                        text(oneLinePreview(msg.toolResult)) | color(theme.toolColor) | dim
+                        text(oneLinePreview(msg.tool->toolResult)) | color(theme.toolColor) | dim
                     );
                 }
             }
@@ -595,16 +661,63 @@ Element MessageListComponent::buildMessageBlock(
                             paragraph(msg.text) | color(theme.toolColor),
                         }));
                     }
-                    if (msg.toolFinished) {
+                    if (finished) {
                         lines.push_back(hbox({
                             text("  result: ") | color(theme.toolColor),
-                            paragraph(msg.toolResult) | color(theme.toolColor),
+                            paragraph(msg.tool->toolResult) | color(theme.toolColor),
                         }));
                     } else {
                         lines.push_back(text("  running...") | color(theme.toolColor));
                     }
                 }
             }
+            return vbox(std::move(lines));
+        }
+        case TUIMessage::Role::Interrupt: {
+            // 中断输入消息: 内嵌交互控件, 直接渲染在消息列表中
+            Elements lines;
+
+            const bool waiting = msg.interrupt
+                && msg.interrupt->interruptStatus == TUIMessage::InterruptStatus::Waiting;
+            if (waiting) {
+                // 头行: 类型 + 进度
+                Elements header;
+                header.push_back(
+                    text(fmt::format(
+                        "[Interrupt] Input {}/{}: ",
+                        msg.interrupt->inputIndex,
+                        msg.interrupt->inputTotal
+                    ))
+                    | color(theme.accentColor) | bold
+                );
+                header.push_back(text(msg.interrupt->inputLabel) | color(theme.accentColor));
+                lines.push_back(hbox(std::move(header)));
+
+                if (!msg.interrupt->inputDepict.empty()) {
+                    lines.push_back(hbox({
+                        text("  ") | color(theme.hintColor),
+                        text(msg.interrupt->inputDepict) | color(theme.hintColor),
+                    }));
+                }
+
+                lines.push_back(text(" "));
+                lines.push_back(buildInterruptControl(msg, msgIndex));
+
+                // 校验失败提示: 从 UI 状态表读取 (消息结构不承载 UI 状态)
+                InterruptKey key;
+                if (interruptKeyOf(msg, key)) {
+                    auto it = interruptUi_.find(key);
+                    if (it != interruptUi_.end() && !it->second.tip.empty()) {
+                        lines.push_back(hbox({
+                            text("  ") | color(theme.hintColor),
+                            text(it->second.tip) | color(theme.errorColor),
+                        }));
+                    }
+                }
+            } else {
+                lines.push_back(buildInterruptStatusLine(msg));
+            }
+
             return vbox(std::move(lines));
         }
     }
@@ -751,4 +864,635 @@ Element MessageListComponent::renderEditToolDiff(std::string_view oldStr, std::s
         separator(),
         vbox(std::move(rightLines)) | flex,
     });
+}
+
+// ---------------------------------------------------------------------------
+// 中断输入消息: 控件渲染 + 交互
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// double 步进后的显示格式: 整数值按 "1.0" 风格, 非整数保留有效精度
+std::string formatStepDouble(double v) {
+    if (v == std::floor(v) && std::abs(v) < 1e15) {
+        return fmt::format("{:.1f}", v);
+    }
+    return fmt::format("{:.10g}", v);
+}
+
+} // namespace
+
+Element MessageListComponent::buildInterruptStatusLine(const TUIMessage& msg) {
+    const auto& theme = *ctx_.theme;
+    if (!msg.interrupt) {
+        return text("");
+    }
+    const auto& it = *msg.interrupt;
+    switch (it.interruptStatus) {
+        case TUIMessage::InterruptStatus::Confirmed:
+            return hbox({
+                text(fmt::format("[Interrupt] Input {}/{}: ", it.inputIndex, it.inputTotal))
+                    | color(theme.hintColor) | dim,
+                text("✓ 已确认 ") | color(theme.accentColor) | bold,
+                text(fmt::format("{}: {}", it.inputLabel, it.interruptResult))
+                    | color(theme.accentColor),
+            });
+        case TUIMessage::InterruptStatus::Cancelled:
+            return hbox({
+                text(fmt::format("[Interrupt] Input {}/{}: ", it.inputIndex, it.inputTotal))
+                    | color(theme.hintColor) | dim,
+                text(fmt::format("✕ {}: 已取消", it.inputLabel)) | color(theme.hintColor) | dim,
+            });
+        case TUIMessage::InterruptStatus::Expired:
+            return hbox({
+                text(fmt::format("[Interrupt] Input {}/{}: ", it.inputIndex, it.inputTotal))
+                    | color(theme.hintColor) | dim,
+                text(fmt::format("⌛ {}: 已过期", it.inputLabel)) | color(theme.hintColor) | dim,
+            });
+        default:
+            return text("");
+    }
+}
+
+Element MessageListComponent::buildInterruptControl(const TUIMessage& msg, size_t msgIndex) {
+    const auto& theme = *ctx_.theme;
+    if (!msg.interrupt) {
+        return text("");
+    }
+    // UI 状态 (编辑文本/选中项): 惰性创建并读取 (渲染是 UI 线程独占路径)
+    const auto& ui = uiStateFor(msg);
+    const auto& id = *msg.interrupt;
+
+    // 记录命中区域: box 经 shared_ptr 持有, reflect 在布局 (SetBox) 时写回,
+    // 点击检测读到的是最新布局位置 (构建阶段记录值会拿到空 Box)
+    auto hit = [this, msgIndex](uint8_t kind, int sub, const std::shared_ptr<Box>& box) {
+        InterruptHitBox hb;
+        hb.msgIndex = msgIndex;
+        hb.kind     = kind;
+        hb.sub      = sub;
+        hb.box      = box;
+        interruptHits_.push_back(std::move(hb));
+    };
+    auto mkBox = []() {
+        return std::make_shared<Box>();
+    };
+
+    // 按钮样式
+    auto btn = [&theme](std::string label, bool active) {
+        if (active) {
+            return text(label) | bgcolor(theme.buttonActiveBgColor)
+                   | color(theme.buttonActiveTextColor) | bold;
+        }
+        return text(label) | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor);
+    };
+
+    // 确认 / 取消按钮 (共用)
+    auto confirmBox = mkBox();
+    auto cancelBox  = mkBox();
+    auto confirmBtn = btn(" [确认] ", false) | reflect(*confirmBox);
+    auto cancelBtn  = text(" ✕ ") | color(theme.errorColor) | reflect(*cancelBox);
+    hit(kHitConfirm, 0, confirmBox);
+    hit(kHitCancel, 0, cancelBox);
+
+    Element control;
+    if (id.inputType == "bool") {
+        auto yesBox = mkBox();
+        auto noBox  = mkBox();
+        auto yes    = btn(" 是 ", ui.selected == 0) | reflect(*yesBox);
+        auto no     = btn(" 否 ", ui.selected == 1) | reflect(*noBox);
+        hit(kHitBoolYes, 0, yesBox);
+        hit(kHitBoolNo, 0, noBox);
+        control = hbox({
+            yes,
+            text(" "),
+            no,
+            text("  "),
+            confirmBtn,
+            text("  "),
+            cancelBtn,
+        });
+    } else if (id.inputType == "int" || id.inputType == "double") {
+        auto minusBox = mkBox();
+        auto plusBox  = mkBox();
+        auto editBox  = mkBox();
+        auto minus    = btn(" - ", false) | reflect(*minusBox);
+        auto plus     = btn(" + ", false) | reflect(*plusBox);
+        hit(kHitNumMinus, 0, minusBox);
+        hit(kHitNumPlus, 0, plusBox);
+        hit(kHitEdit, 0, editBox);
+        control = hbox({
+            minus,
+            text(" "),
+            text(" " + ui.editText + " ") | bgcolor(theme.inputBgColor)
+                | color(theme.inputTextColor) | reflect(*editBox),
+            text(" "),
+            plus,
+            text("  "),
+            confirmBtn,
+            text("  "),
+            cancelBtn,
+        });
+    } else if (id.inputType == "enum") {
+        // 枚举项竖直列表 (选中项高亮)
+        enumBoxes_.resize(id.inputEnums.size());
+        Elements items;
+        for (size_t i = 0; i < id.inputEnums.size(); ++i) {
+            if (!enumBoxes_[i]) {
+                enumBoxes_[i] = mkBox();
+            }
+            auto entry = text(fmt::format(
+                " {} {}",
+                (static_cast<int>(i) == ui.selected) ? "▸" : " ",
+                id.inputEnums[i]
+            ));
+            if (static_cast<int>(i) == ui.selected) {
+                entry = entry | bgcolor(theme.buttonActiveBgColor)
+                        | color(theme.buttonActiveTextColor) | bold;
+            } else {
+                entry = entry | color(theme.buttonTextColor);
+            }
+            entry = entry | reflect(*enumBoxes_[i]);
+            hit(kHitEnumItem, static_cast<int>(i), enumBoxes_[i]);
+            items.push_back(entry);
+        }
+        // 底部操作行: 确认 + 取消
+        control = vbox({
+            vbox(std::move(items)),
+            text(" "),
+            hbox({
+                confirmBtn,
+                text("  "),
+                cancelBtn,
+            }),
+        });
+    } else { // string
+        auto editBox = mkBox();
+        hit(kHitEdit, 0, editBox);
+        control = hbox({
+            text(" " + ui.editText + " ") | bgcolor(theme.inputBgColor)
+                | color(theme.inputTextColor) | reflect(*editBox),
+            text("  "),
+            confirmBtn,
+            text("  "),
+            cancelBtn,
+        });
+    }
+    return control;
+}
+
+// ---------------------------------------------------------------------------
+// 中断 UI 状态表 (UI 线程独占; key = (interruptId, inputIndex))
+// ---------------------------------------------------------------------------
+
+void MessageListComponent::attachInterruptChannel(
+    int64_t                                     wireId,
+    std::shared_ptr<InterruptResultChannel> ch
+) {
+    interruptChannels_[wireId] = std::move(ch);
+}
+
+void MessageListComponent::releaseInterruptChannel(int64_t wireId) {
+    interruptChannels_.erase(wireId);
+    for (auto it = interruptUi_.begin(); it != interruptUi_.end();) {
+        if (it->first.id == wireId) {
+            it = interruptUi_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+void MessageListComponent::clearInterruptUiState() {
+    interruptUi_.clear();
+    interruptChannels_.clear();
+}
+
+bool MessageListComponent::interruptKeyOf(const TUIMessage& msg, InterruptKey& out) {
+    if (msg.role != TUIMessage::Role::Interrupt || !msg.interrupt) {
+        return false;
+    }
+    out.id    = msg.interrupt->interruptId;
+    out.index = msg.interrupt->inputIndex;
+    return true;
+}
+
+MessageListComponent::InterruptUIState& MessageListComponent::uiStateFor(const TUIMessage& msg) {
+    InterruptKey key;
+    if (!interruptKeyOf(msg, key)) {
+        // 非中断消息不应请求 UI 状态; 返回静态兜底条目 (调用方按角色分支, 不会走到)
+        static InterruptUIState fallback;
+        return fallback;
+    }
+    auto [it, inserted] = interruptUi_.try_emplace(key);
+    if (inserted) {
+        // 惰性初始化: 编辑文本 = 默认值 (数值无默认时 "0"/"0.0"), string 无默认为空;
+        // 选中项 = bool 按默认值 (false/no/n → "否"), enum 按默认值匹配 (无匹配首项)
+        const auto& id = *msg.interrupt;
+        auto&       ui = it->second;
+        ui.editText    = id.inputDefault;
+        if ((id.inputType == "int" || id.inputType == "double") && id.inputDefault.empty()) {
+            ui.editText = (id.inputType == "double") ? "0.0" : "0";
+        }
+        if (id.inputType == "bool") {
+            std::string def = id.inputDefault;
+            agentxx::util::toLowerSelf(def);
+            ui.selected = (def == "false" || def == "no" || def == "n") ? 1 : 0;
+        } else if (id.inputType == "enum") {
+            for (size_t i = 0; i < id.inputEnums.size(); ++i) {
+                if (id.inputEnums[i] == id.inputDefault) {
+                    ui.selected = static_cast<int>(i);
+                    break;
+                }
+            }
+        }
+    }
+    return it->second;
+}
+
+MessageListComponent::InterruptUIState&
+    MessageListComponent::mutateInterruptUiState(const TUIMessage& msg) {
+    auto& ui = uiStateFor(msg);
+    ++ui.version; // 驱动 itemKey 变化 → 懒列表缓存失效 (高度/滚动重估)
+    return ui;
+}
+
+MessageListComponent::InterruptUIState MessageListComponent::interruptUiState(size_t msgIndex) const {
+    const auto& st = *ctx_.frameState;
+    if (msgIndex >= st.messages.size()) {
+        return {};
+    }
+    const auto& msg = *st.messages[msgIndex];
+    InterruptKey key;
+    if (!interruptKeyOf(msg, key)) {
+        return {};
+    }
+    auto it = interruptUi_.find(key);
+    return it == interruptUi_.end() ? InterruptUIState{} : it->second;
+}
+
+// ---------------------------------------------------------------------------
+// 中断输入消息交互
+// ---------------------------------------------------------------------------
+
+bool MessageListComponent::handleInterruptClick(const Mouse& mouse) {
+    if (mouse.button != Mouse::Left || mouse.motion != Mouse::Released) {
+        return false;
+    }
+    if (areaBox_.x_max < areaBox_.x_min) {
+        return false; // 尚未布局
+    }
+    if (mouse.x < areaBox_.x_min || mouse.x > areaBox_.x_max) {
+        return false;
+    }
+    // 命中检测: 后渲染的控件优先 (enum 项与底部按钮同帧注册, 无重叠; 直接顺序查找)
+    for (const auto& h : interruptHits_) {
+        if (!h.box) {
+            continue;
+        }
+        const auto& box = *h.box;
+        if (mouse.y < box.y_min || mouse.y > box.y_max || mouse.x < box.x_min
+            || mouse.x > box.x_max) {
+            continue;
+        }
+        switch (h.kind) {
+            case kHitBoolYes:
+                // 点击是/否直接确认 (先设置选中, 再确认)
+                ctx_.state->mutate([&](TUIRenderState& st) {
+                    if (h.msgIndex < st.messages.size()) {
+                        auto& ui = mutateInterruptUiState(*st.messages[h.msgIndex]);
+                        ui.selected = 0;
+                        ui.tip.clear();
+                    }
+                });
+                setInterruptActive(h.msgIndex);
+                confirmInterrupt(h.msgIndex);
+                return true;
+            case kHitBoolNo:
+                ctx_.state->mutate([&](TUIRenderState& st) {
+                    if (h.msgIndex < st.messages.size()) {
+                        auto& ui = mutateInterruptUiState(*st.messages[h.msgIndex]);
+                        ui.selected = 1;
+                        ui.tip.clear();
+                    }
+                });
+                setInterruptActive(h.msgIndex);
+                confirmInterrupt(h.msgIndex);
+                return true;
+            case kHitNumMinus:
+                setInterruptActive(h.msgIndex);
+                stepInterrupt(h.msgIndex, -1.0);
+                return true;
+            case kHitNumPlus:
+                setInterruptActive(h.msgIndex);
+                stepInterrupt(h.msgIndex, 1.0);
+                return true;
+            case kHitEnumItem: {
+                // 选中枚举项
+                ctx_.state->mutate([&](TUIRenderState& st) {
+                    if (h.msgIndex >= st.messages.size()) {
+                        return;
+                    }
+                    auto& ui = mutateInterruptUiState(*st.messages[h.msgIndex]);
+                    ui.selected = h.sub;
+                    ui.tip.clear();
+                });
+                setInterruptActive(h.msgIndex);
+                ctx_.postRedraw();
+                return true;
+            }
+            case kHitEdit:
+                setInterruptActive(h.msgIndex);
+                return true;
+            case kHitConfirm:
+                setInterruptActive(h.msgIndex);
+                confirmInterrupt(h.msgIndex);
+                return true;
+            case kHitCancel:
+                cancelInterrupt(h.msgIndex);
+                return true;
+            default:
+                return false;
+        }
+    }
+    return false;
+}
+
+bool MessageListComponent::handleInterruptKey(Event event) {
+    const size_t mi = activeInterruptMsg_;
+
+    // 校验 active 消息仍存在且可交互
+    std::string type;
+    bool        valid = false;
+    ctx_.state->mutate([&](TUIRenderState& st) {
+        if (mi < st.messages.size()) {
+            const auto& m = *st.messages[mi];
+            if (m.role == TUIMessage::Role::Interrupt && m.interrupt
+                && m.interrupt->interruptStatus == TUIMessage::InterruptStatus::Waiting) {
+                valid = true;
+                type  = m.interrupt->inputType;
+            }
+        }
+    });
+    if (!valid) {
+        activeInterruptMsg_ = static_cast<size_t>(-1);
+        return false;
+    }
+
+    if (event == Event::Escape) {
+        // 退出编辑态 (不取消中断)
+        activeInterruptMsg_ = static_cast<size_t>(-1);
+        ctx_.postRedraw();
+        return true;
+    }
+    if (event == Event::Return) {
+        confirmInterrupt(mi);
+        return true;
+    }
+    if (type == "bool") {
+        if (event == Event::ArrowLeft || event == Event::ArrowRight) {
+            ctx_.state->mutate([&](TUIRenderState& st) {
+                if (mi < st.messages.size()) {
+                    auto& ui            = mutateInterruptUiState(*st.messages[mi]);
+                    ui.selected         = 1 - ui.selected;
+                }
+            });
+            ctx_.postRedraw();
+            return true;
+        }
+        return false;
+    }
+    if (type == "enum") {
+        int delta = 0;
+        if (event == Event::ArrowUp) {
+            delta = -1;
+        } else if (event == Event::ArrowDown) {
+            delta = 1;
+        }
+        if (delta != 0) {
+            ctx_.state->mutate([&](TUIRenderState& st) {
+                if (mi >= st.messages.size() || !st.messages[mi]->interrupt) {
+                    return;
+                }
+                auto& ui   = mutateInterruptUiState(*st.messages[mi]);
+                int   size = static_cast<int>(st.messages[mi]->interrupt->inputEnums.size());
+                ui.selected = std::clamp(ui.selected + delta, 0, size - 1);
+            });
+            ctx_.postRedraw();
+            return true;
+        }
+        return false;
+    }
+    if (type == "int" || type == "double") {
+        if (event == Event::ArrowUp) {
+            stepInterrupt(mi, 1.0);
+            return true;
+        }
+        if (event == Event::ArrowDown) {
+            stepInterrupt(mi, -1.0);
+            return true;
+        }
+    }
+    // 数值/string: 文本编辑
+    if (event.is_character() || event == Event::Backspace || event == Event::Delete
+        || event == Event::ArrowLeft || event == Event::ArrowRight) {
+        ctx_.state->mutate([&](TUIRenderState& st) {
+            if (mi >= st.messages.size()) {
+                return;
+            }
+            auto& ui = mutateInterruptUiState(*st.messages[mi]);
+            if (event.is_character()) {
+                if (!ui.edited) {
+                    // 首次输入替换默认值 (与输入框激活时保留默认值的语义一致)
+                    ui.editText.clear();
+                    ui.edited = true;
+                }
+                ui.editText += event.character();
+            } else if (event == Event::Backspace && !ui.editText.empty()) {
+                ui.editText.pop_back();
+                ui.edited = true;
+            } else if (event == Event::Delete && !ui.editText.empty()) {
+                // 简化: 与 Backspace 同义 (单行输入无光标定位)
+                ui.editText.pop_back();
+                ui.edited = true;
+            }
+            ui.tip.clear();
+        });
+        ctx_.postRedraw();
+        return true;
+    }
+    return false;
+}
+
+void MessageListComponent::setInterruptActive(size_t mi) {
+    activeInterruptMsg_ = mi;
+    // 数值/string: 激活时确保 UI 状态已初始化 (编辑文本 = 默认值);
+    // 首次编辑前 edited=false, 编辑后不再覆盖
+    ctx_.state->mutate([&](TUIRenderState& st) {
+        if (mi >= st.messages.size()) {
+            return;
+        }
+        uiStateFor(*st.messages[mi]); // 惰性创建 (初始化默认编辑文本/选中项)
+    });
+    ctx_.postRedraw();
+}
+
+void MessageListComponent::confirmInterrupt(size_t mi) {
+    std::string value;
+    bool        confirmed = false;
+    InterruptKey key; // 确认成功时记录 (mutate 内收集, 锁外发送结果)
+    ctx_.state->mutate([&](TUIRenderState& st) {
+        if (mi >= st.messages.size() || !st.messages[mi]->interrupt) {
+            return;
+        }
+        const auto& src = *st.messages[mi];
+        if (src.role != TUIMessage::Role::Interrupt
+            || src.interrupt->interruptStatus != TUIMessage::InterruptStatus::Waiting) {
+            return;
+        }
+        const std::string& type = src.interrupt->inputType;
+        auto&              ui   = uiStateFor(src);
+        if (type == "bool") {
+            value     = (ui.selected == 0) ? "true" : "false";
+            confirmed = true;
+        } else if (type == "enum") {
+            if (ui.selected >= 0
+                && ui.selected < static_cast<int>(src.interrupt->inputEnums.size())) {
+                value     = src.interrupt->inputEnums[static_cast<size_t>(ui.selected)];
+                confirmed = true;
+            }
+        } else if (type == "int" || type == "double") {
+            std::string errTip;
+            if (type == "int") {
+                int64_t num = 0;
+                auto    r   = agentxx::util::parseNumberFromString(ui.editText, num);
+                if (r.ec != std::errc{}) {
+                    errTip = "Invalid integer, please input again.";
+                }
+            } else {
+                double num = 0.0;
+                auto   r   = agentxx::util::parseNumberFromString(ui.editText, num);
+                if (r.ec != std::errc{}) {
+                    errTip = "Invalid number, please input again.";
+                }
+            }
+            if (!errTip.empty()) {
+                ui.tip = std::move(errTip);
+                ctx_.postRedraw();
+                return;
+            }
+            value     = ui.editText;
+            confirmed = true;
+        } else { // string
+            value     = ui.editText;
+            confirmed = true;
+        }
+        if (confirmed) {
+            // 先取 key (src 引用随后被 mutableMessage 替换失效)
+            interruptKeyOf(src, key);
+            // 确认结果写入消息 (跨线程共享的展示状态); UI 状态表保留编辑残留
+            auto& mm                      = ctx_.state->mutableMessage(st, mi);
+            mm.interrupt->interruptStatus = TUIMessage::InterruptStatus::Confirmed;
+            mm.interrupt->interruptResult = value;
+        }
+    });
+    if (confirmed) {
+        // 发送结果到 client 线程 (channel 线程安全):
+        // 通道从 interruptChannels_ 取最新 (同请求共享, 经 attachInterruptChannel 注入)
+        auto chIt = interruptChannels_.find(key.id);
+        if (chIt != interruptChannels_.end() && chIt->second) {
+            chIt->second->async_send(
+                neograph_asio_error_code{},
+                key.index,
+                std::optional<std::string>(value),
+                [](neograph_asio_error_code) {}
+            );
+        }
+        ctx_.postRedraw();
+    }
+}
+
+void MessageListComponent::cancelInterrupt(size_t mi) {
+    int64_t id = 0;
+    InterruptKey key; // mutate 内收集, 锁外发送整体取消
+    ctx_.state->mutate([&](TUIRenderState& st) {
+        if (mi >= st.messages.size() || !st.messages[mi]->interrupt) {
+            return;
+        }
+        id = st.messages[mi]->interrupt->interruptId;
+        interruptKeyOf(*st.messages[mi], key);
+        // 标记同请求所有未操作消息为 Cancelled
+        for (size_t i = 0; i < st.messages.size(); ++i) {
+            const auto& m = *st.messages[i];
+            if (m.role == TUIMessage::Role::Interrupt && m.interrupt
+                && m.interrupt->interruptId == id
+                && m.interrupt->interruptStatus == TUIMessage::InterruptStatus::Waiting) {
+                auto& mm                      = ctx_.state->mutableMessage(st, i);
+                mm.interrupt->interruptStatus = TUIMessage::InterruptStatus::Cancelled;
+            }
+        }
+        // 清理同请求的 UI 状态 (消息已固定状态, 编辑残留不再需要)
+        for (auto it = interruptUi_.begin(); it != interruptUi_.end();) {
+            if (it->first.id == id) {
+                it = interruptUi_.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    });
+    // 整体取消: inputIndex = -1, value = nullopt (经同请求共享通道发送)
+    auto chIt = interruptChannels_.find(id);
+    if (chIt != interruptChannels_.end() && chIt->second) {
+        chIt->second->async_send(
+            neograph_asio_error_code{},
+            -1,
+            std::optional<std::string>(),
+            [](neograph_asio_error_code) {}
+        );
+    }
+    activeInterruptMsg_ = static_cast<size_t>(-1);
+    ctx_.postRedraw();
+}
+
+void MessageListComponent::stepInterrupt(size_t mi, double delta) {
+    ctx_.state->mutate([&](TUIRenderState& st) {
+        if (mi >= st.messages.size() || !st.messages[mi]->interrupt) {
+            return;
+        }
+        const auto& src = *st.messages[mi];
+        if (src.role != TUIMessage::Role::Interrupt
+            || src.interrupt->interruptStatus != TUIMessage::InterruptStatus::Waiting) {
+            return;
+        }
+        const std::string& type = src.interrupt->inputType;
+        if (type != "int" && type != "double") {
+            return;
+        }
+        auto& ui = uiStateFor(src);
+        double val = 0.0;
+        if (type == "int") {
+            int64_t num = 0;
+            auto    r   = agentxx::util::parseNumberFromString(ui.editText, num);
+            if (r.ec != std::errc{}) {
+                return; // 编辑值非法时步进无效
+            }
+            val = static_cast<double>(num);
+        } else {
+            double num = 0.0;
+            auto   r   = agentxx::util::parseNumberFromString(ui.editText, num);
+            if (r.ec != std::errc{}) {
+                return;
+            }
+            val = num;
+        }
+        val += delta;
+        // 注意: src 为快照引用, 修改 UI 状态表不改变消息, 引用保持有效
+        if (type == "int") {
+            ui.editText = fmt::format("{}", static_cast<int64_t>(val));
+        } else {
+            ui.editText = formatStepDouble(val);
+        }
+        ui.edited = true;
+        ui.tip.clear();
+    });
+    ctx_.postRedraw();
 }
