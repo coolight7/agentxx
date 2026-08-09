@@ -418,6 +418,8 @@ std::string WsAgentIOTransport::serialize(const WireMessage& msg) {
                     .dump();
             } else if constexpr (std::is_same_v<T, WireInterruptResponse>) {
                 return io::makeInterruptResponse(m.id, m.result).dump();
+            } else if constexpr (std::is_same_v<T, WireInterruptExpired>) {
+                return io::makeInterruptExpired(m.id, m.threadId).dump();
             } else if constexpr (std::is_same_v<T, Delta>) {
                 return io::makeDeltaMsg(m).dump();
             } else if constexpr (std::is_same_v<T, SyncPayload>) {
@@ -499,6 +501,11 @@ std::optional<WireMessage> WsAgentIOTransport::deserialize(std::string_view json
         resp.id     = j.value("id", int64_t{0});
         resp.result = j.value("result", neograph::json{});
         return WireMessage{std::move(resp)};
+    } else if (t == io::MsgType::InterruptExpired) {
+        WireInterruptExpired expired;
+        expired.id       = j.value("id", int64_t{0});
+        expired.threadId = j.value("thread", std::string{});
+        return WireMessage{std::move(expired)};
     } else if (t == io::MsgType::TurnResult) {
         WireTurnResult r;
         r.threadId     = j.value("thread", std::string{});

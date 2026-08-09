@@ -100,9 +100,11 @@ asio::awaitable<neograph::json> SessionServerAgentIO::handleInterrupt(
     });
 
     neograph::json result = neograph::json::array();
+    bool           gotResponse = false;
     co_await agentxx::util::catchErrorAsync<bool>(
         [&]() -> asio::awaitable<bool> {
-            result = co_await ch->async_receive(asio::cancel_after(timeout, asio::use_awaitable));
+            result      = co_await ch->async_receive(asio::cancel_after(timeout, asio::use_awaitable));
+            gotResponse = true;
             co_return true;
         },
         [&](std::string errmsg) -> asio::awaitable<bool> {
@@ -111,6 +113,13 @@ asio::awaitable<neograph::json> SessionServerAgentIO::handleInterrupt(
         }
     );
     pending_.erase(id);
+    if (!gotResponse) {
+        // 超时/异常结束 (用户未响应): 通知客户端该中断已过期,
+        // 使客户端将对应未操作的中断消息标记为过期并结束等待
+        if (transport_ && transport_->alive()) {
+            sendToPeer(WireInterruptExpired{id, config_.threadId});
+        }
+    }
     co_return result;
 }
 
@@ -452,6 +461,11 @@ void SessionServerAgentIO::cancelGraceTimer() {
 
 void SessionServerAgentIO::failAllPending() {
     for (auto& [id, p] : pending_) {
+        // 通知客户端该中断已过期 (停止/断线宽限期满/会话取消), 使客户端
+        // 将对应未操作的中断消息标记为过期并结束等待
+        if (transport_ && transport_->alive()) {
+            sendToPeer(WireInterruptExpired{id, config_.threadId});
+        }
         p.ch->close();
     }
     pending_.clear();

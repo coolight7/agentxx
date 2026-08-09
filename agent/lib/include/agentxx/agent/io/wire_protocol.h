@@ -30,6 +30,8 @@ struct MsgType {
     inline static constexpr std::string_view DeltaMsg            = "delta";
     inline static constexpr std::string_view SyncMsg             = "sync";
     inline static constexpr std::string_view InterruptRequest    = "interrupt_request";
+    /// 服务端通知中断已过期 (超时/会话取消): 客户端应将对应未操作的中断消息标记为过期
+    inline static constexpr std::string_view InterruptExpired    = "interrupt_expired";
     inline static constexpr std::string_view TurnResult          = "turn_result";
     inline static constexpr std::string_view ContextStats        = "context_stats";
     inline static constexpr std::string_view ErrorMsg            = "error";
@@ -212,11 +214,8 @@ inline neograph::json syncToJson(const SyncPayload& p) {
     j["from_index"]    = p.fromIndex;
     j["tail_hash"]     = p.tailHash;
     neograph::json arr = neograph::json::array();
-    for (const auto& hm : p.messages) {
-        arr.push_back(neograph::json{
-            {"id",   hm.id  },
-            {"data", hm.data}
-        });
+    for (const auto& vm : p.messages) {
+        arr.push_back(vm.toJson());
     }
     j["messages"] = std::move(arr);
     return j;
@@ -232,10 +231,7 @@ inline std::optional<SyncPayload> syncFromJson(const neograph::json& j) {
     auto msgs   = j.value("messages", neograph::json::array());
     if (msgs.is_array()) {
         for (const auto& m : msgs) {
-            HistoryMessage hm;
-            hm.id   = m.value("id", std::string{});
-            hm.data = m.value("data", neograph::json{});
-            p.messages.push_back(std::move(hm));
+            p.messages.push_back(ViewMessage::fromJson(m));
         }
     }
     return p;
@@ -372,6 +368,15 @@ inline neograph::json makeInterruptRequest(
         {"node",     node                     },
         {"value",    value                    },
         {"arg_json", argJson                  },
+    };
+}
+
+/// 服务端通知中断已过期 (超时/取消): 对应 WireInterruptRequest 的 id
+inline neograph::json makeInterruptExpired(int64_t id, std::string_view threadId) {
+    return neograph::json{
+        {"type",   MsgType::InterruptExpired},
+        {"id",     id                       },
+        {"thread", threadId                 },
     };
 }
 
