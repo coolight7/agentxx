@@ -268,7 +268,9 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
 ftxui::Element TUIClientAgentIO::renderInfoSidebarFooter() {
     Elements elements;
 
-    std::string cwd = agentxx::util::catchError<std::string>(
+    // 工作目录在进程运行期间固定: 首次调用时计算并缓存到静态变量,
+    // 避免 Info tab 常驻时每帧执行 current_path() 系统调用
+    static const std::string kCwd = agentxx::util::catchError<std::string>(
         []() -> std::string {
             return std::filesystem::current_path().string();
         },
@@ -276,7 +278,7 @@ ftxui::Element TUIClientAgentIO::renderInfoSidebarFooter() {
             return "[Unknown Work Dir]";
         }
     );
-    elements.push_back(text(cwd) | color(theme_.hintColor));
+    elements.push_back(text(kCwd) | color(theme_.hintColor));
 
     std::string mode = remoteUrl_.empty() ? "Inner Server" : remoteUrl_;
     elements.push_back(

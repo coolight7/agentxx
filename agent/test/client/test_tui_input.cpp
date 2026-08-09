@@ -100,15 +100,19 @@ void test_paste_crlf_dedup() {
     InputFixture f;
     auto         comp = f.makeComponent();
 
-    // 终端粘贴 CRLF: \r 与 \n 分别解析为两个 Return, 应去重为单个 '\n'
+    // 粘贴内容中的空行 (\n\n) 必须原样保留。
+    // 背景: FTXUI 解析层已把 \r 归一化为 \n, 事件层面无法区分
+    // "CRLF 的第二个 \n" 与 "粘贴内容中真实的空行" —— 去重会吞掉空行
+    // (如代码块中的空行), 代价大于个别 Windows 终端 (CRLF 粘贴) 多出的空行,
+    // 故不做去重, 全部换行原样保留。
     comp->OnEvent(ftxui::Event::Special("\x1B[200~"));
     comp->OnEvent(ftxui::Event::Character('a'));
-    comp->OnEvent(ftxui::Event::Return); // \r
-    comp->OnEvent(ftxui::Event::Return); // \n (CRLF 的 LF 部分)
+    comp->OnEvent(ftxui::Event::Return); // 行尾换行
+    comp->OnEvent(ftxui::Event::Return); // 空行 (原 CRLF 去重场景, 现保留)
     comp->OnEvent(ftxui::Event::Character('b'));
     comp->OnEvent(ftxui::Event::Special("\x1B[201~"));
 
-    XX_TEST_EXPECT_EQ(comp->inputText(), std::string("a\nb"));
+    XX_TEST_EXPECT_EQ(comp->inputText(), std::string("a\n\nb"));
     XX_TEST_EXPECT_FALSE(f.sent);
 }
 
