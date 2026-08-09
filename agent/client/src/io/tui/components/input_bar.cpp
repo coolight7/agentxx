@@ -94,11 +94,11 @@ bool InputComponent::OnEvent(Event event) {
             pasteBuffer_.clear();
             return true;
         } else {
-            // 累积粘贴内容; 终端粘贴的 CRLF (\r\n) 会解析为两个 Return,
-            // 去重保留单个 '\n'
-            if (event == Event::Return && !pasteBuffer_.empty() && pasteBuffer_.back() == '\n') {
-                return true;
-            }
+            // 累积粘贴内容, 原样保留每个换行。
+            // 注意: 不做 CRLF 去重 —— FTXUI 解析层已把 \r 归一化为 \n,
+            // 事件层面无法区分 "CRLF 的 \n" 与 "粘贴内容中真实的空行",
+            // 去重会吞掉空行 (如代码块中的空行), 代价大于个别 Windows
+            // 终端 (CRLF 粘贴) 多出的空行。
             pasteBuffer_        += event.input();
             lastPasteEventTime_  = now;
             return true;
