@@ -134,6 +134,7 @@ std::optional<ftxui::Element> TUIClientAgentIO::renderPlanningInfo() {
     if (!plan->toolFinished) {
         title.push_back(text(" Planning...") | color(theme_.hintColor));
     } else if (!roadmap.empty()) {
+        title.push_back(text(" "));
         title.push_back(
             text(" Graph ") | bgcolor(theme_.buttonBgColor) | color(theme_.buttonTextColor)
             | reflect(planDiagramButtonBox_)

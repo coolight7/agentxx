@@ -146,10 +146,8 @@ Element SettingsOverlay::OnRender() {
     // 动画等级 (Enter/点击循环切换; 组件经 TUISettings::isAnimationEnabled() 判断启用)
     items.push_back(text(" "));
     items.push_back(text(" Animation ") | color(theme.hintColor));
-    auto animEntry = text(fmt::format(
-        " Animation Level: {} ",
-        TUISettings::instance().animationLevelName()
-    ));
+    auto animEntry
+        = text(fmt::format(" Animation Level: {} ", TUISettings::instance().animationLevelName()));
     if (selectedIndex_ == 3) {
         animEntry = animEntry | bgcolor(theme.buttonActiveBgColor)
                     | color(theme.buttonActiveTextColor) | bold | focus;
@@ -257,8 +255,8 @@ bool SettingsOverlay::handleMouse(const Mouse& mouse) {
 }
 
 void SettingsOverlay::cycleAnimationLevel() {
-    auto& settings = TUISettings::instance();
-    const int next = (static_cast<int>(settings.animationLevel()) + 1)
+    auto&     settings = TUISettings::instance();
+    const int next     = (static_cast<int>(settings.animationLevel()) + 1)
                      % static_cast<int>(TUISettings::kAnimationLevelNames.size());
     settings.setAnimationLevel(static_cast<AnimationLevel>(next));
 }
@@ -374,8 +372,8 @@ bool PendingInputsOverlay::handleMouse(const Mouse& mouse) {
 // ---------------------------------------------------------------------------
 
 Element ContextOverlay::OnRender() {
-    const auto& st    = *ctx_.frameState;
-    const auto& theme = *ctx_.theme;
+    const auto& st      = *ctx_.frameState;
+    const auto& theme   = *ctx_.theme;
     const auto& msgsPtr = st.contextMessages;
 
     const int maxVisible = std::max(8, Terminal::Size().dimy - 10);
@@ -384,10 +382,10 @@ Element ContextOverlay::OnRender() {
     if (!msgsPtr || !msgsPtr->is_array() || msgsPtr->empty()) {
         items.push_back(text(" (empty) ") | dim);
     } else {
-        const auto& msgs      = *msgsPtr;
+        const auto& msgs       = *msgsPtr;
         const int   totalItems = static_cast<int>(msgs.size());
-        const int maxScroll  = std::max(0, totalItems - maxVisible);
-        scrollOffset_        = std::clamp(scrollOffset_, 0, maxScroll);
+        const int   maxScroll  = std::max(0, totalItems - maxVisible);
+        scrollOffset_          = std::clamp(scrollOffset_, 0, maxScroll);
 
         const int end = std::min(totalItems, scrollOffset_ + maxVisible);
         for (int i = scrollOffset_; i < end; ++i) {
@@ -427,10 +425,8 @@ Element ContextOverlay::OnRender() {
         }
     }
 
-    auto title = fmt::format(
-        " LLM Context ({}) ",
-        (msgsPtr && msgsPtr->is_array()) ? msgsPtr->size() : 0
-    );
+    auto title
+        = fmt::format(" LLM Context ({}) ", (msgsPtr && msgsPtr->is_array()) ? msgsPtr->size() : 0);
 
     return vbox({
                text(title) | bold | inverted,
@@ -454,10 +450,10 @@ bool ContextOverlay::OnEvent(Event event) {
         }
         return true;
     }
-    auto      snap = ctx_.state->readSnapshot();
-    const int total = (snap->contextMessages && snap->contextMessages->is_array())
-                          ? static_cast<int>(snap->contextMessages->size())
-                          : 0;
+    auto      snap       = ctx_.state->readSnapshot();
+    const int total      = (snap->contextMessages && snap->contextMessages->is_array())
+                               ? static_cast<int>(snap->contextMessages->size())
+                               : 0;
     const int maxVisible = std::max(8, Terminal::Size().dimy - 10);
     const int maxScroll  = std::max(0, total - maxVisible);
 
@@ -536,7 +532,9 @@ std::vector<ScrollItem> PlanDiagramOverlay::buildItems() {
                     cachedArgs_ = neograph::json::parse(plan->text);
                     return true;
                 },
-                [](std::string) -> bool { return false; }
+                [](std::string) -> bool {
+                    return false;
+                }
             );
         }
         if (cachedValid_) {
@@ -573,21 +571,16 @@ std::vector<ScrollItem> PlanDiagramOverlay::buildItems() {
 
     return {
         ScrollItem{
-            tui_mermaid::renderMermaidStateDiagram(dg, maxW, theme.normalColor, colorOf),
-            false,
-        }
+                   tui_mermaid::renderMermaidStateDiagram(dg, maxW, theme.normalColor, colorOf),
+                   false, }
     };
 }
 
 Element PlanDiagramOverlay::OnRender() {
-    const auto& theme = *ctx_.theme;
-
-    auto closeBtn = text(" ✕ ") | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor)
-                    | bold | reflect(closeBox_);
-    auto header = hbox({
+    const auto& theme  = *ctx_.theme;
+    auto        header = hbox({
         text(" Plan Diagram ") | bold,
         filler(),
-        closeBtn,
         text(" "),
     });
 
@@ -601,10 +594,10 @@ Element PlanDiagramOverlay::OnRender() {
                separator(),
                hbox({text(" "), scrollable_->Render() | flex, text(" ")}) | flex,
                separator(),
-               text(" [Wheel/Up/Down] Scroll  [✕/Esc] Close ") | center | dim,
+               text(" [Wheel/Up/Down] Scroll  [Esc] Close ") | center | dim,
            })
-           | border | size(WIDTH, LESS_THAN, maxW) | size(WIDTH, GREATER_THAN, 40)
-           | size(HEIGHT, LESS_THAN, maxH) | color(theme.accentColor);
+           | border | size(WIDTH, LESS_THAN, maxW * 2 / 3) | size(WIDTH, GREATER_THAN, 40)
+           | size(HEIGHT, LESS_THAN, maxH * 2 / 3) | color(theme.accentColor);
 }
 
 bool PlanDiagramOverlay::OnEvent(Event event) {
@@ -618,14 +611,6 @@ bool PlanDiagramOverlay::OnEvent(Event event) {
     if (event.is_mouse()) {
         const auto& mouse = event.mouse();
         // 右上 ✕ 关闭
-        if (mouse.button == Mouse::Left && mouse.motion == Mouse::Released
-            && closeBox_.Contain(mouse.x, mouse.y)) {
-            ctx_.postRedraw();
-            if (onClose_) {
-                onClose_();
-            }
-            return true;
-        }
         if (scrollable_->OnEvent(event)) {
             ctx_.postRedraw();
             return true;
@@ -642,7 +627,8 @@ bool PlanDiagramOverlay::OnEvent(Event event) {
     if (event == Event::ArrowDown) {
         scrollable_->setScrollOffset(scrollable_->scrollOffset() + 1);
         // 滚到底部恢复吸附
-        if (scrollable_->totalHeight() - scrollable_->viewportHeight() <= scrollable_->scrollOffset()) {
+        if (scrollable_->totalHeight() - scrollable_->viewportHeight()
+            <= scrollable_->scrollOffset()) {
             scrollable_->setStickToBottom(true);
         }
         ctx_.postRedraw();
