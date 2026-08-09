@@ -19,6 +19,8 @@ protected:
 
         /// 路径
         std::string path;
+        /// 父节点 (最长前缀匹配时用于沿父链回退查找处理函数); 根节点为 nullptr
+        RouterTreePort* parent = nullptr;
         /// 对应Http方法的处理函数
         std::array<std::shared_ptr<HANLDE_TPYE>, HANLDE_NUM> handles;
         /// 子节点
@@ -39,12 +41,18 @@ protected:
 
         /// 获取对应路径[in_path]的节点，并返回路由路径到[re_path]
         ///
-        /// - [in_path] 待查找路径
-        /// - [re_path] 节点真实路由路径；无对应节点时返回空
+        /// - [in_path] 待查找路径（相对当前节点的剩余路径）
+        /// - [re_path] 累积的节点真实路由路径（不含开头 '/'）；未匹配到时清空
         /// - [do_add] 当路径对应节点不存在时，是否添加节点
+        /// - [loose] 不创建节点且精确子节点不存在时，是否回退到当前节点（最长前缀匹配）
         ///
         /// - return: 对应路径节点，不存在则返回nullptr
-        RouterTreePort* getChild(const char* in_path, std::string& re_path, bool do_add = false) {
+        RouterTreePort* getChild(
+            const char*    in_path,
+            std::string&   re_path,
+            bool           do_add = false,
+            bool           loose  = false
+        ) {
             const char *strptr = in_path, *nextptr = in_path;
             for (;;) {
                 if (*nextptr == '/') {
@@ -57,23 +65,37 @@ protected:
                     ++strptr;
                     ++nextptr;
                 } else {
-                    // strp = '\0'，是最后一个子节点
+                    // *nextptr == '\0'，in_path 是最后一个路径段
+                    if (in_path == nextptr) {
+                        // 空路径段（查询路径以 '/' 结尾），视为当前节点自身
+                        if (!re_path.empty() && re_path.back() == '/') {
+                            re_path.pop_back();
+                        }
+                        return this;
+                    }
                     auto it = child.find(in_path);
                     if (it != child.end()) {
                         // 存在子节点
-                        re_path = in_path;
+                        re_path += in_path;
                         return it->second;
                     } else {
                         if (do_add) {
-                            auto treeptr   = new RouterTreePort(in_path);
-                            child[in_path] = treeptr;
-                            re_path        = in_path;
+                            auto treeptr    = new RouterTreePort(in_path);
+                            treeptr->parent = this;
+                            child[in_path]  = treeptr;
+                            re_path += in_path;
                             return treeptr;
                         } else {
                             it = child.find("*");
                             if (it != child.end()) {
-                                re_path = "*";
+                                re_path += "*";
                                 return it->second;
+                            } else if (loose) {
+                                // 最长前缀匹配: 无更深的精确子节点时回退到当前节点
+                                if (!re_path.empty() && re_path.back() == '/') {
+                                    re_path.pop_back();
+                                }
+                                return this;
                             } else {
                                 re_path.clear();
                                 return nullptr;
@@ -83,34 +105,57 @@ protected:
                 }
             }
 
-            // *strp = '/'，不是最后一个子节点
+            // *nextptr == '/'，in_path 含有多个路径段
             std::string str{in_path, strptr};
+            if (str.empty()) {
+                // 连续结尾斜杠 (如 "/a/b//")，视为当前节点自身
+                if (!re_path.empty() && re_path.back() == '/') {
+                    re_path.pop_back();
+                }
+                return this;
+            }
             ++nextptr;
             auto it = child.find(str);
             if (it != child.end()) {
                 // 如果存在子节点
-                auto re_ptr = it->second->getChild(nextptr, re_path, do_add);
+                const size_t re_size = re_path.size();
+                re_path += str;
+                re_path += '/';
+                auto re_ptr = it->second->getChild(nextptr, re_path, do_add, loose);
                 if (re_ptr != nullptr) {
                     // 有找到匹配的路径
-                    re_path = fmt::format("{}/{}", str, re_path);
+                    return re_ptr;
                 }
-                return re_ptr;
+                // 未匹配，回退累积的路径
+                re_path.resize(re_size);
+                return nullptr;
             } else {
                 if (do_add) {
                     // 如果需要新建子节点
-                    auto treeptr = new RouterTreePort(str);
-                    child[str]   = treeptr;
-                    auto re_ptr  = treeptr->getChild(nextptr, re_path, do_add);
+                    auto treeptr    = new RouterTreePort(str);
+                    treeptr->parent = this;
+                    child[str]      = treeptr;
+                    const size_t re_size = re_path.size();
+                    re_path += str;
+                    re_path += '/';
+                    auto re_ptr = treeptr->getChild(nextptr, re_path, do_add, loose);
                     if (re_ptr != nullptr) {
-                        re_path = fmt::format("{}/{}", str, re_path);
+                        return re_ptr;
                     }
-                    return re_ptr;
+                    re_path.resize(re_size);
+                    return nullptr;
                 } else {
                     // 查找是否有通配符
                     it = child.find("*");
                     if (it != child.end()) {
-                        re_path = "*";
+                        re_path += "*";
                         return it->second;
+                    } else if (loose) {
+                        // 最长前缀匹配: 回退到当前节点，去掉刚累积的分隔符
+                        if (!re_path.empty() && re_path.back() == '/') {
+                            re_path.pop_back();
+                        }
+                        return this;
                     } else {
                         // 无查找结果，清空re_path并返回nullptr
                         re_path.clear();
@@ -187,14 +232,21 @@ protected:
     ///
     /// - [in_path] 待查找路径
     /// - [re_path] 返回该节点的真实路由路径；节点不存在时返回空
+    /// - [loose] 精确子节点不存在时回退到最深的已注册父节点（最长前缀匹配）
     ///
     /// - return: 返回查找结果节点
-    RouterTreePort* getTreepNocache(std::string_view in_path, std::string& re_path) {
+    RouterTreePort* getTreepNocache(
+        std::string_view in_path,
+        std::string&     re_path,
+        bool             loose = false
+    ) {
+        // 路径自顶向下累积，必须先清空（调用方可能复用 re_path 字符串）
+        re_path.clear();
         const char* strp = in_path.data();
         while (*strp == '/') {
             ++strp;
         }
-        auto treep = this->routerTree.getChild(strp, re_path);
+        auto treep = this->routerTree.getChild(strp, re_path, false, loose);
         if (false == re_path.empty()) {
             re_path = fmt::format("/{}", re_path);
         }
@@ -209,8 +261,8 @@ public:
     /// 添加路由
     /// - 允许使用通配符 *
     /// - 允许同时设置多个类型枚举
-    /// - 路径中连续的 / 将被视为仅一个 /
-    /// - 即 /a//b///c 等同于 /a/b/c
+    /// - 路径中连续的 / 将被视为仅一个 /，结尾的 / 将被忽略（文件夹路径与文件路径等价注册）
+    /// - 即 /a//b///c 等同于 /a/b/c；/a/b/ 等同于 /a/b
     bool add(std::string_view in_path, int in_index, std::shared_ptr<HANLDE_TPYE> in_fun) {
         this->cacheMap.clear();
         const char* strp = in_path.data();
@@ -226,20 +278,37 @@ public:
     /// - 有，且对应方法有处理函数：返回其处理函数指针，并赋值re_path
     /// - 有，但对应方法没有处理函数：返回nullptr，并赋值re_path
     /// - 没有:	返回nullptr，re_path置空
-    std::shared_ptr<HANLDE_TPYE>
-        get(const std::string& in_path, int in_index, std::string& re_path) {
+    ///
+    /// - [prefix_fallback] 最长前缀匹配:
+    ///   精确路径节点不存在时回退到最深的已注册父节点（* 通配符优先于回退）;
+    ///   若该节点没有对应 [in_index] 的处理函数，继续沿父链向上查找;
+    ///   [re_path] 始终为最深匹配节点的真实路径。
+    ///   该模式命中父链回退的结果不写入缓存。
+    std::shared_ptr<HANLDE_TPYE> get(
+        const std::string& in_path,
+        int                in_index,
+        std::string&       re_path,
+        bool               prefix_fallback = false
+    ) {
         auto                      cached  = this->cacheMap.get(in_path);
         XXRouter::RouterTreePort* treeptr = nullptr;
         if (cached.has_value()) {
             treeptr = cached->treeptr;
             re_path = cached->path;
         } else {
-            treeptr = this->getTreepNocache(in_path, re_path);
+            treeptr = this->getTreepNocache(in_path, re_path, prefix_fallback);
         }
         if (treeptr != nullptr) {
             auto handles = treeptr->getHandle(in_index);
             if (handles) {
                 this->cacheMap.put(in_path, {re_path, treeptr});
+            } else if (prefix_fallback) {
+                // 节点自身无对应处理函数时，沿父链向上回退查找
+                // 父链回退命中的结果不写缓存（缓存条目需保证节点自身持有处理函数）
+                for (auto parent = treeptr->parent; parent != nullptr && handles == nullptr;
+                     parent     = parent->parent) {
+                    handles = parent->getHandle(in_index);
+                }
             }
             return handles;
         }
@@ -250,11 +319,25 @@ public:
     /// - 有，且对应方法有处理函数：返回其处理函数指针，并赋值[re_path]
     /// - 有，但对应方法没有处理函数：返回[nullptr]，并赋值[re_path]
     /// - 没有:	返回[nullptr]，[re_path]置空
-    std::shared_ptr<HANLDE_TPYE>
-        getNocache(const std::string& in_path, int in_index, std::string& re_path) {
-        auto treep = this->getTreepNocache(in_path, re_path);
+    ///
+    /// - [prefix_fallback] 最长前缀匹配，语义同 [get]
+    std::shared_ptr<HANLDE_TPYE> getNocache(
+        const std::string& in_path,
+        int                in_index,
+        std::string&       re_path,
+        bool               prefix_fallback = false
+    ) {
+        auto treep = this->getTreepNocache(in_path, re_path, prefix_fallback);
         if (treep != nullptr) {
-            return treep->getHandle(in_index);
+            auto handles = treep->getHandle(in_index);
+            if (handles == nullptr && prefix_fallback) {
+                // 节点自身无对应处理函数时，沿父链向上回退查找
+                for (auto parent = treep->parent; parent != nullptr && handles == nullptr;
+                     parent     = parent->parent) {
+                    handles = parent->getHandle(in_index);
+                }
+            }
+            return handles;
         }
         return nullptr;
     }

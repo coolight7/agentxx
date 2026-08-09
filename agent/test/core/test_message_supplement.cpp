@@ -38,8 +38,8 @@ int g_ms_failed = 0;
 //    - 中断处理并 resume 后, 该 tool 重新执行返回真实结果, 最终上下文
 //      角色顺序: system -> user -> assistant(tool_calls) -> tool -> assistant
 // 2. 取消 / 超时停止 (CancelToken 取消):
-//    - 未完成的 tool 自动补充 [User canceled] tool 消息
-//      (role=tool, flags=AutoInserted), 已完成的保留真实结果
+//    - 串行 toolcall 下, 取消时未完成的 tool 全部自动补充 [User canceled]
+//      tool 消息 (role=tool, flags=AutoInserted, 按 tool_calls 声明顺序)
 //    - 最终上下文角色顺序完整, 每条 assistant tool_call 都有 tool 回复
 // ===========================================================================
 
@@ -168,7 +168,8 @@ public:
     }
 };
 
-/// 快速 tool: 立即完成 (取消时已完成的 tool 应保留真实结果)
+/// 快速 tool: 排在 slow 之后声明 (串行 toolcall 下取消后不再执行,
+/// 同样被补充 [User canceled])
 class FastDoneTool : public agentxx::tools::XXToolBase {
 public:
 
@@ -333,13 +334,16 @@ asio::awaitable<void> test_interrupt_auto_supplement() {
 
 // ===========================================================================
 // 取消/超时停止 E2E: tool 执行中取消
-// - 已完成的 tool 保留真实结果, 未完成的自动补充 [User canceled]
+// - 串行 toolcall: slow 先执行被取消中断, 后续 fast 不再执行
+// - 未完成的 tool 全部自动补充 [User canceled] (按声明顺序)
 // - 最终上下文角色顺序完整: 每条 assistant tool_call 都有对应 tool 回复
 // ===========================================================================
 
-/// 校验取消后的消息序列:
+/// 校验取消后的消息序列 (串行 toolcall 语义):
 /// [system, user, assistant(tool_calls=[call_slow_1, call_fast_1]),
-///  tool(call_fast_1=fast done), tool(call_slow_1=[User canceled] AutoInserted)]
+///  tool(call_slow_1=[User canceled] AutoInserted), tool(call_fast_1=[User canceled] AutoInserted)]
+/// - 串行执行: slow 先执行, 取消中断 slow 后 fast 不再执行
+/// - 未完成的 tool 全部自动补充 [User canceled] (按声明顺序), 保证角色顺序完整
 static bool checkCanceledMessageSequence(const neograph::json& msgs) {
     if (!msgs.is_array() || msgs.size() != 5) {
         return false;
@@ -370,31 +374,42 @@ static bool checkCanceledMessageSequence(const neograph::json& msgs) {
     if (msgs[2]["tool_calls"][1].value("id", std::string{}) != "call_fast_1") {
         return false;
     }
-    // 已完成的 tool 保留真实结果
-    if (msgs[3].value("tool_call_id", std::string{}) != "call_fast_1") {
+    // 未完成的 tool 自动补充 [User canceled] (按 tool_calls 声明顺序):
+    // - slow 先执行, 取消时在途未完成 → 补充 [User canceled]
+    if (msgs[3].value("tool_call_id", std::string{}) != "call_slow_1") {
         return false;
     }
-    if (msgs[3].value("tool_name", std::string{}) != "test_fast") {
+    if (msgs[3].value("tool_name", std::string{}) != "test_slow") {
         return false;
     }
-    if (msgs[3].value("content", std::string{}) != "fast done") {
+    if (msgs[3].value("content", std::string{}) != "[User canceled]") {
         return false;
     }
-    // 未完成的 tool 自动补充 [User canceled], 且标记 AutoInserted
-    if (msgs[4].value("tool_call_id", std::string{}) != "call_slow_1") {
+    {
+        const auto flags = static_cast<neograph::MessageFlag>(
+            msgs[3].value<unsigned long long>("flags", 0)
+        );
+        if (!neograph::hasFlag(flags, neograph::MessageFlag::AutoInserted)) {
+            return false;
+        }
+    }
+    // - fast 排在 slow 之后, 取消后未执行 → 同样补充 [User canceled]
+    if (msgs[4].value("tool_call_id", std::string{}) != "call_fast_1") {
         return false;
     }
-    if (msgs[4].value("tool_name", std::string{}) != "test_slow") {
+    if (msgs[4].value("tool_name", std::string{}) != "test_fast") {
         return false;
     }
     if (msgs[4].value("content", std::string{}) != "[User canceled]") {
         return false;
     }
-    const auto flags = static_cast<neograph::MessageFlag>(
-        msgs[4].value<unsigned long long>("flags", 0)
-    );
-    if (!neograph::hasFlag(flags, neograph::MessageFlag::AutoInserted)) {
-        return false;
+    {
+        const auto flags = static_cast<neograph::MessageFlag>(
+            msgs[4].value<unsigned long long>("flags", 0)
+        );
+        if (!neograph::hasFlag(flags, neograph::MessageFlag::AutoInserted)) {
+            return false;
+        }
     }
     return true;
 }
@@ -440,8 +455,9 @@ asio::awaitable<void> test_cancel_auto_supplement() {
 
     auto ex = co_await asio::this_coro::executor;
 
-    // 等待慢速 tool 开始执行后再取消, 确保取消发生在 toolcall 执行期间
-    // (快速 tool 已在取消前并行完成)
+    // 串行 toolcall: 等待 slow 开始执行后再取消, 确保取消发生在 slow 执行期间:
+    // - slow (2s 在途) 被取消信号立即中断, 未完成 → 补充 [User canceled]
+    // - fast 排在 slow 之后, 取消后不再执行 → 同样补充 [User canceled]
     auto cancelWatcher = [&]() -> asio::awaitable<void> {
         asio::steady_timer timer(ex);
         for (int i = 0; i < 2000; ++i) {
@@ -484,8 +500,8 @@ asio::awaitable<void> test_cancel_auto_supplement() {
     // 取消应立即中断会话轮次 (不等待慢速 tool 自然完成)
     XX_TEST_EXPECT_TRUE(elapsedMs < 8000);
 
-    // 轮询等待自动补充消息最终保存完成 (取消时引擎可能销毁 toolcall 帧,
-    // 由最后一个退出的工具协程兜底保存到 tempMessages)
+    // 轮询等待自动补充消息最终保存完成 (baseRun 走 isCancel 分支后,
+    // wrap_handle 在 rethrow 前写入 tempMessages)
     {
         auto ex2 = co_await asio::this_coro::executor;
         asio::steady_timer poll(ex2);

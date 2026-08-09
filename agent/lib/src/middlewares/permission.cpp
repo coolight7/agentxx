@@ -29,7 +29,8 @@ asio::awaitable<bool> PermissionMiddlewareHandle::defOnFilesystemHandle(
 ) {
     auto        path = args.value<std::string>("path", "");
     std::string re_path;
-    auto        handle = filesystemPermission.get(path, static_cast<int>(index), re_path);
+    // 最长前缀匹配: 注册的文件夹规则 (如 /data/projects) 对其下任意子路径生效
+    auto handle = filesystemPermission.get(path, static_cast<int>(index), re_path, true);
     if (nullptr != handle) {
         auto permission = *handle;
         switch (permission) {
