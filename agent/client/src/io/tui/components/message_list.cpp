@@ -10,6 +10,7 @@
 #include "ftxui/screen/terminal.hpp"
 #include <markdown/dom_builder.hpp>
 #include <markdown/parser.hpp>
+#include <markdown/text_utils.hpp>
 
 using namespace ftxui;
 
@@ -139,8 +140,11 @@ std::pair<Element, std::vector<std::unique_ptr<markdown::DomBuilder>>> renderMar
     return {vbox(std::move(parts)) | ftxui::color(color), std::move(builders)};
 }
 
-/// 估算文本显示行数 (换行符计数 + 按宽度折行估算)。
+/// 估算文本显示行数 (换行符计数 + 按显示宽度折行估算)。
 /// 仅用于不可见子项的高度估算 (影响滚动条/滚动定位), 子项进入视口后实测修正。
+/// 宽字符 (CJK/emoji 等) 按 2 列计, 与 markdown::utf8_display_width 一致,
+/// 修复旧实现按 UTF-8 码点计宽 (宽字符算 1 列) 导致 CJK 文本高度低估、
+/// 滚动定位抖动的问题。线性扫描, 不整串调用 utf8_display_width (避免 O(n²))。
 int estimateLines(std::string_view s, int width) {
     if (width <= 0) {
         width = 80;
@@ -148,21 +152,27 @@ int estimateLines(std::string_view s, int width) {
     if (s.empty()) {
         return 1;
     }
-    int    lines    = 1;
-    size_t segChars = 0; // 当前行内已计字符数 (按 UTF-8 码点)
-    for (unsigned char c : s) {
-        if ((c & 0xC0) == 0x80) {
-            continue; // UTF-8 续字节, 不独立计数
-        }
-        if (c == '\n') {
+    int    lines = 1;
+    int    col   = 0;
+    size_t i     = 0;
+    while (i < s.size()) {
+        if (s[i] == '\n') {
             ++lines;
-            segChars = 0;
+            col = 0;
+            ++i;
             continue;
         }
-        if (++segChars >= static_cast<size_t>(width)) {
-            ++lines;
-            segChars = 0;
+        size_t len  = markdown::utf8_byte_length(s[i]);
+        len         = std::min(len, s.size() - i);
+        const int w = markdown::codepoint_width(markdown::utf8_codepoint(s.data() + i, len));
+        if (w > 0) { // 组合字符/零宽字符不占列, 不触发折行
+            col += w;
+            if (col >= width) {
+                ++lines;
+                col = 0;
+            }
         }
+        i += len;
     }
     return lines;
 }
@@ -509,11 +519,11 @@ Element MessageListComponent::buildMessageBlock(
             ftxui::Color tipColor = theme.systemColor;
             switch (msg.tipLevel) {
                 case TUIMessage::TipLevel::Warning:
-                    prefix   = "[Warn] ";
+                    prefix   = "# [Warn] ";
                     tipColor = theme.thinkingColor;
                     break;
                 case TUIMessage::TipLevel::Error:
-                    prefix   = "[Error] ";
+                    prefix   = "# [Error] ";
                     tipColor = theme.errorColor;
                     break;
                 case TUIMessage::TipLevel::Info:
