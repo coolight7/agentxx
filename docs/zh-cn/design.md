@@ -26,7 +26,7 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
 
 ### 核心对话能力
 
-- **多轮对话**: 支持完整的多轮对话管理，维护 `fullHistory` (append-only 完整历史) 和 `llmMessages` (可压缩的 LLM 上下文) 双消息集
+- **多轮对话**: 支持完整的多轮对话管理，维护 `viewMessages` (append-only 完整历史) 和 `llmMessages` (可压缩的 LLM 上下文) 双消息集
 - **流式输出**: LLM 响应以增量 Delta 事件推送 (TextToken / ThinkingToken / ToolStart / ToolEnd / TurnStart / TurnEnd / NodeStart / NodeEnd)，每个 Delta 携带单调递增 seq 用于重放与同步
 - **多模型支持**: 运行时按会话 (thread_id) 动态切换模型，支持 OpenAI Chat Completions、Anthropic Messages、OpenAI Responses (Codex) 三种 Provider 协议
 - **上下文压缩**: SummarizationMiddleware 在上下文接近模型 token 上限时自动压缩历史消息，支持 toolcall 输出去重与截断
@@ -109,8 +109,8 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
   不使用 fork / 时间旅行 (get_state_history), 因此每 thread 仅保留最新 checkpoint,
   存储开销从 O(super-steps) 降为 O(threads), 轮末无需手动裁剪
 - **活动状态**: Idle / Streaming / ExecutingTool / WaitingInput 四种状态
-- **链式哈希**: fullHistory 使用 FNV-1a 链式哈希校验一致性
-- **线程绑定 (单线程读写)**: Session 通过 `bindIoThread()` 绑定 io 线程，`assertIoThread()` 强制校验可变状态 (fullHistory/llmMessages/chainHash) 仅在 io 线程读写；client/UI 不直接读取，需要时由 io 线程拷贝后经 Wire 消息 (Sync/Delta) 传输，因此无需快照/锁同步
+- **链式哈希**: viewMessages 使用 FNV-1a 链式哈希校验一致性
+- **线程绑定 (单线程读写)**: Session 通过 `bindIoThread()` 绑定 io 线程，`assertIoThread()` 强制校验可变状态 (viewMessages/llmMessages/chainHash) 仅在 io 线程读写；client/UI 不直接读取，需要时由 io 线程拷贝后经 Wire 消息 (Sync/Delta) 传输，因此无需快照/锁同步
 - **取消/切模型**: UI 线程的取消/切模型操作通过 Wire 消息 (WireCancel/WireSelectModel) 发往 agent 线程处理，避免跨线程竞争
 - **异步互斥锁**: `AsyncMutex` 基于 asio concurrent_channel 实现协程感知互斥，不会阻塞线程，适用于协程跨越 co_await 临界区
 
@@ -752,7 +752,7 @@ AgentContext
          │     ├── bus                   (会话级事件总线)
          │     ├── contextStats          (std::atomic 字段, 跨线程安全)
          │     ├── activity              (Activity)
-         │     ├── fullHistory + chainHash (仅 io 线程读写, client 经 Wire 拷贝传输)
+         │     ├── viewMessages + chainHash (仅 io 线程读写, client 经 Wire 拷贝传输)
          │     ├── deltaSeq              (普通 uint64_t, 仅 io 线程递增; EventBridge 分配)
          │     ├── cancelToken           (仅 io 线程读写)
          │     └── modelName             (仅 io 线程读写, 经 Wire 切换)
@@ -760,7 +760,7 @@ AgentContext
                └── ...
 
 线程安全策略:
-  - io 线程: 读写 fullHistory/llmMessages/chainHash/deltaSeq (assertIoThread 强制校验)
+  - io 线程: 读写 viewMessages/llmMessages/chainHash/deltaSeq (assertIoThread 强制校验)
   - client/UI: 不直接读取, 由 io 线程拷贝后经 Wire 消息 (Sync/Delta) 传输
   - 取消/切模型: 经 Wire 消息发往 agent 线程处理
   - SessionStore: 仅在 agent io_context 线程访问, 无需锁
@@ -860,12 +860,13 @@ agent/
 │   │   │   ├── config.h          # AgentConfig / ModelConfig 配置
 │   │   │   ├── config_static.h   # 静态路径配置
 │   │   │   ├── context.h         # AgentContext / Session / SessionStore / ContextStats
-│   │   │   │                     #   Session: 线程绑定 (fullHistory/chainHash 单线程读写)
+│   │   │   │                     #   Session: 线程绑定 (viewMessages/chainHash 单线程读写)
 │   │   │   ├── checkpoint_store.h # 单检查点存储: SingleCheckpointStore 策略基类 +
 │   │   │   │                     #   InMemorySingleCheckpointStore (每 thread 仅最新,
 │   │   │   │                     #   save 时自动淘汰历史, O(super-steps) -> O(threads))
 │   │   │   ├── conversation_types.h # Delta(含NodeStart/End/seq/timing) / SyncPayload
-│   │   │   │                     #   HistoryMessage / ChainHash / AppendComponentNotification
+│   │   │   │                     #   ViewMessage (UI 展示消息, role 拆分子结构) /
+│   │   │   │                     #   ChainHash / AppendComponentNotification
 │   │   │   ├── model_registry.h  # ModelProviderRegistry (运行时模型切换)
 │   │   │   ├── prompt.h          # AgentPrompt / ToolPrompt 提示词管理
 │   │   │   ├── training.h        # EvolutionTrainingAgent 进化训练 (变异/评估/优化/收敛检测)
@@ -1000,7 +1001,7 @@ agent/
 │   ├── test_subagent_bus.*       # 子代理总线测试
 │   ├── test_crossagent.*         # 跨代理通信测试
 │   ├── test_concurrency.*        # 并发测试
-│   ├── test_session_concurrency.* # Session 线程模型测试 (fullHistory 单线程读写 + 原子字段并发)
+│   ├── test_session_concurrency.* # Session 线程模型测试 (viewMessages 单线程读写 + 原子字段并发)
 │   ├── test_remote_agent.*       # 远程 Agent (WS 传输 / SessionServerAgentIO) 测试
 │   ├── test_mcp.*                # MCP 协议测试 (多版本/HTTP/stdio)
 │   ├── test_a2a.*                # A2A 协议测试
@@ -1071,7 +1072,7 @@ BaseAgent (基类)
   ├── MiddlewareContext → 中间件栈
   ├── AgentContext
   │     ├── SessionStore → Session (per thread_id)
-  │     │     ├── fullHistory + chainHash (仅 io 线程读写, client 经 Wire 拷贝传输)
+  │     │     ├── viewMessages + chainHash (仅 io 线程读写, client 经 Wire 拷贝传输)
   │     │     ├── llmMessages (io 线程读写)
   │     │     ├── cancelToken / modelName (io 线程读写)
   │     │     ├── activity / contextStats (atomic, 跨线程安全)

@@ -60,6 +60,13 @@ struct WireInterruptResponse {
     neograph::json result;
 };
 
+/// 服务端通知中断已过期 (超时/会话取消) (Server -> Client)
+/// - id 对应 WireInterruptRequest.id; 客户端应将对应未操作的中断消息标记为过期
+struct WireInterruptExpired {
+    int64_t     id = 0;
+    std::string threadId;
+};
+
 struct WireTurnResult {
     std::string threadId;
     bool        hasError = false;
@@ -125,6 +132,7 @@ using WireMessage = std::variant<
     WireSelectModel,
     WireInterruptRequest,
     WireInterruptResponse,
+    WireInterruptExpired,
     Delta,
     SyncPayload,
     WireTurnResult,

@@ -142,8 +142,8 @@ static uint16_t startServerAndWait(HttpServer& server, std::thread& th) {
 
 static asio::awaitable<void> test_remote_protocol_roundtrip() {
     using agentxx::agent::Delta;
-    using agentxx::agent::HistoryMessage;
     using agentxx::agent::SyncPayload;
+    using agentxx::agent::ViewMessage;
     using agentxx::agent::WireMessage;
     using agentxx::agent::WsAgentIOTransport;
 
@@ -232,10 +232,9 @@ static asio::awaitable<void> test_remote_protocol_roundtrip() {
         SyncPayload p;
         p.fromIndex = 2;
         p.tailHash  = "hash123";
-        p.messages.push_back(HistoryMessage{
-            "id1",
-            neograph::json{{"role", "user"}, {"content", "hi"}},
-        });
+        auto        vm = ViewMessage::makeText(ViewMessage::Role::User, "hi");
+        vm.id          = "id1";
+        p.messages.push_back(std::move(vm));
         auto back = WsAgentIOTransport::deserialize(WsAgentIOTransport::serialize(WireMessage{p}));
         XX_TEST_EXPECT_TRUE(back.has_value());
         if (back) {
@@ -247,6 +246,8 @@ static asio::awaitable<void> test_remote_protocol_roundtrip() {
                 XX_TEST_EXPECT_EQ(sp->messages.size(), size_t{1});
                 if (!sp->messages.empty()) {
                     XX_TEST_EXPECT_EQ(sp->messages[0].id, std::string("id1"));
+                    XX_TEST_EXPECT_TRUE(sp->messages[0].role == ViewMessage::Role::User);
+                    XX_TEST_EXPECT_EQ(sp->messages[0].text, std::string("hi"));
                 }
             }
         }
@@ -276,6 +277,20 @@ static asio::awaitable<void> test_remote_protocol_roundtrip() {
             XX_TEST_EXPECT_TRUE(r != nullptr);
             if (r) {
                 XX_TEST_EXPECT_EQ(r->id, int64_t{7});
+            }
+        }
+    }
+    {
+        agentxx::agent::WireInterruptExpired expired{7, "sess"};
+        auto                                json = WsAgentIOTransport::serialize(WireMessage{expired});
+        auto                                back = WsAgentIOTransport::deserialize(json);
+        XX_TEST_EXPECT_TRUE(back.has_value());
+        if (back) {
+            auto* e = std::get_if<agentxx::agent::WireInterruptExpired>(&*back);
+            XX_TEST_EXPECT_TRUE(e != nullptr);
+            if (e) {
+                XX_TEST_EXPECT_EQ(e->id, int64_t{7});
+                XX_TEST_EXPECT_EQ(e->threadId, std::string("sess"));
             }
         }
     }
@@ -600,11 +615,16 @@ static asio::awaitable<void> test_session_controller_replay_fallback() {
 }
 
 // ---------------------------------------------------------------------------
-// 6. SessionServerAgentIO: 请求级超时 (handleInterrupt 无响应 -> 超时返回)
+// 6. SessionServerAgentIO: 请求级超时 (handleInterrupt 无响应 -> 超时返回,
+//    并通知客户端中断已过期)
 // ---------------------------------------------------------------------------
 
 static asio::awaitable<void> test_session_controller_interrupt_timeout() {
     auto ex = co_await asio::this_coro::executor;
+
+    auto gracePair = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+    auto clientT   = std::move(gracePair.first);
+    auto serverT   = std::move(gracePair.second);
 
     SessionServerAgentIO::Config cfg;
     cfg.threadId         = "session";
@@ -614,6 +634,7 @@ static asio::awaitable<void> test_session_controller_interrupt_timeout() {
         std::weak_ptr<agentxx::agent::BaseAgent>{},
         cfg
     );
+    sc->setTransport(std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(serverT)));
 
     auto start   = std::chrono::steady_clock::now();
     auto result  = co_await sc->handleInterrupt("session", "node", "val", "{}");
@@ -623,6 +644,28 @@ static asio::awaitable<void> test_session_controller_interrupt_timeout() {
 
     XX_TEST_EXPECT_TRUE(result.is_array());
     XX_TEST_EXPECT_TRUE(elapsed.count() >= 250 && elapsed.count() < 3000);
+
+    // 超时后 server 应通知客户端该中断已过期 (客户端据此标记消息并结束等待);
+    // channel 中先收到 WireInterruptRequest, 超时后再收到 WireInterruptExpired
+    auto reqMsg = co_await clientT->recv();
+    XX_TEST_EXPECT_TRUE(reqMsg.has_value());
+    if (reqMsg) {
+        auto* req = std::get_if<agentxx::agent::WireInterruptRequest>(&*reqMsg);
+        XX_TEST_EXPECT_TRUE(req != nullptr);
+        if (req) {
+            XX_TEST_EXPECT_EQ(req->id, int64_t{1});
+        }
+    }
+    auto msg = co_await clientT->recv();
+    XX_TEST_EXPECT_TRUE(msg.has_value());
+    if (msg) {
+        auto* expired = std::get_if<agentxx::agent::WireInterruptExpired>(&*msg);
+        XX_TEST_EXPECT_TRUE(expired != nullptr);
+        if (expired) {
+            XX_TEST_EXPECT_EQ(expired->id, int64_t{1});
+            XX_TEST_EXPECT_EQ(expired->threadId, std::string("session"));
+        }
+    }
     co_return;
 }
 

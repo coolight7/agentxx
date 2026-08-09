@@ -3,7 +3,7 @@
 //
 // 用法: agentxx_test memgrowth [--mem-turns N] [--mem-size KB] [--mem-warmup N]
 //
-// 输出每轮: RSS/Private 内存、fullHistory / llmMessages / shareStore 的大小,
+// 输出每轮: RSS/Private 内存、viewMessages / llmMessages / shareStore 的大小,
 // 量化各模块内存占用。
 
 #include "test_memgrowth.h"
@@ -26,8 +26,8 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
-#include <windows.h>
 #include <psapi.h>
+#include <windows.h>
 #ifdef _MSC_VER
 #include <crtdbg.h>
 #endif
@@ -46,23 +46,29 @@ namespace {
 // ---------------------------------------------------------------------------
 
 struct MemSample {
-    double rssMB     = 0.0;  // 常驻物理内存
-    double privateMB = 0.0;  // 私有内存 (Windows PrivateUsage / Linux RSS 近似)
+    double rssMB     = 0.0; // 常驻物理内存
+    double privateMB = 0.0; // 私有内存 (Windows PrivateUsage / Linux RSS 近似)
 };
 
 MemSample sampleProcessMemory() {
     MemSample out;
 #ifdef _WIN32
-    HANDLE h = ::GetCurrentProcess();
+    HANDLE                     h = ::GetCurrentProcess();
     PROCESS_MEMORY_COUNTERS_EX pmc;
-    if (h && ::GetProcessMemoryInfo(h, reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&pmc), sizeof(pmc))) {
+    if (h
+        && ::GetProcessMemoryInfo(
+            h,
+            reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&pmc),
+            sizeof(pmc)
+        )) {
         out.rssMB     = static_cast<double>(pmc.WorkingSetSize) / (1024.0 * 1024.0);
         out.privateMB = static_cast<double>(pmc.PrivateUsage) / (1024.0 * 1024.0);
     }
 #else
     struct rusage ru {};
+
     if (::getrusage(RUSAGE_SELF, &ru) == 0) {
-        out.rssMB = static_cast<double>(ru.ru_maxrss) / 1024.0;  // KB -> MB
+        out.rssMB = static_cast<double>(ru.ru_maxrss) / 1024.0; // KB -> MB
     }
     out.privateMB = out.rssMB;
 #endif
@@ -73,10 +79,10 @@ MemSample sampleProcessMemory() {
 // 各容器字节估算 (dump 近似)
 // ---------------------------------------------------------------------------
 
-size_t estimateHistoryBytes(const std::vector<agentxx::agent::HistoryMessage>& h) {
+size_t estimateHistoryBytes(const std::vector<agentxx::agent::ViewMessage>& h) {
     size_t total = 0;
     for (const auto& m : h) {
-        total += m.data.dump().size();
+        total += m.toJson().dump().size();
         total += m.id.size();
     }
     return total;
@@ -105,8 +111,8 @@ ContainerSnapshot snapshotContainers(
     ContainerSnapshot out;
     auto              session = ctx->sessions->get(threadId);
     if (session) {
-        out.fullHistoryCount = session->fullHistory.size();
-        out.fullHistoryBytes = estimateHistoryBytes(session->fullHistory);
+        out.fullHistoryCount = session->viewMessages.size();
+        out.fullHistoryBytes = estimateHistoryBytes(session->viewMessages);
         out.llmMsgCount      = session->llmMessages.size();
         out.llmMsgBytes      = estimateJsonBytes(session->llmMessages);
     }
@@ -118,21 +124,21 @@ ContainerSnapshot snapshotContainers(
 }
 
 asio::awaitable<int> runScenario(
-    size_t        turns,
-    size_t        responseKB,
-    size_t        warmupSkip,
-    bool          hugeTokenLimit,  // true = 关闭压缩 (模拟不触发 summarization)
-    bool          nonStream,       // true = 使用 runNonStreamAsync (无 token 流式事件)
-    bool          runAgentCtx,     // true = 后台线程运行 agent io_context (模拟真实 CLI)
-    std::string   label
+    size_t      turns,
+    size_t      responseKB,
+    size_t      warmupSkip,
+    bool        hugeTokenLimit, // true = 关闭压缩 (模拟不触发 summarization)
+    bool        nonStream,      // true = 使用 runNonStreamAsync (无 token 流式事件)
+    bool        runAgentCtx,    // true = 后台线程运行 agent io_context (模拟真实 CLI)
+    std::string label
 ) {
     auto sim     = startDaSimServer();
     auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
 
-    auto cfg             = std::make_shared<agentxx::agent::AgentConfig>();
-    cfg->model.baseUrl   = baseUrl;
-    cfg->model.apiKey    = "EMPTY";
-    cfg->model.modelName = "test-sim";
+    auto cfg                 = std::make_shared<agentxx::agent::AgentConfig>();
+    cfg->model.baseUrl       = baseUrl;
+    cfg->model.apiKey        = "EMPTY";
+    cfg->model.modelName     = "test-sim";
     cfg->prompt.systemPrompt = "You are a helpful assistant.";
     if (hugeTokenLimit) {
         // 极大上下文上限: summarization 永远不会触发, 观察纯线性增长
@@ -150,9 +156,9 @@ asio::awaitable<int> runScenario(
         }
         big.resize(k);
     }
-    g_da_sim_response_content = big;
-    g_da_sim_tool_calls       = neograph::json::array();
-    g_da_sim_prompt_tokens    = static_cast<int>(k / 4);
+    g_da_sim_response_content  = big;
+    g_da_sim_tool_calls        = neograph::json::array();
+    g_da_sim_prompt_tokens     = static_cast<int>(k / 4);
     g_da_sim_completion_tokens = static_cast<int>(k / 4);
 
     auto agent = std::make_shared<agentxx::agent::CodeAgent>(cfg);
@@ -161,7 +167,7 @@ asio::awaitable<int> runScenario(
     // 模拟真实 CLI: 后台线程运行 agent io_context
     // 注意: 必须持 work_guard, 否则 io_context 空闲时 run() 立即返回、线程退出,
     // 后续 co_spawn 到该 io_context 的轮次协程永远不会执行, channel 等待永久挂起
-    std::thread  agentThread;
+    std::thread                                                                 agentThread;
     std::shared_ptr<asio::executor_work_guard<asio::io_context::executor_type>> agentWorkGuard;
     if (runAgentCtx) {
         agentWorkGuard
@@ -211,8 +217,13 @@ asio::awaitable<int> runScenario(
     size_t lastLive = 0;
     (void)lastLive;
     for (size_t turn = 0; turn < turns; ++turn) {
-        std::fprintf(stderr, "[memgrow] turn %zu begin (stream=%d ctx=%d)\n", turn,
-                     (int)!nonStream, (int)runAgentCtx);
+        std::fprintf(
+            stderr,
+            "[memgrow] turn %zu begin (stream=%d ctx=%d)\n",
+            turn,
+            (int)!nonStream,
+            (int)runAgentCtx
+        );
         auto input = "User message number " + std::to_string(turn) + " (memory growth probe)";
         bool ok    = true;
         if (runAgentCtx) {
@@ -232,15 +243,13 @@ asio::awaitable<int> runScenario(
                         auto text = co_await agent->runNonStreamAsync(threadId, msgs);
                         success   = !text.empty();
                     } else {
-                        auto result = co_await agent->runConversationTurnAsync(
-                            threadId,
-                            input,
-                            turn == 0,
-                            nullptr
-                        );
+                        auto result
+                            = co_await agent
+                                  ->runConversationTurnAsync(threadId, input, turn == 0, nullptr);
                         success = !result.hasError;
                     }
-                    co_await ch->async_send(neograph_asio_error_code{}, success, asio::use_awaitable);
+                    co_await ch
+                        ->async_send(neograph_asio_error_code{}, success, asio::use_awaitable);
                     co_return;
                 },
                 asio::detached
@@ -262,7 +271,7 @@ asio::awaitable<int> runScenario(
                 threadId,
                 input,
                 turn == 0,
-                nullptr  // headless: 不产生 delta 事件, 排除 client 侧干扰
+                nullptr // headless: 不产生 delta 事件, 排除 client 侧干扰
             );
             ok = !result.hasError;
         }
@@ -356,7 +365,7 @@ asio::awaitable<int> runScenario(
     co_return 0;
 }
 
-}  // namespace
+} // namespace
 
 // ---------------------------------------------------------------------------
 // 入口: 解析参数并运行场景
@@ -385,8 +394,12 @@ asio::awaitable<TestResult> run_memgrowth_tests() {
         hugeLimit = (std::strtoull(v, nullptr, 10) != 0);
     }
 
-    std::printf("======= Memory Growth Probe (turns=%zu, resp=%zuKB, hugeLimit=%d) =======\n",
-                turns, responseKB, (int)hugeLimit);
+    std::printf(
+        "======= Memory Growth Probe (turns=%zu, resp=%zuKB, hugeLimit=%d) =======\n",
+        turns,
+        responseKB,
+        (int)hugeLimit
+    );
 
     // 场景 1: 默认流式 16KB 回复 (agent io_context 未运行 → 复现泄漏)
     co_await runScenario(turns, responseKB, warmupSkip, hugeLimit, false, false, "stream16k");
@@ -400,5 +413,5 @@ asio::awaitable<TestResult> run_memgrowth_tests() {
     co_return r;
 }
 
-}  // namespace test
-}  // namespace agentxx
+} // namespace test
+} // namespace agentxx

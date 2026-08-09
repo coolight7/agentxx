@@ -46,12 +46,9 @@ public:
         co_return std::nullopt;
     }
 
-    asio::awaitable<neograph::json> handleInterrupt(
-        std::string_view,
-        std::string_view,
-        std::string_view,
-        std::string_view
-    ) override {
+    asio::awaitable<neograph::json>
+        handleInterrupt(std::string_view, std::string_view, std::string_view, std::string_view)
+            override {
         co_return neograph::json::array();
     }
 };
@@ -233,18 +230,22 @@ asio::awaitable<void> test_eventbridge_message_tip() {
         neograph::graph::GraphEvent::Type::CHANNEL_WRITE,
         "llm",
         neograph::json{
-            {"channel", "message_tip"},
-            {"value",   neograph::json{
-                {"tip_type", "warning"},
-                {"text",     "LLM API 调用失败，6 秒后自动重试 (2/5)"},
-            }},
-        }
+                       {"channel", "message_tip"},
+                       {"value",
+             neograph::json{
+                 {"tip_type", "warning"},
+                 {"text", "LLM API 调用失败，6 秒后自动重试 (2/5)"},
+             }},
+                       }
     });
     XX_TEST_EXPECT_EQ(io->deltas.size(), size_t{1});
     if (!io->deltas.empty()) {
         XX_TEST_EXPECT_TRUE(io->deltas[0].type == agentxx::agent::Delta::Type::MessageTip);
         XX_TEST_EXPECT_TRUE(io->deltas[0].tipType == agentxx::agent::Delta::TipType::Warning);
-        XX_TEST_EXPECT_EQ(io->deltas[0].text, std::string{"LLM API 调用失败，6 秒后自动重试 (2/5)"});
+        XX_TEST_EXPECT_EQ(
+            io->deltas[0].text,
+            std::string{"LLM API 调用失败，6 秒后自动重试 (2/5)"}
+        );
     }
 
     // error 级别
@@ -252,12 +253,13 @@ asio::awaitable<void> test_eventbridge_message_tip() {
         neograph::graph::GraphEvent::Type::CHANNEL_WRITE,
         "llm",
         neograph::json{
-            {"channel", "message_tip"},
-            {"value",   neograph::json{
-                {"tip_type", "error"},
-                {"text",     "boom"},
-            }},
-        }
+                       {"channel", "message_tip"},
+                       {"value",
+             neograph::json{
+                 {"tip_type", "error"},
+                 {"text", "boom"},
+             }},
+                       }
     });
     XX_TEST_EXPECT_EQ(io->deltas.size(), size_t{2});
     if (io->deltas.size() >= 2) {
@@ -270,9 +272,9 @@ asio::awaitable<void> test_eventbridge_message_tip() {
         neograph::graph::GraphEvent::Type::CHANNEL_WRITE,
         "llm",
         neograph::json{
-            {"channel", "message_tip"},
-            {"value",   neograph::json{{"text", "hello"}}},
-        }
+                       {"channel", "message_tip"},
+                       {"value", neograph::json{{"text", "hello"}}},
+                       }
     });
     XX_TEST_EXPECT_EQ(io->deltas.size(), size_t{3});
     if (io->deltas.size() >= 3) {
@@ -293,22 +295,23 @@ asio::awaitable<void> test_eventbridge_channel_write_messages() {
 
     auto msgJson = neograph::json{
         {"role",       "assistant"},
-        {"content",    ""},
-        {"tool_calls", neograph::json::array({
+        {"content",    ""         },
+        {"tool_calls",
+         neograph::json::array({
              neograph::json{
-                 {"id",   "call_1"},
+                 {"id", "call_1"},
                  {"name", "bash"},
                  {"arguments", "{\"cmd\":\"ls\"}"},
              },
-         })},
+         })                       },
     };
     bridgeCb(neograph::graph::GraphEvent{
         neograph::graph::GraphEvent::Type::CHANNEL_WRITE,
         "llm",
         neograph::json{
-            {"channel", "messages"},
-            {"value",   neograph::json::array({msgJson})},
-        }
+                       {"channel", "messages"},
+                       {"value", neograph::json::array({msgJson})},
+                       }
     });
 
     // 产出 ToolStart delta
@@ -319,7 +322,7 @@ asio::awaitable<void> test_eventbridge_channel_write_messages() {
         XX_TEST_EXPECT_EQ(io->deltas[0].toolCallId, std::string{"call_1"});
     }
     // 历史已追加
-    XX_TEST_EXPECT_EQ(session->fullHistory.size(), size_t{1});
+    XX_TEST_EXPECT_EQ(session->viewMessages.size(), size_t{1});
 
     co_return;
 }
