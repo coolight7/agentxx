@@ -109,13 +109,11 @@ void StdIOClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
 }
 
 void StdIOClientAgentIO::onSync(const agentxx::agent::SyncPayload& payload) {
-    for (const auto& hm : payload.messages) {
-        auto role    = hm.data.value("role", std::string{});
-        auto content = hm.data.value("content", std::string{});
-        if (role == "user") {
-            std::cout << "> " << content << std::endl;
-        } else if (role == "assistant") {
-            std::cout << content << std::endl;
+    for (const auto& vm : payload.messages) {
+        if (vm.role == agentxx::agent::ViewMessage::Role::User) {
+            std::cout << "> " << vm.text << std::endl;
+        } else if (vm.role == agentxx::agent::ViewMessage::Role::Assistant) {
+            std::cout << vm.text << std::endl;
         }
     }
 }

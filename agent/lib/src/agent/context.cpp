@@ -5,13 +5,15 @@
 namespace agentxx {
 namespace agent {
 
-std::string Session::appendHistory(neograph::json msgData) {
-    // 强制校验: fullHistory/chainHash/msgIdCounter_ 仅允许 io 线程写入
+std::string Session::appendHistory(ViewMessage msg) {
+    // 强制校验: viewMessages/chainHash/msgIdCounter_ 仅允许 io 线程写入
     assertIoThread();
 
+    // 链式哈希对消息内容 (不含 id): 与旧实现 (json 内容 dump) 语义一致
+    chainHash.append(msg.toJson().dump());
     auto id = fmt::format("msg_{:06d}", ++msgIdCounter_);
-    chainHash.append(msgData.dump());
-    fullHistory.push_back(HistoryMessage{id, std::move(msgData)});
+    msg.id  = id;
+    viewMessages.push_back(std::move(msg));
     return id;
 }
 

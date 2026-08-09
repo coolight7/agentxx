@@ -23,6 +23,7 @@
 #include <deque>
 #include <format>
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -284,6 +285,14 @@ private:
     /// 与 sharedState_ 无关, 独立加锁 (消费方仅短暂持有, 不嵌套 sharedState 锁)
     std::mutex                         uiActionsMutex_;
     std::vector<std::function<void()>> uiActions_;
+
+    // ---- 中断请求 (client 线程独占) ----
+    /// 当前进行中中断的 wire id (onPeerMessage 收到 WireInterruptRequest 时设置,
+    /// 与 handleInterrupt 同线程顺序执行, 无需同步)
+    int64_t interruptWireId_ = 0;
+    /// 进行中中断的结果回传通道: wireId → 通道 (中断输入消息共享引用)。
+    /// handleInterrupt 插入/移除; WireInterruptExpired / stop() 关闭通道以终止等待
+    std::map<int64_t, std::shared_ptr<InterruptResultChannel>> activeInterrupts_;
 
     // ---- 系统资源监控 (每 kSystemInfoIntervalSec 秒采集一次 CPU/内存占用) ----
     /// Info 侧边栏系统资源显示开关存储于全局设置单例 TUISettings::showSystemInfo()

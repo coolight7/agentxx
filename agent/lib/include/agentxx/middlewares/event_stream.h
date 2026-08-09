@@ -501,12 +501,12 @@ public:
     /// @param io        对端 IO (发送 Delta/ContextStats; 为空表示 headless 场景)
     /// @param origCb    原始回调 (可空)
     EventBridge(
-        std::string                                   agentName,
-        std::string                                   threadId,
-        std::weak_ptr<agentxx::agent::AgentContext>   ctx,
-        std::shared_ptr<agentxx::agent::Session>      session,
-        std::shared_ptr<agentxx::agent::AgentIOBase>  io,
-        neograph::graph::GraphStreamCallback          origCb = nullptr
+        std::string                                  agentName,
+        std::string                                  threadId,
+        std::weak_ptr<agentxx::agent::AgentContext>  ctx,
+        std::shared_ptr<agentxx::agent::Session>     session,
+        std::shared_ptr<agentxx::agent::AgentIOBase> io,
+        neograph::graph::GraphStreamCallback         origCb = nullptr
     );
 
     /// 处理一个 GraphEvent (GraphStreamCallback 调用入口)
@@ -532,12 +532,12 @@ private:
     /// 发布总线事件: ERROR -> EventError (无订阅者时跳过)
     void publishError(std::string message, std::string where);
 
-    std::string                                   agentName_;
-    std::string                                   threadId_;
-    std::weak_ptr<agentxx::agent::AgentContext>   ctx_;
-    std::shared_ptr<agentxx::agent::Session>      session_;
-    std::shared_ptr<agentxx::agent::AgentIOBase>  io_;
-    neograph::graph::GraphStreamCallback          origCb_;
+    std::string                                  agentName_;
+    std::string                                  threadId_;
+    std::weak_ptr<agentxx::agent::AgentContext>  ctx_;
+    std::shared_ptr<agentxx::agent::Session>     session_;
+    std::shared_ptr<agentxx::agent::AgentIOBase> io_;
+    neograph::graph::GraphStreamCallback         origCb_;
 
     /// 最近一次 LLM 流式 chunk 类型 (用于切换 content/thinking 时附带时长)
     int lastChatChunkType_ = neograph::ChatStreamChunk::TYPE_UNKNOWN;
@@ -545,10 +545,10 @@ private:
     std::chrono::system_clock::time_point nodeStartTime_{};
     int64_t                               nodeStartTimeMs_ = 0;
 
-    /// toolCallId → fullHistory 索引 映射 (加速 edit 工具 diff 渲染)
+    /// toolCallId → viewMessages 索引 映射 (加速 tool 结果回填 O(1) 定位)
     /// - assistant(tool_calls) 消息登记, tool 结果按 id O(1) 定位, 避免每结果
     ///   从历史末尾线性回扫 O(n²); 未命中时回扫兜底 (如历史来自更早轮次)
-    /// - fullHistory append-only, 索引不失效
+    /// - viewMessages append-only, 索引不失效
     std::unordered_map<std::string, size_t> toolCallHistoryIndex_;
 };
 

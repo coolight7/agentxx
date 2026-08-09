@@ -56,7 +56,7 @@ enum class Activity : uint8_t {
 /// 单个会话的独立状态 (按 thread_id 区分)
 /// - 设计目标：单线程/多协程交错执行多会话，会话间状态彼此隔离
 /// - io/bus/contextStats 在 agent 线程 (io_context) 上访问，无需额外同步
-/// - fullHistory/llmMessages/chainHash/cancelToken/modelName 仅在 ioContext 线程读写,
+/// - viewMessages/llmMessages/chainHash/cancelToken/modelName 仅在 ioContext 线程读写,
 ///   通过 bindIoThread() 绑定 io 线程, assertIoThread() 强制校验。
 ///   client/UI 不直接读取, 需要时由 io 线程拷贝后经 Wire 消息 (Sync/Delta) 传输,
 ///   因此无需快照/锁同步
@@ -76,18 +76,18 @@ public:
 
     /// 完整历史消息 (append-only, 永不压缩, 用于 client 同步与展示)
     /// - 仅 ioContext 线程可读写 (写: appendHistory), 通过 assertIoThread() 强制
-    std::vector<HistoryMessage> fullHistory;
+    std::vector<ViewMessage> viewMessages;
     /// LLM 上下文消息 (可压缩/裁剪, 仅用于调用 LLM API)
     /// - 仅 ioContext 线程可读写
     neograph::json llmMessages = neograph::json::array();
-    /// fullHistory 的链式哈希 (用于 client 校验一致性)
+    /// viewMessages 的链式哈希 (用于 client 校验一致性)
     /// - 仅 ioContext 线程可读写 (appendHistory 内部更新)
     ChainHash chainHash;
     /// Delta 流序号 (单调递增, 原子操作, 跨线程安全)
     uint64_t deltaSeq = 0;
 
     // -------------------------------------------------------------------
-    // 线程绑定: 强制 fullHistory/llmMessages/chainHash 只在 io 线程写入
+    // 线程绑定: 强制 viewMessages/llmMessages/chainHash 只在 io 线程写入
     // -------------------------------------------------------------------
 
     /// 绑定 io 线程 (在 BaseAgent::runConversationTurnAsync 首次使用时调用)
@@ -104,7 +104,7 @@ public:
         [[maybe_unused]] auto bound = ioThreadId_.load(std::memory_order_relaxed);
         assert(
             (bound == std::thread::id{} || bound == std::this_thread::get_id())
-            && "Session: mutable state (fullHistory/llmMessages/chainHash) must only be "
+            && "Session: mutable state (viewMessages/llmMessages/chainHash) must only be "
                "accessed on the bound io thread"
         );
     }
@@ -115,9 +115,9 @@ public:
 
     /// 获取完整历史消息副本
     /// - 仅 io 线程调用 (assertIoThread 强制校验); 返回拷贝供 Sync 传输
-    std::vector<HistoryMessage> getFullHistoryCopy() const {
+    std::vector<ViewMessage> getFullHistoryCopy() const {
         assertIoThread();
-        return fullHistory;
+        return viewMessages;
     }
 
     /// 获取链式哈希信息
@@ -136,9 +136,9 @@ public:
     // io 线程专用写入接口
     // -------------------------------------------------------------------
 
-    /// 向 fullHistory 追加一条消息并更新链式哈希，返回分配的 msgId
+    /// 向 viewMessages 追加一条消息并更新链式哈希，返回分配的 msgId
     /// - 必须在 ioContext 线程内调用 (assertIoThread 强制校验)
-    std::string appendHistory(neograph::json msgData);
+    std::string appendHistory(ViewMessage msg);
 
     /// 设置本会话当前轮次的取消令牌 (仅 io 线程)
     void setCancelToken(std::shared_ptr<neograph::graph::CancelToken> token);
