@@ -202,7 +202,7 @@ public:
     }
 
     /// 发起请求并等待响应
-    /// - timeout 到期返回 nullopt, 并清理 pending 槽
+    /// - timeout 到期返回 nullopt, 并清理 pending 槽; timeout <= 0 表示不限制 (无限等待)
     /// - 同一 io_context 单线程运行, pending_/servers_ 无需加锁
     /// - return (resp/error)
     asio::awaitable<std::expected<RespType, std::string>>

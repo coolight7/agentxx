@@ -40,7 +40,8 @@ public:
 
     struct Config {
         std::string               threadId         = "session";
-        std::chrono::milliseconds interruptTimeout = std::chrono::seconds{300};
+        /// 中断/权限等待客户端响应的超时; <=0 表示不限制 (无限等待用户响应)
+        std::chrono::milliseconds interruptTimeout = std::chrono::milliseconds{0};
         /// 断线后保持运行中轮次的宽限期; <=0 表示断线立即取消轮次
         std::chrono::milliseconds gracePeriod = std::chrono::seconds{30};
         /// delta 环形缓冲容量 (按消息数)

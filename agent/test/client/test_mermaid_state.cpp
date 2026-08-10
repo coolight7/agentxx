@@ -1,6 +1,7 @@
 #include "test_mermaid_state.h"
 
 #include "agentxx-client/io/tui/components/overlays.h"
+#include "agentxx-client/io/tui/framework/modal_container.h"
 #include "agentxx-client/io/tui/framework/tui_context.h"
 #include "agentxx-client/io/tui/framework/tui_state.h"
 #include "agentxx-client/io/tui/mermaid_state.h"
@@ -8,6 +9,7 @@
 #include "ftxui/component/event.hpp"
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/screen.hpp"
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -414,6 +416,68 @@ void test_overlay_renders_plan_diagram() {
     XX_TEST_EXPECT_TRUE(seenGo); // 边标签
 }
 
+/// 回归: 状态图在 ModalContainer (center 居中) 中不再被压缩为 1 行高度。
+///
+/// 直接 Render(overlay) 时弹窗拿到全屏 box, 滚动区 |flex 撑满, 测不出该问题;
+/// 真实 TUI 经 ModalContainer 的 center 渲染, 弹窗按自然尺寸摆放 ——
+/// Scrollable 的 ListView 惰性布局 (min_y=0) 使滚动区自然高度仅 1 行,
+/// 若弹窗无高度下限, 状态图会被压成 1 行且无法滚动。
+void test_overlay_in_modal_container_height() {
+    OverlayFixture f;
+    f.pushPlan(R"({"roadmap":"stateDiagram-v2\n[*] --> A\nA --> B: go\nB --> [*]\n","todos":[]})");
+
+    auto overlay = std::make_shared<PlanDiagramOverlay>(f.ctx);
+    auto modal   = ModalContainer::Create(std::make_shared<ftxui::ComponentBase>());
+    modal->pushModal(overlay);
+
+    auto renderModal = [&]() {
+        auto el     = modal->Render();
+        auto screen = ftxui::Screen::Create(
+            ftxui::Dimension::Fixed(120), ftxui::Dimension::Fixed(50)
+        );
+        ftxui::Render(screen, el);
+        return screen.ToString();
+    };
+    auto out = renderModal();
+
+    // 弹窗高度断言: footer (含 "Scroll" 提示) 与 header 的行差应 >= 8。
+    // 修复前弹窗仅 ~5 行高 (滚动区 1 行), 行差为 4。
+    std::vector<std::string> rows;
+    {
+        std::stringstream ss(out);
+        std::string       line;
+        while (std::getline(ss, line)) {
+            rows.push_back(line);
+        }
+    }
+    int headerRow = -1, footerRow = -1;
+    for (size_t i = 0; i < rows.size(); ++i) {
+        if (contains(rows[i], "Plan Diagram")) {
+            headerRow = static_cast<int>(i);
+        }
+        if (contains(rows[i], "Scroll") && footerRow < 0) {
+            footerRow = static_cast<int>(i);
+        }
+    }
+    XX_TEST_EXPECT_TRUE(headerRow >= 0);
+    XX_TEST_EXPECT_TRUE(footerRow >= 0);
+    if (headerRow >= 0 && footerRow >= 0) {
+        XX_TEST_EXPECT_TRUE(footerRow - headerRow >= 8);
+    }
+
+    // 图首层节点可见
+    XX_TEST_EXPECT_TRUE(contains(out, "A"));
+
+    // 滚动区足够高: 下层节点 B 可通过滚动看到 (修复前滚动区 1 行, maxOffset=0, 永远不可见)
+    bool seenB = contains(out, "B");
+    for (int i = 0; i < 12 && !seenB; ++i) {
+        overlay->OnEvent(ftxui::Event::ArrowDown);
+        out    = renderModal();
+        seenB  = contains(out, "B");
+    }
+    XX_TEST_EXPECT_TRUE(seenB);
+}
+
 void test_overlay_without_plan_shows_hint() {
     OverlayFixture f; // 无任何消息
 
@@ -494,6 +558,7 @@ TestResult testMermaidState() {
     test_render_cjk_label_width();
     // PlanDiagramOverlay
     test_overlay_renders_plan_diagram();
+    test_overlay_in_modal_container_height();
     test_overlay_without_plan_shows_hint();
     test_overlay_invalid_plan_json_no_crash();
     test_overlay_escape_closes();

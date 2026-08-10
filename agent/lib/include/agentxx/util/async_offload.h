@@ -236,13 +236,18 @@ asio::awaitable<T> offloadCancellableAsync(
 
 /// 超时等待协程完成
 /// - timeout 使用毫秒精度, 秒级调用方可隐式转换 (秒->毫秒不损失精度, 反之则不能隐式转换)
+/// - timeout <= 0 表示不限制: 不启动定时器, 无限等待工作协程完成 (也不触发 onTimeout)
 template<typename T>
 asio::awaitable<T> asyncWithTimeout(
     std::function<asio::awaitable<T>()> future,
     std::chrono::milliseconds           timeout,
     std::function<T()>                  onTimeout = nullptr
 ) {
-    auto               ctx = co_await asio::this_coro::executor;
+    auto ctx = co_await asio::this_coro::executor;
+    if (timeout.count() <= 0) {
+        // 不限制: 直接等待工作协程, 超时/异常按原语义传递
+        co_return co_await future();
+    }
     asio::steady_timer timer(ctx, timeout);
     // 注意: 不能使用 `operator||` (其内部是 wait_for_one_success 语义) —— 当工作协程
     // 快速失败 (如 file_patterns 无匹配、文件读取错误) 时, 该语义不会立即返回, 而是继续

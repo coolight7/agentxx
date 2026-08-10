@@ -604,11 +604,17 @@ Element PlanDiagramOverlay::OnRender() {
         text(" "),
     });
 
-    // 默认全屏大小保留一圈边距 (上下左右各 2 字符): 弹窗在 ModalContainer 中居中,
-    // 四周自然露出背景色边距; 宽度下限 40 与状态图渲染预算保持一致
+    // 弹窗大小: 默认 2/3 屏 (小终端保底 10 行), 在 ModalContainer 中居中后
+    // 四周自然露出背景色边距; 宽度下限 40 与状态图渲染预算保持一致。
+    // 注意: 高度必须同时给 GREATER_THAN 下限 —— Scrollable 的 ListView 为惰性
+    // viewport (ComputeRequirement 返回 min_y=0), 滚动区 hbox 自然高度仅 1 行,
+    // 若只有 LESS_THAN 上限, 弹窗在 center 下按自然高度 (~5 行) 摆放,
+    // 状态图会被压缩成 1 行高度。GREATER_THAN+LESS_THAN 组合等价于固定高度,
+    // 滚动区由内部 |flex 撑满剩余行。
     const int margin = 2;
     const int maxW   = std::max(40, Terminal::Size().dimx - margin * 2);
     const int maxH   = std::max(10, Terminal::Size().dimy - margin * 2);
+    const int popupH = std::max(10, maxH * 2 / 3);
     return vbox({
                header,
                separator(),
@@ -617,7 +623,8 @@ Element PlanDiagramOverlay::OnRender() {
                text(" [Wheel/Up/Down] Scroll  [Esc] Close ") | center | dim,
            })
            | border | size(WIDTH, LESS_THAN, maxW * 2 / 3) | size(WIDTH, GREATER_THAN, 40)
-           | size(HEIGHT, LESS_THAN, maxH * 2 / 3) | color(theme.accentColor);
+           | size(HEIGHT, GREATER_THAN, popupH) | size(HEIGHT, LESS_THAN, popupH)
+           | color(theme.accentColor);
 }
 
 bool PlanDiagramOverlay::OnEvent(Event event) {
