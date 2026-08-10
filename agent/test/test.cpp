@@ -44,6 +44,7 @@
 #include "test_text_selection_monitor.h"
 #include "test_toolcall_args.h"
 #ifdef AGENTXX_BUILD_CLIENT
+#include "test_config_loader.h"
 #include "test_mermaid_state.h"
 #include "test_thread_id.h"
 #include "test_tui_input.h"
@@ -124,6 +125,7 @@ int main(int argn, char** argv) {
     runSync("settings_db", agentxx::test::testSettingsDb);
     runSync("toolcall_args", agentxx::test::testToolcallArgs);
 #ifdef AGENTXX_BUILD_CLIENT
+    runSync("config_loader", agentxx::test::testConfigLoader);
     runSync("tui_settings", agentxx::test::testTuiSettings);
     runSync("tui_input", agentxx::test::testTuiInput);
     runSync("tui_interrupt", agentxx::test::testTuiInterrupt);

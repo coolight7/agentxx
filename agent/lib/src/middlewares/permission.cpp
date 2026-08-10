@@ -56,6 +56,21 @@ asio::awaitable<bool> PermissionMiddlewareHandle::defOnFilesystemHandle(
                 );
         }
     }
+    // 未命中任何规则: 按 noRuleOperator 处理 (CodeAgent 按 permission.mode 设置;
+    // 默认 ALLOW 与历史行为一致, 无规则即放行)
+    switch (noRuleOperator) {
+        case PermissionOperator::ALLOW:
+            co_return true;
+        case PermissionOperator::DENY:
+            co_return false;
+        case PermissionOperator::INTERRUPT:
+            co_return co_await requestPermission(
+                item,
+                args,
+                index == FilesystemPermissionREAD ? "filesystem_read" : "filesystem_write",
+                path
+            );
+    }
     co_return true;
 }
 

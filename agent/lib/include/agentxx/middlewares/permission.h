@@ -45,6 +45,13 @@ public:
         std::function<asio::awaitable<bool>(const neograph::Tool& item, neograph::json& args)>>
         handles{};
 
+    /// 未命中任何已注册规则时 (router 返回 nullptr) 的默认处理操作。
+    /// - 默认 ALLOW: 与历史行为一致 (无规则即放行)
+    /// - CodeAgent 按配置的 permission.mode 设置:
+    ///   ask/all_ask → INTERRUPT (询问), pass → ALLOW, deny → DENY,
+    ///   使未注册规则覆盖的路径 (如白名单子树之外的兄弟路径) 也有明确语义
+    PermissionOperator noRuleOperator = PermissionOperator::ALLOW;
+
     PermissionMiddlewareHandle(std::weak_ptr<agentxx::agent::AgentContext> in_agentContext);
 
     void setFilesystemPermission(std::string_view path, PermissionOperator op, size_t index);

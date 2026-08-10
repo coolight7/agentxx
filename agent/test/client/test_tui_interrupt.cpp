@@ -1,10 +1,13 @@
 #include "test_tui_interrupt.h"
 
+#include "agentxx-client/io/tui/agent_tui.h"
 #include "agentxx-client/io/tui/components/message_list.h"
 #include "agentxx-client/io/tui/framework/tui_context.h"
 #include "agentxx-client/io/tui/framework/tui_state.h"
 #include "agentxx-client/io/tui/tui_theme.h"
 #include "agentxx/util/string_util.h"
+#include "asio/co_spawn.hpp"
+#include "asio/detached.hpp"
 #include "asio/io_context.hpp"
 #include "ftxui/component/event.hpp"
 #include "ftxui/component/mouse.hpp"
@@ -589,6 +592,136 @@ void test_expired_rendered() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// 客户端侧权限通行模式 (yaml permission_mode: pass)
+// handleInterrupt 收到权限询问 (interruptNode == "permission") 时,
+// 通行模式直接返回允许, 不创建中断输入消息, 并输出一条 Pass 提示
+// ---------------------------------------------------------------------------
+
+asio::awaitable<void> test_permission_pass_mode_auto_allow() {
+    asio::io_context                          io;
+    auto                                      agentCtx = std::make_shared<agentxx::agent::AgentContext>();
+    auto tui = std::make_shared<TUIClientAgentIO>(
+        io.get_executor(),
+        agentCtx,
+        "session",
+        TUITheme::darkTheme(),
+        agentxx::agent::PermissionMode::Pass
+    );
+
+    auto result = co_await tui->handleInterrupt(
+        "session",
+        "permission",
+        "/data/x.txt",
+        R"({"name":"perm","arg":{"category":"filesystem_write","target":"/data/x.txt"},"resultId":"r1","inputs":[]})"
+    );
+
+    // 通行模式: 直接返回允许, 无需用户介入
+    XX_TEST_EXPECT_TRUE(result.is_array());
+    if (result.is_array()) {
+        XX_TEST_EXPECT_EQ(result.size(), size_t{1});
+        if (result.size() == 1) {
+            XX_TEST_EXPECT_EQ(result[0].get<std::string>(), std::string("true"));
+        }
+    }
+
+    // 消息列表出现 "[Permission] Pass mode" 提示 (含目标与分类)
+    auto  snap        = tui->sharedState().readSnapshot();
+    bool  foundPass   = false;
+    bool  foundTarget = false;
+    for (const auto& m : snap->messages) {
+        if (m->role != TUIMessage::Role::System) {
+            continue;
+        }
+        if (m->text.find("[Permission] Pass mode") != std::string::npos) {
+            foundPass = true;
+        }
+        if (m->text.find("/data/x.txt") != std::string::npos
+            && m->text.find("filesystem_write") != std::string::npos) {
+            foundTarget = true;
+        }
+    }
+    XX_TEST_EXPECT_TRUE(foundPass);
+    XX_TEST_EXPECT_TRUE(foundTarget);
+
+    // 通行模式不应产生中断输入消息 (无等待用户输入)
+    for (const auto& m : snap->messages) {
+        XX_TEST_EXPECT_TRUE(m->role != TUIMessage::Role::Interrupt);
+    }
+    co_return;
+}
+
+void test_permission_pass_mode() {
+    asio::io_context io;
+    asio::co_spawn(io, test_permission_pass_mode_auto_allow(), asio::detached);
+    io.run();
+}
+
+// ---------------------------------------------------------------------------
+// 客户端侧权限拒绝模式 (yaml permission_mode: deny)
+// handleInterrupt 收到权限询问 (interruptNode == "permission") 时,
+// 拒绝模式直接返回拒绝, 不创建中断输入消息, 并输出一条 Deny 提示
+// ---------------------------------------------------------------------------
+
+asio::awaitable<void> test_permission_deny_mode_auto_reject() {
+    asio::io_context                          io;
+    auto                                      agentCtx = std::make_shared<agentxx::agent::AgentContext>();
+    auto tui = std::make_shared<TUIClientAgentIO>(
+        io.get_executor(),
+        agentCtx,
+        "session",
+        TUITheme::darkTheme(),
+        agentxx::agent::PermissionMode::Deny
+    );
+
+    auto result = co_await tui->handleInterrupt(
+        "session",
+        "permission",
+        "/data/x.txt",
+        R"({"name":"perm","arg":{"category":"filesystem_write","target":"/data/x.txt"},"resultId":"r1","inputs":[]})"
+    );
+
+    // 拒绝模式: 直接返回拒绝, 无需用户介入
+    XX_TEST_EXPECT_TRUE(result.is_array());
+    if (result.is_array()) {
+        XX_TEST_EXPECT_EQ(result.size(), size_t{1});
+        if (result.size() == 1) {
+            XX_TEST_EXPECT_EQ(result[0].get<std::string>(), std::string("false"));
+        }
+    }
+
+    // 消息列表出现 "[Permission] Deny mode" 提示 (含目标与分类)
+    auto  snap        = tui->sharedState().readSnapshot();
+    bool  foundDeny   = false;
+    bool  foundTarget = false;
+    for (const auto& m : snap->messages) {
+        if (m->role != TUIMessage::Role::System) {
+            continue;
+        }
+        if (m->text.find("[Permission] Deny mode") != std::string::npos) {
+            foundDeny = true;
+        }
+        if (m->text.find("/data/x.txt") != std::string::npos
+            && m->text.find("filesystem_write") != std::string::npos) {
+            foundTarget = true;
+        }
+    }
+    XX_TEST_EXPECT_TRUE(foundDeny);
+    XX_TEST_EXPECT_TRUE(foundTarget);
+
+    // 拒绝模式不应产生中断输入消息 (无等待用户输入)
+    for (const auto& m : snap->messages) {
+        XX_TEST_EXPECT_TRUE(m->role != TUIMessage::Role::Interrupt);
+    }
+    co_return;
+}
+
+void test_permission_deny_mode() {
+    asio::io_context io;
+    asio::co_spawn(io, test_permission_deny_mode_auto_reject(), asio::detached);
+    io.run();
+}
+
 TestResult testTuiInterrupt() {
     g_tui_interrupt_passed = 0;
     g_tui_interrupt_failed = 0;
@@ -603,6 +736,10 @@ TestResult testTuiInterrupt() {
     test_permission_remember_ui_only_for_rememberable();
     test_permission_remember_toggle_and_confirm();
     test_permission_remember_without_toggle();
+    // 客户端权限通行模式 (yaml permission_mode: pass)
+    test_permission_pass_mode();
+    // 客户端权限拒绝模式 (yaml permission_mode: deny)
+    test_permission_deny_mode();
     // int
     test_int_step_plus_minus();
     test_int_arrow_step_active();

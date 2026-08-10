@@ -11,6 +11,23 @@
 namespace agentxx {
 namespace agent {
 
+/// 权限询问处理模式 (yaml `permission.mode` 指定; 默认 Ask)
+///
+/// 服务端 CodeAgent 按模式注册文件系统读写默认规则 (见 code_agent.cpp
+/// setupMiddleware), 白名单/黑名单路径始终优先于模式默认规则;
+/// 客户端 (TUI/CLI) 仅对仍到达的权限 INTERRUPT 询问作兜底处理。
+///
+/// - Ask:    当前工作目录内允许读写, 其他路径询问用户
+/// - AllAsk: 所有路径读写均询问用户
+/// - Pass:   全部放行, 不询问
+/// - Deny:   全部拒绝, 不询问
+enum class PermissionMode : int {
+    Ask    = 0,
+    AllAsk = 1,
+    Pass   = 2,
+    Deny   = 3,
+};
+
 /// 模型连接配置
 /// - 用于主模型和 subagent 模型的统一描述
 /// - 同时作为 OpenAIProvider / AnthropicProvider 的配置
@@ -106,6 +123,21 @@ public:
     /// - 索引数据库: {dataDir}/sqlite/codegraph/<折叠路径>/index.db
     ///   (深层路径折叠 + 单段截断控制长度, 子目录可前缀复用最近父级索引)
     bool enableCodeGraph = true;
+
+    /// 权限询问处理模式 (yaml `permission.mode`; 见 PermissionMode)
+    /// - CodeAgent 启动时按模式注册文件系统读写默认规则:
+    ///   Ask=工作目录内允许+其他询问 / AllAsk=全部询问 / Pass=全部放行 / Deny=全部拒绝
+    PermissionMode permissionMode = PermissionMode::Ask;
+
+    /// 权限白名单: 始终放行 (ALLOW) 的路径列表 (yaml `permission.whitelist`)
+    /// - 最长前缀匹配, 支持 * 通配符; 相对路径按程序工作目录解析为绝对路径
+    /// - 优先级高于模式默认规则 (如 Deny 模式下白名单路径仍可访问)
+    std::vector<std::string> permissionAllowPaths;
+
+    /// 权限黑名单: 始终拒绝 (DENY) 的路径列表 (yaml `permission.blacklist`)
+    /// - 最长前缀匹配, 支持 * 通配符; 相对路径按程序工作目录解析为绝对路径
+    /// - 与白名单同路径时黑名单优先 (后注册覆盖)
+    std::vector<std::string> permissionDenyPaths;
 
     /// 是否启用会话 SQLite 持久化 (消息上下文/展示历史/share store)
     /// - 数据目录: {dataDir}/sqlite/sessions/{threadId}/

@@ -21,6 +21,25 @@
 # data_dir: ~/.agentxx
 data_dir: default
 
+# === 权限配置 (该配置项已从 TUI 设置弹窗移除, 启动时提示一次)
+# - mode: 询问处理模式
+#   - ask:     当前工作目录内允许读写, 其他路径询问用户 (默认)
+#   - all_ask: 所有路径读写均询问用户
+#   - pass:    全部放行, 不询问
+#   - deny:    全部拒绝, 不询问
+# - whitelist (可选路径列表; 最长前缀匹配, 支持 * 通配符;
+#   相对路径按程序工作目录解析为绝对路径): 始终放行, 优先级高于 mode 默认规则
+#   (如 deny 模式下白名单路径仍可访问)
+# - blacklist: 始终拒绝, 与白名单同路径时黑名单优先
+permission:
+  mode: ask
+  # whitelist:
+  #   - "C:/work/trusted"
+  #   - "/home/user/shared/**"
+  # blacklist:
+  #   - "C:/secret"
+  #   - "/home/user/.ssh"
+
 # === 模型列表
 models:
   # 声明模型，[name] 取 [default] 仅是自定义名称，并不会被默认使用，应当在 [use_model] 中指定
