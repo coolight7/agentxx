@@ -65,7 +65,7 @@ int main(int argn, char** argv) {
 #if XX_IS_WIN_D
     SetConsoleOutputCP(CP_UTF8);
 #endif
-#if XX_IS_DEBUG_D && XX_IS_LINUX_D
+#if XX_IS_DEBUG_D && (XX_IS_LINUX_D || XX_IS_WIN_D)
     agentxx::util::signalError(argv[0]);
 #endif
 
