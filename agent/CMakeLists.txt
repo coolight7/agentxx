@@ -33,6 +33,18 @@ option(AGENTXX_ENABLE_VECTORSCAN "Add VectorScan for regex support. Use [AGENTXX
 option(AGENTXX_ENABLE_HYPERSCAN "Add HyperScan for regex support. Use [AGENTXX_ENABLE_VECTORSCAN] or std::regex if disable." OFF)
 option(AGENTXX_ENABLE_CODEGRAPH "Add CodeGraph-CPP for code analysis." ON)
 option(AGENTXX_ENABLE_BOOST_PROCESS "Use Boost.process for execute command toolcall." ON)
+# ===== Debug 构建加速选项 =====
+# - 关闭后 Debug 构建不再启用 AddressSanitizer，编译与链接显著加快
+#   (仍保留 -fno-omit-frame-pointer 便于调试)，默认开启保持原有行为
+option(AGENTXX_ENABLE_ASAN "Enable AddressSanitizer for Debug builds." ON)
+# - 关闭后 Debug 构建不带调试符号 (-g)，进一步加快编译/链接
+option(AGENTXX_ENABLE_DEBUG_INFO "Enable debug info (-g) for Debug builds." ON)
+# - 预编译稳定的第三方头文件 (fmt/asio/boost.exception 等) 加速 lib/client/test 编译;
+#   项目自身头文件不参与 PCH，改动时不会触发全量重编。仅 GCC/Clang 生效
+option(AGENTXX_ENABLE_PCH "Enable precompiled headers (GCC/Clang)." ON)
+# - 链接器选择 (GCC/Clang): auto 自动检测 mold -> gold -> 默认 bfd;
+#   也可直接指定 mold/gold/bfd 等。mold 可大幅减少大体积二进制链接时间
+set(AGENTXX_LINKER "auto" CACHE STRING "Linker for GCC/Clang: auto|mold|gold|bfd|...")
 
 # 仅用于指示是否编译用于调试用途，不代表真实编译类型
 # - [XX_IS_DEBUG_D] == 1 时，启用大部分调试日志等信息，因此 profile 之类注重
@@ -224,17 +236,67 @@ else ()
   set(CMAKE_CXX_FLAGS_MINSIZEREL     "${_AGENTXX_CXX_FLAGS} ${CMAKE_CXX_FLAGS_MINSIZEREL}")
   set(CMAKE_C_FLAGS_RELWITHDEBINFO   "${_AGENTXX_C_FLAGS}   ${CMAKE_C_FLAGS_RELWITHDEBINFO}")
   set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${_AGENTXX_CXX_FLAGS} ${CMAKE_CXX_FLAGS_RELWITHDEBINFO}")
-  set(CMAKE_C_FLAGS_DEBUG            "${_AGENTXX_C_FLAGS}   -fsanitize=address -g -fno-omit-frame-pointer -fno-optimize-sibling-calls ${CMAKE_C_FLAGS_DEBUG}")
-  set(CMAKE_CXX_FLAGS_DEBUG          "${_AGENTXX_CXX_FLAGS} -fsanitize=address -g -fno-omit-frame-pointer -fno-optimize-sibling-calls ${CMAKE_CXX_FLAGS_DEBUG}")
+  # Debug 编译加速: -g / ASAN 均可通过选项关闭;
+  # - 启用 ASAN 时: -fsanitize=address -fno-omit-frame-pointer -fno-optimize-sibling-calls
+  # - 关闭 ASAN 时: 保留 -fno-omit-frame-pointer 便于调试/性能分析
+  # - 关闭 DEBUG_INFO 时: 需同时剔除 CMake 为 GCC/Clang 默认追加的 -g
+  #   (CMAKE_CXX_FLAGS_DEBUG 默认值即 "-g")，否则产物依旧膨胀
+  set(_AGENTXX_DEBUG_EXTRA_FLAGS "")
+  if (AGENTXX_ENABLE_DEBUG_INFO)
+    string(APPEND _AGENTXX_DEBUG_EXTRA_FLAGS " -g")
+  else()
+    string(REGEX REPLACE "(^| )-g([0-9])?( |$)" " " CMAKE_C_FLAGS_DEBUG   "${CMAKE_C_FLAGS_DEBUG}")
+    string(REGEX REPLACE "(^| )-g([0-9])?( |$)" " " CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG}")
+  endif()
+  if (AGENTXX_ENABLE_ASAN)
+    string(APPEND _AGENTXX_DEBUG_EXTRA_FLAGS " -fsanitize=address -fno-omit-frame-pointer -fno-optimize-sibling-calls")
+  else()
+    string(APPEND _AGENTXX_DEBUG_EXTRA_FLAGS " -fno-omit-frame-pointer")
+  endif()
+  set(CMAKE_C_FLAGS_DEBUG            "${_AGENTXX_C_FLAGS}   ${_AGENTXX_DEBUG_EXTRA_FLAGS} ${CMAKE_C_FLAGS_DEBUG}")
+  set(CMAKE_CXX_FLAGS_DEBUG          "${_AGENTXX_CXX_FLAGS} ${_AGENTXX_DEBUG_EXTRA_FLAGS} ${CMAKE_CXX_FLAGS_DEBUG}")
+  unset(_AGENTXX_DEBUG_EXTRA_FLAGS)
 
   if (XX_IS_RELEASE_D)
     set(_AGENTXX_LDFLAGS "${LDFLAGS} ${_AGENTXX_LDFLAGS} -Wl,--gc-sections -flto")
   else ()
-    set(_AGENTXX_LDFLAGS "${LDFLAGS} ${_AGENTXX_LDFLAGS} -fsanitize=address")
+    if (AGENTXX_ENABLE_ASAN)
+      set(_AGENTXX_LDFLAGS "${LDFLAGS} ${_AGENTXX_LDFLAGS} -fsanitize=address")
+    else ()
+      set(_AGENTXX_LDFLAGS "${LDFLAGS} ${_AGENTXX_LDFLAGS}")
+    endif()
   endif ()
 endif ()
 string(APPEND CMAKE_EXE_LINKER_FLAGS    " ${_AGENTXX_LDFLAGS}")
 string(APPEND CMAKE_SHARED_LINKER_FLAGS " ${_AGENTXX_LDFLAGS}")
+
+# 快速链接器 (GCC/Clang): mold > gold > 默认 bfd，大幅减少大体积二进制链接时间
+# - auto: 自动检测 mold / ld.gold，均未安装时使用默认链接器
+# - 也可通过 -DAGENTXX_LINKER=mold|gold|bfd 显式指定
+# - 不适用于 MSVC (无对应 -fuse-ld 语义)
+if (NOT XX_IS_MSVC_D)
+  set(_AGENTXX_LINKER_FLAG "")
+  if (AGENTXX_LINKER STREQUAL "auto")
+    find_program(_AGENTXX_MOLD_EXECUTABLE mold)
+    find_program(_AGENTXX_GOLD_EXECUTABLE ld.gold)
+    if (_AGENTXX_MOLD_EXECUTABLE)
+      message("[agentxx] Use fast linker: mold")
+      set(_AGENTXX_LINKER_FLAG "-fuse-ld=mold")
+    elseif (_AGENTXX_GOLD_EXECUTABLE)
+      message("[agentxx] Use fast linker: gold")
+      set(_AGENTXX_LINKER_FLAG "-fuse-ld=gold")
+    else ()
+      message("[agentxx] Use default linker (bfd)")
+    endif()
+  elseif (AGENTXX_LINKER STREQUAL "bfd")
+    message("[agentxx] Use default linker (bfd)")
+  else ()
+    set(_AGENTXX_LINKER_FLAG "-fuse-ld=${AGENTXX_LINKER}")
+  endif()
+  string(APPEND CMAKE_EXE_LINKER_FLAGS    " ${_AGENTXX_LINKER_FLAG}")
+  string(APPEND CMAKE_SHARED_LINKER_FLAGS " ${_AGENTXX_LINKER_FLAG}")
+  unset(_AGENTXX_LINKER_FLAG)
+endif()
 
 unset(_AGENTXX_COMMON_C_CXX_FLAGS)
 unset(_AGENTXX_C_FLAGS)
@@ -319,6 +381,14 @@ set(_AGENTXX_COMMON_CMAKE_ARGS
 
     "-DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}"
     "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+    # ccache 等编译启动器需显式传给嵌套 (ExternalProject) 构建，否则子构建不会使用
+    "-DCMAKE_C_COMPILER_LAUNCHER=${CMAKE_C_COMPILER_LAUNCHER}"
+    "-DCMAKE_CXX_COMPILER_LAUNCHER=${CMAKE_CXX_COMPILER_LAUNCHER}"
+    # 嵌套构建引用 CCACHE_PROGRAM 判断是否启用 ccache 兼容选项 (如 -fpch-preprocess)
+    "-DCCACHE_PROGRAM=${CCACHE_PROGRAM}"
+    # 链接器 (mold/gold/-fsanitize 等) 同样需要显式传递给嵌套构建
+    "-DCMAKE_EXE_LINKER_FLAGS=${CMAKE_EXE_LINKER_FLAGS}"
+    "-DCMAKE_SHARED_LINKER_FLAGS=${CMAKE_SHARED_LINKER_FLAGS}"
     "-DCMAKE_INSTALL_PREFIX=${AGENTXX_INSTALL_DIR}"
     -DCMAKE_POSITION_INDEPENDENT_CODE=ON
     -DCMAKE_EXPORT_COMPILE_COMMANDS=${CMAKE_EXPORT_COMPILE_COMMANDS}
@@ -353,6 +423,10 @@ set(_AGENTXX_COMMON_CMAKE_ARGS
     "-DOPENSSL_ROOT_DIR:PATH=${OPENSSL_ROOT_DIR}"
     -DOPENSSL_USE_STATIC_LIBS=${OPENSSL_USE_STATIC_LIBS}
     -DYAML_CPP_STATIC_DEFINE=ON
+
+    -DAGENTXX_ENABLE_ASAN=${AGENTXX_ENABLE_ASAN}
+    -DAGENTXX_ENABLE_DEBUG_INFO=${AGENTXX_ENABLE_DEBUG_INFO}
+    -DAGENTXX_ENABLE_PCH=${AGENTXX_ENABLE_PCH}
     
     -DXX_IS_DEBUG_D=${XX_IS_DEBUG_D}
     -DXX_IS_RELEASE_D=${XX_IS_RELEASE_D}
