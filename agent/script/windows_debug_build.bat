@@ -13,6 +13,7 @@ set "crude_dir=%CD%"
 set "script_dir=%~dp0"
 set "src_dir=%script_dir%\..\"
 set "build_dir=%script_dir%\..\build\windows-debug"
+set "output_dir=%script_dir%\..\build\windows-debug-output"
 
 cd %script_dir%
 set script_dir=%CD%
@@ -68,3 +69,5 @@ if %ERRORLEVEL% neq 0 (
     echo cmake install failed!
     exit /b 1
 )
+
+copy "%build_dir%\exec\agentxx_cli.exe" "%output_dir%\"
