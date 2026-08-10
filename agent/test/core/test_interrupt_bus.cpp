@@ -11,6 +11,7 @@
 #include "asio/detached.hpp"
 #include "asio/io_context.hpp"
 #include "asio/use_awaitable.hpp"
+#include <filesystem>
 #include <fmt/format.h>
 #include <iostream>
 #include <memory>
@@ -253,6 +254,109 @@ asio::awaitable<void> test_interrupt_bus_custom_handler() {
     co_return;
 }
 
+/// 权限路由: 相对路径应基于当前工作目录转换为绝对路径后再匹配规则,
+/// 使注册的绝对路径规则 (如 {cwd}/*) 也能命中相对路径访问
+asio::awaitable<void> test_permission_relative_path() {
+    /// 最小 Tool 实现: 仅提供名称
+    class MockTool : public neograph::Tool {
+    public:
+
+        explicit MockTool(std::string name) :
+            name_(std::move(name)) {}
+
+        neograph::ChatTool get_definition() const override {
+            return neograph::ChatTool{
+                .name        = name_,
+                .description = "",
+                .parameters  = neograph::json::object(),
+            };
+        }
+
+        std::string get_name() const override { return name_; }
+
+        std::string execute(const neograph::json&) override { return ""; }
+
+    private:
+
+        std::string name_;
+    };
+
+    auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
+    auto permission
+        = std::make_shared<agentxx::middleware::PermissionMiddlewareHandle>(agentContext);
+
+    // 注册绝对路径规则 (与 code_agent.cpp 的默认注册方式一致)
+    auto cwd = std::filesystem::current_path().generic_string();
+    permission->setFilesystemPermission(
+        fmt::format("{}/*", cwd),
+        agentxx::middleware::PermissionOperator::ALLOW,
+        agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
+    );
+    // 最长前缀优先: cwd 下的 secret 子目录 DENY, 覆盖外层 ALLOW
+    permission->setFilesystemPermission(
+        fmt::format("{}/secret/*", cwd),
+        agentxx::middleware::PermissionOperator::DENY,
+        agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
+    );
+    permission->setFilesystemPermission(
+        "/*",
+        agentxx::middleware::PermissionOperator::INTERRUPT,
+        agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
+    );
+
+    MockTool item("agentxx_filesystem_write_file");
+
+    auto check = [&](std::string_view rel, std::string_view abs) -> asio::awaitable<void> {
+        // 相对路径访问
+        auto relArgs = neograph::json{{"path", std::string{rel}}};
+        auto relOk   = co_await permission->defOnFilesystemHandle(
+            item,
+            relArgs,
+            agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
+        );
+        // 对应绝对路径访问
+        auto absArgs = neograph::json{{"path", std::string{abs}}};
+        auto absOk   = co_await permission->defOnFilesystemHandle(
+            item,
+            absArgs,
+            agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
+        );
+        XX_TEST_EXPECT_EQ(relOk, absOk);
+    };
+
+    // 1. cwd 下的相对路径 -> 命中 {cwd}/* ALLOW (绝对/相对一致)
+    co_await check("src/main.cpp", fmt::format("{}/src/main.cpp", cwd));
+    co_await check("./a.txt", fmt::format("{}/a.txt", cwd));
+
+    // 2. cwd 下 secret 目录 -> 命中 {cwd}/secret/* DENY (最长前缀优先于外层 ALLOW)
+    co_await check("secret/x.log", fmt::format("{}/secret/x.log", cwd));
+
+    // 3. 带 .. 的相对路径 -> 词法规范化后命中 /* INTERRUPT (无 prompter 时拒绝)
+    {
+        std::error_code ec;
+        auto            parent = std::filesystem::path{cwd}.parent_path().generic_string();
+        co_await check("../outside.txt", fmt::format("{}/outside.txt", parent));
+    }
+
+    // 4. 空路径与 cwd 路径均不命中 {cwd}/* 规则, 回退到 /* INTERRUPT
+    //    (无 prompter 时均拒绝, 行为一致)
+    auto emptyArgs = neograph::json{{"path", ""}};
+    auto emptyOk   = co_await permission->defOnFilesystemHandle(
+        item,
+        emptyArgs,
+        agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
+    );
+    auto cwdArgs = neograph::json{{"path", cwd}};
+    auto cwdOk   = co_await permission->defOnFilesystemHandle(
+        item,
+        cwdArgs,
+        agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
+    );
+    XX_TEST_EXPECT_EQ(emptyOk, cwdOk);
+
+    co_return;
+}
+
 asio::awaitable<TestResult> run_interrupt_bus_tests() {
     g_ib_passed = 0;
     g_ib_failed = 0;
@@ -261,6 +365,7 @@ asio::awaitable<TestResult> run_interrupt_bus_tests() {
         co_await test_permission_bus_request_response();
         co_await test_registerOnBus_no_accumulation();
         co_await test_interrupt_bus_custom_handler();
+        co_await test_permission_relative_path();
     } catch (const std::exception& e) {
         TEST_FAIL << "interrupt_bus suite exception: " << e.what() << std::endl;
         g_ib_failed++;

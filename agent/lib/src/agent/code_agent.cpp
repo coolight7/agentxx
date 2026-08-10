@@ -44,7 +44,7 @@ asio::awaitable<void> CodeAgent::setupMiddleware() {
         auto permission
             = std::make_shared<agentxx::middleware::PermissionMiddlewareHandle>(agentContext);
         permission->setFilesystemPermission(
-            fmt::format("{}/*", std::filesystem::current_path().generic_string()),
+            fmt::format("{}/*", agentxx::agent::AgentConfigStatic::getCurrentWorkPath()),
             agentxx::middleware::PermissionOperator::ALLOW,
             agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
         );
