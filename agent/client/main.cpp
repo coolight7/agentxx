@@ -162,7 +162,7 @@ Options:
     std::map<std::string, std::string> overrideEnvVars;
     if (!overrideEnvPath.empty()) {
         overrideEnvVars = loadOverrideEnv(overrideEnvPath);
-        XX_OUT(
+        XX_LOGI(
             "[Config] Loaded {} override variables from: {}",
             overrideEnvVars.size(),
             overrideEnvPath
@@ -182,7 +182,7 @@ Options:
         }
         dotEnvVars = loadDotEnv(envPaths);
         if (!dotEnvVars.empty()) {
-            XX_OUT("[Config] Loaded {} variables from .env", dotEnvVars.size());
+            XX_LOGI("[Config] Loaded {} variables from .env", dotEnvVars.size());
         }
     }
 
@@ -192,7 +192,7 @@ Options:
         auto code = agentxx::util::catchError<int>(
             [&]() -> int {
                 yamlCfg = loadYamlConfig(configPath, dotEnvVars, overrideEnvVars);
-                XX_OUT("[Config] Loaded config from: {}", configPath);
+                XX_LOGI("[Config] Loaded config from: {}", configPath);
                 return 0;
             },
             [](std::string errmsg) -> int {
@@ -217,7 +217,7 @@ Options:
         if (yamlCfg.dataDir == agentxx::agent::AgentConfigStatic::kDefaultDataDirKey) {
             // 关键字 default: 取系统数据目录 (平台惯例)
             resolvedDataDir = agentxx::agent::AgentConfigStatic::systemDataDir();
-            XX_OUT("[Config] data_dir: default -> {}", resolvedDataDir);
+            XX_LOGI("[Config] data_dir: default -> {}", resolvedDataDir);
         } else {
             auto dataDirExpanded = agentxx::util::expandUserHomePath(yamlCfg.dataDir);
             std::filesystem::path fp{dataDirExpanded};
@@ -225,7 +225,7 @@ Options:
                 = fp.is_absolute()
                       ? fp.lexically_normal().string()
                       : (std::filesystem::current_path() / fp).lexically_normal().string();
-            XX_OUT("[Config] data_dir: {}", resolvedDataDir);
+            XX_LOGI("[Config] data_dir: {}", resolvedDataDir);
         }
     }
 
@@ -316,8 +316,8 @@ Options:
     // - dataDir 未配置 (为空) 时: 不绑定数据库, 设置仅存内存 (进程生命周期有效)
     if (mode == "tui") {
         if (resolvedDataDir.empty()) {
-            XX_OUT("[Config] data_dir not set: TUI settings will NOT be persisted "
-                   "(in-memory only)");
+            XX_LOGI("[Config] data_dir not set: TUI settings will NOT be persisted "
+                    "(in-memory only)");
         } else {
             auto settingsDb = std::make_shared<agentxx::util::SettingsDb>(
                 agentxx::agent::AgentConfigStatic::getGlobalSettingsDbPath(resolvedDataDir)
@@ -358,7 +358,7 @@ Options:
                 asio::signal_set         signals(*agent->ioCtx, SIGINT, SIGTERM);
                 neograph_asio_error_code ec;
                 co_await signals.async_wait(asio::redirect_error(asio::use_awaitable, ec));
-                XX_OUT("[agent_server] signal received, shutting down ({})...", ec.message());
+                XX_LOGI("[agent_server] signal received, shutting down ({})...", ec.message());
                 server->stop();
                 agent->ioCtx->stop();
                 co_return;

@@ -384,7 +384,7 @@ asio::awaitable<void>
         auto msgSize = newMsgsJson.size();
         in.state.overwrite("messages", std::move(newMsgsJson));
         if (agentCtxPtr->agentConfig->logPrintSummarizationResultTokenCount) {
-            XX_OUT(
+            XX_LOGD(
                 R"_(
 ┏━━━━━━ Summary ━━━━━━┓
 ┣━ Messages Length: {}
@@ -403,7 +403,7 @@ asio::awaitable<void>
         }
     } else {
         if (agentCtxPtr->agentConfig->logPrintSummarizationResultTokenCount) {
-            XX_OUT(
+            XX_LOGD(
                 R"_(
 ┏━━━━━━ Summary ━━━━━━┓
 ┣━ Messages Length: {}
