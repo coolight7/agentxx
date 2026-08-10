@@ -386,9 +386,8 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
     session->setCancelToken(cancelToken);
 
     // 中断等待超时: 优先取 IO 端点配置 (SessionServerAgentIO::interruptTimeout),
-    // 否则使用总线默认 (30s)。避免 HIL 弹窗被总线 30s 默认超时提前截断,
-    // 与 SessionServerAgentIO::Config::interruptTimeout (默认 300s) 的设计意图不一致。
-    auto interruptTimeout = std::chrono::milliseconds{0}; // 0 = 使用总线默认
+    // 否则默认不限制 (<=0 表示不限制, 避免 HIL 弹窗被总线 30s 默认超时提前截断)
+    auto interruptTimeout = std::chrono::milliseconds{0}; // 0 = 不限制
     if (session->io) {
         if (auto* serverIo
             = dynamic_cast<agentxx::agent::SessionServerAgentIO*>(session->io.get())) {
@@ -569,7 +568,8 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                             if (session && session->bus) {
                                 // 显式传递中断等待超时: 与 IO 端点
                                 // interruptTimeout 配置一致, 避免被总线默认
-                                // 30s 超时截断 (用户长时间未响应中断弹窗时丢失中断)
+                                // 30s 超时截断 (用户长时间未响应中断弹窗时丢失中断);
+                                // <=0 表示不限制
                                 auto resp = co_await
                                     [&]() -> asio::awaitable<
                                               std::expected<events::RespInterrupt, std::string>> {
@@ -584,18 +584,13 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                                         .interruptArgsJson = interruptArg.toJson().dump(),
                                         .resultId          = interruptArg.resultId,
                                     };
-                                    if (interruptTimeout.count() > 0) {
-                                        co_return co_await session->bus
-                                            ->request<events::ReqInterrupt, events::RespInterrupt>(
-                                                events::Topic::Interrupt,
-                                                std::move(req),
-                                                interruptTimeout
-                                            );
-                                    }
                                     co_return co_await session->bus
                                         ->request<events::ReqInterrupt, events::RespInterrupt>(
                                             events::Topic::Interrupt,
-                                            std::move(req)
+                                            std::move(req),
+                                            interruptTimeout.count() > 0
+                                                ? interruptTimeout
+                                                : std::chrono::milliseconds{0}
                                         );
                                 }();
                                 if (resp.has_value() && resp->handled) {

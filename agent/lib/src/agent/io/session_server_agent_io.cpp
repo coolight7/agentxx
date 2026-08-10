@@ -103,7 +103,13 @@ asio::awaitable<neograph::json> SessionServerAgentIO::handleInterrupt(
     bool           gotResponse = false;
     co_await agentxx::util::catchErrorAsync<bool>(
         [&]() -> asio::awaitable<bool> {
-            result = co_await ch->async_receive(asio::cancel_after(timeout, asio::use_awaitable));
+            // timeout <= 0 表示不限制: 不启用 cancel_after, 无限等待客户端响应
+            // (由 resolveInterrupt / failAllPending 正常结束等待)
+            if (timeout.count() > 0) {
+                result = co_await ch->async_receive(asio::cancel_after(timeout, asio::use_awaitable));
+            } else {
+                result = co_await ch->async_receive(asio::use_awaitable);
+            }
             gotResponse = true;
             co_return true;
         },
