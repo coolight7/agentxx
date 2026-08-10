@@ -40,12 +40,14 @@ TUIClientAgentIO::TUIClientAgentIO(
     asio::any_io_executor                         ex,
     std::shared_ptr<agentxx::agent::AgentContext> agentContext,
     std::string                                   threadId,
-    TUITheme                                      theme
+    TUITheme                                      theme,
+    agentxx::agent::PermissionMode                 permissionMode
 ) :
     agentContext_(std::move(agentContext)),
     theme_(theme),
     threadId_(std::move(threadId)),
     ex_(ex),
+    permissionMode_(permissionMode),
     inputChannel_(std::make_shared<LineChannel>(ex, 64)),
     logSink_(std::make_shared<TUILogSink>()) {
     if (agentContext_) {
@@ -105,6 +107,20 @@ void TUIClientAgentIO::postRedraw() {
 
 void TUIClientAgentIO::start() {
     running_ = true;
+    // 启动提示: 输出当前权限询问处理模式 (来自 yaml 配置 `permission.mode`,
+    // 该配置项已从 TUI 设置弹窗移除, 仅在启动时提示一次)
+    {
+        std::lock_guard<std::mutex> lock(sharedState_.mutex());
+        auto&                       st = sharedState_.mutableState();
+        st.messages.push_back(std::make_shared<TUIMessage>(TUIMessage::makeText(
+            TUIMessage::Role::System,
+            fmt::format(
+                "[Permission] Mode: {} (yaml `permission.mode`: ask=工作目录内允许/其他询问, "
+                "all_ask=全部询问, pass=全部放行, deny=全部拒绝)",
+                agentxx::client::permissionModeName(permissionMode_)
+            )
+        )));
+    }
     if (logSink_) {
         agentxx::util::LogDispatcher::instance().addSink(logSink_);
     }
@@ -1011,12 +1027,16 @@ asio::awaitable<neograph::json> TUIClientAgentIO::handleInterrupt(
             permCategory = handleArg.arg.value("category", std::string{});
             permTarget   = handleArg.arg.value("target", std::string{});
         }
-        // 通行模式: 不询问, 直接放行。
-        // 注意: 中间件已注册的显式规则 (ALLOW/DENY) 在服务端先行判定,
-        // 能走到这里说明策略为 INTERRUPT; 通行模式下视为允许, 无需用户介入
-        if (TUISettings::instance().permissionMode() == PermissionMode::Pass) {
-            const std::string_view shownTarget
-                = permTarget.empty() ? interruptValue : std::string_view{permTarget};
+        const std::string_view shownTarget
+            = permTarget.empty() ? interruptValue : std::string_view{permTarget};
+        // 客户端兜底处理 (模式来自 yaml 配置 `permission.mode`):
+        // 中间件已注册的显式规则 (ALLOW/DENY) 在服务端先行判定, 能走到这里
+        // 说明服务端策略为 INTERRUPT (如远程 server 与本地配置不一致时)。
+        // - pass: 视为允许, 无需用户介入
+        // - deny: 视为拒绝, 无需用户介入
+        // - ask/all_ask: 询问用户 (ask 模式下工作目录内的路径由服务端规则
+        //   直接放行, 到达客户端的均为需要询问的路径)
+        if (permissionMode_ == agentxx::agent::PermissionMode::Pass) {
             {
                 std::lock_guard<std::mutex> lock(sharedState_.mutex());
                 auto&                       st = sharedState_.mutableState();
@@ -1031,6 +1051,22 @@ asio::awaitable<neograph::json> TUIClientAgentIO::handleInterrupt(
             }
             postRedraw();
             co_return neograph::json::array({"true"});
+        }
+        if (permissionMode_ == agentxx::agent::PermissionMode::Deny) {
+            {
+                std::lock_guard<std::mutex> lock(sharedState_.mutex());
+                auto&                       st = sharedState_.mutableState();
+                st.messages.push_back(std::make_shared<TUIMessage>(TUIMessage::makeText(
+                    TUIMessage::Role::System,
+                    fmt::format(
+                        "[Permission] Deny mode: reject {} ({})",
+                        shownTarget,
+                        permCategory
+                    )
+                )));
+            }
+            postRedraw();
+            co_return neograph::json::array({"false"});
         }
     }
 

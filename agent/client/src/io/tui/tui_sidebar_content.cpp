@@ -231,11 +231,9 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
                 }
                 ++count;
                 elems.push_back(
-                    (splitName ? hbox({text(fmt::format(
-                                     "|  {}·{}",
-                                     agentxx::util::getFileName(notif.name),
-                                     notif.name
-                                 ))})
+                    (splitName ? hbox({text(
+                         fmt::format("|  {}·{}", agentxx::util::getFileName(notif.name), notif.name)
+                     )})
                                : hbox({text("|  "), text(notif.name)}))
                     | color(notif.success ? theme_.hintColor : theme_.errorColor)
                 );
@@ -300,9 +298,9 @@ ftxui::Element TUIClientAgentIO::renderLogSidebarFooter() {
 
     Elements row;
     if (st.currentNodeName.empty()) {
-        row.push_back(text(" idle") | color(theme_.hintColor));
+        row.push_back(text("idle") | color(theme_.hintColor));
     } else {
-        row.push_back(text(fmt::format(" > {}", st.currentNodeName)) | color(theme_.accentColor));
+        row.push_back(text(fmt::format("> {}", st.currentNodeName)) | color(theme_.accentColor));
     }
     row.push_back(filler());
 
