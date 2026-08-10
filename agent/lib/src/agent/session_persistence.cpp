@@ -125,7 +125,6 @@ CREATE TABLE IF NOT EXISTS item (
 
 /// meta 键名
 static constexpr std::string_view kMetaMsgIdCounter = "msgIdCounter";
-static constexpr std::string_view kMetaModelName    = "modelName";
 
 } // namespace
 
@@ -225,14 +224,11 @@ SessionPersistence::LoadedSession SessionPersistence::loadSession(std::string_vi
             if (ctxStmt.step()) {
                 out.llmMessages = neograph::json::parse(ctxStmt.columnText(0));
             }
-            // meta: msgIdCounter / modelName
+            // meta: msgIdCounter
             auto metaStmt = db.prepare("SELECT key, value FROM meta");
             while (metaStmt.step()) {
-                auto key = metaStmt.columnText(0);
-                if (key == kMetaMsgIdCounter) {
+                if (metaStmt.columnText(0) == kMetaMsgIdCounter) {
                     out.msgIdCounter = static_cast<uint64_t>(metaStmt.columnInt64(1));
-                } else if (key == kMetaModelName) {
-                    out.modelName = metaStmt.columnText(1);
                 }
             }
             // 兜底: 老数据无 msgIdCounter 记录时按历史条数恢复
@@ -333,27 +329,6 @@ void SessionPersistence::saveLlmMessages(
         },
         [&](std::string errmsg) -> bool {
             XX_LOGE("SessionPersistence: saveLlmMessages({}) failed: {}", threadId, errmsg);
-            return false;
-        }
-    );
-}
-
-void SessionPersistence::saveModelName(std::string_view threadId, std::string_view modelName) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    agentxx::util::catchError<bool>(
-        [&]() -> bool {
-            auto& db = dbs(threadId).sessionDb;
-            auto  stmt = db.prepare(
-                "INSERT INTO meta(key, value) VALUES (?, ?) "
-                "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
-            );
-            stmt.bindText(1, kMetaModelName);
-            stmt.bindText(2, modelName);
-            stmt.step();
-            return true;
-        },
-        [&](std::string errmsg) -> bool {
-            XX_LOGE("SessionPersistence: saveModelName({}) failed: {}", threadId, errmsg);
             return false;
         }
     );

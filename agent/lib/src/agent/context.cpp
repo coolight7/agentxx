@@ -27,11 +27,7 @@ void Session::setPersistenceHooks(SessionPersistenceHooks hooks) {
     hooks_ = std::move(hooks);
 }
 
-void Session::restore(
-    std::vector<ViewMessage> messages,
-    uint64_t                 msgIdCounter,
-    std::string              modelName
-) {
+void Session::restore(std::vector<ViewMessage> messages, uint64_t msgIdCounter) {
     assertIoThread();
 
     // 重建链式哈希: 与 appendHistory 一致, 对不含 id 的消息内容哈希
@@ -43,7 +39,6 @@ void Session::restore(
     }
     viewMessages  = std::move(messages);
     msgIdCounter_ = msgIdCounter;
-    modelName_    = std::move(modelName);
 }
 
 void Session::saveLlmMessages() {
@@ -66,10 +61,6 @@ std::shared_ptr<neograph::graph::CancelToken> Session::getCancelToken() {
 void Session::setModelName(std::string_view name) {
     assertIoThread();
     modelName_ = name;
-    // 持久化会话选择的模型名 (重启后恢复)
-    if (hooks_.onSaveModelName) {
-        hooks_.onSaveModelName(name);
-    }
 }
 
 std::string Session::getModelName() const {
@@ -86,13 +77,9 @@ std::shared_ptr<Session> SessionStore::getOrCreate(std::string_view threadId) {
     // 拷贝到局部: 供 lambda 按值捕获 (成员无法直接捕获)
     auto persistence = this->persistence;
     if (persistence) {
-        // 从 SQLite 恢复该 thread 的历史消息/LLM 上下文/模型名, 并绑定持久化回调
+        // 从 SQLite 恢复该 thread 的历史消息/LLM 上下文, 并绑定持久化回调
         auto loaded = persistence->loadSession(threadId);
-        session->restore(
-            std::move(loaded.viewMessages),
-            loaded.msgIdCounter,
-            std::move(loaded.modelName)
-        );
+        session->restore(std::move(loaded.viewMessages), loaded.msgIdCounter);
         session->llmMessages = std::move(loaded.llmMessages);
         // 捕获 threadId 副本, 回调生命周期随 session, 无悬垂风险
         auto tid = std::string{threadId};
@@ -102,9 +89,6 @@ std::shared_ptr<Session> SessionStore::getOrCreate(std::string_view threadId) {
             },
             .onSaveLlmMessages = [persistence, tid](const neograph::json& msgs) {
                 persistence->saveLlmMessages(tid, msgs);
-            },
-            .onSaveModelName = [persistence, tid](std::string_view name) {
-                persistence->saveModelName(tid, name);
             },
         });
     }

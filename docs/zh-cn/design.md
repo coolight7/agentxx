@@ -125,7 +125,7 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
   取不到主目录时回退系统临时目录)
 - 分库设计 (两个 DB 文件, 均启用 WAL + busy_timeout):
   - `session.db`: viewMessages (append-only, 每消息一行 JSON) + llmMessages
-    (单行整体替换, 每轮结束保存) + meta (msgIdCounter / modelName)
+    (单行整体替换, 每轮结束保存) + meta (msgIdCounter)
     —— 同属"会话消息状态", 同一生命周期 (随 thread 创建/删除), 同一 io 线程写入,
     一轮对话结束时消息与计数可事务性一起提交
   - `share_store.db`: agentxx_share_store KV 条目 (id 自增 = 现有最大 id + 1,
@@ -133,13 +133,12 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
     内容可丢弃/可清理, 生命周期独立于消息历史; 可能存放大型文本, 独立文件
     避免其膨胀拖慢消息库 WAL checkpoint, 也便于未来独立裁剪/归档
 - 接入点:
-  - `SessionStore::getOrCreate`: 创建 Session 时从 SQLite 恢复 viewMessages/llmMessages/
-    modelName, 重建链式哈希 (对不含 id 的消息内容, 与 appendHistory 语义一致),
+  - `SessionStore::getOrCreate`: 创建 Session 时从 SQLite 恢复 viewMessages/llmMessages,
+    重建链式哈希 (对不含 id 的消息内容, 与 appendHistory 语义一致),
     恢复 msgIdCounter 保证新消息 id 不冲突; 并绑定 `SessionPersistenceHooks`
     (std::function 回调, context.h 不依赖 sqlite 头)
   - `Session::appendHistory`: 追加后回调落库 (消息 + 计数事务提交)
   - `BaseAgent::runConversationTurnAsync`: 轮末回调保存 llmMessages (整表替换)
-  - `Session::setModelName`: 回调保存模型名
   - `MiddlewareContext` share store 四方法: 内存 map 作读缓存 (首次访问某 thread
     时从 DB 恢复全部条目与 id 计数器), 写操作同步写穿 DB
 - 容错: 所有落库失败仅记录错误日志, 不影响内存状态与对话主流程 (尽力而为持久化);

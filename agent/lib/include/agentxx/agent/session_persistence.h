@@ -19,7 +19,7 @@ namespace agent {
 ///   - session.db      会话消息状态:
 ///                       view_message 表  展示历史 (append-only, 每消息一行 JSON)
 ///                       llm_context 表  LLM 上下文消息 (单行整体替换, 每轮结束保存)
-///                       meta 表          msgIdCounter / modelName
+///                       meta 表          msgIdCounter
 ///   - share_store.db  agentxx_share_store KV 存储:
 ///                       item 表  id(自增) -> value
 ///
@@ -48,8 +48,7 @@ public:
         std::vector<ViewMessage> viewMessages;
         neograph::json           llmMessages = neograph::json::array();
         /// 恢复后的 msg id 计数器 (保证新消息 id 不与已存消息冲突)
-        uint64_t    msgIdCounter = 0;
-        std::string modelName;
+        uint64_t msgIdCounter = 0;
     };
 
     /// 加载指定 thread 的会话消息状态; 无数据/打开失败时返回空结构 (仅记日志)
@@ -63,9 +62,6 @@ public:
     /// 保存 LLM 上下文消息 (整表替换; 每轮对话结束时调用)
     /// - 失败仅记录日志, 不影响内存状态
     void saveLlmMessages(std::string_view threadId, const neograph::json& llmMessages);
-
-    /// 保存会话选择的模型名 (meta 表)
-    void saveModelName(std::string_view threadId, std::string_view modelName);
 
     // ---- share store (share_store.db) ----
 
