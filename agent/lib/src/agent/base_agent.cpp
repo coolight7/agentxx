@@ -2,6 +2,7 @@
 
 #include "agentxx/agent/checkpoint_store.h"
 #include "agentxx/agent/io/session_server_agent_io.h"
+#include "agentxx/agent/session_persistence.h"
 #include "agentxx/middlewares/summarization.h"
 #include "agentxx/util/diff_util.h"
 #include "agentxx/util/exception.h"
@@ -24,6 +25,13 @@ BaseAgent::BaseAgent(std::shared_ptr<agentxx::agent::AgentConfig> in_config) {
     agentContext->agentConfig = in_config;
     assert(nullptr != in_config);
     assert(in_config->model.isValid());
+    // 会话 SQLite 持久化 (开启时): 消息上下文/展示历史/share store
+    // 落库到 {root}/{threadId}/, 供重启恢复; root 可经配置重定向
+    if (in_config->enableSessionPersistence) {
+        agentContext->sessionPersistence
+            = std::make_shared<SessionPersistence>(in_config->sessionPersistenceRoot);
+        agentContext->sessions->persistence = agentContext->sessionPersistence;
+    }
 }
 
 asio::awaitable<void> BaseAgent::init() {
@@ -37,7 +45,9 @@ asio::awaitable<void> BaseAgent::init() {
     setupEventBus();
 
     agentContext->middlewareHandleContext
-        = std::make_shared<agentxx::middleware::MiddlewareContext>();
+        = std::make_shared<agentxx::middleware::MiddlewareContext>(
+            agentContext->sessionPersistence
+        );
 
     {
         auto registry = std::make_shared<neograph::graph::GraphRegistry>();
@@ -686,6 +696,10 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
         // 中断已经处理完成，清理 graphData
         state.remove(agentxx::middleware::MiddlewareContext::channel_savedGraphData);
     });
+
+    // 持久化 LLM 上下文消息 (每轮结束时整表替换, 供重启恢复会话)
+    // - 持久化回调内部捕获异常, 失败仅记日志, 不影响本轮结果
+    session->saveLlmMessages();
 
     // 计算轮次持续时间
     const auto duration_ms

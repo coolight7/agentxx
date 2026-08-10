@@ -44,20 +44,20 @@ asio::awaitable<void> CodeAgent::setupMiddleware() {
         auto permission
             = std::make_shared<agentxx::middleware::PermissionMiddlewareHandle>(agentContext);
         permission->setFilesystemPermission(
-            std::filesystem::current_path().generic_string(),
+            fmt::format("{}/*", std::filesystem::current_path().generic_string()),
             agentxx::middleware::PermissionOperator::ALLOW,
             agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
         );
-        // permission->setFilesystemPermission(
-        //     "/tmp/test/",
-        //     agentxx::middleware::PermissionOperator::DENY,
-        //     agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
-        // );
-        // permission->setFilesystemPermission(
-        //     "/",
-        //     agentxx::middleware::PermissionOperator::INTERRUPT,
-        //     agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
-        // );
+        permission->setFilesystemPermission(
+            "/tmp/test/*",
+            agentxx::middleware::PermissionOperator::DENY,
+            agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
+        );
+        permission->setFilesystemPermission(
+            "/*",
+            agentxx::middleware::PermissionOperator::INTERRUPT,
+            agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
+        );
         // 注册 tool 名 -> 权限处理函数; 未调用则 handles 为空, 权限拦截不会触发
         permission->registerHandles();
         agentContext->permissionMiddleware = permission;
@@ -285,8 +285,8 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
     /// - 索引项目根目录固定为当前程序工作目录
     /// - 索引数据库: ~/.agentxx/sqlite/codegraph/<折叠路径>/index.db,
     ///   深层路径折叠 + 单段截断控制长度, 子目录可前缀复用最近父级索引
-#if AGENTXX_ENABLE_CODEGRAPH
     if (config->enableCodeGraph) {
+#if AGENTXX_ENABLE_CODEGRAPH
         auto codegraph = std::make_shared<agentxx::expand::CodeGraphManager>();
         std::optional<std::string> projectRoot
             = agentxx::agent::AgentConfigStatic::getCurrentWorkPath();
@@ -323,8 +323,10 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
         } else {
             XX_LOGE("CodeGraph enabled in config but initialize failed, skip codegraph tools");
         }
-    }
+#else
+        XX_LOGE("Codegraph is not available, please re-compile.");
 #endif
+    }
 
     /// Subagent
     {
