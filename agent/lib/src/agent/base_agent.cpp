@@ -1,6 +1,7 @@
 #include "agentxx/agent/base_agent.h"
 
 #include "agentxx/agent/checkpoint_store.h"
+#include "agentxx/agent/config_static.h"
 #include "agentxx/agent/io/session_server_agent_io.h"
 #include "agentxx/agent/session_persistence.h"
 #include "agentxx/middlewares/summarization.h"
@@ -25,16 +26,41 @@ BaseAgent::BaseAgent(std::shared_ptr<agentxx::agent::AgentConfig> in_config) {
     agentContext->agentConfig = in_config;
     assert(nullptr != in_config);
     assert(in_config->model.isValid());
+
     // 会话 SQLite 持久化 (开启时): 消息上下文/展示历史/share store
     // 落库到 {root}/{threadId}/, 供重启恢复; root 可经配置重定向
-    if (in_config->enableSessionPersistence) {
-        agentContext->sessionPersistence
-            = std::make_shared<SessionPersistence>(in_config->sessionPersistenceRoot);
+    // - 要求 dataDir 非空 (root 由 {dataDir}/sqlite/sessions/ 派生)
+    //   或显式指定了 sessionPersistenceRoot; 否则不创建持久化实例,
+    //   会话仅存内存 (SessionStore/MiddlewareContext 均已判空, 安全)
+    // - dataDir 未配置的警告在 init() 中输出 (构造函数可能早于日志
+    //   sink 注册, 警告会丢失)
+    if (in_config->enableSessionPersistence
+        && (!in_config->dataDir.empty() || !in_config->sessionPersistenceRoot.empty())) {
+        std::string root = in_config->sessionPersistenceRoot;
+        if (root.empty()) {
+            root = agentxx::agent::AgentConfigStatic::getSessionsDir(in_config->dataDir);
+        }
+        agentContext->sessionPersistence = std::make_shared<SessionPersistence>(std::move(root));
         agentContext->sessions->persistence = agentContext->sessionPersistence;
+    } else if (in_config->enableSessionPersistence) {
+        XX_LOGD(
+            "Session persistence disabled: dataDir not set and sessionPersistenceRoot empty "
+            "(in-memory only)"
+        );
     }
 }
 
 asio::awaitable<void> BaseAgent::init() {
+    // dataDir 未配置 (为空) 时: 设置/会话/codegraph 等数据均不落盘, 仅存内存
+    // - 警告提示用户: 重启后设置与历史会话无法恢复
+    // - 会话持久化/CodeGraph 索引在无 dataDir 时自动禁用 (见构造函数/CodeAgent)
+    // - 放在 init() 而非构造函数: 构造函数可能早于日志 sink 注册, 警告会丢失
+    if (agentContext->agentConfig->dataDir.empty()) {
+        XX_LOGW(
+            "AgentConfig::dataDir is not set: settings/sessions/codegraph data "
+            "will NOT be persisted to disk (in-memory only)"
+        );
+    }
 #if ASIO_HAS_FILE || BOOST_ASIO_HAS_FILE
     XX_LOGD("Enable asio/async file RW");
 #else

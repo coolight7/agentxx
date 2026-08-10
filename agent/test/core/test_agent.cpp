@@ -455,6 +455,43 @@ asio::awaitable<void> test_agent_nonstream() {
     co_return;
 }
 
+/// dataDir 未配置时: 会话持久化自动禁用 (仅存内存), 不落盘;
+/// - dataDir 为空 + root 为空 → 不创建 SessionPersistence
+/// - dataDir 非空 → 创建到 {dataDir}/sqlite/sessions/
+/// - dataDir 为空但显式指定 sessionPersistenceRoot → 仍持久化 (显式路径)
+asio::awaitable<void> test_agent_persistence_datadir_gate() {
+    auto makeCfg = [](std::string dataDir, std::string root) {
+        auto cfg                       = std::make_shared<agentxx::agent::AgentConfig>();
+        cfg->model.baseUrl             = "http://127.0.0.1:1";
+        cfg->model.apiKey              = "EMPTY";
+        cfg->model.modelName           = "test-sim";
+        cfg->enableSessionPersistence  = true;
+        cfg->dataDir                   = std::move(dataDir);
+        cfg->sessionPersistenceRoot    = std::move(root);
+        return cfg;
+    };
+
+    // 1) dataDir 为空 + root 为空 → 不创建持久化 (内存模式)
+    {
+        agentxx::agent::CodeAgent agent(makeCfg("", ""));
+        XX_TEST_EXPECT_TRUE(agent.agentContext->sessionPersistence == nullptr);
+        XX_TEST_EXPECT_TRUE(agent.agentContext->sessions->persistence == nullptr);
+    }
+    // 2) dataDir 非空 → 创建持久化到 {dataDir}/sqlite/sessions/
+    {
+        agentxx::agent::CodeAgent agent(makeCfg("/tmp/agentxx-test-data", ""));
+        XX_TEST_EXPECT_TRUE(agent.agentContext->sessionPersistence != nullptr);
+        XX_TEST_EXPECT_TRUE(agent.agentContext->sessions->persistence != nullptr);
+    }
+    // 3) dataDir 为空但显式指定 sessionPersistenceRoot → 仍持久化 (显式路径)
+    {
+        agentxx::agent::CodeAgent agent(makeCfg("", "/tmp/agentxx-test-sessions"));
+        XX_TEST_EXPECT_TRUE(agent.agentContext->sessionPersistence != nullptr);
+    }
+
+    co_return;
+}
+
 asio::awaitable<void> test_agent_io_session_bus() {
     auto sim     = startDaSimServer();
     auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
@@ -655,6 +692,7 @@ asio::awaitable<TestResult> run_agent_tests() {
         co_await test_agent_multi_turn();
         co_await test_agent_large_history();
         co_await test_agent_nonstream();
+        co_await test_agent_persistence_datadir_gate();
         co_await test_agent_io_session_bus();
         co_await test_agent_io_null();
         co_await test_agent_session_activity_streaming();

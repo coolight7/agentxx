@@ -73,6 +73,13 @@ std::string generateUniqueThreadId() {
     return fmt::format("sess-{:x}-{}-{:08x}-{:04x}", ts, pid, randomSeed(), cnt);
 }
 
+/// 启动时解析 TUI 主题: 从全局设置恢复上次保存的主题 (tui.theme),
+/// 未设置/库不可用时默认 Dark。须在 main 中 attachDb() 之后调用。
+static TUITheme resolveTuiTheme() {
+    return TUISettings::instance().themeKind() == TUISettings::kThemeLight ? TUITheme::lightTheme()
+                                                                           : TUITheme::darkTheme();
+}
+
 // ---------------------------------------------------------------------------
 // Local unified DIRECT (ChannelAgentIOTransport 直连 TUI ↔ SessionServerAgentIO)
 // ---------------------------------------------------------------------------
@@ -173,7 +180,7 @@ static asio::awaitable<void> runLocalCliUnifiedAsync(std::shared_ptr<agent::Code
     auto io       = std::make_shared<StdIOClientAgentIO>();
     // 每次启动生成唯一会话 id, 避免多实例/多次启动共用 "session" 导致会话串扰
     const std::string threadId = generateUniqueThreadId();
-    XX_OUT("======= Agentxx Client (CLI, in-process unified) =======");
+    XX_LOGI("======= Agentxx Client (CLI, in-process unified) =======");
     auto serverIO = setupLocalUnifiedDirect(clientEx, agent, io, threadId);
     // CLI 输入循环: 从 stdin 读取并发送
     std::cout << "\n>>> " << std::flush;
@@ -218,13 +225,12 @@ static asio::awaitable<void> runLocalTuiUnifiedAsync(
         if (config->availableModels.empty()) {
             registry->registerModel(config->model.modelName, config->model);
             registry->setDefaultModel(config->model.modelName);
-        } else if (!config->currentModelName.empty()
-                   && registry->hasModel(config->currentModelName)) {
+        } else if (!config->currentModelName.empty() && registry->hasModel(config->currentModelName)) {
             registry->setDefaultModel(config->currentModelName);
         }
         ctx->modelRegistry = std::move(registry);
     }
-    auto tui = std::make_shared<TUIClientAgentIO>(clientEx, ctx, threadId);
+    auto tui = std::make_shared<TUIClientAgentIO>(clientEx, ctx, threadId, resolveTuiTheme());
     tui->start();
 
     auto serverIO = setupLocalUnifiedDirect(clientEx, agent, tui, threadId);
@@ -282,7 +288,7 @@ static asio::awaitable<void>
     );
     io->setTransport(transport);
 
-    XX_OUT("======= Agentxx Remote Client (CLI, auto-reconnect) =======");
+    XX_LOGI("======= Agentxx Remote Client (CLI, auto-reconnect) =======");
 
     // 连接并握手
     agent::WireHello hello{threadId, token, 0, ""};
@@ -341,7 +347,7 @@ static asio::awaitable<void> runRemoteTuiAsync(
     // 每次启动生成唯一会话 id: 服务端按 threadId 区分会话,
     // 共用 "session" 会使多个客户端实例挂到同一会话上互相串扰
     const std::string threadId = generateUniqueThreadId();
-    auto              io       = std::make_shared<TUIClientAgentIO>(ex, ctx, threadId);
+    auto              io = std::make_shared<TUIClientAgentIO>(ex, ctx, threadId, resolveTuiTheme());
     io->setRemoteUrl(url);
     io->start();
 

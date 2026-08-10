@@ -280,14 +280,24 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
 #endif
 
     /// CodeGraph 代码分析
-    /// - 仅当配置启用了 codegraph [config->enableCodeGraph] 且编译启用了
-    ///   codegraph [AGENTXX_ENABLE_CODEGRAPH] 时才添加 codegraph 系列 tool
+    /// - 仅当配置启用了 codegraph [config->enableCodeGraph]、编译启用了
+    ///   codegraph [AGENTXX_ENABLE_CODEGRAPH] 且配置了 dataDir 时才添加
+    ///   codegraph 系列 tool (索引数据库存放于 {dataDir}/sqlite/codegraph/,
+    ///   dataDir 为空时不落盘, 故不注册)
     /// - 索引项目根目录固定为当前程序工作目录
-    /// - 索引数据库: ~/.agentxx/sqlite/codegraph/<折叠路径>/index.db,
+    /// - 索引数据库: {dataDir}/sqlite/codegraph/<折叠路径>/index.db,
     ///   深层路径折叠 + 单段截断控制长度, 子目录可前缀复用最近父级索引
-    if (config->enableCodeGraph) {
+    if (config->enableCodeGraph && config->dataDir.empty()) {
+        // dataDir 未配置: codegraph 索引无处落盘, 跳过注册 (与 BaseAgent 警告一致)
+        XX_LOGW(
+            "CodeGraph enabled in config but dataDir is not set, skip codegraph tools "
+            "(in-memory only, no index persistence)"
+        );
+    } else if (config->enableCodeGraph) {
 #if AGENTXX_ENABLE_CODEGRAPH
-        auto codegraph = std::make_shared<agentxx::expand::CodeGraphManager>();
+        auto codegraph = std::make_shared<agentxx::expand::CodeGraphManager>(
+            agentxx::agent::AgentConfigStatic::getSqliteDir(config->dataDir)
+        );
         std::optional<std::string> projectRoot
             = agentxx::agent::AgentConfigStatic::getCurrentWorkPath();
         if (!projectRoot.has_value()) {

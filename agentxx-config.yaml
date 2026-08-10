@@ -9,6 +9,19 @@
 #
 # 加载实现源码见 [agent/client/src/config_loader.cpp]
 
+# === 统一数据根目录 (留空/不配置 = 不持久化数据: 设置/会话/codegraph 仅存内存,
+# 重启后无法恢复; 支持 `~` 与 ${VAR} 展开, 相对路径按工作目录解析)
+# 特殊关键字 `default` (仅 tui/cli 模式): 使用当前系统数据目录
+#   - Linux/macOS: ~/.agentxx/
+#   - Windows: %APPDATA%/agentxx/
+# 配置后数据子路径:
+#   - {data_dir}/sqlite/global.db                     全局设置 (TUI 动画等级/系统信息显示等)
+#   - {data_dir}/sqlite/sessions/{threadId}/          会话数据 (session.db / share_store.db)
+#   - {data_dir}/sqlite/codegraph/<折叠路径>/index.db CodeGraph 索引
+# data_dir: ~/.agentxx
+data_dir: default
+
+# === 模型列表
 models:
   # 声明模型，[name] 取 [default] 仅是自定义名称，并不会被默认使用，应当在 [use_model] 中指定
   - name: openai_full_example

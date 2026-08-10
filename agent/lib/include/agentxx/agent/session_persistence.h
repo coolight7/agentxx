@@ -23,6 +23,9 @@ namespace agent {
 ///   - share_store.db  agentxx_share_store KV 存储:
 ///                       item 表  id(自增) -> value
 ///
+/// 默认 root: {dataDir}/sqlite/sessions/ (dataDir 为空时 ~/.agentxx/,
+/// 取不到用户主目录时回退系统临时目录), 数据目录统一由 client 经
+/// AgentConfig::dataDir 重定向。
 /// 分库理由:
 ///   - session.db: viewMessages/llmMessages 同属"会话消息状态", 生命周期一致
 ///     (随 thread 创建/删除), 在同一个 io 线程写入, 一轮对话结束时消息与
@@ -38,8 +41,8 @@ namespace agent {
 class SessionPersistence {
 public:
 
-    /// @param rootDir 数据根目录; 为空使用默认 ~/.agentxx/sqlite/
-    ///        (取不到用户主目录时回退系统临时目录)
+    /// @param rootDir 数据根目录; 为空使用默认 {dataDir}/sqlite/sessions/
+    ///        (dataDir 为空时 ~/.agentxx/, 取不到用户主目录时回退系统临时目录)
     explicit SessionPersistence(std::string rootDir = "");
 
     // ---- 会话消息状态 (session.db) ----

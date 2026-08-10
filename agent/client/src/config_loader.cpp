@@ -381,6 +381,16 @@ YamlAppConfig loadYamlConfig(
         }
     }
 
+    // 统一数据根目录 (全局设置/会话/codegraph 索引等数据存放根)
+    // - 为空使用默认 ~/.agentxx/; 支持 ${VAR} 展开, `~` 展开由调用方完成
+    if (root["data_dir"]) {
+        cfg.dataDir = resolveEnvVars(
+            root["data_dir"].as<std::string>(""),
+            dotEnvVars,
+            overrideEnvVars
+        );
+    }
+
     // CodeGraph 代码分析
     if (root["enable_codegraph"]) {
         cfg.enableCodeGraph = resolveEnvVars(

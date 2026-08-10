@@ -7,3 +7,4 @@ help-dummy.o
 .VSCodeCounter
 .env
 crash-*.log
+crash-*.dmp
