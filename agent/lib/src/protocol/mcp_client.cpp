@@ -221,7 +221,9 @@ struct McpClient::StdioTransport {
                     client->deliverResponse(response);
                     return true;
                 },
-                [](std::string) -> bool { return false; }
+                [](std::string) -> bool {
+                    return false;
+                }
             );
         }
         running.store(false);
@@ -433,7 +435,10 @@ struct McpClient::StdioTransport {
                         return true;
                     },
                     [&](std::string) -> bool {
-                        XX_LOGW("[McpClient] ignoring malformed stdout line: {}", line.substr(0, 128));
+                        XX_LOGW(
+                            "[McpClient] ignoring malformed stdout line: {}",
+                            line.substr(0, 128)
+                        );
                         return false;
                     }
                 );
@@ -447,7 +452,9 @@ struct McpClient::StdioTransport {
                     client->deliverResponse(response);
                     return true;
                 },
-                [](std::string) -> bool { return false; }
+                [](std::string) -> bool {
+                    return false;
+                }
             );
         }
 #elif XX_IS_WIN_D
@@ -477,7 +484,9 @@ struct McpClient::StdioTransport {
                         client->deliverResponse(response);
                         return true;
                     },
-                    [](std::string) -> bool { return false; }
+                    [](std::string) -> bool {
+                        return false;
+                    }
                 );
             }
         }
@@ -549,9 +558,9 @@ json McpClient::buildModernMeta() const {
     json meta;
     meta[std::string{agentxx::server::kMetaProtocolVersion}] = effectiveProtocolVersion();
     json info;
-    info["name"]    = config_.clientName;
-    info["version"] = config_.clientVersion;
-    meta[std::string{agentxx::server::kMetaClientInfo}] = std::move(info);
+    info["name"]                                                = config_.clientName;
+    info["version"]                                             = config_.clientVersion;
+    meta[std::string{agentxx::server::kMetaClientInfo}]         = std::move(info);
     meta[std::string{agentxx::server::kMetaClientCapabilities}] = json::object();
     return meta;
 }
@@ -574,7 +583,8 @@ json McpClient::withModernMeta(const json& params) const {
     return p;
 }
 
-std::string McpClient::pickMutualVersion(std::string_view requested, const json& serverSupportedVersions) {
+std::string
+    McpClient::pickMutualVersion(std::string_view requested, const json& serverSupportedVersions) {
     if (!serverSupportedVersions.is_array()) {
         return std::string{requested};
     }
@@ -645,7 +655,10 @@ asio::awaitable<std::expected<McpClient::InitializeResult, std::string>> McpClie
             );
             co_return std::move(info);
         }
-        XX_LOGW("[McpClient] modern probe failed ({}), falling back to legacy initialize", disc.error());
+        XX_LOGW(
+            "[McpClient] modern probe failed ({}), falling back to legacy initialize",
+            disc.error()
+        );
         // 回退: 旧版服务端 (initialize 握手)
         era_               = ProtocolEra::Legacy;
         negotiatedVersion_ = std::string{kProtocol2025_11_25};
@@ -746,8 +759,11 @@ asio::awaitable<std::expected<McpClient::DiscoverResult, std::string>> McpClient
         int code = j["error"].value("code", 0);
         if (code == kMcpUnsupportedProtocolVersion) {
             // 现代服务端但版本不受支持: 从 data.supported 挑选共同版本后重试
-            json data = j["error"].contains("data") ? j["error"]["data"] : json::object();
-            auto mutual = pickMutualVersion(config_.protocolVersion, data.value("supported", json::array()));
+            json data   = j["error"].contains("data") ? j["error"]["data"] : json::object();
+            auto mutual = pickMutualVersion(
+                config_.protocolVersion,
+                data.value("supported", json::array())
+            );
             if (mutual != config_.protocolVersion) {
                 negotiatedVersion_ = mutual;
                 params["_meta"]    = buildModernMeta();
@@ -756,20 +772,24 @@ asio::awaitable<std::expected<McpClient::DiscoverResult, std::string>> McpClient
                     co_return parseDiscoverResult(retry->operator[]("result"));
                 }
             }
-            co_return std::unexpected{
-                fmt::format("unsupported protocol version (server supports: {})", data.value("supported", json::array()).dump())
-            };
+            co_return std::unexpected{fmt::format(
+                "unsupported protocol version (server supports: {})",
+                data.value("supported", json::array()).dump()
+            )};
         }
         // HeaderMismatch / MissingRequiredClientCapability: 现代服务端但请求有问题
         if (code == kMcpHeaderMismatch || code == kMcpMissingRequiredClientCapability) {
-            co_return std::unexpected{
-                fmt::format("modern server rejected request: {}", j["error"].value("message", "unknown error"))
-            };
+            co_return std::unexpected{fmt::format(
+                "modern server rejected request: {}",
+                j["error"].value("message", "unknown error")
+            )};
         }
         // 其他错误 (如 -32601/-32602): legacy 服务端特征 → 回退
-        co_return std::unexpected{
-            fmt::format("server responded with error {}: {}", code, j["error"].value("message", "unknown error"))
-        };
+        co_return std::unexpected{fmt::format(
+            "server responded with error {}: {}",
+            code,
+            j["error"].value("message", "unknown error")
+        )};
     }
 
     if (!j.contains("result") || !j["result"].is_object()) {
@@ -872,23 +892,21 @@ asio::awaitable<std::expected<json, std::string>>
     json result = resp.value();
 
     // 2026-07-28: HeaderMismatch (Mcp-Param-* 缺失/不匹配) → 刷新工具缓存后重试一次
-    if (era_ == ProtocolEra::Modern && result.contains("error")
-        && result["error"].is_object()
+    if (era_ == ProtocolEra::Modern && result.contains("error") && result["error"].is_object()
         && result["error"].value("code", 0) == kMcpHeaderMismatch) {
-        XX_LOGW("[McpClient] tool call rejected with HeaderMismatch, refreshing tools cache and retrying");
+        XX_LOGW(
+            "[McpClient] tool call rejected with HeaderMismatch, refreshing tools cache and retrying"
+        );
         auto refreshed = co_await listTools();
         if (refreshed.has_value()) {
             params["name"]      = name;
             params["arguments"] = arguments;
-            auto retry = co_await sendRequest("tools/call", std::move(params));
+            auto retry          = co_await sendRequest("tools/call", std::move(params));
             if (retry.has_value()) {
                 result = std::move(retry.value());
             }
         }
     }
-
-    std::cerr << "[DBG] mcp-client callTool(" << name << ") raw response: " << result.dump()
-              << std::endl;
 
     if (result.contains("error")) {
         co_return result;
@@ -1324,7 +1342,7 @@ std::unordered_map<std::string, McpClient::XMcpHeaderInfo>
         }
         auto it = pdef.find("x-mcp-header");
         if (it != pdef.end() && (*it).is_string()) {
-            auto headerName = (*it).get<std::string>();
+            auto        headerName = (*it).get<std::string>();
             std::string lower;
             lower.reserve(headerName.size());
             for (char c : headerName) {
@@ -1414,8 +1432,6 @@ util::HeaderMap
         } else {
             name = params.value("name", std::string{});
         }
-        std::cerr << "[DBG] buildModernHttpHeaders " << method << " name='" << name
-                  << "' params=" << params.dump() << std::endl;
         // 注意: 必须用圆括号 json(name) 构造字符串 JSON, 花括号 json{name} 会
         // 匹配 initializer_list 构造函数 → 构造数组 [name], is_string() 为 false,
         // 导致 header 值被错误地 Base64 编码成空串 (=?base64??=)
@@ -1468,7 +1484,8 @@ asio::awaitable<std::expected<json, std::string>>
     // 非 2xx: 解析 JSON-RPC 错误 (现代服务端错误特征)
     if (httpResp.status / 100 != 2) {
         auto bodyJson = httpResp.bodyJson();
-        if (bodyJson.has_value() && bodyJson->contains("error") && (*bodyJson)["error"].is_object()) {
+        if (bodyJson.has_value() && bodyJson->contains("error")
+            && (*bodyJson)["error"].is_object()) {
             int code = (*bodyJson)["error"].value("code", 0);
             if (code == kMcpHeaderMismatch || code == kMcpMissingRequiredClientCapability
                 || code == kMcpUnsupportedProtocolVersion) {
@@ -1571,7 +1588,7 @@ asio::awaitable<std::expected<json, std::string>>
         auto events = parseSseEvents(httpResp.body);
         for (const auto& ev : events) {
             if (ev.event == "message" || ev.event.empty()) {
-                bool matched   = false;
+                bool matched = false;
                 json resultJson;
                 // 非法 SSE data 记录日志并跳过, 不中断整个流的处理
                 co_await agentxx::util::catchErrorAsync<bool>(
@@ -1736,9 +1753,9 @@ asio::awaitable<std::expected<json, std::string>>
 }
 
 asio::awaitable<std::expected<void, std::string>> McpClient::listen(
-    const SubscriptionFilter&                      filter,
-    std::function<void(const json& notification)>  onNotification,
-    std::function<void()>                          onEnded
+    const SubscriptionFilter&                     filter,
+    std::function<void(const json& notification)> onNotification,
+    std::function<void()>                         onEnded
 ) {
     if (closed_.load()) {
         co_return std::unexpected{std::string{"client is closed"}};
@@ -1750,7 +1767,7 @@ asio::awaitable<std::expected<void, std::string>> McpClient::listen(
         };
     }
 
-    int64_t id  = nextId_.fetch_add(1);
+    int64_t id       = nextId_.fetch_add(1);
     listenRequestId_ = id;
 
     json params;
@@ -1789,7 +1806,9 @@ asio::awaitable<std::expected<void, std::string>> McpClient::listen(
         auto reqStr = fmt::format("{}\n", req.dump());
         bool ok     = co_await writeStdioLine(reqStr);
         if (!ok) {
-            co_return std::unexpected{std::string{"failed to write subscriptions/listen to subprocess"}};
+            co_return std::unexpected{
+                std::string{"failed to write subscriptions/listen to subprocess"}
+            };
         }
         std::expected<void, std::string> okResult;
         co_return okResult;
@@ -1800,7 +1819,7 @@ asio::awaitable<std::expected<void, std::string>> McpClient::listen(
     }
 
     // HTTP: 驱动长连接 SSE 流, 直到服务端优雅结束或外部取消
-    std::string  sseBuffer;
+    std::string       sseBuffer;
     std::atomic<bool> finished{false};
 
     auto flushEvents = [&](std::string_view block) -> bool {
@@ -1815,7 +1834,9 @@ asio::awaitable<std::expected<void, std::string>> McpClient::listen(
                         j = json::parse(ev.data);
                         return true;
                     },
-                    [](std::string) -> bool { return false; }
+                    [](std::string) -> bool {
+                        return false;
+                    }
                 )) {
                 continue; // 非法 JSON (如 keepalive 注释) 忽略
             }
@@ -1923,7 +1944,7 @@ asio::awaitable<bool> McpClient::writeStdioLine(const std::string& line) {
         &written,
         nullptr
     );
-    co_return ok == TRUE && written == static_cast<DWORD>(line.size());
+    co_return ok == TRUE&& written == static_cast<DWORD>(line.size());
 #else
     co_return false;
 #endif
@@ -2012,7 +2033,9 @@ void McpClient::closeInternal() {
                 req->promise.set_value(std::move(errorResp));
                 return true;
             },
-            [](std::string) -> bool { return false; }
+            [](std::string) -> bool {
+                return false;
+            }
         );
     }
     pending_.clear();
@@ -2056,7 +2079,9 @@ void McpClient::deliverResponse(const json& response) {
                 idVal = std::stoll(respId.get<std::string>());
                 return true;
             },
-            [](std::string) -> bool { return false; }
+            [](std::string) -> bool {
+                return false;
+            }
         );
         if (!parsed) {
             return;
@@ -2082,7 +2107,9 @@ void McpClient::deliverResponse(const json& response) {
             req->promise.set_value(response);
             return true;
         },
-        [](std::string) -> bool { return false; }
+        [](std::string) -> bool {
+            return false;
+        }
     );
 }
 

@@ -731,9 +731,22 @@ Element MessageListComponent::buildMessageBlock(
 // agentxx_filesystem_edit_text_file 特化渲染
 // ---------------------------------------------------------------------------
 
+/// 工具结果文本是否表示失败
+/// 与服务端工具错误约定一致: 工具返回 "[Error] ..." / "[Exception aborted: ...]" 文本,
+/// 中断为 "[Interrupt]"; 成功结果 (如 "Success, Replace N hits") 不以这些前缀开头
+static bool isToolResultError(std::string_view result) {
+    return result.starts_with("[Error]") || result.starts_with("[Exception")
+           || result.starts_with("[Interrupt]") || result.contains("Permission");
+}
+
 void MessageListComponent::appendEditToolHeader(const TUIMessage& msg, Elements& header) {
     const auto& theme = *ctx_.theme;
-    std::string path  = agentxx::util::catchError<std::string>(
+    if (msg.tool && msg.tool->toolFinished && isToolResultError(msg.tool->toolResult)) {
+        // 操作失败: 折叠态显示错误预览而非路径
+        header.push_back(text(oneLinePreview(msg.tool->toolResult)) | color(theme.errorColor));
+        return;
+    }
+    std::string path = agentxx::util::catchError<std::string>(
         [&msg]() -> std::string {
             return neograph::json::parse(msg.text).value("path", std::string{});
         },
@@ -748,6 +761,14 @@ void MessageListComponent::appendEditToolHeader(const TUIMessage& msg, Elements&
 
 void MessageListComponent::appendEditToolBody(const TUIMessage& msg, Elements& lines) {
     const auto& theme = *ctx_.theme;
+    // 操作失败: 渲染错误信息, 不渲染基于请求参数的 diff (避免误导: 文件实际未被修改)
+    if (msg.tool && msg.tool->toolFinished && isToolResultError(msg.tool->toolResult)) {
+        lines.push_back(hbox({
+            text("  result: ") | color(theme.toolColor),
+            paragraph(msg.tool->toolResult) | color(theme.errorColor),
+        }));
+        return;
+    }
     std::string path, oldStr, newStr;
     agentxx::util::catchError<bool>(
         [&]() -> bool {

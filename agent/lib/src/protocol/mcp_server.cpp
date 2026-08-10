@@ -339,15 +339,16 @@ json McpServer::unsupportedVersionError(std::string_view requested) {
 json McpServer::serverInfoMeta() const {
     json meta;
     json info;
-    info["name"]    = config_.serverName;
-    info["version"] = config_.serverVersion;
+    info["name"]                       = config_.serverName;
+    info["version"]                    = config_.serverVersion;
     meta[std::string{kMetaServerInfo}] = std::move(info);
     return meta;
 }
 
-json McpServer::decorateModernResult(json result, std::string_view method, const json& requestMeta) const {
+json McpServer::decorateModernResult(json result, std::string_view method, const json& requestMeta)
+    const {
     result["resultType"] = "complete";
-    json meta = serverInfoMeta();
+    json meta            = serverInfoMeta();
     // 保留请求 _meta 中的透传字段 (如 progressToken / OTel traceparent)
     if (requestMeta.is_object()) {
         for (const auto& item : requestMeta.items()) {
@@ -361,7 +362,7 @@ json McpServer::decorateModernResult(json result, std::string_view method, const
     if (method == "tools/list" || method == "prompts/list" || method == "resources/list"
         || method == "resources/templates/list" || method == "resources/read"
         || method == "server/discover") {
-        result["ttlMs"]     = config_.cacheTtlMs;
+        result["ttlMs"]      = config_.cacheTtlMs;
         result["cacheScope"] = (method == "resources/read") ? "private" : config_.cacheScope;
     }
     return result;
@@ -425,8 +426,9 @@ json McpServer::processJsonRpc(const json& requestJson, const RequestContext& ct
     }
 
     // ---- 现代模式必需字段校验 (2026-07-28) ----
-    if (isModern && (!meta.is_object() || !meta.contains(std::string{kMetaProtocolVersion})
-                     || !meta.contains(std::string{kMetaClientCapabilities}))) {
+    if (isModern
+        && (!meta.is_object() || !meta.contains(std::string{kMetaProtocolVersion})
+            || !meta.contains(std::string{kMetaClientCapabilities}))) {
         return jsonRpcErrorResponse(
             id,
             jsonRpcError(
@@ -443,12 +445,13 @@ json McpServer::processJsonRpc(const json& requestJson, const RequestContext& ct
         [&]() -> bool {
             if (method == "initialize") {
                 // 2026-07-28 已移除 initialize 握手; 现代请求显式报 method not found
-                response = isModern
-                               ? jsonRpcErrorResponse(
-                                     id,
-                                     jsonRpcError(kJsonRpcMethodNotFound, "Method not found: initialize")
-                                 )
-                               : handleInitialize(id, params);
+                response
+                    = isModern
+                          ? jsonRpcErrorResponse(
+                                id,
+                                jsonRpcError(kJsonRpcMethodNotFound, "Method not found: initialize")
+                            )
+                          : handleInitialize(id, params);
             } else if (method == "server/discover") {
                 response = isModern ? handleDiscover(id, params)
                                     : jsonRpcErrorResponse(
@@ -481,7 +484,10 @@ json McpServer::processJsonRpc(const json& requestJson, const RequestContext& ct
                 } else {
                     response = jsonRpcErrorResponse(
                         id,
-                        jsonRpcError(kJsonRpcMethodNotFound, std::string("Method not found: ") + method)
+                        jsonRpcError(
+                            kJsonRpcMethodNotFound,
+                            std::string("Method not found: ") + method
+                        )
                     );
                 }
             } else if (method == "ping") {
@@ -506,13 +512,16 @@ json McpServer::processJsonRpc(const json& requestJson, const RequestContext& ct
                 }
             } else if (method == "resources/subscribe" || method == "resources/unsubscribe") {
                 // 2026-07-28 由 subscriptions/listen 取代
-                response = isModern
-                               ? jsonRpcErrorResponse(
-                                     id,
-                                     jsonRpcError(kJsonRpcMethodNotFound, std::string("Method not found: ") + method)
-                                 )
-                               : (method == "resources/subscribe" ? handleResourcesSubscribe(id, params)
-                                                                  : handleResourcesUnsubscribe(id, params));
+                response = isModern ? jsonRpcErrorResponse(
+                                          id,
+                                          jsonRpcError(
+                                              kJsonRpcMethodNotFound,
+                                              std::string("Method not found: ") + method
+                                          )
+                                      )
+                                    : (method == "resources/subscribe"
+                                           ? handleResourcesSubscribe(id, params)
+                                           : handleResourcesUnsubscribe(id, params));
             } else if (method == "resources/templates/list") {
                 response = handleResourceTemplatesList(id, params);
             } else if (method == "prompts/list") {
@@ -521,12 +530,14 @@ json McpServer::processJsonRpc(const json& requestJson, const RequestContext& ct
                 response = handlePromptsGet(id, params);
             } else if (method == "logging/setLevel") {
                 // 2026-07-28 已移除; legacy 保留
-                response = isModern
-                               ? jsonRpcErrorResponse(
-                                     id,
-                                     jsonRpcError(kJsonRpcMethodNotFound, std::string("Method not found: ") + method)
-                                 )
-                               : handleLoggingSetLevel(id, params);
+                response = isModern ? jsonRpcErrorResponse(
+                                          id,
+                                          jsonRpcError(
+                                              kJsonRpcMethodNotFound,
+                                              std::string("Method not found: ") + method
+                                          )
+                                      )
+                                    : handleLoggingSetLevel(id, params);
             } else if (method == "completion/complete") {
                 response = handleComplete(id, params);
             } else {
@@ -628,9 +639,9 @@ asio::awaitable<void> McpServer::handleMcpPost(
         co_return;
     }
 
-    json requestJson;
+    json        requestJson;
     std::string parseErrMsg;
-    bool parsed = agentxx::util::catchError<bool>(
+    bool        parsed = agentxx::util::catchError<bool>(
         [&]() -> bool {
             requestJson = json::parse(req.body());
             return true;
@@ -651,27 +662,24 @@ asio::awaitable<void> McpServer::handleMcpPost(
 
     // 构建请求上下文
     RequestContext ctx;
-    ctx.isHttp                       = true;
-    ctx.httpProtocolVersionHeader    = std::string{req["MCP-Protocol-Version"]};
-    ctx.httpMcpMethodHeader          = std::string{req["Mcp-Method"]};
-    ctx.httpMcpNameHeader            = std::string{req["Mcp-Name"]};
-    std::cerr << "[DBG] mcp-server request headers:" << std::endl;
-    for (auto const& h : req.base()) {
-        std::cerr << "[DBG]   " << h.name_string() << ": " << h.value() << std::endl;
-    }
-    std::cerr << "[DBG]   Mcp-Name lookup: '" << ctx.httpMcpNameHeader << "'" << std::endl;
-    json params                      = requestJson.contains("params") ? requestJson["params"] : json::object();
-    json requestId                   = requestJson.contains("id") && !requestJson["id"].is_null()
-                                          ? requestJson["id"]
-                                          : json{};
-    ctx.protocolVersion              = extractProtocolVersion(params, ctx);
-    ctx.isModern                     = (ctx.protocolVersion == kMcpProtocol2026_07_28);
+    ctx.isHttp                    = true;
+    ctx.httpProtocolVersionHeader = std::string{req["MCP-Protocol-Version"]};
+    ctx.httpMcpMethodHeader       = std::string{req["Mcp-Method"]};
+    ctx.httpMcpNameHeader         = std::string{req["Mcp-Name"]};
+    json params = requestJson.contains("params") ? requestJson["params"] : json::object();
+    json requestId
+        = requestJson.contains("id") && !requestJson["id"].is_null() ? requestJson["id"] : json{};
+    ctx.protocolVersion = extractProtocolVersion(params, ctx);
+    ctx.isModern        = (ctx.protocolVersion == kMcpProtocol2026_07_28);
 
     std::string method = requestJson.value("method", "");
 
     // 版本门控: 未知版本 → 400 + UnsupportedProtocolVersionError
     if (!ctx.protocolVersion.empty() && !isSupportedProtocolVersion(ctx.protocolVersion)) {
-        co_await respond(http::status::bad_request, jsonRpcErrorResponse(requestId, unsupportedVersionError(ctx.protocolVersion)));
+        co_await respond(
+            http::status::bad_request,
+            jsonRpcErrorResponse(requestId, unsupportedVersionError(ctx.protocolVersion))
+        );
         co_return;
     }
 
@@ -712,7 +720,13 @@ asio::awaitable<void> McpServer::handleMcpPost(
         // 无 writer (普通 handler 被 SSE 路由遮蔽, 实际不可达)
         co_await respond(
             http::status::bad_request,
-            jsonRpcErrorResponse(requestId, jsonRpcError(kJsonRpcMethodNotFound, "subscriptions/listen requires a streaming transport"))
+            jsonRpcErrorResponse(
+                requestId,
+                jsonRpcError(
+                    kJsonRpcMethodNotFound,
+                    "subscriptions/listen requires a streaming transport"
+                )
+            )
         );
         co_return;
     }
@@ -841,22 +855,26 @@ std::optional<std::string> McpServer::validateModernHeaders(
 
     // Mcp-Param-*: 仅校验工具 inputSchema 中声明了 x-mcp-header 的参数
     if (method == "tools/call") {
-        auto toolName = params.value("name", std::string{});
+        auto             toolName = params.value("name", std::string{});
         std::shared_lock lock(toolsMutex_);
         auto             it = toolsByName_.find(toolName);
         if (it != toolsByName_.end()) {
             const auto& schema = it->second.def.inputSchema;
             std::unordered_map<std::string, std::string> headerToParam; // 小写 header 名 -> 参数名
             std::unordered_map<std::string, std::string> paramToHeader; // 参数名 -> 原始 header 名
-            if (schema.is_object() && schema.contains("properties") && schema["properties"].is_object()) {
+            if (schema.is_object() && schema.contains("properties")
+                && schema["properties"].is_object()) {
                 for (const auto& propItem : schema["properties"].items()) {
                     const auto& pname = propItem.first;
                     const auto& pdef  = propItem.second;
-                    if (pdef.is_object() && pdef.contains("x-mcp-header") && pdef["x-mcp-header"].is_string()) {
-                        auto hname = pdef["x-mcp-header"].get<std::string>();
+                    if (pdef.is_object() && pdef.contains("x-mcp-header")
+                        && pdef["x-mcp-header"].is_string()) {
+                        auto        hname = pdef["x-mcp-header"].get<std::string>();
                         std::string lower;
                         for (char c : hname) {
-                            lower.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+                            lower.push_back(
+                                static_cast<char>(std::tolower(static_cast<unsigned char>(c)))
+                            );
                         }
                         headerToParam[lower] = pname;
                         paramToHeader[pname] = hname;
@@ -872,7 +890,9 @@ std::optional<std::string> McpServer::validateModernHeaders(
                     std::string hname(h.name_string());
                     std::string lowerHname;
                     for (char c : hname) {
-                        lowerHname.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+                        lowerHname.push_back(
+                            static_cast<char>(std::tolower(static_cast<unsigned char>(c)))
+                        );
                     }
                     constexpr std::string_view kPrefix = "mcp-param-";
                     if (lowerHname.size() <= kPrefix.size()
@@ -884,7 +904,7 @@ std::optional<std::string> McpServer::validateModernHeaders(
                     if (pit == headerToParam.end()) {
                         continue; // 未声明注解 → 忽略
                     }
-                    auto decoded = decodeMcpHeaderValueForServer(h.value());
+                    auto        decoded = decodeMcpHeaderValueForServer(h.value());
                     std::string bodyVal = mcpParamBodyValue(args, pit->second);
                     if (!headerValuesMatch(decoded, bodyVal)) {
                         return fmt::format(
@@ -900,7 +920,9 @@ std::optional<std::string> McpServer::validateModernHeaders(
                     if (args.contains(pname) && !args[pname].is_null()) {
                         std::string lowerH;
                         for (char c : hname) {
-                            lowerH.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+                            lowerH.push_back(
+                                static_cast<char>(std::tolower(static_cast<unsigned char>(c)))
+                            );
                         }
                         if (req.find(fmt::format("Mcp-Param-{}", hname)) == req.end()
                             && req.find(fmt::format("mcp-param-{}", lowerH)) == req.end()) {
@@ -929,8 +951,8 @@ json McpServer::buildCapabilities() const {
     if (capabilities_.logging) {
         capabilities["logging"] = json::object();
     }
-    capabilities["tasks"]        = json::object();
-    capabilities["elicitation"]  = json::object();
+    capabilities["tasks"]       = json::object();
+    capabilities["elicitation"] = json::object();
     return capabilities;
 }
 
@@ -1244,10 +1266,11 @@ namespace {
 /// 从 listen 请求解析通知过滤器 (未提供的字段默认不订阅)
 McpServer::SubscriptionFilter parseSubscriptionFilter(const json& params) {
     McpServer::SubscriptionFilter filter;
-    if (!params.is_object() || !params.contains("notifications") || !params["notifications"].is_object()) {
+    if (!params.is_object() || !params.contains("notifications")
+        || !params["notifications"].is_object()) {
         return filter;
     }
-    const auto& n = params["notifications"];
+    const auto& n               = params["notifications"];
     filter.toolsListChanged     = n.value("toolsListChanged", false);
     filter.promptsListChanged   = n.value("promptsListChanged", false);
     filter.resourcesListChanged = n.value("resourcesListChanged", false);
@@ -1284,7 +1307,11 @@ json filterToJson(const McpServer::SubscriptionFilter& filter) {
 }
 
 /// 生成携带 subscriptionId 的通知
-json makeSubscriptionNotification(std::string_view method, const json& subId, json extraParams = json::object()) {
+json makeSubscriptionNotification(
+    std::string_view method,
+    const json&      subId,
+    json             extraParams = json::object()
+) {
     json notif;
     notif["jsonrpc"] = "2.0";
     notif["method"]  = std::string{method};
@@ -1308,11 +1335,11 @@ std::optional<json> McpServer::handleSubscriptionsListenStdio(const json& id, co
             jsonRpcError(kJsonRpcInvalidRequest, "subscriptions/listen requires an id")
         );
     }
-    auto entry        = std::make_shared<SubscriptionEntry>();
-    entry->idKey      = id.dump();
-    entry->id         = id;
-    entry->filter     = parseSubscriptionFilter(params);
-    entry->closed     = false;
+    auto entry    = std::make_shared<SubscriptionEntry>();
+    entry->idKey  = id.dump();
+    entry->id     = id;
+    entry->filter = parseSubscriptionFilter(params);
+    entry->closed = false;
     {
         std::lock_guard lock(subscriptionsMutex_);
         subscriptions_[entry->idKey] = entry;
@@ -1322,7 +1349,9 @@ std::optional<json> McpServer::handleSubscriptionsListenStdio(const json& id, co
     auto ack = makeSubscriptionNotification(
         "notifications/subscriptions/acknowledged",
         id,
-        {{"notifications", filterToJson(entry->filter)}}
+        {
+            {"notifications", filterToJson(entry->filter)}
+    }
     );
     writeStdioMessage(ack);
     XX_LOGI("[mcp] stdio subscription registered: id={}", id.dump());
@@ -1339,7 +1368,11 @@ asio::awaitable<void> McpServer::handleSubscriptionsListenSse(
             json(nullptr),
             jsonRpcError(kJsonRpcInvalidRequest, "subscriptions/listen requires an id")
         );
-        co_await writer->writeResponse(boost::beast::http::status::bad_request, "application/json", err.dump());
+        co_await writer->writeResponse(
+            boost::beast::http::status::bad_request,
+            "application/json",
+            err.dump()
+        );
         co_return;
     }
 
@@ -1358,7 +1391,9 @@ asio::awaitable<void> McpServer::handleSubscriptionsListenSse(
     auto ack = makeSubscriptionNotification(
         "notifications/subscriptions/acknowledged",
         id,
-        {{"notifications", filterToJson(entry->filter)}}
+        {
+            {"notifications", filterToJson(entry->filter)}
+    }
     );
     if (!co_await writer->writeEvent("message", ack.dump())) {
         entry->closed = true;
@@ -1368,11 +1403,9 @@ asio::awaitable<void> McpServer::handleSubscriptionsListenSse(
     }
 
     // 长连接: 轮询通知队列 + keepalive 注释; 服务端停止/客户端断开时退出
-    std::cerr << "[DBG] subs-listen-sse: entering loop id=" << id.dump()
-              << " toolsChanged=" << entry->filter.toolsListChanged << std::endl;
     co_await agentxx::util::catchErrorAsync<bool>(
         [&]() -> asio::awaitable<bool> {
-            auto executor = co_await asio::this_coro::executor;
+            auto executor      = co_await asio::this_coro::executor;
             auto lastKeepalive = std::chrono::steady_clock::now();
             while (!entry->closed && !httpServer_->isStopped()) {
                 // 排空通知队列 (notify* 可能从任意线程入队)
@@ -1382,16 +1415,12 @@ asio::awaitable<void> McpServer::handleSubscriptionsListenSse(
                     pending.swap(entry->pending);
                 }
                 for (const auto& n : pending) {
-                    std::cerr << "[DBG] subs-listen-sse: writing notification " << n.dump()
-                              << std::endl;
                     if (!co_await writer->writeEvent("message", n.dump())) {
                         entry->closed = true;
-                        std::cerr << "[DBG] subs-listen-sse: writeEvent failed" << std::endl;
                         break;
                     }
                 }
                 if (entry->closed) {
-                    std::cerr << "[DBG] subs-listen-sse: closed, breaking" << std::endl;
                     break;
                 }
                 // keepalive 注释 (约 15s 一次)
@@ -1437,8 +1466,7 @@ asio::awaitable<void> McpServer::handleSubscriptionsListenSse(
 }
 
 /// 等待指定 HTTP 订阅 SSE 协程完成优雅结束 (最多 1s, 防止 stop 阻塞过久)
-void McpServer::waitSubscriptionsDrained(
-    const std::vector<std::shared_ptr<SubscriptionEntry>>& subs
+void McpServer::waitSubscriptionsDrained(const std::vector<std::shared_ptr<SubscriptionEntry>>& subs
 ) {
     auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{1};
     for (const auto& sub : subs) {
@@ -1455,7 +1483,6 @@ void McpServer::waitSubscriptionsDrained(
 void McpServer::sendSubscriptionNotification(SubscriptionEntry& sub, const json& notification) {
     if (sub.writer) {
         // HTTP: 入队, 由 SSE 循环 (io 线程) 下发, 避免跨线程写 socket
-        std::cerr << "[DBG] subs-notify: enqueue " << notification.dump() << std::endl;
         std::lock_guard lock(subscriptionsMutex_);
         sub.pending.push_back(notification);
     } else {
@@ -1469,7 +1496,7 @@ void McpServer::endSubscription(SubscriptionEntry& sub) {
         return;
     }
     json result;
-    result["resultType"] = "complete";
+    result["resultType"]                              = "complete";
     result["_meta"][std::string{kMetaSubscriptionId}] = sub.id;
     json resp;
     resp["jsonrpc"] = "2.0";
