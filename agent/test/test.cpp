@@ -35,6 +35,7 @@
 #include "test_regex.h"
 #include "test_remote_agent.h"
 #include "test_screen_capture.h"
+#include "test_session_persistence.h"
 #include "test_share_store.h"
 #include "test_string_tools.h"
 #include "test_string_util.h"
@@ -193,6 +194,7 @@ int main(int argn, char** argv) {
             co_await run("subagent_bus", agentxx::test::run_subagent_bus_tests);
             co_await runCtx("string_tools", agentxx::test::run_string_tools_tests, agentContext);
             co_await run("share_store", agentxx::test::run_share_store_tests);
+            co_await run("session_persistence", agentxx::test::run_session_persistence_tests);
             co_await runCtx("rag_search", agentxx::test::run_rag_search_tools_tests, agentContext);
             co_await runCtx("datetime", agentxx::test::run_datetime_tool_tests, agentContext);
             co_await runCtx("filesystem", agentxx::test::run_filesystem_tools_tests, agentContext);

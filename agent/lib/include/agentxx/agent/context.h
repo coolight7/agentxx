@@ -35,6 +35,19 @@ namespace agent {
 
 class AgentIOBase;
 class ModelProviderRegistry;
+class SessionPersistence;
+
+/// 会话持久化回调 (由 SessionStore 创建 Session 时注入, 解耦 sqlite 依赖)
+/// - 所有回调仅做"尽力而为"持久化, 内部已捕获异常并记录日志, 不中断主流程
+struct SessionPersistenceHooks {
+    /// 追加展示历史消息后调用 (msg 已含分配 id; msgIdCounter 为追加后计数,
+    /// 供重启恢复时延续 id 分配)
+    std::function<void(const ViewMessage&, uint64_t msgIdCounter)> onAppendMessage;
+    /// 保存 LLM 上下文消息 (每轮对话结束时调用)
+    std::function<void(const neograph::json&)> onSaveLlmMessages;
+    /// 保存会话选择的模型名
+    std::function<void(std::string_view)> onSaveModelName;
+};
 
 /// 上下文统计 (供 UI 显示上下文占用)
 /// - 由 SummarizationMiddlewareHandle 在每次 modelcall 前更新
@@ -138,7 +151,20 @@ public:
 
     /// 向 viewMessages 追加一条消息并更新链式哈希，返回分配的 msgId
     /// - 必须在 ioContext 线程内调用 (assertIoThread 强制校验)
+    /// - 已绑定持久化回调时同步落库 (失败仅记日志)
     std::string appendHistory(ViewMessage msg);
+
+    /// 绑定持久化回调 (由 SessionStore 创建 Session 时注入; 测试可不绑定)
+    void setPersistenceHooks(SessionPersistenceHooks hooks);
+
+    /// 从持久化状态恢复: 重建链式哈希 (对不含 id 的消息内容, 与
+    /// appendHistory 语义一致)、恢复 msgIdCounter 与模型名
+    /// - 不触发持久化回调 (恢复本身不产生新的写入)
+    void restore(std::vector<ViewMessage> messages, uint64_t msgIdCounter, std::string modelName);
+
+    /// 持久化 LLM 上下文消息 (每轮对话结束时由 BaseAgent 调用)
+    /// - 未绑定回调时为 no-op
+    void saveLlmMessages();
 
     /// 设置本会话当前轮次的取消令牌 (仅 io 线程)
     void setCancelToken(std::shared_ptr<neograph::graph::CancelToken> token);
@@ -159,6 +185,9 @@ private:
 
     /// 绑定的 io 线程 id (std::thread::id{} 表示未绑定)
     std::atomic<std::thread::id> ioThreadId_{std::thread::id{}};
+
+    /// 持久化回调 (可选; 为空时不落库)
+    SessionPersistenceHooks hooks_;
 };
 
 /// 会话存储: 按 thread_id 取/建 Session
@@ -168,12 +197,18 @@ class SessionStore {
 public:
 
     /// 获取或创建指定 thread_id 的会话
+    /// - 创建时若已注入持久化 (persistence), 从 SQLite 恢复该 thread 的
+    ///   历史消息/LLM 上下文/模型名, 并绑定持久化回调
     std::shared_ptr<Session> getOrCreate(std::string_view threadId);
 
     /// 获取指定 thread_id 的会话; 不存在时返回 nullptr
     std::shared_ptr<Session> get(std::string_view threadId);
 
     void remove(std::string_view threadId);
+
+    /// 会话 SQLite 持久化 (由 BaseAgent 注入; 为空时不持久化)
+    /// - 仅 io 线程读写, 无需锁
+    std::shared_ptr<SessionPersistence> persistence = nullptr;
 
 private:
 
@@ -210,6 +245,11 @@ public:
 
     /// 会话存储：按 thread_id 取/建 Session
     std::shared_ptr<SessionStore> sessions = std::make_shared<SessionStore>();
+
+    /// 会话 SQLite 持久化 (AgentConfig::enableSessionPersistence 开启时由
+    /// BaseAgent 创建并注入; 为空表示不持久化)
+    /// - 数据目录: ~/.agentxx/sqlite/{threadId}/
+    std::shared_ptr<SessionPersistence> sessionPersistence = nullptr;
 
     /// 组件加载信息
     AgentAppendComponentInfo appendComponentInfo;
