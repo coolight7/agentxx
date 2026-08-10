@@ -496,7 +496,7 @@ asio::awaitable<void> test_agent_cancel_toolcall() {
         auto               ex2 = co_await asio::this_coro::executor;
         asio::steady_timer poll(ex2);
         neograph::json     im;
-        bool               slowCanceled = false;
+        bool               slowCanceled   = false;
         bool               markerCanceled = false;
         const auto         deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
         while (std::chrono::steady_clock::now() < deadline) {

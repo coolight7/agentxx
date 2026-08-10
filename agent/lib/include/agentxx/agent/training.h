@@ -133,7 +133,9 @@ inline std::string stripMarkdownCodeBlock(std::string_view content) {
 inline neograph::json parseJsonFromResponse(std::string_view content) {
     auto stripped = stripMarkdownCodeBlock(content);
     return agentxx::util::catchError<neograph::json>(
-        [&stripped]() -> neograph::json { return neograph::json::parse(stripped); },
+        [&stripped]() -> neograph::json {
+            return neograph::json::parse(stripped);
+        },
         [&stripped](std::string errmsg) -> neograph::json {
             auto first = stripped.find('{');
             auto last  = stripped.rfind('}');

@@ -44,10 +44,10 @@
 #include "test_toolcall_args.h"
 #ifdef AGENTXX_BUILD_CLIENT
 #include "test_mermaid_state.h"
+#include "test_thread_id.h"
 #include "test_tui_input.h"
 #include "test_tui_interrupt.h"
 #include "test_tui_settings.h"
-#include "test_thread_id.h"
 #endif
 #include "test_util_misc.h"
 #include "test_web_search_tools.h"

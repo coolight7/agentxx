@@ -240,8 +240,9 @@ asio::awaitable<TrainingScore> EvolutionTrainingAgent::defaultScoringWithSubAgen
     // catchErrorAsync: 评分子代理异常 (含取消/中断类) 转为 0 分反馈, 训练循环继续
     co_await agentxx::util::catchErrorAsync<bool>(
         [&]() -> asio::awaitable<bool> {
-            auto content = co_await runLLMAgent(scoreAgent, cfg.scoringPrompt, scoringMessage.str());
-            auto parsed  = parseJsonFromResponse(content);
+            auto content
+                = co_await runLLMAgent(scoreAgent, cfg.scoringPrompt, scoringMessage.str());
+            auto parsed = parseJsonFromResponse(content);
             if (parsed.is_object()) {
                 result.score    = parsed.value("score", 0.0);
                 result.feedback = parsed.value("feedback", std::string{});

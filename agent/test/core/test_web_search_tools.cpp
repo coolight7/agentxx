@@ -201,7 +201,8 @@ asio::awaitable<void>
 /// 判断 tool 定义中是否包含指定参数
 static bool definitionHasArg(const neograph::ChatTool& def, std::string_view argName) {
     const auto& params = def.parameters;
-    if (!params.is_object() || !params.contains("properties") || !params["properties"].is_object()) {
+    if (!params.is_object() || !params.contains("properties")
+        || !params["properties"].is_object()) {
         return false;
     }
     const auto props = params["properties"];
@@ -209,9 +210,9 @@ static bool definitionHasArg(const neograph::ChatTool& def, std::string_view arg
 }
 
 /// 所有 web tool 的定义都应统一包含 `timeout` 与 `header` 参数
-asio::awaitable<void>
-    test_web_tools_definition_timeout_header(std::weak_ptr<agentxx::agent::AgentContext> agentContext
-    ) {
+asio::awaitable<void> test_web_tools_definition_timeout_header(
+    std::weak_ptr<agentxx::agent::AgentContext> agentContext
+) {
     auto checkTool = [](std::string_view name, const neograph::ChatTool& def) {
         bool ok = definitionHasArg(def, "timeout") && definitionHasArg(def, "header");
         if (ok) {
@@ -224,9 +225,8 @@ asio::awaitable<void>
     };
 
     {
-        auto tool = agentxx::tools::WebSearchTool{
-            "https://example.com/search?q={}", false, agentContext
-        };
+        auto tool
+            = agentxx::tools::WebSearchTool{"https://example.com/search?q={}", false, agentContext};
         checkTool("WebSearchTool", tool.get_definition());
     }
     {
@@ -259,7 +259,7 @@ asio::awaitable<void>
                 resp.result(boost::beast::http::status::ok);
                 resp.set(boost::beast::http::field::content_type, "text/plain");
                 boost::beast::string_view v = req.base()["X-Test-Header"];
-                resp.body()                = v.empty() ? std::string{} : std::string(v);
+                resp.body()                 = v.empty() ? std::string{} : std::string(v);
                 resp.prepare_payload();
                 co_return;
             }
@@ -283,7 +283,7 @@ asio::awaitable<void>
     std::thread serverThread([&server]() {
         server.start();
     });
-    uint16_t port = 0;
+    uint16_t    port = 0;
     for (int i = 0; i < 100; ++i) {
         port = server.port();
         if (port != 0) {
@@ -304,7 +304,7 @@ asio::awaitable<void>
     {
         auto tool = agentxx::tools::WebFetchUrlTool{agentContext};
         auto args = neograph::json{
-            {"url", baseUrl + "/echo-header"},
+            {"url",    baseUrl + "/echo-header"                                   },
             {"header", neograph::json{{"X-Test-Header", "fetch-url-header-value"}}},
         };
         auto result = co_await tool.execute_async(args);
@@ -320,7 +320,7 @@ asio::awaitable<void>
     {
         auto tool = agentxx::tools::WebFetchUrlMarkdownTool{agentContext};
         auto args = neograph::json{
-            {"url", baseUrl + "/echo-header"},
+            {"url",    baseUrl + "/echo-header"                                  },
             {"header", neograph::json{{"X-Test-Header", "fetch-md-header-value"}}},
         };
         auto result = co_await tool.execute_async(args);
@@ -335,13 +335,12 @@ asio::awaitable<void>
     }
     // WebSearchTool (原始 body 路径): header 参数 + timeout 参数
     {
-        auto tool = agentxx::tools::WebSearchTool{
-            baseUrl + "/echo-header?q={}", false, agentContext
-        };
+        auto tool
+            = agentxx::tools::WebSearchTool{baseUrl + "/echo-header?q={}", false, agentContext};
         auto args = neograph::json{
-            {"query", "test"},
-            {"timeout", 10},
-            {"header", neograph::json{{"X-Test-Header", "search-raw-header-value"}}},
+            {"query",   "test"                                                      },
+            {"timeout", 10                                                          },
+            {"header",  neograph::json{{"X-Test-Header", "search-raw-header-value"}}},
         };
         auto result = co_await tool.execute_async(args);
         if (result.find("search-raw-header-value") != std::string::npos) {
@@ -354,18 +353,18 @@ asio::awaitable<void>
     }
     // WebSearchTool (markdown 路径): header 参数 + timeout 参数
     {
-        auto tool = agentxx::tools::WebSearchTool{
-            baseUrl + "/echo-header?q={}", true, agentContext
-        };
+        auto tool
+            = agentxx::tools::WebSearchTool{baseUrl + "/echo-header?q={}", true, agentContext};
         auto args = neograph::json{
-            {"query", "test"},
-            {"timeout", 10},
-            {"header", neograph::json{{"X-Test-Header", "search-md-header-value"}}},
+            {"query",   "test"                                                     },
+            {"timeout", 10                                                         },
+            {"header",  neograph::json{{"X-Test-Header", "search-md-header-value"}}},
         };
         auto result = co_await tool.execute_async(args);
         if (result.find("search-md-header-value") != std::string::npos) {
             g_ws_passed++;
-            TEST_PASS << "WebSearchTool(markdown) sends custom header & accepts timeout" << std::endl;
+            TEST_PASS << "WebSearchTool(markdown) sends custom header & accepts timeout"
+                      << std::endl;
         } else {
             g_ws_failed++;
             TEST_FAIL << "WebSearchTool(markdown) header not received, got: " << result
@@ -376,8 +375,8 @@ asio::awaitable<void>
     {
         auto tool = agentxx::tools::WebFetchUrlTool{agentContext};
         auto args = neograph::json{
-            {"url", baseUrl + "/hello"},
-            {"timeout", 5},
+            {"url",     baseUrl + "/hello"},
+            {"timeout", 5                 },
         };
         auto result = co_await tool.execute_async(args);
         if (result.find("\"error\"") == std::string::npos) {

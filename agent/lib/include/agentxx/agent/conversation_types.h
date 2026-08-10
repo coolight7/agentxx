@@ -58,8 +58,8 @@ struct ViewMessage {
     /// 正文: User/Assistant/Thinking/System 消息文本; Tool 消息为工具参数
     /// (arguments JSON 字符串, 与渲染侧现有约定一致)
     std::string text;
-    int64_t     startTimeMs = 0; ///< 开始时间戳 (毫秒, Unix 时间戳)
-    int64_t     durationMs  = 0; ///< 运行时长 (毫秒)
+    int64_t     startTimeMs = 0;     ///< 开始时间戳 (毫秒, Unix 时间戳)
+    int64_t     durationMs  = 0;     ///< 运行时长 (毫秒)
     bool        collapsed   = false; ///< 折叠展示 (Thinking/Tool 消息)
 
     // ---- Role::Tool 专属 ----
@@ -71,10 +71,12 @@ struct ViewMessage {
         std::string diff;
         bool        toolFinished = false;
     };
+
     // ---- Role::System 专属 ----
     struct SystemData {
         TipLevel tipLevel = TipLevel::Info;
     };
+
     // ---- Role::Interrupt 专属 ----
     struct InterruptData {
         /// 中断请求 wire id (对应 WireInterruptRequest.id); 0 = 非中断消息
@@ -83,8 +85,8 @@ struct ViewMessage {
         std::string inputLabel;
         std::string inputDepict;
         /// 返回值类型: bool / int / double / string / enum
-        std::string inputType;
-        std::string inputDefault;
+        std::string              inputType;
+        std::string              inputDefault;
         std::vector<std::string> inputEnums;
         /// 输入项序号 (1-based) / 总数 (仅进度展示)
         int inputIndex = 0;
@@ -101,12 +103,8 @@ struct ViewMessage {
 
     /// 便捷构造: 纯文本消息 (User/Assistant/Thinking/System)
     /// - System 消息自动创建 system 子结构 (tipLevel 默认 Info)
-    static ViewMessage makeText(
-        Role        role,
-        std::string text,
-        int64_t     startTimeMs = 0,
-        int64_t     durationMs  = 0
-    ) {
+    static ViewMessage
+        makeText(Role role, std::string text, int64_t startTimeMs = 0, int64_t durationMs = 0) {
         ViewMessage m;
         m.role        = role;
         m.text        = std::move(text);
@@ -202,9 +200,9 @@ struct Delta {
 };
 
 struct SyncPayload {
-    uint64_t             fromIndex = 0;
+    uint64_t                 fromIndex = 0;
     std::vector<ViewMessage> messages;
-    std::string          tailHash;
+    std::string              tailHash;
 };
 
 // ---------------------------------------------------------------------------
@@ -277,7 +275,8 @@ inline ViewMessage::TipLevel viewMessageTipLevelFromString(std::string_view s) n
     return T::Info;
 }
 
-inline std::string_view viewMessageInterruptStatusToString(ViewMessage::InterruptStatus s) noexcept {
+inline std::string_view viewMessageInterruptStatusToString(ViewMessage::InterruptStatus s
+) noexcept {
     using S = ViewMessage::InterruptStatus;
     switch (s) {
         case S::Confirmed:
@@ -292,8 +291,8 @@ inline std::string_view viewMessageInterruptStatusToString(ViewMessage::Interrup
     return "waiting";
 }
 
-inline ViewMessage::InterruptStatus
-    viewMessageInterruptStatusFromString(std::string_view s) noexcept {
+inline ViewMessage::InterruptStatus viewMessageInterruptStatusFromString(std::string_view s
+) noexcept {
     using S = ViewMessage::InterruptStatus;
     if (s == "confirmed") {
         return S::Confirmed;
@@ -312,10 +311,10 @@ inline neograph::json ViewMessage::toJson() const {
     if (!id.empty()) {
         j["id"] = id;
     }
-    j["role"]        = std::string(viewMessageRoleToString(role));
-    j["text"]        = text;
+    j["role"]          = std::string(viewMessageRoleToString(role));
+    j["text"]          = text;
     j["start_time_ms"] = startTimeMs;
-    j["duration_ms"]  = durationMs;
+    j["duration_ms"]   = durationMs;
     if (collapsed) {
         j["collapsed"] = true;
     }
@@ -344,7 +343,7 @@ inline neograph::json ViewMessage::toJson() const {
         };
     }
     if (interrupt) {
-        neograph::json it = neograph::json::object();
+        neograph::json it  = neograph::json::object();
         it["interrupt_id"] = interrupt->interruptId;
         if (!interrupt->inputLabel.empty()) {
             it["input_label"] = interrupt->inputLabel;
@@ -407,7 +406,8 @@ inline ViewMessage ViewMessage::fromJson(const neograph::json& j) {
         case ViewMessage::Role::System: {
             ViewMessage::SystemData s;
             if (j.contains("system")) {
-                s.tipLevel = viewMessageTipLevelFromString(j["system"].value("tip_level", std::string{}));
+                s.tipLevel
+                    = viewMessageTipLevelFromString(j["system"].value("tip_level", std::string{}));
             }
             m.system = std::move(s);
             break;
@@ -415,21 +415,23 @@ inline ViewMessage ViewMessage::fromJson(const neograph::json& j) {
         case ViewMessage::Role::Interrupt: {
             ViewMessage::InterruptData it;
             if (j.contains("interrupt")) {
-                const auto& ij       = j["interrupt"];
-                it.interruptId       = ij.value("interrupt_id", int64_t{0});
-                it.inputLabel        = ij.value("input_label", std::string{});
-                it.inputDepict       = ij.value("input_depict", std::string{});
-                it.inputType         = ij.value("input_type", std::string{});
-                it.inputDefault      = ij.value("input_default", std::string{});
-                it.inputIndex        = ij.value("input_index", 0);
-                it.inputTotal        = ij.value("input_total", 0);
-                it.interruptStatus   = viewMessageInterruptStatusFromString(
+                const auto& ij     = j["interrupt"];
+                it.interruptId     = ij.value("interrupt_id", int64_t{0});
+                it.inputLabel      = ij.value("input_label", std::string{});
+                it.inputDepict     = ij.value("input_depict", std::string{});
+                it.inputType       = ij.value("input_type", std::string{});
+                it.inputDefault    = ij.value("input_default", std::string{});
+                it.inputIndex      = ij.value("input_index", 0);
+                it.inputTotal      = ij.value("input_total", 0);
+                it.interruptStatus = viewMessageInterruptStatusFromString(
                     ij.value("interrupt_status", std::string{})
                 );
-                it.interruptResult   = ij.value("interrupt_result", std::string{});
+                it.interruptResult = ij.value("interrupt_result", std::string{});
                 if (ij.contains("input_enums") && ij["input_enums"].is_array()) {
                     for (const auto& e : ij["input_enums"]) {
-                        it.inputEnums.push_back(e.is_string() ? e.get<std::string>() : std::string{});
+                        it.inputEnums.push_back(
+                            e.is_string() ? e.get<std::string>() : std::string{}
+                        );
                     }
                 }
             }

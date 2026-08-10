@@ -95,9 +95,9 @@ public:
 
     /// 2026-07-28 subscriptions/listen 通知过滤器
     struct SubscriptionFilter {
-        bool                    toolsListChanged     = false;
-        bool                    promptsListChanged   = false;
-        bool                    resourcesListChanged = false;
+        bool                     toolsListChanged     = false;
+        bool                     promptsListChanged   = false;
+        bool                     resourcesListChanged = false;
         std::vector<std::string> resourceSubscriptions;
     };
 
@@ -164,10 +164,11 @@ public:
     /// - HTTP: 在本协程的 io 线程上调用
     /// onEnded 在服务端优雅结束订阅 (回发空 result) 时调用。
     /// HTTP 下该协程保持运行直到订阅结束或外部取消; stdio 下写入请求后立即返回。
-    asio::awaitable<std::expected<void, std::string>>
-        listen(const SubscriptionFilter&                          filter,
-               std::function<void(const json& notification)>     onNotification,
-               std::function<void()>                             onEnded = {});
+    asio::awaitable<std::expected<void, std::string>> listen(
+        const SubscriptionFilter&                     filter,
+        std::function<void(const json& notification)> onNotification,
+        std::function<void()>                         onEnded = {}
+    );
 
     // -----------------------------------------------------------------------
     // Tool adapter factory
@@ -219,8 +220,8 @@ private:
     asio::awaitable<std::expected<DiscoverResult, std::string>> probeModern();
 
     /// 从服务端支持的版本列表挑选双方共同支持的版本 (优先 requested)
-    static std::string pickMutualVersion(std::string_view requested,
-                                         const json&       serverSupportedVersions);
+    static std::string
+        pickMutualVersion(std::string_view requested, const json& serverSupportedVersions);
 
     /// 现代 HTTP 请求头 (MCP-Protocol-Version / Mcp-Method / Mcp-Name / Mcp-Param-*)
     util::HeaderMap buildModernHttpHeaders(std::string_view method, const json& params) const;
@@ -239,6 +240,7 @@ private:
         std::string headerName; // 原始大小写 (发送时使用)
         std::string param;      // 参数名
     };
+
     static std::unordered_map<std::string, XMcpHeaderInfo>
         extractXMcpHeaders(const McpToolDefinition& def);
 
@@ -307,8 +309,8 @@ private:
     std::atomic<int64_t> nextId_{1};
 
     // 2026-07-28 协议时代/版本状态
-    ProtocolEra   era_{ProtocolEra::Unknown};
-    std::string   negotiatedVersion_;
+    ProtocolEra era_{ProtocolEra::Unknown};
+    std::string negotiatedVersion_;
 
     // HTTP SSE transport state (legacy HTTP+SSE)
     std::atomic<bool> sseDiscovered_{false};
@@ -325,14 +327,14 @@ private:
     neograph_asio_error_code                                     ignoreEc_;
 
     // 工具定义缓存 (x-mcp-header 提取)
-    mutable std::mutex                            toolsCacheMutex_;
+    mutable std::mutex                                 toolsCacheMutex_;
     std::unordered_map<std::string, McpToolDefinition> toolsCache_;
 
     // subscriptions/listen 通知分发
-    std::mutex                        notifyMutex_;
-    std::function<void(const json&)>  notificationHandler_;
-    std::function<void()>             subscriptionEnded_;
-    int64_t                           listenRequestId_ = -1;
+    std::mutex                       notifyMutex_;
+    std::function<void(const json&)> notificationHandler_;
+    std::function<void()>            subscriptionEnded_;
+    int64_t                          listenRequestId_ = -1;
 };
 
 // ---------------------------------------------------------------------------

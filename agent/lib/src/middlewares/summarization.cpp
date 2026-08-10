@@ -198,7 +198,9 @@ void SummarizationMiddlewareHandle::doSummarizeToolcall(std::vector<neograph::Ch
                             );
                             return true;
                         },
-                        [](std::string) -> bool { return false; }
+                        [](std::string) -> bool {
+                            return false;
+                        }
                     );
                 }
 
@@ -225,7 +227,9 @@ void SummarizationMiddlewareHandle::doSummarizeToolcall(std::vector<neograph::Ch
                             args = neograph::json::parse(tc.arguments);
                             return true;
                         },
-                        [](std::string) -> bool { return false; }
+                        [](std::string) -> bool {
+                            return false;
+                        }
                     );
                     auto key = itemHandleIt->second.generateDeduplicationKey(args);
                     if (key.has_value()) {

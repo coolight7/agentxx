@@ -136,7 +136,8 @@ std::pair<std::string, neograph::json> AnthropicProvider::convertMessages(
             }
             j["content"] = std::move(content_arr);
             arr.push_back(std::move(j));
-        } else if (sendThinking && msg.role == "assistant" && (!msg.reasoning_content.empty() || hasThinkingBlocks(msg))) {
+        } else if (sendThinking && msg.role == "assistant"
+                   && (!msg.reasoning_content.empty() || hasThinkingBlocks(msg))) {
             neograph::json j;
             j["role"]                  = "assistant";
             neograph::json content_arr = neograph::json::array();

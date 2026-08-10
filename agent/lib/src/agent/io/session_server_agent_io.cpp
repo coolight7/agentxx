@@ -99,11 +99,11 @@ asio::awaitable<neograph::json> SessionServerAgentIO::handleInterrupt(
         .argJson  = std::string{interruptArgJson},
     });
 
-    neograph::json result = neograph::json::array();
+    neograph::json result      = neograph::json::array();
     bool           gotResponse = false;
     co_await agentxx::util::catchErrorAsync<bool>(
         [&]() -> asio::awaitable<bool> {
-            result      = co_await ch->async_receive(asio::cancel_after(timeout, asio::use_awaitable));
+            result = co_await ch->async_receive(asio::cancel_after(timeout, asio::use_awaitable));
             gotResponse = true;
             co_return true;
         },

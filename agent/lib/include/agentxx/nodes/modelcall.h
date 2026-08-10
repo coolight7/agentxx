@@ -41,9 +41,10 @@ public:
     /// 解析指定会话使用的模型名 (发送给 LLM api 的 model 字段)
     std::string resolveCurrentModelName(std::string_view threadId) const;
 
-    asio::awaitable<neograph::ChatCompletion>
-        onReceiveToken(neograph::CompletionParams& params, neograph::graph::NodeInput& input)
-        override;
+    asio::awaitable<neograph::ChatCompletion> onReceiveToken(
+        neograph::CompletionParams& params,
+        neograph::graph::NodeInput& input
+    ) override;
 
     neograph::CompletionParams
         build_params(const neograph::graph::GraphState& state, std::string_view threadId) const;

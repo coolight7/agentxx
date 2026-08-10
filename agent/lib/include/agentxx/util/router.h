@@ -48,10 +48,10 @@ protected:
         ///
         /// - return: 对应路径节点，不存在则返回nullptr
         RouterTreePort* getChild(
-            const char*    in_path,
-            std::string&   re_path,
-            bool           do_add = false,
-            bool           loose  = false
+            const char*  in_path,
+            std::string& re_path,
+            bool         do_add = false,
+            bool         loose  = false
         ) {
             const char *strptr = in_path, *nextptr = in_path;
             for (;;) {
@@ -80,10 +80,10 @@ protected:
                         return it->second;
                     } else {
                         if (do_add) {
-                            auto treeptr    = new RouterTreePort(in_path);
-                            treeptr->parent = this;
-                            child[in_path]  = treeptr;
-                            re_path += in_path;
+                            auto treeptr     = new RouterTreePort(in_path);
+                            treeptr->parent  = this;
+                            child[in_path]   = treeptr;
+                            re_path         += in_path;
                             return treeptr;
                         } else {
                             it = child.find("*");
@@ -118,10 +118,10 @@ protected:
             auto it = child.find(str);
             if (it != child.end()) {
                 // 如果存在子节点
-                const size_t re_size = re_path.size();
-                re_path += str;
-                re_path += '/';
-                auto re_ptr = it->second->getChild(nextptr, re_path, do_add, loose);
+                const size_t re_size  = re_path.size();
+                re_path              += str;
+                re_path              += '/';
+                auto re_ptr           = it->second->getChild(nextptr, re_path, do_add, loose);
                 if (re_ptr != nullptr) {
                     // 有找到匹配的路径
                     return re_ptr;
@@ -132,13 +132,13 @@ protected:
             } else {
                 if (do_add) {
                     // 如果需要新建子节点
-                    auto treeptr    = new RouterTreePort(str);
-                    treeptr->parent = this;
-                    child[str]      = treeptr;
-                    const size_t re_size = re_path.size();
-                    re_path += str;
-                    re_path += '/';
-                    auto re_ptr = treeptr->getChild(nextptr, re_path, do_add, loose);
+                    auto treeptr          = new RouterTreePort(str);
+                    treeptr->parent       = this;
+                    child[str]            = treeptr;
+                    const size_t re_size  = re_path.size();
+                    re_path              += str;
+                    re_path              += '/';
+                    auto re_ptr           = treeptr->getChild(nextptr, re_path, do_add, loose);
                     if (re_ptr != nullptr) {
                         return re_ptr;
                     }
@@ -235,11 +235,8 @@ protected:
     /// - [loose] 精确子节点不存在时回退到最深的已注册父节点（最长前缀匹配）
     ///
     /// - return: 返回查找结果节点
-    RouterTreePort* getTreepNocache(
-        std::string_view in_path,
-        std::string&     re_path,
-        bool             loose = false
-    ) {
+    RouterTreePort*
+        getTreepNocache(std::string_view in_path, std::string& re_path, bool loose = false) {
         // 路径自顶向下累积，必须先清空（调用方可能复用 re_path 字符串）
         re_path.clear();
         const char* strp = in_path.data();
@@ -284,12 +281,11 @@ public:
     ///   若该节点没有对应 [in_index] 的处理函数，继续沿父链向上查找;
     ///   [re_path] 始终为最深匹配节点的真实路径。
     ///   该模式命中父链回退的结果不写入缓存。
-    std::shared_ptr<HANLDE_TPYE> get(
-        const std::string& in_path,
-        int                in_index,
-        std::string&       re_path,
-        bool               prefix_fallback = false
-    ) {
+    std::shared_ptr<HANLDE_TPYE>
+        get(const std::string& in_path,
+            int                in_index,
+            std::string&       re_path,
+            bool               prefix_fallback = false) {
         auto                      cached  = this->cacheMap.get(in_path);
         XXRouter::RouterTreePort* treeptr = nullptr;
         if (cached.has_value()) {
@@ -306,7 +302,7 @@ public:
                 // 节点自身无对应处理函数时，沿父链向上回退查找
                 // 父链回退命中的结果不写缓存（缓存条目需保证节点自身持有处理函数）
                 for (auto parent = treeptr->parent; parent != nullptr && handles == nullptr;
-                     parent     = parent->parent) {
+                     parent      = parent->parent) {
                     handles = parent->getHandle(in_index);
                 }
             }
@@ -333,7 +329,7 @@ public:
             if (handles == nullptr && prefix_fallback) {
                 // 节点自身无对应处理函数时，沿父链向上回退查找
                 for (auto parent = treep->parent; parent != nullptr && handles == nullptr;
-                     parent     = parent->parent) {
+                     parent      = parent->parent) {
                     handles = parent->getHandle(in_index);
                 }
             }

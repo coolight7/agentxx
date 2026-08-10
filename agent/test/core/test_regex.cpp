@@ -237,7 +237,7 @@ void test_regex_case_sensitive() {
 void test_regex_case_insensitive() {
     // caseInsensitive=true: 大小写不敏感匹配 (Hyperscan: HS_FLAG_CASELESS,
     // std::regex fallback: icase), 不再依赖外部折叠模式
-    auto                            re = XXRegex::createRegex("hello", XXRegex::defHSFlags_normal, true);
+    auto re = XXRegex::createRegex("hello", XXRegex::defHSFlags_normal, true);
     std::vector<XXRegexMatchResult> results;
 
     XX_TEST_EXPECT_TRUE(re->match("Hello World", results));

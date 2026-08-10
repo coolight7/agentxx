@@ -467,7 +467,9 @@ std::optional<WireMessage> WsAgentIOTransport::deserialize(std::string_view json
             j = neograph::json::parse(jsonText);
             return true;
         },
-        [](std::string) -> bool { return false; }
+        [](std::string) -> bool {
+            return false;
+        }
     );
     if (!parsed) {
         return std::nullopt;

@@ -24,9 +24,9 @@ public:
     XXRegex& operator=(const XXRegex&) = delete;
 
     [[nodiscard]] static std::shared_ptr<agentxx::util::XXRegex> createRegex(
-        const std::string&  regstr,
-        unsigned int        flags          = defHSFlags_normal,
-        bool                caseInsensitive = false
+        const std::string& regstr,
+        unsigned int       flags           = defHSFlags_normal,
+        bool               caseInsensitive = false
     );
     [[nodiscard]] static std::shared_ptr<agentxx::util::XXRegex> createRegex(
         const std::vector<std::string>& regstrs,

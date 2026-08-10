@@ -84,15 +84,14 @@ public:
             agentxx::middleware::MiddlewareContext::graphDataKey_interruptToolcallCache
         );
         if (cache.is_array() && cache.size() == 1) {
-            const auto& m     = cache[0];
-            const auto  flags = static_cast<neograph::MessageFlag>(
-                m.value<unsigned long long>("flags", 0)
-            );
+            const auto& m = cache[0];
+            const auto  flags
+                = static_cast<neograph::MessageFlag>(m.value<unsigned long long>("flags", 0));
             interruptMsgOk = m.value("role", std::string{}) == "tool"
-                && m.value("content", std::string{}) == "[Interrupt]"
-                && m.value("tool_call_id", std::string{}) == "call_it_1"
-                && m.value("tool_name", std::string{}) == "test_interrupt"
-                && neograph::hasFlag(flags, neograph::MessageFlag::Interrupt);
+                             && m.value("content", std::string{}) == "[Interrupt]"
+                             && m.value("tool_call_id", std::string{}) == "call_it_1"
+                             && m.value("tool_name", std::string{}) == "test_interrupt"
+                             && neograph::hasFlag(flags, neograph::MessageFlag::Interrupt);
         }
 
         // 2) 中断时刻上下文 (wrap_handle 保存的 tempMessages):
@@ -103,11 +102,12 @@ public:
             agentxx::middleware::MiddlewareContext::graphDataKey_tempMessages
         );
         if (temp.is_array() && temp.size() == 3) {
-            interruptTempOrderOk = temp[0].value("role", std::string{}) == "system"
-                && temp[1].value("role", std::string{}) == "user"
-                && temp[2].value("role", std::string{}) == "assistant"
-                && temp[2]["tool_calls"].is_array() && temp[2]["tool_calls"].size() == 1
-                && temp[2]["tool_calls"][0].value("id", std::string{}) == "call_it_1";
+            interruptTempOrderOk
+                = temp[0].value("role", std::string{}) == "system"
+                  && temp[1].value("role", std::string{}) == "user"
+                  && temp[2].value("role", std::string{}) == "assistant"
+                  && temp[2]["tool_calls"].is_array() && temp[2]["tool_calls"].size() == 1
+                  && temp[2]["tool_calls"][0].value("id", std::string{}) == "call_it_1";
         }
 
         co_return neograph::json(std::string{"handled"});
@@ -264,9 +264,9 @@ asio::awaitable<void> test_interrupt_auto_supplement() {
                        {"id", "call_it_1"},
                        {"type", "function"},
                        {"function",
-                   neograph::json{
-                       {"name", "test_interrupt"},
-                       {"arguments", "{}"},
+             neograph::json{
+                 {"name", "test_interrupt"},
+                 {"arguments", "{}"},
              }},
                        },
     });
@@ -275,9 +275,8 @@ asio::awaitable<void> test_interrupt_auto_supplement() {
     co_await agent.init();
 
     auto io     = std::make_shared<InterruptMockIO>(agent.agentContext);
-    auto result = co_await agent.runConversationTurnAsync(
-        "interrupt_msg_test", "Please interrupt", true, io
-    );
+    auto result = co_await agent
+                      .runConversationTurnAsync("interrupt_msg_test", "Please interrupt", true, io);
 
     // 中断被处理并 resume, 轮次正常完成 (interrupted 标记 true, 无错误)
     XX_TEST_EXPECT_FALSE(result.hasError);
@@ -312,8 +311,14 @@ asio::awaitable<void> test_interrupt_auto_supplement() {
                     std::string{"call_it_1"}
                 );
             }
-            XX_TEST_EXPECT_EQ(msgs[3].value("tool_call_id", std::string{}), std::string{"call_it_1"});
-            XX_TEST_EXPECT_EQ(msgs[3].value("tool_name", std::string{}), std::string{"test_interrupt"});
+            XX_TEST_EXPECT_EQ(
+                msgs[3].value("tool_call_id", std::string{}),
+                std::string{"call_it_1"}
+            );
+            XX_TEST_EXPECT_EQ(
+                msgs[3].value("tool_name", std::string{}),
+                std::string{"test_interrupt"}
+            );
             // resume 后 tool 重新执行返回真实中断结果, 不再是 [Interrupt] 占位
             XX_TEST_EXPECT_EQ(msgs[3].value("content", std::string{}), std::string{"handled"});
             // 最终 tool 消息不应残留 [Interrupt]/[AutoInserted] 标记
@@ -386,9 +391,8 @@ static bool checkCanceledMessageSequence(const neograph::json& msgs) {
         return false;
     }
     {
-        const auto flags = static_cast<neograph::MessageFlag>(
-            msgs[3].value<unsigned long long>("flags", 0)
-        );
+        const auto flags
+            = static_cast<neograph::MessageFlag>(msgs[3].value<unsigned long long>("flags", 0));
         if (!neograph::hasFlag(flags, neograph::MessageFlag::AutoInserted)) {
             return false;
         }
@@ -404,9 +408,8 @@ static bool checkCanceledMessageSequence(const neograph::json& msgs) {
         return false;
     }
     {
-        const auto flags = static_cast<neograph::MessageFlag>(
-            msgs[4].value<unsigned long long>("flags", 0)
-        );
+        const auto flags
+            = static_cast<neograph::MessageFlag>(msgs[4].value<unsigned long long>("flags", 0));
         if (!neograph::hasFlag(flags, neograph::MessageFlag::AutoInserted)) {
             return false;
         }
@@ -433,9 +436,9 @@ asio::awaitable<void> test_cancel_auto_supplement() {
                        {"id", "call_slow_1"},
                        {"type", "function"},
                        {"function",
-                   neograph::json{
-                       {"name", "test_slow"},
-                       {"arguments", "{}"},
+             neograph::json{
+                 {"name", "test_slow"},
+                 {"arguments", "{}"},
              }},
                        },
         neograph::json{
@@ -443,9 +446,9 @@ asio::awaitable<void> test_cancel_auto_supplement() {
                        {"id", "call_fast_1"},
                        {"type", "function"},
                        {"function",
-                   neograph::json{
-                       {"name", "test_fast"},
-                       {"arguments", "{}"},
+             neograph::json{
+                 {"name", "test_fast"},
+                 {"arguments", "{}"},
              }},
                        },
     });
@@ -503,17 +506,16 @@ asio::awaitable<void> test_cancel_auto_supplement() {
     // 轮询等待自动补充消息最终保存完成 (baseRun 走 isCancel 分支后,
     // wrap_handle 在 rethrow 前写入 tempMessages)
     {
-        auto ex2 = co_await asio::this_coro::executor;
+        auto               ex2 = co_await asio::this_coro::executor;
         asio::steady_timer poll(ex2);
-        bool               ok       = false;
+        bool               ok = false;
         neograph::json     im;
         const auto         deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
         while (std::chrono::steady_clock::now() < deadline) {
-            im = agent.agentContext->middlewareHandleContext
-                     ->getGraphDataItemValue<neograph::json>(
-                         "cancel_msg_test",
-                         agentxx::middleware::MiddlewareContext::graphDataKey_tempMessages
-                     );
+            im = agent.agentContext->middlewareHandleContext->getGraphDataItemValue<neograph::json>(
+                "cancel_msg_test",
+                agentxx::middleware::MiddlewareContext::graphDataKey_tempMessages
+            );
             if (checkCanceledMessageSequence(im)) {
                 ok = true;
                 break;

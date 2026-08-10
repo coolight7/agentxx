@@ -89,8 +89,8 @@ json AcpProtocolHandler::handleMessage(const json& env) {
     auto id             = env.contains("id") ? env["id"] : json();
     bool isNotification = !env.contains("id");
 
-    bool   handled = false;
-    auto   result  = agentxx::util::catchError<json>(
+    bool handled = false;
+    auto result  = agentxx::util::catchError<json>(
         [&]() -> json {
             if (method == "initialize") {
                 handled = true;
@@ -620,9 +620,11 @@ asio::awaitable<void> HttpAcpServer::handleAcpRequest(
 ) {
     namespace http = boost::beast::http;
 
-    bool           isError = false;
+    bool           isError     = false;
     neograph::json requestJson = agentxx::util::catchError<neograph::json>(
-        [&req]() -> neograph::json { return neograph::json::parse(req.body()); },
+        [&req]() -> neograph::json {
+            return neograph::json::parse(req.body());
+        },
         [&](std::string errmsg) -> neograph::json {
             writeJsonResponse(
                 resp,
@@ -652,7 +654,9 @@ asio::awaitable<void> HttpAcpServer::handleAcpRequest(
     neograph::json id = requestJson.contains("id") ? requestJson["id"] : neograph::json{};
 
     neograph::json response = agentxx::util::catchError<neograph::json>(
-        [&]() -> neograph::json { return handler_.handleMessage(requestJson); },
+        [&]() -> neograph::json {
+            return handler_.handleMessage(requestJson);
+        },
         [&](std::string errmsg) -> neograph::json {
             XX_LOGE("[acp] handleMessage error: {}", errmsg);
             writeJsonResponse(

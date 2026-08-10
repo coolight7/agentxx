@@ -209,10 +209,10 @@ public:
     /// - 外部取消经 co_await 传播, 立即中止
     /// http / websocket 客户端统一使用, 避免黑洞 DNS 时请求/连接无限挂起。
     static asio::awaitable<asio::ip::tcp::resolver::results_type> asyncResolveWithDeadline(
-        std::string_view                     host,
-        std::string_view                     port,
+        std::string_view                      host,
+        std::string_view                      port,
         std::chrono::steady_clock::time_point connectDeadline,
-        std::chrono::milliseconds            connectTimeout
+        std::chrono::milliseconds             connectTimeout
     );
 
     /// Enable/disable SSL certificate verification (default: enabled).

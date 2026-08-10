@@ -70,9 +70,8 @@ static bool isWindowsReservedName(std::string_view seg) {
         c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
     }
     static const char* kReserved[] = {
-        "CON", "PRN", "AUX", "NUL",
-        "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
-        "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+        "CON",  "PRN",  "AUX",  "NUL",  "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7",
+        "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
     };
     for (const auto* r : kReserved) {
         if (name == r) {
@@ -89,8 +88,8 @@ static std::string sanitizeSegment(std::string_view seg) {
     std::string out;
     out.reserve(seg.size());
     for (char c : seg) {
-        if (static_cast<unsigned char>(c) < 0x20 || c == '<' || c == '>' || c == ':'
-            || c == '"' || c == '/' || c == '\\' || c == '|' || c == '?' || c == '*') {
+        if (static_cast<unsigned char>(c) < 0x20 || c == '<' || c == '>' || c == ':' || c == '"'
+            || c == '/' || c == '\\' || c == '|' || c == '?' || c == '*') {
             out.push_back('_');
         } else {
             out.push_back(c);
@@ -165,15 +164,13 @@ std::string SessionPersistence::sanitizeThreadId(std::string_view threadId) {
 
 SessionPersistence::ThreadDbs& SessionPersistence::dbs(std::string_view threadId) {
     // 目录: {root}/{sanitizedThreadId}/
-    auto dir = fs::path(rootDir_) / sanitizeThreadId(threadId);
+    auto            dir = fs::path(rootDir_) / sanitizeThreadId(threadId);
     std::error_code ec;
     fs::create_directories(dir, ec);
     if (ec) {
-        throw std::runtime_error{fmt::format(
-            "SessionPersistence: create dir {} failed: {}",
-            dir.string(),
-            ec.message()
-        )};
+        throw std::runtime_error{
+            fmt::format("SessionPersistence: create dir {} failed: {}", dir.string(), ec.message())
+        };
     }
 
     auto it = dbs_.find(threadId);
@@ -264,10 +261,8 @@ void SessionPersistence::appendViewMessage(
                 insert.step();
 
                 // UPSERT 计数: 新线程首条消息时 meta 不存在, 需 INSERT
-                auto meta = db.prepare(
-                    "INSERT INTO meta(key, value) VALUES (?, ?) "
-                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
-                );
+                auto meta = db.prepare("INSERT INTO meta(key, value) VALUES (?, ?) "
+                                       "ON CONFLICT(key) DO UPDATE SET value = excluded.value");
                 meta.bindText(1, kMetaMsgIdCounter);
                 meta.bindInt64(2, static_cast<int64_t>(msgIdCounter));
                 meta.step();
@@ -281,7 +276,9 @@ void SessionPersistence::appendViewMessage(
                             db.rollback();
                             return true;
                         },
-                        [](std::string) -> bool { return false; }
+                        [](std::string) -> bool {
+                            return false;
+                        }
                     );
                 }
                 throw;
@@ -296,7 +293,7 @@ void SessionPersistence::appendViewMessage(
 }
 
 void SessionPersistence::saveLlmMessages(
-    std::string_view    threadId,
+    std::string_view      threadId,
     const neograph::json& llmMessages
 ) {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -320,7 +317,9 @@ void SessionPersistence::saveLlmMessages(
                             db.rollback();
                             return true;
                         },
-                        [](std::string) -> bool { return false; }
+                        [](std::string) -> bool {
+                            return false;
+                        }
                     );
                 }
                 throw;
@@ -347,7 +346,7 @@ SessionPersistence::LoadedShareStore SessionPersistence::loadShareStore(std::str
     }
     agentxx::util::catchError<bool>(
         [&]() -> bool {
-            auto& db = dbs(threadId).shareStoreDb;
+            auto& db   = dbs(threadId).shareStoreDb;
             auto  stmt = db.prepare("SELECT id, value FROM item ORDER BY id");
             while (stmt.step()) {
                 out.items[static_cast<size_t>(stmt.columnInt64(0))] = stmt.columnText(1);
@@ -374,7 +373,7 @@ std::optional<std::string>
     }
     agentxx::util::catchError<bool>(
         [&]() -> bool {
-            auto& db  = dbs(threadId).shareStoreDb;
+            auto& db   = dbs(threadId).shareStoreDb;
             auto  stmt = db.prepare("SELECT value FROM item WHERE id = ?");
             stmt.bindInt64(1, static_cast<int64_t>(id));
             if (stmt.step()) {
@@ -383,7 +382,12 @@ std::optional<std::string>
             return true;
         },
         [&](std::string errmsg) -> bool {
-            XX_LOGE("SessionPersistence: getShareStoreItem({}, {}) failed: {}", threadId, id, errmsg);
+            XX_LOGE(
+                "SessionPersistence: getShareStoreItem({}, {}) failed: {}",
+                threadId,
+                id,
+                errmsg
+            );
             return false;
         }
     );
@@ -398,18 +402,21 @@ void SessionPersistence::setShareStoreItem(
     std::lock_guard<std::mutex> lock(mutex_);
     agentxx::util::catchError<bool>(
         [&]() -> bool {
-            auto& db  = dbs(threadId).shareStoreDb;
-            auto  stmt = db.prepare(
-                "INSERT INTO item(id, value) VALUES (?, ?) "
-                "ON CONFLICT(id) DO UPDATE SET value = excluded.value"
-            );
+            auto& db   = dbs(threadId).shareStoreDb;
+            auto  stmt = db.prepare("INSERT INTO item(id, value) VALUES (?, ?) "
+                                    "ON CONFLICT(id) DO UPDATE SET value = excluded.value");
             stmt.bindInt64(1, static_cast<int64_t>(id));
             stmt.bindText(2, value);
             stmt.step();
             return true;
         },
         [&](std::string errmsg) -> bool {
-            XX_LOGE("SessionPersistence: setShareStoreItem({}, {}) failed: {}", threadId, id, errmsg);
+            XX_LOGE(
+                "SessionPersistence: setShareStoreItem({}, {}) failed: {}",
+                threadId,
+                id,
+                errmsg
+            );
             return false;
         }
     );
@@ -423,10 +430,8 @@ size_t SessionPersistence::addShareStoreItem(std::string_view threadId, std::str
             auto& db = dbs(threadId).shareStoreDb;
             // 自增 id: 取现有最大 id + 1, 重启后延续; 与内存版
             // (ThreadShareStore::storeId 递增) 语义一致且更稳健
-            auto stmt = db.prepare(
-                "INSERT INTO item(id, value) "
-                "VALUES ((SELECT COALESCE(MAX(id), 0) + 1 FROM item), ?)"
-            );
+            auto stmt = db.prepare("INSERT INTO item(id, value) "
+                                   "VALUES ((SELECT COALESCE(MAX(id), 0) + 1 FROM item), ?)");
             stmt.bindText(1, value);
             stmt.step();
             out = static_cast<size_t>(db.lastInsertRowid());
@@ -444,7 +449,7 @@ void SessionPersistence::removeShareStoreItem(std::string_view threadId, size_t 
     std::lock_guard<std::mutex> lock(mutex_);
     agentxx::util::catchError<bool>(
         [&]() -> bool {
-            auto& db  = dbs(threadId).shareStoreDb;
+            auto& db   = dbs(threadId).shareStoreDb;
             auto  stmt = db.prepare("DELETE FROM item WHERE id = ?");
             stmt.bindInt64(1, static_cast<int64_t>(id));
             stmt.step();

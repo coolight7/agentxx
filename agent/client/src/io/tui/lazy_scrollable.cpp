@@ -378,11 +378,11 @@ void LazyScrollable::drawScrollbar(ftxui::Screen& screen) {
     const int start     = 2 * scrollOffset_ * vh / totalHeight_;
     const int x         = box_.x_max;
     for (int y = box_.y_min; y <= box_.y_max; ++y) {
-        const int   yUp   = 2 * (y - box_.y_min);
-        const int   yDown = yUp + 1;
-        const bool  up    = (start <= yUp) && (yUp <= start + thumbSize);
-        const bool  down  = (start <= yDown) && (yDown <= start + thumbSize);
-        const char* c     = up ? (down ? "┃" : "╹") : (down ? "╻" : " ");
+        const int   yUp               = 2 * (y - box_.y_min);
+        const int   yDown             = yUp + 1;
+        const bool  up                = (start <= yUp) && (yUp <= start + thumbSize);
+        const bool  down              = (start <= yDown) && (yDown <= start + thumbSize);
+        const char* c                 = up ? (down ? "┃" : "╹") : (down ? "╻" : " ");
         screen.CellAt(x, y).character = c;
     }
 }

@@ -237,7 +237,7 @@ Options:
         applySubagentModelToConfig(config, yamlCfg.models, yamlCfg.useModelSubagent);
         applyWebSearchModelToConfig(config, yamlCfg.models, yamlCfg.useModelWebSearch);
         config->enableCodeGraph = yamlCfg.enableCodeGraph;
-        auto agent = std::make_shared<agentxx::agent::CodeAgent>(config);
+        auto agent              = std::make_shared<agentxx::agent::CodeAgent>(config);
         asio::co_spawn(
             *agent->ioCtx,
             [agent]() -> asio::awaitable<void> {

@@ -523,7 +523,8 @@ void A2aServer::executeTask(std::string_view taskId, std::string_view userInput)
             [&]() -> bool {
                 asio::co_spawn(
                     *ioCtx,
-                    [this, &threadId, &userInput, &collected, &cancelFlag]() -> asio::awaitable<void> {
+                    [this, &threadId, &userInput, &collected, &cancelFlag](
+                    ) -> asio::awaitable<void> {
                         std::vector<neograph::ChatMessage> msgs{
                             neograph::ChatMessage{"user", std::string{userInput}}
                         };
@@ -537,7 +538,8 @@ void A2aServer::executeTask(std::string_view taskId, std::string_view userInput)
                                     } else if (event.data.is_object()) {
                                         neograph::ChatStreamChunk chunk;
                                         neograph::from_json(event.data, chunk);
-                                        if (chunk.type != neograph::ChatStreamChunk::TYPE_THINKING) {
+                                        if (chunk.type
+                                            != neograph::ChatStreamChunk::TYPE_THINKING) {
                                             collected += chunk.data;
                                         }
                                     }

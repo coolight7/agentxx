@@ -1,7 +1,7 @@
 // 注意顺序: test_agent.h 会把 XX_TEST_PASSED/FAILED 重定义为 g_da_*,
 // 必须在其后包含 test_session_persistence.h (重新定义为 g_sp_*)
-#include "test_agent.h"
 #include "test_session_persistence.h"
+#include "test_agent.h"
 
 #include "agentxx/agent/code_agent.h"
 #include "agentxx/agent/context.h"
@@ -66,17 +66,17 @@ agentxx::agent::ViewMessage makeMsg(agentxx::agent::ViewMessage::Role role, std:
         }
         case V::Role::Interrupt: {
             V::InterruptData it;
-            it.interruptId       = 7;
-            it.inputLabel        = "choice";
-            it.inputDepict       = "pick one";
-            it.inputType         = "enum";
-            it.inputDefault      = "b";
-            it.inputEnums        = {"a", "b", "c"};
-            it.inputIndex        = 1;
-            it.inputTotal        = 2;
-            it.interruptStatus   = V::InterruptStatus::Confirmed;
-            it.interruptResult   = "b";
-            msg.interrupt        = std::move(it);
+            it.interruptId     = 7;
+            it.inputLabel      = "choice";
+            it.inputDepict     = "pick one";
+            it.inputType       = "enum";
+            it.inputDefault    = "b";
+            it.inputEnums      = {"a", "b", "c"};
+            it.inputIndex      = 1;
+            it.inputTotal      = 2;
+            it.interruptStatus = V::InterruptStatus::Confirmed;
+            it.interruptResult = "b";
+            msg.interrupt      = std::move(it);
             break;
         }
         default:
@@ -147,10 +147,7 @@ static TestResult testViewMessagesRoundtrip() {
             XX_TEST_EXPECT_EQ(intMsg.interrupt->interruptId, int64_t{7});
             XX_TEST_EXPECT_EQ(intMsg.interrupt->inputType, "enum");
             XX_TEST_EXPECT_EQ(intMsg.interrupt->inputEnums.size(), size_t{3});
-            XX_TEST_EXPECT_EQ(
-                intMsg.interrupt->interruptStatus,
-                V::InterruptStatus::Confirmed
-            );
+            XX_TEST_EXPECT_EQ(intMsg.interrupt->interruptStatus, V::InterruptStatus::Confirmed);
             XX_TEST_EXPECT_EQ(intMsg.interrupt->interruptResult, "b");
         }
         // msgIdCounter 恢复
@@ -189,21 +186,21 @@ static TestResult testLlmMessagesRoundtrip() {
         // 带 system/user/assistant/tool 的上下文
         neograph::json ctx = neograph::json::array();
         ctx.push_back(neograph::json{
-            {"role", "system"},
-            {"content", "sys"},
+            {"role",    "system"},
+            {"content", "sys"   },
         });
         ctx.push_back(neograph::json{
-            {"role", "user"},
-            {"content", "u1"},
+            {"role",    "user"},
+            {"content", "u1"  },
         });
         ctx.push_back(neograph::json{
-            {"role", "assistant"},
-            {"content", "a1"},
+            {"role",    "assistant"},
+            {"content", "a1"       },
         });
         ctx.push_back(neograph::json{
-            {"role",        "tool"       },
+            {"role",         "tool"      },
             {"tool_call_id", "call_1"    },
-            {"content",     R"({"r":1})"},
+            {"content",      R"({"r":1})"},
         });
         p->saveLlmMessages("t2", ctx);
 
@@ -213,8 +210,14 @@ static TestResult testLlmMessagesRoundtrip() {
         XX_TEST_EXPECT_TRUE(l2.llmMessages.is_array());
         XX_TEST_EXPECT_EQ(l2.llmMessages.size(), ctx.size());
         if (l2.llmMessages.size() == ctx.size()) {
-            XX_TEST_EXPECT_EQ(l2.llmMessages[0].value("role", std::string{}), std::string{"system"});
-            XX_TEST_EXPECT_EQ(l2.llmMessages[3].value("tool_call_id", std::string{}), std::string{"call_1"});
+            XX_TEST_EXPECT_EQ(
+                l2.llmMessages[0].value("role", std::string{}),
+                std::string{"system"}
+            );
+            XX_TEST_EXPECT_EQ(
+                l2.llmMessages[3].value("tool_call_id", std::string{}),
+                std::string{"call_1"}
+            );
         }
     }
     fs::remove_all(root);
@@ -274,10 +277,10 @@ static TestResult testShareStoreRoundtrip() {
         XX_TEST_EXPECT_NULLOPT(p->getShareStoreItem("s1", 9999));
 
         // 模拟重启: 数据与 id 计数器延续 (剩余条目: id1/id3(101)/id100)
-        auto p2 = std::make_shared<SessionPersistence>(root);
+        auto p2     = std::make_shared<SessionPersistence>(root);
         auto loaded = p2->loadShareStore("s1");
         XX_TEST_EXPECT_EQ(loaded.items.size(), size_t{3});
-        XX_TEST_EXPECT_EQ(loaded.nextId, size_t{102});     // max(1,100,101)+1
+        XX_TEST_EXPECT_EQ(loaded.nextId, size_t{102}); // max(1,100,101)+1
         XX_TEST_EXPECT_EQ(p2->getShareStoreItem("s1", 100).value_or(""), std::string{"far-id"});
         auto id4 = p2->addShareStoreItem("s1", "fourth");
         XX_TEST_EXPECT_EQ(id4, size_t{102});
@@ -305,8 +308,8 @@ static TestResult testSessionStoreIntegration() {
     auto root = makeTempRoot();
     {
         // ---- 第一次"运行": 写入历史 + LLM 上下文 ----
-        auto persistence = std::make_shared<SessionPersistence>(root);
-        auto store       = std::make_shared<SessionStore>();
+        auto persistence   = std::make_shared<SessionPersistence>(root);
+        auto store         = std::make_shared<SessionStore>();
         store->persistence = persistence;
 
         auto s1 = store->getOrCreate("thread-a");
@@ -314,15 +317,21 @@ static TestResult testSessionStoreIntegration() {
         s1->appendHistory(ViewMessage::makeText(V::Role::Assistant, "a1"));
         s1->appendHistory(makeMsg(V::Role::Tool, R"({"tool":"x"})"));
         s1->llmMessages = neograph::json::array();
-        s1->llmMessages.push_back(neograph::json{{"role", "system"}, {"content", "sys"}});
-        s1->llmMessages.push_back(neograph::json{{"role", "user"}, {"content", "u1"}});
+        s1->llmMessages.push_back(neograph::json{
+            {"role",    "system"},
+            {"content", "sys"   }
+        });
+        s1->llmMessages.push_back(neograph::json{
+            {"role",    "user"},
+            {"content", "u1"  }
+        });
         s1->saveLlmMessages();
         auto hash1 = s1->getHashInfo();
         XX_TEST_EXPECT_EQ(hash1.count, size_t{3});
 
         // ---- 第二次"运行" (模拟重启): 新建 store + persistence ----
-        auto p2    = std::make_shared<SessionPersistence>(root);
-        auto store2 = std::make_shared<SessionStore>();
+        auto p2             = std::make_shared<SessionPersistence>(root);
+        auto store2         = std::make_shared<SessionStore>();
         store2->persistence = p2;
 
         auto s2 = store2->getOrCreate("thread-a");
@@ -342,10 +351,10 @@ static TestResult testSessionStoreIntegration() {
         XX_TEST_EXPECT_EQ(newId, std::string{"msg_000004"});
 
         // 追加后再"重启", 历史含新消息
-        auto p3     = std::make_shared<SessionPersistence>(root);
-        auto store3 = std::make_shared<SessionStore>();
+        auto p3             = std::make_shared<SessionPersistence>(root);
+        auto store3         = std::make_shared<SessionStore>();
         store3->persistence = p3;
-        auto s3 = store3->getOrCreate("thread-a");
+        auto s3             = store3->getOrCreate("thread-a");
         XX_TEST_EXPECT_EQ(s3->viewMessages.size(), size_t{4});
         XX_TEST_EXPECT_EQ(s3->viewMessages[3].text, std::string{"a2"});
         XX_TEST_EXPECT_EQ(s3->getHashInfo().count, size_t{4});
@@ -418,7 +427,9 @@ static TestResult testMiddlewareShareStorePersistence() {
 static TestResult testSanitizeThreadId() {
     using agentxx::agent::SessionPersistence;
 
-    auto dir = [](std::string_view tid) { return SessionPersistence::sanitizeThreadId(tid); };
+    auto dir = [](std::string_view tid) {
+        return SessionPersistence::sanitizeThreadId(tid);
+    };
 
     // 常规 threadId 保持不变 (目录可读)
     XX_TEST_EXPECT_EQ(dir("session"), std::string{"session"});
@@ -441,8 +452,7 @@ static TestResult testSanitizeThreadId() {
             XX_TEST_EXPECT_EQ(suffix[0], '_');
             for (size_t i = 1; i < suffix.size(); ++i) {
                 XX_TEST_EXPECT_TRUE(
-                    (suffix[i] >= '0' && suffix[i] <= '9')
-                    || (suffix[i] >= 'a' && suffix[i] <= 'f')
+                    (suffix[i] >= '0' && suffix[i] <= '9') || (suffix[i] >= 'a' && suffix[i] <= 'f')
                 );
             }
         }
@@ -487,11 +497,11 @@ static asio::awaitable<void> testSessionPersistenceE2E() {
         auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
 
         auto makeCfg = [&]() {
-            auto cfg                 = std::make_shared<agentxx::agent::AgentConfig>();
-            cfg->model.baseUrl       = baseUrl;
-            cfg->model.apiKey        = "EMPTY";
-            cfg->model.modelName     = "test-sim";
-            cfg->prompt.systemPrompt = "You are a helpful assistant.";
+            auto cfg                      = std::make_shared<agentxx::agent::AgentConfig>();
+            cfg->model.baseUrl            = baseUrl;
+            cfg->model.apiKey             = "EMPTY";
+            cfg->model.modelName          = "test-sim";
+            cfg->prompt.systemPrompt      = "You are a helpful assistant.";
             cfg->enableSessionPersistence = true;
             cfg->sessionPersistenceRoot   = root;
             return cfg;
@@ -505,22 +515,21 @@ static asio::awaitable<void> testSessionPersistenceE2E() {
             CodeAgent agent(makeCfg());
             co_await agent.init();
 
-            auto result = co_await agent.runConversationTurnAsync(
-                "e2e-thread",
-                "Hello",
-                true,
-                nullptr
-            );
+            auto result
+                = co_await agent.runConversationTurnAsync("e2e-thread", "Hello", true, nullptr);
             XX_TEST_EXPECT_FALSE(result.hasError);
             XX_TEST_EXPECT_FALSE(result.interrupted);
 
             // share store 写穿
-            auto id = agent.agentContext->middlewareHandleContext
-                          ->addShareStoreItemValue("e2e-thread", "stored-value");
+            auto id = agent.agentContext->middlewareHandleContext->addShareStoreItemValue(
+                "e2e-thread",
+                "stored-value"
+            );
             XX_TEST_EXPECT_EQ(id, size_t{1});
 
             // 落盘检查: 目录布局 {root}/{threadId}/{session.db, share_store.db}
-            auto dir = fs::path(root) / agentxx::agent::SessionPersistence::sanitizeThreadId("e2e-thread");
+            auto dir = fs::path(root)
+                       / agentxx::agent::SessionPersistence::sanitizeThreadId("e2e-thread");
             XX_TEST_EXPECT_TRUE(fs::exists(dir / "session.db"));
             XX_TEST_EXPECT_TRUE(fs::exists(dir / "share_store.db"));
 
@@ -542,24 +551,26 @@ static asio::awaitable<void> testSessionPersistenceE2E() {
             XX_TEST_EXPECT_TRUE(sess->llmMessages.is_array());
             XX_TEST_EXPECT_TRUE(sess->llmMessages.size() >= size_t{2});
             // msg id 延续
-            auto newId = sess->appendHistory(
-                agentxx::agent::ViewMessage::makeText(
-                    agentxx::agent::ViewMessage::Role::Assistant,
-                    "extra"
-                )
-            );
+            auto newId = sess->appendHistory(agentxx::agent::ViewMessage::makeText(
+                agentxx::agent::ViewMessage::Role::Assistant,
+                "extra"
+            ));
             XX_TEST_EXPECT_EQ(newId, std::string{"msg_000003"});
 
             // share store 恢复 (懒加载自 DB)
-            auto v = agent.agentContext->middlewareHandleContext
-                         ->getShareStoreItemValue("e2e-thread", 1);
+            auto v = agent.agentContext->middlewareHandleContext->getShareStoreItemValue(
+                "e2e-thread",
+                1
+            );
             XX_TEST_EXPECT_HAS_VALUE(v);
             if (v) {
                 XX_TEST_EXPECT_EQ(*v, std::string{"stored-value"});
             }
             // 新条目 id 延续
-            auto id2 = agent.agentContext->middlewareHandleContext
-                           ->addShareStoreItemValue("e2e-thread", "second");
+            auto id2 = agent.agentContext->middlewareHandleContext->addShareStoreItemValue(
+                "e2e-thread",
+                "second"
+            );
             XX_TEST_EXPECT_EQ(id2, size_t{2});
         }
 

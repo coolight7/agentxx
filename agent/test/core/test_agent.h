@@ -28,7 +28,7 @@ extern int            g_da_sim_prompt_tokens;
 extern int            g_da_sim_completion_tokens;
 extern neograph::json g_da_sim_tool_calls;
 /// 响应前延迟 (毫秒), 用于模拟慢速 LLM 以测试取消; 0 表示不延迟
-extern int            g_da_sim_delay_ms;
+extern int g_da_sim_delay_ms;
 
 /// 模拟器配置选项
 struct DaSimConfig {

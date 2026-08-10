@@ -2772,10 +2772,10 @@ void test_responses_sse_parsing_edge_cases() {
                           "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_x\","
                           "\"status\":\"completed\",\"usage\":{\"input_tokens\":12,"
                           "\"output_tokens\":7,\"total_tokens\":19}}}\n\n";
-        neograph::ChatCompletion completion;
-        std::string              content, thinking;
+        neograph::ChatCompletion          completion;
+        std::string                       content, thinking;
         std::map<int, neograph::ToolCall> tcMap;
-        bool done = OpenAIProvider::processResponsesSseBuffer(
+        bool                              done = OpenAIProvider::processResponsesSseBuffer(
             buf,
             completion,
             content,
@@ -2795,8 +2795,8 @@ void test_responses_sse_parsing_edge_cases() {
         std::string buf = "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_x\","
                           "\"status\":\"completed\",\"usage\":{\"input_tokens\":3,"
                           "\"output_tokens\":4}}}\n\n";
-        neograph::ChatCompletion completion;
-        std::string              content, thinking;
+        neograph::ChatCompletion          completion;
+        std::string                       content, thinking;
         std::map<int, neograph::ToolCall> tcMap;
         OpenAIProvider::processResponsesSseBuffer(
             buf,
@@ -2816,8 +2816,8 @@ void test_responses_sse_parsing_edge_cases() {
         std::string buf = "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_x\","
                           "\"status\":\"completed\"},\"usage\":{\"input_tokens\":5,"
                           "\"output_tokens\":3,\"total_tokens\":8}}\n\n";
-        neograph::ChatCompletion completion;
-        std::string              content, thinking;
+        neograph::ChatCompletion          completion;
+        std::string                       content, thinking;
         std::map<int, neograph::ToolCall> tcMap;
         OpenAIProvider::processResponsesSseBuffer(
             buf,
@@ -2836,8 +2836,8 @@ void test_responses_sse_parsing_edge_cases() {
     {
         std::string buf = "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_x\","
                           "\"status\":\"completed\",\"usage\":\"weird\"}}\n\n";
-        neograph::ChatCompletion completion;
-        std::string              content, thinking;
+        neograph::ChatCompletion          completion;
+        std::string                       content, thinking;
         std::map<int, neograph::ToolCall> tcMap;
         try {
             OpenAIProvider::processResponsesSseBuffer(

@@ -30,10 +30,8 @@ bool contains(std::string_view haystack, std::string_view needle) {
 
 /// 渲染到固定画布并取回文本
 std::string renderToString(const MermaidStateDiagram& dg, int maxWidth = 0) {
-    auto el = renderMermaidStateDiagram(dg, maxWidth);
-    auto screen = ftxui::Screen::Create(
-        ftxui::Dimension::Fixed(160), ftxui::Dimension::Fixed(160)
-    );
+    auto el     = renderMermaidStateDiagram(dg, maxWidth);
+    auto screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(160), ftxui::Dimension::Fixed(160));
     ftxui::Render(screen, el);
     return screen.ToString();
 }
@@ -153,7 +151,7 @@ void test_parse_empty() {
 // ---------------------------------------------------------------------------
 
 void test_render_linear_chain() {
-    auto dg = parseMermaidStateDiagram(R"(
+    auto dg  = parseMermaidStateDiagram(R"(
 stateDiagram-v2
     [*] --> 1_reproduce_bug
     1_reproduce_bug --> 1_in_progress: start
@@ -165,8 +163,8 @@ stateDiagram-v2
     XX_TEST_EXPECT_TRUE(contains(out, "1_reproduce_bug"));
     XX_TEST_EXPECT_TRUE(contains(out, "1_in_progress"));
     XX_TEST_EXPECT_TRUE(contains(out, "1_completed"));
-    XX_TEST_EXPECT_TRUE(contains(out, "v"));      // 箭头
-    XX_TEST_EXPECT_TRUE(contains(out, "start"));  // 边标签
+    XX_TEST_EXPECT_TRUE(contains(out, "v"));     // 箭头
+    XX_TEST_EXPECT_TRUE(contains(out, "start")); // 边标签
     XX_TEST_EXPECT_TRUE(contains(out, "reproduced"));
     // 框线
     XX_TEST_EXPECT_TRUE(contains(out, "┌"));
@@ -175,7 +173,7 @@ stateDiagram-v2
 
 void test_render_fork() {
     // 1 个宽源分叉到左右 2 个目标: 分叉 junction '┴'
-    auto dg = parseMermaidStateDiagram(R"(
+    auto dg  = parseMermaidStateDiagram(R"(
 stateDiagram-v2
     [*] --> A
     state "center node" as A
@@ -196,7 +194,7 @@ stateDiagram-v2
 
 void test_render_merge() {
     // 2 个源 (左右各一) 汇合到居中的 1 个目标: 汇合 junction '┬'
-    auto dg = parseMermaidStateDiagram(R"(
+    auto dg  = parseMermaidStateDiagram(R"(
 stateDiagram-v2
     [*] --> A
     [*] --> B
@@ -215,7 +213,7 @@ stateDiagram-v2
 }
 
 void test_render_lr() {
-    auto dg = parseMermaidStateDiagram(R"(
+    auto dg  = parseMermaidStateDiagram(R"(
 stateDiagram-v2
     direction LR
     [*] --> A
@@ -223,15 +221,15 @@ stateDiagram-v2
     B --> [*]
 )");
     auto out = renderToString(dg);
-    XX_TEST_EXPECT_TRUE(contains(out, ">"));   // 横向箭头
-    XX_TEST_EXPECT_TRUE(contains(out, "go"));  // 边标签
+    XX_TEST_EXPECT_TRUE(contains(out, ">"));  // 横向箭头
+    XX_TEST_EXPECT_TRUE(contains(out, "go")); // 边标签
     XX_TEST_EXPECT_TRUE(contains(out, "A"));
     XX_TEST_EXPECT_TRUE(contains(out, "B"));
 }
 
 void test_render_skip_edge_legend() {
     // 跨层边 (1 --> 3) 进入图例文本
-    auto dg = parseMermaidStateDiagram(R"(
+    auto dg  = parseMermaidStateDiagram(R"(
 stateDiagram-v2
     [*] --> A
     A --> B
@@ -245,7 +243,7 @@ stateDiagram-v2
 }
 
 void test_render_max_width_truncation() {
-    auto dg = parseMermaidStateDiagram(R"(
+    auto dg  = parseMermaidStateDiagram(R"(
 stateDiagram-v2
     [*] --> phase_1_very_long_node_name
     phase_1_very_long_node_name --> [*]
@@ -256,7 +254,7 @@ stateDiagram-v2
 }
 
 void test_render_empty_diagram() {
-    auto dg = parseMermaidStateDiagram("stateDiagram-v2\n%% only comments\n");
+    auto dg  = parseMermaidStateDiagram("stateDiagram-v2\n%% only comments\n");
     auto out = renderToString(dg);
     // 空图: 不渲染任何节点/箭头
     XX_TEST_EXPECT_FALSE(contains(out, "┌"));
@@ -265,7 +263,7 @@ void test_render_empty_diagram() {
 }
 
 void test_render_multi_line_label() {
-    auto dg = parseMermaidStateDiagram(R"(
+    auto dg  = parseMermaidStateDiagram(R"(
 stateDiagram-v2
     state "line one\nline two" as A
     A --> B
@@ -277,7 +275,7 @@ stateDiagram-v2
 
 void test_render_lr_fallback_to_tb_when_too_wide() {
     // direction LR 但总宽超限: 自动退回 TB (按层截断), 不崩溃且内容可见
-    auto dg = parseMermaidStateDiagram(R"(
+    auto dg  = parseMermaidStateDiagram(R"(
 stateDiagram-v2
     direction LR
     [*] --> A
@@ -300,7 +298,7 @@ stateDiagram-v2
 
 void test_render_self_loop_and_backward_in_legend() {
     // 自环进入图例文本 (不参与分层边带)
-    auto dg = parseMermaidStateDiagram(R"(
+    auto dg  = parseMermaidStateDiagram(R"(
 stateDiagram-v2
     [*] --> A
     A --> A
@@ -310,7 +308,7 @@ stateDiagram-v2
     XX_TEST_EXPECT_TRUE(contains(out, "A"));
 
     // 跨层边进入图例文本
-    auto dg2 = parseMermaidStateDiagram(R"(
+    auto dg2  = parseMermaidStateDiagram(R"(
 stateDiagram-v2
     [*] --> A
     A --> B
@@ -326,7 +324,7 @@ stateDiagram-v2
 
 void test_render_cjk_label_width() {
     // 中文标签按 2 列宽计算, 盒子对齐/箭头位置正确
-    auto dg = parseMermaidStateDiagram(R"(
+    auto dg  = parseMermaidStateDiagram(R"(
 stateDiagram-v2
     [*] --> A
     A --> B: 下一步
@@ -348,14 +346,16 @@ namespace {
 /// 构造带 planning_write 工具消息的 TUICtx 夹具
 struct OverlayFixture {
     TUISharedState sharedState;
-    TUITheme       theme = TUITheme::darkTheme();
+    TUITheme       theme       = TUITheme::darkTheme();
     int            redrawCount = 0;
     TUICtx         ctx;
 
     OverlayFixture() {
-        ctx.state          = &sharedState;
-        ctx.frameState     = sharedState.readSnapshot();
-        ctx.postRedraw     = [this] { ++redrawCount; };
+        ctx.state      = &sharedState;
+        ctx.frameState = sharedState.readSnapshot();
+        ctx.postRedraw = [this] {
+            ++redrawCount;
+        };
         ctx.theme          = &theme;
         ctx.showSystemInfo = nullptr;
         ctx.session        = nullptr;
@@ -366,12 +366,12 @@ struct OverlayFixture {
     /// 注入 planning_write 工具消息 (JSON 文本)
     void pushPlan(std::string_view json) {
         sharedState.mutate([&](TUIRenderState& st) {
-            auto m          = std::make_shared<TUIMessage>();
-            m->role         = TUIMessage::Role::Tool;
-            m->tool         = TUIMessage::ToolData{};
-            m->tool->toolName   = "agentxx_planning_write";
-            m->tool->toolCallId = "call_1";
-            m->text         = std::string(json);
+            auto m                = std::make_shared<TUIMessage>();
+            m->role               = TUIMessage::Role::Tool;
+            m->tool               = TUIMessage::ToolData{};
+            m->tool->toolName     = "agentxx_planning_write";
+            m->tool->toolCallId   = "call_1";
+            m->text               = std::string(json);
             m->tool->toolFinished = true;
             st.messages.push_back(std::move(m));
         });
@@ -381,9 +381,8 @@ struct OverlayFixture {
     /// 渲染 overlay 到固定画布并取回文本
     static std::string renderOverlay(PlanDiagramOverlay& overlay) {
         auto el = overlay.OnRender();
-        auto screen = ftxui::Screen::Create(
-            ftxui::Dimension::Fixed(120), ftxui::Dimension::Fixed(50)
-        );
+        auto screen
+            = ftxui::Screen::Create(ftxui::Dimension::Fixed(120), ftxui::Dimension::Fixed(50));
         ftxui::Render(screen, el);
         return screen.ToString();
     }
@@ -441,9 +440,11 @@ void test_overlay_escape_closes() {
     OverlayFixture f;
     f.pushPlan(R"({"roadmap":"stateDiagram-v2\n[*] --> A\nA --> [*]\n"})");
 
-    auto overlay = std::make_shared<PlanDiagramOverlay>(f.ctx);
+    auto overlay    = std::make_shared<PlanDiagramOverlay>(f.ctx);
     int  closeCount = 0;
-    overlay->onClose([&] { ++closeCount; });
+    overlay->onClose([&] {
+        ++closeCount;
+    });
 
     XX_TEST_EXPECT_TRUE(overlay->OnEvent(ftxui::Event::Escape));
     XX_TEST_EXPECT_EQ(closeCount, 1);

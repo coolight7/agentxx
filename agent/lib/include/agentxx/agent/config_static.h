@@ -28,7 +28,9 @@ public:
                 auto cwd = std::filesystem::current_path();
                 return cwd.string();
             },
-            [](std::string) -> std::optional<std::string> { return std::nullopt; }
+            [](std::string) -> std::optional<std::string> {
+                return std::nullopt;
+            }
         );
     }
 };

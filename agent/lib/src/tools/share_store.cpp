@@ -193,11 +193,8 @@ asio::awaitable<std::string> ThreadShareStoreTool::execute_async(const neograph:
         if (text_id <= 0) {
             co_return R"({"error":"Arg `id` is empty"})";
         }
-        agentContextPtr->middlewareHandleContext->setShareStoreItemValue(
-            thread_id,
-            text_id,
-            sliceByLine(std::move(text))
-        );
+        agentContextPtr->middlewareHandleContext
+            ->setShareStoreItemValue(thread_id, text_id, sliceByLine(std::move(text)));
         co_return "success";
     } else if (text_opt == std::string_view{"delete"}) {
         if (text_id <= 0) {

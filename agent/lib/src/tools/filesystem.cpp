@@ -206,7 +206,9 @@ std::vector<std::regex> compileExcludeRegexes(const std::vector<std::string>& ex
                 regexes.emplace_back(glob::to_regex(ep));
                 return true;
             },
-            [](std::string) -> bool { return false; }
+            [](std::string) -> bool {
+                return false;
+            }
         );
     }
     return regexes;
@@ -388,7 +390,7 @@ asio::awaitable<std::string> FileSystemListTool::execute_async(const neograph::j
                             pathStr += "/";
                         } else if (entity.is_symlink()) {
                             std::error_code ec;
-                            auto            target = std::filesystem::read_symlink(entity.path(), ec);
+                            auto target = std::filesystem::read_symlink(entity.path(), ec);
                             if (!ec) {
                                 pathStr += " -> " + target.generic_string();
                             }
@@ -402,11 +404,7 @@ asio::awaitable<std::string> FileSystemListTool::execute_async(const neograph::j
                     },
                     [&](std::string errmsg) -> bool {
                         lines.push_back(
-                            fmt::format(
-                                "[Error] {}: {}",
-                                entity.path().generic_string(),
-                                errmsg
-                            )
+                            fmt::format("[Error] {}: {}", entity.path().generic_string(), errmsg)
                         );
                         return false;
                     }
@@ -1469,8 +1467,7 @@ asio::awaitable<std::string> FilesystemGlobTool::execute_async(const neograph::j
         pool,
         cancelFlag,
         cancelToken,
-        [file_patterns, typeFilter, excludePatterns, maxDepth, doSort](
-            std::atomic<bool>& cancelFlag
+        [file_patterns, typeFilter, excludePatterns, maxDepth, doSort](std::atomic<bool>& cancelFlag
         ) -> asio::awaitable<std::string> {
             if (cancelFlag.load(std::memory_order_acquire)) {
                 throw neograph::graph::CancelledException("filesystem_glob cancelled");
@@ -1881,17 +1878,16 @@ asio::awaitable<std::string> FilesystemGrepTool::execute_async(const neograph::j
         };
 
         /// 提取 text 中第 lineIdx 行 (0-based) 的内容 (不含末尾换行符)
-        auto extractLine = [](std::string_view                            text,
-                              const std::vector<size_t>&                  lineStarts,
-                              size_t                                       lineIdx
-                          ) -> std::string_view {
+        auto extractLine
+            = [](std::string_view text, const std::vector<size_t>& lineStarts, size_t lineIdx
+              ) -> std::string_view {
             if (lineIdx >= lineStarts.size()) {
                 return {};
             }
             const size_t start = lineStarts[lineIdx];
             // lineStarts[i+1] 为下一行行首 (本行 `\n` 后一字节), 减 1 排除换行符
-            const size_t end   = (lineIdx + 1 < lineStarts.size()) ? lineStarts[lineIdx + 1] - 1
-                                                                   : text.size();
+            const size_t end
+                = (lineIdx + 1 < lineStarts.size()) ? lineStarts[lineIdx + 1] - 1 : text.size();
             return text.substr(start, end - start);
         };
 
@@ -1912,8 +1908,8 @@ asio::awaitable<std::string> FilesystemGrepTool::execute_async(const neograph::j
 
         /// 加载并预处理文本文件: 跳过二进制文件 (含 NUL 字节), 非 UTF-8 编码
         /// (GBK 等) 转换为 UTF-8, 转换失败视为非文本跳过
-        auto loadSearchableText = [&](const std::string& filepath
-                                   ) -> asio::awaitable<std::optional<std::string>> {
+        auto loadSearchableText
+            = [&](const std::string& filepath) -> asio::awaitable<std::optional<std::string>> {
             auto filetext = co_await readFileContent(filepath);
             // 仅搜索文本文件: 含 NUL 字节视为二进制, 跳过
             if (filetext.find('\0') != std::string::npos) {
@@ -2042,7 +2038,7 @@ asio::awaitable<std::string> FilesystemGrepTool::execute_async(const neograph::j
                     } else {
                         // content 模式: 输出匹配整行, 格式 file:line:content (对齐 grep -n)
                         // 构建行索引, 行号/行内容查询 O(log n)
-                        auto lineStarts = buildLineStarts(filetext);
+                        auto             lineStarts = buildLineStarts(filetext);
                         std::set<size_t> matchLineSet;
                         std::set<size_t> contextLineSet;
                         size_t           fileLines = totalLines(filetext);

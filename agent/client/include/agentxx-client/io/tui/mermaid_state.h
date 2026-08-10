@@ -22,8 +22,8 @@ namespace tui {
 ///   %% 注释行
 /// 不支持 (忽略): note/复合状态体/条件转移等
 struct MermaidStateNode {
-    std::string id;      // 节点标识
-    std::string label;   // 显示文本 (多行以 \n 分隔; 空 = 使用 id)
+    std::string id;               // 节点标识
+    std::string label;            // 显示文本 (多行以 \n 分隔; 空 = 使用 id)
     bool        isPseudo = false; // [*] 起始/结束伪状态
 };
 
@@ -50,9 +50,9 @@ MermaidStateDiagram parseMermaidStateDiagram(std::string_view source);
 /// @param nodeColor    按节点 id 提供颜色的回调 (如按状态后缀着色);
 ///                     返回 Color::Default 表示不着色
 ftxui::Element renderMermaidStateDiagram(
-    const MermaidStateDiagram&                          dg,
-    int                                                 maxWidth     = 0,
-    ftxui::Color                                        defaultColor = ftxui::Color::Default,
+    const MermaidStateDiagram&                           dg,
+    int                                                  maxWidth     = 0,
+    ftxui::Color                                         defaultColor = ftxui::Color::Default,
     const std::function<ftxui::Color(std::string_view)>& nodeColor    = nullptr
 );
 

@@ -2,11 +2,11 @@
 
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/screen.hpp"
-#include <markdown/text_utils.hpp>
 #include <algorithm>
 #include <cctype>
 #include <functional>
 #include <map>
+#include <markdown/text_utils.hpp>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -107,18 +107,30 @@ constexpr int kW = 8;
 /// 取并集后查表, 避免源/目标转角互相覆盖
 std::string glyphForTbJunction(int dirs) {
     switch (dirs) {
-        case kN | kS:            return "\xE2\x94\x82"; // │ 直连
-        case kN | kE:            return "\xE2\x94\x94"; // └ 向下转右
-        case kN | kW:            return "\xE2\x94\x98"; // ┘ 向下转左
-        case kN | kE | kW:       return "\xE2\x94\xB4"; // ┴ 分叉 (自上而下分裂左右)
-        case kN | kS | kE:       return "\xE2\x94\x9C"; // ├ 直连 + 右分支
-        case kN | kS | kW:       return "\xE2\x94\xA4"; // ┤ 直连 + 左分支
-        case kN | kS | kE | kW:  return "\xE2\x94\xBC"; // ┼ 直连 + 双向分支
-        case kE | kS:            return "\xE2\x94\x8C"; // ┌ 自右转下
-        case kW | kS:            return "\xE2\x94\x90"; // ┐ 自左转下
-        case kE | kW | kS:       return "\xE2\x94\xAC"; // ┬ 汇合 (左右汇合向下)
-        case kE | kW:            return "\xE2\x94\x80"; // ─ (防御)
-        default:                 return " ";
+        case kN | kS:
+            return "\xE2\x94\x82"; // │ 直连
+        case kN | kE:
+            return "\xE2\x94\x94"; // └ 向下转右
+        case kN | kW:
+            return "\xE2\x94\x98"; // ┘ 向下转左
+        case kN | kE | kW:
+            return "\xE2\x94\xB4"; // ┴ 分叉 (自上而下分裂左右)
+        case kN | kS | kE:
+            return "\xE2\x94\x9C"; // ├ 直连 + 右分支
+        case kN | kS | kW:
+            return "\xE2\x94\xA4"; // ┤ 直连 + 左分支
+        case kN | kS | kE | kW:
+            return "\xE2\x94\xBC"; // ┼ 直连 + 双向分支
+        case kE | kS:
+            return "\xE2\x94\x8C"; // ┌ 自右转下
+        case kW | kS:
+            return "\xE2\x94\x90"; // ┐ 自左转下
+        case kE | kW | kS:
+            return "\xE2\x94\xAC"; // ┬ 汇合 (左右汇合向下)
+        case kE | kW:
+            return "\xE2\x94\x80"; // ─ (防御)
+        default:
+            return " ";
     }
 }
 
@@ -126,18 +138,30 @@ std::string glyphForTbJunction(int dirs) {
 /// 同行既可能是源侧 (茎自左向右, W) 又可能是目标侧 (向右进盒, E)
 std::string glyphForLrJunction(int dirs) {
     switch (dirs) {
-        case kW | kE:            return "\xE2\x94\x80"; // ─ 直连
-        case kW | kN:            return "\xE2\x94\x98"; // ┘ 自左转上
-        case kW | kS:            return "\xE2\x94\x90"; // ┐ 自左转下
-        case kW | kE | kN:       return "\xE2\x94\xB4"; // ┴ 直连 + 上分支
-        case kW | kE | kS:       return "\xE2\x94\xAC"; // ┬ 直连 + 下分支
-        case kW | kN | kS:       return "\xE2\x94\xA4"; // ┤ 分叉 (自左分裂上下)
-        case kW | kE | kN | kS:  return "\xE2\x94\xBC"; // ┼
-        case kE | kN:            return "\xE2\x94\x94"; // └ 自上转右
-        case kE | kS:            return "\xE2\x94\x8C"; // ┌ 自下转右
-        case kE | kN | kS:       return "\xE2\x94\x9C"; // ├ 汇合 (上下汇合向右)
-        case kN | kS:            return "\xE2\x94\x82"; // │ (防御)
-        default:                 return " ";
+        case kW | kE:
+            return "\xE2\x94\x80"; // ─ 直连
+        case kW | kN:
+            return "\xE2\x94\x98"; // ┘ 自左转上
+        case kW | kS:
+            return "\xE2\x94\x90"; // ┐ 自左转下
+        case kW | kE | kN:
+            return "\xE2\x94\xB4"; // ┴ 直连 + 上分支
+        case kW | kE | kS:
+            return "\xE2\x94\xAC"; // ┬ 直连 + 下分支
+        case kW | kN | kS:
+            return "\xE2\x94\xA4"; // ┤ 分叉 (自左分裂上下)
+        case kW | kE | kN | kS:
+            return "\xE2\x94\xBC"; // ┼
+        case kE | kN:
+            return "\xE2\x94\x94"; // └ 自上转右
+        case kE | kS:
+            return "\xE2\x94\x8C"; // ┌ 自下转右
+        case kE | kN | kS:
+            return "\xE2\x94\x9C"; // ├ 汇合 (上下汇合向右)
+        case kN | kS:
+            return "\xE2\x94\x82"; // │ (防御)
+        default:
+            return " ";
     }
 }
 
@@ -151,7 +175,7 @@ std::string glyphForLrJunction(int dirs) {
 
 struct Cell {
     std::string text;        // 空 + 非续列 = 空格
-    int         width = 0;   // 文本单元占用列数 (仅 text 非空有意义)
+    int         width   = 0; // 文本单元占用列数 (仅 text 非空有意义)
     bool        colored = false;
     Color       color;
     bool        continuation = false; // 前一多列单元的续列占位
@@ -233,6 +257,7 @@ private:
             bool        colored;
             Color       color;
         };
+
         std::vector<Run> runs;
         runs.reserve(row.size());
         size_t i = 0;
@@ -253,7 +278,7 @@ private:
                 continue;
             }
             // 相邻同色文本单元合并 (不跨空格)
-            size_t   j = i;
+            size_t      j = i;
             std::string text;
             while (j < row.size() && !row[j].text.empty() && !row[j].continuation
                    && row[j].colored == c.colored && row[j].color == c.color
@@ -286,7 +311,7 @@ private:
 // ---------------------------------------------------------------------------
 
 struct BoxGeom {
-    std::vector<std::string> lines; // 盒子各行文本
+    std::vector<std::string> lines;      // 盒子各行文本
     int                      width  = 0; // 盒宽 (终端列)
     int                      height = 0; // 盒高 (行)
 };
@@ -317,8 +342,9 @@ BoxGeom buildBox(const MermaidStateNode& node, int maxInterior) {
             if (!line.empty() && line.back() == '\r') {
                 line.pop_back();
             }
-            labelLines.push_back(maxInterior > 0 ? truncateToWidth(line, maxInterior)
-                                                 : std::move(line));
+            labelLines.push_back(
+                maxInterior > 0 ? truncateToWidth(line, maxInterior) : std::move(line)
+            );
         }
         if (labelLines.empty()) {
             labelLines.push_back("");
@@ -332,7 +358,7 @@ BoxGeom buildBox(const MermaidStateNode& node, int maxInterior) {
     for (const auto& l : labelLines) {
         interior = std::max(interior, markdown::utf8_display_width(l));
     }
-    std::string horiz = repeatStr(kHorizBorder, interior);
+    std::string              horiz = repeatStr(kHorizBorder, interior);
     std::vector<std::string> lines;
     lines.push_back("\xE2\x94\x8C" + horiz + "\xE2\x94\x90"); // ┌ ┐
     for (const auto& l : labelLines) {
@@ -347,7 +373,7 @@ BoxGeom buildBox(const MermaidStateNode& node, int maxInterior) {
 
 /// 分层结果: 层内按节点注册顺序排列
 struct Layout {
-    std::vector<std::vector<size_t>> layers; // 按层分组
+    std::vector<std::vector<size_t>> layers;  // 按层分组
     std::vector<int>                 layerOf; // 节点 -> 层号
     int                              maxLayer = 0;
 };
@@ -359,10 +385,10 @@ struct Layout {
 /// 短分支 (如 in_progress → failed 快速失败路径) 会被错误地推到最大层。
 /// 环通过递归访问标记截断 (回边进入图例)。
 Layout computeLayers(const MermaidStateDiagram& dg) {
-    const size_t                n = dg.nodes.size();
-    std::vector<int>            layer(n, -1);
-    std::vector<int8_t>         visiting(n, 0);
-    std::function<int(size_t)>  longestFromSource = [&](size_t u) -> int {
+    const size_t               n = dg.nodes.size();
+    std::vector<int>           layer(n, -1);
+    std::vector<int8_t>        visiting(n, 0);
+    std::function<int(size_t)> longestFromSource = [&](size_t u) -> int {
         if (layer[u] >= 0) {
             return layer[u];
         }
@@ -370,7 +396,7 @@ Layout computeLayers(const MermaidStateDiagram& dg) {
             return 0; // 环: 回边不计
         }
         visiting[u] = 1;
-        int best = 0;
+        int best    = 0;
         for (const auto& e : dg.edges) {
             if (e.to != u) {
                 continue;
@@ -378,7 +404,7 @@ Layout computeLayers(const MermaidStateDiagram& dg) {
             best = std::max(best, longestFromSource(e.from) + 1);
         }
         visiting[u] = 0;
-        layer[u] = best;
+        layer[u]    = best;
         return best;
     };
     for (size_t i = 0; i < n; ++i) {
@@ -411,10 +437,10 @@ struct OtherEdge {
 
 /// 边分类: 相邻层边进边带, 其余 (跨层/回边/自环) 进图例
 void classifyEdges(
-    const MermaidStateDiagram&              dg,
-    const Layout&                           layout,
-    std::vector<std::vector<BandEdge>>&     bands,
-    std::vector<OtherEdge>&                 others
+    const MermaidStateDiagram&          dg,
+    const Layout&                       layout,
+    std::vector<std::vector<BandEdge>>& bands,
+    std::vector<OtherEdge>&             others
 ) {
     bands.assign(layout.maxLayer + 1, {});
     for (const auto& e : dg.edges) {
@@ -611,10 +637,10 @@ void drawBandLR(
 // ---------------------------------------------------------------------------
 
 Color nodeDisplayColor(
-    const MermaidStateDiagram&                          dg,
-    const std::function<Color(std::string_view)>&       nodeColor,
-    Color                                               defaultColor,
-    size_t                                              idx
+    const MermaidStateDiagram&                    dg,
+    const std::function<Color(std::string_view)>& nodeColor,
+    Color                                         defaultColor,
+    size_t                                        idx
 ) {
     Color c = nodeColor ? nodeColor(dg.nodes[idx].id) : Color::Default;
     if (c == Color::Default) {
@@ -624,11 +650,7 @@ Color nodeDisplayColor(
 }
 
 /// 将图例 (跨层/回边/自环边) 追加为文本行
-void renderLegend(
-    Grid&                      grid,
-    const std::vector<OtherEdge>& others,
-    Color                      defaultColor
-) {
+void renderLegend(Grid& grid, const std::vector<OtherEdge>& others, Color defaultColor) {
     int row = grid.rows() + 1;
     for (const auto& e : others) {
         std::string line = e.from + " --> " + e.to;
@@ -640,31 +662,31 @@ void renderLegend(
 }
 
 Element renderTB(
-    const Layout&                                        layout,
-    const std::vector<BoxGeom>&                          geom,
-    const std::vector<std::vector<BandEdge>>&            bands,
-    const std::vector<OtherEdge>&                        others,
-    const MermaidStateDiagram&                           dg,
-    const std::function<Color(std::string_view)>&        nodeColor,
-    Color                                                defaultColor
+    const Layout&                                 layout,
+    const std::vector<BoxGeom>&                   geom,
+    const std::vector<std::vector<BandEdge>>&     bands,
+    const std::vector<OtherEdge>&                 others,
+    const MermaidStateDiagram&                    dg,
+    const std::function<Color(std::string_view)>& nodeColor,
+    Color                                         defaultColor
 ) {
-    Grid grid(defaultColor);
-    const size_t        n = dg.nodes.size();
-    std::vector<int>    lefts(n, 0), centers(n, 0);
+    Grid             grid(defaultColor);
+    const size_t     n = dg.nodes.size();
+    std::vector<int> lefts(n, 0), centers(n, 0);
     // Pass 1: 计算所有层盒子的位置与中心列 (边带路由需目标中心, 须先于绘制)
     for (int L = 0; L <= layout.maxLayer; ++L) {
         const auto& layer = layout.layers[L];
         int         x     = 0;
         for (size_t u : layer) {
-            lefts[u]   = x;
-            centers[u] = x + (geom[u].width - 1) / 2;
-            x += geom[u].width + kBoxGap;
+            lefts[u]    = x;
+            centers[u]  = x + (geom[u].width - 1) / 2;
+            x          += geom[u].width + kBoxGap;
         }
     }
     // Pass 2: 放置盒子 + 绘制边带
     int row = 0;
     for (int L = 0; L <= layout.maxLayer; ++L) {
-        const auto& layer = layout.layers[L];
+        const auto& layer  = layout.layers[L];
         int         layerH = 0;
         for (size_t u : layer) {
             layerH = std::max(layerH, geom[u].height);
@@ -693,19 +715,19 @@ Element renderTB(
 }
 
 Element renderLR(
-    const Layout&                                        layout,
-    const std::vector<BoxGeom>&                          geom,
-    const std::vector<std::vector<BandEdge>>&            bands,
-    const std::vector<OtherEdge>&                        others,
-    const MermaidStateDiagram&                           dg,
-    const std::function<Color(std::string_view)>&        nodeColor,
-    Color                                                defaultColor
+    const Layout&                                 layout,
+    const std::vector<BoxGeom>&                   geom,
+    const std::vector<std::vector<BandEdge>>&     bands,
+    const std::vector<OtherEdge>&                 others,
+    const MermaidStateDiagram&                    dg,
+    const std::function<Color(std::string_view)>& nodeColor,
+    Color                                         defaultColor
 ) {
-    Grid grid(defaultColor);
-    const size_t        n = dg.nodes.size();
-    std::vector<int>    tops(n, 0), lefts(n, 0);
+    Grid             grid(defaultColor);
+    const size_t     n = dg.nodes.size();
+    std::vector<int> tops(n, 0), lefts(n, 0);
     // 每带标签列宽 (影响后续层起点)
-    std::vector<int>    bandLabelW(layout.maxLayer + 1, 0);
+    std::vector<int> bandLabelW(layout.maxLayer + 1, 0);
     for (int L = 0; L <= layout.maxLayer; ++L) {
         if (L < layout.maxLayer) {
             for (const auto& e : bands[L]) {
@@ -717,16 +739,16 @@ Element renderLR(
     {
         int col = 0;
         for (int L = 0; L <= layout.maxLayer; ++L) {
-            const auto& layer = layout.layers[L];
+            const auto& layer  = layout.layers[L];
             int         layerW = 0;
             for (size_t u : layer) {
                 layerW = std::max(layerW, geom[u].width);
             }
             int top = 0;
             for (size_t u : layer) {
-                tops[u]  = top;
-                lefts[u] = col + (layerW - geom[u].width) / 2; // 水平居中
-                top += geom[u].height + kBoxGap;
+                tops[u]   = top;
+                lefts[u]  = col + (layerW - geom[u].width) / 2; // 水平居中
+                top      += geom[u].height + kBoxGap;
             }
             col += layerW;
             if (L < layout.maxLayer) {
@@ -737,7 +759,7 @@ Element renderLR(
     // Pass 2: 放置盒子 + 绘制边带
     int col = 0;
     for (int L = 0; L <= layout.maxLayer; ++L) {
-        const auto& layer = layout.layers[L];
+        const auto& layer  = layout.layers[L];
         int         layerW = 0;
         for (size_t u : layer) {
             layerW = std::max(layerW, geom[u].width);
@@ -771,7 +793,7 @@ Element renderLR(
 // ---------------------------------------------------------------------------
 
 MermaidStateDiagram parseMermaidStateDiagram(std::string_view source) {
-    MermaidStateDiagram dg;
+    MermaidStateDiagram                        dg;
     std::map<std::string, size_t, std::less<>> idIndex;
     // 起始/结束伪状态使用互不相同的内部 id (显示均为 [*])
     const std::string kStartId = "\x01start\x01";
@@ -830,8 +852,8 @@ MermaidStateDiagram parseMermaidStateDiagram(std::string_view source) {
                 if (close == std::string_view::npos) {
                     continue;
                 }
-                label = std::string(trimSv(rest.substr(1, close - 1)));
-                auto  tail = trimSv(rest.substr(close + 1));
+                label     = std::string(trimSv(rest.substr(1, close - 1)));
+                auto tail = trimSv(rest.substr(close + 1));
                 if (startsWithSv(tail, "as")) {
                     id = std::string(trimSv(tail.substr(2)));
                 } else {
@@ -892,17 +914,17 @@ MermaidStateDiagram parseMermaidStateDiagram(std::string_view source) {
 // ---------------------------------------------------------------------------
 
 Element renderMermaidStateDiagram(
-    const MermaidStateDiagram&                          dg,
-    int                                                 maxWidth,
-    Color                                               defaultColor,
-    const std::function<Color(std::string_view)>&       nodeColor
+    const MermaidStateDiagram&                    dg,
+    int                                           maxWidth,
+    Color                                         defaultColor,
+    const std::function<Color(std::string_view)>& nodeColor
 ) {
     if (dg.nodes.empty()) {
         return text("");
     }
 
-    auto layout = computeLayers(dg);
-    const size_t n = dg.nodes.size();
+    auto                 layout = computeLayers(dg);
+    const size_t         n      = dg.nodes.size();
     std::vector<BoxGeom> geom(n);
     for (size_t i = 0; i < n; ++i) {
         geom[i] = buildBox(dg.nodes[i], 0);

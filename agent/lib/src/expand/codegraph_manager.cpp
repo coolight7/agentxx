@@ -93,8 +93,8 @@ static std::string sanitizeSegment(std::string_view seg) {
     std::string out;
     out.reserve(seg.size());
     for (char c : seg) {
-        if (static_cast<unsigned char>(c) < 0x20 || c == '<' || c == '>' || c == ':'
-            || c == '"' || c == '/' || c == '\\' || c == '|' || c == '?' || c == '*') {
+        if (static_cast<unsigned char>(c) < 0x20 || c == '<' || c == '>' || c == ':' || c == '"'
+            || c == '/' || c == '\\' || c == '|' || c == '?' || c == '*') {
             out.push_back('_');
         } else {
             out.push_back(c);
@@ -122,9 +122,8 @@ static bool isWindowsReservedName(std::string_view seg) {
         c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
     }
     static const char* kReserved[] = {
-        "CON", "PRN", "AUX", "NUL",
-        "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
-        "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+        "CON",  "PRN",  "AUX",  "NUL",  "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7",
+        "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
     };
     for (const auto* r : kReserved) {
         if (name == r) {
@@ -145,12 +144,14 @@ static std::vector<std::string> projectRootToSegments(std::string_view project_r
 
     // 绝对化并解析 `.` / `..` (weakly_canonical 不要求路径全部存在)
     fs::path abs;
-    bool ok = agentxx::util::catchError<bool>(
+    bool     ok = agentxx::util::catchError<bool>(
         [&]() -> bool {
             abs = fs::weakly_canonical(fs::path(project_root));
             return true;
         },
-        [](std::string) -> bool { return false; }
+        [](std::string) -> bool {
+            return false;
+        }
     );
     if (!ok || abs.empty()) {
         abs = fs::absolute(fs::path(project_root));
@@ -235,8 +236,11 @@ static std::optional<fs::path> findNearestExistingIndex(std::string_view project
     fs::path base = fs::path(getCodeGraphSqliteDir()) / kCodeGraphSqliteSubDirName;
     // 从最深 (最近) 前缀开始逐级缩短检查
     for (size_t n = segs.size(); n > 0; --n) {
-        std::vector<std::string> prefix(segs.begin(), segs.begin() + static_cast<std::ptrdiff_t>(n));
-        fs::path                 dir = base;
+        std::vector<std::string> prefix(
+            segs.begin(),
+            segs.begin() + static_cast<std::ptrdiff_t>(n)
+        );
+        fs::path dir = base;
         for (const auto& seg : foldSegments(prefix)) {
             dir /= seg;
         }
@@ -252,7 +256,7 @@ static std::optional<fs::path> findNearestExistingIndex(std::string_view project
 /// - sqlite 的写锁竞争是瞬时的 (busy_timeout=5000 等待 + WAL 短事务), 重试后基本必成
 /// - fn 抛异常时由内部 catchError 捕获, 按 attempt 指数退避后重试
 /// - 全部尝试失败返回 false (已记录错误日志)
-template <typename F>
+template<typename F>
 static bool runWithRetry(std::string_view what, int attempts, F&& fn) {
     for (int attempt = 1; attempt <= attempts; ++attempt) {
         bool ok = agentxx::util::catchError<bool>(
@@ -291,8 +295,9 @@ static bool runWithRetry(std::string_view what, int attempts, F&& fn) {
 /// 带有限重试的事务提交: BEGIN -> fn(写操作) -> COMMIT
 /// - 写锁竞争 (SQLITE_BUSY) 时回滚并重试整个事务, 避免静默丢失该批写入
 /// - fn 仅执行写操作, 不负责事务边界
-template <typename F>
-static bool runTransactionWithRetry(std::string_view what, int attempts, codegraph::Database* db, F&& fn) {
+template<typename F>
+static bool
+    runTransactionWithRetry(std::string_view what, int attempts, codegraph::Database* db, F&& fn) {
     for (int attempt = 1; attempt <= attempts; ++attempt) {
         bool inTx = false;
         bool ok   = agentxx::util::catchError<bool>(
@@ -312,7 +317,9 @@ static bool runTransactionWithRetry(std::string_view what, int attempts, codegra
                             db->rollback();
                             return true;
                         },
-                        [](std::string) -> bool { return false; }
+                        [](std::string) -> bool {
+                            return false;
+                        }
                     );
                     inTx = false;
                 }
@@ -403,12 +410,14 @@ static bool is_changed(
     return agentxx::util::catchError<bool>(
         [&]() -> bool {
             auto ftime = fs::last_write_time(entry);
-            auto mtime
-                = std::chrono::duration_cast<std::chrono::seconds>(ftime.time_since_epoch()).count();
+            auto mtime = std::chrono::duration_cast<std::chrono::seconds>(ftime.time_since_epoch())
+                             .count();
             return existing->mtime != mtime
                    || existing->size != static_cast<int64_t>(fs::file_size(entry));
         },
-        [](std::string) -> bool { return true; }
+        [](std::string) -> bool {
+            return true;
+        }
     );
 }
 
@@ -561,7 +570,9 @@ public:
                         fs::directory_entry entry(file_path);
                         return is_changed(*db_, entry, file_path);
                     },
-                    [](std::string) -> bool { return false; }
+                    [](std::string) -> bool {
+                        return false;
+                    }
                 );
                 if (!changed) {
                     continue;
@@ -610,7 +621,9 @@ public:
         resolveReferences();
 
         // FTS 重建失败仅告警, 不影响索引主流程; 多进程并发时锁竞争重试
-        runWithRetry("FTS rebuild", 3, [&]() { db_->rebuild_fts(); });
+        runWithRetry("FTS rebuild", 3, [&]() {
+            db_->rebuild_fts();
+        });
 
         return true;
     }
@@ -633,57 +646,52 @@ public:
         }
 
         // 多进程并发写时锁竞争 (SQLITE_BUSY) 会导致整个引用解析批次丢失, 重试整个事务
-        return runTransactionWithRetry(
-            "resolveReferences",
-            3,
-            db_.get(),
-            [&]() {
-                for (const auto& ref : unresolved) {
-                    if (!running_.load()) {
-                        break;
-                    }
-
-                    auto source_node = db_->get_node(ref.source_node_id);
-                    if (!source_node.has_value()) {
-                        continue;
-                    }
-
-                    auto candidates = db_->find_nodes_by_name(ref.ref_name, 10);
-                    if (candidates.empty()) {
-                        continue;
-                    }
-
-                    if (candidates.size() == 1) {
-                        codegraph::Edge edge;
-                        edge.source_id = source_node->id;
-                        edge.target_id = candidates[0].id;
-                        edge.kind      = codegraph::EdgeKind::Calls;
-                        edge.line      = ref.line;
-                        edge.col       = ref.col;
-                        db_->insert_edge(edge);
-                    } else {
-                        codegraph::Node best       = candidates[0];
-                        int             best_score = -1;
-                        for (const auto& cand : candidates) {
-                            int s = score_target(source_node.value(), cand);
-                            if (s > best_score) {
-                                best_score = s;
-                                best       = cand;
-                            }
-                        }
-                        codegraph::Edge edge;
-                        edge.source_id = source_node->id;
-                        edge.target_id = best.id;
-                        edge.kind      = codegraph::EdgeKind::Calls;
-                        edge.line      = ref.line;
-                        edge.col       = ref.col;
-                        db_->insert_edge(edge);
-                    }
-
-                    db_->delete_unresolved_ref(ref.id);
+        return runTransactionWithRetry("resolveReferences", 3, db_.get(), [&]() {
+            for (const auto& ref : unresolved) {
+                if (!running_.load()) {
+                    break;
                 }
+
+                auto source_node = db_->get_node(ref.source_node_id);
+                if (!source_node.has_value()) {
+                    continue;
+                }
+
+                auto candidates = db_->find_nodes_by_name(ref.ref_name, 10);
+                if (candidates.empty()) {
+                    continue;
+                }
+
+                if (candidates.size() == 1) {
+                    codegraph::Edge edge;
+                    edge.source_id = source_node->id;
+                    edge.target_id = candidates[0].id;
+                    edge.kind      = codegraph::EdgeKind::Calls;
+                    edge.line      = ref.line;
+                    edge.col       = ref.col;
+                    db_->insert_edge(edge);
+                } else {
+                    codegraph::Node best       = candidates[0];
+                    int             best_score = -1;
+                    for (const auto& cand : candidates) {
+                        int s = score_target(source_node.value(), cand);
+                        if (s > best_score) {
+                            best_score = s;
+                            best       = cand;
+                        }
+                    }
+                    codegraph::Edge edge;
+                    edge.source_id = source_node->id;
+                    edge.target_id = best.id;
+                    edge.kind      = codegraph::EdgeKind::Calls;
+                    edge.line      = ref.line;
+                    edge.col       = ref.col;
+                    db_->insert_edge(edge);
+                }
+
+                db_->delete_unresolved_ref(ref.id);
             }
-        );
+        });
     }
 
     CodeGraphSearchResult searchSymbols(std::string_view query, int limit) {
@@ -718,7 +726,8 @@ public:
         // 查询异常转为 result.error, 不向外抛出
         agentxx::util::catchError<bool>(
             [&]() -> bool {
-                result.context = context_builder_->build_context(std::string{symbol}, limit, max_depth);
+                result.context
+                    = context_builder_->build_context(std::string{symbol}, limit, max_depth);
                 if (result.context.contains("error")) {
                     result.error   = result.context["error"].get<std::string>();
                     result.success = false;
@@ -837,7 +846,7 @@ public:
                     result.error = "No path found";
                     return true;
                 }
-                auto                                         nodes = db_->get_nodes_by_ids(path_ids);
+                auto nodes = db_->get_nodes_by_ids(path_ids);
                 std::unordered_map<int64_t, codegraph::Node> node_map;
                 for (auto& n : nodes) {
                     node_map[n.id] = n;
@@ -936,9 +945,11 @@ public:
                 file_watcher_ = codegraph::FileWatcher::create(project_root_, &running_);
                 file_watcher_->add_watch_recursive(project_root_);
 
-                file_watcher_->set_callback([this, auto_reindex](std::string_view path, uint32_t mask) {
+                file_watcher_->set_callback([this,
+                                             auto_reindex](std::string_view path, uint32_t mask) {
                     if (auto_reindex
-                        && (mask & (codegraph::FILE_EVENT_MODIFIED | codegraph::FILE_EVENT_CREATED))) {
+                        && (mask & (codegraph::FILE_EVENT_MODIFIED | codegraph::FILE_EVENT_CREATED)
+                        )) {
                         std::string lang = codegraph::detect_language(std::string{path});
                         if (!lang.empty() && !should_skip(path)) {
                             this->indexFile(path, lang);
@@ -994,51 +1005,48 @@ public:
         codegraph::ExtractionResult& result
     ) {
         // 多进程并发写同一库时锁竞争 (SQLITE_BUSY) 会静默丢失该文件索引, 重试整个事务
-        runTransactionWithRetry(
-            fmt::format("write result for {}", file_path),
-            3,
-            db_.get(),
-            [&]() {
-                db_->delete_edges_for_file_nodes(std::string{file_path});
-                db_->delete_unresolved_refs_by_file(std::string{file_path});
-                db_->delete_nodes_by_file(std::string{file_path});
+        runTransactionWithRetry(fmt::format("write result for {}", file_path), 3, db_.get(), [&]() {
+            db_->delete_edges_for_file_nodes(std::string{file_path});
+            db_->delete_unresolved_refs_by_file(std::string{file_path});
+            db_->delete_nodes_by_file(std::string{file_path});
 
-                std::vector<int64_t> id_map;
-                id_map.reserve(result.nodes.size());
-                for (auto& node : result.nodes) {
-                    if (node.kind == codegraph::NodeKind::File) {
-                        node.file_path = file_path;
-                    }
-                    int64_t id = db_->insert_node(node);
-                    id_map.push_back(id);
+            std::vector<int64_t> id_map;
+            id_map.reserve(result.nodes.size());
+            for (auto& node : result.nodes) {
+                if (node.kind == codegraph::NodeKind::File) {
+                    node.file_path = file_path;
                 }
-
-                codegraph::FileRecord fr;
-                fr.path     = file_path;
-                fr.language = lang;
-                // 无法读取文件元信息时使用默认值 (mtime=0), 不中断写入
-                agentxx::util::catchError<bool>(
-                    [&]() -> bool {
-                        auto ftime = fs::last_write_time(fs::path(file_path));
-                        fr.mtime
-                            = std::chrono::duration_cast<std::chrono::seconds>(ftime.time_since_epoch())
-                                  .count();
-                        fr.size = fs::file_size(fs::path(file_path));
-                        return true;
-                    },
-                    [](std::string) -> bool { return false; }
-                );
-                db_->insert_file(fr);
-
-                for (auto ref : result.unresolved) {
-                    int original_index = static_cast<int>(-ref.source_node_id) - 1;
-                    if (original_index >= 0 && original_index < static_cast<int>(id_map.size())) {
-                        ref.source_node_id = id_map[original_index];
-                    }
-                    db_->insert_unresolved_ref(ref);
-                }
+                int64_t id = db_->insert_node(node);
+                id_map.push_back(id);
             }
-        );
+
+            codegraph::FileRecord fr;
+            fr.path     = file_path;
+            fr.language = lang;
+            // 无法读取文件元信息时使用默认值 (mtime=0), 不中断写入
+            agentxx::util::catchError<bool>(
+                [&]() -> bool {
+                    auto ftime = fs::last_write_time(fs::path(file_path));
+                    fr.mtime
+                        = std::chrono::duration_cast<std::chrono::seconds>(ftime.time_since_epoch())
+                              .count();
+                    fr.size = fs::file_size(fs::path(file_path));
+                    return true;
+                },
+                [](std::string) -> bool {
+                    return false;
+                }
+            );
+            db_->insert_file(fr);
+
+            for (auto ref : result.unresolved) {
+                int original_index = static_cast<int>(-ref.source_node_id) - 1;
+                if (original_index >= 0 && original_index < static_cast<int>(id_map.size())) {
+                    ref.source_node_id = id_map[original_index];
+                }
+                db_->insert_unresolved_ref(ref);
+            }
+        });
     }
 
     void indexFile(std::string_view file_path, std::string_view lang) {

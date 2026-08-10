@@ -199,7 +199,9 @@ public:
                 j = neograph::json::parse(payload);
                 return true;
             },
-            [](std::string) -> bool { return false; }
+            [](std::string) -> bool {
+                return false;
+            }
         );
         if (!parsed) {
             return false;

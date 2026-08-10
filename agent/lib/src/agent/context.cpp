@@ -84,12 +84,14 @@ std::shared_ptr<Session> SessionStore::getOrCreate(std::string_view threadId) {
         // 捕获 threadId 副本, 回调生命周期随 session, 无悬垂风险
         auto tid = std::string{threadId};
         session->setPersistenceHooks(SessionPersistenceHooks{
-            .onAppendMessage  = [persistence, tid](const ViewMessage& msg, uint64_t counter) {
-                persistence->appendViewMessage(tid, msg, counter);
-            },
-            .onSaveLlmMessages = [persistence, tid](const neograph::json& msgs) {
-                persistence->saveLlmMessages(tid, msgs);
-            },
+            .onAppendMessage =
+                [persistence, tid](const ViewMessage& msg, uint64_t counter) {
+                    persistence->appendViewMessage(tid, msg, counter);
+                },
+            .onSaveLlmMessages =
+                [persistence, tid](const neograph::json& msgs) {
+                    persistence->saveLlmMessages(tid, msgs);
+                },
         });
     }
     sessions_.emplace(threadId, session);

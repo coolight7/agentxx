@@ -50,7 +50,8 @@ static uint32_t randomSeed() {
             return rd();
         },
         [](std::string) -> uint32_t {
-            return static_cast<uint32_t>(std::chrono::steady_clock::now().time_since_epoch().count());
+            return static_cast<uint32_t>(std::chrono::steady_clock::now().time_since_epoch().count()
+            );
         }
     );
 }
@@ -217,7 +218,8 @@ static asio::awaitable<void> runLocalTuiUnifiedAsync(
         if (config->availableModels.empty()) {
             registry->registerModel(config->model.modelName, config->model);
             registry->setDefaultModel(config->model.modelName);
-        } else if (!config->currentModelName.empty() && registry->hasModel(config->currentModelName)) {
+        } else if (!config->currentModelName.empty()
+                   && registry->hasModel(config->currentModelName)) {
             registry->setDefaultModel(config->currentModelName);
         }
         ctx->modelRegistry = std::move(registry);
