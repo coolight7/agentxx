@@ -76,6 +76,8 @@ asio::awaitable<bool> PermissionMiddlewareHandle::requestPermission(
         // 无会话总线, 默认拒绝以保安全
         co_return false;
     }
+    // 不限制等待时间: 用户可能长时间未响应权限询问,
+    // 避免被总线默认 30s 超时截断导致权限被误判为拒绝
     auto resp = co_await bus->request<events::ReqPermission, events::RespPermission>(
         events::Topic::Permission,
         events::ReqPermission{
@@ -85,7 +87,8 @@ asio::awaitable<bool> PermissionMiddlewareHandle::requestPermission(
             .category      = std::move(category),
             .target        = std::move(target),
             .argumentsJson = args.dump(),
-        }
+        },
+        std::chrono::milliseconds{0} // 0 = 不限制
     );
     if (!resp.has_value()) {
         co_return false; // 无 prompter, 拒绝
