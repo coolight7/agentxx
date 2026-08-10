@@ -221,24 +221,6 @@ static TestResult testLlmMessagesRoundtrip() {
     return TestResult{};
 }
 
-static TestResult testModelNameRoundtrip() {
-    using agentxx::agent::SessionPersistence;
-
-    auto root = makeTempRoot();
-    {
-        auto p = std::make_shared<SessionPersistence>(root);
-        auto l1 = p->loadSession("t3");
-        XX_TEST_EXPECT_EQ(l1.modelName, std::string{});
-
-        p->saveModelName("t3", "gpt-4o");
-        auto p2 = std::make_shared<SessionPersistence>(root);
-        auto l2 = p2->loadSession("t3");
-        XX_TEST_EXPECT_EQ(l2.modelName, std::string{"gpt-4o"});
-    }
-    fs::remove_all(root);
-    return TestResult{};
-}
-
 // ---------------------------------------------------------------------------
 // SessionPersistence 单测: share store
 // ---------------------------------------------------------------------------
@@ -370,13 +352,6 @@ static TestResult testSessionStoreIntegration() {
         // 计数延续
         auto newId2 = s3->appendHistory(ViewMessage::makeText(V::Role::User, "u3"));
         XX_TEST_EXPECT_EQ(newId2, std::string{"msg_000005"});
-
-        // ---- modelName 持久化 (需新 store, 旧 store 中 thread-a 已在内存) ----
-        s1->setModelName("gpt-4o");
-        auto store4    = std::make_shared<SessionStore>();
-        store4->persistence = p3;
-        auto s4 = store4->getOrCreate("thread-a");
-        XX_TEST_EXPECT_EQ(s4->getModelName(), std::string{"gpt-4o"});
 
         // ---- 不同 thread 互不影响 ----
         auto sOther = store3->getOrCreate("thread-b");
@@ -600,7 +575,6 @@ asio::awaitable<TestResult> run_session_persistence_tests() {
 
     testViewMessagesRoundtrip();
     testLlmMessagesRoundtrip();
-    testModelNameRoundtrip();
     testShareStoreRoundtrip();
     testSessionStoreIntegration();
     testMiddlewareShareStorePersistence();

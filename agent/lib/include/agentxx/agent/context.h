@@ -45,8 +45,6 @@ struct SessionPersistenceHooks {
     std::function<void(const ViewMessage&, uint64_t msgIdCounter)> onAppendMessage;
     /// 保存 LLM 上下文消息 (每轮对话结束时调用)
     std::function<void(const neograph::json&)> onSaveLlmMessages;
-    /// 保存会话选择的模型名
-    std::function<void(std::string_view)> onSaveModelName;
 };
 
 /// 上下文统计 (供 UI 显示上下文占用)
@@ -158,9 +156,9 @@ public:
     void setPersistenceHooks(SessionPersistenceHooks hooks);
 
     /// 从持久化状态恢复: 重建链式哈希 (对不含 id 的消息内容, 与
-    /// appendHistory 语义一致)、恢复 msgIdCounter 与模型名
+    /// appendHistory 语义一致) 并恢复 msgIdCounter
     /// - 不触发持久化回调 (恢复本身不产生新的写入)
-    void restore(std::vector<ViewMessage> messages, uint64_t msgIdCounter, std::string modelName);
+    void restore(std::vector<ViewMessage> messages, uint64_t msgIdCounter);
 
     /// 持久化 LLM 上下文消息 (每轮对话结束时由 BaseAgent 调用)
     /// - 未绑定回调时为 no-op
@@ -198,7 +196,7 @@ public:
 
     /// 获取或创建指定 thread_id 的会话
     /// - 创建时若已注入持久化 (persistence), 从 SQLite 恢复该 thread 的
-    ///   历史消息/LLM 上下文/模型名, 并绑定持久化回调
+    ///   历史消息/LLM 上下文, 并绑定持久化回调
     std::shared_ptr<Session> getOrCreate(std::string_view threadId);
 
     /// 获取指定 thread_id 的会话; 不存在时返回 nullptr
