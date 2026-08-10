@@ -18,10 +18,12 @@
 ///   负数 (-1) 表示整体取消 (仅当 value 为 nullopt)
 /// - 参数 2: 用户确认值 (bool 规范化 "true"/"false", 其余原样字符串);
 ///   nullopt 表示该输入项无结果 (取消/整体取消)
+/// - 参数 3: 记住本次选择 (仅权限询问有效: 确认后按本次允许/拒绝注册路径规则,
+///   后续访问该路径或其子目录不再询问; 其余中断恒为 false)
 /// 同一次中断请求的所有输入项共享同一 channel; client 线程 handleInterrupt
 /// 挂起接收, UI 线程 (消息列表控件交互) 确认/取消后发送。
 using InterruptResultChannel = asio::experimental::concurrent_channel<
-    void(neograph_asio_error_code, int, std::optional<std::string>)>;
+    void(neograph_asio_error_code, int, std::optional<std::string>, bool)>;
 
 /// TUI 消息模型: 统一使用 agentxx::agent::ViewMessage
 /// (与 server Session::viewMessages / wire Sync 同型, 见 conversation_types.h)

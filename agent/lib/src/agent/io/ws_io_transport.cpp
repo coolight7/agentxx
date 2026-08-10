@@ -452,6 +452,8 @@ std::string WsAgentIOTransport::serialize(const WireMessage& msg) {
                 return io::makeGetContext(m.threadId).dump();
             } else if constexpr (std::is_same_v<T, WireContextMessages>) {
                 return io::makeContextMessages(m.messages).dump();
+            } else if constexpr (std::is_same_v<T, WireSetPermission>) {
+                return io::makeSetPermission(m.threadId, m.path, m.allow, m.index).dump();
             } else {
                 return "{}";
             }
@@ -595,6 +597,8 @@ std::optional<WireMessage> WsAgentIOTransport::deserialize(std::string_view json
         WireContextMessages resp;
         resp.messages = j.value("messages", neograph::json::array());
         return WireMessage{std::move(resp)};
+    } else if (t == io::MsgType::SetPermission) {
+        return WireMessage{io::setPermissionFromJson(j)};
     }
     // Pong / Ping: 心跳内部处理, 不转发给调用方
     return std::nullopt;

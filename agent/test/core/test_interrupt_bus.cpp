@@ -254,33 +254,33 @@ asio::awaitable<void> test_interrupt_bus_custom_handler() {
     co_return;
 }
 
+/// 最小 Tool 实现: 仅提供名称 (权限路由测试用)
+class MockTool : public neograph::Tool {
+public:
+
+    explicit MockTool(std::string name) :
+        name_(std::move(name)) {}
+
+    neograph::ChatTool get_definition() const override {
+        return neograph::ChatTool{
+            .name        = name_,
+            .description = "",
+            .parameters  = neograph::json::object(),
+        };
+    }
+
+    std::string get_name() const override { return name_; }
+
+    std::string execute(const neograph::json&) override { return ""; }
+
+private:
+
+    std::string name_;
+};
+
 /// 权限路由: 相对路径应基于当前工作目录转换为绝对路径后再匹配规则,
 /// 使注册的绝对路径规则 (如 {cwd}/*) 也能命中相对路径访问
 asio::awaitable<void> test_permission_relative_path() {
-    /// 最小 Tool 实现: 仅提供名称
-    class MockTool : public neograph::Tool {
-    public:
-
-        explicit MockTool(std::string name) :
-            name_(std::move(name)) {}
-
-        neograph::ChatTool get_definition() const override {
-            return neograph::ChatTool{
-                .name        = name_,
-                .description = "",
-                .parameters  = neograph::json::object(),
-            };
-        }
-
-        std::string get_name() const override { return name_; }
-
-        std::string execute(const neograph::json&) override { return ""; }
-
-    private:
-
-        std::string name_;
-    };
-
     auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
     auto permission
         = std::make_shared<agentxx::middleware::PermissionMiddlewareHandle>(agentContext);
@@ -357,6 +357,84 @@ asio::awaitable<void> test_permission_relative_path() {
     co_return;
 }
 
+/// 记住权限选择: 用户选择允许/拒绝并"记住"后, 注册的路径规则 (ALLOW/DENY) 使
+/// 后续访问该路径或其子目录直接按规则处理, 不再经总线询问 (prompter 不被调用)
+asio::awaitable<void> test_permission_remember_rule() {
+    auto sessionBus
+        = std::make_shared<agentxx::middleware::EventBus>(co_await asio::this_coro::executor);
+
+    // prompter (模拟客户端权限询问应答): 记录被询问次数
+    auto io             = std::make_shared<MockIO>();
+    io->permissionAllow = true;
+    io->registerOnBus(sessionBus);
+
+    auto agentContext  = std::make_shared<agentxx::agent::AgentContext>();
+    auto session       = agentContext->getSession("remember_test");
+    session->bus       = sessionBus;
+    auto permission
+        = std::make_shared<agentxx::middleware::PermissionMiddlewareHandle>(agentContext);
+
+    // 与 code_agent.cpp 默认注册一致: cwd 内写 ALLOW, 其余 /* INTERRUPT (询问)
+    auto cwd = std::filesystem::current_path().generic_string();
+    permission->setFilesystemPermission(
+        fmt::format("{}/*", cwd),
+        agentxx::middleware::PermissionOperator::ALLOW,
+        agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
+    );
+    permission->setFilesystemPermission(
+        "/*",
+        agentxx::middleware::PermissionOperator::INTERRUPT,
+        agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
+    );
+
+    MockTool item("agentxx_filesystem_write_file");
+    const std::string outsidePath = "/data/projects/remember/out.txt";
+    const std::string subPath     = "/data/projects/remember/sub/deep.txt";
+    const std::string secretPath  = "/data/projects/remember/secret/key.txt";
+
+    auto write = [&](std::string_view path) -> asio::awaitable<bool> {
+        // 必须携带 thread_id: requestPermission 经 sessions->get(thread_id) 取会话总线
+        auto args
+            = neograph::json{{"path", std::string{path}}, {"thread_id", "remember_test"}};
+        co_return co_await permission->defOnFilesystemHandle(
+            item,
+            args,
+            agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
+        );
+    };
+
+    // 初始: 未注册规则 → INTERRUPT → 经总线询问 (prompter 应答允许)
+    bool ok = co_await write(outsidePath);
+    XX_TEST_EXPECT_TRUE(ok);
+    XX_TEST_EXPECT_EQ(io->interruptCalls, 1);
+
+    // 用户选择"记住 (允许)": 注册 ALLOW 规则 (等价于客户端发送 WireSetPermission)
+    permission->setFilesystemPermission(
+        "/data/projects/remember",
+        agentxx::middleware::PermissionOperator::ALLOW,
+        agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
+    );
+
+    // 记住后: 该路径及其子目录直接放行, 不再询问
+    ok = co_await write(outsidePath);
+    XX_TEST_EXPECT_TRUE(ok);
+    ok = co_await write(subPath);
+    XX_TEST_EXPECT_TRUE(ok);
+    XX_TEST_EXPECT_EQ(io->interruptCalls, 1); // 未再询问
+
+    // 最长前缀优先: 子目录记住"拒绝" (DENY) 覆盖外层 ALLOW, 且不再询问
+    permission->setFilesystemPermission(
+        "/data/projects/remember/secret",
+        agentxx::middleware::PermissionOperator::DENY,
+        agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
+    );
+    ok = co_await write(secretPath);
+    XX_TEST_EXPECT_FALSE(ok);
+    XX_TEST_EXPECT_EQ(io->interruptCalls, 1); // 仍未再询问
+
+    co_return;
+}
+
 asio::awaitable<TestResult> run_interrupt_bus_tests() {
     g_ib_passed = 0;
     g_ib_failed = 0;
@@ -366,6 +444,7 @@ asio::awaitable<TestResult> run_interrupt_bus_tests() {
         co_await test_registerOnBus_no_accumulation();
         co_await test_interrupt_bus_custom_handler();
         co_await test_permission_relative_path();
+        co_await test_permission_remember_rule();
     } catch (const std::exception& e) {
         TEST_FAIL << "interrupt_bus suite exception: " << e.what() << std::endl;
         g_ib_failed++;

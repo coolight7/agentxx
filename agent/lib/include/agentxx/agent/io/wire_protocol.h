@@ -24,6 +24,8 @@ struct MsgType {
     inline static constexpr std::string_view GetModel               = "get_model";
     inline static constexpr std::string_view GetAppendComponentInfo = "get_append_component_info";
     inline static constexpr std::string_view Ping                   = "ping";
+    /// 客户端记住权限选择: 注册路径规则到服务端权限中间件
+    inline static constexpr std::string_view SetPermission = "set_permission";
 
     // ===== Server -> Client =====
     inline static constexpr std::string_view HelloAck         = "hello_ack";
@@ -507,6 +509,27 @@ inline neograph::json makeGetContext(std::string_view threadId) {
         {"type",   MsgType::GetContext},
         {"thread", threadId           },
     };
+}
+
+/// 客户端记住权限选择 (Client -> Server): 注册路径规则到服务端权限中间件
+inline neograph::json
+    makeSetPermission(std::string_view threadId, std::string_view path, bool allow, size_t index) {
+    return neograph::json{
+        {"type",   MsgType::SetPermission},
+        {"thread", threadId              },
+        {"path",   path                  },
+        {"allow",  allow                 },
+        {"index",  index                 },
+    };
+}
+
+inline WireSetPermission setPermissionFromJson(const neograph::json& j) {
+    WireSetPermission m;
+    m.threadId = j.value("thread", std::string{});
+    m.path     = j.value("path", std::string{});
+    m.allow    = j.value("allow", true);
+    m.index    = j.value("index", size_t{0});
+    return m;
 }
 
 inline neograph::json makeContextMessages(const neograph::json& messages) {
