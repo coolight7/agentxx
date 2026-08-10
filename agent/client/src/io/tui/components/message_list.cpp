@@ -980,21 +980,35 @@ Element MessageListComponent::buildInterruptControl(const TUIMessage& msg, size_
 
     Element control;
     if (id.inputType == "bool") {
+        // 权限询问 (rememberable): 额外显示"记住"开关 —— 勾选后确认时按本次
+        // 允许/拒绝注册路径规则, 后续访问该路径或其子目录不再询问
+        const bool rememberable = [&]() -> bool {
+            auto it = interruptChannels_.find(id.interruptId);
+            return it != interruptChannels_.end() && it->second.rememberable;
+        }();
+
         auto yesBox = mkBox();
         auto noBox  = mkBox();
         auto yes    = btn(" 是 ", ui.selected == 0) | reflect(*yesBox);
         auto no     = btn(" 否 ", ui.selected == 1) | reflect(*noBox);
         hit(kHitBoolYes, 0, yesBox);
         hit(kHitBoolNo, 0, noBox);
-        control = hbox({
-            yes,
-            text(" "),
-            no,
-            text("  "),
-            confirmBtn,
-            text("  "),
-            cancelBtn,
-        });
+        Elements row;
+        row.push_back(yes);
+        row.push_back(text(" "));
+        row.push_back(no);
+        if (rememberable) {
+            auto remBox = mkBox();
+            auto rem    = btn(ui.remember ? " 记住✓ " : " 记住 ", ui.remember) | reflect(*remBox);
+            hit(kHitRemember, 0, remBox);
+            row.push_back(text("  "));
+            row.push_back(rem);
+        }
+        row.push_back(text("  "));
+        row.push_back(confirmBtn);
+        row.push_back(text("  "));
+        row.push_back(cancelBtn);
+        control = hbox(std::move(row));
     } else if (id.inputType == "int" || id.inputType == "double") {
         auto minusBox = mkBox();
         auto plusBox  = mkBox();
@@ -1070,9 +1084,10 @@ Element MessageListComponent::buildInterruptControl(const TUIMessage& msg, size_
 
 void MessageListComponent::attachInterruptChannel(
     int64_t                                 wireId,
-    std::shared_ptr<InterruptResultChannel> ch
+    std::shared_ptr<InterruptResultChannel> ch,
+    bool                                    rememberable
 ) {
-    interruptChannels_[wireId] = std::move(ch);
+    interruptChannels_[wireId] = InterruptChannelInfo{std::move(ch), rememberable};
 }
 
 void MessageListComponent::releaseInterruptChannel(int64_t wireId) {
@@ -1225,6 +1240,19 @@ bool MessageListComponent::handleInterruptClick(const Mouse& mouse) {
                 ctx_.postRedraw();
                 return true;
             }
+            case kHitRemember: {
+                // 权限询问: 切换"记住本次选择"
+                ctx_.state->mutate([&](TUIRenderState& st) {
+                    if (h.msgIndex >= st.messages.size()) {
+                        return;
+                    }
+                    auto& ui    = mutateInterruptUiState(*st.messages[h.msgIndex]);
+                    ui.remember = !ui.remember;
+                });
+                setInterruptActive(h.msgIndex);
+                ctx_.postRedraw();
+                return true;
+            }
             case kHitEdit:
                 setInterruptActive(h.msgIndex);
                 return true;
@@ -1364,6 +1392,7 @@ void MessageListComponent::setInterruptActive(size_t mi) {
 void MessageListComponent::confirmInterrupt(size_t mi) {
     std::string  value;
     bool         confirmed = false;
+    bool         remember  = false; // 权限询问: 是否记住本次选择 (mutate 内收集, 锁外发送)
     InterruptKey key; // 确认成功时记录 (mutate 内收集, 锁外发送结果)
     ctx_.state->mutate([&](TUIRenderState& st) {
         if (mi >= st.messages.size() || !st.messages[mi]->interrupt) {
@@ -1414,6 +1443,7 @@ void MessageListComponent::confirmInterrupt(size_t mi) {
         if (confirmed) {
             // 先取 key (src 引用随后被 mutableMessage 替换失效)
             interruptKeyOf(src, key);
+            remember = ui.remember; // 权限询问"记住本次选择"标记
             // 确认结果写入消息 (跨线程共享的展示状态); UI 状态表保留编辑残留
             auto& mm                      = ctx_.state->mutableMessage(st, mi);
             mm.interrupt->interruptStatus = TUIMessage::InterruptStatus::Confirmed;
@@ -1424,11 +1454,12 @@ void MessageListComponent::confirmInterrupt(size_t mi) {
         // 发送结果到 client 线程 (channel 线程安全):
         // 通道从 interruptChannels_ 取最新 (同请求共享, 经 attachInterruptChannel 注入)
         auto chIt = interruptChannels_.find(key.id);
-        if (chIt != interruptChannels_.end() && chIt->second) {
-            chIt->second->async_send(
+        if (chIt != interruptChannels_.end() && chIt->second.ch) {
+            chIt->second.ch->async_send(
                 neograph_asio_error_code{},
                 key.index,
                 std::optional<std::string>(value),
+                remember,
                 [](neograph_asio_error_code) {}
             );
         }
@@ -1466,11 +1497,12 @@ void MessageListComponent::cancelInterrupt(size_t mi) {
     });
     // 整体取消: inputIndex = -1, value = nullopt (经同请求共享通道发送)
     auto chIt = interruptChannels_.find(id);
-    if (chIt != interruptChannels_.end() && chIt->second) {
-        chIt->second->async_send(
+    if (chIt != interruptChannels_.end() && chIt->second.ch) {
+        chIt->second.ch->async_send(
             neograph_asio_error_code{},
             -1,
             std::optional<std::string>(),
+            false,
             [](neograph_asio_error_code) {}
         );
     }

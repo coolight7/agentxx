@@ -70,7 +70,8 @@ struct InterruptFixture {
         std::vector<std::string>                enumValues   = {},
         int64_t                                 interruptId  = 1,
         int                                     inputIndex   = 1,
-        int                                     inputTotal   = 1
+        int                                     inputTotal   = 1,
+        bool                                    rememberable = false
     ) {
         auto m                     = std::make_shared<TUIMessage>();
         m->role                    = TUIMessage::Role::Interrupt;
@@ -87,7 +88,7 @@ struct InterruptFixture {
             st.messages.push_back(std::move(m));
         });
         // 结果通道注入组件状态表 (与 handleInterrupt 经 enqueueUiAction 一致)
-        comp->attachInterruptChannel(interruptId, ch);
+        comp->attachInterruptChannel(interruptId, ch, rememberable);
         return sharedState.readSnapshot()->messages.size() - 1;
     }
 
@@ -127,17 +128,21 @@ struct InterruptFixture {
     }
 
     /// 从通道读取一条结果; 返回 false = 无可用消息
+    /// remember 为可选输出: 权限询问"记住本次选择"标记 (nullptr 不读取)
     bool recv(
         std::shared_ptr<InterruptResultChannel> ch,
         int&                                    inputIndex,
-        std::optional<std::string>&             value
+        std::optional<std::string>&             value,
+        bool*                                   remember = nullptr
     ) {
-        bool got
-            = ch->try_receive([&](neograph_asio_error_code ec, int idx, std::optional<std::string> v
-                              ) {
-                  inputIndex = idx;
-                  value      = std::move(v);
-              });
+        bool got = ch->try_receive([&](neograph_asio_error_code ec, int idx,
+                                       std::optional<std::string> v, bool rem) {
+            inputIndex = idx;
+            value      = std::move(v);
+            if (remember) {
+                *remember = rem;
+            }
+        });
         io.run(); // 排空 async_send 投递的完成 handler (数据本身已入队)
         return got;
     }
@@ -235,6 +240,63 @@ void test_bool_default_no_selected() {
     XX_TEST_EXPECT_TRUE(f.recv(ch, idx, val));
     XX_TEST_EXPECT_TRUE(val.has_value());
     XX_TEST_EXPECT_EQ(*val, std::string("false"));
+}
+
+// ---------------------------------------------------------------------------
+// 权限询问: "记住"开关 (仅 rememberable 的中断渲染; 确认时回传 remember 标记)
+// ---------------------------------------------------------------------------
+
+void test_permission_remember_ui_only_for_rememberable() {
+    InterruptFixture f;
+    // 非权限询问 (rememberable=false): 不渲染"记住"按钮
+    auto ch1 = f.makeChannel();
+    f.addInterrupt(ch1, "bool", "no");
+    XX_TEST_EXPECT_TRUE(f.render().find("记住") == std::string::npos);
+    // 权限询问 (rememberable=true): 渲染"记住"按钮
+    auto ch2 = f.makeChannel();
+    f.addInterrupt(ch2, "bool", "no", "perm", {}, 2, 1, 1, true);
+    XX_TEST_EXPECT_TRUE(f.render().find("记住") != std::string::npos);
+}
+
+void test_permission_remember_toggle_and_confirm() {
+    InterruptFixture f;
+    auto             ch = f.makeChannel();
+    auto             mi = f.addInterrupt(ch, "bool", "no", "perm", {}, 1, 1, 1, true);
+    // 初始: 未记住
+    XX_TEST_EXPECT_FALSE(f.comp->interruptUiState(mi).remember);
+    // 点击"记住"开关 → 状态翻转
+    XX_TEST_EXPECT_TRUE(f.click(mi, MessageListComponent::kHitRemember));
+    XX_TEST_EXPECT_TRUE(f.comp->interruptUiState(mi).remember);
+    // 再次点击 → 关闭
+    XX_TEST_EXPECT_TRUE(f.click(mi, MessageListComponent::kHitRemember));
+    XX_TEST_EXPECT_FALSE(f.comp->interruptUiState(mi).remember);
+    // 再开启, 选"是"并确认 → 结果回传 remember=true
+    XX_TEST_EXPECT_TRUE(f.click(mi, MessageListComponent::kHitRemember));
+    XX_TEST_EXPECT_TRUE(f.click(mi, MessageListComponent::kHitBoolYes));
+    int                        idx      = 0;
+    std::optional<std::string> val;
+    bool                       remember = false;
+    XX_TEST_EXPECT_TRUE(f.recv(ch, idx, val, &remember));
+    XX_TEST_EXPECT_EQ(idx, 1);
+    XX_TEST_EXPECT_TRUE(val.has_value());
+    XX_TEST_EXPECT_EQ(*val, std::string("true"));
+    XX_TEST_EXPECT_TRUE(remember);
+}
+
+void test_permission_remember_without_toggle() {
+    InterruptFixture f;
+    auto             ch = f.makeChannel();
+    auto             mi = f.addInterrupt(ch, "bool", "no", "perm", {}, 1, 1, 1, true);
+    // 未勾选"记住", 确认 → remember=false
+    XX_TEST_EXPECT_TRUE(f.click(mi, MessageListComponent::kHitBoolNo));
+    int                        idx      = 0;
+    std::optional<std::string> val;
+    bool                       remember = true;
+    XX_TEST_EXPECT_TRUE(f.recv(ch, idx, val, &remember));
+    XX_TEST_EXPECT_EQ(idx, 1);
+    XX_TEST_EXPECT_TRUE(val.has_value());
+    XX_TEST_EXPECT_EQ(*val, std::string("false"));
+    XX_TEST_EXPECT_FALSE(remember);
 }
 
 // ---------------------------------------------------------------------------
@@ -537,6 +599,10 @@ TestResult testTuiInterrupt() {
     test_bool_click_no_confirms_false();
     test_bool_confirm_rendered();
     test_bool_default_no_selected();
+    // 权限询问 "记住" 开关
+    test_permission_remember_ui_only_for_rememberable();
+    test_permission_remember_toggle_and_confirm();
+    test_permission_remember_without_toggle();
     // int
     test_int_step_plus_minus();
     test_int_arrow_step_active();

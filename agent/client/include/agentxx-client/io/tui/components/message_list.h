@@ -43,6 +43,9 @@ public:
         bool edited = false;
         /// bool/enum 选中索引 (0=是/首项)
         int selected = 0;
+        /// 权限询问: 是否记住本次选择 (确认后按本次允许/拒绝注册路径规则,
+        /// 后续访问该路径或其子目录不再询问; 仅 rememberable 的权限询问显示开关)
+        bool remember = false;
         /// 校验失败等提示 (显示于控件下方; 下次编辑时清除)
         std::string tip;
         /// 修改计数 (itemKey 失效用)
@@ -61,6 +64,7 @@ public:
         kHitEdit     = 5, // 输入框 (激活编辑)
         kHitConfirm  = 6, // 确认
         kHitCancel   = 7, // 取消整个中断请求
+        kHitRemember = 8, // 权限询问 "记住" 开关 (切换 remember 状态)
     };
 
     /// 中断控件命中区域 (渲染时 reflect 填充, 供点击命中检测)
@@ -111,7 +115,12 @@ public:
 
     /// 注册中断请求结果回传通道 (client 线程经 enqueueUiAction 调用;
     /// 同请求的所有输入项共享同一通道)
-    void attachInterruptChannel(int64_t wireId, std::shared_ptr<InterruptResultChannel> ch);
+    /// - rememberable: 该请求是否为可记住选择的权限询问 (渲染"记住"开关)
+    void attachInterruptChannel(
+        int64_t                                 wireId,
+        std::shared_ptr<InterruptResultChannel> ch,
+        bool                                    rememberable = false
+    );
 
     /// 释放指定中断请求的通道映射与该请求全部 UI 状态 (中断流程结束时调用;
     /// 消息已固定状态, 状态行渲染不再需要编辑状态)
@@ -169,8 +178,13 @@ private:
     static bool interruptKeyOf(const TUIMessage& msg, InterruptKey& out);
 
     std::map<InterruptKey, InterruptUIState> interruptUi_;
-    /// 中断请求 wireId → 结果回传通道 (client 线程注入; 同请求共享)
-    std::map<int64_t, std::shared_ptr<InterruptResultChannel>> interruptChannels_;
+    /// 中断请求信息: wireId → 通道 + 权限询问标记 (client 线程注入; 同请求共享)
+    struct InterruptChannelInfo {
+        std::shared_ptr<InterruptResultChannel> ch;
+        /// 是否为可记住选择的权限询问 (渲染"记住"开关)
+        bool rememberable = false;
+    };
+    std::map<int64_t, InterruptChannelInfo> interruptChannels_;
 
     // ---- LazyScrollable 回调 ----
     size_t        itemCount();

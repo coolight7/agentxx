@@ -2,6 +2,7 @@
 
 #include "agentxx/agent/base_agent.h"
 #include "agentxx/agent/context.h"
+#include "agentxx/middlewares/permission.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/log.h"
 #include "asio/cancel_after.hpp"
@@ -181,6 +182,26 @@ void SessionServerAgentIO::onPeerMessage(WireMessage msg) {
                     return;
                 }
                 sendToPeer(WireContextMessages{sess->llmMessages});
+            } else if constexpr (std::is_same_v<T, WireSetPermission>) {
+                // 客户端记住权限选择: 注册路径规则到权限中间件,
+                // 后续访问该路径或其子目录时按规则直接允许/拒绝, 不再询问
+                auto agent = agent_.lock();
+                if (!agent || !agent->agentContext || !agent->agentContext->permissionMiddleware) {
+                    return;
+                }
+                auto& perm = agent->agentContext->permissionMiddleware;
+                perm->setFilesystemPermission(
+                    m.path,
+                    m.allow ? agentxx::middleware::PermissionOperator::ALLOW
+                            : agentxx::middleware::PermissionOperator::DENY,
+                    m.index
+                );
+                XX_LOGI(
+                    "[session_ctrl] remembered permission rule: {} {} (index={})",
+                    m.path,
+                    m.allow ? "ALLOW" : "DENY",
+                    m.index
+                );
             }
         },
         std::move(msg)
