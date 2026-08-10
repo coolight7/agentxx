@@ -2,7 +2,8 @@
 [Github agentxx](https://github.com/coolight7/agentxx)
 
 - C++ 协程异步实现的 AI Agent，可编译为`单程序、动态库`直接启动使用。降低内存占用、程序包体积、摆脱庞大的 动态库、python、js 等依赖，为普通性能的手机、电脑等设备上运行设计
-- 目前实测单轮任务最长自动运行5小时完成，本项目已由 Agentxx 自身介入开发
+- 目标支持嵌入App实现高性能的Agent功能，顺带实现 cli/TUI 的 Code Agent; GUI客户端将由[Lumenxx](https://github.com/coolight7/lumenxx-docx)支持，并实现 音视频处理、自动化控制 等 Agent 
+- 已实测过最长单轮任务自动运行5小时完成，本项目已由 Agentxx 自身介入开发
 
 > - 早期开发中...
 

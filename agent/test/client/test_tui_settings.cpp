@@ -1,10 +1,12 @@
 #include "test_tui_settings.h"
 
+#include "agentxx-client/io/tui/agent_tui.h"
 #include "agentxx-client/io/tui/framework/tui_settings.h"
 #include "agentxx/util/settings_db.h"
 #include <chrono>
 #include <filesystem>
 #include <fmt/format.h>
+#include <memory>
 #include <string_view>
 #include <system_error>
 #include <thread>
@@ -121,6 +123,109 @@ void test_show_system_info() {
     XX_TEST_EXPECT_TRUE(settings.showSystemInfoRef().load());
 }
 
+void test_log_level_set_get() {
+    auto& settings = TUISettings::instance();
+
+    // 逐一设置各等级并读回 (名称表与 LogLevel 枚举值一一对应)
+    const struct {
+        agentxx::util::LogLevel level;
+        std::string_view        name;
+    } cases[] = {
+        {agentxx::util::LogLevel::Trace, "Trace"},
+        {agentxx::util::LogLevel::Debug, "Debug"},
+        {agentxx::util::LogLevel::Info,  "Info" },
+        {agentxx::util::LogLevel::Warn,  "Warn" },
+        {agentxx::util::LogLevel::Error, "Error"},
+        {agentxx::util::LogLevel::Out,   "Out"  },
+    };
+
+    for (const auto& c : cases) {
+        settings.setLogLevel(c.level);
+        XX_TEST_EXPECT_TRUE(settings.logLevel() == c.level);
+        XX_TEST_EXPECT_EQ(settings.logLevelName(), c.name);
+    }
+
+    // 恢复默认, 避免影响其他用例
+    settings.setLogLevel(TUISettings::kDefaultLogLevel);
+}
+
+void test_log_level_names_table() {
+    // 名称表覆盖全部等级 (与 LogLevel 枚举值顺序一致)
+    XX_TEST_EXPECT_EQ(TUISettings::kLogLevelNames.size(), (size_t)6);
+    XX_TEST_EXPECT_EQ(TUISettings::kLogLevelNames[0], std::string_view("Trace"));
+    XX_TEST_EXPECT_EQ(TUISettings::kLogLevelNames[1], std::string_view("Debug"));
+    XX_TEST_EXPECT_EQ(TUISettings::kLogLevelNames[2], std::string_view("Info"));
+    XX_TEST_EXPECT_EQ(TUISettings::kLogLevelNames[3], std::string_view("Warn"));
+    XX_TEST_EXPECT_EQ(TUISettings::kLogLevelNames[4], std::string_view("Error"));
+    XX_TEST_EXPECT_EQ(TUISettings::kLogLevelNames[5], std::string_view("Out"));
+}
+
+// TUILogSink 按 TUISettings.logLevel 过滤 (Out 恒显示)
+void test_log_sink_level_filter() {
+    auto& settings = TUISettings::instance();
+    auto  sink     = std::make_shared<TUILogSink>();
+
+    auto makeEntry = [](agentxx::util::LogLevel level, const char* msg) {
+        return std::make_shared<const agentxx::util::LogEntry>(agentxx::util::LogEntry{
+            level,
+            0,
+            0,
+            msg,
+        });
+    };
+
+    // 默认 Info: 仅显示 Info/Warn/Error/Out, 过滤 Trace/Debug
+    settings.setLogLevel(agentxx::util::LogLevel::Info);
+    sink->enqueue(makeEntry(agentxx::util::LogLevel::Trace, "t"));
+    sink->enqueue(makeEntry(agentxx::util::LogLevel::Debug, "d"));
+    sink->enqueue(makeEntry(agentxx::util::LogLevel::Info, "i"));
+    sink->enqueue(makeEntry(agentxx::util::LogLevel::Warn, "w"));
+    sink->enqueue(makeEntry(agentxx::util::LogLevel::Error, "e"));
+    sink->enqueue(makeEntry(agentxx::util::LogLevel::Out, "o"));
+    sink->pump();
+    {
+        auto lines = sink->snapshot();
+        XX_TEST_EXPECT_EQ(lines.size(), size_t{4});
+        if (lines.size() == 4) {
+            XX_TEST_EXPECT_EQ(lines[0].level, agentxx::util::LogLevel::Info);
+            XX_TEST_EXPECT_EQ(lines[1].level, agentxx::util::LogLevel::Warn);
+            XX_TEST_EXPECT_EQ(lines[2].level, agentxx::util::LogLevel::Error);
+            XX_TEST_EXPECT_EQ(lines[3].level, agentxx::util::LogLevel::Out);
+        }
+    }
+
+    // Trace: 显示全部
+    sink->clear();
+    settings.setLogLevel(agentxx::util::LogLevel::Trace);
+    sink->enqueue(makeEntry(agentxx::util::LogLevel::Trace, "t"));
+    sink->enqueue(makeEntry(agentxx::util::LogLevel::Debug, "d"));
+    sink->enqueue(makeEntry(agentxx::util::LogLevel::Info, "i"));
+    sink->enqueue(makeEntry(agentxx::util::LogLevel::Error, "e"));
+    sink->enqueue(makeEntry(agentxx::util::LogLevel::Out, "o"));
+    sink->pump();
+    XX_TEST_EXPECT_EQ(sink->snapshot().size(), size_t{5});
+
+    // Error: 仅显示 Error/Out
+    sink->clear();
+    settings.setLogLevel(agentxx::util::LogLevel::Error);
+    sink->enqueue(makeEntry(agentxx::util::LogLevel::Trace, "t"));
+    sink->enqueue(makeEntry(agentxx::util::LogLevel::Info, "i"));
+    sink->enqueue(makeEntry(agentxx::util::LogLevel::Error, "e"));
+    sink->enqueue(makeEntry(agentxx::util::LogLevel::Out, "o"));
+    sink->pump();
+    {
+        auto lines = sink->snapshot();
+        XX_TEST_EXPECT_EQ(lines.size(), size_t{2});
+        if (lines.size() == 2) {
+            XX_TEST_EXPECT_EQ(lines[0].level, agentxx::util::LogLevel::Error);
+            XX_TEST_EXPECT_EQ(lines[1].level, agentxx::util::LogLevel::Out);
+        }
+    }
+
+    // 恢复默认, 避免影响其他用例
+    settings.setLogLevel(TUISettings::kDefaultLogLevel);
+}
+
 void test_concurrent_access() {
     // 多线程并发读写不应崩溃, 且读到的等级值始终合法
     auto&         settings    = TUISettings::instance();
@@ -131,6 +236,7 @@ void test_concurrent_access() {
         for (int i = 0; i < kIterations && !stop.load(); ++i) {
             settings.setAnimationLevel(static_cast<AnimationLevel>(i % 5));
             settings.setShowSystemInfo(i % 2 == 0);
+            settings.setLogLevel(static_cast<agentxx::util::LogLevel>(i % 6));
         }
     });
 
@@ -143,8 +249,13 @@ void test_concurrent_access() {
                 if (lv < 0 || lv > 4) {
                     invalidCount.fetch_add(1);
                 }
+                const int ll = static_cast<int>(settings.logLevel());
+                if (ll < 0 || ll > 5) {
+                    invalidCount.fetch_add(1);
+                }
                 (void)settings.isAnimationEnabled(AnimationLevel::Medium);
                 (void)settings.showSystemInfo();
+                (void)settings.logLevelName();
             }
         });
     }
@@ -158,6 +269,7 @@ void test_concurrent_access() {
     // 恢复默认, 避免影响其他用例
     settings.setAnimationLevel(TUISettings::kDefaultAnimationLevel);
     settings.setShowSystemInfo(true);
+    settings.setLogLevel(TUISettings::kDefaultLogLevel);
 }
 
 void test_persist_to_db() {
@@ -178,27 +290,32 @@ void test_persist_to_db() {
     settings.setThemeKind(TUISettings::kThemeLight);
     settings.setAnimationLevel(AnimationLevel::Low);
     settings.setShowSystemInfo(false);
+    settings.setLogLevel(agentxx::util::LogLevel::Warn);
     {
         auto fresh = agentxx::util::SettingsDb(dbPath);
         XX_TEST_EXPECT_EQ(fresh.getInt64("tui.theme", -1), int64_t{TUISettings::kThemeLight});
         XX_TEST_EXPECT_EQ(fresh.getInt64("tui.animationLevel", -1), int64_t{1}); // Low
         XX_TEST_EXPECT_FALSE(fresh.getBool("tui.showSystemInfo", true));
+        XX_TEST_EXPECT_EQ(fresh.getInt64("tui.logLevel", -1), int64_t{3}); // Warn
     }
 
     // 再次变更 → 库文件同步更新
     settings.setThemeKind(TUISettings::kThemeDark);
     settings.setAnimationLevel(AnimationLevel::Ultra);
     settings.setShowSystemInfo(true);
+    settings.setLogLevel(agentxx::util::LogLevel::Debug);
     {
         auto fresh = agentxx::util::SettingsDb(dbPath);
         XX_TEST_EXPECT_EQ(fresh.getInt64("tui.theme", -1), int64_t{TUISettings::kThemeDark});
         XX_TEST_EXPECT_EQ(fresh.getInt64("tui.animationLevel", -1), int64_t{4}); // Ultra
         XX_TEST_EXPECT_TRUE(fresh.getBool("tui.showSystemInfo", false));
+        XX_TEST_EXPECT_EQ(fresh.getInt64("tui.logLevel", -1), int64_t{1}); // Debug
     }
 
     // 恢复默认, 避免影响其他用例
     settings.setAnimationLevel(TUISettings::kDefaultAnimationLevel);
     settings.setShowSystemInfo(true);
+    settings.setLogLevel(TUISettings::kDefaultLogLevel);
 
     // 注意: TUISettings 单例持有 db 连接 (进程生命周期), Windows 上无法删除
     // 被占用文件, 故清理失败时忽略 (仅临时目录残留, 不影响测试结果)
@@ -215,6 +332,9 @@ TestResult testTuiSettings() {
     test_is_animation_enabled();
     test_level_names_table();
     test_show_system_info();
+    test_log_level_set_get();
+    test_log_level_names_table();
+    test_log_sink_level_filter();
     test_concurrent_access();
     test_persist_to_db();
 

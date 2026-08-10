@@ -1,5 +1,6 @@
 #pragma once
 
+#include "agentxx/util/log.h"
 #include "agentxx/util/settings_db.h"
 #include <array>
 #include <atomic>
@@ -35,6 +36,7 @@ enum class AnimationLevel : int {
 /// - 主题 (ThemeKind: Dark/Light)
 /// - 动画等级 (AnimationLevel)
 /// - Info 侧边栏是否显示系统资源占用 (showSystemInfo)
+/// - 日志等级 (LogLevel: Trace/Debug/Info/Warn/Error/Out, TUI 日志侧边栏过滤)
 ///
 /// 线程安全: 所有设置项均为 std::atomic, 读写无锁,
 /// 可从 UI 线程 (渲染/事件) 与后台线程 (如资源监控线程) 并发访问。
@@ -57,6 +59,13 @@ public:
 
     /// 默认动画等级: Ultra (启用全部动画)
     inline static constexpr AnimationLevel kDefaultAnimationLevel = AnimationLevel::High;
+
+    /// 日志等级名称 (供设置弹窗展示; 与 agentxx::util::LogLevel 枚举值一一对应)
+    inline static constexpr std::array<const char*, 6> kLogLevelNames
+        = {"Trace", "Debug", "Info", "Warn", "Error", "Out"};
+
+    /// 默认日志等级: Info (TUI 日志侧边栏仅显示 Info 及以上, Out 恒显示)
+    inline static constexpr agentxx::util::LogLevel kDefaultLogLevel = agentxx::util::LogLevel::Info;
 
     /// 主题枚举 (与 tui.theme 库中存储的整数值对应)
     enum ThemeKind : int {
@@ -86,6 +95,10 @@ public:
         }
         if (auto v = db_->get("tui.showSystemInfo"); v.has_value()) {
             showSystemInfo_.store(*v == "1", std::memory_order_release);
+        }
+        auto logLevel = db_->getInt64("tui.logLevel", -1);
+        if (logLevel >= 0 && logLevel < static_cast<int64_t>(kLogLevelNames.size())) {
+            logLevel_.store(static_cast<int>(logLevel), std::memory_order_release);
         }
     }
 
@@ -152,6 +165,35 @@ public:
         return showSystemInfo_;
     }
 
+    /// 获取当前日志等级 (TUI 日志侧边栏过滤: 显示 >= 该等级的日志, Out 恒显示)
+    agentxx::util::LogLevel logLevel() const noexcept {
+        const int v = logLevel_.load(std::memory_order_acquire);
+        if (v >= 0 && v < static_cast<int>(kLogLevelNames.size())) {
+            return static_cast<agentxx::util::LogLevel>(v);
+        }
+        return kDefaultLogLevel;
+    }
+
+    /// 设置日志等级 (越界值回退默认 Info)
+    /// - 变更同步持久化到全局设置数据库 (失败仅记日志, 不影响本次设置)
+    inline void setLogLevel(agentxx::util::LogLevel level) noexcept {
+        const int v = static_cast<int>(level);
+        logLevel_.store(
+            (v >= 0 && v < static_cast<int>(kLogLevelNames.size()))
+                ? v
+                : static_cast<int>(kDefaultLogLevel),
+            std::memory_order_release
+        );
+        if (db_) {
+            db_->setInt64("tui.logLevel", logLevel_.load(std::memory_order_relaxed));
+        }
+    }
+
+    /// 日志等级名称 (当前设置值)
+    std::string_view logLevelName() const noexcept {
+        return logLevelName(logLevel());
+    }
+
 private:
 
     TUISettings() :
@@ -166,12 +208,23 @@ private:
         return "Unknown";
     }
 
+    /// 日志等级名称 (越界返回 "Unknown")
+    inline static constexpr std::string_view logLevelName(agentxx::util::LogLevel level) noexcept {
+        const int idx = static_cast<int>(level);
+        if (idx >= 0 && idx < static_cast<int>(kLogLevelNames.size())) {
+            return kLogLevelNames[static_cast<size_t>(idx)];
+        }
+        return "Unknown";
+    }
+
     /// 主题 (存储为 int 以便原子读写; 0=Dark, 1=Light)
     std::atomic<int> themeKind_{kThemeDark};
     /// 动画等级 (存储为 int 以便原子读写)
     std::atomic<int> animationLevel_;
     /// Info 侧边栏系统资源显示开关
     std::atomic<bool> showSystemInfo_{true};
+    /// 日志等级 (存储为 int 以便原子读写; 与 agentxx::util::LogLevel 枚举值对应)
+    std::atomic<int> logLevel_{static_cast<int>(kDefaultLogLevel)};
     /// 全局设置数据库 (空 = 未持久化, 设置仅存内存)
     std::shared_ptr<agentxx::util::SettingsDb> db_;
 };

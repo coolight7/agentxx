@@ -44,11 +44,13 @@ private:
 };
 
 /// 设置弹窗组件
-/// - 主题切换 (Dark/Light)
+/// - 主题切换 (Dark/Light, 单行显示当前值, 点击/Enter 循环切换)
 /// - 系统资源占用显示开关 (Info 侧边栏; 默认开启)
 /// - 动画等级 (Disabled/Low/Medium/High/Ultra; 见 TUISettings)
+/// - 日志等级 (Trace/Debug/Info/Warn/Error/Out; 见 TUISettings)
 ///
-/// 交互: Up/Down 选择条目, Enter 应用/切换 (动画等级循环切换); 也支持鼠标点击
+/// 交互: Up/Down 选择条目, Enter 应用/切换 (循环切换); 也支持鼠标点击。
+/// 所有条目切换后均保持弹窗打开, 便于连续调整; 由 [Esc] 关闭。
 class SettingsOverlay : public ftxui::ComponentBase {
 public:
 
@@ -59,6 +61,16 @@ public:
         onClose_ = std::move(fn);
     }
 
+    /// 主题变化回调 (供外部清理渲染缓存; 弹窗保持打开, 主题立即生效)
+    void onThemeChange(std::function<void()> fn) {
+        onThemeChange_ = std::move(fn);
+    }
+
+    /// 日志等级变化回调 (供外部清空已收集日志行, 重新按新等级收集)
+    void onLogLevelChange(std::function<void()> fn) {
+        onLogLevelChange_ = std::move(fn);
+    }
+
     bool           OnEvent(ftxui::Event event) override;
     ftxui::Element OnRender() override;
 
@@ -66,19 +78,27 @@ private:
 
     bool handleMouse(const ftxui::Mouse& mouse);
 
+    /// 循环切换主题: Dark -> Light -> Dark (需要访问 ctx_.theme, 非静态)
+    void cycleTheme();
     /// 循环切换动画等级: Disabled -> Low -> Medium -> High -> Ultra -> Disabled
     static void cycleAnimationLevel();
+    /// 循环切换日志等级: Trace -> Debug -> Info -> Warn -> Error -> Out -> Trace
+    /// (需要访问 onLogLevelChange_, 非静态)
+    void cycleLogLevel();
 
     TUICtx& ctx_;
-    /// 条目索引: 0/1 = 主题 Dark/Light, 2 = 系统资源显示开关, 3 = 动画等级
-    /// Enter/鼠标点击索引 3 时循环切换对应设置
+    /// 条目索引: 0 = 主题, 1 = 系统资源显示开关, 2 = 动画等级, 3 = 日志等级
+    /// Enter/鼠标点击索引时循环切换对应设置
     static constexpr int  kItemCount     = 4;
     int                   selectedIndex_ = 0;
     std::function<void()> onClose_;
+    std::function<void()> onThemeChange_;
+    std::function<void()> onLogLevelChange_;
 
-    ftxui::Box themeBoxes_[2];  // Dark/Light 点击区域
-    ftxui::Box sysInfoBox_;     // 系统资源开关点击区域
-    ftxui::Box animLevelBox_;   // 动画等级点击区域
+    ftxui::Box themeBox_;     // 主题点击区域
+    ftxui::Box sysInfoBox_;   // 系统资源开关点击区域
+    ftxui::Box animLevelBox_; // 动画等级点击区域
+    ftxui::Box logLevelBox_;  // 日志等级点击区域
 };
 
 /// 待发送消息队列弹窗组件

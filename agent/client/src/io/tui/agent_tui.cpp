@@ -524,14 +524,23 @@ void TUIClientAgentIO::openModelSelector() {
 void TUIClientAgentIO::openSettings() {
     auto overlay = std::make_shared<SettingsOverlay>(ctx_);
     overlay->onClose([this] {
-        // 主题变化后清空消息缓存。
-        // 注意: 必须在 popModal() 之前访问成员 —— popModal() 会释放 overlay,
-        // 而当前闭包存储在该 overlay 内, pop 之后闭包已析构, 再访问捕获变量属于 use-after-free。
+        modal_->popModal();
+    });
+    // 主题变化后清空消息缓存与日志行缓存 (设置弹窗保持打开, 主题立即生效)。
+    // 注意: 必须在 popModal() 之前访问成员 —— popModal() 会释放 overlay,
+    // 而当前闭包存储在该 overlay 内, pop 之后闭包已析构, 再访问捕获变量属于 use-after-free。
+    overlay->onThemeChange([this] {
         if (messageList_) {
             messageList_->invalidateCache();
         }
         logLineCache_.clear();
-        modal_->popModal();
+    });
+    // 日志等级变化: 清空已收集日志行 (重新按新等级收集);
+    // logLineCache_ 因行数骤减在下次渲染时自动整体失效
+    overlay->onLogLevelChange([this] {
+        if (logSink_) {
+            logSink_->clear();
+        }
     });
     modal_->pushModal(overlay);
     postRedraw();

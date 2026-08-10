@@ -108,27 +108,23 @@ void ModelSelectorOverlay::confirmSelection() {
 // ---------------------------------------------------------------------------
 
 Element SettingsOverlay::OnRender() {
-    static constexpr const char* themeNames[] = {"Dark", "Light"};
-    const auto&                  theme        = *ctx_.theme;
+    const auto& theme = *ctx_.theme;
 
-    // 当前主题对应的条目索引 (供初始高亮; 键盘导航时由 selectedIndex_ 接管)
-    const int curThemeIdx = (theme.name == "Light") ? 1 : 0;
+    // 当前主题名 (Dark/Light)
+    const char* curThemeName = (theme.name == "Light") ? "Light" : "Dark";
 
     Elements items;
+
+    // 主题 (单行显示当前值, 点击/Enter 循环切换 Dark <-> Light)
     items.push_back(text(" Theme ") | color(theme.hintColor));
-    for (int i = 0; i < 2; ++i) {
-        auto entry = text(fmt::format(" {} ", themeNames[i]));
-        if (i == selectedIndex_) {
-            entry = entry | bgcolor(theme.buttonActiveBgColor) | color(theme.buttonActiveTextColor)
-                    | bold | focus;
-        } else {
-            entry = entry | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor);
-        }
-        if (i == curThemeIdx && i != selectedIndex_) {
-            entry = entry | bold;
-        }
-        items.push_back(entry | reflect(themeBoxes_[i]));
+    auto themeEntry = text(fmt::format(" Theme: {} ", curThemeName));
+    if (selectedIndex_ == 0) {
+        themeEntry = themeEntry | bgcolor(theme.buttonActiveBgColor)
+                     | color(theme.buttonActiveTextColor) | bold | focus;
+    } else {
+        themeEntry = themeEntry | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor);
     }
+    items.push_back(themeEntry | reflect(themeBox_));
 
     // 系统资源占用显示开关 (Info 侧边栏)
     const bool showSys
@@ -136,7 +132,7 @@ Element SettingsOverlay::OnRender() {
     items.push_back(text(" "));
     items.push_back(text(" Info Sidebar ") | color(theme.hintColor));
     auto sysEntry = text(fmt::format(" Show System Info: {} ", showSys ? "ON" : "OFF"));
-    if (selectedIndex_ == 2) {
+    if (selectedIndex_ == 1) {
         sysEntry = sysEntry | bgcolor(theme.buttonActiveBgColor)
                    | color(theme.buttonActiveTextColor) | bold | focus;
     } else {
@@ -144,12 +140,12 @@ Element SettingsOverlay::OnRender() {
     }
     items.push_back(sysEntry | reflect(sysInfoBox_));
 
-    // 动画等级 (Enter/点击循环切换; 组件经 TUISettings::isAnimationEnabled() 判断启用)
+    // 动画等级 (点击/Enter 循环切换; 组件经 TUISettings::isAnimationEnabled() 判断启用)
     items.push_back(text(" "));
     items.push_back(text(" Animation ") | color(theme.hintColor));
     auto animEntry
         = text(fmt::format(" Animation Level: {} ", TUISettings::instance().animationLevelName()));
-    if (selectedIndex_ == 3) {
+    if (selectedIndex_ == 2) {
         animEntry = animEntry | bgcolor(theme.buttonActiveBgColor)
                     | color(theme.buttonActiveTextColor) | bold | focus;
     } else {
@@ -157,12 +153,24 @@ Element SettingsOverlay::OnRender() {
     }
     items.push_back(animEntry | reflect(animLevelBox_));
 
+    // 日志等级 (点击/Enter 循环切换; TUI 日志侧边栏按此过滤)
+    items.push_back(text(" "));
+    items.push_back(text(" Log ") | color(theme.hintColor));
+    auto logEntry = text(fmt::format(" Log Level: {} ", TUISettings::instance().logLevelName()));
+    if (selectedIndex_ == 3) {
+        logEntry = logEntry | bgcolor(theme.buttonActiveBgColor)
+                   | color(theme.buttonActiveTextColor) | bold | focus;
+    } else {
+        logEntry = logEntry | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor);
+    }
+    items.push_back(logEntry | reflect(logLevelBox_));
+
     return vbox({
                text(" Settings ") | bold | inverted,
                separator(),
                vbox(std::move(items)),
                separator(),
-               text(" [Up/Down] Move  [Enter] Apply/Toggle  [Esc] Close ") | center | dim,
+               text(" [Up/Down] Move  [Enter] Toggle  [Esc] Close ") | center | dim,
            })
            | border | size(WIDTH, LESS_THAN, 80) | color(theme.accentColor);
 }
@@ -184,28 +192,22 @@ bool SettingsOverlay::OnEvent(Event event) {
     }
     if (event == Event::Return) {
         if (selectedIndex_ == 0) {
-            // 主题切换同步持久化到全局设置数据库, 重启后恢复
-            TUISettings::instance().setThemeKind(TUISettings::kThemeDark);
-            *ctx_.theme = TUITheme::darkTheme();
+            // 主题循环切换; 切换后保持弹窗打开, 便于继续调整
+            // (主题变化经 onThemeChange_ 通知外部清理渲染缓存)
+            cycleTheme();
             ctx_.postRedraw();
-            if (onClose_) {
-                onClose_();
-            }
-        } else if (selectedIndex_ == 1) {
-            TUISettings::instance().setThemeKind(TUISettings::kThemeLight);
-            *ctx_.theme = TUITheme::lightTheme();
-            ctx_.postRedraw();
-            if (onClose_) {
-                onClose_();
-            }
-        } else if (selectedIndex_ == 2 && ctx_.showSystemInfo) {
+        } else if (selectedIndex_ == 1 && ctx_.showSystemInfo) {
             // 切换后保持弹窗打开, 便于继续调整; 由 [Esc] 关闭
             // 经 TUISettings 设置以同步持久化到全局设置数据库 ({dataDir}/sqlite/global.db)
             TUISettings::instance().setShowSystemInfo(!TUISettings::instance().showSystemInfo());
             ctx_.postRedraw();
-        } else if (selectedIndex_ == 3) {
+        } else if (selectedIndex_ == 2) {
             // 动画等级循环切换; 切换后保持弹窗打开, 便于继续调整
             cycleAnimationLevel();
+            ctx_.postRedraw();
+        } else if (selectedIndex_ == 3) {
+            // 日志等级循环切换; 切换后保持弹窗打开, 便于继续调整
+            cycleLogLevel();
             ctx_.postRedraw();
         }
         return true;
@@ -228,21 +230,9 @@ bool SettingsOverlay::handleMouse(const Mouse& mouse) {
     if (mouse.button != Mouse::Left || mouse.motion != Mouse::Released) {
         return false;
     }
-    if (themeBoxes_[0].Contain(mouse.x, mouse.y)) {
-        // 主题切换同步持久化到全局设置数据库, 重启后恢复
-        TUISettings::instance().setThemeKind(TUISettings::kThemeDark);
-        *ctx_.theme = TUITheme::darkTheme();
-        if (onClose_) {
-            onClose_();
-        }
-        return true;
-    }
-    if (themeBoxes_[1].Contain(mouse.x, mouse.y)) {
-        TUISettings::instance().setThemeKind(TUISettings::kThemeLight);
-        *ctx_.theme = TUITheme::lightTheme();
-        if (onClose_) {
-            onClose_();
-        }
+    if (themeBox_.Contain(mouse.x, mouse.y)) {
+        // 主题循环切换 (与键盘 Enter 路径一致, 经 onThemeChange_ 通知外部清理缓存)
+        cycleTheme();
         return true;
     }
     if (ctx_.showSystemInfo && sysInfoBox_.Contain(mouse.x, mouse.y)) {
@@ -255,14 +245,36 @@ bool SettingsOverlay::handleMouse(const Mouse& mouse) {
         cycleAnimationLevel();
         return true;
     }
+    if (logLevelBox_.Contain(mouse.x, mouse.y)) {
+        cycleLogLevel();
+        return true;
+    }
     return false;
 }
 
-void SettingsOverlay::cycleAnimationLevel() {
+void SettingsOverlay::cycleTheme() {
+    auto&     settings = TUISettings::instance();
+    const bool light   = settings.themeKind() == TUISettings::kThemeLight;
+    settings.setThemeKind(light ? TUISettings::kThemeDark : TUISettings::kThemeLight);
+    *ctx_.theme = light ? TUITheme::darkTheme() : TUITheme::lightTheme();
+    if (onThemeChange_) {
+        onThemeChange_();
+    }
+}void SettingsOverlay::cycleAnimationLevel() {
     auto&     settings = TUISettings::instance();
     const int next     = (static_cast<int>(settings.animationLevel()) + 1)
                      % static_cast<int>(TUISettings::kAnimationLevelNames.size());
     settings.setAnimationLevel(static_cast<AnimationLevel>(next));
+}
+
+void SettingsOverlay::cycleLogLevel() {
+    auto&     settings = TUISettings::instance();
+    const int next     = (static_cast<int>(settings.logLevel()) + 1)
+                     % static_cast<int>(TUISettings::kLogLevelNames.size());
+    settings.setLogLevel(static_cast<agentxx::util::LogLevel>(next));
+    if (onLogLevelChange_) {
+        onLogLevelChange_();
+    }
 }
 
 // ---------------------------------------------------------------------------
