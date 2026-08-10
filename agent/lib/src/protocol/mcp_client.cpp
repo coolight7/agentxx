@@ -1,5 +1,6 @@
 #include "agentxx/protocol/mcp_client.h"
 
+#include "agentxx/util/async_offload.h"
 #include "agentxx/util/exception.h"
 #include <fmt/format.h>
 #include <thread>
@@ -2137,7 +2138,24 @@ neograph::ChatTool McpClientTool::get_definition() const {
 }
 
 asio::awaitable<std::string> McpClientTool::execute_async(const neograph::json& arguments) {
-    auto result = co_await client_->callTool(def_.name, arguments);
+    // 工具调用整体超时 (配置项 toolCallTimeout, 毫秒; 0 = 不限制):
+    // - 覆盖 callTool 的完整流程 (含 HeaderMismatch 重试等), 是总超时兜底
+    // - 超时时取消底层请求 (HTTP/stdio), 返回超时错误; 外部取消按原语义传播
+    // - 内部请求级超时 (requestTimeout) 仍独立生效, 默认 60s < 120s
+    auto callWithTimeout = [&]() -> asio::awaitable<std::expected<json, std::string>> {
+        co_return co_await client_->callTool(def_.name, arguments);
+    };
+    auto result = co_await agentxx::util::asyncWithTimeout<std::expected<json, std::string>>(
+        callWithTimeout,
+        client_->config_.toolCallTimeout,
+        [this]() -> std::expected<json, std::string> {
+            return std::unexpected{fmt::format(
+                "MCP tool call [{}] timed out after {}ms",
+                def_.name,
+                client_->config_.toolCallTimeout.count()
+            )};
+        }
+    );
     if (!result.has_value()) {
         throw std::runtime_error(
             fmt::format("MCP tool call [{}] failed: {}", def_.name, result.error())

@@ -607,7 +607,7 @@ Element PlanDiagramOverlay::OnRender() {
         text(" "),
     });
 
-    // 弹窗大小: 默认 2/3 屏 (小终端保底 10 行), 在 ModalContainer 中居中后
+    // 弹窗大小: 默认 4/5 屏 (小终端保底 10 行), 在 ModalContainer 中居中后
     // 四周自然露出背景色边距; 宽度下限 40 与状态图渲染预算保持一致。
     // 注意: 高度必须同时给 GREATER_THAN 下限 —— Scrollable 的 ListView 为惰性
     // viewport (ComputeRequirement 返回 min_y=0), 滚动区 hbox 自然高度仅 1 行,
@@ -617,7 +617,7 @@ Element PlanDiagramOverlay::OnRender() {
     const int margin = 2;
     const int maxW   = std::max(40, Terminal::Size().dimx - margin * 2);
     const int maxH   = std::max(10, Terminal::Size().dimy - margin * 2);
-    const int popupH = std::max(10, maxH * 2 / 3);
+    const int popupH = std::max(10, maxH * 4 / 5);
     return vbox({
                header,
                separator(),
@@ -625,7 +625,7 @@ Element PlanDiagramOverlay::OnRender() {
                separator(),
                text(" [Wheel/Up/Down] Scroll  [Esc] Close ") | center | dim,
            })
-           | border | size(WIDTH, LESS_THAN, maxW * 2 / 3) | size(WIDTH, GREATER_THAN, 40)
+           | border | size(WIDTH, LESS_THAN, maxW * 4 / 5) | size(WIDTH, GREATER_THAN, 40)
            | size(HEIGHT, GREATER_THAN, popupH) | size(HEIGHT, LESS_THAN, popupH)
            | color(theme.accentColor);
 }

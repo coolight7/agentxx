@@ -223,16 +223,17 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
         = co_await BaseAgent::createTools();
 
     /// MCP tool
-    for (const auto& [mcpNamespace, url] : config->mcpServerUrls) {
+    for (const auto& [mcpNamespace, mcpCfg] : config->mcpServerUrls) {
         co_await agentxx::util::catchErrorAsync<bool>(
             [&]() -> asio::awaitable<bool> {
-                XX_LOGD("load mcp tool: {} | {}", mcpNamespace, url);
+                XX_LOGD("load mcp tool: {} | {}", mcpNamespace, mcpCfg.url);
                 auto mcpClient = std::make_shared<agentxx::server::McpClient>(
                     agentxx::server::McpClient::Config{
-                        .serverUrl = url,
+                        .serverUrl = mcpCfg.url,
                         .protocolVersion
                         = std::string{agentxx::server::McpClient::kProtocol2026_07_28},
-                        .toolNamespace = mcpNamespace,
+                        .toolNamespace     = mcpNamespace,
+                        .toolCallTimeout   = mcpCfg.toolTimeout,
                     }
                 );
                 auto result = co_await mcpClient->initialize();
@@ -248,17 +249,27 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
                         XX_LOGE(
                             "list mcp tool error: {} | {} | {}",
                             mcpNamespace,
-                            url,
+                            mcpCfg.url,
                             mcpTools.error()
                         );
                     }
                 } else {
-                    XX_LOGE("load mcp tool error: {} | {} | {}", mcpNamespace, url, result.error());
+                    XX_LOGE(
+                        "load mcp tool error: {} | {} | {}",
+                        mcpNamespace,
+                        mcpCfg.url,
+                        result.error()
+                    );
                 }
                 co_return true;
             },
             [&](std::string errmsg) -> asio::awaitable<bool> {
-                XX_LOGE("[agentxx] Append mcp tool error: {} | {} | {}", mcpNamespace, url, errmsg);
+                XX_LOGE(
+                    "[agentxx] Append mcp tool error: {} | {} | {}",
+                    mcpNamespace,
+                    mcpCfg.url,
+                    errmsg
+                );
                 co_return true;
             }
         );

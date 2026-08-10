@@ -29,9 +29,11 @@ inline constexpr std::string_view permissionModeName(agent::PermissionMode mode)
 
 struct YamlAppConfig {
     std::map<std::string, agent::ModelConfig> models;
-    std::map<std::string, std::string>        mcpServers;
-    std::vector<std::string>                  skillDirPaths;
-    std::vector<std::string>                  memoryFilePaths;
+    /// MCP 服务器配置 (yaml `mcp` 列表项, key 为命名空间)
+    /// - timeout 字段按秒配置, 0 = 不限制, 未配置默认 120 秒
+    std::map<std::string, agent::McpServerConfig> mcpServers;
+    std::vector<std::string>                      skillDirPaths;
+    std::vector<std::string>                      memoryFilePaths;
     std::string                               useModelDefault;
     std::string                               useModelSubagent;
     std::string                               useModelWebSearch;

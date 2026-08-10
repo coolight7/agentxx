@@ -166,6 +166,149 @@ permission_whitelist:
     XX_TEST_EXPECT_TRUE(cfg.permissionAllowPaths.empty());
 }
 
+// ---------------------------------------------------------------------------
+// mcp / skill / memory 解析 (yaml `mcp` / `skill` / `memory` 键)
+// ---------------------------------------------------------------------------
+
+void test_mcp_parse_basic() {
+    // mcp 列表项: namespace + url + timeout (秒, 默认 120)
+    auto cfg = loadYaml(R"(mcp:
+  - namespace: fs
+    url: "http://127.0.0.1:8000/mcp"
+  - namespace: git
+    url: "http://127.0.0.1:8001/mcp"
+    timeout: 30
+)");
+    XX_TEST_EXPECT_EQ(cfg.mcpServers.size(), size_t{2});
+    auto it = cfg.mcpServers.find("fs");
+    XX_TEST_EXPECT_TRUE(it != cfg.mcpServers.end());
+    if (it != cfg.mcpServers.end()) {
+        XX_TEST_EXPECT_EQ(it->second.url, std::string("http://127.0.0.1:8000/mcp"));
+        // 未配置 timeout: 默认 120 秒
+        XX_TEST_EXPECT_EQ(it->second.toolTimeout.count(), 120 * 1000);
+    }
+    it = cfg.mcpServers.find("git");
+    XX_TEST_EXPECT_TRUE(it != cfg.mcpServers.end());
+    if (it != cfg.mcpServers.end()) {
+        XX_TEST_EXPECT_EQ(it->second.url, std::string("http://127.0.0.1:8001/mcp"));
+        XX_TEST_EXPECT_EQ(it->second.toolTimeout.count(), 30 * 1000);
+    }
+}
+
+void test_mcp_timeout_zero_unlimited() {
+    // timeout: 0 表示不限制 (toolTimeout 为 0)
+    auto cfg = loadYaml(R"(mcp:
+  - namespace: fs
+    url: "http://127.0.0.1:8000/mcp"
+    timeout: 0
+)");
+    auto it = cfg.mcpServers.find("fs");
+    XX_TEST_EXPECT_TRUE(it != cfg.mcpServers.end());
+    if (it != cfg.mcpServers.end()) {
+        XX_TEST_EXPECT_EQ(it->second.toolTimeout.count(), 0);
+    }
+}
+
+void test_mcp_timeout_invalid_fallback() {
+    // 非法 timeout 值: 容错回退默认 120 秒, 不崩溃
+    auto cfg = loadYaml(R"(mcp:
+  - namespace: fs
+    url: "http://127.0.0.1:8000/mcp"
+    timeout: abc
+)");
+    auto it = cfg.mcpServers.find("fs");
+    XX_TEST_EXPECT_TRUE(it != cfg.mcpServers.end());
+    if (it != cfg.mcpServers.end()) {
+        XX_TEST_EXPECT_EQ(it->second.toolTimeout.count(), 120 * 1000);
+    }
+}
+
+void test_mcp_missing_fields_skipped() {
+    // 缺 namespace 或 url 的条目跳过, 不影响其他条目
+    auto cfg = loadYaml(R"(mcp:
+  - namespace: ok
+    url: "http://127.0.0.1:8000/mcp"
+  - url: "http://127.0.0.1:8001/mcp"
+  - namespace: no-url
+)");
+    XX_TEST_EXPECT_EQ(cfg.mcpServers.size(), size_t{1});
+    XX_TEST_EXPECT_TRUE(cfg.mcpServers.contains("ok"));
+}
+
+void test_mcp_env_expand() {
+    // namespace/url/timeout 均支持 ${VAR} 展开
+    auto path = fs::temp_directory_path()
+                / fmt::format(
+                    "agentxx_config_loader_test_{}.yaml",
+                    std::chrono::steady_clock::now().time_since_epoch().count()
+                );
+    {
+        std::ofstream ofs(path);
+        ofs << R"(mcp:
+  - namespace: ${AGENTXX_TEST_MCP_NS}
+    url: "${AGENTXX_TEST_MCP_URL}"
+    timeout: ${AGENTXX_TEST_MCP_TIMEOUT}
+)";
+    }
+    auto cfg = agentxx::client::loadYamlConfig(
+        path.string(),
+        {
+            {"AGENTXX_TEST_MCP_NS",     "fs"                                   },
+            {"AGENTXX_TEST_MCP_URL",    "http://127.0.0.1:9000/mcp"            },
+            {"AGENTXX_TEST_MCP_TIMEOUT", "45"                                  },
+        },
+        {}
+    );
+    std::error_code ec;
+    fs::remove(path, ec);
+
+    auto it = cfg.mcpServers.find("fs");
+    XX_TEST_EXPECT_TRUE(it != cfg.mcpServers.end());
+    if (it != cfg.mcpServers.end()) {
+        XX_TEST_EXPECT_EQ(it->second.url, std::string("http://127.0.0.1:9000/mcp"));
+        XX_TEST_EXPECT_EQ(it->second.toolTimeout.count(), 45 * 1000);
+    }
+}
+
+void test_skill_parse() {
+    auto cfg = loadYaml(R"(skill:
+  - "C:/skills/skill_a"
+  - "C:/skills/skill_b"
+)");
+    XX_TEST_EXPECT_EQ(cfg.skillDirPaths.size(), size_t{2});
+    if (cfg.skillDirPaths.size() == 2) {
+        XX_TEST_EXPECT_EQ(cfg.skillDirPaths[0], std::string("C:/skills/skill_a"));
+        XX_TEST_EXPECT_EQ(cfg.skillDirPaths[1], std::string("C:/skills/skill_b"));
+    }
+}
+
+void test_memory_parse() {
+    auto cfg = loadYaml(R"(memory:
+  - "C:/memory/memory_a.md"
+  - "C:/memory/memory_b.md"
+)");
+    XX_TEST_EXPECT_EQ(cfg.memoryFilePaths.size(), size_t{2});
+    if (cfg.memoryFilePaths.size() == 2) {
+        XX_TEST_EXPECT_EQ(cfg.memoryFilePaths[0], std::string("C:/memory/memory_a.md"));
+        XX_TEST_EXPECT_EQ(cfg.memoryFilePaths[1], std::string("C:/memory/memory_b.md"));
+    }
+}
+
+void test_legacy_keys_ignored() {
+    // 旧键名 (mcp_servers/skill_dirs/memory_files) 已废弃, 不再解析
+    auto cfg = loadYaml(R"(mcp_servers:
+  - namespace: old
+    url: "http://127.0.0.1:8000/mcp"
+skill_dirs:
+  - "C:/skills/old"
+memory_files:
+  - "C:/memory/old.md"
+)");
+    XX_TEST_EXPECT_TRUE(cfg.mcpServers.empty());
+    XX_TEST_EXPECT_TRUE(cfg.skillDirPaths.empty());
+    XX_TEST_EXPECT_TRUE(cfg.memoryFilePaths.empty());
+}
+
 TestResult testConfigLoader() {
     g_config_loader_passed = 0;
     g_config_loader_failed = 0;
@@ -182,6 +325,14 @@ TestResult testConfigLoader() {
     test_permission_lists_absent();
     test_permission_lists_env_expand();
     test_permission_legacy_flat_keys_ignored();
+    test_mcp_parse_basic();
+    test_mcp_timeout_zero_unlimited();
+    test_mcp_timeout_invalid_fallback();
+    test_mcp_missing_fields_skipped();
+    test_mcp_env_expand();
+    test_skill_parse();
+    test_memory_parse();
+    test_legacy_keys_ignored();
 
     return TestResult{g_config_loader_passed, g_config_loader_failed};
 }

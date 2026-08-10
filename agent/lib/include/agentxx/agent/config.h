@@ -3,6 +3,7 @@
 #include "neograph/api.h"
 #include "neograph/json.h"
 #include "prompt.h"
+#include <chrono>
 #include <map>
 #include <optional>
 #include <string>
@@ -67,6 +68,16 @@ public:
     bool isOpenaiResponseApi() const;
 };
 
+/// MCP 服务器配置 (yaml `mcp` 列表项; key 为命名空间)
+struct McpServerConfig {
+    /// MCP 服务器 URL
+    std::string url;
+    /// MCP 工具调用超时限制 (毫秒)
+    /// - 0 表示不限制
+    /// - 默认 120 秒; yaml 中按秒配置 (timeout 字段, 0=不限制)
+    std::chrono::milliseconds toolTimeout{std::chrono::seconds{120}};
+};
+
 class AgentConfig {
 public:
 
@@ -102,9 +113,8 @@ public:
     std::vector<std::string> memoryFilePaths{};
     /// MCP 服务器配置
     /// - key: MCP 命名空间 (每个 MCP 的命名空间应当唯一，作为该服务所有 tool 的名称前缀)
-    /// - value: MCP 服务器 URL
-    std::map<std::string, std::string> mcpServerUrls{};
-    std::vector<std::string>           ragDocsPaths{};
+    std::map<std::string, McpServerConfig> mcpServerUrls{};
+    std::vector<std::string>               ragDocsPaths{};
 
     /// 统一数据根目录 (全局设置/会话/codegraph 索引等数据的存放根)
     /// - 为空表示不持久化: 全局设置/会话/codegraph 等数据仅存内存,

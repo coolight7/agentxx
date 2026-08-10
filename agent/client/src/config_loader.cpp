@@ -2,6 +2,8 @@
 
 #include "agentxx/util/string_util.h"
 #include "yaml-cpp/yaml.h"
+#include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <fstream>
 
@@ -339,8 +341,8 @@ YamlAppConfig loadYamlConfig(
         );
     }
 
-    if (root["mcp_servers"] && root["mcp_servers"].IsSequence()) {
-        for (const auto& node : root["mcp_servers"]) {
+    if (root["mcp"] && root["mcp"].IsSequence()) {
+        for (const auto& node : root["mcp"]) {
             auto ns = resolveEnvVars(
                 node["namespace"].as<std::string>(""),
                 dotEnvVars,
@@ -348,23 +350,35 @@ YamlAppConfig loadYamlConfig(
             );
             auto url = resolveEnvVars(node["url"].as<std::string>(""), dotEnvVars, overrideEnvVars);
             if (ns.empty() || url.empty()) {
-                XX_LOGW(
-                    R"([Config] Warning: mcp_servers entry missing `namespace` or `url`, skipped)"
-                );
+                XX_LOGW(R"([Config] Warning: mcp entry missing `namespace` or `url`, skipped)");
                 continue;
+            }
+            agent::McpServerConfig mcpCfg;
+            mcpCfg.url = url;
+            // 工具调用超时 (秒, 0=不限制, 默认 120); 容错解析, 非法时保留默认
+            if (node["timeout"]) {
+                auto val = resolveEnvVars(
+                    node["timeout"].as<std::string>("120"),
+                    dotEnvVars,
+                    overrideEnvVars
+                );
+                int parsed = 120;
+                if (util::parseNumberFromString(val, parsed).ec == std::errc{}) {
+                    mcpCfg.toolTimeout = std::chrono::seconds{std::max(parsed, 0)};
+                }
             }
             if (cfg.mcpServers.contains(ns)) {
                 XX_LOGW(
-                    R"([Config] Warning: duplicate mcp namespace '{}', overriding its url)",
+                    R"([Config] Warning: duplicate mcp namespace '{}', overriding its config)",
                     ns
                 );
             }
-            cfg.mcpServers[ns] = url;
+            cfg.mcpServers[ns] = std::move(mcpCfg);
         }
     }
 
-    if (root["skill_dirs"] && root["skill_dirs"].IsSequence()) {
-        for (const auto& node : root["skill_dirs"]) {
+    if (root["skill"] && root["skill"].IsSequence()) {
+        for (const auto& node : root["skill"]) {
             auto p = resolveEnvVars(node.as<std::string>(""), dotEnvVars, overrideEnvVars);
             if (!p.empty()) {
                 cfg.skillDirPaths.push_back(std::move(p));
@@ -372,8 +386,8 @@ YamlAppConfig loadYamlConfig(
         }
     }
 
-    if (root["memory_files"] && root["memory_files"].IsSequence()) {
-        for (const auto& node : root["memory_files"]) {
+    if (root["memory"] && root["memory"].IsSequence()) {
+        for (const auto& node : root["memory"]) {
             auto p = resolveEnvVars(node.as<std::string>(""), dotEnvVars, overrideEnvVars);
             if (!p.empty()) {
                 cfg.memoryFilePaths.push_back(std::move(p));
