@@ -232,9 +232,9 @@ Options:
     // 权限询问处理模式启动提示 (yaml `permission.mode`, 默认 ask):
     // ask = 工作目录内允许/其他询问; all_ask = 全部询问; pass = 全部放行; deny = 全部拒绝
     XX_LOGI(
-        "[Config] permission.mode: {} (ask=工作目录内允许/其他询问, all_ask=全部询问, "
-        "pass=全部放行, deny=全部拒绝)",
-        agentxx::client::permissionModeName(yamlCfg.permissionMode)
+        "[Config] permission.mode: {} ({})",
+        agentxx::client::permissionModeName(yamlCfg.permissionMode),
+        agentxx::client::permissionModeDepict(yamlCfg.permissionMode)
     );
     if (!yamlCfg.permissionAllowPaths.empty()) {
         XX_LOGI(
@@ -331,7 +331,7 @@ Options:
     config->enableCodeGraph = yamlCfg.enableCodeGraph;
 
     // 权限配置 (模式 + 白/黑名单; CodeAgent 启动时按此注册文件系统读写规则)
-    config->permissionMode      = yamlCfg.permissionMode;
+    config->permissionMode       = yamlCfg.permissionMode;
     config->permissionAllowPaths = yamlCfg.permissionAllowPaths;
     config->permissionDenyPaths  = yamlCfg.permissionDenyPaths;
 

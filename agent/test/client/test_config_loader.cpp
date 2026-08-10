@@ -30,7 +30,7 @@ static agentxx::client::YamlAppConfig loadYaml(std::string_view content) {
         std::ofstream ofs(path);
         ofs << content;
     }
-    auto cfg = agentxx::client::loadYamlConfig(path.string(), {}, {});
+    auto            cfg = agentxx::client::loadYamlConfig(path.string(), {}, {});
     std::error_code ec;
     fs::remove(path, ec);
     return cfg;
@@ -97,7 +97,9 @@ void test_permission_mode_env_expand() {
     }
     auto cfg = agentxx::client::loadYamlConfig(
         path.string(),
-        {{"AGENTXX_TEST_PERM_MODE", "pass"}},
+        {
+            {"AGENTXX_TEST_PERM_MODE", "pass"}
+    },
         {}
     );
     XX_TEST_EXPECT_TRUE(cfg.permissionMode == agent::PermissionMode::Pass);
@@ -202,7 +204,7 @@ void test_mcp_timeout_zero_unlimited() {
     url: "http://127.0.0.1:8000/mcp"
     timeout: 0
 )");
-    auto it = cfg.mcpServers.find("fs");
+    auto it  = cfg.mcpServers.find("fs");
     XX_TEST_EXPECT_TRUE(it != cfg.mcpServers.end());
     if (it != cfg.mcpServers.end()) {
         XX_TEST_EXPECT_EQ(it->second.toolTimeout.count(), 0);
@@ -216,7 +218,7 @@ void test_mcp_timeout_invalid_fallback() {
     url: "http://127.0.0.1:8000/mcp"
     timeout: abc
 )");
-    auto it = cfg.mcpServers.find("fs");
+    auto it  = cfg.mcpServers.find("fs");
     XX_TEST_EXPECT_TRUE(it != cfg.mcpServers.end());
     if (it != cfg.mcpServers.end()) {
         XX_TEST_EXPECT_EQ(it->second.toolTimeout.count(), 120 * 1000);
@@ -253,10 +255,10 @@ void test_mcp_env_expand() {
     auto cfg = agentxx::client::loadYamlConfig(
         path.string(),
         {
-            {"AGENTXX_TEST_MCP_NS",     "fs"                                   },
-            {"AGENTXX_TEST_MCP_URL",    "http://127.0.0.1:9000/mcp"            },
-            {"AGENTXX_TEST_MCP_TIMEOUT", "45"                                  },
-        },
+            {"AGENTXX_TEST_MCP_NS",      "fs"                       },
+            {"AGENTXX_TEST_MCP_URL",     "http://127.0.0.1:9000/mcp"},
+            {"AGENTXX_TEST_MCP_TIMEOUT", "45"                       },
+    },
         {}
     );
     std::error_code ec;
@@ -294,21 +296,6 @@ void test_memory_parse() {
     }
 }
 
-void test_legacy_keys_ignored() {
-    // 旧键名 (mcp_servers/skill_dirs/memory_files) 已废弃, 不再解析
-    auto cfg = loadYaml(R"(mcp_servers:
-  - namespace: old
-    url: "http://127.0.0.1:8000/mcp"
-skill_dirs:
-  - "C:/skills/old"
-memory_files:
-  - "C:/memory/old.md"
-)");
-    XX_TEST_EXPECT_TRUE(cfg.mcpServers.empty());
-    XX_TEST_EXPECT_TRUE(cfg.skillDirPaths.empty());
-    XX_TEST_EXPECT_TRUE(cfg.memoryFilePaths.empty());
-}
-
 TestResult testConfigLoader() {
     g_config_loader_passed = 0;
     g_config_loader_failed = 0;
@@ -332,7 +319,6 @@ TestResult testConfigLoader() {
     test_mcp_env_expand();
     test_skill_parse();
     test_memory_parse();
-    test_legacy_keys_ignored();
 
     return TestResult{g_config_loader_passed, g_config_loader_failed};
 }

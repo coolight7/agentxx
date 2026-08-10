@@ -27,6 +27,20 @@ inline constexpr std::string_view permissionModeName(agent::PermissionMode mode)
     return "ask";
 }
 
+inline constexpr std::string_view permissionModeDepict(agent::PermissionMode mode) noexcept {
+    switch (mode) {
+        case agent::PermissionMode::Ask:
+            return "工作目录内允许/其他询问";
+        case agent::PermissionMode::AllAsk:
+            return "全部询问";
+        case agent::PermissionMode::Pass:
+            return "全部允许";
+        case agent::PermissionMode::Deny:
+            return "全部拒绝";
+    }
+    return "ask";
+}
+
 struct YamlAppConfig {
     std::map<std::string, agent::ModelConfig> models;
     /// MCP 服务器配置 (yaml `mcp` 列表项, key 为命名空间)
@@ -34,13 +48,13 @@ struct YamlAppConfig {
     std::map<std::string, agent::McpServerConfig> mcpServers;
     std::vector<std::string>                      skillDirPaths;
     std::vector<std::string>                      memoryFilePaths;
-    std::string                               useModelDefault;
-    std::string                               useModelSubagent;
-    std::string                               useModelWebSearch;
-    std::string                               useModelAcp;
-    std::string                               useModelTrain;
-    std::string                               useModelTrainScorer;
-    std::string                               useModelTrainOptimizer;
+    std::string                                   useModelDefault;
+    std::string                                   useModelSubagent;
+    std::string                                   useModelWebSearch;
+    std::string                                   useModelAcp;
+    std::string                                   useModelTrain;
+    std::string                                   useModelTrainScorer;
+    std::string                                   useModelTrainOptimizer;
     /// 统一数据根目录 (yaml `data_dir`, 支持 `~`/环境变量展开)
     /// - 为空表示不持久化: 设置/会话/codegraph 数据仅存内存 (BaseAgent 输出警告)
     /// - 特殊关键字 `default` (仅 tui/cli 模式): 使用当前系统数据目录

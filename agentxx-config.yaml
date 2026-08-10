@@ -161,7 +161,7 @@ use_model:
 # - namespace: 该 MCP 的命名空间，应当唯一；会作为其所有 tool 的名称前缀 (格式 "namespace_toolName")
 #              命名空间重复时会警告，且后出现的 url 覆盖先前的
 # - url:       MCP 服务器地址
-mcp_servers:
+mcp:
   - namespace: musicxx
     url: "http://172.29.48.1:17001/mcp"
   # - namespace: exa
@@ -170,14 +170,14 @@ mcp_servers:
 # Skill 文件夹路径列表
 # - 支持绝对路径或相对路径（相对路径按程序工作目录解析）
 # - 每个文件夹下可包含多个 skill 子目录，每个子目录包含 SKILL.md
-skill_dirs:
+skill:
   # - "/absolute/path/to/skills"
   # - "relative/path/to/skills"
 
 # 上下文文件路径列表
 # - 支持绝对路径或相对路径（相对路径按程序工作目录解析）
 # - 文件内容会在每次模型调用时注入系统提示词
-memory_files:
+memory:
   # - "/absolute/path/to/context.md"
   # - "relative/path/to/AGENTS.md"
   - "AGENTS.md"
