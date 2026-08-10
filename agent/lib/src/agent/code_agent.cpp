@@ -43,21 +43,75 @@ asio::awaitable<void> CodeAgent::setupMiddleware() {
     {
         auto permission
             = std::make_shared<agentxx::middleware::PermissionMiddlewareHandle>(agentContext);
-        permission->setFilesystemPermission(
-            fmt::format("{}/*", agentxx::agent::AgentConfigStatic::getCurrentWorkPath()),
-            agentxx::middleware::PermissionOperator::ALLOW,
-            agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
-        );
-        permission->setFilesystemPermission(
-            "/tmp/test/*",
-            agentxx::middleware::PermissionOperator::DENY,
-            agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
-        );
-        permission->setFilesystemPermission(
-            "/*",
-            agentxx::middleware::PermissionOperator::INTERRUPT,
-            agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
-        );
+        // 权限规则注册 (按 yaml 配置 permission 块: mode / whitelist / blacklist,
+        // 读写均注册同一套规则):
+        // - 白名单: 始终放行 (最长前缀匹配, 支持 * 通配符)
+        // - 黑名单: 始终拒绝 (与白名单同路径时后注册覆盖白名单, 优先生效)
+        // - 模式默认规则经 noRuleOperator 生效 (未命中任何已注册规则时的
+        //   兜底处理, 见 PermissionMiddlewareHandle::noRuleOperator):
+        //   ask=工作目录内 ALLOW + 其余 INTERRUPT / all_ask=INTERRUPT /
+        //   pass=ALLOW / deny=DENY
+        // 注: 不依赖 "/*" 兜底规则 — 路由最长前缀回退到深层注册子树 (如白名单
+        // 目录) 时不会命中根节点 "/*" 规则, 必须由 noRuleOperator 保证语义
+        for (const auto& p : config->permissionAllowPaths) {
+            permission->setFilesystemPermission(
+                p,
+                agentxx::middleware::PermissionOperator::ALLOW,
+                agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
+            );
+            permission->setFilesystemPermission(
+                p,
+                agentxx::middleware::PermissionOperator::ALLOW,
+                agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionREAD
+            );
+        }
+        for (const auto& p : config->permissionDenyPaths) {
+            permission->setFilesystemPermission(
+                p,
+                agentxx::middleware::PermissionOperator::DENY,
+                agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
+            );
+            permission->setFilesystemPermission(
+                p,
+                agentxx::middleware::PermissionOperator::DENY,
+                agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionREAD
+            );
+        }
+        switch (config->permissionMode) {
+            case agentxx::agent::PermissionMode::Pass:
+                // 全部放行: 无规则即放行
+                permission->noRuleOperator = agentxx::middleware::PermissionOperator::ALLOW;
+                break;
+            case agentxx::agent::PermissionMode::Deny:
+                // 全部拒绝: 无规则即拒绝
+                permission->noRuleOperator = agentxx::middleware::PermissionOperator::DENY;
+                break;
+            case agentxx::agent::PermissionMode::AllAsk:
+                // 所有路径均询问: 无规则即询问
+                permission->noRuleOperator = agentxx::middleware::PermissionOperator::INTERRUPT;
+                break;
+            case agentxx::agent::PermissionMode::Ask:
+            default:
+                // 当前工作目录内允许, 其他路径询问
+                permission->setFilesystemPermission(
+                    fmt::format(
+                        "{}/*",
+                        agentxx::agent::AgentConfigStatic::getCurrentWorkPath()
+                    ),
+                    agentxx::middleware::PermissionOperator::ALLOW,
+                    agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
+                );
+                permission->setFilesystemPermission(
+                    fmt::format(
+                        "{}/*",
+                        agentxx::agent::AgentConfigStatic::getCurrentWorkPath()
+                    ),
+                    agentxx::middleware::PermissionOperator::ALLOW,
+                    agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionREAD
+                );
+                permission->noRuleOperator = agentxx::middleware::PermissionOperator::INTERRUPT;
+                break;
+        }
         // 注册 tool 名 -> 权限处理函数; 未调用则 handles 为空, 权限拦截不会触发
         permission->registerHandles();
         agentContext->permissionMiddleware = permission;

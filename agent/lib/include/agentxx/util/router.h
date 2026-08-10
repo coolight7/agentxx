@@ -255,6 +255,14 @@ public:
     XXRouter() noexcept :
         routerTree("/") {}
 
+    /// 析构时清空共享缓存:
+    /// cacheMap 为同类所有实例共享的 thread_local 缓存, 其中保存的是本路由树
+    /// 的原始节点指针; 树销毁后必须清空, 否则后续其他路由实例 (如按模式重建的
+    /// 权限中间件) 可能命中悬空指针导致 use-after-free
+    ~XXRouter() {
+        this->cacheMap.clear();
+    }
+
     /// 添加路由
     /// - 允许使用通配符 *
     /// - 允许同时设置多个类型枚举

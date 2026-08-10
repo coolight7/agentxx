@@ -74,4 +74,10 @@ if %ERRORLEVEL% neq 0 (
     exit /b 1
 )
 
-copy "%build_dir%\exec\agentxx_cli.exe" "%output_dir%\"
+rem Copy the exe to the output dir. Failure (e.g. target file locked by a
+rem running process / output dir missing) is only reported, and does NOT fail
+rem the build, because the compiled artifact in %build_dir% is already valid.
+rem NOTE: keep ASCII only - multi-byte chars break cmd.exe batch parsing.
+copy /Y "%build_dir%\exec\agentxx_cli.exe" "%output_dir%\" >NUL 2>&1
+if errorlevel 1 echo copy agentxx_cli.exe to "%output_dir%" failed (ignored)
+exit /b 0

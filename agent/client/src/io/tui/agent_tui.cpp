@@ -10,6 +10,7 @@
 #include "agentxx/middlewares/permission.h"
 #include "agentxx/util/async_offload.h"
 #include "agentxx/util/exception.h"
+#include "agentxx/util/log.h"
 #include "agentxx/util/string_util.h"
 #include "asio/as_tuple.hpp"
 #include "asio/co_spawn.hpp"
@@ -41,7 +42,7 @@ TUIClientAgentIO::TUIClientAgentIO(
     std::shared_ptr<agentxx::agent::AgentContext> agentContext,
     std::string                                   threadId,
     TUITheme                                      theme,
-    agentxx::agent::PermissionMode                 permissionMode
+    agentxx::agent::PermissionMode                permissionMode
 ) :
     agentContext_(std::move(agentContext)),
     theme_(theme),
@@ -107,20 +108,6 @@ void TUIClientAgentIO::postRedraw() {
 
 void TUIClientAgentIO::start() {
     running_ = true;
-    // 启动提示: 输出当前权限询问处理模式 (来自 yaml 配置 `permission.mode`,
-    // 该配置项已从 TUI 设置弹窗移除, 仅在启动时提示一次)
-    {
-        std::lock_guard<std::mutex> lock(sharedState_.mutex());
-        auto&                       st = sharedState_.mutableState();
-        st.messages.push_back(std::make_shared<TUIMessage>(TUIMessage::makeText(
-            TUIMessage::Role::System,
-            fmt::format(
-                "[Permission] Mode: {} (yaml `permission.mode`: ask=工作目录内允许/其他询问, "
-                "all_ask=全部询问, pass=全部放行, deny=全部拒绝)",
-                agentxx::client::permissionModeName(permissionMode_)
-            )
-        )));
-    }
     if (logSink_) {
         agentxx::util::LogDispatcher::instance().addSink(logSink_);
     }
@@ -1019,9 +1006,9 @@ asio::awaitable<neograph::json> TUIClientAgentIO::handleInterrupt(
     // 服务端权限处理器经 InterruptHandleArg.arg 透传权限上下文 {category, target}:
     // - category: 权限分类 ("filesystem_read" / "filesystem_write"), 决定规则作用域
     // - target:   受约束目标 (已标准化的绝对路径, 与中间件规则匹配口径一致)
-    const bool   isPermission = (interruptNode == "permission");
-    std::string  permCategory;
-    std::string  permTarget;
+    const bool  isPermission = (interruptNode == "permission");
+    std::string permCategory;
+    std::string permTarget;
     if (isPermission) {
         if (handleArg.arg.is_object()) {
             permCategory = handleArg.arg.value("category", std::string{});
@@ -1042,11 +1029,7 @@ asio::awaitable<neograph::json> TUIClientAgentIO::handleInterrupt(
                 auto&                       st = sharedState_.mutableState();
                 st.messages.push_back(std::make_shared<TUIMessage>(TUIMessage::makeText(
                     TUIMessage::Role::System,
-                    fmt::format(
-                        "[Permission] Pass mode: allow {} ({})",
-                        shownTarget,
-                        permCategory
-                    )
+                    fmt::format("[Permission] Pass mode: allow {} ({})", shownTarget, permCategory)
                 )));
             }
             postRedraw();
@@ -1058,11 +1041,7 @@ asio::awaitable<neograph::json> TUIClientAgentIO::handleInterrupt(
                 auto&                       st = sharedState_.mutableState();
                 st.messages.push_back(std::make_shared<TUIMessage>(TUIMessage::makeText(
                     TUIMessage::Role::System,
-                    fmt::format(
-                        "[Permission] Deny mode: reject {} ({})",
-                        shownTarget,
-                        permCategory
-                    )
+                    fmt::format("[Permission] Deny mode: reject {} ({})", shownTarget, permCategory)
                 )));
             }
             postRedraw();
@@ -1134,7 +1113,7 @@ asio::awaitable<neograph::json> TUIClientAgentIO::handleInterrupt(
     auto                                    result = neograph::json::array();
     std::vector<std::optional<std::string>> values(total);
     size_t                                  confirmedCount = 0;
-    bool                                    remember       = false; // 权限询问: 记住本次选择
+    bool                                    remember = false; // 权限询问: 记住本次选择
     while (confirmedCount < values.size()) {
         auto [ec, idx, val, rem] = co_await ch->async_receive(asio::as_tuple(asio::use_awaitable));
         if (ec) {
@@ -1148,8 +1127,8 @@ asio::awaitable<neograph::json> TUIClientAgentIO::handleInterrupt(
         if (idx < 1 || idx > total || values[static_cast<size_t>(idx - 1)].has_value()) {
             continue; // 防御: 非法/重复序号
         }
-        values[static_cast<size_t>(idx - 1)] = val;
-        remember                            |= rem;
+        values[static_cast<size_t>(idx - 1)]  = val;
+        remember                             |= rem;
         ++confirmedCount;
     }
     for (auto& v : values) {
@@ -1162,8 +1141,8 @@ asio::awaitable<neograph::json> TUIClientAgentIO::handleInterrupt(
     // 后续访问该路径或其子目录时按本次允许/拒绝处理, 不再询问
     if (isPermission && remember && !permTarget.empty() && confirmedCount > 0
         && values[0].has_value()) {
-        const auto& v     = *values[0];
-        const bool  allow = (v == "true" || v == "yes");
+        const auto&  v     = *values[0];
+        const bool   allow = (v == "true" || v == "yes");
         const size_t index
             = (permCategory == "filesystem_write")
                   ? agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
