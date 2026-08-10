@@ -62,6 +62,10 @@ public:
         std::string               toolNamespace;
         std::chrono::milliseconds requestTimeout{60000};
         std::chrono::milliseconds initTimeout{10000};
+        /// MCP 工具调用超时限制 (McpClientTool::execute_async 整体超时, 毫秒)
+        /// - 0 表示不限制 (无整体超时, 仅受 requestTimeout 等内部超时约束)
+        /// - 默认 120 秒; 可在 yaml 中对每个 mcp 单独配置 (单位秒, 0=不限制)
+        std::chrono::milliseconds toolCallTimeout{120000};
         util::HeaderMap           extraHeaders;
 
         bool isHttp() const {

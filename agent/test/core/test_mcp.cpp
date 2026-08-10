@@ -2373,6 +2373,128 @@ asio::awaitable<void> test_mcp_client_tool_namespace() {
 }
 
 // -----------------------------------------------------------------------
+// McpClientTool tool call timeout tests
+// -----------------------------------------------------------------------
+
+asio::awaitable<void> test_mcp_client_tool_timeout() {
+    using Server = McpServer;
+
+    Server::Config cfg;
+    cfg.httpConfig.address          = "127.0.0.1";
+    cfg.httpConfig.port             = 0;
+    cfg.httpConfig.ioThreads        = 1;
+    cfg.httpConfig.accessLogEnabled = false;
+
+    Server            server(std::move(cfg));
+    McpToolDefinition def;
+    def.name        = "slow";
+    def.description = "Slow tool that sleeps 1500ms";
+    def.inputSchema = json::parse(R"({"type":"object","properties":{}})");
+    server.addTool(def, [](const json&) -> json {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+        json content;
+        content["type"] = "text";
+        content["text"] = "done";
+        return content;
+    });
+
+    std::thread serverThread([&server]() {
+        server.start();
+    });
+
+    uint16_t port = 0;
+    for (int i = 0; i < 100; ++i) {
+        port = server.port();
+        if (port != 0) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    if (port == 0) {
+        TEST_FAIL << "McpServer failed to start" << std::endl;
+        g_mcp_failed++;
+        server.stop();
+        serverThread.join();
+        co_return;
+    }
+
+    std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
+
+    for (int i = 0; i < 100; ++i) {
+        try {
+            asio::io_context      tmpCtx;
+            asio::ip::tcp::socket sock(tmpCtx);
+            sock.connect(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), port));
+            sock.close();
+            break;
+        } catch (...) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+    }
+
+    // 1. toolCallTimeout 有限 (300ms): execute_async 超时抛异常
+    {
+        McpClient::Config clientCfg;
+        clientCfg.serverUrl       = baseUrl + "/mcp";
+        clientCfg.requestTimeout  = std::chrono::seconds(5);
+        clientCfg.initTimeout     = std::chrono::seconds(5);
+        clientCfg.toolCallTimeout = std::chrono::milliseconds(300);
+
+        auto client = std::make_shared<McpClient>(std::move(clientCfg));
+        auto init   = co_await client->initialize();
+        XX_TEST_EXPECT_TRUE(init.has_value());
+
+        auto tools = co_await client->listTools();
+        XX_TEST_EXPECT_TRUE(tools.has_value());
+        if (tools.has_value() && !tools->empty()) {
+            auto    tool     = client->createTool((*tools)[0], {});
+            bool    timedOut = false;
+            bool    success  = false;
+            co_await agentxx::util::catchErrorAsync<bool>(
+                [&]() -> asio::awaitable<bool> {
+                    auto r = co_await tool->execute_async(json::object());
+                    success = (r == "done");
+                    co_return true;
+                },
+                [&](std::string errmsg) -> asio::awaitable<bool> {
+                    TEST_INFO << "tool timeout error: " << errmsg << std::endl;
+                    timedOut = errmsg.find("timed out") != std::string::npos;
+                    co_return true;
+                }
+            );
+            XX_TEST_EXPECT_FALSE(success);
+            XX_TEST_EXPECT_TRUE(timedOut);
+        }
+        co_await client->close();
+    }
+
+    // 2. toolCallTimeout = 0 (不限制): 等待慢工具完成, 应成功返回
+    {
+        McpClient::Config clientCfg;
+        clientCfg.serverUrl       = baseUrl + "/mcp";
+        clientCfg.requestTimeout  = std::chrono::seconds(5);
+        clientCfg.initTimeout     = std::chrono::seconds(5);
+        clientCfg.toolCallTimeout = std::chrono::milliseconds(0);
+
+        auto client = std::make_shared<McpClient>(std::move(clientCfg));
+        auto init   = co_await client->initialize();
+        XX_TEST_EXPECT_TRUE(init.has_value());
+
+        auto tools = co_await client->listTools();
+        XX_TEST_EXPECT_TRUE(tools.has_value());
+        if (tools.has_value() && !tools->empty()) {
+            auto tool   = client->createTool((*tools)[0], {});
+            auto result = co_await tool->execute_async(json::object());
+            XX_TEST_EXPECT_EQ(result, "done");
+        }
+        co_await client->close();
+    }
+
+    server.stop();
+    serverThread.join();
+}
+
+// -----------------------------------------------------------------------
 // 2026-07-28 protocol tests
 // -----------------------------------------------------------------------
 
@@ -3426,6 +3548,7 @@ asio::awaitable<TestResult> run_mcp_tests() {
     test_mcp_server_2025_03_26_stdio();
     co_await test_mcp_client_http();
     co_await test_mcp_client_tool_namespace();
+    co_await test_mcp_client_tool_timeout();
     co_await test_mcp_client_2025_version();
     co_await test_mcp_server_cross_version_http();
     co_await test_mcp_client_accept_header();

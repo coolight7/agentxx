@@ -309,7 +309,7 @@ Options:
     applySubagentModelToConfig(config, yamlCfg.models, yamlCfg.useModelSubagent);
     applyWebSearchModelToConfig(config, yamlCfg.models, yamlCfg.useModelWebSearch);
     applyAvailableModelsToConfig(config, yamlCfg.models, yamlCfg.useModelDefault);
-    // MCP 服务器 (来自 config.yaml 的 mcp_servers, key 为命名空间)
+    // MCP 服务器 (来自 config.yaml 的 mcp, key 为命名空间)
     config->mcpServerUrls = yamlCfg.mcpServers;
 
     // 解析路径：相对路径按程序工作目录解析为绝对路径
