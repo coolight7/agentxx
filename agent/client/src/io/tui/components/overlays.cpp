@@ -184,12 +184,15 @@ bool SettingsOverlay::OnEvent(Event event) {
     }
     if (event == Event::Return) {
         if (selectedIndex_ == 0) {
+            // 主题切换同步持久化到全局设置数据库, 重启后恢复
+            TUISettings::instance().setThemeKind(TUISettings::kThemeDark);
             *ctx_.theme = TUITheme::darkTheme();
             ctx_.postRedraw();
             if (onClose_) {
                 onClose_();
             }
         } else if (selectedIndex_ == 1) {
+            TUISettings::instance().setThemeKind(TUISettings::kThemeLight);
             *ctx_.theme = TUITheme::lightTheme();
             ctx_.postRedraw();
             if (onClose_) {
@@ -197,10 +200,8 @@ bool SettingsOverlay::OnEvent(Event event) {
             }
         } else if (selectedIndex_ == 2 && ctx_.showSystemInfo) {
             // 切换后保持弹窗打开, 便于继续调整; 由 [Esc] 关闭
-            ctx_.showSystemInfo->store(
-                !ctx_.showSystemInfo->load(std::memory_order_relaxed),
-                std::memory_order_relaxed
-            );
+            // 经 TUISettings 设置以同步持久化到全局设置数据库 ({dataDir}/sqlite/global.db)
+            TUISettings::instance().setShowSystemInfo(!TUISettings::instance().showSystemInfo());
             ctx_.postRedraw();
         } else if (selectedIndex_ == 3) {
             // 动画等级循环切换; 切换后保持弹窗打开, 便于继续调整
@@ -228,6 +229,8 @@ bool SettingsOverlay::handleMouse(const Mouse& mouse) {
         return false;
     }
     if (themeBoxes_[0].Contain(mouse.x, mouse.y)) {
+        // 主题切换同步持久化到全局设置数据库, 重启后恢复
+        TUISettings::instance().setThemeKind(TUISettings::kThemeDark);
         *ctx_.theme = TUITheme::darkTheme();
         if (onClose_) {
             onClose_();
@@ -235,6 +238,7 @@ bool SettingsOverlay::handleMouse(const Mouse& mouse) {
         return true;
     }
     if (themeBoxes_[1].Contain(mouse.x, mouse.y)) {
+        TUISettings::instance().setThemeKind(TUISettings::kThemeLight);
         *ctx_.theme = TUITheme::lightTheme();
         if (onClose_) {
             onClose_();
@@ -242,10 +246,9 @@ bool SettingsOverlay::handleMouse(const Mouse& mouse) {
         return true;
     }
     if (ctx_.showSystemInfo && sysInfoBox_.Contain(mouse.x, mouse.y)) {
-        ctx_.showSystemInfo->store(
-            !ctx_.showSystemInfo->load(std::memory_order_relaxed),
-            std::memory_order_relaxed
-        );
+        // 经 TUISettings 设置以同步持久化到全局设置数据库 (与键盘 Enter 路径一致),
+        // 内部原子量与 ctx_.showSystemInfo 指向同一存储, 界面显示同步更新
+        TUISettings::instance().setShowSystemInfo(!TUISettings::instance().showSystemInfo());
         return true;
     }
     if (animLevelBox_.Contain(mouse.x, mouse.y)) {

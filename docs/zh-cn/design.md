@@ -120,9 +120,11 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
   开启后由 BaseAgent 创建 `SessionPersistence` 并注入 AgentContext:
   - `AgentContext::sessionPersistence` + `SessionStore::persistence` (会话消息状态)
   - `MiddlewareContext` 构造参数 (share store 写穿)
-- 数据目录: `~/.agentxx/sqlite/{threadId}/` (threadId 经 `sanitizeThreadId` 清洗为安全目录名:
+- 数据目录: `{dataDir}/sqlite/sessions/{threadId}/` (threadId 经 `sanitizeThreadId` 清洗为安全目录名:
   非法字符替换/超长截断/Windows 保留名规避, 发生改写时附加 FNV hash 尾缀防碰撞;
-  取不到主目录时回退系统临时目录)
+  dataDir 由 yaml `data_dir` 指定, **未配置 dataDir 时不持久化**:
+  设置/会话/codegraph 数据仅存内存, BaseAgent 初始化时输出警告;
+  sessionPersistenceRoot 显式指定时即使无 dataDir 仍落盘)
 - 分库设计 (两个 DB 文件, 均启用 WAL + busy_timeout):
   - `session.db`: viewMessages (append-only, 每消息一行 JSON) + llmMessages
     (单行整体替换, 每轮结束保存) + meta (msgIdCounter)
@@ -234,7 +236,7 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
 | **AudioStream** | 系统音频/麦克风/程序音频流捕获 |
 | **TextSelectionMonitor** | 系统级文本选择事件监听 (Windows UI Automation) |
 | **CpuGpuMonitor** | CPU/内存/GPU 使用率查询 |
-| **CodeGraphManager** | 代码索引与符号分析 (基于 codegraph-cpp)；索引根目录为当前程序工作目录，sqlite 数据库存于 `~/.agentxx/sqlite/codegraph/<折叠路径>/index.db`（深层折叠 + 单段截断控制长度，路径前缀匹配复用） |
+| **CodeGraphManager** | 代码索引与符号分析 (基于 codegraph-cpp)；索引根目录为当前程序工作目录，sqlite 数据库存于 `{dataDir}/sqlite/codegraph/<折叠路径>/index.db`（深层折叠 + 单段截断控制长度，路径前缀匹配复用；dataDir 由 yaml `data_dir` 指定，未配置 dataDir 时不注册 codegraph 工具，索引不落盘） |
 
 ### 依赖注入
 
@@ -320,10 +322,21 @@ mcp_servers:
   - namespace: "my_mcp"
     url: "http://localhost:3000/mcp"
 
+# 统一数据根目录 (留空/不配置 = 不持久化: 设置/会话/codegraph 仅存内存,
+# 重启后无法恢复; 支持 ~ 与 ${VAR} 展开, 相对路径按工作目录解析)
+# 特殊关键字 `default` (仅 tui/cli 模式): 使用当前系统数据目录
+#   - Linux/macOS: ~/.agentxx/
+#   - Windows: %APPDATA%/agentxx/
+# 配置后数据子路径:
+#   - {data_dir}/sqlite/global.db                     全局设置 (TUI 设置等)
+#   - {data_dir}/sqlite/sessions/{threadId}/          会话数据 (session.db/share_store.db)
+#   - {data_dir}/sqlite/codegraph/<折叠路径>/index.db CodeGraph 索引
+# data_dir: ~/.agentxx
+
 # CodeGraph 代码分析 (需编译启用 AGENTXX_ENABLE_CODEGRAPH)
 enable_codegraph: false           # true 时 CodeAgent 注册 codegraph 系列 tool
                                   # 索引根目录为当前程序工作目录
-                                  # 数据库: ~/.agentxx/sqlite/codegraph/<折叠路径>/index.db
+                                  # 数据库: {data_dir}/sqlite/codegraph/<折叠路径>/index.db
                                   # - 前缀复用: 子目录工作自动复用最近父级索引
                                   # - 长度控制: 深层路径折叠为 hash 段, 单段超长截断,
                                   #   保证不超系统路径限制 (Windows MAX_PATH=260)

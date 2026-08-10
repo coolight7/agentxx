@@ -33,9 +33,9 @@ namespace expand {
 
 namespace fs = std::filesystem;
 
-/// CodeGraph sqlite 数据库存放目录名: ~/.agentxx/sqlite/
+/// CodeGraph sqlite 数据库存放目录名: {dataDir}/sqlite/
 static constexpr std::string_view kCodeGraphSqliteDirName = "sqlite";
-/// CodeGraph 索引数据库子目录: ~/.agentxx/sqlite/codegraph/
+/// CodeGraph 索引数据库子目录: {dataDir}/sqlite/codegraph/
 static constexpr std::string_view kCodeGraphSqliteSubDirName = "codegraph";
 /// 单个项目索引数据库文件名
 static constexpr std::string_view kCodeGraphIndexDbName = "index.db";
@@ -59,32 +59,14 @@ static uint64_t fnv1a64(std::string_view s) {
     return hash;
 }
 
-/// 获取用户主目录 (Unix: $HOME, Windows: %USERPROFILE%)
-/// - 未设置时返回空字符串
-static std::string getUserHomeDir() {
-#if XX_IS_WIN_D
-    const char* home = std::getenv("USERPROFILE");
-#else
-    const char* home = std::getenv("HOME");
-#endif
-    if (!home || !*home) {
-        return "";
+/// CodeGraph sqlite 数据库目录: {dataDir}/sqlite/
+/// - dataDir 为空时默认 ~/.agentxx/ (取不到用户主目录时回退系统临时目录)
+/// - 可经 AgentConfig::dataDir / yaml data_dir 统一重定向
+static std::string getCodeGraphSqliteDir(std::string_view sqliteDir) {
+    if (!sqliteDir.empty()) {
+        return std::string{sqliteDir};
     }
-    return std::string{home};
-}
-
-/// CodeGraph sqlite 数据库目录: ~/.agentxx/sqlite/
-/// - 取不到用户主目录时回退到系统临时目录, 保证功能可用
-static std::string getCodeGraphSqliteDir() {
-    auto home = getUserHomeDir();
-    if (!home.empty()) {
-        return (fs::path(home) / agentxx::agent::AgentConfigStatic::agentxxDataDirPath
-                / kCodeGraphSqliteDirName)
-            .string();
-    }
-    return (fs::temp_directory_path() / agentxx::agent::AgentConfigStatic::agentxxDataDirPath
-            / kCodeGraphSqliteDirName)
-        .string();
+    return agentxx::agent::AgentConfigStatic::getSqliteDir("");
 }
 
 /// 路径段清洗: 替换文件系统非法字符为 `_`
@@ -215,9 +197,9 @@ static std::vector<std::string> foldSegments(const std::vector<std::string>& seg
     return folded;
 }
 
-/// 项目根目录对应的索引数据库路径: ~/.agentxx/sqlite/codegraph/<折叠路径层级>/index.db
-static fs::path getIndexDbPath(std::string_view project_root) {
-    fs::path dir = fs::path(getCodeGraphSqliteDir()) / kCodeGraphSqliteSubDirName;
+/// 项目根目录对应的索引数据库路径: {dataDir}/sqlite/codegraph/<折叠路径层级>/index.db
+static fs::path getIndexDbPath(std::string_view project_root, std::string_view sqliteDir) {
+    fs::path dir = fs::path(getCodeGraphSqliteDir(sqliteDir)) / kCodeGraphSqliteSubDirName;
     for (const auto& seg : foldSegments(projectRootToSegments(project_root))) {
         dir /= seg;
     }
@@ -228,12 +210,15 @@ static fs::path getIndexDbPath(std::string_view project_root) {
 /// - 例如工作目录为 /home/user/proj/sub 时, 若 /home/user/proj 已建索引则复用
 /// - 每个前缀独立应用折叠规则 (确定性), 折叠后路径一致即视为同一前缀
 /// - 未找到任何父级索引时返回 nullopt (将在自身路径下新建)
-static std::optional<fs::path> findNearestExistingIndex(std::string_view project_root) {
+static std::optional<fs::path> findNearestExistingIndex(
+    std::string_view project_root,
+    std::string_view sqliteDir
+) {
     auto segs = projectRootToSegments(project_root);
     if (segs.empty()) {
         return std::nullopt;
     }
-    fs::path base = fs::path(getCodeGraphSqliteDir()) / kCodeGraphSqliteSubDirName;
+    fs::path base = fs::path(getCodeGraphSqliteDir(sqliteDir)) / kCodeGraphSqliteSubDirName;
     // 从最深 (最近) 前缀开始逐级缩短检查
     for (size_t n = segs.size(); n > 0; --n) {
         std::vector<std::string> prefix(
@@ -451,9 +436,11 @@ static int score_target(const codegraph::Node& source, const codegraph::Node& ca
 class CodeGraphManager::Impl {
 public:
 
-    Impl() :
+    /// @param sqliteDir sqlite 数据目录 (为空使用默认 {dataDir}/sqlite/)
+    explicit Impl(std::string sqliteDir = "") :
         running_(false),
-        needs_initialize_(true) {}
+        needs_initialize_(true),
+        sqlite_dir_(std::move(sqliteDir)) {}
 
     ~Impl() {
         shutdown();
@@ -492,14 +479,14 @@ public:
         }
 
         project_root_ = project_root;
-        // 索引数据库: ~/.agentxx/sqlite/codegraph/<折叠路径层级>/index.db
+        // 索引数据库: {dataDir}/sqlite/codegraph/<折叠路径层级>/index.db
         // - 目录层级与项目路径层级一一对应 (深层路径折叠为 hash 段, 单段超长截断),
         //   长度受控不会超过系统路径限制 (Windows MAX_PATH=260 / Linux PATH_MAX)
         // - 支持路径前缀匹配复用 (findNearestExistingIndex):
         //   工作目录为已有索引项目的子目录时, 复用最近父级索引, 无需重新索引
-        auto     sqlite_base = fs::path(getCodeGraphSqliteDir()) / kCodeGraphSqliteSubDirName;
-        auto     reused      = findNearestExistingIndex(project_root);
-        fs::path index_path  = reused ? *reused : getIndexDbPath(project_root);
+        auto     sqlite_base = fs::path(getCodeGraphSqliteDir(sqlite_dir_)) / kCodeGraphSqliteSubDirName;
+        auto     reused      = findNearestExistingIndex(project_root, sqlite_dir_);
+        fs::path index_path  = reused ? *reused : getIndexDbPath(project_root, sqlite_dir_);
         if (reused) {
             XX_LOGI(
                 "CodeGraphManager: reuse existing index db from parent path: {}",
@@ -1090,12 +1077,16 @@ private:
     std::atomic<bool>       running_;
     std::atomic<bool>       file_watcher_running_{false};
     bool                    needs_initialize_;
+    /// sqlite 数据目录 (为空使用默认 {dataDir}/sqlite/, 见 getCodeGraphSqliteDir)
+    std::string sqlite_dir_;
 
     IndexProgressCallback progress_callback_;
 };
 
-CodeGraphManager::CodeGraphManager() :
-    impl_(std::make_unique<Impl>()) {}
+/// @param sqliteDir sqlite 数据目录; 为空使用默认 {dataDir}/sqlite/
+///        (dataDir 为空时 ~/.agentxx/sqlite/, 取不到主目录时回退系统临时目录)
+CodeGraphManager::CodeGraphManager(std::string sqliteDir) :
+    impl_(std::make_unique<Impl>(std::move(sqliteDir))) {}
 
 CodeGraphManager::~CodeGraphManager() {
     impl_->shutdown();

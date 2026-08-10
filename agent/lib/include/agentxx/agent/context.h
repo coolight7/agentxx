@@ -246,7 +246,7 @@ public:
 
     /// 会话 SQLite 持久化 (AgentConfig::enableSessionPersistence 开启时由
     /// BaseAgent 创建并注入; 为空表示不持久化)
-    /// - 数据目录: ~/.agentxx/sqlite/{threadId}/
+    /// - 数据目录: {dataDir}/sqlite/sessions/{threadId}/
     std::shared_ptr<SessionPersistence> sessionPersistence = nullptr;
 
     /// 组件加载信息

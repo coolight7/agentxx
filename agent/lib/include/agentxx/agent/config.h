@@ -89,15 +89,26 @@ public:
     std::map<std::string, std::string> mcpServerUrls{};
     std::vector<std::string>           ragDocsPaths{};
 
+    /// 统一数据根目录 (全局设置/会话/codegraph 索引等数据的存放根)
+    /// - 为空表示不持久化: 全局设置/会话/codegraph 等数据仅存内存,
+    ///   不写入磁盘 (BaseAgent 初始化时输出警告); 此时会话持久化与
+    ///   codegraph 索引自动禁用 (除非显式指定了 sessionPersistenceRoot)
+    /// - 非空时数据子路径:
+    ///   - {dataDir}/sqlite/global.db                     全局设置 (TUI 设置等)
+    ///   - {dataDir}/sqlite/sessions/{threadId}/          会话数据
+    ///   - {dataDir}/sqlite/codegraph/<折叠路径>/index.db CodeGraph 索引
+    /// - 相对路径按程序工作目录解析为绝对路径 (由 client 启动时解析)
+    std::string dataDir;
+
     /// 是否启用 CodeGraph 代码分析 (需编译时启用 AGENTXX_ENABLE_CODEGRAPH)
     /// - 配置启用且编译启用时, CodeAgent 才会注册 codegraph 系列 tool
     /// - 索引项目根目录固定为当前程序工作目录
-    /// - 索引数据库: ~/.agentxx/sqlite/codegraph/<折叠路径>/index.db
+    /// - 索引数据库: {dataDir}/sqlite/codegraph/<折叠路径>/index.db
     ///   (深层路径折叠 + 单段截断控制长度, 子目录可前缀复用最近父级索引)
     bool enableCodeGraph = true;
 
     /// 是否启用会话 SQLite 持久化 (消息上下文/展示历史/share store)
-    /// - 数据目录: ~/.agentxx/sqlite/{threadId}/
+    /// - 数据目录: {dataDir}/sqlite/sessions/{threadId}/
     ///   - session.db      展示历史 + LLM 上下文 + 会话元数据
     ///   - share_store.db  agentxx_share_store KV 条目
     /// - 开启后会话在重启后可恢复历史消息/上下文/模型选择/share store
@@ -105,7 +116,8 @@ public:
     bool enableSessionPersistence = false;
 
     /// 会话持久化根目录 (enableSessionPersistence 开启时生效)
-    /// - 为空使用默认 ~/.agentxx/sqlite/ (取不到用户主目录时回退系统临时目录)
+    /// - 为空时使用 {dataDir}/sqlite/sessions/ (要求 dataDir 非空;
+    ///   dataDir 为空且 root 未指定时, 会话持久化自动禁用, 不落盘)
     /// - 数据目录结构: {root}/{threadId}/{session.db, share_store.db}
     std::string sessionPersistenceRoot;
 

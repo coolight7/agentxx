@@ -1,13 +1,17 @@
 #include "agentxx-client/config_loader.h"
 #include "agentxx-client/io/stdio/agent_stdio.h"
 #include "agentxx-client/io/tui/agent_tui.h"
+#include "agentxx-client/io/tui/framework/tui_settings.h"
 #include "agentxx-client/mode_runners.h"
 #include "agentxx-client/train/train.h"
 #include "agentxx-client/util/util.h"
 #include "agentxx/agent/code_agent.h"
+#include "agentxx/agent/config_static.h"
 #include "agentxx/agent/io/agent_server.h"
 #include "agentxx/protocol/acp_server.h"
 #include "agentxx/util/exception.h"
+#include "agentxx/util/settings_db.h"
+#include "agentxx/util/string_util.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/signal_set.hpp"
@@ -142,8 +146,7 @@ Options:
         } else if (arg == "--ssl-key" && i + 1 < argn) {
             ++i;
             sslKeyFile = argv[i];
-        } else if (arg == "tui" || arg == "cli" || arg == "server" || arg == "acp"
-                   || arg == "train") {
+        } else if (arg == "tui" || arg == "cli" || arg == "server" || arg == "acp" || arg == "train") {
             mode = arg;
         } else {
             XX_LOGE("Unknown arg: `{}`", arg);
@@ -202,8 +205,33 @@ Options:
         }
     }
 
+    // 统一数据根目录: 可在 yaml 配置 data_dir 指定
+    // - tui/cli 模式支持关键字 `default`: 使用当前系统数据目录 (平台惯例,
+    //   Linux/macOS: ~/.agentxx/, Windows: %APPDATA%/agentxx/)
+    // - 其他值: 展开 `~` 为用户主目录; 相对路径按程序工作目录解析为绝对路径
+    // - 数据子路径: {dataDir}/sqlite/global.db (全局设置),
+    //   {dataDir}/sqlite/sessions/{threadId}/ (会话数据),
+    //   {dataDir}/sqlite/codegraph/... (CodeGraph 索引)
+    std::string resolvedDataDir;
+    if (!yamlCfg.dataDir.empty()) {
+        if (yamlCfg.dataDir == agentxx::agent::AgentConfigStatic::kDefaultDataDirKey) {
+            // 关键字 default: 取系统数据目录 (平台惯例)
+            resolvedDataDir = agentxx::agent::AgentConfigStatic::systemDataDir();
+            XX_OUT("[Config] data_dir: default -> {}", resolvedDataDir);
+        } else {
+            auto dataDirExpanded = agentxx::util::expandUserHomePath(yamlCfg.dataDir);
+            std::filesystem::path fp{dataDirExpanded};
+            resolvedDataDir
+                = fp.is_absolute()
+                      ? fp.lexically_normal().string()
+                      : (std::filesystem::current_path() / fp).lexically_normal().string();
+            XX_OUT("[Config] data_dir: {}", resolvedDataDir);
+        }
+    }
+
     if (mode == "train") {
         auto config                                    = buildDefaultConfig();
+        config->dataDir                                = resolvedDataDir;
         config->logPrintToolcall                       = false;
         config->logPrintMessagesBeforeLLM              = false;
         config->logPrintMessagesBeforeLLMWithSystemMsg = false;
@@ -211,6 +239,7 @@ Options:
         applyModelToConfig(config, yamlCfg.models, yamlCfg.useModelTrain);
 
         auto scorerConfig                                    = buildDefaultConfig();
+        scorerConfig->dataDir                                = resolvedDataDir;
         scorerConfig->logPrintToolcall                       = false;
         scorerConfig->logPrintMessagesBeforeLLM              = false;
         scorerConfig->logPrintMessagesBeforeLLMWithSystemMsg = false;
@@ -218,6 +247,7 @@ Options:
         applyModelToConfig(scorerConfig, yamlCfg.models, yamlCfg.useModelTrainScorer);
 
         auto optimizerConfig                                    = buildDefaultConfig();
+        optimizerConfig->dataDir                                = resolvedDataDir;
         optimizerConfig->logPrintToolcall                       = false;
         optimizerConfig->logPrintMessagesBeforeLLM              = false;
         optimizerConfig->logPrintMessagesBeforeLLMWithSystemMsg = false;
@@ -230,6 +260,7 @@ Options:
 
     if (mode == "acp") {
         auto config                                   = buildDefaultConfig();
+        config->dataDir                               = resolvedDataDir;
         config->logPrintToolcall                      = false;
         config->logPrintMessagesBeforeLLM             = false;
         config->logPrintSummarizationResultTokenCount = false;
@@ -252,7 +283,8 @@ Options:
         return 0;
     }
 
-    auto config = buildDefaultConfig();
+    auto config     = buildDefaultConfig();
+    config->dataDir = resolvedDataDir;
     applyModelToConfig(config, yamlCfg.models, yamlCfg.useModelDefault);
     applySubagentModelToConfig(config, yamlCfg.models, yamlCfg.useModelSubagent);
     applyWebSearchModelToConfig(config, yamlCfg.models, yamlCfg.useModelWebSearch);
@@ -277,6 +309,22 @@ Options:
     }
     // CodeGraph 代码分析 (索引项目根目录固定为当前程序工作目录)
     config->enableCodeGraph = yamlCfg.enableCodeGraph;
+
+    // ======================== TUI 全局设置持久化 ========================
+    // 全局设置 (动画等级/showSystemInfo 等) 存于 {dataDir}/sqlite/global.db,
+    // 绑定到 TUISettings 单例, 设置变更时同步落库, 重启后恢复
+    // - dataDir 未配置 (为空) 时: 不绑定数据库, 设置仅存内存 (进程生命周期有效)
+    if (mode == "tui") {
+        if (resolvedDataDir.empty()) {
+            XX_OUT("[Config] data_dir not set: TUI settings will NOT be persisted "
+                   "(in-memory only)");
+        } else {
+            auto settingsDb = std::make_shared<agentxx::util::SettingsDb>(
+                agentxx::agent::AgentConfigStatic::getGlobalSettingsDbPath(resolvedDataDir)
+            );
+            TUISettings::instance().attachDb(std::move(settingsDb));
+        }
+    }
 
     // ======================== CodeAgent Websocket Server 服务模式 ========================
     if (mode == "server") {

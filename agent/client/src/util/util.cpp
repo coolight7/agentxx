@@ -8,7 +8,8 @@ std::shared_ptr<agentxx::agent::AgentConfig> buildDefaultConfig() {
     config->currentSystemName = agentxx::util::getSystemName();
     config->isSystemWSL       = agentxx::util::isRunningInWSL();
     // 会话 SQLite 持久化: 消息上下文/展示历史/share store 落库
-    // ~/.agentxx/sqlite/{threadId}/, 重启后恢复会话
+    // {dataDir}/sqlite/sessions/{threadId}/, 重启后恢复会话
+    // (dataDir 默认 ~/.agentxx/, 可经 yaml data_dir 重定向)
     config->enableSessionPersistence = true;
 
     return config;

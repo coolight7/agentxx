@@ -14,8 +14,6 @@ namespace fs = std::filesystem;
 
 namespace {
 
-/// sqlite 数据库存放目录名 (与 CodeGraph 索引库共用 ~/.agentxx/sqlite/)
-static constexpr std::string_view kSqliteDirName = "sqlite";
 /// 单个 threadId 目录段最大长度 (截断后含分隔符与 hash 尾缀)
 /// - Windows 默认 MAX_PATH=260, 需控制单段长度
 static constexpr size_t kMaxThreadDirLen = 96;
@@ -31,30 +29,10 @@ static uint64_t fnv1a64(std::string_view s) {
     return hash;
 }
 
-/// 获取用户主目录 (Unix: $HOME, Windows: %USERPROFILE%); 未设置返回空串
-static std::string getUserHomeDir() {
-#if XX_IS_WIN_D
-    const char* home = std::getenv("USERPROFILE");
-#else
-    const char* home = std::getenv("HOME");
-#endif
-    if (!home || !*home) {
-        return "";
-    }
-    return std::string{home};
-}
-
-/// 默认数据根目录: ~/.agentxx/sqlite/ (取不到主目录时回退系统临时目录)
+/// 默认数据根目录: {dataDir}/sqlite/sessions/
+/// - dataDir 为空时回退 ~/.agentxx/ (取不到用户主目录时回退系统临时目录)
 static std::string defaultRootDir() {
-    auto home = getUserHomeDir();
-    if (!home.empty()) {
-        return (fs::path(home) / agentxx::agent::AgentConfigStatic::agentxxDataDirPath
-                / kSqliteDirName)
-            .string();
-    }
-    return (fs::temp_directory_path() / agentxx::agent::AgentConfigStatic::agentxxDataDirPath
-            / kSqliteDirName)
-        .string();
+    return agentxx::agent::AgentConfigStatic::getSessionsDir("");
 }
 
 /// Windows 保留设备名 (CON/PRN/AUX/NUL/COM1-9/LPT1-9, 忽略扩展名)

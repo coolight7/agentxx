@@ -49,7 +49,9 @@ struct CodeGraphPathResult {
 class CodeGraphManager {
 public:
 
-    CodeGraphManager();
+    /// @param sqliteDir sqlite 数据目录; 为空使用默认 {dataDir}/sqlite/
+    ///        (dataDir 为空时 ~/.agentxx/sqlite/, 取不到主目录时回退系统临时目录)
+    explicit CodeGraphManager(std::string sqliteDir = "");
     ~CodeGraphManager();
 
     CodeGraphManager(const CodeGraphManager&)            = delete;

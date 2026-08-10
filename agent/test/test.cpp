@@ -36,6 +36,7 @@
 #include "test_remote_agent.h"
 #include "test_screen_capture.h"
 #include "test_session_persistence.h"
+#include "test_settings_db.h"
 #include "test_share_store.h"
 #include "test_string_tools.h"
 #include "test_string_util.h"
@@ -120,6 +121,7 @@ int main(int argn, char** argv) {
     runSync("misc_fixes", agentxx::test::testMiscFixes);
     runSync("aho_corasick", agentxx::test::testAhoCorasick);
     runSync("util_misc", agentxx::test::testUtilMisc);
+    runSync("settings_db", agentxx::test::testSettingsDb);
     runSync("toolcall_args", agentxx::test::testToolcallArgs);
 #ifdef AGENTXX_BUILD_CLIENT
     runSync("tui_settings", agentxx::test::testTuiSettings);
