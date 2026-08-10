@@ -7,6 +7,7 @@
 #include "agentxx/agent/model_registry.h"
 #include "agentxx/expand/get_cpu_gpu_use.h"
 #include "agentxx/middlewares/middleware.h"
+#include "agentxx/middlewares/permission.h"
 #include "agentxx/util/async_offload.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/string_util.h"
@@ -998,6 +999,41 @@ asio::awaitable<neograph::json> TUIClientAgentIO::handleInterrupt(
     }
     const auto& handleArg = argOpt.value();
 
+    // ---- 权限询问 (interruptNode == "permission") 的客户端侧处理 ----
+    // 服务端权限处理器经 InterruptHandleArg.arg 透传权限上下文 {category, target}:
+    // - category: 权限分类 ("filesystem_read" / "filesystem_write"), 决定规则作用域
+    // - target:   受约束目标 (已标准化的绝对路径, 与中间件规则匹配口径一致)
+    const bool   isPermission = (interruptNode == "permission");
+    std::string  permCategory;
+    std::string  permTarget;
+    if (isPermission) {
+        if (handleArg.arg.is_object()) {
+            permCategory = handleArg.arg.value("category", std::string{});
+            permTarget   = handleArg.arg.value("target", std::string{});
+        }
+        // 通行模式: 不询问, 直接放行。
+        // 注意: 中间件已注册的显式规则 (ALLOW/DENY) 在服务端先行判定,
+        // 能走到这里说明策略为 INTERRUPT; 通行模式下视为允许, 无需用户介入
+        if (TUISettings::instance().permissionMode() == PermissionMode::Pass) {
+            const std::string_view shownTarget
+                = permTarget.empty() ? interruptValue : std::string_view{permTarget};
+            {
+                std::lock_guard<std::mutex> lock(sharedState_.mutex());
+                auto&                       st = sharedState_.mutableState();
+                st.messages.push_back(std::make_shared<TUIMessage>(TUIMessage::makeText(
+                    TUIMessage::Role::System,
+                    fmt::format(
+                        "[Permission] Pass mode: allow {} ({})",
+                        shownTarget,
+                        permCategory
+                    )
+                )));
+            }
+            postRedraw();
+            co_return neograph::json::array({"true"});
+        }
+    }
+
     awaitingInterruptInput_.store(true, std::memory_order_release);
 
     // 中断头消息 (节点/值/句柄)
@@ -1021,10 +1057,11 @@ asio::awaitable<neograph::json> TUIClientAgentIO::handleInterrupt(
     activeInterrupts_[wireId] = ch;
 
     // 结果回传通道注入 UI 线程 (MessageListComponent 中断 UI 状态表):
-    // 通道由 client 线程创建, UI 线程交互 (确认/取消) 需经其发送结果
-    enqueueUiAction([this, wireId, ch]() {
+    // 通道由 client 线程创建, UI 线程交互 (确认/取消) 需经其发送结果;
+    // 权限询问标记 rememberable: 渲染"记住"开关, 用户可勾选记住本次选择
+    enqueueUiAction([this, wireId, ch, rememberable = isPermission]() {
         if (messageList_) {
-            messageList_->attachInterruptChannel(wireId, ch);
+            messageList_->attachInterruptChannel(wireId, ch, rememberable);
         }
     });
 
@@ -1061,8 +1098,9 @@ asio::awaitable<neograph::json> TUIClientAgentIO::handleInterrupt(
     auto                                    result = neograph::json::array();
     std::vector<std::optional<std::string>> values(total);
     size_t                                  confirmedCount = 0;
+    bool                                    remember       = false; // 权限询问: 记住本次选择
     while (confirmedCount < values.size()) {
-        auto [ec, idx, val] = co_await ch->async_receive(asio::as_tuple(asio::use_awaitable));
+        auto [ec, idx, val, rem] = co_await ch->async_receive(asio::as_tuple(asio::use_awaitable));
         if (ec) {
             // 通道关闭: server 过期通知 / TUI 退出 → 终止, 返回已收集结果
             break;
@@ -1075,11 +1113,32 @@ asio::awaitable<neograph::json> TUIClientAgentIO::handleInterrupt(
             continue; // 防御: 非法/重复序号
         }
         values[static_cast<size_t>(idx - 1)] = val;
+        remember                            |= rem;
         ++confirmedCount;
     }
     for (auto& v : values) {
         if (v.has_value()) {
             result.push_back(std::move(*v));
+        }
+    }
+
+    // 记住本次选择: 将路径规则注册到服务端权限中间件,
+    // 后续访问该路径或其子目录时按本次允许/拒绝处理, 不再询问
+    if (isPermission && remember && !permTarget.empty() && confirmedCount > 0
+        && values[0].has_value()) {
+        const auto& v     = *values[0];
+        const bool  allow = (v == "true" || v == "yes");
+        const size_t index
+            = (permCategory == "filesystem_write")
+                  ? agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
+                  : agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionREAD;
+        if (transport_) {
+            sendToPeer(agentxx::agent::WireSetPermission{
+                .threadId = std::string{threadId},
+                .path     = permTarget,
+                .allow    = allow,
+                .index    = index,
+            });
         }
     }
 

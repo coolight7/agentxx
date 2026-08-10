@@ -157,6 +157,21 @@ Element SettingsOverlay::OnRender() {
     }
     items.push_back(animEntry | reflect(animLevelBox_));
 
+    // 权限询问处理模式 (Enter/点击循环切换; 询问/通行, 见 TUISettings)
+    items.push_back(text(" "));
+    items.push_back(text(" Permission ") | color(theme.hintColor));
+    auto permEntry = text(fmt::format(
+        " Permission Mode: {} ",
+        TUISettings::instance().permissionModeName()
+    ));
+    if (selectedIndex_ == 4) {
+        permEntry = permEntry | bgcolor(theme.buttonActiveBgColor)
+                    | color(theme.buttonActiveTextColor) | bold | focus;
+    } else {
+        permEntry = permEntry | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor);
+    }
+    items.push_back(permEntry | reflect(permModeBox_));
+
     return vbox({
                text(" Settings ") | bold | inverted,
                separator(),
@@ -207,6 +222,10 @@ bool SettingsOverlay::OnEvent(Event event) {
             // 动画等级循环切换; 切换后保持弹窗打开, 便于继续调整
             cycleAnimationLevel();
             ctx_.postRedraw();
+        } else if (selectedIndex_ == 4) {
+            // 权限询问处理模式循环切换; 切换后保持弹窗打开, 便于继续调整
+            cyclePermissionMode();
+            ctx_.postRedraw();
         }
         return true;
     }
@@ -255,6 +274,10 @@ bool SettingsOverlay::handleMouse(const Mouse& mouse) {
         cycleAnimationLevel();
         return true;
     }
+    if (permModeBox_.Contain(mouse.x, mouse.y)) {
+        cyclePermissionMode();
+        return true;
+    }
     return false;
 }
 
@@ -263,6 +286,13 @@ void SettingsOverlay::cycleAnimationLevel() {
     const int next     = (static_cast<int>(settings.animationLevel()) + 1)
                      % static_cast<int>(TUISettings::kAnimationLevelNames.size());
     settings.setAnimationLevel(static_cast<AnimationLevel>(next));
+}
+
+void SettingsOverlay::cyclePermissionMode() {
+    auto&     settings = TUISettings::instance();
+    const int next     = (static_cast<int>(settings.permissionMode()) + 1)
+                     % static_cast<int>(TUISettings::kPermissionModeNames.size());
+    settings.setPermissionMode(static_cast<PermissionMode>(next));
 }
 
 // ---------------------------------------------------------------------------

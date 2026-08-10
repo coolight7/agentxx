@@ -123,6 +123,18 @@ struct WireContextMessages {
     neograph::json messages;
 };
 
+/// 客户端记住权限选择 (Client -> Server): 将路径规则注册到服务端权限中间件,
+/// 后续访问该路径或其子目录时按规则直接允许/拒绝, 不再询问
+struct WireSetPermission {
+    std::string threadId;
+    /// 标准化绝对路径 (规则作用于该路径及其子目录, 最长前缀匹配)
+    std::string path;
+    /// true = 允许 (PermissionOperator::ALLOW), false = 拒绝 (PermissionOperator::DENY)
+    bool allow = true;
+    /// 规则作用域: FilesystemPermissionREAD(0) / FilesystemPermissionWRITE(1)
+    size_t index = 0;
+};
+
 /// 所有可能的线消息类型 (tagged variant)
 using WireMessage = std::variant<
     WireHello,
@@ -144,7 +156,8 @@ using WireMessage = std::variant<
     WireGetAppendComponentInfo,
     WireAppendComponentInfo,
     WireGetContext,
-    WireContextMessages>;
+    WireContextMessages,
+    WireSetPermission>;
 
 // ---------------------------------------------------------------------------
 // AgentIOTransportBase: 两个 AgentIOBase 端点之间的协议传输层
