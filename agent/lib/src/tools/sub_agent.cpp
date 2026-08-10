@@ -131,8 +131,8 @@ std::string SubAgentManagerTool::get_name() const {
 }
 
 neograph::ChatTool SubAgentManagerTool::get_definition() const {
-    auto               agentPtr = agentContext.lock();
-    const auto&        prompt   = agentPtr->agentConfig->prompt.toolPrompt[get_name()];
+    auto        agentPtr = agentContext.lock();
+    const auto& prompt   = agentPtr->agentConfig->prompt.toolPrompt[get_name()];
 
     auto               subagentNameList = std::vector<std::string>{};
     std::ostringstream subagentNameDepict;

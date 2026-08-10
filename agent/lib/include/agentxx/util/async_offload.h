@@ -182,9 +182,7 @@ asio::awaitable<T> offloadCancellableAsync(
                     while (false == watcherDone->load(std::memory_order_acquire)
                            && false == cancelToken->is_cancelled()) {
                         timer.expires_after(std::chrono::milliseconds(20));
-                        auto [ec] = co_await timer.async_wait(
-                            asio::as_tuple(asio::use_awaitable)
-                        );
+                        auto [ec] = co_await timer.async_wait(asio::as_tuple(asio::use_awaitable));
                         if (ec) {
                             co_return;
                         }
@@ -229,7 +227,10 @@ asio::awaitable<T> offloadCancellableAsync(
 ) {
     auto cancelFlag = std::make_shared<std::atomic<bool>>(false);
     co_return co_await offloadCancellableAsync<T>(
-        pool, std::move(cancelFlag), std::move(cancelToken), std::move(fn)
+        pool,
+        std::move(cancelFlag),
+        std::move(cancelToken),
+        std::move(fn)
     );
 }
 

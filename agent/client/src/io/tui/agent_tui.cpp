@@ -139,9 +139,9 @@ void TUIClientAgentIO::start() {
             auto&                       st = sharedState_.mutableState();
             if (awaitingInterruptInput_.load(std::memory_order_acquire)) {
                 pushCurrentTokenLocked(st);
-                st.messages.push_back(std::make_shared<TUIMessage>(
-                    TUIMessage::makeText(TUIMessage::Role::User, text)
-                ));
+                st.messages.push_back(
+                    std::make_shared<TUIMessage>(TUIMessage::makeText(TUIMessage::Role::User, text))
+                );
                 messageList_->setStickToBottom(true);
                 inputChannel_->async_send(
                     neograph_asio_error_code{},
@@ -623,9 +623,8 @@ void TUIClientAgentIO::onPeerMessage(agentxx::agent::WireMessage msg) {
                             && msg.interrupt->interruptId == expiredId
                             && msg.interrupt->interruptStatus
                                    == TUIMessage::InterruptStatus::Waiting) {
-                            auto& mm                   = sharedState_.mutableMessage(st, i);
-                            mm.interrupt->interruptStatus
-                                = TUIMessage::InterruptStatus::Expired;
+                            auto& mm                      = sharedState_.mutableMessage(st, i);
+                            mm.interrupt->interruptStatus = TUIMessage::InterruptStatus::Expired;
                         }
                     }
                 }
@@ -693,10 +692,10 @@ void TUIClientAgentIO::pushCurrentTokenLocked(TUIRenderState& st) {
     if (!st.currentToken || st.currentToken->empty()) {
         return;
     }
-    auto msg       = std::make_shared<TUIMessage>();
-    msg->role      = st.currentTokenRole;
-    msg->text      = *st.currentToken;
-    msg->collapsed = (st.currentTokenRole == TUIMessage::Role::Thinking);
+    auto msg         = std::make_shared<TUIMessage>();
+    msg->role        = st.currentTokenRole;
+    msg->text        = *st.currentToken;
+    msg->collapsed   = (st.currentTokenRole == TUIMessage::Role::Thinking);
     msg->durationMs  = st.pendingTokenDurationMs;
     msg->startTimeMs = st.pendingTokenStartTimeMs;
     st.messages.push_back(std::move(msg));
@@ -719,9 +718,9 @@ void TUIClientAgentIO::sendUserInputLocked(TUIRenderState& st, std::string text)
     pushCurrentTokenLocked(st);
     // 注意: 不能 move text (后续 sendToPeer/inputChannel 仍需要使用);
     // makeText 按值参数, 此处 lvalue 拷贝一次, 与原聚合初始化拷贝次数一致
-    st.messages.push_back(std::make_shared<TUIMessage>(
-        TUIMessage::makeText(TUIMessage::Role::User, text)
-    ));
+    st.messages.push_back(
+        std::make_shared<TUIMessage>(TUIMessage::makeText(TUIMessage::Role::User, text))
+    );
     st.isStreaming = true;
     // 消息列表吸附到底部: messageList_ 为 UI 线程独占组件, 本函数可能被
     // client 线程 (dispatchNextPendingInput) 调用, 须投递到 UI 线程执行
@@ -785,15 +784,15 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
             } break;
             case Type::ToolStart: {
                 pushCurrentTokenLocked(st);
-                auto m          = std::make_shared<TUIMessage>();
-                m->role         = TUIMessage::Role::Tool;
-                m->tool         = TUIMessage::ToolData{};
-                m->tool->toolName   = delta.toolName;
-                m->tool->toolCallId = delta.toolCallId;
-                m->text         = delta.arguments;
+                auto m                = std::make_shared<TUIMessage>();
+                m->role               = TUIMessage::Role::Tool;
+                m->tool               = TUIMessage::ToolData{};
+                m->tool->toolName     = delta.toolName;
+                m->tool->toolCallId   = delta.toolCallId;
+                m->text               = delta.arguments;
                 m->tool->toolFinished = false;
-                m->collapsed    = false;
-                m->startTimeMs  = delta.startTimeMs;
+                m->collapsed          = false;
+                m->startTimeMs        = delta.startTimeMs;
                 st.messages.push_back(std::move(m));
                 st.isStreaming = true;
             } break;
@@ -803,27 +802,27 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
                     auto& msg = *st.messages[i - 1];
                     if (msg.role == TUIMessage::Role::Tool && msg.tool
                         && msg.tool->toolCallId == delta.toolCallId && !msg.tool->toolFinished) {
-                        auto& m        = sharedState_.mutableMessage(st, i - 1);
+                        auto& m              = sharedState_.mutableMessage(st, i - 1);
                         m.tool->toolResult   = delta.result;
                         m.tool->toolFinished = true;
-                        m.collapsed    = true;
-                        m.startTimeMs  = delta.startTimeMs;
-                        m.durationMs   = delta.durationMs;
-                        found          = true;
+                        m.collapsed          = true;
+                        m.startTimeMs        = delta.startTimeMs;
+                        m.durationMs         = delta.durationMs;
+                        found                = true;
                         break;
                     }
                 }
                 if (!found) {
-                    auto m          = std::make_shared<TUIMessage>();
-                    m->role         = TUIMessage::Role::Tool;
-                    m->tool         = TUIMessage::ToolData{};
-                    m->tool->toolName   = delta.toolName;
-                    m->tool->toolCallId = delta.toolCallId;
-                    m->tool->toolResult = delta.result;
+                    auto m                = std::make_shared<TUIMessage>();
+                    m->role               = TUIMessage::Role::Tool;
+                    m->tool               = TUIMessage::ToolData{};
+                    m->tool->toolName     = delta.toolName;
+                    m->tool->toolCallId   = delta.toolCallId;
+                    m->tool->toolResult   = delta.result;
                     m->tool->toolFinished = true;
-                    m->startTimeMs  = delta.startTimeMs;
-                    m->durationMs   = delta.durationMs;
-                    m->collapsed    = true;
+                    m->startTimeMs        = delta.startTimeMs;
+                    m->durationMs         = delta.durationMs;
+                    m->collapsed          = true;
                     st.messages.push_back(std::move(m));
                 }
             } break;
@@ -846,9 +845,9 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
             case Type::MessageTip: {
                 // 通用提示消息: 插入 System 提示消息 (按级别区分显示)
                 pushCurrentTokenLocked(st);
-                auto msg  = std::make_shared<TUIMessage>();
-                msg->role = TUIMessage::Role::System;
-                msg->text = delta.text;
+                auto msg    = std::make_shared<TUIMessage>();
+                msg->role   = TUIMessage::Role::System;
+                msg->text   = delta.text;
                 msg->system = TUIMessage::SystemData{};
                 switch (delta.tipType) {
                     case agentxx::agent::Delta::TipType::Info:
@@ -880,7 +879,7 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
                         formatDurationMilliseconds(delta.durationMs),
                         formatTimestampMilliseconds(delta.startTimeMs + delta.durationMs)
                     );
-                    statMsg->system       = TUIMessage::SystemData{};
+                    statMsg->system      = TUIMessage::SystemData{};
                     statMsg->durationMs  = delta.durationMs;
                     statMsg->startTimeMs = delta.startTimeMs;
                     st.messages.push_back(std::move(statMsg));
@@ -902,8 +901,8 @@ void TUIClientAgentIO::onSync(const agentxx::agent::SyncPayload& payload) {
         // 旧实现先 lock_guard 再调 mutate() 会对同一非递归 mutex 二次加锁,
         // 造成客户端线程死锁 (TUI 启动握手即触发, 界面冻结)
         sharedState_.mutate([&](TUIRenderState& cur) {
-            auto st   = std::make_shared<TUIRenderState>();
-            auto prev = sharedState_.snapshot();
+            auto st              = std::make_shared<TUIRenderState>();
+            auto prev            = sharedState_.snapshot();
             st->cachedModelName  = prev->cachedModelName;
             st->modelNames       = prev->modelNames;
             st->appendComponents = prev->appendComponents;
@@ -943,11 +942,10 @@ void TUIClientAgentIO::onTurnResult(const agentxx::agent::WireTurnResult& result
         auto&                       st = sharedState_.mutableState();
         st.isStreaming                 = false;
         if (result.hasError && !result.errorMessage.empty()) {
-            st.messages.push_back(std::make_shared<TUIMessage>(
-                TUIMessage::makeText(
-                    TUIMessage::Role::System, fmt::format("[Error] {}", result.errorMessage)
-                )
-            ));
+            st.messages.push_back(std::make_shared<TUIMessage>(TUIMessage::makeText(
+                TUIMessage::Role::System,
+                fmt::format("[Error] {}", result.errorMessage)
+            )));
         }
         dispatchNextPendingInput(st);
     }
@@ -1018,8 +1016,8 @@ asio::awaitable<neograph::json> TUIClientAgentIO::handleInterrupt(
     postRedraw();
 
     // 每个输入项一条中断消息 (共享结果通道)
-    const int64_t wireId = interruptWireId_;
-    auto          ch     = std::make_shared<InterruptResultChannel>(ex_, 64);
+    const int64_t wireId      = interruptWireId_;
+    auto          ch          = std::make_shared<InterruptResultChannel>(ex_, 64);
     activeInterrupts_[wireId] = ch;
 
     // 结果回传通道注入 UI 线程 (MessageListComponent 中断 UI 状态表):
@@ -1030,20 +1028,20 @@ asio::awaitable<neograph::json> TUIClientAgentIO::handleInterrupt(
         }
     });
 
-    const int total  = static_cast<int>(handleArg.inputs.size());
-    int       index  = 0;
+    const int total = static_cast<int>(handleArg.inputs.size());
+    int       index = 0;
     for (const auto& input : handleArg.inputs) {
         ++index;
         if (input.type.empty()) {
             continue;
         }
-        auto m             = std::make_shared<TUIMessage>();
-        m->role            = TUIMessage::Role::Interrupt;
-        m->interrupt       = TUIMessage::InterruptData{};
-        m->interrupt->interruptId = wireId;
-        m->interrupt->inputLabel  = input.label;
-        m->interrupt->inputDepict = input.depict;
-        m->interrupt->inputType   = input.type;
+        auto m                     = std::make_shared<TUIMessage>();
+        m->role                    = TUIMessage::Role::Interrupt;
+        m->interrupt               = TUIMessage::InterruptData{};
+        m->interrupt->interruptId  = wireId;
+        m->interrupt->inputLabel   = input.label;
+        m->interrupt->inputDepict  = input.depict;
+        m->interrupt->inputType    = input.type;
         m->interrupt->inputDefault = input.defaultValue;
         m->interrupt->inputEnums   = input.enumValues;
         m->interrupt->inputIndex   = index;
@@ -1060,9 +1058,9 @@ asio::awaitable<neograph::json> TUIClientAgentIO::handleInterrupt(
 
     // 收集结果: 各输入项确认后按 inputIndex 回填 (支持任意顺序确认),
     // 整体取消 (inputIndex=-1) 或通道关闭 (过期/退出) 时终止
-    auto result = neograph::json::array();
+    auto                                    result = neograph::json::array();
     std::vector<std::optional<std::string>> values(total);
-    size_t                                   confirmedCount = 0;
+    size_t                                  confirmedCount = 0;
     while (confirmedCount < values.size()) {
         auto [ec, idx, val] = co_await ch->async_receive(asio::as_tuple(asio::use_awaitable));
         if (ec) {

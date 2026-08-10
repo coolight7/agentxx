@@ -218,7 +218,7 @@ private:
             namespace http = boost::beast::http;
             co_return co_await agentxx::util::catchErrorAsync<bool>(
                 [&]() -> asio::awaitable<bool> {
-                    responseSent_               = true;
+                    responseSent_ = true;
                     http::response<http::string_body> resp;
                     resp.version(11);
                     resp.result(status);

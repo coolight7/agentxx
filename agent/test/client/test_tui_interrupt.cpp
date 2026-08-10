@@ -1,15 +1,15 @@
 #include "test_tui_interrupt.h"
 
 #include "agentxx-client/io/tui/components/message_list.h"
-#include "agentxx/util/string_util.h"
 #include "agentxx-client/io/tui/framework/tui_context.h"
 #include "agentxx-client/io/tui/framework/tui_state.h"
 #include "agentxx-client/io/tui/tui_theme.h"
+#include "agentxx/util/string_util.h"
+#include "asio/io_context.hpp"
 #include "ftxui/component/event.hpp"
 #include "ftxui/component/mouse.hpp"
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/screen.hpp"
-#include "asio/io_context.hpp"
 #include <memory>
 #include <optional>
 #include <string>
@@ -43,9 +43,11 @@ struct InterruptFixture {
     std::shared_ptr<MessageListComponent> comp;
 
     InterruptFixture() {
-        ctx.state          = &sharedState;
-        ctx.frameState     = sharedState.readSnapshot();
-        ctx.postRedraw     = [this] { ++redrawCount; };
+        ctx.state      = &sharedState;
+        ctx.frameState = sharedState.readSnapshot();
+        ctx.postRedraw = [this] {
+            ++redrawCount;
+        };
         ctx.theme          = &theme;
         ctx.showSystemInfo = nullptr;
         ctx.session        = nullptr;
@@ -61,21 +63,21 @@ struct InterruptFixture {
 
     /// 追加一条中断输入消息, 返回其消息索引
     size_t addInterrupt(
-        std::shared_ptr<InterruptResultChannel>       ch,
-        std::string                                   type,
-        std::string                                   defaultValue = "",
-        std::string                                   label        = "label",
-        std::vector<std::string>                      enumValues   = {},
-        int64_t                                       interruptId  = 1,
-        int                                           inputIndex   = 1,
-        int                                           inputTotal   = 1
+        std::shared_ptr<InterruptResultChannel> ch,
+        std::string                             type,
+        std::string                             defaultValue = "",
+        std::string                             label        = "label",
+        std::vector<std::string>                enumValues   = {},
+        int64_t                                 interruptId  = 1,
+        int                                     inputIndex   = 1,
+        int                                     inputTotal   = 1
     ) {
-        auto m             = std::make_shared<TUIMessage>();
-        m->role            = TUIMessage::Role::Interrupt;
-        m->interrupt       = TUIMessage::InterruptData{};
-        m->interrupt->interruptId = interruptId;
-        m->interrupt->inputLabel  = label;
-        m->interrupt->inputType   = type;
+        auto m                     = std::make_shared<TUIMessage>();
+        m->role                    = TUIMessage::Role::Interrupt;
+        m->interrupt               = TUIMessage::InterruptData{};
+        m->interrupt->interruptId  = interruptId;
+        m->interrupt->inputLabel   = label;
+        m->interrupt->inputType    = type;
         m->interrupt->inputDefault = defaultValue;
         m->interrupt->inputIndex   = inputIndex;
         m->interrupt->inputTotal   = inputTotal;
@@ -93,9 +95,8 @@ struct InterruptFixture {
     std::string render() {
         ctx.frameState = sharedState.readSnapshot();
         auto el        = comp->Render();
-        auto screen    = ftxui::Screen::Create(
-            ftxui::Dimension::Fixed(120), ftxui::Dimension::Fixed(60)
-        );
+        auto screen
+            = ftxui::Screen::Create(ftxui::Dimension::Fixed(120), ftxui::Dimension::Fixed(60));
         ftxui::Render(screen, el);
         return screen.ToString();
     }
@@ -131,10 +132,12 @@ struct InterruptFixture {
         int&                                    inputIndex,
         std::optional<std::string>&             value
     ) {
-        bool got = ch->try_receive([&](neograph_asio_error_code ec, int idx, std::optional<std::string> v) {
-            inputIndex = idx;
-            value      = std::move(v);
-        });
+        bool got
+            = ch->try_receive([&](neograph_asio_error_code ec, int idx, std::optional<std::string> v
+                              ) {
+                  inputIndex = idx;
+                  value      = std::move(v);
+              });
         io.run(); // 排空 async_send 投递的完成 handler (数据本身已入队)
         return got;
     }
@@ -153,9 +156,9 @@ struct InterruptFixture {
 // ---------------------------------------------------------------------------
 
 void test_bool_render_yes_no() {
-    InterruptFixture f;
-    auto             ch  = f.makeChannel();
-    auto             mi  = f.addInterrupt(ch, "bool", "true");
+    InterruptFixture  f;
+    auto              ch   = f.makeChannel();
+    auto              mi   = f.addInterrupt(ch, "bool", "true");
     const std::string text = f.render();
     XX_TEST_EXPECT_TRUE(text.find("是") != std::string::npos);
     XX_TEST_EXPECT_TRUE(text.find("否") != std::string::npos);
@@ -180,8 +183,8 @@ void test_bool_click_yes_confirms_true() {
         XX_TEST_EXPECT_EQ(msg.interrupt->interruptResult, std::string("true"));
     }
 
-    int                         idx = 0;
-    std::optional<std::string>  val;
+    int                        idx = 0;
+    std::optional<std::string> val;
     XX_TEST_EXPECT_TRUE(f.recv(ch, idx, val));
     XX_TEST_EXPECT_EQ(idx, 1);
     XX_TEST_EXPECT_TRUE(val.has_value());
@@ -203,8 +206,8 @@ void test_bool_click_no_confirms_false() {
         XX_TEST_EXPECT_EQ(msg.interrupt->interruptResult, std::string("false"));
     }
 
-    int                         idx = 0;
-    std::optional<std::string>  val;
+    int                        idx = 0;
+    std::optional<std::string> val;
     XX_TEST_EXPECT_TRUE(f.recv(ch, idx, val));
     XX_TEST_EXPECT_EQ(idx, 1);
     XX_TEST_EXPECT_TRUE(val.has_value());
@@ -227,8 +230,8 @@ void test_bool_default_no_selected() {
     auto             mi = f.addInterrupt(ch, "bool", "no");
     // 默认 "no" → 选中"否", 点击确认按钮 → "false"
     XX_TEST_EXPECT_TRUE(f.click(mi, MessageListComponent::kHitConfirm));
-    int                         idx = 0;
-    std::optional<std::string>  val;
+    int                        idx = 0;
+    std::optional<std::string> val;
     XX_TEST_EXPECT_TRUE(f.recv(ch, idx, val));
     XX_TEST_EXPECT_TRUE(val.has_value());
     XX_TEST_EXPECT_EQ(*val, std::string("false"));
@@ -251,8 +254,8 @@ void test_int_step_plus_minus() {
     XX_TEST_EXPECT_EQ(f.comp->interruptUiState(mi).editText, std::string("4"));
     // 键盘确认
     f.comp->OnEvent(ftxui::Event::Return);
-    int                         idx = 0;
-    std::optional<std::string>  val;
+    int                        idx = 0;
+    std::optional<std::string> val;
     XX_TEST_EXPECT_TRUE(f.recv(ch, idx, val));
     XX_TEST_EXPECT_TRUE(val.has_value());
     XX_TEST_EXPECT_EQ(*val, std::string("4"));
@@ -270,8 +273,8 @@ void test_int_arrow_step_active() {
     f.comp->OnEvent(ftxui::Event::ArrowDown);
     XX_TEST_EXPECT_EQ(f.comp->interruptUiState(mi).editText, std::string("-1"));
     f.comp->OnEvent(ftxui::Event::Return);
-    int                         idx = 0;
-    std::optional<std::string>  val;
+    int                        idx = 0;
+    std::optional<std::string> val;
     XX_TEST_EXPECT_TRUE(f.recv(ch, idx, val));
     XX_TEST_EXPECT_TRUE(val.has_value());
     XX_TEST_EXPECT_EQ(*val, std::string("-1"));
@@ -286,8 +289,8 @@ void test_int_manual_edit_replace_default() {
     f.type("42");
     XX_TEST_EXPECT_EQ(f.comp->interruptUiState(mi).editText, std::string("42"));
     f.comp->OnEvent(ftxui::Event::Return);
-    int                         idx = 0;
-    std::optional<std::string>  val;
+    int                        idx = 0;
+    std::optional<std::string> val;
     XX_TEST_EXPECT_TRUE(f.recv(ch, idx, val));
     XX_TEST_EXPECT_TRUE(val.has_value());
     XX_TEST_EXPECT_EQ(*val, std::string("42"));
@@ -327,8 +330,8 @@ void test_int_invalid_rejected_and_recover() {
     }
     f.type("7");
     f.comp->OnEvent(ftxui::Event::Return);
-    int                         idx = 0;
-    std::optional<std::string>  val;
+    int                        idx = 0;
+    std::optional<std::string> val;
     XX_TEST_EXPECT_TRUE(f.recv(ch, idx, val));
     XX_TEST_EXPECT_TRUE(val.has_value());
     XX_TEST_EXPECT_EQ(*val, std::string("7"));
@@ -345,8 +348,8 @@ void test_double_step_keeps_fraction() {
     XX_TEST_EXPECT_TRUE(f.click(mi, MessageListComponent::kHitNumPlus));
     XX_TEST_EXPECT_EQ(f.comp->interruptUiState(mi).editText, std::string("3.5"));
     f.comp->OnEvent(ftxui::Event::Return);
-    int                         idx = 0;
-    std::optional<std::string>  val;
+    int                        idx = 0;
+    std::optional<std::string> val;
     XX_TEST_EXPECT_TRUE(f.recv(ch, idx, val));
     XX_TEST_EXPECT_TRUE(val.has_value());
     XX_TEST_EXPECT_EQ(*val, std::string("3.5"));
@@ -362,8 +365,8 @@ void test_double_step_integer_style() {
     f.comp->OnEvent(ftxui::Event::ArrowUp);
     XX_TEST_EXPECT_EQ(f.comp->interruptUiState(mi).editText, std::string("2.0"));
     f.comp->OnEvent(ftxui::Event::Return);
-    int                         idx = 0;
-    std::optional<std::string>  val;
+    int                        idx = 0;
+    std::optional<std::string> val;
     XX_TEST_EXPECT_TRUE(f.recv(ch, idx, val));
     XX_TEST_EXPECT_TRUE(val.has_value());
     XX_TEST_EXPECT_EQ(*val, std::string("2.0"));
@@ -392,9 +395,9 @@ void test_double_invalid_rejected() {
 // ---------------------------------------------------------------------------
 
 void test_enum_render_list() {
-    InterruptFixture f;
-    auto             ch  = f.makeChannel();
-    auto             mi  = f.addInterrupt(ch, "enum", "", "mode", {"alpha", "beta", "gamma"});
+    InterruptFixture  f;
+    auto              ch   = f.makeChannel();
+    auto              mi   = f.addInterrupt(ch, "enum", "", "mode", {"alpha", "beta", "gamma"});
     const std::string text = f.render();
     XX_TEST_EXPECT_TRUE(text.find("alpha") != std::string::npos);
     XX_TEST_EXPECT_TRUE(text.find("beta") != std::string::npos);
@@ -407,8 +410,8 @@ void test_enum_default_selected_and_move() {
     auto             mi = f.addInterrupt(ch, "enum", "b", "mode", {"a", "b", "c"});
     // 默认选中 b → 点击确认按钮
     XX_TEST_EXPECT_TRUE(f.click(mi, MessageListComponent::kHitConfirm));
-    int                         idx = 0;
-    std::optional<std::string>  val;
+    int                        idx = 0;
+    std::optional<std::string> val;
     XX_TEST_EXPECT_TRUE(f.recv(ch, idx, val));
     XX_TEST_EXPECT_TRUE(val.has_value());
     XX_TEST_EXPECT_EQ(*val, std::string("b"));
@@ -437,8 +440,8 @@ void test_string_replace_default_and_confirm() {
     f.type("hello");
     XX_TEST_EXPECT_EQ(f.comp->interruptUiState(mi).editText, std::string("hello"));
     f.comp->OnEvent(ftxui::Event::Return);
-    int                         idx = 0;
-    std::optional<std::string>  val;
+    int                        idx = 0;
+    std::optional<std::string> val;
     XX_TEST_EXPECT_TRUE(f.recv(ch, idx, val));
     XX_TEST_EXPECT_TRUE(val.has_value());
     XX_TEST_EXPECT_EQ(*val, std::string("hello"));
@@ -451,8 +454,8 @@ void test_string_enter_uses_default() {
     // 激活后不编辑直接 Enter: 确认默认值
     XX_TEST_EXPECT_TRUE(f.click(mi, MessageListComponent::kHitEdit));
     f.comp->OnEvent(ftxui::Event::Return);
-    int                         idx = 0;
-    std::optional<std::string>  val;
+    int                        idx = 0;
+    std::optional<std::string> val;
     XX_TEST_EXPECT_TRUE(f.recv(ch, idx, val));
     XX_TEST_EXPECT_TRUE(val.has_value());
     XX_TEST_EXPECT_EQ(*val, std::string("hi"));
@@ -464,7 +467,7 @@ void test_string_enter_uses_default() {
 
 void test_cancel_marks_all_and_notifies() {
     InterruptFixture f;
-    auto             ch = f.makeChannel();
+    auto             ch  = f.makeChannel();
     auto             mi1 = f.addInterrupt(ch, "bool", "true", "a", {}, 7, 1, 2);
     auto             mi2 = f.addInterrupt(ch, "bool", "false", "b", {}, 7, 2, 2);
     // 取消任意一条 → 同请求所有未操作消息 Cancelled, 通道收到整体取消

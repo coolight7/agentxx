@@ -416,8 +416,7 @@ public:
             + std::string(content) + R"("}],
       "stop_reason": "end_turn",
       "usage": {"input_tokens": )"
-            + std::to_string(inputTok) + R"(, "output_tokens": )" + std::to_string(outputTok)
-            + R"(}
+            + std::to_string(inputTok) + R"(, "output_tokens": )" + std::to_string(outputTok) + R"(}
     })"
         );
     }
@@ -1969,11 +1968,11 @@ void test_convert_messages_thinking_signature_roundtrip() {
 /// - HTTP URL → url source
 void test_convert_messages_multimodal() {
     std::vector<neograph::ChatMessage> msgs = {
-        {.role        = "user",
-         .content     = "看看这个视频",
-         .image_urls  = {"https://example.com/a.png"},
-         .audio_urls  = {"data:audio/wav;base64,UklGRg=="},
-         .video_urls  = {"data:video/mp4;base64,AAAA", "https://example.com/b.mp4"}},
+        {.role       = "user",
+         .content    = "看看这个视频",
+         .image_urls = {"https://example.com/a.png"},
+         .audio_urls = {"data:audio/wav;base64,UklGRg=="},
+         .video_urls = {"data:video/mp4;base64,AAAA", "https://example.com/b.mp4"}},
     };
     auto [system, arr] = server::AnthropicProvider::convertMessages(msgs);
     XX_TEST_EXPECT_TRUE(system.empty());
@@ -2011,8 +2010,7 @@ void test_convert_messages_multimodal() {
 /// 多模态消息: 无文本时不应产生 text 块
 void test_convert_messages_multimodal_no_text() {
     std::vector<neograph::ChatMessage> msgs = {
-        {.role       = "user",
-         .audio_urls = {"data:audio/mpeg;base64,SUQzBAAAAA=="}},
+        {.role = "user", .audio_urls = {"data:audio/mpeg;base64,SUQzBAAAAA=="}},
     };
     auto [system, arr] = server::AnthropicProvider::convertMessages(msgs);
     const auto& blocks = arr[0]["content"];
@@ -2024,12 +2022,8 @@ void test_convert_messages_multimodal_no_text() {
 /// 多模态消息合并: 相邻同 role 多模态消息的 content 块应正确拼接
 void test_convert_messages_multimodal_merge() {
     std::vector<neograph::ChatMessage> msgs = {
-        {.role       = "user",
-         .content    = "图1",
-         .image_urls = {"https://example.com/1.png"}},
-        {.role       = "user",
-         .content    = "图2",
-         .image_urls = {"https://example.com/2.png"}},
+        {.role = "user", .content = "图1", .image_urls = {"https://example.com/1.png"}},
+        {.role = "user", .content = "图2", .image_urls = {"https://example.com/2.png"}},
     };
     auto [system, arr] = server::AnthropicProvider::convertMessages(msgs);
     // 相邻同 role 合并为一条

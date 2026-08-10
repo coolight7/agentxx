@@ -427,9 +427,7 @@ public:
 
     /// @param persistence 会话 SQLite 持久化 (由 BaseAgent::init 注入;
     ///        为空时 share store 仅内存存储, 不落库)
-    explicit MiddlewareContext(
-        std::shared_ptr<agentxx::agent::SessionPersistence> persistence
-    ) :
+    explicit MiddlewareContext(std::shared_ptr<agentxx::agent::SessionPersistence> persistence) :
         persistence_(persistence) {}
 
     /// 将 std::any 转为 neograph::json（用于序列化到 state）

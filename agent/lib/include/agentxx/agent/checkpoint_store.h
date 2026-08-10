@@ -48,11 +48,13 @@ namespace agent {
  */
 class SingleCheckpointStore : public neograph::graph::CheckpointStore {
 public:
+
     /// 保存 checkpoint 并淘汰该 thread 的历史数据
     /// - final: 子类通过 saveImpl / evictImpl 参与, 不可覆盖本函数
     void save(const neograph::graph::Checkpoint& cp) final;
 
 protected:
+
     /// 子类实现: 将 cp 持久化为该 thread 的最新 checkpoint
     virtual void saveImpl(const neograph::graph::Checkpoint& cp) = 0;
 
@@ -71,32 +73,33 @@ protected:
  */
 class InMemorySingleCheckpointStore : public SingleCheckpointStore {
 public:
+
     // ── CheckpointStore 同步接口 (async 侧继承基类默认实现) ─────────────
 
-    std::optional<neograph::graph::Checkpoint>
-    load_latest(const std::string& thread_id) override;
+    std::optional<neograph::graph::Checkpoint> load_latest(const std::string& thread_id) override;
 
     /// 仅可能命中某个 thread 的最新 checkpoint; 历史 id 已被淘汰, 返回 nullopt
     std::optional<neograph::graph::Checkpoint> load_by_id(const std::string& id) override;
 
     /// 最多返回最新一条 (limit <= 0 时返回空, 与 neograph 语义一致)
     std::vector<neograph::graph::Checkpoint>
-    list(const std::string& thread_id, int limit = 100) override;
+        list(const std::string& thread_id, int limit = 100) override;
 
     void delete_thread(const std::string& thread_id) override;
 
     // ── pending writes ──────────────────────────────────────────────────
 
-    void put_writes(const std::string&             thread_id,
-                    const std::string&             parent_checkpoint_id,
-                    const neograph::graph::PendingWrite& write) override;
+    void put_writes(
+        const std::string&                   thread_id,
+        const std::string&                   parent_checkpoint_id,
+        const neograph::graph::PendingWrite& write
+    ) override;
 
     std::vector<neograph::graph::PendingWrite>
-    get_writes(const std::string& thread_id,
-               const std::string& parent_checkpoint_id) override;
+        get_writes(const std::string& thread_id, const std::string& parent_checkpoint_id) override;
 
-    void clear_writes(const std::string& thread_id,
-                      const std::string& parent_checkpoint_id) override;
+    void clear_writes(const std::string& thread_id, const std::string& parent_checkpoint_id)
+        override;
 
     // ── 测试辅助 ────────────────────────────────────────────────────────
 
@@ -104,14 +107,18 @@ public:
     std::size_t size() const;
 
     /// 指定 checkpoint 上挂载的 pending writes 数量
-    std::size_t pending_writes_count(const std::string& thread_id,
-                                     const std::string& parent_checkpoint_id) const;
+    std::size_t pending_writes_count(
+        const std::string& thread_id,
+        const std::string& parent_checkpoint_id
+    ) const;
 
 protected:
+
     void saveImpl(const neograph::graph::Checkpoint& cp) override;
     void evictImpl(std::string_view threadId, std::string_view keepId) override;
 
 private:
+
     mutable std::mutex mutex_;
     /// 每个 thread 仅保留最新 checkpoint
     std::map<std::string, neograph::graph::Checkpoint> latest_;

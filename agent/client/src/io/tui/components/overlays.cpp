@@ -573,7 +573,10 @@ std::vector<ScrollItem> PlanDiagramOverlay::buildItems() {
                 cachedDiagram_     = tui_mermaid::parseMermaidStateDiagram(roadmap);
                 if (!cachedDiagram_.nodes.empty()) {
                     cachedElement_ = tui_mermaid::renderMermaidStateDiagram(
-                        cachedDiagram_, maxW, theme.normalColor, colorOf
+                        cachedDiagram_,
+                        maxW,
+                        theme.normalColor,
+                        colorOf
                     );
                 }
             }

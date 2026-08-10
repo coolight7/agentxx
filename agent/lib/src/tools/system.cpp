@@ -38,8 +38,8 @@ asio::awaitable<std::string> GetCurrentDateTimeTool::execute_async(const neograp
         std::chrono::zoned_time local_time{std::chrono::current_zone(), now};
         localTimeStr = std::format("{:%Y-%m-%d %H:%M:%S}", local_time);
     } catch (...) {
-        std::time_t  t   = std::chrono::system_clock::to_time_t(now);
-        std::tm      tmv{};
+        std::time_t t = std::chrono::system_clock::to_time_t(now);
+        std::tm     tmv{};
 #if XX_IS_WIN_D
         localtime_s(&tmv, &t);
 #else

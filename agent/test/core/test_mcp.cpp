@@ -1552,16 +1552,16 @@ void test_mcp_server_cross_version_stdio() {
     };
 
     VersionPair pairs[] = {
-  // Client requests known version → server responds with same
+        // Client requests known version → server responds with same
         {"2024-11-05", "2024-11-05"},
         {"2025-03-26", "2025-03-26"},
         {"2025-06-18", "2025-06-18"},
         {"2025-11-25", "2025-11-25"},
- // Client requests unknown 2025 version → server responds with newest 2025
+        // Client requests unknown 2025 version → server responds with newest 2025
         {"2025-01-01", "2025-11-25"},
- // Client requests future version → server responds with newest
+        // Client requests future version → server responds with newest
         {"2026-01-01", "2026-07-28"},
- // Client requests older version → server responds with that version
+        // Client requests older version → server responds with that version
         {"2024-06-01", "2024-11-05"},
     };
 

@@ -24,7 +24,7 @@ public:
     // 初始化Hyperscan数据库
     XXRegexHP(
         const std::string& regstr,
-        unsigned int       flags          = agentxx::util::XXRegex::defHSFlags_normal,
+        unsigned int       flags           = agentxx::util::XXRegex::defHSFlags_normal,
         bool               caseInsensitive = false
     ) :
         hs_db(nullptr),
@@ -73,7 +73,7 @@ public:
                 f |= HS_FLAG_CASELESS;
             }
         }
-        std::vector<const char*>  reglist;
+        std::vector<const char*> reglist;
         reglist.reserve(regstrs.size());
         for (const auto& reg : regstrs) {
             reglist.push_back(reg.c_str());

@@ -422,8 +422,8 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
         in.state.overwrite("messages", std::move(msglist));
     }
 
-    auto   ctxPtr = agentContext.lock()->middlewareHandleContext;
-    auto   timer  = asio::steady_timer(co_await asio::this_coro::executor);
+    auto ctxPtr = agentContext.lock()->middlewareHandleContext;
+    auto timer  = asio::steady_timer(co_await asio::this_coro::executor);
     // 连续重试次数 (用于退避延时计算; 部分输出成功后会重置)
     size_t retry = 0;
     // 总尝试次数 (每次调用失败都递增, 不重置): 限制 LLM 调用失败的总次数,
@@ -524,8 +524,7 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
         // - 连续重试达到配置上限, 或
         // - 总尝试次数达到配置上限 * 3 (防止部分输出后 retry 被反复重置导致无限重试)
         //   时, 停止重试并抛出原始异常
-        if (isCancel
-            || retry >= agentCtxPtr->agentConfig->llmMaxRetry
+        if (isCancel || retry >= agentCtxPtr->agentConfig->llmMaxRetry
             || totalAttempts >= agentCtxPtr->agentConfig->llmMaxRetry * 3) {
             std::rethrow_exception(errorPtr);
         }
@@ -549,18 +548,20 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
         if (nullptr != in.stream_cb) {
             // 实际等待时长: retry*3 秒 + 限速附加延时 (appendDelay 单位: 秒)
             const auto delaySec = retry * 3 + appendDelay;
-            auto tipJson = neograph::json{
-                {"channel", "message_tip"},
-                {"value",   neograph::json{
-                    {"tip_type", "warning"},
-                    {"text",     fmt::format(
-                         "LLM API 调用失败，{} 秒后自动重试 ({}/{})，错误: {}",
-                         delaySec,
-                         retry,
-                         agentCtxPtr->agentConfig->llmMaxRetry,
-                         errInfo
-                     )},
-                }},
+            auto       tipJson  = neograph::json{
+                       {"channel", "message_tip"},
+                       {"value",
+                        neograph::json{
+                            {"tip_type", "warning"},
+                            {"text",
+                             fmt::format(
+                          "LLM API 调用失败，{} 秒后自动重试 ({}/{})，错误: {}",
+                          delaySec,
+                          retry,
+                          agentCtxPtr->agentConfig->llmMaxRetry,
+                          errInfo
+                      )},
+                 }                              },
             };
             (*in.stream_cb)(neograph::graph::GraphEvent{
                 neograph::graph::GraphEvent::Type::CHANNEL_WRITE,
@@ -569,9 +570,7 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
             });
         }
         // 逐渐延长延时等待 (appendDelay 单位: 秒, 与 UI 提示 delaySec 一致)
-        timer.expires_after(
-            std::chrono::seconds(retry * 3) + std::chrono::seconds(appendDelay)
-        );
+        timer.expires_after(std::chrono::seconds(retry * 3) + std::chrono::seconds(appendDelay));
         co_await timer.async_wait(asio::use_awaitable);
     } while (true);
 }

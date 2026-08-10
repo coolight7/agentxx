@@ -4,8 +4,8 @@
 #include "agentxx/util/exception.h"
 #include "agentxx/util/log.h"
 #include "fmt/format.h"
-#include <neograph/graph/engine.h>
 #include <atomic>
+#include <neograph/graph/engine.h>
 #include <sstream>
 #include <vector>
 
@@ -172,10 +172,9 @@ asio::awaitable<events::RespSubagentResult> SubagentSupervisor::runSubagent(
     // - 附加父会话 + 全局自增序号保证唯一 (单线程协作式调度下自增无竞争)
     static std::atomic<uint64_t> subagentRunSeq{0};
     const auto                   parentId = std::string{parentThreadId};
-    const auto subagentId = fmt::format(
-        "subagent_{}_{}_{}", subagentName, parentId, subagentRunSeq.fetch_add(1)
-    );
-    auto busPtr     = ctxPtr->bus;
+    const auto                   subagentId
+        = fmt::format("subagent_{}_{}_{}", subagentName, parentId, subagentRunSeq.fetch_add(1));
+    auto busPtr = ctxPtr->bus;
 
     // 标记 subagent 运行中 (供跨 agent 查询路由校验)
     runningRegistry_[std::string{subagentName}] = true;
@@ -209,7 +208,8 @@ asio::awaitable<events::RespSubagentResult> SubagentSupervisor::runSubagent(
             std::ostringstream oss;
             co_await subgraph->run_stream_async(
                 cfg,
-                [&oss, &busPtr, &subagentName, &subagentId](const neograph::graph::GraphEvent& event) {
+                [&oss, &busPtr, &subagentName, &subagentId](const neograph::graph::GraphEvent& event
+                ) {
                     switch (event.type) {
                         case neograph::graph::GraphEvent::Type::NODE_START:
                         case neograph::graph::GraphEvent::Type::NODE_END:
@@ -244,8 +244,8 @@ asio::awaitable<events::RespSubagentResult> SubagentSupervisor::runSubagent(
                                             events::EventSubagentProgress{
                                                 .subagentId = subagentId,
                                                 .agentName  = agentName,
-                                                .kind       = kind == "thinking" ? "thinking" : "token",
-                                                .data       = token,
+                                                .kind = kind == "thinking" ? "thinking" : "token",
+                                                .data = token,
                                             }
                                         );
                                     },

@@ -4,9 +4,9 @@
 #include "agentxx-client/io/tui/lazy_scrollable.h"
 #include "ftxui/component/component_base.hpp"
 #include "ftxui/dom/elements.hpp"
-#include <markdown/dom_builder.hpp>
 #include <cstdint>
 #include <map>
+#include <markdown/dom_builder.hpp>
 #include <memory>
 #include <vector>
 
@@ -180,18 +180,18 @@ private:
     bool          fillViewport(size_t index);
 
     // ---- 子项构建辅助 ----
-    LazyBuiltItem buildMessageItem(const TUIMessage& msg, size_t index);
-    LazyBuiltItem buildStreamingItem(const TUIRenderState& st);
+    LazyBuiltItem  buildMessageItem(const TUIMessage& msg, size_t index);
+    LazyBuiltItem  buildStreamingItem(const TUIRenderState& st);
     ftxui::Element buildBanner();
 
     bool hasStreamingToken(const TUIRenderState& st) const;
 
     ftxui::Element buildMessageBlock(
-                 const TUIMessage&                                   msg,
-                 size_t                                              msgIndex,
-                 int                                                 maxWidth,
-                 std::vector<std::unique_ptr<markdown::DomBuilder>>& mdBuilders
-             );
+        const TUIMessage&                                   msg,
+        size_t                                              msgIndex,
+        int                                                 maxWidth,
+        std::vector<std::unique_ptr<markdown::DomBuilder>>& mdBuilders
+    );
 
     /// 中断消息控件区 (仅 Waiting 状态; 渲染控件并把命中区域记入 interruptHits_)
     ftxui::Element buildInterruptControl(const TUIMessage& msg, size_t msgIndex);
@@ -202,8 +202,8 @@ private:
     void           appendEditToolBody(const TUIMessage& msg, ftxui::Elements& lines);
     ftxui::Element renderEditToolDiff(std::string_view oldStr, std::string_view newStr);
 
-    TUICtx&                          ctx_;
-    std::shared_ptr<LazyScrollable>  scrollable_;
+    TUICtx&                         ctx_;
+    std::shared_ptr<LazyScrollable> scrollable_;
 
     // ---- 折叠消息命中检测 (由上一帧 visibleBoxes 反推) ----
     std::vector<ftxui::Box> collapsibleBoxes_;

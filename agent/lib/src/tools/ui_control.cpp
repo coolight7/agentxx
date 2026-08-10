@@ -454,16 +454,16 @@ static void uiControlPrepareKeyInput(INPUT& input, WORD vk, DWORD flags) {
 static asio::awaitable<void> uiControlMouseMoveTo(int x, int y) {
     // 多显示器: 使用虚拟屏幕坐标系 (覆盖所有显示器), 支持副屏的负坐标。
     // 绝对坐标归一化按虚拟屏尺寸计算, 越界坐标 clamp 到虚拟屏范围避免溢出
-    const int vx = GetSystemMetrics(SM_XVIRTUALSCREEN);
-    const int vy = GetSystemMetrics(SM_YVIRTUALSCREEN);
-    const int vw = GetSystemMetrics(SM_CXVIRTUALSCREEN);
-    const int vh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
-    x            = std::clamp(x, vx, vx + vw - 1);
-    y            = std::clamp(y, vy, vy + vh - 1);
-    INPUT input  = {};
-    input.type   = INPUT_MOUSE;
-    input.mi.dx  = static_cast<LONG>((static_cast<LONGLONG>(x - vx) * 65535) / (vw - 1));
-    input.mi.dy  = static_cast<LONG>((static_cast<LONGLONG>(y - vy) * 65535) / (vh - 1));
+    const int vx         = GetSystemMetrics(SM_XVIRTUALSCREEN);
+    const int vy         = GetSystemMetrics(SM_YVIRTUALSCREEN);
+    const int vw         = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+    const int vh         = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+    x                    = std::clamp(x, vx, vx + vw - 1);
+    y                    = std::clamp(y, vy, vy + vh - 1);
+    INPUT input          = {};
+    input.type           = INPUT_MOUSE;
+    input.mi.dx          = static_cast<LONG>((static_cast<LONGLONG>(x - vx) * 65535) / (vw - 1));
+    input.mi.dy          = static_cast<LONG>((static_cast<LONGLONG>(y - vy) * 65535) / (vh - 1));
     input.mi.mouseData   = 0;
     input.mi.dwFlags     = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE;
     input.mi.time        = 0;
@@ -709,14 +709,8 @@ static asio::awaitable<UICmdResult> uiControlKeyType(std::string_view text) {
     // UTF-8 -> UTF-16 (Windows 宽字符编码): 逐字节发送 UTF-8 会让中文等多字节
     // 字符变成多个乱码字符, 必须先解码为 UTF-16 码元再经 KEYEVENTF_UNICODE 发送
     std::wstring wtext;
-    const int    wlen = MultiByteToWideChar(
-        CP_UTF8,
-        0,
-        text.data(),
-        static_cast<int>(text.size()),
-        nullptr,
-        0
-    );
+    const int    wlen
+        = MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0);
     if (wlen > 0) {
         wtext.resize(static_cast<size_t>(wlen));
         MultiByteToWideChar(
@@ -1024,7 +1018,8 @@ UIControlKeyboardMouseTool::UIControlKeyboardMouseTool(
 
 neograph::ChatTool UIControlKeyboardMouseTool::get_definition() const {
     auto        agentPtr = agentContext.lock();
-    const auto& prompt   = agentPtr->agentConfig->prompt.toolPrompt["agentxx_ui_control_keyboard_mouse"];
+    const auto& prompt
+        = agentPtr->agentConfig->prompt.toolPrompt["agentxx_ui_control_keyboard_mouse"];
 
     return {
         "agentxx_ui_control_keyboard_mouse",

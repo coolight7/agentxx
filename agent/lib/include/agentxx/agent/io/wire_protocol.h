@@ -26,10 +26,10 @@ struct MsgType {
     inline static constexpr std::string_view Ping                   = "ping";
 
     // ===== Server -> Client =====
-    inline static constexpr std::string_view HelloAck            = "hello_ack";
-    inline static constexpr std::string_view DeltaMsg            = "delta";
-    inline static constexpr std::string_view SyncMsg             = "sync";
-    inline static constexpr std::string_view InterruptRequest    = "interrupt_request";
+    inline static constexpr std::string_view HelloAck         = "hello_ack";
+    inline static constexpr std::string_view DeltaMsg         = "delta";
+    inline static constexpr std::string_view SyncMsg          = "sync";
+    inline static constexpr std::string_view InterruptRequest = "interrupt_request";
     /// 服务端通知中断已过期 (超时/会话取消): 客户端应将对应未操作的中断消息标记为过期
     inline static constexpr std::string_view InterruptExpired    = "interrupt_expired";
     inline static constexpr std::string_view TurnResult          = "turn_result";

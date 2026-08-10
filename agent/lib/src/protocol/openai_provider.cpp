@@ -1247,7 +1247,8 @@ bool OpenAIProvider::processResponsesSseLine(
     // usage, 两者都兼容
     if (j.contains("usage") && j["usage"].is_object()) {
         parseResponsesUsage(j["usage"], completion);
-    } else if (j.contains("response") && j["response"].is_object() && j["response"].contains("usage")) {
+    } else if (j.contains("response") && j["response"].is_object()
+               && j["response"].contains("usage")) {
         parseResponsesUsage(j["response"]["usage"], completion);
     }
 

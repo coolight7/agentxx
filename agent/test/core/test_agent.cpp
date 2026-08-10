@@ -138,9 +138,7 @@ DaSimServer startDaSimServer() {
                         co_await asio::this_coro::executor,
                         std::chrono::milliseconds(g_da_sim_delay_ms)
                     );
-                    auto [ec] = co_await delayTimer.async_wait(
-                        asio::as_tuple(asio::use_awaitable)
-                    );
+                    auto [ec] = co_await delayTimer.async_wait(asio::as_tuple(asio::use_awaitable));
                     if (ec) {
                         co_return;
                     }

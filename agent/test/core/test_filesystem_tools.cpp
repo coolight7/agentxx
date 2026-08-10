@@ -29,7 +29,6 @@ std::string testDirRelativeToCwd() {
     return relStr.empty() ? testDir : relStr;
 }
 
-
 void setupTestDir() {
     namespace fs = std::filesystem;
     if (fs::exists(testDir)) {
@@ -180,10 +179,10 @@ asio::awaitable<void>
 /// 不修改进程 CWD: 计算 testDir 相对当前工作目录的路径传入, 工具内部解析后应能正确列出。
 asio::awaitable<void>
     test_list_file_relative_path(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
-    auto tool = agentxx::tools::FileSystemListTool{agentContext};
+    auto tool    = agentxx::tools::FileSystemListTool{agentContext};
     auto relPath = testDirRelativeToCwd();
-    auto args = neograph::json{
-        {"path", relPath}
+    auto args    = neograph::json{
+           {"path", relPath}
     };
     auto result = co_await tool.execute_async(args);
     if (result.find("test1.txt") != std::string::npos
@@ -335,8 +334,8 @@ asio::awaitable<void>
     test_read_text_file_relative_path(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool    = agentxx::tools::FilesystemReadTextFileTool{agentContext};
     auto relPath = testDirRelativeToCwd() + "/test1.txt";
-    auto args = neograph::json{
-        {"path", relPath}
+    auto args    = neograph::json{
+           {"path", relPath}
     };
     auto result = co_await tool.execute_async(args);
     if (result.find("line1") != std::string::npos && result.find("line5") != std::string::npos) {
@@ -917,8 +916,8 @@ asio::awaitable<void>
     test_glob_relative_pattern(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool   = agentxx::tools::FilesystemGlobTool{agentContext};
     auto relDir = testDirRelativeToCwd();
-    auto args = neograph::json{
-        {"file_patterns", neograph::json::array({relDir + "/*.txt"})},
+    auto args   = neograph::json{
+          {"file_patterns", neograph::json::array({relDir + "/*.txt"})},
     };
     auto result = co_await tool.execute_async(args);
     if (result.find("test1.txt") != std::string::npos
@@ -1210,8 +1209,8 @@ asio::awaitable<void>
 
 /// max_depth 过滤 (glob 库 static_prefix + path_depth):
 /// `{testDir}/**/*.txt` 递归匹配, max_depth=1 时 subdir/subtest.txt (深度 2) 应被排除
-asio::awaitable<void>
-    test_glob_max_depth(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+asio::awaitable<void> test_glob_max_depth(std::weak_ptr<agentxx::agent::AgentContext> agentContext
+) {
     auto tool = agentxx::tools::FilesystemGlobTool{agentContext};
     auto args = neograph::json{
         {"file_patterns", neograph::json::array({testDir + "/**/*.txt"})},
@@ -1305,8 +1304,8 @@ asio::awaitable<void>
 }
 
 /// 内存压力测试: 循环多次调用 grep, 用于排查内存泄漏/堆损坏
-asio::awaitable<void>
-    test_grep_mem_stress(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+asio::awaitable<void> test_grep_mem_stress(std::weak_ptr<agentxx::agent::AgentContext> agentContext
+) {
     namespace fs = std::filesystem;
     // 构造较大测试目录: 100 个文件, 便于观察内存行为
     auto stressDir = testDir + "/stress";
@@ -1338,9 +1337,9 @@ asio::awaitable<void>
 
     // 正则 + files_with_matches
     auto args = neograph::json{
-        {"text_patterns_is_regex", true},
-        {"text_patterns", neograph::json::array({"token_\\d+", "func\\d+"})},
-        {"file_patterns", neograph::json::array({stressDir + "/**/*"})},
+        {"text_patterns_is_regex", true                                             },
+        {"text_patterns",          neograph::json::array({"token_\\d+", "func\\d+"})},
+        {"file_patterns",          neograph::json::array({stressDir + "/**/*"})     },
     };
     auto rss0 = rssKB();
     for (int i = 0; i < 30; i++) {
@@ -1355,10 +1354,10 @@ asio::awaitable<void>
 
     // 纯文本 (AhoCorasick) + content 模式
     auto args2 = neograph::json{
-        {"text_patterns_is_regex", false},
-        {"text_patterns", neograph::json::array({"token_5", "func3"})},
-        {"file_patterns", neograph::json::array({stressDir + "/**/*"})},
-        {"output_mode", "content"},
+        {"text_patterns_is_regex", false                                       },
+        {"text_patterns",          neograph::json::array({"token_5", "func3"}) },
+        {"file_patterns",          neograph::json::array({stressDir + "/**/*"})},
+        {"output_mode",            "content"                                   },
     };
     for (int i = 0; i < 30; i++) {
         auto r = co_await tool.execute_async(args2);

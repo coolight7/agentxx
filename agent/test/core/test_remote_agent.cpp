@@ -232,8 +232,8 @@ static asio::awaitable<void> test_remote_protocol_roundtrip() {
         SyncPayload p;
         p.fromIndex = 2;
         p.tailHash  = "hash123";
-        auto        vm = ViewMessage::makeText(ViewMessage::Role::User, "hi");
-        vm.id          = "id1";
+        auto vm     = ViewMessage::makeText(ViewMessage::Role::User, "hi");
+        vm.id       = "id1";
         p.messages.push_back(std::move(vm));
         auto back = WsAgentIOTransport::deserialize(WsAgentIOTransport::serialize(WireMessage{p}));
         XX_TEST_EXPECT_TRUE(back.has_value());
@@ -282,8 +282,8 @@ static asio::awaitable<void> test_remote_protocol_roundtrip() {
     }
     {
         agentxx::agent::WireInterruptExpired expired{7, "sess"};
-        auto                                json = WsAgentIOTransport::serialize(WireMessage{expired});
-        auto                                back = WsAgentIOTransport::deserialize(json);
+        auto json = WsAgentIOTransport::serialize(WireMessage{expired});
+        auto back = WsAgentIOTransport::deserialize(json);
         XX_TEST_EXPECT_TRUE(back.has_value());
         if (back) {
             auto* e = std::get_if<agentxx::agent::WireInterruptExpired>(&*back);
@@ -486,7 +486,7 @@ static asio::awaitable<void> test_remote_client_handshake() {
 static asio::awaitable<void> test_session_controller_replay() {
     auto ex = co_await asio::this_coro::executor;
 
-    auto tp = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+    auto tp      = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
     auto clientT = std::move(tp.first);
     auto serverT = std::move(tp.second);
 
@@ -563,7 +563,7 @@ static asio::awaitable<void> test_session_controller_replay() {
 static asio::awaitable<void> test_session_controller_replay_fallback() {
     auto ex = co_await asio::this_coro::executor;
 
-    auto tp = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+    auto tp      = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
     auto clientT = std::move(tp.first);
     auto serverT = std::move(tp.second);
 
@@ -926,7 +926,7 @@ static asio::awaitable<void> test_remote_client_context_stats() {
 static asio::awaitable<void> test_channel_client_integration() {
     auto ex = co_await asio::this_coro::executor;
 
-    auto tp = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+    auto tp      = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
     auto clientT = std::move(tp.first);
     auto serverT = std::move(tp.second);
 
@@ -1079,7 +1079,7 @@ static asio::awaitable<void> test_remote_echo() {
 static asio::awaitable<void> test_remote_concurrent_writes() {
     auto ex = co_await asio::this_coro::executor;
 
-    auto tp = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex, 8192);
+    auto tp      = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex, 8192);
     auto clientT = std::move(tp.first);
     auto serverT = std::move(tp.second);
 
@@ -1431,7 +1431,7 @@ static asio::awaitable<void> test_remote_auth_timeout() {
 static asio::awaitable<void> test_remote_auth_rejected() {
     auto ex = co_await asio::this_coro::executor;
 
-    auto tp = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+    auto tp      = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
     auto clientT = std::move(tp.first);
     auto serverT = std::move(tp.second);
 

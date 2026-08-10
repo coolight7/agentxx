@@ -57,7 +57,8 @@ public:
     /// 追加一条展示历史消息 (事务: 消息 + msgIdCounter 一起提交)
     /// - msgIdCounter 为追加后会话的计数 (新消息 id 序号), 供重启恢复
     /// - 失败仅记录日志, 不影响内存状态
-    void appendViewMessage(std::string_view threadId, const ViewMessage& msg, uint64_t msgIdCounter);
+    void
+        appendViewMessage(std::string_view threadId, const ViewMessage& msg, uint64_t msgIdCounter);
 
     /// 保存 LLM 上下文消息 (整表替换; 每轮对话结束时调用)
     /// - 失败仅记录日志, 不影响内存状态
@@ -66,7 +67,7 @@ public:
     // ---- share store (share_store.db) ----
 
     struct LoadedShareStore {
-        std::map<size_t, std::string> items;  ///< id -> value
+        std::map<size_t, std::string> items; ///< id -> value
         /// 下一个可分配 id (恢复自现有条目最大 id + 1; 空存储为 1)
         size_t nextId = 1;
     };
@@ -111,10 +112,8 @@ private:
     bool threadDirExists(std::string_view threadId) const;
 
     /// 建表 (幂等)
-    static void ensureSchema(
-        agentxx::util::SqliteDb& sessionDb,
-        agentxx::util::SqliteDb& shareStoreDb
-    );
+    static void
+        ensureSchema(agentxx::util::SqliteDb& sessionDb, agentxx::util::SqliteDb& shareStoreDb);
 
     std::string rootDir_;
     std::mutex  mutex_;

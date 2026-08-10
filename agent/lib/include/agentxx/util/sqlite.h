@@ -25,13 +25,14 @@ public:
     ~SqliteDb();
     SqliteDb(SqliteDb&& other) noexcept;
     SqliteDb& operator=(SqliteDb&& other) noexcept;
-    SqliteDb(const SqliteDb&) = delete;
+    SqliteDb(const SqliteDb&)            = delete;
     SqliteDb& operator=(const SqliteDb&) = delete;
 
     /// 打开数据库 (文件不存在则创建; ":memory:" 支持内存库, 用于测试)
     /// - 设置 WAL / busy_timeout / synchronous=NORMAL; 失败抛异常
     void open(std::string_view path);
     void close();
+
     bool isOpen() const noexcept {
         return db_ != nullptr;
     }
@@ -47,7 +48,7 @@ public:
         ~Stmt();
         Stmt(Stmt&& other) noexcept;
         Stmt& operator=(Stmt&& other) noexcept;
-        Stmt(const Stmt&) = delete;
+        Stmt(const Stmt&)            = delete;
         Stmt& operator=(const Stmt&) = delete;
 
         /// 内部构造: 由 SqliteDb::prepare 使用 (sql 编译失败抛异常)

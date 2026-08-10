@@ -45,8 +45,7 @@ asio::awaitable<void> BaseAgent::init() {
     setupEventBus();
 
     agentContext->middlewareHandleContext
-        = std::make_shared<agentxx::middleware::MiddlewareContext>(
-            agentContext->sessionPersistence
+        = std::make_shared<agentxx::middleware::MiddlewareContext>(agentContext->sessionPersistence
         );
 
     {
@@ -380,9 +379,7 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
     };
     // 展示历史 (ViewMessage) 与 LLM 上下文 (原始 json) 分集维护:
     // 历史用于 client 同步/展示, 上下文仅用于调用 LLM API
-    session->appendHistory(
-        ViewMessage::makeText(ViewMessage::Role::User, processedInput)
-    );
+    session->appendHistory(ViewMessage::makeText(ViewMessage::Role::User, processedInput));
     session->llmMessages.push_back(std::move(userMsgJson));
 
     auto cancelToken = std::make_shared<neograph::graph::CancelToken>();

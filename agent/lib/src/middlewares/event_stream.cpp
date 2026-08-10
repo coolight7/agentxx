@@ -221,8 +221,7 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
                 target = &session_->viewMessages[idxIt->second];
             }
             if (!target) {
-                for (auto it = session_->viewMessages.rbegin();
-                     it != session_->viewMessages.rend();
+                for (auto it = session_->viewMessages.rbegin(); it != session_->viewMessages.rend();
                      ++it) {
                     if (it->role == ViewMessage::Role::Tool && it->tool
                         && it->tool->toolCallId == toolCallId && !it->tool->toolFinished) {

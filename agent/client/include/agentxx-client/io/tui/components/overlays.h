@@ -161,12 +161,12 @@ private:
     /// 缓存命中时 buildItems 返回同一个 Element 指针, Scrollable 的
     /// cachedElements_ 指针比较相等 → 高度缓存不失效、不重测,
     /// 避免弹窗常驻时每帧全量解析 mermaid + 重建整图 Element 的 O(图大小) 开销。
-    const TUIMessage*                      cachedMsgPtr_  = nullptr;
-    size_t                                 cachedTextLen_ = 0;
-    int                                    cachedMaxW_    = 0;
-    std::string                            cachedThemeName_;
-    bool                                   cachedValid_ = false;
-    neograph::json                         cachedArgs_  = neograph::json::array();
+    const TUIMessage*                         cachedMsgPtr_  = nullptr;
+    size_t                                    cachedTextLen_ = 0;
+    int                                       cachedMaxW_    = 0;
+    std::string                               cachedThemeName_;
+    bool                                      cachedValid_ = false;
+    neograph::json                            cachedArgs_  = neograph::json::array();
     agentxx::client::tui::MermaidStateDiagram cachedDiagram_;
-    ftxui::Element                         cachedElement_;
+    ftxui::Element                            cachedElement_;
 };

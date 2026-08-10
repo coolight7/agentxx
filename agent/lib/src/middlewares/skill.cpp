@@ -41,10 +41,14 @@ asio::awaitable<std::pair<std::string, agentxx::middleware::_SkillMetadata>>
             stream.open(fmt::format("{}/SKILL.md", dirpath));
             if (!stream) {
                 auto ec = std::error_code{errno, std::system_category()};
-                throw std::runtime_error{fmt::format(R"(Can not open file. Error: {})", ec.message())};
+                throw std::runtime_error{
+                    fmt::format(R"(Can not open file. Error: {})", ec.message())
+                };
             }
-            auto filecontent
-                = std::string{std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>()};
+            auto filecontent = std::string{
+                std::istreambuf_iterator<char>(stream),
+                std::istreambuf_iterator<char>()
+            };
             agentxx::util::autoConvertToUtf8(filecontent);
             stream.close();
             const auto yamlDelimiter = std::string_view{"---"};
@@ -88,7 +92,8 @@ asio::awaitable<std::pair<std::string, agentxx::middleware::_SkillMetadata>>
                     }
                     if (metadata["metadata"].IsMap()) {
                         for (const auto& item : metadata["metadata"]) {
-                            data.metadata[item.first.as<std::string>()] = item.second.as<std::string>();
+                            data.metadata[item.first.as<std::string>()]
+                                = item.second.as<std::string>();
                         }
                     }
                     co_return std::make_pair("", data);
@@ -128,7 +133,8 @@ asio::awaitable<void> SkillMiddlewareHandle::onAgentcallStartFunc(neograph::grap
                 [&]() -> asio::awaitable<bool> {
                     auto dir = std::filesystem::directory_entry{itempath};
                     if (dir.is_directory()) {
-                        if (std::filesystem::is_regular_file(fmt::format("{}/SKILL.md", itempath))) {
+                        if (std::filesystem::is_regular_file(fmt::format("{}/SKILL.md", itempath)
+                            )) {
                             // load skill metadata
                             const auto [err, metadata] = co_await readSkillFile(itempath);
                             if (err.empty()) {

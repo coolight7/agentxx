@@ -16,10 +16,12 @@ namespace ngcp = neograph::graph;
 /// 构造一个带 channel_values 的测试 checkpoint
 /// 注意: 必须用括号构造 json 标量 —— `neograph::json{msg}` 会被
 /// json(std::initializer_list<json>) 劫持构造为数组而非字符串
-static ngcp::Checkpoint makeCp(const std::string& threadId,
-                               const std::string& id,
-                               int64_t            step,
-                               const std::string& msg) {
+static ngcp::Checkpoint makeCp(
+    const std::string& threadId,
+    const std::string& id,
+    int64_t            step,
+    const std::string& msg
+) {
     ngcp::Checkpoint cp;
     cp.id              = id;
     cp.thread_id       = threadId;
@@ -29,12 +31,12 @@ static ngcp::Checkpoint makeCp(const std::string& threadId,
     cp.next_nodes      = {"next_" + id};
     cp.interrupt_phase = ngcp::CheckpointPhase::Completed;
 
-    neograph::json messages = neograph::json::object();
-    messages["version"] = step;
-    messages["value"]   = neograph::json(msg);
-    neograph::json channels = neograph::json::object();
-    channels["messages"] = messages;
-    cp.channel_values           = neograph::json::object();
+    neograph::json messages       = neograph::json::object();
+    messages["version"]           = step;
+    messages["value"]             = neograph::json(msg);
+    neograph::json channels       = neograph::json::object();
+    channels["messages"]          = messages;
+    cp.channel_values             = neograph::json::object();
     cp.channel_values["channels"] = channels;
     return cp;
 }

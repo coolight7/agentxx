@@ -38,6 +38,7 @@ namespace tools {
 /// RAII: 析构时置位 done, 通知取消 watcher 退出循环, 避免其继续引用已析构的 process
 struct ProcCancelGuard {
     std::shared_ptr<std::atomic<bool>> done;
+
     ~ProcCancelGuard() {
         if (done) {
             done->store(true, std::memory_order_release);
@@ -54,9 +55,9 @@ struct ProcCancelGuard {
 ///   退出时由系统回收 (比孤儿进程继续运行危害小)
 /// - 返回 RAII guard: execute_async 栈展开 (含异常路径) 时置位 done, watcher 退出
 static ProcCancelGuard startProcCancelWatcher(
-    asio::any_io_executor                                    ctx,
-    boost::process::process&                                 proc,
-    const std::shared_ptr<neograph::graph::CancelToken>&     cancelToken
+    asio::any_io_executor                                ctx,
+    boost::process::process&                             proc,
+    const std::shared_ptr<neograph::graph::CancelToken>& cancelToken
 ) {
     auto done = std::make_shared<std::atomic<bool>>(false);
     if (cancelToken && false == cancelToken->is_cancelled()) {
@@ -73,7 +74,7 @@ static ProcCancelGuard startProcCancelWatcher(
                     }
                 }
                 if (false == done->load(std::memory_order_acquire)) {
-                    // 会话取消: 终止子进程
+                // 会话取消: 终止子进程
 #if XX_IS_WIN_D
                     neograph_asio_error_code ec;
                     proc.terminate(ec);
@@ -387,7 +388,7 @@ asio::awaitable<std::string>
         auto proc = boost::process::process{
             ctx,
             boost::process::environment::find_executable("cmd.exe"),
-            {"/c",          command      },
+            {"/c", command},
             boost::process::process_environment(procEnv),
             // stdin 重定向到 null 设备, 避免子进程抢读 agent 进程的终端输入
             boost::process::process_stdio{.in = nullptr, .out = outpip, .err = errpip}

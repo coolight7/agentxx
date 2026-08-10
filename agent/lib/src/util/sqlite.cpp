@@ -160,13 +160,8 @@ void SqliteDb::Stmt::bindText(int index, std::string_view value) {
     // SQLITE_TRANSIENT: sqlite 内部拷贝, 允许 value 在 step 前析构
     // 空串时 data() 可能为 nullptr, 显式传 "" 保证 sqlite 行为一致
     const char* data = value.empty() ? "" : value.data();
-    int rc = sqlite3_bind_text(
-        stmt_,
-        index,
-        data,
-        static_cast<int>(value.size()),
-        SQLITE_TRANSIENT
-    );
+    int         rc
+        = sqlite3_bind_text(stmt_, index, data, static_cast<int>(value.size()), SQLITE_TRANSIENT);
     if (rc != SQLITE_OK) {
         throwDbError(db_, "sqlite bind_text");
     }

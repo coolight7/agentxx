@@ -8,9 +8,9 @@
 #include <vector>
 
 #ifdef _WIN32
-#include <windows.h>  // GetCurrentProcessId
+#include <windows.h> // GetCurrentProcessId
 #else
-#include <unistd.h>  // getpid
+#include <unistd.h> // getpid
 #endif
 
 namespace agentxx {
@@ -45,7 +45,7 @@ std::vector<std::string> splitId(const std::string& id) {
 
 void test_format() {
     // 格式: "sess-<hex ts>-<pid 十进制>-<8位hex rnd>-<4位hex seq>"
-    const std::string        id    = client::generateUniqueThreadId();
+    const std::string              id    = client::generateUniqueThreadId();
     const std::vector<std::string> parts = splitId(id);
 
     XX_TEST_EXPECT_EQ(parts.size(), (size_t)5);
@@ -76,8 +76,8 @@ void test_uniqueness_many_calls() {
 
 void test_uniqueness_concurrent() {
     // 多线程并发调用, 不允许重复 (自增序号 + 时间戳保证线程安全)
-    constexpr int           kThreads   = 8;
-    constexpr int           kPerThread = 2000;
+    constexpr int            kThreads   = 8;
+    constexpr int            kPerThread = 2000;
     std::vector<std::string> results;
     results.reserve(kThreads * kPerThread);
     std::mutex m;
@@ -86,7 +86,7 @@ void test_uniqueness_concurrent() {
     for (int t = 0; t < kThreads; ++t) {
         threads.emplace_back([&] {
             for (int i = 0; i < kPerThread; ++i) {
-                const auto              id = client::generateUniqueThreadId();
+                const auto                  id = client::generateUniqueThreadId();
                 std::lock_guard<std::mutex> lock(m);
                 results.push_back(id);
             }

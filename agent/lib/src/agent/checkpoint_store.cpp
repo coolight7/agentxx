@@ -42,9 +42,8 @@ void InMemorySingleCheckpointStore::saveImpl(const Checkpoint& cp) {
     latest_[cp.thread_id] = cp;
 }
 
-void InMemorySingleCheckpointStore::evictImpl(std::string_view threadId,
-                                              std::string_view keepId) {
-    std::lock_guard lock(mutex_);
+void InMemorySingleCheckpointStore::evictImpl(std::string_view threadId, std::string_view keepId) {
+    std::lock_guard   lock(mutex_);
     const std::string tid{threadId};
     const std::string keep{keepId};
     // 清理挂载在历史 (非 keepId) checkpoint 上的 pending writes
@@ -58,10 +57,9 @@ void InMemorySingleCheckpointStore::evictImpl(std::string_view threadId,
     }
 }
 
-std::optional<Checkpoint>
-InMemorySingleCheckpointStore::load_latest(const std::string& thread_id) {
+std::optional<Checkpoint> InMemorySingleCheckpointStore::load_latest(const std::string& thread_id) {
     std::lock_guard lock(mutex_);
-    auto it = latest_.find(thread_id);
+    auto            it = latest_.find(thread_id);
     if (it == latest_.end()) {
         return std::nullopt;
     }
@@ -80,8 +78,8 @@ std::optional<Checkpoint> InMemorySingleCheckpointStore::load_by_id(const std::s
 }
 
 std::vector<Checkpoint>
-InMemorySingleCheckpointStore::list(const std::string& thread_id, int limit) {
-    std::lock_guard lock(mutex_);
+    InMemorySingleCheckpointStore::list(const std::string& thread_id, int limit) {
+    std::lock_guard         lock(mutex_);
     std::vector<Checkpoint> result;
     if (limit <= 0) {
         return result;
@@ -106,26 +104,31 @@ void InMemorySingleCheckpointStore::delete_thread(const std::string& thread_id) 
     }
 }
 
-void InMemorySingleCheckpointStore::put_writes(const std::string& thread_id,
-                                               const std::string& parent_checkpoint_id,
-                                               const PendingWrite&   write) {
+void InMemorySingleCheckpointStore::put_writes(
+    const std::string&  thread_id,
+    const std::string&  parent_checkpoint_id,
+    const PendingWrite& write
+) {
     std::lock_guard lock(mutex_);
     pending_[{thread_id, parent_checkpoint_id}].push_back(write);
 }
 
-std::vector<PendingWrite>
-InMemorySingleCheckpointStore::get_writes(const std::string& thread_id,
-                                          const std::string& parent_checkpoint_id) {
+std::vector<PendingWrite> InMemorySingleCheckpointStore::get_writes(
+    const std::string& thread_id,
+    const std::string& parent_checkpoint_id
+) {
     std::lock_guard lock(mutex_);
-    auto it = pending_.find({thread_id, parent_checkpoint_id});
+    auto            it = pending_.find({thread_id, parent_checkpoint_id});
     if (it == pending_.end()) {
         return {};
     }
     return it->second;
 }
 
-void InMemorySingleCheckpointStore::clear_writes(const std::string& thread_id,
-                                                 const std::string& parent_checkpoint_id) {
+void InMemorySingleCheckpointStore::clear_writes(
+    const std::string& thread_id,
+    const std::string& parent_checkpoint_id
+) {
     std::lock_guard lock(mutex_);
     pending_.erase({thread_id, parent_checkpoint_id});
 }
@@ -135,12 +138,12 @@ std::size_t InMemorySingleCheckpointStore::size() const {
     return latest_.size();
 }
 
-std::size_t
-InMemorySingleCheckpointStore::pending_writes_count(const std::string& thread_id,
-                                                    const std::string& parent_checkpoint_id
+std::size_t InMemorySingleCheckpointStore::pending_writes_count(
+    const std::string& thread_id,
+    const std::string& parent_checkpoint_id
 ) const {
     std::lock_guard lock(mutex_);
-    auto it = pending_.find({thread_id, parent_checkpoint_id});
+    auto            it = pending_.find({thread_id, parent_checkpoint_id});
     if (it == pending_.end()) {
         return 0;
     }

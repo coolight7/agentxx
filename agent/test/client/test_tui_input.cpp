@@ -24,7 +24,7 @@ namespace {
 
 struct InputFixture {
     TUISharedState sharedState;
-    TUITheme       theme  = TUITheme::darkTheme();
+    TUITheme       theme       = TUITheme::darkTheme();
     int            redrawCount = 0;
     std::string    sentText;
     bool           sent = false;
@@ -32,9 +32,11 @@ struct InputFixture {
     TUICtx ctx;
 
     InputFixture() {
-        ctx.state          = &sharedState;
-        ctx.frameState     = sharedState.readSnapshot();
-        ctx.postRedraw     = [this] { ++redrawCount; };
+        ctx.state      = &sharedState;
+        ctx.frameState = sharedState.readSnapshot();
+        ctx.postRedraw = [this] {
+            ++redrawCount;
+        };
         ctx.theme          = &theme;
         ctx.showSystemInfo = nullptr; // InputComponent 不使用
         ctx.session        = nullptr;
@@ -220,8 +222,8 @@ void test_alt_enter_newline_mid_text() {
 
     // "abc", 光标移到 'c' 前, Alt+Enter → "ab\nc", 光标在换行后
     InputFixture::type(*comp, "abc");
-    comp->OnEvent(ftxui::Event::ArrowLeft);          // 光标在 'c' 前
-    comp->OnEvent(ftxui::Event::Special("\x1B\r"));  // Alt+Enter (部分终端发送 \r)
+    comp->OnEvent(ftxui::Event::ArrowLeft);         // 光标在 'c' 前
+    comp->OnEvent(ftxui::Event::Special("\x1B\r")); // Alt+Enter (部分终端发送 \r)
     comp->OnEvent(ftxui::Event::Character('X'));
 
     XX_TEST_EXPECT_EQ(comp->inputText(), std::string("ab\nXc"));
