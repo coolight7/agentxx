@@ -22,11 +22,24 @@ enum class AnimationLevel : int {
     Ultra    = 4,
 };
 
+/// 权限询问处理模式 (PermissionMiddleware 判定 INTERRUPT 时客户端如何处理)
+///
+/// - Ask:  询问 — 弹出中断询问界面, 由用户决定允许/拒绝
+/// - Pass: 通行 — 不询问, 直接放行 (相当于默认允许)
+///
+/// 注意: 该模式仅在客户端应答权限询问时生效 (询问经总线到达客户端);
+/// 中间件已注册的显式规则 (ALLOW/DENY) 始终优先于本模式。
+enum class PermissionMode : int {
+    Ask  = 0,
+    Pass = 1,
+};
+
 /// TUI 全局设置存储 (进程级单例)
 ///
 /// 集中管理 TUI 全局设置项, 供各组件跨线程读写:
 /// - 动画等级 (AnimationLevel)
 /// - Info 侧边栏是否显示系统资源占用 (showSystemInfo)
+/// - 权限询问处理模式 (PermissionMode): 询问/通行
 ///
 /// 线程安全: 所有设置项均为 std::atomic, 读写无锁,
 /// 可从 UI 线程 (渲染/事件) 与后台线程 (如资源监控线程) 并发访问。
@@ -47,6 +60,12 @@ public:
 
     /// 默认动画等级: Ultra (启用全部动画)
     inline static constexpr AnimationLevel kDefaultAnimationLevel = AnimationLevel::High;
+
+    /// 权限询问处理模式名称 (供设置弹窗展示)
+    inline static constexpr std::array<const char*, 2> kPermissionModeNames = {"Ask", "Pass"};
+
+    /// 默认权限询问处理模式: 询问
+    inline static constexpr PermissionMode kDefaultPermissionMode = PermissionMode::Ask;
 
     TUISettings(const TUISettings&)            = delete;
     TUISettings& operator=(const TUISettings&) = delete;
@@ -90,10 +109,30 @@ public:
         return showSystemInfo_;
     }
 
+    /// 当前权限询问处理模式
+    PermissionMode permissionMode() const noexcept {
+        return static_cast<PermissionMode>(permissionMode_.load(std::memory_order_acquire));
+    }
+
+    /// 设置权限询问处理模式 (调用方应使用合法枚举值)
+    void setPermissionMode(PermissionMode mode) noexcept {
+        permissionMode_.store(static_cast<int>(mode), std::memory_order_release);
+    }
+
+    /// 权限询问处理模式名称 (当前设置值; 越界返回 "Unknown")
+    std::string_view permissionModeName() const noexcept {
+        const int idx = static_cast<int>(permissionMode());
+        if (idx >= 0 && idx < static_cast<int>(kPermissionModeNames.size())) {
+            return kPermissionModeNames[static_cast<size_t>(idx)];
+        }
+        return "Unknown";
+    }
+
 private:
 
     TUISettings() :
-        animationLevel_(static_cast<int>(kDefaultAnimationLevel)) {}
+        animationLevel_(static_cast<int>(kDefaultAnimationLevel)),
+        permissionMode_(static_cast<int>(kDefaultPermissionMode)) {}
 
     /// 动画等级名称 (越界返回 "Unknown")
     inline static constexpr std::string_view levelName(AnimationLevel level) noexcept {
@@ -108,4 +147,6 @@ private:
     std::atomic<int> animationLevel_;
     /// Info 侧边栏系统资源显示开关
     std::atomic<bool> showSystemInfo_{true};
+    /// 权限询问处理模式 (存储为 int 以便原子读写)
+    std::atomic<int> permissionMode_;
 };
