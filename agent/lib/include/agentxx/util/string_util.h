@@ -4,7 +4,9 @@
 #include <algorithm>
 #include <cassert>
 #include <charconv>
+#include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <functional>
 #include <iomanip>
 #include <optional>
@@ -762,6 +764,76 @@ inline PinyinCallback s_pinyinCallback = nullptr;
     }
     return toUnixStandardPath(path);
 #endif
+}
+
+/// 判断路径是否为绝对路径。
+/// 直接使用标准库 std::filesystem::path::is_absolute():
+///  - Unix: 以 `/` 开头
+///  - Windows: 盘符 + 分隔符 (如 `C:\`) 或 UNC (如 `\\server\share`);
+///    `C:foo` (盘符相对) 返回 false, 与手写判断语义一致
+///  - 空路径返回 false
+/// 注意: Windows 上 `\foo` (根相对) 无盘符, 按标准库语义返回 false
+[[nodiscard]] inline bool isAbsolutePath(std::string_view path) {
+    return std::filesystem::path{path}.is_absolute();
+}
+
+/// 展开路径开头的 `~` 为用户主目录 (Unix: $HOME, Windows: %USERPROFILE%)。
+/// 仅处理 `~` 或 `~/xxx` 形式; `~user` 等其它形式保持原样。
+[[nodiscard]] inline std::string expandUserHomePath(std::string_view path) {
+    if (path.empty() || path.front() != '~') {
+        return std::string{path};
+    }
+    // `~` 之后必须是路径分隔符或结束, 否则视为普通名称 (如 `~user`) 不展开
+    if (path.size() > 1 && path[1] != '/' && path[1] != '\\') {
+        return std::string{path};
+    }
+#if XX_IS_WIN_D
+    const char* home = std::getenv("USERPROFILE");
+#else
+    const char* home = std::getenv("HOME");
+#endif
+    if (!home || !*home) {
+        return std::string{path};
+    }
+    auto homePath = agentxx::util::toCurrentSystemStandardPath(home);
+    if (path.size() == 1) {
+        return homePath;
+    }
+    // path[1] 为分隔符, 拼接剩余部分
+    auto rest = path.substr(2);
+    if (homePath.empty()) {
+        return std::string{rest};
+    }
+    if (homePath.back() == '/' || homePath.back() == '\\') {
+        return homePath + std::string{rest};
+    }
+    return homePath + "/" + std::string{rest};
+}
+
+/// 将用户提供的路径统一转换为当前系统的绝对路径:
+/// 1. 展开开头的 `~` 为用户主目录
+/// 2. 规范化分隔符/盘符 (toCurrentSystemStandardPath, 含 Windows 盘符 -> /mnt/ 转换)
+/// 3. 相对路径基于进程当前工作目录拼接为绝对路径
+/// 4. 词法规范化 (去除 `./`、多余的 `../` 等, 不访问文件系统, 对不存在的路径安全)
+/// - 供 filesystem 系列工具与 permission 权限判断使用, 使相对路径
+///   (如 `src/main.cpp`、`./a.txt`) 也能与绝对路径规则稳定匹配
+[[nodiscard]] inline std::string toCurrentSystemAbsolutePath(std::string_view path) {
+    if (path.empty()) {
+        return std::string{path};
+    }
+    auto expanded   = expandUserHomePath(path);
+    auto normalized = toCurrentSystemStandardPath(expanded);
+    if (isAbsolutePath(normalized)) {
+        return std::filesystem::path{normalized}.lexically_normal().generic_string();
+    }
+    // 相对路径: 基于进程当前工作目录转换为绝对路径
+    std::error_code ec;
+    auto            abs = std::filesystem::absolute(normalized, ec);
+    if (ec) {
+        // absolute 仅在获取 cwd 时可能失败, 回退为原规范化路径
+        return std::filesystem::path{normalized}.lexically_normal().generic_string();
+    }
+    return abs.lexically_normal().generic_string();
 }
 
 [[nodiscard]] inline constexpr std::string_view

@@ -22,14 +22,14 @@ public:
         return fmt::format("{}/results/{}", agentxxDataDirPath, parent);
     }
 
-    inline static std::optional<std::string> getCurrentWorkPath() noexcept {
-        return agentxx::util::catchError<std::optional<std::string>>(
-            []() -> std::optional<std::string> {
-                auto cwd = std::filesystem::current_path();
-                return cwd.string();
+    inline static std::string getCurrentWorkPath() noexcept {
+        return agentxx::util::catchError<std::string>(
+            []() -> std::string {
+                return std::filesystem::current_path().generic_string();
             },
-            [](std::string) -> std::optional<std::string> {
-                return std::nullopt;
+            [](std::string errinfo) -> std::string {
+                XX_LOGW("AgentConfigStatic::getCurrentWorkPath() faild: {}", errinfo);
+                return "";
             }
         );
     }

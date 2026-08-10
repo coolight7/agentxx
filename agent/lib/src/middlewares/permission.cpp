@@ -2,6 +2,7 @@
 
 #include "agentxx/middlewares/event_stream.h"
 #include "agentxx/middlewares/events.h"
+#include "agentxx/util/string_util.h"
 
 namespace agentxx {
 namespace middleware {
@@ -18,8 +19,11 @@ void PermissionMiddlewareHandle::setFilesystemPermission(
     size_t             index
 ) {
     assert(index == 0 || index == 1);
-    filesystemPermission
-        .add(path, static_cast<int>(index), std::make_shared<PermissionOperator>(op));
+    filesystemPermission.add(
+        agentxx::util::toUnixStandardDirPath(agentxx::util::toCurrentSystemAbsolutePath(path)),
+        static_cast<int>(index),
+        std::make_shared<PermissionOperator>(op)
+    );
 }
 
 asio::awaitable<bool> PermissionMiddlewareHandle::defOnFilesystemHandle(
@@ -27,7 +31,10 @@ asio::awaitable<bool> PermissionMiddlewareHandle::defOnFilesystemHandle(
     neograph::json&       args,
     size_t                index
 ) {
-    auto        path = args.value<std::string>("path", "");
+    auto path = args.value<std::string>("path", "");
+    // 支持相对路径: 非绝对路径基于当前工作目录拼接为绝对路径,
+    // 与 filesystem 工具实际访问的路径保持一致, 使注册的绝对路径规则也能匹配相对路径访问
+    path = agentxx::util::toUnixStandardDirPath(agentxx::util::toCurrentSystemAbsolutePath(path));
     std::string re_path;
     // 最长前缀匹配: 注册的文件夹规则 (如 /data/projects) 对其下任意子路径生效
     auto handle = filesystemPermission.get(path, static_cast<int>(index), re_path, true);
