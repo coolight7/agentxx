@@ -12,6 +12,17 @@
 #include <fcntl.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#elif XX_IS_WIN_D
+#include <windows.h>
+#include <dbghelp.h>
+// windows.h 的 min/max 宏与 C++ 标准库冲突
+#undef min
+#undef max
+#include <csignal>
+#include <cstdio>
+#include <cstdint>
+#include <cstring>
+#include <mutex>
 #endif
 
 namespace agentxx {
@@ -582,6 +593,389 @@ void signalError(std::string_view exepath) {
     for (int sig : fatalSignals) {
         sigaction(sig, &sa, nullptr);
     }
+}
+
+#elif XX_IS_WIN_D
+
+// ---------------------------------------------------------------------------
+// Windows 版 printStack / signalError (dbghelp.dll 运行时动态加载)
+// ---------------------------------------------------------------------------
+// 设计说明:
+// - 运行时 LoadLibrary("dbghelp.dll") + GetProcAddress 解析所需函数, 避免为工程
+//   新增 dbghelp.lib 链接依赖; Windows 10+ 系统均自带 dbghelp.dll
+// - printStack(): 普通上下文 (非崩溃) 手动调用, 采集当前线程栈并输出函数名/文件
+//   行号到 stderr, 对应 Linux 版的 backtrace + addr2line
+// - signalError(): 安装 UnhandledExceptionFilter 捕获 SEH 崩溃 (访问违例/非法指令/
+//   栈溢出等), 并安装 SIGABRT CRT 信号处理 (assert/abort/std::terminate 路径;
+//   硬件异常不注册 CRT 信号, 否则 MSVC CRT 会在独立线程中拦截处理, 丢失崩溃现场),
+//   崩溃时输出栈回溯 + 符号到 stderr 与 crash-<pid>.log, 并写 crash-<pid>.dmp
+//   迷你转储; 之后交还系统默认处理终止进程 (对应 Linux 版重新 raise 的语义)
+// - 崩溃处理上下文中避免 CRT 堆分配与锁等待: 全部使用栈上缓冲区 + WriteFile;
+//   符号查询使用 try_lock, 拿不到锁时退化为输出裸地址, 防止崩溃现场死锁
+// ---------------------------------------------------------------------------
+
+/// dbghelp 函数指针 (动态解析)
+using FnCaptureStackBackTrace = USHORT(WINAPI*)(ULONG, ULONG, PVOID*, PULONG);
+using FnSymInitialize         = BOOL(WINAPI*)(HANDLE, PCSTR, BOOL);
+using FnSymSetOptions         = DWORD(WINAPI*)(DWORD);
+using FnSymFromAddr           = BOOL(WINAPI*)(HANDLE, DWORD64, PDWORD64, PSYMBOL_INFO);
+using FnSymGetModuleInfo64    = BOOL(WINAPI*)(HANDLE, DWORD64, PIMAGEHLP_MODULE64);
+using FnSymGetLineFromAddr64  = BOOL(WINAPI*)(HANDLE, DWORD64, PDWORD, PIMAGEHLP_LINE64);
+using FnMiniDumpWriteDump     = BOOL(WINAPI*)(
+    HANDLE, DWORD, HANDLE, MINIDUMP_TYPE, PMINIDUMP_EXCEPTION_INFORMATION,
+    PMINIDUMP_USER_STREAM_INFORMATION, PMINIDUMP_CALLBACK_INFORMATION
+);
+
+static HMODULE                 g_dbghelpDll            = nullptr;
+static FnCaptureStackBackTrace g_CaptureStackBackTrace = nullptr;
+static FnSymInitialize         g_SymInitialize         = nullptr;
+static FnSymSetOptions         g_SymSetOptions         = nullptr;
+static FnSymFromAddr           g_SymFromAddr           = nullptr;
+static FnSymGetModuleInfo64    g_SymGetModuleInfo64    = nullptr;
+static FnSymGetLineFromAddr64  g_SymGetLineFromAddr64  = nullptr;
+static FnMiniDumpWriteDump     g_MiniDumpWriteDump     = nullptr;
+
+static std::string    _exe_path{};  ///< 可执行文件路径 (signalError 传入), 用于符号搜索
+static bool           g_symInitialized = false;
+static std::mutex     g_symMutex;      ///< dbghelp 符号查询非线程安全, 需要串行化
+static std::once_flag g_symOnce;       ///< 保证符号初始化只执行一次
+
+constexpr int kMaxFrames = 64; ///< 最大栈帧数
+
+/// 动态加载 dbghelp.dll 并解析所需函数; 失败返回 false (后续退化为裸地址输出)
+static bool winDbgHelpLoad() {
+    if (g_dbghelpDll == nullptr) {
+        g_dbghelpDll = LoadLibraryW(L"dbghelp.dll");
+        if (g_dbghelpDll == nullptr) {
+            return false;
+        }
+        // 注意: CaptureStackBackTrace 不是 dbghelp.dll 的导出, 见下方 ntdll 解析
+        g_SymInitialize        = (FnSymInitialize)GetProcAddress(g_dbghelpDll, "SymInitialize");
+        g_SymSetOptions        = (FnSymSetOptions)GetProcAddress(g_dbghelpDll, "SymSetOptions");
+        g_SymFromAddr          = (FnSymFromAddr)GetProcAddress(g_dbghelpDll, "SymFromAddr");
+        g_SymGetModuleInfo64   = (FnSymGetModuleInfo64)GetProcAddress(g_dbghelpDll, "SymGetModuleInfo64");
+        g_SymGetLineFromAddr64 = (FnSymGetLineFromAddr64)GetProcAddress(g_dbghelpDll, "SymGetLineFromAddr64");
+        g_MiniDumpWriteDump    = (FnMiniDumpWriteDump)GetProcAddress(g_dbghelpDll, "MiniDumpWriteDump");
+    }
+    // CaptureStackBackTrace 实际位于 ntdll.dll (RtlCaptureStackBackTrace, 与
+    // CaptureStackBackTrace 签名一致), dbghelp.dll 无此导出; ntdll 必然已加载
+    if (g_CaptureStackBackTrace == nullptr) {
+        HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+        if (ntdll != nullptr) {
+            g_CaptureStackBackTrace
+                = (FnCaptureStackBackTrace)GetProcAddress(ntdll, "RtlCaptureStackBackTrace");
+        }
+    }
+    return g_CaptureStackBackTrace != nullptr && g_SymInitialize != nullptr && g_SymFromAddr != nullptr;
+}
+
+/// 惰性初始化符号 (线程安全, 只执行一次); 返回 false 表示符号不可用
+static bool winSymInit() {
+    std::call_once(g_symOnce, [] {
+        if (!winDbgHelpLoad()) {
+            return;
+        }
+        // UNDNAME: 反修饰 C++ 符号名; DEFERRED_LOADS: 符号按需加载 (避免启动慢);
+        // LOAD_LINES: 加载文件行号; FAIL_CRITICAL_ERRORS: PDB 缺失时静默不弹窗
+        if (g_SymSetOptions != nullptr) {
+            g_SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS | SYMOPT_LOAD_LINES | SYMOPT_FAIL_CRITICAL_ERRORS);
+        }
+        // 符号搜索路径: exe 所在目录 (PDB 通常与 exe 同目录)
+        std::string searchPath;
+        auto        slash = _exe_path.find_last_of("\\/");
+        if (slash != std::string::npos) {
+            searchPath = _exe_path.substr(0, slash);
+        }
+        g_symInitialized = g_SymInitialize(
+            GetCurrentProcess(), searchPath.empty() ? nullptr : searchPath.c_str(), TRUE
+        ) != FALSE;
+    });
+    return g_symInitialized;
+}
+
+/// 将单个栈帧地址格式化为 "模块!函数+偏移 (文件:行号)" (栈上缓冲区, 崩溃上下文安全);
+/// 符号不可用或符号表被占用时退化为只输出裸地址
+static void winFormatFrame(char* out, size_t outLen, const void* addr) {
+    if (out == nullptr || outLen == 0) {
+        return;
+    }
+    const uintptr_t pc = reinterpret_cast<uintptr_t>(addr);
+    out[0]              = '\0';
+    if (!g_symInitialized || !g_symMutex.try_lock()) {
+        // 符号未就绪, 或符号表正被其他线程使用 (崩溃现场避免死锁): 只输出裸地址
+        std::snprintf(out, outLen, "0x%llX", static_cast<unsigned long long>(pc));
+        return;
+    }
+    std::lock_guard<std::mutex> lock(g_symMutex, std::adopt_lock);
+
+    char                module[MAX_PATH]{};
+    DWORD64             modBase = 0;
+    IMAGEHLP_MODULE64   modInfo{};
+    modInfo.SizeOfStruct = sizeof(modInfo);
+    if (g_SymGetModuleInfo64 != nullptr
+        && g_SymGetModuleInfo64(GetCurrentProcess(), (DWORD64)pc, &modInfo) != FALSE) {
+        modBase = modInfo.BaseOfImage;
+        std::snprintf(module, sizeof(module), "%s", modInfo.ModuleName);
+    }
+
+    // SYMBOL_INFO 含 8 字节对齐成员, 用 alignas 显式对齐栈缓冲区
+    alignas(SYMBOL_INFO) char symBuf[sizeof(SYMBOL_INFO) + MAX_SYM_NAME * sizeof(char)];
+    auto*   sym      = reinterpret_cast<PSYMBOL_INFO>(symBuf);
+    sym->SizeOfStruct = sizeof(SYMBOL_INFO);
+    sym->MaxNameLen   = MAX_SYM_NAME;
+    DWORD64 disp     = 0;
+    bool    hasSym   = g_SymFromAddr != nullptr
+                       && g_SymFromAddr(GetCurrentProcess(), (DWORD64)pc, &disp, sym) != FALSE;
+
+    IMAGEHLP_LINE64 line{};
+    line.SizeOfStruct = sizeof(line);
+    DWORD lineDisp = 0;
+    bool  hasLine  = g_SymGetLineFromAddr64 != nullptr
+                     && g_SymGetLineFromAddr64(GetCurrentProcess(), (DWORD64)pc, &lineDisp, &line) != FALSE;
+
+    if (hasSym) {
+        if (module[0] != '\0') {
+            if (hasLine && line.FileName != nullptr) {
+                std::snprintf(
+                    out, outLen, "%s!%s+0x%llX (%s:%lu)",
+                    module, sym->Name, static_cast<unsigned long long>(disp),
+                    line.FileName, static_cast<unsigned long>(line.LineNumber)
+                );
+            } else {
+                std::snprintf(out, outLen, "%s!%s+0x%llX", module, sym->Name, static_cast<unsigned long long>(disp));
+            }
+        } else {
+            std::snprintf(out, outLen, "%s+0x%llX", sym->Name, static_cast<unsigned long long>(disp));
+        }
+    } else if (module[0] != '\0' && modBase != 0) {
+        std::snprintf(out, outLen, "%s+0x%llX", module, static_cast<unsigned long long>(pc - modBase));
+    } else {
+        std::snprintf(out, outLen, "0x%llX", static_cast<unsigned long long>(pc));
+    }
+}
+
+/// 将字符串完整写入句柄 (循环 WriteFile 处理部分写入; 崩溃上下文安全, 不依赖 CRT 堆)
+static void winWriteAll(HANDLE h, const char* s) {
+    if (h == nullptr || h == INVALID_HANDLE_VALUE || s == nullptr) {
+        return;
+    }
+    DWORD len = static_cast<DWORD>(strlen(s));
+    while (len > 0) {
+        DWORD written = 0;
+        if (WriteFile(h, s, len, &written, nullptr) == FALSE || written == 0) {
+            break;
+        }
+        s   += written;
+        len -= written;
+    }
+}
+
+/// 打开 crash-<pid>.log (崩溃上下文安全)
+static HANDLE winOpenCrashLog() {
+    char filename[MAX_PATH];
+    std::snprintf(filename, sizeof(filename), "crash-%lu.log", static_cast<unsigned long>(GetCurrentProcessId()));
+    return CreateFileA(
+        filename, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+        nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr
+    );
+}
+
+/// 采集并输出当前线程栈回溯到两个句柄 (stderr / crash 日志)
+static void winDumpStack(HANDLE console, HANDLE file) {
+    void*  frames[kMaxFrames]{};
+    USHORT count = 0;
+    if (g_CaptureStackBackTrace != nullptr) {
+        // 跳过 2 帧: CaptureStackBackTrace 自身 + winDumpStack
+        count = g_CaptureStackBackTrace(2, kMaxFrames, frames, nullptr);
+    }
+    winWriteAll(console, "======= Dump stack start =======\n");
+    winWriteAll(file, "======= Dump stack start =======\n");
+    if (count == 0) {
+        winWriteAll(console, "(capture stack failed)\n");
+        winWriteAll(file, "(capture stack failed)\n");
+    }
+    for (USHORT i = 0; i < count; ++i) {
+        char frame[512];
+        winFormatFrame(frame, sizeof(frame), frames[i]);
+        char line[640];
+        std::snprintf(line, sizeof(line), "[%02u] %s\n", static_cast<unsigned>(i), frame);
+        winWriteAll(console, line);
+        winWriteAll(file, line);
+    }
+    winWriteAll(console, "======= Dump stack end =======\n");
+    winWriteAll(file, "======= Dump stack end =======\n");
+}
+
+/// 异常码 -> 名称 (供日志输出)
+static const char* winExceptionName(DWORD code) {
+    switch (code) {
+        case EXCEPTION_ACCESS_VIOLATION:      return "ACCESS_VIOLATION";
+        case EXCEPTION_ARRAY_BOUNDS_EXCEEDED: return "ARRAY_BOUNDS_EXCEEDED";
+        case EXCEPTION_BREAKPOINT:            return "BREAKPOINT";
+        case EXCEPTION_DATATYPE_MISALIGNMENT: return "DATATYPE_MISALIGNMENT";
+        case EXCEPTION_FLT_DIVIDE_BY_ZERO:    return "FLT_DIVIDE_BY_ZERO";
+        case EXCEPTION_FLT_OVERFLOW:          return "FLT_OVERFLOW";
+        case EXCEPTION_FLT_UNDERFLOW:         return "FLT_UNDERFLOW";
+        case EXCEPTION_ILLEGAL_INSTRUCTION:   return "ILLEGAL_INSTRUCTION";
+        case EXCEPTION_IN_PAGE_ERROR:         return "IN_PAGE_ERROR";
+        case EXCEPTION_INT_DIVIDE_BY_ZERO:    return "INT_DIVIDE_BY_ZERO";
+        case EXCEPTION_INT_OVERFLOW:          return "INT_OVERFLOW";
+        case EXCEPTION_PRIV_INSTRUCTION:      return "PRIV_INSTRUCTION";
+        case EXCEPTION_STACK_OVERFLOW:        return "STACK_OVERFLOW";
+        case 0xC0000409:                      return "STACK_BUFFER_OVERRUN/FAST_FAIL";
+        case 0xC0000374:                      return "HEAP_CORRUPTION";
+        case 0xE06D7363:                      return "MSVC_CXX_EXCEPTION";
+        case 0xC0000135:                      return "DLL_NOT_FOUND";
+        case 0xC0000139:                      return "ENTRYPOINT_NOT_FOUND";
+        default:                              return "UNKNOWN";
+    }
+}
+
+/// 写 crash-<pid>.dmp 迷你转储 (崩溃过滤器调用; 失败静默)
+static void winWriteMiniDump(EXCEPTION_POINTERS* ep) {
+    if (g_MiniDumpWriteDump == nullptr) {
+        return;
+    }
+    char filename[MAX_PATH];
+    std::snprintf(filename, sizeof(filename), "crash-%lu.dmp", static_cast<unsigned long>(GetCurrentProcessId()));
+    HANDLE h = CreateFileA(
+        filename, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+        nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr
+    );
+    if (h == INVALID_HANDLE_VALUE) {
+        return;
+    }
+    MINIDUMP_EXCEPTION_INFORMATION mei{};
+    mei.ThreadId          = GetCurrentThreadId();
+    mei.ExceptionPointers = ep;
+    mei.ClientPointers    = FALSE;
+    g_MiniDumpWriteDump(
+        GetCurrentProcess(), GetCurrentProcessId(), h,
+        MiniDumpWithDataSegs, ep != nullptr ? &mei : nullptr, nullptr, nullptr
+    );
+    CloseHandle(h);
+}
+
+/// 未处理异常过滤器: 输出崩溃信息 + 栈回溯, 然后交还系统默认处理终止进程
+/// (对应 Linux 版的 signal_handler; 返回 EXCEPTION_CONTINUE_SEARCH 保留标准行为)
+static LONG WINAPI winExceptionFilter(EXCEPTION_POINTERS* ep) {
+    const EXCEPTION_RECORD* rec  = ep != nullptr ? ep->ExceptionRecord : nullptr;
+    const DWORD             code = rec != nullptr ? rec->ExceptionCode : 0;
+
+    const HANDLE console = GetStdHandle(STD_ERROR_HANDLE);
+    const HANDLE file    = winOpenCrashLog();
+
+    char buf[512];
+    std::snprintf(
+        buf, sizeof(buf), "\n======= xx catch exception 0x%08lX (%s) =======\n",
+        static_cast<unsigned long>(code), winExceptionName(code)
+    );
+    winWriteAll(console, buf);
+    winWriteAll(file, buf);
+
+    if (rec != nullptr && rec->ExceptionAddress != nullptr) {
+        std::snprintf(
+            buf, sizeof(buf), "Exception address: 0x%llX\n",
+            static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(rec->ExceptionAddress))
+        );
+        winWriteAll(console, buf);
+        winWriteAll(file, buf);
+    }
+    if (code == EXCEPTION_ACCESS_VIOLATION && rec != nullptr && rec->NumberParameters >= 2) {
+        // ExceptionInformation[0]: 0=读 1=写 8=执行; [1]: 故障地址
+        const char* op = rec->ExceptionInformation[0] == 1
+                             ? "write"
+                             : (rec->ExceptionInformation[0] == 8 ? "execute" : "read");
+        std::snprintf(
+            buf, sizeof(buf), "Fault address: 0x%llX (%s)\n",
+            static_cast<unsigned long long>(rec->ExceptionInformation[1]), op
+        );
+        winWriteAll(console, buf);
+        winWriteAll(file, buf);
+    }
+    std::snprintf(
+        buf, sizeof(buf), "PID: %lu, TID: %lu\n",
+        static_cast<unsigned long>(GetCurrentProcessId()),
+        static_cast<unsigned long>(GetCurrentThreadId())
+    );
+    winWriteAll(console, buf);
+    winWriteAll(file, buf);
+    if (!_exe_path.empty()) {
+        std::snprintf(buf, sizeof(buf), "Exe: %s\n", _exe_path.c_str());
+        winWriteAll(console, buf);
+        winWriteAll(file, buf);
+    }
+
+    winDumpStack(console, file);
+    winWriteMiniDump(ep);
+
+    if (file != INVALID_HANDLE_VALUE) {
+        std::snprintf(
+            buf, sizeof(buf), "\n# See file: crash-%lu.log\n",
+            static_cast<unsigned long>(GetCurrentProcessId())
+        );
+        winWriteAll(console, buf);
+        winWriteAll(file, buf);
+        CloseHandle(file);
+    }
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
+/// CRT 信号处理 (SIGABRT): assert/abort/std::terminate 路径;
+/// 输出栈回溯后恢复默认处理并重新 raise (与 Linux 版语义一致)
+/// 注: 硬件异常 (访问违例等) 不走这里, 由 winExceptionFilter 在崩溃线程现场捕获
+static void winSignalHandler(int signo) {
+    const HANDLE console = GetStdHandle(STD_ERROR_HANDLE);
+    const HANDLE file    = winOpenCrashLog();
+
+    char buf[256];
+    std::snprintf(buf, sizeof(buf), "\n======= xx catch signal %d =======\n", signo);
+    winWriteAll(console, buf);
+    winWriteAll(file, buf);
+
+    winDumpStack(console, file);
+
+    if (file != INVALID_HANDLE_VALUE) {
+        std::snprintf(
+            buf, sizeof(buf), "\n# See file: crash-%lu.log\n",
+            static_cast<unsigned long>(GetCurrentProcessId())
+        );
+        winWriteAll(console, buf);
+        winWriteAll(file, buf);
+        CloseHandle(file);
+    }
+
+    // 恢复默认处理并重新抛出, 保留标准退出行为
+    signal(signo, SIG_DFL);
+    raise(signo);
+}
+
+void printStack() {
+    // 普通上下文 (非崩溃), 确保符号已初始化后输出当前线程栈到 stderr
+    winSymInit();
+    winDumpStack(GetStdHandle(STD_ERROR_HANDLE), INVALID_HANDLE_VALUE);
+}
+
+void signalError(std::string_view exepath) {
+    _exe_path.assign(exepath.data(), exepath.size());
+
+    // 抑制 Windows 错误报告对话框 (崩溃后不弹窗, 信息统一写入 crash-<pid>.log)
+    SetErrorMode(SEM_NOGPFAULTERRORBOX);
+
+    // 预加载符号: 在主线程启动阶段完成, 避免崩溃处理时才做重 IO/加载
+    winSymInit();
+
+    // 捕获 SEH 崩溃 (访问违例/非法指令/除零/栈溢出等)。注意: 不能同时注册
+    // SIGSEGV/SIGFPE/SIGILL 的 CRT 信号处理, MSVC 的 CRT 会抢先拦截对应的硬件异常,
+    // 并在独立线程中调用信号处理器 (栈回溯不可用、无 EXCEPTION_POINTERS), 导致
+    // 崩溃现场信息丢失; 不注册时异常会继续传播到本过滤器, 在崩溃线程现场运行
+    SetUnhandledExceptionFilter(&winExceptionFilter);
+
+    // CRT 信号路径: 仅保留非硬件异常信号。assert/abort/std::terminate 触发 SIGABRT
+    // (raise 同步调用, 位于崩溃线程, 栈回溯有效)
+    signal(SIGABRT, &winSignalHandler);
+
+    XX_LOGI("# Signal error handler: {}", _exe_path);
 }
 
 #else
