@@ -410,6 +410,7 @@ public:
     /// - 存储变量内容，留出 id 到 上下文中，llm 需要时可以通过
     /// toolcall/agentxx_share_store 读取
     /// - 如: 压缩上下文时会将部分长文本存入这里替换为 id
+    /// - 内存副本作为读缓存, 写操作同步落库 (持久化注入时)
     std::map<std::string, ThreadShareStore, std::less<>> shareStore{};
 
     /// <thread_id, itemData>
@@ -422,7 +423,14 @@ public:
     /// 的话元素大小是 固定为基类大小，插入子类时内存会被截断，导致后续异常
     std::vector<std::shared_ptr<BaseMiddlewareHandleInterface>> handles{};
 
-    MiddlewareContext() {}
+    MiddlewareContext() = default;
+
+    /// @param persistence 会话 SQLite 持久化 (由 BaseAgent::init 注入;
+    ///        为空时 share store 仅内存存储, 不落库)
+    explicit MiddlewareContext(
+        std::shared_ptr<agentxx::agent::SessionPersistence> persistence
+    ) :
+        persistence_(persistence) {}
 
     /// 将 std::any 转为 neograph::json（用于序列化到 state）
     static neograph::json anyToJson(const std::any& val);
@@ -580,6 +588,17 @@ public:
     void setGraphDataFromState(neograph::graph::GraphState& state, std::string_view thread_id);
 
     void setGraphDataFromState(neograph::json j, std::string_view thread_id);
+
+private:
+
+    /// 确保 share store 内存缓存已加载 (首次访问某 thread 时从 SQLite 恢复;
+    /// 未注入持久化时 no-op)
+    void ensureShareStoreLoaded(std::string_view thread_id);
+
+    /// 会话 SQLite 持久化 (为空时 share store 仅内存存储)
+    std::shared_ptr<agentxx::agent::SessionPersistence> persistence_ = nullptr;
+    /// 已从持久化加载过 share store 的 thread (避免空存储反复加载)
+    std::vector<std::string> shareStoreLoaded_{};
 };
 
 } // namespace middleware

@@ -96,6 +96,19 @@ public:
     ///   (深层路径折叠 + 单段截断控制长度, 子目录可前缀复用最近父级索引)
     bool enableCodeGraph = true;
 
+    /// 是否启用会话 SQLite 持久化 (消息上下文/展示历史/share store)
+    /// - 数据目录: ~/.agentxx/sqlite/{threadId}/
+    ///   - session.db      展示历史 + LLM 上下文 + 会话元数据
+    ///   - share_store.db  agentxx_share_store KV 条目
+    /// - 开启后会话在重启后可恢复历史消息/上下文/模型选择/share store
+    /// - 默认关闭 (库使用方按需开启); agentxx_cli 在 buildDefaultConfig 中开启
+    bool enableSessionPersistence = false;
+
+    /// 会话持久化根目录 (enableSessionPersistence 开启时生效)
+    /// - 为空使用默认 ~/.agentxx/sqlite/ (取不到用户主目录时回退系统临时目录)
+    /// - 数据目录结构: {root}/{threadId}/{session.db, share_store.db}
+    std::string sessionPersistenceRoot;
+
     /// LLM 节点最大重试次数
     /// - 最多执行 1 + 5(retry) = 6 次
     size_t llmMaxRetry = 5;

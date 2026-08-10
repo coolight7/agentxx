@@ -1,4 +1,5 @@
 #include "agentxx/middlewares/middleware.h"
+#include "agentxx/agent/session_persistence.h"
 #include "agentxx/tools/tool.h"
 #include <charconv>
 
@@ -261,8 +262,22 @@ neograph::json MiddlewareContext::anyToJson(const std::any& val) {
     return nullptr;
 }
 
+void MiddlewareContext::ensureShareStoreLoaded(std::string_view thread_id) {
+    if (!persistence_ || shareStore.contains(thread_id)) {
+        return;
+    }
+    // 首次访问: 从 SQLite 恢复全部条目与 id 计数器
+    auto loaded = persistence_->loadShareStore(thread_id);
+    shareStore.emplace(
+        std::string{thread_id},
+        ThreadShareStore{.store = std::move(loaded.items), .storeId = loaded.nextId}
+    );
+    shareStoreLoaded_.push_back(std::string{thread_id});
+}
+
 std::optional<std::string>
     MiddlewareContext::getShareStoreItemValue(std::string_view thread_id, const size_t id) {
+    ensureShareStoreLoaded(thread_id);
     auto it = shareStore.find(thread_id);
     if (shareStore.end() != it) {
         auto result = it->second.store.find(id);
@@ -278,6 +293,7 @@ void MiddlewareContext::setShareStoreItemValue(
     const size_t     id,
     std::string_view value
 ) {
+    ensureShareStoreLoaded(thread_id);
     // shareStore[thread_id].store[id] = value;
 
     auto it = shareStore.find(thread_id);
@@ -291,33 +307,62 @@ void MiddlewareContext::setShareStoreItemValue(
             }
         );
     }
+    if (persistence_) {
+        persistence_->setShareStoreItem(thread_id, id, value);
+    }
 }
 
 size_t
     MiddlewareContext::addShareStoreItemValue(std::string_view thread_id, std::string_view value) {
+    ensureShareStoreLoaded(thread_id);
+
+    // 分配 id:
+    // - 注入持久化时由数据库分配 (取现有最大 id + 1, 重启后延续); 落库失败
+    //   退回内存分配, 保证本次会话内功能可用
+    // - 无持久化时保持原语义: 新 thread 首条为 1, 其后 storeId 递增
+    size_t id = 0;
+    if (persistence_) {
+        id = persistence_->addShareStoreItem(thread_id, value);
+    }
+    if (id == 0) {
+        auto it = shareStore.find(thread_id);
+        if (it != shareStore.end()) {
+            id = it->second.getNextId();
+        } else {
+            id = 1;
+        }
+    }
+
     auto it = shareStore.find(thread_id);
     if (it != shareStore.end()) {
-        auto id              = it->second.getNextId();
-        it->second.store[id] = value;
-        return id;
+        it->second.store[id] = std::string{value};
+        // 同步内存计数器: DB 分配优先, 计数器仅作退回路径的兜底
+        if (it->second.storeId <= id) {
+            it->second.storeId = id;
+        }
     } else {
         shareStore.emplace(
             std::string{thread_id},
             MiddlewareContext::ThreadShareStore{
-                .store = std::map<size_t, std::string>{{1, std::string{value}}}
+                .store   = std::map<size_t, std::string>{{id, std::string{value}}},
+                .storeId = id,
             }
         );
-        return 1;
     }
+    return id;
 }
 
 void MiddlewareContext::removeShareStoreItemValue(std::string_view thread_id, const size_t id) {
+    ensureShareStoreLoaded(thread_id);
     auto it = shareStore.find(thread_id);
     if (shareStore.end() != it) {
         auto resultIt = it->second.store.find(id);
         if (it->second.store.end() != resultIt) {
             it->second.store.erase(resultIt);
         }
+    }
+    if (persistence_) {
+        persistence_->removeShareStoreItem(thread_id, id);
     }
 }
 

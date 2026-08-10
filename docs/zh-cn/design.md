@@ -114,6 +114,40 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
 - **取消/切模型**: UI 线程的取消/切模型操作通过 Wire 消息 (WireCancel/WireSelectModel) 发往 agent 线程处理，避免跨线程竞争
 - **异步互斥锁**: `AsyncMutex` 基于 asio concurrent_channel 实现协程感知互斥，不会阻塞线程，适用于协程跨越 co_await 临界区
 
+#### 会话 SQLite 持久化 (消息上下文 / viewMessages / share_store)
+
+- 开关: `AgentConfig::enableSessionPersistence` (默认关闭; agentxx_cli 在 `buildDefaultConfig` 中开启)。
+  开启后由 BaseAgent 创建 `SessionPersistence` 并注入 AgentContext:
+  - `AgentContext::sessionPersistence` + `SessionStore::persistence` (会话消息状态)
+  - `MiddlewareContext` 构造参数 (share store 写穿)
+- 数据目录: `~/.agentxx/sqlite/{threadId}/` (threadId 经 `sanitizeThreadId` 清洗为安全目录名:
+  非法字符替换/超长截断/Windows 保留名规避, 发生改写时附加 FNV hash 尾缀防碰撞;
+  取不到主目录时回退系统临时目录)
+- 分库设计 (两个 DB 文件, 均启用 WAL + busy_timeout):
+  - `session.db`: viewMessages (append-only, 每消息一行 JSON) + llmMessages
+    (单行整体替换, 每轮结束保存) + meta (msgIdCounter / modelName)
+    —— 同属"会话消息状态", 同一生命周期 (随 thread 创建/删除), 同一 io 线程写入,
+    一轮对话结束时消息与计数可事务性一起提交
+  - `share_store.db`: agentxx_share_store KV 条目 (id 自增 = 现有最大 id + 1,
+    重启后延续) —— KV 随机读改写与消息追加模式不同, 本质是上下文卸载缓存,
+    内容可丢弃/可清理, 生命周期独立于消息历史; 可能存放大型文本, 独立文件
+    避免其膨胀拖慢消息库 WAL checkpoint, 也便于未来独立裁剪/归档
+- 接入点:
+  - `SessionStore::getOrCreate`: 创建 Session 时从 SQLite 恢复 viewMessages/llmMessages/
+    modelName, 重建链式哈希 (对不含 id 的消息内容, 与 appendHistory 语义一致),
+    恢复 msgIdCounter 保证新消息 id 不冲突; 并绑定 `SessionPersistenceHooks`
+    (std::function 回调, context.h 不依赖 sqlite 头)
+  - `Session::appendHistory`: 追加后回调落库 (消息 + 计数事务提交)
+  - `BaseAgent::runConversationTurnAsync`: 轮末回调保存 llmMessages (整表替换)
+  - `Session::setModelName`: 回调保存模型名
+  - `MiddlewareContext` share store 四方法: 内存 map 作读缓存 (首次访问某 thread
+    时从 DB 恢复全部条目与 id 计数器), 写操作同步写穿 DB
+- 容错: 所有落库失败仅记录错误日志, 不影响内存状态与对话主流程 (尽力而为持久化);
+  读取路径在目录不存在时直接返回空, 不创建目录/空文件 (避免 subagent 等
+  只读访问产生垃圾目录)
+- 线程安全: `SessionPersistence` 内部互斥锁保护; 常规使用下调用发生在 agent io
+  线程 (Session 绑定线程/工具执行), 锁仅在多线程并发访问时生效
+
 #### Subagent 执行链路 (NodeInterrupt → 总线派发 → 独立引擎运行)
 
 ```
@@ -248,7 +282,7 @@ path/to/agentxx_test --fail-fast
 path/to/agentxx_test string_util regex agent
 ```
 
-可用测试模块: `string_util` `regex` `diff_util` `events` `concurrency` `misc_fixes` `aho_corasick` `util_misc` `event_stream` `event_bridge` `interrupt_bus` `subagent_bus` `crossagent` `string_tools` `share_store` `rag_search` `datetime` `filesystem` `command` `web_search` `codegraph` `cpu_gpu` `http` `network_timeout` `websocket` `remote_agent` `mcp` `acp` `a2a` `openai_provider` `anthropic_provider` `agent` `screen_capture` `text_selection` `session_concurrency`
+可用测试模块: `string_util` `regex` `diff_util` `events` `concurrency` `misc_fixes` `aho_corasick` `util_misc` `event_stream` `event_bridge` `interrupt_bus` `subagent_bus` `crossagent` `string_tools` `share_store` `session_persistence` `rag_search` `datetime` `filesystem` `command` `web_search` `codegraph` `cpu_gpu` `http` `network_timeout` `websocket` `remote_agent` `mcp` `acp` `a2a` `openai_provider` `anthropic_provider` `agent` `screen_capture` `text_selection` `session_concurrency`
 
 ### 配置文件
 
@@ -868,6 +902,9 @@ agent/
 │   │   │   │                     #   ViewMessage (UI 展示消息, role 拆分子结构) /
 │   │   │   │                     #   ChainHash / AppendComponentNotification
 │   │   │   ├── model_registry.h  # ModelProviderRegistry (运行时模型切换)
+│   │   │   ├── session_persistence.h # 会话 SQLite 持久化: 按 threadId 分目录,
+│   │   │   │                     #   session.db (viewMessages+llmMessages+meta) 与
+│   │   │   │   │                   share_store.db 分库, 读取路径不创建目录
 │   │   │   ├── prompt.h          # AgentPrompt / ToolPrompt 提示词管理
 │   │   │   ├── training.h        # EvolutionTrainingAgent 进化训练 (变异/评估/优化/收敛检测)
 │   │   │   └── io/           # 远程通信
@@ -936,6 +973,7 @@ agent/
 │   │       ├── regex.h           # 正则引擎 (hyperscan/vectorscan)
 │   │       ├── aho_corasick.h    # Aho-Corasick 多模式匹配
 │   │       ├── router.h          # HTTP 路由器
+│   │       ├── sqlite.h          # SQLite 轻量 RAII 封装 (SqliteDb/Stmt, WAL+busy_timeout)
 │   │       ├── async_mutex.h     # 协程感知异步互斥锁 (基于 concurrent_channel)
 │   │       ├── async_offload.h   # 阻塞操作线程池卸载 (offloadAsync /
 │   │       │                     #   offloadCancellableAsync / asyncWithTimeout)
@@ -1002,6 +1040,7 @@ agent/
 │   ├── test_crossagent.*         # 跨代理通信测试
 │   ├── test_concurrency.*        # 并发测试
 │   ├── test_session_concurrency.* # Session 线程模型测试 (viewMessages 单线程读写 + 原子字段并发)
+│   ├── test_session_persistence.* # 会话 SQLite 持久化测试 (消息/上下文/share store 落库与重启恢复)
 │   ├── test_remote_agent.*       # 远程 Agent (WS 传输 / SessionServerAgentIO) 测试
 │   ├── test_mcp.*                # MCP 协议测试 (多版本/HTTP/stdio)
 │   ├── test_a2a.*                # A2A 协议测试
