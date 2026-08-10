@@ -401,6 +401,50 @@ YamlAppConfig loadYamlConfig(
                               == "true";
     }
 
+    // 权限配置 (permission 块: mode / whitelist / blacklist)
+    // - mode:      询问处理模式 (ask/all_ask/pass/deny; 忽略大小写, 非法值警告回退 ask)
+    // - whitelist: 始终放行 (ALLOW) 的路径列表
+    // - blacklist: 始终拒绝 (DENY) 的路径列表
+    if (root["permission"]) {
+        if (root["permission"]["mode"]) {
+            auto val = resolveEnvVars(
+                root["permission"]["mode"].as<std::string>("ask"),
+                dotEnvVars,
+                overrideEnvVars
+            );
+            if (util::isIgnoreCaseEqual(val, "pass")) {
+                cfg.permissionMode = agent::PermissionMode::Pass;
+            } else if (util::isIgnoreCaseEqual(val, "all_ask")) {
+                cfg.permissionMode = agent::PermissionMode::AllAsk;
+            } else if (util::isIgnoreCaseEqual(val, "deny")) {
+                cfg.permissionMode = agent::PermissionMode::Deny;
+            } else if (util::isIgnoreCaseEqual(val, "ask")) {
+                cfg.permissionMode = agent::PermissionMode::Ask;
+            } else {
+                XX_LOGW(
+                    "[Config] Warning: unknown permission.mode '{}', fallback to 'ask'",
+                    val
+                );
+            }
+        }
+        if (root["permission"]["whitelist"] && root["permission"]["whitelist"].IsSequence()) {
+            for (const auto& node : root["permission"]["whitelist"]) {
+                auto p = resolveEnvVars(node.as<std::string>(""), dotEnvVars, overrideEnvVars);
+                if (!p.empty()) {
+                    cfg.permissionAllowPaths.push_back(std::move(p));
+                }
+            }
+        }
+        if (root["permission"]["blacklist"] && root["permission"]["blacklist"].IsSequence()) {
+            for (const auto& node : root["permission"]["blacklist"]) {
+                auto p = resolveEnvVars(node.as<std::string>(""), dotEnvVars, overrideEnvVars);
+                if (!p.empty()) {
+                    cfg.permissionDenyPaths.push_back(std::move(p));
+                }
+            }
+        }
+    }
+
     return cfg;
 }
 

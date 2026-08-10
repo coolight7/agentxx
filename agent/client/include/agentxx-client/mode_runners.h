@@ -1,5 +1,6 @@
 #pragma once
 
+#include "agentxx-client/config_loader.h"
 #include "agentxx/agent/code_agent.h"
 #include "agentxx/agent/config.h"
 #include <memory>
@@ -16,7 +17,8 @@ void runLocalCliUnified(std::shared_ptr<agent::CodeAgent> agent);
 
 void runLocalTuiUnified(
     std::shared_ptr<agent::CodeAgent>   agent,
-    std::shared_ptr<agent::AgentConfig> config
+    std::shared_ptr<agent::AgentConfig> config,
+    agent::PermissionMode               permissionMode = agent::PermissionMode::Ask
 );
 
 void runRemoteCli(std::string_view url, std::string_view token, std::string_view model);
@@ -25,7 +27,8 @@ void runRemoteTui(
     std::shared_ptr<agent::AgentConfig> config,
     std::string_view                    url,
     std::string_view                    token,
-    std::string_view                    model
+    std::string_view                    model,
+    agent::PermissionMode               permissionMode = agent::PermissionMode::Ask
 );
 
 } // namespace client

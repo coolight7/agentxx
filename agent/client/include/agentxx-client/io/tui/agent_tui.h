@@ -1,5 +1,6 @@
 #pragma once
 
+#include "agentxx-client/config_loader.h"
 #include "agentxx-client/io/tui/framework/modal_container.h"
 #include "agentxx-client/io/tui/framework/tui_context.h"
 #include "agentxx-client/io/tui/framework/tui_settings.h"
@@ -149,7 +150,9 @@ public:
         asio::any_io_executor                         ex,
         std::shared_ptr<agentxx::agent::AgentContext> agentContext,
         std::string                                   threadId = "session",
-        TUITheme                                      theme    = TUITheme::darkTheme()
+        TUITheme                                      theme    = TUITheme::darkTheme(),
+        /// 权限询问处理模式 (来自 yaml 配置 `permission.mode`, 见 config.h)
+        agentxx::agent::PermissionMode permissionMode = agentxx::agent::PermissionMode::Ask
     );
     ~TUIClientAgentIO() override;
 
@@ -237,6 +240,8 @@ private:
     TUITheme                                      theme_;
     std::string                                   threadId_;
     asio::any_io_executor                         ex_;
+    /// 权限询问处理模式 (yaml 配置 `permission.mode` 注入, 不可运行时切换)
+    agentxx::agent::PermissionMode permissionMode_ = agentxx::agent::PermissionMode::Ask;
 
     std::mutex                                screenMutex_;
     std::shared_ptr<ftxui::ScreenInteractive> screen_;

@@ -229,6 +229,26 @@ Options:
         }
     }
 
+    // 权限询问处理模式启动提示 (yaml `permission.mode`, 默认 ask):
+    // ask = 工作目录内允许/其他询问; all_ask = 全部询问; pass = 全部放行; deny = 全部拒绝
+    XX_LOGI(
+        "[Config] permission.mode: {} (ask=工作目录内允许/其他询问, all_ask=全部询问, "
+        "pass=全部放行, deny=全部拒绝)",
+        agentxx::client::permissionModeName(yamlCfg.permissionMode)
+    );
+    if (!yamlCfg.permissionAllowPaths.empty()) {
+        XX_LOGI(
+            "[Config] permission.whitelist (始终放行): {} 条",
+            yamlCfg.permissionAllowPaths.size()
+        );
+    }
+    if (!yamlCfg.permissionDenyPaths.empty()) {
+        XX_LOGI(
+            "[Config] permission.blacklist (始终拒绝): {} 条",
+            yamlCfg.permissionDenyPaths.size()
+        );
+    }
+
     if (mode == "train") {
         auto config                                    = buildDefaultConfig();
         config->dataDir                                = resolvedDataDir;
@@ -310,6 +330,11 @@ Options:
     // CodeGraph 代码分析 (索引项目根目录固定为当前程序工作目录)
     config->enableCodeGraph = yamlCfg.enableCodeGraph;
 
+    // 权限配置 (模式 + 白/黑名单; CodeAgent 启动时按此注册文件系统读写规则)
+    config->permissionMode      = yamlCfg.permissionMode;
+    config->permissionAllowPaths = yamlCfg.permissionAllowPaths;
+    config->permissionDenyPaths  = yamlCfg.permissionDenyPaths;
+
     // ======================== TUI 全局设置持久化 ========================
     // 全局设置 (动画等级/showSystemInfo 等) 存于 {dataDir}/sqlite/global.db,
     // 绑定到 TUISettings 单例, 设置变更时同步落库, 重启后恢复
@@ -378,7 +403,7 @@ Options:
             config->logPrintMessagesBeforeLLM              = false;
             config->logPrintMessagesBeforeLLMWithSystemMsg = false;
             config->logPrintSummarizationResultTokenCount  = true;
-            runRemoteTui(config, agentUrl, agentToken, remoteModel);
+            runRemoteTui(config, agentUrl, agentToken, remoteModel, yamlCfg.permissionMode);
         } else {
             config->logPrintToolcall                       = false;
             config->logPrintMessagesBeforeLLM              = false;
@@ -398,7 +423,7 @@ Options:
         config->logPrintMessagesBeforeLLMWithSystemMsg = false;
         config->logPrintSummarizationResultTokenCount  = true;
         auto agent = std::make_shared<agentxx::agent::CodeAgent>(config);
-        runLocalTuiUnified(agent, config);
+        runLocalTuiUnified(agent, config, yamlCfg.permissionMode);
     } else {
         agentxx::util::LogDispatcher::instance().removeSink(defaultLogSink);
         config->logPrintToolcall                       = false;

@@ -209,7 +209,8 @@ void runLocalCliUnified(std::shared_ptr<agent::CodeAgent> agent) {
 
 static asio::awaitable<void> runLocalTuiUnifiedAsync(
     std::shared_ptr<agent::CodeAgent>   agent,
-    std::shared_ptr<agent::AgentConfig> config
+    std::shared_ptr<agent::AgentConfig> config,
+    agent::PermissionMode                   permissionMode
 ) {
     auto clientEx = co_await asio::this_coro::executor;
     // 每次启动生成唯一会话 id, 避免多实例/多次启动共用 "session" 导致会话串扰
@@ -230,7 +231,13 @@ static asio::awaitable<void> runLocalTuiUnifiedAsync(
         }
         ctx->modelRegistry = std::move(registry);
     }
-    auto tui = std::make_shared<TUIClientAgentIO>(clientEx, ctx, threadId, resolveTuiTheme());
+    auto tui = std::make_shared<TUIClientAgentIO>(
+        clientEx,
+        ctx,
+        threadId,
+        resolveTuiTheme(),
+        permissionMode
+    );
     tui->start();
 
     auto serverIO = setupLocalUnifiedDirect(clientEx, agent, tui, threadId);
@@ -257,9 +264,10 @@ static asio::awaitable<void> runLocalTuiUnifiedAsync(
 
 void runLocalTuiUnified(
     std::shared_ptr<agent::CodeAgent>   agent,
-    std::shared_ptr<agent::AgentConfig> config
+    std::shared_ptr<agent::AgentConfig> config,
+    agent::PermissionMode                   permissionMode
 ) {
-    runLocalUnifiedMain(agent, runLocalTuiUnifiedAsync(agent, config));
+    runLocalUnifiedMain(agent, runLocalTuiUnifiedAsync(agent, config, permissionMode));
 }
 
 // ---------------------------------------------------------------------------
@@ -338,7 +346,8 @@ static asio::awaitable<void> runRemoteTuiAsync(
     std::shared_ptr<agent::AgentConfig> config,
     std::string                         url,
     std::string                         token,
-    std::string                         model
+    std::string                         model,
+    agent::PermissionMode                   permissionMode
 ) {
     auto ex = co_await asio::this_coro::executor;
 
@@ -347,7 +356,13 @@ static asio::awaitable<void> runRemoteTuiAsync(
     // 每次启动生成唯一会话 id: 服务端按 threadId 区分会话,
     // 共用 "session" 会使多个客户端实例挂到同一会话上互相串扰
     const std::string threadId = generateUniqueThreadId();
-    auto              io = std::make_shared<TUIClientAgentIO>(ex, ctx, threadId, resolveTuiTheme());
+    auto              io = std::make_shared<TUIClientAgentIO>(
+        ex,
+        ctx,
+        threadId,
+        resolveTuiTheme(),
+        permissionMode
+    );
     io->setRemoteUrl(url);
     io->start();
 
@@ -396,12 +411,19 @@ void runRemoteTui(
     std::shared_ptr<agent::AgentConfig> config,
     std::string_view                    url,
     std::string_view                    token,
-    std::string_view                    model
+    std::string_view                    model,
+    agent::PermissionMode                   permissionMode
 ) {
     asio::io_context ctx;
     asio::co_spawn(
         ctx,
-        runRemoteTuiAsync(config, std::string{url}, std::string{token}, std::string{model}),
+        runRemoteTuiAsync(
+            config,
+            std::string{url},
+            std::string{token},
+            std::string{model},
+            permissionMode
+        ),
         asio::detached
     );
     ctx.run();

@@ -12,6 +12,21 @@
 namespace agentxx {
 namespace client {
 
+/// 权限模式名称 (供日志/启动提示/测试展示; 越界返回 "ask")
+inline constexpr std::string_view permissionModeName(agent::PermissionMode mode) noexcept {
+    switch (mode) {
+        case agent::PermissionMode::Ask:
+            return "ask";
+        case agent::PermissionMode::AllAsk:
+            return "all_ask";
+        case agent::PermissionMode::Pass:
+            return "pass";
+        case agent::PermissionMode::Deny:
+            return "deny";
+    }
+    return "ask";
+}
+
 struct YamlAppConfig {
     std::map<std::string, agent::ModelConfig> models;
     std::map<std::string, std::string>        mcpServers;
@@ -37,6 +52,22 @@ struct YamlAppConfig {
     /// - 索引数据库: {dataDir}/sqlite/codegraph/<折叠路径>/index.db
     ///   (深层路径折叠 + 单段截断控制长度, 子目录可前缀复用最近父级索引)
     bool enableCodeGraph = true;
+
+    /// 权限询问处理模式 (yaml `permission.mode`: ask/all_ask/pass/deny, 默认 ask)
+    /// - ask:     当前工作目录内允许读写, 其他路径询问用户
+    /// - all_ask: 所有路径读写均询问用户
+    /// - pass:    全部放行, 不询问
+    /// - deny:    全部拒绝, 不询问
+    /// 服务端 CodeAgent 按模式注册文件系统读写规则; 客户端仅对仍到达的
+    /// 权限 INTERRUPT 作兜底 (pass 放行 / deny 拒绝 / ask、all_ask 询问)
+    agent::PermissionMode permissionMode = agent::PermissionMode::Ask;
+    /// 权限白名单: 始终放行的路径列表 (yaml `permission.whitelist`)
+    /// - 最长前缀匹配, 支持 * 通配符; 相对路径按程序工作目录解析
+    /// - 优先级高于模式默认规则 (如 deny 模式下白名单路径仍可访问)
+    std::vector<std::string> permissionAllowPaths;
+    /// 权限黑名单: 始终拒绝的路径列表 (yaml `permission.blacklist`)
+    /// - 与白名单同路径时黑名单优先 (后注册覆盖)
+    std::vector<std::string> permissionDenyPaths;
 };
 
 std::map<std::string, std::string> loadDotEnv(std::string_view path);
