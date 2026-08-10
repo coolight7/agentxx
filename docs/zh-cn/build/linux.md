@@ -69,6 +69,33 @@ cd {项目根目录}/agent
 ./script/linux_release_build.sh
 ```
 
+## Debug 构建加速
+
+Debug 构建脚本 (`script/linux_debug_build.sh`) 默认已启用以下加速手段，可直接使用:
+
+| 手段 | 说明 |
+| --- | --- |
+| ccache | 缓存编译结果，增量/重复/切分支构建大幅提速。未安装时自动跳过 (`apt-get install ccache`)。缓存目录默认 `~/.cache/ccache-agentxx`，可用环境变量 `CCACHE_DIR` / `CCACHE_MAXSIZE` (默认 3G) 覆盖 |
+| 快速链接器 | 自动检测并使用 mold (>25x 于默认 bfd，大体积二进制链接尤其明显)，其次 gold；均无则用默认。可用 `-DAGENTXX_LINKER=mold\|gold\|bfd` 强制指定 |
+| PCH | 预编译稳定第三方头 (std/fmt/asio/boost.exception 等)，项目自身头不参与，改动项目头不会触发全量重编。可用 `-DAGENTXX_ENABLE_PCH=OFF` 关闭 |
+| 并行度 | 并行任务数默认取 CPU 核数 (原为 4)，可用环境变量 `AGENTXX_BUILD_PARALLEL` 覆盖，例如内存不足/编译器 ICE 时: `AGENTXX_BUILD_PARALLEL=4 ./script/linux_debug_build.sh` |
+| 源码单次编译 | GCC/Clang 下 lib 的 62 个源文件经 OBJECT 库只编译一次，动态/静态库复用同一批 .o (原为编译两次)，编译时间近乎减半 |
+
+### 更快的可选配置
+
+默认 Debug 构建保留 AddressSanitizer 与调试符号 (`-g`)。若日常迭代不需要 ASAN/断点符号，可通过 cmake 选项显著加快编译与链接 (产物缩小 3 倍左右):
+
+```sh
+cmake -B build/linux-debug -S agent \
+    -DAGENTXX_ENABLE_ASAN=OFF \        # 关闭 AddressSanitizer
+    -DAGENTXX_ENABLE_DEBUG_INFO=OFF \  # 关闭调试符号 (-g)
+    ...其余参数与 linux_debug_build.sh 一致
+```
+
+- `AGENTXX_ENABLE_ASAN=OFF`: 去掉 `-fsanitize=address`，编译与链接均显著加快 (仍保留 `-fno-omit-frame-pointer` 便于调试/性能分析)
+- `AGENTXX_ENABLE_DEBUG_INFO=OFF`: 去掉 `-g`，.o/.a/.so/可执行文件体积缩小约 3 倍，ar 打包与 install 拷贝大幅提速。注意关闭后 crash 日志的 addr2line 无法解析文件名/行号
+- 建议日常开发全开 OFF，提交前/定位疑难问题时再开回 ON 全量构建验证一次
+
 ## 常见错误
 - [FAQ 更多问题](FAQ.md)
 

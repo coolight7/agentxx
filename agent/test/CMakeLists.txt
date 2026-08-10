@@ -11,6 +11,11 @@ cmake_policy(SET CMP0167 OLD)
 project(agentxx_test VERSION 0.1.0 LANGUAGES C CXX)
 include(GNUInstallDirs)
 
+# 由顶层 superbuild 传入 (见 agent/CMakeLists.txt)
+option(AGENTXX_ENABLE_PCH "Enable precompiled headers (GCC/Clang)." ON)
+# 嵌套构建时由顶层传入；独立构建时自动查找
+find_program(CCACHE_PROGRAM ccache)
+
 # 建议使用 c++ 26 
 set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_STANDARD_REQUIRED OFF)
@@ -59,6 +64,24 @@ if (AGENTXX_BUILD_CLIENT)
   target_include_directories(agentxx_test PRIVATE 
     "${AGENTXX_CLIENT_SOURCE_DIR}/include/"
   )
+endif()
+
+# PCH: 只预编译稳定第三方头，加速测试编译 (GCC/Clang，与 lib 保持一致)。
+# 第三方头须用 <...> 形式 (见 lib/CMakeLists.txt 说明)
+if (AGENTXX_ENABLE_PCH AND NOT XX_IS_MSVC_D)
+  target_precompile_headers(agentxx_test PRIVATE
+    <algorithm> <atomic> <chrono> <cstdint> <cstring> <deque> <exception>
+    <filesystem> <fstream> <functional> <map> <memory> <mutex> <optional>
+    <set> <sstream> <string> <string_view> <thread> <unordered_map>
+    <utility> <variant> <vector>
+    <fmt/format.h>
+    <asio/awaitable.hpp>
+    <boost/exception/exception.hpp>
+  )
+  # ccache + PCH 兼容 (GCC 特有)，仅对本目标生效
+  if (CCACHE_PROGRAM AND XX_IS_GCC_D)
+    target_compile_options(agentxx_test PRIVATE -fpch-preprocess)
+  endif()
 endif()
 
 find_package(PkgConfig REQUIRED)
