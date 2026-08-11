@@ -51,13 +51,17 @@ int g_ms_failed = 0;
 class InterruptMockIO : public agentxx::agent::AgentIOBase {
 public:
 
-    std::shared_ptr<agentxx::agent::AgentContext> agentContext;
-    std::atomic<bool>                             interruptMsgOk{false};
-    std::atomic<bool>                             interruptTempOrderOk{false};
-    std::atomic<int>                              interruptCalls{0};
+    // 注意: 必须用 weak_ptr 持有 AgentContext!
+    // 否则 io 被 BaseAgent 存入 session->io (shared_ptr) 后, 会形成
+    // AgentContext -> Session::io -> InterruptMockIO -> AgentContext 循环引用,
+    // 导致 AgentContext 整棵树无法释放 (ASan 报告内存泄漏)
+    std::weak_ptr<agentxx::agent::AgentContext> agentContext;
+    std::atomic<bool>                           interruptMsgOk{false};
+    std::atomic<bool>                           interruptTempOrderOk{false};
+    std::atomic<int>                            interruptCalls{0};
 
     explicit InterruptMockIO(std::shared_ptr<agentxx::agent::AgentContext> ctx) :
-        agentContext(std::move(ctx)) {}
+        agentContext(ctx) {}
 
     void onDelta(const agentxx::agent::Delta&) override {}
 
@@ -74,7 +78,11 @@ public:
         std::string_view /*interruptArgJson*/
     ) override {
         ++interruptCalls;
-        auto& graphData = agentContext->middlewareHandleContext;
+        auto ctx = agentContext.lock();
+        if (!ctx || !ctx->middlewareHandleContext) {
+            co_return neograph::json{};
+        }
+        auto& graphData = ctx->middlewareHandleContext;
 
         // 1) 中断时刻自动补充的 [Interrupt] tool 消息:
         //    - 触发中断的 tool 结果以 [Interrupt] 占位 (role=tool), 保证

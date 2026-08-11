@@ -1060,8 +1060,10 @@ asio::awaitable<void> test_agent_toolcall_intercept_exception() {
     XX_TEST_EXPECT_TRUE(msgs.is_array());
     bool hasErrorMsg = false;
     for (const auto& m : msgs) {
+        // 匹配 "[Start/Exception aborted" 前缀: 实际插入格式为
+        // "[Start/Exception aborted: {exceptionStr}]" (带错误详情)
         if (m["role"] == "tool"
-            && m["content"].dump().find("[Start/Exception aborted]") != std::string::npos) {
+            && m["content"].dump().find("[Start/Exception aborted") != std::string::npos) {
             hasErrorMsg = true;
         }
     }

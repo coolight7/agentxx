@@ -1590,8 +1590,9 @@ asio::awaitable<void> test_http_client_dns_timeout() {
             if (!ok) {
                 // 环境前提不满足: 黑洞 DNS 未生效 (如 WSL 下 UDP 查询被立即拒绝/
                 // 提前返回, 未发生预期的挂起), 无法验证 DNS 超时路径, 跳过整个测试;
-                // 仅当耗时超过 glibc 黑洞超时 (≈2.5s+) 且错误仍不符时才判失败 (真 bug)
-                if (elapsed < 2500) {
+                // 仅当耗时明显超过 glibc 黑洞解析超时 (~6s, A+AAAA 两次查询) 且错误
+                // 仍不符时才判失败 (真 bug: HttpClient 的 DNS 超时路径未生效)
+                if (elapsed < 7000) {
                     std::cout << "[dns_timeout] skip: blackhole DNS not effective (" << elapsed
                               << " ms, err: " << msg << ")" << std::endl;
                     co_return;
