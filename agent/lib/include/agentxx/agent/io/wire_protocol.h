@@ -414,12 +414,20 @@ inline neograph::json makeTurnResult(
     return j;
 }
 
-inline neograph::json makeContextStats(uint64_t contextTokens, uint64_t maxContextTokens) {
-    return neograph::json{
+inline neograph::json makeContextStats(
+    uint64_t contextTokens,
+    uint64_t maxContextTokens,
+    double   tps = 0.0
+) {
+    neograph::json j = {
         {"type",               MsgType::ContextStats},
         {"context_tokens",     contextTokens        },
         {"max_context_tokens", maxContextTokens     },
     };
+    if (tps > 0.0) {
+        j["tps"] = tps;
+    }
+    return j;
 }
 
 inline neograph::json makeError(int code, std::string_view message) {

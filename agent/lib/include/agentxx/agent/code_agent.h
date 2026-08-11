@@ -4,10 +4,6 @@
 
 namespace agentxx {
 
-namespace middleware {
-class SummarizationMiddlewareHandle;
-} // namespace middleware
-
 namespace tools {
 class SubAgentManagerTool;
 } // namespace tools
@@ -44,8 +40,8 @@ private:
 
     /// subagent 管理工具 (在 setupMiddleware 中创建, createTools 中完成配置)
     std::unique_ptr<agentxx::tools::SubAgentManagerTool> subagentManagerTool_;
-    /// summarization 中间件 (在 setupMiddleware 中创建, createTools 后关联压缩句柄)
-    std::shared_ptr<agentxx::middleware::SummarizationMiddlewareHandle> summarizationMiddleware_;
+    // (summarization 中间件由 AgentContext::summarizationMiddleware 持有,
+    //  CodeAgent 不再单独保存)
 };
 
 } // namespace agent

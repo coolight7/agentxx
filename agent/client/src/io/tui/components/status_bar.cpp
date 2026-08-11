@@ -1,5 +1,6 @@
 #include "agentxx-client/io/tui/components/status_bar.h"
 #include "ftxui/dom/elements.hpp"
+#include <vector>
 
 using namespace ftxui;
 
@@ -35,13 +36,21 @@ Element StatusBarComponent::OnRender() {
     }
 
     // 模型区域: 整体作为可点击区域 (点击打开模型选择弹窗)
-    auto modelInfo = hbox({
-                         text("[F2] ") | color(theme.hintColor),
-                         text(modelName) | color(theme.accentColor),
-                         text(" · ") | color(theme.hintColor),
-                         ctxText | color(theme.hintColor),
-                     })
-                     | reflect(modelBox_);
+    // - 流式期间 (ModelCall) 在上下文占比之后追加显示平均生成速度 (token/s)
+    std::vector<Element> modelChildren = {
+        text("[F2] ") | color(theme.hintColor),
+        text(modelName) | color(theme.accentColor),
+        text(" · ") | color(theme.hintColor),
+        ctxText | color(theme.hintColor),
+    };
+    const double tps = (ctx_.session && ctx_.session->contextStats)
+                           ? ctx_.session->contextStats->tps.load(std::memory_order_relaxed)
+                           : 0.0;
+    if (st.isStreaming && tps > 0.0) {
+        modelChildren.push_back(text("·") | color(theme.hintColor) | dim);
+        modelChildren.push_back(text(fmt::format("{:.1f} t/s", tps)) | color(theme.hintColor));
+    }
+    auto modelInfo = hbox(std::move(modelChildren)) | reflect(modelBox_);
 
     // Sessions 按钮: 可点击打开会话选择弹窗 (F4), 位于 Settings 左侧
     auto sessionsText = text("[F4] Sessions") | color(theme.hintColor) | reflect(sessionBox_);

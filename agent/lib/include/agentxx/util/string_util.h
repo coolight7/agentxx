@@ -966,7 +966,8 @@ inline PinyinCallback s_pinyinCallback = nullptr;
     return std::nullopt;
 }
 
-[[nodiscard]] inline constexpr std::string formatSize(size_t bytes, double base = 1024) {
+[[nodiscard]] inline constexpr std::string
+    formatSize(size_t bytes, double base = 1024, bool showFloat = true) {
     if (bytes == 0) {
         return "0";
     }
@@ -987,7 +988,7 @@ inline PinyinCallback s_pinyinCallback = nullptr;
     // 格式化输出: size 为整数时无小数 (避免 "1" 显示为 "1.0"),
     // 否则保留一位小数 (如 1.5K); 原逻辑仅按 >=100 去掉小数,
     // 导致 formatSize(1) 返回 "1.0" 这类不合理显示
-    if (size == std::floor(size)) {
+    if (false == showFloat || size == std::floor(size)) {
         return fmt::format("{}{}", int64_t(size), units[index]);
     } else {
         return fmt::format("{:.1f}{}", size, units[index]);

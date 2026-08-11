@@ -456,7 +456,7 @@ std::string WsAgentIOTransport::serialize(const WireMessage& msg) {
                 )
                     .dump();
             } else if constexpr (std::is_same_v<T, WireContextStats>) {
-                return io::makeContextStats(m.contextTokens, m.maxContextTokens).dump();
+                return io::makeContextStats(m.contextTokens, m.maxContextTokens, m.tps).dump();
             } else if constexpr (std::is_same_v<T, WireError>) {
                 return io::makeError(m.code, m.message).dump();
             } else if constexpr (std::is_same_v<T, WireLog>) {
@@ -582,6 +582,7 @@ std::optional<WireMessage> WsAgentIOTransport::deserialize(std::string_view json
         WireContextStats stats;
         stats.contextTokens    = j.value("context_tokens", uint64_t{0});
         stats.maxContextTokens = j.value("max_context_tokens", uint64_t{0});
+        stats.tps              = j.value("tps", 0.0);
         return WireMessage{std::move(stats)};
     } else if (t == io::MsgType::ErrorMsg) {
         WireError err;

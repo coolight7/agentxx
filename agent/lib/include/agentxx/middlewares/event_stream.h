@@ -519,6 +519,11 @@ public:
     /// 包装为 GraphStreamCallback (shared_from_this 持有, 回调期间本对象存活)
     neograph::graph::GraphStreamCallback makeCallback();
 
+    /// 设置 tps 推送间隔 (秒); 默认 5 秒, 测试可调小以缩短等待
+    void setTpsPushInterval(double seconds) {
+        tpsPushIntervalSec_ = seconds;
+    }
+
 private:
 
     void handleLLMToken(const neograph::graph::GraphEvent& event);
@@ -526,6 +531,18 @@ private:
     void handleNodeStart(const neograph::graph::GraphEvent& event);
     void handleNodeEnd(const neograph::graph::GraphEvent& event);
     void handleError(const neograph::graph::GraphEvent& event);
+
+    /// 估算 UTF-8 字符串对应的 token 数
+    /// - 优先使用 AgentContext::summarizationMiddleware 的 countTokensForUtf8Str
+    ///   (上下文压缩/上下文统计共用同一口径)
+    /// - 无 summarization 时 (如测试/裸 EventBridge) 回退内置估算:
+    ///   ascii ≈ 4 字符/token, 非 ascii ≈ 1.1 字符/token
+    double estimateTokens(std::string_view text);
+
+    /// 每 5 秒推送一次当前 ModelCall 的平均生成速度 (token/s) 到对端
+    /// - 经 WireContextStats.tps 携带, 与上下文统计共用同一通道;
+    ///   无流式数据 (io_ 为空/无会话统计) 时静默跳过
+    void pushTpsIfDue();
 
     /// 发布总线事件: LLM_TOKEN -> EventModelToken (无订阅者时跳过, 避免无效协程创建)
     void publishModelToken(const std::string& token, std::string_view kind);
@@ -550,6 +567,17 @@ private:
     ///   从历史末尾线性回扫 O(n²); 未命中时回扫兜底 (如历史来自更早轮次)
     /// - viewMessages append-only, 索引不失效
     std::unordered_map<std::string, size_t> toolCallHistoryIndex_;
+
+    /// tps (token/s) 统计: 从每次 ModelCall 流式开始 (节点开始后首个 token) 计时,
+    /// 累计估算 token 数, 每 [tpsPushIntervalSec_] 秒推送一次平均速度到对端
+    /// (WireContextStats.tps)
+    /// - 新流开始判定: handleLLMToken 进入时 lastChatChunkType_ == TYPE_UNKNOWN
+    ///   (handleNodeStart/handleNodeEnd/handleError 都会重置该标记)
+    /// - 仅在 io 线程访问, 无需同步
+    std::chrono::steady_clock::time_point tpsStartTime_{};
+    double                                tpsTokenCount_  = 0.0; ///< 累计估算 token 数
+    double                                tpsLastPushSec_ = 0.0; ///< 上次推送时的累计秒数
+    double                                tpsPushIntervalSec_ = 3.0; ///< 推送间隔 (秒)
 };
 
 } // namespace middleware

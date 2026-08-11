@@ -153,7 +153,7 @@ foreach(_agentxx_target ${_AGENTXX_USAGE_TARGETS})
       "${Boost_INCLUDE_DIRS}/boost/"
     )
     target_link_directories(${_agentxx_target} PUBLIC 
-      "${BOOST_LIBRARY_DIR}"
+      "${BOOST_LIBRARY_DIRS}"
     )
   endif()
   if (AGENTXX_ENABLE_CODEGRAPH)
