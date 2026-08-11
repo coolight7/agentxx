@@ -413,7 +413,13 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
     };
     // 展示历史 (ViewMessage) 与 LLM 上下文 (原始 json) 分集维护:
     // 历史用于 client 同步/展示, 上下文仅用于调用 LLM API
-    session->appendHistory(ViewMessage::makeText(ViewMessage::Role::User, processedInput));
+    // - 附带开始时间戳: 会话列表的 lastActiveMs 依赖此值 (持久化 meta),
+    //   无时间戳时列表无法显示活动时间
+    session->appendHistory(ViewMessage::makeText(
+        ViewMessage::Role::User,
+        processedInput,
+        start_time_ms
+    ));
     session->llmMessages.push_back(std::move(userMsgJson));
 
     auto cancelToken = std::make_shared<neograph::graph::CancelToken>();

@@ -43,6 +43,8 @@ struct SessionPersistenceHooks {
     /// 追加展示历史消息后调用 (msg 已含分配 id; msgIdCounter 为追加后计数,
     /// 供重启恢复时延续 id 分配)
     std::function<void(const ViewMessage&, uint64_t msgIdCounter)> onAppendMessage;
+    /// 更新一条已持久化历史消息后调用 (msg 已含分配 id; 如 tool 结果回填)
+    std::function<void(const ViewMessage&)> onUpdateMessage;
     /// 保存 LLM 上下文消息 (每轮对话结束时调用)
     std::function<void(const neograph::json&)> onSaveLlmMessages;
 };
@@ -151,6 +153,13 @@ public:
     /// - 必须在 ioContext 线程内调用 (assertIoThread 强制校验)
     /// - 已绑定持久化回调时同步落库 (失败仅记日志)
     std::string appendHistory(ViewMessage msg);
+
+    /// 更新一条已存在的历史消息 (按 msg.id 定位) 并同步持久化
+    /// - 必须在 ioContext 线程内调用 (assertIoThread 强制校验)
+    /// - 不更新链式哈希 (哈希基于消息内容, 历史内容本不应变化;
+    ///   tool 结果回填属于"补齐信息", 与增量 Delta 语义一致)
+    /// - 已绑定持久化回调时同步更新库内对应行 (失败仅记日志)
+    void updateHistory(ViewMessage msg);
 
     /// 绑定持久化回调 (由 SessionStore 创建 Session 时注入; 测试可不绑定)
     void setPersistenceHooks(SessionPersistenceHooks hooks);

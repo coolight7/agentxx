@@ -1,6 +1,7 @@
 #include "agentxx/agent/context.h"
 #include "agentxx/agent/model_registry.h"
 #include "agentxx/agent/session_persistence.h"
+#include "agentxx/util/log.h"
 #include <fmt/format.h>
 
 namespace agentxx {
@@ -20,6 +21,28 @@ std::string Session::appendHistory(ViewMessage msg) {
         hooks_.onAppendMessage(viewMessages.back(), msgIdCounter_);
     }
     return id;
+}
+
+void Session::updateHistory(ViewMessage msg) {
+    // 强制校验: viewMessages/chainHash/msgIdCounter_ 仅允许 io 线程写入
+    assertIoThread();
+
+    if (msg.id.empty()) {
+        XX_LOGW("Session::updateHistory: empty msg id, skipped");
+        return;
+    }
+    // 定位同 id 消息 (历史 append-only, 顺序线性扫描即可; 低频操作)
+    for (auto& m : viewMessages) {
+        if (m.id == msg.id) {
+            m = std::move(msg);
+            // 持久化 (尽力而为): 覆盖库内对应行, 供重启恢复
+            if (hooks_.onUpdateMessage) {
+                hooks_.onUpdateMessage(m);
+            }
+            return;
+        }
+    }
+    XX_LOGW("Session::updateHistory: msg id {} not found in history", msg.id);
 }
 
 void Session::setPersistenceHooks(SessionPersistenceHooks hooks) {
@@ -87,6 +110,10 @@ std::shared_ptr<Session> SessionStore::getOrCreate(std::string_view threadId) {
             .onAppendMessage =
                 [persistence, tid](const ViewMessage& msg, uint64_t counter) {
                     persistence->appendViewMessage(tid, msg, counter);
+                },
+            .onUpdateMessage =
+                [persistence, tid](const ViewMessage& msg) {
+                    persistence->updateViewMessage(tid, msg);
                 },
             .onSaveLlmMessages =
                 [persistence, tid](const neograph::json& msgs) {

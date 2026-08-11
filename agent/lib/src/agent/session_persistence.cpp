@@ -148,6 +148,39 @@ static std::string titlePreview(std::string_view s, size_t max = 60) {
 
 } // namespace
 
+void SessionPersistence::updateViewMessage(
+    std::string_view   threadId,
+    const ViewMessage& msg
+) {
+    if (msg.id.empty()) {
+        XX_LOGD("SessionPersistence: updateViewMessage({}) skipped (empty msg id)", threadId);
+        return;
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    agentxx::util::catchError<bool>(
+        [&]() -> bool {
+            auto& db = dbs(threadId).sessionDb;
+            // 按消息 id 定位行 (json1 json_extract; sqlite >= 3.38 内置)
+            auto update = db.prepare(
+                "UPDATE view_message SET json = ? WHERE json_extract(json, '$.id') = ?"
+            );
+            update.bindText(1, msg.toJson().dump());
+            update.bindText(2, msg.id);
+            update.step();
+            return true;
+        },
+        [&](std::string errmsg) -> bool {
+            XX_LOGE(
+                "SessionPersistence: updateViewMessage({}, id={}) failed: {}",
+                threadId,
+                msg.id,
+                errmsg
+            );
+            return false;
+        }
+    );
+}
+
 // ---------------------------------------------------------------------------
 // SessionPersistence
 // ---------------------------------------------------------------------------
@@ -302,6 +335,31 @@ std::vector<SessionInfo> SessionPersistence::listSessions() {
                                 info.title = stmt.columnText(1);
                             } else if (key == kMetaLastActiveMs) {
                                 info.lastActiveMs = stmt.columnInt64(1);
+                            }
+                        }
+                        // 兜底: 老数据无 lastActiveMs meta 时, 取最新一条
+                        // view_message 的开始时间戳 (json1 json_extract); 仍为 0
+                        // (历史消息均无时间戳) 时回退 session.db 文件修改时间,
+                        // 保证会话列表时间列不为空 (展示端对 0 显示 "-")
+                        if (info.lastActiveMs <= 0) {
+                            auto lastStmt = db.prepare(
+                                "SELECT json_extract(json, '$.start_time_ms') FROM view_message "
+                                "ORDER BY seq DESC LIMIT 1"
+                            );
+                            if (lastStmt.step() && !lastStmt.columnIsNull(0)) {
+                                info.lastActiveMs = lastStmt.columnInt64(0);
+                            }
+                        }
+                        if (info.lastActiveMs <= 0) {
+                            std::error_code fec;
+                            const auto      mtime
+                                = fs::last_write_time(entry.path() / "session.db", fec);
+                            if (!fec) {
+                                info.lastActiveMs
+                                    = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                          mtime.time_since_epoch()
+                                      )
+                                          .count();
                             }
                         }
                         return true;
