@@ -44,8 +44,7 @@ Element StatusBarComponent::OnRender() {
                      | reflect(modelBox_);
 
     // Sessions 按钮: 可点击打开会话选择弹窗 (F4), 位于 Settings 左侧
-    auto sessionsText
-        = text("[F4] Sessions") | color(theme.hintColor) | reflect(sessionBox_);
+    auto sessionsText = text("[F4] Sessions") | color(theme.hintColor) | reflect(sessionBox_);
 
     // Settings 按钮: 可点击打开设置弹窗, 鼠标悬浮时高亮背景
     auto settingsText = text("[F3] Settings") | color(theme.hintColor) | reflect(settingsBox_);
@@ -57,7 +56,7 @@ Element StatusBarComponent::OnRender() {
         filler(),
         text(" "),
         sessionsText,
-        text("  "),
+        text(" "),
         settingsText,
         text(" "),
     });
