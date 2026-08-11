@@ -1,6 +1,7 @@
 #include "agentxx/middlewares/event_stream.h"
 
 #include "agentxx/agent/io/agent_io_transport.h"
+#include "agentxx/middlewares/summarization.h"
 #include "agentxx/util/log.h"
 #include "fmt/format.h"
 
@@ -97,6 +98,13 @@ void EventBridge::handleLLMToken(const neograph::graph::GraphEvent& event) {
     bool        sendDuration = false;
     std::string kind         = "content";
 
+    // tps 统计: 新 ModelCall 流开始 (节点开始/结束后的首个 token) 时重置计时与计数
+    if (lastChatChunkType_ == neograph::ChatStreamChunk::TYPE_UNKNOWN) {
+        tpsStartTime_   = std::chrono::steady_clock::now();
+        tpsTokenCount_  = 0.0;
+        tpsLastPushSec_ = 0.0;
+    }
+
     if (event.data.is_string()) {
         token              = event.data.get<std::string>();
         lastChatChunkType_ = neograph::ChatStreamChunk::TYPE_CONTENT;
@@ -113,6 +121,11 @@ void EventBridge::handleLLMToken(const neograph::graph::GraphEvent& event) {
         token = event.data.dump();
     }
 
+    // 累计估算 token 数 (content + thinking 均计入生成速度)
+    tpsTokenCount_ += estimateTokens(token);
+    // 定时推送一次平均速度 (token/s)
+    pushTpsIfDue();
+
     // 总线发布 (无订阅者时内部跳过, 零开销)
     publishModelToken(token, kind);
 
@@ -125,7 +138,7 @@ void EventBridge::handleLLMToken(const neograph::graph::GraphEvent& event) {
         .durationMs
         = sendDuration ? static_cast<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
                                                   std::chrono::system_clock::now() - nodeStartTime_
-                         )
+          )
                                                   .count())
                        : 0,
     });
@@ -325,6 +338,62 @@ void EventBridge::handleError(const neograph::graph::GraphEvent& event) {
     lastChatChunkType_ = neograph::ChatStreamChunk::TYPE_UNKNOWN;
     auto msg           = event.data.is_string() ? event.data.get<std::string>() : event.data.dump();
     publishError(std::move(msg), event.node_name);
+}
+
+double EventBridge::estimateTokens(std::string_view text) {
+    // 优先使用 summarization 中间件的 token 计算 (与上下文压缩/上下文统计同口径)
+    if (auto ctxPtr = ctx_.lock()) {
+        if (ctxPtr->summarizationMiddleware) {
+            return static_cast<double>(ctxPtr->summarizationMiddleware->countTokensForUtf8Str(text)
+            );
+        }
+    }
+
+    // 回退: 无 summarization (测试/裸 EventBridge) 时的内置估算
+    // 口径与 SummarizationMiddlewareHandle 一致: ascii ≈ 4 字符/token,
+    // 非 ascii ≈ 1.1 字符/token
+    size_t unicodeCount = 0, asciiCount = 0;
+    for (size_t i = 0, step = 0; i < text.size(); i += step) {
+        unsigned char byte = static_cast<unsigned char>(text[i]);
+        // UTF-8 编码长度: 首字节高位连续 1 的个数决定后续字节数
+        if (byte >= 0xFC) {
+            step = 6;
+        } else if (byte >= 0xF8) {
+            step = 5;
+        } else if (byte >= 0xF0) {
+            step = 4;
+        } else if (byte >= 0xE0) {
+            step = 3;
+        } else if (byte >= 0xC0) {
+            step = 2;
+        } else {
+            step = 1;
+            ++asciiCount;
+            continue;
+        }
+        ++unicodeCount;
+    }
+    return static_cast<double>(unicodeCount) / 1.1 + static_cast<double>(asciiCount) / 4.0;
+}
+
+void EventBridge::pushTpsIfDue() {
+    // 无对端 (headless) 或无会话统计时不推送
+    if (!io_ || !session_->contextStats) {
+        return;
+    }
+    const auto nowSec
+        = std::chrono::duration<double>(std::chrono::steady_clock::now() - tpsStartTime_).count();
+    // 每 [tpsPushIntervalSec_] 秒更新一次平均速度; 流式期间 token 持续到达, 越界即推送
+    if (nowSec - tpsLastPushSec_ < tpsPushIntervalSec_) {
+        return;
+    }
+    tpsLastPushSec_  = nowSec;
+    const double tps = nowSec > 0.0 ? tpsTokenCount_ / nowSec : 0.0;
+    io_->sendToPeer(agentxx::agent::WireContextStats{
+        session_->contextStats->contextTokens.load(std::memory_order_relaxed),
+        session_->contextStats->maxContextTokens.load(std::memory_order_relaxed),
+        tps,
+    });
 }
 
 void EventBridge::publishModelToken(const std::string& token, std::string_view kind) {

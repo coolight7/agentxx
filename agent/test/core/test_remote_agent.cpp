@@ -49,6 +49,7 @@ public:
     std::atomic<bool>                  lastTurnInterrupted{false};
     std::atomic<uint64_t>              lastCtxTokens{0};
     std::atomic<uint64_t>              lastMaxTokens{0};
+    std::atomic<double>                lastTps{0.0};
     std::mutex                         mu;
 
     void onDelta(const agentxx::agent::Delta& delta) override {
@@ -68,6 +69,7 @@ public:
     void onContextStats(const agentxx::agent::WireContextStats& s) override {
         lastCtxTokens.store(s.contextTokens);
         lastMaxTokens.store(s.maxContextTokens);
+        lastTps.store(s.tps);
     }
 
     asio::awaitable<std::optional<std::string>> getInput() override {
@@ -953,7 +955,10 @@ static asio::awaitable<void> test_remote_client_context_stats() {
             ws,
             io::makeHelloAck(true, hello->value("thread", std::string{}), "", {})
         );
-        co_await wsSendJson(ws, io::makeContextStats(1234, 5678));
+        co_await wsSendJson(
+            ws,
+            io::makeContextStats(1234, 5678, 12.5)
+        );
         for (;;) {
             auto j = co_await wsRecvJson(ws);
             if (!j) {
@@ -993,6 +998,8 @@ static asio::awaitable<void> test_remote_client_context_stats() {
         co_await testSleep(ex, std::chrono::milliseconds{300});
         XX_TEST_EXPECT_EQ(io->lastCtxTokens.load(), uint64_t{1234});
         XX_TEST_EXPECT_EQ(io->lastMaxTokens.load(), uint64_t{5678});
+        // tps 字段 round-trip (makeContextStats 第三个参数)
+        XX_TEST_EXPECT_TRUE(io->lastTps.load() > 12.0 && io->lastTps.load() < 13.0);
     }
     transport->close();
 

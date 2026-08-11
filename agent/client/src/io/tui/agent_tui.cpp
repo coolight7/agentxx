@@ -1072,6 +1072,7 @@ void TUIClientAgentIO::onContextStats(const agentxx::agent::WireContextStats& st
             stats.maxContextTokens,
             std::memory_order_relaxed
         );
+        session_->contextStats->tps.store(stats.tps, std::memory_order_relaxed);
     }
     postRedraw();
 }

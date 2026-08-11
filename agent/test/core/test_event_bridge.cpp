@@ -3,6 +3,7 @@
 #include "agentxx/agent/context.h"
 #include "agentxx/middlewares/event_stream.h"
 #include "agentxx/middlewares/events.h"
+#include "agentxx/middlewares/summarization.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/io_context.hpp"
@@ -22,11 +23,14 @@ int g_eb_failed = 0;
 class TestEbIO : public agentxx::agent::AgentIOBase {
 public:
 
-    std::vector<agentxx::agent::Delta> deltas;
+    std::vector<agentxx::agent::Delta>             deltas;
+    std::vector<agentxx::agent::WireContextStats> stats;
 
     void sendToPeer(agentxx::agent::WireMessage msg) override {
         if (auto* d = std::get_if<agentxx::agent::Delta>(&msg)) {
             deltas.push_back(*d);
+        } else if (auto* s = std::get_if<agentxx::agent::WireContextStats>(&msg)) {
+            stats.push_back(*s);
         } else {
             agentxx::agent::AgentIOBase::sendToPeer(std::move(msg));
         }
@@ -358,6 +362,73 @@ asio::awaitable<void> test_eventbridge_node_delta() {
     co_return;
 }
 
+/// 验证 ModelCall 流式期间 tps 统计:
+/// - 从首个 token (节点开始后) 计时, 每 [tpsPushIntervalSec_] 秒推送一次平均速度
+/// - 间隔未到不推送; 新流 (NODE_START 后) 重新计时
+/// - token 估算复用 AgentContext::summarizationMiddleware 的 countTokensForUtf8Str 口径
+asio::awaitable<void> test_eventbridge_tps() {
+    auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
+    // 注入 summarization 中间件: estimateTokens 应复用其 token 计算口径
+    agentContext->summarizationMiddleware
+        = std::make_shared<agentxx::middleware::SummarizationMiddlewareHandle>(nullptr, agentContext);
+    auto session      = std::make_shared<agentxx::agent::Session>();
+    auto io           = std::make_shared<TestEbIO>();
+
+    auto bridge = makeTestBridge(agentContext, session, io);
+    // 缩短推送间隔 (默认 5 秒), 测试无需真实等待
+    bridge->setTpsPushInterval(0.05);
+    auto bridgeCb = bridge->makeCallback();
+
+    // 节点开始: 重置 chunk 类型标记, 后续首个 token 作为新流计时起点
+    bridgeCb(neograph::graph::GraphEvent{
+        neograph::graph::GraphEvent::Type::NODE_START,
+        "llm",
+        neograph::json::object()
+    });
+
+    // 首个 token: 流开始计时; 间隔未到 → 不推送
+    bridgeCb(neograph::graph::GraphEvent{
+        neograph::graph::GraphEvent::Type::LLM_TOKEN,
+        "llm",
+        neograph::json(std::string{"Hello"})
+    });
+    XX_TEST_EXPECT_EQ(io->stats.size(), size_t{0});
+
+    // 等待超过间隔后继续发 token → 触发推送, tps > 0
+    co_await asio::steady_timer(
+        co_await asio::this_coro::executor, std::chrono::milliseconds(80)
+    )
+        .async_wait(asio::use_awaitable);
+    bridgeCb(neograph::graph::GraphEvent{
+        neograph::graph::GraphEvent::Type::LLM_TOKEN,
+        "llm",
+        neograph::json(std::string{" World"})
+    });
+    XX_TEST_EXPECT_EQ(io->stats.size(), size_t{1});
+    if (io->stats.size() == 1) {
+        // "Hello" ≈ 5 个 ascii 字符 / 4 ≈ 1.25 token, 80ms 内 → tps 约 15.6
+        XX_TEST_EXPECT_TRUE(io->stats[0].tps > 0.0);
+        // 上下文统计字段透传 (默认 0)
+        XX_TEST_EXPECT_EQ(io->stats[0].contextTokens, uint64_t{0});
+    }
+
+    // 新流 (NODE_START) 重新计时: 间隔从新流首个 token 起算, 立即发 token 不推送
+    bridgeCb(neograph::graph::GraphEvent{
+        neograph::graph::GraphEvent::Type::NODE_START,
+        "llm",
+        neograph::json::object()
+    });
+    bridgeCb(neograph::graph::GraphEvent{
+        neograph::graph::GraphEvent::Type::LLM_TOKEN,
+        "llm",
+        neograph::json(std::string{"new stream"})
+    });
+    // 上一次推送时间戳已按新流重置: nowSec 重新从 0 起算, 未到 50ms 不推送
+    XX_TEST_EXPECT_EQ(io->stats.size(), size_t{1});
+
+    co_return;
+}
+
 asio::awaitable<TestResult> run_event_bridge_tests() {
     g_eb_passed = 0;
     g_eb_failed = 0;
@@ -368,6 +439,7 @@ asio::awaitable<TestResult> run_event_bridge_tests() {
         co_await test_eventbridge_message_tip();
         co_await test_eventbridge_channel_write_messages();
         co_await test_eventbridge_node_delta();
+        co_await test_eventbridge_tps();
     } catch (const std::exception& e) {
         TEST_FAIL << "event_bridge suite exception: " << e.what() << std::endl;
         g_eb_failed++;

@@ -79,6 +79,8 @@ struct WireTurnResult {
 struct WireContextStats {
     uint64_t contextTokens    = 0;
     uint64_t maxContextTokens = 0;
+    /// 当前 ModelCall 平均生成速度 (token/s, 估算值); 0 = 无流式/无数据
+    double tps = 0.0;
 };
 
 struct WireError {

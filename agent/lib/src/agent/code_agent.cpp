@@ -94,18 +94,12 @@ asio::awaitable<void> CodeAgent::setupMiddleware() {
             default:
                 // 当前工作目录内允许, 其他路径询问
                 permission->setFilesystemPermission(
-                    fmt::format(
-                        "{}/*",
-                        agentxx::agent::AgentConfigStatic::getCurrentWorkPath()
-                    ),
+                    fmt::format("{}/*", agentxx::agent::AgentConfigStatic::getCurrentWorkPath()),
                     agentxx::middleware::PermissionOperator::ALLOW,
                     agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
                 );
                 permission->setFilesystemPermission(
-                    fmt::format(
-                        "{}/*",
-                        agentxx::agent::AgentConfigStatic::getCurrentWorkPath()
-                    ),
+                    fmt::format("{}/*", agentxx::agent::AgentConfigStatic::getCurrentWorkPath()),
                     agentxx::middleware::PermissionOperator::ALLOW,
                     agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionREAD
                 );
@@ -144,12 +138,13 @@ asio::awaitable<void> CodeAgent::setupMiddleware() {
         agentContext->middlewareHandleContext->handles.push_back(memoryFileMiddleware);
     }
     {
-        summarizationMiddleware_
+        auto summarizationMiddleware
             = std::make_shared<agentxx::middleware::SummarizationMiddlewareHandle>(
                 subagentManagerTool_.get(),
                 agentContext
             );
-        agentContext->middlewareHandleContext->handles.push_back(summarizationMiddleware_);
+        agentContext->summarizationMiddleware = summarizationMiddleware;
+        agentContext->middlewareHandleContext->handles.push_back(summarizationMiddleware);
     }
     {
         auto planningMiddleware
@@ -232,8 +227,8 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
                         .serverUrl = mcpCfg.url,
                         .protocolVersion
                         = std::string{agentxx::server::McpClient::kProtocol2026_07_28},
-                        .toolNamespace     = mcpNamespace,
-                        .toolCallTimeout   = mcpCfg.toolTimeout,
+                        .toolNamespace   = mcpNamespace,
+                        .toolCallTimeout = mcpCfg.toolTimeout,
                     }
                 );
                 auto result = co_await mcpClient->initialize();
@@ -354,10 +349,8 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
     ///   深层路径折叠 + 单段截断控制长度, 子目录可前缀复用最近父级索引
     if (config->enableCodeGraph && config->dataDir.empty()) {
         // dataDir 未配置: codegraph 索引无处落盘, 跳过注册 (与 BaseAgent 警告一致)
-        XX_LOGW(
-            "CodeGraph enabled in config but dataDir is not set, skip codegraph tools "
-            "(in-memory only, no index persistence)"
-        );
+        XX_LOGW("CodeGraph enabled in config but dataDir is not set, skip codegraph tools "
+                "(in-memory only, no index persistence)");
     } else if (config->enableCodeGraph) {
 #if AGENTXX_ENABLE_CODEGRAPH
         auto codegraph = std::make_shared<agentxx::expand::CodeGraphManager>(

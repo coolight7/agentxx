@@ -25,6 +25,7 @@ namespace middleware {
 class MiddlewareContext;
 class PermissionMiddlewareHandle;
 class EventBus;
+class SummarizationMiddlewareHandle;
 } // namespace middleware
 
 namespace tools {
@@ -56,6 +57,9 @@ struct ContextStats {
     std::atomic<size_t> contextTokens{0};
     /// 模型支持的最大 token 数
     std::atomic<size_t> maxContextTokens{0};
+    /// 当前 ModelCall 的平均生成速度 (token/s, 估算值)
+    /// - 由 EventBridge 在流式期间定时更新推送; 无流式时为 0
+    std::atomic<double> tps{0.0};
 };
 
 /// 会话当前活动状态
@@ -239,6 +243,11 @@ public:
     std::shared_ptr<agentxx::middleware::MiddlewareContext> middlewareHandleContext       = nullptr;
     std::shared_ptr<agentxx::middleware::PermissionMiddlewareHandle> permissionMiddleware = nullptr;
     agentxx::tools::SubAgentManagerTool* subagentManagerToolPtr                           = nullptr;
+    /// 上下文压缩 (summarization) 中间件
+    /// - 供 压缩 或 EventBridge 等复用其 token 估算口径 (countTokensForUtf8Str),
+    ///   保证 tps/上下文统计与压缩判定使用一致的 token 计算
+    std::shared_ptr<agentxx::middleware::SummarizationMiddlewareHandle> summarizationMiddleware
+        = nullptr;
     /// 事件总线
     /// - 由 BaseAgent 在 init() 中创建并注入; 节点/middleware/tool 经
     ///   weak_ptr<AgentContext> 取用
