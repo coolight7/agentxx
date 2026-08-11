@@ -23,6 +23,200 @@ public:
     const std::string& getArg(std::string_view name) const;
 };
 
+/// 缓存的 PowerShell 探测结果 (首次访问时探测一次, 之后复用)
+/// - 供 agentxx_execute_windows_command 的提示词动态生成使用
+///   (选择 PowerShell/cmd 提示词分支, 并把可执行文件名与版本号插入提示词)
+inline const agentxx::util::PowerShellInfo& cachedPowerShellInfo() {
+    static const agentxx::util::PowerShellInfo info = agentxx::util::detectPowerShell();
+    return info;
+}
+
+/// agentxx_execute_windows_command `command` 参数描述的公共前缀 (区分 WSL/原生 Windows)
+inline std::string winCommandPrefix() {
+    return agentxx::util::isRunningInWSL()
+               ? R"(Command to execute in the Windows terminal (via WSL interop).
+Current system is WSL. This tool runs the command on the Windows side.
+If the user provides a Windows path (e.g. `C:\...` or `D:\...`), convert it to a WSL path (`/mnt/c/...` or `/mnt/d/...`) for file operations, but use the original Windows path when passing to Windows executables.)"
+               : "The Windows command to execute.";
+}
+
+/// agentxx_execute_windows_command depict: 标明实际执行器 (PowerShell 及版本号, 或回退 cmd.exe)
+inline std::string winCommandToolDepict() {
+    const auto& ps = cachedPowerShellInfo();
+    if (ps.available) {
+        return fmt::format(
+            "Execute a Windows command via {} (PowerShell {}) and return its output.",
+            ps.exeName,
+            ps.version
+        );
+    }
+    return "Execute a Windows command via cmd.exe and return its output.";
+}
+
+/// boost.process 直传路径 + PowerShell 可用: `command` 参数描述 (PowerShell 语法指引)
+inline std::string winCommandProcessPs() {
+    const auto& ps = cachedPowerShellInfo();
+    return fmt::format(
+        R"({}
+
+The command is executed by {} (PowerShell {}) as ONE `-Command` argument — do NOT prepend `{}`, `-Command`, `powershell.exe`, or `cmd.exe /c` yourself.
+Write plain PowerShell code. Syntax essentials (follow them to avoid quoting/`$` errors):
+- `$name` is a variable reference: `$x = 1; Write-Output $x`.
+- Double-quoted strings expand `$variables`; single-quoted strings are fully literal: `Write-Output 'a$b'` prints `a$b`.
+- To embed a double quote inside a double-quoted string use backtick: "say `"hi`"", or prefer single quotes: 'say "hi"'.
+- Quote paths that contain spaces or backslashes: `'C:\Program Files\app.exe'`.
+- Separate statements with `;` or newlines (`&&` only works on PowerShell 7+).
+
+## Examples:
+- `Get-Process`: List processes
+- `Get-ChildItem 'C:\Users'`: List a directory
+- `$v = $PSVersionTable.PSVersion.ToString(); Write-Output $v`: Print PowerShell version
+- `explorer.exe C:\Users`: Open File Explorer at path
+- `Taskmgr.exe`: Open Task Manager
+- `notepad.exe C:\file.txt`: Open file in Notepad)",
+        winCommandPrefix(),
+        ps.exeName,
+        ps.version,
+        ps.exeName
+    );
+}
+
+/// boost.process 直传路径 + PowerShell 不可用 (回退 cmd.exe): `command` 参数描述
+inline std::string winCommandProcessCmd() {
+    return fmt::format(
+        R"({}
+
+The command is passed directly to `cmd.exe` — do NOT prepend `cmd.exe /c` yourself.
+cmd.exe syntax essentials:
+- `$` has no special meaning in cmd; environment variables use `%VAR%` (e.g. `echo %PATH%`).
+- Special characters `& | < > ^` are cmd operators: quote them or escape with `^` when literal.
+- Chain commands with `&` (always), `&&` (on success), `||` (on failure).
+
+## Examples:
+- `dir C:\Users`: List a directory
+- `echo %USERPROFILE%`: Print user profile path
+- `explorer.exe C:\Users`: Open File Explorer at path
+- `Taskmgr.exe`: Open Task Manager
+- `Control.exe`: Open Control Panel
+- `regedit.exe`: Open Registry Editor
+- `calc.exe`: Open Calculator
+- `notepad.exe C:\file.txt`: Open file in Notepad)",
+        winCommandPrefix()
+    );
+}
+
+/// popen 路径 + PowerShell 可用: `command` 参数描述
+/// - WSL: 外层为 Linux shell, PowerShell 代码需单引号保护
+/// - 原生 Windows: 外层为 cmd.exe, PowerShell 代码需双引号包裹
+inline std::string winCommandPopenPs() {
+    const auto& ps = cachedPowerShellInfo();
+    if (agentxx::util::isRunningInWSL()) {
+        return fmt::format(
+            R"({}
+
+Windows commands are executed via PowerShell ({} {}) through the Linux/WSL shell.
+Format: {} -NoProfile -Command '<powershell code>'
+- The outer command runs in the Linux/WSL shell: wrap the whole PowerShell code in single quotes to protect `$`, quotes and spaces.
+- If the PowerShell code itself contains a single quote, escape it as `'\''` (close quote, escaped quote, reopen).
+- Inside the PowerShell code use double quotes for strings.
+
+## Examples:
+- `{} -NoProfile -Command 'Get-Process'`: List processes
+- `{} -NoProfile -Command 'Get-ChildItem C:\Users'`: List a directory
+- `explorer.exe C:\Users`: Open File Explorer at path
+- `Taskmgr.exe`: Open Task Manager)",
+            winCommandPrefix(),
+            ps.exeName,
+            ps.version,
+            ps.exeName,
+            ps.exeName,
+            ps.exeName
+        );
+    }
+    return fmt::format(
+        R"({}
+
+Windows commands are executed via PowerShell ({} {}) through cmd.exe.
+Format: {} -NoProfile -Command "<powershell code>"
+- The command line is parsed by cmd.exe: wrap the PowerShell code in double quotes.
+- Prefer single quotes for strings inside the PowerShell code to avoid cmd double-quote conflicts.
+
+## Examples:
+- `{} -NoProfile -Command "Get-Process"`: List processes
+- `{} -NoProfile -Command "Get-ChildItem 'C:\Users'"`: List a directory
+- `explorer.exe C:\Users`: Open File Explorer at path
+- `Taskmgr.exe`: Open Task Manager)",
+        winCommandPrefix(),
+        ps.exeName,
+        ps.version,
+        ps.exeName,
+        ps.exeName,
+        ps.exeName
+    );
+}
+
+/// popen 路径 + PowerShell 不可用 (回退 cmd.exe): `command` 参数描述
+/// - WSL: 外层为 Linux shell, `cmd.exe /c "..."` 双层引号需特别小心
+/// - 原生 Windows: 外层为 cmd.exe, 直接写命令即可
+inline std::string winCommandPopenCmd() {
+    if (agentxx::util::isRunningInWSL()) {
+        return R"(Command to execute in the Windows terminal (via WSL interop).
+Current system is WSL. This tool runs the command on the Windows side via cmd.exe.
+Windows commands must be invoked through `cmd.exe`. Format: `cmd.exe /c "win_command"`
+- The outer command runs in the Linux/WSL shell, but `win_command` executes inside the Windows terminal.
+- Wrap `win_command` in double quotes; inside it use single quotes or `^` for cmd special characters.
+If the user provides a Windows path (e.g. `C:\...` or `D:\...`), convert it to a WSL path (`/mnt/c/...` or `/mnt/d/...`) for file operations, but use the original Windows path when passing to Windows executables.
+
+## Examples:
+- `cmd.exe /c "echo hello"`: Run a command in Windows CMD
+- `cmd.exe /c "dir C:\Users"`: List a directory via CMD
+- `explorer.exe C:\Users`: Open File Explorer at path
+- `Taskmgr.exe`: Open Task Manager
+- `Control.exe`: Open Control Panel
+- `regedit.exe`: Open Registry Editor
+- `calc.exe`: Open Calculator
+- `notepad.exe C:\file.txt`: Open file in Notepad)";
+    }
+    return R"(The Windows command to execute (executed via cmd.exe).
+
+## Examples:
+- `echo hello`: Print text
+- `dir C:\Users`: List a directory
+- `explorer.exe C:\Users`: Open File Explorer at path
+- `Taskmgr.exe`: Open Task Manager
+- `Control.exe`: Open Control Panel
+- `regedit.exe`: Open Registry Editor
+- `calc.exe`: Open Calculator
+- `notepad.exe C:\file.txt`: Open file in Notepad)";
+}
+
+// ---------------------------------------------------------------------------
+// 占位描述 (未完成 PowerShell 探测时使用)
+// ---------------------------------------------------------------------------
+// AgentPrompt 构造时使用占位文本, 避免启动阶段在主线程同步探测 PowerShell
+// (detectPowerShell 会 spawn 子进程, 每个候选最多阻塞约 12s, 是 client 启动
+// 慢的主因)。BaseAgent::init 在 agent 线程完成探测后调用
+// AgentPrompt::refreshEnvDetectedPrompts() 将其覆盖为真实分支
+// (winCommandToolDepict / winCommandProcessPs / winCommandPopenPs 等)。
+
+/// 占位: tool 总体描述 (不声明具体执行器)
+inline std::string winCommandToolDepictPlaceholder() {
+    return R"(Execute a Windows command and return its output.
+The command is executed in the Windows terminal. Do NOT prepend any wrapper (`cmd.exe /c`, `powershell.exe -Command`, ...) — write the plain command; the executor is selected automatically.)";
+}
+
+/// 占位: `command_process` 参数描述
+inline std::string winCommandProcessPlaceholder() {
+    return R"(The Windows command to execute (executed via a direct process spawn).
+The command is executed in the Windows terminal. Do NOT prepend any wrapper (`cmd.exe /c`, `powershell.exe -Command`, ...) — write the plain command; the executor is selected automatically.)";
+}
+
+/// 占位: `command_popen` 参数描述
+inline std::string winCommandPopenPlaceholder() {
+    return R"(The Windows command to execute.
+The command is executed in the Windows terminal. Do NOT prepend any wrapper — write the plain command; the executor is selected automatically.)";
+}
+
 /// Prompt registry.
 /// - Aggregates system prompts and tool prompts for easy customization,
 ///   self-updating, and training serialization.
@@ -121,7 +315,11 @@ When in doubt, check if a skill exists for the task.
                           "command",
                           fmt::format(
                               R"(The shell command to execute.
-Current system: {}{}. Use standard Linux shell/bash syntax.)",
+Current system: {}{}. Use standard Linux shell/bash syntax.
+The command string is passed as-is to `bash -c` (no extra escaping layer):
+- `$` starts variable expansion — wrap literal `$` in single quotes (`echo 'a$b'`) or escape it (`echo \$HOME`).
+- Prefer single quotes for text with spaces/special characters; use double quotes when `$` expansion is intended.
+- Chain commands with `&&` / `||` / `;`; redirect with `>` / `2>&1`.)",
                               agentxx::util::getSystemName(),
                               agentxx::util::isRunningInWSL() ? " (WSL)" : ""),
                       },
@@ -141,52 +339,21 @@ Current system: {}{}. Use standard Linux shell/bash syntax.)",
       {
           "agentxx_execute_windows_command",
           ToolPrompt{
-              .depict = "Execute a Windows command via cmd.exe and return its output.",
+              // 构造时不探测 PowerShell: 启动阶段避免子进程探测阻塞 UI/主线程,
+              // 先使用非阻塞占位描述; BaseAgent::init (agent 线程) 调用
+              // refreshEnvDetectedPrompts() 完成探测后覆盖为真实分支
+              .depict = winCommandToolDepictPlaceholder(),
               .args =
                   {
                       {
+                          // boost.process v2 直传 argv 路径: PowerShell 优先, 未找到回退 cmd
                           "command_process",
-                          fmt::format(
-                              R"({}
-
-The command is passed directly to `cmd.exe` — do NOT prepend `cmd.exe /c` yourself.
-
-## Examples:
-- `powershell.exe -Command "Get-Process"`: Run PowerShell command
-- `explorer.exe C:\Users`: Open File Explorer at path
-- `Taskmgr.exe`: Open Task Manager
-- `Control.exe`: Open Control Panel
-- `regedit.exe`: Open Registry Editor
-- `calc.exe`: Open Calculator
-- `notepad.exe C:\file.txt`: Open file in Notepad)",
-                              agentxx::util::isRunningInWSL()
-                                  ? R"(Command to execute in the Windows terminal (via WSL interop).
-Current system is WSL. This tool routes the command through cmd.exe into Windows.
-If the user provides a Windows path (e.g. `C:\...` or `D:\...`), convert it to a WSL path (`/mnt/c/...` or `/mnt/d/...`) for file operations, but use the original Windows path when passing to Windows executables.)"
-                                  : "The Windows command to execute."),
+                          winCommandProcessPlaceholder(),
                       },
                       {
+                          // popen 路径: 同上按可用性分支
                           "command_popen",
-                          fmt::format(
-                              R"({}
-
-## Examples:
-- `cmd.exe /c "echo hello"`: Run a command in Windows CMD
-- `cmd.exe /c "mkdir C:\test"`: Create directory via CMD
-- `powershell.exe -Command "Get-ChildItem"`: Run PowerShell command
-- `explorer.exe C:\Users`: Open File Explorer at path
-- `Taskmgr.exe`: Open Task Manager
-- `Control.exe`: Open Control Panel
-- `regedit.exe`: Open Registry Editor
-- `calc.exe`: Open Calculator
-- `notepad.exe C:\file.txt`: Open file in Notepad)",
-                              agentxx::util::isRunningInWSL()
-                                  ? R"(Command to execute in the Windows terminal (via WSL interop).
-Windows commands must be invoked through `cmd.exe`. Format: `cmd.exe /c "{win_command}"`.
-- The outer command runs in the Linux/WSL shell, but `{win_command}` executes inside the Windows terminal.
-- All Windows commands must go through cmd.exe: `cmd.exe /c "{win_command}"`.
-If the user provides a Windows path (e.g. `C:\...` or `D:\...`), convert it to a WSL path (`/mnt/c/...` or `/mnt/d/...`) for file operations, but use the original Windows path when passing to Windows executables.)"
-                                  : "The Windows command to execute."),
+                          winCommandPopenPlaceholder(),
                       },
                       {
                           "all_output",
@@ -814,6 +981,13 @@ The sub-agent runs with an isolated message context: it cannot see the parent co
 
     // ----- Training serialization helpers -----
     // Serialize the entire AgentPrompt (including toolPrompt) to JSON for training save/load.
+
+    /// 执行环境探测 (PowerShell 等) 并刷新依赖探测结果的提示词条目。
+    /// - AgentPrompt 构造时对探测相关条目使用非阻塞占位文本; 本函数由
+    ///   BaseAgent::init (agent 线程) 调用, 完成真实探测并覆盖为最终描述。
+    ///   tool definition 每次 LLM 请求时从 toolPrompt 重读, 首个请求前必然就绪
+    /// - 首次调用阻塞 (子进程探测, 结果按进程缓存), 之后立即返回
+    void refreshEnvDetectedPrompts();
 
     neograph::json toJson() const;
 
