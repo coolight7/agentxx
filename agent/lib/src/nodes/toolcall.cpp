@@ -237,7 +237,12 @@ ToolcallWrapNode::ToolcallWrapNode(
     const neograph::graph::NodeContext&         in_ctx,
     std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
 ) :
-    WrapHandleBaseNode<neograph::graph::ToolDispatchNode>(in_name, in_agentContext, in_ctx) {}
+    WrapHandleBaseNode<neograph::graph::ToolDispatchNode>(in_name, in_agentContext, in_ctx) {
+    // 拦截所有普通异常: 工具调用/中间件回调异常由 onHandle*Error 插入错误消息,
+    // 图继续调度, 让 agent 基于错误消息继续运行 (工具调用失败是常态, 不应终止会话);
+    // 取消/中断/取消信号 仍重抛, 由 base_agent 按控制流处理
+    interceptOrdinaryError_ = true;
+}
 
 void ToolcallWrapNode::onHandleStartError(
     bool                                                errorRethrow,
@@ -498,6 +503,36 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
         out = neograph::graph::NodeOutput{};
         co_return;
     }
+
+// debug 检查警告: 若该 assistant 声明的 tool_calls 在其之后已全部有 tool 结果消息,
+// 说明这些工具已执行过, 本节点被重复调度
+// - 正常流程不会发生 (工具执行后 llm 重新调用, 末尾变为新的 assistant 消息)
+// - 出现时说明存在异常路径 (如异常被吞掉后 [has_tool_calls] 误路由), 记录
+//   警告日志供排查; 不跳过执行, 避免掩盖真正的问题
+#if XX_IS_DEBUG_D
+    {
+        const int64_t assistantIndex = static_cast<int64_t>(assistant_msg - &messages.front());
+        std::set<std::string> replied;
+        for (size_t i = static_cast<size_t>(assistantIndex) + 1; i < messages.size(); ++i) {
+            if (messages[i].role == "tool" && false == messages[i].tool_call_id.empty()) {
+                replied.insert(messages[i].tool_call_id);
+            }
+        }
+        const bool allReplied = std::all_of(
+            assistant_msg->tool_calls.begin(),
+            assistant_msg->tool_calls.end(),
+            [&](const neograph::ToolCall& tc) {
+                return false == tc.id.empty() && replied.count(tc.id) > 0;
+            }
+        );
+        if (allReplied) {
+            XX_LOGW(
+                "Toolcall re-execute check: last assistant tool_calls already fully replied ({} tools); abnormal scheduling suspected",
+                assistant_msg->tool_calls.size()
+            );
+        }
+    }
+#endif
 
     bool isInterrupt   = false;
     bool isCancel      = false;

@@ -70,10 +70,10 @@ models:
     model_context_max_token: 262144 # 模型支持的最大上下文 token 数；不指定时上下文压缩使用默认值 256k
     extra_api_config:
       stream: true
+      # - 可选; 思考强度，"none|minimal|low|medium|high|xhigh|max" 
+      # 并非所有模型支持的选项都一样，可能有的支持 xhigh 有的支持 max
+      # 可以改一个值然后启动聊聊天，如果请求失败再修改试试
       reasoning:
-        # - 可选; 思考强度，"none|minimal|low|medium|high|xhigh|max" 
-        # 并非所有模型支持的选项都一样，可能有的支持 xhigh 有的支持 max
-        # 可以改一个值然后启动聊聊天，如果请求失败再修改试试
         effort: high 
 
   - name: qwenai-qwen3.8-max

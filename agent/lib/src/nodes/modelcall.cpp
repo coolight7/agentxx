@@ -424,11 +424,34 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
 
     auto ctxPtr = agentContext.lock()->middlewareHandleContext;
     auto timer  = asio::steady_timer(co_await asio::this_coro::executor);
-    // 连续重试次数 (用于退避延时计算; 部分输出成功后会重置)
+    // 连续重试次数 (用于退避延时计算): 达到配置上限后停止重试, 不因部分输出重置,
+    // 保证总失败次数严格不超过 llmMaxRetry, 避免消息无限堆积
     size_t retry = 0;
-    // 总尝试次数 (每次调用失败都递增, 不重置): 限制 LLM 调用失败的总次数,
-    // 防止 "流式输出 ≥512 字符后失败 -> 插入部分消息并重置 retry" 导致无限重试
-    size_t totalAttempts = 0;
+
+    // 插入 assistant 兜底消息 (保留部分输出, 或插入异常/取消提示):
+    // - 保证消息上下文完整, 用户能看到本次 LLM 调用失败
+    // - 保证末尾消息角色为 assistant 且无 tool_calls, 使 [has_tool_calls] 条件
+    //   路由到 agent_end 结束本轮, 而不是把悬挂的 tool_calls 误路由回 tools
+    //   节点重复执行
+    auto appendAbortMessage = [&](const std::string& content, const std::string& thinking) {
+        auto msg = neograph::ChatMessage{
+            .role              = "assistant",
+            .content           = content,
+            .reasoning_content = thinking,
+            .flags             = neograph::MessageFlag::AutoInserted,
+        };
+        auto msgJson = neograph::json{};
+        neograph::to_json(msgJson, msg);
+        auto appendMsgJsons = neograph::json::array({msgJson});
+        in.state.write("messages", appendMsgJsons);
+        if (nullptr != in.stream_cb) {
+            (*in.stream_cb)(neograph::graph::GraphEvent{
+                neograph::graph::GraphEvent::Type::CHANNEL_WRITE,
+                nodeName,
+                std::move(appendMsgJsons),
+            });
+        }
+    };
 
     do {
         // 清理过时的 临时 LLM 消息
@@ -481,8 +504,7 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
             errorPtr = std::current_exception();
         }
 
-        // 触发异常: 本次调用失败, 总尝试次数递增 (不随部分输出重置)
-        ++totalAttempts;
+        // 触发异常: 本次调用失败
         auto lastMsgThinking = ctxPtr->getGraphDataItemValue<std::string>(
             in.ctx.thread_id,
             agentxx::middleware::MiddlewareContext::graphDataKey_tempLLMThinking
@@ -491,42 +513,39 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
             in.ctx.thread_id,
             agentxx::middleware::MiddlewareContext::graphDataKey_tempLLMContent
         );
-        if (lastMsgThinking.size() + lastMsgContent.size() >= 512) {
-            // - 保留已有的 llm 消息，而不是丢弃
-            // - 插入 assistant 消息，此时末尾消息为 assistant, 将在下一次进入
-            // baseRun 时自动修复上下文角色顺序 [repairMessages]
-            // TODO: 修正消息上下文，应当与客户端同步信息
-            auto msg = neograph::ChatMessage{
-                .role    = "assistant",
-                .content = fmt::format(
-                    "{}\n{}",
-                    std::move(lastMsgContent),
-                    isCancel ? defaultUserCancelTip : defaultExceptionTip
-                ),
-                .reasoning_content = std::move(lastMsgThinking),
-                .flags             = neograph::MessageFlag::AutoInserted,
-            };
-            auto msgJson = neograph::json{};
-            neograph::to_json(msgJson, msg);
-            auto appendMsgJsons = neograph::json::array({msgJson});
-            in.state.write("messages", appendMsgJsons);
-            if (nullptr != in.stream_cb) {
-                (*in.stream_cb)(neograph::graph::GraphEvent{
-                    neograph::graph::GraphEvent::Type::CHANNEL_WRITE,
-                    nodeName,
-                    std::move(appendMsgJsons),
-                });
+
+        // - 取消 或 连续重试达到配置上限: 停止重试, 抛出原始异常结束本轮执行
+        if (isCancel || retry >= agentCtxPtr->agentConfig->llmMaxRetry) {
+            // 抛出前检查末尾消息角色: 若末尾不是 assistant, 或末尾 assistant
+            // 仍带 tool_calls (悬挂), 插入兜底提示消息
+            // - 覆盖 无输出/短输出 失败的情况 (上轮未插入过)
+            // - 已有 ≥512 部分输出时, 上轮已插入 assistant 保留消息, 无需重复插入
+            // - 保证 [has_tool_calls] 条件路由到 agent_end, 不会把悬挂的
+            //   tool_calls 误路由回 tools 节点重复执行
+            auto lastMsg = agentxx::middleware::BaseMiddlewareHandleInterface::getLastMessage(in);
+            const bool lastIsAssistant = lastMsg.has_value() && lastMsg->role == "assistant";
+            const bool lastHasToolCalls = lastMsg.has_value() && !lastMsg->tool_calls.empty();
+            if (false == lastIsAssistant || lastHasToolCalls) {
+                appendAbortMessage(
+                    fmt::format(
+                        "{}\n{}",
+                        lastMsgContent,
+                        isCancel ? defaultUserCancelTip : defaultExceptionTip
+                    ),
+                    lastMsgThinking
+                );
             }
-            // 有部分响应成功，重置连续重试次数 (退避延时重新从短开始)
-            retry = 0;
+            std::rethrow_exception(errorPtr);
         }
 
-        // - 连续重试达到配置上限, 或
-        // - 总尝试次数达到配置上限 * 3 (防止部分输出后 retry 被反复重置导致无限重试)
-        //   时, 停止重试并抛出原始异常
-        if (isCancel || retry >= agentCtxPtr->agentConfig->llmMaxRetry
-            || totalAttempts >= agentCtxPtr->agentConfig->llmMaxRetry * 3) {
-            std::rethrow_exception(errorPtr);
+        // 有部分响应成功 (≥512 字符): 保留已有的 llm 消息而不是丢弃, 插入
+        // assistant 消息后继续重试; retry 不重置, 达到配置上限即停止, 避免
+        // "部分输出 -> 重置 retry" 导致无限重试与消息无限堆积
+        if (lastMsgThinking.size() + lastMsgContent.size() >= 512) {
+            appendAbortMessage(
+                fmt::format("{}\n{}", lastMsgContent, defaultExceptionTip),
+                lastMsgThinking
+            );
         }
 
         // 自动重试

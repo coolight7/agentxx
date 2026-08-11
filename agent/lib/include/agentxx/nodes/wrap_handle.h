@@ -116,6 +116,14 @@ protected:
     std::string                                 nodeName;
     std::weak_ptr<agentxx::agent::AgentContext> agentContext;
 
+    /// 是否拦截普通异常 (不重抛, 视为节点正常完成)
+    /// - false (默认): 普通异常统一重抛, 停止本轮执行
+    ///   (如 ModelCall 重试耗尽后应结束会话, 不能静默吞掉)
+    /// - true: 普通异常被拦截, 图继续调度
+    ///   (如 Toolcall 由 onHandle*Error 插入错误消息后, 让 agent 基于错误继续运行)
+    /// 取消/中断/取消信号 类控制流异常不受影响, 始终重抛
+    bool interceptOrdinaryError_ = false;
+
 public:
 
     template<typename... Args>
@@ -132,7 +140,8 @@ public:
         co_return;
     }
 
-    // 触发 中断、取消 等 rethrow 异常时不执行
+    // 取消/中断/异常重抛时 (onHandle*Error 路径) 不执行;
+    // 正常完成 或 普通异常被节点拦截 (视为正常完成) 时执行
     virtual asio::awaitable<void>
         onNodeEnd(const neograph::graph::NodeInput& in, neograph::graph::NodeOutput& result) {
         co_return;
@@ -203,8 +212,12 @@ public:
 
         co_await onNodeStart(in);
 
-        std::string                 errInfo;
-        std::exception_ptr          errorPtr;
+        std::string        errInfo;
+        std::exception_ptr errorPtr;
+        // 取消/中断标记: 仅 取消/中断/取消信号 类控制流异常为 true, 普通异常为 false
+        // - 传给 onHandle*Error 回调用于区分 (如 ToolcallWrapNode 仅对普通异常
+        //   插入错误消息, 取消/中断由节点内部处理)
+        // - 末尾判定: errorRethrow=false (普通异常) 且节点声明拦截时, 不重抛
         bool                        errorRethrow = false;
         neograph::graph::NodeOutput out;
 
@@ -383,7 +396,17 @@ public:
             }
         }
 
-        if (errorRethrow) {
+        if (nullptr != errorPtr) {
+            if (interceptOrdinaryError_ && false == errorRethrow) {
+                // 节点声明拦截普通异常 (如 Toolcall): 不重抛, 视为节点正常完成
+                // - onHandle*Error 已插入错误消息到 [out], 图继续调度, 让 agent
+                //   基于错误消息继续运行 (工具调用失败是常态, 不应终止会话)
+                // - 仅拦截普通异常; 取消/中断/取消信号 (errorRethrow=true)
+                //   仍走下方重抛, 保证控制流语义
+                XX_LOGW("{}/intercept ordinary exception: {}", nodeName, errInfo);
+                co_await onNodeEnd(in, out);
+                co_return out;
+            }
             // 保存此时的上下文，如果直接抛异常到 neograph::engine，会丢失本轮 session 增加的上下文
             auto session = agentCtxPtr->getSession(in.ctx.thread_id);
             auto data    = in.state.get("messages");
@@ -393,6 +416,13 @@ public:
                 agentxx::middleware::MiddlewareContext::graphDataKey_tempMessages,
                 std::move(data)
             );
+
+            // 取消/中断 或 未配置拦截的节点 (如 ModelCall): 统一重抛, 不静默吞掉
+            // - 静默吞掉会让节点"假装成功"返回空输出, 图继续调度, 可能造成
+            //   [has_tool_calls] 等条件误路由 (如 llm 重试耗尽后末尾仍为
+            //   assistant(tool_calls) 时被误路由回 tools 节点, 导致工具重复
+            //   执行与消息无限堆积)
+            // - 业务层错误 (如工具执行失败) 由节点内部捕获消息化, 不会抛到这里
             std::rethrow_exception(errorPtr);
         }
 
