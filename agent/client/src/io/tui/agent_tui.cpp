@@ -4,6 +4,7 @@
 #include "agentxx-client/io/tui/components/overlays.h"
 #include "agentxx-client/io/tui/components/sidebar.h"
 #include "agentxx-client/io/tui/components/status_bar.h"
+#include "agentxx-client/mode_runners.h"
 #include "agentxx/agent/model_registry.h"
 #include "agentxx/expand/get_cpu_gpu_use.h"
 #include "agentxx/middlewares/middleware.h"
@@ -619,6 +620,12 @@ void TUIClientAgentIO::openSessionSelector() {
     });
     overlay->onSelect([this](std::string threadId) {
         switchToSession(std::move(threadId));
+    });
+    overlay->onNewSession([this] {
+        // 新建会话: 生成全新 threadId 并切换 (无历史, 服务端回推空 Sync)
+        const auto newThreadId = agentxx::client::generateUniqueThreadId();
+        XX_LOGI("[tui] new session: {}", newThreadId);
+        switchToSession(newThreadId);
     });
     modal_->pushModal(overlay);
     postRedraw();

@@ -237,6 +237,13 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
                 target->tool->toolResult   = content;
                 target->tool->toolFinished = true;
                 target->collapsed          = true;
+                // 回填后同步持久化: 库内该行仍是未完成的 Tool 消息 (tool_finished
+                // 缺失), 若不更新, 重启恢复/会话切换后再展示的 tool 结果会一直
+                // 显示未完成状态。经 Session::updateHistory 触发 onUpdateMessage
+                // 回调覆盖库内对应行 (按 msg.id 定位)。
+                if (!target->id.empty()) {
+                    session_->updateHistory(*target);
+                }
                 // (edit 工具参数 unified diff: 渲染端自行计算, 无消费者, 不再生成;
                 //  ToolData::diff 字段保留供未来)
             }

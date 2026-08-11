@@ -112,9 +112,26 @@ Element SessionSelectorOverlay::OnRender() {
     const auto& theme      = *ctx_.theme;
     const int   maxVisible = std::max(5, Terminal::Size().dimy / 2);
 
-    itemBoxes_.assign(st.sessionList.size(), Box{});
+    // 列表项布局: 索引 0 = 固定 "新会话" 入口, 其后为持久化会话 (sessionList[0..])
+    itemBoxes_.assign(st.sessionList.size() + 1, Box{});
 
     Elements items;
+
+    // 顶部固定 "新会话" 项 (列表加载中也常驻, 保证始终可新建)
+    {
+        auto newEntry = hbox({
+            text(" ✚ ") | color(theme.accentColor) | bold,
+            text(" 新会话 ") | bold,
+        });
+        if (selectedIndex_ == 0) {
+            newEntry = newEntry | bgcolor(theme.buttonActiveBgColor)
+                       | color(theme.buttonActiveTextColor) | focus;
+        } else {
+            newEntry = newEntry | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor);
+        }
+        items.push_back(newEntry | reflect(itemBoxes_[0]));
+    }
+
     if (!st.sessionListLoaded) {
         // 列表请求已发出, 响应尚未到达
         items.push_back(text(" Loading sessions... ") | dim);
@@ -146,13 +163,14 @@ Element SessionSelectorOverlay::OnRender() {
                 });
             }
 
-            if (static_cast<int>(i) == selectedIndex_) {
+            // +1: 会话条目从索引 1 开始 (0 为 "新会话" 入口)
+            if (static_cast<int>(i) + 1 == selectedIndex_) {
                 row = row | bgcolor(theme.buttonActiveBgColor)
                       | color(theme.buttonActiveTextColor) | focus;
             } else {
                 row = row | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor);
             }
-            items.push_back(row | reflect(itemBoxes_[i]));
+            items.push_back(row | reflect(itemBoxes_[i + 1]));
         }
     }
 
@@ -169,7 +187,8 @@ Element SessionSelectorOverlay::OnRender() {
 
 bool SessionSelectorOverlay::OnEvent(Event event) {
     auto snap = ctx_.state->readSnapshot();
-    const int count = static_cast<int>(snap->sessionList.size());
+    // 可选项总数: "新会话" 入口 (0) + 持久化会话
+    const int count = 1 + static_cast<int>(snap->sessionList.size());
 
     if (event == Event::ArrowUp) {
         if (selectedIndex_ > 0) {
@@ -212,12 +231,24 @@ bool SessionSelectorOverlay::OnEvent(Event event) {
 }
 
 void SessionSelectorOverlay::confirmSelection() {
+    if (selectedIndex_ == 0) {
+        // 顶部 "新会话" 入口: 新建会话 (无历史)
+        if (onClose_) {
+            onClose_();
+        }
+        if (onNewSession_) {
+            onNewSession_();
+        }
+        return;
+    }
     std::string selected;
     {
         auto snap = ctx_.state->readSnapshot();
-        if (selectedIndex_ >= 0
-            && selectedIndex_ < static_cast<int>(snap->sessionList.size())) {
-            selected = snap->sessionList[selectedIndex_].threadId;
+        // -1: 会话条目从索引 1 开始 (0 为 "新会话" 入口)
+        const int sessionIdx = selectedIndex_ - 1;
+        if (sessionIdx >= 0
+            && sessionIdx < static_cast<int>(snap->sessionList.size())) {
+            selected = snap->sessionList[sessionIdx].threadId;
         }
     }
     if (onClose_) {
