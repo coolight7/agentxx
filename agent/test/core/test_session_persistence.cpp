@@ -296,6 +296,73 @@ static TestResult testShareStoreRoundtrip() {
 }
 
 // ---------------------------------------------------------------------------
+// Session::updateHistory + 持久化: tool 结果回填后重启恢复仍为已完成
+// ---------------------------------------------------------------------------
+
+static TestResult testUpdateHistoryPersistence() {
+    using agentxx::agent::SessionPersistence;
+    using agentxx::agent::SessionStore;
+    using agentxx::agent::ViewMessage;
+    using V = ViewMessage;
+
+    auto root = makeTempRoot();
+    {
+        auto persistence   = std::make_shared<SessionPersistence>(root);
+        auto store         = std::make_shared<SessionStore>();
+        store->persistence = persistence;
+
+        auto s1 = store->getOrCreate("thread-upd");
+        s1->appendHistory(ViewMessage::makeText(V::Role::User, "u1"));
+        // 追加一条未完成的 Tool 消息 (模拟 assistant tool_calls 展开)
+        V toolMsg;
+        toolMsg.role        = V::Role::Tool;
+        toolMsg.text        = R"({"path":"/x"})";
+        toolMsg.startTimeMs = 1700000000000LL;
+        toolMsg.collapsed   = true;
+        V::ToolData t;
+        t.toolName     = "agentxx_filesystem_read_text_file";
+        t.toolCallId   = "call_x";
+        t.toolFinished = false; // 尚未收到结果
+        toolMsg.tool   = std::move(t);
+        auto toolId = s1->appendHistory(std::move(toolMsg));
+
+        // 模拟 tool 结果回填: 走 Session::updateHistory (触发 onUpdateMessage 落库)
+        auto& stored = s1->viewMessages.back();
+        stored.tool->toolResult   = "file content";
+        stored.tool->toolFinished = true;
+        stored.collapsed          = true;
+        s1->updateHistory(stored);
+
+        // 内存中已完成
+        XX_TEST_EXPECT_TRUE(s1->viewMessages.back().tool->toolFinished);
+
+        // ---- 模拟重启: 新实例恢复, tool 消息应保持已完成 ----
+        auto p2             = std::make_shared<SessionPersistence>(root);
+        auto store2         = std::make_shared<SessionStore>();
+        store2->persistence = p2;
+        auto s2             = store2->getOrCreate("thread-upd");
+        XX_TEST_EXPECT_EQ(s2->viewMessages.size(), size_t{2});
+        const auto& toolMsg2 = s2->viewMessages[1];
+        XX_TEST_EXPECT_EQ(toolMsg2.id, toolId);
+        XX_TEST_EXPECT_TRUE(toolMsg2.tool.has_value());
+        if (toolMsg2.tool) {
+            XX_TEST_EXPECT_TRUE(toolMsg2.tool->toolFinished);
+            XX_TEST_EXPECT_EQ(toolMsg2.tool->toolResult, std::string{"file content"});
+        }
+
+        // 链式哈希不受 updateHistory 影响 (历史内容语义不变)
+        XX_TEST_EXPECT_EQ(s2->getHashInfo().count, size_t{2});
+
+        // 不存在的 id: 仅记日志, 不崩溃
+        V bogus = ViewMessage::makeText(V::Role::User, "x");
+        bogus.id = "msg_999999";
+        s2->updateHistory(bogus);
+    }
+    fs::remove_all(root);
+    return TestResult{};
+}
+
+// ---------------------------------------------------------------------------
 // Session + SessionStore 集成: 重启恢复语义
 // ---------------------------------------------------------------------------
 
@@ -587,6 +654,7 @@ asio::awaitable<TestResult> run_session_persistence_tests() {
     testViewMessagesRoundtrip();
     testLlmMessagesRoundtrip();
     testShareStoreRoundtrip();
+    testUpdateHistoryPersistence();
     testSessionStoreIntegration();
     testMiddlewareShareStorePersistence();
     testSanitizeThreadId();

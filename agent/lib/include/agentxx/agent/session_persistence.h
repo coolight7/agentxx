@@ -69,6 +69,12 @@ public:
     void
         appendViewMessage(std::string_view threadId, const ViewMessage& msg, uint64_t msgIdCounter);
 
+    /// 更新一条已持久化的展示历史消息 (按 msg.id 定位行)
+    /// - 用于追加后内容再变化的消息 (如 tool 结果回填: toolFinished/toolResult/collapsed),
+    ///   保证重启恢复的历史与内存状态一致
+    /// - msg.id 必须非空 (appendHistory 分配); 找不到匹配行仅记录日志, 不影响内存状态
+    void updateViewMessage(std::string_view threadId, const ViewMessage& msg);
+
     /// 保存 LLM 上下文消息 (整表替换; 每轮对话结束时调用)
     /// - 失败仅记录日志, 不影响内存状态
     void saveLlmMessages(std::string_view threadId, const neograph::json& llmMessages);
