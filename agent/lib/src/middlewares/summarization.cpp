@@ -39,27 +39,33 @@ size_t SummarizationMiddlewareHandle::countTokensForUtf8Str(std::string_view in_
     size_t unicodeCount = 0, asciiCount = 0;
     for (size_t i = 0, step = 0; i < in_str.size(); i += step) {
         unsigned char byte = in_str[i];
-        // lenght 6
-        if (byte >= 0xFC) {
-            step = 6;
-        } else if (byte >= 0xF8) {
-            step = 5;
+        if (byte >= 0xF8) {
+            // 0xF8-0xFF: 无效 UTF-8 前导 (5/6 字节编码已被 RFC 3629 废弃),
+            // 按 ascii 单字节处理, 避免吞掉后续字节少计
+            step = 1;
+            ++asciiCount;
+            continue;
         } else if (byte >= 0xF0) {
+            // 4 字节前导 0xF0-0xF7
             step = 4;
         } else if (byte >= 0xE0) {
+            // 3 字节前导 0xE0-0xEF
             step = 3;
         } else if (byte >= 0xC0) {
+            // 2 字节前导 0xC0-0xDF
             step = 2;
         } else {
+            // ascii 0x00-0x7F / 续字节 0x80-0xBF (单独出现无效): 单字节处理
             step = 1;
             ++asciiCount;
             continue;
         }
         ++unicodeCount;
     }
-    return static_cast<size_t>(
-        unicodeCount / unicodeCharsPerToken + asciiCount / asciiCharsPerToken
-    );
+    // ascii / unicode 分别按各自折算比例取整后再相加 (与测试/文档语义一致:
+    // "ascii + unicode 分别折算"), 避免先相加再整体截断导致高估 token 数
+    return static_cast<size_t>(unicodeCount / unicodeCharsPerToken)
+           + static_cast<size_t>(asciiCount / asciiCharsPerToken);
 }
 
 size_t SummarizationMiddlewareHandle::countTokens(
@@ -174,7 +180,10 @@ void SummarizationMiddlewareHandle::doSummarizeToolcall(std::vector<neograph::Ch
                 // 寻找 llm toolcall message
                 int64_t lastMsgIndex  = i - 1;
                 int64_t toolcallIndex = -1;
-                for (; lastMsgIndex > 0; --lastMsgIndex) {
+                // 从 0 开始遍历: 首个 assistant(tool_calls) 可能位于消息索引 0
+                // (无 system 消息时), 不能排除该位置, 否则该组 (assistant,tool)
+                // 永远无法去重
+                for (; lastMsgIndex >= 0; --lastMsgIndex) {
                     for (int64_t j = 0;
                          j < static_cast<int64_t>(messages[lastMsgIndex].tool_calls.size());
                          ++j) {
