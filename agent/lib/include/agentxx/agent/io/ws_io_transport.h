@@ -69,6 +69,11 @@ public:
 
     bool alive() const noexcept override;
 
+    /// 会话切换: 更新重连握手的 threadId 并复位增量重放状态
+    /// (新会话 delta seq 独立编号, 旧会话 seq/tailHash 不再适用)。
+    /// 投递到 ex_ 线程执行 (与 readLoop 重连路径同线程, 无数据竞争)
+    void updateReconnectThreadId(std::string newThreadId) override;
+
     // ----- 序列化工具 (供 ServerWsIOTransport 复用) -----
 
     /// WireMessage -> JSON 文本帧

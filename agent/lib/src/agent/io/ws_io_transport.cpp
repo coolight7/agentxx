@@ -5,6 +5,7 @@
 #include "agentxx/util/log.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
+#include "asio/dispatch.hpp"
 #include "asio/redirect_error.hpp"
 #include "asio/use_awaitable.hpp"
 
@@ -137,6 +138,26 @@ void WsAgentIOTransport::close() {
         return;
     }
     stopLoops();
+}
+
+void WsAgentIOTransport::updateReconnectThreadId(std::string newThreadId) {
+    if (!clientMode_) {
+        // 服务端模式不存在重连握手, 无需处理
+        return;
+    }
+    // helloThreadId_/lastDeltaSeq_/lastTailHash_ 仅由 ex_ 线程访问
+    // (connect() 与 readLoop 重连路径), 投递回 ex_ 线程更新避免数据竞争。
+    // 会话切换后新会话的 delta seq 独立编号, 旧的 seq/tailHash 不再适用,
+    // 一并复位: 重连时 lastSeq=0 使服务端回退全量 sync
+    auto self = shared_from_this();
+    asio::dispatch(ex_, [self, tid = std::move(newThreadId)]() {
+        if (self->stopped_.load(std::memory_order_acquire)) {
+            return;
+        }
+        self->helloThreadId_ = tid;
+        self->lastDeltaSeq_.store(0, std::memory_order_release);
+        self->lastTailHash_.clear();
+    });
 }
 
 bool WsAgentIOTransport::alive() const noexcept {
@@ -452,6 +473,12 @@ std::string WsAgentIOTransport::serialize(const WireMessage& msg) {
                 return io::makeGetContext(m.threadId).dump();
             } else if constexpr (std::is_same_v<T, WireContextMessages>) {
                 return io::makeContextMessages(m.messages).dump();
+            } else if constexpr (std::is_same_v<T, WireListSessions>) {
+                return io::makeListSessions().dump();
+            } else if constexpr (std::is_same_v<T, WireSessionList>) {
+                return io::makeSessionList(m.sessions).dump();
+            } else if constexpr (std::is_same_v<T, WireSwitchSession>) {
+                return io::makeSwitchSession(m.threadId).dump();
             } else if constexpr (std::is_same_v<T, WireSetPermission>) {
                 return io::makeSetPermission(m.threadId, m.path, m.allow, m.index).dump();
             } else {
@@ -597,6 +624,14 @@ std::optional<WireMessage> WsAgentIOTransport::deserialize(std::string_view json
         WireContextMessages resp;
         resp.messages = j.value("messages", neograph::json::array());
         return WireMessage{std::move(resp)};
+    } else if (t == io::MsgType::ListSessions) {
+        return WireMessage{WireListSessions{}};
+    } else if (t == io::MsgType::SessionList) {
+        WireSessionList resp;
+        resp.sessions = io::sessionListFromJson(j);
+        return WireMessage{std::move(resp)};
+    } else if (t == io::MsgType::SwitchSession) {
+        return WireMessage{io::switchSessionFromJson(j)};
     } else if (t == io::MsgType::SetPermission) {
         return WireMessage{io::setPermissionFromJson(j)};
     }

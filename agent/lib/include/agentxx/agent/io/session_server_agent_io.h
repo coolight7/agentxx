@@ -111,6 +111,13 @@ public:
     /// 当前 viewMessages 的链式哈希尾 (供 hello_ack/sync)
     std::string currentTailHash();
 
+    /// 切换本端点绑定的会话 (会话选择弹窗确认后由客户端经 WireSwitchSession 请求)
+    /// - 重新绑定 config_.threadId 到目标会话 (不存在时由 SessionStore 从持久化恢复创建)
+    /// - 清空 delta 重放缓冲 (新会话 delta seq 独立编号)
+    /// - 回推新会话的全量 Sync + 模型信息 + 上下文统计, 客户端据此恢复界面
+    /// - 仅当无进行中轮次时生效 (客户端已做前置拦截, 此处双重保护)
+    void switchSession(std::string newThreadId);
+
 protected:
 
     // ----- AgentIOBase: 被动接收回调 (server 端点不会从 client 收到这些消息,

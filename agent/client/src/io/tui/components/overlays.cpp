@@ -104,6 +104,131 @@ void ModelSelectorOverlay::confirmSelection() {
 }
 
 // ---------------------------------------------------------------------------
+// SessionSelectorOverlay
+// ---------------------------------------------------------------------------
+
+Element SessionSelectorOverlay::OnRender() {
+    const auto& st         = *ctx_.frameState;
+    const auto& theme      = *ctx_.theme;
+    const int   maxVisible = std::max(5, Terminal::Size().dimy / 2);
+
+    itemBoxes_.assign(st.sessionList.size(), Box{});
+
+    Elements items;
+    if (!st.sessionListLoaded) {
+        // 列表请求已发出, 响应尚未到达
+        items.push_back(text(" Loading sessions... ") | dim);
+    } else if (st.sessionList.empty()) {
+        items.push_back(text(" (no persisted sessions) ") | dim);
+    } else {
+        for (size_t i = 0; i < st.sessionList.size(); ++i) {
+            const auto& s = st.sessionList[i];
+            // 第一行: 会话名称 (title 为空时回退 threadId)
+            const std::string title = s.title.empty() ? s.threadId : s.title;
+            const bool        isCurrent = (s.threadId == ctx_.threadId);
+            auto nameLine = text(fmt::format(" {} ", title));
+            if (isCurrent) {
+                nameLine = nameLine | bold;
+            }
+            // 第二行: 最近活动日期
+            auto dateLine
+                = text(fmt::format("   {} ", formatDateTimeMilliseconds(s.lastActiveMs))) | dim;
+
+            // 当前会话条目: 名称后附加 "(current)" 标记
+            Element row = vbox({nameLine, dateLine});
+            if (isCurrent) {
+                row = vbox({
+                    hbox({
+                        text(fmt::format(" {} ", title)) | bold,
+                        text(" (current) ") | color(theme.accentColor),
+                    }),
+                    dateLine,
+                });
+            }
+
+            if (static_cast<int>(i) == selectedIndex_) {
+                row = row | bgcolor(theme.buttonActiveBgColor)
+                      | color(theme.buttonActiveTextColor) | focus;
+            } else {
+                row = row | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor);
+            }
+            items.push_back(row | reflect(itemBoxes_[i]));
+        }
+    }
+
+    return vbox({
+               text(" Select Session ") | bold | inverted,
+               separator(),
+               vbox(std::move(items)) | yframe | vscroll_indicator
+                   | size(HEIGHT, LESS_THAN, maxVisible),
+               separator(),
+               text(" [Up/Down] Move  [Enter] Switch  [Esc] Cancel ") | center | dim,
+           })
+           | border | size(WIDTH, LESS_THAN, 70) | color(theme.accentColor);
+}
+
+bool SessionSelectorOverlay::OnEvent(Event event) {
+    auto snap = ctx_.state->readSnapshot();
+    const int count = static_cast<int>(snap->sessionList.size());
+
+    if (event == Event::ArrowUp) {
+        if (selectedIndex_ > 0) {
+            --selectedIndex_;
+        }
+        ctx_.postRedraw();
+        return true;
+    }
+    if (event == Event::ArrowDown) {
+        if (selectedIndex_ + 1 < count) {
+            ++selectedIndex_;
+        }
+        ctx_.postRedraw();
+        return true;
+    }
+    if (event == Event::Return) {
+        confirmSelection();
+        return true;
+    }
+    if (event == Event::Escape) {
+        ctx_.postRedraw();
+        if (onClose_) {
+            onClose_();
+        }
+        return true;
+    }
+    if (event.is_mouse()) {
+        const auto& mouse = event.mouse();
+        if (mouse.button == Mouse::Left && mouse.motion == Mouse::Released) {
+            for (size_t i = 0; i < itemBoxes_.size(); ++i) {
+                if (itemBoxes_[i].Contain(mouse.x, mouse.y)) {
+                    selectedIndex_ = static_cast<int>(i);
+                    confirmSelection();
+                    return true;
+                }
+            }
+        }
+    }
+    return true;
+}
+
+void SessionSelectorOverlay::confirmSelection() {
+    std::string selected;
+    {
+        auto snap = ctx_.state->readSnapshot();
+        if (selectedIndex_ >= 0
+            && selectedIndex_ < static_cast<int>(snap->sessionList.size())) {
+            selected = snap->sessionList[selectedIndex_].threadId;
+        }
+    }
+    if (onClose_) {
+        onClose_();
+    }
+    if (onSelect_ && !selected.empty()) {
+        onSelect_(std::move(selected));
+    }
+}
+
+// ---------------------------------------------------------------------------
 // SettingsOverlay
 // ---------------------------------------------------------------------------
 

@@ -2,7 +2,9 @@
 
 #include "agentxx/agent/base_agent.h"
 #include "agentxx/agent/context.h"
+#include "agentxx/agent/session_persistence.h"
 #include "agentxx/middlewares/permission.h"
+#include "agentxx/util/async_offload.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/log.h"
 #include "asio/cancel_after.hpp"
@@ -182,6 +184,40 @@ void SessionServerAgentIO::onPeerMessage(WireMessage msg) {
                     return;
                 }
                 sendToPeer(WireContextMessages{sess->llmMessages});
+            } else if constexpr (std::is_same_v<T, WireListSessions>) {
+                // 客户端请求持久化会话列表 (会话选择弹窗数据源):
+                // 目录扫描 + SQLite 读取属阻塞 I/O, 卸载到 blockingPool 执行,
+                // 避免阻塞 agent io 线程; 完成后经 shared_from_this 回填响应
+                auto agent = agent_.lock();
+                if (!agent || !agent->agentContext
+                    || !agent->agentContext->sessionPersistence) {
+                    sendToPeer(WireSessionList{});
+                    return;
+                }
+                auto persistence = agent->agentContext->sessionPersistence;
+                auto self        = shared_from_this();
+                asio::co_spawn(
+                    ex_,
+                    [self, persistence, agent]() -> asio::awaitable<void> {
+                        std::vector<SessionInfo> sessions;
+                        if (agent->agentContext->blockingPool) {
+                            sessions = co_await agentxx::util::offloadAsync<
+                                std::vector<SessionInfo>>(
+                                *agent->agentContext->blockingPool,
+                                [persistence]() -> asio::awaitable<std::vector<SessionInfo>> {
+                                    co_return persistence->listSessions();
+                                }
+                            );
+                        } else {
+                            sessions = persistence->listSessions();
+                        }
+                        self->sendToPeer(WireSessionList{std::move(sessions)});
+                    },
+                    asio::detached
+                );
+            } else if constexpr (std::is_same_v<T, WireSwitchSession>) {
+                // 客户端请求切换会话 (弹窗选择后); 运行态拦截由客户端前置完成
+                switchSession(std::move(m.threadId));
             } else if constexpr (std::is_same_v<T, WireSetPermission>) {
                 // 客户端记住权限选择: 注册路径规则到权限中间件,
                 // 后续访问该路径或其子目录时按规则直接允许/拒绝, 不再询问
@@ -274,6 +310,58 @@ void SessionServerAgentIO::onDisconnect() {
     if (turnActive_.load(std::memory_order_acquire)) {
         startGraceTimer();
     }
+}
+
+void SessionServerAgentIO::switchSession(std::string newThreadId) {
+    if (newThreadId.empty() || newThreadId == config_.threadId) {
+        // 空 id 非法; 同一会话无需切换 (历史已同步, 重复全量 Sync 反而闪烁)
+        if (newThreadId == config_.threadId) {
+            // 仍回推一次全量 Sync: 客户端可能因本地状态异常需要校准
+            auto sync = buildFullSync();
+            sendToPeer(std::move(sync));
+            sendContextStats();
+        }
+        return;
+    }
+    if (turnActive_.load(std::memory_order_acquire)) {
+        // 双重保护: 客户端已拦截运行态切换, 此处再兜底拒绝,
+        // 避免轮次进行中被换走导致 Delta/输入错投到新会话
+        XX_LOGW(
+            "[session_ctrl] switchSession rejected: turn active (thread={})",
+            config_.threadId
+        );
+        return;
+    }
+
+    auto agent = agent_.lock();
+    if (!agent || !agent->agentContext) {
+        return;
+    }
+
+    const std::string oldThreadId = config_.threadId;
+    config_.threadId              = newThreadId;
+    // delta 重放缓冲属于旧会话的 seq 空间, 新会话 seq 独立编号, 清空避免错配重放
+    deltaBuffer_.clear();
+    // 新会话对当前连接而言等同于首次接入: 重置 firstTurn_ 使首条输入走
+    // resume_if_exists=true 的恢复路径 (与会话重启恢复行为一致)
+    firstTurn_ = true;
+
+    XX_LOGI("[session_ctrl] switched session: {} -> {}", oldThreadId, config_.threadId);
+
+    // 回推新会话状态: 全量 Sync (历史消息) + 模型信息 + 上下文统计
+    auto sync = buildFullSync();
+    sendToPeer(std::move(sync));
+
+    std::string              currentModel = agent->getCurrentModelName(config_.threadId);
+    std::vector<std::string> models;
+    if (agent->agentContext->agentConfig) {
+        for (const auto& [name, mc] : agent->agentContext->agentConfig->availableModels) {
+            models.push_back(name);
+        }
+    }
+    sendToPeer(WireModelInfo{std::move(currentModel), std::move(models)});
+
+    sendContextStats();
 }
 
 void SessionServerAgentIO::resolveInterrupt(int64_t id, neograph::json result) {

@@ -128,7 +128,7 @@ void TUIClientAgentIO::start() {
         };
         ctx_.theme          = &theme_;
         ctx_.session        = session_;
-        ctx_.threadId       = threadId_;
+        ctx_.threadId       = currentThreadId();
         ctx_.remoteUrl      = remoteUrl_;
         ctx_.showSystemInfo = &TUISettings::instance().showSystemInfoRef();
 
@@ -183,7 +183,7 @@ void TUIClientAgentIO::start() {
         // 侧边栏 footer 点击: 处理 "上下文" 按钮
         sidebar_->onFooterClick([this](const Mouse&) -> bool {
             if (transport_) {
-                sendToPeer(agentxx::agent::WireGetContext{threadId_});
+                sendToPeer(agentxx::agent::WireGetContext{currentThreadId()});
             } else if (session_) {
                 std::lock_guard<std::mutex> lock(sharedState_.mutex());
                 auto&                       st = sharedState_.mutableState();
@@ -265,6 +265,10 @@ void TUIClientAgentIO::start() {
                 openSettings();
                 return true;
             }
+            if (event == Event::F4) {
+                openSessionSelector();
+                return true;
+            }
             if (event == Event::F12) {
                 toggleLogWindow();
                 return true;
@@ -295,6 +299,11 @@ void TUIClientAgentIO::start() {
                     // 状态栏模型区域点击 → 打开模型选择弹窗
                     if (statusBar_ && statusBar_->modelBox().Contain(mouse.x, mouse.y)) {
                         openModelSelector();
+                        return true;
+                    }
+                    // 状态栏 "Sessions" 按钮点击 → 打开会话选择弹窗 (同 F4)
+                    if (statusBar_ && statusBar_->sessionBox().Contain(mouse.x, mouse.y)) {
+                        openSessionSelector();
                         return true;
                     }
                     // 状态栏 "Settings" 按钮点击 → 打开设置弹窗
@@ -501,7 +510,7 @@ void TUIClientAgentIO::stopSystemMonitor() {
 
 void TUIClientAgentIO::openModelSelector() {
     if (transport_) {
-        sendToPeer(agentxx::agent::WireGetModel{threadId_});
+        sendToPeer(agentxx::agent::WireGetModel{currentThreadId()});
     }
     auto overlay = std::make_shared<ModelSelectorOverlay>(ctx_);
     auto snap    = sharedState_.readSnapshot();
@@ -512,7 +521,7 @@ void TUIClientAgentIO::openModelSelector() {
         }
     }
     overlay->onConfirm([this](std::string model) {
-        requestSelectModel(threadId_, model);
+        requestSelectModel(currentThreadId(), model);
     });
     overlay->onClose([this] {
         modal_->popModal();
@@ -571,6 +580,81 @@ void TUIClientAgentIO::openPlanDiagram() {
             modal_->popModal();
         });
         modal_->pushModal(overlay);
+    }
+    postRedraw();
+}
+
+void TUIClientAgentIO::openSessionSelector() {
+    if (!modal_ || modal_->hasModal()) {
+        return;
+    }
+    // 仅当前会话非运行状态时可切换: 轮次进行中切换会话会使 Delta/输入错投,
+    // 请先停止当前会话 (Esc 或点击停止)
+    const bool busy = (ctx_.frameState && ctx_.frameState->isStreaming)
+                      || awaitingInterruptInput_.load(std::memory_order_acquire);
+    if (busy) {
+        {
+            std::lock_guard<std::mutex> lock(sharedState_.mutex());
+            auto&                       st  = sharedState_.mutableState();
+            auto                        tip = std::make_shared<TUIMessage>(TUIMessage::makeText(
+                TUIMessage::Role::System,
+                "[Session] 请先停止当前会话, 再进行会话切换"
+            ));
+            tip->system->tipLevel = TUIMessage::TipLevel::Warning;
+            st.messages.push_back(std::move(tip));
+        }
+        postRedraw();
+        return;
+    }
+    // 请求服务端持久化会话列表 (WireSessionList 异步回填 sharedState);
+    // 重置 loaded 标志使弹窗先显示 loading
+    sharedState_.mutate([](TUIRenderState& st) {
+        st.sessionListLoaded = false;
+    });
+    sendToPeer(agentxx::agent::WireListSessions{});
+
+    auto overlay = std::make_shared<SessionSelectorOverlay>(ctx_);
+    overlay->onClose([this] {
+        modal_->popModal();
+    });
+    overlay->onSelect([this](std::string threadId) {
+        switchToSession(std::move(threadId));
+    });
+    modal_->pushModal(overlay);
+    postRedraw();
+}
+
+void TUIClientAgentIO::switchToSession(std::string newThreadId) {
+    if (newThreadId.empty() || newThreadId == currentThreadId()) {
+        return;
+    }
+    XX_LOGI("[tui] switching session: {} -> {}", currentThreadId(), newThreadId);
+    setCurrentThreadId(newThreadId);
+    // 更新组件共享上下文: 状态栏/会话弹窗据此标记 current 会话
+    ctx_.threadId = newThreadId;
+    // 注意: 不切换 session_ —— Session 的可变状态绑定 agent io 线程
+    // (assertIoThread), UI 线程不得触碰; 状态栏的上下文统计经
+    // session_->contextStats 原子量展示, 切换后服务端推送新会话的
+    // WireContextStats 覆写同一原子量, 显示自动跟随新会话
+    // 清理上一会话遗留的消息列表吸附/中断 UI 状态;
+    // 消息历史由服务端回推的全量 Sync 整体替换 (onSync)
+    if (messageList_) {
+        messageList_->setStickToBottom(true);
+        messageList_->clearInterruptUiState();
+    }
+    awaitingInterruptInput_.store(false, std::memory_order_release);
+    // 清理上一会话遗留的排队输入与上下文弹窗数据 (正常路径下切换前
+    // isStreaming == false 时排队输入已清空, 此处兜底防御), 避免串扰新会话
+    sharedState_.mutate([](TUIRenderState& st) {
+        st.pendingInputs.clear();
+        st.contextMessages.reset();
+        st.showContextOverlay = false;
+    });
+    // WS 模式: 更新重连握手 threadId 并复位增量重放状态 (新会话 delta seq 独立编号);
+    // Channel/进程内模式为 no-op
+    if (transport_) {
+        transport_->updateReconnectThreadId(newThreadId);
+        sendToPeer(agentxx::agent::WireSwitchSession{newThreadId});
     }
     postRedraw();
 }
@@ -691,6 +775,15 @@ void TUIClientAgentIO::onPeerMessage(agentxx::agent::WireMessage msg) {
                     }
                 });
                 postRedraw();
+            } else if constexpr (std::is_same_v<T, agentxx::agent::WireSessionList>) {
+                // 会话选择弹窗数据源: 回填持久化会话列表 (服务端已按最近活动降序)
+                {
+                    std::lock_guard<std::mutex> lock(sharedState_.mutex());
+                    auto&                       st               = sharedState_.mutableState();
+                    st.sessionList                               = m.sessions;
+                    st.sessionListLoaded                         = true;
+                }
+                postRedraw();
             }
         },
         std::move(msg)
@@ -718,7 +811,7 @@ void TUIClientAgentIO::pushCurrentTokenLocked(TUIRenderState& st) {
 }
 
 void TUIClientAgentIO::cancelCurrentRunLocked(TUIRenderState& st) {
-    requestCancel(threadId_);
+    requestCancel(currentThreadId());
     pushCurrentTokenLocked(st);
     st.messages.push_back(std::make_shared<TUIMessage>(
         TUIMessage::makeText(TUIMessage::Role::System, "[Cancel Request]")
@@ -743,7 +836,7 @@ void TUIClientAgentIO::sendUserInputLocked(TUIRenderState& st, std::string text)
         }
     });
     if (transport_) {
-        sendToPeer(agentxx::agent::WireUserInput{threadId_, text});
+        sendToPeer(agentxx::agent::WireUserInput{currentThreadId(), text});
     } else {
         inputChannel_->async_send(
             neograph_asio_error_code{},

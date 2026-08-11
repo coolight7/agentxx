@@ -26,6 +26,10 @@ struct MsgType {
     inline static constexpr std::string_view Ping                   = "ping";
     /// 客户端记住权限选择: 注册路径规则到服务端权限中间件
     inline static constexpr std::string_view SetPermission = "set_permission";
+    /// 客户端请求持久化会话列表 (会话选择弹窗数据源)
+    inline static constexpr std::string_view ListSessions = "list_sessions";
+    /// 客户端请求切换当前连接的会话 (重新绑定 threadId 并回推历史)
+    inline static constexpr std::string_view SwitchSession = "switch_session";
 
     // ===== Server -> Client =====
     inline static constexpr std::string_view HelloAck         = "hello_ack";
@@ -42,6 +46,8 @@ struct MsgType {
     inline static constexpr std::string_view AppendComponentInfo = "append_component_info";
     inline static constexpr std::string_view GetContext          = "get_context";
     inline static constexpr std::string_view ContextMessages     = "context_messages";
+    /// 服务端持久化会话列表响应 (ListSessions 的结果)
+    inline static constexpr std::string_view SessionList = "session_list";
     inline static constexpr std::string_view Pong                = "pong";
 };
 
@@ -537,6 +543,73 @@ inline neograph::json makeContextMessages(const neograph::json& messages) {
         {"type",     MsgType::ContextMessages},
         {"messages", messages                },
     };
+}
+
+// ---------------------------------------------------------------------------
+// 会话列表 / 会话切换 (TUI 会话选择弹窗)
+// ---------------------------------------------------------------------------
+
+/// 客户端请求持久化会话列表 (无载荷; 列举全部持久化会话)
+inline neograph::json makeListSessions() {
+    return neograph::json{
+        {"type", MsgType::ListSessions},
+    };
+}
+
+inline neograph::json sessionInfoToJson(const SessionInfo& s) {
+    neograph::json j = {
+        {"thread",      s.threadId    },
+        {"last_active", s.lastActiveMs},
+    };
+    if (!s.title.empty()) {
+        j["title"] = s.title;
+    }
+    return j;
+}
+
+inline SessionInfo sessionInfoFromJson(const neograph::json& j) {
+    SessionInfo s;
+    s.threadId     = j.value("thread", std::string{});
+    s.title        = j.value("title", std::string{});
+    s.lastActiveMs = j.value("last_active", int64_t{0});
+    return s;
+}
+
+inline neograph::json makeSessionList(const std::vector<SessionInfo>& sessions) {
+    neograph::json j = {
+        {"type", MsgType::SessionList}
+    };
+    neograph::json arr = neograph::json::array();
+    for (const auto& s : sessions) {
+        arr.push_back(sessionInfoToJson(s));
+    }
+    j["sessions"] = std::move(arr);
+    return j;
+}
+
+inline std::vector<SessionInfo> sessionListFromJson(const neograph::json& j) {
+    std::vector<SessionInfo> out;
+    auto arr = j.value("sessions", neograph::json::array());
+    if (arr.is_array()) {
+        for (const auto& item : arr) {
+            out.push_back(sessionInfoFromJson(item));
+        }
+    }
+    return out;
+}
+
+/// 客户端请求切换当前连接的会话
+inline neograph::json makeSwitchSession(std::string_view threadId) {
+    return neograph::json{
+        {"type",   MsgType::SwitchSession},
+        {"thread", threadId              },
+    };
+}
+
+inline WireSwitchSession switchSessionFromJson(const neograph::json& j) {
+    WireSwitchSession m;
+    m.threadId = j.value("thread", std::string{});
+    return m;
 }
 
 inline neograph::json makeLog(int level, std::string_view message) {

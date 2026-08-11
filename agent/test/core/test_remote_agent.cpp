@@ -1,4 +1,6 @@
 #include "test_remote_agent.h"
+#include "agentxx/agent/base_agent.h"
+#include "agentxx/agent/config.h"
 #include "agentxx/agent/io/agent_io.h"
 #include "agentxx/agent/io/agent_server.h"
 #include "agentxx/agent/io/channel_io_transport.h"
@@ -194,7 +196,7 @@ static asio::awaitable<void> test_remote_protocol_roundtrip() {
         d.type    = Delta::Type::MessageTip;
         d.seq     = 11;
         d.tipType = Delta::TipType::Warning;
-        d.text    = "LLM API 调用失败，6 秒后自动重试 (2/5)，错误: connection reset";
+        d.text    = "LLM API 请求失败，6 秒后自动重试 (2/5)，错误: connection reset";
         auto back = WsAgentIOTransport::deserialize(WsAgentIOTransport::serialize(WireMessage{d}));
         XX_TEST_EXPECT_TRUE(back.has_value());
         if (back) {
@@ -205,7 +207,7 @@ static asio::awaitable<void> test_remote_protocol_roundtrip() {
                 XX_TEST_EXPECT_TRUE(bd->tipType == Delta::TipType::Warning);
                 XX_TEST_EXPECT_EQ(
                     bd->text,
-                    std::string("LLM API 调用失败，6 秒后自动重试 (2/5)，错误: connection reset")
+                    std::string("LLM API 请求失败，6 秒后自动重试 (2/5)，错误: connection reset")
                 );
             }
         }
@@ -297,8 +299,8 @@ static asio::awaitable<void> test_remote_protocol_roundtrip() {
     {
         // 客户端记住权限选择 (WireSetPermission) 序列化往返
         agentxx::agent::WireSetPermission perm{"sess", "/data/projects", true, 1};
-        auto json = WsAgentIOTransport::serialize(WireMessage{perm});
-        auto back = WsAgentIOTransport::deserialize(json);
+        auto                              json = WsAgentIOTransport::serialize(WireMessage{perm});
+        auto                              back = WsAgentIOTransport::deserialize(json);
         XX_TEST_EXPECT_TRUE(back.has_value());
         if (back) {
             auto* p = std::get_if<agentxx::agent::WireSetPermission>(&*back);
@@ -312,8 +314,8 @@ static asio::awaitable<void> test_remote_protocol_roundtrip() {
         }
         // 拒绝规则往返
         agentxx::agent::WireSetPermission deny{"sess", "/etc/secret", false, 0};
-        auto                             denyJson = WsAgentIOTransport::serialize(WireMessage{deny});
-        auto                             denyBack = WsAgentIOTransport::deserialize(denyJson);
+        auto denyJson = WsAgentIOTransport::serialize(WireMessage{deny});
+        auto denyBack = WsAgentIOTransport::deserialize(denyJson);
         XX_TEST_EXPECT_TRUE(denyBack.has_value());
         if (denyBack) {
             auto* p = std::get_if<agentxx::agent::WireSetPermission>(&*denyBack);
@@ -321,6 +323,55 @@ static asio::awaitable<void> test_remote_protocol_roundtrip() {
             if (p) {
                 XX_TEST_EXPECT_FALSE(p->allow);
                 XX_TEST_EXPECT_EQ(p->index, size_t{0});
+            }
+        }
+    }
+    {
+        // 会话选择弹窗: ListSessions / SessionList / SwitchSession 序列化往返
+        agentxx::agent::WireListSessions ls{};
+        auto                             back = WsAgentIOTransport::deserialize(
+            WsAgentIOTransport::serialize(WireMessage{ls})
+        );
+        XX_TEST_EXPECT_TRUE(back.has_value());
+        if (back) {
+            XX_TEST_EXPECT_TRUE(std::get_if<agentxx::agent::WireListSessions>(&*back) != nullptr);
+        }
+    }
+    {
+        agentxx::agent::WireSessionList sl;
+        sl.sessions.push_back(agentxx::agent::SessionInfo{"t1", "title-1", 1712345678000});
+        sl.sessions.push_back(agentxx::agent::SessionInfo{"t2", "", 0});
+        auto back = WsAgentIOTransport::deserialize(
+            WsAgentIOTransport::serialize(WireMessage{sl})
+        );
+        XX_TEST_EXPECT_TRUE(back.has_value());
+        if (back) {
+            auto* r = std::get_if<agentxx::agent::WireSessionList>(&*back);
+            XX_TEST_EXPECT_TRUE(r != nullptr);
+            if (r) {
+                XX_TEST_EXPECT_EQ(r->sessions.size(), size_t{2});
+                if (r->sessions.size() == 2) {
+                    XX_TEST_EXPECT_EQ(r->sessions[0].threadId, std::string("t1"));
+                    XX_TEST_EXPECT_EQ(r->sessions[0].title, std::string("title-1"));
+                    XX_TEST_EXPECT_EQ(r->sessions[0].lastActiveMs, int64_t{1712345678000});
+                    XX_TEST_EXPECT_EQ(r->sessions[1].threadId, std::string("t2"));
+                    XX_TEST_EXPECT_TRUE(r->sessions[1].title.empty());
+                    XX_TEST_EXPECT_EQ(r->sessions[1].lastActiveMs, int64_t{0});
+                }
+            }
+        }
+    }
+    {
+        agentxx::agent::WireSwitchSession sw{"target-session"};
+        auto                              back = WsAgentIOTransport::deserialize(
+            WsAgentIOTransport::serialize(WireMessage{sw})
+        );
+        XX_TEST_EXPECT_TRUE(back.has_value());
+        if (back) {
+            auto* r = std::get_if<agentxx::agent::WireSwitchSession>(&*back);
+            XX_TEST_EXPECT_TRUE(r != nullptr);
+            if (r) {
+                XX_TEST_EXPECT_EQ(r->threadId, std::string("target-session"));
             }
         }
     }
@@ -1504,6 +1555,101 @@ static asio::awaitable<void> test_remote_auth_rejected() {
 }
 
 // ---------------------------------------------------------------------------
+// 19. SessionServerAgentIO: switchSession 切换会话
+//     (回推全量 Sync + 模型信息 + 上下文统计; 运行态拒绝切换; 同会话校准)
+// ---------------------------------------------------------------------------
+
+static asio::awaitable<void> test_session_controller_switch_session() {
+    auto ex = co_await asio::this_coro::executor;
+
+    auto tp      = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+    auto clientT = std::move(tp.first);
+    auto serverT = std::move(tp.second);
+
+    // 最小 BaseAgent (无需 init: switchSession 仅依赖 agentContext/SessionStore;
+    // getCurrentModelName 在 modelRegistry 为空时回退 agentConfig->model)
+    auto cfg             = std::make_shared<agentxx::agent::AgentConfig>();
+    cfg->model.baseUrl   = "http://127.0.0.1:1";
+    cfg->model.modelName = "test-model";
+    auto agent           = std::make_shared<agentxx::agent::BaseAgent>(cfg);
+
+    // 预置目标会话历史 (io 线程未绑定, assertIoThread 为 no-op)
+    auto target = agent->agentContext->getSession("target-session");
+    target->appendHistory(
+        agentxx::agent::ViewMessage::makeText(agentxx::agent::ViewMessage::Role::User, "hello")
+    );
+
+    SessionServerAgentIO::Config scCfg;
+    scCfg.threadId = "session-a";
+    auto sc        = std::make_shared<SessionServerAgentIO>(ex, agent, scCfg);
+    sc->setTransport(std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(serverT)));
+
+    // ---- 正常切换: 回推全量 Sync + 模型信息 + 上下文统计 ----
+    sc->switchSession("target-session");
+    XX_TEST_EXPECT_EQ(std::string{sc->threadId()}, std::string("target-session"));
+
+    auto syncMsg = co_await clientT->recv();
+    XX_TEST_EXPECT_TRUE(syncMsg.has_value());
+    if (syncMsg) {
+        auto* sp = std::get_if<agentxx::agent::SyncPayload>(&*syncMsg);
+        XX_TEST_EXPECT_TRUE(sp != nullptr);
+        if (sp) {
+            XX_TEST_EXPECT_EQ(sp->messages.size(), size_t{1});
+            if (!sp->messages.empty()) {
+                XX_TEST_EXPECT_TRUE(
+                    sp->messages[0].role == agentxx::agent::ViewMessage::Role::User
+                );
+                XX_TEST_EXPECT_EQ(sp->messages[0].text, std::string("hello"));
+            }
+        }
+    }
+    auto modelMsg = co_await clientT->recv();
+    XX_TEST_EXPECT_TRUE(modelMsg.has_value());
+    if (modelMsg) {
+        auto* mi = std::get_if<agentxx::agent::WireModelInfo>(&*modelMsg);
+        XX_TEST_EXPECT_TRUE(mi != nullptr);
+        if (mi) {
+            XX_TEST_EXPECT_EQ(mi->currentModel, std::string("test-model"));
+        }
+    }
+    auto statsMsg = co_await clientT->recv();
+    XX_TEST_EXPECT_TRUE(statsMsg.has_value());
+    if (statsMsg) {
+        XX_TEST_EXPECT_TRUE(std::get_if<agentxx::agent::WireContextStats>(&*statsMsg) != nullptr);
+    }
+
+    // ---- 运行态拒绝切换 (客户端已前置拦截, 服务端兜底; 不产生任何消息) ----
+    sc->setTurnActiveForTest(true);
+    sc->switchSession("another-session");
+    XX_TEST_EXPECT_EQ(std::string{sc->threadId()}, std::string("target-session"));
+    sc->setTurnActiveForTest(false);
+
+    // ---- 切换到同一会话: threadId 不变, 仅回推校准 Sync + 统计 ----
+    sc->switchSession("target-session");
+    auto reSyncMsg = co_await clientT->recv();
+    XX_TEST_EXPECT_TRUE(reSyncMsg.has_value());
+    if (reSyncMsg) {
+        XX_TEST_EXPECT_TRUE(std::get_if<agentxx::agent::SyncPayload>(&*reSyncMsg) != nullptr);
+    }
+    auto reStatsMsg = co_await clientT->recv();
+    XX_TEST_EXPECT_TRUE(reStatsMsg.has_value());
+    if (reStatsMsg) {
+        XX_TEST_EXPECT_TRUE(
+            std::get_if<agentxx::agent::WireContextStats>(&*reStatsMsg) != nullptr
+        );
+    }
+
+    // ---- 空 threadId 非法: 直接忽略 ----
+    sc->switchSession("");
+    XX_TEST_EXPECT_EQ(std::string{sc->threadId()}, std::string("target-session"));
+
+    // 显式关闭: 使挂起的 recv 完成, 避免挂起协程持有 transport 泄漏
+    clientT->close();
+    sc->stop();
+    co_return;
+}
+
+// ---------------------------------------------------------------------------
 
 asio::awaitable<TestResult> run_remote_agent_tests() {
     std::cout << "  [remote] protocol roundtrip..." << std::endl;
@@ -1559,6 +1705,9 @@ asio::awaitable<TestResult> run_remote_agent_tests() {
 
     std::cout << "  [remote] auth rejected..." << std::endl;
     co_await test_remote_auth_rejected();
+
+    std::cout << "  [remote] session controller switch session..." << std::endl;
+    co_await test_session_controller_switch_session();
 
     co_return TestResult{g_remote_passed, g_remote_failed};
 }

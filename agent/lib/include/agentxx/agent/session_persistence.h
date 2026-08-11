@@ -57,6 +57,12 @@ public:
     /// 加载指定 thread 的会话消息状态; 无数据/打开失败时返回空结构 (仅记日志)
     LoadedSession loadSession(std::string_view threadId);
 
+    /// 列举全部持久化会话的摘要 (供会话选择弹窗), 按最近活动时间降序
+    /// - 扫描根目录下各 thread 目录, 以独立临时连接读取 session.db meta 表
+    ///   (threadId/title/lastActiveMs); 老数据无 meta 时回退目录名作 threadId
+    /// - 打开/读取失败仅记日志并跳过该目录
+    std::vector<SessionInfo> listSessions();
+
     /// 追加一条展示历史消息 (事务: 消息 + msgIdCounter 一起提交)
     /// - msgIdCounter 为追加后会话的计数 (新消息 id 序号), 供重启恢复
     /// - 失败仅记录日志, 不影响内存状态

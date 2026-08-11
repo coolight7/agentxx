@@ -555,7 +555,7 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
                             {"tip_type", "warning"},
                             {"text",
                              fmt::format(
-                          "LLM API 调用失败，{} 秒后自动重试 ({}/{})，错误: {}",
+                          "LLM API 请求失败，{} 秒后自动重试 ({}/{})，错误: {}",
                           delaySec,
                           retry,
                           agentCtxPtr->agentConfig->llmMaxRetry,

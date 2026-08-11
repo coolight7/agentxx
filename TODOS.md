@@ -4,8 +4,7 @@
 - BaseAgent 增加支持 usage 统计
 - 会话独立日志
 - eventBus 改为tree，命名空间使用 axx/bxx/cc
-- mcp 超时限制+配置
-- 优化 exec 传入命令的执行成功率
+- llm 节点超时结束时，可能触发重复执行 toolcall 节点，然后又回到 llm 节点，导致异常
 - 支持修改上下文
 
 ## 提示词优化

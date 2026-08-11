@@ -69,6 +69,18 @@ inline std::string formatTimestampMilliseconds(int64_t timestamp_ms) {
     return std::format("{:%H:%M:%S}", time);
 }
 
+/// 日期时间格式化 (会话列表展示用): YYYY-MM-DD HH:MM
+inline std::string formatDateTimeMilliseconds(int64_t timestamp_ms) {
+    if (timestamp_ms <= 0) {
+        return "-";
+    }
+    std::chrono::zoned_time time{
+        std::chrono::current_zone(),
+        std::chrono::sys_time{std::chrono::seconds(timestamp_ms / 1000)}
+    };
+    return std::format("{:%Y-%m-%d %H:%M}", time);
+}
+
 inline std::string oneLinePreview(std::string_view s, size_t max = 60) {
     const auto  nl = s.find('\n');
     std::string line{(nl == std::string_view::npos) ? s : s.substr(0, nl)};
@@ -214,6 +226,28 @@ private:
     void openModelSelector();
     /// 打开设置模态
     void openSettings();
+    /// 打开会话选择模态 (F4 / 状态栏 [F4] Sessions 按钮):
+    /// - 仅当前会话非运行状态时可打开 (否则提示先停止当前会话)
+    /// - 请求服务端会话列表并展示; 确认后经 WireSwitchSession 切换
+    void openSessionSelector();
+    /// 会话选择弹窗确认后的切换逻辑 (UI 线程):
+    /// - 更新本地 threadId 绑定与重连握手 threadId (WS 模式)
+    /// - 发送 WireSwitchSession, 服务端回推全量 Sync/模型/上下文统计恢复界面
+    /// - 不触碰 session_ (Session 绑定 agent io 线程); 上下文统计经
+    ///   onContextStats 由服务端推送写入, 切换后自动跟随新会话
+    void switchToSession(std::string newThreadId);
+
+    /// 当前会话 thread_id 的跨线程安全读写:
+    /// UI 线程切换会话时写入, client 线程发送用户输入时读取
+    std::string currentThreadId() const {
+        std::lock_guard<std::mutex> lock(threadIdMutex_);
+        return threadId_;
+    }
+
+    void setCurrentThreadId(std::string newThreadId) {
+        std::lock_guard<std::mutex> lock(threadIdMutex_);
+        threadId_ = std::move(newThreadId);
+    }
     /// F12: 切换日志窗口 tab
     void toggleLogWindow();
     /// 打开 Plan 状态图模态 (Info 侧边栏 [View Plan Diagram] 按钮触发)
@@ -238,8 +272,11 @@ private:
 
     std::shared_ptr<agentxx::agent::AgentContext> agentContext_;
     TUITheme                                      theme_;
-    std::string                                   threadId_;
-    asio::any_io_executor                         ex_;
+    /// 当前会话 thread_id (切换会话时由 UI 线程写入, client 线程发送输入时读取;
+    /// 经 threadIdMutex_ 保护, 见 currentThreadId()/setCurrentThreadId())
+    std::string              threadId_;
+    mutable std::mutex       threadIdMutex_;
+    asio::any_io_executor    ex_;
     /// 权限询问处理模式 (yaml 配置 `permission.mode` 注入, 不可运行时切换)
     agentxx::agent::PermissionMode permissionMode_ = agentxx::agent::PermissionMode::Ask;
 

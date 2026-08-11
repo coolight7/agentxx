@@ -234,7 +234,7 @@ asio::awaitable<void> test_eventbridge_message_tip() {
                        {"value",
              neograph::json{
                  {"tip_type", "warning"},
-                 {"text", "LLM API 调用失败，6 秒后自动重试 (2/5)"},
+                 {"text", "LLM API 请求失败，6 秒后自动重试 (2/5)"},
              }},
                        }
     });
@@ -244,7 +244,7 @@ asio::awaitable<void> test_eventbridge_message_tip() {
         XX_TEST_EXPECT_TRUE(io->deltas[0].tipType == agentxx::agent::Delta::TipType::Warning);
         XX_TEST_EXPECT_EQ(
             io->deltas[0].text,
-            std::string{"LLM API 调用失败，6 秒后自动重试 (2/5)"}
+            std::string{"LLM API 请求失败，6 秒后自动重试 (2/5)"}
         );
     }
 

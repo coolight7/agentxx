@@ -123,6 +123,23 @@ struct WireContextMessages {
     neograph::json messages;
 };
 
+/// 客户端请求持久化会话列表 (Client -> Server): 会话选择弹窗数据源
+/// - 不携带 threadId: 列举全部持久化会话, 与当前连接会话无关
+struct WireListSessions {};
+
+/// 服务端持久化会话列表响应 (Server -> Client)
+/// - sessions 按最近活动时间降序排列 (最新在前)
+struct WireSessionList {
+    std::vector<SessionInfo> sessions;
+};
+
+/// 客户端请求切换当前连接的会话 (Client -> Server): 将会话端点重新绑定到
+/// 目标 threadId, 服务端加载其历史并回推 Sync/模型/上下文统计 (见
+/// SessionServerAgentIO::switchSession)
+struct WireSwitchSession {
+    std::string threadId;
+};
+
 /// 客户端记住权限选择 (Client -> Server): 将路径规则注册到服务端权限中间件,
 /// 后续访问该路径或其子目录时按规则直接允许/拒绝, 不再询问
 struct WireSetPermission {
@@ -157,6 +174,9 @@ using WireMessage = std::variant<
     WireAppendComponentInfo,
     WireGetContext,
     WireContextMessages,
+    WireListSessions,
+    WireSessionList,
+    WireSwitchSession,
     WireSetPermission>;
 
 // ---------------------------------------------------------------------------
@@ -196,6 +216,13 @@ public:
 
     /// 传输是否仍然存活
     virtual bool alive() const noexcept = 0;
+
+    /// 会话切换通知: 更新客户端重连时握手携带的 threadId, 并复位增量重放状态
+    /// (新会话的 delta seq 独立编号, 旧会话的 seq/tailHash 不再适用)。
+    /// - WS 客户端模式: 覆写实现 (见 WsAgentIOTransport)
+    /// - Channel/服务端模式: 无重连, 默认 no-op
+    /// 线程安全: 可从任意线程调用 (实现内部投递回自身 executor)
+    virtual void updateReconnectThreadId(std::string /*newThreadId*/) {}
 };
 
 } // namespace agent
