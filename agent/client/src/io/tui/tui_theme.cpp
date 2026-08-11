@@ -16,8 +16,8 @@ TUITheme TUITheme::darkTheme() {
         .blockColor            = ftxui::Color::RGB(18, 18, 18),    // #121212
         .inputBgColor          = ftxui::Color::RGB(24, 26, 30),    //
         .inputTextColor        = ftxui::Color::RGB(255, 255, 255), // #fff
-        .buttonBgColor         = ftxui::Color::RGB(42, 49, 56),    // #2a3138
-        .buttonTextColor       = ftxui::Color::RGB(255, 255, 255), // #fff
+        .buttonBgColor         = ftxui::Color::RGBA(102, 204, 255, 128),    // #66ccff
+        .buttonTextColor       = ftxui::Color::RGB(0, 0, 0),       // #fff
         .buttonActiveBgColor   = ftxui::Color::RGB(102, 204, 255), // #66ccff
         .buttonActiveTextColor = ftxui::Color::RGB(0, 0, 0),       // #000
         .markdownTheme         = markdown::Theme{
@@ -55,8 +55,8 @@ TUITheme TUITheme::lightTheme() {
         .blockColor            = ftxui::Color::RGB(246, 247, 252),
         .inputBgColor          = ftxui::Color::RGB(235, 238, 240),
         .inputTextColor        = ftxui::Color::RGB(50, 50, 50),
-        .buttonBgColor         = ftxui::Color::RGB(220, 224, 228),
-        .buttonTextColor       = ftxui::Color::RGB(50, 50, 50),
+        .buttonBgColor         = ftxui::Color::RGBA(102, 204, 255, 128),    // #66ccff
+        .buttonTextColor       = ftxui::Color::RGB(0, 0, 0),       // #fff
         .buttonActiveBgColor   = ftxui::Color::RGB(60, 80, 130),
         .buttonActiveTextColor = ftxui::Color::White,
         .markdownTheme         = markdown::Theme{
