@@ -3,6 +3,7 @@
 #include "agentxx/agent/config_static.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/log.h"
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <fmt/format.h>
@@ -102,6 +103,48 @@ CREATE TABLE IF NOT EXISTS item (
 
 /// meta 键名
 static constexpr std::string_view kMetaMsgIdCounter = "msgIdCounter";
+/// 会话元数据 (供会话列表展示): 原始 threadId / 会话名称 / 最近活动时间
+/// - threadId: 目录名经 sanitizeThreadId 清洗后可能失真, 原始值单独存于 meta,
+///   listSessions 恢复真实 threadId; 老数据无此键时回退目录名
+/// - title:    首条用户消息的单行预览 (仅首次写入, 后续不覆盖)
+/// - lastActiveMs: 最近一条消息的开始时间戳 (毫秒), 每次追加消息时更新
+static constexpr std::string_view kMetaThreadId     = "threadId";
+static constexpr std::string_view kMetaTitle        = "title";
+static constexpr std::string_view kMetaLastActiveMs = "lastActiveMs";
+
+/// 会话名称预览: 取首行并截断到 max 个 UTF-8 字符 (避免弹窗展示过宽)
+static std::string titlePreview(std::string_view s, size_t max = 60) {
+    const auto  nl = s.find('\n');
+    std::string line{(nl == std::string_view::npos) ? s : s.substr(0, nl)};
+    // 去除行尾回车 (Windows 换行符 \r\n)
+    while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) {
+        line.pop_back();
+    }
+    // 按 UTF-8 字符数截断 (中文字符为多字节, 不能按字节切)
+    size_t count = 0;
+    size_t i     = 0;
+    while (i < line.size() && count < max) {
+        const auto c = static_cast<unsigned char>(line[i]);
+        size_t     step = 1;
+        if (c >= 0xf0) {
+            step = 4;
+        } else if (c >= 0xe0) {
+            step = 3;
+        } else if (c >= 0xc0) {
+            step = 2;
+        }
+        if (i + step > line.size()) {
+            break;
+        }
+        i += step;
+        ++count;
+    }
+    if (i < line.size()) {
+        line.resize(i);
+        line += "...";
+    }
+    return line;
+}
 
 } // namespace
 
@@ -222,6 +265,75 @@ SessionPersistence::LoadedSession SessionPersistence::loadSession(std::string_vi
     return out;
 }
 
+std::vector<SessionInfo> SessionPersistence::listSessions() {
+    std::vector<SessionInfo> out;
+    std::lock_guard<std::mutex> lock(mutex_);
+    agentxx::util::catchError<bool>(
+        [&]() -> bool {
+            std::error_code ec;
+            fs::path        root{rootDir_};
+            if (!fs::exists(root, ec)) {
+                // 根目录不存在 = 从未持久化过任何会话, 返回空列表
+                return true;
+            }
+            for (const auto& entry : fs::directory_iterator(root, ec)) {
+                if (ec || !entry.is_directory(ec)) {
+                    continue;
+                }
+                // 独立临时连接读取 meta (只读; 不复用 dbs_ 缓存, 也不创建目录):
+                // threadId 优先取 meta 中的原始值 (目录名经 sanitize 后可能失真),
+                // 老数据无 meta.threadId 时回退目录名 (generateUniqueThreadId 生成的
+                // id 仅含安全字符, sanitize 不改写, 目录名即原始 threadId)
+                SessionInfo info;
+                info.threadId = entry.path().filename().string();
+                agentxx::util::catchError<bool>(
+                    [&]() -> bool {
+                        agentxx::util::SqliteDb db;
+                        db.open((entry.path() / "session.db").string());
+                        auto stmt = db.prepare("SELECT key, value FROM meta");
+                        while (stmt.step()) {
+                            const auto key = stmt.columnText(0);
+                            if (key == kMetaThreadId) {
+                                const auto tid = stmt.columnText(1);
+                                if (!tid.empty()) {
+                                    info.threadId = tid;
+                                }
+                            } else if (key == kMetaTitle) {
+                                info.title = stmt.columnText(1);
+                            } else if (key == kMetaLastActiveMs) {
+                                info.lastActiveMs = stmt.columnInt64(1);
+                            }
+                        }
+                        return true;
+                    },
+                    [&](std::string errmsg) -> bool {
+                        XX_LOGD(
+                            "SessionPersistence: listSessions read {} failed: {}",
+                            entry.path().filename().string(),
+                            errmsg
+                        );
+                        return false;
+                    }
+                );
+                out.push_back(std::move(info));
+            }
+            // 按最近活动时间降序 (最新在前); 时间相同时按 threadId 字典序保证稳定顺序
+            std::sort(out.begin(), out.end(), [](const SessionInfo& a, const SessionInfo& b) {
+                if (a.lastActiveMs != b.lastActiveMs) {
+                    return a.lastActiveMs > b.lastActiveMs;
+                }
+                return a.threadId < b.threadId;
+            });
+            return true;
+        },
+        [&](std::string errmsg) -> bool {
+            XX_LOGE("SessionPersistence: listSessions failed: {}", errmsg);
+            return false;
+        }
+    );
+    return out;
+}
+
 void SessionPersistence::appendViewMessage(
     std::string_view   threadId,
     const ViewMessage& msg,
@@ -244,6 +356,33 @@ void SessionPersistence::appendViewMessage(
                 meta.bindText(1, kMetaMsgIdCounter);
                 meta.bindInt64(2, static_cast<int64_t>(msgIdCounter));
                 meta.step();
+
+                // ---- 会话列表元数据 (供 listSessions 展示, 与消息同事务提交) ----
+                // 原始 threadId (目录名经清洗后可能失真)
+                meta.reset();
+                meta.bindText(1, kMetaThreadId);
+                meta.bindText(2, std::string{threadId});
+                meta.step();
+                // 最近活动时间: 取消息开始时间戳 (毫秒)
+                if (msg.startTimeMs > 0) {
+                    meta.reset();
+                    meta.bindText(1, kMetaLastActiveMs);
+                    meta.bindInt64(2, msg.startTimeMs);
+                    meta.step();
+                }
+                // 会话名称: 首条用户消息的单行预览 (仅首次写入, 不覆盖)
+                if (msg.role == ViewMessage::Role::User && !msg.text.empty()) {
+                    auto title = titlePreview(msg.text);
+                    if (!title.empty()) {
+                        auto titleStmt = db.prepare(
+                            "INSERT INTO meta(key, value) VALUES (?, ?) "
+                            "ON CONFLICT(key) DO NOTHING"
+                        );
+                        titleStmt.bindText(1, kMetaTitle);
+                        titleStmt.bindText(2, title);
+                        titleStmt.step();
+                    }
+                }
 
                 db.commit();
                 inTx = false;

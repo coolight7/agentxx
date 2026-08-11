@@ -123,6 +123,16 @@ struct ViewMessage {
     static ViewMessage fromJson(const neograph::json& j);
 };
 
+/// 会话列表条目摘要 (会话选择弹窗展示用)
+/// - threadId:     会话唯一标识
+/// - title:        会话名称 (取首条用户消息的单行预览; 无用户消息时为空, 展示端回退 threadId)
+/// - lastActiveMs: 最近活动时间 (毫秒时间戳; 取末条消息开始时间, 无消息时为 0)
+struct SessionInfo {
+    std::string threadId;
+    std::string title;
+    int64_t     lastActiveMs = 0;
+};
+
 /// 加载组件通知：显示加载的 MCP/Skill/Memory 信息
 struct AppendComponentNotification {
     enum class Type : uint8_t {

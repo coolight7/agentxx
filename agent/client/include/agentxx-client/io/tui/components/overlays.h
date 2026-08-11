@@ -43,6 +43,39 @@ private:
     std::function<void(std::string)> onConfirm_;
 };
 
+/// 会话选择弹窗组件 (F4 / 状态栏 [F4] Sessions 按钮)
+/// - 列表项两行: 第一行会话名称 (title, 空时回退 threadId), 第二行最近活动日期
+/// - Up/Down 选择, Enter/鼠标点击切换会话, Esc 关闭
+/// - 列表加载中 (sessionListLoaded == false) 显示 loading
+class SessionSelectorOverlay : public ftxui::ComponentBase {
+public:
+
+    explicit SessionSelectorOverlay(TUICtx& ctx) :
+        ctx_(ctx) {}
+
+    void onClose(std::function<void()> fn) {
+        onClose_ = fn;
+    }
+
+    /// 切换会话回调 (参数: 目标 threadId)
+    void onSelect(std::function<void(std::string)> fn) {
+        onSelect_ = fn;
+    }
+
+    bool           OnEvent(ftxui::Event event) override;
+    ftxui::Element OnRender() override;
+
+private:
+
+    void confirmSelection();
+
+    TUICtx&                            ctx_;
+    int                                selectedIndex_ = 0;
+    std::function<void()>              onClose_;
+    std::function<void(std::string)>   onSelect_;
+    std::vector<ftxui::Box>            itemBoxes_;
+};
+
 /// 设置弹窗组件
 /// - 主题切换 (Dark/Light, 单行显示当前值, 点击/Enter 循环切换)
 /// - 系统资源占用显示开关 (Info 侧边栏; 默认开启)

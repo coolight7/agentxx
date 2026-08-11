@@ -79,6 +79,12 @@ struct TUIRenderState {
 
     bool showContextOverlay = false;
 
+    /// 持久化会话列表 (会话选择弹窗数据源, WireSessionList 响应填充)
+    /// - sessionListLoaded: false = 列表请求已发出但响应未到达 (弹窗显示 loading);
+    ///   true = 已收到响应 (列表为空则确实无持久化会话)
+    std::vector<agentxx::agent::SessionInfo> sessionList;
+    bool                                     sessionListLoaded = false;
+
     std::vector<agentxx::agent::AppendComponentNotification> appendComponents;
 
     /// 系统资源占用快照 (CPU/内存/GPU), 由资源监控线程周期写入; 为 null 表示尚未采集
