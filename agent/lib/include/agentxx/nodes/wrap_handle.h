@@ -213,6 +213,7 @@ public:
         size_t     i           = 0;
         for (; i < len; ++i) {
             auto& item = agentCtxPtr->middlewareHandleContext->handles[i];
+            XX_LOGT(R"_({}/start, {}/{})_", nodeName, item->name, i);
             try {
                 co_await onHandleStart(*item, in);
                 continue;
@@ -321,6 +322,7 @@ public:
 
         for (; i-- > 0;) {
             auto& item = agentCtxPtr->middlewareHandleContext->handles[i];
+            XX_LOGT(R"_({}/end, {}/{})_", nodeName, item->name, i);
             if (nullptr != errorPtr) {
                 onHandleEndError(errorRethrow, false, errInfo, *item, in, out);
             } else {

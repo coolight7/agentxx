@@ -1,6 +1,7 @@
 #include "test_command_tools.h"
 #include "agentxx/agent/context.h"
 #include "agentxx/tools/execute_command.h"
+#include "agentxx/util/util.h"
 #include "asio/dispatch.hpp"
 #include "asio/steady_timer.hpp"
 #include "asio/use_awaitable.hpp"
@@ -497,6 +498,132 @@ asio::awaitable<void>
     co_return;
 }
 
+// ---- PowerShell 探测 ----
+
+asio::awaitable<void> test_detect_powershell(std::weak_ptr<agentxx::agent::AgentContext>) {
+    auto info  = agentxx::util::detectPowerShell();
+    auto info2 = agentxx::util::detectPowerShell();
+    // 缓存一致性
+    XX_TEST_EXPECT_TRUE(info.available == info2.available);
+    XX_TEST_EXPECT_TRUE(info.exeName == info2.exeName);
+    XX_TEST_EXPECT_TRUE(info.version == info2.version);
+#if XX_IS_LINUX_D
+    if (false == agentxx::util::isRunningInWSL()) {
+        // 非 WSL Linux: 无法调用 Windows 侧 PowerShell
+        XX_TEST_EXPECT_TRUE(false == info.available);
+    }
+    // WSL: interop 环境下通常可用, 但不强制断言 (interop 可能被禁用);
+    // 可用时校验字段格式
+#elif XX_IS_WINDOWS_D
+    // 原生 Windows: 通常可用, 不强制断言 (精简系统可能无 PowerShell)
+#endif
+    if (info.available) {
+        XX_TEST_EXPECT_TRUE(info.exeName == "pwsh.exe" || info.exeName == "powershell.exe");
+        XX_TEST_EXPECT_TRUE(info.version.find('.') != std::string::npos);
+        XX_TEST_EXPECT_TRUE(info.isPwsh == (info.exeName == "pwsh.exe"));
+        TEST_INFO << "PowerShell detected: " << info.exeName << " v" << info.version
+                  << std::endl;
+    } else {
+        TEST_INFO << "PowerShell not detected (will fallback to cmd.exe)" << std::endl;
+    }
+    co_return;
+}
+
+asio::awaitable<void>
+    test_windows_definition_ps_info(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    // AgentPrompt 构造时为避免启动阻塞使用非阻塞占位文本 (不探测 PowerShell);
+    // 此处显式完成探测+刷新, 等价于 BaseAgent::init (agent 线程) 的行为
+    if (auto agentPtr = agentContext.lock(); agentPtr && agentPtr->agentConfig) {
+        agentPtr->agentConfig->prompt.refreshEnvDetectedPrompts();
+    }
+    auto psInfo = agentxx::util::detectPowerShell();
+    auto tool   = agentxx::tools::ExecuteWindowsCommandTool{agentContext};
+    auto def    = tool.get_definition();
+    if (psInfo.available) {
+        // depict 与 command 参数描述都应包含探测到的可执行文件名与版本号
+        XX_TEST_EXPECT_TRUE(def.description.find(psInfo.exeName) != std::string::npos);
+        XX_TEST_EXPECT_TRUE(def.description.find(psInfo.version) != std::string::npos);
+        auto props = def.parameters["properties"];
+        XX_TEST_EXPECT_TRUE(props.contains("command"));
+        XX_TEST_EXPECT_TRUE(
+            props["command"]["description"].get<std::string>().find(psInfo.exeName)
+            != std::string::npos
+        );
+    } else {
+        // 回退: 提示词应描述 cmd.exe 语义
+        XX_TEST_EXPECT_TRUE(def.description.find("cmd.exe") != std::string::npos);
+    }
+    co_return;
+}
+
+asio::awaitable<void>
+    test_windows_execute_ps(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    auto psInfo = agentxx::util::detectPowerShell();
+    if (false == psInfo.available) {
+        TEST_INFO << "PowerShell not available, skip PS execution tests" << std::endl;
+        co_return;
+    }
+    auto tool = agentxx::tools::ExecuteWindowsCommandTool{agentContext};
+    {
+        // 基本执行
+        auto args = neograph::json{
+            {"command", "Write-Output 'ps_tool_echo_ok'"},
+            {"timeout", 60                              },
+        };
+        auto result = co_await tool.execute_async(args);
+        XX_TEST_EXPECT_TRUE(result.find("ps_tool_echo_ok") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(result.find("ExitCode: 0") != std::string::npos);
+    }
+    {
+        // 字面量 $ 不应被展开 (引号/$ 解析问题的核心回归测试)
+        auto args = neograph::json{
+            {"command", "Write-Output 'a$b'"},
+            {"timeout", 60                 },
+        };
+        auto result = co_await tool.execute_async(args);
+        XX_TEST_EXPECT_TRUE(result.find("a$b") != std::string::npos);
+    }
+    {
+        // 变量赋值 + 双引号插值
+        auto args = neograph::json{
+            {"command", "$x = 'v1'; Write-Output \"val=$x\""},
+            {"timeout", 60                                  },
+        };
+        auto result = co_await tool.execute_async(args);
+        XX_TEST_EXPECT_TRUE(result.find("val=v1") != std::string::npos);
+    }
+    {
+        // 脚本 exit 码透传
+        auto args = neograph::json{
+            {"command", "Write-Output 'before_exit'; exit 42"},
+            {"timeout", 60                                   },
+        };
+        auto result = co_await tool.execute_async(args);
+        XX_TEST_EXPECT_TRUE(result.find("before_exit") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(result.find("ExitCode: 42") != std::string::npos);
+    }
+    {
+        // 异常 (throw) 转 stdout + exit 1
+        auto args = neograph::json{
+            {"command", "Get-Content 'C:\\__agentxx_test_no_such__.txt' -ErrorAction Stop"},
+            {"timeout", 60                                                                 },
+        };
+        auto result = co_await tool.execute_async(args);
+        XX_TEST_EXPECT_TRUE(result.find("ExitCode: 1") != std::string::npos);
+    }
+    {
+        // 脚本块花括号 (PS 常用语法; 包装模板的 fmt::format 不应破坏大括号)
+        auto args = neograph::json{
+            {"command", "Get-Process | Where-Object { $_.Id -gt 0 } | Select-Object -First 1 | ForEach-Object { Write-Output ('pid_ok') }"},
+            {"timeout", 60                                                                                                             },
+        };
+        auto result = co_await tool.execute_async(args);
+        XX_TEST_EXPECT_TRUE(result.find("pid_ok") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(result.find("ExitCode: 0") != std::string::npos);
+    }
+    co_return;
+}
+
 asio::awaitable<TestResult>
     run_command_tools_tests(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     g_cmd_passed = 0;
@@ -537,7 +664,19 @@ asio::awaitable<TestResult>
     co_await run(test_windows_command_get_definition);
     co_await run(test_windows_get_definition_properties);
     co_await run(test_windows_command_empty_command);
+#elif XX_IS_LINUX_D
+    // WSL: ExecuteWindowsCommandTool 同样注册 (经 interop 调 Windows 侧),
+    // 与 code_agent.cpp 的注册条件保持一致
+    if (agentxx::util::isRunningInWSL()) {
+        co_await run(test_windows_command_get_definition);
+        co_await run(test_windows_get_definition_properties);
+        co_await run(test_windows_command_empty_command);
+    }
 #endif
+
+    co_await run(test_detect_powershell);
+    co_await run(test_windows_definition_ps_info);
+    co_await run(test_windows_execute_ps);
 
     co_await run(test_python_command_get_definition);
     co_await run(test_python_get_definition_properties);
