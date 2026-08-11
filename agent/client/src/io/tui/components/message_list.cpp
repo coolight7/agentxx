@@ -643,7 +643,7 @@ Element MessageListComponent::buildMessageBlock(
             );
             if (!expanded) {
                 if (!finished) {
-                    header.push_back(text("running...") | color(theme.toolColor));
+                    header.push_back(text("running...") | color(theme.toolColor) | dim);
                 } else if (isEditTool) {
                     appendEditToolHeader(msg, header);
                 } else {
@@ -999,7 +999,7 @@ Element MessageListComponent::buildInterruptControl(const TUIMessage& msg, size_
         row.push_back(no);
         if (rememberable) {
             auto remBox = mkBox();
-            auto rem    = btn(ui.remember ? " 记住✓ " : " 记住 ", ui.remember) | reflect(*remBox);
+            auto rem = btn(ui.remember ? " 记住✓ " : " 记住 ", ui.remember) | reflect(*remBox);
             hit(kHitRemember, 0, remBox);
             row.push_back(text("  "));
             row.push_back(rem);
@@ -1390,10 +1390,10 @@ void MessageListComponent::setInterruptActive(size_t mi) {
 }
 
 void MessageListComponent::confirmInterrupt(size_t mi) {
-    std::string  value;
-    bool         confirmed = false;
-    bool         remember  = false; // 权限询问: 是否记住本次选择 (mutate 内收集, 锁外发送)
-    InterruptKey key; // 确认成功时记录 (mutate 内收集, 锁外发送结果)
+    std::string value;
+    bool        confirmed = false;
+    bool remember = false; // 权限询问: 是否记住本次选择 (mutate 内收集, 锁外发送)
+    InterruptKey key;      // 确认成功时记录 (mutate 内收集, 锁外发送结果)
     ctx_.state->mutate([&](TUIRenderState& st) {
         if (mi >= st.messages.size() || !st.messages[mi]->interrupt) {
             return;

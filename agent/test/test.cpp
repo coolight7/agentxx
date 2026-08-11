@@ -41,6 +41,7 @@
 #include "test_string_tools.h"
 #include "test_string_util.h"
 #include "test_subagent_bus.h"
+#include "test_summarization.h"
 #include "test_text_selection_monitor.h"
 #include "test_toolcall_args.h"
 #ifdef AGENTXX_BUILD_CLIENT
@@ -217,6 +218,7 @@ int main(int argn, char** argv) {
             co_await run("anthropic_provider", agentxx::test::run_anthropic_provider_tests);
             co_await run("cancel", agentxx::test::run_cancel_tests);
             co_await run("message_supplement", agentxx::test::run_message_supplement_tests);
+            co_await run("summarization", agentxx::test::run_summarization_tests);
             co_await run("checkpoint_store", agentxx::test::run_checkpoint_store_tests);
             co_await run("agent", agentxx::test::run_agent_tests);
             co_await run("memgrowth", agentxx::test::run_memgrowth_tests);
