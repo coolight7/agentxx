@@ -29,6 +29,10 @@ extern int            g_da_sim_completion_tokens;
 extern neograph::json g_da_sim_tool_calls;
 /// 响应前延迟 (毫秒), 用于模拟慢速 LLM 以测试取消; 0 表示不延迟
 extern int g_da_sim_delay_ms;
+/// 累计请求计数 (每次 /chat/completions 请求递增, 含失败请求), 供测试验证调用次数
+extern int g_da_sim_request_count;
+/// 剩余失败次数: >0 时接下来的请求直接返回 HTTP 500 并递减, 用于模拟 LLM API 持续失败
+extern int g_da_sim_fail_count;
 
 /// 模拟器配置选项
 struct DaSimConfig {
@@ -64,6 +68,12 @@ asio::awaitable<TestResult> run_agent_tests();
 
 /// 启动 LLM 模拟器
 DaSimServer startDaSimServer();
+
+/// LLM API 持续失败时重试耗尽的行为测试 (重试停止 + 不重复执行 toolcall)
+asio::awaitable<void> test_agent_llm_retry_exhaust();
+
+/// Toolcall 拦截普通异常继续运行的行为测试 (错误消息化 + agent 继续)
+asio::awaitable<void> test_agent_toolcall_intercept_exception();
 
 } // namespace test
 } // namespace agentxx

@@ -71,7 +71,6 @@ public:
 /// 测试用权限应答 IO: 记录权限询问次数, 默认应答允许 (模拟客户端权限询问)
 class PermissionTestIO : public agentxx::agent::AgentIOBase {
 public:
-
     std::atomic<int> permissionCalls{0};
 
     void sendToPeer(agentxx::agent::WireMessage /*msg*/) override {}
@@ -96,6 +95,35 @@ public:
         }
         co_return neograph::json::array();
     }
+};
+
+/// 模拟 tools 节点 start 阶段抛异常的中间件
+/// (验证 Toolcall 拦截普通异常后, agent 基于错误消息继续运行)
+class ThrowToolcallStartMiddleware
+    : public agentxx::middleware::MiddlewareWrapHandle<
+          agentxx::middleware::BaseMiddlewareState> {
+public:
+
+    using Base = agentxx::middleware::MiddlewareWrapHandle<
+        agentxx::middleware::BaseMiddlewareState>;
+
+    ThrowToolcallStartMiddleware(
+        std::weak_ptr<agentxx::agent::AgentContext> agentContext
+    ) :
+        Base(
+            "ThrowToolcallStart",
+            agentContext,
+            nullptr, // onAgentcallStart
+            nullptr, // onAgentcallEnd
+            nullptr, // onModelcallStart
+            nullptr, // onModelcallRun
+            nullptr, // onModelcallEnd
+            // onToolcallStart: 每次 tools 节点 start 阶段抛出异常
+            [](neograph::graph::NodeInput&) -> asio::awaitable<void> {
+                throw std::runtime_error("simulated toolcall start failure");
+            },
+            nullptr // onToolcallEnd
+        ) {}
 };
 
 /// 最小 Tool 实现: 仅提供名称 (权限路由测试用)
@@ -134,6 +162,10 @@ int            g_da_sim_prompt_tokens     = 100;
 int            g_da_sim_completion_tokens = 50;
 neograph::json g_da_sim_tool_calls        = neograph::json::array();
 int            g_da_sim_delay_ms          = 0;
+/// 累计请求计数 (每次 /chat/completions 请求递增, 含失败请求), 供测试验证调用次数
+int g_da_sim_request_count = 0;
+/// 剩余失败次数: >0 时接下来的请求直接返回 HTTP 500 并递减, 用于模拟 LLM API 持续失败
+int g_da_sim_fail_count = 0;
 
 /// 默认模拟器配置
 static DaSimConfig g_defaultSimConfig;
@@ -193,6 +225,17 @@ DaSimServer startDaSimServer() {
                agentxx::util::HttpServer::Response& resp,
                std::string_view) -> asio::awaitable<void> {
                 namespace http = boost::beast::http;
+
+                g_da_sim_request_count++;
+                if (g_da_sim_fail_count > 0) {
+                    // 模拟 LLM API 持续失败: 直接返回 HTTP 500
+                    g_da_sim_fail_count--;
+                    resp.result(http::status::internal_server_error);
+                    resp.set(http::field::content_type, "application/json");
+                    resp.body() = R"({"error":{"message":"simulated failure"}})";
+                    resp.prepare_payload();
+                    co_return;
+                }
 
                 if (g_da_sim_delay_ms > 0) {
                     // 模拟慢速 LLM: 延迟后再响应, 供取消测试中断在途请求
@@ -888,6 +931,148 @@ asio::awaitable<void> test_agent_reuse_session_bus() {
     co_return;
 }
 
+/// LLM API 持续失败时, ModelCall 重试耗尽后应重抛异常停止本轮执行,
+/// 而不是: 吞掉异常 -> 节点假装成功返回空输出 -> [has_tool_calls] 误路由 ->
+/// 重复执行最后一次 toolcall 并插入重复结果 -> llm<->tools 无限循环 (消息无限堆积)
+asio::awaitable<void> test_agent_llm_retry_exhaust() {
+    auto sim     = startDaSimServer();
+    auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
+
+    auto cfg                 = std::make_shared<agentxx::agent::AgentConfig>();
+    cfg->model.baseUrl       = baseUrl;
+    cfg->model.apiKey        = "EMPTY";
+    cfg->model.modelName     = "test-sim";
+    cfg->prompt.systemPrompt = "You are a helpful assistant.";
+    // 重试 1 次即停止, 缩短测试等待时间 (退避 3 秒)
+    cfg->llmMaxRetry = 1;
+
+    g_da_sim_request_count = 0;
+    g_da_sim_fail_count    = 0;
+
+    agentxx::agent::CodeAgent agent(cfg);
+    co_await agent.init();
+
+    // ---- 第一轮: llm 返回 tool_calls, tools 执行一次 ----
+    g_da_sim_response_content = "";
+    g_da_sim_tool_calls       = neograph::json::array({
+        neograph::json{
+                       {"index", 0},
+                       {"id", "call_retry_1"},
+                       {"type", "function"},
+                       {"function",
+                   neograph::json{
+                       {"name", "agentxx_filesystem_list"},
+                       {"arguments", "{}"},
+             }},
+                       },
+    });
+
+    auto r1 = co_await agent.runConversationTurnAsync("retry_test", "List files", true, nullptr);
+    XX_TEST_EXPECT_FALSE(r1.hasError);
+    // 2 次请求: tool_calls 请求 + tools 执行后回 llm 的收尾请求
+    XX_TEST_EXPECT_EQ(g_da_sim_request_count, 2);
+
+    // ---- 第二轮: llm 持续失败 (重试耗尽后应结束本轮) ----
+    g_da_sim_response_content = "fallback text"; // bug 场景下第 4 次请求会成功返回此文本
+    g_da_sim_tool_calls       = neograph::json::array();
+    // 接下来 2 次请求返回 500: 第 1 次失败 + 1 次重试失败
+    g_da_sim_fail_count = 2;
+
+    auto r2 = co_await agent.runConversationTurnAsync("retry_test", "Continue", false, nullptr);
+
+    // 重试耗尽后停止会话执行 (重抛 -> base_agent 报告错误): 共 4 次请求
+    // (第一轮 2 次 + 本轮 2 次失败), 不再继续请求
+    XX_TEST_EXPECT_EQ(g_da_sim_request_count, 4);
+    // 重试耗尽 -> 会话以错误结束 (停止执行), 而不是无限循环
+    XX_TEST_EXPECT_TRUE(r2.hasError);
+
+    // 末尾消息为 assistant 且包含失败提示
+    auto session = agent.agentContext->sessions->get("retry_test");
+    XX_TEST_EXPECT_TRUE(session != nullptr);
+    auto msgs = session->llmMessages;
+    XX_TEST_EXPECT_TRUE(msgs.is_array());
+    const auto& last = msgs.back();
+    XX_TEST_EXPECT_TRUE(last["role"] == "assistant");
+    XX_TEST_EXPECT_TRUE(last["content"].dump().find("[Exception aborted]") != std::string::npos);
+
+    // toolcall 只执行了一次: 整个上下文中的 tool 结果消息数 == 1
+    int toolResultCount = 0;
+    for (const auto& m : msgs) {
+        if (m["role"] == "tool") {
+            toolResultCount++;
+        }
+    }
+    XX_TEST_EXPECT_EQ(toolResultCount, 1);
+
+    co_return;
+}
+
+/// Toolcall 节点拦截普通异常: 中间件 onToolcallStart 抛异常时,
+/// 插入 [Start/Exception aborted] 错误消息并继续调度 (agent 基于错误继续运行),
+/// 而不是终止会话; 取消/中断 仍重抛由 base_agent 控制流处理
+asio::awaitable<void> test_agent_toolcall_intercept_exception() {
+    auto sim     = startDaSimServer();
+    auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
+
+    auto cfg                 = std::make_shared<agentxx::agent::AgentConfig>();
+    cfg->model.baseUrl       = baseUrl;
+    cfg->model.apiKey        = "EMPTY";
+    cfg->model.modelName     = "test-sim";
+    cfg->prompt.systemPrompt = "You are a helpful assistant.";
+
+    g_da_sim_request_count    = 0;
+    g_da_sim_fail_count       = 0;
+    g_da_sim_response_content = "Final answer after tool error.";
+    g_da_sim_tool_calls       = neograph::json::array({
+        neograph::json{
+                       {"index", 0},
+                       {"id", "call_intercept_1"},
+                       {"type", "function"},
+                       {"function",
+                   neograph::json{
+                       {"name", "agentxx_filesystem_list"},
+                       {"arguments", "{}"},
+             }},
+                       },
+    });
+
+    agentxx::agent::CodeAgent agent(cfg);
+    co_await agent.init();
+
+    // init 后插入抛异常中间件 (不带工具, 无需在 init 前注册)
+    agent.agentContext->middlewareHandleContext->handles.push_back(
+        std::make_shared<ThrowToolcallStartMiddleware>(agent.agentContext)
+    );
+
+    auto result
+        = co_await agent.runConversationTurnAsync("intercept_test", "Run tool", true, nullptr);
+
+    // toolcall 拦截异常 -> agent 继续运行 -> 会话正常结束 (非错误/非中断)
+    XX_TEST_EXPECT_FALSE(result.hasError);
+    XX_TEST_EXPECT_FALSE(result.interrupted);
+    // 2 次请求: tool_calls 请求 + 拦截后回 llm 的收尾请求
+    XX_TEST_EXPECT_EQ(g_da_sim_request_count, 2);
+
+    // 上下文包含 [Start/Exception aborted] 错误消息 + 末尾为最终回答
+    auto session = agent.agentContext->sessions->get("intercept_test");
+    XX_TEST_EXPECT_TRUE(session != nullptr);
+    auto msgs = session->llmMessages;
+    XX_TEST_EXPECT_TRUE(msgs.is_array());
+    bool hasErrorMsg = false;
+    for (const auto& m : msgs) {
+        if (m["role"] == "tool"
+            && m["content"].dump().find("[Start/Exception aborted]") != std::string::npos) {
+            hasErrorMsg = true;
+        }
+    }
+    XX_TEST_EXPECT_TRUE(hasErrorMsg);
+    const auto& last = msgs.back();
+    XX_TEST_EXPECT_TRUE(last["role"] == "assistant");
+    XX_TEST_EXPECT_TRUE(last["content"].dump().find("Final answer") != std::string::npos);
+
+    co_return;
+}
+
 asio::awaitable<TestResult> run_agent_tests() {
     g_da_passed = 0;
     g_da_failed = 0;
@@ -908,6 +1093,8 @@ asio::awaitable<TestResult> run_agent_tests() {
         co_await test_agent_session_activity_toolcall();
         co_await test_agent_multi_session_io();
         co_await test_agent_reuse_session_bus();
+        co_await test_agent_llm_retry_exhaust();
+        co_await test_agent_toolcall_intercept_exception();
     } catch (const std::exception& e) {
         TEST_FAIL << "agent suite exception: " << e.what() << std::endl;
         g_da_failed++;
