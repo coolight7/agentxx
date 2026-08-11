@@ -24,7 +24,6 @@ struct DiffLine {
     int          newLineNo = 0; // 0 表示无 (Delete 行无新行号)
 };
 
-namespace detail {
 /// 按 '\n' 拆分文本为行 (不保留行尾换行符; 末尾空行忽略)
 [[nodiscard]] inline std::vector<std::string> splitDiffLines(std::string_view s) {
     std::vector<std::string> lines;
@@ -40,13 +39,12 @@ namespace detail {
     }
     return lines;
 }
-} // namespace detail
 
 /// 基于 LCS 计算 oldText -> newText 的逐行 diff
 [[nodiscard]] inline std::vector<DiffLine>
     computeLineDiff(std::string_view oldText, std::string_view newText) {
-    auto       oldLines = detail::splitDiffLines(oldText);
-    auto       newLines = detail::splitDiffLines(newText);
+    auto       oldLines = splitDiffLines(oldText);
+    auto       newLines = splitDiffLines(newText);
     const auto n        = oldLines.size();
     const auto m        = newLines.size();
 
@@ -109,8 +107,8 @@ namespace detail {
 /// 生成 git 风格的 unified diff 字符串 (单 hunk 覆盖全部变更)
 [[nodiscard]] inline std::string
     makeUnifiedDiff(std::string_view oldText, std::string_view newText, std::string_view path) {
-    const auto oldCount = detail::splitDiffLines(oldText).size();
-    const auto newCount = detail::splitDiffLines(newText).size();
+    const auto oldCount = splitDiffLines(oldText).size();
+    const auto newCount = splitDiffLines(newText).size();
     auto       diff     = computeLineDiff(oldText, newText);
 
     std::string out;
