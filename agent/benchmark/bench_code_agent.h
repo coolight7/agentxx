@@ -231,11 +231,6 @@ inline LlmSimServer startLlmSimServer() {
     return sim;
 }
 
-// ===========================================================================
-// Benchmark result helpers
-// ===========================================================================
-namespace detail {
-
 inline std::shared_ptr<agentxx::agent::AgentConfig> makeAgentConfig(
     const std::string& baseUrl,
     const std::string& apiKey,
@@ -292,8 +287,6 @@ inline void reportBenchResult(const std::string& name, std::vector<double>& dura
     BenchReporter::instance().addResult(r);
     printResult(r);
 }
-
-} // namespace detail
 
 struct CodeAgentBenchConfig {
     std::string openAIBaseUrl;
@@ -519,7 +512,7 @@ inline void benchCodeAgentSimpleCompletion(const CodeAgentBenchConfig& cfg) {
                   << std::endl;
     }
 
-    auto agentConfig = detail::makeAgentConfig(baseUrl, apiKey, modelName, cfg.systemPrompt);
+    auto                agentConfig = makeAgentConfig(baseUrl, apiKey, modelName, cfg.systemPrompt);
     std::vector<double> durations;
     durations.reserve(cfg.iterations);
 
@@ -549,7 +542,7 @@ inline void benchCodeAgentSimpleCompletion(const CodeAgentBenchConfig& cfg) {
         ioCtx.run();
     }
 
-    detail::reportBenchResult("CodeAgent::runSingleInputAsync [completion]", durations);
+    reportBenchResult("CodeAgent::runSingleInputAsync [completion]", durations);
 }
 
 // -----------------------------------------------------------------------
@@ -573,7 +566,7 @@ inline void benchCodeAgentMultiTurn(const CodeAgentBenchConfig& cfg) {
                   << std::endl;
     }
 
-    auto agentConfig = detail::makeAgentConfig(baseUrl, apiKey, modelName, cfg.systemPrompt);
+    auto agentConfig = makeAgentConfig(baseUrl, apiKey, modelName, cfg.systemPrompt);
 
     constexpr size_t    turnsPerIteration = 3;
     std::vector<double> durations;
@@ -617,7 +610,7 @@ inline void benchCodeAgentMultiTurn(const CodeAgentBenchConfig& cfg) {
         ioCtx.run();
     }
 
-    detail::reportBenchResult(
+    reportBenchResult(
         "CodeAgent::runConversationTurnAsync [multi-turn x" + std::to_string(turnsPerIteration)
             + "]",
         durations
@@ -645,7 +638,7 @@ inline void benchCodeAgentLargeHistory(const CodeAgentBenchConfig& cfg) {
                   << std::endl;
     }
 
-    auto agentConfig = detail::makeAgentConfig(baseUrl, apiKey, modelName, cfg.systemPrompt);
+    auto agentConfig = makeAgentConfig(baseUrl, apiKey, modelName, cfg.systemPrompt);
 
     constexpr size_t    historyMessages = 20; // 10 turns back-and-forth
     std::vector<double> durations;
@@ -698,7 +691,7 @@ inline void benchCodeAgentLargeHistory(const CodeAgentBenchConfig& cfg) {
         ioCtx.run();
     }
 
-    detail::reportBenchResult(
+    reportBenchResult(
         "CodeAgent::runConversationTurnAsync [history=" + std::to_string(historyMessages) + "]",
         durations
     );
@@ -729,12 +722,8 @@ inline void benchCodeAgentInitWarm() {
         std::cout << "  [INFO] Using local LLM simulator (init only)" << std::endl;
     }
 
-    auto agentConfig = detail::makeAgentConfig(
-        config.openAIBaseUrl,
-        config.openAIApiKey,
-        config.openAIModelName,
-        ""
-    );
+    auto agentConfig
+        = makeAgentConfig(config.openAIBaseUrl, config.openAIApiKey, config.openAIModelName, "");
 
     // One cold init to warm up caches
     {
@@ -773,7 +762,7 @@ inline void benchCodeAgentInitWarm() {
         ioCtx.run();
     }
 
-    detail::reportBenchResult("CodeAgent::init [warm re-init]", durations);
+    reportBenchResult("CodeAgent::init [warm re-init]", durations);
 }
 } // namespace bench
 } // namespace agentxx

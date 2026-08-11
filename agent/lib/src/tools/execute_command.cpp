@@ -2,6 +2,7 @@
 
 #include "agentxx/agent/context.h"
 #include "agentxx/util/async_offload.h"
+#include "agentxx/util/log.h"
 #include "agentxx/util/string_util.h"
 #include "agentxx/util/util.h"
 #include "asio/as_tuple.hpp"
@@ -24,7 +25,9 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <unordered_map>
+#include <vector>
 
 #if AGENTXX_ENABLE_BOOST_PROCESS
 #include "boost/process.hpp"
@@ -127,6 +130,42 @@ Command timed out after {} seconds. If this command is expected to take longer a
         strerr
     );
 }
+
+/// 构造 Windows tool 的子进程启动参数: 可执行文件 + argv 列表
+/// - PowerShell 可用 (默认): {exeName, -NoProfile, -NonInteractive, -Command, <包装后的脚本>}
+///   脚本包装为 try/catch, 强制 UTF-8 输出并透传脚本退出码;
+///   整段脚本作为单个 argv 元素直传, 不经 cmd/sh 解析, 根治引号/$ 转义问题
+/// - PowerShell 不可用 (回退): {cmd.exe, /c, command} (cmd 语法, 由提示词引导 LLM)
+/// - 仅 boost.process 直传路径使用 (popen 路径由 LLM 自行拼接完整命令行)
+#if defined(BOOST_PROCESS_V2_PROCESS_HPP)
+struct WinProcLaunch {
+    std::string              exeName;
+    std::vector<std::string> args;
+};
+
+static WinProcLaunch buildWinProcLaunch(std::string_view command) {
+    const auto psInfo = agentxx::util::detectPowerShell();
+    if (psInfo.available) {
+        // -Command 后的多个 argv 元素会被 PowerShell 用空格拼接成一条命令串,
+        // 因此必须作为单个元素传入 (脚本内可含换行, PowerShell 按语句解析)
+        // - try/catch 把脚本错误 (异常) 转为 stdout 文本 + 退出码 1, 避免错误只进 stderr
+        //   且丢失详情; `exit $LASTEXITCODE` 透传脚本/外部程序的退出码
+        // - UTF8 输出编码仅对 Windows PowerShell 5.1 必要 (7+ 默认 UTF-8), 统一设置无害
+        auto wrapped = fmt::format(
+            "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; "
+            "try {{ {} }} catch {{ Write-Output $_.Exception.Message; exit 1 }}; "
+            "exit $LASTEXITCODE",
+            command
+        );
+        return WinProcLaunch{
+            psInfo.exeName,
+            {"-NoProfile", "-NonInteractive", "-Command", std::move(wrapped)},
+        };
+    }
+    XX_LOGD("ExecuteWindowsCommandTool: PowerShell not found, fallback to cmd.exe");
+    return WinProcLaunch{"cmd.exe", {"/c", std::string{command}}};
+}
+#endif // BOOST_PROCESS_V2_PROCESS_HPP
 
 ExecuteLinuxCommandTool::ExecuteLinuxCommandTool(
     std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
@@ -385,10 +424,21 @@ asio::awaitable<std::string>
             }
         }
 
+        auto launch = buildWinProcLaunch(command);
+        auto procExe = boost::process::environment::find_executable(launch.exeName);
+        if (procExe.empty() && launch.exeName != "cmd.exe") {
+            // 探测到 PowerShell 但 PATH 中找不到 (极端环境): 回退 cmd.exe
+            XX_LOGW(
+                "ExecuteWindowsCommandTool: {} not found in PATH, fallback to cmd.exe",
+                launch.exeName
+            );
+            launch = WinProcLaunch{"cmd.exe", {"/c", command}};
+            procExe = boost::process::environment::find_executable(launch.exeName);
+        }
         auto proc = boost::process::process{
             ctx,
-            boost::process::environment::find_executable("cmd.exe"),
-            {"/c", command},
+            procExe,
+            launch.args,
             boost::process::process_environment(procEnv),
             // stdin 重定向到 null 设备, 避免子进程抢读 agent 进程的终端输入
             boost::process::process_stdio{.in = nullptr, .out = outpip, .err = errpip}
