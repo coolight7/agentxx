@@ -145,16 +145,14 @@ std::pair<Element, std::vector<std::unique_ptr<markdown::DomBuilder>>> renderMar
 /// 宽字符 (CJK/emoji 等) 按 2 列计, 与 markdown::utf8_display_width 一致,
 /// 修复旧实现按 UTF-8 码点计宽 (宽字符算 1 列) 导致 CJK 文本高度低估、
 /// 滚动定位抖动的问题。线性扫描, 不整串调用 utf8_display_width (避免 O(n²))。
-size_t estimateLines(std::string_view s, size_t width) {
-    if (width <= 0) {
-        width = 80;
-    }
+size_t estimateLines(std::string_view s, int width) {
     if (s.empty()) {
         return 1;
     }
-    size_t lines = 1;
-    size_t col   = 0;
-    size_t i     = 0;
+    size_t useWidth = (width <= 0) ? 80 : static_cast<size_t>(width);
+    size_t lines    = 1;
+    size_t col      = 0;
+    size_t i        = 0;
     while (i < s.size()) {
         if (s[i] == '\n') {
             ++lines;
@@ -165,9 +163,10 @@ size_t estimateLines(std::string_view s, size_t width) {
         size_t len  = markdown::utf8_byte_length(s[i]);
         len         = std::min(len, s.size() - i);
         const int w = markdown::codepoint_width(markdown::utf8_codepoint(s.data() + i, len));
-        if (w > 0) { // 组合字符/零宽字符不占列, 不触发折行
+        if (w > 0) {
+            // 组合字符/零宽字符不占列, 不触发折行
             col += w;
-            if (col >= width) {
+            if (col >= useWidth) {
                 ++lines;
                 col = 0;
             }
@@ -192,7 +191,7 @@ MessageListComponent::MessageListComponent(TUICtx& ctx) :
         [this](size_t index) {
             return itemKey(index);
         },
-        [this](size_t index, size_t width) {
+        [this](size_t index, int width) {
             return estimateHeight(index, width);
         },
         [this](size_t index) {
@@ -410,7 +409,7 @@ uint64_t MessageListComponent::itemKey(size_t index) {
     return h;
 }
 
-size_t MessageListComponent::estimateHeight(size_t index, size_t width) {
+size_t MessageListComponent::estimateHeight(size_t index, int width) {
     const auto& st = *ctx_.frameState;
     if (st.messages.empty() && !hasStreamingToken(st)) {
         return 1; // banner 为 fillViewport, 高度由 LazyScrollable 置为视口高度

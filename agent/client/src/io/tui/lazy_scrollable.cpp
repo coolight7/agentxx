@@ -306,7 +306,7 @@ void LazyScrollable::prepareLayout(const ftxui::Box& box) {
     if (stickToBottom_) {
         scrollOffset_ = maxOffset;
     }
-    scrollOffset_          = std::clamp(scrollOffset_, 0, maxOffset);
+    scrollOffset_    = std::clamp(scrollOffset_, 0, maxOffset);
     int scrollOffset = scrollOffset_;
 
     // === 阶段 1: 构建并测量可见子项 (视口局部, 按估算高度定位) ===
@@ -350,7 +350,7 @@ void LazyScrollable::prepareLayout(const ftxui::Box& box) {
         for (size_t i = 0; i < count; ++i) {
             t += std::max(1, heights_[i]);
         }
-        totalHeight_ = t;
+        totalHeight_           = t;
         const int newMaxOffset = std::max(0, t - vh);
         if (stickToBottom_) {
             scrollOffset_ = newMaxOffset;
@@ -375,13 +375,13 @@ void LazyScrollable::prepareLayout(const ftxui::Box& box) {
         }
 
         ensureElement(i);
-        int  itemH = h;
+        int itemH = h;
         bool fresh = false; // 本阶段刚完成测量 (同宽度布局已收敛, 仅 SetBox 即可)
         if (!measured_[i]) {
             // 阶段 1 未覆盖 (估算偏差改变可见区间): 补测
             const Box measureBox{0, contentWidth - 1, 0, kTallHeight};
-            itemH       = std::max(1, layoutAndMeasure(elementAt(i), measureBox));
-            heights_[i] = itemH;
+            itemH        = std::max(1, layoutAndMeasure(elementAt(i), measureBox));
+            heights_[i]  = itemH;
             measured_[i] = true;
             fresh        = true;
             cum          = top + itemH;
