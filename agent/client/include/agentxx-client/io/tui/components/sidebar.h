@@ -1,6 +1,5 @@
 #pragma once
 
-#include "agentxx-client/io/tui/framework/dirty_component.h"
 #include "agentxx-client/io/tui/framework/tui_context.h"
 #include "agentxx-client/io/tui/scrollable.h"
 #include "ftxui/component/component_base.hpp"
@@ -39,6 +38,20 @@ public:
 
     bool empty() const {
         return tabs_.empty();
+    }
+
+    /// 当前激活 tab 的 id (无 tab 时返回空 string_view)
+    std::string_view activeTabId() const {
+        if (activeTab_ >= 0 && activeTab_ < static_cast<int>(tabs_.size())) {
+            return tabs_[activeTab_].id;
+        }
+        return {};
+    }
+
+    /// 指定 tab 是否为当前激活 tab (供外部判断其渲染是否对可见 UI 有影响,
+    /// 如日志窗口未激活时日志更新无需触发重绘)
+    bool isTabActive(std::string_view id) const {
+        return activeTabId() == id;
     }
 
     /// 侧边栏宽度 (供外部布局使用)

@@ -264,11 +264,11 @@ void TUIClientAgentIO::start() {
                 } else {
                     auto toastEl = hbox({
                         filler(),
-                        text(toastText_) | bgcolor(theme_.errorColor) | color(Color::White) | bold
-                            | border,
+                        text(toastText_) | bgcolor(theme_.blockColor) | color(theme_.accentColor)
+                            | bold | border,
                         filler(),
                     });
-                    body = dbox({
+                    body         = dbox({
                         body,
                         vbox({
                             text(" "),
@@ -406,7 +406,8 @@ void TUIClientAgentIO::start() {
                 // 仅当 Logs tab 存在且为当前激活 tab 时才触发重绘 —— agent 运行时
                 // 日志量很大, 若 tab 未打开, 日志变化不影响任何可见 UI, 每批日志
                 // 都触发整帧渲染 (布局 + 全屏 ToString + stdout 写) 是纯浪费
-                if (logSink_ && logSink_->pump() > 0 && sidebar_ && sidebar_->isTabActive(kLogTabId)) {
+                if (logSink_ && logSink_->pump() > 0 && sidebar_
+                    && sidebar_->isTabActive(kLogTabId)) {
                     screen->Post(Event::Custom);
                 }
                 loop.RunOnceBlocking();
@@ -475,6 +476,11 @@ void TUIClientAgentIO::stop() {
         uiThread_.join();
     }
     stopSystemMonitor();
+    // 取消 toast 超时定时器: 避免退出后残留挂起等待触发 use-after-free
+    // (回调捕获 this; cancel 后回调以 operation_aborted 返回, 不访问 this)
+    if (toastTimer_) {
+        toastTimer_->cancel();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -551,11 +557,6 @@ void TUIClientAgentIO::stopSystemMonitor() {
     // 依赖 timer cancel + 运行标志结束; 残留定时器会阻塞 client io_context 的 run())
     if (sysMonitorTimer_) {
         sysMonitorTimer_->cancel();
-    }
-    // 取消 toast 超时定时器: 避免退出后残留挂起等待触发 use-after-free
-    // (回调捕获 this; cancel 后回调以 operation_aborted 返回, 不访问 this)
-    if (toastTimer_) {
-        toastTimer_->cancel();
     }
 }
 
@@ -843,9 +844,9 @@ void TUIClientAgentIO::onPeerMessage(agentxx::agent::WireMessage msg) {
                 // 会话选择弹窗数据源: 回填持久化会话列表 (服务端已按最近活动降序)
                 {
                     std::lock_guard<std::mutex> lock(sharedState_.mutex());
-                    auto&                       st               = sharedState_.mutableState();
-                    st.sessionList                               = m.sessions;
-                    st.sessionListLoaded                         = true;
+                    auto&                       st = sharedState_.mutableState();
+                    st.sessionList                 = m.sessions;
+                    st.sessionListLoaded           = true;
                 }
                 postRedraw();
             }

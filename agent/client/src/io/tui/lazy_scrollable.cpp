@@ -102,6 +102,18 @@ void LazyScrollable::clearCache() {
     for (auto&& f : hasCache_) {
         f = false;
     }
+    // 缓存清空后本帧重建的 Element 是新对象 (无上帧布局状态), 必须重新布局:
+    // 阶段 2 的"缓存命中且 box 相同则跳过布局"优化以元素对象未变为前提,
+    // 若沿用旧 lastBoxes_ 判断, 主题切换后新构建的元素会被误判为
+    // "box 与上帧一致"而跳过 SetBox —— 元素从未布局 (box_ 未初始化),
+    // 渲染位置错误/内容丢失, 且此后每帧都跳过 (scrollOffset 不变则 box 恒同),
+    // 列表持续消失直到内容变化 (发送消息) 才恢复。
+    // 清空 lastBoxes_ 使下一帧所有可见子项 sameBox=false, 强制重新布局。
+    // (宽度变化路径同样调用 clearCache, 但其 heights_/measured_ 已全失效,
+    //  全部走 fresh 分支布局, 不依赖 lastBoxes_, 无副作用)
+    for (auto& b : lastBoxes_) {
+        b = ftxui::Box{0, -1, 0, -1};
+    }
 }
 
 ftxui::Element LazyScrollable::OnRender() {
@@ -187,6 +199,17 @@ void LazyScrollable::ensureElement(size_t index) {
     itemCache_[index] = lruList_.begin();
     if (index < hasCache_.size()) {
         hasCache_[index] = true;
+    }
+    // 新构建的元素没有上帧布局状态: 清空其 lastBoxes_, 使阶段 2 的
+    // "缓存命中且 box 相同则跳过布局" 判定失效, 强制重新布局 (SetBox)。
+    // 否则: key 变化 (单条替换 / onSync 整体重建) 但内容与高度不变的项,
+    // 阶段 1 重建了新元素后, 阶段 2 用旧 lastBoxes_ 误判 sameBox=true 跳过
+    // 布局 —— 新元素从未 SetBox (box_ = {0,0,0,0}), Text 只画首字符到 (0,0),
+    // 表现为消息少开头/整行不显示 (用户报告症状)。
+    // 注意: 缓存命中路径 (本函数开头 return) 不清 lastBoxes_, sameBox 判定
+    // 正常生效 —— 内容未变 + box 未变时跳过布局是安全的。
+    if (index < lastBoxes_.size()) {
+        lastBoxes_[index] = ftxui::Box{0, -1, 0, -1};
     }
     if (lruList_.front().bytesCounted) {
         cachedBytes_ += lruList_.front().sourceBytes;
@@ -274,6 +297,7 @@ void LazyScrollable::prepareLayout(const ftxui::Box& box) {
     keys_.resize(count, 0);
     hasCache_.resize(count, false);
     itemCache_.resize(count);
+    lastBoxes_.resize(count);
 
     // key 变化 -> 内容变化: 使该子项缓存失效并重算估算高度。
     // key 未变的子项零成本 (不读内容、不重建)
@@ -392,8 +416,16 @@ void LazyScrollable::prepareLayout(const ftxui::Box& box) {
             // 测量时同宽度布局已收敛, 仅 SetBox 重定位
             elementAt(i)->SetBox(itemBox);
         } else {
-            layoutAndMeasure(elementAt(i), itemBox);
+            // 跳过布局优化: 缓存命中 (key 未变 -> 内容未变) 且 box 与上帧一致时,
+            // 子项内部布局状态与上帧完全相同, 无需重跑 ComputeRequirement/SetBox
+            // 迭代; 其 reflect 命中框 (点击检测读取) 也保持上帧值 (box 相同)
+            const bool cached  = i < hasCache_.size() && hasCache_[i];
+            const bool sameBox = lastBoxes_[i] == itemBox;
+            if (!(cached && sameBox)) {
+                layoutAndMeasure(elementAt(i), itemBox);
+            }
         }
+        lastBoxes_[i] = itemBox;
         visibleIndices_.push_back(i);
         visibleBoxes_[i] = Box::Intersection(itemBox, box);
     }
