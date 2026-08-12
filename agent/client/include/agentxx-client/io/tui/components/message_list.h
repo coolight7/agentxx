@@ -193,7 +193,7 @@ private:
     // ---- LazyScrollable 回调 ----
     size_t        itemCount();
     uint64_t      itemKey(size_t index);
-    size_t        estimateHeight(size_t index, size_t width);
+    size_t        estimateHeight(size_t index, int width);
     LazyBuiltItem buildItem(size_t index);
     bool          fillViewport(size_t index);
 

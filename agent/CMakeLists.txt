@@ -688,18 +688,6 @@ if (AGENTXX_ENABLE_HYPERSCAN)
       -DBUILD_SHARED_LIBS=OFF
       -DBUILD_STATIC_LIBS=ON
       "-DCMAKE_POLICY_VERSION_MINIMUM:STRING=3.15"
-      # hyperscan 是 C++11 老项目：主项目统一传给子构建的 CMAKE_CXX_FLAGS_* 中
-      # 追加的 -std=c++26 会覆盖其自身的 -std=c++11 (GCC 最后一个 -std= 生效)，
-      # 导致 C++14 的 std::make_unique 与 boost::make_unique 重载歧义等编译错误；
-      # 且其 debug 构建自身启用 -Werror，新编译器下 sign-compare 等警告会升级为
-      # 错误。这里在统一 flags 末尾追加 -std=c++11 恢复 C++11 编译，并追加
-      # -Wno-error=sign-compare 压住 -Werror (该选项需出现在 -Werror 之后)，
-      # C/C++ 的 flags 均需处理 (C 文件中 sign-compare 警告也会被 -Werror 升级)。
-      "-DCMAKE_C_FLAGS_DEBUG:STRING=${CMAKE_C_FLAGS_DEBUG} -Wno-error=sign-compare"
-      "-DCMAKE_CXX_FLAGS_DEBUG:STRING=${CMAKE_CXX_FLAGS_DEBUG} -std=c++11 -Wno-error=sign-compare"
-      "-DCMAKE_CXX_FLAGS_RELEASE:STRING=${CMAKE_CXX_FLAGS_RELEASE} -std=c++11"
-      "-DCMAKE_CXX_FLAGS_RELWITHDEBINFO:STRING=${CMAKE_CXX_FLAGS_RELWITHDEBINFO} -std=c++11"
-      "-DCMAKE_CXX_FLAGS_MINSIZEREL:STRING=${CMAKE_CXX_FLAGS_MINSIZEREL} -std=c++11"
     CMAKE_CACHE_ARGS
       ${_AGENTXX_COMMON_CMAKE_CACHE_ARGS}
       "-DBOOST_ROOT:PATH=${BOOST_ROOT}"
