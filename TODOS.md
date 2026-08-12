@@ -16,5 +16,6 @@
 - 建议当需要通读一个大项目时，可以先由 subagent 总结出大致的 wiki，然后分析划分模块化，再分享 wiki 给多个 subagent 各自负责模块解决问题
 - 使用 agentxx_filesystem_grep/agentxx_filesystem_glob 时尽量缩小扫描范围，避开 .gitignore 内定义的目录、third_party、build、node_modules 等文件夹
 - 软件使用文档说明 skill
+- exec_command 可以通过在多条命令中穿插 echo === xxx === 隔开输出
 
 ## 问题

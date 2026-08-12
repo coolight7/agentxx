@@ -4,7 +4,7 @@
 	branch = 12.1.0
 [submodule "agent/third_party/simdjson"]
 	path = agent/third_party/simdjson
-	url = https://github.com/simdjson/simdjson/
+	url = https://github.com/simdjson/simdjson
 	branch = v4.6.4
 [submodule "agent/third_party/neograph"]
 	path = agent/third_party/neograph
@@ -15,9 +15,6 @@
 [submodule "agent/third_party/glob"]
 	path = agent/third_party/glob
 	url = https://github.com/coolight7/glob
-[submodule "agent/third_party/vectorscan"]
-	path = agent/third_party/vectorscan
-	url = https://github.com/VectorCamp/vectorscan
 [submodule "agent/third_party/uchardet"]
 	path = agent/third_party/uchardet
 	url = https://github.com/coolight7/uchardet
@@ -34,7 +31,7 @@
 	url = https://github.com/coolight7/codegraph-cpp
 [submodule "agent/third_party/sqlite3-cmake"]
 	path = agent/third_party/sqlite3-cmake
-	url = https://github.com/coolight7/sqlite3-cmake/
+	url = https://github.com/coolight7/sqlite3-cmake
 [submodule "agent/third_party/libiconv-native"]
 	path = agent/third_party/libiconv-native
 	url = https://github.com/coolight7/libiconv-native
@@ -43,7 +40,7 @@
 	url = https://github.com/curl/curl
 [submodule "agent/third_party/hyperscan"]
 	path = agent/third_party/hyperscan
-	url = https://github.com/coolight7/hyperscan/
+	url = https://github.com/coolight7/hyperscan
 [submodule "agent/third_party/zlib-ng"]
 	path = agent/third_party/zlib-ng
 	url = https://github.com/zlib-ng/zlib-ng
@@ -57,5 +54,4 @@
 	url = https://github.com/coolight7/MarkdownFTXUI
 [submodule "agent/third_party/cmark_gfm"]
 	path = agent/third_party/cmark_gfm
-	url = https://github.com/github/cmark-gfm
-	branch = 499789b49373bfa045d0e7547e5ee63444c77bca
+	url = https://github.com/coolight7/cmark-gfm

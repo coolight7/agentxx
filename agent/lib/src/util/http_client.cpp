@@ -184,7 +184,7 @@ asio::awaitable<asio::ip::tcp::resolver::results_type> waitDnsResolve(
             );
         }
         // 短间隔轮询: 超时上限内的误差可忽略; 同时每次 co_await 都是取消检查点
-        pollTimer.expires_after(std::chrono::milliseconds(10));
+        pollTimer.expires_after(std::chrono::milliseconds(100));
         co_await pollTimer.async_wait(asio::use_awaitable);
     }
     if (state->ec) {

@@ -11,7 +11,6 @@
                 "${workspaceFolder}/agent/third_party/yaml-cpp/include/",
                 "${workspaceFolder}/agent/third_party/html2md/include/",
                 "${workspaceFolder}/agent/third_party/liburing/src/include/",
-                "${workspaceFolder}/agent/third_party/vectorscan/src/",
                 "${workspaceFolder}/agent/third_party/glob/single_include/",
                 "${workspaceFolder}/agent/third_party/OpenSSL-linux-build/include/",
                 "${workspaceFolder}/agent/third_party/boost-linux-build-debug/include/boost/",
@@ -31,8 +30,6 @@
                 "ASIO_HAS_FILE",
                 "BOOST_ASIO_HAS_IO_URING",
                 "BOOST_ASIO_HAS_FILE",
-                "NEOGRAPH_USE_BOOST_ASIO",
-                "AGENTXX_ENABLE_VECTORSCAN",
                 "AGENTXX_ENABLE_HYPERSCAN=0",
                 "AGENTXX_ENABLE_CODEGRAPH",
                 "AGENTXX_ENABLE_BOOST_PROCESS"
@@ -52,7 +49,6 @@
                 "${workspaceFolder}/agent/third_party/fmt/include/",
                 "${workspaceFolder}/agent/third_party/yaml-cpp/include/",
                 "${workspaceFolder}/agent/third_party/html2md/include/",
-                "${workspaceFolder}/agent/third_party/vectorscan/src/",
                 "${workspaceFolder}/agent/third_party/glob/single_include/",
                 "${workspaceFolder}/agent/third_party/OpenSSL-windows-build/include/",
                 "${workspaceFolder}/agent/third_party/boost-windows-build-debug/include/boost/",
@@ -76,7 +72,6 @@
                 "BOOST_ASIO_HAS_WINDOWS_RANDOM_ACCESS_HANDLE",
                 "BOOST_ASIO_HAS_FILE",
                 "NEOGRAPH_USE_BOOST_ASIO",
-                "AGENTXX_ENABLE_VECTORSCAN=0",
                 "AGENTXX_ENABLE_HYPERSCAN",
                 "AGENTXX_ENABLE_CODEGRAPH",
                 "AGENTXX_ENABLE_BOOST_PROCESS"
@@ -96,7 +91,6 @@
                 "${workspaceFolder}/agent/third_party/fmt/include/",
                 "${workspaceFolder}/agent/third_party/yaml-cpp/include/",
                 "${workspaceFolder}/agent/third_party/html2md/include/",
-                "${workspaceFolder}/agent/third_party/vectorscan/src/",
                 "${workspaceFolder}/agent/third_party/glob/single_include/",
                 "${workspaceFolder}/agent/third_party/OpenSSL-android-build/include/",
                 "${workspaceFolder}/agent/third_party/boost-android-build-debug/include/boost/",
@@ -120,7 +114,6 @@
                 "BOOST_ASIO_HAS_IO_URING",
                 "BOOST_ASIO_HAS_FILE",
                 "NEOGRAPH_USE_BOOST_ASIO",
-                "AGENTXX_ENABLE_VECTORSCAN=0",
                 "AGENTXX_ENABLE_HYPERSCAN=0",
                 "AGENTXX_ENABLE_CODEGRAPH=0",
                 "AGENTXX_ENABLE_BOOST_PROCESS=0"

@@ -985,7 +985,7 @@ agent/
 │   │       ├── exception.h       # 异常处理工具
 │   │       ├── lru_cache.h       # LRU 缓存
 │   │       ├── diff_util.h       # 行级 diff (unified diff 格式)
-│   │       ├── regex.h           # 正则引擎 (hyperscan/vectorscan)
+│   │       ├── regex.h           # 正则引擎 (hyperscan)
 │   │       ├── aho_corasick.h    # Aho-Corasick 多模式匹配
 │   │       ├── router.h          # HTTP 路由器
 │   │       ├── sqlite.h          # SQLite 轻量 RAII 封装 (SqliteDb/Stmt, WAL+busy_timeout)
@@ -1101,7 +1101,6 @@ agent/
 │   ├── simdjson/                 # JSON 解析
 │   ├── sqlite3/                  # 数据库
 │   ├── uchardet/                 # 编码检测
-│   ├── vectorscan/               # 正则引擎 (hyperscan 替代)
 │   ├── yaml-cpp/                 # YAML 解析
 │   └── zlib/                     # 压缩
 │

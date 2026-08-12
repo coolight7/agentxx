@@ -3,7 +3,7 @@
 #include "agentxx/util/log.h"
 #include <algorithm>
 
-#if AGENTXX_ENABLE_VECTORSCAN || AGENTXX_ENABLE_HYPERSCAN
+#if AGENTXX_ENABLE_HYPERSCAN
 #include <hs_compile.h>
 #include <hs_runtime.h>
 

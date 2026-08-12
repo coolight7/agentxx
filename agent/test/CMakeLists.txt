@@ -124,7 +124,7 @@ target_link_libraries(agentxx_test PRIVATE
   yyjson
 	agentxx_static
 )
-if (AGENTXX_ENABLE_HYPERSCAN OR AGENTXX_ENABLE_VECTORSCAN)
+if (AGENTXX_ENABLE_HYPERSCAN)
   pkg_check_modules(hyperscan REQUIRED IMPORTED_TARGET libhs)
   target_link_libraries(agentxx_test PRIVATE 
     PkgConfig::hyperscan
