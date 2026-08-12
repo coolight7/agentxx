@@ -124,7 +124,11 @@ asio::awaitable<bool> WsAgentIOTransport::connect(const WireHello& hello) {
         [&](std::string errmsg) -> asio::awaitable<bool> {
             // 超时或 channel 关闭，确保资源清理
             XX_LOGW("[ws_transport] auth handshake timeout or disconnected: {}", errmsg);
-            stopLoops(); // 确保所有循环和资源被正确关闭
+            // 握手失败视为连接终止: close() 置 stopped_ 并关闭队列/取消定时器/abort ws,
+            // 使已启动的 readLoop 退出且不进入自动重连循环 —— 否则调用方在 connect()
+            // 返回 false 后已放弃连接, readLoop 仍会每 reconnectBackoff 无限重连
+            // (maxReconnectAttempts=0 表示无限), 泄漏协程与持续的连接尝试
+            close();
             connected_.store(false, std::memory_order_release); // 明确设置连接状态
             co_return false;
         }

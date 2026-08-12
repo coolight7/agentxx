@@ -24,11 +24,16 @@ std::shared_ptr<AgentIOTransportBase> AgentIOBase::transport() const noexcept {
 }
 
 asio::awaitable<void> AgentIOBase::runTransportLoop() {
-    if (!transport_) {
+    // 捕获局部 transport 引用: 服务端同一 threadId 的新连接替换旧连接
+    // (AgentServer::serveTransport 中 setTransport) 时, 本协程应继续消费旧
+    // transport 直至其关闭自然退出, 而不是跟随成员 transport_ 切换到新
+    // transport 上发起第二个接收循环 (消息被两个循环瓜分 / 协程泄漏)
+    auto transport = transport_;
+    if (!transport) {
         co_return;
     }
-    while (transport_->alive()) {
-        auto msg = co_await transport_->recv();
+    while (transport->alive()) {
+        auto msg = co_await transport->recv();
         if (!msg.has_value()) {
             break;
         }
