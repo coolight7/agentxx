@@ -59,6 +59,12 @@ struct TUIRenderState {
     std::shared_ptr<std::string>             currentToken;
     TUIMessage::Role                         currentTokenRole = TUIMessage::Role::Assistant;
     bool                                     isStreaming      = false;
+    /// 流式代次 (client 线程在**新建** currentToken 时递增; COW 复制不递增):
+    /// - 语义 = 流身份: 同一流内 currentToken 只会被原地 append (或 COW 复制,
+    ///   内容仍是同一流的延续), epoch 不变
+    /// - UI 线程 (MessageListComponent::syncStream) 据此 O(1) 判断"新流/延续流",
+    ///   替代每帧对整段累积文本做前缀比较 (O(n²) -> O(n))
+    uint64_t currentTokenEpoch = 0;
 
     int64_t pendingTokenDurationMs  = 0;
     int64_t pendingTokenStartTimeMs = 0;
