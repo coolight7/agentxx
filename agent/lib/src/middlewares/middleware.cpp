@@ -159,7 +159,7 @@ std::optional<InterruptHandleArg> InterruptHandleArg::fromJson(const neograph::j
             result.name = data["name"].get<std::string>();
         }
         result.arg      = data["arg"];
-        result.resultId = data["resultId"].get<std::string>();
+        result.resultId = data.value("resultId", std::string{});
         if (data["inputs"].is_array()) {
             for (const auto& input : data["inputs"]) {
                 result.inputs.push_back(InterruptHandleInputItem::fromJson(input));

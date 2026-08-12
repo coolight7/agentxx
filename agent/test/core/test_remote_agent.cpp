@@ -941,6 +941,88 @@ static asio::awaitable<void> test_channel_transport_loopback() {
 }
 
 // ---------------------------------------------------------------------------
+// 9b. runTransportLoop 绑定局部 transport (连接替换安全):
+// 服务端同一 threadId 新连接替换旧连接 (AgentServer::serveTransport 中
+// setTransport + close 旧 transport) 时, 旧接收循环应随旧 transport 关闭而退出,
+// 而不是跟随成员 transport_ 切换到新 transport 上继续 recv (消息被两个循环
+// 瓜分 / 旧协程泄漏 / onDisconnect 重复触发)
+// ---------------------------------------------------------------------------
+
+static asio::awaitable<void> test_run_transport_loop_replace_transport() {
+    auto ex = co_await asio::this_coro::executor;
+
+    // 第一次连接的传输对 (controller 端 tA / 对端 tAPeer)
+    auto [tA, tAPeer] = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+    // 替换后的新传输对 (controller 端 tB / 对端 tBPeer)
+    auto [tB, tBPeer] = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+
+    auto io = std::make_shared<TestIO>();
+    io->setTransport(std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(tA)));
+
+    // 旧接收循环 (对应旧连接的 serveTransport 协程), 完成时置 oldLoopExited
+    std::atomic<bool> oldLoopExited{false};
+    asio::co_spawn(
+        ex,
+        io->runTransportLoop(),
+        [&oldLoopExited](std::exception_ptr) {
+            oldLoopExited.store(true, std::memory_order_release);
+        }
+    );
+
+    // 旧连接上收一条 Delta (确认循环工作)
+    agentxx::agent::Delta da;
+    da.type = agentxx::agent::Delta::Type::TextToken;
+    da.text = "a";
+    tAPeer->send(agentxx::agent::WireMessage{da});
+    co_await testSleep(ex, std::chrono::milliseconds{50});
+    XX_TEST_EXPECT_EQ(io->deltaCount(), size_t{1});
+    XX_TEST_EXPECT_TRUE(io->deltaText(0) == "a");
+    XX_TEST_EXPECT_FALSE(oldLoopExited.load()); // 循环仍在运行
+
+    // 模拟连接替换: 换用新 transport, 关闭旧 transport。
+    // 注意 tB 是 unique_ptr, move 进 shared_ptr 后原指针为空, 后续 close 须
+    // 使用保存的 shared_ptr 副本 (tBShared)
+    auto tBShared = std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(tB));
+    io->setTransport(tBShared);
+    tAPeer->close(); // 旧 transport 关闭 → 旧接收循环应退出
+
+    co_await testSleep(ex, std::chrono::milliseconds{100});
+    // 修复验证点: 旧循环随旧 transport 关闭而退出
+    // (修复前绑定成员 transport_: 旧循环会切到新 transport 继续 recv, 此处为 false)
+    XX_TEST_EXPECT_TRUE(oldLoopExited.load(std::memory_order_acquire));
+
+    // 新接收循环 (模拟新连接的 serveTransport 发起): 绑定当前成员 transport_ (tB)
+    std::atomic<bool> newLoopExited{false};
+    asio::co_spawn(
+        ex,
+        io->runTransportLoop(),
+        [&newLoopExited](std::exception_ptr) {
+            newLoopExited.store(true, std::memory_order_release);
+        }
+    );
+
+    // 新连接上收发消息正常 (无两个循环瓜分)
+    agentxx::agent::Delta db;
+    db.type = agentxx::agent::Delta::Type::TextToken;
+    db.text = "b";
+    tBPeer->send(agentxx::agent::WireMessage{db});
+    co_await testSleep(ex, std::chrono::milliseconds{50});
+    XX_TEST_EXPECT_EQ(io->deltaCount(), size_t{2});
+    XX_TEST_EXPECT_TRUE(io->deltaText(1) == "b");
+
+    // 关闭新 transport, 等待新循环退出: 本测试持有的 io (shared_ptr) 是
+    // runTransportLoop 协程的 this, 若协程未退出就返回, io/transport 析构后
+    // 挂起的 recv 会访问已析构对象 (use-after-free)
+    tBShared->close();
+    tBPeer->close();
+    for (int i = 0; i < 20 && !newLoopExited.load(std::memory_order_acquire); ++i) {
+        co_await testSleep(ex, std::chrono::milliseconds{20});
+    }
+    XX_TEST_EXPECT_TRUE(newLoopExited.load(std::memory_order_acquire));
+    co_return;
+}
+
+// ---------------------------------------------------------------------------
 // 10. 客户端接收上下文统计 (context_stats)
 // ---------------------------------------------------------------------------
 
@@ -1685,6 +1767,9 @@ asio::awaitable<TestResult> run_remote_agent_tests() {
 
     std::cout << "  [remote] channel transport loopback..." << std::endl;
     co_await test_channel_transport_loopback();
+
+    std::cout << "  [remote] run transport loop replace transport..." << std::endl;
+    co_await test_run_transport_loop_replace_transport();
 
     std::cout << "  [remote] client context stats..." << std::endl;
     co_await test_remote_client_context_stats();
