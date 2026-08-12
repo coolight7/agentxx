@@ -35,9 +35,6 @@ struct TUICtx {
     /// 渲染线程与资源监控线程均可读取
     std::atomic<bool>* showSystemInfo = nullptr;
 
-    /// 当前会话 (供状态栏等读取 contextStats)
-    std::shared_ptr<agentxx::agent::Session> session;
-
     /// 本 TUI 绑定的会话 thread_id
     std::string threadId;
 

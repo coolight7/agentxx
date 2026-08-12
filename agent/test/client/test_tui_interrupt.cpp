@@ -53,7 +53,6 @@ struct InterruptFixture {
         };
         ctx.theme          = &theme;
         ctx.showSystemInfo = nullptr;
-        ctx.session        = nullptr;
         ctx.threadId       = "session";
         ctx.remoteUrl      = "";
         comp               = std::make_shared<MessageListComponent>(ctx);
@@ -599,11 +598,9 @@ void test_expired_rendered() {
 // ---------------------------------------------------------------------------
 
 asio::awaitable<void> test_permission_pass_mode_auto_allow() {
-    asio::io_context                          io;
-    auto                                      agentCtx = std::make_shared<agentxx::agent::AgentContext>();
-    auto tui = std::make_shared<TUIClientAgentIO>(
+    asio::io_context io;
+    auto             tui = std::make_shared<TUIClientAgentIO>(
         io.get_executor(),
-        agentCtx,
         "session",
         TUITheme::darkTheme(),
         agentxx::agent::PermissionMode::Pass
@@ -664,11 +661,9 @@ void test_permission_pass_mode() {
 // ---------------------------------------------------------------------------
 
 asio::awaitable<void> test_permission_deny_mode_auto_reject() {
-    asio::io_context                          io;
-    auto                                      agentCtx = std::make_shared<agentxx::agent::AgentContext>();
-    auto tui = std::make_shared<TUIClientAgentIO>(
+    asio::io_context io;
+    auto             tui = std::make_shared<TUIClientAgentIO>(
         io.get_executor(),
-        agentCtx,
         "session",
         TUITheme::darkTheme(),
         agentxx::agent::PermissionMode::Deny

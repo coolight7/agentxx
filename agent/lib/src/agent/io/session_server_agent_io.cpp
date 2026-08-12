@@ -418,12 +418,17 @@ asio::awaitable<void> SessionServerAgentIO::run() {
             auto vm   = ViewMessage::makeText(ViewMessage::Role::System, text);
             vm.system->tipLevel = ViewMessage::TipLevel::Error;
             const auto id = sess->appendHistory(std::move(vm));
-            sendToPeer(Delta{
+            // 新产出的 Delta 必须分配会话级 seq (统一经 Session::nextDeltaSeq):
+            // 重放缓冲依赖 seq 单调性, 未分配 seq (=0) 的 Delta 不会入缓冲,
+            // 断线重连增量重放时该消息会丢失, 导致客户端历史与服务端不一致
+            auto d = Delta{
                 .type    = Delta::Type::SystemMessage,
                 .text    = std::move(text),
                 .msgId   = id,
                 .tipType = Delta::TipType::Error,
-            });
+            };
+            d.seq = sess->nextDeltaSeq();
+            sendToPeer(std::move(d));
         };
         co_await agentxx::util::catchErrorAsync<bool>(
             [&]() -> asio::awaitable<bool> {

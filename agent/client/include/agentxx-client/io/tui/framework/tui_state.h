@@ -93,6 +93,13 @@ struct TUIRenderState {
 
     std::vector<agentxx::agent::AppendComponentNotification> appendComponents;
 
+    /// 上下文统计 (WireContextStats 响应填充; 状态栏显示用)
+    /// - TUI 不持有 agent-server 的 Session, 统计经 Wire 消息获取后存于此
+    /// - 0/0 表示尚未收到服务端推送
+    size_t contextTokens    = 0;
+    size_t maxContextTokens = 0;
+    double tps              = 0.0;
+
     /// 系统资源占用快照 (CPU/内存/GPU), 由资源监控线程周期写入; 为 null 表示尚未采集
     std::shared_ptr<agentxx::expand::CpuGpuUsage> systemUsage;
 };

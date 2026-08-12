@@ -159,11 +159,14 @@ void BaseAgent::setupModelRegistry() {
     if (config->availableModels.empty()) {
         registry->registerModel(config->model.modelName, config->model);
         registry->setDefaultModel(config->model.modelName);
-    } else if (false == config->currentModelName.empty() && registry->hasModel(config->currentModelName)) {
-        registry->setDefaultModel(config->currentModelName);
-    } else {
-        // [currentModelName] 不存在
-        XX_LOGE("指定使用的模型不存在: `{}`", config->currentModelName);
+    } else if (!config->currentModelName.empty()) {
+        if (registry->hasModel(config->currentModelName)) {
+            registry->setDefaultModel(config->currentModelName);
+        } else {
+            // 仅当显式指定了不存在的模型时才报错;
+            // currentModelName 为空时默认模型为 registerModel 首个注册的模型, 无需提示
+            XX_LOGE("指定使用的模型不存在: `{}`", config->currentModelName);
+        }
     }
     agentContext->modelRegistry = std::move(registry);
 }

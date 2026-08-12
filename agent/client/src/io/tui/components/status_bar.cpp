@@ -13,12 +13,8 @@ Element StatusBarComponent::OnRender() {
         modelName = "<none>";
     }
 
-    size_t ctx    = 0;
-    size_t maxCtx = 0;
-    if (ctx_.session && ctx_.session->contextStats) {
-        ctx    = ctx_.session->contextStats->contextTokens.load();
-        maxCtx = ctx_.session->contextStats->maxContextTokens.load();
-    }
+    size_t ctx    = st.contextTokens;
+    size_t maxCtx = st.maxContextTokens;
     Element ctxText;
     if (maxCtx > 0) {
         ctxText = hbox({
@@ -43,10 +39,7 @@ Element StatusBarComponent::OnRender() {
         text(" · ") | color(theme.hintColor),
         ctxText | color(theme.hintColor),
     };
-    const int tps
-        = (ctx_.session && ctx_.session->contextStats)
-              ? static_cast<int>(ctx_.session->contextStats->tps.load(std::memory_order_relaxed))
-              : 0;
+    const int tps = static_cast<int>(st.tps);
     if (st.isStreaming && tps > 0) {
         modelChildren.push_back(text("·") | color(theme.hintColor) | dim);
         modelChildren.push_back(text(fmt::format("{}t/s", tps)) | color(theme.hintColor));

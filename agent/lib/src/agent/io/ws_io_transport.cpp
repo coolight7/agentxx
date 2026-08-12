@@ -66,6 +66,13 @@ asio::awaitable<std::optional<WireMessage>> WsAgentIOTransport::recv() {
     if (!recvQueue_) {
         co_return std::nullopt;
     }
+    // 优先返回握手期间缓存的消息 (connect() 等待 HelloAck 时先于 HelloAck
+    // 到达的非 HelloAck 消息; 仅 ex_ 线程访问, 无锁)
+    if (!helloPending_.empty()) {
+        auto msg = std::move(helloPending_.front());
+        helloPending_.pop_front();
+        co_return std::move(msg);
+    }
     // channel 关闭时 async_receive 抛 system_error, 按"无消息"处理返回 nullopt;
     // 取消类异常 (CancelledException/NodeInterrupt) 由 catchErrorAsync 原样抛出
     co_return co_await agentxx::util::catchErrorAsync<std::optional<WireMessage>>(
@@ -118,6 +125,10 @@ asio::awaitable<bool> WsAgentIOTransport::connect(const WireHello& hello) {
                 if (std::get_if<WireHelloAck>(&msg)) {
                     break;
                 }
+                // 防御: 先于 HelloAck 到达的其余消息 (如 Log/ContextStats) 缓存
+                // 起来供 recv() 消费, 避免被握手循环丢弃 (协议上服务端先发
+                // HelloAck 再重放, 正常路径此列表为空)
+                helloPending_.push_back(std::move(msg));
             }
             co_return true;
         },

@@ -39,7 +39,6 @@ struct InputFixture {
         };
         ctx.theme          = &theme;
         ctx.showSystemInfo = nullptr; // InputComponent 不使用
-        ctx.session        = nullptr;
         ctx.threadId       = "session";
         ctx.remoteUrl      = "";
     }

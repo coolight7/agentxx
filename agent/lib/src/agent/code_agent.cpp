@@ -22,6 +22,10 @@
 // CodeGraph 代码分析 (头文件内部按 AGENTXX_ENABLE_CODEGRAPH 条件编译)
 #include "agentxx/expand/codegraph_manager.h"
 #include "agentxx/tools/codegraph_tool.h"
+#include "asio/co_spawn.hpp"
+#include "asio/detached.hpp"
+#include "asio/experimental/concurrent_channel.hpp"
+#include "asio/use_awaitable.hpp"
 #include "neograph/mcp/client.h"
 #include <optional>
 
@@ -93,16 +97,29 @@ asio::awaitable<void> CodeAgent::setupMiddleware() {
             case agentxx::agent::PermissionMode::Ask:
             default:
                 // 当前工作目录内允许, 其他路径询问
-                permission->setFilesystemPermission(
-                    fmt::format("{}/*", agentxx::agent::AgentConfigStatic::getCurrentWorkPath()),
-                    agentxx::middleware::PermissionOperator::ALLOW,
-                    agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
-                );
-                permission->setFilesystemPermission(
-                    fmt::format("{}/*", agentxx::agent::AgentConfigStatic::getCurrentWorkPath()),
-                    agentxx::middleware::PermissionOperator::ALLOW,
-                    agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionREAD
-                );
+                // - 工作目录获取失败 (返回空串) 时不注册默认放行规则, 所有路径
+                //   均询问 (安全兜底: "/*" 规则会退化为放行根目录下所有路径)
+                {
+                    const auto workPath
+                        = agentxx::agent::AgentConfigStatic::getCurrentWorkPath();
+                    if (workPath.empty()) {
+                        XX_LOGW(
+                            "PermissionMode::Ask: getCurrentWorkPath failed, "
+                            "no default allow rule registered, all paths will be asked"
+                        );
+                    } else {
+                        permission->setFilesystemPermission(
+                            fmt::format("{}/*", workPath),
+                            agentxx::middleware::PermissionOperator::ALLOW,
+                            agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
+                        );
+                        permission->setFilesystemPermission(
+                            fmt::format("{}/*", workPath),
+                            agentxx::middleware::PermissionOperator::ALLOW,
+                            agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionREAD
+                        );
+                    }
+                }
                 permission->noRuleOperator = agentxx::middleware::PermissionOperator::INTERRUPT;
                 break;
         }
@@ -218,56 +235,103 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
         = co_await BaseAgent::createTools();
 
     /// MCP tool
-    for (const auto& [mcpNamespace, mcpCfg] : config->mcpServerUrls) {
-        co_await agentxx::util::catchErrorAsync<bool>(
-            [&]() -> asio::awaitable<bool> {
-                XX_LOGD("load mcp tool: {} | {}", mcpNamespace, mcpCfg.url);
-                auto mcpClient = std::make_shared<agentxx::server::McpClient>(
-                    agentxx::server::McpClient::Config{
-                        .serverUrl = mcpCfg.url,
-                        .protocolVersion
-                        = std::string{agentxx::server::McpClient::kProtocol2026_07_28},
-                        .toolNamespace   = mcpNamespace,
-                        .toolCallTimeout = mcpCfg.toolTimeout,
-                    }
-                );
-                auto result = co_await mcpClient->initialize();
-                if (result.has_value()) {
-                    auto mcpTools = co_await mcpClient->listTools();
-                    if (mcpTools.has_value()) {
-                        for (auto& tool : mcpTools.value()) {
-                            tools.push_back(mcpClient->createTool(std::move(tool), agentContext));
+    /// - 多个 server 并行初始化 (独立网络 IO, 互不依赖): 串行加载时每个 server
+    ///   需 initialize + listTools 两次网络往返, 多 server 会显著拖慢 agent 启动;
+    ///   并行化后总耗时约为最慢 server 的单次加载时间
+    /// - 同一 ioCtx 协作式调度, 子协程与主协程交错执行, tools 容器无数据竞争;
+    ///   主协程等待全部完成信号后才返回, 期间 createTools 栈帧存活, 引用安全
+    /// - 单个 server 失败仅记录日志, 不影响其他 server 与 agent 启动
+    const size_t mcpCount = config->mcpServerUrls.size();
+    if (mcpCount > 0) {
+        using McpDoneChannel
+            = asio::experimental::concurrent_channel<void(neograph_asio_error_code, size_t)>;
+        auto mcpEx  = co_await asio::this_coro::executor;
+        auto doneCh = std::make_shared<McpDoneChannel>(mcpEx, mcpCount);
+        // 单个 MCP server 加载 (工具 push 到 tools; 失败仅记录日志)
+        auto loadOneMcp =
+            [&](std::string ns, agentxx::agent::McpServerConfig mcpCfg) -> asio::awaitable<void> {
+            co_await agentxx::util::catchErrorAsync<bool>(
+                [&]() -> asio::awaitable<bool> {
+                    XX_LOGD("load mcp tool: {} | {}", ns, mcpCfg.url);
+                    auto mcpClient = std::make_shared<agentxx::server::McpClient>(
+                        agentxx::server::McpClient::Config{
+                            .serverUrl = mcpCfg.url,
+                            .protocolVersion
+                            = std::string{agentxx::server::McpClient::kProtocol2026_07_28},
+                            .toolNamespace   = ns,
+                            .toolCallTimeout = mcpCfg.toolTimeout,
                         }
-                        // 添加到启动信息
-                        agentContext->appendComponentInfo.mcpTools.push_back(mcpNamespace);
+                    );
+                    auto result = co_await mcpClient->initialize();
+                    if (result.has_value()) {
+                        auto mcpTools = co_await mcpClient->listTools();
+                        if (mcpTools.has_value()) {
+                            for (auto& tool : mcpTools.value()) {
+                                tools.push_back(mcpClient->createTool(std::move(tool), agentContext));
+                            }
+                            // 添加到启动信息
+                            agentContext->appendComponentInfo.mcpTools.push_back(ns);
+                        } else {
+                            XX_LOGE(
+                                "list mcp tool error: {} | {} | {}",
+                                ns,
+                                mcpCfg.url,
+                                mcpTools.error()
+                            );
+                        }
                     } else {
                         XX_LOGE(
-                            "list mcp tool error: {} | {} | {}",
-                            mcpNamespace,
+                            "load mcp tool error: {} | {} | {}",
+                            ns,
                             mcpCfg.url,
-                            mcpTools.error()
+                            result.error()
                         );
                     }
-                } else {
+                    co_return true;
+                },
+                [&](std::string errmsg) -> asio::awaitable<bool> {
                     XX_LOGE(
-                        "load mcp tool error: {} | {} | {}",
-                        mcpNamespace,
+                        "[agentxx] Append mcp tool error: {} | {} | {}",
+                        ns,
                         mcpCfg.url,
-                        result.error()
+                        errmsg
                     );
+                    co_return true;
                 }
-                co_return true;
-            },
-            [&](std::string errmsg) -> asio::awaitable<bool> {
-                XX_LOGE(
-                    "[agentxx] Append mcp tool error: {} | {} | {}",
-                    mcpNamespace,
-                    mcpCfg.url,
-                    errmsg
-                );
-                co_return true;
-            }
-        );
+            );
+            co_return;
+        };
+
+        for (const auto& [mcpNamespace, mcpCfg] : config->mcpServerUrls) {
+            asio::co_spawn(
+                mcpEx,
+                [&tools, loadOneMcp, ns = mcpNamespace, cfg = mcpCfg](
+                ) -> asio::awaitable<void> {
+                    co_await loadOneMcp(ns, cfg);
+                },
+                // 完成处理器: 捕获协程内部未捕获的异常 (loadOneMcp 已捕获普通异常,
+                // 此处兜底防止异常逃逸 detached 协程 → terminate), 并保证无论如何
+                // 都发送一次完成信号, 避免主协程收不满 n 个信号死锁
+                [doneCh](std::exception_ptr ep) {
+                    if (ep) {
+                        agentxx::util::catchError<bool>(
+                            [&]() {
+                                std::rethrow_exception(ep);
+                                return true;
+                            },
+                            [](std::string errmsg) {
+                                XX_LOGE("[agentxx] MCP load coroutine error: {}", errmsg);
+                                return false;
+                            }
+                        );
+                    }
+                    doneCh->try_send(neograph_asio_error_code{}, 0);
+                }
+            );
+        }
+        for (size_t i = 0; i < mcpCount; ++i) {
+            co_await doneCh->async_receive(asio::use_awaitable);
+        }
     }
 
     /// Filesystem

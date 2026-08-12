@@ -208,39 +208,24 @@ void runLocalCliUnified(std::shared_ptr<agent::CodeAgent> agent) {
 }
 
 static asio::awaitable<void> runLocalTuiUnifiedAsync(
-    std::shared_ptr<agent::CodeAgent>   agent,
-    std::shared_ptr<agent::AgentConfig> config,
+    std::shared_ptr<agent::CodeAgent> agent,
     agent::PermissionMode                   permissionMode
 ) {
     auto clientEx = co_await asio::this_coro::executor;
     // 每次启动生成唯一会话 id, 避免多实例/多次启动共用 "session" 导致会话串扰
     const std::string threadId = generateUniqueThreadId();
 
-    auto ctx         = std::make_shared<agent::AgentContext>();
-    ctx->agentConfig = config;
-    {
-        auto registry = std::make_shared<agent::ModelProviderRegistry>();
-        for (const auto& [name, mc] : config->availableModels) {
-            registry->registerModel(name, mc);
-        }
-        if (config->availableModels.empty()) {
-            registry->registerModel(config->model.modelName, config->model);
-            registry->setDefaultModel(config->model.modelName);
-        } else if (!config->currentModelName.empty() && registry->hasModel(config->currentModelName)) {
-            registry->setDefaultModel(config->currentModelName);
-        }
-        ctx->modelRegistry = std::move(registry);
-    }
-    auto tui = std::make_shared<TUIClientAgentIO>(
-        clientEx,
-        ctx,
-        threadId,
-        resolveTuiTheme(),
-        permissionMode
-    );
+    // 注意: TUI 不持有 AgentContext/Session (属于 agent-server 线程), 所有
+    // agent 侧信息 (模型列表/上下文统计/LLM 上下文) 均经 Wire 消息由服务端获取
+    auto tui = std::make_shared<TUIClientAgentIO>(clientEx, threadId, resolveTuiTheme(), permissionMode);
     tui->start();
 
     auto serverIO = setupLocalUnifiedDirect(clientEx, agent, tui, threadId);
+
+    // 请求服务端当前模型信息 (WireModelInfo 回填状态栏模型名/弹窗列表):
+    // 本地模式无上下文可解析默认模型, 必须显式请求; 发送时机在 transport 就绪后
+    // 即可 (init 前处理 WireGetModel 安全: modelRegistry 为空时回退 agentConfig)
+    tui->sendToPeer(agent::WireGetModel{threadId});
 
     // TUI 模式下输入由 FTXUI 事件循环驱动 (sendUserInputLocked 经 transport 发送)
     // 此处等待 TUI 停止
@@ -263,11 +248,10 @@ static asio::awaitable<void> runLocalTuiUnifiedAsync(
 }
 
 void runLocalTuiUnified(
-    std::shared_ptr<agent::CodeAgent>   agent,
-    std::shared_ptr<agent::AgentConfig> config,
-    agent::PermissionMode                   permissionMode
+    std::shared_ptr<agent::CodeAgent> agent,
+    agent::PermissionMode             permissionMode
 ) {
-    runLocalUnifiedMain(agent, runLocalTuiUnifiedAsync(agent, config, permissionMode));
+    runLocalUnifiedMain(agent, runLocalTuiUnifiedAsync(agent, permissionMode));
 }
 
 // ---------------------------------------------------------------------------
@@ -343,26 +327,19 @@ void runRemoteCli(std::string_view url, std::string_view token, std::string_view
 }
 
 static asio::awaitable<void> runRemoteTuiAsync(
-    std::shared_ptr<agent::AgentConfig> config,
-    std::string                         url,
-    std::string                         token,
-    std::string                         model,
+    std::string url,
+    std::string token,
+    std::string model,
     agent::PermissionMode                   permissionMode
 ) {
     auto ex = co_await asio::this_coro::executor;
 
-    auto ctx         = std::make_shared<agent::AgentContext>();
-    ctx->agentConfig = config;
     // 每次启动生成唯一会话 id: 服务端按 threadId 区分会话,
     // 共用 "session" 会使多个客户端实例挂到同一会话上互相串扰
     const std::string threadId = generateUniqueThreadId();
-    auto              io = std::make_shared<TUIClientAgentIO>(
-        ex,
-        ctx,
-        threadId,
-        resolveTuiTheme(),
-        permissionMode
-    );
+    // 注意: TUI 不持有 AgentContext/Session (属于 agent-server 线程),
+    // 模型名/上下文统计等均经 Wire 消息由服务端获取
+    auto io = std::make_shared<TUIClientAgentIO>(ex, threadId, resolveTuiTheme(), permissionMode);
     io->setRemoteUrl(url);
     io->start();
 
@@ -408,17 +385,15 @@ static asio::awaitable<void> runRemoteTuiAsync(
 }
 
 void runRemoteTui(
-    std::shared_ptr<agent::AgentConfig> config,
-    std::string_view                    url,
-    std::string_view                    token,
-    std::string_view                    model,
-    agent::PermissionMode                   permissionMode
+    std::string_view             url,
+    std::string_view             token,
+    std::string_view             model,
+    agent::PermissionMode        permissionMode
 ) {
     asio::io_context ctx;
     asio::co_spawn(
         ctx,
         runRemoteTuiAsync(
-            config,
             std::string{url},
             std::string{token},
             std::string{model},
