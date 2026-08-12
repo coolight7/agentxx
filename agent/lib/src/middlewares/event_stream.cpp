@@ -179,10 +179,32 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
         auto role = jm.value("role", std::string{});
         if (role == "assistant" && jm.contains("tool_calls")) {
             hasLLMOutput = true;
-            // 展开: 每条 tool_call → 一条 Tool 消息 (未完成, 历史默认折叠);
-            // content 非空 → 一条 Assistant 消息。
+            // 展开: reasoning_content 非空 → Thinking (折叠); 每条 tool_call →
+            // 一条 Tool 消息 (未完成, 历史默认折叠); content 非空 → 一条
+            // Assistant 消息。顺序与渲染端拆解一致: Thinking 在前, 其余在后。
             // 展开语义与渲染端 (TUI) 同步一致: 历史消息直接就是渲染消息,
             // client 端无需再按 json 拆解
+            auto reasoning = jm.value("reasoning_content", std::string{});
+            if (!reasoning.empty()) {
+                auto m = ViewMessage::makeText(
+                    ViewMessage::Role::Thinking,
+                    reasoning,
+                    jm.value("start_time_ms", int64_t{0}),
+                    jm.value("duration_ms", int64_t{0})
+                );
+                m.collapsed = true;
+                session_->appendHistory(std::move(m));
+            }
+            auto content = jm.value("content", std::string{});
+            if (!content.empty()) {
+                auto m = ViewMessage::makeText(
+                    ViewMessage::Role::Assistant,
+                    content,
+                    jm.value("start_time_ms", int64_t{0}),
+                    jm.value("duration_ms", int64_t{0})
+                );
+                session_->appendHistory(std::move(m));
+            }
             for (const auto& tc : jm["tool_calls"]) {
                 const auto toolName   = tc.value("name", std::string{});
                 const auto toolCallId = tc.value("id", std::string{});
@@ -209,16 +231,6 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
                     .toolCallId = toolCallId,
                     .arguments  = arguments,
                 });
-            }
-            auto content = jm.value("content", std::string{});
-            if (!content.empty()) {
-                auto m = ViewMessage::makeText(
-                    ViewMessage::Role::Assistant,
-                    content,
-                    jm.value("start_time_ms", int64_t{0}),
-                    jm.value("duration_ms", int64_t{0})
-                );
-                session_->appendHistory(std::move(m));
             }
         } else if (role == "tool") {
             auto content    = jm.value("content", std::string{});
@@ -324,9 +336,8 @@ void EventBridge::settleCurrentStream() {
     }
     // 将当前流的累计估算 token 与流式耗时累加到轮级统计
     // (耗时仅计 LLM 流式期间, 从首个 token 到节点结束)
-    const auto elapsedSec = std::chrono::duration<double>(
-        std::chrono::steady_clock::now() - tpsStartTime_
-    ).count();
+    const auto elapsedSec
+        = std::chrono::duration<double>(std::chrono::steady_clock::now() - tpsStartTime_).count();
     turnTpsTokenCount_ += tpsTokenCount_;
     if (elapsedSec > 0.0) {
         turnTpsDurationSec_ += elapsedSec;
@@ -447,12 +458,11 @@ void EventBridge::pushTpsIfDue() {
     // 窗口内 token 增量 / 窗口实际时长, 而非自流开始以来的累计平均
     // (累计平均会被早期慢速段平滑, 无法反映当前实际速度)
     const double windowSec = nowSec - tpsLastPushSec_;
-    const double tps
-        = (windowSec > 0.0 && tpsTokenCount_ > tpsLastPushToken_)
-              ? (tpsTokenCount_ - tpsLastPushToken_) / windowSec
-              : 0.0;
-    tpsLastPushSec_   = nowSec;
-    tpsLastPushToken_ = tpsTokenCount_;
+    const double tps       = (windowSec > 0.0 && tpsTokenCount_ > tpsLastPushToken_)
+                                 ? (tpsTokenCount_ - tpsLastPushToken_) / windowSec
+                                 : 0.0;
+    tpsLastPushSec_        = nowSec;
+    tpsLastPushToken_      = tpsTokenCount_;
     io_->sendToPeer(agentxx::agent::WireContextStats{
         session_->contextStats->contextTokens.load(std::memory_order_relaxed),
         session_->contextStats->maxContextTokens.load(std::memory_order_relaxed),

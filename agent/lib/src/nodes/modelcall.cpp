@@ -523,7 +523,7 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
             // - 保证 [has_tool_calls] 条件路由到 agent_end, 不会把悬挂的
             //   tool_calls 误路由回 tools 节点重复执行
             auto lastMsg = agentxx::middleware::BaseMiddlewareHandleInterface::getLastMessage(in);
-            const bool lastIsAssistant = lastMsg.has_value() && lastMsg->role == "assistant";
+            const bool lastIsAssistant  = lastMsg.has_value() && lastMsg->role == "assistant";
             const bool lastHasToolCalls = lastMsg.has_value() && !lastMsg->tool_calls.empty();
             if (false == lastIsAssistant || lastHasToolCalls) {
                 appendAbortMessage(

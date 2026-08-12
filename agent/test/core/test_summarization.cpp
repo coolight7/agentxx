@@ -517,8 +517,13 @@ asio::awaitable<TestResult> run_summarization_tests() {
             XX_TEST_EXPECT_EQ(msgs[3].content, std::string{"r2"});
             // 去重 key 已由新 response 占用, 新 request 也被截断 (共享 lastWriteIndex)
             XX_TEST_EXPECT_EQ(msgs[2].tool_calls[0].arguments, std::string{"[Truncated Request]"});
-            // 索引 0 的 request 受循环边界保护, 不被截断
-            XX_TEST_EXPECT_EQ(msgs[0].tool_calls[0].arguments, std::string{R"({"path":"A"})"});
+            // 索引 0 的 request 已随 0f9f920 纳入去重循环 (i >= 0): 与后面的重复
+            // request 一样被截断, 仅保留最后一组 (旧断言"索引 0 受循环边界保护"
+            // 与新循环语义矛盾, 已同步更新)
+            XX_TEST_EXPECT_EQ(
+                msgs[0].tool_calls[0].arguments,
+                std::string{"[Truncated Request]"}
+            );
         }
 
         // --- D. 非法 JSON 参数: 跳过该条, 不崩溃 ---

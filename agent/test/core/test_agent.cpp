@@ -157,10 +157,11 @@ private:
 // ===========================================================================
 // Enhanced LLM Simulator Implementation
 // ===========================================================================
-std::string    g_da_sim_response_content  = "Hello! I am a simulated LLM response for testing.";
+std::string            g_da_sim_response_content  = "Hello! I am a simulated LLM response for testing.";
 int            g_da_sim_prompt_tokens     = 100;
 int            g_da_sim_completion_tokens = 50;
 neograph::json g_da_sim_tool_calls        = neograph::json::array();
+std::string    g_da_sim_reasoning_content = "";
 int            g_da_sim_delay_ms          = 0;
 /// 累计请求计数 (每次 /chat/completions 请求递增, 含失败请求), 供测试验证调用次数
 int g_da_sim_request_count = 0;
@@ -287,6 +288,13 @@ DaSimServer startDaSimServer() {
                         append(d, "");
                     }
 
+                    // 模拟 thinking 模型: 先推送 reasoning_content 增量 (TYPE_THINKING)
+                    if (!g_da_sim_reasoning_content.empty()) {
+                        auto d                  = neograph::json::object();
+                        d["reasoning_content"] = g_da_sim_reasoning_content;
+                        append(d, "");
+                    }
+
                     if (hasToolCalls) {
                         auto d          = neograph::json::object();
                         d["tool_calls"] = g_da_sim_tool_calls;
@@ -322,6 +330,9 @@ DaSimServer startDaSimServer() {
                 } else {
                     auto msg    = neograph::json::object();
                     msg["role"] = "assistant";
+                    if (!g_da_sim_reasoning_content.empty()) {
+                        msg["reasoning_content"] = g_da_sim_reasoning_content;
+                    }
                     if (hasToolCalls) {
                         msg["content"]    = nullptr;
                         msg["tool_calls"] = g_da_sim_tool_calls;
@@ -353,7 +364,8 @@ DaSimServer startDaSimServer() {
                     resp.prepare_payload();
                 }
 
-                g_da_sim_tool_calls = neograph::json::array();
+                g_da_sim_tool_calls        = neograph::json::array();
+                g_da_sim_reasoning_content = "";
                 co_return;
             }
         )
