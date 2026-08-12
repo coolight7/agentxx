@@ -50,6 +50,7 @@
 #include "test_thread_id.h"
 #include "test_tui_input.h"
 #include "test_tui_interrupt.h"
+#include "test_tui_scroll.h"
 #include "test_tui_settings.h"
 #endif
 #include "test_util_misc.h"
@@ -130,6 +131,7 @@ int main(int argn, char** argv) {
     runSync("tui_settings", agentxx::test::testTuiSettings);
     runSync("tui_input", agentxx::test::testTuiInput);
     runSync("tui_interrupt", agentxx::test::testTuiInterrupt);
+    runSync("tui_scroll", agentxx::test::testTuiScroll);
     runSync("thread_id", agentxx::test::testThreadId);
     runSync("mermaid_state", agentxx::test::testMermaidState);
 #endif

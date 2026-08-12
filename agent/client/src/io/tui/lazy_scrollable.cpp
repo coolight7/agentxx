@@ -307,9 +307,15 @@ void LazyScrollable::prepareLayout(const ftxui::Box& box) {
         scrollOffset_ = maxOffset;
     }
     scrollOffset_          = std::clamp(scrollOffset_, 0, maxOffset);
-    const int scrollOffset = scrollOffset_;
+    int scrollOffset = scrollOffset_;
 
-    // === 构建并布局可见子项 (视口局部) ===
+    // === 阶段 1: 构建并测量可见子项 (视口局部, 按估算高度定位) ===
+    // 只做 ensureElement + 实测 (修正估算高度), 不在此阶段定位:
+    // 子项定位必须等总高度/滚动偏移按实测修正后进行, 否则当前帧子项位置
+    // 基于估算滚动偏移, 与最终偏移不一致 —— 流式输出时流式项每帧 key 变化
+    // 导致估算/实测高度偏差 (通常 ±1 行), 若在测量前定位, 内容帧会把子项
+    // 画在错误的偏移上 (底部多出空行), 下一帧 (如鼠标移动) 才回到正确位置,
+    // 帧间交替即表现为消息列表上下抖动
     int  cum       = 0;     // 累计高度 (当前子项的内容顶边, 行)
     bool corrected = false; // 是否有估算高度被实测修正
     for (size_t i = 0; i < count; ++i) {
@@ -323,10 +329,8 @@ void LazyScrollable::prepareLayout(const ftxui::Box& box) {
             continue; // 完全在可见区上方
         }
 
-        // 与可见区相交 -> 构建 (缓存命中或 buildItem) 并布局该子项
+        // 与可见区相交 -> 构建 (缓存命中或 buildItem) 并测量
         ensureElement(i);
-        const int screenY = box.y_min + (top - scrollOffset);
-        Box       itemBox{box.x_min, contentXMax_, screenY, screenY + h - 1};
         if (!measured_[i]) {
             // 首次布局: 完整迭代布局并测量自然高度, 修正估算值
             const Box measureBox{0, contentWidth - 1, 0, kTallHeight};
@@ -336,27 +340,62 @@ void LazyScrollable::prepareLayout(const ftxui::Box& box) {
             if (heights_[i] != h) {
                 corrected = true;
             }
-            // 以实测高度重定位 (测量时同宽度布局已收敛, 仅 SetBox 即可)
-            itemBox.y_max = screenY + heights_[i] - 1;
-            elementAt(i)->SetBox(itemBox);
             cum = top + heights_[i];
-        } else {
-            layoutAndMeasure(elementAt(i), itemBox);
         }
-        visibleIndices_.push_back(i);
-        visibleBoxes_[i] = Box::Intersection(itemBox, box);
     }
 
-    // 估算被修正 -> 刷新总高度; 吸附模式下同步修正滚动偏移 (下帧定位完全一致)
+    // 估算被修正 -> 以实测高度刷新总高度与滚动偏移 (供阶段 2 定位)
     if (corrected) {
         int t = 0;
         for (size_t i = 0; i < count; ++i) {
             t += std::max(1, heights_[i]);
         }
         totalHeight_ = t;
+        const int newMaxOffset = std::max(0, t - vh);
         if (stickToBottom_) {
-            scrollOffset_ = std::max(0, t - vh);
+            scrollOffset_ = newMaxOffset;
+        } else {
+            scrollOffset_ = std::clamp(scrollOffset_, 0, newMaxOffset);
         }
+    }
+    scrollOffset = scrollOffset_;
+
+    // === 阶段 2: 以最终滚动偏移定位并布局可见子项 ===
+    // 阶段 1 未扫到的可见子项 (估算偏差改变可见区间) 在此补建/补测
+    cum = 0;
+    for (size_t i = 0; i < count; ++i) {
+        const int h   = std::max(1, heights_[i]);
+        const int top = cum;
+        if (top >= scrollOffset + vh) {
+            break; // 完全在可见区下方 (后续更靠下, 提前结束)
+        }
+        cum += h;
+        if (cum <= scrollOffset) {
+            continue; // 完全在可见区上方
+        }
+
+        ensureElement(i);
+        int  itemH = h;
+        bool fresh = false; // 本阶段刚完成测量 (同宽度布局已收敛, 仅 SetBox 即可)
+        if (!measured_[i]) {
+            // 阶段 1 未覆盖 (估算偏差改变可见区间): 补测
+            const Box measureBox{0, contentWidth - 1, 0, kTallHeight};
+            itemH       = std::max(1, layoutAndMeasure(elementAt(i), measureBox));
+            heights_[i] = itemH;
+            measured_[i] = true;
+            fresh        = true;
+            cum          = top + itemH;
+        }
+        const int screenY = box.y_min + (top - scrollOffset);
+        Box       itemBox{box.x_min, contentXMax_, screenY, screenY + itemH - 1};
+        if (fresh) {
+            // 测量时同宽度布局已收敛, 仅 SetBox 重定位
+            elementAt(i)->SetBox(itemBox);
+        } else {
+            layoutAndMeasure(elementAt(i), itemBox);
+        }
+        visibleIndices_.push_back(i);
+        visibleBoxes_[i] = Box::Intersection(itemBox, box);
     }
 }
 
