@@ -79,6 +79,33 @@ struct ScrollFixture {
         });
     }
 
+    /// 模拟 onDelta 新建流式 token (指定流身份 epoch + 整体替换内容);
+    /// 同流追加时保持相同 epoch (与 onDelta 的 COW/原地 append 语义一致)
+    void setTokenEpoch(uint64_t epoch, const std::string& tok) {
+        sharedState.mutate([&](TUIRenderState& st) {
+            st.currentToken     = std::make_shared<std::string>(tok);
+            st.currentTokenEpoch = epoch;
+            st.isStreaming      = true;
+        });
+    }
+
+    /// 模拟 onSync: 整体重建 TUIRenderState (currentTokenEpoch 归 0, 消息历史保留)
+    /// 注意: 必须深拷贝消息 (每个消息新建 shared_ptr) —— 真实 onSync 从
+    /// WireMessage 反序列化重建 ViewMessage, 消息指针全变, 驱动 itemKey 变化;
+    /// 若浅拷贝 (共享指针), key 不变, 无法模拟缓存失效路径
+    void rebuildState() {
+        sharedState.mutate([&](TUIRenderState& st) {
+            auto prev = sharedState.snapshot();
+            auto ns   = std::make_shared<TUIRenderState>();
+            ns->isStreaming = false;
+            ns->messages.reserve(prev->messages.size());
+            for (const auto& m : prev->messages) {
+                ns->messages.push_back(std::make_shared<TUIMessage>(*m));
+            }
+            st = std::move(*ns);
+        });
+    }
+
     /// 流式结束: token 落为正式消息 (模拟 TurnEnd pushCurrentTokenLocked)
     void endStream() {
         sharedState.mutate([&](TUIRenderState& st) {
@@ -252,6 +279,168 @@ TestResult testTuiScroll() {
                 ScrollFixture::lastLine(c1).find(std::to_string(step)) != std::string::npos
             );
         }
+    }
+
+    {
+        // 场景 6: onSync 重建 state 后新一轮流式首 token 不丢失 (epoch 碰撞回归)
+        // 回归链: 首轮流式 (UI 缓存 streamEpoch_=1) -> 流结束 -> onSync (epoch 归 0)
+        //   -> 新流首 token (epoch 0->1, 恰与 UI 缓存的 streamEpoch_ 相等)
+        //   -> 必须强制重建渲染器; 否则 syncStream 误判"同一流"走增量分支,
+        //      而 fedLen 仍是旧流长度, 首 token 被整体跳过 (渲染缺字),
+        //      直到 token 超过旧 fedLen 才从错误偏移开始显示
+        ScrollFixture f;
+        f.addHistory();
+        f.render();
+
+        // 第一轮流式: epoch 0 -> 1, UI 缓存 streamEpoch_ = 1
+        f.setTokenEpoch(1, "first stream content marker F1ST");
+        f.render();
+        f.endStream(); // token 落为正式消息
+        f.render();    // 无 token 帧 (OnRender 清理)
+
+        // 模拟 onSync: 整体重建 state, epoch 归 0 (保留历史)
+        f.rebuildState();
+        f.render(); // 无 token 帧
+
+        // 用户发送消息后新一轮首 token: epoch 0 -> 1, 与 UI 缓存的 streamEpoch_ 相等
+        f.setTokenEpoch(1, "second stream marker S2ND");
+        std::string frame = f.render();
+        XX_TEST_EXPECT_TRUE(
+            ScrollFixture::lastLine(frame).find("S2ND") != std::string::npos
+        );
+
+        // 同流后续 token 追加 (epoch 不变) 仍正常增量显示
+        f.setTokenEpoch(1, "second stream marker S2ND with more tail T3ST");
+        std::string frame2 = f.render();
+        XX_TEST_EXPECT_TRUE(
+            ScrollFixture::lastLine(frame2).find("T3ST") != std::string::npos
+        );
+    }
+
+    {
+        // 场景 7: 主题切换 (invalidateCache) 后同内容渲染必须与切换前一致
+        // 回归: clearCache 后阶段 1 用新主题重建了 Element, 但阶段 2 的
+        // "缓存命中且 box 相同则跳过布局" 误判 (lastBoxes_ 未清, 新元素
+        // 从未 SetBox) -> 新元素以未初始化 box_ 渲染, 消息列表消失;
+        // 且此后每帧 box 恒同持续跳过, 直到内容变化才恢复
+        ScrollFixture f;
+        f.addHistory();
+        f.render(); // 建立缓存与布局
+        std::string before = f.render();
+
+        f.comp->invalidateCache(); // 模拟主题切换: 清空渲染缓存
+        std::string afterClear = f.render(); // 缓存重建首帧: 必须重新布局
+        XX_TEST_EXPECT_TRUE(before == afterClear);
+
+        // 后续帧 (缓存命中 + box 相同路径) 仍一致 (跳过布局是安全的)
+        std::string cachedFrame = f.render();
+        XX_TEST_EXPECT_TRUE(before == cachedFrame);
+
+        // 流式结束后再切一次主题 (双路径: 消息 + 流式残留缓存) 仍一致
+        f.setToken("streaming text with marker THME");
+        f.render();
+        f.endStream();
+        f.render();
+        std::string before2 = f.render();
+        f.comp->invalidateCache();
+        XX_TEST_EXPECT_TRUE(before2 == f.render());
+    }
+
+    {
+        // 场景 8: onSync 整体重建 state 后 (消息指针全变), 同内容渲染必须正常
+        // 回归: onSync 重建后所有消息 key 变化 -> 阶段1 全部重建新元素,
+        // 但 lastBoxes_ 保留旧值 (resize 不重置), 内容相同 + 滚动位置不变时
+        // itemBox 与上帧相同 -> 阶段2 误判 "缓存命中且 box 相同" 跳过布局,
+        // 新元素从未 SetBox (box_ = {0,0,0,0}) -> 渲染只画首字符/整行消失
+        ScrollFixture f;
+        f.addHistory();
+        f.render(); // 建立缓存与布局
+
+        // 模拟 onSync: 整体重建 state (消息内容不变, 指针全变)
+        f.rebuildState();
+        f.render(); // 全部重建帧
+
+        // 同内容再渲染帧: 内容未变, box 相同 -> 缓存命中/跳过布局路径
+        std::string frame = f.render();
+        // 历史消息完整显示 (无整行消失)
+        XX_TEST_EXPECT_TRUE(frame.find("history line 79") != std::string::npos);
+    }
+
+    {
+        // 场景 8b: onSync 重建后发送 user 消息, 新消息必须完整显示
+        ScrollFixture f;
+        f.addHistory();
+        f.render();
+        f.rebuildState();
+        f.render();
+
+        f.sharedState.mutate([&](TUIRenderState& st) {
+            auto m  = std::make_shared<TUIMessage>();
+            m->role = TUIMessage::Role::User;
+            m->text = "hello user message with marker USRM";
+            st.messages.push_back(std::move(m));
+            st.isStreaming = true;
+        });
+        f.comp->setStickToBottom(true);
+        std::string frame = f.render();
+        XX_TEST_EXPECT_TRUE(
+            ScrollFixture::lastLines(frame, 3).find("USRM") != std::string::npos
+        );
+        XX_TEST_EXPECT_TRUE(frame == f.render());
+    }
+
+    {
+        // 场景 8c: onSync 重建 + 估算==实测的短消息 (无折行) -> 跳过布局回归
+        // 触发条件: 消息短/单行, estimateLines == 实测高度, corrected=false,
+        // 滚动偏移不变 -> 阶段 2 sameBox=true 误判跳过布局 -> 新元素 box_ 未
+        // 初始化 {0,0,0,0} -> Text 只画首字符到 (0,0) (用户报告"少开头两
+        // 个字/整行不显示但有滚动高度"); 长文本场景因估算偏差触发 corrected
+        // 重算偏移恰好避开此路径, 故此前测试未复现
+        ScrollFixture f;
+        // 短消息 (单行, 无折行): 估算 == 实测
+        f.sharedState.mutate([&](TUIRenderState& st) {
+            for (int i = 0; i < 30; ++i) {
+                auto m  = std::make_shared<TUIMessage>();
+                m->role = TUIMessage::Role::Assistant;
+                m->text = "short line " + std::to_string(i);
+                st.messages.push_back(std::move(m));
+            }
+        });
+        f.render(); // 建立缓存与布局
+
+        // 模拟 onSync: 整体重建 state (指针全变, 内容相同)
+        f.rebuildState();
+        std::string rebuilt = f.render(); // 全部重建帧
+        if (rebuilt.find("short line 29") == std::string::npos) {
+            fprintf(stderr, "[DBG8c] rebuilt missing short line 29, dump:\n");
+            // 分行打印 (转义序列干扰行内查找, 但可看行分布)
+            std::string s = rebuilt;
+            size_t pos = 0, lineNo = 0;
+            while ((pos = s.find('\n')) != std::string::npos) {
+                fprintf(stderr, "  L%02zu: %s\n", lineNo++, s.substr(0, pos).c_str());
+                s.erase(0, pos + 1);
+            }
+            fprintf(stderr, "  L%02zu: %s\n", lineNo, s.c_str());
+        }
+        // 历史消息完整显示 (无整行消失)
+        XX_TEST_EXPECT_TRUE(rebuilt.find("short line 29") != std::string::npos);
+        // 同内容再渲染帧一致
+        XX_TEST_EXPECT_TRUE(rebuilt == f.render());
+
+        // 发送 user 消息 (估算==实测的单行消息) 后完整显示
+        f.sharedState.mutate([&](TUIRenderState& st) {
+            auto m  = std::make_shared<TUIMessage>();
+            m->role = TUIMessage::Role::User;
+            m->text = "user msg marker USRM";
+            st.messages.push_back(std::move(m));
+            st.isStreaming = true;
+        });
+        f.comp->setStickToBottom(true);
+        std::string frame = f.render();
+        XX_TEST_EXPECT_TRUE(
+            ScrollFixture::lastLines(frame, 3).find("USRM") != std::string::npos
+        );
+        XX_TEST_EXPECT_TRUE(frame == f.render());
     }
 
     return TestResult{g_tui_scroll_passed, g_tui_scroll_failed};
