@@ -429,6 +429,81 @@ asio::awaitable<void> test_eventbridge_tps() {
     co_return;
 }
 
+/// 验证轮级 tps 统计 (TurnStart/TurnEnd 使用):
+/// - 未开始轮次时 takeTurnTps 返回 0
+/// - handleTurnStart 重置轮级统计
+/// - 一轮内多个 ModelCall 流 (NODE_START → token → NODE_END) 的累计 token /
+///   累计流式耗时在 takeTurnTps 时结算为平均速度; 空流 (无 token) 不计入
+/// - takeTurnTps 取走后重置, 再次调用返回 0
+/// - 新轮次无 LLM 输出直接结束 → 0
+asio::awaitable<void> test_eventbridge_turn_tps() {
+    auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
+    agentContext->summarizationMiddleware
+        = std::make_shared<agentxx::middleware::SummarizationMiddlewareHandle>(nullptr, agentContext);
+    auto session = std::make_shared<agentxx::agent::Session>();
+    auto io      = std::make_shared<TestEbIO>();
+
+    auto bridge   = makeTestBridge(agentContext, session, io);
+    auto bridgeCb = bridge->makeCallback();
+    auto executor = co_await asio::this_coro::executor;
+
+    // 初始状态: 未开始轮次时取平均应为 0
+    XX_TEST_EXPECT_EQ(bridge->takeTurnTps(), 0.0);
+
+    // 轮次开始: 重置统计
+    bridge->handleTurnStart();
+
+    // 第一个 ModelCall 流: 开始 → 发 token → 等待一小段 → 发 token → 结束 (结算)
+    bridgeCb(neograph::graph::GraphEvent{
+        neograph::graph::GraphEvent::Type::NODE_START,
+        "llm",
+        neograph::json::object()
+    });
+    bridgeCb(neograph::graph::GraphEvent{
+        neograph::graph::GraphEvent::Type::LLM_TOKEN,
+        "llm",
+        neograph::json(std::string{"Hello"})
+    });
+    co_await asio::steady_timer(executor, std::chrono::milliseconds(50))
+        .async_wait(asio::use_awaitable);
+    bridgeCb(neograph::graph::GraphEvent{
+        neograph::graph::GraphEvent::Type::LLM_TOKEN,
+        "llm",
+        neograph::json(std::string{" World"})
+    });
+    bridgeCb(neograph::graph::GraphEvent{
+        neograph::graph::GraphEvent::Type::NODE_END,
+        "llm",
+        neograph::json::object()
+    });
+
+    // 第二个 ModelCall 流: 空流 (无 token) → 不结算, 不影响轮级统计
+    bridgeCb(neograph::graph::GraphEvent{
+        neograph::graph::GraphEvent::Type::NODE_START,
+        "llm",
+        neograph::json::object()
+    });
+    bridgeCb(neograph::graph::GraphEvent{
+        neograph::graph::GraphEvent::Type::NODE_END,
+        "llm",
+        neograph::json::object()
+    });
+
+    // 轮次结束: 取走平均速度
+    // "Hello World" ≈ 11 个 ascii 字符 / 4 ≈ 2.75 token, 流式耗时约 50ms → tps > 0
+    const double tps = bridge->takeTurnTps();
+    XX_TEST_EXPECT_TRUE(tps > 0.0);
+
+    // 取走后已重置: 再次调用返回 0
+    XX_TEST_EXPECT_EQ(bridge->takeTurnTps(), 0.0);
+
+    // 新轮次: 无 LLM 输出直接结束 → 0
+    bridge->handleTurnStart();
+    XX_TEST_EXPECT_EQ(bridge->takeTurnTps(), 0.0);
+
+    co_return;
+}
+
 asio::awaitable<TestResult> run_event_bridge_tests() {
     g_eb_passed = 0;
     g_eb_failed = 0;
@@ -440,6 +515,7 @@ asio::awaitable<TestResult> run_event_bridge_tests() {
         co_await test_eventbridge_channel_write_messages();
         co_await test_eventbridge_node_delta();
         co_await test_eventbridge_tps();
+        co_await test_eventbridge_turn_tps();
     } catch (const std::exception& e) {
         TEST_FAIL << "event_bridge suite exception: " << e.what() << std::endl;
         g_eb_failed++;

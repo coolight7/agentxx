@@ -4,9 +4,11 @@
 #include <algorithm>
 #include <cassert>
 #include <charconv>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <format>
 #include <functional>
 #include <iomanip>
 #include <optional>
@@ -1022,6 +1024,56 @@ inline PinyinCallback s_pinyinCallback = nullptr;
         return false;
     }
     return isIgnoreCaseContains(str1, str2);
+}
+
+// ---------------------------------------------------------------------------
+// 时长 / 时间戳格式化 (agent 端构造系统提示消息文本时使用, 如轮次统计)
+// ---------------------------------------------------------------------------
+
+/// 格式化运行时长: 1.2s / 3m5s / 1h2m3s
+[[nodiscard]] inline std::string formatDurationMilliseconds(int64_t milliseconds) {
+    if (milliseconds < 0) {
+        return "0.0s";
+    }
+    const int64_t totalSec = milliseconds / 1000;
+    const int64_t hours    = totalSec / 3600;
+    const int64_t minutes  = (totalSec % 3600) / 60;
+    const int64_t seconds  = totalSec % 60;
+    if (hours > 0) {
+        return fmt::format("{}h{}m{}s", hours, minutes, seconds);
+    }
+    if (minutes > 0) {
+        if (seconds > 0) {
+            return fmt::format("{}m{}s", minutes, seconds);
+        }
+        return fmt::format("{}m0s", minutes);
+    }
+    const double sec = static_cast<double>(milliseconds) / 1000.0;
+    return fmt::format("{:.1f}s", sec);
+}
+
+/// 格式化时间戳: HH:MM:SS (本地时区)
+[[nodiscard]] inline std::string formatTimestampMilliseconds(int64_t timestamp_ms) {
+    if (timestamp_ms <= 0) {
+        return "00:00:00";
+    }
+    std::chrono::zoned_time time{
+        std::chrono::current_zone(),
+        std::chrono::sys_time{std::chrono::seconds(timestamp_ms / 1000)}
+    };
+    return std::format("{:%H:%M:%S}", time);
+}
+
+/// 格式化时间戳: YYYY-MM-DD HH:MM (会话列表展示用)
+[[nodiscard]] inline std::string formatDateTimeMilliseconds(int64_t timestamp_ms) {
+    if (timestamp_ms <= 0) {
+        return "-";
+    }
+    std::chrono::zoned_time time{
+        std::chrono::current_zone(),
+        std::chrono::sys_time{std::chrono::seconds(timestamp_ms / 1000)}
+    };
+    return std::format("{:%Y-%m-%d %H:%M}", time);
 }
 
 [[nodiscard]] inline constexpr bool

@@ -181,6 +181,11 @@ struct Delta {
         NodeStart,
         NodeEnd,
         MessageTip, ///< 通用提示消息 (info/warning/error, UI 插入提示消息)
+        /// 系统消息: 已由 agent 线程插入会话历史 (viewMessages) 的消息
+        /// - 与 MessageTip 的区别: SystemMessage 携带 appendHistory 分配的
+        ///   msgId, 内容/时间戳与 viewMessages 完全一致, UI 端直接追加即可
+        ///   (不自行构造文本); 用于轮次统计、错误/取消提示、中断头消息等
+        SystemMessage,
     };
 
     Type     type;
@@ -207,6 +212,10 @@ struct Delta {
     // 运行时长统计
     int64_t startTimeMs = 0; // 开始时间戳 (毫秒)
     int64_t durationMs  = 0; // 运行时长 (毫秒)
+
+    // 轮次统计 (TurnEnd 使用): 本轮会话 LLM API 平均生成速度 (token/s, 估算值)
+    // - 0 = 本轮无 LLM 流式输出 (如纯工具错误轮)
+    double tps = 0.0;
 };
 
 struct SyncPayload {

@@ -7,8 +7,10 @@
 #include "agentxx/middlewares/summarization.h"
 #include "agentxx/util/diff_util.h"
 #include "agentxx/util/exception.h"
+#include "agentxx/util/string_util.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
+#include "fmt/format.h"
 #include "neograph/graph/compiler.h"
 #include "neograph/graph/validator.h"
 #include "neograph/llm/openai_provider.h"
@@ -40,13 +42,11 @@ BaseAgent::BaseAgent(std::shared_ptr<agentxx::agent::AgentConfig> in_config) {
         if (root.empty()) {
             root = agentxx::agent::AgentConfigStatic::getSessionsDir(in_config->dataDir);
         }
-        agentContext->sessionPersistence = std::make_shared<SessionPersistence>(std::move(root));
+        agentContext->sessionPersistence    = std::make_shared<SessionPersistence>(std::move(root));
         agentContext->sessions->persistence = agentContext->sessionPersistence;
     } else if (in_config->enableSessionPersistence) {
-        XX_LOGD(
-            "Session persistence disabled: dataDir not set and sessionPersistenceRoot empty "
-            "(in-memory only)"
-        );
+        XX_LOGD("Session persistence disabled: dataDir not set and sessionPersistenceRoot empty "
+                "(in-memory only)");
     }
 }
 
@@ -56,10 +56,8 @@ asio::awaitable<void> BaseAgent::init() {
     // - 会话持久化/CodeGraph 索引在无 dataDir 时自动禁用 (见构造函数/CodeAgent)
     // - 放在 init() 而非构造函数: 构造函数可能早于日志 sink 注册, 警告会丢失
     if (agentContext->agentConfig->dataDir.empty()) {
-        XX_LOGW(
-            "AgentConfig::dataDir is not set: settings/sessions/codegraph data "
-            "will NOT be persisted to disk (in-memory only)"
-        );
+        XX_LOGW("AgentConfig::dataDir is not set: settings/sessions/codegraph data "
+                "will NOT be persisted to disk (in-memory only)");
     }
 
     // 在 agent 线程完成环境探测 (PowerShell 等) 并刷新依赖它的提示词:
@@ -161,8 +159,7 @@ void BaseAgent::setupModelRegistry() {
     if (config->availableModels.empty()) {
         registry->registerModel(config->model.modelName, config->model);
         registry->setDefaultModel(config->model.modelName);
-    } else if (false == config->currentModelName.empty()
-               && registry->hasModel(config->currentModelName)) {
+    } else if (false == config->currentModelName.empty() && registry->hasModel(config->currentModelName)) {
         registry->setDefaultModel(config->currentModelName);
     } else {
         // [currentModelName] 不存在
@@ -386,6 +383,37 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
         ioPtr
     );
 
+    // 插入系统消息: 由 agent 线程追加到会话历史 (viewMessages) 并发送
+    // SystemMessage Delta 通知 UI 追加对应消息。UI 端不再自行构造系统提示,
+    // 保证 viewMessages / Sync 恢复 / 持久化与展示内容一致。
+    // - 无对端 (headless) 时不插入 (提示为展示用途, headless 无消费者)
+    auto insertSystemMessage =
+        [&](std::string text, ViewMessage::TipLevel level, int64_t startMs = 0, int64_t durMs = 0) {
+            if (!session->io) {
+                return;
+            }
+            auto vm = ViewMessage::makeText(ViewMessage::Role::System, text, startMs, durMs);
+            vm.system->tipLevel    = level;
+            const auto     id      = session->appendHistory(std::move(vm));
+            Delta::TipType tipType = Delta::TipType::Info;
+            if (level == ViewMessage::TipLevel::Warning) {
+                tipType = Delta::TipType::Warning;
+            } else if (level == ViewMessage::TipLevel::Error) {
+                tipType = Delta::TipType::Error;
+            }
+            eventBridge->emitDelta(Delta{
+                .type        = Delta::Type::SystemMessage,
+                .text        = std::move(text),
+                .msgId       = id,
+                .tipType     = tipType,
+                .startTimeMs = startMs,
+                .durationMs  = durMs,
+            });
+        };
+
+    // 记录轮次开始: 重置轮级 LLM API 平均生成速度 (token/s) 统计
+    eventBridge->handleTurnStart();
+
     eventBridge->emitDelta(Delta{.type = Delta::Type::TurnStart});
 
     selectModel(threadId, modelName);
@@ -415,11 +443,9 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
     // 历史用于 client 同步/展示, 上下文仅用于调用 LLM API
     // - 附带开始时间戳: 会话列表的 lastActiveMs 依赖此值 (持久化 meta),
     //   无时间戳时列表无法显示活动时间
-    session->appendHistory(ViewMessage::makeText(
-        ViewMessage::Role::User,
-        processedInput,
-        start_time_ms
-    ));
+    session->appendHistory(
+        ViewMessage::makeText(ViewMessage::Role::User, processedInput, start_time_ms)
+    );
     session->llmMessages.push_back(std::move(userMsgJson));
 
     auto cancelToken = std::make_shared<neograph::graph::CancelToken>();
@@ -550,8 +576,8 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                         if (interruptArg.name == "subagent") {
                             auto subagentArg = interruptArg.arg;
                             auto resp        = co_await agentContext->bus->request<
-                                       events::ReqSubagentStart,
-                                       events::RespSubagentResult>(
+                                events::ReqSubagentStart,
+                                events::RespSubagentResult>(
                                 events::Topic::Subagent,
                                 events::ReqSubagentStart{
                                     .parentAgentName = agentContext->agentConfig
@@ -604,6 +630,20 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                                 }
                             }
                         } else {
+                            // 中断头消息: 由 agent 线程插入会话历史并通知 UI
+                            // (原由 client 端 handleInterrupt 构造); 后续中断
+                            // 输入项消息 (Role::Interrupt) 仍由 client 端插入
+                            {
+                                std::string msg = fmt::format(
+                                    "Interrupted at: {}\nValue: {}",
+                                    interruptNode,
+                                    interruptValue
+                                );
+                                if (!interruptArg.name.empty()) {
+                                    msg += fmt::format("\nHandle: {}", interruptArg.name);
+                                }
+                                insertSystemMessage(std::move(msg), ViewMessage::TipLevel::Info);
+                            }
                             auto session = agentContext->sessions->get(threadId);
                             if (session && session->bus) {
                                 // 显式传递中断等待超时: 与 IO 端点
@@ -692,12 +732,19 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
             XX_LOGE("Agent Session Response failed: {}", errmsg);
             turnResult.hasError     = true;
             turnResult.errorMessage = std::move(errmsg);
+            // 错误提示: agent 线程插入会话历史并通知 UI
+            insertSystemMessage(
+                fmt::format("[Error] {}", turnResult.errorMessage),
+                ViewMessage::TipLevel::Error
+            );
             co_return true;
         },
         [&](std::string& errmsg) -> std::optional<bool> {
             XX_LOGI("Agent Session Cancelled: {}", errmsg);
             turnResult.hasError     = true;
             turnResult.errorMessage = "Cancelled by user";
+            // 取消提示: agent 线程插入会话历史并通知 UI
+            insertSystemMessage("[Cancel Request]", ViewMessage::TipLevel::Info);
             return true;
         },
         // 传入取消令牌: engine 内未被转换的 operation_aborted (asio 取消信号)
@@ -740,14 +787,43 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
         )
                                    .count());
 
-    // 发送 TurnEnd Delta，包含时长统计
+    // 取走本轮 LLM API 平均生成速度 (token/s), 同时填入 TurnEnd Delta 与
+    // 轮次统计系统提示
+    const double turnTps = eventBridge->takeTurnTps();
+
+    // 发送 TurnEnd Delta，包含时长统计与 LLM API 平均生成速度 (token/s)
     eventBridge->emitDelta(Delta{
         .type         = Delta::Type::TurnEnd,
         .historyCount = session->chainHash.count(),
         .tailHash     = session->chainHash.tailHex(),
         .startTimeMs  = start_time_ms,
         .durationMs   = duration_ms,
+        .tps          = turnTps,
     });
+
+    // 轮次统计系统提示: 由 agent 线程插入会话历史并发送 Delta (原由 UI 端
+    // 在 TurnEnd 时自行构造), 模型名之后显示本轮 LLM API 平均生成速度
+    insertSystemMessage(
+        [&]() {
+            std::string modelText = agentContext->getSessionCurrentModelName(threadId);
+            if (turnTps > 0.0) {
+                if (modelText.empty()) {
+                    modelText = fmt::format("{:.1f} t/s", turnTps);
+                } else {
+                    modelText = fmt::format("{} · {:.1f} t/s", modelText, turnTps);
+                }
+            }
+            return fmt::format(
+                "{} · {} · {}",
+                modelText,
+                agentxx::util::formatDurationMilliseconds(duration_ms),
+                agentxx::util::formatTimestampMilliseconds(start_time_ms + duration_ms)
+            );
+        }(),
+        ViewMessage::TipLevel::Info,
+        start_time_ms,
+        duration_ms
+    );
 
     // checkpoint store 采用 InMemorySingleCheckpointStore, save 时自动淘汰
     // 该 thread 的历史 checkpoint, 轮末无需额外裁剪

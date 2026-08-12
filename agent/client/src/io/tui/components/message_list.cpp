@@ -503,7 +503,10 @@ LazyBuiltItem MessageListComponent::buildStreamingItem(const TUIRenderState& st)
         header.push_back(text("- [Thinking] ") | color(theme.thinkingColor));
         if (currentMsg && currentMsg->durationMs > 0) {
             header.push_back(
-                text(fmt::format("{} ", formatDurationMilliseconds(currentMsg->durationMs)))
+                text(fmt::format(
+                    "{} ",
+                    agentxx::util::formatDurationMilliseconds(currentMsg->durationMs)
+                ))
                 | color(theme.thinkingColor)
             );
         }
@@ -604,7 +607,8 @@ Element MessageListComponent::buildMessageBlock(
             header.push_back(text("[Thinking] ") | color(theme.thinkingColor));
             if (msg.durationMs > 0) {
                 header.push_back(
-                    text(formatDurationMilliseconds(msg.durationMs)) | color(theme.thinkingColor)
+                    text(agentxx::util::formatDurationMilliseconds(msg.durationMs))
+                    | color(theme.thinkingColor)
                 );
                 header.push_back(text(" "));
             }

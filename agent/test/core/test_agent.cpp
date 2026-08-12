@@ -776,6 +776,61 @@ asio::awaitable<void> test_agent_io_session_bus() {
     co_return;
 }
 
+/// 轮次统计系统提示由 agent 线程插入:
+/// - 带 io 运行一轮后, viewMessages 末尾应包含 System 消息 (轮次统计, 含
+///   模型名 / tps / 时长)
+/// - io 应收到 SystemMessage Delta, 其 msgId 与 viewMessages 中消息 id 一致
+asio::awaitable<void> test_agent_turn_system_message() {
+    auto sim     = startDaSimServer();
+    auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
+
+    auto cfg                  = std::make_shared<agentxx::agent::AgentConfig>();
+    cfg->model.baseUrl        = baseUrl;
+    cfg->model.apiKey         = "EMPTY";
+    cfg->model.modelName      = "test-sim";
+    cfg->prompt.systemPrompt  = "You are a helpful assistant.";
+    g_da_sim_response_content = "System message test!";
+    g_da_sim_tool_calls       = neograph::json::array();
+
+    agentxx::agent::CodeAgent agent(cfg);
+    co_await agent.init();
+
+    auto io = std::make_shared<TestAgentIO>();
+    auto result = co_await agent.runConversationTurnAsync("sysmsg_test", "Hello", true, io);
+    XX_TEST_EXPECT_FALSE(result.hasError);
+
+    auto session = agent.agentContext->sessions->get("sysmsg_test");
+    XX_TEST_EXPECT_TRUE(session != nullptr);
+
+    // viewMessages 应包含 System 轮次统计消息 (模型名 · t/s · 时长 · 时间)
+    bool        foundStat = false;
+    std::string statMsgId;
+    for (const auto& vm : session->viewMessages) {
+        if (vm.role == agentxx::agent::ViewMessage::Role::System) {
+            foundStat = true;
+            statMsgId = vm.id;
+            XX_TEST_EXPECT_TRUE(vm.text.find("test-sim") != std::string::npos);
+            XX_TEST_EXPECT_TRUE(vm.text.find("t/s") != std::string::npos);
+            XX_TEST_EXPECT_TRUE(vm.text.find("·") != std::string::npos);
+            XX_TEST_EXPECT_TRUE(vm.durationMs > 0);
+        }
+    }
+    XX_TEST_EXPECT_TRUE(foundStat);
+
+    // io 应收到 SystemMessage Delta, msgId 与历史消息一致
+    bool foundDelta = false;
+    for (const auto& d : io->deltas) {
+        if (d.type == agentxx::agent::Delta::Type::SystemMessage) {
+            foundDelta = true;
+            XX_TEST_EXPECT_EQ(d.msgId, statMsgId);
+            XX_TEST_EXPECT_TRUE(!d.text.empty());
+        }
+    }
+    XX_TEST_EXPECT_TRUE(foundDelta);
+
+    co_return;
+}
+
 asio::awaitable<void> test_agent_io_null() {
     auto sim     = startDaSimServer();
     auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
@@ -1090,6 +1145,7 @@ asio::awaitable<TestResult> run_agent_tests() {
         co_await test_agent_nonstream();
         co_await test_agent_persistence_datadir_gate();
         co_await test_agent_io_session_bus();
+        co_await test_agent_turn_system_message();
         co_await test_agent_io_null();
         co_await test_agent_session_activity_streaming();
         co_await test_agent_session_activity_toolcall();

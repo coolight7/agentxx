@@ -303,6 +303,52 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
     }
 }
 
+void EventBridge::handleTurnStart() {
+    // 重置轮级 tps 统计 (上一轮残留: 流已结算, 计数归零)
+    turnTpsTokenCount_  = 0.0;
+    turnTpsDurationSec_ = 0.0;
+    // 重置流级统计 (防御: 上轮异常结束可能未结算)
+    tpsStartTime_   = {};
+    tpsTokenCount_  = 0.0;
+    tpsLastPushSec_ = 0.0;
+}
+
+void EventBridge::settleCurrentStream() {
+    // 无进行中的流 (当前流无 token 输出) 时跳过
+    if (tpsTokenCount_ <= 0.0) {
+        return;
+    }
+    // 将当前流的累计估算 token 与流式耗时累加到轮级统计
+    // (耗时仅计 LLM 流式期间, 从首个 token 到节点结束)
+    const auto elapsedSec = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - tpsStartTime_
+    ).count();
+    turnTpsTokenCount_ += tpsTokenCount_;
+    if (elapsedSec > 0.0) {
+        turnTpsDurationSec_ += elapsedSec;
+    }
+    // 重置流级计数 (下一个流重新开始计时)
+    tpsStartTime_   = {};
+    tpsTokenCount_  = 0.0;
+    tpsLastPushSec_ = 0.0;
+}
+
+double EventBridge::takeTurnTps() {
+    // 结算可能仍在进行中的流 (异常/取消路径可能未触发节点结束)
+    settleCurrentStream();
+    // 无 LLM 流式输出时返回 0 (如纯工具错误轮)
+    if (turnTpsDurationSec_ <= 0.0) {
+        turnTpsTokenCount_  = 0.0;
+        turnTpsDurationSec_ = 0.0;
+        return 0.0;
+    }
+    const double tps = turnTpsTokenCount_ / turnTpsDurationSec_;
+    // 取走后重置, 下一轮重新统计
+    turnTpsTokenCount_  = 0.0;
+    turnTpsDurationSec_ = 0.0;
+    return tps;
+}
+
 void EventBridge::handleNodeStart(const neograph::graph::GraphEvent& event) {
     lastChatChunkType_ = neograph::ChatStreamChunk::TYPE_UNKNOWN;
     nodeStartTime_     = std::chrono::system_clock::now();
@@ -318,6 +364,8 @@ void EventBridge::handleNodeStart(const neograph::graph::GraphEvent& event) {
 }
 
 void EventBridge::handleNodeEnd(const neograph::graph::GraphEvent& event) {
+    // 结算当前 LLM 流: 将流耗时累加到轮级 tps 统计 (ModelCall 节点结束即流结束)
+    settleCurrentStream();
     lastChatChunkType_ = neograph::ChatStreamChunk::TYPE_UNKNOWN;
     // 计算持续时间
     const int64_t duration_ms
@@ -335,6 +383,8 @@ void EventBridge::handleNodeEnd(const neograph::graph::GraphEvent& event) {
 
 void EventBridge::handleError(const neograph::graph::GraphEvent& event) {
     // 错误不产出会话增量 Delta (由 WireTurnResult 统一报告), 仅发布总线事件
+    // 结算当前 LLM 流 (错误/取消可能跳过节点结束, 轮级统计需及时结算)
+    settleCurrentStream();
     lastChatChunkType_ = neograph::ChatStreamChunk::TYPE_UNKNOWN;
     auto msg           = event.data.is_string() ? event.data.get<std::string>() : event.data.dump();
     publishError(std::move(msg), event.node_name);
