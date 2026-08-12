@@ -991,7 +991,7 @@ inline PinyinCallback s_pinyinCallback = nullptr;
     // 否则保留一位小数 (如 1.5K); 原逻辑仅按 >=100 去掉小数,
     // 导致 formatSize(1) 返回 "1.0" 这类不合理显示
     if (false == showFloat || size == std::floor(size)) {
-        return fmt::format("{}{}", int64_t(size), units[index]);
+        return fmt::format("{}{}", static_cast<int64_t>(size), units[index]);
     } else {
         return fmt::format("{:.1f}{}", size, units[index]);
     }

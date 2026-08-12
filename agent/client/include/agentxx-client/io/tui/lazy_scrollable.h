@@ -44,7 +44,7 @@ public:
 
     using ItemCountFunc      = std::function<size_t()>;
     using ItemKeyFunc        = std::function<uint64_t(size_t index)>;
-    using EstimateHeightFunc = std::function<int(size_t index, int width)>;
+    using EstimateHeightFunc = std::function<size_t(size_t index, size_t width)>;
     using BuildFunc          = std::function<LazyBuiltItem(size_t index)>;
     /// 判断子项是否占据整个视口高度 (空状态居中展示用); 返回 false 则正常布局
     using FillViewportFunc = std::function<bool(size_t index)>;

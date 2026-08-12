@@ -145,15 +145,15 @@ std::pair<Element, std::vector<std::unique_ptr<markdown::DomBuilder>>> renderMar
 /// 宽字符 (CJK/emoji 等) 按 2 列计, 与 markdown::utf8_display_width 一致,
 /// 修复旧实现按 UTF-8 码点计宽 (宽字符算 1 列) 导致 CJK 文本高度低估、
 /// 滚动定位抖动的问题。线性扫描, 不整串调用 utf8_display_width (避免 O(n²))。
-int estimateLines(std::string_view s, int width) {
+size_t estimateLines(std::string_view s, size_t width) {
     if (width <= 0) {
         width = 80;
     }
     if (s.empty()) {
         return 1;
     }
-    int    lines = 1;
-    int    col   = 0;
+    size_t lines = 1;
+    size_t col   = 0;
     size_t i     = 0;
     while (i < s.size()) {
         if (s[i] == '\n') {
@@ -192,7 +192,7 @@ MessageListComponent::MessageListComponent(TUICtx& ctx) :
         [this](size_t index) {
             return itemKey(index);
         },
-        [this](size_t index, int width) {
+        [this](size_t index, size_t width) {
             return estimateHeight(index, width);
         },
         [this](size_t index) {
@@ -410,7 +410,7 @@ uint64_t MessageListComponent::itemKey(size_t index) {
     return h;
 }
 
-int MessageListComponent::estimateHeight(size_t index, int width) {
+size_t MessageListComponent::estimateHeight(size_t index, size_t width) {
     const auto& st = *ctx_.frameState;
     if (st.messages.empty() && !hasStreamingToken(st)) {
         return 1; // banner 为 fillViewport, 高度由 LazyScrollable 置为视口高度
@@ -430,7 +430,7 @@ int MessageListComponent::estimateHeight(size_t index, int width) {
                 if (msg.collapsed) {
                     return 1;
                 }
-                int lines = 1; // header
+                size_t lines = 1; // header
                 if (!msg.text.empty()) {
                     lines += estimateLines(msg.text, width);
                 }
@@ -484,7 +484,7 @@ int MessageListComponent::estimateHeight(size_t index, int width) {
         const auto   t = streamRenderer_->text();
         const size_t f = streamRenderer_->frontierStart();
         if (f < t.size()) {
-            return std::max(1, estimateLines(t.substr(f), width));
+            return std::max(static_cast<size_t>(1), estimateLines(t.substr(f), width));
         }
     }
     return 1;
@@ -624,15 +624,15 @@ LazyBuiltItem MessageListComponent::buildStreamingHeader(const TUIRenderState& s
 
 LazyBuiltItem MessageListComponent::buildStreamingStable(const TUIRenderState& st, size_t bi) {
     // 已闭合顶层块: 构建一次后由 LazyScrollable 缓存 (key 稳定, 仅可见项被布局)
-    const auto& theme = *ctx_.theme;
-    const int   maxWidth = std::max(1, scrollable_->contentWidth());
-    const bool  thinking = (st.currentTokenRole == TUIMessage::Role::Thinking);
-    const ftxui::Color c = thinking ? theme.thinkingColor : theme.normalColor;
+    const auto&        theme    = *ctx_.theme;
+    const int          maxWidth = std::max(1, scrollable_->contentWidth());
+    const bool         thinking = (st.currentTokenRole == TUIMessage::Role::Thinking);
+    const ftxui::Color c        = thinking ? theme.thinkingColor : theme.normalColor;
 
     LazyBuiltItem out;
     out.cacheable = true;
     if (streamRenderer_) {
-        out.element = vbox({
+        out.element     = vbox({
             streamRenderer_->stableBlockElement(bi, theme.markdownTheme, maxWidth) | color(c),
             text(""), // 块间空行分隔 (与整篇解析一致)
         });
@@ -645,10 +645,10 @@ LazyBuiltItem MessageListComponent::buildStreamingStable(const TUIRenderState& s
 
 LazyBuiltItem MessageListComponent::buildStreamingFrontier(const TUIRenderState& st) {
     // 尾部 (仍增长) 块: 每帧重建
-    const auto& theme = *ctx_.theme;
-    const int   maxWidth = std::max(1, scrollable_->contentWidth());
-    const bool  thinking = (st.currentTokenRole == TUIMessage::Role::Thinking);
-    const ftxui::Color c = thinking ? theme.thinkingColor : theme.normalColor;
+    const auto&        theme    = *ctx_.theme;
+    const int          maxWidth = std::max(1, scrollable_->contentWidth());
+    const bool         thinking = (st.currentTokenRole == TUIMessage::Role::Thinking);
+    const ftxui::Color c        = thinking ? theme.thinkingColor : theme.normalColor;
 
     LazyBuiltItem out;
     out.cacheable   = false;
@@ -699,8 +699,7 @@ void MessageListComponent::syncStream(const TUIRenderState& st) {
     }
     const auto& tok = *st.currentToken;
     const auto  acc = streamRenderer_->text();
-    if (tok.size() >= acc.size()
-        && std::string_view(tok).substr(0, acc.size()) == acc) {
+    if (tok.size() >= acc.size() && std::string_view(tok).substr(0, acc.size()) == acc) {
         // token 是已累积文本的延续 -> 仅追加增量
         if (tok.size() > acc.size()) {
             streamRenderer_->append(std::string_view(tok).substr(acc.size()));
