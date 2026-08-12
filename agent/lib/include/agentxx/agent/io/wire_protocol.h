@@ -83,6 +83,8 @@ inline std::string_view deltaTypeToString(Delta::Type t) noexcept {
             return "node_end";
         case T::MessageTip:
             return "message_tip";
+        case T::SystemMessage:
+            return "system_message";
     }
     return "text_token";
 }
@@ -115,6 +117,9 @@ inline std::optional<Delta::Type> deltaTypeFromString(std::string_view s) noexce
     }
     if (s == "message_tip") {
         return T::MessageTip;
+    }
+    if (s == "system_message") {
+        return T::SystemMessage;
     }
     return std::nullopt;
 }
@@ -157,11 +162,14 @@ inline neograph::json deltaToJson(const Delta& d) {
     if (d.durationMs > 0) {
         j["duration_ms"] = d.durationMs;
     }
+    if (d.tps > 0.0) {
+        j["tps"] = d.tps;
+    }
     if (!d.nodeName.empty()) {
         j["node_name"] = d.nodeName;
     }
-    // MessageTip: 提示级别
-    if (d.type == Delta::Type::MessageTip) {
+    // MessageTip / SystemMessage: 提示级别
+    if (d.type == Delta::Type::MessageTip || d.type == Delta::Type::SystemMessage) {
         switch (d.tipType) {
             case Delta::TipType::Warning:
                 j["tip_type"] = "warning";
@@ -199,8 +207,9 @@ inline std::optional<Delta> deltaFromJson(const neograph::json& j) {
     d.tailHash     = j.value("tail_hash", std::string{});
     d.startTimeMs  = j.value("start_time_ms", int64_t{0});
     d.durationMs   = j.value("duration_ms", int64_t{0});
+    d.tps          = j.value("tps", 0.0);
     d.nodeName     = j.value("node_name", std::string{});
-    if (d.type == Delta::Type::MessageTip) {
+    if (d.type == Delta::Type::MessageTip || d.type == Delta::Type::SystemMessage) {
         const auto tip = j.value("tip_type", std::string{"info"});
         if (tip == "warning") {
             d.tipType = Delta::TipType::Warning;

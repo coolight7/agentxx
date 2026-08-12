@@ -820,9 +820,8 @@ void TUIClientAgentIO::pushCurrentTokenLocked(TUIRenderState& st) {
 void TUIClientAgentIO::cancelCurrentRunLocked(TUIRenderState& st) {
     requestCancel(currentThreadId());
     pushCurrentTokenLocked(st);
-    st.messages.push_back(std::make_shared<TUIMessage>(
-        TUIMessage::makeText(TUIMessage::Role::System, "[Cancel Request]")
-    ));
+    // 取消提示由 agent 线程确认取消后经 SystemMessage Delta 插入 (原在此处
+    // 即时插入 "[Cancel Request]", 迁移后由 agent 端统一插入保证历史一致)
     st.isStreaming = false;
     dispatchNextPendingInput(st);
 }
@@ -976,6 +975,30 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
                 st.messages.push_back(std::move(msg));
                 st.isStreaming = true;
             } break;
+            case Type::SystemMessage: {
+                // 系统消息: 已由 agent 线程插入会话历史 (viewMessages),
+                // 内容/时间戳/级别与历史完全一致, 直接追加即可
+                pushCurrentTokenLocked(st);
+                auto msg    = std::make_shared<TUIMessage>();
+                msg->role   = TUIMessage::Role::System;
+                msg->id     = delta.msgId;
+                msg->text   = delta.text;
+                msg->system = TUIMessage::SystemData{};
+                switch (delta.tipType) {
+                    case agentxx::agent::Delta::TipType::Warning:
+                        msg->system->tipLevel = TUIMessage::TipLevel::Warning;
+                        break;
+                    case agentxx::agent::Delta::TipType::Error:
+                        msg->system->tipLevel = TUIMessage::TipLevel::Error;
+                        break;
+                    default:
+                        msg->system->tipLevel = TUIMessage::TipLevel::Info;
+                        break;
+                }
+                msg->startTimeMs = delta.startTimeMs;
+                msg->durationMs  = delta.durationMs;
+                st.messages.push_back(std::move(msg));
+            } break;
             case Type::TurnStart: {
                 st.isStreaming = true;
             } break;
@@ -983,20 +1006,8 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
                 st.currentNodeName.clear();
                 pushCurrentTokenLocked(st);
                 st.isStreaming = false;
-                if (delta.durationMs > 0 || delta.startTimeMs > 0) {
-                    auto statMsg  = std::make_shared<TUIMessage>();
-                    statMsg->role = TUIMessage::Role::System;
-                    statMsg->text = fmt::format(
-                        "{} · {} · {}",
-                        st.cachedModelName,
-                        formatDurationMilliseconds(delta.durationMs),
-                        formatTimestampMilliseconds(delta.startTimeMs + delta.durationMs)
-                    );
-                    statMsg->system      = TUIMessage::SystemData{};
-                    statMsg->durationMs  = delta.durationMs;
-                    statMsg->startTimeMs = delta.startTimeMs;
-                    st.messages.push_back(std::move(statMsg));
-                }
+                // 轮次统计系统提示由 agent 端插入 (SystemMessage Delta),
+                // UI 端不再自行构造
                 dispatchNextPendingInput(st);
             } break;
         }
@@ -1049,17 +1060,13 @@ void TUIClientAgentIO::onSync(const agentxx::agent::SyncPayload& payload) {
 // onTurnResult / onContextStats (client 线程)
 // ---------------------------------------------------------------------------
 
-void TUIClientAgentIO::onTurnResult(const agentxx::agent::WireTurnResult& result) {
+void TUIClientAgentIO::onTurnResult(const agentxx::agent::WireTurnResult& /*result*/) {
     {
         std::lock_guard<std::mutex> lock(sharedState_.mutex());
         auto&                       st = sharedState_.mutableState();
         st.isStreaming                 = false;
-        if (result.hasError && !result.errorMessage.empty()) {
-            st.messages.push_back(std::make_shared<TUIMessage>(TUIMessage::makeText(
-                TUIMessage::Role::System,
-                fmt::format("[Error] {}", result.errorMessage)
-            )));
-        }
+        // 错误提示已由 agent 线程插入会话历史并经 SystemMessage Delta 送达,
+        // 此处不再自行构造
         dispatchNextPendingInput(st);
     }
     postRedraw();
@@ -1161,20 +1168,8 @@ asio::awaitable<neograph::json> TUIClientAgentIO::handleInterrupt(
 
     awaitingInterruptInput_.store(true, std::memory_order_release);
 
-    // 中断头消息 (节点/值/句柄)
-    {
-        std::lock_guard<std::mutex> lock(sharedState_.mutex());
-        auto&                       st = sharedState_.mutableState();
-        std::string                 msg
-            = fmt::format("Interrupted at: {}\nValue: {}", interruptNode, interruptValue);
-        if (!handleArg.name.empty()) {
-            msg += fmt::format("\nHandle: {}", handleArg.name);
-        }
-        st.messages.push_back(std::make_shared<TUIMessage>(
-            TUIMessage::makeText(TUIMessage::Role::System, std::move(msg))
-        ));
-    }
-    postRedraw();
+    // 中断头消息已由 agent 线程插入会话历史并经 SystemMessage Delta 送达
+    // (在发起中断请求前插入, 顺序先于本函数的输入项消息), 此处不再构造
 
     // 每个输入项一条中断消息 (共享结果通道)
     const int64_t wireId      = interruptWireId_;

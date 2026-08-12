@@ -524,6 +524,16 @@ public:
         tpsPushIntervalSec_ = seconds;
     }
 
+    /// 记录一轮会话开始: 重置轮级 tps 统计
+    /// - 由 BaseAgent 在发送 TurnStart Delta 前调用
+    void handleTurnStart();
+
+    /// 取走本轮会话的 LLM API 平均生成速度 (token/s) 并重置轮级统计
+    /// - 由 BaseAgent 在发送 TurnEnd Delta 前调用, 结果填入 Delta::tps
+    /// - 计算口径: 本轮所有 ModelCall 的累计估算 token / 累计流式耗时;
+    ///   无 LLM 流式输出时返回 0
+    double takeTurnTps();
+
 private:
 
     void handleLLMToken(const neograph::graph::GraphEvent& event);
@@ -543,6 +553,11 @@ private:
     /// - 经 WireContextStats.tps 携带, 与上下文统计共用同一通道;
     ///   无流式数据 (io_ 为空/无会话统计) 时静默跳过
     void pushTpsIfDue();
+
+    /// 结算当前进行中的 ModelCall 流: 将流耗时累加到轮级统计, 并重置流级计数
+    /// - 在节点结束 (handleNodeEnd) / 出错 (handleError) 时调用, 保证每个流
+    ///   的耗时恰好结算一次
+    void settleCurrentStream();
 
     /// 发布总线事件: LLM_TOKEN -> EventModelToken (无订阅者时跳过, 避免无效协程创建)
     void publishModelToken(const std::string& token, std::string_view kind);
@@ -575,9 +590,16 @@ private:
     ///   (handleNodeStart/handleNodeEnd/handleError 都会重置该标记)
     /// - 仅在 io 线程访问, 无需同步
     std::chrono::steady_clock::time_point tpsStartTime_{};
-    double                                tpsTokenCount_  = 0.0; ///< 累计估算 token 数
-    double                                tpsLastPushSec_ = 0.0; ///< 上次推送时的累计秒数
+    double                                tpsTokenCount_     = 0.0; ///< 当前流累计估算 token 数
+    double                                tpsLastPushSec_    = 0.0; ///< 上次推送时的累计秒数
     double                                tpsPushIntervalSec_ = 3.0; ///< 推送间隔 (秒)
+
+    /// 轮级 tps (token/s) 统计: 一轮会话内所有 ModelCall 的累计估算 token 与
+    /// 累计流式耗时 (仅计 LLM 流式期间, 不含 tool 执行等间隔)
+    /// - handleTurnStart 重置; 每个流结束 (settleCurrentStream) 累加;
+    ///   takeTurnTps 取平均值并重置
+    double turnTpsTokenCount_  = 0.0; ///< 本轮累计估算 token 数
+    double turnTpsDurationSec_ = 0.0; ///< 本轮累计流式耗时 (秒)
 };
 
 } // namespace middleware

@@ -141,15 +141,18 @@ Element SessionSelectorOverlay::OnRender() {
         for (size_t i = 0; i < st.sessionList.size(); ++i) {
             const auto& s = st.sessionList[i];
             // 第一行: 会话名称 (title 为空时回退 threadId)
-            const std::string title = s.title.empty() ? s.threadId : s.title;
+            const std::string title     = s.title.empty() ? s.threadId : s.title;
             const bool        isCurrent = (s.threadId == ctx_.threadId);
-            auto nameLine = text(fmt::format(" {} ", title));
+            auto              nameLine  = text(fmt::format(" {} ", title));
             if (isCurrent) {
                 nameLine = nameLine | bold;
             }
             // 第二行: 最近活动日期
-            auto dateLine
-                = text(fmt::format("   {} ", formatDateTimeMilliseconds(s.lastActiveMs))) | dim;
+            auto dateLine = text(fmt::format(
+                                "   {} ",
+                                agentxx::util::formatDateTimeMilliseconds(s.lastActiveMs)
+                            ))
+                            | dim;
 
             // 当前会话条目: 名称后附加 "(current)" 标记
             Element row = vbox({nameLine, dateLine});
@@ -165,8 +168,8 @@ Element SessionSelectorOverlay::OnRender() {
 
             // +1: 会话条目从索引 1 开始 (0 为 "新会话" 入口)
             if (static_cast<int>(i) + 1 == selectedIndex_) {
-                row = row | bgcolor(theme.buttonActiveBgColor)
-                      | color(theme.buttonActiveTextColor) | focus;
+                row = row | bgcolor(theme.buttonActiveBgColor) | color(theme.buttonActiveTextColor)
+                      | focus;
             } else {
                 row = row | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor);
             }
@@ -246,8 +249,7 @@ void SessionSelectorOverlay::confirmSelection() {
         auto snap = ctx_.state->readSnapshot();
         // -1: 会话条目从索引 1 开始 (0 为 "新会话" 入口)
         const int sessionIdx = selectedIndex_ - 1;
-        if (sessionIdx >= 0
-            && sessionIdx < static_cast<int>(snap->sessionList.size())) {
+        if (sessionIdx >= 0 && sessionIdx < static_cast<int>(snap->sessionList.size())) {
             selected = snap->sessionList[sessionIdx].threadId;
         }
     }
@@ -409,14 +411,16 @@ bool SettingsOverlay::handleMouse(const Mouse& mouse) {
 }
 
 void SettingsOverlay::cycleTheme() {
-    auto&     settings = TUISettings::instance();
-    const bool light   = settings.themeKind() == TUISettings::kThemeLight;
+    auto&      settings = TUISettings::instance();
+    const bool light    = settings.themeKind() == TUISettings::kThemeLight;
     settings.setThemeKind(light ? TUISettings::kThemeDark : TUISettings::kThemeLight);
     *ctx_.theme = light ? TUITheme::darkTheme() : TUITheme::lightTheme();
     if (onThemeChange_) {
         onThemeChange_();
     }
-}void SettingsOverlay::cycleAnimationLevel() {
+}
+
+void SettingsOverlay::cycleAnimationLevel() {
     auto&     settings = TUISettings::instance();
     const int next     = (static_cast<int>(settings.animationLevel()) + 1)
                      % static_cast<int>(TUISettings::kAnimationLevelNames.size());

@@ -13,6 +13,7 @@
 #include "asio/dispatch.hpp"
 #include "asio/redirect_error.hpp"
 #include "asio/use_awaitable.hpp"
+#include "fmt/format.h"
 #include "neograph/graph/cancel.h"
 
 namespace agentxx {
@@ -406,6 +407,24 @@ asio::awaitable<void> SessionServerAgentIO::run() {
         // catchErrorAsync: 取消类异常 (CancelledException/NodeInterrupt) 与普通异常
         // 一致转为错误消息通知客户端 (onRethrow), 避免异常逃逸 co_spawn 完成处理器;
         // 其余异常同样转为错误消息
+        // 错误提示: agent 线程插入会话历史并发送 SystemMessage Delta (覆盖
+        // runConversationTurnAsync 自身抛异常的兜底路径, 与主路径提示一致)
+        auto sendErrorTip = [&](std::string_view errmsg) {
+            auto sess = session();
+            if (!sess) {
+                return;
+            }
+            auto text = fmt::format("[Error] {}", errmsg);
+            auto vm   = ViewMessage::makeText(ViewMessage::Role::System, text);
+            vm.system->tipLevel = ViewMessage::TipLevel::Error;
+            const auto id = sess->appendHistory(std::move(vm));
+            sendToPeer(Delta{
+                .type    = Delta::Type::SystemMessage,
+                .text    = std::move(text),
+                .msgId   = id,
+                .tipType = Delta::TipType::Error,
+            });
+        };
         co_await agentxx::util::catchErrorAsync<bool>(
             [&]() -> asio::awaitable<bool> {
                 auto result = co_await agent->runConversationTurnAsync(
@@ -426,6 +445,7 @@ asio::awaitable<void> SessionServerAgentIO::run() {
             },
             [&](std::string errmsg) -> asio::awaitable<bool> {
                 XX_LOGE("[session_ctrl] turn error: {}", errmsg);
+                sendErrorTip(errmsg);
                 sendToPeer(WireTurnResult{
                     .threadId     = config_.threadId,
                     .hasError     = true,
@@ -436,6 +456,7 @@ asio::awaitable<void> SessionServerAgentIO::run() {
             },
             [&](std::string& errmsg) -> std::optional<bool> {
                 XX_LOGE("[session_ctrl] turn error: {}", errmsg);
+                sendErrorTip(errmsg);
                 sendToPeer(WireTurnResult{
                     .threadId     = config_.threadId,
                     .hasError     = true,
