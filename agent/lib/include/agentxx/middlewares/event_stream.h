@@ -549,7 +549,7 @@ private:
     ///   ascii ≈ 4 字符/token, 非 ascii ≈ 1.1 字符/token
     double estimateTokens(std::string_view text);
 
-    /// 每 5 秒推送一次当前 ModelCall 的平均生成速度 (token/s) 到对端
+    /// 每 [tpsPushIntervalSec_] 秒推送一次最近窗口内的平均生成速度 (token/s) 到对端
     /// - 经 WireContextStats.tps 携带, 与上下文统计共用同一通道;
     ///   无流式数据 (io_ 为空/无会话统计) 时静默跳过
     void pushTpsIfDue();
@@ -584,14 +584,17 @@ private:
     std::unordered_map<std::string, size_t> toolCallHistoryIndex_;
 
     /// tps (token/s) 统计: 从每次 ModelCall 流式开始 (节点开始后首个 token) 计时,
-    /// 累计估算 token 数, 每 [tpsPushIntervalSec_] 秒推送一次平均速度到对端
-    /// (WireContextStats.tps)
+    /// 累计估算 token 数, 每 [tpsPushIntervalSec_] 秒推送一次到对端 (WireContextStats.tps)
+    /// - 推送口径为"最近一个窗口 (推送间隔) 内的平均生成速度":
+    ///   窗口内 token 增量 / 窗口时长, 而非自流开始以来的累计平均
+    ///   (长时间流的速度波动不会被早期数据平滑掉, 反映当前实际生成速度)
     /// - 新流开始判定: handleLLMToken 进入时 lastChatChunkType_ == TYPE_UNKNOWN
     ///   (handleNodeStart/handleNodeEnd/handleError 都会重置该标记)
     /// - 仅在 io 线程访问, 无需同步
     std::chrono::steady_clock::time_point tpsStartTime_{};
     double                                tpsTokenCount_     = 0.0; ///< 当前流累计估算 token 数
     double                                tpsLastPushSec_    = 0.0; ///< 上次推送时的累计秒数
+    double                                tpsLastPushToken_  = 0.0; ///< 上次推送时的累计 token 数
     double                                tpsPushIntervalSec_ = 3.0; ///< 推送间隔 (秒)
 
     /// 轮级 tps (token/s) 统计: 一轮会话内所有 ModelCall 的累计估算 token 与

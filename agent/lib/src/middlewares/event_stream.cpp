@@ -100,9 +100,10 @@ void EventBridge::handleLLMToken(const neograph::graph::GraphEvent& event) {
 
     // tps 统计: 新 ModelCall 流开始 (节点开始/结束后的首个 token) 时重置计时与计数
     if (lastChatChunkType_ == neograph::ChatStreamChunk::TYPE_UNKNOWN) {
-        tpsStartTime_   = std::chrono::steady_clock::now();
-        tpsTokenCount_  = 0.0;
-        tpsLastPushSec_ = 0.0;
+        tpsStartTime_     = std::chrono::steady_clock::now();
+        tpsTokenCount_    = 0.0;
+        tpsLastPushSec_   = 0.0;
+        tpsLastPushToken_ = 0.0;
     }
 
     if (event.data.is_string()) {
@@ -308,9 +309,10 @@ void EventBridge::handleTurnStart() {
     turnTpsTokenCount_  = 0.0;
     turnTpsDurationSec_ = 0.0;
     // 重置流级统计 (防御: 上轮异常结束可能未结算)
-    tpsStartTime_   = {};
-    tpsTokenCount_  = 0.0;
-    tpsLastPushSec_ = 0.0;
+    tpsStartTime_     = {};
+    tpsTokenCount_    = 0.0;
+    tpsLastPushSec_   = 0.0;
+    tpsLastPushToken_ = 0.0;
 }
 
 void EventBridge::settleCurrentStream() {
@@ -328,9 +330,10 @@ void EventBridge::settleCurrentStream() {
         turnTpsDurationSec_ += elapsedSec;
     }
     // 重置流级计数 (下一个流重新开始计时)
-    tpsStartTime_   = {};
-    tpsTokenCount_  = 0.0;
-    tpsLastPushSec_ = 0.0;
+    tpsStartTime_     = {};
+    tpsTokenCount_    = 0.0;
+    tpsLastPushSec_   = 0.0;
+    tpsLastPushToken_ = 0.0;
 }
 
 double EventBridge::takeTurnTps() {
@@ -437,8 +440,16 @@ void EventBridge::pushTpsIfDue() {
     if (nowSec - tpsLastPushSec_ < tpsPushIntervalSec_) {
         return;
     }
-    tpsLastPushSec_  = nowSec;
-    const double tps = nowSec > 0.0 ? tpsTokenCount_ / nowSec : 0.0;
+    // 最近一个窗口 (推送周期) 内的平均生成速度:
+    // 窗口内 token 增量 / 窗口实际时长, 而非自流开始以来的累计平均
+    // (累计平均会被早期慢速段平滑, 无法反映当前实际速度)
+    const double windowSec = nowSec - tpsLastPushSec_;
+    const double tps
+        = (windowSec > 0.0 && tpsTokenCount_ > tpsLastPushToken_)
+              ? (tpsTokenCount_ - tpsLastPushToken_) / windowSec
+              : 0.0;
+    tpsLastPushSec_   = nowSec;
+    tpsLastPushToken_ = tpsTokenCount_;
     io_->sendToPeer(agentxx::agent::WireContextStats{
         session_->contextStats->contextTokens.load(std::memory_order_relaxed),
         session_->contextStats->maxContextTokens.load(std::memory_order_relaxed),
