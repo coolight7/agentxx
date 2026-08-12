@@ -1,7 +1,8 @@
-// 注意顺序: test_agent.h 会把 XX_TEST_PASSED/FAILED 重定义为 g_da_*,
-// 必须在其后包含 test_session_persistence.h (重新定义为 g_sp_*)
-#include "test_session_persistence.h"
+// 注意顺序: test_session_persistence.h 会把 XX_TEST_PASSED/FAILED 重定义为
+// g_sp_*, 必须包含在 test_agent.h 之后 (test_agent.h 会重定义为 g_da_*),
+// 使本模块测试计数回落到 g_sp_* 而非计入 agent 模块
 #include "test_agent.h"
+#include "test_session_persistence.h"
 
 #include "agentxx/agent/code_agent.h"
 #include "agentxx/agent/context.h"
@@ -574,8 +575,22 @@ static asio::awaitable<void> testSessionPersistenceE2E() {
             return cfg;
         };
 
-        g_da_sim_response_content = "Persisted E2E response.";
-        g_da_sim_tool_calls       = neograph::json::array();
+        g_da_sim_response_content = "";
+        g_da_sim_tool_calls       = neograph::json::array({
+            neograph::json{
+                           {"index", 0},
+                           {"id", "call_e2e_1"},
+                           {"type", "function"},
+                           {"function",
+                       neograph::json{
+                           {"name", "agentxx_filesystem_list"},
+                           {"arguments", "{}"},
+                 }},
+                           },
+        });
+        // 模拟 thinking 模型: 首个请求携带 reasoning_content + tool_calls,
+        // 验证展开出的 Thinking 历史消息可持久化并在重启后恢复
+        g_da_sim_reasoning_content = "E2E reasoning before tool call";
 
         // ---- 第一次运行: 一轮对话 + share store 写入 ----
         {
@@ -586,6 +601,18 @@ static asio::awaitable<void> testSessionPersistenceE2E() {
                 = co_await agent.runConversationTurnAsync("e2e-thread", "Hello", true, nullptr);
             XX_TEST_EXPECT_FALSE(result.hasError);
             XX_TEST_EXPECT_FALSE(result.interrupted);
+
+            // 内存 viewMessages: user + Thinking(tool_calls 展开) + Tool
+            auto sess = agent.agentContext->getSession("e2e-thread");
+            XX_TEST_EXPECT_TRUE(sess->viewMessages.size() >= size_t{3});
+            bool thinkingInMemory = false;
+            for (const auto& vm : sess->viewMessages) {
+                if (vm.role == agentxx::agent::ViewMessage::Role::Thinking
+                    && vm.text == "E2E reasoning before tool call") {
+                    thinkingInMemory = true;
+                }
+            }
+            XX_TEST_EXPECT_TRUE(thinkingInMemory);
 
             // share store 写穿
             auto id = agent.agentContext->middlewareHandleContext->addShareStoreItemValue(
@@ -599,9 +626,6 @@ static asio::awaitable<void> testSessionPersistenceE2E() {
                        / agentxx::agent::SessionPersistence::sanitizeThreadId("e2e-thread");
             XX_TEST_EXPECT_TRUE(fs::exists(dir / "session.db"));
             XX_TEST_EXPECT_TRUE(fs::exists(dir / "share_store.db"));
-
-            auto sess = agent.agentContext->getSession("e2e-thread");
-            XX_TEST_EXPECT_TRUE(sess->viewMessages.size() >= size_t{2});
         }
 
         // ---- 模拟重启: 新 Agent 实例恢复会话 ----
@@ -610,11 +634,20 @@ static asio::awaitable<void> testSessionPersistenceE2E() {
             co_await agent.init();
 
             auto sess = agent.agentContext->getSession("e2e-thread");
-            // 展示历史恢复 (user + assistant)
-            XX_TEST_EXPECT_EQ(sess->viewMessages.size(), size_t{2});
+            // 展示历史恢复: user + Thinking + Tool; Thinking 是本次修复的核心断言,
+            // 修复前 tool_calls 分支不展开 Thinking, 重启后 Thinking 丢失
+            XX_TEST_EXPECT_EQ(sess->viewMessages.size(), size_t{3});
             XX_TEST_EXPECT_EQ(sess->viewMessages[0].id, std::string{"msg_000001"});
             XX_TEST_EXPECT_EQ(sess->viewMessages[0].text, std::string{"Hello"});
-            // LLM 上下文恢复 (system + user + assistant)
+            XX_TEST_EXPECT_TRUE(
+                sess->viewMessages[1].role == agentxx::agent::ViewMessage::Role::Thinking
+            );
+            XX_TEST_EXPECT_EQ(sess->viewMessages[1].text, std::string{"E2E reasoning before tool call"});
+            XX_TEST_EXPECT_TRUE(sess->viewMessages[1].collapsed);
+            XX_TEST_EXPECT_TRUE(
+                sess->viewMessages[2].role == agentxx::agent::ViewMessage::Role::Tool
+            );
+            // LLM 上下文恢复 (system + user + assistant(tool_calls) + tool + assistant)
             XX_TEST_EXPECT_TRUE(sess->llmMessages.is_array());
             XX_TEST_EXPECT_TRUE(sess->llmMessages.size() >= size_t{2});
             // msg id 延续
@@ -622,7 +655,7 @@ static asio::awaitable<void> testSessionPersistenceE2E() {
                 agentxx::agent::ViewMessage::Role::Assistant,
                 "extra"
             ));
-            XX_TEST_EXPECT_EQ(newId, std::string{"msg_000003"});
+            XX_TEST_EXPECT_EQ(newId, std::string{"msg_000004"});
 
             // share store 恢复 (懒加载自 DB)
             auto v = agent.agentContext->middlewareHandleContext->getShareStoreItemValue(
