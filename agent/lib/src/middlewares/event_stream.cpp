@@ -80,7 +80,9 @@ void EventBridge::operator()(const neograph::graph::GraphEvent& event) {
 
 void EventBridge::emitDelta(agentxx::agent::Delta delta) {
     // Delta 流序号: 会话级单调递增 (服务端增量重放缓冲依赖 seq 单调性)
-    delta.seq = ++session_->deltaSeq;
+    // 统一经 Session::nextDeltaSeq 分配 (与 SessionServerAgentIO 的新产出
+    // Delta 共用同一入口, 保证所有新 Delta 都携带有效 seq 入重放缓冲)
+    delta.seq = session_->nextDeltaSeq();
     if (io_) {
         io_->sendToPeer(std::move(delta));
     }
@@ -403,16 +405,17 @@ double EventBridge::estimateTokens(std::string_view text) {
     }
 
     // 回退: 无 summarization (测试/裸 EventBridge) 时的内置估算
-    // 口径与 SummarizationMiddlewareHandle 一致: ascii ≈ 4 字符/token,
-    // 非 ascii ≈ 1.1 字符/token
+    // 口径与 SummarizationMiddlewareHandle::countTokensForUtf8Str 完全一致:
+    // - 0xF8-0xFF (无效 UTF-8 前导, 5/6 字节编码已被 RFC 3629 废弃) 按 ascii
+    //   单字节处理, 避免吞掉后续字节少计
+    // - ascii ≈ 4 字符/token, 非 ascii ≈ 1.1 字符/token (分别折算后相加)
     size_t unicodeCount = 0, asciiCount = 0;
     for (size_t i = 0, step = 0; i < text.size(); i += step) {
         unsigned char byte = static_cast<unsigned char>(text[i]);
-        // UTF-8 编码长度: 首字节高位连续 1 的个数决定后续字节数
-        if (byte >= 0xFC) {
-            step = 6;
-        } else if (byte >= 0xF8) {
-            step = 5;
+        if (byte >= 0xF8) {
+            step = 1;
+            ++asciiCount;
+            continue;
         } else if (byte >= 0xF0) {
             step = 4;
         } else if (byte >= 0xE0) {

@@ -403,7 +403,7 @@ Options:
             config->logPrintMessagesBeforeLLM              = false;
             config->logPrintMessagesBeforeLLMWithSystemMsg = false;
             config->logPrintSummarizationResultTokenCount  = true;
-            runRemoteTui(config, agentUrl, agentToken, remoteModel, yamlCfg.permissionMode);
+            runRemoteTui(agentUrl, agentToken, remoteModel, yamlCfg.permissionMode);
         } else {
             config->logPrintToolcall                       = false;
             config->logPrintMessagesBeforeLLM              = false;
@@ -423,7 +423,7 @@ Options:
         config->logPrintMessagesBeforeLLMWithSystemMsg = false;
         config->logPrintSummarizationResultTokenCount  = true;
         auto agent = std::make_shared<agentxx::agent::CodeAgent>(config);
-        runLocalTuiUnified(agent, config, yamlCfg.permissionMode);
+        runLocalTuiUnified(agent, yamlCfg.permissionMode);
     } else {
         agentxx::util::LogDispatcher::instance().removeSink(defaultLogSink);
         config->logPrintToolcall                       = false;

@@ -16,19 +16,17 @@ std::string generateUniqueThreadId();
 void runLocalCliUnified(std::shared_ptr<agent::CodeAgent> agent);
 
 void runLocalTuiUnified(
-    std::shared_ptr<agent::CodeAgent>   agent,
-    std::shared_ptr<agent::AgentConfig> config,
-    agent::PermissionMode               permissionMode = agent::PermissionMode::Ask
+    std::shared_ptr<agent::CodeAgent> agent,
+    agent::PermissionMode             permissionMode = agent::PermissionMode::Ask
 );
 
 void runRemoteCli(std::string_view url, std::string_view token, std::string_view model);
 
 void runRemoteTui(
-    std::shared_ptr<agent::AgentConfig> config,
-    std::string_view                    url,
-    std::string_view                    token,
-    std::string_view                    model,
-    agent::PermissionMode               permissionMode = agent::PermissionMode::Ask
+    std::string_view    url,
+    std::string_view    token,
+    std::string_view    model,
+    agent::PermissionMode permissionMode = agent::PermissionMode::Ask
 );
 
 } // namespace client

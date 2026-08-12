@@ -170,7 +170,11 @@ void SummarizationMiddlewareHandle::doSummarizeToolcall(std::vector<neograph::Ch
 ) {
     auto                          agentCtxPtr = agentContext.lock();
     std::map<std::string, size_t> lastWriteIndex{};
-    for (int64_t i = static_cast<int64_t>(messages.size()) - 1; i > 0; --i) {
+    // 从后往前遍历 (含索引 0): 无 system 消息时首个 assistant(tool_calls) 可能位于
+    // 消息索引 0, 其后续 tool 结果 (索引 >=1) 需要与之配对去重; 若排除索引 0,
+    // 该组 (assistant, tool) 的去重逻辑会漏掉 (外层循环从 i >= 1 开始, tool 消息
+    // 在索引 0 时永远不会被处理)
+    for (int64_t i = static_cast<int64_t>(messages.size()) - 1; i >= 0; --i) {
         auto& msg = messages[i];
         if ("tool" == msg.role) {
             auto itemHandleIt = summarizationToolHandles.find(msg.tool_name);

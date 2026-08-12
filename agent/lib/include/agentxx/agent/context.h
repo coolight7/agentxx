@@ -77,7 +77,8 @@ enum class Activity : uint8_t {
 ///   通过 bindIoThread() 绑定 io 线程, assertIoThread() 强制校验。
 ///   client/UI 不直接读取, 需要时由 io 线程拷贝后经 Wire 消息 (Sync/Delta) 传输,
 ///   因此无需快照/锁同步
-/// - deltaSeq/contextStats 为原子, 跨线程安全
+/// - deltaSeq              (普通 uint64_t, 仅 io 线程递增; EventBridge 分配)
+/// - contextStats          (std::atomic 字段, 跨线程安全)
 /// - UI 线程的取消/切模型操作通过 Wire 消息 (WireCancel/WireSelectModel) 发往 agent 线程处理
 class Session {
 public:
@@ -100,7 +101,9 @@ public:
     /// viewMessages 的链式哈希 (用于 client 校验一致性)
     /// - 仅 ioContext 线程可读写 (appendHistory 内部更新)
     ChainHash chainHash;
-    /// Delta 流序号 (单调递增, 原子操作, 跨线程安全)
+    /// Delta 流序号 (单调递增; 仅 io 线程读写, 无需原子)
+    /// - 由 EventBridge / Session::nextDeltaSeq 统一分配, 服务端增量重放缓冲
+    ///   依赖 seq 单调性; 除重放路径外, 新产出的 Delta 必须经 nextDeltaSeq 分配
     uint64_t deltaSeq = 0;
 
     // -------------------------------------------------------------------
@@ -187,6 +190,15 @@ public:
     void setModelName(std::string_view name);
     /// 获取本会话选择的模型名 (仅 io 线程)
     std::string getModelName() const;
+
+    /// 分配下一个 Delta 流序号 (仅 io 线程调用)
+    /// - 会话级单调递增; EventBridge 与 SessionServerAgentIO 共用此入口,
+    ///   保证所有新产出的 Delta 都分配 seq (重放缓冲依赖 seq 单调性,
+    ///   未分配 seq (=0) 的 Delta 不会入缓冲, 断线重连增量重放会丢失)
+    uint64_t nextDeltaSeq() {
+        assertIoThread();
+        return ++deltaSeq;
+    }
 
 private:
 
