@@ -3,6 +3,7 @@
 #include "agentxx-client/io/stdio/stdin_reader.h"
 #include "agentxx/agent/conversation_types.h"
 #include "agentxx/middlewares/middleware.h"
+#include "agentxx/util/exception.h"
 #include "agentxx/util/log.h"
 #include "agentxx/util/string_util.h"
 #include "asio/this_coro.hpp"
@@ -157,9 +158,20 @@ asio::awaitable<neograph::json> StdIOClientAgentIO::handleInterrupt(
     std::string_view interruptValue,
     std::string_view interruptArgJson
 ) {
-    auto argOpt
-        = agentxx::middleware::InterruptHandleArg::fromJson(neograph::json::parse(interruptArgJson)
-        );
+    // 与 TUI 版一致: 容错解析中断参数 JSON, 避免非法数据抛异常使整个中断请求失败
+    std::optional<agentxx::middleware::InterruptHandleArg> argOpt;
+    agentxx::util::catchError<bool>(
+        [&]() -> bool {
+            argOpt = agentxx::middleware::InterruptHandleArg::fromJson(
+                neograph::json::parse(interruptArgJson)
+            );
+            return true;
+        },
+        [](std::string errinfo) -> bool {
+            XX_LOGE("StdIOClientAgentIO::handleInterrupt json::parse failed: {}", errinfo);
+            return true;
+        }
+    );
     if (!argOpt.has_value()) {
         co_return neograph::json::array();
     }
