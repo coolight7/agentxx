@@ -543,7 +543,18 @@ void TUIClientAgentIO::openSettings() {
         if (messageList_) {
             messageList_->invalidateCache();
         }
+        // 日志行缓存: 已按旧主题着色, 整体清空并重置计数,
+        // 使 renderLogWindow 下次渲染时按新主题重建全部日志行
+        // (仅 clear 不清计数会因行数未变跳过重建, 导致日志侧边栏显示 [Empty])
         logLineCache_.clear();
+        logCacheLineCount_   = 0;
+        logCachePoppedCount_ = 0;
+        // 模态容器背景色: setBgColor 仅在 start() 时设置一次, 主题切换后
+        // 若不更新, 设置弹窗背景仍是旧主题背景色 (弹窗内部元素每帧重建,
+        // 已自动使用新主题; 背景由 ModalContainer 的 bgColor_ 提供)
+        if (modal_) {
+            modal_->setBgColor(theme_.backgroundColor);
+        }
     });
     // 日志等级变化: 清空已收集日志行 (重新按新等级收集);
     // logLineCache_ 因行数骤减在下次渲染时自动整体失效
