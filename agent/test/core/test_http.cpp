@@ -66,6 +66,42 @@ void test_http_client_unit() {
     }
 
     {
+        // isTransientError: 瞬时传输错误分类 (响应截断/连接重置/超时)
+        // -- 响应被截断 (exchange 转换后的错误 / OpenSSL stream truncated)
+        XX_TEST_EXPECT_TRUE(HttpClient::isTransientError(
+            "HTTP response truncated: server closed connection before sending complete "
+            "response (status 200, 123 bytes received)"
+        ));
+        XX_TEST_EXPECT_TRUE(HttpClient::isTransientError("ssl stream truncated"));
+        // 最原始的 beast 错误 (兼容旧路径, 不含 exchange 转换时也命中)
+        XX_TEST_EXPECT_TRUE(HttpClient::isTransientError("partial message [beast.http:2]"));
+        // -- 连接被重置 / 管道破裂
+        XX_TEST_EXPECT_TRUE(HttpClient::isTransientError("Connection reset by peer"));
+        XX_TEST_EXPECT_TRUE(HttpClient::isTransientError("broken pipe"));
+        // -- 对端关闭连接
+        XX_TEST_EXPECT_TRUE(HttpClient::isTransientError("End of file"));
+        // -- 超时 (catchErrorAsync 包装 operation_aborted 为 "timeout: ...")
+        XX_TEST_EXPECT_TRUE(HttpClient::isTransientError("timeout: operation aborted"));
+        XX_TEST_EXPECT_TRUE(HttpClient::isTransientError("connect timed out"));
+        // -- 非瞬时错误不应被分类为可重试
+        XX_TEST_EXPECT_FALSE(HttpClient::isTransientError("HTTP 500: Internal Server Error"));
+        XX_TEST_EXPECT_FALSE(HttpClient::isTransientError("HTTP 404: not found"));
+        XX_TEST_EXPECT_FALSE(HttpClient::isTransientError("invalid JSON response: <html>"));
+        XX_TEST_EXPECT_FALSE(HttpClient::isTransientError("failed to start subprocess"));
+        XX_TEST_EXPECT_FALSE(HttpClient::isTransientError(""));
+        // 大小写不敏感: 大写首字母的错误消息同样命中
+        XX_TEST_EXPECT_TRUE(HttpClient::isTransientError("Connection reset by peer"));
+        XX_TEST_EXPECT_TRUE(HttpClient::isTransientError("End of file"));
+        // "timed out" 变体 (asio 原生消息 "connect timed out" 等) 同样命中;
+        // 超时即瞬时可重试 (含上层整体超时, 但 isTransientError 仅被传输层
+        // 错误路径调用, 上层超时错误不会进入此分类)
+        XX_TEST_EXPECT_TRUE(HttpClient::isTransientError("connect timed out"));
+        XX_TEST_EXPECT_TRUE(HttpClient::isTransientError(
+            "MCP tool call timed out after 120000ms"
+        ));
+    }
+
+    {
         HttpResponse resp;
         resp.status = 200;
         XX_TEST_EXPECT_TRUE(resp.isSuccess());

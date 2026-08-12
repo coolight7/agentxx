@@ -157,12 +157,35 @@ public:
         // 连接关闭但响应未解析完整时, async_read_some 会抛出 eof 错误 (由调用方捕获),
         // 不会返回截断的 body
         while (!parser.is_done()) {
-            co_await http::async_read_some(
-                stream,
-                buffer,
-                parser,
-                asio::cancel_after(config.readChunkTimeout, asio::use_awaitable)
-            );
+            try {
+                co_await http::async_read_some(
+                    stream,
+                    buffer,
+                    parser,
+                    asio::cancel_after(config.readChunkTimeout, asio::use_awaitable)
+                );
+            } catch (const neograph_asio_system_error& e) {
+                // 服务器在响应完整发送前关闭了连接 (Content-Length 偏大 / chunked
+                // 编码不完整 / 网关超时掐断), beast 报 partial_message。原始错误信息
+                // 只含 "partial message [beast.http:2 ...]" 无任何请求上下文, 甚至
+                // 无法区分是响应头还是 body 阶段失败, 这里转换为带状态与已收字节数
+                // 的友好提示, 便于上层 (LLM/provider/MCP) 诊断与识别瞬时错误。
+                // 注意: 该错误是"响应被截断", 不代表请求失败, 服务器可能已处理完
+                // 请求, 仅响应在传输中丢失; 幂等/可容忍重复执行的请求可安全重试。
+                if (e.code() == http::error::partial_message) {
+                    // body().size() = 已接收字节数; Content-Length 头声明值用于
+                    // 区分"服务器 Content-Length 写错"与"连接提前断开"
+                    auto cl = parser.get()[http::field::content_length];
+                    throw std::runtime_error(fmt::format(
+                        "HTTP response truncated: server closed connection before sending "
+                        "complete response (status {}, {} of {} bytes received)",
+                        parser.get().result_int(),
+                        parser.get().body().size(),
+                        cl.empty() ? std::string{"?"} : std::string{cl}
+                    ));
+                }
+                throw;
+            }
         }
 
         auto         res = parser.release();
@@ -174,6 +197,15 @@ public:
         resp.body = std::move(res.body());
         co_return std::expected<HttpResponse, std::string>{std::move(resp)};
     }
+
+    /// 判断错误消息是否属于"瞬时传输错误" (响应被截断 / 连接重置 / 对端关闭 /
+    /// 超时等)。这类错误通常是网络抖动或服务器/网关行为导致, 重试一次大概率
+    /// 成功; 但重试可能造成请求重复执行 (如 POST), 是否重试由调用方根据
+    /// 幂等性决定, 本函数只负责分类, 不负责重试。
+    /// - 匹配的字符串来自本模块 exchange 转换后的错误 ("truncated") 以及
+    ///   asio/beast/OpenSSL 稳定的错误消息 (connection reset / end of file /
+    ///   stream truncated / timeout 等)
+    static bool isTransientError(std::string_view errmsg) noexcept;
 
     static asio::awaitable<std::expected<HttpResponse, std::string>> requestAsync(
         std::string_view     method,

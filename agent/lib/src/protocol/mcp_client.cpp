@@ -120,6 +120,56 @@ bool isHttpTokenChar(char c) {
 bool isBase64Sentinel(std::string_view s) {
     return s.size() >= 10 && s.starts_with("=?base64?") && s.ends_with("?=");
 }
+
+/// 判断 HTTP 响应是否为 "会话过期/失效" 错误 (HTTP 401 + 错误体含 session 过期特征)。
+/// 典型格式 (阿里云 FC / ModelScope 网关):
+///   {"RequestId":"...","Code":"SessionExpired","Message":"session xxx is expired"}
+/// 仅针对明确的 session 过期语义, 避免把普通 401 (如鉴权失败) 误判为会话过期
+bool isSessionExpiredResponse(const agentxx::util::HttpResponse& resp) {
+    if (resp.status != 401) {
+        return false;
+    }
+    auto lower = agentxx::util::toLower(resp.body);
+    return lower.find("sessionexpired") != std::string::npos
+           || lower.find("session_expired") != std::string::npos
+           || lower.find("session expired") != std::string::npos
+           || lower.find("is expired") != std::string::npos;
+}
+
+/// 判断 modern probe (server/discover) 失败是否属于 "legacy 服务器正常回退" 特征。
+/// legacy / streamable-http 服务器 (如 ModelScope 网关) 不支持 server/discover,
+/// 会返回 4xx 协议错误 (如 "No valid session ID provided" / "request without
+/// mcp-session-id header should be mcp initialize request") 或 JSON-RPC
+/// -32601/-32602, 此时回退到 legacy initialize 握手是**预期流程**, 日志应降为
+/// 信息级; 而连接失败/超时/TLS/响应截断等传输层错误属于真正异常, 保留 WARN。
+bool isLegacyProbeFailure(std::string_view errmsg) {
+    auto lower = agentxx::util::toLower(errmsg);
+    // 明确的协议级特征 (旧版服务器对未知 modern 方法/无 session 请求的典型响应)
+    static constexpr std::string_view kLegacyTags[] = {
+        "no valid session",
+        "session id",
+        "must be mcp initialize",
+        "method not found",
+        "-32601",
+        "-32602",
+        "unsupported protocol version",
+        "record not found",
+        "http 400",
+        "http 401",
+        "http 403",
+        "http 404",
+        "http 405",
+        "http 406",
+        "http 409",
+        "http 410",
+    };
+    for (auto tag : kLegacyTags) {
+        if (lower.find(tag) != std::string_view::npos) {
+            return true;
+        }
+    }
+    return false;
+}
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -656,10 +706,22 @@ asio::awaitable<std::expected<McpClient::InitializeResult, std::string>> McpClie
             );
             co_return std::move(info);
         }
-        XX_LOGW(
-            "[McpClient] modern probe failed ({}), falling back to legacy initialize",
-            disc.error()
-        );
+        // legacy / streamable-http 服务器不支持 server/discover, probe 失败并
+        // 回退到 legacy initialize 握手是**预期流程** (非异常): 协议级 4xx /
+        // JSON-RPC 错误视为正常回退, 降为信息级日志; 连接失败/超时/TLS/响应
+        // 截断等传输层异常保留 WARN 便于排查
+        if (isLegacyProbeFailure(disc.error())) {
+            XX_LOGI(
+                "[McpClient] server does not support modern protocol probe ({}), "
+                "falling back to legacy initialize (expected for legacy servers)",
+                disc.error()
+            );
+        } else {
+            XX_LOGW(
+                "[McpClient] modern probe failed ({}), falling back to legacy initialize",
+                disc.error()
+            );
+        }
         // 回退: 旧版服务端 (initialize 握手)
         era_               = ProtocolEra::Legacy;
         negotiatedVersion_ = std::string{kProtocol2025_11_25};
@@ -1470,15 +1532,34 @@ asio::awaitable<std::expected<json, std::string>>
     auto req     = makeRequest(id, method, params);
     auto headers = buildModernHttpHeaders(method, params);
 
-    auto resp = co_await util::HttpClient::postAsync(
-        config_.serverUrl,
-        req,
-        headers,
-        util::HttpClient::RequestConfig{.readChunkTimeout = config_.requestTimeout}
-    );
+    auto doPost = [&]() -> asio::awaitable<
+        std::expected<agentxx::util::HttpResponse, std::string>> {
+        co_return co_await util::HttpClient::postAsync(
+            config_.serverUrl,
+            req,
+            headers,
+            util::HttpClient::RequestConfig{.readChunkTimeout = config_.requestTimeout}
+        );
+    };
 
+    auto resp = co_await doPost();
     if (!resp.has_value()) {
-        co_return std::unexpected{std::move(resp.error())};
+        // 瞬时传输错误 (响应被截断/连接重置/超时) 自动重试, 语义同 sendHttpRequest
+        for (int attempt = 0;
+             !resp.has_value() && util::HttpClient::isTransientError(resp.error())
+             && attempt < 2;
+             ++attempt) {
+            XX_LOGW(
+                "[McpClient] transient HTTP error on {} ({}), retrying ({}/2)",
+                method,
+                resp.error(),
+                attempt + 1
+            );
+            resp = co_await doPost();
+        }
+        if (!resp.has_value()) {
+            co_return std::unexpected{std::move(resp.error())};
+        }
     }
     auto& httpResp = resp.value();
 
@@ -1556,18 +1637,54 @@ asio::awaitable<std::expected<json, std::string>>
         co_await discoverSseEndpoint();
     }
 
-    auto req     = makeRequest(id, method, params);
-    auto headers = buildHttpHeaders();
+    auto req = makeRequest(id, method, params);
 
-    auto resp = co_await util::HttpClient::postAsync(
-        httpMessageUrl_,
-        req,
-        headers,
-        util::HttpClient::RequestConfig{.readChunkTimeout = config_.requestTimeout}
-    );
+    auto doPost = [&]() -> asio::awaitable<
+        std::expected<agentxx::util::HttpResponse, std::string>> {
+        // headers 每次请求时重建: 反映最新的 mcpSessionId_ (会话重建后复用本 lambda)
+        auto hdrs = buildHttpHeaders();
+        co_return co_await util::HttpClient::postAsync(
+            httpMessageUrl_,
+            req,
+            hdrs,
+            util::HttpClient::RequestConfig{.readChunkTimeout = config_.requestTimeout}
+        );
+    };
 
+    // ---- 传输层瞬时错误 (响应被截断/连接重置/超时): 自动重试, 最多 2 次额外尝试 ----
+    auto resp = co_await doPost();
+    for (int attempt = 0;
+         !resp.has_value() && util::HttpClient::isTransientError(resp.error()) && attempt < 2;
+         ++attempt) {
+        XX_LOGW(
+            "[McpClient] transient HTTP error on {} ({}), retrying ({}/2)",
+            method,
+            resp.error(),
+            attempt + 1
+        );
+        resp = co_await doPost();
+    }
     if (!resp.has_value()) {
         co_return std::unexpected{std::move(resp.error())};
+    }
+
+    // ---- HTTP 401 + session 过期特征 (如 ModelScope 网关 SessionExpired):
+    //      自动重建会话 (重新 initialize + notifications/initialized) 后重试一次。
+    //      每个请求最多重建一次, 避免会话反复失效时无限递归。 ----
+    if (isSessionExpiredResponse(resp.value())) {
+        XX_LOGW(
+            "[McpClient] HTTP 401 session expired on {}, rebuilding session and retrying once",
+            method
+        );
+        if (co_await rebuildHttpSession()) {
+            resp = co_await doPost();
+            if (!resp.has_value() && util::HttpClient::isTransientError(resp.error())) {
+                resp = co_await doPost();
+            }
+            if (!resp.has_value()) {
+                co_return std::unexpected{std::move(resp.error())};
+            }
+        }
     }
     auto& httpResp = resp.value();
 
@@ -1654,6 +1771,50 @@ asio::awaitable<std::expected<json, std::string>>
     }
 
     co_return j;
+}
+
+asio::awaitable<bool> McpClient::rebuildHttpSession() {
+    // 清空旧 session: 无 Mcp-Session-Id 的请求被服务器视为首次 initialize
+    mcpSessionId_.clear();
+
+    json params;
+    params["protocolVersion"] = negotiatedVersion_.empty()
+                                    ? std::string{kProtocol2025_11_25}
+                                    : negotiatedVersion_;
+    params["capabilities"]    = json::object();
+    json info;
+    info["name"]    = config_.clientName;
+    info["version"] = config_.clientVersion;
+    params["clientInfo"] = std::move(info);
+
+    auto req     = makeRequest(nextId_.fetch_add(1), "initialize", std::move(params));
+    auto headers = buildHttpHeaders(); // mcpSessionId_ 已清空 → 无 session header
+    auto resp    = co_await util::HttpClient::postAsync(
+        httpMessageUrl_,
+        req,
+        headers,
+        util::HttpClient::RequestConfig{.readChunkTimeout = config_.initTimeout}
+    );
+    if (!resp.has_value()) {
+        XX_LOGW("[McpClient] rebuild session failed: {}", resp.error());
+        co_return false;
+    }
+    auto& r = resp.value();
+    if (r.status / 100 != 2) {
+        XX_LOGW("[McpClient] rebuild session failed: HTTP {}", r.status);
+        co_return false;
+    }
+    auto sid = r.findHeader("mcp-session-id");
+    if (sid.empty()) {
+        XX_LOGW("[McpClient] rebuild session failed: no Mcp-Session-Id in response");
+        co_return false;
+    }
+    mcpSessionId_ = std::string{sid};
+    // 部分服务器 (如 ModelScope 网关) 要求 initialize 后补发
+    // notifications/initialized 才算完成握手, 否则后续请求返回错误
+    co_await sendRawNotification("notifications/initialized", json::object());
+    XX_LOGI("[McpClient] session rebuilt: {}", mcpSessionId_);
+    co_return true;
 }
 
 asio::awaitable<std::expected<json, std::string>>

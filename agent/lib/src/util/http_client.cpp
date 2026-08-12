@@ -319,6 +319,40 @@ bool HttpClient::respIsSucc(const HttpResponse& resp) {
     return resp.isSuccess();
 }
 
+bool HttpClient::isTransientError(std::string_view errmsg) noexcept {
+    if (errmsg.empty()) {
+        return false;
+    }
+    // 大小写不敏感匹配: asio/beast/OpenSSL 的错误消息首字母可能大写
+    // (如 "Connection reset by peer" / "End of file")
+    auto lower = agentxx::util::toLower(errmsg);
+    // 响应被截断: 服务器在完整响应前关闭连接。包括 exchange 转换后的
+    // "HTTP response truncated: ..."、beast 原始错误 "partial message"
+    // (如 "partial message [beast.http:2]") 与 OpenSSL 的 "stream truncated"
+    // (对端未发 close_notify 就断开, 常见于网关/负载均衡超时掐断连接)
+    if (lower.find("truncat") != std::string::npos
+        || lower.find("partial message") != std::string::npos) {
+        return true;
+    }
+    // 连接被对端重置 / 管道破裂 (写请求时对端已关闭)
+    if (lower.find("connection reset") != std::string::npos
+        || lower.find("broken pipe") != std::string::npos) {
+        return true;
+    }
+    // 对端正常关闭连接但请求未完成 (如服务器主动断开 keep-alive 连接)
+    if (lower.find("end of file") != std::string::npos) {
+        return true;
+    }
+    // 超时: 连接/写请求/读响应任一时间窗口超时。catchErrorAsync 把
+    // operation_aborted 包装为 "timeout: ..."; asio 原生消息为
+    // "connect timed out" / "operation timed out" 等 ("timed out" 变体)
+    if (lower.find("timeout") != std::string::npos
+        || lower.find("timed out") != std::string::npos) {
+        return true;
+    }
+    return false;
+}
+
 bool HttpClient::isValidUrl(std::string_view url) noexcept {
     if (url.empty()) {
         return false;
