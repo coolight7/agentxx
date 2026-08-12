@@ -151,7 +151,7 @@ models:
 use_model:
   # default: local
   # default: qwenai-qwen3.8-max-preview
-  default: opencode-ds-v4-flash
+  default: qwenai-deepseek-v4-flash-0731
   acp: acp
   # train: train
   train: local

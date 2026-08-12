@@ -27,7 +27,7 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
 ### 核心对话能力
 
 - **多轮对话**: 支持完整的多轮对话管理，维护 `viewMessages` (append-only 完整历史) 和 `llmMessages` (可压缩的 LLM 上下文) 双消息集
-- **流式输出**: LLM 响应以增量 Delta 事件推送 (TextToken / ThinkingToken / ToolStart / ToolEnd / TurnStart / TurnEnd / NodeStart / NodeEnd)，每个 Delta 携带单调递增 seq 用于重放与同步
+- **流式输出**: LLM 响应以增量 Delta 事件推送 (TextToken / ThinkingToken / ToolStart / ToolEnd / TurnStart / TurnEnd / NodeStart / NodeEnd / MessageTip / SystemMessage)，每个 Delta 携带单调递增 seq 用于重放与同步; 轮次统计/错误/取消提示/中断头消息由 agent 线程构造为 SystemMessage 插入会话历史并推送 (携带 msgId), 保证 viewMessages 与 UI 展示一致
 - **多模型支持**: 运行时按会话 (thread_id) 动态切换模型，支持 OpenAI Chat Completions、Anthropic Messages、OpenAI Responses (Codex) 三种 Provider 协议
 - **上下文压缩**: SummarizationMiddleware 在上下文接近模型 token 上限时自动压缩历史消息，支持 toolcall 输出去重与截断
 - **思维链展示**: 支持 LLM 的 thinking/reasoning_content 流式输出与展示
@@ -82,7 +82,7 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
 
 | 中间件 | 功能 |
 |--------|------|
-| **PermissionMiddleware** | 工具调用权限控制，经事件总线向用户请求授权 (HIL)。文件系统权限按最长前缀匹配文件夹规则，支持 `*` 通配符：`/data/projects` 的规则对其下任意子路径生效，且父链规则可回退 (见 `XXRouter::get` 的 `prefix_fallback`) |
+| **PermissionMiddleware** | 工具调用权限控制，经事件总线向用户请求授权 (HIL)。文件系统权限按最长前缀匹配文件夹规则，支持 `*` 通配符：`/data/projects` 的规则对其下任意子路径生效，且父链规则可回退 (见 `XXRouter::get` 的 `prefix_fallback`)。默认规则由 yaml `permission.mode` 决定 (Ask=工作目录内 ALLOW + 其余 INTERRUPT / AllAsk=全部 INTERRUPT / Pass=全部 ALLOW / Deny=全部 DENY)，白名单 (whitelist) 始终放行、黑名单 (blacklist) 始终拒绝 (同路径黑名单优先)，未命中任何规则时由 `noRuleOperator` 兜底。客户端可"记住本次选择" (WireSetPermission 将路径规则注册回服务端，后续直接放行/拒绝不再询问) |
 | **SkillMiddleware** | 技能文件 (SKILL.md) 的渐进式发现与加载 |
 | **MemoryFileMiddleware** | 上下文文件 (Memory) 读取与缓存，每次模型调用时注入系统提示词 |
 | **SummarizationMiddleware** | 上下文 token 统计与自动压缩，防止超出模型上下文窗口 |
@@ -109,6 +109,8 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
   不使用 fork / 时间旅行 (get_state_history), 因此每 thread 仅保留最新 checkpoint,
   存储开销从 O(super-steps) 降为 O(threads), 轮末无需手动裁剪
 - **活动状态**: Idle / Streaming / ExecutingTool / WaitingInput 四种状态
+  (注: 目前仅 ExecutingTool/Idle 被 LogPrint 中间件实际写入, Streaming/WaitingInput
+  为预留; UI 活动感知实际经 Delta 事件流完成)
 - **链式哈希**: viewMessages 使用 FNV-1a 链式哈希校验一致性
 - **线程绑定 (单线程读写)**: Session 通过 `bindIoThread()` 绑定 io 线程，`assertIoThread()` 强制校验可变状态 (viewMessages/llmMessages/chainHash) 仅在 io 线程读写；client/UI 不直接读取，需要时由 io 线程拷贝后经 Wire 消息 (Sync/Delta) 传输，因此无需快照/锁同步
 - **取消/切模型**: UI 线程的取消/切模型操作通过 Wire 消息 (WireCancel/WireSelectModel) 发往 agent 线程处理，避免跨线程竞争
@@ -149,6 +151,24 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
 - 线程安全: `SessionPersistence` 内部互斥锁保护; 常规使用下调用发生在 agent io
   线程 (Session 绑定线程/工具执行), 锁仅在多线程并发访问时生效
 
+#### 会话切换 (TUI 会话选择弹窗)
+
+```
+TUI [F4] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸载到 blockingPool)
+  → 服务端回 WireSessionList (持久化会话列表, 按最近活动时间降序)
+  → 用户确认 → WireSwitchSession(newThreadId)
+  → SessionServerAgentIO::switchSession:
+      重绑定 config_.threadId → 清空 delta 重放缓冲 (新会话 seq 独立编号)
+      → 重置 firstTurn_ (首条输入走 resume_if_exists=true 恢复路径)
+      → 回推新会话全量 Sync + WireModelInfo + WireContextStats
+  → 客户端 (TUI) 更新本地 threadId 绑定; WS 模式同时
+    transport->updateReconnectThreadId() (复位重连握手的 threadId/lastSeq/tailHash)
+```
+
+- 仅当无进行中轮次时切换 (客户端前置拦截 + 服务端双重保护)
+- 新会话历史由 SessionStore 从持久化恢复 (不存在时创建空会话)
+- 会话列表数据源: `{dataDir}/sqlite/sessions/` 目录扫描 + meta 表 (threadId/title/lastActiveMs)
+
 #### Subagent 执行链路 (NodeInterrupt → 总线派发 → 独立引擎运行)
 
 ```
@@ -178,7 +198,7 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
 ### 远程通信
 
 - **WebSocket 服务**: AgentServer 提供 WS/WSS 服务，支持 token 鉴权
-- **Wire Protocol**: 双向 JSON 消息协议 (Hello/UserInput/Cancel/SelectModel/GetModel/Delta/Sync/InterruptRequest/InterruptResponse/TurnResult/ContextStats/Error/Log/ModelInfo/GetAppendComponentInfo/AppendComponentInfo/GetContext/ContextMessages/Ping/Pong)
+- **Wire Protocol**: 双向 JSON 消息协议 (Hello/HelloAck/UserInput/Cancel/SelectModel/GetModel/Delta/Sync/InterruptRequest/InterruptResponse/InterruptExpired/TurnResult/ContextStats/Error/Log/ModelInfo/GetAppendComponentInfo/AppendComponentInfo/GetContext/ContextMessages/Ping/Pong/SetPermission/ListSessions/SessionList/SwitchSession)
 - **断线重连**: 客户端自动重连，携带 lastSeq 供增量 Delta 重放，seq 不连续时回退全量 Sync
 - **Grace Period**: 断线后会话保持运行的宽限期，避免误取消进行中的轮次
 - **进程内直连**: ChannelAgentIOTransport 零序列化 Channel 传输，同进程内 client 与 agent 直连
@@ -197,17 +217,19 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
 ### 客户端 UI
 
 - **TUI 模式**: 基于 FTXUI 的终端 UI，支持：
-  - 消息列表 (User/Assistant/Thinking/Tool/System 角色)
+  - 消息列表 (User/Assistant/Thinking/Tool/System/Interrupt 角色)
   - Thinking/Tool 消息自动折叠/展开 (执行中展开，完成后折叠)
-  - 流式 token 实时渲染
-  - 权限请求弹窗
+  - 流式 token 实时渲染 (COW 按需拷贝避免 O(n²) 累积拷贝)
+  - 权限请求弹窗 + "记住本次选择" (经 WireSetPermission 将路径规则注册到服务端权限中间件)
   - 模型选择器 (运行时切换)
   - 右侧边栏 (日志窗口 / 信息面板 / Planning 展示)
   - 待发送消息队列 (执行中排队，轮次结束自动派发)
   - 文件编辑 diff 对比渲染
   - Mermaid stateDiagram-v2 状态图渲染 (消息中 ```mermaid 代码块 / Plan 弹窗显示 roadmap 状态图)
   - 上下文 token 占用状态栏
-  - 主题切换
+  - 主题切换 (持久化到 {dataDir}/sqlite/global.db)
+  - 会话选择弹窗 (F4): 列出持久化会话 (WireListSessions), 确认后经 WireSwitchSession 切换, 服务端回推新会话全量 Sync/模型/上下文统计
+  - 屏幕上方 toast 提示
   - 自动滚动吸附底部 (Scrollable 组件)
 - **TUI 渲染模块化**: 将消息列表、侧边栏、浮层、编辑工具渲染拆分到独立文件
 - **LazyScrollable (Flutter ListView.builder 风格)**: 消息列表采用懒构建渲染架构 ——
@@ -286,7 +308,10 @@ path/to/agentxx_test --fail-fast
 path/to/agentxx_test string_util regex agent
 ```
 
-可用测试模块: `string_util` `regex` `diff_util` `events` `concurrency` `misc_fixes` `aho_corasick` `util_misc` `event_stream` `event_bridge` `interrupt_bus` `subagent_bus` `crossagent` `string_tools` `share_store` `session_persistence` `rag_search` `datetime` `filesystem` `command` `web_search` `codegraph` `cpu_gpu` `http` `network_timeout` `websocket` `remote_agent` `mcp` `acp` `a2a` `openai_provider` `anthropic_provider` `agent` `screen_capture` `text_selection` `session_concurrency`
+可用测试模块 (与 `agent/test/test.cpp` 注册列表一致):
+- 同步模块: `string_util` `regex` `diff_util` `events` `concurrency` `misc_fixes` `aho_corasick` `util_misc` `settings_db` `toolcall_args` (及 client 侧: `config_loader` `tui_settings` `tui_input` `tui_interrupt` `tui_scroll` `tui_stream` `thread_id` `mermaid_state`)
+- 异步模块: `event_stream` `event_bridge` `interrupt_bus` `subagent_bus` `string_tools` `share_store` `session_persistence` `rag_search` `datetime` `filesystem` `command` `web_search` `codegraph` `cpu_gpu` `http` `network_timeout` `websocket` `remote_agent` `mcp` `acp` `a2a` `openai_provider` `anthropic_provider` `cancel` `message_supplement` `summarization` `checkpoint_store` `agent` `memgrowth`
+- 平台模块: `screen_capture` `text_selection`
 
 ### 配置文件
 
@@ -343,6 +368,16 @@ enable_codegraph: false           # true 时 CodeAgent 注册 codegraph 系列 t
                                   # - 前缀复用: 子目录工作自动复用最近父级索引
                                   # - 长度控制: 深层路径折叠为 hash 段, 单段超长截断,
                                   #   保证不超系统路径限制 (Windows MAX_PATH=260)
+
+# 权限询问处理模式 (默认 ask, 见 PermissionMode)
+# - ask:     当前工作目录内允许读写, 其他路径询问用户 (默认)
+# - all_ask: 所有路径读写均询问用户
+# - pass:    全部放行, 不询问
+# - deny:    全部拒绝, 不询问
+permission:
+  mode: ask
+  whitelist: []   # 始终放行路径 (最长前缀匹配, 支持 * 通配; 优先级高于模式默认规则)
+  blacklist: []   # 始终拒绝路径 (与白名单同路径时黑名单优先)
 ```
 
 > **Codex (Responses API) 配置示例**:
@@ -695,9 +730,15 @@ AgentIOBase (服务端端点: SessionServerAgentIO)
     │                          重放 delta (seq <= 缓冲尾) 不重复入缓冲
     ├── onDelta/onSync     → protected 空实现 (server 不会从 client 收到, 满足纯虚契约)
     ├── getInput()         → 从 inputChannel_ 等待客户端输入
-    ├── handleInterrupt()  → 发送 InterruptRequest，等待客户端响应
-    ├── onPeerMessage()    → 覆写: 处理 UserInput/Cancel/Hello/SelectModel 等
-    └── run()              → 驱动循环: 取输入 → 执行轮次 → 推送结果
+    ├── handleInterrupt()  → 发送 InterruptRequest，等待客户端响应 (超时/过期通知)
+    ├── onPeerMessage()    → 覆写: 处理 Hello/UserInput/Cancel/SelectModel/InterruptResponse/
+    │                          GetModel/GetAppendComponentInfo/GetContext/ListSessions/
+    │                          SwitchSession/SetPermission 等
+    ├── run()              → 驱动循环: 取输入 → 执行轮次 → 推送结果
+    ├── stop()             → 停止驱动循环 (关闭输入 channel/取消轮次/fail pending)
+    ├── onDisconnect()     → 传输断开时启动 grace 定时器 (宽限期满且无连接则取消轮次)
+    └── switchSession()    → 会话切换: 重绑定 threadId, 清空 delta 缓冲, 重置 firstTurn_,
+                             回推新会话全量 Sync + 模型信息 + 上下文统计
 
 AgentIOTransportBase (传输层抽象)
     ├── connect(hello)     → 建立连接并发送握手
@@ -746,6 +787,16 @@ neograph GraphEngine (run_stream_async)
 - 生命周期: `makeCallback()` 经 `shared_from_this` 持有, 回调期间本对象存活;
   AgentContext 以 weak_ptr 持有, 总线发布前 lock 检查
 - 新增 GraphEvent 处理只需扩展本类, 无需修改 BaseAgent
+
+**tps (token/s) 生成速度统计** (EventBridge 内置双级统计):
+- 流级 (窗口推送): 每次 ModelCall 流开始 (节点开始后首个 token) 计时, 每
+  `tpsPushIntervalSec_` (默认 3s) 推送一次**最近窗口**内的平均速度 (窗口内
+  token 增量 / 窗口时长, 而非自流开始以来的累计平均, 反映当前实际速度),
+  经 WireContextStats.tps 下发; 每个流结束 (节点结束/出错) 结算一次
+- 轮级 (TurnEnd 展示): 一轮内所有 ModelCall 的累计估算 token / 累计流式耗时,
+  TurnEnd Delta 携带 tps 字段, 并显示在轮次统计系统提示中
+- token 估算与 SummarizationMiddleware 共用 `countTokensForUtf8Str` 口径
+  (ascii ≈ 4 字符/token, 非 ascii ≈ 1.1 字符/token; 无 summarization 时内置回退)
 
 #### 4. EventBus 强类型事件
 
@@ -880,7 +931,20 @@ Client                              Server
   │←── Log (level, message) ─────────│ 服务端日志实时推送
   │                                    │
   │ (可选) 上下文统计
-  │←── ContextStats ──────────────────│ token 用量推送
+  │←── ContextStats ──────────────────│ token 用量推送 (含流式期间窗口平均 tps)
+  │                                    │
+  │ (可选) 客户端记住权限选择
+  │──── SetPermission (path, allow) ──│ 注册路径规则到服务端权限中间件
+  │                                    │
+  │ (可选) 会话选择弹窗 (TUI F4)
+  │──── ListSessions ─────────────────│ 列举持久化会话 (阻塞 I/O 卸载到线程池)
+  │←── SessionList ───────────────────│
+  │──── SwitchSession (threadId) ────│ 切换会话绑定: 清空 delta 缓冲,
+  │                                   │ 回推新会话全量 Sync + 模型信息 + 上下文统计
+  │                                    │
+  │ (可选) 中断过期通知
+  │←── InterruptExpired ──────────────│ 中断超时/断线宽限期满/会话取消时,
+  │                                   │ 客户端将对应中断消息标记为过期并结束等待
 ```
 
 ### 依赖注入容器
@@ -1014,8 +1078,7 @@ agent/
 │   │   │       │   ├── tui_state.h       # TUI 状态聚合 (消息/侧边栏/排队输入等)
 │   │   │       │   ├── tui_context.h     # TUI 渲染上下文 (theme/state/尺寸)
 │   │   │       │   ├── tui_settings.h    # TUI 全局设置单例 (主题/系统资源显示开关等)
-│   │   │       │   ├── modal_container.h # 浮层容器 (权限/中断弹窗)
-│   │   │       │   └── dirty_component.h # 脏标记增量渲染组件基类
+│   │   │       │   └── modal_container.h # 浮层容器 (权限/中断弹窗)
 │   │   │       └── components/   # TUI 渲染组件
 │   │   │           ├── message_list.h # 消息列表渲染
 │   │   │           ├── sidebar.h      # 右侧边栏 (日志/信息/Planning)
@@ -1034,6 +1097,7 @@ agent/
 │       │       ├── agent_tui.cpp
 │       │       ├── tui_theme.cpp
 │       │       ├── scrollable.cpp
+│       │       ├── lazy_scrollable.cpp  # LazyScrollable 懒构建渲染实现
 │       │       ├── mermaid_state.cpp    # Mermaid 状态图解析/渲染实现
 │       │       ├── tui_sidebar_content.cpp # 侧边栏内容 (日志/信息/Planning)
 │       │       ├── tui_log_sink.cpp        # TUI 日志接收器
@@ -1044,17 +1108,21 @@ agent/
 │       └── util/util.cpp          # 客户端工具实现
 │
 ├── test/                         # agentxx_test 测试程序
-│   ├── test.cpp                  # 测试入口: 模块注册与调度
+│   ├── test.cpp                  # 测试入口: 模块注册与调度 (同步/异步/平台模块分组)
 │   ├── test_framework.h          # 测试框架 (断言宏 / TestResult)
-│   ├── test_agent.*              # CodeAgent 集成测试 (模拟 LLM Server)
+│   ├── test_agent.*              # CodeAgent 集成测试 (模拟 LLM Server: 工具调用/多轮/权限模式/重试耗尽/异常拦截)
 │   ├── test_events.*             # 事件类型测试
 │   ├── test_event_stream.*       # EventBus / EventStream / RequestResponseStream 测试
 │   ├── test_event_bridge.*       # EventBridge 事件翻译测试
 │   ├── test_interrupt_bus.*      # 中断总线 HIL 测试
-│   ├── test_subagent_bus.*       # 子代理总线测试
-│   ├── test_crossagent.*         # 跨代理通信测试
+│   ├── test_subagent_bus.*       # 子代理总线测试 (含批量委派/跨 agent 路由)
 │   ├── test_concurrency.*        # 并发测试
-│   ├── test_session_concurrency.* # Session 线程模型测试 (viewMessages 单线程读写 + 原子字段并发)
+│   ├── test_cancel.*             # 取消语义测试 (CancelToken 双通道/operation_aborted 转换)
+│   ├── test_message_supplement.* # 消息补全/修复测试
+│   ├── test_summarization.*      # 上下文压缩测试 (token 统计/去重/LLM 压缩)
+│   ├── test_checkpoint_store.*   # 单检查点存储测试 (InMemorySingleCheckpointStore)
+│   ├── test_memgrowth.*          # 多轮内存增长测试 (泄漏检测)
+│   ├── test_toolcall_args.*      # 工具参数类型自动修正测试
 │   ├── test_session_persistence.* # 会话 SQLite 持久化测试 (消息/上下文/share store 落库与重启恢复)
 │   ├── test_remote_agent.*       # 远程 Agent (WS 传输 / SessionServerAgentIO) 测试
 │   ├── test_mcp.*                # MCP 协议测试 (多版本/HTTP/stdio)
@@ -1069,6 +1137,7 @@ agent/
 │   ├── test_diff_util.*          # Diff 工具测试
 │   ├── test_aho_corasick.*       # Aho-Corasick 多模式匹配测试
 │   ├── test_util_misc.*          # 杂项 util 测试
+│   ├── test_settings_db.*        # 全局设置 SQLite 测试
 │   ├── test_network_timeout.*    # 网络超时行为测试
 │   ├── test_filesystem_tools.*   # 文件系统工具测试
 │   ├── test_command_tools.*      # 命令执行工具测试
@@ -1081,7 +1150,16 @@ agent/
 │   ├── test_cpu_gpu_use.*        # CPU/GPU 监控测试
 │   ├── test_screen_capture.*     # 屏幕截图测试
 │   ├── test_text_selection_monitor.* # 文本选择监听测试
-│   └── test_misc_fixes.*         # 杂项修复测试
+│   ├── test_misc_fixes.*         # 杂项修复测试
+│   └── client/                   # client 侧测试 (AGENTXX_BUILD_CLIENT 条件编译)
+│       ├── test_config_loader.*  # YAML 配置加载测试
+│       ├── test_mermaid_state.*  # Mermaid 状态图解析测试
+│       ├── test_thread_id.*      # threadId 生成唯一性测试
+│       ├── test_tui_input.*      # TUI 输入测试
+│       ├── test_tui_interrupt.*  # TUI 中断交互测试
+│       ├── test_tui_scroll.*     # TUI 滚动测试
+│       ├── test_tui_settings.*   # TUI 设置持久化测试
+│       └── test_tui_stream.*     # TUI 流式渲染测试
 │
 ├── benchmark/                    # 性能测试 (一般仅 release 编译)
 │
