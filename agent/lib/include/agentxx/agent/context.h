@@ -282,6 +282,14 @@ public:
     /// 组件加载信息
     AgentAppendComponentInfo appendComponentInfo;
 
+    /// agent 启动进度通知回调 (由客户端端点 (TUI) 注册; 无注册则为空, no-op)
+    /// - 调用方: BaseAgent::init() / CodeAgent::createTools() 各启动阶段
+    ///   (agent 线程, 同步调用, 不阻塞启动流程)
+    /// - 语义: 报告当前正在执行的启动操作 (如 "加载 MCP server: xxx"),
+    ///   供 TUI 在"启动中"banner 中逐步展示
+    /// - 线程安全: 回调实现 (TUI onServerProgress) 内部自行加锁同步
+    std::function<void(std::string_view)> startupNotifier;
+
     /// 阻塞操作执行线程池 (文件系统遍历、glob、DNS 解析等同步阻塞操作)
     /// - 通过 agentxx::util::offloadAsync / offloadCancellableAsync 使用
     /// - 避免阻塞操作卡住 io_context 事件循环

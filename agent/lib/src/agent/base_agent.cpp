@@ -60,6 +60,8 @@ asio::awaitable<void> BaseAgent::init() {
                 "will NOT be persisted to disk (in-memory only)");
     }
 
+    // 逐步上报启动进度 (客户端 TUI 在"启动中"banner 展示当前正在执行的操作)
+    notifyStartup("检测系统环境 ...");
     // 在 agent 线程完成环境探测 (PowerShell 等) 并刷新依赖它的提示词:
     // - AgentPrompt 构造时为避免阻塞 UI/主线程启动使用非阻塞占位描述 (不探测)
     // - 此处 (agent ioCtx 线程, UI 已先行启动) 执行阻塞式子进程探测并覆盖占位;
@@ -67,13 +69,9 @@ asio::awaitable<void> BaseAgent::init() {
     //   首个请求前必然拿到最终描述
     agentContext->agentConfig->prompt.refreshEnvDetectedPrompts();
 
-#if ASIO_HAS_FILE || BOOST_ASIO_HAS_FILE
-    XX_LOGD("Enable asio/async file RW");
-#else
-    XX_LOGD("Disable asio/async file RW");
-#endif
-
+    notifyStartup("初始化模型注册表 ...");
     setupModelRegistry();
+    notifyStartup("初始化事件总线 ...");
     setupEventBus();
 
     agentContext->middlewareHandleContext
@@ -86,12 +84,15 @@ asio::awaitable<void> BaseAgent::init() {
         graphRegistry = std::move(registry);
     }
 
+    notifyStartup("注册中间件 (权限 / Skill / Memory / 规划) ...");
     co_await setupMiddleware();
 
+    notifyStartup("创建工具集 ...");
     auto tools = co_await createTools();
 
     collectMiddlewareTools(tools);
 
+    notifyStartup("初始化上下文压缩 ...");
     setupSummarizationHandles(tools);
 
     // 检查 tools 的提示词
@@ -99,6 +100,7 @@ asio::awaitable<void> BaseAgent::init() {
         assert(item->get_definition().name == item->get_name());
     }
 
+    notifyStartup("构建执行图 ...");
     auto graphDef = buildGraphDefinition();
 
     auto config = agentContext->agentConfig;
@@ -148,6 +150,14 @@ asio::awaitable<void> BaseAgent::init() {
     }
 
     co_return;
+}
+
+void BaseAgent::notifyStartup(std::string_view step) {
+    // 启动进度通知经 AgentContext::startupNotifier 转发给客户端端点 (TUI);
+    // 未注册回调时为 no-op, 不影响启动流程 (Server/CLI/headless 模式无此显示)
+    if (agentContext && agentContext->startupNotifier) {
+        agentContext->startupNotifier(step);
+    }
 }
 
 void BaseAgent::setupModelRegistry() {

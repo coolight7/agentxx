@@ -155,6 +155,12 @@ protected:
     void setupSummarizationHandles(
         const std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>& tools
     );
+
+    /// 通知 agent 启动进度 (供 init/createTools 各启动阶段调用):
+    /// - 经 agentContext->startupNotifier 转发给客户端 (TUI banner 展示);
+    ///   未注册回调时 no-op
+    /// - 必须由 agent 线程 (init 协程上下文) 调用
+    void notifyStartup(std::string_view step);
 };
 
 } // namespace agent

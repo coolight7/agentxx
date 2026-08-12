@@ -229,6 +229,17 @@ TUI [F4] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
   - 上下文 token 占用状态栏
   - 主题切换 (持久化到 {dataDir}/sqlite/global.db)
   - 会话选择弹窗 (F4): 列出持久化会话 (WireListSessions), 确认后经 WireSwitchSession 切换, 服务端回推新会话全量 Sync/模型/上下文统计
+  - 启动连接状态 (banner 提示): TUI 启动后消息列表 banner 按 agent-server
+    连接状态显示 —— 启动中 (Connecting, 输入进入待发送队列, 连接完成后自动发送) /
+    连接失败 (Failed, 显示"连接失败 + [重试]"可点击按钮重新连接) / 已连接 (正常输入);
+    本地模式由 SessionServerAgentIO 驱动循环启动前回调 onServerReady 置就绪,
+    远程模式由 mode_runners 连接协程驱动 (ConnState 存于 TUIRenderState::connState)
+  - 启动进度逐步展示: agent-server init() 各阶段 (检测系统环境/模型注册表/中间件/
+    加载 MCP server/RAG/CodeGraph 等) 经 AgentContext::startupNotifier →
+    AgentIOBase::onServerProgress 上报, "启动中"banner 同步显示当前执行的操作,
+    完成后显示"agent-server 已启动完成 ✓"及按键提示 (banner itemKey 计入
+    connState+startupProgress 使 LazyScrollable 缓存失效重建)
+    远程模式由 mode_runners 连接协程驱动 (ConnState 存于 TUIRenderState::connState)
   - 屏幕上方 toast 提示
   - 自动滚动吸附底部 (Scrollable 组件)
 - **TUI 渲染模块化**: 将消息列表、侧边栏、浮层、编辑工具渲染拆分到独立文件
