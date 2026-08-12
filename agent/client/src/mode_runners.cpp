@@ -107,6 +107,17 @@ static std::shared_ptr<agent::SessionServerAgentIO> setupLocalUnifiedDirect(
     serverIO->setTransport(std::shared_ptr<agent::AgentIOTransportBase>(std::move(serverTransport))
     );
 
+    // 注册 agent 启动进度通知: init() 各启动阶段 (agent 线程) → 客户端端点
+    // (TUI 在"启动中"banner 逐步展示当前执行的操作, 如加载 MCP/Skill/RAG 等)
+    // - 必须在 init() 协程启动前注册, 否则 init 前期的步骤会丢失
+    // - 回调内 clientIO 为 shared_ptr 捕获 (TUI 存活期安全); StdIO 端点
+    //   不覆写 onServerProgress, 回调为 no-op
+    if (auto ctx = agent->agentContext) {
+        ctx->startupNotifier = [clientIO](std::string_view step) {
+            clientIO->onServerProgress(step);
+        };
+    }
+
     // transport 接收循环先于 init() 启动:
     // init() 中 MCP 连接等网络操作可能耗时数秒, 若等 init 完成才启动接收循环,
     // 客户端在 init 期间发出的请求 (如模型选择弹窗的 WireGetModel / WireHello) 会
@@ -137,6 +148,11 @@ static std::shared_ptr<agent::SessionServerAgentIO> setupLocalUnifiedDirect(
             // 已先于 init 启动, 若此时 (init 前) 发送会立即得到空列表 (组件尚未加载),
             // 客户端将永远显示不出已加载的组件
             clientIO->requestAppendComponentInfo(threadId);
+            // 通知客户端: agent-server 就绪 (init/组件加载完成, 会话驱动循环即将
+            // 启动并开始消费用户输入)。客户端 (TUI) 据此解除"启动中"输入限制,
+            // 刷新连接前排队输入 (此时发送的输入由 server 端 inputChannel 缓存,
+            // run() 启动后正常消费)
+            clientIO->onServerReady();
             co_await serverIO->run();
         },
         asio::detached
@@ -343,22 +359,56 @@ static asio::awaitable<void> runRemoteTuiAsync(
     io->setRemoteUrl(url);
     io->start();
 
-    agent::WsAgentIOTransport::Config transportCfg;
-    util::WsClientConfig              wsCfg;
-    wsCfg.recvTimeout = std::chrono::seconds{60};
+    // TUI 立即启动: 初始 connState=Connecting, banner 显示"agent-server 正在
+    // 启动中", 用户输入进入待发送队列 (不发送); 连接成败均不阻塞 TUI 界面
 
-    auto transport
-        = std::make_shared<agent::WsAgentIOTransport>(ex, url, token, transportCfg, wsCfg);
-    io->setTransport(transport);
-
-    // 连接并握手
+    // 连接流程 (失败可重试, 不退出 TUI):
+    // - 每次尝试创建全新 transport (失败后的 transport 已 stopped/半初始化,
+    //   复用会出现握手/写队列状态残留; 新建更干净)
+    // - transport->connect 内部有限次重试 (maxReconnectAttempts=2), 均失败则
+    //   返回 false → banner 显示"连接失败 + [重试]"等待用户点击
+    // - 用户点击重试 → requestRetry() 置 Connecting 并唤醒 waitRetry 重新循环
+    // - TUI 退出 (running_=false) 时流程尽快终止
     agent::WireHello hello{threadId, token, 0, ""};
-    bool             ok = co_await transport->connect(hello);
-    if (!ok) {
-        XX_LOGE("[remote_tui] connection failed");
+    bool             connected = false;
+    while (!connected) {
+        agent::WsAgentIOTransport::Config transportCfg;
+        // 有限次尝试后返回失败 (默认 0=无限内部重连, 用户永远等不到失败提示)
+        transportCfg.maxReconnectAttempts = 2;
+        util::WsClientConfig              wsCfg;
+        wsCfg.recvTimeout = std::chrono::seconds{60};
+
+        auto transport
+            = std::make_shared<agent::WsAgentIOTransport>(ex, url, token, transportCfg, wsCfg);
+        io->setTransport(transport);
+
+        connected = co_await transport->connect(hello);
+        if (connected) {
+            break;
+        }
+
+        XX_LOGE("[remote_tui] connection failed, waiting for user retry");
+        transport->close();
+        if (!io->running()) {
+            break;
+        }
+        io->setConnState(ConnState::Failed);
+        // 等待用户点击 banner 上的"重试" (TUI 退出时尽快返回, 见 waitRetry)
+        co_await io->waitRetry();
+        if (!io->running()) {
+            break;
+        }
+        io->setConnState(ConnState::Connecting);
+    }
+
+    if (!connected) {
+        // 用户在连接失败 (或等待重试) 期间退出了 TUI: 停止并退出, 不进入会话
+        XX_LOGW("[remote_tui] quit before connection established");
         io->stop();
         co_return;
     }
+
+    io->setConnState(ConnState::Connected);
 
     // 指定模型 (经独立的模型选择通道); 先于 GetModel 发送, 使其返回所选模型
     if (!model.empty()) {
@@ -374,13 +424,17 @@ static asio::awaitable<void> runRemoteTuiAsync(
     // 启动接收循环
     asio::co_spawn(ex, io->runTransportLoop(), asio::detached);
 
+    // 连接建立后刷新待发送队列: 发送用户连接前排队的输入
+    // (置 isStreaming 并经 transport 发送; 后续排队输入由 TurnEnd 依次分发)
+    io->flushPendingInput();
+
     // 等待 TUI 退出
     while (io->running()) {
         asio::steady_timer timer(ex);
         timer.expires_after(std::chrono::milliseconds(200));
         co_await timer.async_wait(asio::use_awaitable);
     }
-    transport->close();
+    io->transport()->close();
     io->stop();
 }
 

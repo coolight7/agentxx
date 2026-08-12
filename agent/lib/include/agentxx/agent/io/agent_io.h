@@ -67,6 +67,20 @@ public:
     /// - 是否首轮由服务端自行管理; 模型切换经 requestSelectModel
     virtual void sendUserInput(std::string threadId, std::string text);
 
+    /// 服务端就绪通知 [client] (默认空实现, 客户端端点按需覆写):
+    /// - 本地模式: agent-server (SessionServerAgentIO) 的会话驱动循环启动前由
+    ///   mode_runners 调用, 表示 init() 等启动工作完成、可以开始消费用户输入
+    /// - 远程模式: 连接握手完成后由连接协程调用
+    /// 客户端 (TUI) 据此解除"启动中"输入限制并刷新待发送队列
+    virtual void onServerReady() {}
+
+    /// 服务端启动进度通知 [client] (默认空实现, 客户端端点按需覆写):
+    /// - 本地模式: agent-server 的 init() 各启动阶段 (加载 MCP/Skill/Memory/
+    ///   RAG/CodeGraph 等) 经 AgentContext::startupNotifier → 本接口逐步上报,
+    ///   客户端 (TUI) 据此在"启动中"banner 中展示当前正在执行的操作
+    /// - 由 agent 线程同步调用, 实现须自行加锁同步
+    virtual void onServerProgress(std::string_view /*step*/) {}
+
     // -----------------------------------------------------------------------
     // 拉取接口 [双向] (调用方: server 侧由 BaseAgent 驱动循环调用,
     //                   client 侧由本端输入循环/onPeerMessage 调用)

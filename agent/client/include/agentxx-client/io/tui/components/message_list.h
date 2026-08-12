@@ -108,6 +108,12 @@ public:
         return interruptHits_;
     }
 
+    /// 连接失败 banner 的"重试"按钮命中区域 (渲染时 reflect 填充,
+    /// 供 TUIClientAgentIO 全局鼠标事件检测点击)
+    const ftxui::Box& retryButtonBox() const {
+        return retryButtonBox_;
+    }
+
     /// 测试辅助: 当前激活的中断消息索引 (npos = 无)
     size_t activeInterruptMsg() const {
         return activeInterruptMsg_;
@@ -139,6 +145,10 @@ private:
     /// 最近一次渲染时记录的中断控件命中区域 (UI 线程独占; 渲染时填充,
     /// 点击时命中检测; 与 collapsibleBoxes_ 生命周期一致)
     std::vector<InterruptHitBox> interruptHits_;
+
+    /// 连接失败 banner 的"重试"按钮命中区域 (UI 线程独占; buildBanner 渲染时
+    /// reflect 填充, TUIClientAgentIO 全局鼠标事件检测点击)
+    ftxui::Box retryButtonBox_;
     /// 当前激活编辑的中断消息索引 (点击输入框/控件时设置, Esc 清除)
     size_t activeInterruptMsg_ = static_cast<size_t>(-1);
 

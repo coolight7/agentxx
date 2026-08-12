@@ -41,6 +41,17 @@ struct TUIPendingInput {
     bool        expanded = false;
 };
 
+/// agent-server 连接状态 (消息列表 banner 显示 + 输入发送限制)
+/// - Connecting: 服务尚未就绪 (本地模式 init 中 / 远程模式连接握手前),
+///   用户输入进入待发送队列 (st.pendingInputs), 连接完成后统一发送
+/// - Connected:  服务就绪, 输入直接发送
+/// - Failed:     连接失败, banner 显示失败提示 + 可点击的"重试"按钮
+enum class ConnState : uint8_t {
+    Connecting,
+    Connected,
+    Failed,
+};
+
 /// 跨线程共享的渲染状态 (COW 语义)
 ///
 /// 所有被 client 线程 (onDelta/onSync) 和 UI 线程 (渲染/事件) 并发访问的数据
@@ -59,6 +70,15 @@ struct TUIRenderState {
     std::shared_ptr<std::string>             currentToken;
     TUIMessage::Role                         currentTokenRole = TUIMessage::Role::Assistant;
     bool                                     isStreaming      = false;
+
+    /// agent-server 连接状态 (默认 Connecting: TUI 启动后、服务就绪前输入受限,
+    /// banner 显示"启动中"; 连接建立后由 mode_runners 置 Connected)
+    ConnState connState = ConnState::Connecting;
+
+    /// 当前进行中的 agent 启动步骤 (如 "加载 MCP server: xxx"); 由
+    /// onServerProgress (agent 线程 → sharedState) 更新, Connecting 期间
+    /// banner 逐步展示; 启动完成 (onServerReady) 后清空
+    std::string startupProgress;
     /// 流式代次 (client 线程在**新建** currentToken 时递增; COW 复制不递增):
     /// - 语义 = 流身份: 同一流内 currentToken 只会被原地 append (或 COW 复制,
     ///   内容仍是同一流的延续), epoch 不变

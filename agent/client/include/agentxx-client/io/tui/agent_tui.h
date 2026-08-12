@@ -137,6 +137,29 @@ public:
         remoteUrl_ = std::move(url);
     }
 
+    /// 设置连接状态 (跨线程安全: 更新 sharedState 并触发重绘)
+    /// 状态枚举 ConnState 定义于 tui_state.h (TUIRenderState::connState)
+    void setConnState(ConnState state);
+
+    /// AgentIOBase::onServerReady 覆写: 置 Connected 并刷新待发送队列
+    /// (连接建立后由 mode_runners 调用)
+    void onServerReady() override;
+
+    /// AgentIOBase::onServerProgress 覆写: 更新 banner 当前启动步骤
+    /// (agent 线程同步调用, 经 sharedState 锁 + postRedraw 安全更新)
+    void onServerProgress(std::string_view step) override;
+
+    /// 连接建立后刷新待发送队列: 发送连接前排队输入的首条
+    /// (置 isStreaming 并经 transport 发送, 后续排队输入由 TurnEnd 分发)
+    void flushPendingInput();
+
+    /// 等待用户点击"重试" (连接失败后由连接协程 await; TUI 退出时尽快返回,
+    /// 避免失败后用户退出导致协程永久挂起阻塞 io_context)
+    asio::awaitable<void> waitRetry();
+
+    /// 用户点击 banner 上的"重试"按钮 (UI 线程调用): 置 Connecting 并唤醒 waitRetry
+    void requestRetry();
+
     asio::awaitable<std::optional<std::string>> getInput() override;
     asio::awaitable<neograph::json>             handleInterrupt(
                     std::string_view threadId,
@@ -310,6 +333,11 @@ private:
     /// 进行中中断的结果回传通道: wireId → 通道 (中断输入消息共享引用)。
     /// handleInterrupt 插入/移除; WireInterruptExpired / stop() 关闭通道以终止等待
     std::map<int64_t, std::shared_ptr<InterruptResultChannel>> activeInterrupts_;
+
+    // ---- 连接失败重试 (跨线程原子标志) ----
+    /// 用户点击 banner"重试"按钮的标志 (UI 线程 requestRetry 置位;
+    /// 连接协程 waitRetry 轮询消费并据此返回重试连接)
+    std::atomic<bool> retryRequested_{false};
 
     // ---- 系统资源监控 (每 kSystemInfoIntervalSec 秒采集一次 CPU/内存占用) ----
     /// Info 侧边栏系统资源显示开关存储于全局设置单例 TUISettings::showSystemInfo()

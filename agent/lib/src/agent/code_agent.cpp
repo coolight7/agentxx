@@ -252,6 +252,8 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
             [&](std::string ns, agentxx::agent::McpServerConfig mcpCfg) -> asio::awaitable<void> {
             co_await agentxx::util::catchErrorAsync<bool>(
                 [&]() -> asio::awaitable<bool> {
+                    // 逐步上报启动进度: MCP 网络连接较慢, 逐 server 报告名称+地址
+                    notifyStartup(fmt::format("加载 MCP server: {} ({})", ns, mcpCfg.url));
                     XX_LOGD("load mcp tool: {} | {}", ns, mcpCfg.url);
                     auto mcpClient = std::make_shared<agentxx::server::McpClient>(
                         agentxx::server::McpClient::Config{
@@ -370,6 +372,8 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
 
     /// RAG
     if (false == config->ragDocsPaths.empty()) {
+        // 逐步上报启动进度: RAG 文档扫描 + embedding 生成耗时较长
+        notifyStartup("加载 RAG 文档并生成向量索引 ...");
         auto client = std::make_shared<agentxx::tools::EmbeddingClient>(
             config->model.baseUrl,
             config->model.apiKey,
@@ -417,6 +421,8 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
                 "(in-memory only, no index persistence)");
     } else if (config->enableCodeGraph) {
 #if AGENTXX_ENABLE_CODEGRAPH
+        // 逐步上报启动进度: CodeGraph 初始化涉及索引库打开/项目根扫描
+        notifyStartup("初始化 CodeGraph 代码索引 ...");
         auto codegraph = std::make_shared<agentxx::expand::CodeGraphManager>(
             agentxx::agent::AgentConfigStatic::getSqliteDir(config->dataDir)
         );

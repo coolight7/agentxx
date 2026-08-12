@@ -168,6 +168,14 @@ void TUIClientAgentIO::start() {
                     std::move(text),
                     [](neograph_asio_error_code) {}
                 );
+            } else if (st.connState != ConnState::Connected) {
+                // agent-server 未就绪 (启动中 Connecting / 连接失败 Failed):
+                // 输入进入待发送队列 (与流式输出期间排队语义一致, 经底部队列
+                // 提示展示), 不置 isStreaming; 连接建立后由 flushPendingInput
+                // 统一发送 — 若在未连接时直接调 sendUserInputLocked, 远程模式下
+                // transport 的写队列尚未创建 (connect 完成前 writeQueue_ 为空),
+                // 消息会被静默丢弃
+                st.pendingInputs.push_back(TUIPendingInput{std::move(text), false});
             } else if (st.isStreaming) {
                 st.pendingInputs.push_back(TUIPendingInput{std::move(text), false});
             } else {
@@ -313,6 +321,11 @@ void TUIClientAgentIO::start() {
             if (event.is_mouse()) {
                 const auto& mouse = event.mouse();
                 if (mouse.button == Mouse::Left && mouse.motion == Mouse::Released) {
+                    // 连接失败 banner 的"重试"按钮点击 → 重新发起连接
+                    if (messageList_ && messageList_->retryButtonBox().Contain(mouse.x, mouse.y)) {
+                        requestRetry();
+                        return true;
+                    }
                     // 可折叠消息点击 (Thinking/Tool 展开/折叠)
                     if (messageList_ && messageList_->handleCollapsibleClick(mouse)) {
                         return true;
@@ -475,6 +488,84 @@ void TUIClientAgentIO::stop() {
 }
 
 // ---------------------------------------------------------------------------
+// agent-server 连接状态管理
+//
+// 覆盖场景:
+// - 本地一体模式: TUI 启动后 agent 线程仍在 init() (MCP 连接等可能耗时数秒),
+//   期间 connState=Connecting, banner 显示"启动中", 用户输入进入待发送队列;
+//   SessionServerAgentIO 会话驱动循环启动前经 onServerReady() 置 Connected 并刷新队列
+// - 远程模式: WS 连接握手期间 connState=Connecting; 连接失败置 Failed,
+//   banner 显示失败 + [重试] 按钮, 用户点击后 requestRetry() 唤醒连接协程重试
+// ---------------------------------------------------------------------------
+
+void TUIClientAgentIO::setConnState(ConnState state) {
+    {
+        std::lock_guard<std::mutex> lock(sharedState_.mutex());
+        auto&                       st = sharedState_.mutableState();
+        st.connState                   = state;
+    }
+    postRedraw();
+}
+
+void TUIClientAgentIO::onServerReady() {
+    {
+        std::lock_guard<std::mutex> lock(sharedState_.mutex());
+        auto&                       st = sharedState_.mutableState();
+        st.connState                   = ConnState::Connected;
+        // 启动完成: 清空进行中的启动步骤 (banner 切换到"启动完成 + 按键提示")
+        st.startupProgress.clear();
+    }
+    postRedraw();
+    // 刷新连接前排队的用户输入 (发送首条并置 isStreaming, 后续由 TurnEnd 分发)
+    flushPendingInput();
+}
+
+void TUIClientAgentIO::onServerProgress(std::string_view step) {
+    // agent 线程同步调用 (startupNotifier → onServerProgress):
+    // 只更新当前步骤文本, 不触碰其他字段; 经 sharedState 锁避免与 UI 快照竞争
+    {
+        std::lock_guard<std::mutex> lock(sharedState_.mutex());
+        auto&                       st = sharedState_.mutableState();
+        st.startupProgress             = std::string(step);
+    }
+    postRedraw();
+}
+
+void TUIClientAgentIO::flushPendingInput() {
+    std::lock_guard<std::mutex> lock(sharedState_.mutex());
+    auto&                       st = sharedState_.mutableState();
+    // 与 TurnEnd/TurnResult 后的分发一致: 仅当未处于流式输出且队列非空时
+    // 发送首条 (sendUserInputLocked 内部置 isStreaming, 其余排队输入随后续
+    // 轮次结束依次分发)
+    dispatchNextPendingInput(st);
+}
+
+void TUIClientAgentIO::requestRetry() {
+    retryRequested_.store(true, std::memory_order_release);
+    // 立即回到"启动中"提示: 连接协程 waitRetry 返回后会重新发起连接
+    setConnState(ConnState::Connecting);
+}
+
+asio::awaitable<void> TUIClientAgentIO::waitRetry() {
+    // 轮询等待用户点击 banner 的"重试"按钮 (requestRetry 置 retryRequested_):
+    // - 100ms 轮询间隔, 点击延迟不可感知
+    // - 每次轮询检查 running_: 连接失败期间用户可能退出 TUI, 等待协程须尽快
+    //   返回, 否则 runner 协程永久挂起会阻塞 client io_context 的 run() 使进程无法退出
+    asio::steady_timer timer(ex_);
+    for (;;) {
+        if (retryRequested_.exchange(false, std::memory_order_acq_rel)) {
+            co_return;
+        }
+        if (!running_.load(std::memory_order_acquire)) {
+            co_return;
+        }
+        timer.expires_after(std::chrono::milliseconds(100));
+        auto [ec] = co_await timer.async_wait(asio::as_tuple(asio::use_awaitable));
+        (void)ec;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // 系统资源监控 (每 kSystemInfoIntervalSec 秒采集一次 CPU/内存占用)
 //
 // 无独立线程: 采集周期由 client io_context 上的协程 (steady_timer) 驱动,
@@ -552,6 +643,13 @@ void TUIClientAgentIO::stopSystemMonitor() {
 // ---------------------------------------------------------------------------
 
 void TUIClientAgentIO::openModelSelector() {
+    // agent-server 未就绪时请求会被 transport 丢弃 (远程模式写队列未创建/
+    // 本地模式服务尚未启动), 弹窗将永远显示 loading; 提示用户等待连接完成
+    if (ctx_.frameState && ctx_.frameState->connState != ConnState::Connected) {
+        showToast("agent-server 尚未就绪, 请稍后再试");
+        postRedraw();
+        return;
+    }
     if (transport_) {
         sendToPeer(agentxx::agent::WireGetModel{currentThreadId()});
     }
@@ -640,6 +738,13 @@ void TUIClientAgentIO::openPlanDiagram() {
 
 void TUIClientAgentIO::openSessionSelector() {
     if (!modal_ || modal_->hasModal()) {
+        return;
+    }
+    // agent-server 未就绪时 WireListSessions/WireSwitchSession 无法送达,
+    // 会话列表将永远显示 loading; 提示用户等待连接完成
+    if (ctx_.frameState && ctx_.frameState->connState != ConnState::Connected) {
+        showToast("agent-server 尚未就绪, 请稍后再试");
+        postRedraw();
         return;
     }
     // 仅当前会话非运行状态时可切换: 轮次进行中切换会话会使 Delta/输入错投,
@@ -1080,6 +1185,12 @@ void TUIClientAgentIO::onSync(const agentxx::agent::SyncPayload& payload) {
             st->systemUsage      = prev->systemUsage;
             st->contextMessages  = prev->contextMessages;
             st->isStreaming      = false;
+            // 连接状态不随 Sync 重置: 握手后服务端回推全量 Sync 时若被重置回
+            // Connecting (默认值), banner 会错误地回到"启动中"
+            st->connState = prev->connState;
+            // 启动进度不随 Sync 重置: 本地模式下握手后 init 仍在进行,
+            // 期间服务端回推的早期 Sync 不应清空正在展示的启动步骤
+            st->startupProgress = prev->startupProgress;
 
             // 历史消息与 server viewMessages 同型 (ViewMessage), 直接拷贝;
             // 原 json→TUIMessage 拆解逻辑已下沉到 server (event_stream 展开)

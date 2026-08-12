@@ -355,7 +355,16 @@ uint64_t MessageListComponent::itemKey(size_t index) {
         return seed ^ (v + 0x9e3779b97f4a7c15ULL + (seed << 6) + (seed >> 2));
     };
     if (st.messages.empty() && !hasStreamingToken(st)) {
-        return 1; // banner
+        // banner 内容随连接状态 + 启动进度 (startupProgress) 变化:
+        // 两者计入 key 使 LazyScrollable 缓存失效重建 —— 若 key 恒定,
+        // 缓存的是首次渲染的 banner 文本, 连接状态切换/启动步骤更新
+        // 都不会反映到屏幕 (启动进度永远停在第一步)
+        uint64_t h = 1;
+        h          = combine(h, static_cast<uint64_t>(st.connState));
+        for (const char c : st.startupProgress) {
+            h = combine(h, static_cast<uint64_t>(static_cast<uint8_t>(c)));
+        }
+        return h;
     }
     if (index < st.messages.size()) {
         // 消息内容变化必然伴随消息指针变化 (见 TUISharedState::mutableMessage /
@@ -538,6 +547,51 @@ LazyBuiltItem MessageListComponent::buildItem(size_t index) {
 
 Element MessageListComponent::buildBanner() {
     const auto& theme = *ctx_.theme;
+    const auto& st    = *ctx_.frameState;
+
+    // 连接状态行 (banner 下半部):
+    // - Connecting: agent-server 正在启动, 下方逐步显示当前正在执行的启动
+    //   操作 (如"加载 MCP server: xxx"), 并提示输入将在连接完成后自动发送
+    // - Failed:     连接失败提示 + 可点击的 [重试] 按钮 (TUIClientAgentIO 全局
+    //               鼠标事件经 retryButtonBox 命中检测, 点击重新发起连接)
+    // - Connected:  启动完成提示 + 默认按键提示
+    Element statusLine;
+    switch (st.connState) {
+        case ConnState::Connecting: {
+            Elements els;
+            els.push_back(text("agent-server 正在启动中 ...") | color(theme.hintColor) | center);
+            if (!st.startupProgress.empty()) {
+                // 当前正在执行的启动步骤 (agent 线程逐步上报)
+                els.push_back(
+                    text(fmt::format("~ {}", st.startupProgress)) | color(theme.accentColor)
+                    | center
+                );
+            }
+            els.push_back(text("输入消息将在连接完成后自动发送") | color(theme.hintColor) | center);
+            statusLine = vbox(std::move(els));
+            break;
+        }
+        case ConnState::Failed: {
+            // 重置上一帧命中区域 (避免缓存命中的旧 Box 残留; 元素重建后 reflect 重新填充)
+            retryButtonBox_ = ftxui::Box{};
+            statusLine      = hbox({
+                filler(),
+                text("  agent-server 连接失败  ") | color(theme.errorColor),
+                text("  [ 重试 ]  ") | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor)
+                    | bold | reflect(retryButtonBox_),
+                filler(),
+            });
+            break;
+        }
+        default: // Connected: 启动完成提示 + 按键提示
+            statusLine = vbox({
+                text("agent-server 已启动完成") | color(theme.accentColor) | center,
+                text(R"(Type a message to start. [Esc] cancel, [Ctrl+C] quit.)")
+                    | color(theme.hintColor) | center,
+            });
+            break;
+    }
+
     return vbox({
         filler(),
         text(R"_(
@@ -548,9 +602,7 @@ Element MessageListComponent::buildBanner() {
 /_/  |_\____/_____/_/ |_/ /_/      /_/   /_/
 )_") | bold | color(theme.accentColor)
             | center,
-        text("Type a message to start. [F2] switch model, [Esc] cancel, "
-             "[Ctrl+C] quit.")
-            | color(theme.hintColor) | center,
+        statusLine,
         filler(),
     });
 }
