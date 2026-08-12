@@ -11,9 +11,12 @@
 #include <asio/steady_timer.hpp>
 #include <asio/use_awaitable.hpp>
 #include <asio/use_future.hpp>
+#include <atomic>
 #include <chrono>
 #include <future>
 #include <iostream>
+#include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 
@@ -3532,6 +3535,382 @@ asio::awaitable<void> test_mcp_client_2026_legacy_fallback() {
     serverThread.join();
 }
 
+/// 模拟"服务端响应被截断"场景 (Content-Length 偏大 / 网关超时掐断连接):
+/// 第一次 HTTP 响应返回不完整 body 后立即关闭连接, 客户端 HttpClient 读到
+/// EOF 报 beast partial_message; 验证 McpClient 将该错误识别为瞬时传输
+/// 错误并自动重试一次, 第二次请求成功。
+asio::awaitable<void> test_mcp_client_truncated_retry() {
+    struct TruncServer {
+        std::thread                              thread;
+        std::atomic<uint16_t>                    port{0};
+        std::atomic<int>                         requestCount{0};
+        std::atomic<bool>                        stopped{false};
+        std::unique_ptr<asio::io_context>        ioCtx;
+        std::unique_ptr<asio::ip::tcp::acceptor> acceptor;
+
+        /// 从 JSON body 提取 "id": <N> 回显, 保证响应与请求 id 匹配
+        static std::string extractJsonId(const std::string& body) {
+            auto pos = body.find("\"id\"");
+            if (pos == std::string::npos) {
+                return "0";
+            }
+            pos = body.find(':', pos);
+            if (pos == std::string::npos) {
+                return "0";
+            }
+            ++pos;
+            while (pos < body.size() && (body[pos] == ' ' || body[pos] == '\t')) {
+                ++pos;
+            }
+            auto end = pos;
+            while (end < body.size()
+                   && ((body[end] >= '0' && body[end] <= '9') || body[end] == '-')) {
+                ++end;
+            }
+            return end == pos ? "0" : body.substr(pos, end - pos);
+        }
+
+        void start() {
+            ioCtx = std::make_unique<asio::io_context>();
+            acceptor = std::make_unique<asio::ip::tcp::acceptor>(
+                *ioCtx,
+                asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0)
+            );
+            port.store(acceptor->local_endpoint().port());
+            thread = std::thread([this]() {
+                while (!stopped.load()) {
+                    neograph_asio_error_code ec;
+                    asio::ip::tcp::socket    sock(*ioCtx);
+                    acceptor->accept(sock, ec);
+                    if (ec) {
+                        break;
+                    }
+                    handle(sock);
+                }
+            });
+        }
+
+        void handle(asio::ip::tcp::socket& sock) {
+            namespace http = boost::beast::http;
+            neograph_asio_error_code         ec;
+            boost::beast::flat_buffer        buf;
+            http::request<http::string_body> req;
+            http::read(sock, buf, req, ec);
+            if (ec) {
+                return;
+            }
+
+            const int         n  = requestCount.fetch_add(1) + 1;
+            const std::string id = extractJsonId(req.body());
+
+            if (n == 1) {
+                // 第一次: 截断响应 — Content-Length 声明 10000 但实际 body 远小于
+                // 该值, 发送后立即关闭连接; 客户端读到 EOF → beast partial_message
+                std::string partial = "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":{}}";
+                const std::string header = "HTTP/1.1 200 OK\r\n"
+                                           "Content-Type: application/json\r\n"
+                                           "Content-Length: 10000\r\n"
+                                           "\r\n";
+                asio::write(sock, asio::buffer(header), ec);
+                asio::write(sock, asio::buffer(partial), ec);
+                sock.close();
+                return;
+            }
+
+            // 后续: 完整响应 (server/discover 返回支持版本, 其余返回空 result)
+            std::string body;
+            if (req.body().find("server/discover") != std::string::npos) {
+                body = "{\"jsonrpc\":\"2.0\",\"id\":" + id
+                       + ",\"result\":{\"supportedVersions\":[\"2026-07-28\"],"
+                         "\"capabilities\":{},\"_meta\":{\"io.modelcontextprotocol/"
+                         "serverInfo\":{\"name\":\"trunc-test\",\"version\":\"1.0\"}}}}";
+            } else {
+                body = "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":{}}";
+            }
+            const std::string resp = "HTTP/1.1 200 OK\r\n"
+                                     "Content-Type: application/json\r\n"
+                                     "Content-Length: "
+                                     + std::to_string(body.size()) + "\r\n"
+                                     "Connection: close\r\n"
+                                     "\r\n" + body;
+            asio::write(sock, asio::buffer(resp), ec);
+            sock.close();
+        }
+
+        void stop() {
+            stopped.store(true);
+            if (acceptor) {
+                neograph_asio_error_code ec;
+                // 先连接一次唤醒阻塞中的同步 accept: 跨线程 close 无法可靠
+                // 中断 asio 同步 accept (见 test_http.cpp 同模式), 先送一个
+                // 连接让 accept 返回, 再 close 使后续 accept 返回错误退出循环
+                asio::ip::tcp::socket dummy(*ioCtx);
+                dummy.connect(
+                    asio::ip::tcp::endpoint(
+                        asio::ip::make_address("127.0.0.1"),
+                        port.load()
+                    ),
+                    ec
+                );
+                dummy.close();
+                acceptor->close(ec);
+            }
+            if (thread.joinable()) {
+                thread.join();
+            }
+        }
+    };
+
+    TruncServer server;
+    server.start();
+    if (server.port.load() == 0) {
+        TEST_FAIL << "truncated-response server failed to start" << std::endl;
+        ++g_mcp_failed;
+        server.stop();
+        co_return;
+    }
+
+    const std::string serverUrl = "http://127.0.0.1:" + std::to_string(server.port.load());
+
+    McpClient::Config clientCfg;
+    clientCfg.serverUrl       = serverUrl;
+    clientCfg.protocolVersion = std::string{McpClient::kProtocol2026_07_28};
+    clientCfg.requestTimeout  = std::chrono::seconds(5);
+    clientCfg.initTimeout     = std::chrono::seconds(5);
+
+    auto client = std::make_shared<McpClient>(std::move(clientCfg));
+
+    // 第一次 server/discover 响应被截断 → McpClient 自动重试 → 第二次成功
+    auto init = co_await client->initialize();
+    XX_TEST_EXPECT_TRUE(init.has_value());
+    if (init.has_value()) {
+        XX_TEST_EXPECT_EQ(init->serverName, "trunc-test");
+        XX_TEST_EXPECT_EQ(init->protocolVersion, "2026-07-28");
+    }
+
+    auto ping = co_await client->ping();
+    XX_TEST_EXPECT_TRUE(ping.has_value());
+
+    co_await client->close();
+
+    // 至少 2 次请求 (第 1 次截断 + 重试), 证明重试确实发生
+    const int reqCount = server.requestCount.load();
+    XX_TEST_EXPECT_TRUE(reqCount >= 2);
+    TEST_INFO << "truncated-response server received " << reqCount
+              << " requests (1 truncated + retried)" << std::endl;
+
+    server.stop();
+}
+
+/// 模拟"服务端会话过期"场景: 服务器颁发 session 后, 第一次业务请求返回
+/// 401 SessionExpired, 验证 McpClient 自动重建会话 (重新 initialize +
+/// notifications/initialized) 并重试成功。
+asio::awaitable<void> test_mcp_client_session_rebuild() {
+    struct SessionServer {
+        std::thread                              thread;
+        std::atomic<uint16_t>                    port{0};
+        std::atomic<bool>                        stopped{false};
+        std::atomic<int>                         initCount{0};
+        std::atomic<int>                         businessCalls{0};
+        std::unique_ptr<asio::io_context>        ioCtx;
+        std::unique_ptr<asio::ip::tcp::acceptor> acceptor;
+
+        void start() {
+            ioCtx = std::make_unique<asio::io_context>();
+            acceptor = std::make_unique<asio::ip::tcp::acceptor>(
+                *ioCtx,
+                asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0)
+            );
+            port.store(acceptor->local_endpoint().port());
+            thread = std::thread([this]() {
+                while (!stopped.load()) {
+                    neograph_asio_error_code ec;
+                    asio::ip::tcp::socket    sock(*ioCtx);
+                    acceptor->accept(sock, ec);
+                    if (ec) {
+                        break;
+                    }
+                    handle(sock);
+                }
+            });
+        }
+
+        void handle(asio::ip::tcp::socket& sock) {
+            namespace http = boost::beast::http;
+            neograph_asio_error_code         ec;
+            boost::beast::flat_buffer        buf;
+            http::request<http::string_body> req;
+            http::read(sock, buf, req, ec);
+            if (ec) {
+                return;
+            }
+
+            const std::string body = req.body();
+
+            // 现代探测 server/discover 无 session → 400 (触发客户端回退 legacy)
+            if (body.find("server/discover") != std::string::npos) {
+                const std::string respBody
+                    = "{\"RequestId\":\"x\",\"Code\":\"InvalidArgument\","
+                      "\"Message\":\"request without mcp-session-id header should be "
+                      "mcp initialize request\"}";
+                const std::string resp = "HTTP/1.1 400 Bad Request\r\n"
+                                         "Content-Type: application/json\r\n"
+                                         "Content-Length: "
+                                         + std::to_string(respBody.size()) + "\r\n"
+                                         "Connection: close\r\n\r\n" + respBody;
+                asio::write(sock, asio::buffer(resp), ec);
+                sock.close();
+                return;
+            }
+            // SSE 发现 GET /sse → 404 (模拟 Streamable HTTP 服务器无 SSE endpoint)
+            if (req.method() == http::verb::get) {
+                const std::string respBody = "{\"error\":{\"message\":\"record not found\"}}";
+                const std::string resp = "HTTP/1.1 404 Not Found\r\n"
+                                         "Content-Type: application/json\r\n"
+                                         "Content-Length: "
+                                         + std::to_string(respBody.size()) + "\r\n"
+                                         "Connection: close\r\n\r\n" + respBody;
+                asio::write(sock, asio::buffer(resp), ec);
+                sock.close();
+                return;
+            }
+            // initialize: 颁发新 session
+            if (body.find("\"initialize\"") != std::string::npos) {
+                const int n = initCount.fetch_add(1) + 1;
+                const std::string sid = fmt::format("good-{}", n);
+                const std::string resultBody = "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{"
+                                               "\"protocolVersion\":\"2025-03-26\","
+                                               "\"capabilities\":{},\"serverInfo\":{"
+                                               "\"name\":\"session-test\",\"version\":\"1.0\"}}}";
+                const std::string resp = "HTTP/1.1 200 OK\r\n"
+                                         "Content-Type: application/json\r\n"
+                                         "Content-Length: "
+                                         + std::to_string(resultBody.size()) + "\r\n"
+                                         "Mcp-Session-Id: " + sid + "\r\n"
+                                         "Connection: close\r\n\r\n" + resultBody;
+                asio::write(sock, asio::buffer(resp), ec);
+                sock.close();
+                return;
+            }
+            // notifications/initialized → 202 空响应
+            if (body.find("notifications/initialized") != std::string::npos) {
+                const std::string resp = "HTTP/1.1 202 Accepted\r\n"
+                                         "Content-Length: 0\r\n"
+                                         "Connection: close\r\n\r\n";
+                asio::write(sock, asio::buffer(resp), ec);
+                sock.close();
+                return;
+            }
+            // 其他业务请求 (tools/list 等):
+            // - 第 1 次业务调用 → 401 SessionExpired (模拟会话过期, 不改变状态)
+            // - 之后 (会话重建后重试) → 200 成功
+            if (businessCalls.fetch_add(1) == 0) {
+                const std::string errBody
+                    = "{\"RequestId\":\"x\",\"Code\":\"SessionExpired\","
+                      "\"Message\":\"session is expired\"}";
+                const std::string resp = "HTTP/1.1 401 Unauthorized\r\n"
+                                         "Content-Type: application/json\r\n"
+                                         "Content-Length: "
+                                         + std::to_string(errBody.size()) + "\r\n"
+                                         "Connection: close\r\n\r\n" + errBody;
+                asio::write(sock, asio::buffer(resp), ec);
+                sock.close();
+                return;
+            }
+            // 成功响应: 回显请求 id
+            const std::string id = extractJsonId(body);
+            const std::string okBody = "{\"jsonrpc\":\"2.0\",\"id\":" + id
+                                       + ",\"result\":{\"tools\":[],\"resources\":[]}}";
+            const std::string resp = "HTTP/1.1 200 OK\r\n"
+                                     "Content-Type: application/json\r\n"
+                                     "Content-Length: "
+                                     + std::to_string(okBody.size()) + "\r\n"
+                                     "Connection: close\r\n\r\n" + okBody;
+            asio::write(sock, asio::buffer(resp), ec);
+            sock.close();
+        }
+
+        static std::string extractJsonId(const std::string& body) {
+            auto pos = body.find("\"id\"");
+            if (pos == std::string::npos) {
+                return "0";
+            }
+            pos = body.find(':', pos);
+            if (pos == std::string::npos) {
+                return "0";
+            }
+            ++pos;
+            while (pos < body.size() && (body[pos] == ' ' || body[pos] == '\t')) {
+                ++pos;
+            }
+            auto end = pos;
+            while (end < body.size()
+                   && ((body[end] >= '0' && body[end] <= '9') || body[end] == '-')) {
+                ++end;
+            }
+            return end == pos ? "0" : body.substr(pos, end - pos);
+        }
+
+        void stop() {
+            stopped.store(true);
+            if (acceptor) {
+                neograph_asio_error_code ec;
+                asio::ip::tcp::socket    dummy(*ioCtx);
+                dummy.connect(
+                    asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), port.load()),
+                    ec
+                );
+                dummy.close();
+                acceptor->close(ec);
+            }
+            if (thread.joinable()) {
+                thread.join();
+            }
+        }
+    };
+
+    SessionServer server;
+    server.start();
+    if (server.port.load() == 0) {
+        TEST_FAIL << "session-rebuild server failed to start" << std::endl;
+        ++g_mcp_failed;
+        server.stop();
+        co_return;
+    }
+
+    const std::string serverUrl = "http://127.0.0.1:" + std::to_string(server.port.load());
+
+    McpClient::Config cfg;
+    cfg.serverUrl       = serverUrl;
+    cfg.protocolVersion = std::string{McpClient::kProtocol2026_07_28};
+    cfg.requestTimeout  = std::chrono::seconds(5);
+    cfg.initTimeout     = std::chrono::seconds(5);
+
+    auto client = std::make_shared<McpClient>(std::move(cfg));
+
+    // 初始化 (modern 探测 400 → 回退 legacy initialize 握手)
+    auto init = co_await client->initialize();
+    XX_TEST_EXPECT_TRUE(init.has_value());
+    if (init.has_value()) {
+        XX_TEST_EXPECT_EQ(init->serverName, "session-test");
+    }
+
+    // 第一次业务请求: 服务器返回 401 SessionExpired → McpClient 应自动
+    // 重建会话并重试成功 (initCount 应变为 2: 首次 + 重建)
+    auto tools = co_await client->listTools();
+    XX_TEST_EXPECT_TRUE(tools.has_value());
+
+    const int initCnt = server.initCount.load();
+    XX_TEST_EXPECT_EQ(initCnt, 2);
+
+    // 重建后的会话应能继续使用
+    auto ping = co_await client->ping();
+    XX_TEST_EXPECT_TRUE(ping.has_value());
+
+    co_await client->close();
+    server.stop();
+}
+
 asio::awaitable<TestResult> run_mcp_tests() {
     test_mcp_version_negotiation_unit();
     test_mcp_server_unit();
@@ -3563,6 +3942,8 @@ asio::awaitable<TestResult> run_mcp_tests() {
     co_await test_mcp_server_2026_x_mcp_header();
     co_await test_mcp_client_2026_modern_http();
     co_await test_mcp_client_2026_legacy_fallback();
+    co_await test_mcp_client_truncated_retry();
+    co_await test_mcp_client_session_rebuild();
     co_return TestResult{g_mcp_passed, g_mcp_failed};
 }
 

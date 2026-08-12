@@ -283,6 +283,11 @@ private:
     asio::awaitable<std::expected<json, std::string>>
         sendStdioRequest(int64_t id, std::string_view method, const json& params);
 
+    /// 重新建立 HTTP 会话: session 过期/失效 (如 401 SessionExpired) 后调用。
+    /// 清空旧 session → 重新发送 initialize 获取新 Mcp-Session-Id →
+    /// 补发 notifications/initialized。成功返回 true。
+    asio::awaitable<bool> rebuildHttpSession();
+
     /// 2026-07-28: 现代 HTTP 请求 (直接 POST serverUrl, 无 SSE discovery/会话)
     asio::awaitable<std::expected<json, std::string>>
         sendModernHttpRequest(int64_t id, std::string_view method, const json& params);
