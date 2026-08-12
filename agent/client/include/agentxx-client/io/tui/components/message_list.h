@@ -180,18 +180,20 @@ private:
     static bool interruptKeyOf(const TUIMessage& msg, InterruptKey& out);
 
     std::map<InterruptKey, InterruptUIState> interruptUi_;
+
     /// 中断请求信息: wireId → 通道 + 权限询问标记 (client 线程注入; 同请求共享)
     struct InterruptChannelInfo {
         std::shared_ptr<InterruptResultChannel> ch;
         /// 是否为可记住选择的权限询问 (渲染"记住"开关)
         bool rememberable = false;
     };
+
     std::map<int64_t, InterruptChannelInfo> interruptChannels_;
 
     // ---- LazyScrollable 回调 ----
     size_t        itemCount();
     uint64_t      itemKey(size_t index);
-    int           estimateHeight(size_t index, int width);
+    size_t        estimateHeight(size_t index, size_t width);
     LazyBuiltItem buildItem(size_t index);
     bool          fillViewport(size_t index);
 

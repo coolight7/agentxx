@@ -22,9 +22,9 @@ Element StatusBarComponent::OnRender() {
     Element ctxText;
     if (maxCtx > 0) {
         ctxText = hbox({
-            text(agentxx::util::formatSize(ctx)) | color(theme.hintColor),
+            text(agentxx::util::formatSize(ctx, 1024, false)) | color(theme.hintColor),
             text("/") | color(theme.hintColor) | dim,
-            text(agentxx::util::formatSize(maxCtx)) | color(theme.hintColor),
+            text(agentxx::util::formatSize(maxCtx, 1024, false)) | color(theme.hintColor),
             text("·") | color(theme.hintColor) | dim,
             text(fmt::format(
                 "{}%",
@@ -43,12 +43,13 @@ Element StatusBarComponent::OnRender() {
         text(" · ") | color(theme.hintColor),
         ctxText | color(theme.hintColor),
     };
-    const double tps = (ctx_.session && ctx_.session->contextStats)
-                           ? ctx_.session->contextStats->tps.load(std::memory_order_relaxed)
-                           : 0.0;
-    if (st.isStreaming && tps > 0.0) {
+    const int tps
+        = (ctx_.session && ctx_.session->contextStats)
+              ? static_cast<int>(ctx_.session->contextStats->tps.load(std::memory_order_relaxed))
+              : 0;
+    if (st.isStreaming && tps > 0) {
         modelChildren.push_back(text("·") | color(theme.hintColor) | dim);
-        modelChildren.push_back(text(fmt::format("{:.1f} t/s", tps)) | color(theme.hintColor));
+        modelChildren.push_back(text(fmt::format("{}t/s", tps)) | color(theme.hintColor));
     }
     auto modelInfo = hbox(std::move(modelChildren)) | reflect(modelBox_);
 

@@ -808,9 +808,9 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
             std::string modelText = agentContext->getSessionCurrentModelName(threadId);
             if (turnTps > 0.0) {
                 if (modelText.empty()) {
-                    modelText = fmt::format("{:.1f} t/s", turnTps);
+                    modelText = fmt::format("{:.1f}t/s", turnTps);
                 } else {
-                    modelText = fmt::format("{} · {:.1f} t/s", modelText, turnTps);
+                    modelText = fmt::format("{} · {:.1f}t/s", modelText, turnTps);
                 }
             }
             return fmt::format(
