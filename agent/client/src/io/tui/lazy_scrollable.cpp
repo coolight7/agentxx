@@ -146,10 +146,10 @@ bool LazyScrollable::OnEvent(ftxui::Event event) {
     return false;
 }
 
-int LazyScrollable::estimateHeightFor(size_t index) const {
+size_t LazyScrollable::estimateHeightFor(size_t index) const {
     // measuredWidth_ 首帧布局前为 -1; 由 estimateHeight 回调自行兜底默认宽度
-    const int h = estimateHeight_ ? estimateHeight_(index, measuredWidth_) : 1;
-    return std::max(1, h);
+    const size_t h = estimateHeight_ ? estimateHeight_(index, measuredWidth_) : 1;
+    return std::max(static_cast<size_t>(1), h);
 }
 
 ftxui::Element& LazyScrollable::elementAt(size_t index) {
@@ -314,7 +314,7 @@ void LazyScrollable::prepareLayout(const ftxui::Box& box) {
             heights_[i]  = vh;
             measured_[i] = true;
         } else if (heights_[i] < 0) {
-            heights_[i] = estimateHeightFor(i);
+            heights_[i] = static_cast<int>(estimateHeightFor(i));
         }
     }
 
