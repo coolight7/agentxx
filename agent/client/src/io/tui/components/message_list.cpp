@@ -215,10 +215,18 @@ void MessageListComponent::invalidateCache() {
 
 Element MessageListComponent::OnRender() {
     // 流式已结束 (无流式 token): 及时释放增量渲染器缓存的稳定块/文本, 避免常驻内存。
+    // 同时重置流身份缓存 (streamEpoch_/streamFedLen_): 使下一流强制走重建分支。
+    // 为什么必须重置: onSync 会整体重建 TUIRenderState (currentTokenEpoch 归 0),
+    // 若此处保留旧 streamEpoch_, 新流首 token 递增后的 epoch 可能与旧值恰好相等,
+    // syncStream 误判为"同一流"而走增量分支, 而 fedLen 仍是旧流长度 —— 首 token
+    // 内容被整体跳过 (渲染缺字), 直到 token 超过旧 fedLen 才从错误偏移开始显示。
     // (须在构建/布局前判断; 流式进行中时 hasStreamingToken 为真, 不会重置)
-    if (ctx_.frameState && !hasStreamingToken(*ctx_.frameState) && streamRenderer_
-        && !streamRenderer_->text().empty()) {
-        streamRenderer_->reset();
+    if (ctx_.frameState && !hasStreamingToken(*ctx_.frameState)) {
+        if (streamRenderer_ && !streamRenderer_->text().empty()) {
+            streamRenderer_->reset();
+        }
+        streamFedLen_ = 0;
+        streamEpoch_  = ~0ULL;
     }
 
     // 由上一帧 viewport 可见区域反推可折叠消息的鼠标命中区域。
@@ -416,18 +424,25 @@ size_t MessageListComponent::estimateHeight(size_t index, int width) {
     }
     if (index < st.messages.size()) {
         const auto& msg = *st.messages[index];
+        // 注意: 所有消息分支的估算高度 = buildMessageBlock 内容行数 + 1 (尾部空行)。
+        // buildMessageItem 产出 vbox({block, text("")}), 实测高度恒比内容多 1 行;
+        // 若估算漏掉该空行, 不可见项 (未测量) 高度恒偏低 1 行/条, 总高度偏低
+        // -> stickToBottom 滚动偏移偏小, 底部最新消息被推出视口 (整行不显示
+        // 但滚动条/总高度仍存在)。此偏差还使"估算==实测"恒不成立, 每帧触发
+        // corrected 重算, 浪费且无法收敛到精确总高度。
         switch (msg.role) {
             case TUIMessage::Role::User:
-                return estimateLines(msg.text, width);
+                return estimateLines(msg.text, width) + 1;
             case TUIMessage::Role::Assistant:
-                return estimateLines(msg.text, width);
+                return estimateLines(msg.text, width) + 1;
             case TUIMessage::Role::System:
-                return estimateLines(msg.text, width);
+                return estimateLines(msg.text, width) + 1;
             case TUIMessage::Role::Thinking:
-                return msg.collapsed ? 1 : 1 + estimateLines(msg.text, width);
+                // 折叠: 仅 header 行 + 空行; 展开: header + 内容 + 空行
+                return (msg.collapsed ? 1 : 1 + estimateLines(msg.text, width)) + 1;
             case TUIMessage::Role::Tool: {
                 if (msg.collapsed) {
-                    return 1;
+                    return 1 + 1; // header 行 + 空行
                 }
                 size_t lines = 1; // header
                 if (!msg.text.empty()) {
@@ -435,7 +450,7 @@ size_t MessageListComponent::estimateHeight(size_t index, int width) {
                 }
                 const bool finished  = msg.tool && msg.tool->toolFinished;
                 lines               += finished ? estimateLines(msg.tool->toolResult, width) : 1;
-                return lines;
+                return lines + 1; // +1: 尾部空行
             }
             case TUIMessage::Role::Interrupt: {
                 // 粗略估算 (进入视口后实测修正): 头行 + label + depict +
@@ -457,12 +472,13 @@ size_t MessageListComponent::estimateHeight(size_t index, int width) {
                             ++lines;
                         }
                     }
-                    return lines;
+                    return static_cast<int>(lines) + 1; // +1: 尾部空行
                 }
+                // 非 waiting: 状态行 1 行 + 尾部空行 = 2
                 return 2;
             }
         }
-        return 1;
+        return 2; // 未知角色兜底: 内容 1 行 + 空行
     }
     // ---- 流式区 ----
     if (!streamUseIncremental_) {
@@ -679,15 +695,20 @@ void MessageListComponent::syncStream(const TUIRenderState& st) {
             ++streamGen_;
         }
         streamFedLen_ = 0;
+        // 下一流强制全量重建 (防御: 即使 future 代码在重建 currentToken 时
+        // 忘记递增 epoch, 此处兜底也能保证渲染器不与新流串用)
+        streamEpoch_ = ~0ULL;
         return;
     }
 
-    // 增量渲染仅在动画等级满足时启用; 否则降级为整段 paragraph 单子项
+    // 增量渲染仅在动画等级满足时启用; 否则降级为整段 paragraph 单子项。
+    // 降级期间不 feed 渲染器、不更新 fedLen/epoch —— renderer 内容与 fedLen
+    // 的一致性保持 (renderer text == token[0..fedLen)), 恢复增量后按 fedLen
+    // 追加缺失的增量即可, 无需重建 (与"新流"路径区分)。
     const bool inc = (st.currentTokenRole == TUIMessage::Role::Thinking)
                          ? TUISettings::instance().isAnimationEnabled(AnimationLevel::Ultra)
                          : TUISettings::instance().isAnimationEnabled(AnimationLevel::Low);
     if (!inc) {
-        streamFedLen_ = 0;
         return;
     }
     streamUseIncremental_ = true;
@@ -697,20 +718,21 @@ void MessageListComponent::syncStream(const TUIRenderState& st) {
         streamRenderer_ = std::make_unique<markdown::IncrementalRenderer>();
     }
     const auto& tok = *st.currentToken;
-    const auto  acc = streamRenderer_->text();
-    if (tok.size() >= acc.size() && std::string_view(tok).substr(0, acc.size()) == acc) {
-        // token 是已累积文本的延续 -> 仅追加增量
-        if (tok.size() > acc.size()) {
-            streamRenderer_->append(std::string_view(tok).substr(acc.size()));
-        }
-        streamFedLen_ = tok.size();
-    } else {
-        // 新流 (token 已被重置/更换) -> 重建渲染器
+    if (st.currentTokenEpoch != streamEpoch_) {
+        // 新流 (token 被重置/更换): 重建渲染器并全量 feed。
+        // 判定依据: client 线程仅在新建 currentToken 时递增 epoch (COW 复制
+        // 不递增, 内容仍是同一流延续), 故 epoch 相同即"同一流", 无需再对
+        // 整段累积文本做前缀比较
         streamRenderer_->reset();
         ++streamGen_;
+        streamEpoch_ = st.currentTokenEpoch;
         if (!tok.empty()) {
             streamRenderer_->append(tok);
         }
+        streamFedLen_ = tok.size();
+    } else if (tok.size() > streamFedLen_) {
+        // 同一流: 仅 feed 新增字节 (fedLen 不变量: renderer text == token[0..fedLen))
+        streamRenderer_->append(std::string_view(tok).substr(streamFedLen_));
         streamFedLen_ = tok.size();
     }
 }

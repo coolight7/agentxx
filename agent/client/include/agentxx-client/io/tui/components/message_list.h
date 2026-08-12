@@ -235,6 +235,10 @@ private:
     size_t streamHeaderCount_ = 0;
     /// 已 feed 到渲染器的 token 字节数 (检测增量追加/新流)
     size_t streamFedLen_ = 0;
+    /// 流身份缓存 (对应 TUIRenderState::currentTokenEpoch):
+    /// 与 fedLen_ 联合判定 "同一流仅追加增量" (epoch 相同且长度增长)
+    /// 或 "新流需重建渲染器" (epoch 变化), 替代逐帧前缀比较
+    uint64_t streamEpoch_ = ~0ULL;
     /// 流式代次: 每重建一次渲染器递增, 用于流式子项 key 防跨流串用缓存
     uint64_t streamGen_ = 0;
 

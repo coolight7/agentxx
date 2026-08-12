@@ -188,6 +188,10 @@ private:
     /// - 仅当前会话非运行状态时可打开 (否则提示先停止当前会话)
     /// - 请求服务端会话列表并展示; 确认后经 WireSwitchSession 切换
     void openSessionSelector();
+    /// 屏幕上方提示 (toast): 设置提示文本并安排 kToastDuration 后触发重绘,
+    /// 由 UI 线程渲染时检查超时并清除 (toastText_/toastShownAt_ 为 UI 线程独占,
+    /// 定时器回调仅触发重绘, 不直接写状态, 无跨线程竞争)
+    void showToast(std::string text);
     /// 会话选择弹窗确认后的切换逻辑 (UI 线程):
     /// - 更新本地 threadId 绑定与重连握手 threadId (WS 模式)
     /// - 发送 WireSwitchSession, 服务端回推全量 Sync/模型/上下文统计恢复界面
@@ -279,6 +283,17 @@ private:
     ///                  若有则补 Post 一帧, 保证以最新快照重绘, 避免请求丢失
     std::atomic<uint64_t> redrawSeq_{0};
     std::atomic<bool>     redrawPosted_{false};
+
+    // ---- 屏幕上方提示 (toast, UI 线程独占) ----
+    /// 当前 toast 文本 (空 = 无提示); 渲染时检查超时并清除
+    std::string                          toastText_;
+    /// toast 显示起始时刻 (渲染时据此判断是否超过 kToastDuration)
+    std::chrono::steady_clock::time_point toastShownAt_;
+    /// toast 超时定时器 (client io_context 上): 超时后仅触发重绘,
+    /// 由 UI 线程渲染时清除状态; stop() 时 cancel 避免挂起等待
+    std::shared_ptr<asio::steady_timer> toastTimer_;
+    /// toast 显示时长
+    static constexpr std::chrono::seconds kToastDuration{3};
 
     // ---- UI 线程动作队列 ----
     /// client 线程投递、UI 线程 (帧循环开头) 消费的组件操作队列;

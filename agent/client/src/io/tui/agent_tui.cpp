@@ -103,6 +103,26 @@ void TUIClientAgentIO::postRedraw() {
     }
 }
 
+void TUIClientAgentIO::showToast(std::string text) {
+    // UI 线程独占状态 (openSessionSelector 等 UI 事件处理中调用):
+    // 设置文本与起始时刻, 由渲染帧检查超时并清除 (见 start() 主渲染器)
+    toastText_    = std::move(text);
+    toastShownAt_ = std::chrono::steady_clock::now();
+    if (!toastTimer_) {
+        toastTimer_ = std::make_shared<asio::steady_timer>(ex_);
+    }
+    // 取消上一次挂起的等待 (连续提示时以最后一次为准重新计时)
+    toastTimer_->cancel();
+    toastTimer_->expires_after(kToastDuration);
+    // 回调仅触发重绘, 不写 UI 状态 (toastText_ 为 UI 线程独占, 无锁);
+    // 超时清除由 UI 线程下一帧渲染时执行, 避免跨线程数据竞争
+    toastTimer_->async_wait([this](neograph_asio_error_code ec) {
+        if (!ec) {
+            postRedraw();
+        }
+    });
+}
+
 // ---------------------------------------------------------------------------
 // start / stop
 // ---------------------------------------------------------------------------
@@ -233,6 +253,31 @@ void TUIClientAgentIO::start() {
                     sidebar_->Render(),
                 });
             }
+            // 屏幕上方 toast 提示 (如会话切换警告): 渲染时检查超时, 超过
+            // kToastDuration 自动清除 (toastText_/toastShownAt_ 为 UI 线程独占,
+            // 仅在本帧渲染中读写, 无跨线程竞争); 显示期间以 dbox 叠加在
+            // 主界面之上, 水平居中、垂直靠顶 (vbox 顶部 + filler 撑满)
+            if (!toastText_.empty()) {
+                const auto elapsed = std::chrono::steady_clock::now() - toastShownAt_;
+                if (elapsed >= kToastDuration) {
+                    toastText_.clear();
+                } else {
+                    auto toastEl = hbox({
+                        filler(),
+                        text(toastText_) | bgcolor(theme_.blockColor) | color(theme_.accentColor)
+                            | bold | border,
+                        filler(),
+                    });
+                    body         = dbox({
+                        body,
+                        vbox({
+                            text(" "),
+                            toastEl,
+                            filler(),
+                        }),
+                    });
+                }
+            }
             return body | bold | bgcolor(theme_.backgroundColor);
         });
 
@@ -357,7 +402,12 @@ void TUIClientAgentIO::start() {
                         fn();
                     }
                 }
-                if (logSink_ && logSink_->pump() > 0) {
+                // 日志 sink 排空 (丢弃防护: 不消费则生产者可能丢弃新日志):
+                // 仅当 Logs tab 存在且为当前激活 tab 时才触发重绘 —— agent 运行时
+                // 日志量很大, 若 tab 未打开, 日志变化不影响任何可见 UI, 每批日志
+                // 都触发整帧渲染 (布局 + 全屏 ToString + stdout 写) 是纯浪费
+                if (logSink_ && logSink_->pump() > 0 && sidebar_
+                    && sidebar_->isTabActive(kLogTabId)) {
                     screen->Post(Event::Custom);
                 }
                 loop.RunOnceBlocking();
@@ -426,6 +476,11 @@ void TUIClientAgentIO::stop() {
         uiThread_.join();
     }
     stopSystemMonitor();
+    // 取消 toast 超时定时器: 避免退出后残留挂起等待触发 use-after-free
+    // (回调捕获 this; cancel 后回调以 operation_aborted 返回, 不访问 this)
+    if (toastTimer_) {
+        toastTimer_->cancel();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -602,19 +657,11 @@ void TUIClientAgentIO::openSessionSelector() {
     }
     // 仅当前会话非运行状态时可切换: 轮次进行中切换会话会使 Delta/输入错投,
     // 请先停止当前会话 (Esc 或点击停止)
+    // 提示以屏幕上方 toast 展示 (3 秒自动消失), 不插入消息列表
     const bool busy = (ctx_.frameState && ctx_.frameState->isStreaming)
                       || awaitingInterruptInput_.load(std::memory_order_acquire);
     if (busy) {
-        {
-            std::lock_guard<std::mutex> lock(sharedState_.mutex());
-            auto&                       st  = sharedState_.mutableState();
-            auto                        tip = std::make_shared<TUIMessage>(TUIMessage::makeText(
-                TUIMessage::Role::System,
-                "[Session] 请先停止当前会话, 再进行会话切换"
-            ));
-            tip->system->tipLevel = TUIMessage::TipLevel::Warning;
-            st.messages.push_back(std::move(tip));
-        }
+        showToast("[Session] 请先停止当前会话, 再进行会话切换");
         postRedraw();
         return;
     }
@@ -797,9 +844,9 @@ void TUIClientAgentIO::onPeerMessage(agentxx::agent::WireMessage msg) {
                 // 会话选择弹窗数据源: 回填持久化会话列表 (服务端已按最近活动降序)
                 {
                     std::lock_guard<std::mutex> lock(sharedState_.mutex());
-                    auto&                       st               = sharedState_.mutableState();
-                    st.sessionList                               = m.sessions;
-                    st.sessionListLoaded                         = true;
+                    auto&                       st = sharedState_.mutableState();
+                    st.sessionList                 = m.sessions;
+                    st.sessionListLoaded           = true;
                 }
                 postRedraw();
             }
@@ -899,6 +946,8 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
                 // 避免每 token 深拷贝整个已累积文本 (O(n²) -> O(n))
                 if (!st.currentToken) {
                     st.currentToken = std::make_shared<std::string>();
+                    // 新流开始: 递增流身份 (COW 复制不递增, 见 currentTokenEpoch 注释)
+                    ++st.currentTokenEpoch;
                 } else if (st.currentToken.use_count() > 1) {
                     st.currentToken = std::make_shared<std::string>(*st.currentToken);
                 }

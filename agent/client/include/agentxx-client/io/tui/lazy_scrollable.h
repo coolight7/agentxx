@@ -184,5 +184,9 @@ private:
 
     // ---- 命中检测输出 ----
     std::vector<ftxui::Box> visibleBoxes_;
+    /// 各子项上一帧的布局 Box (与 items 按 index 对应; 未布局过的项为无效 Box)。
+    /// 缓存命中且 box 与上帧一致时, 子项内部布局状态与上帧完全相同,
+    /// 可跳过整棵子树的 ComputeRequirement/SetBox 迭代 (见 prepareLayout 阶段 2)
+    std::vector<ftxui::Box> lastBoxes_;
     ftxui::Box              box_;
 };
