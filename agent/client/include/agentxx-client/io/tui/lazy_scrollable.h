@@ -44,7 +44,7 @@ public:
 
     using ItemCountFunc      = std::function<size_t()>;
     using ItemKeyFunc        = std::function<uint64_t(size_t index)>;
-    using EstimateHeightFunc = std::function<int(size_t index, int width)>;
+    using EstimateHeightFunc = std::function<size_t(size_t index, int width)>;
     using BuildFunc          = std::function<LazyBuiltItem(size_t index)>;
     /// 判断子项是否占据整个视口高度 (空状态居中展示用); 返回 false 则正常布局
     using FillViewportFunc = std::function<bool(size_t index)>;
@@ -142,7 +142,7 @@ private:
     /// 按条数/字节预算从 LRU 尾部淘汰
     void evictIfNeeded();
     /// 估算未测量子项的高度 (行), 兜底 >= 1
-    int estimateHeightFor(size_t index) const;
+    size_t estimateHeightFor(size_t index) const;
 
     // ---- 回调 ----
     ItemCountFunc      itemCount_;
