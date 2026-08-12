@@ -96,7 +96,7 @@ target_link_libraries(agentxx_cli PUBLIC
   ftxui::ftxui
   markdown::markdown-ui
 )
-if (AGENTXX_ENABLE_HYPERSCAN OR AGENTXX_ENABLE_VECTORSCAN)
+if (AGENTXX_ENABLE_HYPERSCAN)
   pkg_check_modules(hyperscan REQUIRED IMPORTED_TARGET libhs)
   target_link_libraries(agentxx_cli PRIVATE 
     PkgConfig::hyperscan

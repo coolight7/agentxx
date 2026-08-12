@@ -33,7 +33,8 @@ data_dir: default
 # - blacklist: 始终拒绝, 与白名单同路径时黑名单优先
 permission:
   mode: ask
-  # whitelist:
+  whitelist:
+    - "/tmp/"
   #   - "C:/work/trusted"
   #   - "/home/user/shared/**"
   # blacklist:

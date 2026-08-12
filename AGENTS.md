@@ -83,7 +83,6 @@ path/to/agentxx_test string_util regex
     - [simdjson](agent/third_party/simdjson/)
     - [sqlite3] | [sqlite3-cmake](agent/third_party/sqlite3-cmake/)
     - [uchardet](agent/third_party/uchardet/)
-    - [vectorscan](agent/third_party/verctorscan/)
     - [yaml-cpp](agent/third_party/yaml-cpp/)
     - [zlib] | [zlib-ng](agent/third_party/zlib-ng/)
 

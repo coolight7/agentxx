@@ -119,15 +119,12 @@ Element SessionSelectorOverlay::OnRender() {
 
     // 顶部固定 "新会话" 项 (列表加载中也常驻, 保证始终可新建)
     {
-        auto newEntry = hbox({
-            text(" ✚ ") | color(theme.accentColor) | bold,
-            text(" 新会话 ") | bold,
-        });
+        auto newEntry = text(" + 新会话 ");
         if (selectedIndex_ == 0) {
             newEntry = newEntry | bgcolor(theme.buttonActiveBgColor)
                        | color(theme.buttonActiveTextColor) | focus;
         } else {
-            newEntry = newEntry | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor);
+            newEntry = newEntry | color(theme.normalColor);
         }
         items.push_back(newEntry | reflect(itemBoxes_[0]));
     }

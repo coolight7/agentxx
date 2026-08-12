@@ -29,8 +29,7 @@ option(XX_IS_RELEASE_D "Release Build." ON)
 option(AGENTXX_BUILD_CLIENT "Generate the client target." OFF)
 option(AGENTXX_BUILD_TEST "Generate the test target." OFF)
 option(AGENTXX_BUILD_BENCHMARK "Generate the benchmark target." OFF)
-option(AGENTXX_ENABLE_VECTORSCAN "Add VectorScan for regex support. Use [AGENTXX_ENABLE_HYPERSCAN] or std::regex if disable." ON)
-option(AGENTXX_ENABLE_HYPERSCAN "Add HyperScan for regex support. Use [AGENTXX_ENABLE_VECTORSCAN] or std::regex if disable." OFF)
+option(AGENTXX_ENABLE_HYPERSCAN "Add HyperScan for regex support. Use std::regex if disable." OFF)
 option(AGENTXX_ENABLE_CODEGRAPH "Add CodeGraph-CPP for code analysis." ON)
 option(AGENTXX_ENABLE_BOOST_PROCESS "Use Boost.process for execute command toolcall." ON)
 # ===== Debug 构建加速选项 =====
@@ -442,7 +441,6 @@ set(_AGENTXX_COMMON_CMAKE_ARGS
     -DXX_IS_CLANG_D=${XX_IS_CLANG_D}
 
     "-DAGENTXX_INSTALL_DIR=${AGENTXX_INSTALL_DIR}"
-    -DAGENTXX_ENABLE_VECTORSCAN=${AGENTXX_ENABLE_VECTORSCAN}
     -DAGENTXX_ENABLE_HYPERSCAN=${AGENTXX_ENABLE_HYPERSCAN}
     -DAGENTXX_ENABLE_CODEGRAPH=${AGENTXX_ENABLE_CODEGRAPH}
     -DAGENTXX_ENABLE_BOOST_PROCESS=${AGENTXX_ENABLE_BOOST_PROCESS}
@@ -674,58 +672,7 @@ if (AGENTXX_ENABLE_CODEGRAPH)
     TEST_COMMAND ""
   )
 endif()
-
-if (AGENTXX_ENABLE_VECTORSCAN)
-  # vectorscan
-  if (XX_IS_MSVC_D)
-    check_cxx_compiler_flag("/arch:AVX512" COMPILER_SUPPORTS_AVX512F)
-    check_cxx_source_runs("
-      #include <immintrin.h>
-      int main() {
-          // 使用 VBMI 特有的 intrinsic：_mm512_vpermvar_epi8
-          __m512i a = _mm512_set1_epi8(42);
-          __m512i idx = _mm512_set1_epi8(0);
-          __m512i result = _mm512_vpermvar_epi8(a, idx);
-          
-          // 防止编译器优化掉
-          volatile __m512i dummy = result;
-          (void)dummy;
-          return 0;
-      }" 
-      COMPILER_SUPPORTS_AVX512VBMI
-    )
-  else ()
-    check_cxx_compiler_flag("-mavx512f" COMPILER_SUPPORTS_AVX512F)
-    check_cxx_compiler_flag("-mavx512vbmi" COMPILER_SUPPORTS_AVX512VBMI)
-  endif()
-
-  ExternalProject_Add(
-    vectorscan_repo
-    SOURCE_DIR "${AGENTXX_THIRD_PARTY_DIR}/vectorscan/"
-    INSTALL_DIR "${AGENTXX_INSTALL_DIR}"
-    CMAKE_ARGS
-      ${_AGENTXX_COMMON_CMAKE_ARGS}
-      -DBUILD_UNIT=OFF
-      -DBUILD_TOOLS=OFF
-      -DBUILD_EXAMPLES=OFF
-      -DBUILD_BENCHMARKS=OFF
-      -DBUILD_DOC=OFF
-      -DFAT_RUNTIME=OFF
-      -DUSE_CPU_NATIVE=ON 
-      -DBUILD_AVX2=ON 
-      -DBUILD_AVX512=${COMPILER_SUPPORTS_AVX512F}
-      -DBUILD_AVX512VBMI=${COMPILER_SUPPORTS_AVX512VBMI}
-      -DBUILD_SIMDE_BACKEND=OFF
-      -DBUILD_SIMDE_NATIVE=OFF
-      -DBUILD_SHARED_LIBS=OFF
-      -DBUILD_STATIC_LIBS=ON
-    CMAKE_CACHE_ARGS
-      ${_AGENTXX_COMMON_CMAKE_CACHE_ARGS}
-      "-DBOOST_ROOT:PATH=${BOOST_ROOT}"
-      "-DOPENSSL_ROOT_DIR:PATH=${OPENSSL_ROOT_DIR}"
-    TEST_COMMAND ""
-  )
-elseif (AGENTXX_ENABLE_HYPERSCAN)
+if (AGENTXX_ENABLE_HYPERSCAN)
   ExternalProject_Add(
     hyperscan_repo
     SOURCE_DIR "${AGENTXX_THIRD_PARTY_DIR}/hyperscan/"
@@ -741,6 +688,18 @@ elseif (AGENTXX_ENABLE_HYPERSCAN)
       -DBUILD_SHARED_LIBS=OFF
       -DBUILD_STATIC_LIBS=ON
       "-DCMAKE_POLICY_VERSION_MINIMUM:STRING=3.15"
+      # hyperscan 是 C++11 老项目：主项目统一传给子构建的 CMAKE_CXX_FLAGS_* 中
+      # 追加的 -std=c++26 会覆盖其自身的 -std=c++11 (GCC 最后一个 -std= 生效)，
+      # 导致 C++14 的 std::make_unique 与 boost::make_unique 重载歧义等编译错误；
+      # 且其 debug 构建自身启用 -Werror，新编译器下 sign-compare 等警告会升级为
+      # 错误。这里在统一 flags 末尾追加 -std=c++11 恢复 C++11 编译，并追加
+      # -Wno-error=sign-compare 压住 -Werror (该选项需出现在 -Werror 之后)，
+      # C/C++ 的 flags 均需处理 (C 文件中 sign-compare 警告也会被 -Werror 升级)。
+      "-DCMAKE_C_FLAGS_DEBUG:STRING=${CMAKE_C_FLAGS_DEBUG} -Wno-error=sign-compare"
+      "-DCMAKE_CXX_FLAGS_DEBUG:STRING=${CMAKE_CXX_FLAGS_DEBUG} -std=c++11 -Wno-error=sign-compare"
+      "-DCMAKE_CXX_FLAGS_RELEASE:STRING=${CMAKE_CXX_FLAGS_RELEASE} -std=c++11"
+      "-DCMAKE_CXX_FLAGS_RELWITHDEBINFO:STRING=${CMAKE_CXX_FLAGS_RELWITHDEBINFO} -std=c++11"
+      "-DCMAKE_CXX_FLAGS_MINSIZEREL:STRING=${CMAKE_CXX_FLAGS_MINSIZEREL} -std=c++11"
     CMAKE_CACHE_ARGS
       ${_AGENTXX_COMMON_CMAKE_CACHE_ARGS}
       "-DBOOST_ROOT:PATH=${BOOST_ROOT}"
@@ -748,7 +707,7 @@ elseif (AGENTXX_ENABLE_HYPERSCAN)
     TEST_COMMAND ""
   )
 else()
-  message("[agentxx] Disable VectorScan and HyperScan")
+  message("[agentxx] Disable HyperScan")
 endif()
 
 # neograph
@@ -928,9 +887,7 @@ ExternalProject_Add(
 if (AGENTXX_LINUX_IO_URING_SUPPORTED)
   add_dependencies(agentxx_lib_repo liburing_repo)
 endif()
-if (AGENTXX_ENABLE_VECTORSCAN)
-  add_dependencies(agentxx_lib_repo vectorscan_repo)
-elseif (AGENTXX_ENABLE_HYPERSCAN)
+if (AGENTXX_ENABLE_HYPERSCAN)
   add_dependencies(agentxx_lib_repo hyperscan_repo)
 endif()
 if (AGENTXX_ENABLE_CODEGRAPH)

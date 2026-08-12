@@ -52,7 +52,7 @@
 ### 编译后的体积和依赖库
 - Agentxx 编译后输出的 可执行程序`agentxx_cli`、动态库`libagentxx` 都会尽量静态链接依赖库，保持编译结果对动态库的依赖尽量少
 - ⬜编译优化，控制导出符号，裁剪体积
-- 以下是`仅编译agentxx，移除大部分不必要的扩展依赖库`时的体积和运行时内存占用，如果需要进一步裁剪体积，可以移除 VectorScan/Hyperscan/codegraph/Boost.process 等可选库、采用 -Os/-Oz 体积编译优化 (commit: 0252b3eafacf400de4528832d14762529b001d1b)
+- 以下是`仅编译agentxx，移除大部分不必要的扩展依赖库`时的体积和运行时内存占用，如果需要进一步裁剪体积，可以移除 Hyperscan/codegraph/Boost.process 等可选库、采用 -Os/-Oz 体积编译优化 (commit: 0252b3eafacf400de4528832d14762529b001d1b)
 
 | System | agentxx_cli | agentxx_cli RAM | libagentxx | compiler | TIP |
 |---|---|---|---|---|---|
@@ -278,8 +278,7 @@
             - 从仅支持 c++/python 解析，扩展到支持 js/ts/dart/rust/go/java/kotlin/bash/markdown 等 20+ 种编程语言和文件格式结构
             - 扩展 Windows 编译运行支持
     - `正则表达式库支持`: 可根据编译选项自定义选择支持
-        - Vectorscan: 优先选择，但仅在 Linux 支持
-        - Hyperscan: 次选，兼容 Windows/Linux
+        - Hyperscan: 兼容 x86 Windows/Linux
         - std::regex: 兜底
 
 ## 编译 
@@ -353,6 +352,5 @@ agentxx_cli tui --agent ws://127.0.0.1:7007/agent --token passwd # 启动 TUI界
     - [simdjson](https://github.com/simdjson/simdjson/)
     - [sqlite3](https://github.com/sqlite/sqlite) | [sqlite3-cmake](https://github.com/sjinks/sqlite3-cmake)
     - [uchardet](https://www.freedesktop.org/wiki/Software/uchardet/)
-    - [vectorscan](https://github.com/VectorCamp/vectorscan)
     - [yaml-cpp](https://github.com/jbeder/yaml-cpp)
     - [zlib](https://github.com/madler/zlib) | [zlib-ng](https://github.com/zlib-ng/zlib-ng)

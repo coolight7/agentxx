@@ -7,7 +7,9 @@
 #include <cstdint>
 #include <map>
 #include <markdown/dom_builder.hpp>
+#include <markdown/incremental.hpp>
 #include <memory>
+#include <string_view>
 #include <vector>
 
 /// 消息列表组件 (Flutter ListView.builder 风格)
@@ -218,6 +220,33 @@ private:
 
     TUICtx&                         ctx_;
     std::shared_ptr<LazyScrollable> scrollable_;
+
+    // ---- 流式增量 markdown 渲染器 ----
+    // 流式输出期间避免每帧对整段累积文本全量重解析 (O(n^2) -> 稳定块缓存 O(n)):
+    // 已闭合的顶层块作为独立可缓存子项 (LazyScrollable 仅布局可见子项, 避免
+    // 每帧对整篇内容全量布局), 每帧仅重建末尾仍在增长的块。
+    std::unique_ptr<markdown::IncrementalRenderer> streamRenderer_;
+    /// 当前流式渲染模式: true=增量 (稳定块拆分为多个可缓存子项);
+    /// false=降级 (动画等级不足, 整段 paragraph 单子项)
+    bool streamUseIncremental_ = false;
+    /// 流式期间 (增量模式) 头部项数: thinking 时 1 (显示 "[Thinking] 时长"), 其余 0
+    size_t streamHeaderCount_ = 0;
+    /// 已 feed 到渲染器的 token 字节数 (检测增量追加/新流)
+    size_t streamFedLen_ = 0;
+    /// 流式代次: 每重建一次渲染器递增, 用于流式子项 key 防跨流串用缓存
+    uint64_t streamGen_ = 0;
+
+    /// 增量模式的流式区子项数 = 头部 + 稳定块 + (尾部块存在 ? 1 : 0)
+    size_t streamItemCount() const;
+    /// 同步渲染器与当前 flow 状态 (每帧由 itemCount 调用一次):
+    /// 检测新流/流结束/动画降级, 增量 feed 新 token, harvest 稳定块
+    void syncStream(const TUIRenderState& st);
+    /// 构建 thinking 头部项 (缓存, key 稳定)
+    LazyBuiltItem buildStreamingHeader(const TUIRenderState& st);
+    /// 构建第 bi 个稳定块项 (可缓存; 构建一次后由 LazyScrollable 缓存)
+    LazyBuiltItem buildStreamingStable(const TUIRenderState& st, size_t bi);
+    /// 构建尾部 (仍增长) 块项 (每帧重建)
+    LazyBuiltItem buildStreamingFrontier(const TUIRenderState& st);
 
     // ---- 折叠消息命中检测 (由上一帧 visibleBoxes 反推) ----
     std::vector<ftxui::Box> collapsibleBoxes_;

@@ -208,9 +208,20 @@ MessageListComponent::MessageListComponent(TUICtx& ctx) :
 
 void MessageListComponent::invalidateCache() {
     scrollable_->clearCache();
+    // 主题/宽度变化: 稳定块的着色/布局已过时, 令增量渲染器重建缓存
+    if (streamRenderer_) {
+        streamRenderer_->invalidateCache();
+    }
 }
 
 Element MessageListComponent::OnRender() {
+    // 流式已结束 (无流式 token): 及时释放增量渲染器缓存的稳定块/文本, 避免常驻内存。
+    // (须在构建/布局前判断; 流式进行中时 hasStreamingToken 为真, 不会重置)
+    if (ctx_.frameState && !hasStreamingToken(*ctx_.frameState) && streamRenderer_
+        && !streamRenderer_->text().empty()) {
+        streamRenderer_->reset();
+    }
+
     // 由上一帧 viewport 可见区域反推可折叠消息的鼠标命中区域。
     // 必须在 scrollable_->Render() 之前计算: 此时 visibleBoxes() 为上一帧数据,
     // 与用户当前看到的屏幕内容一致。
@@ -308,7 +319,27 @@ size_t MessageListComponent::itemCount() {
     if (st.messages.empty() && !hasStreamingToken(st)) {
         return 1; // 空状态 banner (fillViewport)
     }
-    return st.messages.size() + (hasStreamingToken(st) ? 1 : 0);
+    size_t n = st.messages.size();
+    if (hasStreamingToken(st)) {
+        syncStream(st); // 每帧同步流式增量状态 (feed 新 token / harvest 稳定块)
+        if (streamUseIncremental_) {
+            n += streamItemCount();
+        } else {
+            n += 1; // 降级: 整段 paragraph 单子项
+        }
+    }
+    return n;
+}
+
+size_t MessageListComponent::streamItemCount() const {
+    size_t n = streamHeaderCount_;
+    if (streamRenderer_) {
+        n += streamRenderer_->stableBlockCount();
+        if (streamRenderer_->frontierStart() < streamRenderer_->text().size()) {
+            ++n; // 尾部 (仍增长) 块
+        }
+    }
+    return n;
 }
 
 uint64_t MessageListComponent::itemKey(size_t index) {
@@ -354,10 +385,28 @@ uint64_t MessageListComponent::itemKey(size_t index) {
         }
         return h;
     }
-    // 流式增量项: token 累积中, 以 (指针, 长度, role) 作为 key 触发高度重估
-    uint64_t h = reinterpret_cast<uint64_t>(st.currentToken.get());
+    // ---- 流式区 ----
+    if (!streamUseIncremental_) {
+        // 降级路径: 单个 paragraph 项, 以 (指针, 长度, role) 作为 key 触发高度重估
+        uint64_t h = reinterpret_cast<uint64_t>(st.currentToken.get());
+        h          = combine(h, st.currentToken ? st.currentToken->size() : 0);
+        h          = combine(h, 0xDEAD0000ull);
+        return h;
+    }
+    const size_t si = index - st.messages.size();
+    // 头部项 (thinking 时长行): key 稳定, 帧间缓存
+    if (si < streamHeaderCount_) {
+        return combine(streamGen_, 0xFACE0000ull);
+    }
+    const size_t bi = si - streamHeaderCount_;
+    if (streamRenderer_ && bi < streamRenderer_->stableBlockCount()) {
+        // 稳定块: 内容不可变, key = (代次, 块序号) 稳定, LazyScrollable 缓存布局
+        return combine(streamGen_, 0xC0FFEE00ull + static_cast<uint64_t>(bi));
+    }
+    // 尾部块: 每帧内容变化, key 随 (token 长度, 尾部起点) 变化触发重建
+    uint64_t h = combine(streamGen_, 0xFEED0000ull);
     h          = combine(h, st.currentToken ? st.currentToken->size() : 0);
-    h          = combine(h, static_cast<uint64_t>(st.currentTokenRole));
+    h          = combine(h, streamRenderer_ ? streamRenderer_->frontierStart() : 0);
     return h;
 }
 
@@ -416,8 +465,29 @@ int MessageListComponent::estimateHeight(size_t index, int width) {
         }
         return 1;
     }
-    // 流式增量项
-    return 1 + estimateLines(*st.currentToken, width);
+    // ---- 流式区 ----
+    if (!streamUseIncremental_) {
+        // 降级路径: 单个 paragraph 项
+        return 1 + estimateLines(*st.currentToken, width);
+    }
+    const size_t si = index - st.messages.size();
+    if (si < streamHeaderCount_) {
+        return 1; // thinking 头部单行
+    }
+    const size_t bi = si - streamHeaderCount_;
+    if (streamRenderer_) {
+        if (bi < streamRenderer_->stableBlockCount()) {
+            // 稳定块 + 尾部空行分隔 (与 buildStreamingStable 的 vbox{block, text("")} 对应)
+            return 1 + estimateLines(streamRenderer_->stableBlockSource(bi), width);
+        }
+        // 尾部块
+        const auto   t = streamRenderer_->text();
+        const size_t f = streamRenderer_->frontierStart();
+        if (f < t.size()) {
+            return std::max(1, estimateLines(t.substr(f), width));
+        }
+    }
+    return 1;
 }
 
 bool MessageListComponent::fillViewport(size_t index) {
@@ -436,7 +506,19 @@ LazyBuiltItem MessageListComponent::buildItem(size_t index) {
     if (index < st.messages.size()) {
         return buildMessageItem(*st.messages[index], index);
     }
-    return buildStreamingItem(st);
+    // ---- 流式区 ----
+    if (!streamUseIncremental_) {
+        return buildStreamingItem(st);
+    }
+    const size_t si = index - st.messages.size();
+    if (si < streamHeaderCount_) {
+        return buildStreamingHeader(st);
+    }
+    const size_t bi = si - streamHeaderCount_;
+    if (streamRenderer_ && bi < streamRenderer_->stableBlockCount()) {
+        return buildStreamingStable(st, bi);
+    }
+    return buildStreamingFrontier(st);
 }
 
 Element MessageListComponent::buildBanner() {
@@ -480,14 +562,46 @@ LazyBuiltItem MessageListComponent::buildMessageItem(const TUIMessage& msg, size
 }
 
 LazyBuiltItem MessageListComponent::buildStreamingItem(const TUIRenderState& st) {
-    const auto& theme    = *ctx_.theme;
-    const int   maxWidth = std::max(1, scrollable_->contentWidth());
+    // 降级路径 (动画等级不足, 未启用增量渲染): 整段 paragraph 单子项
+    const auto& theme = *ctx_.theme;
 
     LazyBuiltItem out;
-    out.cacheable   = false; // 流式增量每帧都变, 不缓存 (每帧重建后即释放)
+    out.cacheable   = false;
     out.sourceBytes = st.currentToken ? st.currentToken->size() : 0;
 
-    // 与流式角色相同的最近一条消息 (thinking 头部显示其时长)
+    Element block;
+    if (st.currentTokenRole == TUIMessage::Role::Thinking) {
+        Elements lines;
+        Elements header;
+        header.push_back(text("- [Thinking] ") | color(theme.thinkingColor));
+        const TUIMessage* currentMsg = nullptr;
+        for (size_t i = st.messages.size(); i > 0; --i) {
+            if (st.messages[i - 1]->role == st.currentTokenRole) {
+                currentMsg = st.messages[i - 1].get();
+                break;
+            }
+        }
+        if (currentMsg && currentMsg->durationMs > 0) {
+            header.push_back(
+                text(agentxx::util::formatDurationMilliseconds(currentMsg->durationMs) + " ")
+                | color(theme.thinkingColor)
+            );
+        }
+        lines.push_back(hbox(std::move(header)));
+        lines.push_back(paragraph(*st.currentToken) | color(theme.thinkingColor));
+        block = vbox(std::move(lines));
+    } else {
+        block = paragraph(*st.currentToken) | color(theme.normalColor);
+    }
+    out.element = std::move(block);
+    return out;
+}
+
+LazyBuiltItem MessageListComponent::buildStreamingHeader(const TUIRenderState& st) {
+    // thinking 头部项: "[Thinking] <时长>" 单行, 可缓存 (key 稳定)
+    const auto& theme = *ctx_.theme;
+    Elements    header;
+    header.push_back(text("- [Thinking] ") | color(theme.thinkingColor));
     const TUIMessage* currentMsg = nullptr;
     for (size_t i = st.messages.size(); i > 0; --i) {
         if (st.messages[i - 1]->role == st.currentTokenRole) {
@@ -495,56 +609,112 @@ LazyBuiltItem MessageListComponent::buildStreamingItem(const TUIRenderState& st)
             break;
         }
     }
-
-    Element block;
-    if (st.currentTokenRole == TUIMessage::Role::Thinking) {
-        Elements lines;
-        Elements header;
-        header.push_back(text("- [Thinking] ") | color(theme.thinkingColor));
-        if (currentMsg && currentMsg->durationMs > 0) {
-            header.push_back(
-                text(fmt::format(
-                    "{} ",
-                    agentxx::util::formatDurationMilliseconds(currentMsg->durationMs)
-                ))
-                | color(theme.thinkingColor)
-            );
-        }
-        lines.push_back(hbox(std::move(header)));
-        if (false == TUISettings::instance().isAnimationEnabled(AnimationLevel::Ultra)) {
-            // 超长流式文本: 纯文本渲染, 避免每 token 全量 cmark 解析
-            lines.push_back(paragraph(*st.currentToken) | color(theme.thinkingColor));
-        } else {
-            auto [el, builder] = renderMarkdown(
-                *st.currentToken,
-                theme.thinkingColor,
-                theme.markdownTheme,
-                maxWidth
-            );
-            if (builder) {
-                out.attachments.push_back(std::move(builder));
-            }
-            lines.push_back(std::move(el));
-        }
-        block = vbox(std::move(lines));
-    } else {
-        if (false == TUISettings::instance().isAnimationEnabled(AnimationLevel::Low)) {
-            block = paragraph(*st.currentToken) | color(theme.normalColor);
-        } else {
-            auto [el, builder] = renderMarkdown(
-                *st.currentToken,
-                theme.normalColor,
-                theme.markdownTheme,
-                maxWidth
-            );
-            if (builder) {
-                out.attachments.push_back(std::move(builder));
-            }
-            block = std::move(el);
-        }
+    if (currentMsg && currentMsg->durationMs > 0) {
+        header.push_back(
+            text(agentxx::util::formatDurationMilliseconds(currentMsg->durationMs) + " ")
+            | color(theme.thinkingColor)
+        );
     }
-    out.element = std::move(block);
+    LazyBuiltItem out;
+    out.element     = hbox(std::move(header));
+    out.cacheable   = true;
+    out.sourceBytes = 0;
     return out;
+}
+
+LazyBuiltItem MessageListComponent::buildStreamingStable(const TUIRenderState& st, size_t bi) {
+    // 已闭合顶层块: 构建一次后由 LazyScrollable 缓存 (key 稳定, 仅可见项被布局)
+    const auto& theme = *ctx_.theme;
+    const int   maxWidth = std::max(1, scrollable_->contentWidth());
+    const bool  thinking = (st.currentTokenRole == TUIMessage::Role::Thinking);
+    const ftxui::Color c = thinking ? theme.thinkingColor : theme.normalColor;
+
+    LazyBuiltItem out;
+    out.cacheable = true;
+    if (streamRenderer_) {
+        out.element = vbox({
+            streamRenderer_->stableBlockElement(bi, theme.markdownTheme, maxWidth) | color(c),
+            text(""), // 块间空行分隔 (与整篇解析一致)
+        });
+        out.sourceBytes = streamRenderer_->stableBlockSource(bi).size();
+    } else {
+        out.element = text("");
+    }
+    return out;
+}
+
+LazyBuiltItem MessageListComponent::buildStreamingFrontier(const TUIRenderState& st) {
+    // 尾部 (仍增长) 块: 每帧重建
+    const auto& theme = *ctx_.theme;
+    const int   maxWidth = std::max(1, scrollable_->contentWidth());
+    const bool  thinking = (st.currentTokenRole == TUIMessage::Role::Thinking);
+    const ftxui::Color c = thinking ? theme.thinkingColor : theme.normalColor;
+
+    LazyBuiltItem out;
+    out.cacheable   = false;
+    out.sourceBytes = st.currentToken ? st.currentToken->size() : 0;
+    if (streamRenderer_) {
+        std::unique_ptr<markdown::DomBuilder> fb;
+        auto el = streamRenderer_->renderFrontier(theme.markdownTheme, maxWidth, fb);
+        if (fb) {
+            out.attachments.push_back(std::move(fb));
+        }
+        if (!el) {
+            el = text("");
+        }
+        out.element = el | color(c);
+    } else {
+        out.element = text("");
+    }
+    return out;
+}
+
+void MessageListComponent::syncStream(const TUIRenderState& st) {
+    streamUseIncremental_ = false;
+    streamHeaderCount_    = 0;
+
+    if (!hasStreamingToken(st)) {
+        // 流式结束: 释放渲染器缓存 (OnRender 也会在无 token 时重置)
+        if (streamRenderer_ && !streamRenderer_->text().empty()) {
+            streamRenderer_->reset();
+            ++streamGen_;
+        }
+        streamFedLen_ = 0;
+        return;
+    }
+
+    // 增量渲染仅在动画等级满足时启用; 否则降级为整段 paragraph 单子项
+    const bool inc = (st.currentTokenRole == TUIMessage::Role::Thinking)
+                         ? TUISettings::instance().isAnimationEnabled(AnimationLevel::Ultra)
+                         : TUISettings::instance().isAnimationEnabled(AnimationLevel::Low);
+    if (!inc) {
+        streamFedLen_ = 0;
+        return;
+    }
+    streamUseIncremental_ = true;
+    streamHeaderCount_    = (st.currentTokenRole == TUIMessage::Role::Thinking) ? 1 : 0;
+
+    if (!streamRenderer_) {
+        streamRenderer_ = std::make_unique<markdown::IncrementalRenderer>();
+    }
+    const auto& tok = *st.currentToken;
+    const auto  acc = streamRenderer_->text();
+    if (tok.size() >= acc.size()
+        && std::string_view(tok).substr(0, acc.size()) == acc) {
+        // token 是已累积文本的延续 -> 仅追加增量
+        if (tok.size() > acc.size()) {
+            streamRenderer_->append(std::string_view(tok).substr(acc.size()));
+        }
+        streamFedLen_ = tok.size();
+    } else {
+        // 新流 (token 已被重置/更换) -> 重建渲染器
+        streamRenderer_->reset();
+        ++streamGen_;
+        if (!tok.empty()) {
+            streamRenderer_->append(tok);
+        }
+        streamFedLen_ = tok.size();
+    }
 }
 
 // ---------------------------------------------------------------------------
