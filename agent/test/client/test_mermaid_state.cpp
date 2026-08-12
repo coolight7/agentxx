@@ -360,7 +360,6 @@ struct OverlayFixture {
         };
         ctx.theme          = &theme;
         ctx.showSystemInfo = nullptr;
-        ctx.session        = nullptr;
         ctx.threadId       = "session";
         ctx.remoteUrl      = "";
     }

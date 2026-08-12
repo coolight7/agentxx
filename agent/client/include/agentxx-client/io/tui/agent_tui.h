@@ -15,6 +15,7 @@
 #include "asio/experimental/concurrent_channel.hpp"
 #include "asio/io_context.hpp"
 #include "asio/steady_timer.hpp"
+#include "asio/thread_pool.hpp"
 #include "fmt/format.h"
 #include "ftxui/component/component.hpp"
 #include "ftxui/component/screen_interactive.hpp"
@@ -117,10 +118,9 @@ public:
     using RenderState  = TUIRenderState;
 
     explicit TUIClientAgentIO(
-        asio::any_io_executor                         ex,
-        std::shared_ptr<agentxx::agent::AgentContext> agentContext,
-        std::string                                   threadId = "session",
-        TUITheme                                      theme    = TUITheme::darkTheme(),
+        asio::any_io_executor ex,
+        std::string           threadId = "session",
+        TUITheme              theme    = TUITheme::darkTheme(),
         /// 权限询问处理模式 (来自 yaml 配置 `permission.mode`, 见 config.h)
         agentxx::agent::PermissionMode permissionMode = agentxx::agent::PermissionMode::Ask
     );
@@ -194,9 +194,8 @@ private:
     void showToast(std::string text);
     /// 会话选择弹窗确认后的切换逻辑 (UI 线程):
     /// - 更新本地 threadId 绑定与重连握手 threadId (WS 模式)
-    /// - 发送 WireSwitchSession, 服务端回推全量 Sync/模型/上下文统计恢复界面
-    /// - 不触碰 session_ (Session 绑定 agent io 线程); 上下文统计经
-    ///   onContextStats 由服务端推送写入, 切换后自动跟随新会话
+    /// - 发送 WireSwitchSession, 服务端回推全量 Sync/模型/上下文统计 (WireModelInfo
+    ///   / WireContextStats) 恢复界面; TUI 不持有 Session (属于 agent-server 线程)
     void switchToSession(std::string newThreadId);
 
     /// 当前会话 thread_id 的跨线程安全读写:
@@ -210,6 +209,7 @@ private:
         std::lock_guard<std::mutex> lock(threadIdMutex_);
         threadId_ = std::move(newThreadId);
     }
+
     /// F12: 切换日志窗口 tab
     void toggleLogWindow();
     /// 打开 Plan 状态图模态 (Info 侧边栏 [View Plan Diagram] 按钮触发)
@@ -232,13 +232,12 @@ private:
     // -----------------------------------------------------------------------
     TUISharedState sharedState_;
 
-    std::shared_ptr<agentxx::agent::AgentContext> agentContext_;
-    TUITheme                                      theme_;
+    TUITheme theme_;
     /// 当前会话 thread_id (切换会话时由 UI 线程写入, client 线程发送输入时读取;
     /// 经 threadIdMutex_ 保护, 见 currentThreadId()/setCurrentThreadId())
-    std::string              threadId_;
-    mutable std::mutex       threadIdMutex_;
-    asio::any_io_executor    ex_;
+    std::string           threadId_;
+    mutable std::mutex    threadIdMutex_;
+    asio::any_io_executor ex_;
     /// 权限询问处理模式 (yaml 配置 `permission.mode` 注入, 不可运行时切换)
     agentxx::agent::PermissionMode permissionMode_ = agentxx::agent::PermissionMode::Ask;
 
@@ -252,7 +251,10 @@ private:
     std::shared_ptr<TUILogSink>  logSink_;
     std::string                  remoteUrl_;
 
-    std::shared_ptr<agentxx::agent::Session> session_;
+    /// 阻塞操作执行线程池 (仅用于系统资源监控的 offload; 生命周期独立于
+    /// agent-server 的 AgentContext::blockingPool —— TUI 不持有 AgentContext,
+    /// 所有 agent 侧信息均经 Wire 消息获取)
+    std::shared_ptr<asio::thread_pool> blockingPool_ = std::make_shared<asio::thread_pool>(4);
 
     /// UI 线程组件 (start() 中创建, UI 线程独占)
     TUICtx                                ctx_;
@@ -286,7 +288,7 @@ private:
 
     // ---- 屏幕上方提示 (toast, UI 线程独占) ----
     /// 当前 toast 文本 (空 = 无提示); 渲染时检查超时并清除
-    std::string                          toastText_;
+    std::string toastText_;
     /// toast 显示起始时刻 (渲染时据此判断是否超过 kToastDuration)
     std::chrono::steady_clock::time_point toastShownAt_;
     /// toast 超时定时器 (client io_context 上): 超时后仅触发重绘,

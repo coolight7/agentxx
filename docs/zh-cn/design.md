@@ -779,7 +779,9 @@ neograph GraphEngine (run_stream_async)
                 │     ├── NODE_START/END → 节点计时 + Delta::NodeStart/NodeEnd
                 │     └── ERROR          → publishError (总线, 不产 Delta,
                 │                         由 WireTurnResult 统一报告)
-                └── emitDelta: 分配会话级单调递增 seq (++session->deltaSeq)
+                └── emitDelta: 分配会话级单调递增 seq (统一经
+                       Session::nextDeltaSeq, EventBridge 与 SessionServerAgentIO
+                       的新产出 Delta 共用入口)
                                后经 io->sendToPeer 发送; io 为空 (headless) 时丢弃
 ```
 

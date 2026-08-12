@@ -39,28 +39,21 @@ using namespace ftxui;
 // ---------------------------------------------------------------------------
 
 TUIClientAgentIO::TUIClientAgentIO(
-    asio::any_io_executor                         ex,
-    std::shared_ptr<agentxx::agent::AgentContext> agentContext,
-    std::string                                   threadId,
-    TUITheme                                      theme,
-    agentxx::agent::PermissionMode                permissionMode
+    asio::any_io_executor                 ex,
+    std::string                           threadId,
+    TUITheme                              theme,
+    agentxx::agent::PermissionMode        permissionMode
 ) :
-    agentContext_(std::move(agentContext)),
     theme_(theme),
     threadId_(std::move(threadId)),
     ex_(ex),
     permissionMode_(permissionMode),
     inputChannel_(std::make_shared<LineChannel>(ex, 64)),
     logSink_(std::make_shared<TUILogSink>()) {
-    if (agentContext_) {
-        session_ = agentContext_->getSession(threadId_);
-    }
-    if (session_ && agentContext_ && agentContext_->modelRegistry) {
-        sharedState_.mutate([&](TUIRenderState& st) {
-            st.cachedModelName
-                = agentContext_->modelRegistry->resolveModelName(session_->getModelName());
-        });
-    }
+    // 注意: TUI 是纯 client 端点, 不持有 AgentContext/Session (属于 agent-server
+    // 线程); 模型名/上下文统计等所有 agent 侧信息均经 Wire 消息 (WireModelInfo /
+    // WireContextStats) 由服务端推送获取, cachedModelName 初始为空,
+    // 收到 WireModelInfo 后更新 (调用方在连接建立后发送 WireGetModel 请求)
 }
 
 TUIClientAgentIO::~TUIClientAgentIO() {
@@ -148,10 +141,12 @@ void TUIClientAgentIO::start() {
             postRedraw();
         };
         ctx_.theme          = &theme_;
-        ctx_.session        = session_;
         ctx_.threadId       = currentThreadId();
         ctx_.remoteUrl      = remoteUrl_;
         ctx_.showSystemInfo = &TUISettings::instance().showSystemInfoRef();
+        // 注意: 不设置 ctx_.session —— TUI 不持有 Session (属于 agent-server 线程),
+        // 上下文统计经 WireContextStats → onContextStats → sharedState_ 更新,
+        // 状态栏等组件从 frameState 读取 (见 status_bar.cpp)
 
         // 创建组件
         messageList_ = std::make_shared<MessageListComponent>(ctx_);
@@ -203,14 +198,11 @@ void TUIClientAgentIO::start() {
 
         // 侧边栏 footer 点击: 处理 "上下文" 按钮
         sidebar_->onFooterClick([this](const Mouse&) -> bool {
+            // LLM 上下文消息在 agent-server 侧 (Session::llmMessages), TUI 不持有,
+            // 经 WireGetContext 由服务端回推 (WireContextMessages → onPeerMessage
+            // → sharedState_.contextMessages); 本地/远程模式均有 transport
             if (transport_) {
                 sendToPeer(agentxx::agent::WireGetContext{currentThreadId()});
-            } else if (session_) {
-                std::lock_guard<std::mutex> lock(sharedState_.mutex());
-                auto&                       st = sharedState_.mutableState();
-                // json 拷贝是深拷贝 (yyjson 全树复制), 仅此低频场景一次, 可接受
-                st.contextMessages    = std::make_shared<neograph::json>(session_->llmMessages);
-                st.showContextOverlay = true;
             }
             if (modal_ && !modal_->hasModal()) {
                 auto overlay = std::make_shared<ContextOverlay>(ctx_);
@@ -262,17 +254,16 @@ void TUIClientAgentIO::start() {
                 if (elapsed >= kToastDuration) {
                     toastText_.clear();
                 } else {
-                    auto toastEl = hbox({
-                        filler(),
-                        text(toastText_) | bgcolor(theme_.blockColor) | color(theme_.accentColor)
-                            | bold | border,
-                        filler(),
-                    });
-                    body         = dbox({
+                    body = dbox({
                         body,
                         vbox({
                             text(" "),
-                            toastEl,
+                            hbox({
+                                filler(),
+                                text(toastText_) | bold | bgcolor(theme_.buttonBgColor)
+                                    | color(theme_.buttonTextColor),
+                                filler(),
+                            }),
                             filler(),
                         }),
                     });
@@ -509,22 +500,18 @@ void TUIClientAgentIO::startSystemMonitor() {
                     auto usage = std::make_shared<agentxx::expand::CpuGpuUsage>();
                     co_await agentxx::util::catchErrorAsync<bool>(
                         [&]() -> asio::awaitable<bool> {
-                            if (agentContext_ && agentContext_->blockingPool) {
-                                // query() 为协程 (内部含 100ms 采样间隔定时器与文件读取),
-                                // 整体投递到 blockingPool 线程池执行, 不占用 client io_context;
-                                // offloadAsync 完成后自动恢复回 client executor
-                                *usage = co_await agentxx::util::offloadAsync<
-                                    agentxx::expand::CpuGpuUsage>(
-                                    *agentContext_->blockingPool,
-                                    [monitor]() -> asio::awaitable<agentxx::expand::CpuGpuUsage> {
-                                        co_return co_await monitor->query();
-                                    }
-                                );
-                            } else {
-                                // 兜底: 无 blockingPool 时直接在 client executor 上执行
-                                // (query() 内部为异步操作, 不阻塞事件循环)
-                                *usage = co_await monitor->query();
-                            }
+                            // query() 为协程 (内部含 100ms 采样间隔定时器与文件读取),
+                            // 整体投递到本 TUI 自有的 blockingPool 线程池执行
+                            // (TUI 不持有 agent-server 的 AgentContext::blockingPool),
+                            // 不占用 client io_context; offloadAsync 完成后自动恢复回
+                            // client executor
+                            *usage = co_await agentxx::util::offloadAsync<
+                                agentxx::expand::CpuGpuUsage>(
+                                *blockingPool_,
+                                [monitor]() -> asio::awaitable<agentxx::expand::CpuGpuUsage> {
+                                    co_return co_await monitor->query();
+                                }
+                            );
                             {
                                 std::lock_guard<std::mutex> lock(sharedState_.mutex());
                                 auto&                       st = sharedState_.mutableState();
@@ -661,7 +648,7 @@ void TUIClientAgentIO::openSessionSelector() {
     const bool busy = (ctx_.frameState && ctx_.frameState->isStreaming)
                       || awaitingInterruptInput_.load(std::memory_order_acquire);
     if (busy) {
-        showToast("[Session] 请先停止当前会话, 再进行会话切换");
+        showToast("请先停止当前会话, 再进行会话切换");
         postRedraw();
         return;
     }
@@ -697,10 +684,9 @@ void TUIClientAgentIO::switchToSession(std::string newThreadId) {
     setCurrentThreadId(newThreadId);
     // 更新组件共享上下文: 状态栏/会话弹窗据此标记 current 会话
     ctx_.threadId = newThreadId;
-    // 注意: 不切换 session_ —— Session 的可变状态绑定 agent io 线程
-    // (assertIoThread), UI 线程不得触碰; 状态栏的上下文统计经
-    // session_->contextStats 原子量展示, 切换后服务端推送新会话的
-    // WireContextStats 覆写同一原子量, 显示自动跟随新会话
+    // 注意: TUI 不持有 Session (属于 agent-server 线程), 切换后服务端回推
+    // 新会话的全量 Sync + WireModelInfo + WireContextStats (WireSwitchSession
+    // 处理路径), 客户端界面 (消息历史/模型名/上下文统计) 随之整体更新
     // 清理上一会话遗留的消息列表吸附/中断 UI 状态;
     // 消息历史由服务端回推的全量 Sync 整体替换 (onSync)
     if (messageList_) {
@@ -1133,13 +1119,16 @@ void TUIClientAgentIO::onTurnResult(const agentxx::agent::WireTurnResult& /*resu
 }
 
 void TUIClientAgentIO::onContextStats(const agentxx::agent::WireContextStats& stats) {
-    if (session_ && session_->contextStats) {
-        session_->contextStats->contextTokens.store(stats.contextTokens, std::memory_order_relaxed);
-        session_->contextStats->maxContextTokens.store(
-            stats.maxContextTokens,
-            std::memory_order_relaxed
-        );
-        session_->contextStats->tps.store(stats.tps, std::memory_order_relaxed);
+    // 上下文统计写入 sharedState_ (而非 Session::contextStats —— TUI 不持有
+    // Session, 属于 agent-server 线程); 状态栏等组件从 frameState 读取。
+    // 会话切换后服务端推送新会话的 WireContextStats (#switchSession 路径),
+    // 显示自动跟随新会话
+    {
+        std::lock_guard<std::mutex> lock(sharedState_.mutex());
+        auto&                       st = sharedState_.mutableState();
+        st.contextTokens             = stats.contextTokens;
+        st.maxContextTokens          = stats.maxContextTokens;
+        st.tps                       = stats.tps;
     }
     postRedraw();
 }
