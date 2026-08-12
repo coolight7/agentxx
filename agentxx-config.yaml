@@ -165,10 +165,8 @@ use_model:
 mcp:
   - namespace: musicxx
     url: "http://172.29.48.1:17001/mcp"
-  - namespace: bing
-    url: "https://mcp.api-inference.modelscope.net/59eb16fad9aa41/mcp"
-  # - namespace: exa
-  #   url: "https://mcp.exa.ai"
+  - namespace: exa
+    url: "https://mcp.exa.ai"
 
 # Skill 文件夹路径列表
 # - 支持绝对路径或相对路径（相对路径按程序工作目录解析）
