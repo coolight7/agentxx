@@ -154,6 +154,11 @@ void SummarizationMiddlewareHandle::offloadLongContentToTempStore(
     const std::shared_ptr<MiddlewareContext>& ctx,
     std::string_view                          thread_id
 ) {
+    // system prompt 不压缩 (设计: "system prompt、最近的消息 不压缩"):
+    // 始终原样保留, 不应被暂存替换, 否则模型会丢失系统指令
+    if ("system" == msg.role) {
+        return;
+    }
     if (msg.content.size() <= longContentByteThreshold) {
         return;
     }
