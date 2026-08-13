@@ -306,16 +306,16 @@ When in doubt, check if a skill exists for the task.
     /// toolcall
     std::map<std::string, ToolPrompt, std::less<>> toolPrompt{
       {
-          "agentxx_execute_linux_command",
+          "agentxx_execute_bash_command",
           ToolPrompt{
-              .depict = "Execute a Linux shell/bash command and return its output.",
+              .depict = "Execute a shell/bash command and return its output.",
               .args =
                   {
                       {
                           "command",
                           fmt::format(
                               R"(The shell command to execute.
-Current system: {}{}. Use standard Linux shell/bash syntax.
+Current system: {}{}. Use standard shell/bash syntax.
 The command string is passed as-is to `bash -c` (no extra escaping layer):
 - `$` starts variable expansion — wrap literal `$` in single quotes (`echo 'a$b'`) or escape it (`echo \$HOME`).
 - Prefer single quotes for text with spaces/special characters; use double quotes when `$` expansion is intended.
