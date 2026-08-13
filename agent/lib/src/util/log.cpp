@@ -13,8 +13,9 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #elif XX_IS_WIN_D
-#include <dbghelp.h>
 #include <windows.h>
+// ---
+#include <dbghelp.h>
 // windows.h 的 min/max 宏与 C++ 标准库冲突
 #undef min
 #undef max
