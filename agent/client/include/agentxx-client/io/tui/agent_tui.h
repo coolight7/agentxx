@@ -117,12 +117,14 @@ public:
     using PendingInput = TUIPendingInput;
     using RenderState  = TUIRenderState;
 
-    /// 复制鼠标选中的文本到系统剪贴板 (Ctrl+Insert 触发, UI 线程调用):
-    /// - 从 FTXUI Screen 的当前 selection 提取文本 (GetSelection)
+    /// 复制鼠标选中的文本到系统剪贴板 (鼠标左键拖选后松开时调用, UI 线程):
+    /// - 从 FTXUI Screen 的当前 selection 提取文本 (GetSelection, 取上一绘制帧
+    ///   累积的选中文本, 与屏幕显示一致, 已含本次拖动终点)
     /// - 写入系统剪贴板: Windows 用 Win32 API, 其他平台用 OSC 52 转义序列
     ///   (依赖终端模拟器支持, 如 Windows Terminal/wezterm/kitty/xterm)
-    /// - 无选中文本时仅 toast 提示, 不弹窗
-    void copySelectionToClipboard();
+    /// - 返回 true 表示已复制; 无选中文本或剪贴板不可用时返回 false
+    /// - 复制成功/失败时均以 toast 提示 (无选中文本不提示)
+    bool copySelectionToClipboard();
 
     explicit TUIClientAgentIO(
         asio::any_io_executor ex,

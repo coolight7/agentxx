@@ -43,7 +43,7 @@ public:
     std::string apiKey                  = "EMPTY";
     std::string modelName               = "Agentxx"; ///< 发送请求时的 model 字段值
     int         connectTimeoutSeconds   = 16;
-    int         readChunkTimeoutSeconds = 60;
+    int         readChunkTimeoutSeconds = 100;
     /// 是否在发送 LLM 请求时携带 thinking 内容
     bool                sendThinking = false;
     std::optional<bool> sslVerify    = std::nullopt;
