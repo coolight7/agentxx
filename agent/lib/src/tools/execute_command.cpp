@@ -170,12 +170,12 @@ static WinProcLaunch buildWinProcLaunch(std::string_view command) {
 }
 #endif // BOOST_PROCESS_V2_PROCESS_HPP
 
-ExecuteLinuxCommandTool::ExecuteLinuxCommandTool(
+ExecuteBashCommandTool::ExecuteBashCommandTool(
     std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
 ) :
-    XXToolBase("agentxx_execute_linux_command", in_agentContext, true, false) {}
+    XXToolBase("agentxx_execute_bash_command", in_agentContext, true, false) {}
 
-neograph::ChatTool ExecuteLinuxCommandTool::get_definition() const {
+neograph::ChatTool ExecuteBashCommandTool::get_definition() const {
     auto        agentPtr = agentContext.lock();
     const auto& prompt   = agentPtr->agentConfig->prompt.toolPrompt[get_name()];
 
@@ -214,7 +214,7 @@ neograph::ChatTool ExecuteLinuxCommandTool::get_definition() const {
     };
 }
 
-asio::awaitable<std::string> ExecuteLinuxCommandTool::execute_async(const neograph::json& arguments
+asio::awaitable<std::string> ExecuteBashCommandTool::execute_async(const neograph::json& arguments
 ) {
     auto command = arguments.value("command", std::string{});
     if (command.empty()) {
@@ -252,8 +252,8 @@ asio::awaitable<std::string> ExecuteLinuxCommandTool::execute_async(const neogra
             procExe,
             procArgs,
             boost::process::process_environment(procEnv),
-            // stdin 重定向到 null 设备 (Windows: NUL / POSIX: /dev/null),
-            // 避免子进程 (如交互式命令) 抢读 agent 进程的终端输入
+ // stdin 重定向到 null 设备 (Windows: NUL / POSIX: /dev/null),
+  // 避免子进程 (如交互式命令) 抢读 agent 进程的终端输入
             boost::process::process_stdio{.in = nullptr, .out = outpip, .err = errpip},
         };
 
@@ -446,7 +446,7 @@ asio::awaitable<std::string>
             procExe,
             launch.args,
             boost::process::process_environment(procEnv),
-            // stdin 重定向到 null 设备, 避免子进程抢读 agent 进程的终端输入
+ // stdin 重定向到 null 设备, 避免子进程抢读 agent 进程的终端输入
             boost::process::process_stdio{.in = nullptr, .out = outpip, .err = errpip}
         };
 

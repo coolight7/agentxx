@@ -398,12 +398,12 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
     tools.push_back(std::make_unique<agentxx::tools::UIControlKeyboardMouseTool>(agentContext));
     tools.push_back(std::make_unique<agentxx::tools::ExecuteWindowsCommandTool>(agentContext));
 #elif XX_IS_LINUX_D
-    tools.push_back(std::make_unique<agentxx::tools::ExecuteLinuxCommandTool>(agentContext));
+    tools.push_back(std::make_unique<agentxx::tools::ExecuteBashCommandTool>(agentContext));
     if (agentxx::util::isRunningInWSL()) {
         tools.push_back(std::make_unique<agentxx::tools::ExecuteWindowsCommandTool>(agentContext));
     }
 #elif XX_IS_MACOS_D
-    tools.push_back(std::make_unique<agentxx::tools::ExecuteLinuxCommandTool>(agentContext));
+    tools.push_back(std::make_unique<agentxx::tools::ExecuteBashCommandTool>(agentContext));
 #endif
 
     /// CodeGraph 代码分析

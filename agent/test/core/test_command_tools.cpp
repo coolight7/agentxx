@@ -17,29 +17,29 @@ int g_cmd_failed = 0;
 
 asio::awaitable<void>
     test_linux_command_get_definition(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
-    auto tool = agentxx::tools::ExecuteLinuxCommandTool{agentContext};
+    auto tool = agentxx::tools::ExecuteBashCommandTool{agentContext};
     auto def  = tool.get_definition();
-    if (def.name == "agentxx_execute_linux_command") {
+    if (def.name == "agentxx_execute_bash_command") {
         g_cmd_passed++;
-        TEST_PASS << "ExecuteLinuxCommandTool::get_definition() name correct" << std::endl;
+        TEST_PASS << "ExecuteBashCommandTool::get_definition() name correct" << std::endl;
     } else {
-        std::cout << "[FAIL] ExecuteLinuxCommandTool::get_definition() name incorrect" << std::endl;
+        std::cout << "[FAIL] ExecuteBashCommandTool::get_definition() name incorrect" << std::endl;
     }
     co_return;
 }
 
 asio::awaitable<void>
     test_linux_command_empty_command(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
-    auto tool = agentxx::tools::ExecuteLinuxCommandTool{agentContext};
+    auto tool = agentxx::tools::ExecuteBashCommandTool{agentContext};
     auto args = neograph::json{
         {"command", ""}
     };
     auto result = co_await tool.execute_async(args);
     if (result.find("\"error\"") != std::string::npos) {
-        std::cout << "[PASS] ExecuteLinuxCommandTool returns error for empty command" << std::endl;
+        std::cout << "[PASS] ExecuteBashCommandTool returns error for empty command" << std::endl;
     } else {
         g_cmd_failed++;
-        TEST_FAIL << "ExecuteLinuxCommandTool should return error for empty "
+        TEST_FAIL << "ExecuteBashCommandTool should return error for empty "
                      "command, got: "
                   << result << std::endl;
     }
@@ -48,68 +48,68 @@ asio::awaitable<void>
 
 asio::awaitable<void>
     test_linux_command_echo(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
-    auto tool = agentxx::tools::ExecuteLinuxCommandTool{agentContext};
+    auto tool = agentxx::tools::ExecuteBashCommandTool{agentContext};
     auto args = neograph::json{
         {"command", "echo hello_test"}
     };
     auto result = co_await tool.execute_async(args);
     if (result.find("hello_test") != std::string::npos) {
         g_cmd_passed++;
-        TEST_PASS << "ExecuteLinuxCommandTool executes echo command" << std::endl;
+        TEST_PASS << "ExecuteBashCommandTool executes echo command" << std::endl;
     } else {
         g_cmd_failed++;
-        TEST_FAIL << "ExecuteLinuxCommandTool echo failed, got: " << result << std::endl;
+        TEST_FAIL << "ExecuteBashCommandTool echo failed, got: " << result << std::endl;
     }
     co_return;
 }
 
 asio::awaitable<void> test_linux_command_ls(std::weak_ptr<agentxx::agent::AgentContext> agentContext
 ) {
-    auto tool = agentxx::tools::ExecuteLinuxCommandTool{agentContext};
+    auto tool = agentxx::tools::ExecuteBashCommandTool{agentContext};
     auto args = neograph::json{
         {"command", "ls /tmp"}
     };
     auto result = co_await tool.execute_async(args);
     if (false == result.empty()) {
         g_cmd_passed++;
-        TEST_PASS << "ExecuteLinuxCommandTool executes ls command" << std::endl;
+        TEST_PASS << "ExecuteBashCommandTool executes ls command" << std::endl;
     } else {
         g_cmd_failed++;
-        TEST_FAIL << "ExecuteLinuxCommandTool ls returned empty result" << std::endl;
+        TEST_FAIL << "ExecuteBashCommandTool ls returned empty result" << std::endl;
     }
     co_return;
 }
 
 asio::awaitable<void>
     test_linux_command_pwd(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
-    auto tool = agentxx::tools::ExecuteLinuxCommandTool{agentContext};
+    auto tool = agentxx::tools::ExecuteBashCommandTool{agentContext};
     auto args = neograph::json{
         {"command", "pwd"}
     };
     auto result = co_await tool.execute_async(args);
     if (result.find("/") != std::string::npos) {
         g_cmd_passed++;
-        TEST_PASS << "ExecuteLinuxCommandTool executes pwd command" << std::endl;
+        TEST_PASS << "ExecuteBashCommandTool executes pwd command" << std::endl;
     } else {
         g_cmd_failed++;
-        TEST_FAIL << "ExecuteLinuxCommandTool pwd failed, got: " << result << std::endl;
+        TEST_FAIL << "ExecuteBashCommandTool pwd failed, got: " << result << std::endl;
     }
     co_return;
 }
 
 asio::awaitable<void>
     test_linux_command_whoami(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
-    auto tool = agentxx::tools::ExecuteLinuxCommandTool{agentContext};
+    auto tool = agentxx::tools::ExecuteBashCommandTool{agentContext};
     auto args = neograph::json{
         {"command", "whoami"}
     };
     auto result = co_await tool.execute_async(args);
     if (false == result.empty()) {
         g_cmd_passed++;
-        TEST_PASS << "ExecuteLinuxCommandTool executes whoami command" << std::endl;
+        TEST_PASS << "ExecuteBashCommandTool executes whoami command" << std::endl;
     } else {
         g_cmd_failed++;
-        TEST_FAIL << "ExecuteLinuxCommandTool whoami returned empty result" << std::endl;
+        TEST_FAIL << "ExecuteBashCommandTool whoami returned empty result" << std::endl;
     }
     co_return;
 }
@@ -216,10 +216,10 @@ asio::awaitable<void>
 
 asio::awaitable<void>
     test_linux_get_definition_properties(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
-    auto tool = agentxx::tools::ExecuteLinuxCommandTool{agentContext};
+    auto tool = agentxx::tools::ExecuteBashCommandTool{agentContext};
     auto def  = tool.get_definition();
 
-    XX_TEST_EXPECT_EQ(def.name, "agentxx_execute_linux_command");
+    XX_TEST_EXPECT_EQ(def.name, "agentxx_execute_bash_command");
     auto params = def.parameters;
 
     auto props = params["properties"];
@@ -292,7 +292,7 @@ asio::awaitable<void> test_javascript_get_definition_properties(
 
 asio::awaitable<void>
     test_linux_timeout_disabled(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
-    auto tool = agentxx::tools::ExecuteLinuxCommandTool{agentContext};
+    auto tool = agentxx::tools::ExecuteBashCommandTool{agentContext};
     auto args = neograph::json{
         {"command", "echo timeout_disabled_test"},
         {"timeout", 0                           },
@@ -304,7 +304,7 @@ asio::awaitable<void>
 
 asio::awaitable<void>
     test_linux_timeout_triggers(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
-    auto tool = agentxx::tools::ExecuteLinuxCommandTool{agentContext};
+    auto tool = agentxx::tools::ExecuteBashCommandTool{agentContext};
     auto args = neograph::json{
         {"command", "sleep 5"},
         {"timeout", 1        },
@@ -316,7 +316,7 @@ asio::awaitable<void>
 
 asio::awaitable<void>
     test_linux_timeout_partial_output(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
-    auto tool = agentxx::tools::ExecuteLinuxCommandTool{agentContext};
+    auto tool = agentxx::tools::ExecuteBashCommandTool{agentContext};
     auto args = neograph::json{
         {"command", "echo 'before_sleep' && sleep 5"},
         {"timeout", 1                               },
@@ -328,7 +328,7 @@ asio::awaitable<void>
 
 asio::awaitable<void>
     test_linux_timeout_default(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
-    auto tool = agentxx::tools::ExecuteLinuxCommandTool{agentContext};
+    auto tool = agentxx::tools::ExecuteBashCommandTool{agentContext};
     auto args = neograph::json{
         {"command", "echo default_timeout_ok"}
     };
@@ -341,7 +341,7 @@ asio::awaitable<void>
 
 asio::awaitable<void>
     test_linux_all_output_false_success(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
-    auto tool = agentxx::tools::ExecuteLinuxCommandTool{agentContext};
+    auto tool = agentxx::tools::ExecuteBashCommandTool{agentContext};
     auto args = neograph::json{
         {"command",    "echo success_msg"},
         {"all_output", false             },
@@ -354,7 +354,7 @@ asio::awaitable<void>
 
 asio::awaitable<void>
     test_linux_all_output_false_failure(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
-    auto tool = agentxx::tools::ExecuteLinuxCommandTool{agentContext};
+    auto tool = agentxx::tools::ExecuteBashCommandTool{agentContext};
     auto args = neograph::json{
         {"command",    "echo fail_msg && exit 1"},
         {"all_output", false                    },
@@ -368,7 +368,7 @@ asio::awaitable<void>
 // ---- stderr & exit code ----
 
 asio::awaitable<void> test_linux_stderr(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
-    auto tool = agentxx::tools::ExecuteLinuxCommandTool{agentContext};
+    auto tool = agentxx::tools::ExecuteBashCommandTool{agentContext};
     auto args = neograph::json{
         {"command", "echo stderr_test_msg >&2"}
     };
@@ -379,7 +379,7 @@ asio::awaitable<void> test_linux_stderr(std::weak_ptr<agentxx::agent::AgentConte
 
 asio::awaitable<void>
     test_linux_nonzero_exit(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
-    auto tool = agentxx::tools::ExecuteLinuxCommandTool{agentContext};
+    auto tool = agentxx::tools::ExecuteBashCommandTool{agentContext};
     auto args = neograph::json{
         {"command", "exit 42"}
     };
@@ -390,7 +390,7 @@ asio::awaitable<void>
 
 asio::awaitable<void>
     test_linux_special_chars(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
-    auto tool = agentxx::tools::ExecuteLinuxCommandTool{agentContext};
+    auto tool = agentxx::tools::ExecuteBashCommandTool{agentContext};
     auto args = neograph::json{
         {"command", "echo 'hello with spaces and $pecial chars!'"}
     };
@@ -401,7 +401,7 @@ asio::awaitable<void>
 
 asio::awaitable<void>
     test_linux_long_output(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
-    auto tool = agentxx::tools::ExecuteLinuxCommandTool{agentContext};
+    auto tool = agentxx::tools::ExecuteBashCommandTool{agentContext};
     auto args = neograph::json{
         {"command", "for i in $(seq 1 100); do echo \"line_$i\"; done"}
     };
@@ -445,7 +445,7 @@ asio::awaitable<void>
 
 asio::awaitable<void>
     test_linux_timeout_json_escaping(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
-    auto tool = agentxx::tools::ExecuteLinuxCommandTool{agentContext};
+    auto tool = agentxx::tools::ExecuteBashCommandTool{agentContext};
     // 输出含双引号/反斜杠/换行后超时; 修复前 fmt 拼接会产生非法 JSON
     auto args = neograph::json{
         {"command", R"(printf 'has "quotes" and \\backslash\n'; sleep 5)"},
@@ -467,7 +467,7 @@ asio::awaitable<void>
 
 asio::awaitable<void>
     test_linux_timeout_kills_descendants(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
-    // auto tool = agentxx::tools::ExecuteLinuxCommandTool{agentContext};
+    // auto tool = agentxx::tools::ExecuteBashCommandTool{agentContext};
     // // bash 派生后台 sleep 子孙进程并持有 stdout 管道; 修复后经 setsid+killpg 整组清理
     // auto args = neograph::json{
     //     {"command", "bash -c '(sleep 31.7 &) ; echo started; sleep 31.7'"},

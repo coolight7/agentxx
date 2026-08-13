@@ -5,10 +5,10 @@
 namespace agentxx {
 namespace tools {
 
-class ExecuteLinuxCommandTool : public XXToolBase {
+class ExecuteBashCommandTool : public XXToolBase {
 public:
 
-    ExecuteLinuxCommandTool(std::weak_ptr<agentxx::agent::AgentContext> in_agentContext);
+    ExecuteBashCommandTool(std::weak_ptr<agentxx::agent::AgentContext> in_agentContext);
 
     neograph::ChatTool get_definition() const override;
 

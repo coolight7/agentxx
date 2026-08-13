@@ -46,7 +46,7 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
 | | `agentxx_filesystem_edit_text_file` | 精确字符串替换编辑文本文件 |
 | | `agentxx_filesystem_glob` | 按 glob 模式搜索文件 |
 | | `agentxx_filesystem_grep` | 按正则/文本搜索文件内容 |
-| **命令执行** | `agentxx_execute_linux_command` | 执行 Linux shell 命令，支持超时控制 (Linux/macOS) |
+| **命令执行** | `agentxx_execute_bash_command` | 执行 Linux shell 命令，支持超时控制 (Linux/macOS) |
 | | `agentxx_execute_windows_command` | 执行 Windows 命令，默认 PowerShell (自动探测 pwsh/powershell 并注入版本号到提示词)，未找到时回退 cmd.exe (Windows / WSL 下调用) |
 | **网络** | `agentxx_web_search` | 网络搜索 (DuckDuckGo / 模型搜索) |
 | | `agentxx_web_fetch_url` | HTTP GET 获取网页原文 |
