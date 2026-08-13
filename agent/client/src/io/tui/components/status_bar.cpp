@@ -13,8 +13,8 @@ Element StatusBarComponent::OnRender() {
         modelName = "<none>";
     }
 
-    size_t ctx    = st.contextTokens;
-    size_t maxCtx = st.maxContextTokens;
+    size_t  ctx    = st.contextTokens;
+    size_t  maxCtx = st.maxContextTokens;
     Element ctxText;
     if (maxCtx > 0) {
         ctxText = hbox({

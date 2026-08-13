@@ -521,8 +521,7 @@ asio::awaitable<void> test_detect_powershell(std::weak_ptr<agentxx::agent::Agent
         XX_TEST_EXPECT_TRUE(info.exeName == "pwsh.exe" || info.exeName == "powershell.exe");
         XX_TEST_EXPECT_TRUE(info.version.find('.') != std::string::npos);
         XX_TEST_EXPECT_TRUE(info.isPwsh == (info.exeName == "pwsh.exe"));
-        TEST_INFO << "PowerShell detected: " << info.exeName << " v" << info.version
-                  << std::endl;
+        TEST_INFO << "PowerShell detected: " << info.exeName << " v" << info.version << std::endl;
     } else {
         TEST_INFO << "PowerShell not detected (will fallback to cmd.exe)" << std::endl;
     }
@@ -578,7 +577,7 @@ asio::awaitable<void>
         // 字面量 $ 不应被展开 (引号/$ 解析问题的核心回归测试)
         auto args = neograph::json{
             {"command", "Write-Output 'a$b'"},
-            {"timeout", 60                 },
+            {"timeout", 60                  },
         };
         auto result = co_await tool.execute_async(args);
         XX_TEST_EXPECT_TRUE(result.find("a$b") != std::string::npos);
@@ -606,7 +605,7 @@ asio::awaitable<void>
         // 异常 (throw) 转 stdout + exit 1
         auto args = neograph::json{
             {"command", "Get-Content 'C:\\__agentxx_test_no_such__.txt' -ErrorAction Stop"},
-            {"timeout", 60                                                                 },
+            {"timeout", 60                                                                },
         };
         auto result = co_await tool.execute_async(args);
         XX_TEST_EXPECT_TRUE(result.find("ExitCode: 1") != std::string::npos);
@@ -614,8 +613,10 @@ asio::awaitable<void>
     {
         // 脚本块花括号 (PS 常用语法; 包装模板的 fmt::format 不应破坏大括号)
         auto args = neograph::json{
-            {"command", "Get-Process | Where-Object { $_.Id -gt 0 } | Select-Object -First 1 | ForEach-Object { Write-Output ('pid_ok') }"},
-            {"timeout", 60                                                                                                             },
+            {"command",
+             "Get-Process | Where-Object { $_.Id -gt 0 } | Select-Object -First 1 | ForEach-Object { Write-Output ('pid_ok') }"
+            },
+            {"timeout", 60                                                                                                     },
         };
         auto result = co_await tool.execute_async(args);
         XX_TEST_EXPECT_TRUE(result.find("pid_ok") != std::string::npos);

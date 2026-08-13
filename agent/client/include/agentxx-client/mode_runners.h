@@ -23,9 +23,9 @@ void runLocalTuiUnified(
 void runRemoteCli(std::string_view url, std::string_view token, std::string_view model);
 
 void runRemoteTui(
-    std::string_view    url,
-    std::string_view    token,
-    std::string_view    model,
+    std::string_view      url,
+    std::string_view      token,
+    std::string_view      model,
     agent::PermissionMode permissionMode = agent::PermissionMode::Ask
 );
 

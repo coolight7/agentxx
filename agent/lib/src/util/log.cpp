@@ -13,14 +13,14 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #elif XX_IS_WIN_D
-#include <windows.h>
 #include <dbghelp.h>
+#include <windows.h>
 // windows.h 的 min/max 宏与 C++ 标准库冲突
 #undef min
 #undef max
 #include <csignal>
-#include <cstdio>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <mutex>
 #endif
@@ -622,8 +622,13 @@ using FnSymFromAddr           = BOOL(WINAPI*)(HANDLE, DWORD64, PDWORD64, PSYMBOL
 using FnSymGetModuleInfo64    = BOOL(WINAPI*)(HANDLE, DWORD64, PIMAGEHLP_MODULE64);
 using FnSymGetLineFromAddr64  = BOOL(WINAPI*)(HANDLE, DWORD64, PDWORD, PIMAGEHLP_LINE64);
 using FnMiniDumpWriteDump     = BOOL(WINAPI*)(
-    HANDLE, DWORD, HANDLE, MINIDUMP_TYPE, PMINIDUMP_EXCEPTION_INFORMATION,
-    PMINIDUMP_USER_STREAM_INFORMATION, PMINIDUMP_CALLBACK_INFORMATION
+    HANDLE,
+    DWORD,
+    HANDLE,
+    MINIDUMP_TYPE,
+    PMINIDUMP_EXCEPTION_INFORMATION,
+    PMINIDUMP_USER_STREAM_INFORMATION,
+    PMINIDUMP_CALLBACK_INFORMATION
 );
 
 static HMODULE                 g_dbghelpDll            = nullptr;
@@ -635,10 +640,10 @@ static FnSymGetModuleInfo64    g_SymGetModuleInfo64    = nullptr;
 static FnSymGetLineFromAddr64  g_SymGetLineFromAddr64  = nullptr;
 static FnMiniDumpWriteDump     g_MiniDumpWriteDump     = nullptr;
 
-static std::string    _exe_path{};  ///< 可执行文件路径 (signalError 传入), 用于符号搜索
-static bool           g_symInitialized = false;
-static std::mutex     g_symMutex;      ///< dbghelp 符号查询非线程安全, 需要串行化
-static std::once_flag g_symOnce;       ///< 保证符号初始化只执行一次
+static std::string _exe_path{}; ///< 可执行文件路径 (signalError 传入), 用于符号搜索
+static bool        g_symInitialized = false;
+static std::mutex  g_symMutex;   ///< dbghelp 符号查询非线程安全, 需要串行化
+static std::once_flag g_symOnce; ///< 保证符号初始化只执行一次
 
 constexpr int kMaxFrames = 64; ///< 最大栈帧数
 
@@ -650,12 +655,15 @@ static bool winDbgHelpLoad() {
             return false;
         }
         // 注意: CaptureStackBackTrace 不是 dbghelp.dll 的导出, 见下方 ntdll 解析
-        g_SymInitialize        = (FnSymInitialize)GetProcAddress(g_dbghelpDll, "SymInitialize");
-        g_SymSetOptions        = (FnSymSetOptions)GetProcAddress(g_dbghelpDll, "SymSetOptions");
-        g_SymFromAddr          = (FnSymFromAddr)GetProcAddress(g_dbghelpDll, "SymFromAddr");
-        g_SymGetModuleInfo64   = (FnSymGetModuleInfo64)GetProcAddress(g_dbghelpDll, "SymGetModuleInfo64");
-        g_SymGetLineFromAddr64 = (FnSymGetLineFromAddr64)GetProcAddress(g_dbghelpDll, "SymGetLineFromAddr64");
-        g_MiniDumpWriteDump    = (FnMiniDumpWriteDump)GetProcAddress(g_dbghelpDll, "MiniDumpWriteDump");
+        g_SymInitialize = (FnSymInitialize)GetProcAddress(g_dbghelpDll, "SymInitialize");
+        g_SymSetOptions = (FnSymSetOptions)GetProcAddress(g_dbghelpDll, "SymSetOptions");
+        g_SymFromAddr   = (FnSymFromAddr)GetProcAddress(g_dbghelpDll, "SymFromAddr");
+        g_SymGetModuleInfo64
+            = (FnSymGetModuleInfo64)GetProcAddress(g_dbghelpDll, "SymGetModuleInfo64");
+        g_SymGetLineFromAddr64
+            = (FnSymGetLineFromAddr64)GetProcAddress(g_dbghelpDll, "SymGetLineFromAddr64");
+        g_MiniDumpWriteDump
+            = (FnMiniDumpWriteDump)GetProcAddress(g_dbghelpDll, "MiniDumpWriteDump");
     }
     // CaptureStackBackTrace 实际位于 ntdll.dll (RtlCaptureStackBackTrace, 与
     // CaptureStackBackTrace 签名一致), dbghelp.dll 无此导出; ntdll 必然已加载
@@ -666,7 +674,8 @@ static bool winDbgHelpLoad() {
                 = (FnCaptureStackBackTrace)GetProcAddress(ntdll, "RtlCaptureStackBackTrace");
         }
     }
-    return g_CaptureStackBackTrace != nullptr && g_SymInitialize != nullptr && g_SymFromAddr != nullptr;
+    return g_CaptureStackBackTrace != nullptr && g_SymInitialize != nullptr
+           && g_SymFromAddr != nullptr;
 }
 
 /// 惰性初始化符号 (线程安全, 只执行一次); 返回 false 表示符号不可用
@@ -678,7 +687,10 @@ static bool winSymInit() {
         // UNDNAME: 反修饰 C++ 符号名; DEFERRED_LOADS: 符号按需加载 (避免启动慢);
         // LOAD_LINES: 加载文件行号; FAIL_CRITICAL_ERRORS: PDB 缺失时静默不弹窗
         if (g_SymSetOptions != nullptr) {
-            g_SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS | SYMOPT_LOAD_LINES | SYMOPT_FAIL_CRITICAL_ERRORS);
+            g_SymSetOptions(
+                SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS | SYMOPT_LOAD_LINES
+                | SYMOPT_FAIL_CRITICAL_ERRORS
+            );
         }
         // 符号搜索路径: exe 所在目录 (PDB 通常与 exe 同目录)
         std::string searchPath;
@@ -687,8 +699,11 @@ static bool winSymInit() {
             searchPath = _exe_path.substr(0, slash);
         }
         g_symInitialized = g_SymInitialize(
-            GetCurrentProcess(), searchPath.empty() ? nullptr : searchPath.c_str(), TRUE
-        ) != FALSE;
+                               GetCurrentProcess(),
+                               searchPath.empty() ? nullptr : searchPath.c_str(),
+                               TRUE
+                           )
+                           != FALSE;
     });
     return g_symInitialized;
 }
@@ -700,7 +715,7 @@ static void winFormatFrame(char* out, size_t outLen, const void* addr) {
         return;
     }
     const uintptr_t pc = reinterpret_cast<uintptr_t>(addr);
-    out[0]              = '\0';
+    out[0]             = '\0';
     if (!g_symInitialized || !g_symMutex.try_lock()) {
         // 符号未就绪, 或符号表正被其他线程使用 (崩溃现场避免死锁): 只输出裸地址
         std::snprintf(out, outLen, "0x%llX", static_cast<unsigned long long>(pc));
@@ -708,9 +723,9 @@ static void winFormatFrame(char* out, size_t outLen, const void* addr) {
     }
     std::lock_guard<std::mutex> lock(g_symMutex, std::adopt_lock);
 
-    char                module[MAX_PATH]{};
-    DWORD64             modBase = 0;
-    IMAGEHLP_MODULE64   modInfo{};
+    char              module[MAX_PATH]{};
+    DWORD64           modBase = 0;
+    IMAGEHLP_MODULE64 modInfo{};
     modInfo.SizeOfStruct = sizeof(modInfo);
     if (g_SymGetModuleInfo64 != nullptr
         && g_SymGetModuleInfo64(GetCurrentProcess(), (DWORD64)pc, &modInfo) != FALSE) {
@@ -720,35 +735,60 @@ static void winFormatFrame(char* out, size_t outLen, const void* addr) {
 
     // SYMBOL_INFO 含 8 字节对齐成员, 用 alignas 显式对齐栈缓冲区
     alignas(SYMBOL_INFO) char symBuf[sizeof(SYMBOL_INFO) + MAX_SYM_NAME * sizeof(char)];
-    auto*   sym      = reinterpret_cast<PSYMBOL_INFO>(symBuf);
-    sym->SizeOfStruct = sizeof(SYMBOL_INFO);
-    sym->MaxNameLen   = MAX_SYM_NAME;
-    DWORD64 disp     = 0;
-    bool    hasSym   = g_SymFromAddr != nullptr
-                       && g_SymFromAddr(GetCurrentProcess(), (DWORD64)pc, &disp, sym) != FALSE;
+    auto*                     sym = reinterpret_cast<PSYMBOL_INFO>(symBuf);
+    sym->SizeOfStruct             = sizeof(SYMBOL_INFO);
+    sym->MaxNameLen               = MAX_SYM_NAME;
+    DWORD64 disp                  = 0;
+    bool    hasSym                = g_SymFromAddr != nullptr
+                  && g_SymFromAddr(GetCurrentProcess(), (DWORD64)pc, &disp, sym) != FALSE;
 
     IMAGEHLP_LINE64 line{};
     line.SizeOfStruct = sizeof(line);
-    DWORD lineDisp = 0;
-    bool  hasLine  = g_SymGetLineFromAddr64 != nullptr
-                     && g_SymGetLineFromAddr64(GetCurrentProcess(), (DWORD64)pc, &lineDisp, &line) != FALSE;
+    DWORD lineDisp    = 0;
+    bool  hasLine
+        = g_SymGetLineFromAddr64 != nullptr
+          && g_SymGetLineFromAddr64(GetCurrentProcess(), (DWORD64)pc, &lineDisp, &line) != FALSE;
 
     if (hasSym) {
         if (module[0] != '\0') {
             if (hasLine && line.FileName != nullptr) {
                 std::snprintf(
-                    out, outLen, "%s!%s+0x%llX (%s:%lu)",
-                    module, sym->Name, static_cast<unsigned long long>(disp),
-                    line.FileName, static_cast<unsigned long>(line.LineNumber)
+                    out,
+                    outLen,
+                    "%s!%s+0x%llX (%s:%lu)",
+                    module,
+                    sym->Name,
+                    static_cast<unsigned long long>(disp),
+                    line.FileName,
+                    static_cast<unsigned long>(line.LineNumber)
                 );
             } else {
-                std::snprintf(out, outLen, "%s!%s+0x%llX", module, sym->Name, static_cast<unsigned long long>(disp));
+                std::snprintf(
+                    out,
+                    outLen,
+                    "%s!%s+0x%llX",
+                    module,
+                    sym->Name,
+                    static_cast<unsigned long long>(disp)
+                );
             }
         } else {
-            std::snprintf(out, outLen, "%s+0x%llX", sym->Name, static_cast<unsigned long long>(disp));
+            std::snprintf(
+                out,
+                outLen,
+                "%s+0x%llX",
+                sym->Name,
+                static_cast<unsigned long long>(disp)
+            );
         }
     } else if (module[0] != '\0' && modBase != 0) {
-        std::snprintf(out, outLen, "%s+0x%llX", module, static_cast<unsigned long long>(pc - modBase));
+        std::snprintf(
+            out,
+            outLen,
+            "%s+0x%llX",
+            module,
+            static_cast<unsigned long long>(pc - modBase)
+        );
     } else {
         std::snprintf(out, outLen, "0x%llX", static_cast<unsigned long long>(pc));
     }
@@ -773,10 +813,20 @@ static void winWriteAll(HANDLE h, const char* s) {
 /// 打开 crash-<pid>.log (崩溃上下文安全)
 static HANDLE winOpenCrashLog() {
     char filename[MAX_PATH];
-    std::snprintf(filename, sizeof(filename), "crash-%lu.log", static_cast<unsigned long>(GetCurrentProcessId()));
+    std::snprintf(
+        filename,
+        sizeof(filename),
+        "crash-%lu.log",
+        static_cast<unsigned long>(GetCurrentProcessId())
+    );
     return CreateFileA(
-        filename, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
-        nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr
+        filename,
+        GENERIC_WRITE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        nullptr,
+        CREATE_ALWAYS,
+        FILE_ATTRIBUTE_NORMAL,
+        nullptr
     );
 }
 
@@ -809,25 +859,44 @@ static void winDumpStack(HANDLE console, HANDLE file) {
 /// 异常码 -> 名称 (供日志输出)
 static const char* winExceptionName(DWORD code) {
     switch (code) {
-        case EXCEPTION_ACCESS_VIOLATION:      return "ACCESS_VIOLATION";
-        case EXCEPTION_ARRAY_BOUNDS_EXCEEDED: return "ARRAY_BOUNDS_EXCEEDED";
-        case EXCEPTION_BREAKPOINT:            return "BREAKPOINT";
-        case EXCEPTION_DATATYPE_MISALIGNMENT: return "DATATYPE_MISALIGNMENT";
-        case EXCEPTION_FLT_DIVIDE_BY_ZERO:    return "FLT_DIVIDE_BY_ZERO";
-        case EXCEPTION_FLT_OVERFLOW:          return "FLT_OVERFLOW";
-        case EXCEPTION_FLT_UNDERFLOW:         return "FLT_UNDERFLOW";
-        case EXCEPTION_ILLEGAL_INSTRUCTION:   return "ILLEGAL_INSTRUCTION";
-        case EXCEPTION_IN_PAGE_ERROR:         return "IN_PAGE_ERROR";
-        case EXCEPTION_INT_DIVIDE_BY_ZERO:    return "INT_DIVIDE_BY_ZERO";
-        case EXCEPTION_INT_OVERFLOW:          return "INT_OVERFLOW";
-        case EXCEPTION_PRIV_INSTRUCTION:      return "PRIV_INSTRUCTION";
-        case EXCEPTION_STACK_OVERFLOW:        return "STACK_OVERFLOW";
-        case 0xC0000409:                      return "STACK_BUFFER_OVERRUN/FAST_FAIL";
-        case 0xC0000374:                      return "HEAP_CORRUPTION";
-        case 0xE06D7363:                      return "MSVC_CXX_EXCEPTION";
-        case 0xC0000135:                      return "DLL_NOT_FOUND";
-        case 0xC0000139:                      return "ENTRYPOINT_NOT_FOUND";
-        default:                              return "UNKNOWN";
+        case EXCEPTION_ACCESS_VIOLATION:
+            return "ACCESS_VIOLATION";
+        case EXCEPTION_ARRAY_BOUNDS_EXCEEDED:
+            return "ARRAY_BOUNDS_EXCEEDED";
+        case EXCEPTION_BREAKPOINT:
+            return "BREAKPOINT";
+        case EXCEPTION_DATATYPE_MISALIGNMENT:
+            return "DATATYPE_MISALIGNMENT";
+        case EXCEPTION_FLT_DIVIDE_BY_ZERO:
+            return "FLT_DIVIDE_BY_ZERO";
+        case EXCEPTION_FLT_OVERFLOW:
+            return "FLT_OVERFLOW";
+        case EXCEPTION_FLT_UNDERFLOW:
+            return "FLT_UNDERFLOW";
+        case EXCEPTION_ILLEGAL_INSTRUCTION:
+            return "ILLEGAL_INSTRUCTION";
+        case EXCEPTION_IN_PAGE_ERROR:
+            return "IN_PAGE_ERROR";
+        case EXCEPTION_INT_DIVIDE_BY_ZERO:
+            return "INT_DIVIDE_BY_ZERO";
+        case EXCEPTION_INT_OVERFLOW:
+            return "INT_OVERFLOW";
+        case EXCEPTION_PRIV_INSTRUCTION:
+            return "PRIV_INSTRUCTION";
+        case EXCEPTION_STACK_OVERFLOW:
+            return "STACK_OVERFLOW";
+        case 0xC0000409:
+            return "STACK_BUFFER_OVERRUN/FAST_FAIL";
+        case 0xC0000374:
+            return "HEAP_CORRUPTION";
+        case 0xE06D7363:
+            return "MSVC_CXX_EXCEPTION";
+        case 0xC0000135:
+            return "DLL_NOT_FOUND";
+        case 0xC0000139:
+            return "ENTRYPOINT_NOT_FOUND";
+        default:
+            return "UNKNOWN";
     }
 }
 
@@ -837,10 +906,20 @@ static void winWriteMiniDump(EXCEPTION_POINTERS* ep) {
         return;
     }
     char filename[MAX_PATH];
-    std::snprintf(filename, sizeof(filename), "crash-%lu.dmp", static_cast<unsigned long>(GetCurrentProcessId()));
+    std::snprintf(
+        filename,
+        sizeof(filename),
+        "crash-%lu.dmp",
+        static_cast<unsigned long>(GetCurrentProcessId())
+    );
     HANDLE h = CreateFileA(
-        filename, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
-        nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr
+        filename,
+        GENERIC_WRITE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        nullptr,
+        CREATE_ALWAYS,
+        FILE_ATTRIBUTE_NORMAL,
+        nullptr
     );
     if (h == INVALID_HANDLE_VALUE) {
         return;
@@ -850,8 +929,13 @@ static void winWriteMiniDump(EXCEPTION_POINTERS* ep) {
     mei.ExceptionPointers = ep;
     mei.ClientPointers    = FALSE;
     g_MiniDumpWriteDump(
-        GetCurrentProcess(), GetCurrentProcessId(), h,
-        MiniDumpWithDataSegs, ep != nullptr ? &mei : nullptr, nullptr, nullptr
+        GetCurrentProcess(),
+        GetCurrentProcessId(),
+        h,
+        MiniDumpWithDataSegs,
+        ep != nullptr ? &mei : nullptr,
+        nullptr,
+        nullptr
     );
     CloseHandle(h);
 }
@@ -867,15 +951,20 @@ static LONG WINAPI winExceptionFilter(EXCEPTION_POINTERS* ep) {
 
     char buf[512];
     std::snprintf(
-        buf, sizeof(buf), "\n======= xx catch exception 0x%08lX (%s) =======\n",
-        static_cast<unsigned long>(code), winExceptionName(code)
+        buf,
+        sizeof(buf),
+        "\n======= xx catch exception 0x%08lX (%s) =======\n",
+        static_cast<unsigned long>(code),
+        winExceptionName(code)
     );
     winWriteAll(console, buf);
     winWriteAll(file, buf);
 
     if (rec != nullptr && rec->ExceptionAddress != nullptr) {
         std::snprintf(
-            buf, sizeof(buf), "Exception address: 0x%llX\n",
+            buf,
+            sizeof(buf),
+            "Exception address: 0x%llX\n",
             static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(rec->ExceptionAddress))
         );
         winWriteAll(console, buf);
@@ -887,14 +976,19 @@ static LONG WINAPI winExceptionFilter(EXCEPTION_POINTERS* ep) {
                              ? "write"
                              : (rec->ExceptionInformation[0] == 8 ? "execute" : "read");
         std::snprintf(
-            buf, sizeof(buf), "Fault address: 0x%llX (%s)\n",
-            static_cast<unsigned long long>(rec->ExceptionInformation[1]), op
+            buf,
+            sizeof(buf),
+            "Fault address: 0x%llX (%s)\n",
+            static_cast<unsigned long long>(rec->ExceptionInformation[1]),
+            op
         );
         winWriteAll(console, buf);
         winWriteAll(file, buf);
     }
     std::snprintf(
-        buf, sizeof(buf), "PID: %lu, TID: %lu\n",
+        buf,
+        sizeof(buf),
+        "PID: %lu, TID: %lu\n",
         static_cast<unsigned long>(GetCurrentProcessId()),
         static_cast<unsigned long>(GetCurrentThreadId())
     );
@@ -911,7 +1005,9 @@ static LONG WINAPI winExceptionFilter(EXCEPTION_POINTERS* ep) {
 
     if (file != INVALID_HANDLE_VALUE) {
         std::snprintf(
-            buf, sizeof(buf), "\n# See file: crash-%lu.log\n",
+            buf,
+            sizeof(buf),
+            "\n# See file: crash-%lu.log\n",
             static_cast<unsigned long>(GetCurrentProcessId())
         );
         winWriteAll(console, buf);
@@ -937,7 +1033,9 @@ static void winSignalHandler(int signo) {
 
     if (file != INVALID_HANDLE_VALUE) {
         std::snprintf(
-            buf, sizeof(buf), "\n# See file: crash-%lu.log\n",
+            buf,
+            sizeof(buf),
+            "\n# See file: crash-%lu.log\n",
             static_cast<unsigned long>(GetCurrentProcessId())
         );
         winWriteAll(console, buf);

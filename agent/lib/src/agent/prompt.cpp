@@ -22,13 +22,11 @@ void AgentPrompt::refreshEnvDetectedPrompts() {
     // - 探测结果同时供 execute_command tool 运行时使用 (见 buildWinProcLaunch),
     //   与提示词文本相互独立, 刷新前后执行均正确
     (void)agentxx::util::detectPowerShell();
-    const auto& ps = cachedPowerShellInfo();
-    auto&       win = toolPrompt["agentxx_execute_windows_command"];
-    win.depict      = winCommandToolDepict();
-    win.args["command_process"]
-        = ps.available ? winCommandProcessPs() : winCommandProcessCmd();
-    win.args["command_popen"]
-        = ps.available ? winCommandPopenPs() : winCommandPopenCmd();
+    const auto& ps              = cachedPowerShellInfo();
+    auto&       win             = toolPrompt["agentxx_execute_windows_command"];
+    win.depict                  = winCommandToolDepict();
+    win.args["command_process"] = ps.available ? winCommandProcessPs() : winCommandProcessCmd();
+    win.args["command_popen"]   = ps.available ? winCommandPopenPs() : winCommandPopenCmd();
 }
 
 neograph::json AgentPrompt::toJson() const {

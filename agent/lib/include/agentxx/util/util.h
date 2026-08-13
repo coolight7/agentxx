@@ -32,13 +32,13 @@ namespace util {
 /// PowerShell 可执行文件探测结果 (供 execute_windows_command tool 选择执行器/生成提示词)
 struct PowerShellInfo {
     /// 是否找到可用的 PowerShell 可执行文件
-    bool        available = false;
+    bool available = false;
     /// 可执行文件名, 如 "pwsh.exe" / "powershell.exe" (未找到时为空)
     std::string exeName;
     /// 版本号, 如 "7.5.4" / "5.1.26100.7462" (探测失败时为空)
     std::string version;
     /// true: PowerShell 7+ (pwsh); false: Windows PowerShell 5.1 或未知
-    bool        isPwsh = false;
+    bool isPwsh = false;
 };
 
 /// 探测本机可用的 PowerShell 并返回其版本信息 (结果按进程缓存)。

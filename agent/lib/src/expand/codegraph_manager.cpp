@@ -210,10 +210,8 @@ static fs::path getIndexDbPath(std::string_view project_root, std::string_view s
 /// - 例如工作目录为 /home/user/proj/sub 时, 若 /home/user/proj 已建索引则复用
 /// - 每个前缀独立应用折叠规则 (确定性), 折叠后路径一致即视为同一前缀
 /// - 未找到任何父级索引时返回 nullopt (将在自身路径下新建)
-static std::optional<fs::path> findNearestExistingIndex(
-    std::string_view project_root,
-    std::string_view sqliteDir
-) {
+static std::optional<fs::path>
+    findNearestExistingIndex(std::string_view project_root, std::string_view sqliteDir) {
     auto segs = projectRootToSegments(project_root);
     if (segs.empty()) {
         return std::nullopt;
@@ -484,9 +482,10 @@ public:
         //   长度受控不会超过系统路径限制 (Windows MAX_PATH=260 / Linux PATH_MAX)
         // - 支持路径前缀匹配复用 (findNearestExistingIndex):
         //   工作目录为已有索引项目的子目录时, 复用最近父级索引, 无需重新索引
-        auto     sqlite_base = fs::path(getCodeGraphSqliteDir(sqlite_dir_)) / kCodeGraphSqliteSubDirName;
-        auto     reused      = findNearestExistingIndex(project_root, sqlite_dir_);
-        fs::path index_path  = reused ? *reused : getIndexDbPath(project_root, sqlite_dir_);
+        auto sqlite_base
+            = fs::path(getCodeGraphSqliteDir(sqlite_dir_)) / kCodeGraphSqliteSubDirName;
+        auto     reused     = findNearestExistingIndex(project_root, sqlite_dir_);
+        fs::path index_path = reused ? *reused : getIndexDbPath(project_root, sqlite_dir_);
         if (reused) {
             XX_LOGI(
                 "CodeGraphManager: reuse existing index db from parent path: {}",

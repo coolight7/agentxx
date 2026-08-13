@@ -100,23 +100,22 @@ asio::awaitable<void> CodeAgent::setupMiddleware() {
                 // - 工作目录获取失败 (返回空串) 时不注册默认放行规则, 所有路径
                 //   均询问 (安全兜底: "/*" 规则会退化为放行根目录下所有路径)
                 {
-                    const auto workPath
-                        = agentxx::agent::AgentConfigStatic::getCurrentWorkPath();
+                    const auto workPath = agentxx::agent::AgentConfigStatic::getCurrentWorkPath();
                     if (workPath.empty()) {
-                        XX_LOGW(
-                            "PermissionMode::Ask: getCurrentWorkPath failed, "
-                            "no default allow rule registered, all paths will be asked"
-                        );
+                        XX_LOGW("PermissionMode::Ask: getCurrentWorkPath failed, "
+                                "no default allow rule registered, all paths will be asked");
                     } else {
                         permission->setFilesystemPermission(
                             fmt::format("{}/*", workPath),
                             agentxx::middleware::PermissionOperator::ALLOW,
-                            agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
+                            agentxx::middleware::PermissionMiddlewareHandle::
+                                FilesystemPermissionWRITE
                         );
                         permission->setFilesystemPermission(
                             fmt::format("{}/*", workPath),
                             agentxx::middleware::PermissionOperator::ALLOW,
-                            agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionREAD
+                            agentxx::middleware::PermissionMiddlewareHandle::
+                                FilesystemPermissionREAD
                         );
                     }
                 }
@@ -248,8 +247,8 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
         auto mcpEx  = co_await asio::this_coro::executor;
         auto doneCh = std::make_shared<McpDoneChannel>(mcpEx, mcpCount);
         // 单个 MCP server 加载 (工具 push 到 tools; 失败仅记录日志)
-        auto loadOneMcp =
-            [&](std::string ns, agentxx::agent::McpServerConfig mcpCfg) -> asio::awaitable<void> {
+        auto loadOneMcp
+            = [&](std::string ns, agentxx::agent::McpServerConfig mcpCfg) -> asio::awaitable<void> {
             co_await agentxx::util::catchErrorAsync<bool>(
                 [&]() -> asio::awaitable<bool> {
                     // 逐步上报启动进度: MCP 网络连接较慢, 逐 server 报告名称+地址
@@ -269,7 +268,8 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
                         auto mcpTools = co_await mcpClient->listTools();
                         if (mcpTools.has_value()) {
                             for (auto& tool : mcpTools.value()) {
-                                tools.push_back(mcpClient->createTool(std::move(tool), agentContext));
+                                tools.push_back(mcpClient->createTool(std::move(tool), agentContext)
+                                );
                             }
                             // 添加到启动信息
                             agentContext->appendComponentInfo.mcpTools.push_back(ns);
@@ -307,8 +307,7 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
         for (const auto& [mcpNamespace, mcpCfg] : config->mcpServerUrls) {
             asio::co_spawn(
                 mcpEx,
-                [&tools, loadOneMcp, ns = mcpNamespace, cfg = mcpCfg](
-                ) -> asio::awaitable<void> {
+                [&tools, loadOneMcp, ns = mcpNamespace, cfg = mcpCfg]() -> asio::awaitable<void> {
                     co_await loadOneMcp(ns, cfg);
                 },
                 // 完成处理器: 捕获协程内部未捕获的异常 (loadOneMcp 已捕获普通异常,

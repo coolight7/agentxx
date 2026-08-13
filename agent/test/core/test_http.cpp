@@ -96,9 +96,7 @@ void test_http_client_unit() {
         // 超时即瞬时可重试 (含上层整体超时, 但 isTransientError 仅被传输层
         // 错误路径调用, 上层超时错误不会进入此分类)
         XX_TEST_EXPECT_TRUE(HttpClient::isTransientError("connect timed out"));
-        XX_TEST_EXPECT_TRUE(HttpClient::isTransientError(
-            "MCP tool call timed out after 120000ms"
-        ));
+        XX_TEST_EXPECT_TRUE(HttpClient::isTransientError("MCP tool call timed out after 120000ms"));
     }
 
     {

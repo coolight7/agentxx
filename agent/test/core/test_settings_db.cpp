@@ -130,8 +130,8 @@ static TestResult testTypedAccess() {
 
 static TestResult testDefaultPath() {
     // 默认路径: {defaultDataDir}/sqlite/global.db
-    using agentxx::util::SettingsDb;
     using agentxx::agent::AgentConfigStatic;
+    using agentxx::util::SettingsDb;
 
     auto db   = std::make_shared<SettingsDb>();
     auto path = fs::path(db->dbPath()).lexically_normal().string();
@@ -140,9 +140,9 @@ static TestResult testDefaultPath() {
     XX_TEST_EXPECT_EQ(path, expect);
 
     // 显式 dataDir 时: {dataDir}/sqlite/global.db
-    auto db2 = std::make_shared<SettingsDb>(
-        AgentConfigStatic::getGlobalSettingsDbPath("/tmp/custom-data")
-    );
+    auto db2
+        = std::make_shared<SettingsDb>(AgentConfigStatic::getGlobalSettingsDbPath("/tmp/custom-data"
+        ));
     XX_TEST_EXPECT_TRUE(db2->dbPath().find("global.db") != std::string::npos);
 
     // data_dir: default 关键字与系统数据目录 (平台惯例)

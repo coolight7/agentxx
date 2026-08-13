@@ -39,7 +39,7 @@ class SessionServerAgentIO : public AgentIOBase,
 public:
 
     struct Config {
-        std::string               threadId         = "session";
+        std::string threadId = "session";
         /// 中断/权限等待客户端响应的超时; <=0 表示不限制 (无限等待用户响应)
         std::chrono::milliseconds interruptTimeout = std::chrono::milliseconds{0};
         /// 断线后保持运行中轮次的宽限期; <=0 表示断线立即取消轮次

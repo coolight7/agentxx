@@ -25,9 +25,10 @@ CREATE TABLE IF NOT EXISTS setting (
 } // namespace
 
 SettingsDb::SettingsDb(std::string dbPath) :
-    dbPath_(dbPath.empty()
-                ? agentxx::agent::AgentConfigStatic::getGlobalSettingsDbPath("")
-                : std::move(dbPath)) {}
+    dbPath_(
+        dbPath.empty() ? agentxx::agent::AgentConfigStatic::getGlobalSettingsDbPath("")
+                       : std::move(dbPath)
+    ) {}
 
 bool SettingsDb::ensureOpen() {
     if (db_.isOpen()) {
@@ -83,10 +84,8 @@ bool SettingsDb::set(std::string_view key, std::string_view value) {
     return agentxx::util::catchError<bool>(
         [&]() -> bool {
             // INSERT OR REPLACE 语义 (主键冲突时覆盖)
-            auto stmt = db_.prepare(
-                "INSERT INTO setting(key, value) VALUES(?, ?) "
-                "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
-            );
+            auto stmt = db_.prepare("INSERT INTO setting(key, value) VALUES(?, ?) "
+                                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value");
             stmt.bindText(1, key);
             stmt.bindText(2, value);
             stmt.step();

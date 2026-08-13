@@ -65,7 +65,8 @@ public:
         = {"Trace", "Debug", "Info", "Warn", "Error", "Out"};
 
     /// 默认日志等级: Info (TUI 日志侧边栏仅显示 Info 及以上, Out 恒显示)
-    inline static constexpr agentxx::util::LogLevel kDefaultLogLevel = agentxx::util::LogLevel::Info;
+    inline static constexpr agentxx::util::LogLevel kDefaultLogLevel
+        = agentxx::util::LogLevel::Info;
 
     /// 主题枚举 (与 tui.theme 库中存储的整数值对应)
     enum ThemeKind : int {

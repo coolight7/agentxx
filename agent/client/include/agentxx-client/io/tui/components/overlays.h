@@ -75,12 +75,12 @@ private:
 
     void confirmSelection();
 
-    TUICtx&                            ctx_;
-    int                                selectedIndex_ = 0;
-    std::function<void()>              onClose_;
-    std::function<void(std::string)>   onSelect_;
-    std::function<void()>              onNewSession_;
-    std::vector<ftxui::Box>            itemBoxes_;
+    TUICtx&                          ctx_;
+    int                              selectedIndex_ = 0;
+    std::function<void()>            onClose_;
+    std::function<void(std::string)> onSelect_;
+    std::function<void()>            onNewSession_;
+    std::vector<ftxui::Box>          itemBoxes_;
 };
 
 /// 设置弹窗组件

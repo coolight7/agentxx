@@ -1532,8 +1532,8 @@ asio::awaitable<std::expected<json, std::string>>
     auto req     = makeRequest(id, method, params);
     auto headers = buildModernHttpHeaders(method, params);
 
-    auto doPost = [&]() -> asio::awaitable<
-        std::expected<agentxx::util::HttpResponse, std::string>> {
+    auto doPost
+        = [&]() -> asio::awaitable<std::expected<agentxx::util::HttpResponse, std::string>> {
         co_return co_await util::HttpClient::postAsync(
             config_.serverUrl,
             req,
@@ -1546,8 +1546,7 @@ asio::awaitable<std::expected<json, std::string>>
     if (!resp.has_value()) {
         // 瞬时传输错误 (响应被截断/连接重置/超时) 自动重试, 语义同 sendHttpRequest
         for (int attempt = 0;
-             !resp.has_value() && util::HttpClient::isTransientError(resp.error())
-             && attempt < 2;
+             !resp.has_value() && util::HttpClient::isTransientError(resp.error()) && attempt < 2;
              ++attempt) {
             XX_LOGW(
                 "[McpClient] transient HTTP error on {} ({}), retrying ({}/2)",
@@ -1639,8 +1638,8 @@ asio::awaitable<std::expected<json, std::string>>
 
     auto req = makeRequest(id, method, params);
 
-    auto doPost = [&]() -> asio::awaitable<
-        std::expected<agentxx::util::HttpResponse, std::string>> {
+    auto doPost
+        = [&]() -> asio::awaitable<std::expected<agentxx::util::HttpResponse, std::string>> {
         // headers 每次请求时重建: 反映最新的 mcpSessionId_ (会话重建后复用本 lambda)
         auto hdrs = buildHttpHeaders();
         co_return co_await util::HttpClient::postAsync(
@@ -1778,13 +1777,12 @@ asio::awaitable<bool> McpClient::rebuildHttpSession() {
     mcpSessionId_.clear();
 
     json params;
-    params["protocolVersion"] = negotiatedVersion_.empty()
-                                    ? std::string{kProtocol2025_11_25}
-                                    : negotiatedVersion_;
-    params["capabilities"]    = json::object();
+    params["protocolVersion"]
+        = negotiatedVersion_.empty() ? std::string{kProtocol2025_11_25} : negotiatedVersion_;
+    params["capabilities"] = json::object();
     json info;
-    info["name"]    = config_.clientName;
-    info["version"] = config_.clientVersion;
+    info["name"]         = config_.clientName;
+    info["version"]      = config_.clientVersion;
     params["clientInfo"] = std::move(info);
 
     auto req     = makeRequest(nextId_.fetch_add(1), "initialize", std::move(params));

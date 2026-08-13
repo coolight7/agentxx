@@ -146,7 +146,8 @@ Options:
         } else if (arg == "--ssl-key" && i + 1 < argn) {
             ++i;
             sslKeyFile = argv[i];
-        } else if (arg == "tui" || arg == "cli" || arg == "server" || arg == "acp" || arg == "train") {
+        } else if (arg == "tui" || arg == "cli" || arg == "server" || arg == "acp"
+                   || arg == "train") {
             mode = arg;
         } else {
             XX_LOGE("Unknown arg: `{}`", arg);
