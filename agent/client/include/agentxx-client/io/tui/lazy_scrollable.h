@@ -108,6 +108,15 @@ public:
     /// 清空缓存 (如主题切换后旧 Element 的颜色已过时)
     void clearCache();
 
+    /// 清除可见子项残留的鼠标选中高亮 (Text::has_selection_)。
+    ///
+    /// 背景: 本组件为懒构建/局部布局, 跳过 FTXUI 每帧的 ComputeRequirement
+    /// (Text 节点只在 ComputeRequirement 里复位 has_selection_), 因此拖动选中
+    /// 的文本在选择被清空后高亮不消失。调用本方法对当前可见子项执行一次
+    /// ComputeRequirement, 使其选择状态随内容重算归零 (幂等, 不影响布局).
+    /// 用于"拖选松开自动复制"完成后清除高亮 (见 agent_tui.cpp 拖选跟踪)
+    void resetSelectionHighlight();
+
     // === ComponentBase 接口 ===
     ftxui::Element OnRender() override;
     bool           OnEvent(ftxui::Event event) override;

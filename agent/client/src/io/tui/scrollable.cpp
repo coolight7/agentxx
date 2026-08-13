@@ -180,6 +180,23 @@ public:
         scrollbarOffset_   = scrollOffset;
     }
 
+    // 覆写 Node::Select: 本节点的可见子项按可见区域惰性布局 (visibleIndices_),
+    // 不在 children_ 列表中 —— 默认实现只递归 children_, 导致侧边栏内容
+    // 不参与 FTXUI 的鼠标选择收集 (无反色高亮、GetSelection 收集不到文本)。
+    // 与 Render 同帧顺序: Select 于 SetBox (Pass 2 已定位可见子项) 之后执行,
+    // 此处对可见子项逐一递归即可。
+    void Select(Selection& selection) override {
+        if (Box::Intersection(selection.GetBox(), box_).IsEmpty()) {
+            return;
+        }
+        const auto& items = *st_.items;
+        for (size_t i : visibleIndices_) {
+            if (items[i].element) {
+                items[i].element->Select(selection);
+            }
+        }
+    }
+
     void Render(Screen& screen) override {
         // 裁剪到视口: 局部超出视口的子项内容经 CellAt 的 stencil 检查被丢弃
         const AutoReset<Box> stencil(&screen.stencil, Box::Intersection(box_, screen.stencil));

@@ -69,6 +69,24 @@ public:
         comp_->prepareLayout(box);
     }
 
+    // 覆写 Node::Select: 本节点的可见子项以可见区域懒构建 (存于
+    // visibleIndices_/缓存), 不在 children_ 列表中 —— 默认实现只递归
+    // children_, 导致消息列表/空态 banner 的文本不参与 FTXUI 的鼠标选择
+    // (拖动选中无反色高亮、GetSelection 收集不到文本)。
+    // 与 Render 同帧顺序: Select 于 SetBox->prepareLayout 之后执行,
+    // 可见子项已构建并定位 (屏幕坐标), 此处对可见子项逐一递归即可。
+    void Select(Selection& selection) override {
+        if (Box::Intersection(selection.GetBox(), box_).IsEmpty()) {
+            return;
+        }
+        for (size_t i : comp_->visibleIndices_) {
+            auto& el = comp_->elementAt(i);
+            if (el) {
+                el->Select(selection);
+            }
+        }
+    }
+
     void Render(Screen& screen) override {
         // 裁剪到视口: 局部超出视口的子项内容经 CellAt 的 stencil 检查被丢弃
         const AutoReset<Box> stencil(&screen.stencil, Box::Intersection(box_, screen.stencil));
@@ -144,6 +162,18 @@ bool LazyScrollable::OnEvent(ftxui::Event event) {
         return true;
     }
     return false;
+}
+
+void LazyScrollable::resetSelectionHighlight() {
+    // 对当前可见子项执行 ComputeRequirement:
+    // Text::ComputeRequirement 会复位 has_selection_ (见 ftxui text.cpp),
+    // 从而清除拖动选中残留的反色高亮。幂等操作, 不影响内容/布局。
+    for (size_t i : visibleIndices_) {
+        auto& el = elementAt(i);
+        if (el) {
+            el->ComputeRequirement();
+        }
+    }
 }
 
 size_t LazyScrollable::estimateHeightFor(size_t index) const {

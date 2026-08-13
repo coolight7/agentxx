@@ -100,6 +100,12 @@ public:
     /// 主题变化后清空缓存 (颜色已过时)
     void invalidateCache();
 
+    /// 清除消息列表可见项的鼠标选中高亮 (拖选松开复制完成后调用;
+    /// 转发给 scrollable_ 的 resetSelectionHighlight)
+    void clearSelectionHighlight() {
+        scrollable_->resetSelectionHighlight();
+    }
+
     /// 处理可折叠消息的鼠标点击 (供外部 CatchEvent 调用); 返回是否消费了事件
     bool handleCollapsibleClick(const ftxui::Mouse& mouse);
 
