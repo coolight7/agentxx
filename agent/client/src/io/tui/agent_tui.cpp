@@ -38,7 +38,7 @@ using namespace ftxui;
 // ---------------------------------------------------------------------------
 // 系统剪贴板写入 (跨平台)
 // ---------------------------------------------------------------------------
-// Ctrl+Insert 复制鼠标选中文本时调用; 仅写入, 不读取。
+// 复制鼠标选中文本时调用; 仅写入, 不读取。
 //
 // 实现:
 // - Windows: Win32 API (OpenClipboard + SetClipboardData(CF_UNICODETEXT)),
@@ -186,33 +186,33 @@ void TUIClientAgentIO::showToast(std::string text) {
 }
 
 // ---------------------------------------------------------------------------
-// 复制鼠标选中的文本 (Ctrl+Insert)
+// 复制鼠标选中的文本
 // ---------------------------------------------------------------------------
 
-void TUIClientAgentIO::copySelectionToClipboard() {
+bool TUIClientAgentIO::copySelectionToClipboard() {
     std::shared_ptr<ScreenInteractive> s;
     {
         std::lock_guard<std::mutex> lock(screenMutex_);
         s = screen_;
     }
     if (!s) {
-        return;
+        return false;
     }
     // GetSelection(): 返回上一次绘制帧中累积的选中文本 (FTXUI 在每帧
     // Render 时按当前 Selection 收集各文本节点选中的部分);
     // TUI 为全屏模式, selection 坐标为屏幕绝对坐标, 无需校正
     const std::string text = s->GetSelection();
     if (text.empty()) {
-        showToast("未选中文本");
-        return;
+        return false;
     }
     const bool ok = copyTextToSystemClipboard(text);
     if (ok) {
-        showToast(fmt::format("已复制 {} 字符", text.size()));
+        showToast(fmt::format("已复制 ({})", text.size()));
     } else {
         showToast("复制失败 (剪贴板不可用)");
     }
     postRedraw();
+    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -368,8 +368,8 @@ void TUIClientAgentIO::start() {
                             hbox({
                                 filler(),
                                 hbox({
-                                    text(toastText_) | bold | bgcolor(theme_.buttonBgColor)
-                                        | color(theme_.buttonTextColor),
+                                    text(toastText_) | bold | bgcolor(theme_.buttonActiveBgColor)
+                                        | color(theme_.buttonActiveTextColor),
                                 }) | border,
                                 filler(),
                             }),
@@ -399,16 +399,6 @@ void TUIClientAgentIO::start() {
                 screen->Exit();
                 return true;
             }
-            // Ctrl+Insert (\x1B[2;5~): 复制鼠标选中文本到系统剪贴板。
-            // - 置于 modal 检查之前: 弹窗打开时也可复制 (例如复制弹窗内文本)
-            // - 此处是事件分发最外层 (CatchEvent 先于子组件执行), GetSelection()
-            //   读取的是上一绘制帧累积的选中文本, 与屏幕显示一致
-            // - 返回 false (不消费): 使 HandleSelection 不清除当前选择,
-            //   复制后选中高亮保持; 子组件不认识该按键, 无副作用
-            if (event.input() == "\x1B[2;5~") {
-                copySelectionToClipboard();
-                return false;
-            }
             // 鼠标事件: 拖选跟踪在任何状态下生效 (弹窗内文本同样支持拖选复制)
             if (event.is_mouse()) {
                 const auto& mouse = event.mouse();
@@ -432,8 +422,7 @@ void TUIClientAgentIO::start() {
                         const bool wasDrag = mouseDragged_;
                         mouseDown_         = false;
                         mouseDragged_      = false;
-                        if (wasDrag) {
-                            copySelectionToClipboard();
+                        if (wasDrag && copySelectionToClipboard()) {
                             // 清除选中高亮: 复制已完成; 懒加载列表跳过 FTXUI
                             // 每帧 ComputeRequirement, Text 节点的选中反色不会
                             // 自动复位, 需显式清除 (见 resetSelectionHighlight)

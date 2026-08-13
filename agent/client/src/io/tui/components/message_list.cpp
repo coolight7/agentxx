@@ -1196,22 +1196,21 @@ Element MessageListComponent::buildInterruptStatusLine(const TUIMessage& msg) {
         case TUIMessage::InterruptStatus::Confirmed:
             return hbox({
                 text(fmt::format("! [Interrupt] Input {}/{}: ", it.inputIndex, it.inputTotal))
-                    | color(theme.hintColor) | dim,
-                text("已确认 ") | color(theme.accentColor) | bold,
-                text(fmt::format("{}: {}", it.inputLabel, it.interruptResult))
-                    | color(theme.accentColor),
+                    | color(theme.hintColor),
+                text(fmt::format("已确认 {}: {}", it.inputLabel, it.interruptResult))
+                    | color(theme.accentColor) | dim,
             });
         case TUIMessage::InterruptStatus::Cancelled:
             return hbox({
                 text(fmt::format("! [Interrupt] Input {}/{}: ", it.inputIndex, it.inputTotal))
-                    | color(theme.hintColor) | dim,
-                text(fmt::format("{}: 已取消", it.inputLabel)) | color(theme.hintColor) | dim,
+                    | color(theme.hintColor),
+                text(fmt::format("{}: 已取消", it.inputLabel)) | color(theme.errorColor) | dim,
             });
         case TUIMessage::InterruptStatus::Expired:
             return hbox({
                 text(fmt::format("! [Interrupt] Input {}/{}: ", it.inputIndex, it.inputTotal))
-                    | color(theme.hintColor) | dim,
-                text(fmt::format("{}: 已过期", it.inputLabel)) | color(theme.hintColor) | dim,
+                    | color(theme.hintColor),
+                text(fmt::format("{}: 已过期", it.inputLabel)) | color(theme.errorColor) | dim,
             });
         default:
             return text("");
