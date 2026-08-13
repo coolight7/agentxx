@@ -193,9 +193,9 @@ static asio::awaitable<void> test_remote_protocol_roundtrip() {
         }
     }
     {
-        // MessageTip: 通用提示消息 delta 序列化往返
+        // MessageUITip: 通用提示消息 delta 序列化往返
         Delta d;
-        d.type    = Delta::Type::MessageTip;
+        d.type    = Delta::Type::MessageUITip;
         d.seq     = 11;
         d.tipType = Delta::TipType::Warning;
         d.text    = "LLM API 请求失败，6 秒后自动重试 (2/5)，错误: connection reset";
@@ -205,7 +205,7 @@ static asio::awaitable<void> test_remote_protocol_roundtrip() {
             auto* bd = std::get_if<Delta>(&*back);
             XX_TEST_EXPECT_TRUE(bd != nullptr);
             if (bd) {
-                XX_TEST_EXPECT_TRUE(bd->type == Delta::Type::MessageTip);
+                XX_TEST_EXPECT_TRUE(bd->type == Delta::Type::MessageUITip);
                 XX_TEST_EXPECT_TRUE(bd->tipType == Delta::TipType::Warning);
                 XX_TEST_EXPECT_EQ(
                     bd->text,
@@ -215,9 +215,9 @@ static asio::awaitable<void> test_remote_protocol_roundtrip() {
         }
     }
     {
-        // MessageTip: Error 级别往返
+        // MessageUITip: Error 级别往返
         Delta d;
-        d.type    = Delta::Type::MessageTip;
+        d.type    = Delta::Type::MessageUITip;
         d.tipType = Delta::TipType::Error;
         d.text    = "something went wrong";
         auto back = WsAgentIOTransport::deserialize(WsAgentIOTransport::serialize(WireMessage{d}));
@@ -226,7 +226,7 @@ static asio::awaitable<void> test_remote_protocol_roundtrip() {
             auto* bd = std::get_if<Delta>(&*back);
             XX_TEST_EXPECT_TRUE(bd != nullptr);
             if (bd) {
-                XX_TEST_EXPECT_TRUE(bd->type == Delta::Type::MessageTip);
+                XX_TEST_EXPECT_TRUE(bd->type == Delta::Type::MessageUITip);
                 XX_TEST_EXPECT_TRUE(bd->tipType == Delta::TipType::Error);
                 XX_TEST_EXPECT_EQ(bd->text, std::string("something went wrong"));
             }

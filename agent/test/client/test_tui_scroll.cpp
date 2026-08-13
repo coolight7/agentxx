@@ -441,10 +441,10 @@ TestResult testTuiScroll() {
         ScrollFixture f;
         f.sharedState.mutate([&](TUIRenderState& st) {
             auto m       = std::make_shared<TUIMessage>();
-            m->role      = TUIMessage::Role::System;
-            m->system    = TUIMessage::SystemData{};
-            m->collapsed = true; // 默认折叠 (与 makeText(Role::System) 语义一致)
-            m->text      = "system tip body line that is long enough to be truncated "
+            m->role      = TUIMessage::Role::Tip;
+            m->tip       = TUIMessage::TipData{};
+            m->collapsed = true; // 默认折叠 (与 makeText(Role::Tip) 语义一致)
+            m->text      = "tip tip body line that is long enough to be truncated "
                            "in the collapsed preview with unique tail marker "
                            "SYSM_TAIL_9XYZ";
             st.messages.push_back(std::move(m));
@@ -512,25 +512,25 @@ TestResult testTuiScroll() {
         // 场景 9b: System 消息折叠态按提示级别显示对应前缀 (Warning/Error)
         ScrollFixture f;
         f.sharedState.mutate([&](TUIRenderState& st) {
-            auto m              = std::make_shared<TUIMessage>();
-            m->role             = TUIMessage::Role::System;
-            m->system           = TUIMessage::SystemData{};
-            m->system->tipLevel = TUIMessage::TipLevel::Warning;
-            m->collapsed        = true;
-            m->text             = "warning tip body with marker WRN_TAIL_7K";
+            auto m           = std::make_shared<TUIMessage>();
+            m->role          = TUIMessage::Role::Tip;
+            m->tip           = TUIMessage::TipData{};
+            m->tip->tipLevel = TUIMessage::TipLevel::Warning;
+            m->collapsed     = true;
+            m->text          = "warning tip body with marker WRN_TAIL_7K";
             st.messages.push_back(std::move(m));
 
-            auto m2              = std::make_shared<TUIMessage>();
-            m2->role             = TUIMessage::Role::System;
-            m2->system           = TUIMessage::SystemData{};
-            m2->system->tipLevel = TUIMessage::TipLevel::Error;
-            m2->collapsed        = true;
-            m2->text             = "error tip body with marker ERR_TAIL_8M";
+            auto m2           = std::make_shared<TUIMessage>();
+            m2->role          = TUIMessage::Role::Tip;
+            m2->tip           = TUIMessage::TipData{};
+            m2->tip->tipLevel = TUIMessage::TipLevel::Error;
+            m2->collapsed     = true;
+            m2->text          = "error tip body with marker ERR_TAIL_8M";
             st.messages.push_back(std::move(m2));
 
             auto m3       = std::make_shared<TUIMessage>();
-            m3->role      = TUIMessage::Role::System;
-            m3->system    = TUIMessage::SystemData{};
+            m3->role      = TUIMessage::Role::Tip;
+            m3->tip       = TUIMessage::TipData{};
             m3->collapsed = true;
             m3->text      = "info tip body with marker INF_TAIL_6N";
             st.messages.push_back(std::move(m3));

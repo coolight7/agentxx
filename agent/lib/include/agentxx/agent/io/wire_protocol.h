@@ -48,7 +48,7 @@ struct MsgType {
     inline static constexpr std::string_view ContextMessages     = "context_messages";
     /// 服务端持久化会话列表响应 (ListSessions 的结果)
     inline static constexpr std::string_view SessionList = "session_list";
-    inline static constexpr std::string_view Pong                = "pong";
+    inline static constexpr std::string_view Pong        = "pong";
 };
 
 /// 中断/取消原因 (供 BaseAgent 区分中断来源)
@@ -81,9 +81,9 @@ inline std::string_view deltaTypeToString(Delta::Type t) noexcept {
             return "node_start";
         case T::NodeEnd:
             return "node_end";
-        case T::MessageTip:
+        case T::MessageUITip:
             return "message_tip";
-        case T::SystemMessage:
+        case T::MessageTip:
             return "system_message";
     }
     return "text_token";
@@ -116,10 +116,10 @@ inline std::optional<Delta::Type> deltaTypeFromString(std::string_view s) noexce
         return T::NodeEnd;
     }
     if (s == "message_tip") {
-        return T::MessageTip;
+        return T::MessageUITip;
     }
     if (s == "system_message") {
-        return T::SystemMessage;
+        return T::MessageTip;
     }
     return std::nullopt;
 }
@@ -168,8 +168,8 @@ inline neograph::json deltaToJson(const Delta& d) {
     if (!d.nodeName.empty()) {
         j["node_name"] = d.nodeName;
     }
-    // MessageTip / SystemMessage: 提示级别
-    if (d.type == Delta::Type::MessageTip || d.type == Delta::Type::SystemMessage) {
+    // MessageUITip / MessageTip: 提示级别
+    if (d.type == Delta::Type::MessageUITip || d.type == Delta::Type::MessageTip) {
         switch (d.tipType) {
             case Delta::TipType::Warning:
                 j["tip_type"] = "warning";
@@ -209,7 +209,7 @@ inline std::optional<Delta> deltaFromJson(const neograph::json& j) {
     d.durationMs   = j.value("duration_ms", int64_t{0});
     d.tps          = j.value("tps", 0.0);
     d.nodeName     = j.value("node_name", std::string{});
-    if (d.type == Delta::Type::MessageTip || d.type == Delta::Type::SystemMessage) {
+    if (d.type == Delta::Type::MessageUITip || d.type == Delta::Type::MessageTip) {
         const auto tip = j.value("tip_type", std::string{"info"});
         if (tip == "warning") {
             d.tipType = Delta::TipType::Warning;
@@ -423,11 +423,8 @@ inline neograph::json makeTurnResult(
     return j;
 }
 
-inline neograph::json makeContextStats(
-    uint64_t contextTokens,
-    uint64_t maxContextTokens,
-    double   tps = 0.0
-) {
+inline neograph::json
+    makeContextStats(uint64_t contextTokens, uint64_t maxContextTokens, double tps = 0.0) {
     neograph::json j = {
         {"type",               MsgType::ContextStats},
         {"context_tokens",     contextTokens        },
@@ -606,7 +603,7 @@ inline neograph::json makeSessionList(const std::vector<SessionInfo>& sessions) 
 
 inline std::vector<SessionInfo> sessionListFromJson(const neograph::json& j) {
     std::vector<SessionInfo> out;
-    auto arr = j.value("sessions", neograph::json::array());
+    auto                     arr = j.value("sessions", neograph::json::array());
     if (arr.is_array()) {
         for (const auto& item : arr) {
             out.push_back(sessionInfoFromJson(item));

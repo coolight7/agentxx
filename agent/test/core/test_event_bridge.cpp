@@ -23,7 +23,7 @@ int g_eb_failed = 0;
 class TestEbIO : public agentxx::agent::AgentIOBase {
 public:
 
-    std::vector<agentxx::agent::Delta>             deltas;
+    std::vector<agentxx::agent::Delta>            deltas;
     std::vector<agentxx::agent::WireContextStats> stats;
 
     void sendToPeer(agentxx::agent::WireMessage msg) override {
@@ -220,7 +220,7 @@ asio::awaitable<void> test_eventbridge_error() {
     co_return;
 }
 
-/// 验证 MessageTip: CHANNEL_WRITE "message_tip" -> Delta::MessageTip (warning/error/info)
+/// 验证 MessageUITip: CHANNEL_WRITE "message_tip" -> Delta::MessageUITip (warning/error/info)
 asio::awaitable<void> test_eventbridge_message_tip() {
     auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
     auto session      = std::make_shared<agentxx::agent::Session>();
@@ -244,7 +244,7 @@ asio::awaitable<void> test_eventbridge_message_tip() {
     });
     XX_TEST_EXPECT_EQ(io->deltas.size(), size_t{1});
     if (!io->deltas.empty()) {
-        XX_TEST_EXPECT_TRUE(io->deltas[0].type == agentxx::agent::Delta::Type::MessageTip);
+        XX_TEST_EXPECT_TRUE(io->deltas[0].type == agentxx::agent::Delta::Type::MessageUITip);
         XX_TEST_EXPECT_TRUE(io->deltas[0].tipType == agentxx::agent::Delta::TipType::Warning);
         XX_TEST_EXPECT_EQ(
             io->deltas[0].text,
@@ -351,21 +351,21 @@ asio::awaitable<void> test_eventbridge_channel_write_thinking() {
         neograph::json{
                        {"channel", "messages"},
                        {"value",
-            neograph::json::array({
-                neograph::json{
-                    {"role",              "assistant"},
-                    {"content",           ""         },
-                    {"reasoning_content", "need to list files first"},
-                    {"tool_calls",
-                     neograph::json::array({
-                         neograph::json{
-                             {"id", "call_1"},
-                             {"name", "bash"},
-                             {"arguments", "{\"cmd\":\"ls\"}"},
-                         },
-                     })                       },
-                },
-            })},
+             neograph::json::array({
+                 neograph::json{
+                     {"role", "assistant"},
+                     {"content", ""},
+                     {"reasoning_content", "need to list files first"},
+                     {"tool_calls",
+                      neograph::json::array({
+                          neograph::json{
+                              {"id", "call_1"},
+                              {"name", "bash"},
+                              {"arguments", "{\"cmd\":\"ls\"}"},
+                          },
+                      })},
+                 },
+             })},
                        }
     });
     // Thinking 在前, Tool 在后
@@ -391,13 +391,13 @@ asio::awaitable<void> test_eventbridge_channel_write_thinking() {
         neograph::json{
                        {"channel", "messages"},
                        {"value",
-            neograph::json::array({
-                neograph::json{
-                    {"role",              "assistant"},
-                    {"content",           "done"     },
-                    {"reasoning_content", "reasoned here"},
-                },
-            })},
+             neograph::json::array({
+                 neograph::json{
+                     {"role", "assistant"},
+                     {"content", "done"},
+                     {"reasoning_content", "reasoned here"},
+                 },
+             })},
                        }
     });
     XX_TEST_EXPECT_EQ(session->viewMessages.size(), size_t{4});
@@ -418,12 +418,12 @@ asio::awaitable<void> test_eventbridge_channel_write_thinking() {
         neograph::json{
                        {"channel", "messages"},
                        {"value",
-            neograph::json::array({
-                neograph::json{
-                    {"role",    "assistant"},
-                    {"content", "plain"    },
-                },
-            })},
+             neograph::json::array({
+                 neograph::json{
+                     {"role", "assistant"},
+                     {"content", "plain"},
+                 },
+             })},
                        }
     });
     XX_TEST_EXPECT_EQ(session->viewMessages.size(), size_t{5});
@@ -475,9 +475,12 @@ asio::awaitable<void> test_eventbridge_tps() {
     auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
     // 注入 summarization 中间件: estimateTokens 应复用其 token 计算口径
     agentContext->summarizationMiddleware
-        = std::make_shared<agentxx::middleware::SummarizationMiddlewareHandle>(nullptr, agentContext);
-    auto session      = std::make_shared<agentxx::agent::Session>();
-    auto io           = std::make_shared<TestEbIO>();
+        = std::make_shared<agentxx::middleware::SummarizationMiddlewareHandle>(
+            nullptr,
+            agentContext
+        );
+    auto session = std::make_shared<agentxx::agent::Session>();
+    auto io      = std::make_shared<TestEbIO>();
 
     auto bridge = makeTestBridge(agentContext, session, io);
     // 缩短推送间隔 (默认 5 秒), 测试无需真实等待
@@ -500,9 +503,7 @@ asio::awaitable<void> test_eventbridge_tps() {
     XX_TEST_EXPECT_EQ(io->stats.size(), size_t{0});
 
     // 等待超过间隔后继续发 token → 触发推送, tps > 0
-    co_await asio::steady_timer(
-        co_await asio::this_coro::executor, std::chrono::milliseconds(80)
-    )
+    co_await asio::steady_timer(co_await asio::this_coro::executor, std::chrono::milliseconds(80))
         .async_wait(asio::use_awaitable);
     bridgeCb(neograph::graph::GraphEvent{
         neograph::graph::GraphEvent::Type::LLM_TOKEN,
@@ -544,7 +545,10 @@ asio::awaitable<void> test_eventbridge_tps() {
 asio::awaitable<void> test_eventbridge_turn_tps() {
     auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
     agentContext->summarizationMiddleware
-        = std::make_shared<agentxx::middleware::SummarizationMiddlewareHandle>(nullptr, agentContext);
+        = std::make_shared<agentxx::middleware::SummarizationMiddlewareHandle>(
+            nullptr,
+            agentContext
+        );
     auto session = std::make_shared<agentxx::agent::Session>();
     auto io      = std::make_shared<TestEbIO>();
 

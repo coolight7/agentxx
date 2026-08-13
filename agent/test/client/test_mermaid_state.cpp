@@ -9,6 +9,14 @@
 #include "ftxui/component/event.hpp"
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/screen.hpp"
+#include "ftxui/screen/terminal.hpp"
+#if defined(_WIN32)
+#define NOMINMAX
+#include <windows.h>
+#else
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -532,9 +540,76 @@ void test_overlay_reparses_on_plan_update() {
 
 } // namespace
 
+/// 固定 Terminal::Size() 返回值 (测试确定性):
+/// ftxui 的 Terminal::Size() 在 Windows 下查询 stdout 控制台窗口尺寸, 测试进程
+/// 在用户终端/CI 中运行时窗口大小不确定, 会使依赖弹窗尺寸的渲染断言
+/// (PlanDiagramOverlay 高度) 随窗口变化而不稳定。
+/// 这里将 stdout 句柄重定向到 NUL (非控制台 → 尺寸查询失败 → 走 fallback),
+/// 再 SetFallbackSize 固定为 120x50, 使本模块渲染断言与运行终端无关。
+/// 析构时恢复 stdout 与 fallback 默认值 (80x24)。
+class TerminalSizeFix {
+public:
+    TerminalSizeFix() {
+        ftxui::Terminal::SetFallbackSize({120, 50});
+#if defined(_WIN32)
+        oldOut_ = GetStdHandle(STD_OUTPUT_HANDLE);
+        nul_    = CreateFileW(
+            L"NUL",
+            GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            nullptr,
+            OPEN_EXISTING,
+            0,
+            nullptr
+        );
+        if (nul_ != INVALID_HANDLE_VALUE) {
+            SetStdHandle(STD_OUTPUT_HANDLE, nul_);
+        }
+#else
+        // POSIX: 重定向 STDOUT_FILENO 到 /dev/null, 使 ioctl(TIOCGWINSZ) 失败
+        oldOutFd_ = dup(STDOUT_FILENO);
+        const int devnull = open("/dev/null", O_WRONLY);
+        if (devnull >= 0) {
+            dup2(devnull, STDOUT_FILENO);
+            close(devnull);
+        }
+#endif
+    }
+    ~TerminalSizeFix() {
+#if defined(_WIN32)
+        if (oldOut_ != INVALID_HANDLE_VALUE) {
+            SetStdHandle(STD_OUTPUT_HANDLE, oldOut_);
+        }
+        if (nul_ != INVALID_HANDLE_VALUE) {
+            CloseHandle(nul_);
+        }
+#else
+        if (oldOutFd_ >= 0) {
+            dup2(oldOutFd_, STDOUT_FILENO);
+            close(oldOutFd_);
+        }
+#endif
+        // 恢复 ftxui 默认 fallback (其他测试不依赖, 保持环境干净)
+        ftxui::Terminal::SetFallbackSize({80, 24});
+    }
+    TerminalSizeFix(const TerminalSizeFix&)            = delete;
+    TerminalSizeFix& operator=(const TerminalSizeFix&) = delete;
+
+private:
+#if defined(_WIN32)
+    HANDLE oldOut_ = INVALID_HANDLE_VALUE;
+    HANDLE nul_    = INVALID_HANDLE_VALUE;
+#else
+    int oldOutFd_ = -1;
+#endif
+};
+
 TestResult testMermaidState() {
     g_mermaid_state_passed = 0;
     g_mermaid_state_failed = 0;
+
+    // 固定终端尺寸: 使 PlanDiagramOverlay 弹窗尺寸断言与运行窗口大小无关
+    TerminalSizeFix termFix;
 
     // 解析
     test_parse_linear_chain();

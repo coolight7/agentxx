@@ -71,6 +71,7 @@ public:
 /// 测试用权限应答 IO: 记录权限询问次数, 默认应答允许 (模拟客户端权限询问)
 class PermissionTestIO : public agentxx::agent::AgentIOBase {
 public:
+
     std::atomic<int> permissionCalls{0};
 
     void sendToPeer(agentxx::agent::WireMessage /*msg*/) override {}
@@ -100,16 +101,13 @@ public:
 /// 模拟 tools 节点 start 阶段抛异常的中间件
 /// (验证 Toolcall 拦截普通异常后, agent 基于错误消息继续运行)
 class ThrowToolcallStartMiddleware
-    : public agentxx::middleware::MiddlewareWrapHandle<
-          agentxx::middleware::BaseMiddlewareState> {
+    : public agentxx::middleware::MiddlewareWrapHandle<agentxx::middleware::BaseMiddlewareState> {
 public:
 
-    using Base = agentxx::middleware::MiddlewareWrapHandle<
-        agentxx::middleware::BaseMiddlewareState>;
+    using Base
+        = agentxx::middleware::MiddlewareWrapHandle<agentxx::middleware::BaseMiddlewareState>;
 
-    ThrowToolcallStartMiddleware(
-        std::weak_ptr<agentxx::agent::AgentContext> agentContext
-    ) :
+    ThrowToolcallStartMiddleware(std::weak_ptr<agentxx::agent::AgentContext> agentContext) :
         Base(
             "ThrowToolcallStart",
             agentContext,
@@ -157,7 +155,7 @@ private:
 // ===========================================================================
 // Enhanced LLM Simulator Implementation
 // ===========================================================================
-std::string            g_da_sim_response_content  = "Hello! I am a simulated LLM response for testing.";
+std::string    g_da_sim_response_content  = "Hello! I am a simulated LLM response for testing.";
 int            g_da_sim_prompt_tokens     = 100;
 int            g_da_sim_completion_tokens = 50;
 neograph::json g_da_sim_tool_calls        = neograph::json::array();
@@ -290,7 +288,7 @@ DaSimServer startDaSimServer() {
 
                     // 模拟 thinking 模型: 先推送 reasoning_content 增量 (TYPE_THINKING)
                     if (!g_da_sim_reasoning_content.empty()) {
-                        auto d                  = neograph::json::object();
+                        auto d                 = neograph::json::object();
                         d["reasoning_content"] = g_da_sim_reasoning_content;
                         append(d, "");
                     }
@@ -412,7 +410,7 @@ asio::awaitable<void> test_agent_permission_mode_rules() {
     auto sim     = startDaSimServer();
     auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
 
-    auto cfgBase        = std::make_shared<agentxx::agent::AgentConfig>();
+    auto cfgBase             = std::make_shared<agentxx::agent::AgentConfig>();
     cfgBase->model.baseUrl   = baseUrl;
     cfgBase->model.apiKey    = "EMPTY";
     cfgBase->model.modelName = "test-sim";
@@ -426,7 +424,7 @@ asio::awaitable<void> test_agent_permission_mode_rules() {
     const std::string outsidePath = "/data/outside.txt";
 
     // 工具 + 会话总线 + 权限应答 IO (每次构造新 CodeAgent 前重建, 保证计数独立)
-    TestTool tool("agentxx_filesystem_write_file");
+    TestTool         tool("agentxx_filesystem_write_file");
     constexpr size_t kWriteIndex
         = agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE;
 
@@ -434,14 +432,17 @@ asio::awaitable<void> test_agent_permission_mode_rules() {
     auto check = [&](std::shared_ptr<agentxx::middleware::PermissionMiddlewareHandle> perm,
                      std::string_view                                                 path,
                      const std::string& threadId) -> asio::awaitable<bool> {
-        auto args = neograph::json{{"path", std::string{path}}, {"thread_id", threadId}};
+        auto args = neograph::json{
+            {"path",      std::string{path}},
+            {"thread_id", threadId         }
+        };
         co_return co_await perm->defOnFilesystemHandle(tool, args, kWriteIndex);
     };
 
     // ---- 模式 ask: 工作目录内允许, 其他询问 ----
     {
-        auto cfg = std::make_shared<agentxx::agent::AgentConfig>(*cfgBase);
-        cfg->permissionMode     = agent::PermissionMode::Ask;
+        auto cfg                  = std::make_shared<agentxx::agent::AgentConfig>(*cfgBase);
+        cfg->permissionMode       = agent::PermissionMode::Ask;
         cfg->permissionAllowPaths = {cwd + "/trusted"};
         cfg->permissionDenyPaths  = {cwd + "/secret"};
 
@@ -451,8 +452,9 @@ asio::awaitable<void> test_agent_permission_mode_rules() {
         XX_TEST_EXPECT_TRUE(perm != nullptr);
 
         auto session = agent.agentContext->getSession("perm_ask");
-        auto bus     = std::make_shared<agentxx::middleware::EventBus>(co_await asio::this_coro::executor);
-        auto io      = std::make_shared<PermissionTestIO>();
+        auto bus
+            = std::make_shared<agentxx::middleware::EventBus>(co_await asio::this_coro::executor);
+        auto io = std::make_shared<PermissionTestIO>();
         io->registerOnBus(bus);
         session->bus = bus;
 
@@ -476,7 +478,7 @@ asio::awaitable<void> test_agent_permission_mode_rules() {
 
     // ---- 模式 all_ask: 所有路径均询问 ----
     {
-        auto cfg = std::make_shared<agentxx::agent::AgentConfig>(*cfgBase);
+        auto cfg            = std::make_shared<agentxx::agent::AgentConfig>(*cfgBase);
         cfg->permissionMode = agent::PermissionMode::AllAsk;
 
         agentxx::agent::CodeAgent agent(cfg);
@@ -484,8 +486,9 @@ asio::awaitable<void> test_agent_permission_mode_rules() {
         auto perm = agent.agentContext->permissionMiddleware;
 
         auto session = agent.agentContext->getSession("perm_allask");
-        auto bus     = std::make_shared<agentxx::middleware::EventBus>(co_await asio::this_coro::executor);
-        auto io      = std::make_shared<PermissionTestIO>();
+        auto bus
+            = std::make_shared<agentxx::middleware::EventBus>(co_await asio::this_coro::executor);
+        auto io = std::make_shared<PermissionTestIO>();
         io->registerOnBus(bus);
         session->bus = bus;
 
@@ -499,7 +502,7 @@ asio::awaitable<void> test_agent_permission_mode_rules() {
 
     // ---- 模式 pass: 全部放行, 不询问 ----
     {
-        auto cfg = std::make_shared<agentxx::agent::AgentConfig>(*cfgBase);
+        auto cfg            = std::make_shared<agentxx::agent::AgentConfig>(*cfgBase);
         cfg->permissionMode = agent::PermissionMode::Pass;
 
         agentxx::agent::CodeAgent agent(cfg);
@@ -507,8 +510,9 @@ asio::awaitable<void> test_agent_permission_mode_rules() {
         auto perm = agent.agentContext->permissionMiddleware;
 
         auto session = agent.agentContext->getSession("perm_pass");
-        auto bus     = std::make_shared<agentxx::middleware::EventBus>(co_await asio::this_coro::executor);
-        auto io      = std::make_shared<PermissionTestIO>();
+        auto bus
+            = std::make_shared<agentxx::middleware::EventBus>(co_await asio::this_coro::executor);
+        auto io = std::make_shared<PermissionTestIO>();
         io->registerOnBus(bus);
         session->bus = bus;
 
@@ -521,8 +525,8 @@ asio::awaitable<void> test_agent_permission_mode_rules() {
 
     // ---- 模式 deny: 全部拒绝, 不询问; 白名单路径仍放行 ----
     {
-        auto cfg = std::make_shared<agentxx::agent::AgentConfig>(*cfgBase);
-        cfg->permissionMode     = agent::PermissionMode::Deny;
+        auto cfg                  = std::make_shared<agentxx::agent::AgentConfig>(*cfgBase);
+        cfg->permissionMode       = agent::PermissionMode::Deny;
         cfg->permissionAllowPaths = {cwd + "/trusted"};
 
         agentxx::agent::CodeAgent agent(cfg);
@@ -530,8 +534,9 @@ asio::awaitable<void> test_agent_permission_mode_rules() {
         auto perm = agent.agentContext->permissionMiddleware;
 
         auto session = agent.agentContext->getSession("perm_deny");
-        auto bus     = std::make_shared<agentxx::middleware::EventBus>(co_await asio::this_coro::executor);
-        auto io      = std::make_shared<PermissionTestIO>();
+        auto bus
+            = std::make_shared<agentxx::middleware::EventBus>(co_await asio::this_coro::executor);
+        auto io = std::make_shared<PermissionTestIO>();
         io->registerOnBus(bus);
         session->bus = bus;
 
@@ -724,13 +729,13 @@ asio::awaitable<void> test_agent_nonstream() {
 /// - dataDir 为空但显式指定 sessionPersistenceRoot → 仍持久化 (显式路径)
 asio::awaitable<void> test_agent_persistence_datadir_gate() {
     auto makeCfg = [](std::string dataDir, std::string root) {
-        auto cfg                       = std::make_shared<agentxx::agent::AgentConfig>();
-        cfg->model.baseUrl             = "http://127.0.0.1:1";
-        cfg->model.apiKey              = "EMPTY";
-        cfg->model.modelName           = "test-sim";
-        cfg->enableSessionPersistence  = true;
-        cfg->dataDir                   = std::move(dataDir);
-        cfg->sessionPersistenceRoot    = std::move(root);
+        auto cfg                      = std::make_shared<agentxx::agent::AgentConfig>();
+        cfg->model.baseUrl            = "http://127.0.0.1:1";
+        cfg->model.apiKey             = "EMPTY";
+        cfg->model.modelName          = "test-sim";
+        cfg->enableSessionPersistence = true;
+        cfg->dataDir                  = std::move(dataDir);
+        cfg->sessionPersistenceRoot   = std::move(root);
         return cfg;
     };
 
@@ -791,7 +796,7 @@ asio::awaitable<void> test_agent_io_session_bus() {
 /// 轮次统计系统提示由 agent 线程插入:
 /// - 带 io 运行一轮后, viewMessages 末尾应包含 System 消息 (轮次统计, 含
 ///   模型名 / tps / 时长)
-/// - io 应收到 SystemMessage Delta, 其 msgId 与 viewMessages 中消息 id 一致
+/// - io 应收到 MessageTip Delta, 其 msgId 与 viewMessages 中消息 id 一致
 asio::awaitable<void> test_agent_turn_system_message() {
     auto sim     = startDaSimServer();
     auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
@@ -807,18 +812,18 @@ asio::awaitable<void> test_agent_turn_system_message() {
     agentxx::agent::CodeAgent agent(cfg);
     co_await agent.init();
 
-    auto io = std::make_shared<TestAgentIO>();
+    auto io     = std::make_shared<TestAgentIO>();
     auto result = co_await agent.runConversationTurnAsync("sysmsg_test", "Hello", true, io);
     XX_TEST_EXPECT_FALSE(result.hasError);
 
     auto session = agent.agentContext->sessions->get("sysmsg_test");
     XX_TEST_EXPECT_TRUE(session != nullptr);
 
-    // viewMessages 应包含 System 轮次统计消息 (模型名 · t/s · 时长 · 时间)
+    // viewMessages 应包含 Tip 轮次统计消息 (模型名 · t/s · 时长 · 时间)
     bool        foundStat = false;
     std::string statMsgId;
     for (const auto& vm : session->viewMessages) {
-        if (vm.role == agentxx::agent::ViewMessage::Role::System) {
+        if (vm.role == agentxx::agent::ViewMessage::Role::Tip) {
             foundStat = true;
             statMsgId = vm.id;
             XX_TEST_EXPECT_TRUE(vm.text.find("test-sim") != std::string::npos);
@@ -829,10 +834,10 @@ asio::awaitable<void> test_agent_turn_system_message() {
     }
     XX_TEST_EXPECT_TRUE(foundStat);
 
-    // io 应收到 SystemMessage Delta, msgId 与历史消息一致
+    // io 应收到 MessageTip Delta, msgId 与历史消息一致
     bool foundDelta = false;
     for (const auto& d : io->deltas) {
-        if (d.type == agentxx::agent::Delta::Type::SystemMessage) {
+        if (d.type == agentxx::agent::Delta::Type::MessageTip) {
             foundDelta = true;
             XX_TEST_EXPECT_EQ(d.msgId, statMsgId);
             XX_TEST_EXPECT_TRUE(!d.text.empty());
@@ -1041,7 +1046,7 @@ asio::awaitable<void> test_agent_llm_retry_exhaust() {
 
     // ---- 第二轮: llm 持续失败 (重试耗尽后应结束本轮) ----
     g_da_sim_response_content = "fallback text"; // bug 场景下第 4 次请求会成功返回此文本
-    g_da_sim_tool_calls       = neograph::json::array();
+    g_da_sim_tool_calls = neograph::json::array();
     // 接下来 2 次请求返回 500: 第 1 次失败 + 1 次重试失败
     g_da_sim_fail_count = 2;
 

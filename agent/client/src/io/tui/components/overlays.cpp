@@ -776,17 +776,25 @@ Element PlanDiagramOverlay::OnRender() {
         text(" "),
     });
 
-    // 弹窗大小: 默认 4/5 屏 (小终端保底 10 行), 在 ModalContainer 中居中后
-    // 四周自然露出背景色边距; 宽度下限 40 与状态图渲染预算保持一致。
+    // 弹窗大小: 期望 4/5 屏, 但不超过窗口可用空间 (减去边距)。
+    // 窗口不足时用尽可用空间而不溢出 —— 弹窗超过窗口会被 center 布局
+    // 裁掉 header/footer, 无法关闭/查看。
     // 注意: 高度必须同时给 GREATER_THAN 下限 —— Scrollable 的 ListView 为惰性
     // viewport (ComputeRequirement 返回 min_y=0), 滚动区 hbox 自然高度仅 1 行,
     // 若只有 LESS_THAN 上限, 弹窗在 center 下按自然高度 (~5 行) 摆放,
     // 状态图会被压缩成 1 行高度。GREATER_THAN+LESS_THAN 组合等价于固定高度,
     // 滚动区由内部 |flex 撑满剩余行。
+    // 期望保底: 宽 40 (状态图渲染预算下限); 高 14 (总高扣除 border 2 行 +
+    // header/separator/footer 4 行后, 滚动内容区 >= 8 行, 状态图可读可滚)。
     const int margin = 2;
-    const int maxW   = std::max(40, Terminal::Size().dimx - margin * 2);
-    const int maxH   = std::max(10, Terminal::Size().dimy - margin * 2);
-    const int popupH = std::max(10, maxH * 4 / 5);
+    const int termW  = Terminal::Size().dimx;
+    const int termH  = Terminal::Size().dimy;
+    const int wantW  = std::max(40, termW * 4 / 5);
+    const int wantH  = std::max(14, termH * 4 / 5);
+    const int availW = std::max(1, termW - margin * 2);
+    const int availH = std::max(1, termH - margin * 2);
+    const int popupW = std::min(wantW, availW);
+    const int popupH = std::min(wantH, availH);
     return vbox({
                header,
                separator(),
@@ -794,7 +802,7 @@ Element PlanDiagramOverlay::OnRender() {
                separator(),
                text(" [Wheel/Up/Down] Scroll  [Esc] Close ") | center | dim,
            })
-           | border | size(WIDTH, LESS_THAN, maxW * 4 / 5) | size(WIDTH, GREATER_THAN, 40)
+           | border | size(WIDTH, GREATER_THAN, popupW) | size(WIDTH, LESS_THAN, popupW)
            | size(HEIGHT, GREATER_THAN, popupH) | size(HEIGHT, LESS_THAN, popupH)
            | color(theme.accentColor);
 }

@@ -271,7 +271,7 @@ asio::awaitable<std::expected<WsMessage, std::string>> WsClient::recv() {
             try {
                 std::string payload;
                 std::string chunk;
-                chunk.resize(4096);
+                chunk.resize(1024 * 16);
 
                 if (impl_->isSsl) {
                     do {

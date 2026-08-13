@@ -483,7 +483,7 @@ private:
 
 /// GraphEvent -> 会话增量 Delta + EventBus 适配器
 /// - 接替 BaseAgent 的 llm callback 职责: 把 neograph 的 GraphStreamCallback 翻译成:
-///   1. 会话增量 Delta (TextToken/ThinkingToken/ToolStart/ToolEnd/NodeStart/NodeEnd/MessageTip),
+///   1. 会话增量 Delta (TextToken/ThinkingToken/ToolStart/ToolEnd/NodeStart/NodeEnd/MessageUITip),
 ///      经 emitDelta 发送到对端 (TUI/stdio), 并写入会话历史 (appendHistory)
 ///   2. 强类型总线事件发布 (EventBus: ModelToken/Error 等)
 ///   3. 可选转发到原始 callback (origCb)
@@ -592,10 +592,10 @@ private:
     ///   (handleNodeStart/handleNodeEnd/handleError 都会重置该标记)
     /// - 仅在 io 线程访问, 无需同步
     std::chrono::steady_clock::time_point tpsStartTime_{};
-    double                                tpsTokenCount_     = 0.0; ///< 当前流累计估算 token 数
-    double                                tpsLastPushSec_    = 0.0; ///< 上次推送时的累计秒数
-    double                                tpsLastPushToken_  = 0.0; ///< 上次推送时的累计 token 数
-    double                                tpsPushIntervalSec_ = 3.0; ///< 推送间隔 (秒)
+    double                                tpsTokenCount_ = 0.0; ///< 当前流累计估算 token 数
+    double                                tpsLastPushSec_ = 0.0; ///< 上次推送时的累计秒数
+    double tpsLastPushToken_   = 0.0; ///< 上次推送时的累计 token 数
+    double tpsPushIntervalSec_ = 3.0; ///< 推送间隔 (秒)
 
     /// 轮级 tps (token/s) 统计: 一轮会话内所有 ModelCall 的累计估算 token 与
     /// 累计流式耗时 (仅计 LLM 流式期间, 不含 tool 执行等间隔)

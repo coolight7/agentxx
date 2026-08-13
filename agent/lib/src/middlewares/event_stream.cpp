@@ -154,7 +154,7 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
     auto chan  = event.data.value("channel", std::string{});
     auto value = event.data.value("value", neograph::json{});
 
-    // 通用提示消息: 转发为 Delta::MessageTip, 由 client 端插入提示消息
+    // 通用提示消息: 转发为 Delta::MessageUITip, 由 client 端插入提示消息
     if (chan == "message_tip" && value.is_object()) {
         auto       tipType = Delta::TipType::Info;
         const auto tip     = value.value("tip_type", std::string{"info"});
@@ -164,7 +164,7 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
             tipType = Delta::TipType::Error;
         }
         emitDelta(Delta{
-            .type    = Delta::Type::MessageTip,
+            .type    = Delta::Type::MessageUITip,
             .text    = value.value("text", std::string{}),
             .tipType = tipType,
         });
