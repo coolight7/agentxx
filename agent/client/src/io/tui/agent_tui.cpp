@@ -26,6 +26,7 @@
 #include "ftxui/screen/terminal.hpp"
 #include "neograph/graph/cancel.h"
 #include <algorithm>
+#include <atomic>
 #include <charconv>
 #include <cstdint>
 #include <format>
@@ -33,6 +34,68 @@
 #include <memory>
 
 using namespace ftxui;
+
+// ---------------------------------------------------------------------------
+// 系统剪贴板写入 (跨平台)
+// ---------------------------------------------------------------------------
+// Ctrl+Insert 复制鼠标选中文本时调用; 仅写入, 不读取。
+//
+// 实现:
+// - Windows: Win32 API (OpenClipboard + SetClipboardData(CF_UNICODETEXT)),
+//   对任何图形终端/控制台均可靠
+// - 其他平台 (Linux/macOS/WSL): OSC 52 转义序列写入终端主剪贴板,
+//   依赖终端模拟器支持 (xterm/Windows Terminal/wezterm/kitty 等; tmux 需配置)
+
+#if defined(_WIN32)
+#include <windows.h>
+
+/// Windows: UTF-8 文本写入系统剪贴板 (UTF-8 -> UTF-16)
+static bool copyTextToSystemClipboard(const std::string& text) {
+    if (text.empty()) {
+        return false;
+    }
+    // OpenClipboard(nullptr): 不关联具体窗口, 供无 GUI 窗口句柄的线程使用
+    if (!OpenClipboard(nullptr)) {
+        return false;
+    }
+    EmptyClipboard();
+    bool ok = false;
+    const int wlen = MultiByteToWideChar(
+        CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0
+    );
+    if (wlen > 0) {
+        HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, static_cast<SIZE_T>(wlen + 1) * sizeof(wchar_t));
+        if (hMem) {
+            wchar_t* dst = static_cast<wchar_t*>(GlobalLock(hMem));
+            if (dst) {
+                MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), dst, wlen);
+                dst[wlen] = L'\0';
+                GlobalUnlock(hMem);
+                // 成功时剪贴板拥有 hMem 所有权; 失败则释放, 避免泄漏
+                ok = SetClipboardData(CF_UNICODETEXT, hMem) != nullptr;
+                if (!ok) {
+                    GlobalFree(hMem);
+                }
+            } else {
+                GlobalFree(hMem);
+            }
+        }
+    }
+    CloseClipboard();
+    return ok;
+}
+#else
+
+/// 其他平台: OSC 52 序列写入终端主剪贴板 (c = CLIPBOARD)
+static bool copyTextToSystemClipboard(const std::string& text) {
+    if (text.empty()) {
+        return false;
+    }
+    // ESC ] 52 ; c ; <base64> BEL — 无可见输出, 与 FTXUI 屏幕刷新流交错安全
+    std::cout << "\x1b]52;c;" << agentxx::util::base64Encode(text) << "\x07" << std::flush;
+    return true;
+}
+#endif
 
 // ---------------------------------------------------------------------------
 // 构造 / 析构
@@ -114,6 +177,36 @@ void TUIClientAgentIO::showToast(std::string text) {
             postRedraw();
         }
     });
+}
+
+// ---------------------------------------------------------------------------
+// 复制鼠标选中的文本 (Ctrl+Insert)
+// ---------------------------------------------------------------------------
+
+void TUIClientAgentIO::copySelectionToClipboard() {
+    std::shared_ptr<ScreenInteractive> s;
+    {
+        std::lock_guard<std::mutex> lock(screenMutex_);
+        s = screen_;
+    }
+    if (!s) {
+        return;
+    }
+    // GetSelection(): 返回上一次绘制帧中累积的选中文本 (FTXUI 在每帧
+    // Render 时按当前 Selection 收集各文本节点选中的部分);
+    // TUI 为全屏模式, selection 坐标为屏幕绝对坐标, 无需校正
+    const std::string text = s->GetSelection();
+    if (text.empty()) {
+        showToast("未选中文本");
+        return;
+    }
+    const bool ok = copyTextToSystemClipboard(text);
+    if (ok) {
+        showToast(fmt::format("已复制 {} 字符", text.size()));
+    } else {
+        showToast("复制失败 (剪贴板不可用)");
+    }
+    postRedraw();
 }
 
 // ---------------------------------------------------------------------------
@@ -298,28 +391,62 @@ void TUIClientAgentIO::start() {
                 screen->Exit();
                 return true;
             }
-            // 模态弹窗打开时: 优先让弹窗处理 (Escape 关闭弹窗等), 不拦截
-            if (modal_->hasModal()) {
+            // Ctrl+Insert (\x1B[2;5~): 复制鼠标选中文本到系统剪贴板。
+            // - 置于 modal 检查之前: 弹窗打开时也可复制 (例如复制弹窗内文本)
+            // - 此处是事件分发最外层 (CatchEvent 先于子组件执行), GetSelection()
+            //   读取的是上一绘制帧累积的选中文本, 与屏幕显示一致
+            // - 返回 false (不消费): 使 HandleSelection 不清除当前选择,
+            //   复制后选中高亮保持; 子组件不认识该按键, 无副作用
+            if (event.input() == "\x1B[2;5~") {
+                copySelectionToClipboard();
                 return false;
             }
-            if (event == Event::F2) {
-                openModelSelector();
-                return true;
-            }
-            if (event == Event::F3) {
-                openSettings();
-                return true;
-            }
-            if (event == Event::F4) {
-                openSessionSelector();
-                return true;
-            }
-            if (event == Event::F12) {
-                toggleLogWindow();
-                return true;
-            }
+            // 鼠标事件: 拖选跟踪在任何状态下生效 (弹窗内文本同样支持拖选复制)
             if (event.is_mouse()) {
                 const auto& mouse = event.mouse();
+                // ---- 拖选跟踪 (松开即复制) ----
+                // Windows Terminal 等终端会拦截 Ctrl+Insert 作为终端复制 (不转发给
+                // 应用), 故以"左键按下并拖动后松开"作为主要复制入口:
+                // - Pressed:   记录按下 (单击判定起点)
+                // - Moved:     SGR 拖动事件仅在按键按下并移动时上报, 出现即视为拖选
+                // - Released:  发生过拖动 -> 自动复制选中文本 (GetSelection 取上一
+                //               绘制帧累积的选择, 已含本次拖动终点) + toast 提示
+                // - 单击 (无拖动): 不复制, 保持原有的点击交互 (按钮/折叠/拖拽条等)
+                if (mouse.button == Mouse::Left) {
+                    if (mouse.motion == Mouse::Pressed) {
+                        mouseDown_    = true;
+                        mouseDragged_ = false;
+                    } else if (mouse.motion == Mouse::Moved) {
+                        if (mouseDown_) {
+                            mouseDragged_ = true;
+                        }
+                    } else if (mouse.motion == Mouse::Released) {
+                        const bool wasDrag = mouseDragged_;
+                        mouseDown_         = false;
+                        mouseDragged_      = false;
+                        if (wasDrag) {
+                            copySelectionToClipboard();
+                            // 清除选中高亮: 复制已完成; 懒加载列表跳过 FTXUI
+                            // 每帧 ComputeRequirement, Text 节点的选中反色不会
+                            // 自动复位, 需显式清除 (见 resetSelectionHighlight)
+                            if (messageList_) {
+                                messageList_->clearSelectionHighlight();
+                            }
+                            if (sidebar_) {
+                                sidebar_->clearSelectionHighlight();
+                            }
+                            // 消费事件: 拖选释放不应触发下方按钮/折叠点击;
+                            // (handleSelection(handled=true) 将清除选择高亮,
+                            // 复制已完成, 符合"松开即复制"语义)
+                            return true;
+                        }
+                    }
+                }
+                // 模态弹窗打开时: 主界面不可见 (命中 box 为残留值), 跳过主界面
+                // 按钮点击检测, 事件交予弹窗组件处理
+                if (modal_->hasModal()) {
+                    return false;
+                }
                 if (mouse.button == Mouse::Left && mouse.motion == Mouse::Released) {
                     // 连接失败 banner 的"重试"按钮点击 → 重新发起连接
                     if (messageList_ && messageList_->retryButtonBox().Contain(mouse.x, mouse.y)) {
@@ -363,6 +490,26 @@ void TUIClientAgentIO::start() {
                     }
                 }
                 return false;
+            }
+            // 模态弹窗打开时: 键盘优先让弹窗处理 (Escape 关闭弹窗等), 不拦截
+            if (modal_->hasModal()) {
+                return false;
+            }
+            if (event == Event::F2) {
+                openModelSelector();
+                return true;
+            }
+            if (event == Event::F3) {
+                openSettings();
+                return true;
+            }
+            if (event == Event::F4) {
+                openSessionSelector();
+                return true;
+            }
+            if (event == Event::F12) {
+                toggleLogWindow();
+                return true;
             }
             if (event == Event::Escape) {
                 std::lock_guard<std::mutex> lock(sharedState_.mutex());

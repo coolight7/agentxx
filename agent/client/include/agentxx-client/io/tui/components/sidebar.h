@@ -64,6 +64,12 @@ public:
         onFooterClick_ = std::move(fn);
     }
 
+    /// 清除侧边栏可见项的鼠标选中高亮 (拖选松开复制完成后调用;
+    /// 转发给 scrollable_ 的 resetSelectionHighlight)
+    void clearSelectionHighlight() {
+        scrollable_->resetSelectionHighlight();
+    }
+
     ftxui::Element OnRender() override;
     bool           OnEvent(ftxui::Event event) override;
 

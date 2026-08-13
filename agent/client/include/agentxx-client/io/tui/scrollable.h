@@ -86,6 +86,19 @@ public:
         return visibleBoxes_;
     }
 
+    /// 清除可见子项残留的鼠标选中高亮 (Text::has_selection_)。
+    /// 背景与实现同 LazyScrollable::resetSelectionHighlight:
+    /// 本组件跳过 FTXUI 每帧 ComputeRequirement, Text 节点的选择状态不会
+    /// 自动复位, 需显式对可见子项执行 ComputeRequirement 归零 (幂等)。
+    void resetSelectionHighlight() {
+        for (size_t i = 0; i < items_.size(); ++i) {
+            if (i < visibleBoxes_.size() && !visibleBoxes_[i].IsEmpty()
+                && items_[i].element) {
+                items_[i].element->ComputeRequirement();
+            }
+        }
+    }
+
     // === ComponentBase 接口 ===
     ftxui::Element OnRender() override;
     bool           OnEvent(ftxui::Event event) override;

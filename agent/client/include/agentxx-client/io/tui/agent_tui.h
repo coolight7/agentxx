@@ -117,6 +117,13 @@ public:
     using PendingInput = TUIPendingInput;
     using RenderState  = TUIRenderState;
 
+    /// 复制鼠标选中的文本到系统剪贴板 (Ctrl+Insert 触发, UI 线程调用):
+    /// - 从 FTXUI Screen 的当前 selection 提取文本 (GetSelection)
+    /// - 写入系统剪贴板: Windows 用 Win32 API, 其他平台用 OSC 52 转义序列
+    ///   (依赖终端模拟器支持, 如 Windows Terminal/wezterm/kitty/xterm)
+    /// - 无选中文本时仅 toast 提示, 不弹窗
+    void copySelectionToClipboard();
+
     explicit TUIClientAgentIO(
         asio::any_io_executor ex,
         std::string           threadId = "session",
@@ -319,6 +326,14 @@ private:
     std::shared_ptr<asio::steady_timer> toastTimer_;
     /// toast 显示时长
     static constexpr std::chrono::seconds kToastDuration{3};
+
+    // ---- 鼠标拖选跟踪 (UI 线程独占, 用于"松开即复制") ----
+    /// 左键是否处于按下状态 (Left Pressed 置位, Released 复位)
+    bool mouseDown_ = false;
+    /// 按下后是否发生过拖动 (Left Moved 置位); Released 且该标志为真时
+    /// 判定为一次拖选完成 -> 自动复制选中文本并 toast 提示。
+    /// 单击 (无拖动) 不复制, 保持原有点击交互 (按钮/折叠/拖拽条等)
+    bool mouseDragged_ = false;
 
     // ---- UI 线程动作队列 ----
     /// client 线程投递、UI 线程 (帧循环开头) 消费的组件操作队列;
