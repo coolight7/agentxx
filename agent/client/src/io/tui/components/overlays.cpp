@@ -23,12 +23,12 @@ Element ModelSelectorOverlay::OnRender() {
 
     Elements items;
     for (size_t i = 0; i < st.modelNames.size(); ++i) {
-        auto entry = text(fmt::format(" {} ", st.modelNames[i]));
+        auto entry = text(st.modelNames[i]);
         if (static_cast<int>(i) == selectedIndex_) {
             entry = entry | bgcolor(theme.buttonActiveBgColor) | color(theme.buttonActiveTextColor)
-                    | bold | focus;
+                    | focus;
         } else {
-            entry = entry | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor);
+            entry = entry | color(theme.normalColor);
         }
         items.push_back(entry);
     }
@@ -37,12 +37,16 @@ Element ModelSelectorOverlay::OnRender() {
     if (st.modelNames.empty()) {
         // 尚未收到服务端模型信息响应 → 加载中; 已收到但为空 → 确实无可用模型
         if (!st.modelInfoLoaded) {
-            list = text(" Loading models... ") | dim;
+            list = text("Loading models...") | dim;
         } else {
-            list = text(" (no models available) ") | dim;
+            list = text("(no models available)") | dim;
         }
     } else {
-        list = vbox(std::move(items)) | yframe | vscroll_indicator
+        list = hbox({
+                   text(" "),
+                   vbox(std::move(items)) | bold | yframe | vscroll_indicator,
+                   text(" "),
+               })
                | size(HEIGHT, LESS_THAN, maxVisible);
     }
 
@@ -119,7 +123,7 @@ Element SessionSelectorOverlay::OnRender() {
 
     // 顶部固定 "新会话" 项 (列表加载中也常驻, 保证始终可新建)
     {
-        auto newEntry = text(" + 新会话 ");
+        auto newEntry = text("+ 新会话");
         if (selectedIndex_ == 0) {
             newEntry = newEntry | bgcolor(theme.buttonActiveBgColor)
                        | color(theme.buttonActiveTextColor) | focus;
@@ -131,44 +135,30 @@ Element SessionSelectorOverlay::OnRender() {
 
     if (!st.sessionListLoaded) {
         // 列表请求已发出, 响应尚未到达
-        items.push_back(text(" Loading sessions... ") | dim);
+        items.push_back(text("Loading sessions...") | dim);
     } else if (st.sessionList.empty()) {
-        items.push_back(text(" (no persisted sessions) ") | dim);
+        items.push_back(text("(no persisted sessions)") | dim);
     } else {
         for (size_t i = 0; i < st.sessionList.size(); ++i) {
             const auto& s = st.sessionList[i];
             // 第一行: 会话名称 (title 为空时回退 threadId)
             const std::string title     = s.title.empty() ? s.threadId : s.title;
             const bool        isCurrent = (s.threadId == ctx_.threadId);
-            auto              nameLine  = text(fmt::format(" {} ", title));
-            if (isCurrent) {
-                nameLine = nameLine | bold;
-            }
             // 第二行: 最近活动日期
-            auto dateLine = text(fmt::format(
-                                "   {} ",
-                                agentxx::util::formatDateTimeMilliseconds(s.lastActiveMs)
-                            ))
-                            | dim;
+            auto dateLine = text(agentxx::util::formatDateTimeMilliseconds(s.lastActiveMs)) | dim;
 
             // 当前会话条目: 名称后附加 "(current)" 标记
-            Element row = vbox({nameLine, dateLine});
-            if (isCurrent) {
-                row = vbox({
-                    hbox({
-                        text(fmt::format(" {} ", title)) | bold,
-                        text(" (current) ") | color(theme.accentColor),
-                    }),
-                    dateLine,
-                });
-            }
+            Element row = vbox({
+                isCurrent ? text(fmt::format("{} (current)", title)) : text(title),
+                dateLine,
+            });
 
             // +1: 会话条目从索引 1 开始 (0 为 "新会话" 入口)
             if (static_cast<int>(i) + 1 == selectedIndex_) {
                 row = row | bgcolor(theme.buttonActiveBgColor) | color(theme.buttonActiveTextColor)
                       | focus;
             } else {
-                row = row | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor);
+                row = row | color(theme.normalColor);
             }
             items.push_back(row | reflect(itemBoxes_[i + 1]));
         }
@@ -177,8 +167,11 @@ Element SessionSelectorOverlay::OnRender() {
     return vbox({
                text(" Select Session ") | bold | inverted,
                separator(),
-               vbox(std::move(items)) | yframe | vscroll_indicator
-                   | size(HEIGHT, LESS_THAN, maxVisible),
+               hbox({
+                   text(" "),
+                   vbox(std::move(items)) | bold | yframe | vscroll_indicator,
+                   text(" "),
+               }) | size(HEIGHT, LESS_THAN, maxVisible),
                separator(),
                text(" [Up/Down] Move  [Enter] Switch  [Esc] Cancel ") | center | dim,
            })

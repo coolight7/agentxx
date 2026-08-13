@@ -367,8 +367,10 @@ void TUIClientAgentIO::start() {
                             text(" "),
                             hbox({
                                 filler(),
-                                text(toastText_) | bold | border | bgcolor(theme_.buttonBgColor)
-                                    | color(theme_.buttonTextColor),
+                                hbox({
+                                    text(toastText_) | bold | bgcolor(theme_.buttonBgColor)
+                                        | color(theme_.buttonTextColor),
+                                }) | border,
                                 filler(),
                             }),
                             filler(),
