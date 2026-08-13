@@ -59,16 +59,22 @@ static bool copyTextToSystemClipboard(const std::string& text) {
         return false;
     }
     EmptyClipboard();
-    bool ok = false;
-    const int wlen = MultiByteToWideChar(
-        CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0
-    );
+    bool      ok = false;
+    const int wlen
+        = MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0);
     if (wlen > 0) {
         HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, static_cast<SIZE_T>(wlen + 1) * sizeof(wchar_t));
         if (hMem) {
             wchar_t* dst = static_cast<wchar_t*>(GlobalLock(hMem));
             if (dst) {
-                MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), dst, wlen);
+                MultiByteToWideChar(
+                    CP_UTF8,
+                    0,
+                    text.data(),
+                    static_cast<int>(text.size()),
+                    dst,
+                    wlen
+                );
                 dst[wlen] = L'\0';
                 GlobalUnlock(hMem);
                 // 成功时剪贴板拥有 hMem 所有权; 失败则释放, 避免泄漏
@@ -361,7 +367,7 @@ void TUIClientAgentIO::start() {
                             text(" "),
                             hbox({
                                 filler(),
-                                text(toastText_) | bold | bgcolor(theme_.buttonBgColor)
+                                text(toastText_) | bold | border | bgcolor(theme_.buttonBgColor)
                                     | color(theme_.buttonTextColor),
                                 filler(),
                             }),
