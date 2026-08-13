@@ -43,9 +43,9 @@ struct ScrollFixture {
     static constexpr int kHeight = 20;
 
     ScrollFixture() {
-        ctx.state      = &sharedState;
-        ctx.frameState = sharedState.readSnapshot();
-        ctx.postRedraw = [] {};
+        ctx.state          = &sharedState;
+        ctx.frameState     = sharedState.readSnapshot();
+        ctx.postRedraw     = [] {};
         ctx.theme          = &theme;
         ctx.showSystemInfo = nullptr;
         ctx.threadId       = "s";
@@ -82,9 +82,9 @@ struct ScrollFixture {
     /// 同流追加时保持相同 epoch (与 onDelta 的 COW/原地 append 语义一致)
     void setTokenEpoch(uint64_t epoch, const std::string& tok) {
         sharedState.mutate([&](TUIRenderState& st) {
-            st.currentToken     = std::make_shared<std::string>(tok);
+            st.currentToken      = std::make_shared<std::string>(tok);
             st.currentTokenEpoch = epoch;
-            st.isStreaming      = true;
+            st.isStreaming       = true;
         });
     }
 
@@ -94,8 +94,8 @@ struct ScrollFixture {
     /// 若浅拷贝 (共享指针), key 不变, 无法模拟缓存失效路径
     void rebuildState() {
         sharedState.mutate([&](TUIRenderState& st) {
-            auto prev = sharedState.snapshot();
-            auto ns   = std::make_shared<TUIRenderState>();
+            auto prev       = sharedState.snapshot();
+            auto ns         = std::make_shared<TUIRenderState>();
             ns->isStreaming = false;
             ns->messages.reserve(prev->messages.size());
             for (const auto& m : prev->messages) {
@@ -109,9 +109,9 @@ struct ScrollFixture {
     void endStream() {
         sharedState.mutate([&](TUIRenderState& st) {
             if (st.currentToken && !st.currentToken->empty()) {
-                auto m      = std::make_shared<TUIMessage>();
-                m->role     = TUIMessage::Role::Assistant;
-                m->text     = *st.currentToken;
+                auto m  = std::make_shared<TUIMessage>();
+                m->role = TUIMessage::Role::Assistant;
+                m->text = *st.currentToken;
                 st.messages.push_back(std::move(m));
             }
             st.currentToken.reset();
@@ -123,8 +123,10 @@ struct ScrollFixture {
     std::string render() {
         ctx.frameState = sharedState.readSnapshot();
         auto el        = comp->Render();
-        auto screen
-            = ftxui::Screen::Create(ftxui::Dimension::Fixed(kWidth), ftxui::Dimension::Fixed(kHeight));
+        auto screen    = ftxui::Screen::Create(
+            ftxui::Dimension::Fixed(kWidth),
+            ftxui::Dimension::Fixed(kHeight)
+        );
         ftxui::Render(screen, el);
         return screen.ToString();
     }
@@ -148,7 +150,7 @@ struct ScrollFixture {
     /// 取渲染文本的最后 n 行 (消息子项尾部带空行, 标记可能落在倒数第二行)
     static std::string lastLines(const std::string& screen, int n) {
         std::vector<std::string> lines;
-        std::string              s = screen;
+        std::string              s   = screen;
         size_t                   pos = 0;
         while ((pos = s.find('\n')) != std::string::npos) {
             lines.push_back(s.substr(0, pos));
@@ -158,8 +160,8 @@ struct ScrollFixture {
             lines.push_back(s);
         }
         std::string out;
-        for (size_t k = (lines.size() > static_cast<size_t>(n)) ? lines.size() - static_cast<size_t>(n)
-                                                                : 0;
+        for (size_t k
+             = (lines.size() > static_cast<size_t>(n)) ? lines.size() - static_cast<size_t>(n) : 0;
              k < lines.size();
              ++k) {
             out += lines[k];
@@ -187,8 +189,8 @@ TestResult testTuiScroll() {
         std::string tok;
         for (int step = 0; step < 25; ++step) {
             // 每步追加带唯一尾部标记的 token (标记落在流式项最后一行)
-            tok += "new token content " + std::to_string(step) + " with some words "
-                   + "M" + std::to_string(step) + "END ";
+            tok += "new token content " + std::to_string(step) + " with some words " + "M"
+                   + std::to_string(step) + "END ";
             f.setToken(tok);
             // 内容帧: token 增长后首帧渲染
             std::string contentFrame = f.render();
@@ -199,7 +201,7 @@ TestResult testTuiScroll() {
             // 吸附底部: 屏幕最底行必须包含最新 token 的尾部标记 (不能多出空行)
             XX_TEST_EXPECT_TRUE(
                 ScrollFixture::lastLine(contentFrame).find("M" + std::to_string(step) + "END")
-                    != std::string::npos
+                != std::string::npos
             );
         }
     }
@@ -268,8 +270,8 @@ TestResult testTuiScroll() {
         std::string tok;
         for (int step = 0; step < 15; ++step) {
             // 长串无空格文本 (估算/实测偏差大) + 短标记
-            tok += "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" + std::to_string(step)
-                   + " ";
+            tok += "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                   + std::to_string(step) + " ";
             f.setToken(tok);
             std::string c1 = f.render();
             std::string c2 = f.render();
@@ -304,16 +306,12 @@ TestResult testTuiScroll() {
         // 用户发送消息后新一轮首 token: epoch 0 -> 1, 与 UI 缓存的 streamEpoch_ 相等
         f.setTokenEpoch(1, "second stream marker S2ND");
         std::string frame = f.render();
-        XX_TEST_EXPECT_TRUE(
-            ScrollFixture::lastLine(frame).find("S2ND") != std::string::npos
-        );
+        XX_TEST_EXPECT_TRUE(ScrollFixture::lastLine(frame).find("S2ND") != std::string::npos);
 
         // 同流后续 token 追加 (epoch 不变) 仍正常增量显示
         f.setTokenEpoch(1, "second stream marker S2ND with more tail T3ST");
         std::string frame2 = f.render();
-        XX_TEST_EXPECT_TRUE(
-            ScrollFixture::lastLine(frame2).find("T3ST") != std::string::npos
-        );
+        XX_TEST_EXPECT_TRUE(ScrollFixture::lastLine(frame2).find("T3ST") != std::string::npos);
     }
 
     {
@@ -327,7 +325,7 @@ TestResult testTuiScroll() {
         f.render(); // 建立缓存与布局
         std::string before = f.render();
 
-        f.comp->invalidateCache(); // 模拟主题切换: 清空渲染缓存
+        f.comp->invalidateCache();           // 模拟主题切换: 清空渲染缓存
         std::string afterClear = f.render(); // 缓存重建首帧: 必须重新布局
         XX_TEST_EXPECT_TRUE(before == afterClear);
 
@@ -382,9 +380,7 @@ TestResult testTuiScroll() {
         });
         f.comp->setStickToBottom(true);
         std::string frame = f.render();
-        XX_TEST_EXPECT_TRUE(
-            ScrollFixture::lastLines(frame, 3).find("USRM") != std::string::npos
-        );
+        XX_TEST_EXPECT_TRUE(ScrollFixture::lastLines(frame, 3).find("USRM") != std::string::npos);
         XX_TEST_EXPECT_TRUE(frame == f.render());
     }
 
@@ -413,8 +409,8 @@ TestResult testTuiScroll() {
         if (rebuilt.find("short line 29") == std::string::npos) {
             fprintf(stderr, "[DBG8c] rebuilt missing short line 29, dump:\n");
             // 分行打印 (转义序列干扰行内查找, 但可看行分布)
-            std::string s = rebuilt;
-            size_t pos = 0, lineNo = 0;
+            std::string s   = rebuilt;
+            size_t      pos = 0, lineNo = 0;
             while ((pos = s.find('\n')) != std::string::npos) {
                 fprintf(stderr, "  L%02zu: %s\n", lineNo++, s.substr(0, pos).c_str());
                 s.erase(0, pos + 1);
@@ -436,10 +432,118 @@ TestResult testTuiScroll() {
         });
         f.comp->setStickToBottom(true);
         std::string frame = f.render();
-        XX_TEST_EXPECT_TRUE(
-            ScrollFixture::lastLines(frame, 3).find("USRM") != std::string::npos
-        );
+        XX_TEST_EXPECT_TRUE(ScrollFixture::lastLines(frame, 3).find("USRM") != std::string::npos);
         XX_TEST_EXPECT_TRUE(frame == f.render());
+    }
+
+    {
+        // 场景 9: System 消息支持折叠且默认折叠显示; 点击 header 折叠/展开
+        ScrollFixture f;
+        f.sharedState.mutate([&](TUIRenderState& st) {
+            auto m       = std::make_shared<TUIMessage>();
+            m->role      = TUIMessage::Role::System;
+            m->system    = TUIMessage::SystemData{};
+            m->collapsed = true; // 默认折叠 (与 makeText(Role::System) 语义一致)
+            m->text      = "system tip body line that is long enough to be truncated "
+                           "in the collapsed preview with unique tail marker "
+                           "SYSM_TAIL_9XYZ";
+            st.messages.push_back(std::move(m));
+        });
+
+        // 点击命中区域由上一帧 visibleBoxes 反推: 渲染两帧建立布局与命中盒
+        f.render();
+        f.render();
+
+        // 折叠态: header 显示 "+ " 折叠标记 + "# " 前缀 + 单行预览,
+        // 正文尾部标记 (超出 preview 截断) 不显示
+        std::string collapsed1 = f.render();
+        XX_TEST_EXPECT_TRUE(collapsed1.find("+ # ") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(collapsed1.find("SYSM_TAIL_9XYZ") == std::string::npos);
+
+        // 模拟点击 header → 展开 (消费事件, 且消息折叠状态翻转)
+        bool clicked = false;
+        for (const auto& box : f.comp->collapsibleBoxes()) {
+            if (box.IsEmpty()) {
+                continue;
+            }
+            ftxui::Mouse m;
+            m.button = ftxui::Mouse::Left;
+            m.motion = ftxui::Mouse::Released;
+            m.x      = (box.x_min + box.x_max) / 2;
+            m.y      = (box.y_min + box.y_max) / 2;
+            clicked  = f.comp->OnEvent(ftxui::Event::Mouse("", m));
+            break;
+        }
+        XX_TEST_EXPECT_TRUE(clicked);
+
+        // 展开态: "- " 展开标记 + 正文完整显示 (尾部标记可见)
+        std::string expanded = f.render();
+        XX_TEST_EXPECT_TRUE(expanded.find("- # ") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(expanded.find("SYSM_TAIL_9XYZ") != std::string::npos);
+
+        // 状态确实更新为展开
+        auto snap = f.sharedState.readSnapshot();
+        XX_TEST_EXPECT_TRUE(!snap->messages.empty() && !snap->messages[0]->collapsed);
+
+        // 再次点击 → 重新折叠 (先渲染刷新命中区域: 展开后消息更高, box 更大)
+        f.render();
+        clicked = false;
+        for (const auto& box : f.comp->collapsibleBoxes()) {
+            if (box.IsEmpty()) {
+                continue;
+            }
+            ftxui::Mouse m;
+            m.button = ftxui::Mouse::Left;
+            m.motion = ftxui::Mouse::Released;
+            m.x      = (box.x_min + box.x_max) / 2;
+            m.y      = (box.y_min + box.y_max) / 2;
+            clicked  = f.comp->OnEvent(ftxui::Event::Mouse("", m));
+            break;
+        }
+        XX_TEST_EXPECT_TRUE(clicked);
+        std::string collapsed2 = f.render();
+        XX_TEST_EXPECT_TRUE(collapsed2.find("+ # ") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(collapsed2.find("SYSM_TAIL_9XYZ") == std::string::npos);
+        snap = f.sharedState.readSnapshot();
+        XX_TEST_EXPECT_TRUE(!snap->messages.empty() && snap->messages[0]->collapsed);
+    }
+
+    {
+        // 场景 9b: System 消息折叠态按提示级别显示对应前缀 (Warning/Error)
+        ScrollFixture f;
+        f.sharedState.mutate([&](TUIRenderState& st) {
+            auto m              = std::make_shared<TUIMessage>();
+            m->role             = TUIMessage::Role::System;
+            m->system           = TUIMessage::SystemData{};
+            m->system->tipLevel = TUIMessage::TipLevel::Warning;
+            m->collapsed        = true;
+            m->text             = "warning tip body with marker WRN_TAIL_7K";
+            st.messages.push_back(std::move(m));
+
+            auto m2              = std::make_shared<TUIMessage>();
+            m2->role             = TUIMessage::Role::System;
+            m2->system           = TUIMessage::SystemData{};
+            m2->system->tipLevel = TUIMessage::TipLevel::Error;
+            m2->collapsed        = true;
+            m2->text             = "error tip body with marker ERR_TAIL_8M";
+            st.messages.push_back(std::move(m2));
+
+            auto m3       = std::make_shared<TUIMessage>();
+            m3->role      = TUIMessage::Role::System;
+            m3->system    = TUIMessage::SystemData{};
+            m3->collapsed = true;
+            m3->text      = "info tip body with marker INF_TAIL_6N";
+            st.messages.push_back(std::move(m3));
+        });
+        f.render();
+        f.render();
+        std::string frame = f.render();
+        XX_TEST_EXPECT_TRUE(frame.find("# [Warn]") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(frame.find("# [Error]") != std::string::npos);
+        // 三条 System 消息均渲染 (折叠态预览含完整短文本 marker)
+        XX_TEST_EXPECT_TRUE(frame.find("WRN_TAIL_7K") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(frame.find("ERR_TAIL_8M") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(frame.find("INF_TAIL_6N") != std::string::npos);
     }
 
     return TestResult{g_tui_scroll_passed, g_tui_scroll_failed};

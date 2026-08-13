@@ -1,8 +1,8 @@
 // 注意顺序: test_session_persistence.h 会把 XX_TEST_PASSED/FAILED 重定义为
 // g_sp_*, 必须包含在 test_agent.h 之后 (test_agent.h 会重定义为 g_da_*),
 // 使本模块测试计数回落到 g_sp_* 而非计入 agent 模块
-#include "test_agent.h"
 #include "test_session_persistence.h"
+#include "test_agent.h"
 
 #include "agentxx/agent/code_agent.h"
 #include "agentxx/agent/context.h"
@@ -325,10 +325,10 @@ static TestResult testUpdateHistoryPersistence() {
         t.toolCallId   = "call_x";
         t.toolFinished = false; // 尚未收到结果
         toolMsg.tool   = std::move(t);
-        auto toolId = s1->appendHistory(std::move(toolMsg));
+        auto toolId    = s1->appendHistory(std::move(toolMsg));
 
         // 模拟 tool 结果回填: 走 Session::updateHistory (触发 onUpdateMessage 落库)
-        auto& stored = s1->viewMessages.back();
+        auto& stored              = s1->viewMessages.back();
         stored.tool->toolResult   = "file content";
         stored.tool->toolFinished = true;
         stored.collapsed          = true;
@@ -355,7 +355,7 @@ static TestResult testUpdateHistoryPersistence() {
         XX_TEST_EXPECT_EQ(s2->getHashInfo().count, size_t{2});
 
         // 不存在的 id: 仅记日志, 不崩溃
-        V bogus = ViewMessage::makeText(V::Role::User, "x");
+        V bogus  = ViewMessage::makeText(V::Role::User, "x");
         bogus.id = "msg_999999";
         s2->updateHistory(bogus);
     }
@@ -642,7 +642,10 @@ static asio::awaitable<void> testSessionPersistenceE2E() {
             XX_TEST_EXPECT_TRUE(
                 sess->viewMessages[1].role == agentxx::agent::ViewMessage::Role::Thinking
             );
-            XX_TEST_EXPECT_EQ(sess->viewMessages[1].text, std::string{"E2E reasoning before tool call"});
+            XX_TEST_EXPECT_EQ(
+                sess->viewMessages[1].text,
+                std::string{"E2E reasoning before tool call"}
+            );
             XX_TEST_EXPECT_TRUE(sess->viewMessages[1].collapsed);
             XX_TEST_EXPECT_TRUE(
                 sess->viewMessages[2].role == agentxx::agent::ViewMessage::Role::Tool
