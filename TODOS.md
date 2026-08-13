@@ -4,7 +4,6 @@
 - BaseAgent 增加支持 usage 统计
 - 会话独立日志、yaml配置文件
 - eventBus 改为tree，命名空间使用 axx/bxx/cc
-- llm 节点超时结束时，可能触发重复执行 toolcall 节点，然后又回到 llm 节点，导致异常
 - 支持修改上下文
 - llm压缩时，保持同一上下文，直接添加新user消息提示压缩成一段话，然后覆盖回去
 

@@ -60,7 +60,7 @@ void StdIOClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
                 << fmt::format("[Tool] {} {}", delta.toolName, delta.hasError ? "error" : "done")
                 << std::endl;
             break;
-        case Type::MessageTip: {
+        case Type::MessageUITip: {
             std::string prefix;
             using TipType = agentxx::agent::Delta::TipType;
             switch (delta.tipType) {

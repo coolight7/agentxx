@@ -15,8 +15,8 @@ namespace agent {
 /// 设计: 通用字段 (role/text/时间戳/折叠) 平铺, 角色专属字段按 role 放入
 /// optional 子结构, 避免单结构背负所有角色的字段:
 /// - Role::Tool:      tool (toolName/toolCallId/toolResult/toolFinished/diff)
-/// - Role::System:    system (tipLevel)
 /// - Role::Interrupt: interrupt (中断输入项数据)
+/// - Role::Tip:       tip (tipLevel)
 ///
 /// 注意: 纯 UI 交互状态 (输入框编辑文本/选中项/校验提示/结果回传通道等) 不属于
 /// 消息内容, 由渲染端 (如 TUI MessageListComponent) 独立维护, 不进入本结构。
@@ -31,7 +31,9 @@ struct ViewMessage {
         System,
         Tool,
         /// 中断输入项消息 (内嵌交互控件, 直接渲染在消息列表中)
-        Interrupt
+        Interrupt,
+        /// 消息提示
+        Tip
     };
     /// 提示消息级别 (System 提示消息使用, 与 agentxx::agent::Delta::TipType 对应)
     enum class TipLevel : uint8_t {
@@ -60,7 +62,7 @@ struct ViewMessage {
     std::string text;
     int64_t     startTimeMs = 0; ///< 开始时间戳 (毫秒, Unix 时间戳)
     int64_t     durationMs  = 0; ///< 运行时长 (毫秒)
-    /// 折叠展示 (Thinking/Tool/System 消息; 点击可折叠/展开)
+    /// 折叠展示 (Thinking/Tool/System/Tip 消息; 点击可折叠/展开)
     bool collapsed = false;
 
     // ---- Role::Tool 专属 ----
@@ -73,8 +75,8 @@ struct ViewMessage {
         bool        toolFinished = false;
     };
 
-    // ---- Role::System 专属 ----
-    struct SystemData {
+    // ---- Role::Tip 专属 ----
+    struct TipData {
         TipLevel tipLevel = TipLevel::Info;
     };
 
@@ -99,11 +101,11 @@ struct ViewMessage {
     };
 
     std::optional<ToolData>      tool;      ///< Role::Tool 有效
-    std::optional<SystemData>    system;    ///< Role::System 有效
+    std::optional<TipData>       tip;       ///< Role::Tip 有效
     std::optional<InterruptData> interrupt; ///< Role::Interrupt 有效
 
-    /// 便捷构造: 纯文本消息 (User/Assistant/Thinking/System)
-    /// - System 消息自动创建 system 子结构 (tipLevel 默认 Info), 且默认折叠展示
+    /// 便捷构造: 纯文本消息 (User/Assistant/Thinking/System/Tip)
+    /// - Tip 消息自动创建 tip 子结构 (tipLevel 默认 Info), 且默认折叠展示
     ///   (提示类消息内容通常较长, 折叠避免占据消息列表空间, 点击可展开)
     static ViewMessage
         makeText(Role role, std::string text, int64_t startTimeMs = 0, int64_t durationMs = 0) {
@@ -112,8 +114,8 @@ struct ViewMessage {
         m.text        = std::move(text);
         m.startTimeMs = startTimeMs;
         m.durationMs  = durationMs;
-        if (role == Role::System) {
-            m.system    = SystemData{};
+        if (role == Role::Tip) {
+            m.tip       = TipData{};
             m.collapsed = true;
         }
         return m;
@@ -167,7 +169,7 @@ private:
 };
 
 struct Delta {
-    /// 提示消息级别 (MessageTip 使用)
+    /// 提示消息级别 (MessageUITip 使用)
     enum class TipType : uint8_t {
         Info,    ///< 普通提示
         Warning, ///< 警告
@@ -183,12 +185,12 @@ struct Delta {
         TurnEnd,
         NodeStart,
         NodeEnd,
-        MessageTip, ///< 通用提示消息 (info/warning/error, UI 插入提示消息)
+        MessageUITip, ///< 通用提示消息 (info/warning/error, UI 插入提示消息)
         /// 系统消息: 已由 agent 线程插入会话历史 (viewMessages) 的消息
-        /// - 与 MessageTip 的区别: SystemMessage 携带 appendHistory 分配的
+        /// - 与 MessageUITip 的区别: MessageTip 携带 appendHistory 分配的
         ///   msgId, 内容/时间戳与 viewMessages 完全一致, UI 端直接追加即可
         ///   (不自行构造文本); 用于轮次统计、错误/取消提示、中断头消息等
-        SystemMessage,
+        MessageTip,
     };
 
     Type     type;
@@ -206,7 +208,7 @@ struct Delta {
 
     std::string nodeName;
 
-    // MessageTip: 通用提示消息 (文本复用 text 字段)
+    // MessageUITip: 通用提示消息 (文本复用 text 字段)
     TipType tipType = TipType::Info; ///< 提示级别 (Info/Warning/Error)
 
     uint64_t    historyCount = 0;
@@ -242,6 +244,8 @@ inline std::string_view viewMessageRoleToString(ViewMessage::Role role) noexcept
             return "thinking";
         case R::System:
             return "system";
+        case R::Tip:
+            return "tip";
         case R::Tool:
             return "tool";
         case R::Interrupt:
@@ -263,6 +267,9 @@ inline std::optional<ViewMessage::Role> viewMessageRoleFromString(std::string_vi
     }
     if (s == "system") {
         return R::System;
+    }
+    if (s == "tip") {
+        return R::Tip;
     }
     if (s == "tool") {
         return R::Tool;
@@ -359,9 +366,9 @@ inline neograph::json ViewMessage::toJson() const {
         }
         j["tool"] = std::move(t);
     }
-    if (system) {
-        j["system"] = neograph::json{
-            {"tip_level", std::string(viewMessageTipLevelToString(system->tipLevel))},
+    if (tip) {
+        j["tip"] = neograph::json{
+            {"tip_level", std::string(viewMessageTipLevelToString(tip->tipLevel))},
         };
     }
     if (interrupt) {
@@ -425,13 +432,13 @@ inline ViewMessage ViewMessage::fromJson(const neograph::json& j) {
             m.tool = std::move(t);
             break;
         }
-        case ViewMessage::Role::System: {
-            ViewMessage::SystemData s;
-            if (j.contains("system")) {
+        case ViewMessage::Role::Tip: {
+            ViewMessage::TipData s;
+            if (j.contains("tip")) {
                 s.tipLevel
-                    = viewMessageTipLevelFromString(j["system"].value("tip_level", std::string{}));
+                    = viewMessageTipLevelFromString(j["tip"].value("tip_level", std::string{}));
             }
-            m.system = std::move(s);
+            m.tip = std::move(s);
             break;
         }
         case ViewMessage::Role::Interrupt: {
@@ -461,6 +468,7 @@ inline ViewMessage ViewMessage::fromJson(const neograph::json& j) {
             break;
         }
         case ViewMessage::Role::User:
+        case ViewMessage::Role::System:
         case ViewMessage::Role::Assistant:
         case ViewMessage::Role::Thinking:
             break;

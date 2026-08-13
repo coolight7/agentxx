@@ -137,14 +137,15 @@ struct InterruptFixture {
         std::optional<std::string>&             value,
         bool*                                   remember = nullptr
     ) {
-        bool got = ch->try_receive([&](neograph_asio_error_code ec, int idx,
-                                       std::optional<std::string> v, bool rem) {
-            inputIndex = idx;
-            value      = std::move(v);
-            if (remember) {
-                *remember = rem;
+        bool got = ch->try_receive(
+            [&](neograph_asio_error_code ec, int idx, std::optional<std::string> v, bool rem) {
+                inputIndex = idx;
+                value      = std::move(v);
+                if (remember) {
+                    *remember = rem;
+                }
             }
-        });
+        );
         io.run(); // 排空 async_send 投递的完成 handler (数据本身已入队)
         return got;
     }
@@ -275,7 +276,7 @@ void test_permission_remember_toggle_and_confirm() {
     // 再开启, 选"是"并确认 → 结果回传 remember=true
     XX_TEST_EXPECT_TRUE(f.click(mi, MessageListComponent::kHitRemember));
     XX_TEST_EXPECT_TRUE(f.click(mi, MessageListComponent::kHitBoolYes));
-    int                        idx      = 0;
+    int                        idx = 0;
     std::optional<std::string> val;
     bool                       remember = false;
     XX_TEST_EXPECT_TRUE(f.recv(ch, idx, val, &remember));
@@ -291,7 +292,7 @@ void test_permission_remember_without_toggle() {
     auto             mi = f.addInterrupt(ch, "bool", "no", "perm", {}, 1, 1, 1, true);
     // 未勾选"记住", 确认 → remember=false
     XX_TEST_EXPECT_TRUE(f.click(mi, MessageListComponent::kHitBoolNo));
-    int                        idx      = 0;
+    int                        idx = 0;
     std::optional<std::string> val;
     bool                       remember = true;
     XX_TEST_EXPECT_TRUE(f.recv(ch, idx, val, &remember));
@@ -623,11 +624,11 @@ asio::awaitable<void> test_permission_pass_mode_auto_allow() {
     }
 
     // 消息列表出现 "[Permission] Pass mode" 提示 (含目标与分类)
-    auto  snap        = tui->sharedState().readSnapshot();
-    bool  foundPass   = false;
-    bool  foundTarget = false;
+    auto snap        = tui->sharedState().readSnapshot();
+    bool foundPass   = false;
+    bool foundTarget = false;
     for (const auto& m : snap->messages) {
-        if (m->role != TUIMessage::Role::System) {
+        if (m->role != TUIMessage::Role::Tip) {
             continue;
         }
         if (m->text.find("[Permission] Pass mode") != std::string::npos) {
@@ -686,11 +687,11 @@ asio::awaitable<void> test_permission_deny_mode_auto_reject() {
     }
 
     // 消息列表出现 "[Permission] Deny mode" 提示 (含目标与分类)
-    auto  snap        = tui->sharedState().readSnapshot();
-    bool  foundDeny   = false;
-    bool  foundTarget = false;
+    auto snap        = tui->sharedState().readSnapshot();
+    bool foundDeny   = false;
+    bool foundTarget = false;
     for (const auto& m : snap->messages) {
-        if (m->role != TUIMessage::Role::System) {
+        if (m->role != TUIMessage::Role::Tip) {
             continue;
         }
         if (m->text.find("[Permission] Deny mode") != std::string::npos) {

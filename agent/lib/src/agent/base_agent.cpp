@@ -396,18 +396,18 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
         ioPtr
     );
 
-    // 插入系统消息: 由 agent 线程追加到会话历史 (viewMessages) 并发送
-    // SystemMessage Delta 通知 UI 追加对应消息。UI 端不再自行构造系统提示,
+    // 插入提示消息: 由 agent 线程追加到会话历史 (viewMessages) 并发送
+    // MessageTip Delta 通知 UI 追加对应消息。UI 端不再自行构造系统提示,
     // 保证 viewMessages / Sync 恢复 / 持久化与展示内容一致。
     // - 无对端 (headless) 时不插入 (提示为展示用途, headless 无消费者)
-    auto insertSystemMessage =
+    auto insertMessageTip =
         [&](std::string text, ViewMessage::TipLevel level, int64_t startMs = 0, int64_t durMs = 0) {
             if (!session->io) {
                 return;
             }
-            auto vm = ViewMessage::makeText(ViewMessage::Role::System, text, startMs, durMs);
-            vm.system->tipLevel    = level;
-            const auto     id      = session->appendHistory(std::move(vm));
+            auto vm           = ViewMessage::makeText(ViewMessage::Role::Tip, text, startMs, durMs);
+            vm.tip->tipLevel  = level;
+            const auto     id = session->appendHistory(std::move(vm));
             Delta::TipType tipType = Delta::TipType::Info;
             if (level == ViewMessage::TipLevel::Warning) {
                 tipType = Delta::TipType::Warning;
@@ -415,7 +415,7 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                 tipType = Delta::TipType::Error;
             }
             eventBridge->emitDelta(Delta{
-                .type        = Delta::Type::SystemMessage,
+                .type        = Delta::Type::MessageTip,
                 .text        = std::move(text),
                 .msgId       = id,
                 .tipType     = tipType,
@@ -655,7 +655,7 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                                 if (!interruptArg.name.empty()) {
                                     msg += fmt::format("\nHandle: {}", interruptArg.name);
                                 }
-                                insertSystemMessage(std::move(msg), ViewMessage::TipLevel::Info);
+                                insertMessageTip(std::move(msg), ViewMessage::TipLevel::Info);
                             }
                             auto session = agentContext->sessions->get(threadId);
                             if (session && session->bus) {
@@ -746,10 +746,7 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
             turnResult.hasError     = true;
             turnResult.errorMessage = std::move(errmsg);
             // 错误提示: agent 线程插入会话历史并通知 UI
-            insertSystemMessage(
-                fmt::format("[Error] {}", turnResult.errorMessage),
-                ViewMessage::TipLevel::Error
-            );
+            insertMessageTip(turnResult.errorMessage, ViewMessage::TipLevel::Error);
             co_return true;
         },
         [&](std::string& errmsg) -> std::optional<bool> {
@@ -757,7 +754,7 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
             turnResult.hasError     = true;
             turnResult.errorMessage = "Cancelled by user";
             // 取消提示: agent 线程插入会话历史并通知 UI
-            insertSystemMessage("[Cancel Request]", ViewMessage::TipLevel::Info);
+            insertMessageTip("[Cancel Request]", ViewMessage::TipLevel::Info);
             return true;
         },
         // 传入取消令牌: engine 内未被转换的 operation_aborted (asio 取消信号)
@@ -816,7 +813,7 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
 
     // 轮次统计系统提示: 由 agent 线程插入会话历史并发送 Delta (原由 UI 端
     // 在 TurnEnd 时自行构造), 模型名之后显示本轮 LLM API 平均生成速度
-    insertSystemMessage(
+    insertMessageTip(
         [&]() {
             std::string modelText = agentContext->getSessionCurrentModelName(threadId);
             if (turnTps > 0.0) {

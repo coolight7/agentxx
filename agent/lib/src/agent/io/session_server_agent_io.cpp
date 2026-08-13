@@ -110,7 +110,8 @@ asio::awaitable<neograph::json> SessionServerAgentIO::handleInterrupt(
             // timeout <= 0 表示不限制: 不启用 cancel_after, 无限等待客户端响应
             // (由 resolveInterrupt / failAllPending 正常结束等待)
             if (timeout.count() > 0) {
-                result = co_await ch->async_receive(asio::cancel_after(timeout, asio::use_awaitable));
+                result
+                    = co_await ch->async_receive(asio::cancel_after(timeout, asio::use_awaitable));
             } else {
                 result = co_await ch->async_receive(asio::use_awaitable);
             }
@@ -190,8 +191,7 @@ void SessionServerAgentIO::onPeerMessage(WireMessage msg) {
                 // 目录扫描 + SQLite 读取属阻塞 I/O, 卸载到 blockingPool 执行,
                 // 避免阻塞 agent io 线程; 完成后经 shared_from_this 回填响应
                 auto agent = agent_.lock();
-                if (!agent || !agent->agentContext
-                    || !agent->agentContext->sessionPersistence) {
+                if (!agent || !agent->agentContext || !agent->agentContext->sessionPersistence) {
                     sendToPeer(WireSessionList{});
                     return;
                 }
@@ -202,13 +202,13 @@ void SessionServerAgentIO::onPeerMessage(WireMessage msg) {
                     [self, persistence, agent]() -> asio::awaitable<void> {
                         std::vector<SessionInfo> sessions;
                         if (agent->agentContext->blockingPool) {
-                            sessions = co_await agentxx::util::offloadAsync<
-                                std::vector<SessionInfo>>(
-                                *agent->agentContext->blockingPool,
-                                [persistence]() -> asio::awaitable<std::vector<SessionInfo>> {
-                                    co_return persistence->listSessions();
-                                }
-                            );
+                            sessions
+                                = co_await agentxx::util::offloadAsync<std::vector<SessionInfo>>(
+                                    *agent->agentContext->blockingPool,
+                                    [persistence]() -> asio::awaitable<std::vector<SessionInfo>> {
+                                        co_return persistence->listSessions();
+                                    }
+                                );
                         } else {
                             sessions = persistence->listSessions();
                         }
@@ -327,10 +327,7 @@ void SessionServerAgentIO::switchSession(std::string newThreadId) {
     if (turnActive_.load(std::memory_order_acquire)) {
         // 双重保护: 客户端已拦截运行态切换, 此处再兜底拒绝,
         // 避免轮次进行中被换走导致 Delta/输入错投到新会话
-        XX_LOGW(
-            "[session_ctrl] switchSession rejected: turn active (thread={})",
-            config_.threadId
-        );
+        XX_LOGW("[session_ctrl] switchSession rejected: turn active (thread={})", config_.threadId);
         return;
     }
 
@@ -407,23 +404,22 @@ asio::awaitable<void> SessionServerAgentIO::run() {
         // catchErrorAsync: 取消类异常 (CancelledException/NodeInterrupt) 与普通异常
         // 一致转为错误消息通知客户端 (onRethrow), 避免异常逃逸 co_spawn 完成处理器;
         // 其余异常同样转为错误消息
-        // 错误提示: agent 线程插入会话历史并发送 SystemMessage Delta (覆盖
+        // 错误提示: agent 线程插入会话历史并发送 MessageTip Delta (覆盖
         // runConversationTurnAsync 自身抛异常的兜底路径, 与主路径提示一致)
         auto sendErrorTip = [&](std::string_view errmsg) {
             auto sess = session();
             if (!sess) {
                 return;
             }
-            auto text = fmt::format("[Error] {}", errmsg);
-            auto vm   = ViewMessage::makeText(ViewMessage::Role::System, text);
-            vm.system->tipLevel = ViewMessage::TipLevel::Error;
-            const auto id = sess->appendHistory(std::move(vm));
+            auto vm          = ViewMessage::makeText(ViewMessage::Role::Tip, std::string{errmsg});
+            vm.tip->tipLevel = ViewMessage::TipLevel::Error;
+            const auto id    = sess->appendHistory(std::move(vm));
             // 新产出的 Delta 必须分配会话级 seq (统一经 Session::nextDeltaSeq):
             // 重放缓冲依赖 seq 单调性, 未分配 seq (=0) 的 Delta 不会入缓冲,
             // 断线重连增量重放时该消息会丢失, 导致客户端历史与服务端不一致
             auto d = Delta{
-                .type    = Delta::Type::SystemMessage,
-                .text    = std::move(text),
+                .type    = Delta::Type::MessageTip,
+                .text    = std::string{errmsg},
                 .msgId   = id,
                 .tipType = Delta::TipType::Error,
             };

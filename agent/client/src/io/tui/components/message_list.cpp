@@ -243,7 +243,7 @@ Element MessageListComponent::OnRender() {
             // 可折叠消息: Thinking / Tool / System (点击 header 折叠/展开)
             const bool collapsible
                 = (msg.role == TUIMessage::Role::Thinking || msg.role == TUIMessage::Role::Tool
-                   || msg.role == TUIMessage::Role::System);
+                   || msg.role == TUIMessage::Role::System || msg.role == TUIMessage::Role::Tip);
             if (!collapsible || vboxes[i].IsEmpty()) {
                 continue;
             }
@@ -450,6 +450,9 @@ size_t MessageListComponent::estimateHeight(size_t index, int width) {
                 // 折叠: 仅 header 行 + 空行; 展开: header + 内容 + 空行
                 return (msg.collapsed ? 1 : 1 + estimateLines(msg.text, width)) + 1;
             case TUIMessage::Role::Thinking:
+                // 折叠: 仅 header 行 + 空行; 展开: header + 内容 + 空行
+                return (msg.collapsed ? 1 : 1 + estimateLines(msg.text, width)) + 1;
+            case TUIMessage::Role::Tip:
                 // 折叠: 仅 header 行 + 空行; 展开: header + 内容 + 空行
                 return (msg.collapsed ? 1 : 1 + estimateLines(msg.text, width)) + 1;
             case TUIMessage::Role::Tool: {
@@ -823,10 +826,28 @@ Element MessageListComponent::buildMessageBlock(
             return el;
         }
         case TUIMessage::Role::System: {
+            ftxui::Color tipColor = theme.systemColor;
+            // 可折叠: header 行带 +/- 折叠标记与单行预览 (折叠态), 展开态显示全文
+            // (与 Thinking 消息同一折叠模式; 默认折叠见创建处 makeText / onDelta)
+            const bool expanded = !msg.collapsed;
+            Elements   lines;
+            Elements   header;
+            header.push_back(text(expanded ? "- " : "+ ") | color(tipColor));
+            header.push_back(text("[System] ") | color(tipColor));
+            if (!expanded) {
+                header.push_back(text(oneLinePreview(msg.text)) | color(tipColor) | dim);
+            }
+            lines.push_back(hbox(std::move(header)));
+            if (expanded) {
+                lines.push_back(paragraph(msg.text) | color(tipColor));
+            }
+            return vbox(std::move(lines));
+        }
+        case TUIMessage::Role::Tip: {
             // 按提示级别区分前缀与颜色 (Info/Warning/Error)
             std::string  prefix   = "# ";
-            ftxui::Color tipColor = theme.systemColor;
-            const auto   tipLevel = msg.system ? msg.system->tipLevel : TUIMessage::TipLevel::Info;
+            ftxui::Color tipColor = theme.hintColor;
+            const auto   tipLevel = msg.tip ? msg.tip->tipLevel : TUIMessage::TipLevel::Info;
             switch (tipLevel) {
                 case TUIMessage::TipLevel::Warning:
                     prefix   = "# [Warn] ";
@@ -847,7 +868,7 @@ Element MessageListComponent::buildMessageBlock(
             header.push_back(text(expanded ? "- " : "+ ") | color(tipColor));
             header.push_back(text(prefix) | color(tipColor));
             if (!expanded) {
-                header.push_back(text(oneLinePreview(msg.text)) | color(tipColor) | dim);
+                header.push_back(text(oneLinePreview(msg.text)) | color(tipColor));
             }
             lines.push_back(hbox(std::move(header)));
             if (expanded) {
@@ -947,7 +968,7 @@ Element MessageListComponent::buildMessageBlock(
                 Elements header;
                 header.push_back(
                     text(fmt::format(
-                        "[Interrupt] Input {}/{}: ",
+                        "! [Interrupt] Input {}/{}: ",
                         msg.interrupt->inputIndex,
                         msg.interrupt->inputTotal
                     ))
@@ -1175,23 +1196,23 @@ Element MessageListComponent::buildInterruptStatusLine(const TUIMessage& msg) {
     switch (it.interruptStatus) {
         case TUIMessage::InterruptStatus::Confirmed:
             return hbox({
-                text(fmt::format("[Interrupt] Input {}/{}: ", it.inputIndex, it.inputTotal))
+                text(fmt::format("! [Interrupt] Input {}/{}: ", it.inputIndex, it.inputTotal))
                     | color(theme.hintColor) | dim,
-                text("✓ 已确认 ") | color(theme.accentColor) | bold,
+                text("已确认 ") | color(theme.accentColor) | bold,
                 text(fmt::format("{}: {}", it.inputLabel, it.interruptResult))
                     | color(theme.accentColor),
             });
         case TUIMessage::InterruptStatus::Cancelled:
             return hbox({
-                text(fmt::format("[Interrupt] Input {}/{}: ", it.inputIndex, it.inputTotal))
+                text(fmt::format("! [Interrupt] Input {}/{}: ", it.inputIndex, it.inputTotal))
                     | color(theme.hintColor) | dim,
-                text(fmt::format("✕ {}: 已取消", it.inputLabel)) | color(theme.hintColor) | dim,
+                text(fmt::format("{}: 已取消", it.inputLabel)) | color(theme.hintColor) | dim,
             });
         case TUIMessage::InterruptStatus::Expired:
             return hbox({
-                text(fmt::format("[Interrupt] Input {}/{}: ", it.inputIndex, it.inputTotal))
+                text(fmt::format("! [Interrupt] Input {}/{}: ", it.inputIndex, it.inputTotal))
                     | color(theme.hintColor) | dim,
-                text(fmt::format("⌛ {}: 已过期", it.inputLabel)) | color(theme.hintColor) | dim,
+                text(fmt::format("{}: 已过期", it.inputLabel)) | color(theme.hintColor) | dim,
             });
         default:
             return text("");

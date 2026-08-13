@@ -59,10 +59,10 @@ agentxx::agent::ViewMessage makeMsg(agentxx::agent::ViewMessage::Role role, std:
             msg.tool       = std::move(t);
             break;
         }
-        case V::Role::System: {
-            V::SystemData s;
+        case V::Role::Tip: {
+            V::TipData s;
             s.tipLevel = V::TipLevel::Warning;
-            msg.system = std::move(s);
+            msg.tip    = std::move(s);
             break;
         }
         case V::Role::Interrupt: {
@@ -109,7 +109,7 @@ static TestResult testViewMessagesRoundtrip() {
             makeMsg(V::Role::User, "hello"),
             makeMsg(V::Role::Assistant, "hi there"),
             makeMsg(V::Role::Tool, R"({"tool":"x"})"),
-            makeMsg(V::Role::System, "tip"),
+            makeMsg(V::Role::Tip, "tip"),
             makeMsg(V::Role::Thinking, "think"),
             makeMsg(V::Role::Interrupt, "interrupt-payload"),
         };
@@ -138,9 +138,9 @@ static TestResult testViewMessagesRoundtrip() {
             XX_TEST_EXPECT_TRUE(toolMsg.tool->toolFinished);
         }
         const auto& sysMsg = loaded.viewMessages[3];
-        XX_TEST_EXPECT_TRUE(sysMsg.system.has_value());
-        if (sysMsg.system) {
-            XX_TEST_EXPECT_EQ(sysMsg.system->tipLevel, V::TipLevel::Warning);
+        XX_TEST_EXPECT_TRUE(sysMsg.tip.has_value());
+        if (sysMsg.tip) {
+            XX_TEST_EXPECT_EQ(sysMsg.tip->tipLevel, V::TipLevel::Warning);
         }
         const auto& intMsg = loaded.viewMessages[5];
         XX_TEST_EXPECT_TRUE(intMsg.interrupt.has_value());
