@@ -2450,12 +2450,12 @@ asio::awaitable<void> test_mcp_client_tool_timeout() {
         auto tools = co_await client->listTools();
         XX_TEST_EXPECT_TRUE(tools.has_value());
         if (tools.has_value() && !tools->empty()) {
-            auto    tool     = client->createTool((*tools)[0], {});
-            bool    timedOut = false;
-            bool    success  = false;
+            auto tool     = client->createTool((*tools)[0], {});
+            bool timedOut = false;
+            bool success  = false;
             co_await agentxx::util::catchErrorAsync<bool>(
                 [&]() -> asio::awaitable<bool> {
-                    auto r = co_await tool->execute_async(json::object());
+                    auto r  = co_await tool->execute_async(json::object());
                     success = (r == "done");
                     co_return true;
                 },
@@ -3563,15 +3563,15 @@ asio::awaitable<void> test_mcp_client_truncated_retry() {
                 ++pos;
             }
             auto end = pos;
-            while (end < body.size()
-                   && ((body[end] >= '0' && body[end] <= '9') || body[end] == '-')) {
+            while (end < body.size() && ((body[end] >= '0' && body[end] <= '9') || body[end] == '-')
+            ) {
                 ++end;
             }
             return end == pos ? "0" : body.substr(pos, end - pos);
         }
 
         void start() {
-            ioCtx = std::make_unique<asio::io_context>();
+            ioCtx    = std::make_unique<asio::io_context>();
             acceptor = std::make_unique<asio::ip::tcp::acceptor>(
                 *ioCtx,
                 asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0)
@@ -3606,11 +3606,11 @@ asio::awaitable<void> test_mcp_client_truncated_retry() {
             if (n == 1) {
                 // 第一次: 截断响应 — Content-Length 声明 10000 但实际 body 远小于
                 // 该值, 发送后立即关闭连接; 客户端读到 EOF → beast partial_message
-                std::string partial = "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":{}}";
-                const std::string header = "HTTP/1.1 200 OK\r\n"
-                                           "Content-Type: application/json\r\n"
-                                           "Content-Length: 10000\r\n"
-                                           "\r\n";
+                std::string       partial = "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":{}}";
+                const std::string header  = "HTTP/1.1 200 OK\r\n"
+                                            "Content-Type: application/json\r\n"
+                                            "Content-Length: 10000\r\n"
+                                            "\r\n";
                 asio::write(sock, asio::buffer(header), ec);
                 asio::write(sock, asio::buffer(partial), ec);
                 sock.close();
@@ -3630,9 +3630,11 @@ asio::awaitable<void> test_mcp_client_truncated_retry() {
             const std::string resp = "HTTP/1.1 200 OK\r\n"
                                      "Content-Type: application/json\r\n"
                                      "Content-Length: "
-                                     + std::to_string(body.size()) + "\r\n"
-                                     "Connection: close\r\n"
-                                     "\r\n" + body;
+                                     + std::to_string(body.size())
+                                     + "\r\n"
+                                       "Connection: close\r\n"
+                                       "\r\n"
+                                     + body;
             asio::write(sock, asio::buffer(resp), ec);
             sock.close();
         }
@@ -3646,10 +3648,7 @@ asio::awaitable<void> test_mcp_client_truncated_retry() {
                 // 连接让 accept 返回, 再 close 使后续 accept 返回错误退出循环
                 asio::ip::tcp::socket dummy(*ioCtx);
                 dummy.connect(
-                    asio::ip::tcp::endpoint(
-                        asio::ip::make_address("127.0.0.1"),
-                        port.load()
-                    ),
+                    asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), port.load()),
                     ec
                 );
                 dummy.close();
@@ -3716,7 +3715,7 @@ asio::awaitable<void> test_mcp_client_session_rebuild() {
         std::unique_ptr<asio::ip::tcp::acceptor> acceptor;
 
         void start() {
-            ioCtx = std::make_unique<asio::io_context>();
+            ioCtx    = std::make_unique<asio::io_context>();
             acceptor = std::make_unique<asio::ip::tcp::acceptor>(
                 *ioCtx,
                 asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0)
@@ -3756,8 +3755,10 @@ asio::awaitable<void> test_mcp_client_session_rebuild() {
                 const std::string resp = "HTTP/1.1 400 Bad Request\r\n"
                                          "Content-Type: application/json\r\n"
                                          "Content-Length: "
-                                         + std::to_string(respBody.size()) + "\r\n"
-                                         "Connection: close\r\n\r\n" + respBody;
+                                         + std::to_string(respBody.size())
+                                         + "\r\n"
+                                           "Connection: close\r\n\r\n"
+                                         + respBody;
                 asio::write(sock, asio::buffer(resp), ec);
                 sock.close();
                 return;
@@ -3765,29 +3766,35 @@ asio::awaitable<void> test_mcp_client_session_rebuild() {
             // SSE 发现 GET /sse → 404 (模拟 Streamable HTTP 服务器无 SSE endpoint)
             if (req.method() == http::verb::get) {
                 const std::string respBody = "{\"error\":{\"message\":\"record not found\"}}";
-                const std::string resp = "HTTP/1.1 404 Not Found\r\n"
-                                         "Content-Type: application/json\r\n"
-                                         "Content-Length: "
-                                         + std::to_string(respBody.size()) + "\r\n"
-                                         "Connection: close\r\n\r\n" + respBody;
+                const std::string resp     = "HTTP/1.1 404 Not Found\r\n"
+                                             "Content-Type: application/json\r\n"
+                                             "Content-Length: "
+                                         + std::to_string(respBody.size())
+                                         + "\r\n"
+                                           "Connection: close\r\n\r\n"
+                                         + respBody;
                 asio::write(sock, asio::buffer(resp), ec);
                 sock.close();
                 return;
             }
             // initialize: 颁发新 session
             if (body.find("\"initialize\"") != std::string::npos) {
-                const int n = initCount.fetch_add(1) + 1;
-                const std::string sid = fmt::format("good-{}", n);
+                const int         n          = initCount.fetch_add(1) + 1;
+                const std::string sid        = fmt::format("good-{}", n);
                 const std::string resultBody = "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{"
                                                "\"protocolVersion\":\"2025-03-26\","
                                                "\"capabilities\":{},\"serverInfo\":{"
                                                "\"name\":\"session-test\",\"version\":\"1.0\"}}}";
-                const std::string resp = "HTTP/1.1 200 OK\r\n"
-                                         "Content-Type: application/json\r\n"
-                                         "Content-Length: "
-                                         + std::to_string(resultBody.size()) + "\r\n"
-                                         "Mcp-Session-Id: " + sid + "\r\n"
-                                         "Connection: close\r\n\r\n" + resultBody;
+                const std::string resp       = "HTTP/1.1 200 OK\r\n"
+                                               "Content-Type: application/json\r\n"
+                                               "Content-Length: "
+                                         + std::to_string(resultBody.size())
+                                         + "\r\n"
+                                           "Mcp-Session-Id: "
+                                         + sid
+                                         + "\r\n"
+                                           "Connection: close\r\n\r\n"
+                                         + resultBody;
                 asio::write(sock, asio::buffer(resp), ec);
                 sock.close();
                 return;
@@ -3805,27 +3812,30 @@ asio::awaitable<void> test_mcp_client_session_rebuild() {
             // - 第 1 次业务调用 → 401 SessionExpired (模拟会话过期, 不改变状态)
             // - 之后 (会话重建后重试) → 200 成功
             if (businessCalls.fetch_add(1) == 0) {
-                const std::string errBody
-                    = "{\"RequestId\":\"x\",\"Code\":\"SessionExpired\","
-                      "\"Message\":\"session is expired\"}";
-                const std::string resp = "HTTP/1.1 401 Unauthorized\r\n"
-                                         "Content-Type: application/json\r\n"
-                                         "Content-Length: "
-                                         + std::to_string(errBody.size()) + "\r\n"
-                                         "Connection: close\r\n\r\n" + errBody;
+                const std::string errBody = "{\"RequestId\":\"x\",\"Code\":\"SessionExpired\","
+                                            "\"Message\":\"session is expired\"}";
+                const std::string resp    = "HTTP/1.1 401 Unauthorized\r\n"
+                                            "Content-Type: application/json\r\n"
+                                            "Content-Length: "
+                                         + std::to_string(errBody.size())
+                                         + "\r\n"
+                                           "Connection: close\r\n\r\n"
+                                         + errBody;
                 asio::write(sock, asio::buffer(resp), ec);
                 sock.close();
                 return;
             }
             // 成功响应: 回显请求 id
-            const std::string id = extractJsonId(body);
+            const std::string id     = extractJsonId(body);
             const std::string okBody = "{\"jsonrpc\":\"2.0\",\"id\":" + id
                                        + ",\"result\":{\"tools\":[],\"resources\":[]}}";
             const std::string resp = "HTTP/1.1 200 OK\r\n"
                                      "Content-Type: application/json\r\n"
                                      "Content-Length: "
-                                     + std::to_string(okBody.size()) + "\r\n"
-                                     "Connection: close\r\n\r\n" + okBody;
+                                     + std::to_string(okBody.size())
+                                     + "\r\n"
+                                       "Connection: close\r\n\r\n"
+                                     + okBody;
             asio::write(sock, asio::buffer(resp), ec);
             sock.close();
         }
@@ -3844,8 +3854,8 @@ asio::awaitable<void> test_mcp_client_session_rebuild() {
                 ++pos;
             }
             auto end = pos;
-            while (end < body.size()
-                   && ((body[end] >= '0' && body[end] <= '9') || body[end] == '-')) {
+            while (end < body.size() && ((body[end] >= '0' && body[end] <= '9') || body[end] == '-')
+            ) {
                 ++end;
             }
             return end == pos ? "0" : body.substr(pos, end - pos);
