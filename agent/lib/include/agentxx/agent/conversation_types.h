@@ -58,9 +58,10 @@ struct ViewMessage {
     /// 正文: User/Assistant/Thinking/System 消息文本; Tool 消息为工具参数
     /// (arguments JSON 字符串, 与渲染侧现有约定一致)
     std::string text;
-    int64_t     startTimeMs = 0;     ///< 开始时间戳 (毫秒, Unix 时间戳)
-    int64_t     durationMs  = 0;     ///< 运行时长 (毫秒)
-    bool        collapsed   = false; ///< 折叠展示 (Thinking/Tool 消息)
+    int64_t     startTimeMs = 0; ///< 开始时间戳 (毫秒, Unix 时间戳)
+    int64_t     durationMs  = 0; ///< 运行时长 (毫秒)
+    /// 折叠展示 (Thinking/Tool/System 消息; 点击可折叠/展开)
+    bool collapsed = false;
 
     // ---- Role::Tool 专属 ----
     struct ToolData {
@@ -102,7 +103,8 @@ struct ViewMessage {
     std::optional<InterruptData> interrupt; ///< Role::Interrupt 有效
 
     /// 便捷构造: 纯文本消息 (User/Assistant/Thinking/System)
-    /// - System 消息自动创建 system 子结构 (tipLevel 默认 Info)
+    /// - System 消息自动创建 system 子结构 (tipLevel 默认 Info), 且默认折叠展示
+    ///   (提示类消息内容通常较长, 折叠避免占据消息列表空间, 点击可展开)
     static ViewMessage
         makeText(Role role, std::string text, int64_t startTimeMs = 0, int64_t durationMs = 0) {
         ViewMessage m;
@@ -111,7 +113,8 @@ struct ViewMessage {
         m.startTimeMs = startTimeMs;
         m.durationMs  = durationMs;
         if (role == Role::System) {
-            m.system = SystemData{};
+            m.system    = SystemData{};
+            m.collapsed = true;
         }
         return m;
     }

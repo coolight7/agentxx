@@ -240,8 +240,10 @@ Element MessageListComponent::OnRender() {
         const auto& msgs   = ctx_.frameState->messages;
         for (size_t i = 0; i < vboxes.size() && i < msgs.size(); ++i) {
             const auto& msg = *msgs[i];
-            const bool  collapsible
-                = (msg.role == TUIMessage::Role::Thinking || msg.role == TUIMessage::Role::Tool);
+            // 可折叠消息: Thinking / Tool / System (点击 header 折叠/展开)
+            const bool collapsible
+                = (msg.role == TUIMessage::Role::Thinking || msg.role == TUIMessage::Role::Tool
+                   || msg.role == TUIMessage::Role::System);
             if (!collapsible || vboxes[i].IsEmpty()) {
                 continue;
             }
@@ -445,7 +447,8 @@ size_t MessageListComponent::estimateHeight(size_t index, int width) {
             case TUIMessage::Role::Assistant:
                 return estimateLines(msg.text, width) + 1;
             case TUIMessage::Role::System:
-                return estimateLines(msg.text, width) + 1;
+                // 折叠: 仅 header 行 + 空行; 展开: header + 内容 + 空行
+                return (msg.collapsed ? 1 : 1 + estimateLines(msg.text, width)) + 1;
             case TUIMessage::Role::Thinking:
                 // 折叠: 仅 header 行 + 空行; 展开: header + 内容 + 空行
                 return (msg.collapsed ? 1 : 1 + estimateLines(msg.text, width)) + 1;
@@ -836,10 +839,21 @@ Element MessageListComponent::buildMessageBlock(
                 case TUIMessage::TipLevel::Info:
                     break;
             }
-            return hbox({
-                text(prefix) | color(tipColor),
-                paragraph(msg.text) | color(tipColor),
-            });
+            // 可折叠: header 行带 +/- 折叠标记与单行预览 (折叠态), 展开态显示全文
+            // (与 Thinking 消息同一折叠模式; 默认折叠见创建处 makeText / onDelta)
+            const bool expanded = !msg.collapsed;
+            Elements   lines;
+            Elements   header;
+            header.push_back(text(expanded ? "- " : "+ ") | color(tipColor));
+            header.push_back(text(prefix) | color(tipColor));
+            if (!expanded) {
+                header.push_back(text(oneLinePreview(msg.text)) | color(tipColor) | dim);
+            }
+            lines.push_back(hbox(std::move(header)));
+            if (expanded) {
+                lines.push_back(paragraph(msg.text) | color(tipColor));
+            }
+            return vbox(std::move(lines));
         }
         case TUIMessage::Role::Thinking: {
             const bool expanded = !msg.collapsed;

@@ -39,10 +39,10 @@ using namespace ftxui;
 // ---------------------------------------------------------------------------
 
 TUIClientAgentIO::TUIClientAgentIO(
-    asio::any_io_executor                 ex,
-    std::string                           threadId,
-    TUITheme                              theme,
-    agentxx::agent::PermissionMode        permissionMode
+    asio::any_io_executor          ex,
+    std::string                    threadId,
+    TUITheme                       theme,
+    agentxx::agent::PermissionMode permissionMode
 ) :
     theme_(theme),
     threadId_(std::move(threadId)),
@@ -1106,12 +1106,14 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
                 }
             } break;
             case Type::MessageTip: {
-                // 通用提示消息: 插入 System 提示消息 (按级别区分显示)
+                // 通用提示消息: 插入 System 提示消息 (按级别区分显示);
+                // 默认折叠展示 (提示类消息, 与 makeText 的 System 默认折叠语义一致)
                 pushCurrentTokenLocked(st);
-                auto msg    = std::make_shared<TUIMessage>();
-                msg->role   = TUIMessage::Role::System;
-                msg->text   = delta.text;
-                msg->system = TUIMessage::SystemData{};
+                auto msg       = std::make_shared<TUIMessage>();
+                msg->role      = TUIMessage::Role::Tip;
+                msg->text      = delta.text;
+                msg->system    = TUIMessage::SystemData{};
+                msg->collapsed = true;
                 switch (delta.tipType) {
                     case agentxx::agent::Delta::TipType::Info:
                         msg->system->tipLevel = TUIMessage::TipLevel::Info;
@@ -1128,13 +1130,15 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
             } break;
             case Type::SystemMessage: {
                 // 系统消息: 已由 agent 线程插入会话历史 (viewMessages),
-                // 内容/时间戳/级别与历史完全一致, 直接追加即可
+                // 内容/时间戳/级别与历史完全一致, 直接追加即可;
+                // 默认折叠展示 (服务端历史创建时即 collapsed=true, 此处显式同步)
                 pushCurrentTokenLocked(st);
-                auto msg    = std::make_shared<TUIMessage>();
-                msg->role   = TUIMessage::Role::System;
-                msg->id     = delta.msgId;
-                msg->text   = delta.text;
-                msg->system = TUIMessage::SystemData{};
+                auto msg       = std::make_shared<TUIMessage>();
+                msg->role      = TUIMessage::Role::System;
+                msg->id        = delta.msgId;
+                msg->text      = delta.text;
+                msg->system    = TUIMessage::SystemData{};
+                msg->collapsed = true;
                 switch (delta.tipType) {
                     case agentxx::agent::Delta::TipType::Warning:
                         msg->system->tipLevel = TUIMessage::TipLevel::Warning;
@@ -1237,9 +1241,9 @@ void TUIClientAgentIO::onContextStats(const agentxx::agent::WireContextStats& st
     {
         std::lock_guard<std::mutex> lock(sharedState_.mutex());
         auto&                       st = sharedState_.mutableState();
-        st.contextTokens             = stats.contextTokens;
-        st.maxContextTokens          = stats.maxContextTokens;
-        st.tps                       = stats.tps;
+        st.contextTokens               = stats.contextTokens;
+        st.maxContextTokens            = stats.maxContextTokens;
+        st.tps                         = stats.tps;
     }
     postRedraw();
 }

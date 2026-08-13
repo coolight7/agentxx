@@ -108,6 +108,12 @@ public:
         return interruptHits_;
     }
 
+    /// 测试辅助: 上一帧可折叠消息 (Thinking/Tool/System) 的命中区域
+    /// (与 collapsibleIndices_ 对应; 供测试模拟点击折叠/展开)
+    const std::vector<ftxui::Box>& collapsibleBoxes() const {
+        return collapsibleBoxes_;
+    }
+
     /// 连接失败 banner 的"重试"按钮命中区域 (渲染时 reflect 填充,
     /// 供 TUIClientAgentIO 全局鼠标事件检测点击)
     const ftxui::Box& retryButtonBox() const {
