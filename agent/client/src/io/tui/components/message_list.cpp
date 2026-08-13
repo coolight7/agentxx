@@ -565,6 +565,7 @@ Element MessageListComponent::buildBanner() {
     switch (st.connState) {
         case ConnState::Connecting: {
             Elements els;
+            els.push_back(text("输入消息将在连接完成后自动发送") | color(theme.hintColor) | center);
             els.push_back(text("agent-server 正在启动中 ...") | color(theme.hintColor) | center);
             if (!st.startupProgress.empty()) {
                 // 当前正在执行的启动步骤 (agent 线程逐步上报)
@@ -573,7 +574,6 @@ Element MessageListComponent::buildBanner() {
                     | center
                 );
             }
-            els.push_back(text("输入消息将在连接完成后自动发送") | color(theme.hintColor) | center);
             statusLine = vbox(std::move(els));
             break;
         }
@@ -591,7 +591,6 @@ Element MessageListComponent::buildBanner() {
         }
         default: // Connected: 启动完成提示 + 按键提示
             statusLine = vbox({
-                text("agent-server 已启动完成") | color(theme.accentColor) | center,
                 text(R"(Type a message to start. [Esc] cancel, [Ctrl+C] quit.)")
                     | color(theme.hintColor) | center,
             });

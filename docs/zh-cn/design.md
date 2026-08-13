@@ -237,7 +237,7 @@ TUI [F4] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
   - 启动进度逐步展示: agent-server init() 各阶段 (检测系统环境/模型注册表/中间件/
     加载 MCP server/RAG/CodeGraph 等) 经 AgentContext::startupNotifier →
     AgentIOBase::onServerProgress 上报, "启动中"banner 同步显示当前执行的操作,
-    完成后显示"agent-server 已启动完成 ✓"及按键提示 (banner itemKey 计入
+    完成后显示按键提示 (banner itemKey 计入
     connState+startupProgress 使 LazyScrollable 缓存失效重建)
     远程模式由 mode_runners 连接协程驱动 (ConnState 存于 TUIRenderState::connState)
   - 屏幕上方 toast 提示

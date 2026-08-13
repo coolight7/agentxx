@@ -91,9 +91,9 @@
         - 超时限制
         - 区分 stdout、stderr，自动转换输出字符编码到 Utf8
     - ✅web_search (支持 asio 协程异步网络请求)
-        - agentxx_web_search (内置 HTML 转 markdown, 支持直接使用普通网页搜索api)
-        - agentxx_web_fetch_url_markdown (html to markdown)
-        - agentxx_web_fetch_url (raw resp body)
+        - web_search (内置 HTML 转 markdown, 支持直接使用普通网页搜索api)
+        - web_fetch_url_markdown (html to markdown)
+        - web_fetch_url (raw resp body)
         - ⬜支持 subagent 对接外部 llm api 实现搜索
     - ✅planning
         - 目标规划 + 渐进任务细节 两层任务规划 + 备忘录
@@ -104,7 +104,7 @@
     - ⬜tool_skill_search (延迟加载 tool/skill)
     - ✅ui_control (windows 系统上控制鼠标键盘)
     - ✅get_system_core_info 获取系统 CPU占用、内存、GPU占用、显存
-    - ✅agentxx_get_current_datetime 获取系统时间戳、本地时间、UTC时间
+    - ✅get_current_datetime 获取系统时间戳、本地时间、UTC时间
 - ✅**Tree-Messages**
     - agentxx_share_store (允许存取变量，在 llm-messages、skill、tool 之间传递数据)
         - 支持 `line_offset`/`line_limit` 文本分页读取
@@ -151,20 +151,22 @@
 - ✅**压缩上下文** `SummarizationMiddleware`
     - Api TokenUsage / 自动估算 tokens，达到阈值时自动启动压缩
     - toolcall 各自实现压缩处理
-        - 裁剪历史消息中过时的 (agentxx_filesystem)文件读写、(agentxx_planning_write)任务规划、(agentxx_share_store)变量读写消息
+        - 裁剪历史消息中过时的 (filesystem)文件读写、(agentxx_planning_write)任务规划、(agentxx_share_store)变量读写消息
     - 将部分重要的长消息内容暂存到 `agentxx_share_store`，而不压缩，模型需要时可以提取
     - LLM 总结压缩
     - 保留最近消息
-- ⬜**Memory记忆**
-    - ✅自定义加载 Memory 文件
-    - 持久记忆
+- ✅**Memory记忆与上下文**
+    - ✅自定义 yaml 配置加载 Memory 文件
+    - ✅sqlite 保存 session 上下文和程序重启恢复
     - 总结共享记忆
-    - 自定义加载记忆消息
 - ✅**Skill支持** `SkillMiddleware`
     - 文件夹扫描/metadata读取收集 + `filesystem`文件内容读取 + `execute_command`执行
 - ✅**MCP支持**
-    - 命名空间隔离
+    - 宽泛协议支持 (2024-11-05 ~ 2026-07-28)
     - MCP client
+        - 命名空间隔离
+        - 默认超时限制
+        - http/stdio
     - Mcp Server
         - ⬜CodeGraph
         - ⬜Websearch
@@ -180,12 +182,13 @@
     - 自定义 (BaseUrl/ApiKey/ModelName/ExtraConfig)
 - ✅**自定义配置**
     - 支持启动时从 agentxx-config.yaml、.env 加载配置文件
+    - yaml 配置支持添加 Memory、MCP、Skill
     - 分离 System/Tool Prompt 到独立配置，以便支持自定义和`Self-upgrade`自动调整适配
 - ✅**网络超时与SSL验证**
     - 支持配置连接超时、动态超时限制 (自动根据请求体大小动态计算发送超时、流式接收间隔超时)
     - 支持关闭SSL验证
 - **队列等待输入**
-    - ⬜agent内置正在运行会话时增加用户输入，则添加到队列中，等待会话完成自动插入
+    - ⬜agent-server 内置正在运行会话时增加用户输入，则添加到队列中，等待会话完成自动插入
     - TUI输入队列
 
 ### 提示词训练
@@ -232,7 +235,7 @@
 - ⬜部分扩展功能独立编译为 exe，以便支持 WSL 连接扩展获取数据
 
 ### UI
-- ✅cli
+- ✅Cli
 - ✅TUI
 - ⬜GUI
 
