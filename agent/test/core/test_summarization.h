@@ -20,6 +20,8 @@ extern int g_sum_failed;
 /// 上下文压缩中间件 (SummarizationMiddlewareHandle) 单元测试
 /// - 覆盖: token 估算 / 文本转换 / 长内容暂存 share_store /
 ///   toolcall 去重截断 / onModelcallRunFunc 两级压缩流程与上下文统计
+/// - 完整语义: system 消息不可变 / tool 压缩先行 / subagent 整体压缩为一段总结
+///   (保留重要信息) / 消息角色顺序 (system|user 自动提示|assistant 总结 + 未压缩最近消息)
 asio::awaitable<TestResult> run_summarization_tests();
 
 } // namespace test
