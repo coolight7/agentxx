@@ -163,7 +163,10 @@ static WinProcLaunch buildWinProcLaunch(std::string_view command) {
         };
     }
     XX_LOGD("ExecuteWindowsCommandTool: PowerShell not found, fallback to cmd.exe");
-    return WinProcLaunch{"cmd.exe", {"/c", std::string{command}}};
+    return WinProcLaunch{
+        "cmd.exe",
+        {"/c", std::string{command}}
+    };
 }
 #endif // BOOST_PROCESS_V2_PROCESS_HPP
 
@@ -424,7 +427,7 @@ asio::awaitable<std::string>
             }
         }
 
-        auto launch = buildWinProcLaunch(command);
+        auto launch  = buildWinProcLaunch(command);
         auto procExe = boost::process::environment::find_executable(launch.exeName);
         if (procExe.empty() && launch.exeName != "cmd.exe") {
             // 探测到 PowerShell 但 PATH 中找不到 (极端环境): 回退 cmd.exe
@@ -432,7 +435,10 @@ asio::awaitable<std::string>
                 "ExecuteWindowsCommandTool: {} not found in PATH, fallback to cmd.exe",
                 launch.exeName
             );
-            launch = WinProcLaunch{"cmd.exe", {"/c", command}};
+            launch = WinProcLaunch{
+                "cmd.exe",
+                {"/c", command}
+            };
             procExe = boost::process::environment::find_executable(launch.exeName);
         }
         auto proc = boost::process::process{

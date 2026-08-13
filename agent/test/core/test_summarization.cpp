@@ -520,10 +520,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
             // 索引 0 的 request 已随 0f9f920 纳入去重循环 (i >= 0): 与后面的重复
             // request 一样被截断, 仅保留最后一组 (旧断言"索引 0 受循环边界保护"
             // 与新循环语义矛盾, 已同步更新)
-            XX_TEST_EXPECT_EQ(
-                msgs[0].tool_calls[0].arguments,
-                std::string{"[Truncated Request]"}
-            );
+            XX_TEST_EXPECT_EQ(msgs[0].tool_calls[0].arguments, std::string{"[Truncated Request]"});
         }
 
         // --- D. 非法 JSON 参数: 跳过该条, 不崩溃 ---

@@ -35,12 +35,12 @@ using namespace ftxui;
 
 /// 一次性全量解析 + 构建 (O(n), 作为“期望结果”基线)
 Element fullRender(
-    std::string_view                     text,
-    markdown::Theme const&               theme,
-    int                                  width,
+    std::string_view                                    text,
+    markdown::Theme const&                              theme,
+    int                                                 width,
     std::vector<std::unique_ptr<markdown::DomBuilder>>& keepAlive
 ) {
-    auto parser = markdown::make_cmark_parser();
+    auto                  parser = markdown::make_cmark_parser();
     markdown::MarkdownAST ast;
     parser->parse(text, ast);
     auto builder = std::make_unique<markdown::DomBuilder>();
@@ -54,14 +54,14 @@ Element fullRender(
 
 /// 将增量渲染器的稳定块 + 尾部块组装为完整元素 (与整篇解析的块间空行一致)
 Element incrementalRenderAll(
-    markdown::IncrementalRenderer&                        inc,
-    Color                                                 color,
-    markdown::Theme const&                                theme,
-    int                                                   width,
-    std::vector<std::unique_ptr<markdown::DomBuilder>>&   buildersOut
+    markdown::IncrementalRenderer&                      inc,
+    Color                                               color,
+    markdown::Theme const&                              theme,
+    int                                                 width,
+    std::vector<std::unique_ptr<markdown::DomBuilder>>& buildersOut
 ) {
     std::unique_ptr<markdown::DomBuilder> fb;
-    auto frontier = inc.renderFrontier(theme, width, fb);
+    auto                                  frontier = inc.renderFrontier(theme, width, fb);
     if (fb) {
         buildersOut.push_back(std::move(fb));
     }
@@ -96,9 +96,7 @@ std::string toScreen(Element el, int w, int h) {
 }
 
 /// 断言: 增量渲染器在给定文本的渲染结果与一次性全量解析一致
-void expectIncrementalEqualsFull(
-    std::string_view text, int width, std::string const& tag
-) {
+void expectIncrementalEqualsFull(std::string_view text, int width, std::string const& tag) {
     auto const& theme = markdown::theme_default();
 
     // 期望值: 一次性全量解析
@@ -117,7 +115,8 @@ void expectIncrementalEqualsFull(
         XX_TEST_EXPECT_TRUE(false);
         fprintf(stderr, "[tui_stream] mismatch (tag=%s)\n", tag.c_str());
         fprintf(
-            stderr, "  expected:\n%s\n  actual:\n%s\n",
+            stderr,
+            "  expected:\n%s\n  actual:\n%s\n",
             toScreen(full, width, 80).c_str(),
             toScreen(incEl, width, 80).c_str()
         );
@@ -173,7 +172,7 @@ TestResult testTuiStream() {
 
     // ---- 空文档 ----
     {
-        markdown::IncrementalRenderer inc;
+        markdown::IncrementalRenderer                      inc;
         std::vector<std::unique_ptr<markdown::DomBuilder>> keep;
         auto el = incrementalRenderAll(inc, Color::White, markdown::theme_default(), W, keep);
         auto s  = toScreen(el, W, 10);
@@ -206,7 +205,11 @@ TestResult testTuiStream() {
     );
 
     // ---- 引用块 ----
-    expectIncrementalEqualsFull("> quote line 1\n> quote line 2\n\nPlain after quote.\n", W, "quote");
+    expectIncrementalEqualsFull(
+        "> quote line 1\n> quote line 2\n\nPlain after quote.\n",
+        W,
+        "quote"
+    );
 
     // ---- 主题分割线 ----
     expectIncrementalEqualsFull("Before\n\n---\n\nAfter\n", W, "thematic");
@@ -232,7 +235,7 @@ TestResult testTuiStream() {
 
     // ---- stableBlockCount 单调不减, 且最终稳定块数以空行为界 ----
     {
-        std::string doc = "one\n\ntwo\nthree\n\nfour\n";
+        std::string                   doc = "one\n\ntwo\nthree\n\nfour\n";
         markdown::IncrementalRenderer inc;
         inc.append("one\n\n");
         XX_TEST_EXPECT_TRUE(inc.stableBlockCount() >= 0);
@@ -266,10 +269,10 @@ TestResult testTuiStream() {
     {
         // 分步 feed 回归: 定义段落已出现(仍是 parser 子块) 之后又被释放,
         // 已缓存的 P1 必须保持单份, 尾块从定义处起算 (曾经修复过重复渲染)
-        const auto& theme = markdown::theme_default();
-        markdown::IncrementalRenderer inc;
+        const auto&                                        theme = markdown::theme_default();
+        markdown::IncrementalRenderer                      inc;
         std::vector<std::unique_ptr<markdown::DomBuilder>> keepInc, keepFull;
-        auto cmp = [&](std::string_view prefix) {
+        auto                                               cmp = [&](std::string_view prefix) {
             keepInc.clear();
             keepFull.clear();
             auto incEl = incrementalRenderAll(inc, Color::White, theme, W, keepInc);
@@ -298,9 +301,7 @@ TestResult testTuiStream() {
         auto el1 = incrementalRenderAll(inc, Color::White, markdown::theme_default(), W, keep);
         inc.invalidateCache();
         auto el2 = incrementalRenderAll(inc, Color::White, markdown::theme_default(), W, keep);
-        XX_TEST_EXPECT_TRUE(
-            toScreen(el1, W, 40) == toScreen(el2, W, 40)
-        );
+        XX_TEST_EXPECT_TRUE(toScreen(el1, W, 40) == toScreen(el2, W, 40));
     }
 
     // ---- 宽依赖: 窄/宽宽度渲染 (表格随 maxWidth 变化) 至少不崩溃 ----

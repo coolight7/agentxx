@@ -124,7 +124,7 @@ static std::string titlePreview(std::string_view s, size_t max = 60) {
     size_t count = 0;
     size_t i     = 0;
     while (i < line.size() && count < max) {
-        const auto c = static_cast<unsigned char>(line[i]);
+        const auto c    = static_cast<unsigned char>(line[i]);
         size_t     step = 1;
         if (c >= 0xf0) {
             step = 4;
@@ -148,10 +148,7 @@ static std::string titlePreview(std::string_view s, size_t max = 60) {
 
 } // namespace
 
-void SessionPersistence::updateViewMessage(
-    std::string_view   threadId,
-    const ViewMessage& msg
-) {
+void SessionPersistence::updateViewMessage(std::string_view threadId, const ViewMessage& msg) {
     if (msg.id.empty()) {
         XX_LOGD("SessionPersistence: updateViewMessage({}) skipped (empty msg id)", threadId);
         return;
@@ -161,9 +158,9 @@ void SessionPersistence::updateViewMessage(
         [&]() -> bool {
             auto& db = dbs(threadId).sessionDb;
             // 按消息 id 定位行 (json1 json_extract; sqlite >= 3.38 内置)
-            auto update = db.prepare(
-                "UPDATE view_message SET json = ? WHERE json_extract(json, '$.id') = ?"
-            );
+            auto update
+                = db.prepare("UPDATE view_message SET json = ? WHERE json_extract(json, '$.id') = ?"
+                );
             update.bindText(1, msg.toJson().dump());
             update.bindText(2, msg.id);
             update.step();
@@ -299,7 +296,7 @@ SessionPersistence::LoadedSession SessionPersistence::loadSession(std::string_vi
 }
 
 std::vector<SessionInfo> SessionPersistence::listSessions() {
-    std::vector<SessionInfo> out;
+    std::vector<SessionInfo>    out;
     std::lock_guard<std::mutex> lock(mutex_);
     agentxx::util::catchError<bool>(
         [&]() -> bool {
@@ -358,7 +355,7 @@ std::vector<SessionInfo> SessionPersistence::listSessions() {
                                 info.lastActiveMs
                                     = std::chrono::duration_cast<std::chrono::milliseconds>(
                                           mtime.time_since_epoch()
-                                      )
+                                    )
                                           .count();
                             }
                         }
@@ -432,10 +429,8 @@ void SessionPersistence::appendViewMessage(
                 if (msg.role == ViewMessage::Role::User && !msg.text.empty()) {
                     auto title = titlePreview(msg.text);
                     if (!title.empty()) {
-                        auto titleStmt = db.prepare(
-                            "INSERT INTO meta(key, value) VALUES (?, ?) "
-                            "ON CONFLICT(key) DO NOTHING"
-                        );
+                        auto titleStmt = db.prepare("INSERT INTO meta(key, value) VALUES (?, ?) "
+                                                    "ON CONFLICT(key) DO NOTHING");
                         titleStmt.bindText(1, kMetaTitle);
                         titleStmt.bindText(2, title);
                         titleStmt.step();

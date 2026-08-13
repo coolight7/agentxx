@@ -269,9 +269,13 @@ public:
         };
     }
 
-    std::string get_name() const override { return name_; }
+    std::string get_name() const override {
+        return name_;
+    }
 
-    std::string execute(const neograph::json&) override { return ""; }
+    std::string execute(const neograph::json&) override {
+        return "";
+    }
 
 private:
 
@@ -308,15 +312,19 @@ asio::awaitable<void> test_permission_relative_path() {
 
     auto check = [&](std::string_view rel, std::string_view abs) -> asio::awaitable<void> {
         // 相对路径访问
-        auto relArgs = neograph::json{{"path", std::string{rel}}};
-        auto relOk   = co_await permission->defOnFilesystemHandle(
+        auto relArgs = neograph::json{
+            {"path", std::string{rel}}
+        };
+        auto relOk = co_await permission->defOnFilesystemHandle(
             item,
             relArgs,
             agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
         );
         // 对应绝对路径访问
-        auto absArgs = neograph::json{{"path", std::string{abs}}};
-        auto absOk   = co_await permission->defOnFilesystemHandle(
+        auto absArgs = neograph::json{
+            {"path", std::string{abs}}
+        };
+        auto absOk = co_await permission->defOnFilesystemHandle(
             item,
             absArgs,
             agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
@@ -340,14 +348,18 @@ asio::awaitable<void> test_permission_relative_path() {
 
     // 4. 空路径与 cwd 路径均不命中 {cwd}/* 规则, 回退到 /* INTERRUPT
     //    (无 prompter 时均拒绝, 行为一致)
-    auto emptyArgs = neograph::json{{"path", ""}};
-    auto emptyOk   = co_await permission->defOnFilesystemHandle(
+    auto emptyArgs = neograph::json{
+        {"path", ""}
+    };
+    auto emptyOk = co_await permission->defOnFilesystemHandle(
         item,
         emptyArgs,
         agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
     );
-    auto cwdArgs = neograph::json{{"path", cwd}};
-    auto cwdOk   = co_await permission->defOnFilesystemHandle(
+    auto cwdArgs = neograph::json{
+        {"path", cwd}
+    };
+    auto cwdOk = co_await permission->defOnFilesystemHandle(
         item,
         cwdArgs,
         agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
@@ -368,9 +380,9 @@ asio::awaitable<void> test_permission_remember_rule() {
     io->permissionAllow = true;
     io->registerOnBus(sessionBus);
 
-    auto agentContext  = std::make_shared<agentxx::agent::AgentContext>();
-    auto session       = agentContext->getSession("remember_test");
-    session->bus       = sessionBus;
+    auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
+    auto session      = agentContext->getSession("remember_test");
+    session->bus      = sessionBus;
     auto permission
         = std::make_shared<agentxx::middleware::PermissionMiddlewareHandle>(agentContext);
 
@@ -387,15 +399,17 @@ asio::awaitable<void> test_permission_remember_rule() {
         agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
     );
 
-    MockTool item("agentxx_filesystem_write_file");
+    MockTool          item("agentxx_filesystem_write_file");
     const std::string outsidePath = "/data/projects/remember/out.txt";
     const std::string subPath     = "/data/projects/remember/sub/deep.txt";
     const std::string secretPath  = "/data/projects/remember/secret/key.txt";
 
     auto write = [&](std::string_view path) -> asio::awaitable<bool> {
         // 必须携带 thread_id: requestPermission 经 sessions->get(thread_id) 取会话总线
-        auto args
-            = neograph::json{{"path", std::string{path}}, {"thread_id", "remember_test"}};
+        auto args = neograph::json{
+            {"path",      std::string{path}},
+            {"thread_id", "remember_test"  }
+        };
         co_return co_await permission->defOnFilesystemHandle(
             item,
             args,

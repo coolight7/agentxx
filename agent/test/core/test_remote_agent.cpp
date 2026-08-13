@@ -331,9 +331,7 @@ static asio::awaitable<void> test_remote_protocol_roundtrip() {
     {
         // 会话选择弹窗: ListSessions / SessionList / SwitchSession 序列化往返
         agentxx::agent::WireListSessions ls{};
-        auto                             back = WsAgentIOTransport::deserialize(
-            WsAgentIOTransport::serialize(WireMessage{ls})
-        );
+        auto back = WsAgentIOTransport::deserialize(WsAgentIOTransport::serialize(WireMessage{ls}));
         XX_TEST_EXPECT_TRUE(back.has_value());
         if (back) {
             XX_TEST_EXPECT_TRUE(std::get_if<agentxx::agent::WireListSessions>(&*back) != nullptr);
@@ -343,9 +341,7 @@ static asio::awaitable<void> test_remote_protocol_roundtrip() {
         agentxx::agent::WireSessionList sl;
         sl.sessions.push_back(agentxx::agent::SessionInfo{"t1", "title-1", 1712345678000});
         sl.sessions.push_back(agentxx::agent::SessionInfo{"t2", "", 0});
-        auto back = WsAgentIOTransport::deserialize(
-            WsAgentIOTransport::serialize(WireMessage{sl})
-        );
+        auto back = WsAgentIOTransport::deserialize(WsAgentIOTransport::serialize(WireMessage{sl}));
         XX_TEST_EXPECT_TRUE(back.has_value());
         if (back) {
             auto* r = std::get_if<agentxx::agent::WireSessionList>(&*back);
@@ -365,9 +361,7 @@ static asio::awaitable<void> test_remote_protocol_roundtrip() {
     }
     {
         agentxx::agent::WireSwitchSession sw{"target-session"};
-        auto                              back = WsAgentIOTransport::deserialize(
-            WsAgentIOTransport::serialize(WireMessage{sw})
-        );
+        auto back = WsAgentIOTransport::deserialize(WsAgentIOTransport::serialize(WireMessage{sw}));
         XX_TEST_EXPECT_TRUE(back.has_value());
         if (back) {
             auto* r = std::get_if<agentxx::agent::WireSwitchSession>(&*back);
@@ -961,13 +955,9 @@ static asio::awaitable<void> test_run_transport_loop_replace_transport() {
 
     // 旧接收循环 (对应旧连接的 serveTransport 协程), 完成时置 oldLoopExited
     std::atomic<bool> oldLoopExited{false};
-    asio::co_spawn(
-        ex,
-        io->runTransportLoop(),
-        [&oldLoopExited](std::exception_ptr) {
-            oldLoopExited.store(true, std::memory_order_release);
-        }
-    );
+    asio::co_spawn(ex, io->runTransportLoop(), [&oldLoopExited](std::exception_ptr) {
+        oldLoopExited.store(true, std::memory_order_release);
+    });
 
     // 旧连接上收一条 Delta (确认循环工作)
     agentxx::agent::Delta da;
@@ -993,13 +983,9 @@ static asio::awaitable<void> test_run_transport_loop_replace_transport() {
 
     // 新接收循环 (模拟新连接的 serveTransport 发起): 绑定当前成员 transport_ (tB)
     std::atomic<bool> newLoopExited{false};
-    asio::co_spawn(
-        ex,
-        io->runTransportLoop(),
-        [&newLoopExited](std::exception_ptr) {
-            newLoopExited.store(true, std::memory_order_release);
-        }
-    );
+    asio::co_spawn(ex, io->runTransportLoop(), [&newLoopExited](std::exception_ptr) {
+        newLoopExited.store(true, std::memory_order_release);
+    });
 
     // 新连接上收发消息正常 (无两个循环瓜分)
     agentxx::agent::Delta db;
@@ -1037,10 +1023,7 @@ static asio::awaitable<void> test_remote_client_context_stats() {
             ws,
             io::makeHelloAck(true, hello->value("thread", std::string{}), "", {})
         );
-        co_await wsSendJson(
-            ws,
-            io::makeContextStats(1234, 5678, 12.5)
-        );
+        co_await wsSendJson(ws, io::makeContextStats(1234, 5678, 12.5));
         for (;;) {
             auto j = co_await wsRecvJson(ws);
             if (!j) {
@@ -1723,9 +1706,7 @@ static asio::awaitable<void> test_session_controller_switch_session() {
     auto reStatsMsg = co_await clientT->recv();
     XX_TEST_EXPECT_TRUE(reStatsMsg.has_value());
     if (reStatsMsg) {
-        XX_TEST_EXPECT_TRUE(
-            std::get_if<agentxx::agent::WireContextStats>(&*reStatsMsg) != nullptr
-        );
+        XX_TEST_EXPECT_TRUE(std::get_if<agentxx::agent::WireContextStats>(&*reStatsMsg) != nullptr);
     }
 
     // ---- 空 threadId 非法: 直接忽略 ----

@@ -589,8 +589,8 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                         if (interruptArg.name == "subagent") {
                             auto subagentArg = interruptArg.arg;
                             auto resp        = co_await agentContext->bus->request<
-                                events::ReqSubagentStart,
-                                events::RespSubagentResult>(
+                                       events::ReqSubagentStart,
+                                       events::RespSubagentResult>(
                                 events::Topic::Subagent,
                                 events::ReqSubagentStart{
                                     .parentAgentName = agentContext->agentConfig

@@ -53,8 +53,8 @@ bool isValidPsVersion(std::string_view version) {
 #include <sys/wait.h>
 #include <unistd.h>
 
-static std::optional<std::string> systemName_;
-static std::optional<bool>        isRunningInWSL_;
+static std::optional<std::string>                   systemName_;
+static std::optional<bool>                          isRunningInWSL_;
 static std::optional<agentxx::util::PowerShellInfo> psInfo_;
 
 std::string agentxx::util::getSystemName() {
@@ -119,8 +119,9 @@ bool agentxx::util::isRunningInWSL() {
 static std::string runPsVersionProbe(const char* exeName, int timeoutMs) {
     // exeName 只允许字母数字与点 (防止拼接 shell 注入), 候选列表由本函数调用方控制
     for (char c : std::string_view{exeName}) {
-        if (false == ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
-                      || c == '.')) {
+        if (false
+            == ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+                || c == '.')) {
             return {};
         }
     }
@@ -183,9 +184,11 @@ static std::string runPsVersionProbe(const char* exeName, int timeoutMs) {
             XX_LOGW("PowerShell probe timeout, killed pid={}", static_cast<long>(pid));
             break;
         }
+
         struct pollfd pfd {
             .fd = pipefd[0], .events = POLLIN
         };
+
         int pollRet = ::poll(&pfd, 1, static_cast<int>(std::min<long long>(remainMs, INT_MAX)));
         if (pollRet > 0 && (pfd.revents & POLLIN)) {
             ssize_t n = ::read(pipefd[0], buf, sizeof(buf));
@@ -235,7 +238,7 @@ agentxx::util::PowerShellInfo agentxx::util::detectPowerShell(bool forceRefresh)
                 };
                 for (const auto& [exeName, isPwsh] : candidates) {
                     // 探测超时给足裕量: 首次运行 powershell.exe 可能较慢
-                    auto output = runPsVersionProbe(exeName, 12000);
+                    auto output  = runPsVersionProbe(exeName, 12000);
                     auto version = trimWhitespace(output);
                     // 版本可能带 BOM/多余内容, 只取第一行
                     if (auto nlPos = version.find_first_of("\r\n"); nlPos != std::string::npos) {
@@ -318,8 +321,8 @@ static std::string runPsVersionProbeWin(const char* exeName) {
         exeName
     );
     // 丢弃 stderr, 只取 stdout 版本输出
-    cmd += " 2>NUL";
-    FILE* fp = _popen(cmd.c_str(), "r");
+    cmd      += " 2>NUL";
+    FILE* fp  = _popen(cmd.c_str(), "r");
     if (nullptr == fp) {
         return {};
     }
@@ -344,7 +347,7 @@ agentxx::util::PowerShellInfo agentxx::util::detectPowerShell(bool forceRefresh)
                 {{"pwsh.exe", true}, {"powershell.exe", false}},
             };
             for (const auto& [exeName, isPwsh] : candidates) {
-                auto output = runPsVersionProbeWin(exeName);
+                auto output  = runPsVersionProbeWin(exeName);
                 auto version = trimWhitespace(output);
                 if (auto nlPos = version.find_first_of("\r\n"); nlPos != std::string::npos) {
                     version.erase(nlPos);

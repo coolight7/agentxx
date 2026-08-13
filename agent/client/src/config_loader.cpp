@@ -398,11 +398,8 @@ YamlAppConfig loadYamlConfig(
     // 统一数据根目录 (全局设置/会话/codegraph 索引等数据存放根)
     // - 为空使用默认 ~/.agentxx/; 支持 ${VAR} 展开, `~` 展开由调用方完成
     if (root["data_dir"]) {
-        cfg.dataDir = resolveEnvVars(
-            root["data_dir"].as<std::string>(""),
-            dotEnvVars,
-            overrideEnvVars
-        );
+        cfg.dataDir
+            = resolveEnvVars(root["data_dir"].as<std::string>(""), dotEnvVars, overrideEnvVars);
     }
 
     // CodeGraph 代码分析
@@ -435,10 +432,7 @@ YamlAppConfig loadYamlConfig(
             } else if (util::isIgnoreCaseEqual(val, "ask")) {
                 cfg.permissionMode = agent::PermissionMode::Ask;
             } else {
-                XX_LOGW(
-                    "[Config] Warning: unknown permission.mode '{}', fallback to 'ask'",
-                    val
-                );
+                XX_LOGW("[Config] Warning: unknown permission.mode '{}', fallback to 'ask'", val);
             }
         }
         if (root["permission"]["whitelist"] && root["permission"]["whitelist"].IsSequence()) {

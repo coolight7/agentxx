@@ -438,10 +438,9 @@ void test_overlay_in_modal_container_height() {
     modal->pushModal(overlay);
 
     auto renderModal = [&]() {
-        auto el     = modal->Render();
-        auto screen = ftxui::Screen::Create(
-            ftxui::Dimension::Fixed(120), ftxui::Dimension::Fixed(50)
-        );
+        auto el = modal->Render();
+        auto screen
+            = ftxui::Screen::Create(ftxui::Dimension::Fixed(120), ftxui::Dimension::Fixed(50));
         ftxui::Render(screen, el);
         return screen.ToString();
     };
@@ -479,8 +478,8 @@ void test_overlay_in_modal_container_height() {
     bool seenB = contains(out, "B");
     for (int i = 0; i < 12 && !seenB; ++i) {
         overlay->OnEvent(ftxui::Event::ArrowDown);
-        out    = renderModal();
-        seenB  = contains(out, "B");
+        out   = renderModal();
+        seenB = contains(out, "B");
     }
     XX_TEST_EXPECT_TRUE(seenB);
 }
@@ -549,6 +548,7 @@ void test_overlay_reparses_on_plan_update() {
 /// 析构时恢复 stdout 与 fallback 默认值 (80x24)。
 class TerminalSizeFix {
 public:
+
     TerminalSizeFix() {
         ftxui::Terminal::SetFallbackSize({120, 50});
 #if defined(_WIN32)
@@ -567,7 +567,7 @@ public:
         }
 #else
         // POSIX: 重定向 STDOUT_FILENO 到 /dev/null, 使 ioctl(TIOCGWINSZ) 失败
-        oldOutFd_ = dup(STDOUT_FILENO);
+        oldOutFd_         = dup(STDOUT_FILENO);
         const int devnull = open("/dev/null", O_WRONLY);
         if (devnull >= 0) {
             dup2(devnull, STDOUT_FILENO);
@@ -575,6 +575,7 @@ public:
         }
 #endif
     }
+
     ~TerminalSizeFix() {
 #if defined(_WIN32)
         if (oldOut_ != INVALID_HANDLE_VALUE) {
@@ -592,10 +593,12 @@ public:
         // 恢复 ftxui 默认 fallback (其他测试不依赖, 保持环境干净)
         ftxui::Terminal::SetFallbackSize({80, 24});
     }
+
     TerminalSizeFix(const TerminalSizeFix&)            = delete;
     TerminalSizeFix& operator=(const TerminalSizeFix&) = delete;
 
 private:
+
 #if defined(_WIN32)
     HANDLE oldOut_ = INVALID_HANDLE_VALUE;
     HANDLE nul_    = INVALID_HANDLE_VALUE;

@@ -32,7 +32,7 @@ public:
         util::HttpServer::Config http;  // address
         std::string              token; // 空且 autoGenerateToken 时自动生成
         /// 进程内可信连接可关闭鉴权 (token 留空即不校验)
-        bool                 autoGenerateToken = true;
+        bool autoGenerateToken = true;
         /// 中断/权限等待客户端响应的超时; <=0 表示不限制 (无限等待用户响应)
         std::chrono::milliseconds interruptTimeout{0};
         std::chrono::seconds      gracePeriod{30}; // 断线重挂等待期

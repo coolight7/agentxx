@@ -225,7 +225,7 @@ void runLocalCliUnified(std::shared_ptr<agent::CodeAgent> agent) {
 
 static asio::awaitable<void> runLocalTuiUnifiedAsync(
     std::shared_ptr<agent::CodeAgent> agent,
-    agent::PermissionMode                   permissionMode
+    agent::PermissionMode             permissionMode
 ) {
     auto clientEx = co_await asio::this_coro::executor;
     // 每次启动生成唯一会话 id, 避免多实例/多次启动共用 "session" 导致会话串扰
@@ -233,7 +233,8 @@ static asio::awaitable<void> runLocalTuiUnifiedAsync(
 
     // 注意: TUI 不持有 AgentContext/Session (属于 agent-server 线程), 所有
     // agent 侧信息 (模型列表/上下文统计/LLM 上下文) 均经 Wire 消息由服务端获取
-    auto tui = std::make_shared<TUIClientAgentIO>(clientEx, threadId, resolveTuiTheme(), permissionMode);
+    auto tui
+        = std::make_shared<TUIClientAgentIO>(clientEx, threadId, resolveTuiTheme(), permissionMode);
     tui->start();
 
     auto serverIO = setupLocalUnifiedDirect(clientEx, agent, tui, threadId);
@@ -343,10 +344,10 @@ void runRemoteCli(std::string_view url, std::string_view token, std::string_view
 }
 
 static asio::awaitable<void> runRemoteTuiAsync(
-    std::string url,
-    std::string token,
-    std::string model,
-    agent::PermissionMode                   permissionMode
+    std::string           url,
+    std::string           token,
+    std::string           model,
+    agent::PermissionMode permissionMode
 ) {
     auto ex = co_await asio::this_coro::executor;
 
@@ -375,7 +376,7 @@ static asio::awaitable<void> runRemoteTuiAsync(
         agent::WsAgentIOTransport::Config transportCfg;
         // 有限次尝试后返回失败 (默认 0=无限内部重连, 用户永远等不到失败提示)
         transportCfg.maxReconnectAttempts = 2;
-        util::WsClientConfig              wsCfg;
+        util::WsClientConfig wsCfg;
         wsCfg.recvTimeout = std::chrono::seconds{60};
 
         auto transport
@@ -439,20 +440,15 @@ static asio::awaitable<void> runRemoteTuiAsync(
 }
 
 void runRemoteTui(
-    std::string_view             url,
-    std::string_view             token,
-    std::string_view             model,
-    agent::PermissionMode        permissionMode
+    std::string_view      url,
+    std::string_view      token,
+    std::string_view      model,
+    agent::PermissionMode permissionMode
 ) {
     asio::io_context ctx;
     asio::co_spawn(
         ctx,
-        runRemoteTuiAsync(
-            std::string{url},
-            std::string{token},
-            std::string{model},
-            permissionMode
-        ),
+        runRemoteTuiAsync(std::string{url}, std::string{token}, std::string{model}, permissionMode),
         asio::detached
     );
     ctx.run();
