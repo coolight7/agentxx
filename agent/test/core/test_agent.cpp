@@ -462,6 +462,23 @@ asio::awaitable<void> test_agent_permission_mode_rules() {
         bool ok = co_await check(perm, insidePath, "perm_ask");
         XX_TEST_EXPECT_TRUE(ok);
         XX_TEST_EXPECT_EQ(io->permissionCalls.load(), 0);
+#if XX_IS_WIN_D
+        // Windows 文件系统大小写不敏感: 请求路径与注册路径大小写不同
+        // (模型可能传任意大小写, 如 d:/... 或 D:\...) 也应放行, 不询问
+        std::string mixedCasePath = insidePath;
+        for (auto& c : mixedCasePath) {
+            if (c >= 'a' && c <= 'z') {
+                c = static_cast<char>(c - 'a' + 'A');
+            } else if (c >= 'A' && c <= 'Z') {
+                c = static_cast<char>(c - 'A' + 'a');
+            }
+        }
+        if (mixedCasePath != insidePath) {
+            ok = co_await check(perm, mixedCasePath, "perm_ask");
+            XX_TEST_EXPECT_TRUE(ok);
+            XX_TEST_EXPECT_EQ(io->permissionCalls.load(), 0);
+        }
+#endif
         // 白名单 (工作目录内 trusted 子目录): 允许, 不询问
         ok = co_await check(perm, trustedPath, "perm_ask");
         XX_TEST_EXPECT_TRUE(ok);

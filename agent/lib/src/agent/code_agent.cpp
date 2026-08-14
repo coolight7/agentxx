@@ -106,21 +106,24 @@ asio::awaitable<void> CodeAgent::setupMiddleware() {
             default:
                 // 当前工作目录内允许, 其他路径询问
                 // - 工作目录获取失败 (返回空串) 时不注册默认放行规则, 所有路径
-                //   均询问 (安全兜底: "/*" 规则会退化为放行根目录下所有路径)
+                //   均询问 (安全兜底: 注册根目录 "/" 会退化为放行所有路径)
                 {
                     const auto workPath = agentxx::agent::AgentConfigStatic::getCurrentWorkPath();
                     if (workPath.empty()) {
                         XX_LOGW("PermissionMode::Ask: getCurrentWorkPath failed, "
                                 "no default allow rule registered, all paths will be asked");
                     } else {
+                        // 注册工作目录本身: 权限路由最长前缀回退 (prefix_fallback)
+                        // 使其下任意子路径均命中此规则 (与 "{workPath}/*" 等价且
+                        // 额外覆盖对工作目录自身的访问, 如列出工作目录)
                         permission->setFilesystemPermission(
-                            fmt::format("{}/*", workPath),
+                            workPath,
                             agentxx::middleware::PermissionOperator::ALLOW,
                             agentxx::middleware::PermissionMiddlewareHandle::
                                 FilesystemPermissionWRITE
                         );
                         permission->setFilesystemPermission(
-                            fmt::format("{}/*", workPath),
+                            workPath,
                             agentxx::middleware::PermissionOperator::ALLOW,
                             agentxx::middleware::PermissionMiddlewareHandle::
                                 FilesystemPermissionREAD

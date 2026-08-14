@@ -103,6 +103,12 @@ public:
     bool startFileWatcher(bool auto_reindex = true);
     void stopFileWatcher();
 
+    /// 索引进度回调 (由索引线程触发, 调用方须自行跨线程转发)
+    /// - 流式遍历阶段: 每 kProgressNotifyBatch 个文件回调一次,
+    ///   [total]=0 表示文件总数未知 (遍历未结束), [processed] 为已处理文件数;
+    ///   UI 可据此显示"索引中 · 已发现 N 个文件", 随遍历逐渐增长
+    /// - 完成信号: 回调一次 (total, total, "") 且 total>0 表示索引结束
+    ///   (订阅方据此将状态置为 "完成" indexing=false)
     using IndexProgressCallback
         = std::function<void(int processed, int total, std::string_view current_file)>;
     void setProgressCallback(IndexProgressCallback callback);

@@ -621,20 +621,25 @@ static bool should_skip(std::string_view file_path) {
            || path_str.find(kSkipAgentxx) != std::string::npos;
 }
 
-/// 收集根目录下待索引的源文件列表 (应用全部过滤规则)
+/// 广度优先遍历根目录, 边遍历边回调每个待索引的源文件 (应用全部过滤规则)
 /// @param ignore_path_regexes 配置 ignorePaths 编译后的正则列表
 /// @param use_gitignore      是否启用 .gitignore/.gitmodules 忽略
+/// @param on_file            每发现一个应索引的源文件调用一次 (调用方即时索引);
+///                           返回 false 时停止遍历 (调用方主动中断, 不视为错误)
+/// - 不再预先收集完整文件列表: 大目录 (数万文件) 下避免一次性列出全部路径
+///   才返回 (阻塞索引与 UI 进度通知), 改为边遍历边回调, 索引进度/文件数
+///   可随遍历逐渐增长
 /// - 目录级剪枝: 命中忽略规则 (内置过滤/ignorePaths/gitignore) 的目录整棵子树
 ///   不进入遍历, 避免扫描 build/.git/third_party/子模块 等大目录
 /// - gitignore 按层级继承: 每进入一层目录加载该层 .gitignore (父级规则保留)
 /// - 显式栈遍历替代 recursive_directory_iterator, 避免深目录树递归栈溢出
-static std::vector<std::string> collect_source_files(
-    std::string_view               root_path,
-    const std::vector<std::regex>& ignore_path_regexes,
-    bool                           use_gitignore
+static void traverse_source_files(
+    std::string_view                   root_path,
+    const std::vector<std::regex>&     ignore_path_regexes,
+    bool                               use_gitignore,
+    const std::function<bool(std::string_view)>& on_file
 ) {
-    std::vector<std::string> files;
-    // 遍历失败记录日志, 返回已收集到的部分文件
+    // 遍历异常记录日志后中止; 已回调的文件保持已处理状态 (不重复处理)
     agentxx::util::catchError<bool>(
         [&]() -> bool {
             GitIgnoreMatcher matcher;
@@ -707,18 +712,20 @@ static std::vector<std::string> collect_source_files(
                         if (lang.empty()) {
                             continue;
                         }
-                        files.push_back(path_str);
+                        // 边遍历边回调 (调用方即时索引并通知进度; 返回 false 停止遍历)
+                        if (!on_file(path_str)) {
+                            return false; // 主动中断, 不视为错误
+                        }
                     }
                 }
             }
             return true;
         },
         [](std::string errmsg) -> bool {
-            XX_LOGE("CodeGraphManager: collect_source_files error: {}", errmsg);
+            XX_LOGE("CodeGraphManager: traverse_source_files error: {}", errmsg);
             return false;
         }
     );
-    return files;
 }
 
 static bool is_changed(
@@ -914,34 +921,18 @@ public:
 
         // 锁策略: 不再全程持有独占写锁 (否则索引期间查询被 writer 优先阻塞,
         // 表现为模型调用 codegraph tool 一直等待)。
-        // - collect_source_files / 文件解析 / is_changed 为锁外只读, 可与查询并发
+        // - traverse_source_files / 文件解析 / is_changed 为锁外只读, 可与查询并发
         // - 仅"实际写库"的操作 (writeExtractionResult / resolveReferences /
         //   rebuild_fts / wal checkpoint) 在持有 unique_lock 的短暂窗口内执行,
         //   查询 (shared_lock) 至多等待毫秒级, 大部分时间可读取已提交的部分数据
-        auto files = collect_source_files(path, ignore_path_regexes_, index_config_.useGitignore);
-        if (files.empty()) {
-            XX_LOGW("CodeGraphManager: no source files found in {}", path);
-            // 仍清理该根前缀下的残留记录 (忽略规则变更导致整根被过滤时,
-            // 旧节点/引用若不删除会残留), 然后保持原语义提前返回
-            std::unique_lock<std::shared_mutex> lock(mutex_);
-            if (db_) {
-                cleanupRemovedFiles(path, files);
-                runWithRetry("WAL checkpoint", 3, [&]() {
-                    db_->wal_checkpoint();
-                });
-                invalidateCaches();
-            }
-            return true;
-        }
-
-        XX_LOGI("CodeGraphManager: found {} source files to index in {}", files.size(), path);
-
+        // 流式遍历+索引: 目录遍历与文件索引同步进行 (不预先收集完整文件列表),
+        // 大目录下索引进度随遍历逐渐增长, 内存中不缓存全部路径
         int processed = 0;
-        int total     = static_cast<int>(files.size());
 
-        for (const auto& file_path : files) {
+        auto processFile = [&](std::string_view file_path) -> bool {
+            // 停止信号: 中断遍历 (traverse 不再回调)
             if (!running_.load()) {
-                break;
+                return false;
             }
 
             if (incremental) {
@@ -959,28 +950,24 @@ public:
                     // 增量跳过未变更文件: 推进进度计数 (processed = 已检查文件数),
                     // 使重启后断点续传时进度显示从上一次位置继续, 而非从 0 开始
                     ++processed;
-                    continue;
+                    return true;
                 }
             }
 
-            if (progress_callback_) {
-                progress_callback_(processed, total, file_path);
-            }
-
-            std::string lang = codegraph::detect_language(file_path);
+            std::string lang = codegraph::detect_language(std::string{file_path});
             if (lang.empty()) {
-                continue;
+                return true;
             }
 
             auto extractor = codegraph::create_extractor(std::string{lang});
             if (!extractor) {
-                continue;
+                return true;
             }
 
             std::ifstream ifs(std::string{file_path});
             if (!ifs.is_open()) {
                 XX_LOGW("CodeGraphManager: cannot open file {}", file_path);
-                continue;
+                return true;
             }
             std::string source(
                 (std::istreambuf_iterator<char>(ifs)),
@@ -993,12 +980,21 @@ public:
             {
                 std::unique_lock<std::shared_mutex> lock(mutex_);
                 if (!db_) {
-                    break;
+                    return false;
                 }
                 writeExtractionResult(file_path, lang, result);
             }
 
-            processed++;
+            ++processed;
+
+            // 进度通知: 首个文件立即回调 (UI 尽快显示"已发现文件"), 之后按批
+            // 节流 (每 kProgressNotifyBatch 个文件一次; total 在遍历结束前未知,
+            // 传 0 表示"文件总数未知, 索引进行中"):
+            // UI 侧据此显示已发现的文件数, 随遍历逐渐增长
+            if (progress_callback_
+                && (processed == 1 || processed % kProgressNotifyBatch == 0)) {
+                progress_callback_(processed, 0, file_path);
+            }
 
             // 每批文件提交后 WAL checkpoint: 已提交数据及时合并进主库文件,
             // 缩小"索引中途进程被强杀 -> 数据丢失"的窗口 (-wal 文件保留时
@@ -1009,7 +1005,36 @@ public:
                     db_->wal_checkpoint();
                 });
             }
+            return true;
+        };
+
+        // 边遍历边索引: 每发现一个源文件立即处理并通知进度
+        traverse_source_files(
+            path,
+            ignore_path_regexes_,
+            index_config_.useGitignore,
+            processFile
+        );
+
+        // 遍历结束: 文件总数为已处理数 (含增量跳过的未变更文件)
+        const int total = processed;
+
+        if (total == 0) {
+            XX_LOGW("CodeGraphManager: no source files found in {}", path);
+            // 仍清理该根前缀下的残留记录 (忽略规则变更导致整根被过滤时,
+            // 旧节点/引用若不删除会残留), 然后保持原语义提前返回
+            std::unique_lock<std::shared_mutex> lock(mutex_);
+            if (db_) {
+                cleanupRemovedFiles(path);
+                runWithRetry("WAL checkpoint", 3, [&]() {
+                    db_->wal_checkpoint();
+                });
+                invalidateCaches();
+            }
+            return true;
         }
+
+        XX_LOGI("CodeGraphManager: indexed {} source files in {}", total, path);
 
         {
             // 收尾写操作 (消失文件清理/引用解析/FTS 重建/checkpoint): 短暂独占锁
@@ -1019,10 +1044,10 @@ public:
             }
             // 清理本次索引范围内已消失文件的残留记录:
             // - 文件被删除, 或命中忽略规则 (ignorePaths/.gitignore/.gitmodules)
-            //   后不再出现在 files 列表, 其旧节点/引用若不删除会残留 (查询仍可搜到)
+            //   后不再被收集, 其旧节点/引用若不删除会残留 (查询仍可搜到)
             // - 仅删除属于本次索引根前缀的文件, 不动前缀复用库中其他路径的数据
-            // - files 为空 (整根被过滤/无源码) 时同样执行, 保证全量清理
-            cleanupRemovedFiles(path, files);
+            // - 遍历未收集到任何文件 (整根被过滤/无源码) 时同样执行, 保证全量清理
+            cleanupRemovedFiles(path);
 
             resolveReferences();
 
@@ -1600,8 +1625,9 @@ public:
     }
 
     /// 单文件是否应被过滤 (内置过滤 + ignorePaths 正则 + gitignore 缓存)
-    /// - 供文件监听增量索引使用; 全量/增量索引走 collect_source_files 的
-    ///   遍历过滤 (gitignore 按层级加载), 两者过滤规则保持一致
+    /// - 供文件监听增量索引与收尾清理使用; 全量/增量索引走
+    ///   traverse_source_files 的遍历过滤 (gitignore 按层级加载),
+    ///   两者过滤规则保持一致
     bool isFileIgnored(std::string_view file_path) {
         std::string s{file_path};
         if (should_skip(s)) {
@@ -1618,20 +1644,16 @@ public:
         return false;
     }
 
-    /// 删除本次索引根前缀下、不在 collected_files 中的文件的残留记录
-    /// - 文件被删除或命中忽略规则后不再被收集, 旧节点/引用/文件记录若不删除
-    ///   会残留 (查询仍可搜到); 由 indexDirectory 收尾调用
+    /// 删除本次索引根前缀下、已消失的文件的残留记录
+    /// - 文件被删除或命中忽略规则 (ignorePaths/.gitignore/.gitmodules) 后不再
+    ///   被遍历收集, 旧节点/引用/文件记录若不删除会残留 (查询仍可搜到);
+    ///   由 indexDirectory 收尾调用
+    /// - 流式遍历不再保留收集文件集合 (避免大目录内存缓存), 改为对数据库记录
+    ///   逐个判断: 文件仍存在且未命中过滤规则则保留, 否则删除 (语义与
+    ///   "不在收集列表中的删除" 等价)
     /// - 仅删除属于 root 前缀的文件, 不动前缀复用索引库中其他路径的数据
     /// - 调用方须已持有独占锁 (mutex_)
-    void cleanupRemovedFiles(
-        std::string_view                root,
-        const std::vector<std::string>& collected_files
-    ) {
-        std::unordered_set<std::string> collected;
-        collected.reserve(collected_files.size());
-        for (const auto& f : collected_files) {
-            collected.insert(f);
-        }
+    void cleanupRemovedFiles(std::string_view root) {
         std::string prefix = normalizePathStr(root);
         if (!prefix.empty() && prefix.back() != '/') {
             prefix.push_back('/');
@@ -1642,7 +1664,8 @@ public:
             if (fp.rfind(prefix, 0) != 0) {
                 continue;
             }
-            if (collected.count(fr.path) != 0 || collected.count(fp) != 0) {
+            // 文件仍存在且未命中过滤规则: 保留 (增量索引跳过的未变更文件在此保留)
+            if (fs::exists(fs::path(fr.path)) && !isFileIgnored(fr.path)) {
                 continue;
             }
             // 顺序与 writeExtractionResult 一致: 先删边/引用 (外键), 再删节点/记录;
@@ -1720,6 +1743,11 @@ public:
     /// 每批处理的文件数, 达到后执行一次 WAL checkpoint
     /// - 缩小"索引中途进程被强杀 -> 已提交数据仅存于 -wal"的丢失窗口
     static constexpr int kCheckpointFileBatch = 200;
+
+    /// 每批处理的文件数, 达到后回调一次索引进度 (遍历阶段文件总数未知)
+    /// - 流式遍历时每文件一次回调的 post/字符串拷贝开销对大目录 (数万文件)
+    ///   可感知, 按批通知既保持 UI 进度平滑增长又控制开销
+    static constexpr int kProgressNotifyBatch = 16;
 
 private:
 
