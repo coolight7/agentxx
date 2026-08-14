@@ -419,9 +419,13 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
     ///   codegraph [AGENTXX_ENABLE_CODEGRAPH] 且配置了 dataDir 时才添加
     ///   codegraph 系列 tool (索引数据库存放于 {dataDir}/sqlite/codegraph/,
     ///   dataDir 为空时不落盘, 故不注册)
-    /// - 索引项目根目录固定为当前程序工作目录
-    /// - 索引数据库: {dataDir}/sqlite/codegraph/<折叠路径>/index.db,
+    /// - 索引数据库按项目根目录 (通常为当前工作目录) 定位:
+    ///   {dataDir}/sqlite/codegraph/<折叠路径>/index.db,
     ///   深层路径折叠 + 单段截断控制长度, 子目录可前缀复用最近父级索引
+    /// - 索引内容范围由 CodeGraphIndexConfig 控制 (yaml `codegraph` 块):
+    ///   loadPaths 加载路径列表 (为空时索引项目根目录) /
+    ///   ignorePaths 忽略路径 (支持 * 通配符) / useGitignore (.gitignore 与
+    ///   .gitmodules 子模块目录忽略, 默认开启)
     if (config->enableCodeGraph && config->dataDir.empty()) {
         // dataDir 未配置: codegraph 索引无处落盘, 跳过注册 (与 BaseAgent 警告一致)
         XX_LOGW("CodeGraph enabled in config but dataDir is not set, skip codegraph tools "
@@ -436,8 +440,16 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
             "[codegraph] index data dir: {}",
             agentxx::agent::AgentConfigStatic::getSqliteDir(config->dataDir)
         );
-        codegraph_ = std::make_shared<agentxx::expand::CodeGraphManager>(
-            agentxx::agent::AgentConfigStatic::getSqliteDir(config->dataDir)
+        // 索引过滤配置 (加载路径/忽略路径/gitignore 开关; 相对路径已由
+        // client 启动时按工作目录解析为绝对路径)
+        agentxx::expand::CodeGraphIndexConfig cgConfig;
+        cgConfig.loadPaths          = config->codeGraphPaths;
+        cgConfig.ignorePaths        = config->codeGraphIgnorePaths;
+        cgConfig.useGitignore       = config->codeGraphUseGitignore;
+        cgConfig.autoLoadProjectRoot = config->codeGraphLoadCwd;
+        codegraph_             = std::make_shared<agentxx::expand::CodeGraphManager>(
+            agentxx::agent::AgentConfigStatic::getSqliteDir(config->dataDir),
+            std::move(cgConfig)
         );
         std::optional<std::string> projectRoot
             = agentxx::agent::AgentConfigStatic::getCurrentWorkPath();
@@ -470,22 +482,43 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
             tools.push_back(
                 std::make_unique<agentxx::tools::CodeGraphPathTool>(codegraph_, agentContext)
             );
-            XX_LOGI("CodeGraph enabled, added codegraph tools (project root: {})", *projectRoot);
+            // 日志: 展示索引范围 (加载路径列表或项目根) 与过滤配置
+            {
+                std::string scope;
+                if (!config->codeGraphPaths.empty()) {
+                    for (size_t i = 0; i < config->codeGraphPaths.size(); ++i) {
+                        if (i > 0) {
+                            scope += ", ";
+                        }
+                        scope += config->codeGraphPaths[i];
+                    }
+                } else if (config->codeGraphLoadCwd) {
+                    scope = *projectRoot;
+                } else {
+                    scope = "(未配置加载路径且 load_cwd=false: 不自动索引)";
+                }
+                XX_LOGI(
+                    "CodeGraph enabled, added codegraph tools (index scope: {}, ignore_paths: {}, "
+                    "use_gitignore: {})",
+                    scope,
+                    config->codeGraphIgnorePaths.size(),
+                    config->codeGraphUseGitignore
+                );
+            }
 
             // 后台预热索引 (Eager 预计算):
-            // - 启动延迟后对项目根执行一次增量索引, 使随后的 codegraph 查询
-            //   尽快落在预计算数据上 (已有索引库时仅重扫变更文件, 首次为全量)
+            // - 启动延迟后对索引范围 (加载路径列表, 未配置时为项目根) 执行一次
+            //   增量索引, 使随后的 codegraph 查询尽快落在预计算数据上
+            //   (已有索引库时仅重扫变更文件, 首次为全量)
             // - 挂在 agent ioCtx 上 (detached), offload 到 blockingPool 执行,
             //   不阻塞 agent 初始化/首个请求; 索引期间查询经共享锁可并发读取旧数据
             // - 编码为弱引用持有 agentContext: agent 已销毁时跳过
             {
                 auto warmupAgent = std::weak_ptr<agentxx::agent::AgentContext>{agentContext};
                 auto warmupCg    = codegraph_;
-                auto warmupRoot  = std::string{*projectRoot};
                 asio::co_spawn(
                     ioCtx->get_executor(),
-                    [warmupAgent, warmupCg, warmupRoot = std::move(warmupRoot)]() mutable
-                        -> asio::awaitable<void> {
+                    [warmupAgent, warmupCg]() -> asio::awaitable<void> {
                         // 延迟启动: 让 agent 初始化/组件加载等启动流程先行,
                         // 避免预热索引与启动期任务竞争线程池
                         asio::steady_timer timer(co_await asio::this_coro::executor);
@@ -495,12 +528,13 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
                         if (!agentPtr || !agentPtr->blockingPool) {
                             co_return;
                         }
-                        XX_LOGI("[codegraph] background warmup index start (root={})", warmupRoot);
+                        XX_LOGI("[codegraph] background warmup index start");
                         const auto startAt = std::chrono::steady_clock::now();
                         bool       ok      = co_await agentxx::util::offloadAsync<bool>(
                             *agentPtr->blockingPool,
-                            [warmupCg, warmupRoot]() -> asio::awaitable<bool> {
-                                co_return warmupCg->indexDirectory(warmupRoot, true);
+                            [warmupCg]() -> asio::awaitable<bool> {
+                                // 按加载路径列表索引 (未配置时为项目根目录)
+                                co_return warmupCg->updateIndex();
                             }
                         );
                         const auto costMs
@@ -509,9 +543,8 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
                               )
                                   .count();
                         XX_LOGI(
-                            "[codegraph] background warmup index {} (root={}, {}ms)",
+                            "[codegraph] background warmup index {} ({}ms)",
                             ok ? "done" : "failed",
-                            warmupRoot,
                             costMs
                         );
                     },

@@ -46,12 +46,33 @@ struct CodeGraphPathResult {
     bool                         success = false;
 };
 
+/// CodeGraph 索引过滤配置 (构造时传入, 默认值即全默认行为)
+struct CodeGraphIndexConfig {
+    /// 加载(索引)路径列表 (绝对路径; 调用方负责按工作目录解析相对路径)
+    /// - 非空时 updateIndex/启动预热/文件监听按此列表执行 (可多个目录);
+    ///   为空时按 autoLoadProjectRoot 决定是否回退项目根目录
+    std::vector<std::string> loadPaths;
+    /// 忽略路径列表 (绝对路径, 支持 * 通配符; 命中即跳过)
+    /// - 对全部加载路径及 agentxx_codegraph_index 手动索引均生效
+    std::vector<std::string> ignorePaths;
+    /// 是否启用 .gitignore 规则与 .gitmodules 子模块目录忽略 (默认 true)
+    bool useGitignore = true;
+    /// loadPaths 为空时是否自动回退项目根目录 (yaml `codegraph.load_cwd`, 默认 true)
+    /// - false 且 loadPaths 为空: 无自动索引范围 (updateIndex 空操作,
+    ///   文件监听不启动), 仅 agentxx_codegraph_index 手动索引可用
+    bool autoLoadProjectRoot = true;
+};
+
 class CodeGraphManager {
 public:
 
     /// @param sqliteDir sqlite 数据目录; 为空使用默认 {dataDir}/sqlite/
     ///        (dataDir 为空时 ~/.agentxx/sqlite/, 取不到主目录时回退系统临时目录)
-    explicit CodeGraphManager(std::string sqliteDir = "");
+    /// @param config    索引过滤配置 (加载路径/忽略路径/gitignore 开关)
+    explicit CodeGraphManager(
+        std::string               sqliteDir = "",
+        CodeGraphIndexConfig      config    = {}
+    );
     ~CodeGraphManager();
 
     CodeGraphManager(const CodeGraphManager&)            = delete;

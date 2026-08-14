@@ -414,14 +414,55 @@ YamlAppConfig loadYamlConfig(
             = resolveEnvVars(root["data_dir"].as<std::string>(""), dotEnvVars, overrideEnvVars);
     }
 
-    // CodeGraph 代码分析
-    if (root["enable_codegraph"]) {
-        cfg.enableCodeGraph = resolveEnvVars(
-                                  root["enable_codegraph"].as<std::string>("false"),
-                                  dotEnvVars,
-                                  overrideEnvVars
-                              )
-                              == "true";
+    // CodeGraph 代码分析 (yaml `codegraph` 块, 默认禁用)
+    // - enable:        是否启用 (默认 false)
+    // - paths:         加载(索引)路径列表 (相对路径按工作目录解析为绝对路径;
+    //                  非空时按此列表索引, 为空时按 load_cwd 决定是否索引工作目录)
+    // - ignore_paths:  忽略路径列表 (相对路径按工作目录解析, 支持 * 通配符; 命中即跳过)
+    // - load_cwd:      未配置 paths 时是否默认加载当前工作目录 (默认 true)
+    // - use_gitignore: 是否默认忽略 .gitignore 规则与 .gitmodules 子模块目录 (默认 true)
+    if (root["codegraph"]) {
+        auto cg = root["codegraph"];
+        if (cg["enable"]) {
+            cfg.codeGraph.enable = resolveEnvVars(
+                                       cg["enable"].as<std::string>("false"),
+                                       dotEnvVars,
+                                       overrideEnvVars
+                                   )
+                                   == "true";
+        }
+        if (cg["paths"] && cg["paths"].IsSequence()) {
+            for (const auto& node : cg["paths"]) {
+                auto p = resolveEnvVars(node.as<std::string>(""), dotEnvVars, overrideEnvVars);
+                if (!p.empty()) {
+                    cfg.codeGraph.paths.push_back(std::move(p));
+                }
+            }
+        }
+        if (cg["ignore_paths"] && cg["ignore_paths"].IsSequence()) {
+            for (const auto& node : cg["ignore_paths"]) {
+                auto p = resolveEnvVars(node.as<std::string>(""), dotEnvVars, overrideEnvVars);
+                if (!p.empty()) {
+                    cfg.codeGraph.ignorePaths.push_back(std::move(p));
+                }
+            }
+        }
+        if (cg["load_cwd"]) {
+            cfg.codeGraph.loadCwd = resolveEnvVars(
+                                        cg["load_cwd"].as<std::string>("true"),
+                                        dotEnvVars,
+                                        overrideEnvVars
+                                    )
+                                    == "true";
+        }
+        if (cg["use_gitignore"]) {
+            cfg.codeGraph.useGitignore = resolveEnvVars(
+                                             cg["use_gitignore"].as<std::string>("true"),
+                                             dotEnvVars,
+                                             overrideEnvVars
+                                         )
+                                         == "true";
+        }
     }
 
     // 权限配置 (permission 块: mode / whitelist / blacklist)

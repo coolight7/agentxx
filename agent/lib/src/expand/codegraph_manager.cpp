@@ -2,6 +2,7 @@
 #include "agentxx/agent/config_static.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/log.h"
+#include "glob/glob.h"
 #include <algorithm>
 #include <atomic>
 #include <cctype>
@@ -14,6 +15,7 @@
 #include <mutex>
 #include <optional>
 #include <queue>
+#include <regex>
 #include <shared_mutex>
 #include <sstream>
 #include <thread>
@@ -335,6 +337,275 @@ static bool
     return false;
 }
 
+// ---------------------------------------------------------------------------
+// .gitignore / .gitmodules 规则解析与匹配
+// ---------------------------------------------------------------------------
+
+/// 单条 gitignore 规则 (已编译为正则)
+struct GitIgnoreRule {
+    std::string regex; // 完整匹配正则 (锚定规则针对 base 相对路径, 非锚定针对完整路径)
+    bool       negate   = false;
+    bool       anchored = false; // 包含 `/` 的模式锚定到规则所在目录
+    fs::path   base;             // 规则所在目录 (anchored 时相对路径基准)
+    std::regex re;               // 编译后的正则
+};
+
+/// gitignore 规则集合: 支持多级 .gitignore 继承 + .gitmodules 子模块目录
+/// - 规则顺序: 根目录规则在前, 子目录规则在后; 匹配时从后往前取第一个命中
+///   (gitignore 语义: 后出现的规则优先, 子目录规则覆盖父目录规则)
+/// - 否定规则 (`!xxx`): 命中后取消忽略 (最后一个匹配规则决定最终结果)
+/// - 目录命中忽略规则时, 其下所有内容一并忽略 (匹配正则隐含子树匹配)
+class GitIgnoreMatcher {
+public:
+
+    /// 解析并添加一个 .gitignore 文件 (不存在则忽略; base = 文件所在目录)
+    void addIgnoreFile(const fs::path& ignore_file) {
+        std::error_code ec;
+        if (!fs::is_regular_file(ignore_file, ec)) {
+            return;
+        }
+        std::ifstream ifs(ignore_file.string());
+        if (!ifs.is_open()) {
+            return;
+        }
+        fs::path    base = ignore_file.parent_path();
+        std::string line;
+        while (std::getline(ifs, line)) {
+            if (!line.empty() && line.back() == '\r') {
+                line.pop_back();
+            }
+            addPattern(line, base);
+        }
+    }
+
+    /// 解析 .gitmodules 中的子模块 `path = xxx` 并加入忽略 (子模块目录整体忽略)
+    void addSubmodules(const fs::path& gitmodules_file) {
+        std::error_code ec;
+        if (!fs::is_regular_file(gitmodules_file, ec)) {
+            return;
+        }
+        std::ifstream ifs(gitmodules_file.string());
+        if (!ifs.is_open()) {
+            return;
+        }
+        fs::path    base = gitmodules_file.parent_path();
+        std::string line;
+        while (std::getline(ifs, line)) {
+            auto eq = line.find('=');
+            if (eq == std::string::npos) {
+                continue;
+            }
+            std::string key = line.substr(0, eq);
+            std::string val = line.substr(eq + 1);
+            trimStr(key);
+            trimStr(val);
+            if (key != "path" || val.empty()) {
+                continue;
+            }
+            // 子模块目录整体忽略 (目录模式)
+            addPattern(val + "/", base);
+        }
+    }
+
+    /// 路径是否被忽略 (文件或目录; 目录命中即整棵子树忽略)
+    bool isIgnored(const fs::path& p) const {
+        if (rules_.empty()) {
+            return false;
+        }
+        std::string path_str = p.generic_string();
+        // 从后往前找第一个匹配规则 (最后一个匹配规则决定)
+        for (auto it = rules_.rbegin(); it != rules_.rend(); ++it) {
+            if (matchRule(*it, p, path_str)) {
+                return !it->negate;
+            }
+        }
+        return false;
+    }
+
+    bool empty() const {
+        return rules_.empty();
+    }
+
+private:
+
+    static void trimStr(std::string& s) {
+        s.erase(0, s.find_first_not_of(" \t"));
+        s.erase(s.find_last_not_of(" \t") + 1);
+    }
+
+    /// gitignore 模式 -> 正则片段 (不含锚定前后缀)
+    /// - `**` 匹配任意字符 (含 `/`); `*` 匹配非 `/` 任意字符; `?` 匹配单个非 `/` 字符
+    /// - `\x` 转义字面量
+    static std::string toGitIgnoreRegex(std::string_view pattern) {
+        std::string re;
+        re.reserve(pattern.size() + 8);
+        for (size_t i = 0; i < pattern.size(); ++i) {
+            char c = pattern[i];
+            if (c == '*') {
+                // 连续 `*` 合并为一个 `**` (gitignore 中 `**` 可匹配 `/`)
+                bool recursive = (i + 1 < pattern.size() && pattern[i + 1] == '*');
+                while (i + 1 < pattern.size() && pattern[i + 1] == '*') {
+                    ++i;
+                }
+                re += recursive ? ".*" : "[^/]*";
+            } else if (c == '?') {
+                re += "[^/]";
+            } else if (c == '\\' && i + 1 < pattern.size()) {
+                // 转义下一字符
+                ++i;
+                re += escapeRegexChar(pattern[i]);
+            } else {
+                re += escapeRegexChar(c);
+            }
+        }
+        return re;
+    }
+
+    static std::string escapeRegexChar(char c) {
+        static const std::string special = R"(\.^$+()[]{}|)";
+        if (special.find(c) != std::string::npos) {
+            return std::string("\\") + c;
+        }
+        return std::string(1, c);
+    }
+
+    /// 规则匹配: 锚定规则匹配 base 下的相对路径, 非锚定规则匹配任意层级
+    static bool
+        matchRule(const GitIgnoreRule& rule, const fs::path& p, const std::string& path_str) {
+        if (rule.anchored) {
+            std::error_code ec;
+            auto            rel = fs::relative(p, rule.base, ec);
+            if (ec || rel.empty()) {
+                return false;
+            }
+            return std::regex_match(rel.generic_string(), rule.re);
+        }
+        // 非锚定: 模式可命中任意层级的同名条目, 路径开头通常不是模式本身
+        // (如 Windows 盘符 C:/...), 必须用 regex_search 扫描任意位置;
+        // 正则尾部的 `(?:/.*)?$` 保证命中后延伸到路径末尾 (目录命中即整棵子树忽略)
+        return std::regex_search(path_str, rule.re);
+    }
+
+    void addPattern(std::string_view pattern, const fs::path& base) {
+        // 空行 / 注释
+        if (pattern.empty() || pattern[0] == '#') {
+            return;
+        }
+        // 转义开头的 `\#` / `\!`
+        if (pattern[0] == '\\' && pattern.size() >= 2 && (pattern[1] == '#' || pattern[1] == '!')) {
+            pattern = pattern.substr(1);
+        }
+        GitIgnoreRule rule;
+        rule.base = base;
+        // 否定规则
+        if (pattern[0] == '!') {
+            rule.negate = true;
+            pattern     = pattern.substr(1);
+            if (pattern.empty()) {
+                return;
+            }
+        }
+        // 结尾 `/` -> 仅目录 (匹配语义与普通模式一致, 正则隐含子树匹配)
+        if (pattern.back() == '/') {
+            pattern = pattern.substr(0, pattern.size() - 1);
+            if (pattern.empty()) {
+                return;
+            }
+        }
+        // 剩余模式含 `/` (非结尾) -> 锚定到规则所在目录
+        rule.anchored = pattern.find('/') != std::string_view::npos;
+        auto body     = toGitIgnoreRegex(pattern);
+        if (rule.anchored) {
+            // 匹配 base 下的相对路径本身或子树
+            rule.regex = "^" + body + R"((?:/.*)?$)";
+        } else {
+            // 匹配任意层级的同名条目 (文件或目录) 及其子树
+            rule.regex = R"((?:^|/))" + body + R"((?:/.*)?$)";
+        }
+        // 编译失败 (非法正则) 时丢弃该规则, 不中断解析
+        bool compiled = agentxx::util::catchError<bool>(
+            [&]() -> bool {
+                rule.re = std::regex(rule.regex);
+                return true;
+            },
+            [](std::string) -> bool {
+                return false;
+            }
+        );
+        if (compiled) {
+            rules_.push_back(std::move(rule));
+        }
+    }
+
+    std::vector<GitIgnoreRule> rules_;
+};
+
+/// gitignore 匹配器 (供单文件增量索引使用): 带目录级解析缓存
+/// - 懒加载: 首次匹配某路径时, 沿祖先链向上解析各级 .gitignore 与根 .gitmodules
+/// - 缓存: 已解析目录不再重复读盘; 锁保护, 与索引线程并发安全
+class GitIgnoreCache {
+public:
+
+    /// 确保 path 祖先链上各级 .gitignore 已解析 (幂等)
+    void ensureLoaded(const fs::path& p) {
+        std::unique_lock<std::mutex> lock(mutex_);
+        // 收集祖先目录链 (叶 -> 根)
+        std::vector<fs::path> dirs;
+        fs::path              cur = p.parent_path();
+        while (!cur.empty()) {
+            dirs.push_back(cur);
+            auto parent = cur.parent_path();
+            if (parent == cur) {
+                break;
+            }
+            cur = parent;
+        }
+        // 根 -> 叶 顺序解析 (保证规则顺序: 根规则在前)
+        for (auto it = dirs.rbegin(); it != dirs.rend(); ++it) {
+            if (loaded_dirs_.count(*it)) {
+                continue;
+            }
+            matcher_.addIgnoreFile(*it / ".gitignore");
+            // .gitmodules 仅根目录解析一次
+            if (it + 1 == dirs.rend() && loaded_submodules_.count(*it) == 0) {
+                matcher_.addSubmodules(*it / ".gitmodules");
+                loaded_submodules_.insert(*it);
+            }
+            loaded_dirs_.insert(*it);
+        }
+    }
+
+    bool isIgnored(const fs::path& p) {
+        ensureLoaded(p);
+        std::unique_lock<std::mutex> lock(mutex_);
+        return matcher_.isIgnored(p);
+    }
+
+    void clear() {
+        std::unique_lock<std::mutex> lock(mutex_);
+        matcher_ = GitIgnoreMatcher{};
+        loaded_dirs_.clear();
+        loaded_submodules_.clear();
+    }
+
+private:
+
+    std::mutex                   mutex_;
+    GitIgnoreMatcher             matcher_;
+    std::unordered_set<fs::path> loaded_dirs_;
+    std::unordered_set<fs::path> loaded_submodules_;
+};
+
+/// 路径字符串规范化: 统一 `/` 分隔符并 lexically_normal
+/// - 配置文件中的路径可能是 Windows 反斜杠或含 `.`/`..` 段, 与遍历路径
+///   (generic_string) 比较前统一
+static std::string normalizePathStr(std::string_view p) {
+    std::string s{p};
+    std::replace(s.begin(), s.end(), '\\', '/');
+    fs::path fp{s};
+    return fp.lexically_normal().generic_string();
+}
+
 static bool should_skip(std::string_view file_path) {
     static const std::string kSkipAgentxx
         = fmt::format("/{}/", agentxx::agent::AgentConfigStatic::agentxxDataDirPath);
@@ -350,27 +621,95 @@ static bool should_skip(std::string_view file_path) {
            || path_str.find(kSkipAgentxx) != std::string::npos;
 }
 
-static std::vector<std::string> collect_source_files(std::string_view root_path) {
+/// 收集根目录下待索引的源文件列表 (应用全部过滤规则)
+/// @param ignore_path_regexes 配置 ignorePaths 编译后的正则列表
+/// @param use_gitignore      是否启用 .gitignore/.gitmodules 忽略
+/// - 目录级剪枝: 命中忽略规则 (内置过滤/ignorePaths/gitignore) 的目录整棵子树
+///   不进入遍历, 避免扫描 build/.git/third_party/子模块 等大目录
+/// - gitignore 按层级继承: 每进入一层目录加载该层 .gitignore (父级规则保留)
+/// - 显式栈遍历替代 recursive_directory_iterator, 避免深目录树递归栈溢出
+static std::vector<std::string> collect_source_files(
+    std::string_view               root_path,
+    const std::vector<std::regex>& ignore_path_regexes,
+    bool                           use_gitignore
+) {
     std::vector<std::string> files;
     // 遍历失败记录日志, 返回已收集到的部分文件
     agentxx::util::catchError<bool>(
         [&]() -> bool {
-            for (const auto& entry : fs::recursive_directory_iterator(
-                     root_path,
-                     fs::directory_options::skip_permission_denied
-                 )) {
-                if (!entry.is_regular_file()) {
-                    continue;
+            GitIgnoreMatcher matcher;
+            if (use_gitignore) {
+                matcher.addSubmodules(fs::path(root_path) / ".gitmodules");
+            }
+
+            // 目录忽略判断 (剪枝): 内置过滤(补尾/使子串匹配命中目录自身) +
+            // ignorePaths 正则 + gitignore
+            auto isDirIgnored = [&](const fs::path& dir) -> bool {
+                std::string s = dir.generic_string();
+                if (should_skip(s + "/")) {
+                    return true;
                 }
-                std::string path = entry.path().generic_string();
-                if (should_skip(path)) {
-                    continue;
+                for (const auto& re : ignore_path_regexes) {
+                    if (std::regex_match(s, re)) {
+                        return true;
+                    }
                 }
-                std::string lang = codegraph::detect_language(path);
-                if (lang.empty()) {
-                    continue;
+                return matcher.isIgnored(dir);
+            };
+            // 文件忽略判断: 内置过滤 + ignorePaths 正则 + gitignore
+            auto isFileIgnored = [&](const std::string& s) -> bool {
+                if (should_skip(s)) {
+                    return true;
                 }
-                files.push_back(path);
+                for (const auto& re : ignore_path_regexes) {
+                    if (std::regex_match(s, re)) {
+                        return true;
+                    }
+                }
+                return matcher.isIgnored(fs::path(s));
+            };
+
+            std::vector<fs::path> stack;
+            stack.push_back(fs::path(root_path));
+            while (!stack.empty()) {
+                fs::path dir = std::move(stack.back());
+                stack.pop_back();
+
+                if (use_gitignore) {
+                    matcher.addIgnoreFile(dir / ".gitignore");
+                }
+
+                std::error_code ec;
+                for (auto it = fs::directory_iterator(
+                         dir,
+                         fs::directory_options::skip_permission_denied,
+                         ec
+                     );
+                     it != fs::directory_iterator();
+                     it.increment(ec)) {
+                    if (ec) {
+                        break;
+                    }
+                    const auto&     entry = *it;
+                    fs::path        p     = entry.path();
+                    std::error_code typeEc;
+                    if (entry.is_directory(typeEc)) {
+                        if (isDirIgnored(p)) {
+                            continue; // 剪枝: 整棵子树忽略, 不进入
+                        }
+                        stack.push_back(std::move(p));
+                    } else if (entry.is_regular_file(typeEc)) {
+                        std::string path_str = p.generic_string();
+                        if (isFileIgnored(path_str)) {
+                            continue;
+                        }
+                        std::string lang = codegraph::detect_language(path_str);
+                        if (lang.empty()) {
+                            continue;
+                        }
+                        files.push_back(path_str);
+                    }
+                }
             }
             return true;
         },
@@ -437,10 +776,36 @@ class CodeGraphManager::Impl {
 public:
 
     /// @param sqliteDir sqlite 数据目录 (为空使用默认 {dataDir}/sqlite/)
-    explicit Impl(std::string sqliteDir = "") :
+    /// @param config    索引过滤配置 (加载路径/忽略路径/gitignore 开关)
+    explicit Impl(std::string sqliteDir = "", CodeGraphIndexConfig config = {}) :
         running_(false),
         needs_initialize_(true),
-        sqlite_dir_(std::move(sqliteDir)) {}
+        sqlite_dir_(std::move(sqliteDir)),
+        index_config_(std::move(config)) {
+        // 编译 ignorePaths 为正则 (支持 * 通配符):
+        // - 含通配符: glob::to_regex (从宽: * 与 ** 均匹配任意字符含 /)
+        // - 无通配符: 目录前缀匹配 (命中路径本身或其子树), 追加 (?:/.*)?
+        // - 非法模式静默忽略, 不影响其他规则
+        for (const auto& raw : index_config_.ignorePaths) {
+            std::string p = normalizePathStr(raw);
+            if (p.empty()) {
+                continue;
+            }
+            std::string re = glob::to_regex(p);
+            if (p.find_first_of("*?[") == std::string::npos) {
+                re = re.substr(0, re.size() - 1) + R"((?:/.*)?$)";
+            }
+            agentxx::util::catchError<bool>(
+                [&]() -> bool {
+                    ignore_path_regexes_.emplace_back(re);
+                    return true;
+                },
+                [](std::string) -> bool {
+                    return false;
+                }
+            );
+        }
+    }
 
     ~Impl() {
         shutdown();
@@ -459,6 +824,9 @@ public:
         traverser_.reset();
         context_builder_.reset();
         fts_search_.reset();
+        // 清空 gitignore 匹配缓存: 重新 initialize (可能换项目根) 时
+        // 避免旧项目的 .gitignore 规则残留污染新项目
+        gitignore_cache_.clear();
         needs_initialize_ = true;
     }
 
@@ -535,8 +903,10 @@ public:
         // 索引生命周期标志: 查询侧据此附加"索引中, 结果可能不完整"提示;
         // RAII 保证所有 return 路径 (成功/中断/异常) 复位
         indexing_.store(true, std::memory_order_release);
+
         struct IndexingGuard {
             std::atomic<bool>& flag;
+
             ~IndexingGuard() {
                 flag.store(false, std::memory_order_release);
             }
@@ -548,13 +918,23 @@ public:
         // - 仅"实际写库"的操作 (writeExtractionResult / resolveReferences /
         //   rebuild_fts / wal checkpoint) 在持有 unique_lock 的短暂窗口内执行,
         //   查询 (shared_lock) 至多等待毫秒级, 大部分时间可读取已提交的部分数据
-        auto files = collect_source_files(path);
+        auto files = collect_source_files(path, ignore_path_regexes_, index_config_.useGitignore);
         if (files.empty()) {
             XX_LOGW("CodeGraphManager: no source files found in {}", path);
+            // 仍清理该根前缀下的残留记录 (忽略规则变更导致整根被过滤时,
+            // 旧节点/引用若不删除会残留), 然后保持原语义提前返回
+            std::unique_lock<std::shared_mutex> lock(mutex_);
+            if (db_) {
+                cleanupRemovedFiles(path, files);
+                runWithRetry("WAL checkpoint", 3, [&]() {
+                    db_->wal_checkpoint();
+                });
+                invalidateCaches();
+            }
             return true;
         }
 
-        XX_LOGI("CodeGraphManager: found {} source files to index", files.size());
+        XX_LOGI("CodeGraphManager: found {} source files to index in {}", files.size(), path);
 
         int processed = 0;
         int total     = static_cast<int>(files.size());
@@ -563,8 +943,6 @@ public:
             if (!running_.load()) {
                 break;
             }
-
-            XX_LOGI("CodeGraphManager: processing file [{}]: {}", processed, file_path);
 
             if (incremental) {
                 // 条目构建/变更判断失败时按"需重新索引"处理
@@ -591,13 +969,11 @@ public:
 
             std::string lang = codegraph::detect_language(file_path);
             if (lang.empty()) {
-                XX_LOGW("CodeGraphManager: no language detected for {}", file_path);
                 continue;
             }
 
             auto extractor = codegraph::create_extractor(std::string{lang});
             if (!extractor) {
-                XX_LOGW("CodeGraphManager: no extractor for lang={} file={}", lang, file_path);
                 continue;
             }
 
@@ -612,12 +988,6 @@ public:
             );
 
             auto result = extractor->extract(std::string{file_path}, source);
-            XX_LOGI(
-                "CodeGraphManager: extracted {} nodes, {} unresolved refs from {}",
-                result.nodes.size(),
-                result.unresolved.size(),
-                file_path
-            );
 
             // 实际写库: 短暂 unique_lock (毫秒级), 查询 shared_lock 不会长期阻塞
             {
@@ -642,11 +1012,18 @@ public:
         }
 
         {
-            // 收尾写操作 (引用解析/FT S 重建/checkpoint): 短暂独占锁
+            // 收尾写操作 (消失文件清理/引用解析/FTS 重建/checkpoint): 短暂独占锁
             std::unique_lock<std::shared_mutex> lock(mutex_);
             if (!db_) {
                 return false;
             }
+            // 清理本次索引范围内已消失文件的残留记录:
+            // - 文件被删除, 或命中忽略规则 (ignorePaths/.gitignore/.gitmodules)
+            //   后不再出现在 files 列表, 其旧节点/引用若不删除会残留 (查询仍可搜到)
+            // - 仅删除属于本次索引根前缀的文件, 不动前缀复用库中其他路径的数据
+            // - files 为空 (整根被过滤/无源码) 时同样执行, 保证全量清理
+            cleanupRemovedFiles(path, files);
+
             resolveReferences();
 
             // FTS 重建失败仅告警, 不影响索引主流程; 多进程并发时锁竞争重试
@@ -676,6 +1053,20 @@ public:
     bool updateIndex() {
         // 不在此处无锁读 db_ (避免与 initialize/shutdown 的数据竞争):
         // indexDirectory 内部持独占锁并检查 db_ 可用性
+        // 配置了加载路径时按列表逐个增量索引; 否则按 autoLoadProjectRoot
+        // 决定是否回退项目根目录 (false 且无加载路径: 无自动索引范围, 空操作)
+        if (!index_config_.loadPaths.empty()) {
+            bool all_ok = true;
+            for (const auto& p : index_config_.loadPaths) {
+                if (!indexDirectory(p, true)) {
+                    all_ok = false;
+                }
+            }
+            return all_ok;
+        }
+        if (!index_config_.autoLoadProjectRoot) {
+            return true;
+        }
         return indexDirectory(project_root_, true);
     }
 
@@ -933,8 +1324,8 @@ public:
 
     CodeGraphPathResult findPath(std::string_view from, std::string_view to, int max_depth) {
         // 缓存命中 (TTL 内同参数重复查询): 直接返回, 避免重复图搜索
-        std::string key = "path|" + std::string{from} + "|" + std::string{to} + "|"
-                          + std::to_string(max_depth);
+        std::string key
+            = "path|" + std::string{from} + "|" + std::string{to} + "|" + std::to_string(max_depth);
         if (auto hit = path_cache_.get(key)) {
             return *hit;
         }
@@ -1006,59 +1397,59 @@ public:
             }
             // 各统计项失败时带上下文记录错误并提前返回
             bool ok = agentxx::util::catchError<bool>(
-            [&]() -> bool {
-                result.total_nodes = db_->count_nodes();
-                return true;
-            },
-            [&](std::string errmsg) -> bool {
-                result.error = std::string("count_nodes: ") + std::move(errmsg);
-                return false;
+                [&]() -> bool {
+                    result.total_nodes = db_->count_nodes();
+                    return true;
+                },
+                [&](std::string errmsg) -> bool {
+                    result.error = std::string("count_nodes: ") + std::move(errmsg);
+                    return false;
+                }
+            );
+            if (!ok) {
+                return result;
             }
-        );
-        if (!ok) {
-            return result;
-        }
-        ok = agentxx::util::catchError<bool>(
-            [&]() -> bool {
-                result.total_edges = db_->count_edges();
-                return true;
-            },
-            [&](std::string errmsg) -> bool {
-                result.error = std::string("count_edges: ") + std::move(errmsg);
-                return false;
+            ok = agentxx::util::catchError<bool>(
+                [&]() -> bool {
+                    result.total_edges = db_->count_edges();
+                    return true;
+                },
+                [&](std::string errmsg) -> bool {
+                    result.error = std::string("count_edges: ") + std::move(errmsg);
+                    return false;
+                }
+            );
+            if (!ok) {
+                return result;
             }
-        );
-        if (!ok) {
-            return result;
-        }
-        ok = agentxx::util::catchError<bool>(
-            [&]() -> bool {
-                result.total_files = static_cast<int64_t>(db_->get_all_files().size());
-                return true;
-            },
-            [&](std::string errmsg) -> bool {
-                result.error = std::string("get_all_files: ") + std::move(errmsg);
-                return false;
+            ok = agentxx::util::catchError<bool>(
+                [&]() -> bool {
+                    result.total_files = static_cast<int64_t>(db_->get_all_files().size());
+                    return true;
+                },
+                [&](std::string errmsg) -> bool {
+                    result.error = std::string("get_all_files: ") + std::move(errmsg);
+                    return false;
+                }
+            );
+            if (!ok) {
+                return result;
             }
-        );
-        if (!ok) {
-            return result;
-        }
-        ok = agentxx::util::catchError<bool>(
-            [&]() -> bool {
-                auto cycles          = traverser_->find_circular_dependencies();
-                result.circular_deps = static_cast<int>(cycles.size());
-                return true;
-            },
-            [&](std::string errmsg) -> bool {
-                result.error = std::string("find_circular_dependencies: ") + std::move(errmsg);
-                return false;
+            ok = agentxx::util::catchError<bool>(
+                [&]() -> bool {
+                    auto cycles          = traverser_->find_circular_dependencies();
+                    result.circular_deps = static_cast<int>(cycles.size());
+                    return true;
+                },
+                [&](std::string errmsg) -> bool {
+                    result.error = std::string("find_circular_dependencies: ") + std::move(errmsg);
+                    return false;
+                }
+            );
+            if (!ok) {
+                return result;
             }
-        );
-        if (!ok) {
-            return result;
-        }
-        result.success = true;
+            result.success = true;
         }
         // 仅缓存成功结果
         if (result.success) {
@@ -1073,11 +1464,27 @@ public:
             return false;
         }
 
+        // 监听根: 配置了加载路径时按列表监听; 否则按 autoLoadProjectRoot
+        // 决定是否监听项目根目录 (false 且无加载路径: 无监听范围)
+        std::vector<std::string> watch_roots;
+        if (!index_config_.loadPaths.empty()) {
+            watch_roots = index_config_.loadPaths;
+        } else if (index_config_.autoLoadProjectRoot) {
+            watch_roots.push_back(project_root_);
+        }
+        if (watch_roots.empty()) {
+            XX_LOGW("CodeGraphManager: no watch roots (loadPaths empty and load_cwd disabled), "
+                    "skip file watcher");
+            return false;
+        }
+
         // 启动文件监听失败记录日志并返回 false
         return agentxx::util::catchError<bool>(
             [&]() -> bool {
                 file_watcher_ = codegraph::FileWatcher::create(project_root_, &running_);
-                file_watcher_->add_watch_recursive(project_root_);
+                for (const auto& root : watch_roots) {
+                    file_watcher_->add_watch_recursive(root);
+                }
 
                 file_watcher_->set_callback([this,
                                              auto_reindex](std::string_view path, uint32_t mask) {
@@ -1085,7 +1492,8 @@ public:
                         && (mask & (codegraph::FILE_EVENT_MODIFIED | codegraph::FILE_EVENT_CREATED)
                         )) {
                         std::string lang = codegraph::detect_language(std::string{path});
-                        if (!lang.empty() && !should_skip(path)) {
+                        // 与全量/增量索引一致的过滤: 内置过滤 + ignorePaths + gitignore
+                        if (!lang.empty() && !this->isFileIgnored(std::string{path})) {
                             this->indexFile(path, lang);
                         }
                     }
@@ -1191,6 +1599,75 @@ public:
         });
     }
 
+    /// 单文件是否应被过滤 (内置过滤 + ignorePaths 正则 + gitignore 缓存)
+    /// - 供文件监听增量索引使用; 全量/增量索引走 collect_source_files 的
+    ///   遍历过滤 (gitignore 按层级加载), 两者过滤规则保持一致
+    bool isFileIgnored(std::string_view file_path) {
+        std::string s{file_path};
+        if (should_skip(s)) {
+            return true;
+        }
+        for (const auto& re : ignore_path_regexes_) {
+            if (std::regex_match(s, re)) {
+                return true;
+            }
+        }
+        if (index_config_.useGitignore && gitignore_cache_.isIgnored(fs::path(s))) {
+            return true;
+        }
+        return false;
+    }
+
+    /// 删除本次索引根前缀下、不在 collected_files 中的文件的残留记录
+    /// - 文件被删除或命中忽略规则后不再被收集, 旧节点/引用/文件记录若不删除
+    ///   会残留 (查询仍可搜到); 由 indexDirectory 收尾调用
+    /// - 仅删除属于 root 前缀的文件, 不动前缀复用索引库中其他路径的数据
+    /// - 调用方须已持有独占锁 (mutex_)
+    void cleanupRemovedFiles(
+        std::string_view                root,
+        const std::vector<std::string>& collected_files
+    ) {
+        std::unordered_set<std::string> collected;
+        collected.reserve(collected_files.size());
+        for (const auto& f : collected_files) {
+            collected.insert(f);
+        }
+        std::string prefix = normalizePathStr(root);
+        if (!prefix.empty() && prefix.back() != '/') {
+            prefix.push_back('/');
+        }
+        for (const auto& fr : db_->get_all_files()) {
+            std::string fp = normalizePathStr(fr.path);
+            // 不属于本次索引根前缀 (含前缀复用库中其他路径): 跳过
+            if (fp.rfind(prefix, 0) != 0) {
+                continue;
+            }
+            if (collected.count(fr.path) != 0 || collected.count(fp) != 0) {
+                continue;
+            }
+            // 顺序与 writeExtractionResult 一致: 先删边/引用 (外键), 再删节点/记录;
+            // 单文件清理失败仅记录日志, 不影响整体索引 (下次增量索引可再清理)
+            agentxx::util::catchError<bool>(
+                [&]() -> bool {
+                    db_->delete_edges_for_file_nodes(fr.path);
+                    db_->delete_unresolved_refs_by_file(fr.path);
+                    db_->delete_nodes_by_file(fr.path);
+                    db_->delete_file(fr.path);
+                    return true;
+                },
+                [&](std::string errmsg) -> bool {
+                    XX_LOGW(
+                        "CodeGraphManager: cleanup removed file {} failed: {}",
+                        fr.path,
+                        errmsg
+                    );
+                    return false;
+                }
+            );
+            XX_LOGI("CodeGraphManager: cleanup removed file record: {}", fr.path);
+        }
+    }
+
     void indexFile(std::string_view file_path, std::string_view lang) {
         if (!db_) {
             return;
@@ -1285,17 +1762,26 @@ private:
     /// 索引是否进行中 (indexDirectory 生命周期内为 true; 查询侧提示用)
     std::atomic<bool> indexing_{false};
     std::atomic<bool> file_watcher_running_{false};
-    bool                    needs_initialize_;
+    bool              needs_initialize_;
     /// sqlite 数据目录 (为空使用默认 {dataDir}/sqlite/, 见 getCodeGraphSqliteDir)
     std::string sqlite_dir_;
+
+    // ------------------------------------------------------------------
+    // 索引过滤配置 (构造时传入; 见 CodeGraphIndexConfig)
+    CodeGraphIndexConfig index_config_;
+    /// ignorePaths 编译后的正则列表 (含通配符: glob 语义; 无通配符: 目录前缀)
+    std::vector<std::regex> ignore_path_regexes_;
+    /// gitignore 匹配缓存 (供文件监听单文件增量索引; 与索引线程并发安全)
+    GitIgnoreCache gitignore_cache_;
 
     IndexProgressCallback progress_callback_;
 };
 
 /// @param sqliteDir sqlite 数据目录; 为空使用默认 {dataDir}/sqlite/
 ///        (dataDir 为空时 ~/.agentxx/sqlite/, 取不到主目录时回退系统临时目录)
-CodeGraphManager::CodeGraphManager(std::string sqliteDir) :
-    impl_(std::make_unique<Impl>(std::move(sqliteDir))) {}
+/// @param config 索引过滤配置 (加载路径/忽略路径/gitignore 开关)
+CodeGraphManager::CodeGraphManager(std::string sqliteDir, CodeGraphIndexConfig config) :
+    impl_(std::make_unique<Impl>(std::move(sqliteDir), std::move(config))) {}
 
 CodeGraphManager::~CodeGraphManager() {
     impl_->shutdown();

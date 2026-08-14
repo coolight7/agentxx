@@ -59,7 +59,7 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
 | | `agentxx_codegraph_index` | 索引目录构建符号数据库 |
 | | `agentxx_codegraph_path` | 查找两符号间的调用链路径 |
 | | `agentxx_codegraph_status` | 索引统计信息 |
-| | | `agentxx_codegraph_*` 系列 tool 仅在配置 `enable_codegraph: true` 且编译启用 `AGENTXX_ENABLE_CODEGRAPH` 时注册 |
+| | | `agentxx_codegraph_*` 系列 tool 仅在配置 `codegraph.enable: true` 且编译启用 `AGENTXX_ENABLE_CODEGRAPH` 时注册 |
 | **规划** | `agentxx_planning_write` | 两层任务规划 (Mermaid 状态图 + Todo List + 备忘录) |
 | **子代理** | `agentxx_subagent_switch` | 创建和管理子代理执行委派任务 |
 | | `tool_skill_search` | 延迟加载工具/技能的搜索与发现 |
@@ -272,7 +272,7 @@ TUI [F4] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
 | **AudioStream** | 系统音频/麦克风/程序音频流捕获 |
 | **TextSelectionMonitor** | 系统级文本选择事件监听 (Windows UI Automation) |
 | **CpuGpuMonitor** | CPU/内存/GPU 使用率查询 |
-| **CodeGraphManager** | 代码索引与符号分析 (基于 codegraph-cpp)；索引根目录为当前程序工作目录，sqlite 数据库存于 `{dataDir}/sqlite/codegraph/<折叠路径>/index.db`（深层折叠 + 单段截断控制长度，路径前缀匹配复用；dataDir 由 yaml `data_dir` 指定，未配置 dataDir 时不注册 codegraph 工具，索引不落盘） |
+| **CodeGraphManager** | 代码索引与符号分析 (基于 codegraph-cpp)；索引范围由 yaml `codegraph` 块配置 (默认关闭)：`paths` 加载路径列表 (可多个目录，未配置时按 `load_cwd` 默认索引当前工作目录)、`ignore_paths` 忽略路径 (支持 `*` 通配符)、`use_gitignore` 默认忽略 `.gitignore` 规则与 `.gitmodules` 子模块目录；遍历按目录剪枝 (忽略目录整棵子树不进入)，文件监听增量索引应用同一套过滤；sqlite 数据库存于 `{dataDir}/sqlite/codegraph/<折叠路径>/index.db`（深层折叠 + 单段截断控制长度，路径前缀匹配复用；dataDir 由 yaml `data_dir` 指定，未配置 dataDir 时不注册 codegraph 工具，索引不落盘） |
 
 ### 依赖注入
 
@@ -375,13 +375,22 @@ mcp:
 #   - {data_dir}/sqlite/codegraph/<折叠路径>/index.db CodeGraph 索引
 # data_dir: ~/.agentxx
 
-# CodeGraph 代码分析 (需编译启用 AGENTXX_ENABLE_CODEGRAPH)
-enable_codegraph: false           # true 时 CodeAgent 注册 codegraph 系列 tool
-                                  # 索引根目录为当前程序工作目录
-                                  # 数据库: {data_dir}/sqlite/codegraph/<折叠路径>/index.db
-                                  # - 前缀复用: 子目录工作自动复用最近父级索引
-                                  # - 长度控制: 深层路径折叠为 hash 段, 单段超长截断,
-                                  #   保证不超系统路径限制 (Windows MAX_PATH=260)
+# CodeGraph 代码分析 (需编译启用 AGENTXX_ENABLE_CODEGRAPH; 默认关闭)
+codegraph:
+  enable: false             # true 时 CodeAgent 注册 codegraph 系列 tool
+  # paths:                  # 加载(索引)路径列表 (可选; 相对路径按工作目录解析;
+  #   - "/path/to/proj_a"   #   非空时按此列表索引, 可多个目录)
+  #   - "relative/proj_b"
+  # ignore_paths:           # 忽略路径列表 (可选; 相对路径按工作目录解析,
+  #   - "/path/to/proj_a/third_party"   #   支持 * 通配符; 命中即跳过)
+  #   - "**/generated/**"
+  load_cwd: true            # 未配置 paths 时默认加载当前工作目录 (默认 true;
+                            #   false 时仅可手动 agentxx_codegraph_index)
+  use_gitignore: true       # 默认忽略 .gitignore 规则与 .gitmodules 子模块目录
+                            # 数据库: {data_dir}/sqlite/codegraph/<折叠路径>/index.db
+                            # - 前缀复用: 子目录工作自动复用最近父级索引
+                            # - 长度控制: 深层路径折叠为 hash 段, 单段超长截断,
+                            #   保证不超系统路径限制 (Windows MAX_PATH=260)
 
 # 权限询问处理模式 (默认 ask, 见 PermissionMode)
 # - ask:     当前工作目录内允许读写, 其他路径询问用户 (默认)

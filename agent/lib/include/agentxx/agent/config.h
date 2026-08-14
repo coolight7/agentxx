@@ -132,12 +132,30 @@ public:
     /// - 相对路径按程序工作目录解析为绝对路径 (由 client 启动时解析)
     std::string dataDir;
 
-    /// 是否启用 CodeGraph 代码分析 (需编译时启用 AGENTXX_ENABLE_CODEGRAPH)
-    /// - 配置启用且编译启用时, CodeAgent 才会注册 codegraph 系列 tool
-    /// - 索引项目根目录固定为当前程序工作目录
+    /// 是否启用 CodeGraph 代码分析 (yaml `codegraph.enable`; 默认关闭)
+    /// - 需编译时启用 AGENTXX_ENABLE_CODEGRAPH; 配置启用且编译启用时,
+    ///   CodeAgent 才会注册 codegraph 系列 tool
     /// - 索引数据库: {dataDir}/sqlite/codegraph/<折叠路径>/index.db
     ///   (深层路径折叠 + 单段截断控制长度, 子目录可前缀复用最近父级索引)
-    bool enableCodeGraph = true;
+    bool enableCodeGraph = false;
+
+    /// CodeGraph 加载(索引)路径列表 (yaml `codegraph.paths`)
+    /// - 相对路径由 client 启动时按程序工作目录解析为绝对路径
+    /// - 非空时按此列表索引 (可多个目录); 为空时按 codeGraphLoadCwd 决定
+    ///   是否默认索引当前工作目录
+    std::vector<std::string> codeGraphPaths;
+
+    /// CodeGraph 忽略路径列表 (yaml `codegraph.ignore_paths`)
+    /// - 相对路径由 client 启动时按程序工作目录解析为绝对路径, 支持 * 通配符
+    /// - 命中即跳过 (对全部加载路径及 agentxx_codegraph_index 手动索引生效)
+    std::vector<std::string> codeGraphIgnorePaths;
+
+    /// 未配置 codeGraphPaths 时是否默认加载当前工作目录 (yaml `codegraph.load_cwd`, 默认 true)
+    bool codeGraphLoadCwd = true;
+
+    /// 是否默认启用 .gitignore 规则与 .gitmodules 子模块目录忽略
+    /// (yaml `codegraph.use_gitignore`, 默认 true)
+    bool codeGraphUseGitignore = true;
 
     /// 权限询问处理模式 (yaml `permission.mode`; 见 PermissionMode)
     /// - CodeAgent 启动时按模式注册文件系统读写默认规则:

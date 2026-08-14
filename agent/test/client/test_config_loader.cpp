@@ -351,6 +351,113 @@ void test_model_max_concurrent_connections() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// codegraph 块解析 (yaml `codegraph`: enable/paths/ignore_paths/load_cwd/use_gitignore)
+// ---------------------------------------------------------------------------
+
+void test_codegraph_default_disabled() {
+    // 未配置 codegraph 块: 默认禁用 (enable=false), load_cwd/use_gitignore 默认 true
+    auto cfg = loadYaml("data_dir: default\n");
+    XX_TEST_EXPECT_TRUE(!cfg.codeGraph.enable);
+    XX_TEST_EXPECT_TRUE(cfg.codeGraph.loadCwd);
+    XX_TEST_EXPECT_TRUE(cfg.codeGraph.useGitignore);
+    XX_TEST_EXPECT_TRUE(cfg.codeGraph.paths.empty());
+    XX_TEST_EXPECT_TRUE(cfg.codeGraph.ignorePaths.empty());
+}
+
+void test_codegraph_enable() {
+    auto cfg = loadYaml("codegraph:\n  enable: true\n");
+    XX_TEST_EXPECT_TRUE(cfg.codeGraph.enable);
+
+    cfg = loadYaml("codegraph:\n  enable: false\n");
+    XX_TEST_EXPECT_TRUE(!cfg.codeGraph.enable);
+}
+
+void test_codegraph_paths_parse() {
+    auto cfg = loadYaml(R"(codegraph:
+  enable: true
+  paths:
+    - "/path/to/project_a"
+    - "relative/path/project_b"
+  ignore_paths:
+    - "/path/to/project_a/third_party"
+    - "**/generated/**"
+)");
+    XX_TEST_EXPECT_TRUE(cfg.codeGraph.enable);
+    XX_TEST_EXPECT_EQ(cfg.codeGraph.paths.size(), size_t{2});
+    if (cfg.codeGraph.paths.size() == 2) {
+        XX_TEST_EXPECT_EQ(cfg.codeGraph.paths[0], std::string("/path/to/project_a"));
+        XX_TEST_EXPECT_EQ(cfg.codeGraph.paths[1], std::string("relative/path/project_b"));
+    }
+    XX_TEST_EXPECT_EQ(cfg.codeGraph.ignorePaths.size(), size_t{2});
+    if (cfg.codeGraph.ignorePaths.size() == 2) {
+        XX_TEST_EXPECT_EQ(
+            cfg.codeGraph.ignorePaths[0],
+            std::string("/path/to/project_a/third_party")
+        );
+        XX_TEST_EXPECT_EQ(cfg.codeGraph.ignorePaths[1], std::string("**/generated/**"));
+    }
+}
+
+void test_codegraph_load_cwd_and_gitignore_flags() {
+    auto cfg = loadYaml(R"(codegraph:
+  enable: true
+  load_cwd: false
+  use_gitignore: false
+)");
+    XX_TEST_EXPECT_TRUE(cfg.codeGraph.enable);
+    XX_TEST_EXPECT_TRUE(!cfg.codeGraph.loadCwd);
+    XX_TEST_EXPECT_TRUE(!cfg.codeGraph.useGitignore);
+
+    // 缺省字段保持默认
+    cfg = loadYaml("codegraph:\n  enable: true\n");
+    XX_TEST_EXPECT_TRUE(cfg.codeGraph.loadCwd);
+    XX_TEST_EXPECT_TRUE(cfg.codeGraph.useGitignore);
+}
+
+void test_codegraph_env_expand() {
+    // enable / paths / ignore_paths 均支持 ${VAR} 展开
+    auto path = fs::temp_directory_path()
+                / fmt::format(
+                    "agentxx_config_loader_test_{}.yaml",
+                    std::chrono::steady_clock::now().time_since_epoch().count()
+                );
+    {
+        std::ofstream ofs(path);
+        ofs << R"(codegraph:
+  enable: ${AGENTXX_TEST_CG_ENABLE}
+  paths:
+    - "${AGENTXX_TEST_CG_PATH}"
+  ignore_paths:
+    - "${AGENTXX_TEST_CG_IGNORE}"
+)";
+    }
+    auto cfg = agentxx::client::loadYamlConfig(
+        path.string(),
+        {
+            {"AGENTXX_TEST_CG_ENABLE", "true"                       },
+            {"AGENTXX_TEST_CG_PATH",    "/data/cg/proj"             },
+            {"AGENTXX_TEST_CG_IGNORE",  "/data/cg/proj/third_party"},
+    },
+        {}
+    );
+    std::error_code ec;
+    fs::remove(path, ec);
+
+    XX_TEST_EXPECT_TRUE(cfg.codeGraph.enable);
+    XX_TEST_EXPECT_EQ(cfg.codeGraph.paths.size(), size_t{1});
+    if (cfg.codeGraph.paths.size() == 1) {
+        XX_TEST_EXPECT_EQ(cfg.codeGraph.paths[0], std::string("/data/cg/proj"));
+    }
+    XX_TEST_EXPECT_EQ(cfg.codeGraph.ignorePaths.size(), size_t{1});
+    if (cfg.codeGraph.ignorePaths.size() == 1) {
+        XX_TEST_EXPECT_EQ(
+            cfg.codeGraph.ignorePaths[0],
+            std::string("/data/cg/proj/third_party")
+        );
+    }
+}
+
 TestResult testConfigLoader() {
     g_config_loader_passed = 0;
     g_config_loader_failed = 0;
@@ -375,6 +482,11 @@ TestResult testConfigLoader() {
     test_skill_parse();
     test_memory_parse();
     test_model_max_concurrent_connections();
+    test_codegraph_default_disabled();
+    test_codegraph_enable();
+    test_codegraph_paths_parse();
+    test_codegraph_load_cwd_and_gitignore_flags();
+    test_codegraph_env_expand();
 
     return TestResult{g_config_loader_passed, g_config_loader_failed};
 }
