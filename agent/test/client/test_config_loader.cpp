@@ -296,6 +296,61 @@ void test_memory_parse() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// 模型连接池配置 (yaml `models[].max_concurrent_connections`, 默认 5)
+// ---------------------------------------------------------------------------
+
+void test_model_max_concurrent_connections() {
+    // 未配置: 默认 5
+    auto cfg = loadYaml(R"(models:
+  - name: m1
+    type: "openai"
+    base_url: "http://127.0.0.1:8000/v1"
+)");
+    auto it = cfg.models.find("m1");
+    XX_TEST_EXPECT_TRUE(it != cfg.models.end());
+    if (it != cfg.models.end()) {
+        XX_TEST_EXPECT_EQ(it->second.maxConcurrentConnections, size_t{5});
+    }
+
+    // 显式指定
+    cfg = loadYaml(R"(models:
+  - name: m2
+    type: "openai"
+    base_url: "http://127.0.0.1:8000/v1"
+    max_concurrent_connections: 3
+)");
+    it = cfg.models.find("m2");
+    XX_TEST_EXPECT_TRUE(it != cfg.models.end());
+    if (it != cfg.models.end()) {
+        XX_TEST_EXPECT_EQ(it->second.maxConcurrentConnections, size_t{3});
+    }
+
+    // 0 = 不限制
+    cfg = loadYaml(R"(models:
+  - name: m3
+    type: "openai"
+    max_concurrent_connections: 0
+)");
+    it = cfg.models.find("m3");
+    XX_TEST_EXPECT_TRUE(it != cfg.models.end());
+    if (it != cfg.models.end()) {
+        XX_TEST_EXPECT_EQ(it->second.maxConcurrentConnections, size_t{0});
+    }
+
+    // 非法值: 容错回退默认 5, 不崩溃
+    cfg = loadYaml(R"(models:
+  - name: m4
+    type: "openai"
+    max_concurrent_connections: abc
+)");
+    it = cfg.models.find("m4");
+    XX_TEST_EXPECT_TRUE(it != cfg.models.end());
+    if (it != cfg.models.end()) {
+        XX_TEST_EXPECT_EQ(it->second.maxConcurrentConnections, size_t{5});
+    }
+}
+
 TestResult testConfigLoader() {
     g_config_loader_passed = 0;
     g_config_loader_failed = 0;
@@ -319,6 +374,7 @@ TestResult testConfigLoader() {
     test_mcp_env_expand();
     test_skill_parse();
     test_memory_parse();
+    test_model_max_concurrent_connections();
 
     return TestResult{g_config_loader_passed, g_config_loader_failed};
 }

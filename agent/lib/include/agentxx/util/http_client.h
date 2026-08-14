@@ -35,6 +35,10 @@ struct HttpResponse {
     int         status = 0;
     std::string body;
     HeaderMap   headers;
+    /// 响应是否允许 keep-alive (HTTP/1.1 默认或显式 Connection: keep-alive)。
+    /// - 由 exchange 在解析完整响应后填充 (基于响应版本与 Connection 头)
+    /// - 连接池据此决定响应完成后连接是否可归还复用
+    bool keepAlive = false;
 
     std::string_view findHeader(std::string_view name) const noexcept;
 
@@ -70,6 +74,11 @@ inline constexpr uint64_t kDefaultMaxResponseBody = 10 * 1024 * 1024;
 ///   (the timer resets every time new data is received). This is a per-chunk
 ///   timeout, NOT a total response timeout — as long as data keeps flowing the
 ///   connection stays alive.
+/// - keepAlive: enable HTTP keep-alive + 连接池复用 (见 maxConcurrentConnections)。
+///   false (默认) 时请求头带 Connection: close, 每次新建连接、响应后立即关闭。
+/// - maxConcurrentConnections: keepAlive=true 时生效, 每个端点
+///   (scheme://host:port + sslVerify) 的最大并发连接数; 默认 5, 0 = 不限制
+///   (仍复用空闲连接)。超过上限的并发请求排队等待空闲连接。
 struct RequestConfig {
     std::chrono::milliseconds                connectTimeout   = std::chrono::seconds{30};
     std::optional<std::chrono::milliseconds> sendTimeout      = std::nullopt;
@@ -77,6 +86,7 @@ struct RequestConfig {
     std::optional<bool>                      sslVerify        = std::nullopt;
     size_t                                   followRedirect   = 3;
     bool                                     keepAlive        = false;
+    size_t                                   maxConcurrentConnections = 5;
     uint64_t                                 maxResponseBody  = kDefaultMaxResponseBody;
 };
 
@@ -191,6 +201,8 @@ public:
         auto         res = parser.release();
         HttpResponse resp;
         resp.status = res.result_int();
+        // 服务端是否允许 keep-alive: 连接池据此决定响应完成后连接可否复用
+        resp.keepAlive = res.keep_alive();
         for (auto const& field : res) {
             resp.headers.set(field.name_string(), field.value());
         }
@@ -252,6 +264,30 @@ public:
     static void setSslVerify(bool enable) noexcept;
 
     static bool getSslVerify() noexcept;
+
+    // -----------------------------------------------------------------------
+    // 连接池 (HTTP keep-alive 复用)
+    // - 仅 RequestConfig.keepAlive=true 时启用; 池键 = scheme://host:port + sslVerify
+    // - 空闲连接可跨请求复用 (跳过 DNS/TCP/TLS 建连), 复用失效连接时自动重试一次
+    // - 同一端点的并发连接数受 RequestConfig.maxConcurrentConnections 限制 (默认 5)
+    // - 池为进程级单例, 供测试/调试查询; 空闲连接绑定创建它的 io_context,
+    //   该 io_context 存活期间可安全复用
+    // -----------------------------------------------------------------------
+
+    struct PoolStats {
+        size_t active      = 0; ///< 当前借出的连接数
+        size_t idle        = 0; ///< 当前空闲可复用的连接数
+        size_t created     = 0; ///< 累计新建连接数
+        size_t reused      = 0; ///< 累计复用连接数
+        size_t peakActive  = 0; ///< 历史并发峰值 (验证并发上限用)
+        size_t queuedWaits = 0; ///< 累计因并发上限排队等待的次数
+    };
+
+    /// 查询指定 URL 对应端点的连接池统计 (未使用过连接池时返回全 0)
+    static PoolStats poolStats(std::string_view url);
+
+    /// 关闭并清空所有空闲连接 (测试收尾/io_context 销毁前使用; 不影响借出的连接)
+    static void clearConnectionPool();
 
     static asio::awaitable<std::expected<HttpResponse, std::string>> getAsync(
         std::string_view     url,

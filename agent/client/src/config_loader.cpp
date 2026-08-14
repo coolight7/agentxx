@@ -282,6 +282,18 @@ YamlAppConfig loadYamlConfig(
                     mc.sslVerify = false;
                 }
             }
+            if (node["max_concurrent_connections"]) {
+                // 同上: 容错解析, 避免非法配置导致 std::stoull 抛异常崩溃
+                auto val = resolveEnvVars(
+                    node["max_concurrent_connections"].as<std::string>("5"),
+                    dotEnvVars,
+                    overrideEnvVars
+                );
+                unsigned long long parsed = 0;
+                if (util::parseNumberFromString(val, parsed).ec == std::errc{}) {
+                    mc.maxConcurrentConnections = static_cast<size_t>(parsed);
+                }
+            }
             if (node["model_context_max_token"]) {
                 // 同上: 容错解析, 避免非法配置导致 std::stoull 抛异常崩溃
                 auto val = resolveEnvVars(

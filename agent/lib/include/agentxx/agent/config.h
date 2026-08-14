@@ -47,6 +47,11 @@ public:
     /// 是否在发送 LLM 请求时携带 thinking 内容
     bool                sendThinking = false;
     std::optional<bool> sslVerify    = std::nullopt;
+    /// LLM API 连接池: 该模型端点 (baseUrl) 的最大并发连接数 (yaml `max_concurrent_connections`)
+    /// - 默认 5; 0 = 不限制 (仍复用空闲连接)
+    /// - LLM 请求启用 HTTP keep-alive 连接池, 复用空闲连接并限制并发建连数,
+    ///   超过上限的并发请求排队等待空闲连接 (见 HttpClient::RequestConfig)
+    size_t maxConcurrentConnections = 5;
     /// Anthropic API version（仅 Anthropic 使用）
     std::string anthropicVersion = "2023-06-01";
     /// 自定义 API 路径（如 "/v1/chat/completions"）

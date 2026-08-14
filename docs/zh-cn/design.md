@@ -340,6 +340,9 @@ models:
     ssl_verify: null            # true/false 显式控制 TLS 证书验证; 省略用默认策略
     connect_timeout: 16
     read_chunk_timeout: 24
+    max_concurrent_connections: 5   # 该模型 API 端点的最大并发连接数 (默认 5, 0=不限制)
+                                    # LLM 请求启用 HTTP keep-alive 连接池: 空闲连接复用,
+                                    # 超过上限的并发请求排队等待空闲连接
     model_context_max_token: 128000
     extra_headers:              # 额外 HTTP 请求头 (如自定义鉴权/网关透传)
       x-custom-header: "value"
@@ -357,7 +360,7 @@ use_model:
   train_scorer: "my-model"      # 训练评分模型
   train_optimizer: "my-model"   # 训练优化模型
 
-mcp_servers:
+mcp:
   - namespace: "my_mcp"
     url: "http://localhost:3000/mcp"
 
@@ -1123,6 +1126,8 @@ agent/
 │   │       ├── log.h             # 日志系统 (XX_LOG 宏, LogDispatcher, LogSink)
 │   │       ├── string_util.h     # 字符串工具 (编码转换/路径标准化/base64/自然排序/IgnoreCaseMap 等)
 │   │       ├── http_client.h     # HTTP 客户端 (基于 Boost.Beast)
+│   │       │                     #   连接池: keep-alive 空闲连接复用 + 每端点并发上限
+│   │       │                     #   (maxConcurrentConnections, 默认 5), 复用失效自动重试
 │   │       ├── http_server.h     # HTTP 服务器 (路由/WS/SSE/SSL)
 │   │       ├── http_header.h     # HeaderMap (忽略大小写的 HTTP 头部管理)
 │   │       ├── ws_client.h       # WebSocket 客户端

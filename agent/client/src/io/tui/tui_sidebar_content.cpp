@@ -254,13 +254,11 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
                 })
                 | color(theme_.normalColor)
             );
-            appendEls.push_back(
-                hbox({
-                    text("|  "),
-                    text(std::move(status)),
-                })
-                | color(cg.indexing ? theme_.accentColor : theme_.hintColor)
-            );
+            appendEls.push_back(hbox({
+                text("|  ") | color(theme_.hintColor),
+                text(std::move(status))
+                    | color(cg.indexing ? theme_.accentColor : theme_.hintColor),
+            }));
         }
 
         auto appendGroup = [&](std::string_view                                  label,
