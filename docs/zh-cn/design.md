@@ -41,8 +41,7 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
 |------|------|------|
 | **文件系统** | `agentxx_filesystem_list` | 列出文件/文件夹信息 (大小、类型、修改时间)，支持递归 |
 | | `agentxx_filesystem_read_text_file` | 按行读取文本文件，支持 offset/limit |
-| | `agentxx_filesystem_read_binary_file` | 按字节读取二进制文件，返回 base64 |
-| | `agentxx_filesystem_write_file` | 创建/覆盖文件，支持二进制 (base64) 写入 |
+| | `agentxx_filesystem_write_file` | 创建/覆盖文本文件 |
 | | `agentxx_filesystem_edit_text_file` | 精确字符串替换编辑文本文件 |
 | | `agentxx_filesystem_glob` | 按 glob 模式搜索文件 |
 | | `agentxx_filesystem_grep` | 按正则/文本搜索文件内容 |

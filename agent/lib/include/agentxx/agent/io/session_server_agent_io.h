@@ -1,6 +1,7 @@
 #pragma once
 
 #include "agentxx/agent/io/agent_io.h"
+#include "agentxx/expand/get_cpu_gpu_use.h"
 #include "agentxx/util/stream.h"
 #include "asio/any_io_executor.hpp"
 #include "asio/awaitable.hpp"
@@ -194,6 +195,12 @@ private:
 
     // grace 定时器 (仅 ex_ 线程访问: startGraceTimer/cancelGraceTimer)
     std::shared_ptr<asio::steady_timer> graceTimer_;
+
+    /// 系统资源监控实例 (按需惰性创建, 仅 ex_ 线程访问):
+    /// CPU 占用率依赖前后两次采样差值, 客户端 (TUI) 周期请求时须跨请求复用
+    /// 同一实例才能得到连续准确的占用率; query() 卸载到 blockingPool 执行,
+    /// 不经此协程并发, 实例内部采样状态无竞争
+    std::shared_ptr<agentxx::expand::CpuGpuMonitor> sysMonitor_;
 
     // ----- CodeGraph 索引进度推送状态 (仅 ex_ 线程访问) -----
 
