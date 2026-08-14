@@ -1,5 +1,8 @@
 #include "agentxx/protocol/openai_provider.h"
 #include "agentxx/util/exception.h"
+#include "fmt/format.h"
+#include <chrono>
+#include <random>
 
 namespace agentxx {
 namespace server {
@@ -231,10 +234,30 @@ std::string OpenAIProvider::extractApiError(const std::string& body) {
     );
 }
 
+namespace {
+
+// 生成唯一的 tool_call id: 毫秒时间戳 + 32 位随机数
+// - 无需与已有 id 比较, 碰撞概率 ~2^-32 (同一毫秒内), 跨毫秒必然不同
+// - 相比按下标回填 call_{i}, 不会与 LLM 返回的 call_N 形式 id 冲突
+std::string makeUniqueToolCallId(size_t i = 0) {
+    thread_local std::mt19937_64 rng{
+        static_cast<uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count())
+    };
+    const auto ts = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::system_clock::now().time_since_epoch()
+    )
+                        .count();
+    return fmt::format("call_{}_{}_{:08x}", ts, i, static_cast<uint32_t>(rng()));
+}
+
+} // namespace
+
 void OpenAIProvider::fillMissingToolCallIds(neograph::ChatCompletion& completion) {
-    for (size_t i = 0; i < completion.message.tool_calls.size(); ++i) {
-        if (completion.message.tool_calls[i].id.empty()) {
-            completion.message.tool_calls[i].id = fmt::format("call_{}", i);
+    // 缺失 id 用时间戳+随机数回填, 天然唯一, 无需与已有 id 比较
+    size_t index = 0;
+    for (auto& tc : completion.message.tool_calls) {
+        if (tc.id.empty()) {
+            tc.id = makeUniqueToolCallId(++index);
         }
     }
 }
@@ -478,11 +501,11 @@ asio::awaitable<neograph::ChatCompletion>
         "application/json",
         headers,
         HttpClient::RequestConfig{
-            .connectTimeout            = std::chrono::seconds{config_.connectTimeoutSeconds},
-            .readChunkTimeout          = std::chrono::seconds{config_.readChunkTimeoutSeconds},
-            .sslVerify                 = config_.sslVerify,
-            .keepAlive                 = true,
-            .maxConcurrentConnections  = config_.maxConcurrentConnections,
+            .connectTimeout           = std::chrono::seconds{config_.connectTimeoutSeconds},
+            .readChunkTimeout         = std::chrono::seconds{config_.readChunkTimeoutSeconds},
+            .sslVerify                = config_.sslVerify,
+            .keepAlive                = true,
+            .maxConcurrentConnections = config_.maxConcurrentConnections,
         }
     );
 
@@ -593,11 +616,11 @@ asio::awaitable<neograph::ChatCompletion>
         "application/json",
         headers,
         HttpClient::RequestConfig{
-            .connectTimeout            = std::chrono::seconds{config_.connectTimeoutSeconds},
-            .readChunkTimeout          = std::chrono::seconds{config_.readChunkTimeoutSeconds},
-            .sslVerify                 = config_.sslVerify,
-            .keepAlive                 = true,
-            .maxConcurrentConnections  = config_.maxConcurrentConnections,
+            .connectTimeout           = std::chrono::seconds{config_.connectTimeoutSeconds},
+            .readChunkTimeout         = std::chrono::seconds{config_.readChunkTimeoutSeconds},
+            .sslVerify                = config_.sslVerify,
+            .keepAlive                = true,
+            .maxConcurrentConnections = config_.maxConcurrentConnections,
         }
     );
 
@@ -753,10 +776,10 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStream(
                 "application/json",
                 headers,
                 HttpClient::RequestConfig{
-                    .connectTimeout           = std::chrono::seconds{config_.connectTimeoutSeconds},
-                    .readChunkTimeout         = std::chrono::seconds{config_.readChunkTimeoutSeconds},
-                    .sslVerify                = config_.sslVerify,
-                    .keepAlive                = true,
+                    .connectTimeout   = std::chrono::seconds{config_.connectTimeoutSeconds},
+                    .readChunkTimeout = std::chrono::seconds{config_.readChunkTimeoutSeconds},
+                    .sslVerify        = config_.sslVerify,
+                    .keepAlive        = true,
                     .maxConcurrentConnections = config_.maxConcurrentConnections,
                 },
                 // 返回 true 通知 http 层流已结束 (收到 [DONE]): 立即断开连接停止读取,
@@ -829,9 +852,11 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStream(
     }
     completion.message.content           = fullContent;
     completion.message.reasoning_content = fullThinking;
+    // 回填缺失的 tool_call id: 时间戳+随机数生成, 天然唯一, 无需与已有 id 比较
+    size_t index = 0;
     for (auto& [idx, tc] : tcMap) {
         if (tc.id.empty()) {
-            tc.id = fmt::format("call_{}", idx);
+            tc.id = makeUniqueToolCallId(++index);
         }
         completion.message.tool_calls.push_back(std::move(tc));
     }
@@ -881,10 +906,10 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStreamResponses(
                 "application/json",
                 headers,
                 HttpClient::RequestConfig{
-                    .connectTimeout           = std::chrono::seconds{config_.connectTimeoutSeconds},
-                    .readChunkTimeout         = std::chrono::seconds{config_.readChunkTimeoutSeconds},
-                    .sslVerify                = config_.sslVerify,
-                    .keepAlive                = true,
+                    .connectTimeout   = std::chrono::seconds{config_.connectTimeoutSeconds},
+                    .readChunkTimeout = std::chrono::seconds{config_.readChunkTimeoutSeconds},
+                    .sslVerify        = config_.sslVerify,
+                    .keepAlive        = true,
                     .maxConcurrentConnections = config_.maxConcurrentConnections,
                 },
                 // 返回 true 通知 http 层流已结束 (收到 response.completed): 立即断开
@@ -960,9 +985,11 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStreamResponses(
     }
     completion.message.content           = fullContent;
     completion.message.reasoning_content = fullThinking;
+    // 回填缺失的 tool_call id: 时间戳+随机数生成, 天然唯一, 无需与已有 id 比较
+    size_t index = 0;
     for (auto& [idx, tc] : tcMap) {
         if (tc.id.empty()) {
-            tc.id = fmt::format("call_{}", idx);
+            tc.id = makeUniqueToolCallId(++index);
         }
         completion.message.tool_calls.push_back(std::move(tc));
     }
@@ -1255,8 +1282,7 @@ bool OpenAIProvider::processResponsesSseLine(
     // usage, 两者都兼容
     if (j.contains("usage") && j["usage"].is_object()) {
         parseResponsesUsage(j["usage"], completion);
-    } else if (j.contains("response") && j["response"].is_object()
-               && j["response"].contains("usage")) {
+    } else if (j.contains("response") && j["response"].is_object() && j["response"].contains("usage")) {
         parseResponsesUsage(j["response"]["usage"], completion);
     }
 
