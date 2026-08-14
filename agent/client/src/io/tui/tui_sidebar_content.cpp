@@ -216,7 +216,9 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
         elements.push_back(text(" "));
     }
 
-    if (!st.appendComponents.empty()) {
+    // Append 段: 已加载组件 (Memory/Skill/MCP) + CodeGraph 索引状态
+    // - CodeGraph 状态在 appendComponents 为空时也需展示, 条件一并判断
+    if (!st.appendComponents.empty() || (st.codegraphProgress && st.codegraphProgress->available)) {
         Elements appendEls;
         appendEls.push_back(text("Append") | color(theme_.accentColor));
 
@@ -231,11 +233,9 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
                 }
                 ++count;
                 elems.push_back(
-                    (splitName ? hbox({text(fmt::format(
-                                     "|  {}·{}",
-                                     agentxx::util::getFileName(notif.name),
-                                     notif.name
-                                 ))})
+                    (splitName ? hbox({text(
+                         fmt::format("|  {}·{}", agentxx::util::getFileName(notif.name), notif.name)
+                     )})
                                : hbox({text("|  "), text(notif.name)}))
                     | color(notif.success ? theme_.hintColor : theme_.errorColor)
                 );
@@ -251,6 +251,41 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
         appendGroup("Memory", agentxx::agent::AppendComponentNotification::Type::Memory, true);
         appendGroup("Skill", agentxx::agent::AppendComponentNotification::Type::Skill, true);
         appendGroup("MCP", agentxx::agent::AppendComponentNotification::Type::Mcp, false);
+
+        // CodeGraph 索引状态 (服务端 WireCodegraphProgress 节流 ≥3s 推送):
+        // 追加到 Append 段末尾, 展示索引进度/就绪状态
+        if (st.codegraphProgress && st.codegraphProgress->available) {
+            const auto& cg = *st.codegraphProgress;
+            std::string status;
+            if (cg.indexing && cg.total > 0) {
+                // 索引进行中: 45% (12/60)
+                status = fmt::format(
+                    "indexing {}% · {}/{}",
+                    static_cast<int>(
+                        100.0 * static_cast<double>(cg.processed) / static_cast<double>(cg.total)
+                    ),
+                    cg.processed,
+                    cg.total
+                );
+            } else if (cg.indexing) {
+                // 索引进行中但文件总数未知 (首次扫描阶段)
+                status = "indexing ...";
+            } else if (cg.total > 0) {
+                // 索引完成
+                status = fmt::format("avail {}/{}", cg.processed, cg.total);
+            } else {
+                // 可用但尚未开始索引
+                status = "ready";
+            }
+            appendEls.push_back(
+                hbox({
+                    text("|- "),
+                    text("CodeGraph: "),
+                    text(std::move(status)),
+                })
+                | color(cg.indexing ? theme_.accentColor : theme_.normalColor)
+            );
+        }
 
         elements.push_back(vbox(std::move(appendEls)));
     }

@@ -1057,6 +1057,14 @@ void TUIClientAgentIO::onPeerMessage(agentxx::agent::WireMessage msg) {
                     }
                 }
                 postRedraw();
+            } else if constexpr (std::is_same_v<T, agentxx::agent::WireCodegraphProgress>) {
+                // CodeGraph 索引进度 (服务端节流 ≥3s 推送): Info 侧边栏 Append 段显示
+                {
+                    std::lock_guard<std::mutex> lock(sharedState_.mutex());
+                    auto&                       st = sharedState_.mutableState();
+                    st.codegraphProgress = m;
+                }
+                postRedraw();
             } else if constexpr (std::is_same_v<T, agentxx::agent::WireContextMessages>) {
                 {
                     std::lock_guard<std::mutex> lock(sharedState_.mutex());
@@ -1332,6 +1340,8 @@ void TUIClientAgentIO::onSync(const agentxx::agent::SyncPayload& payload) {
             st->pendingInputs    = prev->pendingInputs;
             st->systemUsage      = prev->systemUsage;
             st->contextMessages  = prev->contextMessages;
+            // CodeGraph 索引进度不随 Sync 重置 (状态栏/Info 侧边栏持续展示)
+            st->codegraphProgress = prev->codegraphProgress;
             st->isStreaming      = false;
             // 连接状态不随 Sync 重置: 握手后服务端回推全量 Sync 时若被重置回
             // Connecting (默认值), banner 会错误地回到"启动中"

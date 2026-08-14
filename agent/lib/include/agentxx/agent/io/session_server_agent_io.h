@@ -1,6 +1,7 @@
 #pragma once
 
 #include "agentxx/agent/io/agent_io.h"
+#include "agentxx/util/stream.h"
 #include "asio/any_io_executor.hpp"
 #include "asio/awaitable.hpp"
 #include "asio/experimental/concurrent_channel.hpp"
@@ -160,6 +161,23 @@ private:
     void resolveInterrupt(int64_t id, neograph::json result);
     void onCancel();
 
+    // ----- CodeGraph 索引进度推送 (仅 ex_ 线程访问) -----
+
+    /// 订阅 codegraph 索引进度 (run 开始时调用一次):
+    /// - 经 agent->codegraphManager() 获取 CodeGraphManager 并注册进度回调
+    /// - codegraph 不可用 (未启用/未初始化) 时不订阅, TUI 不显示
+    void subscribeCodegraphProgress();
+
+    /// ex_ 线程: 收到一次索引进度更新 (由 blockingPool 线程回调 post 而来);
+    /// 经 3s 节流放行后推送, 限流窗内的更新挂起由尾推定时器补发
+    void onCodegraphProgress(WireCodegraphProgress prog);
+
+    /// 尾推定时器回调: 补推限流窗内挂起的最新进度 (计为一次放行)
+    void onCodegraphTail();
+
+    /// 启动/复用尾推定时器: 窗末补推 cgPending_ (定时器在跑时 no-op)
+    void armCodegraphTailTimer();
+
     asio::any_io_executor    ex_;
     std::weak_ptr<BaseAgent> agent_;
     Config                   config_;
@@ -176,6 +194,17 @@ private:
 
     // grace 定时器 (仅 ex_ 线程访问: startGraceTimer/cancelGraceTimer)
     std::shared_ptr<asio::steady_timer> graceTimer_;
+
+    // ----- CodeGraph 索引进度推送状态 (仅 ex_ 线程访问) -----
+
+    /// 是否已注册 codegraph 进度订阅 (防止 run() 重复注册覆盖回调)
+    bool cgSubscribed_ = false;
+    /// 3s 节流器: 索引进度推送限流 (最短 3 秒一次, 见 util/stream.h Throttle)
+    agentxx::util::Throttle cgThrottle_{std::chrono::seconds{3}};
+    /// 限流窗内挂起的最新进度 (尾推定时器到点补发, 保证最后一条不丢)
+    std::optional<WireCodegraphProgress> cgPending_;
+    /// 尾推定时器: 放行后启动, 窗末补推 cgPending_ (非空即表示定时器在跑)
+    std::shared_ptr<asio::steady_timer> cgTailTimer_;
 
     std::atomic<bool> running_{false};
     std::atomic<bool> turnActive_{false};

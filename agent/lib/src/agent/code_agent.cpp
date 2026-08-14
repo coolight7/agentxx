@@ -22,11 +22,14 @@
 // CodeGraph 代码分析 (头文件内部按 AGENTXX_ENABLE_CODEGRAPH 条件编译)
 #include "agentxx/expand/codegraph_manager.h"
 #include "agentxx/tools/codegraph_tool.h"
+#include "agentxx/util/async_offload.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/experimental/concurrent_channel.hpp"
+#include "asio/steady_timer.hpp"
 #include "asio/use_awaitable.hpp"
 #include "neograph/mcp/client.h"
+#include <chrono>
 #include <optional>
 
 namespace agentxx {
@@ -36,6 +39,11 @@ CodeAgent::CodeAgent(std::shared_ptr<agentxx::agent::AgentConfig> in_config) :
     BaseAgent(std::move(in_config)) {}
 
 CodeAgent::~CodeAgent() = default;
+
+std::shared_ptr<expand::CodeGraphManager> CodeAgent::codegraphManager() {
+    // createTools 中启用且初始化成功时填充 codegraph_, 否则为空 (不可用)
+    return codegraph_;
+}
 
 asio::awaitable<void> CodeAgent::setupMiddleware() {
     auto config = agentContext->agentConfig;
@@ -422,7 +430,13 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
 #if AGENTXX_ENABLE_CODEGRAPH
         // 逐步上报启动进度: CodeGraph 初始化涉及索引库打开/项目根扫描
         notifyStartup("初始化 CodeGraph 代码索引 ...");
-        auto codegraph = std::make_shared<agentxx::expand::CodeGraphManager>(
+        // 打印索引数据目录: 便于核对持久化位置是否稳定
+        // (project_root / dataDir 变化会导致每次新建索引库, 表现为"每次从头索引")
+        XX_LOGI(
+            "[codegraph] index data dir: {}",
+            agentxx::agent::AgentConfigStatic::getSqliteDir(config->dataDir)
+        );
+        codegraph_ = std::make_shared<agentxx::expand::CodeGraphManager>(
             agentxx::agent::AgentConfigStatic::getSqliteDir(config->dataDir)
         );
         std::optional<std::string> projectRoot
@@ -431,32 +445,79 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
             XX_LOGE(
                 "CodeGraph enabled in config but get current work path failed, skip codegraph tools"
             );
-        } else if (codegraph->initialize(*projectRoot)) {
+        } else if (codegraph_->initialize(*projectRoot)) {
             tools.push_back(
-                std::make_unique<agentxx::tools::CodeGraphSearchTool>(codegraph, agentContext)
+                std::make_unique<agentxx::tools::CodeGraphSearchTool>(codegraph_, agentContext)
             );
             tools.push_back(
-                std::make_unique<agentxx::tools::CodeGraphContextTool>(codegraph, agentContext)
+                std::make_unique<agentxx::tools::CodeGraphContextTool>(codegraph_, agentContext)
             );
             tools.push_back(
-                std::make_unique<agentxx::tools::CodeGraphCallersTool>(codegraph, agentContext)
+                std::make_unique<agentxx::tools::CodeGraphCallersTool>(codegraph_, agentContext)
             );
             tools.push_back(
-                std::make_unique<agentxx::tools::CodeGraphCalleesTool>(codegraph, agentContext)
+                std::make_unique<agentxx::tools::CodeGraphCalleesTool>(codegraph_, agentContext)
             );
             tools.push_back(
-                std::make_unique<agentxx::tools::CodeGraphImpactTool>(codegraph, agentContext)
+                std::make_unique<agentxx::tools::CodeGraphImpactTool>(codegraph_, agentContext)
             );
             tools.push_back(
-                std::make_unique<agentxx::tools::CodeGraphStatusTool>(codegraph, agentContext)
+                std::make_unique<agentxx::tools::CodeGraphStatusTool>(codegraph_, agentContext)
             );
             tools.push_back(
-                std::make_unique<agentxx::tools::CodeGraphIndexTool>(codegraph, agentContext)
+                std::make_unique<agentxx::tools::CodeGraphIndexTool>(codegraph_, agentContext)
             );
             tools.push_back(
-                std::make_unique<agentxx::tools::CodeGraphPathTool>(codegraph, agentContext)
+                std::make_unique<agentxx::tools::CodeGraphPathTool>(codegraph_, agentContext)
             );
             XX_LOGI("CodeGraph enabled, added codegraph tools (project root: {})", *projectRoot);
+
+            // 后台预热索引 (Eager 预计算):
+            // - 启动延迟后对项目根执行一次增量索引, 使随后的 codegraph 查询
+            //   尽快落在预计算数据上 (已有索引库时仅重扫变更文件, 首次为全量)
+            // - 挂在 agent ioCtx 上 (detached), offload 到 blockingPool 执行,
+            //   不阻塞 agent 初始化/首个请求; 索引期间查询经共享锁可并发读取旧数据
+            // - 编码为弱引用持有 agentContext: agent 已销毁时跳过
+            {
+                auto warmupAgent = std::weak_ptr<agentxx::agent::AgentContext>{agentContext};
+                auto warmupCg    = codegraph_;
+                auto warmupRoot  = std::string{*projectRoot};
+                asio::co_spawn(
+                    ioCtx->get_executor(),
+                    [warmupAgent, warmupCg, warmupRoot = std::move(warmupRoot)]() mutable
+                        -> asio::awaitable<void> {
+                        // 延迟启动: 让 agent 初始化/组件加载等启动流程先行,
+                        // 避免预热索引与启动期任务竞争线程池
+                        asio::steady_timer timer(co_await asio::this_coro::executor);
+                        timer.expires_after(std::chrono::seconds(2));
+                        co_await timer.async_wait(asio::use_awaitable);
+                        auto agentPtr = warmupAgent.lock();
+                        if (!agentPtr || !agentPtr->blockingPool) {
+                            co_return;
+                        }
+                        XX_LOGI("[codegraph] background warmup index start (root={})", warmupRoot);
+                        const auto startAt = std::chrono::steady_clock::now();
+                        bool       ok      = co_await agentxx::util::offloadAsync<bool>(
+                            *agentPtr->blockingPool,
+                            [warmupCg, warmupRoot]() -> asio::awaitable<bool> {
+                                co_return warmupCg->indexDirectory(warmupRoot, true);
+                            }
+                        );
+                        const auto costMs
+                            = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                  std::chrono::steady_clock::now() - startAt
+                              )
+                                  .count();
+                        XX_LOGI(
+                            "[codegraph] background warmup index {} (root={}, {}ms)",
+                            ok ? "done" : "failed",
+                            warmupRoot,
+                            costMs
+                        );
+                    },
+                    asio::detached
+                );
+            }
         } else {
             XX_LOGE("CodeGraph enabled in config but initialize failed, skip codegraph tools");
         }

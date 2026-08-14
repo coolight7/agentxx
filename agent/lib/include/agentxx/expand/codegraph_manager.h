@@ -62,6 +62,10 @@ public:
 
     bool isRunning() const;
 
+    /// 索引是否进行中 (indexDirectory 生命周期内为 true)
+    /// - 查询侧据此附加"索引中, 结果可能不完整"提示
+    bool isIndexing() const;
+
     bool indexDirectory(std::string_view path, bool incremental = true);
     bool updateIndex();
     bool resolveReferences();
