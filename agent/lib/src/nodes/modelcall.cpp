@@ -11,7 +11,11 @@
 #include "fmt/format.h"
 #include "fmt/ranges.h"
 #include <algorithm>
+#include <chrono>
+#include <random>
 #include <set>
+#include <unordered_map>
+#include <unordered_set>
 
 namespace agentxx {
 namespace nodes {
@@ -31,6 +35,20 @@ inline static const auto defaultRateLimitTag = agentxx::util::AhoCorasick<char>{
     },
     true
 };
+
+// 生成唯一的 tool_call id: 毫秒时间戳 + 32 位随机数
+// - 无需与已有 id 比较, 碰撞概率 ~2^-32 (同一毫秒内), 跨毫秒必然不同
+// - 相比按下标回填 call_{i}, 不会与 LLM 返回的 call_N 形式 id 冲突
+inline static std::string makeUniqueToolCallId(size_t i) {
+    thread_local std::mt19937_64 rng{
+        static_cast<uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count())
+    };
+    const auto ts = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::system_clock::now().time_since_epoch()
+    )
+                        .count();
+    return fmt::format("call_{}_{}_{:08x}", ts, i, static_cast<uint32_t>(rng()));
+}
 
 ModelCallWrapNode::ModelCallWrapNode(
     std::string_view                            name,
@@ -188,11 +206,12 @@ asio::awaitable<neograph::graph::NodeOutput>
     neograph::graph::record_usage(in.ctx, completion); // #88
 
     // 部分 OpenAI 兼容 API (如 Ollama) 流式响应不返回 tool_call id，
-    // 此处补充合成 ID，确保下游 ToolStart/ToolEnd 能正确关联
-    for (size_t i = 0; i < completion.message.tool_calls.size(); ++i) {
-        auto& tc = completion.message.tool_calls[i];
+    // 此处补充合成 ID，确保下游 ToolStart/ToolEnd 能正确关联；
+    // 时间戳+随机数生成, 天然唯一, 不会与 LLM 返回的 id 冲突
+    size_t index = 0;
+    for (auto& tc : completion.message.tool_calls) {
         if (tc.id.empty()) {
-            tc.id = fmt::format("call_{}", i);
+            tc.id = makeUniqueToolCallId(++index);
         }
     }
 
@@ -288,6 +307,75 @@ void ModelCallWrapNode::repairMessages(neograph::graph::NodeInput& in) {
                     XX_LOGD("RepairMessages: clear dangling toolcalls before LLM call");
                     haveChange = true;
                 }
+            }
+        }
+
+        // 检查并修复 tool_call_id 重复:
+        // - LLM 可能返回重复的 tool_call id (重试/多轮时复用), provider 自动回填的
+        //   call_{i} 也可能与 LLM 返回的 id 冲突, 重复 id 会让 tool 结果消息无法
+        //   精确匹配对应的 assistant tool_call
+        // - 重命名重复出现的 assistant tool_call id, 并按出现顺序同步更新对应
+        //   tool 结果消息的 tool_call_id (第 1 个调用对应第 1 个结果, 依次类推)
+        {
+            // 重复项位置: (消息索引, tool_calls 内索引, 新 id)
+            struct DupToolCall {
+                size_t      msgIdx;
+                size_t      tcIdx;
+                std::string newId;
+            };
+
+            // old id -> 重复项列表 (第 2 次及以后出现)
+            std::unordered_map<std::string, std::vector<DupToolCall>> dupMap;
+            // old id -> 对应 tool 结果消息索引 (按出现顺序)
+            std::unordered_map<std::string, std::vector<size_t>> toolResultIdxs;
+            // 全局已见 id (assistant tool_calls + tool 结果), 生成新 id 时避开
+            std::unordered_set<std::string> seenIds;
+
+            // 第一遍: 收集 assistant tool_calls 的 id, 标记重复项
+            for (size_t mi = 0; mi < msgs.size(); ++mi) {
+                auto& msg = msgs[mi];
+                if ("assistant" == msg.role) {
+                    for (size_t ti = 0; ti < msg.tool_calls.size(); ++ti) {
+                        const auto& id = msg.tool_calls[ti].id;
+                        if (id.empty()) {
+                            continue;
+                        }
+                        if (!seenIds.insert(id).second) {
+                            // 第 2 次及以后出现: 重命名为唯一 id (时间戳+随机数, 无需比较)
+                            dupMap[id].push_back(DupToolCall{mi, ti, makeUniqueToolCallId(ti)});
+                        }
+                    }
+                } else if ("tool" == msg.role && !msg.tool_call_id.empty()) {
+                    // tool 结果消息的 id 也纳入已见集合, 防止新 id 与之冲突
+                    seenIds.insert(msg.tool_call_id);
+                }
+            }
+
+            if (!dupMap.empty()) {
+                // 第二遍: 收集 tool 结果消息的 tool_call_id 出现顺序
+                for (size_t mi = 0; mi < msgs.size(); ++mi) {
+                    if ("tool" == msgs[mi].role && !msgs[mi].tool_call_id.empty()) {
+                        toolResultIdxs[msgs[mi].tool_call_id].push_back(mi);
+                    }
+                }
+                // 第三遍: 应用重命名, 重复项与 tool 结果按出现顺序配对
+                for (const auto& [oldId, infos] : dupMap) {
+                    const auto& resultIdxs = toolResultIdxs[oldId];
+                    for (size_t k = 0; k < infos.size(); ++k) {
+                        const auto& info                            = infos[k];
+                        msgs[info.msgIdx].tool_calls[info.tcIdx].id = info.newId;
+                        if (k + 1 < resultIdxs.size()) {
+                            // 第 1 个 tool 结果对应原始调用, 第 k+1 个对应第 k 个重复项
+                            msgs[resultIdxs[k + 1]].tool_call_id = info.newId;
+                        }
+                        XX_LOGW(
+                            "RepairMessages: duplicate tool_call_id '{}' -> '{}'",
+                            oldId,
+                            info.newId
+                        );
+                    }
+                }
+                haveChange = true;
             }
         }
 
