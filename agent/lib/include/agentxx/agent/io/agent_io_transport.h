@@ -208,8 +208,8 @@ using WireMessage = std::variant<
     WireSwitchSession,
     WireSetPermission,
     WireGetSystemUsage,
-    WireSystemUsage>,
-      WireCodegraphProgress > ;
+    WireSystemUsage,
+    WireCodegraphProgress>;
 
 // ---------------------------------------------------------------------------
 // AgentIOTransportBase: 两个 AgentIOBase 端点之间的协议传输层
