@@ -41,6 +41,24 @@ inline constexpr std::string_view permissionModeDepict(agent::PermissionMode mod
     return "ask";
 }
 
+/// CodeGraph 代码分析配置 (yaml `codegraph` 块)
+/// - 默认禁用 (enable=false); 索引加载路径/忽略路径可配置
+struct CodeGraphConfig {
+    /// 是否启用 CodeGraph 代码分析 (yaml `codegraph.enable`, 默认 false)
+    bool enable = false;
+    /// 加载(索引)路径列表 (yaml `codegraph.paths`, 相对路径按工作目录解析为绝对路径)
+    /// - 非空时按此列表索引; 为空时按 loadCwd 决定是否默认索引当前工作目录
+    std::vector<std::string> paths;
+    /// 忽略路径列表 (yaml `codegraph.ignore_paths`, 相对路径按工作目录解析,
+    /// 支持 * 通配符; 命中即跳过)
+    std::vector<std::string> ignorePaths;
+    /// 未配置 paths 时是否默认加载当前工作目录 (yaml `codegraph.load_cwd`, 默认 true)
+    bool loadCwd = true;
+    /// 是否默认启用 .gitignore 规则与 .gitmodules 子模块目录忽略
+    /// (yaml `codegraph.use_gitignore`, 默认 true)
+    bool useGitignore = true;
+};
+
 struct YamlAppConfig {
     std::map<std::string, agent::ModelConfig> models;
     /// MCP 服务器配置 (yaml `mcp` 列表项, key 为命名空间)
@@ -63,11 +81,10 @@ struct YamlAppConfig {
     ///   {dataDir}/sqlite/sessions/{threadId}/ (会话数据),
     ///   {dataDir}/sqlite/codegraph/... (CodeGraph 索引)
     std::string dataDir;
-    /// 是否启用 CodeGraph 代码分析 (默认关闭)
-    /// - 索引项目根目录固定为当前程序工作目录
+    /// CodeGraph 代码分析配置 (yaml `codegraph` 块, 默认禁用)
     /// - 索引数据库: {dataDir}/sqlite/codegraph/<折叠路径>/index.db
     ///   (深层路径折叠 + 单段截断控制长度, 子目录可前缀复用最近父级索引)
-    bool enableCodeGraph = true;
+    CodeGraphConfig codeGraph;
 
     /// 权限询问处理模式 (yaml `permission.mode`: ask/all_ask/pass/deny, 默认 ask)
     /// - ask:     当前工作目录内允许读写, 其他路径询问用户

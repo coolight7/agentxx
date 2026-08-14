@@ -212,6 +212,8 @@
 - ✅CodeGraph
     - 分析代码符号、查找定位
     - 保存分析结果到 sqlite
+    - ✅可配置加载路径/忽略路径 (yaml `codegraph` 块: paths/ignore_paths/load_cwd)
+    - ✅默认忽略 .gitignore 规则与 .gitmodules 子模块目录 (可配置关闭 use_gitignore)
     - ⬜根据 .gitignore/.gitmodules 等排序分析优先级，把 third_party/test 等目录排后
 - ✅RAG
     - ✅文本分割分块 + 默认20%相邻分块重叠

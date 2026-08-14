@@ -250,6 +250,16 @@ Options:
         );
     }
 
+    // 解析路径：相对路径按程序工作目录解析为绝对路径
+    // (用于 skill/memory/codegraph 加载与忽略路径; 放在模式分支前定义, acp 模式也可用)
+    auto resolvePath = [](std::string_view p) -> std::string {
+        std::filesystem::path fp{p};
+        if (fp.is_absolute()) {
+            return fp.lexically_normal().string();
+        }
+        return (std::filesystem::current_path() / fp).lexically_normal().string();
+    };
+
     if (mode == "train") {
         auto config                                    = buildDefaultConfig();
         config->dataDir                                = resolvedDataDir;
@@ -288,8 +298,22 @@ Options:
         applyModelToConfig(config, yamlCfg.models, yamlCfg.useModelAcp);
         applySubagentModelToConfig(config, yamlCfg.models, yamlCfg.useModelSubagent);
         applyWebSearchModelToConfig(config, yamlCfg.models, yamlCfg.useModelWebSearch);
-        config->enableCodeGraph = yamlCfg.enableCodeGraph;
-        auto agent              = std::make_shared<agentxx::agent::CodeAgent>(config);
+        // CodeGraph 代码分析 (yaml `codegraph` 块; 相对路径按工作目录解析为绝对路径,
+        // 统一 / 分隔符以便与索引路径匹配)
+        config->enableCodeGraph        = yamlCfg.codeGraph.enable;
+        config->codeGraphLoadCwd       = yamlCfg.codeGraph.loadCwd;
+        config->codeGraphUseGitignore  = yamlCfg.codeGraph.useGitignore;
+        for (const auto& p : yamlCfg.codeGraph.paths) {
+            config->codeGraphPaths.push_back(
+                std::filesystem::path(resolvePath(p)).generic_string()
+            );
+        }
+        for (const auto& p : yamlCfg.codeGraph.ignorePaths) {
+            config->codeGraphIgnorePaths.push_back(
+                std::filesystem::path(resolvePath(p)).generic_string()
+            );
+        }
+        auto agent = std::make_shared<agentxx::agent::CodeAgent>(config);
         asio::co_spawn(
             *agent->ioCtx,
             [agent]() -> asio::awaitable<void> {
@@ -313,23 +337,32 @@ Options:
     // MCP 服务器 (来自 config.yaml 的 mcp, key 为命名空间)
     config->mcpServerUrls = yamlCfg.mcpServers;
 
-    // 解析路径：相对路径按程序工作目录解析为绝对路径
-    auto resolvePath = [](std::string_view p) -> std::string {
-        std::filesystem::path fp{p};
-        if (fp.is_absolute()) {
-            return fp.lexically_normal().string();
-        }
-        return (std::filesystem::current_path() / fp).lexically_normal().string();
-    };
-
     for (const auto& p : yamlCfg.skillDirPaths) {
         config->skillDirPaths.push_back(resolvePath(p));
     }
     for (const auto& p : yamlCfg.memoryFilePaths) {
         config->memoryFilePaths.push_back(resolvePath(p));
     }
-    // CodeGraph 代码分析 (索引项目根目录固定为当前程序工作目录)
-    config->enableCodeGraph = yamlCfg.enableCodeGraph;
+    // CodeGraph 代码分析 (yaml `codegraph` 块; 相对路径按工作目录解析为绝对路径,
+    // 统一 / 分隔符以便与索引路径匹配)
+    // - enable:        启用开关 (默认 false)
+    // - paths:         加载(索引)路径列表; 为空时按 load_cwd 决定是否索引工作目录
+    // - ignore_paths:  忽略路径列表 (命中即跳过, 支持 * 通配符)
+    // - load_cwd:      未配置 paths 时默认加载当前工作目录 (默认 true)
+    // - use_gitignore: 默认忽略 .gitignore 规则与 .gitmodules 子模块目录 (默认 true)
+    config->enableCodeGraph        = yamlCfg.codeGraph.enable;
+    config->codeGraphLoadCwd       = yamlCfg.codeGraph.loadCwd;
+    config->codeGraphUseGitignore  = yamlCfg.codeGraph.useGitignore;
+    for (const auto& p : yamlCfg.codeGraph.paths) {
+        config->codeGraphPaths.push_back(
+            std::filesystem::path(resolvePath(p)).generic_string()
+        );
+    }
+    for (const auto& p : yamlCfg.codeGraph.ignorePaths) {
+        config->codeGraphIgnorePaths.push_back(
+            std::filesystem::path(resolvePath(p)).generic_string()
+        );
+    }
 
     // 权限配置 (模式 + 白/黑名单; CodeAgent 启动时按此注册文件系统读写规则)
     config->permissionMode       = yamlCfg.permissionMode;

@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <regex>
 #include <string>
 #include <thread>
 
@@ -1288,6 +1289,240 @@ asio::awaitable<void>
 }
 
 // =========================================================================
+// 索引过滤测试 (ignorePaths / .gitignore / .gitmodules / loadPaths)
+// =========================================================================
+
+/// 创建带第三方目录与 gitignore 的过滤测试项目:
+/// - src/          正常源码
+/// - third_party/  第三方目录 (测试 ignorePaths / .gitmodules 忽略)
+/// - vendor/       被 .gitignore 忽略的目录
+static std::string create_filter_project() {
+    int  idx     = g_temp_project_counter.fetch_add(1);
+    auto tmp_dir = fs::temp_directory_path() / ("codegraph_filter_test_" + std::to_string(idx));
+    if (fs::exists(tmp_dir)) {
+        fs::remove_all(tmp_dir);
+    }
+    fs::create_directories(tmp_dir / "src");
+    fs::create_directories(tmp_dir / "third_party");
+    fs::create_directories(tmp_dir / "vendor");
+
+    {
+        std::ofstream f(tmp_dir / "src" / "main.cpp");
+        f << "int helper() { return 1; }\nint main() { return helper(); }\n";
+    }
+    {
+        std::ofstream f(tmp_dir / "third_party" / "lib.cpp");
+        f << "int third_party_func() { return 3; }\n";
+    }
+    {
+        std::ofstream f(tmp_dir / "vendor" / "vendored.cpp");
+        f << "int vendored_func() { return 4; }\n";
+    }
+
+    // .gitignore: 忽略 vendor 目录 (目录模式)
+    {
+        std::ofstream f(tmp_dir / ".gitignore");
+        f << "vendor/\n";
+    }
+
+    return tmp_dir.generic_string();
+}
+
+/// ignorePaths 过滤: 命中路径 (目录前缀匹配) 不进入索引
+void test_codegraph_ignore_paths() {
+    auto tmp_dir = create_filter_project();
+    agentxx::expand::CodeGraphIndexConfig cfg;
+    cfg.ignorePaths.push_back((fs::path(tmp_dir) / "third_party").generic_string());
+    auto manager = agentxx::expand::CodeGraphManager{"", std::move(cfg)};
+
+    manager.initialize(tmp_dir);
+    manager.indexDirectory(tmp_dir, false);
+
+    // third_party 内符号不可查询; src 内符号可查询
+    auto r1 = manager.searchSymbols("third_party_func", 10);
+    auto r2 = manager.searchSymbols("helper", 10);
+
+    if ((r1.success && r1.nodes.empty()) && (r2.success && !r2.nodes.empty())) {
+        g_cg_passed++;
+        TEST_PASS << "ignorePaths excludes directory from index" << std::endl;
+    } else {
+        g_cg_failed++;
+        TEST_FAIL << "ignorePaths filter FAILED: third_party_func nodes=" << r1.nodes.size()
+                  << " helper nodes=" << r2.nodes.size() << std::endl;
+    }
+
+    cleanup_temp_project(tmp_dir);
+}
+
+/// ignorePaths 通配符: `**/third_party/**` 命中任意层级的同名目录
+void test_codegraph_ignore_paths_wildcard() {
+    auto tmp_dir = create_filter_project();
+    agentxx::expand::CodeGraphIndexConfig cfg;
+    cfg.ignorePaths.push_back("**/third_party/**");
+    auto manager = agentxx::expand::CodeGraphManager{"", std::move(cfg)};
+
+    manager.initialize(tmp_dir);
+    manager.indexDirectory(tmp_dir, false);
+
+    auto r1 = manager.searchSymbols("third_party_func", 10);
+    auto r2 = manager.searchSymbols("helper", 10);
+
+    if ((r1.success && r1.nodes.empty()) && (r2.success && !r2.nodes.empty())) {
+        g_cg_passed++;
+        TEST_PASS << "ignorePaths wildcard excludes matched files" << std::endl;
+    } else {
+        g_cg_failed++;
+        TEST_FAIL << "ignorePaths wildcard FAILED: third_party_func nodes=" << r1.nodes.size()
+                  << " helper nodes=" << r2.nodes.size() << std::endl;
+    }
+
+    cleanup_temp_project(tmp_dir);
+}
+
+/// .gitignore 过滤: 被忽略的目录不进入索引 (默认启用)
+void test_codegraph_gitignore() {
+    auto tmp_dir = create_filter_project();
+    auto manager = agentxx::expand::CodeGraphManager{};
+
+    manager.initialize(tmp_dir);
+    manager.indexDirectory(tmp_dir, false);
+
+    // vendor (gitignore) 内符号不可查询; src 内符号可查询
+    auto r1 = manager.searchSymbols("vendored_func", 10);
+    auto r2 = manager.searchSymbols("helper", 10);
+
+    if ((r1.success && r1.nodes.empty()) && (r2.success && !r2.nodes.empty())) {
+        g_cg_passed++;
+        TEST_PASS << ".gitignore excluded dir skipped" << std::endl;
+    } else {
+        g_cg_failed++;
+        TEST_FAIL << ".gitignore filter FAILED: vendored_func nodes=" << r1.nodes.size()
+                  << " helper nodes=" << r2.nodes.size() << std::endl;
+    }
+
+    cleanup_temp_project(tmp_dir);
+}
+
+/// use_gitignore=false: .gitignore 规则不生效, 被忽略文件正常索引
+void test_codegraph_gitignore_disabled() {
+    auto tmp_dir = create_filter_project();
+    agentxx::expand::CodeGraphIndexConfig cfg;
+    cfg.useGitignore = false;
+    auto manager = agentxx::expand::CodeGraphManager{"", std::move(cfg)};
+
+    manager.initialize(tmp_dir);
+    manager.indexDirectory(tmp_dir, false);
+
+    auto r1 = manager.searchSymbols("vendored_func", 10);
+    if (r1.success && !r1.nodes.empty()) {
+        g_cg_passed++;
+        TEST_PASS << "use_gitignore=false: gitignored file still indexed" << std::endl;
+    } else {
+        g_cg_failed++;
+        TEST_FAIL << "use_gitignore=false FAILED: vendored_func not indexed" << std::endl;
+    }
+
+    cleanup_temp_project(tmp_dir);
+}
+
+/// .gitmodules 子模块目录忽略: 声明为子模块的目录不进入索引
+void test_codegraph_gitmodules() {
+    auto tmp_dir = create_filter_project();
+    {
+        std::ofstream f(fs::path(tmp_dir) / ".gitmodules");
+        f << "[submodule \"third_party\"]\n"
+             "\tpath = third_party\n"
+             "\turl = https://example.com/x\n";
+    }
+    auto manager = agentxx::expand::CodeGraphManager{};
+
+    manager.initialize(tmp_dir);
+    manager.indexDirectory(tmp_dir, false);
+
+    // third_party (gitmodules 子模块) 内符号不可查询; src 内符号可查询
+    auto r1 = manager.searchSymbols("third_party_func", 10);
+    auto r2 = manager.searchSymbols("helper", 10);
+
+    if ((r1.success && r1.nodes.empty()) && (r2.success && !r2.nodes.empty())) {
+        g_cg_passed++;
+        TEST_PASS << ".gitmodules submodule dir skipped" << std::endl;
+    } else {
+        g_cg_failed++;
+        TEST_FAIL << ".gitmodules filter FAILED: third_party_func nodes=" << r1.nodes.size()
+                  << " helper nodes=" << r2.nodes.size() << std::endl;
+    }
+
+    cleanup_temp_project(tmp_dir);
+}
+
+/// loadPaths 多目录: updateIndex 按加载路径列表逐个索引
+void test_codegraph_load_paths() {
+    int  idx      = g_temp_project_counter.fetch_add(1);
+    auto tmp_base = fs::temp_directory_path()
+                    / ("codegraph_loadpaths_test_" + std::to_string(idx));
+    if (fs::exists(tmp_base)) {
+        fs::remove_all(tmp_base);
+    }
+    auto dir_a = tmp_base / "a";
+    auto dir_b = tmp_base / "b";
+    fs::create_directories(dir_a);
+    fs::create_directories(dir_b);
+
+    {
+        std::ofstream f(dir_a / "a.cpp");
+        f << "int func_a() { return 1; }\n";
+    }
+    {
+        std::ofstream f(dir_b / "b.cpp");
+        f << "int func_b() { return 2; }\n";
+    }
+
+    agentxx::expand::CodeGraphIndexConfig cfg;
+    cfg.loadPaths.push_back(dir_a.generic_string());
+    cfg.loadPaths.push_back(dir_b.generic_string());
+    auto manager = agentxx::expand::CodeGraphManager{"", std::move(cfg)};
+
+    manager.initialize(tmp_base.generic_string());
+    bool ok = manager.updateIndex(); // 按 loadPaths 索引
+
+    auto r1 = manager.searchSymbols("func_a", 10);
+    auto r2 = manager.searchSymbols("func_b", 10);
+
+    if (ok && r1.success && !r1.nodes.empty() && r2.success && !r2.nodes.empty()) {
+        g_cg_passed++;
+        TEST_PASS << "loadPaths multi-dir updateIndex works" << std::endl;
+    } else {
+        g_cg_failed++;
+        TEST_FAIL << "loadPaths FAILED: ok=" << ok << " func_a=" << r1.nodes.size()
+                  << " func_b=" << r2.nodes.size() << std::endl;
+    }
+
+    fs::remove_all(tmp_base);
+}
+
+/// autoLoadProjectRoot=false (load_cwd=false) 且无加载路径: updateIndex 空操作不索引
+void test_codegraph_load_cwd_disabled() {
+    auto tmp_dir = create_temp_project();
+    agentxx::expand::CodeGraphIndexConfig cfg;
+    cfg.autoLoadProjectRoot = false;
+    auto manager = agentxx::expand::CodeGraphManager{"", std::move(cfg)};
+
+    manager.initialize(tmp_dir);
+    bool ok = manager.updateIndex(); // 无加载路径且关闭默认加载: 空操作
+
+    auto r = manager.searchSymbols("add", 10);
+    if (ok && r.success && r.nodes.empty()) {
+        g_cg_passed++;
+        TEST_PASS << "load_cwd=false: no auto index without loadPaths" << std::endl;
+    } else {
+        g_cg_failed++;
+        TEST_FAIL << "load_cwd=false FAILED: nodes=" << r.nodes.size() << std::endl;
+    }
+
+    cleanup_temp_project(tmp_dir);
+}
+
+// =========================================================================
 // Test Runner
 // =========================================================================
 
@@ -1413,6 +1648,14 @@ asio::awaitable<TestResult>
     test_codegraph_manager_shutdown();
     test_codegraph_manager_update_index();
     test_codegraph_manager_resolve();
+
+    test_codegraph_ignore_paths();
+    test_codegraph_ignore_paths_wildcard();
+    test_codegraph_gitignore();
+    test_codegraph_gitignore_disabled();
+    test_codegraph_gitmodules();
+    test_codegraph_load_paths();
+    test_codegraph_load_cwd_disabled();
 
     test_codegraph_manager_multi_lang_index();
     test_codegraph_manager_multi_lang_status();
