@@ -795,6 +795,138 @@ void MessageListComponent::syncStream(const TUIRenderState& st) {
 }
 
 // ---------------------------------------------------------------------------
+// 工具调用头部摘要 (TUI 特化渲染)
+// ---------------------------------------------------------------------------
+
+/// 将工具调用的参数 JSON 摘要为单行头部, 例如:
+/// - agentxx_filesystem_read_text_file  -> "Read · [0, 100] /path/file"
+/// - agentxx_filesystem_write_file      -> "Write · /path/file"
+/// - agentxx_web_search                 -> "Search · <query>"
+/// 未知工具 / 参数解析失败返回空串, 调用方回退显示原始 toolName
+static std::string buildToolHeaderSummary(std::string_view toolName, std::string_view argsText) {
+    // 参数 JSON 解析失败 (截断/异常) 或解析结果非对象时回退显示原始 toolName
+    bool           parseOk = true;
+    neograph::json args    = agentxx::util::catchError<neograph::json>(
+        [&]() -> neograph::json {
+            auto j = neograph::json::parse(argsText);
+            if (!j.is_object()) {
+                parseOk = false;
+            }
+            return j;
+        },
+        [&](std::string) -> neograph::json {
+            parseOk = false;
+            return {};
+        }
+    );
+    if (!parseOk || !args.is_object()) {
+        return {};
+    }
+
+    auto getStr = [&args](std::string_view key) -> std::string {
+        return args.value(std::string(key), std::string{});
+    };
+    auto getStrList = [&args](std::string_view key) -> std::vector<std::string> {
+        return args.value(std::string(key), std::vector<std::string>{});
+    };
+
+    /// 拼接 "{action} · [{params}] {target}" (params 可空)
+    auto make = [](std::string_view action, std::string_view params, std::string_view target) {
+        std::string out{action};
+        out += " ·";
+        if (!params.empty()) {
+            out += " [";
+            out += params;
+            out += "]";
+        }
+        if (!target.empty()) {
+            out += " ";
+            out += target;
+        }
+        return out;
+    };
+
+    /// "[offset, limit]" 区间参数摘要 (默认 -1/缺省表示不过滤, 不显示)
+    auto range = [&args](const char* offKey, const char* limKey) -> std::string {
+        const int64_t off = args.value(offKey, int64_t{-1});
+        const int64_t lim = args.value(limKey, int64_t{-1});
+        if (off <= 0 && lim <= 0) {
+            return {};
+        }
+        if (off <= 0) {
+            return fmt::format("0, {}", lim);
+        }
+        if (lim <= 0) {
+            return fmt::format("{}", off);
+        }
+        return fmt::format("{}, {}", off, lim);
+    };
+
+    /// 字符串列表摘要: 最多展示 maxShow 项, 超出以 ", ..." 收尾
+    auto joinList = [](const std::vector<std::string>& items, size_t maxShow = 2) -> std::string {
+        std::string        out;
+        const size_t       n = (items.size() < maxShow) ? items.size() : maxShow;
+        for (size_t i = 0; i < n; ++i) {
+            if (i > 0) {
+                out += ", ";
+            }
+            out += items[i];
+        }
+        if (items.size() > maxShow) {
+            out += (n > 0 ? ", ..." : "...");
+        }
+        return out;
+    };
+
+    if (toolName == "agentxx_filesystem_list") {
+        return make("List", {}, getStr("path"));
+    }
+    if (toolName == "agentxx_filesystem_read_text_file") {
+        return make("Read", range("line_offset", "line_limit"), getStr("path"));
+    }
+    if (toolName == "agentxx_filesystem_read_binary_file") {
+        return make("ReadBin", range("byte_offset", "byte_limit"), getStr("path"));
+    }
+    if (toolName == "agentxx_filesystem_write_file") {
+        return make("Write", {}, getStr("path"));
+    }
+    if (toolName == "agentxx_filesystem_edit_text_file") {
+        return make("Edit", {}, getStr("path"));
+    }
+    if (toolName == "agentxx_filesystem_glob") {
+        return make("Glob", {}, joinList(getStrList("file_patterns")));
+    }
+    if (toolName == "agentxx_filesystem_grep") {
+        // 匹配模式 (引号包裹) 作为参数区, 文件模式作为主参数
+        const auto  patterns = getStrList("text_patterns");
+        const auto  files    = getStrList("file_patterns");
+        std::string quoted;
+        for (size_t i = 0; i < patterns.size() && i < 2; ++i) {
+            if (i > 0) {
+                quoted += ", ";
+            }
+            quoted += '"';
+            quoted += oneLinePreview(patterns[i], 50);
+            quoted += '"';
+        }
+        if (patterns.size() > 2) {
+            quoted += ", ...";
+        }
+        return make("Grep", quoted, joinList(files));
+    }
+    if (toolName == "agentxx_web_search") {
+        return make("Search", {}, oneLinePreview(getStr("query"), 100));
+    }
+    if (toolName == "agentxx_web_fetch_url") {
+        return make("Fetch", {}, oneLinePreview(getStr("url"), 100));
+    }
+    if (toolName == "agentxx_web_fetch_url_markdown") {
+        return make("FetchMD", {}, oneLinePreview(getStr("url"), 100));
+    }
+    return {};
+}
+
+// ---------------------------------------------------------------------------
 // 消息块构建 (与旧实现一致的视觉呈现)
 // ---------------------------------------------------------------------------
 
@@ -915,10 +1047,17 @@ Element MessageListComponent::buildMessageBlock(
             const bool isEditTool
                 = msg.tool && msg.tool->toolName == "agentxx_filesystem_edit_text_file";
             const bool finished = msg.tool && msg.tool->toolFinished;
-            Elements   lines;
-            Elements   header;
+            // TUI 特化: 已知工具头部渲染为 "动词 · 参数摘要"
+            // (如 "Read · [0, 100] /path" / "Write · /path"), 未知工具回退原始 toolName
+            const std::string headerText = buildToolHeaderSummary(msg.tool->toolName, msg.text);
+            Elements          lines;
+            Elements          header;
             header.push_back(
-                text(fmt::format("{} [Tool] {} ", expanded ? "-" : "+", msg.tool->toolName))
+                text(fmt::format(
+                    "{} [Tool] {} ",
+                    expanded ? "-" : "+",
+                    headerText.empty() ? msg.tool->toolName : headerText
+                ))
                 | color(theme.toolColor)
             );
             if (!expanded) {
@@ -1021,21 +1160,9 @@ static bool isToolResultError(std::string_view result) {
 
 void MessageListComponent::appendEditToolHeader(const TUIMessage& msg, Elements& header) {
     const auto& theme = *ctx_.theme;
+    // 操作失败: 折叠态显示错误预览而非路径 (路径已由头部摘要 "Edit · {path}" 展示)
     if (msg.tool && msg.tool->toolFinished && isToolResultError(msg.tool->toolResult)) {
-        // 操作失败: 折叠态显示错误预览而非路径
         header.push_back(text(oneLinePreview(msg.tool->toolResult)) | color(theme.errorColor));
-        return;
-    }
-    std::string path = agentxx::util::catchError<std::string>(
-        [&msg]() -> std::string {
-            return neograph::json::parse(msg.text).value("path", std::string{});
-        },
-        [](std::string) -> std::string {
-            return {};
-        }
-    );
-    if (!path.empty()) {
-        header.push_back(text(path) | color(theme.toolColor) | dim);
     }
 }
 
