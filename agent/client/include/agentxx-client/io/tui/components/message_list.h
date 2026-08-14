@@ -238,7 +238,6 @@ private:
     /// 中断消息状态行 (Confirmed/Cancelled/Expired)
     ftxui::Element buildInterruptStatusLine(const TUIMessage& msg);
 
-    void           appendEditToolHeader(const TUIMessage& msg, ftxui::Elements& header);
     void           appendEditToolBody(const TUIMessage& msg, ftxui::Elements& lines);
     ftxui::Element renderEditToolDiff(std::string_view oldStr, std::string_view newStr);
 

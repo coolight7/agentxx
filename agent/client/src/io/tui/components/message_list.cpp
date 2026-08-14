@@ -878,6 +878,7 @@ static std::string buildToolHeaderSummary(std::string_view toolName, std::string
         return out;
     };
 
+    // TODO: 操作失败时显示失败内容
     if (toolName == "agentxx_filesystem_list") {
         return make("List", {}, getStr("path"));
     }
@@ -1057,8 +1058,6 @@ Element MessageListComponent::buildMessageBlock(
                 // 折叠状态
                 if (!finished) {
                     header.push_back(text("running...") | color(theme.toolColor) | dim);
-                } else if (isEditTool) {
-                    appendEditToolHeader(msg, header);
                 } else {
                     auto headerText = buildToolHeaderSummary(msg.tool->toolName, msg.text);
                     if (false == headerText.empty()) {
@@ -1077,7 +1076,10 @@ Element MessageListComponent::buildMessageBlock(
                         );
                     }
                 }
+            } else {
+                header.push_back(text(msg.tool->toolName) | color(theme.toolColor));
             }
+
             lines.push_back(hbox(std::move(header)));
             if (expanded) {
                 if (isEditTool) {
@@ -1163,14 +1165,6 @@ Element MessageListComponent::buildMessageBlock(
 static bool isToolResultError(std::string_view result) {
     return result.starts_with("[Error]") || result.starts_with("[Exception")
            || result.starts_with("[Interrupt]") || result.contains("Permission");
-}
-
-void MessageListComponent::appendEditToolHeader(const TUIMessage& msg, Elements& header) {
-    const auto& theme = *ctx_.theme;
-    // 操作失败: 折叠态显示错误预览而非路径 (路径已由头部摘要 "Edit · {path}" 展示)
-    if (msg.tool && msg.tool->toolFinished && isToolResultError(msg.tool->toolResult)) {
-        header.push_back(text(oneLinePreview(msg.tool->toolResult)) | color(theme.errorColor));
-    }
 }
 
 void MessageListComponent::appendEditToolBody(const TUIMessage& msg, Elements& lines) {
