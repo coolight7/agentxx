@@ -53,6 +53,7 @@
 #include "test_tui_scroll.h"
 #include "test_tui_settings.h"
 #include "test_tui_stream.h"
+#include "test_tui_tool_header.h"
 #endif
 #include "test_util_misc.h"
 #include "test_web_search_tools.h"
@@ -134,6 +135,7 @@ int main(int argn, char** argv) {
     runSync("tui_interrupt", agentxx::test::testTuiInterrupt);
     runSync("tui_scroll", agentxx::test::testTuiScroll);
     runSync("tui_stream", agentxx::test::testTuiStream);
+    runSync("tui_tool_header", agentxx::test::testTuiToolHeader);
     runSync("thread_id", agentxx::test::testThreadId);
     runSync("mermaid_state", agentxx::test::testMermaidState);
 #endif
