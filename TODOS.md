@@ -5,7 +5,11 @@
 - 会话独立日志、yaml配置文件
 - eventBus 改为tree，命名空间使用 axx/bxx/cc
 - 支持修改上下文
+- markdown 支持渲染 状态图
+- 插件化支持
 - llm压缩时，保持同一上下文，直接添加新user消息提示压缩成一段话，然后覆盖回去
+- provider 连接池、保持连接活跃
+- 检查toolcall id 重复、调整自动补充 toolcallid
 
 ## 提示词优化
 - 如果编译需要配置特定参数，写成脚本或者写入到AGENTS.md

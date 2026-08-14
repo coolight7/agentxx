@@ -2,8 +2,11 @@
 
 #include "agentxx/util/exception.h"
 #include "agentxx/util/http_header.h"
+#include "agentxx/util/stream.h"
 #include "agentxx/util/util.h"
+#include <chrono>
 #include <stdexcept>
+#include <thread>
 
 namespace agentxx {
 namespace test {
@@ -124,6 +127,58 @@ void test_system_utils() {
     (void)agentxx::util::isRunningInWSL();
 }
 
+// ---------------------------------------------------------------------------
+// util/stream.h: Throttle (节流) / Debounce (防抖)
+// ---------------------------------------------------------------------------
+void test_stream_throttle_debounce() {
+    using namespace std::chrono;
+
+    // --- Throttle: 最小放行间隔 ---
+    {
+        agentxx::util::Throttle throttle(seconds{1});
+        // 首次调用恒放行
+        XX_TEST_EXPECT_TRUE(throttle.try_acquire());
+        // 间隔内不放行
+        XX_TEST_EXPECT_FALSE(throttle.try_acquire());
+        // 剩余时间在 (0, interval] 内
+        auto remaining = throttle.time_until_acquire();
+        XX_TEST_EXPECT_TRUE(remaining > std::chrono::steady_clock::duration::zero());
+        XX_TEST_EXPECT_TRUE(remaining <= seconds{1});
+        // 等待满间隔后放行
+        std::this_thread::sleep_for(milliseconds{1100});
+        XX_TEST_EXPECT_TRUE(throttle.try_acquire());
+    }
+    {
+        // force() 计为一次放行: 之后立即 try_acquire 不放行
+        agentxx::util::Throttle throttle(seconds{1});
+        throttle.force();
+        XX_TEST_EXPECT_FALSE(throttle.try_acquire());
+        // 从未放行时 time_until_acquire 为 0
+        agentxx::util::Throttle fresh(seconds{1});
+        XX_TEST_EXPECT_TRUE(
+            fresh.time_until_acquire() == std::chrono::steady_clock::duration::zero()
+        );
+    }
+
+    // --- Debounce: 静默满 wait 后才 ready, 期间触发重置计时 ---
+    {
+        agentxx::util::Debounce debounce(milliseconds{200});
+        // 未触发过: 不 ready
+        XX_TEST_EXPECT_FALSE(debounce.ready());
+        debounce.trigger();
+        std::this_thread::sleep_for(milliseconds{100});
+        debounce.trigger(); // 重置计时
+        std::this_thread::sleep_for(milliseconds{150});
+        // 距最后一次触发 150ms < 200ms: 不 ready
+        XX_TEST_EXPECT_FALSE(debounce.ready());
+        std::this_thread::sleep_for(milliseconds{100});
+        // 静默满 200ms: ready
+        XX_TEST_EXPECT_TRUE(debounce.ready());
+        debounce.reset();
+        XX_TEST_EXPECT_FALSE(debounce.ready());
+    }
+}
+
 TestResult testUtilMisc() {
     g_um_passed = 0;
     g_um_failed = 0;
@@ -135,6 +190,7 @@ TestResult testUtilMisc() {
     test_catch_error_std_exception();
     test_catch_error_unknown();
     test_system_utils();
+    test_stream_throttle_debounce();
 
     return TestResult{g_um_passed, g_um_failed};
 }

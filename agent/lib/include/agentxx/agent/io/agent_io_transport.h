@@ -154,6 +154,22 @@ struct WireSetPermission {
     size_t index = 0;
 };
 
+/// 服务端 CodeGraph 索引进度推送 (Server -> Client)
+/// - 仅当 codegraph 启用且初始化成功时推送; agent-server 侧限流 (最短 3s) 推送
+/// - 客户端状态栏据此显示 CodeGraph 索引状态
+struct WireCodegraphProgress {
+    /// codegraph 是否可用 (启用且初始化成功); false 表示不可用/未启用
+    bool        available = false;
+    /// 是否正在索引 (processed < total 且 total > 0)
+    bool        indexing  = false;
+    /// 已索引文件数
+    int         processed = 0;
+    /// 文件总数 (未知为 0)
+    int         total     = 0;
+    /// 当前处理文件 (空表示无/已完成)
+    std::string currentFile;
+};
+
 /// 所有可能的线消息类型 (tagged variant)
 using WireMessage = std::variant<
     WireHello,
@@ -179,7 +195,8 @@ using WireMessage = std::variant<
     WireListSessions,
     WireSessionList,
     WireSwitchSession,
-    WireSetPermission>;
+    WireSetPermission,
+    WireCodegraphProgress>;
 
 // ---------------------------------------------------------------------------
 // AgentIOTransportBase: 两个 AgentIOBase 端点之间的协议传输层

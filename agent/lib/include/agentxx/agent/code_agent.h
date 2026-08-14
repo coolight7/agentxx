@@ -4,6 +4,10 @@
 
 namespace agentxx {
 
+namespace expand {
+class CodeGraphManager;
+} // namespace expand
+
 namespace tools {
 class SubAgentManagerTool;
 } // namespace tools
@@ -26,6 +30,11 @@ public:
 
     ~CodeAgent() override;
 
+    /// CodeGraph 代码索引管理器 (启用且初始化成功时返回非空, 否则 nullptr)
+    /// - 会话服务端点 (SessionServerAgentIO) 经此订阅索引进度推送
+    std::shared_ptr<expand::CodeGraphManager>
+        codegraphManager() override;
+
 protected:
 
     asio::awaitable<void> setupMiddleware() override;
@@ -40,6 +49,10 @@ private:
 
     /// subagent 管理工具 (在 setupMiddleware 中创建, createTools 中完成配置)
     std::unique_ptr<agentxx::tools::SubAgentManagerTool> subagentManagerTool_;
+
+    /// CodeGraph 代码索引管理器 (createTools 中创建; 供 codegraph 工具使用与
+    /// 会话端点订阅索引进度; 未启用/初始化失败时为空)
+    std::shared_ptr<expand::CodeGraphManager> codegraph_;
     // (summarization 中间件由 AgentContext::summarizationMiddleware 持有,
     //  CodeAgent 不再单独保存)
 };

@@ -4,10 +4,12 @@
 #include "agentxx/tools/codegraph_tool.h"
 #include <asio/awaitable.hpp>
 #include <atomic>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <string>
+#include <thread>
 
 #if AGENTXX_ENABLE_CODEGRAPH
 
@@ -353,6 +355,72 @@ void test_codegraph_manager_incremental_index() {
     } else {
         g_cg_failed++;
         TEST_FAIL << "CodeGraphManager::indexDirectory incremental failed" << std::endl;
+    }
+
+    cleanup_temp_project(tmp_dir);
+}
+
+// 查询结果缓存 (LruCache): 重复查询命中缓存结果一致; 索引变更后缓存失效,
+// 新符号可查询到 (验证 invalidateCaches 打通索引 -> 缓存的一致性)
+void test_codegraph_manager_cache_invalidate() {
+    auto tmp_dir = create_temp_project();
+    auto manager = agentxx::expand::CodeGraphManager{};
+
+    manager.initialize(tmp_dir);
+    manager.indexDirectory(tmp_dir, false);
+
+    // 1. 首次查询建立缓存
+    auto r1 = manager.searchSymbols("add", 10);
+    if (!r1.success || r1.nodes.empty()) {
+        g_cg_failed++;
+        TEST_FAIL << "searchSymbols('add') initial should succeed (cache seed)" << std::endl;
+        cleanup_temp_project(tmp_dir);
+        return;
+    }
+
+    // 2. 同参数重复查询: 命中缓存, 结果一致
+    auto r2 = manager.searchSymbols("add", 10);
+    if (!r2.success || r2.nodes.size() != r1.nodes.size()) {
+        g_cg_failed++;
+        TEST_FAIL << "repeated searchSymbols('add') should hit cache and match" << std::endl;
+        cleanup_temp_project(tmp_dir);
+        return;
+    }
+
+    // 3. 新增源文件 (含全新符号), 增量索引
+    {
+        std::ofstream f(fs::path(tmp_dir) / "extra.cpp");
+        f << R"(int brand_new_symbol(int v) {
+    return v * 2;
+}
+)";
+    }
+    bool ok = manager.indexDirectory(tmp_dir, true);
+    if (!ok) {
+        g_cg_failed++;
+        TEST_FAIL << "incremental indexDirectory after adding file failed" << std::endl;
+        cleanup_temp_project(tmp_dir);
+        return;
+    }
+
+    // 4. 缓存应已失效 (invalidateCaches): 新符号可查询到
+    auto r3 = manager.searchSymbols("brand", 10);
+    if (r3.success && !r3.nodes.empty()) {
+        g_cg_passed++;
+        TEST_PASS << "cache invalidated after incremental index, new symbol visible" << std::endl;
+    } else {
+        g_cg_failed++;
+        TEST_FAIL << "cache NOT invalidated: new symbol missing after reindex" << std::endl;
+    }
+
+    // 5. 原有查询失效后重算仍正常
+    auto r4 = manager.searchSymbols("add", 10);
+    if (r4.success && !r4.nodes.empty()) {
+        g_cg_passed++;
+        TEST_PASS << "original query re-computed after cache invalidation" << std::endl;
+    } else {
+        g_cg_failed++;
+        TEST_FAIL << "original query failed after cache invalidation" << std::endl;
     }
 
     cleanup_temp_project(tmp_dir);
@@ -1223,6 +1291,107 @@ asio::awaitable<void>
 // Test Runner
 // =========================================================================
 
+// 索引进度断点续传验证: 全量索引后(模拟重启)重新打开同一 db, 增量索引
+// 应跳过已索引文件 (进度回调 0 次), 查询命中已索引数据
+void test_codegraph_manager_restart_resume() {
+    auto tmp_dir = create_temp_project();
+
+    int inprocess_calls = 0;
+    {
+        agentxx::expand::CodeGraphManager manager;
+        manager.initialize(tmp_dir);
+        manager.indexDirectory(tmp_dir, false); // 全量
+        manager.setProgressCallback(
+            [&](int /*processed*/, int /*total*/, std::string_view) { ++inprocess_calls; }
+        );
+        manager.indexDirectory(tmp_dir, true); // 同进程增量: 无变更应全部跳过
+    } // manager 析构: db 关闭 + WAL checkpoint
+
+    int resumed_processed = 0;
+    {
+        agentxx::expand::CodeGraphManager manager2;
+        manager2.initialize(tmp_dir); // 重新打开 (模拟重启)
+        manager2.setProgressCallback(
+            [&](int processed, int total, std::string_view currentFile) {
+                // 完成信号 (total 回调, currentFile 为空) 不算真正处理
+                if (!currentFile.empty() && processed < total) {
+                    ++resumed_processed;
+                }
+            }
+        );
+        manager2.indexDirectory(tmp_dir, true); // 重启后增量: 应跳过所有文件
+
+        auto result = manager2.searchSymbols("add", 10);
+        if (resumed_processed == 0 && result.success && !result.nodes.empty()) {
+            g_cg_passed++;
+            TEST_PASS << "restart resume: unmodified files skipped after restart" << std::endl;
+        } else {
+            g_cg_failed++;
+            TEST_FAIL << "restart resume FAILED: processed=" << resumed_processed
+                      << " search_success=" << result.success << std::endl;
+        }
+    }
+
+    cleanup_temp_project(tmp_dir);
+}
+
+// 索引进行中查询不阻塞验证: 后台线程全量索引 (模拟预热索引), 线程前台
+// 查询应快速返回 (索引写锁仅毫秒级窗口), 而不是等待索引完成
+void test_codegraph_query_during_indexing() {
+    auto tmp_dir = create_multi_lang_project();
+    auto manager = std::make_shared<agentxx::expand::CodeGraphManager>();
+    manager->initialize(tmp_dir);
+
+    std::atomic<bool> first_file{false};
+    manager->setProgressCallback(
+        [&](int /*processed*/, int /*total*/, std::string_view currentFile) {
+            if (!currentFile.empty()) {
+                first_file = true;
+            }
+        }
+    );
+
+    // 后台索引线程: 全量索引 (多文件, 模拟索引进行中)
+    std::thread indexThread([&]() {
+        manager->indexDirectory(tmp_dir, false);
+    });
+
+    // 等待索引开始处理第一个文件
+    for (int i = 0; i < 5000 && !first_file.load(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+
+    // 索引进行中: 前台查询应立即返回 (不等待索引完成)
+    const auto startAt = std::chrono::steady_clock::now();
+    auto       result  = manager->searchSymbols("greet", 10);
+    const auto costUs  = std::chrono::duration_cast<std::chrono::microseconds>(
+                             std::chrono::steady_clock::now() - startAt
+    )
+                             .count();
+
+    indexThread.join();
+
+    // 查询耗时远小于索引总时长 (阈值 3s 宽松; 旧实现被写锁阻塞会超时失败)
+    if (costUs < std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::seconds{3})
+                     .count()) {
+        g_cg_passed++;
+        TEST_PASS << "query during indexing returned promptly: " << costUs << "us" << std::endl;
+    } else {
+        g_cg_failed++;
+        TEST_FAIL << "query blocked during indexing: " << costUs << "us" << std::endl;
+    }
+    // 查询本身不抛异常 (数据为已提交部分数据, 可能为空但 success)
+    if (result.success) {
+        g_cg_passed++;
+        TEST_PASS << "query during indexing returns committed partial data" << std::endl;
+    } else {
+        g_cg_failed++;
+        TEST_FAIL << "query during indexing failed: " << result.error << std::endl;
+    }
+
+    cleanup_temp_project(tmp_dir);
+}
+
 asio::awaitable<TestResult>
     run_codegraph_tools_tests(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     test_codegraph_manager_init();
@@ -1230,6 +1399,9 @@ asio::awaitable<TestResult>
     test_codegraph_manager_not_initialized();
     test_codegraph_manager_index();
     test_codegraph_manager_incremental_index();
+    test_codegraph_manager_cache_invalidate();
+    test_codegraph_manager_restart_resume();
+    test_codegraph_query_during_indexing();
     test_codegraph_manager_search();
     test_codegraph_manager_search_no_results();
     test_codegraph_manager_context();

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "agentxx/agent/context.h"
+#include "agentxx/agent/io/agent_io_transport.h"
 #include "agentxx/expand/get_cpu_gpu_use.h"
 #include "asio/experimental/concurrent_channel.hpp"
 #include "neograph/api.h"
@@ -122,6 +123,10 @@ struct TUIRenderState {
 
     /// 系统资源占用快照 (CPU/内存/GPU), 由资源监控线程周期写入; 为 null 表示尚未采集
     std::shared_ptr<agentxx::expand::CpuGpuUsage> systemUsage;
+
+    /// CodeGraph 索引状态 (WireCodegraphProgress 填充; 状态栏右下侧显示)
+    /// - 为 null 表示尚未收到任何状态 (codegraph 未启用或尚未推送)
+    std::optional<agentxx::agent::WireCodegraphProgress> codegraphProgress;
 };
 
 /// COW 共享状态容器 (封装 mutex + shared_ptr + COW 辅助)

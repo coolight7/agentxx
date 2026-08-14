@@ -3,6 +3,7 @@
 #include "agentxx/agent/base_agent.h"
 #include "agentxx/agent/context.h"
 #include "agentxx/agent/session_persistence.h"
+#include "agentxx/expand/codegraph_manager.h"
 #include "agentxx/middlewares/permission.h"
 #include "agentxx/util/async_offload.h"
 #include "agentxx/util/exception.h"
@@ -380,11 +381,124 @@ void SessionServerAgentIO::onCancel() {
 }
 
 // ---------------------------------------------------------------------------
+// CodeGraph 索引进度推送
+// ---------------------------------------------------------------------------
+
+void SessionServerAgentIO::subscribeCodegraphProgress() {
+    if (cgSubscribed_) {
+        return;
+    }
+    auto agent = agent_.lock();
+    if (!agent) {
+        return;
+    }
+    auto cg = agent->codegraphManager();
+    if (!cg) {
+        // codegraph 不可用 (未启用/未初始化): 不订阅, 客户端不显示该状态
+        return;
+    }
+    cgSubscribed_ = true;
+
+    auto self = shared_from_this();
+
+    // 初始状态: codegraph 可用 (索引数据已打开), 尚未开始/完成索引
+    WireCodegraphProgress initial;
+    initial.available = true;
+    sendToPeer(initial);
+    // 初始推送计为一次放行: 使后续第一个进度更新同样受 3s 间隔约束
+    cgThrottle_.force();
+
+    // 索引进度回调由 indexDirectory/indexFile 在 blockingPool 线程触发
+    // (每处理一个文件一次): 这里仅做快照 + post 回 ex_ 线程, 由
+    // onCodegraphProgress 统一节流推送, 避免跨线程访问端点状态
+#if AGENTXX_ENABLE_CODEGRAPH
+    cg->setProgressCallback(
+        [weakSelf = std::weak_ptr<SessionServerAgentIO>{self}](
+            int processed, int total, std::string_view currentFile
+        ) {
+            auto sp = weakSelf.lock();
+            if (!sp) {
+                return;
+            }
+            WireCodegraphProgress p;
+            p.available   = true;
+            p.processed   = processed;
+            p.total       = total;
+            p.currentFile = std::string{currentFile};
+            // 完成信号 (调用方约定 processed==total 且 total>0 表示索引结束):
+            // processed 尚未达到 total 时视为索引进行中
+            p.indexing = !(total > 0 && processed >= total);
+            asio::post(sp->ex_, [sp, p = std::move(p)]() mutable {
+                sp->onCodegraphProgress(std::move(p));
+            });
+        }
+    );
+#endif
+}
+
+void SessionServerAgentIO::onCodegraphProgress(WireCodegraphProgress prog) {
+    // 总是缓存最新值: 尾推定时器到点补发的即窗内最后一条
+    cgPending_ = std::move(prog);
+
+    // 限流窗内已有尾推定时器: 窗末统一补发, 不再重复放行
+    if (cgTailTimer_) {
+        return;
+    }
+    // 距上次推送 >= 3s (或首次): 立即放行推送
+    if (cgThrottle_.try_acquire()) {
+        auto p = std::move(*cgPending_);
+        cgPending_.reset();
+        sendToPeer(std::move(p));
+    }
+    // 放行/未放行后均启动尾推定时器: 窗内新到的更新由它兜底,
+    // 保证"最短 3s 一次"且最后一条不丢失
+    armCodegraphTailTimer();
+}
+
+void SessionServerAgentIO::armCodegraphTailTimer() {
+    if (cgTailTimer_) {
+        return;
+    }
+    auto t = std::make_shared<asio::steady_timer>(ex_);
+    cgTailTimer_ = t;
+    t->expires_after(cgThrottle_.interval());
+    auto self = shared_from_this();
+    asio::co_spawn(
+        ex_,
+        [t, self]() -> asio::awaitable<void> {
+            // 与 grace timer 同款取消范式: redirect_error + use_awaitable
+            ErrorCode ec;
+            co_await t->async_wait(asio::redirect_error(asio::use_awaitable, ec));
+            if (ec) {
+                // 定时器被取消 (端点停止/新窗已接管)
+                co_return;
+            }
+            self->onCodegraphTail();
+        },
+        asio::detached
+    );
+}
+
+void SessionServerAgentIO::onCodegraphTail() {
+    cgTailTimer_.reset();
+    if (!cgPending_) {
+        return;
+    }
+    auto p = std::move(*cgPending_);
+    cgPending_.reset();
+    // 尾推计为一次放行: 下一次推送同样受 3s 间隔约束, 频率不突破上限
+    cgThrottle_.force();
+    sendToPeer(std::move(p));
+}
+
+// ---------------------------------------------------------------------------
 // 驱动循环
 // ---------------------------------------------------------------------------
 
 asio::awaitable<void> SessionServerAgentIO::run() {
     running_.store(true, std::memory_order_release);
+    // 订阅 CodeGraph 索引进度 (成功后周期推送, 供客户端状态栏显示)
+    subscribeCodegraphProgress();
     while (!stopped_.load(std::memory_order_acquire)) {
         auto input = co_await waitInput();
         if (!input.has_value()) {

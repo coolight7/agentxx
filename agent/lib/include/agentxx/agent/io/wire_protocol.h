@@ -49,6 +49,8 @@ struct MsgType {
     /// 服务端持久化会话列表响应 (ListSessions 的结果)
     inline static constexpr std::string_view SessionList = "session_list";
     inline static constexpr std::string_view Pong        = "pong";
+    /// 服务端 CodeGraph 索引进度推送 (节流 ≥3s)
+    inline static constexpr std::string_view CodegraphProgress = "codegraph_progress";
 };
 
 /// 中断/取消原因 (供 BaseAgent 区分中断来源)
@@ -624,6 +626,31 @@ inline WireSwitchSession switchSessionFromJson(const neograph::json& j) {
     WireSwitchSession m;
     m.threadId = j.value("thread", std::string{});
     return m;
+}
+
+/// 服务端 CodeGraph 索引进度推送 (Server -> Client)
+inline neograph::json makeCodegraphProgress(const WireCodegraphProgress& p) {
+    neograph::json j = {
+        {"type",      MsgType::CodegraphProgress},
+        {"available", p.available              },
+        {"indexing",  p.indexing               },
+        {"processed", p.processed              },
+        {"total",     p.total                  },
+    };
+    if (!p.currentFile.empty()) {
+        j["current_file"] = p.currentFile;
+    }
+    return j;
+}
+
+inline WireCodegraphProgress codegraphProgressFromJson(const neograph::json& j) {
+    WireCodegraphProgress p;
+    p.available  = j.value("available", false);
+    p.indexing   = j.value("indexing", false);
+    p.processed  = j.value("processed", 0);
+    p.total      = j.value("total", 0);
+    p.currentFile = j.value("current_file", std::string{});
+    return p;
 }
 
 inline neograph::json makeLog(int level, std::string_view message) {

@@ -14,6 +14,7 @@
 #include <mutex>
 #include <optional>
 #include <queue>
+#include <shared_mutex>
 #include <sstream>
 #include <thread>
 #include <unordered_map>
@@ -21,6 +22,7 @@
 
 #if AGENTXX_ENABLE_CODEGRAPH
 #include "codegraph/context/context_builder.h"
+#include "codegraph/core/lru_cache.h"
 #include "codegraph/core/types.h"
 #include "codegraph/db/database.h"
 #include "codegraph/extraction/extractor.h"
@@ -462,7 +464,7 @@ public:
 
     bool initialize(std::string_view project_root) {
         {
-            std::lock_guard<std::mutex> lock(mutex_);
+            std::unique_lock<std::shared_mutex> lock(mutex_);
             if (!needs_initialize_ && project_root_ == project_root && db_) {
                 return true;
             }
@@ -470,7 +472,7 @@ public:
 
         shutdown();
 
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::unique_lock<std::shared_mutex> lock(mutex_);
 
         if (!needs_initialize_ && project_root_ == project_root && db_) {
             return true;
@@ -526,11 +528,26 @@ public:
     }
 
     bool indexDirectory(std::string_view path, bool incremental) {
-        std::lock_guard<std::mutex> lock(mutex_);
         if (!db_) {
             return false;
         }
 
+        // 索引生命周期标志: 查询侧据此附加"索引中, 结果可能不完整"提示;
+        // RAII 保证所有 return 路径 (成功/中断/异常) 复位
+        indexing_.store(true, std::memory_order_release);
+        struct IndexingGuard {
+            std::atomic<bool>& flag;
+            ~IndexingGuard() {
+                flag.store(false, std::memory_order_release);
+            }
+        } indexingGuard{indexing_};
+
+        // 锁策略: 不再全程持有独占写锁 (否则索引期间查询被 writer 优先阻塞,
+        // 表现为模型调用 codegraph tool 一直等待)。
+        // - collect_source_files / 文件解析 / is_changed 为锁外只读, 可与查询并发
+        // - 仅"实际写库"的操作 (writeExtractionResult / resolveReferences /
+        //   rebuild_fts / wal checkpoint) 在持有 unique_lock 的短暂窗口内执行,
+        //   查询 (shared_lock) 至多等待毫秒级, 大部分时间可读取已提交的部分数据
         auto files = collect_source_files(path);
         if (files.empty()) {
             XX_LOGW("CodeGraphManager: no source files found in {}", path);
@@ -561,6 +578,9 @@ public:
                     }
                 );
                 if (!changed) {
+                    // 增量跳过未变更文件: 推进进度计数 (processed = 已检查文件数),
+                    // 使重启后断点续传时进度显示从上一次位置继续, 而非从 0 开始
+                    ++processed;
                     continue;
                 }
             }
@@ -599,25 +619,63 @@ public:
                 file_path
             );
 
-            writeExtractionResult(file_path, lang, result);
+            // 实际写库: 短暂 unique_lock (毫秒级), 查询 shared_lock 不会长期阻塞
+            {
+                std::unique_lock<std::shared_mutex> lock(mutex_);
+                if (!db_) {
+                    break;
+                }
+                writeExtractionResult(file_path, lang, result);
+            }
 
             processed++;
+
+            // 每批文件提交后 WAL checkpoint: 已提交数据及时合并进主库文件,
+            // 缩小"索引中途进程被强杀 -> 数据丢失"的窗口 (-wal 文件保留时
+            // sqlite 会自动恢复, checkpoint 是防止 -wal 被外部清理的兜底)
+            if (processed % kCheckpointFileBatch == 0) {
+                std::unique_lock<std::shared_mutex> lock(mutex_);
+                runWithRetry("WAL checkpoint", 3, [&]() {
+                    db_->wal_checkpoint();
+                });
+            }
         }
 
-        resolveReferences();
+        {
+            // 收尾写操作 (引用解析/FT S 重建/checkpoint): 短暂独占锁
+            std::unique_lock<std::shared_mutex> lock(mutex_);
+            if (!db_) {
+                return false;
+            }
+            resolveReferences();
 
-        // FTS 重建失败仅告警, 不影响索引主流程; 多进程并发时锁竞争重试
-        runWithRetry("FTS rebuild", 3, [&]() {
-            db_->rebuild_fts();
-        });
+            // FTS 重建失败仅告警, 不影响索引主流程; 多进程并发时锁竞争重试
+            runWithRetry("FTS rebuild", 3, [&]() {
+                db_->rebuild_fts();
+            });
+
+            // 索引结束 WAL checkpoint: 全部已提交数据落主库文件。进程被强杀
+            // (无析构/无 sqlite close) 时主库仍是完整数据, 下次启动不会从头索引
+            runWithRetry("WAL checkpoint", 3, [&]() {
+                db_->wal_checkpoint();
+            });
+        }
+
+        // 索引数据已变更: 使全部查询缓存失效, 下次查询按新数据重算
+        invalidateCaches();
+
+        // 索引进度完成信号 (约定 processed==total 且 total>0 表示索引结束):
+        // 订阅方据此将状态置为 "完成" (indexing=false), 并作为最后一次进度回调
+        if (progress_callback_) {
+            progress_callback_(total, total, "");
+        }
 
         return true;
     }
 
     bool updateIndex() {
-        if (!db_) {
-            return false;
-        }
+        // 不在此处无锁读 db_ (避免与 initialize/shutdown 的数据竞争):
+        // indexDirectory 内部持独占锁并检查 db_ 可用性
         return indexDirectory(project_root_, true);
     }
 
@@ -681,188 +739,273 @@ public:
     }
 
     CodeGraphSearchResult searchSymbols(std::string_view query, int limit) {
-        CodeGraphSearchResult       result;
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (!db_ || !fts_search_) {
-            result.error = "CodeGraph not initialized";
-            return result;
+        // 缓存命中 (TTL 内同参数重复查询): 直接返回, 避免重复 FTS/排序
+        std::string key = "search|" + std::string{query} + "|" + std::to_string(limit);
+        if (auto hit = search_cache_.get(key)) {
+            return *hit;
         }
-        // 查询异常转为 result.error, 不向外抛出
-        agentxx::util::catchError<bool>(
-            [&]() -> bool {
-                result.nodes   = fts_search_->search(std::string{query}, limit);
-                result.success = true;
-                return true;
-            },
-            [&](std::string errmsg) -> bool {
-                result.error = std::move(errmsg);
-                return false;
+
+        CodeGraphSearchResult result;
+        {
+            // 只读查询: 共享锁, 多个查询可并发执行 (索引写与查询读互斥)
+            std::shared_lock<std::shared_mutex> lock(mutex_);
+            if (!db_ || !fts_search_) {
+                result.error = "CodeGraph not initialized";
+                return result;
             }
-        );
+            // 查询异常转为 result.error, 不向外抛出
+            agentxx::util::catchError<bool>(
+                [&]() -> bool {
+                    result.nodes   = fts_search_->search(std::string{query}, limit);
+                    result.success = true;
+                    return true;
+                },
+                [&](std::string errmsg) -> bool {
+                    result.error = std::move(errmsg);
+                    return false;
+                }
+            );
+        }
+        // 仅缓存成功结果 (失败结果如 "未初始化" 无缓存价值)
+        if (result.success) {
+            search_cache_.put(std::move(key), result);
+        }
         return result;
     }
 
     CodeGraphContextResult getSymbolContext(std::string_view symbol, int limit, int max_depth) {
-        CodeGraphContextResult      result;
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (!context_builder_) {
-            result.error = "CodeGraph not initialized";
-            return result;
+        // 缓存命中 (TTL 内同参数重复查询): 直接返回, 避免重复图遍历
+        std::string key = "ctx|" + std::string{symbol} + "|" + std::to_string(limit) + "|"
+                          + std::to_string(max_depth);
+        if (auto hit = context_cache_.get(key)) {
+            return *hit;
         }
-        // 查询异常转为 result.error, 不向外抛出
-        agentxx::util::catchError<bool>(
-            [&]() -> bool {
-                result.context
-                    = context_builder_->build_context(std::string{symbol}, limit, max_depth);
-                if (result.context.contains("error")) {
-                    result.error   = result.context["error"].get<std::string>();
-                    result.success = false;
-                } else {
-                    result.success = true;
-                }
-                return true;
-            },
-            [&](std::string errmsg) -> bool {
-                result.error = std::move(errmsg);
-                return false;
+
+        CodeGraphContextResult result;
+        {
+            // 只读查询: 共享锁, 多个查询可并发执行
+            std::shared_lock<std::shared_mutex> lock(mutex_);
+            if (!context_builder_) {
+                result.error = "CodeGraph not initialized";
+                return result;
             }
-        );
+            // 查询异常转为 result.error, 不向外抛出
+            agentxx::util::catchError<bool>(
+                [&]() -> bool {
+                    result.context
+                        = context_builder_->build_context(std::string{symbol}, limit, max_depth);
+                    if (result.context.contains("error")) {
+                        result.error   = result.context["error"].get<std::string>();
+                        result.success = false;
+                    } else {
+                        result.success = true;
+                    }
+                    return true;
+                },
+                [&](std::string errmsg) -> bool {
+                    result.error = std::move(errmsg);
+                    return false;
+                }
+            );
+        }
+        if (result.success) {
+            context_cache_.put(std::move(key), result);
+        }
         return result;
     }
 
     CodeGraphImpactResult getCallers(std::string_view symbol, int max_depth) {
-        CodeGraphImpactResult       result;
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (!context_builder_) {
-            result.error = "CodeGraph not initialized";
-            return result;
+        // 缓存命中 (TTL 内同参数重复查询): 直接返回, 避免重复图遍历
+        std::string key = "callers|" + std::string{symbol} + "|" + std::to_string(max_depth);
+        if (auto hit = callers_cache_.get(key)) {
+            return *hit;
         }
-        // 查询异常转为 result.error, 不向外抛出
-        agentxx::util::catchError<bool>(
-            [&]() -> bool {
-                result.impact = context_builder_->get_callers(std::string{symbol}, max_depth);
-                if (result.impact.contains("error")) {
-                    result.error   = result.impact["error"].get<std::string>();
-                    result.success = false;
-                } else {
-                    result.success = true;
-                }
-                return true;
-            },
-            [&](std::string errmsg) -> bool {
-                result.error = std::move(errmsg);
-                return false;
+
+        CodeGraphImpactResult result;
+        {
+            // 只读查询: 共享锁, 多个查询可并发执行
+            std::shared_lock<std::shared_mutex> lock(mutex_);
+            if (!context_builder_) {
+                result.error = "CodeGraph not initialized";
+                return result;
             }
-        );
+            // 查询异常转为 result.error, 不向外抛出
+            agentxx::util::catchError<bool>(
+                [&]() -> bool {
+                    result.impact = context_builder_->get_callers(std::string{symbol}, max_depth);
+                    if (result.impact.contains("error")) {
+                        result.error   = result.impact["error"].get<std::string>();
+                        result.success = false;
+                    } else {
+                        result.success = true;
+                    }
+                    return true;
+                },
+                [&](std::string errmsg) -> bool {
+                    result.error = std::move(errmsg);
+                    return false;
+                }
+            );
+        }
+        if (result.success) {
+            callers_cache_.put(std::move(key), result);
+        }
         return result;
     }
 
     CodeGraphImpactResult getCallees(std::string_view symbol, int max_depth) {
-        CodeGraphImpactResult       result;
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (!context_builder_) {
-            result.error = "CodeGraph not initialized";
-            return result;
+        // 缓存命中 (TTL 内同参数重复查询): 直接返回, 避免重复图遍历
+        std::string key = "callees|" + std::string{symbol} + "|" + std::to_string(max_depth);
+        if (auto hit = callees_cache_.get(key)) {
+            return *hit;
         }
-        // 查询异常转为 result.error, 不向外抛出
-        agentxx::util::catchError<bool>(
-            [&]() -> bool {
-                result.impact = context_builder_->get_callees(std::string{symbol}, max_depth);
-                if (result.impact.contains("error")) {
-                    result.error   = result.impact["error"].get<std::string>();
-                    result.success = false;
-                } else {
-                    result.success = true;
-                }
-                return true;
-            },
-            [&](std::string errmsg) -> bool {
-                result.error = std::move(errmsg);
-                return false;
+
+        CodeGraphImpactResult result;
+        {
+            // 只读查询: 共享锁, 多个查询可并发执行
+            std::shared_lock<std::shared_mutex> lock(mutex_);
+            if (!context_builder_) {
+                result.error = "CodeGraph not initialized";
+                return result;
             }
-        );
+            // 查询异常转为 result.error, 不向外抛出
+            agentxx::util::catchError<bool>(
+                [&]() -> bool {
+                    result.impact = context_builder_->get_callees(std::string{symbol}, max_depth);
+                    if (result.impact.contains("error")) {
+                        result.error   = result.impact["error"].get<std::string>();
+                        result.success = false;
+                    } else {
+                        result.success = true;
+                    }
+                    return true;
+                },
+                [&](std::string errmsg) -> bool {
+                    result.error = std::move(errmsg);
+                    return false;
+                }
+            );
+        }
+        if (result.success) {
+            callees_cache_.put(std::move(key), result);
+        }
         return result;
     }
 
     CodeGraphImpactResult getImpact(std::string_view symbol, int max_depth) {
-        CodeGraphImpactResult       result;
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (!context_builder_) {
-            result.error = "CodeGraph not initialized";
-            return result;
+        // 缓存命中 (TTL 内同参数重复查询): 直接返回, 避免重复图遍历
+        std::string key = "impact|" + std::string{symbol} + "|" + std::to_string(max_depth);
+        if (auto hit = impact_cache_.get(key)) {
+            return *hit;
         }
-        // 查询异常转为 result.error, 不向外抛出
-        agentxx::util::catchError<bool>(
-            [&]() -> bool {
-                result.impact = context_builder_->get_impact(std::string{symbol}, max_depth);
-                if (result.impact.contains("error")) {
-                    result.error   = result.impact["error"].get<std::string>();
-                    result.success = false;
-                } else {
-                    result.success = true;
-                }
-                return true;
-            },
-            [&](std::string errmsg) -> bool {
-                result.error = std::move(errmsg);
-                return false;
+
+        CodeGraphImpactResult result;
+        {
+            // 只读查询: 共享锁, 多个查询可并发执行
+            std::shared_lock<std::shared_mutex> lock(mutex_);
+            if (!context_builder_) {
+                result.error = "CodeGraph not initialized";
+                return result;
             }
-        );
+            // 查询异常转为 result.error, 不向外抛出
+            agentxx::util::catchError<bool>(
+                [&]() -> bool {
+                    result.impact = context_builder_->get_impact(std::string{symbol}, max_depth);
+                    if (result.impact.contains("error")) {
+                        result.error   = result.impact["error"].get<std::string>();
+                        result.success = false;
+                    } else {
+                        result.success = true;
+                    }
+                    return true;
+                },
+                [&](std::string errmsg) -> bool {
+                    result.error = std::move(errmsg);
+                    return false;
+                }
+            );
+        }
+        if (result.success) {
+            impact_cache_.put(std::move(key), result);
+        }
         return result;
     }
 
     CodeGraphPathResult findPath(std::string_view from, std::string_view to, int max_depth) {
-        CodeGraphPathResult         result;
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (!db_ || !traverser_) {
-            result.error = "CodeGraph not initialized";
-            return result;
+        // 缓存命中 (TTL 内同参数重复查询): 直接返回, 避免重复图搜索
+        std::string key = "path|" + std::string{from} + "|" + std::string{to} + "|"
+                          + std::to_string(max_depth);
+        if (auto hit = path_cache_.get(key)) {
+            return *hit;
         }
-        // 查询异常转为 result.error, 不向外抛出
-        agentxx::util::catchError<bool>(
-            [&]() -> bool {
-                auto from_nodes = db_->find_nodes_by_name(std::string{from}, 1);
-                auto to_nodes   = db_->find_nodes_by_name(std::string{to}, 1);
-                if (from_nodes.empty() || to_nodes.empty()) {
-                    result.error = "Symbol not found";
-                    return true;
-                }
-                auto path_ids = traverser_->find_path(from_nodes[0].id, to_nodes[0].id, max_depth);
-                if (path_ids.empty()) {
-                    result.error = "No path found";
-                    return true;
-                }
-                auto nodes = db_->get_nodes_by_ids(path_ids);
-                std::unordered_map<int64_t, codegraph::Node> node_map;
-                for (auto& n : nodes) {
-                    node_map[n.id] = n;
-                }
-                for (auto id : path_ids) {
-                    auto it = node_map.find(id);
-                    if (it != node_map.end()) {
-                        result.path.push_back(it->second);
-                    }
-                }
-                result.success = true;
-                return true;
-            },
-            [&](std::string errmsg) -> bool {
-                result.error = std::move(errmsg);
-                return false;
+
+        CodeGraphPathResult result;
+        {
+            // 只读查询: 共享锁, 多个查询可并发执行
+            std::shared_lock<std::shared_mutex> lock(mutex_);
+            if (!db_ || !traverser_) {
+                result.error = "CodeGraph not initialized";
+                return result;
             }
-        );
+            // 查询异常转为 result.error, 不向外抛出
+            agentxx::util::catchError<bool>(
+                [&]() -> bool {
+                    auto from_nodes = db_->find_nodes_by_name(std::string{from}, 1);
+                    auto to_nodes   = db_->find_nodes_by_name(std::string{to}, 1);
+                    if (from_nodes.empty() || to_nodes.empty()) {
+                        result.error = "Symbol not found";
+                        return true;
+                    }
+                    auto path_ids
+                        = traverser_->find_path(from_nodes[0].id, to_nodes[0].id, max_depth);
+                    if (path_ids.empty()) {
+                        result.error = "No path found";
+                        return true;
+                    }
+                    auto nodes = db_->get_nodes_by_ids(path_ids);
+                    std::unordered_map<int64_t, codegraph::Node> node_map;
+                    for (auto& n : nodes) {
+                        node_map[n.id] = n;
+                    }
+                    for (auto id : path_ids) {
+                        auto it = node_map.find(id);
+                        if (it != node_map.end()) {
+                            result.path.push_back(it->second);
+                        }
+                    }
+                    result.success = true;
+                    return true;
+                },
+                [&](std::string errmsg) -> bool {
+                    result.error = std::move(errmsg);
+                    return false;
+                }
+            );
+        }
+        // 仅缓存成功结果 (失败结果如 "Symbol not found" 可能很快变化, 不缓存)
+        if (result.success) {
+            path_cache_.put(std::move(key), result);
+        }
         return result;
     }
 
     CodeGraphStatusResult getStatus() {
-        CodeGraphStatusResult       result;
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (!db_ || !traverser_) {
-            result.error = "CodeGraph not initialized";
-            return result;
+        // 缓存命中 (TTL 内重复查询): 直接返回, 避免重复统计查询
+        const std::string key = "status";
+        if (auto hit = status_cache_.get(key)) {
+            return *hit;
         }
-        // 各统计项失败时带上下文记录错误并提前返回
-        bool ok = agentxx::util::catchError<bool>(
+
+        CodeGraphStatusResult result;
+        {
+            // 只读查询: 共享锁, 多个查询可并发执行
+            std::shared_lock<std::shared_mutex> lock(mutex_);
+            if (!db_ || !traverser_) {
+                result.error = "CodeGraph not initialized";
+                return result;
+            }
+            // 各统计项失败时带上下文记录错误并提前返回
+            bool ok = agentxx::util::catchError<bool>(
             [&]() -> bool {
                 result.total_nodes = db_->count_nodes();
                 return true;
@@ -916,11 +1059,16 @@ public:
             return result;
         }
         result.success = true;
+        }
+        // 仅缓存成功结果
+        if (result.success) {
+            status_cache_.put(key, result);
+        }
         return result;
     }
 
     bool startFileWatcher(bool auto_reindex) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::unique_lock<std::shared_mutex> lock(mutex_);
         if (!db_ || file_watcher_running_) {
             return false;
         }
@@ -971,6 +1119,7 @@ public:
     }
 
     void stopFileWatcher() {
+        std::unique_lock<std::shared_mutex> lock(mutex_);
         file_watcher_running_ = false;
         if (file_watcher_) {
             file_watcher_->stop();
@@ -978,11 +1127,18 @@ public:
     }
 
     void setProgressCallback(IndexProgressCallback callback) {
+        std::unique_lock<std::shared_mutex> lock(mutex_);
         progress_callback_ = std::move(callback);
     }
 
     bool isRunning() const {
         return running_.load();
+    }
+
+    /// 索引是否进行中 (indexDirectory 生命周期内为 true):
+    /// - 查询侧据此附加"索引中, 结果可能不完整"提示
+    bool isIndexing() const {
+        return indexing_.load(std::memory_order_acquire);
     }
 
     void writeExtractionResult(
@@ -1036,7 +1192,6 @@ public:
     }
 
     void indexFile(std::string_view file_path, std::string_view lang) {
-        std::lock_guard<std::mutex> lock(mutex_);
         if (!db_) {
             return;
         }
@@ -1052,16 +1207,70 @@ public:
         }
         std::string source((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
 
+        // 锁策略同 indexDirectory: 文件解析锁外 (可与查询并发),
+        // 仅实际写库时短暂持独占锁
         auto result = extractor->extract(std::string{file_path}, source);
-        writeExtractionResult(file_path, lang, result);
+        {
+            std::unique_lock<std::shared_mutex> lock(mutex_);
+            if (!db_) {
+                return;
+            }
+            writeExtractionResult(file_path, lang, result);
+        }
+
+        // 单文件增量索引完成: 使查询缓存失效 (该文件相关查询需按新数据重算)
+        invalidateCaches();
     }
 
     bool resolveReferencesLocked() {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::unique_lock<std::shared_mutex> lock(mutex_);
         return resolveReferences();
     }
 
+    /// 索引/文件/引用数据变更后使全部查询缓存失效 (LruCache generation+1)
+    /// - 仅由写路径 (indexDirectory / indexFile / resolveReferences) 调用,
+    ///   调用方须已持有独占锁; LruCache 内部自带互斥, 无锁嵌套问题
+    void invalidateCaches() {
+        search_cache_.invalidate();
+        context_cache_.invalidate();
+        callers_cache_.invalidate();
+        callees_cache_.invalidate();
+        impact_cache_.invalidate();
+        path_cache_.invalidate();
+        status_cache_.invalidate();
+    }
+
+    /// 每批处理的文件数, 达到后执行一次 WAL checkpoint
+    /// - 缩小"索引中途进程被强杀 -> 已提交数据仅存于 -wal"的丢失窗口
+    static constexpr int kCheckpointFileBatch = 200;
+
 private:
+
+    // ------------------------------------------------------------------
+    // 查询/索引并发控制
+    //
+    // shared_mutex 读写分离:
+    // - 查询 (searchSymbols 等只读操作): shared_lock, 多个查询可并发执行
+    // - 索引/初始化等写操作: unique_lock, 独占执行
+    // - sqlite3 以 serialized 模式编译 (agentxx 构建开启
+    //   sqlite3_ENABLE_THREADSAFE), 多线程共享同一 Database 连接并发执行
+    //   只读 SQL (每次 prepare->step->finalize, 不共享 prepared stmt) 安全;
+    //   写操作仍须串行 (WAL 写不阻塞读其他连接, 但本架构单连接, 由锁协调)
+    std::shared_mutex mutex_;
+
+    // ------------------------------------------------------------------
+    // 查询结果缓存 (LruCache: LRU 淘汰 + TTL 过期 + generation 主动失效)
+    //
+    // LLM 循环中高频重复查询 (同一符号反复查 context/callers 等), 无缓存时
+    // 每次实时 FTS/图遍历, 浪费计算并拖慢响应; 命中缓存直接返回 (TTL 30s),
+    // 索引数据变更后 invalidate() 使旧结果失效, 下次查询按新数据重算
+    codegraph::LruCache<std::string, CodeGraphSearchResult>  search_cache_{512, 30};
+    codegraph::LruCache<std::string, CodeGraphContextResult> context_cache_{512, 30};
+    codegraph::LruCache<std::string, CodeGraphImpactResult>  callers_cache_{512, 30};
+    codegraph::LruCache<std::string, CodeGraphImpactResult>  callees_cache_{512, 30};
+    codegraph::LruCache<std::string, CodeGraphImpactResult>  impact_cache_{512, 30};
+    codegraph::LruCache<std::string, CodeGraphPathResult>    path_cache_{256, 30};
+    codegraph::LruCache<std::string, CodeGraphStatusResult>  status_cache_{16, 30};
 
     std::string                                project_root_;
     std::unique_ptr<codegraph::Database>       db_;
@@ -1070,11 +1279,12 @@ private:
     std::unique_ptr<codegraph::FtsSearch>      fts_search_;
     std::unique_ptr<codegraph::FileWatcher>    file_watcher_;
 
-    std::mutex              mutex_;
     std::thread             worker_thread_;
     std::condition_variable cv_;
     std::atomic<bool>       running_;
-    std::atomic<bool>       file_watcher_running_{false};
+    /// 索引是否进行中 (indexDirectory 生命周期内为 true; 查询侧提示用)
+    std::atomic<bool> indexing_{false};
+    std::atomic<bool> file_watcher_running_{false};
     bool                    needs_initialize_;
     /// sqlite 数据目录 (为空使用默认 {dataDir}/sqlite/, 见 getCodeGraphSqliteDir)
     std::string sqlite_dir_;
@@ -1101,6 +1311,10 @@ void CodeGraphManager::shutdown() {
 
 bool CodeGraphManager::isRunning() const {
     return impl_->isRunning();
+}
+
+bool CodeGraphManager::isIndexing() const {
+    return impl_->isIndexing();
 }
 
 bool CodeGraphManager::indexDirectory(std::string_view path, bool incremental) {
