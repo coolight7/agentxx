@@ -456,8 +456,9 @@ void SessionServerAgentIO::subscribeCodegraphProgress() {
     cgThrottle_.force();
 
     // 索引进度回调由 indexDirectory/indexFile 在 blockingPool 线程触发
-    // (每处理一个文件一次): 这里仅做快照 + post 回 ex_ 线程, 由
-    // onCodegraphProgress 统一节流推送, 避免跨线程访问端点状态
+    // (流式遍历时按批回调, 遍历阶段 total=0 表示文件总数未知):
+    // 这里仅做快照 + post 回 ex_ 线程, 由 onCodegraphProgress 统一节流推送,
+    // 避免跨线程访问端点状态
 #if AGENTXX_ENABLE_CODEGRAPH
     cg->setProgressCallback(
         [weakSelf = std::weak_ptr<SessionServerAgentIO>{self}](

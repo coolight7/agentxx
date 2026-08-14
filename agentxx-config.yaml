@@ -38,9 +38,9 @@ codegraph:
   # paths:
   #   - "/path/to/project_a"
   #   - "relative/path/to/project_b"
-  # ignore_paths:
-  #   - "/path/to/project_a/third_party"
-  #   - "**/generated/**"
+  ignore_paths:
+    - "**/build/**"
+    - "**/node_modules/**"
   load_cwd: true
   use_gitignore: true
 
