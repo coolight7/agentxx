@@ -9,7 +9,6 @@
 #include "agentxx/expand/get_cpu_gpu_use.h"
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/middlewares/permission.h"
-#include "agentxx/util/async_offload.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/log.h"
 #include "agentxx/util/string_util.h"
@@ -710,11 +709,13 @@ asio::awaitable<void> TUIClientAgentIO::waitRetry() {
 }
 
 // ---------------------------------------------------------------------------
-// 系统资源监控 (每 kSystemInfoIntervalSec 秒采集一次 CPU/内存占用)
+// 系统资源监控 (每 kSystemInfoIntervalSec 秒经 Wire 请求 agent-server 采集)
 //
-// 无独立线程: 采集周期由 client io_context 上的协程 (steady_timer) 驱动,
-// 实际的 CpuGpuMonitor::query() 经 util::offloadAsync 投递到 blockingPool
-// 线程池执行, 避免查询期间的等待/文件读取占用 client 事件循环。
+// 采集已迁移到 agent-server: TUI 不再本地读取 CPU/内存 (TUI 与 agent-server
+// 可分属不同进程/主机, 远端模式下展示的是 server 主机的资源), 仅周期发送
+// WireGetSystemUsage 请求, 服务端读取后回传 WireSystemUsage (由 client 线程
+// onPeerMessage 写入 sharedState_.systemUsage)。采集周期由 client io_context
+// 上的协程 (steady_timer) 驱动, 不占用 UI 线程。
 // ---------------------------------------------------------------------------
 
 void TUIClientAgentIO::startSystemMonitor() {
@@ -725,41 +726,14 @@ void TUIClientAgentIO::startSystemMonitor() {
     asio::co_spawn(
         ex_,
         [this]() -> asio::awaitable<void> {
-            // CpuGpuMonitor 内部缓存上次 CPU 采样值, 同一实例连续查询才能得到准确的
-            // CPU 占用率, 因此在循环外构造一次, 跨采集周期复用
-            auto monitor = std::make_shared<agentxx::expand::CpuGpuMonitor>();
-            auto timer   = sysMonitorTimer_;
+            auto timer = sysMonitorTimer_;
             for (;;) {
-                // 显示关闭时跳过采集 (仍保持周期唤醒, 以便随时重新开启)
-                if (TUISettings::instance().showSystemInfo()) {
-                    auto usage = std::make_shared<agentxx::expand::CpuGpuUsage>();
-                    co_await agentxx::util::catchErrorAsync<bool>(
-                        [&]() -> asio::awaitable<bool> {
-                            // query() 为协程 (内部含 100ms 采样间隔定时器与文件读取),
-                            // 整体投递到本 TUI 自有的 blockingPool 线程池执行
-                            // (TUI 不持有 agent-server 的 AgentContext::blockingPool),
-                            // 不占用 client io_context; offloadAsync 完成后自动恢复回
-                            // client executor
-                            *usage = co_await agentxx::util::offloadAsync<
-                                agentxx::expand::CpuGpuUsage>(
-                                *blockingPool_,
-                                [monitor]() -> asio::awaitable<agentxx::expand::CpuGpuUsage> {
-                                    co_return co_await monitor->query();
-                                }
-                            );
-                            {
-                                std::lock_guard<std::mutex> lock(sharedState_.mutex());
-                                auto&                       st = sharedState_.mutableState();
-                                st.systemUsage                 = std::move(usage);
-                            }
-                            postRedraw();
-                            co_return true;
-                        },
-                        [](std::string errmsg) -> asio::awaitable<bool> {
-                            XX_LOGE("[tui] system monitor query failed: {}", errmsg);
-                            co_return false;
-                        }
-                    );
+                // 显示关闭时跳过请求 (仍保持周期唤醒, 以便随时重新开启)
+                if (TUISettings::instance().showSystemInfo() && transport_) {
+                    // 请求 agent-server 读取系统资源占用 (CPU/内存/GPU):
+                    // 服务端经 blockingPool 采集后回传 WireSystemUsage,
+                    // 由 onPeerMessage 更新 sharedState_.systemUsage 并重绘
+                    sendToPeer(agentxx::agent::WireGetSystemUsage{});
                 }
                 // 周期等待; stop() 时 cancel() 使本等待立即返回并退出循环
                 timer->expires_after(std::chrono::seconds(kSystemInfoIntervalSec));
@@ -1055,6 +1029,17 @@ void TUIClientAgentIO::onPeerMessage(agentxx::agent::WireMessage msg) {
                     for (const auto& notif : m.notifications) {
                         st.appendComponents.push_back(notif);
                     }
+                }
+                postRedraw();
+            } else if constexpr (std::is_same_v<T, agentxx::agent::WireSystemUsage>) {
+                // agent-server 侧采集的系统资源占用响应 (WireGetSystemUsage 的回复):
+                // 写入 sharedState_ (Info 侧边栏从 frameState 读取, 见
+                // renderInfoSidebar), 采集周期由 startSystemMonitor 的定时器驱动
+                {
+                    std::lock_guard<std::mutex> lock(sharedState_.mutex());
+                    auto&                       st = sharedState_.mutableState();
+                    st.systemUsage
+                        = std::make_shared<agentxx::expand::CpuGpuUsage>(std::move(m.usage));
                 }
                 postRedraw();
             } else if constexpr (std::is_same_v<T, agentxx::agent::WireContextMessages>) {

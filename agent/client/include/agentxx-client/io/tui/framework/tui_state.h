@@ -120,7 +120,9 @@ struct TUIRenderState {
     size_t maxContextTokens = 0;
     double tps              = 0.0;
 
-    /// 系统资源占用快照 (CPU/内存/GPU), 由资源监控线程周期写入; 为 null 表示尚未采集
+    /// 系统资源占用快照 (CPU/内存/GPU), 由 client 线程收到 WireSystemUsage
+    /// (agent-server 侧采集后回传, 见 startSystemMonitor / onPeerMessage) 后写入;
+    /// 为 null 表示尚未收到服务端推送
     std::shared_ptr<agentxx::expand::CpuGpuUsage> systemUsage;
 };
 
