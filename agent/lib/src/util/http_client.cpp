@@ -15,8 +15,10 @@
 #include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>
 #include <asio/steady_timer.hpp>
+#include <map>
 #include <neograph/provider.h>
 #include <openssl/ssl.h>
+#include <variant>
 
 namespace agentxx {
 namespace util {
@@ -189,6 +191,320 @@ asio::awaitable<asio::ip::tcp::resolver::results_type> waitDnsResolve(
         throw neograph_asio_system_error(state->ec);
     }
     co_return std::move(state->results);
+}
+
+// ---------------------------------------------------------------------------
+// HTTP 连接池 (keep-alive 连接复用)
+//
+// 背景: 旧实现每次请求都新建 TCP+TLS 连接、响应后立即关闭, LLM API 调用频繁时
+// 每次都要付出 DNS 解析 + TCP 握手 + TLS 握手 (100ms~1s+) 的建连开销。连接池
+// 将空闲连接缓存复用, 同时把同一端点的并发连接数限制在可配置上限内。
+//
+// 设计要点:
+// - 池键 = scheme://host:port + sslVerify (TLS 上下文不同不能互用)
+// - 仅 RequestConfig.keepAlive=true 时启用; keepAlive=false 保持旧行为
+//   (Connection: close, 每次新建/关闭, 不受并发上限约束)
+// - 空闲连接超时 (kPoolIdleTimeout) 未复用视为可能已被服务端断开, 获取时丢弃
+// - 复用失效连接 (服务端关闭了空闲 keep-alive 连接) 时自动用新连接重试一次,
+//   仅限 eof/connection reset/broken pipe 等"请求未到达服务端"的错误
+//   (见 isPoolRetryableError); 响应被截断/超时等不重试, 避免请求重复执行
+// - 并发达到上限时轮询等待 (kPoolWaitPollInterval), 等待可被取消且不改池状态
+// - 线程安全: 池状态用互斥锁保护; 连接的读写由借出的协程独占, 无并发访问
+// - 连接绑定创建它的 io_context (socket 的 any_io_executor): 复用期间该
+//   io_context 必须存活 (本项目 LLM 调用集中在 agent 的 io_context, 满足要求)
+// ---------------------------------------------------------------------------
+
+/// 连接池键: 同一端点 (协议+主机+端口+证书校验) 的连接可互相复用
+struct HttpPoolKey {
+    bool        https  = false;
+    std::string host; // IPv6 字面量不含方括号 (与 ParsedUrl::host 一致)
+    uint16_t    port  = 0;
+    bool        verify = true; // sslVerify 不同则 TLS 上下文不同, 不能复用
+
+    bool operator==(const HttpPoolKey&) const = default;
+};
+
+struct HttpPoolKeyLess {
+    bool operator()(const HttpPoolKey& a, const HttpPoolKey& b) const {
+        if (a.https != b.https) {
+            return a.https < b.https;
+        }
+        if (a.port != b.port) {
+            return a.port < b.port;
+        }
+        if (a.verify != b.verify) {
+            return a.verify < b.verify;
+        }
+        return a.host < b.host;
+    }
+};
+
+/// 池化连接: 持有一个 TCP 或 TLS 流 (TLS 流内部持有 TCP socket)
+struct PooledConnection {
+    // asio 1.30+ 的 tcp::socket 无默认构造函数 (必须传 executor), 因此显式构造:
+    // 默认按 TCP 构造 (std::in_place_index<0>), 创建 TLS 连接时再 emplace 替换
+    explicit PooledConnection(asio::any_io_executor executor)
+        : stream(std::in_place_index<0>, std::move(executor)) {
+    }
+
+    std::variant<asio::ip::tcp::socket, asio::ssl::stream<asio::ip::tcp::socket>> stream;
+    std::chrono::steady_clock::time_point lastUsed;
+    bool                                  fresh = true; ///< 本次是否新建 (非复用), 供失效重试决策
+};
+
+// 前置声明: HttpConnectionPool::acquire 在类内调用, 定义位于类之后
+asio::awaitable<std::shared_ptr<PooledConnection>>
+    createConnection(const HttpPoolKey& key, const RequestConfig& config);
+
+/// 空闲连接最大存活时长: 超过该时长未复用的连接在下次获取时关闭重建。
+/// 多数网关/负载均衡的 keep-alive 空闲超时在 60~75s, 120s 足够覆盖常见复用间隔;
+/// 即使服务端提前断开, 复用失败也会自动用新连接重试一次 (见 isPoolRetryableError)。
+inline constexpr auto kPoolIdleTimeout = std::chrono::seconds{120};
+
+/// 并发上限等待时的轮询间隔: 等待是稀有的 (仅同一端点并发超过上限时), 50ms 粒度
+/// 可接受; 相比等待队列, 轮询天然支持取消且无跨 executor 唤醒的复杂度
+inline constexpr auto kPoolWaitPollInterval = std::chrono::milliseconds{50};
+
+/// 复用失效重试判定: 仅当错误表明"连接在对端已被关闭/重置" (请求几乎未到达
+/// 服务端) 时, 才允许用新连接重试一次。
+/// - 优先按 asio/beast 错误码判定 (不依赖本地化错误消息, Windows 中文系统下
+///   asio 错误消息为中文, 文本匹配不可靠)
+/// - 匹配: eof / connection reset (Windows: WSAECONNRESET 10054) /
+///   connection aborted (Windows: WSAECONNABORTED 10053, 对端关闭空闲连接后
+///   读写时报此错) / broken pipe / beast end_of_stream
+/// - 不匹配 (服务端已接收并处理请求, 重试会造成重复执行, 由上层决定):
+///   响应截断 (partial message / ssl stream_truncated)、各类超时、取消
+bool isPoolRetryableError(const neograph_asio_error_code& ec, std::string_view errmsg) {
+    if (ec) {
+        if (ec == asio::error::eof || ec == asio::error::connection_reset
+            || ec == asio::error::connection_aborted || ec == asio::error::broken_pipe) {
+            return true;
+        }
+        // beast: 连接在消息边界处关闭 (读下一个请求的响应时立即 EOF)
+        if (ec == boost::beast::http::error::end_of_stream) {
+            return true;
+        }
+    }
+    // 兜底: 文本匹配 (非 asio 错误 / 被包装的错误消息)
+    if (errmsg.empty()) {
+        return false;
+    }
+    auto lower = agentxx::util::toLower(errmsg);
+    if (lower.find("end of file") != std::string_view::npos
+        || lower.find("end of stream") != std::string_view::npos) {
+        return true;
+    }
+    if (lower.find("connection reset") != std::string_view::npos
+        || lower.find("connection aborted") != std::string_view::npos
+        || lower.find("broken pipe") != std::string_view::npos) {
+        return true;
+    }
+    return false;
+}
+
+class HttpConnectionPool {
+public:
+
+    static HttpConnectionPool& instance() {
+        static HttpConnectionPool pool;
+        return pool;
+    }
+
+    /// 获取连接: 优先复用空闲连接, 否则新建 (受 maxConcurrent 并发上限约束)。
+    /// - maxConcurrent==0 表示不限制 (始终新建, 仍可复用空闲)
+    /// - 空闲连接超过 kPoolIdleTimeout 未复用 (服务端很可能已断开) 时丢弃重建
+    /// - 并发达到上限时轮询等待; 等待可被取消 (中止等待, 不修改池状态)
+    /// - 新建连接失败/被取消时归还并发名额并抛出异常
+    asio::awaitable<std::shared_ptr<PooledConnection>> acquire(
+        const HttpPoolKey&   key,
+        size_t               maxConcurrent,
+        const RequestConfig& config
+    ) {
+        auto               executor = co_await asio::this_coro::executor;
+        asio::steady_timer pollTimer(executor);
+
+        for (;;) {
+            bool create = false;
+            {
+                std::lock_guard<std::mutex> lock(mtx_);
+                auto& entry = entries_[key];
+                auto  now   = std::chrono::steady_clock::now();
+                // 优先复用空闲连接; 丢弃已超时的空闲连接 (析构关闭 socket)
+                while (!entry.idle.empty()) {
+                    auto conn = std::move(entry.idle.back());
+                    entry.idle.pop_back();
+                    if (now - conn->lastUsed <= kPoolIdleTimeout) {
+                        ++entry.active;
+                        ++entry.reused;
+                        entry.peakActive = std::max(entry.peakActive, entry.active);
+                        conn->fresh      = false;
+                        co_return conn;
+                    }
+                }
+                if (maxConcurrent == 0 || entry.active < maxConcurrent) {
+                    ++entry.active;
+                    ++entry.created;
+                    entry.peakActive = std::max(entry.peakActive, entry.active);
+                    create          = true;
+                } else {
+                    ++entry.queuedWaits;
+                }
+            }
+            if (create) {
+                try {
+                    auto conn = co_await createConnection(key, config);
+                    conn->fresh = true;
+                    co_return conn;
+                } catch (...) {
+                    // 新建失败或外部取消: 归还并发名额后原样抛出
+                    std::lock_guard<std::mutex> lock(mtx_);
+                    if (entries_[key].active > 0) {
+                        --entries_[key].active;
+                    }
+                    throw;
+                }
+            }
+            // 并发达到上限: 轮询等待空闲连接/名额 (可取消)
+            pollTimer.expires_after(kPoolWaitPollInterval);
+            co_await pollTimer.async_wait(asio::use_awaitable);
+        }
+    }
+
+    /// 归还连接: reusable=true 且底层连接仍打开时进入空闲池, 否则直接关闭
+    void release(const HttpPoolKey& key, std::shared_ptr<PooledConnection> conn, bool reusable) {
+        if (!conn) {
+            return;
+        }
+        std::lock_guard<std::mutex> lock(mtx_);
+        auto& entry = entries_[key];
+        if (entry.active > 0) {
+            --entry.active;
+        }
+        if (reusable && isOpen(*conn)) {
+            conn->lastUsed = std::chrono::steady_clock::now();
+            entry.idle.push_back(std::move(conn));
+        }
+    }
+
+    struct Stats {
+        size_t active      = 0;
+        size_t idle        = 0;
+        size_t created     = 0;
+        size_t reused      = 0;
+        size_t peakActive  = 0;
+        size_t queuedWaits = 0;
+    };
+
+    Stats stats(const HttpPoolKey& key) const {
+        std::lock_guard<std::mutex> lock(mtx_);
+        auto                        it = entries_.find(key);
+        if (it == entries_.end()) {
+            return {};
+        }
+        return Stats{
+            it->second.active,
+            it->second.idle.size(),
+            it->second.created,
+            it->second.reused,
+            it->second.peakActive,
+            it->second.queuedWaits,
+        };
+    }
+
+    /// 关闭并清空全部空闲连接 (测试收尾/io_context 销毁前; 不影响借出的连接)
+    void clear() {
+        std::lock_guard<std::mutex> lock(mtx_);
+        for (auto& [key, entry] : entries_) {
+            entry.idle.clear(); // 析构关闭 socket
+        }
+    }
+
+private:
+
+    struct Entry {
+        std::vector<std::shared_ptr<PooledConnection>> idle;
+        size_t                                         active      = 0;
+        size_t                                         created     = 0;
+        size_t                                         reused      = 0;
+        size_t                                         peakActive  = 0;
+        size_t                                         queuedWaits = 0;
+    };
+
+    mutable std::mutex mtx_;
+    std::map<HttpPoolKey, Entry, HttpPoolKeyLess> entries_;
+
+    static bool isOpen(const PooledConnection& conn) {
+        return std::visit(
+            [](const auto& s) {
+                return s.lowest_layer().is_open();
+            },
+            conn.stream
+        );
+    }
+};
+
+/// 建立一条到池键对应端点的连接 (DNS + TCP + TLS), connectTimeout 为总时限。
+/// 建连逻辑与原请求路径一致: 后台 DNS 解析 + TCP 连接 + no_delay/TCP keepalive
+/// + TLS 握手 (SNI 仅域名)。返回的连接尚未用于任何请求 (fresh=true)。
+asio::awaitable<std::shared_ptr<PooledConnection>>
+    createConnection(const HttpPoolKey& key, const RequestConfig& config) {
+    using asio::ip::tcp;
+
+    auto executor = co_await asio::this_coro::executor;
+
+    // connectTimeout 是 DNS + TCP + TLS 的总上限 (各阶段共用剩余时间)
+    auto connectDeadline = std::chrono::steady_clock::now() + config.connectTimeout;
+    auto remainingMs     = [&]() -> std::chrono::milliseconds {
+        auto now = std::chrono::steady_clock::now();
+        if (now >= connectDeadline) {
+            return std::chrono::seconds{1};
+        }
+        return std::chrono::duration_cast<std::chrono::milliseconds>(connectDeadline - now);
+    };
+
+    // DNS 解析不能直接 co_await: getaddrinfo 阻塞无法被取消/超时中断,
+    // 黑洞 DNS 时会无限挂起 (见 HttpClient::asyncResolveWithDeadline 注释)
+    auto endpoints = co_await HttpClient::asyncResolveWithDeadline(
+        key.host,
+        std::to_string(key.port),
+        connectDeadline,
+        config.connectTimeout
+    );
+
+    auto conn = std::make_shared<PooledConnection>(executor);
+    if (key.https) {
+        auto& sslCtx = HttpClient::sharedSslCtx(key.verify);
+        auto& stream = conn->stream.emplace<asio::ssl::stream<tcp::socket>>(executor, sslCtx);
+        // SNI 只能是域名, IP 字面量 (IPv6 含 ':') 不支持 SNI
+        if (!key.host.empty() && key.host.find(':') == std::string::npos) {
+            ::SSL_set_tlsext_host_name(stream.native_handle(), key.host.c_str());
+        }
+        co_await asio::async_connect(
+            stream.lowest_layer(),
+            endpoints,
+            asio::cancel_after(remainingMs(), asio::use_awaitable)
+        );
+        neograph_asio_error_code tcpEc;
+        stream.lowest_layer().set_option(asio::ip::tcp::no_delay(true), tcpEc);
+        enableTcpKeepalive(stream.lowest_layer());
+        co_await stream.async_handshake(
+            asio::ssl::stream_base::client,
+            asio::cancel_after(remainingMs(), asio::use_awaitable)
+        );
+    } else {
+        auto& stream = conn->stream.emplace<tcp::socket>(executor);
+        co_await asio::async_connect(
+            stream,
+            endpoints,
+            asio::cancel_after(remainingMs(), asio::use_awaitable)
+        );
+        neograph_asio_error_code tcpEc;
+        stream.set_option(asio::ip::tcp::no_delay(true), tcpEc);
+        enableTcpKeepalive(stream);
+    }
+    conn->lastUsed = std::chrono::steady_clock::now();
+    conn->fresh    = true;
+    co_return conn;
 }
 
 asio::awaitable<asio::ip::tcp::resolver::results_type> HttpClient::asyncResolveWithDeadline(
@@ -588,73 +904,75 @@ asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::requestAsy
                     req.prepare_payload();
                 }
 
-                // connectTimeout 是 DNS + TCP + TLS 的总上限:
-                // 用 deadline 记录起始时刻, 后续各阶段 (含 DNS) 使用剩余时间,
-                // 避免各阶段各用满导致总耗时成倍放大
-                auto connectDeadline  = std::chrono::steady_clock::now() + config.connectTimeout;
-                auto remainingTimeout = [&]() -> std::chrono::milliseconds {
-                    auto now = std::chrono::steady_clock::now();
-                    if (now >= connectDeadline) {
-                        // 留一点时间
-                        return std::chrono::seconds{1};
+                // 连接池: keepAlive=true 时启用 (复用空闲连接 + 并发上限), 否则保持
+                // 旧行为 (每次新建连接, 响应后关闭, 不受并发上限约束)
+                bool   usePool  = config.keepAlive;
+                size_t poolMax  = usePool ? config.maxConcurrentConnections : 0;
+                int    maxAttempts = usePool ? 2 : 1; // 复用失效连接时用新连接重试一次
+
+                HttpPoolKey poolKey;
+                poolKey.https  = isHttps;
+                poolKey.host   = parsed->host;
+                poolKey.port   = parsed->port;
+                poolKey.verify = config.sslVerify.value_or(sslVerifyEnabled_.load(
+                    std::memory_order_relaxed
+                ));
+                auto& pool = HttpConnectionPool::instance();
+
+                std::shared_ptr<PooledConnection> conn;
+                for (int attempt = 0; attempt < maxAttempts; ++attempt) {
+                    // keepAlive=true: 经连接池获取 (复用空闲/并发上限);
+                    // keepAlive=false: 直接新建 (旧行为), 不产生池统计
+                    conn = usePool ? co_await pool.acquire(poolKey, poolMax, config)
+                                   : co_await createConnection(poolKey, config);
+                    bool reused   = usePool && !conn->fresh;
+                    bool poolable = false;
+                    try {
+                        result = co_await std::visit(
+                            [&](auto& stream) -> asio::awaitable<std::expected<
+                                HttpResponse,
+                                std::string>> {
+                                co_return co_await exchange(stream, req, config);
+                            },
+                            conn->stream
+                        );
+                        // 服务端同意 keep-alive (响应无 Connection: close) 时连接可归还复用
+                        poolable = usePool && result.has_value() && result->keepAlive;
+                    } catch (const neograph_asio_system_error& e) {
+                        // 复用的空闲连接已被服务端关闭 (eof/reset/broken pipe, 请求
+                        // 几乎未到达服务端): 释放坏连接后用新连接重试一次; 其他错误
+                        // (响应截断/超时/取消) 说明服务端可能已处理请求, 原样抛出
+                        // 由上层决定是否重试, 避免重复执行
+                        if (reused && attempt + 1 < maxAttempts && isPoolRetryableError(e.code(), e.what())) {
+                            pool.release(poolKey, std::move(conn), false);
+                            continue;
+                        }
+                        // 归还/关闭连接, 避免 active 计数泄漏
+                        if (usePool) {
+                            pool.release(poolKey, std::move(conn), false);
+                        }
+                        throw;
+                    } catch (...) {
+                        // 非传输错误 (如响应截断转换的 runtime_error): 不重试, 关闭连接
+                        if (usePool) {
+                            pool.release(poolKey, std::move(conn), false);
+                        }
+                        throw;
                     }
-                    return std::chrono::duration_cast<std::chrono::milliseconds>(
-                        connectDeadline - now
-                    );
-                };
-
-                // DNS 解析不能直接 co_await: getaddrinfo 阻塞无法被取消/超时中断,
-                // 黑洞 DNS 时会无限挂起。后台协程解析 + 轮询, 超时/取消立即放弃等待
-                // (见 HttpClient::asyncResolveWithDeadline 注释)
-                auto endpoints = co_await HttpClient::asyncResolveWithDeadline(
-                    parsed->host,
-                    std::to_string(parsed->port),
-                    connectDeadline,
-                    config.connectTimeout
-                );
-
-                if (isHttps) {
-                    bool verify
-                        = config.sslVerify.value_or(sslVerifyEnabled_.load(std::memory_order_relaxed
+                    // keepAlive=false 的 HTTPS 请求保持旧行为: 发送 close_notify 友好关闭
+                    // (失败不影响已成功获取的响应; cancel_after 防止对端不响应时挂起)
+                    if (!usePool && isHttps) {
+                        auto& sslStream = std::get<asio::ssl::stream<tcp::socket>>(conn->stream);
+                        neograph_asio_error_code sslEc;
+                        co_await sslStream.async_shutdown(asio::cancel_after(
+                            std::chrono::seconds{5},
+                            asio::redirect_error(asio::use_awaitable, sslEc)
                         ));
-                    auto&                          sslCtx = sharedSslCtx(verify);
-                    asio::ssl::stream<tcp::socket> stream(executor, sslCtx);
-                    // SNI 只能是域名, IP 字面量 (IPv6 含 ':') 不支持 SNI
-                    if (!parsed->host.empty() && parsed->host.find(':') == std::string::npos) {
-                        ::SSL_set_tlsext_host_name(stream.native_handle(), parsed->host.c_str());
                     }
-                    co_await asio::async_connect(
-                        stream.lowest_layer(),
-                        endpoints,
-                        asio::cancel_after(remainingTimeout(), asio::use_awaitable)
-                    );
-                    neograph_asio_error_code tcpEc;
-                    stream.lowest_layer().set_option(asio::ip::tcp::no_delay(true), tcpEc);
-                    enableTcpKeepalive(stream.lowest_layer());
-                    co_await stream.async_handshake(
-                        asio::ssl::stream_base::client,
-                        asio::cancel_after(remainingTimeout(), asio::use_awaitable)
-                    );
-                    result = co_await exchange(stream, req, config);
-                    // shutdown 失败 (如对端已提前关闭) 不影响已成功获取的响应,
-                    // 用 redirect_error 捕获并忽略, 避免异常丢弃上面的成功 result
-                    // 加 cancel_after 防止对端不响应 close_notify 时永久挂起
-                    neograph_asio_error_code sslEc;
-                    co_await stream.async_shutdown(asio::cancel_after(
-                        std::chrono::seconds{5},
-                        asio::redirect_error(asio::use_awaitable, sslEc)
-                    ));
-                } else {
-                    tcp::socket stream(executor);
-                    co_await asio::async_connect(
-                        stream,
-                        endpoints,
-                        asio::cancel_after(remainingTimeout(), asio::use_awaitable)
-                    );
-                    neograph_asio_error_code tcpEc;
-                    stream.set_option(asio::ip::tcp::no_delay(true), tcpEc);
-                    enableTcpKeepalive(stream);
-                    result = co_await exchange(stream, req, config);
+                    if (usePool) {
+                        pool.release(poolKey, std::move(conn), poolable);
+                    }
+                    break;
                 }
                 co_return true;
             },
@@ -729,32 +1047,25 @@ asio::awaitable<void> HttpClient::requestSseAsync(
         req.prepare_payload();
     }
 
-    auto executor = co_await asio::this_coro::executor;
+    // 连接池: keepAlive=true 时启用 (复用空闲连接 + 并发上限), 否则保持旧行为
+    // (每次新建连接, 结束后关闭, 不受并发上限约束)
+    bool   usePool     = config.keepAlive;
+    size_t poolMax     = usePool ? config.maxConcurrentConnections : 0;
+    int    maxAttempts = usePool ? 2 : 1; // 复用失效连接时用新连接重试一次
 
-    // connectTimeout 是 DNS + TCP + TLS 的总上限: 各阶段 (含 DNS) 共用剩余时间
-    auto connectDeadline = std::chrono::steady_clock::now() + config.connectTimeout;
-    auto remainingMs     = [&]() -> std::chrono::milliseconds {
-        auto now = std::chrono::steady_clock::now();
-        if (now >= connectDeadline) {
-            return std::chrono::seconds{1};
-        }
-        return std::chrono::duration_cast<std::chrono::milliseconds>(connectDeadline - now);
-    };
-
-    // DNS 解析不能直接 co_await: getaddrinfo 阻塞无法被取消/超时中断, 黑洞 DNS
-    // 时会无限挂起。改为后台协程解析 + 轮询, 超时/取消立即放弃等待 (见
-    // HttpClient::asyncResolveWithDeadline 注释)
-    XX_LOGT("HttpClient::requestSseAsync: async_resolve");
-    auto endpoints = co_await HttpClient::asyncResolveWithDeadline(
-        parsed->host,
-        std::to_string(parsed->port),
-        connectDeadline,
-        config.connectTimeout
-    );
+    HttpPoolKey poolKey;
+    poolKey.https  = isHttps;
+    poolKey.host   = parsed->host;
+    poolKey.port   = parsed->port;
+    poolKey.verify = config.sslVerify.value_or(sslVerifyEnabled_.load(std::memory_order_relaxed));
+    auto& pool = HttpConnectionPool::instance();
 
     auto sendTimeout = config.sendTimeout.value_or(calcTimeoutBySize(req.body().size()));
 
-    auto doSseExchange = [&](auto& stream) -> asio::awaitable<void> {
+    // 执行 SSE 交换; 返回连接是否可归还池复用 (流完整结束且服务端允许 keep-alive)。
+    // - anyDelivered: 是否已向 onChunk 投递过数据; 投递后连接层失败不再重试
+    //   (重试会向调用方重复投递数据), 由上层决定
+    auto doSseExchange = [&](auto& stream, bool& anyDelivered) -> asio::awaitable<bool> {
         // 发送请求体: 服务器不读 body (如 TCP 窗口阻塞) 时写会长期挂起, 超时直接断开
         co_await runSseOpWithTimeout(
             stream,
@@ -828,13 +1139,15 @@ asio::awaitable<void> HttpClient::requestSseAsync(
         }
 
         size_t processed = 0;
+        bool   reusable  = false;
 
-        // 返回 true 表示 onChunk 告知流已结束 (如 [DONE]), 应停止读取并断开连接
+        // 返回 true 表示 onChunk 告知流已结束 (如 [DONE]), 应停止读取
         auto flushBody = [&]() -> bool {
             auto& respBody = parser.get().body();
             bool  stop     = false;
             if (respBody.size() > processed) {
-                stop = onChunk(std::string_view{respBody}.substr(processed));
+                anyDelivered = true;
+                stop         = onChunk(std::string_view{respBody}.substr(processed));
             }
             // 清空已读 body 并重置偏移: SSE 为长连接流, 若只移动偏移不裁剪,
             // string_body 会随流持续无限增长 → OOM
@@ -843,11 +1156,21 @@ asio::awaitable<void> HttpClient::requestSseAsync(
             return stop;
         };
 
+        // 流结束处理: 若流已完整解析 (chunked 终止块已到达, 连接处于消息边界) 且
+        // 服务端允许 keep-alive, 连接可归还池复用; 否则必须主动断开 (避免对端
+        // keep-alive 不关闭时白等 readChunkTimeout)
+        auto stopReading = [&]() {
+            if (parser.is_done()) {
+                reusable = parser.get().keep_alive();
+            } else {
+                neograph_asio_error_code ignore;
+                stream.lowest_layer().close(ignore);
+            }
+        };
+
         // 初始 flush: 响应头与首个 body 数据可能在同一数据块中到达
         if (flushBody()) {
-            // 首个数据块即含流结束标记: 直接断开
-            neograph_asio_error_code ignore;
-            stream.lowest_layer().close(ignore);
+            stopReading();
         } else {
             while (!parser.is_done()) {
                 // 读 body: 每次读操作独立计时 (readChunkTimeout = 块间最大间隔), 超时断开
@@ -860,62 +1183,71 @@ asio::awaitable<void> HttpClient::requestSseAsync(
                     }
                 );
                 if (flushBody()) {
-                    // 流已结束 (如收到 [DONE]): 主动断开连接, 避免对端 keep-alive
-                    // 不关闭时白等 readChunkTimeout; 断开后不会再读后续数据
-                    neograph_asio_error_code ignore;
-                    stream.lowest_layer().close(ignore);
+                    stopReading();
                     break;
                 }
             }
-            flushBody();
+            // 自然结束 (循环因 parser.is_done() 退出): 连接处于消息边界
+            if (!reusable) {
+                flushBody();
+                if (parser.is_done()) {
+                    reusable = parser.get().keep_alive();
+                }
+            }
         }
+        co_return reusable;
     };
 
-    if (isHttps) {
-        bool  verify = config.sslVerify.value_or(sslVerifyEnabled_.load(std::memory_order_relaxed));
-        auto& sslCtx = sharedSslCtx(verify);
-        asio::ssl::stream<tcp::socket> stream(executor, sslCtx);
-        // SNI 只能是域名, IP 字面量 (IPv6 含 ':') 不支持 SNI
-        if (!parsed->host.empty() && parsed->host.find(':') == std::string::npos) {
-            ::SSL_set_tlsext_host_name(stream.native_handle(), parsed->host.c_str());
+    // 建连 (DNS+TCP+TLS) 与交换统一走连接池
+    std::shared_ptr<PooledConnection> conn;
+    for (int attempt = 0; attempt < maxAttempts; ++attempt) {
+        // keepAlive=true: 经连接池获取 (复用空闲/并发上限);
+        // keepAlive=false: 直接新建 (旧行为), 不产生池统计
+        conn           = usePool ? co_await pool.acquire(poolKey, poolMax, config)
+                                 : co_await createConnection(poolKey, config);
+        bool reused    = usePool && !conn->fresh;
+        bool anyDelivered = false;
+        bool poolable  = false;
+        try {
+            poolable = co_await std::visit(
+                [&](auto& stream) -> asio::awaitable<bool> {
+                    co_return co_await doSseExchange(stream, anyDelivered);
+                },
+                conn->stream
+            );
+        } catch (const neograph_asio_system_error& e) {
+            // 复用的空闲连接已被服务端关闭 (eof/reset/broken pipe) 且尚未投递任何
+            // 数据 (请求未到达服务端): 释放坏连接后用新连接重试一次; 已投递过数据
+            // 或响应被截断/超时等错误原样抛出, 避免重复投递/重复执行
+            if (reused && attempt + 1 < maxAttempts && !anyDelivered
+                && isPoolRetryableError(e.code(), e.what())) {
+                pool.release(poolKey, std::move(conn), false);
+                continue;
+            }
+            // 归还/关闭连接, 避免 active 计数泄漏
+            if (usePool) {
+                pool.release(poolKey, std::move(conn), false);
+            }
+            throw;
+        } catch (...) {
+            if (usePool) {
+                pool.release(poolKey, std::move(conn), false);
+            }
+            throw;
         }
-        XX_LOGT("HttpClient::requestSseAsync: HTTPS async_connect");
-        co_await asio::async_connect(
-            stream.lowest_layer(),
-            endpoints,
-            asio::cancel_after(remainingMs(), asio::use_awaitable)
-        );
-        neograph_asio_error_code tcpEc;
-        stream.lowest_layer().set_option(asio::ip::tcp::no_delay(true), tcpEc);
-        enableTcpKeepalive(stream.lowest_layer());
-        XX_LOGT("HttpClient::requestSseAsync: HTTPS async_handshake");
-        co_await stream.async_handshake(
-            asio::ssl::stream_base::client,
-            asio::cancel_after(remainingMs(), asio::use_awaitable)
-        );
-        XX_LOGT("HttpClient::requestSseAsync: HTTPS doSseExchange");
-        co_await doSseExchange(stream);
-        XX_LOGT("HttpClient::requestSseAsync: HTTPS shutdown");
-        neograph_asio_error_code sslEc;
-        co_await stream.async_shutdown(asio::cancel_after(
-            std::chrono::seconds{5},
-            asio::redirect_error(asio::use_awaitable, sslEc)
-        ));
-        XX_LOGT("HttpClient::requestSseAsync: HTTPS DONE");
-    } else {
-        tcp::socket stream(executor);
-        XX_LOGT("HttpClient::requestSseAsync: HTTP async_connect");
-        co_await asio::async_connect(
-            stream,
-            endpoints,
-            asio::cancel_after(remainingMs(), asio::use_awaitable)
-        );
-        neograph_asio_error_code tcpEc;
-        stream.set_option(asio::ip::tcp::no_delay(true), tcpEc);
-        enableTcpKeepalive(stream);
-        XX_LOGT("HttpClient::requestSseAsync: HTTP doSseExchange");
-        co_await doSseExchange(stream);
-        XX_LOGT("HttpClient::requestSseAsync: HTTP DONE");
+        if (!usePool && isHttps) {
+            // keepAlive=false 保持旧行为: close_notify 友好关闭
+            auto& sslStream = std::get<asio::ssl::stream<tcp::socket>>(conn->stream);
+            neograph_asio_error_code sslEc;
+            co_await sslStream.async_shutdown(asio::cancel_after(
+                std::chrono::seconds{5},
+                asio::redirect_error(asio::use_awaitable, sslEc)
+            ));
+        }
+        if (usePool) {
+            pool.release(poolKey, std::move(conn), usePool && poolable);
+        }
+        break;
     }
 }
 
@@ -925,6 +1257,24 @@ void HttpClient::setSslVerify(bool enable) noexcept {
 
 bool HttpClient::getSslVerify() noexcept {
     return sslVerifyEnabled_.load(std::memory_order_relaxed);
+}
+
+HttpClient::PoolStats HttpClient::poolStats(std::string_view url) {
+    auto parsed = parseUrl(url);
+    if (!parsed) {
+        return {};
+    }
+    HttpPoolKey key;
+    key.https  = parsed->scheme == "https";
+    key.host   = parsed->host;
+    key.port   = parsed->port;
+    key.verify = sslVerifyEnabled_.load(std::memory_order_relaxed);
+    auto s     = HttpConnectionPool::instance().stats(key);
+    return PoolStats{s.active, s.idle, s.created, s.reused, s.peakActive, s.queuedWaits};
+}
+
+void HttpClient::clearConnectionPool() {
+    HttpConnectionPool::instance().clear();
 }
 
 asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::getAsync(

@@ -54,6 +54,8 @@ models:
     connect_timeout: 30 # seconds 建立连接时的超时限制
     read_chunk_timeout: 30 # seconds 接收数据时，超过该时长`未收到新数据`时判断为响应超时，即相邻数据间隔应当小于该时长
     ssl_verify: true # 是否验证 TLS 证书；不指定时使用全局默认值
+    max_concurrent_connections: 5 # 可选，默认 5；该模型 API 端点的最大并发连接数（0 = 不限制）。
+                                 # LLM 请求启用 HTTP keep-alive 连接池，空闲连接复用，超过上限的并发请求排队等待
     model_context_max_token: 262144 # 模型支持的最大上下文 token 数；不指定时上下文压缩使用默认值 256k
     extra_api_config:
       stream: true
@@ -68,6 +70,8 @@ models:
     connect_timeout: 30 # seconds 建立连接时的超时限制
     read_chunk_timeout: 30 # seconds 接收数据时，超过该时长`未收到新数据`时判断为响应超时，即相邻数据间隔应当小于该时长
     ssl_verify: true # 是否验证 TLS 证书；不指定时使用全局默认值
+    max_concurrent_connections: 5 # 可选，默认 5；该模型 API 端点的最大并发连接数（0 = 不限制）。
+                                 # LLM 请求启用 HTTP keep-alive 连接池，空闲连接复用，超过上限的并发请求排队等待
     model_context_max_token: 262144 # 模型支持的最大上下文 token 数；不指定时上下文压缩使用默认值 256k
     extra_api_config:
       stream: true

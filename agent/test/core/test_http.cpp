@@ -1704,6 +1704,291 @@ asio::awaitable<void> test_http_client_dns_timeout() {
     co_return;
 }
 
+/// 模拟"响应 keep-alive 但服务端随后立即关闭连接"的场景 (如网关空闲回收):
+/// 每个连接只服务一个请求, 响应携带 keep-alive 头, 处理完立即关闭。
+/// 客户端会把连接放回池, 下次复用该连接时发现已被关闭, 触发自动重试。
+class OneShotKeepAliveServer {
+public:
+
+    std::thread              thread;
+    uint16_t                 boundPort = 0;
+    std::atomic<bool>        stopped{false};
+    std::atomic<int>         connections{0};
+
+private:
+
+    asio::io_context                         ioCtx;
+    std::unique_ptr<asio::ip::tcp::acceptor> acceptor;
+    asio::ip::tcp::endpoint                  ep;
+
+public:
+
+    void start() {
+        acceptor = std::make_unique<asio::ip::tcp::acceptor>(
+            ioCtx,
+            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0)
+        );
+        ep        = acceptor->local_endpoint();
+        boundPort = ep.port();
+
+        thread = std::thread([this]() {
+            while (!stopped.load()) {
+                neograph_asio_error_code ec;
+                asio::ip::tcp::socket    sock(ioCtx);
+                acceptor->accept(sock, ec);
+                if (ec) {
+                    break;
+                }
+                if (stopped.load()) {
+                    break;
+                }
+                ++connections;
+                handleConn(sock);
+            }
+        });
+    }
+
+    void stop() {
+        stopped.store(true);
+        if (acceptor) {
+            neograph_asio_error_code ec;
+            asio::ip::tcp::socket    dummy(ioCtx);
+            dummy.connect(ep, ec);
+            acceptor->close(ec);
+        }
+        if (thread.joinable()) {
+            thread.join();
+        }
+    }
+
+private:
+
+    void handleConn(asio::ip::tcp::socket& sock) {
+        namespace http = boost::beast::http;
+        neograph_asio_error_code ec;
+
+        boost::beast::flat_buffer        buf;
+        http::request<http::string_body> req;
+        http::read(sock, buf, req, ec);
+        if (ec) {
+            return;
+        }
+
+        // 响应显式声明 keep-alive (HTTP/1.1 默认), 但处理完立即关闭连接,
+        // 模拟服务端空闲回收 keep-alive 连接的行为
+        std::string resp = "HTTP/1.1 200 OK\r\n"
+                           "Content-Type: text/plain\r\n"
+                           "Content-Length: 5\r\n"
+                           "Connection: keep-alive\r\n"
+                           "\r\n"
+                           "hello";
+        asio::write(sock, asio::buffer(resp), ec);
+        sock.close(ec);
+    }
+};
+
+/// 连接池: keep-alive 连接复用 / 并发上限 / 失效连接自动重试 / SSE 复用
+asio::awaitable<void> test_http_client_connection_pool() {
+    using Server = HttpServer;
+
+    auto executor = co_await asio::this_coro::executor;
+
+    // 带可选延迟的响应 handler (制造并发排队场景)
+    auto strRespDelay = [](const char* ct, std::string body, int delayMs) {
+        return std::make_shared<Server::Handler>(
+            [ct, body = std::move(body), delayMs](
+                Server::Request&,
+                Server::Response& resp,
+                std::string_view
+            ) -> asio::awaitable<void> {
+                if (delayMs > 0) {
+                    auto ex = co_await asio::this_coro::executor;
+                    asio::steady_timer t(ex, std::chrono::milliseconds(delayMs));
+                    co_await t.async_wait(asio::use_awaitable);
+                }
+                resp.result(boost::beast::http::status::ok);
+                resp.set(boost::beast::http::field::content_type, ct);
+                resp.body() = std::move(body);
+                resp.prepare_payload();
+                co_return;
+            }
+        );
+    };
+
+    Server server({.address = "127.0.0.1", .port = 0, .ioThreads = 1});
+    server.router().add("/hello", 0, strRespDelay("text/plain", "hello world", 0));
+    server.router().add("/slow", 0, strRespDelay("text/plain", "slow", 400));
+
+    std::thread serverThread([&server]() {
+        server.start();
+    });
+    uint16_t    port = 0;
+    for (int i = 0; i < 100; ++i) {
+        port = server.port();
+        if (port != 0) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    if (port == 0) {
+        TEST_FAIL << "Server failed to start" << std::endl;
+        g_http_failed++;
+        server.stop();
+        serverThread.join();
+        co_return;
+    }
+
+    std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
+
+    HttpClient::RequestConfig poolCfg;
+    poolCfg.keepAlive = true;
+    poolCfg.maxConcurrentConnections = 5;
+
+    // 1) keepAlive=false (默认): 不启用连接池, 池统计保持全 0
+    {
+        HttpClient::clearConnectionPool();
+        for (int i = 0; i < 2; ++i) {
+            auto resp = co_await HttpClient::getAsync(baseUrl + "/hello");
+            XX_TEST_EXPECT_HAS_VALUE(resp);
+        }
+        auto s = HttpClient::poolStats(baseUrl);
+        XX_TEST_EXPECT_EQ(s.created, size_t{0});
+        XX_TEST_EXPECT_EQ(s.reused, size_t{0});
+        XX_TEST_EXPECT_EQ(s.idle, size_t{0});
+    }
+
+    // 2) keepAlive=true: 连续 3 次请求复用同一条连接 (created==1, reused==2)
+    {
+        HttpClient::clearConnectionPool();
+        for (int i = 0; i < 3; ++i) {
+            auto resp = co_await HttpClient::getAsync(baseUrl + "/hello", {}, poolCfg);
+            XX_TEST_EXPECT_HAS_VALUE(resp);
+            if (resp.has_value()) {
+                XX_TEST_EXPECT_EQ(resp->status, 200);
+                XX_TEST_EXPECT_EQ(resp->body, "hello world");
+                XX_TEST_EXPECT_TRUE(resp->keepAlive);
+            }
+        }
+        auto s = HttpClient::poolStats(baseUrl);
+        XX_TEST_EXPECT_EQ(s.created, size_t{1});
+        XX_TEST_EXPECT_EQ(s.reused, size_t{2});
+        XX_TEST_EXPECT_EQ(s.idle, size_t{1});
+        XX_TEST_EXPECT_EQ(s.peakActive, size_t{1});
+    }
+
+    // 3) 并发上限: maxConcurrentConnections=2, 5 个并发慢请求,
+    //    峰值并发连接数不得超过 2, 全部请求成功
+    {
+        HttpClient::clearConnectionPool();
+        HttpClient::RequestConfig cfg;
+        cfg.keepAlive = true;
+        cfg.maxConcurrentConnections = 2;
+
+        // 记录基线 (同一端点在测试 2 已产生统计), 用增量断言本测试的新建数
+        auto base = HttpClient::poolStats(baseUrl);
+
+        std::atomic<int> ok{0};
+        auto run = [&]() -> asio::awaitable<void> {
+            auto resp = co_await HttpClient::getAsync(baseUrl + "/slow", {}, cfg);
+            if (resp.has_value() && resp->status == 200 && resp->body == "slow") {
+                ++ok;
+            }
+        };
+        for (int i = 0; i < 5; ++i) {
+            asio::co_spawn(executor, run, asio::detached);
+        }
+        asio::steady_timer poll(executor);
+        while (ok.load() < 5) {
+            poll.expires_after(std::chrono::milliseconds(10));
+            co_await poll.async_wait(asio::use_awaitable);
+        }
+        auto s = HttpClient::poolStats(baseUrl);
+        XX_TEST_EXPECT_EQ(ok.load(), 5);
+        XX_TEST_EXPECT_EQ(s.peakActive, size_t{2});           // 历史峰值受限于上限
+        XX_TEST_EXPECT_EQ(s.created - base.created, size_t{2}); // 本次仅新建 2 条
+        XX_TEST_EXPECT_TRUE(s.queuedWaits > base.queuedWaits);  // 第 3 个请求开始必须排队
+    }
+
+    // 4) 失效连接自动重试: 服务端响应 keep-alive 但立即关闭 (模拟空闲回收),
+    //    第二次请求复用失败后自动用新连接重试, 请求仍成功
+    {
+        HttpClient::clearConnectionPool();
+        OneShotKeepAliveServer srv;
+        srv.start();
+        std::string oneShotUrl = "http://127.0.0.1:" + std::to_string(srv.boundPort) + "/";
+
+        // 第一次: 新连接, 响应 keep-alive → 放回池
+        auto resp1 = co_await HttpClient::getAsync(oneShotUrl, {}, poolCfg);
+        XX_TEST_EXPECT_HAS_VALUE(resp1);
+        if (resp1.has_value()) {
+            XX_TEST_EXPECT_EQ(resp1->body, "hello");
+            XX_TEST_EXPECT_TRUE(resp1->keepAlive);
+        }
+        // 第二次: 复用池中连接 → 服务端已关闭 → 自动重试新连接 → 成功
+        auto resp2 = co_await HttpClient::getAsync(oneShotUrl, {}, poolCfg);
+        XX_TEST_EXPECT_HAS_VALUE(resp2);
+        if (resp2.has_value()) {
+            XX_TEST_EXPECT_EQ(resp2->body, "hello");
+        }
+        auto s = HttpClient::poolStats(oneShotUrl);
+        XX_TEST_EXPECT_EQ(s.created, size_t{2}); // 1 次新建 + 1 次重试新建
+        XX_TEST_EXPECT_EQ(s.reused, size_t{1});  // 复用 1 次 (失败)
+        XX_TEST_EXPECT_EQ(srv.connections.load(), 2);
+
+        srv.stop();
+    }
+
+    // 5) SSE 复用与失效重试: 第一次 SSE 完整结束后连接放回池 (服务端 keep-alive),
+    //    第二次 SSE 复用失败 → 自动重试新连接 → 数据完整送达
+    {
+        HttpClient::clearConnectionPool();
+        SseTestServer srv;
+        srv.mode   = SseTestServer::Mode::Complete;
+        srv.events = {"data: one\n\n", "data: two\n\n"};
+        srv.start();
+        std::string sseUrl = "http://127.0.0.1:" + std::to_string(srv.boundPort) + "/sse";
+
+        HttpClient::RequestConfig cfg;
+        cfg.keepAlive = true;
+        cfg.maxConcurrentConnections = 5;
+        cfg.connectTimeout = std::chrono::seconds{5};
+        cfg.readChunkTimeout = std::chrono::seconds{5};
+
+        for (int i = 0; i < 2; ++i) {
+            std::string received;
+            bool        threw = false;
+            try {
+                co_await HttpClient::requestSseAsync(
+                    "POST",
+                    sseUrl,
+                    "{}",
+                    "application/json",
+                    {},
+                    cfg,
+                    [&](std::string_view chunk) -> bool {
+                        received += chunk;
+                        return false;
+                    }
+                );
+            } catch (const std::exception& e) {
+                threw = true;
+                TEST_FAIL << "sse pool retry case " << i << " threw: " << e.what() << std::endl;
+            }
+            XX_TEST_EXPECT_FALSE(threw);
+            XX_TEST_EXPECT_EQ(received, "data: one\n\ndata: two\n\n");
+        }
+        auto s = HttpClient::poolStats(sseUrl);
+        XX_TEST_EXPECT_EQ(s.created, size_t{2}); // 1 次新建 + 1 次重试新建
+        XX_TEST_EXPECT_EQ(s.reused, size_t{1});  // 复用 1 次 (失败后重试)
+
+        srv.stop();
+    }
+
+    HttpClient::clearConnectionPool();
+    server.stop();
+    serverThread.join();
+}
+
 asio::awaitable<TestResult> run_http_client_tests() {
     test_http_client_unit();
     test_http_server_unit();
@@ -1712,6 +1997,7 @@ asio::awaitable<TestResult> run_http_client_tests() {
     co_await test_http_server_expect_100_continue();
     co_await test_http_server_absolute_form_target();
     co_await test_http_client_sse_interruption();
+    co_await test_http_client_connection_pool();
     co_await test_http_client_dns_timeout();
     co_return TestResult{g_http_passed, g_http_failed};
 }

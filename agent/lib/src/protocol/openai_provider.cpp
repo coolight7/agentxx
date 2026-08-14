@@ -478,9 +478,11 @@ asio::awaitable<neograph::ChatCompletion>
         "application/json",
         headers,
         HttpClient::RequestConfig{
-            .connectTimeout   = std::chrono::seconds{config_.connectTimeoutSeconds},
-            .readChunkTimeout = std::chrono::seconds{config_.readChunkTimeoutSeconds},
-            .sslVerify        = config_.sslVerify,
+            .connectTimeout            = std::chrono::seconds{config_.connectTimeoutSeconds},
+            .readChunkTimeout          = std::chrono::seconds{config_.readChunkTimeoutSeconds},
+            .sslVerify                 = config_.sslVerify,
+            .keepAlive                 = true,
+            .maxConcurrentConnections  = config_.maxConcurrentConnections,
         }
     );
 
@@ -591,9 +593,11 @@ asio::awaitable<neograph::ChatCompletion>
         "application/json",
         headers,
         HttpClient::RequestConfig{
-            .connectTimeout   = std::chrono::seconds{config_.connectTimeoutSeconds},
-            .readChunkTimeout = std::chrono::seconds{config_.readChunkTimeoutSeconds},
-            .sslVerify        = config_.sslVerify,
+            .connectTimeout            = std::chrono::seconds{config_.connectTimeoutSeconds},
+            .readChunkTimeout          = std::chrono::seconds{config_.readChunkTimeoutSeconds},
+            .sslVerify                 = config_.sslVerify,
+            .keepAlive                 = true,
+            .maxConcurrentConnections  = config_.maxConcurrentConnections,
         }
     );
 
@@ -749,9 +753,11 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStream(
                 "application/json",
                 headers,
                 HttpClient::RequestConfig{
-                    .connectTimeout   = std::chrono::seconds{config_.connectTimeoutSeconds},
-                    .readChunkTimeout = std::chrono::seconds{config_.readChunkTimeoutSeconds},
-                    .sslVerify        = config_.sslVerify,
+                    .connectTimeout           = std::chrono::seconds{config_.connectTimeoutSeconds},
+                    .readChunkTimeout         = std::chrono::seconds{config_.readChunkTimeoutSeconds},
+                    .sslVerify                = config_.sslVerify,
+                    .keepAlive                = true,
+                    .maxConcurrentConnections = config_.maxConcurrentConnections,
                 },
                 // 返回 true 通知 http 层流已结束 (收到 [DONE]): 立即断开连接停止读取,
                 // 避免对端 keep-alive 不关闭时白等 readChunkTimeout
@@ -875,9 +881,11 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStreamResponses(
                 "application/json",
                 headers,
                 HttpClient::RequestConfig{
-                    .connectTimeout   = std::chrono::seconds{config_.connectTimeoutSeconds},
-                    .readChunkTimeout = std::chrono::seconds{config_.readChunkTimeoutSeconds},
-                    .sslVerify        = config_.sslVerify,
+                    .connectTimeout           = std::chrono::seconds{config_.connectTimeoutSeconds},
+                    .readChunkTimeout         = std::chrono::seconds{config_.readChunkTimeoutSeconds},
+                    .sslVerify                = config_.sslVerify,
+                    .keepAlive                = true,
+                    .maxConcurrentConnections = config_.maxConcurrentConnections,
                 },
                 // 返回 true 通知 http 层流已结束 (收到 response.completed): 立即断开
                 [&](std::string_view chunk) -> bool {
