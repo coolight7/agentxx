@@ -1,6 +1,7 @@
 #pragma once
 
 #include "agentxx/agent/conversation_types.h"
+#include "agentxx/expand/get_cpu_gpu_use.h"
 #include "neograph/json.h"
 #include <cstdint>
 #include <optional>
@@ -30,6 +31,9 @@ struct MsgType {
     inline static constexpr std::string_view ListSessions = "list_sessions";
     /// 客户端请求切换当前连接的会话 (重新绑定 threadId 并回推历史)
     inline static constexpr std::string_view SwitchSession = "switch_session";
+    /// 客户端周期请求系统资源占用 (CPU/内存/GPU): 由 agent-server 侧采集后回传
+    /// (TUI 与 agent-server 可分属不同进程/主机, 采集迁移到 server 侧执行)
+    inline static constexpr std::string_view GetSystemUsage = "get_system_usage";
 
     // ===== Server -> Client =====
     inline static constexpr std::string_view HelloAck         = "hello_ack";
@@ -48,6 +52,8 @@ struct MsgType {
     inline static constexpr std::string_view ContextMessages     = "context_messages";
     /// 服务端持久化会话列表响应 (ListSessions 的结果)
     inline static constexpr std::string_view SessionList = "session_list";
+    /// 服务端系统资源占用响应 (GetSystemUsage 的结果)
+    inline static constexpr std::string_view SystemUsage = "system_usage";
     inline static constexpr std::string_view Pong        = "pong";
     /// 服务端 CodeGraph 索引进度推送 (节流 ≥3s)
     inline static constexpr std::string_view CodegraphProgress = "codegraph_progress";
@@ -628,14 +634,80 @@ inline WireSwitchSession switchSessionFromJson(const neograph::json& j) {
     return m;
 }
 
+// ---------------------------------------------------------------------------
+// 系统资源占用 <-> json (TUI 周期请求, 由 agent-server 侧采集后回传)
+// ---------------------------------------------------------------------------
+
+inline neograph::json cpuGpuUsageToJson(const agentxx::expand::CpuGpuUsage& u) {
+    neograph::json j    = neograph::json::object();
+    j["cpu"]            = u.cpuUsagePercent;
+    j["mem_total_mb"]   = u.memory.totalPhysicalMB;
+    j["mem_used_mb"]    = u.memory.usedPhysicalMB;
+    j["mem_percent"]    = u.memory.usagePercent;
+    neograph::json gpus = neograph::json::array();
+    for (const auto& g : u.gpus) {
+        neograph::json gj            = neograph::json::object();
+        gj["name"]                   = g.name;
+        gj["dedicated_vram_mb"]      = g.dedicatedVramMB;
+        gj["dedicated_vram_used_mb"] = g.dedicatedVramUsedMB;
+        gj["shared_vram_mb"]         = g.sharedVramMB;
+        gj["shared_vram_used_mb"]    = g.sharedVramUsedMB;
+        gj["usage_percent"]          = g.usagePercent;
+        gpus.push_back(std::move(gj));
+    }
+    j["gpus"] = std::move(gpus);
+    return j;
+}
+
+inline agentxx::expand::CpuGpuUsage cpuGpuUsageFromJson(const neograph::json& j) {
+    agentxx::expand::CpuGpuUsage u;
+    u.cpuUsagePercent        = j.value("cpu", 0.0);
+    u.memory.totalPhysicalMB = j.value("mem_total_mb", uint64_t{0});
+    u.memory.usedPhysicalMB  = j.value("mem_used_mb", uint64_t{0});
+    u.memory.usagePercent    = j.value("mem_percent", 0.0);
+    auto gpus                = j.value("gpus", neograph::json::array());
+    if (gpus.is_array()) {
+        for (const auto& g : gpus) {
+            agentxx::expand::GpuInfo info;
+            info.name                = g.value("name", std::string{});
+            info.dedicatedVramMB     = g.value("dedicated_vram_mb", uint64_t{0});
+            info.dedicatedVramUsedMB = g.value("dedicated_vram_used_mb", uint64_t{0});
+            info.sharedVramMB        = g.value("shared_vram_mb", uint64_t{0});
+            info.sharedVramUsedMB    = g.value("shared_vram_used_mb", uint64_t{0});
+            info.usagePercent        = g.value("usage_percent", 0.0);
+            u.gpus.push_back(std::move(info));
+        }
+    }
+    return u;
+}
+
+/// 客户端请求系统资源占用 (Client -> Server): 无载荷
+inline neograph::json makeGetSystemUsage() {
+    return neograph::json{
+        {"type", MsgType::GetSystemUsage},
+    };
+}
+
+/// 服务端系统资源占用响应 (Server -> Client)
+inline neograph::json makeSystemUsage(const agentxx::expand::CpuGpuUsage& usage) {
+    neograph::json j = neograph::json::object();
+    j["type"]        = MsgType::SystemUsage;
+    j["usage"]       = cpuGpuUsageToJson(usage);
+    return j;
+}
+
+inline agentxx::expand::CpuGpuUsage systemUsageFromJson(const neograph::json& j) {
+    return cpuGpuUsageFromJson(j.value("usage", neograph::json::object()));
+}
+
 /// 服务端 CodeGraph 索引进度推送 (Server -> Client)
 inline neograph::json makeCodegraphProgress(const WireCodegraphProgress& p) {
     neograph::json j = {
         {"type",      MsgType::CodegraphProgress},
-        {"available", p.available              },
-        {"indexing",  p.indexing               },
-        {"processed", p.processed              },
-        {"total",     p.total                  },
+        {"available", p.available               },
+        {"indexing",  p.indexing                },
+        {"processed", p.processed               },
+        {"total",     p.total                   },
     };
     if (!p.currentFile.empty()) {
         j["current_file"] = p.currentFile;
@@ -645,10 +717,10 @@ inline neograph::json makeCodegraphProgress(const WireCodegraphProgress& p) {
 
 inline WireCodegraphProgress codegraphProgressFromJson(const neograph::json& j) {
     WireCodegraphProgress p;
-    p.available  = j.value("available", false);
-    p.indexing   = j.value("indexing", false);
-    p.processed  = j.value("processed", 0);
-    p.total      = j.value("total", 0);
+    p.available   = j.value("available", false);
+    p.indexing    = j.value("indexing", false);
+    p.processed   = j.value("processed", 0);
+    p.total       = j.value("total", 0);
     p.currentFile = j.value("current_file", std::string{});
     return p;
 }
