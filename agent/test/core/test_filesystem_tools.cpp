@@ -395,40 +395,6 @@ asio::awaitable<void>
 }
 
 asio::awaitable<void>
-    test_read_binary_file_get_definition(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
-    auto tool = agentxx::tools::FilesystemReadBinaryFileTool{agentContext};
-    auto def  = tool.get_definition();
-    if (def.name == "agentxx_filesystem_read_binary_file") {
-        std::cout << "[PASS] FilesystemReadBinaryFileTool::get_definition() name correct"
-                  << std::endl;
-    } else {
-        g_fs_failed++;
-        TEST_FAIL << "FilesystemReadBinaryFileTool::get_definition() name "
-                     "incorrect"
-                  << std::endl;
-    }
-    co_return;
-}
-
-asio::awaitable<void>
-    test_read_binary_file_full(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
-    auto tool = agentxx::tools::FilesystemReadBinaryFileTool{agentContext};
-    auto args = neograph::json{
-        {"path", testDir + "/test1.txt"}
-    };
-    auto result = co_await tool.execute_async(args);
-    if (result.find("base64_data") != std::string::npos
-        && result.find("bytes_read_len") != std::string::npos) {
-        std::cout << "[PASS] FilesystemReadBinaryFileTool returns base64 encoded data" << std::endl;
-    } else {
-        g_fs_failed++;
-        TEST_FAIL << "FilesystemReadBinaryFileTool binary read failed, got: " << result
-                  << std::endl;
-    }
-    co_return;
-}
-
-asio::awaitable<void>
     test_write_file_get_definition(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FilesystemWriteFileTool{agentContext};
     auto def  = tool.get_definition();
@@ -1405,9 +1371,6 @@ asio::awaitable<TestResult>
     co_await run(test_read_text_file_relative_path);
     co_await run(test_read_text_file_limit);
     co_await run(test_read_text_file_offset_and_limit);
-
-    co_await run(test_read_binary_file_get_definition);
-    co_await run(test_read_binary_file_full);
 
     co_await run(test_write_file_get_definition);
     co_await run(test_write_file_empty_path);

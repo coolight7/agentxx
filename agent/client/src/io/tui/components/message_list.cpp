@@ -884,9 +884,6 @@ static std::string buildToolHeaderSummary(std::string_view toolName, std::string
     if (toolName == "agentxx_filesystem_read_text_file") {
         return make("Read", range("line_offset", "line_limit"), getStr("path"));
     }
-    if (toolName == "agentxx_filesystem_read_binary_file") {
-        return make("ReadBin", range("byte_offset", "byte_limit"), getStr("path"));
-    }
     if (toolName == "agentxx_filesystem_write_file") {
         return make("Write", {}, getStr("path"));
     }

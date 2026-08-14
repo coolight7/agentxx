@@ -3,7 +3,7 @@
 // 覆盖已知工具头部渲染为 "动词 · 参数摘要" 的场景, 以及未知工具/参数
 // 解析失败回退显示原始 toolName 的降级路径:
 // - filesystem 系列: list / read_text_file (含 [offset, limit] 区间) /
-//   read_binary_file / write_file / edit_text_file / glob / grep
+//   write_file / edit_text_file / glob / grep
 // - web_search 系列: web_search / web_fetch_url / web_fetch_url_markdown
 // - 降级: 未知工具名 / 非 JSON 参数 -> 头部仍显示原始 toolName
 #include "test_tui_tool_header.h"
@@ -99,10 +99,6 @@ void testTuiToolHeaderFilesystem() {
     // read_text_file: 仅 offset
     f.pushTool("agentxx_filesystem_read_text_file", R"({"path":"/home/d.cpp","line_offset":10})");
     XX_TEST_EXPECT_TRUE(f.render().find("Read · [10] /home/d.cpp") != std::string::npos);
-
-    // read_binary_file
-    f.pushTool("agentxx_filesystem_read_binary_file", R"({"path":"/bin/xx","byte_offset":128,"byte_limit":256})");
-    XX_TEST_EXPECT_TRUE(f.render().find("ReadBin · [128, 256] /bin/xx") != std::string::npos);
 
     // list
     f.pushTool("agentxx_filesystem_list", R"({"path":"/home"})");

@@ -338,7 +338,6 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
     /// Filesystem
     tools.push_back(std::make_unique<agentxx::tools::FileSystemListTool>(agentContext));
     tools.push_back(std::make_unique<agentxx::tools::FilesystemReadTextFileTool>(agentContext));
-    tools.push_back(std::make_unique<agentxx::tools::FilesystemReadBinaryFileTool>(agentContext));
     tools.push_back(std::make_unique<agentxx::tools::FilesystemWriteFileTool>(agentContext));
     tools.push_back(std::make_unique<agentxx::tools::FilesystemEditTextFileTool>(agentContext));
     tools.push_back(std::make_unique<agentxx::tools::FilesystemGlobTool>(agentContext));

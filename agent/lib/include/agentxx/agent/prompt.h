@@ -437,23 +437,6 @@ Supports offset/limit for reading portions of large files.)",
           },
       },
       {
-          "agentxx_filesystem_read_binary_file",
-          ToolPrompt{
-              .depict =
-                  R"(Read a binary file and return its contents as a base64-encoded string.
-Supports byte offset/limit for reading portions of large files.)",
-              .args =
-                  {
-                      {"path",
-                       R"(Path to the file. Relative paths are resolved against the current working directory; `~` expands to the home directory.)"},
-                      {"byte_offset",
-                       R"(Starting byte offset. Default `0` (from beginning). Returns an error if offset exceeds file size.)"},
-                      {"byte_limit",
-                       R"(Maximum number of bytes to read. Range: [1, ∞]. Default `null` (read all). Values exceeding file size are allowed without error.)"},
-                  },
-          },
-      },
-      {
           "agentxx_filesystem_write_file",
           ToolPrompt{
               .depict = "Create a new file or overwrite an existing file with the given content.",
@@ -465,10 +448,6 @@ Supports byte offset/limit for reading portions of large files.)",
                       {"overwrite", R"(Default `false`. Controls write behavior:
 `true`: Create the file if it doesn't exist; overwrite if it does.
 `false`: Create a new file only; returns an error if the file already exists.)"},
-                      {"is_binary",
-                       R"(Default `false`. Controls content encoding:
-`true`: `content` must be a base64-encoded string; decoded and written as raw bytes.
-`false`: `content` is treated as plain text and written directly.)"},
                   },
           },
       },
