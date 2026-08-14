@@ -1,9 +1,29 @@
 #include "agentxx/protocol/anthropic_provider.h"
 #include "agentxx/protocol/openai_provider.h"
 #include "agentxx/util/exception.h"
+#include "fmt/format.h"
+#include <chrono>
+#include <random>
 
 namespace agentxx {
 namespace server {
+
+namespace {
+
+// 生成唯一的 tool_call id: 毫秒时间戳 + 32 位随机数 (与 openai_provider 同模式)
+// - 无需与已有 id 比较, 碰撞概率 ~2^-32 (同一毫秒内), 跨毫秒必然不同
+std::string makeUniqueToolCallId(size_t i) {
+    thread_local std::mt19937_64 rng{
+        static_cast<uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count())
+    };
+    const auto ts = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::system_clock::now().time_since_epoch()
+    )
+                        .count();
+    return fmt::format("call_{}_{}_{:08x}", ts, i, static_cast<uint32_t>(rng()));
+}
+
+} // namespace
 
 std::unique_ptr<AnthropicProvider>
     AnthropicProvider::create(const agentxx::agent::ModelConfig& config) {
@@ -136,8 +156,7 @@ std::pair<std::string, neograph::json> AnthropicProvider::convertMessages(
             }
             j["content"] = std::move(content_arr);
             arr.push_back(std::move(j));
-        } else if (sendThinking && msg.role == "assistant"
-                   && (!msg.reasoning_content.empty() || hasThinkingBlocks(msg))) {
+        } else if (sendThinking && msg.role == "assistant" && (!msg.reasoning_content.empty() || hasThinkingBlocks(msg))) {
             neograph::json j;
             j["role"]                  = "assistant";
             neograph::json content_arr = neograph::json::array();
@@ -372,11 +391,11 @@ asio::awaitable<neograph::ChatCompletion>
         "application/json",
         headers,
         HttpClient::RequestConfig{
-            .connectTimeout            = std::chrono::seconds{config_.connectTimeoutSeconds},
-            .readChunkTimeout          = std::chrono::seconds{config_.readChunkTimeoutSeconds},
-            .sslVerify                 = config_.sslVerify,
-            .keepAlive                 = true,
-            .maxConcurrentConnections  = config_.maxConcurrentConnections,
+            .connectTimeout           = std::chrono::seconds{config_.connectTimeoutSeconds},
+            .readChunkTimeout         = std::chrono::seconds{config_.readChunkTimeoutSeconds},
+            .sslVerify                = config_.sslVerify,
+            .keepAlive                = true,
+            .maxConcurrentConnections = config_.maxConcurrentConnections,
         }
     );
 
@@ -445,10 +464,10 @@ asio::awaitable<neograph::ChatCompletion> AnthropicProvider::doStream(
                 "application/json",
                 headers,
                 HttpClient::RequestConfig{
-                    .connectTimeout           = std::chrono::seconds{config_.connectTimeoutSeconds},
-                    .readChunkTimeout         = std::chrono::seconds{config_.readChunkTimeoutSeconds},
-                    .sslVerify                = config_.sslVerify,
-                    .keepAlive                = true,
+                    .connectTimeout   = std::chrono::seconds{config_.connectTimeoutSeconds},
+                    .readChunkTimeout = std::chrono::seconds{config_.readChunkTimeoutSeconds},
+                    .sslVerify        = config_.sslVerify,
+                    .keepAlive        = true,
                     .maxConcurrentConnections = config_.maxConcurrentConnections,
                 },
                 // 返回 true 通知 http 层流已结束 (收到 message_stop): 立即断开连接停止读取,
@@ -517,9 +536,11 @@ asio::awaitable<neograph::ChatCompletion> AnthropicProvider::doStream(
 
     completion.message.content           = fullContent;
     completion.message.reasoning_content = fullThinking;
+    // 回填缺失的 tool_call id: 时间戳+随机数生成, 天然唯一, 无需与已有 id 比较
+    size_t index = 0;
     for (auto& [idx, tc] : tcMap) {
         if (tc.id.empty()) {
-            tc.id = fmt::format("call_{}", idx);
+            tc.id = makeUniqueToolCallId(++index);
         }
         completion.message.tool_calls.push_back(std::move(tc));
     }

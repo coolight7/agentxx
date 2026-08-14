@@ -19,6 +19,7 @@
 #include <cstdio>
 #include <iostream>
 #include <memory>
+#include <set>
 #include <thread>
 
 namespace agentxx {
@@ -87,6 +88,88 @@ void test_factory_and_name() {
         auto p    = server::OpenAIProvider::create_shared(mc);
         XX_TEST_EXPECT_TRUE(p != nullptr);
         XX_TEST_EXPECT_EQ(p->get_name(), "openai");
+    }
+}
+
+/// tool_calls 缺失 id 时用时间戳+随机数回填, 保证非空且不与 LLM 已返回的 id 重复
+/// (旧逻辑按下标回填 call_N, LLM 返回的 id 恰好为 call_N 形式时会生成重复 id)
+void test_fill_missing_tool_call_ids_unique() {
+    // 场景 1: 已有 id "call_1", 下标 1 缺失 -> 回填的 id 不能与已有 id 重复
+    {
+        neograph::ChatCompletion completion;
+        completion.message.role = "assistant";
+        completion.message.tool_calls.push_back(neograph::ToolCall{
+            .id        = "call_1",
+            .name      = "get_weather",
+            .arguments = "{}",
+        });
+        completion.message.tool_calls.push_back(neograph::ToolCall{
+            .id        = "",
+            .name      = "get_time",
+            .arguments = "{}",
+        });
+        server::OpenAIProvider::fillMissingToolCallIds(completion);
+
+        XX_TEST_EXPECT_EQ(completion.message.tool_calls.size(), (size_t)2);
+        XX_TEST_EXPECT_EQ(completion.message.tool_calls[0].id, "call_1");
+        XX_TEST_EXPECT_TRUE(!completion.message.tool_calls[1].id.empty());
+        // 与已有 id 不同
+        XX_TEST_EXPECT_TRUE(completion.message.tool_calls[1].id != completion.message.tool_calls[0].id);
+        // 格式为 call_<时间戳>_<随机数>
+        XX_TEST_EXPECT_TRUE(completion.message.tool_calls[1].id.rfind("call_", 0) == 0);
+        XX_TEST_EXPECT_TRUE(completion.message.tool_calls[1].id.find('_', 5) != std::string::npos);
+    }
+
+    // 场景 2: 已有 id 为 call_N / call_N_1 形式, 回填的 id 依然不冲突
+    {
+        neograph::ChatCompletion completion;
+        completion.message.role = "assistant";
+        completion.message.tool_calls.push_back(neograph::ToolCall{
+            .id        = "call_2",
+            .name      = "get_weather",
+            .arguments = "{}",
+        });
+        completion.message.tool_calls.push_back(neograph::ToolCall{
+            .id        = "call_2_1",
+            .name      = "get_time",
+            .arguments = "{}",
+        });
+        completion.message.tool_calls.push_back(neograph::ToolCall{
+            .id        = "",
+            .name      = "get_date",
+            .arguments = "{}",
+        });
+        server::OpenAIProvider::fillMissingToolCallIds(completion);
+
+        XX_TEST_EXPECT_TRUE(!completion.message.tool_calls[2].id.empty());
+        XX_TEST_EXPECT_TRUE(completion.message.tool_calls[2].id != "call_2");
+        XX_TEST_EXPECT_TRUE(completion.message.tool_calls[2].id != "call_2_1");
+    }
+
+    // 场景 3: 多个缺失 id 时整体唯一
+    {
+        neograph::ChatCompletion completion;
+        completion.message.role = "assistant";
+        completion.message.tool_calls.push_back(neograph::ToolCall{
+            .id        = "call_0",
+            .name      = "get_weather",
+            .arguments = "{}",
+        });
+        for (size_t i = 1; i <= 3; ++i) {
+            completion.message.tool_calls.push_back(neograph::ToolCall{
+                .id        = "",
+                .name      = "get_time",
+                .arguments = "{}",
+            });
+        }
+        server::OpenAIProvider::fillMissingToolCallIds(completion);
+
+        std::set<std::string> ids;
+        for (const auto& tc : completion.message.tool_calls) {
+            XX_TEST_EXPECT_TRUE(!tc.id.empty());
+            ids.insert(tc.id);
+        }
+        XX_TEST_EXPECT_EQ(ids.size(), completion.message.tool_calls.size());
     }
 }
 
@@ -1329,8 +1412,9 @@ asio::awaitable<void>
             XX_TEST_EXPECT_TRUE(
                 result.message.tool_calls[0].arguments.find("Beijing") != std::string::npos
             );
-            // 兼容性增强: 非流式路径缺失 id 时同样回填 "call_N" (与流式路径一致)
-            XX_TEST_EXPECT_EQ(result.message.tool_calls[0].id, "call_0");
+            // 兼容性增强: 非流式路径缺失 id 时同样回填 (时间戳+随机数, 与流式路径一致)
+            XX_TEST_EXPECT_TRUE(!result.message.tool_calls[0].id.empty());
+            XX_TEST_EXPECT_TRUE(result.message.tool_calls[0].id.rfind("call_", 0) == 0);
         }
     } catch (const std::exception& e) {
         XX_TEST_FAILED++;
@@ -1392,10 +1476,9 @@ asio::awaitable<void> test_streaming_tool_call_missing_id(MockOpenAIServer& mock
             XX_TEST_EXPECT_TRUE(
                 result.message.tool_calls[0].arguments.find("Shanghai") != std::string::npos
             );
-            // 流式路径: doStream 结束后有 fallback:
-            // if (tc.id.empty()) tc.id = "call_" + std::to_string(idx);
-            // 缺少 id 时应生成 "call_0"
-            XX_TEST_EXPECT_EQ(result.message.tool_calls[0].id, "call_0");
+            // 流式路径: doStream 结束后 fallback 回填缺失 id (时间戳+随机数)
+            XX_TEST_EXPECT_TRUE(!result.message.tool_calls[0].id.empty());
+            XX_TEST_EXPECT_TRUE(result.message.tool_calls[0].id.rfind("call_", 0) == 0);
         }
     } catch (const std::exception& e) {
         XX_TEST_FAILED++;
@@ -3833,6 +3916,7 @@ asio::awaitable<TestResult> run_openai_provider_tests() {
 
     // Unit tests (no server needed)
     test_factory_and_name();
+    test_fill_missing_tool_call_ids_unique();
     test_config_defaults();
     test_extra_body_with_custom_params();
     test_openai_sse_parsing_edge_cases();

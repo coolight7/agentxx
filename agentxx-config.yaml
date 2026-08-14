@@ -73,7 +73,7 @@ models:
     api_path: "/chat/completions" # 可选；自定义路径，默认自动根据 [type] 选择
     api_key: "${OPENAI_API_KEY}" # 可选；如果不需要验证，可以填 EMPTY 等任意字符串
     model_name: "qwen3.8-max-preview" # 可选；使用的模型名称，建议填写
-    send_thinking: false # 可选，默认 false；是否发送 thinking，部分模型要求发送才能正常使用
+    send_thinking: true # 可选，默认 false；是否发送 thinking，部分模型要求发送才能正常使用
     connect_timeout: 30 # seconds 建立连接时的超时限制
     read_chunk_timeout: 30 # seconds 接收数据时，超过该时长`未收到新数据`时判断为响应超时，即相邻数据间隔应当小于该时长
     ssl_verify: true # 是否验证 TLS 证书；不指定时使用全局默认值
@@ -82,6 +82,7 @@ models:
     model_context_max_token: 262144 # 模型支持的最大上下文 token 数；不指定时上下文压缩使用默认值 256k
     extra_api_config:
       stream: true
+      preserve_thinking: true  # 请求时保留所有思考块，启用时应当同步指定 [send_thinking] = true
 
   - name: openai_response_full_example
     type: "openai-responses" # 必选；模型类型，根据 api 类型选择 openai / openai-responses / anthropic
@@ -89,7 +90,7 @@ models:
     api_path: "/responses" # 可选；自定义路径，默认自动根据 [type] 选择
     api_key: "${OPENAI_API_KEY}" # 可选；如果不需要验证，可以填 EMPTY 等任意字符串
     model_name: "qwen3.8-max-preview" # 可选；使用的模型名称，建议填写
-    send_thinking: false # 可选，默认 false；是否发送 thinking，部分模型要求发送才能正常使用
+    send_thinking: true # 可选，默认 false；是否发送 thinking，部分模型要求发送才能正常使用
     connect_timeout: 30 # seconds 建立连接时的超时限制
     read_chunk_timeout: 30 # seconds 接收数据时，超过该时长`未收到新数据`时判断为响应超时，即相邻数据间隔应当小于该时长
     ssl_verify: true # 是否验证 TLS 证书；不指定时使用全局默认值
@@ -104,15 +105,6 @@ models:
       reasoning:
         effort: high 
 
-  - name: qwenai-qwen3.8-max
-    type: "openai"
-    base_url: "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
-    api_key: "${QWENAI_API_KEY}"
-    model_name: "qwen3.8-max"
-    send_thinking: true
-    model_context_max_token: 1000000
-    extra_api_config:
-      stream: true
   - name: qwenai-deepseek-v4-flash-0731
     type: "openai"
     base_url: "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
@@ -133,14 +125,16 @@ models:
       reasoning:
         effort: max
       stream: true
+      preserve_thinking: true 
   - name: local
     type: "openai"
     base_url: "http://172.29.48.1:7070/v1"
     api_key: "EMPTY"
     model_name: "Agentxx"
-    model_context_max_token: 200000
+    model_context_max_token: 256000
     extra_api_config:
       stream: true
+      preserve_thinking: true 
 
   # ACP 服务模型
   - name: acp
