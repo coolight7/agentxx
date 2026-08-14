@@ -864,8 +864,8 @@ static std::string buildToolHeaderSummary(std::string_view toolName, std::string
 
     /// 字符串列表摘要: 最多展示 maxShow 项, 超出以 ", ..." 收尾
     auto joinList = [](const std::vector<std::string>& items, size_t maxShow = 2) -> std::string {
-        std::string        out;
-        const size_t       n = (items.size() < maxShow) ? items.size() : maxShow;
+        std::string  out;
+        const size_t n = (items.size() < maxShow) ? items.size() : maxShow;
         for (size_t i = 0; i < n; ++i) {
             if (i > 0) {
                 out += ", ";
@@ -1046,26 +1046,36 @@ Element MessageListComponent::buildMessageBlock(
             const bool finished = msg.tool && msg.tool->toolFinished;
             // TUI 特化: 已知工具头部渲染为 "动词 · 参数摘要"
             // (如 "Read · [0, 100] /path" / "Write · /path"), 未知工具回退原始 toolName
-            const std::string headerText = buildToolHeaderSummary(msg.tool->toolName, msg.text);
-            Elements          lines;
-            Elements          header;
-            header.push_back(
-                text(fmt::format(
-                    "{} [Tool] {} ",
-                    expanded ? "-" : "+",
-                    headerText.empty() ? msg.tool->toolName : headerText
-                ))
-                | color(theme.toolColor)
-            );
+            Elements lines;
+            Elements header;
+            {
+                header.push_back(
+                    text(fmt::format("{} [Tool] ", expanded ? "-" : "+")) | color(theme.toolColor)
+                );
+            }
             if (!expanded) {
+                // 折叠状态
                 if (!finished) {
                     header.push_back(text("running...") | color(theme.toolColor) | dim);
                 } else if (isEditTool) {
                     appendEditToolHeader(msg, header);
                 } else {
-                    header.push_back(
-                        text(oneLinePreview(msg.tool->toolResult)) | color(theme.toolColor) | dim
-                    );
+                    auto headerText = buildToolHeaderSummary(msg.tool->toolName, msg.text);
+                    if (headerText.empty()) {
+                        // 压缩渲染
+                        header.push_back(
+                            text(fmt::format(
+                                "{} {}",
+                                msg.tool->toolName,
+                                oneLinePreview(msg.tool->toolResult)
+                            ))
+                            | color(theme.toolColor) | dim
+                        );
+                    } else {
+                        header.push_back(
+                            text(std::move(headerText)) | color(theme.toolColor) | dim
+                        );
+                    }
                 }
             }
             lines.push_back(hbox(std::move(header)));
