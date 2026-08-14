@@ -44,20 +44,6 @@ public:
     asio::awaitable<std::string> execute_async(const neograph::json& arguments) override;
 };
 
-/// read
-class FilesystemReadBinaryFileTool : public XXToolBase {
-public:
-
-    FilesystemReadBinaryFileTool(std::weak_ptr<agentxx::agent::AgentContext> in_agentContext);
-
-    neograph::ChatTool get_definition() const override;
-
-    std::optional<agentxx::middleware::SummarizationToolHandle>
-        createSummarizationToolHandle() const override;
-
-    asio::awaitable<std::string> execute_async(const neograph::json& arguments) override;
-};
-
 /// write
 class FilesystemWriteFileTool : public XXToolBase {
 public:

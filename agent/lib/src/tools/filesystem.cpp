@@ -167,17 +167,13 @@ std::optional<std::string> _defFileReadGenerateKey(const neograph::json& args) {
     auto path        = toCurrentSystemAbsolutePath(args["path"].get<std::string>());
     auto line_offset = args.value<int64_t>("line_offset", -1);
     auto line_limit  = args.value<int64_t>("line_limit", -1);
-    auto byte_offset = args.value<int64_t>("byte_offset", -1);
-    auto byte_limit  = args.value<int64_t>("byte_limit", -1);
     auto recursive   = args.value<bool>("recursive", false);
     auto limit       = args.value<int64_t>("limit", 100);
     return fmt::format(
-        "filesystem:{}:lo={}:ll={}:bo={}:bl={}:r={}:l={}",
+        "filesystem:{}:lo={}:ll={}:r={}:l={}",
         path,
         line_offset,
         line_limit,
-        byte_offset,
-        byte_limit,
         recursive,
         limit
     );
@@ -639,236 +635,6 @@ asio::awaitable<std::string>
     }
 }
 
-FilesystemReadBinaryFileTool::FilesystemReadBinaryFileTool(
-    std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
-) :
-    XXToolBase("agentxx_filesystem_read_binary_file", in_agentContext, false, false) {}
-
-neograph::ChatTool FilesystemReadBinaryFileTool::get_definition() const {
-    auto        agentPtr = agentContext.lock();
-    const auto& prompt   = agentPtr->agentConfig->prompt.toolPrompt[get_name()];
-
-    return {
-        get_name(),
-        prompt.depict,
-        neograph::json{
-                       {"type", "object"},
-                       {
-                "properties",
-                {
-                    {
-                        "path",
-                        {
-                            {"type", "string"},
-                            {"description", prompt.getArg("path")},
-                        },
-                    },
-                    {
-                        "byte_offset",
-                        {
-                            {"type", "number"},
-                            {"description", prompt.getArg("byte_offset")},
-                        },
-                    },
-                    {
-                        "byte_limit",
-                        {
-                            {"type", "number"},
-                            {"description", prompt.getArg("byte_limit")},
-                        },
-                    },
-                },
-            }, {"required", neograph::json::array({"path"})},
-                       },
-    };
-}
-
-std::optional<agentxx::middleware::SummarizationToolHandle>
-    FilesystemReadBinaryFileTool::createSummarizationToolHandle() const {
-    return agentxx::middleware::SummarizationToolHandle{
-        .generateDeduplicationKey = _defFileReadGenerateKey,
-        .truncateRequest          = nullptr,
-        .truncateResponse         = _defTruncateToolcallResponse,
-    };
-}
-
-asio::awaitable<std::string>
-    FilesystemReadBinaryFileTool::execute_async(const neograph::json& arguments) {
-    auto filepath = toCurrentSystemAbsolutePath(arguments.value("path", std::string{}));
-    if (filepath.empty()) {
-        co_return R"([Error] Arg `path` is empty)";
-    }
-    auto systemCharsetFilePath = filepath;
-    agentxx::util::autoConvertToSystemPath(systemCharsetFilePath);
-    auto byte_offset = arguments.value<int64_t>("byte_offset", -1);
-    auto byte_limit  = arguments.value<int64_t>("byte_limit", -1);
-
-#if ASIO_HAS_FILE || BOOST_ASIO_HAS_FILE
-    {
-        auto currentIoCtx = co_await asio::this_coro::executor;
-
-        /// 异步读取文件
-        if (byte_offset >= 0 || byte_limit >= 0) {
-            asio::random_access_file stream{currentIoCtx};
-            neograph_asio_error_code errCode;
-            stream.open(systemCharsetFilePath, asio::random_access_file::read_only, errCode);
-            if (false == stream.is_open()) {
-                throw std::runtime_error{fmt::format(R"(Can not open file: {})", errCode.message())
-                };
-            }
-
-            // 读取部分文件
-            const size_t offset = (byte_offset >= 0) ? static_cast<size_t>(byte_offset) : 0;
-            const size_t limit  = (byte_limit >= 0) ? static_cast<size_t>(byte_limit)
-                                                    : std::numeric_limits<size_t>::max();
-
-            auto fileSize       = stream.size();
-            auto bytesAvailable = std::max((int64_t)fileSize - (int64_t)offset, (int64_t)0);
-            auto bytesRead      = std::min(
-                static_cast<std::streamsize>(limit),
-                static_cast<std::streamsize>(bytesAvailable)
-            );
-
-            // 没有数据可读
-            if (bytesRead <= 0) {
-                throw std::runtime_error{fmt::format(
-                    R"(Arg `byte_offset`({}) is out of range of file size({}).)",
-                    offset,
-                    static_cast<size_t>(fileSize)
-                )};
-            }
-
-            std::string result;
-            result.resize(bytesRead);
-            auto bytesReadLen = co_await asio::async_read_at(
-                stream,
-                offset,
-                asio::buffer(result, bytesRead),
-                asio::redirect_error(asio::use_awaitable, errCode)
-            );
-            if (errCode && errCode != asio::error::eof) {
-                throw std::system_error{errCode};
-            }
-            stream.close();
-            co_return neograph::json{
-                {"bytes_read_len", bytesReadLen                                                 },
-                {
-                 "base64_data",    agentxx::util::base64Encode(std::string_view{result}.substr(0, bytesReadLen)),
-                 },
-            }
-                .dump();
-        }
-
-        // 读取完整文件
-        asio::stream_file        stream{currentIoCtx};
-        neograph_asio_error_code errCode;
-        stream.open(systemCharsetFilePath, asio::stream_file::read_only, errCode);
-        if (false == stream.is_open()) {
-            throw std::runtime_error{fmt::format(R"(Can not open file: {})", errCode.message())};
-        }
-
-        std::string result;
-        auto        bytesReadLen = co_await asio::async_read(
-            stream,
-            asio::dynamic_buffer(result),
-            asio::transfer_all(),
-            asio::redirect_error(asio::use_awaitable, errCode)
-        );
-        if (errCode && errCode != asio::error::eof) {
-            throw std::system_error{errCode};
-        }
-        stream.close();
-        auto readRange = std::string_view{result}.substr(0, bytesReadLen);
-        co_return neograph::json{
-            {"bytes_read_len", bytesReadLen},
-            {
-             "base64_data", agentxx::util::base64Encode(readRange),
-             },
-        }
-            .dump();
-    }
-#endif
-
-    {
-        /// 同步读取
-        std::ifstream stream;
-        stream.open(systemCharsetFilePath, std::ios::binary);
-        if (!stream) {
-            auto ec = std::error_code{errno, std::system_category()};
-            throw std::runtime_error{fmt::format(R"(Can not open file. Error: {})", ec.message())};
-        }
-
-        if (byte_offset >= 0 || byte_limit >= 0) {
-            // 读取部分文件
-            const size_t offset = (byte_offset >= 0) ? static_cast<size_t>(byte_offset) : 0;
-            const size_t limit  = (byte_limit >= 0) ? static_cast<size_t>(byte_limit)
-                                                    : std::numeric_limits<size_t>::max();
-
-            // 计算实际需要读取的字节数
-            size_t fileSize       = static_cast<size_t>(std::filesystem::file_size(filepath));
-            auto   bytesAvailable = std::max((int64_t)fileSize - (int64_t)offset, (int64_t)0);
-            auto   bytesRead      = std::min(
-                static_cast<std::streamsize>(limit),
-                static_cast<std::streamsize>(bytesAvailable)
-            );
-
-            // 没有数据可读
-            if (bytesRead <= 0) {
-                throw std::runtime_error{fmt::format(
-                    R"(Arg `byte_offset`({}) is out of range of file size({}).)",
-                    offset,
-                    fileSize
-                )};
-            }
-
-            stream.seekg(offset, std::ios::beg);
-            if (!stream.good()) {
-                auto ec = std::error_code{errno, std::system_category()};
-                throw std::runtime_error{
-                    fmt::format(R"(Read offset {} bytes failed. Error: {})", offset, ec.message())
-                };
-            }
-
-            std::string result;
-            result.resize(bytesRead);
-            stream.read(result.data(), bytesRead);
-            std::streamsize realBytesRead = stream.gcount();
-
-            stream.close();
-            if (realBytesRead <= 0) {
-                throw std::runtime_error{fmt::format(
-                    R"(Read {} bytes from file failed. Error: {})",
-                    offset,
-                    stream.bad() ? std::error_code{errno, std::system_category()}.message()
-                                 : "no data read"
-                )};
-            }
-            co_return neograph::json{
-                {"bytes_read_len", realBytesRead},
-                // 仅编码实际读到的字节, 避免预分配 buffer 中未读到的零填充字节被编码
-                {"base64_data",
-                 agentxx::util::base64Encode(
-                     std::string_view{result}.substr(0, static_cast<size_t>(realBytesRead))
-                 )},
-            }
-                .dump();
-        }
-
-        // 读取完整文件
-        auto result = std::string(
-            (std::istreambuf_iterator<char>(stream)),
-            std::istreambuf_iterator<char>()
-        );
-        auto bytesReadLen = result.size();
-        stream.close();
-        co_return neograph::json{
-            {"bytes_read_len", bytesReadLen                       },
-            {"base64_data",    agentxx::util::base64Encode(result)},
-        }
-            .dump();
-    }
-}
-
 FilesystemWriteFileTool::FilesystemWriteFileTool(
     std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
 ) :
@@ -907,13 +673,6 @@ neograph::ChatTool FilesystemWriteFileTool::get_definition() const {
                             {"description", prompt.getArg("overwrite")},
                         },
                     },
-                    {
-                        "is_binary",
-                        {
-                            {"type", "boolean"},
-                            {"description", prompt.getArg("is_binary")},
-                        },
-                    },
                 },
             }, {"required", neograph::json::array({"path"})},
                        },
@@ -939,7 +698,6 @@ asio::awaitable<std::string> FilesystemWriteFileTool::execute_async(const neogra
     agentxx::util::autoConvertToSystemPath(systemCharsetFilePath);
     auto content   = arguments.value<std::string>("content", std::string{});
     auto overwrite = arguments.value<bool>("overwrite", false);
-    auto is_binary = arguments.value<bool>("is_binary", false);
 
 #if ASIO_HAS_FILE || BOOST_ASIO_HAS_FILE
     {
@@ -973,24 +731,12 @@ asio::awaitable<std::string> FilesystemWriteFileTool::execute_async(const neogra
         }
 
         if (false == content.empty()) {
-            // 写入文件内容
-            if (is_binary) {
-                auto result = agentxx::util::base64Decode(content);
-                if (!result.has_value()) {
-                    throw std::runtime_error{"base64 decode failed"};
-                }
-                co_await asio::async_write(
-                    stream,
-                    asio::buffer(result.value()),
-                    asio::redirect_error(asio::use_awaitable, errCode)
-                );
-            } else {
-                co_await asio::async_write(
-                    stream,
-                    asio::buffer(content),
-                    asio::redirect_error(asio::use_awaitable, errCode)
-                );
-            }
+            // 写入文本内容
+            co_await asio::async_write(
+                stream,
+                asio::buffer(content),
+                asio::redirect_error(asio::use_awaitable, errCode)
+            );
             if (errCode) {
                 throw std::system_error{errCode};
             }
@@ -1018,11 +764,7 @@ asio::awaitable<std::string> FilesystemWriteFileTool::execute_async(const neogra
             )};
         }
 
-        stream.open(
-            systemCharsetFilePath,
-            is_binary ? std::ios_base::out | std::ios_base::binary | std::ios_base::trunc
-                      : std::ios_base::out | std::ios_base::trunc
-        );
+        stream.open(systemCharsetFilePath, std::ios_base::out | std::ios_base::trunc);
         if (!stream) {
             auto ec = std::error_code{errno, std::system_category()};
             throw std::runtime_error{
@@ -1031,16 +773,8 @@ asio::awaitable<std::string> FilesystemWriteFileTool::execute_async(const neogra
         }
 
         if (false == content.empty()) {
-            // 写入文件内容
-            if (is_binary) {
-                auto result = agentxx::util::base64Decode(content);
-                if (!result.has_value()) {
-                    throw std::runtime_error{"base64 decode failed"};
-                }
-                stream << result.value();
-            } else {
-                stream << content;
-            }
+            // 写入文本内容
+            stream << content;
             if (!stream) {
                 auto ec = std::error_code{errno, std::system_category()};
                 throw std::runtime_error{fmt::format(
