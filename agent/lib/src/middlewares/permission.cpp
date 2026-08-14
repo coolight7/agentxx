@@ -3,9 +3,24 @@
 #include "agentxx/middlewares/event_stream.h"
 #include "agentxx/middlewares/events.h"
 #include "agentxx/util/string_util.h"
+#include <cctype>
 
 namespace agentxx {
 namespace middleware {
+
+/// 权限路径规范化: 绝对路径 + Unix 分隔符 + 目录尾斜杠
+/// - Windows 文件系统大小写不敏感, 统一转小写使注册规则 (来自配置/工作目录)
+///   与请求路径 (模型可能传任意大小写, 如 `d:/...` 或 `D:\...`) 稳定匹配;
+///   XXRouter 的树节点按字符串精确查找 (区分大小写), 不统一大小写会漏匹配,
+///   表现为 mode: ask 时工作目录内的读写仍被询问
+static std::string normalizePermissionPath(std::string_view path) {
+    std::string s
+        = agentxx::util::toUnixStandardDirPath(agentxx::util::toCurrentSystemAbsolutePath(path));
+#if XX_IS_WIN_D
+    agentxx::util::toLowerSelf(s);
+#endif
+    return s;
+}
 
 PermissionMiddlewareHandle::PermissionMiddlewareHandle(
     std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
@@ -20,7 +35,7 @@ void PermissionMiddlewareHandle::setFilesystemPermission(
 ) {
     assert(index == 0 || index == 1);
     filesystemPermission.add(
-        agentxx::util::toUnixStandardDirPath(agentxx::util::toCurrentSystemAbsolutePath(path)),
+        normalizePermissionPath(path),
         static_cast<int>(index),
         std::make_shared<PermissionOperator>(op)
     );
@@ -34,7 +49,7 @@ asio::awaitable<bool> PermissionMiddlewareHandle::defOnFilesystemHandle(
     auto path = args.value<std::string>("path", "");
     // 支持相对路径: 非绝对路径基于当前工作目录拼接为绝对路径,
     // 与 filesystem 工具实际访问的路径保持一致, 使注册的绝对路径规则也能匹配相对路径访问
-    path = agentxx::util::toUnixStandardDirPath(agentxx::util::toCurrentSystemAbsolutePath(path));
+    path = normalizePermissionPath(path);
     std::string re_path;
     // 最长前缀匹配: 注册的文件夹规则 (如 /data/projects) 对其下任意子路径生效
     auto handle = filesystemPermission.get(path, static_cast<int>(index), re_path, true);
