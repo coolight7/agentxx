@@ -185,7 +185,8 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
 
     Elements elements;
 
-    // 系统资源占用 (CPU/内存), 由资源监控线程周期刷新; 显示开关存储于全局设置单例
+    // 系统资源占用 (CPU/内存): 由 client 线程收到 WireSystemUsage (agent-server
+    // 采集回传) 后周期刷新; 显示开关存储于全局设置单例
     if (TUISettings::instance().showSystemInfo()) {
         Elements sysEls;
         sysEls.push_back(text("System") | color(theme_.accentColor));

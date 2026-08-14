@@ -239,6 +239,53 @@ void SessionServerAgentIO::onPeerMessage(WireMessage msg) {
                     m.allow ? "ALLOW" : "DENY",
                     m.index
                 );
+            } else if constexpr (std::is_same_v<T, WireGetSystemUsage>) {
+                // 客户端 (TUI) 周期请求系统资源占用 (CPU/内存/GPU):
+                // 采集迁移到 agent-server 侧 (远端模式下展示 server 主机的资源;
+                // 本地一体模式由本进程读取), 完成后回传 WireSystemUsage。
+                // 与 WireListSessions 同模式: 查询卸载到 blockingPool 执行,
+                // 避免占用 agent io 线程; 完成后经 shared_from_this 回传响应
+                auto self = shared_from_this();
+                asio::co_spawn(
+                    ex_,
+                    [self]() -> asio::awaitable<void> {
+                        if (!self->sysMonitor_) {
+                            self->sysMonitor_
+                                = std::make_shared<agentxx::expand::CpuGpuMonitor>();
+                        }
+                        auto monitor = self->sysMonitor_;
+                        auto usage   = std::make_shared<agentxx::expand::CpuGpuUsage>();
+                        co_await agentxx::util::catchErrorAsync<bool>(
+                            [&]() -> asio::awaitable<bool> {
+                                // query() 为协程 (内部含 100ms 采样间隔定时器与
+                                // 文件读取), 整体投递到 agent 的 blockingPool 线程池
+                                // 执行, 完成后自动恢复回 ex_ 线程
+                                auto agent = self->agent_.lock();
+                                if (agent && agent->agentContext
+                                    && agent->agentContext->blockingPool) {
+                                    *usage = co_await agentxx::util::offloadAsync<
+                                        agentxx::expand::CpuGpuUsage>(
+                                        *agent->agentContext->blockingPool,
+                                        [monitor]() -> asio::awaitable<
+                                            agentxx::expand::CpuGpuUsage> {
+                                            co_return co_await monitor->query();
+                                        }
+                                    );
+                                } else {
+                                    *usage = co_await monitor->query();
+                                }
+                                self->sendToPeer(WireSystemUsage{*usage});
+                                co_return true;
+                            },
+                            [](std::string errmsg) -> asio::awaitable<bool> {
+                                XX_LOGE("[session_ctrl] system usage query failed: {}", errmsg);
+                                co_return false;
+                            }
+                        );
+                        co_return;
+                    },
+                    asio::detached
+                );
             }
         },
         std::move(msg)

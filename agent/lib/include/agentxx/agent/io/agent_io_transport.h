@@ -1,6 +1,7 @@
 #pragma once
 
 #include "agentxx/agent/conversation_types.h"
+#include "agentxx/expand/get_cpu_gpu_use.h"
 #include "asio/awaitable.hpp"
 #include "neograph/json.h"
 #include <cstdint>
@@ -154,6 +155,16 @@ struct WireSetPermission {
     size_t index = 0;
 };
 
+/// 客户端请求系统资源占用 (Client -> Server): TUI 周期请求 CPU/内存/GPU 占用,
+/// 由 agent-server 侧读取后回传 —— 采集逻辑位于 agent-server 所在进程/主机
+/// (远端模式下展示的是 server 主机的资源; 本地一体模式由 server 端点进程读取)
+struct WireGetSystemUsage {};
+
+/// 服务端系统资源占用响应 (Server -> Client): CpuGpuMonitor::query() 的结果
+struct WireSystemUsage {
+    agentxx::expand::CpuGpuUsage usage;
+};
+
 /// 所有可能的线消息类型 (tagged variant)
 using WireMessage = std::variant<
     WireHello,
@@ -179,7 +190,9 @@ using WireMessage = std::variant<
     WireListSessions,
     WireSessionList,
     WireSwitchSession,
-    WireSetPermission>;
+    WireSetPermission,
+    WireGetSystemUsage,
+    WireSystemUsage>;
 
 // ---------------------------------------------------------------------------
 // AgentIOTransportBase: 两个 AgentIOBase 端点之间的协议传输层

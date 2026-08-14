@@ -1061,8 +1061,12 @@ Element MessageListComponent::buildMessageBlock(
                     appendEditToolHeader(msg, header);
                 } else {
                     auto headerText = buildToolHeaderSummary(msg.tool->toolName, msg.text);
-                    if (headerText.empty()) {
-                        // 压缩渲染
+                    if (false == headerText.empty()) {
+                        // 特化渲染
+                        header.push_back(
+                            text(std::move(headerText)) | color(theme.toolColor) | dim
+                        );
+                    } else {
                         header.push_back(
                             text(fmt::format(
                                 "{} {}",
@@ -1070,10 +1074,6 @@ Element MessageListComponent::buildMessageBlock(
                                 oneLinePreview(msg.tool->toolResult)
                             ))
                             | color(theme.toolColor) | dim
-                        );
-                    } else {
-                        header.push_back(
-                            text(std::move(headerText)) | color(theme.toolColor) | dim
                         );
                     }
                 }
