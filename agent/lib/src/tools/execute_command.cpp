@@ -252,8 +252,8 @@ asio::awaitable<std::string> ExecuteBashCommandTool::execute_async(const neograp
             procExe,
             procArgs,
             boost::process::process_environment(procEnv),
- // stdin 重定向到 null 设备 (Windows: NUL / POSIX: /dev/null),
-  // 避免子进程 (如交互式命令) 抢读 agent 进程的终端输入
+            // stdin 重定向到 null 设备 (Windows: NUL / POSIX: /dev/null),
+            // 避免子进程 (如交互式命令) 抢读 agent 进程的终端输入
             boost::process::process_stdio{.in = nullptr, .out = outpip, .err = errpip},
         };
 
@@ -446,7 +446,7 @@ asio::awaitable<std::string>
             procExe,
             launch.args,
             boost::process::process_environment(procEnv),
- // stdin 重定向到 null 设备, 避免子进程抢读 agent 进程的终端输入
+            // stdin 重定向到 null 设备, 避免子进程抢读 agent 进程的终端输入
             boost::process::process_stdio{.in = nullptr, .out = outpip, .err = errpip}
         };
 

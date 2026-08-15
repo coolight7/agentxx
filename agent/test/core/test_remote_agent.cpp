@@ -374,7 +374,8 @@ static asio::awaitable<void> test_remote_protocol_roundtrip() {
     {
         // 系统资源占用: GetSystemUsage (无载荷) 序列化往返
         agentxx::agent::WireGetSystemUsage req{};
-        auto back = WsAgentIOTransport::deserialize(WsAgentIOTransport::serialize(WireMessage{req}));
+        auto                               back
+            = WsAgentIOTransport::deserialize(WsAgentIOTransport::serialize(WireMessage{req}));
         XX_TEST_EXPECT_TRUE(back.has_value());
         if (back) {
             XX_TEST_EXPECT_TRUE(std::get_if<agentxx::agent::WireGetSystemUsage>(&*back) != nullptr);
@@ -395,17 +396,22 @@ static asio::awaitable<void> test_remote_protocol_roundtrip() {
         gpu.sharedVramUsedMB    = 100;
         gpu.usagePercent        = 33.3;
         resp.usage.gpus.push_back(std::move(gpu));
-        auto back = WsAgentIOTransport::deserialize(WsAgentIOTransport::serialize(WireMessage{resp}));
+        auto back
+            = WsAgentIOTransport::deserialize(WsAgentIOTransport::serialize(WireMessage{resp}));
         XX_TEST_EXPECT_TRUE(back.has_value());
         if (back) {
             auto* r = std::get_if<agentxx::agent::WireSystemUsage>(&*back);
             XX_TEST_EXPECT_TRUE(r != nullptr);
             if (r) {
                 // 浮点经 JSON 往返精度足够 (双精度 printf 精度内), 用近似比较
-                XX_TEST_EXPECT_TRUE(r->usage.cpuUsagePercent > 42.4 && r->usage.cpuUsagePercent < 42.6);
+                XX_TEST_EXPECT_TRUE(
+                    r->usage.cpuUsagePercent > 42.4 && r->usage.cpuUsagePercent < 42.6
+                );
                 XX_TEST_EXPECT_EQ(r->usage.memory.totalPhysicalMB, uint64_t{16384});
                 XX_TEST_EXPECT_EQ(r->usage.memory.usedPhysicalMB, uint64_t{8192});
-                XX_TEST_EXPECT_TRUE(r->usage.memory.usagePercent > 49.9 && r->usage.memory.usagePercent < 50.1);
+                XX_TEST_EXPECT_TRUE(
+                    r->usage.memory.usagePercent > 49.9 && r->usage.memory.usagePercent < 50.1
+                );
                 XX_TEST_EXPECT_EQ(r->usage.gpus.size(), size_t{1});
                 if (r->usage.gpus.size() == 1) {
                     const auto& rg = r->usage.gpus[0];

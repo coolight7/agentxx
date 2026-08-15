@@ -16,11 +16,11 @@
 namespace agentxx {
 namespace tools {
 // 结果类型定义于 agentxx::expand, 此处显式引用需导入 (原代码用 auto 推导)
-using agentxx::expand::CodeGraphSearchResult;
 using agentxx::expand::CodeGraphContextResult;
-using agentxx::expand::CodeGraphStatusResult;
 using agentxx::expand::CodeGraphImpactResult;
 using agentxx::expand::CodeGraphPathResult;
+using agentxx::expand::CodeGraphSearchResult;
+using agentxx::expand::CodeGraphStatusResult;
 
 namespace {
 
@@ -88,10 +88,7 @@ static std::string addIndexingWarning(
 // =========================================================================
 
 /// Node 列表 (search/path 结果, 基于 codegraph::Node 结构体) 转多行文本
-static std::string nodesToText(
-    std::string_view                  title,
-    const std::vector<codegraph::Node>& nodes
-) {
+static std::string nodesToText(std::string_view title, const std::vector<codegraph::Node>& nodes) {
     std::string out = fmt::format("{} ({}):", title, nodes.size());
     if (nodes.empty()) {
         out += "\n  (none)";
@@ -99,9 +96,7 @@ static std::string nodesToText(
     }
     int idx = 0;
     for (const auto& node : nodes) {
-        out += fmt::format(
-            "\n[{}] {} {}", ++idx, codegraph::node_kind_str(node.kind), node.name
-        );
+        out += fmt::format("\n[{}] {} {}", ++idx, codegraph::node_kind_str(node.kind), node.name);
         if (!node.qualified_name.empty() && node.qualified_name != node.name) {
             out += fmt::format("\n    qualified_name: {}", node.qualified_name);
         }
@@ -141,8 +136,8 @@ static std::string jsonNodesToText(std::string_view title, const codegraph::Json
     }
     // codegraph::Json 无迭代器/empty(), 用 size() + 下标访问
     for (size_t i = 0; i < arr.size(); ++i) {
-        const auto& n = arr[i];
-        out += fmt::format(
+        const auto& n  = arr[i];
+        out           += fmt::format(
             "\n[{}] {} {}",
             i + 1,
             n.value("kind", std::string{}),
@@ -161,8 +156,8 @@ static std::string jsonEdgesToText(const codegraph::Json& arr) {
         return out;
     }
     for (size_t i = 0; i < arr.size(); ++i) {
-        const auto& e = arr[i];
-        out += fmt::format(
+        const auto& e  = arr[i];
+        out           += fmt::format(
             "\n[{}] {} -> {} ({})",
             i + 1,
             e.value("src", int64_t{0}),
@@ -177,8 +172,8 @@ static std::string jsonEdgesToText(const codegraph::Json& arr) {
 static std::string contextToText(const codegraph::Json& ctx) {
     std::string out;
     if (ctx.contains("symbol")) {
-        const auto& s = ctx["symbol"];
-        out += fmt::format(
+        const auto& s  = ctx["symbol"];
+        out           += fmt::format(
             "symbol: {} {}",
             s.value("kind", std::string{}),
             s.value("name", std::string{})
@@ -264,8 +259,7 @@ asio::awaitable<std::string> CodeGraphSearchTool::execute_async(const neograph::
     auto result = co_await offloadCodeGraphQuery<CodeGraphSearchResult>(
         agentContext,
         arguments,
-        [codegraph = codegraph, query, limit](
-            std::atomic<bool>& cancelFlag
+        [codegraph = codegraph, query, limit](std::atomic<bool>& cancelFlag
         ) -> asio::awaitable<CodeGraphSearchResult> {
             if (cancelFlag.load(std::memory_order_acquire)) {
                 throw neograph::graph::CancelledException("codegraph search cancelled");
@@ -339,8 +333,7 @@ asio::awaitable<std::string> CodeGraphContextTool::execute_async(const neograph:
     auto result = co_await offloadCodeGraphQuery<CodeGraphContextResult>(
         agentContext,
         arguments,
-        [codegraph = codegraph, symbol, limit, max_depth](
-            std::atomic<bool>& cancelFlag
+        [codegraph = codegraph, symbol, limit, max_depth](std::atomic<bool>& cancelFlag
         ) -> asio::awaitable<CodeGraphContextResult> {
             if (cancelFlag.load(std::memory_order_acquire)) {
                 throw neograph::graph::CancelledException("codegraph context cancelled");
@@ -406,8 +399,7 @@ asio::awaitable<std::string> CodeGraphCallersTool::execute_async(const neograph:
     auto result = co_await offloadCodeGraphQuery<CodeGraphImpactResult>(
         agentContext,
         arguments,
-        [codegraph = codegraph, symbol, max_depth](
-            std::atomic<bool>& cancelFlag
+        [codegraph = codegraph, symbol, max_depth](std::atomic<bool>& cancelFlag
         ) -> asio::awaitable<CodeGraphImpactResult> {
             if (cancelFlag.load(std::memory_order_acquire)) {
                 throw neograph::graph::CancelledException("codegraph callers cancelled");
@@ -472,8 +464,7 @@ asio::awaitable<std::string> CodeGraphCalleesTool::execute_async(const neograph:
     auto result = co_await offloadCodeGraphQuery<CodeGraphImpactResult>(
         agentContext,
         arguments,
-        [codegraph = codegraph, symbol, max_depth](
-            std::atomic<bool>& cancelFlag
+        [codegraph = codegraph, symbol, max_depth](std::atomic<bool>& cancelFlag
         ) -> asio::awaitable<CodeGraphImpactResult> {
             if (cancelFlag.load(std::memory_order_acquire)) {
                 throw neograph::graph::CancelledException("codegraph callees cancelled");
@@ -538,8 +529,7 @@ asio::awaitable<std::string> CodeGraphImpactTool::execute_async(const neograph::
     auto result = co_await offloadCodeGraphQuery<CodeGraphImpactResult>(
         agentContext,
         arguments,
-        [codegraph = codegraph, symbol, max_depth](
-            std::atomic<bool>& cancelFlag
+        [codegraph = codegraph, symbol, max_depth](std::atomic<bool>& cancelFlag
         ) -> asio::awaitable<CodeGraphImpactResult> {
             if (cancelFlag.load(std::memory_order_acquire)) {
                 throw neograph::graph::CancelledException("codegraph impact cancelled");
@@ -580,8 +570,8 @@ asio::awaitable<std::string> CodeGraphStatusTool::execute_async(const neograph::
     auto result = co_await offloadCodeGraphQuery<CodeGraphStatusResult>(
         agentContext,
         arguments,
-        [codegraph = codegraph](std::atomic<bool>& cancelFlag
-        ) -> asio::awaitable<CodeGraphStatusResult> {
+        [codegraph
+         = codegraph](std::atomic<bool>& cancelFlag) -> asio::awaitable<CodeGraphStatusResult> {
             if (cancelFlag.load(std::memory_order_acquire)) {
                 throw neograph::graph::CancelledException("codegraph status cancelled");
             }
@@ -593,13 +583,16 @@ asio::awaitable<std::string> CodeGraphStatusTool::execute_async(const neograph::
     }
 
     // 多行文本: 每行一个 "label: value" 统计字段
-    co_return addIndexingWarning(codegraph, fmt::format(
-        "total_nodes: {}\ntotal_edges: {}\ntotal_files: {}\ncircular_deps: {}",
-        result.total_nodes,
-        result.total_edges,
-        result.total_files,
-        result.circular_deps
-    ));
+    co_return addIndexingWarning(
+        codegraph,
+        fmt::format(
+            "total_nodes: {}\ntotal_edges: {}\ntotal_files: {}\ncircular_deps: {}",
+            result.total_nodes,
+            result.total_edges,
+            result.total_files,
+            result.circular_deps
+        )
+    );
 }
 
 CodeGraphIndexTool::CodeGraphIndexTool(
@@ -660,8 +653,7 @@ asio::awaitable<std::string> CodeGraphIndexTool::execute_async(const neograph::j
         pool,
         cancelFlag,
         cancelToken,
-        [codegraph = codegraph, path, incremental](
-            std::atomic<bool>& cancelFlag
+        [codegraph = codegraph, path, incremental](std::atomic<bool>& cancelFlag
         ) -> asio::awaitable<bool> {
             if (cancelFlag.load(std::memory_order_acquire)) {
                 throw neograph::graph::CancelledException("codegraph index cancelled");
@@ -674,8 +666,8 @@ asio::awaitable<std::string> CodeGraphIndexTool::execute_async(const neograph::j
     auto status = co_await offloadCodeGraphQuery<CodeGraphStatusResult>(
         agentContext,
         arguments,
-        [codegraph = codegraph](std::atomic<bool>& cancelFlag
-        ) -> asio::awaitable<CodeGraphStatusResult> {
+        [codegraph
+         = codegraph](std::atomic<bool>& cancelFlag) -> asio::awaitable<CodeGraphStatusResult> {
             if (cancelFlag.load(std::memory_order_acquire)) {
                 throw neograph::graph::CancelledException("codegraph status cancelled");
             }
@@ -760,8 +752,7 @@ asio::awaitable<std::string> CodeGraphPathTool::execute_async(const neograph::js
     auto result = co_await offloadCodeGraphQuery<CodeGraphPathResult>(
         agentContext,
         arguments,
-        [codegraph = codegraph, from, to, max_depth](
-            std::atomic<bool>& cancelFlag
+        [codegraph = codegraph, from, to, max_depth](std::atomic<bool>& cancelFlag
         ) -> asio::awaitable<CodeGraphPathResult> {
             if (cancelFlag.load(std::memory_order_acquire)) {
                 throw neograph::graph::CancelledException("codegraph path cancelled");

@@ -370,7 +370,7 @@ void test_model_max_concurrent_connections() {
     type: "openai"
     base_url: "http://127.0.0.1:8000/v1"
 )");
-    auto it = cfg.models.find("m1");
+    auto it  = cfg.models.find("m1");
     XX_TEST_EXPECT_TRUE(it != cfg.models.end());
     if (it != cfg.models.end()) {
         XX_TEST_EXPECT_EQ(it->second.maxConcurrentConnections, size_t{5});
@@ -383,7 +383,7 @@ void test_model_max_concurrent_connections() {
     base_url: "http://127.0.0.1:8000/v1"
     max_concurrent_connections: 3
 )");
-    it = cfg.models.find("m2");
+    it  = cfg.models.find("m2");
     XX_TEST_EXPECT_TRUE(it != cfg.models.end());
     if (it != cfg.models.end()) {
         XX_TEST_EXPECT_EQ(it->second.maxConcurrentConnections, size_t{3});
@@ -395,7 +395,7 @@ void test_model_max_concurrent_connections() {
     type: "openai"
     max_concurrent_connections: 0
 )");
-    it = cfg.models.find("m3");
+    it  = cfg.models.find("m3");
     XX_TEST_EXPECT_TRUE(it != cfg.models.end());
     if (it != cfg.models.end()) {
         XX_TEST_EXPECT_EQ(it->second.maxConcurrentConnections, size_t{0});
@@ -407,7 +407,7 @@ void test_model_max_concurrent_connections() {
     type: "openai"
     max_concurrent_connections: abc
 )");
-    it = cfg.models.find("m4");
+    it  = cfg.models.find("m4");
     XX_TEST_EXPECT_TRUE(it != cfg.models.end());
     if (it != cfg.models.end()) {
         XX_TEST_EXPECT_EQ(it->second.maxConcurrentConnections, size_t{5});
@@ -498,9 +498,9 @@ void test_codegraph_env_expand() {
     auto cfg = agentxx::client::loadYamlConfig(
         path.string(),
         {
-            {"AGENTXX_TEST_CG_ENABLE", "true"                       },
-            {"AGENTXX_TEST_CG_PATH",    "/data/cg/proj"             },
-            {"AGENTXX_TEST_CG_IGNORE",  "/data/cg/proj/third_party"},
+            {"AGENTXX_TEST_CG_ENABLE", "true"                     },
+            {"AGENTXX_TEST_CG_PATH",   "/data/cg/proj"            },
+            {"AGENTXX_TEST_CG_IGNORE", "/data/cg/proj/third_party"},
     },
         {}
     );
@@ -514,10 +514,7 @@ void test_codegraph_env_expand() {
     }
     XX_TEST_EXPECT_EQ(cfg.codeGraph.ignorePaths.size(), size_t{1});
     if (cfg.codeGraph.ignorePaths.size() == 1) {
-        XX_TEST_EXPECT_EQ(
-            cfg.codeGraph.ignorePaths[0],
-            std::string("/data/cg/proj/third_party")
-        );
+        XX_TEST_EXPECT_EQ(cfg.codeGraph.ignorePaths[0], std::string("/data/cg/proj/third_party"));
     }
 }
 

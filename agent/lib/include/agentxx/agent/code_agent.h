@@ -32,8 +32,7 @@ public:
 
     /// CodeGraph 代码索引管理器 (启用且初始化成功时返回非空, 否则 nullptr)
     /// - 会话服务端点 (SessionServerAgentIO) 经此订阅索引进度推送
-    std::shared_ptr<expand::CodeGraphManager>
-        codegraphManager() override;
+    std::shared_ptr<expand::CodeGraphManager> codegraphManager() override;
 
 protected:
 

@@ -80,14 +80,14 @@ inline constexpr uint64_t kDefaultMaxResponseBody = 10 * 1024 * 1024;
 ///   (scheme://host:port + sslVerify) 的最大并发连接数; 默认 5, 0 = 不限制
 ///   (仍复用空闲连接)。超过上限的并发请求排队等待空闲连接。
 struct RequestConfig {
-    std::chrono::milliseconds                connectTimeout   = std::chrono::seconds{30};
-    std::optional<std::chrono::milliseconds> sendTimeout      = std::nullopt;
-    std::chrono::milliseconds                readChunkTimeout = std::chrono::seconds{30};
-    std::optional<bool>                      sslVerify        = std::nullopt;
-    size_t                                   followRedirect   = 3;
-    bool                                     keepAlive        = false;
+    std::chrono::milliseconds                connectTimeout           = std::chrono::seconds{30};
+    std::optional<std::chrono::milliseconds> sendTimeout              = std::nullopt;
+    std::chrono::milliseconds                readChunkTimeout         = std::chrono::seconds{30};
+    std::optional<bool>                      sslVerify                = std::nullopt;
+    size_t                                   followRedirect           = 3;
+    bool                                     keepAlive                = false;
     size_t                                   maxConcurrentConnections = 5;
-    uint64_t                                 maxResponseBody  = kDefaultMaxResponseBody;
+    uint64_t                                 maxResponseBody          = kDefaultMaxResponseBody;
 };
 
 class HttpClient {

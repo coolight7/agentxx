@@ -216,9 +216,9 @@ asio::awaitable<asio::ip::tcp::resolver::results_type> waitDnsResolve(
 
 /// 连接池键: 同一端点 (协议+主机+端口+证书校验) 的连接可互相复用
 struct HttpPoolKey {
-    bool        https  = false;
+    bool        https = false;
     std::string host; // IPv6 字面量不含方括号 (与 ParsedUrl::host 一致)
-    uint16_t    port  = 0;
+    uint16_t    port   = 0;
     bool        verify = true; // sslVerify 不同则 TLS 上下文不同, 不能复用
 
     bool operator==(const HttpPoolKey&) const = default;
@@ -243,13 +243,12 @@ struct HttpPoolKeyLess {
 struct PooledConnection {
     // asio 1.30+ 的 tcp::socket 无默认构造函数 (必须传 executor), 因此显式构造:
     // 默认按 TCP 构造 (std::in_place_index<0>), 创建 TLS 连接时再 emplace 替换
-    explicit PooledConnection(asio::any_io_executor executor)
-        : stream(std::in_place_index<0>, std::move(executor)) {
-    }
+    explicit PooledConnection(asio::any_io_executor executor) :
+        stream(std::in_place_index<0>, std::move(executor)) {}
 
     std::variant<asio::ip::tcp::socket, asio::ssl::stream<asio::ip::tcp::socket>> stream;
-    std::chrono::steady_clock::time_point lastUsed;
-    bool                                  fresh = true; ///< 本次是否新建 (非复用), 供失效重试决策
+    std::chrono::steady_clock::time_point                                         lastUsed;
+    bool fresh = true; ///< 本次是否新建 (非复用), 供失效重试决策
 };
 
 // 前置声明: HttpConnectionPool::acquire 在类内调用, 定义位于类之后
@@ -315,11 +314,8 @@ public:
     /// - 空闲连接超过 kPoolIdleTimeout 未复用 (服务端很可能已断开) 时丢弃重建
     /// - 并发达到上限时轮询等待; 等待可被取消 (中止等待, 不修改池状态)
     /// - 新建连接失败/被取消时归还并发名额并抛出异常
-    asio::awaitable<std::shared_ptr<PooledConnection>> acquire(
-        const HttpPoolKey&   key,
-        size_t               maxConcurrent,
-        const RequestConfig& config
-    ) {
+    asio::awaitable<std::shared_ptr<PooledConnection>>
+        acquire(const HttpPoolKey& key, size_t maxConcurrent, const RequestConfig& config) {
         auto               executor = co_await asio::this_coro::executor;
         asio::steady_timer pollTimer(executor);
 
@@ -327,8 +323,8 @@ public:
             bool create = false;
             {
                 std::lock_guard<std::mutex> lock(mtx_);
-                auto& entry = entries_[key];
-                auto  now   = std::chrono::steady_clock::now();
+                auto&                       entry = entries_[key];
+                auto                        now   = std::chrono::steady_clock::now();
                 // 优先复用空闲连接; 丢弃已超时的空闲连接 (析构关闭 socket)
                 while (!entry.idle.empty()) {
                     auto conn = std::move(entry.idle.back());
@@ -345,14 +341,14 @@ public:
                     ++entry.active;
                     ++entry.created;
                     entry.peakActive = std::max(entry.peakActive, entry.active);
-                    create          = true;
+                    create           = true;
                 } else {
                     ++entry.queuedWaits;
                 }
             }
             if (create) {
                 try {
-                    auto conn = co_await createConnection(key, config);
+                    auto conn   = co_await createConnection(key, config);
                     conn->fresh = true;
                     co_return conn;
                 } catch (...) {
@@ -376,7 +372,7 @@ public:
             return;
         }
         std::lock_guard<std::mutex> lock(mtx_);
-        auto& entry = entries_[key];
+        auto&                       entry = entries_[key];
         if (entry.active > 0) {
             --entry.active;
         }
@@ -430,7 +426,7 @@ private:
         size_t                                         queuedWaits = 0;
     };
 
-    mutable std::mutex mtx_;
+    mutable std::mutex                            mtx_;
     std::map<HttpPoolKey, Entry, HttpPoolKeyLess> entries_;
 
     static bool isOpen(const PooledConnection& conn) {
@@ -908,30 +904,28 @@ asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::requestAsy
                 // 旧行为 (每次新建连接, 响应后关闭, 不受并发上限约束)
                 bool   usePool  = config.keepAlive;
                 size_t poolMax  = usePool ? config.maxConcurrentConnections : 0;
-                int    maxAttempts = usePool ? 2 : 1; // 复用失效连接时用新连接重试一次
+                int maxAttempts = usePool ? 2 : 1; // 复用失效连接时用新连接重试一次
 
                 HttpPoolKey poolKey;
-                poolKey.https  = isHttps;
-                poolKey.host   = parsed->host;
-                poolKey.port   = parsed->port;
-                poolKey.verify = config.sslVerify.value_or(sslVerifyEnabled_.load(
-                    std::memory_order_relaxed
-                ));
+                poolKey.https = isHttps;
+                poolKey.host  = parsed->host;
+                poolKey.port  = parsed->port;
+                poolKey.verify
+                    = config.sslVerify.value_or(sslVerifyEnabled_.load(std::memory_order_relaxed));
                 auto& pool = HttpConnectionPool::instance();
 
                 std::shared_ptr<PooledConnection> conn;
                 for (int attempt = 0; attempt < maxAttempts; ++attempt) {
                     // keepAlive=true: 经连接池获取 (复用空闲/并发上限);
                     // keepAlive=false: 直接新建 (旧行为), 不产生池统计
-                    conn = usePool ? co_await pool.acquire(poolKey, poolMax, config)
-                                   : co_await createConnection(poolKey, config);
+                    conn          = usePool ? co_await pool.acquire(poolKey, poolMax, config)
+                                            : co_await createConnection(poolKey, config);
                     bool reused   = usePool && !conn->fresh;
                     bool poolable = false;
                     try {
                         result = co_await std::visit(
-                            [&](auto& stream) -> asio::awaitable<std::expected<
-                                HttpResponse,
-                                std::string>> {
+                            [&](auto& stream
+                            ) -> asio::awaitable<std::expected<HttpResponse, std::string>> {
                                 co_return co_await exchange(stream, req, config);
                             },
                             conn->stream
@@ -943,7 +937,8 @@ asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::requestAsy
                         // 几乎未到达服务端): 释放坏连接后用新连接重试一次; 其他错误
                         // (响应截断/超时/取消) 说明服务端可能已处理请求, 原样抛出
                         // 由上层决定是否重试, 避免重复执行
-                        if (reused && attempt + 1 < maxAttempts && isPoolRetryableError(e.code(), e.what())) {
+                        if (reused && attempt + 1 < maxAttempts
+                            && isPoolRetryableError(e.code(), e.what())) {
                             pool.release(poolKey, std::move(conn), false);
                             continue;
                         }
@@ -1058,7 +1053,7 @@ asio::awaitable<void> HttpClient::requestSseAsync(
     poolKey.host   = parsed->host;
     poolKey.port   = parsed->port;
     poolKey.verify = config.sslVerify.value_or(sslVerifyEnabled_.load(std::memory_order_relaxed));
-    auto& pool = HttpConnectionPool::instance();
+    auto& pool     = HttpConnectionPool::instance();
 
     auto sendTimeout = config.sendTimeout.value_or(calcTimeoutBySize(req.body().size()));
 
@@ -1203,11 +1198,11 @@ asio::awaitable<void> HttpClient::requestSseAsync(
     for (int attempt = 0; attempt < maxAttempts; ++attempt) {
         // keepAlive=true: 经连接池获取 (复用空闲/并发上限);
         // keepAlive=false: 直接新建 (旧行为), 不产生池统计
-        conn           = usePool ? co_await pool.acquire(poolKey, poolMax, config)
-                                 : co_await createConnection(poolKey, config);
-        bool reused    = usePool && !conn->fresh;
+        conn              = usePool ? co_await pool.acquire(poolKey, poolMax, config)
+                                    : co_await createConnection(poolKey, config);
+        bool reused       = usePool && !conn->fresh;
         bool anyDelivered = false;
-        bool poolable  = false;
+        bool poolable     = false;
         try {
             poolable = co_await std::visit(
                 [&](auto& stream) -> asio::awaitable<bool> {

@@ -1710,10 +1710,10 @@ asio::awaitable<void> test_http_client_dns_timeout() {
 class OneShotKeepAliveServer {
 public:
 
-    std::thread              thread;
-    uint16_t                 boundPort = 0;
-    std::atomic<bool>        stopped{false};
-    std::atomic<int>         connections{0};
+    std::thread       thread;
+    uint16_t          boundPort = 0;
+    std::atomic<bool> stopped{false};
+    std::atomic<int>  connections{0};
 
 private:
 
@@ -1802,7 +1802,7 @@ asio::awaitable<void> test_http_client_connection_pool() {
                 std::string_view
             ) -> asio::awaitable<void> {
                 if (delayMs > 0) {
-                    auto ex = co_await asio::this_coro::executor;
+                    auto               ex = co_await asio::this_coro::executor;
                     asio::steady_timer t(ex, std::chrono::milliseconds(delayMs));
                     co_await t.async_wait(asio::use_awaitable);
                 }
@@ -1841,7 +1841,7 @@ asio::awaitable<void> test_http_client_connection_pool() {
     std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
 
     HttpClient::RequestConfig poolCfg;
-    poolCfg.keepAlive = true;
+    poolCfg.keepAlive                = true;
     poolCfg.maxConcurrentConnections = 5;
 
     // 1) keepAlive=false (默认): 不启用连接池, 池统计保持全 0
@@ -1881,14 +1881,14 @@ asio::awaitable<void> test_http_client_connection_pool() {
     {
         HttpClient::clearConnectionPool();
         HttpClient::RequestConfig cfg;
-        cfg.keepAlive = true;
+        cfg.keepAlive                = true;
         cfg.maxConcurrentConnections = 2;
 
         // 记录基线 (同一端点在测试 2 已产生统计), 用增量断言本测试的新建数
         auto base = HttpClient::poolStats(baseUrl);
 
         std::atomic<int> ok{0};
-        auto run = [&]() -> asio::awaitable<void> {
+        auto             run = [&]() -> asio::awaitable<void> {
             auto resp = co_await HttpClient::getAsync(baseUrl + "/slow", {}, cfg);
             if (resp.has_value() && resp->status == 200 && resp->body == "slow") {
                 ++ok;
@@ -1904,7 +1904,7 @@ asio::awaitable<void> test_http_client_connection_pool() {
         }
         auto s = HttpClient::poolStats(baseUrl);
         XX_TEST_EXPECT_EQ(ok.load(), 5);
-        XX_TEST_EXPECT_EQ(s.peakActive, size_t{2});           // 历史峰值受限于上限
+        XX_TEST_EXPECT_EQ(s.peakActive, size_t{2});             // 历史峰值受限于上限
         XX_TEST_EXPECT_EQ(s.created - base.created, size_t{2}); // 本次仅新建 2 条
         XX_TEST_EXPECT_TRUE(s.queuedWaits > base.queuedWaits);  // 第 3 个请求开始必须排队
     }
@@ -1949,10 +1949,10 @@ asio::awaitable<void> test_http_client_connection_pool() {
         std::string sseUrl = "http://127.0.0.1:" + std::to_string(srv.boundPort) + "/sse";
 
         HttpClient::RequestConfig cfg;
-        cfg.keepAlive = true;
+        cfg.keepAlive                = true;
         cfg.maxConcurrentConnections = 5;
-        cfg.connectTimeout = std::chrono::seconds{5};
-        cfg.readChunkTimeout = std::chrono::seconds{5};
+        cfg.connectTimeout           = std::chrono::seconds{5};
+        cfg.readChunkTimeout         = std::chrono::seconds{5};
 
         for (int i = 0; i < 2; ++i) {
             std::string received;

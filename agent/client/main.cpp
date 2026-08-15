@@ -300,12 +300,11 @@ Options:
         applyWebSearchModelToConfig(config, yamlCfg.models, yamlCfg.useModelWebSearch);
         // CodeGraph 代码分析 (yaml `codegraph` 块; 相对路径按工作目录解析为绝对路径,
         // 统一 / 分隔符以便与索引路径匹配)
-        config->enableCodeGraph        = yamlCfg.codeGraph.enable;
-        config->codeGraphLoadCwd       = yamlCfg.codeGraph.loadCwd;
-        config->codeGraphUseGitignore  = yamlCfg.codeGraph.useGitignore;
+        config->enableCodeGraph       = yamlCfg.codeGraph.enable;
+        config->codeGraphLoadCwd      = yamlCfg.codeGraph.loadCwd;
+        config->codeGraphUseGitignore = yamlCfg.codeGraph.useGitignore;
         for (const auto& p : yamlCfg.codeGraph.paths) {
-            config->codeGraphPaths.push_back(
-                std::filesystem::path(resolvePath(p)).generic_string()
+            config->codeGraphPaths.push_back(std::filesystem::path(resolvePath(p)).generic_string()
             );
         }
         for (const auto& p : yamlCfg.codeGraph.ignorePaths) {
@@ -350,13 +349,11 @@ Options:
     // - ignore_paths:  忽略路径列表 (命中即跳过, 支持 * 通配符)
     // - load_cwd:      未配置 paths 时默认加载当前工作目录 (默认 true)
     // - use_gitignore: 默认忽略 .gitignore 规则与 .gitmodules 子模块目录 (默认 true)
-    config->enableCodeGraph        = yamlCfg.codeGraph.enable;
-    config->codeGraphLoadCwd       = yamlCfg.codeGraph.loadCwd;
-    config->codeGraphUseGitignore  = yamlCfg.codeGraph.useGitignore;
+    config->enableCodeGraph       = yamlCfg.codeGraph.enable;
+    config->codeGraphLoadCwd      = yamlCfg.codeGraph.loadCwd;
+    config->codeGraphUseGitignore = yamlCfg.codeGraph.useGitignore;
     for (const auto& p : yamlCfg.codeGraph.paths) {
-        config->codeGraphPaths.push_back(
-            std::filesystem::path(resolvePath(p)).generic_string()
-        );
+        config->codeGraphPaths.push_back(std::filesystem::path(resolvePath(p)).generic_string());
     }
     for (const auto& p : yamlCfg.codeGraph.ignorePaths) {
         config->codeGraphIgnorePaths.push_back(

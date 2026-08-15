@@ -568,8 +568,7 @@ int func_c() { return func_a(); }
 /// 后续解析不再重复处理同一批引用 (收敛性)
 void test_codegraph_resolve_unresolvable() {
     int  idx     = g_temp_project_counter.fetch_add(1);
-    auto tmp_dir = fs::temp_directory_path()
-                   / ("codegraph_unresolvable_" + std::to_string(idx));
+    auto tmp_dir = fs::temp_directory_path() / ("codegraph_unresolvable_" + std::to_string(idx));
     if (fs::exists(tmp_dir)) {
         fs::remove_all(tmp_dir);
     }
@@ -587,9 +586,9 @@ int main() { return caller_a() + caller_b(); }
 
     // 两次解析都成功且不抛异常; 不可解析引用 (目标不存在) 应被清理,
     // 第二次解析不再重复处理 (无法直接观察数量, 验证行为正确性)
-    bool       ok1    = manager.resolveReferences();
-    bool       ok2    = manager.resolveReferences();
-    auto       status = manager.getStatus();
+    bool ok1    = manager.resolveReferences();
+    bool ok2    = manager.resolveReferences();
+    auto status = manager.getStatus();
     if (ok1 && ok2 && status.success) {
         g_cg_passed++;
         TEST_PASS << "resolveReferences handles unresolvable refs" << std::endl;
@@ -1246,8 +1245,7 @@ asio::awaitable<void>
     });
 
     // 多行文本格式: 成功时首行 "success: true" + 统计字段
-    if (result.rfind("success: true", 0) == 0
-        || result.find("error:") != std::string::npos) {
+    if (result.rfind("success: true", 0) == 0 || result.find("error:") != std::string::npos) {
         g_cg_passed++;
         TEST_PASS << "CodeGraphIndexTool indexes directory" << std::endl;
     } else {
@@ -1289,8 +1287,7 @@ asio::awaitable<void>
     });
 
     // 多行文本格式: 首行 "Callers (N):" (可为空列表)
-    if (result.rfind("Callers (", 0) == 0
-        || result.find("error:") != std::string::npos) {
+    if (result.rfind("Callers (", 0) == 0 || result.find("error:") != std::string::npos) {
         g_cg_passed++;
         TEST_PASS << "CodeGraphCallersTool returns plain-text callers" << std::endl;
     } else {
@@ -1314,8 +1311,7 @@ asio::awaitable<void>
     });
 
     // 多行文本格式: 首行 "Callees (N):" (可为空列表)
-    if (result.rfind("Callees (", 0) == 0
-        || result.find("error:") != std::string::npos) {
+    if (result.rfind("Callees (", 0) == 0 || result.find("error:") != std::string::npos) {
         g_cg_passed++;
         TEST_PASS << "CodeGraphCalleesTool returns plain-text callees" << std::endl;
     } else {
@@ -1339,8 +1335,7 @@ asio::awaitable<void>
     });
 
     // 多行文本格式: 首行 "Impact (N):" (可为空列表)
-    if (result.rfind("Impact (", 0) == 0
-        || result.find("error:") != std::string::npos) {
+    if (result.rfind("Impact (", 0) == 0 || result.find("error:") != std::string::npos) {
         g_cg_passed++;
         TEST_PASS << "CodeGraphImpactTool returns plain-text impact" << std::endl;
     } else {
@@ -1365,8 +1360,7 @@ asio::awaitable<void>
     });
 
     // 多行文本格式: 首行 "Path (N):", 找不到路径时返回 "error: No path found"
-    if (result.rfind("Path (", 0) == 0
-        || result.find("error:") != std::string::npos) {
+    if (result.rfind("Path (", 0) == 0 || result.find("error:") != std::string::npos) {
         g_cg_passed++;
         TEST_PASS << "CodeGraphPathTool returns path or no-path-found" << std::endl;
     } else {
@@ -1418,7 +1412,7 @@ static std::string create_filter_project() {
 
 /// ignorePaths 过滤: 命中路径 (目录前缀匹配) 不进入索引
 void test_codegraph_ignore_paths() {
-    auto tmp_dir = create_filter_project();
+    auto                                  tmp_dir = create_filter_project();
     agentxx::expand::CodeGraphIndexConfig cfg;
     cfg.ignorePaths.push_back((fs::path(tmp_dir) / "third_party").generic_string());
     auto manager = agentxx::expand::CodeGraphManager{"", std::move(cfg)};
@@ -1444,7 +1438,7 @@ void test_codegraph_ignore_paths() {
 
 /// ignorePaths 通配符: `**/third_party/**` 命中任意层级的同名目录
 void test_codegraph_ignore_paths_wildcard() {
-    auto tmp_dir = create_filter_project();
+    auto                                  tmp_dir = create_filter_project();
     agentxx::expand::CodeGraphIndexConfig cfg;
     cfg.ignorePaths.push_back("**/third_party/**");
     auto manager = agentxx::expand::CodeGraphManager{"", std::move(cfg)};
@@ -1493,10 +1487,10 @@ void test_codegraph_gitignore() {
 
 /// use_gitignore=false: .gitignore 规则不生效, 被忽略文件正常索引
 void test_codegraph_gitignore_disabled() {
-    auto tmp_dir = create_filter_project();
+    auto                                  tmp_dir = create_filter_project();
     agentxx::expand::CodeGraphIndexConfig cfg;
     cfg.useGitignore = false;
-    auto manager = agentxx::expand::CodeGraphManager{"", std::move(cfg)};
+    auto manager     = agentxx::expand::CodeGraphManager{"", std::move(cfg)};
 
     manager.initialize(tmp_dir);
     manager.indexDirectory(tmp_dir, false);
@@ -1546,8 +1540,9 @@ void test_codegraph_gitmodules() {
 /// 多级 .gitignore 继承: 子目录内的 .gitignore 规则同样生效 (忽略其所在
 /// 层级下的文件), 不要求规则只写在项目根
 void test_codegraph_gitignore_nested() {
-    int  idx     = g_temp_project_counter.fetch_add(1);
-    auto tmp_dir = fs::temp_directory_path() / ("codegraph_nested_gitignore_" + std::to_string(idx));
+    int  idx = g_temp_project_counter.fetch_add(1);
+    auto tmp_dir
+        = fs::temp_directory_path() / ("codegraph_nested_gitignore_" + std::to_string(idx));
     if (fs::exists(tmp_dir)) {
         fs::remove_all(tmp_dir);
     }
@@ -1590,9 +1585,9 @@ void test_codegraph_gitignore_nested() {
 /// 多级 .gitmodules: 子目录内的 .gitmodules (嵌套 git 仓库) 声明同样生效,
 /// 不要求只解析项目根 .gitmodules
 void test_codegraph_gitmodules_nested() {
-    int  idx     = g_temp_project_counter.fetch_add(1);
-    auto tmp_dir = fs::temp_directory_path()
-                   / ("codegraph_nested_gitmodules_" + std::to_string(idx));
+    int  idx = g_temp_project_counter.fetch_add(1);
+    auto tmp_dir
+        = fs::temp_directory_path() / ("codegraph_nested_gitmodules_" + std::to_string(idx));
     if (fs::exists(tmp_dir)) {
         fs::remove_all(tmp_dir);
     }
@@ -1640,8 +1635,7 @@ void test_codegraph_gitmodules_nested() {
 /// relative() 得到的相对路径, 规则永不生效)
 void test_codegraph_gitignore_anchored_root() {
     int  idx     = g_temp_project_counter.fetch_add(1);
-    auto tmp_dir = fs::temp_directory_path()
-                   / ("codegraph_anchor_root_" + std::to_string(idx));
+    auto tmp_dir = fs::temp_directory_path() / ("codegraph_anchor_root_" + std::to_string(idx));
     if (fs::exists(tmp_dir)) {
         fs::remove_all(tmp_dir);
     }
@@ -1693,8 +1687,7 @@ void test_codegraph_gitignore_anchored_root() {
 /// 其他同名路径之外的内容
 void test_codegraph_gitignore_anchored_nested() {
     int  idx     = g_temp_project_counter.fetch_add(1);
-    auto tmp_dir = fs::temp_directory_path()
-                   / ("codegraph_anchor_nested_" + std::to_string(idx));
+    auto tmp_dir = fs::temp_directory_path() / ("codegraph_anchor_nested_" + std::to_string(idx));
     if (fs::exists(tmp_dir)) {
         fs::remove_all(tmp_dir);
     }
@@ -1744,8 +1737,7 @@ void test_codegraph_gitignore_anchored_nested() {
 /// 忽略任意深度下的 generated 目录
 void test_codegraph_gitignore_doublestar_prefix() {
     int  idx     = g_temp_project_counter.fetch_add(1);
-    auto tmp_dir = fs::temp_directory_path()
-                   / ("codegraph_dstar_prefix_" + std::to_string(idx));
+    auto tmp_dir = fs::temp_directory_path() / ("codegraph_dstar_prefix_" + std::to_string(idx));
     if (fs::exists(tmp_dir)) {
         fs::remove_all(tmp_dir);
     }
@@ -1871,8 +1863,7 @@ void test_codegraph_gitignore_incremental_cleanup() {
 /// loadPaths 多目录: updateIndex 按加载路径列表逐个索引
 void test_codegraph_load_paths() {
     int  idx      = g_temp_project_counter.fetch_add(1);
-    auto tmp_base = fs::temp_directory_path()
-                    / ("codegraph_loadpaths_test_" + std::to_string(idx));
+    auto tmp_base = fs::temp_directory_path() / ("codegraph_loadpaths_test_" + std::to_string(idx));
     if (fs::exists(tmp_base)) {
         fs::remove_all(tmp_base);
     }
@@ -1915,10 +1906,10 @@ void test_codegraph_load_paths() {
 
 /// autoLoadProjectRoot=false (load_cwd=false) 且无加载路径: updateIndex 空操作不索引
 void test_codegraph_load_cwd_disabled() {
-    auto tmp_dir = create_temp_project();
+    auto                                  tmp_dir = create_temp_project();
     agentxx::expand::CodeGraphIndexConfig cfg;
     cfg.autoLoadProjectRoot = false;
-    auto manager = agentxx::expand::CodeGraphManager{"", std::move(cfg)};
+    auto manager            = agentxx::expand::CodeGraphManager{"", std::move(cfg)};
 
     manager.initialize(tmp_dir);
     bool ok = manager.updateIndex(); // 无加载路径且关闭默认加载: 空操作
@@ -1949,9 +1940,9 @@ void test_codegraph_manager_restart_resume() {
         agentxx::expand::CodeGraphManager manager;
         manager.initialize(tmp_dir);
         manager.indexDirectory(tmp_dir, false); // 全量
-        manager.setProgressCallback(
-            [&](int /*processed*/, int /*total*/, std::string_view) { ++inprocess_calls; }
-        );
+        manager.setProgressCallback([&](int /*processed*/, int /*total*/, std::string_view) {
+            ++inprocess_calls;
+        });
         manager.indexDirectory(tmp_dir, true); // 同进程增量: 无变更应全部跳过
     } // manager 析构: db 关闭 + WAL checkpoint
 
@@ -1959,14 +1950,12 @@ void test_codegraph_manager_restart_resume() {
     {
         agentxx::expand::CodeGraphManager manager2;
         manager2.initialize(tmp_dir); // 重新打开 (模拟重启)
-        manager2.setProgressCallback(
-            [&](int processed, int total, std::string_view currentFile) {
-                // 完成信号 (total 回调, currentFile 为空) 不算真正处理
-                if (!currentFile.empty() && processed < total) {
-                    ++resumed_processed;
-                }
+        manager2.setProgressCallback([&](int processed, int total, std::string_view currentFile) {
+            // 完成信号 (total 回调, currentFile 为空) 不算真正处理
+            if (!currentFile.empty() && processed < total) {
+                ++resumed_processed;
             }
-        );
+        });
         manager2.indexDirectory(tmp_dir, true); // 重启后增量: 应跳过所有文件
 
         auto result = manager2.searchSymbols("add", 10);
@@ -1991,13 +1980,12 @@ void test_codegraph_query_during_indexing() {
     manager->initialize(tmp_dir);
 
     std::atomic<bool> first_file{false};
-    manager->setProgressCallback(
-        [&](int /*processed*/, int /*total*/, std::string_view currentFile) {
-            if (!currentFile.empty()) {
-                first_file = true;
-            }
+    manager->setProgressCallback([&](int /*processed*/, int /*total*/, std::string_view currentFile
+                                 ) {
+        if (!currentFile.empty()) {
+            first_file = true;
         }
-    );
+    });
 
     // 后台索引线程: 全量索引 (多文件, 模拟索引进行中)
     std::thread indexThread([&]() {
@@ -2013,15 +2001,15 @@ void test_codegraph_query_during_indexing() {
     const auto startAt = std::chrono::steady_clock::now();
     auto       result  = manager->searchSymbols("greet", 10);
     const auto costUs  = std::chrono::duration_cast<std::chrono::microseconds>(
-                             std::chrono::steady_clock::now() - startAt
+                            std::chrono::steady_clock::now() - startAt
     )
-                             .count();
+                            .count();
 
     indexThread.join();
 
     // 查询耗时远小于索引总时长 (阈值 3s 宽松; 旧实现被写锁阻塞会超时失败)
-    if (costUs < std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::seconds{3})
-                     .count()) {
+    if (costUs
+        < std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::seconds{3}).count()) {
         g_cg_passed++;
         TEST_PASS << "query during indexing returned promptly: " << costUs << "us" << std::endl;
     } else {
@@ -2074,7 +2062,7 @@ void test_codegraph_query_during_finalize() {
 
     // 前台持续查询 (每 10ms 一次), 记录最坏单次耗时
     std::atomic<int64_t> worst_us{0};
-    std::thread queryThread([&]() {
+    std::thread          queryThread([&]() {
         while (!indexing_done.load()) {
             auto startAt = std::chrono::steady_clock::now();
             manager->searchSymbols("sym_1", 10); // 无论结果如何都要走查询锁
@@ -2096,8 +2084,8 @@ void test_codegraph_query_during_finalize() {
     const auto worstMs = worst_us.load() / 1000;
     if (worstMs < 2000) {
         g_cg_passed++;
-        TEST_PASS << "query never blocked long during finalize, worst=" << worstMs
-                  << "ms" << std::endl;
+        TEST_PASS << "query never blocked long during finalize, worst=" << worstMs << "ms"
+                  << std::endl;
     } else {
         g_cg_failed++;
         TEST_FAIL << "query blocked during finalize, worst=" << worstMs << "ms" << std::endl;

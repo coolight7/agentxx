@@ -28,7 +28,7 @@ int g_plugin_failed = 0;
 static std::string findExamplePluginPath() {
     namespace fs = std::filesystem;
     std::error_code ec;
-    auto cwd = fs::current_path(ec);
+    auto            cwd = fs::current_path(ec);
     if (!ec) {
         for (const auto& cand : {
                  cwd / "libagentxx_plugin_example.so",
@@ -44,7 +44,8 @@ static std::string findExamplePluginPath() {
 }
 
 static asio::awaitable<void> sleepMs(int ms) {
-    auto timer = asio::steady_timer(co_await asio::this_coro::executor, std::chrono::milliseconds{ms});
+    auto timer
+        = asio::steady_timer(co_await asio::this_coro::executor, std::chrono::milliseconds{ms});
     co_await timer.async_wait(asio::use_awaitable);
 }
 
@@ -56,9 +57,9 @@ asio::awaitable<TestResult> run_plugin_tests() {
     auto ctx                     = std::make_shared<agentxx::agent::AgentContext>();
     ctx->agentConfig             = std::make_shared<agentxx::agent::AgentConfig>();
     ctx->middlewareHandleContext = std::make_shared<agentxx::middleware::MiddlewareContext>();
-    ctx->bus                     = std::make_shared<agentxx::middleware::EventBus>(co_await asio::this_coro::executor);
-    ctx->toolRegistry            = std::make_shared<agentxx::plugin::ToolRegistry>();
-    ctx->pluginManager           = std::make_shared<agentxx::plugin::PluginManager>(ctx);
+    ctx->bus = std::make_shared<agentxx::middleware::EventBus>(co_await asio::this_coro::executor);
+    ctx->toolRegistry  = std::make_shared<agentxx::plugin::ToolRegistry>();
+    ctx->pluginManager = std::make_shared<agentxx::plugin::PluginManager>(ctx);
     // 装配 io executor (与 BaseAgent::init 一致): 跨线程 (JS 线程/线程池) 的
     // vtable 调用经真实 post 到 io 线程执行, 而非测试默认的"伪 io 线程"直连
     ctx->pluginManager->setIoExecutor(co_await asio::this_coro::executor);
@@ -85,10 +86,10 @@ asio::awaitable<TestResult> run_plugin_tests() {
         XX_TEST_EXPECT_TRUE(tool != nullptr);
         if (tool) {
             auto out = co_await tool->execute_async(neograph::json{
-                {"thread_id", "t1"},
-                {"hello", "world"},
+                {"thread_id", "t1"   },
+                {"hello",     "world"},
             });
-            auto j = neograph::json::parse(out);
+            auto j   = neograph::json::parse(out);
             XX_TEST_EXPECT_EQ(j["echo"]["hello"].get<std::string>(), "world");
             XX_TEST_EXPECT_EQ(j["thread_id"].get<std::string>(), "t1");
         }
@@ -101,9 +102,9 @@ asio::awaitable<TestResult> run_plugin_tests() {
         if (tool) {
             auto out = co_await tool->execute_async(neograph::json{
                 {"thread_id", "t1"},
-                {"x", 42},
+                {"x",         42  },
             });
-            auto j = neograph::json::parse(out);
+            auto j   = neograph::json::parse(out);
             XX_TEST_EXPECT_EQ(j["via_call_tool"]["echo"]["x"].get<int>(), 42);
         }
     }
@@ -111,7 +112,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
     // ---- 5. 钩子注册: 中间件句柄入栈 + 钩子点记录 ----
     {
         const auto& handles = ctx->middlewareHandleContext->handles;
-        bool found = std::any_of(handles.begin(), handles.end(), [](const auto& h) {
+        bool        found   = std::any_of(handles.begin(), handles.end(), [](const auto& h) {
             return h->name == "agentxx_plugin_example_middleware";
         });
         XX_TEST_EXPECT_TRUE(found);
@@ -123,14 +124,13 @@ asio::awaitable<TestResult> run_plugin_tests() {
     {
         // 测试侧订阅同一 topic (JSON 字符串载荷)
         bool received = false;
-        auto subId    = ctx->bus->get<std::string>("plugin.demo.topic").subscribe(
-            [&](const std::string& data) -> asio::awaitable<void> {
-                if (data.find("\"k\"") != std::string::npos) {
-                    received = true;
-                }
-                co_return;
-            }
-        );
+        auto subId    = ctx->bus->get<std::string>("plugin.demo.topic")
+                         .subscribe([&](const std::string& data) -> asio::awaitable<void> {
+                             if (data.find("\"k\"") != std::string::npos) {
+                                 received = true;
+                             }
+                             co_return;
+                         });
         int rc = ctx->pluginManager->publish("demo.topic", R"({"k":"v"})");
         XX_TEST_EXPECT_EQ(rc, 0);
         co_await sleepMs(150);
@@ -164,7 +164,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
         XX_TEST_EXPECT_FALSE(ctx->pluginManager->capabilities()->has("example.demo"));
         // 中间件应从 handles 摘除 (pendingCleanup 于下轮 flush; 无轮次时直接摘除)
         const auto& handles = ctx->middlewareHandleContext->handles;
-        bool found = std::any_of(handles.begin(), handles.end(), [](const auto& h) {
+        bool        found   = std::any_of(handles.begin(), handles.end(), [](const auto& h) {
             return h->name == "agentxx_plugin_example_middleware";
         });
         XX_TEST_EXPECT_FALSE(found);
@@ -183,13 +183,16 @@ asio::awaitable<TestResult> run_plugin_tests() {
         // 最小非抽象工具 (仅测试注册表冲突检测用)
         struct DummyTool : agentxx::tools::XXToolBase {
             using XXToolBase::XXToolBase;
+
             neograph::ChatTool get_definition() const override {
                 return neograph::ChatTool{};
             }
+
             asio::awaitable<std::string> execute_async(const neograph::json&) override {
                 co_return std::string{};
             }
         };
+
         ctx->toolRegistry->setStaticToolNames({"builtin_tool_a"});
         // 插件工具注册冲突在 loadNativeAsync 路径覆盖, 此处验证注册表拒绝同名静态工具
         auto dummy = std::make_shared<DummyTool>("builtin_tool_a", ctx);
@@ -204,7 +207,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
         auto inst2 = co_await ctx->pluginManager->loadNativeAsync(path);
         XX_TEST_EXPECT_TRUE(inst2 != nullptr);
         if (inst2) {
-            auto list = ctx->pluginManager->list();
+            auto list  = ctx->pluginManager->list();
             bool found = std::any_of(list.begin(), list.end(), [](const auto& item) {
                 return item.name == "agentxx_plugin_example" && item.enabled;
             });
@@ -214,7 +217,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
     }
 
     // JS 引擎库与脚本插件目录 (第 12~26 段共用; 函数级声明)
-    namespace fs = std::filesystem;
+    namespace fs       = std::filesystem;
     auto        jsPath = findExamplePluginPath();
     std::string jsLib  = (fs::path(jsPath).parent_path() / "libagentxx_plugin_js.so").string();
     std::string jsDir  = (fs::path(jsPath).parent_path() / "plugins" / "js_example").string();
@@ -259,18 +262,20 @@ asio::awaitable<TestResult> run_plugin_tests() {
             XX_TEST_EXPECT_TRUE(tool != nullptr);
             if (tool) {
                 auto out = co_await tool->execute_async(neograph::json{
-                    {"thread_id", "t1"},
-                    {"name", "agentxx"},
+                    {"thread_id", "t1"     },
+                    {"name",      "agentxx"},
                 });
-                auto j = neograph::json::parse(out);
+                auto j   = neograph::json::parse(out);
                 XX_TEST_EXPECT_EQ(j["greeting"].get<std::string>(), "Hello, agentxx!");
                 XX_TEST_EXPECT_EQ(j["from"].get<std::string>(), "js plugin");
             }
             auto asyncTool = ctx->toolRegistry->find("js_async_wait");
             XX_TEST_EXPECT_TRUE(asyncTool != nullptr);
             if (asyncTool) {
-                auto out = co_await asyncTool->execute_async(neograph::json{{"thread_id", "t2"}});
-                auto j = neograph::json::parse(out);
+                auto out = co_await asyncTool->execute_async(neograph::json{
+                    {"thread_id", "t2"}
+                });
+                auto j   = neograph::json::parse(out);
                 XX_TEST_EXPECT_EQ(j["waited"].get<bool>(), true);
                 XX_TEST_EXPECT_EQ(j["thread"].get<std::string>(), "t2");
             }
@@ -281,8 +286,10 @@ asio::awaitable<TestResult> run_plugin_tests() {
             auto tool = ctx->toolRegistry->find("js_call_js");
             XX_TEST_EXPECT_TRUE(tool != nullptr);
             if (tool) {
-                auto out = co_await tool->execute_async(neograph::json{{"name", "inner-x"}});
-                auto j = neograph::json::parse(out);
+                auto out = co_await tool->execute_async(neograph::json{
+                    {"name", "inner-x"}
+                });
+                auto j   = neograph::json::parse(out);
                 XX_TEST_EXPECT_EQ(j["inner"]["greeting"].get<std::string>(), "Hello, inner-x!");
             }
         }
@@ -292,8 +299,10 @@ asio::awaitable<TestResult> run_plugin_tests() {
             auto tool = ctx->toolRegistry->find("js_call_host");
             XX_TEST_EXPECT_TRUE(tool != nullptr);
             if (tool) {
-                auto out = co_await tool->execute_async(neograph::json{{"hello", "host"}});
-                auto j = neograph::json::parse(out);
+                auto out = co_await tool->execute_async(neograph::json{
+                    {"hello", "host"}
+                });
+                auto j   = neograph::json::parse(out);
                 XX_TEST_EXPECT_EQ(j["host"]["echo"]["hello"].get<std::string>(), "host");
             }
         }
@@ -386,7 +395,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
                 auto allJson = ctx->pluginManager->listPluginsJson();
                 XX_TEST_EXPECT_FALSE(allJson.empty());
                 if (!allJson.empty()) {
-                    auto arr = neograph::json::parse(allJson);
+                    auto arr     = neograph::json::parse(allJson);
                     bool foundJs = false;
                     for (const auto& item : arr) {
                         if (item["name"].get<std::string>() == "js_example"
@@ -417,15 +426,14 @@ asio::awaitable<TestResult> run_plugin_tests() {
             slowSpec.name            = "slow_timeout_tool";
             slowSpec.description     = "slow tool for unload race test";
             slowSpec.parameters_json = "{}";
-            slowSpec.execute
-                = +[](void*, const char*, const char*, const char*, char**) -> char* {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(600));
-                    char* p = static_cast<char*>(::malloc(3));
-                    p[0]    = '{';
-                    p[1]    = '}';
-                    p[2]    = '\0';
-                    return p;
-                };
+            slowSpec.execute = +[](void*, const char*, const char*, const char*, char**) -> char* {
+                std::this_thread::sleep_for(std::chrono::milliseconds(600));
+                char* p = static_cast<char*>(::malloc(3));
+                p[0]    = '{';
+                p[1]    = '}';
+                p[2]    = '\0';
+                return p;
+            };
             slowSpec.default_timeout_ms = 100;
             XX_TEST_EXPECT_EQ(ctx->pluginManager->registerTool(inst23.get(), &slowSpec), 0);
 
@@ -433,7 +441,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
             XX_TEST_EXPECT_TRUE(tool != nullptr);
             if (tool) {
                 std::atomic<bool> execDone{false};
-                auto ex = co_await asio::this_coro::executor;
+                auto              ex = co_await asio::this_coro::executor;
                 asio::co_spawn(
                     ex,
                     [&execDone, tool]() -> asio::awaitable<void> {
@@ -447,13 +455,12 @@ asio::awaitable<TestResult> run_plugin_tests() {
                 // 等待超时返回 (100ms) + 回调仍在线程池执行 (600ms 未完成)
                 co_await sleepMs(250);
                 // 立即卸载: 必须等 inflight 归零 (回调完成) 才 dlclose
-                auto t0       = std::chrono::steady_clock::now();
-                auto ok       = co_await ctx->pluginManager->unloadAsync("agentxx_plugin_example");
-                auto elapsedMs
-                    = std::chrono::duration_cast<std::chrono::milliseconds>(
-                          std::chrono::steady_clock::now() - t0
-                      )
-                          .count();
+                auto t0        = std::chrono::steady_clock::now();
+                auto ok        = co_await ctx->pluginManager->unloadAsync("agentxx_plugin_example");
+                auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                     std::chrono::steady_clock::now() - t0
+                )
+                                     .count();
                 XX_TEST_EXPECT_TRUE(ok);
                 // 卸载应等待回调完成 (600-250 ≈ 350ms; 放宽到 >= 250ms),
                 // 且回调必须完整执行完 (execDone)
@@ -480,7 +487,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
             XX_TEST_EXPECT_TRUE(inst24->middleware != nullptr);
             XX_TEST_EXPECT_FALSE(inst24->middleware->disabled);
             const auto& handles = ctx->middlewareHandleContext->handles;
-            bool found = std::any_of(handles.begin(), handles.end(), [](const auto& h) {
+            bool        found   = std::any_of(handles.begin(), handles.end(), [](const auto& h) {
                 return h->name == "agentxx_plugin_example_middleware" && !h->disabled;
             });
             XX_TEST_EXPECT_TRUE(found);

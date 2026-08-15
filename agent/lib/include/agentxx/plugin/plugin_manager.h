@@ -37,16 +37,16 @@ public:
     std::string name;
     std::string version;
     std::string description;
-    std::string path;                    ///< 加载的库路径
+    std::string path; ///< 加载的库路径
     /// 必选依赖 (插件名): 未安装则加载失败; 卸载/禁用时级联 (依赖方先于被依赖方)
     std::vector<std::string> depends;
     /// 可选依赖 (插件名): 未安装仅警告, 不影响加载
     std::vector<std::string> optionalDepends;
-    void*       dlHandle = nullptr;      ///< dlopen/LoadLibrary 句柄 (脚本插件为空)
-    void*       pluginCtx = nullptr;     ///< entry 输出的插件私有上下文
-    bool        enabled = true;          ///< 是否启用 (禁用: 工具摘除/钩子停用)
-    bool        userDisabled = false;    ///< 是否被用户显式禁用 (区别于级联禁用; enable 级联不复活)
-    bool        unloadRequested = false; ///< 已请求卸载 (防重复)
+    void*                    dlHandle = nullptr; ///< dlopen/LoadLibrary 句柄 (脚本插件为空)
+    void*                    pluginCtx = nullptr; ///< entry 输出的插件私有上下文
+    bool                     enabled   = true; ///< 是否启用 (禁用: 工具摘除/钩子停用)
+    bool userDisabled = false; ///< 是否被用户显式禁用 (区别于级联禁用; enable 级联不复活)
+    bool unloadRequested = false; ///< 已请求卸载 (防重复)
 
     /// 本插件专属宿主句柄 (vtable 为宿主静态函数表, opaque 指向本实例)
     AgentxxHost host{};
@@ -63,18 +63,18 @@ public:
 
     /// 能力注册记录 (含方法回调; enable 恢复完整能力, 而非降级为无方法哑能力)
     struct CapabilityRegistration {
-        std::string                name;
-        AgentxxCapabilityInvokeFn  invoke = nullptr;
-        void*                      ctx    = nullptr;
+        std::string               name;
+        AgentxxCapabilityInvokeFn invoke = nullptr;
+        void*                     ctx    = nullptr;
     };
 
     /// 注册残留 (卸载时统一清理; 仅 io 线程)
     /// - 工具/钩子/能力【注册信息】在 disable 后保留 (enable 可恢复),
     ///   实际注册状态 (registry/handles/能力表) 由 disable/detachAll 摘除
-    std::vector<std::string>           toolNames;      ///< 已注册工具名
-    std::vector<HookRegistration>      hookRegistrations; ///< 已注册钩子记录 (含函数指针)
+    std::vector<std::string>      toolNames;         ///< 已注册工具名
+    std::vector<HookRegistration> hookRegistrations; ///< 已注册钩子记录 (含函数指针)
     std::vector<std::shared_ptr<AgentxxSubscription>> subscriptions; ///< 已订阅事件句柄
-    std::vector<CapabilityRegistration> capabilityRegistrations; ///< 已声明能力记录
+    std::vector<CapabilityRegistration> capabilityRegistrations;     ///< 已声明能力记录
 
     /// 本插件的中间件句柄 (懒创建; 挂 handles 栈)
     std::shared_ptr<PluginMiddlewareHandle> middleware = nullptr;
@@ -86,18 +86,22 @@ public:
     /// 管理器弱引用 (host vtable 回调取用)
     std::weak_ptr<PluginManager> manager{};
 
-    explicit PluginInstance(std::string in_name) : name(std::move(in_name)) {}
+    explicit PluginInstance(std::string in_name) :
+        name(std::move(in_name)) {}
 
     ~PluginInstance();
 
     /// 在途计数 RAII (execute/hook/event handler 入口调用)
     struct InflightGuard {
         PluginInstance* inst;
-        explicit InflightGuard(PluginInstance* i) : inst(i) {
+
+        explicit InflightGuard(PluginInstance* i) :
+            inst(i) {
             if (inst) {
                 inst->inflight.fetch_add(1, std::memory_order_acq_rel);
             }
         }
+
         ~InflightGuard() {
             if (inst) {
                 inst->inflight.fetch_sub(1, std::memory_order_acq_rel);
@@ -114,10 +118,10 @@ class PluginTool : public agentxx::tools::XXToolBase {
 public:
 
     PluginTool(
-        std::string_view                          name,
+        std::string_view                            name,
         std::weak_ptr<agentxx::agent::AgentContext> agentContext,
-        std::shared_ptr<PluginInstance>           instance,
-        AgentxxToolSpec                           spec
+        std::shared_ptr<PluginInstance>             instance,
+        AgentxxToolSpec                             spec
     );
 
     neograph::ChatTool get_definition() const override;
@@ -136,22 +140,22 @@ public:
 
 private:
 
-    AgentxxToolSpec                   spec_;      ///< 拷贝的 spec (含函数指针)
-    neograph::json                    parameters_; ///< 解析缓存的参数 schema (避免每轮重复 parse)
-    std::weak_ptr<PluginInstance>     instance_;
+    AgentxxToolSpec spec_;       ///< 拷贝的 spec (含函数指针)
+    neograph::json  parameters_; ///< 解析缓存的参数 schema (避免每轮重复 parse)
+    std::weak_ptr<PluginInstance> instance_;
 };
 
 /// 插件中间件句柄: 7 个 C 钩子 → 现有 handles 栈式执行
 /// - 注册进 middlewareHandleContext->handles; 禁用/卸载时置 disabled 位
 ///   (WrapHandleBaseNode 遍历跳过), 由 PluginManager 在轮末安全摘除
-class PluginMiddlewareHandle : public agentxx::middleware::BaseMiddlewareHandle<
-                                   agentxx::middleware::BaseMiddlewareState> {
+class PluginMiddlewareHandle
+    : public agentxx::middleware::BaseMiddlewareHandle<agentxx::middleware::BaseMiddlewareState> {
 public:
 
     PluginMiddlewareHandle(
-        std::string_view                 name,
+        std::string_view                            name,
         std::weak_ptr<agentxx::agent::AgentContext> agentContext,
-        std::shared_ptr<PluginInstance>  instance
+        std::shared_ptr<PluginInstance>             instance
     );
 
     void setHook(AgentxxHookPoint point, AgentxxHookFn fn, void* user_data);
@@ -161,16 +165,19 @@ public:
     // 7 钩子覆写: 转发到 C 回调 (io 线程同步, 快速返回约定)
     asio::awaitable<void> onAgentcallStartFunc(neograph::graph::NodeInput& in) override;
     asio::awaitable<void> onAgentcallEndFunc(
-        const neograph::graph::NodeInput& in, neograph::graph::NodeOutput& result
+        const neograph::graph::NodeInput& in,
+        neograph::graph::NodeOutput&      result
     ) override;
     asio::awaitable<void> onModelcallStartFunc(neograph::graph::NodeInput& in) override;
     asio::awaitable<void> onModelcallRunFunc(neograph::graph::NodeInput& in) override;
     asio::awaitable<void> onModelcallEndFunc(
-        const neograph::graph::NodeInput& in, neograph::graph::NodeOutput& result
+        const neograph::graph::NodeInput& in,
+        neograph::graph::NodeOutput&      result
     ) override;
     asio::awaitable<void> onToolcallStartFunc(neograph::graph::NodeInput& in) override;
     asio::awaitable<void> onToolcallEndFunc(
-        const neograph::graph::NodeInput& in, neograph::graph::NodeOutput& result
+        const neograph::graph::NodeInput& in,
+        neograph::graph::NodeOutput&      result
     ) override;
 
 private:
@@ -183,7 +190,7 @@ private:
 
     asio::awaitable<void> dispatch(AgentxxHookPoint point, const neograph::graph::NodeInput& in);
 
-    std::shared_ptr<PluginInstance> instance_;
+    std::shared_ptr<PluginInstance>           instance_;
     std::array<HookEntry, AGENTXX_HOOK_COUNT> hooks_{};
 };
 
@@ -203,7 +210,7 @@ public:
         std::string              version;
         std::string              description;
         std::string              path;
-        bool                     enabled = true;
+        bool                     enabled  = true;
         size_t                   inflight = 0;
         std::vector<std::string> tools;
         std::vector<std::string> capabilities;
@@ -244,9 +251,8 @@ public:
     /// - 插件目录 (含 plugin.yaml): 按清单分派 (type: native/js)
     /// - 按 manifest depends 拓扑排序加载 (依赖者排在被依赖者之后),
     ///   避免配置顺序导致依赖缺失加载失败
-    asio::awaitable<void> loadConfiguredPlugins(
-        const std::vector<agentxx::agent::PluginConfig>& plugins
-    );
+    asio::awaitable<void>
+        loadConfiguredPlugins(const std::vector<agentxx::agent::PluginConfig>& plugins);
 
     /// 加载插件 (支持 库路径 或 插件目录; 目录含 plugin.yaml 时按清单分派)
     /// - **所有插件统一为 C++ 插件**: manifest entry 总是指向动态库,
@@ -267,7 +273,7 @@ public:
 
     // ==================== 查询 ====================
 
-    std::vector<PluginListView> list() const;
+    std::vector<PluginListView>     list() const;
     std::shared_ptr<PluginInstance> find(std::string_view name) const;
 
     /// 当前是否有轮次在图引擎执行 (disable 立即/延迟生效判定)
@@ -279,6 +285,7 @@ public:
     void onTurnBegin() {
         ++runningTurns_;
     }
+
     void onTurnEnd() {
         if (runningTurns_ > 0) {
             --runningTurns_;
@@ -296,8 +303,10 @@ public:
     int unregisterHook(PluginInstance* inst, AgentxxHookPoint point, AgentxxHookFn fn, void* ud);
     /// 事件订阅/发布 (topic 加 "plugin." 前缀, 载荷 JSON 字符串)
     AgentxxSubscription* subscribe(
-        PluginInstance* inst, const char* topic,
-        void (*handler)(const char* event_json, void* ud), void* ud
+        PluginInstance* inst,
+        const char*     topic,
+        void (*handler)(const char* event_json, void* ud),
+        void* ud
     );
     void unsubscribe(AgentxxSubscription* sub);
     int  publish(const char* topic, const char* event_json);
@@ -349,16 +358,25 @@ public:
     int registerCapability(PluginInstance* inst, const char* capability);
     /// 注册能力并附带方法回调 (通用插件间通信; 如 JS 引擎 "interpreter.js"
     /// 提供 load/unload 方法)
-    int registerCapabilityEx(PluginInstance* inst, const char* capability,
-                             AgentxxCapabilityInvokeFn invoke, void* ctx);
+    int registerCapabilityEx(
+        PluginInstance*           inst,
+        const char*               capability,
+        AgentxxCapabilityInvokeFn invoke,
+        void*                     ctx
+    );
     int unregisterCapability(PluginInstance* inst, const char* capability);
     int hasCapability(const char* capability) const;
 
     /// 调用能力提供者的方法 (io 线程约束; 跨线程经 post 同步等待)
     /// - 提供者回调在调用方线程执行 (回调内部自行跳转引擎线程)
     /// - 返回结果 JSON (host->alloc); 失败返回 NULL 并 error_out
-    char* invokeCapability(PluginInstance* caller, const char* capability,
-                           const char* method, const char* args_json, char** error_out);
+    char* invokeCapability(
+        PluginInstance* caller,
+        const char*     capability,
+        const char*     method,
+        const char*     args_json,
+        char**          error_out
+    );
 
     // ==================== 插件互查 (vtable list_plugins/get_plugin) ====================
 
@@ -374,8 +392,10 @@ private:
     /// 等待插件在途计数归零 (io 线程协程轮询); 超时返回 false
     /// - 超时说明有插件回调长时间未返回 (慢/恶意插件): 调用方放弃卸载
     ///   (插件保持已 detach 状态, 可稍后重试), 避免无限阻塞 io 线程
-    asio::awaitable<bool> waitInflightZero(const std::shared_ptr<PluginInstance>& inst,
-                                           std::chrono::milliseconds timeout);
+    asio::awaitable<bool> waitInflightZero(
+        const std::shared_ptr<PluginInstance>& inst,
+        std::chrono::milliseconds              timeout
+    );
 
     /// 插件卸载清理: 摘除注册/退订/置 disabled (io 线程)
     /// - 保留注册信息 (工具对象/hook 记录/能力记录), disable 后 enable 可恢复;
@@ -394,8 +414,11 @@ private:
 
     /// 依赖检查: 必选依赖是否全部已安装; 可选缺失仅警告 (返回 false = 加载失败)
     /// - 顺带做循环依赖检测 (DFS 访问链)
-    bool checkDependencies(const std::string& name, const std::vector<std::string>& depends,
-                           const std::vector<std::string>& optionalDepends);
+    bool checkDependencies(
+        const std::string&              name,
+        const std::vector<std::string>& depends,
+        const std::vector<std::string>& optionalDepends
+    );
 
     /// 递归检测依赖环 (visiting 为当前 DFS 访问链)
     bool hasDependencyCycle(const std::string& name, std::vector<std::string>& visiting) const;
@@ -418,7 +441,7 @@ private:
 
     /// io executor (BaseAgent::init 装配; 空 = 未装配)
     asio::any_io_executor ioExecutor_{};
-    std::thread::id        ioThreadId_{};
+    std::thread::id       ioThreadId_{};
 };
 
 /// 能力注册表 (插件互查/委派; 如 JS 解释器能力 "interpreter.js")
@@ -427,19 +450,23 @@ class CapabilityRegistry {
 public:
 
     struct Entry {
-        std::string provider;                          ///< 提供者插件名
-        AgentxxCapabilityInvokeFn invoke = nullptr;    ///< 方法回调 (可空)
-        void* ctx = nullptr;                           ///< 提供者私有上下文
+        std::string               provider;         ///< 提供者插件名
+        AgentxxCapabilityInvokeFn invoke = nullptr; ///< 方法回调 (可空)
+        void*                     ctx    = nullptr; ///< 提供者私有上下文
     };
 
-    bool registerCapability(std::string_view name, std::string_view providerPlugin,
-                            AgentxxCapabilityInvokeFn invoke = nullptr, void* ctx = nullptr);
+    bool registerCapability(
+        std::string_view          name,
+        std::string_view          providerPlugin,
+        AgentxxCapabilityInvokeFn invoke = nullptr,
+        void*                     ctx    = nullptr
+    );
     bool unregisterCapability(std::string_view name, std::string_view providerPlugin);
     bool has(std::string_view name) const;
     /// 能力条目 (不存在返回 nullptr)
     const Entry* get(std::string_view name) const;
     /// 提供某能力的插件名 (不存在返回空)
-    std::string providerOf(std::string_view name) const;
+    std::string              providerOf(std::string_view name) const;
     std::vector<std::string> names() const;
 
 private:

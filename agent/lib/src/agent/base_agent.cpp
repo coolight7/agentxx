@@ -86,9 +86,7 @@ asio::awaitable<void> BaseAgent::init() {
     // - 配置插件的实际加载在 init 末尾 (engine 构建后, 见下方)
     notifyStartup("初始化插件系统 ...");
     agentContext->toolRegistry  = std::make_shared<agentxx::plugin::ToolRegistry>();
-    agentContext->pluginManager = std::make_shared<agentxx::plugin::PluginManager>(
-        agentContext
-    );
+    agentContext->pluginManager = std::make_shared<agentxx::plugin::PluginManager>(agentContext);
     // 装配 io executor: 插件 vtable 的跨线程调用 (JS 线程等) 经 post 到 io 线程
     // 执行并同步等待 (init 运行于 io 线程, 此处记录的线程 id 即 io 线程)
     agentContext->pluginManager->setIoExecutor(co_await asio::this_coro::executor);
