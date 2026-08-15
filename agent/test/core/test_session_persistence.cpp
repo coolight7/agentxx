@@ -321,7 +321,7 @@ static TestResult testUpdateHistoryPersistence() {
         toolMsg.startTimeMs = 1700000000000LL;
         toolMsg.collapsed   = true;
         V::ToolData t;
-        t.toolName     = "agentxx_filesystem_read_text_file";
+        t.toolName     = "agentxx_filesystem_read";
         t.toolCallId   = "call_x";
         t.toolFinished = false; // 尚未收到结果
         toolMsg.tool   = std::move(t);

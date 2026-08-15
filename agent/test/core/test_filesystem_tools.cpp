@@ -236,7 +236,7 @@ asio::awaitable<void>
     test_read_text_file_get_definition(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FilesystemReadTextFileTool{agentContext};
     auto def  = tool.get_definition();
-    if (def.name == "agentxx_filesystem_read_text_file") {
+    if (def.name == "agentxx_filesystem_read") {
         std::cout << "[PASS] FilesystemReadTextFileTool::get_definition() name correct"
                   << std::endl;
     } else {
@@ -398,7 +398,7 @@ asio::awaitable<void>
     test_write_file_get_definition(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FilesystemWriteFileTool{agentContext};
     auto def  = tool.get_definition();
-    if (def.name == "agentxx_filesystem_write_file") {
+    if (def.name == "agentxx_filesystem_write") {
         g_fs_passed++;
         TEST_PASS << "FilesystemWriteFileTool::get_definition() name correct" << std::endl;
     } else {
@@ -521,7 +521,7 @@ asio::awaitable<void>
     test_edit_text_file_get_definition(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FilesystemEditTextFileTool{agentContext};
     auto def  = tool.get_definition();
-    if (def.name == "agentxx_filesystem_edit_text_file") {
+    if (def.name == "agentxx_filesystem_edit") {
         std::cout << "[PASS] FilesystemEditTextFileTool::get_definition() name correct"
                   << std::endl;
     } else {

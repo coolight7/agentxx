@@ -62,11 +62,11 @@ struct ToolHeaderFixture {
             m->tool->toolFinished = true;
             // 与实际流水线一致: 已完成的 Tool 消息默认折叠展示 (event_stream 历史
             // 重连时 collapsed=true), 折叠头部即 "动词 · 参数摘要" 特化渲染
-            m->collapsed          = true;
-            m->text               = std::move(args);
+            m->collapsed = true;
+            m->text      = std::move(args);
             // Tool 消息默认折叠展示 (与真实 TUI 流一致, 见 agent_tui.cpp);
             // 折叠态头部才显示 "动词 · 参数摘要" 特化渲染
-            m->collapsed          = true;
+            m->collapsed = true;
             st.messages.push_back(std::move(m));
         });
     }
@@ -92,21 +92,21 @@ void testTuiToolHeaderFilesystem() {
 
     // read_text_file: 完整 [offset, limit] 区间
     f.pushTool(
-        "agentxx_filesystem_read_text_file",
+        "agentxx_filesystem_read",
         R"({"path":"/home/a.cpp","line_offset":0,"line_limit":100})"
     );
     XX_TEST_EXPECT_TRUE(f.render().find("Read · [0, 100] /home/a.cpp") != std::string::npos);
 
     // read_text_file: 无区间 (默认 -1) 不显示中括号
-    f.pushTool("agentxx_filesystem_read_text_file", R"({"path":"/home/b.cpp"})");
+    f.pushTool("agentxx_filesystem_read", R"({"path":"/home/b.cpp"})");
     XX_TEST_EXPECT_TRUE(f.render().find("Read · /home/b.cpp") != std::string::npos);
 
     // read_text_file: 仅 limit
-    f.pushTool("agentxx_filesystem_read_text_file", R"({"path":"/home/c.cpp","line_limit":50})");
+    f.pushTool("agentxx_filesystem_read", R"({"path":"/home/c.cpp","line_limit":50})");
     XX_TEST_EXPECT_TRUE(f.render().find("Read · [0, 50] /home/c.cpp") != std::string::npos);
 
     // read_text_file: 仅 offset
-    f.pushTool("agentxx_filesystem_read_text_file", R"({"path":"/home/d.cpp","line_offset":10})");
+    f.pushTool("agentxx_filesystem_read", R"({"path":"/home/d.cpp","line_offset":10})");
     XX_TEST_EXPECT_TRUE(f.render().find("Read · [10] /home/d.cpp") != std::string::npos);
 
     // list
@@ -114,14 +114,11 @@ void testTuiToolHeaderFilesystem() {
     XX_TEST_EXPECT_TRUE(f.render().find("List · /home") != std::string::npos);
 
     // write_file
-    f.pushTool("agentxx_filesystem_write_file", R"({"path":"/home/out.txt","overwrite":true})");
+    f.pushTool("agentxx_filesystem_write", R"({"path":"/home/out.txt","overwrite":true})");
     XX_TEST_EXPECT_TRUE(f.render().find("Write · /home/out.txt") != std::string::npos);
 
     // edit_text_file: 头部摘要含路径 (diff 正文不受影响)
-    f.pushTool(
-        "agentxx_filesystem_edit_text_file",
-        R"({"path":"/home/e.cpp","old_str":"a","new_str":"b"})"
-    );
+    f.pushTool("agentxx_filesystem_edit", R"({"path":"/home/e.cpp","old_str":"a","new_str":"b"})");
     XX_TEST_EXPECT_TRUE(f.render().find("Edit · /home/e.cpp") != std::string::npos);
 
     // glob: 单模式 / 多模式折叠为前两项 + "..."
@@ -167,8 +164,8 @@ void testTuiToolHeaderFallback() {
     XX_TEST_EXPECT_TRUE(f.render().find("unknown_tool_xyz") != std::string::npos);
 
     // 参数不是 JSON (普通文本) 时解析失败, 同样回退 toolName
-    f.pushTool("agentxx_filesystem_read_text_file", "not-a-json");
-    XX_TEST_EXPECT_TRUE(f.render().find("agentxx_filesystem_read_text_file") != std::string::npos);
+    f.pushTool("agentxx_filesystem_read", "not-a-json");
+    XX_TEST_EXPECT_TRUE(f.render().find("agentxx_filesystem_read") != std::string::npos);
 }
 
 TestResult testTuiToolHeader() {

@@ -695,8 +695,8 @@ void MessageListComponent::syncStream(const TUIRenderState& st) {
 // ---------------------------------------------------------------------------
 
 /// 将工具调用的参数 JSON 摘要为单行头部, 例如:
-/// - agentxx_filesystem_read_text_file  -> "Read · [0, 100] /path/file"
-/// - agentxx_filesystem_write_file      -> "Write · /path/file"
+/// - agentxx_filesystem_read  -> "Read · [0, 100] /path/file"
+/// - agentxx_filesystem_write      -> "Write · /path/file"
 /// - agentxx_web_search                 -> "Search · <query>"
 /// 未知工具 / 参数解析失败返回空串, 调用方回退显示原始 toolName
 static std::string buildToolHeaderSummary(std::string_view toolName, std::string_view argsText) {
@@ -778,13 +778,13 @@ static std::string buildToolHeaderSummary(std::string_view toolName, std::string
     if (toolName == "agentxx_filesystem_list") {
         return make("List", {}, getStr("path"));
     }
-    if (toolName == "agentxx_filesystem_read_text_file") {
+    if (toolName == "agentxx_filesystem_read") {
         return make("Read", range("line_offset", "line_limit"), getStr("path"));
     }
-    if (toolName == "agentxx_filesystem_write_file") {
+    if (toolName == "agentxx_filesystem_write") {
         return make("Write", {}, getStr("path"));
     }
-    if (toolName == "agentxx_filesystem_edit_text_file") {
+    if (toolName == "agentxx_filesystem_edit") {
         return make("Edit", {}, getStr("path"));
     }
     if (toolName == "agentxx_filesystem_glob") {
@@ -839,12 +839,8 @@ Element MessageListComponent::buildMessageBlock(
                 paragraph(msg.text) | color(theme.userColor),
             });
         case TUIMessage::Role::Assistant: {
-            auto [el, builder] = renderMarkdown(
-                msg.text,
-                theme.assistantColor,
-                theme.markdownTheme,
-                maxWidth
-            );
+            auto [el, builder]
+                = renderMarkdown(msg.text, theme.assistantColor, theme.markdownTheme, maxWidth);
             if (builder) {
                 mdBuilders.push_back(std::move(builder));
             }
@@ -919,12 +915,8 @@ Element MessageListComponent::buildMessageBlock(
             }
             lines.push_back(hbox(std::move(header)));
             if (expanded) {
-                auto [el, builder] = renderMarkdown(
-                    msg.text,
-                    theme.thinkingColor,
-                    theme.markdownTheme,
-                    maxWidth
-                );
+                auto [el, builder]
+                    = renderMarkdown(msg.text, theme.thinkingColor, theme.markdownTheme, maxWidth);
                 if (builder) {
                     mdBuilders.push_back(std::move(builder));
                 }
@@ -937,10 +929,9 @@ Element MessageListComponent::buildMessageBlock(
             if (!msg.tool) {
                 return text("");
             }
-            const bool expanded = !msg.collapsed;
-            const bool isEditTool
-                = msg.tool && msg.tool->toolName == "agentxx_filesystem_edit_text_file";
-            const bool finished = msg.tool && msg.tool->toolFinished;
+            const bool expanded   = !msg.collapsed;
+            const bool isEditTool = msg.tool && msg.tool->toolName == "agentxx_filesystem_edit";
+            const bool finished   = msg.tool && msg.tool->toolFinished;
             // TUI 特化: 已知工具头部渲染为 "动词 · 参数摘要"
             // (如 "Read · [0, 100] /path" / "Write · /path"), 未知工具回退原始 toolName
             Elements lines;
@@ -1052,7 +1043,7 @@ Element MessageListComponent::buildMessageBlock(
 }
 
 // ---------------------------------------------------------------------------
-// agentxx_filesystem_edit_text_file 特化渲染
+// agentxx_filesystem_edit 特化渲染
 // ---------------------------------------------------------------------------
 
 /// 工具结果文本是否表示失败

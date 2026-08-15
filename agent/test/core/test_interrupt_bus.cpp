@@ -308,7 +308,7 @@ asio::awaitable<void> test_permission_relative_path() {
         agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
     );
 
-    MockTool item("agentxx_filesystem_write_file");
+    MockTool item("agentxx_filesystem_write");
 
     auto check = [&](std::string_view rel, std::string_view abs) -> asio::awaitable<void> {
         // 相对路径访问
@@ -399,7 +399,7 @@ asio::awaitable<void> test_permission_remember_rule() {
         agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
     );
 
-    MockTool          item("agentxx_filesystem_write_file");
+    MockTool          item("agentxx_filesystem_write");
     const std::string outsidePath = "/data/projects/remember/out.txt";
     const std::string subPath     = "/data/projects/remember/sub/deep.txt";
     const std::string secretPath  = "/data/projects/remember/secret/key.txt";
