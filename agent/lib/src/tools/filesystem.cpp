@@ -865,6 +865,10 @@ asio::awaitable<std::string>
     auto new_str       = arguments.value<std::string>("new_str", std::string{});
     auto multi_replace = arguments.value<bool>("multi_replace", false);
 
+    if (new_str == old_str) {
+        co_return "[Error] Arg `old_str` and `new_str` are equal and unchanged.";
+    }
+
     // 统一到 \n 换行符
     // - 与 filesystem_read 的逻辑不同，read 应当保留原始的内容，edit 应当尽可能保证修改成功，如果
     // llm 需要写回 crlf，可使用 shell
