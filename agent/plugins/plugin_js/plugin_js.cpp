@@ -153,10 +153,14 @@ public:
     void loadScriptInEngine(const AgentxxHost* host, const std::string& name,
                             const std::string& path, const std::string& code,
                             int& rc, std::string& err) {
-        postSync([&]() { rc = doLoadScript(host, name, path, code, err); });
+        if (!postSync([&]() { rc = doLoadScript(host, name, path, code, err); })) {
+            // 引擎已停止: 置失败状态 (postSync 未执行 lambda, rc/err 未被赋值)
+            rc  = -1;
+            err = "interpreter.js engine stopped";
+        }
     }
 
-    /// 投递式卸载脚本 (不等待)
+    /// 投递式卸载脚本 (不等待); 引擎停止时静默忽略
     void unloadScript(const char* script_name) {
         std::string name{script_name};
         post([this, name]() { doUnloadScript(name); });
@@ -165,23 +169,25 @@ public:
     /// 已加载脚本的工具名 JSON 数组 (JS 线程; 手工拼接, 不依赖宿主 JSON 库)
     std::string loadedToolsJson(const std::string& name) {
         std::string out;
-        postSync([&]() {
-            auto pctx = findPlugin(name);
-            if (!pctx || !pctx->ctx) {
-                out = "[]";
-                return;
-            }
-            out = "[";
-            bool first = true;
-            for (auto& k : jsToolsSnapshot(pctx.get())) {
-                if (!first) {
-                    out += ",";
+        if (!postSync([&]() {
+                auto pctx = findPlugin(name);
+                if (!pctx || !pctx->ctx) {
+                    out = "[]";
+                    return;
                 }
-                first = false;
-                out += "\"" + k + "\"";
-            }
-            out += "]";
-        });
+                out = "[";
+                bool first = true;
+                for (auto& k : jsToolsSnapshot(pctx.get())) {
+                    if (!first) {
+                        out += ",";
+                    }
+                    first = false;
+                    out += "\"" + k + "\"";
+                }
+                out += "]";
+            })) {
+            return "[]"; // 引擎已停止
+        }
         return out;
     }
 
@@ -198,25 +204,29 @@ public:
 
     // ==================== 任务队列 ====================
 
-    void post(std::function<void()> fn) {
+    /// 投递任务到 JS 线程 (非阻塞); 返回 false = 引擎已停止 (未入队)
+    bool post(std::function<void()> fn) {
         {
             std::lock_guard<std::mutex> lk(mtx_);
             if (stop_) {
-                return;
+                return false;
             }
             queue_.push_back(std::move(fn));
         }
         cv_.notify_one();
+        return true;
     }
 
-    void postSync(std::function<void()> fn) {
+    /// 投递任务到 JS 线程并阻塞等待执行完成; 返回 false = 引擎已停止
+    /// (未执行, 输出参数保持不变, 由调用方置失败状态)
+    bool postSync(std::function<void()> fn) {
         std::mutex              m;
         std::condition_variable cv;
         bool                    done = false;
         {
             std::lock_guard<std::mutex> lk(mtx_);
             if (stop_) {
-                return;
+                return false;
             }
             queue_.push_back([&]() {
                 fn();
@@ -230,6 +240,7 @@ public:
         cv_.notify_one();
         std::unique_lock<std::mutex> lk(m);
         cv.wait(lk, [&]() { return done; });
+        return true;
     }
 
     // ==================== 跨线程镜像 ====================
@@ -305,7 +316,9 @@ private:
                 } else {
                     cv_.wait_until(lk, next, [&]() { return stop_ || !queue_.empty(); });
                 }
-                if (stop_ && queue_.empty() && timers_.empty()) {
+                // 退出条件仅看 stop_ + 队列: 未到期长定时器不再导致退出前忙循环
+                // (定时器引用在下方 break 前统一释放)
+                if (stop_ && queue_.empty()) {
                     break;
                 }
                 if (queue_.empty()) {
@@ -323,6 +336,28 @@ private:
             } catch (...) {
                 // 任务异常不得终止 JS 线程
             }
+        }
+        // ---- 线程退出前清理 (JS 线程, 安全释放 JSValue) ----
+        // 1. 残余定时器 (正常卸载路径 doUnloadScript 已清各插件定时器, 此处兜底)
+        for (auto& [id, t] : timers_) {
+            (void)id;
+            auto pctx = findPlugin(t.plugin);
+            if (pctx && pctx->ctx) {
+                JS_FreeValue(pctx->ctx, t.fn);
+            }
+        }
+        timers_.clear();
+        // 2. 残余插件上下文 (正常路径引擎卸载前脚本插件已级联卸载; 兜底释放,
+        //    保证 JS_FreeRuntime 前所有 JSContext 已 Free, 无 gc 断言)
+        for (auto& [name, pctx] : plugins_) {
+            (void)name;
+            pctx->deleted = true;
+            pctx->host    = nullptr;
+        }
+        plugins_.clear();
+        {
+            std::lock_guard<std::mutex> lk(mirrorMtx_);
+            mirror_.clear();
         }
     }
 
@@ -552,9 +587,19 @@ private:
                 return JS_NewString(pctx->ctx, "[pending job exception]");
             }
             if (rc == 0) {
-                // 无 job: 可能等待外部事件 (setTimeout); 执行到期定时器并让出
+                // 无 job: 可能等待外部事件 (setTimeout); 执行到期定时器后
+                // 等待下一个定时器到期 (避免 1ms 忙轮询; 新定时器注册会
+                // notify 唤醒, stop_ 时尽快退出)
                 fireDueTimersInline();
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                auto next = nextTimerLocked();
+                if (next == std::chrono::steady_clock::time_point::max()) {
+                    // 无任何定时器: 无法推进, 短暂让出后重试 (Promise 可能
+                    // 依赖 job 队列, 由循环头 JS_ExecutePendingJob 重新检查)
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                } else {
+                    std::unique_lock<std::mutex> lk(mtx_);
+                    cv_.wait_until(lk, next, [&]() { return stop_; });
+                }
             }
         }
         if (JS_PromiseState(pctx->ctx, value) == JS_PROMISE_FULFILLED) {
@@ -733,14 +778,20 @@ char* JsEngine::toolExecute(void* ud, const char* args_json, const char* thread_
 
         std::mutex              m;
         std::condition_variable cv;
-        engine->post([engine, binding, req, &m, &cv]() {
-            engine->doToolExecute(binding, *req);
-            {
-                std::lock_guard<std::mutex> lk(m);
-                req->done = true;
+        if (!engine->post([engine, binding, req, &m, &cv]() {
+                engine->doToolExecute(binding, *req);
+                {
+                    std::lock_guard<std::mutex> lk(m);
+                    req->done = true;
+                }
+                cv.notify_one();
+            })) {
+            // 引擎已停止: 不再阻塞等待 (否则线程池线程永久挂起)
+            if (error_out && engine->engineHost_) {
+                *error_out = engine->engineHost_->vtable->strdup("interpreter.js engine stopped");
             }
-            cv.notify_one();
-        });
+            return nullptr;
+        }
         {
             std::unique_lock<std::mutex> lk(m);
             cv.wait(lk, [&]() { return req->done; });
@@ -1081,6 +1132,15 @@ JSValue JsEngine::bridgeCall(JSContext* ctx, JSValueConst this_val, int argc,
             JS_SetPropertyStr(ctx, entry, "topic", JS_NewString(ctx, topic.c_str()));
             JS_SetPropertyStr(ctx, entry, "handler", JS_DupValue(ctx, argv[1]));
             JS_SetPropertyStr(ctx, entry, "token", JS_NewInt32(ctx, static_cast<int32_t>(len)));
+            // 宿主订阅句柄: 拆高低 32 位存储 (JS number 为 double, 直接存指针
+            // 会丢低位精度; BigInt 依赖 libbf 未裁剪)
+            uint64_t subPtr = reinterpret_cast<uint64_t>(sub);
+            JS_SetPropertyStr(
+                ctx, entry, "subPtrLo", JS_NewInt32(ctx, static_cast<int32_t>(subPtr & 0xFFFFFFFFu))
+            );
+            JS_SetPropertyStr(
+                ctx, entry, "subPtrHi", JS_NewInt32(ctx, static_cast<int32_t>(subPtr >> 32))
+            );
             JS_SetPropertyUint32(ctx, pctx->agents, len, entry);
             pctx->hookBindings.push_back(std::move(binding));
             return JS_NewInt32(ctx, static_cast<int32_t>(len));
@@ -1094,6 +1154,20 @@ JSValue JsEngine::bridgeCall(JSContext* ctx, JSValueConst this_val, int argc,
             JS_ToUint32(ctx, &token, argv[0]);
             JSValue entry = JS_GetPropertyUint32(ctx, pctx->agents, token);
             if (JS_IsObject(entry)) {
+                // 释放宿主订阅 (防事件持续投递到已退订的脚本插件:
+                // 退订后宿主不再回调, 插件卸载时也无残留)
+                uint64_t subPtr = 0;
+                JSValue  loV    = JS_GetPropertyStr(ctx, entry, "subPtrLo");
+                JSValue  hiV    = JS_GetPropertyStr(ctx, entry, "subPtrHi");
+                uint32_t lo = 0, hi = 0;
+                JS_ToUint32(ctx, &lo, loV);
+                JS_ToUint32(ctx, &hi, hiV);
+                JS_FreeValue(ctx, loV);
+                JS_FreeValue(ctx, hiV);
+                subPtr = (static_cast<uint64_t>(hi) << 32) | lo;
+                if (subPtr) {
+                    vt.unsubscribe(reinterpret_cast<AgentxxSubscription*>(subPtr));
+                }
                 JS_SetPropertyUint32(ctx, pctx->agents, token, JS_UNDEFINED);
             }
             JS_FreeValue(ctx, entry);
@@ -1202,30 +1276,6 @@ extern "C" const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
     return &info;
 }
 
-/// 轻量提取 JSON 对象字符串字段 (插件不依赖宿主 JSON 库)
-/// - 仅支持平铺对象中形如 "key":"value" 的字符串字段; 失败返回 false
-static bool extractJsonStringField(const std::string& json, const std::string& key,
-                                   std::string& out) {
-    auto pos = json.find("\"" + key + "\"");
-    if (pos == std::string::npos) {
-        return false;
-    }
-    auto colon = json.find(':', pos + key.size() + 2);
-    if (colon == std::string::npos) {
-        return false;
-    }
-    auto q1 = json.find('"', colon + 1);
-    if (q1 == std::string::npos) {
-        return false;
-    }
-    auto q2 = json.find('"', q1 + 1);
-    if (q2 == std::string::npos) {
-        return false;
-    }
-    out = json.substr(q1 + 1, q2 - q1 - 1);
-    return true;
-}
-
 /// 能力方法回调 (interpreter.js): "load" 加载脚本到引擎 / "unload" 卸载
 /// - caller_host: 脚本插件 (C++ 壳) 的宿主句柄 —— 脚本内 agentxx.registerTool
 ///   等注册动作经此挂到调用方插件实例 (宿主 detachAll 统一清理)
@@ -1246,12 +1296,20 @@ static char* jsInvoke(void* ctx, const AgentxxHost* caller_host, const char* met
     }
     std::string methodStr{method};
     std::string argsStr{args_json ? args_json : "{}"};
+    // 参数解析经宿主 json_get_string (对转义/嵌套结构可靠, 替代手写字符串扫描)
+    auto argStr = [&](const char* key, std::string& out) -> bool {
+        char* v = caller_host->vtable->json_get_string(caller_host, argsStr.c_str(), key);
+        if (!v) {
+            return false;
+        }
+        out = v;
+        caller_host->vtable->free(v);
+        return true;
+    };
 
     if (methodStr == "load") {
-        // 解析参数: 轻量提取 JSON 字符串字段 "name"/"path" (不依赖宿主 JSON 库)
         std::string name, path;
-        if (!extractJsonStringField(argsStr, "name", name)
-            || !extractJsonStringField(argsStr, "path", path)) {
+        if (!argStr("name", name) || !argStr("path", path)) {
             setErr("interpreter.js load: name and path (string) required");
             return nullptr;
         }
@@ -1287,7 +1345,7 @@ static char* jsInvoke(void* ctx, const AgentxxHost* caller_host, const char* met
 
     if (methodStr == "unload") {
         std::string name;
-        if (!extractJsonStringField(argsStr, "name", name) || name.empty()) {
+        if (!argStr("name", name) || name.empty()) {
             setErr("interpreter.js unload: name (string) required");
             return nullptr;
         }
