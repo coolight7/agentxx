@@ -369,6 +369,19 @@ Options:
     config->permissionAllowPaths = yamlCfg.permissionAllowPaths;
     config->permissionDenyPaths  = yamlCfg.permissionDenyPaths;
 
+    // 插件配置 (yaml `plugins` 段): 相对路径按程序工作目录解析为绝对路径
+    // (与 skill/memory 一致; BaseAgent::init 按此加载, 拓扑排序见 PluginManager)
+    for (const auto& pc : yamlCfg.plugins) {
+        agentxx::agent::PluginConfig pluginCfg;
+        pluginCfg.path    = resolvePath(pc.path);
+        pluginCfg.enabled = pc.enabled;
+        pluginCfg.args    = pc.args;
+        config->plugins.push_back(std::move(pluginCfg));
+    }
+    if (!config->plugins.empty()) {
+        XX_LOGI("[Config] plugins: {} 条", config->plugins.size());
+    }
+
     // ======================== TUI 全局设置持久化 ========================
     // 全局设置 (动画等级/showSystemInfo 等) 存于 {dataDir}/sqlite/global.db,
     // 绑定到 TUISettings 单例, 设置变更时同步落库, 重启后恢复
