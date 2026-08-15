@@ -5,6 +5,7 @@
 #include "agentxx/agent/io/session_server_agent_io.h"
 #include "agentxx/agent/session_persistence.h"
 #include "agentxx/middlewares/summarization.h"
+#include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/util/diff_util.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/string_util.h"
@@ -78,6 +79,20 @@ asio::awaitable<void> BaseAgent::init() {
         = std::make_shared<agentxx::middleware::MiddlewareContext>(agentContext->sessionPersistence
         );
 
+    // 插件系统装配: 工具注册表 + 插件管理器 (挂在 AgentContext, 供
+    // ToolcallWrapNode/ModelCallWrapNode/中间件栈取用)
+    // - 在 setupMiddleware 之前创建: 插件钩子注册 (加载插件时) push 到
+    //   handles 栈, 与既有中间件并存
+    // - 配置插件的实际加载在 init 末尾 (engine 构建后, 见下方)
+    notifyStartup("初始化插件系统 ...");
+    agentContext->toolRegistry  = std::make_shared<agentxx::plugin::ToolRegistry>();
+    agentContext->pluginManager = std::make_shared<agentxx::plugin::PluginManager>(
+        agentContext
+    );
+    // 装配 io executor: 插件 vtable 的跨线程调用 (JS 线程等) 经 post 到 io 线程
+    // 执行并同步等待 (init 运行于 io 线程, 此处记录的线程 id 即 io 线程)
+    agentContext->pluginManager->setIoExecutor(co_await asio::this_coro::executor);
+
     {
         auto registry = std::make_shared<neograph::graph::GraphRegistry>();
         registerNodes(*registry);
@@ -142,11 +157,31 @@ asio::awaitable<void> BaseAgent::init() {
     );
     assert(nullptr != engine);
     {
+        // 装配静态工具名集合 (插件工具注册冲突检测用; 覆盖内置/中间件/MCP 工具)
+        // - 必须在 own_tools 之前收集: own_tools 会把 tools 元素 move 成空
+        //   unique_ptr, 之后遍历将解引用空指针
+        if (agentContext->toolRegistry) {
+            std::vector<std::string> staticNames;
+            staticNames.reserve(tools.size());
+            for (auto& tool : tools) {
+                staticNames.push_back(tool->get_name());
+            }
+            agentContext->toolRegistry->setStaticToolNames(std::move(staticNames));
+        }
+
         auto crudeTools = std::vector<std::unique_ptr<neograph::Tool>>{};
         for (auto& tool : tools) {
             crudeTools.push_back(std::move(tool));
         }
         engine->own_tools(std::move(crudeTools));
+    }
+
+    // 加载配置启用的插件 (yaml `plugins` 段; 加载失败仅记日志不影响主流程)
+    notifyStartup("加载插件 ...");
+    if (agentContext->pluginManager && !agentContext->agentConfig->plugins.empty()) {
+        co_await agentContext->pluginManager->loadConfiguredPlugins(
+            agentContext->agentConfig->plugins
+        );
     }
 
     co_return;
@@ -373,6 +408,14 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
     auto                   session = agentContext->getSession(threadId);
     session->bindIoThread();
     session->assertIoThread();
+
+    // 插件轮次边界: 每轮开始先清理上一轮遗留的待摘除中间件 (异常路径残留自愈),
+    // 再登记本轮进行中 (供 disable 立即/延迟生效判定)
+    if (agentContext->pluginManager) {
+        agentContext->pluginManager->flushPendingCleanup();
+        agentContext->pluginManager->onTurnBegin();
+    }
+
     if (!session->bus) {
         session->bus
             = std::make_shared<agentxx::middleware::EventBus>(co_await asio::this_coro::executor);
@@ -842,6 +885,11 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
 
     // checkpoint store 采用 InMemorySingleCheckpointStore, save 时自动淘汰
     // 该 thread 的历史 checkpoint, 轮末无需额外裁剪
+
+    // 插件轮次结束: 正常路径登记轮次退出 (异常路径下轮开始时自愈)
+    if (agentContext->pluginManager) {
+        agentContext->pluginManager->onTurnEnd();
+    }
 
     co_return turnResult;
 }

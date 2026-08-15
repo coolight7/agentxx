@@ -1,11 +1,20 @@
 #include "agentxx/agent/context.h"
 #include "agentxx/agent/model_registry.h"
 #include "agentxx/agent/session_persistence.h"
+#include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/util/log.h"
 #include <fmt/format.h>
 
 namespace agentxx {
 namespace agent {
+
+AgentContext::~AgentContext() {
+    // 插件系统先卸载全部插件, 断开中间件↔实例循环引用
+    // (handles 由 middlewareHandleContext 持有, 其析构晚于 pluginManager)
+    if (pluginManager) {
+        pluginManager->shutdownAll();
+    }
+}
 
 std::string Session::appendHistory(ViewMessage msg) {
     // 强制校验: viewMessages/chainHash/msgIdCounter_ 仅允许 io 线程写入

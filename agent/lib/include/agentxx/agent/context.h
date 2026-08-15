@@ -28,6 +28,11 @@ class EventBus;
 class SummarizationMiddlewareHandle;
 } // namespace middleware
 
+namespace plugin {
+class ToolRegistry;
+class PluginManager;
+} // namespace plugin
+
 namespace tools {
 class SubAgentManagerTool;
 }
@@ -251,6 +256,9 @@ struct AgentAppendComponentInfo {
 class AgentContext {
 public:
 
+    /// 析构 (定义于 context.cpp: 需完整类型销毁 plugin 成员)
+    ~AgentContext();
+
     std::shared_ptr<agentxx::agent::AgentConfig>            agentConfig                   = nullptr;
     std::shared_ptr<agentxx::middleware::MiddlewareContext> middlewareHandleContext       = nullptr;
     std::shared_ptr<agentxx::middleware::PermissionMiddlewareHandle> permissionMiddleware = nullptr;
@@ -281,6 +289,15 @@ public:
 
     /// 组件加载信息
     AgentAppendComponentInfo appendComponentInfo;
+
+    /// 插件工具注册表 (动态热插拔工具; ToolcallWrapNode 查找优先,
+    /// ModelCallWrapNode 组装 LLM 侧工具 schema)
+    /// - 由 BaseAgent::init 创建并注入
+    std::shared_ptr<plugin::ToolRegistry> toolRegistry = nullptr;
+
+    /// 插件管理器 (生命周期/热插拔; 全局唯一)
+    /// - 由 BaseAgent::init 创建并注入
+    std::shared_ptr<plugin::PluginManager> pluginManager = nullptr;
 
     /// agent 启动进度通知回调 (由客户端端点 (TUI) 注册; 无注册则为空, no-op)
     /// - 调用方: BaseAgent::init() / CodeAgent::createTools() 各启动阶段

@@ -1093,6 +1093,13 @@ agent/
 │   │   │   ├── modelcall.h       # ModelCallWrapNode (LLM 调用, 动态模型切换)
 │   │   │   ├── toolcall.h        # ToolcallWrapNode (工具分发, 自动压缩)
 │   │   │   └── agentcall.h       # AgentStart/EndCallWrapNode (会话生命周期)
+│   │   ├── plugin/               # 插件系统 (热插拔原生 C++ 插件, 纯 C ABI)
+│   │   │   ├── plugin_api.h      # 纯 C ABI 契约 (唯一跨版本稳定接口, 见 docs/zh-cn/plugins.md)
+│   │   │   ├── plugin_manager.h  # PluginManager 生命周期 (load/enable/disable/unload) /
+│   │   │   │                     #   PluginTool (C 回调→线程池卸载执行) /
+│   │   │   │                     #   PluginMiddlewareHandle (7 钩子→C 回调) /
+│   │   │   │                     #   CapabilityRegistry / NativeLoader (dlopen↔LoadLibraryW)
+│   │   │   └── tool_registry.h   # 动态插件工具查表 (shared_ptr 保活, 静态工具名冲突检测)
 │   │   ├── middlewares/          # 中间件
 │   │   │   ├── middleware.h      # BaseMiddlewareHandle / MiddlewareContext / State 基类
 │   │   │   ├── events.h          # 事件类型定义 (Topic 命名空间 / Event structs)
@@ -1204,6 +1211,7 @@ agent/
 ├── test/                         # agentxx_test 测试程序
 │   ├── test.cpp                  # 测试入口: 模块注册与调度 (同步/异步/平台模块分组)
 │   ├── test_framework.h          # 测试框架 (断言宏 / TestResult)
+│   ├── core/test_plugins.*       # 插件系统测试 (加载/工具/钩子/事件/热插拔, 模块名 `plugins`)
 │   ├── test_agent.*              # CodeAgent 集成测试 (模拟 LLM Server: 工具调用/多轮/权限模式/重试耗尽/异常拦截)
 │   ├── test_events.*             # 事件类型测试
 │   ├── test_event_stream.*       # EventBus / EventStream / RequestResponseStream 测试
@@ -1270,11 +1278,17 @@ agent/
 │   ├── liburing/                 # io_uring
 │   ├── NeoGraph/                 # 图引擎 (LLM 调用/工具分发)
 │   ├── OpenSSL/                  # TLS/SSL
+│   ├── quickjs/                  # QuickJS (JS 插件引擎, submodule quickjs-ng, AGENTXX_ENABLE_PLUGIN_JS)
 │   ├── simdjson/                 # JSON 解析
 │   ├── sqlite3/                  # 数据库
 │   ├── uchardet/                 # 编码检测
 │   ├── yaml-cpp/                 # YAML 解析
 │   └── zlib/                     # 压缩
+│
+├── plugins/                      # 插件 (独立动态库/目录, 仅依赖 plugin_api.h)
+│   ├── example_native/           # 一期示例: C++ 插件 (工具/钩子/事件/能力)
+│   ├── plugin_js/                # 二期: JS 解释器插件 (QuickJS, interpreter.js 能力)
+│   └── js_example/               # 二期示例: JS 插件 (plugin.yaml + plugin.js)
 │
 └── script/                       # 编译/测试脚本
     ├── linux_debug_build.sh

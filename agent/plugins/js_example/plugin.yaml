@@ -1,0 +1,11 @@
+# js_example —— JS 示例插件 (统一插件模型)
+# 所有插件统一为 C++ 插件: entry 指向本插件的 C++ 壳 (libjs_example.so),
+# 壳经能力调用把 plugin.js 交给 interpreter.js 引擎执行
+# depends: 必选依赖 —— agentxx_plugin_js 未安装时本插件加载失败
+name: js_example
+version: 1.0.0
+description: "Example JS plugin: C++ shell + JS via interpreter.js capability"
+entry: libjs_example.so
+depends:
+  - agentxx_plugin_js
+enabled: true

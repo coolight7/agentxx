@@ -32,6 +32,7 @@ option(AGENTXX_BUILD_BENCHMARK "Generate the benchmark target." OFF)
 option(AGENTXX_ENABLE_HYPERSCAN "Add HyperScan for regex support. Use std::regex if disable." OFF)
 option(AGENTXX_ENABLE_CODEGRAPH "Add CodeGraph-CPP for code analysis." ON)
 option(AGENTXX_ENABLE_BOOST_PROCESS "Use Boost.process for execute command toolcall." ON)
+option(AGENTXX_ENABLE_PLUGIN_JS "Build QuickJS JS plugin engine (agentxx_plugin_js)." ON)
 # ===== Debug 构建加速选项 =====
 # - 关闭后 Debug 构建不再启用 AddressSanitizer，编译与链接显著加快
 #   (仍保留 -fno-omit-frame-pointer 便于调试)，默认开启保持原有行为
@@ -444,6 +445,7 @@ set(_AGENTXX_COMMON_CMAKE_ARGS
     -DAGENTXX_ENABLE_HYPERSCAN=${AGENTXX_ENABLE_HYPERSCAN}
     -DAGENTXX_ENABLE_CODEGRAPH=${AGENTXX_ENABLE_CODEGRAPH}
     -DAGENTXX_ENABLE_BOOST_PROCESS=${AGENTXX_ENABLE_BOOST_PROCESS}
+    -DAGENTXX_ENABLE_PLUGIN_JS=${AGENTXX_ENABLE_PLUGIN_JS}
 
     "-DAGENTXX_EXEC_INSTALL_PREFIX=${AGENTXX_EXEC_INSTALL_PREFIX}"
     "-DAGENTXX_THIRD_PARTY_DIR=${AGENTXX_THIRD_PARTY_DIR}"
@@ -874,6 +876,26 @@ ExternalProject_Add(
     ${_AGENTXX_COMMON_CMAKE_CACHE_ARGS}
   TEST_COMMAND ""
 )
+
+# QuickJS (JS 插件引擎 agentxx_plugin_js 的运行时)
+# - 静态库 libqjs.a + 头文件 install 到 AGENTXX_INSTALL_DIR
+# - 关闭 CLI/示例/测试, 仅编译核心库
+if (AGENTXX_ENABLE_PLUGIN_JS)
+  ExternalProject_Add(
+    quickjs_repo
+    SOURCE_DIR "${AGENTXX_THIRD_PARTY_DIR}/quickjs/"
+    INSTALL_DIR "${AGENTXX_INSTALL_DIR}"
+    CMAKE_ARGS
+      ${_AGENTXX_COMMON_CMAKE_ARGS}
+      -DBUILD_SHARED_LIBS=OFF
+      -DQJS_BUILD_CLI_STATIC=OFF
+      -DQJS_BUILD_EXAMPLES=OFF
+      -DQJS_BUILD_WERROR=OFF
+    CMAKE_CACHE_ARGS
+      ${_AGENTXX_COMMON_CMAKE_CACHE_ARGS}
+    TEST_COMMAND ""
+  )
+endif()
 if (AGENTXX_LINUX_IO_URING_SUPPORTED)
   add_dependencies(agentxx_lib_repo liburing_repo)
 endif()
@@ -911,16 +933,20 @@ if (AGENTXX_BUILD_TEST)
     SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/test/"
     INSTALL_DIR "${AGENTXX_INSTALL_DIR}"
     BUILD_ALWAYS TRUE
-    INSTALL_ALWAYS TRUE
     CMAKE_ARGS
       ${_AGENTXX_COMMON_CMAKE_ARGS}
       -DAGENTXX_BUILD_CLIENT=${AGENTXX_BUILD_CLIENT}
+      -DAGENTXX_ENABLE_PLUGIN_JS=${AGENTXX_ENABLE_PLUGIN_JS}
     CMAKE_CACHE_ARGS
       ${_AGENTXX_COMMON_CMAKE_CACHE_ARGS}
     TEST_COMMAND ""
   )
   if (AGENTXX_BUILD_CLIENT)
     add_dependencies(agentxx_test_repo agentxx_client_repo)
+  endif()
+  if (AGENTXX_ENABLE_PLUGIN_JS)
+    # 测试编译 agentxx_plugin_js 需 quickjs 库
+    add_dependencies(agentxx_test_repo quickjs_repo)
   endif()
 endif()
 if (AGENTXX_BUILD_BENCHMARK)
