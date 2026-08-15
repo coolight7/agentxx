@@ -350,13 +350,25 @@ struct GitIgnoreRule {
     std::regex re;               // 编译后的正则
 };
 
-/// gitignore 规则集合: 支持多级 .gitignore 继承 + .gitmodules 子模块目录
+/// gitignore 规则集合: 支持多级 .gitignore 继承 + 多级 .gitmodules 子模块目录
 /// - 规则顺序: 根目录规则在前, 子目录规则在后; 匹配时从后往前取第一个命中
 ///   (gitignore 语义: 后出现的规则优先, 子目录规则覆盖父目录规则)
 /// - 否定规则 (`!xxx`): 命中后取消忽略 (最后一个匹配规则决定最终结果)
 /// - 目录命中忽略规则时, 其下所有内容一并忽略 (匹配正则隐含子树匹配)
+/// - 内置规则: use_gitignore 启用时 `.git` 元数据目录 (任意层级, 含项目根下
+///   的 .git) 整体忽略, 与 .gitignore/.gitmodules 规则一同生效
 class GitIgnoreMatcher {
 public:
+
+    /// 添加内置忽略规则: `.git` 目录 (任意层级, 含项目根下的 .git) 整体忽略
+    /// - 非锚定模式匹配任意层级; 幂等 (重复调用不重复添加规则)
+    void addGitDirIgnore() {
+        if (git_dir_ignored_) {
+            return;
+        }
+        addPattern(".git", {});
+        git_dir_ignored_ = true;
+    }
 
     /// 解析并添加一个 .gitignore 文件 (不存在则忽略; base = 文件所在目录)
     void addIgnoreFile(const fs::path& ignore_file) {
@@ -505,6 +517,27 @@ private:
                 return;
             }
         }
+        // 开头的 `/`: git 语义仅表示"锚定到规则所在目录", 不参与路径匹配,
+        // 必须剥离, 否则正则以字面 `/` 开头, 无法匹配 relative() 得到的
+        // 相对路径 (如 `.gitignore` 中的 `/third_party/boost*/`)
+        bool anchored        = false;
+        bool wildcard_prefix = false; // 以 `**/` 开头: 任意层级语义, 剩余含 `/` 也不锚定
+        if (pattern.front() == '/') {
+            anchored = true;
+            pattern  = pattern.substr(1);
+            if (pattern.empty()) {
+                return;
+            }
+        }
+        // `**/` 开头 (且非 `/` 开头): git 语义匹配任意层级 (如 `**/foo` ≡ `foo`,
+        // `**/a/b` 匹配任意深度下的 a/b), 剥离 `**/` 并保持非锚定
+        if (pattern.rfind("**/", 0) == 0) {
+            wildcard_prefix = true;
+            pattern         = pattern.substr(3);
+            if (pattern.empty()) {
+                return;
+            }
+        }
         // 结尾 `/` -> 仅目录 (匹配语义与普通模式一致, 正则隐含子树匹配)
         if (pattern.back() == '/') {
             pattern = pattern.substr(0, pattern.size() - 1);
@@ -512,8 +545,11 @@ private:
                 return;
             }
         }
-        // 剩余模式含 `/` (非结尾) -> 锚定到规则所在目录
-        rule.anchored = pattern.find('/') != std::string_view::npos;
+        // 剩余模式含 `/` (非开头非结尾, 且非 `**/` 开头) -> 锚定到规则所在目录
+        if (!wildcard_prefix && pattern.find('/') != std::string_view::npos) {
+            anchored = true;
+        }
+        rule.anchored = anchored;
         auto body     = toGitIgnoreRegex(pattern);
         if (rule.anchored) {
             // 匹配 base 下的相对路径本身或子树
@@ -538,22 +574,43 @@ private:
     }
 
     std::vector<GitIgnoreRule> rules_;
+    /// 内置 `.git` 忽略规则是否已添加 (addGitDirIgnore 幂等标记)
+    bool git_dir_ignored_ = false;
 };
 
 /// gitignore 匹配器 (供单文件增量索引使用): 带目录级解析缓存
-/// - 懒加载: 首次匹配某路径时, 沿祖先链向上解析各级 .gitignore 与根 .gitmodules
+/// - 懒加载: 首次匹配某路径时, 沿祖先链向上解析各级 .gitignore 与 .gitmodules;
+///   链在项目根处截止, 不读取项目根之外的规则 (避免项目外目录的
+///   .gitignore/.gitmodules 干扰)
 /// - 缓存: 已解析目录不再重复读盘; 锁保护, 与索引线程并发安全
+/// - 失效: 每次 indexDirectory 前及 .gitignore/.gitmodules 文件变更事件时
+///   由调用方 clear(), 保证新增/修改的规则及时生效
 class GitIgnoreCache {
 public:
 
-    /// 确保 path 祖先链上各级 .gitignore 已解析 (幂等)
+    GitIgnoreCache() {
+        // 内置规则: `.git` 目录 (任意层级) 整体忽略
+        matcher_.addGitDirIgnore();
+    }
+
+    /// 设置项目根目录: 祖先链解析到项目根为止 (幂等, 可随时更新)
+    void setRoot(fs::path root) {
+        std::unique_lock<std::mutex> lock(mutex_);
+        root_ = std::move(root);
+    }
+
+    /// 确保 path 祖先链上各级 .gitignore/.gitmodules 已解析 (幂等)
     void ensureLoaded(const fs::path& p) {
         std::unique_lock<std::mutex> lock(mutex_);
-        // 收集祖先目录链 (叶 -> 根)
+        // 收集祖先目录链 (叶 -> 根; 已知项目根时链在项目根处截止)
         std::vector<fs::path> dirs;
-        fs::path              cur = p.parent_path();
+        fs::path              cur     = p.parent_path();
+        fs::path              normRoot = normalizeDirPath(root_);
         while (!cur.empty()) {
             dirs.push_back(cur);
+            if (!normRoot.empty() && normalizeDirPath(cur) == normRoot) {
+                break; // 已到项目根: 不再向上读取项目外的规则
+            }
             auto parent = cur.parent_path();
             if (parent == cur) {
                 break;
@@ -565,12 +622,11 @@ public:
             if (loaded_dirs_.count(*it)) {
                 continue;
             }
+            // 每层目录追加本层 .gitignore 与 .gitmodules 规则 (父级规则保留,
+            // 子目录规则追加在后, 匹配时后者优先; 嵌套 git 仓库的
+            // .gitmodules 也在所在层级生效)
             matcher_.addIgnoreFile(*it / ".gitignore");
-            // .gitmodules 仅根目录解析一次
-            if (it + 1 == dirs.rend() && loaded_submodules_.count(*it) == 0) {
-                matcher_.addSubmodules(*it / ".gitmodules");
-                loaded_submodules_.insert(*it);
-            }
+            matcher_.addSubmodules(*it / ".gitmodules");
             loaded_dirs_.insert(*it);
         }
     }
@@ -584,16 +640,28 @@ public:
     void clear() {
         std::unique_lock<std::mutex> lock(mutex_);
         matcher_ = GitIgnoreMatcher{};
+        matcher_.addGitDirIgnore();
         loaded_dirs_.clear();
-        loaded_submodules_.clear();
+        // 保留 root_: 项目根由 initialize 设置, 跨索引生命周期有效
     }
 
 private:
 
+    /// 归一化目录路径用于相等比较: lexically_normal 并去除尾部 `/`
+    /// (Windows 盘符根 `C:/` 归一化后仍为自身, 不会死循环)
+    static fs::path normalizeDirPath(const fs::path& p) {
+        fs::path n = p.lexically_normal();
+        if (!n.empty() && n.filename().empty()) {
+            n = n.parent_path();
+        }
+        return n;
+    }
+
     std::mutex                   mutex_;
     GitIgnoreMatcher             matcher_;
     std::unordered_set<fs::path> loaded_dirs_;
-    std::unordered_set<fs::path> loaded_submodules_;
+    /// 项目根目录 (祖先链解析的上限; 为空时不设上限)
+    fs::path                     root_;
 };
 
 /// 路径字符串规范化: 统一 `/` 分隔符并 lexically_normal
@@ -621,6 +689,16 @@ static bool should_skip(std::string_view file_path) {
            || path_str.find(kSkipAgentxx) != std::string::npos;
 }
 
+/// 是否为 git 规则文件 (.gitignore / .gitmodules)
+/// - 供文件监听识别: 规则文件变更时需失效 gitignore 规则缓存并重新解析
+static bool isGitRuleFile(std::string_view path) {
+    auto tail = [&](std::string_view name) {
+        return path.size() >= name.size()
+               && path.substr(path.size() - name.size()) == name;
+    };
+    return tail("/.gitignore") || tail("/.gitmodules");
+}
+
 /// 广度优先遍历根目录, 边遍历边回调每个待索引的源文件 (应用全部过滤规则)
 /// @param ignore_path_regexes 配置 ignorePaths 编译后的正则列表
 /// @param use_gitignore      是否启用 .gitignore/.gitmodules 忽略
@@ -631,7 +709,8 @@ static bool should_skip(std::string_view file_path) {
 ///   可随遍历逐渐增长
 /// - 目录级剪枝: 命中忽略规则 (内置过滤/ignorePaths/gitignore) 的目录整棵子树
 ///   不进入遍历, 避免扫描 build/.git/third_party/子模块 等大目录
-/// - gitignore 按层级继承: 每进入一层目录加载该层 .gitignore (父级规则保留)
+/// - gitignore 按层级继承: 每进入一层目录追加该层 .gitignore 与 .gitmodules
+///   规则 (父级规则保留), 并内置忽略 `.git` 目录
 /// - 显式栈遍历替代 recursive_directory_iterator, 避免深目录树递归栈溢出
 static void traverse_source_files(
     std::string_view                   root_path,
@@ -644,7 +723,9 @@ static void traverse_source_files(
         [&]() -> bool {
             GitIgnoreMatcher matcher;
             if (use_gitignore) {
-                matcher.addSubmodules(fs::path(root_path) / ".gitmodules");
+                // 内置规则: `.git` 元数据目录 (任意层级, 含项目根下的 .git)
+                // 整体忽略, 不进入索引
+                matcher.addGitDirIgnore();
             }
 
             // 目录忽略判断 (剪枝): 内置过滤(补尾/使子串匹配命中目录自身) +
@@ -681,7 +762,11 @@ static void traverse_source_files(
                 stack.pop_back();
 
                 if (use_gitignore) {
+                    // 每层目录追加本层 .gitignore 与 .gitmodules 规则 (父级
+                    // 规则保留, 子目录规则追加在后, 匹配时后者优先; 嵌套 git
+                    // 仓库的 .gitmodules 也在所在层级生效)
                     matcher.addIgnoreFile(dir / ".gitignore");
+                    matcher.addSubmodules(dir / ".gitmodules");
                 }
 
                 std::error_code ec;
@@ -854,6 +939,9 @@ public:
         }
 
         project_root_ = project_root;
+        // gitignore 增量匹配缓存: 记录项目根, 祖先链解析到项目根为止
+        // (不读取项目根之外的 .gitignore/.gitmodules 规则)
+        gitignore_cache_.setRoot(project_root);
         // 索引数据库: {dataDir}/sqlite/codegraph/<折叠路径层级>/index.db
         // - 目录层级与项目路径层级一一对应 (深层路径折叠为 hash 段, 单段超长截断),
         //   长度受控不会超过系统路径限制 (Windows MAX_PATH=260 / Linux PATH_MAX)
@@ -907,6 +995,10 @@ public:
             return false;
         }
 
+        // 每次索引前失效 gitignore 规则缓存: .gitignore/.gitmodules 可能在上次
+        // 索引后被新增/修改, 否则收尾清理/增量判断仍沿用旧规则 (漏删/漏滤)
+        gitignore_cache_.clear();
+
         // 索引生命周期标志: 查询侧据此附加"索引中, 结果可能不完整"提示;
         // RAII 保证所有 return 路径 (成功/中断/异常) 复位
         indexing_.store(true, std::memory_order_release);
@@ -927,7 +1019,8 @@ public:
         //   查询 (shared_lock) 至多等待毫秒级, 大部分时间可读取已提交的部分数据
         // 流式遍历+索引: 目录遍历与文件索引同步进行 (不预先收集完整文件列表),
         // 大目录下索引进度随遍历逐渐增长, 内存中不缓存全部路径
-        int processed = 0;
+        int  processed   = 0;
+        auto last_notify = std::chrono::steady_clock::now();
 
         auto processFile = [&](std::string_view file_path) -> bool {
             // 停止信号: 中断遍历 (traverse 不再回调)
@@ -987,13 +1080,15 @@ public:
 
             ++processed;
 
-            // 进度通知: 首个文件立即回调 (UI 尽快显示"已发现文件"), 之后按批
-            // 节流 (每 kProgressNotifyBatch 个文件一次; total 在遍历结束前未知,
-            // 传 0 表示"文件总数未知, 索引进行中"):
+            // 进度通知: 首个文件立即回调 (UI 尽快显示"已发现文件"), 之后按
+            // 固定时间间隔节流 (kProgressNotifyInterval; total 在遍历结束前
+            // 未知, 传 0 表示"文件总数未知, 索引进行中"):
             // UI 侧据此显示已发现的文件数, 随遍历逐渐增长
+            auto now = std::chrono::steady_clock::now();
             if (progress_callback_
-                && (processed == 1 || processed % kProgressNotifyBatch == 0)) {
+                && (processed == 1 || now - last_notify >= kProgressNotifyInterval)) {
                 progress_callback_(processed, 0, file_path);
+                last_notify = now;
             }
 
             // 每批文件提交后 WAL checkpoint: 已提交数据及时合并进主库文件,
@@ -1516,6 +1611,12 @@ public:
                     if (auto_reindex
                         && (mask & (codegraph::FILE_EVENT_MODIFIED | codegraph::FILE_EVENT_CREATED)
                         )) {
+                        // .gitignore/.gitmodules 变更: 失效规则缓存, 后续过滤
+                        // 按最新规则重新解析 (不直接索引规则文件本身)
+                        if (isGitRuleFile(path)) {
+                            gitignore_cache_.clear();
+                            return;
+                        }
                         std::string lang = codegraph::detect_language(std::string{path});
                         // 与全量/增量索引一致的过滤: 内置过滤 + ignorePaths + gitignore
                         if (!lang.empty() && !this->isFileIgnored(std::string{path})) {
@@ -1744,10 +1845,11 @@ public:
     /// - 缩小"索引中途进程被强杀 -> 已提交数据仅存于 -wal"的丢失窗口
     static constexpr int kCheckpointFileBatch = 200;
 
-    /// 每批处理的文件数, 达到后回调一次索引进度 (遍历阶段文件总数未知)
+    /// 索引进度通知间隔: 每间隔该时长推送一次进度回调 (遍历阶段文件总数未知)
     /// - 流式遍历时每文件一次回调的 post/字符串拷贝开销对大目录 (数万文件)
-    ///   可感知, 按批通知既保持 UI 进度平滑增长又控制开销
-    static constexpr int kProgressNotifyBatch = 16;
+    ///   可感知, 定时通知既保持 UI 进度平滑增长又控制开销;
+    ///   首个文件仍立即通知 (UI 尽快显示"已发现文件"), 完成信号不受间隔约束
+    static constexpr auto kProgressNotifyInterval = std::chrono::seconds{5};
 
 private:
 

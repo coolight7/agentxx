@@ -1455,6 +1455,331 @@ void test_codegraph_gitmodules() {
     cleanup_temp_project(tmp_dir);
 }
 
+/// 多级 .gitignore 继承: 子目录内的 .gitignore 规则同样生效 (忽略其所在
+/// 层级下的文件), 不要求规则只写在项目根
+void test_codegraph_gitignore_nested() {
+    int  idx     = g_temp_project_counter.fetch_add(1);
+    auto tmp_dir = fs::temp_directory_path() / ("codegraph_nested_gitignore_" + std::to_string(idx));
+    if (fs::exists(tmp_dir)) {
+        fs::remove_all(tmp_dir);
+    }
+    fs::create_directories(tmp_dir / "src" / "debug");
+
+    {
+        std::ofstream f(tmp_dir / "src" / "main.cpp");
+        f << "int helper() { return 1; }\nint main() { return helper(); }\n";
+    }
+    {
+        std::ofstream f(tmp_dir / "src" / "debug" / "dbg.cpp");
+        f << "int dbg_func() { return 2; }\n";
+    }
+    // 子目录级 .gitignore: 忽略 src/debug (不写根 .gitignore 也应生效)
+    {
+        std::ofstream f(tmp_dir / "src" / ".gitignore");
+        f << "debug/\n";
+    }
+    auto manager = agentxx::expand::CodeGraphManager{};
+
+    manager.initialize(tmp_dir.generic_string());
+    manager.indexDirectory(tmp_dir.generic_string(), false);
+
+    // src/debug (子目录 gitignore) 内符号不可查询; src 内符号可查询
+    auto r1 = manager.searchSymbols("dbg_func", 10);
+    auto r2 = manager.searchSymbols("helper", 10);
+
+    if ((r1.success && r1.nodes.empty()) && (r2.success && !r2.nodes.empty())) {
+        g_cg_passed++;
+        TEST_PASS << "nested .gitignore excludes subdir" << std::endl;
+    } else {
+        g_cg_failed++;
+        TEST_FAIL << "nested .gitignore FAILED: dbg_func nodes=" << r1.nodes.size()
+                  << " helper nodes=" << r2.nodes.size() << std::endl;
+    }
+
+    cleanup_temp_project(tmp_dir.generic_string());
+}
+
+/// 多级 .gitmodules: 子目录内的 .gitmodules (嵌套 git 仓库) 声明同样生效,
+/// 不要求只解析项目根 .gitmodules
+void test_codegraph_gitmodules_nested() {
+    int  idx     = g_temp_project_counter.fetch_add(1);
+    auto tmp_dir = fs::temp_directory_path()
+                   / ("codegraph_nested_gitmodules_" + std::to_string(idx));
+    if (fs::exists(tmp_dir)) {
+        fs::remove_all(tmp_dir);
+    }
+    fs::create_directories(tmp_dir / "src" / "third_party");
+
+    {
+        std::ofstream f(tmp_dir / "src" / "main.cpp");
+        f << "int helper() { return 1; }\n";
+    }
+    {
+        std::ofstream f(tmp_dir / "src" / "third_party" / "lib.cpp");
+        f << "int lib_func() { return 2; }\n";
+    }
+    // 子目录级 .gitmodules: 声明 src/third_party 为子模块
+    {
+        std::ofstream f(tmp_dir / "src" / ".gitmodules");
+        f << "[submodule \"third_party\"]\n"
+             "\tpath = third_party\n"
+             "\turl = https://example.com/x\n";
+    }
+    auto manager = agentxx::expand::CodeGraphManager{};
+
+    manager.initialize(tmp_dir.generic_string());
+    manager.indexDirectory(tmp_dir.generic_string(), false);
+
+    // src/third_party (嵌套 .gitmodules 子模块) 内符号不可查询; src 内符号可查询
+    auto r1 = manager.searchSymbols("lib_func", 10);
+    auto r2 = manager.searchSymbols("helper", 10);
+
+    if ((r1.success && r1.nodes.empty()) && (r2.success && !r2.nodes.empty())) {
+        g_cg_passed++;
+        TEST_PASS << "nested .gitmodules submodule dir skipped" << std::endl;
+    } else {
+        g_cg_failed++;
+        TEST_FAIL << "nested .gitmodules FAILED: lib_func nodes=" << r1.nodes.size()
+                  << " helper nodes=" << r2.nodes.size() << std::endl;
+    }
+
+    cleanup_temp_project(tmp_dir.generic_string());
+}
+
+/// 根 .gitignore 中 `/xxx` 锚定规则 (git 规范: 开头的 `/` 仅表示锚定到
+/// 规则所在目录, 不参与路径匹配): 复现 agent/.gitignore 的 `/third_party/boost*/`
+/// 场景, 验证该目录被忽略 (修复前: 开头的 `/` 被编进正则, 无法匹配
+/// relative() 得到的相对路径, 规则永不生效)
+void test_codegraph_gitignore_anchored_root() {
+    int  idx     = g_temp_project_counter.fetch_add(1);
+    auto tmp_dir = fs::temp_directory_path()
+                   / ("codegraph_anchor_root_" + std::to_string(idx));
+    if (fs::exists(tmp_dir)) {
+        fs::remove_all(tmp_dir);
+    }
+    fs::create_directories(tmp_dir / "third_party" / "boost");
+    fs::create_directories(tmp_dir / "third_party" / "other");
+
+    {
+        std::ofstream f(tmp_dir / "main.cpp");
+        f << "int helper() { return 1; }\n";
+    }
+    {
+        std::ofstream f(tmp_dir / "third_party" / "boost" / "boost_lib.cpp");
+        f << "int boost_func() { return 2; }\n";
+    }
+    {
+        std::ofstream f(tmp_dir / "third_party" / "other" / "other_lib.cpp");
+        f << "int other_func() { return 3; }\n";
+    }
+    // 与 agent/.gitignore 相同的锚定规则形式
+    {
+        std::ofstream f(tmp_dir / ".gitignore");
+        f << "/third_party/boost*/\n";
+    }
+    auto manager = agentxx::expand::CodeGraphManager{};
+
+    manager.initialize(tmp_dir.generic_string());
+    manager.indexDirectory(tmp_dir.generic_string(), false);
+
+    auto r1 = manager.searchSymbols("boost_func", 10);
+    auto r2 = manager.searchSymbols("other_func", 10);
+    auto r3 = manager.searchSymbols("helper", 10);
+
+    if ((r1.success && r1.nodes.empty()) && (r2.success && !r2.nodes.empty())
+        && (r3.success && !r3.nodes.empty())) {
+        g_cg_passed++;
+        TEST_PASS << "anchored /third_party/boost*/ rule excludes boost dir" << std::endl;
+    } else {
+        g_cg_failed++;
+        TEST_FAIL << "anchored rule FAILED: boost_func=" << r1.nodes.size()
+                  << " other_func=" << r2.nodes.size() << " helper=" << r3.nodes.size()
+                  << std::endl;
+    }
+
+    cleanup_temp_project(tmp_dir.generic_string());
+}
+
+/// 子目录 .gitignore 中 `/xxx` 锚定规则: 锚定到该 .gitignore 所在目录
+/// (即 agent/.gitignore 位于项目子目录的真实场景), 且不影响同层级的
+/// 其他同名路径之外的内容
+void test_codegraph_gitignore_anchored_nested() {
+    int  idx     = g_temp_project_counter.fetch_add(1);
+    auto tmp_dir = fs::temp_directory_path()
+                   / ("codegraph_anchor_nested_" + std::to_string(idx));
+    if (fs::exists(tmp_dir)) {
+        fs::remove_all(tmp_dir);
+    }
+    fs::create_directories(tmp_dir / "src" / "third_party" / "boost");
+    fs::create_directories(tmp_dir / "src" / "third_party" / "other");
+
+    {
+        std::ofstream f(tmp_dir / "src" / "main.cpp");
+        f << "int helper() { return 1; }\n";
+    }
+    {
+        std::ofstream f(tmp_dir / "src" / "third_party" / "boost" / "boost_lib.cpp");
+        f << "int boost_func() { return 2; }\n";
+    }
+    {
+        std::ofstream f(tmp_dir / "src" / "third_party" / "other" / "other_lib.cpp");
+        f << "int other_func() { return 3; }\n";
+    }
+    {
+        std::ofstream f(tmp_dir / "src" / ".gitignore");
+        f << "/third_party/boost*/\n";
+    }
+    auto manager = agentxx::expand::CodeGraphManager{};
+
+    manager.initialize(tmp_dir.generic_string());
+    manager.indexDirectory(tmp_dir.generic_string(), false);
+
+    auto r1 = manager.searchSymbols("boost_func", 10);
+    auto r2 = manager.searchSymbols("other_func", 10);
+    auto r3 = manager.searchSymbols("helper", 10);
+
+    if ((r1.success && r1.nodes.empty()) && (r2.success && !r2.nodes.empty())
+        && (r3.success && !r3.nodes.empty())) {
+        g_cg_passed++;
+        TEST_PASS << "nested anchored /third_party/boost*/ rule excludes boost dir" << std::endl;
+    } else {
+        g_cg_failed++;
+        TEST_FAIL << "nested anchored rule FAILED: boost_func=" << r1.nodes.size()
+                  << " other_func=" << r2.nodes.size() << " helper=" << r3.nodes.size()
+                  << std::endl;
+    }
+
+    cleanup_temp_project(tmp_dir.generic_string());
+}
+
+/// `**/` 开头模式: git 语义匹配任意层级 (非锚定), 如 `**/generated/`
+/// 忽略任意深度下的 generated 目录
+void test_codegraph_gitignore_doublestar_prefix() {
+    int  idx     = g_temp_project_counter.fetch_add(1);
+    auto tmp_dir = fs::temp_directory_path()
+                   / ("codegraph_dstar_prefix_" + std::to_string(idx));
+    if (fs::exists(tmp_dir)) {
+        fs::remove_all(tmp_dir);
+    }
+    fs::create_directories(tmp_dir / "a" / "generated");
+    fs::create_directories(tmp_dir / "b" / "c" / "generated");
+
+    {
+        std::ofstream f(tmp_dir / "main.cpp");
+        f << "int helper() { return 1; }\n";
+    }
+    {
+        std::ofstream f(tmp_dir / "a" / "generated" / "gen_a.cpp");
+        f << "int gen_a_func() { return 2; }\n";
+    }
+    {
+        std::ofstream f(tmp_dir / "b" / "c" / "generated" / "gen_b.cpp");
+        f << "int gen_b_func() { return 3; }\n";
+    }
+    {
+        std::ofstream f(tmp_dir / ".gitignore");
+        f << "**/generated/\n";
+    }
+    auto manager = agentxx::expand::CodeGraphManager{};
+
+    manager.initialize(tmp_dir.generic_string());
+    manager.indexDirectory(tmp_dir.generic_string(), false);
+
+    auto r1 = manager.searchSymbols("gen_a_func", 10);
+    auto r2 = manager.searchSymbols("gen_b_func", 10);
+    auto r3 = manager.searchSymbols("helper", 10);
+
+    if ((r1.success && r1.nodes.empty()) && (r2.success && r2.nodes.empty())
+        && (r3.success && !r3.nodes.empty())) {
+        g_cg_passed++;
+        TEST_PASS << "**/generated/ excludes generated dirs at any depth" << std::endl;
+    } else {
+        g_cg_failed++;
+        TEST_FAIL << "**/ prefix FAILED: gen_a=" << r1.nodes.size() << " gen_b=" << r2.nodes.size()
+                  << " helper=" << r3.nodes.size() << std::endl;
+    }
+
+    cleanup_temp_project(tmp_dir.generic_string());
+}
+
+/// use_gitignore 启用时忽略 .git 元数据目录 (含项目根下的 .git):
+/// .git 内的源文件不进入索引
+void test_codegraph_git_dir_ignored() {
+    int  idx     = g_temp_project_counter.fetch_add(1);
+    auto tmp_dir = fs::temp_directory_path() / ("codegraph_gitdir_test_" + std::to_string(idx));
+    if (fs::exists(tmp_dir)) {
+        fs::remove_all(tmp_dir);
+    }
+    fs::create_directories(tmp_dir / ".git" / "objects");
+
+    {
+        std::ofstream f(tmp_dir / "main.cpp");
+        f << "int helper() { return 1; }\n";
+    }
+    {
+        // .git 内的 cpp 文件: 即便语言可识别也不应进入索引
+        std::ofstream f(tmp_dir / ".git" / "objects" / "gitdata.cpp");
+        f << "int git_internal_func() { return 2; }\n";
+    }
+    auto manager = agentxx::expand::CodeGraphManager{};
+
+    manager.initialize(tmp_dir.generic_string());
+    manager.indexDirectory(tmp_dir.generic_string(), false);
+
+    auto r1 = manager.searchSymbols("git_internal_func", 10);
+    auto r2 = manager.searchSymbols("helper", 10);
+
+    if ((r1.success && r1.nodes.empty()) && (r2.success && !r2.nodes.empty())) {
+        g_cg_passed++;
+        TEST_PASS << ".git dir excluded from index" << std::endl;
+    } else {
+        g_cg_failed++;
+        TEST_FAIL << ".git dir FAILED: git_internal_func nodes=" << r1.nodes.size()
+                  << " helper nodes=" << r2.nodes.size() << std::endl;
+    }
+
+    cleanup_temp_project(tmp_dir.generic_string());
+}
+
+/// 增量索引 + gitignore: 首次全量索引后新增 .gitignore 忽略已有文件, 再次
+/// 增量索引时经单文件过滤 (GitIgnoreCache) 清理被忽略文件的残留记录
+void test_codegraph_gitignore_incremental_cleanup() {
+    int  idx     = g_temp_project_counter.fetch_add(1);
+    auto tmp_dir = fs::temp_directory_path() / ("codegraph_gitignore_incr_" + std::to_string(idx));
+    if (fs::exists(tmp_dir)) {
+        fs::remove_all(tmp_dir);
+    }
+    fs::create_directories(tmp_dir / "src");
+
+    {
+        std::ofstream f(tmp_dir / "src" / "main.cpp");
+        f << "int helper() { return 1; }\nint main() { return helper(); }\n";
+    }
+    auto manager = agentxx::expand::CodeGraphManager{};
+
+    manager.initialize(tmp_dir.generic_string());
+    manager.indexDirectory(tmp_dir.generic_string(), false); // 全量: helper 已索引
+
+    // 新增 .gitignore 忽略 src/ 整个目录, 增量索引
+    {
+        std::ofstream f(tmp_dir / ".gitignore");
+        f << "src/\n";
+    }
+    manager.indexDirectory(tmp_dir.generic_string(), true);
+
+    // 残留记录应被清理: helper 不再可查询
+    auto r = manager.searchSymbols("helper", 10);
+    if (r.success && r.nodes.empty()) {
+        g_cg_passed++;
+        TEST_PASS << "incremental index cleans up gitignored file records" << std::endl;
+    } else {
+        g_cg_failed++;
+        TEST_FAIL << "incremental cleanup FAILED: helper nodes=" << r.nodes.size() << std::endl;
+    }
+
+    cleanup_temp_project(tmp_dir.generic_string());
+}
+
 /// loadPaths 多目录: updateIndex 按加载路径列表逐个索引
 void test_codegraph_load_paths() {
     int  idx      = g_temp_project_counter.fetch_add(1);
@@ -1654,6 +1979,13 @@ asio::awaitable<TestResult>
     test_codegraph_gitignore();
     test_codegraph_gitignore_disabled();
     test_codegraph_gitmodules();
+    test_codegraph_gitignore_nested();
+    test_codegraph_gitmodules_nested();
+    test_codegraph_gitignore_anchored_root();
+    test_codegraph_gitignore_anchored_nested();
+    test_codegraph_gitignore_doublestar_prefix();
+    test_codegraph_git_dir_ignored();
+    test_codegraph_gitignore_incremental_cleanup();
     test_codegraph_load_paths();
     test_codegraph_load_cwd_disabled();
 

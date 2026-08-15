@@ -55,7 +55,9 @@ struct CodeGraphIndexConfig {
     /// 忽略路径列表 (绝对路径, 支持 * 通配符; 命中即跳过)
     /// - 对全部加载路径及 agentxx_codegraph_index 手动索引均生效
     std::vector<std::string> ignorePaths;
-    /// 是否启用 .gitignore 规则与 .gitmodules 子模块目录忽略 (默认 true)
+    /// 是否启用 git 相关忽略 (默认 true):
+    /// - 逐层读取各级目录的 .gitignore 规则与 .gitmodules 子模块目录
+    /// - 内置忽略 `.git` 元数据目录 (任意层级)
     bool useGitignore = true;
     /// loadPaths 为空时是否自动回退项目根目录 (yaml `codegraph.load_cwd`, 默认 true)
     /// - false 且 loadPaths 为空: 无自动索引范围 (updateIndex 空操作,

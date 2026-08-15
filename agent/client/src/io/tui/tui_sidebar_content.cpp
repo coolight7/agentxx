@@ -241,7 +241,7 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
             } else if (cg.indexing && cg.processed > 0) {
                 // 索引进行中但文件总数未知 (流式遍历/收集阶段): 显示已发现文件数,
                 // 随遍历逐渐增长, 避免大目录首次扫描期间长时间无任何进度显示
-                status = fmt::format("indexing · {} files", cg.processed);
+                status = fmt::format("indexing {}·{}", cg.processed, cg.currentFile);
             } else if (cg.indexing) {
                 // 索引进行中且尚未发现文件
                 status = "indexing ...";
