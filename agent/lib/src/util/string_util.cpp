@@ -310,8 +310,9 @@ std::optional<std::string> agentxx::util::base64Decode(std::string_view str) {
         for (size_t i = 0; i < str.size(); ++i) {
             unsigned char c = static_cast<unsigned char>(str[i]);
             if (c == '=') {
-                if (i < str.size() - 2) {
-                    return std::nullopt; // '=' 只能出现在结尾最多 2 个
+                // '=' 只能出现在结尾最多 2 个; 先判 str.size() >= 2 避免 size_t 下溢
+                if (str.size() < 2 || i + 2 < str.size()) {
+                    return std::nullopt;
                 }
                 ++padCount;
             } else {
@@ -486,18 +487,19 @@ int agentxx::util::compareExtend(std::string_view left, std::string_view right) 
         if (leftIsNum) {
             // 用 int64 累加数字段, 避免原 int 累加在超长数字串(如 file99999999999)下溢出(UB);
             // 保持返回"数值差"的原有语义(测试依赖精确差值), 超出 int 范围时饱和截断(符号仍正确)。
-            constexpr int64_t kInt64Max  = std::numeric_limits<int64_t>::max();
-            constexpr int64_t kSafeBound = kInt64Max / 10;
-            int64_t           leftSum    = 0;
+            constexpr int64_t kInt64Max = std::numeric_limits<int64_t>::max();
+            int64_t           leftSum   = 0;
             while (i < left.size() && isCode_num(static_cast<unsigned char>(left[i]))) {
                 const int d = static_cast<unsigned char>(left[i]) - CODE_0;
-                leftSum     = (leftSum > kSafeBound) ? kInt64Max : (leftSum * 10 + d);
+                // 用 (kInt64Max - d) / 10 判定: leftSum*10+d 必然 <= kInt64Max,
+                // 避免在边界附近 (如 922337203685477580 + d>=8) 有符号溢出 (UB)
+                leftSum = (leftSum > (kInt64Max - d) / 10) ? kInt64Max : (leftSum * 10 + d);
                 i++;
             }
             int64_t rightSum = 0;
             while (j < right.size() && isCode_num(static_cast<unsigned char>(right[j]))) {
                 const int d = static_cast<unsigned char>(right[j]) - CODE_0;
-                rightSum    = (rightSum > kSafeBound) ? kInt64Max : (rightSum * 10 + d);
+                rightSum    = (rightSum > (kInt64Max - d) / 10) ? kInt64Max : (rightSum * 10 + d);
                 j++;
             }
             if (leftSum != rightSum) {
@@ -573,18 +575,14 @@ std::string agentxx::util::toArgument(std::string_view str, char mark) {
 
     for (size_t i = 0; i < len; ++i) {
         if (str[i] == mark) {
-            bool shouldEscape = false;
-
-            if (i == 0) {
-                shouldEscape = true;
-            } else {
-                char prev = str[i - 1];
-                if (prev != '\\') {
-                    shouldEscape = true;
-                }
+            // 统计 mark 前连续反斜杠数量: 偶数个 (含 0) 时 mark 是新的界定符, 需转义;
+            // 奇数个时 mark 已被反斜杠转义 (如 \" 表示字面引号), 不应再转义
+            // (仅看紧邻前一个字符会在 "\\\"" 偶数个反斜杠时漏转义, 导致引号提前闭合)
+            size_t backslashes = 0;
+            while (i > backslashes && str[i - backslashes - 1] == '\\') {
+                ++backslashes;
             }
-
-            if (shouldEscape) {
+            if (backslashes % 2 == 0) {
                 result += '\\';
             }
             result += mark;

@@ -21,6 +21,7 @@
 #include <neograph/provider.h>
 #include <openssl/ssl.h>
 #include <variant>
+#include <vector>
 
 namespace agentxx {
 namespace util {
@@ -128,6 +129,50 @@ asio::awaitable<void> runSseOpWithTimeout(
     if (timedOut->load()) {
         throw std::runtime_error(fmt::format("SSE {} timeout after {} ms", stage, timeout.count()));
     }
+}
+
+/// 对 URL 路径做词法规范化 (纯字符串操作, 不访问文件系统):
+/// 去除 "." 段, 解析 ".." 段 (不越过根), 如 "/a/b/../c/./d" -> "/a/c/d",
+/// "/a/../../b" -> "/b" (超出的 ".." 丢弃)
+static std::string normalizeUrlPath(std::string_view path) {
+    std::string         result;
+    std::vector<size_t> segStarts; // 每段内容写入前 result.size() (含可能的前导 '/')
+    result.reserve(path.size());
+    size_t i = 0;
+    while (i < path.size()) {
+        // 跳过 '/'
+        while (i < path.size() && path[i] == '/') {
+            ++i;
+        }
+        if (i >= path.size()) {
+            break;
+        }
+        size_t segEnd = path.find('/', i);
+        if (segEnd == std::string_view::npos) {
+            segEnd = path.size();
+        }
+        std::string_view seg = path.substr(i, segEnd - i);
+        if (seg == ".") {
+            // 当前目录段, 忽略
+        } else if (seg == "..") {
+            // 上级目录: 回退到上一个段的起始位置 (不越过根)
+            if (!segStarts.empty()) {
+                result.resize(segStarts.back());
+                segStarts.pop_back();
+            }
+        } else {
+            if (result.empty() || result.back() != '/') {
+                result += '/';
+            }
+            segStarts.push_back(result.size());
+            result.append(seg);
+        }
+        i = (segEnd == path.size()) ? segEnd : segEnd + 1;
+    }
+    if (result.empty()) {
+        return "/";
+    }
+    return result;
 }
 
 } // namespace
@@ -809,7 +854,9 @@ std::string HttpClient::resolveRedirectUrl(
     std::string basePath = (slashPos != std::string_view::npos && slashPos > 0)
                                ? std::string(path.substr(0, slashPos + 1))
                                : "/";
-    return base + basePath + std::string(location);
+    // 相对 Location 可能含 "./"、"../" 段 (如 Location: ../../login),
+    // 拼接后做 URL 词法规范化 (纯字符串操作, 不访问文件系统)
+    return base + normalizeUrlPath(basePath + std::string(location));
 }
 
 const HeaderMap& HttpClient::defaultHeaders() {
@@ -875,7 +922,11 @@ std::optional<HttpClient::ParsedUrl> HttpClient::parseUrl(std::string_view url) 
         // 去掉方括号: DNS 解析 (getaddrinfo) 与 SNI 不接受带括号的 IPv6 字面量,
         // 构造 Host 头时再按 HTTP 规范加回 (见 buildHostHeader)
         host = std::string{hostPort.substr(1, cb - 1)};
-        if (cb + 1 < hostPort.size() && hostPort[cb + 1] == ':') {
+        if (cb + 1 < hostPort.size()) {
+            // `]` 后必须是 ':' + 端口, 其余形式 (如 "[::1]xxx") 视为非法 URL
+            if (hostPort[cb + 1] != ':') {
+                return std::nullopt;
+            }
             auto portStart = hostPort.data() + cb + 2;
             auto portEnd   = hostPort.data() + hostPort.size();
             int  p         = 0;

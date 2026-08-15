@@ -53,9 +53,14 @@ struct WsClient::Impl {
     bool                       isSsl   = false;
     bool                       closed_ = false;
 
+    /// 接收缓冲 (recv 循环复用, 避免每次调用重新分配)
+    std::string recvChunk;
+
     Impl(asio::any_io_executor ex, WsClientConfig cfg) :
         executor(std::move(ex)),
-        config(std::move(cfg)) {}
+        config(std::move(cfg)) {
+        recvChunk.resize(1024 * 16);
+    }
 
     void configureStream() {
         // 禁用 Beast 内部 idle_timeout: 由外部 cancel_after(recvTimeout/sendTimeout) 统一控制,
@@ -240,8 +245,11 @@ asio::awaitable<std::expected<void, std::string>>
     co_return co_await agentxx::util::catchErrorAsync<std::expected<void, std::string>>(
         [&]() -> asio::awaitable<std::expected<void, std::string>> {
             boost::beast::websocket::close_reason cr;
-            cr.code   = code;
-            cr.reason = std::string(reason);
+            cr.code = code;
+            // RFC 6455 §5.5.1: close reason 最大 123 字节; 超长会令
+            // static_string 抛 length_error, 导致 close 帧未发送却被
+            // catchErrorAsync 当成功返回, 这里先截断
+            cr.reason = std::string(reason.substr(0, 123));
             if (impl_->isSsl) {
                 co_await impl_->wss->async_close(
                     cr,
@@ -270,8 +278,7 @@ asio::awaitable<std::expected<WsMessage, std::string>> WsClient::recv() {
         [&]() -> asio::awaitable<std::expected<WsMessage, std::string>> {
             try {
                 std::string payload;
-                std::string chunk;
-                chunk.resize(1024 * 16);
+                auto&       chunk = impl_->recvChunk; // 复用缓冲, 避免每次调用重新分配
 
                 if (impl_->isSsl) {
                     do {

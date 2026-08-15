@@ -41,6 +41,24 @@ void test_compareExtend() {
         // 超 int64 范围 (饱和处理): 不崩溃, 大数仍 > 小数
         XX_TEST_EXPECT_TRUE(agentxx::util::compareExtend("file99999999999999999999", "file1") > 0);
         XX_TEST_EXPECT_TRUE(agentxx::util::compareExtend("file1", "file99999999999999999999") < 0);
+        // 回归: 前缀恰为 922337203685477580 (kInt64Max/10) 时, 旧实现 leftSum*10+d
+        // 在 d>=8 时有符号溢出 (UB); 修复后:
+        // - d<=7 走精确路径 (9223372036854775807 是最大可精确表示值)
+        // - d>=8 走饱和路径 (映射到 INT64_MAX), 符号仍正确
+        XX_TEST_EXPECT_EQ(
+            agentxx::util::compareExtend("x9223372036854775807", "x9223372036854775806"), 1
+        );
+        XX_TEST_EXPECT_EQ(
+            agentxx::util::compareExtend("x9223372036854775806", "x9223372036854775807"), -1
+        );
+        // d=8 溢出路径: 饱和后与小数比较符号正确
+        XX_TEST_EXPECT_EQ(
+            agentxx::util::compareExtend("x9223372036854775808", "x9223372036854775806"), 1
+        );
+        XX_TEST_EXPECT_EQ(
+            agentxx::util::compareExtend("x9223372036854775806", "x9223372036854775808"), -1
+        );
+        XX_TEST_EXPECT_TRUE(agentxx::util::compareExtend("file9223372036854775808", "file1") > 0);
     }
 }
 
@@ -260,6 +278,15 @@ void test_toArgument() {
     XX_TEST_EXPECT_EQ(agentxx::util::toArgument("\"\\\"\", --"), "\"\\\"\\\"\\\", --\"");
     XX_TEST_EXPECT_EQ(agentxx::util::toArgument("\"wow\""), "\"\\\"wow\\\"\"");
     XX_TEST_EXPECT_EQ(agentxx::util::toArgument("\\\"wow\\\""), "\"\\\"wow\\\"\"");
+
+    // 回归: mark 前连续反斜杠的奇偶性决定是否转义
+    // - 奇数个反斜杠 (\\"): mark 已被转义 (字面引号), 不再转义
+    XX_TEST_EXPECT_EQ(agentxx::util::toArgument("a\\\"b"), "\"a\\\"b\"");
+    // - 偶数个反斜杠 (\\\\"): mark 是新界定符, 必须转义 (旧实现漏转义导致引号提前闭合)
+    XX_TEST_EXPECT_EQ(agentxx::util::toArgument("a\\\\\"b"), "\"a\\\\\\\"b\"");
+    XX_TEST_EXPECT_EQ(agentxx::util::toArgument("\\\\\""), "\"\\\\\\\"\"");
+    // - 奇数个反斜杠在串尾 + 后续 mark: 不转义
+    XX_TEST_EXPECT_EQ(agentxx::util::toArgument("a\\\"\"b"), "\"a\\\"\\\"b\"");
 }
 
 void test_base64() {
@@ -342,6 +369,12 @@ void test_base64() {
     XX_TEST_EXPECT_FALSE(agentxx::util::base64Decode("Zm9vY").has_value()); // 数据长度 mod4==1 非法
     XX_TEST_EXPECT_FALSE(agentxx::util::base64Decode("Zm=v").has_value()); // padding 位置非法
     XX_TEST_EXPECT_FALSE(agentxx::util::base64Decode("Zm9v YmFy").has_value()); // 含空格非法
+
+    // 回归: 短输入含 '=' 时不应触发 size_t 下溢 (旧实现 i < str.size()-2)
+    XX_TEST_EXPECT_FALSE(agentxx::util::base64Decode("=").has_value());
+    XX_TEST_EXPECT_FALSE(agentxx::util::base64Decode("==").has_value());
+    XX_TEST_EXPECT_FALSE(agentxx::util::base64Decode("===").has_value());
+    XX_TEST_EXPECT_FALSE(agentxx::util::base64Decode("Z=").has_value()); // 数据长度 mod4==1
 }
 
 void test_convertCharset() {

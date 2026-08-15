@@ -263,9 +263,14 @@ void HttpServer::startAsync(asio::any_io_executor executor) {
 
 asio::awaitable<void> HttpServer::serveTcp(std::shared_ptr<boost::beast::tcp_stream> stream) {
     ConnectionGuard guard{activeConnections_};
-    // 与 SSL 路径一致: 捕获异常, 避免客户端在读写期间断开时异常逃逸 detached 协程 → terminate
+    // 与 SSL 路径一致: 捕获异常, 避免客户端在读写期间断开时异常逃逸 detached 协程 → terminate;
+    // 取消/中断 (CancelledException/NodeInterrupt, 经 handler 传播) 是预期行为, 静默返回
     try {
         co_await serve(std::move(*stream));
+    } catch (const neograph::graph::CancelledException&) {
+        // 取消: 连接终止是预期行为, 静默返回
+    } catch (const neograph::graph::NodeInterrupt&) {
+        // 中断: 同上
     } catch (const neograph_asio_system_error& e) {
         if (e.code() != asio::error::operation_aborted
             && e.code() != asio::ssl::error::stream_truncated) {
@@ -418,6 +423,10 @@ asio::awaitable<void> HttpServer::sslHandshakeAndServe(
             asio::cancel_after(config_.requestTimeout, asio::use_awaitable)
         );
         co_await serve(std::move(*stream));
+    } catch (const neograph::graph::CancelledException&) {
+        // 取消: 连接终止是预期行为, 静默返回
+    } catch (const neograph::graph::NodeInterrupt&) {
+        // 中断: 同上
     } catch (const neograph_asio_system_error& e) {
         if (e.code() != asio::error::operation_aborted
             && e.code() != asio::ssl::error::stream_truncated) {
