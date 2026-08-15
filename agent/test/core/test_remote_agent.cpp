@@ -1034,6 +1034,8 @@ static asio::awaitable<void> test_run_transport_loop_replace_transport() {
     // 修复验证点: 旧循环随旧 transport 关闭而退出
     // (修复前绑定成员 transport_: 旧循环会切到新 transport 继续 recv, 此处为 false)
     XX_TEST_EXPECT_TRUE(oldLoopExited.load(std::memory_order_acquire));
+    // 旧对端已不再使用, 立即释放 (避免与协程帧析构的时序竞争导致泄漏)
+    tAPeer.reset();
 
     // 新接收循环 (模拟新连接的 serveTransport 发起): 绑定当前成员 transport_ (tB)
     std::atomic<bool> newLoopExited{false};
@@ -1059,6 +1061,11 @@ static asio::awaitable<void> test_run_transport_loop_replace_transport() {
         co_await testSleep(ex, std::chrono::milliseconds{20});
     }
     XX_TEST_EXPECT_TRUE(newLoopExited.load(std::memory_order_acquire));
+    // 等 co_spawn 状态机完全析构接收循环 (flag 在 handler 中置位, 状态机/帧
+    // 析构紧随其后; 立即返回会让帧析构与对端/io 析构产生时序竞争, 偶发泄漏)
+    co_await testSleep(ex, std::chrono::milliseconds{20});
+    // 显式释放对端传输: 确保 tBPeer 在测试帧析构前销毁
+    tBPeer.reset();
     co_return;
 }
 

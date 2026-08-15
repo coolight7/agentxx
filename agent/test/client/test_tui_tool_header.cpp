@@ -60,6 +60,9 @@ struct ToolHeaderFixture {
             m->tool->toolName     = std::move(name);
             m->tool->toolCallId   = "call_1";
             m->tool->toolFinished = true;
+            // 与实际流水线一致: 已完成的 Tool 消息默认折叠展示 (event_stream 历史
+            // 重连时 collapsed=true), 折叠头部即 "动词 · 参数摘要" 特化渲染
+            m->collapsed          = true;
             m->text               = std::move(args);
             st.messages.push_back(std::move(m));
         });

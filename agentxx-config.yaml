@@ -34,7 +34,7 @@ data_dir: default
 #   - 前缀复用: 子目录工作自动复用最近父级索引
 #   - 长度控制: 深层路径折叠为 hash 段, 单段超长截断, 保证不超系统路径限制
 codegraph:
-  enable: false
+  enable: true
   # paths:
   #   - "/path/to/project_a"
   #   - "relative/path/to/project_b"
