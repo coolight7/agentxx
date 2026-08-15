@@ -34,7 +34,7 @@ data_dir: default
 #   - 前缀复用: 子目录工作自动复用最近父级索引
 #   - 长度控制: 深层路径折叠为 hash 段, 单段超长截断, 保证不超系统路径限制
 codegraph:
-  enable: true
+  enable: false
   # paths:
   #   - "/path/to/project_a"
   #   - "relative/path/to/project_b"
@@ -213,3 +213,33 @@ memory:
   # - "relative/path/to/AGENTS.md"
   - "AGENTS.md"
   - ".agentxx/memory/self.md"
+
+# 插件列表 (热插拔 C++/JS 插件; 加载实现见 [agent/lib/src/plugins/plugin_manager.cpp])
+# - path: 插件动态库路径 或 插件目录 (目录含 plugin.yaml 时按清单分派, 推荐);
+#         相对路径按程序工作目录解析为绝对路径
+# - enabled: 是否启用 (默认 true; false 跳过加载)
+# - args:    自定义参数 (预留; 当前仅存留供查询, 不传入插件)
+# - 依赖排序: 加载时按 manifest depends 拓扑排序 (脚本插件须在引擎之后,
+#   配置顺序无关 —— 即使脚本插件写在引擎前面也会自动排到后面)
+#
+# 形态一: 插件目录 (含 plugin.yaml; entry 指向动态库, depends 声明依赖)
+#   plugins/js_example/ 为 JS 示例插件 (C++ 壳 + plugin.js), depends:
+#   agentxx_plugin_js (JS 解释器引擎, 需同时配置)
+# 形态二: 直接库路径 (无 plugin.yaml; 插件名按文件名推导 libfoo.so → foo)
+#   示例插件编译产物: build/linux-debug/exec/libagentxx_plugin_example.so
+#   引擎插件编译产物: build/linux-debug/exec/libagentxx_plugin_js.so
+plugins:
+  # --- 示例: JS 插件 (引擎 + 脚本插件; 顺序无关, 拓扑排序自动处理) ---
+  # - path: "build/linux-debug/exec/plugins/js_example"
+  #   enabled: true
+  # - path: "build/linux-debug/exec/libagentxx_plugin_js.so"
+  #   enabled: true
+
+  # --- 示例: 原生 C++ 插件 (直接库路径) ---
+  # - path: "build/linux-debug/exec/libagentxx_plugin_example.so"
+  #   enabled: true
+  #   args: { foo: bar }
+
+  # --- 示例: 禁用 (加载时跳过) ---
+  # - path: "build/linux-debug/exec/libagentxx_plugin_example.so"
+  #   enabled: false

@@ -6,13 +6,17 @@
 #include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/util/async_offload.h"
 #include "agentxx/util/log.h"
+#include "asio/co_spawn.hpp"
+#include "asio/detached.hpp"
 #include "asio/steady_timer.hpp"
 #include "asio/use_awaitable.hpp"
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <string>
+#include <thread>
 
 namespace agentxx {
 namespace test {
@@ -55,6 +59,9 @@ asio::awaitable<TestResult> run_plugin_tests() {
     ctx->bus                     = std::make_shared<agentxx::middleware::EventBus>(co_await asio::this_coro::executor);
     ctx->toolRegistry            = std::make_shared<agentxx::plugin::ToolRegistry>();
     ctx->pluginManager           = std::make_shared<agentxx::plugin::PluginManager>(ctx);
+    // 装配 io executor (与 BaseAgent::init 一致): 跨线程 (JS 线程/线程池) 的
+    // vtable 调用经真实 post 到 io 线程执行, 而非测试默认的"伪 io 线程"直连
+    ctx->pluginManager->setIoExecutor(co_await asio::this_coro::executor);
 
     // ---- 2. 加载示例插件 ----
     auto path = findExamplePluginPath();
@@ -108,7 +115,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
             return h->name == "agentxx_plugin_example_middleware";
         });
         XX_TEST_EXPECT_TRUE(found);
-        XX_TEST_EXPECT_EQ(inst->hookPoints.size(), size_t{1});
+        XX_TEST_EXPECT_EQ(inst->hookRegistrations.size(), size_t{1});
         XX_TEST_EXPECT_TRUE(inst->middleware != nullptr);
     }
 
@@ -136,12 +143,14 @@ asio::awaitable<TestResult> run_plugin_tests() {
         ctx->pluginManager->disable("agentxx_plugin_example");
         XX_TEST_EXPECT_FALSE(ctx->toolRegistry->contains("example_echo"));
         XX_TEST_EXPECT_FALSE(ctx->pluginManager->registry()->contains("example_caller"));
-        XX_TEST_EXPECT_TRUE(inst->middleware->disabled);
+        // 无轮次执行时 disable 立即摘除中间件 (hooks 停用; enable 时按记录重建)
+        XX_TEST_EXPECT_TRUE(inst->middleware == nullptr);
         XX_TEST_EXPECT_FALSE(inst->enabled);
 
         ctx->pluginManager->enable("agentxx_plugin_example");
         XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("example_echo"));
         XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("example_caller"));
+        XX_TEST_EXPECT_TRUE(inst->middleware != nullptr);
         XX_TEST_EXPECT_FALSE(inst->middleware->disabled);
         XX_TEST_EXPECT_TRUE(inst->enabled);
     }
@@ -204,12 +213,14 @@ asio::awaitable<TestResult> run_plugin_tests() {
         }
     }
 
+    // JS 引擎库与脚本插件目录 (第 12~26 段共用; 函数级声明)
+    namespace fs = std::filesystem;
+    auto        jsPath = findExamplePluginPath();
+    std::string jsLib  = (fs::path(jsPath).parent_path() / "libagentxx_plugin_js.so").string();
+    std::string jsDir  = (fs::path(jsPath).parent_path() / "plugins" / "js_example").string();
+
     // ---- 12. JS 引擎插件加载 (二期) ----
     {
-        auto jsPath = findExamplePluginPath();
-        // 引擎插件库与示例插件同目录: exec/libagentxx_plugin_js.so
-        namespace fs = std::filesystem;
-        std::string jsLib = (fs::path(jsPath).parent_path() / "libagentxx_plugin_js.so").string();
         auto engineInst = co_await ctx->pluginManager->loadNativeAsync(jsLib);
         XX_TEST_EXPECT_TRUE(engineInst != nullptr);
         if (!engineInst) {
@@ -222,7 +233,6 @@ asio::awaitable<TestResult> run_plugin_tests() {
         // 需宿主 example_echo 供 js_call_host 互调
         auto hostInst = co_await ctx->pluginManager->loadNativeAsync(path);
         XX_TEST_EXPECT_TRUE(hostInst != nullptr);
-        auto jsDir = (fs::path(jsPath).parent_path() / "plugins" / "js_example").string();
         auto jsInst = co_await ctx->pluginManager->loadPluginAsync(jsDir);
         XX_TEST_EXPECT_TRUE(jsInst != nullptr);
         if (!jsInst) {
@@ -392,6 +402,153 @@ asio::awaitable<TestResult> run_plugin_tests() {
             co_await ctx->pluginManager->unloadAsync("js_example");
             co_await ctx->pluginManager->unloadAsync("agentxx_plugin_js");
         }
+    }
+
+    // ---- 23. H1 回归: 工具超时后立即卸载不得执行已卸载代码段 ----
+    // - 超时 (asyncWithTimeout) 取消等待协程, 但线程池中的 C 回调仍会跑完
+    // - 修复: inflight 计数在线程池入口递增 + shared_ptr 保活 → unloadAsync
+    //   必须等回调真正返回后才 dlclose (卸载耗时 ≈ 回调剩余时间)
+    {
+        auto inst23 = co_await ctx->pluginManager->loadNativeAsync(path);
+        XX_TEST_EXPECT_TRUE(inst23 != nullptr);
+        if (inst23) {
+            // 注册带超时的慢工具: 超时 100ms, C 回调 sleep 600ms
+            static AgentxxToolSpec slowSpec;
+            slowSpec.name            = "slow_timeout_tool";
+            slowSpec.description     = "slow tool for unload race test";
+            slowSpec.parameters_json = "{}";
+            slowSpec.execute
+                = +[](void*, const char*, const char*, const char*, char**) -> char* {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+                    char* p = static_cast<char*>(::malloc(3));
+                    p[0]    = '{';
+                    p[1]    = '}';
+                    p[2]    = '\0';
+                    return p;
+                };
+            slowSpec.default_timeout_ms = 100;
+            XX_TEST_EXPECT_EQ(ctx->pluginManager->registerTool(inst23.get(), &slowSpec), 0);
+
+            auto tool = ctx->toolRegistry->find("slow_timeout_tool");
+            XX_TEST_EXPECT_TRUE(tool != nullptr);
+            if (tool) {
+                std::atomic<bool> execDone{false};
+                auto ex = co_await asio::this_coro::executor;
+                asio::co_spawn(
+                    ex,
+                    [&execDone, tool]() -> asio::awaitable<void> {
+                        auto out = co_await tool->execute_async(neograph::json{});
+                        (void)out; // 超时返回 "[Plugin tool timeout]"
+                        execDone.store(true);
+                        co_return;
+                    },
+                    asio::detached
+                );
+                // 等待超时返回 (100ms) + 回调仍在线程池执行 (600ms 未完成)
+                co_await sleepMs(250);
+                // 立即卸载: 必须等 inflight 归零 (回调完成) 才 dlclose
+                auto t0       = std::chrono::steady_clock::now();
+                auto ok       = co_await ctx->pluginManager->unloadAsync("agentxx_plugin_example");
+                auto elapsedMs
+                    = std::chrono::duration_cast<std::chrono::milliseconds>(
+                          std::chrono::steady_clock::now() - t0
+                      )
+                          .count();
+                XX_TEST_EXPECT_TRUE(ok);
+                // 卸载应等待回调完成 (600-250 ≈ 350ms; 放宽到 >= 250ms),
+                // 且回调必须完整执行完 (execDone)
+                XX_TEST_EXPECT_TRUE(elapsedMs >= 250);
+                XX_TEST_EXPECT_TRUE(execDone.load());
+            }
+        }
+    }
+
+    // ---- 24. H4 回归: disable 跨轮次 (中间件已物理摘除) 后 enable 钩子恢复 ----
+    {
+        auto inst24 = co_await ctx->pluginManager->loadNativeAsync(path);
+        XX_TEST_EXPECT_TRUE(inst24 != nullptr);
+        if (inst24) {
+            XX_TEST_EXPECT_TRUE(inst24->middleware != nullptr);
+            ctx->pluginManager->onTurnBegin(); // 轮次执行中
+            ctx->pluginManager->disable("agentxx_plugin_example");
+            ctx->pluginManager->flushPendingCleanup(); // 轮末摘除中间件
+            ctx->pluginManager->onTurnEnd();
+            XX_TEST_EXPECT_TRUE(inst24->middleware == nullptr); // 已物理摘除
+            XX_TEST_EXPECT_TRUE(inst24->hookRegistrations.size() == size_t{1});
+            // 启用: 钩子按注册记录重建中间件
+            ctx->pluginManager->enable("agentxx_plugin_example");
+            XX_TEST_EXPECT_TRUE(inst24->middleware != nullptr);
+            XX_TEST_EXPECT_FALSE(inst24->middleware->disabled);
+            const auto& handles = ctx->middlewareHandleContext->handles;
+            bool found = std::any_of(handles.begin(), handles.end(), [](const auto& h) {
+                return h->name == "agentxx_plugin_example_middleware" && !h->disabled;
+            });
+            XX_TEST_EXPECT_TRUE(found);
+            co_await ctx->pluginManager->unloadAsync("agentxx_plugin_example");
+        }
+    }
+
+    // ---- 25. M8 回归: 用户手动禁用的插件不被 enable 级联恢复 ----
+    {
+        auto engine25 = co_await ctx->pluginManager->loadNativeAsync(jsLib);
+        XX_TEST_EXPECT_TRUE(engine25 != nullptr);
+        auto js25 = co_await ctx->pluginManager->loadPluginAsync(jsDir);
+        XX_TEST_EXPECT_TRUE(js25 != nullptr);
+        if (engine25 && js25) {
+            ctx->pluginManager->disable("js_example"); // 用户手动禁用
+            XX_TEST_EXPECT_FALSE(ctx->pluginManager->find("js_example")->enabled);
+            // 启用引擎 → 不应级联恢复被用户手动禁用的脚本插件
+            ctx->pluginManager->enable("agentxx_plugin_js");
+            XX_TEST_EXPECT_FALSE(ctx->pluginManager->find("js_example")->enabled);
+            // 用户显式启用 → 恢复
+            ctx->pluginManager->enable("js_example");
+            XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("js_example")->enabled);
+            co_await ctx->pluginManager->unloadAsync("js_example");
+            co_await ctx->pluginManager->unloadAsync("agentxx_plugin_js");
+        }
+    }
+
+    // ---- 26. H2 回归: shutdownAll (含 JS 引擎) 先子后父, unload 回调后 dlclose ----
+    // - 引擎插件 unload 回调 join JS 线程; 脚本插件先卸载 (通知引擎释放
+    //   JSContext) → 引擎 join 时 JS 线程空闲 → 无挂死/无执行已卸载代码段
+    {
+        auto engine26 = co_await ctx->pluginManager->loadNativeAsync(jsLib);
+        XX_TEST_EXPECT_TRUE(engine26 != nullptr);
+        auto js26 = co_await ctx->pluginManager->loadPluginAsync(jsDir);
+        XX_TEST_EXPECT_TRUE(js26 != nullptr);
+        ctx->pluginManager->shutdownAll();
+        XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("js_example") == nullptr);
+        XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("agentxx_plugin_js") == nullptr);
+    }
+
+    // ---- 27. loadConfiguredPlugins 拓扑排序: 配置顺序无关 (脚本插件在前也能加载) ----
+    // - 库路径项按文件名推导插件名 (libagentxx_plugin_js.so → agentxx_plugin_js),
+    //   参与依赖排序: js_example (depends agentxx_plugin_js) 排在引擎之后
+    {
+        std::vector<agentxx::agent::PluginConfig> cfgs;
+        // 故意把脚本插件目录写在引擎库之前 (配置顺序与依赖顺序相反)
+        agentxx::agent::PluginConfig jsCfg;
+        jsCfg.path    = jsDir;
+        jsCfg.enabled = true;
+        cfgs.push_back(jsCfg);
+        agentxx::agent::PluginConfig engCfg;
+        engCfg.path    = jsLib;
+        engCfg.enabled = true;
+        cfgs.push_back(engCfg);
+        co_await ctx->pluginManager->loadConfiguredPlugins(cfgs);
+        // 两者都应加载成功 (拓扑排序保证引擎先加载)
+        XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("agentxx_plugin_js") != nullptr);
+        XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("js_example") != nullptr);
+        XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("js_hello"));
+        // 清理
+        co_await ctx->pluginManager->unloadAsync("agentxx_plugin_js");
+        XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("js_example") == nullptr); // 级联卸载
+        // 禁用项不加载
+        agentxx::agent::PluginConfig disCfg;
+        disCfg.path    = jsDir;
+        disCfg.enabled = false;
+        co_await ctx->pluginManager->loadConfiguredPlugins({disCfg});
+        XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("js_example") == nullptr);
     }
 
     co_return TestResult{g_plugin_passed, g_plugin_failed};
