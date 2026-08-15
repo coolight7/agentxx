@@ -223,7 +223,12 @@ public:
 
         auto       agentCtxPtr = agentContext.lock();
         const auto len         = agentCtxPtr->middlewareHandleContext->handles.size();
-        size_t     i           = 0;
+        // 已实际执行 onHandleStart 的下标记录 (M7): end 阶段按此回放, 不依赖
+        // 当前 disabled 位 —— 运行中插件禁用 (置 disabled) 不会破坏 start/end
+        // 配对 (start 已执行的中间件, end 必定执行; 未被 start 的绝不 end)
+        std::vector<size_t> startedIdxs;
+        startedIdxs.reserve(len);
+        size_t i = 0;
         for (; i < len; ++i) {
             auto& item = agentCtxPtr->middlewareHandleContext->handles[i];
             // 跳过已禁用中间件 (插件热卸载/禁用; len 已缓存, 跳过不影响
@@ -234,6 +239,8 @@ public:
             XX_LOGT(R"_({}/start, {}/{})_", nodeName, item->name, i);
             try {
                 co_await onHandleStart(*item, in);
+                // 成功执行 start 才记录: 出错项不参与 end 回放 (与原语义一致)
+                startedIdxs.push_back(i);
                 continue;
             } catch (const neograph::graph::CancelledException&) {
                 errorRethrow = true;
@@ -338,13 +345,11 @@ public:
             }
         } while (false);
 
-        for (; i-- > 0;) {
-            auto& item = agentCtxPtr->middlewareHandleContext->handles[i];
-            // 跳过已禁用中间件 (与 start 循环一致, 保证 start/end 配对)
-            if (item->disabled) {
-                continue;
-            }
-            XX_LOGT(R"_({}/end, {}/{})_", nodeName, item->name, i);
+        // end 阶段: 按 startedIdxs 逆序回放 (仅回放实际执行过 start 的中间件,
+        // 不再检查 disabled —— 运行中禁用不破坏配对)
+        for (auto it = startedIdxs.rbegin(); it != startedIdxs.rend(); ++it) {
+            auto& item = agentCtxPtr->middlewareHandleContext->handles[*it];
+            XX_LOGT(R"_({}/end, {}/{})_", nodeName, item->name, *it);
             if (nullptr != errorPtr) {
                 onHandleEndError(errorRethrow, false, errInfo, *item, in, out);
             } else {
