@@ -506,6 +506,37 @@ YamlAppConfig loadYamlConfig(
         }
     }
 
+    // 插件配置 (yaml `plugins` 列表项: path / enabled / args)
+    // - path: 插件动态库路径 或 插件目录 (含 plugin.yaml 时按清单分派加载)
+    // - enabled: 默认 true; args: 自定义参数 (预留, 存留供查询, 不传入插件)
+    if (root["plugins"] && root["plugins"].IsSequence()) {
+        for (const auto& node : root["plugins"]) {
+            if (!node.IsMap()) {
+                XX_LOGW(R"([Config] Warning: plugins entry must be a map, skipped)");
+                continue;
+            }
+            auto p = resolveEnvVars(
+                node["path"].as<std::string>(""), dotEnvVars, overrideEnvVars
+            );
+            if (p.empty()) {
+                XX_LOGW(R"([Config] Warning: plugin entry missing `path`, skipped)");
+                continue;
+            }
+            agent::PluginConfig pc;
+            pc.path = std::move(p);
+            if (node["enabled"]) {
+                auto val = resolveEnvVars(
+                    node["enabled"].as<std::string>("true"), dotEnvVars, overrideEnvVars
+                );
+                pc.enabled = val == "true";
+            }
+            if (node["args"]) {
+                pc.args = yamlToJson(node["args"]);
+            }
+            cfg.plugins.push_back(std::move(pc));
+        }
+    }
+
     return cfg;
 }
 
