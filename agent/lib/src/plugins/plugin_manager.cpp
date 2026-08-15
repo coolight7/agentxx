@@ -9,11 +9,13 @@
 #include "agentxx/util/string_util.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
+#include "asio/post.hpp"
 #include "asio/steady_timer.hpp"
 #include "asio/this_coro.hpp"
 #include "asio/use_awaitable.hpp"
 #include "fmt/format.h"
 #include "neograph/graph/cancel.h"
+#include "yaml-cpp/yaml.h"
 
 #include <algorithm>
 #include <chrono>
@@ -21,6 +23,7 @@
 #include <cstring>
 #include <filesystem>
 #include <functional>
+#include <future>
 #include <thread>
 
 #if defined(_WIN32)
@@ -130,17 +133,18 @@ void NativeLoader::addSearchPath(std::string_view dir) {
 // CapabilityRegistry
 // =====================================================================
 
-bool CapabilityRegistry::registerCapability(std::string_view name, std::string_view provider) {
+bool CapabilityRegistry::registerCapability(std::string_view name, std::string_view provider,
+                                            AgentxxCapabilityInvokeFn invoke, void* ctx) {
     if (name.empty()) {
         return false;
     }
     // 同名能力重复注册: 拒绝 (能力委派需唯一 provider)
     if (caps_.contains(std::string{name})) {
         XX_LOGW("CapabilityRegistry: capability `{}` already registered by `{}`", name,
-                caps_.at(std::string{name}));
+                caps_.at(std::string{name}).provider);
         return false;
     }
-    caps_[std::string{name}] = std::string{provider};
+    caps_[std::string{name}] = Entry{std::string{provider}, invoke, ctx};
     XX_LOGI("CapabilityRegistry: `{}` registered by plugin `{}`", name, provider);
     return true;
 }
@@ -150,9 +154,9 @@ bool CapabilityRegistry::unregisterCapability(std::string_view name, std::string
     if (it == caps_.end()) {
         return false;
     }
-    if (it->second != provider) {
+    if (it->second.provider != provider) {
         XX_LOGW("CapabilityRegistry: capability `{}` owned by `{}`, cannot unregister by `{}`",
-                name, it->second, provider);
+                name, it->second.provider, provider);
         return false;
     }
     caps_.erase(it);
@@ -163,19 +167,27 @@ bool CapabilityRegistry::has(std::string_view name) const {
     return caps_.contains(std::string{name});
 }
 
+const CapabilityRegistry::Entry* CapabilityRegistry::get(std::string_view name) const {
+    auto it = caps_.find(std::string{name});
+    if (it == caps_.end()) {
+        return nullptr;
+    }
+    return &it->second;
+}
+
 std::string CapabilityRegistry::providerOf(std::string_view name) const {
     auto it = caps_.find(std::string{name});
     if (it == caps_.end()) {
         return {};
     }
-    return it->second;
+    return it->second.provider;
 }
 
 std::vector<std::string> CapabilityRegistry::names() const {
     std::vector<std::string> out;
     out.reserve(caps_.size());
-    for (const auto& [name, provider] : caps_) {
-        (void)provider;
+    for (const auto& [name, entry] : caps_) {
+        (void)entry;
         out.push_back(name);
     }
     return out;
@@ -455,6 +467,7 @@ PluginManager::~PluginManager() {
 }
 
 void PluginManager::shutdownAll() {
+    // 全部插件统一处理: 摘除注册 → dlclose
     for (auto& [name, inst] : plugins_) {
         (void)name;
         detachAll(inst.get());
@@ -474,6 +487,51 @@ static PluginInstance* instOf(const AgentxxHost* host) {
 static PluginManager* mgrOf(const AgentxxHost* host) {
     auto inst = instOf(host);
     return inst ? inst->manager.lock().get() : nullptr;
+}
+
+/// 在 io 线程执行并同步等待结果 (调用方为 io 线程时直接执行)
+/// - 供 vtable 的 io 线程约束操作跨线程调用 (JS 线程/宿主线程池) 使用;
+///   调用方线程阻塞等待, io 线程为事件循环 (挂起而非忙等), 无死锁风险
+template<typename T>
+static T ioCallSync(PluginManager* mgr, std::function<T()> fn) {
+    if (!mgr) {
+        throw std::runtime_error("plugin manager released");
+    }
+    if (mgr->isIoThread()) {
+        return fn();
+    }
+    std::promise<T> p;
+    auto            fut = p.get_future();
+    mgr->postToIo([&p, fn = std::move(fn)]() mutable {
+        try {
+            p.set_value(fn());
+        } catch (...) {
+            p.set_exception(std::current_exception());
+        }
+    });
+    return fut.get();
+}
+
+/// void 特化
+static void ioCallSyncVoid(PluginManager* mgr, std::function<void()> fn) {
+    if (!mgr) {
+        return;
+    }
+    if (mgr->isIoThread()) {
+        fn();
+        return;
+    }
+    std::promise<void> p;
+    auto               fut = p.get_future();
+    mgr->postToIo([&p, fn = std::move(fn)]() mutable {
+        try {
+            fn();
+            p.set_value();
+        } catch (...) {
+            p.set_exception(std::current_exception());
+        }
+    });
+    fut.get();
 }
 
 static void* xx_alloc(size_t size) {
@@ -502,7 +560,13 @@ static int xx_register_tool(const AgentxxHost* host, const AgentxxToolSpec* spec
     if (!mgr || !inst || !spec || !spec->name || !*spec->name) {
         return -1;
     }
-    return mgr->registerTool(inst, spec);
+    // io 线程约束操作: 非 io 线程调用 (JS 线程等) 经 post 同步等待
+    auto mgrPtr  = mgr;
+    auto instPtr = inst;
+    AgentxxToolSpec specCopy = *spec;
+    return ioCallSync<int>(mgrPtr, [mgrPtr, instPtr, specCopy]() {
+        return mgrPtr->registerTool(instPtr, &specCopy);
+    });
 }
 
 static int xx_unregister_tool(const AgentxxHost* host, const char* name) {
@@ -511,7 +575,12 @@ static int xx_unregister_tool(const AgentxxHost* host, const char* name) {
     if (!mgr || !inst || !name) {
         return -1;
     }
-    return mgr->unregisterTool(inst, name);
+    auto mgrPtr = mgr;
+    auto instPtr = inst;
+    std::string toolName{name};
+    return ioCallSync<int>(mgrPtr, [mgrPtr, instPtr, toolName]() {
+        return mgrPtr->unregisterTool(instPtr, toolName.c_str());
+    });
 }
 
 static int xx_register_hook(const AgentxxHost* host, AgentxxHookPoint point, AgentxxHookFn fn,
@@ -521,7 +590,11 @@ static int xx_register_hook(const AgentxxHost* host, AgentxxHookPoint point, Age
     if (!mgr || !inst) {
         return -1;
     }
-    return mgr->registerHook(inst, point, fn, user_data);
+    auto mgrPtr = mgr;
+    auto instPtr = inst;
+    return ioCallSync<int>(mgrPtr, [mgrPtr, instPtr, point, fn, user_data]() {
+        return mgrPtr->registerHook(instPtr, point, fn, user_data);
+    });
 }
 
 static int xx_unregister_hook(const AgentxxHost* host, AgentxxHookPoint point, AgentxxHookFn fn,
@@ -531,7 +604,11 @@ static int xx_unregister_hook(const AgentxxHost* host, AgentxxHookPoint point, A
     if (!mgr || !inst) {
         return -1;
     }
-    return mgr->unregisterHook(inst, point, fn, user_data);
+    auto mgrPtr = mgr;
+    auto instPtr = inst;
+    return ioCallSync<int>(mgrPtr, [mgrPtr, instPtr, point, fn, user_data]() {
+        return mgrPtr->unregisterHook(instPtr, point, fn, user_data);
+    });
 }
 
 static AgentxxSubscription* xx_subscribe(const AgentxxHost* host, const char* topic,
@@ -542,7 +619,12 @@ static AgentxxSubscription* xx_subscribe(const AgentxxHost* host, const char* to
     if (!mgr || !inst) {
         return nullptr;
     }
-    return mgr->subscribe(inst, topic, handler, ud);
+    auto mgrPtr = mgr;
+    auto instPtr = inst;
+    std::string topicStr{topic ? topic : ""};
+    return ioCallSync<AgentxxSubscription*>(mgrPtr, [mgrPtr, instPtr, topicStr, handler, ud]() {
+        return mgrPtr->subscribe(instPtr, topicStr.c_str(), handler, ud);
+    });
 }
 
 static void xx_unsubscribe(AgentxxSubscription* sub) {
@@ -551,7 +633,7 @@ static void xx_unsubscribe(AgentxxSubscription* sub) {
     }
     auto mgr = sub->inst ? sub->inst->manager.lock().get() : nullptr;
     if (mgr) {
-        mgr->unsubscribe(sub);
+        ioCallSyncVoid(mgr, [mgr, sub]() { mgr->unsubscribe(sub); });
     } else {
         delete sub;
     }
@@ -571,7 +653,12 @@ static int xx_register_capability(const AgentxxHost* host, const char* capabilit
     if (!mgr || !inst || !capability) {
         return -1;
     }
-    return mgr->registerCapability(inst, capability);
+    auto mgrPtr = mgr;
+    auto instPtr = inst;
+    std::string cap{capability};
+    return ioCallSync<int>(mgrPtr, [mgrPtr, instPtr, cap]() {
+        return mgrPtr->registerCapability(instPtr, cap.c_str());
+    });
 }
 
 static int xx_unregister_capability(const AgentxxHost* host, const char* capability) {
@@ -580,7 +667,12 @@ static int xx_unregister_capability(const AgentxxHost* host, const char* capabil
     if (!mgr || !inst || !capability) {
         return -1;
     }
-    return mgr->unregisterCapability(inst, capability);
+    auto mgrPtr = mgr;
+    auto instPtr = inst;
+    std::string cap{capability};
+    return ioCallSync<int>(mgrPtr, [mgrPtr, instPtr, cap]() {
+        return mgrPtr->unregisterCapability(instPtr, cap.c_str());
+    });
 }
 
 static int xx_has_capability(const AgentxxHost* host, const char* capability) {
@@ -591,6 +683,35 @@ static int xx_has_capability(const AgentxxHost* host, const char* capability) {
     return mgr->hasCapability(capability) ? 1 : 0;
 }
 
+static int xx_register_capability_ex(const AgentxxHost* host, const char* capability,
+                                     AgentxxCapabilityInvokeFn invoke, void* ctx) {
+    auto mgr = mgrOf(host);
+    auto inst = instOf(host);
+    if (!mgr || !inst || !capability || !*capability) {
+        return -1;
+    }
+    auto mgrPtr = mgr;
+    auto instPtr = inst;
+    std::string cap{capability};
+    return ioCallSync<int>(mgrPtr, [mgrPtr, instPtr, cap, invoke, ctx]() {
+        return mgrPtr->registerCapabilityEx(instPtr, cap.c_str(), invoke, ctx);
+    });
+}
+
+static char* xx_invoke_capability(const AgentxxHost* host, const char* capability,
+                                  const char* method, const char* args_json, char** error_out) {
+    auto mgr = mgrOf(host);
+    auto inst = instOf(host);
+    if (!mgr || !inst || !capability || !method) {
+        return nullptr;
+    }
+    std::string cap{capability};
+    std::string m{method};
+    std::string args{args_json ? args_json : "{}"};
+    // 查表在 io 线程 (invokeCapability 内部), 提供者回调在调用方线程执行
+    return mgr->invokeCapability(inst, cap.c_str(), m.c_str(), args.c_str(), error_out);
+}
+
 static char* xx_call_tool(const AgentxxHost* host, const char* name, const char* args_json,
                           const char* thread_id, char** error_out) {
     auto mgr = mgrOf(host);
@@ -598,7 +719,63 @@ static char* xx_call_tool(const AgentxxHost* host, const char* name, const char*
     if (!mgr || !inst) {
         return nullptr;
     }
-    return mgr->callTool(inst, name, args_json, thread_id, error_out);
+    // registry 查表为 io 线程数据结构: 整体在 io 线程执行 (含 spec.execute 同步
+    // 回调; call_tool 为低频互调路径, 阻塞 io 线程可接受; 若目标是本引擎的
+    // JS 工具, JS 侧桥已内联处理, 不会走到这里)
+    auto mgrPtr = mgr;
+    auto instPtr = inst;
+    std::string toolName{name ? name : ""};
+    std::string args{args_json ? args_json : ""};
+    std::string tid{thread_id ? thread_id : ""};
+    // error_out 由调用方栈持有, 调用方在 fut.get() 等待期间有效;
+    // 内存可见性由 future 保证
+    return ioCallSync<char*>(mgrPtr, [mgrPtr, instPtr, toolName, args, tid, error_out]() {
+        return mgrPtr->callTool(instPtr, toolName.c_str(), args.c_str(), tid.c_str(), error_out);
+    });
+}
+
+static char* xx_list_plugins(const AgentxxHost* host) {
+    auto mgr = mgrOf(host);
+    if (!mgr) {
+        return nullptr;
+    }
+    // plugins_ 为 io 线程数据结构: 整体在 io 线程执行; 字符串跨边界经 host->alloc
+    auto mgrPtr = mgr;
+    auto json   = ioCallSync<std::string>(mgrPtr, [mgrPtr]() { return mgrPtr->listPluginsJson(); });
+    return host->vtable->strdup(json.c_str());
+}
+
+static char* xx_get_plugin(const AgentxxHost* host, const char* name) {
+    auto mgr = mgrOf(host);
+    if (!mgr || !name) {
+        return nullptr;
+    }
+    auto mgrPtr = mgr;
+    std::string pluginName{name};
+    auto json = ioCallSync<std::string>(mgrPtr, [mgrPtr, pluginName]() {
+        return mgrPtr->getPluginJson(pluginName);
+    });
+    if (json.empty()) {
+        return nullptr; // 未安装
+    }
+    return host->vtable->strdup(json.c_str());
+}
+
+static char* xx_get_own_info(const AgentxxHost* host) {
+    auto mgr = mgrOf(host);
+    auto inst = instOf(host);
+    if (!mgr || !inst) {
+        return nullptr;
+    }
+    auto mgrPtr = mgr;
+    std::string ownName = inst->name;
+    auto json = ioCallSync<std::string>(mgrPtr, [mgrPtr, ownName]() {
+        return mgrPtr->getOwnPluginJson(ownName);
+    });
+    if (json.empty()) {
+        return nullptr;
+    }
+    return host->vtable->strdup(json.c_str());
 }
 
 static char* xx_get_share_store(const AgentxxHost* host, const char* thread_id, long long id) {
@@ -607,7 +784,13 @@ static char* xx_get_share_store(const AgentxxHost* host, const char* thread_id, 
     if (!mgr || !inst) {
         return nullptr;
     }
-    return mgr->getShareStore(inst, thread_id, id);
+    // shareStore 仅 io 线程访问 (无锁模型): 跨线程经 post 同步等待
+    auto mgrPtr = mgr;
+    auto instPtr = inst;
+    std::string tid{thread_id ? thread_id : ""};
+    return ioCallSync<char*>(mgrPtr, [mgrPtr, instPtr, tid, id]() {
+        return mgrPtr->getShareStore(instPtr, tid.c_str(), id);
+    });
 }
 
 static void xx_emit_message_tip(const AgentxxHost* host, const char* thread_id, const char* text,
@@ -617,7 +800,26 @@ static void xx_emit_message_tip(const AgentxxHost* host, const char* thread_id, 
     if (!mgr || !inst) {
         return;
     }
-    mgr->emitMessageTip(inst, thread_id, text, level);
+    auto mgrPtr = mgr;
+    auto instPtr = inst;
+    std::string tid{thread_id ? thread_id : ""};
+    std::string msg{text ? text : ""};
+    ioCallSyncVoid(mgrPtr, [mgrPtr, instPtr, tid, msg, level]() {
+        mgrPtr->emitMessageTip(instPtr, tid.c_str(), msg.c_str(), level);
+    });
+}
+
+static int xx_is_io_thread(const AgentxxHost* host) {
+    auto mgr = mgrOf(host);
+    return (mgr && mgr->isIoThread()) ? 1 : 0;
+}
+
+static void xx_post_to_io(const AgentxxHost* host, void (*fn)(void* ud), void* ud) {
+    auto mgr = mgrOf(host);
+    if (!mgr || !fn) {
+        return;
+    }
+    mgr->postToIo([fn, ud]() { fn(ud); });
 }
 
 static void xx_log(const AgentxxHost* host, int level, const char* msg) {
@@ -658,9 +860,16 @@ static const AgentxxHostVtable g_hostVtable = {
     xx_unsubscribe,
     xx_publish,
     xx_register_capability,
+    xx_register_capability_ex,
     xx_unregister_capability,
     xx_has_capability,
+    xx_invoke_capability,
+    xx_is_io_thread,
+    xx_post_to_io,
     xx_call_tool,
+    xx_list_plugins,
+    xx_get_plugin,
+    xx_get_own_info,
     xx_get_share_store,
     xx_emit_message_tip,
     xx_log,
@@ -844,6 +1053,57 @@ int PluginManager::unregisterCapability(PluginInstance* inst, const char* capabi
 
 int PluginManager::hasCapability(const char* capability) const {
     return capability && capabilities_->has(capability) ? 1 : 0;
+}
+
+int PluginManager::registerCapabilityEx(PluginInstance* inst, const char* capability,
+                                        AgentxxCapabilityInvokeFn invoke, void* ctx) {
+    if (!inst || !capability || !*capability || !invoke) {
+        return -1;
+    }
+    if (!capabilities_->registerCapability(capability, inst->name, invoke, ctx)) {
+        return -1;
+    }
+    inst->capabilities.push_back(capability);
+    return 0;
+}
+
+char* PluginManager::invokeCapability(PluginInstance* caller, const char* capability,
+                                      const char* method, const char* args_json, char** error_out) {
+    auto setErr = [&](const std::string& msg) {
+        if (error_out && caller) {
+            *error_out = caller->host.vtable->strdup(msg.c_str());
+        }
+    };
+    // 1. io 线程查表并拷贝 (短临界区)
+    CapabilityRegistry::Entry entry;
+    bool                       found = false;
+    if (isIoThread()) {
+        if (const auto* e = capabilities_->get(capability)) {
+            entry = *e;
+            found = true;
+        }
+    } else {
+        found = ioCallSync<bool>(this, [this, capability, &entry]() {
+            const auto* e = capabilities_->get(capability);
+            if (!e) {
+                return false;
+            }
+            entry = *e;
+            return true;
+        });
+    }
+    if (!found) {
+        setErr(fmt::format("invoke_capability: capability `{}` not registered", capability));
+        return nullptr;
+    }
+    if (!entry.invoke) {
+        setErr(fmt::format("invoke_capability: capability `{}` has no method handler", capability));
+        return nullptr;
+    }
+    // 2. 提供者回调在【调用方线程】执行 (关键: 引擎的 load 会阻塞等待其引擎
+    //    线程, 引擎线程内脚本注册回调又要回 io 线程 —— 若回调在 io 线程执行
+    //    则 io↔引擎互等死锁; 调用方线程执行则 io 线程保持空闲可服务注册回调)
+    return entry.invoke(entry.ctx, caller ? &caller->host : nullptr, method, args_json, error_out);
 }
 
 // ==================== 会话/上下文访问 ====================
@@ -1140,6 +1400,17 @@ asio::awaitable<bool> PluginManager::unloadAsync(std::string_view name) {
         co_return false;
     }
     inst->unloadRequested = true;
+
+    // ---- 依赖图级联: 先卸载必选依赖本插件的插件 (先子后父) ----
+    // - 例如卸载 JS 引擎插件 → 先卸载全部 depends 它的脚本插件,
+    //   保证引擎 dlclose 前无任何脚本插件残留 (binding 永不悬垂)
+    for (const auto& dep : reverseRequiredDeps(inst->name, /*onlyEnabled=*/true)) {
+        XX_LOGI("Unload `{}` cascades unload of dependent plugin `{}`", inst->name, dep);
+        co_await unloadAsync(dep);
+    }
+    // 可选依赖者: 仅警告 (插件运行时用互查 API 感知后自行降级)
+
+    // ---- 摘除全部注册 (插件内部委托的脚本运行时由插件自身的 unload 回调清理) ----
     detachAll(inst.get());
     // 卸载后不再恢复: 释放插件工具对象 (enable 仅对未卸载插件有意义)
     inst->tools.clear();
@@ -1163,7 +1434,7 @@ asio::awaitable<bool> PluginManager::unloadAsync(std::string_view name) {
         pendingCleanup_.end()
     );
 
-    // 插件 unload 回调 (业务清理; 宿主已自动反注册全部残留)
+    // 插件 unload 回调 (业务清理; 宿主已自动反注册全部残留; 脚本插件无 dlHandle)
     if (inst->dlHandle) {
         std::string err;
         auto fn = reinterpret_cast<AgentxxPluginUnloadFn>(
@@ -1173,16 +1444,35 @@ asio::awaitable<bool> PluginManager::unloadAsync(std::string_view name) {
             fn(inst->pluginCtx);
         }
     }
-
     plugins_.erase(it); // 析构 → dlclose (inst 局部 shared_ptr 保活到函数结束)
     XX_LOGI("Plugin unloaded: {}", inst->name);
     co_return true;
+}
+
+/// 收集必选依赖 target 的插件名 (io 线程)
+std::vector<std::string> PluginManager::reverseRequiredDeps(const std::string& target,
+                                                            bool               onlyEnabled) const {
+    std::vector<std::string> out;
+    for (const auto& [name, inst] : plugins_) {
+        if (name == target || (onlyEnabled && !inst->enabled)) {
+            continue;
+        }
+        if (std::find(inst->depends.begin(), inst->depends.end(), target) != inst->depends.end()) {
+            out.push_back(name);
+        }
+    }
+    return out;
 }
 
 void PluginManager::disable(std::string_view name) {
     auto inst = find(name);
     if (!inst || !inst->enabled) {
         return;
+    }
+    // 依赖图级联: 先禁用必选依赖本插件的插件 (脚本插件随引擎一起停用)
+    for (const auto& dep : reverseRequiredDeps(inst->name, /*onlyEnabled=*/true)) {
+        XX_LOGI("Disable `{}` cascades disable of dependent plugin `{}`", inst->name, dep);
+        disable(dep);
     }
     inst->enabled = false;
     // 工具摘除 (对象保留, enable 恢复)
@@ -1227,7 +1517,160 @@ void PluginManager::enable(std::string_view name) {
     for (const auto& cap : inst->capabilities) {
         capabilities_->registerCapability(cap, inst->name);
     }
+    // 依赖图级联: 再启用必选依赖本插件的插件 (含被级联禁用的)
+    for (const auto& dep : reverseRequiredDeps(inst->name, /*onlyEnabled=*/false)) {
+        auto depInst = find(dep);
+        if (depInst && !depInst->enabled) {
+            XX_LOGI("Enable `{}` cascades enable of dependent plugin `{}`", inst->name, dep);
+            enable(dep);
+        }
+    }
     XX_LOGI("Plugin enabled: {}", inst->name);
+}
+
+/// 从插件目录 plugin.yaml 解析清单 (name/entry/depends/optional_depends/enabled)
+/// - 返回 false 表示解析失败 (记录日志)
+static bool parsePluginManifest(
+    const std::filesystem::path& dir,
+    std::string&                 name,
+    std::string&                 entry,
+    std::vector<std::string>&    depends,
+    std::vector<std::string>&    optionalDepends,
+    bool&                        enabled
+) {
+    auto yamlPath = dir / "plugin.yaml";
+    std::error_code ec;
+    if (!std::filesystem::exists(yamlPath, ec)) {
+        XX_LOGW("Plugin dir `{}` has no plugin.yaml", dir.string());
+        return false;
+    }
+    try {
+        auto node = YAML::LoadFile(yamlPath.string());
+        name    = node["name"] ? node["name"].as<std::string>() : std::string{};
+        entry   = node["entry"] ? node["entry"].as<std::string>() : std::string{};
+        if (node["depends"] && node["depends"].IsSequence()) {
+            for (const auto& d : node["depends"]) {
+                if (d.IsScalar()) {
+                    depends.push_back(d.as<std::string>());
+                }
+            }
+        }
+        if (node["optional_depends"] && node["optional_depends"].IsSequence()) {
+            for (const auto& d : node["optional_depends"]) {
+                if (d.IsScalar()) {
+                    optionalDepends.push_back(d.as<std::string>());
+                }
+            }
+        }
+        if (node["enabled"] && node["enabled"].IsScalar()) {
+            try {
+                enabled = node["enabled"].as<bool>();
+            } catch (const std::exception&) {
+                auto s = node["enabled"].as<std::string>();
+                enabled = !(s == "false" || s == "0" || s == "no");
+            }
+        }
+    } catch (const std::exception& e) {
+        XX_LOGE("Parse plugin manifest `{}` failed: {}", yamlPath.string(), e.what());
+        return false;
+    }
+    if (name.empty() || entry.empty()) {
+        XX_LOGE("Plugin manifest `{}` invalid: name/entry required", yamlPath.string());
+        return false;
+    }
+    return true;
+}
+
+bool PluginManager::hasDependencyCycle(const std::string& name,
+                                       std::vector<std::string>& visiting) const {
+    // 当前 DFS 链上再次遇到 → 环
+    if (std::find(visiting.begin(), visiting.end(), name) != visiting.end()) {
+        return true;
+    }
+    auto it = plugins_.find(name);
+    if (it == plugins_.end()) {
+        return false; // 未安装的依赖不参与环检测 (加载时必选缺失已报错)
+    }
+    visiting.push_back(name);
+    for (const auto& d : it->second->depends) {
+        if (hasDependencyCycle(d, visiting)) {
+            return true;
+        }
+    }
+    visiting.pop_back();
+    return false;
+}
+
+bool PluginManager::checkDependencies(
+    const std::string& name, const std::vector<std::string>& depends,
+    const std::vector<std::string>& optionalDepends
+) {
+    bool ok = true;
+    for (const auto& d : depends) {
+        if (!plugins_.contains(d)) {
+            XX_LOGE("Plugin `{}` load failed: required dependency `{}` not installed "
+                    "(load it first)", name, d);
+            ok = false;
+        }
+    }
+    for (const auto& d : optionalDepends) {
+        if (!plugins_.contains(d)) {
+            XX_LOGW("Plugin `{}`: optional dependency `{}` not installed (skip enhancement)",
+                    name, d);
+        }
+    }
+    if (!ok) {
+        return false;
+    }
+    // 循环依赖检测 (含新插件的依赖链 DFS)
+    std::vector<std::string> visiting;
+    for (const auto& d : depends) {
+        if (hasDependencyCycle(d, visiting)) {
+            std::string chain;
+            for (size_t i = 0; i < visiting.size(); ++i) {
+                if (i) {
+                    chain += " -> ";
+                }
+                chain += visiting[i];
+            }
+            XX_LOGE("Plugin `{}` load failed: dependency cycle detected (chain: {})", name, chain);
+            return false;
+        }
+    }
+    return true;
+}
+
+asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadPluginAsync(std::string path) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    if (fs::is_directory(path, ec)) {
+        // ---- 插件目录: 按 plugin.yaml 清单分派 ----
+        std::string                 name, entry;
+        std::vector<std::string>    depends, optionalDepends;
+        bool                        enabled = true;
+        if (!parsePluginManifest(fs::path(path), name, entry, depends, optionalDepends, enabled)) {
+            co_return nullptr;
+        }
+        if (!enabled) {
+            XX_LOGI("Plugin `{}` disabled by manifest, skip", name);
+            co_return nullptr;
+        }
+        // 依赖检查 (必选缺失/可选警告/环检测)
+        if (!checkDependencies(name, depends, optionalDepends)) {
+            co_return nullptr;
+        }
+        // 所有插件统一为 C++ 插件: entry 总是指向动态库
+        // (脚本能力由插件内部经能力调用委派给 interpreter 引擎, 宿主不参与)
+        auto entryPath = (fs::path(path) / entry).lexically_normal().string();
+        auto inst = co_await loadNativeAsync(std::move(entryPath));
+        if (inst) {
+            inst->depends         = std::move(depends);
+            inst->optionalDepends = std::move(optionalDepends);
+        }
+        co_return inst;
+    }
+    // ---- 文件: 视为原生库路径 ----
+    co_return co_await loadNativeAsync(std::move(path));
 }
 
 asio::awaitable<void> PluginManager::loadConfiguredPlugins(
@@ -1237,7 +1680,7 @@ asio::awaitable<void> PluginManager::loadConfiguredPlugins(
         if (!cfg.enabled) {
             continue;
         }
-        co_await loadNativeAsync(cfg.path);
+        co_await loadPluginAsync(cfg.path);
     }
 }
 
@@ -1254,9 +1697,61 @@ std::vector<PluginManager::PluginListView> PluginManager::list() const {
             inst->inflight.load(std::memory_order_acquire),
             inst->toolNames,
             inst->capabilities,
+            inst->depends,
         });
     }
     return out;
+}
+
+// ==================== 插件互查 (list_plugins / get_plugin) ====================
+
+/// 单插件信息 → JSON (io 线程)
+static neograph::json pluginInfoToJson(const PluginManager::PluginListView& p) {
+    neograph::json j = neograph::json::object();
+    j["name"]         = p.name;
+    j["version"]      = p.version;
+    j["description"]  = p.description;
+    j["path"]         = p.path;
+    j["enabled"]      = p.enabled;
+    j["tools"]        = neograph::json::array();
+    for (const auto& t : p.tools) {
+        j["tools"].push_back(t);
+    }
+    j["capabilities"] = neograph::json::array();
+    for (const auto& c : p.capabilities) {
+        j["capabilities"].push_back(c);
+    }
+    j["depends"] = neograph::json::array();
+    for (const auto& d : p.depends) {
+        j["depends"].push_back(d);
+    }
+    return j;
+}
+
+std::string PluginManager::listPluginsJson() {
+    auto pluginList = list();
+    neograph::json arr = neograph::json::array();
+    for (const auto& p : pluginList) {
+        arr.push_back(pluginInfoToJson(p));
+    }
+    return arr.dump();
+}
+
+std::string PluginManager::getPluginJson(const std::string& name) {
+    auto inst = find(name);
+    if (!inst) {
+        return {};
+    }
+    PluginListView p{
+        inst->name, inst->version, inst->description, inst->path,
+        inst->enabled, inst->inflight.load(std::memory_order_acquire),
+        inst->toolNames, inst->capabilities, inst->depends,
+    };
+    return pluginInfoToJson(p).dump();
+}
+
+std::string PluginManager::getOwnPluginJson(const std::string& name) {
+    return getPluginJson(name);
 }
 
 std::shared_ptr<PluginInstance> PluginManager::find(std::string_view name) const {

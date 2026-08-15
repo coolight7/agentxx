@@ -23,6 +23,10 @@ class PluginMiddlewareHandle;
 class PluginTool;
 
 /// 已加载插件实例 (宿主侧状态)
+/// - **所有插件统一为 C++ 插件**: 每个插件都有 dlHandle/entry; 脚本能力是
+///   插件内部实现的一部分 —— 经 manifest 依赖声明 (depends 引擎插件) +
+///   能力调用 (invoke_capability 插件间通信) 把脚本代码交给 interpreter
+///   引擎执行, 宿主不特判任何脚本类型 (未来 py/lua 同理, 宿主零改动)
 /// - 所有注册残留 (工具/钩子/订阅/能力) 记录于此, 卸载时统一清理
 /// - inflight: 在途回调计数 (工具 execute / 钩子 / 事件 handler),
 ///   卸载流程须等其为 0 后才能调 unload 回调并 dlclose
@@ -34,7 +38,11 @@ public:
     std::string version;
     std::string description;
     std::string path;                    ///< 加载的库路径
-    void*       dlHandle = nullptr;      ///< dlopen/LoadLibrary 句柄
+    /// 必选依赖 (插件名): 未安装则加载失败; 卸载/禁用时级联 (依赖方先于被依赖方)
+    std::vector<std::string> depends;
+    /// 可选依赖 (插件名): 未安装仅警告, 不影响加载
+    std::vector<std::string> optionalDepends;
+    void*       dlHandle = nullptr;      ///< dlopen/LoadLibrary 句柄 (脚本插件为空)
     void*       pluginCtx = nullptr;     ///< entry 输出的插件私有上下文
     bool        enabled = true;          ///< 是否启用 (禁用: 工具摘除/钩子停用)
     bool        unloadRequested = false; ///< 已请求卸载 (防重复)
@@ -181,6 +189,7 @@ public:
         size_t                   inflight = 0;
         std::vector<std::string> tools;
         std::vector<std::string> capabilities;
+        std::vector<std::string> depends;
     };
 
     explicit PluginManager(std::weak_ptr<agentxx::agent::AgentContext> agentContext);
@@ -209,9 +218,19 @@ public:
     void flushPendingCleanup();
 
     /// 加载配置中启用的插件 (BaseAgent::init 装配后调用)
+    /// - 原生插件: 直接库路径
+    /// - 插件目录 (含 plugin.yaml): 按清单分派 (type: native/js)
     asio::awaitable<void> loadConfiguredPlugins(
         const std::vector<agentxx::agent::PluginConfig>& plugins
     );
+
+    /// 加载插件 (支持 库路径 或 插件目录; 目录含 plugin.yaml 时按清单分派)
+    /// - **所有插件统一为 C++ 插件**: manifest entry 总是指向动态库,
+    ///   dlopen 后调 entry 函数; 脚本能力由插件内部经能力调用委派给
+    ///   interpreter 引擎 (宿主不参与)
+    /// - 依赖检查: 必选依赖未安装 → 加载失败; 可选依赖未安装 → 警告;
+    ///   依赖环 → 拒绝
+    asio::awaitable<std::shared_ptr<PluginInstance>> loadPluginAsync(std::string path);
 
     /// 同步卸载全部插件 (AgentContext 析构前调用, 断开中间件↔实例循环引用;
     /// 不等在途回调, 适用于进程/上下文销毁场景)
@@ -253,10 +272,6 @@ public:
     );
     void unsubscribe(AgentxxSubscription* sub);
     int  publish(const char* topic, const char* event_json);
-    /// 能力注册
-    int registerCapability(PluginInstance* inst, const char* capability);
-    int unregisterCapability(PluginInstance* inst, const char* capability);
-    int hasCapability(const char* capability) const;
     /// 插件工具互调 (线程安全, 内部独立线程池执行)
     char* callTool(PluginInstance* inst, const char* name, const char* args_json,
                    const char* thread_id, char** error_out);
@@ -273,6 +288,60 @@ public:
         return capabilities_;
     }
 
+    // ==================== io 线程投递 (vtable 跨线程调用支撑) ====================
+
+    /// 装配 io executor (BaseAgent::init 调用; 未装配时 vtable 的跨线程
+    /// 调用按 io 线程直接执行处理)
+    void setIoExecutor(asio::any_io_executor ex) {
+        ioExecutor_ = std::move(ex);
+        if (ioExecutor_) {
+            ioThreadId_ = std::this_thread::get_id(); // init 在 io 线程执行
+        }
+    }
+
+    /// 当前线程是否为 io 线程
+    bool isIoThread() const {
+        return !ioExecutor_ || ioThreadId_ == std::this_thread::get_id();
+    }
+
+    /// 投递任务到 io 线程异步执行 (线程安全; 非阻塞)
+    void postToIo(std::function<void()> fn) const {
+        if (isIoThread()) {
+            fn();
+        } else if (ioExecutor_) {
+            asio::post(ioExecutor_, std::move(fn));
+        } else {
+            // 无 io executor (测试等场景): 直接执行 (调用方应为 io 线程)
+            fn();
+        }
+    }
+
+    // ==================== 能力注册/调用 (插件间通信) ====================
+
+    /// 声明能力 (无回调; 仅标记/互查)
+    int registerCapability(PluginInstance* inst, const char* capability);
+    /// 注册能力并附带方法回调 (通用插件间通信; 如 JS 引擎 "interpreter.js"
+    /// 提供 load/unload 方法)
+    int registerCapabilityEx(PluginInstance* inst, const char* capability,
+                             AgentxxCapabilityInvokeFn invoke, void* ctx);
+    int unregisterCapability(PluginInstance* inst, const char* capability);
+    int hasCapability(const char* capability) const;
+
+    /// 调用能力提供者的方法 (io 线程约束; 跨线程经 post 同步等待)
+    /// - 提供者回调在调用方线程执行 (回调内部自行跳转引擎线程)
+    /// - 返回结果 JSON (host->alloc); 失败返回 NULL 并 error_out
+    char* invokeCapability(PluginInstance* caller, const char* capability,
+                           const char* method, const char* args_json, char** error_out);
+
+    // ==================== 插件互查 (vtable list_plugins/get_plugin) ====================
+
+    /// 全部插件信息 JSON 数组 (std::string; io 线程)
+    std::string listPluginsJson();
+    /// 单个插件信息 JSON (未安装返回空串; io 线程)
+    std::string getPluginJson(const std::string& name);
+    /// 指定插件自身信息 JSON (未安装返回空串; io 线程)
+    std::string getOwnPluginJson(const std::string& name);
+
 private:
 
     friend class PluginInstance;
@@ -286,31 +355,59 @@ private:
     /// 从 handles 摘除某插件的全部中间件 (仅 flushPendingCleanup 调用)
     void eraseMiddleware(const PluginInstance* inst);
 
+    /// 依赖检查: 必选依赖是否全部已安装; 可选缺失仅警告 (返回 false = 加载失败)
+    /// - 顺带做循环依赖检测 (DFS 访问链)
+    bool checkDependencies(const std::string& name, const std::vector<std::string>& depends,
+                           const std::vector<std::string>& optionalDepends);
+
+    /// 递归检测依赖环 (visiting 为当前 DFS 访问链)
+    bool hasDependencyCycle(const std::string& name, std::vector<std::string>& visiting) const;
+
+    /// 收集反向必选依赖 (depends 含 target 的插件名; io 线程)
+    /// - onlyEnabled=true: 仅统计 enabled 的插件 (卸载/禁用级联)
+    /// - onlyEnabled=false: 全部统计 (启用级联: 需恢复被级联禁用的插件)
+    std::vector<std::string> reverseRequiredDeps(const std::string& target, bool onlyEnabled) const;
+
     std::weak_ptr<agentxx::agent::AgentContext> agentContext_;
     std::shared_ptr<ToolRegistry>               registry_;
     std::shared_ptr<CapabilityRegistry>         capabilities_;
     /// 插件表 <name, instance>
     std::map<std::string, std::shared_ptr<PluginInstance>, std::less<>> plugins_{};
+
     /// 进行中轮次计数 (io 线程)
     size_t runningTurns_ = 0;
     /// 待轮末生效的禁用/卸载列表 (io 线程)
     std::vector<std::string> pendingCleanup_{};
+
+    /// io executor (BaseAgent::init 装配; 空 = 未装配)
+    asio::any_io_executor ioExecutor_{};
+    std::thread::id        ioThreadId_{};
 };
 
 /// 能力注册表 (插件互查/委派; 如 JS 解释器能力 "interpreter.js")
+/// - 能力可附带方法回调: 能力调用 = 通用插件间通信通道 (invoke_capability)
 class CapabilityRegistry {
 public:
 
-    bool registerCapability(std::string_view name, std::string_view providerPlugin);
+    struct Entry {
+        std::string provider;                          ///< 提供者插件名
+        AgentxxCapabilityInvokeFn invoke = nullptr;    ///< 方法回调 (可空)
+        void* ctx = nullptr;                           ///< 提供者私有上下文
+    };
+
+    bool registerCapability(std::string_view name, std::string_view providerPlugin,
+                            AgentxxCapabilityInvokeFn invoke = nullptr, void* ctx = nullptr);
     bool unregisterCapability(std::string_view name, std::string_view providerPlugin);
     bool has(std::string_view name) const;
+    /// 能力条目 (不存在返回 nullptr)
+    const Entry* get(std::string_view name) const;
     /// 提供某能力的插件名 (不存在返回空)
     std::string providerOf(std::string_view name) const;
     std::vector<std::string> names() const;
 
 private:
 
-    std::map<std::string, std::string, std::less<>> caps_{}; ///< <capability, providerPlugin>
+    std::map<std::string, Entry, std::less<>> caps_{}; ///< <capability, Entry>
 };
 
 /// 平台动态库加载封装 (dlopen ↔ LoadLibrary)

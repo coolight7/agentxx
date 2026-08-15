@@ -28,7 +28,7 @@
 extern "C" {
 #endif
 
-#define AGENTXX_PLUGIN_API_VERSION 1
+#define AGENTXX_PLUGIN_API_VERSION 2
 
 /* ==================== 插件元信息 ==================== */
 
@@ -90,6 +90,17 @@ typedef struct AgentxxSubscription AgentxxSubscription;
 
 typedef struct AgentxxHost AgentxxHost;
 
+/// 能力调用回调 (capability 提供者注册; 通用插件间通信, 如 JS 引擎提供
+/// "interpreter.js" 能力的 load/unload 方法)
+/// - ctx: 提供者私有上下文
+/// - caller_host: 调用方插件宿主句柄 (如脚本插件的 C++ 壳, 脚本内注册的
+///   工具经此挂到调用方实例)
+/// - method/args_json: 提供者自定义方法契约 (JSON 字符串)
+/// - 返回: 结果 JSON 字符串 (host->alloc 分配); 失败返回 NULL 并经 error_out 输出
+typedef char* (*AgentxxCapabilityInvokeFn)(void* ctx, const AgentxxHost* caller_host,
+                                           const char* method, const char* args_json,
+                                           char** error_out);
+
 typedef struct AgentxxHostVtable {
     /* ---- 内存 (跨 CRT 堆边界的唯一分配通道) ---- */
     void* (*alloc)(size_t size);
@@ -118,9 +129,25 @@ typedef struct AgentxxHostVtable {
     int (*publish)(const AgentxxHost* host, const char* topic, const char* event_json);
 
     /* ---- 能力注册表 (插件互查/委派, 如 "interpreter.js") ---- */
+    /// 声明能力 (无方法回调; 仅标记/互查)
     int (*register_capability)(const AgentxxHost* host, const char* capability);
+    /// 注册能力并附带方法回调 (能力调用 = 通用插件间通信通道;
+    /// 如 JS 引擎注册 "interpreter.js" 提供 load/unload 方法)
+    int (*register_capability_ex)(const AgentxxHost* host, const char* capability,
+                                  AgentxxCapabilityInvokeFn invoke, void* ctx);
     int (*unregister_capability)(const AgentxxHost* host, const char* capability);
     int (*has_capability)(const AgentxxHost* host, const char* capability);
+
+    /* ---- 能力调用 (插件间通信; io 线程约束, 跨线程经 post) ---- */
+    /// 调用能力提供者的方法; 返回结果 JSON (host->alloc), 失败返回 NULL 并 error_out
+    char* (*invoke_capability)(const AgentxxHost* host, const char* capability,
+                               const char* method, const char* args_json, char** error_out);
+
+    /* ---- 线程投递 (非 io 线程调用方使用; 二期) ---- */
+    /// 当前线程是否为宿主 io 线程
+    int  (*is_io_thread)(const AgentxxHost* host);
+    /// 投递任务到宿主 io 线程异步执行 (不等待, 线程安全)
+    void (*post_to_io)(const AgentxxHost* host, void (*fn)(void* ud), void* ud);
 
     /* ---- 会话/上下文访问 ---- */
     /// 调用插件工具 (仅限插件注册的工具, 不暴露宿主内置工具; 在调用方线程
@@ -128,6 +155,17 @@ typedef struct AgentxxHostVtable {
     /// 返回结果 JSON 字符串 (host->alloc); 失败返回 NULL 并经 error_out 输出
     char* (*call_tool)(const AgentxxHost* host, const char* name, const char* args_json,
                        const char* thread_id, char** error_out);
+
+    /* ---- 插件互查 (依赖协商/自适应; io 线程约束, 跨线程经 post) ---- */
+    /// 全部已安装插件信息 JSON 数组 (host->alloc 分配):
+    /// [{"name","version","description","type","enabled","tools":[],"capabilities":[],
+    ///   "depends":[],"optional_depends":[]}, ...]
+    char* (*list_plugins)(const AgentxxHost* host);
+    /// 单个插件信息 JSON (同上单对象; 未安装返回 NULL, host->alloc)
+    char* (*get_plugin)(const AgentxxHost* host, const char* name);
+    /// 调用方插件自身信息 JSON {"name","version","description","path","depends":[],...}
+    /// (插件加载时常用: 从 path 推导资源目录等; host->alloc)
+    char* (*get_own_info)(const AgentxxHost* host);
     /// 读取会话级 share_store 条目 (仅 io 线程); 不存在返回 NULL
     char* (*get_share_store)(const AgentxxHost* host, const char* thread_id, long long id);
     /// 向会话 UI 推送提示消息 (仅 io 线程); level: 0=info 1=warning 2=error
@@ -141,6 +179,8 @@ struct AgentxxHost {
     const AgentxxHostVtable* vtable; ///< 函数表 (宿主静态)
     void* opaque;                    ///< 宿主内部 (指向插件实例状态, 插件不得使用)
 };
+
+/* ==================== 脚本引擎注册 (解释器插件委派, 二期) ==================== */
 
 /* ==================== 插件入口符号 (dlsym) ==================== */
 
