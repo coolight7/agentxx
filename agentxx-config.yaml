@@ -193,8 +193,8 @@ use_model:
 #              命名空间重复时会警告，且后出现的 url 覆盖先前的
 # - url:       MCP 服务器地址
 mcp:
-  - namespace: musicxx
-    url: "http://172.29.48.1:17001/mcp"
+  # - namespace: musicxx
+  #   url: "http://172.29.48.1:17001/mcp"
   - namespace: exa
     url: "https://mcp.exa.ai"
 
