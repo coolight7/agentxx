@@ -28,7 +28,7 @@ int g_tui_tool_header_failed = 0;
 
 namespace {
 
-/// 测试夹具: 固定 120x16 视口的消息列表 (单条 Tool 消息即可完整展示头部)
+/// 测试夹具: 固定视口的消息列表 (单条 Tool 消息即可完整展示头部)
 struct ToolHeaderFixture {
     asio::io_context io;
     TUISharedState   sharedState;
@@ -37,10 +37,12 @@ struct ToolHeaderFixture {
     TUICtx                                ctx;
     std::shared_ptr<MessageListComponent> comp;
 
-    static constexpr int kWidth  = 120;
-    static constexpr int kHeight = 16;
+    int width  = 120;
+    int height = 16;
 
-    ToolHeaderFixture() {
+    ToolHeaderFixture(int w = 120, int h = 16) :
+        width(w),
+        height(h) {
         ctx.state          = &sharedState;
         ctx.frameState     = sharedState.readSnapshot();
         ctx.postRedraw     = [] {};
@@ -71,13 +73,24 @@ struct ToolHeaderFixture {
         });
     }
 
+    /// 追加一条 Thinking 消息 (折叠状态, 头部为 "-/+/[Thinking]/预览")
+    void pushThinking(std::string text) {
+        sharedState.mutate([&](TUIRenderState& st) {
+            auto m          = std::make_shared<TUIMessage>();
+            m->role         = TUIMessage::Role::Thinking;
+            m->collapsed    = true;
+            m->text         = std::move(text);
+            st.messages.push_back(std::move(m));
+        });
+    }
+
     /// 渲染一帧并返回屏幕文本
     std::string render() {
         ctx.frameState = sharedState.readSnapshot();
         auto el        = comp->Render();
         auto screen    = ftxui::Screen::Create(
-            ftxui::Dimension::Fixed(kWidth),
-            ftxui::Dimension::Fixed(kHeight)
+            ftxui::Dimension::Fixed(width),
+            ftxui::Dimension::Fixed(height)
         );
         ftxui::Render(screen, el);
         return screen.ToString();
@@ -168,10 +181,42 @@ void testTuiToolHeaderFallback() {
     XX_TEST_EXPECT_TRUE(f.render().find("agentxx_filesystem_read") != std::string::npos);
 }
 
+// 回归: 折叠头部内容超宽时前缀不得被压缩 (向左覆盖压缩 bug)
+//
+// ftxui hbox 在内容总宽超出容器时对全部子元素按比例收缩
+// (box_helper::ComputeShrinkHard), 长摘要会把 "+ [Tool] " 前缀压扁、
+// 摘要字符向左挤占覆盖。修复: 长内容元素加 xflex_shrink, 使其吸收剩余
+// 宽度并在右缘裁剪, 前缀保持完整。
+void testTuiToolHeaderOverflow() {
+    // 窄视口 (内容宽度 = 29 列, 扣除滚动条 gutter)
+    ToolHeaderFixture f(30, 8);
+
+    // 摘要含超长路径, 远超视口宽度
+    f.pushTool(
+        "agentxx_filesystem_read_text_file",
+        R"({"path":"/very/very/long/path/that/definitely/exceeds/the/narrow/viewport/width/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.cpp","line_offset":0,"line_limit":100})"
+    );
+    std::string out = f.render();
+    // 前缀必须完整保留 (修复前会被按比例压扁, 丢失 "Tool]" 等字符)
+    XX_TEST_EXPECT_TRUE(out.find("+ [Tool] ") != std::string::npos);
+    // 摘要开头仍可见 (右缘裁剪)
+    XX_TEST_EXPECT_TRUE(out.find("Read · ") != std::string::npos);
+
+    // Thinking 折叠头部: 超长预览同样不得压缩 "- / [Thinking] " 前缀
+    ToolHeaderFixture g(30, 8);
+    g.pushThinking(
+        "这是一个非常非常非常非常非常非常非常非常非常非常非常非常非常长的思考内容"
+        "用来验证折叠预览超宽时头部前缀不会被压缩覆盖"
+    );
+    std::string out2 = g.render();
+    XX_TEST_EXPECT_TRUE(out2.find("+ [Thinking] ") != std::string::npos);
+}
+
 TestResult testTuiToolHeader() {
     testTuiToolHeaderFilesystem();
     testTuiToolHeaderWeb();
     testTuiToolHeaderFallback();
+    testTuiToolHeaderOverflow();
     return {g_tui_tool_header_passed, g_tui_tool_header_failed};
 }
 
