@@ -473,9 +473,13 @@ void SessionServerAgentIO::subscribeCodegraphProgress() {
             p.processed   = processed;
             p.total       = total;
             p.currentFile = std::string{currentFile};
-            // 完成信号 (调用方约定 processed==total 且 total>0 表示索引结束):
-            // processed 尚未达到 total 时视为索引进行中
-            p.indexing = !(total > 0 && processed >= total);
+            // 完成信号 (调用方约定):
+            // - total>0 且 processed>=total: 索引正常结束
+            // - processed==0 且 total==0: 无文件可索引, 同样视为结束
+            // 其余情况视为进行中:
+            // - 流式遍历阶段 (processed>0, total=0)
+            // - 引用解析阶段 (processed>0, total=0, currentFile="resolve refs")
+            p.indexing = total > 0 ? !(processed >= total) : (processed > 0);
             asio::post(sp->ex_, [sp, p = std::move(p)]() mutable {
                 sp->onCodegraphProgress(std::move(p));
             });

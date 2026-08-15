@@ -1129,6 +1129,13 @@ public:
                 });
                 invalidateCaches();
             }
+            // 完成信号 (processed==0 && total==0 约定为"无文件可索引"完成,
+            // 见 SessionServerAgentIO::onCodegraphProgress 注释):
+            // 否则索引生命周期标志复位后, 订阅方状态会永远停在
+            // "indexing ..."/"ready" 不结束
+            if (progress_callback_) {
+                progress_callback_(0, 0, "");
+            }
             return true;
         }
 
@@ -1198,11 +1205,31 @@ public:
         return indexDirectory(project_root_, true);
     }
 
+    /// 单次索引收尾最多解析的未解析引用条数
+    /// - 引用解析是"每条引用一次名字查询"(含 LIKE 全表扫描), 大库
+    ///   (数千~数万条未解析引用) 下单次全量可达分钟级; 预热索引/手动索引
+    ///   会长时间不发送完成信号 (TUI 状态栏一直显示 "ready"/"indexing")。
+    ///   限制单次处理量, 剩余引用下次启动/下次索引继续, 每次收敛一部分。
+    /// - 配合不可解析引用的删除 (见 resolveReferences), 多启动几次后收敛。
+    static constexpr int kMaxResolveRefsPerRun = 2000;
+
+    /// 单次引用解析中每个名字的最大候选节点数 (与原 find_nodes_by_name
+    /// 调用 limit=10 保持一致; 内存候选收集/截断用)
+    static constexpr int kMaxRefCandidates = 10;
+
     /// 引用解析: 把跨文件未解析引用解析为正式调用边
     /// - 两阶段执行, 尽量缩短独占锁持有时间:
     ///   1) 只读计算 (shared_lock, 与查询并发): 快照未解析引用 + 计算每条
     ///      的目标候选, 期间查询线程不被阻塞
     ///   2) 事务写 (短暂 unique_lock): 批量插入解析出的边 + 删除已处理引用
+    /// - 单次运行上限 kMaxResolveRefsPerRun: 避免大库一次解析过久阻塞
+    ///   索引完成信号 (剩余引用下次继续)
+    /// - 无法解析的引用 (源节点已消失 / 目标符号不存在) 直接删除:
+    ///   多为提取器噪音或目标被过滤的残留, 不删除会每次启动重复处理
+    ///   同一批引用 (永不收敛); 源文件重索引时会重新提取生成
+    /// - 解析阶段发送进度回调 (processed, 0, "resolve refs"): 使 TUI 在
+    ///   收尾阶段仍有进度反馈, 不传完成信号 (完成信号由 indexDirectory
+    ///   收尾统一发送)
     bool resolveReferences() {
         struct ResolvedRef {
             int64_t source_id;
@@ -1212,6 +1239,12 @@ public:
             int64_t ref_id;
         };
         std::vector<ResolvedRef> resolved;
+        // 本次运行需删除的引用: 源节点已消失 / 目标符号不存在 (无法解析),
+        // 不删除会每次启动重复处理同一批引用
+        std::vector<int64_t> refs_to_delete;
+        // 未解析引用总数 (截断前): 日志用
+        size_t         total_refs = 0;
+        const auto     resolveStartAt = std::chrono::steady_clock::now();
 
         {
             // 阶段 1: 只读计算 (shared_lock, 查询可并发进入)
@@ -1223,39 +1256,160 @@ public:
             if (unresolved.empty()) {
                 return true;
             }
+            // 单次运行上限: 剩余引用下次启动/下次索引继续处理
+            total_refs = unresolved.size();
+            if (total_refs > static_cast<size_t>(kMaxResolveRefsPerRun)) {
+                XX_LOGI(
+                    "CodeGraphManager: resolveReferences limited to {}/{} refs this run",
+                    kMaxResolveRefsPerRun,
+                    total_refs
+                );
+                unresolved.resize(static_cast<size_t>(kMaxResolveRefsPerRun));
+            }
             resolved.reserve(unresolved.size());
+            refs_to_delete.reserve(unresolved.size() / 4);
+
+            // ── 节点内存快照 ─────────────────────────────────────────────
+            // 一次 SQL 全量加载节点, 在内存建立 name/qualified_name/尾段/ID
+            // 哈希索引, 替代每条引用 1~2 次 SQL 查询。此前每条引用经
+            // find_nodes_by_name 触发全表 LIKE 扫描 (万级节点库 ~10ms/次),
+            // 数千条引用时是主要耗时来源; 且同一名字 (如测试宏上千条引用)
+            // 被重复查询。快照仅在本 shared_lock 期间使用, 期间索引写被
+            // 互斥, 数据一致。string_view 均指向 all_nodes 内字符串,
+            // 生命周期覆盖整个解析循环。
+            auto all_nodes = db_->get_all_nodes();
+
+            std::unordered_map<std::string_view, std::vector<int>> by_name;
+            std::unordered_map<std::string_view, std::vector<int>> by_qual;
+            std::unordered_map<std::string_view, std::vector<int>> by_last_seg;
+            std::unordered_map<int64_t, int>                       by_id;
+            by_name.reserve(all_nodes.size());
+            by_qual.reserve(all_nodes.size() / 2);
+            by_last_seg.reserve(all_nodes.size() / 2);
+            by_id.reserve(all_nodes.size());
+            for (int i = 0; i < static_cast<int>(all_nodes.size()); ++i) {
+                const auto& n = all_nodes[static_cast<size_t>(i)];
+                by_id.emplace(n.id, i);
+                by_name[std::string_view{n.name}].push_back(i);
+                if (!n.qualified_name.empty()) {
+                    by_qual[std::string_view{n.qualified_name}].push_back(i);
+                    // 尾段: 最后一个 "::" 之后的部分 (后缀匹配等价于
+                    // qualified_name LIKE '%::name')
+                    auto           pos = n.qualified_name.rfind("::");
+                    std::string_view last_seg
+                        = pos == std::string::npos
+                              ? std::string_view{n.qualified_name}
+                              : std::string_view{n.qualified_name}.substr(pos + 2);
+                    by_last_seg[last_seg].push_back(i);
+                }
+            }
+
+            // 名字级候选缓存: ref_name -> 候选节点下标 (空 vector = 已确认
+            // 无候选)。同一名字 (如宏 XX_TEST_EXPECT_EQ 上千条引用) 只查找
+            // 一次, 其余直接复用结果。
+            std::unordered_map<std::string, std::vector<int>> name_cache;
+            name_cache.reserve(unresolved.size() / 4);
+
+            // 内存模糊匹配: 等价原 SQL LIKE '%name%' 阶段 (name/qualified_name
+            // 子串包含)。仅在精确/后缀桶全部未命中时调用 (此时不存在精确
+            // 行, 无需排除)。逐行 std::string::find 子串扫描, 万级节点一次
+            // 亚毫秒级, 远快于 SQL 全表 LIKE。
+            auto fuzzyMatch = [&](std::string_view needle, std::vector<int>& out) {
+                out.clear();
+                for (size_t i = 0; i < all_nodes.size() && out.size() < kMaxRefCandidates;
+                     ++i) {
+                    const auto& n = all_nodes[i];
+                    if (n.name.find(needle) != std::string::npos
+                        || n.qualified_name.find(needle) != std::string::npos) {
+                        out.push_back(static_cast<int>(i));
+                    }
+                }
+            };
+
+            int processed_refs = 0;
             for (const auto& ref : unresolved) {
                 if (!running_.load()) {
                     break;
                 }
-                auto source_node = db_->get_node(ref.source_node_id);
-                if (!source_node.has_value()) {
+                // 源节点经 ID 哈希索引查找 (替代逐条 SQL get_node 点查)
+                auto id_it = by_id.find(ref.source_node_id);
+                if (id_it == by_id.end()) {
+                    // 源节点已不存在 (文件被删除/重建): 引用作废, 删除
+                    refs_to_delete.push_back(ref.id);
+                    ++processed_refs;
                     continue;
                 }
-                auto candidates = db_->find_nodes_by_name(ref.ref_name, 10);
-                if (candidates.empty()) {
+                const auto& source_node = all_nodes[static_cast<size_t>(id_it->second)];
+
+                // 候选查找: 精确 name -> 精确 qualified_name -> 后缀尾段 ->
+                // 内存模糊; 结果按名字缓存复用
+                auto cache_it = name_cache.find(ref.ref_name);
+                if (cache_it == name_cache.end()) {
+                    std::vector<int> cand;
+                    auto             hit = by_name.find(ref.ref_name);
+                    if (hit != by_name.end()) {
+                        cand = hit->second;
+                    } else if ((hit = by_qual.find(ref.ref_name)) != by_qual.end()) {
+                        cand = hit->second;
+                    } else if ((hit = by_last_seg.find(ref.ref_name)) != by_last_seg.end()) {
+                        cand = hit->second;
+                    } else {
+                        fuzzyMatch(ref.ref_name, cand);
+                    }
+                    // 候选数上限与原 find_nodes_by_name(ref_name, 10) 一致
+                    if (cand.size() > kMaxRefCandidates) {
+                        cand.resize(kMaxRefCandidates);
+                    }
+                    cache_it = name_cache.emplace(ref.ref_name, std::move(cand)).first;
+                }
+                if (cache_it->second.empty()) {
+                    // 目标符号不存在 (提取器噪音/目标被忽略规则过滤): 无法
+                    // 解析, 删除引用避免下次启动重复处理; 若以后目标符号
+                    // 出现, 源文件重索引会重新生成引用
+                    refs_to_delete.push_back(ref.id);
+                    ++processed_refs;
                     continue;
                 }
-                int64_t target_id = candidates[0].id;
-                if (candidates.size() > 1) {
-                    codegraph::Node best       = candidates[0];
-                    int             best_score = -1;
-                    for (const auto& cand : candidates) {
-                        int s = score_target(source_node.value(), cand);
+
+                // 候选评分选最佳 (与原实现一致): 同文件/同命名空间优先
+                const auto& candidates = cache_it->second;
+                int64_t     target_id  = 0;
+                if (candidates.size() == 1) {
+                    target_id = all_nodes[static_cast<size_t>(candidates[0])].id;
+                } else {
+                    int best_idx   = candidates[0];
+                    int best_score = score_target(
+                        source_node,
+                        all_nodes[static_cast<size_t>(best_idx)]
+                    );
+                    for (size_t ci = 1; ci < candidates.size(); ++ci) {
+                        int idx = candidates[ci];
+                        int s   = score_target(
+                            source_node,
+                            all_nodes[static_cast<size_t>(idx)]
+                        );
                         if (s > best_score) {
                             best_score = s;
-                            best       = cand;
+                            best_idx   = idx;
                         }
                     }
-                    target_id = best.id;
+                    target_id = all_nodes[static_cast<size_t>(best_idx)].id;
                 }
                 resolved.push_back(
-                    ResolvedRef{source_node->id, target_id, ref.line, ref.col, ref.id}
+                    ResolvedRef{source_node.id, target_id, ref.line, ref.col, ref.id}
                 );
+                ++processed_refs;
+
+                // 进度通知: 引用解析阶段 (节流, 每 200 条回调一次)。total 传 0
+                // 表示"非遍历阶段", 避免 processed==total 被订阅方误判为索引完成
+                // (完成信号由 indexDirectory 收尾统一发送)
+                if (progress_callback_ && processed_refs % 200 == 0) {
+                    progress_callback_(processed_refs, 0, "resolve refs");
+                }
             }
         }
 
-        if (resolved.empty()) {
+        if (resolved.empty() && refs_to_delete.empty()) {
             return true;
         }
 
@@ -1265,7 +1419,7 @@ public:
         if (!db_) {
             return false;
         }
-        return runTransactionWithRetry("resolveReferences", 3, db_.get(), [&]() {
+        bool ok = runTransactionWithRetry("resolveReferences", 3, db_.get(), [&]() {
             for (const auto& r : resolved) {
                 if (!running_.load()) {
                     break;
@@ -1279,7 +1433,29 @@ public:
                 db_->insert_edge(edge);
                 db_->delete_unresolved_ref(r.ref_id);
             }
+            for (int64_t ref_id : refs_to_delete) {
+                if (!running_.load()) {
+                    break;
+                }
+                db_->delete_unresolved_ref(ref_id);
+            }
         });
+        if (ok && (resolved.size() + refs_to_delete.size() > 0)) {
+            const auto costMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                    std::chrono::steady_clock::now() - resolveStartAt
+                                )
+                                    .count();
+            XX_LOGI(
+                "CodeGraphManager: resolveReferences done (resolved {}, dropped {}, "
+                "processed {}/{}, {}ms)",
+                resolved.size(),
+                refs_to_delete.size(),
+                resolved.size() + refs_to_delete.size(),
+                total_refs,
+                costMs
+            );
+        }
+        return ok;
     }
 
     CodeGraphSearchResult searchSymbols(std::string_view query, int limit) {

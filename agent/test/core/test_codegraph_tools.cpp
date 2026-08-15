@@ -529,6 +529,79 @@ void test_codegraph_manager_status() {
     cleanup_temp_project(tmp_dir);
 }
 
+/// 循环依赖检测正确性 (find_circular_dependencies 批量查询重写后):
+/// 构造 A->B->C->A 调用环, getStatus 应检测到 >=1 个循环依赖 SCC
+/// (调用定义在后的函数会生成未解析引用, 收尾 resolve 后建立调用边)
+void test_codegraph_circular_deps() {
+    int  idx     = g_temp_project_counter.fetch_add(1);
+    auto tmp_dir = fs::temp_directory_path() / ("codegraph_cycle_test_" + std::to_string(idx));
+    if (fs::exists(tmp_dir)) {
+        fs::remove_all(tmp_dir);
+    }
+    fs::create_directories(tmp_dir);
+    {
+        std::ofstream f(tmp_dir / "cycle.cpp");
+        f << R"(int func_a() { return func_b(); }
+int func_b() { return func_c(); }
+int func_c() { return func_a(); }
+)";
+    }
+    auto manager = agentxx::expand::CodeGraphManager{};
+    manager.initialize(tmp_dir.generic_string());
+    manager.indexDirectory(tmp_dir.generic_string(), false);
+
+    auto result = manager.getStatus();
+    if (result.success && result.circular_deps >= 1) {
+        g_cg_passed++;
+        TEST_PASS << "circular dependencies detected: " << result.circular_deps << std::endl;
+    } else {
+        g_cg_failed++;
+        TEST_FAIL << "circular deps detection FAILED: success=" << result.success
+                  << " circular_deps=" << result.circular_deps << std::endl;
+    }
+
+    cleanup_temp_project(tmp_dir.generic_string());
+}
+
+/// 不可解析引用清理: 跨文件调用不存在的符号 (目标无定义, 提取器噪音),
+/// resolveReferences 应删除这些引用而非保留; 连续多次解析均成功且不抛异常,
+/// 后续解析不再重复处理同一批引用 (收敛性)
+void test_codegraph_resolve_unresolvable() {
+    int  idx     = g_temp_project_counter.fetch_add(1);
+    auto tmp_dir = fs::temp_directory_path()
+                   / ("codegraph_unresolvable_" + std::to_string(idx));
+    if (fs::exists(tmp_dir)) {
+        fs::remove_all(tmp_dir);
+    }
+    fs::create_directories(tmp_dir);
+    {
+        std::ofstream f(tmp_dir / "main.cpp");
+        f << R"(int caller_a() { return totally_missing_func_a(1); }
+int caller_b() { return totally_missing_func_b(1); }
+int main() { return caller_a() + caller_b(); }
+)";
+    }
+    auto manager = agentxx::expand::CodeGraphManager{};
+    manager.initialize(tmp_dir.generic_string());
+    manager.indexDirectory(tmp_dir.generic_string(), false);
+
+    // 两次解析都成功且不抛异常; 不可解析引用 (目标不存在) 应被清理,
+    // 第二次解析不再重复处理 (无法直接观察数量, 验证行为正确性)
+    bool       ok1    = manager.resolveReferences();
+    bool       ok2    = manager.resolveReferences();
+    auto       status = manager.getStatus();
+    if (ok1 && ok2 && status.success) {
+        g_cg_passed++;
+        TEST_PASS << "resolveReferences handles unresolvable refs" << std::endl;
+    } else {
+        g_cg_failed++;
+        TEST_FAIL << "resolveReferences unresolvable FAILED: ok1=" << ok1 << " ok2=" << ok2
+                  << " status_success=" << status.success << std::endl;
+    }
+
+    cleanup_temp_project(tmp_dir.generic_string());
+}
+
 void test_codegraph_manager_callers() {
     auto tmp_dir = create_temp_project();
     auto manager = agentxx::expand::CodeGraphManager{};
@@ -2043,6 +2116,8 @@ asio::awaitable<TestResult>
     test_codegraph_manager_search_no_results();
     test_codegraph_manager_context();
     test_codegraph_manager_status();
+    test_codegraph_circular_deps();
+    test_codegraph_resolve_unresolvable();
     test_codegraph_manager_callers();
     test_codegraph_manager_callees();
     test_codegraph_manager_impact();
