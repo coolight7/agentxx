@@ -479,10 +479,8 @@ private:
                     // handler 异常统一经 catchErrorAsync 处理: 若尚未发送任何 SSE
                     // 数据, 经 writer 回写 500 响应; 已发送则连接随后关闭。
                     // CancelledException/NodeInterrupt 保持抛出 (无 onRethrow) 终止本连接
-                    auto writer = std::make_shared<SseWriterImpl<Stream>>(
-                        stream,
-                        config_.sseWriteTimeout
-                    );
+                    auto writer
+                        = std::make_shared<SseWriterImpl<Stream>>(stream, config_.sseWriteTimeout);
                     auto sseOk = co_await agentxx::util::catchErrorAsync<bool>(
                         [&]() -> asio::awaitable<bool> {
                             co_await sseIt->second(req, writer);
@@ -521,10 +519,8 @@ private:
             if (methodIdx == 2) { // POST
                 auto sseIt = ssePostRoutes_.find(path);
                 if (sseIt != ssePostRoutes_.end()) {
-                    auto writer = std::make_shared<SseWriterImpl<Stream>>(
-                        stream,
-                        config_.sseWriteTimeout
-                    );
+                    auto writer
+                        = std::make_shared<SseWriterImpl<Stream>>(stream, config_.sseWriteTimeout);
                     auto sseOk = co_await agentxx::util::catchErrorAsync<bool>(
                         [&]() -> asio::awaitable<bool> {
                             co_await sseIt->second(req, writer);

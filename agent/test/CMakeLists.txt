@@ -76,29 +76,29 @@ if (AGENTXX_ENABLE_PLUGIN_JS)
     LIBRARY_OUTPUT_DIRECTORY "${AGENTXX_EXEC_INSTALL_PREFIX}/"
   )
   # 构建 JS 示例插件 (统一模型: C++ 壳 + 脚本资源)
-  # - libjs_example.so: C++ 壳 (MODULE, 经能力调用委派脚本给引擎)
+  # - libexample_js.so: C++ 壳 (MODULE, 经能力调用委派脚本给引擎)
   # - plugin.yaml + plugin.js 拷贝到同目录 (壳推导同目录 plugin.js)
-  add_library(js_example MODULE
-    "${CMAKE_CURRENT_SOURCE_DIR}/../plugins/js_example/libjs_example.cpp"
+  add_library(example_js MODULE
+    "${CMAKE_CURRENT_SOURCE_DIR}/../plugins/example_js/libexample_js.cpp"
   )
-  target_include_directories(js_example PRIVATE
+  target_include_directories(example_js PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/../lib/include"
   )
-  set_target_properties(js_example PROPERTIES
+  set_target_properties(example_js PROPERTIES
     PREFIX "lib"
     CXX_STANDARD 17
     CXX_STANDARD_REQUIRED OFF
-    RUNTIME_OUTPUT_DIRECTORY "${AGENTXX_EXEC_INSTALL_PREFIX}/plugins/js_example/"
-    LIBRARY_OUTPUT_DIRECTORY "${AGENTXX_EXEC_INSTALL_PREFIX}/plugins/js_example/"
+    RUNTIME_OUTPUT_DIRECTORY "${AGENTXX_EXEC_INSTALL_PREFIX}/plugins/example_js/"
+    LIBRARY_OUTPUT_DIRECTORY "${AGENTXX_EXEC_INSTALL_PREFIX}/plugins/example_js/"
   )
-  add_custom_command(TARGET js_example POST_BUILD
+  add_custom_command(TARGET example_js POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-      "${CMAKE_CURRENT_SOURCE_DIR}/../plugins/js_example/plugin.yaml"
-      "${AGENTXX_EXEC_INSTALL_PREFIX}/plugins/js_example/plugin.yaml"
+      "${CMAKE_CURRENT_SOURCE_DIR}/../plugins/example_js/plugin.yaml"
+      "${AGENTXX_EXEC_INSTALL_PREFIX}/plugins/example_js/plugin.yaml"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-      "${CMAKE_CURRENT_SOURCE_DIR}/../plugins/js_example/plugin.js"
-      "${AGENTXX_EXEC_INSTALL_PREFIX}/plugins/js_example/plugin.js"
-    COMMENT "Copy js_example plugin resources to ${AGENTXX_EXEC_INSTALL_PREFIX}/plugins/js_example"
+      "${CMAKE_CURRENT_SOURCE_DIR}/../plugins/example_js/plugin.js"
+      "${AGENTXX_EXEC_INSTALL_PREFIX}/plugins/example_js/plugin.js"
+    COMMENT "Copy example_js plugin resources to ${AGENTXX_EXEC_INSTALL_PREFIX}/plugins/example_js"
   )
 endif()
 

@@ -1,4 +1,4 @@
-// js_example —— JS 插件示例
+// example_js —— JS 插件示例
 // 通过全局 agentxx 桥注册工具/钩子/事件; 引擎 (agentxx_plugin_js) 承载执行
 
 // ---- 工具 1: 纯 JS 计算 ----
@@ -72,5 +72,5 @@ agentxx.subscribe("demo.topic", (payload) => {
 // ---- 顶层异步初始化 (Promise 驱动) ----
 (async () => {
   await new Promise((resolve) => setTimeout(resolve, 5));
-  agentxx.log(2, "js_example async init done");
+  agentxx.log(2, "example_js async init done");
 })();
