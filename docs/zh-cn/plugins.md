@@ -1,6 +1,6 @@
 # Agentxx 插件系统设计方案
 
-> 状态: 一期 (C++ 插件框架) 已实现 (2026-08); 二期 (JS) / 三期 (生态) 待实现
+> 状态: 一期 (C++ 插件框架) + 二期 (JS 插件) 已实现 (2026-08); 三期 (生态) 待实现
 > 关联: [design.md](design.md)
 > 目标: 原生 C++ 插件 + JS 插件 (由 C++ 插件承载), 支持热插拔、强自定义
 
@@ -351,13 +351,143 @@ agentxx.onToolEnd((ctx) => agentxx.emitMessageTip(ctx.thread_id, "天气查询�
 - **执行中工具悬垂**: 原稿靠插件 inflight 计数, 实现中 `ToolRegistry::find` 返回 shared_ptr 保活 (与 execTool 的裸指针路径并存, 插件工具经 shared_ptr 传入), 双保险。
 - **注册时序**: dlopen 在阻塞线程池, 但 entry 的注册动作必须回到 io 线程 (无锁模型); `loadNativeAsync` 在 io 线程协程内完成 dlopen (卸载到线程池) + entry 同步调用。
 
-### 11.4 尚未实现 (后续阶段)
+### 11.4 二期实现状态 (2026-08)
+
+> 二期 (JS 插件支持) 已实现, 以下为实际落地内容。
+
+#### 11.4.1 已落地
+
+| 组件 | 位置 | 说明 |
+|------|------|------|
+| QuickJS 引擎 | `agent/third_party/quickjs/` (git submodule, quickjs-ng) | 核心 4 源文件 (quickjs.c/libregexp.c/libunicode.c/dtoa.c) 静态库 `libqjs.a`, 经 `quickjs_repo` ExternalProject 构建 install 到 `AGENTXX_INSTALL_DIR` |
+| 构建开关 | `AGENTXX_ENABLE_PLUGIN_JS` (默认 ON) | 顶层 option; 控制 quickjs_repo / agentxx_plugin_js 构建 |
+| JS 引擎插件 | `agent/plugins/plugin_js/plugin_js.cpp` → `libagentxx_plugin_js.so` | 独立动态库 (链接 libqjs.a), 经 `register_capability_ex` 注册 `interpreter.js` 能力 (方法 load/unload) |
+| 宿主委派 | `PluginManager::loadPluginAsync` | 插件目录 (plugin.yaml) 分派: `type: native` → dlopen, `type: js` → 创建脚本 PluginInstance (dlHandle 空) 并调引擎 `load_script` (host 为脚本插件自身句柄) |
+| 卸载级联 | `unloadAsync` 依赖图 | 卸载引擎插件前先级联卸载 depends 它的脚本插件 (先子后父); 脚本插件卸载时经委派记录通知引擎 `unload_script` (投递式); 见 11.5 |
+| 跨线程投递 | vtable `is_io_thread` / `post_to_io` + `PluginManager::setIoExecutor` | JS 线程/宿主线程池调用的 io 线程约束操作 (注册/钩子/订阅/能力/shareStore/tip) 经 `ioCallSync` post 到 io 线程同步等待; `call_tool` 整体在 io 线程执行 (registry 竞争防护) |
+| JS 线程模型 | 专用 JS 线程 + 任务队列 (mutex+cv) | 所有 QuickJS 操作集中单线程; 同步等待方向无环 (见 11.4.2) |
+| agentxx 桥 | 全局 `agentxx` 对象 (每脚本插件独立 JSContext) | registerTool/unregisterTool/callTool/getShareStore/emitMessageTip/log/onHook/offHook/subscribe/unsubscribe/publish + 全局 `setTimeout`/`clearTimeout` (定时器桥) |
+| Promise 驱动 | `drivePromise` | 循环 `JS_ExecutePendingJob` 直至 settle; 无 job 时执行到期定时器 + 让出 (支持 await/setTimeout 异步); 超时由 interrupt handler 兜底 |
+| 沙箱 | 内存 64MB / 栈 512KB / 任务 60s 超时 | 不引入 quickjs-libc (无 os/std 模块); 仅标准 ECMA + agentxx 桥 |
+| JS 示例插件 | `agent/plugins/js_example/` (plugin.yaml + plugin.js) | 4 工具 (同步/async Promise/JS 内互调/宿主互调) + 钩子 + 事件订阅 + 顶层异步初始化; 构建时拷贝到 exec/plugins/ |
+| 测试 | `test_plugins` 模块 12-19 段 | 引擎加载/脚本插件加载/工具执行/互调/卸载/级联 (67 项全过) |
+
+#### 11.4.2 JS 线程模型要点 (实现为准)
+
+```
+宿主线程池 ──postSync──▶ JS 线程 (execute 桥: 驱动 Promise 后返回结果)
+io 线程    ──post──────▶ JS 线程 (钩子/事件回调: fire-and-forget, 不等待)
+JS 线程    ──vtable────▶ io 线程 (注册/钩子/订阅/shareStore/tip: ioCallSync 同步等待)
+JS 线程    ──callTool──▶ 本引擎 JS 工具: 同线程内联 (防自锁)
+JS 线程    ──callTool──▶ 宿主插件工具: vtable call_tool (io 线程执行)
+```
+
+- 卸载安全: 脚本插件卸载 (deleted) 后已入队任务检查标志跳过; JSContext 由
+  JsPluginCtx 析构释放 (在途任务计数归零后); 引擎卸载 delete JsEngine →
+  join 等待 JS 线程处理完已入队任务 → JS_FreeRuntime
+- 定时器: setTimeout 注册到 timers_ (JS 线程), 任务循环 wait_until +
+  drivePromise 空闲时内联触发 (execute 等待期间定时器也能工作)
+- 栈检测: JS_NewRuntime 在 io 线程创建, **JS 线程入口必须 JS_UpdateStackTop**
+  (否则栈溢出检测基于 io 线程栈指针误判)
+
+#### 11.4.3 实现中踩过的坑 (供参考)
+
+1. **JS_SetProperty* 是 move 语义**: 属性消费传入值, 调用方不得再 Free
+   (否则 double free → ASan heap-use-after-free)
+2. **JS_PromiseResult 返回新引用**: 直接返回, 不得再 Dup (泄漏 → JS_FreeRuntime
+   断言 gc_obj_list 非空 abort)
+3. **JS_IsFunction 是双参** (ctx, val), 其他 JS_Is* 单参 (quickjs-ng 与 bellard 差异)
+4. **JS_NewCFunction2 是 6 参** (含 JSCFunctionEnum cproto), magic 版函数签名
+   `(JSContext*, JSValueConst, int, JSValueConst*, int)` 需强转 JSCFunction*
+5. **JS_JSONStringify 的 space 参数是 JSValue** 不是 int
+6. **yaml description 值含 `: ` 需引号包裹** (illegal map value)
+7. **沙箱无 setTimeout**: 示例插件的 `new Promise(r => setTimeout(r, 10))`
+   抛 ReferenceError → promise reject → 工具返回 `{}` (异常对象 JSON 序列化)
+
+### 11.5 统一插件模型 (架构重构, 2026-08)
+
+> **所有插件统一为 C++ 插件**, PluginInstance 无 type 概念 (无 native/js/py 之分):
+> 每个插件都有 dlHandle/entry; 脚本能力是插件内部实现的一部分 —— 经 manifest
+> 依赖声明 (depends 引擎插件) + 能力调用 (invoke_capability 通用插件间通信)
+> 把脚本代码交给 interpreter 引擎执行。宿主不特判任何脚本类型 (未来 py/lua
+> 引擎注册 interpreter.py 能力即可被脚本插件依赖, 宿主零改动)。
+
+#### 11.5.1 统一模型
+
+```
+PluginInstance (一切插件都是 C++ 插件)
+  ├── depends         // 必选依赖 (插件名): 未安装→加载失败; 卸载/禁用时级联
+  ├── optionalDepends // 可选依赖: 未安装仅警告; 插件运行时用互查 API 自适应
+  ├── dlHandle        // 动态库句柄 (所有插件都有)
+  └── 注册残留         // 工具/钩子/订阅/能力 —— 宿主 detachAll 统一清理
+```
+
+- **加载**: manifest 解析 → 依赖检查 → dlopen(entry) → entry()。entry 总是指向
+  动态库; 脚本插件 = 薄 C++ 壳, 壳在 entry 里经能力调用加载脚本
+- **脚本执行 (插件间通信, 宿主不参与)**:
+  - 引擎插件 (agentxx_plugin_js) 注册能力 `interpreter.js` 并附带方法回调
+    (`register_capability_ex`): 方法 `load` (执行脚本) / `unload` (释放运行时)
+  - 脚本插件的 C++ 壳: `get_own_info` 拿自身 name/path → 推导脚本文件 →
+    `invoke_capability("interpreter.js", "load", {name, path})`
+  - 引擎执行脚本; 脚本内 `agentxx.registerTool` 等经 **caller_host (壳实例)**
+    注册 → 注册残留归属壳插件, 宿主 detachAll 统一清理
+  - 壳的 unload 回调里 `invoke_capability("interpreter.js", "unload", {name})`
+    通知引擎释放脚本运行时
+- **多脚本/混合插件**: 一个壳插件可 invoke 多个语言引擎 (interpreter.js +
+  interpreter.py), 天然支持; 也可同时含原生 C++ 实现
+- **卸载 (依赖图级联)**: 收集 `depends 含目标` 的插件 → 必选依赖者递归卸载
+  (先子后父, 保证引擎 dlclose 前无脚本插件残留) → detachAll → 等 inflight==0
+  → unload 回调 (壳通知引擎释放脚本运行时) + dlclose
+- **禁用/启用**: 同样依赖图级联传播 (disable 先子后父; enable 先父后子)
+- **互查 API** (vtable): `list_plugins` / `get_plugin` / `get_own_info` →
+  JSON (name/version/description/path/enabled/tools/capabilities/depends);
+  JS 桥成 `agentxx.listPlugins()` / `agentxx.getPlugin(name)`
+
+#### 11.5.2 能力调用 (invoke_capability) 线程模型
+
+```
+脚本插件 C++ 壳 (io 线程 entry / 线程池工具回调)
+  └─ invoke_capability("interpreter.js", "load", args)
+       ├─ 查表: io 线程短临界区 (ioCallSync, 拷贝 Entry)
+       └─ 提供者回调: 【调用方线程】执行 (关键!)
+            └─ 引擎 loadScriptInEngine: postSync 到 JS 线程
+                 ├─ 执行脚本代码
+                 └─ 脚本内 agentxx.registerTool → vtable register_tool
+                      └─ ioCallSync 回 io 线程注册 (io 线程空闲, 无死锁)
+```
+
+- **死锁规避要点**: 提供者回调绝不能在 io 线程执行 —— 引擎的 load 会阻塞
+  等待其 JS 线程, 而 JS 线程内脚本注册回调又要回 io 线程; 若回调在 io 线程
+  执行则 io↔引擎互等死锁。查表与回调分离: 查表 (短) 在 io 线程, 回调 (长) 在
+  调用方线程。
+
+#### 11.5.3 依赖检查规则
+
+| 场景 | 行为 |
+|------|------|
+| 必选依赖缺失 | 加载失败, 日志提示先加载谁 |
+| 可选依赖缺失 | 加载成功, 警告 |
+| 依赖环 (A→B→A) | 拒绝 (DFS 访问链检测, 防卸载级联死循环) |
+| 卸载被依赖插件 | 必选依赖者级联卸载 (自动, 日志列出); 可选依赖者仅警告 |
+| 引擎插件卸载 | 先级联卸载全部 depends 它的脚本插件, 再 dlclose 引擎 (binding 永不悬垂) |
+| 加载顺序 | 脚本插件须在引擎之后加载 (本期报错提示; 三期做拓扑排序/自动装配) |
+
+#### 11.5.4 与旧实现的差异
+
+| 项 | 旧 (二期初版) | 新 (统一模型) |
+|----|--------------|--------------|
+| 插件类型 | PluginInstance::type (native/js/...) | 无 type 概念, 全部 C++ 插件 |
+| 脚本加载 | 宿主 loadScriptAsync 委派 | 插件 C++ 壳 invoke_capability |
+| 脚本运行时管理 | 宿主 scriptDelegations_ 记录 | 引擎内部 (load/unload 方法) |
+| 脚本注册归属 | 脚本插件实例 (伪类型) | 壳插件实例 (caller_host) |
+| 未来 py/lua | 需改宿主 | 注册 interpreter.py 能力即可, 宿主零改动 |
+
+### 11.6 尚未实现 (后续阶段)
 
 - `AgentConfig::plugins` 的 yaml 配置段解析 (`config_loader`) —— 结构体已就绪, client 侧解析未接
 - `agentxx_cli plugin list/install/unload/disable` 命令
-- JS 插件 (QuickJS, 二期): 需 `interpreter.js` 能力插件 + PluginManager 委派加载 `type: js`
 - Wire 协议远程热管理 / TUI 插件面板 (三期)
-- 插件依赖排序 / 签名校验 / manifest (plugin.yaml) 解析 —— 一期仅支持直接库路径
+- 插件依赖排序 / 签名校验
 - 插件钩子的 out_json 修改能力、permission 联动注册 (插件工具默认走 PermissionMiddleware 的未注册规则兜底)
 
 ---

@@ -1278,11 +1278,17 @@ agent/
 │   ├── liburing/                 # io_uring
 │   ├── NeoGraph/                 # 图引擎 (LLM 调用/工具分发)
 │   ├── OpenSSL/                  # TLS/SSL
+│   ├── quickjs/                  # QuickJS (JS 插件引擎, submodule quickjs-ng, AGENTXX_ENABLE_PLUGIN_JS)
 │   ├── simdjson/                 # JSON 解析
 │   ├── sqlite3/                  # 数据库
 │   ├── uchardet/                 # 编码检测
 │   ├── yaml-cpp/                 # YAML 解析
 │   └── zlib/                     # 压缩
+│
+├── plugins/                      # 插件 (独立动态库/目录, 仅依赖 plugin_api.h)
+│   ├── example_native/           # 一期示例: C++ 插件 (工具/钩子/事件/能力)
+│   ├── plugin_js/                # 二期: JS 解释器插件 (QuickJS, interpreter.js 能力)
+│   └── js_example/               # 二期示例: JS 插件 (plugin.yaml + plugin.js)
 │
 └── script/                       # 编译/测试脚本
     ├── linux_debug_build.sh
