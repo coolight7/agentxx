@@ -386,6 +386,7 @@ codegraph:
   load_cwd: true            # 未配置 paths 时默认加载当前工作目录 (默认 true;
                             #   false 时仅可手动 agentxx_codegraph_index)
   use_gitignore: true       # 默认忽略 .gitignore 规则与 .gitmodules 子模块目录
+                            #   (逐层读取各级目录的规则) 及 .git 元数据目录
                             # 数据库: {data_dir}/sqlite/codegraph/<折叠路径>/index.db
                             # - 前缀复用: 子目录工作自动复用最近父级索引
                             # - 长度控制: 深层路径折叠为 hash 段, 单段超长截断,
