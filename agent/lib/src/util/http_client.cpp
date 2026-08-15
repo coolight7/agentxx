@@ -13,6 +13,8 @@
 #include "agentxx/util/http_client.h"
 #include "html2md/html2md.h"
 #include <asio/co_spawn.hpp>
+#include <asio/execution/context.hpp>
+#include <asio/execution_context.hpp>
 #include <asio/detached.hpp>
 #include <asio/steady_timer.hpp>
 #include <map>
@@ -24,6 +26,12 @@ namespace agentxx {
 namespace util {
 
 namespace {
+
+/// 连接池存活标记 (平凡存储, 进程退出期间始终可安全读取):
+/// HttpConnectionPool 是函数局部静态, 若它晚于某个 io_context 构造, 退出时就会
+/// 先于该 io_context 销毁; 之后该 io_context 上的 HttpPoolContextGuard 析构时
+/// 不能再调用 instance() (访问已销毁的对象是 UB), 需先检查本标记。
+std::atomic<bool> g_poolAlive{false};
 
 /// 启用 TCP keepalive 并缩短探测间隔 (OS 默认 idle 常为 2 小时, 毫无作用)。
 /// LLM 流式响应存在长时间无数据的空窗期 (如 content 结束后等待 tool_call 下发),
@@ -251,6 +259,28 @@ struct PooledConnection {
     bool fresh = true; ///< 本次是否新建 (非复用), 供失效重试决策
 };
 
+/// io_context 生命周期守卫: 连接池是进程级单例, 但池中连接绑定创建它的
+/// io_context (socket 的 any_io_executor)。若某个 io_context 在池中连接销毁前先被
+/// 销毁 (如测试/插件使用临时 io_context), 销毁 socket 会访问已销毁的 reactor,
+/// 造成 use-after-free 崩溃。
+///
+/// 本服务注册到 io_context 上 (首次进入连接池时经 use_service 惰性注册): io_context
+/// 析构时 asio 按"后注册先销毁"的顺序销毁服务, 本服务晚于 io_context 的内部服务
+/// (scheduler/epoll_reactor) 注册, 因此本服务析构时 reactor 仍存活, 可以在析构中
+/// 安全释放该 io_context 上的全部空闲连接。
+class HttpConnectionPool;
+class HttpPoolContextGuard : public asio::execution_context::service {
+public:
+
+    static asio::execution_context::id id;
+
+    explicit HttpPoolContextGuard(asio::execution_context& owner) : service(owner) {}
+
+    ~HttpPoolContextGuard() override;
+
+    void shutdown() override {}
+};
+
 // 前置声明: HttpConnectionPool::acquire 在类内调用, 定义位于类之后
 asio::awaitable<std::shared_ptr<PooledConnection>>
     createConnection(const HttpPoolKey& key, const RequestConfig& config);
@@ -304,12 +334,24 @@ bool isPoolRetryableError(const neograph_asio_error_code& ec, std::string_view e
 class HttpConnectionPool {
 public:
 
+    HttpConnectionPool() {
+        g_poolAlive.store(true, std::memory_order_relaxed);
+    }
+
+    /// 析构时释放全部剩余连接: 池销毁发生在引用它的 io_context 之后 (构造逆序),
+    /// 此时这些 io_context 仍存活, 销毁 socket 是安全的
+    ~HttpConnectionPool() {
+        g_poolAlive.store(false, std::memory_order_relaxed);
+    }
+
     static HttpConnectionPool& instance() {
         static HttpConnectionPool pool;
         return pool;
     }
 
-    /// 获取连接: 优先复用空闲连接, 否则新建 (受 maxConcurrent 并发上限约束)。
+    /// 获取连接: 优先复用本 io_context 的空闲连接, 否则新建 (受 maxConcurrent 并发上限约束)。
+    /// - 空闲连接绑定创建它的 io_context, 只能被同一 io_context 复用
+    ///   (跨上下文复用 socket 是未定义行为), 因此空闲池按 io_context 分桶
     /// - maxConcurrent==0 表示不限制 (始终新建, 仍可复用空闲)
     /// - 空闲连接超过 kPoolIdleTimeout 未复用 (服务端很可能已断开) 时丢弃重建
     /// - 并发达到上限时轮询等待; 等待可被取消 (中止等待, 不修改池状态)
@@ -318,6 +360,7 @@ public:
         acquire(const HttpPoolKey& key, size_t maxConcurrent, const RequestConfig& config) {
         auto               executor = co_await asio::this_coro::executor;
         asio::steady_timer pollTimer(executor);
+        auto&              ctx = asio::query(executor, asio::execution::context);
 
         for (;;) {
             bool create = false;
@@ -325,10 +368,11 @@ public:
                 std::lock_guard<std::mutex> lock(mtx_);
                 auto&                       entry = entries_[key];
                 auto                        now   = std::chrono::steady_clock::now();
-                // 优先复用空闲连接; 丢弃已超时的空闲连接 (析构关闭 socket)
-                while (!entry.idle.empty()) {
-                    auto conn = std::move(entry.idle.back());
-                    entry.idle.pop_back();
+                // 优先复用本 io_context 的空闲连接; 丢弃已超时的空闲连接 (析构关闭 socket)
+                auto& idle = entry.idleByCtx[&ctx];
+                while (!idle.empty()) {
+                    auto conn = std::move(idle.back());
+                    idle.pop_back();
                     if (now - conn->lastUsed <= kPoolIdleTimeout) {
                         ++entry.active;
                         ++entry.reused;
@@ -366,11 +410,17 @@ public:
         }
     }
 
-    /// 归还连接: reusable=true 且底层连接仍打开时进入空闲池, 否则直接关闭
+    /// 归还连接: reusable=true 且底层连接仍打开时进入本 io_context 的空闲桶, 否则直接关闭
     void release(const HttpPoolKey& key, std::shared_ptr<PooledConnection> conn, bool reusable) {
         if (!conn) {
             return;
         }
+        auto& ctx = std::visit(
+            [](auto& s) -> asio::execution_context& {
+                return asio::query(s.get_executor(), asio::execution::context);
+            },
+            conn->stream
+        );
         std::lock_guard<std::mutex> lock(mtx_);
         auto&                       entry = entries_[key];
         if (entry.active > 0) {
@@ -378,7 +428,7 @@ public:
         }
         if (reusable && isOpen(*conn)) {
             conn->lastUsed = std::chrono::steady_clock::now();
-            entry.idle.push_back(std::move(conn));
+            entry.idleByCtx[&ctx].push_back(std::move(conn));
         }
     }
 
@@ -397,13 +447,18 @@ public:
         if (it == entries_.end()) {
             return {};
         }
+        const auto& entry = it->second;
+        size_t      idle  = 0;
+        for (const auto& [ctx, conns] : entry.idleByCtx) {
+            idle += conns.size();
+        }
         return Stats{
-            it->second.active,
-            it->second.idle.size(),
-            it->second.created,
-            it->second.reused,
-            it->second.peakActive,
-            it->second.queuedWaits,
+            entry.active,
+            idle,
+            entry.created,
+            entry.reused,
+            entry.peakActive,
+            entry.queuedWaits,
         };
     }
 
@@ -411,19 +466,34 @@ public:
     void clear() {
         std::lock_guard<std::mutex> lock(mtx_);
         for (auto& [key, entry] : entries_) {
-            entry.idle.clear(); // 析构关闭 socket
+            for (auto& [ctx, conns] : entry.idleByCtx) {
+                conns.clear(); // 析构关闭 socket
+            }
+        }
+    }
+
+    /// io_context 销毁时由 HttpPoolContextGuard 回调: 释放该上下文上的全部空闲连接。
+    /// 此时该 io_context 的 scheduler/reactor 等内部服务尚未销毁 (守卫后注册先销毁),
+    /// 可安全析构这些 socket; 调用方持锁保证与 acquire/release/clear 互斥。
+    void dropContext(asio::execution_context* ctx) {
+        std::lock_guard<std::mutex> lock(mtx_);
+        for (auto& [key, entry] : entries_) {
+            entry.idleByCtx.erase(ctx); // 析构关闭该上下文上的空闲 socket
         }
     }
 
 private:
 
     struct Entry {
-        std::vector<std::shared_ptr<PooledConnection>> idle;
-        size_t                                         active      = 0;
-        size_t                                         created     = 0;
-        size_t                                         reused      = 0;
-        size_t                                         peakActive  = 0;
-        size_t                                         queuedWaits = 0;
+        // 空闲连接按 io_context 分桶: 连接只能被创建它的 io_context 复用,
+        // 且该 io_context 销毁时 (经 HttpPoolContextGuard) 桶随上下文一起释放,
+        // 避免池持有指向已销毁 io_context 的连接
+        std::map<asio::execution_context*, std::vector<std::shared_ptr<PooledConnection>>> idleByCtx;
+        size_t active      = 0;
+        size_t created     = 0;
+        size_t reused      = 0;
+        size_t peakActive  = 0;
+        size_t queuedWaits = 0;
     };
 
     mutable std::mutex                            mtx_;
@@ -438,6 +508,19 @@ private:
         );
     }
 };
+
+asio::execution_context::id HttpPoolContextGuard::id;
+
+HttpPoolContextGuard::~HttpPoolContextGuard() {
+    // io_context 正在析构: 释放该上下文上的全部空闲连接。
+    // asio 按后注册先销毁的顺序销毁服务, 本守卫晚于 reactor 注册, 此时 reactor 仍存活,
+    // 析构 socket 是安全的。
+    // 若连接池已先于本守卫销毁 (静态析构逆序: 池构造晚于本 io_context 时先销毁),
+    // 池析构时已释放全部连接 (当时本 io_context 仍存活), 此处直接跳过, 不得再访问池。
+    if (g_poolAlive.load(std::memory_order_relaxed)) {
+        HttpConnectionPool::instance().dropContext(&context());
+    }
+}
 
 /// 建立一条到池键对应端点的连接 (DNS + TCP + TLS), connectTimeout 为总时限。
 /// 建连逻辑与原请求路径一致: 后台 DNS 解析 + TCP 连接 + no_delay/TCP keepalive
@@ -498,6 +581,12 @@ asio::awaitable<std::shared_ptr<PooledConnection>>
         stream.set_option(asio::ip::tcp::no_delay(true), tcpEc);
         enableTcpKeepalive(stream);
     }
+    // 注册 io_context 生命周期守卫: 必须在 socket 创建之后 — io_context 按
+    // "后注册先销毁"的顺序销毁服务, 守卫需晚于 reactor (socket 构造时惰性注册)
+    // 注册, 才能在 io_context 销毁时先于 reactor 释放本上下文上的空闲连接。
+    asio::use_service<HttpPoolContextGuard>(
+        asio::query(executor, asio::execution::context)
+    );
     conn->lastUsed = std::chrono::steady_clock::now();
     conn->fresh    = true;
     co_return conn;
@@ -918,8 +1007,14 @@ asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::requestAsy
                 for (int attempt = 0; attempt < maxAttempts; ++attempt) {
                     // keepAlive=true: 经连接池获取 (复用空闲/并发上限);
                     // keepAlive=false: 直接新建 (旧行为), 不产生池统计
-                    conn          = usePool ? co_await pool.acquire(poolKey, poolMax, config)
-                                            : co_await createConnection(poolKey, config);
+                    if (usePool) {
+                        // 注意: 不能用 `usePool ? co_await acquire(...) : co_await createConnection(...)`
+                        // 三元表达式 — GCC 16 对协程内 co_await 三元表达式存在代码生成缺陷,
+                        // 会同时执行两个分支 (连接被重复创建/泄漏, 连接池统计错乱), 必须用 if/else
+                        conn = co_await pool.acquire(poolKey, poolMax, config);
+                    } else {
+                        conn = co_await createConnection(poolKey, config);
+                    }
                     bool reused   = usePool && !conn->fresh;
                     bool poolable = false;
                     try {
@@ -1198,8 +1293,12 @@ asio::awaitable<void> HttpClient::requestSseAsync(
     for (int attempt = 0; attempt < maxAttempts; ++attempt) {
         // keepAlive=true: 经连接池获取 (复用空闲/并发上限);
         // keepAlive=false: 直接新建 (旧行为), 不产生池统计
-        conn              = usePool ? co_await pool.acquire(poolKey, poolMax, config)
-                                    : co_await createConnection(poolKey, config);
+        if (usePool) {
+            // 注意: 不能用三元表达式包 co_await (GCC 16 协程代码生成缺陷, 见 requestAsync 注释)
+            conn = co_await pool.acquire(poolKey, poolMax, config);
+        } else {
+            conn = co_await createConnection(poolKey, config);
+        }
         bool reused       = usePool && !conn->fresh;
         bool anyDelivered = false;
         bool poolable     = false;

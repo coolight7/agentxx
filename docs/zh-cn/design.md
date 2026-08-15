@@ -1076,7 +1076,10 @@ agent/
 │   │       ├── string_util.h     # 字符串工具 (编码转换/路径标准化/base64/自然排序/IgnoreCaseMap 等)
 │   │       ├── http_client.h     # HTTP 客户端 (基于 Boost.Beast)
 │   │       │                     #   连接池: keep-alive 空闲连接复用 + 每端点并发上限
-│   │       │                     #   (maxConcurrentConnections, 默认 5), 复用失效自动重试
+│   │       │                     #   (maxConcurrentConnections, 默认 5), 复用失效自动重试;
+│   │       │                     #   空闲连接按 io_context 分桶 (跨上下文复用 socket 是 UB),
+│   │       │                     #   HttpPoolContextGuard 服务随 io_context 销毁自动释放
+│   │       │                     #   该上下文上的空闲连接, 避免悬挂 reactor 的 use-after-free
 │   │       ├── http_server.h     # HTTP 服务器 (路由/WS/SSE/SSL)
 │   │       ├── http_header.h     # HeaderMap (忽略大小写的 HTTP 头部管理)
 │   │       ├── ws_client.h       # WebSocket 客户端
