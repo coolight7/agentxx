@@ -28,6 +28,23 @@ endif()
 
 add_executable(agentxx_test)
 
+# ===== 示例插件 (插件系统测试用) =====
+# - 编译为 MODULE 动态库 (不链接 libagentxx, 仅依赖纯 C ABI 头)
+# - 输出到测试可执行同目录, 供 test_plugins 加载
+add_library(agentxx_plugin_example MODULE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../plugins/example_native/example_native.cpp"
+)
+target_include_directories(agentxx_plugin_example PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../lib/include"
+)
+set_target_properties(agentxx_plugin_example PROPERTIES
+  PREFIX "lib"
+  CXX_STANDARD 17
+  CXX_STANDARD_REQUIRED OFF
+  RUNTIME_OUTPUT_DIRECTORY "${AGENTXX_EXEC_INSTALL_PREFIX}/"
+  LIBRARY_OUTPUT_DIRECTORY "${AGENTXX_EXEC_INSTALL_PREFIX}/"
+)
+
 # 测试源按目录划分:
 # - 根目录: 入口 test.cpp (模块注册)
 # - core/:   agentxx (lib) 核心测试
