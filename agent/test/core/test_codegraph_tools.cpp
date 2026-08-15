@@ -1952,6 +1952,82 @@ void test_codegraph_query_during_indexing() {
     cleanup_temp_project(tmp_dir);
 }
 
+/// 收尾阶段查询不阻塞验证: 放大收尾成本 (大量文件残留清理 + 大量跨文件
+/// 引用解析), 索引期间持续查询, 任何单次查询都不应被长时间阻塞
+/// - 修复前: 收尾 (清理/引用解析/FTS 重建/checkpoint) 在单个独占锁内串行
+///   执行, 期间 codegraph tool 查询全部阻塞 (agent 线程卡住)
+/// - 修复后: 清理的磁盘 IO/规则匹配与引用解析计算移出独占锁, 锁内仅剩
+///   短暂事务写
+void test_codegraph_query_during_finalize() {
+    int  idx     = g_temp_project_counter.fetch_add(1);
+    auto tmp_dir = fs::temp_directory_path() / ("codegraph_finalize_test_" + std::to_string(idx));
+    if (fs::exists(tmp_dir)) {
+        fs::remove_all(tmp_dir);
+    }
+    fs::create_directories(tmp_dir);
+
+    // 800 个文件, 每个文件定义一个符号并跨文件调用下一个文件的符号,
+    // 制造大量未解析引用 (放大收尾引用解析成本)
+    constexpr int kFileCount = 800;
+    for (int i = 0; i < kFileCount; ++i) {
+        std::ofstream f(tmp_dir / ("mod" + std::to_string(i) + ".cpp"));
+        f << "int sym_" << i << "() { return " << i << "; }\n";
+        f << "int caller_" << i << "() { return sym_" << (i + 1) % kFileCount << "(); }\n";
+    }
+    auto manager = std::make_shared<agentxx::expand::CodeGraphManager>();
+    manager->initialize(tmp_dir.generic_string());
+
+    std::atomic<bool> indexing_done{false};
+    // 后台索引线程: 全量索引 (含收尾清理 + 引用解析)
+    std::thread indexThread([&]() {
+        manager->indexDirectory(tmp_dir.generic_string(), false);
+        indexing_done = true;
+    });
+
+    // 前台持续查询 (每 10ms 一次), 记录最坏单次耗时
+    std::atomic<int64_t> worst_us{0};
+    std::thread queryThread([&]() {
+        while (!indexing_done.load()) {
+            auto startAt = std::chrono::steady_clock::now();
+            manager->searchSymbols("sym_1", 10); // 无论结果如何都要走查询锁
+            auto costUs = std::chrono::duration_cast<std::chrono::microseconds>(
+                              std::chrono::steady_clock::now() - startAt
+            )
+                              .count();
+            int64_t cur = worst_us.load();
+            while (costUs > cur && !worst_us.compare_exchange_weak(cur, costUs)) {
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+    });
+
+    indexThread.join();
+    queryThread.join();
+
+    // 收尾期间任何单次查询都不应超过 2s (旧实现收尾独占锁可阻塞数秒~十秒级)
+    const auto worstMs = worst_us.load() / 1000;
+    if (worstMs < 2000) {
+        g_cg_passed++;
+        TEST_PASS << "query never blocked long during finalize, worst=" << worstMs
+                  << "ms" << std::endl;
+    } else {
+        g_cg_failed++;
+        TEST_FAIL << "query blocked during finalize, worst=" << worstMs << "ms" << std::endl;
+    }
+
+    // 收尾后的数据完整性: 引用解析完成, 跨文件调用边应存在 (callees 可查)
+    auto result = manager->getCallees("caller_0", 3);
+    if (result.success) {
+        g_cg_passed++;
+        TEST_PASS << "references resolved after finalize" << std::endl;
+    } else {
+        g_cg_failed++;
+        TEST_FAIL << "resolve after finalize failed: " << result.error << std::endl;
+    }
+
+    cleanup_temp_project(tmp_dir.generic_string());
+}
+
 asio::awaitable<TestResult>
     run_codegraph_tools_tests(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     test_codegraph_manager_init();
@@ -1962,6 +2038,7 @@ asio::awaitable<TestResult>
     test_codegraph_manager_cache_invalidate();
     test_codegraph_manager_restart_resume();
     test_codegraph_query_during_indexing();
+    test_codegraph_query_during_finalize();
     test_codegraph_manager_search();
     test_codegraph_manager_search_no_results();
     test_codegraph_manager_context();

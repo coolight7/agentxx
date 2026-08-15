@@ -1014,9 +1014,11 @@ public:
         // 锁策略: 不再全程持有独占写锁 (否则索引期间查询被 writer 优先阻塞,
         // 表现为模型调用 codegraph tool 一直等待)。
         // - traverse_source_files / 文件解析 / is_changed 为锁外只读, 可与查询并发
-        // - 仅"实际写库"的操作 (writeExtractionResult / resolveReferences /
+        // - 仅"实际写库"的操作 (writeExtractionResult / 收尾清理 / 引用解析写 /
         //   rebuild_fts / wal checkpoint) 在持有 unique_lock 的短暂窗口内执行,
         //   查询 (shared_lock) 至多等待毫秒级, 大部分时间可读取已提交的部分数据
+        // - 收尾阶段同样分阶段取锁: 消失文件判断 (磁盘 IO/规则匹配) 与引用
+        //   解析计算在锁外或 shared_lock 下进行, 不阻塞查询
         // 流式遍历+索引: 目录遍历与文件索引同步进行 (不预先收集完整文件列表),
         // 大目录下索引进度随遍历逐渐增长, 内存中不缓存全部路径
         int  processed   = 0;
@@ -1118,9 +1120,10 @@ public:
             XX_LOGW("CodeGraphManager: no source files found in {}", path);
             // 仍清理该根前缀下的残留记录 (忽略规则变更导致整根被过滤时,
             // 旧节点/引用若不删除会残留), 然后保持原语义提前返回
+            // (cleanupRemovedFiles 内部自行管理锁)
+            cleanupRemovedFiles(path);
             std::unique_lock<std::shared_mutex> lock(mutex_);
             if (db_) {
-                cleanupRemovedFiles(path);
                 runWithRetry("WAL checkpoint", 3, [&]() {
                     db_->wal_checkpoint();
                 });
@@ -1131,35 +1134,40 @@ public:
 
         XX_LOGI("CodeGraphManager: indexed {} source files in {}", total, path);
 
+        // 收尾: 各阶段尽量缩短独占锁持有时间, 避免查询 (codegraph tool 调用)
+        // 在索引完成时被长时间阻塞:
+        // - 消失文件清理: 内部三阶段 (快照 -> 锁外判断 -> 事务删除), 磁盘 IO
+        //   与规则匹配不占锁
+        // - 引用解析: 内部两阶段 (shared_lock 只读计算与查询并发 ->
+        //   unique_lock 事务写)
+        // - FTS 重建: 仅全量索引执行 (单条 insert/delete 走触发器同步,
+        //   增量时 FTS 已一致, 重建冗余; 全量保留作兜底)
+        // - WAL checkpoint: 短暂独占锁
+        cleanupRemovedFiles(path);
+
+        resolveReferences();
+
         {
-            // 收尾写操作 (消失文件清理/引用解析/FTS 重建/checkpoint): 短暂独占锁
             std::unique_lock<std::shared_mutex> lock(mutex_);
             if (!db_) {
                 return false;
             }
-            // 清理本次索引范围内已消失文件的残留记录:
-            // - 文件被删除, 或命中忽略规则 (ignorePaths/.gitignore/.gitmodules)
-            //   后不再被收集, 其旧节点/引用若不删除会残留 (查询仍可搜到)
-            // - 仅删除属于本次索引根前缀的文件, 不动前缀复用库中其他路径的数据
-            // - 遍历未收集到任何文件 (整根被过滤/无源码) 时同样执行, 保证全量清理
-            cleanupRemovedFiles(path);
-
-            resolveReferences();
-
             // FTS 重建失败仅告警, 不影响索引主流程; 多进程并发时锁竞争重试
-            runWithRetry("FTS rebuild", 3, [&]() {
-                db_->rebuild_fts();
-            });
+            if (!incremental) {
+                runWithRetry("FTS rebuild", 3, [&]() {
+                    db_->rebuild_fts();
+                });
+            }
 
             // 索引结束 WAL checkpoint: 全部已提交数据落主库文件。进程被强杀
             // (无析构/无 sqlite close) 时主库仍是完整数据, 下次启动不会从头索引
             runWithRetry("WAL checkpoint", 3, [&]() {
                 db_->wal_checkpoint();
             });
-        }
 
-        // 索引数据已变更: 使全部查询缓存失效, 下次查询按新数据重算
-        invalidateCaches();
+            // 索引数据已变更: 使全部查询缓存失效, 下次查询按新数据重算
+            invalidateCaches();
+        }
 
         // 索引进度完成信号 (约定 processed==total 且 total>0 表示索引结束):
         // 订阅方据此将状态置为 "完成" (indexing=false), 并作为最后一次进度回调
@@ -1190,42 +1198,46 @@ public:
         return indexDirectory(project_root_, true);
     }
 
+    /// 引用解析: 把跨文件未解析引用解析为正式调用边
+    /// - 两阶段执行, 尽量缩短独占锁持有时间:
+    ///   1) 只读计算 (shared_lock, 与查询并发): 快照未解析引用 + 计算每条
+    ///      的目标候选, 期间查询线程不被阻塞
+    ///   2) 事务写 (短暂 unique_lock): 批量插入解析出的边 + 删除已处理引用
     bool resolveReferences() {
-        if (!db_) {
-            return false;
-        }
+        struct ResolvedRef {
+            int64_t source_id;
+            int64_t target_id;
+            int     line;
+            int     col;
+            int64_t ref_id;
+        };
+        std::vector<ResolvedRef> resolved;
 
-        auto unresolved = db_->get_unresolved_refs();
-        if (unresolved.empty()) {
-            return true;
-        }
-
-        // 多进程并发写时锁竞争 (SQLITE_BUSY) 会导致整个引用解析批次丢失, 重试整个事务
-        return runTransactionWithRetry("resolveReferences", 3, db_.get(), [&]() {
+        {
+            // 阶段 1: 只读计算 (shared_lock, 查询可并发进入)
+            std::shared_lock<std::shared_mutex> lock(mutex_);
+            if (!db_) {
+                return false;
+            }
+            auto unresolved = db_->get_unresolved_refs();
+            if (unresolved.empty()) {
+                return true;
+            }
+            resolved.reserve(unresolved.size());
             for (const auto& ref : unresolved) {
                 if (!running_.load()) {
                     break;
                 }
-
                 auto source_node = db_->get_node(ref.source_node_id);
                 if (!source_node.has_value()) {
                     continue;
                 }
-
                 auto candidates = db_->find_nodes_by_name(ref.ref_name, 10);
                 if (candidates.empty()) {
                     continue;
                 }
-
-                if (candidates.size() == 1) {
-                    codegraph::Edge edge;
-                    edge.source_id = source_node->id;
-                    edge.target_id = candidates[0].id;
-                    edge.kind      = codegraph::EdgeKind::Calls;
-                    edge.line      = ref.line;
-                    edge.col       = ref.col;
-                    db_->insert_edge(edge);
-                } else {
+                int64_t target_id = candidates[0].id;
+                if (candidates.size() > 1) {
                     codegraph::Node best       = candidates[0];
                     int             best_score = -1;
                     for (const auto& cand : candidates) {
@@ -1235,16 +1247,37 @@ public:
                             best       = cand;
                         }
                     }
-                    codegraph::Edge edge;
-                    edge.source_id = source_node->id;
-                    edge.target_id = best.id;
-                    edge.kind      = codegraph::EdgeKind::Calls;
-                    edge.line      = ref.line;
-                    edge.col       = ref.col;
-                    db_->insert_edge(edge);
+                    target_id = best.id;
                 }
+                resolved.push_back(
+                    ResolvedRef{source_node->id, target_id, ref.line, ref.col, ref.id}
+                );
+            }
+        }
 
-                db_->delete_unresolved_ref(ref.id);
+        if (resolved.empty()) {
+            return true;
+        }
+
+        // 阶段 2: 事务写 (多进程并发写时锁竞争 (SQLITE_BUSY) 会导致整个
+        // 引用解析批次丢失, 重试整个事务)
+        std::unique_lock<std::shared_mutex> lock(mutex_);
+        if (!db_) {
+            return false;
+        }
+        return runTransactionWithRetry("resolveReferences", 3, db_.get(), [&]() {
+            for (const auto& r : resolved) {
+                if (!running_.load()) {
+                    break;
+                }
+                codegraph::Edge edge;
+                edge.source_id = r.source_id;
+                edge.target_id = r.target_id;
+                edge.kind      = codegraph::EdgeKind::Calls;
+                edge.line      = r.line;
+                edge.col       = r.col;
+                db_->insert_edge(edge);
+                db_->delete_unresolved_ref(r.ref_id);
             }
         });
     }
@@ -1753,43 +1786,81 @@ public:
     ///   逐个判断: 文件仍存在且未命中过滤规则则保留, 否则删除 (语义与
     ///   "不在收集列表中的删除" 等价)
     /// - 仅删除属于 root 前缀的文件, 不动前缀复用索引库中其他路径的数据
-    /// - 调用方须已持有独占锁 (mutex_)
+    /// - 三阶段执行, 尽量缩短独占锁持有时间:
+    ///   1) 锁内快照全部文件记录路径 (一次只读查询)
+    ///   2) 锁外判断: fs::exists (磁盘 IO) 与 isFileIgnored (正则/gitignore
+    ///      匹配) 全部移出独占锁, 期间查询可并发执行
+    ///   3) 锁内单事务批量删除, 提交一次
     void cleanupRemovedFiles(std::string_view root) {
         std::string prefix = normalizePathStr(root);
         if (!prefix.empty() && prefix.back() != '/') {
             prefix.push_back('/');
         }
-        for (const auto& fr : db_->get_all_files()) {
-            std::string fp = normalizePathStr(fr.path);
+
+        // 阶段 1: 锁内快照文件记录 (短暂独占锁, 仅拷贝路径字符串)
+        std::vector<std::string> all_paths;
+        {
+            std::unique_lock<std::shared_mutex> lock(mutex_);
+            if (!db_) {
+                return;
+            }
+            auto files = db_->get_all_files();
+            all_paths.reserve(files.size());
+            for (const auto& fr : files) {
+                all_paths.push_back(fr.path);
+            }
+        }
+
+        // 阶段 2: 锁外判断哪些需要删除 (磁盘 IO / 正则匹配不占锁)
+        // isFileIgnored 内部访问 gitignore_cache_ (自带互斥) 与只读的
+        // ignore_path_regexes_, 锁外调用安全
+        std::vector<std::string> to_delete;
+        to_delete.reserve(all_paths.size() / 4);
+        for (const auto& path : all_paths) {
+            std::string fp = normalizePathStr(path);
             // 不属于本次索引根前缀 (含前缀复用库中其他路径): 跳过
             if (fp.rfind(prefix, 0) != 0) {
                 continue;
             }
             // 文件仍存在且未命中过滤规则: 保留 (增量索引跳过的未变更文件在此保留)
-            if (fs::exists(fs::path(fr.path)) && !isFileIgnored(fr.path)) {
+            if (fs::exists(fs::path(path)) && !isFileIgnored(path)) {
                 continue;
             }
-            // 顺序与 writeExtractionResult 一致: 先删边/引用 (外键), 再删节点/记录;
-            // 单文件清理失败仅记录日志, 不影响整体索引 (下次增量索引可再清理)
-            agentxx::util::catchError<bool>(
-                [&]() -> bool {
-                    db_->delete_edges_for_file_nodes(fr.path);
-                    db_->delete_unresolved_refs_by_file(fr.path);
-                    db_->delete_nodes_by_file(fr.path);
-                    db_->delete_file(fr.path);
-                    return true;
-                },
-                [&](std::string errmsg) -> bool {
-                    XX_LOGW(
-                        "CodeGraphManager: cleanup removed file {} failed: {}",
-                        fr.path,
-                        errmsg
-                    );
-                    return false;
-                }
-            );
-            XX_LOGI("CodeGraphManager: cleanup removed file record: {}", fr.path);
+            to_delete.push_back(path);
         }
+        if (to_delete.empty()) {
+            return;
+        }
+
+        // 阶段 3: 锁内单事务批量删除 (顺序与 writeExtractionResult 一致:
+        // 先删边/引用 (外键), 再删节点/记录; 单文件失败仅记录日志不中断,
+        // 下次增量索引可再清理)
+        std::unique_lock<std::shared_mutex> lock(mutex_);
+        if (!db_) {
+            return;
+        }
+        runTransactionWithRetry("cleanup removed files", 3, db_.get(), [&]() {
+            for (const auto& path : to_delete) {
+                agentxx::util::catchError<bool>(
+                    [&]() -> bool {
+                        db_->delete_edges_for_file_nodes(path);
+                        db_->delete_unresolved_refs_by_file(path);
+                        db_->delete_nodes_by_file(path);
+                        db_->delete_file(path);
+                        return true;
+                    },
+                    [&](std::string errmsg) -> bool {
+                        XX_LOGW(
+                            "CodeGraphManager: cleanup removed file {} failed: {}",
+                            path,
+                            errmsg
+                        );
+                        return false;
+                    }
+                );
+                XX_LOGI("CodeGraphManager: cleanup removed file record: {}", path);
+            }
+        });
     }
 
     void indexFile(std::string_view file_path, std::string_view lang) {
@@ -1823,8 +1894,9 @@ public:
         invalidateCaches();
     }
 
+    /// 公开 resolveReferences API 入口: resolveReferences 内部自行管理锁
+    /// (shared_lock 只读计算 + unique_lock 事务写), 此处不再额外取锁
     bool resolveReferencesLocked() {
-        std::unique_lock<std::shared_mutex> lock(mutex_);
         return resolveReferences();
     }
 
