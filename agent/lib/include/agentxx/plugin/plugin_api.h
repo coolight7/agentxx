@@ -11,10 +11,13 @@
  * - 线程约定:
  *   - entry/register/unregister/subscribe/unsubscribe/publish/emit_message_tip/
  *     get_share_store 必须在宿主 io 线程调用 (插件入口与钩子回调即在此线程)
- *   - execute 回调运行在宿主线程池, 内仅可调用 call_tool / log (线程安全);
- *     其余 API 需经宿主 post 到 io 线程 (二期提供 async 桥)
+ *   - execute 回调运行在宿主线程池, 内仅可调用 call_tool / log / json_*
+ *     (线程安全); 其余 API 需经宿主 post 到 io 线程 (二期提供 async 桥)
  * - 回调快速返回约定: 事件订阅回调与钩子回调在 io 线程同步调用, 必须快速
  *   返回, 不得阻塞 (长时间任务请经 call_tool 或自行投递到独立线程)
+ * - 异常不外泄: 宿主 vtable 所有函数内部捕获全部异常 (C ABI 边界无异常);
+ *   插件侧 execute/hook/event 回调同样不得让异常逃逸 (宿主调用处已兜底,
+ *   但插件自身应遵循)
  *
  * 版本策略: 修改本契约时递增 AGENTXX_PLUGIN_API_VERSION; 宿主拒绝
  * api_version 不匹配的插件 (仅拒绝, 不崩溃)
@@ -28,7 +31,7 @@
 extern "C" {
 #endif
 
-#define AGENTXX_PLUGIN_API_VERSION 2
+#define AGENTXX_PLUGIN_API_VERSION 3
 
 /* ==================== 插件元信息 ==================== */
 
@@ -52,7 +55,9 @@ typedef struct AgentxxToolSpec {
     /// - args_json: 参数对象 JSON (含宿主注入的 thread_id / tool_call_id)
     /// - 返回: 结果 JSON 字符串, 必须用 host->alloc 分配 (宿主 free);
     ///   失败时返回 NULL 并经 error_out 输出错误信息 (同样 host->alloc)
-    /// - 回调内可调用 call_tool / log; 不得阻塞宿主 io 线程
+    /// - 回调内可调用 call_tool / log / json_*; 不得阻塞宿主 io 线程
+    /// - 注意: 宿主超时/取消仅终止"等待", 本回调一旦开始执行将持续到返回
+    ///   (宿主按插件实例 inflight 计数保证其执行期间插件代码段不被卸载)
     char* (*execute)(void* user_data, const char* args_json, const char* thread_id,
                      const char* tool_call_id, char** error_out);
     void* user_data;
@@ -150,9 +155,13 @@ typedef struct AgentxxHostVtable {
     void (*post_to_io)(const AgentxxHost* host, void (*fn)(void* ud), void* ud);
 
     /* ---- 会话/上下文访问 ---- */
-    /// 调用插件工具 (仅限插件注册的工具, 不暴露宿主内置工具; 在调用方线程
-    /// 同步执行 —— 工具回调(线程池)内可安全调用, 宿主 io 线程内调用会阻塞 io 线程)
-    /// 返回结果 JSON 字符串 (host->alloc); 失败返回 NULL 并经 error_out 输出
+    /// 调用插件工具 (仅限插件注册的工具, 不暴露宿主内置工具)
+    /// - 查表在宿主 io 线程 (短临界区), 目标工具 execute 回调在【调用方线程】
+    ///   执行: 线程池/JS 线程内调用不阻塞 io 线程; 宿主 io 线程内调用会
+    ///   阻塞 io 线程 (罕见场景, 插件应避免)
+    /// - 目标插件由宿主引用计数保活: 即使目标插件正在被卸载, 本次调用
+    ///   期间其代码段也不会被释放
+    /// - 返回结果 JSON 字符串 (host->alloc); 失败返回 NULL 并经 error_out 输出
     char* (*call_tool)(const AgentxxHost* host, const char* name, const char* args_json,
                        const char* thread_id, char** error_out);
 
@@ -173,6 +182,15 @@ typedef struct AgentxxHostVtable {
                              const char* text, int level);
     /// 日志 (线程安全); level 与宿主 XX_LOG 级别对应 (0=trace 1=debug 2=info 3=warn 4=error)
     void (*log)(const AgentxxHost* host, int level, const char* msg);
+
+    /* ---- JSON 辅助 (插件拼装/解析 JSON; 线程安全, 任意线程可调用) ---- */
+    /// 从 JSON 字符串中提取指定 key 的字符串值 (宿主解析; 结果 host->alloc)
+    /// - key 缺失 / 值非字符串 / JSON 非法 返回 NULL
+    /// - 替代插件手写 JSON 解析 (对转义字符/嵌套结构不可靠)
+    char* (*json_get_string)(const AgentxxHost* host, const char* json, const char* key);
+    /// 字符串 → JSON 字符串字面量 (含引号包裹与转义; 结果 host->alloc)
+    /// - 用于插件拼装 JSON 时转义字段值 (替代手工拼接, 防注入/语法错误)
+    char* (*json_escape)(const AgentxxHost* host, const char* s);
 } AgentxxHostVtable;
 
 struct AgentxxHost {
@@ -187,10 +205,13 @@ struct AgentxxHost {
 /// 可选: 查询插件元信息 (加载前调用, 用于版本/信息校验; 未导出则跳过)
 typedef const AgentxxPluginInfo* (*AgentxxPluginGetInfoFn)(void);
 
-/// 必需: 插件入口 (宿主 io 线程调用)
+/// 必需: 插件入口 (宿主线程池调用; 内部注册动作宿主会自动投递回 io 线程)
 /// - host: 本插件专属宿主句柄 (opaque 已关联本插件)
 /// - plugin_ctx: 输出插件私有上下文 (透传给 unload)
 /// - 返回 0 成功; 非 0 加载失败 (宿主 dlclose 并报告错误)
+/// - 线程说明: entry 运行在宿主线程池, 但其中经 vtable 的注册/订阅等 io 线程
+///   约束操作由宿主自动投递回 io 线程串行执行 (vtable 内部处理, 插件无感;
+///   因此 entry 内可安全调用 register_tool / invoke_capability 等任意 API)
 typedef int (*AgentxxPluginEntryFn)(const AgentxxHost* host, void** plugin_ctx);
 
 /// 可选: 插件卸载通知 (宿主等全部在途回调完成后调用; 用于插件业务清理;

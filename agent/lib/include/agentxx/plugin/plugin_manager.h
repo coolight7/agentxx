@@ -45,6 +45,7 @@ public:
     void*       dlHandle = nullptr;      ///< dlopen/LoadLibrary 句柄 (脚本插件为空)
     void*       pluginCtx = nullptr;     ///< entry 输出的插件私有上下文
     bool        enabled = true;          ///< 是否启用 (禁用: 工具摘除/钩子停用)
+    bool        userDisabled = false;    ///< 是否被用户显式禁用 (区别于级联禁用; enable 级联不复活)
     bool        unloadRequested = false; ///< 已请求卸载 (防重复)
 
     /// 本插件专属宿主句柄 (vtable 为宿主静态函数表, opaque 指向本实例)
@@ -53,11 +54,27 @@ public:
     /// 在途回调计数 (原子, 跨线程)
     std::atomic<size_t> inflight{0};
 
+    /// 钩子注册记录 (enable 重建中间件时恢复; 仅 io 线程)
+    struct HookRegistration {
+        AgentxxHookPoint point;
+        AgentxxHookFn    fn;
+        void*            ud;
+    };
+
+    /// 能力注册记录 (含方法回调; enable 恢复完整能力, 而非降级为无方法哑能力)
+    struct CapabilityRegistration {
+        std::string                name;
+        AgentxxCapabilityInvokeFn  invoke = nullptr;
+        void*                      ctx    = nullptr;
+    };
+
     /// 注册残留 (卸载时统一清理; 仅 io 线程)
+    /// - 工具/钩子/能力【注册信息】在 disable 后保留 (enable 可恢复),
+    ///   实际注册状态 (registry/handles/能力表) 由 disable/detachAll 摘除
     std::vector<std::string>           toolNames;      ///< 已注册工具名
-    std::vector<AgentxxHookPoint>      hookPoints;     ///< 已注册钩子点
-    std::vector<AgentxxSubscription*>  subscriptions;  ///< 已订阅事件句柄
-    std::vector<std::string>           capabilities;   ///< 已声明能力
+    std::vector<HookRegistration>      hookRegistrations; ///< 已注册钩子记录 (含函数指针)
+    std::vector<std::shared_ptr<AgentxxSubscription>> subscriptions; ///< 已订阅事件句柄
+    std::vector<CapabilityRegistration> capabilityRegistrations; ///< 已声明能力记录
 
     /// 本插件的中间件句柄 (懒创建; 挂 handles 栈)
     std::shared_ptr<PluginMiddlewareHandle> middleware = nullptr;
@@ -120,6 +137,7 @@ public:
 private:
 
     AgentxxToolSpec                   spec_;      ///< 拷贝的 spec (含函数指针)
+    neograph::json                    parameters_; ///< 解析缓存的参数 schema (避免每轮重复 parse)
     std::weak_ptr<PluginInstance>     instance_;
 };
 
@@ -190,6 +208,7 @@ public:
         std::vector<std::string> tools;
         std::vector<std::string> capabilities;
         std::vector<std::string> depends;
+        std::vector<std::string> optionalDepends;
     };
 
     explicit PluginManager(std::weak_ptr<agentxx::agent::AgentContext> agentContext);
@@ -209,9 +228,12 @@ public:
 
     /// 禁用插件 (工具摘除/钩子停用; 轮次边界生效)
     /// - 若当前无轮次执行则立即生效; 否则标记 pending, 轮末 flushPendingCleanup 生效
+    /// - 级联: 必选依赖本插件的插件一同禁用 (依赖者先禁用)
+    /// - 被级联禁用的插件不置 userDisabled (用户显式 enable 依赖方时可级联恢复)
     void disable(std::string_view name);
 
-    /// 启用插件 (重新注册保存的工具/钩子)
+    /// 启用插件 (重新注册保存的工具/钩子/能力)
+    /// - 级联: 必选依赖本插件的插件一同启用 (被级联禁用且未被用户显式禁用的)
     void enable(std::string_view name);
 
     /// 轮末清理: 摘除 pending 的中间件 (io 线程, 无执行中, 安全 erase)
@@ -220,6 +242,8 @@ public:
     /// 加载配置中启用的插件 (BaseAgent::init 装配后调用)
     /// - 原生插件: 直接库路径
     /// - 插件目录 (含 plugin.yaml): 按清单分派 (type: native/js)
+    /// - 按 manifest depends 拓扑排序加载 (依赖者排在被依赖者之后),
+    ///   避免配置顺序导致依赖缺失加载失败
     asio::awaitable<void> loadConfiguredPlugins(
         const std::vector<agentxx::agent::PluginConfig>& plugins
     );
@@ -232,8 +256,13 @@ public:
     ///   依赖环 → 拒绝
     asio::awaitable<std::shared_ptr<PluginInstance>> loadPluginAsync(std::string path);
 
-    /// 同步卸载全部插件 (AgentContext 析构前调用, 断开中间件↔实例循环引用;
-    /// 不等在途回调, 适用于进程/上下文销毁场景)
+    /// 同步卸载全部插件 (AgentContext 析构前调用, 断开中间件↔实例循环引用)
+    /// - 按依赖图逆序 (先子后父): 脚本插件先卸载, 引擎插件最后 (脚本插件
+    ///   unload 回调需经 invoke_capability 通知引擎, 引擎必须存活到最后)
+    /// - 每个插件: detachAll → unload 回调 → dlclose; unload 回调用于业务清理
+    ///   (如引擎插件 join 内部线程, 保证 dlclose 前代码段无执行者)
+    /// - 不等在途回调: 调用方须保证无在途插件回调 (进程正常退出/上下文销毁
+    ///   路径满足); 否则 unload 回调可能等待在途回调完成而阻塞
     void shutdownAll();
 
     // ==================== 查询 ====================
@@ -272,9 +301,7 @@ public:
     );
     void unsubscribe(AgentxxSubscription* sub);
     int  publish(const char* topic, const char* event_json);
-    /// 插件工具互调 (线程安全, 内部独立线程池执行)
-    char* callTool(PluginInstance* inst, const char* name, const char* args_json,
-                   const char* thread_id, char** error_out);
+    /// 读取会话级 share_store 条目 (io 线程)
     char* getShareStore(PluginInstance* inst, const char* thread_id, long long id);
     void  emitMessageTip(PluginInstance* inst, const char* thread_id, const char* text, int level);
 
@@ -339,21 +366,31 @@ public:
     std::string listPluginsJson();
     /// 单个插件信息 JSON (未安装返回空串; io 线程)
     std::string getPluginJson(const std::string& name);
-    /// 指定插件自身信息 JSON (未安装返回空串; io 线程)
-    std::string getOwnPluginJson(const std::string& name);
 
 private:
 
     friend class PluginInstance;
 
-    /// 等待插件在途计数归零 (io 线程协程轮询)
-    asio::awaitable<void> waitInflightZero(const std::shared_ptr<PluginInstance>& inst);
+    /// 等待插件在途计数归零 (io 线程协程轮询); 超时返回 false
+    /// - 超时说明有插件回调长时间未返回 (慢/恶意插件): 调用方放弃卸载
+    ///   (插件保持已 detach 状态, 可稍后重试), 避免无限阻塞 io 线程
+    asio::awaitable<bool> waitInflightZero(const std::shared_ptr<PluginInstance>& inst,
+                                           std::chrono::milliseconds timeout);
 
     /// 插件卸载清理: 摘除注册/退订/置 disabled (io 线程)
+    /// - 保留注册信息 (工具对象/hook 记录/能力记录), disable 后 enable 可恢复;
+    ///   仅插件实例析构 (unload/进程销毁) 时随实例释放
     void detachAll(PluginInstance* inst);
 
-    /// 从 handles 摘除某插件的全部中间件 (仅 flushPendingCleanup 调用)
-    void eraseMiddleware(const PluginInstance* inst);
+    /// 从 handles 摘除某插件的全部中间件 (仅 flushPendingCleanup/unload/shutdown 调用)
+    void eraseMiddleware(PluginInstance* inst);
+
+    /// 禁用/启用内部实现 (级联递归用; userInitiated=false 表示级联, 不改 userDisabled)
+    void disableImpl(std::string_view name, bool userInitiated);
+    void enableImpl(std::string_view name, bool userInitiated);
+
+    /// 卸载单个插件 (shutdownAll 用; 先递归卸载必选依赖者, 再处理自己)
+    void shutdownPlugin(const std::shared_ptr<PluginInstance>& inst);
 
     /// 依赖检查: 必选依赖是否全部已安装; 可选缺失仅警告 (返回 false = 加载失败)
     /// - 顺带做循环依赖检测 (DFS 访问链)

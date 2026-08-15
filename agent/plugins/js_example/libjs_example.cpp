@@ -65,31 +65,21 @@ extern "C" int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) 
         return -1;
     }
 
-    // 自身信息: name + 库路径 (推导插件目录)
+    // 自身信息: name + 库路径 (推导插件目录); 字段解析经宿主 json_get_string
+    // (对转义字符/嵌套结构可靠, 替代手写字符串扫描)
     char* info = host->vtable->get_own_info(host);
     if (!info) {
         host->vtable->log(host, 4, "js_example: get_own_info failed");
         return -1;
     }
-    // 轻量解析 {"name": "...", "path": "..."}
     auto field = [&](const char* key) -> std::string {
-        std::string k = "\"";
-        k += key;
-        k += "\"";
-        std::string s = info;
-        auto p = s.find(k);
-        if (p == std::string::npos) {
+        char* v = host->vtable->json_get_string(host, info, key);
+        if (!v) {
             return {};
         }
-        auto q1 = s.find('"', p + k.size());
-        if (q1 == std::string::npos) {
-            return {};
-        }
-        auto q2 = s.find('"', q1 + 1);
-        if (q2 == std::string::npos) {
-            return {};
-        }
-        return s.substr(q1 + 1, q2 - q1 - 1);
+        std::string s = v;
+        host->vtable->free(v);
+        return s;
     };
     std::string libPath = field("path");
     std::string name    = field("name");
@@ -102,10 +92,23 @@ extern "C" int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) 
     g_dir  = dirOf(libPath);
 
     // 委派加载脚本 (经能力调用 → 引擎执行; 脚本内注册动作挂到本插件实例)
+    // - args 经 json_escape 转义字段值, 防止路径含引号/反斜杠破坏 JSON
     std::string scriptPath = g_dir + "/plugin.js";
-    std::string args       = "{\"name\":\"" + name + "\",\"path\":\"" + scriptPath + "\"}";
-    char*       err        = nullptr;
-    char*       resp       = host->vtable->invoke_capability(
+    char*       escName    = host->vtable->json_escape(host, name.c_str());
+    char*       escPath    = host->vtable->json_escape(host, scriptPath.c_str());
+    std::string args       = "{\"name\":";
+    args += escName ? escName : "\"\"";
+    args += ",\"path\":";
+    args += escPath ? escPath : "\"\"";
+    args += "}";
+    if (escName) {
+        host->vtable->free(escName);
+    }
+    if (escPath) {
+        host->vtable->free(escPath);
+    }
+    char*       err  = nullptr;
+    char*       resp = host->vtable->invoke_capability(
         host, "interpreter.js", "load", args.c_str(), &err
     );
     if (!resp) {
