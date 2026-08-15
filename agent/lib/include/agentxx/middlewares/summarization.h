@@ -63,7 +63,7 @@ public:
         std::weak_ptr<agentxx::agent::AgentContext> in_agentContext,
         size_t in_defaultModelSupportMaxToken = defaultModelSupportMaxToken,
         double in_asciiCharsPerToken          = 4.0,
-        double in_unicodeCharsPerToken        = 1.1,
+        double in_unicodeCharsPerToken        = 0.7,
         double in_tokensPerImage              = 400.0,
         double in_extraTokensPerMessage       = 3.0
     );

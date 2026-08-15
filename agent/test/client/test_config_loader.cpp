@@ -297,6 +297,69 @@ void test_memory_parse() {
 }
 
 // ---------------------------------------------------------------------------
+// 插件配置解析 (yaml `plugins` 列表项: path / enabled / args)
+// ---------------------------------------------------------------------------
+
+void test_plugins_parse_basic() {
+    // 列表项: path (必填) + enabled (默认 true) + args (任意 YAML → JSON)
+    auto cfg = loadYaml(R"(plugins:
+  - path: "/opt/plugins/my_plugin.so"
+  - path: "/opt/plugins/js_example"
+    enabled: false
+    args:
+      foo: bar
+      n: 42
+)");
+    XX_TEST_EXPECT_EQ(cfg.plugins.size(), size_t{2});
+    if (cfg.plugins.size() == 2) {
+        // 默认 enabled = true
+        XX_TEST_EXPECT_TRUE(cfg.plugins[0].enabled);
+        XX_TEST_EXPECT_EQ(cfg.plugins[0].path, std::string("/opt/plugins/my_plugin.so"));
+        // enabled: false 生效
+        XX_TEST_EXPECT_FALSE(cfg.plugins[1].enabled);
+        XX_TEST_EXPECT_EQ(cfg.plugins[1].path, std::string("/opt/plugins/js_example"));
+        // args 解析为 JSON 对象
+        auto& args = cfg.plugins[1].args;
+        XX_TEST_EXPECT_TRUE(args.is_object());
+        if (args.is_object()) {
+            XX_TEST_EXPECT_EQ(args["foo"].get<std::string>(), std::string("bar"));
+            XX_TEST_EXPECT_EQ(args["n"].get<int>(), 42);
+        }
+    }
+}
+
+void test_plugins_missing_path_skipped() {
+    // 缺 path 或非 map 条目跳过; 空 plugins (全注释) 不报错
+    auto cfg = loadYaml(R"(plugins:
+  - enabled: true
+  - 123
+  - path: "/opt/plugins/ok.so"
+)");
+    XX_TEST_EXPECT_EQ(cfg.plugins.size(), size_t{1});
+    if (cfg.plugins.size() == 1) {
+        XX_TEST_EXPECT_EQ(cfg.plugins[0].path, std::string("/opt/plugins/ok.so"));
+    }
+    // 全注释的 plugins 段 (null): 解析为空列表
+    cfg = loadYaml("plugins:\n  # - path: \"/opt/plugins/x.so\"\n");
+    XX_TEST_EXPECT_TRUE(cfg.plugins.empty());
+    // 未配置 plugins 段
+    cfg = loadYaml("data_dir: default\n");
+    XX_TEST_EXPECT_TRUE(cfg.plugins.empty());
+}
+
+void test_plugins_env_expand() {
+    // path 支持 ${VAR} 环境变量展开
+    auto cfg = loadYaml("plugins:\n  - path: \"${PLUGIN_DIR}/my_plugin.so\"\n");
+    XX_TEST_EXPECT_EQ(cfg.plugins.size(), size_t{1});
+    if (cfg.plugins.size() == 1) {
+        XX_TEST_EXPECT_EQ(
+            cfg.plugins[0].path,
+            std::string("${PLUGIN_DIR}/my_plugin.so") // 无对应环境变量: 保留原样
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // 模型连接池配置 (yaml `models[].max_concurrent_connections`, 默认 5)
 // ---------------------------------------------------------------------------
 
@@ -481,6 +544,9 @@ TestResult testConfigLoader() {
     test_mcp_env_expand();
     test_skill_parse();
     test_memory_parse();
+    test_plugins_parse_basic();
+    test_plugins_missing_path_skipped();
+    test_plugins_env_expand();
     test_model_max_concurrent_connections();
     test_codegraph_default_disabled();
     test_codegraph_enable();
