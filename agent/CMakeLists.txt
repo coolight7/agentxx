@@ -29,10 +29,11 @@ option(XX_IS_RELEASE_D "Release Build." ON)
 option(AGENTXX_BUILD_CLIENT "Generate the client target." OFF)
 option(AGENTXX_BUILD_TEST "Generate the test target." OFF)
 option(AGENTXX_BUILD_BENCHMARK "Generate the benchmark target." OFF)
+option(AGENTXX_BUILD_PLUGINS "Generate the plugins target." ON)
 option(AGENTXX_ENABLE_HYPERSCAN "Add HyperScan for regex support. Use std::regex if disable." OFF)
 option(AGENTXX_ENABLE_CODEGRAPH "Add CodeGraph-CPP for code analysis." ON)
 option(AGENTXX_ENABLE_BOOST_PROCESS "Use Boost.process for execute command toolcall." ON)
-option(AGENTXX_ENABLE_PLUGIN_JS "Build QuickJS JS plugin engine (agentxx_plugin_js)." ON)
+option(AGENTXX_ENABLE_PLUGIN_JS "Build QuickJS JS plugin engine (agentxx_javascript_engine)." ON)
 # ===== Debug 构建加速选项 =====
 # - 关闭后 Debug 构建不再启用 AddressSanitizer，编译与链接显著加快
 #   (仍保留 -fno-omit-frame-pointer 便于调试)，默认开启保持原有行为
@@ -877,7 +878,7 @@ ExternalProject_Add(
   TEST_COMMAND ""
 )
 
-# QuickJS (JS 插件引擎 agentxx_plugin_js 的运行时)
+# QuickJS (JS 插件引擎 agentxx_javascript_engine 的运行时)
 # - 静态库 libqjs.a + 头文件 install 到 AGENTXX_INSTALL_DIR
 # - 关闭 CLI/示例/测试, 仅编译核心库
 if (AGENTXX_ENABLE_PLUGIN_JS)
@@ -904,6 +905,35 @@ if (AGENTXX_ENABLE_HYPERSCAN)
 endif()
 if (AGENTXX_ENABLE_CODEGRAPH)
   add_dependencies(agentxx_lib_repo codegraph_repo)
+endif()
+
+# 插件 (独立编译, 见 plugins/CMakeLists.txt)
+# - 各插件子目录 (example_native/javascript_engine/example_js) 自带 CMakeLists.txt,
+#   经 plugins/CMakeLists.txt add_subdirectory 汇总; 也可独立构建:
+#   cmake -B build -S agent/plugins -DAGENTXX_INSTALL_DIR=<agentxx-project-install>
+# - 插件不链接 libagentxx, 仅依赖纯 C ABI 头; JS 插件 (javascript_engine/example_js)
+#   需 quickjs 库
+if (AGENTXX_BUILD_PLUGINS)
+  ExternalProject_Add(
+    agentxx_plugins_repo
+    DEPENDS 
+      agentxx_lib_repo
+    SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/plugins/"
+    INSTALL_DIR "${AGENTXX_INSTALL_DIR}"
+    BUILD_ALWAYS TRUE
+    CMAKE_ARGS
+      ${_AGENTXX_COMMON_CMAKE_ARGS}
+    CMAKE_CACHE_ARGS
+      ${_AGENTXX_COMMON_CMAKE_CACHE_ARGS}
+    TEST_COMMAND ""
+    # 插件动态库直接输出到 ${AGENTXX_EXEC_INSTALL_PREFIX} (见各插件 CMakeLists.txt),
+    # 无需 install 步骤
+    INSTALL_COMMAND ""
+  )
+  if (AGENTXX_ENABLE_PLUGIN_JS)
+    # 编译 agentxx_javascript_engine / example_js 需 quickjs 库
+    add_dependencies(agentxx_plugins_repo quickjs_repo)
+  endif()
 endif()
 
 if (AGENTXX_BUILD_CLIENT)
@@ -936,7 +966,6 @@ if (AGENTXX_BUILD_TEST)
     CMAKE_ARGS
       ${_AGENTXX_COMMON_CMAKE_ARGS}
       -DAGENTXX_BUILD_CLIENT=${AGENTXX_BUILD_CLIENT}
-      -DAGENTXX_ENABLE_PLUGIN_JS=${AGENTXX_ENABLE_PLUGIN_JS}
     CMAKE_CACHE_ARGS
       ${_AGENTXX_COMMON_CMAKE_CACHE_ARGS}
     TEST_COMMAND ""
@@ -944,9 +973,9 @@ if (AGENTXX_BUILD_TEST)
   if (AGENTXX_BUILD_CLIENT)
     add_dependencies(agentxx_test_repo agentxx_client_repo)
   endif()
-  if (AGENTXX_ENABLE_PLUGIN_JS)
-    # 测试编译 agentxx_plugin_js 需 quickjs 库
-    add_dependencies(agentxx_test_repo quickjs_repo)
+  if (AGENTXX_BUILD_PLUGINS)
+    # 测试运行时加载插件 (与测试可执行同目录输出), 需先于测试编译
+    add_dependencies(agentxx_test_repo agentxx_plugins_repo)
   endif()
 endif()
 if (AGENTXX_BUILD_BENCHMARK)

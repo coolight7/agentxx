@@ -37,7 +37,7 @@ extern "C" {
 
 typedef struct AgentxxPluginInfo {
     int api_version; ///< 必须 == AGENTXX_PLUGIN_API_VERSION
-    const char* name; ///< 唯一标识, 如 "agentxx_plugin_js" (宿主内静态字符串, 无需释放)
+    const char* name; ///< 唯一标识, 如 "agentxx_javascript_engine" (宿主内静态字符串, 无需释放)
     const char* version;
     const char* description;
 } AgentxxPluginInfo;

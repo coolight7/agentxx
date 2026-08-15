@@ -1,5 +1,5 @@
 /*
- * agentxx_plugin_js —— JS 解释器插件 (二期)
+ * agentxx_javascript_engine —— JS 解释器插件 (二期)
  *
  * 功能: 注册 "interpreter.js" 脚本引擎, 承载加载/卸载 type: js 的脚本插件
  *
@@ -1381,7 +1381,7 @@ JSValue JsEngine::bridgeCall(
 extern "C" const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
     static const AgentxxPluginInfo info{
         AGENTXX_PLUGIN_API_VERSION,
-        "agentxx_plugin_js",
+        "agentxx_javascript_engine",
         "1.0.0",
         "JS interpreter plugin (QuickJS): hosts type:js plugins",
     };
@@ -1486,7 +1486,7 @@ extern "C" int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) 
         return -1;
     }
     *plugin_ctx = engine;
-    host->vtable->log(host, 2, "agentxx_plugin_js loaded (QuickJS interpreter.js)");
+    host->vtable->log(host, 2, "agentxx_javascript_engine loaded (QuickJS interpreter.js)");
     return 0;
 }
 
