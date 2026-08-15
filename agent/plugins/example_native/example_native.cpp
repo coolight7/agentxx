@@ -9,7 +9,7 @@
  * 5. 卸载: unload 回调主动反注册
  *
  * 编译 (无需链接 libagentxx):
- *   g++ -std=c++17 -fPIC -shared example_native.cpp -o libagentxx_plugin_example.so
+ *   g++ -std=c++26 -fPIC -shared example_native.cpp -o libagentxx_plugin_example.so
  */
 #include "agentxx/plugin/plugin_api.h"
 

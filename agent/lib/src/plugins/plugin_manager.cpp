@@ -2116,7 +2116,7 @@ asio::awaitable<void>
     namespace fs = std::filesystem;
 
     // 预解析各配置项依赖 (目录插件读 plugin.yaml depends; 库路径按文件名
-    // 推导插件名参与排序 —— libagentxx_plugin_js.so → agentxx_plugin_js)
+    // 推导插件名参与排序 —— libagentxx_javascript_engine.so → agentxx_javascript_engine)
     struct Item {
         std::string              path;
         std::string              name; ///< 空 = 无法推导 (不影响排序)

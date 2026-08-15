@@ -3,7 +3,7 @@
  *
  * 所有插件统一为 C++ 插件: 本壳是 example_js 的 C++ 实现部分,
  * 脚本能力经能力调用 (invoke_capability) 委派给 interpreter 引擎插件
- * (agentxx_plugin_js), 宿主不参与脚本管理。
+ * (agentxx_javascript_engine), 宿主不参与脚本管理。
  *
  * 加载流程 (entry):
  *   1. 检查能力 interpreter.js 可用 (manifest depends 已保证, 此处防御)

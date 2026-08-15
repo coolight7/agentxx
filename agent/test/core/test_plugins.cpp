@@ -219,8 +219,9 @@ asio::awaitable<TestResult> run_plugin_tests() {
     // JS 引擎库与脚本插件目录 (第 12~26 段共用; 函数级声明)
     namespace fs       = std::filesystem;
     auto        jsPath = findExamplePluginPath();
-    std::string jsLib  = (fs::path(jsPath).parent_path() / "libagentxx_plugin_js.so").string();
-    std::string jsDir  = (fs::path(jsPath).parent_path() / "plugins" / "example_js").string();
+    std::string jsLib
+        = (fs::path(jsPath).parent_path() / "libagentxx_javascript_engine.so").string();
+    std::string jsDir = (fs::path(jsPath).parent_path() / "plugins" / "example_js").string();
 
     // ---- 12. JS 引擎插件加载 (二期) ----
     {
@@ -247,9 +248,9 @@ asio::awaitable<TestResult> run_plugin_tests() {
         // 脚本能力由壳经能力调用委派给引擎 (宿主不参与)
         XX_TEST_EXPECT_TRUE(jsInst->dlHandle != nullptr);
         XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("example_js") == jsInst);
-        // 依赖声明 (manifest depends: [agentxx_plugin_js])
+        // 依赖声明 (manifest depends: [agentxx_javascript_engine])
         XX_TEST_EXPECT_EQ(jsInst->depends.size(), size_t{1});
-        XX_TEST_EXPECT_EQ(jsInst->depends[0], "agentxx_plugin_js");
+        XX_TEST_EXPECT_EQ(jsInst->depends[0], "agentxx_javascript_engine");
         // 脚本内注册的工具挂到本插件实例 (引擎经壳 host 注册)
         XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("js_hello"));
         XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("js_async_wait"));
@@ -325,7 +326,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
 
         // ---- 19. 卸载 JS 引擎插件: 能力消失 (脚本插件已在 17 卸载) ----
         {
-            auto ok = co_await ctx->pluginManager->unloadAsync("agentxx_plugin_js");
+            auto ok = co_await ctx->pluginManager->unloadAsync("agentxx_javascript_engine");
             XX_TEST_EXPECT_TRUE(ok);
             XX_TEST_EXPECT_FALSE(ctx->pluginManager->capabilities()->has("interpreter.js"));
         }
@@ -343,7 +344,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
             }
             XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("js_hello"));
             // 卸载引擎 → 级联卸载 example_js (依赖图: example_js depends 引擎)
-            auto ok = co_await ctx->pluginManager->unloadAsync("agentxx_plugin_js");
+            auto ok = co_await ctx->pluginManager->unloadAsync("agentxx_javascript_engine");
             XX_TEST_EXPECT_TRUE(ok);
             XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("example_js") == nullptr);
             XX_TEST_EXPECT_FALSE(ctx->toolRegistry->contains("js_hello"));
@@ -351,7 +352,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
 
         // ---- 21. 依赖检查: 必选依赖缺失 → 加载失败 ----
         {
-            // 引擎未加载, example_js depends agentxx_plugin_js → 加载失败
+            // 引擎未加载, example_js depends agentxx_javascript_engine → 加载失败
             auto js3 = co_await ctx->pluginManager->loadPluginAsync(jsDir);
             XX_TEST_EXPECT_TRUE(js3 == nullptr);
             XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("example_js") == nullptr);
@@ -366,11 +367,11 @@ asio::awaitable<TestResult> run_plugin_tests() {
             XX_TEST_EXPECT_TRUE(js4 != nullptr);
             if (js4) {
                 // 脚本内互查已由 plugin.js 顶层执行 (日志); 此处验证宿主侧 JSON
-                auto engineJson = ctx->pluginManager->getPluginJson("agentxx_plugin_js");
+                auto engineJson = ctx->pluginManager->getPluginJson("agentxx_javascript_engine");
                 XX_TEST_EXPECT_FALSE(engineJson.empty());
                 if (!engineJson.empty()) {
                     auto j = neograph::json::parse(engineJson);
-                    XX_TEST_EXPECT_EQ(j["name"].get<std::string>(), "agentxx_plugin_js");
+                    XX_TEST_EXPECT_EQ(j["name"].get<std::string>(), "agentxx_javascript_engine");
                     bool hasInterp = false;
                     for (const auto& c : j["capabilities"]) {
                         if (c.get<std::string>() == "interpreter.js") {
@@ -383,7 +384,10 @@ asio::awaitable<TestResult> run_plugin_tests() {
                 XX_TEST_EXPECT_FALSE(jsJson.empty());
                 if (!jsJson.empty()) {
                     auto j = neograph::json::parse(jsJson);
-                    XX_TEST_EXPECT_EQ(j["depends"][0].get<std::string>(), "agentxx_plugin_js");
+                    XX_TEST_EXPECT_EQ(
+                        j["depends"][0].get<std::string>(),
+                        "agentxx_javascript_engine"
+                    );
                     bool hasHello = false;
                     for (const auto& t : j["tools"]) {
                         if (t.get<std::string>() == "js_hello") {
@@ -399,7 +403,8 @@ asio::awaitable<TestResult> run_plugin_tests() {
                     bool foundJs = false;
                     for (const auto& item : arr) {
                         if (item["name"].get<std::string>() == "example_js"
-                            && item["depends"][0].get<std::string>() == "agentxx_plugin_js") {
+                            && item["depends"][0].get<std::string>()
+                                   == "agentxx_javascript_engine") {
                             foundJs = true;
                         }
                     }
@@ -409,7 +414,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
                 XX_TEST_EXPECT_TRUE(ctx->pluginManager->getPluginJson("not_installed").empty());
             }
             co_await ctx->pluginManager->unloadAsync("example_js");
-            co_await ctx->pluginManager->unloadAsync("agentxx_plugin_js");
+            co_await ctx->pluginManager->unloadAsync("agentxx_javascript_engine");
         }
     }
 
@@ -505,13 +510,13 @@ asio::awaitable<TestResult> run_plugin_tests() {
             ctx->pluginManager->disable("example_js"); // 用户手动禁用
             XX_TEST_EXPECT_FALSE(ctx->pluginManager->find("example_js")->enabled);
             // 启用引擎 → 不应级联恢复被用户手动禁用的脚本插件
-            ctx->pluginManager->enable("agentxx_plugin_js");
+            ctx->pluginManager->enable("agentxx_javascript_engine");
             XX_TEST_EXPECT_FALSE(ctx->pluginManager->find("example_js")->enabled);
             // 用户显式启用 → 恢复
             ctx->pluginManager->enable("example_js");
             XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("example_js")->enabled);
             co_await ctx->pluginManager->unloadAsync("example_js");
-            co_await ctx->pluginManager->unloadAsync("agentxx_plugin_js");
+            co_await ctx->pluginManager->unloadAsync("agentxx_javascript_engine");
         }
     }
 
@@ -525,12 +530,12 @@ asio::awaitable<TestResult> run_plugin_tests() {
         XX_TEST_EXPECT_TRUE(js26 != nullptr);
         ctx->pluginManager->shutdownAll();
         XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("example_js") == nullptr);
-        XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("agentxx_plugin_js") == nullptr);
+        XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("agentxx_javascript_engine") == nullptr);
     }
 
     // ---- 27. loadConfiguredPlugins 拓扑排序: 配置顺序无关 (脚本插件在前也能加载) ----
-    // - 库路径项按文件名推导插件名 (libagentxx_plugin_js.so → agentxx_plugin_js),
-    //   参与依赖排序: example_js (depends agentxx_plugin_js) 排在引擎之后
+    // - 库路径项按文件名推导插件名 (libagentxx_javascript_engine.so → agentxx_javascript_engine),
+    //   参与依赖排序: example_js (depends agentxx_javascript_engine) 排在引擎之后
     {
         std::vector<agentxx::agent::PluginConfig> cfgs;
         // 故意把脚本插件目录写在引擎库之前 (配置顺序与依赖顺序相反)
@@ -544,11 +549,11 @@ asio::awaitable<TestResult> run_plugin_tests() {
         cfgs.push_back(engCfg);
         co_await ctx->pluginManager->loadConfiguredPlugins(cfgs);
         // 两者都应加载成功 (拓扑排序保证引擎先加载)
-        XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("agentxx_plugin_js") != nullptr);
+        XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("agentxx_javascript_engine") != nullptr);
         XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("example_js") != nullptr);
         XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("js_hello"));
         // 清理
-        co_await ctx->pluginManager->unloadAsync("agentxx_plugin_js");
+        co_await ctx->pluginManager->unloadAsync("agentxx_javascript_engine");
         XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("example_js") == nullptr); // 级联卸载
         // 禁用项不加载
         agentxx::agent::PluginConfig disCfg;
