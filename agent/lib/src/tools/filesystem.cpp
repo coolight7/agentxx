@@ -420,7 +420,7 @@ asio::awaitable<std::string> FileSystemListTool::execute_async(const neograph::j
 FilesystemReadTextFileTool::FilesystemReadTextFileTool(
     std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
 ) :
-    XXToolBase("agentxx_filesystem_read_text_file", in_agentContext, false, false) {}
+    XXToolBase("agentxx_filesystem_read", in_agentContext, false, false) {}
 
 neograph::ChatTool FilesystemReadTextFileTool::get_definition() const {
     auto        agentPtr = agentContext.lock();
@@ -638,7 +638,7 @@ asio::awaitable<std::string>
 FilesystemWriteFileTool::FilesystemWriteFileTool(
     std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
 ) :
-    XXToolBase("agentxx_filesystem_write_file", in_agentContext, false, false) {}
+    XXToolBase("agentxx_filesystem_write", in_agentContext, false, false) {}
 
 neograph::ChatTool FilesystemWriteFileTool::get_definition() const {
     auto        agentPtr = agentContext.lock();
@@ -792,7 +792,7 @@ asio::awaitable<std::string> FilesystemWriteFileTool::execute_async(const neogra
 FilesystemEditTextFileTool::FilesystemEditTextFileTool(
     std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
 ) :
-    XXToolBase("agentxx_filesystem_edit_text_file", in_agentContext, false, false) {}
+    XXToolBase("agentxx_filesystem_edit", in_agentContext, false, false) {}
 
 neograph::ChatTool FilesystemEditTextFileTool::get_definition() const {
     auto        agentPtr = agentContext.lock();

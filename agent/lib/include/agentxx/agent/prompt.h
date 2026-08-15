@@ -280,7 +280,7 @@ Skills follow a progressive disclosure pattern — you see their name and descri
 but only read full instructions when needed:
 
 1. **Recognize when a skill applies**: Check if the user's task matches a skill's description.
-2. **Read the skill's full instructions**: Use `agentxx_filesystem_read_text_file` on the skill path.
+2. **Read the skill's full instructions**: Use `agentxx_filesystem_read` on the skill path.
    It reads the whole file by default; only set `line_offset`/`line_limit` if the file is very large.
 3. **Follow the skill's instructions**: SKILL.md contains step-by-step workflows, best practices, and examples.
 4. **Access supporting files**: Skills may include helper scripts, configs, or reference docs — use absolute paths.
@@ -296,7 +296,7 @@ Skills may contain Python scripts or other executables. Always use absolute path
 ### Example Workflow
 User: "Can you analyse the latest developments in quantum computing?"
 1. Check available skills → see "data-analyse" skill with its path
-2. Read the full skill file via `agentxx_filesystem_read_text_file`
+2. Read the full skill file via `agentxx_filesystem_read`
 3. Follow the skill's research workflow (search → organize → synthesize)
 4. Use any helper scripts with absolute paths
 
@@ -420,7 +420,7 @@ Can also be used to check whether a specific file or directory exists.)",
           },
       },
       {
-          "agentxx_filesystem_read_text_file",
+          "agentxx_filesystem_read",
           ToolPrompt{
               .depict =
                   R"(Read a text file (e.g. .txt, .md, .json, .log, source code) and return its contents with line numbers.
@@ -437,7 +437,7 @@ Supports offset/limit for reading portions of large files.)",
           },
       },
       {
-          "agentxx_filesystem_write_file",
+          "agentxx_filesystem_write",
           ToolPrompt{
               .depict = "Create a new file or overwrite an existing file with the given content.",
               .args =
@@ -452,7 +452,7 @@ Supports offset/limit for reading portions of large files.)",
           },
       },
       {
-          "agentxx_filesystem_edit_text_file",
+          "agentxx_filesystem_edit",
           ToolPrompt{
               .depict =
                   R"(Perform exact string replacement in a text file (e.g. *.txt, *.md, *.cpp, *.h).

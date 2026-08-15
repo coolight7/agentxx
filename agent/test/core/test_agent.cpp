@@ -424,7 +424,7 @@ asio::awaitable<void> test_agent_permission_mode_rules() {
     const std::string outsidePath = "/data/outside.txt";
 
     // 工具 + 会话总线 + 权限应答 IO (每次构造新 CodeAgent 前重建, 保证计数独立)
-    TestTool         tool("agentxx_filesystem_write_file");
+    TestTool         tool("agentxx_filesystem_write");
     constexpr size_t kWriteIndex
         = agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE;
 

@@ -132,13 +132,13 @@ void PermissionMiddlewareHandle::registerFilesystemHandles() {
         co_return co_await defOnFilesystemHandle(item, args, FilesystemPermissionREAD);
     };
 
-    handles["agentxx_filesystem_list"]           = readHandle;
-    handles["agentxx_filesystem_read_text_file"] = readHandle;
-    handles["agentxx_filesystem_write_file"]
+    handles["agentxx_filesystem_list"] = readHandle;
+    handles["agentxx_filesystem_read"] = readHandle;
+    handles["agentxx_filesystem_write"]
         = [this](const neograph::Tool& item, neograph::json& args) -> asio::awaitable<bool> {
         co_return co_await defOnFilesystemHandle(item, args, FilesystemPermissionWRITE);
     };
-    handles["agentxx_filesystem_edit_text_file"]
+    handles["agentxx_filesystem_edit"]
         = [this](const neograph::Tool& item, neograph::json& args) -> asio::awaitable<bool> {
         co_return co_await defOnFilesystemHandle(item, args, FilesystemPermissionREAD)
             && co_await defOnFilesystemHandle(item, args, FilesystemPermissionWRITE);
