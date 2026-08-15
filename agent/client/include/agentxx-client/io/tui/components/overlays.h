@@ -1,12 +1,12 @@
 #pragma once
 
 #include "agentxx-client/io/tui/framework/tui_context.h"
-#include "agentxx-client/io/tui/mermaid_state.h"
 #include "agentxx-client/io/tui/scrollable.h"
 #include "ftxui/component/component_base.hpp"
 #include "ftxui/component/event.hpp"
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/box.hpp"
+#include <markdown/state_diagram.hpp>
 #include <functional>
 #include <string>
 #include <vector>
@@ -227,6 +227,6 @@ private:
     std::string                               cachedThemeName_;
     bool                                      cachedValid_ = false;
     neograph::json                            cachedArgs_  = neograph::json::array();
-    agentxx::client::tui::MermaidStateDiagram cachedDiagram_;
+    markdown::MermaidStateDiagram             cachedDiagram_;
     ftxui::Element                            cachedElement_;
 };

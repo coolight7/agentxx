@@ -4,12 +4,12 @@
 #include "agentxx-client/io/tui/framework/modal_container.h"
 #include "agentxx-client/io/tui/framework/tui_context.h"
 #include "agentxx-client/io/tui/framework/tui_state.h"
-#include "agentxx-client/io/tui/mermaid_state.h"
 #include "agentxx-client/io/tui/tui_theme.h"
 #include "ftxui/component/event.hpp"
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/screen.hpp"
 #include "ftxui/screen/terminal.hpp"
+#include <markdown/state_diagram.hpp>
 #if defined(_WIN32)
 #define NOMINMAX
 #include <windows.h>
@@ -30,9 +30,9 @@ int g_mermaid_state_failed = 0;
 
 namespace {
 
-using agentxx::client::tui::MermaidStateDiagram;
-using agentxx::client::tui::parseMermaidStateDiagram;
-using agentxx::client::tui::renderMermaidStateDiagram;
+using markdown::MermaidStateDiagram;
+using markdown::parseMermaidStateDiagram;
+using markdown::renderMermaidStateDiagram;
 
 bool contains(std::string_view haystack, std::string_view needle) {
     return haystack.find(needle) != std::string_view::npos;

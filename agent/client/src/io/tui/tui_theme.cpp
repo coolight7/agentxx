@@ -35,6 +35,10 @@ TUITheme TUITheme::darkTheme() {
             .blockquote  = ftxui::color(ftxui::Color::RGB(117, 125, 138)),
             .table_header = ftxui::color(ftxui::Color::RGB(255, 255, 255)) | ftxui::bold,
             .table_border = ftxui::color(ftxui::Color::RGB(255, 255, 255)),
+            .diagram_pending  = ftxui::Color::RGB(117, 125, 138), // hintColor
+            .diagram_running  = ftxui::Color::RGB(255, 175, 95),  // thinkingColor
+            .diagram_done     = ftxui::Color::RGB(102, 204, 255), // accentColor
+            .diagram_failed   = ftxui::Color::RGB(255, 85, 85),   // errorColor
         },
     };
 }
@@ -74,6 +78,10 @@ TUITheme TUITheme::lightTheme() {
             .blockquote  = ftxui::color(ftxui::Color::RGB(135, 136, 137)),  // 引用
             .table_header = ftxui::color(ftxui::Color::RGB(50, 50, 50)) | ftxui::bold, // 表格
             .table_border = ftxui::color(ftxui::Color::RGB(50, 50, 50)),
+            .diagram_pending  = ftxui::Color::RGB(135, 136, 137), // hintColor
+            .diagram_running  = ftxui::Color::Yellow4,            // thinkingColor
+            .diagram_done     = ftxui::Color::RGB(102, 204, 255), // accentColor
+            .diagram_failed   = ftxui::Color::RGB(200, 30, 30),   // errorColor
         },
     };
 }

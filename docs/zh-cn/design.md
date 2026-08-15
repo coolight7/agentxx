@@ -1106,7 +1106,6 @@ agent/
 │   │   │       ├── agent_tui.h   # TUIClientAgentIO (FTXUI 终端 UI, 接收/显示/排队/权限/日志)
 │   │   │       ├── scrollable.h  # Scrollable (全量构建的可滚动容器, 侧边栏等短列表用)
 │   │   │       ├── lazy_scrollable.h # LazyScrollable (懒构建+LRU有界缓存+视口局部渲染)
-│   │   │       ├── mermaid_state.h   # Mermaid stateDiagram-v2 解析 + ASCII 分层图渲染
 │   │   │       ├── tui_theme.h   # TUI 主题配色
 │   │   │       ├── framework/    # TUI 框架层
 │   │   │       │   ├── tui_state.h       # TUI 状态聚合 (消息/侧边栏/排队输入等)
@@ -1132,7 +1131,6 @@ agent/
 │       │       ├── tui_theme.cpp
 │       │       ├── scrollable.cpp
 │       │       ├── lazy_scrollable.cpp  # LazyScrollable 懒构建渲染实现
-│       │       ├── mermaid_state.cpp    # Mermaid 状态图解析/渲染实现
 │       │       ├── tui_sidebar_content.cpp # 侧边栏内容 (日志/信息/Planning)
 │       │       ├── tui_log_sink.cpp        # TUI 日志接收器
 │       │       ├── framework/              # TUI 框架层实现 (tui_state/modal_container/...)
@@ -1209,6 +1207,8 @@ agent/
 │   ├── hyperscan/                # 正则引擎
 │   ├── iconv/                    # 字符编码转换
 │   ├── liburing/                 # io_uring
+│   ├── markdown_ftxui/           # markdown-ui: Markdown 渲染 (cmark-gfm 解析 + FTXUI DOM),
+│   │                            #   含 Mermaid stateDiagram-v2 状态图渲染 (state_diagram.*)
 │   ├── NeoGraph/                 # 图引擎 (LLM 调用/工具分发)
 │   ├── OpenSSL/                  # TLS/SSL
 │   ├── quickjs/                  # QuickJS (JS 插件引擎, submodule quickjs-ng, AGENTXX_ENABLE_PLUGIN_JS)
