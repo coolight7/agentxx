@@ -783,8 +783,8 @@ Operates on in-memory text content (not files).)",
           ToolPrompt{
               .depict =
                   R"(Search for code symbols (functions, classes, variables, etc.) by name using the codegraph index.
-Returns matched symbols with their file locations and signatures.
-Use this to quickly locate definitions across a large codebase.)",
+Use this to quickly locate definitions across a large codebase.
+Returns plain multi-line text: one block per symbol ("[N] kind name" plus indented file:line and signature lines).)",
               .args =
                   {
                       {"query",
@@ -798,7 +798,8 @@ Use this to quickly locate definitions across a large codebase.)",
           ToolPrompt{
               .depict =
                   R"(Get rich context for a code symbol: its definition, callers, callees, and methods (for classes).
-Useful for understanding how a function or class is used throughout the codebase.)",
+Useful for understanding how a function or class is used throughout the codebase.
+Returns plain multi-line text with "symbol:", "callers (N):", "callees (N):", "methods (N):" and "edges (N):" sections.)",
               .args =
                   {
                       {"symbol", "Fully qualified symbol name (e.g. `MyClass::myMethod`)."},
@@ -813,7 +814,8 @@ Useful for understanding how a function or class is used throughout the codebase
           ToolPrompt{
               .depict =
                   R"(Find all functions that call a given symbol (reverse call-graph traversal).
-Use this to understand what depends on a function before modifying it.)",
+Use this to understand what depends on a function before modifying it.
+Returns plain multi-line text: "Callers (N):" followed by one block per symbol.)",
               .args =
                   {
                       {"symbol", "Symbol name to find callers for."},
@@ -826,7 +828,8 @@ Use this to understand what depends on a function before modifying it.)",
           ToolPrompt{
               .depict =
                   R"(Find all functions that a given symbol calls (forward call-graph traversal).
-Use this to understand a function's dependencies.)",
+Use this to understand a function's dependencies.
+Returns plain multi-line text: "Callees (N):" followed by one block per symbol.)",
               .args =
                   {
                       {"symbol", "Symbol name to find callees for."},
@@ -839,7 +842,8 @@ Use this to understand a function's dependencies.)",
           ToolPrompt{
               .depict =
                   R"(Analyze the impact of modifying a symbol. Finds all downstream symbols that may be
-affected (callers, references). Use this before refactoring to assess blast radius.)",
+affected (callers, references). Use this before refactoring to assess blast radius.
+Returns plain multi-line text: "Impact (N):" followed by one block per symbol.)",
               .args =
                   {
                       {"symbol", "Symbol name to analyze impact for."},
@@ -851,7 +855,8 @@ affected (callers, references). Use this before refactoring to assess blast radi
           "agentxx_codegraph_status",
           ToolPrompt{
               .depict =
-                  R"(Get codegraph index statistics: total nodes, edges, indexed files, and circular dependency count.)",
+                  R"(Get codegraph index statistics: total nodes, edges, indexed files, and circular dependency count.
+Returns plain multi-line text, one "label: value" per line.)",
               .args = {},
           },
       },
@@ -860,7 +865,8 @@ affected (callers, references). Use this before refactoring to assess blast radi
           ToolPrompt{
               .depict =
                   R"(Index a directory for code analysis. Parses source files and builds the symbol database
-used by search, context, callers, callees, and impact queries.)",
+used by search, context, callers, callees, and impact queries.
+Returns plain multi-line text with "success:" and index statistics.)",
               .args =
                   {
                       {"path", "Absolute path to the directory to index."},
@@ -874,7 +880,8 @@ used by search, context, callers, callees, and impact queries.)",
           ToolPrompt{
               .depict =
                   R"(Find the call-chain path between two symbols in the call graph.
-Use this to trace how execution flows from one function to another.)",
+Use this to trace how execution flows from one function to another.
+Returns plain multi-line text: "Path (N):" followed by one block per symbol on the path.)",
               .args =
                   {
                       {"from", "Starting symbol name."},

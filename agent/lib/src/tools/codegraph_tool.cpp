@@ -61,33 +61,154 @@ asio::awaitable<R> offloadCodeGraphQuery(
     );
 }
 
-/// 若 CodeGraph 仍在索引 (indexDirectory 生命周期内), 在返回 JSON 顶层附加
-/// `"warning"` 提示 (结果可能不完整); 索引完成后输出结构与历史一致 (不附加)。
-/// - object: 直接插入 "warning" 字段
-/// - array (search 结果): "warning" 无法附加到数组, 包装为 {"symbols": [...], ...}
-/// - 解析失败 (非 JSON/内部错误) 时原样返回, 不额外处理
+/// 若 CodeGraph 仍在索引 (indexDirectory 生命周期内), 在文本输出末尾附加
+/// `warning:` 提示行 (结果可能不完整); 索引完成后原样返回 (不附加)。
 static std::string addIndexingWarning(
     const std::shared_ptr<agentxx::expand::CodeGraphManager>& cg,
     std::string                                               out
 ) {
-    if (!cg || !cg->isIndexing()) {
+    if (cg && cg->isIndexing()) {
+        out += "\nwarning: CodeGraph is still indexing, results may be incomplete";
+    }
+    return out;
+}
+
+// =========================================================================
+// 多行文本输出格式 (替代 JSON)
+//
+// 为什么返回多行文本而不是 JSON:
+// - 结果直接可读, 便于 LLM 解析 (省去 JSON 转义/嵌套开销)
+// - 与 filesystem 等工具的输出风格一致, 保持 tool 输出统一
+//
+// 通用格式约定:
+// - 列表: 标题行 "<title> (N):" + 每个条目一块, 条目首行 "[N] <kind> <name>",
+//   后续为缩进 4 空格的 "label: value" 详情行 (仅输出非空字段)
+// - 错误: "error: <原因>"
+// - 警告: 末尾附加 "warning: <提示>"
+// =========================================================================
+
+/// Node 列表 (search/path 结果, 基于 codegraph::Node 结构体) 转多行文本
+static std::string nodesToText(
+    std::string_view                  title,
+    const std::vector<codegraph::Node>& nodes
+) {
+    std::string out = fmt::format("{} ({}):", title, nodes.size());
+    if (nodes.empty()) {
+        out += "\n  (none)";
         return out;
     }
-    agentxx::util::catchError<bool>(
-        [&]() -> bool {
-            auto j = neograph::json::parse(out);
-            if (j.is_array()) {
-                j = neograph::json{{"symbols", std::move(j)}};
-            }
-            j["warning"] = "CodeGraph is still indexing, results may be incomplete";
-            out         = j.dump();
-            return true;
-        },
-        [](std::string) -> bool {
-            return true;
+    int idx = 0;
+    for (const auto& node : nodes) {
+        out += fmt::format(
+            "\n[{}] {} {}", ++idx, codegraph::node_kind_str(node.kind), node.name
+        );
+        if (!node.qualified_name.empty() && node.qualified_name != node.name) {
+            out += fmt::format("\n    qualified_name: {}", node.qualified_name);
         }
-    );
+        out += fmt::format("\n    file: {}:{}", node.file_path, node.line);
+        if (!node.signature.empty()) {
+            out += fmt::format("\n    signature: {}", node.signature);
+        }
+    }
     return out;
+}
+
+/// JSON 节点对象的详情行 (context/impact 结果, 精简字段 kind/name/file/line/signature)
+/// 追加到已输出的 "[N] <kind> <name>" 头行之后
+static void appendJsonNodeDetails(std::string& out, const codegraph::Json& node) {
+    if (node.contains("file")) {
+        auto file = node["file"].get<std::string>();
+        if (node.contains("line")) {
+            out += fmt::format("\n    file: {}:{}", file, node["line"].get<int>());
+        } else {
+            out += fmt::format("\n    file: {}", file);
+        }
+    }
+    if (node.contains("signature")) {
+        auto sig = node["signature"].get<std::string>();
+        if (!sig.empty()) {
+            out += fmt::format("\n    signature: {}", sig);
+        }
+    }
+}
+
+/// JSON 节点数组 (context 的 callers/callees/methods, impact 的 nodes) 转多行文本
+static std::string jsonNodesToText(std::string_view title, const codegraph::Json& arr) {
+    std::string out = fmt::format("{} ({}):", title, arr.size());
+    if (arr.size() == 0) {
+        out += "\n  (none)";
+        return out;
+    }
+    // codegraph::Json 无迭代器/empty(), 用 size() + 下标访问
+    for (size_t i = 0; i < arr.size(); ++i) {
+        const auto& n = arr[i];
+        out += fmt::format(
+            "\n[{}] {} {}",
+            i + 1,
+            n.value("kind", std::string{}),
+            n.value("name", std::string{})
+        );
+        appendJsonNodeDetails(out, n);
+    }
+    return out;
+}
+
+/// 边数组 (context 的 edges: {src, dst, kind}) 转多行文本
+static std::string jsonEdgesToText(const codegraph::Json& arr) {
+    std::string out = fmt::format("edges ({}):", arr.size());
+    if (arr.size() == 0) {
+        out += "\n  (none)";
+        return out;
+    }
+    for (size_t i = 0; i < arr.size(); ++i) {
+        const auto& e = arr[i];
+        out += fmt::format(
+            "\n[{}] {} -> {} ({})",
+            i + 1,
+            e.value("src", int64_t{0}),
+            e.value("dst", int64_t{0}),
+            e.value("kind", std::string{})
+        );
+    }
+    return out;
+}
+
+/// context 结果 (build_context: {symbol, callers, callees, edges, methods}) 转多行文本
+static std::string contextToText(const codegraph::Json& ctx) {
+    std::string out;
+    if (ctx.contains("symbol")) {
+        const auto& s = ctx["symbol"];
+        out += fmt::format(
+            "symbol: {} {}",
+            s.value("kind", std::string{}),
+            s.value("name", std::string{})
+        );
+        appendJsonNodeDetails(out, s);
+    }
+    if (ctx.contains("callers")) {
+        out += "\n" + jsonNodesToText("callers", ctx["callers"]);
+    }
+    if (ctx.contains("callees")) {
+        out += "\n" + jsonNodesToText("callees", ctx["callees"]);
+    }
+    if (ctx.contains("methods")) {
+        out += "\n" + jsonNodesToText("methods", ctx["methods"]);
+    }
+    if (ctx.contains("edges")) {
+        out += "\n" + jsonEdgesToText(ctx["edges"]);
+    }
+    return out;
+}
+
+/// impact 结果 (get_callers/get_callees/get_impact: {nodes: [...]}) 转多行文本
+static std::string impactToText(std::string_view title, const codegraph::Json& impact) {
+    if (impact.contains("nodes")) {
+        return jsonNodesToText(title, impact["nodes"]);
+    }
+    if (impact.contains("error")) {
+        return "error: " + impact["error"].get<std::string>();
+    }
+    return "error: unknown result";
 }
 
 } // namespace
@@ -134,7 +255,7 @@ neograph::ChatTool CodeGraphSearchTool::get_definition() const {
 asio::awaitable<std::string> CodeGraphSearchTool::execute_async(const neograph::json& arguments) {
     std::string query = arguments.value("query", std::string{});
     if (query.empty()) {
-        co_return R"({"error":"Arg `query` is empty"})";
+        co_return "error: Arg `query` is empty";
     }
     int limit = static_cast<int>(arguments.value("limit", 20.0));
 
@@ -153,24 +274,11 @@ asio::awaitable<std::string> CodeGraphSearchTool::execute_async(const neograph::
         }
     );
     if (!result.success) {
-        co_return neograph::json{
-            {"error", result.error}
-        }.dump();
+        co_return fmt::format("error: {}", result.error);
     }
 
-    auto json = neograph::json::array();
-    for (const auto& node : result.nodes) {
-        json.push_back({
-            {"kind",           codegraph::node_kind_str(node.kind)},
-            {"name",           node.name                          },
-            {"qualified_name", node.qualified_name                },
-            {"file",           node.file_path                     },
-            {"line",           node.line                          },
-            {"signature",      node.signature                     },
-        });
-    }
-    // 索引进行中时附加"结果可能不完整"提示 (见 addIndexingWarning)
-    co_return addIndexingWarning(codegraph, json.dump());
+    // 多行文本: 每个符号一块 "[N] <kind> <name>" + 缩进详情行
+    co_return addIndexingWarning(codegraph, nodesToText("Symbols", result.nodes));
 }
 
 CodeGraphContextTool::CodeGraphContextTool(
@@ -222,7 +330,7 @@ neograph::ChatTool CodeGraphContextTool::get_definition() const {
 asio::awaitable<std::string> CodeGraphContextTool::execute_async(const neograph::json& arguments) {
     std::string symbol = arguments.value("symbol", std::string{});
     if (symbol.empty()) {
-        co_return R"({"error":"Arg `symbol` is empty"})";
+        co_return "error: Arg `symbol` is empty";
     }
     int limit     = static_cast<int>(arguments.value("limit", 10.0));
     int max_depth = static_cast<int>(arguments.value("max_depth", 3.0));
@@ -241,13 +349,11 @@ asio::awaitable<std::string> CodeGraphContextTool::execute_async(const neograph:
         }
     );
     if (!result.success) {
-        co_return neograph::json{
-            {"error", result.error}
-        }.dump();
+        co_return fmt::format("error: {}", result.error);
     }
 
-    // 索引进行中时附加"结果可能不完整"提示 (见 addIndexingWarning)
-    co_return addIndexingWarning(codegraph, result.context.dump());
+    // 多行文本: symbol 块 + callers/callees/methods/edges 列表 (见 contextToText)
+    co_return addIndexingWarning(codegraph, contextToText(result.context));
 }
 
 CodeGraphCallersTool::CodeGraphCallersTool(
@@ -292,7 +398,7 @@ neograph::ChatTool CodeGraphCallersTool::get_definition() const {
 asio::awaitable<std::string> CodeGraphCallersTool::execute_async(const neograph::json& arguments) {
     std::string symbol = arguments.value("symbol", std::string{});
     if (symbol.empty()) {
-        co_return R"({"error":"Arg `symbol` is empty"})";
+        co_return "error: Arg `symbol` is empty";
     }
     int max_depth = static_cast<int>(arguments.value("max_depth", 3.0));
 
@@ -310,12 +416,10 @@ asio::awaitable<std::string> CodeGraphCallersTool::execute_async(const neograph:
         }
     );
     if (!result.success) {
-        co_return neograph::json{
-            {"error", result.error}
-        }.dump();
+        co_return fmt::format("error: {}", result.error);
     }
-    // 索引进行中时附加"结果可能不完整"提示 (见 addIndexingWarning)
-    co_return addIndexingWarning(codegraph, result.impact.dump());
+    // 多行文本: "Callers (N):" + 每符号一块 (见 impactToText)
+    co_return addIndexingWarning(codegraph, impactToText("Callers", result.impact));
 }
 
 CodeGraphCalleesTool::CodeGraphCalleesTool(
@@ -360,7 +464,7 @@ neograph::ChatTool CodeGraphCalleesTool::get_definition() const {
 asio::awaitable<std::string> CodeGraphCalleesTool::execute_async(const neograph::json& arguments) {
     std::string symbol = arguments.value("symbol", std::string{});
     if (symbol.empty()) {
-        co_return R"({"error":"Arg `symbol` is empty"})";
+        co_return "error: Arg `symbol` is empty";
     }
     int max_depth = static_cast<int>(arguments.value("max_depth", 3.0));
 
@@ -378,12 +482,10 @@ asio::awaitable<std::string> CodeGraphCalleesTool::execute_async(const neograph:
         }
     );
     if (!result.success) {
-        co_return neograph::json{
-            {"error", result.error}
-        }.dump();
+        co_return fmt::format("error: {}", result.error);
     }
-    // 索引进行中时附加"结果可能不完整"提示 (见 addIndexingWarning)
-    co_return addIndexingWarning(codegraph, result.impact.dump());
+    // 多行文本: "Callees (N):" + 每符号一块 (见 impactToText)
+    co_return addIndexingWarning(codegraph, impactToText("Callees", result.impact));
 }
 
 CodeGraphImpactTool::CodeGraphImpactTool(
@@ -428,7 +530,7 @@ neograph::ChatTool CodeGraphImpactTool::get_definition() const {
 asio::awaitable<std::string> CodeGraphImpactTool::execute_async(const neograph::json& arguments) {
     std::string symbol = arguments.value("symbol", std::string{});
     if (symbol.empty()) {
-        co_return R"({"error":"Arg `symbol` is empty"})";
+        co_return "error: Arg `symbol` is empty";
     }
     int max_depth = static_cast<int>(arguments.value("max_depth", 5.0));
 
@@ -446,12 +548,10 @@ asio::awaitable<std::string> CodeGraphImpactTool::execute_async(const neograph::
         }
     );
     if (!result.success) {
-        co_return neograph::json{
-            {"error", result.error}
-        }.dump();
+        co_return fmt::format("error: {}", result.error);
     }
-    // 索引进行中时附加"结果可能不完整"提示 (见 addIndexingWarning)
-    co_return addIndexingWarning(codegraph, result.impact.dump());
+    // 多行文本: "Impact (N):" + 每符号一块 (见 impactToText)
+    co_return addIndexingWarning(codegraph, impactToText("Impact", result.impact));
 }
 
 CodeGraphStatusTool::CodeGraphStatusTool(
@@ -489,14 +589,12 @@ asio::awaitable<std::string> CodeGraphStatusTool::execute_async(const neograph::
         }
     );
     if (!result.success) {
-        co_return neograph::json{
-            {"error", result.error}
-        }.dump();
+        co_return fmt::format("error: {}", result.error);
     }
 
-    // 索引进行中时附加"结果可能不完整"提示 (见 addIndexingWarning)
+    // 多行文本: 每行一个 "label: value" 统计字段
     co_return addIndexingWarning(codegraph, fmt::format(
-        R"({{"total_nodes":{},"total_edges":{},"total_files":{},"circular_deps":{}}})",
+        "total_nodes: {}\ntotal_edges: {}\ntotal_files: {}\ncircular_deps: {}",
         result.total_nodes,
         result.total_edges,
         result.total_files,
@@ -546,7 +644,7 @@ neograph::ChatTool CodeGraphIndexTool::get_definition() const {
 asio::awaitable<std::string> CodeGraphIndexTool::execute_async(const neograph::json& arguments) {
     std::string path = arguments.value("path", std::string{});
     if (path.empty()) {
-        co_return R"({"error":"Arg `path` is empty"})";
+        co_return "error: Arg `path` is empty";
     }
     bool incremental = arguments.value("incremental", true);
 
@@ -588,26 +686,20 @@ asio::awaitable<std::string> CodeGraphIndexTool::execute_async(const neograph::j
     if (ok) {
         if (status.success) {
             co_return fmt::format(
-                R"({{"success":true,"total_nodes":{},"total_edges":{},"total_files":{}}})",
+                "success: true\ntotal_nodes: {}\ntotal_edges: {}\ntotal_files: {}",
                 status.total_nodes,
                 status.total_edges,
                 status.total_files
             );
         }
         // 索引成功但状态查询失败 (罕见): 返回具体原因
-        co_return neograph::json{
-            {"error", fmt::format("Indexing done, but status query failed: {}", status.error)},
-        }
-            .dump();
+        co_return fmt::format("error: Indexing done, but status query failed: {}", status.error);
     }
     // 索引失败: 返回具体原因 (如未初始化), 便于 LLM 诊断
     if (false == status.success && false == status.error.empty()) {
-        co_return neograph::json{
-            {"error", fmt::format("Indexing failed: {}", status.error)},
-        }
-            .dump();
+        co_return fmt::format("error: Indexing failed: {}", status.error);
     }
-    co_return R"({"error":"Indexing failed"})";
+    co_return "error: Indexing failed";
 }
 
 CodeGraphPathTool::CodeGraphPathTool(
@@ -660,7 +752,7 @@ asio::awaitable<std::string> CodeGraphPathTool::execute_async(const neograph::js
     std::string from = arguments.value("from", std::string{});
     std::string to   = arguments.value("to", std::string{});
     if (from.empty() || to.empty()) {
-        co_return R"({"error":"Args `from` and `to` are required"})";
+        co_return "error: Args `from` and `to` are required";
     }
     int max_depth = static_cast<int>(arguments.value("max_depth", 10.0));
 
@@ -678,22 +770,11 @@ asio::awaitable<std::string> CodeGraphPathTool::execute_async(const neograph::js
         }
     );
     if (!result.success) {
-        co_return neograph::json{
-            {"error", result.error}
-        }.dump();
+        co_return fmt::format("error: {}", result.error);
     }
 
-    auto json = neograph::json::array();
-    for (const auto& node : result.path) {
-        json.push_back({
-            {"kind", codegraph::node_kind_str(node.kind)},
-            {"name", node.name                          },
-            {"file", node.file_path                     },
-            {"line", node.line                          },
-        });
-    }
-    // 索引进行中时附加"结果可能不完整"提示 (见 addIndexingWarning)
-    co_return addIndexingWarning(codegraph, fmt::format(R"({{"path":{},"depth":{}}})", json.dump(), result.path.size()));
+    // 多行文本: "Path (N):" + 路径上每个符号一块 (N 即路径深度)
+    co_return addIndexingWarning(codegraph, nodesToText("Path", result.path));
 }
 
 } // namespace tools

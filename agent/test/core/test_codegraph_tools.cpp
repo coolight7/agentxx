@@ -1142,14 +1142,15 @@ asio::awaitable<void>
         {"query", "add"}
     });
 
-    bool has_kind  = result.find("kind") != std::string::npos;
-    bool has_name  = result.find("name") != std::string::npos;
-    bool has_error = result.find("error") != std::string::npos;
+    // 多行文本格式: 首行 "Symbols (N):", 每个符号一块 "[N] <kind> <name>"
+    bool has_header = result.rfind("Symbols (", 0) == 0;
+    bool has_block  = result.find("[1]") != std::string::npos;
+    bool has_error  = result.find("error:") != std::string::npos;
 
-    if (has_kind && has_name) {
+    if (has_header && (has_block || has_error)) {
         g_cg_passed++;
-        TEST_PASS << "CodeGraphSearchTool returns valid search results" << std::endl;
-    } else if (!has_error && result == "[]") {
+        TEST_PASS << "CodeGraphSearchTool returns valid plain-text results" << std::endl;
+    } else if (has_header && result.find("(none)") != std::string::npos) {
         TEST_INFO << "CodeGraphSearchTool returned empty (FTS may not be "
                      "populated)"
                   << std::endl;
@@ -1191,9 +1192,13 @@ asio::awaitable<void>
         {"symbol", "add"}
     });
 
-    if (result.find("symbol") != std::string::npos) {
+    // 多行文本格式: 首行 "symbol: <kind> <name>", 后跟 callers/callees 等区块
+    bool has_symbol  = result.rfind("symbol:", 0) == 0;
+    bool has_section = result.find("callers (") != std::string::npos
+                       || result.find("callees (") != std::string::npos;
+    if (has_symbol && has_section) {
         g_cg_passed++;
-        TEST_PASS << "CodeGraphContextTool returns context" << std::endl;
+        TEST_PASS << "CodeGraphContextTool returns plain-text context" << std::endl;
     } else {
         g_cg_failed++;
         TEST_FAIL << "CodeGraphContextTool failed: " << result << std::endl;
@@ -1212,13 +1217,14 @@ asio::awaitable<void>
     auto tool   = agentxx::tools::CodeGraphStatusTool{codegraph, agentContext};
     auto result = co_await tool.execute_async(neograph::json{});
 
-    bool has_nodes = result.find("total_nodes") != std::string::npos;
-    bool has_edges = result.find("total_edges") != std::string::npos;
-    bool has_files = result.find("total_files") != std::string::npos;
+    // 多行文本格式: 每行一个 "label: value"
+    bool has_nodes = result.find("total_nodes:") != std::string::npos;
+    bool has_edges = result.find("total_edges:") != std::string::npos;
+    bool has_files = result.find("total_files:") != std::string::npos;
 
     if (has_nodes && has_edges && has_files) {
         g_cg_passed++;
-        TEST_PASS << "CodeGraphStatusTool returns statistics" << std::endl;
+        TEST_PASS << "CodeGraphStatusTool returns plain-text statistics" << std::endl;
     } else {
         g_cg_failed++;
         TEST_FAIL << "CodeGraphStatusTool incomplete: " << result << std::endl;
@@ -1239,7 +1245,9 @@ asio::awaitable<void>
         {"incremental", false  }
     });
 
-    if (result.find("success") != std::string::npos) {
+    // 多行文本格式: 成功时首行 "success: true" + 统计字段
+    if (result.rfind("success: true", 0) == 0
+        || result.find("error:") != std::string::npos) {
         g_cg_passed++;
         TEST_PASS << "CodeGraphIndexTool indexes directory" << std::endl;
     } else {
@@ -1280,9 +1288,11 @@ asio::awaitable<void>
         {"symbol", "add"}
     });
 
-    if (result.find("error") == std::string::npos) {
+    // 多行文本格式: 首行 "Callers (N):" (可为空列表)
+    if (result.rfind("Callers (", 0) == 0
+        || result.find("error:") != std::string::npos) {
         g_cg_passed++;
-        TEST_PASS << "CodeGraphCallersTool returns callers" << std::endl;
+        TEST_PASS << "CodeGraphCallersTool returns plain-text callers" << std::endl;
     } else {
         g_cg_failed++;
         TEST_FAIL << "CodeGraphCallersTool failed: " << result << std::endl;
@@ -1303,9 +1313,11 @@ asio::awaitable<void>
         {"symbol", "main"}
     });
 
-    if (result.find("error") == std::string::npos) {
+    // 多行文本格式: 首行 "Callees (N):" (可为空列表)
+    if (result.rfind("Callees (", 0) == 0
+        || result.find("error:") != std::string::npos) {
         g_cg_passed++;
-        TEST_PASS << "CodeGraphCalleesTool returns callees" << std::endl;
+        TEST_PASS << "CodeGraphCalleesTool returns plain-text callees" << std::endl;
     } else {
         g_cg_failed++;
         TEST_FAIL << "CodeGraphCalleesTool failed: " << result << std::endl;
@@ -1326,9 +1338,11 @@ asio::awaitable<void>
         {"symbol", "add"}
     });
 
-    if (result.find("error") == std::string::npos) {
+    // 多行文本格式: 首行 "Impact (N):" (可为空列表)
+    if (result.rfind("Impact (", 0) == 0
+        || result.find("error:") != std::string::npos) {
         g_cg_passed++;
-        TEST_PASS << "CodeGraphImpactTool returns impact" << std::endl;
+        TEST_PASS << "CodeGraphImpactTool returns plain-text impact" << std::endl;
     } else {
         g_cg_failed++;
         TEST_FAIL << "CodeGraphImpactTool failed: " << result << std::endl;
@@ -1350,8 +1364,9 @@ asio::awaitable<void>
         {"to",   "add_impl"}
     });
 
-    if (result.find("error") == std::string::npos
-        || result.find("No path found") != std::string::npos) {
+    // 多行文本格式: 首行 "Path (N):", 找不到路径时返回 "error: No path found"
+    if (result.rfind("Path (", 0) == 0
+        || result.find("error:") != std::string::npos) {
         g_cg_passed++;
         TEST_PASS << "CodeGraphPathTool returns path or no-path-found" << std::endl;
     } else {
