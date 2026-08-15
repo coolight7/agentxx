@@ -7,8 +7,8 @@ namespace agentxx {
 namespace plugin {
 
 bool ToolRegistry::registerTool(
-    std::string                                          name,
-    std::shared_ptr<agentxx::tools::XXToolBase>          tool
+    std::string                                 name,
+    std::shared_ptr<agentxx::tools::XXToolBase> tool
 ) {
     if (name.empty() || !tool) {
         XX_LOGW("ToolRegistry: register with empty name or null tool");

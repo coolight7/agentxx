@@ -92,8 +92,7 @@ public:
     /// 自动复位, 需显式对可见子项执行 ComputeRequirement 归零 (幂等)。
     void resetSelectionHighlight() {
         for (size_t i = 0; i < items_.size(); ++i) {
-            if (i < visibleBoxes_.size() && !visibleBoxes_[i].IsEmpty()
-                && items_[i].element) {
+            if (i < visibleBoxes_.size() && !visibleBoxes_[i].IsEmpty() && items_[i].element) {
                 items_[i].element->ComputeRequirement();
             }
         }

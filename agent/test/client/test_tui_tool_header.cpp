@@ -54,13 +54,13 @@ struct ToolHeaderFixture {
     /// 追加一条 Tool 消息 (text 为工具参数 JSON, 与 server 端约定一致)
     void pushTool(std::string name, std::string args) {
         sharedState.mutate([&](TUIRenderState& st) {
-            auto m                    = std::make_shared<TUIMessage>();
-            m->role                   = TUIMessage::Role::Tool;
-            m->tool                   = TUIMessage::ToolData{};
-            m->tool->toolName         = std::move(name);
-            m->tool->toolCallId       = "call_1";
-            m->tool->toolFinished     = true;
-            m->text                   = std::move(args);
+            auto m                = std::make_shared<TUIMessage>();
+            m->role               = TUIMessage::Role::Tool;
+            m->tool               = TUIMessage::ToolData{};
+            m->tool->toolName     = std::move(name);
+            m->tool->toolCallId   = "call_1";
+            m->tool->toolFinished = true;
+            m->text               = std::move(args);
             st.messages.push_back(std::move(m));
         });
     }
@@ -85,7 +85,10 @@ void testTuiToolHeaderFilesystem() {
     ToolHeaderFixture f;
 
     // read_text_file: 完整 [offset, limit] 区间
-    f.pushTool("agentxx_filesystem_read_text_file", R"({"path":"/home/a.cpp","line_offset":0,"line_limit":100})");
+    f.pushTool(
+        "agentxx_filesystem_read_text_file",
+        R"({"path":"/home/a.cpp","line_offset":0,"line_limit":100})"
+    );
     XX_TEST_EXPECT_TRUE(f.render().find("Read · [0, 100] /home/a.cpp") != std::string::npos);
 
     // read_text_file: 无区间 (默认 -1) 不显示中括号
@@ -109,20 +112,31 @@ void testTuiToolHeaderFilesystem() {
     XX_TEST_EXPECT_TRUE(f.render().find("Write · /home/out.txt") != std::string::npos);
 
     // edit_text_file: 头部摘要含路径 (diff 正文不受影响)
-    f.pushTool("agentxx_filesystem_edit_text_file", R"({"path":"/home/e.cpp","old_str":"a","new_str":"b"})");
+    f.pushTool(
+        "agentxx_filesystem_edit_text_file",
+        R"({"path":"/home/e.cpp","old_str":"a","new_str":"b"})"
+    );
     XX_TEST_EXPECT_TRUE(f.render().find("Edit · /home/e.cpp") != std::string::npos);
 
-    // glob: 单模式 / 多模式折叠为前两项 + "..." 
+    // glob: 单模式 / 多模式折叠为前两项 + "..."
     f.pushTool("agentxx_filesystem_glob", R"({"file_patterns":["agent/lib/**/*.cpp"]})");
     XX_TEST_EXPECT_TRUE(f.render().find("Glob · agent/lib/**/*.cpp") != std::string::npos);
     f.pushTool("agentxx_filesystem_glob", R"({"file_patterns":["a","b","c","d"]})");
     XX_TEST_EXPECT_TRUE(f.render().find("Glob · a, b, ...") != std::string::npos);
 
     // grep: 引号包裹的匹配模式 (参数区, 中括号) + 文件模式 (主参数)
-    f.pushTool("agentxx_filesystem_grep", R"({"text_patterns":["foo"],"file_patterns":["src/**/*.h"]})");
+    f.pushTool(
+        "agentxx_filesystem_grep",
+        R"({"text_patterns":["foo"],"file_patterns":["src/**/*.h"]})"
+    );
     XX_TEST_EXPECT_TRUE(f.render().find(R"(Grep · ["foo"] src/**/*.h)") != std::string::npos);
-    f.pushTool("agentxx_filesystem_grep", R"({"text_patterns":["a","b","c"],"file_patterns":["agent/**/*.cpp"]})");
-    XX_TEST_EXPECT_TRUE(f.render().find(R"(Grep · ["a", "b", ...] agent/**/*.cpp)") != std::string::npos);
+    f.pushTool(
+        "agentxx_filesystem_grep",
+        R"({"text_patterns":["a","b","c"],"file_patterns":["agent/**/*.cpp"]})"
+    );
+    XX_TEST_EXPECT_TRUE(
+        f.render().find(R"(Grep · ["a", "b", ...] agent/**/*.cpp)") != std::string::npos
+    );
 }
 
 // web_search 系列

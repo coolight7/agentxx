@@ -520,7 +520,7 @@ private:
         // 开头的 `/`: git 语义仅表示"锚定到规则所在目录", 不参与路径匹配,
         // 必须剥离, 否则正则以字面 `/` 开头, 无法匹配 relative() 得到的
         // 相对路径 (如 `.gitignore` 中的 `/third_party/boost*/`)
-        bool anchored        = false;
+        bool anchored = false;
         bool wildcard_prefix = false; // 以 `**/` 开头: 任意层级语义, 剩余含 `/` 也不锚定
         if (pattern.front() == '/') {
             anchored = true;
@@ -604,7 +604,7 @@ public:
         std::unique_lock<std::mutex> lock(mutex_);
         // 收集祖先目录链 (叶 -> 根; 已知项目根时链在项目根处截止)
         std::vector<fs::path> dirs;
-        fs::path              cur     = p.parent_path();
+        fs::path              cur      = p.parent_path();
         fs::path              normRoot = normalizeDirPath(root_);
         while (!cur.empty()) {
             dirs.push_back(cur);
@@ -661,7 +661,7 @@ private:
     GitIgnoreMatcher             matcher_;
     std::unordered_set<fs::path> loaded_dirs_;
     /// 项目根目录 (祖先链解析的上限; 为空时不设上限)
-    fs::path                     root_;
+    fs::path root_;
 };
 
 /// 路径字符串规范化: 统一 `/` 分隔符并 lexically_normal
@@ -693,8 +693,7 @@ static bool should_skip(std::string_view file_path) {
 /// - 供文件监听识别: 规则文件变更时需失效 gitignore 规则缓存并重新解析
 static bool isGitRuleFile(std::string_view path) {
     auto tail = [&](std::string_view name) {
-        return path.size() >= name.size()
-               && path.substr(path.size() - name.size()) == name;
+        return path.size() >= name.size() && path.substr(path.size() - name.size()) == name;
     };
     return tail("/.gitignore") || tail("/.gitmodules");
 }
@@ -713,9 +712,9 @@ static bool isGitRuleFile(std::string_view path) {
 ///   规则 (父级规则保留), 并内置忽略 `.git` 目录
 /// - 显式栈遍历替代 recursive_directory_iterator, 避免深目录树递归栈溢出
 static void traverse_source_files(
-    std::string_view                   root_path,
-    const std::vector<std::regex>&     ignore_path_regexes,
-    bool                               use_gitignore,
+    std::string_view                             root_path,
+    const std::vector<std::regex>&               ignore_path_regexes,
+    bool                                         use_gitignore,
     const std::function<bool(std::string_view)>& on_file
 ) {
     // 遍历异常记录日志后中止; 已回调的文件保持已处理状态 (不重复处理)
@@ -1106,12 +1105,7 @@ public:
         };
 
         // 边遍历边索引: 每发现一个源文件立即处理并通知进度
-        traverse_source_files(
-            path,
-            ignore_path_regexes_,
-            index_config_.useGitignore,
-            processFile
-        );
+        traverse_source_files(path, ignore_path_regexes_, index_config_.useGitignore, processFile);
 
         // 遍历结束: 文件总数为已处理数 (含增量跳过的未变更文件)
         const int total = processed;
@@ -1238,13 +1232,14 @@ public:
             int     col;
             int64_t ref_id;
         };
+
         std::vector<ResolvedRef> resolved;
         // 本次运行需删除的引用: 源节点已消失 / 目标符号不存在 (无法解析),
         // 不删除会每次启动重复处理同一批引用
         std::vector<int64_t> refs_to_delete;
         // 未解析引用总数 (截断前): 日志用
-        size_t         total_refs = 0;
-        const auto     resolveStartAt = std::chrono::steady_clock::now();
+        size_t     total_refs     = 0;
+        const auto resolveStartAt = std::chrono::steady_clock::now();
 
         {
             // 阶段 1: 只读计算 (shared_lock, 查询可并发进入)
@@ -1295,7 +1290,7 @@ public:
                     by_qual[std::string_view{n.qualified_name}].push_back(i);
                     // 尾段: 最后一个 "::" 之后的部分 (后缀匹配等价于
                     // qualified_name LIKE '%::name')
-                    auto           pos = n.qualified_name.rfind("::");
+                    auto             pos = n.qualified_name.rfind("::");
                     std::string_view last_seg
                         = pos == std::string::npos
                               ? std::string_view{n.qualified_name}
@@ -1316,8 +1311,7 @@ public:
             // 亚毫秒级, 远快于 SQL 全表 LIKE。
             auto fuzzyMatch = [&](std::string_view needle, std::vector<int>& out) {
                 out.clear();
-                for (size_t i = 0; i < all_nodes.size() && out.size() < kMaxRefCandidates;
-                     ++i) {
+                for (size_t i = 0; i < all_nodes.size() && out.size() < kMaxRefCandidates; ++i) {
                     const auto& n = all_nodes[i];
                     if (n.name.find(needle) != std::string::npos
                         || n.qualified_name.find(needle) != std::string::npos) {
@@ -1377,17 +1371,12 @@ public:
                 if (candidates.size() == 1) {
                     target_id = all_nodes[static_cast<size_t>(candidates[0])].id;
                 } else {
-                    int best_idx   = candidates[0];
-                    int best_score = score_target(
-                        source_node,
-                        all_nodes[static_cast<size_t>(best_idx)]
-                    );
+                    int best_idx = candidates[0];
+                    int best_score
+                        = score_target(source_node, all_nodes[static_cast<size_t>(best_idx)]);
                     for (size_t ci = 1; ci < candidates.size(); ++ci) {
                         int idx = candidates[ci];
-                        int s   = score_target(
-                            source_node,
-                            all_nodes[static_cast<size_t>(idx)]
-                        );
+                        int s   = score_target(source_node, all_nodes[static_cast<size_t>(idx)]);
                         if (s > best_score) {
                             best_score = s;
                             best_idx   = idx;
@@ -1395,8 +1384,7 @@ public:
                     }
                     target_id = all_nodes[static_cast<size_t>(best_idx)].id;
                 }
-                resolved.push_back(
-                    ResolvedRef{source_node.id, target_id, ref.line, ref.col, ref.id}
+                resolved.push_back(ResolvedRef{source_node.id, target_id, ref.line, ref.col, ref.id}
                 );
                 ++processed_refs;
 
@@ -1443,7 +1431,7 @@ public:
         if (ok && (resolved.size() + refs_to_delete.size() > 0)) {
             const auto costMs = std::chrono::duration_cast<std::chrono::milliseconds>(
                                     std::chrono::steady_clock::now() - resolveStartAt
-                                )
+            )
                                     .count();
             XX_LOGI(
                 "CodeGraphManager: resolveReferences done (resolved {}, dropped {}, "

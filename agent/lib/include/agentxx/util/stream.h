@@ -58,7 +58,7 @@ public:
     /// - 首次调用恒放行 (无上次放行记录)
     bool try_acquire() {
         std::lock_guard<std::mutex> lock(mutex_);
-        const auto now = std::chrono::steady_clock::now();
+        const auto                  now = std::chrono::steady_clock::now();
         if (last_.time_since_epoch().count() == 0 || now - last_ >= interval_) {
             last_ = now;
             return true;
@@ -97,7 +97,7 @@ private:
     std::chrono::steady_clock::duration interval_;
     /// 上次放行时刻 (默认构造 = steady_clock epoch, 表示从未放行)
     std::chrono::steady_clock::time_point last_{};
-    mutable std::mutex mutex_;
+    mutable std::mutex                    mutex_;
 };
 
 /// 防抖器: 触发后等待 wait 时长, 期间再次触发重置计时; 静默满 wait 后 ready
@@ -168,7 +168,7 @@ private:
     std::chrono::steady_clock::duration wait_;
     /// 最近触发时刻 (默认构造 = steady_clock epoch, 表示从未触发)
     std::chrono::steady_clock::time_point last_{};
-    mutable std::mutex mutex_;
+    mutable std::mutex                    mutex_;
 };
 
 } // namespace util

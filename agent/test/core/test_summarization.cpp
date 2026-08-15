@@ -860,10 +860,10 @@ asio::awaitable<TestResult> run_summarization_tests() {
     {
         auto env = std::make_shared<SummarizationTestEnv>();
         env->session()->setModelName("small"); // max=1000 → 阈值 650 / 850
-        env->subagent->summary                  = "S1"; // 模拟 subagent 总结输出 (保留重要信息)
+        env->subagent->summary = "S1";         // 模拟 subagent 总结输出 (保留重要信息)
         env->handle->summarizationToolHandles["read_file"] = makeReadFileHandle();
 
-        auto longContent = makeLongContent(3000);
+        auto                               longContent = makeLongContent(3000);
         std::vector<neograph::ChatMessage> msgs{
             makeMsg("system", "sys"),
             makeMsg("user", "u1"),
@@ -995,7 +995,8 @@ asio::awaitable<TestResult> run_summarization_tests() {
         XX_TEST_EXPECT_EQ(
             summaryContent,
             std::string{
-                "[Previous conversation summary]: \nKey decision: X\nFile: /a/b/c.cpp\nAction: Y"}
+                "[Previous conversation summary]: \nKey decision: X\nFile: /a/b/c.cpp\nAction: Y"
+            }
         );
         XX_TEST_EXPECT_EQ(env->subagent->receivedArguments.size(), size_t{1});
     }

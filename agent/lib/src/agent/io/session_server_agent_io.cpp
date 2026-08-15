@@ -251,8 +251,7 @@ void SessionServerAgentIO::onPeerMessage(WireMessage msg) {
                     ex_,
                     [self]() -> asio::awaitable<void> {
                         if (!self->sysMonitor_) {
-                            self->sysMonitor_
-                                = std::make_shared<agentxx::expand::CpuGpuMonitor>();
+                            self->sysMonitor_ = std::make_shared<agentxx::expand::CpuGpuMonitor>();
                         }
                         auto monitor = self->sysMonitor_;
                         auto usage   = std::make_shared<agentxx::expand::CpuGpuUsage>();
@@ -267,8 +266,8 @@ void SessionServerAgentIO::onPeerMessage(WireMessage msg) {
                                     *usage = co_await agentxx::util::offloadAsync<
                                         agentxx::expand::CpuGpuUsage>(
                                         *agent->agentContext->blockingPool,
-                                        [monitor]() -> asio::awaitable<
-                                            agentxx::expand::CpuGpuUsage> {
+                                        [monitor](
+                                        ) -> asio::awaitable<agentxx::expand::CpuGpuUsage> {
                                             co_return co_await monitor->query();
                                         }
                                     );
@@ -460,31 +459,28 @@ void SessionServerAgentIO::subscribeCodegraphProgress() {
     // 这里仅做快照 + post 回 ex_ 线程, 由 onCodegraphProgress 统一节流推送,
     // 避免跨线程访问端点状态
 #if AGENTXX_ENABLE_CODEGRAPH
-    cg->setProgressCallback(
-        [weakSelf = std::weak_ptr<SessionServerAgentIO>{self}](
-            int processed, int total, std::string_view currentFile
-        ) {
-            auto sp = weakSelf.lock();
-            if (!sp) {
-                return;
-            }
-            WireCodegraphProgress p;
-            p.available   = true;
-            p.processed   = processed;
-            p.total       = total;
-            p.currentFile = std::string{currentFile};
-            // 完成信号 (调用方约定):
-            // - total>0 且 processed>=total: 索引正常结束
-            // - processed==0 且 total==0: 无文件可索引, 同样视为结束
-            // 其余情况视为进行中:
-            // - 流式遍历阶段 (processed>0, total=0)
-            // - 引用解析阶段 (processed>0, total=0, currentFile="resolve refs")
-            p.indexing = total > 0 ? !(processed >= total) : (processed > 0);
-            asio::post(sp->ex_, [sp, p = std::move(p)]() mutable {
-                sp->onCodegraphProgress(std::move(p));
-            });
+    cg->setProgressCallback([weakSelf = std::weak_ptr<SessionServerAgentIO>{self
+                             }](int processed, int total, std::string_view currentFile) {
+        auto sp = weakSelf.lock();
+        if (!sp) {
+            return;
         }
-    );
+        WireCodegraphProgress p;
+        p.available   = true;
+        p.processed   = processed;
+        p.total       = total;
+        p.currentFile = std::string{currentFile};
+        // 完成信号 (调用方约定):
+        // - total>0 且 processed>=total: 索引正常结束
+        // - processed==0 且 total==0: 无文件可索引, 同样视为结束
+        // 其余情况视为进行中:
+        // - 流式遍历阶段 (processed>0, total=0)
+        // - 引用解析阶段 (processed>0, total=0, currentFile="resolve refs")
+        p.indexing = total > 0 ? !(processed >= total) : (processed > 0);
+        asio::post(sp->ex_, [sp, p = std::move(p)]() mutable {
+            sp->onCodegraphProgress(std::move(p));
+        });
+    });
 #endif
 }
 
@@ -511,7 +507,7 @@ void SessionServerAgentIO::armCodegraphTailTimer() {
     if (cgTailTimer_) {
         return;
     }
-    auto t = std::make_shared<asio::steady_timer>(ex_);
+    auto t       = std::make_shared<asio::steady_timer>(ex_);
     cgTailTimer_ = t;
     t->expires_after(cgThrottle_.interval());
     auto self = shared_from_this();

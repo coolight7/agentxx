@@ -114,7 +114,9 @@ void test_fill_missing_tool_call_ids_unique() {
         XX_TEST_EXPECT_EQ(completion.message.tool_calls[0].id, "call_1");
         XX_TEST_EXPECT_TRUE(!completion.message.tool_calls[1].id.empty());
         // 与已有 id 不同
-        XX_TEST_EXPECT_TRUE(completion.message.tool_calls[1].id != completion.message.tool_calls[0].id);
+        XX_TEST_EXPECT_TRUE(
+            completion.message.tool_calls[1].id != completion.message.tool_calls[0].id
+        );
         // 格式为 call_<时间戳>_<随机数>
         XX_TEST_EXPECT_TRUE(completion.message.tool_calls[1].id.rfind("call_", 0) == 0);
         XX_TEST_EXPECT_TRUE(completion.message.tool_calls[1].id.find('_', 5) != std::string::npos);

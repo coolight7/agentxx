@@ -424,12 +424,9 @@ YamlAppConfig loadYamlConfig(
     if (root["codegraph"]) {
         auto cg = root["codegraph"];
         if (cg["enable"]) {
-            cfg.codeGraph.enable = resolveEnvVars(
-                                       cg["enable"].as<std::string>("false"),
-                                       dotEnvVars,
-                                       overrideEnvVars
-                                   )
-                                   == "true";
+            cfg.codeGraph.enable
+                = resolveEnvVars(cg["enable"].as<std::string>("false"), dotEnvVars, overrideEnvVars)
+                  == "true";
         }
         if (cg["paths"] && cg["paths"].IsSequence()) {
             for (const auto& node : cg["paths"]) {
@@ -515,9 +512,7 @@ YamlAppConfig loadYamlConfig(
                 XX_LOGW(R"([Config] Warning: plugins entry must be a map, skipped)");
                 continue;
             }
-            auto p = resolveEnvVars(
-                node["path"].as<std::string>(""), dotEnvVars, overrideEnvVars
-            );
+            auto p = resolveEnvVars(node["path"].as<std::string>(""), dotEnvVars, overrideEnvVars);
             if (p.empty()) {
                 XX_LOGW(R"([Config] Warning: plugin entry missing `path`, skipped)");
                 continue;
@@ -526,7 +521,9 @@ YamlAppConfig loadYamlConfig(
             pc.path = std::move(p);
             if (node["enabled"]) {
                 auto val = resolveEnvVars(
-                    node["enabled"].as<std::string>("true"), dotEnvVars, overrideEnvVars
+                    node["enabled"].as<std::string>("true"),
+                    dotEnvVars,
+                    overrideEnvVars
                 );
                 pc.enabled = val == "true";
             }

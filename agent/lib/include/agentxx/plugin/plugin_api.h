@@ -36,21 +36,21 @@ extern "C" {
 /* ==================== 插件元信息 ==================== */
 
 typedef struct AgentxxPluginInfo {
-    int         api_version;  ///< 必须 == AGENTXX_PLUGIN_API_VERSION
-    const char* name;         ///< 唯一标识, 如 "agentxx_plugin_js" (宿主内静态字符串, 无需释放)
+    int api_version; ///< 必须 == AGENTXX_PLUGIN_API_VERSION
+    const char* name; ///< 唯一标识, 如 "agentxx_plugin_js" (宿主内静态字符串, 无需释放)
     const char* version;
     const char* description;
 } AgentxxPluginInfo;
 
 /* ==================== 工具定义 ==================== */
 
-#define AGENTXX_TOOL_FLAG_NONE          0
-#define AGENTXX_TOOL_FLAG_AUTO_SUMMARY  (1 << 0) ///< 输出超限时自动压缩 (经 share_store 卸载)
+#define AGENTXX_TOOL_FLAG_NONE         0
+#define AGENTXX_TOOL_FLAG_AUTO_SUMMARY (1 << 0) ///< 输出超限时自动压缩 (经 share_store 卸载)
 
 typedef struct AgentxxToolSpec {
-    const char* name;             ///< 须全局唯一 (与内置工具/MCP 工具同名将注册失败)
+    const char* name; ///< 须全局唯一 (与内置工具/MCP 工具同名将注册失败)
     const char* description;
-    const char* parameters_json;  ///< JSON Schema 字符串 (json object)
+    const char* parameters_json; ///< JSON Schema 字符串 (json object)
     /// 同步执行回调 (宿主线程池线程):
     /// - args_json: 参数对象 JSON (含宿主注入的 thread_id / tool_call_id)
     /// - 返回: 结果 JSON 字符串, 必须用 host->alloc 分配 (宿主 free);
@@ -58,11 +58,16 @@ typedef struct AgentxxToolSpec {
     /// - 回调内可调用 call_tool / log / json_*; 不得阻塞宿主 io 线程
     /// - 注意: 宿主超时/取消仅终止"等待", 本回调一旦开始执行将持续到返回
     ///   (宿主按插件实例 inflight 计数保证其执行期间插件代码段不被卸载)
-    char* (*execute)(void* user_data, const char* args_json, const char* thread_id,
-                     const char* tool_call_id, char** error_out);
+    char* (*execute)(
+        void*       user_data,
+        const char* args_json,
+        const char* thread_id,
+        const char* tool_call_id,
+        char**      error_out
+    );
     void* user_data;
-    long  default_timeout_ms;     ///< 0 = 不限制 (宿主按调用方取消语义执行)
-    int   flags;                  ///< AGENTXX_TOOL_FLAG_*
+    long  default_timeout_ms; ///< 0 = 不限制 (宿主按调用方取消语义执行)
+    int   flags;              ///< AGENTXX_TOOL_FLAG_*
 } AgentxxToolSpec;
 
 /* ==================== 中间件钩子 ==================== */
@@ -83,9 +88,13 @@ typedef enum AgentxxHookPoint {
 /// - node_input_json: 节点输入摘要 ({"thread_id", "node", "messages_count", ...})
 /// - out_json: 预留, 一期恒为 NULL (回调不得写入)
 /// - 返回 0 成功; 非 0 失败并经 error_out 输出错误 (host->alloc 分配)
-typedef int (*AgentxxHookFn)(void* user_data, AgentxxHookPoint point,
-                             const char* node_input_json, char** out_json,
-                             char** error_out);
+typedef int (*AgentxxHookFn)(
+    void*            user_data,
+    AgentxxHookPoint point,
+    const char*      node_input_json,
+    char**           out_json,
+    char**           error_out
+);
 
 /* ==================== 事件订阅 ==================== */
 
@@ -102,14 +111,18 @@ typedef struct AgentxxHost AgentxxHost;
 ///   工具经此挂到调用方实例)
 /// - method/args_json: 提供者自定义方法契约 (JSON 字符串)
 /// - 返回: 结果 JSON 字符串 (host->alloc 分配); 失败返回 NULL 并经 error_out 输出
-typedef char* (*AgentxxCapabilityInvokeFn)(void* ctx, const AgentxxHost* caller_host,
-                                           const char* method, const char* args_json,
-                                           char** error_out);
+typedef char* (*AgentxxCapabilityInvokeFn)(
+    void*              ctx,
+    const AgentxxHost* caller_host,
+    const char*        method,
+    const char*        args_json,
+    char**             error_out
+);
 
 typedef struct AgentxxHostVtable {
     /* ---- 内存 (跨 CRT 堆边界的唯一分配通道) ---- */
     void* (*alloc)(size_t size);
-    void  (*free)(void* ptr);
+    void (*free)(void* ptr);
     char* (*strdup)(const char* s);
 
     /* ---- 工具注册 (热插拔) ---- */
@@ -119,16 +132,27 @@ typedef struct AgentxxHostVtable {
     int (*unregister_tool)(const AgentxxHost* host, const char* name);
 
     /* ---- 中间件钩子 (热插拔, 轮次边界生效) ---- */
-    int (*register_hook)(const AgentxxHost* host, AgentxxHookPoint point,
-                         AgentxxHookFn fn, void* user_data);
-    int (*unregister_hook)(const AgentxxHost* host, AgentxxHookPoint point,
-                           AgentxxHookFn fn, void* user_data);
+    int (*register_hook)(
+        const AgentxxHost* host,
+        AgentxxHookPoint   point,
+        AgentxxHookFn      fn,
+        void*              user_data
+    );
+    int (*unregister_hook)(
+        const AgentxxHost* host,
+        AgentxxHookPoint   point,
+        AgentxxHookFn      fn,
+        void*              user_data
+    );
 
     /* ---- 事件 (topic 自动加 "plugin." 前缀, 载荷为 JSON 字符串) ---- */
     /// 订阅; 返回句柄 (宿主侧持有, 插件卸载时自动退订)
-    AgentxxSubscription* (*subscribe)(const AgentxxHost* host, const char* topic,
-                                      void (*handler)(const char* event_json, void* ud),
-                                      void* ud);
+    AgentxxSubscription* (*subscribe)(
+        const AgentxxHost* host,
+        const char*        topic,
+        void (*handler)(const char* event_json, void* ud),
+        void* ud
+    );
     void (*unsubscribe)(AgentxxSubscription* sub);
     /// 发布 (异步投递, 立即返回)
     int (*publish)(const AgentxxHost* host, const char* topic, const char* event_json);
@@ -138,19 +162,28 @@ typedef struct AgentxxHostVtable {
     int (*register_capability)(const AgentxxHost* host, const char* capability);
     /// 注册能力并附带方法回调 (能力调用 = 通用插件间通信通道;
     /// 如 JS 引擎注册 "interpreter.js" 提供 load/unload 方法)
-    int (*register_capability_ex)(const AgentxxHost* host, const char* capability,
-                                  AgentxxCapabilityInvokeFn invoke, void* ctx);
+    int (*register_capability_ex)(
+        const AgentxxHost*        host,
+        const char*               capability,
+        AgentxxCapabilityInvokeFn invoke,
+        void*                     ctx
+    );
     int (*unregister_capability)(const AgentxxHost* host, const char* capability);
     int (*has_capability)(const AgentxxHost* host, const char* capability);
 
     /* ---- 能力调用 (插件间通信; io 线程约束, 跨线程经 post) ---- */
     /// 调用能力提供者的方法; 返回结果 JSON (host->alloc), 失败返回 NULL 并 error_out
-    char* (*invoke_capability)(const AgentxxHost* host, const char* capability,
-                               const char* method, const char* args_json, char** error_out);
+    char* (*invoke_capability)(
+        const AgentxxHost* host,
+        const char*        capability,
+        const char*        method,
+        const char*        args_json,
+        char**             error_out
+    );
 
     /* ---- 线程投递 (非 io 线程调用方使用; 二期) ---- */
     /// 当前线程是否为宿主 io 线程
-    int  (*is_io_thread)(const AgentxxHost* host);
+    int (*is_io_thread)(const AgentxxHost* host);
     /// 投递任务到宿主 io 线程异步执行 (不等待, 线程安全)
     void (*post_to_io)(const AgentxxHost* host, void (*fn)(void* ud), void* ud);
 
@@ -162,8 +195,13 @@ typedef struct AgentxxHostVtable {
     /// - 目标插件由宿主引用计数保活: 即使目标插件正在被卸载, 本次调用
     ///   期间其代码段也不会被释放
     /// - 返回结果 JSON 字符串 (host->alloc); 失败返回 NULL 并经 error_out 输出
-    char* (*call_tool)(const AgentxxHost* host, const char* name, const char* args_json,
-                       const char* thread_id, char** error_out);
+    char* (*call_tool)(
+        const AgentxxHost* host,
+        const char*        name,
+        const char*        args_json,
+        const char*        thread_id,
+        char**             error_out
+    );
 
     /* ---- 插件互查 (依赖协商/自适应; io 线程约束, 跨线程经 post) ---- */
     /// 全部已安装插件信息 JSON 数组 (host->alloc 分配):
@@ -178,8 +216,12 @@ typedef struct AgentxxHostVtable {
     /// 读取会话级 share_store 条目 (仅 io 线程); 不存在返回 NULL
     char* (*get_share_store)(const AgentxxHost* host, const char* thread_id, long long id);
     /// 向会话 UI 推送提示消息 (仅 io 线程); level: 0=info 1=warning 2=error
-    void (*emit_message_tip)(const AgentxxHost* host, const char* thread_id,
-                             const char* text, int level);
+    void (*emit_message_tip)(
+        const AgentxxHost* host,
+        const char*        thread_id,
+        const char*        text,
+        int                level
+    );
     /// 日志 (线程安全); level 与宿主 XX_LOG 级别对应 (0=trace 1=debug 2=info 3=warn 4=error)
     void (*log)(const AgentxxHost* host, int level, const char* msg);
 
@@ -195,7 +237,7 @@ typedef struct AgentxxHostVtable {
 
 struct AgentxxHost {
     const AgentxxHostVtable* vtable; ///< 函数表 (宿主静态)
-    void* opaque;                    ///< 宿主内部 (指向插件实例状态, 插件不得使用)
+    void* opaque; ///< 宿主内部 (指向插件实例状态, 插件不得使用)
 };
 
 /* ==================== 脚本引擎注册 (解释器插件委派, 二期) ==================== */

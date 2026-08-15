@@ -445,11 +445,11 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
         // 索引过滤配置 (加载路径/忽略路径/gitignore 开关; 相对路径已由
         // client 启动时按工作目录解析为绝对路径)
         agentxx::expand::CodeGraphIndexConfig cgConfig;
-        cgConfig.loadPaths          = config->codeGraphPaths;
-        cgConfig.ignorePaths        = config->codeGraphIgnorePaths;
-        cgConfig.useGitignore       = config->codeGraphUseGitignore;
+        cgConfig.loadPaths           = config->codeGraphPaths;
+        cgConfig.ignorePaths         = config->codeGraphIgnorePaths;
+        cgConfig.useGitignore        = config->codeGraphUseGitignore;
         cgConfig.autoLoadProjectRoot = config->codeGraphLoadCwd;
-        codegraph_             = std::make_shared<agentxx::expand::CodeGraphManager>(
+        codegraph_                   = std::make_shared<agentxx::expand::CodeGraphManager>(
             agentxx::agent::AgentConfigStatic::getSqliteDir(config->dataDir),
             std::move(cgConfig)
         );
@@ -539,11 +539,10 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
                                 co_return warmupCg->updateIndex();
                             }
                         );
-                        const auto costMs
-                            = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                  std::chrono::steady_clock::now() - startAt
-                              )
-                                  .count();
+                        const auto costMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                std::chrono::steady_clock::now() - startAt
+                        )
+                                                .count();
                         XX_LOGI(
                             "[codegraph] background warmup index {} ({}ms)",
                             ok ? "done" : "failed",
