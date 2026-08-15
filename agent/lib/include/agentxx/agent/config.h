@@ -83,6 +83,16 @@ struct McpServerConfig {
     std::chrono::milliseconds toolTimeout{std::chrono::seconds{120}};
 };
 
+/// 插件配置 (yaml `plugins` 列表项)
+struct PluginConfig {
+    /// 插件动态库路径 或 插件目录 (目录含 plugin.yaml 时按清单解析; 一期仅支持直接库路径)
+    std::string path;
+    /// 是否启用 (默认 true)
+    bool enabled = true;
+    /// 自定义参数 (预留; 一期仅存留供查询, 不传入插件)
+    neograph::json args;
+};
+
 class AgentConfig {
 public:
 
@@ -211,6 +221,9 @@ public:
     bool logPrintMessagesBeforeLLM              = false;
     bool logPrintMessagesBeforeLLMWithSystemMsg = false;
     bool logPrintSummarizationResultTokenCount  = false;
+
+    /// 插件配置 (yaml `plugins` 列表; 启动时由 PluginManager 加载)
+    std::vector<PluginConfig> plugins{};
 };
 
 } // namespace agent

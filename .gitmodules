@@ -55,3 +55,6 @@
 [submodule "agent/third_party/cmark_gfm"]
 	path = agent/third_party/cmark_gfm
 	url = https://github.com/coolight7/cmark-gfm
+[submodule "agent/third_party/quickjs"]
+	path = agent/third_party/quickjs
+	url = https://github.com/quickjs-ng/quickjs
