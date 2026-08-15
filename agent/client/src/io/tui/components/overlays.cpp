@@ -1,16 +1,14 @@
 #include "agentxx-client/io/tui/components/overlays.h"
 #include "agentxx-client/io/tui/agent_tui.h"
 #include "agentxx-client/io/tui/framework/tui_settings.h"
-#include "agentxx-client/io/tui/mermaid_state.h"
 #include "agentxx/util/exception.h"
 #include "ftxui/component/component.hpp"
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/terminal.hpp"
 #include <algorithm>
+#include <markdown/state_diagram.hpp>
 
 using namespace ftxui;
-
-namespace tui_mermaid = agentxx::client::tui;
 
 // ---------------------------------------------------------------------------
 // ModelSelectorOverlay
@@ -693,23 +691,6 @@ std::vector<ScrollItem> PlanDiagramOverlay::buildItems() {
     // 弹窗宽度: 终端宽 - 弹窗边框/留白; 超宽由渲染器按层截断
     const int maxW = std::max(40, Terminal::Size().dimx - 10);
 
-    // 按节点 id 状态后缀着色 (与 Info 侧边栏 Plan 展示一致)
-    auto colorOf = [&theme](std::string_view id) -> ftxui::Color {
-        if (id.ends_with("_in_progress")) {
-            return theme.thinkingColor;
-        }
-        if (id.ends_with("_completed")) {
-            return theme.accentColor;
-        }
-        if (id.ends_with("_failed")) {
-            return theme.errorColor;
-        }
-        if (id.ends_with("_pending")) {
-            return theme.hintColor;
-        }
-        return ftxui::Color::Default;
-    };
-
     // 缓存失效条件: plan 消息变化 (mutableMessage 复制 → 指针变化; 文本长度变化)
     // / 终端宽度变化 / 主题变化 (Element 着色)
     const size_t planTextLen = plan ? plan->text.size() : 0;
@@ -735,13 +716,15 @@ std::vector<ScrollItem> PlanDiagramOverlay::buildItems() {
             );
             if (cachedValid_) {
                 const auto roadmap = cachedArgs_.value("roadmap", std::string{});
-                cachedDiagram_     = tui_mermaid::parseMermaidStateDiagram(roadmap);
+                cachedDiagram_     = markdown::parseMermaidStateDiagram(roadmap);
                 if (!cachedDiagram_.nodes.empty()) {
-                    cachedElement_ = tui_mermaid::renderMermaidStateDiagram(
+                    // 节点按 id 状态后缀着色 (与 markdown 代码块渲染一致, 见
+                    // markdown::diagramNodeColor); 未着色单元使用 normalColor
+                    cachedElement_ = markdown::renderMermaidStateDiagram(
                         cachedDiagram_,
                         maxW,
                         theme.normalColor,
-                        colorOf
+                        markdown::diagramNodeColor(theme.markdownTheme)
                     );
                 }
             }

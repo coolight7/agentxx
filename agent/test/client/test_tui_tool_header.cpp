@@ -61,6 +61,9 @@ struct ToolHeaderFixture {
             m->tool->toolCallId   = "call_1";
             m->tool->toolFinished = true;
             m->text               = std::move(args);
+            // Tool 消息默认折叠展示 (与真实 TUI 流一致, 见 agent_tui.cpp);
+            // 折叠态头部才显示 "动词 · 参数摘要" 特化渲染
+            m->collapsed          = true;
             st.messages.push_back(std::move(m));
         });
     }
