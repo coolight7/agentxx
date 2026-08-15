@@ -165,7 +165,7 @@ std::optional<ftxui::Element> TUIClientAgentIO::renderPlanningInfo() {
             }
             lines.push_back(hbox({
                 text(fmt::format("{} ", icon)) | color(c),
-                paragraph(content) | color(c),
+                paragraph(content) | color(c) | xflex_shrink,
             }));
         }
     }
@@ -247,7 +247,7 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
                 status = "indexing ...";
             } else if (cg.total > 0) {
                 // 索引完成
-                status = fmt::format("avail {}/{}", cg.processed, cg.total);
+                status = fmt::format("available {}", cg.processed, cg.total);
             } else {
                 // 可用但尚未开始索引
                 status = "ready";
@@ -261,8 +261,8 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
             );
             appendEls.push_back(hbox({
                 text("|  ") | color(theme_.hintColor),
-                text(std::move(status))
-                    | color(cg.indexing ? theme_.accentColor : theme_.hintColor),
+                text(std::move(status)) | color(cg.indexing ? theme_.accentColor : theme_.hintColor)
+                    | xflex_shrink,
             }));
         }
 
@@ -282,7 +282,7 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
                                      agentxx::util::getFileName(notif.name),
                                      notif.name
                                  ))})
-                               : hbox({text("|  "), text(notif.name)}))
+                               : hbox({text("|  "), text(notif.name) | xflex_shrink}))
                     | color(notif.success ? theme_.hintColor : theme_.errorColor)
                 );
             }
@@ -333,7 +333,7 @@ ftxui::Element TUIClientAgentIO::renderInfoSidebarFooter() {
         hbox({
             text(fmt::format("Agentxx {} ", kAgentxxVersion)),
             filler(),
-            text(mode),
+            text(mode) | xflex_shrink,
         })
         | xflex | color(theme_.hintColor)
     );

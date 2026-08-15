@@ -834,9 +834,11 @@ Element MessageListComponent::buildMessageBlock(
 
     switch (msg.role) {
         case TUIMessage::Role::User:
+            // 内容超宽时 xflex_shrink 使段落吸收剩余宽度换行/裁剪,
+            // 避免 hbox 按比例压缩前缀 "> " (见 ftxui box_helper::ComputeShrinkHard)
             return hbox({
                 text("> ") | color(theme.userColor),
-                paragraph(msg.text) | color(theme.userColor),
+                paragraph(msg.text) | color(theme.userColor) | xflex_shrink,
             });
         case TUIMessage::Role::Assistant: {
             auto [el, builder]
@@ -856,7 +858,9 @@ Element MessageListComponent::buildMessageBlock(
             header.push_back(text(expanded ? "- " : "+ ") | color(tipColor));
             header.push_back(text("[System] ") | color(tipColor));
             if (!expanded) {
-                header.push_back(text(oneLinePreview(msg.text)) | color(tipColor) | dim);
+                // 预览可能超出宽度: xflex_shrink 使预览吸收剩余宽度并在右缘裁剪,
+                // 避免 hbox 把 "- [System] " 前缀一并压缩 (向左覆盖压缩)
+                header.push_back(text(oneLinePreview(msg.text)) | color(tipColor) | dim | xflex_shrink);
             }
             lines.push_back(hbox(std::move(header)));
             if (expanded) {
@@ -889,7 +893,8 @@ Element MessageListComponent::buildMessageBlock(
             header.push_back(text(expanded ? "- " : "+ ") | color(tipColor));
             header.push_back(text(prefix) | color(tipColor));
             if (!expanded) {
-                header.push_back(text(oneLinePreview(msg.text)) | color(tipColor));
+                // 同 System: 预览超宽时右缘裁剪, 不压缩前缀
+                header.push_back(text(oneLinePreview(msg.text)) | color(tipColor) | xflex_shrink);
             }
             lines.push_back(hbox(std::move(header)));
             if (expanded) {
@@ -911,7 +916,10 @@ Element MessageListComponent::buildMessageBlock(
                 header.push_back(text(" "));
             }
             if (!expanded) {
-                header.push_back(text(oneLinePreview(msg.text)) | color(theme.thinkingColor) | dim);
+                // 同 System: 预览超宽时右缘裁剪, 不压缩前缀
+                header.push_back(
+                    text(oneLinePreview(msg.text)) | color(theme.thinkingColor) | dim | xflex_shrink
+                );
             }
             lines.push_back(hbox(std::move(header)));
             if (expanded) {
@@ -948,9 +956,9 @@ Element MessageListComponent::buildMessageBlock(
                 } else {
                     auto headerText = buildToolHeaderSummary(msg.tool->toolName, msg.text);
                     if (false == headerText.empty()) {
-                        // 特化渲染
+                        // 特化渲染 (摘要可能超宽: xflex_shrink 右缘裁剪, 不压缩前缀)
                         header.push_back(
-                            text(std::move(headerText)) | color(theme.toolColor) | dim
+                            text(std::move(headerText)) | color(theme.toolColor) | dim | xflex_shrink
                         );
                     } else {
                         header.push_back(
@@ -959,7 +967,7 @@ Element MessageListComponent::buildMessageBlock(
                                 msg.tool->toolName,
                                 oneLinePreview(msg.tool->toolResult)
                             ))
-                            | color(theme.toolColor) | dim
+                            | color(theme.toolColor) | dim | xflex_shrink
                         );
                     }
                 }
@@ -975,13 +983,13 @@ Element MessageListComponent::buildMessageBlock(
                     if (!msg.text.empty()) {
                         lines.push_back(hbox({
                             text("  args: ") | color(theme.toolColor),
-                            paragraph(msg.text) | color(theme.toolColor),
+                            paragraph(msg.text) | color(theme.toolColor) | xflex_shrink,
                         }));
                     }
                     if (finished) {
                         lines.push_back(hbox({
                             text("  result: ") | color(theme.toolColor),
-                            paragraph(msg.tool->toolResult) | color(theme.toolColor),
+                            paragraph(msg.tool->toolResult) | color(theme.toolColor) | xflex_shrink,
                         }));
                     } else {
                         lines.push_back(text("  running...") | color(theme.toolColor));
@@ -1008,13 +1016,13 @@ Element MessageListComponent::buildMessageBlock(
                     ))
                     | color(theme.accentColor) | bold
                 );
-                header.push_back(text(msg.interrupt->inputLabel) | color(theme.accentColor));
+                header.push_back(text(msg.interrupt->inputLabel) | color(theme.accentColor) | xflex_shrink);
                 lines.push_back(hbox(std::move(header)));
 
                 if (!msg.interrupt->inputDepict.empty()) {
                     lines.push_back(hbox({
                         text("  ") | color(theme.hintColor),
-                        text(msg.interrupt->inputDepict) | color(theme.hintColor),
+                        text(msg.interrupt->inputDepict) | color(theme.hintColor) | xflex_shrink,
                     }));
                 }
 
@@ -1028,7 +1036,7 @@ Element MessageListComponent::buildMessageBlock(
                     if (it != interruptUi_.end() && !it->second.tip.empty()) {
                         lines.push_back(hbox({
                             text("  ") | color(theme.hintColor),
-                            text(it->second.tip) | color(theme.errorColor),
+                            text(it->second.tip) | color(theme.errorColor) | xflex_shrink,
                         }));
                     }
                 }
@@ -1060,7 +1068,7 @@ void MessageListComponent::appendEditToolBody(const TUIMessage& msg, Elements& l
     if (msg.tool && msg.tool->toolFinished && isToolResultError(msg.tool->toolResult)) {
         lines.push_back(hbox({
             text("  result: ") | color(theme.toolColor),
-            paragraph(msg.tool->toolResult) | color(theme.errorColor),
+            paragraph(msg.tool->toolResult) | color(theme.errorColor) | xflex_shrink,
         }));
         return;
     }
@@ -1080,7 +1088,7 @@ void MessageListComponent::appendEditToolBody(const TUIMessage& msg, Elements& l
     if (!path.empty()) {
         lines.push_back(hbox({
             text("  file: ") | color(theme.hintColor),
-            text(path) | color(theme.toolColor),
+            text(path) | color(theme.toolColor) | xflex_shrink,
         }));
     }
     lines.push_back(renderEditToolDiff(oldStr, newStr));
@@ -1141,7 +1149,7 @@ Element MessageListComponent::renderEditToolDiff(std::string_view oldStr, std::s
             text(sign) | color(c),
             text(noStr) | color(theme.hintColor) | size(WIDTH, EQUAL, 4),
             text(" "),
-            text(trunc(txt, static_cast<size_t>(textW))) | color(c),
+            text(trunc(txt, static_cast<size_t>(textW))) | color(c) | xflex_shrink,
         });
     };
 
@@ -1213,19 +1221,21 @@ Element MessageListComponent::buildInterruptStatusLine(const TUIMessage& msg) {
                 text(fmt::format("! [Interrupt] Input {}/{}: ", it.inputIndex, it.inputTotal))
                     | color(theme.hintColor),
                 text(fmt::format("已确认 {}: {}", it.inputLabel, it.interruptResult))
-                    | color(theme.accentColor) | dim,
+                    | color(theme.accentColor) | dim | xflex_shrink,
             });
         case TUIMessage::InterruptStatus::Cancelled:
             return hbox({
                 text(fmt::format("! [Interrupt] Input {}/{}: ", it.inputIndex, it.inputTotal))
                     | color(theme.hintColor),
-                text(fmt::format("{}: 已取消", it.inputLabel)) | color(theme.errorColor) | dim,
+                text(fmt::format("{}: 已取消", it.inputLabel)) | color(theme.errorColor) | dim
+                    | xflex_shrink,
             });
         case TUIMessage::InterruptStatus::Expired:
             return hbox({
                 text(fmt::format("! [Interrupt] Input {}/{}: ", it.inputIndex, it.inputTotal))
                     | color(theme.hintColor),
-                text(fmt::format("{}: 已过期", it.inputLabel)) | color(theme.errorColor) | dim,
+                text(fmt::format("{}: 已过期", it.inputLabel)) | color(theme.errorColor) | dim
+                    | xflex_shrink,
             });
         default:
             return text("");
@@ -1316,7 +1326,7 @@ Element MessageListComponent::buildInterruptControl(const TUIMessage& msg, size_
             minus,
             text(" "),
             text(" " + ui.editText + " ") | bgcolor(theme.inputBgColor)
-                | color(theme.inputTextColor) | reflect(*editBox),
+                | color(theme.inputTextColor) | reflect(*editBox) | xflex_shrink,
             text(" "),
             plus,
             text("  "),
@@ -1362,7 +1372,7 @@ Element MessageListComponent::buildInterruptControl(const TUIMessage& msg, size_
         hit(kHitEdit, 0, editBox);
         control = hbox({
             text(" " + ui.editText + " ") | bgcolor(theme.inputBgColor)
-                | color(theme.inputTextColor) | reflect(*editBox),
+                | color(theme.inputTextColor) | reflect(*editBox) | xflex_shrink,
             text("  "),
             confirmBtn,
             text("  "),

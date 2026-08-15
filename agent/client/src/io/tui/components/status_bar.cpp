@@ -25,7 +25,7 @@ Element StatusBarComponent::OnRender() {
             text(fmt::format(
                 "{}%",
                 static_cast<int>(100.0 * static_cast<double>(ctx) / static_cast<double>(maxCtx))
-            )) | color(theme.hintColor),
+            )) | color(theme.hintColor) | xflex_shrink,
         });
     } else {
         ctxText = text(fmt::format("{}", agentxx::util::formatSize(ctx))) | color(theme.hintColor);
@@ -33,18 +33,22 @@ Element StatusBarComponent::OnRender() {
 
     // 模型区域: 整体作为可点击区域 (点击打开模型选择弹窗)
     // - 流式期间 (ModelCall) 在上下文占比之后追加显示平均生成速度 (token/s)
+    // - 模型名/上下文可能超宽: xflex_shrink 使长内容吸收剩余宽度并在右缘裁剪,
+    //   避免 hbox 按比例压缩 "[F2] " 等前缀及右侧按钮 (向左覆盖压缩)
     std::vector<Element> modelChildren = {
         text("[F2] ") | color(theme.hintColor),
-        text(modelName) | color(theme.accentColor),
+        text(modelName) | color(theme.accentColor) | xflex_shrink,
         text(" · ") | color(theme.hintColor),
-        ctxText | color(theme.hintColor),
+        ctxText | color(theme.hintColor) | xflex_shrink,
     };
     const int tps = static_cast<int>(st.tps);
     if (st.isStreaming && tps > 0) {
         modelChildren.push_back(text("·") | color(theme.hintColor) | dim);
         modelChildren.push_back(text(fmt::format("{}t/s", tps)) | color(theme.hintColor));
     }
-    auto modelInfo = hbox(std::move(modelChildren)) | reflect(modelBox_);
+    // 外层 hbox 也需感知 modelInfo 可收缩, 否则整块被按比例压缩 (见
+    // ftxui box_helper::ComputeShrinkHard: 不可收缩元素同样被缩减)
+    auto modelInfo = hbox(std::move(modelChildren)) | xflex_shrink | reflect(modelBox_);
 
     // Sessions 按钮: 可点击打开会话选择弹窗 (F4), 位于 Settings 左侧
     auto sessionsText = text("[F4] Sessions") | color(theme.hintColor) | reflect(sessionBox_);
