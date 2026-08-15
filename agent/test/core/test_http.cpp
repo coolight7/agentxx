@@ -320,6 +320,17 @@ void test_http_client_unit() {
         XX_TEST_EXPECT_FALSE(HttpClient::parseUrl("http://[::1").has_value());
         XX_TEST_EXPECT_FALSE(HttpClient::parseUrl("http://host:99999/").has_value());
         XX_TEST_EXPECT_FALSE(HttpClient::parseUrl("http://:8080/").has_value());
+        // 回归: `]` 后非 ':' 的非法格式 (旧实现静默忽略 "abc")
+        XX_TEST_EXPECT_FALSE(HttpClient::parseUrl("http://[::1]abc/").has_value());
+        XX_TEST_EXPECT_FALSE(HttpClient::parseUrl("http://[::1]8080/").has_value());
+        // `[::1]` 无端口是合法 IPv6 URL
+        auto p6 = HttpClient::parseUrl("http://[::1]");
+        XX_TEST_EXPECT_HAS_VALUE(p6);
+        if (p6.has_value()) {
+            XX_TEST_EXPECT_EQ(p6->host, "::1");
+            XX_TEST_EXPECT_EQ(p6->port, 80);
+            XX_TEST_EXPECT_EQ(p6->path, "/");
+        }
     }
 
     {
@@ -479,6 +490,34 @@ void test_http_server_unit() {
         XX_TEST_EXPECT_EQ(
             HttpClient::resolveRedirectUrl("http://example.com/a", "#only-fragment"),
             "http://example.com/a"
+        );
+        // 回归: 相对 Location 含 "./"、"../" 段时做 URL 词法规范化
+        // (旧实现原样拼接, 得到错误路径)
+        XX_TEST_EXPECT_EQ(
+            HttpClient::resolveRedirectUrl("http://example.com/a/b/c", "../d"),
+            "http://example.com/a/d"
+        );
+        XX_TEST_EXPECT_EQ(
+            HttpClient::resolveRedirectUrl("http://example.com/a/b/c", "../../d"),
+            "http://example.com/d"
+        );
+        XX_TEST_EXPECT_EQ(
+            HttpClient::resolveRedirectUrl("http://example.com/a/b/c", "./d"),
+            "http://example.com/a/b/d"
+        );
+        XX_TEST_EXPECT_EQ(
+            HttpClient::resolveRedirectUrl("http://example.com/a/b", "../.."),
+            "http://example.com/"
+        );
+        // 超过根的 "../" 丢弃
+        XX_TEST_EXPECT_EQ(
+            HttpClient::resolveRedirectUrl("http://example.com/a", "../../../x"),
+            "http://example.com/x"
+        );
+        // 混合路径 + query string
+        XX_TEST_EXPECT_EQ(
+            HttpClient::resolveRedirectUrl("http://example.com/a/b/c", "../d?x=1"),
+            "http://example.com/a/d?x=1"
         );
     }
 }

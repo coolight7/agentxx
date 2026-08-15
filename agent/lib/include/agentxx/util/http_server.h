@@ -218,6 +218,11 @@ private:
             namespace http = boost::beast::http;
             co_return co_await agentxx::util::catchErrorAsync<bool>(
                 [&]() -> asio::awaitable<bool> {
+                    // 已发送 SSE 头或完整响应后不能再写完整 HTTP 响应:
+                    // 会破坏协议 (双响应/流帧错位), 直接返回失败
+                    if (headerSent_ || responseSent_) {
+                        co_return false;
+                    }
                     responseSent_ = true;
                     http::response<http::string_body> resp;
                     resp.version(11);
@@ -236,11 +241,9 @@ private:
                 [&](std::string errinfo) -> asio::awaitable<bool> {
                     XX_LOGE("[sse] write response error: {}", errinfo);
                     co_return false;
-                },
-                [](std::string& errinfo) -> std::optional<bool> {
-                    XX_LOGE("[sse] write response error: {}", errinfo);
-                    return false;
                 }
+                // 不传 onRethrow: CancelledException/NodeInterrupt 保持抛出 (项目约定),
+                // 避免取消被吞掉后 SSE 流无法终止
             );
         }
 
@@ -284,11 +287,8 @@ private:
                 [&](std::string errinfo) -> asio::awaitable<bool> {
                     XX_LOGE("[sse] write error: {}", errinfo);
                     co_return false;
-                },
-                [](std::string& errinfo) -> std::optional<bool> {
-                    XX_LOGE("[sse] write error: {}", errinfo);
-                    return false;
                 }
+                // 不传 onRethrow: CancelledException/NodeInterrupt 保持抛出 (项目约定)
             );
         }
 
@@ -476,14 +476,15 @@ private:
             if (methodIdx == 0) { // GET
                 auto sseIt = sseRoutes_.find(path);
                 if (sseIt != sseRoutes_.end()) {
-                    // handler 异常统一经 catchErrorAsync 转为 500 (错误消息含 UTF-8
-                    // 转换); CancelledException/NodeInterrupt 保持抛出以终止本连接
+                    // handler 异常统一经 catchErrorAsync 处理: 若尚未发送任何 SSE
+                    // 数据, 经 writer 回写 500 响应; 已发送则连接随后关闭。
+                    // CancelledException/NodeInterrupt 保持抛出 (无 onRethrow) 终止本连接
+                    auto writer = std::make_shared<SseWriterImpl<Stream>>(
+                        stream,
+                        config_.sseWriteTimeout
+                    );
                     auto sseOk = co_await agentxx::util::catchErrorAsync<bool>(
                         [&]() -> asio::awaitable<bool> {
-                            auto writer = std::make_shared<SseWriterImpl<Stream>>(
-                                stream,
-                                config_.sseWriteTimeout
-                            );
                             co_await sseIt->second(req, writer);
                             co_return true;
                         },
@@ -494,13 +495,14 @@ private:
                                 req.target(),
                                 errInfo
                             );
-                            fillError(
-                                resp,
-                                req.version(),
+                            // 已发送 SSE 数据时 writeResponse 返回 false (不破坏协议),
+                            // 连接随后关闭; 无论如何标记已处理, 避免回落普通路由
+                            co_await writer->writeResponse(
                                 http::status::internal_server_error,
+                                "text/plain",
                                 "Internal Server Error"
                             );
-                            co_return false;
+                            co_return true;
                         }
                     );
                     if (sseOk) {
@@ -519,12 +521,12 @@ private:
             if (methodIdx == 2) { // POST
                 auto sseIt = ssePostRoutes_.find(path);
                 if (sseIt != ssePostRoutes_.end()) {
+                    auto writer = std::make_shared<SseWriterImpl<Stream>>(
+                        stream,
+                        config_.sseWriteTimeout
+                    );
                     auto sseOk = co_await agentxx::util::catchErrorAsync<bool>(
                         [&]() -> asio::awaitable<bool> {
-                            auto writer = std::make_shared<SseWriterImpl<Stream>>(
-                                stream,
-                                config_.sseWriteTimeout
-                            );
                             co_await sseIt->second(req, writer);
                             co_return true;
                         },
@@ -535,13 +537,14 @@ private:
                                 req.target(),
                                 errInfo
                             );
-                            fillError(
-                                resp,
-                                req.version(),
+                            // 同 GET SSE: 尚未发送数据时回写 500, 已发送则连接关闭;
+                            // 标记已处理避免回落普通路由 (404/405 覆盖)
+                            co_await writer->writeResponse(
                                 http::status::internal_server_error,
+                                "text/plain",
                                 "Internal Server Error"
                             );
-                            co_return false;
+                            co_return true;
                         }
                     );
                     if (sseOk) {
@@ -556,8 +559,9 @@ private:
                 auto upgradeIt = req.find(http::field::upgrade);
                 if (upgradeIt != req.end()
                     && boost::beast::iequals(upgradeIt->value(), "websocket")) {
-                    // WS 升级/处理异常统一经 catchErrorAsync 转换;
-                    // CancelledException/NodeInterrupt 保持抛出
+                    // WS 升级/处理异常统一经 catchErrorAsync 处理; 升级失败或 handler
+                    // 异常时连接已不可用 (ws stream 析构即关闭), 标记已处理避免回落
+                    // 普通路由; CancelledException/NodeInterrupt 保持抛出 (无 onRethrow)
                     auto wsOk = co_await agentxx::util::catchErrorAsync<bool>(
                         [&]() -> asio::awaitable<bool> {
                             if constexpr (std::is_same_v<Stream, boost::beast::tcp_stream>) {
@@ -609,13 +613,10 @@ private:
                         },
                         [&](std::string errInfo) -> asio::awaitable<bool> {
                             XX_LOGE("[server] WS upgrade error [{}]: {}", req.target(), errInfo);
-                            fillError(
-                                resp,
-                                req.version(),
-                                http::status::internal_server_error,
-                                "WebSocket Error"
-                            );
-                            co_return false;
+                            // 升级/处理失败: 连接已不可用 (流可能已移入 ws stream,
+                            // 无法再发送 HTTP 错误响应, 由 ws 析构关闭连接);
+                            // 标记已处理, 避免被下方 404/405 覆盖
+                            co_return true;
                         }
                     );
                     if (wsOk) {
@@ -634,7 +635,7 @@ private:
                 }
                 if (handler && *handler) {
                     // handler 异常统一经 catchErrorAsync 转为 500;
-                    // CancelledException/NodeInterrupt 保持抛出
+                    // CancelledException/NodeInterrupt 保持抛出 (无 onRethrow)
                     handled = co_await agentxx::util::catchErrorAsync<bool>(
                         [&]() -> asio::awaitable<bool> {
                             co_await (*handler)(req, resp, matchedPath);
@@ -653,7 +654,9 @@ private:
                                 http::status::internal_server_error,
                                 "Internal Server Error"
                             );
-                            co_return false;
+                            // 已填充 500 响应, 返回 true 表示已处理,
+                            // 避免被下方 404/405 分支覆盖
+                            co_return true;
                         }
                     );
                 }
