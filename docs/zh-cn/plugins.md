@@ -369,7 +369,7 @@ agentxx.onToolEnd((ctx) => agentxx.emitMessageTip(ctx.thread_id, "天气查询�
 | agentxx 桥 | 全局 `agentxx` 对象 (每脚本插件独立 JSContext) | registerTool/unregisterTool/callTool/getShareStore/emitMessageTip/log/onHook/offHook/subscribe/unsubscribe/publish + 全局 `setTimeout`/`clearTimeout` (定时器桥) |
 | Promise 驱动 | `drivePromise` | 循环 `JS_ExecutePendingJob` 直至 settle; 无 job 时执行到期定时器 + 让出 (支持 await/setTimeout 异步); 超时由 interrupt handler 兜底 |
 | 沙箱 | 内存 64MB / 栈 512KB / 任务 60s 超时 | 不引入 quickjs-libc (无 os/std 模块); 仅标准 ECMA + agentxx 桥 |
-| JS 示例插件 | `agent/plugins/js_example/` (plugin.yaml + plugin.js) | 4 工具 (同步/async Promise/JS 内互调/宿主互调) + 钩子 + 事件订阅 + 顶层异步初始化; 构建时拷贝到 exec/plugins/ |
+| JS 示例插件 | `agent/plugins/example_js/` (plugin.yaml + plugin.js) | 4 工具 (同步/async Promise/JS 内互调/宿主互调) + 钩子 + 事件订阅 + 顶层异步初始化; 构建时拷贝到 exec/plugins/ |
 | 测试 | `test_plugins` 模块 12-19 段 | 引擎加载/脚本插件加载/工具执行/互调/卸载/级联 (67 项全过) |
 
 #### 11.4.2 JS 线程模型要点 (实现为准)

@@ -220,7 +220,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
     namespace fs       = std::filesystem;
     auto        jsPath = findExamplePluginPath();
     std::string jsLib  = (fs::path(jsPath).parent_path() / "libagentxx_plugin_js.so").string();
-    std::string jsDir  = (fs::path(jsPath).parent_path() / "plugins" / "js_example").string();
+    std::string jsDir  = (fs::path(jsPath).parent_path() / "plugins" / "example_js").string();
 
     // ---- 12. JS 引擎插件加载 (二期) ----
     {
@@ -242,11 +242,11 @@ asio::awaitable<TestResult> run_plugin_tests() {
             XX_TEST_EXPECT_TRUE(false);
             co_return TestResult{g_plugin_passed, g_plugin_failed};
         }
-        XX_TEST_EXPECT_EQ(jsInst->name, "js_example");
+        XX_TEST_EXPECT_EQ(jsInst->name, "example_js");
         // 统一模型: 所有插件都是 C++ 插件 (有 dlHandle), 无 type 概念;
         // 脚本能力由壳经能力调用委派给引擎 (宿主不参与)
         XX_TEST_EXPECT_TRUE(jsInst->dlHandle != nullptr);
-        XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("js_example") == jsInst);
+        XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("example_js") == jsInst);
         // 依赖声明 (manifest depends: [agentxx_plugin_js])
         XX_TEST_EXPECT_EQ(jsInst->depends.size(), size_t{1});
         XX_TEST_EXPECT_EQ(jsInst->depends[0], "agentxx_plugin_js");
@@ -309,10 +309,10 @@ asio::awaitable<TestResult> run_plugin_tests() {
 
         // ---- 17. 卸载 JS 插件: 工具摘除 + 引擎侧清理 ----
         {
-            auto ok = co_await ctx->pluginManager->unloadAsync("js_example");
+            auto ok = co_await ctx->pluginManager->unloadAsync("example_js");
             XX_TEST_EXPECT_TRUE(ok);
             XX_TEST_EXPECT_FALSE(ctx->toolRegistry->contains("js_hello"));
-            XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("js_example") == nullptr);
+            XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("example_js") == nullptr);
             // 宿主 example_echo 不受影响
             XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("example_echo"));
         }
@@ -342,19 +342,19 @@ asio::awaitable<TestResult> run_plugin_tests() {
                 co_return TestResult{g_plugin_passed, g_plugin_failed};
             }
             XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("js_hello"));
-            // 卸载引擎 → 级联卸载 js_example (依赖图: js_example depends 引擎)
+            // 卸载引擎 → 级联卸载 example_js (依赖图: example_js depends 引擎)
             auto ok = co_await ctx->pluginManager->unloadAsync("agentxx_plugin_js");
             XX_TEST_EXPECT_TRUE(ok);
-            XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("js_example") == nullptr);
+            XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("example_js") == nullptr);
             XX_TEST_EXPECT_FALSE(ctx->toolRegistry->contains("js_hello"));
         }
 
         // ---- 21. 依赖检查: 必选依赖缺失 → 加载失败 ----
         {
-            // 引擎未加载, js_example depends agentxx_plugin_js → 加载失败
+            // 引擎未加载, example_js depends agentxx_plugin_js → 加载失败
             auto js3 = co_await ctx->pluginManager->loadPluginAsync(jsDir);
             XX_TEST_EXPECT_TRUE(js3 == nullptr);
-            XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("js_example") == nullptr);
+            XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("example_js") == nullptr);
         }
 
         // ---- 22. 插件互查 API (vtable list_plugins/get_plugin) ----
@@ -379,7 +379,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
                     }
                     XX_TEST_EXPECT_TRUE(hasInterp);
                 }
-                auto jsJson = ctx->pluginManager->getPluginJson("js_example");
+                auto jsJson = ctx->pluginManager->getPluginJson("example_js");
                 XX_TEST_EXPECT_FALSE(jsJson.empty());
                 if (!jsJson.empty()) {
                     auto j = neograph::json::parse(jsJson);
@@ -398,7 +398,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
                     auto arr     = neograph::json::parse(allJson);
                     bool foundJs = false;
                     for (const auto& item : arr) {
-                        if (item["name"].get<std::string>() == "js_example"
+                        if (item["name"].get<std::string>() == "example_js"
                             && item["depends"][0].get<std::string>() == "agentxx_plugin_js") {
                             foundJs = true;
                         }
@@ -408,7 +408,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
                 // 未安装插件 → 空
                 XX_TEST_EXPECT_TRUE(ctx->pluginManager->getPluginJson("not_installed").empty());
             }
-            co_await ctx->pluginManager->unloadAsync("js_example");
+            co_await ctx->pluginManager->unloadAsync("example_js");
             co_await ctx->pluginManager->unloadAsync("agentxx_plugin_js");
         }
     }
@@ -502,15 +502,15 @@ asio::awaitable<TestResult> run_plugin_tests() {
         auto js25 = co_await ctx->pluginManager->loadPluginAsync(jsDir);
         XX_TEST_EXPECT_TRUE(js25 != nullptr);
         if (engine25 && js25) {
-            ctx->pluginManager->disable("js_example"); // 用户手动禁用
-            XX_TEST_EXPECT_FALSE(ctx->pluginManager->find("js_example")->enabled);
+            ctx->pluginManager->disable("example_js"); // 用户手动禁用
+            XX_TEST_EXPECT_FALSE(ctx->pluginManager->find("example_js")->enabled);
             // 启用引擎 → 不应级联恢复被用户手动禁用的脚本插件
             ctx->pluginManager->enable("agentxx_plugin_js");
-            XX_TEST_EXPECT_FALSE(ctx->pluginManager->find("js_example")->enabled);
+            XX_TEST_EXPECT_FALSE(ctx->pluginManager->find("example_js")->enabled);
             // 用户显式启用 → 恢复
-            ctx->pluginManager->enable("js_example");
-            XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("js_example")->enabled);
-            co_await ctx->pluginManager->unloadAsync("js_example");
+            ctx->pluginManager->enable("example_js");
+            XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("example_js")->enabled);
+            co_await ctx->pluginManager->unloadAsync("example_js");
             co_await ctx->pluginManager->unloadAsync("agentxx_plugin_js");
         }
     }
@@ -524,13 +524,13 @@ asio::awaitable<TestResult> run_plugin_tests() {
         auto js26 = co_await ctx->pluginManager->loadPluginAsync(jsDir);
         XX_TEST_EXPECT_TRUE(js26 != nullptr);
         ctx->pluginManager->shutdownAll();
-        XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("js_example") == nullptr);
+        XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("example_js") == nullptr);
         XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("agentxx_plugin_js") == nullptr);
     }
 
     // ---- 27. loadConfiguredPlugins 拓扑排序: 配置顺序无关 (脚本插件在前也能加载) ----
     // - 库路径项按文件名推导插件名 (libagentxx_plugin_js.so → agentxx_plugin_js),
-    //   参与依赖排序: js_example (depends agentxx_plugin_js) 排在引擎之后
+    //   参与依赖排序: example_js (depends agentxx_plugin_js) 排在引擎之后
     {
         std::vector<agentxx::agent::PluginConfig> cfgs;
         // 故意把脚本插件目录写在引擎库之前 (配置顺序与依赖顺序相反)
@@ -545,17 +545,17 @@ asio::awaitable<TestResult> run_plugin_tests() {
         co_await ctx->pluginManager->loadConfiguredPlugins(cfgs);
         // 两者都应加载成功 (拓扑排序保证引擎先加载)
         XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("agentxx_plugin_js") != nullptr);
-        XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("js_example") != nullptr);
+        XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("example_js") != nullptr);
         XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("js_hello"));
         // 清理
         co_await ctx->pluginManager->unloadAsync("agentxx_plugin_js");
-        XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("js_example") == nullptr); // 级联卸载
+        XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("example_js") == nullptr); // 级联卸载
         // 禁用项不加载
         agentxx::agent::PluginConfig disCfg;
         disCfg.path    = jsDir;
         disCfg.enabled = false;
         co_await ctx->pluginManager->loadConfiguredPlugins({disCfg});
-        XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("js_example") == nullptr);
+        XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("example_js") == nullptr);
     }
 
     co_return TestResult{g_plugin_passed, g_plugin_failed};
