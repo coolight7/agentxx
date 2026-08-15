@@ -472,23 +472,75 @@ PluginInstance (一切插件都是 C++ 插件)
 | 引擎插件卸载 | 先级联卸载全部 depends 它的脚本插件, 再 dlclose 引擎 (binding 永不悬垂) |
 | 加载顺序 | 脚本插件须在引擎之后加载 (本期报错提示; 三期做拓扑排序/自动装配) |
 
-#### 11.5.4 与旧实现的差异
-
-| 项 | 旧 (二期初版) | 新 (统一模型) |
-|----|--------------|--------------|
-| 插件类型 | PluginInstance::type (native/js/...) | 无 type 概念, 全部 C++ 插件 |
-| 脚本加载 | 宿主 loadScriptAsync 委派 | 插件 C++ 壳 invoke_capability |
-| 脚本运行时管理 | 宿主 scriptDelegations_ 记录 | 引擎内部 (load/unload 方法) |
-| 脚本注册归属 | 脚本插件实例 (伪类型) | 壳插件实例 (caller_host) |
-| 未来 py/lua | 需改宿主 | 注册 interpreter.py 能力即可, 宿主零改动 |
-
 ### 11.6 尚未实现 (后续阶段)
 
-- `AgentConfig::plugins` 的 yaml 配置段解析 (`config_loader`) —— 结构体已就绪, client 侧解析未接
-- `agentxx_cli plugin list/install/unload/disable` 命令
+> 2026-08 更新: `plugins:` yaml 配置段解析 (config_loader + main.cpp) 与插件依赖拓扑排序 (loadConfiguredPlugins) 已实现 (见 11.7.3), 从本清单移除。
+
 - Wire 协议远程热管理 / TUI 插件面板 (三期)
-- 插件依赖排序 / 签名校验
+- 插件签名校验 (依赖排序已完成)
 - 插件钩子的 out_json 修改能力、permission 联动注册 (插件工具默认走 PermissionMiddleware 的未注册规则兜底)
+
+### 11.7 框架审查修复记录 (2026-08)
+
+> 对 11.1~11.5 实现的全量审查 (对照设计文档) 后修复的问题清单, 实现为准。
+
+#### 11.7.1 高危修复
+
+| # | 问题 | 现象 | 修复 |
+|---|------|------|------|
+| H1 | 工具超时后卸载竞态 | `asyncWithTimeout` 取消等待协程 → 协程帧 `InflightGuard` 提前释放 → 线程池 C 回调仍在执行时 `unloadAsync` 判 inflight==0 → dlclose → 执行已卸载代码段 (崩溃) | inflight 计数移入线程池入口 (run lambda 内), 且 run 按值捕获 `shared_ptr<PluginInstance>`: 回调执行期间引用计数保活, 卸载必须等回调真正返回 |
+| H2 | `shutdownAll` 不调 unload 回调 | 正常退出路径 (AgentContext 析构) 直接 dlclose → JS 引擎线程未 join 即被卸载 (UAF); 脚本插件 JSContext 未释放 → JS_FreeRuntime 断言 | shutdownAll 按依赖图逆序 (先子后父) 逐插件: detachAll → unload 回调 (引擎 join 线程) → dlclose; 脚本插件先卸载保证引擎存活到最后 |
+| H3 | `detachAll` 遍历中修改容器 | `for (auto* sub : subscriptions) unsubscribe(sub)` 内部 erase 同一 vector → 迭代器失效 UB | 先 `move` 出容器再遍历退订 |
+| H4 | disable 跨轮次后 enable 钩子永久丢失 | `flushPendingCleanup` 置空 `inst->middleware` 后 `enable` 判空跳过 → 钩子无法恢复 (工具却恢复了) | `PluginInstance` 保存 `hookRegistrations` (point/fn/ud); enable 时 middleware 为空则按记录重建并重新挂栈 |
+
+#### 11.7.2 中危修复
+
+- **M1** 能力恢复死代码且写错: `enable` 用 `registerCapability(name)` 恢复, 会丢方法回调 (JS 引擎恢复成哑能力)。改为保存完整 `capabilityRegistrations` (name/invoke/ctx) 恢复。
+- **M2** vtable 函数无异常屏障: `ioCallSync` 的 `fut.get()` 重抛异常会跨 C ABI 边界外泄 (UB)。全部 `xx_*` 加 `XX_PLUGIN_CATCH_BEGIN/END` 捕获转日志。
+- **M3** `xx_has_capability` 未走 io 线程: 直接读 `caps_` (io 线程数据结构) 是 data race。改为 `ioCallSync` 查询。
+- **M4** JS 引擎析构自旋: 退出条件含 `timers_.empty()`, 未到期长定时器导致 `fireDueTimersInline` 空转 (CPU 100% 直到定时器到期)。退出条件改为 `stop_ && queue_.empty()`, break 前统一释放定时器引用 + 兜底释放残留插件上下文。
+- **M5** 引擎停止后 `toolExecute` 死等 / `postSync` 假成功: `post` 在 `stop_` 时静默丢弃 → 等待方永久阻塞线程池线程。`post/postSync` 返回 bool, 调用方置失败状态 (`"engine stopped"`)。
+- **M6** `call_tool` 在 io 线程同步执行目标工具 execute: 慢工具卡死 io 线程。改为查表 (io 线程短临界区) 与 execute (调用方线程) 分离, 目标插件由 shared_ptr 保活 (执行中卸载安全)。
+- **M7** 中途 disable 破坏 start/end 钩子配对: end 循环重读 disabled 位导致 start 已执行的中间件被跳过。`WrapHandleBaseNode::run` 改为记录实际执行 start 的下标, end 按记录逆序回放。
+- **M8** enable 级联复活用户手动禁用的插件: 新增 `PluginInstance::userDisabled`, 级联 enable 仅恢复未被用户显式禁用的。
+- **M9** `unloadAsync` 无限阻塞: inflight 归零/轮次结束等待加总时限 (30s), 超时放弃卸载 (插件保持 detach 状态, 可重试)。
+- **M10** JS 侧 `unsubscribe` 未释放宿主订阅: 只清 agents 数组, 宿主订阅残留持续投递。B_SUBSCRIBE 保存宿主句柄 (高低 32 位拆分存 JS number, 避免 double 精度丢失), B_UNSUBSCRIBE 调 `vt.unsubscribe`。
+
+#### 11.7.3 低危修复与优化
+
+- 配置链路闭环: `config_loader` 解析 `plugins:` 段 (path/enabled/args), main.cpp 路径解析后注入 AgentConfig → 生产路径 (BaseAgent::init) 可真实加载插件。
+- `loadConfiguredPlugins` 按 manifest depends 拓扑排序 (Kahn), 配置顺序不再影响依赖加载。
+- `PluginInfoToJson` 补 `optional_depends` / `inflight` 字段。
+- `pluginNameFromPath` 兼容版本号后缀 (`libfoo.so.1.2` → `foo`), 保留多点库名 (`my.plugin.so` → `my.plugin`)。
+- `PluginTool::get_definition` 缓存解析后的 parameters (注册时解析一次, 不再每轮 parse)。
+- 事件订阅对象 shared_ptr 化: 派发快照期间退订/卸载不释放订阅对象 (handler lambda 持有 shared_ptr, `inst==nullptr` 跳过)。
+- 插件示例修复: `example_native` 判空后解引用 (`*error_out = g_host->...)`, `printf` 污染 TUI; 新增 `example_sleep` 慢工具 (测试超时/卸载竞态)。
+- vtable 新增 `json_get_string` / `json_escape` (api_version 3): 替代插件手写 JSON 解析/拼接 (对转义字符可靠); `libjs_example` / `plugin_js` / `example_native` 全部改用。
+- `drivePromise` 等待优化: 无 job 时等待下一个定时器到期 (wait_until), 替代 1ms 忙轮询。
+
+#### 11.7.4 关键契约变更 (实现为准)
+
+1. **api_version 2 → 3**: vtable 末尾新增 `json_get_string` / `json_escape` (线程安全, 任意线程可调用)。
+2. **entry 线程约定变更**: entry 现由宿主在线程池调用 (原为 io 线程)。原因: 脚本插件 entry 经 `invoke_capability` 同步等待 JS 线程加载脚本, 而 JS 线程内脚本注册回调又要回 io 线程 —— entry 在 io 线程执行则 io↔引擎互等死锁 (见 11.5.2); 线程池执行时 io 线程保持空闲可服务注册回调。entry 内注册动作仍由宿主自动投递回 io 线程串行执行 (插件无感)。
+3. **call_tool 语义**: 查表在 io 线程 (短临界区), 目标工具 execute 在调用方线程执行 (不再整体在 io 线程); 目标插件由引用计数保活, 执行期间卸载安全。io 线程内调用会阻塞 io 线程 (插件应避免)。
+4. **disable 语义**: 无轮次执行时立即摘除中间件 (不再滞留到 flush); enable 时按 hookRegistrations 重建。
+5. **shutdownAll 语义**: 按依赖图逆序级联卸载 + 调 unload 回调; 调用方须保证无在途插件回调 (正常退出路径满足)。
+6. **超时 inflight 语义**: 宿主超时/取消仅终止"等待", 插件 C 回调一旦开始执行将持续到返回; inflight 计数覆盖整个回调执行期 (H1 修复后成立)。
+
+#### 11.7.5 新增测试 (test_plugins 109 项)
+
+- H1 回归: 慢工具 (超时 100ms / 回调 600ms) 超时后立即卸载 → 断言卸载等待回调完成 (elapsed ≥ 250ms) 且回调完整执行。
+- H2 回归: 加载 JS 引擎 + 脚本插件后直接 `shutdownAll` → 无崩溃/挂死 (引擎线程 join + dlclose 顺序验证)。
+- H4 回归: disable (轮次中) → flushPendingCleanup 摘除 → enable → 中间件按记录重建, handles 栈恢复。
+- M8 回归: 用户手动禁用脚本插件后 enable 引擎 → 不被级联恢复; 用户显式 enable 后恢复。
+- 测试基建: `setIoExecutor` 显式装配 (与 BaseAgent::init 一致), JS 线程跨线程调用走真实 post 路径 (暴露并验证了 entry 死锁修复)。
+
+#### 11.7.6 已知预存在问题 (与本次修复无关, 基线同样存在)
+
+- `tui_tool_header` 模块 14 项失败 (TUI 头部渲染断言)。
+- `codegraph` 模块 1 项失败 (`load_cwd=false FAILED: nodes=2`)。
+- 全量测试在 `cpu_gpu` 之后 ASan heap-use-after-free (boost socket destroy, 网络相关模块)。
+- `setIoExecutor` 未装配时 `isIoThread()` 恒为 true (测试默认"伪 io 线程"直连, 生产路径已装配); 插件系统仅在测试/配置插件可达 (见 11.6 配置接入, 本次已闭环)。
 
 ---
 
