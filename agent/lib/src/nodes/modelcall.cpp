@@ -1,6 +1,7 @@
 #include "agentxx/nodes/modelcall.h"
 
 #include "agentxx/agent/model_registry.h"
+#include "agentxx/plugin/tool_registry.h"
 #include "agentxx/protocol/openai_provider.h"
 #include "agentxx/util/aho_corasick.h"
 #include "agentxx/util/exception.h"
@@ -187,6 +188,15 @@ neograph::CompletionParams ModelCallWrapNode::build_params(
     tool_defs.reserve(tools_.size());
     for (auto* tool : tools_) {
         tool_defs.push_back(tool->get_definition());
+    }
+
+    // 动态插件工具: 追加到 LLM 侧工具 schema (热插拔工具对模型可见的关键)
+    // - 插件工具注册后, 下一轮 modelcall 即随请求发送给 LLM
+    // - 插件工具卸载后, 定义从列表消失, 模型不再选择调用
+    if (auto ctxPtr = agentContext.lock()) {
+        if (ctxPtr->toolRegistry) {
+            ctxPtr->toolRegistry->appendDefinitions(tool_defs);
+        }
     }
 
     neograph::CompletionParams params;

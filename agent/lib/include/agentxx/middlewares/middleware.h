@@ -64,6 +64,11 @@ public:
     /// 名称
     std::string                                 name;
     std::weak_ptr<agentxx::agent::AgentContext> agentContext;
+    /// 是否已禁用 (禁用后 WrapHandleBaseNode 遍历跳过, 不执行任何钩子)
+    /// - 供插件热卸载/禁用使用: 运行中置位安全 (len 已缓存), 轮末由
+    ///   PluginManager::flushPendingCleanup 从 handles 摘除
+    /// - 普通中间件不使用, 保持 false
+    bool disabled = false;
     /// 会被添加移动到 agent 中，完成后此处留空数组
     std::vector<std::unique_ptr<agentxx::tools::XXToolBase>> toolcalls{};
     /// 每个 [Middleware] 全局共享，按会话ID 取值 <thread_id, state>

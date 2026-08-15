@@ -226,6 +226,11 @@ public:
         size_t     i           = 0;
         for (; i < len; ++i) {
             auto& item = agentCtxPtr->middlewareHandleContext->handles[i];
+            // 跳过已禁用中间件 (插件热卸载/禁用; len 已缓存, 跳过不影响
+            // 下标遍历安全)
+            if (item->disabled) {
+                continue;
+            }
             XX_LOGT(R"_({}/start, {}/{})_", nodeName, item->name, i);
             try {
                 co_await onHandleStart(*item, in);
@@ -335,6 +340,10 @@ public:
 
         for (; i-- > 0;) {
             auto& item = agentCtxPtr->middlewareHandleContext->handles[i];
+            // 跳过已禁用中间件 (与 start 循环一致, 保证 start/end 配对)
+            if (item->disabled) {
+                continue;
+            }
             XX_LOGT(R"_({}/end, {}/{})_", nodeName, item->name, i);
             if (nullptr != errorPtr) {
                 onHandleEndError(errorRethrow, false, errInfo, *item, in, out);

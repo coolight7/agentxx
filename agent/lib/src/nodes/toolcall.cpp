@@ -1,6 +1,7 @@
 #include "agentxx/nodes/toolcall.h"
 
 #include "agentxx/middlewares/permission.h"
+#include "agentxx/plugin/tool_registry.h"
 #include "agentxx/tools/tool.h"
 #include "agentxx/util/log.h"
 #include "agentxx/util/string_util.h"
@@ -560,7 +561,59 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
             return t->get_name() == tc.name;
         });
         if (it == tools_.end()) {
-            tool_msg.content = fmt::format(R"([Error] Tool not found: {})", tc.name);
+            // 静态列表未命中: 查动态插件工具注册表 (热插拔工具)
+            // - 返回 shared_ptr 保持插件代码段存活 (与插件的 inflight 计数配合,
+            //   卸载流程等计数归零后才 dlclose)
+            auto pluginTool = (agentCtxPtr && agentCtxPtr->toolRegistry)
+                                  ? agentCtxPtr->toolRegistry->find(tc.name)
+                                  : nullptr;
+            if (!pluginTool) {
+                tool_msg.content = fmt::format(R"([Error] Tool not found: {})", tc.name);
+            } else {
+                std::exception_ptr errorPtr;
+                co_await agentxx::util::catchErrorAsync<bool>(
+                    [&]() -> asio::awaitable<bool> {
+                        try {
+                            auto args = neograph::json::parse(tc.arguments);
+                            if (args.is_object()) {
+                                // append arg `thread_id`
+                                args["thread_id"] = in.ctx.thread_id;
+                                // - 注入 tool_call_id 供 tool 使用 (如 agentxx_subagent_switch 的中断
+                                // resultId)
+                                args["tool_call_id"] = tc.id;
+                            }
+                            tool_msg.content
+                                = co_await execTool(pluginTool.get(), args, in.ctx.cancel_token);
+                            // 取消埋点: tool 执行完成后检查, 避免取消后继续收集/执行后续 tool
+                            if (in.ctx.cancel_token) {
+                                in.ctx.cancel_token->throw_if_cancelled("after tool execution");
+                            }
+                        } catch (const neograph::graph::CancelledException&) {
+                            // TODO: 保存已有的 toolcall 结果由 baseRun 的取消捕获处保存后再重新抛出
+                            errorPtr = std::current_exception();
+                        } catch (const neograph::graph::NodeInterrupt&) {
+                            // tool触发中断
+                            // - 不应在这里提取中断参数，协程并发等 co_await
+                            // 执行完成时可能参数数组已经不是单一值
+                            isInterrupt       = true;
+                            tool_msg.flags   |= neograph::MessageFlag::Interrupt;
+                            tool_msg.content  = "[Interrupt]";
+                        }
+                        co_return true;
+                    },
+                    [&](std::string errinfo) -> asio::awaitable<bool> {
+                        tool_msg.content = fmt::format("[Exception aborted: {}]", errinfo);
+                        co_return true;
+                    },
+                    nullptr,
+                    // 传入取消令牌: tool 被取消信号中断产生的 operation_aborted
+                    // 转换为 CancelledException, 避免取消被当作普通 tool 错误吞掉
+                    in.ctx.cancel_token
+                );
+                if (errorPtr) {
+                    std::rethrow_exception(errorPtr);
+                }
+            }
         } else {
             std::exception_ptr errorPtr;
             co_await agentxx::util::catchErrorAsync<bool>(

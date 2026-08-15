@@ -31,6 +31,7 @@
 #include "test_misc_fixes.h"
 #include "test_network_timeout.h"
 #include "test_openai_provider.h"
+#include "test_plugins.h"
 #include "test_rag_search_tools.h"
 #include "test_regex.h"
 #include "test_remote_agent.h"
@@ -222,6 +223,7 @@ int main(int argn, char** argv) {
             co_await run("a2a", agentxx::test::run_a2a_tests);
             co_await run("openai_provider", agentxx::test::run_openai_provider_tests);
             co_await run("anthropic_provider", agentxx::test::run_anthropic_provider_tests);
+            co_await run("plugins", agentxx::test::run_plugin_tests);
             co_await run("cancel", agentxx::test::run_cancel_tests);
             co_await run("message_supplement", agentxx::test::run_message_supplement_tests);
             co_await run("summarization", agentxx::test::run_summarization_tests);
