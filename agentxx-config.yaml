@@ -262,3 +262,26 @@ plugins:
         - "**/node_modules/**"
       load_cwd: true
       use_gitignore: true
+
+  # === 系统资源监控 (插件 agentxx_system_monitor; 从 lib expand 拆分, 默认开启)
+  # - 工具: agentxx_get_system_core_info (原内置工具迁移, 同名同行为;
+  #   lib 不再内置, 未配置本插件时该工具不可用)
+  # - 能力: agentxx.system_usage (方法 query) —— TUI 侧边栏 System 段
+  #   (WireGetSystemUsage 周期请求) 经服务端调用本能力采集 CPU/内存/GPU;
+  #   载荷 schema 由本插件定义, 宿主只透传 (lib wire 层无系统资源 DTO)
+  - path: agent/build/linux-debug/exec/plugins/agentxx_system_monitor/
+    enabled: true
+
+  # === 音频流捕获 (插件 agentxx_audio_stream; 从 lib expand 拆分, 默认关闭)
+  # - 工具: agentxx_audio_stream (start/stop/status; 仅 Windows 支持捕获,
+  #   其他平台 start 返回失败)
+  # - 捕获帧经事件推送 (topic agentxx_audio_stream.audio)
+  # - path: agent/build/linux-debug/exec/plugins/agentxx_audio_stream/
+  #   enabled: true
+
+  # === 系统级文本选择事件流 (插件 agentxx_text_selection_monitor;
+  #   从 lib expand 拆分, 默认关闭; 仅 Windows 支持)
+  # - 工具: agentxx_text_selection_monitor (start/stop/status)
+  # - 选中文本经事件推送 (topic agentxx_text_selection_monitor.selection)
+  # - path: agent/build/linux-debug/exec/plugins/agentxx_text_selection_monitor/
+  #   enabled: true
