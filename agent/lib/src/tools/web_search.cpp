@@ -203,7 +203,7 @@ asio::awaitable<std::string> WebSearchTool::execute_async(const neograph::json& 
 }
 
 WebFetchUrlTool::WebFetchUrlTool(std::weak_ptr<agentxx::agent::AgentContext> in_agentContext) :
-    XXToolBase("agentxx_web_fetch_url", in_agentContext, true, true) {}
+    XXToolBase("agentxx_web_fetch", in_agentContext, true, true) {}
 
 neograph::ChatTool WebFetchUrlTool::get_definition() const {
     auto        agentPtr = agentContext.lock();
@@ -281,7 +281,7 @@ asio::awaitable<std::string> WebFetchUrlTool::execute_async(const neograph::json
 WebFetchUrlMarkdownTool::WebFetchUrlMarkdownTool(
     std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
 ) :
-    XXToolBase("agentxx_web_fetch_url_markdown", in_agentContext, true, true) {}
+    XXToolBase("agentxx_web_fetch_markdown", in_agentContext, true, true) {}
 
 neograph::ChatTool WebFetchUrlMarkdownTool::get_definition() const {
     auto        agentPtr = agentContext.lock();

@@ -659,7 +659,7 @@ Returns the most relevant documents with content, source, and similarity score.)
           ToolPrompt{
               .depict =
                   R"(Perform a web search. Returns a markdown-formatted list of results.
-Use `agentxx_web_fetch_url_markdown` afterwards to retrieve full page content from a result.)",
+Use `agentxx_web_fetch_markdown` afterwards to retrieve full page content from a result.)",
               .args =
                   {
                       {"query", "The search query string."},
@@ -671,7 +671,7 @@ Example: {"X-Api-Key": "xxx", "User-Agent": "agentxx"})"},
           },
       },
       {
-          "agentxx_web_fetch_url",
+          "agentxx_web_fetch",
           ToolPrompt{
               .depict = "Perform an HTTP GET request and return the raw response body.",
               .args =
@@ -685,7 +685,7 @@ Example: {"X-Api-Key": "xxx", "User-Agent": "agentxx"})"},
           },
       },
       {
-          "agentxx_web_fetch_url_markdown",
+          "agentxx_web_fetch_markdown",
           ToolPrompt{
               .depict =
                   R"(Perform an HTTP GET request and return the page content converted to Markdown.
@@ -942,7 +942,7 @@ Returns plain multi-line text: "Path (N):" followed by one block per symbol on t
           },
       },
       {
-          "agentxx_subagent_switch",
+          "agentxx_subagent",
           ToolPrompt{
               .depict =
                   R"(Switch a isolation messages context sub-agent to exec.
