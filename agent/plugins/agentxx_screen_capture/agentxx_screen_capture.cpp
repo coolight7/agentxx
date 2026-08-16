@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
+#include <cstring>
 #include <functional>
 #include <memory>
 #include <string>
@@ -26,7 +27,7 @@ static std::string readToolDepict(const std::string& toolName) {
     if (!g_host || !g_host->vtable || !g_host->vtable->get_tool_prompt) {
         return {};
     }
-    char* json = g_host->vtable->get_tool_prompt(g_host, toolName.c_str());
+    char* json = g_host->vtable->get_tool_prompt(g_host, agentxx_plugin_sv(toolName.data(), toolName.size()));
     if (!json) {
         return {};
     }
@@ -44,6 +45,7 @@ static std::string readToolDepict(const std::string& toolName) {
 /// 注册工具 (schema/描述存储于插件侧静态区)
 /// - 静态存储: spec.execute 为静态 lambda (无捕获), fn 存于静态区
 ///   (unique_ptr 保证地址稳定), 经 user_data 传递; 插件生命周期内有效
+/// - 字符串字段以 string_view 传入 (宿主注册时拷贝, 插件侧静态区存 std::string)
 struct ToolEntry {
     std::function<std::string(SimpleJson&)> fn;
 };
@@ -70,16 +72,17 @@ static void registerTool(
     g_entries.push_back(std::move(entry));
 
     AgentxxToolSpec spec{};
-    spec.name            = const_cast<char*>(name);
-    spec.description     = const_cast<char*>(g_storage[g_storage.size() - 2].c_str());
-    spec.parameters_json = const_cast<char*>(g_storage.back().c_str());
+    spec.name            = agentxx_plugin_sv(name, std::strlen(name));
+    spec.description     = agentxx_plugin_sv(g_storage[g_storage.size() - 2].data(), g_storage[g_storage.size() - 2].size());
+    spec.parameters_json = agentxx_plugin_sv(g_storage.back().data(), g_storage.back().size());
     spec.user_data       = entryPtr;
     spec.flags           = flags;
-    spec.execute         = +[](void* ud, const char* args_json, const char*, const char*, char** err
+    spec.execute         = +[](void* ud, AgentxxPluginStringView args_json, AgentxxPluginStringView, AgentxxPluginStringView, char** err
                            ) -> char* {
         auto* e = static_cast<ToolEntry*>(ud);
         try {
-            SimpleJson args(args_json ? args_json : "{}");
+            std::string argsStr{args_json.data ? args_json.data : "{}", args_json.size};
+            SimpleJson  args(argsStr.empty() ? "{}" : argsStr);
             if (!args.ok()) {
                 throw std::runtime_error("invalid args json");
             }
@@ -189,7 +192,12 @@ struct ScreenCaptureHolder {
                 for (const auto& f : frames) {
                     j["frames"].push_back(frameToJson(f, false));
                 }
-                g_host->vtable->publish(g_host, "agentxx_screen_capture.frame", j.dump().c_str());
+                std::string payload = j.dump();
+                g_host->vtable->publish(
+                    g_host,
+                    AGENTXX_SV("agentxx_screen_capture.frame"),
+                    agentxx_plugin_sv(payload.data(), payload.size())
+                );
             }
         );
     }
@@ -289,9 +297,11 @@ using namespace agentxx_screen_capture_plugin;
 extern "C" const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
     static const AgentxxPluginInfo info{
         AGENTXX_PLUGIN_API_VERSION,
-        "agentxx_screen_capture",
-        "1.0.0",
-        "Screen capture on Windows: all screens, mouse screen, specific screen, and streaming",
+        AGENTXX_SV("agentxx_screen_capture"),
+        AGENTXX_SV("1.0.0"),
+        AGENTXX_SV(
+            "Screen capture on Windows: all screens, mouse screen, specific screen, and streaming"
+        ),
     };
     return &info;
 }

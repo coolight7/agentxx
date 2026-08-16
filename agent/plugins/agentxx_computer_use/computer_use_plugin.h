@@ -33,7 +33,7 @@ inline const AgentxxHost* g_host = nullptr;
 /// 日志转发到宿主 vtable log (线程安全)
 inline void pluginLog(int level, const std::string& msg) {
     if (g_host && g_host->vtable && g_host->vtable->log) {
-        g_host->vtable->log(g_host, level, msg.c_str());
+        g_host->vtable->log(g_host, level, agentxx_plugin_sv(msg.data(), msg.size()));
     }
 }
 

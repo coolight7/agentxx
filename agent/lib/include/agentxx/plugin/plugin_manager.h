@@ -117,6 +117,9 @@ public:
 /// - execute_async 经 offloadCancellableAsync 卸载到宿主线程池调用 C 回调
 ///   (取消/超时语义天然接入 toolcall 链路)
 /// - 持有 PluginInstance shared_ptr: 工具执行期间插件不会被卸载
+/// - 字符串字段 (name/description/parameters_json) 在构造时从 string_view
+///   拷贝进成员 (spec_ 指针指向本对象成员, 生命周期与工具一致, 不依赖
+///   插件侧内存存活)
 class PluginTool : public agentxx::tools::XXToolBase {
 public:
 
@@ -136,15 +139,18 @@ public:
         return instance_.lock();
     }
 
-    /// 原始 C ABI spec (call_tool 同步互调用)
+    /// 原始 C ABI spec (call_tool 同步互调用; 字符串指针指向本对象成员)
     const AgentxxToolSpec& spec() const {
         return spec_;
     }
 
 private:
 
-    AgentxxToolSpec spec_;       ///< 拷贝的 spec (含函数指针)
-    neograph::json  parameters_; ///< 解析缓存的参数 schema (避免每轮重复 parse)
+    std::string name_;             ///< 拷贝的 name (稳定地址)
+    std::string description_;      ///< 拷贝的 description (稳定地址)
+    std::string parametersJson_;   ///< 拷贝的 parameters_json (稳定地址)
+    AgentxxToolSpec spec_;         ///< 拷贝的 spec (字符串指针指向上面成员)
+    neograph::json  parameters_;   ///< 解析缓存的参数 schema (避免每轮重复 parse)
     std::weak_ptr<PluginInstance> instance_;
 };
 
@@ -308,7 +314,7 @@ public:
     AgentxxSubscription* subscribe(
         PluginInstance* inst,
         const char*     topic,
-        void (*handler)(const char* event_json, void* ud),
+        void (*handler)(AgentxxPluginStringView event_json, void* ud),
         void* ud
     );
     void unsubscribe(AgentxxSubscription* sub);

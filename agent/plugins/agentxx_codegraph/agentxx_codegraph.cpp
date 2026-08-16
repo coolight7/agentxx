@@ -12,6 +12,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <map>
 #include <memory>
@@ -83,7 +84,9 @@ static ToolPrompt readToolPrompt(const std::string& toolName) {
     if (!g_host || !g_host->vtable || !g_host->vtable->get_tool_prompt) {
         return out;
     }
-    char* json = g_host->vtable->get_tool_prompt(g_host, toolName.c_str());
+    char* json = g_host->vtable->get_tool_prompt(
+        g_host, agentxx_plugin_sv(toolName.data(), toolName.size())
+    );
     if (!json) {
         return out;
     }
@@ -266,16 +269,17 @@ static void registerTool(
     g_entries.push_back(std::move(entry));
 
     AgentxxToolSpec spec{};
-    spec.name            = const_cast<char*>(name);
-    spec.description     = const_cast<char*>(g_storage[g_storage.size() - 2].c_str());
-    spec.parameters_json = const_cast<char*>(g_storage.back().c_str());
+    spec.name            = agentxx_plugin_sv(name, std::strlen(name));
+    spec.description     = agentxx_plugin_sv(g_storage[g_storage.size() - 2].data(), g_storage[g_storage.size() - 2].size());
+    spec.parameters_json = agentxx_plugin_sv(g_storage.back().data(), g_storage.back().size());
     spec.user_data       = entryPtr;
     spec.flags           = flags;
-    spec.execute         = +[](void* ud, const char* args_json, const char*, const char*, char** err
+    spec.execute         = +[](void* ud, AgentxxPluginStringView args_json, AgentxxPluginStringView, AgentxxPluginStringView, char** err
                            ) -> char* {
         auto* e = static_cast<ToolEntry*>(ud);
         try {
-            SimpleJson args(args_json ? args_json : "{}");
+            std::string argsStr{args_json.data ? args_json.data : "{}", args_json.size};
+            SimpleJson  args(argsStr.empty() ? "{}" : argsStr);
             if (!args.ok()) {
                 throw std::runtime_error("invalid args json");
             }
@@ -645,9 +649,11 @@ using namespace agentxx_codegraph_plugin;
 extern "C" const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
     static const AgentxxPluginInfo info{
         AGENTXX_PLUGIN_API_VERSION,
-        "agentxx_codegraph",
-        "1.0.0",
-        "CodeGraph code analysis: symbol search/context/callers/callees/impact/index/status/path",
+        AGENTXX_SV("agentxx_codegraph"),
+        AGENTXX_SV("1.0.0"),
+        AGENTXX_SV(
+            "CodeGraph code analysis: symbol search/context/callers/callees/impact/index/status/path"
+        ),
     };
     return &info;
 }
@@ -694,7 +700,12 @@ extern "C" int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) 
         j["processed"]    = processed;
         j["total"]        = total;
         j["current_file"] = std::string{currentFile};
-        g_host->vtable->publish(g_host, "agentxx_codegraph.progress", j.dump().c_str());
+        std::string payload = j.dump();
+        g_host->vtable->publish(
+            g_host,
+            AGENTXX_SV("agentxx_codegraph.progress"),
+            agentxx_plugin_sv(payload.data(), payload.size())
+        );
     });
 
     std::string projectRoot = cfg.projectRoot;
@@ -745,7 +756,12 @@ extern "C" int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) 
         codegraph::Json j = codegraph::Json::object();
         j["loaded"]         = true;
         j["project_root"]   = projectRoot;
-        g_host->vtable->publish(g_host, "agentxx_codegraph.status", j.dump().c_str());
+        std::string payload = j.dump();
+        g_host->vtable->publish(
+            g_host,
+            AGENTXX_SV("agentxx_codegraph.status"),
+            agentxx_plugin_sv(payload.data(), payload.size())
+        );
     }
     return 0;
 }
@@ -759,7 +775,12 @@ extern "C" void agentxx_plugin_unload(void* plugin_ctx) {
     if (g_host && g_host->vtable && g_host->vtable->publish) {
         codegraph::Json j = codegraph::Json::object();
         j["loaded"]         = false;
-        g_host->vtable->publish(g_host, "agentxx_codegraph.status", j.dump().c_str());
+        std::string payload = j.dump();
+        g_host->vtable->publish(
+            g_host,
+            AGENTXX_SV("agentxx_codegraph.status"),
+            agentxx_plugin_sv(payload.data(), payload.size())
+        );
     }
     ctx->stop.store(true, std::memory_order_release);
     if (ctx->warmup.joinable()) {
