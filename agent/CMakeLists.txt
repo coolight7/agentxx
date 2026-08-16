@@ -34,6 +34,9 @@ option(AGENTXX_ENABLE_BOOST_PROCESS "Use Boost.process for execute command toolc
 option(AGENTXX_BUILD_PLUGINS "Generate the plugins target." ON)
 option(AGENTXX_ENABLE_PLUGIN_CODEGRAPH "Add CodeGraph-CPP for code analysis." ON)
 option(AGENTXX_ENABLE_PLUGIN_JS "Build QuickJS JS plugin engine (agentxx_javascript_engine)." ON)
+option(AGENTXX_ENABLE_PLUGIN_SYSTEM_MONITOR "Build agentxx_system_monitor plugin (CPU/GPU usage)." ON)
+option(AGENTXX_ENABLE_PLUGIN_AUDIO_STREAM "Build agentxx_audio_stream plugin (audio capture)." ON)
+option(AGENTXX_ENABLE_PLUGIN_TEXT_SELECTION "Build agentxx_text_selection_monitor plugin (text selection)." ON)
 # ===== Debug 构建加速选项 =====
 # - 关闭后 Debug 构建不再启用 AddressSanitizer，编译与链接显著加快
 #   (仍保留 -fno-omit-frame-pointer 便于调试)，默认开启保持原有行为
@@ -447,6 +450,9 @@ set(_AGENTXX_COMMON_CMAKE_ARGS
     -DAGENTXX_ENABLE_PLUGIN_CODEGRAPH=${AGENTXX_ENABLE_PLUGIN_CODEGRAPH}
     -DAGENTXX_ENABLE_BOOST_PROCESS=${AGENTXX_ENABLE_BOOST_PROCESS}
     -DAGENTXX_ENABLE_PLUGIN_JS=${AGENTXX_ENABLE_PLUGIN_JS}
+    -DAGENTXX_ENABLE_PLUGIN_SYSTEM_MONITOR=${AGENTXX_ENABLE_PLUGIN_SYSTEM_MONITOR}
+    -DAGENTXX_ENABLE_PLUGIN_AUDIO_STREAM=${AGENTXX_ENABLE_PLUGIN_AUDIO_STREAM}
+    -DAGENTXX_ENABLE_PLUGIN_TEXT_SELECTION=${AGENTXX_ENABLE_PLUGIN_TEXT_SELECTION}
 
     "-DAGENTXX_EXEC_INSTALL_PREFIX=${AGENTXX_EXEC_INSTALL_PREFIX}"
     "-DAGENTXX_THIRD_PARTY_DIR=${AGENTXX_THIRD_PARTY_DIR}"

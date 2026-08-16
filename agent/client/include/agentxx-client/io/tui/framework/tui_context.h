@@ -3,6 +3,7 @@
 #include "agentxx-client/io/tui/framework/tui_state.h"
 #include "agentxx-client/io/tui/tui_theme.h"
 #include "agentxx/agent/context.h"
+#include "agentxx/plugin/client_plugin_manager.h"
 #include <atomic>
 #include <functional>
 #include <memory>
@@ -40,4 +41,9 @@ struct TUICtx {
 
     /// 远程地址 (空 = 内置)
     std::string remoteUrl;
+
+    /// client 插件管理器 (mode_runners 装配后注入; 状态栏/侧边栏渲染与
+    /// 命令管线经此读取 UI 注册表快照; 线程安全: uiRegistrySnapshot/hasCommand
+    /// 短锁, 渲染可无锁读取返回的 snapshot)
+    std::shared_ptr<agentxx::plugin::ClientPluginManager> pluginManager;
 };

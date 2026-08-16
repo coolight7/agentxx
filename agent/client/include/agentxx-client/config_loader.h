@@ -79,9 +79,10 @@ struct YamlAppConfig {
     /// 权限黑名单: 始终拒绝的路径列表 (yaml `permission.blacklist`)
     /// - 与白名单同路径时黑名单优先 (后注册覆盖)
     std::vector<std::string> permissionDenyPaths;
-    /// 插件配置 (yaml `plugins` 列表项: path / enabled / args)
+    /// 插件配置 (yaml `plugins` 列表项: path / enabled / sides / args)
     /// - path: 插件动态库路径 或 插件目录 (含 plugin.yaml 时按清单分派)
-    /// - enabled: 默认 true; args: 自定义参数 (预留, 存留供查询)
+    /// - enabled: 默认 true; sides: 运行侧 (auto/agent/client, 默认 auto);
+    ///   args: 自定义参数 (预留, 存留供查询)
     std::vector<agent::PluginConfig> plugins;
 };
 

@@ -529,6 +529,29 @@ YamlAppConfig loadYamlConfig(
                 );
                 pc.enabled = val == "true";
             }
+            // sides: 插件运行侧 (auto/agent/client; 忽略大小写, 非法值警告回退 auto)
+            // - auto:   按导出符号自动决定 (client 侧: 有 agentxx_client_entry 才加载)
+            // - agent:  仅 agent 侧加载 (client 侧跳过)
+            // - client: 仅 client 侧加载 (agent 侧跳过)
+            if (node["sides"]) {
+                auto val = resolveEnvVars(
+                    node["sides"].as<std::string>("auto"),
+                    dotEnvVars,
+                    overrideEnvVars
+                );
+                if (util::isIgnoreCaseEqual(val, "agent")) {
+                    pc.sides = agent::PluginSide::Agent;
+                } else if (util::isIgnoreCaseEqual(val, "client")) {
+                    pc.sides = agent::PluginSide::Client;
+                } else if (!util::isIgnoreCaseEqual(val, "auto")
+                           && !util::isIgnoreCaseEqual(val, "both")) {
+                    XX_LOGW(
+                        R"([Config] Warning: plugin `{}` invalid sides `{}`, fallback to auto)",
+                        pc.path,
+                        val
+                    );
+                }
+            }
             if (node["args"]) {
                 // 插件参数整体传递 (宿主不解析字段语义); 标量递归展开 ${VAR}
                 pc.args = yamlToJsonResolveEnv(node["args"], dotEnvVars, overrideEnvVars);

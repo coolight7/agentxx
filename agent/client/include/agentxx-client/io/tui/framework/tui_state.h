@@ -2,7 +2,6 @@
 
 #include "agentxx/agent/context.h"
 #include "agentxx/agent/io/agent_io_transport.h"
-#include "agentxx/expand/get_cpu_gpu_use.h"
 #include "asio/experimental/concurrent_channel.hpp"
 #include "neograph/api.h"
 #include "neograph/define.h"
@@ -122,10 +121,12 @@ struct TUIRenderState {
     size_t maxContextTokens = 0;
     double tps              = 0.0;
 
-    /// 系统资源占用快照 (CPU/内存/GPU), 由 client 线程收到 WireSystemUsage
-    /// (agent-server 侧采集后回传, 见 startSystemMonitor / onPeerMessage) 后写入;
-    /// 为 null 表示尚未收到服务端推送
-    std::shared_ptr<agentxx::expand::CpuGpuUsage> systemUsage;
+    /// 系统资源占用快照 (JSON 字符串, schema 由采集插件定义:
+    /// agentxx_system_monitor 能力 agentxx.system_usage 返回
+    /// {"cpu","mem_total_mb","mem_used_mb","mem_percent","gpus":[...]}),
+    /// 由 client 线程收到 WireSystemUsage (agent-server 侧经插件采集后回传,
+    /// 见 startSystemMonitor / onPeerMessage) 后写入; 空串 = 未收到/无数据
+    std::string systemUsageJson;
 
     /// 插件数据 (WirePluginData 转发; key = 插件名, 如 "agentxx_codegraph")
     /// - 服务端把插件事件原样转发, 载荷语义由插件定义; 客户端据此判断
