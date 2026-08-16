@@ -1055,7 +1055,7 @@ agent/
 │   │   │   ├── tool_skill_search.h # 工具/技能延迟加载搜索
 │   │   │   ├── share_store.h     # 会话级文本寄存
 │   │   │   ├── string.h          # 字符串工具 (html2md / regexp)
-│   │   │   ├── system.h          # 系统工具 (datetime / cpu_gpu_info)
+│   │   │   ├── system.h          # 系统工具 (datetime; cpu_gpu_info 已迁插件)
 │   │   │   └── ui_control.h      # UI 键鼠控制 (Windows)
 │   │   ├── protocol/             # 协议实现
 │   │   │   ├── openai_provider.h  # OpenAI Chat Completions API (流式/非流式/SSE)
@@ -1065,12 +1065,10 @@ agent/
 │   │   │   ├── a2a_client.h      # A2A Client (Agent Card / SendMessage / Task 管理)
 │   │   │   ├── a2a_server.h      # A2A Server (JSON-RPC, 任务状态机)
 │   │   │   └── acp_server.h      # ACP Server (stdio 模式)
-│   │   ├── expand/               # 扩展能力
-│   │   │   ├── codegraph_manager.h # 代码索引管理器
-│   │   │   ├── screen_capture.h  # 屏幕截图
-│   │   │   ├── audio_stream.h    # 音频流捕获
-│   │   │   ├── text_selection_monitor.h # 文本选择监听
-│   │   │   └── get_cpu_gpu_use.h # CPU/GPU 监控
+│   │   ├── expand/               # 扩展能力 (已逐步迁移为独立插件, 见 plugins/)
+│   │   │   ├── (codegraph_manager / screen_capture / audio_stream /
+│   │   │   │    text_selection_monitor / get_cpu_gpu_use 均已拆分为
+│   │   │   │    agent/plugins/ 下的独立插件, 2026-08 起 lib 不再内置)
 │   │   └── util/                 # 工具类
 │   │       ├── log.h             # 日志系统 (XX_LOG 宏, LogDispatcher, LogSink)
 │   │       ├── string_util.h     # 字符串工具 (编码转换/路径标准化/base64/自然排序/IgnoreCaseMap 等)

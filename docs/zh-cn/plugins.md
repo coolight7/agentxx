@@ -16,6 +16,7 @@
 - [8. 与现有代码的接入点](#8-与现有代码的接入点)
 - [9. 安全与权限](#9-安全与权限)
 - [10. 示例插件](#10-示例插件)
+- [12. client 侧插件系统 (四期)](#12-client-侧插件系统-四期)
 
 ---
 
@@ -379,6 +380,9 @@ agentxx.onToolEnd((ctx) => agentxx.emitMessageTip(ctx.thread_id, "天气查询�
 | codegraph 插件 | `agent/plugins/agentxx_codegraph/` → `libagentxx_codegraph.so` | 统一经 yaml `plugins` 段 path 配置加载 (不区分内置/外置, 无自动加载); 8 个工具 (search/context/callers/callees/impact/status/index/path); 索引进度/加载状态经 publish 事件 (topic 约定 `{插件名}.{事件名}`) 通知宿主, 由 SessionServerAgentIO 原样转发 WirePluginData 供 TUI 展示 |
 | screen_capture 插件 | `agent/plugins/agentxx_screen_capture/` → `libagentxx_screen_capture.so` | 仅 Windows 可用, 经 yaml `plugins` 段 path 配置加载; 工具 `agentxx_screen_capture` (单帧/全部屏幕/鼠标屏/流式推帧事件 topic `agentxx_screen_capture.frame`) |
 | computer_use 插件 | `agent/plugins/agentxx_computer_use/` → `libagentxx_computer_use.so` | 仅 Windows 可用, 经 yaml `plugins` 段 path 配置加载; 工具 `agentxx_ui_control_keyboard_mouse`; plugin.yaml `depends: [agentxx_screen_capture]` (须与 screen_capture 同时配置加载) |
+| system_monitor 插件 | `agent/plugins/agentxx_system_monitor/` → `libagentxx_system_monitor.so` | 从 lib `src/expand/get_cpu_gpu_use` 拆分独立 (2026-08): 工具 `agentxx_get_system_core_info` (原内置工具迁移, lib 不再内置) + 能力 `agentxx.system_usage` (方法 query, 返回使用率 JSON); SessionServerAgentIO 处理 WireGetSystemUsage 时经能力调用采集 (卸载到 blockingPool), 载荷为插件定义 schema 的 JSON 字符串经 WireSystemUsage 原样透传, TUI System 侧边栏按约定字段渲染 —— 采集实现与数据类型完全隔离在插件内, lib wire 层不含任何系统资源 DTO (后续 client 插件化渲染 UI 时, 插件可直接消费同一 JSON) |
+| audio_stream 插件 | `agent/plugins/agentxx_audio_stream/` → `libagentxx_audio_stream.so` | 从 lib `src/expand/audio_stream` 拆分独立 (2026-08): Windows WASAPI 系统输出/程序输出/麦克风捕获; 工具 `agentxx_audio_stream` (start/stop/status); 捕获帧经 publish 事件推送 (topic `agentxx_audio_stream.audio`, base64 PCM); 非 Windows 平台 no-op |
+| text_selection_monitor 插件 | `agent/plugins/agentxx_text_selection_monitor/` → `libagentxx_text_selection_monitor.so` | 从 lib `src/expand/text_selection_monitor` 拆分独立 (2026-08): Windows 系统级文本选择事件流 (UIAutomation/WinEvent/CDP/剪贴板兜底); 工具 `agentxx_text_selection_monitor` (start/stop/status); 选中文本经 publish 事件推送 (topic `agentxx_text_selection_monitor.selection`); 非 Windows 平台 no-op |
 | 宿主配置访问 | vtable `get_config` / `get_plugin_args` / `get_tool_prompt` | `get_config` 读取通用宿主信息 (dataDir/projectRoot/platform); `get_plugin_args` 整体返回 yaml `plugins` 条目 args (宿主不解析字段语义, 参数含义由插件定义, 如 agentxx_codegraph 的 paths/ignore_paths); `get_tool_prompt` 读取工具提示词 (depict/args), 实现与内置工具一致的动态描述 |
 | 跨线程投递 | vtable `is_io_thread` / `post_to_io` + `PluginManager::setIoExecutor` | JS 线程/宿主线程池调用的 io 线程约束操作 (注册/钩子/订阅/能力/shareStore/tip) 经 `ioCallSync` post 到 io 线程同步等待; `call_tool` 整体在 io 线程执行 (registry 竞争防护) |
 | JS 线程模型 | 专用 JS 线程 + 任务队列 (mutex+cv) | 所有 QuickJS 操作集中单线程; 同步等待方向无环 (见 11.4.2) |
@@ -492,9 +496,10 @@ PluginInstance (一切插件都是 C++ 插件)
 
 > 2026-08 更新: `plugins:` yaml 配置段解析 (config_loader + main.cpp) 与插件依赖拓扑排序 (loadConfiguredPlugins) 已实现 (见 11.7.3)
 
-- Wire 协议远程热管理 / TUI 插件面板 (三期)
+- Wire 协议远程热管理 / TUI 插件管理面板 (三期)
 - 插件签名校验 (依赖排序已完成)
 - 插件钩子的 out_json 修改能力、permission 联动注册 (插件工具默认走 PermissionMiddleware 的未注册规则兜底)
+- client 插件二期: prompt/quick_pick 模态、input_filter、消息装饰、keybind、设置项注册、热重载 (见 12.2 能力位预留)
 
 ---
 
@@ -604,3 +609,211 @@ plugins/
     ├── plugin.js          # (js) 脚本入口
     └── assets/            # 附带资源 (SKILL.md / memory 文件 / prompt 模板)
 ```
+
+---
+
+## 12. client 侧插件系统 (四期)
+
+> 状态: 已设计并实现一期 (2026-08): C ABI 契约 + ClientPluginManager + UI 适配器 +
+> TUI/CLI 介入 + 跨端数据通道 (WirePluginDataUp) + 示例双端插件 + 集成测试
+> (模块 `client_plugins`, 40 项)
+> 目标: 插件可介入 client 的 CLI / TUI / 未来 GUI, 与 agent 侧插件体系并存、互通
+
+### 12.1 背景与核心决策
+
+agent 侧插件 (工具/钩子/事件/能力) 已完备, 但 client (CLI/TUI) 是另一类宿主:
+有自己的生命周期、线程模型与 UI 形态。一期 `WirePluginData` 仅提供 agent→client
+的只读数据通道, 插件无法自定义展示、无法接收用户操作。
+
+| 决策 | 结论 | 理由 |
+|------|------|------|
+| 插件能否直接操作 UI 组件树 | **不能**。扩展点是 UI 无关的"语义层" | 暴露 FTXUI 组件会把插件绑死在 TUI 框架上, GUI 无法复用, CLI 无从谈起 |
+| ABI 组织 | **独立头 `client_plugin_api.h` + 独立入口符号 `agentxx_client_entry` + 独立版本号** | client 侧扩展点迭代频繁; 独立符号集使 agent 侧 `plugin_api.h` 零改动, 旧插件不受影响 |
+| 双端插件 | **同一动态库可导出两套入口**, 两个 PluginManager 各自 dlopen/装配 | codegraph 这类插件天然需要 "agent 侧提供工具 + client 侧展示进度" 的成对能力; dlopen 引用计数支持同库双实例 |
+| 跨端通信 | **统一走 wire 协议**: 已有 `WirePluginData` (agent→client), 新增 `WirePluginDataUp` (client→agent) | 本地 Channel 模式与远程 WS 模式路径完全一致, 插件不感知部署形态 |
+| 代码归属 | **UI 无关宿主层放 `agent/lib` (plugin/ 目录), TUI/CLI 适配器放 `agent/client`** | 未来 GUI 只需实现一个 `PluginUiAdapter` 即可复用宿主层 |
+
+### 12.2 UI 无关语义层
+
+插件对 UI 的全部控制力收敛为三件事:
+
+1. **声明展示物**: 状态栏项 / 侧边栏面板 —— 内容是宿主定义 schema 的 JSON
+   (text/kv/progress/action), 不是组件;
+2. **声明拦截点**: 斜杠命令 (如 `/usage`) —— 回调拿到参数, 返回动作 JSON;
+3. **调用交互原语**: toast / 代发消息 —— 命令式调用。
+
+每个 UI 实现经 `ui_caps` 位图向插件声明自己支持什么, 不支持的注册项自动失败
+(返回 NULL / 非 0), 插件自适应降级。CLI 的 caps = `TOAST` (命令为输入管线一部分,
+必然支持); TUI 全量; 未来 GUI 自行声明。
+
+### 12.3 跨端数据流 (本地/远程同路径)
+
+```
+agent 插件 publish("agentxx_codegraph.progress", {...})
+  → SessionServerAgentIO → WirePluginData ──(Channel | WS)──▶ client 端点
+  → ClientEventSink::onPluginData → 分发到订阅 EVT_PLUGIN_DATA 的 client 插件
+
+client 插件 send_plugin_data("rebuild_request", {...})
+  → WirePluginDataUp ──(Channel | WS)──▶ SessionServerAgentIO
+  → agent 事件总线 publish("client.{插件名}.{事件名}", data)
+  → agent 侧插件订阅消费
+```
+
+### 12.4 线程模型
+
+| 线程 | 职责 | 插件可见性 |
+|------|------|-----------|
+| client io 线程 (端点所在 io_context) | 全部插件回调: entry 注册落地、事件 handler、命令 execute、panel action | 插件回调的唯一线程, 沿用"快速返回"约定 |
+| UI 线程 (TUI FTXUI Loop) | 渲染语义元素、产生交互 (点击/按键) | **从不直接调用插件代码**; 交互经 postToIo 反向投递 |
+| agent io 线程 | 现有 agent 插件体系 | 与 client 插件完全隔离 |
+| client 侧线程池 | dlopen + entry 执行 | 插件无感 (注册经 ioCallSync 回 io 线程) |
+
+安全不变式: 跨线程递给 UI 的数据一律是宿主已拷贝的 JSON 字符串; UI 线程持有
+的数据不引用插件内存 → UI 侧不参与 inflight 计数, 卸载只需等 io 线程 inflight
+归零 (复用 InflightGuard 模式)。
+
+### 12.5 组件清单
+
+| 组件 | 位置 | 说明 |
+|------|------|------|
+| `client_plugin_api.h` | `agent/lib/include/agentxx/plugin/` | 纯 C ABI 契约头 (client v1); 复用 `AgentxxPluginStringView`/`AGENTXX_SV` 约定; 入口符号 `agentxx_client_get_info` / `agentxx_client_entry` / `agentxx_client_unload` |
+| `ClientPluginManager` | `agent/lib/src/plugins/client_plugin_manager.cpp` | client 侧管理器: 生命周期 (load/enable/disable/unload/shutdownAll) + UI 注册表 (status items/panels/commands) + 事件分发 (实现 `ClientEventSink`) + vtable 实现; 依赖拓扑排序; 加载时过滤 `sides` 配置 |
+| `ClientEventSink` | `agent/lib/include/agentxx/agent/io/client_event_sink.h` | 端点 → 插件的事件通道 (ready/conn_state/user_input/delta/turn_end/session_switch/plugin_data); `AgentIOBase::setEventSink` 注入 |
+| `PluginUiAdapter` | `agent/client/include/agentxx-client/io/plugin/` | UI 无关宿主层要求的适配器接口 (uiCaps/注册/更新/toast/sendPluginMessage) |
+| `TuiPluginAdapter` | `agent/client/src/io/tui/` | 状态栏项 → StatusBarComponent 槽位; 面板 → SidebarComponent tab; toast → 既有 showToast; 命令动作 → enqueueUiAction 投递 |
+| `CliPluginAdapter` | `agent/client/src/io/stdio/` | caps 仅 TOAST; toast → stderr (保持 stdout 纯净); 命令动作 send → 端点 sendToPeer |
+| Wire 消息 | `agent_io_transport.h` / `wire_protocol.h` / `ws_io_transport.cpp` | `WirePluginDataUp` 变体 + `MsgType::PluginDataUp` + 序列化; 服务端 onPeerMessage 收到后 publish 到总线 `client.{plugin}.{event}` |
+
+### 12.6 入口 ABI 摘要
+
+```c
+#define AGENTXX_CLIENT_PLUGIN_API_VERSION 1
+
+typedef struct AgentxxClientPluginInfo {
+    int api_version;                /* == AGENTXX_CLIENT_PLUGIN_API_VERSION */
+    AgentxxPluginStringView name;   /* 全局唯一 (与 agent 侧插件共用命名空间) */
+    AgentxxPluginStringView version;
+    AgentxxPluginStringView description;
+    uint32_t min_ui_caps;           /* 宿主不满足则拒绝加载 */
+} AgentxxClientPluginInfo;
+
+/* 事件订阅 (payload 均为 JSON 字符串) */
+typedef enum {
+    AGENTXX_CLIENT_EVT_READY, AGENTXX_CLIENT_EVT_CONN_STATE,
+    AGENTXX_CLIENT_EVT_USER_INPUT, AGENTXX_CLIENT_EVT_DELTA,
+    AGENTXX_CLIENT_EVT_TURN_END, AGENTXX_CLIENT_EVT_SESSION_SWITCH,
+    AGENTXX_CLIENT_EVT_PLUGIN_DATA, AGENTXX_CLIENT_EVT_COUNT
+} AgentxxClientEvent;
+
+/* 命令 execute 返回的动作 JSON (宿主解释执行):
+   {"action":"none"}                      已处理完毕
+   {"action":"send","text":"..."}         代为发送一条用户消息
+   {"action":"toast","text":"...","level":0|1|2} */
+
+typedef struct AgentxxClientHostVtable {
+    /* 内存/日志/JSON (与 agent 侧 vtable 同语义) */
+    void* (*alloc)(size_t);  void (*free)(void*);  char* (*strdup)(const char*);
+    void  (*log)(const AgentxxClientHost*, int, AgentxxPluginStringView);
+    char* (*json_get_string)(...);  char* (*json_escape)(...);
+    /* 能力协商 */
+    uint32_t (*ui_caps)(const AgentxxClientHost*);
+    /* 展示扩展 (语义 JSON) */
+    AgentxxStatusItem* (*register_status_item)(const AgentxxClientHost*,
+        AgentxxPluginStringView id, AgentxxPluginStringView initial_json, int align, int order);
+    int  (*update_status_item)(const AgentxxClientHost*, AgentxxStatusItem*, AgentxxPluginStringView json);
+    void (*unregister_status_item)(const AgentxxClientHost*, AgentxxStatusItem*);
+    AgentxxPanel* (*register_panel)(const AgentxxClientHost*, AgentxxPluginStringView id,
+        AgentxxPluginStringView props_json);
+    int  (*update_panel)(const AgentxxClientHost*, AgentxxPanel*, AgentxxPluginStringView items_json);
+    void (*unregister_panel)(const AgentxxClientHost*, AgentxxPanel*);
+    /* 输入扩展 */
+    int  (*register_command)(const AgentxxClientHost*, AgentxxPluginStringView name,
+        AgentxxPluginStringView description,
+        char* (*execute)(void* ud, AgentxxPluginStringView args_json, char** error_out), void* ud);
+    int  (*unregister_command)(const AgentxxClientHost*, AgentxxPluginStringView name);
+    /* 交互原语 */
+    void (*show_toast)(const AgentxxClientHost*, AgentxxPluginStringView text, int level);
+    /* 事件订阅 (卸载自动退订) */
+    AgentxxSubscription* (*subscribe)(const AgentxxClientHost*, int event,
+        void (*handler)(AgentxxPluginStringView payload_json, void* ud), void* ud);
+    void (*unsubscribe)(AgentxxSubscription*);
+    /* 会话上下文快照 */
+    char* (*get_client_state)(const AgentxxClientHost*);
+    /* 会话操作 */
+    int  (*send_user_input)(const AgentxxClientHost*, AgentxxPluginStringView thread_id,
+        AgentxxPluginStringView text);
+    void (*request_cancel)(const AgentxxClientHost*, AgentxxPluginStringView thread_id);
+    /* 跨端数据: client 实例 → wire → agent 侧实例 */
+    int  (*send_plugin_data)(const AgentxxClientHost*, AgentxxPluginStringView event,
+        AgentxxPluginStringView json);
+    /* 自描述 */
+    char* (*get_own_info)(const AgentxxClientHost*);
+    char* (*get_plugin_args)(const AgentxxClientHost*);
+} AgentxxClientHostVtable;
+```
+
+### 12.7 配置格式
+
+```yaml
+plugins:
+  - path: ./plugins/agentxx_codegraph   # 双端: 按导出符号自动生效 (sides 缺省 auto)
+  - path: ./plugins/my-statusbar
+    sides: client                       # client|agent|auto(默认; both 同 auto)
+    args: { refresh: 2 }
+```
+
+- `sides` 语义: `agent` 仅 agent 侧加载; `client` 仅 client 侧加载; `auto` 按导出
+  符号 (有 `agentxx_client_entry` 才在 client 侧加载, 无则跳过并记日志);
+- 本地一体模式: agent 侧加载逻辑不变 (BaseAgent::init), client 侧由 mode_runners
+  加载同一配置 (经 sides 过滤); 双端插件同库被两个管理器各自 dlopen (引用计数
+  互不影响);
+- 远程 client 模式: 只加载 client 侧条目, agent 条目被过滤 (agent 在 server 进程)。
+
+### 12.8 与现有代码的接入点
+
+| 位置 | 改动 |
+|------|------|
+| 新增 `agent/lib/include/agentxx/plugin/client_plugin_api.h` | client C ABI 契约 (纯 C) |
+| 新增 `agent/lib/include/agentxx/plugin/client_plugin_manager.h` + `src/plugins/client_plugin_manager.cpp` | client 侧管理器 + vtable 实现 + UI 注册表 + 事件分发 |
+| 新增 `agent/lib/include/agentxx/agent/io/client_event_sink.h` | 端点 → 插件事件通道 |
+| `agent/lib/include/agentxx/agent/io/agent_io.h/.cpp` | `setEventSink` + `emitEventSink`; 基类 onPeerMessage 分发 Delta/TurnResult/PluginData 到 sink; `sendUserInput` 通知; `onServerReady` 默认实现通知 ready |
+| `agent/lib/include/agentxx/agent/io/agent_io_transport.h` | 新增 `WirePluginDataUp` 变体 |
+| `agent/lib/include/agentxx/agent/io/wire_protocol.h` | `MsgType::PluginDataUp` + `makePluginDataUp`/`pluginDataUpFromJson` |
+| `agent/lib/src/agent/io/ws_io_transport.cpp` | serialize/deserialize 支持 `WirePluginDataUp` |
+| `agent/lib/src/agent/io/session_server_agent_io.cpp` | onPeerMessage 收 `WirePluginDataUp` → 总线 publish `plugin.client.{插件名}.{事件名}` (载荷 std::string); 环回跳过 (plugin.client. 前缀事件不转发回客户端) |
+| `agent/lib/include/agentxx/agent/config.h` | `PluginConfig` 增 `sides` (PluginSide 枚举: Auto/Agent/Client) |
+| `agent/client/src/config_loader.cpp` | 解析 `sides` 字段 |
+| 新增 `agent/client/include/agentxx-client/io/plugin/plugin_ui_adapter.h` | UI 适配器接口 |
+| 新增 `agent/client/include/agentxx-client/io/tui/tui_plugin_adapter.h` + `io/stdio/cli_plugin_adapter.h` | TUI/CLI 适配器 |
+| `agent/client/src/io/tui/agent_tui.h/.cpp` | EventSink 通知点; 命令管线 (onSend 拦截 `/`); 插件状态栏槽位 / 侧边栏 tab 挂载 (addPluginPanelTab/renderPluginPanel) |
+| `agent/client/src/io/tui/components/status_bar.cpp` | 状态栏渲染插件状态栏项 (左/右分组, order 排序) |
+| `agent/client/src/io/stdio/agent_stdio.h/.cpp` + `mode_runners.cpp` | CLI 命令管线; `sendPluginUserInput` 路径接入 sink |
+| `agent/client/src/mode_runners.cpp` + `main.cpp` | 4 个模式装配 ClientPluginManager + 适配器, 传入 yaml plugins 配置 |
+| `agent/plugins/example_plugin/` | 增加 client 入口演示双端插件 (状态栏/面板/命令/事件/跨端) |
+| 新增 `agent/test/core/test_client_plugins.*` | client 插件测试模块 (40 项) |
+
+### 12.9 实现偏差与要点 (以代码为准)
+
+1. **事件上行 topic 前缀**: 服务端发布 `plugin.client.{插件名}.{事件名}` (而非设计稿的
+   `client.{...}`), 与 agent 侧事件统一加 `plugin.` 前缀; 插件侧 subscribe 传
+   `client.{插件名}.{事件名}` 即可。
+2. **环回防护**: `subscribePluginEvents` 跳过 `plugin.client.` 前缀 (client 上行事件
+   不转发回客户端, 防止 client 插件收到自己发出的数据形成环回)。
+3. **命令动作 JSON**: 一期支持 `send` / `toast` / `none`; `json_escape` 返回带引号的
+   JSON 字符串字面量 (与 agent 侧一致), 插件拼装动作 JSON 时不得再额外加引号。
+4. **句柄生命周期**: disable 保留注册信息与句柄 (enable 重建), unload 时句柄存活到
+   实例析构 (插件的 unload 回调可能主动反注册, 句柄必须有效)。
+5. **远程 client 模式**: 只加载 client 侧条目 (agent 条目被 sides 过滤, agent 在
+   server 进程); `io->onServerReady()` 在连接建立后调用 (TUI 覆写版幂等, 同时通知
+   事件接收器)。
+
+### 12.9 安全
+
+- `send_user_input` 等价于代用户发言: 动作 send 一律经 UI 既有排队语义
+  (流式中进 pendingInputs), 不绕过 UI 状态机;
+- 可见性声明: 插件可订阅 EVT_USER_INPUT / EVT_DELTA (全量消息), 文档明确告知;
+- UI 不越权: 语义层原语无"读屏/注入按键"能力; 命令只拦截以 `/` 开头的输入,
+  未命中命令照常作为普通消息发送;
+- 跨端通道: `WirePluginDataUp` 在服务端发布到 `plugin.client.` 前缀 topic
+  (agent 侧插件订阅 `client.{插件名}.{事件名}` 消费), 频率由插件控制;
+  服务端不解析载荷语义 (与 WirePluginData 对称), 且环回跳过 (不转发回客户端)。
