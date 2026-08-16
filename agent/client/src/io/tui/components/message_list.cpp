@@ -136,9 +136,9 @@ Element MessageListComponent::OnRender() {
         const auto& msgs   = ctx_.frameState->messages;
         for (size_t i = 0; i < vboxes.size() && i < msgs.size(); ++i) {
             const auto& msg = *msgs[i];
-            // 可折叠消息: Thinking / Tool / System (点击 header 折叠/展开)
+            // 可折叠消息: Think / Tool / System (点击 header 折叠/展开)
             const bool collapsible
-                = (msg.role == TUIMessage::Role::Thinking || msg.role == TUIMessage::Role::Tool
+                = (msg.role == TUIMessage::Role::Think || msg.role == TUIMessage::Role::Tool
                    || msg.role == TUIMessage::Role::System || msg.role == TUIMessage::Role::Tip);
             if (!collapsible || vboxes[i].IsEmpty()) {
                 continue;
@@ -345,7 +345,7 @@ size_t MessageListComponent::estimateHeight(size_t index, int width) {
             case TUIMessage::Role::System:
                 // 折叠: 仅 header 行 + 空行; 展开: header + 内容 + 空行
                 return (msg.collapsed ? 1 : 1 + estimateLines(msg.text, width)) + 1;
-            case TUIMessage::Role::Thinking:
+            case TUIMessage::Role::Think:
                 // 折叠: 仅 header 行 + 空行; 展开: header + 内容 + 空行
                 return (msg.collapsed ? 1 : 1 + estimateLines(msg.text, width)) + 1;
             case TUIMessage::Role::Tip:
@@ -538,10 +538,10 @@ LazyBuiltItem MessageListComponent::buildStreamingItem(const TUIRenderState& st)
     out.sourceBytes = st.currentToken ? st.currentToken->size() : 0;
 
     Element block;
-    if (st.currentTokenRole == TUIMessage::Role::Thinking) {
+    if (st.currentTokenRole == TUIMessage::Role::Think) {
         Elements lines;
         Elements header;
-        header.push_back(text("- [Thinking] ") | color(theme.thinkingColor));
+        header.push_back(text("- [Think] ") | color(theme.thinkingColor));
         const TUIMessage* currentMsg = nullptr;
         for (size_t i = st.messages.size(); i > 0; --i) {
             if (st.messages[i - 1]->role == st.currentTokenRole) {
@@ -566,10 +566,10 @@ LazyBuiltItem MessageListComponent::buildStreamingItem(const TUIRenderState& st)
 }
 
 LazyBuiltItem MessageListComponent::buildStreamingHeader(const TUIRenderState& st) {
-    // thinking 头部项: "[Thinking] <时长>" 单行, 可缓存 (key 稳定)
+    // thinking 头部项: "[Think] <时长>" 单行, 可缓存 (key 稳定)
     const auto& theme = *ctx_.theme;
     Elements    header;
-    header.push_back(text("- [Thinking] ") | color(theme.thinkingColor));
+    header.push_back(text("- [Think] ") | color(theme.thinkingColor));
     const TUIMessage* currentMsg = nullptr;
     for (size_t i = st.messages.size(); i > 0; --i) {
         if (st.messages[i - 1]->role == st.currentTokenRole) {
@@ -594,7 +594,7 @@ LazyBuiltItem MessageListComponent::buildStreamingStable(const TUIRenderState& s
     // 已闭合顶层块: 构建一次后由 LazyScrollable 缓存 (key 稳定, 仅可见项被布局)
     const auto&        theme    = *ctx_.theme;
     const int          maxWidth = std::max(1, scrollable_->contentWidth());
-    const bool         thinking = (st.currentTokenRole == TUIMessage::Role::Thinking);
+    const bool         thinking = (st.currentTokenRole == TUIMessage::Role::Think);
     const ftxui::Color c        = thinking ? theme.thinkingColor : theme.normalColor;
 
     LazyBuiltItem out;
@@ -615,7 +615,7 @@ LazyBuiltItem MessageListComponent::buildStreamingFrontier(const TUIRenderState&
     // 尾部 (仍增长) 块: 每帧重建
     const auto&        theme    = *ctx_.theme;
     const int          maxWidth = std::max(1, scrollable_->contentWidth());
-    const bool         thinking = (st.currentTokenRole == TUIMessage::Role::Thinking);
+    const bool         thinking = (st.currentTokenRole == TUIMessage::Role::Think);
     const ftxui::Color c        = thinking ? theme.thinkingColor : theme.normalColor;
 
     LazyBuiltItem out;
@@ -658,14 +658,14 @@ void MessageListComponent::syncStream(const TUIRenderState& st) {
     // 降级期间不 feed 渲染器、不更新 fedLen/epoch —— renderer 内容与 fedLen
     // 的一致性保持 (renderer text == token[0..fedLen)), 恢复增量后按 fedLen
     // 追加缺失的增量即可, 无需重建 (与"新流"路径区分)。
-    const bool inc = (st.currentTokenRole == TUIMessage::Role::Thinking)
+    const bool inc = (st.currentTokenRole == TUIMessage::Role::Think)
                          ? TUISettings::instance().isAnimationEnabled(AnimationLevel::Ultra)
                          : TUISettings::instance().isAnimationEnabled(AnimationLevel::Low);
     if (!inc) {
         return;
     }
     streamUseIncremental_ = true;
-    streamHeaderCount_    = (st.currentTokenRole == TUIMessage::Role::Thinking) ? 1 : 0;
+    streamHeaderCount_    = (st.currentTokenRole == TUIMessage::Role::Think) ? 1 : 0;
 
     if (!streamRenderer_) {
         streamRenderer_ = std::make_unique<markdown::IncrementalRenderer>();
@@ -857,7 +857,7 @@ Element MessageListComponent::buildMessageBlock(
         case TUIMessage::Role::System: {
             ftxui::Color tipColor = theme.systemColor;
             // 可折叠: header 行带 +/- 折叠标记与单行预览 (折叠态), 展开态显示全文
-            // (与 Thinking 消息同一折叠模式; 默认折叠见创建处 makeText / onDelta)
+            // (与 Think 消息同一折叠模式; 默认折叠见创建处 makeText / onDelta)
             const bool expanded = !msg.collapsed;
             Elements   lines;
             Elements   header;
@@ -894,7 +894,7 @@ Element MessageListComponent::buildMessageBlock(
                     break;
             }
             // 可折叠: header 行带 +/- 折叠标记与单行预览 (折叠态), 展开态显示全文
-            // (与 Thinking 消息同一折叠模式; 默认折叠见创建处 makeText / onDelta)
+            // (与 Think 消息同一折叠模式; 默认折叠见创建处 makeText / onDelta)
             const bool expanded = !msg.collapsed;
             Elements   lines;
             Elements   header;
@@ -910,12 +910,12 @@ Element MessageListComponent::buildMessageBlock(
             }
             return vbox(std::move(lines));
         }
-        case TUIMessage::Role::Thinking: {
+        case TUIMessage::Role::Think: {
             const bool expanded = !msg.collapsed;
             Elements   lines;
             Elements   header;
             header.push_back(text(expanded ? "- " : "+ ") | color(theme.thinkingColor));
-            header.push_back(text("[Thinking] ") | color(theme.thinkingColor));
+            header.push_back(text("[Think] ") | color(theme.thinkingColor));
             if (msg.durationMs > 0) {
                 header.push_back(
                     text(agentxx::util::formatDurationMilliseconds(msg.durationMs))

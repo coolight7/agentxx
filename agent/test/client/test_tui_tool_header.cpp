@@ -73,11 +73,11 @@ struct ToolHeaderFixture {
         });
     }
 
-    /// 追加一条 Thinking 消息 (折叠状态, 头部为 "-/+/[Thinking]/预览")
+    /// 追加一条 Think 消息 (折叠状态, 头部为 "-/+/[Think]/预览")
     void pushThinking(std::string text) {
         sharedState.mutate([&](TUIRenderState& st) {
             auto m       = std::make_shared<TUIMessage>();
-            m->role      = TUIMessage::Role::Thinking;
+            m->role      = TUIMessage::Role::Think;
             m->collapsed = true;
             m->text      = std::move(text);
             st.messages.push_back(std::move(m));
@@ -202,12 +202,12 @@ void testTuiToolHeaderOverflow() {
     // 摘要开头仍可见 (右缘裁剪)
     XX_TEST_EXPECT_TRUE(out.find("Read · ") != std::string::npos);
 
-    // Thinking 折叠头部: 超长预览同样不得压缩 "- / [Thinking] " 前缀
+    // Think 折叠头部: 超长预览同样不得压缩 "- / [Think] " 前缀
     ToolHeaderFixture g(30, 8);
     g.pushThinking("这是一个非常非常非常非常非常非常非常非常非常非常非常非常非常长的思考内容"
                    "用来验证折叠预览超宽时头部前缀不会被压缩覆盖");
     std::string out2 = g.render();
-    XX_TEST_EXPECT_TRUE(out2.find("+ [Thinking] ") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(out2.find("+ [Think] ") != std::string::npos);
 }
 
 TestResult testTuiToolHeader() {

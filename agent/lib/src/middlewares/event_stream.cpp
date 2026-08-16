@@ -141,7 +141,7 @@ void EventBridge::handleLLMToken(const neograph::graph::GraphEvent& event) {
         .durationMs
         = sendDuration ? static_cast<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
                                                   std::chrono::system_clock::now() - nodeStartTime_
-                         )
+          )
                                                   .count())
                        : 0,
     });
@@ -179,15 +179,15 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
         auto role = jm.value("role", std::string{});
         if (role == "assistant" && jm.contains("tool_calls")) {
             hasLLMOutput = true;
-            // 展开: reasoning_content 非空 → Thinking (折叠); 每条 tool_call →
+            // 展开: reasoning_content 非空 → Think (折叠); 每条 tool_call →
             // 一条 Tool 消息 (未完成, 历史默认折叠); content 非空 → 一条
-            // Assistant 消息。顺序与渲染端拆解一致: Thinking 在前, 其余在后。
+            // Assistant 消息。顺序与渲染端拆解一致: Think 在前, 其余在后。
             // 展开语义与渲染端 (TUI) 同步一致: 历史消息直接就是渲染消息,
             // client 端无需再按 json 拆解
             auto reasoning = jm.value("reasoning_content", std::string{});
             if (!reasoning.empty()) {
                 auto m = ViewMessage::makeText(
-                    ViewMessage::Role::Thinking,
+                    ViewMessage::Role::Think,
                     reasoning,
                     jm.value("start_time_ms", int64_t{0}),
                     jm.value("duration_ms", int64_t{0})
@@ -284,12 +284,12 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
             });
         } else if (role == "assistant") {
             hasLLMOutput = true;
-            // 展开: reasoning_content 非空 → Thinking (折叠); content 非空 → Assistant。
-            // 顺序与渲染端拆解一致: Thinking 在前, Assistant 在后
+            // 展开: reasoning_content 非空 → Think (折叠); content 非空 → Assistant。
+            // 顺序与渲染端拆解一致: Think 在前, Assistant 在后
             auto reasoning = jm.value("reasoning_content", std::string{});
             if (!reasoning.empty()) {
                 auto m = ViewMessage::makeText(
-                    ViewMessage::Role::Thinking,
+                    ViewMessage::Role::Think,
                     reasoning,
                     jm.value("start_time_ms", int64_t{0}),
                     jm.value("duration_ms", int64_t{0})
