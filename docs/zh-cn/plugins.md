@@ -331,7 +331,7 @@ agentxx.onToolEnd((ctx) => agentxx.emitMessageTip(ctx.thread_id, "天气查询�
 | LLM 侧可见性 | `ModelCallWrapNode::build_params` 追加插件工具定义 (本设计原稿遗漏的关键点, 见 11.3) |
 | 执行侧查找 | `ToolcallWrapNode::baseRun` 静态列表未命中 → `ToolRegistry` 回退 |
 | Agent 装配 | `BaseAgent::init` 创建 toolRegistry/pluginManager 并注入 AgentContext, 装配静态工具名, 加载配置插件; `runConversationTurnAsync` 轮次边界登记 |
-| 示例插件 | `agent/plugins/example_native/` | 2 工具 (echo + call_tool 互调) + agent_start 钩子 + 事件订阅 + 能力声明 |
+| 示例插件 | `agent/plugins/example_plugin/` | 2 工具 (echo + call_tool 互调) + agent_start 钩子 + 事件订阅 + 能力声明 |
 | 集成测试 | `agent/test/core/test_plugins.*` | 37 项: 加载/工具执行/互调/钩子/事件回环/禁用启用/卸载/冲突/列表 (模块名 `plugins`) |
 
 ### 11.2 与设计原稿的偏差 (实现为准)

@@ -1965,8 +1965,7 @@ static bool parsePluginManifest(
     std::string&                 name,
     std::string&                 entry,
     std::vector<std::string>&    depends,
-    std::vector<std::string>&    optionalDepends,
-    bool&                        enabled
+    std::vector<std::string>&    optionalDepends
 ) {
     auto            yamlPath = dir / "plugin.yaml";
     std::error_code ec;
@@ -1990,14 +1989,6 @@ static bool parsePluginManifest(
                 if (d.IsScalar()) {
                     optionalDepends.push_back(d.as<std::string>());
                 }
-            }
-        }
-        if (node["enabled"] && node["enabled"].IsScalar()) {
-            try {
-                enabled = node["enabled"].as<bool>();
-            } catch (const std::exception&) {
-                auto s  = node["enabled"].as<std::string>();
-                enabled = !(s == "false" || s == "0" || s == "no");
             }
         }
     } catch (const std::exception& e) {
@@ -2085,12 +2076,7 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadPluginAsync(
         // ---- 插件目录: 按 plugin.yaml 清单分派 ----
         std::string              name, entry;
         std::vector<std::string> depends, optionalDepends;
-        bool                     enabled = true;
-        if (!parsePluginManifest(fs::path(path), name, entry, depends, optionalDepends, enabled)) {
-            co_return nullptr;
-        }
-        if (!enabled) {
-            XX_LOGI("Plugin `{}` disabled by manifest, skip", name);
+        if (!parsePluginManifest(fs::path(path), name, entry, depends, optionalDepends)) {
             co_return nullptr;
         }
         // 依赖检查 (必选缺失/可选警告/环检测)
@@ -2132,15 +2118,7 @@ asio::awaitable<void>
         if (fs::is_directory(cfg.path, ec)) {
             std::string              name, entry;
             std::vector<std::string> depends, optionalDepends;
-            bool                     enabled = true;
-            if (parsePluginManifest(
-                    fs::path(cfg.path),
-                    name,
-                    entry,
-                    depends,
-                    optionalDepends,
-                    enabled
-                )) {
+            if (parsePluginManifest(fs::path(cfg.path), name, entry, depends, optionalDepends)) {
                 items.push_back(Item{cfg.path, name, depends});
                 continue;
             }

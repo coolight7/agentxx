@@ -908,7 +908,7 @@ if (AGENTXX_ENABLE_CODEGRAPH)
 endif()
 
 # 插件 (独立编译, 见 plugins/CMakeLists.txt)
-# - 各插件子目录 (example_native/javascript_engine/example_js) 自带 CMakeLists.txt,
+# - 各插件子目录 (example_plugin/javascript_engine/example_js) 自带 CMakeLists.txt,
 #   经 plugins/CMakeLists.txt add_subdirectory 汇总; 也可独立构建:
 #   cmake -B build -S agent/plugins -DAGENTXX_INSTALL_DIR=<agentxx-project-install>
 # - 插件不链接 libagentxx, 仅依赖纯 C ABI 头; JS 插件 (javascript_engine/example_js)

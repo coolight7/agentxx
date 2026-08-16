@@ -1,0 +1,5 @@
+name: agentxx_javascript_engine
+version: 1.0.0
+description: "Example native plugin"
+entry: libagentxx_javascript_engine.so
+depends:

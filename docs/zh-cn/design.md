@@ -1222,7 +1222,7 @@ agent/
 │   └── zlib/                     # 压缩
 │
 ├── plugins/                      # 插件 (独立动态库/目录, 仅依赖 plugin_api.h)
-│   ├── example_native/           # 一期示例: C++ 插件 (工具/钩子/事件/能力)
+│   ├── example_plugin/           # 一期示例: C++ 插件 (工具/钩子/事件/能力)
 │   ├── javascript_engine/                # 二期: JS 解释器插件 (QuickJS, interpreter.js 能力)
 │   └── example_js/               # 二期示例: JS 插件 (plugin.yaml + plugin.js)
 │

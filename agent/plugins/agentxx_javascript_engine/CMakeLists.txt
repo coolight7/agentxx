@@ -18,20 +18,27 @@ if (NOT QUICKJS_LIBRARY OR NOT QUICKJS_INCLUDE_DIR)
     "or pass -DAGENTXX_INSTALL_DIR=<path>")
 endif()
 
-add_library(agentxx_javascript_engine MODULE
-  javascript_engine.cpp
+set(PLUGIN_NAME agentxx_javascript_engine)
+add_library(${PLUGIN_NAME} MODULE
+  agentxx_javascript_engine.cpp
 )
-target_include_directories(agentxx_javascript_engine PRIVATE
+target_include_directories(${PLUGIN_NAME} PRIVATE
   "${AGENTXX_LIB_INCLUDE_DIR}"
   "${QUICKJS_INCLUDE_DIR}"
 )
-target_link_libraries(agentxx_javascript_engine PRIVATE
+target_link_libraries(${PLUGIN_NAME} PRIVATE
   "${QUICKJS_LIBRARY}"
 )
-set_target_properties(agentxx_javascript_engine PROPERTIES
+set_target_properties(${PLUGIN_NAME} PROPERTIES
   PREFIX "lib"
   CXX_STANDARD 26
   CXX_STANDARD_REQUIRED OFF
-  RUNTIME_OUTPUT_DIRECTORY "${AGENTXX_EXEC_INSTALL_PREFIX}/"
-  LIBRARY_OUTPUT_DIRECTORY "${AGENTXX_EXEC_INSTALL_PREFIX}/"
+  RUNTIME_OUTPUT_DIRECTORY "${AGENTXX_EXEC_INSTALL_PREFIX}/plugins/${PLUGIN_NAME}/"
+  LIBRARY_OUTPUT_DIRECTORY "${AGENTXX_EXEC_INSTALL_PREFIX}/plugins/${PLUGIN_NAME}/"
+)
+add_custom_command(TARGET ${PLUGIN_NAME} POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    "${CMAKE_CURRENT_SOURCE_DIR}/plugin.yaml"
+    "${AGENTXX_EXEC_INSTALL_PREFIX}/plugins/${PLUGIN_NAME}/plugin.yaml"
+  COMMENT "Copy ${PLUGIN_NAME} plugin resources to ${AGENTXX_EXEC_INSTALL_PREFIX}/plugins/${PLUGIN_NAME}"
 )
