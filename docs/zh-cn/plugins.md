@@ -138,24 +138,32 @@ C++ 跨动态库边界传对象有三大致命问题: 编译器不匹配 (GCC/Cl
 extern "C" {
 #endif
 
-#define AGENTXX_PLUGIN_API_VERSION 1
+#define AGENTXX_PLUGIN_API_VERSION 6
+
+/// 跨边界字符串参数统一形态: 只读借用 (data+size, 不要求 NUL 结尾,
+/// 生命周期仅覆盖本次调用; 宿主不得保存引用)
+typedef struct AgentxxPluginStringView {
+    const char* data;
+    size_t      size;
+} AgentxxPluginStringView;
+// 便捷构造: agentxx_plugin_sv(data, size) / agentxx_plugin_sv_cstr(s) / AGENTXX_SV(s)
 
 /// 插件元信息 (dlsym 入口后由宿主获取)
 typedef struct AgentxxPluginInfo {
-    int         api_version;   ///< 必须 == AGENTXX_PLUGIN_API_VERSION
-    const char* name;          ///< 唯一标识, 如 "agentxx_javascript_engine"
-    const char* version;
-    const char* description;
+    int api_version;   ///< 必须 == AGENTXX_PLUGIN_API_VERSION
+    AgentxxPluginStringView name;          ///< 唯一标识, 如 "agentxx_javascript_engine"
+    AgentxxPluginStringView version;
+    AgentxxPluginStringView description;
 } AgentxxPluginInfo;
 
-/// 工具定义 (LLM 侧, JSON Schema 以字符串传)
+/// 工具定义 (LLM 侧, JSON Schema 以字符串视图传)
 typedef struct AgentxxToolSpec {
-    const char* name;            ///< 须全局唯一
-    const char* description;
-    const char* parameters_json; ///< JSON Schema (json 字符串)
-    /// 同步执行回调; 返回 malloc 字符串(宿主 free), error_out 同理
-    char* (*execute)(void* user_data, const char* args_json,
-                     const char* thread_id, const char* tool_call_id,
+    AgentxxPluginStringView name;            ///< 须全局唯一
+    AgentxxPluginStringView description;
+    AgentxxPluginStringView parameters_json; ///< JSON Schema (json 字符串)
+    /// 同步执行回调; 返回 host->alloc 字符串(宿主 free), error_out 同理
+    char* (*execute)(void* user_data, AgentxxPluginStringView args_json,
+                     AgentxxPluginStringView thread_id, AgentxxPluginStringView tool_call_id,
                      char** error_out);
     void* user_data;
     long  default_timeout_ms;    ///< 0 = 宿主默认
@@ -168,34 +176,36 @@ typedef enum AgentxxHookPoint {
     AGENTXX_HOOK_TOOL_START,  AGENTXX_HOOK_TOOL_END
 } AgentxxHookPoint;
 
-/// 钩子回调 (NodeInput 序列化为 json 字符串; 允许通过 out_json 修改)
+/// 钩子回调 (NodeInput 序列化为 json 字符串视图; 允许通过 out_json 修改)
 typedef int (*AgentxxHookFn)(void* user_data, AgentxxHookPoint point,
-                             const char* node_input_json,
+                             AgentxxPluginStringView node_input_json,
                              char** out_json, char** error_out);
 
 /// 事件订阅句柄
 typedef struct AgentxxSubscription AgentxxSubscription;
 
-/// 宿主函数表 —— 插件获得的全部能力
+/// 宿主函数表 —— 插件获得的全部能力 (字符串参数均为 AgentxxPluginStringView;
+/// 返回的 char* 均为 host->alloc 分配, 调用方须 host->free)
 typedef struct AgentxxHostVtable {
     // ---- 注册/注销 (热插拔四个面) ----
     int  (*register_tool)(const struct AgentxxHost*, const AgentxxToolSpec*);
-    int  (*unregister_tool)(const struct AgentxxHost*, const char* name);
+    int  (*unregister_tool)(const struct AgentxxHost*, AgentxxPluginStringView name);
     int  (*register_hook)(const struct AgentxxHost*, AgentxxHookPoint,
                           AgentxxHookFn, void* user_data);
     int  (*unregister_hook)(const struct AgentxxHost*, AgentxxHookPoint, AgentxxHookFn);
-    AgentxxSubscription* (*subscribe)(const struct AgentxxHost*, const char* topic,
-                                      void (*handler)(const char* event_json, void* ud),
+    AgentxxSubscription* (*subscribe)(const struct AgentxxHost*, AgentxxPluginStringView topic,
+                                      void (*handler)(AgentxxPluginStringView event_json, void* ud),
                                       void* ud);
     void (*unsubscribe)(AgentxxSubscription*);
-    int  (*register_capability)(const struct AgentxxHost*, const char* capability_name);
+    int  (*register_capability)(const struct AgentxxHost*, AgentxxPluginStringView capability_name);
     // ---- 会话/上下文访问 (线程安全, 内部 post 到 io 线程) ----
-    char* (*call_tool)(const struct AgentxxHost*, const char* name,
-                       const char* args_json, const char* thread_id, char** error_out);
-    char* (*get_share_store)(const struct AgentxxHost*, const char* thread_id, long long id);
-    void  (*emit_message_tip)(const struct AgentxxHost*, const char* thread_id,
-                              const char* text);
-    void  (*log)(const struct AgentxxHost*, int level, const char* msg);
+    char* (*call_tool)(const struct AgentxxHost*, AgentxxPluginStringView name,
+                       AgentxxPluginStringView args_json, AgentxxPluginStringView thread_id,
+                       char** error_out);
+    char* (*get_share_store)(const struct AgentxxHost*, AgentxxPluginStringView thread_id, long long id);
+    void  (*emit_message_tip)(const struct AgentxxHost*, AgentxxPluginStringView thread_id,
+                              AgentxxPluginStringView text);
+    void  (*log)(const struct AgentxxHost*, int level, AgentxxPluginStringView msg);
 } AgentxxHostVtable;
 
 /// dlopen 后 dlsym 的入口符号
@@ -321,7 +331,7 @@ agentxx.onToolEnd((ctx) => agentxx.emitMessageTip(ctx.thread_id, "天气查询�
 
 | 组件 | 文件 | 说明 |
 |------|------|------|
-| C ABI 契约 | `agent/lib/include/agentxx/plugin/plugin_api.h` | 纯 C 头; vtable 含 `alloc/free/strdup` (跨 CRT 堆边界唯一分配通道), 插件返回字符串必须经 `host->alloc` 系分配 |
+| C ABI 契约 | `agent/lib/include/agentxx/plugin/plugin_api.h` | 纯 C 头 (API v6); vtable 含 `alloc/free/strdup` (跨 CRT 堆边界唯一分配通道), 插件返回字符串必须经 `host->alloc` 系分配; **字符串参数/字段一律 `AgentxxPluginStringView` (data+size 只读借用, 不要求 NUL 结尾), 便捷构造 `AGENTXX_SV(s)` / `agentxx_plugin_sv(data,size)` / `agentxx_plugin_sv_cstr(s)`** |
 | 工具注册表 | `plugin/tool_registry.h/.cpp` | 动态插件工具表 (shared_ptr 持有); 与静态工具名集合冲突检测; `appendDefinitions` 供 LLM 侧 schema 组装 |
 | 插件管理器 | `plugin/plugin_manager.h/.cpp` | 生命周期 load/enable/disable/unload + shutdownAll; `NativeLoader` 平台封装 (dlopen↔LoadLibraryW); `CapabilityRegistry` |
 | 插件工具适配 | `PluginTool` | C 回调经 `offloadCancellableAsync` (CancelToken watcher) 卸载到线程池, 超时经 `asyncWithTimeout`; inflight 计数保活代码段 |
@@ -337,13 +347,14 @@ agentxx.onToolEnd((ctx) => agentxx.emitMessageTip(ctx.thread_id, "天气查询�
 ### 11.2 与设计原稿的偏差 (实现为准)
 
 1. **跨 CRT 堆边界**: vtable 增加 `alloc/free/strdup`; `AgentxxToolSpec::execute` 返回的字符串与 `error_out` 均须经宿主分配 (`AGENTXX_STRDUP` 宏)。示例插件用 `g_host->vtable->strdup`, 不得用 `strdup`/`malloc`。
-2. **工具冲突检测**: `ToolRegistry::setStaticToolNames` 由 init 在 `own_tools` 之前收集内置工具名 (注意: own_tools 会 move 空 tools vector, 收集必须在其之前), 插件工具与内置/MCP 工具同名注册失败。
-3. **订阅回调签名**: `subscribe(topic, handler, ud)` 载荷为 JSON 字符串; 宿主侧经 `EventBus::get<std::string>` 桥接, topic 自动加 `plugin.` 前缀。
-4. **call_tool 语义**: 仅可调用本插件注册的工具 (不暴露宿主内置工具); 在调用方线程**同步执行** —— 工具回调(线程池)内安全, io 线程内调用会阻塞 io 线程 (JS 二期提供异步桥)。
-5. **钩子回调签名**: `fn(user_data, point, node_input_json, out_json, error_out)`; `node_input_json` 为节点输入摘要 (thread_id/point/messages_count/has_tool_calls); out_json 一期恒 NULL。
-6. **卸载彻底性**: `unloadAsync` 等 inflight==0 **且**进行中轮次结束后立即 `eraseMiddleware` (断开 中间件↔实例 shared_ptr 循环引用), 并从 pendingCleanup 移除; disable 仍走轮末摘除。`AgentContext::~AgentContext` 先调 `pluginManager->shutdownAll()`。
-7. **插件名**: 未导出 `get_info` 时按库文件名推断 (libfoo.so → foo)。
-8. **中间件 disabled 位**: 新增于 `BaseMiddlewareHandleInterface` (普通中间件恒 false); `WrapHandleBaseNode` start/end 循环均跳过 disabled 项, 保证配对。
+2. **字符串参数统一字符串视图 (v6)**: 所有跨边界"字符串参数/字段" (`AgentxxPluginInfo`/`AgentxxToolSpec` 字段、execute/hook/event 回调参数、vtable 的 name/topic/json 等参数) 从 `const char*` 改为 `AgentxxPluginStringView` (data+size, 只读借用, 不要求 NUL 结尾, 生命周期仅覆盖本次调用); 仅"宿主分配"的返回值与 `error_out` 保持 `char*` (host->alloc)。插件侧构造: 字面量用 `AGENTXX_SV("...")`, 运行时字符串用 `agentxx_plugin_sv(str.data(), str.size())`。宿主侧 `PluginTool` 构造时拷贝字符串字段 (name/description/parameters_json 指向插件侧视图, 不依赖插件内存存活)。
+3. **工具冲突检测**: `ToolRegistry::setStaticToolNames` 由 init 在 `own_tools` 之前收集内置工具名 (注意: own_tools 会 move 空 tools vector, 收集必须在其之前), 插件工具与内置/MCP 工具同名注册失败。
+4. **订阅回调签名**: `subscribe(topic, handler, ud)` 载荷为 JSON 字符串; 宿主侧经 `EventBus::get<std::string>` 桥接, topic 自动加 `plugin.` 前缀。
+5. **call_tool 语义**: 仅可调用本插件注册的工具 (不暴露宿主内置工具); 在调用方线程**同步执行** —— 工具回调(线程池)内安全, io 线程内调用会阻塞 io 线程 (JS 二期提供异步桥)。
+6. **钩子回调签名**: `fn(user_data, point, node_input_json, out_json, error_out)`; `node_input_json` 为节点输入摘要 (thread_id/point/messages_count/has_tool_calls); out_json 一期恒 NULL。
+7. **卸载彻底性**: `unloadAsync` 等 inflight==0 **且**进行中轮次结束后立即 `eraseMiddleware` (断开 中间件↔实例 shared_ptr 循环引用), 并从 pendingCleanup 移除; disable 仍走轮末摘除。`AgentContext::~AgentContext` 先调 `pluginManager->shutdownAll()`。
+8. **插件名**: 未导出 `get_info` 时按库文件名推断 (libfoo.so → foo)。
+9. **中间件 disabled 位**: 新增于 `BaseMiddlewareHandleInterface` (普通中间件恒 false); `WrapHandleBaseNode` start/end 循环均跳过 disabled 项, 保证配对。
 
 ### 11.3 设计原稿遗漏、实现中补上的关键点
 

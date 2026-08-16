@@ -422,10 +422,11 @@ asio::awaitable<TestResult> run_plugin_tests() {
         if (inst23) {
             // 注册带超时的慢工具: 超时 100ms, C 回调 sleep 600ms
             static AgentxxToolSpec slowSpec;
-            slowSpec.name            = "slow_timeout_tool";
-            slowSpec.description     = "slow tool for unload race test";
-            slowSpec.parameters_json = "{}";
-            slowSpec.execute = +[](void*, const char*, const char*, const char*, char**) -> char* {
+            slowSpec.name            = AGENTXX_SV("slow_timeout_tool");
+            slowSpec.description     = AGENTXX_SV("slow tool for unload race test");
+            slowSpec.parameters_json = AGENTXX_SV("{}");
+            slowSpec.execute
+                = +[](void*, AgentxxPluginStringView, AgentxxPluginStringView, AgentxxPluginStringView, char**) -> char* {
                 std::this_thread::sleep_for(std::chrono::milliseconds(600));
                 char* p = static_cast<char*>(::malloc(3));
                 p[0]    = '{';
