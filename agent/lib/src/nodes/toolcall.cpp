@@ -578,7 +578,7 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
                             if (args.is_object()) {
                                 // append arg `thread_id`
                                 args["thread_id"] = in.ctx.thread_id;
-                                // - 注入 tool_call_id 供 tool 使用 (如 agentxx_subagent_switch
+                                // - 注入 tool_call_id 供 tool 使用 (如 agentxx_subagent
                                 // 的中断 resultId)
                                 args["tool_call_id"] = tc.id;
                             }
@@ -623,7 +623,7 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
                         if (args.is_object()) {
                             // append arg `thread_id`
                             args["thread_id"] = in.ctx.thread_id;
-                            // - 注入 tool_call_id 供 tool 使用 (如 agentxx_subagent_switch 的中断
+                            // - 注入 tool_call_id 供 tool 使用 (如 agentxx_subagent 的中断
                             // resultId)
                             args["tool_call_id"] = tc.id;
                         }
