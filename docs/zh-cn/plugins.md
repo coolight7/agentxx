@@ -297,7 +297,7 @@ agentxx.registerTool({
   description: "查询城市天气",
   parameters: { city: { type: "string", required: true, description: "城市名" } },
   execute: async (args, ctx) => {
-    const page = await agentxx.callTool("agentxx_web_fetch_url",
+    const page = await agentxx.callTool("agentxx_web_fetch",
                                         { url: `https://wttr.in/${args.city}` }, ctx.thread_id);
     return { summary: page.slice(0, 500) };
   }
