@@ -57,8 +57,7 @@ void SubAgentNormalTask::createSubgraph(
         // 与主引擎一致: 每 thread 仅保留最新 checkpoint, 防止子代理每次运行
         // 在 subgraph 内累积 O(super-steps) 的 checkpoint (子代理为一次性
         // 运行, 不使用 fork / 时间旅行)
-        config.checkpoint_store
-            = std::make_shared<agentxx::agent::InMemorySingleCheckpointStore>();
+        config.checkpoint_store = std::make_shared<agentxx::agent::InMemorySingleCheckpointStore>();
         neograph::graph::EngineResources resources;
         resources.registry = std::move(registry);
         auto inner         = neograph::graph::GraphEngine::build(
@@ -133,7 +132,7 @@ SubAgentManagerTool::SubAgentManagerTool(
     XXToolBase(in_nodeName, in_agentContext, true, false) {}
 
 std::string SubAgentManagerTool::get_name() const {
-    return "agentxx_subagent_switch";
+    return "agentxx_subagent";
 }
 
 neograph::ChatTool SubAgentManagerTool::get_definition() const {
@@ -148,7 +147,7 @@ neograph::ChatTool SubAgentManagerTool::get_definition() const {
     }
 
     return {
-        "agentxx_subagent_switch",
+        "agentxx_subagent",
         prompt.depict,
         neograph::json{
                        {"type", "object"},
