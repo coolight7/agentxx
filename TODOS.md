@@ -1,5 +1,4 @@
 # TODO
-- tui 特化各种 toolcall 渲染， json 格式化
 - graph json 定义
 - BaseAgent 增加支持 usage 统计
 - 会话独立日志、yaml配置文件
@@ -9,7 +8,6 @@
 - llm压缩时，保持同一上下文，直接添加新user消息提示压缩成一段话，然后覆盖回去
 - 插件化支持内置合并编译
 - 客户端 viewMessage 分页
-- 插件支持修改预设提示词、剥离部分 tool 提示词到插件
 - 插件实现 execute_javascript_command
 - 调整插件代码结构，增加测试、划分文件夹
 
