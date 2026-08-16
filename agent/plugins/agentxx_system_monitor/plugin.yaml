@@ -1,0 +1,5 @@
+name: agentxx_system_monitor
+version: 1.0.0
+description: "System resource monitor: CPU/memory/GPU usage (tool agentxx_get_system_core_info, capability agentxx.system_usage)"
+entry: libagentxx_system_monitor.so
+depends:
