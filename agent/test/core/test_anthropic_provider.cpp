@@ -381,7 +381,7 @@ void test_parse_response_usage() {
 enum class AnthropicMockMode {
     Normal,
     ToolCall,
-    Thinking,
+    Think,
     RateLimit,
     ServerError,
     Streaming,
@@ -522,7 +522,7 @@ std::unique_ptr<MockAnthropicServer> startAnthropicMockServer(uint16_t& outPort)
                 resp.prepare_payload();
                 break;
 
-            case AnthropicMockMode::Thinking:
+            case AnthropicMockMode::Think:
                 resp.result(boost::beast::http::status::ok);
                 resp.set(boost::beast::http::field::content_type, "application/json");
                 resp.body() = mock->makeThinkingResponse().dump();
@@ -669,7 +669,7 @@ asio::awaitable<void> test_non_streaming_tool_call(MockAnthropicServer& mock, ui
 
 asio::awaitable<void> test_non_streaming_thinking(MockAnthropicServer& mock, uint16_t port) {
     std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
-    mock.mode           = AnthropicMockMode::Thinking;
+    mock.mode           = AnthropicMockMode::Think;
 
     auto provider = server::AnthropicProvider::create(makeAntCfg("sk-ant-test", baseUrl));
 

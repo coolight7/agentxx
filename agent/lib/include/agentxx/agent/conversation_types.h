@@ -27,7 +27,7 @@ struct ViewMessage {
     enum class Role : uint8_t {
         User,
         Assistant,
-        Thinking,
+        Think,
         System,
         Tool,
         /// 中断输入项消息 (内嵌交互控件, 直接渲染在消息列表中)
@@ -57,12 +57,12 @@ struct ViewMessage {
     /// 历史消息 id (appendHistory 分配); 客户端本地消息 (如 TUI 中断消息) 可为空
     std::string id;
     Role        role = Role::User;
-    /// 正文: User/Assistant/Thinking/System 消息文本; Tool 消息为工具参数
+    /// 正文: User/Assistant/Think/System 消息文本; Tool 消息为工具参数
     /// (arguments JSON 字符串, 与渲染侧现有约定一致)
     std::string text;
     int64_t     startTimeMs = 0; ///< 开始时间戳 (毫秒, Unix 时间戳)
     int64_t     durationMs  = 0; ///< 运行时长 (毫秒)
-    /// 折叠展示 (Thinking/Tool/System/Tip 消息; 点击可折叠/展开)
+    /// 折叠展示 (Think/Tool/System/Tip 消息; 点击可折叠/展开)
     bool collapsed = false;
 
     // ---- Role::Tool 专属 ----
@@ -104,7 +104,7 @@ struct ViewMessage {
     std::optional<TipData>       tip;       ///< Role::Tip 有效
     std::optional<InterruptData> interrupt; ///< Role::Interrupt 有效
 
-    /// 便捷构造: 纯文本消息 (User/Assistant/Thinking/System/Tip)
+    /// 便捷构造: 纯文本消息 (User/Assistant/Think/System/Tip)
     /// - Tip 消息自动创建 tip 子结构 (tipLevel 默认 Info), 且默认折叠展示
     ///   (提示类消息内容通常较长, 折叠避免占据消息列表空间, 点击可展开)
     static ViewMessage
@@ -240,7 +240,7 @@ inline std::string_view viewMessageRoleToString(ViewMessage::Role role) noexcept
             return "user";
         case R::Assistant:
             return "assistant";
-        case R::Thinking:
+        case R::Think:
             return "thinking";
         case R::System:
             return "system";
@@ -263,7 +263,7 @@ inline std::optional<ViewMessage::Role> viewMessageRoleFromString(std::string_vi
         return R::Assistant;
     }
     if (s == "thinking") {
-        return R::Thinking;
+        return R::Think;
     }
     if (s == "system") {
         return R::System;
@@ -470,7 +470,7 @@ inline ViewMessage ViewMessage::fromJson(const neograph::json& j) {
         case ViewMessage::Role::User:
         case ViewMessage::Role::System:
         case ViewMessage::Role::Assistant:
-        case ViewMessage::Role::Thinking:
+        case ViewMessage::Role::Think:
             break;
     }
     return m;

@@ -86,7 +86,7 @@ void BaseMiddlewareHandleInterface::printMessage(const neograph::ChatMessage& ms
 ┏━━━━━━ Message/{} ━━━━━━┓
 ┣━ Role: {}
 {}
-┣━ Thinking: {}
+┣━ Think: {}
 ┣━ Content: {}
 ┗━━━━━━ Message/{} ━━━━━━┛
 )",
@@ -382,7 +382,8 @@ void MiddlewareContext::cleanupThread(std::string_view thread_id) {
     shareStore.erase(thread_id);
     // 移除"已从持久化加载过"标记, 避免该 thread 再次出现时跳过加载
     if (!shareStoreLoaded_.empty()) {
-        auto it = std::find(shareStoreLoaded_.begin(), shareStoreLoaded_.end(), std::string{thread_id});
+        auto it
+            = std::find(shareStoreLoaded_.begin(), shareStoreLoaded_.end(), std::string{thread_id});
         if (it != shareStoreLoaded_.end()) {
             shareStoreLoaded_.erase(it);
         }

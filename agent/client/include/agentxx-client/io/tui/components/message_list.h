@@ -26,7 +26,7 @@
 ///
 /// 事件处理:
 /// - 滚轮: 由内部 LazyScrollable 处理
-/// - 左键点击 Thinking/Tool 消息: 折叠/展开
+/// - 左键点击 Think/Tool 消息: 折叠/展开
 /// - 左键点击中断输入消息的控件 (是/否、±、枚举项、输入框、确认、取消):
 ///   切换选中 / 步进 / 聚焦编辑 / 确认 / 取消; 键盘 (字符/Backspace/方向键/
 ///   Enter/Esc) 作用于最近点击激活的中断消息
@@ -114,7 +114,7 @@ public:
         return interruptHits_;
     }
 
-    /// 测试辅助: 上一帧可折叠消息 (Thinking/Tool/System) 的命中区域
+    /// 测试辅助: 上一帧可折叠消息 (Think/Tool/System) 的命中区域
     /// (与 collapsibleIndices_ 对应; 供测试模拟点击折叠/展开)
     const std::vector<ftxui::Box>& collapsibleBoxes() const {
         return collapsibleBoxes_;
@@ -252,7 +252,7 @@ private:
     /// 当前流式渲染模式: true=增量 (稳定块拆分为多个可缓存子项);
     /// false=降级 (动画等级不足, 整段 paragraph 单子项)
     bool streamUseIncremental_ = false;
-    /// 流式期间 (增量模式) 头部项数: thinking 时 1 (显示 "[Thinking] 时长"), 其余 0
+    /// 流式期间 (增量模式) 头部项数: thinking 时 1 (显示 "[Think] 时长"), 其余 0
     size_t streamHeaderCount_ = 0;
     /// 已 feed 到渲染器的 token 字节数 (检测增量追加/新流)
     size_t streamFedLen_ = 0;

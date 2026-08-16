@@ -29,7 +29,7 @@ extern int            g_da_sim_completion_tokens;
 extern neograph::json g_da_sim_tool_calls;
 /// 模拟 thinking 模型的推理文本: 非空时流式响应先推送一段
 /// [reasoning_content] delta (TYPE_THINKING), 并通过非流式的 message 字段返回,
-/// 用于验证 reasoning_content → Thinking 历史消息的持久化链路
+/// 用于验证 reasoning_content → Think 历史消息的持久化链路
 extern std::string g_da_sim_reasoning_content;
 /// 响应前延迟 (毫秒), 用于模拟慢速 LLM 以测试取消; 0 表示不延迟
 extern int g_da_sim_delay_ms;

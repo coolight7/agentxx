@@ -331,11 +331,11 @@ asio::awaitable<void> test_eventbridge_channel_write_messages() {
     co_return;
 }
 
-/// 回归: assistant 消息携带 reasoning_content 时必须展开为 Thinking 历史消息,
-/// 否则 viewMessages 不保存 Thinking, 重启恢复会话后 Thinking 丢失
+/// 回归: assistant 消息携带 reasoning_content 时必须展开为 Think 历史消息,
+/// 否则 viewMessages 不保存 Think, 重启恢复会话后 Think 丢失
 /// - 含 tool_calls 的消息 (thinking 模型 + 工具调用的常见形态) 同样要展开:
-///   修复前该分支只展开 Tool 消息, Thinking 从未进入 viewMessages/持久化
-/// - 纯文本 assistant (无 tool_calls) 也应展开: Thinking 在前, Assistant 在后
+///   修复前该分支只展开 Tool 消息, Think 从未进入 viewMessages/持久化
+/// - 纯文本 assistant (无 tool_calls) 也应展开: Think 在前, Assistant 在后
 asio::awaitable<void> test_eventbridge_channel_write_thinking() {
     auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
     auto session      = std::make_shared<agentxx::agent::Session>();
@@ -368,11 +368,11 @@ asio::awaitable<void> test_eventbridge_channel_write_thinking() {
              })},
                        }
     });
-    // Thinking 在前, Tool 在后
+    // Think 在前, Tool 在后
     XX_TEST_EXPECT_EQ(session->viewMessages.size(), size_t{2});
     if (session->viewMessages.size() == 2) {
         const auto& thinking = session->viewMessages[0];
-        XX_TEST_EXPECT_TRUE(thinking.role == agentxx::agent::ViewMessage::Role::Thinking);
+        XX_TEST_EXPECT_TRUE(thinking.role == agentxx::agent::ViewMessage::Role::Think);
         XX_TEST_EXPECT_EQ(thinking.text, std::string{"need to list files first"});
         XX_TEST_EXPECT_TRUE(thinking.collapsed);
         XX_TEST_EXPECT_FALSE(thinking.id.empty()); // 已分配 id (可持久化定位)
@@ -403,7 +403,7 @@ asio::awaitable<void> test_eventbridge_channel_write_thinking() {
     XX_TEST_EXPECT_EQ(session->viewMessages.size(), size_t{4});
     if (session->viewMessages.size() == 4) {
         const auto& thinking2 = session->viewMessages[2];
-        XX_TEST_EXPECT_TRUE(thinking2.role == agentxx::agent::ViewMessage::Role::Thinking);
+        XX_TEST_EXPECT_TRUE(thinking2.role == agentxx::agent::ViewMessage::Role::Think);
         XX_TEST_EXPECT_EQ(thinking2.text, std::string{"reasoned here"});
         XX_TEST_EXPECT_TRUE(thinking2.collapsed);
         const auto& assistant = session->viewMessages[3];
@@ -411,7 +411,7 @@ asio::awaitable<void> test_eventbridge_channel_write_thinking() {
         XX_TEST_EXPECT_EQ(assistant.text, std::string{"done"});
     }
 
-    // ---- 3. 无 reasoning_content: 不产生 Thinking (空内容不应生成空消息) ----
+    // ---- 3. 无 reasoning_content: 不产生 Think (空内容不应生成空消息) ----
     bridgeCb(neograph::graph::GraphEvent{
         neograph::graph::GraphEvent::Type::CHANNEL_WRITE,
         "llm",

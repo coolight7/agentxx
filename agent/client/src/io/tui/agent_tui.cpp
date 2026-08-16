@@ -449,7 +449,7 @@ void TUIClientAgentIO::start() {
                         requestRetry();
                         return true;
                     }
-                    // 可折叠消息点击 (Thinking/Tool 展开/折叠)
+                    // 可折叠消息点击 (Think/Tool 展开/折叠)
                     if (messageList_ && messageList_->handleCollapsibleClick(mouse)) {
                         return true;
                     }
@@ -1094,7 +1094,7 @@ void TUIClientAgentIO::pushCurrentTokenLocked(TUIRenderState& st) {
     auto msg         = std::make_shared<TUIMessage>();
     msg->role        = st.currentTokenRole;
     msg->text        = *st.currentToken;
-    msg->collapsed   = (st.currentTokenRole == TUIMessage::Role::Thinking);
+    msg->collapsed   = (st.currentTokenRole == TUIMessage::Role::Think);
     msg->durationMs  = st.pendingTokenDurationMs;
     msg->startTimeMs = st.pendingTokenStartTimeMs;
     st.messages.push_back(std::move(msg));
@@ -1159,7 +1159,7 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
         switch (delta.type) {
             case Type::TextToken:
             case Type::ThinkingToken: {
-                auto role = (delta.type == Type::ThinkingToken) ? TUIMessage::Role::Thinking
+                auto role = (delta.type == Type::ThinkingToken) ? TUIMessage::Role::Think
                                                                 : TUIMessage::Role::Assistant;
                 if (st.currentTokenRole != role && st.currentToken && !st.currentToken->empty()) {
                     // 先 push 再更新时间戳: pushCurrentTokenLocked 使用

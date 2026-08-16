@@ -110,7 +110,7 @@ static TestResult testViewMessagesRoundtrip() {
             makeMsg(V::Role::Assistant, "hi there"),
             makeMsg(V::Role::Tool, R"({"tool":"x"})"),
             makeMsg(V::Role::Tip, "tip"),
-            makeMsg(V::Role::Thinking, "think"),
+            makeMsg(V::Role::Think, "think"),
             makeMsg(V::Role::Interrupt, "interrupt-payload"),
         };
         for (size_t i = 0; i < msgs.size(); ++i) {
@@ -589,7 +589,7 @@ static asio::awaitable<void> testSessionPersistenceE2E() {
                            },
         });
         // 模拟 thinking 模型: 首个请求携带 reasoning_content + tool_calls,
-        // 验证展开出的 Thinking 历史消息可持久化并在重启后恢复
+        // 验证展开出的 Think 历史消息可持久化并在重启后恢复
         g_da_sim_reasoning_content = "E2E reasoning before tool call";
 
         // ---- 第一次运行: 一轮对话 + share store 写入 ----
@@ -602,12 +602,12 @@ static asio::awaitable<void> testSessionPersistenceE2E() {
             XX_TEST_EXPECT_FALSE(result.hasError);
             XX_TEST_EXPECT_FALSE(result.interrupted);
 
-            // 内存 viewMessages: user + Thinking(tool_calls 展开) + Tool
+            // 内存 viewMessages: user + Think(tool_calls 展开) + Tool
             auto sess = agent.agentContext->getSession("e2e-thread");
             XX_TEST_EXPECT_TRUE(sess->viewMessages.size() >= size_t{3});
             bool thinkingInMemory = false;
             for (const auto& vm : sess->viewMessages) {
-                if (vm.role == agentxx::agent::ViewMessage::Role::Thinking
+                if (vm.role == agentxx::agent::ViewMessage::Role::Think
                     && vm.text == "E2E reasoning before tool call") {
                     thinkingInMemory = true;
                 }
@@ -634,13 +634,13 @@ static asio::awaitable<void> testSessionPersistenceE2E() {
             co_await agent.init();
 
             auto sess = agent.agentContext->getSession("e2e-thread");
-            // 展示历史恢复: user + Thinking + Tool; Thinking 是本次修复的核心断言,
-            // 修复前 tool_calls 分支不展开 Thinking, 重启后 Thinking 丢失
+            // 展示历史恢复: user + Think + Tool; Think 是本次修复的核心断言,
+            // 修复前 tool_calls 分支不展开 Think, 重启后 Think 丢失
             XX_TEST_EXPECT_EQ(sess->viewMessages.size(), size_t{3});
             XX_TEST_EXPECT_EQ(sess->viewMessages[0].id, std::string{"msg_000001"});
             XX_TEST_EXPECT_EQ(sess->viewMessages[0].text, std::string{"Hello"});
             XX_TEST_EXPECT_TRUE(
-                sess->viewMessages[1].role == agentxx::agent::ViewMessage::Role::Thinking
+                sess->viewMessages[1].role == agentxx::agent::ViewMessage::Role::Think
             );
             XX_TEST_EXPECT_EQ(
                 sess->viewMessages[1].text,
