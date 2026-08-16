@@ -361,10 +361,8 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
     tools.push_back(std::make_unique<agentxx::tools::StringHtml2MarkdownTool>(agentContext));
     tools.push_back(std::make_unique<agentxx::tools::StringRegexpTool>(agentContext));
 
-    /// System
-#if XX_IS_WIN_D || XX_IS_LINUX_D
-    tools.push_back(std::make_unique<agentxx::tools::GetSystemCoreInfoTool>(agentContext));
-#endif
+    /// System (系统资源监控工具已迁移至插件 agentxx_system_monitor:
+    /// agentxx_get_system_core_info 由插件注册, 见 agentxx-config.yaml plugins 段)
 
     /// Web
     tools.push_back(std::make_unique<agentxx::tools::WebFetchUrlTool>(agentContext));
