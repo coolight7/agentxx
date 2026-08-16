@@ -28,19 +28,11 @@ int g_plugin_failed = 0;
 static std::string findExamplePluginPath() {
     namespace fs = std::filesystem;
     std::error_code ec;
-    auto            cwd = fs::current_path(ec);
+    auto            cwd = fs::current_path(ec) / "plugins" / "example_plugin";
     if (!ec) {
-        for (const auto& cand : {
-                 cwd / "libagentxx_plugin_example.so",
-                 cwd / "libagentxx_plugin_example.dylib",
-                 cwd / "libagentxx_plugin_example.dll",
-             }) {
-            if (fs::exists(cand, ec)) {
-                return cand.string();
-            }
-        }
+        return cwd.string();
     }
-    return "libagentxx_plugin_example.so"; // 让加载失败暴露日志
+    return "libexample_plugin.so"; // 让加载失败暴露日志
 }
 
 static asio::awaitable<void> sleepMs(int ms) {
@@ -66,14 +58,14 @@ asio::awaitable<TestResult> run_plugin_tests() {
 
     // ---- 2. 加载示例插件 ----
     auto path = findExamplePluginPath();
-    XX_TEST_EXPECT_TRUE(path.find("libagentxx_plugin_example") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(path.find("libexample_plugin") != std::string::npos);
     auto inst = co_await ctx->pluginManager->loadNativeAsync(path);
     XX_TEST_EXPECT_TRUE(inst != nullptr);
     if (!inst) {
         XX_TEST_EXPECT_TRUE(false);
         co_return TestResult{g_plugin_passed, g_plugin_failed};
     }
-    XX_TEST_EXPECT_EQ(inst->name, "agentxx_plugin_example");
+    XX_TEST_EXPECT_EQ(inst->name, "example_plugin");
     XX_TEST_EXPECT_EQ(inst->version, "1.0.0");
     XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("example_echo"));
     XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("example_caller"));
@@ -113,7 +105,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
     {
         const auto& handles = ctx->middlewareHandleContext->handles;
         bool        found   = std::any_of(handles.begin(), handles.end(), [](const auto& h) {
-            return h->name == "agentxx_plugin_example_middleware";
+            return h->name == "example_plugin_middleware";
         });
         XX_TEST_EXPECT_TRUE(found);
         XX_TEST_EXPECT_EQ(inst->hookRegistrations.size(), size_t{1});
@@ -140,14 +132,14 @@ asio::awaitable<TestResult> run_plugin_tests() {
 
     // ---- 7. 禁用 → 工具摘除/钩子停用; 启用 → 恢复 ----
     {
-        ctx->pluginManager->disable("agentxx_plugin_example");
+        ctx->pluginManager->disable("example_plugin");
         XX_TEST_EXPECT_FALSE(ctx->toolRegistry->contains("example_echo"));
         XX_TEST_EXPECT_FALSE(ctx->pluginManager->registry()->contains("example_caller"));
         // 无轮次执行时 disable 立即摘除中间件 (hooks 停用; enable 时按记录重建)
         XX_TEST_EXPECT_TRUE(inst->middleware == nullptr);
         XX_TEST_EXPECT_FALSE(inst->enabled);
 
-        ctx->pluginManager->enable("agentxx_plugin_example");
+        ctx->pluginManager->enable("example_plugin");
         XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("example_echo"));
         XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("example_caller"));
         XX_TEST_EXPECT_TRUE(inst->middleware != nullptr);
@@ -157,15 +149,15 @@ asio::awaitable<TestResult> run_plugin_tests() {
 
     // ---- 8. 卸载: 注册残留全部清理 + 插件移除 + 能力移除 ----
     {
-        auto ok = co_await ctx->pluginManager->unloadAsync("agentxx_plugin_example");
+        auto ok = co_await ctx->pluginManager->unloadAsync("example_plugin");
         XX_TEST_EXPECT_TRUE(ok);
         XX_TEST_EXPECT_FALSE(ctx->toolRegistry->contains("example_echo"));
-        XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("agentxx_plugin_example") == nullptr);
+        XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("example_plugin") == nullptr);
         XX_TEST_EXPECT_FALSE(ctx->pluginManager->capabilities()->has("example.demo"));
         // 中间件应从 handles 摘除 (pendingCleanup 于下轮 flush; 无轮次时直接摘除)
         const auto& handles = ctx->middlewareHandleContext->handles;
         bool        found   = std::any_of(handles.begin(), handles.end(), [](const auto& h) {
-            return h->name == "agentxx_plugin_example_middleware";
+            return h->name == "example_plugin_middleware";
         });
         XX_TEST_EXPECT_FALSE(found);
         // 工具对象应已释放 (inflight 归零后 dlclose)
@@ -174,7 +166,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
 
     // ---- 9. 重复卸载拒绝 ----
     {
-        auto ok = co_await ctx->pluginManager->unloadAsync("agentxx_plugin_example");
+        auto ok = co_await ctx->pluginManager->unloadAsync("example_plugin");
         XX_TEST_EXPECT_FALSE(ok);
     }
 
@@ -209,10 +201,10 @@ asio::awaitable<TestResult> run_plugin_tests() {
         if (inst2) {
             auto list  = ctx->pluginManager->list();
             bool found = std::any_of(list.begin(), list.end(), [](const auto& item) {
-                return item.name == "agentxx_plugin_example" && item.enabled;
+                return item.name == "example_plugin" && item.enabled;
             });
             XX_TEST_EXPECT_TRUE(found);
-            co_await ctx->pluginManager->unloadAsync("agentxx_plugin_example");
+            co_await ctx->pluginManager->unloadAsync("example_plugin");
         }
     }
 
@@ -220,7 +212,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
     namespace fs       = std::filesystem;
     auto        jsPath = findExamplePluginPath();
     std::string jsLib
-        = (fs::path(jsPath).parent_path() / "libagentxx_javascript_engine.so").string();
+        = (fs::path(jsPath).parent_path() / "plugins" / "agentxx_javascript_engine").string();
     std::string jsDir = (fs::path(jsPath).parent_path() / "plugins" / "example_js").string();
 
     // ---- 12. JS 引擎插件加载 (二期) ----
@@ -320,7 +312,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
 
         // ---- 18. 卸载宿主示例插件 ----
         {
-            co_await ctx->pluginManager->unloadAsync("agentxx_plugin_example");
+            co_await ctx->pluginManager->unloadAsync("example_plugin");
             XX_TEST_EXPECT_FALSE(ctx->toolRegistry->contains("example_echo"));
         }
 
@@ -461,7 +453,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
                 co_await sleepMs(250);
                 // 立即卸载: 必须等 inflight 归零 (回调完成) 才 dlclose
                 auto t0        = std::chrono::steady_clock::now();
-                auto ok        = co_await ctx->pluginManager->unloadAsync("agentxx_plugin_example");
+                auto ok        = co_await ctx->pluginManager->unloadAsync("example_plugin");
                 auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
                                      std::chrono::steady_clock::now() - t0
                 )
@@ -482,21 +474,21 @@ asio::awaitable<TestResult> run_plugin_tests() {
         if (inst24) {
             XX_TEST_EXPECT_TRUE(inst24->middleware != nullptr);
             ctx->pluginManager->onTurnBegin(); // 轮次执行中
-            ctx->pluginManager->disable("agentxx_plugin_example");
+            ctx->pluginManager->disable("example_plugin");
             ctx->pluginManager->flushPendingCleanup(); // 轮末摘除中间件
             ctx->pluginManager->onTurnEnd();
             XX_TEST_EXPECT_TRUE(inst24->middleware == nullptr); // 已物理摘除
             XX_TEST_EXPECT_TRUE(inst24->hookRegistrations.size() == size_t{1});
             // 启用: 钩子按注册记录重建中间件
-            ctx->pluginManager->enable("agentxx_plugin_example");
+            ctx->pluginManager->enable("example_plugin");
             XX_TEST_EXPECT_TRUE(inst24->middleware != nullptr);
             XX_TEST_EXPECT_FALSE(inst24->middleware->disabled);
             const auto& handles = ctx->middlewareHandleContext->handles;
             bool        found   = std::any_of(handles.begin(), handles.end(), [](const auto& h) {
-                return h->name == "agentxx_plugin_example_middleware" && !h->disabled;
+                return h->name == "example_plugin_middleware" && !h->disabled;
             });
             XX_TEST_EXPECT_TRUE(found);
-            co_await ctx->pluginManager->unloadAsync("agentxx_plugin_example");
+            co_await ctx->pluginManager->unloadAsync("example_plugin");
         }
     }
 

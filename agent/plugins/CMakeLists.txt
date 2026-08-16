@@ -52,11 +52,11 @@ endif()
 # - 每个插件子目录自带 CMakeLists.txt, 可独立编译
 # - 仅 AGENTXX_ENABLE_PLUGIN_JS 时编译 JS 相关插件 (依赖 quickjs 库)
 if (AGENTXX_ENABLE_PLUGIN_EXAMPLE)
-  add_subdirectory(example_native)
+  add_subdirectory(example_plugin)
 endif()
 
 if (AGENTXX_ENABLE_PLUGIN_JS)
-  add_subdirectory(javascript_engine)
+  add_subdirectory(agentxx_javascript_engine)
   if (AGENTXX_ENABLE_PLUGIN_EXAMPLE)
     add_subdirectory(example_js)
   endif()

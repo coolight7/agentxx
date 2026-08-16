@@ -1,5 +1,5 @@
 /*
- * agentxx_plugin_example —— 一期示例插件 (C++ 实现, 仅依赖纯 C ABI 头)
+ * example_plugin —— 一期示例插件 (C++ 实现, 仅依赖纯 C ABI 头)
  *
  * 演示能力:
  * 1. 工具注册: example_echo (原样回显) / example_caller (经 call_tool 互调)
@@ -9,7 +9,7 @@
  * 5. 卸载: unload 回调主动反注册
  *
  * 编译 (无需链接 libagentxx):
- *   g++ -std=c++26 -fPIC -shared example_native.cpp -o libagentxx_plugin_example.so
+ *   g++ -std=c++26 -fPIC -shared example_native.cpp -o libexample_plugin.so
  */
 #include "agentxx/plugin/plugin_api.h"
 
@@ -27,7 +27,7 @@ static const AgentxxHost* g_host = nullptr;
 extern "C" const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
     static const AgentxxPluginInfo info{
         AGENTXX_PLUGIN_API_VERSION,
-        "agentxx_plugin_example",
+        "example_plugin",
         "1.0.0",
         "Example native plugin: echo tool, hook, event, capability",
     };
