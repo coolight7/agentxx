@@ -86,7 +86,7 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
 | **MemoryFileMiddleware** | 上下文文件 (Memory) 读取与缓存，每次模型调用时注入系统提示词 |
 | **SummarizationMiddleware** | 上下文 token 统计与自动压缩，防止超出模型上下文窗口 |
 | **PlanningMiddleware** | 任务规划状态管理，将 planning 数据注入 system prompt |
-| **SubagentSupervisor** | 子代理生命周期管理与结果收集，支持批量并发委派和跨 agent 查询路由 |
+| **AgentHost** | 进程级 agent 宿主: 主 agent 与子代理平等注册 (AgentNode), 派生独立 agent 运行子代理, 强制深度/并发预算, HostBus 跨 agent 消息路由, 生命周期回收 |
 | **EventBridge** | 将 GraphEngine 事件翻译为 EventBus 强类型事件 |
 | **LogPrint** | 调试日志输出中间件 (条件编译，按配置控制日志级别) |
 
@@ -168,7 +168,7 @@ TUI [F4] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
 - 新会话历史由 SessionStore 从持久化恢复 (不存在时创建空会话)
 - 会话列表数据源: `{dataDir}/sqlite/sessions/` 目录扫描 + meta 表 (threadId/title/lastActiveMs)
 
-#### Subagent 执行链路 (NodeInterrupt → 总线派发 → 独立引擎运行)
+#### Subagent 执行链路 (NodeInterrupt → 总线派发 → 宿主派生独立 agent)
 
 ```
 父 agent LLM 发起 agentxx_subagent_switch
@@ -179,20 +179,27 @@ TUI [F4] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
       → 逐个解析 graphData 中的 interrupt args
       → "subagent" 参数: 经全局总线 service.subagent 委派
       → "subagent_batch": 经 service.subagent.batch 批量并发委派
-  → SubagentSupervisor::runSubagent:
-      → 从 subAgentList 取 SubAgentNormalTask (独立编译的 subgraph,
-        复用父 agent 的 tools 指针列表与 graphRegistry)
-      → 以独立 thread_id (session_subagent_{name}) 运行 subgraph
-        (resume_if_exists=false, 每次全新运行; 继承父会话 io 供权限/中断交互)
-      → 结果经 interruptResult channel 写回 graphData
+  → AgentHost::spawnSubagent (根 agent 总线由 attachRoot 挂接, serve 委派):
+      → 派生"独立 agent" (独立 AgentContext / engine / SessionStore / 中间件栈),
+        与主 agent 完全平等 (AgentNode); 配置为轻量子代理:
+        不建 MCP 连接 / 不加载插件 / RAG / CodeGraph, 不注入父级 Skill/Memory,
+        不持久化, 默认使用配置的 subagent 模型
+      → 宿主强制嵌套深度 (maxDepth) 与并发预算 (maxConcurrentSubagents)
+      → HIL 冒泡: 子代理会话继承父会话的 io 与总线 (权限/中断询问直达用户)
+      → 取消令牌透传: 父取消级联中止子代理 (engine run 取消)
+      → 进度经 hostBus agent.progress 发布, 结束经 agent.done 通知
+      → 运行结束 (成功/错误/取消) 宿主立即回收 AgentNode: 会话与中间件状态
+        随 AgentContext 析构整体释放, 无按 thread 累积泄漏
+  → 结果经 interruptResult channel 写回 graphData
   → engine->resume_async 恢复父图, execute_async 从 interruptResult 按
     resultId 提取结果返回
 ```
 
-- 父图与 subagent 图是两套 GraphEngine 实例, 消息上下文完全隔离
+- 子代理是独立 agent: 与根 agent 同构 (AgentNode), 消息上下文完全隔离
 - 中断结果按 resultId (默认取 tool_call_id) 关联, 支持同轮多个 subagent
-- 跨 agent 查询 (service.crossagent) 当前为显式 "not implemented"
-  (被动消息注入需持久会话模式, 未实现)
+- 跨 agent 消息 (agent.message): 本地 mailbox 路由 (持久会话 agent 扩展点),
+  或经 A2A 桥接转发远程 agent (registerRemoteAgent); 未注册目标返回明确的
+  not-implemented 错误
 
 ### 远程通信
 
@@ -863,14 +870,32 @@ auto resp = co_await rr.request(ReqPermission{.category = "filesystem_write"});
 | `service.subagent.batch` | ReqSubagentBatch / RespSubagentBatch | RR | 批量 subagent |
 | `service.crossagent` | ReqCrossAgent / RespCrossAgent | RR | 跨 agent 查询 |
 
+宿主总线 (HostBus, AgentHost 持有, 跨 agent 路由):
+
+| Topic | 类型 | 说明 |
+|---|---|---|
+| `agent.spawn` | ReqHostSpawn / RespHostSpawn | RR | 派生子代理 (宿主强制深度/并发预算) |
+| `agent.message` | ReqHostMessage / RespHostMessage | RR | 任意→任意 agent 消息 (mailbox / A2A 桥接) |
+| `agent.progress` | EventHostProgress | 单向 | 任意 agent 进度事件 |
+| `agent.done` | EventHostDone | 单向 | agent 运行结束 (宿主据此回收 AgentNode) |
+
 #### 5. 会话隔离与无锁设计
 
 ```
+AgentHost (进程级宿主)
+    ├── ioCtx                (共享 io_context, 多 agent 单线程/多协程交错)
+    ├── blockingPool         (共享阻塞操作线程池, 避免每 agent 一份)
+    ├── hostBus              (宿主总线: agent.spawn/message/progress/done)
+    └── AgentRegistry        (AgentNode 注册表: 主 agent 与子代理平等)
+         ├── "root" → AgentNode (主 agent, 独立 BaseAgent)
+         └── "agent_N" → AgentNode (子代理, 独立 BaseAgent)
+
 AgentContext
     ├── agentConfig          (全局共享配置)
     ├── middlewareHandleContext (中间件句柄)
     ├── bus                  (全局事件总线)
     ├── modelRegistry        (模型注册表)
+    ├── host                 (宿主引用, attachRoot/派生时注入)
     └── sessions (SessionStore)
          ├── "thread_1" → Session
          │     ├── io                    (AgentIOBase)
@@ -1042,7 +1067,7 @@ agent/
 │   │   │   ├── memory_file.h     # MemoryFileMiddleware (上下文文件注入)
 │   │   │   ├── summarization.h   # SummarizationMiddleware (上下文压缩)
 │   │   │   ├── planning.h        # PlanningMiddleware (任务规划状态)
-│   │   │   └── subagent_supervisor.h # SubagentSupervisor (子代理管理, 批量委派, 跨 agent 路由)
+│   │   │   └── host_events.h     # HostBus 事件类型 (agent.spawn/message/progress/done)
 │   │   ├── tools/                # 工具
 │   │   │   ├── tool.h            # XXToolBase / XXToolWrap 工具基类
 │   │   │   ├── filesystem.h      # 文件系统工具 (list/read/write/edit/glob/grep)

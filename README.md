@@ -25,7 +25,8 @@
 - c++协程异步实现，程序体积和内存占用少且性能高，可选添加 硬件加速Hyperscan、内置codegraph-cpp 等扩展库
 - 数据安全; Agentxx 不会上传你的数据，如果使用局域网内的 LLM Api Server，完全可以实现全程断网运行; Agentxx 无法确认 LLM Api、MCP、Skill 的数据安全，如果导入需要自行确认
 - 跨系统支持; 优化 windows 兼容，可在 WSL 中直接执行 windows 命令、打开 windows 程序、自动转换文件路径
-- 丰富的 toolcall、内置实现 codegraph 等效果显著的功能
+- 丰富的 tool
+- c++插件/js插件支持; 已实现 codegraph、系统CPU/GPU/RAM等信息、屏幕截取、鼠标选择文本事件流 等效果显著的功能，通过 C++ Quickjs 插件可以加载实现 js 插件
 - UI与Agent可分离，支持 TUI、cli、接入GUI、Websocket API、动态库/静态库嵌入App，支持单进程、多进程分别启动 UI 和 Agent Websocket Server服务
 - 中断、错误自动处理: 长时间稳定运行、网络重试、动态超时限制、消息上下文角色顺序检查和修正、自动检查和修正字符编码
 
@@ -73,25 +74,24 @@
     - ✅拦截输出，超过限制长度时自动压缩、截取摘要存储到 agentxx_share_store
     - ✅自动转换参数类型（String、Array、Number互转），提高兼容性
     - ⬜支持依托`事件流`实现异步获取结果、分块获取结果
-    - ✅filesystem (支持 `同步`/`asio io_uring/IOCP 协程异步` 文件读写、超时限制)
-        - ls (file/dir/recursive-dir/limit)
-        - read_text (full / offset-limit)
-        - read_binary (full / byte-offset-limit)
-        - write (text/binary)
-        - edit_text
+    - ✅filesystem (`同步`/`asio io_uring/IOCP 协程异步` 文件读写、超时限制)
+        - list (file/dir/recursive-dir/limit)
+        - read (full / offset-limit)
+        - write
+        - edit
         - glob
         - grep (multi text/regex + multi-filepath)
         - WSL 系统环境下自动转换 windows 文件路径
         - 读取文件内容时自动转换字符编码到 utf8
         - ⬜写入文件内容时保持文件原有字符编码
-    - ✅execute_command (支持 `同步`/`Boost.process 协程异步`执行、超时限制)
+    - ✅execute_command (`同步`/`Boost.process 协程异步`执行、超时限制)
         - execute_bash_command
         - execute_windows_command (检测到 WSL 环境时，允许在 linux/wsl 直接执行 windows 命令)
         - ⬜execute_python_command
         - ⬜execute_javascript_command
         - 超时限制
         - 区分 stdout、stderr，自动转换输出字符编码到 Utf8
-    - ✅web_search (支持 asio 协程异步网络请求)
+    - ✅web_search (asio 协程异步网络请求)
         - web_search (内置 HTML 转 markdown, 支持直接使用普通网页搜索api)
         - web_fetch_url_markdown (html to markdown)
         - web_fetch_url (raw resp body)
@@ -100,10 +100,16 @@
         - 目标规划 + 渐进任务细节 两层任务规划 + 备忘录
         - mermaid/stateDiagram-v2 状态图描述大方向的任务规划
         - todos 描述近期需要实现的任务细节步骤
+    - ✅RAG
+        - ✅文本分割分块 + 默认20%相邻分块重叠
+        - ✅文本分割方式:
+            - 定长分割
+            - 字符分割
+            - 结构分割 (较长的再进行 字符分割/定长分割)
+            - ⬜语义分割
     - ✅Sub-Agent (支持协程并发执行，并保证返回顺序正确)
     - ✅RAGSearch
     - ⬜tool_skill_search (延迟加载 tool/skill)
-    - ✅ui_control (windows 系统上控制鼠标键盘)
     - ✅get_system_core_info 获取系统 CPU占用、内存、GPU占用、显存
     - ✅get_current_datetime 获取系统时间戳、本地时间、UTC时间
 - ✅**Tree-Messages**
@@ -113,7 +119,7 @@
         - 自动拦截 tool/subagent 返回值，太长时存储原始内容到 `agentxx_share_store`, 并留下摘要和 id
     - 消息分支，支持修改历史消息/模型重新生成消息
     - 多会话和历史会话
-- ✅**事件流**
+- ✅**EventBus 事件流**
     - 支持注册事件功能/订阅事件通知，事件触发时通知订阅者
     - 预设功能:
         - 中断处理
@@ -171,6 +177,8 @@
     - Mcp Server
         - ⬜CodeGraph
         - ⬜Websearch
+- ⬜**A2UI支持**
+    - 统一 client 插件使用 A2UI 数据结构
 - ⬜**Self-upgrade**
     - 自动循环调整系统提示词、工具提示词等，评估效果
     - 自动测试
@@ -188,9 +196,19 @@
 - ✅**网络超时与SSL验证**
     - 支持配置连接超时、动态超时限制 (自动根据请求体大小动态计算发送超时、流式接收间隔超时)
     - 支持关闭SSL验证
-- **队列等待输入**
-    - ⬜agent-server 内置正在运行会话时增加用户输入，则添加到队列中，等待会话完成自动插入
+- ✅**队列等待输入**
     - TUI输入队列
+    - ⬜agent-server 内置正在运行会话时增加用户输入，则添加到队列中，等待会话完成自动插入
+
+### UI
+- ✅Cli
+- ✅TUI
+- ⬜GUI
+
+### Server
+- ✅MCP server
+- ✅ACP Server
+- ✅A2A Server
 
 ### 提示词训练
 - 系统提示词、工具提示词 对 LLM 的运行效果有重要影响，尤其是希望用于本地运行的小模型，为此设计了 `提示词训练`，希望实现对不同 LLM 模型针对性的提示词设计
@@ -200,35 +218,26 @@
 - ⬜根据 ModelName 动态加载，没有匹配的则取用默认提示词
 
 ### 插件化支持
-- ✅c/c++插件支持
-- ✅由 c++插件实现 js 扩展插件开发支持
-
-### 扩展
-- ⬜迁移到插件化实现
-- ✅支持读取 windows/linux 的 CPU占用、内存占用、GPU占用、显存占用
-- ✅支持 DXGI/DGI 捕获屏幕帧
-- ⬜支持捕获系统输出音频、指定程序输出音频、麦克风
-- ✅支持接收各种程序、浏览器的选择文本事件
-- ✅CodeGraph
+- ✅c++插件支持，可对 agent、client-ui 插件化修改
+- ✅`agentxx_javascript_engine`由 c++插件实现 js 扩展插件开发支持
+- ✅`agentxx_codegraph`
     - 分析代码符号、查找定位
     - 保存分析结果到 sqlite
-    - 可配置加载路径/忽略路径 (yaml `codegraph` 块: paths/ignore_paths/load_cwd)
+    - 可配置加载路径/忽略路径
     - 默认忽略 .gitignore 规则与 .gitmodules 子模块目录 (可配置关闭 use_gitignore)
-- ✅RAG
-    - ✅文本分割分块 + 默认20%相邻分块重叠
-    - ✅文本分割方式:
-        - 定长分割
-        - 字符分割
-        - 结构分割 (较长的再进行 字符分割/定长分割)
-        - ⬜语义分割
-- PaddleOCR (图片转文本)
-- SD.cpp 图片视频生成
-- FunASR 语音识别
-- Qwen3-TTS 文本转语音
+- ✅`agentxx_system_monitor`支持读取 windows/linux 的 CPU占用、内存占用、GPU占用、显存占用
+- ✅`agentxx_screen_capture`支持 DXGI/DGI 捕获屏幕帧
+- ⬜`agentxx_audio_stream`支持捕获系统输出音频、指定程序输出音频、麦克风
+- ✅`agentxx_text_selection_monitor`支持接收各种程序、浏览器的选择文本事件
+- ✅`agentxx_computer_use`windows 系统上控制鼠标键盘
+- ⬜PaddleOCR (图片转文本)
+- ⬜SD.cpp 图片视频生成
+- ⬜FunASR 语音识别
+- ⬜Qwen3-TTS 文本转语音
 
 ### 功能
 - ✅**操作键鼠**
-    - Tool/ui_control
+    - 插件实现`agentxx_computer_use`
 - ⬜**翻译/划词翻译**
     - 截图识别屏幕文本，允许复制、分析、翻译
 - ⬜**根据图片内容，提取文本和提示并指定文本在图片上的位置**
@@ -240,16 +249,6 @@
 - ⬜**匹配歌词**
 - ⬜**操作live2d/3d模型动作**
 - ⬜部分扩展功能独立编译为 exe，以便支持 WSL 连接扩展获取数据
-
-### UI
-- ✅Cli
-- ✅TUI
-- ⬜GUI
-
-### Server
-- ✅MCP server
-- ✅ACP Server
-- ✅A2A Server
 
 ### 测试
 - Agent 整体稳定性测试
