@@ -162,10 +162,10 @@ void testTuiToolHeaderWeb() {
     f.pushTool("agentxx_web_search", R"({"query":"hello world"})");
     XX_TEST_EXPECT_TRUE(f.render().find("Search · hello world") != std::string::npos);
 
-    f.pushTool("agentxx_web_fetch_url", R"({"url":"https://example.com/a"})");
+    f.pushTool("agentxx_web_fetch", R"({"url":"https://example.com/a"})");
     XX_TEST_EXPECT_TRUE(f.render().find("Fetch · https://example.com/a") != std::string::npos);
 
-    f.pushTool("agentxx_web_fetch_url_markdown", R"({"url":"https://example.com/b"})");
+    f.pushTool("agentxx_web_fetch_markdown", R"({"url":"https://example.com/b"})");
     XX_TEST_EXPECT_TRUE(f.render().find("FetchMD · https://example.com/b") != std::string::npos);
 }
 

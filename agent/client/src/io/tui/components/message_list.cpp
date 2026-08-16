@@ -811,11 +811,17 @@ static std::string buildToolHeaderSummary(std::string_view toolName, std::string
     if (toolName == "agentxx_web_search") {
         return make("Search", {}, oneLinePreview(getStr("query"), 100));
     }
-    if (toolName == "agentxx_web_fetch_url") {
+    if (toolName == "agentxx_web_fetch") {
         return make("Fetch", {}, oneLinePreview(getStr("url"), 100));
     }
-    if (toolName == "agentxx_web_fetch_url_markdown") {
+    if (toolName == "agentxx_web_fetch_markdown") {
         return make("FetchMD", {}, oneLinePreview(getStr("url"), 100));
+    }
+    // execute 系列 (bash/windows/python/javascript): 统一缩略名 Bash, 内容为命令
+    if (toolName == "agentxx_execute_bash_command" || toolName == "agentxx_execute_windows_command"
+        || toolName == "agentxx_execute_python_command"
+        || toolName == "agentxx_execute_javascript_command") {
+        return make("Bash", {}, oneLinePreview(getStr("command"), 100));
     }
     return {};
 }
