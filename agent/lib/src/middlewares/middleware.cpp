@@ -1,6 +1,7 @@
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/agent/session_persistence.h"
 #include "agentxx/tools/tool.h"
+#include <algorithm>
 #include <charconv>
 
 agentxx::middleware::BaseMiddlewareHandleInterface::BaseMiddlewareHandleInterface(
@@ -372,6 +373,24 @@ void MiddlewareContext::removeGraphDataItem(std::string_view thread_id, std::str
         auto resultIt = it->second.find(key);
         if (it->second.end() != resultIt) {
             it->second.erase(resultIt);
+        }
+    }
+}
+
+void MiddlewareContext::cleanupThread(std::string_view thread_id) {
+    graphData.erase(thread_id);
+    shareStore.erase(thread_id);
+    // 移除"已从持久化加载过"标记, 避免该 thread 再次出现时跳过加载
+    if (!shareStoreLoaded_.empty()) {
+        auto it = std::find(shareStoreLoaded_.begin(), shareStoreLoaded_.end(), std::string{thread_id});
+        if (it != shareStoreLoaded_.end()) {
+            shareStoreLoaded_.erase(it);
+        }
+    }
+    // 各中间件按 thread 的 state
+    for (auto& handle : handles) {
+        if (handle) {
+            handle->states.erase(thread_id);
         }
     }
 }

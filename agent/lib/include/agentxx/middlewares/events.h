@@ -1,7 +1,9 @@
 #pragma once
 
 #include "agentxx/util/log.h"
+#include "neograph/graph/cancel.h"
 #include <chrono>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -59,7 +61,7 @@ struct Topic {
 
     /// 跨 agent 查询: ReqCrossAgent / RespCrossAgent
     /// - 任一 agent (含 subagent) 可向指定 agentName 发起查询
-    /// - 目标 agent 的持有者 (如 SubagentSupervisor) 应答
+    /// - 目标 agent 的持有者 (AgentHost) 应答
     inline static constexpr std::string_view CrossAgent{"service.crossagent"};
 };
 
@@ -131,6 +133,10 @@ struct EventSubagentProgress {
     /// 进度类型: "token" | "tool_start" | "tool_end" | "turn_end"
     std::string kind;
     std::string data;
+    /// 宿主中的 agent 唯一 id (AgentHost 发布时填充; 旧发布方为空)
+    std::string agentId;
+    /// 父 agent id (AgentHost 发布时填充; 空 = 根/旧发布方)
+    std::string parentAgentId;
 };
 
 /// ===== IO =====
@@ -214,7 +220,7 @@ struct RespPermission {
 
 /// ===== 请求-响应: subagent 委派 =====
 /// - 父 agent 经 NodeInterrupt 触发 subagent 委派中断
-/// - Session 发出 ReqSubagentStart, SubagentSupervisor 应答
+/// - Session 发出 ReqSubagentStart, AgentHost 应答
 /// - 响应到达后 Session resume 父 graph, 注入结果
 
 struct ReqSubagentStart {
@@ -228,6 +234,9 @@ struct ReqSubagentStart {
     std::string message;
     /// 回填到父 toolcall 的 tool_call_id
     std::string resultId;
+    /// 父会话取消令牌 (可空): 子代理运行期间父会话被取消时, 令牌取消会
+    /// 级联中止子代理的 graph run, 避免子代理继续消耗 LLM token
+    std::shared_ptr<neograph::graph::CancelToken> cancelToken;
 };
 
 struct RespSubagentResult {
@@ -235,11 +244,13 @@ struct RespSubagentResult {
     std::string content;
     bool        hasError = false;
     std::string errorMessage;
+    /// 宿主派生时的 agent 唯一 id (AgentHost 填充; 直接请求方为空)
+    std::string agentId;
 };
 
 /// ===== 请求-响应: 跨 agent 查询 =====
 /// - 任一 agent (含 subagent) 向另一指定 agent 发起查询
-/// - 目标 agent 持有者 (SubagentSupervisor / Session) 注册 server 响应
+/// - 目标 agent 持有者 (AgentHost) 注册 server 响应
 /// - 实现 agent 间 actor 式通信
 
 struct ReqCrossAgent {
@@ -261,7 +272,7 @@ struct RespCrossAgent {
 };
 
 /// ===== 批量 subagent 委派 =====
-/// - 单个 interrupt 携带 N 个子任务, SubagentSupervisor 并发运行
+/// - 单个 interrupt 携带 N 个子任务, AgentHost 并发运行
 /// - 用于一轮内派发多个独立 subagent (如并行研究 + 编码)
 
 struct SubagentBatchItem {
@@ -273,9 +284,11 @@ struct SubagentBatchItem {
 };
 
 struct ReqSubagentBatch {
-    std::string                    parentAgentName;
-    std::string                    parentThreadId;
-    std::vector<SubagentBatchItem> tasks;
+    std::string parentAgentName;
+    std::string parentThreadId;
+    /// 父会话取消令牌 (可空): 取消时级联中止全部在跑子代理 (同 ReqSubagentStart)
+    std::shared_ptr<neograph::graph::CancelToken> cancelToken;
+    std::vector<SubagentBatchItem>                tasks;
 };
 
 struct RespSubagentBatchItem {

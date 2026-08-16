@@ -9,6 +9,7 @@
 #include "test_a2a.h"
 #include "test_acp.h"
 #include "test_agent.h"
+#include "test_agent_host.h"
 #include "test_aho_corasick.h"
 #include "test_anthropic_provider.h"
 #include "test_cancel.h"
@@ -204,6 +205,7 @@ int main(int argn, char** argv) {
             co_await run("event_bridge", agentxx::test::run_event_bridge_tests);
             co_await run("interrupt_bus", agentxx::test::run_interrupt_bus_tests);
             co_await run("subagent_bus", agentxx::test::run_subagent_bus_tests);
+            co_await run("agent_host", agentxx::test::run_agent_host_tests);
             co_await runCtx("string_tools", agentxx::test::run_string_tools_tests, agentContext);
             co_await run("share_store", agentxx::test::run_share_store_tests);
             co_await run("session_persistence", agentxx::test::run_session_persistence_tests);

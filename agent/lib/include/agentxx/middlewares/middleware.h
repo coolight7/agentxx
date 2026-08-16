@@ -531,6 +531,12 @@ public:
 
     void removeGraphDataItem(std::string_view thread_id, std::string_view key);
 
+    /// 清理指定 thread 的全部中间件状态 (graphData / shareStore / 各 handle states)
+    /// - 供一次性会话 (subagent、headless run) 结束后的资源回收, 防止按 thread 累积泄漏
+    ///   (Session 由 SessionStore::remove 另行移除)
+    /// - 须由 agent io 线程调用 (与状态读写同一线程)
+    void cleanupThread(std::string_view thread_id);
+
     template<typename T>
     T& getGraphDataItemValue(std::string_view thread_id, std::string_view key) {
         auto& itemGraphData = graphData[std::string{thread_id}];

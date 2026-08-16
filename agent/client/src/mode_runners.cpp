@@ -2,12 +2,12 @@
 
 #include "agentxx-client/io/stdio/agent_stdio.h"
 #include "agentxx-client/io/tui/agent_tui.h"
+#include "agentxx/agent/agent_host.h"
 #include "agentxx/agent/io/agent_server.h"
 #include "agentxx/agent/io/channel_io_transport.h"
 #include "agentxx/agent/io/session_server_agent_io.h"
 #include "agentxx/agent/io/ws_io_transport.h"
 #include "agentxx/agent/model_registry.h"
-#include "agentxx/middlewares/subagent_supervisor.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/log.h"
 #include "agentxx/util/ws_client.h"
@@ -141,9 +141,16 @@ static std::shared_ptr<agent::SessionServerAgentIO> setupLocalUnifiedDirect(
         *agent->ioCtx,
         [agent, serverIO, clientIO, threadId]() -> asio::awaitable<void> {
             co_await agent->init();
-            // 须经 shared_ptr 持有: 总线 handler 以 weak_ptr 捕获, 避免悬空 this
-            auto supervisor = std::make_shared<middleware::SubagentSupervisor>(agent->agentContext);
-            co_await supervisor->start();
+            // 宿主 (进程级): 主 agent 与子代理平等注册, 经 HostBus 交互;
+            // attachRoot 在根 agent 总线上 serve 子代理委派 (service.subagent),
+            // 子代理由宿主派生独立 agent 运行 (独立 AgentContext/engine)
+            // - 须经 shared_ptr 持有: 总线 handler 以 weak_ptr 捕获, 避免悬空 this
+            // - 注: MSVC 不支持带默认成员初始化器的聚合 + 指定初始化器,
+            //   故用字段赋值构造 Config
+            agentxx::agent::AgentHost::Config hostCfg;
+            hostCfg.ioCtx = agent->ioCtx;
+            auto host     = agentxx::agent::AgentHost::create(hostCfg);
+            host->attachRoot(agent);
             // 拉取启动信息 (MCP/Skill/Memory): 须在 init 完成后发送 —— transport 接收循环
             // 已先于 init 启动, 若此时 (init 前) 发送会立即得到空列表 (组件尚未加载),
             // 客户端将永远显示不出已加载的组件
