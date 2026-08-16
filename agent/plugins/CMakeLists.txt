@@ -44,6 +44,15 @@ endif()
 set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_STANDARD_REQUIRED OFF)
 
+# Windows/MSVC: MODULE 动态库默认不导出任何符号, 插件入口 (agentxx_plugin_entry /
+# agentxx_plugin_get_info / agentxx_client_entry 等) 与跨翻译单元符号
+# (如 agentxx_computer_use 的 uiControlExecute) 将无法被宿主 dlsym/GetProcAddress
+# 找到。开启自动导出 (CMake 生成 .def 导出全部全局符号; 插件为独立进程内加载,
+# 导出面不影响行为)
+if (WIN32)
+  set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
+endif()
+
 if(XX_IS_MSVC_D)
   list(PREPEND CMAKE_FIND_LIBRARY_SUFFIXES .lib .a)
 else()

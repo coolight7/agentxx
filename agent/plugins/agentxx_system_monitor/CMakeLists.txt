@@ -5,7 +5,7 @@
 #   - 能力 agentxx.system_usage (方法 query): 宿主 TUI 系统资源展示链路
 #     (WireGetSystemUsage) 经能力调用获取使用率 JSON
 set(PLUGIN_NAME agentxx_system_monitor)
-add_library(${PLUGIN_NAME} MODULE
+add_library(${PLUGIN_NAME} SHARED
   agentxx_system_monitor.cpp
   cpu_gpu_monitor.cpp
 )

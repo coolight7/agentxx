@@ -4,7 +4,7 @@
 # - 屏幕捕获已拆分为独立插件 agentxx_screen_capture (见 plugin.yaml depends,
 #   加载时须先于本插件, 拓扑排序自动处理)
 set(PLUGIN_NAME agentxx_computer_use)
-add_library(${PLUGIN_NAME} MODULE
+add_library(${PLUGIN_NAME} SHARED
   agentxx_computer_use.cpp
   ui_control.cpp
 )

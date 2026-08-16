@@ -4,7 +4,7 @@
 # - 从 agentxx_computer_use 拆分独立; agentxx_computer_use 经 plugin.yaml
 #   depends 声明依赖本插件 (须先于其加载)
 set(PLUGIN_NAME agentxx_screen_capture)
-add_library(${PLUGIN_NAME} MODULE
+add_library(${PLUGIN_NAME} SHARED
   agentxx_screen_capture.cpp
   screen_capture.cpp
 )

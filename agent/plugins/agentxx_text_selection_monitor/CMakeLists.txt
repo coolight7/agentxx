@@ -4,7 +4,7 @@
 #   - 工具 agentxx_text_selection_monitor (start/stop/status)
 #   - 选中文本经 publish 事件推送 (topic "agentxx_text_selection_monitor.selection")
 set(PLUGIN_NAME agentxx_text_selection_monitor)
-add_library(${PLUGIN_NAME} MODULE
+add_library(${PLUGIN_NAME} SHARED
   agentxx_text_selection_monitor.cpp
   text_selection_monitor.cpp
 )

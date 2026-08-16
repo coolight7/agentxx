@@ -3,7 +3,7 @@
 # - plugin.yaml + plugin.js 拷贝到同目录 (壳推导同目录 plugin.js)
 # - 仅当 AGENTXX_ENABLE_PLUGIN_JS 时由 plugins/CMakeLists.txt 添加本子目录
 set(PLUGIN_NAME example_js)
-add_library(${PLUGIN_NAME} MODULE
+add_library(${PLUGIN_NAME} SHARED
   libexample_js.cpp
 )
 target_include_directories(${PLUGIN_NAME} PRIVATE

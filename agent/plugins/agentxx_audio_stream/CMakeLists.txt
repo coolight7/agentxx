@@ -4,7 +4,7 @@
 #   - 工具 agentxx_audio_stream (start/stop/status)
 #   - 捕获帧经 publish 事件推送 (topic "agentxx_audio_stream.audio")
 set(PLUGIN_NAME agentxx_audio_stream)
-add_library(${PLUGIN_NAME} MODULE
+add_library(${PLUGIN_NAME} SHARED
   agentxx_audio_stream.cpp
   audio_stream.cpp
 )
