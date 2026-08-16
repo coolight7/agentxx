@@ -14,7 +14,8 @@ project(agentxx_plugins VERSION 0.1.0 LANGUAGES C CXX)
 option(AGENTXX_ENABLE_PLUGIN_EXAMPLE "Build example plugin." ON)
 option(AGENTXX_ENABLE_PLUGIN_JS "Build QuickJS JS plugin engine (agentxx_javascript_engine)." ON)
 option(AGENTXX_ENABLE_PLUGIN_CODEGRAPH "Build agentxx_codegraph plugin (requires codegraph libs)." ON)
-option(AGENTXX_ENABLE_PLUGIN_COMPUTER_USE "Build agentxx_computer_use plugin (ui_control/screen_capture)." ON)
+option(AGENTXX_ENABLE_PLUGIN_COMPUTER_USE "Build agentxx_computer_use plugin (ui_control)." ON)
+option(AGENTXX_ENABLE_PLUGIN_SCREEN_CAPTURE "Build agentxx_screen_capture plugin (screen capture)." ON)
 
 # 嵌套构建时由顶层传入 (见 agent/CMakeLists.txt)；独立构建时取默认值:
 # - AGENTXX_INSTALL_DIR:      依赖库 (如 quickjs 的 libqjs.a / quickjs.h) 的 install 目录
@@ -71,7 +72,12 @@ if (AGENTXX_ENABLE_PLUGIN_CODEGRAPH)
   add_subdirectory(agentxx_codegraph)
 endif()
 
-# agentxx_computer_use (ui_control/screen_capture)
+# agentxx_screen_capture (屏幕捕获; 独立插件, agentxx_computer_use depends 依赖它)
+if (AGENTXX_ENABLE_PLUGIN_SCREEN_CAPTURE)
+  add_subdirectory(agentxx_screen_capture)
+endif()
+
+# agentxx_computer_use (ui_control; 运行时依赖 agentxx_screen_capture, 配置时须同时加载)
 if (AGENTXX_ENABLE_PLUGIN_COMPUTER_USE)
   add_subdirectory(agentxx_computer_use)
 endif()

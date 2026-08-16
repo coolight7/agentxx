@@ -1,15 +1,15 @@
-# agentxx_computer_use —— 计算机控制插件 (Windows)
+# agentxx_screen_capture —— 屏幕捕获插件 (Windows)
 # - 独立动态库 (MODULE), 仅依赖纯 C ABI 头 + codegraph::Json (simdjson)
-# - 提供: agentxx_ui_control_keyboard_mouse
-# - 屏幕捕获已拆分为独立插件 agentxx_screen_capture (见 plugin.yaml depends,
-#   加载时须先于本插件, 拓扑排序自动处理)
-set(PLUGIN_NAME agentxx_computer_use)
+# - 提供: agentxx_screen_capture (单帧/全部屏幕/鼠标屏/流式推送)
+# - 从 agentxx_computer_use 拆分独立; agentxx_computer_use 经 plugin.yaml
+#   depends 声明依赖本插件 (须先于其加载)
+set(PLUGIN_NAME agentxx_screen_capture)
 add_library(${PLUGIN_NAME} MODULE
-  agentxx_computer_use.cpp
-  ui_control.cpp
+  agentxx_screen_capture.cpp
+  screen_capture.cpp
 )
 target_include_directories(${PLUGIN_NAME} PRIVATE
-  "${CMAKE_CURRENT_SOURCE_DIR}"          # computer_use_plugin.h
+  "${CMAKE_CURRENT_SOURCE_DIR}"          # screen_capture.h / screen_capture_plugin.h
   "${AGENTXX_LIB_INCLUDE_DIR}"           # agentxx/plugin/plugin_api.h
   "${AGENTXX_INSTALL_DIR}/include"       # codegraph/core/json.hpp simdjson.h fmt
 )
@@ -22,6 +22,12 @@ target_link_libraries(${PLUGIN_NAME} PRIVATE
 target_link_directories(${PLUGIN_NAME} PRIVATE
   "${AGENTXX_INSTALL_DIR}/lib"
 )
+if (WIN32)
+  # screen_capture: DXGI/D3D11/GDI
+  target_link_libraries(${PLUGIN_NAME} PRIVATE
+    d3d11 dxgi
+  )
+endif()
 
 set_target_properties(${PLUGIN_NAME} PROPERTIES
   PREFIX "lib"

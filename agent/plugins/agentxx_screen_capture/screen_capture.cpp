@@ -14,7 +14,7 @@ using Microsoft::WRL::ComPtr;
 #include <atomic>
 #include <thread>
 
-#include "computer_use_plugin.h"
+#include "screen_capture_plugin.h"
 
 namespace agentxx {
 namespace expand {
