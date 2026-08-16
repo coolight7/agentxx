@@ -246,6 +246,9 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>>
     // ---- 目录插件: 解析 plugin.yaml 取 entry 库路径 (与 agent 侧一致) ----
     // - manifest: name/entry/depends/optional_depends
     // - entry 为库文件名 (相对于插件目录)
+    // - entry 平台化: manifest 按 Linux 书写 (libfoo.so), Windows/macOS 下
+    //   修正扩展名 (.dll/.dylib); 多配置生成器 (MSVC Debug/Release) 产物位于
+    //   配置子目录: entry 按 {dir}/{entry} 找不到时回退 {dir}/{Debug|Release|...}
     std::string              libPath = path;
     std::vector<std::string> depends, optionalDepends;
     {
@@ -262,7 +265,37 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>>
                 XX_LOGE("[client_plugin] `{}` missing/invalid plugin.yaml", path);
                 co_return nullptr;
             }
-            libPath = (fs::path(path) / manifestEntry).string();
+            auto entryPath = (fs::path(path) / manifestEntry).lexically_normal().string();
+#if defined(_WIN32)
+            if (entryPath.ends_with(".so")) {
+                entryPath.replace(entryPath.size() - 3, 3, ".dll");
+            }
+#elif defined(__APPLE__)
+            if (entryPath.ends_with(".so")) {
+                entryPath.replace(entryPath.size() - 3, 3, ".dylib");
+            }
+#endif
+            if (!fs::exists(entryPath, ec)) {
+                for (const char* cfg : {"Debug", "Release", "RelWithDebInfo", "MinSizeRel"}) {
+                    auto candidate = (fs::path(path) / cfg / manifestEntry)
+                                         .lexically_normal()
+                                         .string();
+#if defined(_WIN32)
+                    if (candidate.ends_with(".so")) {
+                        candidate.replace(candidate.size() - 3, 3, ".dll");
+                    }
+#elif defined(__APPLE__)
+                    if (candidate.ends_with(".so")) {
+                        candidate.replace(candidate.size() - 3, 3, ".dylib");
+                    }
+#endif
+                    if (fs::exists(candidate, ec)) {
+                        entryPath = std::move(candidate);
+                        break;
+                    }
+                }
+            }
+            libPath = std::move(entryPath);
         }
     }
 
