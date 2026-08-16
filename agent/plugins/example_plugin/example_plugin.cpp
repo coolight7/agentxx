@@ -7,11 +7,19 @@
  * 3. 事件: 订阅 plugin.demo.topic
  * 4. 能力: 声明 capability "example.demo"
  * 5. 卸载: unload 回调主动反注册
+ * 6. client 入口 (双端插件, agentxx_client_entry):
+ *    - 状态栏项 example.status (轮次结束事件更新文本)
+ *    - 侧边栏面板 example.panel (展示收到的跨端插件事件)
+ *    - 命令 /example (send 动作) 与 /example_toast (toast 动作)
+ *    - 订阅 client 事件 (READY / TURN_END / PLUGIN_DATA)
+ *    - 跨端数据: READY 时 send_plugin_data("hello") 上行到 agent 侧
+ *      (agent 侧订阅 "client.example_plugin.hello" 消费)
  *
  * 编译 (无需链接 libagentxx):
  *   g++ -std=c++26 -fPIC -shared example_native.cpp -o libexample_plugin.so
  */
 #include "agentxx/plugin/plugin_api.h"
+#include "agentxx/plugin/client_plugin_api.h"
 
 #include <algorithm>
 #include <chrono>
@@ -169,6 +177,16 @@ static void on_demo_event(AgentxxPluginStringView event_json, void* ud) {
     }
 }
 
+/// 跨端事件: client 插件 send_plugin_data("hello") 上行 →
+/// 服务端发布 plugin.client.example_plugin.hello → 本订阅消费 (演示双端互通)
+static void on_client_hello(AgentxxPluginStringView event_json, void* ud) {
+    (void)event_json;
+    (void)ud;
+    if (g_host) {
+        g_host->vtable->log(g_host, 2, AGENTXX_SV("example received client hello event"));
+    }
+}
+
 /* ---------------- entry / unload ---------------- */
 
 extern "C" int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) {
@@ -226,6 +244,17 @@ extern "C" int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) 
         return -1;
     }
 
+    // 3.1 跨端事件订阅: client 插件上行 (服务端发布 plugin.client.example_plugin.hello;
+    // 插件侧传 "client.example_plugin.hello" 即可)
+    if (!host->vtable->subscribe(
+            host,
+            AGENTXX_SV("client.example_plugin.hello"),
+            on_client_hello,
+            nullptr
+        )) {
+        return -1;
+    }
+
     // 4. 能力
     if (host->vtable->register_capability(host, AGENTXX_SV("example.demo")) != 0) {
         return -1;
@@ -248,4 +277,268 @@ extern "C" void agentxx_plugin_unload(void* plugin_ctx) {
     g_host->vtable->unregister_capability(g_host, AGENTXX_SV("example.demo"));
     g_host->vtable->log(g_host, 2, AGENTXX_SV("example plugin unloaded"));
     g_host = nullptr;
+}
+
+/* =====================================================================
+ * client 侧入口 (agentxx_client_entry) —— 双端插件演示
+ *
+ * 同一动态库同时导出 agent 入口 (agentxx_plugin_entry) 与 client 入口
+ * (agentxx_client_entry); 两个 PluginManager 各自 dlopen/装配, 实例状态
+ * 彼此独立, 互通一律走 wire (send_plugin_data ↔ WirePluginDataUp)
+ * ===================================================================== */
+
+static const AgentxxClientHost* g_client_host = nullptr;
+static AgentxxStatusItem*       g_status_item = nullptr;
+static AgentxxPanel*            g_panel       = nullptr;
+static int                      g_turn_count  = 0;
+
+extern "C" const AgentxxClientPluginInfo* agentxx_client_get_info(void) {
+    static const AgentxxClientPluginInfo info{
+        AGENTXX_CLIENT_PLUGIN_API_VERSION,
+        AGENTXX_SV("example_plugin"),
+        AGENTXX_SV("1.0.0"),
+        AGENTXX_SV("Example client plugin: status item, panel, commands, events, cross-side data"),
+        0, // min_ui_caps: 无最低要求 (无 UI 能力的 CLI 也可加载)
+    };
+    return &info;
+}
+
+/* ---------------- 命令: /example (send 动作) ---------------- */
+
+static char* example_cmd_execute(void* ud, AgentxxPluginStringView args_json, char** error_out) {
+    (void)ud;
+    (void)error_out;
+    if (!g_client_host) {
+        return nullptr;
+    }
+    // 参数: {"text": "..."} (输入 "/example 参数" 的剩余部分)
+    char* argText = g_client_host->vtable->json_get_string(
+        g_client_host,
+        args_json,
+        AGENTXX_SV("text")
+    );
+    std::string suffix = argText ? argText : "";
+    if (argText) {
+        g_client_host->vtable->free(argText);
+    }
+    // 动作: send —— 代发一条用户消息 (与用户输入同排队语义)
+    std::string text = "Hello from example plugin";
+    if (!suffix.empty()) {
+        text += " (" + suffix + ")";
+    }
+    // json_escape 返回带引号的 JSON 字符串字面量 (如 "\"abc\""), 直接拼装即可
+    char* esc = g_client_host->vtable->json_escape(g_client_host, AGENTXX_SV(text.c_str()));
+    std::string out = R"({"action":"send","text":)";
+    out += esc ? esc : "\"\"";
+    out += "}";
+    if (esc) {
+        g_client_host->vtable->free(esc);
+    }
+    return g_client_host->vtable->strdup(out.c_str());
+}
+
+/* ---------------- 命令: /example_toast (toast 动作) ---------------- */
+
+static char* example_toast_execute(void* ud, AgentxxPluginStringView args_json, char** error_out) {
+    (void)ud;
+    (void)error_out;
+    if (!g_client_host) {
+        return nullptr;
+    }
+    char* argText = g_client_host->vtable->json_get_string(
+        g_client_host,
+        args_json,
+        AGENTXX_SV("text")
+    );
+    std::string text = argText && *argText ? argText : "toast from example plugin";
+    if (argText) {
+        g_client_host->vtable->free(argText);
+    }
+    char* esc = g_client_host->vtable->json_escape(g_client_host, AGENTXX_SV(text.c_str()));
+    std::string out = R"({"action":"toast","text":)";
+    out += esc ? esc : "\"\"";
+    out += R"(,"level":1})";
+    if (esc) {
+        g_client_host->vtable->free(esc);
+    }
+    return g_client_host->vtable->strdup(out.c_str());
+}
+
+/* ---------------- 事件订阅 ---------------- */
+
+/// READY: 服务端就绪 → 更新状态栏项 + 跨端上行 hello
+static void on_client_ready(AgentxxPluginStringView payload_json, void* ud) {
+    (void)ud;
+    if (!g_client_host) {
+        return;
+    }
+    g_client_host->vtable->log(g_client_host, 2, AGENTXX_SV("client example: ready"));
+    // 跨端数据: client → agent (服务端发布到 plugin.client.example_plugin.hello,
+    // agent 侧 on_client_hello 订阅消费)
+    g_client_host->vtable->send_plugin_data(
+        g_client_host,
+        AGENTXX_SV("hello"),
+        AGENTXX_SV(R"({"from":"client-example"})")
+    );
+}
+
+/// TURN_END: 轮次结束 → 状态栏项文本更新
+static void on_client_turn_end(AgentxxPluginStringView payload_json, void* ud) {
+    (void)ud;
+    (void)payload_json;
+    if (!g_client_host || !g_status_item) {
+        return;
+    }
+    ++g_turn_count;
+    std::string text = "turns: " + std::to_string(g_turn_count);
+    char*       esc  = g_client_host->vtable->json_escape(
+        g_client_host,
+        agentxx_plugin_sv(text.data(), text.size())
+    );
+    // json_escape 返回带引号的 JSON 字符串字面量, 直接拼装
+    std::string json = R"({"text":)";
+    json += esc ? esc : "\"\"";
+    json += "}";
+    if (esc) {
+        g_client_host->vtable->free(esc);
+    }
+    g_client_host->vtable->update_status_item(
+        g_client_host,
+        g_status_item,
+        agentxx_plugin_sv(json.data(), json.size())
+    );
+}
+
+/// PLUGIN_DATA: 收到 agent 侧插件事件 (WirePluginData) → 面板展示
+static void on_client_plugin_data(AgentxxPluginStringView payload_json, void* ud) {
+    (void)ud;
+    if (!g_client_host || !g_panel) {
+        return;
+    }
+    // payload: {"plugin","event","data"}
+    char* plugin = g_client_host->vtable->json_get_string(
+        g_client_host,
+        payload_json,
+        AGENTXX_SV("plugin")
+    );
+    char* event = g_client_host->vtable->json_get_string(
+        g_client_host,
+        payload_json,
+        AGENTXX_SV("event")
+    );
+    char* data = g_client_host->vtable->json_get_string(
+        g_client_host,
+        payload_json,
+        AGENTXX_SV("data")
+    );
+    std::string line = std::string(plugin ? plugin : "?") + "." + (event ? event : "?");
+    if (data && *data) {
+        line += ": " + std::string(data);
+    }
+    if (plugin) {
+        g_client_host->vtable->free(plugin);
+    }
+    if (event) {
+        g_client_host->vtable->free(event);
+    }
+    if (data) {
+        g_client_host->vtable->free(data);
+    }
+    char* esc = g_client_host->vtable->json_escape(g_client_host, AGENTXX_SV(line.c_str()));
+    // json_escape 返回带引号的 JSON 字符串字面量, 直接拼装
+    std::string json = R"({"items":[{"kind":"text","text":)";
+    json += esc ? esc : "\"\"";
+    json += R"(},{"kind":"badge","text":"updated"}]})";
+    if (esc) {
+        g_client_host->vtable->free(esc);
+    }
+    g_client_host->vtable->update_panel(g_client_host, g_panel, AGENTXX_SV(json.c_str()));
+}
+
+/* ---------------- entry / unload ---------------- */
+
+extern "C" int agentxx_client_entry(const AgentxxClientHost* host, void** plugin_ctx) {
+    g_client_host = host;
+    (void)plugin_ctx;
+
+    // 1. 状态栏项 (左侧 align=0, order=10)
+    g_status_item = host->vtable->register_status_item(
+        host,
+        AGENTXX_SV("example_plugin.turns"),
+        AGENTXX_SV(R"({"text":"turns: 0"})"),
+        0,
+        10
+    );
+    // 宿主不支持状态栏 (如 CLI) 时注册返回 NULL, 插件降级 (不视为失败)
+
+    // 2. 侧边栏面板
+    g_panel = host->vtable->register_panel(
+        host,
+        AGENTXX_SV("example_plugin.panel"),
+        AGENTXX_SV(R"({"title":"Example"})")
+    );
+
+    // 3. 命令
+    if (host->vtable->register_command(
+            host,
+            AGENTXX_SV("example"),
+            AGENTXX_SV("Send a message from the example plugin"),
+            example_cmd_execute,
+            nullptr
+        ) != 0) {
+        return -1;
+    }
+    if (host->vtable->register_command(
+            host,
+            AGENTXX_SV("example_toast"),
+            AGENTXX_SV("Show a toast from the example plugin"),
+            example_toast_execute,
+            nullptr
+        ) != 0) {
+        return -1;
+    }
+
+    // 4. 事件订阅
+    if (!host->vtable->subscribe(host, AGENTXX_CLIENT_EVT_READY, on_client_ready, nullptr)) {
+        return -1;
+    }
+    if (!host->vtable->subscribe(
+            host,
+            AGENTXX_CLIENT_EVT_TURN_END,
+            on_client_turn_end,
+            nullptr
+        )) {
+        return -1;
+    }
+    if (!host->vtable->subscribe(
+            host,
+            AGENTXX_CLIENT_EVT_PLUGIN_DATA,
+            on_client_plugin_data,
+            nullptr
+        )) {
+        return -1;
+    }
+
+    host->vtable->log(host, 2, AGENTXX_SV("example client plugin loaded"));
+    return 0;
+}
+
+extern "C" void agentxx_client_unload(void* plugin_ctx) {
+    (void)plugin_ctx;
+    if (!g_client_host) {
+        return;
+    }
+    // 主动反注册 (宿主也会自动清理, 这里演示插件侧约定)
+    g_client_host->vtable->unregister_command(g_client_host, AGENTXX_SV("example"));
+    g_client_host->vtable->unregister_command(g_client_host, AGENTXX_SV("example_toast"));
+    if (g_status_item) {
+        g_client_host->vtable->unregister_status_item(g_client_host, g_status_item);
+        g_status_item = nullptr;
+    }
+    if (g_panel) {
+        g_client_host->vtable->unregister_panel(g_client_host, g_panel);
+        g_panel = nullptr;
+    }
+    g_client_host->vtable->log(g_client_host, 2, AGENTXX_SV("example client plugin unloaded"));
+    g_client_host = nullptr;
 }
