@@ -1,5 +1,5 @@
-// js_example —— JS 插件示例
-// 通过全局 agentxx 桥注册工具/钩子/事件; 引擎 (agentxx_plugin_js) 承载执行
+// example_js —— JS 插件示例
+// 通过全局 agentxx 桥注册工具/钩子/事件; 引擎 (agentxx_javascript_engine) 承载执行
 
 // ---- 工具 1: 纯 JS 计算 ----
 agentxx.registerTool({
@@ -56,10 +56,10 @@ agentxx.subscribe("demo.topic", (payload) => {
 });
 
 // ---- 插件互查 API 演示: 判断依赖是否安装 + 自适应 ----
-// - agentxx.getPlugin("agentxx_plugin_js") → 信息对象或 null
+// - agentxx.getPlugin("agentxx_javascript_engine") → 信息对象或 null
 // - agentxx.listPlugins() → 全部已安装插件数组
 (function checkDeps() {
-  const engine = agentxx.getPlugin("agentxx_plugin_js");
+  const engine = agentxx.getPlugin("agentxx_javascript_engine");
   if (engine) {
     agentxx.log(2, "js engine installed: v" + engine.version + " (type " + engine.type + ")");
   } else {
@@ -72,5 +72,5 @@ agentxx.subscribe("demo.topic", (payload) => {
 // ---- 顶层异步初始化 (Promise 驱动) ----
 (async () => {
   await new Promise((resolve) => setTimeout(resolve, 5));
-  agentxx.log(2, "js_example async init done");
+  agentxx.log(2, "example_js async init done");
 })();

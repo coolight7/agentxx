@@ -304,7 +304,7 @@ void test_plugins_parse_basic() {
     // 列表项: path (必填) + enabled (默认 true) + args (任意 YAML → JSON)
     auto cfg = loadYaml(R"(plugins:
   - path: "/opt/plugins/my_plugin.so"
-  - path: "/opt/plugins/js_example"
+  - path: "/opt/plugins/example_js"
     enabled: false
     args:
       foo: bar
@@ -317,7 +317,7 @@ void test_plugins_parse_basic() {
         XX_TEST_EXPECT_EQ(cfg.plugins[0].path, std::string("/opt/plugins/my_plugin.so"));
         // enabled: false 生效
         XX_TEST_EXPECT_FALSE(cfg.plugins[1].enabled);
-        XX_TEST_EXPECT_EQ(cfg.plugins[1].path, std::string("/opt/plugins/js_example"));
+        XX_TEST_EXPECT_EQ(cfg.plugins[1].path, std::string("/opt/plugins/example_js"));
         // args 解析为 JSON 对象
         auto& args = cfg.plugins[1].args;
         XX_TEST_EXPECT_TRUE(args.is_object());

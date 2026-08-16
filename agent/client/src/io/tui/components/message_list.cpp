@@ -860,7 +860,9 @@ Element MessageListComponent::buildMessageBlock(
             if (!expanded) {
                 // 预览可能超出宽度: xflex_shrink 使预览吸收剩余宽度并在右缘裁剪,
                 // 避免 hbox 把 "- [System] " 前缀一并压缩 (向左覆盖压缩)
-                header.push_back(text(oneLinePreview(msg.text)) | color(tipColor) | dim | xflex_shrink);
+                header.push_back(
+                    text(oneLinePreview(msg.text)) | color(tipColor) | dim | xflex_shrink
+                );
             }
             lines.push_back(hbox(std::move(header)));
             if (expanded) {
@@ -958,7 +960,8 @@ Element MessageListComponent::buildMessageBlock(
                     if (false == headerText.empty()) {
                         // 特化渲染 (摘要可能超宽: xflex_shrink 右缘裁剪, 不压缩前缀)
                         header.push_back(
-                            text(std::move(headerText)) | color(theme.toolColor) | dim | xflex_shrink
+                            text(std::move(headerText)) | color(theme.toolColor) | dim
+                            | xflex_shrink
                         );
                     } else {
                         header.push_back(
@@ -1016,7 +1019,9 @@ Element MessageListComponent::buildMessageBlock(
                     ))
                     | color(theme.accentColor) | bold
                 );
-                header.push_back(text(msg.interrupt->inputLabel) | color(theme.accentColor) | xflex_shrink);
+                header.push_back(
+                    text(msg.interrupt->inputLabel) | color(theme.accentColor) | xflex_shrink
+                );
                 lines.push_back(hbox(std::move(header)));
 
                 if (!msg.interrupt->inputDepict.empty()) {
