@@ -1,18 +1,15 @@
 // agentxx_computer_use —— 计算机控制插件 (Windows)
-// - 从 lib 迁移: ui_control (鼠标键盘控制) + screen_capture (屏幕捕获)
 // - 注册工具:
 //   - agentxx_ui_control_keyboard_mouse: 批量 UI 命令 (鼠标/键盘/滚动/拖拽)
-//   - agentxx_screen_capture: 屏幕捕获 (单帧/全部屏幕/鼠标屏/流式推送)
+// - 屏幕捕获已拆分到独立插件 agentxx_screen_capture (本插件 plugin.yaml
+//   depends 声明依赖, 加载时须先于本插件)
 // - 插件不链接 libagentxx: 描述经 get_tool_prompt 读取, 日志经 vtable log
 #include "computer_use_plugin.h"
-#include "screen_capture.h"
 #include "codegraph/core/json.hpp"
 #include "fmt/format.h"
-#include <atomic>
-#include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
-#include <thread>
 #include <vector>
 
 // ui_control.cpp 提供的执行函数 (Windows 分支; 非 Windows 分支由 ui_control.cpp 提供)
@@ -178,183 +175,6 @@ static void registerUiControlTool() {
     );
 }
 
-// =====================================================================
-// agentxx_screen_capture
-// =====================================================================
-
-/// 屏幕帧 → 元信息 JSON (像素可选 base64)
-static codegraph::Json frameToJson(const agentxx::expand::ScreenFrame& f, bool includePixels) {
-    codegraph::Json j = codegraph::Json::object();
-    j["width"]        = f.width;
-    j["height"]       = f.height;
-    j["offset_x"]     = f.offsetX;
-    j["offset_y"]     = f.offsetY;
-    j["screen_index"] = f.screenIndex;
-    j["screen_name"]  = f.screenName;
-    j["is_primary"]   = f.isPrimary;
-    j["pixel_bytes"]  = static_cast<int64_t>(f.pixelData.size());
-    if (includePixels && !f.pixelData.empty()) {
-        static const char* kBase64 =
-            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-        std::string b64;
-        b64.reserve(((f.pixelData.size() + 2) / 3) * 4);
-        size_t i = 0;
-        for (; i + 2 < f.pixelData.size(); i += 3) {
-            uint32_t n = (uint32_t{f.pixelData[i]} << 16) | (uint32_t{f.pixelData[i + 1]} << 8)
-                         | uint32_t{f.pixelData[i + 2]};
-            b64.push_back(kBase64[(n >> 18) & 63]);
-            b64.push_back(kBase64[(n >> 12) & 63]);
-            b64.push_back(kBase64[(n >> 6) & 63]);
-            b64.push_back(kBase64[n & 63]);
-        }
-        if (i + 1 == f.pixelData.size()) {
-            uint32_t n = uint32_t{f.pixelData[i]} << 16;
-            b64.push_back(kBase64[(n >> 18) & 63]);
-            b64.push_back(kBase64[(n >> 12) & 63]);
-            b64.push_back('=');
-            b64.push_back('=');
-        } else if (i + 2 == f.pixelData.size()) {
-            uint32_t n = (uint32_t{f.pixelData[i]} << 16) | (uint32_t{f.pixelData[i + 1]} << 8);
-            b64.push_back(kBase64[(n >> 18) & 63]);
-            b64.push_back(kBase64[(n >> 12) & 63]);
-            b64.push_back(kBase64[(n >> 6) & 63]);
-            b64.push_back('=');
-        }
-        j["pixels_base64"] = b64;
-    }
-    return j;
-}
-
-/// 帧数组 → JSON (空帧标记失败)
-static std::string framesResult(
-    const std::vector<agentxx::expand::ScreenFrame>& frames,
-    bool                                             includePixels
-) {
-    if (frames.empty()) {
-        return R"({"ok":false,"error":"capture failed"})";
-    }
-    codegraph::Json arr = codegraph::Json::array();
-    for (const auto& f : frames) {
-        arr.push_back(frameToJson(f, includePixels));
-    }
-    codegraph::Json j = codegraph::Json::object();
-    j["ok"]            = true;
-    j["frames"]        = arr;
-    return j.dump();
-}
-
-/// 流式采集单例 (ScreenCapture 内部自管线程; unload 时停止)
-struct ScreenCaptureHolder {
-    static ScreenCaptureHolder& instance() {
-        static ScreenCaptureHolder holder;
-        return holder;
-    }
-
-    bool startStreaming(int rate) {
-        if (capture_.isStreaming()) {
-            return false;
-        }
-        rate = std::clamp(rate, 1, 30);
-        return capture_.startStreaming(
-            rate,
-            [](const std::vector<agentxx::expand::ScreenFrame>& frames) {
-                if (!g_host || !g_host->vtable || !g_host->vtable->publish) {
-                    return;
-                }
-                codegraph::Json j = codegraph::Json::object();
-                j["frames"]       = codegraph::Json::array();
-                for (const auto& f : frames) {
-                    j["frames"].push_back(frameToJson(f, false));
-                }
-                g_host->vtable->publish(g_host, "agentxx_computer_use.frame", j.dump().c_str());
-            }
-        );
-    }
-
-    void stopStreaming() {
-        capture_.stopStreaming();
-    }
-
-    agentxx::expand::ScreenCapture capture_;
-};
-
-static void registerScreenCaptureTool() {
-    codegraph::Json cmd = codegraph::Json::object();
-    cmd["type"]         = "string";
-    cmd["enum"]         = codegraph::Json::array({codegraph::Json("capture_all"),
-                                                  codegraph::Json("capture_mouse"),
-                                                  codegraph::Json("capture_screen"),
-                                                  codegraph::Json("get_screen_count"),
-                                                  codegraph::Json("start_streaming"),
-                                                  codegraph::Json("stop_streaming")});
-    codegraph::Json schema = codegraph::Json::object();
-    schema["type"]         = "object";
-    schema["properties"]   = codegraph::Json::object();
-    schema["properties"]["command"]       = cmd;
-    schema["properties"]["screen_index"]  = codegraph::Json({{"type", "number"}});
-    schema["properties"]["frame_rate"]    = codegraph::Json({{"type", "number"}});
-    schema["properties"]["include_pixels"] = codegraph::Json(
-        {{"type", "boolean"},
-         {"description", "Include base64 pixel data (large!). Default: false."}}
-    );
-    schema["required"] = codegraph::Json::array({codegraph::Json("command")});
-
-    registerTool(
-        "agentxx_screen_capture",
-        "Capture screen frames on Windows: all screens, mouse screen, or a specific screen; "
-        "also supports start/stop streaming (frames pushed as plugin events).",
-        schema.dump(),
-        [](SimpleJson& args) -> std::string {
-            auto&       capture = ScreenCaptureHolder::instance();
-            std::string command;
-            jsonGetString(args.doc().at_pointer("/command"), command);
-            bool includePixels = false;
-            jsonGetBool(args.doc().at_pointer("/include_pixels"), includePixels);
-            if (command == "capture_all") {
-                return framesResult(capture.capture_.captureAllScreens(), includePixels);
-            }
-            if (command == "capture_mouse") {
-                std::vector<agentxx::expand::ScreenFrame> frames;
-                auto f = capture.capture_.captureMouseScreen();
-                if (f.width > 0) {
-                    frames.push_back(std::move(f));
-                }
-                return framesResult(frames, includePixels);
-            }
-            if (command == "capture_screen") {
-                int64_t idx = 0;
-                jsonGetInt(args.doc().at_pointer("/screen_index"), idx);
-                std::vector<agentxx::expand::ScreenFrame> frames;
-                auto f = capture.capture_.captureScreen(static_cast<int>(idx));
-                if (f.width > 0) {
-                    frames.push_back(std::move(f));
-                }
-                return framesResult(frames, includePixels);
-            }
-            if (command == "get_screen_count") {
-                codegraph::Json j = codegraph::Json::object();
-                j["ok"]            = true;
-                j["count"]         = capture.capture_.getScreenCount();
-                return j.dump();
-            }
-            if (command == "start_streaming") {
-                int64_t rate = 5;
-                jsonGetInt(args.doc().at_pointer("/frame_rate"), rate);
-                bool ok = capture.startStreaming(static_cast<int>(rate));
-                codegraph::Json j = codegraph::Json::object();
-                j["ok"]            = ok;
-                j["rate"]          = rate;
-                return j.dump();
-            }
-            if (command == "stop_streaming") {
-                capture.stopStreaming();
-                return R"({"ok":true})";
-            }
-            return R"({"ok":false,"error":"unknown command"})";
-        }
-    );
-}
-
 } // namespace agentxx_computer_use_plugin
 
 using namespace agentxx_computer_use_plugin;
@@ -368,20 +188,18 @@ extern "C" const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
         AGENTXX_PLUGIN_API_VERSION,
         "agentxx_computer_use",
         "1.0.0",
-        "Computer control on Windows: keyboard/mouse (ui_control) and screen capture",
+        "Computer control on Windows: keyboard/mouse (ui_control); screen capture provided by agentxx_screen_capture",
     };
     return &info;
 }
 
-extern "C" int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) {
+extern "C" int agentxx_plugin_entry(const AgentxxHost* host, void** /*plugin_ctx*/) {
     g_host = host;
     registerUiControlTool();
-    registerScreenCaptureTool();
-    pluginLog(2, "agentxx_computer_use loaded (2 tools)");
+    pluginLog(2, "agentxx_computer_use loaded (1 tool)");
     return 0;
 }
 
 extern "C" void agentxx_plugin_unload(void* /*plugin_ctx*/) {
-    ScreenCaptureHolder::instance().stopStreaming();
     pluginLog(2, "agentxx_computer_use unloaded");
 }

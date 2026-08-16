@@ -1,5 +1,6 @@
 name: agentxx_computer_use
 version: 1.0.0
-description: "Computer control on Windows: keyboard/mouse (ui_control) and screen capture"
+description: "Computer control on Windows: keyboard/mouse (ui_control); screen capture provided by agentxx_screen_capture"
 entry: libagentxx_computer_use.so
 depends:
+  - agentxx_screen_capture

@@ -1126,7 +1126,7 @@ static std::string uiControlExecute(agentxx_computer_use_plugin::SimpleJson& arg
     return results.dump();
 }
 #else
-static std::string uiControlExecute(agentxx_computer_use_plugin::SimpleJson&) {
+std::string uiControlExecute(agentxx_computer_use_plugin::SimpleJson&) {
     return R"({"error":"agentxx_ui_control_keyboard_mouse is not available on current system"})";
 }
 #endif

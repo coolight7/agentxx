@@ -218,22 +218,29 @@ memory:
 #   plugins/example_js/ 为 JS 示例插件 (C++ 壳 + plugin.js), depends:
 #   agentxx_javascript_engine (JS 解释器引擎, 需同时配置)
 # 形态二: 直接库路径 (无 plugin.yaml; 插件名按文件名推导 libfoo.so → foo)
-#   示例插件编译产物: build/linux-debug/exec/libexample_plugin.so
-#   引擎插件编译产物: build/linux-debug/exec/libagentxx_javascript_engine.so
+#   示例插件编译产物: agent/build/linux-debug/exec/plugins/libexample_plugin.so
+#   引擎插件编译产物: agent/build/linux-debug/exec/plugins/libagentxx_javascript_engine.so
 plugins:
   # --- 示例: 原生 C++ 插件 (直接库路径) ---
-  # - path: "build/linux-debug/exec/libexample_plugin.so"
+  # - path: "agent/build/linux-debug/exec/plugins/example_plugin"
   #   enabled: true
   #   args: { foo: bar }
 
   # --- 示例: 禁用 (加载时跳过) ---
-  # - path: "build/linux-debug/exec/libexample_plugin.so"
+  # - path: "agent/build/linux-debug/exec/plugins/example_plugin"
   #   enabled: false
 
   # --- 示例: JS 插件 (引擎 + 脚本插件; 顺序无关, 拓扑排序自动处理) ---
-  # - path: "build/linux-debug/exec/libagentxx_javascript_engine.so"
+  # - path: "agent/build/linux-debug/exec/plugins/agentxx_javascript_engine"
   #   enabled: true
-  # - path: "build/linux-debug/exec/plugins/example_js"
+  # - path: "agent/build/linux-debug/exec/plugins/example_js"
+  #   enabled: true
+
+  # --- 示例: Windows 桌面控制 (screen_capture 捕获 + computer_use 控制;
+  #   须同时配置, computer_use 的 plugin.yaml depends 声明依赖 screen_capture) ---
+  # - path: "agent/build/linux-debug/exec/plugins/agentxx_screen_capture"
+  #   enabled: true
+  # - path: "agent/build/linux-debug/exec/plugins/agentxx_computer_use"
   #   enabled: true
 
   # === CodeGraph 代码分析 (插件 agentxx_codegraph; 默认关闭)
@@ -247,9 +254,9 @@ plugins:
   - path: agent/build/linux-debug/exec/plugins/agentxx_codegraph/
     enabled: true
     args:
-      paths:
-        - "/path/to/project_a"
-        - "relative/path/to/project_b"
+      # paths:
+      #   - "/path/to/project_a"
+      #   - "relative/path/to/project_b"
       ignore_paths:
         - "**/build/**"
         - "**/node_modules/**"
