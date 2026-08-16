@@ -83,6 +83,16 @@ struct McpServerConfig {
     std::chrono::milliseconds toolTimeout{std::chrono::seconds{120}};
 };
 
+/// 插件运行侧 (yaml `plugins` 条目 sides)
+/// - auto: 按导出符号自动决定 (client 侧: 有 agentxx_client_entry 才加载)
+/// - agent: 仅 agent 侧加载 (client 侧跳过)
+/// - client: 仅 client 侧加载 (agent 侧跳过)
+enum class PluginSide : uint8_t {
+    Auto = 0,
+    Agent,
+    Client,
+};
+
 /// 插件配置 (yaml `plugins` 列表项)
 struct PluginConfig {
     /// 插件动态库路径 或 插件目录 (目录含 plugin.yaml 时按清单解析)
@@ -91,6 +101,8 @@ struct PluginConfig {
     std::string path;
     /// 是否启用 (默认 true)
     bool enabled = true;
+    /// 插件运行侧 (默认 auto = 按导出符号自动决定)
+    PluginSide sides = PluginSide::Auto;
     /// 插件参数 (yaml `args`; 宿主原样保存并整体传递给插件,
     /// 不解析具体字段 —— 参数语义由插件自行定义)
     neograph::json args;

@@ -6,7 +6,6 @@
 #include "agentxx-client/io/tui/components/status_bar.h"
 #include "agentxx-client/mode_runners.h"
 #include "agentxx/agent/model_registry.h"
-#include "agentxx/expand/get_cpu_gpu_use.h"
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/middlewares/permission.h"
 #include "agentxx/util/exception.h"
@@ -185,6 +184,194 @@ void TUIClientAgentIO::showToast(std::string text) {
 }
 
 // ---------------------------------------------------------------------------
+// 插件适配器接口 (TuiPluginAdapter 调用; 任意线程安全)
+// ---------------------------------------------------------------------------
+
+void TUIClientAgentIO::uiToast(std::string text, int level) {
+    (void)level; // 一期统一样式; 后续可按级别着色
+    // toastText_/toastShownAt_ 为 UI 线程独占, 投递到 UI 线程执行
+    enqueueUiAction([this, text = std::move(text)]() {
+        showToast(std::move(text));
+    });
+}
+
+void TUIClientAgentIO::sendPluginUserInput(std::string text) {
+    if (text.empty()) {
+        return;
+    }
+    // 与用户输入同排队语义 (见 start() 中 inputCfg.onSend 的分支逻辑):
+    // - 中断等待输入: 直接投递到输入通道 (由中断流程消费)
+    // - 未连接 (Connecting/Failed): 进待发送队列
+    // - 流式中: 进待发送队列 (轮次结束后分发)
+    // - 空闲: 立即发送
+    {
+        std::lock_guard<std::mutex> lock(sharedState_.mutex());
+        auto&                       st = sharedState_.mutableState();
+        if (awaitingInterruptInput_.load(std::memory_order_acquire)) {
+            pushCurrentTokenLocked(st);
+            st.messages.push_back(
+                std::make_shared<TUIMessage>(TUIMessage::makeText(TUIMessage::Role::User, text))
+            );
+            // messageList_ 为 UI 线程独占组件, 投递到 UI 线程执行
+            enqueueUiAction([this]() {
+                if (messageList_) {
+                    messageList_->setStickToBottom(true);
+                }
+            });
+            inputChannel_->async_send(
+                neograph_asio_error_code{},
+                std::move(text),
+                [](neograph_asio_error_code) {}
+            );
+            return; // 中断输入不触发事件接收器 (属于中断响应, 非用户消息)
+        }
+        if (st.connState != ConnState::Connected || st.isStreaming) {
+            st.pendingInputs.push_back(TUIPendingInput{std::move(text), false});
+        } else {
+            sendUserInputLocked(st, std::move(text)); // 内部通知事件接收器
+        }
+    }
+    postRedraw();
+}
+
+bool TUIClientAgentIO::sendPluginDataUp(
+    const std::string& plugin,
+    const std::string& event,
+    const std::string& json
+) {
+    // client io 线程调用 (adapter); 未连接时 sendToPeer 丢弃并记日志
+    if (!transport_ || !transport_->alive()) {
+        XX_LOGW(
+            "[tui] sendPluginDataUp dropped (no transport): {}.{}",
+            plugin,
+            event
+        );
+        return false;
+    }
+    agentxx::agent::WirePluginDataUp up;
+    up.plugin = plugin;
+    up.event  = event;
+    up.data   = json;
+    sendToPeer(std::move(up));
+    return true;
+}
+
+void TUIClientAgentIO::notifyUserInputSent(const std::string& threadId, const std::string& text) {
+    // 事件接收器回调须在 client io 线程 (ClientEventSink 约定):
+    // - 本函数可能被 client 线程 (sendUserInputLocked ← dispatchNextPendingInput)
+    //   或 UI 线程 (inputCfg.onSend) 调用; 统一 post 到 io 线程执行
+    //   (低频事件, post 延迟一个事件循环 tick 可接受)
+    auto self = shared_from_this();
+    asio::post(ex_, [self, tid = threadId, t = text]() mutable {
+        self->emitEventSink([&](agentxx::agent::ClientEventSink& sink) {
+            sink.onUserInput(tid, t);
+        });
+    });
+}
+
+void TUIClientAgentIO::addPluginPanelTab(const std::string& id, const std::string& title) {
+    // UI 线程调用 (适配器经 postToUi 投递); sidebar_ 为 UI 线程独占组件
+    if (!sidebar_ || sidebar_->hasTab(id)) {
+        return;
+    }
+    sidebar_->addTab(
+        id,
+        title,
+        [this, id]() {
+            return renderPluginPanel(id);
+        }
+    );
+    postRedraw();
+}
+
+void TUIClientAgentIO::removePluginPanelTab(const std::string& id) {
+    // UI 线程调用 (适配器经 postToUi 投递); sidebar_ 为 UI 线程独占组件
+    if (!sidebar_) {
+        return;
+    }
+    sidebar_->removeTab(id);
+    postRedraw();
+}
+
+std::vector<ScrollItem> TUIClientAgentIO::renderPluginPanel(const std::string& panelId) {
+    // UI 线程调用 (侧边栏 tab render 回调); 读取注册表快照 (短锁拷贝 shared_ptr)
+    std::vector<ScrollItem> out;
+    auto                    mgr = pluginManager_;
+    if (!mgr) {
+        return out;
+    }
+    auto reg = mgr->uiRegistrySnapshot();
+    if (!reg) {
+        return out;
+    }
+    const agentxx::plugin::ClientPanel* panel = nullptr;
+    for (const auto& p : reg->panels) {
+        if (p.id == panelId) {
+            panel = &p;
+            break;
+        }
+    }
+    if (!panel) {
+        return out;
+    }
+    const auto& theme = theme_;
+    // 面板内容: items JSON 数组 (kind: text/kv/progress/action/badge)
+    if (panel->items.is_array()) {
+        for (const auto& it : panel->items) {
+            if (!it.is_object()) {
+                continue;
+            }
+            const auto kind = it.value("kind", std::string{"text"});
+            if (kind == "text") {
+                out.push_back(ScrollItem{
+                    text(it.value("text", std::string{})) | color(theme.toolColor)
+                });
+            } else if (kind == "kv") {
+                out.push_back(ScrollItem{
+                    hbox({
+                        text(it.value("key", std::string{}) + ": ")
+                            | color(theme.hintColor),
+                        text(it.value("value", std::string{})) | color(theme.toolColor)
+                            | xflex_shrink,
+                    })
+                });
+            } else if (kind == "progress") {
+                const double v = it.value("value", 0.0);
+                const int    w = 10;
+                const int    filled = static_cast<int>(v * w);
+                std::string  bar;
+                bar.reserve(w);
+                for (int i = 0; i < w; ++i) {
+                    bar += (i < filled) ? '#' : '-';
+                }
+                out.push_back(ScrollItem{
+                    hbox({
+                        text("[" + bar + "]") | color(theme.accentColor),
+                        text(fmt::format(" {}%", static_cast<int>(v * 100)))
+                            | color(theme.hintColor),
+                    })
+                });
+            } else if (kind == "action") {
+                out.push_back(ScrollItem{
+                    text("◈ " + it.value("label", std::string{"(action)"}))
+                        | color(theme.buttonActiveTextColor) | bold
+                });
+            } else if (kind == "badge") {
+                out.push_back(ScrollItem{
+                    text("● " + it.value("text", std::string{}))
+                        | color(theme.accentColor)
+                });
+            } else if (kind == "separator") {
+                out.push_back(ScrollItem{
+                    text("─") | color(theme.hintColor) | dim
+                });
+            }
+        }
+    }
+    return out;
+}
+
+// ---------------------------------------------------------------------------
 // 复制鼠标选中的文本
 // ---------------------------------------------------------------------------
 
@@ -242,6 +429,7 @@ void TUIClientAgentIO::start() {
         ctx_.threadId       = currentThreadId();
         ctx_.remoteUrl      = remoteUrl_;
         ctx_.showSystemInfo = &TUISettings::instance().showSystemInfoRef();
+        ctx_.pluginManager  = pluginManager_;
         // 注意: 不设置 ctx_.session —— TUI 不持有 Session (属于 agent-server 线程),
         // 上下文统计经 WireContextStats → onContextStats → sharedState_ 更新,
         // 状态栏等组件从 frameState 读取 (见 status_bar.cpp)
@@ -253,6 +441,28 @@ void TUIClientAgentIO::start() {
 
         InputComponent::Config inputCfg;
         inputCfg.onSend = [this](std::string text) {
+            // ---- 插件命令拦截 (UI 线程) ----
+            // 输入以 "/" 开头且匹配插件注册的命令时, 拦截并投递到 client io
+            // 线程执行命令回调 (execute 返回动作 JSON, 由宿主解释执行);
+            // 未命中命令照常作为普通消息发送
+            if (pluginManager_ && !text.empty() && text[0] == '/') {
+                const auto spacePos = text.find(' ');
+                const auto cmdName  = text.substr(
+                    1,
+                    spacePos == std::string::npos ? std::string::npos : spacePos - 1
+                );
+                if (!cmdName.empty() && pluginManager_->hasCommand(cmdName)) {
+                    // 参数: 剩余部分整体作为 {"text": "..."} 传入 (语义由插件定义)
+                    std::string argsText = spacePos == std::string::npos
+                                               ? std::string{}
+                                               : text.substr(spacePos + 1);
+                    neograph::json args = neograph::json::object();
+                    args["text"]        = argsText;
+                    pluginManager_->postCommandInvocation(cmdName, args.dump());
+                    inputBar_->clear();
+                    return;
+                }
+            }
             std::lock_guard<std::mutex> lock(sharedState_.mutex());
             auto&                       st = sharedState_.mutableState();
             if (awaitingInterruptInput_.load(std::memory_order_acquire)) {
@@ -648,6 +858,13 @@ void TUIClientAgentIO::setConnState(ConnState state) {
         st.connState                   = state;
     }
     postRedraw();
+    // 通知事件接收器 (client 插件系统订阅连接状态事件)
+    const char* stateName = state == ConnState::Connected
+                                ? "connected"
+                                : (state == ConnState::Failed ? "failed" : "connecting");
+    emitEventSink([&](agentxx::agent::ClientEventSink& sink) {
+        sink.onConnStateChanged(stateName, {});
+    });
 }
 
 void TUIClientAgentIO::onServerReady() {
@@ -661,17 +878,27 @@ void TUIClientAgentIO::onServerReady() {
     postRedraw();
     // 刷新连接前排队的用户输入 (发送首条并置 isStreaming, 后续由 TurnEnd 分发)
     flushPendingInput();
+    // 通知事件接收器: 服务端就绪 (基类默认实现)
+    agentxx::agent::AgentIOBase::onServerReady();
 }
 
 void TUIClientAgentIO::onServerProgress(std::string_view step) {
     // agent 线程同步调用 (startupNotifier → onServerProgress):
     // 只更新当前步骤文本, 不触碰其他字段; 经 sharedState 锁避免与 UI 快照竞争
+    std::string stepCopy{step};
     {
         std::lock_guard<std::mutex> lock(sharedState_.mutex());
         auto&                       st = sharedState_.mutableState();
-        st.startupProgress             = std::string(step);
+        st.startupProgress             = stepCopy;
     }
     postRedraw();
+    // 通知事件接收器 (agent 线程 → post 到 client io 线程)
+    auto self = shared_from_this();
+    asio::post(ex_, [self, step = std::move(stepCopy)]() mutable {
+        self->emitEventSink([&](agentxx::agent::ClientEventSink& sink) {
+            sink.onConnStateChanged("connecting", step);
+        });
+    });
 }
 
 void TUIClientAgentIO::flushPendingInput() {
@@ -714,7 +941,7 @@ asio::awaitable<void> TUIClientAgentIO::waitRetry() {
 // 采集已迁移到 agent-server: TUI 不再本地读取 CPU/内存 (TUI 与 agent-server
 // 可分属不同进程/主机, 远端模式下展示的是 server 主机的资源), 仅周期发送
 // WireGetSystemUsage 请求, 服务端读取后回传 WireSystemUsage (由 client 线程
-// onPeerMessage 写入 sharedState_.systemUsage)。采集周期由 client io_context
+// onPeerMessage 写入 sharedState_.systemUsageJson)。采集周期由 client io_context
 // 上的协程 (steady_timer) 驱动, 不占用 UI 线程。
 // ---------------------------------------------------------------------------
 
@@ -732,7 +959,7 @@ void TUIClientAgentIO::startSystemMonitor() {
                 if (TUISettings::instance().showSystemInfo() && transport_) {
                     // 请求 agent-server 读取系统资源占用 (CPU/内存/GPU):
                     // 服务端经 blockingPool 采集后回传 WireSystemUsage,
-                    // 由 onPeerMessage 更新 sharedState_.systemUsage 并重绘
+                    // 由 onPeerMessage 更新 sharedState_.systemUsageJson 并重绘
                     sendToPeer(agentxx::agent::WireGetSystemUsage{});
                 }
                 // 周期等待; stop() 时 cancel() 使本等待立即返回并退出循环
@@ -931,6 +1158,15 @@ void TUIClientAgentIO::switchToSession(std::string newThreadId) {
         sendToPeer(agentxx::agent::WireSwitchSession{newThreadId});
     }
     postRedraw();
+    // 通知事件接收器: 会话切换 (post 到 client io 线程)
+    {
+        auto self = shared_from_this();
+        asio::post(ex_, [self, tid = newThreadId]() mutable {
+            self->emitEventSink([&](agentxx::agent::ClientEventSink& sink) {
+                sink.onSessionSwitched(tid);
+            });
+        });
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -958,10 +1194,18 @@ void TUIClientAgentIO::onPeerMessage(agentxx::agent::WireMessage msg) {
         [this](auto&& m) {
             using T = std::decay_t<decltype(m)>;
             if constexpr (std::is_same_v<T, agentxx::agent::Delta>) {
+                // 通知事件接收器 (client 插件系统订阅 delta 事件)
+                emitEventSink([&](agentxx::agent::ClientEventSink& sink) {
+                    sink.onDelta(m);
+                });
                 onDelta(m);
             } else if constexpr (std::is_same_v<T, agentxx::agent::SyncPayload>) {
                 onSync(m);
             } else if constexpr (std::is_same_v<T, agentxx::agent::WireTurnResult>) {
+                // 通知事件接收器 (client 插件系统订阅轮次结束事件)
+                emitEventSink([&](agentxx::agent::ClientEventSink& sink) {
+                    sink.onTurnResult(m);
+                });
                 onTurnResult(m);
             } else if constexpr (std::is_same_v<T, agentxx::agent::WireContextStats>) {
                 onContextStats(m);
@@ -1035,11 +1279,11 @@ void TUIClientAgentIO::onPeerMessage(agentxx::agent::WireMessage msg) {
                 // agent-server 侧采集的系统资源占用响应 (WireGetSystemUsage 的回复):
                 // 写入 sharedState_ (Info 侧边栏从 frameState 读取, 见
                 // renderInfoSidebar), 采集周期由 startSystemMonitor 的定时器驱动
+                // - 载荷为插件定义 schema 的 JSON 字符串, 宿主只透传
                 {
                     std::lock_guard<std::mutex> lock(sharedState_.mutex());
                     auto&                       st = sharedState_.mutableState();
-                    st.systemUsage
-                        = std::make_shared<agentxx::expand::CpuGpuUsage>(std::move(m.usage));
+                    st.systemUsageJson = std::move(m.data);
                 }
                 postRedraw();
             } else if constexpr (std::is_same_v<T, agentxx::agent::WirePluginData>) {
@@ -1050,6 +1294,10 @@ void TUIClientAgentIO::onPeerMessage(agentxx::agent::WireMessage msg) {
                     auto&                       st = sharedState_.mutableState();
                     st.pluginData[m.plugin]        = m;
                 }
+                // 通知事件接收器 (client 插件系统订阅跨端插件数据事件)
+                emitEventSink([&](agentxx::agent::ClientEventSink& sink) {
+                    sink.onPluginData(m);
+                });
                 postRedraw();
             } else if constexpr (std::is_same_v<T, agentxx::agent::WireContextMessages>) {
                 {
@@ -1121,6 +1369,8 @@ void TUIClientAgentIO::sendUserInputLocked(TUIRenderState& st, std::string text)
         std::make_shared<TUIMessage>(TUIMessage::makeText(TUIMessage::Role::User, text))
     );
     st.isStreaming = true;
+    // 事件接收器通知用原文 (inputChannel 分支会 move text, 提前拷贝)
+    const std::string notifyText = text;
     // 消息列表吸附到底部: messageList_ 为 UI 线程独占组件, 本函数可能被
     // client 线程 (dispatchNextPendingInput) 调用, 须投递到 UI 线程执行
     enqueueUiAction([this]() {
@@ -1137,6 +1387,8 @@ void TUIClientAgentIO::sendUserInputLocked(TUIRenderState& st, std::string text)
             [](neograph_asio_error_code) {}
         );
     }
+    // 通知事件接收器 (用户输入事件; 任意线程安全, 内部按需 post 到 io 线程)
+    notifyUserInputSent(currentThreadId(), notifyText);
 }
 
 void TUIClientAgentIO::dispatchNextPendingInput(TUIRenderState& st) {
@@ -1324,7 +1576,7 @@ void TUIClientAgentIO::onSync(const agentxx::agent::SyncPayload& payload) {
             st->modelNames       = prev->modelNames;
             st->appendComponents = prev->appendComponents;
             st->pendingInputs    = prev->pendingInputs;
-            st->systemUsage      = prev->systemUsage;
+            st->systemUsageJson  = prev->systemUsageJson;
             st->contextMessages  = prev->contextMessages;
             // 插件数据不随 Sync 重置 (状态栏/Info 侧边栏持续展示)
             st->pluginData = prev->pluginData;

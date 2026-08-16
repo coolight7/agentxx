@@ -23,6 +23,10 @@ std::shared_ptr<AgentIOTransportBase> AgentIOBase::transport() const noexcept {
     return transport_;
 }
 
+void AgentIOBase::setEventSink(std::shared_ptr<ClientEventSink> sink) {
+    eventSink_ = std::move(sink);
+}
+
 asio::awaitable<void> AgentIOBase::runTransportLoop() {
     // 捕获局部 transport 引用: 服务端同一 threadId 的新连接替换旧连接
     // (AgentServer::serveTransport 中 setTransport) 时, 本协程应继续消费旧
@@ -71,7 +75,18 @@ void AgentIOBase::requestAppendComponentInfo(std::string threadId) {
 }
 
 void AgentIOBase::sendUserInput(std::string threadId, std::string text) {
+    // 通知事件接收器 (client 插件系统订阅用户输入事件)
+    emitEventSink([&](ClientEventSink& sink) {
+        sink.onUserInput(threadId, text);
+    });
     sendToPeer(WireUserInput{std::move(threadId), std::move(text)});
+}
+
+void AgentIOBase::onServerReady() {
+    // 基类默认实现通知事件接收器 (client 插件系统据此开始注册 UI/订阅事件)
+    emitEventSink([&](ClientEventSink& sink) {
+        sink.onReady();
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -83,13 +98,25 @@ void AgentIOBase::onPeerMessage(WireMessage msg) {
         [this](auto&& m) {
             using T = std::decay_t<decltype(m)>;
             if constexpr (std::is_same_v<T, Delta>) {
+                emitEventSink([&](ClientEventSink& sink) {
+                    sink.onDelta(m);
+                });
                 onDelta(m);
             } else if constexpr (std::is_same_v<T, SyncPayload>) {
                 onSync(m);
             } else if constexpr (std::is_same_v<T, WireTurnResult>) {
+                emitEventSink([&](ClientEventSink& sink) {
+                    sink.onTurnResult(m);
+                });
                 onTurnResult(m);
             } else if constexpr (std::is_same_v<T, WireContextStats>) {
                 onContextStats(m);
+            } else if constexpr (std::is_same_v<T, WirePluginData>) {
+                // 插件事件转发: 通知事件接收器 (client 插件系统据此分发到
+                // 订阅 EVT_PLUGIN_DATA 的插件回调)
+                emitEventSink([&](ClientEventSink& sink) {
+                    sink.onPluginData(m);
+                });
             }
         },
         std::move(msg)

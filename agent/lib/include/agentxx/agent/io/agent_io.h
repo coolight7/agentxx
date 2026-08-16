@@ -2,11 +2,13 @@
 
 #include "agentxx/agent/conversation_types.h"
 #include "agentxx/agent/io/agent_io_transport.h"
+#include "agentxx/agent/io/client_event_sink.h"
 #include "agentxx/util/log.h"
 #include "asio/awaitable.hpp"
 #include "asio/this_coro.hpp"
 #include "fmt/format.h"
 #include "neograph/json.h"
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -65,6 +67,7 @@ public:
 
     /// 发送用户输入到对端 [client]
     /// - 是否首轮由服务端自行管理; 模型切换经 requestSelectModel
+    /// - 发送后通知事件接收器 (ClientEventSink::onUserInput)
     virtual void sendUserInput(std::string threadId, std::string text);
 
     /// 服务端就绪通知 [client] (默认空实现, 客户端端点按需覆写):
@@ -72,7 +75,9 @@ public:
     ///   mode_runners 调用, 表示 init() 等启动工作完成、可以开始消费用户输入
     /// - 远程模式: 连接握手完成后由连接协程调用
     /// 客户端 (TUI) 据此解除"启动中"输入限制并刷新待发送队列
-    virtual void onServerReady() {}
+    /// - 基类默认实现通知事件接收器 (ClientEventSink::onReady); 覆写方应调用
+    ///   基类实现 (或自行 emitEventSink)
+    virtual void onServerReady();
 
     /// 服务端启动进度通知 [client] (默认空实现, 客户端端点按需覆写):
     /// - 本地模式: agent-server 的 init() 各启动阶段 (加载 MCP/Skill/Memory/
@@ -109,6 +114,15 @@ public:
     /// 获取传输层 (可能为 nullptr)
     std::shared_ptr<AgentIOTransportBase> transport() const noexcept;
 
+    /// 设置事件接收器 (client 插件系统等扩展点的被动回调入口)
+    /// - 由模式启动时 (mode_runners) 注入; 端点是 sink 的持有方 (shared_ptr)
+    void setEventSink(std::shared_ptr<ClientEventSink> sink);
+
+    /// 获取事件接收器 (可能为 nullptr)
+    std::shared_ptr<ClientEventSink> eventSink() const noexcept {
+        return eventSink_;
+    }
+
     /// 运行接收循环: 从 transport 读消息并 dispatch 到 onPeerMessage
     /// - 应在协程中 co_await 调用; transport 关闭时自然退出
     /// - 未设置 transport 时立即返回
@@ -124,6 +138,19 @@ public:
     virtual void registerOnBus(std::shared_ptr<agentxx::middleware::EventBus> sessionBus);
 
 protected:
+
+    // -----------------------------------------------------------------------
+    // 事件接收器辅助 [client] (子类在关键路径调用; 空 sink 时为 no-op)
+    // -----------------------------------------------------------------------
+
+    /// 转发事件到接收器 (sink 为空时跳过; 调用方线程即回调线程 —— 须为
+    /// client io 线程, 符合 ClientEventSink 线程约定)
+    template<typename Fn>
+    void emitEventSink(Fn fn) const {
+        if (eventSink_) {
+            fn(*eventSink_);
+        }
+    }
 
     // -----------------------------------------------------------------------
     // 被动接收回调 [client] (仅由 onPeerMessage 分发调用, 外部不应直接调用)
@@ -151,6 +178,7 @@ protected:
     void unregisterFromBus();
 
     std::shared_ptr<AgentIOTransportBase>        transport_;
+    std::shared_ptr<ClientEventSink>             eventSink_;
     std::weak_ptr<agentxx::middleware::EventBus> registeredBus_;
     size_t                                       interruptServerId_  = 0;
     size_t                                       permissionServerId_ = 0;

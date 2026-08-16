@@ -418,13 +418,21 @@ Options:
             config->logPrintMessagesBeforeLLM              = false;
             config->logPrintMessagesBeforeLLMWithSystemMsg = false;
             config->logPrintSummarizationResultTokenCount  = true;
-            runRemoteTui(agentUrl, agentToken, remoteModel, yamlCfg.permissionMode);
+            // 远程 client 进程只加载 client 侧插件 (yaml plugins 段经 sides
+            // 过滤, 见 ClientPluginManager::loadConfiguredClientPlugins)
+            runRemoteTui(
+                agentUrl,
+                agentToken,
+                remoteModel,
+                yamlCfg.permissionMode,
+                config->plugins
+            );
         } else {
             config->logPrintToolcall                       = false;
             config->logPrintMessagesBeforeLLM              = false;
             config->logPrintMessagesBeforeLLMWithSystemMsg = false;
             config->logPrintSummarizationResultTokenCount  = false;
-            runRemoteCli(agentUrl, agentToken, remoteModel);
+            runRemoteCli(agentUrl, agentToken, remoteModel, config->plugins);
         }
         return 0;
     }
@@ -438,7 +446,9 @@ Options:
         config->logPrintMessagesBeforeLLMWithSystemMsg = false;
         config->logPrintSummarizationResultTokenCount  = true;
         auto agent = std::make_shared<agentxx::agent::CodeAgent>(config);
-        runLocalTuiUnified(agent, yamlCfg.permissionMode);
+        // 双端插件: agent 侧经 BaseAgent::init 加载 (同 config->plugins),
+        // client 侧经 runLocalTuiUnified 加载 (sides 过滤)
+        runLocalTuiUnified(agent, yamlCfg.permissionMode, config->plugins);
     } else {
         agentxx::util::LogDispatcher::instance().removeSink(defaultLogSink);
         config->logPrintToolcall                       = false;
@@ -446,7 +456,7 @@ Options:
         config->logPrintMessagesBeforeLLMWithSystemMsg = false;
         config->logPrintSummarizationResultTokenCount  = false;
         auto agent = std::make_shared<agentxx::agent::CodeAgent>(config);
-        runLocalCliUnified(agent);
+        runLocalCliUnified(agent, config->plugins);
     }
     return 0;
 }

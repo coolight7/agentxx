@@ -2,6 +2,7 @@
 #include "agentxx-client/io/tui/components/message_list.h"
 #include "agentxx-client/io/tui/components/sidebar.h"
 #include "agentxx/util/exception.h"
+#include "agentxx/util/log.h"
 #include "agentxx/util/string_util.h"
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/terminal.hpp"
@@ -186,26 +187,43 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
     Elements elements;
 
     // 系统资源占用 (CPU/内存): 由 client 线程收到 WireSystemUsage (agent-server
-    // 采集回传) 后周期刷新; 显示开关存储于全局设置单例
+    // 经 agentxx_system_monitor 插件能力采集后回传) 后周期刷新; 载荷为插件
+    // 定义 schema 的 JSON 字符串 (宿主只透传不解析, 此处按约定字段读取):
+    // {"cpu","mem_total_mb","mem_used_mb","mem_percent","gpus":[...]}
+    // 显示开关存储于全局设置单例
     if (TUISettings::instance().showSystemInfo()) {
         Elements sysEls;
         sysEls.push_back(text("System") | color(theme_.accentColor));
-        if (st.systemUsage) {
-            const auto& usage = *st.systemUsage;
-            sysEls.push_back(
-                text(fmt::format("|- CPU: {:.1f}%", usage.cpuUsagePercent))
-                | color(theme_.normalColor)
-            );
-            sysEls.push_back(
-                text(fmt::format(
-                    "|- RAM: {:.1f}% {}/{}",
-                    usage.memory.usagePercent,
-                    agentxx::util::formatSize(usage.memory.usedPhysicalMB * 1024 * 1024),
-                    agentxx::util::formatSize(usage.memory.totalPhysicalMB * 1024 * 1024)
-                ))
-                | color(theme_.normalColor)
-            );
-        } else {
+        bool rendered = false;
+        if (!st.systemUsageJson.empty()) {
+            try {
+                auto j = neograph::json::parse(st.systemUsageJson);
+                if (j.is_object() && j.contains("cpu")) {
+                    double cpu     = j.value("cpu", 0.0);
+                    double memPct  = j.value("mem_percent", 0.0);
+                    uint64_t memU  = j.value("mem_used_mb", uint64_t{0});
+                    uint64_t memT  = j.value("mem_total_mb", uint64_t{0});
+                    sysEls.push_back(
+                        text(fmt::format("|- CPU: {:.1f}%", cpu))
+                        | color(theme_.normalColor)
+                    );
+                    sysEls.push_back(
+                        text(fmt::format(
+                            "|- RAM: {:.1f}% {}/{}",
+                            memPct,
+                            agentxx::util::formatSize(memU * 1024 * 1024),
+                            agentxx::util::formatSize(memT * 1024 * 1024)
+                        ))
+                        | color(theme_.normalColor)
+                    );
+                    rendered = true;
+                }
+            } catch (const std::exception& e) {
+                // 载荷非约定 schema: 按无数据展示 (不崩溃)
+                XX_LOGW("renderInfoSidebar: system usage json parse failed: {}", e.what());
+            }
+        }
+        if (!rendered) {
             sysEls.push_back(text("|- loading...") | color(theme_.hintColor));
         }
         elements.push_back(vbox(std::move(sysEls)));
