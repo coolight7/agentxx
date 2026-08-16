@@ -13,6 +13,7 @@
 #include "test_anthropic_provider.h"
 #include "test_cancel.h"
 #include "test_checkpoint_store.h"
+#include "test_client_plugins.h"
 #include "test_codegraph_tools.h"
 #include "test_command_tools.h"
 #include "test_concurrency.h"
@@ -63,7 +64,6 @@
 #include <iostream>
 #include <map>
 
-bool             waitForInput = false;
 asio::io_context ioCtx;
 
 /// 运行可执行 ../script/test_run.sh
@@ -218,7 +218,12 @@ int main(int argn, char** argv) {
                 agentxx::test::run_screen_capture_tests,
                 agentContext
             );
-            co_await run("cpu_gpu", agentxx::test::run_cpu_gpu_use_tests);
+            co_await runCtx("cpu_gpu", agentxx::test::run_cpu_gpu_use_tests, agentContext);
+            co_await runCtx(
+                "text_selection",
+                agentxx::test::run_text_selection_monitor_tests,
+                agentContext
+            );
             co_await run("http", agentxx::test::run_http_client_tests);
             co_await run("network_timeout", agentxx::test::run_network_timeout_tests);
             co_await run("websocket", agentxx::test::run_websocket_tests);
@@ -229,6 +234,7 @@ int main(int argn, char** argv) {
             co_await run("openai_provider", agentxx::test::run_openai_provider_tests);
             co_await run("anthropic_provider", agentxx::test::run_anthropic_provider_tests);
             co_await run("plugins", agentxx::test::run_plugin_tests);
+            co_await run("client_plugins", agentxx::test::run_client_plugin_tests);
             co_await run("cancel", agentxx::test::run_cancel_tests);
             co_await run("message_supplement", agentxx::test::run_message_supplement_tests);
             co_await run("summarization", agentxx::test::run_summarization_tests);
@@ -241,18 +247,6 @@ int main(int argn, char** argv) {
         asio::detached
     );
     ioCtx.run();
-
-    // ---- 同步平台相关测试 ----
-    if (shouldRun("text_selection")) {
-        auto monitor = agentxx::test::test_text_selection_monitor();
-        if (waitForInput) {
-            std::cout << "Press any key to continue..." << std::endl;
-            std::cin.get();
-        }
-        if (nullptr != monitor) {
-            monitor->stop();
-        }
-    }
 
     std::cout << "======= Test Done =======" << std::endl;
     std::cout << "Total: passed=" << total.passed << " failed=" << total.failed << std::endl;
