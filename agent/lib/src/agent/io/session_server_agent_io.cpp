@@ -3,8 +3,8 @@
 #include "agentxx/agent/base_agent.h"
 #include "agentxx/agent/context.h"
 #include "agentxx/agent/session_persistence.h"
-#include "agentxx/expand/codegraph_manager.h"
 #include "agentxx/middlewares/permission.h"
+#include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/util/async_offload.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/log.h"
@@ -242,39 +242,74 @@ void SessionServerAgentIO::onPeerMessage(WireMessage msg) {
                 );
             } else if constexpr (std::is_same_v<T, WireGetSystemUsage>) {
                 // 客户端 (TUI) 周期请求系统资源占用 (CPU/内存/GPU):
-                // 采集迁移到 agent-server 侧 (远端模式下展示 server 主机的资源;
-                // 本地一体模式由本进程读取), 完成后回传 WireSystemUsage。
-                // 与 WireListSessions 同模式: 查询卸载到 blockingPool 执行,
-                // 避免占用 agent io 线程; 完成后经 shared_from_this 回传响应
+                // 采集实现已移出 libagentxx (agentxx_system_monitor 插件),
+                // 此处经插件能力 agentxx.system_usage (方法 query) 获取
+                // (远端模式下展示 server 主机的资源; 本地一体模式由本进程加载
+                // 的插件读取)。能力回调为同步阻塞 (~100ms 采样), 卸载到
+                // blockingPool 执行避免占用 agent io 线程; 完成后回传
+                // WireSystemUsage (载荷为插件定义 schema 的 JSON 字符串,
+                // 宿主只透传; 插件未加载时回传空串, TUI 显示 loading)
                 auto self = shared_from_this();
                 asio::co_spawn(
                     ex_,
                     [self]() -> asio::awaitable<void> {
-                        if (!self->sysMonitor_) {
-                            self->sysMonitor_ = std::make_shared<agentxx::expand::CpuGpuMonitor>();
-                        }
-                        auto monitor = self->sysMonitor_;
-                        auto usage   = std::make_shared<agentxx::expand::CpuGpuUsage>();
+                        auto usageJson = std::make_shared<std::string>();
                         co_await agentxx::util::catchErrorAsync<bool>(
                             [&]() -> asio::awaitable<bool> {
-                                // query() 为协程 (内部含 100ms 采样间隔定时器与
-                                // 文件读取), 整体投递到 agent 的 blockingPool 线程池
-                                // 执行, 完成后自动恢复回 ex_ 线程
-                                auto agent = self->agent_.lock();
-                                if (agent && agent->agentContext
-                                    && agent->agentContext->blockingPool) {
-                                    *usage = co_await agentxx::util::offloadAsync<
-                                        agentxx::expand::CpuGpuUsage>(
-                                        *agent->agentContext->blockingPool,
-                                        [monitor](
-                                        ) -> asio::awaitable<agentxx::expand::CpuGpuUsage> {
-                                            co_return co_await monitor->query();
+                                auto query = [self]() -> std::string {
+                                    auto agent = self->agent_.lock();
+                                    if (!agent || !agent->agentContext
+                                        || !agent->agentContext->pluginManager) {
+                                        return {};
+                                    }
+                                    char* err  = nullptr;
+                                    char* json = agent->agentContext->pluginManager
+                                                     ->invokeCapability(
+                                                         nullptr,
+                                                         "agentxx.system_usage",
+                                                         "query",
+                                                         "{}",
+                                                         &err
+                                                     );
+                                    if (!json) {
+                                        if (err) {
+                                            XX_LOGE(
+                                                "[session_ctrl] system usage capability "
+                                                "failed: {}",
+                                                err
+                                            );
+                                            std::free(err);
+                                        } else {
+                                            XX_LOGW(
+                                                "[session_ctrl] system usage capability "
+                                                "not available (agentxx_system_monitor "
+                                                "plugin not loaded?)"
+                                            );
+                                        }
+                                        return {};
+                                    }
+                                    // 插件能力返回的使用率 JSON 原样透传
+                                    // (schema 由插件定义; 宿主不解析)
+                                    std::string result{json};
+                                    std::free(json);
+                                    return result;
+                                };
+                                // 能力回调为同步阻塞调用, 卸载到 agent 的
+                                // blockingPool 线程池执行
+                                auto agent2 = self->agent_.lock();
+                                if (agent2 && agent2->agentContext
+                                    && agent2->agentContext->blockingPool) {
+                                    *usageJson = co_await agentxx::util::offloadAsync<
+                                        std::string>(
+                                        *agent2->agentContext->blockingPool,
+                                        [query]() -> asio::awaitable<std::string> {
+                                            co_return query();
                                         }
                                     );
                                 } else {
-                                    *usage = co_await monitor->query();
+                                    *usageJson = query();
                                 }
-                                self->sendToPeer(WireSystemUsage{*usage});
+                                self->sendToPeer(WireSystemUsage{*usageJson});
                                 co_return true;
                             },
                             [](std::string errmsg) -> asio::awaitable<bool> {
@@ -286,6 +321,33 @@ void SessionServerAgentIO::onPeerMessage(WireMessage msg) {
                     },
                     asio::detached
                 );
+            } else if constexpr (std::is_same_v<T, WirePluginDataUp>) {
+                // client 插件事件上行: 发布到 agent 事件总线 topic
+                // `plugin.client.{插件名}.{事件名}` (载荷 std::string), 由 agent
+                // 侧插件经 subscribe("client.{插件名}.{事件名}") 订阅消费
+                // (跨端插件数据通道 client → agent);
+                // 前缀 "plugin.client." 的发布不会被 subscribePluginEvents 转发
+                // 回客户端 (见该处环回跳过逻辑)
+                auto agent = agent_.lock();
+                if (agent && agent->agentContext && agent->agentContext->bus) {
+                    auto bus = agent->agentContext->bus;
+                    auto topic = "plugin.client." + m.plugin + "." + m.event;
+                    auto data  = m.data;
+                    // EventBus::publish 为协程; 投递到总线 executor 执行
+                    asio::co_spawn(
+                        bus->executor(),
+                        [bus, topic = std::move(topic), data = std::move(data)]() -> asio::awaitable<void> {
+                            co_await bus->publish(topic, data);
+                            co_return;
+                        },
+                        asio::detached
+                    );
+                } else {
+                    XX_LOGW(
+                        "[session_ctrl] WirePluginDataUp dropped (no agent bus): {}",
+                        m.plugin
+                    );
+                }
             }
         },
         std::move(msg)
@@ -427,116 +489,59 @@ void SessionServerAgentIO::onCancel() {
 }
 
 // ---------------------------------------------------------------------------
-// CodeGraph 索引进度推送
+// 插件事件转发
 // ---------------------------------------------------------------------------
 
-void SessionServerAgentIO::subscribeCodegraphProgress() {
-    if (cgSubscribed_) {
+void SessionServerAgentIO::subscribePluginEvents() {
+    if (pluginSubscribed_) {
         return;
     }
     auto agent = agent_.lock();
-    if (!agent) {
+    if (!agent || !agent->agentContext || !agent->agentContext->bus) {
         return;
     }
-    auto cg = agent->codegraphManager();
-    if (!cg) {
-        // codegraph 不可用 (未启用/未初始化): 不订阅, 客户端不显示该状态
-        return;
-    }
-    cgSubscribed_ = true;
-
+    auto bus = agent->agentContext->bus;
     auto self = shared_from_this();
-
-    // 初始状态: codegraph 可用 (索引数据已打开), 尚未开始/完成索引
-    WireCodegraphProgress initial;
-    initial.available = true;
-    sendToPeer(initial);
-    // 初始推送计为一次放行: 使后续第一个进度更新同样受 3s 间隔约束
-    cgThrottle_.force();
-
-    // 索引进度回调由 indexDirectory/indexFile 在 blockingPool 线程触发
-    // (流式遍历时按批回调, 遍历阶段 total=0 表示文件总数未知):
-    // 这里仅做快照 + post 回 ex_ 线程, 由 onCodegraphProgress 统一节流推送,
-    // 避免跨线程访问端点状态
-#if AGENTXX_ENABLE_CODEGRAPH
-    cg->setProgressCallback([weakSelf = std::weak_ptr<SessionServerAgentIO>{self
-                             }](int processed, int total, std::string_view currentFile) {
-        auto sp = weakSelf.lock();
-        if (!sp) {
-            return;
-        }
-        WireCodegraphProgress p;
-        p.available   = true;
-        p.processed   = processed;
-        p.total       = total;
-        p.currentFile = std::string{currentFile};
-        // 完成信号 (调用方约定):
-        // - total>0 且 processed>=total: 索引正常结束
-        // - processed==0 且 total==0: 无文件可索引, 同样视为结束
-        // 其余情况视为进行中:
-        // - 流式遍历阶段 (processed>0, total=0)
-        // - 引用解析阶段 (processed>0, total=0, currentFile="resolve refs")
-        p.indexing = total > 0 ? !(processed >= total) : (processed > 0);
-        asio::post(sp->ex_, [sp, p = std::move(p)]() mutable {
-            sp->onCodegraphProgress(std::move(p));
-        });
-    });
-#endif
-}
-
-void SessionServerAgentIO::onCodegraphProgress(WireCodegraphProgress prog) {
-    // 总是缓存最新值: 尾推定时器到点补发的即窗内最后一条
-    cgPending_ = std::move(prog);
-
-    // 限流窗内已有尾推定时器: 窗末统一补发, 不再重复放行
-    if (cgTailTimer_) {
-        return;
-    }
-    // 距上次推送 >= 3s (或首次): 立即放行推送
-    if (cgThrottle_.try_acquire()) {
-        auto p = std::move(*cgPending_);
-        cgPending_.reset();
-        sendToPeer(std::move(p));
-    }
-    // 放行/未放行后均启动尾推定时器: 窗内新到的更新由它兜底,
-    // 保证"最短 3s 一次"且最后一条不丢失
-    armCodegraphTailTimer();
-}
-
-void SessionServerAgentIO::armCodegraphTailTimer() {
-    if (cgTailTimer_) {
-        return;
-    }
-    auto t       = std::make_shared<asio::steady_timer>(ex_);
-    cgTailTimer_ = t;
-    t->expires_after(cgThrottle_.interval());
-    auto self = shared_from_this();
-    asio::co_spawn(
-        ex_,
-        [t, self]() -> asio::awaitable<void> {
-            // 与 grace timer 同款取消范式: redirect_error + use_awaitable
-            ErrorCode ec;
-            co_await t->async_wait(asio::redirect_error(asio::use_awaitable, ec));
-            if (ec) {
-                // 定时器被取消 (端点停止/新窗已接管)
-                co_return;
+    // 订阅全部插件事件 (topic `plugin.{插件名}.{事件名}`):
+    // - 载荷均为 std::string (JSON); 类型不匹配跳过
+    // - 原样转发为 WirePluginData, 宿主不解析语义; 频率由插件控制
+    pluginSubId_ = bus->subscribePrefix(
+        "plugin.",
+        [weakSelf = std::weak_ptr<SessionServerAgentIO>{self}](
+            std::string_view topic, const std::any& payload
+        ) {
+            auto sp = weakSelf.lock();
+            if (!sp) {
+                return;
             }
-            self->onCodegraphTail();
-        },
-        asio::detached
+            if (payload.type() != typeid(std::string)) {
+                return;
+            }
+            const auto& data = std::any_cast<const std::string&>(payload);
+            // topic: "plugin.{插件名}.{事件名}" → 拆出插件名与事件名
+            std::string_view rest = topic.substr(7); // 去掉 "plugin."
+            // 环回跳过: client 插件上行事件 (topic "plugin.client.{...}") 仅面向
+            // agent 侧插件订阅, 不得转发回客户端 (否则 client 插件会收到自己
+            // send_plugin_data 发出的事件, 形成环回)
+            if (rest.starts_with("client.")) {
+                return;
+            }
+            auto dot = rest.find('.');
+            if (dot == std::string_view::npos || dot == 0 || dot + 1 >= rest.size()) {
+                return;
+            }
+            WirePluginData wpd;
+            wpd.plugin = std::string{rest.substr(0, dot)};
+            wpd.event  = std::string{rest.substr(dot + 1)};
+            wpd.data   = data;
+            // 回调运行在 bus executor (与 ex_ 同一 ioCtx); 仍 post 到 ex_
+            // 统一串行化端点状态访问 (与插件侧线程解耦)
+            asio::post(sp->ex_, [sp, w = std::move(wpd)]() mutable {
+                sp->sendToPeer(std::move(w));
+            });
+        }
     );
-}
-
-void SessionServerAgentIO::onCodegraphTail() {
-    cgTailTimer_.reset();
-    if (!cgPending_) {
-        return;
-    }
-    auto p = std::move(*cgPending_);
-    cgPending_.reset();
-    // 尾推计为一次放行: 下一次推送同样受 3s 间隔约束, 频率不突破上限
-    cgThrottle_.force();
-    sendToPeer(std::move(p));
+    pluginSubscribed_ = true;
 }
 
 // ---------------------------------------------------------------------------
@@ -545,8 +550,8 @@ void SessionServerAgentIO::onCodegraphTail() {
 
 asio::awaitable<void> SessionServerAgentIO::run() {
     running_.store(true, std::memory_order_release);
-    // 订阅 CodeGraph 索引进度 (成功后周期推送, 供客户端状态栏显示)
-    subscribeCodegraphProgress();
+    // 订阅插件事件 (转发 WirePluginData 供客户端展示插件状态)
+    subscribePluginEvents();
     while (!stopped_.load(std::memory_order_acquire)) {
         auto input = co_await waitInput();
         if (!input.has_value()) {
@@ -653,6 +658,13 @@ void SessionServerAgentIO::stopImpl() {
     failAllPending();
     inputChannel_->close();
     onCancel();
+    // 退订插件事件前缀 (防止端点析构后回调悬垂)
+    if (pluginSubId_ != 0) {
+        if (auto agent = agent_.lock(); agent && agent->agentContext && agent->agentContext->bus) {
+            agent->agentContext->bus->unsubscribePrefix(pluginSubId_);
+        }
+        pluginSubId_ = 0;
+    }
     if (transport_) {
         transport_->close();
     }

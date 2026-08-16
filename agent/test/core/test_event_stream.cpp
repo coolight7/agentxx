@@ -221,6 +221,45 @@ asio::awaitable<void> test_eventbus_convenience() {
     co_return;
 }
 
+
+/// 8. EventBus 前缀订阅: 匹配 topic 前缀的事件经 any 转发, 取消后不再触发
+asio::awaitable<void> test_eventbus_prefix_subscribe() {
+    auto  bus = agentxx::middleware::EventBus{co_await asio::this_coro::executor};
+    int   matched   = 0;
+    int   unrelated = 0;
+    auto id = bus.subscribePrefix(
+        "plugin.",
+        [&](std::string_view topic, const std::any& payload) {
+            if (payload.type() != typeid(std::string)) {
+                return;
+            }
+            const auto& data = std::any_cast<const std::string&>(payload);
+            if (topic == "plugin.agentxx_codegraph.progress") {
+                matched += (data == "{\"p\":1}") ? 1 : 0;
+            } else {
+                unrelated++;
+            }
+        }
+    );
+
+    // 匹配前缀的事件 → 回调
+    co_await bus.publish<std::string>("plugin.agentxx_codegraph.progress", "{\"p\":1}");
+    co_await bus.publish<std::string>("plugin.agentxx_codegraph.status", "{\"loaded\":true}");
+    // 不匹配前缀 → 不触发
+    co_await bus.publish<std::string>("other.topic", "x");
+    // 非 string 载荷 → 类型不匹配跳过 (不会崩溃)
+    co_await bus.publish<int>("plugin.int_event", 42);
+    XX_TEST_EXPECT_TRUE(matched == 1);
+    XX_TEST_EXPECT_TRUE(unrelated == 1);
+
+    // 取消订阅 → 不再触发
+    bus.unsubscribePrefix(id);
+    co_await bus.publish<std::string>("plugin.agentxx_codegraph.progress", "{\"p\":2}");
+    XX_TEST_EXPECT_TRUE(matched == 1);
+
+    co_return;
+}
+
 asio::awaitable<TestResult> run_event_stream_tests() {
     try {
         co_await test_eventstream_publish();
@@ -230,6 +269,7 @@ asio::awaitable<TestResult> run_event_stream_tests() {
         co_await test_requestresponse_server_exception();
         co_await test_timer_once();
         co_await test_eventbus_convenience();
+        co_await test_eventbus_prefix_subscribe();
     } catch (const std::exception& e) {
         TEST_FAIL << "event_stream suite exception: " << e.what() << std::endl;
         g_es_failed++;

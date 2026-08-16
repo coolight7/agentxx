@@ -38,6 +38,9 @@ public:
     std::string version;
     std::string description;
     std::string path; ///< 加载的库路径
+    /// 插件配置参数 (yaml `plugins` 条目 args; 宿主原样保存, 经 vtable
+    /// get_plugin_args 整体返回给插件, 不解析其字段语义)
+    neograph::json args = neograph::json::object();
     /// 必选依赖 (插件名): 未安装则加载失败; 卸载/禁用时级联 (依赖方先于被依赖方)
     std::vector<std::string> depends;
     /// 可选依赖 (插件名): 未安装仅警告, 不影响加载
@@ -114,6 +117,9 @@ public:
 /// - execute_async 经 offloadCancellableAsync 卸载到宿主线程池调用 C 回调
 ///   (取消/超时语义天然接入 toolcall 链路)
 /// - 持有 PluginInstance shared_ptr: 工具执行期间插件不会被卸载
+/// - 字符串字段 (name/description/parameters_json) 在构造时从 string_view
+///   拷贝进成员 (spec_ 指针指向本对象成员, 生命周期与工具一致, 不依赖
+///   插件侧内存存活)
 class PluginTool : public agentxx::tools::XXToolBase {
 public:
 
@@ -133,15 +139,18 @@ public:
         return instance_.lock();
     }
 
-    /// 原始 C ABI spec (call_tool 同步互调用)
+    /// 原始 C ABI spec (call_tool 同步互调用; 字符串指针指向本对象成员)
     const AgentxxToolSpec& spec() const {
         return spec_;
     }
 
 private:
 
-    AgentxxToolSpec spec_;       ///< 拷贝的 spec (含函数指针)
-    neograph::json  parameters_; ///< 解析缓存的参数 schema (避免每轮重复 parse)
+    std::string name_;             ///< 拷贝的 name (稳定地址)
+    std::string description_;      ///< 拷贝的 description (稳定地址)
+    std::string parametersJson_;   ///< 拷贝的 parameters_json (稳定地址)
+    AgentxxToolSpec spec_;         ///< 拷贝的 spec (字符串指针指向上面成员)
+    neograph::json  parameters_;   ///< 解析缓存的参数 schema (避免每轮重复 parse)
     std::weak_ptr<PluginInstance> instance_;
 };
 
@@ -305,7 +314,7 @@ public:
     AgentxxSubscription* subscribe(
         PluginInstance* inst,
         const char*     topic,
-        void (*handler)(const char* event_json, void* ud),
+        void (*handler)(AgentxxPluginStringView event_json, void* ud),
         void* ud
     );
     void unsubscribe(AgentxxSubscription* sub);
@@ -384,6 +393,21 @@ public:
     std::string listPluginsJson();
     /// 单个插件信息 JSON (未安装返回空串; io 线程)
     std::string getPluginJson(const std::string& name);
+
+    // ==================== 宿主配置访问 (vtable get_config/get_tool_prompt) ====================
+
+    /// 宿主 AgentConfig 关键字段 JSON (io 线程; 供插件装配期读取)
+    /// {"dataDir","projectRoot","platform"}
+    /// - 通用宿主信息; 插件业务参数经 get_plugin_args (宿主不解析 args)
+    /// - agentContext/agentConfig 未装配时返回空串
+    std::string getConfigJson();
+    /// 宿主 toolPrompt 配置 JSON (io 线程):
+    /// {"depict": "...", "args": {"参数名": "说明"}}
+    /// - 工具未配置 prompt 时返回空串 (插件回退内置默认描述)
+    std::string getToolPromptJson(const std::string& toolName);
+    /// 本插件配置参数 JSON (io 线程; 未配置返回 "{}")
+    /// - 宿主对 args 内容完全不解析, 整体原样传递
+    std::string getPluginArgsJson(std::string_view pluginName);
 
 private:
 

@@ -83,13 +83,28 @@ struct McpServerConfig {
     std::chrono::milliseconds toolTimeout{std::chrono::seconds{120}};
 };
 
+/// 插件运行侧 (yaml `plugins` 条目 sides)
+/// - auto: 按导出符号自动决定 (client 侧: 有 agentxx_client_entry 才加载)
+/// - agent: 仅 agent 侧加载 (client 侧跳过)
+/// - client: 仅 client 侧加载 (agent 侧跳过)
+enum class PluginSide : uint8_t {
+    Auto = 0,
+    Agent,
+    Client,
+};
+
 /// 插件配置 (yaml `plugins` 列表项)
 struct PluginConfig {
-    /// 插件动态库路径 或 插件目录 (目录含 plugin.yaml 时按清单解析; 一期仅支持直接库路径)
+    /// 插件动态库路径 或 插件目录 (目录含 plugin.yaml 时按清单解析)
+    /// - 必填: 所有插件统一经 path 外置指定, 不再区分内置/外置插件
+    ///   (相对路径按程序工作目录解析为绝对路径)
     std::string path;
     /// 是否启用 (默认 true)
     bool enabled = true;
-    /// 自定义参数 (预留; 一期仅存留供查询, 不传入插件)
+    /// 插件运行侧 (默认 auto = 按导出符号自动决定)
+    PluginSide sides = PluginSide::Auto;
+    /// 插件参数 (yaml `args`; 宿主原样保存并整体传递给插件,
+    /// 不解析具体字段 —— 参数语义由插件自行定义)
     neograph::json args;
 };
 
@@ -142,30 +157,11 @@ public:
     /// - 相对路径按程序工作目录解析为绝对路径 (由 client 启动时解析)
     std::string dataDir;
 
-    /// 是否启用 CodeGraph 代码分析 (yaml `codegraph.enable`; 默认关闭)
-    /// - 需编译时启用 AGENTXX_ENABLE_CODEGRAPH; 配置启用且编译启用时,
-    ///   CodeAgent 才会注册 codegraph 系列 tool
-    /// - 索引数据库: {dataDir}/sqlite/codegraph/<折叠路径>/index.db
-    ///   (深层路径折叠 + 单段截断控制长度, 子目录可前缀复用最近父级索引)
-    bool enableCodeGraph = false;
-
-    /// CodeGraph 加载(索引)路径列表 (yaml `codegraph.paths`)
-    /// - 相对路径由 client 启动时按程序工作目录解析为绝对路径
-    /// - 非空时按此列表索引 (可多个目录); 为空时按 codeGraphLoadCwd 决定
-    ///   是否默认索引当前工作目录
-    std::vector<std::string> codeGraphPaths;
-
-    /// CodeGraph 忽略路径列表 (yaml `codegraph.ignore_paths`)
-    /// - 相对路径由 client 启动时按程序工作目录解析为绝对路径, 支持 * 通配符
-    /// - 命中即跳过 (对全部加载路径及 agentxx_codegraph_index 手动索引生效)
-    std::vector<std::string> codeGraphIgnorePaths;
-
-    /// 未配置 codeGraphPaths 时是否默认加载当前工作目录 (yaml `codegraph.load_cwd`, 默认 true)
-    bool codeGraphLoadCwd = true;
-
-    /// 是否默认启用 .gitignore 规则与 .gitmodules 子模块目录忽略
-    /// (yaml `codegraph.use_gitignore`, 默认 true)
-    bool codeGraphUseGitignore = true;
+    /// CodeGraph 代码分析由插件 agentxx_codegraph 提供 (yaml `plugins` 段配置):
+    /// - 插件参数整体存放于 PluginConfig::args (宿主不解析字段语义,
+    ///   由插件自行读取: loadPaths/ignorePaths/loadCwd/useGitignore 等)
+    /// - CodeAgent 按 plugins 段 path 统一加载插件; dataDir 未配置时
+    ///   插件自动跳过
 
     /// 权限询问处理模式 (yaml `permission.mode`; 见 PermissionMode)
     /// - CodeAgent 启动时按模式注册文件系统读写默认规则:

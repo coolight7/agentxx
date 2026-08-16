@@ -9,6 +9,7 @@
 #include "agentxx-client/io/tui/tui_theme.h"
 #include "agentxx/agent/context.h"
 #include "agentxx/agent/io/agent_io.h"
+#include "agentxx/plugin/client_plugin_manager.h"
 #include "agentxx/util/log.h"
 #include "agentxx/util/string_util.h"
 #include "asio/awaitable.hpp"
@@ -145,6 +146,61 @@ public:
         remoteUrl_ = std::move(url);
     }
 
+    /// 装配 client 插件管理器 (mode_runners 在 start() 后调用):
+    /// - 供命令管线 (onSend 拦截 "/" 命令) 与组件渲染 (状态栏/侧边栏) 读取
+    /// - 同时也是事件接收器 (ClientEventSink), 经 setEventSink 注入
+    void setPluginManager(std::shared_ptr<agentxx::plugin::ClientPluginManager> mgr) {
+        pluginManager_ = std::move(mgr);
+        if (pluginManager_) {
+            pluginManager_->setThreadId(currentThreadId());
+        }
+    }
+
+    std::shared_ptr<agentxx::plugin::ClientPluginManager> pluginManager() const {
+        return pluginManager_;
+    }
+
+    // -----------------------------------------------------------------------
+    // 插件适配器接口 (由 TuiPluginAdapter 在 client io 线程调用; 内部自行
+    // 投递到 UI 线程 / 加锁, 线程安全)
+    // -----------------------------------------------------------------------
+
+    /// 投递 UI 线程独占操作 (等价 enqueueUiAction; 任意线程可调用)
+    void postToUi(std::function<void()> fn) {
+        enqueueUiAction(std::move(fn));
+    }
+
+    /// 请求 UI 重绘 (任意线程可调用; 合并同帧多次请求)
+    void requestRedraw() {
+        postRedraw();
+    }
+
+    /// 侧边栏组件访问器 (UI 线程使用; 未启动时返回 nullptr)
+    std::shared_ptr<SidebarComponent> sidebar() const {
+        return sidebar_;
+    }
+
+    /// 插件面板挂载: 添加侧边栏 tab (UI 线程调用; 内容渲染经 renderPluginPanel)
+    /// - 已存在同名 tab 时跳过 (幂等)
+    void addPluginPanelTab(const std::string& id, const std::string& title);
+
+    /// 插件面板摘除: 移除侧边栏 tab (UI 线程调用; 不存在时忽略)
+    void removePluginPanelTab(const std::string& id);
+
+    /// 渲染插件侧边栏面板内容 (UI 线程; 从 pluginManager UI 注册表快照读取)
+    std::vector<ScrollItem> renderPluginPanel(const std::string& panelId);
+
+    /// 显示 toast (任意线程可调用; 内部投递到 UI 线程)
+    void uiToast(std::string text, int level);
+
+    /// 代发用户消息 (client io 线程; 与用户输入同排队语义: 未连接/流式中
+    /// 进 pendingInputs, 连接后按轮次分发; 发送后通知事件接收器)
+    void sendPluginUserInput(std::string text);
+
+    /// 跨端插件数据上行 (client io 线程): WirePluginDataUp → agent 侧插件
+    /// 返回 true 表示已投递 (未连接等失败返回 false)
+    bool sendPluginDataUp(const std::string& plugin, const std::string& event, const std::string& json);
+
     /// 设置连接状态 (跨线程安全: 更新 sharedState 并触发重绘)
     /// 状态枚举 ConnState 定义于 tui_state.h (TUIRenderState::connState)
     void setConnState(ConnState state);
@@ -223,6 +279,10 @@ private:
     /// 由 UI 线程渲染时检查超时并清除 (toastText_/toastShownAt_ 为 UI 线程独占,
     /// 定时器回调仅触发重绘, 不直接写状态, 无跨线程竞争)
     void showToast(std::string text);
+
+    /// 通知事件接收器: 用户输入已发送 (sendUserInputLocked 内部调用;
+    /// 任意线程, 内部按需 post 到 client io 线程)
+    void notifyUserInputSent(const std::string& threadId, const std::string& text);
     /// 会话选择弹窗确认后的切换逻辑 (UI 线程):
     /// - 更新本地 threadId 绑定与重连握手 threadId (WS 模式)
     /// - 发送 WireSwitchSession, 服务端回推全量 Sync/模型/上下文统计 (WireModelInfo
@@ -240,6 +300,9 @@ private:
         std::lock_guard<std::mutex> lock(threadIdMutex_);
         threadId_ = std::move(newThreadId);
     }
+
+    /// client 插件管理器 (装配后不可变; uiRegistrySnapshot/hasCommand 线程安全)
+    std::shared_ptr<agentxx::plugin::ClientPluginManager> pluginManager_;
 
     /// F12: 切换日志窗口 tab
     void toggleLogWindow();
@@ -357,7 +420,7 @@ private:
     ///
     /// 采集已迁移到 agent-server: TUI 不再本地读取 CPU/内存 (远端模式下显示的是
     /// server 主机的资源; 本地一体模式也由 server 端点所在进程读取), 仅周期发送
-    /// WireGetSystemUsage, 收到 WireSystemUsage 响应后更新 sharedState_.systemUsage
+    /// WireGetSystemUsage, 收到 WireSystemUsage 响应后更新 sharedState_.systemUsageJson
 
     /// 监控运行标志: start() 置位, stop() 复位; 监控协程据此决定是否继续下一轮
     std::atomic<bool> sysMonitorRunning_{false};

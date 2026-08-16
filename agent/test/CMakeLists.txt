@@ -28,7 +28,7 @@ endif()
 
 add_executable(agentxx_test)
 
-# 注: 示例插件 (example_native/javascript_engine/example_js) 已独立到 agent/plugins/
+# 注: 示例插件 (example_plugin/javascript_engine/example_js) 已独立到 agent/plugins/
 # 独立编译 (每个插件子目录自带 CMakeLists.txt), 见 plugins/CMakeLists.txt;
 # 插件动态库输出到 ${AGENTXX_EXEC_INSTALL_PREFIX} (与测试可执行同目录),
 # 供 test_plugins 加载, 由顶层 agentxx_plugins_repo ExternalProject 构建。

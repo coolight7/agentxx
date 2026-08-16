@@ -202,24 +202,24 @@ public:
 
     /// 工具 execute 桥: 宿主线程池调用; postSync 到 JS 线程执行 (类外定义)
     static char* toolExecute(
-        void*       ud,
-        const char* args_json,
-        const char* thread_id,
-        const char* tool_call_id,
-        char**      error_out
+        void*                   ud,
+        AgentxxPluginStringView args_json,
+        AgentxxPluginStringView thread_id,
+        AgentxxPluginStringView tool_call_id,
+        char**                  error_out
     );
 
     /// 钩子回调桥: io 线程调用; post 到 JS 线程 (fire-and-forget) (类外定义)
     static int hookFire(
-        void*            ud,
-        AgentxxHookPoint point,
-        const char*      node_input_json,
-        char**           out_json,
-        char**           error_out
+        void*                   ud,
+        AgentxxHookPoint        point,
+        AgentxxPluginStringView node_input_json,
+        char**                  out_json,
+        char**                  error_out
     );
 
     /// 事件回调桥: io 线程调用; post 到 JS 线程 (fire-and-forget) (类外定义)
-    static void eventFire(const char* event_json, void* ud);
+    static void eventFire(AgentxxPluginStringView event_json, void* ud);
 
     // ==================== 任务队列 ====================
 
@@ -829,11 +829,11 @@ private:
 };
 
 char* JsEngine::toolExecute(
-    void*       ud,
-    const char* args_json,
-    const char* thread_id,
-    const char* tool_call_id,
-    char**      error_out
+    void*                   ud,
+    AgentxxPluginStringView args_json,
+    AgentxxPluginStringView thread_id,
+    AgentxxPluginStringView tool_call_id,
+    char**                  error_out
 ) {
     auto* binding = static_cast<JsToolBinding*>(ud);
     auto* engine  = binding ? binding->engine : nullptr;
@@ -841,9 +841,9 @@ char* JsEngine::toolExecute(
         return nullptr;
     }
     auto req  = std::make_shared<ToolExecReq>();
-    req->args = args_json ? args_json : "{}";
-    req->tid  = thread_id ? thread_id : "";
-    req->tcid = tool_call_id ? tool_call_id : "";
+    req->args = std::string{args_json.data ? args_json.data : "{}", args_json.size};
+    req->tid  = std::string{thread_id.data ? thread_id.data : "", thread_id.size};
+    req->tcid = std::string{tool_call_id.data ? tool_call_id.data : "", tool_call_id.size};
 
     std::mutex              m;
     std::condition_variable cv;
@@ -879,11 +879,11 @@ char* JsEngine::toolExecute(
 }
 
 int JsEngine::hookFire(
-    void*            ud,
-    AgentxxHookPoint point,
-    const char*      node_input_json,
-    char**           out_json,
-    char**           error_out
+    void*                   ud,
+    AgentxxHookPoint        point,
+    AgentxxPluginStringView node_input_json,
+    char**                  out_json,
+    char**                  error_out
 ) {
     (void)out_json;
     (void)error_out;
@@ -892,21 +892,21 @@ int JsEngine::hookFire(
     if (!engine) {
         return 1;
     }
-    std::string payload = node_input_json ? node_input_json : "";
-    int         pt      = static_cast<int>(point);
+    std::string payload{node_input_json.data ? node_input_json.data : "", node_input_json.size};
+    int         pt = static_cast<int>(point);
     engine->post([engine, binding, payload, pt]() {
         engine->doHookFire(binding, pt, payload);
     });
     return 0;
 }
 
-void JsEngine::eventFire(const char* event_json, void* ud) {
+void JsEngine::eventFire(AgentxxPluginStringView event_json, void* ud) {
     auto* binding = static_cast<JsHookBinding*>(ud);
     auto* engine  = binding ? binding->engine : nullptr;
     if (!engine) {
         return;
     }
-    std::string payload = event_json ? event_json : "";
+    std::string payload{event_json.data ? event_json.data : "", event_json.size};
     engine->post([engine, binding, payload]() {
         engine->doEventFire(binding, payload);
     });
@@ -998,9 +998,9 @@ JSValue JsEngine::bridgeCall(
             binding->name   = name;
 
             AgentxxToolSpec spec{};
-            spec.name            = binding->name.c_str();
-            spec.description     = desc.c_str();
-            spec.parameters_json = paramsJson.c_str();
+            spec.name            = agentxx_plugin_sv(name.data(), name.size());
+            spec.description     = agentxx_plugin_sv(desc.data(), desc.size());
+            spec.parameters_json = agentxx_plugin_sv(paramsJson.data(), paramsJson.size());
             spec.execute         = &JsEngine::toolExecute;
             spec.user_data       = binding.get();
             int rc               = vt.register_tool(host, &spec);
@@ -1029,7 +1029,7 @@ JSValue JsEngine::bridgeCall(
             if (name.empty()) {
                 return JS_ThrowTypeError(ctx, "unregisterTool: name required");
             }
-            vt.unregister_tool(host, name.c_str());
+            vt.unregister_tool(host, agentxx_plugin_sv(name.data(), name.size()));
             JS_SetPropertyStr(ctx, pctx->tools, name.c_str(), JS_UNDEFINED);
             return JS_UNDEFINED;
         }
@@ -1091,7 +1091,13 @@ JSValue JsEngine::bridgeCall(
 
             // 2) 宿主插件工具 (同步互调; vtable 内部保证线程安全)
             char* err  = nullptr;
-            char* resp = vt.call_tool(host, name.c_str(), argsJson.c_str(), threadId.c_str(), &err);
+            char* resp = vt.call_tool(
+                host,
+                agentxx_plugin_sv(name.data(), name.size()),
+                agentxx_plugin_sv(argsJson.data(), argsJson.size()),
+                agentxx_plugin_sv(threadId.data(), threadId.size()),
+                &err
+            );
             if (!resp) {
                 std::string errStr = err ? err : "call_tool failed";
                 if (err) {
@@ -1114,7 +1120,7 @@ JSValue JsEngine::bridgeCall(
             if (argc >= 2) {
                 JS_ToInt64(ctx, &id, argv[1]);
             }
-            char* resp = vt.get_share_store(host, threadId.c_str(), id);
+            char* resp = vt.get_share_store(host, agentxx_plugin_sv(threadId.data(), threadId.size()), id);
             if (!resp) {
                 return JS_NULL;
             }
@@ -1132,7 +1138,12 @@ JSValue JsEngine::bridgeCall(
                 JS_ToInt32(ctx, &lv, argv[2]);
                 level = lv;
             }
-            vt.emit_message_tip(host, threadId.c_str(), text.c_str(), level);
+            vt.emit_message_tip(
+                host,
+                agentxx_plugin_sv(threadId.data(), threadId.size()),
+                agentxx_plugin_sv(text.data(), text.size()),
+                level
+            );
             return JS_UNDEFINED;
         }
 
@@ -1144,7 +1155,7 @@ JSValue JsEngine::bridgeCall(
                 level = lv;
             }
             std::string msg = argc >= 2 ? jsToCppString(ctx, argv[1]) : "";
-            vt.log(host, level, msg.c_str());
+            vt.log(host, level, agentxx_plugin_sv(msg.data(), msg.size()));
             return JS_UNDEFINED;
         }
 
@@ -1225,7 +1236,7 @@ JSValue JsEngine::bridgeCall(
             binding->engine     = engine;
             binding->plugin     = pctx->name;
             binding->point      = -1;
-            auto* sub = vt.subscribe(host, topic.c_str(), &JsEngine::eventFire, binding.get());
+            auto* sub = vt.subscribe(host, agentxx_plugin_sv(topic.data(), topic.size()), &JsEngine::eventFire, binding.get());
             if (!sub) {
                 return throwJsError(ctx, "subscribe: host subscription failed: " + topic);
             }
@@ -1302,7 +1313,11 @@ JSValue JsEngine::bridgeCall(
                     }
                 }
             }
-            vt.publish(host, topic.c_str(), payload.c_str());
+            vt.publish(
+                host,
+                agentxx_plugin_sv(topic.data(), topic.size()),
+                agentxx_plugin_sv(payload.data(), payload.size())
+            );
             return JS_UNDEFINED;
         }
 
@@ -1356,7 +1371,7 @@ JSValue JsEngine::bridgeCall(
                 return JS_ThrowTypeError(ctx, "getPlugin: name required");
             }
             std::string name = jsToCppString(ctx, argv[0]);
-            char*       json = vt.get_plugin(host, name.c_str());
+            char*       json = vt.get_plugin(host, agentxx_plugin_sv(name.data(), name.size()));
             if (!json) {
                 return JS_NULL; // 未安装
             }
@@ -1381,9 +1396,9 @@ JSValue JsEngine::bridgeCall(
 extern "C" const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
     static const AgentxxPluginInfo info{
         AGENTXX_PLUGIN_API_VERSION,
-        "agentxx_javascript_engine",
-        "1.0.0",
-        "JS interpreter plugin (QuickJS): hosts type:js plugins",
+        AGENTXX_SV("agentxx_javascript_engine"),
+        AGENTXX_SV("1.0.0"),
+        AGENTXX_SV("JS interpreter plugin (QuickJS): hosts type:js plugins"),
     };
     return &info;
 }
@@ -1395,11 +1410,11 @@ extern "C" const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
 ///   {"ok": true, "tools": [...]} (JSON, host->alloc)
 /// - "unload" args: {"name": 脚本插件名}; 投递式, 立即返回
 static char* jsInvoke(
-    void*              ctx,
-    const AgentxxHost* caller_host,
-    const char*        method,
-    const char*        args_json,
-    char**             error_out
+    void*                   ctx,
+    const AgentxxHost*      caller_host,
+    AgentxxPluginStringView method,
+    AgentxxPluginStringView args_json,
+    char**                  error_out
 ) {
     auto* engine = static_cast<JsEngine*>(ctx);
     auto  setErr = [&](const char* msg) {
@@ -1407,15 +1422,19 @@ static char* jsInvoke(
             *error_out = caller_host->vtable->strdup(msg);
         }
     };
-    if (!engine || !method) {
+    if (!engine || agentxx_plugin_sv_empty(method)) {
         setErr("interpreter.js: invalid invoke");
         return nullptr;
     }
-    std::string methodStr{method};
-    std::string argsStr{args_json ? args_json : "{}"};
+    std::string methodStr{method.data, method.size};
+    std::string argsStr{args_json.data ? args_json.data : "{}", args_json.size};
     // 参数解析经宿主 json_get_string (对转义/嵌套结构可靠, 替代手写字符串扫描)
     auto argStr = [&](const char* key, std::string& out) -> bool {
-        char* v = caller_host->vtable->json_get_string(caller_host, argsStr.c_str(), key);
+        char* v = caller_host->vtable->json_get_string(
+            caller_host,
+            agentxx_plugin_sv(argsStr.data(), argsStr.size()),
+            agentxx_plugin_sv(key, std::strlen(key))
+        );
         if (!v) {
             return false;
         }
@@ -1480,13 +1499,15 @@ extern "C" int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) 
 
     // 注册能力 "interpreter.js" (带方法回调): 脚本插件 (C++ 壳) 经
     // invoke_capability 把脚本代码交给本引擎执行 —— 插件间通信, 宿主不参与
-    int rc = host->vtable->register_capability_ex(host, "interpreter.js", &jsInvoke, engine);
+    int rc = host->vtable->register_capability_ex(
+        host, AGENTXX_SV("interpreter.js"), &jsInvoke, engine
+    );
     if (rc != 0) {
         delete engine;
         return -1;
     }
     *plugin_ctx = engine;
-    host->vtable->log(host, 2, "agentxx_javascript_engine loaded (QuickJS interpreter.js)");
+    host->vtable->log(host, 2, AGENTXX_SV("agentxx_javascript_engine loaded (QuickJS interpreter.js)"));
     return 0;
 }
 

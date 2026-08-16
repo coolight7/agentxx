@@ -1,0 +1,5 @@
+name: agentxx_screen_capture
+version: 1.0.0
+description: "Screen capture on Windows: all screens, mouse screen, specific screen, and streaming"
+entry: libagentxx_screen_capture.so
+depends:

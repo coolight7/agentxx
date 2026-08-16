@@ -387,11 +387,6 @@ void BaseAgent::collectAppendComponentInfo(std::vector<
     // BaseAgent: 空实现，无需收集信息
 }
 
-std::shared_ptr<expand::CodeGraphManager> BaseAgent::codegraphManager() {
-    // BaseAgent: 无 CodeGraph (CodeAgent 启用时覆写返回实例)
-    return nullptr;
-}
-
 std::string BaseAgent::getCurrentModelName(std::string_view threadId) const {
     return agentContext->getSessionCurrentModelName(threadId);
 }

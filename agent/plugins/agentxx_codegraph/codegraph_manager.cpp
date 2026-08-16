@@ -1,7 +1,8 @@
-#include "agentxx/expand/codegraph_manager.h"
-#include "agentxx/agent/config_static.h"
-#include "agentxx/util/exception.h"
-#include "agentxx/util/log.h"
+// agentxx_codegraph 插件 —— CodeGraphManager 实现 (从 lib 迁移)
+// - 插件不链接 libagentxx: 日志经宿主 vtable log, 数据目录逻辑本地实现
+// - 工具 (codegraph_tools.cpp) 与入口 (agentxx_codegraph.cpp) 同目录
+#include "codegraph_manager.h"
+#include "codegraph_plugin.h"
 #include "glob/glob.h"
 #include <algorithm>
 #include <atomic>
@@ -22,7 +23,6 @@
 #include <unordered_map>
 #include <unordered_set>
 
-#if AGENTXX_ENABLE_CODEGRAPH
 #include "codegraph/context/context_builder.h"
 #include "codegraph/core/lru_cache.h"
 #include "codegraph/core/types.h"
@@ -34,6 +34,47 @@
 
 namespace agentxx {
 namespace expand {
+
+/// 插件侧 catchError (替代 libcatchError):
+/// - 捕获 func 抛出的全部异常, 转错误字符串调 onError 返回
+/// - 取消类异常 (CancelledException) 在 codegraph 索引/查询内部不会抛出,
+///   无需保留重抛语义
+template<typename T>
+static T catchError(std::function<T()> func, std::function<T(std::string)> onError) {
+    std::string errmsg;
+    try {
+        return func();
+    } catch (const std::exception& e) {
+        errmsg = e.what();
+    } catch (...) {
+        errmsg = "unknown exception";
+    }
+    return onError(errmsg);
+}
+
+/// 默认数据目录: ~/.agentxx (取不到主目录时回退系统临时目录)
+/// - 与原 lib AgentConfigStatic::agentxxDataDirPath 一致
+static std::string defaultDataDirPath() {
+    std::error_code ec;
+    const char*     home = std::getenv("HOME");
+    if (home && *home) {
+        return (std::filesystem::path(home) / ".agentxx").string();
+    }
+    const char* tmp = std::getenv("TMPDIR");
+    if (tmp && *tmp) {
+        return (std::filesystem::path(tmp) / ".agentxx").string();
+    }
+    return (std::filesystem::path("/tmp") / ".agentxx").string();
+}
+
+/// CodeGraph sqlite 数据库目录: {dataDir}/sqlite
+/// - dataDir 为空时默认 ~/.agentxx/sqlite (取不到主目录时回退系统临时目录)
+static std::string getCodeGraphSqliteDir(std::string_view sqliteDir) {
+    if (!sqliteDir.empty()) {
+        return std::string{sqliteDir};
+    }
+    return (std::filesystem::path(defaultDataDirPath()) / "sqlite").string();
+}
 
 namespace fs = std::filesystem;
 
@@ -61,16 +102,6 @@ static uint64_t fnv1a64(std::string_view s) {
         hash *= 1099511628211ULL;
     }
     return hash;
-}
-
-/// CodeGraph sqlite 数据库目录: {dataDir}/sqlite/
-/// - dataDir 为空时默认 ~/.agentxx/ (取不到用户主目录时回退系统临时目录)
-/// - 可经 AgentConfig::dataDir / yaml data_dir 统一重定向
-static std::string getCodeGraphSqliteDir(std::string_view sqliteDir) {
-    if (!sqliteDir.empty()) {
-        return std::string{sqliteDir};
-    }
-    return agentxx::agent::AgentConfigStatic::getSqliteDir("");
 }
 
 /// 路径段清洗: 替换文件系统非法字符为 `_`
@@ -130,7 +161,7 @@ static std::vector<std::string> projectRootToSegments(std::string_view project_r
 
     // 绝对化并解析 `.` / `..` (weakly_canonical 不要求路径全部存在)
     fs::path abs;
-    bool     ok = agentxx::util::catchError<bool>(
+    bool     ok = catchError<bool>(
         [&]() -> bool {
             abs = fs::weakly_canonical(fs::path(project_root));
             return true;
@@ -246,7 +277,7 @@ static std::optional<fs::path>
 template<typename F>
 static bool runWithRetry(std::string_view what, int attempts, F&& fn) {
     for (int attempt = 1; attempt <= attempts; ++attempt) {
-        bool ok = agentxx::util::catchError<bool>(
+        bool ok = catchError<bool>(
             [&]() -> bool {
                 fn();
                 return true;
@@ -287,7 +318,7 @@ static bool
     runTransactionWithRetry(std::string_view what, int attempts, codegraph::Database* db, F&& fn) {
     for (int attempt = 1; attempt <= attempts; ++attempt) {
         bool inTx = false;
-        bool ok   = agentxx::util::catchError<bool>(
+        bool ok   = catchError<bool>(
             [&]() -> bool {
                 db->begin_transaction();
                 inTx = true;
@@ -299,7 +330,7 @@ static bool
             [&](std::string errmsg) -> bool {
                 // 回滚需容错: 若 BEGIN 本身失败则无活跃事务, ROLLBACK 会再抛异常
                 if (inTx) {
-                    agentxx::util::catchError<bool>(
+                    catchError<bool>(
                         [&]() -> bool {
                             db->rollback();
                             return true;
@@ -559,7 +590,7 @@ private:
             rule.regex = R"((?:^|/))" + body + R"((?:/.*)?$)";
         }
         // 编译失败 (非法正则) 时丢弃该规则, 不中断解析
-        bool compiled = agentxx::util::catchError<bool>(
+        bool compiled = catchError<bool>(
             [&]() -> bool {
                 rule.re = std::regex(rule.regex);
                 return true;
@@ -675,8 +706,8 @@ static std::string normalizePathStr(std::string_view p) {
 }
 
 static bool should_skip(std::string_view file_path) {
-    static const std::string kSkipAgentxx
-        = fmt::format("/{}/", agentxx::agent::AgentConfigStatic::agentxxDataDirPath);
+    // agentxx 数据目录 (默认 ~/.agentxx): 索引时跳过
+    static const std::string kSkipAgentxx = "/.agentxx/";
 
     fs::path    p(file_path);
     std::string path_str = p.generic_string();
@@ -718,7 +749,7 @@ static void traverse_source_files(
     const std::function<bool(std::string_view)>& on_file
 ) {
     // 遍历异常记录日志后中止; 已回调的文件保持已处理状态 (不重复处理)
-    agentxx::util::catchError<bool>(
+    catchError<bool>(
         [&]() -> bool {
             GitIgnoreMatcher matcher;
             if (use_gitignore) {
@@ -822,7 +853,7 @@ static bool is_changed(
         return true;
     }
     // 无法读取文件元信息时按"已变更"处理, 触发重新索引
-    return agentxx::util::catchError<bool>(
+    return catchError<bool>(
         [&]() -> bool {
             auto ftime = fs::last_write_time(entry);
             auto mtime = std::chrono::duration_cast<std::chrono::seconds>(ftime.time_since_epoch())
@@ -886,7 +917,7 @@ public:
             if (p.find_first_of("*?[") == std::string::npos) {
                 re = re.substr(0, re.size() - 1) + R"((?:/.*)?$)";
             }
-            agentxx::util::catchError<bool>(
+            catchError<bool>(
                 [&]() -> bool {
                     ignore_path_regexes_.emplace_back(re);
                     return true;
@@ -958,7 +989,7 @@ public:
         }
 
         // 初始化失败记录日志并返回 false
-        return agentxx::util::catchError<bool>(
+        return catchError<bool>(
             [&]() -> bool {
                 if (!fs::exists(sqlite_base)) {
                     fs::create_directories(sqlite_base);
@@ -1031,7 +1062,7 @@ public:
 
             if (incremental) {
                 // 条目构建/变更判断失败时按"需重新索引"处理
-                bool changed = agentxx::util::catchError<bool>(
+                bool changed = catchError<bool>(
                     [&]() -> bool {
                         fs::directory_entry entry(file_path);
                         return is_changed(*db_, entry, file_path);
@@ -1124,7 +1155,7 @@ public:
                 invalidateCaches();
             }
             // 完成信号 (processed==0 && total==0 约定为"无文件可索引"完成,
-            // 见 SessionServerAgentIO::onCodegraphProgress 注释):
+            // 订阅方 (插件进度回调/客户端状态栏) 按此判定结束):
             // 否则索引生命周期标志复位后, 订阅方状态会永远停在
             // "indexing ..."/"ready" 不结束
             if (progress_callback_) {
@@ -1462,7 +1493,7 @@ public:
                 return result;
             }
             // 查询异常转为 result.error, 不向外抛出
-            agentxx::util::catchError<bool>(
+            catchError<bool>(
                 [&]() -> bool {
                     result.nodes   = fts_search_->search(std::string{query}, limit);
                     result.success = true;
@@ -1498,7 +1529,7 @@ public:
                 return result;
             }
             // 查询异常转为 result.error, 不向外抛出
-            agentxx::util::catchError<bool>(
+            catchError<bool>(
                 [&]() -> bool {
                     result.context
                         = context_builder_->build_context(std::string{symbol}, limit, max_depth);
@@ -1538,7 +1569,7 @@ public:
                 return result;
             }
             // 查询异常转为 result.error, 不向外抛出
-            agentxx::util::catchError<bool>(
+            catchError<bool>(
                 [&]() -> bool {
                     result.impact = context_builder_->get_callers(std::string{symbol}, max_depth);
                     if (result.impact.contains("error")) {
@@ -1577,7 +1608,7 @@ public:
                 return result;
             }
             // 查询异常转为 result.error, 不向外抛出
-            agentxx::util::catchError<bool>(
+            catchError<bool>(
                 [&]() -> bool {
                     result.impact = context_builder_->get_callees(std::string{symbol}, max_depth);
                     if (result.impact.contains("error")) {
@@ -1616,7 +1647,7 @@ public:
                 return result;
             }
             // 查询异常转为 result.error, 不向外抛出
-            agentxx::util::catchError<bool>(
+            catchError<bool>(
                 [&]() -> bool {
                     result.impact = context_builder_->get_impact(std::string{symbol}, max_depth);
                     if (result.impact.contains("error")) {
@@ -1656,7 +1687,7 @@ public:
                 return result;
             }
             // 查询异常转为 result.error, 不向外抛出
-            agentxx::util::catchError<bool>(
+            catchError<bool>(
                 [&]() -> bool {
                     auto from_nodes = db_->find_nodes_by_name(std::string{from}, 1);
                     auto to_nodes   = db_->find_nodes_by_name(std::string{to}, 1);
@@ -1713,7 +1744,7 @@ public:
                 return result;
             }
             // 各统计项失败时带上下文记录错误并提前返回
-            bool ok = agentxx::util::catchError<bool>(
+            bool ok = catchError<bool>(
                 [&]() -> bool {
                     result.total_nodes = db_->count_nodes();
                     return true;
@@ -1726,7 +1757,7 @@ public:
             if (!ok) {
                 return result;
             }
-            ok = agentxx::util::catchError<bool>(
+            ok = catchError<bool>(
                 [&]() -> bool {
                     result.total_edges = db_->count_edges();
                     return true;
@@ -1739,7 +1770,7 @@ public:
             if (!ok) {
                 return result;
             }
-            ok = agentxx::util::catchError<bool>(
+            ok = catchError<bool>(
                 [&]() -> bool {
                     result.total_files = static_cast<int64_t>(db_->get_all_files().size());
                     return true;
@@ -1752,7 +1783,7 @@ public:
             if (!ok) {
                 return result;
             }
-            ok = agentxx::util::catchError<bool>(
+            ok = catchError<bool>(
                 [&]() -> bool {
                     auto cycles          = traverser_->find_circular_dependencies();
                     result.circular_deps = static_cast<int>(cycles.size());
@@ -1796,7 +1827,7 @@ public:
         }
 
         // 启动文件监听失败记录日志并返回 false
-        return agentxx::util::catchError<bool>(
+        return catchError<bool>(
             [&]() -> bool {
                 file_watcher_ = codegraph::FileWatcher::create(project_root_, &running_);
                 for (const auto& root : watch_roots) {
@@ -1827,7 +1858,7 @@ public:
                 worker_thread_ = std::thread([this]() {
                     while (running_.load() && file_watcher_running_) {
                         // poll 异常仅记录日志, 线程继续轮询
-                        agentxx::util::catchError<bool>(
+                        catchError<bool>(
                             [&]() -> bool {
                                 file_watcher_->poll(1000);
                                 return true;
@@ -1897,7 +1928,7 @@ public:
             fr.path     = file_path;
             fr.language = lang;
             // 无法读取文件元信息时使用默认值 (mtime=0), 不中断写入
-            agentxx::util::catchError<bool>(
+            catchError<bool>(
                 [&]() -> bool {
                     auto ftime = fs::last_write_time(fs::path(file_path));
                     fr.mtime
@@ -2005,7 +2036,7 @@ public:
         }
         runTransactionWithRetry("cleanup removed files", 3, db_.get(), [&]() {
             for (const auto& path : to_delete) {
-                agentxx::util::catchError<bool>(
+                catchError<bool>(
                     [&]() -> bool {
                         db_->delete_edges_for_file_nodes(path);
                         db_->delete_unresolved_refs_by_file(path);
@@ -2225,5 +2256,3 @@ void CodeGraphManager::setProgressCallback(IndexProgressCallback callback) {
 
 } // namespace expand
 } // namespace agentxx
-
-#endif

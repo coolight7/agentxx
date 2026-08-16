@@ -1,5 +1,6 @@
 #include "agentxx/plugin/plugin_manager.h"
 
+#include "agentxx/agent/config_static.h"
 #include "agentxx/agent/io/agent_io.h"
 #include "agentxx/agent/io/agent_io_transport.h"
 #include "agentxx/middlewares/event_stream.h"
@@ -52,7 +53,7 @@ struct AgentxxSubscription {
     std::string                                    topic; ///< 完整 topic (含 plugin. 前缀)
     size_t                                         subscriptionId = 0;
     agentxx::plugin::PluginInstance*               inst           = nullptr;
-    void (*handler)(const char* event_json, void* ud)             = nullptr;
+    void (*handler)(AgentxxPluginStringView event_json, void* ud) = nullptr;
     void* ud                                                      = nullptr;
 };
 
@@ -237,31 +238,37 @@ PluginTool::PluginTool(
         /*canDelayLoad=*/false, // 插件工具全量注册, 不延迟加载
         /*maxRetry=*/0
     ),
-    spec_(spec),
+    name_{spec.name.data ? spec.name.data : "", spec.name.size},
+    description_{spec.description.data ? spec.description.data : "", spec.description.size},
+    parametersJson_{
+        spec.parameters_json.data ? spec.parameters_json.data : "", spec.parameters_json.size
+    },
     parameters_(neograph::json::object()),
     instance_(instance) {
+    // 字符串字段已拷贝进成员 (不依赖插件侧内存存活); spec_ 指针指向本对象成员
+    spec_                 = spec;
+    spec_.name            = agentxx_plugin_sv(name_.data(), name_.size());
+    spec_.description     = agentxx_plugin_sv(description_.data(), description_.size());
+    spec_.parameters_json = agentxx_plugin_sv(parametersJson_.data(), parametersJson_.size());
+
     // 注册时解析一次参数 schema 并缓存 (ModelCallWrapNode 每轮组装工具定义,
     // 避免对同一工具反复 parse JSON)
-    if (spec_.parameters_json && *spec_.parameters_json) {
+    if (!parametersJson_.empty()) {
         try {
-            auto params = neograph::json::parse(spec_.parameters_json);
+            auto params = neograph::json::parse(parametersJson_);
             if (params.is_object()) {
                 parameters_ = std::move(params);
             }
         } catch (const std::exception& e) {
-            XX_LOGW(
-                "PluginTool `{}`: invalid parameters_json: {}",
-                spec_.name ? spec_.name : "",
-                e.what()
-            );
+            XX_LOGW("PluginTool `{}`: invalid parameters_json: {}", name_, e.what());
         }
     }
 }
 
 neograph::ChatTool PluginTool::get_definition() const {
     neograph::ChatTool def;
-    def.name        = spec_.name ? spec_.name : "";
-    def.description = spec_.description ? spec_.description : "";
+    def.name        = name_;
+    def.description = description_;
     def.parameters  = parameters_; // 拷贝缓存 (浅层拷贝, 与解析结果独立)
     return def;
 }
@@ -309,9 +316,9 @@ asio::awaitable<std::string> PluginTool::execute_async(const neograph::json& arg
         char*                         err = nullptr;
         char*                         out = spec.execute(
             spec.user_data,
-            argsJson.c_str(),
-            threadId.c_str(),
-            toolCallId.c_str(),
+            agentxx_plugin_sv(argsJson.data(), argsJson.size()),
+            agentxx_plugin_sv(threadId.data(), threadId.size()),
+            agentxx_plugin_sv(toolCallId.data(), toolCallId.size()),
             &err
         );
         if (err) {
@@ -416,7 +423,13 @@ asio::awaitable<void>
 
     char* out = nullptr;
     char* err = nullptr;
-    int   rc  = hook.fn(hook.ud, point, summaryStr.c_str(), &out, &err);
+    int   rc  = hook.fn(
+        hook.ud,
+        point,
+        agentxx_plugin_sv(summaryStr.data(), summaryStr.size()),
+        &out,
+        &err
+    );
     if (out) {
         // 一期忽略 out_json (预留节点输入修改能力)
         inst->host.vtable->free(out);
@@ -648,10 +661,13 @@ static int xx_register_tool(const AgentxxHost* host, const AgentxxToolSpec* spec
     XX_PLUGIN_CATCH_BEGIN
     auto mgr  = mgrOf(host);
     auto inst = instOf(host);
-    if (!mgr || !inst || !spec || !spec->name || !*spec->name) {
+    if (!mgr || !inst || !spec || agentxx_plugin_sv_empty(spec->name)) {
         return -1;
     }
     // io 线程约束操作: 非 io 线程调用 (JS 线程等) 经 post 同步等待
+    // - spec 字符串字段为视图 (借用): ioCallSync 为同步等待, 调用方 (插件
+    //   entry 等) 在等待期间不会释放内存; PluginTool 构造时已拷贝字符串,
+    //   同步返回后 specCopy 即可废弃
     auto            mgrPtr   = mgr;
     auto            instPtr  = inst;
     AgentxxToolSpec specCopy = *spec;
@@ -661,16 +677,16 @@ static int xx_register_tool(const AgentxxHost* host, const AgentxxToolSpec* spec
     XX_PLUGIN_CATCH_END(-1)
 }
 
-static int xx_unregister_tool(const AgentxxHost* host, const char* name) {
+static int xx_unregister_tool(const AgentxxHost* host, AgentxxPluginStringView name) {
     XX_PLUGIN_CATCH_BEGIN
     auto mgr  = mgrOf(host);
     auto inst = instOf(host);
-    if (!mgr || !inst || !name) {
+    if (!mgr || !inst || agentxx_plugin_sv_empty(name)) {
         return -1;
     }
     auto        mgrPtr  = mgr;
     auto        instPtr = inst;
-    std::string toolName{name};
+    std::string toolName{name.data, name.size};
     return ioCallSync<int>(mgrPtr, [mgrPtr, instPtr, toolName]() {
         return mgrPtr->unregisterTool(instPtr, toolName.c_str());
     });
@@ -719,8 +735,8 @@ static int xx_unregister_hook(
 
 static AgentxxSubscription* xx_subscribe(
     const AgentxxHost* host,
-    const char*        topic,
-    void (*handler)(const char* event_json, void* ud),
+    AgentxxPluginStringView topic,
+    void (*handler)(AgentxxPluginStringView event_json, void* ud),
     void* ud
 ) {
     XX_PLUGIN_CATCH_BEGIN
@@ -731,7 +747,7 @@ static AgentxxSubscription* xx_subscribe(
     }
     auto        mgrPtr  = mgr;
     auto        instPtr = inst;
-    std::string topicStr{topic ? topic : ""};
+    std::string topicStr{topic.data ? topic.data : "", topic.size};
     return ioCallSync<AgentxxSubscription*>(mgrPtr, [mgrPtr, instPtr, topicStr, handler, ud]() {
         return mgrPtr->subscribe(instPtr, topicStr.c_str(), handler, ud);
     });
@@ -759,56 +775,62 @@ static void xx_unsubscribe(AgentxxSubscription* sub) {
     XX_PLUGIN_CATCH_END_VOID()
 }
 
-static int xx_publish(const AgentxxHost* host, const char* topic, const char* event_json) {
+static int xx_publish(
+    const AgentxxHost*      host,
+    AgentxxPluginStringView topic,
+    AgentxxPluginStringView event_json
+) {
     XX_PLUGIN_CATCH_BEGIN
     auto mgr = mgrOf(host);
     if (!mgr) {
         return -1;
     }
-    return mgr->publish(topic, event_json);
+    std::string topicStr{topic.data ? topic.data : "", topic.size};
+    std::string payload{event_json.data ? event_json.data : "", event_json.size};
+    return mgr->publish(topicStr.c_str(), payload.c_str());
     XX_PLUGIN_CATCH_END(-1)
 }
 
-static int xx_register_capability(const AgentxxHost* host, const char* capability) {
+static int xx_register_capability(const AgentxxHost* host, AgentxxPluginStringView capability) {
     XX_PLUGIN_CATCH_BEGIN
     auto mgr  = mgrOf(host);
     auto inst = instOf(host);
-    if (!mgr || !inst || !capability) {
+    if (!mgr || !inst || agentxx_plugin_sv_empty(capability)) {
         return -1;
     }
     auto        mgrPtr  = mgr;
     auto        instPtr = inst;
-    std::string cap{capability};
+    std::string cap{capability.data, capability.size};
     return ioCallSync<int>(mgrPtr, [mgrPtr, instPtr, cap]() {
         return mgrPtr->registerCapability(instPtr, cap.c_str());
     });
     XX_PLUGIN_CATCH_END(-1)
 }
 
-static int xx_unregister_capability(const AgentxxHost* host, const char* capability) {
+static int xx_unregister_capability(const AgentxxHost* host, AgentxxPluginStringView capability) {
     XX_PLUGIN_CATCH_BEGIN
     auto mgr  = mgrOf(host);
     auto inst = instOf(host);
-    if (!mgr || !inst || !capability) {
+    if (!mgr || !inst || agentxx_plugin_sv_empty(capability)) {
         return -1;
     }
     auto        mgrPtr  = mgr;
     auto        instPtr = inst;
-    std::string cap{capability};
+    std::string cap{capability.data, capability.size};
     return ioCallSync<int>(mgrPtr, [mgrPtr, instPtr, cap]() {
         return mgrPtr->unregisterCapability(instPtr, cap.c_str());
     });
     XX_PLUGIN_CATCH_END(-1)
 }
 
-static int xx_has_capability(const AgentxxHost* host, const char* capability) {
+static int xx_has_capability(const AgentxxHost* host, AgentxxPluginStringView capability) {
     XX_PLUGIN_CATCH_BEGIN
     auto mgr = mgrOf(host);
-    if (!mgr || !capability) {
+    if (!mgr || agentxx_plugin_sv_empty(capability)) {
         return 0;
     }
     // caps_ 为 io 线程数据结构: 跨线程调用经 post 到 io 线程查询
-    std::string cap{capability};
+    std::string cap{capability.data, capability.size};
     auto        mgrPtr = mgr;
     return ioCallSync<int>(mgrPtr, [mgrPtr, cap]() {
         return mgrPtr->hasCapability(cap.c_str()) ? 1 : 0;
@@ -818,19 +840,19 @@ static int xx_has_capability(const AgentxxHost* host, const char* capability) {
 
 static int xx_register_capability_ex(
     const AgentxxHost*        host,
-    const char*               capability,
+    AgentxxPluginStringView   capability,
     AgentxxCapabilityInvokeFn invoke,
     void*                     ctx
 ) {
     XX_PLUGIN_CATCH_BEGIN
     auto mgr  = mgrOf(host);
     auto inst = instOf(host);
-    if (!mgr || !inst || !capability || !*capability) {
+    if (!mgr || !inst || agentxx_plugin_sv_empty(capability)) {
         return -1;
     }
     auto        mgrPtr  = mgr;
     auto        instPtr = inst;
-    std::string cap{capability};
+    std::string cap{capability.data, capability.size};
     return ioCallSync<int>(mgrPtr, [mgrPtr, instPtr, cap, invoke, ctx]() {
         return mgrPtr->registerCapabilityEx(instPtr, cap.c_str(), invoke, ctx);
     });
@@ -838,32 +860,35 @@ static int xx_register_capability_ex(
 }
 
 static char* xx_invoke_capability(
-    const AgentxxHost* host,
-    const char*        capability,
-    const char*        method,
-    const char*        args_json,
-    char**             error_out
+    const AgentxxHost*      host,
+    AgentxxPluginStringView capability,
+    AgentxxPluginStringView method,
+    AgentxxPluginStringView args_json,
+    char**                  error_out
 ) {
     XX_PLUGIN_CATCH_BEGIN
     auto mgr  = mgrOf(host);
     auto inst = instOf(host);
-    if (!mgr || !inst || !capability || !method) {
+    if (!mgr || !inst || agentxx_plugin_sv_empty(capability) || agentxx_plugin_sv_empty(method)) {
         return nullptr;
     }
-    std::string cap{capability};
-    std::string m{method};
-    std::string args{args_json ? args_json : "{}"};
+    std::string cap{capability.data, capability.size};
+    std::string m{method.data, method.size};
+    std::string args{args_json.data ? args_json.data : "", args_json.size};
+    if (args.empty()) {
+        args = "{}";
+    }
     // 查表在 io 线程 (invokeCapability 内部), 提供者回调在调用方线程执行
     return mgr->invokeCapability(inst, cap.c_str(), m.c_str(), args.c_str(), error_out);
     XX_PLUGIN_CATCH_END(nullptr)
 }
 
 static char* xx_call_tool(
-    const AgentxxHost* host,
-    const char*        name,
-    const char*        args_json,
-    const char*        thread_id,
-    char**             error_out
+    const AgentxxHost*      host,
+    AgentxxPluginStringView name,
+    AgentxxPluginStringView args_json,
+    AgentxxPluginStringView thread_id,
+    char**                  error_out
 ) {
     auto mgr  = mgrOf(host);
     auto inst = instOf(host);
@@ -875,9 +900,9 @@ static char* xx_call_tool(
             *error_out = inst->host.vtable->strdup(msg.c_str());
         }
     };
-    std::string toolName{name ? name : ""};
-    std::string args{args_json ? args_json : ""};
-    std::string tid{thread_id ? thread_id : ""};
+    std::string toolName{name.data ? name.data : "", name.size};
+    std::string args{args_json.data ? args_json.data : "", args_json.size};
+    std::string tid{thread_id.data ? thread_id.data : "", thread_id.size};
     try {
         // 1. 查表在 io 线程 (短临界区; 查表/执行分离, 见 plugins.md 11.5.2):
         //    shared_ptr 保活目标插件代码段 —— 执行期间即使目标插件被卸载,
@@ -916,7 +941,14 @@ static char* xx_call_tool(
 
         const auto& spec = pluginTool->spec();
         char*       err  = nullptr;
-        char* out = spec.execute(spec.user_data, parsed.dump().c_str(), tid.c_str(), "", &err);
+        std::string argsStr = parsed.dump();
+        char* out = spec.execute(
+            spec.user_data,
+            agentxx_plugin_sv(argsStr.data(), argsStr.size()),
+            agentxx_plugin_sv(tid.data(), tid.size()),
+            agentxx_plugin_sv("", 0),
+            &err
+        );
         if (err) {
             std::string errStr = err;
             inst->host.vtable->free(err);
@@ -952,14 +984,14 @@ static char* xx_list_plugins(const AgentxxHost* host) {
     XX_PLUGIN_CATCH_END(nullptr)
 }
 
-static char* xx_get_plugin(const AgentxxHost* host, const char* name) {
+static char* xx_get_plugin(const AgentxxHost* host, AgentxxPluginStringView name) {
     XX_PLUGIN_CATCH_BEGIN
     auto mgr = mgrOf(host);
-    if (!mgr || !name) {
+    if (!mgr || agentxx_plugin_sv_empty(name)) {
         return nullptr;
     }
     auto        mgrPtr = mgr;
-    std::string pluginName{name};
+    std::string pluginName{name.data, name.size};
     auto        json = ioCallSync<std::string>(mgrPtr, [mgrPtr, pluginName]() {
         return mgrPtr->getPluginJson(pluginName);
     });
@@ -989,7 +1021,11 @@ static char* xx_get_own_info(const AgentxxHost* host) {
     XX_PLUGIN_CATCH_END(nullptr)
 }
 
-static char* xx_get_share_store(const AgentxxHost* host, const char* thread_id, long long id) {
+static char* xx_get_share_store(
+    const AgentxxHost*      host,
+    AgentxxPluginStringView thread_id,
+    long long               id
+) {
     XX_PLUGIN_CATCH_BEGIN
     auto mgr  = mgrOf(host);
     auto inst = instOf(host);
@@ -999,7 +1035,7 @@ static char* xx_get_share_store(const AgentxxHost* host, const char* thread_id, 
     // shareStore 仅 io 线程访问 (无锁模型): 跨线程经 post 同步等待
     auto        mgrPtr  = mgr;
     auto        instPtr = inst;
-    std::string tid{thread_id ? thread_id : ""};
+    std::string tid{thread_id.data ? thread_id.data : "", thread_id.size};
     return ioCallSync<char*>(mgrPtr, [mgrPtr, instPtr, tid, id]() {
         return mgrPtr->getShareStore(instPtr, tid.c_str(), id);
     });
@@ -1007,10 +1043,10 @@ static char* xx_get_share_store(const AgentxxHost* host, const char* thread_id, 
 }
 
 static void xx_emit_message_tip(
-    const AgentxxHost* host,
-    const char*        thread_id,
-    const char*        text,
-    int                level
+    const AgentxxHost*      host,
+    AgentxxPluginStringView thread_id,
+    AgentxxPluginStringView text,
+    int                     level
 ) {
     XX_PLUGIN_CATCH_BEGIN
     auto mgr  = mgrOf(host);
@@ -1020,8 +1056,8 @@ static void xx_emit_message_tip(
     }
     auto        mgrPtr  = mgr;
     auto        instPtr = inst;
-    std::string tid{thread_id ? thread_id : ""};
-    std::string msg{text ? text : ""};
+    std::string tid{thread_id.data ? thread_id.data : "", thread_id.size};
+    std::string msg{text.data ? text.data : "", text.size};
     ioCallSyncVoid(mgrPtr, [mgrPtr, instPtr, tid, msg, level]() {
         mgrPtr->emitMessageTip(instPtr, tid.c_str(), msg.c_str(), level);
     });
@@ -1045,7 +1081,7 @@ static void xx_post_to_io(const AgentxxHost* host, void (*fn)(void* ud), void* u
     XX_PLUGIN_CATCH_END_VOID()
 }
 
-static void xx_log(const AgentxxHost* host, int level, const char* msg) {
+static void xx_log(const AgentxxHost* host, int level, AgentxxPluginStringView msg) {
     (void)host;
     using agentxx::util::LogLevel;
     LogLevel lv = LogLevel::Info;
@@ -1068,19 +1104,25 @@ static void xx_log(const AgentxxHost* host, int level, const char* msg) {
         default:
             break;
     }
-    agentxx::util::xxLogPrint(lv, msg ? msg : "");
+    agentxx::util::xxLogPrint(lv, std::string{msg.data ? msg.data : "", msg.size});
 }
 
 /// JSON 辅助: 提取字符串字段 (线程安全, 纯函数; 供插件替代手写 JSON 解析)
-static char* xx_json_get_string(const AgentxxHost* host, const char* json, const char* key) {
+static char* xx_json_get_string(
+    const AgentxxHost*      host,
+    AgentxxPluginStringView json,
+    AgentxxPluginStringView key
+) {
     auto inst = instOf(host);
-    if (!inst || !json || !key) {
+    if (!inst || agentxx_plugin_sv_empty(json) || agentxx_plugin_sv_empty(key)) {
         return nullptr;
     }
     try {
-        auto j = neograph::json::parse(json);
-        if (j.is_object() && j.contains(key) && j[key].is_string()) {
-            return inst->host.vtable->strdup(j[key].get<std::string>().c_str());
+        std::string jsonStr{json.data, json.size};
+        std::string keyStr{key.data, key.size};
+        auto        j = neograph::json::parse(jsonStr);
+        if (j.is_object() && j.contains(keyStr) && j[keyStr].is_string()) {
+            return inst->host.vtable->strdup(j[keyStr].get<std::string>().c_str());
         }
     } catch (const std::exception&) {
         // JSON 非法: 视为无此字段
@@ -1089,16 +1131,16 @@ static char* xx_json_get_string(const AgentxxHost* host, const char* json, const
 }
 
 /// JSON 辅助: 字符串 → JSON 字符串字面量 (含引号与转义; 供插件拼 JSON 时转义值)
-static char* xx_json_escape(const AgentxxHost* host, const char* s) {
+static char* xx_json_escape(const AgentxxHost* host, AgentxxPluginStringView s) {
     auto inst = instOf(host);
-    if (!inst || !s) {
+    if (!inst || agentxx_plugin_sv_empty(s)) {
         return nullptr;
     }
     std::string out;
-    out.reserve(std::strlen(s) + 2);
+    out.reserve(s.size + 2);
     out += '"';
-    for (const char* p = s; *p; ++p) {
-        const unsigned char c = static_cast<unsigned char>(*p);
+    for (size_t i = 0; i < s.size; ++i) {
+        const unsigned char c = static_cast<unsigned char>(s.data[i]);
         switch (c) {
             case '"':
                 out += "\\\"";
@@ -1134,6 +1176,60 @@ static char* xx_json_escape(const AgentxxHost* host, const char* s) {
     return inst->host.vtable->strdup(out.c_str());
 }
 
+/// 宿主 AgentConfig 关键字段 → JSON (io 线程; 供插件装配期读取)
+static char* xx_get_config(const AgentxxHost* host) {
+    XX_PLUGIN_CATCH_BEGIN
+    auto mgr = mgrOf(host);
+    if (!mgr) {
+        return nullptr;
+    }
+    auto mgrPtr = mgr;
+    auto json   = ioCallSync<std::string>(mgrPtr, [mgrPtr]() {
+        return mgrPtr->getConfigJson();
+    });
+    if (json.empty()) {
+        return nullptr;
+    }
+    return host->vtable->strdup(json.c_str());
+    XX_PLUGIN_CATCH_END(nullptr)
+}
+
+/// 本插件配置参数 → JSON (io 线程; 未配置返回 "{}")
+static char* xx_get_plugin_args(const AgentxxHost* host) {
+    XX_PLUGIN_CATCH_BEGIN
+    auto mgr  = mgrOf(host);
+    auto inst = instOf(host);
+    if (!mgr || !inst) {
+        return nullptr;
+    }
+    auto        mgrPtr  = mgr;
+    std::string ownName = inst->name;
+    auto        json    = ioCallSync<std::string>(mgrPtr, [mgrPtr, ownName]() {
+        return mgrPtr->getPluginArgsJson(ownName);
+    });
+    return host->vtable->strdup(json.c_str());
+    XX_PLUGIN_CATCH_END(nullptr)
+}
+
+/// 宿主 toolPrompt 配置 → JSON (io 线程; 未配置返回 NULL)
+static char* xx_get_tool_prompt(const AgentxxHost* host, AgentxxPluginStringView tool_name) {
+    XX_PLUGIN_CATCH_BEGIN
+    auto mgr = mgrOf(host);
+    if (!mgr || agentxx_plugin_sv_empty(tool_name)) {
+        return nullptr;
+    }
+    auto        mgrPtr = mgr;
+    std::string name{tool_name.data, tool_name.size};
+    auto        json = ioCallSync<std::string>(mgrPtr, [mgrPtr, name]() {
+        return mgrPtr->getToolPromptJson(name);
+    });
+    if (json.empty()) {
+        return nullptr;
+    }
+    return host->vtable->strdup(json.c_str());
+    XX_PLUGIN_CATCH_END(nullptr)
+}
+
 static const AgentxxHostVtable g_hostVtable = {
     xx_alloc,
     xx_free,
@@ -1161,6 +1257,9 @@ static const AgentxxHostVtable g_hostVtable = {
     xx_log,
     xx_json_get_string,
     xx_json_escape,
+    xx_get_config,
+    xx_get_plugin_args,
+    xx_get_tool_prompt,
 };
 
 // ==================== 工具注册/注销 ====================
@@ -1170,14 +1269,23 @@ int PluginManager::registerTool(PluginInstance* inst, const AgentxxToolSpec* spe
     if (!shared) {
         return -1;
     }
-    auto tool = std::make_shared<PluginTool>(spec->name, agentContext_, std::move(shared), *spec);
+    auto tool = std::make_shared<PluginTool>(
+        std::string_view{spec->name.data ? spec->name.data : "", spec->name.size},
+        agentContext_,
+        std::move(shared),
+        *spec
+    );
     if (!registry_->registerTool(tool->get_name(), tool)) {
-        XX_LOGW("Plugin `{}` register tool `{}` failed (conflict?)", inst->name, spec->name);
+        XX_LOGW("Plugin `{}` register tool `{}` failed (conflict?)", inst->name, tool->get_name());
         return -1;
     }
     inst->toolNames.push_back(tool->get_name());
     inst->tools.push_back(std::move(tool));
-    XX_LOGI("Plugin `{}` registered tool `{}`", inst->name, spec->name);
+    XX_LOGI(
+        "Plugin `{}` registered tool `{}`",
+        inst->name,
+        std::string_view{spec->name.data ? spec->name.data : "", spec->name.size}
+    );
     return 0;
 }
 
@@ -1272,7 +1380,7 @@ int PluginManager::unregisterHook(
 AgentxxSubscription* PluginManager::subscribe(
     PluginInstance* inst,
     const char*     topic,
-    void (*handler)(const char* event_json, void* ud),
+    void (*handler)(AgentxxPluginStringView event_json, void* ud),
     void* ud
 ) {
     if (!inst || !topic || !*topic || !handler) {
@@ -1297,7 +1405,7 @@ AgentxxSubscription* PluginManager::subscribe(
             }
             PluginInstance::InflightGuard guard(sub->inst);
             if (sub->handler) {
-                sub->handler(data.c_str(), sub->ud);
+                sub->handler(agentxx_plugin_sv(data.data(), data.size()), sub->ud);
             }
             co_return;
         }
@@ -1473,7 +1581,13 @@ char* PluginManager::invokeCapability(
     // 2. 提供者回调在【调用方线程】执行 (关键: 引擎的 load 会阻塞等待其引擎
     //    线程, 引擎线程内脚本注册回调又要回 io 线程 —— 若回调在 io 线程执行
     //    则 io↔引擎互等死锁; 调用方线程执行则 io 线程保持空闲可服务注册回调)
-    return entry.invoke(entry.ctx, caller ? &caller->host : nullptr, method, args_json, error_out);
+    return entry.invoke(
+        entry.ctx,
+        caller ? &caller->host : nullptr,
+        agentxx_plugin_sv_cstr(method),
+        agentxx_plugin_sv_cstr(args_json),
+        error_out
+    );
 }
 
 // ==================== 会话/上下文访问 ====================
@@ -1582,9 +1696,11 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadNativeAsync(
                 NativeLoader::close(handle);
                 co_return nullptr;
             }
-            name    = info->name ? info->name : "";
-            version = info->version ? info->version : "";
-            desc    = info->description ? info->description : "";
+            name    = std::string{info->name.data ? info->name.data : "", info->name.size};
+            version = std::string{info->version.data ? info->version.data : "", info->version.size};
+            desc    = std::string{
+                info->description.data ? info->description.data : "", info->description.size
+            };
         }
     }
     if (name.empty()) {
@@ -1650,6 +1766,18 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadNativeAsync(
         inst->hookRegistrations.size(),
         inst->capabilityRegistrations.size()
     );
+
+    // 保存配置参数 (yaml `plugins` 条目 args): 宿主不解析字段语义,
+    // 插件经 vtable get_plugin_args 整体读取
+    if (auto ctxPtr = agentContext_.lock(); ctxPtr && ctxPtr->agentConfig) {
+        for (const auto& pc : ctxPtr->agentConfig->plugins) {
+            if (!pc.path.empty() && pluginNameFromPath(pc.path) == name) {
+                inst->args = pc.args;
+                break;
+            }
+        }
+    }
+
     co_return inst;
 }
 
@@ -1965,8 +2093,7 @@ static bool parsePluginManifest(
     std::string&                 name,
     std::string&                 entry,
     std::vector<std::string>&    depends,
-    std::vector<std::string>&    optionalDepends,
-    bool&                        enabled
+    std::vector<std::string>&    optionalDepends
 ) {
     auto            yamlPath = dir / "plugin.yaml";
     std::error_code ec;
@@ -1990,14 +2117,6 @@ static bool parsePluginManifest(
                 if (d.IsScalar()) {
                     optionalDepends.push_back(d.as<std::string>());
                 }
-            }
-        }
-        if (node["enabled"] && node["enabled"].IsScalar()) {
-            try {
-                enabled = node["enabled"].as<bool>();
-            } catch (const std::exception&) {
-                auto s  = node["enabled"].as<std::string>();
-                enabled = !(s == "false" || s == "0" || s == "no");
             }
         }
     } catch (const std::exception& e) {
@@ -2085,12 +2204,7 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadPluginAsync(
         // ---- 插件目录: 按 plugin.yaml 清单分派 ----
         std::string              name, entry;
         std::vector<std::string> depends, optionalDepends;
-        bool                     enabled = true;
-        if (!parsePluginManifest(fs::path(path), name, entry, depends, optionalDepends, enabled)) {
-            co_return nullptr;
-        }
-        if (!enabled) {
-            XX_LOGI("Plugin `{}` disabled by manifest, skip", name);
+        if (!parsePluginManifest(fs::path(path), name, entry, depends, optionalDepends)) {
             co_return nullptr;
         }
         // 依赖检查 (必选缺失/可选警告/环检测)
@@ -2128,19 +2242,12 @@ asio::awaitable<void>
         if (!cfg.enabled) {
             continue;
         }
+        // 所有插件统一经 path 外置指定 (必填; 不区分内置/外置插件)
         std::error_code ec;
         if (fs::is_directory(cfg.path, ec)) {
             std::string              name, entry;
             std::vector<std::string> depends, optionalDepends;
-            bool                     enabled = true;
-            if (parsePluginManifest(
-                    fs::path(cfg.path),
-                    name,
-                    entry,
-                    depends,
-                    optionalDepends,
-                    enabled
-                )) {
+            if (parsePluginManifest(fs::path(cfg.path), name, entry, depends, optionalDepends)) {
                 items.push_back(Item{cfg.path, name, depends});
                 continue;
             }
@@ -2284,6 +2391,62 @@ std::string PluginManager::getPluginJson(const std::string& name) {
         inst->optionalDepends,
     };
     return pluginInfoToJson(p).dump();
+}
+
+// ==================== 宿主配置访问 (vtable get_config/get_tool_prompt) ====================
+
+std::string PluginManager::getConfigJson() {
+    auto ctx = agentContext_.lock();
+    if (!ctx || !ctx->agentConfig) {
+        return {};
+    }
+    const auto& cfg = *ctx->agentConfig;
+    neograph::json j = neograph::json::object();
+    j["dataDir"]     = cfg.dataDir;
+    // 当前工作路径 (插件索引项目根用; 失败为空串, 插件自行回退)
+    j["projectRoot"] = agentxx::agent::AgentConfigStatic::getCurrentWorkPath();
+#if XX_IS_WIN_D
+    j["platform"] = "windows";
+#elif XX_IS_MACOS_D
+    j["platform"] = "macos";
+#else
+    j["platform"] = "linux";
+#endif
+    return j.dump();
+}
+
+std::string PluginManager::getToolPromptJson(const std::string& toolName) {
+    auto ctx = agentContext_.lock();
+    if (!ctx || !ctx->agentConfig) {
+        return {};
+    }
+    const auto& prompts = ctx->agentConfig->prompt.toolPrompt;
+    auto        it      = prompts.find(toolName);
+    if (it == prompts.end()) {
+        return {};
+    }
+    neograph::json j = neograph::json::object();
+    j["depict"]      = it->second.depict;
+    j["args"]        = neograph::json::object();
+    for (const auto& [name, desc] : it->second.args) {
+        j["args"][name] = desc;
+    }
+    return j.dump();
+}
+
+std::string PluginManager::getPluginArgsJson(std::string_view pluginName) {
+    auto ctx = agentContext_.lock();
+    if (!ctx || !ctx->agentConfig) {
+        return "{}";
+    }
+    // 从配置的 plugins 列表匹配本插件 (path 条目按文件名推导的插件名匹配:
+    // libfoo.so → foo)
+    for (const auto& pc : ctx->agentConfig->plugins) {
+        if (!pc.path.empty() && pluginNameFromPath(pc.path) == pluginName) {
+            return pc.args.dump();
+        }
+    }
+    return "{}";
 }
 
 std::shared_ptr<PluginInstance> PluginManager::find(std::string_view name) const {

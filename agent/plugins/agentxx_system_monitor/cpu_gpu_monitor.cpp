@@ -1,5 +1,5 @@
-#include "agentxx/expand/get_cpu_gpu_use.h"
-#include "agentxx/util/log.h"
+#include "cpu_gpu_monitor.h"
+#include "system_monitor_plugin.h"
 #include "asio/steady_timer.hpp"
 #include "asio/use_awaitable.hpp"
 #include <fmt/format.h>
@@ -467,8 +467,7 @@ asio::awaitable<CpuGpuUsage> CpuGpuMonitor::query() {
 
 #elif XX_IS_LINUX_D
 
-#include "agentxx/util/log.h"
-#include "agentxx/util/string_util.h"
+#include "system_monitor_plugin.h"
 #include "asio/random_access_file.hpp"
 #include "asio/read.hpp"
 #include "asio/read_at.hpp"
@@ -477,6 +476,7 @@ asio::awaitable<CpuGpuUsage> CpuGpuMonitor::query() {
 #include "asio/registered_buffer.hpp"
 #include "asio/stream_file.hpp"
 #include "asio/use_awaitable.hpp"
+#include <boost/system/error_code.hpp>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -487,7 +487,6 @@ asio::awaitable<CpuGpuUsage> CpuGpuMonitor::query() {
 #include <iostream>
 #include <limits>
 #include <memory>
-#include <neograph/neograph.h>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -495,6 +494,45 @@ asio::awaitable<CpuGpuUsage> CpuGpuMonitor::query() {
 
 namespace agentxx {
 namespace expand {
+
+/// 原 libagentxx util::removeBetweenSpace 的本地拷贝 (插件不链接 libagentxx):
+/// 移除字符串首尾空白 (可选移除换行), 供解析 sysfs/proc 内容使用
+[[nodiscard]] inline std::string removeBetweenSpace(
+    std::string_view str,
+    bool             removeLine = true,
+    bool             subLeft    = true,
+    bool             subRight   = true
+) {
+    if (str.empty()) {
+        return std::string{str};
+    }
+
+    int left  = 0;
+    int right = static_cast<int>(str.size()) - 1;
+
+    auto isSpace = [removeLine](char c) {
+        if (removeLine) {
+            return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v';
+        }
+        return c == ' ' || c == '\t';
+    };
+
+    if (subLeft) {
+        while (left < right + 1 && isSpace(str[static_cast<size_t>(left)])) {
+            ++left;
+        }
+    }
+    if (subRight) {
+        while (right >= left && isSpace(str[static_cast<size_t>(right)])) {
+            --right;
+        }
+    }
+
+    if (right < left) {
+        return std::string{};
+    }
+    return std::string{str.substr(static_cast<size_t>(left), static_cast<size_t>(right - left + 1))};
+}
 
 struct LinuxGpuCacheEntry {
     std::string devicePath;
@@ -575,7 +613,7 @@ protected:
         {
             auto                     executor = co_await asio::this_coro::executor;
             asio::stream_file        stream{executor};
-            neograph_asio_error_code errCode;
+            boost::system::error_code errCode;
             stream.open(std::string{path}, asio::stream_file::read_only, errCode);
             if (!stream.is_open()) {
                 co_return "";
@@ -595,7 +633,7 @@ protected:
         }
 #else
         std::ifstream stream;
-        stream.open(path);
+        stream.open(std::string{path});
         if (!stream) {
             co_return "";
         }
@@ -765,14 +803,14 @@ protected:
                 if (line.rfind("Model:", 0) == 0) {
                     size_t pos = line.find(':');
                     if (pos != std::string::npos) {
-                        entry.name = agentxx::util::removeBetweenSpace(
+                        entry.name = removeBetweenSpace(
                             std::string_view{line}.substr(pos + 1)
                         );
                     }
                 } else if (line.rfind("Video Memory:", 0) == 0) {
                     size_t pos = line.find(':');
                     if (pos != std::string::npos) {
-                        auto memStr = agentxx::util::removeBetweenSpace(
+                        auto memStr = removeBetweenSpace(
                             std::string_view{line}.substr(pos + 1)
                         );
                         uint64_t totalMiB = 0;
@@ -827,7 +865,7 @@ protected:
     static asio::awaitable<void> readSysfsString(std::string_view path, std::string& out) {
         std::string content = co_await readFileContent(path);
         if (!content.empty()) {
-            out = agentxx::util::removeBetweenSpace(content);
+            out = removeBetweenSpace(content);
         }
     }
 

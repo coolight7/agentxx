@@ -36,9 +36,9 @@ static std::string dirOf(const std::string& path) {
 extern "C" const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
     static const AgentxxPluginInfo info{
         AGENTXX_PLUGIN_API_VERSION,
-        "example_js",
-        "1.0.0",
-        "Example JS plugin (C++ shell + JS via interpreter.js capability)",
+        AGENTXX_SV("example_js"),
+        AGENTXX_SV("1.0.0"),
+        AGENTXX_SV("Example JS plugin (C++ shell + JS via interpreter.js capability)"),
     };
     return &info;
 }
@@ -46,8 +46,8 @@ extern "C" const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
 extern "C" int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) {
     (void)plugin_ctx;
     g_host = host;
-    if (!host->vtable->has_capability(host, "interpreter.js")) {
-        host->vtable->log(host, 4, "example_js: interpreter.js capability not available");
+    if (!host->vtable->has_capability(host, AGENTXX_SV("interpreter.js"))) {
+        host->vtable->log(host, 4, AGENTXX_SV("example_js: interpreter.js capability not available"));
         return -1;
     }
 
@@ -55,11 +55,11 @@ extern "C" int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) 
     // (对转义字符/嵌套结构可靠, 替代手写字符串扫描)
     char* info = host->vtable->get_own_info(host);
     if (!info) {
-        host->vtable->log(host, 4, "example_js: get_own_info failed");
+        host->vtable->log(host, 4, AGENTXX_SV("example_js: get_own_info failed"));
         return -1;
     }
     auto field = [&](const char* key) -> std::string {
-        char* v = host->vtable->json_get_string(host, info, key);
+        char* v = host->vtable->json_get_string(host, agentxx_plugin_sv_cstr(info), AGENTXX_SV(key));
         if (!v) {
             return {};
         }
@@ -71,7 +71,7 @@ extern "C" int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) 
     std::string name    = field("name");
     host->vtable->free(info);
     if (name.empty() || libPath.empty()) {
-        host->vtable->log(host, 4, "example_js: own info invalid");
+        host->vtable->log(host, 4, AGENTXX_SV("example_js: own info invalid"));
         return -1;
     }
     g_name = name;
@@ -79,14 +79,14 @@ extern "C" int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) 
 
     // 委派加载脚本 (经能力调用 → 引擎执行; 脚本内注册动作挂到本插件实例)
     // - args 经 json_escape 转义字段值, 防止路径含引号/反斜杠破坏 JSON
-    std::string scriptPath  = g_dir + "/plugin.js";
-    char*       escName     = host->vtable->json_escape(host, name.c_str());
-    char*       escPath     = host->vtable->json_escape(host, scriptPath.c_str());
-    std::string args        = "{\"name\":";
-    args                   += escName ? escName : "\"\"";
-    args                   += ",\"path\":";
-    args                   += escPath ? escPath : "\"\"";
-    args                   += "}";
+    std::string scriptPath = g_dir + "/plugin.js";
+    char*       escName    = host->vtable->json_escape(host, agentxx_plugin_sv(name.data(), name.size()));
+    char*       escPath    = host->vtable->json_escape(host, agentxx_plugin_sv(scriptPath.data(), scriptPath.size()));
+    std::string args       = "{\"name\":";
+    args                  += escName ? escName : "\"\"";
+    args                  += ",\"path\":";
+    args                  += escPath ? escPath : "\"\"";
+    args                  += "}";
     if (escName) {
         host->vtable->free(escName);
     }
@@ -94,12 +94,17 @@ extern "C" int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) 
         host->vtable->free(escPath);
     }
     char* err = nullptr;
-    char* resp
-        = host->vtable->invoke_capability(host, "interpreter.js", "load", args.c_str(), &err);
+    char* resp = host->vtable->invoke_capability(
+        host,
+        AGENTXX_SV("interpreter.js"),
+        AGENTXX_SV("load"),
+        agentxx_plugin_sv(args.data(), args.size()),
+        &err
+    );
     if (!resp) {
         std::string msg  = "example_js: script load failed: ";
         msg             += err ? err : "?";
-        host->vtable->log(host, 4, msg.c_str());
+        host->vtable->log(host, 4, agentxx_plugin_sv(msg.data(), msg.size()));
         if (err) {
             host->vtable->free(err);
         }
@@ -107,7 +112,7 @@ extern "C" int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) 
     }
     host->vtable->free(resp);
     std::string okMsg = "example_js: script loaded (" + scriptPath + ")";
-    host->vtable->log(host, 2, okMsg.c_str());
+    host->vtable->log(host, 2, agentxx_plugin_sv(okMsg.data(), okMsg.size()));
     return 0;
 }
 
@@ -119,8 +124,13 @@ extern "C" void agentxx_plugin_unload(void* plugin_ctx) {
     // 通知引擎释放本插件的 JSContext (宿主已先 detachAll 摘除全部注册)
     std::string args = "{\"name\":\"" + g_name + "\"}";
     char*       err  = nullptr;
-    char*       resp
-        = g_host->vtable->invoke_capability(g_host, "interpreter.js", "unload", args.c_str(), &err);
+    char* resp = g_host->vtable->invoke_capability(
+        g_host,
+        AGENTXX_SV("interpreter.js"),
+        AGENTXX_SV("unload"),
+        agentxx_plugin_sv(args.data(), args.size()),
+        &err
+    );
     if (resp) {
         g_host->vtable->free(resp);
     }

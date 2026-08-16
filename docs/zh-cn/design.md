@@ -58,7 +58,7 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
 | | `agentxx_codegraph_index` | 索引目录构建符号数据库 |
 | | `agentxx_codegraph_path` | 查找两符号间的调用链路径 |
 | | `agentxx_codegraph_status` | 索引统计信息 |
-| | | `agentxx_codegraph_*` 系列 tool 仅在配置 `codegraph.enable: true` 且编译启用 `AGENTXX_ENABLE_CODEGRAPH` 时注册 |
+| | | `agentxx_codegraph_*` 系列 tool 仅在配置 `codegraph.enable: true` 且编译启用 `AGENTXX_ENABLE_PLUGIN_CODEGRAPH` 时注册 |
 | **规划** | `agentxx_planning_write` | 两层任务规划 (Mermaid 状态图 + Todo List + 备忘录) |
 | **子代理** | `agentxx_subagent` | 创建和管理子代理执行委派任务 |
 | | `tool_skill_search` | 延迟加载工具/技能的搜索与发现 |
@@ -381,7 +381,7 @@ mcp:
 #   - {data_dir}/sqlite/codegraph/<折叠路径>/index.db CodeGraph 索引
 # data_dir: ~/.agentxx
 
-# CodeGraph 代码分析 (需编译启用 AGENTXX_ENABLE_CODEGRAPH; 默认关闭)
+# CodeGraph 代码分析 (需编译启用 AGENTXX_ENABLE_PLUGIN_CODEGRAPH; 默认关闭)
 codegraph:
   enable: false             # true 时 CodeAgent 注册 codegraph 系列 tool
   # paths:                  # 加载(索引)路径列表 (可选; 相对路径按工作目录解析;
@@ -1080,7 +1080,7 @@ agent/
 │   │   │   ├── tool_skill_search.h # 工具/技能延迟加载搜索
 │   │   │   ├── share_store.h     # 会话级文本寄存
 │   │   │   ├── string.h          # 字符串工具 (html2md / regexp)
-│   │   │   ├── system.h          # 系统工具 (datetime / cpu_gpu_info)
+│   │   │   ├── system.h          # 系统工具 (datetime; cpu_gpu_info 已迁插件)
 │   │   │   └── ui_control.h      # UI 键鼠控制 (Windows)
 │   │   ├── protocol/             # 协议实现
 │   │   │   ├── openai_provider.h  # OpenAI Chat Completions API (流式/非流式/SSE)
@@ -1090,12 +1090,10 @@ agent/
 │   │   │   ├── a2a_client.h      # A2A Client (Agent Card / SendMessage / Task 管理)
 │   │   │   ├── a2a_server.h      # A2A Server (JSON-RPC, 任务状态机)
 │   │   │   └── acp_server.h      # ACP Server (stdio 模式)
-│   │   ├── expand/               # 扩展能力
-│   │   │   ├── codegraph_manager.h # 代码索引管理器
-│   │   │   ├── screen_capture.h  # 屏幕截图
-│   │   │   ├── audio_stream.h    # 音频流捕获
-│   │   │   ├── text_selection_monitor.h # 文本选择监听
-│   │   │   └── get_cpu_gpu_use.h # CPU/GPU 监控
+│   │   ├── expand/               # 扩展能力 (已逐步迁移为独立插件, 见 plugins/)
+│   │   │   ├── (codegraph_manager / screen_capture / audio_stream /
+│   │   │   │    text_selection_monitor / get_cpu_gpu_use 均已拆分为
+│   │   │   │    agent/plugins/ 下的独立插件, 2026-08 起 lib 不再内置)
 │   │   └── util/                 # 工具类
 │   │       ├── log.h             # 日志系统 (XX_LOG 宏, LogDispatcher, LogSink)
 │   │       ├── string_util.h     # 字符串工具 (编码转换/路径标准化/base64/自然排序/IgnoreCaseMap 等)
@@ -1247,7 +1245,7 @@ agent/
 │   └── zlib/                     # 压缩
 │
 ├── plugins/                      # 插件 (独立动态库/目录, 仅依赖 plugin_api.h)
-│   ├── example_native/           # 一期示例: C++ 插件 (工具/钩子/事件/能力)
+│   ├── example_plugin/           # 一期示例: C++ 插件 (工具/钩子/事件/能力)
 │   ├── javascript_engine/                # 二期: JS 解释器插件 (QuickJS, interpreter.js 能力)
 │   └── example_js/               # 二期示例: JS 插件 (plugin.yaml + plugin.js)
 │

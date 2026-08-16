@@ -1,7 +1,6 @@
 #pragma once
 
 #include "agentxx/agent/conversation_types.h"
-#include "agentxx/expand/get_cpu_gpu_use.h"
 #include "asio/awaitable.hpp"
 #include "neograph/json.h"
 #include <cstdint>
@@ -9,6 +8,7 @@
 #include <optional>
 #include <string>
 #include <variant>
+#include <vector>
 
 namespace agentxx {
 namespace agent {
@@ -160,25 +160,44 @@ struct WireSetPermission {
 /// (远端模式下展示的是 server 主机的资源; 本地一体模式由 server 端点进程读取)
 struct WireGetSystemUsage {};
 
-/// 服务端系统资源占用响应 (Server -> Client): CpuGpuMonitor::query() 的结果
+/// 服务端系统资源占用响应 (Server -> Client)
+/// - 载荷为 JSON 字符串, schema 由提供采集的插件定义 (宿主只透传, 不解析):
+///   当前 agentxx_system_monitor 插件 (能力 agentxx.system_usage) 返回:
+///   {"cpu": 12.3, "mem_total_mb": 16384, "mem_used_mb": 8192,
+///    "mem_percent": 50.0, "gpus": [{"name","dedicated_vram_mb",
+///    "dedicated_vram_used_mb","shared_vram_mb","shared_vram_used_mb",
+///    "usage_percent"}, ...]}
+/// - 宿主/客户端仅做透传与展示; 插件未加载时 data 为空串
 struct WireSystemUsage {
-    agentxx::expand::CpuGpuUsage usage;
+    /// 插件能力返回的使用率 JSON (空串 = 无数据)
+    std::string data;
 };
 
-/// 服务端 CodeGraph 索引进度推送 (Server -> Client)
-/// - 仅当 codegraph 启用且初始化成功时推送; agent-server 侧限流 (最短 3s) 推送
-/// - 客户端状态栏据此显示 CodeGraph 索引状态
-struct WireCodegraphProgress {
-    /// codegraph 是否可用 (启用且初始化成功); false 表示不可用/未启用
-    bool available = false;
-    /// 是否正在索引 (processed < total 且 total > 0)
-    bool indexing = false;
-    /// 已索引文件数
-    int processed = 0;
-    /// 文件总数 (未知为 0)
-    int total = 0;
-    /// 当前处理文件 (空表示无/已完成)
-    std::string currentFile;
+/// 插件事件转发 (Server -> Client)
+/// - 插件经事件总线发布 (topic 约定 `{插件名}.{事件名}`) 的事件原样转发,
+///   宿主不解析载荷语义; 频率由插件自身控制
+/// - 客户端据此判断插件可用性并展示 (如 agentxx_codegraph 索引进度)
+struct WirePluginData {
+    /// 插件名 (如 "agentxx_codegraph")
+    std::string plugin;
+    /// 事件名 (如 "progress" / "status")
+    std::string event;
+    /// JSON 载荷字符串 (语义由插件定义; 如 {"processed","total","current_file"})
+    std::string data;
+};
+
+/// client 插件事件上行 (Client -> Server)
+/// - client 侧插件 (agentxx_client_entry) 经 send_plugin_data 发出的跨端事件;
+///   服务端收到后发布到事件总线 topic `client.{插件名}.{事件名}` (载荷 std::string),
+///   由 agent 侧同名插件订阅消费
+/// - 宿主不解析载荷语义; 频率由插件自身控制 (与 WirePluginData 对称)
+struct WirePluginDataUp {
+    /// 发送方插件名 (client 侧实例名, 与 agent 侧同名插件对应)
+    std::string plugin;
+    /// 事件名 (如 "rebuild_request")
+    std::string event;
+    /// JSON 载荷字符串 (语义由插件定义)
+    std::string data;
 };
 
 /// 所有可能的线消息类型 (tagged variant)
@@ -209,7 +228,8 @@ using WireMessage = std::variant<
     WireSetPermission,
     WireGetSystemUsage,
     WireSystemUsage,
-    WireCodegraphProgress>;
+    WirePluginData,
+    WirePluginDataUp>;
 
 // ---------------------------------------------------------------------------
 // AgentIOTransportBase: 两个 AgentIOBase 端点之间的协议传输层

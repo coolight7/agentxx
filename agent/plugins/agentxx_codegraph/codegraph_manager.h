@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-#if AGENTXX_ENABLE_CODEGRAPH
+#if AGENTXX_ENABLE_PLUGIN_CODEGRAPH
 #include "codegraph/core/json.hpp"
 #include "codegraph/core/types.h"
 
