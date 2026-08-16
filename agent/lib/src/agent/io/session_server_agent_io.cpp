@@ -4,6 +4,7 @@
 #include "agentxx/agent/context.h"
 #include "agentxx/agent/session_persistence.h"
 #include "agentxx/middlewares/permission.h"
+#include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/util/async_offload.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/log.h"
@@ -241,39 +242,74 @@ void SessionServerAgentIO::onPeerMessage(WireMessage msg) {
                 );
             } else if constexpr (std::is_same_v<T, WireGetSystemUsage>) {
                 // 客户端 (TUI) 周期请求系统资源占用 (CPU/内存/GPU):
-                // 采集迁移到 agent-server 侧 (远端模式下展示 server 主机的资源;
-                // 本地一体模式由本进程读取), 完成后回传 WireSystemUsage。
-                // 与 WireListSessions 同模式: 查询卸载到 blockingPool 执行,
-                // 避免占用 agent io 线程; 完成后经 shared_from_this 回传响应
+                // 采集实现已移出 libagentxx (agentxx_system_monitor 插件),
+                // 此处经插件能力 agentxx.system_usage (方法 query) 获取
+                // (远端模式下展示 server 主机的资源; 本地一体模式由本进程加载
+                // 的插件读取)。能力回调为同步阻塞 (~100ms 采样), 卸载到
+                // blockingPool 执行避免占用 agent io 线程; 完成后回传
+                // WireSystemUsage (载荷为插件定义 schema 的 JSON 字符串,
+                // 宿主只透传; 插件未加载时回传空串, TUI 显示 loading)
                 auto self = shared_from_this();
                 asio::co_spawn(
                     ex_,
                     [self]() -> asio::awaitable<void> {
-                        if (!self->sysMonitor_) {
-                            self->sysMonitor_ = std::make_shared<agentxx::expand::CpuGpuMonitor>();
-                        }
-                        auto monitor = self->sysMonitor_;
-                        auto usage   = std::make_shared<agentxx::expand::CpuGpuUsage>();
+                        auto usageJson = std::make_shared<std::string>();
                         co_await agentxx::util::catchErrorAsync<bool>(
                             [&]() -> asio::awaitable<bool> {
-                                // query() 为协程 (内部含 100ms 采样间隔定时器与
-                                // 文件读取), 整体投递到 agent 的 blockingPool 线程池
-                                // 执行, 完成后自动恢复回 ex_ 线程
-                                auto agent = self->agent_.lock();
-                                if (agent && agent->agentContext
-                                    && agent->agentContext->blockingPool) {
-                                    *usage = co_await agentxx::util::offloadAsync<
-                                        agentxx::expand::CpuGpuUsage>(
-                                        *agent->agentContext->blockingPool,
-                                        [monitor](
-                                        ) -> asio::awaitable<agentxx::expand::CpuGpuUsage> {
-                                            co_return co_await monitor->query();
+                                auto query = [self]() -> std::string {
+                                    auto agent = self->agent_.lock();
+                                    if (!agent || !agent->agentContext
+                                        || !agent->agentContext->pluginManager) {
+                                        return {};
+                                    }
+                                    char* err  = nullptr;
+                                    char* json = agent->agentContext->pluginManager
+                                                     ->invokeCapability(
+                                                         nullptr,
+                                                         "agentxx.system_usage",
+                                                         "query",
+                                                         "{}",
+                                                         &err
+                                                     );
+                                    if (!json) {
+                                        if (err) {
+                                            XX_LOGE(
+                                                "[session_ctrl] system usage capability "
+                                                "failed: {}",
+                                                err
+                                            );
+                                            std::free(err);
+                                        } else {
+                                            XX_LOGW(
+                                                "[session_ctrl] system usage capability "
+                                                "not available (agentxx_system_monitor "
+                                                "plugin not loaded?)"
+                                            );
+                                        }
+                                        return {};
+                                    }
+                                    // 插件能力返回的使用率 JSON 原样透传
+                                    // (schema 由插件定义; 宿主不解析)
+                                    std::string result{json};
+                                    std::free(json);
+                                    return result;
+                                };
+                                // 能力回调为同步阻塞调用, 卸载到 agent 的
+                                // blockingPool 线程池执行
+                                auto agent2 = self->agent_.lock();
+                                if (agent2 && agent2->agentContext
+                                    && agent2->agentContext->blockingPool) {
+                                    *usageJson = co_await agentxx::util::offloadAsync<
+                                        std::string>(
+                                        *agent2->agentContext->blockingPool,
+                                        [query]() -> asio::awaitable<std::string> {
+                                            co_return query();
                                         }
                                     );
                                 } else {
-                                    *usage = co_await monitor->query();
+                                    *usageJson = query();
                                 }
-                                self->sendToPeer(WireSystemUsage{*usage});
+                                self->sendToPeer(WireSystemUsage{*usageJson});
                                 co_return true;
                             },
                             [](std::string errmsg) -> asio::awaitable<bool> {
@@ -285,6 +321,33 @@ void SessionServerAgentIO::onPeerMessage(WireMessage msg) {
                     },
                     asio::detached
                 );
+            } else if constexpr (std::is_same_v<T, WirePluginDataUp>) {
+                // client 插件事件上行: 发布到 agent 事件总线 topic
+                // `plugin.client.{插件名}.{事件名}` (载荷 std::string), 由 agent
+                // 侧插件经 subscribe("client.{插件名}.{事件名}") 订阅消费
+                // (跨端插件数据通道 client → agent);
+                // 前缀 "plugin.client." 的发布不会被 subscribePluginEvents 转发
+                // 回客户端 (见该处环回跳过逻辑)
+                auto agent = agent_.lock();
+                if (agent && agent->agentContext && agent->agentContext->bus) {
+                    auto bus = agent->agentContext->bus;
+                    auto topic = "plugin.client." + m.plugin + "." + m.event;
+                    auto data  = m.data;
+                    // EventBus::publish 为协程; 投递到总线 executor 执行
+                    asio::co_spawn(
+                        bus->executor(),
+                        [bus, topic = std::move(topic), data = std::move(data)]() -> asio::awaitable<void> {
+                            co_await bus->publish(topic, data);
+                            co_return;
+                        },
+                        asio::detached
+                    );
+                } else {
+                    XX_LOGW(
+                        "[session_ctrl] WirePluginDataUp dropped (no agent bus): {}",
+                        m.plugin
+                    );
+                }
             }
         },
         std::move(msg)
@@ -457,6 +520,12 @@ void SessionServerAgentIO::subscribePluginEvents() {
             const auto& data = std::any_cast<const std::string&>(payload);
             // topic: "plugin.{插件名}.{事件名}" → 拆出插件名与事件名
             std::string_view rest = topic.substr(7); // 去掉 "plugin."
+            // 环回跳过: client 插件上行事件 (topic "plugin.client.{...}") 仅面向
+            // agent 侧插件订阅, 不得转发回客户端 (否则 client 插件会收到自己
+            // send_plugin_data 发出的事件, 形成环回)
+            if (rest.starts_with("client.")) {
+                return;
+            }
             auto dot = rest.find('.');
             if (dot == std::string_view::npos || dot == 0 || dot + 1 >= rest.size()) {
                 return;

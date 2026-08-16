@@ -1,7 +1,7 @@
 #pragma once
 
 #include "agentxx/agent/conversation_types.h"
-#include "agentxx/expand/get_cpu_gpu_use.h"
+#include "agentxx/agent/io/agent_io_transport.h"
 #include "neograph/json.h"
 #include <cstdint>
 #include <optional>
@@ -57,6 +57,9 @@ struct MsgType {
     inline static constexpr std::string_view Pong        = "pong";
     /// 服务端插件事件转发 (WirePluginData: 插件名 + 事件名 + JSON 载荷)
     inline static constexpr std::string_view PluginData = "plugin_data";
+    /// client 插件事件上行 (WirePluginDataUp: 插件名 + 事件名 + JSON 载荷;
+    /// 服务端发布到事件总线 topic `client.{插件名}.{事件名}`)
+    inline static constexpr std::string_view PluginDataUp = "plugin_data_up";
 };
 
 /// 中断/取消原因 (供 BaseAgent 区分中断来源)
@@ -635,51 +638,10 @@ inline WireSwitchSession switchSessionFromJson(const neograph::json& j) {
 }
 
 // ---------------------------------------------------------------------------
-// 系统资源占用 <-> json (TUI 周期请求, 由 agent-server 侧采集后回传)
+// 系统资源占用 (TUI 周期请求, 由 agent-server 侧经插件能力采集后回传)
+// - 载荷为 JSON 字符串, schema 由采集插件定义 (agentxx_system_monitor 能力
+//   agentxx.system_usage 的返回格式); 宿主只透传不解析
 // ---------------------------------------------------------------------------
-
-inline neograph::json cpuGpuUsageToJson(const agentxx::expand::CpuGpuUsage& u) {
-    neograph::json j    = neograph::json::object();
-    j["cpu"]            = u.cpuUsagePercent;
-    j["mem_total_mb"]   = u.memory.totalPhysicalMB;
-    j["mem_used_mb"]    = u.memory.usedPhysicalMB;
-    j["mem_percent"]    = u.memory.usagePercent;
-    neograph::json gpus = neograph::json::array();
-    for (const auto& g : u.gpus) {
-        neograph::json gj            = neograph::json::object();
-        gj["name"]                   = g.name;
-        gj["dedicated_vram_mb"]      = g.dedicatedVramMB;
-        gj["dedicated_vram_used_mb"] = g.dedicatedVramUsedMB;
-        gj["shared_vram_mb"]         = g.sharedVramMB;
-        gj["shared_vram_used_mb"]    = g.sharedVramUsedMB;
-        gj["usage_percent"]          = g.usagePercent;
-        gpus.push_back(std::move(gj));
-    }
-    j["gpus"] = std::move(gpus);
-    return j;
-}
-
-inline agentxx::expand::CpuGpuUsage cpuGpuUsageFromJson(const neograph::json& j) {
-    agentxx::expand::CpuGpuUsage u;
-    u.cpuUsagePercent        = j.value("cpu", 0.0);
-    u.memory.totalPhysicalMB = j.value("mem_total_mb", uint64_t{0});
-    u.memory.usedPhysicalMB  = j.value("mem_used_mb", uint64_t{0});
-    u.memory.usagePercent    = j.value("mem_percent", 0.0);
-    auto gpus                = j.value("gpus", neograph::json::array());
-    if (gpus.is_array()) {
-        for (const auto& g : gpus) {
-            agentxx::expand::GpuInfo info;
-            info.name                = g.value("name", std::string{});
-            info.dedicatedVramMB     = g.value("dedicated_vram_mb", uint64_t{0});
-            info.dedicatedVramUsedMB = g.value("dedicated_vram_used_mb", uint64_t{0});
-            info.sharedVramMB        = g.value("shared_vram_mb", uint64_t{0});
-            info.sharedVramUsedMB    = g.value("shared_vram_used_mb", uint64_t{0});
-            info.usagePercent        = g.value("usage_percent", 0.0);
-            u.gpus.push_back(std::move(info));
-        }
-    }
-    return u;
-}
 
 /// 客户端请求系统资源占用 (Client -> Server): 无载荷
 inline neograph::json makeGetSystemUsage() {
@@ -688,16 +650,18 @@ inline neograph::json makeGetSystemUsage() {
     };
 }
 
-/// 服务端系统资源占用响应 (Server -> Client)
-inline neograph::json makeSystemUsage(const agentxx::expand::CpuGpuUsage& usage) {
+/// 服务端系统资源占用响应 (Server -> Client): 插件能力返回的使用率 JSON
+/// 原样放入 "usage" 字段 (空串 = 插件未加载/无数据)
+inline neograph::json makeSystemUsage(std::string usageJson) {
     neograph::json j = neograph::json::object();
     j["type"]        = MsgType::SystemUsage;
-    j["usage"]       = cpuGpuUsageToJson(usage);
+    j["usage"]       = std::move(usageJson);
     return j;
 }
 
-inline agentxx::expand::CpuGpuUsage systemUsageFromJson(const neograph::json& j) {
-    return cpuGpuUsageFromJson(j.value("usage", neograph::json::object()));
+/// 从响应提取使用率 JSON 字符串 (未携带时返回空串)
+inline std::string systemUsageFromJson(const neograph::json& j) {
+    return j.value("usage", std::string{});
 }
 
 /// 插件事件转发 (Server -> Client): 插件经事件总线发布的事件原样转发
@@ -720,11 +684,32 @@ inline WirePluginData pluginDataFromJson(const neograph::json& j) {
     return p;
 }
 
-inline neograph::json makeLog(int level, std::string_view message) {
+/// client 插件事件上行 (Client -> Server): WirePluginDataUp
+/// - 载荷 JSON 原样透传 (语义由插件定义); 服务端发布到事件总线
+///   topic `client.{插件名}.{事件名}`
+inline neograph::json makePluginDataUp(const WirePluginDataUp& p) {
+    neograph::json j = {
+        {"type",   MsgType::PluginDataUp},
+        {"plugin", p.plugin             },
+        {"event",  p.event              },
+        {"data",   p.data               },
+    };
+    return j;
+}
+
+inline WirePluginDataUp pluginDataUpFromJson(const neograph::json& j) {
+    WirePluginDataUp p;
+    p.plugin = j.value("plugin", std::string{});
+    p.event  = j.value("event", std::string{});
+    p.data   = j.value("data", std::string{});
+    return p;
+}
+
+inline neograph::json makeLog(int level, std::string message) {
     return neograph::json{
-        {"type",    MsgType::LogMsg},
-        {"level",   level          },
-        {"message", message        },
+        {"type",    MsgType::LogMsg   },
+        {"level",   level             },
+        {"message", std::move(message)},
     };
 }
 
