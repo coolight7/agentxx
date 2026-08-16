@@ -377,13 +377,13 @@ agentxx.onToolEnd((ctx) => agentxx.emitMessageTip(ctx.thread_id, "天气查询�
 | JS 引擎插件 | `agent/plugins/javascript_engine/javascript_engine.cpp` → `libagentxx_javascript_engine.so` | 独立动态库 (链接 libqjs.a), 经 `register_capability_ex` 注册 `interpreter.js` 能力 (方法 load/unload) |
 | 宿主委派 | `PluginManager::loadPluginAsync` | 插件目录 (plugin.yaml) 分派: `type: native` → dlopen, `type: js` → 创建脚本 PluginInstance (dlHandle 空) 并调引擎 `load_script` (host 为脚本插件自身句柄) |
 | 卸载级联 | `unloadAsync` 依赖图 | 卸载引擎插件前先级联卸载 depends 它的脚本插件 (先子后父); 脚本插件卸载时经委派记录通知引擎 `unload_script` (投递式); 见 11.5 |
-| codegraph 插件 | `agent/plugins/agentxx_codegraph/` → `libagentxx_codegraph.so` | 统一经 yaml `plugins` 段 path 配置加载 (不区分内置/外置, 无自动加载); 8 个工具 (search/context/callers/callees/impact/status/index/path); 索引进度/加载状态经 publish 事件 (topic 约定 `{插件名}.{事件名}`) 通知宿主, 由 SessionServerAgentIO 原样转发 WirePluginData 供 TUI 展示 |
+| codegraph 插件 | `agent/plugins/agentxx_codegraph/` → `libagentxx_codegraph.so` | 统一经 yaml `plugins` 段 path 配置加载 (不区分内置/外置, 无自动加载); 8 个工具 (search/context/callers/callees/impact/status/index/path); 工具提示词默认值从 lib AgentPrompt 剥离迁移 (2026-08), entry 时经 `set_prompt` 写入宿主 toolPrompt (宿主已有条目则跳过, 尊重用户 yaml 覆盖); 索引进度/加载状态经 publish 事件 (topic 约定 `{插件名}.{事件名}`) 通知宿主, 由 SessionServerAgentIO 原样转发 WirePluginData 供 TUI 展示 |
 | screen_capture 插件 | `agent/plugins/agentxx_screen_capture/` → `libagentxx_screen_capture.so` | 仅 Windows 可用, 经 yaml `plugins` 段 path 配置加载; 工具 `agentxx_screen_capture` (单帧/全部屏幕/鼠标屏/流式推帧事件 topic `agentxx_screen_capture.frame`) |
-| computer_use 插件 | `agent/plugins/agentxx_computer_use/` → `libagentxx_computer_use.so` | 仅 Windows 可用, 经 yaml `plugins` 段 path 配置加载; 工具 `agentxx_ui_control_keyboard_mouse`; plugin.yaml `depends: [agentxx_screen_capture]` (须与 screen_capture 同时配置加载) |
-| system_monitor 插件 | `agent/plugins/agentxx_system_monitor/` → `libagentxx_system_monitor.so` | 从 lib `src/expand/get_cpu_gpu_use` 拆分独立 (2026-08): 工具 `agentxx_get_system_core_info` (原内置工具迁移, lib 不再内置) + 能力 `agentxx.system_usage` (方法 query, 返回使用率 JSON); SessionServerAgentIO 处理 WireGetSystemUsage 时经能力调用采集 (卸载到 blockingPool), 载荷为插件定义 schema 的 JSON 字符串经 WireSystemUsage 原样透传, TUI System 侧边栏按约定字段渲染 —— 采集实现与数据类型完全隔离在插件内, lib wire 层不含任何系统资源 DTO (后续 client 插件化渲染 UI 时, 插件可直接消费同一 JSON) |
+| computer_use 插件 | `agent/plugins/agentxx_computer_use/` → `libagentxx_computer_use.so` | 仅 Windows 可用, 经 yaml `plugins` 段 path 配置加载; 工具 `agentxx_ui_control_keyboard_mouse`; 工具提示词默认值 (完整 depict/args) 从 lib AgentPrompt 剥离迁移, entry 时经 `set_prompt` 写入宿主 (宿主已有条目则跳过); plugin.yaml `depends: [agentxx_screen_capture]` (须与 screen_capture 同时配置加载) |
+| system_monitor 插件 | `agent/plugins/agentxx_system_monitor/` → `libagentxx_system_monitor.so` | 从 lib `src/expand/get_cpu_gpu_use` 拆分独立 (2026-08): 工具 `agentxx_get_system_core_info` (原内置工具迁移, lib 不再内置; 提示词默认值剥离迁移, entry 时经 `set_prompt` 写入宿主) + 能力 `agentxx.system_usage` (方法 query, 返回使用率 JSON); SessionServerAgentIO 处理 WireGetSystemUsage 时经能力调用采集 (卸载到 blockingPool), 载荷为插件定义 schema 的 JSON 字符串经 WireSystemUsage 原样透传, TUI System 侧边栏按约定字段渲染 —— 采集实现与数据类型完全隔离在插件内, lib wire 层不含任何系统资源 DTO (后续 client 插件化渲染 UI 时, 插件可直接消费同一 JSON) |
 | audio_stream 插件 | `agent/plugins/agentxx_audio_stream/` → `libagentxx_audio_stream.so` | 从 lib `src/expand/audio_stream` 拆分独立 (2026-08): Windows WASAPI 系统输出/程序输出/麦克风捕获; 工具 `agentxx_audio_stream` (start/stop/status); 捕获帧经 publish 事件推送 (topic `agentxx_audio_stream.audio`, base64 PCM); 非 Windows 平台 no-op |
 | text_selection_monitor 插件 | `agent/plugins/agentxx_text_selection_monitor/` → `libagentxx_text_selection_monitor.so` | 从 lib `src/expand/text_selection_monitor` 拆分独立 (2026-08): Windows 系统级文本选择事件流 (UIAutomation/WinEvent/CDP/剪贴板兜底); 工具 `agentxx_text_selection_monitor` (start/stop/status); 选中文本经 publish 事件推送 (topic `agentxx_text_selection_monitor.selection`); 非 Windows 平台 no-op |
-| 宿主配置访问 | vtable `get_config` / `get_plugin_args` / `get_tool_prompt` | `get_config` 读取通用宿主信息 (dataDir/projectRoot/platform); `get_plugin_args` 整体返回 yaml `plugins` 条目 args (宿主不解析字段语义, 参数含义由插件定义, 如 agentxx_codegraph 的 paths/ignore_paths); `get_tool_prompt` 读取工具提示词 (depict/args), 实现与内置工具一致的动态描述 |
+| 宿主配置访问 | vtable `get_config` / `get_plugin_args` / `get_tool_prompt` / `get_prompt` / `set_prompt` | `get_config` 读取通用宿主信息 (dataDir/projectRoot/platform); `get_plugin_args` 整体返回 yaml `plugins` 条目 args (宿主不解析字段语义, 参数含义由插件定义, 如 agentxx_codegraph 的 paths/ignore_paths); `get_tool_prompt` 读取工具提示词 (depict/args), 实现与内置工具一致的动态描述; `get_prompt` 读取完整提示词 (system 3 段 + toolPrompt), `set_prompt` 合并更新 (仅覆盖 JSON 出现的字段) —— 插件卸载时自动回滚加载期间写入的提示词 (恢复加载前状态), 实现"提示词归插件": 插件把默认工具描述写入宿主 toolPrompt, 用户 yaml 覆盖优先 (见 11.7.4) |
 | 跨线程投递 | vtable `is_io_thread` / `post_to_io` + `PluginManager::setIoExecutor` | JS 线程/宿主线程池调用的 io 线程约束操作 (注册/钩子/订阅/能力/shareStore/tip) 经 `ioCallSync` post 到 io 线程同步等待; `call_tool` 整体在 io 线程执行 (registry 竞争防护) |
 | JS 线程模型 | 专用 JS 线程 + 任务队列 (mutex+cv) | 所有 QuickJS 操作集中单线程; 同步等待方向无环 (见 11.4.2) |
 | agentxx 桥 | 全局 `agentxx` 对象 (每脚本插件独立 JSContext) | registerTool/unregisterTool/callTool/getShareStore/emitMessageTip/log/onHook/offHook/subscribe/unsubscribe/publish + 全局 `setTimeout`/`clearTimeout` (定时器桥) |
@@ -494,12 +494,49 @@ PluginInstance (一切插件都是 C++ 插件)
 
 ### 11.6 尚未实现 (后续阶段)
 
-> 2026-08 更新: `plugins:` yaml 配置段解析 (config_loader + main.cpp) 与插件依赖拓扑排序 (loadConfiguredPlugins) 已实现 (见 11.7.3)
+> 2026-08 更新: `plugins:` yaml 配置段解析 (config_loader + main.cpp) 与插件依赖拓扑排序 (loadConfiguredPlugins) 已实现 (见 11.7.3); 提示词读写 (get_prompt/set_prompt) 与部分 tool 提示词剥离到插件已实现 (见 11.7.4)
 
 - Wire 协议远程热管理 / TUI 插件管理面板 (三期)
 - 插件签名校验 (依赖排序已完成)
 - 插件钩子的 out_json 修改能力、permission 联动注册 (插件工具默认走 PermissionMiddleware 的未注册规则兜底)
 - client 插件二期: prompt/quick_pick 模态、input_filter、消息装饰、keybind、设置项注册、热重载 (见 12.2 能力位预留)
+
+### 11.7.4 提示词读写与 tool 提示词剥离 (2026-08)
+
+> 目标 (TODOS): 插件支持修改覆盖提示词; 剥离部分 tool 提示词到对应插件 (插件卸载即移除, 宿主不残留)
+
+**宿主 API (v6 末尾追加, 非破坏性; 插件侧判空调用)**:
+
+| vtable 函数 | 语义 |
+|------|------|
+| `get_prompt` | 返回完整提示词 JSON: `{"systemPrompt","systemPlanningPrompt","systemSkillPrompt","toolPrompt"}` (与 `AgentPrompt::toJson` 一致); 未装配 AgentConfig 返回 NULL |
+| `set_prompt` | 合并更新 (与 `AgentPrompt::mergeFromJson` 一致, 仅覆盖 JSON 出现的字段; toolPrompt 条目不存在时插入); 返回 0 成功 |
+
+**回滚机制 (提示词归插件)**:
+
+- `PluginInstance::promptBackup` 记录插件加载期间经 `set_prompt` 写入前的原值
+  (system 3 字段 + 每个 toolPrompt 条目, 首次写入某条目前备份一次, 重复写入
+  不覆盖备份); 插件卸载时 `detachAll` → `restorePromptBackup` 恢复加载前状态
+  (原本存在 → 恢复原值; 原本不存在 → 删除条目)
+- disable/enable 不经过回滚 (提示词条目保留, enable 后仍可用)
+
+**剥离范围 (lib `AgentPrompt` 删除, 默认描述迁移到插件)**:
+
+| 插件 | 剥离条目 | 说明 |
+|------|----------|------|
+| `agentxx_codegraph` | `agentxx_codegraph_search/context/callers/callees/impact/status/index/path` ×8 | 完整 depict + args 默认文本迁移 (`defaultToolPrompt`), entry 时 `ensureToolPromptsInHost` 写入宿主 |
+| `agentxx_computer_use` | `agentxx_ui_control_keyboard_mouse` | 完整 depict (含 Actions/Key Names/Examples) 迁移 (`kUiControlDefaultDepict`) |
+| `agentxx_system_monitor` | `agentxx_get_system_core_info` | depict 迁移 |
+
+- 写入规则: `get_prompt` 检查宿主已有条目 → 已存在 (用户 yaml 覆盖 / 之前已写入)
+  则跳过, 尊重用户配置; 未存在才 `set_prompt` 写入默认值
+- 兼容旧宿主: `get_prompt`/`set_prompt` 判空, 缺失时 `registerTool` 回退插件内置
+  默认描述, 行为不变
+- 参数 schema 说明: codegraph 插件 schemaBuilder 已对全部参数有空值回退
+  (宿主无 args 时用插件内置默认), 故宿主 toolPrompt 无条目时工具参数说明仍完整
+
+**示例**: `example_plugin` entry 演示完整链路 (get_prompt 检查 → set_prompt 写入
+example_echo 默认描述), 测试第 28 段验证 写入/读取/卸载回滚/用户覆盖优先。
 
 ---
 

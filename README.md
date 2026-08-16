@@ -263,7 +263,7 @@
 - 详细代码结构和功能见[design.md](docs/zh-cn/design.md)
 - `agent`:
     - C++ 实现 Agent
-    - 大部分手写实现，基础框架实现完善后由AI模块化添加功能和检查、补充测试
+    - 大部分手写实现实现基础框架后，由AI模块化添加功能和检查、补充测试
 - `agent/script`:
     - 编译脚本，存放已经验证支持的系统上的编译脚本，使用前可以先参考 [对应的编译文档](/docs/zh-cn/build/)
 - `agent/lib`: libagentxx
@@ -272,6 +272,8 @@
     - 命令行可执行程序，计划用于启动服务、实现命令行用户交互、TUI
     - `agent/client/include/agentxx-client/io` 实现了 stdio、TUI 方式的 Agent 调用
     - `agent/client/include/agentxx-client/train` 提示词训练
+- `agent/plugins`: 
+    - 插件
 - `agent/test`: agentxx_test
     - 测试
 - `agent/third_party`:
