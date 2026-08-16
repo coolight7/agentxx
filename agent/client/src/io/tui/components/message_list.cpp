@@ -72,6 +72,27 @@ size_t estimateLines(std::string_view s, int width) {
     return lines;
 }
 
+/// 将工具调用参数 JSON 缩进格式化 (2 空格) 便于展开阅读, 例如:
+/// {
+///   "path": "/a/b",
+///   "line_offset": 0
+/// }
+/// 参数解析失败或非对象时回退返回原始文本 (截断/异常参数)
+std::string formatToolArgs(std::string_view argsText) {
+    return agentxx::util::catchError<std::string>(
+        [&]() -> std::string {
+            auto j = neograph::json::parse(argsText);
+            if (!j.is_object()) {
+                return std::string{argsText};
+            }
+            return j.dump(2);
+        },
+        [&](std::string) -> std::string {
+            return std::string{argsText};
+        }
+    );
+}
+
 } // namespace
 
 MessageListComponent::MessageListComponent(TUICtx& ctx) :
@@ -357,7 +378,8 @@ size_t MessageListComponent::estimateHeight(size_t index, int width) {
                 }
                 size_t lines = 1; // header
                 if (!msg.text.empty()) {
-                    lines += estimateLines(msg.text, width);
+                    // 与渲染一致: 参数按 JSON 缩进格式化后的行数估算
+                    lines += estimateLines(formatToolArgs(msg.text), width);
                 }
                 const bool finished  = msg.tool && msg.tool->toolFinished;
                 lines               += finished ? estimateLines(msg.tool->toolResult, width) : 1;
@@ -990,9 +1012,11 @@ Element MessageListComponent::buildMessageBlock(
                     appendEditToolBody(msg, lines);
                 } else {
                     if (!msg.text.empty()) {
+                        // 参数 JSON 缩进格式化 (2 空格) 便于阅读; 解析失败回退原文
                         lines.push_back(hbox({
                             text("  args: ") | color(theme.toolColor),
-                            paragraph(msg.text) | color(theme.toolColor) | xflex_shrink,
+                            paragraph(formatToolArgs(msg.text)) | color(theme.toolColor)
+                                | xflex_shrink,
                         }));
                     }
                     if (finished) {
