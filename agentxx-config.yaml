@@ -126,13 +126,25 @@ models:
         effort: max
       stream: true
       preserve_thinking: true 
+  - name: opencode-ds-v4-pro
+    type: "openai-responses"
+    base_url: "https://opencode.ai/zen/go/v1"
+    api_key: "${OPENCODE_API_KEY}"
+    model_name: "deepseek-v4-pro"
+    send_thinking: true
+    model_context_max_token: 1000000
+    extra_api_config:
+      reasoning:
+        effort: max
+      stream: true
+      preserve_thinking: true 
   - name: opencode-glm-5.3
     type: "openai"
     base_url: "https://opencode.ai/zen/go/v1"
     api_key: "${OPENCODE_API_KEY}"
     model_name: "glm-5.3"
-    send_thinking: true
     model_context_max_token: 1000000
+    send_thinking: true
     extra_api_config:
       stream: true
   - name: local
@@ -141,6 +153,7 @@ models:
     api_key: "EMPTY"
     model_name: "Agentxx"
     model_context_max_token: 256000
+    send_thinking: true
     extra_api_config:
       stream: true
       preserve_thinking: true 
