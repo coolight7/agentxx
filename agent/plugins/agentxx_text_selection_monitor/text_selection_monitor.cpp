@@ -20,13 +20,18 @@
 
 #endif
 
-#include "text_selection_monitor.h"
 #include "simdjson.h"
+#include "text_selection_monitor.h"
 #include <asio/io_context.hpp>
 #include <asio/steady_timer.hpp>
 #include <mutex>
 #include <optional>
 #include <thread>
+#include <type_traits>
+
+namespace asio                   = ::boost::asio;
+using neograph_asio_system_error = ::boost::system::system_error;
+using neograph_asio_error_code   = ::boost::system::error_code;
 
 namespace agentxx {
 namespace expand {

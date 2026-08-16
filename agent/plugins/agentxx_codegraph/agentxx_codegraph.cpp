@@ -108,6 +108,165 @@ static ToolPrompt readToolPrompt(const std::string& toolName) {
     return out;
 }
 
+/// 插件内置默认工具提示词 (从 lib AgentPrompt 剥离迁移, 2026-08)
+/// - 宿主 toolPrompt 无对应条目时经 set_prompt 写入 (见 ensureToolPromptsInHost),
+///   用户可经 yaml 覆盖 (覆盖发生在插件加载前, 插件写入前先 get_prompt
+///   检查条目是否已存在, 已存在则尊重用户配置不覆盖)
+static ToolPrompt defaultToolPrompt(const std::string& toolName) {
+    ToolPrompt p;
+    if (toolName == "agentxx_codegraph_search") {
+        p.depict =
+            "Search for code symbols (functions, classes, variables, etc.) by name using the "
+            "codegraph index.\n"
+            "Use this to quickly locate definitions across a large codebase.\n"
+            "Returns plain multi-line text: one block per symbol (\"[N] kind name\" plus "
+            "indented file:line and signature lines).";
+        p.query = "Symbol name to search for. Supports partial matching.";
+        p.limit = "Maximum number of results to return. Default: 20.";
+    } else if (toolName == "agentxx_codegraph_context") {
+        p.depict =
+            "Get rich context for a code symbol: its definition, callers, callees, and methods "
+            "(for classes).\n"
+            "Useful for understanding how a function or class is used throughout the codebase.\n"
+            "Returns plain multi-line text with \"symbol:\", \"callers (N):\", \"callees (N):\", "
+            "\"methods (N):\" and \"edges (N):\" sections.";
+        p.symbol   = "Fully qualified symbol name (e.g. `MyClass::myMethod`).";
+        p.limit    = "Maximum results per category. Default: 10.";
+        p.maxDepth = "Maximum call-graph traversal depth. Default: 3.";
+    } else if (toolName == "agentxx_codegraph_callers") {
+        p.depict =
+            "Find all functions that call a given symbol (reverse call-graph traversal).\n"
+            "Use this to understand what depends on a function before modifying it.\n"
+            "Returns plain multi-line text: \"Callers (N):\" followed by one block per symbol.";
+        p.symbol   = "Symbol name to find callers for.";
+        p.maxDepth = "Maximum traversal depth. Default: 3.";
+    } else if (toolName == "agentxx_codegraph_callees") {
+        p.depict =
+            "Find all functions that a given symbol calls (forward call-graph traversal).\n"
+            "Use this to understand a function's dependencies.\n"
+            "Returns plain multi-line text: \"Callees (N):\" followed by one block per symbol.";
+        p.symbol   = "Symbol name to find callees for.";
+        p.maxDepth = "Maximum traversal depth. Default: 3.";
+    } else if (toolName == "agentxx_codegraph_impact") {
+        p.depict =
+            "Analyze the impact of modifying a symbol. Finds all downstream symbols that may be\n"
+            "affected (callers, references). Use this before refactoring to assess blast radius.\n"
+            "Returns plain multi-line text: \"Impact (N):\" followed by one block per symbol.";
+        p.symbol   = "Symbol name to analyze impact for.";
+        p.maxDepth = "Maximum traversal depth. Default: 5.";
+    } else if (toolName == "agentxx_codegraph_status") {
+        p.depict =
+            "Get codegraph index statistics: total nodes, edges, indexed files, and circular "
+            "dependency count.\n"
+            "Returns plain multi-line text, one \"label: value\" per line.";
+    } else if (toolName == "agentxx_codegraph_index") {
+        p.depict =
+            "Index a directory for code analysis. Parses source files and builds the symbol "
+            "database\n"
+            "used by search, context, callers, callees, and impact queries.\n"
+            "Returns plain multi-line text with \"success:\" and index statistics.";
+        p.path        = "Absolute path to the directory to index.";
+        p.incremental = "Default `true`. If `true`, only re-index changed files. If `false`, "
+                        "full re-index.";
+    } else if (toolName == "agentxx_codegraph_path") {
+        p.depict =
+            "Find the call-chain path between two symbols in the call graph.\n"
+            "Use this to trace how execution flows from one function to another.\n"
+            "Returns plain multi-line text: \"Path (N):\" followed by one block per symbol on "
+            "the path.";
+        p.from     = "Starting symbol name.";
+        p.to       = "Target symbol name.";
+        p.maxDepth = "Maximum search depth. Default: 10.";
+    }
+    return p;
+}
+
+/// 把插件默认提示词写入宿主 toolPrompt (仅当宿主无对应条目时; io 线程)
+/// - 用户 yaml 覆盖早于插件加载 → get_prompt 已含覆盖 → 跳过 (尊重用户配置)
+/// - 宿主未提供 get_prompt/set_prompt (旧宿主) → 跳过, registerTool 回退插件默认
+static void ensureToolPromptsInHost() {
+    if (!g_host || !g_host->vtable || !g_host->vtable->get_prompt
+        || !g_host->vtable->set_prompt) {
+        return;
+    }
+    char* json = g_host->vtable->get_prompt(g_host);
+    if (!json) {
+        return;
+    }
+    std::string s{json};
+    g_host->vtable->free(json);
+    SimpleJson j(s);
+    if (!j.ok()) {
+        return;
+    }
+    static const char* kToolNames[] = {
+        "agentxx_codegraph_search",
+        "agentxx_codegraph_context",
+        "agentxx_codegraph_callers",
+        "agentxx_codegraph_callees",
+        "agentxx_codegraph_impact",
+        "agentxx_codegraph_status",
+        "agentxx_codegraph_index",
+        "agentxx_codegraph_path",
+    };
+    codegraph::Json patch = codegraph::Json::object();
+    codegraph::Json tools = codegraph::Json::object();
+    bool            dirty = false;
+    for (const char* name : kToolNames) {
+        // 宿主已有条目 (用户 yaml 覆盖 / 之前已写入): 尊重, 不覆盖
+        // - at_pointer 惰性求值, 指针字符串须存局部变量 (临时 c_str 生命周期不足)
+        std::string pointer = "/toolPrompt/" + std::string{name};
+        if (!j.doc().at_pointer(pointer).error()) {
+            continue;
+        }
+        auto p = defaultToolPrompt(name);
+        if (p.depict.empty()) {
+            continue;
+        }
+        codegraph::Json tp   = codegraph::Json::object();
+        tp["depict"]         = p.depict;
+        codegraph::Json args = codegraph::Json::object();
+        if (!p.query.empty()) {
+            args["query"] = p.query;
+        }
+        if (!p.limit.empty()) {
+            args["limit"] = p.limit;
+        }
+        if (!p.symbol.empty()) {
+            args["symbol"] = p.symbol;
+        }
+        if (!p.maxDepth.empty()) {
+            args["max_depth"] = p.maxDepth;
+        }
+        if (!p.path.empty()) {
+            args["path"] = p.path;
+        }
+        if (!p.incremental.empty()) {
+            args["incremental"] = p.incremental;
+        }
+        if (!p.from.empty()) {
+            args["from"] = p.from;
+        }
+        if (!p.to.empty()) {
+            args["to"] = p.to;
+        }
+        tp["args"] = args;
+        tools[name] = tp;
+        dirty       = true;
+    }
+    if (!dirty) {
+        return;
+    }
+    patch["toolPrompt"] = tools;
+    std::string payload = patch.dump();
+    if (g_host->vtable->set_prompt(
+            g_host,
+            agentxx_plugin_sv(payload.data(), payload.size())
+        ) != 0) {
+        pluginLog(3, "agentxx_codegraph: set_prompt failed");
+    }
+}
+
 // =====================================================================
 // 文本格式化辅助 (context/impact 结果 → 多行文本; 与原 lib 输出一致)
 // =====================================================================
@@ -725,6 +884,9 @@ extern "C" int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) 
         pluginLog(4, "agentxx_codegraph: initialize failed, skip codegraph tools");
         return 0;
     }
+
+    // 默认提示词写入宿主 (剥离自 lib AgentPrompt; 用户 yaml 覆盖优先)
+    ensureToolPromptsInHost();
 
     registerAllTools(ctx->mgr.get());
 

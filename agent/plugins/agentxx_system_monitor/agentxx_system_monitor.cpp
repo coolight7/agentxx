@@ -153,6 +153,45 @@ static void registerTool(
     }
 }
 
+/// 把插件默认提示词写入宿主 toolPrompt (仅当宿主无该条目时; io 线程)
+/// - 用户 yaml 覆盖早于插件加载 → get_prompt 已含覆盖 → 跳过 (尊重用户配置)
+/// - 宿主未提供 get_prompt/set_prompt (旧宿主) → 跳过, registerTool 回退插件默认
+static void ensureToolPromptInHost() {
+    if (!g_host || !g_host->vtable || !g_host->vtable->get_prompt
+        || !g_host->vtable->set_prompt) {
+        return;
+    }
+    char* json = g_host->vtable->get_prompt(g_host);
+    if (!json) {
+        return;
+    }
+    std::string s{json};
+    g_host->vtable->free(json);
+    SimpleJson j(s);
+    if (!j.ok()) {
+        return;
+    }
+    // 宿主已有条目 (用户 yaml 覆盖 / 之前已写入): 尊重, 不覆盖
+    if (!j.doc().at_pointer("/toolPrompt/agentxx_get_system_core_info").error()) {
+        return;
+    }
+    // 工具无参数, 描述文本不含引号/反斜杠 → 直接拼 JSON 安全
+    // (与 registerTool 的默认描述一致, 从 lib AgentPrompt 剥离迁移)
+    std::string payload
+        = R"({"toolPrompt":{"agentxx_get_system_core_info":{"depict":")"
+        + std::string{
+              "Get system resource usage: CPU utilization, memory usage, GPU utilization, and "
+              "GPU memory usage."
+          }
+        + R"(","args":{}}}})";
+    if (g_host->vtable->set_prompt(
+            g_host,
+            agentxx_plugin_sv(payload.data(), payload.size())
+        ) != 0) {
+        pluginLog(3, "agentxx_system_monitor: set_prompt failed");
+    }
+}
+
 /// 工具 agentxx_get_system_core_info 的执行回调 (与旧内置工具输出格式一致)
 static char* getSystemCoreInfoExecute(
     void*                   user_data,
@@ -278,13 +317,17 @@ extern "C" const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
 extern "C" int agentxx_plugin_entry(const AgentxxHost* host, void** /*plugin_ctx*/) {
     g_host = host;
 
+    // 默认提示词写入宿主 (从 lib AgentPrompt 剥离迁移; 用户 yaml 覆盖优先)
+    ensureToolPromptInHost();
+
     // 1. 工具 agentxx_get_system_core_info (与原内置工具同名同行为)
     static const std::string kSchema
         = R"({"type":"object","properties":{},"additionalProperties":false})";
     registerTool(
         "agentxx_get_system_core_info",
-        "Get system resource usage: CPU usage, memory usage, and GPU usage (name, VRAM, "
-        "utilization) on the host machine where the agent server runs.",
+        // 默认描述 (从 lib AgentPrompt 剥离迁移, 2026-08)
+        "Get system resource usage: CPU utilization, memory usage, GPU utilization, and GPU "
+        "memory usage.",
         kSchema,
         getSystemCoreInfoExecute
     );
