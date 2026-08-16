@@ -10,6 +10,7 @@
 #include <atomic>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -71,6 +72,24 @@ public:
         void*                     ctx    = nullptr;
     };
 
+    /// 提示词修改备份 (set_prompt 写入前记录, 卸载时回滚)
+    /// - 插件加载期间经 vtable set_prompt 写入的提示词, 卸载时自动恢复
+    ///   为加载前状态 (原值或不存在), 保证"提示词归插件"的干净剥离
+    /// - 仅 io 线程读写 (与 toolPrompt 同一无锁模型)
+    struct PromptBackup {
+        /// 原本是否不存在 (nullopt = 原本无此字段, 回滚时删除)
+        std::optional<std::string> systemPrompt;
+        std::optional<std::string> systemPlanningPrompt;
+        std::optional<std::string> systemSkillPrompt;
+        /// 原本的 toolPrompt 条目 (name → 原值; nullopt = 原本不存在, 回滚时删除)
+        std::map<std::string, std::optional<agentxx::agent::ToolPrompt>, std::less<>>
+            toolPrompt;
+        /// 已记录备份的工具名 (set_prompt 首次写入某条目前备份一次, 重复写入不覆盖备份)
+        std::vector<std::string> backedUpTools;
+        /// 是否已备份过 system 提示词 (首次写入前备份一次)
+        bool backedUpSystem = false;
+    };
+
     /// 注册残留 (卸载时统一清理; 仅 io 线程)
     /// - 工具/钩子/能力【注册信息】在 disable 后保留 (enable 可恢复),
     ///   实际注册状态 (registry/handles/能力表) 由 disable/detachAll 摘除
@@ -78,6 +97,8 @@ public:
     std::vector<HookRegistration> hookRegistrations; ///< 已注册钩子记录 (含函数指针)
     std::vector<std::shared_ptr<AgentxxSubscription>> subscriptions; ///< 已订阅事件句柄
     std::vector<CapabilityRegistration> capabilityRegistrations;     ///< 已声明能力记录
+    /// 提示词修改备份 (set_prompt 写入前记录; 卸载时回滚, 见 detachAll)
+    PromptBackup promptBackup;
 
     /// 本插件的中间件句柄 (懒创建; 挂 handles 栈)
     std::shared_ptr<PluginMiddlewareHandle> middleware = nullptr;
@@ -405,6 +426,19 @@ public:
     /// {"depict": "...", "args": {"参数名": "说明"}}
     /// - 工具未配置 prompt 时返回空串 (插件回退内置默认描述)
     std::string getToolPromptJson(const std::string& toolName);
+    /// 宿主完整提示词 JSON (io 线程; 未装配 AgentConfig 返回空串):
+    /// {"systemPrompt","systemPlanningPrompt","systemSkillPrompt","toolPrompt"}
+    /// - vtable get_prompt 实现入口
+    std::string getPromptJson();
+    /// 合并更新宿主提示词 (io 线程; vtable set_prompt 实现入口)
+    /// - 仅覆盖 JSON 中出现的字段 (与 AgentPrompt::mergeFromJson 语义一致)
+    /// - 写入前记录备份到 inst->promptBackup (首次写入某条目前备份原值),
+    ///   插件卸载时由 detachAll 回滚 (恢复加载前状态)
+    /// - 返回 0 成功; JSON 非法/宿主未就绪返回非 0
+    int setPromptJson(PluginInstance* inst, const char* prompt_json);
+    /// 回滚插件加载期间写入的提示词 (恢复加载前状态; 卸载路径调用)
+    /// - 仅删除/恢复该插件写入过的字段, 不影响其他提示词内容
+    void restorePromptBackup(PluginInstance* inst);
     /// 本插件配置参数 JSON (io 线程; 未配置返回 "{}")
     /// - 宿主对 args 内容完全不解析, 整体原样传递
     std::string getPluginArgsJson(std::string_view pluginName);

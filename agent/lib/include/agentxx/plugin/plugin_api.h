@@ -294,6 +294,22 @@ typedef struct AgentxxHostVtable {
     /// - 工具未配置 prompt 时返回 NULL (插件回退内置默认描述)
     /// - 供插件注册工具时生成与内置工具一致的动态描述 (用户可经 yaml 覆盖)
     char* (*get_tool_prompt)(const AgentxxHost* host, AgentxxPluginStringView tool_name);
+
+    /* ---- 宿主提示词读写 (v6 追加, 非破坏性; 插件侧判空调用) ---- */
+    /// 宿主完整提示词 JSON (io 线程; host->alloc):
+    /// {"systemPrompt": "...", "systemPlanningPrompt": "...", "systemSkillPrompt": "...",
+    ///  "toolPrompt": {"工具名": {"depict": "...", "args": {"参数名": "说明"}}}}
+    /// - 与 get_tool_prompt 相比返回完整提示词 (含 system 提示词), 供插件
+    ///   读取/修改; 宿主未装配 AgentConfig 时返回 NULL
+    char* (*get_prompt)(const AgentxxHost* host);
+    /// 合并更新宿主提示词 (io 线程; 仅覆盖 JSON 中出现的字段, 未出现字段保持不变)
+    /// - 与宿主 AgentPrompt::mergeFromJson 语义一致: toolPrompt 条目不存在时插入
+    /// - 插件卸载时, 其加载期间经本函数写入的提示词自动回滚 (恢复加载前状态),
+    ///   不会残留插件默认文本; 返回 0 成功, 非 0 失败 (JSON 非法/宿主未就绪)
+    /// - 典型用法: 插件注册工具前把内置默认描述写入宿主 toolPrompt, 用户可
+    ///   继续经 yaml 覆盖 (覆盖发生在插件加载前, 插件写入前应先 get_prompt
+    ///   检查条目是否已存在, 已存在则尊重用户配置不覆盖)
+    int (*set_prompt)(const AgentxxHost* host, AgentxxPluginStringView prompt_json);
 } AgentxxHostVtable;
 
 struct AgentxxHost {

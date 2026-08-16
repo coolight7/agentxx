@@ -1230,6 +1230,41 @@ static char* xx_get_tool_prompt(const AgentxxHost* host, AgentxxPluginStringView
     XX_PLUGIN_CATCH_END(nullptr)
 }
 
+/// 宿主完整提示词 → JSON (io 线程; 未装配 AgentConfig 返回 NULL)
+static char* xx_get_prompt(const AgentxxHost* host) {
+    XX_PLUGIN_CATCH_BEGIN
+    auto mgr = mgrOf(host);
+    if (!mgr) {
+        return nullptr;
+    }
+    auto mgrPtr = mgr;
+    auto json   = ioCallSync<std::string>(mgrPtr, [mgrPtr]() {
+        return mgrPtr->getPromptJson();
+    });
+    if (json.empty()) {
+        return nullptr;
+    }
+    return host->vtable->strdup(json.c_str());
+    XX_PLUGIN_CATCH_END(nullptr)
+}
+
+/// 合并更新宿主提示词 (io 线程; 插件卸载时自动回滚, 见 PluginManager::setPromptJson)
+static int xx_set_prompt(const AgentxxHost* host, AgentxxPluginStringView prompt_json) {
+    XX_PLUGIN_CATCH_BEGIN
+    auto mgr  = mgrOf(host);
+    auto inst = instOf(host);
+    if (!mgr || !inst || agentxx_plugin_sv_empty(prompt_json)) {
+        return -1;
+    }
+    auto        mgrPtr  = mgr;
+    auto        instPtr = inst;
+    std::string json{prompt_json.data, prompt_json.size};
+    return ioCallSync<int>(mgrPtr, [mgrPtr, instPtr, json]() {
+        return mgrPtr->setPromptJson(instPtr, json.c_str());
+    });
+    XX_PLUGIN_CATCH_END(-1)
+}
+
 static const AgentxxHostVtable g_hostVtable = {
     xx_alloc,
     xx_free,
@@ -1260,6 +1295,8 @@ static const AgentxxHostVtable g_hostVtable = {
     xx_get_config,
     xx_get_plugin_args,
     xx_get_tool_prompt,
+    xx_get_prompt,
+    xx_set_prompt,
 };
 
 // ==================== 工具注册/注销 ====================
@@ -1841,6 +1878,10 @@ void PluginManager::detachAll(PluginInstance* inst) {
     for (const auto& c : inst->capabilityRegistrations) {
         capabilities_->unregisterCapability(c.name, inst->name);
     }
+    // 提示词: 回滚插件加载期间经 set_prompt 写入的修改 (恢复加载前状态)
+    // - detachAll 仅被卸载路径调用 (unloadAsync/shutdownPlugin/entry 失败清理),
+    //   disable 不经过此路径 (禁用时提示词条目保留, enable 后仍可用)
+    restorePromptBackup(inst);
 }
 
 void PluginManager::eraseMiddleware(PluginInstance* inst) {
@@ -2213,8 +2254,40 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadPluginAsync(
         }
         // 所有插件统一为 C++ 插件: entry 总是指向动态库
         // (脚本能力由插件内部经能力调用委派给 interpreter 引擎, 宿主不参与)
+        // - entry 平台化: manifest 按 Linux 书写 (libfoo.so), Windows/macOS
+        //   下修正扩展名 (.dll/.dylib)
+        // - 多配置生成器 (MSVC Debug/Release) 产物位于配置子目录: entry 按
+        //   {dir}/{entry} 找不到时回退 {dir}/{Debug|Release}/{entry}
         auto entryPath = (fs::path(path) / entry).lexically_normal().string();
-        auto inst      = co_await loadNativeAsync(std::move(entryPath));
+#if defined(_WIN32)
+        if (entryPath.ends_with(".so")) {
+            entryPath.replace(entryPath.size() - 3, 3, ".dll");
+        }
+#elif defined(__APPLE__)
+        if (entryPath.ends_with(".so")) {
+            entryPath.replace(entryPath.size() - 3, 3, ".dylib");
+        }
+#endif
+        std::error_code ec2;
+        if (!fs::exists(entryPath, ec2)) {
+            for (const char* cfg : {"Debug", "Release", "RelWithDebInfo", "MinSizeRel"}) {
+                auto candidate = (fs::path(path) / cfg / entry).lexically_normal().string();
+#if defined(_WIN32)
+                if (candidate.ends_with(".so")) {
+                    candidate.replace(candidate.size() - 3, 3, ".dll");
+                }
+#elif defined(__APPLE__)
+                if (candidate.ends_with(".so")) {
+                    candidate.replace(candidate.size() - 3, 3, ".dylib");
+                }
+#endif
+                if (fs::exists(candidate, ec2)) {
+                    entryPath = std::move(candidate);
+                    break;
+                }
+            }
+        }
+        auto inst = co_await loadNativeAsync(std::move(entryPath));
         if (inst) {
             inst->depends         = std::move(depends);
             inst->optionalDepends = std::move(optionalDepends);
@@ -2432,6 +2505,117 @@ std::string PluginManager::getToolPromptJson(const std::string& toolName) {
         j["args"][name] = desc;
     }
     return j.dump();
+}
+
+std::string PluginManager::getPromptJson() {
+    auto ctx = agentContext_.lock();
+    if (!ctx || !ctx->agentConfig) {
+        return {};
+    }
+    return ctx->agentConfig->prompt.toJson().dump();
+}
+
+int PluginManager::setPromptJson(PluginInstance* inst, const char* prompt_json) {
+    auto ctx = agentContext_.lock();
+    if (!inst || !ctx || !ctx->agentConfig || !prompt_json || !*prompt_json) {
+        return -1;
+    }
+    neograph::json j;
+    try {
+        j = neograph::json::parse(prompt_json);
+    } catch (const std::exception& e) {
+        XX_LOGW("Plugin `{}` set_prompt: invalid json: {}", inst->name, e.what());
+        return -1;
+    }
+    if (!j.is_object()) {
+        XX_LOGW("Plugin `{}` set_prompt: json must be an object", inst->name);
+        return -1;
+    }
+
+    auto& prompt = ctx->agentConfig->prompt;
+
+    // ---- 备份 (仅首次写入某条目前记录原值; 重复写入不覆盖备份, 保证回滚到
+    //      插件加载前状态而非插件上次写入值) ----
+    if (!inst->promptBackup.backedUpSystem) {
+        inst->promptBackup.backedUpSystem = true;
+        inst->promptBackup.systemPrompt   = prompt.systemPrompt;
+        inst->promptBackup.systemPlanningPrompt = prompt.systemPlanningPrompt;
+        inst->promptBackup.systemSkillPrompt    = prompt.systemSkillPrompt;
+    }
+    if (j.contains("toolPrompt") && j["toolPrompt"].is_object()) {
+        for (const auto& item : j["toolPrompt"].items()) {
+            const auto& name = item.first;
+            if (std::find(
+                    inst->promptBackup.backedUpTools.begin(),
+                    inst->promptBackup.backedUpTools.end(),
+                    name
+                )
+                == inst->promptBackup.backedUpTools.end()) {
+                inst->promptBackup.backedUpTools.push_back(name);
+                auto it = prompt.toolPrompt.find(name);
+                if (it == prompt.toolPrompt.end()) {
+                    inst->promptBackup.toolPrompt[name] = std::nullopt; // 原本不存在
+                } else {
+                    inst->promptBackup.toolPrompt[name] = it->second; // 原值
+                }
+            }
+        }
+    }
+
+    // ---- 合并应用 (仅覆盖 JSON 中出现的字段) ----
+    prompt.mergeFromJson(j);
+    XX_LOGI(
+        "Plugin `{}` set_prompt applied (system: {}, toolPrompt entries: {})",
+        inst->name,
+        j.contains("systemPrompt") || j.contains("systemPlanningPrompt")
+                || j.contains("systemSkillPrompt")
+            ? "yes"
+            : "no",
+        j.contains("toolPrompt") && j["toolPrompt"].is_object()
+            ? j["toolPrompt"].size()
+            : 0
+    );
+    return 0;
+}
+
+void PluginManager::restorePromptBackup(PluginInstance* inst) {
+    if (!inst) {
+        return;
+    }
+    auto& backup = inst->promptBackup;
+    if (!backup.backedUpSystem && backup.toolPrompt.empty()) {
+        return; // 插件未写过提示词
+    }
+    auto ctx = agentContext_.lock();
+    if (!ctx || !ctx->agentConfig) {
+        XX_LOGW(
+            "Plugin `{}` prompt rollback skipped: agent config not available",
+            inst->name
+        );
+        return;
+    }
+    auto& prompt = ctx->agentConfig->prompt;
+    // 恢复 system 提示词 (三个 system 字段在 AgentPrompt 中恒有默认值, 仅当备份
+    // 有值时覆盖; 备份无值理论上不会发生, 保守跳过)
+    if (backup.systemPrompt.has_value()) {
+        prompt.systemPrompt = *backup.systemPrompt;
+    }
+    if (backup.systemPlanningPrompt.has_value()) {
+        prompt.systemPlanningPrompt = *backup.systemPlanningPrompt;
+    }
+    if (backup.systemSkillPrompt.has_value()) {
+        prompt.systemSkillPrompt = *backup.systemSkillPrompt;
+    }
+    // 恢复 toolPrompt 条目: 原本存在 → 恢复原值; 原本不存在 → 删除
+    for (const auto& [name, original] : backup.toolPrompt) {
+        if (original.has_value()) {
+            prompt.toolPrompt[name] = *original;
+        } else {
+            prompt.toolPrompt.erase(name);
+        }
+    }
+    backup = PluginInstance::PromptBackup{};
+    XX_LOGI("Plugin `{}` prompt rolled back to load-time state", inst->name);
 }
 
 std::string PluginManager::getPluginArgsJson(std::string_view pluginName) {
