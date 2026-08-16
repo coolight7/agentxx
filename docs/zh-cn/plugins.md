@@ -365,6 +365,9 @@ agentxx.onToolEnd((ctx) => agentxx.emitMessageTip(ctx.thread_id, "天气查询�
 | JS 引擎插件 | `agent/plugins/javascript_engine/javascript_engine.cpp` → `libagentxx_javascript_engine.so` | 独立动态库 (链接 libqjs.a), 经 `register_capability_ex` 注册 `interpreter.js` 能力 (方法 load/unload) |
 | 宿主委派 | `PluginManager::loadPluginAsync` | 插件目录 (plugin.yaml) 分派: `type: native` → dlopen, `type: js` → 创建脚本 PluginInstance (dlHandle 空) 并调引擎 `load_script` (host 为脚本插件自身句柄) |
 | 卸载级联 | `unloadAsync` 依赖图 | 卸载引擎插件前先级联卸载 depends 它的脚本插件 (先子后父); 脚本插件卸载时经委派记录通知引擎 `unload_script` (投递式); 见 11.5 |
+| codegraph 插件 | `agent/plugins/agentxx_codegraph/` → `libagentxx_codegraph.so` | 统一经 yaml `plugins` 段 path 配置加载 (不区分内置/外置, 无自动加载); 8 个工具 (search/context/callers/callees/impact/status/index/path); 索引进度/加载状态经 publish 事件 (topic 约定 `{插件名}.{事件名}`) 通知宿主, 由 SessionServerAgentIO 原样转发 WirePluginData 供 TUI 展示 |
+| computer_use 插件 | `agent/plugins/agentxx_computer_use/` → `libagentxx_computer_use.so` | 仅 Windows 可用, 经 yaml `plugins` 段 path 配置加载; 工具 `agentxx_ui_control_keyboard_mouse` + `agentxx_screen_capture` (含流式推帧事件) |
+| 宿主配置访问 | vtable `get_config` / `get_plugin_args` / `get_tool_prompt` | `get_config` 读取通用宿主信息 (dataDir/projectRoot/platform); `get_plugin_args` 整体返回 yaml `plugins` 条目 args (宿主不解析字段语义, 参数含义由插件定义, 如 agentxx_codegraph 的 paths/ignore_paths); `get_tool_prompt` 读取工具提示词 (depict/args), 实现与内置工具一致的动态描述 |
 | 跨线程投递 | vtable `is_io_thread` / `post_to_io` + `PluginManager::setIoExecutor` | JS 线程/宿主线程池调用的 io 线程约束操作 (注册/钩子/订阅/能力/shareStore/tip) 经 `ioCallSync` post 到 io 线程同步等待; `call_tool` 整体在 io 线程执行 (registry 竞争防护) |
 | JS 线程模型 | 专用 JS 线程 + 任务队列 (mutex+cv) | 所有 QuickJS 操作集中单线程; 同步等待方向无环 (见 11.4.2) |
 | agentxx 桥 | 全局 `agentxx` 对象 (每脚本插件独立 JSContext) | registerTool/unregisterTool/callTool/getShareStore/emitMessageTip/log/onHook/offHook/subscribe/unsubscribe/publish + 全局 `setTimeout`/`clearTimeout` (定时器桥) |

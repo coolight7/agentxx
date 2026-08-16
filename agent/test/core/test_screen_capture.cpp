@@ -1,167 +1,122 @@
 #include "test_screen_capture.h"
-#include "agentxx/expand/screen_capture.h"
+#include "agentxx/agent/context.h"
+#include "agentxx/middlewares/middleware.h"
+#include "agentxx/plugin/plugin_manager.h"
+#include <asio/use_awaitable.hpp>
+#include <filesystem>
 #include <iostream>
-#include <memory>
 #include <string>
-#include <thread>
 
 namespace agentxx {
 namespace test {
 
-agentxx::test::TestResult test_screen_capture() {
+int g_sc_passed = 0;
+int g_sc_failed = 0;
+
 #if XX_IS_WIN_D
-    int g_sc_passed = 0;
-    int g_sc_failed = 0;
 
-    agentxx::expand::ScreenCapture capture;
+namespace {
 
-    int screen_count = capture.getScreenCount();
-    TEST_INFO << "检测到 " << screen_count << " 个屏幕" << std::endl;
-    if (screen_count <= 0) {
-        g_sc_failed++;
-        TEST_FAIL << "getScreenCount() 返回 <= 0" << std::endl;
-        return agentxx::test::TestResult{g_sc_passed, g_sc_failed};
-    }
-    g_sc_passed++;
-    TEST_PASS << "getScreenCount() = " << screen_count << std::endl;
-
-    {
-        auto frames = capture.captureAllScreens();
-        TEST_INFO << "captureAllScreens() 返回 " << frames.size() << " 帧" << std::endl;
-        if (frames.empty()) {
-            g_sc_failed++;
-            TEST_FAIL << "captureAllScreens() 返回空数组" << std::endl;
-            return agentxx::test::TestResult{g_sc_passed, g_sc_failed};
-        }
-
-        for (size_t i = 0; i < frames.size(); ++i) {
-            const auto& f = frames[i];
-            TEST_INFO << "Frame[" << i << "]: " << f.width << "x" << f.height << " offset=("
-                      << f.offsetX << "," << f.offsetY << ")"
-                      << " screenIndex=" << f.screenIndex << " name=" << f.screenName
-                      << " primary=" << (f.isPrimary ? "true" : "false")
-                      << " pixels=" << f.pixelData.size() << " bytes" << std::endl;
-
-            if (f.width <= 0 || f.height <= 0) {
-                g_sc_failed++;
-                TEST_FAIL << "Frame[" << i << "] 宽高无效" << std::endl;
-                return agentxx::test::TestResult{g_sc_passed, g_sc_failed};
-            }
-            if (f.pixelData.size() != static_cast<size_t>(f.width * f.height * 4)) {
-                g_sc_failed++;
-                TEST_FAIL << "Frame[" << i << "] 像素数据大小不匹配: 期望 "
-                          << (f.width * f.height * 4) << " 实际 " << f.pixelData.size()
-                          << std::endl;
-                return agentxx::test::TestResult{g_sc_passed, g_sc_failed};
-            }
-        }
-        g_sc_passed++;
-        TEST_PASS << "captureAllScreens() 所有帧信息正确" << std::endl;
-    }
-
-    {
-        auto frame = capture.captureScreen(0);
-        TEST_INFO << "captureScreen(0): " << frame.width << "x" << frame.height << " offset=("
-                  << frame.offsetX << "," << frame.offsetY << ") name=" << frame.screenName
-                  << std::endl;
-        if (frame.width <= 0 || frame.height <= 0) {
-            g_sc_failed++;
-            TEST_FAIL << "captureScreen(0) 无效" << std::endl;
-            return agentxx::test::TestResult{g_sc_passed, g_sc_failed};
-        }
-        if (frame.pixelData.empty()) {
-            g_sc_failed++;
-            TEST_FAIL << "captureScreen(0) 像素数据为空" << std::endl;
-            return agentxx::test::TestResult{g_sc_passed, g_sc_failed};
-        }
-        g_sc_passed++;
-        TEST_PASS << "captureScreen(0) 正确" << std::endl;
-    }
-
-    {
-        auto frame = capture.captureMouseScreen();
-        TEST_INFO << "captureMouseScreen(): " << frame.width << "x" << frame.height << " offset=("
-                  << frame.offsetX << "," << frame.offsetY << ") name=" << frame.screenName
-                  << std::endl;
-        if (frame.width <= 0 || frame.height <= 0) {
-            g_sc_failed++;
-            TEST_FAIL << "captureMouseScreen() 无效" << std::endl;
-            return agentxx::test::TestResult{g_sc_passed, g_sc_failed};
-        }
-        if (frame.pixelData.empty()) {
-            g_sc_failed++;
-            TEST_FAIL << "captureMouseScreen() 像素数据为空" << std::endl;
-            return agentxx::test::TestResult{g_sc_passed, g_sc_failed};
-        }
-        g_sc_passed++;
-        TEST_PASS << "captureMouseScreen() 正确" << std::endl;
-    }
-
-    {
-        auto frame = capture.captureScreen(9999);
-        if (frame.width == 0 && frame.height == 0 && frame.pixelData.empty()) {
-            g_sc_passed++;
-            TEST_PASS << "captureScreen(9999) 无效索引正确返回空帧" << std::endl;
-        } else {
-            g_sc_failed++;
-            TEST_FAIL << "captureScreen(9999) 应返回空帧" << std::endl;
-            return agentxx::test::TestResult{g_sc_passed, g_sc_failed};
-        }
-    }
-
-    {
-        TEST_INFO << "测试流式订阅 (5 fps, 持续 2 秒)..." << std::endl;
-        int  frame_count       = 0;
-        bool streaming_started = capture.startStreaming(
-            5,
-            [&frame_count](const std::vector<agentxx::expand::ScreenFrame>&) {
-                frame_count++;
-            }
+/// 定位 agentxx_computer_use 插件目录
+static std::string findComputerUsePluginPath() {
+    std::error_code ec;
+    std::vector<std::filesystem::path> candidates;
+    candidates.push_back(std::filesystem::current_path(ec) / "plugins" / "agentxx_computer_use");
+    wchar_t buf[4096];
+    DWORD   n = ::GetModuleFileNameW(nullptr, buf, 4096);
+    if (n > 0 && n < 4096) {
+        int len = ::WideCharToMultiByte(
+            CP_UTF8, 0, buf, static_cast<int>(n), nullptr, 0, nullptr, nullptr
         );
-
-        if (!streaming_started) {
-            g_sc_failed++;
-            TEST_FAIL << "startStreaming() 返回 false" << std::endl;
-            return agentxx::test::TestResult{g_sc_passed, g_sc_failed};
+        if (len > 0) {
+            std::string exe(static_cast<size_t>(len), '\0');
+            ::WideCharToMultiByte(
+                CP_UTF8, 0, buf, static_cast<int>(n), exe.data(), len, nullptr, nullptr
+            );
+            candidates.push_back(
+                std::filesystem::path(exe).parent_path() / "plugins" / "agentxx_computer_use"
+            );
         }
-        g_sc_passed++;
-        TEST_PASS << "startStreaming() 成功启动" << std::endl;
-
-        if (!capture.isStreaming()) {
-            g_sc_failed++;
-            TEST_FAIL << "isStreaming() 应返回 true" << std::endl;
-            return agentxx::test::TestResult{g_sc_passed, g_sc_failed};
+    }
+    for (const auto& c : candidates) {
+        if (std::filesystem::is_directory(c, ec)) {
+            return c.string();
         }
-        g_sc_passed++;
-        TEST_PASS << "isStreaming() = true" << std::endl;
+    }
+    return "plugins/agentxx_computer_use"; // 让加载失败暴露日志
+}
 
-        std::this_thread::sleep_for(std::chrono::milliseconds(2200));
+} // namespace
 
-        capture.stopStreaming();
+#endif // XX_IS_WIN_D
 
-        if (capture.isStreaming()) {
-            g_sc_failed++;
-            TEST_FAIL << "stopStreaming() 后 isStreaming() 应返回 false" << std::endl;
-            return agentxx::test::TestResult{g_sc_passed, g_sc_failed};
+asio::awaitable<agentxx::test::TestResult>
+    run_screen_capture_tests(std::weak_ptr<agentxx::agent::AgentContext> /*agentContext*/) {
+    g_sc_passed = 0;
+    g_sc_failed = 0;
+
+#if XX_IS_WIN_D
+    // ---- 1. 构造 AgentContext ----
+    auto ctx                     = std::make_shared<agentxx::agent::AgentContext>();
+    ctx->agentConfig             = std::make_shared<agentxx::agent::AgentConfig>();
+    ctx->middlewareHandleContext = std::make_shared<agentxx::middleware::MiddlewareContext>();
+    ctx->toolRegistry            = std::make_shared<agentxx::plugin::ToolRegistry>();
+    ctx->pluginManager           = std::make_shared<agentxx::plugin::PluginManager>(ctx);
+    ctx->pluginManager->setIoExecutor(co_await asio::this_coro::executor);
+
+    // ---- 2. 加载 agentxx_computer_use 插件 ----
+    auto path = findComputerUsePluginPath();
+    XX_TEST_EXPECT_TRUE(path.find("agentxx_computer_use") != std::string::npos);
+    auto inst = co_await ctx->pluginManager->loadPluginAsync(path);
+    XX_TEST_EXPECT_TRUE(inst != nullptr);
+    if (!inst) {
+        co_return TestResult{g_sc_passed, g_sc_failed};
+    }
+    XX_TEST_EXPECT_EQ(inst->name, "agentxx_computer_use");
+    XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("agentxx_screen_capture"));
+    XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("agentxx_ui_control_keyboard_mouse"));
+
+    // ---- 3. get_screen_count ----
+    {
+        auto tool = ctx->toolRegistry->find("agentxx_screen_capture");
+        XX_TEST_EXPECT_TRUE(tool != nullptr);
+        if (tool) {
+            auto out = co_await tool->execute_async(neograph::json{{"command", "get_screen_count"}});
+            auto j   = neograph::json::parse(out);
+            XX_TEST_EXPECT_EQ(j["ok"].get<bool>(), true);
+            XX_TEST_EXPECT_TRUE(j["count"].get<int>() > 0);
         }
-        g_sc_passed++;
-        TEST_PASS << "stopStreaming() 成功停止" << std::endl;
-
-        TEST_INFO << "2 秒内收到 " << frame_count << " 帧 (期望约 10 帧)" << std::endl;
-        if (frame_count < 5) {
-            g_sc_failed++;
-            TEST_FAIL << "流式订阅帧数过少: " << frame_count << std::endl;
-            return agentxx::test::TestResult{g_sc_passed, g_sc_failed};
-        }
-        g_sc_passed++;
-        TEST_PASS << "流式订阅帧率正常" << std::endl;
     }
 
-    return agentxx::test::TestResult{g_sc_passed, g_sc_failed};
+    // ---- 4. capture_all (元信息, 不取像素) ----
+    {
+        auto tool = ctx->toolRegistry->find("agentxx_screen_capture");
+        if (tool) {
+            auto out = co_await tool->execute_async(neograph::json{
+                {"command", "capture_all"},
+                {"include_pixels", false},
+            });
+            auto j   = neograph::json::parse(out);
+            XX_TEST_EXPECT_EQ(j["ok"].get<bool>(), true);
+            XX_TEST_EXPECT_TRUE(j["frames"].size() > 0);
+            const auto& f0 = j["frames"][0];
+            XX_TEST_EXPECT_TRUE(f0["width"].get<int>() > 0);
+            XX_TEST_EXPECT_TRUE(f0["height"].get<int>() > 0);
+        }
+    }
+
+    // ---- 5. 卸载: 工具摘除 ----
+    {
+        auto ok = co_await ctx->pluginManager->unloadAsync("agentxx_computer_use");
+        XX_TEST_EXPECT_TRUE(ok);
+        XX_TEST_EXPECT_FALSE(ctx->toolRegistry->contains("agentxx_screen_capture"));
+        XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("agentxx_computer_use") == nullptr);
+    }
 #else
-    TEST_SKIP << "ScreenCapture 仅支持 Windows 平台" << std::endl;
-    return agentxx::test::TestResult{0, 0};
+    TEST_SKIP << "agentxx_computer_use (screen_capture/ui_control) 仅支持 Windows 平台" << std::endl;
 #endif
+
+    co_return TestResult{g_sc_passed, g_sc_failed};
 }
 
 } // namespace test

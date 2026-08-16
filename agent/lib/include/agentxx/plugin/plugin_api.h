@@ -31,7 +31,7 @@
 extern "C" {
 #endif
 
-#define AGENTXX_PLUGIN_API_VERSION 3
+#define AGENTXX_PLUGIN_API_VERSION 5
 
 /* ==================== 插件元信息 ==================== */
 
@@ -233,6 +233,23 @@ typedef struct AgentxxHostVtable {
     /// 字符串 → JSON 字符串字面量 (含引号包裹与转义; 结果 host->alloc)
     /// - 用于插件拼装 JSON 时转义字段值 (替代手工拼接, 防注入/语法错误)
     char* (*json_escape)(const AgentxxHost* host, const char* s);
+
+    /* ---- 宿主配置/提示词访问 (插件装配期使用; io 线程, 跨线程经 post) ---- */
+    /// 宿主 AgentConfig 关键字段 JSON (io 线程; host->alloc):
+    /// {"dataDir": "...", "projectRoot": "..."(可为空),
+    ///  "platform": "windows"|"linux"|"macos"}
+    /// - 通用宿主信息; 插件业务参数请用 get_plugin_args (宿主不解析 args)
+    char* (*get_config)(const AgentxxHost* host);
+    /// 本插件配置参数 JSON (yaml `plugins` 条目 args; io 线程; host->alloc):
+    /// - 宿主对 args 内容完全不解析, 整体原样传递 (参数语义由插件定义,
+    ///   如 agentxx_codegraph 的 loadPaths/ignorePaths/loadCwd/useGitignore)
+    /// - 未配置时返回 "{}"
+    char* (*get_plugin_args)(const AgentxxHost* host);
+    /// 宿主 toolPrompt 配置 (io 线程; host->alloc):
+    /// {"depict": "...", "args": {"参数名": "参数说明", ...}}
+    /// - 工具未配置 prompt 时返回 NULL (插件回退内置默认描述)
+    /// - 供插件注册工具时生成与内置工具一致的动态描述 (用户可经 yaml 覆盖)
+    char* (*get_tool_prompt)(const AgentxxHost* host, const char* tool_name);
 } AgentxxHostVtable;
 
 struct AgentxxHost {
@@ -267,7 +284,7 @@ typedef void (*AgentxxPluginUnloadFn)(void* plugin_ctx);
 /* ==================== 便捷宏 (插件侧使用) ==================== */
 
 /// 在插件侧分配跨边界字符串 (必须用它, 不能直接用 malloc/strdup)
-#define AGENTXX_STRDUP(host, s) ((host)->vtable->strdup((host), (s)))
+#define AGENTXX_STRDUP(host, s) ((host)->vtable->strdup((s)))
 
 #ifdef __cplusplus
 }

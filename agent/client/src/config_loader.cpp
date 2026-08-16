@@ -150,6 +150,52 @@ std::string resolveEnvVars(
 // YAML → JSON
 // ---------------------------------------------------------------------------
 
+/// YAML → JSON 并递归展开 ${VAR} (插件 args 专用)
+/// - 标量先经 resolveEnvVars 展开再判断类型 (true/false/数字/字符串)
+/// - 与 yamlToJson 语义一致, 仅多了 env 展开步骤
+static neograph::json yamlToJsonResolveEnv(
+    const YAML::Node&                             node,
+    const std::map<std::string, std::string>&     dotEnvVars,
+    const std::map<std::string, std::string>&     overrideEnvVars
+) {
+    if (!node.IsDefined() || node.IsNull()) {
+        return neograph::json{};
+    }
+    if (node.IsScalar()) {
+        int    i;
+        double d;
+        auto   s = resolveEnvVars(node.as<std::string>(), dotEnvVars, overrideEnvVars);
+        if (s == "true") {
+            return neograph::json(true);
+        }
+        if (s == "false") {
+            return neograph::json(false);
+        }
+        if (util::parseNumberFromString(s, i).ec == std::errc{}) {
+            return neograph::json(i);
+        }
+        if (util::parseNumberFromString(s, d).ec == std::errc{}) {
+            return neograph::json(d);
+        }
+        return neograph::json(s);
+    }
+    if (node.IsSequence()) {
+        neograph::json arr = neograph::json::array();
+        for (const auto& item : node) {
+            arr.push_back(yamlToJsonResolveEnv(item, dotEnvVars, overrideEnvVars));
+        }
+        return arr;
+    }
+    if (node.IsMap()) {
+        neograph::json obj = neograph::json::object();
+        for (const auto& kv : node) {
+            obj[kv.first.as<std::string>()] = yamlToJsonResolveEnv(kv.second, dotEnvVars, overrideEnvVars);
+        }
+        return obj;
+    }
+    return neograph::json{};
+}
+
 static neograph::json yamlToJson(const YAML::Node& node) {
     if (!node.IsDefined() || node.IsNull()) {
         return neograph::json{};
@@ -414,53 +460,8 @@ YamlAppConfig loadYamlConfig(
             = resolveEnvVars(root["data_dir"].as<std::string>(""), dotEnvVars, overrideEnvVars);
     }
 
-    // CodeGraph 代码分析 (yaml `codegraph` 块, 默认禁用)
-    // - enable:        是否启用 (默认 false)
-    // - paths:         加载(索引)路径列表 (相对路径按工作目录解析为绝对路径;
-    //                  非空时按此列表索引, 为空时按 load_cwd 决定是否索引工作目录)
-    // - ignore_paths:  忽略路径列表 (相对路径按工作目录解析, 支持 * 通配符; 命中即跳过)
-    // - load_cwd:      未配置 paths 时是否默认加载当前工作目录 (默认 true)
-    // - use_gitignore: 是否默认忽略 .gitignore 规则与 .gitmodules 子模块目录 (默认 true)
-    if (root["codegraph"]) {
-        auto cg = root["codegraph"];
-        if (cg["enable"]) {
-            cfg.codeGraph.enable
-                = resolveEnvVars(cg["enable"].as<std::string>("false"), dotEnvVars, overrideEnvVars)
-                  == "true";
-        }
-        if (cg["paths"] && cg["paths"].IsSequence()) {
-            for (const auto& node : cg["paths"]) {
-                auto p = resolveEnvVars(node.as<std::string>(""), dotEnvVars, overrideEnvVars);
-                if (!p.empty()) {
-                    cfg.codeGraph.paths.push_back(std::move(p));
-                }
-            }
-        }
-        if (cg["ignore_paths"] && cg["ignore_paths"].IsSequence()) {
-            for (const auto& node : cg["ignore_paths"]) {
-                auto p = resolveEnvVars(node.as<std::string>(""), dotEnvVars, overrideEnvVars);
-                if (!p.empty()) {
-                    cfg.codeGraph.ignorePaths.push_back(std::move(p));
-                }
-            }
-        }
-        if (cg["load_cwd"]) {
-            cfg.codeGraph.loadCwd = resolveEnvVars(
-                                        cg["load_cwd"].as<std::string>("true"),
-                                        dotEnvVars,
-                                        overrideEnvVars
-                                    )
-                                    == "true";
-        }
-        if (cg["use_gitignore"]) {
-            cfg.codeGraph.useGitignore = resolveEnvVars(
-                                             cg["use_gitignore"].as<std::string>("true"),
-                                             dotEnvVars,
-                                             overrideEnvVars
-                                         )
-                                         == "true";
-        }
-    }
+    // CodeGraph 参数已迁移到插件配置 (yaml `plugins` 段 agentxx_codegraph
+    // 条目的 args): 宿主不解析其字段语义, 整体原样传递给插件
 
     // 权限配置 (permission 块: mode / whitelist / blacklist)
     // - mode:      询问处理模式 (ask/all_ask/pass/deny; 忽略大小写, 非法值警告回退 ask)
@@ -504,8 +505,9 @@ YamlAppConfig loadYamlConfig(
     }
 
     // 插件配置 (yaml `plugins` 列表项: path / enabled / args)
-    // - path: 插件动态库路径 或 插件目录 (含 plugin.yaml 时按清单分派加载)
-    // - enabled: 默认 true; args: 自定义参数 (预留, 存留供查询, 不传入插件)
+    // - path: 插件动态库路径 或 插件目录 (含 plugin.yaml 时按清单分派加载);
+    //   必填 (所有插件统一经 path 外置指定, 不区分内置/外置)
+    // - enabled: 默认 true; args: 插件参数 (整体传递给插件, 宿主不解析)
     if (root["plugins"] && root["plugins"].IsSequence()) {
         for (const auto& node : root["plugins"]) {
             if (!node.IsMap()) {
@@ -513,12 +515,12 @@ YamlAppConfig loadYamlConfig(
                 continue;
             }
             auto p = resolveEnvVars(node["path"].as<std::string>(""), dotEnvVars, overrideEnvVars);
-            if (p.empty()) {
-                XX_LOGW(R"([Config] Warning: plugin entry missing `path`, skipped)");
-                continue;
-            }
             agent::PluginConfig pc;
             pc.path = std::move(p);
+            if (pc.path.empty()) {
+                XX_LOGW(R"([Config] Warning: plugin entry missing required `path`, skipped)");
+                continue;
+            }
             if (node["enabled"]) {
                 auto val = resolveEnvVars(
                     node["enabled"].as<std::string>("true"),
@@ -528,7 +530,8 @@ YamlAppConfig loadYamlConfig(
                 pc.enabled = val == "true";
             }
             if (node["args"]) {
-                pc.args = yamlToJson(node["args"]);
+                // 插件参数整体传递 (宿主不解析字段语义); 标量递归展开 ${VAR}
+                pc.args = yamlToJsonResolveEnv(node["args"], dotEnvVars, overrideEnvVars);
             }
             cfg.plugins.push_back(std::move(pc));
         }

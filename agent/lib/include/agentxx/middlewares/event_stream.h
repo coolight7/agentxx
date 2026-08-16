@@ -17,6 +17,7 @@
 #include "asio/use_awaitable.hpp"
 #include "neograph/graph/types.h"
 #include "neograph/types.h"
+#include <any>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -447,6 +448,16 @@ public:
     /// 单向发布
     template<typename _DATA_TYPE>
     asio::awaitable<void> publish(std::string_view topic, const _DATA_TYPE& data) {
+        // 前缀订阅分派 (如插件事件转发): 仅当前缀订阅表非空时构造 any
+        if (!prefixSubs_.empty()) {
+            for (const auto& [id, sub] : prefixSubs_) {
+                (void)id;
+                if (topic.size() >= sub.prefix.size()
+                    && topic.compare(0, sub.prefix.size(), sub.prefix) == 0) {
+                    sub.handler(topic, std::any(data));
+                }
+            }
+        }
         co_await get<_DATA_TYPE>(topic).publish(data);
     }
 
@@ -475,10 +486,37 @@ public:
         co_return co_await getRR<_REQ_TYPE, _RESP_TYPE>(topic).request(std::move(req), timeout);
     }
 
+    /// 订阅 topic 前缀 (如 "plugin."): 匹配的 publish 事件经回调转发
+    /// - 载荷经 std::any 类型擦除传递, 回调须自行 any_cast 校验类型
+    ///   (插件事件均为 std::string; 不匹配直接返回)
+    /// - 回调在发布方线程 (io 线程) 同步调用, 须快速返回
+    /// - 返回订阅 id (unsubscribePrefix 用); 宿主生命周期内有效
+    size_t subscribePrefix(
+        std::string_view                                                  prefix,
+        std::function<void(std::string_view topic, const std::any& data)> handler
+    ) {
+        auto id = ++nextPrefixSubId_;
+        prefixSubs_[id] = PrefixSub{std::string{prefix}, std::move(handler)};
+        return id;
+    }
+
+    /// 取消前缀订阅
+    bool unsubscribePrefix(size_t id) {
+        return prefixSubs_.erase(id) > 0;
+    }
+
 private:
+
+    /// 前缀订阅项 (仅 io 线程读写)
+    struct PrefixSub {
+        std::string prefix;
+        std::function<void(std::string_view, const std::any&)> handler;
+    };
 
     asio::any_io_executor                                        executor_;
     std::map<std::string, std::shared_ptr<EventStreamInterface>> streams_{};
+    std::map<size_t, PrefixSub>                                  prefixSubs_{};
+    size_t                                                       nextPrefixSubId_ = 0;
 };
 
 /// GraphEvent -> 会话增量 Delta + EventBus 适配器

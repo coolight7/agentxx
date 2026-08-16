@@ -29,10 +29,10 @@ option(XX_IS_RELEASE_D "Release Build." ON)
 option(AGENTXX_BUILD_CLIENT "Generate the client target." OFF)
 option(AGENTXX_BUILD_TEST "Generate the test target." OFF)
 option(AGENTXX_BUILD_BENCHMARK "Generate the benchmark target." OFF)
-option(AGENTXX_BUILD_PLUGINS "Generate the plugins target." ON)
 option(AGENTXX_ENABLE_HYPERSCAN "Add HyperScan for regex support. Use std::regex if disable." OFF)
-option(AGENTXX_ENABLE_CODEGRAPH "Add CodeGraph-CPP for code analysis." ON)
 option(AGENTXX_ENABLE_BOOST_PROCESS "Use Boost.process for execute command toolcall." ON)
+option(AGENTXX_BUILD_PLUGINS "Generate the plugins target." ON)
+option(AGENTXX_ENABLE_PLUGIN_CODEGRAPH "Add CodeGraph-CPP for code analysis." ON)
 option(AGENTXX_ENABLE_PLUGIN_JS "Build QuickJS JS plugin engine (agentxx_javascript_engine)." ON)
 # ===== Debug 构建加速选项 =====
 # - 关闭后 Debug 构建不再启用 AddressSanitizer，编译与链接显著加快
@@ -444,7 +444,7 @@ set(_AGENTXX_COMMON_CMAKE_ARGS
 
     "-DAGENTXX_INSTALL_DIR=${AGENTXX_INSTALL_DIR}"
     -DAGENTXX_ENABLE_HYPERSCAN=${AGENTXX_ENABLE_HYPERSCAN}
-    -DAGENTXX_ENABLE_CODEGRAPH=${AGENTXX_ENABLE_CODEGRAPH}
+    -DAGENTXX_ENABLE_PLUGIN_CODEGRAPH=${AGENTXX_ENABLE_PLUGIN_CODEGRAPH}
     -DAGENTXX_ENABLE_BOOST_PROCESS=${AGENTXX_ENABLE_BOOST_PROCESS}
     -DAGENTXX_ENABLE_PLUGIN_JS=${AGENTXX_ENABLE_PLUGIN_JS}
 
@@ -660,7 +660,7 @@ ExternalProject_Add(
 )
 
 # codegraph-cpp
-if (AGENTXX_ENABLE_CODEGRAPH)
+if (AGENTXX_ENABLE_PLUGIN_CODEGRAPH)
   ExternalProject_Add(
     codegraph_repo
     DEPENDS sqlite3_repo
@@ -903,7 +903,7 @@ endif()
 if (AGENTXX_ENABLE_HYPERSCAN)
   add_dependencies(agentxx_lib_repo hyperscan_repo)
 endif()
-if (AGENTXX_ENABLE_CODEGRAPH)
+if (AGENTXX_ENABLE_PLUGIN_CODEGRAPH)
   add_dependencies(agentxx_lib_repo codegraph_repo)
 endif()
 

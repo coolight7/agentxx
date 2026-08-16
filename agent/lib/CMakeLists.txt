@@ -110,9 +110,6 @@ foreach(_agentxx_target ${_AGENTXX_USAGE_TARGETS})
   if (AGENTXX_ENABLE_HYPERSCAN)
     target_compile_definitions(${_agentxx_target} PUBLIC AGENTXX_ENABLE_HYPERSCAN=1)
   endif()
-  if (AGENTXX_ENABLE_CODEGRAPH)
-    target_compile_definitions(${_agentxx_target} PUBLIC AGENTXX_ENABLE_CODEGRAPH=1)
-  endif()
   if (AGENTXX_ENABLE_BOOST_PROCESS)
     target_compile_definitions(${_agentxx_target} PUBLIC AGENTXX_ENABLE_BOOST_PROCESS=1)
   endif()
@@ -152,9 +149,6 @@ foreach(_agentxx_target ${_AGENTXX_USAGE_TARGETS})
     target_link_directories(${_agentxx_target} PUBLIC 
       "${BOOST_LIBRARY_DIRS}"
     )
-  endif()
-  if (AGENTXX_ENABLE_CODEGRAPH)
-    target_include_directories(${_agentxx_target} PUBLIC "${AGENTXX_INSTALL_DIR}/include/tree_sitter/")
   endif()
 endforeach()
 unset(_agentxx_target)
@@ -209,46 +203,6 @@ else()
   set(_AGENTXX_OBJ_LINK_TARGETS "")
 endif()
 
-if (AGENTXX_ENABLE_CODEGRAPH)
-  # tree_sitter include 目录已在上方 usage requirements 循环中统一设置
-  set(_AGENTXX_CODEGRAPH_LIBS
-    codegraph_core 
-    tree_sitter
-    ts_cpp
-    ts_python
-    ts_javascript
-    ts_dart
-    ts_typescript
-    ts_tsx
-    ts_markdown
-    ts_markdown_inline
-    ts_rust
-    ts_bash
-    ts_go
-    ts_java
-    ts_kotlin
-    ts_php
-    ts_swift
-    ts_objc
-    ts_csharp
-    ts_sql
-    ts_lua
-    ts_yaml
-    ts_json
-    ts_xml
-    ts_html
-    ts_css
-    ts_zig
-    ts_ruby
-    ts_glsl
-  )
-  foreach(_agentxx_target ${_AGENTXX_OBJ_LINK_TARGETS})
-    target_link_libraries(${_agentxx_target} PRIVATE ${_AGENTXX_CODEGRAPH_LIBS})
-  endforeach()
-  target_link_libraries(agentxx_shared PUBLIC ${_AGENTXX_CODEGRAPH_LIBS})
-  target_link_libraries(agentxx_static PUBLIC ${_AGENTXX_CODEGRAPH_LIBS})
-  unset(_AGENTXX_CODEGRAPH_LIBS)
-endif()
 if (AGENTXX_ENABLE_HYPERSCAN)
   pkg_check_modules(hyperscan REQUIRED IMPORTED_TARGET libhs)
   foreach(_agentxx_target ${_AGENTXX_OBJ_LINK_TARGETS})

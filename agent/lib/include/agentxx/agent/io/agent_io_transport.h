@@ -165,20 +165,17 @@ struct WireSystemUsage {
     agentxx::expand::CpuGpuUsage usage;
 };
 
-/// 服务端 CodeGraph 索引进度推送 (Server -> Client)
-/// - 仅当 codegraph 启用且初始化成功时推送; agent-server 侧限流 (最短 3s) 推送
-/// - 客户端状态栏据此显示 CodeGraph 索引状态
-struct WireCodegraphProgress {
-    /// codegraph 是否可用 (启用且初始化成功); false 表示不可用/未启用
-    bool available = false;
-    /// 是否正在索引 (processed < total 且 total > 0)
-    bool indexing = false;
-    /// 已索引文件数
-    int processed = 0;
-    /// 文件总数 (未知为 0)
-    int total = 0;
-    /// 当前处理文件 (空表示无/已完成)
-    std::string currentFile;
+/// 插件事件转发 (Server -> Client)
+/// - 插件经事件总线发布 (topic 约定 `{插件名}.{事件名}`) 的事件原样转发,
+///   宿主不解析载荷语义; 频率由插件自身控制
+/// - 客户端据此判断插件可用性并展示 (如 agentxx_codegraph 索引进度)
+struct WirePluginData {
+    /// 插件名 (如 "agentxx_codegraph")
+    std::string plugin;
+    /// 事件名 (如 "progress" / "status")
+    std::string event;
+    /// JSON 载荷字符串 (语义由插件定义; 如 {"processed","total","current_file"})
+    std::string data;
 };
 
 /// 所有可能的线消息类型 (tagged variant)
@@ -209,7 +206,7 @@ using WireMessage = std::variant<
     WireSetPermission,
     WireGetSystemUsage,
     WireSystemUsage,
-    WireCodegraphProgress>;
+    WirePluginData>;
 
 // ---------------------------------------------------------------------------
 // AgentIOTransportBase: 两个 AgentIOBase 端点之间的协议传输层

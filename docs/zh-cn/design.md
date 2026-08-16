@@ -58,7 +58,7 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
 | | `agentxx_codegraph_index` | 索引目录构建符号数据库 |
 | | `agentxx_codegraph_path` | 查找两符号间的调用链路径 |
 | | `agentxx_codegraph_status` | 索引统计信息 |
-| | | `agentxx_codegraph_*` 系列 tool 仅在配置 `codegraph.enable: true` 且编译启用 `AGENTXX_ENABLE_CODEGRAPH` 时注册 |
+| | | `agentxx_codegraph_*` 系列 tool 仅在配置 `codegraph.enable: true` 且编译启用 `AGENTXX_ENABLE_PLUGIN_CODEGRAPH` 时注册 |
 | **规划** | `agentxx_planning_write` | 两层任务规划 (Mermaid 状态图 + Todo List + 备忘录) |
 | **子代理** | `agentxx_subagent_switch` | 创建和管理子代理执行委派任务 |
 | | `tool_skill_search` | 延迟加载工具/技能的搜索与发现 |
@@ -374,7 +374,7 @@ mcp:
 #   - {data_dir}/sqlite/codegraph/<折叠路径>/index.db CodeGraph 索引
 # data_dir: ~/.agentxx
 
-# CodeGraph 代码分析 (需编译启用 AGENTXX_ENABLE_CODEGRAPH; 默认关闭)
+# CodeGraph 代码分析 (需编译启用 AGENTXX_ENABLE_PLUGIN_CODEGRAPH; 默认关闭)
 codegraph:
   enable: false             # true 时 CodeAgent 注册 codegraph 系列 tool
   # paths:                  # 加载(索引)路径列表 (可选; 相对路径按工作目录解析;

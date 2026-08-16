@@ -21,29 +21,6 @@
 # data_dir: ~/.agentxx
 data_dir: default
 
-# === CodeGraph 代码分析 (默认关闭; 需编译启用 AGENTXX_ENABLE_CODEGRAPH)
-# - enable:        是否启用 (默认 false); 启用后 CodeAgent 注册 codegraph 系列 tool
-# - paths:         加载(索引)路径列表 (可选; 支持绝对路径或相对路径, 相对路径按程序
-#                  工作目录解析; 可配置多个目录)。非空时按此列表索引
-# - ignore_paths:  忽略路径列表 (可选; 相对路径按工作目录解析, 支持 * 通配符;
-#                  命中即跳过, 对全部加载路径及手动索引均生效)
-# - load_cwd:      未配置 paths 时是否默认加载当前工作目录 (默认 true; false 时
-#                  不自动索引, 仅可手动 agentxx_codegraph_index)
-# - use_gitignore: 是否默认忽略 .gitignore 规则与 .gitmodules 子模块目录 (默认 true)
-# 索引数据库: {data_dir}/sqlite/codegraph/<折叠路径>/index.db
-#   - 前缀复用: 子目录工作自动复用最近父级索引
-#   - 长度控制: 深层路径折叠为 hash 段, 单段超长截断, 保证不超系统路径限制
-codegraph:
-  enable: true
-  # paths:
-  #   - "/path/to/project_a"
-  #   - "relative/path/to/project_b"
-  ignore_paths:
-    - "**/build/**"
-    - "**/node_modules/**"
-  load_cwd: true
-  use_gitignore: true
-
 # === 权限配置 (该配置项已从 TUI 设置弹窗移除, 启动时提示一次)
 # - mode: 询问处理模式
 #   - ask:     当前工作目录内允许读写, 其他路径询问用户 (默认)
@@ -227,11 +204,13 @@ memory:
   - "AGENTS.md"
   - ".agentxx/memory/self.md"
 
-# 插件列表 (热插拔 C++/JS 插件; 加载实现见 [agent/lib/src/plugins/plugin_manager.cpp])
+# 插件配置: 所有插件统一经 path 外置指定加载 (不区分内置/外置插件)
+#
 # - path: 插件动态库路径 或 插件目录 (目录含 plugin.yaml 时按清单分派, 推荐);
-#         相对路径按程序工作目录解析为绝对路径
+#         必填; 相对路径按程序工作目录解析为绝对路径
 # - enabled: 是否启用 (默认 true; false 跳过加载)
-# - args:    自定义参数 (预留; 当前仅存留供查询, 不传入插件)
+# - args:    插件参数 json (整体传递给插件, 宿主不解析其字段语义;
+#            参数含义由插件自行定义)
 # - 依赖排序: 加载时按 manifest depends 拓扑排序 (脚本插件须在引擎之后,
 #   配置顺序无关 —— 即使脚本插件写在引擎前面也会自动排到后面)
 #
@@ -242,12 +221,6 @@ memory:
 #   示例插件编译产物: build/linux-debug/exec/libexample_plugin.so
 #   引擎插件编译产物: build/linux-debug/exec/libagentxx_javascript_engine.so
 plugins:
-  # --- 示例: JS 插件 (引擎 + 脚本插件; 顺序无关, 拓扑排序自动处理) ---
-  # - path: "build/linux-debug/exec/plugins/example_js"
-  #   enabled: true
-  # - path: "build/linux-debug/exec/libagentxx_javascript_engine.so"
-  #   enabled: true
-
   # --- 示例: 原生 C++ 插件 (直接库路径) ---
   # - path: "build/linux-debug/exec/libexample_plugin.so"
   #   enabled: true
@@ -256,3 +229,29 @@ plugins:
   # --- 示例: 禁用 (加载时跳过) ---
   # - path: "build/linux-debug/exec/libexample_plugin.so"
   #   enabled: false
+
+  # --- 示例: JS 插件 (引擎 + 脚本插件; 顺序无关, 拓扑排序自动处理) ---
+  # - path: "build/linux-debug/exec/libagentxx_javascript_engine.so"
+  #   enabled: true
+  # - path: "build/linux-debug/exec/plugins/example_js"
+  #   enabled: true
+
+  # === CodeGraph 代码分析 (插件 agentxx_codegraph; 默认关闭)
+  # - 参数经 yaml `plugins` 段 path 条目携带 (宿主只整体传递 args json,
+  #   不解析其字段语义):
+  #     paths:          加载(索引)路径列表 (可选; 相对路径按程序工作目录解析)
+  #     ignore_paths:   忽略路径列表 (支持 * 通配符; 命中即跳过)
+  #     load_cwd:       未配置 paths 时是否默认加载当前工作目录 (默认 true)
+  #     use_gitignore:  是否默认忽略 .gitignore 规则与 .gitmodules 子模块目录 (默认 true)
+  # - 索引数据库: {data_dir}/sqlite/codegraph/<折叠路径>/index.db
+  - path: agent/build/linux-debug/exec/plugins/agentxx_codegraph/
+    enabled: true
+    args:
+      paths:
+        - "/path/to/project_a"
+        - "relative/path/to/project_b"
+      ignore_paths:
+        - "**/build/**"
+        - "**/node_modules/**"
+      load_cwd: true
+      use_gitignore: true

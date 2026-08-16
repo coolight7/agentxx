@@ -1,5 +1,6 @@
 #include "agentxx/plugin/plugin_manager.h"
 
+#include "agentxx/agent/config_static.h"
 #include "agentxx/agent/io/agent_io.h"
 #include "agentxx/agent/io/agent_io_transport.h"
 #include "agentxx/middlewares/event_stream.h"
@@ -1134,6 +1135,60 @@ static char* xx_json_escape(const AgentxxHost* host, const char* s) {
     return inst->host.vtable->strdup(out.c_str());
 }
 
+/// 宿主 AgentConfig 关键字段 → JSON (io 线程; 供插件装配期读取)
+static char* xx_get_config(const AgentxxHost* host) {
+    XX_PLUGIN_CATCH_BEGIN
+    auto mgr = mgrOf(host);
+    if (!mgr) {
+        return nullptr;
+    }
+    auto mgrPtr = mgr;
+    auto json   = ioCallSync<std::string>(mgrPtr, [mgrPtr]() {
+        return mgrPtr->getConfigJson();
+    });
+    if (json.empty()) {
+        return nullptr;
+    }
+    return host->vtable->strdup(json.c_str());
+    XX_PLUGIN_CATCH_END(nullptr)
+}
+
+/// 本插件配置参数 → JSON (io 线程; 未配置返回 "{}")
+static char* xx_get_plugin_args(const AgentxxHost* host) {
+    XX_PLUGIN_CATCH_BEGIN
+    auto mgr  = mgrOf(host);
+    auto inst = instOf(host);
+    if (!mgr || !inst) {
+        return nullptr;
+    }
+    auto        mgrPtr  = mgr;
+    std::string ownName = inst->name;
+    auto        json    = ioCallSync<std::string>(mgrPtr, [mgrPtr, ownName]() {
+        return mgrPtr->getPluginArgsJson(ownName);
+    });
+    return host->vtable->strdup(json.c_str());
+    XX_PLUGIN_CATCH_END(nullptr)
+}
+
+/// 宿主 toolPrompt 配置 → JSON (io 线程; 未配置返回 NULL)
+static char* xx_get_tool_prompt(const AgentxxHost* host, const char* tool_name) {
+    XX_PLUGIN_CATCH_BEGIN
+    auto mgr = mgrOf(host);
+    if (!mgr || !tool_name || !*tool_name) {
+        return nullptr;
+    }
+    auto        mgrPtr = mgr;
+    std::string name{tool_name};
+    auto        json = ioCallSync<std::string>(mgrPtr, [mgrPtr, name]() {
+        return mgrPtr->getToolPromptJson(name);
+    });
+    if (json.empty()) {
+        return nullptr;
+    }
+    return host->vtable->strdup(json.c_str());
+    XX_PLUGIN_CATCH_END(nullptr)
+}
+
 static const AgentxxHostVtable g_hostVtable = {
     xx_alloc,
     xx_free,
@@ -1161,6 +1216,9 @@ static const AgentxxHostVtable g_hostVtable = {
     xx_log,
     xx_json_get_string,
     xx_json_escape,
+    xx_get_config,
+    xx_get_plugin_args,
+    xx_get_tool_prompt,
 };
 
 // ==================== 工具注册/注销 ====================
@@ -1650,6 +1708,18 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadNativeAsync(
         inst->hookRegistrations.size(),
         inst->capabilityRegistrations.size()
     );
+
+    // 保存配置参数 (yaml `plugins` 条目 args): 宿主不解析字段语义,
+    // 插件经 vtable get_plugin_args 整体读取
+    if (auto ctxPtr = agentContext_.lock(); ctxPtr && ctxPtr->agentConfig) {
+        for (const auto& pc : ctxPtr->agentConfig->plugins) {
+            if (!pc.path.empty() && pluginNameFromPath(pc.path) == name) {
+                inst->args = pc.args;
+                break;
+            }
+        }
+    }
+
     co_return inst;
 }
 
@@ -2114,6 +2184,7 @@ asio::awaitable<void>
         if (!cfg.enabled) {
             continue;
         }
+        // 所有插件统一经 path 外置指定 (必填; 不区分内置/外置插件)
         std::error_code ec;
         if (fs::is_directory(cfg.path, ec)) {
             std::string              name, entry;
@@ -2262,6 +2333,62 @@ std::string PluginManager::getPluginJson(const std::string& name) {
         inst->optionalDepends,
     };
     return pluginInfoToJson(p).dump();
+}
+
+// ==================== 宿主配置访问 (vtable get_config/get_tool_prompt) ====================
+
+std::string PluginManager::getConfigJson() {
+    auto ctx = agentContext_.lock();
+    if (!ctx || !ctx->agentConfig) {
+        return {};
+    }
+    const auto& cfg = *ctx->agentConfig;
+    neograph::json j = neograph::json::object();
+    j["dataDir"]     = cfg.dataDir;
+    // 当前工作路径 (插件索引项目根用; 失败为空串, 插件自行回退)
+    j["projectRoot"] = agentxx::agent::AgentConfigStatic::getCurrentWorkPath();
+#if XX_IS_WIN_D
+    j["platform"] = "windows";
+#elif XX_IS_MACOS_D
+    j["platform"] = "macos";
+#else
+    j["platform"] = "linux";
+#endif
+    return j.dump();
+}
+
+std::string PluginManager::getToolPromptJson(const std::string& toolName) {
+    auto ctx = agentContext_.lock();
+    if (!ctx || !ctx->agentConfig) {
+        return {};
+    }
+    const auto& prompts = ctx->agentConfig->prompt.toolPrompt;
+    auto        it      = prompts.find(toolName);
+    if (it == prompts.end()) {
+        return {};
+    }
+    neograph::json j = neograph::json::object();
+    j["depict"]      = it->second.depict;
+    j["args"]        = neograph::json::object();
+    for (const auto& [name, desc] : it->second.args) {
+        j["args"][name] = desc;
+    }
+    return j.dump();
+}
+
+std::string PluginManager::getPluginArgsJson(std::string_view pluginName) {
+    auto ctx = agentContext_.lock();
+    if (!ctx || !ctx->agentConfig) {
+        return "{}";
+    }
+    // 从配置的 plugins 列表匹配本插件 (path 条目按文件名推导的插件名匹配:
+    // libfoo.so → foo)
+    for (const auto& pc : ctx->agentConfig->plugins) {
+        if (!pc.path.empty() && pluginNameFromPath(pc.path) == pluginName) {
+            return pc.args.dump();
+        }
+    }
+    return "{}";
 }
 
 std::shared_ptr<PluginInstance> PluginManager::find(std::string_view name) const {

@@ -32,7 +32,8 @@ static std::string findExamplePluginPath() {
     if (!ec) {
         return cwd.string();
     }
-    return "libexample_plugin.so"; // 让加载失败暴露日志
+    // 异常兜底: 返回相对目录路径, loadPluginAsync 解析失败时日志暴露原因
+    return "plugins/example_plugin";
 }
 
 static asio::awaitable<void> sleepMs(int ms) {
@@ -56,10 +57,10 @@ asio::awaitable<TestResult> run_plugin_tests() {
     // vtable 调用经真实 post 到 io 线程执行, 而非测试默认的"伪 io 线程"直连
     ctx->pluginManager->setIoExecutor(co_await asio::this_coro::executor);
 
-    // ---- 2. 加载示例插件 ----
+    // ---- 2. 加载示例插件 (目录 + plugin.yaml 清单分派) ----
     auto path = findExamplePluginPath();
-    XX_TEST_EXPECT_TRUE(path.find("libexample_plugin") != std::string::npos);
-    auto inst = co_await ctx->pluginManager->loadNativeAsync(path);
+    XX_TEST_EXPECT_TRUE(path.find("example_plugin") != std::string::npos);
+    auto inst = co_await ctx->pluginManager->loadPluginAsync(path);
     XX_TEST_EXPECT_TRUE(inst != nullptr);
     if (!inst) {
         XX_TEST_EXPECT_TRUE(false);
@@ -186,7 +187,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
         };
 
         ctx->toolRegistry->setStaticToolNames({"builtin_tool_a"});
-        // 插件工具注册冲突在 loadNativeAsync 路径覆盖, 此处验证注册表拒绝同名静态工具
+        // 插件工具注册冲突在目录分派 (loadPluginAsync) 路径覆盖, 此处验证注册表拒绝同名静态工具
         auto dummy = std::make_shared<DummyTool>("builtin_tool_a", ctx);
         XX_TEST_EXPECT_FALSE(ctx->toolRegistry->registerTool("builtin_tool_a", dummy));
         XX_TEST_EXPECT_TRUE(ctx->toolRegistry->registerTool("plugin_ok_tool", dummy));
@@ -196,7 +197,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
     // ---- 11. 插件列表 ----
     {
         // 重新加载用于 list 验证
-        auto inst2 = co_await ctx->pluginManager->loadNativeAsync(path);
+        auto inst2 = co_await ctx->pluginManager->loadPluginAsync(path);
         XX_TEST_EXPECT_TRUE(inst2 != nullptr);
         if (inst2) {
             auto list  = ctx->pluginManager->list();
@@ -209,15 +210,16 @@ asio::awaitable<TestResult> run_plugin_tests() {
     }
 
     // JS 引擎库与脚本插件目录 (第 12~26 段共用; 函数级声明)
+    // findExamplePluginPath() 已含 plugins/ 前缀 (…/plugins/example_plugin),
+    // parent_path() 即 plugins/ 目录, 直接拼接插件子目录名即可
     namespace fs       = std::filesystem;
     auto        jsPath = findExamplePluginPath();
-    std::string jsLib
-        = (fs::path(jsPath).parent_path() / "plugins" / "agentxx_javascript_engine").string();
-    std::string jsDir = (fs::path(jsPath).parent_path() / "plugins" / "example_js").string();
+    std::string jsLib  = (fs::path(jsPath).parent_path() / "agentxx_javascript_engine").string();
+    std::string jsDir  = (fs::path(jsPath).parent_path() / "example_js").string();
 
     // ---- 12. JS 引擎插件加载 (二期) ----
     {
-        auto engineInst = co_await ctx->pluginManager->loadNativeAsync(jsLib);
+        auto engineInst = co_await ctx->pluginManager->loadPluginAsync(jsLib);
         XX_TEST_EXPECT_TRUE(engineInst != nullptr);
         if (!engineInst) {
             XX_TEST_EXPECT_TRUE(false);
@@ -227,7 +229,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
 
         // ---- 13. JS 插件 (plugin.yaml 目录分派) ----
         // 需宿主 example_echo 供 js_call_host 互调
-        auto hostInst = co_await ctx->pluginManager->loadNativeAsync(path);
+        auto hostInst = co_await ctx->pluginManager->loadPluginAsync(path);
         XX_TEST_EXPECT_TRUE(hostInst != nullptr);
         auto jsInst = co_await ctx->pluginManager->loadPluginAsync(jsDir);
         XX_TEST_EXPECT_TRUE(jsInst != nullptr);
@@ -326,7 +328,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
         // ---- 20. 依赖图级联卸载: 引擎卸载连带 depends 它的脚本插件 ----
         {
             // 重新加载引擎 + 脚本插件
-            auto engine2 = co_await ctx->pluginManager->loadNativeAsync(jsLib);
+            auto engine2 = co_await ctx->pluginManager->loadPluginAsync(jsLib);
             XX_TEST_EXPECT_TRUE(engine2 != nullptr);
             auto js2 = co_await ctx->pluginManager->loadPluginAsync(jsDir);
             XX_TEST_EXPECT_TRUE(js2 != nullptr);
@@ -353,7 +355,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
         // ---- 22. 插件互查 API (vtable list_plugins/get_plugin) ----
         {
             // 重新加载引擎 (供脚本插件验证互查)
-            auto engine3 = co_await ctx->pluginManager->loadNativeAsync(jsLib);
+            auto engine3 = co_await ctx->pluginManager->loadPluginAsync(jsLib);
             XX_TEST_EXPECT_TRUE(engine3 != nullptr);
             auto js4 = co_await ctx->pluginManager->loadPluginAsync(jsDir);
             XX_TEST_EXPECT_TRUE(js4 != nullptr);
@@ -415,7 +417,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
     // - 修复: inflight 计数在线程池入口递增 + shared_ptr 保活 → unloadAsync
     //   必须等回调真正返回后才 dlclose (卸载耗时 ≈ 回调剩余时间)
     {
-        auto inst23 = co_await ctx->pluginManager->loadNativeAsync(path);
+        auto inst23 = co_await ctx->pluginManager->loadPluginAsync(path);
         XX_TEST_EXPECT_TRUE(inst23 != nullptr);
         if (inst23) {
             // 注册带超时的慢工具: 超时 100ms, C 回调 sleep 600ms
@@ -469,7 +471,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
 
     // ---- 24. H4 回归: disable 跨轮次 (中间件已物理摘除) 后 enable 钩子恢复 ----
     {
-        auto inst24 = co_await ctx->pluginManager->loadNativeAsync(path);
+        auto inst24 = co_await ctx->pluginManager->loadPluginAsync(path);
         XX_TEST_EXPECT_TRUE(inst24 != nullptr);
         if (inst24) {
             XX_TEST_EXPECT_TRUE(inst24->middleware != nullptr);
@@ -494,7 +496,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
 
     // ---- 25. M8 回归: 用户手动禁用的插件不被 enable 级联恢复 ----
     {
-        auto engine25 = co_await ctx->pluginManager->loadNativeAsync(jsLib);
+        auto engine25 = co_await ctx->pluginManager->loadPluginAsync(jsLib);
         XX_TEST_EXPECT_TRUE(engine25 != nullptr);
         auto js25 = co_await ctx->pluginManager->loadPluginAsync(jsDir);
         XX_TEST_EXPECT_TRUE(js25 != nullptr);
@@ -516,7 +518,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
     // - 引擎插件 unload 回调 join JS 线程; 脚本插件先卸载 (通知引擎释放
     //   JSContext) → 引擎 join 时 JS 线程空闲 → 无挂死/无执行已卸载代码段
     {
-        auto engine26 = co_await ctx->pluginManager->loadNativeAsync(jsLib);
+        auto engine26 = co_await ctx->pluginManager->loadPluginAsync(jsLib);
         XX_TEST_EXPECT_TRUE(engine26 != nullptr);
         auto js26 = co_await ctx->pluginManager->loadPluginAsync(jsDir);
         XX_TEST_EXPECT_TRUE(js26 != nullptr);

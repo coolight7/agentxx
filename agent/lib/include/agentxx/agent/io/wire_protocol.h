@@ -55,8 +55,8 @@ struct MsgType {
     /// 服务端系统资源占用响应 (GetSystemUsage 的结果)
     inline static constexpr std::string_view SystemUsage = "system_usage";
     inline static constexpr std::string_view Pong        = "pong";
-    /// 服务端 CodeGraph 索引进度推送 (节流 ≥3s)
-    inline static constexpr std::string_view CodegraphProgress = "codegraph_progress";
+    /// 服务端插件事件转发 (WirePluginData: 插件名 + 事件名 + JSON 载荷)
+    inline static constexpr std::string_view PluginData = "plugin_data";
 };
 
 /// 中断/取消原因 (供 BaseAgent 区分中断来源)
@@ -700,28 +700,23 @@ inline agentxx::expand::CpuGpuUsage systemUsageFromJson(const neograph::json& j)
     return cpuGpuUsageFromJson(j.value("usage", neograph::json::object()));
 }
 
-/// 服务端 CodeGraph 索引进度推送 (Server -> Client)
-inline neograph::json makeCodegraphProgress(const WireCodegraphProgress& p) {
+/// 插件事件转发 (Server -> Client): 插件经事件总线发布的事件原样转发
+/// - data 为 JSON 载荷字符串 (语义由插件定义); 频率由插件自身控制
+inline neograph::json makePluginData(const WirePluginData& p) {
     neograph::json j = {
-        {"type",      MsgType::CodegraphProgress},
-        {"available", p.available               },
-        {"indexing",  p.indexing                },
-        {"processed", p.processed               },
-        {"total",     p.total                   },
+        {"type",   MsgType::PluginData},
+        {"plugin", p.plugin           },
+        {"event",  p.event            },
+        {"data",   p.data             },
     };
-    if (!p.currentFile.empty()) {
-        j["current_file"] = p.currentFile;
-    }
     return j;
 }
 
-inline WireCodegraphProgress codegraphProgressFromJson(const neograph::json& j) {
-    WireCodegraphProgress p;
-    p.available   = j.value("available", false);
-    p.indexing    = j.value("indexing", false);
-    p.processed   = j.value("processed", 0);
-    p.total       = j.value("total", 0);
-    p.currentFile = j.value("current_file", std::string{});
+inline WirePluginData pluginDataFromJson(const neograph::json& j) {
+    WirePluginData p;
+    p.plugin = j.value("plugin", std::string{});
+    p.event  = j.value("event", std::string{});
+    p.data   = j.value("data", std::string{});
     return p;
 }
 

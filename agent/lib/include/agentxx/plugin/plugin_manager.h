@@ -38,6 +38,9 @@ public:
     std::string version;
     std::string description;
     std::string path; ///< 加载的库路径
+    /// 插件配置参数 (yaml `plugins` 条目 args; 宿主原样保存, 经 vtable
+    /// get_plugin_args 整体返回给插件, 不解析其字段语义)
+    neograph::json args = neograph::json::object();
     /// 必选依赖 (插件名): 未安装则加载失败; 卸载/禁用时级联 (依赖方先于被依赖方)
     std::vector<std::string> depends;
     /// 可选依赖 (插件名): 未安装仅警告, 不影响加载
@@ -384,6 +387,21 @@ public:
     std::string listPluginsJson();
     /// 单个插件信息 JSON (未安装返回空串; io 线程)
     std::string getPluginJson(const std::string& name);
+
+    // ==================== 宿主配置访问 (vtable get_config/get_tool_prompt) ====================
+
+    /// 宿主 AgentConfig 关键字段 JSON (io 线程; 供插件装配期读取)
+    /// {"dataDir","projectRoot","platform"}
+    /// - 通用宿主信息; 插件业务参数经 get_plugin_args (宿主不解析 args)
+    /// - agentContext/agentConfig 未装配时返回空串
+    std::string getConfigJson();
+    /// 宿主 toolPrompt 配置 JSON (io 线程):
+    /// {"depict": "...", "args": {"参数名": "说明"}}
+    /// - 工具未配置 prompt 时返回空串 (插件回退内置默认描述)
+    std::string getToolPromptJson(const std::string& toolName);
+    /// 本插件配置参数 JSON (io 线程; 未配置返回 "{}")
+    /// - 宿主对 args 内容完全不解析, 整体原样传递
+    std::string getPluginArgsJson(std::string_view pluginName);
 
 private:
 
