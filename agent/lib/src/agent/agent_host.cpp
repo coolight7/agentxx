@@ -45,8 +45,8 @@ size_t AgentRegistry::size() const {
     return nodes_.size();
 }
 
-std::vector<std::shared_ptr<AgentNode>>
-    AgentRegistry::childrenOf(std::string_view parentAgentId) const {
+std::vector<std::shared_ptr<AgentNode>> AgentRegistry::childrenOf(std::string_view parentAgentId
+) const {
     std::vector<std::shared_ptr<AgentNode>> out;
     for (const auto& [id, node] : nodes_) {
         if (node->parentAgentId == parentAgentId) {
@@ -100,9 +100,7 @@ std::shared_ptr<AgentHost> AgentHost::create(Config cfg) {
 
     // agent.message (RR): 任意→任意 agent 消息 (mailbox 路由)
     host->hostBus_
-        ->getRR<events::ReqHostMessage, events::RespHostMessage>(
-            events::HostTopic::AgentMessage
-        )
+        ->getRR<events::ReqHostMessage, events::RespHostMessage>(events::HostTopic::AgentMessage)
         .serve(
             [self](const events::ReqHostMessage& req, size_t)
                 -> asio::awaitable<events::RespHostMessage> {
@@ -192,12 +190,12 @@ void AgentHost::attachRoot(std::shared_ptr<BaseAgent> rootAgent) {
 
     // 根 agent 也注册为节点 (平等成员; 由宿主持有, 不随 destroyAgent 回收)
     {
-        auto rootNode          = std::make_shared<AgentNode>();
-        rootNode->agentId      = "root";
-        rootNode->name         = ctx->agentConfig ? ctx->agentConfig->agentName : std::string{"root"};
+        auto rootNode     = std::make_shared<AgentNode>();
+        rootNode->agentId = "root";
+        rootNode->name    = ctx->agentConfig ? ctx->agentConfig->agentName : std::string{"root"};
         rootNode->parentAgentId = "";
-        rootNode->depth        = 0;
-        rootNode->agent        = rootAgent_;
+        rootNode->depth         = 0;
+        rootNode->agent         = rootAgent_;
         registry_.insert(std::move(rootNode));
     }
 
@@ -247,8 +245,8 @@ std::shared_ptr<BaseAgent> AgentHost::createAgentInstance(std::shared_ptr<AgentC
     return std::make_shared<CodeAgent>(std::move(config));
 }
 
-std::shared_ptr<AgentConfig>
-    AgentHost::makeSubagentConfig(std::shared_ptr<AgentConfig> parentConfig) const {
+std::shared_ptr<AgentConfig> AgentHost::makeSubagentConfig(std::shared_ptr<AgentConfig> parentConfig
+) const {
     assert(parentConfig && "makeSubagentConfig: parent config is null");
     auto cfg = std::make_shared<AgentConfig>(*parentConfig);
     // 子代理默认轻量: 不重复建立 MCP 连接 / 不加载插件 / RAG / CodeGraph,
@@ -256,8 +254,6 @@ std::shared_ptr<AgentConfig>
     cfg->mcpServerUrls.clear();
     cfg->plugins.clear();
     cfg->ragDocsPaths.clear();
-    cfg->enableCodeGraph       = false;
-    cfg->codeGraphPaths.clear();
     cfg->skillDirPaths.clear();
     cfg->memoryFilePaths.clear();
     cfg->enableSessionPersistence = false;
@@ -284,7 +280,7 @@ void AgentHost::publishProgress(
     }
     asio::co_spawn(
         hostBus_->executor(),
-        [bus = hostBus_,
+        [bus           = hostBus_,
          agentId       = std::string{agentId},
          parentAgentId = std::string{parentAgentId},
          kind          = std::string{kind},
@@ -304,11 +300,11 @@ void AgentHost::publishProgress(
 }
 
 asio::awaitable<events::RespSubagentResult> AgentHost::spawnSubagent(
-    std::string_view                                   subagentName,
-    std::string_view                                   systemPrompt,
-    std::string_view                                   message,
-    std::string_view                                   parentThreadId,
-    std::shared_ptr<neograph::graph::CancelToken>      cancelToken
+    std::string_view                              subagentName,
+    std::string_view                              systemPrompt,
+    std::string_view                              message,
+    std::string_view                              parentThreadId,
+    std::shared_ptr<neograph::graph::CancelToken> cancelToken
 ) {
     // ---- 宿主预算检查 (深度 / 并发) ----
     size_t parentDepth = 0;
@@ -375,12 +371,13 @@ asio::awaitable<events::RespSubagentResult> AgentHost::spawnSubagent(
     subCtx->host         = weak_from_this();
 
     // 唯一运行 id 与 thread id
-    const auto agentId = nextAgentId();
+    const auto agentId  = nextAgentId();
     const auto parentId = std::string{parentThreadId};
-    const auto subagentThreadId = fmt::format("subagent_{}_{}_{}", subagentName, agentId, agentIdSeq_);
+    const auto subagentThreadId
+        = fmt::format("subagent_{}_{}_{}", subagentName, agentId, agentIdSeq_);
 
     // 注册节点 (平等成员; 父为根节点)
-    auto node = std::make_shared<AgentNode>();
+    auto node           = std::make_shared<AgentNode>();
     node->agentId       = agentId;
     node->name          = std::string{subagentName};
     node->parentAgentId = "root";
@@ -455,7 +452,7 @@ asio::awaitable<events::RespSubagentResult> AgentHost::spawnSubagent(
             };
 
             std::ostringstream oss;
-            auto runResult = co_await subagent->getEngine()->run_stream_async(
+            auto               runResult = co_await subagent->getEngine()->run_stream_async(
                 cfg,
                 [&](const neograph::graph::GraphEvent& event) {
                     switch (event.type) {
@@ -493,7 +490,7 @@ asio::awaitable<events::RespSubagentResult> AgentHost::spawnSubagent(
             if (runResult.interrupted) {
                 // 子代理被中断未完成: 显式报错 (子代理作用域不处理中断恢复)
                 resp = events::RespSubagentResult{
-                    .hasError = true,
+                    .hasError     = true,
                     .errorMessage = fmt::format(
                         "Sub-agent interrupted at node `{}` (interrupt not handled in subagent scope)",
                         runResult.interrupt_node
@@ -547,8 +544,8 @@ asio::awaitable<events::RespSubagentResult> AgentHost::spawnSubagent(
     );
 }
 
-asio::awaitable<events::RespSubagentBatch>
-    AgentHost::spawnBatch(const events::ReqSubagentBatch& req) {
+asio::awaitable<events::RespSubagentBatch> AgentHost::spawnBatch(const events::ReqSubagentBatch& req
+) {
     events::RespSubagentBatch batchResp;
     if (req.tasks.empty()) {
         co_return batchResp;
@@ -578,10 +575,10 @@ asio::awaitable<events::RespSubagentBatch>
              cancelToken    = req.cancelToken]() -> asio::awaitable<void> {
                 // RAII 守卫: 无论 spawnSubagent 如何退出都保证发送完成信号
                 struct BatchDoneGuard {
-                    std::shared_ptr<asio::experimental::channel<void(
-                        neograph_asio_error_code,
-                        size_t)>> ch;
-                    size_t        idx;
+                    std::shared_ptr<
+                        asio::experimental::channel<void(neograph_asio_error_code, size_t)>>
+                           ch;
+                    size_t idx;
 
                     ~BatchDoneGuard() {
                         if (ch) {
@@ -652,7 +649,10 @@ asio::awaitable<events::RespHostMessage> AgentHost::sendMessage(events::ReqHostM
     };
 }
 
-void AgentHost::registerRemoteAgent(std::string_view agentId, std::shared_ptr<agentxx::server::A2aClient> client) {
+void AgentHost::registerRemoteAgent(
+    std::string_view                            agentId,
+    std::shared_ptr<agentxx::server::A2aClient> client
+) {
     if (client) {
         remoteAgents_[std::string{agentId}] = std::move(client);
     } else {
@@ -664,8 +664,10 @@ void AgentHost::unregisterRemoteAgent(std::string_view agentId) {
     remoteAgents_.erase(agentId);
 }
 
-asio::awaitable<events::RespHostMessage>
-    AgentHost::sendViaA2a(std::shared_ptr<agentxx::server::A2aClient> client, const events::ReqHostMessage& req) {
+asio::awaitable<events::RespHostMessage> AgentHost::sendViaA2a(
+    std::shared_ptr<agentxx::server::A2aClient> client,
+    const events::ReqHostMessage&               req
+) {
     // 1) SendMessage → 服务端创建 task
     auto sendResult = co_await client->sendMessage(req.message);
     if (!sendResult.has_value()) {
@@ -698,7 +700,7 @@ asio::awaitable<events::RespHostMessage>
                 .errorMessage = fmt::format("A2A GetTask failed: {}", taskResult.error()),
             };
         }
-        const auto& task = taskResult.value();
+        const auto& task  = taskResult.value();
         auto        state = agentxx::server::A2aClient::extractTaskState(task);
         if (state == "TASK_STATE_COMPLETED") {
             co_return events::RespHostMessage{

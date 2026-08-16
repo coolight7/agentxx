@@ -75,15 +75,16 @@ public:
         /// 子代理最大并发数 (超出拒绝派生)
         size_t maxConcurrentSubagents = 8;
         /// agent 构造工厂 (默认 CodeAgent; 可注入自定义 BaseAgent 子类)
-        std::function<std::shared_ptr<BaseAgent>(std::shared_ptr<AgentConfig>)> agentFactory;
+        std::function<std::shared_ptr<BaseAgent>(std::shared_ptr<AgentConfig>)> agentFactory
+            = nullptr;
     };
 
     /// 创建宿主 (须经 shared_ptr 持有: 总线 handler 以 weak_ptr 捕获)
-    static std::shared_ptr<AgentHost> create(Config cfg = {});
+    static std::shared_ptr<AgentHost> create(Config cfg);
 
     ~AgentHost();
 
-    std::shared_ptr<asio::io_context>             ioCtx();
+    std::shared_ptr<asio::io_context>              ioCtx();
     std::shared_ptr<agentxx::middleware::EventBus> hostBus();
     std::shared_ptr<asio::thread_pool>             blockingPool();
     AgentRegistry&                                 registry();
@@ -100,11 +101,11 @@ public:
     /// - HIL (权限/中断) 冒泡: 子代理会话继承父会话的 io 与总线
     /// - 取消令牌透传: 父取消级联中止子代理
     asio::awaitable<events::RespSubagentResult> spawnSubagent(
-        std::string_view                                   subagentName,
-        std::string_view                                   systemPrompt,
-        std::string_view                                   message,
-        std::string_view                                   parentThreadId,
-        std::shared_ptr<neograph::graph::CancelToken>      cancelToken = nullptr
+        std::string_view                              subagentName,
+        std::string_view                              systemPrompt,
+        std::string_view                              message,
+        std::string_view                              parentThreadId,
+        std::shared_ptr<neograph::graph::CancelToken> cancelToken = nullptr
     );
 
     /// 批量派生并等待全部完成 (结果顺序与输入一致)
@@ -116,14 +117,17 @@ public:
     asio::awaitable<events::RespHostMessage> sendMessage(events::ReqHostMessage req);
 
     /// 注册 agent 消息信箱 (扩展点: 持久会话 agent / 远程 A2A 桥接挂接)
-    using Mailbox = std::function<asio::awaitable<events::RespHostMessage>(
-        const events::ReqHostMessage&)>;
+    using Mailbox
+        = std::function<asio::awaitable<events::RespHostMessage>(const events::ReqHostMessage&)>;
     void setMailbox(std::string_view agentId, Mailbox mailbox);
 
     /// 注册远程 agent (A2A 桥接): sendMessage 目标不在本地 mailbox 时,
     /// 经 A2A 协议 (SendMessage + GetTask 轮询) 转发并等待终态
     /// - 本地 agent 与远程 agent 在消息面完全同构 (agent.message RR 统一路由)
-    void registerRemoteAgent(std::string_view agentId, std::shared_ptr<agentxx::server::A2aClient> client);
+    void registerRemoteAgent(
+        std::string_view                            agentId,
+        std::shared_ptr<agentxx::server::A2aClient> client
+    );
 
     /// 注销远程 agent
     void unregisterRemoteAgent(std::string_view agentId);
@@ -143,34 +147,37 @@ private:
 
     std::shared_ptr<BaseAgent> createAgentInstance(std::shared_ptr<AgentConfig> config);
     /// 从父配置派生轻量子代理配置 (不重复建连/不持久化/独立模型)
-    std::shared_ptr<AgentConfig> makeSubagentConfig(std::shared_ptr<AgentConfig> parentConfig) const;
+    std::shared_ptr<AgentConfig> makeSubagentConfig(std::shared_ptr<AgentConfig> parentConfig
+    ) const;
     /// 经 A2A 协议向远程 agent 发送消息并等待终态 (轮询 GetTask)
-    asio::awaitable<events::RespHostMessage>
-        sendViaA2a(std::shared_ptr<agentxx::server::A2aClient> client, const events::ReqHostMessage& req);
+    asio::awaitable<events::RespHostMessage> sendViaA2a(
+        std::shared_ptr<agentxx::server::A2aClient> client,
+        const events::ReqHostMessage&               req
+    );
     std::string nextAgentId();
     void        publishProgress(
-        std::string_view agentId,
-        std::string_view parentAgentId,
-        std::string_view kind,
-        std::string_view data
-    );
+               std::string_view agentId,
+               std::string_view parentAgentId,
+               std::string_view kind,
+               std::string_view data
+           );
 
-    Config                                     cfg_;
-    std::shared_ptr<asio::io_context>          ioCtx_;
-    std::shared_ptr<asio::thread_pool>         blockingPool_;
+    Config                                         cfg_;
+    std::shared_ptr<asio::io_context>              ioCtx_;
+    std::shared_ptr<asio::thread_pool>             blockingPool_;
     std::shared_ptr<agentxx::middleware::EventBus> hostBus_;
-    AgentRegistry                              registry_;
-    std::shared_ptr<BaseAgent>                 rootAgent_;
-    std::map<std::string, Mailbox, std::less<>> mailboxes_;
+    AgentRegistry                                  registry_;
+    std::shared_ptr<BaseAgent>                     rootAgent_;
+    std::map<std::string, Mailbox, std::less<>>    mailboxes_;
     /// 远程 agent (A2A 桥接): agentId -> A2A 客户端
     std::map<std::string, std::shared_ptr<agentxx::server::A2aClient>, std::less<>> remoteAgents_;
     /// 根 agent 全局总线上的 subagent/batch server id (attachRoot 注册)
     size_t subagentServerId_ = 0;
     size_t batchServerId_    = 0;
     /// agent id 自增序号 (单线程协作式调度, 无需原子)
-    uint64_t                  agentIdSeq_ = 0;
+    uint64_t agentIdSeq_ = 0;
     /// 当前运行中的子代理数 (并发预算)
-    size_t                    runningSubagentCount_ = 0;
+    size_t runningSubagentCount_ = 0;
     /// subagent threadId -> 嵌套深度 (根会话不在表内, 视为 0)
     std::map<std::string, size_t, std::less<>> threadDepth_;
 };
