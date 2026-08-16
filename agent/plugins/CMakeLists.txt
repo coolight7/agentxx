@@ -16,6 +16,9 @@ option(AGENTXX_ENABLE_PLUGIN_JS "Build QuickJS JS plugin engine (agentxx_javascr
 option(AGENTXX_ENABLE_PLUGIN_CODEGRAPH "Build agentxx_codegraph plugin (requires codegraph libs)." ON)
 option(AGENTXX_ENABLE_PLUGIN_COMPUTER_USE "Build agentxx_computer_use plugin (ui_control)." ON)
 option(AGENTXX_ENABLE_PLUGIN_SCREEN_CAPTURE "Build agentxx_screen_capture plugin (screen capture)." ON)
+option(AGENTXX_ENABLE_PLUGIN_SYSTEM_MONITOR "Build agentxx_system_monitor plugin (CPU/GPU usage)." ON)
+option(AGENTXX_ENABLE_PLUGIN_AUDIO_STREAM "Build agentxx_audio_stream plugin (audio capture)." ON)
+option(AGENTXX_ENABLE_PLUGIN_TEXT_SELECTION "Build agentxx_text_selection_monitor plugin (text selection)." ON)
 
 # 嵌套构建时由顶层传入 (见 agent/CMakeLists.txt)；独立构建时取默认值:
 # - AGENTXX_INSTALL_DIR:      依赖库 (如 quickjs 的 libqjs.a / quickjs.h) 的 install 目录
@@ -80,4 +83,19 @@ endif()
 # agentxx_computer_use (ui_control; 运行时依赖 agentxx_screen_capture, 配置时须同时加载)
 if (AGENTXX_ENABLE_PLUGIN_COMPUTER_USE)
   add_subdirectory(agentxx_computer_use)
+endif()
+
+# agentxx_system_monitor (系统资源监控: CPU/内存/GPU; 从 lib expand 拆分)
+if (AGENTXX_ENABLE_PLUGIN_SYSTEM_MONITOR)
+  add_subdirectory(agentxx_system_monitor)
+endif()
+
+# agentxx_audio_stream (音频流捕获: 系统输出/程序输出/麦克风; 从 lib expand 拆分)
+if (AGENTXX_ENABLE_PLUGIN_AUDIO_STREAM)
+  add_subdirectory(agentxx_audio_stream)
+endif()
+
+# agentxx_text_selection_monitor (系统级文本选择事件流; 从 lib expand 拆分)
+if (AGENTXX_ENABLE_PLUGIN_TEXT_SELECTION)
+  add_subdirectory(agentxx_text_selection_monitor)
 endif()
