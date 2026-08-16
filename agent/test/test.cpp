@@ -213,6 +213,11 @@ int main(int argn, char** argv) {
             co_await runCtx("command", agentxx::test::run_command_tools_tests, agentContext);
             co_await runCtx("web_search", agentxx::test::run_web_search_tools_tests, agentContext);
             co_await runCtx("codegraph", agentxx::test::run_codegraph_tools_tests, agentContext);
+            co_await runCtx(
+                "screen_capture",
+                agentxx::test::run_screen_capture_tests,
+                agentContext
+            );
             co_await run("cpu_gpu", agentxx::test::run_cpu_gpu_use_tests);
             co_await run("http", agentxx::test::run_http_client_tests);
             co_await run("network_timeout", agentxx::test::run_network_timeout_tests);
@@ -238,8 +243,6 @@ int main(int argn, char** argv) {
     ioCtx.run();
 
     // ---- 同步平台相关测试 ----
-    runSync("screen_capture", agentxx::test::test_screen_capture);
-
     if (shouldRun("text_selection")) {
         auto monitor = agentxx::test::test_text_selection_monitor();
         if (waitForInput) {

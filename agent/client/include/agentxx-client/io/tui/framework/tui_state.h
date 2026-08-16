@@ -8,6 +8,7 @@
 #include "neograph/define.h"
 #include <deque>
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -126,9 +127,10 @@ struct TUIRenderState {
     /// 为 null 表示尚未收到服务端推送
     std::shared_ptr<agentxx::expand::CpuGpuUsage> systemUsage;
 
-    /// CodeGraph 索引状态 (WireCodegraphProgress 填充; 状态栏右下侧显示)
-    /// - 为 null 表示尚未收到任何状态 (codegraph 未启用或尚未推送)
-    std::optional<agentxx::agent::WireCodegraphProgress> codegraphProgress;
+    /// 插件数据 (WirePluginData 转发; key = 插件名, 如 "agentxx_codegraph")
+    /// - 服务端把插件事件原样转发, 载荷语义由插件定义; 客户端据此判断
+    ///   插件可用性并展示 (如 codegraph 索引进度/加载状态)
+    std::map<std::string, agentxx::agent::WirePluginData> pluginData;
 };
 
 /// COW 共享状态容器 (封装 mutex + shared_ptr + COW 辅助)

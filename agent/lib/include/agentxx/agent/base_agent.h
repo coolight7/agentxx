@@ -22,10 +22,6 @@
 #include <memory>
 
 namespace agentxx {
-namespace expand {
-class CodeGraphManager;
-} // namespace expand
-
 namespace agent {
 
 /// Agent 基类: 提供核心基础设施与 ReAct 执行循环
@@ -81,10 +77,6 @@ public:
     /// - CodeAgent 覆写以收集实际加载的组件列表
     virtual void collectAppendComponentInfo(std::vector<AppendComponentNotification>& notifications
     );
-
-    /// CodeGraph 代码索引管理器 (可用时返回非空; 未启用/未初始化返回 nullptr)
-    /// - 会话服务端点经此订阅索引进度推送 (StateBar 显示用)
-    virtual std::shared_ptr<expand::CodeGraphManager> codegraphManager();
 
     virtual ~BaseAgent();
 

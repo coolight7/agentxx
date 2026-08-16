@@ -217,16 +217,50 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
         elements.push_back(text(" "));
     }
 
+    // 插件数据: 解析 agentxx_codegraph 插件状态 (WirePluginData 事件:
+    // status {"loaded"} / progress {"processed","total","current_file"})
+    struct CodegraphView {
+        bool        available = false;
+        bool        indexing  = false;
+        int         processed = 0;
+        int         total     = 0;
+        std::string currentFile;
+    } cg;
+    if (auto it = st.pluginData.find("agentxx_codegraph"); it != st.pluginData.end()) {
+        cg.available = true;
+        if (it->second.event == "progress") {
+            try {
+                auto j = neograph::json::parse(it->second.data);
+                cg.processed = j.value("processed", 0);
+                cg.total     = j.value("total", 0);
+                cg.currentFile = j.value("current_file", std::string{});
+                // 完成信号 (插件约定):
+                // - total>0 且 processed>=total: 索引正常结束
+                // - processed==0 且 total==0: 无文件可索引, 同样视为结束
+                // 其余视为进行中 (流式遍历 processed>0,total=0 / resolve 阶段)
+                cg.indexing = cg.total > 0 ? !(cg.processed >= cg.total) : (cg.processed > 0);
+            } catch (const std::exception&) {
+                cg.available = false;
+            }
+        } else if (it->second.event == "status") {
+            // 插件卸载事件 (loaded=false) → 隐藏状态
+            try {
+                auto j = neograph::json::parse(it->second.data);
+                cg.available = j.value("loaded", true);
+            } catch (const std::exception&) {
+            }
+        }
+    }
+
     // Append 段: 已加载组件 (Memory/Skill/MCP) + CodeGraph 索引状态
     // - CodeGraph 状态在 appendComponents 为空时也需展示, 条件一并判断
-    if (!st.appendComponents.empty() || (st.codegraphProgress && st.codegraphProgress->available)) {
+    if (!st.appendComponents.empty() || cg.available) {
         Elements appendEls;
         appendEls.push_back(text("Append") | color(theme_.accentColor));
 
-        // CodeGraph 索引状态 (服务端 WireCodegraphProgress 节流 ≥3s 推送):
+        // CodeGraph 索引状态 (WirePluginData 转发; 频率由插件控制):
         // 追加到 Append 段末尾, 展示索引进度/就绪状态
-        if (st.codegraphProgress && st.codegraphProgress->available) {
-            const auto& cg = *st.codegraphProgress;
+        if (cg.available) {
             std::string status;
             if (cg.indexing && cg.total > 0) {
                 // 索引进行中: 45% (12/60)

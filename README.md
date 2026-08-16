@@ -54,6 +54,7 @@
 - Agentxx 编译后输出的 可执行程序`agentxx_cli`、动态库`libagentxx` 都会尽量静态链接依赖库，保持编译结果对动态库的依赖尽量少
 - ⬜编译优化，控制导出符号，裁剪体积
 - 以下是`仅编译agentxx，移除大部分不必要的扩展依赖库`时的体积和运行时内存占用，如果需要进一步裁剪体积，可以移除 Hyperscan/codegraph/Boost.process 等可选库、采用 -Os/-Oz 体积编译优化 (commit: 0e2889243389fca8c47420b4410bd7a57e708180)
+    - ⬜奇怪的是 debug 和 release 编译出来体积差别很大，但运行时内存占用差别不大，有待排查
 
 | System | agentxx_cli | libagentxx | compiler | TIP |
 |---|---|---|---|---|

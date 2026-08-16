@@ -500,8 +500,8 @@ std::string WsAgentIOTransport::serialize(const WireMessage& msg) {
                 return io::makeGetSystemUsage().dump();
             } else if constexpr (std::is_same_v<T, WireSystemUsage>) {
                 return io::makeSystemUsage(m.usage).dump();
-            } else if constexpr (std::is_same_v<T, WireCodegraphProgress>) {
-                return io::makeCodegraphProgress(m).dump();
+            } else if constexpr (std::is_same_v<T, WirePluginData>) {
+                return io::makePluginData(m).dump();
             } else {
                 return "{}";
             }
@@ -662,8 +662,8 @@ std::optional<WireMessage> WsAgentIOTransport::deserialize(std::string_view json
         WireSystemUsage resp;
         resp.usage = io::systemUsageFromJson(j);
         return WireMessage{std::move(resp)};
-    } else if (t == io::MsgType::CodegraphProgress) {
-        return WireMessage{io::codegraphProgressFromJson(j)};
+    } else if (t == io::MsgType::PluginData) {
+        return WireMessage{io::pluginDataFromJson(j)};
     }
     // Pong / Ping: 心跳内部处理, 不转发给调用方
     return std::nullopt;

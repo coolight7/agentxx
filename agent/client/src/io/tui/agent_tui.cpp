@@ -1042,12 +1042,13 @@ void TUIClientAgentIO::onPeerMessage(agentxx::agent::WireMessage msg) {
                         = std::make_shared<agentxx::expand::CpuGpuUsage>(std::move(m.usage));
                 }
                 postRedraw();
-            } else if constexpr (std::is_same_v<T, agentxx::agent::WireCodegraphProgress>) {
-                // CodeGraph 索引进度 (服务端节流 ≥3s 推送): Info 侧边栏 Append 段显示
+            } else if constexpr (std::is_same_v<T, agentxx::agent::WirePluginData>) {
+                // 插件事件转发 (WirePluginData): 按插件名存入 pluginData,
+                // 渲染侧判断插件可用性并展示 (如 agentxx_codegraph 索引状态)
                 {
                     std::lock_guard<std::mutex> lock(sharedState_.mutex());
                     auto&                       st = sharedState_.mutableState();
-                    st.codegraphProgress           = m;
+                    st.pluginData[m.plugin]        = m;
                 }
                 postRedraw();
             } else if constexpr (std::is_same_v<T, agentxx::agent::WireContextMessages>) {
@@ -1325,8 +1326,8 @@ void TUIClientAgentIO::onSync(const agentxx::agent::SyncPayload& payload) {
             st->pendingInputs    = prev->pendingInputs;
             st->systemUsage      = prev->systemUsage;
             st->contextMessages  = prev->contextMessages;
-            // CodeGraph 索引进度不随 Sync 重置 (状态栏/Info 侧边栏持续展示)
-            st->codegraphProgress = prev->codegraphProgress;
+            // 插件数据不随 Sync 重置 (状态栏/Info 侧边栏持续展示)
+            st->pluginData = prev->pluginData;
             st->isStreaming       = false;
             // 连接状态不随 Sync 重置: 握手后服务端回推全量 Sync 时若被重置回
             // Connecting (默认值), banner 会错误地回到"启动中"
