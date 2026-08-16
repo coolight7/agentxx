@@ -13,6 +13,8 @@ project(agentxx_plugins VERSION 0.1.0 LANGUAGES C CXX)
 # 由顶层 superbuild 传入 (见 agent/CMakeLists.txt)，独立构建本目录时取默认值
 option(AGENTXX_ENABLE_PLUGIN_EXAMPLE "Build example plugin." ON)
 option(AGENTXX_ENABLE_PLUGIN_JS "Build QuickJS JS plugin engine (agentxx_javascript_engine)." ON)
+option(AGENTXX_ENABLE_PLUGIN_CODEGRAPH "Build agentxx_codegraph plugin (requires codegraph libs)." ON)
+option(AGENTXX_ENABLE_PLUGIN_COMPUTER_USE "Build agentxx_computer_use plugin (ui_control/screen_capture)." ON)
 
 # 嵌套构建时由顶层传入 (见 agent/CMakeLists.txt)；独立构建时取默认值:
 # - AGENTXX_INSTALL_DIR:      依赖库 (如 quickjs 的 libqjs.a / quickjs.h) 的 install 目录
@@ -21,6 +23,8 @@ option(AGENTXX_ENABLE_PLUGIN_JS "Build QuickJS JS plugin engine (agentxx_javascr
 if (NOT DEFINED AGENTXX_INSTALL_DIR)
   set(AGENTXX_INSTALL_DIR "${CMAKE_BINARY_DIR}/agentxx-project-install/")
 endif()
+# 依赖库查找路径 (独立构建本目录时生效; 嵌套构建时顶层已传 CMAKE_PREFIX_PATH)
+list(PREPEND CMAKE_PREFIX_PATH "${AGENTXX_INSTALL_DIR}")
 if (NOT DEFINED AGENTXX_EXEC_INSTALL_PREFIX)
   set(AGENTXX_EXEC_INSTALL_PREFIX "${CMAKE_BINARY_DIR}/exec")
 endif()
@@ -60,4 +64,14 @@ if (AGENTXX_ENABLE_PLUGIN_JS)
   if (AGENTXX_ENABLE_PLUGIN_EXAMPLE)
     add_subdirectory(example_js)
   endif()
+endif()
+
+# agentxx_codegraph (需 codegraph-cpp 库; 顶层 AGENTXX_ENABLE_PLUGIN_CODEGRAPH 时构建)
+if (AGENTXX_ENABLE_PLUGIN_CODEGRAPH)
+  add_subdirectory(agentxx_codegraph)
+endif()
+
+# agentxx_computer_use (ui_control/screen_capture)
+if (AGENTXX_ENABLE_PLUGIN_COMPUTER_USE)
+  add_subdirectory(agentxx_computer_use)
 endif()
