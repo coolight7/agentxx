@@ -14,6 +14,10 @@
 #undef min
 #endif
 
+// computer_use_plugin.h 的 JSON 辅助 (jsonGetString/jsonGetInt 等) 定义于
+// agentxx_computer_use_plugin 命名空间, 此处直接使用
+using namespace agentxx_computer_use_plugin;
+
 namespace agentxx {
 namespace tools {
 
@@ -892,7 +896,9 @@ static bool uiControlParseCmd(simdjson::ondemand::value& v, UiCmdFields& f) {
     }
     for (auto field : obj) {
         std::string_view key;
-        if (field.key().get(key)) {
+        // key() 返回 raw_json_string (get 只接受 raw_json_string&), 用
+        // unescaped_key 直接取转义后的 string_view (simdjson API 兼容)
+        if (field.unescaped_key().get(key)) {
             continue;
         }
         auto val = field.value();
@@ -1071,7 +1077,7 @@ static UICmdResult uiControlExecuteOne(const UiCmdFields& f) {
     return UICmdResult{false, fmt::format("unknown action: {}", action)};
 }
 
-static std::string uiControlExecute(agentxx_computer_use_plugin::SimpleJson& arguments) {
+std::string uiControlExecute(agentxx_computer_use_plugin::SimpleJson& arguments) {
     auto commands = arguments.doc().at_pointer("/commands");
     if (commands.error()) {
         return R"({"error":"Arg `commands` is required and must be an array"})";
@@ -1095,7 +1101,8 @@ static std::string uiControlExecute(agentxx_computer_use_plugin::SimpleJson& arg
         first = false;
 
         UiCmdFields f;
-        if (!uiControlParseCmd(elem, f) || !f.hasAction || f.action.empty()) {
+        if (elem.error() || !uiControlParseCmd(elem.value(), f) || !f.hasAction
+            || f.action.empty()) {
             results.push_back(codegraph::Json{
                 {"index", i},
                 {"action", ""},

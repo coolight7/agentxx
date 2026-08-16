@@ -19,7 +19,7 @@ if (NOT QUICKJS_LIBRARY OR NOT QUICKJS_INCLUDE_DIR)
 endif()
 
 set(PLUGIN_NAME agentxx_javascript_engine)
-add_library(${PLUGIN_NAME} MODULE
+add_library(${PLUGIN_NAME} SHARED
   agentxx_javascript_engine.cpp
 )
 target_include_directories(${PLUGIN_NAME} PRIVATE

@@ -33,6 +33,16 @@ static std::string dirOf(const std::string& path) {
     return pos == std::string::npos ? "." : path.substr(0, pos);
 }
 
+/// 文件是否存在 (纯 C ABI 插件无文件系统 API, 用 stdio 探测)
+static bool fileExists(const std::string& p) {
+    FILE* f = std::fopen(p.c_str(), "rb");
+    if (f) {
+        std::fclose(f);
+        return true;
+    }
+    return false;
+}
+
 extern "C" const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
     static const AgentxxPluginInfo info{
         AGENTXX_PLUGIN_API_VERSION,
@@ -77,9 +87,22 @@ extern "C" int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) 
     g_name = name;
     g_dir  = dirOf(libPath);
 
+    // 推导 plugin.js 路径: 默认与库同目录; Windows 多配置布局下 DLL 位于
+    // {插件根}/Debug|Release/ 子目录, plugin.js 在插件根 → 上溯一级回退
+    std::string scriptPath = g_dir + "/plugin.js";
+    if (!fileExists(scriptPath)) {
+        auto pos = g_dir.find_last_of("/\\");
+        if (pos != std::string::npos) {
+            std::string parent = g_dir.substr(0, pos);
+            if (fileExists(parent + "/plugin.js")) {
+                g_dir       = parent;
+                scriptPath  = parent + "/plugin.js";
+            }
+        }
+    }
+
     // 委派加载脚本 (经能力调用 → 引擎执行; 脚本内注册动作挂到本插件实例)
     // - args 经 json_escape 转义字段值, 防止路径含引号/反斜杠破坏 JSON
-    std::string scriptPath = g_dir + "/plugin.js";
     char*       escName    = host->vtable->json_escape(host, agentxx_plugin_sv(name.data(), name.size()));
     char*       escPath    = host->vtable->json_escape(host, agentxx_plugin_sv(scriptPath.data(), scriptPath.size()));
     std::string args       = "{\"name\":";

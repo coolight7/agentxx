@@ -10,7 +10,7 @@ if (NOT AGENTXX_ENABLE_PLUGIN_CODEGRAPH)
 endif()
 
 set(PLUGIN_NAME agentxx_codegraph)
-add_library(${PLUGIN_NAME} MODULE
+add_library(${PLUGIN_NAME} SHARED
   agentxx_codegraph.cpp
   codegraph_manager.cpp
 )
@@ -43,10 +43,11 @@ target_link_libraries(${PLUGIN_NAME} PRIVATE
   Glob
   uchardet
   fmt::fmt
-  pthread
-  dl
-  m
 )
+# pthread/dl/m 为 Linux 系统库; Windows/MSVC 无对应导入库 (std::thread 原生), 条件链接
+if (UNIX)
+  target_link_libraries(${PLUGIN_NAME} PRIVATE pthread dl m)
+endif()
 target_link_directories(${PLUGIN_NAME} PRIVATE
   "${AGENTXX_INSTALL_DIR}/lib"
   "${AGENTXX_INSTALL_DIR}/lib/Glob-1.0"
