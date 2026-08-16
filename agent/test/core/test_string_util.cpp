@@ -46,17 +46,21 @@ void test_compareExtend() {
         // - d<=7 走精确路径 (9223372036854775807 是最大可精确表示值)
         // - d>=8 走饱和路径 (映射到 INT64_MAX), 符号仍正确
         XX_TEST_EXPECT_EQ(
-            agentxx::util::compareExtend("x9223372036854775807", "x9223372036854775806"), 1
+            agentxx::util::compareExtend("x9223372036854775807", "x9223372036854775806"),
+            1
         );
         XX_TEST_EXPECT_EQ(
-            agentxx::util::compareExtend("x9223372036854775806", "x9223372036854775807"), -1
+            agentxx::util::compareExtend("x9223372036854775806", "x9223372036854775807"),
+            -1
         );
         // d=8 溢出路径: 饱和后与小数比较符号正确
         XX_TEST_EXPECT_EQ(
-            agentxx::util::compareExtend("x9223372036854775808", "x9223372036854775806"), 1
+            agentxx::util::compareExtend("x9223372036854775808", "x9223372036854775806"),
+            1
         );
         XX_TEST_EXPECT_EQ(
-            agentxx::util::compareExtend("x9223372036854775806", "x9223372036854775808"), -1
+            agentxx::util::compareExtend("x9223372036854775806", "x9223372036854775808"),
+            -1
         );
         XX_TEST_EXPECT_TRUE(agentxx::util::compareExtend("file9223372036854775808", "file1") > 0);
     }

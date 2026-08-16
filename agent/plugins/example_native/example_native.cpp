@@ -9,7 +9,7 @@
  * 5. 卸载: unload 回调主动反注册
  *
  * 编译 (无需链接 libagentxx):
- *   g++ -std=c++17 -fPIC -shared example_native.cpp -o libagentxx_plugin_example.so
+ *   g++ -std=c++26 -fPIC -shared example_native.cpp -o libagentxx_plugin_example.so
  */
 #include "agentxx/plugin/plugin_api.h"
 
@@ -36,19 +36,24 @@ extern "C" const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
 
 /* ---------------- tool: example_echo ---------------- */
 
-static char* echo_execute(void*, const char* args_json, const char* thread_id,
-                          const char* tool_call_id, char** error_out) {
+static char* echo_execute(
+    void*,
+    const char* args_json,
+    const char* thread_id,
+    const char* tool_call_id,
+    char**      error_out
+) {
     (void)tool_call_id;
     if (!g_host) {
         return nullptr; // 宿主不可用: 无法分配错误串 (host 为 null)
     }
     // 结果 JSON: {"echo": <原样参数>}
-    char*       escTid = g_host->vtable->json_escape(g_host, thread_id ? thread_id : "");
-    std::string out    = "{\"echo\": ";
-    out += (args_json ? args_json : "{}");
-    out += ", \"thread_id\": ";
-    out += escTid ? escTid : "\"\"";
-    out += "}";
+    char*       escTid  = g_host->vtable->json_escape(g_host, thread_id ? thread_id : "");
+    std::string out     = "{\"echo\": ";
+    out                += (args_json ? args_json : "{}");
+    out                += ", \"thread_id\": ";
+    out                += escTid ? escTid : "\"\"";
+    out                += "}";
     if (escTid) {
         g_host->vtable->free(escTid);
     }
@@ -60,8 +65,13 @@ static char* echo_execute(void*, const char* args_json, const char* thread_id,
 /// 阻塞 duration_ms 毫秒后返回 (模拟慢插件工具):
 /// - 宿主超时/取消只终止"等待", 本回调一旦开始执行将持续到返回
 ///   (宿主按 inflight 计数保证执行期间插件代码段不被卸载)
-static char* sleep_execute(void*, const char* args_json, const char* thread_id,
-                           const char* tool_call_id, char** error_out) {
+static char* sleep_execute(
+    void*,
+    const char* args_json,
+    const char* thread_id,
+    const char* tool_call_id,
+    char**      error_out
+) {
     (void)thread_id;
     (void)tool_call_id;
     if (!g_host) {
@@ -81,25 +91,30 @@ static char* sleep_execute(void*, const char* args_json, const char* thread_id,
         }
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(std::max(ms, 0)));
-    std::string out = "{\"slept_ms\": ";
-    out += std::to_string(ms);
-    out += "}";
+    std::string out  = "{\"slept_ms\": ";
+    out             += std::to_string(ms);
+    out             += "}";
     return g_host->vtable->strdup(out.c_str());
 }
 
 /* ---------------- tool: example_caller (互调) ---------------- */
 
-static char* caller_execute(void*, const char* args_json, const char* thread_id,
-                            const char* tool_call_id, char** error_out) {
+static char* caller_execute(
+    void*,
+    const char* args_json,
+    const char* thread_id,
+    const char* tool_call_id,
+    char**      error_out
+) {
     (void)tool_call_id;
     if (!g_host) {
         return nullptr;
     }
     // 调用本插件的另一个工具 example_echo, 演示插件互调
-    char* err  = nullptr;
-    char* resp = g_host->vtable->call_tool(
-        g_host, "example_echo", args_json ? args_json : "{}", thread_id, &err
-    );
+    char* err = nullptr;
+    char* resp
+        = g_host->vtable
+              ->call_tool(g_host, "example_echo", args_json ? args_json : "{}", thread_id, &err);
     if (!resp) {
         if (err) {
             *error_out = err; // 直接移交
@@ -108,17 +123,22 @@ static char* caller_execute(void*, const char* args_json, const char* thread_id,
         }
         return nullptr;
     }
-    std::string out = "{\"via_call_tool\": ";
-    out += resp;
-    out += "}";
+    std::string out  = "{\"via_call_tool\": ";
+    out             += resp;
+    out             += "}";
     g_host->vtable->free(resp);
     return g_host->vtable->strdup(out.c_str());
 }
 
 /* ---------------- hook: agent_start ---------------- */
 
-static int on_agent_start(void* user_data, AgentxxHookPoint point, const char* node_input_json,
-                          char** out_json, char** error_out) {
+static int on_agent_start(
+    void*            user_data,
+    AgentxxHookPoint point,
+    const char*      node_input_json,
+    char**           out_json,
+    char**           error_out
+) {
     (void)user_data;
     (void)out_json;
     (void)error_out;
@@ -164,18 +184,18 @@ extern "C" int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) 
 
     // 慢工具: 测试插件超时/卸载竞态 (宿主超时后回调仍可能执行, inflight 保活)
     AgentxxToolSpec sleeper{};
-    sleeper.name            = "example_sleep";
-    sleeper.description     = "Sleep duration_ms milliseconds then return (slow plugin tool).";
-    sleeper.parameters_json = R"({"type":"object","properties":{"duration_ms":{"type":"integer"}}})";
-    sleeper.execute         = sleep_execute;
+    sleeper.name        = "example_sleep";
+    sleeper.description = "Sleep duration_ms milliseconds then return (slow plugin tool).";
+    sleeper.parameters_json
+        = R"({"type":"object","properties":{"duration_ms":{"type":"integer"}}})";
+    sleeper.execute            = sleep_execute;
     sleeper.default_timeout_ms = 0; // 无默认超时 (测试用例自行指定)
     if (host->vtable->register_tool(host, &sleeper) != 0) {
         return -1;
     }
 
     // 2. 钩子 (agent_start)
-    if (host->vtable->register_hook(host, AGENTXX_HOOK_AGENT_START, on_agent_start, nullptr)
-        != 0) {
+    if (host->vtable->register_hook(host, AGENTXX_HOOK_AGENT_START, on_agent_start, nullptr) != 0) {
         return -1;
     }
 

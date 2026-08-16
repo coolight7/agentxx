@@ -1,5 +1,5 @@
 /*
- * agentxx_plugin_js —— JS 解释器插件 (二期)
+ * agentxx_javascript_engine —— JS 解释器插件 (二期)
  *
  * 功能: 注册 "interpreter.js" 脚本引擎, 承载加载/卸载 type: js 的脚本插件
  *
@@ -95,14 +95,14 @@ struct JsPluginCtx {
     JSContext*         ctx      = nullptr;
     const AgentxxHost* host     = nullptr; ///< 脚本插件宿主句柄
     JsEngine*          engine   = nullptr;
-    bool               deleted  = false;   ///< 已卸载 (入队任务检查后跳过)
-    size_t             inflight = 0;       ///< 在途访问任务数 (execute/hook/event)
+    bool               deleted  = false; ///< 已卸载 (入队任务检查后跳过)
+    size_t             inflight = 0;     ///< 在途访问任务数 (execute/hook/event)
     /// 工具表: 普通对象 name -> {execute, name, description}
-    JSValue tools  = JS_UNDEFINED;
+    JSValue tools = JS_UNDEFINED;
     /// 钩子表: Array(7) 元素为 fn 或 null
-    JSValue hooks  = JS_UNDEFINED;
+    JSValue hooks = JS_UNDEFINED;
     /// 订阅表: Array of {topic, handler, token}
-    JSValue agents = JS_UNDEFINED;
+    JSValue                                     agents = JS_UNDEFINED;
     std::vector<std::unique_ptr<JsToolBinding>> toolBindings;
     std::vector<std::unique_ptr<JsHookBinding>> hookBindings;
 
@@ -150,10 +150,17 @@ public:
 
     /// 能力方法回调使用的公共接口 (jsInvoke 自由函数):
     /// 在 JS 线程加载脚本 (host = 脚本插件 C++ 壳实例)
-    void loadScriptInEngine(const AgentxxHost* host, const std::string& name,
-                            const std::string& path, const std::string& code,
-                            int& rc, std::string& err) {
-        if (!postSync([&]() { rc = doLoadScript(host, name, path, code, err); })) {
+    void loadScriptInEngine(
+        const AgentxxHost* host,
+        const std::string& name,
+        const std::string& path,
+        const std::string& code,
+        int&               rc,
+        std::string&       err
+    ) {
+        if (!postSync([&]() {
+                rc = doLoadScript(host, name, path, code, err);
+            })) {
             // 引擎已停止: 置失败状态 (postSync 未执行 lambda, rc/err 未被赋值)
             rc  = -1;
             err = "interpreter.js engine stopped";
@@ -163,7 +170,9 @@ public:
     /// 投递式卸载脚本 (不等待); 引擎停止时静默忽略
     void unloadScript(const char* script_name) {
         std::string name{script_name};
-        post([this, name]() { doUnloadScript(name); });
+        post([this, name]() {
+            doUnloadScript(name);
+        });
     }
 
     /// 已加载脚本的工具名 JSON 数组 (JS 线程; 手工拼接, 不依赖宿主 JSON 库)
@@ -175,14 +184,14 @@ public:
                     out = "[]";
                     return;
                 }
-                out = "[";
+                out        = "[";
                 bool first = true;
                 for (auto& k : jsToolsSnapshot(pctx.get())) {
                     if (!first) {
                         out += ",";
                     }
-                    first = false;
-                    out += "\"" + k + "\"";
+                    first  = false;
+                    out   += "\"" + k + "\"";
                 }
                 out += "]";
             })) {
@@ -192,12 +201,22 @@ public:
     }
 
     /// 工具 execute 桥: 宿主线程池调用; postSync 到 JS 线程执行 (类外定义)
-    static char* toolExecute(void* ud, const char* args_json, const char* thread_id,
-                             const char* tool_call_id, char** error_out);
+    static char* toolExecute(
+        void*       ud,
+        const char* args_json,
+        const char* thread_id,
+        const char* tool_call_id,
+        char**      error_out
+    );
 
     /// 钩子回调桥: io 线程调用; post 到 JS 线程 (fire-and-forget) (类外定义)
-    static int hookFire(void* ud, AgentxxHookPoint point, const char* node_input_json,
-                        char** out_json, char** error_out);
+    static int hookFire(
+        void*            ud,
+        AgentxxHookPoint point,
+        const char*      node_input_json,
+        char**           out_json,
+        char**           error_out
+    );
 
     /// 事件回调桥: io 线程调用; post 到 JS 线程 (fire-and-forget) (类外定义)
     static void eventFire(const char* event_json, void* ud);
@@ -239,7 +258,9 @@ public:
         }
         cv_.notify_one();
         std::unique_lock<std::mutex> lk(m);
-        cv.wait(lk, [&]() { return done; });
+        cv.wait(lk, [&]() {
+            return done;
+        });
         return true;
     }
 
@@ -248,7 +269,7 @@ public:
     /// 查找脚本插件上下文 (跨线程; 返回强引用保证存活)
     std::shared_ptr<JsPluginCtx> findPlugin(const std::string& name) {
         std::lock_guard<std::mutex> lk(mirrorMtx_);
-        auto it = mirror_.find(name);
+        auto                        it = mirror_.find(name);
         if (it == mirror_.end()) {
             return nullptr;
         }
@@ -289,8 +310,8 @@ private:
                 continue;
             }
             auto timer = std::move(it->second);
-            it = timers_.erase(it);
-            auto pctx = findPlugin(timer.plugin);
+            it         = timers_.erase(it);
+            auto pctx  = findPlugin(timer.plugin);
             if (!pctx || pctx->deleted || !pctx->ctx) {
                 continue; // 上下文已销毁, fn 引用随 JsPluginCtx 释放
             }
@@ -310,11 +331,15 @@ private:
             std::function<void()> task;
             {
                 std::unique_lock<std::mutex> lk(mtx_);
-                auto next = nextTimerLocked();
+                auto                         next = nextTimerLocked();
                 if (next == std::chrono::steady_clock::time_point::max()) {
-                    cv_.wait(lk, [&]() { return stop_ || !queue_.empty(); });
+                    cv_.wait(lk, [&]() {
+                        return stop_ || !queue_.empty();
+                    });
                 } else {
-                    cv_.wait_until(lk, next, [&]() { return stop_ || !queue_.empty(); });
+                    cv_.wait_until(lk, next, [&]() {
+                        return stop_ || !queue_.empty();
+                    });
                 }
                 // 退出条件仅看 stop_ + 队列: 未到期长定时器不再导致退出前忙循环
                 // (定时器引用在下方 break 前统一释放)
@@ -374,15 +399,20 @@ private:
 
     // ==================== 插件加载/卸载 (JS 线程) ====================
 
-    int doLoadScript(const AgentxxHost* host, const std::string& name, const std::string& path,
-                     const std::string& code, std::string& err) {
+    int doLoadScript(
+        const AgentxxHost* host,
+        const std::string& name,
+        const std::string& path,
+        const std::string& code,
+        std::string&       err
+    ) {
         if (plugins_.find(name) != plugins_.end()) {
             err = "plugin already loaded: " + name;
             return -1;
         }
-        auto pctx  = std::make_shared<JsPluginCtx>();
-        pctx->name = name;
-        pctx->host = host;
+        auto pctx    = std::make_shared<JsPluginCtx>();
+        pctx->name   = name;
+        pctx->host   = host;
         pctx->engine = this;
         pctx->ctx    = JS_NewContext(rt_);
         if (!pctx->ctx) {
@@ -425,7 +455,7 @@ private:
         if (it == plugins_.end()) {
             return;
         }
-        auto pctx = it->second;
+        auto pctx     = it->second;
         pctx->deleted = true;
         pctx->host    = nullptr; // 后续任务不得再调用宿主
         plugins_.erase(it);
@@ -454,10 +484,16 @@ private:
             return;
         }
         pctx->inflight++;
+
         struct InflightGuard {
             JsPluginCtx* p;
-            explicit InflightGuard(JsPluginCtx* pctx) : p(pctx) {}
-            ~InflightGuard() { p->inflight--; }
+
+            explicit InflightGuard(JsPluginCtx* pctx) :
+                p(pctx) {}
+
+            ~InflightGuard() {
+                p->inflight--;
+            }
         } guard(pctx.get());
 
         JSValue entry = JS_GetPropertyStr(pctx->ctx, pctx->tools, binding->name.c_str());
@@ -482,7 +518,12 @@ private:
         }
         JSValue ctxObj = JS_NewObject(pctx->ctx);
         JS_SetPropertyStr(pctx->ctx, ctxObj, "thread_id", JS_NewString(pctx->ctx, req.tid.c_str()));
-        JS_SetPropertyStr(pctx->ctx, ctxObj, "tool_call_id", JS_NewString(pctx->ctx, req.tcid.c_str()));
+        JS_SetPropertyStr(
+            pctx->ctx,
+            ctxObj,
+            "tool_call_id",
+            JS_NewString(pctx->ctx, req.tcid.c_str())
+        );
         JSValue argv[2] = {argsObj, ctxObj};
         JSValue ret     = JS_Call(pctx->ctx, execFn, JS_UNDEFINED, 2, argv);
         JS_FreeValue(pctx->ctx, argsObj);
@@ -508,10 +549,16 @@ private:
             return;
         }
         pctx->inflight++;
+
         struct InflightGuard {
             JsPluginCtx* p;
-            explicit InflightGuard(JsPluginCtx* pctx) : p(pctx) {}
-            ~InflightGuard() { p->inflight--; }
+
+            explicit InflightGuard(JsPluginCtx* pctx) :
+                p(pctx) {}
+
+            ~InflightGuard() {
+                p->inflight--;
+            }
         } guard(pctx.get());
 
         JSValue fn = JS_GetPropertyUint32(pctx->ctx, pctx->hooks, static_cast<uint32_t>(point));
@@ -536,15 +583,21 @@ private:
             return;
         }
         pctx->inflight++;
+
         struct InflightGuard {
             JsPluginCtx* p;
-            explicit InflightGuard(JsPluginCtx* pctx) : p(pctx) {}
-            ~InflightGuard() { p->inflight--; }
+
+            explicit InflightGuard(JsPluginCtx* pctx) :
+                p(pctx) {}
+
+            ~InflightGuard() {
+                p->inflight--;
+            }
         } guard(pctx.get());
 
         // 遍历订阅表, 触发全部 handler (payload 为事件 JSON 字符串)
-        JSValue lenVal = JS_GetPropertyStr(pctx->ctx, pctx->agents, "length");
-        uint32_t len   = 0;
+        JSValue  lenVal = JS_GetPropertyStr(pctx->ctx, pctx->agents, "length");
+        uint32_t len    = 0;
         JS_ToUint32(pctx->ctx, &len, lenVal);
         JS_FreeValue(pctx->ctx, lenVal);
         for (uint32_t i = 0; i < len; ++i) {
@@ -552,7 +605,8 @@ private:
             if (JS_IsObject(entry)) {
                 JSValue handler = JS_GetPropertyStr(pctx->ctx, entry, "handler");
                 if (JS_IsFunction(pctx->ctx, handler)) {
-                    JSValue arg = JS_ParseJSON(pctx->ctx, payload.c_str(), payload.size(), "<event>");
+                    JSValue arg
+                        = JS_ParseJSON(pctx->ctx, payload.c_str(), payload.size(), "<event>");
                     if (JS_IsException(arg)) {
                         JS_FreeValue(pctx->ctx, arg);
                         arg = JS_NewString(pctx->ctx, payload.c_str());
@@ -582,7 +636,7 @@ private:
         int guard = 0;
         while (JS_PromiseState(pctx->ctx, value) == JS_PROMISE_PENDING && guard++ < 120000) {
             JSContext* jobCtx = nullptr;
-            int rc = JS_ExecutePendingJob(rt_, &jobCtx);
+            int        rc     = JS_ExecutePendingJob(rt_, &jobCtx);
             if (rc < 0) {
                 return JS_NewString(pctx->ctx, "[pending job exception]");
             }
@@ -598,7 +652,9 @@ private:
                     std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 } else {
                     std::unique_lock<std::mutex> lk(mtx_);
-                    cv_.wait_until(lk, next, [&]() { return stop_; });
+                    cv_.wait_until(lk, next, [&]() {
+                        return stop_;
+                    });
                 }
             }
         }
@@ -606,7 +662,7 @@ private:
             return JS_PromiseResult(pctx->ctx, value); // 新引用, 调用方 Free
         }
         if (JS_PromiseState(pctx->ctx, value) == JS_PROMISE_REJECTED) {
-            JSValue r = JS_PromiseResult(pctx->ctx, value);
+            JSValue     r = JS_PromiseResult(pctx->ctx, value);
             std::string s = valueToJsonString(pctx->ctx, r);
             return JS_NewString(pctx->ctx, s.c_str());
         }
@@ -617,7 +673,7 @@ private:
 
     std::string extractException(JSContext* ctx, JSValue exc) {
         (void)exc;
-        JSValue e = JS_GetException(ctx);
+        JSValue     e = JS_GetException(ctx);
         std::string s = valueToJsonString(ctx, e);
         JS_FreeValue(ctx, e);
         return s;
@@ -625,9 +681,8 @@ private:
 
     /// 值 → 字符串 (对象 JSON 序列化; 字符串原样; 其他 String() 转换)
     std::string valueToJsonString(JSContext* ctx, JSValueConst v) {
-        if (JS_IsString(v) || JS_IsUndefined(v) || JS_IsNull(v) || JS_IsBool(v)
-            || JS_IsNumber(v)) {
-            const char* s = JS_ToCString(ctx, v);
+        if (JS_IsString(v) || JS_IsUndefined(v) || JS_IsNull(v) || JS_IsBool(v) || JS_IsNumber(v)) {
+            const char* s   = JS_ToCString(ctx, v);
             std::string out = s ? s : "";
             JS_FreeCString(ctx, s);
             return out;
@@ -635,33 +690,20 @@ private:
         JSValue json = JS_JSONStringify(ctx, v, JS_UNDEFINED, JS_UNDEFINED);
         if (JS_IsException(json)) {
             JS_FreeValue(ctx, json);
-            const char* s = JS_ToCString(ctx, v);
+            const char* s   = JS_ToCString(ctx, v);
             std::string out = s ? s : "";
             JS_FreeCString(ctx, s);
             return out;
         }
-        const char* s = JS_ToCString(ctx, json);
+        const char* s   = JS_ToCString(ctx, json);
         std::string out = s ? s : "";
         JS_FreeCString(ctx, s);
         JS_FreeValue(ctx, json);
         return out;
     }
 
-    static std::string pluginNameFromPath(const std::string& path) {
-        auto pos = path.find_last_of("/\\");
-        std::string base = pos == std::string::npos ? path : path.substr(pos + 1);
-        if (base.size() > 3 && base.compare(0, 3, "lib") == 0) {
-            base.erase(0, 3);
-        }
-        auto dot = base.find_last_of('.');
-        if (dot != std::string::npos) {
-            base.erase(dot);
-        }
-        return base;
-    }
-
     static std::string jsToCppString(JSContext* ctx, JSValueConst v) {
-        const char* s = JS_ToCString(ctx, v);
+        const char* s   = JS_ToCString(ctx, v);
         std::string out = s ? s : "";
         JS_FreeCString(ctx, s);
         return out;
@@ -670,42 +712,58 @@ private:
     // ==================== 桥注入 ====================
 
     bool injectBridge(JsPluginCtx* pctx) {
-        JSContext* ctx = pctx->ctx;
-        JSValue global = JS_GetGlobalObject(ctx);
-        JSValue bridge = JS_NewObject(ctx);
+        JSContext* ctx    = pctx->ctx;
+        JSValue    global = JS_GetGlobalObject(ctx);
+        JSValue    bridge = JS_NewObject(ctx);
 
         auto def = [&](const char* name, int magic, int nargs) {
             // 注意: JS_SetProperty* 为 move 语义 (消费传入值), 不得再 Free
-            JSValue fn = JS_NewCFunction2(ctx, reinterpret_cast<JSCFunction*>(&JsEngine::bridgeCall),
-                                    name, nargs, JS_CFUNC_generic_magic, magic);
+            JSValue fn = JS_NewCFunction2(
+                ctx,
+                reinterpret_cast<JSCFunction*>(&JsEngine::bridgeCall),
+                name,
+                nargs,
+                JS_CFUNC_generic_magic,
+                magic
+            );
             JS_SetPropertyStr(ctx, bridge, name, fn);
         };
-        def("registerTool",   B_REGISTER_TOOL,    1);
-        def("unregisterTool", B_UNREGISTER_TOOL,  1);
-        def("callTool",       B_CALL_TOOL,        3);
-        def("getShareStore",  B_GET_SHARE_STORE,  2);
+        def("registerTool", B_REGISTER_TOOL, 1);
+        def("unregisterTool", B_UNREGISTER_TOOL, 1);
+        def("callTool", B_CALL_TOOL, 3);
+        def("getShareStore", B_GET_SHARE_STORE, 2);
         def("emitMessageTip", B_EMIT_MESSAGE_TIP, 3);
-        def("log",            B_LOG,              2);
-        def("onHook",         B_REGISTER_HOOK,    2);
-        def("offHook",        B_UNREGISTER_HOOK,  2);
-        def("subscribe",      B_SUBSCRIBE,        2);
-        def("unsubscribe",    B_UNSUBSCRIBE,      1);
-        def("publish",        B_PUBLISH,          2);
-        def("setTimeout",     B_SET_TIMEOUT,      2);
-        def("clearTimeout",   B_CLEAR_TIMEOUT,    1);
-        def("listPlugins",    B_LIST_PLUGINS,     0);
-        def("getPlugin",      B_GET_PLUGIN,       1);
+        def("log", B_LOG, 2);
+        def("onHook", B_REGISTER_HOOK, 2);
+        def("offHook", B_UNREGISTER_HOOK, 2);
+        def("subscribe", B_SUBSCRIBE, 2);
+        def("unsubscribe", B_UNSUBSCRIBE, 1);
+        def("publish", B_PUBLISH, 2);
+        def("setTimeout", B_SET_TIMEOUT, 2);
+        def("clearTimeout", B_CLEAR_TIMEOUT, 1);
+        def("listPlugins", B_LIST_PLUGINS, 0);
+        def("getPlugin", B_GET_PLUGIN, 1);
 
         int ok = JS_SetPropertyStr(ctx, global, "agentxx", bridge) >= 0;
         // 常用工具函数注入全局 (沙箱内可用): 裸 setTimeout/clearTimeout
         if (ok) {
             JSValue fn = JS_NewCFunction2(
-                ctx, reinterpret_cast<JSCFunction*>(&JsEngine::bridgeCall),
-                "setTimeout", 2, JS_CFUNC_generic_magic, B_SET_TIMEOUT);
+                ctx,
+                reinterpret_cast<JSCFunction*>(&JsEngine::bridgeCall),
+                "setTimeout",
+                2,
+                JS_CFUNC_generic_magic,
+                B_SET_TIMEOUT
+            );
             JS_SetPropertyStr(ctx, global, "setTimeout", fn);
             fn = JS_NewCFunction2(
-                ctx, reinterpret_cast<JSCFunction*>(&JsEngine::bridgeCall),
-                "clearTimeout", 1, JS_CFUNC_generic_magic, B_CLEAR_TIMEOUT);
+                ctx,
+                reinterpret_cast<JSCFunction*>(&JsEngine::bridgeCall),
+                "clearTimeout",
+                1,
+                JS_CFUNC_generic_magic,
+                B_CLEAR_TIMEOUT
+            );
             JS_SetPropertyStr(ctx, global, "clearTimeout", fn);
         }
         JS_FreeValue(ctx, global);
@@ -713,18 +771,18 @@ private:
     }
 
     /// agentxx.* 桥 C 函数 (magic 分派; ctx opaque = JsPluginCtx*)
-    static JSValue bridgeCall(JSContext* ctx, JSValueConst this_val, int argc,
-                              JSValueConst* argv, int magic);
+    static JSValue
+        bridgeCall(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic);
 
     // ==================== 成员 ====================
 
-    JSRuntime*          rt_         = nullptr;
-    const AgentxxHost*  engineHost_ = nullptr;
-    std::thread         thread_;
-    std::mutex          mtx_;
-    std::condition_variable cv_;
+    JSRuntime*                        rt_         = nullptr;
+    const AgentxxHost*                engineHost_ = nullptr;
+    std::thread                       thread_;
+    std::mutex                        mtx_;
+    std::condition_variable           cv_;
     std::deque<std::function<void()>> queue_;
-    bool stop_ = false;
+    bool                              stop_ = false;
 
     std::chrono::steady_clock::time_point taskStart_;
 
@@ -734,16 +792,22 @@ private:
         std::string                           plugin;
         JSValue                               fn;
     };
+
     std::map<uint64_t, JsTimer> timers_;
     uint64_t                    timerSeq_ = 0;
 
     /// 工具表属性名快照 (JS 线程; tools 为普通对象 name -> entry)
     std::vector<std::string> jsToolsSnapshot(JsPluginCtx* pctx) {
         std::vector<std::string> out;
-        JSPropertyEnum* props = nullptr;
-        uint32_t        n     = 0;
-        if (JS_GetOwnPropertyNames(pctx->ctx, &props, &n, pctx->tools,
-                                   JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY)
+        JSPropertyEnum*          props = nullptr;
+        uint32_t                 n     = 0;
+        if (JS_GetOwnPropertyNames(
+                pctx->ctx,
+                &props,
+                &n,
+                pctx->tools,
+                JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY
+            )
             == 0) {
             for (uint32_t i = 0; i < n; ++i) {
                 const char* k = JS_AtomToCString(pctx->ctx, props[i].atom);
@@ -760,81 +824,93 @@ private:
     /// 脚本插件表 (JS 线程访问)
     std::map<std::string, std::shared_ptr<JsPluginCtx>, std::less<>> plugins_;
     /// 跨线程镜像 <name, weak_ptr> (互斥锁保护)
-    std::mutex mirrorMtx_;
+    std::mutex                                                     mirrorMtx_;
     std::map<std::string, std::weak_ptr<JsPluginCtx>, std::less<>> mirror_;
 };
 
-char* JsEngine::toolExecute(void* ud, const char* args_json, const char* thread_id,
-                             const char* tool_call_id, char** error_out) {
-        auto* binding = static_cast<JsToolBinding*>(ud);
-        auto* engine  = binding ? binding->engine : nullptr;
-        if (!engine) {
-            return nullptr;
-        }
-        auto req = std::make_shared<ToolExecReq>();
-        req->args = args_json ? args_json : "{}";
-        req->tid  = thread_id ? thread_id : "";
-        req->tcid = tool_call_id ? tool_call_id : "";
-
-        std::mutex              m;
-        std::condition_variable cv;
-        if (!engine->post([engine, binding, req, &m, &cv]() {
-                engine->doToolExecute(binding, *req);
-                {
-                    std::lock_guard<std::mutex> lk(m);
-                    req->done = true;
-                }
-                cv.notify_one();
-            })) {
-            // 引擎已停止: 不再阻塞等待 (否则线程池线程永久挂起)
-            if (error_out && engine->engineHost_) {
-                *error_out = engine->engineHost_->vtable->strdup("interpreter.js engine stopped");
-            }
-            return nullptr;
-        }
-        {
-            std::unique_lock<std::mutex> lk(m);
-            cv.wait(lk, [&]() { return req->done; });
-        }
-
-        const AgentxxHost* host = engine->engineHost_;
-        if (!req->error.empty()) {
-            if (error_out && host) {
-                *error_out = host->vtable->strdup(req->error.c_str());
-            }
-            return nullptr;
-        }
-        return host ? host->vtable->strdup(req->result.c_str()) : nullptr;
+char* JsEngine::toolExecute(
+    void*       ud,
+    const char* args_json,
+    const char* thread_id,
+    const char* tool_call_id,
+    char**      error_out
+) {
+    auto* binding = static_cast<JsToolBinding*>(ud);
+    auto* engine  = binding ? binding->engine : nullptr;
+    if (!engine) {
+        return nullptr;
     }
+    auto req  = std::make_shared<ToolExecReq>();
+    req->args = args_json ? args_json : "{}";
+    req->tid  = thread_id ? thread_id : "";
+    req->tcid = tool_call_id ? tool_call_id : "";
 
-int JsEngine::hookFire(void* ud, AgentxxHookPoint point, const char* node_input_json,
-                        char** out_json, char** error_out) {
-        (void)out_json;
-        (void)error_out;
-        auto* binding = static_cast<JsHookBinding*>(ud);
-        auto* engine  = binding ? binding->engine : nullptr;
-        if (!engine) {
-            return 1;
+    std::mutex              m;
+    std::condition_variable cv;
+    if (!engine->post([engine, binding, req, &m, &cv]() {
+            engine->doToolExecute(binding, *req);
+            {
+                std::lock_guard<std::mutex> lk(m);
+                req->done = true;
+            }
+            cv.notify_one();
+        })) {
+        // 引擎已停止: 不再阻塞等待 (否则线程池线程永久挂起)
+        if (error_out && engine->engineHost_) {
+            *error_out = engine->engineHost_->vtable->strdup("interpreter.js engine stopped");
         }
-        std::string payload = node_input_json ? node_input_json : "";
-        int         pt      = static_cast<int>(point);
-        engine->post([engine, binding, payload, pt]() {
-            engine->doHookFire(binding, pt, payload);
+        return nullptr;
+    }
+    {
+        std::unique_lock<std::mutex> lk(m);
+        cv.wait(lk, [&]() {
+            return req->done;
         });
-        return 0;
     }
+
+    const AgentxxHost* host = engine->engineHost_;
+    if (!req->error.empty()) {
+        if (error_out && host) {
+            *error_out = host->vtable->strdup(req->error.c_str());
+        }
+        return nullptr;
+    }
+    return host ? host->vtable->strdup(req->result.c_str()) : nullptr;
+}
+
+int JsEngine::hookFire(
+    void*            ud,
+    AgentxxHookPoint point,
+    const char*      node_input_json,
+    char**           out_json,
+    char**           error_out
+) {
+    (void)out_json;
+    (void)error_out;
+    auto* binding = static_cast<JsHookBinding*>(ud);
+    auto* engine  = binding ? binding->engine : nullptr;
+    if (!engine) {
+        return 1;
+    }
+    std::string payload = node_input_json ? node_input_json : "";
+    int         pt      = static_cast<int>(point);
+    engine->post([engine, binding, payload, pt]() {
+        engine->doHookFire(binding, pt, payload);
+    });
+    return 0;
+}
 
 void JsEngine::eventFire(const char* event_json, void* ud) {
-        auto* binding = static_cast<JsHookBinding*>(ud);
-        auto* engine  = binding ? binding->engine : nullptr;
-        if (!engine) {
-            return;
-        }
-        std::string payload = event_json ? event_json : "";
-        engine->post([engine, binding, payload]() { engine->doEventFire(binding, payload); });
+    auto* binding = static_cast<JsHookBinding*>(ud);
+    auto* engine  = binding ? binding->engine : nullptr;
+    if (!engine) {
+        return;
     }
-
-
+    std::string payload = event_json ? event_json : "";
+    engine->post([engine, binding, payload]() {
+        engine->doEventFire(binding, payload);
+    });
+}
 
 namespace {
 
@@ -869,8 +945,13 @@ static JSValue throwJsError(JSContext* ctx, const std::string& msg) {
 // agentxx 桥实现 (C 函数, magic 分派)
 // =====================================================================
 
-JSValue JsEngine::bridgeCall(JSContext* ctx, JSValueConst this_val, int argc,
-                             JSValueConst* argv, int magic) {
+JSValue JsEngine::bridgeCall(
+    JSContext*    ctx,
+    JSValueConst  this_val,
+    int           argc,
+    JSValueConst* argv,
+    int           magic
+) {
     (void)this_val;
     auto* pctx = pluginCtxOf(ctx);
     if (!pctx || !pctx->host || !pctx->engine) {
@@ -885,10 +966,10 @@ JSValue JsEngine::bridgeCall(JSContext* ctx, JSValueConst this_val, int argc,
             if (argc < 1 || !JS_IsObject(argv[0])) {
                 return JS_ThrowTypeError(ctx, "registerTool: spec object required");
             }
-            auto specObj = argv[0];
-            std::string name = jsToCppString(ctx, JS_GetPropertyStr(ctx, specObj, "name"));
-            std::string desc = jsToCppString(ctx, JS_GetPropertyStr(ctx, specObj, "description"));
-            JSValue params = JS_GetPropertyStr(ctx, specObj, "parameters");
+            auto        specObj = argv[0];
+            std::string name    = jsToCppString(ctx, JS_GetPropertyStr(ctx, specObj, "name"));
+            std::string desc   = jsToCppString(ctx, JS_GetPropertyStr(ctx, specObj, "description"));
+            JSValue     params = JS_GetPropertyStr(ctx, specObj, "parameters");
             std::string paramsJson = "{}";
             if (JS_IsObject(params)) {
                 JSValue json = JS_JSONStringify(ctx, params, JS_UNDEFINED, JS_UNDEFINED);
@@ -911,7 +992,7 @@ JSValue JsEngine::bridgeCall(JSContext* ctx, JSValueConst this_val, int argc,
             }
 
             // 工具绑定 (宿主 execute 回调 → 本插件)
-            auto binding = std::make_unique<JsToolBinding>();
+            auto binding    = std::make_unique<JsToolBinding>();
             binding->engine = engine;
             binding->plugin = pctx->name;
             binding->name   = name;
@@ -922,10 +1003,13 @@ JSValue JsEngine::bridgeCall(JSContext* ctx, JSValueConst this_val, int argc,
             spec.parameters_json = paramsJson.c_str();
             spec.execute         = &JsEngine::toolExecute;
             spec.user_data       = binding.get();
-            int rc = vt.register_tool(host, &spec);
+            int rc               = vt.register_tool(host, &spec);
             if (rc != 0) {
                 JS_FreeValue(ctx, execFn);
-                return throwJsError(ctx, "registerTool: host registration failed (conflict?): " + name);
+                return throwJsError(
+                    ctx,
+                    "registerTool: host registration failed (conflict?): " + name
+                );
             }
 
             // JS 侧工具表登记 (供 JS 内 callTool 内联执行)
@@ -954,7 +1038,7 @@ JSValue JsEngine::bridgeCall(JSContext* ctx, JSValueConst this_val, int argc,
             if (argc < 1) {
                 return JS_ThrowTypeError(ctx, "callTool: name required");
             }
-            std::string name = jsToCppString(ctx, argv[0]);
+            std::string name     = jsToCppString(ctx, argv[0]);
             std::string argsJson = "{}";
             if (argc >= 2) {
                 if (JS_IsString(argv[1])) {
@@ -977,13 +1061,19 @@ JSValue JsEngine::bridgeCall(JSContext* ctx, JSValueConst this_val, int argc,
                 JSValue execFn = JS_GetPropertyStr(ctx, entry, "execute");
                 JS_FreeValue(ctx, entry);
                 if (JS_IsFunction(ctx, execFn)) {
-                    JSValue argsObj = JS_ParseJSON(ctx, argsJson.c_str(), argsJson.size(), "<args>");
+                    JSValue argsObj
+                        = JS_ParseJSON(ctx, argsJson.c_str(), argsJson.size(), "<args>");
                     if (JS_IsException(argsObj)) {
                         JS_FreeValue(ctx, argsObj);
                         argsObj = JS_NewObject(ctx);
                     }
                     JSValue ctxObj = JS_NewObject(ctx);
-                    JS_SetPropertyStr(ctx, ctxObj, "thread_id", JS_NewString(ctx, threadId.c_str()));
+                    JS_SetPropertyStr(
+                        ctx,
+                        ctxObj,
+                        "thread_id",
+                        JS_NewString(ctx, threadId.c_str())
+                    );
                     JS_SetPropertyStr(ctx, ctxObj, "tool_call_id", JS_NewString(ctx, "js_call"));
                     JSValue argv2[2] = {argsObj, ctxObj};
                     JSValue ret      = JS_Call(ctx, execFn, JS_UNDEFINED, 2, argv2);
@@ -1072,24 +1162,36 @@ JSValue JsEngine::bridgeCall(JSContext* ctx, JSValueConst this_val, int argc,
             if (JS_IsFunction(ctx, oldFn)) {
                 for (auto& b : pctx->hookBindings) {
                     if (b->point == point) {
-                        vt.unregister_hook(host, static_cast<AgentxxHookPoint>(point),
-                                           &JsEngine::hookFire, b.get());
+                        vt.unregister_hook(
+                            host,
+                            static_cast<AgentxxHookPoint>(point),
+                            &JsEngine::hookFire,
+                            b.get()
+                        );
                     }
                 }
             }
             JS_FreeValue(ctx, oldFn);
 
-            auto binding = std::make_unique<JsHookBinding>();
+            auto binding    = std::make_unique<JsHookBinding>();
             binding->engine = engine;
             binding->plugin = pctx->name;
             binding->point  = point;
-            int rc = vt.register_hook(host, static_cast<AgentxxHookPoint>(point),
-                                      &JsEngine::hookFire, binding.get());
+            int rc          = vt.register_hook(
+                host,
+                static_cast<AgentxxHookPoint>(point),
+                &JsEngine::hookFire,
+                binding.get()
+            );
             if (rc != 0) {
                 return throwJsError(ctx, "onHook: host registration failed");
             }
-            JS_SetPropertyUint32(ctx, pctx->hooks, static_cast<uint32_t>(point),
-                                 JS_DupValue(ctx, argv[1]));
+            JS_SetPropertyUint32(
+                ctx,
+                pctx->hooks,
+                static_cast<uint32_t>(point),
+                JS_DupValue(ctx, argv[1])
+            );
             pctx->hookBindings.push_back(std::move(binding));
             return JS_UNDEFINED;
         }
@@ -1102,8 +1204,12 @@ JSValue JsEngine::bridgeCall(JSContext* ctx, JSValueConst this_val, int argc,
             JS_ToInt32(ctx, &point, argv[0]);
             for (auto& b : pctx->hookBindings) {
                 if (b->point == point) {
-                    vt.unregister_hook(host, static_cast<AgentxxHookPoint>(point),
-                                       &JsEngine::hookFire, b.get());
+                    vt.unregister_hook(
+                        host,
+                        static_cast<AgentxxHookPoint>(point),
+                        &JsEngine::hookFire,
+                        b.get()
+                    );
                 }
             }
             JS_SetPropertyUint32(ctx, pctx->hooks, static_cast<uint32_t>(point), JS_NULL);
@@ -1114,18 +1220,18 @@ JSValue JsEngine::bridgeCall(JSContext* ctx, JSValueConst this_val, int argc,
             if (argc < 2 || !JS_IsString(argv[0]) || !JS_IsFunction(ctx, argv[1])) {
                 return JS_ThrowTypeError(ctx, "subscribe: (topic, handler) required");
             }
-            std::string topic = jsToCppString(ctx, argv[0]);
-            auto binding = std::make_unique<JsHookBinding>();
-            binding->engine = engine;
-            binding->plugin = pctx->name;
-            binding->point  = -1;
+            std::string topic   = jsToCppString(ctx, argv[0]);
+            auto        binding = std::make_unique<JsHookBinding>();
+            binding->engine     = engine;
+            binding->plugin     = pctx->name;
+            binding->point      = -1;
             auto* sub = vt.subscribe(host, topic.c_str(), &JsEngine::eventFire, binding.get());
             if (!sub) {
                 return throwJsError(ctx, "subscribe: host subscription failed: " + topic);
             }
             // token = agents 数组索引
-            JSValue lenVal = JS_GetPropertyStr(ctx, pctx->agents, "length");
-            uint32_t len   = 0;
+            JSValue  lenVal = JS_GetPropertyStr(ctx, pctx->agents, "length");
+            uint32_t len    = 0;
             JS_ToUint32(ctx, &len, lenVal);
             JS_FreeValue(ctx, lenVal);
             JSValue entry = JS_NewObject(ctx);
@@ -1136,10 +1242,16 @@ JSValue JsEngine::bridgeCall(JSContext* ctx, JSValueConst this_val, int argc,
             // 会丢低位精度; BigInt 依赖 libbf 未裁剪)
             uint64_t subPtr = reinterpret_cast<uint64_t>(sub);
             JS_SetPropertyStr(
-                ctx, entry, "subPtrLo", JS_NewInt32(ctx, static_cast<int32_t>(subPtr & 0xFFFFFFFFu))
+                ctx,
+                entry,
+                "subPtrLo",
+                JS_NewInt32(ctx, static_cast<int32_t>(subPtr & 0xFFFFFFFFu))
             );
             JS_SetPropertyStr(
-                ctx, entry, "subPtrHi", JS_NewInt32(ctx, static_cast<int32_t>(subPtr >> 32))
+                ctx,
+                entry,
+                "subPtrHi",
+                JS_NewInt32(ctx, static_cast<int32_t>(subPtr >> 32))
             );
             JS_SetPropertyUint32(ctx, pctx->agents, len, entry);
             pctx->hookBindings.push_back(std::move(binding));
@@ -1200,12 +1312,12 @@ JSValue JsEngine::bridgeCall(JSContext* ctx, JSValueConst this_val, int argc,
             }
             double ms = 0;
             JS_ToFloat64(ctx, &ms, argv[1]);
-            auto id = ++engine->timerSeq_;
+            auto              id = ++engine->timerSeq_;
             JsEngine::JsTimer t;
-            t.due    = std::chrono::steady_clock::now()
-                       + std::chrono::milliseconds(static_cast<int64_t>(ms < 0 ? 0 : ms));
-            t.plugin = pctx->name;
-            t.fn     = JS_DupValue(ctx, argv[0]);
+            t.due = std::chrono::steady_clock::now()
+                    + std::chrono::milliseconds(static_cast<int64_t>(ms < 0 ? 0 : ms));
+            t.plugin            = pctx->name;
+            t.fn                = JS_DupValue(ctx, argv[0]);
             engine->timers_[id] = std::move(t);
             engine->cv_.notify_all(); // 唤醒等待中的 JS 线程 (wait_until 更新)
             return JS_NewInt32(ctx, static_cast<int32_t>(id));
@@ -1244,7 +1356,7 @@ JSValue JsEngine::bridgeCall(JSContext* ctx, JSValueConst this_val, int argc,
                 return JS_ThrowTypeError(ctx, "getPlugin: name required");
             }
             std::string name = jsToCppString(ctx, argv[0]);
-            char* json = vt.get_plugin(host, name.c_str());
+            char*       json = vt.get_plugin(host, name.c_str());
             if (!json) {
                 return JS_NULL; // 未安装
             }
@@ -1269,7 +1381,7 @@ JSValue JsEngine::bridgeCall(JSContext* ctx, JSValueConst this_val, int argc,
 extern "C" const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
     static const AgentxxPluginInfo info{
         AGENTXX_PLUGIN_API_VERSION,
-        "agentxx_plugin_js",
+        "agentxx_javascript_engine",
         "1.0.0",
         "JS interpreter plugin (QuickJS): hosts type:js plugins",
     };
@@ -1282,10 +1394,15 @@ extern "C" const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
 /// - "load" args: {"name": 脚本插件名, "path": 脚本文件路径}; 返回
 ///   {"ok": true, "tools": [...]} (JSON, host->alloc)
 /// - "unload" args: {"name": 脚本插件名}; 投递式, 立即返回
-static char* jsInvoke(void* ctx, const AgentxxHost* caller_host, const char* method,
-                      const char* args_json, char** error_out) {
+static char* jsInvoke(
+    void*              ctx,
+    const AgentxxHost* caller_host,
+    const char*        method,
+    const char*        args_json,
+    char**             error_out
+) {
     auto* engine = static_cast<JsEngine*>(ctx);
-    auto setErr = [&](const char* msg) {
+    auto  setErr = [&](const char* msg) {
         if (error_out && caller_host) {
             *error_out = caller_host->vtable->strdup(msg);
         }
@@ -1331,7 +1448,7 @@ static char* jsInvoke(void* ctx, const AgentxxHost* caller_host, const char* met
             return nullptr;
         }
         std::string err;
-        int rc = -1;
+        int         rc = -1;
         engine->loadScriptInEngine(caller_host, name, path, code, rc, err);
         if (rc != 0) {
             setErr(err.c_str());
@@ -1369,7 +1486,7 @@ extern "C" int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) 
         return -1;
     }
     *plugin_ctx = engine;
-    host->vtable->log(host, 2, "agentxx_plugin_js loaded (QuickJS interpreter.js)");
+    host->vtable->log(host, 2, "agentxx_javascript_engine loaded (QuickJS interpreter.js)");
     return 0;
 }
 

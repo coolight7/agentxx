@@ -97,7 +97,7 @@ libagentxx 核心 (只认识 C++ 插件)
                │
       ┌────────┴───────────┐
       │ 内置 C++ 插件(随发行包) │
-      │ agentxx_plugin_js    │  ← 内嵌 QuickJS
+      │ agentxx_javascript_engine    │  ← 内嵌 QuickJS
       │  能力: interpreter.js │     把自己注册为 JS 解释器
       └────────┬─────────────┘
                │ 委派加载 (PluginManager 查能力表)
@@ -143,7 +143,7 @@ extern "C" {
 /// 插件元信息 (dlsym 入口后由宿主获取)
 typedef struct AgentxxPluginInfo {
     int         api_version;   ///< 必须 == AGENTXX_PLUGIN_API_VERSION
-    const char* name;          ///< 唯一标识, 如 "agentxx_plugin_js"
+    const char* name;          ///< 唯一标识, 如 "agentxx_javascript_engine"
     const char* version;
     const char* description;
 } AgentxxPluginInfo;
@@ -263,10 +263,10 @@ typedef void (*AgentxxPluginUnload)(void* plugin_ctx);
 
 QuickJS 与项目"仅依赖基本系统库、跨 Linux/Win/Android"目标完全吻合 (同 hyperscan/curl 一样走 `agent/third_party/` 编译基建)。
 
-### 6.2 实现层次 (`agentxx_plugin_js`, 内置 C++ 插件)
+### 6.2 实现层次 (`agentxx_javascript_engine`, 内置 C++ 插件)
 
 ```
-agentxx_plugin_js (C++ 插件, 用 plugin_api.h 编写)
+agentxx_javascript_engine (C++ 插件, 用 plugin_api.h 编写)
 ├── 初始化: 注册能力 "interpreter.js" 到 CapabilityRegistry
 ├── JS 运行时: QuickJS 上下文 + 宿主桥接对象 (agentxx.*)
 ├── JS 插件加载: PluginManager 委派 load_js(path)
@@ -360,8 +360,9 @@ agentxx.onToolEnd((ctx) => agentxx.emitMessageTip(ctx.thread_id, "天气查询�
 | 组件 | 位置 | 说明 |
 |------|------|------|
 | QuickJS 引擎 | `agent/third_party/quickjs/` (git submodule, quickjs-ng) | 核心 4 源文件 (quickjs.c/libregexp.c/libunicode.c/dtoa.c) 静态库 `libqjs.a`, 经 `quickjs_repo` ExternalProject 构建 install 到 `AGENTXX_INSTALL_DIR` |
-| 构建开关 | `AGENTXX_ENABLE_PLUGIN_JS` (默认 ON) | 顶层 option; 控制 quickjs_repo / agentxx_plugin_js 构建 |
-| JS 引擎插件 | `agent/plugins/plugin_js/plugin_js.cpp` → `libagentxx_plugin_js.so` | 独立动态库 (链接 libqjs.a), 经 `register_capability_ex` 注册 `interpreter.js` 能力 (方法 load/unload) |
+| 构建开关 | `AGENTXX_ENABLE_PLUGIN_JS` (默认 ON) / `AGENTXX_BUILD_PLUGINS` (默认 ON) | 顶层 option; `AGENTXX_BUILD_PLUGINS` 控制 `agentxx_plugins_repo` (插件整体) 构建, `AGENTXX_ENABLE_PLUGIN_JS` 控制 quickjs_repo 及 JS 插件 (javascript_engine/example_js) 构建 |
+| 插件编译 | `agent/plugins/CMakeLists.txt` + 各插件子目录 CMakeLists.txt | 独立于 test 编译: 每个插件子目录自带 CMakeLists.txt, 可独立构建 (`cmake -B build -S agent/plugins -DAGENTXX_INSTALL_DIR=...`), 插件动态库输出到 `AGENTXX_EXEC_INSTALL_PREFIX` |
+| JS 引擎插件 | `agent/plugins/javascript_engine/javascript_engine.cpp` → `libagentxx_javascript_engine.so` | 独立动态库 (链接 libqjs.a), 经 `register_capability_ex` 注册 `interpreter.js` 能力 (方法 load/unload) |
 | 宿主委派 | `PluginManager::loadPluginAsync` | 插件目录 (plugin.yaml) 分派: `type: native` → dlopen, `type: js` → 创建脚本 PluginInstance (dlHandle 空) 并调引擎 `load_script` (host 为脚本插件自身句柄) |
 | 卸载级联 | `unloadAsync` 依赖图 | 卸载引擎插件前先级联卸载 depends 它的脚本插件 (先子后父); 脚本插件卸载时经委派记录通知引擎 `unload_script` (投递式); 见 11.5 |
 | 跨线程投递 | vtable `is_io_thread` / `post_to_io` + `PluginManager::setIoExecutor` | JS 线程/宿主线程池调用的 io 线程约束操作 (注册/钩子/订阅/能力/shareStore/tip) 经 `ioCallSync` post 到 io 线程同步等待; `call_tool` 整体在 io 线程执行 (registry 竞争防护) |
@@ -369,7 +370,7 @@ agentxx.onToolEnd((ctx) => agentxx.emitMessageTip(ctx.thread_id, "天气查询�
 | agentxx 桥 | 全局 `agentxx` 对象 (每脚本插件独立 JSContext) | registerTool/unregisterTool/callTool/getShareStore/emitMessageTip/log/onHook/offHook/subscribe/unsubscribe/publish + 全局 `setTimeout`/`clearTimeout` (定时器桥) |
 | Promise 驱动 | `drivePromise` | 循环 `JS_ExecutePendingJob` 直至 settle; 无 job 时执行到期定时器 + 让出 (支持 await/setTimeout 异步); 超时由 interrupt handler 兜底 |
 | 沙箱 | 内存 64MB / 栈 512KB / 任务 60s 超时 | 不引入 quickjs-libc (无 os/std 模块); 仅标准 ECMA + agentxx 桥 |
-| JS 示例插件 | `agent/plugins/js_example/` (plugin.yaml + plugin.js) | 4 工具 (同步/async Promise/JS 内互调/宿主互调) + 钩子 + 事件订阅 + 顶层异步初始化; 构建时拷贝到 exec/plugins/ |
+| JS 示例插件 | `agent/plugins/example_js/` (plugin.yaml + plugin.js) | 4 工具 (同步/async Promise/JS 内互调/宿主互调) + 钩子 + 事件订阅 + 顶层异步初始化; 构建时拷贝到 exec/plugins/ |
 | 测试 | `test_plugins` 模块 12-19 段 | 引擎加载/脚本插件加载/工具执行/互调/卸载/级联 (67 项全过) |
 
 #### 11.4.2 JS 线程模型要点 (实现为准)
@@ -425,7 +426,7 @@ PluginInstance (一切插件都是 C++ 插件)
 - **加载**: manifest 解析 → 依赖检查 → dlopen(entry) → entry()。entry 总是指向
   动态库; 脚本插件 = 薄 C++ 壳, 壳在 entry 里经能力调用加载脚本
 - **脚本执行 (插件间通信, 宿主不参与)**:
-  - 引擎插件 (agentxx_plugin_js) 注册能力 `interpreter.js` 并附带方法回调
+  - 引擎插件 (agentxx_javascript_engine) 注册能力 `interpreter.js` 并附带方法回调
     (`register_capability_ex`): 方法 `load` (执行脚本) / `unload` (释放运行时)
   - 脚本插件的 C++ 壳: `get_own_info` 拿自身 name/path → 推导脚本文件 →
     `invoke_capability("interpreter.js", "load", {name, path})`
@@ -507,7 +508,7 @@ PluginInstance (一切插件都是 C++ 插件)
 ### 二期 (JS 支持)
 
 1. QuickJS 集成到 `agent/third_party/quickjs/` (AGENTXX_ENABLE_PLUGIN_JS 编译开关)
-2. 内置 `agentxx_plugin_js` (实现 `interpreter.js` 能力)
+2. 内置 `agentxx_javascript_engine` (实现 `interpreter.js` 能力)
 3. PluginManager 委派加载 `type: js` 插件
 4. JS 沙箱 + async/Promise 桥
 5. JS 示例插件 + 测试
@@ -532,7 +533,7 @@ PluginInstance (一切插件都是 C++ 插件)
 | 新增 `agent/lib/include/agentxx/plugin/plugin_api.h` | C ABI 契约 (纯 C) |
 | 新增 `agent/lib/src/plugins/` | manager / native_loader / host_impl / tool_registry / capability_registry |
 | 新增 `agent/third_party/quickjs/` | QuickJS 引擎 (二期) |
-| 新增 `agent/plugins/plugin_js/` | agentxx_plugin_js 动态库 (二期) |
+| 新增 `agent/plugins/javascript_engine/` | agentxx_javascript_engine 动态库 (二期) |
 | `agent/client` | `plugin` CLI 命令; TUI 面板 (三期) |
 | `agentxx_cli` 分发 | 附带 `plugins/` 目录 + 示例插件 |
 

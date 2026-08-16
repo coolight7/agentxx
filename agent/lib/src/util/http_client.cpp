@@ -13,9 +13,9 @@
 #include "agentxx/util/http_client.h"
 #include "html2md/html2md.h"
 #include <asio/co_spawn.hpp>
+#include <asio/detached.hpp>
 #include <asio/execution/context.hpp>
 #include <asio/execution_context.hpp>
-#include <asio/detached.hpp>
 #include <asio/steady_timer.hpp>
 #include <map>
 #include <neograph/provider.h>
@@ -314,12 +314,14 @@ struct PooledConnection {
 /// (scheduler/epoll_reactor) 注册, 因此本服务析构时 reactor 仍存活, 可以在析构中
 /// 安全释放该 io_context 上的全部空闲连接。
 class HttpConnectionPool;
+
 class HttpPoolContextGuard : public asio::execution_context::service {
 public:
 
     static asio::execution_context::id id;
 
-    explicit HttpPoolContextGuard(asio::execution_context& owner) : service(owner) {}
+    explicit HttpPoolContextGuard(asio::execution_context& owner) :
+        service(owner) {}
 
     ~HttpPoolContextGuard() override;
 
@@ -533,7 +535,8 @@ private:
         // 空闲连接按 io_context 分桶: 连接只能被创建它的 io_context 复用,
         // 且该 io_context 销毁时 (经 HttpPoolContextGuard) 桶随上下文一起释放,
         // 避免池持有指向已销毁 io_context 的连接
-        std::map<asio::execution_context*, std::vector<std::shared_ptr<PooledConnection>>> idleByCtx;
+        std::map<asio::execution_context*, std::vector<std::shared_ptr<PooledConnection>>>
+               idleByCtx;
         size_t active      = 0;
         size_t created     = 0;
         size_t reused      = 0;
@@ -629,9 +632,7 @@ asio::awaitable<std::shared_ptr<PooledConnection>>
     // 注册 io_context 生命周期守卫: 必须在 socket 创建之后 — io_context 按
     // "后注册先销毁"的顺序销毁服务, 守卫需晚于 reactor (socket 构造时惰性注册)
     // 注册, 才能在 io_context 销毁时先于 reactor 释放本上下文上的空闲连接。
-    asio::use_service<HttpPoolContextGuard>(
-        asio::query(executor, asio::execution::context)
-    );
+    asio::use_service<HttpPoolContextGuard>(asio::query(executor, asio::execution::context));
     conn->lastUsed = std::chrono::steady_clock::now();
     conn->fresh    = true;
     co_return conn;
@@ -1059,9 +1060,10 @@ asio::awaitable<std::expected<HttpResponse, std::string>> HttpClient::requestAsy
                     // keepAlive=true: 经连接池获取 (复用空闲/并发上限);
                     // keepAlive=false: 直接新建 (旧行为), 不产生池统计
                     if (usePool) {
-                        // 注意: 不能用 `usePool ? co_await acquire(...) : co_await createConnection(...)`
-                        // 三元表达式 — GCC 16 对协程内 co_await 三元表达式存在代码生成缺陷,
-                        // 会同时执行两个分支 (连接被重复创建/泄漏, 连接池统计错乱), 必须用 if/else
+                        // 注意: 不能用 `usePool ? co_await acquire(...) : co_await
+                        // createConnection(...)` 三元表达式 — GCC 16 对协程内 co_await
+                        // 三元表达式存在代码生成缺陷, 会同时执行两个分支 (连接被重复创建/泄漏,
+                        // 连接池统计错乱), 必须用 if/else
                         conn = co_await pool.acquire(poolKey, poolMax, config);
                     } else {
                         conn = co_await createConnection(poolKey, config);

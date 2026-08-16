@@ -278,7 +278,7 @@ asio::awaitable<std::expected<WsMessage, std::string>> WsClient::recv() {
         [&]() -> asio::awaitable<std::expected<WsMessage, std::string>> {
             try {
                 std::string payload;
-                auto&       chunk = impl_->recvChunk; // 复用缓冲, 避免每次调用重新分配
+                auto& chunk = impl_->recvChunk; // 复用缓冲, 避免每次调用重新分配
 
                 if (impl_->isSsl) {
                     do {

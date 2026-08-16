@@ -28,79 +28,10 @@ endif()
 
 add_executable(agentxx_test)
 
-# ===== 示例插件 (插件系统测试用) =====
-# - 编译为 MODULE 动态库 (不链接 libagentxx, 仅依赖纯 C ABI 头)
-# - 输出到测试可执行同目录, 供 test_plugins 加载
-add_library(agentxx_plugin_example MODULE
-  "${CMAKE_CURRENT_SOURCE_DIR}/../plugins/example_native/example_native.cpp"
-)
-target_include_directories(agentxx_plugin_example PRIVATE
-  "${CMAKE_CURRENT_SOURCE_DIR}/../lib/include"
-)
-set_target_properties(agentxx_plugin_example PROPERTIES
-  PREFIX "lib"
-  CXX_STANDARD 17
-  CXX_STANDARD_REQUIRED OFF
-  RUNTIME_OUTPUT_DIRECTORY "${AGENTXX_EXEC_INSTALL_PREFIX}/"
-  LIBRARY_OUTPUT_DIRECTORY "${AGENTXX_EXEC_INSTALL_PREFIX}/"
-)
-
-# ===== JS 解释器插件 (agentxx_plugin_js, 二期) =====
-# - 独立动态库, 链接 QuickJS (quickjs_repo install 的 libqjs.a)
-# - 加载后可承载 type: js 脚本插件
-if (AGENTXX_ENABLE_PLUGIN_JS)
-  # quickjs-ng 的库目标名为 qjs → install 为 libqjs.a
-  find_library(QUICKJS_LIBRARY qjs
-    PATHS "${AGENTXX_INSTALL_DIR}/lib"
-    NO_DEFAULT_PATH
-  )
-  find_path(QUICKJS_INCLUDE_DIR quickjs.h
-    PATHS "${AGENTXX_INSTALL_DIR}/include"
-    NO_DEFAULT_PATH
-  )
-  add_library(agentxx_plugin_js MODULE
-    "${CMAKE_CURRENT_SOURCE_DIR}/../plugins/plugin_js/plugin_js.cpp"
-  )
-  target_include_directories(agentxx_plugin_js PRIVATE
-    "${CMAKE_CURRENT_SOURCE_DIR}/../lib/include"
-    "${QUICKJS_INCLUDE_DIR}"
-  )
-  target_link_libraries(agentxx_plugin_js PRIVATE
-    "${QUICKJS_LIBRARY}"
-  )
-  set_target_properties(agentxx_plugin_js PROPERTIES
-    PREFIX "lib"
-    CXX_STANDARD 17
-    CXX_STANDARD_REQUIRED OFF
-    RUNTIME_OUTPUT_DIRECTORY "${AGENTXX_EXEC_INSTALL_PREFIX}/"
-    LIBRARY_OUTPUT_DIRECTORY "${AGENTXX_EXEC_INSTALL_PREFIX}/"
-  )
-  # 构建 JS 示例插件 (统一模型: C++ 壳 + 脚本资源)
-  # - libjs_example.so: C++ 壳 (MODULE, 经能力调用委派脚本给引擎)
-  # - plugin.yaml + plugin.js 拷贝到同目录 (壳推导同目录 plugin.js)
-  add_library(js_example MODULE
-    "${CMAKE_CURRENT_SOURCE_DIR}/../plugins/js_example/libjs_example.cpp"
-  )
-  target_include_directories(js_example PRIVATE
-    "${CMAKE_CURRENT_SOURCE_DIR}/../lib/include"
-  )
-  set_target_properties(js_example PROPERTIES
-    PREFIX "lib"
-    CXX_STANDARD 17
-    CXX_STANDARD_REQUIRED OFF
-    RUNTIME_OUTPUT_DIRECTORY "${AGENTXX_EXEC_INSTALL_PREFIX}/plugins/js_example/"
-    LIBRARY_OUTPUT_DIRECTORY "${AGENTXX_EXEC_INSTALL_PREFIX}/plugins/js_example/"
-  )
-  add_custom_command(TARGET js_example POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-      "${CMAKE_CURRENT_SOURCE_DIR}/../plugins/js_example/plugin.yaml"
-      "${AGENTXX_EXEC_INSTALL_PREFIX}/plugins/js_example/plugin.yaml"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-      "${CMAKE_CURRENT_SOURCE_DIR}/../plugins/js_example/plugin.js"
-      "${AGENTXX_EXEC_INSTALL_PREFIX}/plugins/js_example/plugin.js"
-    COMMENT "Copy js_example plugin resources to ${AGENTXX_EXEC_INSTALL_PREFIX}/plugins/js_example"
-  )
-endif()
+# 注: 示例插件 (example_native/javascript_engine/example_js) 已独立到 agent/plugins/
+# 独立编译 (每个插件子目录自带 CMakeLists.txt), 见 plugins/CMakeLists.txt;
+# 插件动态库输出到 ${AGENTXX_EXEC_INSTALL_PREFIX} (与测试可执行同目录),
+# 供 test_plugins 加载, 由顶层 agentxx_plugins_repo ExternalProject 构建。
 
 # 测试源按目录划分:
 # - 根目录: 入口 test.cpp (模块注册)

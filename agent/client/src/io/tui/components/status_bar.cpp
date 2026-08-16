@@ -25,7 +25,8 @@ Element StatusBarComponent::OnRender() {
             text(fmt::format(
                 "{}%",
                 static_cast<int>(100.0 * static_cast<double>(ctx) / static_cast<double>(maxCtx))
-            )) | color(theme.hintColor) | xflex_shrink,
+            )) | color(theme.hintColor)
+                | xflex_shrink,
         });
     } else {
         ctxText = text(fmt::format("{}", agentxx::util::formatSize(ctx))) | color(theme.hintColor);
