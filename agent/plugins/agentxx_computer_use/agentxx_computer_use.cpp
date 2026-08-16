@@ -112,6 +112,48 @@ static void registerTool(
 // agentxx_ui_control_keyboard_mouse
 // =====================================================================
 
+/// 工具默认描述 (从 lib AgentPrompt 剥离迁移, 2026-08)
+/// - 宿主 toolPrompt 无条目时经 set_prompt 写入 (见 ensureToolPromptInHost),
+///   用户可经 yaml 覆盖 (覆盖早于插件加载, 写入前检查条目已存在则跳过)
+static const char* kUiControlDefaultDepict = R"(Control mouse and keyboard on Windows. Accepts a list of UI commands and executes them sequentially.
+
+## Actions
+
+### Mouse
+- `mouse_move`: Move cursor. Params: `x`, `y`
+- `mouse_click`: Click. Params: `button` ("left"/"right"/"middle", default "left"), `x`, `y` (optional, move then click)
+- `mouse_double_click`: Double-click. Params: same as mouse_click
+- `mouse_scroll`: Scroll wheel. Params: `delta` (positive=up, negative=down, ±120 per notch), `x`, `y` (optional)
+- `mouse_drag`: Drag. Params: `x1`, `y1`, `x2`, `y2`, `button` (default "left"), `duration_ms` (default 200)
+
+### Keyboard
+- `key_press`: Press and release a key. Params: `key`
+- `key_down`: Hold a key down. Params: `key`
+- `key_up`: Release a held key. Params: `key`
+- `key_combo`: Press a key combination (e.g. Ctrl+C). Params: `keys` (array of key names)
+- `key_type`: Type a text string. Params: `text`
+
+### Utility
+- `wait`: Pause execution. Params: `ms` (milliseconds, max 30000)
+- `get_cursor_pos`: Get current cursor position. No params.
+- `get_screen_size`: Get screen resolution. No params.
+
+### Key Names
+- Characters: "a"-"z", "0"-"9"
+- Special: "enter", "tab", "escape", "backspace", "delete", "insert", "home", "end", "pageup", "pagedown", "up", "down", "left", "right", "space"
+- Modifiers: "shift", "ctrl", "alt", "win"
+- Function keys: "f1"-"f12"
+- Lock keys: "capslock", "numlock", "scrolllock"
+- Other: "printscreen", "pause", "apps"
+
+### Examples
+```json
+{"action": "mouse_click", "button": "left", "x": 100, "y": 200}
+{"action": "key_combo", "keys": ["ctrl", "c"]}
+{"action": "key_type", "text": "Hello World"}
+{"action": "mouse_drag", "x1": 100, "y1": 100, "x2": 300, "y2": 300}
+```)";
+
 static std::string uiControlSchema() {
     codegraph::Json commandsItem = codegraph::Json::object();
     commandsItem["type"]         = "object";
@@ -170,12 +212,53 @@ static std::string uiControlSchema() {
 static void registerUiControlTool() {
     registerTool(
         "agentxx_ui_control_keyboard_mouse",
-        "Control mouse and keyboard on Windows. Accepts a list of UI commands and executes them sequentially.",
+        kUiControlDefaultDepict,
         uiControlSchema(),
         [](SimpleJson& args) -> std::string {
             return agentxx::tools::uiControlExecute(args);
         }
     );
+}
+
+/// 把插件默认提示词写入宿主 toolPrompt (仅当宿主无该条目时; io 线程)
+/// - 用户 yaml 覆盖早于插件加载 → get_prompt 已含覆盖 → 跳过 (尊重用户配置)
+/// - 宿主未提供 get_prompt/set_prompt (旧宿主) → 跳过, registerTool 回退插件默认
+static void ensureToolPromptInHost() {
+    if (!g_host || !g_host->vtable || !g_host->vtable->get_prompt
+        || !g_host->vtable->set_prompt) {
+        return;
+    }
+    char* json = g_host->vtable->get_prompt(g_host);
+    if (!json) {
+        return;
+    }
+    std::string s{json};
+    g_host->vtable->free(json);
+    SimpleJson j(s);
+    if (!j.ok()) {
+        return;
+    }
+    // 宿主已有条目 (用户 yaml 覆盖 / 之前已写入): 尊重, 不覆盖
+    if (!j.doc().at_pointer("/toolPrompt/agentxx_ui_control_keyboard_mouse").error()) {
+        return;
+    }
+    codegraph::Json tp   = codegraph::Json::object();
+    tp["depict"]         = std::string{kUiControlDefaultDepict};
+    codegraph::Json args = codegraph::Json::object();
+    args["commands"]     = "Ordered list of UI commands to execute sequentially.";
+    args["interval_ms"]  = "Delay between commands in milliseconds. Default: 50. Set `0` for "
+                          "no delay.";
+    tp["args"]           = args;
+    codegraph::Json patch = codegraph::Json::object();
+    patch["toolPrompt"]   = codegraph::Json::object();
+    patch["toolPrompt"]["agentxx_ui_control_keyboard_mouse"] = tp;
+    std::string payload = patch.dump();
+    if (g_host->vtable->set_prompt(
+            g_host,
+            agentxx_plugin_sv(payload.data(), payload.size())
+        ) != 0) {
+        pluginLog(3, "agentxx_computer_use: set_prompt failed");
+    }
 }
 
 } // namespace agentxx_computer_use_plugin
@@ -200,6 +283,8 @@ extern "C" const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
 
 extern "C" int agentxx_plugin_entry(const AgentxxHost* host, void** /*plugin_ctx*/) {
     g_host = host;
+    // 默认提示词写入宿主 (剥离自 lib AgentPrompt; 用户 yaml 覆盖优先)
+    ensureToolPromptInHost();
     registerUiControlTool();
     pluginLog(2, "agentxx_computer_use loaded (1 tool)");
     return 0;

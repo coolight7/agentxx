@@ -452,6 +452,15 @@ asio::awaitable<TestResult> run_plugin_tests() {
                     },
                     asio::detached
                 );
+                // 等待回调已开始 (inflight>0 说明线程池已进入 C 回调):
+                // - Windows 线程池调度延迟不定, 直接 sleep 后卸载可能遇到
+                //   inflight==0 (回调未开始), 卸载立即完成, 时序断言失真
+                // - 注意不能以 execDone 作为轮询出口: 它由超时返回 (100ms)
+                //   置位, 早于回调真正开始; 仅 inflight>0 能确认回调在跑
+                for (int i = 0; i < 200 && inst23->inflight.load(std::memory_order_acquire) == 0;
+                     ++i) {
+                    co_await sleepMs(10);
+                }
                 // 等待超时返回 (100ms) + 回调仍在线程池执行 (600ms 未完成)
                 co_await sleepMs(250);
                 // 立即卸载: 必须等 inflight 归零 (回调完成) 才 dlclose
@@ -464,6 +473,12 @@ asio::awaitable<TestResult> run_plugin_tests() {
                 XX_TEST_EXPECT_TRUE(ok);
                 // 卸载应等待回调完成 (600-250 ≈ 350ms; 放宽到 >= 250ms),
                 // 且回调必须完整执行完 (execDone)
+                // - execDone 由 detached 协程在 execute_async 返回后置位, 其
+                //   恢复依赖 io 线程调度 (Windows 上可能与卸载完成时刻竞态),
+                //   断言前限时等待其恢复, 消除调度时序抖动
+                for (int i = 0; i < 100 && !execDone.load(); ++i) {
+                    co_await sleepMs(10);
+                }
                 XX_TEST_EXPECT_TRUE(elapsedMs >= 250);
                 XX_TEST_EXPECT_TRUE(execDone.load());
             }
@@ -556,6 +571,77 @@ asio::awaitable<TestResult> run_plugin_tests() {
         disCfg.enabled = false;
         co_await ctx->pluginManager->loadConfiguredPlugins({disCfg});
         XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("example_js") == nullptr);
+    }
+
+    // ---- 28. 提示词读写 (get_prompt/set_prompt): 插件写入默认条目 + 卸载回滚 ----
+    // - 插件加载时经 set_prompt 写入宿主 toolPrompt (仅当无该条目);
+    //   卸载时自动回滚 (恢复加载前状态, 条目删除)
+    // - 用户 yaml 覆盖 (加载前已存在条目) 优先, 插件不覆盖
+    {
+        auto& prompt = ctx->agentConfig->prompt;
+        // 初始: 无 example_echo 条目
+        XX_TEST_EXPECT_FALSE(prompt.toolPrompt.contains("example_echo"));
+
+        // 加载插件 → 写入默认条目
+        auto inst28 = co_await ctx->pluginManager->loadPluginAsync(path);
+        XX_TEST_EXPECT_TRUE(inst28 != nullptr);
+        if (inst28) {
+            XX_TEST_EXPECT_TRUE(prompt.toolPrompt.contains("example_echo"));
+            if (prompt.toolPrompt.contains("example_echo")) {
+                XX_TEST_EXPECT_EQ(
+                    prompt.toolPrompt.at("example_echo").depict,
+                    "Echo the input arguments back as JSON (example plugin tool)."
+                );
+            }
+            // get_tool_prompt 可读取该条目
+            auto tpJson = ctx->pluginManager->getToolPromptJson("example_echo");
+            XX_TEST_EXPECT_FALSE(tpJson.empty());
+            if (!tpJson.empty()) {
+                auto j = neograph::json::parse(tpJson);
+                XX_TEST_EXPECT_TRUE(j["depict"].is_string());
+            }
+            // get_prompt 完整提示词含该条目
+            auto fullJson = ctx->pluginManager->getPromptJson();
+            XX_TEST_EXPECT_FALSE(fullJson.empty());
+            if (!fullJson.empty()) {
+                auto j = neograph::json::parse(fullJson);
+                XX_TEST_EXPECT_TRUE(
+                    j.contains("toolPrompt") && j["toolPrompt"].is_object()
+                    && j["toolPrompt"].contains("example_echo")
+                );
+            }
+
+            // system 提示词写入 + 回滚 (set_prompt 直接调用路径)
+            auto originalSystem = prompt.systemPrompt;
+            XX_TEST_EXPECT_EQ(
+                ctx->pluginManager->setPromptJson(
+                    inst28.get(),
+                    R"({"systemPrompt":"modified by plugin"})"
+                ),
+                0
+            );
+            XX_TEST_EXPECT_EQ(prompt.systemPrompt, "modified by plugin");
+
+            // 卸载 → toolPrompt 条目删除 + system 提示词恢复
+            auto ok = co_await ctx->pluginManager->unloadAsync("example_plugin");
+            XX_TEST_EXPECT_TRUE(ok);
+            XX_TEST_EXPECT_FALSE(prompt.toolPrompt.contains("example_echo"));
+            XX_TEST_EXPECT_EQ(prompt.systemPrompt, originalSystem);
+        }
+
+        // 用户覆盖优先: 加载前已存在条目 (模拟 yaml 覆盖), 插件不覆盖
+        prompt.toolPrompt["example_echo"].depict = "user override";
+        auto inst28b = co_await ctx->pluginManager->loadPluginAsync(path);
+        XX_TEST_EXPECT_TRUE(inst28b != nullptr);
+        if (inst28b) {
+            XX_TEST_EXPECT_TRUE(prompt.toolPrompt.contains("example_echo"));
+            XX_TEST_EXPECT_EQ(prompt.toolPrompt.at("example_echo").depict, "user override");
+            co_await ctx->pluginManager->unloadAsync("example_plugin");
+            // 回滚后保留用户覆盖值 (插件未写入, 无回滚动作)
+            XX_TEST_EXPECT_TRUE(prompt.toolPrompt.contains("example_echo"));
+            XX_TEST_EXPECT_EQ(prompt.toolPrompt.at("example_echo").depict, "user override");
+            prompt.toolPrompt.erase("example_echo"); // 清理
+        }
     }
 
     co_return TestResult{g_plugin_passed, g_plugin_failed};

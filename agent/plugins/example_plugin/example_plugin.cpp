@@ -260,6 +260,32 @@ extern "C" int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) 
         return -1;
     }
 
+    // 5. 提示词读写演示 (get_prompt/set_prompt; 宿主为旧版本无此 API 时跳过)
+    //    - 把 example_echo 的默认提示词写入宿主 toolPrompt (仅当宿主无该条目,
+    //      用户 yaml 覆盖早于插件加载, 已存在则尊重用户配置不覆盖)
+    //    - 宿主卸载插件时自动回滚本次写入 (恢复加载前状态)
+    if (host->vtable->get_prompt && host->vtable->set_prompt) {
+        char* full = host->vtable->get_prompt(host);
+        if (full) {
+            std::string prompt{full};
+            host->vtable->free(full);
+            bool hasEntry = prompt.find("\"example_echo\"") != std::string::npos;
+            if (!hasEntry) {
+                const char* promptJson
+                    = R"({"toolPrompt":{"example_echo":{"depict":"Echo the input arguments back as JSON (example plugin tool).","args":{}}}})";
+                int rc = host->vtable->set_prompt(host, AGENTXX_SV(promptJson));
+                if (rc != 0) {
+                    host->vtable->log(
+                        host,
+                        3,
+                        AGENTXX_SV("example plugin set_prompt failed")
+                    );
+                    return -1;
+                }
+            }
+        }
+    }
+
     host->vtable->log(host, 2, AGENTXX_SV("example plugin loaded"));
     return 0;
 }
