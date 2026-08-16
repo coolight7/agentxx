@@ -42,6 +42,7 @@ namespace agent {
 class AgentIOBase;
 class ModelProviderRegistry;
 class SessionPersistence;
+class AgentHost;
 
 /// 会话持久化回调 (由 SessionStore 创建 Session 时注入, 解耦 sqlite 依赖)
 /// - 所有回调仅做"尽力而为"持久化, 内部已捕获异常并记录日志, 不中断主流程
@@ -298,6 +299,10 @@ public:
     /// 插件管理器 (生命周期/热插拔; 全局唯一)
     /// - 由 BaseAgent::init 创建并注入
     std::shared_ptr<plugin::PluginManager> pluginManager = nullptr;
+
+    /// 宿主引用 (由 AgentHost attachRoot/派生时注入; 无宿主时为空)
+    /// - 节点/工具可经此感知宿主 (如查询子代理模板、发起跨 agent 消息)
+    std::weak_ptr<AgentHost> host;
 
     /// agent 启动进度通知回调 (由客户端端点 (TUI) 注册; 无注册则为空, no-op)
     /// - 调用方: BaseAgent::init() / CodeAgent::createTools() 各启动阶段

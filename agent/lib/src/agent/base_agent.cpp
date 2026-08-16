@@ -15,6 +15,7 @@
 #include "neograph/graph/compiler.h"
 #include "neograph/graph/validator.h"
 #include "neograph/llm/openai_provider.h"
+#include <atomic>
 #include <cassert>
 #include <chrono>
 #include <sstream>
@@ -648,6 +649,8 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                                     = subagentArg.value("system_prompt", std::string{}),
                                     .message  = subagentArg.value("message", std::string{}),
                                     .resultId = interruptArg.resultId,
+                                    // 透传父会话取消令牌: 用户取消父轮次时级联中止子代理
+                                    .cancelToken = session->getCancelToken(),
                                 }
                             );
                             if (resp.has_value()) {
@@ -659,7 +662,9 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                                 .parentAgentName = agentContext->agentConfig
                                                        ? agentContext->agentConfig->agentName
                                                        : std::string{},
-                                .parentThreadId  = std::string{threadId},
+                                .parentThreadId = std::string{threadId},
+                                // 透传父会话取消令牌: 用户取消父轮次时级联中止批量子代理
+                                .cancelToken = session->getCancelToken(),
                             };
                             if (batchArg.contains("tasks") && batchArg["tasks"].is_array()) {
                                 for (const auto& t : batchArg["tasks"]) {
@@ -990,8 +995,12 @@ asio::awaitable<BaseAgent::SimpleRunResult> BaseAgent::runStreamAsync(
     const std::vector<neograph::ChatMessage>& messages,
     std::string_view                          modelName
 ) {
-    auto threadId
-        = fmt::format("subagent_{}", std::chrono::system_clock::now().time_since_epoch().count());
+    // 每次运行生成唯一 thread_id: 时间戳 + 进程内自增序号
+    // (原实现仅用时间戳, 同毫秒并发调用会碰撞, 导致 SessionStore 会话 /
+    //  engine checkpoint 互相覆盖)
+    static std::atomic<uint64_t> runStreamSeq{0};
+    const auto                   ts = std::chrono::system_clock::now().time_since_epoch().count();
+    const auto threadId = fmt::format("subagent_{}_{}", ts, runStreamSeq.fetch_add(1));
     selectModel(threadId, modelName);
     auto inputMessages = neograph::json::array();
     for (const auto& msg : messages) {
@@ -1028,6 +1037,12 @@ asio::awaitable<BaseAgent::SimpleRunResult> BaseAgent::runStreamAsync(
     };
 
     auto result = co_await engine->run_stream_async(cfg, callback);
+    // 一次性运行结束: 回收该 thread 的会话与中间件状态 (graphData/shareStore/
+    // handles states), 防止每次调用在 SessionStore / 中间件内累积泄漏
+    if (agentContext->middlewareHandleContext) {
+        agentContext->middlewareHandleContext->cleanupThread(threadId);
+    }
+    agentContext->sessions->remove(threadId);
     co_return SimpleRunResult{
         .content    = oss.str(),
         .fullResult = std::move(result),

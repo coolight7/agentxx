@@ -1,5 +1,6 @@
 #include "agentxx/tools/sub_agent.h"
 
+#include "agentxx/agent/checkpoint_store.h"
 #include "agentxx/nodes/agentcall.h"
 #include "agentxx/nodes/modelcall.h"
 #include "agentxx/nodes/toolcall.h"
@@ -53,6 +54,11 @@ void SubAgentNormalTask::createSubgraph(
     if (nullptr == subgraph) {
         neograph::graph::EngineConfig config;
         config.node_context = context;
+        // 与主引擎一致: 每 thread 仅保留最新 checkpoint, 防止子代理每次运行
+        // 在 subgraph 内累积 O(super-steps) 的 checkpoint (子代理为一次性
+        // 运行, 不使用 fork / 时间旅行)
+        config.checkpoint_store
+            = std::make_shared<agentxx::agent::InMemorySingleCheckpointStore>();
         neograph::graph::EngineResources resources;
         resources.registry = std::move(registry);
         auto inner         = neograph::graph::GraphEngine::build(
@@ -189,7 +195,7 @@ neograph::ChatTool SubAgentManagerTool::get_definition() const {
 asio::awaitable<std::string> SubAgentManagerTool::execute_async(const neograph::json& arguments) {
     // 不直接运行 subgraph, 而是通过 NodeInterrupt 暂停父 agent
     // - 首次调用: 抛出 subagent 中断, 父 graph checkpoint 暂停
-    // - Session 捕获中断后经总线派发给 SubagentSupervisor 运行 subagent
+    // - Session 捕获中断后经总线派发给 AgentHost 派生独立 agent 运行
     // - 结果注入 interruptResult channel, 父 graph resume 后此函数返回结果
     auto subagentName = arguments.value("subagent", std::string{});
     if (subagentName.empty()) {
