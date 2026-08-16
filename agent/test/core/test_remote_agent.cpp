@@ -382,20 +382,10 @@ static asio::awaitable<void> test_remote_protocol_roundtrip() {
         }
     }
     {
-        // 系统资源占用: SystemUsage (CPU/内存/GPU 全字段) 序列化往返
+        // 系统资源占用: SystemUsage 序列化往返 (载荷为插件定义 schema 的
+        // JSON 字符串, 宿主只透传; 此处用 agentxx_system_monitor 约定的格式)
         agentxx::agent::WireSystemUsage resp;
-        resp.usage.cpuUsagePercent        = 42.5;
-        resp.usage.memory.totalPhysicalMB = 16384;
-        resp.usage.memory.usedPhysicalMB  = 8192;
-        resp.usage.memory.usagePercent    = 50.0;
-        agentxx::expand::GpuInfo gpu;
-        gpu.name                = "NVIDIA RTX 4090";
-        gpu.dedicatedVramMB     = 24576;
-        gpu.dedicatedVramUsedMB = 12000;
-        gpu.sharedVramMB        = 8192;
-        gpu.sharedVramUsedMB    = 100;
-        gpu.usagePercent        = 33.3;
-        resp.usage.gpus.push_back(std::move(gpu));
+        resp.data = R"({"cpu":42.5,"mem_total_mb":16384,"mem_used_mb":8192,"mem_percent":50.0,"gpus":[{"name":"NVIDIA RTX 4090","dedicated_vram_mb":24576,"dedicated_vram_used_mb":12000,"shared_vram_mb":8192,"shared_vram_used_mb":100,"usage_percent":33.3}]})";
         auto back
             = WsAgentIOTransport::deserialize(WsAgentIOTransport::serialize(WireMessage{resp}));
         XX_TEST_EXPECT_TRUE(back.has_value());
@@ -403,25 +393,8 @@ static asio::awaitable<void> test_remote_protocol_roundtrip() {
             auto* r = std::get_if<agentxx::agent::WireSystemUsage>(&*back);
             XX_TEST_EXPECT_TRUE(r != nullptr);
             if (r) {
-                // 浮点经 JSON 往返精度足够 (双精度 printf 精度内), 用近似比较
-                XX_TEST_EXPECT_TRUE(
-                    r->usage.cpuUsagePercent > 42.4 && r->usage.cpuUsagePercent < 42.6
-                );
-                XX_TEST_EXPECT_EQ(r->usage.memory.totalPhysicalMB, uint64_t{16384});
-                XX_TEST_EXPECT_EQ(r->usage.memory.usedPhysicalMB, uint64_t{8192});
-                XX_TEST_EXPECT_TRUE(
-                    r->usage.memory.usagePercent > 49.9 && r->usage.memory.usagePercent < 50.1
-                );
-                XX_TEST_EXPECT_EQ(r->usage.gpus.size(), size_t{1});
-                if (r->usage.gpus.size() == 1) {
-                    const auto& rg = r->usage.gpus[0];
-                    XX_TEST_EXPECT_EQ(rg.name, std::string("NVIDIA RTX 4090"));
-                    XX_TEST_EXPECT_EQ(rg.dedicatedVramMB, uint64_t{24576});
-                    XX_TEST_EXPECT_EQ(rg.dedicatedVramUsedMB, uint64_t{12000});
-                    XX_TEST_EXPECT_EQ(rg.sharedVramMB, uint64_t{8192});
-                    XX_TEST_EXPECT_EQ(rg.sharedVramUsedMB, uint64_t{100});
-                    XX_TEST_EXPECT_TRUE(rg.usagePercent > 33.2 && rg.usagePercent < 33.4);
-                }
+                // JSON 字符串原样往返
+                XX_TEST_EXPECT_EQ(r->data, resp.data);
             }
         }
     }

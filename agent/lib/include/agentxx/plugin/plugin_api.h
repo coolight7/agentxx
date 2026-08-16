@@ -4,8 +4,10 @@
  * 设计要点:
  * - 纯 C 头: 插件可用任意编译器/任意语言 (C/C++/Rust...) 实现, 与宿主
  *   STL/异常/RTTI ABI 完全解耦; 插件编译无需链接 libagentxx
- * - 跨 CRT 堆边界: 所有跨边界内存统一由宿主分配/释放 (见 AgentxxHostVtable
- *   alloc/free/strdup), 插件返回的字符串必须经 host->alloc 分配
+ * - 跨 CRT 堆边界: 所有"宿主分配"的跨边界内存统一由宿主 alloc/free 管理
+ *   (见 AgentxxHostVtable alloc/free/strdup), 插件返回的字符串必须经
+ *   host->alloc 分配; 而"字符串参数/字段"一律以 AgentxxPluginStringView
+ *   (data + size) 传入, 是只读借用 (不要求 NUL 结尾, 不要求宿主分配)
  * - 每插件一个 AgentxxHost (opaque 指向宿主侧插件实例): 注册/订阅自动关联
  *   到调用它的插件, 插件卸载时宿主自动清理其全部注册残留
  * - 线程约定:
@@ -18,6 +20,13 @@
  * - 异常不外泄: 宿主 vtable 所有函数内部捕获全部异常 (C ABI 边界无异常);
  *   插件侧 execute/hook/event 回调同样不得让异常逃逸 (宿主调用处已兜底,
  *   但插件自身应遵循)
+ * - 字符串约定 (v6 起):
+ *   - 所有跨边界"字符串参数/字段"类型为 AgentxxPluginStringView (data+size,
+ *     不要求 NUL 结尾, 生命周期仅覆盖本次调用); 便捷构造见
+ *     agentxx_plugin_sv / agentxx_plugin_sv_cstr / AGENTXX_SV
+ *   - 所有"宿主分配"的字符串返回值 (execute 结果 / error_out /
+ *     strdup/list_plugins/get_plugin/... ) 仍为 char* (NUL 结尾, host->alloc),
+ *     调用方用完必须 host->free
  *
  * 版本策略: 修改本契约时递增 AGENTXX_PLUGIN_API_VERSION; 宿主拒绝
  * api_version 不匹配的插件 (仅拒绝, 不崩溃)
@@ -26,20 +35,55 @@
 #define AGENTXX_PLUGIN_API_H
 
 #include <stddef.h>
+#include <string.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#define AGENTXX_PLUGIN_API_VERSION 3
+#define AGENTXX_PLUGIN_API_VERSION 6
+
+/* ==================== 字符串视图 (跨边界字符串参数统一形态) ==================== */
+
+/// 只读字符串视图: 指向调用方内存 (UTF-8), 不要求 NUL 结尾
+/// - 生命周期仅覆盖本次调用 (宿主不得保存引用; 需要保存必须拷贝)
+/// - 空视图: data == NULL 或 size == 0 (视为空串)
+typedef struct AgentxxPluginStringView {
+    const char* data; ///< 指向 UTF-8 字节序列 (可含任意字节, 不必 NUL 结尾)
+    size_t      size; ///< 字节数
+} AgentxxPluginStringView;
+
+/// 构造字符串视图 (data, size)
+static inline AgentxxPluginStringView agentxx_plugin_sv(const char* data, size_t size) {
+    AgentxxPluginStringView sv;
+    sv.data = data;
+    sv.size = size;
+    return sv;
+}
+
+/// 从 NUL 结尾 C 字符串构造视图 (NULL 视为空视图)
+static inline AgentxxPluginStringView agentxx_plugin_sv_cstr(const char* s) {
+    AgentxxPluginStringView sv;
+    sv.data = s;
+    sv.size = s ? strlen(s) : 0;
+    return sv;
+}
+
+/// 视图是否为空 (NULL 或长度 0)
+static inline int agentxx_plugin_sv_empty(AgentxxPluginStringView sv) {
+    return sv.data == NULL || sv.size == 0;
+}
+
+/// 便捷宏: 字符串字面量 / const char* → 视图
+#define AGENTXX_SV(s) agentxx_plugin_sv_cstr((s))
 
 /* ==================== 插件元信息 ==================== */
 
 typedef struct AgentxxPluginInfo {
     int api_version; ///< 必须 == AGENTXX_PLUGIN_API_VERSION
-    const char* name; ///< 唯一标识, 如 "agentxx_javascript_engine" (宿主内静态字符串, 无需释放)
-    const char* version;
-    const char* description;
+    AgentxxPluginStringView name; ///< 唯一标识, 如 "agentxx_javascript_engine" (只读借用)
+    AgentxxPluginStringView version;
+    AgentxxPluginStringView description;
 } AgentxxPluginInfo;
 
 /* ==================== 工具定义 ==================== */
@@ -48,22 +92,22 @@ typedef struct AgentxxPluginInfo {
 #define AGENTXX_TOOL_FLAG_AUTO_SUMMARY (1 << 0) ///< 输出超限时自动压缩 (经 share_store 卸载)
 
 typedef struct AgentxxToolSpec {
-    const char* name; ///< 须全局唯一 (与内置工具/MCP 工具同名将注册失败)
-    const char* description;
-    const char* parameters_json; ///< JSON Schema 字符串 (json object)
+    AgentxxPluginStringView name; ///< 须全局唯一 (与内置工具/MCP 工具同名将注册失败)
+    AgentxxPluginStringView description;
+    AgentxxPluginStringView parameters_json; ///< JSON Schema 字符串 (json object)
     /// 同步执行回调 (宿主线程池线程):
-    /// - args_json: 参数对象 JSON (含宿主注入的 thread_id / tool_call_id)
+    /// - args_json/thread_id/tool_call_id: 字符串视图 (只读借用, 仅本次调用有效)
     /// - 返回: 结果 JSON 字符串, 必须用 host->alloc 分配 (宿主 free);
     ///   失败时返回 NULL 并经 error_out 输出错误信息 (同样 host->alloc)
     /// - 回调内可调用 call_tool / log / json_*; 不得阻塞宿主 io 线程
     /// - 注意: 宿主超时/取消仅终止"等待", 本回调一旦开始执行将持续到返回
     ///   (宿主按插件实例 inflight 计数保证其执行期间插件代码段不被卸载)
     char* (*execute)(
-        void*       user_data,
-        const char* args_json,
-        const char* thread_id,
-        const char* tool_call_id,
-        char**      error_out
+        void*                    user_data,
+        AgentxxPluginStringView  args_json,
+        AgentxxPluginStringView  thread_id,
+        AgentxxPluginStringView  tool_call_id,
+        char**                   error_out
     );
     void* user_data;
     long  default_timeout_ms; ///< 0 = 不限制 (宿主按调用方取消语义执行)
@@ -89,11 +133,11 @@ typedef enum AgentxxHookPoint {
 /// - out_json: 预留, 一期恒为 NULL (回调不得写入)
 /// - 返回 0 成功; 非 0 失败并经 error_out 输出错误 (host->alloc 分配)
 typedef int (*AgentxxHookFn)(
-    void*            user_data,
-    AgentxxHookPoint point,
-    const char*      node_input_json,
-    char**           out_json,
-    char**           error_out
+    void*                    user_data,
+    AgentxxHookPoint         point,
+    AgentxxPluginStringView  node_input_json,
+    char**                   out_json,
+    char**                   error_out
 );
 
 /* ==================== 事件订阅 ==================== */
@@ -109,14 +153,14 @@ typedef struct AgentxxHost AgentxxHost;
 /// - ctx: 提供者私有上下文
 /// - caller_host: 调用方插件宿主句柄 (如脚本插件的 C++ 壳, 脚本内注册的
 ///   工具经此挂到调用方实例)
-/// - method/args_json: 提供者自定义方法契约 (JSON 字符串)
+/// - method/args_json: 提供者自定义方法契约 (字符串视图, 只读借用)
 /// - 返回: 结果 JSON 字符串 (host->alloc 分配); 失败返回 NULL 并经 error_out 输出
 typedef char* (*AgentxxCapabilityInvokeFn)(
-    void*              ctx,
-    const AgentxxHost* caller_host,
-    const char*        method,
-    const char*        args_json,
-    char**             error_out
+    void*                    ctx,
+    const AgentxxHost*       caller_host,
+    AgentxxPluginStringView  method,
+    AgentxxPluginStringView  args_json,
+    char**                   error_out
 );
 
 typedef struct AgentxxHostVtable {
@@ -129,7 +173,7 @@ typedef struct AgentxxHostVtable {
     /// 注册工具; 名称冲突返回非 0
     int (*register_tool)(const AgentxxHost* host, const AgentxxToolSpec* spec);
     /// 注销工具 (按名称); 不存在返回非 0
-    int (*unregister_tool)(const AgentxxHost* host, const char* name);
+    int (*unregister_tool)(const AgentxxHost* host, AgentxxPluginStringView name);
 
     /* ---- 中间件钩子 (热插拔, 轮次边界生效) ---- */
     int (*register_hook)(
@@ -149,36 +193,36 @@ typedef struct AgentxxHostVtable {
     /// 订阅; 返回句柄 (宿主侧持有, 插件卸载时自动退订)
     AgentxxSubscription* (*subscribe)(
         const AgentxxHost* host,
-        const char*        topic,
-        void (*handler)(const char* event_json, void* ud),
+        AgentxxPluginStringView topic,
+        void (*handler)(AgentxxPluginStringView event_json, void* ud),
         void* ud
     );
     void (*unsubscribe)(AgentxxSubscription* sub);
     /// 发布 (异步投递, 立即返回)
-    int (*publish)(const AgentxxHost* host, const char* topic, const char* event_json);
+    int (*publish)(const AgentxxHost* host, AgentxxPluginStringView topic, AgentxxPluginStringView event_json);
 
     /* ---- 能力注册表 (插件互查/委派, 如 "interpreter.js") ---- */
     /// 声明能力 (无方法回调; 仅标记/互查)
-    int (*register_capability)(const AgentxxHost* host, const char* capability);
+    int (*register_capability)(const AgentxxHost* host, AgentxxPluginStringView capability);
     /// 注册能力并附带方法回调 (能力调用 = 通用插件间通信通道;
     /// 如 JS 引擎注册 "interpreter.js" 提供 load/unload 方法)
     int (*register_capability_ex)(
         const AgentxxHost*        host,
-        const char*               capability,
+        AgentxxPluginStringView   capability,
         AgentxxCapabilityInvokeFn invoke,
         void*                     ctx
     );
-    int (*unregister_capability)(const AgentxxHost* host, const char* capability);
-    int (*has_capability)(const AgentxxHost* host, const char* capability);
+    int (*unregister_capability)(const AgentxxHost* host, AgentxxPluginStringView capability);
+    int (*has_capability)(const AgentxxHost* host, AgentxxPluginStringView capability);
 
     /* ---- 能力调用 (插件间通信; io 线程约束, 跨线程经 post) ---- */
     /// 调用能力提供者的方法; 返回结果 JSON (host->alloc), 失败返回 NULL 并 error_out
     char* (*invoke_capability)(
-        const AgentxxHost* host,
-        const char*        capability,
-        const char*        method,
-        const char*        args_json,
-        char**             error_out
+        const AgentxxHost*       host,
+        AgentxxPluginStringView  capability,
+        AgentxxPluginStringView  method,
+        AgentxxPluginStringView  args_json,
+        char**                   error_out
     );
 
     /* ---- 线程投递 (非 io 线程调用方使用; 二期) ---- */
@@ -196,11 +240,11 @@ typedef struct AgentxxHostVtable {
     ///   期间其代码段也不会被释放
     /// - 返回结果 JSON 字符串 (host->alloc); 失败返回 NULL 并经 error_out 输出
     char* (*call_tool)(
-        const AgentxxHost* host,
-        const char*        name,
-        const char*        args_json,
-        const char*        thread_id,
-        char**             error_out
+        const AgentxxHost*      host,
+        AgentxxPluginStringView name,
+        AgentxxPluginStringView args_json,
+        AgentxxPluginStringView thread_id,
+        char**                  error_out
     );
 
     /* ---- 插件互查 (依赖协商/自适应; io 线程约束, 跨线程经 post) ---- */
@@ -209,30 +253,47 @@ typedef struct AgentxxHostVtable {
     ///   "depends":[],"optional_depends":[]}, ...]
     char* (*list_plugins)(const AgentxxHost* host);
     /// 单个插件信息 JSON (同上单对象; 未安装返回 NULL, host->alloc)
-    char* (*get_plugin)(const AgentxxHost* host, const char* name);
+    char* (*get_plugin)(const AgentxxHost* host, AgentxxPluginStringView name);
     /// 调用方插件自身信息 JSON {"name","version","description","path","depends":[],...}
     /// (插件加载时常用: 从 path 推导资源目录等; host->alloc)
     char* (*get_own_info)(const AgentxxHost* host);
     /// 读取会话级 share_store 条目 (仅 io 线程); 不存在返回 NULL
-    char* (*get_share_store)(const AgentxxHost* host, const char* thread_id, long long id);
+    char* (*get_share_store)(const AgentxxHost* host, AgentxxPluginStringView thread_id, long long id);
     /// 向会话 UI 推送提示消息 (仅 io 线程); level: 0=info 1=warning 2=error
     void (*emit_message_tip)(
-        const AgentxxHost* host,
-        const char*        thread_id,
-        const char*        text,
-        int                level
+        const AgentxxHost*      host,
+        AgentxxPluginStringView thread_id,
+        AgentxxPluginStringView text,
+        int                     level
     );
     /// 日志 (线程安全); level 与宿主 XX_LOG 级别对应 (0=trace 1=debug 2=info 3=warn 4=error)
-    void (*log)(const AgentxxHost* host, int level, const char* msg);
+    void (*log)(const AgentxxHost* host, int level, AgentxxPluginStringView msg);
 
     /* ---- JSON 辅助 (插件拼装/解析 JSON; 线程安全, 任意线程可调用) ---- */
     /// 从 JSON 字符串中提取指定 key 的字符串值 (宿主解析; 结果 host->alloc)
     /// - key 缺失 / 值非字符串 / JSON 非法 返回 NULL
     /// - 替代插件手写 JSON 解析 (对转义字符/嵌套结构不可靠)
-    char* (*json_get_string)(const AgentxxHost* host, const char* json, const char* key);
+    char* (*json_get_string)(const AgentxxHost* host, AgentxxPluginStringView json, AgentxxPluginStringView key);
     /// 字符串 → JSON 字符串字面量 (含引号包裹与转义; 结果 host->alloc)
     /// - 用于插件拼装 JSON 时转义字段值 (替代手工拼接, 防注入/语法错误)
-    char* (*json_escape)(const AgentxxHost* host, const char* s);
+    char* (*json_escape)(const AgentxxHost* host, AgentxxPluginStringView s);
+
+    /* ---- 宿主配置/提示词访问 (插件装配期使用; io 线程, 跨线程经 post) ---- */
+    /// 宿主 AgentConfig 关键字段 JSON (io 线程; host->alloc):
+    /// {"dataDir": "...", "projectRoot": "..."(可为空),
+    ///  "platform": "windows"|"linux"|"macos"}
+    /// - 通用宿主信息; 插件业务参数请用 get_plugin_args (宿主不解析 args)
+    char* (*get_config)(const AgentxxHost* host);
+    /// 本插件配置参数 JSON (yaml `plugins` 条目 args; io 线程; host->alloc):
+    /// - 宿主对 args 内容完全不解析, 整体原样传递 (参数语义由插件定义,
+    ///   如 agentxx_codegraph 的 loadPaths/ignorePaths/loadCwd/useGitignore)
+    /// - 未配置时返回 "{}"
+    char* (*get_plugin_args)(const AgentxxHost* host);
+    /// 宿主 toolPrompt 配置 (io 线程; host->alloc):
+    /// {"depict": "...", "args": {"参数名": "参数说明", ...}}
+    /// - 工具未配置 prompt 时返回 NULL (插件回退内置默认描述)
+    /// - 供插件注册工具时生成与内置工具一致的动态描述 (用户可经 yaml 覆盖)
+    char* (*get_tool_prompt)(const AgentxxHost* host, AgentxxPluginStringView tool_name);
 } AgentxxHostVtable;
 
 struct AgentxxHost {
@@ -267,7 +328,7 @@ typedef void (*AgentxxPluginUnloadFn)(void* plugin_ctx);
 /* ==================== 便捷宏 (插件侧使用) ==================== */
 
 /// 在插件侧分配跨边界字符串 (必须用它, 不能直接用 malloc/strdup)
-#define AGENTXX_STRDUP(host, s) ((host)->vtable->strdup((host), (s)))
+#define AGENTXX_STRDUP(host, s) ((host)->vtable->strdup((s)))
 
 #ifdef __cplusplus
 }

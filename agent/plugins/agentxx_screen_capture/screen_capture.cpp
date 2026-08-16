@@ -10,11 +10,11 @@
 using Microsoft::WRL::ComPtr;
 #endif
 
-#include "agentxx/expand/screen_capture.h"
+#include "screen_capture.h"
 #include <atomic>
 #include <thread>
 
-#include "agentxx/util/log.h"
+#include "screen_capture_plugin.h"
 
 namespace agentxx {
 namespace expand {

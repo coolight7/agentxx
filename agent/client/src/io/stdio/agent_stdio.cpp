@@ -152,6 +152,35 @@ asio::awaitable<std::optional<std::string>> StdIOClientAgentIO::getInput() {
     co_return co_await stdinReader.readLine();
 }
 
+// ---------------------------------------------------------------------------
+// 插件适配器接口 (CliPluginAdapter 在 client io 线程调用)
+// ---------------------------------------------------------------------------
+
+void StdIOClientAgentIO::sendPluginUserInput(const std::string& text) {
+    if (text.empty() || threadId_.empty()) {
+        return;
+    }
+    // 与用户输入同路径: 发送 WireUserInput (发送后通知事件接收器)
+    sendUserInput(threadId_, text);
+}
+
+bool StdIOClientAgentIO::sendPluginDataUp(
+    const std::string& plugin,
+    const std::string& event,
+    const std::string& json
+) {
+    if (!transport_ || !transport_->alive()) {
+        XX_LOGW("[stdio] sendPluginDataUp dropped (no transport): {}.{}", plugin, event);
+        return false;
+    }
+    agentxx::agent::WirePluginDataUp up;
+    up.plugin = plugin;
+    up.event  = event;
+    up.data   = json;
+    sendToPeer(std::move(up));
+    return true;
+}
+
 asio::awaitable<neograph::json> StdIOClientAgentIO::handleInterrupt(
     std::string_view threadId,
     std::string_view interruptNode,

@@ -21,6 +21,8 @@ private:
 
     std::shared_ptr<StderrLogSink> logSink_;
     bool                           isThinking_ = false;
+    /// 当前会话 thread_id (mode_runners 装配时设置; 插件代发消息用)
+    std::string threadId_;
 
 public:
 
@@ -35,6 +37,27 @@ public:
 
     StdIOClientAgentIO();
     ~StdIOClientAgentIO() override;
+
+    /// 设置当前会话 thread_id (mode_runners 在建立会话时调用)
+    void setThreadId(std::string threadId) {
+        threadId_ = std::move(threadId);
+    }
+
+    // -----------------------------------------------------------------------
+    // 插件适配器接口 (CliPluginAdapter 在 client io 线程调用; 线程安全)
+    // -----------------------------------------------------------------------
+
+    /// 代发用户消息 (与用户输入同路径: 经 transport 发送 WireUserInput;
+    /// 发送后通知事件接收器)
+    void sendPluginUserInput(const std::string& text);
+
+    /// 跨端插件数据上行: WirePluginDataUp → agent 侧插件
+    /// 返回 true 表示已投递 (未连接等失败返回 false)
+    bool sendPluginDataUp(
+        const std::string& plugin,
+        const std::string& event,
+        const std::string& json
+    );
 
 protected:
 

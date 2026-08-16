@@ -1,3 +1,6 @@
+// 平台宏须最先包含 (XX_IS_WIN_D 等由插件共享头本地推导)
+#include "text_selection_monitor_plugin.h"
+
 #if XX_IS_WIN_D
 // include 顺序是必要的
 #include <winsock2.h>
@@ -17,9 +20,7 @@
 
 #endif
 
-#include "agentxx/expand/text_selection_monitor.h"
-#include "agentxx/util/log.h"
-#include "neograph/api.h"
+#include "text_selection_monitor.h"
 #include "simdjson.h"
 #include <asio/io_context.hpp>
 #include <asio/steady_timer.hpp>

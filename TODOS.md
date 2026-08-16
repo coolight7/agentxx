@@ -7,6 +7,8 @@
 - eventBus 改为tree，命名空间使用 axx/bxx/cc
 - 支持修改上下文
 - llm压缩时，保持同一上下文，直接添加新user消息提示压缩成一段话，然后覆盖回去
+- 插件化支持内置合并编译
+- 客户端 viewMessage 分页
 - 插件支持修改预设提示词、剥离部分 tool 提示词到插件
 - 插件实现 execute_javascript_command
 - 调整插件代码结构，增加测试、划分文件夹

@@ -415,71 +415,93 @@ void test_model_max_concurrent_connections() {
 }
 
 // ---------------------------------------------------------------------------
-// codegraph 块解析 (yaml `codegraph`: enable/paths/ignore_paths/load_cwd/use_gitignore)
+// codegraph 参数迁移到插件配置 (yaml `plugins` 条目 args):
+// 宿主只整体解析 args json, 不解析其字段语义 (字段由插件自行定义)
 // ---------------------------------------------------------------------------
 
-void test_codegraph_default_disabled() {
-    // 未配置 codegraph 块: 默认禁用 (enable=false), load_cwd/use_gitignore 默认 true
+void test_plugins_empty_by_default() {
+    // 未配置 plugins 段: 列表为空
     auto cfg = loadYaml("data_dir: default\n");
-    XX_TEST_EXPECT_TRUE(!cfg.codeGraph.enable);
-    XX_TEST_EXPECT_TRUE(cfg.codeGraph.loadCwd);
-    XX_TEST_EXPECT_TRUE(cfg.codeGraph.useGitignore);
-    XX_TEST_EXPECT_TRUE(cfg.codeGraph.paths.empty());
-    XX_TEST_EXPECT_TRUE(cfg.codeGraph.ignorePaths.empty());
+    XX_TEST_EXPECT_TRUE(cfg.plugins.empty());
 }
 
-void test_codegraph_enable() {
-    auto cfg = loadYaml("codegraph:\n  enable: true\n");
-    XX_TEST_EXPECT_TRUE(cfg.codeGraph.enable);
-
-    cfg = loadYaml("codegraph:\n  enable: false\n");
-    XX_TEST_EXPECT_TRUE(!cfg.codeGraph.enable);
-}
-
-void test_codegraph_paths_parse() {
-    auto cfg = loadYaml(R"(codegraph:
-  enable: true
-  paths:
-    - "/path/to/project_a"
-    - "relative/path/project_b"
-  ignore_paths:
-    - "/path/to/project_a/third_party"
-    - "**/generated/**"
+void test_plugin_name_form_removed() {
+    // name 形式已移除: 所有插件统一经 path 外置指定;
+    // 仅配置 name (无 path) 的条目被跳过 (记警告)
+    auto cfg = loadYaml(R"(plugins:
+  - name: agentxx_codegraph
+    enabled: true
+    args:
+      load_cwd: true
+      use_gitignore: false
 )");
-    XX_TEST_EXPECT_TRUE(cfg.codeGraph.enable);
-    XX_TEST_EXPECT_EQ(cfg.codeGraph.paths.size(), size_t{2});
-    if (cfg.codeGraph.paths.size() == 2) {
-        XX_TEST_EXPECT_EQ(cfg.codeGraph.paths[0], std::string("/path/to/project_a"));
-        XX_TEST_EXPECT_EQ(cfg.codeGraph.paths[1], std::string("relative/path/project_b"));
-    }
-    XX_TEST_EXPECT_EQ(cfg.codeGraph.ignorePaths.size(), size_t{2});
-    if (cfg.codeGraph.ignorePaths.size() == 2) {
-        XX_TEST_EXPECT_EQ(
-            cfg.codeGraph.ignorePaths[0],
-            std::string("/path/to/project_a/third_party")
-        );
-        XX_TEST_EXPECT_EQ(cfg.codeGraph.ignorePaths[1], std::string("**/generated/**"));
+    XX_TEST_EXPECT_TRUE(cfg.plugins.empty());
+    // 同时提供 name + path: 正常加载 (name 字段被忽略, 仅 path 生效)
+    cfg = loadYaml(R"(plugins:
+  - name: agentxx_codegraph
+    path: "/opt/plugins/agentxx_codegraph"
+    enabled: true
+)");
+    XX_TEST_EXPECT_EQ(cfg.plugins.size(), size_t{1});
+    if (cfg.plugins.size() == 1) {
+        XX_TEST_EXPECT_EQ(cfg.plugins[0].path, std::string("/opt/plugins/agentxx_codegraph"));
+        XX_TEST_EXPECT_TRUE(cfg.plugins[0].enabled);
     }
 }
 
-void test_codegraph_load_cwd_and_gitignore_flags() {
-    auto cfg = loadYaml(R"(codegraph:
-  enable: true
-  load_cwd: false
-  use_gitignore: false
+void test_plugin_args_paths_parse() {
+    // args 内路径列表原样解析 (宿主不解析语义)
+    auto cfg = loadYaml(R"(plugins:
+  - path: "/opt/plugins/agentxx_codegraph"
+    enabled: true
+    args:
+      paths:
+        - "/path/to/project_a"
+        - "relative/path/project_b"
+      ignore_paths:
+        - "/path/to/project_a/third_party"
+        - "**/generated/**"
 )");
-    XX_TEST_EXPECT_TRUE(cfg.codeGraph.enable);
-    XX_TEST_EXPECT_TRUE(!cfg.codeGraph.loadCwd);
-    XX_TEST_EXPECT_TRUE(!cfg.codeGraph.useGitignore);
-
-    // 缺省字段保持默认
-    cfg = loadYaml("codegraph:\n  enable: true\n");
-    XX_TEST_EXPECT_TRUE(cfg.codeGraph.loadCwd);
-    XX_TEST_EXPECT_TRUE(cfg.codeGraph.useGitignore);
+    XX_TEST_EXPECT_EQ(cfg.plugins.size(), size_t{1});
+    if (cfg.plugins.size() != 1) {
+        return;
+    }
+    const auto& pc = cfg.plugins[0];
+    XX_TEST_EXPECT_EQ(pc.path, std::string("/opt/plugins/agentxx_codegraph"));
+    XX_TEST_EXPECT_TRUE(pc.args.is_object());
+    if (pc.args.is_object() && pc.args.contains("paths")) {
+        const auto& paths = pc.args["paths"];
+        XX_TEST_EXPECT_EQ(paths.size(), size_t{2});
+        if (paths.size() == 2) {
+            XX_TEST_EXPECT_EQ(paths[0].get<std::string>(), std::string("/path/to/project_a"));
+            XX_TEST_EXPECT_EQ(paths[1].get<std::string>(), std::string("relative/path/project_b"));
+        }
+    } else {
+        XX_TEST_EXPECT_TRUE(false);
+    }
+    if (pc.args.is_object() && pc.args.contains("ignore_paths")) {
+        const auto& ig = pc.args["ignore_paths"];
+        XX_TEST_EXPECT_EQ(ig.size(), size_t{2});
+        if (ig.size() == 2) {
+            XX_TEST_EXPECT_EQ(
+                ig[0].get<std::string>(),
+                std::string("/path/to/project_a/third_party")
+            );
+            XX_TEST_EXPECT_EQ(ig[1].get<std::string>(), std::string("**/generated/**"));
+        }
+    } else {
+        XX_TEST_EXPECT_TRUE(false);
+    }
 }
 
-void test_codegraph_env_expand() {
-    // enable / paths / ignore_paths 均支持 ${VAR} 展开
+void test_plugin_missing_path_skipped() {
+    // path 缺失 (唯一必填字段): 跳过 (记警告)
+    auto cfg = loadYaml("plugins:\n  - enabled: true\n");
+    XX_TEST_EXPECT_TRUE(cfg.plugins.empty());
+}
+
+void test_plugin_args_env_expand() {
+    // 插件 path/args 值均支持 ${VAR} 展开
     auto path = fs::temp_directory_path()
                 / fmt::format(
                     "agentxx_config_loader_test_{}.yaml",
@@ -487,12 +509,14 @@ void test_codegraph_env_expand() {
                 );
     {
         std::ofstream ofs(path);
-        ofs << R"(codegraph:
-  enable: ${AGENTXX_TEST_CG_ENABLE}
-  paths:
-    - "${AGENTXX_TEST_CG_PATH}"
-  ignore_paths:
-    - "${AGENTXX_TEST_CG_IGNORE}"
+        ofs << R"(plugins:
+  - path: ${AGENTXX_TEST_CG_PATH}/agentxx_codegraph
+    enabled: ${AGENTXX_TEST_CG_ENABLE}
+    args:
+      paths:
+        - "${AGENTXX_TEST_CG_PATH}"
+      ignore_paths:
+        - "${AGENTXX_TEST_CG_IGNORE}"
 )";
     }
     auto cfg = agentxx::client::loadYamlConfig(
@@ -507,14 +531,33 @@ void test_codegraph_env_expand() {
     std::error_code ec;
     fs::remove(path, ec);
 
-    XX_TEST_EXPECT_TRUE(cfg.codeGraph.enable);
-    XX_TEST_EXPECT_EQ(cfg.codeGraph.paths.size(), size_t{1});
-    if (cfg.codeGraph.paths.size() == 1) {
-        XX_TEST_EXPECT_EQ(cfg.codeGraph.paths[0], std::string("/data/cg/proj"));
+    XX_TEST_EXPECT_EQ(cfg.plugins.size(), size_t{1});
+    if (cfg.plugins.size() != 1) {
+        return;
     }
-    XX_TEST_EXPECT_EQ(cfg.codeGraph.ignorePaths.size(), size_t{1});
-    if (cfg.codeGraph.ignorePaths.size() == 1) {
-        XX_TEST_EXPECT_EQ(cfg.codeGraph.ignorePaths[0], std::string("/data/cg/proj/third_party"));
+    const auto& pc = cfg.plugins[0];
+    XX_TEST_EXPECT_EQ(pc.path, std::string("/data/cg/proj/agentxx_codegraph"));
+    XX_TEST_EXPECT_TRUE(pc.enabled);
+    if (pc.args.is_object() && pc.args.contains("paths")) {
+        const auto& paths = pc.args["paths"];
+        XX_TEST_EXPECT_EQ(paths.size(), size_t{1});
+        if (paths.size() == 1) {
+            XX_TEST_EXPECT_EQ(paths[0].get<std::string>(), std::string("/data/cg/proj"));
+        }
+    } else {
+        XX_TEST_EXPECT_TRUE(false);
+    }
+    if (pc.args.is_object() && pc.args.contains("ignore_paths")) {
+        const auto& ig = pc.args["ignore_paths"];
+        XX_TEST_EXPECT_EQ(ig.size(), size_t{1});
+        if (ig.size() == 1) {
+            XX_TEST_EXPECT_EQ(
+                ig[0].get<std::string>(),
+                std::string("/data/cg/proj/third_party")
+            );
+        }
+    } else {
+        XX_TEST_EXPECT_TRUE(false);
     }
 }
 
@@ -545,11 +588,11 @@ TestResult testConfigLoader() {
     test_plugins_missing_path_skipped();
     test_plugins_env_expand();
     test_model_max_concurrent_connections();
-    test_codegraph_default_disabled();
-    test_codegraph_enable();
-    test_codegraph_paths_parse();
-    test_codegraph_load_cwd_and_gitignore_flags();
-    test_codegraph_env_expand();
+    test_plugins_empty_by_default();
+    test_plugin_name_form_removed();
+    test_plugin_args_paths_parse();
+    test_plugin_missing_path_skipped();
+    test_plugin_args_env_expand();
 
     return TestResult{g_config_loader_passed, g_config_loader_failed};
 }

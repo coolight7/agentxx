@@ -1,8 +1,7 @@
 #pragma once
 
 #include "agentxx/agent/io/agent_io.h"
-#include "agentxx/expand/get_cpu_gpu_use.h"
-#include "agentxx/util/stream.h"
+#include "agentxx/agent/io/wire_protocol.h"
 #include "asio/any_io_executor.hpp"
 #include "asio/awaitable.hpp"
 #include "asio/experimental/concurrent_channel.hpp"
@@ -162,22 +161,13 @@ private:
     void resolveInterrupt(int64_t id, neograph::json result);
     void onCancel();
 
-    // ----- CodeGraph 索引进度推送 (仅 ex_ 线程访问) -----
+    // ----- 插件事件转发 (仅 ex_ 线程访问) -----
 
-    /// 订阅 codegraph 索引进度 (run 开始时调用一次):
-    /// - 经 agent->codegraphManager() 获取 CodeGraphManager 并注册进度回调
-    /// - codegraph 不可用 (未启用/未初始化) 时不订阅, TUI 不显示
-    void subscribeCodegraphProgress();
-
-    /// ex_ 线程: 收到一次索引进度更新 (由 blockingPool 线程回调 post 而来);
-    /// 经 3s 节流放行后推送, 限流窗内的更新挂起由尾推定时器补发
-    void onCodegraphProgress(WireCodegraphProgress prog);
-
-    /// 尾推定时器回调: 补推限流窗内挂起的最新进度 (计为一次放行)
-    void onCodegraphTail();
-
-    /// 启动/复用尾推定时器: 窗末补推 cgPending_ (定时器在跑时 no-op)
-    void armCodegraphTailTimer();
+    /// 订阅事件总线 `plugin.` 前缀 (run 开始时调用一次):
+    /// - 插件 publish 的事件 (topic 约定 `{插件名}.{事件名}`) 原样转发为
+    ///   WirePluginData (plugin/event/data), 宿主不解析载荷语义
+    /// - 频率由插件自身控制; 客户端据此判断插件可用性并展示
+    void subscribePluginEvents();
 
     asio::any_io_executor    ex_;
     std::weak_ptr<BaseAgent> agent_;
@@ -196,22 +186,12 @@ private:
     // grace 定时器 (仅 ex_ 线程访问: startGraceTimer/cancelGraceTimer)
     std::shared_ptr<asio::steady_timer> graceTimer_;
 
-    /// 系统资源监控实例 (按需惰性创建, 仅 ex_ 线程访问):
-    /// CPU 占用率依赖前后两次采样差值, 客户端 (TUI) 周期请求时须跨请求复用
-    /// 同一实例才能得到连续准确的占用率; query() 卸载到 blockingPool 执行,
-    /// 不经此协程并发, 实例内部采样状态无竞争
-    std::shared_ptr<agentxx::expand::CpuGpuMonitor> sysMonitor_;
+    // ----- 插件事件转发状态 (仅 ex_ 线程访问) -----
 
-    // ----- CodeGraph 索引进度推送状态 (仅 ex_ 线程访问) -----
-
-    /// 是否已注册 codegraph 进度订阅 (防止 run() 重复注册覆盖回调)
-    bool cgSubscribed_ = false;
-    /// 3s 节流器: 索引进度推送限流 (最短 3 秒一次, 见 util/stream.h Throttle)
-    agentxx::util::Throttle cgThrottle_{std::chrono::seconds{3}};
-    /// 限流窗内挂起的最新进度 (尾推定时器到点补发, 保证最后一条不丢)
-    std::optional<WireCodegraphProgress> cgPending_;
-    /// 尾推定时器: 放行后启动, 窗末补推 cgPending_ (非空即表示定时器在跑)
-    std::shared_ptr<asio::steady_timer> cgTailTimer_;
+    /// 是否已注册插件事件订阅 (防止 run() 重复注册覆盖回调)
+    bool pluginSubscribed_ = false;
+    /// 事件总线前缀订阅 id (0 = 未订阅)
+    size_t pluginSubId_ = 0;
 
     std::atomic<bool> running_{false};
     std::atomic<bool> turnActive_{false};
