@@ -597,7 +597,7 @@ static std::string buildUsageInfoItemsJson(const UsageStat& st) {
     // RAM: 45% (8192/18432 MB)
     std::string ram = fmt::format("RAM: {:.0f}%", st.memPct);
     if (st.memTotalMb > 0) {
-        ram = fmt::format("{} ({} / {} MB)", ram, st.memUsedMb, st.memTotalMb);
+        ram = fmt::format("|- {} ({}/{} M)", ram, st.memUsedMb, st.memTotalMb);
     }
     textItem(ram);
     if (st.gpuCount == 0) {
