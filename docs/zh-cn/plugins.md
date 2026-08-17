@@ -768,8 +768,8 @@ plugins/
 | `agent/client/src/io/tui/components/status_bar.cpp` | 插件状态栏项渲染 (左/右分组, order 排序) |
 | `agent/client/src/io/tui/tui_sidebar_content.cpp` | Info 侧边栏 (Planning/Append 组件 + 插件 Info 段落); 系统资源与 CodeGraph 渲染已剥离到插件 client 侧 (经 register_info_section) |
 | `agent/client/src/mode_runners.cpp` + `main.cpp` | 4 个模式装配 ClientPluginManager + 适配器 (setupClientPlugins 模板); 命令拦截 (tryInvokePluginCommand) |
-| `agent/test/core/test_plugins.*` | agent 插件测试模块 `plugins` (118 项断言: 加载/工具执行/互调/钩子/事件/禁用启用/卸载/冲突/列表/JS 引擎/级联/拓扑/超时卸载竞态/shutdownAll) |
-| `agent/test/core/test_client_plugins.*` | client 插件测试模块 `client_plugins` (40 项断言: 加载/UI 注册表/事件分发/命令/跨端/禁用启用/卸载) |
+| `agent/test/core/test_plugins.*` | agent 插件测试模块 `plugins` (140 项断言: 加载/工具执行/互调/钩子/事件/禁用启用/卸载/冲突/列表/JS 引擎/级联/拓扑/超时卸载竞态/shutdownAll/sides 过滤/args 传递/publish 禁用) |
+| `agent/test/core/test_client_plugins.*` | client 插件测试模块 `client_plugins` (61 项断言: 加载/UI 注册表/事件分发/命令/跨端/禁用启用/卸载/订阅扩容与派发中动态订阅) |
 
 ---
 
@@ -788,13 +788,17 @@ plugins/
 
 ### 13.2 与设计原稿的偏差 (实现为准)
 
+0. **client 侧订阅生命周期 (2026-08 修复)**: `ClientPluginInstance::subscriptions` 为
+   `vector<shared_ptr<Subscription>>`; `ClientSubscriptionImpl::sub` 为强引用 ——
+   多次订阅扩容/退订 erase/派发中动态订阅/unload 回调内退订均不悬垂
+   (原实现按值存储 + 裸指针 → UAF, 见 §7 缺陷修复记录)
 1. **跨 CRT 堆边界**: vtable 增加 `alloc/free/strdup`; `AgentxxToolSpec::execute` 返回的字符串与 `error_out` 均须经宿主分配 (`AGENTXX_STRDUP` 宏)。示例插件用 `g_host->vtable->strdup`, 不得用 `strdup`/`malloc`。
 2. **字符串参数统一字符串视图 (v6)**: 所有跨边界"字符串参数/字段" (`AgentxxPluginInfo`/`AgentxxToolSpec` 字段、execute/hook/event 回调参数、vtable 的 name/topic/json 等参数) 从 `const char*` 改为 `AgentxxPluginStringView` (data+size, 只读借用, 不要求 NUL 结尾, 生命周期仅覆盖本次调用); 仅"宿主分配"的返回值与 `error_out` 保持 `char*` (host->alloc)。插件侧构造: 字面量用 `AGENTXX_SV("...")`, 运行时字符串用 `agentxx_plugin_sv(str.data(), str.size())`。宿主侧 `PluginTool` 构造时拷贝字符串字段 (name/description/parameters_json 指向插件侧视图, 不依赖插件内存存活)。
 3. **工具冲突检测**: `ToolRegistry::setStaticToolNames` 由 init 在 `own_tools` 之前收集内置工具名 (注意: own_tools 会 move 空 tools vector, 收集必须在其之前), 插件工具与内置/MCP 工具同名注册失败。
 4. **订阅回调签名**: `subscribe(topic, handler, ud)` 载荷为 JSON 字符串; 宿主侧经 `EventBus::get<std::string>` 桥接, topic 自动加 `plugin.` 前缀; 另增 `publish` (异步投递)。
 5. **call_tool 语义**: 仅可调用插件注册的工具 (不暴露宿主内置工具); 查表在 io 线程短临界区, 目标工具 execute 回调在【调用方线程】执行 —— 线程池/JS 线程内调用不阻塞 io 线程; io 线程内调用会阻塞 (罕见场景, 插件应避免); 目标插件由宿主引用计数保活。
 6. **钩子回调签名**: `fn(user_data, point, node_input_json, out_json, error_out)`; `node_input_json` 为节点输入摘要 (thread_id/point/messages_count/has_tool_calls)
-7. **卸载彻底性**: `unloadAsync` 等 inflight==0 **且**进行中轮次结束后立即 `eraseMiddleware` (断开 中间件↔实例 shared_ptr 循环引用), 并从 pendingCleanup 移除; disable 仍走轮末摘除 (无轮次时立即摘除)。`AgentContext::~AgentContext` 先调 `pluginManager->shutdownAll()`。
+7. **卸载彻底性**: `unloadAsync` 等 inflight==0 **且**进行中轮次结束后立即 `eraseMiddleware`, 并从 pendingCleanup 移除; disable 仍走轮末摘除 (无轮次时立即摘除)。`AgentContext::~AgentContext` 先调 `pluginManager->shutdownAll()`。2026-08 起 `PluginMiddlewareHandle` 持实例**弱引用** (与实例互不持有, 根除循环引用), `pendingCleanup_` 改为中间件弱引用记录 (flush 不依赖实例存活, 加载失败路径也能摘除)。
 8. **插件名**: 未导出 `get_info` 时按库文件名推断 (libfoo.so → foo)。
 9. **中间件 disabled 位**: 新增于 `BaseMiddlewareHandleInterface` (普通中间件恒 false); `WrapHandleBaseNode` start/end 循环均跳过 disabled 项; end 阶段按 start 实际执行下标回放, 运行中禁用不破坏配对 (M7 回归)。
 10. **能力调用 (invoke_capability)**: 原稿仅规划"能力注册表互查", 实现中扩展为通用插件间通信通道 —— 能力可附带方法回调 (`register_capability_ex`), 调用方提供者回调在调用方线程执行 (查表与回调分离防死锁, 见 6.3)。
@@ -804,6 +808,42 @@ plugins/
 
 ### 13.3 设计原稿遗漏、实现中补上的关键点
 
+0. **公共设施提取 (2026-08)**: 新增 `plugin_common.h/.cpp` 集中两侧共享基建
+   (pluginNameFromPath / parsePluginManifest / resolvePluginEntryPath /
+   topoSortPlugins / collectReverseRequiredDeps / ioCallSync / XX_PLUGIN_CATCH_*),
+   agent/client 两个管理器删除本地重复实现, 防止行为漂移
+   (历史上 client 侧多次"漏掉 agent 侧已修的问题")。
+1. **client 侧 entry 线程模型 (2026-08 修复)**: `ClientPluginManager::loadNativeAsync`
+   entry 调用卸载到内部线程池 (原实现 io 线程同步执行, 违背头文件契约且阻塞
+   client io 事件循环; 与 agent 侧 blockingPool 语义对齐)。
+2. **client 侧卸载状态机 (2026-08 修复)**: unloadAsync 顺序改为
+   detach → 等 inflight → unload 回调 → 从表移除 (析构 dlclose);
+   超时保持已 detach 状态可重试 (原实现先 erase 后等待, 超时后句柄泄漏且
+   不可重试); shutdownAll 改为依赖图级联先子后父 (原实现按 map 字母逆序,
+   依赖顺序无保证); `~ClientPluginInstance` 统一负责 dlclose。
+3. **client 侧配置 args (2026-08 修复)**: `loadNativeAsync` 增加 cfg 参数,
+   args 随加载直接写入实例 (原实现恒为空对象, get_plugin_args 恒返回 "{}");
+   agent 侧同步改为 cfg 直接传入, 废除"事后按路径推导名回查配置"
+   (manifest name 与目录名不一致时原实现静默丢失)。
+4. **agent 侧加载失败清理 (2026-08 修复)**: entry 返回非 0 时, 已注册的中间件
+   必须摘除/登记待轮末摘除 —— 原实现漏清理, 中间件↔实例循环引用导致实例
+   不析构 → dlHandle 永不 dlclose (模块泄漏)。配套: `PluginMiddlewareHandle`
+   持实例弱引用 (与实例互不持有, 根除循环引用); `pendingCleanup_` 改为
+   中间件弱引用记录, flush 不依赖实例存活。
+5. **agent 侧 sides 过滤 (2026-08 修复)**: `loadConfiguredPlugins` 跳过
+   `sides == Client` 的配置项 (原实现漏过滤, agent 侧会误加载纯 client 插件)。
+6. **vtable 收紧 (2026-08)**: `publish` 校验插件 enabled (禁用插件不再外发事件);
+   `postToIo` 无 executor 兜底路径加警告日志; `pluginNameFromPath` 扩展名剥离
+   改 rfind (my.plugin.so → my.plugin) 且仅剥过扩展名才去 lib 前缀;
+   `PluginTool` 名称单一来源 (spec.name, 删除构造双参数)。
+7. **client 侧杂项 (2026-08)**: `json_get_string`/`json_escape` 改为纯函数直执行
+   (原实现绕道 io 线程); Auto 侧入口探测与正式加载合并为一次 dlopen
+   (原实现探测 dlopen→close 后正式加载再 dlopen); waitInflightZero 指数退避
+   (10/20ms → 1s 上限); detachAll 卸载路径断订阅句柄链 (unload 回调内退订安全)。
+8. **example_plugin Info 段落 JSON 修复 (2026-08)**: `on_client_turn_end` 把
+   `json_escape` 的返回值 (带引号的 JSON 字面量) 嵌入模板 `{}` 产生非法 JSON
+   (`"text":"Turns: "1""`), 宿主解析失败静默丢弃 (Info 段落恒为空); 改为
+   整段文本放入 escape 调用。
 - **LLM 请求侧工具 schema 静态性**: 原稿只改造了 `toolcall.cpp` 执行侧查表, 但 `ModelCallWrapNode::build_params` 每轮从静态 `tools_` 组装工具定义发给 LLM —— 若不追加插件工具, 模型永远看不到新工具。实现中在 build_params 经 `ToolRegistry::appendDefinitions` 追加 (热注册后下一轮 modelcall 即对模型可见)。
 - **执行中工具悬垂**: 原稿靠插件 inflight 计数, 实现中 `ToolRegistry::find` 返回 shared_ptr 保活 (与 execTool 的裸指针路径并存, 插件工具经 shared_ptr 传入), 双保险。
 - **注册时序**: dlopen 在阻塞线程池, 但 entry 的注册动作必须回到 io 线程 (无锁模型); `loadNativeAsync` 在 io 线程协程内完成 dlopen (卸载到线程池) + entry 同步调用。
@@ -825,24 +865,10 @@ plugins/
 
 ---
 
-## 14. 尚未实现与路线图
+## 14. 尚未实现
 
-### 14.1 尚未实现
-
-- Wire 协议远程热管理 (`WirePluginList` / `WirePluginCmd`) / TUI 插件管理面板
-- 插件签名校验
+- 插件签名校验 (manifest 来源提示/签名)
+- CapabilityRegistry 插件互操作规范 (如第三方提供 `interpreter.python`)
 - 插件钩子的 out_json 修改能力、permission 联动注册 (插件工具默认走 PermissionMiddleware 的未注册规则兜底)
-- client 插件二期: prompt/quick_pick 模态、input_filter、消息装饰、keybind、设置项注册、热重载 (cap 位已预留: AGENTXX_UI_CAP_KEYBIND / PROMPT / MSG_DECOR)
-
-### 14.2 三期落地路线 (生态)
-
-1. Wire 协议: `WirePluginList` / `WirePluginCmd` (远程热管理: agent-server 进程内插件列表/启停)
-2. TUI 插件管理面板 (基于 client 插件面板语义层)
-3. 插件签名校验 (manifest 来源提示/签名)
-4. CapabilityRegistry 插件互操作规范 (如第三方提供 `interpreter.python`)
-
-### 14.3 未来方向
-
 - client 插件二期能力: prompt 模态 / input_filter / 消息装饰 / keybind / 设置项注册 / 热重载
-- 插件钩子 out_json 修改能力 (中间件改写节点输入/输出)
 - 模型 Provider 动态注册接口

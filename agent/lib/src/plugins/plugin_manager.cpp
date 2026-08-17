@@ -4,6 +4,7 @@
 #include "agentxx/agent/io/agent_io.h"
 #include "agentxx/agent/io/agent_io_transport.h"
 #include "agentxx/middlewares/event_stream.h"
+#include "agentxx/plugin/plugin_common.h"
 #include "agentxx/util/async_offload.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/log.h"
@@ -16,7 +17,6 @@
 #include "asio/use_awaitable.hpp"
 #include "fmt/format.h"
 #include "neograph/graph/cancel.h"
-#include "yaml-cpp/yaml.h"
 
 #include <algorithm>
 #include <chrono>
@@ -24,7 +24,6 @@
 #include <cstring>
 #include <filesystem>
 #include <functional>
-#include <future>
 #include <thread>
 
 #if defined(_WIN32)
@@ -226,13 +225,12 @@ PluginInstance::~PluginInstance() {
 // =====================================================================
 
 PluginTool::PluginTool(
-    std::string_view                            name,
     std::weak_ptr<agentxx::agent::AgentContext> agentContext,
     std::shared_ptr<PluginInstance>             instance,
     AgentxxToolSpec                             spec
 ) :
     XXToolBase(
-        name,
+        std::string{spec.name.data ? spec.name.data : "", spec.name.size},
         std::move(agentContext),
         /*autoSummaryOutput=*/(spec.flags & AGENTXX_TOOL_FLAG_AUTO_SUMMARY) != 0,
         /*canDelayLoad=*/false, // 插件工具全量注册, 不延迟加载
@@ -376,7 +374,7 @@ PluginMiddlewareHandle::PluginMiddlewareHandle(
     std::shared_ptr<PluginInstance>             instance
 ) :
     BaseMiddlewareHandle<agentxx::middleware::BaseMiddlewareState>(name, std::move(agentContext)),
-    instance_(std::move(instance)) {}
+    instance_(instance) {} // 存弱引用: 与实例互不持有, 消除循环引用
 
 void PluginMiddlewareHandle::setHook(AgentxxHookPoint point, AgentxxHookFn fn, void* user_data) {
     if (point >= 0 && point < AGENTXX_HOOK_COUNT) {
@@ -396,7 +394,9 @@ asio::awaitable<void>
     if (!hook.set || !hook.fn) {
         co_return;
     }
-    auto inst = instance_;
+    // 弱引用临时 lock: dispatch 期间实例保活 (实例已析构则跳过, 此时
+    // 中间件必然已被摘除, 防御性检查)
+    auto inst = instance_.lock();
     if (!inst || !inst->enabled) {
         co_return;
     }
@@ -530,7 +530,7 @@ void PluginManager::shutdownPlugin(const std::shared_ptr<PluginInstance>& inst) 
     }
     inst->unloadRequested = true;
     // 先递归卸载必选依赖本插件的插件 (先子后父)
-    for (const auto& dep : reverseRequiredDeps(inst->name, /*onlyEnabled=*/false)) {
+    for (const auto& dep : collectReverseRequiredDeps(plugins_, inst->name, /*onlyEnabled=*/false)) {
         auto depInst = find(dep);
         if (depInst && !depInst->unloadRequested) {
             shutdownPlugin(depInst);
@@ -539,7 +539,8 @@ void PluginManager::shutdownPlugin(const std::shared_ptr<PluginInstance>& inst) 
     // 摘除全部注册 → 释放工具对象 → 摘除中间件
     detachAll(inst.get());
     inst->tools.clear();
-    eraseMiddleware(inst.get());
+    eraseMiddleware(inst->middleware.get());
+    inst->middleware = nullptr;
     // unload 回调 (业务清理, 如引擎 join 内部线程); 宿主已自动反注册全部残留
     // - 内置插件无 dlHandle, 直接调用加载时保存的回调
     if (inst->dlHandle) {
@@ -568,51 +569,6 @@ static PluginManager* mgrOf(const AgentxxHost* host) {
     return inst ? inst->manager.lock().get() : nullptr;
 }
 
-/// 在 io 线程执行并同步等待结果 (调用方为 io 线程时直接执行)
-/// - 供 vtable 的 io 线程约束操作跨线程调用 (JS 线程/宿主线程池) 使用;
-///   调用方线程阻塞等待, io 线程为事件循环 (挂起而非忙等), 无死锁风险
-template<typename T>
-static T ioCallSync(PluginManager* mgr, std::function<T()> fn) {
-    if (!mgr) {
-        throw std::runtime_error("plugin manager released");
-    }
-    if (mgr->isIoThread()) {
-        return fn();
-    }
-    std::promise<T> p;
-    auto            fut = p.get_future();
-    mgr->postToIo([&p, fn = std::move(fn)]() mutable {
-        try {
-            p.set_value(fn());
-        } catch (...) {
-            p.set_exception(std::current_exception());
-        }
-    });
-    return fut.get();
-}
-
-/// void 特化
-static void ioCallSyncVoid(PluginManager* mgr, std::function<void()> fn) {
-    if (!mgr) {
-        return;
-    }
-    if (mgr->isIoThread()) {
-        fn();
-        return;
-    }
-    std::promise<void> p;
-    auto               fut = p.get_future();
-    mgr->postToIo([&p, fn = std::move(fn)]() mutable {
-        try {
-            fn();
-            p.set_value();
-        } catch (...) {
-            p.set_exception(std::current_exception());
-        }
-    });
-    fut.get();
-}
-
 static void* xx_alloc(size_t size) {
     return ::malloc(size);
 }
@@ -633,33 +589,7 @@ static char* xx_strdup(const char* s) {
     return p;
 }
 
-/// C ABI 边界异常兜底宏: vtable 函数内部不得让 C++ 异常逃逸 (跨边界 UB),
-/// 统一捕获转日志并按失败返回值返回。用法:
-///   XX_PLUGIN_CATCH_BEGIN
-///   ... 函数体 ...
-///   XX_PLUGIN_CATCH_END(失败返回值)     // 有返回值函数
-///   XX_PLUGIN_CATCH_END_VOID()          // void 函数
-#define XX_PLUGIN_CATCH_BEGIN try {
-#define XX_PLUGIN_CATCH_END(ret)                          \
-    }                                                     \
-    catch (const std::exception& e) {                     \
-        XX_LOGE("plugin vtable exception: {}", e.what()); \
-        return (ret);                                     \
-    }                                                     \
-    catch (...) {                                         \
-        XX_LOGE("plugin vtable unknown exception");       \
-        return (ret);                                     \
-    }
-#define XX_PLUGIN_CATCH_END_VOID()                        \
-    }                                                     \
-    catch (const std::exception& e) {                     \
-        XX_LOGE("plugin vtable exception: {}", e.what()); \
-        return;                                           \
-    }                                                     \
-    catch (...) {                                         \
-        XX_LOGE("plugin vtable unknown exception");       \
-        return;                                           \
-    }
+/// C ABI 边界异常兜底宏见 plugin_common.h (XX_PLUGIN_CATCH_*)
 
 static int xx_register_tool(const AgentxxHost* host, const AgentxxToolSpec* spec) {
     XX_PLUGIN_CATCH_BEGIN
@@ -785,8 +715,14 @@ static int xx_publish(
     AgentxxPluginStringView event_json
 ) {
     XX_PLUGIN_CATCH_BEGIN
-    auto mgr = mgrOf(host);
-    if (!mgr) {
+    auto mgr  = mgrOf(host);
+    auto inst = instOf(host);
+    if (!mgr || !inst) {
+        return -1;
+    }
+    // 禁用插件不得发布事件 (与订阅侧 enabled 检查对称, 防停用插件继续外发)
+    if (!inst->enabled) {
+        XX_LOGW("Plugin `{}` publish ignored (disabled)", inst->name);
         return -1;
     }
     std::string topicStr{topic.data ? topic.data : "", topic.size};
@@ -1203,10 +1139,10 @@ static char* xx_get_plugin_args(const AgentxxHost* host) {
     if (!mgr || !inst) {
         return nullptr;
     }
-    auto        mgrPtr  = mgr;
-    std::string ownName = inst->name;
-    auto        json    = ioCallSync<std::string>(mgrPtr, [mgrPtr, ownName]() {
-        return mgrPtr->getPluginArgsJson(ownName);
+    auto mgrPtr  = mgr;
+    auto instPtr = inst;
+    auto json    = ioCallSync<std::string>(mgrPtr, [mgrPtr, instPtr]() {
+        return mgrPtr->getPluginArgsJson(instPtr);
     });
     return host->vtable->strdup(json.c_str());
     XX_PLUGIN_CATCH_END(nullptr)
@@ -1308,7 +1244,6 @@ int PluginManager::registerTool(PluginInstance* inst, const AgentxxToolSpec* spe
         return -1;
     }
     auto tool = std::make_shared<PluginTool>(
-        std::string_view{spec->name.data ? spec->name.data : "", spec->name.size},
         agentContext_,
         std::move(shared),
         *spec
@@ -1675,25 +1610,6 @@ void PluginManager::emitMessageTip(
 
 // ==================== 生命周期 ====================
 
-/// 从库文件名推断插件名 (libfoo.so → foo; foo.dll → foo; libfoo.so.1.2 → foo)
-/// - 去 lib 前缀; 从第一个已知扩展名 (.so/.dylib/.dll) 截断, 兼容版本号后缀
-static std::string pluginNameFromPath(const std::string& path) {
-    auto base = std::filesystem::path(path).filename().string();
-    // 去 lib 前缀
-    if (base.size() > 3 && base.compare(0, 3, "lib") == 0) {
-        base.erase(0, 3);
-    }
-    // 去扩展名及其后版本号 (libfoo.so.1.2 → foo; my.plugin.so → my.plugin)
-    for (const char* ext : {".dylib", ".so", ".dll"}) {
-        auto pos = base.find(ext);
-        if (pos != std::string::npos) {
-            base.erase(pos);
-            break;
-        }
-    }
-    return base;
-}
-
 // =====================================================================
 // 内置插件注册表 (可选合并编译进 libagentxx, 见 builtin_plugin.h)
 // =====================================================================
@@ -1711,7 +1627,10 @@ static const AgentxxBuiltinPluginInfo* findBuiltinPlugin(std::string_view name) 
     return nullptr;
 }
 
-asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadNativeAsync(std::string path) {
+asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadNativeAsync(
+    std::string                    path,
+    const agentxx::agent::PluginConfig* cfg
+) {
     auto ctx = agentContext_.lock();
     if (!ctx || !ctx->blockingPool) {
         XX_LOGE("PluginManager: agent context not ready");
@@ -1810,6 +1729,15 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadNativeAsync(
     if (rc != 0) {
         XX_LOGE("Plugin `{}` entry returned {}", name, rc);
         detachAll(inst.get());
+        // 加载失败清理 (A4): 已注册的中间件必须摘除/延迟摘除 —— 中间件持有
+        // 实例弱引用, 若其仍挂 handles 栈, 实例无法析构 → dlHandle 不释放。
+        // - 无轮次执行: 立即摘除 (erase 安全), 实例析构 → dlclose
+        // - 轮次执行中: 已由 detachAll 置 disabled + 登记待轮末摘除
+        //   (弱引用记录, flush 不依赖实例存活)
+        if (!hasRunningTurn()) {
+            eraseMiddleware(inst->middleware.get());
+            inst->middleware = nullptr;
+        }
         plugins_.erase(name);
         co_return nullptr;
     }
@@ -1823,15 +1751,12 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadNativeAsync(
         inst->capabilityRegistrations.size()
     );
 
-    // 保存配置参数 (yaml `plugins` 条目 args): 宿主不解析字段语义,
-    // 插件经 vtable get_plugin_args 整体读取
-    if (auto ctxPtr = agentContext_.lock(); ctxPtr && ctxPtr->agentConfig) {
-        for (const auto& pc : ctxPtr->agentConfig->plugins) {
-            if (!pc.path.empty() && pluginNameFromPath(pc.path) == name) {
-                inst->args = pc.args;
-                break;
-            }
-        }
+    // 插件配置参数 (yaml `plugins` 条目 args) 随加载直接传入 (C2):
+    // - 宿主不解析字段语义, 插件经 vtable get_plugin_args 整体读取
+    // - 不再事后按"配置路径推导名 == 插件名"回查: manifest name 与目录/
+    //   文件名不一致时也能正确拿到 args (直接加载路径 cfg 为 nullptr → {})
+    if (cfg) {
+        inst->args = cfg->args;
     }
 
     co_return inst;
@@ -1841,7 +1766,8 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadBuiltinAsync
     std::string              name,
     std::string              path,
     std::vector<std::string> depends,
-    std::vector<std::string> optionalDepends
+    std::vector<std::string> optionalDepends,
+    const agentxx::agent::PluginConfig* cfg
 ) {
     auto ctx = agentContext_.lock();
     if (!ctx || !ctx->blockingPool) {
@@ -1917,6 +1843,11 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadBuiltinAsync
     if (rc != 0) {
         XX_LOGE("Plugin `{}` entry returned {}", name, rc);
         detachAll(inst.get());
+        // 与 loadNativeAsync 失败路径一致: 已注册中间件必须摘除/延迟摘除
+        if (!hasRunningTurn()) {
+            eraseMiddleware(inst->middleware.get());
+            inst->middleware = nullptr;
+        }
         plugins_.erase(name);
         co_return nullptr;
     }
@@ -1930,15 +1861,9 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadBuiltinAsync
         inst->capabilityRegistrations.size()
     );
 
-    // 保存配置参数 (yaml `plugins` 条目 args): 宿主不解析字段语义,
-    // 插件经 vtable get_plugin_args 整体读取
-    if (auto ctxPtr = agentContext_.lock(); ctxPtr && ctxPtr->agentConfig) {
-        for (const auto& pc : ctxPtr->agentConfig->plugins) {
-            if (!pc.path.empty() && pluginNameFromPath(pc.path) == name) {
-                inst->args = pc.args;
-                break;
-            }
-        }
+    // 插件配置参数随加载直接传入 (同 loadNativeAsync, 见 C2)
+    if (cfg) {
+        inst->args = cfg->args;
     }
 
     co_return inst;
@@ -1955,6 +1880,8 @@ asio::awaitable<bool> PluginManager::waitInflightZero(
     auto               ex = co_await asio::this_coro::executor;
     asio::steady_timer timer(ex);
     auto               deadline = std::chrono::steady_clock::now() + timeout;
+    // 指数退避轮询 (10ms → 1s 上限): 慢回调等待期间减少 io 线程定时器唤醒
+    auto backoff = std::chrono::milliseconds(10);
     while (inst->inflight.load(std::memory_order_acquire) > 0) {
         if (std::chrono::steady_clock::now() >= deadline) {
             XX_LOGW(
@@ -1964,8 +1891,9 @@ asio::awaitable<bool> PluginManager::waitInflightZero(
             );
             co_return false;
         }
-        timer.expires_after(std::chrono::milliseconds(10));
+        timer.expires_after(backoff);
         co_await timer.async_wait(asio::use_awaitable);
+        backoff = std::min(backoff * 2, std::chrono::milliseconds(1000));
     }
     co_return true;
 }
@@ -1981,15 +1909,15 @@ void PluginManager::detachAll(PluginInstance* inst) {
     }
     inst->toolNames.clear();
     // 钩子: 停用中间件 (disabled 位) + 记录待轮末摘除
+    // - 待摘除记录存中间件弱引用: 加载失败路径实例随后从插件表移除,
+    //   flush 时仍能按弱引用定位并摘除, 不依赖实例存活 (摘除后中间件
+    //   不再持有实例, 实例自然析构 → dlclose, 无循环引用泄漏)
     if (inst->middleware) {
         inst->middleware->disabled = true;
         for (int p = 0; p < AGENTXX_HOOK_COUNT; ++p) {
             inst->middleware->clearHook(static_cast<AgentxxHookPoint>(p));
         }
-        if (std::find(pendingCleanup_.begin(), pendingCleanup_.end(), inst->name)
-            == pendingCleanup_.end()) {
-            pendingCleanup_.push_back(inst->name);
-        }
+        addPendingCleanup(inst);
     }
     // 订阅: 全部退订
     // - 先 move 出容器再遍历: 避免 unsubscribe 内部 erase 修改正被 range-for
@@ -2010,8 +1938,26 @@ void PluginManager::detachAll(PluginInstance* inst) {
     restorePromptBackup(inst);
 }
 
-void PluginManager::eraseMiddleware(PluginInstance* inst) {
-    if (!inst) {
+void PluginManager::addPendingCleanup(const PluginInstance* inst) {
+    if (!inst || !inst->middleware) {
+        return;
+    }
+    if (std::find_if(
+            pendingCleanup_.begin(),
+            pendingCleanup_.end(),
+            [&](const PendingMiddlewareCleanup& p) {
+                return p.name == inst->name;
+            }
+        )
+        == pendingCleanup_.end()) {
+        pendingCleanup_.push_back(
+            PendingMiddlewareCleanup{inst->name, inst->middleware}
+        );
+    }
+}
+
+void PluginManager::eraseMiddleware(PluginMiddlewareHandle* mw) {
+    if (!mw) {
         return;
     }
     auto ctx = agentContext_.lock();
@@ -2023,14 +1969,12 @@ void PluginManager::eraseMiddleware(PluginInstance* inst) {
         std::remove_if(
             handles.begin(),
             handles.end(),
-            [inst](const std::shared_ptr<agentxx::middleware::BaseMiddlewareHandleInterface>& h) {
-                return h.get() == inst->middleware.get();
+            [mw](const std::shared_ptr<agentxx::middleware::BaseMiddlewareHandleInterface>& h) {
+                return h.get() == mw;
             }
         ),
         handles.end()
     );
-    // 摘除后清掉指针 (防误用; enable 时按需重建)
-    inst->middleware = nullptr;
 }
 
 void PluginManager::flushPendingCleanup() {
@@ -2039,12 +1983,18 @@ void PluginManager::flushPendingCleanup() {
     }
     auto pending = std::move(pendingCleanup_);
     pendingCleanup_.clear();
-    for (const auto& name : pending) {
-        auto inst = find(name);
-        if (inst && inst->middleware) {
-            eraseMiddleware(inst.get());
-            XX_LOGI("Plugin `{}` middleware removed from stack", name);
+    for (const auto& p : pending) {
+        auto mw = p.middleware.lock();
+        if (!mw) {
+            continue; // 已摘除/实例已释放
         }
+        eraseMiddleware(mw.get());
+        // 实例可能已从插件表移除 (加载失败路径): 仅当实例仍存活时断
+        // instance->middleware 引用 (enable 重建逻辑依赖其为空)
+        if (auto inst = find(p.name); inst && inst->middleware.get() == mw.get()) {
+            inst->middleware = nullptr;
+        }
+        XX_LOGI("Plugin `{}` middleware removed from stack", p.name);
     }
 }
 
@@ -2063,7 +2013,7 @@ asio::awaitable<bool> PluginManager::unloadAsync(std::string_view name) {
     // ---- 依赖图级联: 先卸载必选依赖本插件的插件 (先子后父) ----
     // - 例如卸载 JS 引擎插件 → 先卸载全部 depends 它的脚本插件,
     //   保证引擎 dlclose 前无任何脚本插件残留 (binding 永不悬垂)
-    for (const auto& dep : reverseRequiredDeps(inst->name, /*onlyEnabled=*/true)) {
+    for (const auto& dep : collectReverseRequiredDeps(plugins_, inst->name, /*onlyEnabled=*/true)) {
         XX_LOGI("Unload `{}` cascades unload of dependent plugin `{}`", inst->name, dep);
         co_await unloadAsync(dep);
     }
@@ -2101,10 +2051,17 @@ asio::awaitable<bool> PluginManager::unloadAsync(std::string_view name) {
         timer.expires_after(std::chrono::milliseconds(10));
         co_await timer.async_wait(asio::use_awaitable);
     }
-    eraseMiddleware(inst.get());
+    eraseMiddleware(inst->middleware.get());
+    inst->middleware = nullptr;
     // 从待轮末清理列表移除 (已立即摘除)
     pendingCleanup_.erase(
-        std::remove(pendingCleanup_.begin(), pendingCleanup_.end(), std::string{name}),
+        std::remove_if(
+            pendingCleanup_.begin(),
+            pendingCleanup_.end(),
+            [&](const PendingMiddlewareCleanup& p) {
+                return p.name == inst->name;
+            }
+        ),
         pendingCleanup_.end()
     );
 
@@ -2126,20 +2083,7 @@ asio::awaitable<bool> PluginManager::unloadAsync(std::string_view name) {
     co_return true;
 }
 
-/// 收集必选依赖 target 的插件名 (io 线程)
-std::vector<std::string>
-    PluginManager::reverseRequiredDeps(const std::string& target, bool onlyEnabled) const {
-    std::vector<std::string> out;
-    for (const auto& [name, inst] : plugins_) {
-        if (name == target || (onlyEnabled && !inst->enabled)) {
-            continue;
-        }
-        if (std::find(inst->depends.begin(), inst->depends.end(), target) != inst->depends.end()) {
-            out.push_back(name);
-        }
-    }
-    return out;
-}
+/// 收集必选依赖 target 的插件名 → 公共 collectReverseRequiredDeps (plugin_common.h)
 
 void PluginManager::disable(std::string_view name) {
     disableImpl(name, /*userInitiated=*/true);
@@ -2154,7 +2098,7 @@ void PluginManager::disableImpl(std::string_view name, bool userInitiated) {
         inst->userDisabled = true; // 用户显式禁用: enable 级联不复活
     }
     // 依赖图级联: 先禁用必选依赖本插件的插件 (脚本插件随引擎一起停用)
-    for (const auto& dep : reverseRequiredDeps(inst->name, /*onlyEnabled=*/true)) {
+    for (const auto& dep : collectReverseRequiredDeps(plugins_, inst->name, /*onlyEnabled=*/true)) {
         XX_LOGI("Disable `{}` cascades disable of dependent plugin `{}`", inst->name, dep);
         disableImpl(dep, /*userInitiated=*/false);
     }
@@ -2169,13 +2113,11 @@ void PluginManager::disableImpl(std::string_view name, bool userInitiated) {
         inst->middleware->disabled = true;
         if (hasRunningTurn()) {
             // 轮次执行中: 轮末 flushPendingCleanup 摘除 (防执行中下标错位)
-            if (std::find(pendingCleanup_.begin(), pendingCleanup_.end(), inst->name)
-                == pendingCleanup_.end()) {
-                pendingCleanup_.push_back(inst->name);
-            }
+            addPendingCleanup(inst.get());
         } else {
             // 无轮次执行: 立即摘除 (无执行中遍历, erase 安全)
-            eraseMiddleware(inst.get());
+            eraseMiddleware(inst->middleware.get());
+            inst->middleware = nullptr;
         }
     }
     XX_LOGI("Plugin disabled: {}", inst->name);
@@ -2210,7 +2152,13 @@ void PluginManager::enableImpl(std::string_view name, bool userInitiated) {
     if (inst->middleware) {
         inst->middleware->disabled = false;
         pendingCleanup_.erase(
-            std::remove(pendingCleanup_.begin(), pendingCleanup_.end(), std::string{name}),
+            std::remove_if(
+                pendingCleanup_.begin(),
+                pendingCleanup_.end(),
+                [&](const PendingMiddlewareCleanup& p) {
+                    return p.name == inst->name;
+                }
+            ),
             pendingCleanup_.end()
         );
     } else if (!inst->hookRegistrations.empty()) {
@@ -2246,7 +2194,7 @@ void PluginManager::enableImpl(std::string_view name, bool userInitiated) {
         capabilities_->registerCapability(c.name, inst->name, c.invoke, c.ctx);
     }
     // 依赖图级联: 再启用必选依赖本插件的插件 (仅未被用户显式禁用的)
-    for (const auto& dep : reverseRequiredDeps(inst->name, /*onlyEnabled=*/false)) {
+    for (const auto& dep : collectReverseRequiredDeps(plugins_, inst->name, /*onlyEnabled=*/false)) {
         auto depInst = find(dep);
         if (depInst && !depInst->enabled && !depInst->userDisabled) {
             XX_LOGI("Enable `{}` cascades enable of dependent plugin `{}`", inst->name, dep);
@@ -2254,50 +2202,6 @@ void PluginManager::enableImpl(std::string_view name, bool userInitiated) {
         }
     }
     XX_LOGI("Plugin enabled: {}", inst->name);
-}
-
-/// 从插件目录 plugin.yaml 解析清单 (name/entry/depends/optional_depends/enabled)
-/// - 返回 false 表示解析失败 (记录日志)
-static bool parsePluginManifest(
-    const std::filesystem::path& dir,
-    std::string&                 name,
-    std::string&                 entry,
-    std::vector<std::string>&    depends,
-    std::vector<std::string>&    optionalDepends
-) {
-    auto            yamlPath = dir / "plugin.yaml";
-    std::error_code ec;
-    if (!std::filesystem::exists(yamlPath, ec)) {
-        XX_LOGW("Plugin dir `{}` has no plugin.yaml", dir.string());
-        return false;
-    }
-    try {
-        auto node = YAML::LoadFile(yamlPath.string());
-        name      = node["name"] ? node["name"].as<std::string>() : std::string{};
-        entry     = node["entry"] ? node["entry"].as<std::string>() : std::string{};
-        if (node["depends"] && node["depends"].IsSequence()) {
-            for (const auto& d : node["depends"]) {
-                if (d.IsScalar()) {
-                    depends.push_back(d.as<std::string>());
-                }
-            }
-        }
-        if (node["optional_depends"] && node["optional_depends"].IsSequence()) {
-            for (const auto& d : node["optional_depends"]) {
-                if (d.IsScalar()) {
-                    optionalDepends.push_back(d.as<std::string>());
-                }
-            }
-        }
-    } catch (const std::exception& e) {
-        XX_LOGE("Parse plugin manifest `{}` failed: {}", yamlPath.string(), e.what());
-        return false;
-    }
-    if (name.empty() || entry.empty()) {
-        XX_LOGE("Plugin manifest `{}` invalid: name/entry required", yamlPath.string());
-        return false;
-    }
-    return true;
 }
 
 bool PluginManager::hasDependencyCycle(const std::string& name, std::vector<std::string>& visiting)
@@ -2367,7 +2271,10 @@ bool PluginManager::checkDependencies(
     return true;
 }
 
-asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadPluginAsync(std::string path) {
+asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadPluginAsync(
+    std::string                        path,
+    const agentxx::agent::PluginConfig* cfg
+) {
     namespace fs = std::filesystem;
 
     // 显式内置路径 (builtin://<插件名>): 直接从内置注册表加载, 不解析文件
@@ -2380,7 +2287,7 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadPluginAsync(
             XX_LOGE("Plugin path `{}`: empty builtin name", path);
             co_return nullptr;
         }
-        co_return co_await loadBuiltinAsync(std::string{name}, std::move(path), {}, {});
+        co_return co_await loadBuiltinAsync(std::string{name}, std::move(path), {}, {}, cfg);
     }
 
     std::error_code ec;
@@ -2389,6 +2296,7 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadPluginAsync(
         std::string              name, entry;
         std::vector<std::string> depends, optionalDepends;
         if (!parsePluginManifest(fs::path(path), name, entry, depends, optionalDepends)) {
+            XX_LOGW("Plugin dir `{}` manifest invalid or missing", path);
             co_return nullptr;
         }
         // 依赖检查 (必选缺失/可选警告/环检测)
@@ -2397,41 +2305,12 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadPluginAsync(
         }
         // 所有插件统一为 C++ 插件: entry 总是指向动态库
         // (脚本能力由插件内部经能力调用委派给 interpreter 引擎, 宿主不参与)
-        // - entry 平台化: manifest 按 Linux 书写 (libfoo.so), Windows/macOS
-        //   下修正扩展名 (.dll/.dylib)
-        // - 多配置生成器 (MSVC Debug/Release) 产物位于配置子目录: entry 按
-        //   {dir}/{entry} 找不到时回退 {dir}/{Debug|Release}/{entry}
-        auto entryPath = (fs::path(path) / entry).lexically_normal().string();
-#if defined(_WIN32)
-        if (entryPath.ends_with(".so")) {
-            entryPath.replace(entryPath.size() - 3, 3, ".dll");
-        }
-#elif defined(__APPLE__)
-        if (entryPath.ends_with(".so")) {
-            entryPath.replace(entryPath.size() - 3, 3, ".dylib");
-        }
-#endif
+        // - entry 平台化 + 多配置生成器 (MSVC Debug/Release) 配置子目录回退
+        //   见公共 resolvePluginEntryPath (plugin_common.h)
+        auto entryPath = resolvePluginEntryPath(fs::path(path), entry);
         std::error_code ec2;
-        if (!fs::exists(entryPath, ec2)) {
-            for (const char* cfg : {"Debug", "Release", "RelWithDebInfo", "MinSizeRel"}) {
-                auto candidate = (fs::path(path) / cfg / entry).lexically_normal().string();
-#if defined(_WIN32)
-                if (candidate.ends_with(".so")) {
-                    candidate.replace(candidate.size() - 3, 3, ".dll");
-                }
-#elif defined(__APPLE__)
-                if (candidate.ends_with(".so")) {
-                    candidate.replace(candidate.size() - 3, 3, ".dylib");
-                }
-#endif
-                if (fs::exists(candidate, ec2)) {
-                    entryPath = std::move(candidate);
-                    break;
-                }
-            }
-        }
         if (fs::exists(entryPath, ec2)) {
-            auto inst = co_await loadNativeAsync(std::move(entryPath));
+            auto inst = co_await loadNativeAsync(std::move(entryPath), cfg);
             if (inst) {
                 inst->depends         = std::move(depends);
                 inst->optionalDepends = std::move(optionalDepends);
@@ -2454,11 +2333,12 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadPluginAsync(
                 name,
                 std::move(entryPath),
                 std::move(depends),
-                std::move(optionalDepends)
+                std::move(optionalDepends),
+                cfg
             );
         }
         // 非内置模式: 保持原行为 (loadNativeAsync 报告 dlopen 失败)
-        co_return co_await loadNativeAsync(std::move(entryPath));
+        co_return co_await loadNativeAsync(std::move(entryPath), cfg);
     }
 
     // ---- 文件: 视为原生库路径 ----
@@ -2469,10 +2349,10 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadPluginAsync(
         auto builtinName = pluginNameFromPath(path);
         if (findBuiltinPlugin(builtinName)) {
             XX_LOGI("Plugin file `{}` not found, fallback to builtin `{}`", path, builtinName);
-            co_return co_await loadBuiltinAsync(builtinName, std::move(path), {}, {});
+            co_return co_await loadBuiltinAsync(builtinName, std::move(path), {}, {}, cfg);
         }
     }
-    co_return co_await loadNativeAsync(std::move(path));
+    co_return co_await loadNativeAsync(std::move(path), cfg);
 }
 
 asio::awaitable<void>
@@ -2481,15 +2361,23 @@ asio::awaitable<void>
 
     // 预解析各配置项依赖 (目录插件读 plugin.yaml depends; 库路径按文件名
     // 推导插件名参与排序 —— libagentxx_javascript_engine.so → agentxx_javascript_engine)
+    // - sides == Client 的配置项仅属 client 侧, agent 侧跳过 (A7)
+    // - cfg 指针指向入参 vector 元素, 生命周期覆盖本函数 (co_await 挂起时
+    //   入参仍存活)
     struct Item {
         std::string              path;
         std::string              name; ///< 空 = 无法推导 (不影响排序)
         std::vector<std::string> depends;
+        const agentxx::agent::PluginConfig* cfg = nullptr;
     };
 
     std::vector<Item> items;
     for (const auto& cfg : plugins) {
         if (!cfg.enabled) {
+            continue;
+        }
+        if (cfg.sides == agentxx::agent::PluginSide::Client) {
+            XX_LOGI("[Config] plugin `{}` sides=client, skip on agent side", cfg.path);
             continue;
         }
         // 所有插件统一经 path 外置指定 (必填; 不区分内置/外置插件)
@@ -2498,59 +2386,19 @@ asio::awaitable<void>
             std::string              name, entry;
             std::vector<std::string> depends, optionalDepends;
             if (parsePluginManifest(fs::path(cfg.path), name, entry, depends, optionalDepends)) {
-                items.push_back(Item{cfg.path, name, depends});
+                items.push_back(Item{cfg.path, name, depends, &cfg});
                 continue;
             }
         }
-        items.push_back(Item{cfg.path, pluginNameFromPath(cfg.path), {}});
+        items.push_back(Item{cfg.path, pluginNameFromPath(cfg.path), {}, &cfg});
     }
 
     // 拓扑排序 (Kahn): 依赖者排在被依赖者之后, 避免配置顺序导致必选依赖缺失
-    // - 配置列表中且未放置的依赖 → 未满足; 不在配置列表的依赖视为已满足 (已加载)
-    // - 无进展 (环/缺失) 时剩余项按原序附后, 由 loadPluginAsync 的依赖检查报错
-    std::vector<Item> ordered;
-    ordered.reserve(items.size());
-    std::vector<bool> placed(items.size(), false);
-    size_t            placedCount = 0;
-    while (placedCount < items.size()) {
-        size_t progress = 0;
-        for (size_t i = 0; i < items.size(); ++i) {
-            if (placed[i]) {
-                continue;
-            }
-            bool depsOk = true;
-            for (const auto& d : items[i].depends) {
-                for (size_t j = 0; j < items.size(); ++j) {
-                    if (!placed[j] && items[j].name == d) {
-                        depsOk = false;
-                        break;
-                    }
-                }
-                if (!depsOk) {
-                    break;
-                }
-            }
-            if (depsOk) {
-                ordered.push_back(items[i]);
-                placed[i] = true;
-                ++progress;
-            }
-        }
-        if (progress == 0) {
-            // 环或依赖缺失: 剩余项附后 (加载时 checkDependencies 报错)
-            for (size_t i = 0; i < items.size(); ++i) {
-                if (!placed[i]) {
-                    ordered.push_back(items[i]);
-                    placed[i] = true;
-                }
-            }
-            break;
-        }
-        placedCount += progress;
-    }
+    // (公共 topoSortPlugins, plugin_common.h; 无进展项附后由加载路径报错)
+    auto ordered = topoSortPlugins(std::move(items));
 
     for (const auto& item : ordered) {
-        co_await loadPluginAsync(item.path);
+        co_await loadPluginAsync(item.path, item.cfg);
     }
 }
 
@@ -2790,19 +2638,13 @@ void PluginManager::restorePromptBackup(PluginInstance* inst) {
     XX_LOGI("Plugin `{}` prompt rolled back to load-time state", inst->name);
 }
 
-std::string PluginManager::getPluginArgsJson(std::string_view pluginName) {
-    auto ctx = agentContext_.lock();
-    if (!ctx || !ctx->agentConfig) {
+std::string PluginManager::getPluginArgsJson(PluginInstance* inst) {
+    if (!inst) {
         return "{}";
     }
-    // 从配置的 plugins 列表匹配本插件 (path 条目按文件名推导的插件名匹配:
-    // libfoo.so → foo)
-    for (const auto& pc : ctx->agentConfig->plugins) {
-        if (!pc.path.empty() && pluginNameFromPath(pc.path) == pluginName) {
-            return pc.args.dump();
-        }
-    }
-    return "{}";
+    // 直接读取实例保存的 args (加载时随配置传入); 宿主不解析字段语义,
+    // 插件经 vtable get_plugin_args 整体读取
+    return inst->args.dump();
 }
 
 std::shared_ptr<PluginInstance> PluginManager::find(std::string_view name) const {

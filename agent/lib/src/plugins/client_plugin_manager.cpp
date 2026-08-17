@@ -10,6 +10,7 @@
  * - UI 线程从不直接调用插件代码: 命令触发经 postCommandInvocation 投递
  */
 #include "agentxx/plugin/client_plugin_manager.h"
+#include "agentxx/plugin/plugin_common.h"
 #include "agentxx/plugin/plugin_manager.h" /* NativeLoader (平台 dlopen 封装) */
 
 #include "agentxx/agent/io/wire_protocol.h"
@@ -29,8 +30,6 @@
 #include <future>
 #include <iostream>
 #include <thread>
-
-#include <yaml-cpp/yaml.h>
 
 /// 状态栏项宿主句柄实现 (全局作用域, 与 client_plugin_api.h 的 C 不透明类型
 /// 对应 —— vtable 函数签名中的 AgentxxStatusItem 即此类型, 不能在命名空间内
@@ -62,47 +61,7 @@ using agentxx::agent::PluginConfig;
 
 namespace {
 
-// ==================== 异常兜底宏 (同 plugin_manager.cpp) ====================
-
-#define XX_PLUGIN_CATCH_BEGIN try {
-#define XX_PLUGIN_CATCH_END(ret)                                 \
-    }                                                            \
-    catch (const std::exception& e) {                            \
-        XX_LOGE("client plugin vtable exception: {}", e.what()); \
-        return (ret);                                            \
-    }                                                            \
-    catch (...) {                                                \
-        XX_LOGE("client plugin vtable unknown exception");       \
-        return (ret);                                            \
-    }
-#define XX_PLUGIN_CATCH_END_VOID()                               \
-    }                                                            \
-    catch (const std::exception& e) {                            \
-        XX_LOGE("client plugin vtable exception: {}", e.what()); \
-        return;                                                  \
-    }                                                            \
-    catch (...) {                                                \
-        XX_LOGE("client plugin vtable unknown exception");       \
-        return;                                                  \
-    }
-
 // ==================== 工具 ====================
-
-/// 从库文件名推断插件名 (libfoo.so → foo; 同 agent 侧 pluginNameFromPath)
-std::string clientPluginNameFromPath(const std::string& path) {
-    auto base = std::filesystem::path(path).filename().string();
-    if (base.size() > 3 && base.compare(0, 3, "lib") == 0) {
-        base.erase(0, 3);
-    }
-    for (const char* ext : {".dylib", ".so", ".dll"}) {
-        auto pos = base.find(ext);
-        if (pos != std::string::npos) {
-            base.erase(pos);
-            break;
-        }
-    }
-    return base;
-}
 
 /// 从 JSON 提取字符串字段 (缺失/非字符串返回空)
 std::string jsonStr(const neograph::json& j, std::string_view key) {
@@ -142,101 +101,6 @@ int jsonInt(const neograph::json& j, std::string_view key, int def) {
     return def;
 }
 
-/// 解析 plugin.yaml manifest (目录插件; 取 name/entry/depends; 失败返回 false)
-bool parseClientManifest(
-    const std::filesystem::path& dir,
-    std::string&                 name,
-    std::string&                 entry,
-    std::vector<std::string>&    depends,
-    std::vector<std::string>&    optionalDepends
-) {
-    auto            yamlPath = dir / "plugin.yaml";
-    std::error_code ec;
-    if (!std::filesystem::exists(yamlPath, ec)) {
-        return false;
-    }
-    try {
-        auto node = YAML::LoadFile(yamlPath.string());
-        name      = node["name"] ? node["name"].as<std::string>() : "";
-        entry     = node["entry"] ? node["entry"].as<std::string>() : "";
-        if (auto d = node["depends"]; d && d.IsSequence()) {
-            for (const auto& it : d) {
-                depends.push_back(it.as<std::string>());
-            }
-        }
-        if (auto d = node["optional_depends"]; d && d.IsSequence()) {
-            for (const auto& it : d) {
-                optionalDepends.push_back(it.as<std::string>());
-            }
-        }
-        return !name.empty() && !entry.empty();
-    } catch (const std::exception& e) {
-        XX_LOGE("[client_plugin] parse manifest failed: {}: {}", yamlPath.string(), e.what());
-        return false;
-    }
-}
-
-/// 解析插件动态库路径 (目录插件: manifest entry + 平台扩展名修正 +
-/// 配置子目录回退; 直接库路径原样返回)
-/// - 返回 false 表示目录插件 manifest 缺失/非法 (调用方应跳过加载)
-/// - 非目录路径恒返回 true (libPath = path)
-/// - loadNativeAsync 正式加载与 loadConfiguredClientPlugins 入口探测共用,
-///   保证两者解析一致 (探测直接 LoadLibrary 目录在 Windows 上恒失败
-///   error 126)
-bool resolveClientPluginLibPath(
-    const std::string&        path,
-    std::string&              libPath,
-    std::vector<std::string>& depends,
-    std::vector<std::string>& optionalDepends
-) {
-    std::error_code ec;
-    if (!std::filesystem::is_directory(path, ec)) {
-        libPath = path;
-        return true;
-    }
-    std::string manifestName, manifestEntry;
-    if (!parseClientManifest(
-            std::filesystem::path(path),
-            manifestName,
-            manifestEntry,
-            depends,
-            optionalDepends
-        )) {
-        return false;
-    }
-    auto entryPath = (std::filesystem::path(path) / manifestEntry).lexically_normal().string();
-#if defined(_WIN32)
-    if (entryPath.ends_with(".so")) {
-        entryPath.replace(entryPath.size() - 3, 3, ".dll");
-    }
-#elif defined(__APPLE__)
-    if (entryPath.ends_with(".so")) {
-        entryPath.replace(entryPath.size() - 3, 3, ".dylib");
-    }
-#endif
-    if (!std::filesystem::exists(entryPath, ec)) {
-        for (const char* cfg : {"Debug", "Release", "RelWithDebInfo", "MinSizeRel"}) {
-            auto candidate
-                = (std::filesystem::path(path) / cfg / manifestEntry).lexically_normal().string();
-#if defined(_WIN32)
-            if (candidate.ends_with(".so")) {
-                candidate.replace(candidate.size() - 3, 3, ".dll");
-            }
-#elif defined(__APPLE__)
-            if (candidate.ends_with(".so")) {
-                candidate.replace(candidate.size() - 3, 3, ".dylib");
-            }
-#endif
-            if (std::filesystem::exists(candidate, ec)) {
-                entryPath = std::move(candidate);
-                break;
-            }
-        }
-    }
-    libPath = std::move(entryPath);
-    return true;
-}
-
 /// 解析 action 动作 JSON: {"action": "send"|"toast"|"none", ...}
 /// 返回 true 表示 action 字段可识别 (含 none); false 表示非法/空
 bool parseCommandAction(const std::string& jsonText, std::string& action) {
@@ -271,7 +135,12 @@ bool parseCommandAction(const std::string& jsonText, std::string& action) {
 // =====================================================================
 
 ClientPluginInstance::~ClientPluginInstance() {
-    // dlHandle 的 dlclose 由 manager 在卸载流程完成后释放 (本析构仅清理状态)
+    // dlclose (与 agent 侧 PluginInstance 一致): 调用方保证无在途回调
+    // (unloadAsync 等 inflight 归零后移除; shutdownAll 进程退出路径约定无在途)
+    if (dlHandle) {
+        NativeLoader::close(dlHandle);
+        dlHandle = nullptr;
+    }
     subscriptions.clear();
     statusItemHandles.clear();
     panelHandles.clear();
@@ -308,21 +177,32 @@ void ClientPluginManager::setThreadId(std::string threadId) {
 
 // ==================== 生命周期 ====================
 
-asio::awaitable<std::shared_ptr<ClientPluginInstance>>
-    ClientPluginManager::loadNativeAsync(std::string path) {
+asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::loadNativeAsync(
+    std::string                  path,
+    const agentxx::agent::PluginConfig* cfg,
+    bool                         allowMissingEntry
+) {
     // ---- 目录插件: 解析 plugin.yaml 取 entry 库路径 (与 agent 侧一致) ----
     // - manifest: name/entry/depends/optional_depends
-    // - entry 为库文件名 (相对于插件目录)
-    // - entry 平台化: manifest 按 Linux 书写 (libfoo.so), Windows/macOS 下
-    //   修正扩展名 (.dll/.dylib); 多配置生成器 (MSVC Debug/Release) 产物位于
-    //   配置子目录: entry 按 {dir}/{entry} 找不到时回退 {dir}/{Debug|Release|...}
-    // - 解析逻辑与 loadConfiguredClientPlugins 入口探测共用
-    //   (resolveClientPluginLibPath), 保证探测与正式加载路径一致
-    std::string              libPath = path;
+    // - entry 平台化 + 配置子目录回退见公共 resolvePluginEntryPath
+    // - 依赖解析与正式加载合并 (B3): 不再先 dlopen 探测再 close 后重新
+    //   dlopen —— 本函数一次 dlopen 完成 探测(entry 符号) + 装配
+    std::error_code ec;
+    std::string     libPath = path;
     std::vector<std::string> depends, optionalDepends;
-    if (!resolveClientPluginLibPath(path, libPath, depends, optionalDepends)) {
-        XX_LOGE("[client_plugin] `{}` missing/invalid plugin.yaml", path);
-        co_return nullptr;
+    if (std::filesystem::is_directory(path, ec)) {
+        std::string manifestName, manifestEntry;
+        if (!parsePluginManifest(
+                std::filesystem::path(path),
+                manifestName,
+                manifestEntry,
+                depends,
+                optionalDepends
+            )) {
+            XX_LOGE("[client_plugin] `{}` missing/invalid plugin.yaml", path);
+            co_return nullptr;
+        }
+        libPath = resolvePluginEntryPath(std::filesystem::path(path), manifestEntry);
     }
 
     // dlopen 卸载到内部线程池 (避免阻塞 io 线程)
@@ -369,12 +249,33 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>>
         }
     }
     if (name.empty()) {
-        name = clientPluginNameFromPath(libPath);
+        name = pluginNameFromPath(libPath);
     }
 
     // 已存在同名插件: 拒绝 (防重复加载)
     if (plugins_.count(name) > 0) {
         XX_LOGE("[client_plugin] duplicate plugin name `{}`", name);
+        NativeLoader::close(handle);
+        co_return nullptr;
+    }
+
+    // entry 入口 (必需): 探测与加载合并 (B3) —— 一次 dlopen 内查符号
+    std::string entryErr;
+    auto        entryFn = reinterpret_cast<AgentxxClientPluginEntryFn>(
+        NativeLoader::sym(handle, AGENTXX_CLIENT_SYMBOL_ENTRY, entryErr)
+    );
+    if (!entryFn) {
+        if (allowMissingEntry) {
+            // sides==Auto: 无 client 入口视为纯 agent 插件, 静默跳过
+            XX_LOGI("[client_plugin] `{}` has no client entry, skipped (agent-only)", name);
+        } else {
+            XX_LOGE(
+                "[client_plugin] `{}` missing {}: {}",
+                path,
+                AGENTXX_CLIENT_SYMBOL_ENTRY,
+                entryErr
+            );
+        }
         NativeLoader::close(handle);
         co_return nullptr;
     }
@@ -397,7 +298,9 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>>
     inst->version         = version;
     inst->description     = desc;
     inst->path            = path;
-    inst->args            = neograph::json::object();
+    // 插件配置参数随加载直接传入 (C2, 与 agent 侧一致): 宿主不解析字段语义,
+    // 插件经 vtable get_plugin_args 整体读取; 直连路径 cfg 为 nullptr → {}
+    inst->args            = cfg ? cfg->args : neograph::json::object();
     inst->dlHandle        = handle;
     inst->depends         = std::move(depends);
     inst->optionalDepends = std::move(optionalDepends);
@@ -424,22 +327,20 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>>
         co_return nullptr;
     }
 
-    // entry 入口 (必需): 注册动作经 vtable ioCallSync 回 io 线程执行
-    std::string entryErr;
-    auto        entryFn = reinterpret_cast<AgentxxClientPluginEntryFn>(
-        NativeLoader::sym(handle, AGENTXX_CLIENT_SYMBOL_ENTRY, entryErr)
+    // entry 卸载到内部线程池执行 (A2): 与 agent 侧一致 —— entry 内 vtable
+    // 注册动作经 ioCallSync 回 io 线程同步执行; entry 在 io 线程执行会阻塞
+    // client io 事件循环 (慢初始化/插件间调用时明显), 且违背契约声明的
+    // "entry 运行在宿主线程池"
+    int rc = co_await agentxx::util::offloadAsync<int>(
+        *pool_,
+        [inst, entryFn]() -> asio::awaitable<int> {
+            co_return entryFn(&inst->host, &inst->pluginCtx);
+        }
     );
-    if (!entryFn) {
-        XX_LOGE("[client_plugin] `{}` missing {}: {}", path, AGENTXX_CLIENT_SYMBOL_ENTRY, entryErr);
-        NativeLoader::close(handle);
-        co_return nullptr;
-    }
-
-    int rc = entryFn(&inst->host, &inst->pluginCtx);
     if (rc != 0) {
         XX_LOGE("[client_plugin] `{}` entry failed (rc={})", name, rc);
         detachAll(inst.get(), false);
-        NativeLoader::close(handle);
+        // inst 随局部释放析构 → ~ClientPluginInstance → dlclose
         co_return nullptr;
     }
 
@@ -459,22 +360,25 @@ asio::awaitable<bool> ClientPluginManager::unloadAsync(std::string_view name) {
     }
     inst->unloadRequested = true;
 
-    // 级联: 必选依赖者先卸载 (先子后父)
-    for (const auto& child : reverseRequiredDeps(std::string{name}, true)) {
+    // 级联: 必选依赖者先卸载 (先子后父) —— 与 agent 侧 unloadAsync 一致
+    for (const auto& child : collectReverseRequiredDeps(plugins_, std::string{name}, true)) {
+        XX_LOGI("[client_plugin] unload `{}` cascades unload of dependent `{}`", name, child);
         co_await unloadAsync(child);
     }
 
-    // 摘除注册 (adapter 通知 UI 移除; 彻底清理)
+    // 摘除注册 (adapter 通知 UI 移除; 彻底清理) —— 先于等待, 插件卸载期间
+    // 不再收到任何回调
     detachAll(inst.get(), false);
-    plugins_.erase(std::string{name});
 
-    // 等 in-flight 回调归零 (超时放弃, 保持已 detach 状态可稍后重试)
+    // 等 in-flight 回调归零 (超时放弃: 保持已 detach 状态, 复位可稍后重试)
     if (!co_await waitInflightZero(inst, std::chrono::seconds{10})) {
-        XX_LOGW("[client_plugin] `{}` inflight not zero, skip dlclose", name);
+        inst->unloadRequested = false;
+        XX_LOGW("[client_plugin] `{}` inflight not zero, unload aborted (retry later)", name);
         co_return false;
     }
 
-    // unload 回调 (业务清理)
+    // unload 回调 (业务清理; 宿主已自动反注册全部残留; 句柄仍存活:
+    // statusItemHandles/subHandles 等随实例析构释放, 回调内主动反注册安全)
     if (inst->dlHandle) {
         std::string err;
         auto        fn = reinterpret_cast<AgentxxClientPluginUnloadFn>(
@@ -483,9 +387,9 @@ asio::awaitable<bool> ClientPluginManager::unloadAsync(std::string_view name) {
         if (fn) {
             fn(inst->pluginCtx);
         }
-        NativeLoader::close(inst->dlHandle);
-        inst->dlHandle = nullptr;
     }
+    // 从表移除 → 实例析构 → dlclose (~ClientPluginInstance)
+    plugins_.erase(std::string{name});
     XX_LOGI("[client_plugin] unloaded: {}", inst->name);
     co_return true;
 }
@@ -501,7 +405,7 @@ void ClientPluginManager::disableImpl(std::string_view name, bool userInitiated)
     inst->enabled = false;
 
     // 级联禁用依赖者 (先子后父)
-    for (const auto& child : reverseRequiredDeps(std::string{name}, true)) {
+    for (const auto& child : collectReverseRequiredDeps(plugins_, std::string{name}, true)) {
         disableImpl(child, false);
     }
 
@@ -641,23 +545,32 @@ void ClientPluginManager::enable(std::string_view name) {
 asio::awaitable<void>
     ClientPluginManager::loadConfiguredClientPlugins(const std::vector<PluginConfig>& plugins) {
     // 预解析各配置项 sides 过滤 + 依赖 (目录插件读 plugin.yaml depends)
+    // - sides == Agent: 跳过 (属于 agent 侧); enabled == false: 跳过
+    // - cfg 指针指向入参 vector 元素, 生命周期覆盖本函数
     struct Item {
         std::string              path;
         std::string              name; ///< 空 = 无法推导 (不影响排序)
         std::vector<std::string> depends;
+        bool                     allowMissingEntry = false; ///< sides==Auto: 无 client 入口静默跳过
+        const PluginConfig*      cfg               = nullptr;
     };
 
     std::vector<Item> items;
     for (const auto& pc : plugins) {
+        if (!pc.enabled) {
+            continue;
+        }
         if (pc.sides == agentxx::agent::PluginSide::Agent) {
             continue; // 属于 agent 侧
         }
         Item it;
-        it.path = pc.path;
+        it.path             = pc.path;
+        it.cfg              = &pc;
+        it.allowMissingEntry = (pc.sides != agentxx::agent::PluginSide::Client);
         if (std::filesystem::is_directory(std::filesystem::path(pc.path))) {
             std::string              name, entry;
             std::vector<std::string> depends, optionalDepends;
-            if (parseClientManifest(
+            if (parsePluginManifest(
                     std::filesystem::path(pc.path),
                     name,
                     entry,
@@ -668,49 +581,17 @@ asio::awaitable<void>
                 it.depends = std::move(depends);
             }
         } else {
-            it.name = clientPluginNameFromPath(pc.path);
+            it.name = pluginNameFromPath(pc.path);
         }
         items.push_back(std::move(it));
     }
 
-    // 拓扑排序: 依赖者排在被依赖者之后 (贪心; 环由加载时依赖检查拒绝)
-    std::vector<Item> ordered;
-    std::vector<bool> done(items.size(), false);
-    for (size_t round = 0; round < items.size(); ++round) {
-        for (size_t i = 0; i < items.size(); ++i) {
-            if (done[i]) {
-                continue;
-            }
-            bool depsOk = true;
-            for (const auto& d : items[i].depends) {
-                bool found = false;
-                for (size_t k = 0; k < items.size(); ++k) {
-                    if (!done[k] && items[k].name == d) {
-                        found = true;
-                        break;
-                    }
-                }
-                if (found) {
-                    depsOk = false;
-                    break;
-                }
-            }
-            if (depsOk) {
-                ordered.push_back(items[i]);
-                done[i] = true;
-            }
-        }
-    }
-    for (size_t i = 0; i < items.size(); ++i) {
-        if (!done[i]) {
-            XX_LOGW(
-                "[client_plugin] dependency cycle or missing dep for `{}`, skipped",
-                items[i].path
-            );
-        }
-    }
+    // 拓扑排序: 依赖者排在被依赖者之后 (公共 topoSortPlugins; 无进展项附后
+    // 由 loadNativeAsync 的依赖检查报错)
+    auto ordered = topoSortPlugins(std::move(items));
 
-    // 依次加载 (Auto 无 client 入口时跳过, 不报错)
+    // 依次加载 (Auto 无 client 入口时由 loadNativeAsync 静默跳过; B3:
+    // 探测与正式加载合并为一次 dlopen)
     for (const auto& it : ordered) {
         if (it.name.empty()) {
             continue;
@@ -718,55 +599,55 @@ asio::awaitable<void>
         if (plugins_.count(it.name) > 0) {
             continue; // 已加载
         }
-        // 探测 client 入口: 无则视为纯 agent 插件跳过
-        // - 目录插件先解析 manifest entry 库路径再探测 (直接 LoadLibrary
-        //   目录在 Windows 上恒失败 error 126; 解析逻辑与 loadNativeAsync
-        //   共用 resolveClientPluginLibPath, 保证探测/加载路径一致)
-        std::string              probePath;
-        std::vector<std::string> probeDeps, probeOptDeps;
-        if (!resolveClientPluginLibPath(it.path, probePath, probeDeps, probeOptDeps)) {
-            XX_LOGE("[client_plugin] `{}` missing/invalid plugin.yaml", it.path);
-            continue;
-        }
-        std::string dlErr;
-        void*       handle = NativeLoader::open(probePath, dlErr);
-        if (!handle) {
-            XX_LOGE("[client_plugin] load failed: {}: {}", probePath, dlErr);
-            continue;
-        }
-        std::string symErr;
-        void*       entry = NativeLoader::sym(handle, AGENTXX_CLIENT_SYMBOL_ENTRY, symErr);
-        NativeLoader::close(handle); // 探测后立即关闭 (正式加载重新 dlopen)
-        if (!entry) {
-            XX_LOGI("[client_plugin] `{}` has no client entry, skipped (agent-only)", it.name);
-            continue;
-        }
-        co_await loadNativeAsync(it.path);
+        co_await loadNativeAsync(it.path, it.cfg, it.allowMissingEntry);
     }
 }
 
 void ClientPluginManager::shutdownAll() {
-    // 逆序卸载 (依赖者先; 加载时已拓扑排序)
-    std::vector<std::shared_ptr<ClientPluginInstance>> insts;
-    for (auto it = plugins_.rbegin(); it != plugins_.rend(); ++it) {
-        insts.push_back(it->second);
+    // 依赖图级联卸载 (先子后父) —— 与 agent 侧 shutdownAll 一致:
+    // 脚本类插件 (depends 引擎) 先卸载, 引擎最后 dlclose
+    // - 不等在途回调: 调用方 (进程退出) 须保证无在途插件回调
+    std::vector<std::string> names;
+    names.reserve(plugins_.size());
+    for (const auto& [name, inst] : plugins_) {
+        (void)inst;
+        names.push_back(name);
+    }
+    for (const auto& name : names) {
+        auto inst = find(name);
+        if (inst && !inst->unloadRequested) {
+            shutdownClientPlugin(inst);
+        }
     }
     plugins_.clear();
-    for (auto& inst : insts) {
-        detachAll(inst.get(), false);
-        if (inst->dlHandle) {
-            std::string err;
-            auto        fn = reinterpret_cast<AgentxxClientPluginUnloadFn>(
-                NativeLoader::sym(inst->dlHandle, AGENTXX_CLIENT_SYMBOL_UNLOAD, err)
-            );
-            if (fn) {
-                fn(inst->pluginCtx);
-            }
-            NativeLoader::close(inst->dlHandle);
-            inst->dlHandle = nullptr;
-        }
-        XX_LOGI("[client_plugin] shutdown: {}", inst->name);
+}
+
+void ClientPluginManager::shutdownClientPlugin(
+    const std::shared_ptr<ClientPluginInstance>& inst
+) {
+    if (!inst || inst->unloadRequested) {
+        return;
     }
+    inst->unloadRequested = true;
+    // 先递归卸载必选依赖本插件的插件 (先子后父)
+    for (const auto& dep : collectReverseRequiredDeps(plugins_, inst->name, false)) {
+        auto depInst = find(dep);
+        if (depInst && !depInst->unloadRequested) {
+            shutdownClientPlugin(depInst);
+        }
+    }
+    detachAll(inst.get(), false);
+    if (inst->dlHandle) {
+        std::string err;
+        auto        fn = reinterpret_cast<AgentxxClientPluginUnloadFn>(
+            NativeLoader::sym(inst->dlHandle, AGENTXX_CLIENT_SYMBOL_UNLOAD, err)
+        );
+        if (fn) {
+            fn(inst->pluginCtx);
+        }
+    }
+    // dlclose 由 ~ClientPluginInstance 完成 (plugins_.clear() 后实例释放)
+    XX_LOGI("[client_plugin] shutdown: {}", inst->name);
 }
 
 // ==================== 查询 ====================
@@ -987,13 +868,16 @@ asio::awaitable<bool> ClientPluginManager::waitInflightZero(
     std::chrono::milliseconds                    timeout
 ) {
     auto deadline = std::chrono::steady_clock::now() + timeout;
+    // 指数退避轮询 (20ms → 1s 上限): 慢回调等待期间减少 io 线程定时器唤醒
+    auto backoff = std::chrono::milliseconds{20};
     while (inst->inflight.load(std::memory_order_acquire) > 0) {
         if (std::chrono::steady_clock::now() >= deadline) {
             co_return false;
         }
         auto timer = asio::steady_timer(co_await asio::this_coro::executor);
-        timer.expires_after(std::chrono::milliseconds{20});
+        timer.expires_after(backoff);
         co_await timer.async_wait(asio::use_awaitable);
+        backoff = std::min(backoff * 2, std::chrono::milliseconds{1000});
     }
     co_return true;
 }
@@ -1058,7 +942,15 @@ void ClientPluginManager::detachAll(ClientPluginInstance* inst, bool keepInfo) {
     // 由 ~ClientPluginInstance 统一释放 (实例在 plugins_.erase 后所有
     // shared_ptr 释放时析构, 晚于 unload 回调)
     if (!keepInfo) {
-        // 彻底清理: 注册信息随实例释放 (unload/shutdown)
+        // 彻底清理 (unload/shutdown 路径):
+        // - 订阅句柄断链 (B8): unload 回调内插件主动 unsubscribe 时,
+        //   impl->inst 已置空 → xx_cunsubscribe 安全跳过 (句柄由 subHandles
+        //   保活到实例析构, 不解引用已释放内存)
+        for (const auto& h : inst->subHandles) {
+            auto impl = std::static_pointer_cast<ClientSubscriptionImpl>(h);
+            impl->inst = nullptr;
+            impl->sub.reset();
+        }
         inst->statusItemRegs.clear();
         inst->panelRegs.clear();
         inst->infoSectionRegs.clear();
@@ -1067,29 +959,14 @@ void ClientPluginManager::detachAll(ClientPluginInstance* inst, bool keepInfo) {
     }
 }
 
-std::vector<std::string>
-    ClientPluginManager::reverseRequiredDeps(const std::string& target, bool onlyEnabled) const {
-    std::vector<std::string> out;
-    for (const auto& [name, inst] : plugins_) {
-        (void)name;
-        if (onlyEnabled && !inst->enabled) {
-            continue;
-        }
-        for (const auto& d : inst->depends) {
-            if (d == target) {
-                out.push_back(inst->name);
-                break;
-            }
-        }
-    }
-    return out;
-}
+/// 反向必选依赖收集 → 公共 collectReverseRequiredDeps (plugin_common.h)
 
 void ClientPluginManager::dispatchEvent(int event, const std::string& payloadJson) {
-    // 快照订阅列表 (分发在 io 线程串行, 期间不会卸载/改 subscriptions)
+    // 快照订阅列表 (shared_ptr 副本: 派发中退订/卸载不会使后续回调悬垂;
+    // 订阅对象被 impl 句柄/派发副本保活, alive 位标记已退订)
     struct SubRef {
-        ClientPluginInstance*               inst;
-        ClientPluginInstance::Subscription* sub;
+        ClientPluginInstance*                        inst;
+        std::shared_ptr<ClientPluginInstance::Subscription> sub;
     };
 
     std::vector<SubRef> refs;
@@ -1098,9 +975,9 @@ void ClientPluginManager::dispatchEvent(int event, const std::string& payloadJso
         if (!inst->enabled) {
             continue;
         }
-        for (auto& s : inst->subscriptions) {
-            if (s.alive && s.event == event) {
-                refs.push_back(SubRef{inst.get(), &s});
+        for (const auto& s : inst->subscriptions) {
+            if (s->alive && s->event == event) {
+                refs.push_back(SubRef{inst.get(), s});
             }
         }
     }
@@ -1123,48 +1000,6 @@ ClientPluginInstance* clientInstOf(const AgentxxClientHost* host) {
 ClientPluginManager* clientMgrOf(const AgentxxClientHost* host) {
     auto inst = clientInstOf(host);
     return inst ? inst->manager.lock().get() : nullptr;
-}
-
-/// 在 io 线程执行并同步等待结果 (调用方为 io 线程时直接执行)
-template<typename T>
-static T clientIoCallSync(ClientPluginManager* mgr, std::function<T()> fn) {
-    if (!mgr) {
-        throw std::runtime_error("client plugin manager released");
-    }
-    if (mgr->isIoThread()) {
-        return fn();
-    }
-    std::promise<T> p;
-    auto            fut = p.get_future();
-    mgr->postToIo([&p, fn = std::move(fn)]() mutable {
-        try {
-            p.set_value(fn());
-        } catch (...) {
-            p.set_exception(std::current_exception());
-        }
-    });
-    return fut.get();
-}
-
-static void clientIoCallSyncVoid(ClientPluginManager* mgr, std::function<void()> fn) {
-    if (!mgr) {
-        return;
-    }
-    if (mgr->isIoThread()) {
-        fn();
-        return;
-    }
-    std::promise<void> p;
-    auto               fut = p.get_future();
-    mgr->postToIo([&p, fn = std::move(fn)]() mutable {
-        try {
-            fn();
-            p.set_value();
-        } catch (...) {
-            p.set_exception(std::current_exception());
-        }
-    });
-    fut.get();
 }
 
 // ---- 内存 ----
@@ -1213,44 +1048,44 @@ void xx_clog(const AgentxxClientHost* host, int level, AgentxxPluginStringView m
     }
 }
 
+/// JSON 辅助: 提取字符串字段 (线程安全, 纯函数; 供插件替代手写 JSON 解析)
+/// - 与 agent 侧 xx_json_get_string 一致, 无需绕道 io 线程
 char* xx_cjson_get_string(
     const AgentxxClientHost* host,
     AgentxxPluginStringView  json,
     AgentxxPluginStringView  key
 ) {
     XX_PLUGIN_CATCH_BEGIN
-    auto mgr = clientMgrOf(host);
-    if (!mgr) {
+    auto inst = clientInstOf(host);
+    if (!inst || agentxx_plugin_sv_empty(json) || agentxx_plugin_sv_empty(key)) {
         return nullptr;
     }
-    std::string jsonText{json.data ? json.data : "", json.size};
-    std::string keyStr{key.data ? key.data : "", key.size};
-    return clientIoCallSync<char*>(mgr, [&]() -> char* {
-        try {
-            auto j = neograph::json::parse(jsonText);
-            auto v = jsonStr(j, keyStr);
-            if (v.empty() && !j.contains(keyStr)) {
-                return nullptr;
-            }
-            return xx_cstrdup(v.c_str());
-        } catch (...) {
+    try {
+        auto j = neograph::json::parse(std::string{json.data, json.size});
+        auto v = jsonStr(j, std::string_view{key.data, key.size});
+        if (v.empty() && !j.contains(std::string{key.data, key.size})) {
             return nullptr;
         }
-    });
+        return xx_cstrdup(v.c_str());
+    } catch (...) {
+        return nullptr;
+    }
     XX_PLUGIN_CATCH_END(nullptr)
 }
 
+/// JSON 辅助: 字符串 → JSON 字符串字面量 (含引号与转义; 线程安全纯函数)
 char* xx_cjson_escape(const AgentxxClientHost* host, AgentxxPluginStringView s) {
     XX_PLUGIN_CATCH_BEGIN
-    auto mgr = clientMgrOf(host);
-    if (!mgr) {
+    auto inst = clientInstOf(host);
+    if (!inst || agentxx_plugin_sv_empty(s)) {
         return nullptr;
     }
-    std::string text{s.data ? s.data : "", s.size};
-    return clientIoCallSync<char*>(mgr, [&]() -> char* {
-        neograph::json j = std::string{text};
+    try {
+        neograph::json j = std::string{s.data, s.size};
         return xx_cstrdup(j.dump().c_str());
-    });
+    } catch (...) {
+        return nullptr;
+    }
     XX_PLUGIN_CATCH_END(nullptr)
 }
 
@@ -1286,7 +1121,7 @@ AgentxxStatusItem* xx_cregister_status_item(
     if (idStr.empty()) {
         return nullptr;
     }
-    return clientIoCallSync<AgentxxStatusItem*>(mgr, [&]() -> AgentxxStatusItem* {
+    return ioCallSync<AgentxxStatusItem*>(mgr, [&]() -> AgentxxStatusItem* {
         return static_cast<AgentxxStatusItem*>(
             mgr->registerStatusItem(inst, idStr.c_str(), jsonStr.c_str(), align, order)
         );
@@ -1306,7 +1141,7 @@ int xx_cupdate_status_item(
         return -1;
     }
     std::string jsonStr{json.data ? json.data : "", json.size};
-    return clientIoCallSync<int>(mgr, [&]() -> int {
+    return ioCallSync<int>(mgr, [&]() -> int {
         return mgr->updateStatusItem(inst, item, jsonStr.c_str());
     });
     XX_PLUGIN_CATCH_END(-1)
@@ -1319,7 +1154,7 @@ void xx_cunregister_status_item(const AgentxxClientHost* host, AgentxxStatusItem
     if (!mgr || !inst || !item) {
         return;
     }
-    clientIoCallSyncVoid(mgr, [&]() {
+    ioCallSyncVoid(mgr, [&]() {
         mgr->unregisterStatusItem(inst, item);
     });
     XX_PLUGIN_CATCH_END_VOID()
@@ -1343,7 +1178,7 @@ AgentxxPanel* xx_cregister_panel(
     if (idStr.empty()) {
         return nullptr;
     }
-    return clientIoCallSync<AgentxxPanel*>(mgr, [&]() -> AgentxxPanel* {
+    return ioCallSync<AgentxxPanel*>(mgr, [&]() -> AgentxxPanel* {
         return static_cast<AgentxxPanel*>(mgr->registerPanel(inst, idStr.c_str(), props.c_str()));
     });
     XX_PLUGIN_CATCH_END(nullptr)
@@ -1361,7 +1196,7 @@ int xx_cupdate_panel(
         return -1;
     }
     std::string items{items_json.data ? items_json.data : "", items_json.size};
-    return clientIoCallSync<int>(mgr, [&]() -> int {
+    return ioCallSync<int>(mgr, [&]() -> int {
         return mgr->updatePanel(inst, panel, items.c_str());
     });
     XX_PLUGIN_CATCH_END(-1)
@@ -1374,7 +1209,7 @@ void xx_cunregister_panel(const AgentxxClientHost* host, AgentxxPanel* panel) {
     if (!mgr || !inst || !panel) {
         return;
     }
-    clientIoCallSyncVoid(mgr, [&]() {
+    ioCallSyncVoid(mgr, [&]() {
         mgr->unregisterPanel(inst, panel);
     });
     XX_PLUGIN_CATCH_END_VOID()
@@ -1398,7 +1233,7 @@ AgentxxInfoSection* xx_cregister_info_section(
     if (idStr.empty()) {
         return nullptr;
     }
-    return clientIoCallSync<AgentxxInfoSection*>(mgr, [&]() -> AgentxxInfoSection* {
+    return ioCallSync<AgentxxInfoSection*>(mgr, [&]() -> AgentxxInfoSection* {
         return static_cast<AgentxxInfoSection*>(
             mgr->registerInfoSection(inst, idStr.c_str(), props.c_str())
         );
@@ -1418,7 +1253,7 @@ int xx_cupdate_info_section(
         return -1;
     }
     std::string items{items_json.data ? items_json.data : "", items_json.size};
-    return clientIoCallSync<int>(mgr, [&]() -> int {
+    return ioCallSync<int>(mgr, [&]() -> int {
         return mgr->updateInfoSection(inst, section, items.c_str());
     });
     XX_PLUGIN_CATCH_END(-1)
@@ -1431,7 +1266,7 @@ void xx_cunregister_info_section(const AgentxxClientHost* host, AgentxxInfoSecti
     if (!mgr || !inst || !section) {
         return;
     }
-    clientIoCallSyncVoid(mgr, [&]() {
+    ioCallSyncVoid(mgr, [&]() {
         mgr->unregisterInfoSection(inst, section);
     });
     XX_PLUGIN_CATCH_END_VOID()
@@ -1457,7 +1292,7 @@ int xx_cregister_command(
     if (nameStr.empty()) {
         return -1;
     }
-    return clientIoCallSync<int>(mgr, [&]() -> int {
+    return ioCallSync<int>(mgr, [&]() -> int {
         return mgr->registerCommand(inst, nameStr.c_str(), descStr.c_str(), execute, ud);
     });
     XX_PLUGIN_CATCH_END(-1)
@@ -1471,7 +1306,7 @@ int xx_cunregister_command(const AgentxxClientHost* host, AgentxxPluginStringVie
         return -1;
     }
     std::string nameStr{name.data ? name.data : "", name.size};
-    return clientIoCallSync<int>(mgr, [&]() -> int {
+    return ioCallSync<int>(mgr, [&]() -> int {
         return mgr->unregisterCommand(inst, nameStr.c_str());
     });
     XX_PLUGIN_CATCH_END(-1)
@@ -1486,7 +1321,7 @@ void xx_cshow_toast(const AgentxxClientHost* host, AgentxxPluginStringView text,
         return;
     }
     std::string textStr{text.data ? text.data : "", text.size};
-    clientIoCallSyncVoid(mgr, [&]() {
+    ioCallSyncVoid(mgr, [&]() {
         mgr->uiAdapter()->onToast(textStr, level);
     });
     XX_PLUGIN_CATCH_END_VOID()
@@ -1509,7 +1344,7 @@ AgentxxSubscription* xx_csubscribe(
     if (event < 0 || event >= AGENTXX_CLIENT_EVT_COUNT) {
         return nullptr;
     }
-    return clientIoCallSync<AgentxxSubscription*>(mgr, [&]() -> AgentxxSubscription* {
+    return ioCallSync<AgentxxSubscription*>(mgr, [&]() -> AgentxxSubscription* {
         return static_cast<AgentxxSubscription*>(mgr->subscribe(inst, event, handler, ud));
     });
     XX_PLUGIN_CATCH_END(nullptr)
@@ -1521,14 +1356,15 @@ void xx_cunsubscribe(AgentxxSubscription* sub) {
         return;
     }
     auto impl = reinterpret_cast<ClientSubscriptionImpl*>(sub);
+    // impl 由 subHandles 保活到实例析构; 实例已断链 (detachAll) 时跳过
     auto mgr  = impl->inst ? impl->inst->manager.lock().get() : nullptr;
     if (mgr) {
-        clientIoCallSyncVoid(mgr, [&]() {
+        ioCallSyncVoid(mgr, [&]() {
             mgr->unsubscribe(reinterpret_cast<AgentxxSubscription*>(impl));
         });
     }
     impl->inst = nullptr;
-    impl->sub  = nullptr;
+    impl->sub.reset();
     XX_PLUGIN_CATCH_END_VOID()
 }
 
@@ -1540,7 +1376,7 @@ char* xx_cget_client_state(const AgentxxClientHost* host) {
     if (!mgr) {
         return nullptr;
     }
-    return clientIoCallSync<char*>(mgr, [&]() -> char* {
+    return ioCallSync<char*>(mgr, [&]() -> char* {
         auto s = mgr->clientStateJson();
         return xx_cstrdup(s.c_str());
     });
@@ -1562,7 +1398,7 @@ int xx_csend_user_input(
     }
     std::string tid{thread_id.data ? thread_id.data : "", thread_id.size};
     std::string txt{text.data ? text.data : "", text.size};
-    return clientIoCallSync<int>(mgr, [&]() -> int {
+    return ioCallSync<int>(mgr, [&]() -> int {
         mgr->sendUserInputToPeer(inst, tid.c_str(), txt.c_str());
         return 0;
     });
@@ -1577,7 +1413,7 @@ void xx_crequest_cancel(const AgentxxClientHost* host, AgentxxPluginStringView t
         return;
     }
     std::string tid{thread_id.data ? thread_id.data : "", thread_id.size};
-    clientIoCallSyncVoid(mgr, [&]() {
+    ioCallSyncVoid(mgr, [&]() {
         mgr->requestCancelToPeer(inst, tid.c_str());
     });
     XX_PLUGIN_CATCH_END_VOID()
@@ -1598,7 +1434,7 @@ int xx_csend_plugin_data(
     }
     std::string ev{event.data ? event.data : "", event.size};
     std::string data{json.data ? json.data : "", json.size};
-    return clientIoCallSync<int>(mgr, [&]() -> int {
+    return ioCallSync<int>(mgr, [&]() -> int {
         return mgr->sendPluginDataToPeer(inst, ev.c_str(), data.c_str());
     });
     XX_PLUGIN_CATCH_END(-1)
@@ -1613,7 +1449,7 @@ char* xx_cget_own_info(const AgentxxClientHost* host) {
     if (!mgr || !inst) {
         return nullptr;
     }
-    return clientIoCallSync<char*>(mgr, [&]() -> char* {
+    return ioCallSync<char*>(mgr, [&]() -> char* {
         auto s = mgr->getOwnInfoJson(inst);
         return xx_cstrdup(s.c_str());
     });
@@ -1627,7 +1463,7 @@ char* xx_cget_plugin_args(const AgentxxClientHost* host) {
     if (!mgr || !inst) {
         return nullptr;
     }
-    return clientIoCallSync<char*>(mgr, [&]() -> char* {
+    return ioCallSync<char*>(mgr, [&]() -> char* {
         auto s = mgr->getPluginArgsJson(inst);
         return xx_cstrdup(s.c_str());
     });
@@ -2150,15 +1986,15 @@ AgentxxSubscription* ClientPluginManager::subscribe(
     if (!inst || !handler) {
         return nullptr;
     }
-    auto sub  = std::make_shared<ClientSubscriptionImpl>();
-    sub->inst = inst;
-    ClientPluginInstance::Subscription s;
-    s.event   = event;
-    s.handler = handler;
-    s.ud      = ud;
-    s.alive   = true;
+    auto sub   = std::make_shared<ClientSubscriptionImpl>();
+    sub->inst  = inst;
+    auto s     = std::make_shared<ClientPluginInstance::Subscription>();
+    s->event   = event;
+    s->handler = handler;
+    s->ud      = ud;
+    s->alive   = true;
     inst->subscriptions.push_back(s);
-    sub->sub = &inst->subscriptions.back();
+    sub->sub = s; // 强引用: 订阅对象从 vector 摘除后仍被句柄保活 (unload 回调内退订安全)
     inst->subHandles.push_back(sub);
     return reinterpret_cast<AgentxxSubscription*>(sub.get());
 }
@@ -2174,14 +2010,14 @@ void ClientPluginManager::unsubscribe(AgentxxSubscription* sub) {
         std::remove_if(
             subs.begin(),
             subs.end(),
-            [](const auto& s) {
-                return !s.alive;
+            [&](const std::shared_ptr<ClientPluginInstance::Subscription>& s) {
+                return s == impl->sub;
             }
         ),
         subs.end()
     );
     impl->inst = nullptr;
-    impl->sub  = nullptr;
+    impl->sub.reset();
 }
 
 std::string ClientPluginManager::getOwnInfoJson(ClientPluginInstance* inst) {

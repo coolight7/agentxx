@@ -98,6 +98,8 @@ public:
     std::atomic<size_t> inflight{0};
 
     /// 事件订阅记录 (卸载自动退订; 仅 io 线程)
+    /// - shared_ptr 存储: 订阅节点地址稳定 (vector 扩容/erase 不悬垂);
+    ///   dispatch 时拷贝 shared_ptr 保活, 派发中退订/卸载不 UAF
     struct Subscription {
         int event                                                       = 0;
         void (*handler)(AgentxxPluginStringView payload_json, void* ud) = nullptr;
@@ -114,7 +116,7 @@ public:
     std::vector<ClientPanel>       panelRegs;       ///< 面板注册信息 (disable 保留)
     std::vector<ClientInfoSection> infoSectionRegs; ///< Info 段落注册信息 (disable 保留)
     std::vector<ClientCommand>     commandRegs;     ///< 命令注册信息 (disable 保留)
-    std::vector<Subscription>      subscriptions;   ///< 已订阅事件 (disable 保留)
+    std::vector<std::shared_ptr<Subscription>> subscriptions; ///< 已订阅事件 (disable 保留)
     std::vector<std::shared_ptr<void>> statusItemHandles; ///< 状态栏项宿主句柄 (enable 期)
     std::vector<std::shared_ptr<void>> panelHandles;      ///< 面板宿主句柄 (enable 期)
     std::vector<std::shared_ptr<void>> infoSectionHandles; ///< Info 段落宿主句柄 (enable 期)
@@ -126,6 +128,8 @@ public:
     explicit ClientPluginInstance(std::string in_name) :
         name(std::move(in_name)) {}
 
+    /// 析构时 dlclose (与 agent 侧 PluginInstance 一致; 调用方保证无在途回调:
+    /// unloadAsync 等 inflight 归零后移除, shutdownAll 进程退出路径约定无在途)
     ~ClientPluginInstance();
 
     /// 在途计数 RAII (事件 handler / 命令 execute 入口调用)
@@ -149,9 +153,11 @@ public:
 
 /// 事件订阅宿主句柄实现 (仅宿主内部; 与 plugin_api.h 的 C 不透明类型对应,
 /// 命名避免与 agent 侧 PluginManager 的全局定义 ODR 冲突)
+/// - sub 为强引用: 订阅对象从 subscriptions 摘除后仍被本句柄保活,
+///   unload 回调内退订不会解引用已释放内存
 struct ClientSubscriptionImpl {
-    ClientPluginInstance*               inst = nullptr;
-    ClientPluginInstance::Subscription* sub  = nullptr;
+    ClientPluginInstance*                        inst = nullptr;
+    std::shared_ptr<ClientPluginInstance::Subscription> sub;
 };
 
 /// client 插件管理器 (全局唯一; 挂 client 端点侧)
@@ -206,8 +212,18 @@ public:
     // ==================== 生命周期 (须 client io 线程) ====================
 
     /// 加载 client 插件动态库 (io 线程协程; dlopen 卸载到内部线程池执行)
+    /// - cfg: 插件配置 (yaml `plugins` 条目; 传 args 给插件, 不解析字段语义);
+    ///   为 nullptr 时 args 为空对象 (测试/直连路径)
+    /// - allowMissingEntry=true (sides==Auto): entry 符号缺失视为"纯 agent
+    ///   插件"跳过 (info 日志, 不报错); false (sides==Client/直连): 缺失报错
+    /// - 探测与加载合并为一次 dlopen (避免探测 dlopen→close 后正式加载再
+    ///   dlopen 的重复加载/卸载)
     /// - 返回插件实例; 加载失败返回 nullptr (错误记日志)
-    asio::awaitable<std::shared_ptr<ClientPluginInstance>> loadNativeAsync(std::string path);
+    asio::awaitable<std::shared_ptr<ClientPluginInstance>> loadNativeAsync(
+        std::string path,
+        const agentxx::agent::PluginConfig* cfg = nullptr,
+        bool allowMissingEntry = false
+    );
 
     /// 卸载插件 (按名称; 等全部在途回调完成后才 dlclose)
     asio::awaitable<bool> unloadAsync(std::string_view name);
@@ -347,6 +363,11 @@ private:
     /// 禁用/启用内部实现 (级联递归用; userInitiated=false 表示级联, 不改 userDisabled)
     void disableImpl(std::string_view name, bool userInitiated);
     void enableImpl(std::string_view name, bool userInitiated);
+
+    /// 卸载单个插件 (shutdownAll 用; 先递归卸载必选依赖者, 再处理自己)
+    /// - 依赖图级联 (先子后父): 脚本类插件 (depends 引擎) 先卸载, 引擎最后
+    ///   dlclose, 与 agent 侧 shutdownPlugin 语义一致
+    void shutdownClientPlugin(const std::shared_ptr<ClientPluginInstance>& inst);
 
     /// 收集反向必选依赖 (depends 含 target 的插件名; io 线程)
     std::vector<std::string> reverseRequiredDeps(const std::string& target, bool onlyEnabled) const;
