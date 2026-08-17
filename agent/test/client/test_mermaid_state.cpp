@@ -366,10 +366,9 @@ struct OverlayFixture {
         ctx.postRedraw = [this] {
             ++redrawCount;
         };
-        ctx.theme          = &theme;
-        ctx.showSystemInfo = nullptr;
-        ctx.threadId       = "session";
-        ctx.remoteUrl      = "";
+        ctx.theme    = &theme;
+        ctx.threadId = "session";
+        ctx.remoteUrl = "";
     }
 
     /// 注入 planning_write 工具消息 (JSON 文本)

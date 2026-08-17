@@ -37,10 +37,9 @@ struct InputFixture {
         ctx.postRedraw = [this] {
             ++redrawCount;
         };
-        ctx.theme          = &theme;
-        ctx.showSystemInfo = nullptr; // InputComponent 不使用
-        ctx.threadId       = "session";
-        ctx.remoteUrl      = "";
+        ctx.theme    = &theme;
+        ctx.threadId = "session";
+        ctx.remoteUrl = "";
     }
 
     /// 创建组件; ComponentBase 不可移动, 使用 shared_ptr 持有

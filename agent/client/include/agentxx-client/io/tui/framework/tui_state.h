@@ -120,18 +120,6 @@ struct TUIRenderState {
     size_t contextTokens    = 0;
     size_t maxContextTokens = 0;
     double tps              = 0.0;
-
-    /// 系统资源占用快照 (JSON 字符串, schema 由采集插件定义:
-    /// agentxx_system_monitor 能力 agentxx.system_usage 返回
-    /// {"cpu","mem_total_mb","mem_used_mb","mem_percent","gpus":[...]}),
-    /// 由 client 线程收到 WireSystemUsage (agent-server 侧经插件采集后回传,
-    /// 见 startSystemMonitor / onPeerMessage) 后写入; 空串 = 未收到/无数据
-    std::string systemUsageJson;
-
-    /// 插件数据 (WirePluginData 转发; key = 插件名, 如 "agentxx_codegraph")
-    /// - 服务端把插件事件原样转发, 载荷语义由插件定义; 客户端据此判断
-    ///   插件可用性并展示 (如 codegraph 索引进度/加载状态)
-    std::map<std::string, agentxx::agent::WirePluginData> pluginData;
 };
 
 /// COW 共享状态容器 (封装 mutex + shared_ptr + COW 辅助)

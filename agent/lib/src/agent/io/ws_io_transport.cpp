@@ -496,10 +496,6 @@ std::string WsAgentIOTransport::serialize(const WireMessage& msg) {
                 return io::makeSwitchSession(m.threadId).dump();
             } else if constexpr (std::is_same_v<T, WireSetPermission>) {
                 return io::makeSetPermission(m.threadId, m.path, m.allow, m.index).dump();
-            } else if constexpr (std::is_same_v<T, WireGetSystemUsage>) {
-                return io::makeGetSystemUsage().dump();
-            } else if constexpr (std::is_same_v<T, WireSystemUsage>) {
-                return io::makeSystemUsage(m.data).dump();
             } else if constexpr (std::is_same_v<T, WirePluginData>) {
                 return io::makePluginData(m).dump();
             } else if constexpr (std::is_same_v<T, WirePluginDataUp>) {
@@ -658,12 +654,6 @@ std::optional<WireMessage> WsAgentIOTransport::deserialize(std::string_view json
         return WireMessage{io::switchSessionFromJson(j)};
     } else if (t == io::MsgType::SetPermission) {
         return WireMessage{io::setPermissionFromJson(j)};
-    } else if (t == io::MsgType::GetSystemUsage) {
-        return WireMessage{WireGetSystemUsage{}};
-    } else if (t == io::MsgType::SystemUsage) {
-        WireSystemUsage resp;
-        resp.data = io::systemUsageFromJson(j);
-        return WireMessage{std::move(resp)};
     } else if (t == io::MsgType::PluginData) {
         return WireMessage{io::pluginDataFromJson(j)};
     } else if (t == io::MsgType::PluginDataUp) {

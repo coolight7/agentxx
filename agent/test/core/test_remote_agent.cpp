@@ -372,29 +372,44 @@ static asio::awaitable<void> test_remote_protocol_roundtrip() {
         }
     }
     {
-        // 系统资源占用: GetSystemUsage (无载荷) 序列化往返
-        agentxx::agent::WireGetSystemUsage req{};
-        auto                               back
-            = WsAgentIOTransport::deserialize(WsAgentIOTransport::serialize(WireMessage{req}));
+        // 插件事件转发: WirePluginData 序列化往返 (载荷为插件定义 schema 的
+        // JSON 字符串, 宿主只透传; 系统资源占用链路 (agentxx_system_monitor
+        // 周期采集) 与 codegraph 索引状态均走本通道)
+        agentxx::agent::WirePluginData pd;
+        pd.plugin = "agentxx_system_monitor";
+        pd.event  = "usage";
+        pd.data   = R"({"cpu":42.5,"mem_total_mb":16384,"mem_used_mb":8192,"mem_percent":50.0,"gpus":[{"name":"NVIDIA RTX 4090","dedicated_vram_mb":24576,"dedicated_vram_used_mb":12000,"shared_vram_mb":8192,"shared_vram_used_mb":100,"usage_percent":33.3}]})";
+        auto back
+            = WsAgentIOTransport::deserialize(WsAgentIOTransport::serialize(WireMessage{pd}));
         XX_TEST_EXPECT_TRUE(back.has_value());
         if (back) {
-            XX_TEST_EXPECT_TRUE(std::get_if<agentxx::agent::WireGetSystemUsage>(&*back) != nullptr);
+            auto* r = std::get_if<agentxx::agent::WirePluginData>(&*back);
+            XX_TEST_EXPECT_TRUE(r != nullptr);
+            if (r) {
+                XX_TEST_EXPECT_EQ(r->plugin, pd.plugin);
+                XX_TEST_EXPECT_EQ(r->event, pd.event);
+                // JSON 字符串原样往返
+                XX_TEST_EXPECT_EQ(r->data, pd.data);
+            }
         }
     }
     {
-        // 系统资源占用: SystemUsage 序列化往返 (载荷为插件定义 schema 的
-        // JSON 字符串, 宿主只透传; 此处用 agentxx_system_monitor 约定的格式)
-        agentxx::agent::WireSystemUsage resp;
-        resp.data = R"({"cpu":42.5,"mem_total_mb":16384,"mem_used_mb":8192,"mem_percent":50.0,"gpus":[{"name":"NVIDIA RTX 4090","dedicated_vram_mb":24576,"dedicated_vram_used_mb":12000,"shared_vram_mb":8192,"shared_vram_used_mb":100,"usage_percent":33.3}]})";
+        // client 插件事件上行: WirePluginDataUp 序列化往返 (如 /sysinfo 开关
+        // 同步 agentxx_system_monitor.usage_enabled)
+        agentxx::agent::WirePluginDataUp pu;
+        pu.plugin = "agentxx_system_monitor";
+        pu.event  = "usage_enabled";
+        pu.data   = R"({"enabled":true})";
         auto back
-            = WsAgentIOTransport::deserialize(WsAgentIOTransport::serialize(WireMessage{resp}));
+            = WsAgentIOTransport::deserialize(WsAgentIOTransport::serialize(WireMessage{pu}));
         XX_TEST_EXPECT_TRUE(back.has_value());
         if (back) {
-            auto* r = std::get_if<agentxx::agent::WireSystemUsage>(&*back);
+            auto* r = std::get_if<agentxx::agent::WirePluginDataUp>(&*back);
             XX_TEST_EXPECT_TRUE(r != nullptr);
             if (r) {
-                // JSON 字符串原样往返
-                XX_TEST_EXPECT_EQ(r->data, resp.data);
+                XX_TEST_EXPECT_EQ(r->plugin, pu.plugin);
+                XX_TEST_EXPECT_EQ(r->event, pu.event);
+                XX_TEST_EXPECT_EQ(r->data, pu.data);
             }
         }
     }

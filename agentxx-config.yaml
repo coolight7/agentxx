@@ -15,7 +15,7 @@
 #   - Linux/macOS: ~/.agentxx/
 #   - Windows: %APPDATA%/agentxx/
 # 配置后数据子路径:
-#   - {data_dir}/sqlite/global.db                     全局设置 (TUI 动画等级/系统信息显示等)
+#   - {data_dir}/sqlite/global.db                     全局设置 (TUI 动画等级/日志等级等)
 #   - {data_dir}/sqlite/sessions/{threadId}/          会话数据 (session.db / share_store.db)
 #   - {data_dir}/sqlite/codegraph/<折叠路径>/index.db CodeGraph 索引
 # data_dir: ~/.agentxx
@@ -108,6 +108,18 @@ models:
     base_url: "https://opencode.ai/zen/go/v1"
     api_key: "${OPENCODE_API_KEY}"
     model_name: "deepseek-v4-pro"
+    send_thinking: true
+    model_context_max_token: 1000000
+    extra_api_config:
+      reasoning:
+        effort: max
+      stream: true
+      preserve_thinking: true 
+  - name: opencode-gpt-5.6-luna
+    type: "openai-responses"
+    base_url: "https://opencode.ai/zen/go/v1"
+    api_key: "${OPENCODE_API_KEY}"
+    model_name: "gpt-5.6-luna"
     send_thinking: true
     model_context_max_token: 1000000
     extra_api_config:
@@ -255,7 +267,7 @@ plugins:
   #     load_cwd:       未配置 paths 时是否默认加载当前工作目录 (默认 true)
   #     use_gitignore:  是否默认忽略 .gitignore 规则与 .gitmodules 子模块目录 (默认 true)
   # - 索引数据库: {data_dir}/sqlite/codegraph/<折叠路径>/index.db
-  - path: agent/build/linux-debug/exec/plugins/agentxx_codegraph/
+  - path: agent/build/windows-debug/exec/plugins/agentxx_codegraph/
     enabled: true
     args:
       # paths:
@@ -273,19 +285,19 @@ plugins:
   # - 能力: agentxx.system_usage (方法 query) —— TUI 侧边栏 System 段
   #   (WireGetSystemUsage 周期请求) 经服务端调用本能力采集 CPU/内存/GPU;
   #   载荷 schema 由本插件定义, 宿主只透传 (lib wire 层无系统资源 DTO)
-  - path: agent/build/linux-debug/exec/plugins/agentxx_system_monitor/
+  - path: agent/build/windows-debug/exec/plugins/agentxx_system_monitor/
     enabled: true
 
   # === 音频流捕获 (插件 agentxx_audio_stream; 从 lib expand 拆分, 默认关闭)
   # - 工具: agentxx_audio_stream (start/stop/status; 仅 Windows 支持捕获,
   #   其他平台 start 返回失败)
   # - 捕获帧经事件推送 (topic agentxx_audio_stream.audio)
-  # - path: agent/build/linux-debug/exec/plugins/agentxx_audio_stream/
+  # - path: agent/build/windows-debug/exec/plugins/agentxx_audio_stream/
   #   enabled: true
 
   # === 系统级文本选择事件流 (插件 agentxx_text_selection_monitor;
   #   从 lib expand 拆分, 默认关闭; 仅 Windows 支持)
   # - 工具: agentxx_text_selection_monitor (start/stop/status)
   # - 选中文本经事件推送 (topic agentxx_text_selection_monitor.selection)
-  # - path: agent/build/linux-debug/exec/plugins/agentxx_text_selection_monitor/
+  # - path: agent/build/windows-debug/exec/plugins/agentxx_text_selection_monitor/
   #   enabled: true

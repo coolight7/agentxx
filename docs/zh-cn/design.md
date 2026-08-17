@@ -248,6 +248,11 @@ TUI [F4] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
     远程模式由 mode_runners 连接协程驱动 (ConnState 存于 TUIRenderState::connState)
   - 屏幕上方 toast 提示
   - 自动滚动吸附底部 (Scrollable 组件)
+  - 系统资源占用 (CPU/内存) 与 CodeGraph 索引状态: 渲染已剥离到对应插件的
+    client 侧 (agentxx_system_monitor 状态栏项 + 命令 /sysinfo / agentxx_codegraph
+    侧边栏面板); 采集/定时亦在插件内 (agentxx_system_monitor 在 agent 侧周期
+    采集并 publish usage 事件, 经 WirePluginData 通道回传 client 插件渲染),
+    TUI 不发起资源请求、不解析/不渲染插件载荷
 - **TUI 渲染模块化**: 将消息列表、侧边栏、浮层、编辑工具渲染拆分到独立文件
 - **LazyScrollable (Flutter ListView.builder 风格)**: 消息列表采用懒构建渲染架构 ——
   通过 itemCount/itemKey/estimateHeight/buildItem 回调描述列表，仅构建与视口相交的
@@ -1136,7 +1141,7 @@ agent/
 │   │   │       ├── framework/    # TUI 框架层
 │   │   │       │   ├── tui_state.h       # TUI 状态聚合 (消息/侧边栏/排队输入等)
 │   │   │       │   ├── tui_context.h     # TUI 渲染上下文 (theme/state/尺寸)
-│   │   │       │   ├── tui_settings.h    # TUI 全局设置单例 (主题/系统资源显示开关等)
+│   │   │       │   ├── tui_settings.h    # TUI 全局设置单例 (主题/动画/日志等级)
 │   │   │       │   └── modal_container.h # 浮层容器 (权限/中断弹窗)
 │   │   │       └── components/   # TUI 渲染组件
 │   │   │           ├── message_list.h # 消息列表渲染

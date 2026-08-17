@@ -309,12 +309,6 @@ private:
     /// 打开 Plan 状态图模态 (Info 侧边栏 [View Plan Diagram] 按钮触发)
     void openPlanDiagram();
 
-    /// 启动系统资源监控协程 (每 kSystemInfoIntervalSec 秒经 WireGetSystemUsage 请求
-    /// agent-server 读取 CPU/内存占用, 收到 WireSystemUsage 响应后更新 sharedState_)
-    void startSystemMonitor();
-    /// 停止系统资源监控协程
-    void stopSystemMonitor();
-
     /// 侧边栏渲染辅助
     std::vector<ScrollItem>       renderLogWindow();
     std::vector<ScrollItem>       renderInfoSidebar();
@@ -414,21 +408,6 @@ private:
     /// 连接协程 waitRetry 轮询消费并据此返回重试连接)
     std::atomic<bool> retryRequested_{false};
 
-    // ---- 系统资源监控 (每 kSystemInfoIntervalSec 秒经 Wire 请求 agent-server 采集) ----
-    /// Info 侧边栏系统资源显示开关存储于全局设置单例 TUISettings::showSystemInfo()
-    /// (默认开启, 可被设置弹窗切换; UI/监控协程均可读)
-    ///
-    /// 采集已迁移到 agent-server: TUI 不再本地读取 CPU/内存 (远端模式下显示的是
-    /// server 主机的资源; 本地一体模式也由 server 端点所在进程读取), 仅周期发送
-    /// WireGetSystemUsage, 收到 WireSystemUsage 响应后更新 sharedState_.systemUsageJson
-
-    /// 监控运行标志: start() 置位, stop() 复位; 监控协程据此决定是否继续下一轮
-    std::atomic<bool> sysMonitorRunning_{false};
-    /// 监控周期定时器: 由监控协程持有; stop() 调用 cancel() 使挂起的协程立即退出,
-    /// 避免残留定时器阻塞 client io_context 的 run()
-    std::shared_ptr<asio::steady_timer> sysMonitorTimer_;
-    /// 资源采集刷新间隔 (秒)
-    static constexpr int kSystemInfoIntervalSec = 5;
     /// 鼠标命中区域 (渲染时 reflect 填充, 全局事件处理时检测)
     ftxui::Box pendingCounterBox_;
     ftxui::Box contextButtonBox_;

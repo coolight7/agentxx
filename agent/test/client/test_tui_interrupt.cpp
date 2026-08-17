@@ -51,11 +51,10 @@ struct InterruptFixture {
         ctx.postRedraw = [this] {
             ++redrawCount;
         };
-        ctx.theme          = &theme;
-        ctx.showSystemInfo = nullptr;
-        ctx.threadId       = "session";
-        ctx.remoteUrl      = "";
-        comp               = std::make_shared<MessageListComponent>(ctx);
+        ctx.theme    = &theme;
+        ctx.threadId = "session";
+        ctx.remoteUrl = "";
+        comp          = std::make_shared<MessageListComponent>(ctx);
     }
 
     /// 创建中断结果回传通道

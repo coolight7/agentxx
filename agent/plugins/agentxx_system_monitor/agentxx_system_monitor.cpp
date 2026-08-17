@@ -2,19 +2,29 @@
 // - 从 libagentxx src/expand/get_cpu_gpu_use 拆分独立:
 //   原内置工具 agentxx_get_system_core_info 迁入本插件注册 (同名, 行为一致)
 // - 另注册能力 "agentxx.system_usage" (方法 query): 返回使用率 JSON (schema
-//   由本插件定义), 供宿主 SessionServerAgentIO 经能力调用服务 TUI 的系统资源
-//   侧边栏展示 (WireGetSystemUsage/WireSystemUsage 链路; 宿主只透传 JSON,
-//   不解析语义)
+//   由本插件定义), 供测试与工具执行使用; 常规展示不再走请求-响应链路
+//   (WireGetSystemUsage/WireSystemUsage 已随插件化移除, lib wire 层不含
+//   系统资源 DTO)
+// - 周期采集: agent 侧入口启动定时线程, 每 kUsageIntervalSec 秒执行一次
+//   采集并 publish "agentxx_system_monitor.usage" (server 原样转发
+//   WirePluginData) —— 定时/采集/发布完全位于插件内, TUI 不再参与
+// - client 侧入口 (agentxx_client_entry): 订阅宿主转发的 usage 插件事件,
+//   以状态栏项渲染 CPU/内存占用; 显示开关命令 /sysinfo 经跨端事件
+//   (usage_enabled) 上行同步到 agent 侧, 关闭期间跳过采集
 // - 插件不链接 libagentxx: 日志经 vtable log, JSON 组装用 fmt + json_escape
 #include "system_monitor_plugin.h"
 #include "cpu_gpu_monitor.h"
+#include "agentxx/plugin/client_plugin_api.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/io_context.hpp"
 #include "fmt/format.h"
+#include <atomic>
+#include <chrono>
 #include <cstring>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 using namespace agentxx_system_monitor_plugin;
@@ -44,8 +54,8 @@ static agentxx::expand::CpuGpuUsage querySync() {
 // =====================================================================
 // JSON 组装 (能力返回的使用率 JSON schema, 由本插件定义:
 // {"cpu","mem_total_mb","mem_used_mb","mem_percent","gpus":[...]})
-// - 宿主经 WireSystemUsage 原样透传 (lib wire 层不含系统资源 DTO);
-//   TUI 侧按本 schema 渲染; 未来 client 插件化渲染 UI 时消费同一 JSON
+// - 经 publish "agentxx_system_monitor.usage" 事件原样透传 (lib wire 层不含
+//   系统资源 DTO); client 侧入口按本 schema 渲染状态栏项
 // =====================================================================
 
 /// 转义字符串为 JSON 字面量 (经宿主 vtable json_escape)
@@ -264,10 +274,10 @@ static char* getSystemCoreInfoExecute(
 
 // =====================================================================
 // 能力: agentxx.system_usage (方法 query)
-// - 宿主 SessionServerAgentIO 处理 WireGetSystemUsage 时经
-//   PluginManager::invokeCapability 调用 (回调在调用方线程执行, 宿主已
-//   卸载到 blockingPool; 本回调同步阻塞 ~100ms 采样, 可接受)
-// - 返回 JSON schema 与 lib wire_protocol.h 一致
+// - 数据源: 周期采集线程与工具 agentxx_get_system_core_info 均基于
+//   CpuGpuMonitor::query 采样; 本能力供测试/其他插件按需查询
+//   (回调在调用方线程执行, 同步阻塞 ~100ms 采样, 可接受)
+// - 返回 JSON schema 由本插件定义 (usageToJson)
 // =====================================================================
 
 static char* systemUsageInvoke(
@@ -314,7 +324,84 @@ extern "C" const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
     return &info;
 }
 
-extern "C" int agentxx_plugin_entry(const AgentxxHost* host, void** /*plugin_ctx*/) {
+// =====================================================================
+// 周期采集 (agent 侧; 定时/采集/发布完全位于插件内)
+// - 每 kUsageIntervalSec 秒执行一次 querySync() (阻塞 ~100ms 采样) 并
+//   publish "agentxx_system_monitor.usage"; server 的 subscribePluginEvents
+//   原样转发为 WirePluginData, client 侧插件订阅后渲染状态栏项
+// - publish 线程安全: 宿主内部 co_spawn 到总线 executor 异步投递
+//   (不等待 io 线程, 采集线程可安全调用; 与 codegraph 工作线程 publish 同模式)
+// - 显示开关由 client 侧 /sysinfo 命令经跨端事件 (usage_enabled) 同步,
+//   关闭期间跳过采集 (仍保持周期唤醒, 便于随时重新开启)
+// - 退出: unload 回调置 stop 并 join (tick 500ms 轮询, join 最坏 ~600ms)
+// =====================================================================
+
+/// 周期采集间隔 (秒)
+static constexpr int kUsageIntervalSec = 5;
+/// 轮询 tick (毫秒): 短周期便于退出时快速 join
+static constexpr int kUsageTickMs = 500;
+
+struct PluginCtx {
+    std::atomic<bool> stop{false};
+    /// 采集/发布开关 (client /sysinfo 经 usage_enabled 事件同步)
+    std::atomic<bool> usageEnabled{true};
+    /// 周期采集线程 (unload 时 stop + join)
+    std::thread usageThread;
+};
+
+/// 周期采集循环 (独立线程; publish 线程安全, 见上)
+static void usageCollectorLoop(PluginCtx* ctx) {
+    int tick = 0;
+    for (;;) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(kUsageTickMs));
+        if (ctx->stop.load(std::memory_order_acquire)) {
+            break;
+        }
+        if (++tick < kUsageIntervalSec * 1000 / kUsageTickMs) {
+            continue;
+        }
+        tick = 0;
+        if (!ctx->usageEnabled.load(std::memory_order_relaxed)) {
+            continue; // 显示关闭: 跳过采集 (仍保持唤醒)
+        }
+        try {
+            auto usage = querySync();
+            auto json  = usageToJson(usage);
+            if (g_host && g_host->vtable && g_host->vtable->publish) {
+                g_host->vtable->publish(
+                    g_host,
+                    AGENTXX_SV("agentxx_system_monitor.usage"),
+                    agentxx_plugin_sv(json.data(), json.size())
+                );
+            }
+        } catch (const std::exception& e) {
+            pluginLog(
+                3,
+                fmt::format("agentxx_system_monitor: usage collect failed: {}", e.what())
+            );
+        } catch (...) {
+            pluginLog(3, "agentxx_system_monitor: usage collect failed (unknown)");
+        }
+    }
+}
+
+/// 跨端事件: client /sysinfo 开关同步 (WirePluginDataUp 上行后 server 发布到
+/// plugin.client.agentxx_system_monitor.usage_enabled; 订阅回调在 agent io 线程,
+/// 仅写原子标志, 快速返回)
+static void on_usage_enabled(AgentxxPluginStringView event_json, void* ud) {
+    auto* ctx = static_cast<PluginCtx*>(ud);
+    if (!ctx) {
+        return;
+    }
+    std::string json{event_json.data ? event_json.data : "", event_json.size};
+    SimpleJson  j(json);
+    bool        enabled = true;
+    if (j.ok() && jsonGetBool(j.doc().at_pointer("/enabled"), enabled)) {
+        ctx->usageEnabled.store(enabled, std::memory_order_relaxed);
+    }
+}
+
+extern "C" int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) {
     g_host = host;
 
     // 默认提示词写入宿主 (从 lib AgentPrompt 剥离迁移; 用户 yaml 覆盖优先)
@@ -342,14 +429,249 @@ extern "C" int agentxx_plugin_entry(const AgentxxHost* host, void** /*plugin_ctx
         pluginLog(3, "agentxx_system_monitor: register capability agentxx.system_usage failed");
     }
 
-    pluginLog(2, "agentxx_system_monitor loaded (1 tool, 1 capability)");
+    // 3. 周期采集: 订阅 client /sysinfo 开关同步事件 + 启动采集线程
+    auto ctx = std::make_unique<PluginCtx>();
+    if (!host->vtable->subscribe(
+            host,
+            AGENTXX_SV("client.agentxx_system_monitor.usage_enabled"),
+            on_usage_enabled,
+            ctx.get()
+        )) {
+        pluginLog(3, "agentxx_system_monitor: subscribe usage_enabled failed");
+    }
+    // 采集线程周期 querySync + publish usage 事件; 独立线程, 不阻塞 io 线程
+    ctx->usageThread = std::thread(usageCollectorLoop, ctx.get());
+
+    *plugin_ctx = ctx.release();
+    pluginLog(2, "agentxx_system_monitor loaded (1 tool, 1 capability, periodic collector)");
     return 0;
 }
 
-extern "C" void agentxx_plugin_unload(void* /*plugin_ctx*/) {
+extern "C" void agentxx_plugin_unload(void* plugin_ctx) {
+    auto* ctx = static_cast<PluginCtx*>(plugin_ctx);
+    if (ctx) {
+        // 停止周期采集线程 (join 最坏 ~600ms: 500ms tick + 一次 ~100ms 采样)
+        ctx->stop.store(true, std::memory_order_release);
+        if (ctx->usageThread.joinable()) {
+            ctx->usageThread.join();
+        }
+    }
     if (g_host && g_host->vtable) {
         g_host->vtable->unregister_tool(g_host, AGENTXX_SV("agentxx_get_system_core_info"));
         g_host->vtable->unregister_capability(g_host, AGENTXX_SV("agentxx.system_usage"));
     }
     pluginLog(2, "agentxx_system_monitor unloaded");
+    delete ctx;
+}
+
+/* =====================================================================
+ * client 侧入口 (agentxx_client_entry) —— 系统资源占用渲染
+ *
+ * 数据链路 (定时/采集/发布完全位于 agent 侧插件内, 见文件头部说明):
+ * - agent 侧插件周期线程每 5s 采集并 publish "agentxx_system_monitor.usage"
+ * - server 原样转发为 WirePluginData, 宿主 (TUI) 经事件接收器分发到
+ *   client 插件系统 (AGENTXX_CLIENT_EVT_PLUGIN_DATA, 见 TUI onPeerMessage)
+ * - 本入口订阅该事件, 过滤 usage 事件后解析 JSON (schema 由本插件定义),
+ *   以状态栏项渲染 "CPU x% RAM y%"
+ * - 显示开关: 命令 /sysinfo 切换 (插件内部状态; 状态栏项渲染与命令
+ *   执行均在 client io 线程, 无跨线程竞争); 开关状态经跨端事件
+ *   (usage_enabled) 上行同步, agent 侧据此跳过采集
+ * - CLI 宿主 (无 STATUS_ITEM 能力) 下 register_status_item 返回 NULL,
+ *   插件降级 (仅保持数据接收, 不渲染)
+ * ===================================================================== */
+
+static const AgentxxClientHost* g_client_host = nullptr;
+static AgentxxStatusItem*       g_usage_item  = nullptr;
+/// 系统资源显示开关 (命令 /sysinfo 切换; 默认开启, 与旧 TUI 设置一致)
+static std::atomic<bool> g_usage_enabled{true};
+/// 最近一次收到的 usage JSON (原始字符串; 用于开关重新开启时立即刷新)
+static std::string g_last_usage_json;
+
+/// 从 usage JSON 读取双精度字段 (schema 由本插件定义:
+/// {"cpu","mem_total_mb","mem_used_mb","mem_percent","gpus":[...]};
+/// cpu/mem_percent 恒为 {:.2f} 浮点文本)
+static double jsonGetDouble(SimpleJson& j, const char* pointer) {
+    auto v = j.doc().at_pointer(pointer);
+    if (v.error()) {
+        return 0.0;
+    }
+    double d = 0.0;
+    if (!v.value().get_double().get(d)) {
+        return d;
+    }
+    return 0.0;
+}
+
+/// 用最新数据刷新状态栏项 (client io 线程调用)
+static void refreshUsageItem() {
+    if (!g_client_host || !g_usage_item || g_last_usage_json.empty()) {
+        return;
+    }
+    SimpleJson j(g_last_usage_json);
+    if (!j.ok()) {
+        return;
+    }
+    const double cpu    = jsonGetDouble(j, "/cpu");
+    const double memPct = jsonGetDouble(j, "/mem_percent");
+    std::string  text   = fmt::format("CPU {:.0f}% RAM {:.0f}%", cpu, memPct);
+    char*        esc    = g_client_host->vtable->json_escape(
+        g_client_host,
+        agentxx_plugin_sv(text.data(), text.size())
+    );
+    std::string json = R"({"text":)";
+    json += esc ? esc : "\"\"";
+    json += "}";
+    if (esc) {
+        g_client_host->vtable->free(esc);
+    }
+    g_client_host->vtable->update_status_item(
+        g_client_host,
+        g_usage_item,
+        agentxx_plugin_sv(json.data(), json.size())
+    );
+}
+
+/// PLUGIN_DATA 事件: 过滤宿主转发的系统资源占用事件 (agentxx_system_monitor.usage)
+static void on_client_plugin_data(AgentxxPluginStringView payload_json, void* ud) {
+    (void)ud;
+    if (!g_client_host || !g_usage_item) {
+        return;
+    }
+    // payload: {"plugin","event","data"}
+    char* plugin = g_client_host->vtable->json_get_string(
+        g_client_host,
+        payload_json,
+        AGENTXX_SV("plugin")
+    );
+    char* event = g_client_host->vtable->json_get_string(
+        g_client_host,
+        payload_json,
+        AGENTXX_SV("event")
+    );
+    char* data = g_client_host->vtable->json_get_string(
+        g_client_host,
+        payload_json,
+        AGENTXX_SV("data")
+    );
+    const bool mine = plugin && event && std::strcmp(plugin, "agentxx_system_monitor") == 0
+                      && std::strcmp(event, "usage") == 0 && data;
+    if (mine) {
+        g_last_usage_json = data;
+        if (g_usage_enabled.load(std::memory_order_relaxed)) {
+            refreshUsageItem();
+        }
+    }
+    if (plugin) {
+        g_client_host->vtable->free(plugin);
+    }
+    if (event) {
+        g_client_host->vtable->free(event);
+    }
+    if (data) {
+        g_client_host->vtable->free(data);
+    }
+}
+
+/// 命令 /sysinfo: 切换系统资源显示开关 (返回 toast 动作;
+/// 开关状态经跨端事件 usage_enabled 上行同步, agent 侧据此跳过采集)
+static char* sysinfo_cmd_execute(void* ud, AgentxxPluginStringView args_json, char** error_out) {
+    (void)ud;
+    (void)args_json;
+    (void)error_out;
+    if (!g_client_host) {
+        return nullptr;
+    }
+    const bool next = !g_usage_enabled.load(std::memory_order_relaxed);
+    g_usage_enabled.store(next, std::memory_order_relaxed);
+    // 重新开启时立即以最新数据刷新 (数据在关闭期间仍持续接收缓存)
+    if (next) {
+        refreshUsageItem();
+    }
+    // 上行同步: agent 侧插件订阅 client.agentxx_system_monitor.usage_enabled,
+    // 关闭期间跳过周期采集 (省采样开销/网络流量)
+    {
+        std::string payload = next ? R"({"enabled":true})" : R"({"enabled":false})";
+        g_client_host->vtable->send_plugin_data(
+            g_client_host,
+            AGENTXX_SV("usage_enabled"),
+            agentxx_plugin_sv(payload.data(), payload.size())
+        );
+    }
+    std::string text = next ? "System resource info: ON" : "System resource info: OFF";
+    char*       esc  = g_client_host->vtable->json_escape(
+        g_client_host,
+        agentxx_plugin_sv(text.data(), text.size())
+    );
+    std::string out = R"({"action":"toast","text":)";
+    out += esc ? esc : "\"\"";
+    out += R"(,"level":0})";
+    if (esc) {
+        g_client_host->vtable->free(esc);
+    }
+    return g_client_host->vtable->strdup(out.c_str());
+}
+
+extern "C" const AgentxxClientPluginInfo* agentxx_client_get_info(void) {
+    static const AgentxxClientPluginInfo info{
+        AGENTXX_CLIENT_PLUGIN_API_VERSION,
+        AGENTXX_SV("agentxx_system_monitor"),
+        AGENTXX_SV("1.0.0"),
+        AGENTXX_SV("System resource usage status item (CPU/RAM) and /sysinfo toggle"),
+        0, // min_ui_caps: 无最低要求 (CLI 无状态栏时注册失败降级)
+    };
+    return &info;
+}
+
+extern "C" int agentxx_client_entry(const AgentxxClientHost* host, void** plugin_ctx) {
+    g_client_host = host;
+    (void)plugin_ctx;
+
+    // 1. 状态栏项 (左侧 align=0, order=20; 显示在模型信息之后)
+    g_usage_item = host->vtable->register_status_item(
+        host,
+        AGENTXX_SV("agentxx_system_monitor.usage"),
+        AGENTXX_SV(R"({"text":"CPU - RAM -"})"),
+        0,
+        20
+    );
+    // 宿主不支持状态栏 (如 CLI) 时返回 NULL, 插件降级 (不视为失败)
+
+    // 2. 事件订阅: 宿主转发的系统资源事件 (WirePluginData agentxx_system_monitor.usage)
+    if (!host->vtable->subscribe(
+            host,
+            AGENTXX_CLIENT_EVT_PLUGIN_DATA,
+            on_client_plugin_data,
+            nullptr
+        )) {
+        return -1;
+    }
+
+    // 3. 命令 /sysinfo: 切换显示
+    if (host->vtable->register_command(
+            host,
+            AGENTXX_SV("sysinfo"),
+            AGENTXX_SV("Toggle system resource info display (CPU/RAM status item)"),
+            sysinfo_cmd_execute,
+            nullptr
+        ) != 0) {
+        return -1;
+    }
+
+    host->vtable->log(host, 2, AGENTXX_SV("agentxx_system_monitor client loaded"));
+    return 0;
+}
+
+extern "C" void agentxx_client_unload(void* plugin_ctx) {
+    (void)plugin_ctx;
+    if (!g_client_host) {
+        return;
+    }
+    if (g_usage_item) {
+        g_client_host->vtable->unregister_status_item(g_client_host, g_usage_item);
+        g_usage_item = nullptr;
+    }
+    g_client_host->vtable->unregister_command(g_client_host, AGENTXX_SV("sysinfo"));
+    g_last_usage_json.clear();
+    g_client_host->vtable->log(g_client_host, 2, AGENTXX_SV("agentxx_system_monitor client unloaded"));
+    g_client_host = nullptr;
 }

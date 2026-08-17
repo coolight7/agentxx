@@ -169,6 +169,68 @@ bool parseClientManifest(
     }
 }
 
+/// 解析插件动态库路径 (目录插件: manifest entry + 平台扩展名修正 +
+/// 配置子目录回退; 直接库路径原样返回)
+/// - 返回 false 表示目录插件 manifest 缺失/非法 (调用方应跳过加载)
+/// - 非目录路径恒返回 true (libPath = path)
+/// - loadNativeAsync 正式加载与 loadConfiguredClientPlugins 入口探测共用,
+///   保证两者解析一致 (探测直接 LoadLibrary 目录在 Windows 上恒失败
+///   error 126)
+bool resolveClientPluginLibPath(
+    const std::string&        path,
+    std::string&              libPath,
+    std::vector<std::string>& depends,
+    std::vector<std::string>& optionalDepends
+) {
+    std::error_code ec;
+    if (!std::filesystem::is_directory(path, ec)) {
+        libPath = path;
+        return true;
+    }
+    std::string manifestName, manifestEntry;
+    if (!parseClientManifest(
+            std::filesystem::path(path),
+            manifestName,
+            manifestEntry,
+            depends,
+            optionalDepends
+        )) {
+        return false;
+    }
+    auto entryPath = (std::filesystem::path(path) / manifestEntry).lexically_normal().string();
+#if defined(_WIN32)
+    if (entryPath.ends_with(".so")) {
+        entryPath.replace(entryPath.size() - 3, 3, ".dll");
+    }
+#elif defined(__APPLE__)
+    if (entryPath.ends_with(".so")) {
+        entryPath.replace(entryPath.size() - 3, 3, ".dylib");
+    }
+#endif
+    if (!std::filesystem::exists(entryPath, ec)) {
+        for (const char* cfg : {"Debug", "Release", "RelWithDebInfo", "MinSizeRel"}) {
+            auto candidate = (std::filesystem::path(path) / cfg / manifestEntry)
+                                 .lexically_normal()
+                                 .string();
+#if defined(_WIN32)
+            if (candidate.ends_with(".so")) {
+                candidate.replace(candidate.size() - 3, 3, ".dll");
+            }
+#elif defined(__APPLE__)
+            if (candidate.ends_with(".so")) {
+                candidate.replace(candidate.size() - 3, 3, ".dylib");
+            }
+#endif
+            if (std::filesystem::exists(candidate, ec)) {
+                entryPath = std::move(candidate);
+                break;
+            }
+        }
+    }
+    libPath = std::move(entryPath);
+    return true;
+}
+
 /// 解析 action 动作 JSON: {"action": "send"|"toast"|"none", ...}
 /// 返回 true 表示 action 字段可识别 (含 none); false 表示非法/空
 bool parseCommandAction(const std::string& jsonText, std::string& action) {
@@ -241,62 +303,19 @@ void ClientPluginManager::setThreadId(std::string threadId) {
 
 asio::awaitable<std::shared_ptr<ClientPluginInstance>>
     ClientPluginManager::loadNativeAsync(std::string path) {
-    namespace fs = std::filesystem;
-
     // ---- 目录插件: 解析 plugin.yaml 取 entry 库路径 (与 agent 侧一致) ----
     // - manifest: name/entry/depends/optional_depends
     // - entry 为库文件名 (相对于插件目录)
     // - entry 平台化: manifest 按 Linux 书写 (libfoo.so), Windows/macOS 下
     //   修正扩展名 (.dll/.dylib); 多配置生成器 (MSVC Debug/Release) 产物位于
     //   配置子目录: entry 按 {dir}/{entry} 找不到时回退 {dir}/{Debug|Release|...}
+    // - 解析逻辑与 loadConfiguredClientPlugins 入口探测共用
+    //   (resolveClientPluginLibPath), 保证探测与正式加载路径一致
     std::string              libPath = path;
     std::vector<std::string> depends, optionalDepends;
-    {
-        std::error_code ec;
-        if (fs::is_directory(path, ec)) {
-            std::string manifestName, manifestEntry;
-            if (!parseClientManifest(
-                    fs::path(path),
-                    manifestName,
-                    manifestEntry,
-                    depends,
-                    optionalDepends
-                )) {
-                XX_LOGE("[client_plugin] `{}` missing/invalid plugin.yaml", path);
-                co_return nullptr;
-            }
-            auto entryPath = (fs::path(path) / manifestEntry).lexically_normal().string();
-#if defined(_WIN32)
-            if (entryPath.ends_with(".so")) {
-                entryPath.replace(entryPath.size() - 3, 3, ".dll");
-            }
-#elif defined(__APPLE__)
-            if (entryPath.ends_with(".so")) {
-                entryPath.replace(entryPath.size() - 3, 3, ".dylib");
-            }
-#endif
-            if (!fs::exists(entryPath, ec)) {
-                for (const char* cfg : {"Debug", "Release", "RelWithDebInfo", "MinSizeRel"}) {
-                    auto candidate = (fs::path(path) / cfg / manifestEntry)
-                                         .lexically_normal()
-                                         .string();
-#if defined(_WIN32)
-                    if (candidate.ends_with(".so")) {
-                        candidate.replace(candidate.size() - 3, 3, ".dll");
-                    }
-#elif defined(__APPLE__)
-                    if (candidate.ends_with(".so")) {
-                        candidate.replace(candidate.size() - 3, 3, ".dylib");
-                    }
-#endif
-                    if (fs::exists(candidate, ec)) {
-                        entryPath = std::move(candidate);
-                        break;
-                    }
-                }
-            }
-            libPath = std::move(entryPath);
-        }
+    if (!resolveClientPluginLibPath(path, libPath, depends, optionalDepends)) {
+        XX_LOGE("[client_plugin] `{}` missing/invalid plugin.yaml", path);
+        co_return nullptr;
     }
 
     // dlopen 卸载到内部线程池 (避免阻塞 io 线程)
@@ -668,10 +687,19 @@ asio::awaitable<void> ClientPluginManager::loadConfiguredClientPlugins(
             continue; // 已加载
         }
         // 探测 client 入口: 无则视为纯 agent 插件跳过
+        // - 目录插件先解析 manifest entry 库路径再探测 (直接 LoadLibrary
+        //   目录在 Windows 上恒失败 error 126; 解析逻辑与 loadNativeAsync
+        //   共用 resolveClientPluginLibPath, 保证探测/加载路径一致)
+        std::string              probePath;
+        std::vector<std::string> probeDeps, probeOptDeps;
+        if (!resolveClientPluginLibPath(it.path, probePath, probeDeps, probeOptDeps)) {
+            XX_LOGE("[client_plugin] `{}` missing/invalid plugin.yaml", it.path);
+            continue;
+        }
         std::string dlErr;
-        void*       handle = NativeLoader::open(it.path, dlErr);
+        void*       handle = NativeLoader::open(probePath, dlErr);
         if (!handle) {
-            XX_LOGE("[client_plugin] load failed: {}: {}", it.path, dlErr);
+            XX_LOGE("[client_plugin] load failed: {}: {}", probePath, dlErr);
             continue;
         }
         std::string symErr;

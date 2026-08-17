@@ -103,26 +103,6 @@ void test_level_names_table() {
     XX_TEST_EXPECT_EQ(TUISettings::kAnimationLevelNames[4], std::string_view("Ultra"));
 }
 
-void test_show_system_info() {
-    auto& settings = TUISettings::instance();
-
-    // 默认开启
-    settings.setShowSystemInfo(true);
-    XX_TEST_EXPECT_TRUE(settings.showSystemInfo());
-
-    // 切换关闭/开启
-    settings.setShowSystemInfo(false);
-    XX_TEST_EXPECT_FALSE(settings.showSystemInfo());
-    settings.setShowSystemInfo(true);
-    XX_TEST_EXPECT_TRUE(settings.showSystemInfo());
-
-    // 内部引用与 getter 一致 (供 TUICtx 指针访问)
-    settings.setShowSystemInfo(false);
-    XX_TEST_EXPECT_FALSE(settings.showSystemInfoRef().load());
-    settings.setShowSystemInfo(true);
-    XX_TEST_EXPECT_TRUE(settings.showSystemInfoRef().load());
-}
-
 void test_log_level_set_get() {
     auto& settings = TUISettings::instance();
 
@@ -235,7 +215,6 @@ void test_concurrent_access() {
     std::thread       writer([&] {
         for (int i = 0; i < kIterations && !stop.load(); ++i) {
             settings.setAnimationLevel(static_cast<AnimationLevel>(i % 5));
-            settings.setShowSystemInfo(i % 2 == 0);
             settings.setLogLevel(static_cast<agentxx::util::LogLevel>(i % 6));
         }
     });
@@ -254,7 +233,6 @@ void test_concurrent_access() {
                     invalidCount.fetch_add(1);
                 }
                 (void)settings.isAnimationEnabled(AnimationLevel::Medium);
-                (void)settings.showSystemInfo();
                 (void)settings.logLevelName();
             }
         });
@@ -268,7 +246,6 @@ void test_concurrent_access() {
 
     // 恢复默认, 避免影响其他用例
     settings.setAnimationLevel(TUISettings::kDefaultAnimationLevel);
-    settings.setShowSystemInfo(true);
     settings.setLogLevel(TUISettings::kDefaultLogLevel);
 }
 
@@ -289,32 +266,27 @@ void test_persist_to_db() {
     // 写入设置 → 直接读库文件校验持久化 (绕过单例, 模拟重启后的新进程)
     settings.setThemeKind(TUISettings::kThemeLight);
     settings.setAnimationLevel(AnimationLevel::Low);
-    settings.setShowSystemInfo(false);
     settings.setLogLevel(agentxx::util::LogLevel::Warn);
     {
         auto fresh = agentxx::util::SettingsDb(dbPath);
         XX_TEST_EXPECT_EQ(fresh.getInt64("tui.theme", -1), int64_t{TUISettings::kThemeLight});
         XX_TEST_EXPECT_EQ(fresh.getInt64("tui.animationLevel", -1), int64_t{1}); // Low
-        XX_TEST_EXPECT_FALSE(fresh.getBool("tui.showSystemInfo", true));
         XX_TEST_EXPECT_EQ(fresh.getInt64("tui.logLevel", -1), int64_t{3}); // Warn
     }
 
     // 再次变更 → 库文件同步更新
     settings.setThemeKind(TUISettings::kThemeDark);
     settings.setAnimationLevel(AnimationLevel::Ultra);
-    settings.setShowSystemInfo(true);
     settings.setLogLevel(agentxx::util::LogLevel::Debug);
     {
         auto fresh = agentxx::util::SettingsDb(dbPath);
         XX_TEST_EXPECT_EQ(fresh.getInt64("tui.theme", -1), int64_t{TUISettings::kThemeDark});
         XX_TEST_EXPECT_EQ(fresh.getInt64("tui.animationLevel", -1), int64_t{4}); // Ultra
-        XX_TEST_EXPECT_TRUE(fresh.getBool("tui.showSystemInfo", false));
         XX_TEST_EXPECT_EQ(fresh.getInt64("tui.logLevel", -1), int64_t{1}); // Debug
     }
 
     // 恢复默认, 避免影响其他用例
     settings.setAnimationLevel(TUISettings::kDefaultAnimationLevel);
-    settings.setShowSystemInfo(true);
     settings.setLogLevel(TUISettings::kDefaultLogLevel);
 
     // 注意: TUISettings 单例持有 db 连接 (进程生命周期), Windows 上无法删除
@@ -331,7 +303,6 @@ TestResult testTuiSettings() {
     test_animation_level_set_get();
     test_is_animation_enabled();
     test_level_names_table();
-    test_show_system_info();
     test_log_level_set_get();
     test_log_level_names_table();
     test_log_sink_level_filter();

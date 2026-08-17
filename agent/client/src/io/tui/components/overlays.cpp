@@ -272,26 +272,12 @@ Element SettingsOverlay::OnRender() {
     }
     items.push_back(themeEntry | reflect(themeBox_));
 
-    // 系统资源占用显示开关 (Info 侧边栏)
-    const bool showSys
-        = ctx_.showSystemInfo && ctx_.showSystemInfo->load(std::memory_order_relaxed);
-    items.push_back(text(" "));
-    items.push_back(text(" Info Sidebar ") | color(theme.hintColor));
-    auto sysEntry = text(fmt::format(" Show System Info: {} ", showSys ? "ON" : "OFF"));
-    if (selectedIndex_ == 1) {
-        sysEntry = sysEntry | bgcolor(theme.buttonActiveBgColor)
-                   | color(theme.buttonActiveTextColor) | bold | focus;
-    } else {
-        sysEntry = sysEntry | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor);
-    }
-    items.push_back(sysEntry | reflect(sysInfoBox_));
-
     // 动画等级 (点击/Enter 循环切换; 组件经 TUISettings::isAnimationEnabled() 判断启用)
     items.push_back(text(" "));
     items.push_back(text(" Animation ") | color(theme.hintColor));
     auto animEntry
         = text(fmt::format(" Animation Level: {} ", TUISettings::instance().animationLevelName()));
-    if (selectedIndex_ == 2) {
+    if (selectedIndex_ == 1) {
         animEntry = animEntry | bgcolor(theme.buttonActiveBgColor)
                     | color(theme.buttonActiveTextColor) | bold | focus;
     } else {
@@ -303,7 +289,7 @@ Element SettingsOverlay::OnRender() {
     items.push_back(text(" "));
     items.push_back(text(" Log ") | color(theme.hintColor));
     auto logEntry = text(fmt::format(" Log Level: {} ", TUISettings::instance().logLevelName()));
-    if (selectedIndex_ == 3) {
+    if (selectedIndex_ == 2) {
         logEntry = logEntry | bgcolor(theme.buttonActiveBgColor)
                    | color(theme.buttonActiveTextColor) | bold | focus;
     } else {
@@ -342,16 +328,11 @@ bool SettingsOverlay::OnEvent(Event event) {
             // (主题变化经 onThemeChange_ 通知外部清理渲染缓存)
             cycleTheme();
             ctx_.postRedraw();
-        } else if (selectedIndex_ == 1 && ctx_.showSystemInfo) {
-            // 切换后保持弹窗打开, 便于继续调整; 由 [Esc] 关闭
-            // 经 TUISettings 设置以同步持久化到全局设置数据库 ({dataDir}/sqlite/global.db)
-            TUISettings::instance().setShowSystemInfo(!TUISettings::instance().showSystemInfo());
-            ctx_.postRedraw();
-        } else if (selectedIndex_ == 2) {
+        } else if (selectedIndex_ == 1) {
             // 动画等级循环切换; 切换后保持弹窗打开, 便于继续调整
             cycleAnimationLevel();
             ctx_.postRedraw();
-        } else if (selectedIndex_ == 3) {
+        } else if (selectedIndex_ == 2) {
             // 日志等级循环切换; 切换后保持弹窗打开, 便于继续调整
             cycleLogLevel();
             ctx_.postRedraw();
@@ -379,12 +360,6 @@ bool SettingsOverlay::handleMouse(const Mouse& mouse) {
     if (themeBox_.Contain(mouse.x, mouse.y)) {
         // 主题循环切换 (与键盘 Enter 路径一致, 经 onThemeChange_ 通知外部清理缓存)
         cycleTheme();
-        return true;
-    }
-    if (ctx_.showSystemInfo && sysInfoBox_.Contain(mouse.x, mouse.y)) {
-        // 经 TUISettings 设置以同步持久化到全局设置数据库 (与键盘 Enter 路径一致),
-        // 内部原子量与 ctx_.showSystemInfo 指向同一存储, 界面显示同步更新
-        TUISettings::instance().setShowSystemInfo(!TUISettings::instance().showSystemInfo());
         return true;
     }
     if (animLevelBox_.Contain(mouse.x, mouse.y)) {

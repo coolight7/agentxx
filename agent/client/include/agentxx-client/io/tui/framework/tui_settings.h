@@ -35,11 +35,10 @@ enum class AnimationLevel : int {
 /// 集中管理 TUI 全局设置项, 供各组件跨线程读写:
 /// - 主题 (ThemeKind: Dark/Light)
 /// - 动画等级 (AnimationLevel)
-/// - Info 侧边栏是否显示系统资源占用 (showSystemInfo)
 /// - 日志等级 (LogLevel: Trace/Debug/Info/Warn/Error/Out, TUI 日志侧边栏过滤)
 ///
 /// 线程安全: 所有设置项均为 std::atomic, 读写无锁,
-/// 可从 UI 线程 (渲染/事件) 与后台线程 (如资源监控线程) 并发访问。
+/// 可从 UI 线程 (渲染/事件) 与后台线程并发访问。
 ///
 /// 持久化: 启动时经 attachDb() 绑定全局设置数据库
 /// ({dataDir}/sqlite/global.db), 设置项变更时同步写入;
@@ -79,7 +78,7 @@ public:
 
     /// 绑定全局设置数据库并加载已存设置 (启动时调用一次)
     /// - 重复调用以首次为准; db 为空时忽略
-    /// - 从库中恢复: 主题 / 动画等级 / showSystemInfo (键: tui.*)
+    /// - 从库中恢复: 主题 / 动画等级 / 日志等级 (键: tui.*)
     inline void attachDb(std::shared_ptr<agentxx::util::SettingsDb> db) noexcept {
         if (db_ || !db) {
             return;
@@ -93,9 +92,6 @@ public:
         auto anim = db_->getInt64("tui.animationLevel", -1);
         if (anim >= 0 && anim < static_cast<int64_t>(kAnimationLevelNames.size())) {
             animationLevel_.store(static_cast<int>(anim), std::memory_order_release);
-        }
-        if (auto v = db_->get("tui.showSystemInfo"); v.has_value()) {
-            showSystemInfo_.store(*v == "1", std::memory_order_release);
         }
         auto logLevel = db_->getInt64("tui.logLevel", -1);
         if (logLevel >= 0 && logLevel < static_cast<int64_t>(kLogLevelNames.size())) {
@@ -144,26 +140,6 @@ public:
     bool isAnimationEnabled(AnimationLevel required) const noexcept {
         const AnimationLevel cur = animationLevel();
         return cur != AnimationLevel::Disabled && cur >= required;
-    }
-
-    /// Info 侧边栏是否显示系统资源占用 (CPU/内存); 默认开启
-    bool showSystemInfo() const noexcept {
-        return showSystemInfo_.load(std::memory_order_acquire);
-    }
-
-    /// 设置 Info 侧边栏系统资源显示开关
-    /// - 变更同步持久化到全局设置数据库 (失败仅记日志, 不影响本次设置)
-    inline void setShowSystemInfo(bool enabled) noexcept {
-        showSystemInfo_.store(enabled, std::memory_order_release);
-        if (db_) {
-            db_->setBool("tui.showSystemInfo", enabled);
-        }
-    }
-
-    /// 内部原子量引用 (供 TUICtx::showSystemInfo 指针指向单例存储,
-    /// 保持既有组件经指针访问的方式不变)
-    std::atomic<bool>& showSystemInfoRef() noexcept {
-        return showSystemInfo_;
     }
 
     /// 获取当前日志等级 (TUI 日志侧边栏过滤: 显示 >= 该等级的日志, Out 恒显示)
@@ -222,8 +198,6 @@ private:
     std::atomic<int> themeKind_{kThemeDark};
     /// 动画等级 (存储为 int 以便原子读写)
     std::atomic<int> animationLevel_;
-    /// Info 侧边栏系统资源显示开关
-    std::atomic<bool> showSystemInfo_{true};
     /// 日志等级 (存储为 int 以便原子读写; 与 agentxx::util::LogLevel 枚举值对应)
     std::atomic<int> logLevel_{static_cast<int>(kDefaultLogLevel)};
     /// 全局设置数据库 (空 = 未持久化, 设置仅存内存)
