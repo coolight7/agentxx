@@ -71,7 +71,7 @@ public:
     virtual void sendUserInput(std::string threadId, std::string text);
 
     /// 服务端就绪通知 [client] (默认空实现, 客户端端点按需覆写):
-    /// - 本地模式: agent-server (SessionServerAgentIO) 的会话驱动循环启动前由
+    /// - 本地模式: agent-io (SessionServerAgentIO) 的会话驱动循环启动前由
     ///   mode_runners 调用, 表示 init() 等启动工作完成、可以开始消费用户输入
     /// - 远程模式: 连接握手完成后由连接协程调用
     /// 客户端 (TUI) 据此解除"启动中"输入限制并刷新待发送队列
@@ -80,7 +80,7 @@ public:
     virtual void onServerReady();
 
     /// 服务端启动进度通知 [client] (默认空实现, 客户端端点按需覆写):
-    /// - 本地模式: agent-server 的 init() 各启动阶段 (加载 MCP/Skill/Memory/
+    /// - 本地模式: agent-io 的 init() 各启动阶段 (加载 MCP/Skill/Memory/
     ///   RAG/CodeGraph 等) 经 AgentContext::startupNotifier → 本接口逐步上报,
     ///   客户端 (TUI) 据此在"启动中"banner 中展示当前正在执行的操作
     /// - 由 agent 线程同步调用, 实现须自行加锁同步

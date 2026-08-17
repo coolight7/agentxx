@@ -147,8 +147,8 @@ public:
 class PluginTool : public agentxx::tools::XXToolBase {
 public:
 
+    /// name 取自 spec.name (构造时拷贝进成员), 不再单独传参避免双来源不一致
     PluginTool(
-        std::string_view                            name,
         std::weak_ptr<agentxx::agent::AgentContext> agentContext,
         std::shared_ptr<PluginInstance>             instance,
         AgentxxToolSpec                             spec
@@ -223,7 +223,9 @@ private:
 
     asio::awaitable<void> dispatch(AgentxxHookPoint point, const neograph::graph::NodeInput& in);
 
-    std::shared_ptr<PluginInstance>           instance_;
+    /// 插件实例弱引用: 与 instance->middleware 互不持有, 消除循环引用
+    /// (中间件被摘除/实例析构时, 弱引用自动失效; dispatch 处 lock 保活)
+    std::weak_ptr<PluginInstance>             instance_;
     std::array<HookEntry, AGENTXX_HOOK_COUNT> hooks_{};
 };
 
@@ -260,8 +262,13 @@ public:
     // ==================== 生命周期 (须 io 线程) ====================
 
     /// 加载原生 C++ 插件动态库 (io 线程调用; dlopen 卸载到线程池执行)
+    /// - cfg: 插件配置 (yaml `plugins` 条目; 传 args 给插件, 不解析字段语义);
+    ///   为 nullptr 时 args 为空对象 (测试/直连路径)
     /// - 返回插件实例; 加载失败返回 nullptr (错误记日志)
-    asio::awaitable<std::shared_ptr<PluginInstance>> loadNativeAsync(std::string path);
+    asio::awaitable<std::shared_ptr<PluginInstance>> loadNativeAsync(
+        std::string path,
+        const agentxx::agent::PluginConfig* cfg = nullptr
+    );
 
     /// 加载内置插件 (编译进 libagentxx, 无动态库文件; io 线程调用)
     /// - 仅当同名插件已内置 (agentxx_get_builtin_plugins 注册表) 时可用;
@@ -274,7 +281,8 @@ public:
         std::string              name,
         std::string              path,
         std::vector<std::string> depends,
-        std::vector<std::string> optionalDepends
+        std::vector<std::string> optionalDepends,
+        const agentxx::agent::PluginConfig* cfg = nullptr
     );
 
     /// 卸载插件 (按名称; 等全部在途回调完成后才 dlclose)
@@ -307,7 +315,13 @@ public:
     ///   interpreter 引擎 (宿主不参与)
     /// - 依赖检查: 必选依赖未安装 → 加载失败; 可选依赖未安装 → 警告;
     ///   依赖环 → 拒绝
-    asio::awaitable<std::shared_ptr<PluginInstance>> loadPluginAsync(std::string path);
+    /// - cfg: 插件配置 (yaml `plugins` 条目; args 随加载直接传给插件实例,
+    ///   不再事后按名回查配置 —— manifest name 与目录/文件名不一致时也能
+    ///   正确拿到 args); 为 nullptr 时 args 为空对象
+    asio::awaitable<std::shared_ptr<PluginInstance>> loadPluginAsync(
+        std::string path,
+        const agentxx::agent::PluginConfig* cfg = nullptr
+    );
 
     /// 同步卸载全部插件 (AgentContext 析构前调用, 断开中间件↔实例循环引用)
     /// - 按依赖图逆序 (先子后父): 脚本插件先卸载, 引擎插件最后 (脚本插件
@@ -394,7 +408,8 @@ public:
         } else if (ioExecutor_) {
             asio::post(ioExecutor_, std::move(fn));
         } else {
-            // 无 io executor (测试等场景): 直接执行 (调用方应为 io 线程)
+            // 理论不可达 (ioExecutor_ 为空时 isIoThread() 恒 true); 防御兜底
+            XX_LOGW("PluginManager::postToIo: no io executor, executing on caller thread");
             fn();
         }
     }
@@ -457,8 +472,8 @@ public:
     /// - 仅删除/恢复该插件写入过的字段, 不影响其他提示词内容
     void restorePromptBackup(PluginInstance* inst);
     /// 本插件配置参数 JSON (io 线程; 未配置返回 "{}")
-    /// - 宿主对 args 内容完全不解析, 整体原样传递
-    std::string getPluginArgsJson(std::string_view pluginName);
+    /// - 直接读取实例保存的 args (加载时随配置传入, 宿主不解析字段语义)
+    std::string getPluginArgsJson(PluginInstance* inst);
 
 private:
 
@@ -477,8 +492,18 @@ private:
     ///   仅插件实例析构 (unload/进程销毁) 时随实例释放
     void detachAll(PluginInstance* inst);
 
-    /// 从 handles 摘除某插件的全部中间件 (仅 flushPendingCleanup/unload/shutdown 调用)
-    void eraseMiddleware(PluginInstance* inst);
+    /// 从 handles 摘除中间件 (仅 flushPendingCleanup/unload/shutdown/加载失败清理调用)
+    /// - 按中间件指针摘除, 不依赖实例存活 (加载失败路径实例已移除时仍可清理)
+    void eraseMiddleware(PluginMiddlewareHandle* mw);
+
+    /// 待轮末摘除的中间件 (弱引用: flush 时不依赖实例存活 —— 加载失败
+    /// 路径实例已从插件表移除, 仅中间件持实例弱引用, 摘除后实例自然析构)
+    struct PendingMiddlewareCleanup {
+        std::string                                    name; ///< 插件名 (日志/去重用)
+        std::weak_ptr<PluginMiddlewareHandle>          middleware;
+    };
+    /// 登记待轮末清理的中间件 (按 name 去重)
+    void addPendingCleanup(const PluginInstance* inst);
 
     /// 禁用/启用内部实现 (级联递归用; userInitiated=false 表示级联, 不改 userDisabled)
     void disableImpl(std::string_view name, bool userInitiated);
@@ -498,11 +523,6 @@ private:
     /// 递归检测依赖环 (visiting 为当前 DFS 访问链)
     bool hasDependencyCycle(const std::string& name, std::vector<std::string>& visiting) const;
 
-    /// 收集反向必选依赖 (depends 含 target 的插件名; io 线程)
-    /// - onlyEnabled=true: 仅统计 enabled 的插件 (卸载/禁用级联)
-    /// - onlyEnabled=false: 全部统计 (启用级联: 需恢复被级联禁用的插件)
-    std::vector<std::string> reverseRequiredDeps(const std::string& target, bool onlyEnabled) const;
-
     std::weak_ptr<agentxx::agent::AgentContext> agentContext_;
     std::shared_ptr<ToolRegistry>               registry_;
     std::shared_ptr<CapabilityRegistry>         capabilities_;
@@ -512,7 +532,7 @@ private:
     /// 进行中轮次计数 (io 线程)
     size_t runningTurns_ = 0;
     /// 待轮末生效的禁用/卸载列表 (io 线程)
-    std::vector<std::string> pendingCleanup_{};
+    std::vector<PendingMiddlewareCleanup> pendingCleanup_{};
 
     /// io executor (BaseAgent::init 装配; 空 = 未装配)
     asio::any_io_executor ioExecutor_{};

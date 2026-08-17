@@ -489,6 +489,88 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
     XX_TEST_EXPECT_TRUE(adapter->infoSectionRemoved() >= 2);
     XX_TEST_EXPECT_TRUE(mgr->find("example_plugin") == nullptr);
 
+    // ---- 8. A1/B8 回归: 订阅生命周期安全 ----
+    // - 多次订阅触发订阅 vector 扩容, 逐个退订不得悬垂/错位
+    // - 派发中动态订阅 (handler 内再订阅) 不得使 dispatch 快照中的后续
+    //   回调悬垂 (旧实现 subscriptions 按值存储 + 裸指针 → UAF)
+    // - unload 回调内主动退订安全 (detachAll 已断链)
+    {
+        auto inst2 = co_await mgr->loadNativeAsync(path);
+        XX_TEST_EXPECT_TRUE(inst2 != nullptr);
+        if (!inst2) {
+            co_return TestResult{g_client_plugin_passed, g_client_plugin_failed};
+        }
+
+        // 8.1 多次订阅 (1→2→4 扩容) + 逐个退订
+        std::atomic<int>        hits{0};
+        AgentxxSubscription*    subs[4]   = {};
+        auto                    subFn = +[](AgentxxPluginStringView, void* ud) {
+            ++(*static_cast<std::atomic<int>*>(ud));
+        };
+        for (int i = 0; i < 4; ++i) {
+            subs[i] = inst2->host.vtable->subscribe(
+                &inst2->host,
+                AGENTXX_CLIENT_EVT_CONN_STATE,
+                subFn,
+                &hits
+            );
+            XX_TEST_EXPECT_TRUE(subs[i] != nullptr);
+        }
+        for (int i = 0; i < 4; ++i) {
+            inst2->host.vtable->unsubscribe(subs[i]);
+        }
+        mgr->onConnStateChanged("connected", "100%");
+        XX_TEST_EXPECT_EQ(hits.load(), 0); // 全部退订后事件不再达
+
+        // 8.2 派发中动态订阅: 订阅回调内再 subscribe → 快照不受影响
+        // (旧实现 dispatch 快照存裸指针, 回调内订阅触发 vector 扩容后悬垂)
+        struct DynSubState {
+            agentxx::plugin::ClientPluginInstance* inst   = nullptr;
+            std::atomic<int>                       hits{0};
+            AgentxxSubscription*                   dynSub = nullptr;
+            void (*incFn)(AgentxxPluginStringView, void*) = nullptr;
+        };
+        auto st  = std::make_shared<DynSubState>();
+        st->inst = inst2.get();
+        st->incFn = +[](AgentxxPluginStringView, void* ud) {
+            ++(*static_cast<std::atomic<int>*>(ud));
+        };
+        auto aFn = +[](AgentxxPluginStringView, void* ud) {
+            auto* s = static_cast<DynSubState*>(ud);
+            ++s->hits;
+            if (!s->dynSub) {
+                s->dynSub = s->inst->host.vtable->subscribe(
+                    &s->inst->host,
+                    AGENTXX_CLIENT_EVT_USER_INPUT,
+                    s->incFn,
+                    &s->hits
+                );
+            }
+        };
+        AgentxxSubscription* a = inst2->host.vtable->subscribe(
+            &inst2->host,
+            AGENTXX_CLIENT_EVT_USER_INPUT,
+            aFn,
+            st.get()
+        );
+        XX_TEST_EXPECT_TRUE(a != nullptr);
+        mgr->onUserInput("sess-test", "x");
+        // 首次派发: 仅快照中的 a 被调 (dynSub 派发后才注册)
+        XX_TEST_EXPECT_EQ(st->hits.load(), 1);
+        mgr->onUserInput("sess-test", "y");
+        // 第二次派发: a + dynSub 都被调
+        XX_TEST_EXPECT_EQ(st->hits.load(), 3);
+        inst2->host.vtable->unsubscribe(a);
+        if (st->dynSub) {
+            inst2->host.vtable->unsubscribe(st->dynSub);
+        }
+
+        // 8.3 收尾: 卸载 (unload 回调内 vtable 反注册路径已由段 7 覆盖)
+        bool unloaded2 = co_await mgr->unloadAsync("example_plugin");
+        XX_TEST_EXPECT_TRUE(unloaded2);
+        XX_TEST_EXPECT_TRUE(mgr->find("example_plugin") == nullptr);
+    }
+
     co_return TestResult{g_client_plugin_passed, g_client_plugin_failed};
 }
 

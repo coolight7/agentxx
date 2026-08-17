@@ -650,6 +650,72 @@ asio::awaitable<TestResult> run_plugin_tests() {
         }
     }
 
+    // ---- 29. A7 + C2: sides 过滤 + args 随配置直接传递 ----
+    // - sides=client 的配置项不在 agent 侧加载 (原实现漏过滤, agent 侧会
+    //   误加载纯 client 插件)
+    // - args 经 loadConfiguredPlugins 直接传入实例 (原实现事后按路径推导名
+    //   回查, manifest name 与目录名不一致时静默丢失)
+    {
+        std::vector<agentxx::agent::PluginConfig> cfgs;
+        agentxx::agent::PluginConfig pc;
+        pc.path    = path;
+        pc.enabled = true;
+        pc.args    = neograph::json{{"custom_key", "custom_value"}};
+
+        // sides=client: agent 侧跳过
+        pc.sides = agentxx::agent::PluginSide::Client;
+        cfgs.push_back(pc);
+        co_await ctx->pluginManager->loadConfiguredPlugins(cfgs);
+        XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("example_plugin") == nullptr);
+
+        // sides=auto: 正常加载, args 随配置传入实例
+        pc.sides = agentxx::agent::PluginSide::Auto;
+        cfgs.clear();
+        cfgs.push_back(pc);
+        co_await ctx->pluginManager->loadConfiguredPlugins(cfgs);
+        auto inst29 = ctx->pluginManager->find("example_plugin");
+        XX_TEST_EXPECT_TRUE(inst29 != nullptr);
+        if (inst29) {
+            XX_TEST_EXPECT_EQ(
+                inst29->args.value("custom_key", std::string{}),
+                "custom_value"
+            );
+            auto json = ctx->pluginManager->getPluginArgsJson(inst29.get());
+            XX_TEST_EXPECT_FALSE(json.empty());
+            if (!json.empty()) {
+                auto j = neograph::json::parse(json);
+                XX_TEST_EXPECT_EQ(j["custom_key"].get<std::string>(), "custom_value");
+            }
+            co_await ctx->pluginManager->unloadAsync("example_plugin");
+        }
+    }
+
+    // ---- 30. B5 回归: 禁用插件 vtable publish 被拒绝 ----
+    {
+        auto inst30 = co_await ctx->pluginManager->loadPluginAsync(path);
+        XX_TEST_EXPECT_TRUE(inst30 != nullptr);
+        if (inst30) {
+            // 启用状态: publish 正常
+            XX_TEST_EXPECT_EQ(
+                inst30->host.vtable->publish(
+                    &inst30->host,
+                    AGENTXX_SV("demo.topic"),
+                    AGENTXX_SV(R"({"k":"v"})")
+                ),
+                0
+            );
+            ctx->pluginManager->disable("example_plugin");
+            // 禁用状态: vtable publish 拒绝 (返回非 0)
+            int rc = inst30->host.vtable->publish(
+                &inst30->host,
+                AGENTXX_SV("demo.topic"),
+                AGENTXX_SV(R"({"k":"v"})")
+            );
+            XX_TEST_EXPECT_TRUE(rc != 0);
+            co_await ctx->pluginManager->unloadAsync("example_plugin");
+        }
+    }
+
     co_return TestResult{g_plugin_passed, g_plugin_failed};
 }
 

@@ -434,9 +434,12 @@ static void on_client_turn_end(AgentxxPluginStringView payload_json, void* ud) {
     if (g_info_section) {
         // Info 栏段落: {"items":[{"kind":"text","text":"Turns: N"},
         // {"kind":"text","role":"hint","text":"Example Info section is live"}]}
+        // 注意: clientJsonEscape 返回【带引号的 JSON 字面量】(如 "\"Turns: 1\""),
+        // 必须整段放入 escape 调用 (占整个 text 值), 不能嵌入模板的 {} 里
+        // (否则产生 {"text":"Turns: "1""} 非法 JSON, 宿主解析失败静默丢弃)
         const std::string json = fmt::format(
-            R"({{"items":[{{"kind":"text","text":"Turns: {}"}},{{"kind":"text","role":"hint","text":"Example Info section is live"}}]}})",
-            clientJsonEscape(std::to_string(g_turn_count))
+            R"({{"items":[{{"kind":"text","text":{}}},{{"kind":"text","role":"hint","text":"Example Info section is live"}}]}})",
+            clientJsonEscape(fmt::format("Turns: {}", g_turn_count))
         );
         g_client_host->vtable
             ->update_info_section(g_client_host, g_info_section, AGENTXX_SV(json.c_str()));
