@@ -303,6 +303,40 @@ User: "Can you analyse the latest developments in quantum computing?"
 When in doubt, check if a skill exists for the task.
 )_";
 
+    /// LLM 上下文压缩指令模板 (由 SummarizationMiddlewareHandle 在压缩时
+    /// 追加为最后一条 user 消息, 保持同一上下文直接压缩)
+    /// - 占位符 (fmt 命名参数): `{omitted_note}` (请求载荷裁剪时提示丢弃了
+    ///   最旧消息数, 否则为空串), `{max_words}` (摘要字数上限, 由
+    ///   summaryMaxTokens 换算)
+    /// - MUST keep / MAY discard 显式编码"信息价值分级"; OFFLOAD 段提示模型将
+    ///   较长、有用但当前不太重要的内容写入 agentxx_share_store, 替换为 id +
+    ///   极简摘要; MERGE 段支撑增量多轮压缩 (旧压缩对位于压缩段内时自然合并)
+    std::string summarizationPrompt = R"_(
+The conversation above will be compacted to free context space.
+
+Summarize the ENTIRE conversation into ONE self-contained summary that preserves everything needed to continue the current work.
+
+MUST keep:
+1. The user's goals and core requirements (near-verbatim for critical ones)
+2. Key decisions made and their rationale
+3. Files modified (path + what changed), important commands executed
+4. Critical facts: file paths, code locations, errors and their solutions, configs
+5. Current task state: what is in progress and the next planned step
+6. Open issues / unresolved problems / pending todos
+7. If an earlier summary appears above, MERGE it into the new one without losing information
+
+MAY discard:
+- Exploratory read/search process details (keep file names and conclusions)
+- Retry noise, verbose or superseded tool outputs
+- Details of reasoning/thinking content
+
+OFFLOAD long content with the `agentxx_share_store` tool (opt=insert, text=<the long text>):
+- For long text (logs, file contents, search results) that is useful but not critical right now, store it and replace it in your summary with its numeric id plus a one-line description of the content.
+- The full content stays retrievable later via the tool while context space is saved.
+
+{omitted_note}Output ONLY the summary text in the user's language, no meta commentary, under about {max_words} words.
+)_";
+
     /// toolcall
     std::map<std::string, ToolPrompt, std::less<>> toolPrompt{
       {
@@ -789,6 +823,18 @@ The sub-agent runs with an isolated message context: it cannot see the parent co
                       {"system_prompt",
                        "Optional. Custom system prompt for the sub-agent when `subagent` is not set."},
                       {"message", "Task content as a user message for the sub-agent."},
+                      {"messages",
+                       R"(Optional. Structured message list (array of {role, content, tool_calls, ...}) passed through verbatim as the sub-agent's initial context (may include a system message). Takes precedence over `message`. Use this for same-context delegation (e.g. context compression) that must preserve the exact message prefix.)"},
+                      {"thread_id",
+                       R"(Optional. Thread id the sub-agent should run on. Empty (default): the sub-agent runs on its own isolated subagent thread. Non-empty (same-context mode): the sub-agent runs on the given thread with the parent session's current model, so the shared context prefix + thread id + model let the provider reuse its KV/prefix cache.)"},
+                      {"tools",
+                       R"(Optional. Tool policy for the sub-agent, as an array of tool names:
+- `[]` (empty array): no tools at all (pure text answer).
+- `["*"]`: inherit ALL tools of the parent agent.
+- `["name1", "name2", ...]`: only these tools.
+Absent (default): the sub-agent's default full tool set.)"},
+                      {"enable_summarization",
+                       R"(Optional boolean. Whether the sub-agent runs with context summarization enabled. Default: inherit config (enabled). Pass `false` when delegating same-context work (e.g. context compression) so the sub-agent never re-compresses the passed-in context prefix (would break KV/prefix cache reuse).)"},
                   },
           },
       },

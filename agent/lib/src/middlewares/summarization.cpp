@@ -5,37 +5,77 @@
 #include "agentxx/util/exception.h"
 #include "fmt/format.h"
 #include <algorithm>
+#include <limits>
+#include <set>
 #include <sstream>
 
 namespace agentxx {
 namespace middleware {
 
+namespace {
+
+/// 判断是否为 AutoInserted 提示噪音消息 (连续出现时折叠)
+bool isNoiseMessage(const neograph::ChatMessage& m) {
+    if (!neograph::hasFlag(m.flags, neograph::MessageFlag::AutoInserted)) {
+        return false;
+    }
+    if (!m.tool_calls.empty()) {
+        return false;
+    }
+    const std::string_view c = m.content;
+    return c == "[Please continue]" || c == "[User cancelled]" || c == "[Exception aborted]"
+           || c == "[Empty]" || c.empty();
+}
+
+/// 判断两条消息是否完全等价 (用于相邻重复折叠)
+bool isSameMessage(const neograph::ChatMessage& a, const neograph::ChatMessage& b) {
+    if (a.role != b.role || a.content != b.content || a.tool_call_id != b.tool_call_id
+        || a.tool_name != b.tool_name || a.reasoning_content != b.reasoning_content
+        || a.image_urls != b.image_urls || a.audio_urls != b.audio_urls
+        || a.video_urls != b.video_urls || a.tool_calls.size() != b.tool_calls.size()) {
+        return false;
+    }
+    for (size_t i = 0; i < a.tool_calls.size(); ++i) {
+        const auto& x = a.tool_calls[i];
+        const auto& y = b.tool_calls[i];
+        if (x.id != y.id || x.name != y.name || x.arguments != y.arguments) {
+            return false;
+        }
+    }
+    return true;
+}
+
+} // namespace
+
 SummarizationMiddlewareHandle::SummarizationMiddlewareHandle(
-    agentxx::tools::SubAgentManagerTool*        in_subagentManager,
     std::weak_ptr<agentxx::agent::AgentContext> in_agentContext,
     size_t                                      in_defaultModelSupportMaxToken,
     double                                      in_asciiCharsPerToken,
     double                                      in_unicodeCharsPerToken,
     double                                      in_tokensPerImage,
-    double                                      in_extraTokensPerMessage
+    double                                      in_extraTokensPerMessage,
+    double                                      in_recentTokenBudgetRatio,
+    size_t                                      in_summaryMaxTokens
 ) :
     BaseMiddlewareHandle<_SummarizationMiddlewareState>(
         "SummarizationMiddlewareHandle",
         std::move(in_agentContext)
     ),
-    subagentManager(in_subagentManager),
     modelSupportMaxTokenDefault(in_defaultModelSupportMaxToken),
     asciiCharsPerToken(in_asciiCharsPerToken),
     unicodeCharsPerToken(in_unicodeCharsPerToken),
     tokensPerImage(in_tokensPerImage),
-    extraTokensPerMessage(in_extraTokensPerMessage) {
+    extraTokensPerMessage(in_extraTokensPerMessage),
+    recentTokenBudgetRatio(in_recentTokenBudgetRatio),
+    summaryMaxTokens(in_summaryMaxTokens) {
     assert(asciiCharsPerToken >= 0);
     assert(unicodeCharsPerToken >= 0);
     assert(tokensPerImage >= 0);
     assert(extraTokensPerMessage >= 0);
+    assert(recentTokenBudgetRatio >= 0 && recentTokenBudgetRatio < 1.0);
 }
 
-size_t SummarizationMiddlewareHandle::countTokensForUtf8Str(std::string_view in_str) {
+size_t SummarizationMiddlewareHandle::countTokensForUtf8Str(std::string_view in_str) const {
     size_t unicodeCount = 0, asciiCount = 0;
     for (size_t i = 0, step = 0; i < in_str.size(); i += step) {
         unsigned char byte = in_str[i];
@@ -72,7 +112,7 @@ size_t SummarizationMiddlewareHandle::countTokens(
     const std::vector<std::string>&           systemMsgs,
     const std::vector<neograph::ChatMessage>& messages,
     bool                                      countThinking
-) {
+) const {
     size_t count = 0;
     for (const auto& msg : systemMsgs) {
         count += static_cast<size_t>(extraTokensPerMessage) + countTokensForUtf8Str(msg);
@@ -98,7 +138,7 @@ size_t SummarizationMiddlewareHandle::countTokens(
 std::string SummarizationMiddlewareHandle::messagesToText(
     const std::vector<neograph::ChatMessage>& msgs,
     bool                                      includeSystem
-) {
+) const {
     std::ostringstream oss;
     for (const auto& m : msgs) {
         if (!includeSystem && m.role == "system") {
@@ -114,159 +154,394 @@ std::string SummarizationMiddlewareHandle::messagesToText(
     return oss.str();
 }
 
-asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
-    const std::vector<neograph::ChatMessage>& messages
+void SummarizationMiddlewareHandle::cleanNoiseMessages(
+    std::vector<neograph::ChatMessage>& messages
 ) {
-    if (nullptr == subagentManager) {
-        co_return std::string{};
-    }
-    auto prompt = messagesToText(messages, false);
-    if (prompt.empty()) {
-        co_return std::string{};
+    // 1. 删除完全空的消息 + 2. 相邻完全相同的消息只保留最后一条
+    std::vector<neograph::ChatMessage> out;
+    out.reserve(messages.size());
+    for (auto& m : messages) {
+        if (m.content.empty() && m.tool_calls.empty() && m.reasoning_content.empty()
+            && m.image_urls.empty() && m.audio_urls.empty() && m.video_urls.empty()
+            && m.history_contents.empty()) {
+            continue; // 空消息: 零信息, 删除
+        }
+        if (!out.empty() && isSameMessage(out.back(), m)) {
+            out.back() = std::move(m); // 相邻重复: 用新的覆盖旧的 (保留最新)
+            continue;
+        }
+        out.push_back(std::move(m));
     }
 
-    co_return co_await agentxx::util::catchErrorAsync<std::string>(
-        [&]() -> asio::awaitable<std::string> {
-            auto args = neograph::json{
-                {"subagent", "subagent_task"},
-                {"system_prompt",
-                 R"(
-You are a conversation summarizer. 
-Summarize the following conversation messages into a concise summary. 
-Preserve key decisions, action items, file paths, and important context. 
-Output ONLY the summary text, no meta-commentary.
-)"},
-                {"message",
-                 fmt::format("Summarize the following conversation messages:\n\n{}", prompt)},
-            };
-            // TODO: 剥离 tool /manager，避免直接调用 tool
-            co_return co_await subagentManager->execute_async(args);
-        },
-        [](std::string errmsg) -> asio::awaitable<std::string> {
-            XX_LOGE("SummarizationMiddlewareHandle llm 压缩失败: {}", errmsg);
-            co_return "";
+    // 3. 连续出现的 AutoInserted 提示噪音只保留最后一条 (失败重试噪音折叠)
+    std::vector<neograph::ChatMessage> out2;
+    out2.reserve(out.size());
+    for (size_t i = 0; i < out.size(); ++i) {
+        if (isNoiseMessage(out[i])) {
+            size_t j = i;
+            while (j + 1 < out.size() && isNoiseMessage(out[j + 1])) {
+                ++j;
+            }
+            out2.push_back(std::move(out[j]));
+            i = j;
+        } else {
+            out2.push_back(std::move(out[i]));
         }
-    );
+    }
+    messages = std::move(out2);
 }
 
-void SummarizationMiddlewareHandle::offloadLongContentToTempStore(
-    neograph::ChatMessage&                    msg,
-    const std::shared_ptr<MiddlewareContext>& ctx,
-    std::string_view                          thread_id
+void SummarizationMiddlewareHandle::foldExploratoryToolcalls(
+    std::vector<neograph::ChatMessage>& messages
 ) {
-    // system prompt 不压缩 (设计: "system prompt、最近的消息 不压缩"):
-    // 始终原样保留, 不应被暂存替换, 否则模型会丢失系统指令
-    if ("system" == msg.role) {
+    // 从后往前扫描, 找"同一工具的连续单工具调用段" (中间无 user/system 打断,
+    // 仅间隔 tool 结果消息); 段长 >= 3 时, 删除除最后一组外的整组
+    // (assistant + 对应 tool 结果): 探索过程无价值, 结论在最后一组
+    // - 仅折叠"读类"工具: 注册了 truncateResponse 且无 truncateRequest
+    //   (如 read_file/grep/glob; 写类工具 truncateRequest 非空, 不折叠)
+    std::vector<std::pair<size_t, size_t>> groupsToRemove; // [begin, endExclusive) 删除范围
+    std::string                            runTool;
+    std::vector<size_t>                    runAssistantIdx; // 降序 (从后往前 push)
+
+    auto finalizeRun = [&]() {
+        if (runAssistantIdx.size() >= 3) {
+            // 删除 [最早 assistant, 最后一条 assistant) 范围内的全部消息
+            // (该范围内只有 assistant + 其 tool 结果, 无 user/system 打断);
+            // runAssistantIdx 降序: back=最早(索引最小), front=最后一条(索引最大, 保留)
+            groupsToRemove.emplace_back(runAssistantIdx.back(), runAssistantIdx.front());
+        }
+        runTool.clear();
+        runAssistantIdx.clear();
+    };
+
+    for (int64_t i = static_cast<int64_t>(messages.size()) - 1; i >= 0; --i) {
+        const auto& m = messages[static_cast<size_t>(i)];
+        if (m.role == "assistant" && !m.tool_calls.empty()) {
+            const bool foldable = m.tool_calls.size() == 1
+                                  && [&]() {
+                                         auto it = summarizationToolHandles.find(m.tool_calls[0].name);
+                                         return it != summarizationToolHandles.end()
+                                                && nullptr != it->second.truncateResponse
+                                                && nullptr == it->second.truncateRequest;
+                                     }();
+            if (foldable) {
+                const auto& name = m.tool_calls[0].name;
+                if (runTool.empty()) {
+                    runTool = name;
+                } else if (name != runTool) {
+                    finalizeRun();
+                    runTool = name;
+                }
+                runAssistantIdx.push_back(static_cast<size_t>(i));
+                continue;
+            }
+            finalizeRun(); // 多工具调用/不可折叠工具: 打断连续段
+        } else if (m.role == "user" || m.role == "system") {
+            finalizeRun(); // user/system: 打断连续段
+        }
+        // tool 结果消息: 不打断 (属于当前段)
+    }
+    finalizeRun();
+
+    if (groupsToRemove.empty()) {
         return;
     }
-    if (msg.content.size() <= longContentByteThreshold) {
-        return;
+    // 从后往前删除, 索引不失效
+    for (auto it = groupsToRemove.rbegin(); it != groupsToRemove.rend(); ++it) {
+        messages.erase(messages.begin() + it->first, messages.begin() + it->second);
     }
-    auto id     = ctx->addShareStoreItemValue(thread_id, msg.content);
-    msg.content = fmt::format(
-        "[Content offloaded. Use the `agentxx_share_store` tool to fetch the full content by ID {}]",
-        id
-    );
-    msg.flags               |= neograph::MessageFlag::ContentOffloaded;
-    msg.extra["offload_id"]  = id;
 }
 
 void SummarizationMiddlewareHandle::doSummarizeToolcall(std::vector<neograph::ChatMessage>& messages
 ) {
-    auto                          agentCtxPtr = agentContext.lock();
-    std::map<std::string, size_t> lastWriteIndex{};
-    // 从后往前遍历 (含索引 0): 无 system 消息时首个 assistant(tool_calls) 可能位于
-    // 消息索引 0, 其后续 tool 结果 (索引 >=1) 需要与之配对去重; 若排除索引 0,
-    // 该组 (assistant, tool) 的去重逻辑会漏掉 (外层循环从 i >= 1 开始, tool 消息
-    // 在索引 0 时永远不会被处理)
-    for (int64_t i = static_cast<int64_t>(messages.size()) - 1; i >= 0; --i) {
-        auto& msg = messages[i];
-        if ("tool" == msg.role) {
-            auto itemHandleIt = summarizationToolHandles.find(msg.tool_name);
-            if (itemHandleIt != summarizationToolHandles.end()
-                && itemHandleIt->second.generateDeduplicationKey
-                && itemHandleIt->second.truncateResponse) {
-                // 寻找 llm toolcall message
-                int64_t lastMsgIndex  = i - 1;
-                int64_t toolcallIndex = -1;
-                // 从 0 开始遍历: 首个 assistant(tool_calls) 可能位于消息索引 0
-                // (无 system 消息时), 不能排除该位置, 否则该组 (assistant,tool)
-                // 永远无法去重
-                for (; lastMsgIndex >= 0; --lastMsgIndex) {
-                    for (int64_t j = 0;
-                         j < static_cast<int64_t>(messages[lastMsgIndex].tool_calls.size());
-                         ++j) {
-                        if (msg.tool_call_id == messages[lastMsgIndex].tool_calls[j].id) {
-                            toolcallIndex = j;
+    {
+        auto                          agentCtxPtr = agentContext.lock();
+        std::map<std::string, size_t> lastWriteIndex{};
+        // 从后往前遍历 (含索引 0): 无 system 消息时首个 assistant(tool_calls) 可能位于
+        // 消息索引 0, 其后续 tool 结果 (索引 >=1) 需要与之配对去重; 若排除索引 0,
+        // 该组 (assistant, tool) 的去重逻辑会漏掉 (外层循环从 i >= 1 开始, tool 消息
+        // 在索引 0 时永远不会被处理)
+        for (int64_t i = static_cast<int64_t>(messages.size()) - 1; i >= 0; --i) {
+            auto& msg = messages[i];
+            if ("tool" == msg.role) {
+                auto itemHandleIt = summarizationToolHandles.find(msg.tool_name);
+                if (itemHandleIt != summarizationToolHandles.end()
+                    && itemHandleIt->second.generateDeduplicationKey
+                    && itemHandleIt->second.truncateResponse) {
+                    // 寻找 llm toolcall message
+                    int64_t lastMsgIndex  = i - 1;
+                    int64_t toolcallIndex = -1;
+                    // 从 0 开始遍历: 首个 assistant(tool_calls) 可能位于消息索引 0
+                    // (无 system 消息时), 不能排除该位置, 否则该组 (assistant,tool)
+                    // 永远无法去重
+                    for (; lastMsgIndex >= 0; --lastMsgIndex) {
+                        for (int64_t j = 0;
+                             j < static_cast<int64_t>(messages[lastMsgIndex].tool_calls.size());
+                             ++j) {
+                            if (msg.tool_call_id == messages[lastMsgIndex].tool_calls[j].id) {
+                                toolcallIndex = j;
+                                break;
+                            }
+                        }
+                        if (toolcallIndex >= 0) {
                             break;
                         }
                     }
-                    if (toolcallIndex >= 0) {
-                        break;
-                    }
-                }
 
-                neograph::json args;
-                if (toolcallIndex >= 0) {
-                    // 非法 JSON 参数: 跳过该条而非中断整轮压缩
-                    agentxx::util::catchError<bool>(
-                        [&]() -> bool {
-                            args = neograph::json::parse(
-                                messages[lastMsgIndex].tool_calls[toolcallIndex].arguments
-                            );
-                            return true;
-                        },
-                        [](std::string) -> bool {
-                            return false;
-                        }
-                    );
-                }
-
-                auto key = itemHandleIt->second.generateDeduplicationKey(args);
-                if (key.has_value()) {
-                    if (lastWriteIndex.contains(*key)) {
-                        itemHandleIt->second.truncateResponse(msg);
-                    } else {
-                        lastWriteIndex[*key] = i;
-                    }
-                }
-            }
-        } else {
-            // assistant
-            for (auto& tc : msg.tool_calls) {
-                auto itemHandleIt = summarizationToolHandles.find(tc.name);
-                if (itemHandleIt != summarizationToolHandles.end()
-                    && itemHandleIt->second.generateDeduplicationKey
-                    && itemHandleIt->second.truncateRequest) {
                     neograph::json args;
-                    // 非法 JSON 参数: 跳过该条而非中断整轮压缩
-                    agentxx::util::catchError<bool>(
-                        [&]() -> bool {
-                            args = neograph::json::parse(tc.arguments);
-                            return true;
-                        },
-                        [](std::string) -> bool {
-                            return false;
-                        }
-                    );
+                    if (toolcallIndex >= 0) {
+                        // 非法 JSON 参数: 跳过该条而非中断整轮压缩
+                        agentxx::util::catchError<bool>(
+                            [&]() -> bool {
+                                args = neograph::json::parse(
+                                    messages[lastMsgIndex].tool_calls[toolcallIndex].arguments
+                                );
+                                return true;
+                            },
+                            [](std::string) -> bool {
+                                return false;
+                            }
+                        );
+                    }
+
                     auto key = itemHandleIt->second.generateDeduplicationKey(args);
                     if (key.has_value()) {
                         if (lastWriteIndex.contains(*key)) {
-                            itemHandleIt->second.truncateRequest(tc);
+                            itemHandleIt->second.truncateResponse(msg);
                         } else {
                             lastWriteIndex[*key] = i;
                         }
                     }
                 }
+            } else {
+                // assistant
+                for (auto& tc : msg.tool_calls) {
+                    auto itemHandleIt = summarizationToolHandles.find(tc.name);
+                    if (itemHandleIt != summarizationToolHandles.end()
+                        && itemHandleIt->second.generateDeduplicationKey
+                        && itemHandleIt->second.truncateRequest) {
+                        neograph::json args;
+                        // 非法 JSON 参数: 跳过该条而非中断整轮压缩
+                        agentxx::util::catchError<bool>(
+                            [&]() -> bool {
+                                args = neograph::json::parse(tc.arguments);
+                                return true;
+                            },
+                            [](std::string) -> bool {
+                                return false;
+                            }
+                        );
+                        auto key = itemHandleIt->second.generateDeduplicationKey(args);
+                        if (key.has_value()) {
+                            if (lastWriteIndex.contains(*key)) {
+                                itemHandleIt->second.truncateRequest(tc);
+                            } else {
+                                lastWriteIndex[*key] = i;
+                            }
+                        }
+                    }
+                }
             }
         }
     }
+
+    // 探索型调用序列折叠 (在去重之后: 去重已截断旧内容, 折叠删除整组)
+    foldExploratoryToolcalls(messages);
+}
+
+size_t SummarizationMiddlewareHandle::splitRecentByTokenBudget(
+    const std::vector<neograph::ChatMessage>& messages,
+    size_t                                    systemCount,
+    size_t                                    tokenBudget
+) const {
+    if (messages.size() <= systemCount) {
+        return messages.size();
+    }
+    // 从后往前累计预算; recent 至少保留 1 条 (最近消息最重要, 且压缩必须有空间);
+    // 预算充足时 recent 收至 system 之后全部消息
+    size_t end    = messages.size();
+    size_t budget = tokenBudget;
+    while (end > systemCount) {
+        const size_t t = countTokens({}, {messages[end - 1]}, false);
+        if (t > budget) {
+            // 该条超出剩余预算: recent 为空时仍纳入该条 (至少 1 条, 可能略超预算)
+            if (end == messages.size()) {
+                --end;
+            }
+            break;
+        }
+        budget -= t;
+        --end;
+    }
+
+    // 对齐 1: recent 开头为 tool 消息 → 回退到发起这组 toolcall 的 assistant,
+    // 把整组纳入 recent, 避免产生孤儿 tool 结果 / 悬空 tool_calls
+    while (end > systemCount && end < messages.size() && "tool" == messages[end].role) {
+        --end;
+    }
+    // 对齐 2: 压缩段末尾为 assistant(tool_calls) 且其 tool 结果在 recent 内 →
+    // 整组划入 recent, 避免压缩段以悬挂 tool_calls 结尾
+    while (end > systemCount) {
+        const auto& last = messages[end - 1];
+        if ("assistant" != last.role || last.tool_calls.empty()) {
+            break;
+        }
+        bool hasResultInRecent = false;
+        for (const auto& tc : last.tool_calls) {
+            if (tc.id.empty()) {
+                continue;
+            }
+            for (size_t i = end; i < messages.size(); ++i) {
+                if ("tool" == messages[i].role && messages[i].tool_call_id == tc.id) {
+                    hasResultInRecent = true;
+                    break;
+                }
+            }
+            if (hasResultInRecent) {
+                break;
+            }
+        }
+        if (!hasResultInRecent) {
+            break;
+        }
+        --end;
+    }
+    return end;
+}
+
+asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
+    std::string_view                          thread_id,
+    const std::vector<neograph::ChatMessage>& messages
+) {
+    auto agentCtxPtr = agentContext.lock();
+    if (nullptr == agentCtxPtr || nullptr == agentCtxPtr->agentConfig
+        || nullptr == agentCtxPtr->subagentManagerToolPtr) {
+        co_return std::string{};
+    }
+    if (messages.empty()) {
+        co_return std::string{};
+    }
+
+    // 压缩指令模板 (可经 AgentPrompt 定制/训练序列化)
+    const auto& summarizePrompt = agentCtxPtr->agentConfig->prompt.summarizationPrompt;
+    if (summarizePrompt.empty()) {
+        co_return std::string{};
+    }
+
+    // 模型上下文上限 (压缩请求载荷裁剪用; 与子代理实际模型一致,
+    // 因同上下文模式强制使用父会话当前模型)
+    size_t modelMaxToken = modelSupportMaxTokenDefault;
+    {
+        const auto& currentModelConfig = agentCtxPtr->getSessionCurrentModelConfig(thread_id);
+        if (currentModelConfig.modelContenxtMaxToken > 0) {
+            modelMaxToken = currentModelConfig.modelContenxtMaxToken;
+        }
+    }
+
+    // 同上下文: 原始消息副本 (system + 压缩段) + 末尾追加压缩指令
+    auto reqMsgs = messages;
+
+    // 载荷裁剪: 压缩段本身超限时 (如超大附件), 从最旧消息开始丢弃;
+    // 仅影响请求副本, 不影响覆盖回写结构; 丢弃数写入指令提示模型
+    size_t droppedCount = 0;
+    while (reqMsgs.size() > 1 && countTokens({}, reqMsgs, false) > modelMaxToken * 0.95) {
+        size_t dropIdx = ("system" == reqMsgs[0].role) ? 1 : 0;
+        if (dropIdx >= reqMsgs.size()) {
+            break;
+        }
+        reqMsgs.erase(reqMsgs.begin() + static_cast<int64_t>(dropIdx));
+        ++droppedCount;
+    }
+
+    std::string omittedNote;
+    if (droppedCount > 0) {
+        omittedNote = fmt::format(
+            "NOTE: The oldest {} message(s) were omitted from the input above due to context "
+            "limits.\n",
+            droppedCount
+        );
+    }
+
+    neograph::ChatMessage promptMsg;
+    promptMsg.role    = "user";
+    // 模板来自 AgentPrompt (运行时字符串), 经 fmt::runtime 动态解析
+    promptMsg.content = fmt::format(
+        fmt::runtime(summarizePrompt),
+        fmt::arg("omitted_note", omittedNote),
+        fmt::arg("max_words", summaryMaxTokens / 4)
+    );
+    promptMsg.flags = neograph::MessageFlag::AutoInserted;
+    reqMsgs.push_back(std::move(promptMsg));
+
+    // 通过 subagent 完成压缩 (同上下文模式):
+    // - messages: 结构化透传 (system + 压缩段 + 压缩指令), 无文本转录
+    // - thread_id: 父线程 → 子代理与父会话相同 threadid + 相同模型,
+    //   命中 provider KV/prefix cache
+    // - tools: ["agentxx_share_store"] → 模型可自主把长内容写入父会话
+    //   store (id 空间一致, 摘要中的 id 父会话可直接读取)
+    // - enable_summarization: false → 禁止对透传前缀二次压缩
+    // - subagent 内部完成"外置长内容 → 输出摘要"的完整 agent 循环,
+    //   最终纯文本输出即为摘要
+    // - 首次调用抛 NodeInterrupt 暂停父轮次, Session 派生 subagent,
+    //   resume 后此调用返回 subagent 输出 (摘要)
+    neograph::json reqMsgsJson;
+    neograph::to_json(reqMsgsJson, reqMsgs);
+
+    auto args = neograph::json{
+        {"subagent", "subagent_task"},
+        {"messages", std::move(reqMsgsJson)},
+        {"thread_id", std::string{thread_id}},
+        {"tools", neograph::json::array({"agentxx_share_store"})},
+        {"enable_summarization", false},
+    };
+
+    co_return co_await agentxx::util::catchErrorAsync<std::string>(
+        [&]() -> asio::awaitable<std::string> {
+            // NodeInterrupt 会被 catchErrorAsync 放行 (中断/取消不捕获),
+            // 传播到引擎后由 Session 派生 subagent, resume 后返回结果
+            co_return co_await agentCtxPtr->subagentManagerToolPtr->execute_async(args);
+        },
+        [](std::string errmsg) -> asio::awaitable<std::string> {
+            XX_LOGE("SummarizationMiddlewareHandle 压缩 subagent 调用失败: {}", errmsg);
+            co_return "";
+        }
+    );
+}
+
+std::vector<neograph::ChatMessage> SummarizationMiddlewareHandle::hardTruncate(
+    const std::vector<neograph::ChatMessage>& messages,
+    size_t                                    systemCount,
+    size_t                                    maxToken
+) const {
+    std::vector<neograph::ChatMessage> out;
+    if (systemCount > 0 && !messages.empty()) {
+        out.push_back(messages[0]); // system 原样保留
+    }
+    // 截断说明 (user 角色, 置于 recent 之前, 保证角色顺序合法)
+    neograph::ChatMessage note;
+    note.role    = "user";
+    note.content = "[Earlier conversation was truncated due to context limit. Ask the user for "
+                   "details if needed; content stored via `agentxx_share_store` remains "
+                   "retrievable by id.]";
+    note.flags   = neograph::MessageFlag::AutoInserted | neograph::MessageFlag::Summarized;
+    out.push_back(std::move(note));
+
+    // 最近消息: 30% 预算
+    const size_t recentBudget = static_cast<size_t>(maxToken * 0.30);
+    const size_t end          = splitRecentByTokenBudget(messages, systemCount, recentBudget);
+    for (size_t i = end; i < messages.size(); ++i) {
+        out.push_back(messages[i]);
+    }
+    return out;
 }
 
 asio::awaitable<void>
     SummarizationMiddlewareHandle::onModelcallRunFunc(neograph::graph::NodeInput& in) {
     auto agentCtxPtr = agentContext.lock();
-    auto messages    = in.state.get_messages();
+    if (nullptr == agentCtxPtr) {
+        co_return;
+    }
+    auto messages = in.state.get_messages();
     if (messages.empty()) {
         co_return;
     }
@@ -305,96 +580,121 @@ asio::awaitable<void>
     if (auto session = agentCtxPtr->sessions->get(thread_id)) {
         if (session->contextStats) {
             // UI显示优先使用 apiTokenUsage 即可
-            session->contextStats->contextTokens.store(
-                (apiTokenUsage > 0) ? apiTokenUsage : tokenUsage
-            );
+            session->contextStats->contextTokens.store(tokenUsage);
             session->contextStats->maxContextTokens.store(modelContenxtMaxToken);
         }
     }
 
     neograph::json newMsgsJson;
+
+    // ---- L1+L2: 确定性压缩 (>= 65% 上限) ----
+    // - toolcall 去重/探索折叠 + 噪音清理
+    // - 不剥离 thinking (保留逻辑连贯性, 由 LLM 压缩时决定取舍)
+    // - 不做 offload (长内容由 LLM 压缩时经 agentxx_share_store 自主外置)
     if (tokenUsage >= modelContenxtMaxToken * 0.65) {
         doSummarizeToolcall(messages);
-        {
-            for (auto& msg : messages) {
-                offloadLongContentToTempStore(msg, agentCtxPtr->middlewareHandleContext, thread_id);
-            }
-        }
+        cleanNoiseMessages(messages);
         neograph::to_json(newMsgsJson, messages);
     }
 
+    // ---- L4: LLM 同上下文压缩 (>= 85% 上限) ----
     if (tokenUsage >= modelContenxtMaxToken * 0.85) {
         const size_t systemCount = (!messages.empty() && messages[0].role == "system") ? 1 : 0;
-        // TODO: 如果最近消息+system 已经超过，则无法压缩
-        if (messages.size() > keepRecentMessageCount + systemCount) {
-            size_t oldEnd = messages.size() - keepRecentMessageCount;
-            for (size_t i = oldEnd; i > 0; i--) {
-                // - 如果 llm summary 压缩成功，则末尾消息为 assistant，因此需要追加
-                // tool/user 类型.
-                // - 如果 llm 未压缩，则仍为原消息顺序，截取到哪里都可以.
-                const auto& role = messages[i].role;
-                if ("tool" == role || "user" == role) {
-                    oldEnd = i;
-                    break;
+        const size_t recentBudget
+            = static_cast<size_t>(modelContenxtMaxToken * recentTokenBudgetRatio);
+        const size_t oldEnd = splitRecentByTokenBudget(messages, systemCount, recentBudget);
+        const size_t oldStart = systemCount;
+        if (oldEnd > oldStart) {
+            // 压缩段 (system 之后, recent 之前)
+            auto oldMessages = std::vector<neograph::ChatMessage>{
+                messages.begin() + oldStart,
+                messages.begin() + oldEnd
+            };
+            auto recentMessages
+                = std::vector<neograph::ChatMessage>{messages.begin() + oldEnd, messages.end()};
+
+            // 同上下文压缩请求: system + 压缩段 (不包含 recent)
+            std::vector<neograph::ChatMessage> toSummarize;
+            if (systemCount > 0) {
+                toSummarize.push_back(messages[0]);
+            }
+            toSummarize.insert(
+                toSummarize.end(),
+                std::move_iterator(oldMessages.begin()),
+                std::move_iterator(oldMessages.end())
+            );
+
+            /// llm 压缩 (同上下文 subagent, 中断后由 Session 派生并 resume)
+            auto summary = co_await doSummarizeWithLLM(thread_id, toSummarize);
+
+            enum class ReplaceAction { None, Compact, HardTruncate };
+            ReplaceAction action = ReplaceAction::None;
+            if (!summary.empty()) {
+                action = ReplaceAction::Compact;
+                // 压缩成功: 重置失败计数
+                agentCtxPtr->middlewareHandleContext->setGraphDataItemValue<size_t>(
+                    thread_id,
+                    agentxx::middleware::MiddlewareContext::graphDataKey_summarizationFailCount,
+                    size_t{0}
+                );
+            } else {
+                // 压缩失败: 计数 (同一轮内重试/多轮 modelcall 累积);
+                // 连续失败 >= 2 次或超限严重 (>= 95%) 时硬截断兜底
+                size_t failCount
+                    = agentCtxPtr->middlewareHandleContext
+                          ->getGraphDataItemValue<size_t>(
+                              thread_id,
+                              agentxx::middleware::MiddlewareContext::
+                                  graphDataKey_summarizationFailCount
+                          )
+                      + 1;
+                agentCtxPtr->middlewareHandleContext->setGraphDataItemValue<size_t>(
+                    thread_id,
+                    agentxx::middleware::MiddlewareContext::graphDataKey_summarizationFailCount,
+                    failCount
+                );
+                if (failCount >= 2 || tokenUsage >= modelContenxtMaxToken * 0.95) {
+                    action = ReplaceAction::HardTruncate;
                 }
+                XX_LOGD(
+                    "SummarizationMiddlewareHandle: llm 压缩失败 (计数 {}), {}",
+                    failCount,
+                    (action == ReplaceAction::HardTruncate) ? "触发硬截断兜底" : "保留原消息重试"
+                );
             }
-            // 若 recent 段以 tool 消息开头, 说明切在了 tool 交换中间: 向前回退到发起这组 tool 的
-            // assistant(tool_calls), 把整组纳入 recent, 避免产生孤儿 tool 结果 / 悬空 tool_calls
-            while (oldEnd > systemCount && "tool" == messages[oldEnd].role) {
-                --oldEnd;
-            }
 
-            const size_t oldStart = systemCount;
-            const size_t oldCount = oldEnd - oldStart;
-            if (oldCount > 0) {
-                auto oldMessages = std::vector<neograph::ChatMessage>{
-                    messages.begin() + oldStart,
-                    messages.begin() + oldEnd
-                };
-                auto recentMessages
-                    = std::vector<neograph::ChatMessage>{messages.begin() + oldEnd, messages.end()};
-
-                /// llm 压缩
-                auto summary = co_await doSummarizeWithLLM(oldMessages);
-
+            if (action == ReplaceAction::Compact) {
                 std::vector<neograph::ChatMessage> newMessages{};
                 if (systemCount > 0) {
                     // 系统消息
                     newMessages.push_back(messages[0]);
                 }
-                if (!summary.empty()) {
-                    // 追加压缩后的信息
-                    // system | user | assistant | [user/tool]recentMessages
-                    newMessages.push_back(neograph::ChatMessage{
-                        .role    = "user",
-                        .content = "[Please compact context to save space]",
-                        .flags
-                        = neograph::MessageFlag::AutoInserted | neograph::MessageFlag::Summarized,
-                    });
-                    newMessages.push_back(neograph::ChatMessage{
-                        .role    = "assistant",
-                        .content = fmt::format("[Previous conversation summary]: \n{}", summary),
-                        .flags
-                        = neograph::MessageFlag::AutoInserted | neograph::MessageFlag::Summarized,
-                    });
-                } else {
-                    // system | oldMessages | recentMessages
-                    newMessages.insert(
-                        newMessages.end(),
-                        std::move_iterator(oldMessages.begin()),
-                        std::move_iterator(oldMessages.end())
-                    );
-                }
-
+                // 追加压缩后的信息
+                // system | user | assistant | [user/tool]recentMessages
+                newMessages.push_back(neograph::ChatMessage{
+                    .role    = "user",
+                    .content = "[Please compact context to save space]",
+                    .flags
+                    = neograph::MessageFlag::AutoInserted | neograph::MessageFlag::Summarized,
+                });
+                newMessages.push_back(neograph::ChatMessage{
+                    .role    = "assistant",
+                    .content = fmt::format("[Previous conversation summary]: \n{}", summary),
+                    .flags
+                    = neograph::MessageFlag::AutoInserted | neograph::MessageFlag::Summarized,
+                });
                 // 添加最近消息
                 newMessages.insert(
                     newMessages.end(),
                     std::move_iterator(recentMessages.begin()),
                     std::move_iterator(recentMessages.end())
                 );
-
+                neograph::to_json(newMsgsJson, newMessages);
+            } else if (action == ReplaceAction::HardTruncate) {
+                auto newMessages = hardTruncate(messages, systemCount, modelContenxtMaxToken);
                 neograph::to_json(newMsgsJson, newMessages);
             }
+            // ReplaceAction::None: 不覆盖, 保留原消息 (期望重试后再次压缩)
         }
     }
 
