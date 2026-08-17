@@ -549,6 +549,19 @@ asio::awaitable<void> test_http_client_beast_server() {
     // GET /hello
     server.router().add("/hello", 0, strResp("text/plain", "hello world"));
 
+    // GET /html-utf8 – HTML containing non-ASCII (UTF-8) bytes inside tags.
+    // Regression: ParseCharInTag called isspace()/tolower() with a negative
+    // char on Windows, which asserted in debug CRT (signal 22 crash)
+    server.router().add(
+        "/html-utf8",
+        0,
+        strResp(
+            "text/html",
+            "<html><head><title>标题</title></head>"
+            "<body><p title=\"中文属性\">段落内容😀</p></body></html>"
+        )
+    );
+
     // GET /json
     server.router().add("/json", 0, strResp("application/json", R"({"key":"value"})"));
 
@@ -1138,6 +1151,22 @@ asio::awaitable<void> test_http_client_beast_server() {
             HttpClient::RequestConfig{.readChunkTimeout = std::chrono::seconds{5}}
         );
         XX_TEST_EXPECT_HAS_VALUE(result);
+    }
+
+    {
+        // fetchMarkdown on HTML containing non-ASCII (UTF-8) bytes inside tags
+        // (regression: ParseCharInTag passed negative char to isspace/tolower,
+        //  which crashed in debug CRT on Windows)
+        auto result = co_await HttpClient::fetchMarkdown(
+            baseUrl + "/html-utf8",
+            HttpClient::RequestConfig{.readChunkTimeout = std::chrono::seconds{5}}
+        );
+        XX_TEST_EXPECT_HAS_VALUE(result);
+        if (result.has_value()) {
+            XX_TEST_EXPECT_TRUE(
+                result.value().find("段落内容") != std::string::npos
+            );
+        }
     }
 
     {
