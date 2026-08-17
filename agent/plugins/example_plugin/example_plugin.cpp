@@ -20,6 +20,8 @@
  */
 #include "agentxx/plugin/plugin_api.h"
 #include "agentxx/plugin/client_plugin_api.h"
+#include "fmt/format.h"
+#include "fmt/ranges.h"
 
 #include <algorithm>
 #include <chrono>
@@ -29,6 +31,21 @@
 #include <thread>
 
 static const AgentxxHost* g_host = nullptr;
+
+/// 字符串视图 → JSON 字符串字面量 (agent 侧宿主 vtable json_escape; 结果含
+/// 引号; 供 fmt::format 组装 JSON 时嵌入字段值, 避免手工拼接)
+static std::string agentJsonEscape(AgentxxPluginStringView sv) {
+    if (!g_host || agentxx_plugin_sv_empty(sv)) {
+        return "\"\"";
+    }
+    char* esc = g_host->vtable->json_escape(g_host, sv);
+    if (!esc) {
+        return "\"\"";
+    }
+    std::string out{esc};
+    g_host->vtable->free(esc);
+    return out;
+}
 
 /* ---------------- get_info ---------------- */
 
@@ -58,15 +75,11 @@ static char* echo_execute(
         return nullptr; // 宿主不可用: 无法分配错误串 (host 为 null)
     }
     // 结果 JSON: {"echo": <原样参数>}
-    char*       escTid  = g_host->vtable->json_escape(g_host, thread_id);
-    std::string out     = "{\"echo\": ";
-    out                += std::string{args_json.data ? args_json.data : "{}", args_json.size};
-    out                += ", \"thread_id\": ";
-    out                += escTid ? escTid : "\"\"";
-    out                += "}";
-    if (escTid) {
-        g_host->vtable->free(escTid);
-    }
+    const std::string out = fmt::format(
+        R"({{"echo": {},"thread_id": {}}})",
+        std::string_view{args_json.data ? args_json.data : "{}", args_json.size},
+        agentJsonEscape(thread_id)
+    );
     return g_host->vtable->strdup(out.c_str());
 }
 
@@ -103,9 +116,7 @@ static char* sleep_execute(
         }
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(std::max(ms, 0)));
-    std::string out  = "{\"slept_ms\": ";
-    out             += std::to_string(ms);
-    out             += "}";
+    const std::string out = fmt::format(R"({{"slept_ms": {}}})", ms);
     return g_host->vtable->strdup(out.c_str());
 }
 
@@ -140,9 +151,7 @@ static char* caller_execute(
         }
         return nullptr;
     }
-    std::string out  = "{\"via_call_tool\": ";
-    out             += resp;
-    out             += "}";
+    const std::string out = fmt::format(R"({{"via_call_tool": {}}})", resp);
     g_host->vtable->free(resp);
     return g_host->vtable->strdup(out.c_str());
 }
@@ -316,14 +325,35 @@ extern "C" void agentxx_plugin_unload(void* plugin_ctx) {
 static const AgentxxClientHost* g_client_host = nullptr;
 static AgentxxStatusItem*       g_status_item = nullptr;
 static AgentxxPanel*            g_panel       = nullptr;
+static AgentxxInfoSection*      g_info_section = nullptr;
 static int                      g_turn_count  = 0;
+
+/// 字符串 → JSON 字符串字面量 (经宿主 vtable json_escape; 结果含引号;
+/// 供 fmt::format 组装 JSON 时嵌入字段值, 避免手工拼接)
+static std::string clientJsonEscape(const std::string& s) {
+    if (!g_client_host || s.empty()) {
+        return "\"\"";
+    }
+    char* esc = g_client_host->vtable->json_escape(
+        g_client_host,
+        agentxx_plugin_sv(s.data(), s.size())
+    );
+    if (!esc) {
+        return "\"\"";
+    }
+    std::string out{esc};
+    g_client_host->vtable->free(esc);
+    return out;
+}
 
 extern "C" const AgentxxClientPluginInfo* agentxx_client_get_info(void) {
     static const AgentxxClientPluginInfo info{
         AGENTXX_CLIENT_PLUGIN_API_VERSION,
         AGENTXX_SV("example_plugin"),
         AGENTXX_SV("1.0.0"),
-        AGENTXX_SV("Example client plugin: status item, panel, commands, events, cross-side data"),
+        AGENTXX_SV(
+            "Example client plugin: status item, panel, Info section, commands, events, cross-side data"
+        ),
         0, // min_ui_caps: 无最低要求 (无 UI 能力的 CLI 也可加载)
     };
     return &info;
@@ -350,16 +380,13 @@ static char* example_cmd_execute(void* ud, AgentxxPluginStringView args_json, ch
     // 动作: send —— 代发一条用户消息 (与用户输入同排队语义)
     std::string text = "Hello from example plugin";
     if (!suffix.empty()) {
-        text += " (" + suffix + ")";
+        text = fmt::format("{} ({})", text, suffix);
     }
-    // json_escape 返回带引号的 JSON 字符串字面量 (如 "\"abc\""), 直接拼装即可
-    char* esc = g_client_host->vtable->json_escape(g_client_host, AGENTXX_SV(text.c_str()));
-    std::string out = R"({"action":"send","text":)";
-    out += esc ? esc : "\"\"";
-    out += "}";
-    if (esc) {
-        g_client_host->vtable->free(esc);
-    }
+    // json_escape 返回带引号的 JSON 字符串字面量 (如 "\"abc\""), fmt 直接嵌入
+    const std::string out = fmt::format(
+        R"({{"action":"send","text":{}}})",
+        clientJsonEscape(text)
+    );
     return g_client_host->vtable->strdup(out.c_str());
 }
 
@@ -380,13 +407,10 @@ static char* example_toast_execute(void* ud, AgentxxPluginStringView args_json, 
     if (argText) {
         g_client_host->vtable->free(argText);
     }
-    char* esc = g_client_host->vtable->json_escape(g_client_host, AGENTXX_SV(text.c_str()));
-    std::string out = R"({"action":"toast","text":)";
-    out += esc ? esc : "\"\"";
-    out += R"(,"level":1})";
-    if (esc) {
-        g_client_host->vtable->free(esc);
-    }
+    const std::string out = fmt::format(
+        R"({{"action":"toast","text":{},"level":1}})",
+        clientJsonEscape(text)
+    );
     return g_client_host->vtable->strdup(out.c_str());
 }
 
@@ -408,31 +432,39 @@ static void on_client_ready(AgentxxPluginStringView payload_json, void* ud) {
     );
 }
 
-/// TURN_END: 轮次结束 → 状态栏项文本更新
+/// TURN_END: 轮次结束 → 状态栏项文本更新 + Info 栏段落内容更新
 static void on_client_turn_end(AgentxxPluginStringView payload_json, void* ud) {
     (void)ud;
     (void)payload_json;
-    if (!g_client_host || !g_status_item) {
+    if (!g_client_host) {
         return;
     }
     ++g_turn_count;
-    std::string text = "turns: " + std::to_string(g_turn_count);
-    char*       esc  = g_client_host->vtable->json_escape(
-        g_client_host,
-        agentxx_plugin_sv(text.data(), text.size())
-    );
-    // json_escape 返回带引号的 JSON 字符串字面量, 直接拼装
-    std::string json = R"({"text":)";
-    json += esc ? esc : "\"\"";
-    json += "}";
-    if (esc) {
-        g_client_host->vtable->free(esc);
+    if (g_status_item) {
+        // json_escape 返回带引号的 JSON 字符串字面量, fmt 直接嵌入
+        const std::string json = fmt::format(
+            R"({{"text":{}}})",
+            clientJsonEscape(fmt::format("turns: {}", g_turn_count))
+        );
+        g_client_host->vtable->update_status_item(
+            g_client_host,
+            g_status_item,
+            agentxx_plugin_sv(json.data(), json.size())
+        );
     }
-    g_client_host->vtable->update_status_item(
-        g_client_host,
-        g_status_item,
-        agentxx_plugin_sv(json.data(), json.size())
-    );
+    if (g_info_section) {
+        // Info 栏段落: {"items":[{"kind":"kv","key":"Turns","value":"N"},
+        // {"kind":"text","text":"Example Info section is live"}]}
+        const std::string json = fmt::format(
+            R"({{"items":[{{"kind":"kv","key":"Turns","value":{}}},{{"kind":"text","text":"Example Info section is live"}}]}})",
+            clientJsonEscape(std::to_string(g_turn_count))
+        );
+        g_client_host->vtable->update_info_section(
+            g_client_host,
+            g_info_section,
+            AGENTXX_SV(json.c_str())
+        );
+    }
 }
 
 /// PLUGIN_DATA: 收到 agent 侧插件事件 (WirePluginData) → 面板展示
@@ -457,9 +489,9 @@ static void on_client_plugin_data(AgentxxPluginStringView payload_json, void* ud
         payload_json,
         AGENTXX_SV("data")
     );
-    std::string line = std::string(plugin ? plugin : "?") + "." + (event ? event : "?");
+    std::string line = fmt::format("{}.{}", plugin ? plugin : "?", event ? event : "?");
     if (data && *data) {
-        line += ": " + std::string(data);
+        line = fmt::format("{}: {}", line, data);
     }
     if (plugin) {
         g_client_host->vtable->free(plugin);
@@ -470,14 +502,11 @@ static void on_client_plugin_data(AgentxxPluginStringView payload_json, void* ud
     if (data) {
         g_client_host->vtable->free(data);
     }
-    char* esc = g_client_host->vtable->json_escape(g_client_host, AGENTXX_SV(line.c_str()));
-    // json_escape 返回带引号的 JSON 字符串字面量, 直接拼装
-    std::string json = R"({"items":[{"kind":"text","text":)";
-    json += esc ? esc : "\"\"";
-    json += R"(},{"kind":"badge","text":"updated"}]})";
-    if (esc) {
-        g_client_host->vtable->free(esc);
-    }
+    // json_escape 返回带引号的 JSON 字符串字面量, fmt 直接嵌入
+    const std::string json = fmt::format(
+        R"({{"items":[{{"kind":"text","text":{}}},{{"kind":"badge","text":"updated"}}]}})",
+        clientJsonEscape(line)
+    );
     g_client_host->vtable->update_panel(g_client_host, g_panel, AGENTXX_SV(json.c_str()));
 }
 
@@ -502,6 +531,13 @@ extern "C" int agentxx_client_entry(const AgentxxClientHost* host, void** plugin
         host,
         AGENTXX_SV("example_plugin.panel"),
         AGENTXX_SV(R"({"title":"Example"})")
+    );
+
+    // 3. 侧边栏 Info 栏段落 (段落标题 "Example Info"; 内容由 TURN_END 更新)
+    g_info_section = host->vtable->register_info_section(
+        host,
+        AGENTXX_SV("example_plugin.info"),
+        AGENTXX_SV(R"({"title":"Example Info"})")
     );
 
     // 3. 命令
@@ -564,6 +600,10 @@ extern "C" void agentxx_client_unload(void* plugin_ctx) {
     if (g_panel) {
         g_client_host->vtable->unregister_panel(g_client_host, g_panel);
         g_panel = nullptr;
+    }
+    if (g_info_section) {
+        g_client_host->vtable->unregister_info_section(g_client_host, g_info_section);
+        g_info_section = nullptr;
     }
     g_client_host->vtable->log(g_client_host, 2, AGENTXX_SV("example client plugin unloaded"));
     g_client_host = nullptr;

@@ -248,11 +248,15 @@ TUI [F4] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
     远程模式由 mode_runners 连接协程驱动 (ConnState 存于 TUIRenderState::connState)
   - 屏幕上方 toast 提示
   - 自动滚动吸附底部 (Scrollable 组件)
-  - 系统资源占用 (CPU/内存) 与 CodeGraph 索引状态: 渲染已剥离到对应插件的
-    client 侧 (agentxx_system_monitor 状态栏项 + 命令 /sysinfo / agentxx_codegraph
-    侧边栏面板); 采集/定时亦在插件内 (agentxx_system_monitor 在 agent 侧周期
-    采集并 publish usage 事件, 经 WirePluginData 通道回传 client 插件渲染),
-    TUI 不发起资源请求、不解析/不渲染插件载荷
+  - 系统资源占用 (CPU/内存) 与 CodeGraph 索引状态: 渲染已迁移到对应插件的
+    client 侧 (agentxx_system_monitor 状态栏项 + 侧边栏 Info 栏段落 + 命令
+    /sysinfo / agentxx_codegraph Info 栏段落); 采集/定时亦在插件内
+    (agentxx_system_monitor 在 agent 侧周期采集并 publish usage 事件, 经
+    WirePluginData 通道回传 client 插件渲染), TUI 不发起资源请求、不解析/
+    不渲染插件载荷
+  - 插件 Info 栏段落扩展: client 插件可经 register_info_section 向侧边栏
+    Info tab 注入段落 (标题 + items, items schema 与面板一致), 渲染在
+    Append 组件列表之后; TUI 每帧从 client 插件注册表快照读取, 无需缓存
 - **TUI 渲染模块化**: 将消息列表、侧边栏、浮层、编辑工具渲染拆分到独立文件
 - **LazyScrollable (Flutter ListView.builder 风格)**: 消息列表采用懒构建渲染架构 ——
   通过 itemCount/itemKey/estimateHeight/buildItem 回调描述列表，仅构建与视口相交的
@@ -739,7 +743,7 @@ AgentIOBase (公共契约)
     │                                 须已设置 transport, 否则记错误日志并丢弃)
     ├── requestCancel() [client]   → 请求取消
     ├── requestSelectModel() [client] → 切换模型
-    ├── requestAppendComponentInfo() [client] → 拉取启动信息 (MCP/Skill/Memory)
+    ├── requestAppendComponentInfo() [client] → 拉取启动信息 (Plugin/MCP/Skill/Memory)
     ├── sendUserInput() [client]   → 发送用户输入
     ├── getInput() [双向]          → 提供用户输入 (server 侧被 BaseAgent 驱动循环拉取,
     │                                 client 侧被本端输入循环调用)
@@ -976,7 +980,7 @@ Client                              Server
   │──── GetModel ────────────────────→│ 查询当前模型信息
   │←── ModelInfo ─────────────────────│
   │                                    │
-  │──── GetAppendComponentInfo ──────→│ 查询 MCP/Skill/Memory 组件加载信息
+  │──── GetAppendComponentInfo ──────→│ 查询 Plugin/MCP/Skill/Memory 组件加载信息
   │←── AppendComponentInfo ───────────│
   │                                    │
   │──── GetContext ──────────────────→│ 查询当前 llmMessages

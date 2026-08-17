@@ -9,7 +9,8 @@
 //   采集并 publish "agentxx_system_monitor.usage" (server 原样转发
 //   WirePluginData) —— 定时/采集/发布完全位于插件内, TUI 不再参与
 // - client 侧入口 (agentxx_client_entry): 订阅宿主转发的 usage 插件事件,
-//   以状态栏项渲染 CPU/内存占用; 显示开关命令 /sysinfo 经跨端事件
+//   以状态栏项渲染 CPU/内存占用 (快速一览), 并以侧边栏 Info 栏段落渲染
+//   明细 (CPU/RAM/GPU); 显示开关命令 /sysinfo 经跨端事件
 //   (usage_enabled) 上行同步到 agent 侧, 关闭期间跳过采集
 // - 插件不链接 libagentxx: 日志经 vtable log, JSON 组装用 fmt + json_escape
 #include "system_monitor_plugin.h"
@@ -19,6 +20,7 @@
 #include "asio/detached.hpp"
 #include "asio/io_context.hpp"
 #include "fmt/format.h"
+#include "fmt/ranges.h"
 #include <atomic>
 #include <chrono>
 #include <cstring>
@@ -472,20 +474,40 @@ extern "C" void agentxx_plugin_unload(void* plugin_ctx) {
  * - server 原样转发为 WirePluginData, 宿主 (TUI) 经事件接收器分发到
  *   client 插件系统 (AGENTXX_CLIENT_EVT_PLUGIN_DATA, 见 TUI onPeerMessage)
  * - 本入口订阅该事件, 过滤 usage 事件后解析 JSON (schema 由本插件定义),
- *   以状态栏项渲染 "CPU x% RAM y%"
+ *   以状态栏项渲染 "CPU x% RAM y%" (快速一览), 同时以侧边栏 Info 栏段落
+ *   渲染明细 (CPU/RAM/GPU 汇总)
  * - 显示开关: 命令 /sysinfo 切换 (插件内部状态; 状态栏项渲染与命令
  *   执行均在 client io 线程, 无跨线程竞争); 开关状态经跨端事件
  *   (usage_enabled) 上行同步, agent 侧据此跳过采集
- * - CLI 宿主 (无 STATUS_ITEM 能力) 下 register_status_item 返回 NULL,
+ * - CLI 宿主 (无 STATUS_ITEM/INFO_SECTION 能力) 下 register_* 返回 NULL,
  *   插件降级 (仅保持数据接收, 不渲染)
  * ===================================================================== */
 
 static const AgentxxClientHost* g_client_host = nullptr;
 static AgentxxStatusItem*       g_usage_item  = nullptr;
+static AgentxxInfoSection*      g_section     = nullptr;
 /// 系统资源显示开关 (命令 /sysinfo 切换; 默认开启, 与旧 TUI 设置一致)
 static std::atomic<bool> g_usage_enabled{true};
 /// 最近一次收到的 usage JSON (原始字符串; 用于开关重新开启时立即刷新)
 static std::string g_last_usage_json;
+
+/// 字符串 → JSON 字符串字面量 (经宿主 vtable json_escape; 结果含引号;
+/// 供 fmt::format 组装 JSON 时嵌入字段值, 避免手工拼接)
+static std::string clientJsonEscape(const std::string& s) {
+    if (!g_client_host || s.empty()) {
+        return "\"\"";
+    }
+    char* esc = g_client_host->vtable->json_escape(
+        g_client_host,
+        agentxx_plugin_sv(s.data(), s.size())
+    );
+    if (!esc) {
+        return "\"\"";
+    }
+    std::string out{esc};
+    g_client_host->vtable->free(esc);
+    return out;
+}
 
 /// 从 usage JSON 读取双精度字段 (schema 由本插件定义:
 /// {"cpu","mem_total_mb","mem_used_mb","mem_percent","gpus":[...]};
@@ -502,39 +524,143 @@ static double jsonGetDouble(SimpleJson& j, const char* pointer) {
     return 0.0;
 }
 
-/// 用最新数据刷新状态栏项 (client io 线程调用)
-static void refreshUsageItem() {
-    if (!g_client_host || !g_usage_item || g_last_usage_json.empty()) {
-        return;
+/// 从 usage JSON 读取整数字段 (mem_* 单位为 MB 的整数)
+static int64_t jsonGetInt64(SimpleJson& j, const char* pointer) {
+    auto v = j.doc().at_pointer(pointer);
+    if (v.error()) {
+        return 0;
     }
-    SimpleJson j(g_last_usage_json);
+    uint64_t u = 0;
+    if (!v.value().get_uint64().get(u)) {
+        return static_cast<int64_t>(u);
+    }
+    int64_t i = 0;
+    if (!v.value().get_int64().get(i)) {
+        return i;
+    }
+    return 0;
+}
+
+/// usage JSON 解析汇总 (Info 段落数据源)
+struct UsageStat {
+    double  cpu         = 0.0; ///< CPU 占用 %
+    double  memPct      = 0.0; ///< 内存占用 %
+    int64_t memUsedMb   = 0;   ///< 已用内存 MB
+    int64_t memTotalMb  = 0;   ///< 总内存 MB
+    size_t  gpuCount    = 0;   ///< 检测到的 GPU 数量
+    double  gpuPeakPct  = 0.0; ///< GPU 最高占用 %
+};
+
+static UsageStat parseUsage(const std::string& raw) {
+    UsageStat st;
+    SimpleJson j(raw);
     if (!j.ok()) {
+        return st;
+    }
+    st.cpu        = jsonGetDouble(j, "/cpu");
+    st.memPct     = jsonGetDouble(j, "/mem_percent");
+    st.memUsedMb  = jsonGetInt64(j, "/mem_used_mb");
+    st.memTotalMb = jsonGetInt64(j, "/mem_total_mb");
+    // gpus 汇总: 数量 + 峰值占用 (逐元素单次遍历, 避免嵌套二次访问)
+    auto gpus = j.doc().at_pointer("/gpus");
+    if (!gpus.error()) {
+        simdjson::ondemand::array arr;
+        if (!gpus.value().get_array().get(arr)) {
+            for (auto elem : arr) {
+                if (elem.error()) {
+                    continue;
+                }
+                ++st.gpuCount;
+                double u = 0.0;
+                auto   obj = elem.get_object();
+                if (!obj.error()) {
+                    auto usageField = obj["usage_percent"];
+                    if (!usageField.error()) {
+                        usageField.get_double().get(u);
+                    }
+                }
+                if (u > st.gpuPeakPct) {
+                    st.gpuPeakPct = u;
+                }
+            }
+        }
+    }
+    return st;
+}
+
+/// 组装 Info 栏段落 items JSON (明细: CPU/RAM/GPU)
+/// - 各条目用 fmt::format 构造, 最后 fmt::join 组装 (避免手工字符串拼接)
+static std::string buildUsageInfoItemsJson(const UsageStat& st) {
+    std::vector<std::string> items;
+    auto kv = [&](const std::string& key, const std::string& value) {
+        items.push_back(fmt::format(
+            R"({{"kind":"kv","key":{},"value":{}}})",
+            clientJsonEscape(key),
+            clientJsonEscape(value)
+        ));
+    };
+
+    kv("CPU", fmt::format("{:.0f}%", st.cpu));
+    // RAM: 45% (8192/18432 MB)
+    std::string ram = fmt::format("{:.0f}%", st.memPct);
+    if (st.memTotalMb > 0) {
+        ram = fmt::format("{} ({} / {} MB)", ram, st.memUsedMb, st.memTotalMb);
+    }
+    kv("RAM", ram);
+    if (st.gpuCount == 0) {
+        kv("GPU", "none");
+    } else if (st.gpuCount == 1) {
+        kv("GPU", fmt::format("{:.0f}%", st.gpuPeakPct));
+    } else {
+        kv("GPUs", fmt::format("{}x peak {:.0f}%", st.gpuCount, st.gpuPeakPct));
+    }
+    return fmt::format(R"({{"items":[{}]}})", fmt::join(items, ","));
+}
+
+/// 用最新数据刷新状态栏项 + Info 段落 (client io 线程调用; 开关关闭时
+/// Info 段落显示占位提示, 状态栏项保留上次文本)
+static void refreshUsageDisplay() {
+    if (!g_client_host) {
         return;
     }
-    const double cpu    = jsonGetDouble(j, "/cpu");
-    const double memPct = jsonGetDouble(j, "/mem_percent");
-    std::string  text   = fmt::format("CPU {:.0f}% RAM {:.0f}%", cpu, memPct);
-    char*        esc    = g_client_host->vtable->json_escape(
-        g_client_host,
-        agentxx_plugin_sv(text.data(), text.size())
-    );
-    std::string json = R"({"text":)";
-    json += esc ? esc : "\"\"";
-    json += "}";
-    if (esc) {
-        g_client_host->vtable->free(esc);
+    // 状态栏项: 开关开启且有数据时更新
+    if (g_usage_item && !g_last_usage_json.empty()
+        && g_usage_enabled.load(std::memory_order_relaxed)) {
+        SimpleJson j(g_last_usage_json);
+        if (j.ok()) {
+            const double cpu    = jsonGetDouble(j, "/cpu");
+            const double memPct = jsonGetDouble(j, "/mem_percent");
+            const std::string json = fmt::format(
+                R"({{"text":{}}})",
+                clientJsonEscape(fmt::format("CPU {:.0f}% RAM {:.0f}%", cpu, memPct))
+            );
+            g_client_host->vtable->update_status_item(
+                g_client_host,
+                g_usage_item,
+                agentxx_plugin_sv(json.data(), json.size())
+            );
+        }
     }
-    g_client_host->vtable->update_status_item(
-        g_client_host,
-        g_usage_item,
-        agentxx_plugin_sv(json.data(), json.size())
-    );
+    // Info 段落: 明细 (开关关闭时显示占位)
+    if (g_section && !g_last_usage_json.empty()) {
+        std::string json;
+        if (g_usage_enabled.load(std::memory_order_relaxed)) {
+            json = buildUsageInfoItemsJson(parseUsage(g_last_usage_json));
+        } else {
+            json = R"({"items":[{"kind":"text","text":"System info: OFF"}]})";
+        }
+        g_client_host->vtable->update_info_section(
+            g_client_host,
+            g_section,
+            agentxx_plugin_sv(json.data(), json.size())
+        );
+    }
 }
 
 /// PLUGIN_DATA 事件: 过滤宿主转发的系统资源占用事件 (agentxx_system_monitor.usage)
 static void on_client_plugin_data(AgentxxPluginStringView payload_json, void* ud) {
     (void)ud;
-    if (!g_client_host || !g_usage_item) {
+    if (!g_client_host || (!g_usage_item && !g_section)) {
         return;
     }
     // payload: {"plugin","event","data"}
@@ -556,10 +682,10 @@ static void on_client_plugin_data(AgentxxPluginStringView payload_json, void* ud
     const bool mine = plugin && event && std::strcmp(plugin, "agentxx_system_monitor") == 0
                       && std::strcmp(event, "usage") == 0 && data;
     if (mine) {
+        // 缓存原始数据; refreshUsageDisplay 内部按开关状态决定渲染
+        // (开启: 状态栏 + Info 明细; 关闭: Info 段落显示占位)
         g_last_usage_json = data;
-        if (g_usage_enabled.load(std::memory_order_relaxed)) {
-            refreshUsageItem();
-        }
+        refreshUsageDisplay();
     }
     if (plugin) {
         g_client_host->vtable->free(plugin);
@@ -583,10 +709,9 @@ static char* sysinfo_cmd_execute(void* ud, AgentxxPluginStringView args_json, ch
     }
     const bool next = !g_usage_enabled.load(std::memory_order_relaxed);
     g_usage_enabled.store(next, std::memory_order_relaxed);
-    // 重新开启时立即以最新数据刷新 (数据在关闭期间仍持续接收缓存)
-    if (next) {
-        refreshUsageItem();
-    }
+    // 立即按新开关状态刷新 (重新开启时用缓存的最新数据; 关闭时 Info 段落
+    // 显示占位); 数据在关闭期间仍持续接收缓存
+    refreshUsageDisplay();
     // 上行同步: agent 侧插件订阅 client.agentxx_system_monitor.usage_enabled,
     // 关闭期间跳过周期采集 (省采样开销/网络流量)
     {
@@ -598,16 +723,10 @@ static char* sysinfo_cmd_execute(void* ud, AgentxxPluginStringView args_json, ch
         );
     }
     std::string text = next ? "System resource info: ON" : "System resource info: OFF";
-    char*       esc  = g_client_host->vtable->json_escape(
-        g_client_host,
-        agentxx_plugin_sv(text.data(), text.size())
+    const std::string out = fmt::format(
+        R"({{"action":"toast","text":{},"level":0}})",
+        clientJsonEscape(text)
     );
-    std::string out = R"({"action":"toast","text":)";
-    out += esc ? esc : "\"\"";
-    out += R"(,"level":0})";
-    if (esc) {
-        g_client_host->vtable->free(esc);
-    }
     return g_client_host->vtable->strdup(out.c_str());
 }
 
@@ -616,7 +735,7 @@ extern "C" const AgentxxClientPluginInfo* agentxx_client_get_info(void) {
         AGENTXX_CLIENT_PLUGIN_API_VERSION,
         AGENTXX_SV("agentxx_system_monitor"),
         AGENTXX_SV("1.0.0"),
-        AGENTXX_SV("System resource usage status item (CPU/RAM) and /sysinfo toggle"),
+        AGENTXX_SV("System resource usage: status item (CPU/RAM) + Info section (CPU/RAM/GPU), /sysinfo toggle"),
         0, // min_ui_caps: 无最低要求 (CLI 无状态栏时注册失败降级)
     };
     return &info;
@@ -636,7 +755,16 @@ extern "C" int agentxx_client_entry(const AgentxxClientHost* host, void** plugin
     );
     // 宿主不支持状态栏 (如 CLI) 时返回 NULL, 插件降级 (不视为失败)
 
-    // 2. 事件订阅: 宿主转发的系统资源事件 (WirePluginData agentxx_system_monitor.usage)
+    // 2. 侧边栏 Info 栏段落 (资源占用明细: CPU/RAM/GPU; 内容由
+    //    refreshUsageDisplay 更新)
+    g_section = host->vtable->register_info_section(
+        host,
+        AGENTXX_SV("agentxx_system_monitor.usage"),
+        AGENTXX_SV(R"({"title":"System"})")
+    );
+    // 宿主不支持 Info 段落时返回 NULL, 插件降级 (不视为失败)
+
+    // 3. 事件订阅: 宿主转发的系统资源事件 (WirePluginData agentxx_system_monitor.usage)
     if (!host->vtable->subscribe(
             host,
             AGENTXX_CLIENT_EVT_PLUGIN_DATA,
@@ -646,11 +774,11 @@ extern "C" int agentxx_client_entry(const AgentxxClientHost* host, void** plugin
         return -1;
     }
 
-    // 3. 命令 /sysinfo: 切换显示
+    // 4. 命令 /sysinfo: 切换显示
     if (host->vtable->register_command(
             host,
             AGENTXX_SV("sysinfo"),
-            AGENTXX_SV("Toggle system resource info display (CPU/RAM status item)"),
+            AGENTXX_SV("Toggle system resource info display (CPU/RAM status item and Info)"),
             sysinfo_cmd_execute,
             nullptr
         ) != 0) {
@@ -669,6 +797,10 @@ extern "C" void agentxx_client_unload(void* plugin_ctx) {
     if (g_usage_item) {
         g_client_host->vtable->unregister_status_item(g_client_host, g_usage_item);
         g_usage_item = nullptr;
+    }
+    if (g_section) {
+        g_client_host->vtable->unregister_info_section(g_client_host, g_section);
+        g_section = nullptr;
     }
     g_client_host->vtable->unregister_command(g_client_host, AGENTXX_SV("sysinfo"));
     g_last_usage_json.clear();

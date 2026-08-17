@@ -45,6 +45,52 @@ ftxui::Element buildLogLine(const TUILogSink::Line& line, const TUITheme& theme)
     return paragraph(prefix + line.text) | color(c);
 }
 
+/// 渲染插件段落/面板 items JSON 元素 (kind: text/kv/progress/badge/separator;
+/// schema 见 client_plugin_api.h register_panel/register_info_section)
+static void appendPluginItems(
+    const neograph::json& items,
+    const TUITheme&       theme,
+    ftxui::Elements&      out
+) {
+    if (!items.is_array()) {
+        return;
+    }
+    for (const auto& it : items) {
+        if (!it.is_object()) {
+            continue;
+        }
+        const auto kind = it.value("kind", std::string{"text"});
+        if (kind == "text") {
+            out.push_back(paragraph(it.value("text", std::string{})) | color(theme.toolColor));
+        } else if (kind == "kv") {
+            out.push_back(hbox({
+                text(it.value("key", std::string{}) + ": ") | color(theme.hintColor),
+                text(it.value("value", std::string{})) | color(theme.toolColor) | xflex_shrink,
+            }));
+        } else if (kind == "progress") {
+            const double  v       = it.value("value", 0.0);
+            const int     w       = 10;
+            const int     filled  = static_cast<int>(v * w);
+            std::string   bar;
+            bar.reserve(w);
+            for (int i = 0; i < w; ++i) {
+                bar += (i < filled) ? '#' : '-';
+            }
+            out.push_back(hbox({
+                text("[" + bar + "]") | color(theme.accentColor),
+                text(fmt::format(" {}%", static_cast<int>(v * 100)))
+                    | color(theme.hintColor),
+            }));
+        } else if (kind == "badge") {
+            out.push_back(
+                text("● " + it.value("text", std::string{})) | color(theme.accentColor)
+            );
+        } else if (kind == "separator") {
+            out.push_back(text("─") | color(theme.hintColor) | dim);
+        }
+    }
+}
+
 } // namespace
 
 std::vector<ScrollItem> TUIClientAgentIO::renderLogWindow() {
@@ -191,9 +237,9 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
         elements.push_back(text(" "));
     }
 
-    // 已加载组件 (Memory/Skill/MCP) 展示:
-    // - CodeGraph 索引状态与系统资源占用已剥离到对应插件的 client 侧入口
-    //   (agentxx_codegraph 面板 / agentxx_system_monitor 状态栏项), TUI 不再渲染
+    // 已加载组件 (Plugin/Memory/Skill/MCP) 展示:
+    // - CodeGraph 索引状态与系统资源占用由对应插件经 register_info_section
+    //   注入本 Info 栏 (见下方 "插件扩展 Info 段落"), TUI 不再单独渲染
     if (!st.appendComponents.empty()) {
         Elements appendEls;
         appendEls.push_back(text("Append") | color(theme_.accentColor));
@@ -229,8 +275,29 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
         appendGroup("Memory", agentxx::agent::AppendComponentNotification::Type::Memory, true);
         appendGroup("Skill", agentxx::agent::AppendComponentNotification::Type::Skill, true);
         appendGroup("MCP", agentxx::agent::AppendComponentNotification::Type::Mcp, false);
+        appendGroup("Plugins", agentxx::agent::AppendComponentNotification::Type::Plugin, false);
 
         elements.push_back(vbox(std::move(appendEls)));
+    }
+
+    // 插件扩展的 Info 段落 (插件经 register_info_section 注入; UI 线程渲染,
+    // 每帧从 client 插件注册表快照读取, 无需缓存):
+    // - 段落在 Append 之后按注册顺序展示 (标题 + items, items schema 同面板)
+    if (auto mgr = pluginManager_) {
+        auto reg = mgr->uiRegistrySnapshot();
+        if (reg && !reg->infoSections.empty()) {
+            for (const auto& sec : reg->infoSections) {
+                Elements secEls;
+                if (!sec.title.empty()) {
+                    secEls.push_back(text(sec.title) | color(theme_.accentColor));
+                }
+                appendPluginItems(sec.items, theme_, secEls);
+                if (!secEls.empty()) {
+                    elements.push_back(vbox(std::move(secEls)));
+                    elements.push_back(text(" "));
+                }
+            }
+        }
     }
 
     if (elements.empty()) {

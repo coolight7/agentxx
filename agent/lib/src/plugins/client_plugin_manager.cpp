@@ -48,6 +48,13 @@ struct AgentxxPanel {
     std::string plugin;
 };
 
+/// Info 栏段落宿主句柄实现
+struct AgentxxInfoSection {
+    agentxx::plugin::ClientPluginInstance* inst = nullptr;
+    std::string id;
+    std::string plugin;
+};
+
 namespace agentxx {
 namespace plugin {
 
@@ -269,6 +276,7 @@ ClientPluginInstance::~ClientPluginInstance() {
     subscriptions.clear();
     statusItemHandles.clear();
     panelHandles.clear();
+    infoSectionHandles.clear();
     subHandles.clear();
 }
 
@@ -582,6 +590,33 @@ void ClientPluginManager::enableImpl(std::string_view name, bool userInitiated) 
             uiAdapter_->onPanelRegistered(reg.id, props);
         }
     }
+    for (const auto& reg : inst->infoSectionRegs) {
+        auto h    = std::make_shared<AgentxxInfoSection>();
+        h->inst   = inst.get();
+        h->id     = reg.id;
+        h->plugin = reg.plugin;
+        {
+            std::lock_guard<std::mutex> lock(uiMutex_);
+            auto                        cur = std::make_shared<ClientUiRegistry>(*uiRegistry_);
+            bool                        dup = false;
+            for (const auto& s : cur->infoSections) {
+                if (s.id == reg.id) {
+                    dup = true;
+                    break;
+                }
+            }
+            if (!dup) {
+                cur->infoSections.push_back(reg);
+            }
+            uiRegistry_ = std::move(cur);
+        }
+        inst->infoSectionHandles.push_back(h);
+        if (uiAdapter_) {
+            neograph::json props = neograph::json::object();
+            props["title"]       = reg.title;
+            uiAdapter_->onInfoSectionRegistered(reg.id, props);
+        }
+    }
     for (const auto& reg : inst->commandRegs) {
         {
             std::lock_guard<std::mutex> lock(uiMutex_);
@@ -757,6 +792,9 @@ std::vector<ClientPluginManager::PluginListView> ClientPluginManager::list() con
         }
         for (const auto& p : inst->panelRegs) {
             v.panels.push_back(p.id);
+        }
+        for (const auto& s : inst->infoSectionRegs) {
+            v.infoSections.push_back(s.id);
         }
         for (const auto& c : inst->commandRegs) {
             v.commands.push_back(c.name);
@@ -995,6 +1033,14 @@ void ClientPluginManager::detachAll(ClientPluginInstance* inst, bool keepInfo) {
                 ++it;
             }
         }
+        auto& inf = reg->infoSections;
+        for (auto it = inf.begin(); it != inf.end();) {
+            if (it->plugin == inst->name) {
+                it = inf.erase(it);
+            } else {
+                ++it;
+            }
+        }
         auto& cm = reg->commands;
         for (auto it = cm.begin(); it != cm.end();) {
             if (it->plugin == inst->name) {
@@ -1013,15 +1059,20 @@ void ClientPluginManager::detachAll(ClientPluginInstance* inst, bool keepInfo) {
         for (const auto& p : inst->panelRegs) {
             uiAdapter_->onPanelRemoved(p.id);
         }
+        for (const auto& is : inst->infoSectionRegs) {
+            uiAdapter_->onInfoSectionRemoved(is.id);
+        }
     }
-    // 注意: 句柄 (statusItemHandles/panelHandles/subHandles) 不在此释放 ——
-    // 插件的 unload 回调 (detachAll 之后、实例析构之前调用) 可能主动反注册
-    // (unregister_status_item 等), 句柄必须存活到实例析构; 由 ~ClientPluginInstance
-    // 统一释放 (实例在 plugins_.erase 后所有 shared_ptr 释放时析构, 晚于 unload 回调)
+    // 注意: 句柄 (statusItemHandles/panelHandles/infoSectionHandles/subHandles)
+    // 不在此释放 —— 插件的 unload 回调 (detachAll 之后、实例析构之前调用)
+    // 可能主动反注册 (unregister_status_item 等), 句柄必须存活到实例析构;
+    // 由 ~ClientPluginInstance 统一释放 (实例在 plugins_.erase 后所有
+    // shared_ptr 释放时析构, 晚于 unload 回调)
     if (!keepInfo) {
         // 彻底清理: 注册信息随实例释放 (unload/shutdown)
         inst->statusItemRegs.clear();
         inst->panelRegs.clear();
+        inst->infoSectionRegs.clear();
         inst->commandRegs.clear();
         inst->subscriptions.clear();
     }
@@ -1342,6 +1393,63 @@ void xx_cunregister_panel(const AgentxxClientHost* host, AgentxxPanel* panel) {
     XX_PLUGIN_CATCH_END_VOID()
 }
 
+// ---- Info 栏段落 ----
+
+AgentxxInfoSection* xx_cregister_info_section(
+    const AgentxxClientHost* host,
+    AgentxxPluginStringView  id,
+    AgentxxPluginStringView  props_json
+) {
+    XX_PLUGIN_CATCH_BEGIN
+    auto mgr  = clientMgrOf(host);
+    auto inst = clientInstOf(host);
+    if (!mgr || !inst) {
+        return nullptr;
+    }
+    std::string idStr{id.data ? id.data : "", id.size};
+    std::string props{props_json.data ? props_json.data : "", props_json.size};
+    if (idStr.empty()) {
+        return nullptr;
+    }
+    return clientIoCallSync<AgentxxInfoSection*>(mgr, [&]() -> AgentxxInfoSection* {
+        return static_cast<AgentxxInfoSection*>(
+            mgr->registerInfoSection(inst, idStr.c_str(), props.c_str())
+        );
+    });
+    XX_PLUGIN_CATCH_END(nullptr)
+}
+
+int xx_cupdate_info_section(
+    const AgentxxClientHost* host,
+    AgentxxInfoSection*      section,
+    AgentxxPluginStringView  items_json
+) {
+    XX_PLUGIN_CATCH_BEGIN
+    auto mgr  = clientMgrOf(host);
+    auto inst = clientInstOf(host);
+    if (!mgr || !inst || !section) {
+        return -1;
+    }
+    std::string items{items_json.data ? items_json.data : "", items_json.size};
+    return clientIoCallSync<int>(mgr, [&]() -> int {
+        return mgr->updateInfoSection(inst, section, items.c_str());
+    });
+    XX_PLUGIN_CATCH_END(-1)
+}
+
+void xx_cunregister_info_section(const AgentxxClientHost* host, AgentxxInfoSection* section) {
+    XX_PLUGIN_CATCH_BEGIN
+    auto mgr  = clientMgrOf(host);
+    auto inst = clientInstOf(host);
+    if (!mgr || !inst || !section) {
+        return;
+    }
+    clientIoCallSyncVoid(mgr, [&]() {
+        mgr->unregisterInfoSection(inst, section);
+    });
+    XX_PLUGIN_CATCH_END_VOID()
+}
+
 // ---- 命令 ----
 
 int xx_cregister_command(
@@ -1550,6 +1658,9 @@ const AgentxxClientHostVtable g_clientHostVtable = {
     /* register_panel */ xx_cregister_panel,
     /* update_panel */ xx_cupdate_panel,
     /* unregister_panel */ xx_cunregister_panel,
+    /* register_info_section */ xx_cregister_info_section,
+    /* update_info_section */ xx_cupdate_info_section,
+    /* unregister_info_section */ xx_cunregister_info_section,
     /* register_command */ xx_cregister_command,
     /* unregister_command */ xx_cunregister_command,
     /* show_toast */ xx_cshow_toast,
@@ -1832,6 +1943,130 @@ void ClientPluginManager::unregisterPanel(ClientPluginInstance* inst, void* pane
     );
     if (uiAdapter_) {
         uiAdapter_->onPanelRemoved(h->id);
+    }
+    h->inst = nullptr;
+}
+
+void* ClientPluginManager::registerInfoSection(
+    ClientPluginInstance* inst,
+    const char*           id,
+    const char*           props_json
+) {
+    if (!inst) {
+        return nullptr;
+    }
+    if (uiAdapter_ && !(uiAdapter_->uiCaps() & AGENTXX_UI_CAP_INFO_SECTION)) {
+        XX_LOGW("[client_plugin] info section `{}` rejected: UI has no INFO_SECTION cap", id);
+        return nullptr;
+    }
+    {
+        std::lock_guard<std::mutex> lock(uiMutex_);
+        for (const auto& s : uiRegistry_->infoSections) {
+            if (s.id == id) {
+                XX_LOGW("[client_plugin] info section id `{}` already registered", id);
+                return nullptr;
+            }
+        }
+    }
+    neograph::json props;
+    std::string    title;
+    try {
+        props = neograph::json::parse(props_json ? props_json : "{}");
+        title = jsonStr(props, "title");
+    } catch (...) {
+        title.clear();
+    }
+
+    auto handle    = std::make_shared<AgentxxInfoSection>();
+    handle->inst   = inst;
+    handle->id     = id;
+    handle->plugin = inst->name;
+
+    ClientInfoSection reg;
+    reg.plugin = inst->name;
+    reg.id     = handle->id;
+    reg.title  = title;
+    {
+        std::lock_guard<std::mutex> lock(uiMutex_);
+        auto                        cur = std::make_shared<ClientUiRegistry>(*uiRegistry_);
+        cur->infoSections.push_back(reg);
+        uiRegistry_ = std::move(cur);
+    }
+    inst->infoSectionRegs.push_back(std::move(reg));
+    inst->infoSectionHandles.push_back(handle);
+    if (uiAdapter_) {
+        uiAdapter_->onInfoSectionRegistered(handle->id, props);
+    }
+    return handle.get();
+}
+
+int ClientPluginManager::updateInfoSection(
+    ClientPluginInstance* inst,
+    void*                 section,
+    const char*           items_json
+) {
+    auto h = static_cast<AgentxxInfoSection*>(section);
+    if (!inst || !h) {
+        return -1;
+    }
+    neograph::json items = neograph::json::array();
+    try {
+        auto j = neograph::json::parse(items_json ? items_json : "{}");
+        if (j.contains("items") && j["items"].is_array()) {
+            items = j["items"];
+        }
+    } catch (...) {
+        return -1;
+    }
+    {
+        std::lock_guard<std::mutex> lock(uiMutex_);
+        auto                        cur = std::make_shared<ClientUiRegistry>(*uiRegistry_);
+        for (auto& s : cur->infoSections) {
+            if (s.id == h->id) {
+                s.items = items;
+                break;
+            }
+        }
+        uiRegistry_ = std::move(cur);
+    }
+    for (auto& s : inst->infoSectionRegs) {
+        if (s.id == h->id) {
+            s.items = items;
+            break;
+        }
+    }
+    neograph::json payload = neograph::json::object();
+    payload["items"]       = items;
+    if (uiAdapter_) {
+        uiAdapter_->onInfoSectionUpdated(h->id, payload);
+    }
+    return 0;
+}
+
+void ClientPluginManager::unregisterInfoSection(ClientPluginInstance* inst, void* section) {
+    auto h = static_cast<AgentxxInfoSection*>(section);
+    if (!inst || !h) {
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(uiMutex_);
+        auto                        cur = std::make_shared<ClientUiRegistry>(*uiRegistry_);
+        auto&                       vec = cur->infoSections;
+        for (auto it = vec.begin(); it != vec.end(); ++it) {
+            if (it->id == h->id) {
+                vec.erase(it);
+                break;
+            }
+        }
+        uiRegistry_ = std::move(cur);
+    }
+    auto& regs = inst->infoSectionRegs;
+    regs.erase(
+        std::remove_if(regs.begin(), regs.end(), [&](const auto& s) { return s.id == h->id; }),
+        regs.end()
+    );
+    if (uiAdapter_) {
+        uiAdapter_->onInfoSectionRemoved(h->id);
     }
     h->inst = nullptr;
 }

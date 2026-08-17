@@ -39,6 +39,16 @@ struct ClientPanel {
     neograph::json  items = neograph::json::array(); ///< {"items":[{...}]} 内容
 };
 
+/// Info 栏段落注册记录 (UI 注册表快照条目)
+/// - 渲染在侧边栏 Info tab 内 (段落标题 + items, 与面板 items schema 一致),
+///   供插件把摘要/状态信息注入 Info 栏 (如 codegraph 索引状态、系统资源占用)
+struct ClientInfoSection {
+    std::string    plugin; ///< 所属插件名
+    std::string    id;     ///< 全局唯一 id
+    std::string    title;  ///< 段落标题 (空 = 无标题)
+    neograph::json items = neograph::json::array(); ///< {"items":[{...}]} 内容
+};
+
 /// 命令注册记录
 struct ClientCommand {
     std::string plugin; ///< 所属插件名
@@ -50,9 +60,10 @@ struct ClientCommand {
 
 /// UI 注册表快照 (UI 线程渲染读取; COW shared_ptr 语义)
 struct ClientUiRegistry {
-    std::vector<ClientStatusItem> statusItems;
-    std::vector<ClientPanel>      panels;
-    std::vector<ClientCommand>    commands;
+    std::vector<ClientStatusItem>  statusItems;
+    std::vector<ClientPanel>       panels;
+    std::vector<ClientInfoSection> infoSections;
+    std::vector<ClientCommand>     commands;
 };
 
 /// client 插件实例 (宿主侧状态)
@@ -95,16 +106,18 @@ public:
     };
 
     /// 注册残留 (卸载时统一清理; 仅 io 线程)
-    /// - disable 时【完整注册信息】(statusItemRegs/panelRegs/commandRegs) 保留,
-    ///   enable 可恢复; 仅 unload/进程销毁时随实例释放
-    /// - 活跃句柄 (statusItemHandles/panelHandles/subHandles) 为宿主对象
-    ///   (id/plugin 等), enable 期间有效
-    std::vector<ClientStatusItem> statusItemRegs;  ///< 状态栏项注册信息 (disable 保留)
-    std::vector<ClientPanel>      panelRegs;       ///< 面板注册信息 (disable 保留)
-    std::vector<ClientCommand>    commandRegs;     ///< 命令注册信息 (disable 保留)
-    std::vector<Subscription>     subscriptions;   ///< 已订阅事件 (disable 保留)
+    /// - disable 时【完整注册信息】(statusItemRegs/panelRegs/infoSectionRegs/
+    ///   commandRegs) 保留, enable 可恢复; 仅 unload/进程销毁时随实例释放
+    /// - 活跃句柄 (statusItemHandles/panelHandles/infoSectionHandles/subHandles)
+    ///   为宿主对象 (id/plugin 等), enable 期间有效
+    std::vector<ClientStatusItem>  statusItemRegs;        ///< 状态栏项注册信息 (disable 保留)
+    std::vector<ClientPanel>       panelRegs;             ///< 面板注册信息 (disable 保留)
+    std::vector<ClientInfoSection> infoSectionRegs;       ///< Info 段落注册信息 (disable 保留)
+    std::vector<ClientCommand>     commandRegs;           ///< 命令注册信息 (disable 保留)
+    std::vector<Subscription>      subscriptions;         ///< 已订阅事件 (disable 保留)
     std::vector<std::shared_ptr<void>> statusItemHandles; ///< 状态栏项宿主句柄 (enable 期)
     std::vector<std::shared_ptr<void>> panelHandles;      ///< 面板宿主句柄 (enable 期)
+    std::vector<std::shared_ptr<void>> infoSectionHandles; ///< Info 段落宿主句柄 (enable 期)
     std::vector<std::shared_ptr<void>> subHandles;        ///< 订阅句柄保活
 
     /// 管理器弱引用 (host vtable 回调取用)
@@ -164,6 +177,7 @@ public:
         size_t                   inflight = 0;
         std::vector<std::string> statusItems;
         std::vector<std::string> panels;
+        std::vector<std::string> infoSections;
         std::vector<std::string> commands;
         std::vector<std::string> depends;
         std::vector<std::string> optionalDepends;
@@ -275,6 +289,11 @@ public:
     /// 更新面板内容; 返回 0 成功
     int   updatePanel(ClientPluginInstance* inst, void* panel, const char* items_json);
     void  unregisterPanel(ClientPluginInstance* inst, void* panel);
+    /// 注册 Info 栏段落; 返回宿主句柄 (nullptr = 宿主不支持或 id 冲突)
+    void* registerInfoSection(ClientPluginInstance* inst, const char* id, const char* props_json);
+    /// 更新 Info 栏段落内容; 返回 0 成功
+    int   updateInfoSection(ClientPluginInstance* inst, void* section, const char* items_json);
+    void  unregisterInfoSection(ClientPluginInstance* inst, void* section);
     /// 注册命令; 返回 0 成功 (名字冲突返回非 0)
     int   registerCommand(ClientPluginInstance* inst, const char* name, const char* description, char* (*exec)(void*, AgentxxPluginStringView, char**), void* ud);
     int   unregisterCommand(ClientPluginInstance* inst, const char* name);
@@ -372,6 +391,10 @@ public:
     virtual void onPanelRegistered(const std::string& /*id*/, const neograph::json& /*props*/) {}
     virtual void onPanelUpdated(const std::string& /*id*/, const neograph::json& /*items*/) {}
     virtual void onPanelRemoved(const std::string& /*id*/) {}
+    /// Info 栏段落注册/更新/移除 (props: {"title"}; items: {"items":[...]})
+    virtual void onInfoSectionRegistered(const std::string& /*id*/, const neograph::json& /*props*/) {}
+    virtual void onInfoSectionUpdated(const std::string& /*id*/, const neograph::json& /*items*/) {}
+    virtual void onInfoSectionRemoved(const std::string& /*id*/) {}
     /// toast 提示 (level: 0=info 1=warning 2=error)
     virtual void onToast(const std::string& /*text*/, int /*level*/) {}
     /// send 动作: 代发用户消息 (io 线程; 与用户输入同排队语义)

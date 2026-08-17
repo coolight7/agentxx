@@ -28,7 +28,8 @@ public:
         tui_(std::move(tui)) {}
 
     uint32_t uiCaps() const override {
-        return AGENTXX_UI_CAP_STATUS_ITEM | AGENTXX_UI_CAP_PANEL | AGENTXX_UI_CAP_TOAST;
+        return AGENTXX_UI_CAP_STATUS_ITEM | AGENTXX_UI_CAP_PANEL | AGENTXX_UI_CAP_TOAST
+               | AGENTXX_UI_CAP_INFO_SECTION;
     }
 
     // ---- 状态栏项 ----
@@ -85,6 +86,32 @@ public:
         tui->postToUi([tui, id]() {
             tui->removePluginPanelTab(id);
         });
+    }
+
+    // ---- Info 栏段落 (渲染进内置 Info tab; 每帧从注册表快照读取) ----
+    void onInfoSectionRegistered(
+        const std::string& /*id*/,
+        const neograph::json& /*props*/
+    ) override {
+        // 触发重绘即可, Info tab 渲染时从注册表快照读取段落
+        if (auto tui = tui_.lock()) {
+            tui->requestRedraw();
+        }
+    }
+
+    void onInfoSectionUpdated(
+        const std::string& /*id*/,
+        const neograph::json& /*items*/
+    ) override {
+        if (auto tui = tui_.lock()) {
+            tui->requestRedraw();
+        }
+    }
+
+    void onInfoSectionRemoved(const std::string& /*id*/) override {
+        if (auto tui = tui_.lock()) {
+            tui->requestRedraw();
+        }
     }
 
     // ---- toast ----
