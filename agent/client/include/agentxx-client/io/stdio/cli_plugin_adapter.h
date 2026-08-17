@@ -50,11 +50,9 @@ public:
         }
     }
 
-    bool sendPluginData(
-        const std::string& plugin,
-        const std::string& event,
-        const std::string& json
-    ) override {
+    bool
+        sendPluginData(const std::string& plugin, const std::string& event, const std::string& json)
+            override {
         auto io = io_.lock();
         return io ? io->sendPluginDataUp(plugin, event, json) : false;
     }

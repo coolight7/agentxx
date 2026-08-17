@@ -70,7 +70,8 @@ std::shared_ptr<neograph::Provider> ModelProviderRegistry::getProvider(std::stri
 }
 
 void ModelProviderRegistry::setProvider(
-    std::string_view name, std::shared_ptr<neograph::Provider> provider
+    std::string_view                    name,
+    std::shared_ptr<neograph::Provider> provider
 ) {
     // 未注册的模型名也允许注入 (注入后 getProvider 可直接命中缓存;
     // 但 getModelConfig 仍取默认配置, 调用方需自行保证一致性)

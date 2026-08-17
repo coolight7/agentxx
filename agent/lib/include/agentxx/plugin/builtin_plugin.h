@@ -31,10 +31,10 @@ extern "C" {
 
 /// 内置插件描述 (编译进 libagentxx 的插件; 静态数组, 进程生命周期有效)
 typedef struct AgentxxBuiltinPluginInfo {
-    const char*            name;     ///< 插件唯一名 (如 "example_plugin"); NULL = 空表占位
+    const char* name; ///< 插件唯一名 (如 "example_plugin"); NULL = 空表占位
     AgentxxPluginGetInfoFn get_info; ///< 可空 (加载前元信息校验, 与 dlsym 可选符号同语义)
-    AgentxxPluginEntryFn   entry;    ///< 必需 (插件入口, 与 agentxx_plugin_entry 同契约)
-    AgentxxPluginUnloadFn  unload;   ///< 可空 (卸载回调, 与 agentxx_plugin_unload 同契约)
+    AgentxxPluginEntryFn  entry;  ///< 必需 (插件入口, 与 agentxx_plugin_entry 同契约)
+    AgentxxPluginUnloadFn unload; ///< 可空 (卸载回调, 与 agentxx_plugin_unload 同契约)
 } AgentxxBuiltinPluginInfo;
 
 /// 查询全部内置插件 (libagentxx 实现; 返回静态数组, count 输出条目数)

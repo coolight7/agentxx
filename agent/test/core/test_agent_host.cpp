@@ -1,5 +1,5 @@
-#include "test_agent.h"
 #include "test_agent_host.h"
+#include "test_agent.h"
 
 #include "agentxx/agent/agent_host.h"
 #include "agentxx/agent/code_agent.h"
@@ -32,7 +32,7 @@ std::shared_ptr<agentxx::agent::AgentConfig> makeSimConfig(std::string_view base
     cfg->model.modelName     = "test-sim";
     cfg->prompt.systemPrompt = "You are a helpful assistant.";
     // 测试内不触发权限询问
-    cfg->permissionMode      = agentxx::agent::PermissionMode::Pass;
+    cfg->permissionMode = agentxx::agent::PermissionMode::Pass;
     return cfg;
 }
 
@@ -58,9 +58,9 @@ asio::awaitable<void> test_host_registry() {
     agentxx::agent::AgentRegistry reg;
 
     auto makeNode = [](std::string id, std::string parent) {
-        auto n             = std::make_shared<agentxx::agent::AgentNode>();
-        n->agentId         = id;
-        n->parentAgentId   = parent;
+        auto n           = std::make_shared<agentxx::agent::AgentNode>();
+        n->agentId       = id;
+        n->parentAgentId = parent;
         return n;
     };
 
@@ -101,15 +101,15 @@ asio::awaitable<void> test_host_spawn_e2e() {
     g_da_sim_tool_calls       = neograph::json::array();
     g_da_sim_delay_ms         = 0;
 
-    auto io = std::make_shared<asio::io_context>();
+    auto                              io = std::make_shared<asio::io_context>();
     agentxx::agent::AgentHost::Config hostCfg;
-    hostCfg.ioCtx = io;
-    auto host     = agentxx::agent::AgentHost::create(hostCfg);
+    hostCfg.ioCtx                                   = io;
+    auto                                       host = agentxx::agent::AgentHost::create(hostCfg);
     std::shared_ptr<agentxx::agent::CodeAgent> agent;
     std::expected<agentxx::events::RespSubagentResult, std::string> resp;
-    std::atomic<int> progressCount{0};
-    std::atomic<int> doneCount{0};
-    std::atomic<bool> finished{false};
+    std::atomic<int>                                                progressCount{0};
+    std::atomic<int>                                                doneCount{0};
+    std::atomic<bool>                                               finished{false};
 
     host->hostBus()
         ->get<agentxx::events::EventHostProgress>(agentxx::events::HostTopic::AgentProgress)
@@ -134,25 +134,26 @@ asio::awaitable<void> test_host_spawn_e2e() {
             host->attachRoot(agent);
             // 父会话: 供子代理继承 bus (HIL 冒泡路径)
             auto parentSession = agent->getContext()->getSession("parent-session");
-            parentSession->bus = std::make_shared<agentxx::middleware::EventBus>(
-                co_await asio::this_coro::executor
-            );
+            parentSession->bus
+                = std::make_shared<agentxx::middleware::EventBus>(co_await asio::this_coro::executor
+                );
 
-            resp = co_await agent->getContext()->bus->request<
-                agentxx::events::ReqSubagentStart,
-                agentxx::events::RespSubagentResult>(
-                agentxx::events::Topic::Subagent,
-                agentxx::events::ReqSubagentStart{
-                    .parentAgentName = "root",
-                    .parentThreadId  = "parent-session",
-                    .subagentName    = "subagent_task",
-                    .systemPrompt    = "You are a worker.",
-                    .message         = "do the thing",
-                    .resultId        = "call_1",
-                    .cancelToken     = nullptr,
-                },
-                std::chrono::seconds(30)
-            );
+            resp = co_await agent->getContext()
+                       ->bus->request<
+                           agentxx::events::ReqSubagentStart,
+                           agentxx::events::RespSubagentResult>(
+                           agentxx::events::Topic::Subagent,
+                           agentxx::events::ReqSubagentStart{
+                               .parentAgentName = "root",
+                               .parentThreadId  = "parent-session",
+                               .subagentName    = "subagent_task",
+                               .systemPrompt    = "You are a worker.",
+                               .message         = "do the thing",
+                               .resultId        = "call_1",
+                               .cancelToken     = nullptr,
+                           },
+                           std::chrono::seconds(30)
+                       );
             finished = true;
         },
         asio::detached
@@ -207,19 +208,19 @@ asio::awaitable<void> test_host_spawn_same_context() {
     g_da_sim_last_request     = neograph::json::object();
     g_da_sim_requests.clear();
 
-    auto io = std::make_shared<asio::io_context>();
+    auto                              io = std::make_shared<asio::io_context>();
     agentxx::agent::AgentHost::Config hostCfg;
     hostCfg.ioCtx = io;
     auto host     = agentxx::agent::AgentHost::create(hostCfg);
     std::expected<agentxx::events::RespSubagentResult, std::string> sameCtxResp;
     std::expected<agentxx::events::RespSubagentResult, std::string> normalResp;
-    std::atomic<bool> finished{false};
+    std::atomic<bool>                                               finished{false};
 
     // 透传的结构化消息前缀 (模拟压缩场景: 父 system + 历史消息)
     const neograph::json prefix = neograph::json::array({
-        {{"role", "system"}, {"content", "PARENT SYSTEM PROMPT"}},
-        {{"role", "user"}, {"content", "user old msg"}},
-        {{"role", "assistant"}, {"content", "assistant old reply"}},
+        {{"role", "system"},    {"content", "PARENT SYSTEM PROMPT"}},
+        {{"role", "user"},      {"content", "user old msg"}        },
+        {{"role", "assistant"}, {"content", "assistant old reply"} },
     });
 
     asio::co_spawn(
@@ -231,9 +232,9 @@ asio::awaitable<void> test_host_spawn_same_context() {
             // 父会话: 显式选择模型 (模拟用户运行时切换, 与 config 默认不同) + 供子代理继承 bus
             auto parentSession = agent->getContext()->getSession("parent-session");
             parentSession->setModelName("parent-model");
-            parentSession->bus = std::make_shared<agentxx::middleware::EventBus>(
-                co_await asio::this_coro::executor
-            );
+            parentSession->bus
+                = std::make_shared<agentxx::middleware::EventBus>(co_await asio::this_coro::executor
+                );
 
             // [workaround] 聚合提取为具名变量, 绕过 g++ 16.1 ICE (gimplify.cc:8406)
             agentxx::events::ReqSubagentStart sameCtxReq{
@@ -245,17 +246,18 @@ asio::awaitable<void> test_host_spawn_same_context() {
                 // 结构化消息透传 (可含 system, 原样透传)
                 .messages = prefix,
                 // 同上下文: 运行在父线程, 共享上下文前缀
-                .threadId = "parent-session",
-                .resultId = "call_same_ctx",
+                .threadId    = "parent-session",
+                .resultId    = "call_same_ctx",
                 .cancelToken = nullptr,
             };
-            sameCtxResp = co_await agent->getContext()->bus->request<
-                agentxx::events::ReqSubagentStart,
-                agentxx::events::RespSubagentResult>(
-                agentxx::events::Topic::Subagent,
-                sameCtxReq,
-                std::chrono::seconds(30)
-            );
+            sameCtxResp = co_await agent->getContext()
+                              ->bus->request<
+                                  agentxx::events::ReqSubagentStart,
+                                  agentxx::events::RespSubagentResult>(
+                                  agentxx::events::Topic::Subagent,
+                                  sameCtxReq,
+                                  std::chrono::seconds(30)
+                              );
 
             // 对照: 默认模式 (无 messages/threadId) → 独立线程 + config 默认模型
             agentxx::events::ReqSubagentStart normalReq{
@@ -269,13 +271,14 @@ asio::awaitable<void> test_host_spawn_same_context() {
                 .resultId        = "call_normal",
                 .cancelToken     = nullptr,
             };
-            normalResp = co_await agent->getContext()->bus->request<
-                agentxx::events::ReqSubagentStart,
-                agentxx::events::RespSubagentResult>(
-                agentxx::events::Topic::Subagent,
-                normalReq,
-                std::chrono::seconds(30)
-            );
+            normalResp = co_await agent->getContext()
+                             ->bus->request<
+                                 agentxx::events::ReqSubagentStart,
+                                 agentxx::events::RespSubagentResult>(
+                                 agentxx::events::Topic::Subagent,
+                                 normalReq,
+                                 std::chrono::seconds(30)
+                             );
             finished = true;
         },
         asio::detached
@@ -295,10 +298,7 @@ asio::awaitable<void> test_host_spawn_same_context() {
     const auto& normalReqBody  = g_da_sim_requests[1];
 
     // ② 模型强制: 同上下文请求使用父会话当前模型 (parent-model), 而非 config 默认
-    XX_TEST_EXPECT_EQ(
-        sameCtxReqBody.value("model", std::string{}),
-        std::string{"parent-model"}
-    );
+    XX_TEST_EXPECT_EQ(sameCtxReqBody.value("model", std::string{}), std::string{"parent-model"});
 
     // ③ 消息前缀: system 由引擎统一替换为 (子 config 拷贝自父的) systemPrompt,
     //    与父会话请求前缀一致 (这正是 KV cache 前缀一致的关键);
@@ -327,10 +327,7 @@ asio::awaitable<void> test_host_spawn_same_context() {
             );
         }
         // 末尾: repairMessages 补齐的 user 提示 (与父会话同规则)
-        XX_TEST_EXPECT_EQ(
-            reqMsgs.back().value("role", std::string{}),
-            std::string{"user"}
-        );
+        XX_TEST_EXPECT_EQ(reqMsgs.back().value("role", std::string{}), std::string{"user"});
         XX_TEST_EXPECT_EQ(
             reqMsgs.back().value("content", std::string{}),
             std::string{"[Please continue]"}
@@ -378,10 +375,10 @@ asio::awaitable<void> test_host_spawn_tool_policy() {
     g_da_sim_delay_ms         = 0;
     g_da_sim_requests.clear();
 
-    auto io = std::make_shared<asio::io_context>();
+    auto                              io = std::make_shared<asio::io_context>();
     agentxx::agent::AgentHost::Config hostCfg;
-    hostCfg.ioCtx = io;
-    auto host     = agentxx::agent::AgentHost::create(hostCfg);
+    hostCfg.ioCtx          = io;
+    auto              host = agentxx::agent::AgentHost::create(hostCfg);
     std::atomic<bool> finished{false};
 
     asio::co_spawn(
@@ -392,29 +389,30 @@ asio::awaitable<void> test_host_spawn_tool_policy() {
             host->attachRoot(agent);
 
             // 顺序派生 4 次 (不同工具策略), 请求体按到达顺序记录
-            auto spawnOne = [&](std::optional<neograph::json> tools, std::string tag)
-                -> asio::awaitable<void> {
+            auto spawnOne = [&](std::optional<neograph::json> tools,
+                                std::string                   tag) -> asio::awaitable<void> {
                 // [workaround] 聚合提取为具名变量, 绕过 g++ 16.1 ICE
                 agentxx::events::ReqSubagentStart req{
-                    .parentAgentName = "root",
-                    .parentThreadId  = "parent-session",
-                    .subagentName    = "subagent_task",
-                    .systemPrompt    = "You are a worker.",
-                    .message         = "do " + tag,
-                    .messages        = std::nullopt,
-                    .threadId        = "",
-                    .tools           = tools,
+                    .parentAgentName     = "root",
+                    .parentThreadId      = "parent-session",
+                    .subagentName        = "subagent_task",
+                    .systemPrompt        = "You are a worker.",
+                    .message             = "do " + tag,
+                    .messages            = std::nullopt,
+                    .threadId            = "",
+                    .tools               = tools,
                     .enableSummarization = std::nullopt,
-                    .resultId        = "call_" + tag,
-                    .cancelToken     = nullptr,
+                    .resultId            = "call_" + tag,
+                    .cancelToken         = nullptr,
                 };
-                auto resp = co_await agent->getContext()->bus->request<
-                    agentxx::events::ReqSubagentStart,
-                    agentxx::events::RespSubagentResult>(
-                    agentxx::events::Topic::Subagent,
-                    req,
-                    std::chrono::seconds(30)
-                );
+                auto resp = co_await agent->getContext()
+                                ->bus->request<
+                                    agentxx::events::ReqSubagentStart,
+                                    agentxx::events::RespSubagentResult>(
+                                    agentxx::events::Topic::Subagent,
+                                    req,
+                                    std::chrono::seconds(30)
+                                );
                 if (resp.has_value() && resp->hasError) {
                     XX_LOGE("spawn tool-policy `{}` failed: {}", tag, resp->errorMessage);
                 }
@@ -423,10 +421,7 @@ asio::awaitable<void> test_host_spawn_tool_policy() {
             // ① 无工具
             co_await spawnOne(neograph::json::array(), "none");
             // ② 自定义白名单
-            co_await spawnOne(
-                neograph::json::array({"agentxx_share_store"}),
-                "custom"
-            );
+            co_await spawnOne(neograph::json::array({"agentxx_share_store"}), "custom");
             // ③ 全量继承父工具
             co_await spawnOne(neograph::json::array({"*"}), "inherit");
             // ④ 缺省 (子代理默认全量)
@@ -479,9 +474,7 @@ asio::awaitable<void> test_host_spawn_tool_policy() {
         XX_TEST_EXPECT_TRUE(names.size() >= parentToolNames.size());
         // 父工具全部保留
         for (const auto& name : parentToolNames) {
-            XX_TEST_EXPECT_TRUE(
-                std::find(names.begin(), names.end(), name) != names.end()
-            );
+            XX_TEST_EXPECT_TRUE(std::find(names.begin(), names.end(), name) != names.end());
         }
     }
     // ④ 缺省: 与继承一致 (无 MCP/插件差异时等于父工具集)
@@ -489,9 +482,7 @@ asio::awaitable<void> test_host_spawn_tool_policy() {
         const auto& names = toolsOf(g_da_sim_requests[3]);
         XX_TEST_EXPECT_TRUE(names.size() >= parentToolNames.size());
         for (const auto& name : parentToolNames) {
-            XX_TEST_EXPECT_TRUE(
-                std::find(names.begin(), names.end(), name) != names.end()
-            );
+            XX_TEST_EXPECT_TRUE(std::find(names.begin(), names.end(), name) != names.end());
         }
     }
 
@@ -516,14 +507,14 @@ asio::awaitable<void> test_subagent_summarization_switch() {
     {
         auto cfg                 = makeSimConfig(baseUrl);
         cfg->enableSummarization = false;
-        auto agent = std::make_shared<agentxx::agent::CodeAgent>(cfg);
+        auto agent               = std::make_shared<agentxx::agent::CodeAgent>(cfg);
         co_await agent->init();
         XX_TEST_EXPECT_TRUE(agent->getContext()->summarizationMiddleware == nullptr);
     }
     // ② 缺省 (true) → 存在
     {
-        auto cfg    = makeSimConfig(baseUrl);
-        auto agent  = std::make_shared<agentxx::agent::CodeAgent>(cfg);
+        auto cfg   = makeSimConfig(baseUrl);
+        auto agent = std::make_shared<agentxx::agent::CodeAgent>(cfg);
         co_await agent->init();
         XX_TEST_EXPECT_TRUE(agent->getContext()->summarizationMiddleware != nullptr);
     }
@@ -531,7 +522,7 @@ asio::awaitable<void> test_subagent_summarization_switch() {
     {
         auto cfg                 = makeSimConfig(baseUrl);
         cfg->enableSummarization = true;
-        auto agent = std::make_shared<agentxx::agent::CodeAgent>(cfg);
+        auto agent               = std::make_shared<agentxx::agent::CodeAgent>(cfg);
         co_await agent->init();
         XX_TEST_EXPECT_TRUE(agent->getContext()->summarizationMiddleware != nullptr);
     }
@@ -548,13 +539,13 @@ asio::awaitable<void> test_host_spawn_depth_limit() {
     g_da_sim_response_content = "should not run";
     g_da_sim_tool_calls       = neograph::json::array();
 
-    auto io = std::make_shared<asio::io_context>();
+    auto                              io = std::make_shared<asio::io_context>();
     agentxx::agent::AgentHost::Config hostCfg;
     hostCfg.ioCtx    = io;
     hostCfg.maxDepth = 0;
     auto host        = agentxx::agent::AgentHost::create(hostCfg);
     std::expected<agentxx::events::RespHostSpawn, std::string> resp;
-    std::atomic<bool> finished{false};
+    std::atomic<bool>                                          finished{false};
 
     asio::co_spawn(
         *io,
@@ -562,20 +553,19 @@ asio::awaitable<void> test_host_spawn_depth_limit() {
             auto agent = std::make_shared<agentxx::agent::CodeAgent>(cfg);
             co_await agent->init();
             host->attachRoot(agent);
-            resp = co_await host->hostBus()->request<
-                agentxx::events::ReqHostSpawn,
-                agentxx::events::RespHostSpawn>(
-                agentxx::events::HostTopic::AgentSpawn,
-                agentxx::events::ReqHostSpawn{
-                    .parentAgentId = "root",
-                    .name          = "subagent_task",
-                    .systemPrompt  = "",
-                    .message       = "hi",
-                    .modelName     = "",
-                    .cancelToken   = nullptr,
-                },
-                std::chrono::seconds(5)
-            );
+            resp = co_await host->hostBus()
+                       ->request<agentxx::events::ReqHostSpawn, agentxx::events::RespHostSpawn>(
+                           agentxx::events::HostTopic::AgentSpawn,
+                           agentxx::events::ReqHostSpawn{
+                               .parentAgentId = "root",
+                               .name          = "subagent_task",
+                               .systemPrompt  = "",
+                               .message       = "hi",
+                               .modelName     = "",
+                               .cancelToken   = nullptr,
+                           },
+                           std::chrono::seconds(5)
+                       );
             finished = true;
         },
         asio::detached
@@ -605,16 +595,16 @@ asio::awaitable<void> test_host_spawn_concurrent_limit() {
 
     g_da_sim_response_content = "concurrent result";
     g_da_sim_tool_calls       = neograph::json::array();
-    g_da_sim_delay_ms         = 300; // 拉长首个子代理运行窗口, 让第二个请求并发到达
+    g_da_sim_delay_ms = 300; // 拉长首个子代理运行窗口, 让第二个请求并发到达
 
-    auto io = std::make_shared<asio::io_context>();
+    auto                              io = std::make_shared<asio::io_context>();
     agentxx::agent::AgentHost::Config hostCfg;
     hostCfg.ioCtx                  = io;
     hostCfg.maxConcurrentSubagents = 1;
-    auto host                      = agentxx::agent::AgentHost::create(hostCfg);
-    std::atomic<int> okCount{0};
-    std::atomic<int> errCount{0};
-    std::atomic<int> finishedCount{0};
+    auto              host         = agentxx::agent::AgentHost::create(hostCfg);
+    std::atomic<int>  okCount{0};
+    std::atomic<int>  errCount{0};
+    std::atomic<int>  finishedCount{0};
     std::atomic<bool> allDone{false};
 
     asio::co_spawn(
@@ -625,20 +615,20 @@ asio::awaitable<void> test_host_spawn_concurrent_limit() {
             host->attachRoot(agent);
 
             auto spawnOne = [&](std::string tag) -> asio::awaitable<void> {
-                auto r = co_await host->hostBus()->request<
-                    agentxx::events::ReqHostSpawn,
-                    agentxx::events::RespHostSpawn>(
-                    agentxx::events::HostTopic::AgentSpawn,
-                    agentxx::events::ReqHostSpawn{
-                        .parentAgentId = "root",
-                        .name          = "subagent_task",
-                        .systemPrompt  = "",
-                        .message       = tag,
-                        .modelName     = "",
-                        .cancelToken   = nullptr,
-                    },
-                    std::chrono::seconds(10)
-                );
+                auto r
+                    = co_await host->hostBus()
+                          ->request<agentxx::events::ReqHostSpawn, agentxx::events::RespHostSpawn>(
+                              agentxx::events::HostTopic::AgentSpawn,
+                              agentxx::events::ReqHostSpawn{
+                                  .parentAgentId = "root",
+                                  .name          = "subagent_task",
+                                  .systemPrompt  = "",
+                                  .message       = tag,
+                                  .modelName     = "",
+                                  .cancelToken   = nullptr,
+                              },
+                              std::chrono::seconds(10)
+                          );
                 if (r.has_value() && !r->hasError) {
                     okCount++;
                 } else {
@@ -681,12 +671,12 @@ asio::awaitable<void> test_host_spawn_batch() {
     g_da_sim_tool_calls       = neograph::json::array();
     g_da_sim_delay_ms         = 0;
 
-    auto io = std::make_shared<asio::io_context>();
+    auto                              io = std::make_shared<asio::io_context>();
     agentxx::agent::AgentHost::Config hostCfg;
     hostCfg.ioCtx = io;
     auto host     = agentxx::agent::AgentHost::create(hostCfg);
     std::expected<agentxx::events::RespSubagentBatch, std::string> resp;
-    std::atomic<bool> finished{false};
+    std::atomic<bool>                                              finished{false};
 
     asio::co_spawn(
         *io,
@@ -717,13 +707,14 @@ asio::awaitable<void> test_host_spawn_batch() {
                     },
                 },
             };
-            resp = co_await agent->getContext()->bus->request<
-                agentxx::events::ReqSubagentBatch,
-                agentxx::events::RespSubagentBatch>(
-                agentxx::events::Topic::SubagentBatch,
-                batchReq,
-                std::chrono::seconds(30)
-            );
+            resp = co_await agent->getContext()
+                       ->bus->request<
+                           agentxx::events::ReqSubagentBatch,
+                           agentxx::events::RespSubagentBatch>(
+                           agentxx::events::Topic::SubagentBatch,
+                           batchReq,
+                           std::chrono::seconds(30)
+                       );
             finished = true;
         },
         asio::detached
@@ -749,15 +740,15 @@ asio::awaitable<void> test_host_spawn_batch() {
 
 /// 验证: 跨 agent 消息 (mailbox 路由) 与未注册目标
 asio::awaitable<void> test_host_mailbox_message() {
-    auto io = std::make_shared<asio::io_context>();
+    auto                              io = std::make_shared<asio::io_context>();
     agentxx::agent::AgentHost::Config hostCfg;
     hostCfg.ioCtx = io;
     auto host     = agentxx::agent::AgentHost::create(hostCfg);
 
     host->setMailbox(
         "worker",
-        [](const agentxx::events::ReqHostMessage& req)
-            -> asio::awaitable<agentxx::events::RespHostMessage> {
+        [](const agentxx::events::ReqHostMessage& req
+        ) -> asio::awaitable<agentxx::events::RespHostMessage> {
             co_return agentxx::events::RespHostMessage{
                 .content = "echo: " + req.message,
             };
@@ -766,35 +757,35 @@ asio::awaitable<void> test_host_mailbox_message() {
 
     std::expected<agentxx::events::RespHostMessage, std::string> okResp;
     std::expected<agentxx::events::RespHostMessage, std::string> missResp;
-    std::atomic<bool> finished{false};
+    std::atomic<bool>                                            finished{false};
 
     asio::co_spawn(
         *io,
         [&]() -> asio::awaitable<void> {
-            okResp = co_await host->hostBus()->request<
-                agentxx::events::ReqHostMessage,
-                agentxx::events::RespHostMessage>(
-                agentxx::events::HostTopic::AgentMessage,
-                agentxx::events::ReqHostMessage{
-                    .fromAgentId = "root",
-                    .toAgentId   = "worker",
-                    .message     = "hello",
-                    .cancelToken = nullptr,
-                },
-                std::chrono::seconds(5)
-            );
-            missResp = co_await host->hostBus()->request<
-                agentxx::events::ReqHostMessage,
-                agentxx::events::RespHostMessage>(
-                agentxx::events::HostTopic::AgentMessage,
-                agentxx::events::ReqHostMessage{
-                    .fromAgentId = "root",
-                    .toAgentId   = "nobody",
-                    .message     = "hi",
-                    .cancelToken = nullptr,
-                },
-                std::chrono::seconds(5)
-            );
+            okResp
+                = co_await host->hostBus()
+                      ->request<agentxx::events::ReqHostMessage, agentxx::events::RespHostMessage>(
+                          agentxx::events::HostTopic::AgentMessage,
+                          agentxx::events::ReqHostMessage{
+                              .fromAgentId = "root",
+                              .toAgentId   = "worker",
+                              .message     = "hello",
+                              .cancelToken = nullptr,
+                          },
+                          std::chrono::seconds(5)
+                      );
+            missResp
+                = co_await host->hostBus()
+                      ->request<agentxx::events::ReqHostMessage, agentxx::events::RespHostMessage>(
+                          agentxx::events::HostTopic::AgentMessage,
+                          agentxx::events::ReqHostMessage{
+                              .fromAgentId = "root",
+                              .toAgentId   = "nobody",
+                              .message     = "hi",
+                              .cancelToken = nullptr,
+                          },
+                          std::chrono::seconds(5)
+                      );
             finished = true;
         },
         asio::detached
@@ -827,9 +818,9 @@ asio::awaitable<void> test_host_remote_a2a() {
 
     auto io = std::make_shared<asio::io_context>();
     std::expected<agentxx::events::RespHostMessage, std::string> resp;
-    std::atomic<bool> finished{false};
-    std::thread serverThread;
-    std::shared_ptr<agentxx::server::A2aServer> a2aServer;
+    std::atomic<bool>                                            finished{false};
+    std::thread                                                  serverThread;
+    std::shared_ptr<agentxx::server::A2aServer>                  a2aServer;
 
     asio::co_spawn(
         *io,
@@ -843,7 +834,9 @@ asio::awaitable<void> test_host_remote_a2a() {
             scfg.httpConfig.port    = 0;
             scfg.serverName         = "remote-worker";
             a2aServer = std::make_shared<agentxx::server::A2aServer>(remoteAgent, std::move(scfg));
-            serverThread            = std::thread([s = a2aServer]() { s->start(); });
+            serverThread = std::thread([s = a2aServer]() {
+                s->start();
+            });
             // 协作式等待端口就绪 (不阻塞 io 事件循环)
             while (a2aServer->port() == 0 && !a2aServer->isStopped()) {
                 asio::steady_timer t(co_await asio::this_coro::executor);
@@ -852,30 +845,29 @@ asio::awaitable<void> test_host_remote_a2a() {
             }
 
             agentxx::server::A2aClient::Config cc;
-            cc.baseUrl = "http://127.0.0.1:" + std::to_string(a2aServer->port());
+            cc.baseUrl  = "http://127.0.0.1:" + std::to_string(a2aServer->port());
             auto client = std::make_shared<agentxx::server::A2aClient>(std::move(cc));
 
             // 宿主 + 根 agent + 远程注册
             agentxx::agent::AgentHost::Config hostCfg;
-            hostCfg.ioCtx = io;
-            auto host     = agentxx::agent::AgentHost::create(hostCfg);
+            hostCfg.ioCtx  = io;
+            auto host      = agentxx::agent::AgentHost::create(hostCfg);
             auto rootAgent = std::make_shared<agentxx::agent::CodeAgent>(cfg);
             co_await rootAgent->init();
             host->attachRoot(rootAgent);
             host->registerRemoteAgent("remote-worker", client);
 
-            resp = co_await host->hostBus()->request<
-                agentxx::events::ReqHostMessage,
-                agentxx::events::RespHostMessage>(
-                agentxx::events::HostTopic::AgentMessage,
-                agentxx::events::ReqHostMessage{
-                    .fromAgentId = "root",
-                    .toAgentId   = "remote-worker",
-                    .message     = "hi remote",
-                    .cancelToken = nullptr,
-                },
-                std::chrono::seconds(60)
-            );
+            resp = co_await host->hostBus()
+                       ->request<agentxx::events::ReqHostMessage, agentxx::events::RespHostMessage>(
+                           agentxx::events::HostTopic::AgentMessage,
+                           agentxx::events::ReqHostMessage{
+                               .fromAgentId = "root",
+                               .toAgentId   = "remote-worker",
+                               .message     = "hi remote",
+                               .cancelToken = nullptr,
+                           },
+                           std::chrono::seconds(60)
+                       );
             finished = true;
         },
         asio::detached

@@ -551,10 +551,7 @@ void test_plugin_args_env_expand() {
         const auto& ig = pc.args["ignore_paths"];
         XX_TEST_EXPECT_EQ(ig.size(), size_t{1});
         if (ig.size() == 1) {
-            XX_TEST_EXPECT_EQ(
-                ig[0].get<std::string>(),
-                std::string("/data/cg/proj/third_party")
-            );
+            XX_TEST_EXPECT_EQ(ig[0].get<std::string>(), std::string("/data/cg/proj/third_party"));
         }
     } else {
         XX_TEST_EXPECT_TRUE(false);

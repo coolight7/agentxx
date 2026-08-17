@@ -241,11 +241,7 @@ bool TUIClientAgentIO::sendPluginDataUp(
 ) {
     // client io 线程调用 (adapter); 未连接时 sendToPeer 丢弃并记日志
     if (!transport_ || !transport_->alive()) {
-        XX_LOGW(
-            "[tui] sendPluginDataUp dropped (no transport): {}.{}",
-            plugin,
-            event
-        );
+        XX_LOGW("[tui] sendPluginDataUp dropped (no transport): {}.{}", plugin, event);
         return false;
     }
     agentxx::agent::WirePluginDataUp up;
@@ -274,13 +270,9 @@ void TUIClientAgentIO::addPluginPanelTab(const std::string& id, const std::strin
     if (!sidebar_ || sidebar_->hasTab(id)) {
         return;
     }
-    sidebar_->addTab(
-        id,
-        title,
-        [this, id]() {
-            return renderPluginPanel(id);
-        }
-    );
+    sidebar_->addTab(id, title, [this, id]() {
+        return renderPluginPanel(id);
+    });
     postRedraw();
 }
 
@@ -334,35 +326,29 @@ std::vector<ScrollItem> TUIClientAgentIO::renderPluginPanel(const std::string& p
                     out.push_back(ScrollItem{txt | color(theme.normalColor)});
                 }
             } else if (kind == "progress") {
-                const double v = it.value("value", 0.0);
-                const int    w = 10;
+                const double v      = it.value("value", 0.0);
+                const int    w      = 10;
                 const int    filled = static_cast<int>(v * w);
                 std::string  bar;
                 bar.reserve(w);
                 for (int i = 0; i < w; ++i) {
                     bar += (i < filled) ? '#' : '-';
                 }
-                out.push_back(ScrollItem{
-                    hbox({
-                        text("[" + bar + "]") | color(theme.accentColor),
-                        text(fmt::format(" {}%", static_cast<int>(v * 100)))
-                            | color(theme.hintColor),
-                    })
-                });
+                out.push_back(ScrollItem{hbox({
+                    text("[" + bar + "]") | color(theme.accentColor),
+                    text(fmt::format(" {}%", static_cast<int>(v * 100))) | color(theme.hintColor),
+                })});
             } else if (kind == "action") {
                 out.push_back(ScrollItem{
                     text("◈ " + it.value("label", std::string{"(action)"}))
-                        | color(theme.buttonActiveTextColor) | bold
+                    | color(theme.buttonActiveTextColor) | bold
                 });
             } else if (kind == "badge") {
                 out.push_back(ScrollItem{
-                    text("● " + it.value("text", std::string{}))
-                        | color(theme.accentColor)
+                    text("● " + it.value("text", std::string{})) | color(theme.accentColor)
                 });
             } else if (kind == "separator") {
-                out.push_back(ScrollItem{
-                    text("─") | color(theme.hintColor) | dim
-                });
+                out.push_back(ScrollItem{text("─") | color(theme.hintColor) | dim});
             }
         }
     }
@@ -449,9 +435,8 @@ void TUIClientAgentIO::start() {
                 );
                 if (!cmdName.empty() && pluginManager_->hasCommand(cmdName)) {
                     // 参数: 剩余部分整体作为 {"text": "..."} 传入 (语义由插件定义)
-                    std::string argsText = spacePos == std::string::npos
-                                               ? std::string{}
-                                               : text.substr(spacePos + 1);
+                    std::string argsText
+                        = spacePos == std::string::npos ? std::string{} : text.substr(spacePos + 1);
                     neograph::json args = neograph::json::object();
                     args["text"]        = argsText;
                     pluginManager_->postCommandInvocation(cmdName, args.dump());
@@ -1510,7 +1495,7 @@ void TUIClientAgentIO::onSync(const agentxx::agent::SyncPayload& payload) {
             st->appendComponents = prev->appendComponents;
             st->pendingInputs    = prev->pendingInputs;
             st->contextMessages  = prev->contextMessages;
-            st->isStreaming       = false;
+            st->isStreaming      = false;
             // 连接状态不随 Sync 重置: 握手后服务端回推全量 Sync 时若被重置回
             // Connecting (默认值), banner 会错误地回到"启动中"
             st->connState = prev->connState;

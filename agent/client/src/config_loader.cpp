@@ -154,9 +154,9 @@ std::string resolveEnvVars(
 /// - 标量先经 resolveEnvVars 展开再判断类型 (true/false/数字/字符串)
 /// - 与 yamlToJson 语义一致, 仅多了 env 展开步骤
 static neograph::json yamlToJsonResolveEnv(
-    const YAML::Node&                             node,
-    const std::map<std::string, std::string>&     dotEnvVars,
-    const std::map<std::string, std::string>&     overrideEnvVars
+    const YAML::Node&                         node,
+    const std::map<std::string, std::string>& dotEnvVars,
+    const std::map<std::string, std::string>& overrideEnvVars
 ) {
     if (!node.IsDefined() || node.IsNull()) {
         return neograph::json{};
@@ -189,7 +189,8 @@ static neograph::json yamlToJsonResolveEnv(
     if (node.IsMap()) {
         neograph::json obj = neograph::json::object();
         for (const auto& kv : node) {
-            obj[kv.first.as<std::string>()] = yamlToJsonResolveEnv(kv.second, dotEnvVars, overrideEnvVars);
+            obj[kv.first.as<std::string>()]
+                = yamlToJsonResolveEnv(kv.second, dotEnvVars, overrideEnvVars);
         }
         return obj;
     }

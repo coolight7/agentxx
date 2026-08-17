@@ -4,8 +4,8 @@
 // - 屏幕捕获已拆分到独立插件 agentxx_screen_capture (本插件 plugin.yaml
 //   depends 声明依赖, 加载时须先于本插件)
 // - 插件不链接 libagentxx: 描述经 get_tool_prompt 读取, 日志经 vtable log
-#include "computer_use_plugin.h"
 #include "codegraph/core/json.hpp"
+#include "computer_use_plugin.h"
 #include "fmt/format.h"
 #include <cstring>
 #include <functional>
@@ -31,7 +31,10 @@ static std::string readToolDepict(const std::string& toolName) {
     if (!g_host || !g_host->vtable || !g_host->vtable->get_tool_prompt) {
         return {};
     }
-    char* json = g_host->vtable->get_tool_prompt(g_host, agentxx_plugin_sv(toolName.data(), toolName.size()));
+    char* json = g_host->vtable->get_tool_prompt(
+        g_host,
+        agentxx_plugin_sv(toolName.data(), toolName.size())
+    );
     if (!json) {
         return {};
     }
@@ -55,14 +58,14 @@ struct ToolEntry {
 };
 
 static void registerTool(
-    const char*                                   name,
-    const char*                                   defaultDepict,
-    const std::string&                            schema,
-    std::function<std::string(SimpleJson&)>       fn,
-    int                                           flags = 0
+    const char*                             name,
+    const char*                             defaultDepict,
+    const std::string&                      schema,
+    std::function<std::string(SimpleJson&)> fn,
+    int                                     flags = 0
 ) {
     static std::vector<std::string> g_storage;
-    std::string depict = readToolDepict(name);
+    std::string                     depict = readToolDepict(name);
     if (depict.empty()) {
         depict = defaultDepict;
     }
@@ -70,19 +73,25 @@ static void registerTool(
     g_storage.push_back(schema);
 
     static std::vector<std::unique_ptr<ToolEntry>> g_entries;
-    auto entry = std::make_unique<ToolEntry>();
-    entry->fn  = std::move(fn);
-    auto* entryPtr = entry.get();
+    auto                                           entry = std::make_unique<ToolEntry>();
+    entry->fn                                            = std::move(fn);
+    auto* entryPtr                                       = entry.get();
     g_entries.push_back(std::move(entry));
 
     AgentxxToolSpec spec{};
-    spec.name            = agentxx_plugin_sv(name, std::strlen(name));
-    spec.description     = agentxx_plugin_sv(g_storage[g_storage.size() - 2].data(), g_storage[g_storage.size() - 2].size());
+    spec.name        = agentxx_plugin_sv(name, std::strlen(name));
+    spec.description = agentxx_plugin_sv(
+        g_storage[g_storage.size() - 2].data(),
+        g_storage[g_storage.size() - 2].size()
+    );
     spec.parameters_json = agentxx_plugin_sv(g_storage.back().data(), g_storage.back().size());
     spec.user_data       = entryPtr;
     spec.flags           = flags;
-    spec.execute         = +[](void* ud, AgentxxPluginStringView args_json, AgentxxPluginStringView, AgentxxPluginStringView, char** err
-                           ) -> char* {
+    spec.execute         = +[](void*                   ud,
+                       AgentxxPluginStringView args_json,
+                       AgentxxPluginStringView,
+                       AgentxxPluginStringView,
+                       char** err) -> char* {
         auto* e = static_cast<ToolEntry*>(ud);
         try {
             std::string argsStr{args_json.data ? args_json.data : "{}", args_json.size};
@@ -115,7 +124,8 @@ static void registerTool(
 /// 工具默认描述 (从 lib AgentPrompt 剥离迁移, 2026-08)
 /// - 宿主 toolPrompt 无条目时经 set_prompt 写入 (见 ensureToolPromptInHost),
 ///   用户可经 yaml 覆盖 (覆盖早于插件加载, 写入前检查条目已存在则跳过)
-static const char* kUiControlDefaultDepict = R"(Control mouse and keyboard on Windows. Accepts a list of UI commands and executes them sequentially.
+static const char* kUiControlDefaultDepict
+    = R"(Control mouse and keyboard on Windows. Accepts a list of UI commands and executes them sequentially.
 
 ## Actions
 
@@ -159,53 +169,76 @@ static std::string uiControlSchema() {
     commandsItem["type"]         = "object";
     commandsItem["properties"]   = codegraph::Json::object();
     auto& p                      = commandsItem["properties"];
-    p["action"] = codegraph::Json({{"type", "string"},
-                                   {"description",
-                                    "Action to perform. One of: mouse_move, mouse_click, "
-                                    "mouse_double_click, mouse_scroll, mouse_drag, key_press, "
-                                    "key_down, key_up, key_combo, key_type, wait, "
-                                    "get_cursor_pos, get_screen_size"}});
-    p["x"]      = codegraph::Json({{"type", "number"}});
-    p["y"]      = codegraph::Json({{"type", "number"}});
-    p["x1"]     = codegraph::Json({{"type", "number"}});
-    p["y1"]     = codegraph::Json({{"type", "number"}});
-    p["x2"]     = codegraph::Json({{"type", "number"}});
-    p["y2"]     = codegraph::Json({{"type", "number"}});
-    p["button"] = codegraph::Json(
-        {{"type", "string"},
-         {"enum", codegraph::Json::array({codegraph::Json("left"),
-                                          codegraph::Json("right"),
-                                          codegraph::Json("middle")})}}
-    );
-    p["delta"] = codegraph::Json({{"type", "number"}});
-    p["key"]   = codegraph::Json(
-        {{"type", "string"},
-         {"description", "Key name for key_press/key_down/key_up"}}
-    );
-    p["keys"] = codegraph::Json(
-        {{"type", "array"},
-         {"items", codegraph::Json({{"type", "string"}})},
-         {"description", "Key names for key_combo, e.g. [\"ctrl\",\"c\"]"}}
-    );
-    p["text"] = codegraph::Json(
-        {{"type", "string"}, {"description", "Text string for key_type"}}
-    );
-    p["ms"]          = codegraph::Json({{"type", "number"}, {"description", "Wait duration in ms"}});
-    p["duration_ms"] = codegraph::Json({{"type", "number"}});
+    p["action"]                  = codegraph::Json({
+        {"type",        "string"                                            },
+        {"description",
+         "Action to perform. One of: mouse_move, mouse_click, "
+                                           "mouse_double_click, mouse_scroll, mouse_drag, key_press, "
+                                           "key_down, key_up, key_combo, key_type, wait, "
+                                           "get_cursor_pos, get_screen_size"}
+    });
+    p["x"]                       = codegraph::Json({
+        {"type", "number"}
+    });
+    p["y"]                       = codegraph::Json({
+        {"type", "number"}
+    });
+    p["x1"]                      = codegraph::Json({
+        {"type", "number"}
+    });
+    p["y1"]                      = codegraph::Json({
+        {"type", "number"}
+    });
+    p["x2"]                      = codegraph::Json({
+        {"type", "number"}
+    });
+    p["y2"]                      = codegraph::Json({
+        {"type", "number"}
+    });
+    p["button"]                  = codegraph::Json({
+        {"type", "string"},
+        {"enum",
+         codegraph::Json::array(
+             {codegraph::Json("left"), codegraph::Json("right"), codegraph::Json("middle")}
+         )               }
+    });
+    p["delta"]                   = codegraph::Json({
+        {"type", "number"}
+    });
+    p["key"]                     = codegraph::Json({
+        {"type",        "string"                                },
+        {"description", "Key name for key_press/key_down/key_up"}
+    });
+    p["keys"]                    = codegraph::Json({
+        {"type",        "array"                                         },
+        {"items",       codegraph::Json({{"type", "string"}})           },
+        {"description", "Key names for key_combo, e.g. [\"ctrl\",\"c\"]"}
+    });
+    p["text"]                    = codegraph::Json({
+        {"type",        "string"                  },
+        {"description", "Text string for key_type"}
+    });
+    p["ms"]                      = codegraph::Json({
+        {"type",        "number"             },
+        {"description", "Wait duration in ms"}
+    });
+    p["duration_ms"]             = codegraph::Json({
+        {"type", "number"}
+    });
 
-    codegraph::Json schema = codegraph::Json::object();
-    schema["type"]         = "object";
-    schema["properties"]   = codegraph::Json::object();
-    schema["properties"]["commands"] = codegraph::Json(
-        {{"type", "array"},
-         {"description", "List of UI commands to execute sequentially"},
-         {"items", commandsItem}}
-    );
-    schema["properties"]["interval_ms"] = codegraph::Json(
-        {{"type", "number"},
-         {"description", "Delay between commands in ms. Default: 50."}}
-    );
-    schema["required"] = codegraph::Json::array({codegraph::Json("commands")});
+    codegraph::Json schema              = codegraph::Json::object();
+    schema["type"]                      = "object";
+    schema["properties"]                = codegraph::Json::object();
+    schema["properties"]["commands"]    = codegraph::Json({
+        {"type",        "array"                                      },
+        {"description", "List of UI commands to execute sequentially"},
+        {"items",       commandsItem                                 }
+    });
+    schema["properties"]["interval_ms"] = codegraph::Json({
+        {"type",        "number"                                    },
+        {"description", "Delay between commands in ms. Default: 50."}
+    });
+    schema["required"]                  = codegraph::Json::array({codegraph::Json("commands")});
     return schema.dump();
 }
 
@@ -224,8 +257,7 @@ static void registerUiControlTool() {
 /// - 用户 yaml 覆盖早于插件加载 → get_prompt 已含覆盖 → 跳过 (尊重用户配置)
 /// - 宿主未提供 get_prompt/set_prompt (旧宿主) → 跳过, registerTool 回退插件默认
 static void ensureToolPromptInHost() {
-    if (!g_host || !g_host->vtable || !g_host->vtable->get_prompt
-        || !g_host->vtable->set_prompt) {
+    if (!g_host || !g_host->vtable || !g_host->vtable->get_prompt || !g_host->vtable->set_prompt) {
         return;
     }
     char* json = g_host->vtable->get_prompt(g_host);
@@ -242,21 +274,19 @@ static void ensureToolPromptInHost() {
     if (!j.doc().at_pointer("/toolPrompt/agentxx_ui_control_keyboard_mouse").error()) {
         return;
     }
-    codegraph::Json tp   = codegraph::Json::object();
-    tp["depict"]         = std::string{kUiControlDefaultDepict};
-    codegraph::Json args = codegraph::Json::object();
-    args["commands"]     = "Ordered list of UI commands to execute sequentially.";
-    args["interval_ms"]  = "Delay between commands in milliseconds. Default: 50. Set `0` for "
-                          "no delay.";
-    tp["args"]           = args;
+    codegraph::Json tp    = codegraph::Json::object();
+    tp["depict"]          = std::string{kUiControlDefaultDepict};
+    codegraph::Json args  = codegraph::Json::object();
+    args["commands"]      = "Ordered list of UI commands to execute sequentially.";
+    args["interval_ms"]   = "Delay between commands in milliseconds. Default: 50. Set `0` for "
+                            "no delay.";
+    tp["args"]            = args;
     codegraph::Json patch = codegraph::Json::object();
     patch["toolPrompt"]   = codegraph::Json::object();
     patch["toolPrompt"]["agentxx_ui_control_keyboard_mouse"] = tp;
-    std::string payload = patch.dump();
-    if (g_host->vtable->set_prompt(
-            g_host,
-            agentxx_plugin_sv(payload.data(), payload.size())
-        ) != 0) {
+    std::string payload                                      = patch.dump();
+    if (g_host->vtable->set_prompt(g_host, agentxx_plugin_sv(payload.data(), payload.size()))
+        != 0) {
         pluginLog(3, "agentxx_computer_use: set_prompt failed");
     }
 }

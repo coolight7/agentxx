@@ -43,13 +43,13 @@ struct ToolHeaderFixture {
     ToolHeaderFixture(int w = 120, int h = 16) :
         width(w),
         height(h) {
-        ctx.state          = &sharedState;
-        ctx.frameState     = sharedState.readSnapshot();
-        ctx.postRedraw     = [] {};
-        ctx.theme    = &theme;
-        ctx.threadId = "s";
-        ctx.remoteUrl = "";
-        comp          = std::make_shared<MessageListComponent>(ctx);
+        ctx.state      = &sharedState;
+        ctx.frameState = sharedState.readSnapshot();
+        ctx.postRedraw = [] {};
+        ctx.theme      = &theme;
+        ctx.threadId   = "s";
+        ctx.remoteUrl  = "";
+        comp           = std::make_shared<MessageListComponent>(ctx);
     }
 
     /// 追加一条 Tool 消息 (text 为工具参数 JSON, 与 server 端约定一致)

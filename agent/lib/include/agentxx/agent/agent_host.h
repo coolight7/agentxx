@@ -117,10 +117,10 @@ public:
         std::string_view                              systemPrompt,
         std::string_view                              message,
         std::string_view                              parentThreadId,
-        std::shared_ptr<neograph::graph::CancelToken> cancelToken = nullptr,
-        std::optional<neograph::json>                 messages   = std::nullopt,
-        std::string_view                              threadId   = {},
-        std::optional<neograph::json>                 tools      = std::nullopt,
+        std::shared_ptr<neograph::graph::CancelToken> cancelToken         = nullptr,
+        std::optional<neograph::json>                 messages            = std::nullopt,
+        std::string_view                              threadId            = {},
+        std::optional<neograph::json>                 tools               = std::nullopt,
         std::optional<bool>                           enableSummarization = std::nullopt
     );
 

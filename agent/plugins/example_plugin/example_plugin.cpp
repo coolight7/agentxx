@@ -18,8 +18,8 @@
  * 编译 (无需链接 libagentxx):
  *   g++ -std=c++26 -fPIC -shared example_native.cpp -o libexample_plugin.so
  */
-#include "agentxx/plugin/plugin_api.h"
 #include "agentxx/plugin/client_plugin_api.h"
+#include "agentxx/plugin/plugin_api.h"
 #include "fmt/format.h"
 #include "fmt/ranges.h"
 
@@ -135,7 +135,7 @@ static char* caller_execute(
         return nullptr;
     }
     // 调用本插件的另一个工具 example_echo, 演示插件互调
-    char* err = nullptr;
+    char* err  = nullptr;
     char* resp = g_host->vtable->call_tool(
         g_host,
         AGENTXX_SV("example_echo"),
@@ -204,35 +204,31 @@ extern "C" int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) 
 
     // 1. 工具
     AgentxxToolSpec echo{};
-    echo.name            = AGENTXX_SV("example_echo");
-    echo.description     = AGENTXX_SV(
-        "Echo the input arguments back as JSON (example plugin tool)."
-    );
-    echo.parameters_json = AGENTXX_SV(
-        R"({"type":"object","properties":{},"additionalProperties":true})"
-    );
-    echo.execute         = echo_execute;
+    echo.name        = AGENTXX_SV("example_echo");
+    echo.description = AGENTXX_SV("Echo the input arguments back as JSON (example plugin tool).");
+    echo.parameters_json
+        = AGENTXX_SV(R"({"type":"object","properties":{},"additionalProperties":true})");
+    echo.execute = echo_execute;
     if (host->vtable->register_tool(host, &echo) != 0) {
         return -1;
     }
 
     AgentxxToolSpec caller{};
-    caller.name            = AGENTXX_SV("example_caller");
-    caller.description     = AGENTXX_SV(
-        "Call example_echo via call_tool to demonstrate plugin interop."
-    );
-    caller.parameters_json = AGENTXX_SV(
-        R"({"type":"object","properties":{},"additionalProperties":true})"
-    );
-    caller.execute         = caller_execute;
+    caller.name = AGENTXX_SV("example_caller");
+    caller.description
+        = AGENTXX_SV("Call example_echo via call_tool to demonstrate plugin interop.");
+    caller.parameters_json
+        = AGENTXX_SV(R"({"type":"object","properties":{},"additionalProperties":true})");
+    caller.execute = caller_execute;
     if (host->vtable->register_tool(host, &caller) != 0) {
         return -1;
     }
 
     // 慢工具: 测试插件超时/卸载竞态 (宿主超时后回调仍可能执行, inflight 保活)
     AgentxxToolSpec sleeper{};
-    sleeper.name        = AGENTXX_SV("example_sleep");
-    sleeper.description = AGENTXX_SV("Sleep duration_ms milliseconds then return (slow plugin tool).");
+    sleeper.name = AGENTXX_SV("example_sleep");
+    sleeper.description
+        = AGENTXX_SV("Sleep duration_ms milliseconds then return (slow plugin tool).");
     sleeper.parameters_json
         = AGENTXX_SV(R"({"type":"object","properties":{"duration_ms":{"type":"integer"}}})");
     sleeper.execute            = sleep_execute;
@@ -284,11 +280,7 @@ extern "C" int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) 
                     = R"({"toolPrompt":{"example_echo":{"depict":"Echo the input arguments back as JSON (example plugin tool).","args":{}}}})";
                 int rc = host->vtable->set_prompt(host, AGENTXX_SV(promptJson));
                 if (rc != 0) {
-                    host->vtable->log(
-                        host,
-                        3,
-                        AGENTXX_SV("example plugin set_prompt failed")
-                    );
+                    host->vtable->log(host, 3, AGENTXX_SV("example plugin set_prompt failed"));
                     return -1;
                 }
             }
@@ -322,11 +314,11 @@ extern "C" void agentxx_plugin_unload(void* plugin_ctx) {
  * 彼此独立, 互通一律走 wire (send_plugin_data ↔ WirePluginDataUp)
  * ===================================================================== */
 
-static const AgentxxClientHost* g_client_host = nullptr;
-static AgentxxStatusItem*       g_status_item = nullptr;
-static AgentxxPanel*            g_panel       = nullptr;
+static const AgentxxClientHost* g_client_host  = nullptr;
+static AgentxxStatusItem*       g_status_item  = nullptr;
+static AgentxxPanel*            g_panel        = nullptr;
 static AgentxxInfoSection*      g_info_section = nullptr;
-static int                      g_turn_count  = 0;
+static int                      g_turn_count   = 0;
 
 /// 字符串 → JSON 字符串字面量 (经宿主 vtable json_escape; 结果含引号;
 /// 供 fmt::format 组装 JSON 时嵌入字段值, 避免手工拼接)
@@ -334,10 +326,8 @@ static std::string clientJsonEscape(const std::string& s) {
     if (!g_client_host || s.empty()) {
         return "\"\"";
     }
-    char* esc = g_client_host->vtable->json_escape(
-        g_client_host,
-        agentxx_plugin_sv(s.data(), s.size())
-    );
+    char* esc
+        = g_client_host->vtable->json_escape(g_client_host, agentxx_plugin_sv(s.data(), s.size()));
     if (!esc) {
         return "\"\"";
     }
@@ -368,11 +358,8 @@ static char* example_cmd_execute(void* ud, AgentxxPluginStringView args_json, ch
         return nullptr;
     }
     // 参数: {"text": "..."} (输入 "/example 参数" 的剩余部分)
-    char* argText = g_client_host->vtable->json_get_string(
-        g_client_host,
-        args_json,
-        AGENTXX_SV("text")
-    );
+    char* argText
+        = g_client_host->vtable->json_get_string(g_client_host, args_json, AGENTXX_SV("text"));
     std::string suffix = argText ? argText : "";
     if (argText) {
         g_client_host->vtable->free(argText);
@@ -383,10 +370,7 @@ static char* example_cmd_execute(void* ud, AgentxxPluginStringView args_json, ch
         text = fmt::format("{} ({})", text, suffix);
     }
     // json_escape 返回带引号的 JSON 字符串字面量 (如 "\"abc\""), fmt 直接嵌入
-    const std::string out = fmt::format(
-        R"({{"action":"send","text":{}}})",
-        clientJsonEscape(text)
-    );
+    const std::string out = fmt::format(R"({{"action":"send","text":{}}})", clientJsonEscape(text));
     return g_client_host->vtable->strdup(out.c_str());
 }
 
@@ -398,19 +382,14 @@ static char* example_toast_execute(void* ud, AgentxxPluginStringView args_json, 
     if (!g_client_host) {
         return nullptr;
     }
-    char* argText = g_client_host->vtable->json_get_string(
-        g_client_host,
-        args_json,
-        AGENTXX_SV("text")
-    );
+    char* argText
+        = g_client_host->vtable->json_get_string(g_client_host, args_json, AGENTXX_SV("text"));
     std::string text = argText && *argText ? argText : "toast from example plugin";
     if (argText) {
         g_client_host->vtable->free(argText);
     }
-    const std::string out = fmt::format(
-        R"({{"action":"toast","text":{},"level":1}})",
-        clientJsonEscape(text)
-    );
+    const std::string out
+        = fmt::format(R"({{"action":"toast","text":{},"level":1}})", clientJsonEscape(text));
     return g_client_host->vtable->strdup(out.c_str());
 }
 
@@ -459,11 +438,8 @@ static void on_client_turn_end(AgentxxPluginStringView payload_json, void* ud) {
             R"({{"items":[{{"kind":"text","text":"Turns: {}"}},{{"kind":"text","role":"hint","text":"Example Info section is live"}}]}})",
             clientJsonEscape(std::to_string(g_turn_count))
         );
-        g_client_host->vtable->update_info_section(
-            g_client_host,
-            g_info_section,
-            AGENTXX_SV(json.c_str())
-        );
+        g_client_host->vtable
+            ->update_info_section(g_client_host, g_info_section, AGENTXX_SV(json.c_str()));
     }
 }
 
@@ -474,21 +450,12 @@ static void on_client_plugin_data(AgentxxPluginStringView payload_json, void* ud
         return;
     }
     // payload: {"plugin","event","data"}
-    char* plugin = g_client_host->vtable->json_get_string(
-        g_client_host,
-        payload_json,
-        AGENTXX_SV("plugin")
-    );
-    char* event = g_client_host->vtable->json_get_string(
-        g_client_host,
-        payload_json,
-        AGENTXX_SV("event")
-    );
-    char* data = g_client_host->vtable->json_get_string(
-        g_client_host,
-        payload_json,
-        AGENTXX_SV("data")
-    );
+    char* plugin
+        = g_client_host->vtable->json_get_string(g_client_host, payload_json, AGENTXX_SV("plugin"));
+    char* event
+        = g_client_host->vtable->json_get_string(g_client_host, payload_json, AGENTXX_SV("event"));
+    char* data
+        = g_client_host->vtable->json_get_string(g_client_host, payload_json, AGENTXX_SV("data"));
     std::string line = fmt::format("{}.{}", plugin ? plugin : "?", event ? event : "?");
     if (data && *data) {
         line = fmt::format("{}: {}", line, data);
@@ -547,7 +514,8 @@ extern "C" int agentxx_client_entry(const AgentxxClientHost* host, void** plugin
             AGENTXX_SV("Send a message from the example plugin"),
             example_cmd_execute,
             nullptr
-        ) != 0) {
+        )
+        != 0) {
         return -1;
     }
     if (host->vtable->register_command(
@@ -556,7 +524,8 @@ extern "C" int agentxx_client_entry(const AgentxxClientHost* host, void** plugin
             AGENTXX_SV("Show a toast from the example plugin"),
             example_toast_execute,
             nullptr
-        ) != 0) {
+        )
+        != 0) {
         return -1;
     }
 
@@ -564,20 +533,11 @@ extern "C" int agentxx_client_entry(const AgentxxClientHost* host, void** plugin
     if (!host->vtable->subscribe(host, AGENTXX_CLIENT_EVT_READY, on_client_ready, nullptr)) {
         return -1;
     }
-    if (!host->vtable->subscribe(
-            host,
-            AGENTXX_CLIENT_EVT_TURN_END,
-            on_client_turn_end,
-            nullptr
-        )) {
+    if (!host->vtable->subscribe(host, AGENTXX_CLIENT_EVT_TURN_END, on_client_turn_end, nullptr)) {
         return -1;
     }
-    if (!host->vtable->subscribe(
-            host,
-            AGENTXX_CLIENT_EVT_PLUGIN_DATA,
-            on_client_plugin_data,
-            nullptr
-        )) {
+    if (!host->vtable
+             ->subscribe(host, AGENTXX_CLIENT_EVT_PLUGIN_DATA, on_client_plugin_data, nullptr)) {
         return -1;
     }
 

@@ -6,9 +6,9 @@
 // - 捕获到的选中文本经 publish 事件推送 (topic
 //   "agentxx_text_selection_monitor.selection", JSON: text/source/timestamp_ms)
 // - 非 Windows 平台为 no-op (start 返回失败), 工具仍可查询状态
-#include "text_selection_monitor_plugin.h"
-#include "text_selection_monitor.h"
 #include "fmt/format.h"
+#include "text_selection_monitor.h"
+#include "text_selection_monitor_plugin.h"
 #include <chrono>
 #include <cstdint>
 #include <cstring>
@@ -78,8 +78,9 @@ struct TextSelectionHolder {
                 return;
             }
             auto tsMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-                evt.timestamp.time_since_epoch()
-            ).count();
+                            evt.timestamp.time_since_epoch()
+            )
+                            .count();
             std::string payload = fmt::format(
                 R"({{"text":{},"source":{},"timestamp_ms":{}}})",
                 jsonEscape(evt.text),
@@ -131,10 +132,7 @@ char* textSelectionExecute(
             jsonGetInt(args.doc().at_pointer("/debounce_ms"), debounceMs);
             bool ok = holder.start(static_cast<int>(debounceMs));
             return pluginStrdup(
-                fmt::format(
-                    R"({{"ok":{},"running":true}})",
-                    ok ? "true" : "false"
-                ).c_str()
+                fmt::format(R"({{"ok":{},"running":true}})", ok ? "true" : "false").c_str()
             );
         }
 
@@ -175,10 +173,8 @@ extern "C" const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
         AGENTXX_PLUGIN_API_VERSION,
         AGENTXX_SV("agentxx_text_selection_monitor"),
         AGENTXX_SV("1.0.0"),
-        AGENTXX_SV(
-            "System-wide text selection event stream: start/stop/status "
-            "(Windows; other platforms no-op)"
-        ),
+        AGENTXX_SV("System-wide text selection event stream: start/stop/status "
+                   "(Windows; other platforms no-op)"),
     };
     return &info;
 }
@@ -196,12 +192,11 @@ extern "C" int agentxx_plugin_entry(const AgentxxHost* host, void** /*plugin_ctx
     })";
 
     AgentxxToolSpec spec{};
-    spec.name            = AGENTXX_SV("agentxx_text_selection_monitor");
-    spec.description     = AGENTXX_SV(
-        "Monitor text selections system-wide on Windows. start begins capturing; "
-        "selected text is published as plugin events "
-        "(agentxx_text_selection_monitor.selection)."
-    );
+    spec.name = AGENTXX_SV("agentxx_text_selection_monitor");
+    spec.description
+        = AGENTXX_SV("Monitor text selections system-wide on Windows. start begins capturing; "
+                     "selected text is published as plugin events "
+                     "(agentxx_text_selection_monitor.selection).");
     spec.parameters_json = agentxx_plugin_sv(kSchema.data(), kSchema.size());
     spec.execute         = textSelectionExecute;
     if (host->vtable->register_tool(host, &spec) != 0) {

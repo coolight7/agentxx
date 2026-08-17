@@ -414,12 +414,11 @@ asio::awaitable<void> test_agent_init() {
 
         using CodeAgent::CodeAgent;
 
-        void collect(
-            std::vector<agentxx::agent::AppendComponentNotification>& out
-        ) {
+        void collect(std::vector<agentxx::agent::AppendComponentNotification>& out) {
             collectAppendComponentInfo(out);
         }
     };
+
     AppendCollectAgent collectAgent(cfg);
     co_await collectAgent.init();
     XX_TEST_EXPECT_TRUE(collectAgent.agentContext->pluginManager != nullptr);

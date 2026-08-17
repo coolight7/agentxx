@@ -403,11 +403,7 @@ asio::awaitable<events::RespSubagentResult> AgentHost::spawnSubagent(
     // ---- 子代理上下文压缩开关 (缺省继承父 config 拷贝) ----
     if (enableSummarization.has_value()) {
         subCfg->enableSummarization = *enableSummarization;
-        XX_LOGD(
-            "spawnSubagent `{}`: enableSummarization = {}",
-            subagentName,
-            *enableSummarization
-        );
+        XX_LOGD("spawnSubagent `{}`: enableSummarization = {}", subagentName, *enableSummarization);
     }
 
     auto subagent = createAgentInstance(std::move(subCfg));
@@ -530,8 +526,8 @@ asio::awaitable<events::RespSubagentResult> AgentHost::spawnSubagent(
                 inputMessages = *messages;
             } else {
                 inputMessages = neograph::json::array({
-                    {{"role", "system"}, {"content", sysPrompt}},
-                    {{"role", "user"}, {"content", std::string{message}}},
+                    {{"role", "system"}, {"content", sysPrompt}           },
+                    {{"role", "user"},   {"content", std::string{message}}},
                 });
             }
 

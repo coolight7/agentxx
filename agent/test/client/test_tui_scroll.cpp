@@ -43,13 +43,13 @@ struct ScrollFixture {
     static constexpr int kHeight = 20;
 
     ScrollFixture() {
-        ctx.state          = &sharedState;
-        ctx.frameState     = sharedState.readSnapshot();
-        ctx.postRedraw     = [] {};
-        ctx.theme    = &theme;
-        ctx.threadId = "s";
-        ctx.remoteUrl = "";
-        comp          = std::make_shared<MessageListComponent>(ctx);
+        ctx.state      = &sharedState;
+        ctx.frameState = sharedState.readSnapshot();
+        ctx.postRedraw = [] {};
+        ctx.theme      = &theme;
+        ctx.threadId   = "s";
+        ctx.remoteUrl  = "";
+        comp           = std::make_shared<MessageListComponent>(ctx);
     }
 
     /// 追加一条历史消息 (长文本, 撑高列表使其溢出视口)

@@ -495,7 +495,7 @@ public:
         std::string_view                                                  prefix,
         std::function<void(std::string_view topic, const std::any& data)> handler
     ) {
-        auto id = ++nextPrefixSubId_;
+        auto id         = ++nextPrefixSubId_;
         prefixSubs_[id] = PrefixSub{std::string{prefix}, std::move(handler)};
         return id;
     }
@@ -509,7 +509,7 @@ private:
 
     /// 前缀订阅项 (仅 io 线程读写)
     struct PrefixSub {
-        std::string prefix;
+        std::string                                            prefix;
         std::function<void(std::string_view, const std::any&)> handler;
     };
 

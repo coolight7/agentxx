@@ -154,8 +154,7 @@ std::string SummarizationMiddlewareHandle::messagesToText(
     return oss.str();
 }
 
-void SummarizationMiddlewareHandle::cleanNoiseMessages(
-    std::vector<neograph::ChatMessage>& messages
+void SummarizationMiddlewareHandle::cleanNoiseMessages(std::vector<neograph::ChatMessage>& messages
 ) {
     // 1. 删除完全空的消息 + 2. 相邻完全相同的消息只保留最后一条
     std::vector<neograph::ChatMessage> out;
@@ -217,13 +216,12 @@ void SummarizationMiddlewareHandle::foldExploratoryToolcalls(
     for (int64_t i = static_cast<int64_t>(messages.size()) - 1; i >= 0; --i) {
         const auto& m = messages[static_cast<size_t>(i)];
         if (m.role == "assistant" && !m.tool_calls.empty()) {
-            const bool foldable = m.tool_calls.size() == 1
-                                  && [&]() {
-                                         auto it = summarizationToolHandles.find(m.tool_calls[0].name);
-                                         return it != summarizationToolHandles.end()
-                                                && nullptr != it->second.truncateResponse
-                                                && nullptr == it->second.truncateRequest;
-                                     }();
+            const bool foldable = m.tool_calls.size() == 1 && [&]() {
+                auto it = summarizationToolHandles.find(m.tool_calls[0].name);
+                return it != summarizationToolHandles.end()
+                       && nullptr != it->second.truncateResponse
+                       && nullptr == it->second.truncateRequest;
+            }();
             if (foldable) {
                 const auto& name = m.tool_calls[0].name;
                 if (runTool.empty()) {
@@ -463,7 +461,7 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
     }
 
     neograph::ChatMessage promptMsg;
-    promptMsg.role    = "user";
+    promptMsg.role = "user";
     // 模板来自 AgentPrompt (运行时字符串), 经 fmt::runtime 动态解析
     promptMsg.content = fmt::format(
         fmt::runtime(summarizePrompt),
@@ -488,11 +486,11 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
     neograph::to_json(reqMsgsJson, reqMsgs);
 
     auto args = neograph::json{
-        {"subagent", "subagent_task"},
-        {"messages", std::move(reqMsgsJson)},
-        {"thread_id", std::string{thread_id}},
-        {"tools", neograph::json::array({"agentxx_share_store"})},
-        {"enable_summarization", false},
+        {"subagent",             "subagent_task"                               },
+        {"messages",             std::move(reqMsgsJson)                        },
+        {"thread_id",            std::string{thread_id}                        },
+        {"tools",                neograph::json::array({"agentxx_share_store"})},
+        {"enable_summarization", false                                         },
     };
 
     co_return co_await agentxx::util::catchErrorAsync<std::string>(
@@ -602,7 +600,7 @@ asio::awaitable<void>
         const size_t systemCount = (!messages.empty() && messages[0].role == "system") ? 1 : 0;
         const size_t recentBudget
             = static_cast<size_t>(modelContenxtMaxToken * recentTokenBudgetRatio);
-        const size_t oldEnd = splitRecentByTokenBudget(messages, systemCount, recentBudget);
+        const size_t oldEnd   = splitRecentByTokenBudget(messages, systemCount, recentBudget);
         const size_t oldStart = systemCount;
         if (oldEnd > oldStart) {
             // 压缩段 (system 之后, recent 之前)
@@ -627,7 +625,11 @@ asio::awaitable<void>
             /// llm 压缩 (同上下文 subagent, 中断后由 Session 派生并 resume)
             auto summary = co_await doSummarizeWithLLM(thread_id, toSummarize);
 
-            enum class ReplaceAction { None, Compact, HardTruncate };
+            enum class ReplaceAction {
+                None,
+                Compact,
+                HardTruncate
+            };
             ReplaceAction action = ReplaceAction::None;
             if (!summary.empty()) {
                 action = ReplaceAction::Compact;
@@ -641,12 +643,11 @@ asio::awaitable<void>
                 // 压缩失败: 计数 (同一轮内重试/多轮 modelcall 累积);
                 // 连续失败 >= 2 次或超限严重 (>= 95%) 时硬截断兜底
                 size_t failCount
-                    = agentCtxPtr->middlewareHandleContext
-                          ->getGraphDataItemValue<size_t>(
-                              thread_id,
-                              agentxx::middleware::MiddlewareContext::
-                                  graphDataKey_summarizationFailCount
-                          )
+                    = agentCtxPtr->middlewareHandleContext->getGraphDataItemValue<size_t>(
+                          thread_id,
+                          agentxx::middleware::MiddlewareContext::
+                              graphDataKey_summarizationFailCount
+                      )
                       + 1;
                 agentCtxPtr->middlewareHandleContext->setGraphDataItemValue<size_t>(
                     thread_id,

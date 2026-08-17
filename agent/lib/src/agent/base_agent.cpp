@@ -671,7 +671,7 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                                     .subagentName    = subagentArg.value("subagent", std::string{}),
                                     .systemPrompt
                                     = subagentArg.value("system_prompt", std::string{}),
-                                    .message  = subagentArg.value("message", std::string{}),
+                                    .message = subagentArg.value("message", std::string{}),
                                     // 结构化消息透传 (同上下文模式):
                                     // 原样透传消息前缀, 不做文本转录
                                     .messages
@@ -696,7 +696,7 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                                     = (subagentArg.contains("enable_summarization")
                                        && subagentArg["enable_summarization"].is_boolean())
                                           ? std::optional<bool>{subagentArg["enable_summarization"]
-                                                                     .get<bool>()}
+                                                                    .get<bool>()}
                                           : std::nullopt,
                                     .resultId = interruptArg.resultId,
                                     // 透传父会话取消令牌: 用户取消父轮次时级联中止子代理
@@ -712,7 +712,7 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                                 .parentAgentName = agentContext->agentConfig
                                                        ? agentContext->agentConfig->agentName
                                                        : std::string{},
-                                .parentThreadId = std::string{threadId},
+                                .parentThreadId  = std::string{threadId},
                                 // 透传父会话取消令牌: 用户取消父轮次时级联中止批量子代理
                                 .cancelToken = session->getCancelToken(),
                             };
@@ -1050,7 +1050,7 @@ asio::awaitable<BaseAgent::SimpleRunResult> BaseAgent::runStreamAsync(
     //  engine checkpoint 互相覆盖)
     static std::atomic<uint64_t> runStreamSeq{0};
     const auto                   ts = std::chrono::system_clock::now().time_since_epoch().count();
-    const auto threadId = fmt::format("subagent_{}_{}", ts, runStreamSeq.fetch_add(1));
+    const auto threadId             = fmt::format("subagent_{}_{}", ts, runStreamSeq.fetch_add(1));
     selectModel(threadId, modelName);
     auto inputMessages = neograph::json::array();
     for (const auto& msg : messages) {

@@ -63,9 +63,8 @@ public:
         if (!tui) {
             return;
         }
-        std::string title = props.is_object() && props.contains("title")
-                                ? props["title"].get<std::string>()
-                                : id;
+        std::string title
+            = props.is_object() && props.contains("title") ? props["title"].get<std::string>() : id;
         // 组件树 UI 线程独占: 投递 addTab (render 回调读取 renderPluginPanel)
         tui->postToUi([tui, id, title]() {
             tui->addPluginPanelTab(id, title);
@@ -134,11 +133,9 @@ public:
         }
     }
 
-    bool sendPluginData(
-        const std::string& plugin,
-        const std::string& event,
-        const std::string& json
-    ) override {
+    bool
+        sendPluginData(const std::string& plugin, const std::string& event, const std::string& json)
+            override {
         auto tui = tui_.lock();
         return tui ? tui->sendPluginDataUp(plugin, event, json) : false;
     }

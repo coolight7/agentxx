@@ -1,13 +1,13 @@
 #include "agentxx/agent/code_agent.h"
 
 #include "agentxx/agent/config_static.h"
-#include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/middlewares/memory_file.h"
 #include "agentxx/middlewares/permission.h"
 #include "agentxx/middlewares/planning.h"
 #include "agentxx/middlewares/skill.h"
 #include "agentxx/middlewares/subagent_supervisor.h"
 #include "agentxx/middlewares/summarization.h"
+#include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/protocol/mcp_client.h"
 #include "agentxx/protocol/openai_provider.h"
 #include "agentxx/tools/execute_command.h"
@@ -46,7 +46,6 @@ CodeAgent::CodeAgent(std::shared_ptr<agentxx::agent::AgentConfig> in_config) :
     BaseAgent(std::move(in_config)) {}
 
 CodeAgent::~CodeAgent() = default;
-
 
 asio::awaitable<void> CodeAgent::setupMiddleware() {
     auto config = agentContext->agentConfig;
@@ -173,7 +172,8 @@ asio::awaitable<void> CodeAgent::setupMiddleware() {
         //   避免对透传的上下文前缀二次压缩 (破坏 KV/prefix cache 一致性)
         if (config->enableSummarization) {
             auto summarizationMiddleware
-                = std::make_shared<agentxx::middleware::SummarizationMiddlewareHandle>(agentContext);
+                = std::make_shared<agentxx::middleware::SummarizationMiddlewareHandle>(agentContext
+                );
             agentContext->summarizationMiddleware = summarizationMiddleware;
             agentContext->middlewareHandleContext->handles.push_back(summarizationMiddleware);
         }

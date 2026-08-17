@@ -49,42 +49,42 @@ extern "C" {
 /* ==================== UI 能力位 (宿主 ↔ 插件协商) ==================== */
 
 /// 宿主支持的 UI 能力位图 (register_* 前可用 ui_caps() 查询; 不支持则注册失败)
-#define AGENTXX_UI_CAP_STATUS_ITEM (1u << 0) ///< 状态栏项
-#define AGENTXX_UI_CAP_PANEL       (1u << 1) ///< 侧边栏面板
-#define AGENTXX_UI_CAP_TOAST       (1u << 2) ///< toast 提示
-#define AGENTXX_UI_CAP_KEYBIND     (1u << 3) ///< 自定义键位 (预留, 二期)
-#define AGENTXX_UI_CAP_PROMPT      (1u << 4) ///< 模态询问 (预留, 二期)
-#define AGENTXX_UI_CAP_MSG_DECOR   (1u << 5) ///< 消息装饰 (预留, 二期)
+#define AGENTXX_UI_CAP_STATUS_ITEM  (1u << 0) ///< 状态栏项
+#define AGENTXX_UI_CAP_PANEL        (1u << 1) ///< 侧边栏面板
+#define AGENTXX_UI_CAP_TOAST        (1u << 2) ///< toast 提示
+#define AGENTXX_UI_CAP_KEYBIND      (1u << 3) ///< 自定义键位 (预留, 二期)
+#define AGENTXX_UI_CAP_PROMPT       (1u << 4) ///< 模态询问 (预留, 二期)
+#define AGENTXX_UI_CAP_MSG_DECOR    (1u << 5) ///< 消息装饰 (预留, 二期)
 #define AGENTXX_UI_CAP_INFO_SECTION (1u << 6) ///< 侧边栏 Info 栏段落扩展
 
 /* ==================== 插件元信息 ==================== */
 
 typedef struct AgentxxClientPluginInfo {
-    int api_version; ///< 必须 == AGENTXX_CLIENT_PLUGIN_API_VERSION
+    int                     api_version; ///< 必须 == AGENTXX_CLIENT_PLUGIN_API_VERSION
     AgentxxPluginStringView name;        ///< 唯一标识 (与 agent 侧插件共用命名空间)
     AgentxxPluginStringView version;
     AgentxxPluginStringView description;
-    uint32_t min_ui_caps; ///< 宿主 ui_caps() 不满足时拒绝加载 (记日志)
+    uint32_t                min_ui_caps; ///< 宿主 ui_caps() 不满足时拒绝加载 (记日志)
 } AgentxxClientPluginInfo;
 
 /* ==================== client 事件订阅 ==================== */
 
 /// 事件类型 (payload 均为 JSON 字符串, 宿主构造; 语义见注释)
 typedef enum AgentxxClientEvent {
-    AGENTXX_CLIENT_EVT_READY = 0, ///< 服务端就绪 {"uiCaps": n} (启动后最早事件)
-    AGENTXX_CLIENT_EVT_CONN_STATE, ///< 连接状态变化 {"connState","startupProgress"}
-    AGENTXX_CLIENT_EVT_USER_INPUT, ///< 用户输入已发出 {"threadId","text"}
-    AGENTXX_CLIENT_EVT_DELTA,      ///< 增量事件 (同 wire delta JSON 字段)
-    AGENTXX_CLIENT_EVT_TURN_END,   ///< 轮次结束 {"threadId","hasError","interrupted",...}
+    AGENTXX_CLIENT_EVT_READY = 0,      ///< 服务端就绪 {"uiCaps": n} (启动后最早事件)
+    AGENTXX_CLIENT_EVT_CONN_STATE,     ///< 连接状态变化 {"connState","startupProgress"}
+    AGENTXX_CLIENT_EVT_USER_INPUT,     ///< 用户输入已发出 {"threadId","text"}
+    AGENTXX_CLIENT_EVT_DELTA,          ///< 增量事件 (同 wire delta JSON 字段)
+    AGENTXX_CLIENT_EVT_TURN_END,       ///< 轮次结束 {"threadId","hasError","interrupted",...}
     AGENTXX_CLIENT_EVT_SESSION_SWITCH, ///< 会话切换 {"threadId"}
-    AGENTXX_CLIENT_EVT_PLUGIN_DATA,    ///< 插件事件转发 (WirePluginData) {"plugin","event","data"}
+    AGENTXX_CLIENT_EVT_PLUGIN_DATA, ///< 插件事件转发 (WirePluginData) {"plugin","event","data"}
     AGENTXX_CLIENT_EVT_COUNT
 } AgentxxClientEvent;
 
 /* ==================== 展示扩展句柄 (不透明) ==================== */
 
-typedef struct AgentxxStatusItem AgentxxStatusItem;   ///< 状态栏项句柄
-typedef struct AgentxxPanel AgentxxPanel;             ///< 侧边栏面板句柄
+typedef struct AgentxxStatusItem  AgentxxStatusItem;  ///< 状态栏项句柄
+typedef struct AgentxxPanel       AgentxxPanel;       ///< 侧边栏面板句柄
 typedef struct AgentxxInfoSection AgentxxInfoSection; ///< 侧边栏 Info 栏段落句柄
 
 /* ==================== 宿主函数表 ==================== */
@@ -185,11 +185,7 @@ typedef struct AgentxxClientHostVtable {
 
     /* ---- 交互原语 ---- */
     /// 显示 toast 提示 (level: 0=info 1=warning 2=error; 实现可忽略级别差异)
-    void (*show_toast)(
-        const AgentxxClientHost* host,
-        AgentxxPluginStringView  text,
-        int                      level
-    );
+    void (*show_toast)(const AgentxxClientHost* host, AgentxxPluginStringView text, int level);
 
     /* ---- 事件订阅 (payload JSON 字符串; 卸载自动退订) ---- */
     AgentxxSubscription* (*subscribe)(
@@ -241,7 +237,11 @@ typedef struct AgentxxClientHostVtable {
 
     /* ---- JSON 辅助 (线程安全) ---- */
     /// 从 JSON 字符串提取指定 key 的字符串值 (宿主解析; 结果 host->alloc)
-    char* (*json_get_string)(const AgentxxClientHost* host, AgentxxPluginStringView json, AgentxxPluginStringView key);
+    char* (*json_get_string)(
+        const AgentxxClientHost* host,
+        AgentxxPluginStringView  json,
+        AgentxxPluginStringView  key
+    );
     /// 字符串 → JSON 字符串字面量 (含引号包裹与转义; 结果 host->alloc)
     char* (*json_escape)(const AgentxxClientHost* host, AgentxxPluginStringView s);
 } AgentxxClientHostVtable;

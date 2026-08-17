@@ -24,28 +24,28 @@ class PluginUiAdapter;
 
 /// 状态栏项注册记录 (UI 注册表快照条目; 所有字段为宿主拷贝, 可跨线程读取)
 struct ClientStatusItem {
-    std::string plugin; ///< 所属插件名
-    std::string id;     ///< 全局唯一 id
-    std::string text;   ///< 当前文本
+    std::string plugin;    ///< 所属插件名
+    std::string id;        ///< 全局唯一 id
+    std::string text;      ///< 当前文本
     int         align = 0; ///< 0=左侧 1=右侧
     int         order = 0; ///< 组内排序 (小在前)
 };
 
 /// 面板注册记录 (UI 注册表快照条目)
 struct ClientPanel {
-    std::string     plugin; ///< 所属插件名
-    std::string     id;     ///< 全局唯一 id
-    std::string     title;  ///< tab 标题
-    neograph::json  items = neograph::json::array(); ///< {"items":[{...}]} 内容
+    std::string    plugin;                          ///< 所属插件名
+    std::string    id;                              ///< 全局唯一 id
+    std::string    title;                           ///< tab 标题
+    neograph::json items = neograph::json::array(); ///< {"items":[{...}]} 内容
 };
 
 /// Info 栏段落注册记录 (UI 注册表快照条目)
 /// - 渲染在侧边栏 Info tab 内 (段落标题 + items, 与面板 items schema 一致),
 ///   供插件把摘要/状态信息注入 Info 栏 (如 codegraph 索引状态、系统资源占用)
 struct ClientInfoSection {
-    std::string    plugin; ///< 所属插件名
-    std::string    id;     ///< 全局唯一 id
-    std::string    title;  ///< 段落标题 (空 = 无标题)
+    std::string    plugin;                          ///< 所属插件名
+    std::string    id;                              ///< 全局唯一 id
+    std::string    title;                           ///< 段落标题 (空 = 无标题)
     neograph::json items = neograph::json::array(); ///< {"items":[{...}]} 内容
 };
 
@@ -55,7 +55,7 @@ struct ClientCommand {
     std::string name;   ///< 命令名 (用户输入 "/{name}" 触发)
     std::string description;
     char* (*execute)(void* ud, AgentxxPluginStringView args_json, char** error_out) = nullptr;
-    void* ud = nullptr;
+    void* ud                                                                        = nullptr;
 };
 
 /// UI 注册表快照 (UI 线程渲染读取; COW shared_ptr 语义)
@@ -85,10 +85,10 @@ public:
     std::vector<std::string> depends;
     /// 可选依赖 (插件名): 未安装仅警告, 不影响加载
     std::vector<std::string> optionalDepends;
-    void*                    dlHandle = nullptr; ///< dlopen/LoadLibrary 句柄
+    void*                    dlHandle  = nullptr; ///< dlopen/LoadLibrary 句柄
     void*                    pluginCtx = nullptr; ///< entry 输出的插件私有上下文
     bool                     enabled   = true; ///< 是否启用 (禁用: UI 项摘除/命令停用)
-    bool userDisabled = false; ///< 是否被用户显式禁用 (区别于级联禁用)
+    bool userDisabled    = false; ///< 是否被用户显式禁用 (区别于级联禁用)
     bool unloadRequested = false; ///< 已请求卸载 (防重复)
 
     /// 本插件专属宿主句柄 (vtable 为宿主静态函数表, opaque 指向本实例)
@@ -99,10 +99,10 @@ public:
 
     /// 事件订阅记录 (卸载自动退订; 仅 io 线程)
     struct Subscription {
-        int      event = 0;
+        int event                                                       = 0;
         void (*handler)(AgentxxPluginStringView payload_json, void* ud) = nullptr;
-        void*    ud = nullptr;
-        bool     alive = true; ///< 已退订标记 (unsubscribe 置 false, 卸载清理用)
+        void* ud                                                        = nullptr;
+        bool  alive = true; ///< 已退订标记 (unsubscribe 置 false, 卸载清理用)
     };
 
     /// 注册残留 (卸载时统一清理; 仅 io 线程)
@@ -110,15 +110,15 @@ public:
     ///   commandRegs) 保留, enable 可恢复; 仅 unload/进程销毁时随实例释放
     /// - 活跃句柄 (statusItemHandles/panelHandles/infoSectionHandles/subHandles)
     ///   为宿主对象 (id/plugin 等), enable 期间有效
-    std::vector<ClientStatusItem>  statusItemRegs;        ///< 状态栏项注册信息 (disable 保留)
-    std::vector<ClientPanel>       panelRegs;             ///< 面板注册信息 (disable 保留)
-    std::vector<ClientInfoSection> infoSectionRegs;       ///< Info 段落注册信息 (disable 保留)
-    std::vector<ClientCommand>     commandRegs;           ///< 命令注册信息 (disable 保留)
-    std::vector<Subscription>      subscriptions;         ///< 已订阅事件 (disable 保留)
+    std::vector<ClientStatusItem>  statusItemRegs;  ///< 状态栏项注册信息 (disable 保留)
+    std::vector<ClientPanel>       panelRegs;       ///< 面板注册信息 (disable 保留)
+    std::vector<ClientInfoSection> infoSectionRegs; ///< Info 段落注册信息 (disable 保留)
+    std::vector<ClientCommand>     commandRegs;     ///< 命令注册信息 (disable 保留)
+    std::vector<Subscription>      subscriptions;   ///< 已订阅事件 (disable 保留)
     std::vector<std::shared_ptr<void>> statusItemHandles; ///< 状态栏项宿主句柄 (enable 期)
     std::vector<std::shared_ptr<void>> panelHandles;      ///< 面板宿主句柄 (enable 期)
     std::vector<std::shared_ptr<void>> infoSectionHandles; ///< Info 段落宿主句柄 (enable 期)
-    std::vector<std::shared_ptr<void>> subHandles;        ///< 订阅句柄保活
+    std::vector<std::shared_ptr<void>> subHandles;         ///< 订阅句柄保活
 
     /// 管理器弱引用 (host vtable 回调取用)
     std::weak_ptr<ClientPluginManager> manager{};
@@ -150,8 +150,8 @@ public:
 /// 事件订阅宿主句柄实现 (仅宿主内部; 与 plugin_api.h 的 C 不透明类型对应,
 /// 命名避免与 agent 侧 PluginManager 的全局定义 ODR 冲突)
 struct ClientSubscriptionImpl {
-    ClientPluginInstance*            inst = nullptr;
-    ClientPluginInstance::Subscription* sub = nullptr;
+    ClientPluginInstance*               inst = nullptr;
+    ClientPluginInstance::Subscription* sub  = nullptr;
 };
 
 /// client 插件管理器 (全局唯一; 挂 client 端点侧)
@@ -232,7 +232,7 @@ public:
 
     // ==================== 查询 ====================
 
-    std::vector<PluginListView>     list() const;
+    std::vector<PluginListView>           list() const;
     std::shared_ptr<ClientPluginInstance> find(std::string_view name) const;
 
     // ==================== UI 注册表 (任意线程) ====================
@@ -280,25 +280,42 @@ public:
     // 跨线程投递, 插件无感)
 
     /// 注册状态栏项; 返回宿主句柄 (nullptr = 宿主不支持或 id 冲突)
-    void* registerStatusItem(ClientPluginInstance* inst, const char* id, const char* json, int align, int order);
+    void* registerStatusItem(
+        ClientPluginInstance* inst,
+        const char*           id,
+        const char*           json,
+        int                   align,
+        int                   order
+    );
     /// 更新状态栏项; 返回 0 成功
-    int   updateStatusItem(ClientPluginInstance* inst, void* item, const char* json);
-    void  unregisterStatusItem(ClientPluginInstance* inst, void* item);
+    int  updateStatusItem(ClientPluginInstance* inst, void* item, const char* json);
+    void unregisterStatusItem(ClientPluginInstance* inst, void* item);
     /// 注册面板; 返回宿主句柄 (nullptr = 宿主不支持或 id 冲突)
     void* registerPanel(ClientPluginInstance* inst, const char* id, const char* props_json);
     /// 更新面板内容; 返回 0 成功
-    int   updatePanel(ClientPluginInstance* inst, void* panel, const char* items_json);
-    void  unregisterPanel(ClientPluginInstance* inst, void* panel);
+    int  updatePanel(ClientPluginInstance* inst, void* panel, const char* items_json);
+    void unregisterPanel(ClientPluginInstance* inst, void* panel);
     /// 注册 Info 栏段落; 返回宿主句柄 (nullptr = 宿主不支持或 id 冲突)
     void* registerInfoSection(ClientPluginInstance* inst, const char* id, const char* props_json);
     /// 更新 Info 栏段落内容; 返回 0 成功
-    int   updateInfoSection(ClientPluginInstance* inst, void* section, const char* items_json);
-    void  unregisterInfoSection(ClientPluginInstance* inst, void* section);
+    int  updateInfoSection(ClientPluginInstance* inst, void* section, const char* items_json);
+    void unregisterInfoSection(ClientPluginInstance* inst, void* section);
     /// 注册命令; 返回 0 成功 (名字冲突返回非 0)
-    int   registerCommand(ClientPluginInstance* inst, const char* name, const char* description, char* (*exec)(void*, AgentxxPluginStringView, char**), void* ud);
-    int   unregisterCommand(ClientPluginInstance* inst, const char* name);
+    int registerCommand(
+        ClientPluginInstance* inst,
+        const char*           name,
+        const char*           description,
+        char* (*exec)(void*, AgentxxPluginStringView, char**),
+        void* ud
+    );
+    int unregisterCommand(ClientPluginInstance* inst, const char* name);
     /// 事件订阅; 返回句柄 (宿主持有; 卸载自动退订)
-    AgentxxSubscription* subscribe(ClientPluginInstance* inst, int event, void (*handler)(AgentxxPluginStringView, void*), void* ud);
+    AgentxxSubscription* subscribe(
+        ClientPluginInstance* inst,
+        int                   event,
+        void (*handler)(AgentxxPluginStringView, void*),
+        void* ud
+    );
     void unsubscribe(AgentxxSubscription* sub);
     /// 自描述
     std::string getOwnInfoJson(ClientPluginInstance* inst);
@@ -357,7 +374,7 @@ private:
     std::shared_ptr<const ClientUiRegistry> uiRegistry_;
 
     /// 会话上下文 (io 线程)
-    std::string threadId_ = "session";
+    std::string threadId_  = "session";
     std::string connState_ = "connecting";
     std::string startupProgress_;
 
@@ -384,23 +401,41 @@ public:
     /* ---- 信号回调 (client io 线程; 快速返回) ---- */
 
     /// 状态栏项注册/更新/移除 (props: {"text","tooltip"})
-    virtual void onStatusItemRegistered(const std::string& /*id*/, const neograph::json& /*props*/, int /*align*/, int /*order*/) {}
+    virtual void onStatusItemRegistered(
+        const std::string& /*id*/,
+        const neograph::json& /*props*/,
+        int /*align*/,
+        int /*order*/
+    ) {}
+
     virtual void onStatusItemUpdated(const std::string& /*id*/, const neograph::json& /*props*/) {}
+
     virtual void onStatusItemRemoved(const std::string& /*id*/) {}
+
     /// 面板注册/更新/移除 (props: {"title"}; items: {"items":[...]})
     virtual void onPanelRegistered(const std::string& /*id*/, const neograph::json& /*props*/) {}
+
     virtual void onPanelUpdated(const std::string& /*id*/, const neograph::json& /*items*/) {}
+
     virtual void onPanelRemoved(const std::string& /*id*/) {}
+
     /// Info 栏段落注册/更新/移除 (props: {"title"}; items: {"items":[...]})
-    virtual void onInfoSectionRegistered(const std::string& /*id*/, const neograph::json& /*props*/) {}
+    virtual void
+        onInfoSectionRegistered(const std::string& /*id*/, const neograph::json& /*props*/) {}
+
     virtual void onInfoSectionUpdated(const std::string& /*id*/, const neograph::json& /*items*/) {}
+
     virtual void onInfoSectionRemoved(const std::string& /*id*/) {}
+
     /// toast 提示 (level: 0=info 1=warning 2=error)
     virtual void onToast(const std::string& /*text*/, int /*level*/) {}
+
     /// send 动作: 代发用户消息 (io 线程; 与用户输入同排队语义)
     virtual void sendPluginMessage(const std::string& /*text*/) {}
+
     /// 请求取消当前会话轮次 (io 线程; 与用户按 Esc 等价)
     virtual void requestCancel(const std::string& /*threadId*/) {}
+
     /// 跨端数据: client → agent (io 线程; 经端点 WirePluginDataUp 发送)
     /// 返回 true 表示已发送 (未连接等失败返回 false)
     virtual bool sendPluginData(

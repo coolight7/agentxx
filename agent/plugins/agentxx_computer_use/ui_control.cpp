@@ -1,5 +1,5 @@
-#include "computer_use_plugin.h"
 #include "codegraph/core/json.hpp"
+#include "computer_use_plugin.h"
 #include "fmt/format.h"
 #include <cctype>
 #include <chrono>
@@ -850,11 +850,7 @@ static UICmdResult uiControlKeyType(std::string_view text) {
     }
 
     if (!inputs.size() == 0) {
-        uiControlSendInputAsync(
-            static_cast<UINT>(inputs.size()),
-            inputs.data(),
-            sizeof(INPUT)
-        );
+        uiControlSendInputAsync(static_cast<UINT>(inputs.size()), inputs.data(), sizeof(INPUT));
     }
 
     return UICmdResult{true, fmt::format("key_type [{} chars]", text.size())};
@@ -875,12 +871,12 @@ static UICmdResult uiControlGetScreenSize() {
 
 /// 命令对象字段 (顺序无关提取; ondemand 惰性迭代要求按序访问, 这里遍历全部字段匹配)
 struct UiCmdFields {
-    bool     hasAction = false;
-    bool     hasX = false, hasY = false, hasX1 = false, hasY1 = false;
-    bool     hasX2 = false, hasY2 = false, hasDelta = false, hasKey = false;
-    bool     hasKeys = false, hasText = false, hasButton = false, hasDuration = false;
-    bool     hasMs = false;
-    std::string              action, button, key, text;
+    bool        hasAction = false;
+    bool        hasX = false, hasY = false, hasX1 = false, hasY1 = false;
+    bool        hasX2 = false, hasY2 = false, hasDelta = false, hasKey = false;
+    bool        hasKeys = false, hasText = false, hasButton = false, hasDuration = false;
+    bool        hasMs = false;
+    std::string action, button, key, text;
     std::vector<std::string> keys;
     int64_t                  x = 0, y = 0, x1 = 0, y1 = 0, x2 = 0, y2 = 0;
     int64_t                  delta = 0, duration = 200, ms = 100;
@@ -979,7 +975,7 @@ static UICmdResult uiControlExecuteOne(const UiCmdFields& f) {
         if (!f.hasX1 || !f.hasY1 || !f.hasX2 || !f.hasY2) {
             return UICmdResult{false, "mouse_drag requires `x1`, `y1`, `x2`, `y2`"};
         }
-        auto button = f.hasButton ? f.button : std::string{"left"};
+        auto button   = f.hasButton ? f.button : std::string{"left"};
         int  duration = static_cast<int>(f.duration);
         return uiControlMouseDrag(
             static_cast<int>(f.x1),
@@ -1089,7 +1085,7 @@ std::string uiControlExecute(agentxx_computer_use_plugin::SimpleJson& arguments)
     int64_t interval_ms = 50;
     jsonGetInt(arguments.doc().at_pointer("/interval_ms"), interval_ms);
 
-    codegraph::Json results = codegraph::Json::array();
+    codegraph::Json results    = codegraph::Json::array();
     int             ok_count   = 0;
     int             fail_count = 0;
     size_t          i          = 0;
@@ -1104,10 +1100,10 @@ std::string uiControlExecute(agentxx_computer_use_plugin::SimpleJson& arguments)
         if (elem.error() || !uiControlParseCmd(elem.value(), f) || !f.hasAction
             || f.action.empty()) {
             results.push_back(codegraph::Json{
-                {"index", i},
-                {"action", ""},
-                {"ok", false},
-                {"msg", "missing `action` field"},
+                {"index",  i                       },
+                {"action", ""                      },
+                {"ok",     false                   },
+                {"msg",    "missing `action` field"},
             });
             fail_count++;
             break;
@@ -1119,10 +1115,10 @@ std::string uiControlExecute(agentxx_computer_use_plugin::SimpleJson& arguments)
             fail_count++;
         }
         results.push_back(codegraph::Json{
-            {"index", i},
+            {"index",  i       },
             {"action", f.action},
-            {"ok", r.ok},
-            {"msg", r.msg},
+            {"ok",     r.ok    },
+            {"msg",    r.msg   },
         });
         if (!r.ok) {
             break;

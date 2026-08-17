@@ -241,7 +241,8 @@ PluginTool::PluginTool(
     name_{spec.name.data ? spec.name.data : "", spec.name.size},
     description_{spec.description.data ? spec.description.data : "", spec.description.size},
     parametersJson_{
-        spec.parameters_json.data ? spec.parameters_json.data : "", spec.parameters_json.size
+        spec.parameters_json.data ? spec.parameters_json.data : "",
+        spec.parameters_json.size
     },
     parameters_(neograph::json::object()),
     instance_(instance) {
@@ -737,7 +738,7 @@ static int xx_unregister_hook(
 }
 
 static AgentxxSubscription* xx_subscribe(
-    const AgentxxHost* host,
+    const AgentxxHost*      host,
     AgentxxPluginStringView topic,
     void (*handler)(AgentxxPluginStringView event_json, void* ud),
     void* ud
@@ -942,10 +943,10 @@ static char* xx_call_tool(
         parsed["thread_id"]    = tid;
         parsed["tool_call_id"] = fmt::format("plugin_call_{}", ++g_pluginCallSeq);
 
-        const auto& spec = pluginTool->spec();
-        char*       err  = nullptr;
+        const auto& spec    = pluginTool->spec();
+        char*       err     = nullptr;
         std::string argsStr = parsed.dump();
-        char* out = spec.execute(
+        char*       out     = spec.execute(
             spec.user_data,
             agentxx_plugin_sv(argsStr.data(), argsStr.size()),
             agentxx_plugin_sv(tid.data(), tid.size()),
@@ -1024,11 +1025,8 @@ static char* xx_get_own_info(const AgentxxHost* host) {
     XX_PLUGIN_CATCH_END(nullptr)
 }
 
-static char* xx_get_share_store(
-    const AgentxxHost*      host,
-    AgentxxPluginStringView thread_id,
-    long long               id
-) {
+static char*
+    xx_get_share_store(const AgentxxHost* host, AgentxxPluginStringView thread_id, long long id) {
     XX_PLUGIN_CATCH_BEGIN
     auto mgr  = mgrOf(host);
     auto inst = instOf(host);
@@ -1703,8 +1701,8 @@ static std::string pluginNameFromPath(const std::string& path) {
 /// 查询内置插件 (编译进 libagentxx 的插件; 未内置返回 nullptr)
 /// - 跳过 name 为空的占位条目 (空表时 agentxx_get_builtin_plugins 返回占位)
 static const AgentxxBuiltinPluginInfo* findBuiltinPlugin(std::string_view name) {
-    size_t                        count = 0;
-    const AgentxxBuiltinPluginInfo* arr  = agentxx_get_builtin_plugins(&count);
+    size_t                          count = 0;
+    const AgentxxBuiltinPluginInfo* arr   = agentxx_get_builtin_plugins(&count);
     for (size_t i = 0; i < count; ++i) {
         if (arr[i].name && name == arr[i].name) {
             return &arr[i];
@@ -1756,7 +1754,8 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadNativeAsync(
             name    = std::string{info->name.data ? info->name.data : "", info->name.size};
             version = std::string{info->version.data ? info->version.data : "", info->version.size};
             desc    = std::string{
-                info->description.data ? info->description.data : "", info->description.size
+                info->description.data ? info->description.data : "",
+                info->description.size
             };
         }
     }
@@ -1839,10 +1838,10 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadNativeAsync(
 }
 
 asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadBuiltinAsync(
-    std::string                    name,
-    std::string                    path,
-    std::vector<std::string>       depends,
-    std::vector<std::string>       optionalDepends
+    std::string              name,
+    std::string              path,
+    std::vector<std::string> depends,
+    std::vector<std::string> optionalDepends
 ) {
     auto ctx = agentContext_.lock();
     if (!ctx || !ctx->blockingPool) {
@@ -1882,7 +1881,8 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadBuiltinAsync
         if (info) {
             version = std::string{info->version.data ? info->version.data : "", info->version.size};
             desc    = std::string{
-                info->description.data ? info->description.data : "", info->description.size
+                info->description.data ? info->description.data : "",
+                info->description.size
             };
         }
     }
@@ -1893,15 +1893,15 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadBuiltinAsync
     // path 传 manifest 入口文件路径 (与动态加载同形态, 供插件 get_own_info
     // 按"库路径所在目录"推导资源文件, 如 example_js 壳的同目录 plugin.js;
     // 传配置目录会误推导到上一级, 见 loadPluginAsync 内置回退)
-    inst->path             = std::move(path);
-    inst->dlHandle         = nullptr; // 内置插件无动态库句柄
-    inst->builtinUnload    = entry->unload;
-    inst->depends          = std::move(depends);
-    inst->optionalDepends  = std::move(optionalDepends);
-    inst->self             = inst;
-    inst->manager          = shared_from_this();
-    inst->host.vtable      = &g_hostVtable;
-    inst->host.opaque      = inst.get();
+    inst->path            = std::move(path);
+    inst->dlHandle        = nullptr; // 内置插件无动态库句柄
+    inst->builtinUnload   = entry->unload;
+    inst->depends         = std::move(depends);
+    inst->optionalDepends = std::move(optionalDepends);
+    inst->self            = inst;
+    inst->manager         = shared_from_this();
+    inst->host.vtable     = &g_hostVtable;
+    inst->host.opaque     = inst.get();
 
     plugins_[name] = inst;
 
@@ -2468,11 +2468,7 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadPluginAsync(
     if (!fs::exists(path, ec3)) {
         auto builtinName = pluginNameFromPath(path);
         if (findBuiltinPlugin(builtinName)) {
-            XX_LOGI(
-                "Plugin file `{}` not found, fallback to builtin `{}`",
-                path,
-                builtinName
-            );
+            XX_LOGI("Plugin file `{}` not found, fallback to builtin `{}`", path, builtinName);
             co_return co_await loadBuiltinAsync(builtinName, std::move(path), {}, {});
         }
     }
@@ -2654,9 +2650,9 @@ std::string PluginManager::getConfigJson() {
     if (!ctx || !ctx->agentConfig) {
         return {};
     }
-    const auto& cfg = *ctx->agentConfig;
-    neograph::json j = neograph::json::object();
-    j["dataDir"]     = cfg.dataDir;
+    const auto&    cfg = *ctx->agentConfig;
+    neograph::json j   = neograph::json::object();
+    j["dataDir"]       = cfg.dataDir;
     // 当前工作路径 (插件索引项目根用; 失败为空串, 插件自行回退)
     j["projectRoot"] = agentxx::agent::AgentConfigStatic::getCurrentWorkPath();
 #if XX_IS_WIN_D
@@ -2718,8 +2714,8 @@ int PluginManager::setPromptJson(PluginInstance* inst, const char* prompt_json) 
     // ---- 备份 (仅首次写入某条目前记录原值; 重复写入不覆盖备份, 保证回滚到
     //      插件加载前状态而非插件上次写入值) ----
     if (!inst->promptBackup.backedUpSystem) {
-        inst->promptBackup.backedUpSystem = true;
-        inst->promptBackup.systemPrompt   = prompt.systemPrompt;
+        inst->promptBackup.backedUpSystem       = true;
+        inst->promptBackup.systemPrompt         = prompt.systemPrompt;
         inst->promptBackup.systemPlanningPrompt = prompt.systemPlanningPrompt;
         inst->promptBackup.systemSkillPrompt    = prompt.systemSkillPrompt;
     }
@@ -2752,9 +2748,7 @@ int PluginManager::setPromptJson(PluginInstance* inst, const char* prompt_json) 
                 || j.contains("systemSkillPrompt")
             ? "yes"
             : "no",
-        j.contains("toolPrompt") && j["toolPrompt"].is_object()
-            ? j["toolPrompt"].size()
-            : 0
+        j.contains("toolPrompt") && j["toolPrompt"].is_object() ? j["toolPrompt"].size() : 0
     );
     return 0;
 }
@@ -2769,10 +2763,7 @@ void PluginManager::restorePromptBackup(PluginInstance* inst) {
     }
     auto ctx = agentContext_.lock();
     if (!ctx || !ctx->agentConfig) {
-        XX_LOGW(
-            "Plugin `{}` prompt rollback skipped: agent config not available",
-            inst->name
-        );
+        XX_LOGW("Plugin `{}` prompt rollback skipped: agent config not available", inst->name);
         return;
     }
     auto& prompt = ctx->agentConfig->prompt;
