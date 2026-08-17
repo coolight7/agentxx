@@ -2,6 +2,7 @@
 #include "agentxx/agent/code_agent.h"
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/middlewares/permission.h"
+#include "agentxx/plugin/plugin_manager.h"
 #include "asio/as_tuple.hpp"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
@@ -398,6 +399,33 @@ asio::awaitable<void> test_agent_init() {
 
     XX_TEST_EXPECT_TRUE(agent.engine != nullptr);
     XX_TEST_EXPECT_TRUE(agent.agentContext != nullptr);
+
+    // collectAppendComponentInfo: init 后插件管理器已装配 (无配置插件时列表为空),
+    // 收集结果应包含已加载插件 (数量 + 名称列表), 与 MCP/Skill/Memory 同级。
+    // protected 成员经测试子类暴露访问。
+    class AppendCollectAgent : public agentxx::agent::CodeAgent {
+    public:
+
+        using CodeAgent::CodeAgent;
+
+        void collect(
+            std::vector<agentxx::agent::AppendComponentNotification>& out
+        ) {
+            collectAppendComponentInfo(out);
+        }
+    };
+    AppendCollectAgent collectAgent(cfg);
+    co_await collectAgent.init();
+    XX_TEST_EXPECT_TRUE(collectAgent.agentContext->pluginManager != nullptr);
+    std::vector<agentxx::agent::AppendComponentNotification> notifications;
+    collectAgent.collect(notifications);
+    size_t pluginCount = 0;
+    for (const auto& n : notifications) {
+        if (n.type == agentxx::agent::AppendComponentNotification::Type::Plugin) {
+            ++pluginCount;
+        }
+    }
+    XX_TEST_EXPECT_EQ(pluginCount, collectAgent.agentContext->pluginManager->list().size());
 
     co_return;
 }
