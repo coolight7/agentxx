@@ -159,31 +159,25 @@ asio::awaitable<void> test_middleware_cleanup_thread() {
     const std::string tid = "subagent_research_parent_1";
 
     // 写入三类 per-thread 状态
-    agentContext->middlewareHandleContext->setGraphDataItemValue<std::string>(
-        tid, "xx_key", "value"
-    );
+    agentContext->middlewareHandleContext
+        ->setGraphDataItemValue<std::string>(tid, "xx_key", "value");
     agentContext->middlewareHandleContext->addShareStoreItemValue(tid, "big content");
-    auto handle = std::make_shared<agentxx::middleware::MiddlewareWrapHandle<
-        agentxx::middleware::BaseMiddlewareState>>("TestHandle", agentContext);
+    auto handle = std::make_shared<
+        agentxx::middleware::MiddlewareWrapHandle<agentxx::middleware::BaseMiddlewareState>>(
+        "TestHandle",
+        agentContext
+    );
     handle->states[tid] = std::make_shared<agentxx::middleware::BaseMiddlewareState>();
     agentContext->middlewareHandleContext->handles.push_back(handle);
 
-    XX_TEST_EXPECT_TRUE(
-        agentContext->middlewareHandleContext->graphData.contains(tid)
-    );
-    XX_TEST_EXPECT_TRUE(
-        agentContext->middlewareHandleContext->shareStore.contains(tid)
-    );
+    XX_TEST_EXPECT_TRUE(agentContext->middlewareHandleContext->graphData.contains(tid));
+    XX_TEST_EXPECT_TRUE(agentContext->middlewareHandleContext->shareStore.contains(tid));
     XX_TEST_EXPECT_TRUE(handle->states.contains(tid));
 
     // 清理后全部移除
     agentContext->middlewareHandleContext->cleanupThread(tid);
-    XX_TEST_EXPECT_FALSE(
-        agentContext->middlewareHandleContext->graphData.contains(tid)
-    );
-    XX_TEST_EXPECT_FALSE(
-        agentContext->middlewareHandleContext->shareStore.contains(tid)
-    );
+    XX_TEST_EXPECT_FALSE(agentContext->middlewareHandleContext->graphData.contains(tid));
+    XX_TEST_EXPECT_FALSE(agentContext->middlewareHandleContext->shareStore.contains(tid));
     XX_TEST_EXPECT_FALSE(handle->states.contains(tid));
 
     co_return;
@@ -193,8 +187,8 @@ asio::awaitable<void> test_middleware_cleanup_thread() {
 asio::awaitable<void> test_subagent_session_remove() {
     auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
 
-    const std::string tid = "subagent_research_parent_1";
-    auto session = agentContext->getSession(tid);
+    const std::string tid     = "subagent_research_parent_1";
+    auto              session = agentContext->getSession(tid);
     XX_TEST_EXPECT_TRUE(agentContext->sessions->get(tid) == session);
 
     agentContext->sessions->remove(tid);

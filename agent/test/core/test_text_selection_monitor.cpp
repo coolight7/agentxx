@@ -21,7 +21,7 @@ int g_ts_failed = 0;
 
 /// 定位 agentxx_text_selection_monitor 插件目录
 static std::string findTextSelectionPluginPath() {
-    std::error_code ec;
+    std::error_code                    ec;
     std::vector<std::filesystem::path> candidates;
     candidates.push_back(
         std::filesystem::current_path(ec) / "plugins" / "agentxx_text_selection_monitor"
@@ -31,12 +31,26 @@ static std::string findTextSelectionPluginPath() {
     DWORD   n = ::GetModuleFileNameW(nullptr, buf, 4096);
     if (n > 0 && n < 4096) {
         int len = ::WideCharToMultiByte(
-            CP_UTF8, 0, buf, static_cast<int>(n), nullptr, 0, nullptr, nullptr
+            CP_UTF8,
+            0,
+            buf,
+            static_cast<int>(n),
+            nullptr,
+            0,
+            nullptr,
+            nullptr
         );
         if (len > 0) {
             std::string exe(static_cast<size_t>(len), '\0');
             ::WideCharToMultiByte(
-                CP_UTF8, 0, buf, static_cast<int>(n), exe.data(), len, nullptr, nullptr
+                CP_UTF8,
+                0,
+                buf,
+                static_cast<int>(n),
+                exe.data(),
+                len,
+                nullptr,
+                nullptr
             );
             candidates.push_back(
                 std::filesystem::path(exe).parent_path() / "plugins"
@@ -85,7 +99,9 @@ asio::awaitable<TestResult>
         auto tool = ctx->toolRegistry->find("agentxx_text_selection_monitor");
         XX_TEST_EXPECT_TRUE(tool != nullptr);
         if (tool) {
-            auto out = co_await tool->execute_async(neograph::json{{"command", "status"}});
+            auto out = co_await tool->execute_async(neograph::json{
+                {"command", "status"}
+            });
             auto j   = neograph::json::parse(out);
             XX_TEST_EXPECT_EQ(j["ok"].get<bool>(), true);
             XX_TEST_EXPECT_EQ(j["running"].get<bool>(), false);
@@ -97,14 +113,16 @@ asio::awaitable<TestResult>
         auto tool = ctx->toolRegistry->find("agentxx_text_selection_monitor");
         if (tool) {
             auto out = co_await tool->execute_async(neograph::json{
-                {"command", "start"},
-                {"debounce_ms", 300},
+                {"command",     "start"},
+                {"debounce_ms", 300    },
             });
-            auto j = neograph::json::parse(out);
+            auto j   = neograph::json::parse(out);
             XX_TEST_EXPECT_EQ(j["ok"].get<bool>(), true);
             XX_TEST_EXPECT_EQ(j["running"].get<bool>(), true);
 
-            auto out2 = co_await tool->execute_async(neograph::json{{"command", "stop"}});
+            auto out2 = co_await tool->execute_async(neograph::json{
+                {"command", "stop"}
+            });
             auto j2   = neograph::json::parse(out2);
             XX_TEST_EXPECT_EQ(j2["ok"].get<bool>(), true);
             XX_TEST_EXPECT_EQ(j2["running"].get<bool>(), false);

@@ -378,9 +378,9 @@ static asio::awaitable<void> test_remote_protocol_roundtrip() {
         agentxx::agent::WirePluginData pd;
         pd.plugin = "agentxx_system_monitor";
         pd.event  = "usage";
-        pd.data   = R"({"cpu":42.5,"mem_total_mb":16384,"mem_used_mb":8192,"mem_percent":50.0,"gpus":[{"name":"NVIDIA RTX 4090","dedicated_vram_mb":24576,"dedicated_vram_used_mb":12000,"shared_vram_mb":8192,"shared_vram_used_mb":100,"usage_percent":33.3}]})";
-        auto back
-            = WsAgentIOTransport::deserialize(WsAgentIOTransport::serialize(WireMessage{pd}));
+        pd.data
+            = R"({"cpu":42.5,"mem_total_mb":16384,"mem_used_mb":8192,"mem_percent":50.0,"gpus":[{"name":"NVIDIA RTX 4090","dedicated_vram_mb":24576,"dedicated_vram_used_mb":12000,"shared_vram_mb":8192,"shared_vram_used_mb":100,"usage_percent":33.3}]})";
+        auto back = WsAgentIOTransport::deserialize(WsAgentIOTransport::serialize(WireMessage{pd}));
         XX_TEST_EXPECT_TRUE(back.has_value());
         if (back) {
             auto* r = std::get_if<agentxx::agent::WirePluginData>(&*back);
@@ -400,8 +400,7 @@ static asio::awaitable<void> test_remote_protocol_roundtrip() {
         pu.plugin = "agentxx_system_monitor";
         pu.event  = "usage_enabled";
         pu.data   = R"({"enabled":true})";
-        auto back
-            = WsAgentIOTransport::deserialize(WsAgentIOTransport::serialize(WireMessage{pu}));
+        auto back = WsAgentIOTransport::deserialize(WsAgentIOTransport::serialize(WireMessage{pu}));
         XX_TEST_EXPECT_TRUE(back.has_value());
         if (back) {
             auto* r = std::get_if<agentxx::agent::WirePluginDataUp>(&*back);

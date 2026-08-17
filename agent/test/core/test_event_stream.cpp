@@ -221,26 +221,22 @@ asio::awaitable<void> test_eventbus_convenience() {
     co_return;
 }
 
-
 /// 8. EventBus 前缀订阅: 匹配 topic 前缀的事件经 any 转发, 取消后不再触发
 asio::awaitable<void> test_eventbus_prefix_subscribe() {
-    auto  bus = agentxx::middleware::EventBus{co_await asio::this_coro::executor};
-    int   matched   = 0;
-    int   unrelated = 0;
-    auto id = bus.subscribePrefix(
-        "plugin.",
-        [&](std::string_view topic, const std::any& payload) {
-            if (payload.type() != typeid(std::string)) {
-                return;
-            }
-            const auto& data = std::any_cast<const std::string&>(payload);
-            if (topic == "plugin.agentxx_codegraph.progress") {
-                matched += (data == "{\"p\":1}") ? 1 : 0;
-            } else {
-                unrelated++;
-            }
+    auto bus       = agentxx::middleware::EventBus{co_await asio::this_coro::executor};
+    int  matched   = 0;
+    int  unrelated = 0;
+    auto id = bus.subscribePrefix("plugin.", [&](std::string_view topic, const std::any& payload) {
+        if (payload.type() != typeid(std::string)) {
+            return;
         }
-    );
+        const auto& data = std::any_cast<const std::string&>(payload);
+        if (topic == "plugin.agentxx_codegraph.progress") {
+            matched += (data == "{\"p\":1}") ? 1 : 0;
+        } else {
+            unrelated++;
+        }
+    });
 
     // 匹配前缀的事件 → 回调
     co_await bus.publish<std::string>("plugin.agentxx_codegraph.progress", "{\"p\":1}");
