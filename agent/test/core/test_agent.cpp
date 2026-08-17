@@ -162,6 +162,9 @@ int            g_da_sim_completion_tokens = 50;
 neograph::json g_da_sim_tool_calls        = neograph::json::array();
 std::string    g_da_sim_reasoning_content = "";
 int            g_da_sim_delay_ms          = 0;
+neograph::json g_da_sim_last_request      = neograph::json::object();
+/// 按到达顺序记录所有 /chat/completions 请求 (供测试断言多次请求)
+std::vector<neograph::json> g_da_sim_requests;
 /// 累计请求计数 (每次 /chat/completions 请求递增, 含失败请求), 供测试验证调用次数
 int g_da_sim_request_count = 0;
 /// 剩余失败次数: >0 时接下来的请求直接返回 HTTP 500 并递减, 用于模拟 LLM API 持续失败
@@ -252,6 +255,9 @@ DaSimServer startDaSimServer() {
                 auto j            = neograph::json::parse(req.body());
                 bool stream       = j.value("stream", false);
                 bool hasToolCalls = !g_da_sim_tool_calls.empty();
+                // 记录请求 (供测试断言模型名/消息前缀; 按到达顺序追加)
+                g_da_sim_last_request = j;
+                g_da_sim_requests.push_back(j);
 
                 if (stream) {
                     std::string sseBody;

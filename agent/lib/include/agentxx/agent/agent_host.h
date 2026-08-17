@@ -100,12 +100,28 @@ public:
     /// - 子代理为独立 agent: 独立 AgentContext / engine / SessionStore
     /// - HIL (权限/中断) 冒泡: 子代理会话继承父会话的 io 与总线
     /// - 取消令牌透传: 父取消级联中止子代理
+    /// - 同上下文模式 (messages 或 threadId 非空):
+    ///   - messages: 结构化消息透传作为子代理初始上下文 (可含 system,
+    ///     优先于 message 文本)
+    ///   - threadId: 子代理运行在指定 thread (而非独立 subagent 线程),
+    ///     并强制使用该 thread 父会话的当前模型 (忽略 subagentModel);
+    ///     两者配合保证"相同上下文前缀 + 相同 threadid + 相同模型",
+    ///     以命中 provider KV/prefix cache (如上下文压缩场景)
+    /// - tools (可选, 子代理工具策略): 缺省 = 默认全量工具;
+    ///   `[]` = 无工具; `["*"]` = 全量继承父 agent 工具 (解析为父工具名白名单);
+    ///   `["name", ...]` = 自定义白名单
+    /// - enableSummarization (可选): 子代理上下文压缩中间件开关;
+    ///   缺省继承 config (父拷贝); 压缩发起的子代理必须显式 false
     asio::awaitable<events::RespSubagentResult> spawnSubagent(
         std::string_view                              subagentName,
         std::string_view                              systemPrompt,
         std::string_view                              message,
         std::string_view                              parentThreadId,
-        std::shared_ptr<neograph::graph::CancelToken> cancelToken = nullptr
+        std::shared_ptr<neograph::graph::CancelToken> cancelToken = nullptr,
+        std::optional<neograph::json>                 messages   = std::nullopt,
+        std::string_view                              threadId   = {},
+        std::optional<neograph::json>                 tools      = std::nullopt,
+        std::optional<bool>                           enableSummarization = std::nullopt
     );
 
     /// 批量派生并等待全部完成 (结果顺序与输入一致)

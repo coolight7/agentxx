@@ -5,8 +5,6 @@
 - 会话恢复时是否取原来的 配置、插件
 - eventBus 改为tree，命名空间使用 axx/bxx/cc
 - 支持修改上下文
-- llm压缩时，保持同一上下文，直接添加新user消息提示压缩成一段话，然后覆盖回去
-- 插件化支持内置合并编译
 - 客户端 viewMessage 分页
 - 插件实现 execute_javascript_command
 - 调整插件代码结构，增加测试、划分文件夹

@@ -41,6 +41,11 @@ public:
     /// - 无可用模型时返回 nullptr
     std::shared_ptr<neograph::Provider> getProvider(std::string_view name);
 
+    /// 注入/覆盖指定模型的 Provider 实例 (测试或嵌入方自定义 provider 用)
+    /// - 覆盖后 getProvider 返回该实例, 不再按 ModelConfig::type 创建
+    /// - 同名 registerModel 会清除注入的实例 (下次 getProvider 重新创建)
+    void setProvider(std::string_view name, std::shared_ptr<neograph::Provider> provider);
+
     /// 所有已注册模型的显示名称
     std::vector<std::string> listModelNames() const;
 

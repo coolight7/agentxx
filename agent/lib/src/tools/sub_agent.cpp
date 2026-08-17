@@ -183,6 +183,35 @@ neograph::ChatTool SubAgentManagerTool::get_definition() const {
                             {"description", prompt.getArg("message")},
                         },
                     },
+                    {
+                        "messages",
+                        {
+                            {"type", "array"},
+                            {"description", prompt.getArg("messages")},
+                        },
+                    },
+                    {
+                        "thread_id",
+                        {
+                            {"type", "string"},
+                            {"description", prompt.getArg("thread_id")},
+                        },
+                    },
+                    {
+                        "tools",
+                        {
+                            {"type", "array"},
+                            {"items", {{"type", "string"}}},
+                            {"description", prompt.getArg("tools")},
+                        },
+                    },
+                    {
+                        "enable_summarization",
+                        {
+                            {"type", "boolean"},
+                            {"description", prompt.getArg("enable_summarization")},
+                        },
+                    },
                 },
             }, {
                 "required",
@@ -201,10 +230,35 @@ asio::awaitable<std::string> SubAgentManagerTool::execute_async(const neograph::
         co_return R"({"error":"Arg `subagent` is empty"})";
     }
     auto message = arguments.value("message", std::string{});
-    if (message.empty()) {
+    // 结构化消息透传 (可选): 提供时优先于 message; 用于同上下文压缩等
+    // 需要完整消息前缀的场景 (原样透传, 无文本转录)
+    std::optional<neograph::json> messages;
+    if (arguments.contains("messages") && arguments["messages"].is_array()) {
+        messages = arguments["messages"];
+    }
+    if (message.empty() && !messages.has_value()) {
         co_return R"({"error":"Arg `message` is empty"})";
     }
     auto system_prompt = arguments.value("system_prompt", std::string{});
+    // 指定子代理运行的 thread id (可选, 同上下文模式):
+    // - 为空: 子代理使用独立 subagent 线程 id (默认行为)
+    // - 非空: 子代理运行在指定 thread, 使用该 thread 父会话当前模型,
+    //   配合 messages 透传保证"相同上下文前缀 + 相同 threadid + 相同模型",
+    //   以命中 provider KV/prefix cache
+    auto thread_id = arguments.value("thread_id", std::string{});
+    // 子代理工具策略 (可选): 缺省 = 子代理默认全量工具;
+    // [] = 无工具; ["*"] = 全量继承父工具; [name...] = 自定义白名单
+    std::optional<neograph::json> tools;
+    if (arguments.contains("tools") && arguments["tools"].is_array()) {
+        tools = arguments["tools"];
+    }
+    // 子代理上下文压缩中间件开关 (可选, 缺省继承 config 默认):
+    // summarization 发起的压缩子代理必须显式 false, 避免对透传的
+    // 上下文前缀二次压缩 (破坏 KV/prefix cache 一致性)
+    std::optional<bool> enableSummarization;
+    if (arguments.contains("enable_summarization") && arguments["enable_summarization"].is_boolean()) {
+        enableSummarization = arguments["enable_summarization"].get<bool>();
+    }
 
     auto subagentIt = subAgentList.find(subagentName);
     if (subagentIt == subAgentList.end() || nullptr == subagentIt->second) {
@@ -227,8 +281,7 @@ asio::awaitable<std::string> SubAgentManagerTool::execute_async(const neograph::
     if (!agentCtxPtr || !agentCtxPtr->middlewareHandleContext) {
         co_return R"({"error":"AgentContext not available"})";
     }
-    auto thread_id = arguments.value("thread_id", std::string{});
-    auto resultId  = arguments.value("tool_call_id", std::string{});
+    auto resultId = arguments.value("tool_call_id", std::string{});
 
     // 通过 requestInterrupt 触发/恢复中断
     // - 首次: 存储中断参数到 graphData, 抛出 NodeInterrupt
@@ -236,14 +289,30 @@ asio::awaitable<std::string> SubAgentManagerTool::execute_async(const neograph::
     auto result = co_await agentCtxPtr->middlewareHandleContext->requestInterrupt(
         thread_id,
         [&]() {
+            auto argJson = neograph::json{
+                {"subagent", subagentName},
+                {"system_prompt", system_prompt},
+                {"message", message},
+            };
+            // 结构化消息透传 (同上下文模式): 中断参数携带完整消息前缀
+            if (messages.has_value()) {
+                argJson["messages"] = *messages;
+            }
+            // 指定运行 thread (同上下文模式): 空时保持默认独立 subagent 线程
+            if (!thread_id.empty()) {
+                argJson["thread_id"] = thread_id;
+            }
+            // 工具策略 (无工具/继承父/自定义): 缺省不设置 (子代理默认全量)
+            if (tools.has_value()) {
+                argJson["tools"] = *tools;
+            }
+            // 压缩中间件开关: 缺省不设置 (继承 config 默认)
+            if (enableSummarization.has_value()) {
+                argJson["enable_summarization"] = *enableSummarization;
+            }
             return agentxx::middleware::InterruptHandleArg{
                 .name = "subagent",
-                .arg =
-                    neograph::json{
-                        {"subagent", subagentName},
-                        {"system_prompt", system_prompt},
-                        {"message", message},
-                    },
+                .arg  = std::move(argJson),
                 .resultId = resultId,
             };
         },
@@ -257,6 +326,16 @@ asio::awaitable<std::string> SubAgentManagerTool::execute_async(const neograph::
             co_return val.get<std::string>();
         }
         co_return val.dump();
+    }
+    // 非 toolcall 路径直接调用 (如上下文压缩中间件): resultId 为空,
+    // 单中断场景下取 map 中的第一个字符串值 (中断处理以 argIndex 兜底编号)
+    if (result.is_object() && resultId.empty()) {
+        for (const auto& [key, val] : result.items()) {
+            if (val.is_string()) {
+                co_return val.get<std::string>();
+            }
+        }
+        co_return result.dump();
     }
     if (result.is_string()) {
         co_return result.get<std::string>();

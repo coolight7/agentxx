@@ -296,6 +296,11 @@ public:
     /// - 由 BaseAgent::init 创建并注入
     std::shared_ptr<plugin::ToolRegistry> toolRegistry = nullptr;
 
+    /// 本 agent 实际装配的工具名列表 (BaseAgent::init 构建执行图时填充)
+    /// - 供子代理"全量继承父 agent 工具" (tools=["*"]) 使用:
+    ///   AgentHost 据此填充子代理的 toolWhitelist
+    std::vector<std::string> toolNames;
+
     /// 插件管理器 (生命周期/热插拔; 全局唯一)
     /// - 由 BaseAgent::init 创建并注入
     std::shared_ptr<plugin::PluginManager> pluginManager = nullptr;
