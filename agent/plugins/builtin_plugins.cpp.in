@@ -1,0 +1,36 @@
+/*
+ * 自动生成: 内置插件清单 (AGENTXX_ENABLE_PLUGIN_BUILTIN=ON 时由
+ * plugins/CMakeLists.txt 经 configure_file 生成, 编译进 libagentxx)
+ *
+ * - 每个内置插件的源文件在编译时经 CMake per-source 编译定义把入口符号
+ *   改名 (agentxx_plugin_entry → agentxx_plugin_builtin_entry_<插件名> 等,
+ *   见各插件子目录 CMakeLists.txt 的 AGENTXX_ENABLE_PLUGIN_BUILTIN 分支),
+ *   避免多插件合并编译时符号冲突
+ * - 本清单汇总全部启用插件的改名入口符号, 经 agentxx_get_builtin_plugins()
+ *   暴露给 PluginManager (loadBuiltinAsync / loadPluginAsync 回退路径)
+ * - 本文件为纯 C ABI, 仅依赖 builtin_plugin.h 的类型
+ */
+#include "agentxx/plugin/builtin_plugin.h"
+
+/* 内置插件入口符号声明 (各插件子目录内置分支生成; 符号为编译期改名后的
+ * agentxx_plugin_builtin_*_<插件名>) */
+@AGENTXX_BUILTIN_MANIFEST_DECLS@
+
+#if @AGENTXX_BUILTIN_PLUGIN_COUNT@ > 0
+static const AgentxxBuiltinPluginInfo kAgentxxBuiltinPlugins[] = {
+@AGENTXX_BUILTIN_MANIFEST_ENTRIES@
+};
+#else
+/* 无内置插件 (全部 AGENTXX_ENABLE_PLUGIN_*=OFF): 空表占位, 宿主按
+ * name == NULL 跳过 (与 builtin_plugin.h 契约一致) */
+static const AgentxxBuiltinPluginInfo kAgentxxBuiltinPlugins[] = {
+    {nullptr, nullptr, nullptr, nullptr},
+};
+#endif
+
+const AgentxxBuiltinPluginInfo* agentxx_get_builtin_plugins(size_t* count) {
+    if (count) {
+        *count = sizeof(kAgentxxBuiltinPlugins) / sizeof(kAgentxxBuiltinPlugins[0]);
+    }
+    return kAgentxxBuiltinPlugins;
+}

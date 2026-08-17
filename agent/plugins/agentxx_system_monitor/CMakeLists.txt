@@ -1,10 +1,88 @@
 # agentxx_system_monitor —— 系统资源监控插件 (CPU/内存/GPU)
-# - 独立动态库 (MODULE), 仅依赖纯 C ABI 头 + asio (boost 头文件) + fmt + simdjson
+# - 默认: 独立动态库 (MODULE), 仅依赖纯 C ABI 头 + asio (boost 头文件) + fmt + simdjson
+# - 内置模式 (AGENTXX_ENABLE_PLUGIN_BUILTIN=ON): 源文件编译为 OBJECT 库合并进
+#   libagentxx; asio/fmt/simdjson 为 libagentxx 既有依赖, 仅补链接平台库 (pdh)
 # - 从 libagentxx src/expand/get_cpu_gpu_use 拆分独立:
 #   - 工具 agentxx_get_system_core_info (原内置工具迁移, 同名同行为)
 #   - 能力 agentxx.system_usage (方法 query): 宿主 TUI 系统资源展示链路
 #     (WireGetSystemUsage) 经能力调用获取使用率 JSON
 set(PLUGIN_NAME agentxx_system_monitor)
+
+if (AGENTXX_ENABLE_PLUGIN_BUILTIN)
+  # ===== 内置合并编译分支 =====
+  # asio 头文件路径 (BOOST_ROOT 由顶层 superbuild 传入; 与动态分支一致)
+  if (NOT DEFINED BOOST_ROOT)
+    set(_BOOST_CANDIDATES
+      "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/boost-linux-build-debug"
+      "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/boost-linux-build-release"
+      "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/boost-windows-build-debug"
+      "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/boost-windows-build-release"
+    )
+    foreach (_bc ${_BOOST_CANDIDATES})
+      if (EXISTS "${_bc}/include/boost/asio/awaitable.hpp")
+        set(BOOST_ROOT "${_bc}")
+        break()
+      endif()
+    endforeach()
+  endif()
+  if (NOT DEFINED BOOST_ROOT OR NOT EXISTS "${BOOST_ROOT}/include/boost/asio/awaitable.hpp")
+    message(FATAL_ERROR "[agentxx_system_monitor] BOOST_ROOT not found (asio headers required)")
+  endif()
+
+  set(_target abp_${PLUGIN_NAME})
+  add_library(${_target} OBJECT
+    ${CMAKE_CURRENT_SOURCE_DIR}/agentxx_system_monitor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpu_gpu_monitor.cpp
+  )
+  target_compile_definitions(${_target} PRIVATE
+    "AGENTXX_PLUGIN_BUILTIN=1"
+    "agentxx_plugin_entry=agentxx_plugin_builtin_entry_${PLUGIN_NAME}"
+    "agentxx_plugin_get_info=agentxx_plugin_builtin_get_info_${PLUGIN_NAME}"
+    "agentxx_plugin_unload=agentxx_plugin_builtin_unload_${PLUGIN_NAME}"
+  )
+  target_include_directories(${_target} PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}"          # cpu_gpu_monitor.h / system_monitor_plugin.h
+    "${AGENTXX_LIB_INCLUDE_DIR}"           # agentxx/plugin/plugin_api.h
+    "${AGENTXX_INSTALL_DIR}/include"       # simdjson.h fmt
+    "${BOOST_ROOT}/include/"
+    "${BOOST_ROOT}/include/boost/"
+  )
+  set_target_properties(${_target} PROPERTIES
+    POSITION_INDEPENDENT_CODE ON
+    CXX_STANDARD 26
+    CXX_STANDARD_REQUIRED OFF
+  )
+  set(AGENTXX_BUILTIN_MANIFEST_DECLS
+    "${AGENTXX_BUILTIN_MANIFEST_DECLS}
+extern \"C\" const AgentxxPluginInfo* agentxx_plugin_builtin_get_info_${PLUGIN_NAME}(void);
+extern \"C\" int agentxx_plugin_builtin_entry_${PLUGIN_NAME}(const AgentxxHost* host, void** plugin_ctx);
+extern \"C\" void agentxx_plugin_builtin_unload_${PLUGIN_NAME}(void* plugin_ctx);")
+  set(AGENTXX_BUILTIN_MANIFEST_ENTRIES
+    "${AGENTXX_BUILTIN_MANIFEST_ENTRIES}
+    {\"${PLUGIN_NAME}\", agentxx_plugin_builtin_get_info_${PLUGIN_NAME}, agentxx_plugin_builtin_entry_${PLUGIN_NAME}, agentxx_plugin_builtin_unload_${PLUGIN_NAME}},")
+  if (WIN32)
+    # cpu_gpu_monitor Windows 分支: PDH (性能计数器); DXGI 已由 libagentxx 链接
+    set(AGENTXX_BUILTIN_PLUGIN_LINK_LIBS
+      "${AGENTXX_BUILTIN_PLUGIN_LINK_LIBS}" pdh PARENT_SCOPE)
+  else()
+    # asio 文件 I/O 在 -DASIO_HAS_IO_URING 下引用 io_uring 符号;
+    # libagentxx 已按 AGENTXX_LINUX_IO_URING_SUPPORTED 条件链接 liburing
+  endif()
+  set(AGENTXX_BUILTIN_PLUGIN_OBJECT_TARGETS "${AGENTXX_BUILTIN_PLUGIN_OBJECT_TARGETS}" "${_target}" PARENT_SCOPE)
+  set(AGENTXX_BUILTIN_MANIFEST_DECLS "${AGENTXX_BUILTIN_MANIFEST_DECLS}" PARENT_SCOPE)
+  set(AGENTXX_BUILTIN_MANIFEST_ENTRIES "${AGENTXX_BUILTIN_MANIFEST_ENTRIES}" PARENT_SCOPE)
+  # 资源: plugin.yaml (运行期目录配置推导 depends/入口)
+  set(_res "${AGENTXX_EXEC_INSTALL_PREFIX}/plugins/${PLUGIN_NAME}/plugin.yaml")
+  add_custom_command(OUTPUT "${_res}"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      "${CMAKE_CURRENT_SOURCE_DIR}/plugin.yaml" "${_res}"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/plugin.yaml"
+    COMMENT "Copy ${PLUGIN_NAME} plugin resource (builtin mode)")
+  set(AGENTXX_BUILTIN_RESOURCE_OUTPUTS "${AGENTXX_BUILTIN_RESOURCE_OUTPUTS}" "${_res}" PARENT_SCOPE)
+  return()
+endif()
+
+# ===== 独立动态库编译 (默认) =====
 add_library(${PLUGIN_NAME} SHARED
   agentxx_system_monitor.cpp
   cpu_gpu_monitor.cpp

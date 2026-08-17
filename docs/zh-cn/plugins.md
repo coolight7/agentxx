@@ -538,6 +538,52 @@ PluginInstance (一切插件都是 C++ 插件)
 **示例**: `example_plugin` entry 演示完整链路 (get_prompt 检查 → set_prompt 写入
 example_echo 默认描述), 测试第 28 段验证 写入/读取/卸载回滚/用户覆盖优先。
 
+### 11.7.5 内置合并编译 (AGENTXX_ENABLE_PLUGIN_BUILTIN, 2026-08)
+
+> 目标: 可选把启用的插件源文件直接编译进 libagentxx, 运行期无需插件动态库
+> (无 dlopen; 适合嵌入式/单文件分发/不便携带 .so/.dll 的场景)。
+
+**构建**:
+
+- 顶层 superbuild 加 `-DAGENTXX_ENABLE_PLUGIN_BUILTIN=ON` 后, 跳过
+  `agentxx_plugins_repo` (独立插件动态库构建); 由 `agentxx_lib_repo`
+  (libagentxx) 经 `add_subdirectory(../plugins)` 以内置分支收集启用的插件,
+  与 lib 源码一并编译
+- 各插件子目录 CMakeLists.txt 内置分支 (AGENTXX_ENABLE_PLUGIN_BUILTIN):
+  - 源文件编译为**独立 OBJECT 库** (`abp_<插件名>`, per-plugin 编译定义/
+    包含路径互不影响), 目标文件经 `$<TARGET_OBJECTS:...>` 合并进
+    agentxx_shared/agentxx_static
+  - 入口符号经编译定义改名, 避免多插件合并编译冲突: `agentxx_plugin_entry`
+    → `agentxx_plugin_builtin_entry_<插件名>` (get_info/unload/client 入口
+    同理; 纯编译期 -D, 插件源码零改动)
+  - 依赖库登记进 `AGENTXX_BUILTIN_PLUGIN_LINK_LIBS` 由 libagentxx 链接:
+    quickjs (JS 引擎) / codegraph_core+tree_sitter 系 (codegraph) /
+    pdh / psapi / uiautomationcore (平台库); 其余 (simdjson/fmt/asio/
+    d3d11/dxgi/winhttp 等) 为 libagentxx 既有依赖, 无需重复
+  - `plugin.yaml` (+ example_js 的 `plugin.js`) 仍拷贝到
+    `${AGENTXX_EXEC_INSTALL_PREFIX}/plugins/<插件名>/` (运行期资源)
+- 入口清单 `builtin_plugins.cpp` (plugins/CMakeLists.txt 经
+  `builtin_plugins.cpp.in` 生成) 汇总改名后的入口符号静态表, 编译进
+  libagentxx, 经 `agentxx_get_builtin_plugins()` 暴露 (见
+  `lib/include/agentxx/plugin/builtin_plugin.h`); 默认构建由
+  `src/plugins/builtin_plugin_registry.cpp` 提供空表实现
+
+**运行期 (配置零改动)**:
+
+- 配置仍写插件目录路径 (plugin.yaml 在), `loadPluginAsync` 目录分支解析
+  manifest (depends/拓扑排序/级联卸载与动态模式完全一致), 入口文件缺失时
+  自动回退 `loadBuiltinAsync` (内置注册表按名查找, entry 卸载到线程池执行,
+  与 dlopen 路径同线程模型)
+- **`inst->path` 传 manifest 入口文件路径** (如 `…/plugins/example_js/
+  libexample_js.dll`, 与动态加载同形态): 插件侧按"库路径所在目录"推导资源
+  (example_js 壳 dirOf 取同目录 plugin.js), 传目录会误推导到上一级
+- `inst->dlHandle` 为空, unload 回调经 `builtinUnload` 直接调用
+  (shutdownAll/unloadAsync 两路径均支持)
+- 也支持显式 `builtin://插件名` 路径 (无资源需求的插件/测试直连用)
+- client 侧插件 (agentxx_client_entry) 仍走独立动态库构建 (client 可执行
+  程序按需外置), 内置模式不产出 client 插件库; `client_plugins` 测试在
+  内置模式下跳过
+
 ---
 
 ## 7. 三期落地路线

@@ -56,6 +56,14 @@ target_include_directories(agentxx_test PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/client/"
 )
 
+# 内置合并编译模式 (顶层 AGENTXX_ENABLE_PLUGIN_BUILTIN=ON, 由 superbuild 传入):
+# - 测试经插件目录路径加载内置插件 (入口文件缺失时 PluginManager 回退内置注册表),
+#   与动态模式配置完全一致
+# - 暴露编译期宏供测试区分断言 (如 dlHandle 为空/非空)
+if (AGENTXX_ENABLE_PLUGIN_BUILTIN)
+  target_compile_definitions(agentxx_test PRIVATE AGENTXX_ENABLE_PLUGIN_BUILTIN=1)
+endif()
+
 if (AGENTXX_BUILD_CLIENT)
   # build client test
   set(AGENTXX_CLIENT_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../client/")

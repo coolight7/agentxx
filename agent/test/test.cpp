@@ -236,7 +236,14 @@ int main(int argn, char** argv) {
             co_await run("openai_provider", agentxx::test::run_openai_provider_tests);
             co_await run("anthropic_provider", agentxx::test::run_anthropic_provider_tests);
             co_await run("plugins", agentxx::test::run_plugin_tests);
+#ifdef AGENTXX_ENABLE_PLUGIN_BUILTIN
+            // 内置合并编译模式不产出 client 侧插件动态库 (client 插件仍走独立
+            // 构建, 见 plugins.md 11.7.5), client_plugins 测试跳过
+            TEST_INFO << "client_plugins: skipped (AGENTXX_ENABLE_PLUGIN_BUILTIN, no client plugin dlls)"
+                      << std::endl;
+#else
             co_await run("client_plugins", agentxx::test::run_client_plugin_tests);
+#endif
             co_await run("cancel", agentxx::test::run_cancel_tests);
             co_await run("message_supplement", agentxx::test::run_message_supplement_tests);
             co_await run("summarization", agentxx::test::run_summarization_tests);

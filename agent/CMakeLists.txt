@@ -37,6 +37,14 @@ option(AGENTXX_ENABLE_PLUGIN_JS "Build QuickJS JS plugin engine (agentxx_javascr
 option(AGENTXX_ENABLE_PLUGIN_SYSTEM_MONITOR "Build agentxx_system_monitor plugin (CPU/GPU usage)." ON)
 option(AGENTXX_ENABLE_PLUGIN_AUDIO_STREAM "Build agentxx_audio_stream plugin (audio capture)." ON)
 option(AGENTXX_ENABLE_PLUGIN_TEXT_SELECTION "Build agentxx_text_selection_monitor plugin (text selection)." ON)
+option(AGENTXX_ENABLE_PLUGIN_EXAMPLE "Build example plugin." ON)
+option(AGENTXX_ENABLE_PLUGIN_COMPUTER_USE "Build agentxx_computer_use plugin (ui_control)." ON)
+option(AGENTXX_ENABLE_PLUGIN_SCREEN_CAPTURE "Build agentxx_screen_capture plugin (screen capture)." ON)
+# 可选内置合并编译: 启用的插件源文件直接编译进 libagentxx, 运行期无需插件
+# 动态库 (无 dlopen; 适合嵌入式/单文件分发)。开启后跳过独立插件动态库构建
+# (agentxx_plugins_repo), 插件配置沿用插件目录路径 (plugin.yaml 资源仍拷贝,
+# 入口文件缺失时 PluginManager 自动回退内置注册表, 见 plugins.md)
+option(AGENTXX_ENABLE_PLUGIN_BUILTIN "Merge enabled plugins into libagentxx (built-in, no runtime plugin dlls)." OFF)
 # ===== Debug 构建加速选项 =====
 # - 关闭后 Debug 构建不再启用 AddressSanitizer，编译与链接显著加快
 #   (仍保留 -fno-omit-frame-pointer 便于调试)，默认开启保持原有行为
@@ -453,6 +461,10 @@ set(_AGENTXX_COMMON_CMAKE_ARGS
     -DAGENTXX_ENABLE_PLUGIN_SYSTEM_MONITOR=${AGENTXX_ENABLE_PLUGIN_SYSTEM_MONITOR}
     -DAGENTXX_ENABLE_PLUGIN_AUDIO_STREAM=${AGENTXX_ENABLE_PLUGIN_AUDIO_STREAM}
     -DAGENTXX_ENABLE_PLUGIN_TEXT_SELECTION=${AGENTXX_ENABLE_PLUGIN_TEXT_SELECTION}
+    -DAGENTXX_ENABLE_PLUGIN_EXAMPLE=${AGENTXX_ENABLE_PLUGIN_EXAMPLE}
+    -DAGENTXX_ENABLE_PLUGIN_COMPUTER_USE=${AGENTXX_ENABLE_PLUGIN_COMPUTER_USE}
+    -DAGENTXX_ENABLE_PLUGIN_SCREEN_CAPTURE=${AGENTXX_ENABLE_PLUGIN_SCREEN_CAPTURE}
+    -DAGENTXX_ENABLE_PLUGIN_BUILTIN=${AGENTXX_ENABLE_PLUGIN_BUILTIN}
 
     "-DAGENTXX_EXEC_INSTALL_PREFIX=${AGENTXX_EXEC_INSTALL_PREFIX}"
     "-DAGENTXX_THIRD_PARTY_DIR=${AGENTXX_THIRD_PARTY_DIR}"
@@ -912,6 +924,11 @@ endif()
 if (AGENTXX_ENABLE_PLUGIN_CODEGRAPH)
   add_dependencies(agentxx_lib_repo codegraph_repo)
 endif()
+# 内置合并编译模式: libagentxx 需先构建插件依赖库 (quickjs/codegraph),
+# 供 lib/CMakeLists.txt 内置分支 find_library + 链接
+if (AGENTXX_ENABLE_PLUGIN_BUILTIN AND AGENTXX_ENABLE_PLUGIN_JS)
+  add_dependencies(agentxx_lib_repo quickjs_repo)
+endif()
 
 # 插件 (独立编译, 见 plugins/CMakeLists.txt)
 # - 各插件子目录 (example_plugin/javascript_engine/example_js) 自带 CMakeLists.txt,
@@ -919,7 +936,9 @@ endif()
 #   cmake -B build -S agent/plugins -DAGENTXX_INSTALL_DIR=<agentxx-project-install>
 # - 插件不链接 libagentxx, 仅依赖纯 C ABI 头; JS 插件 (javascript_engine/example_js)
 #   需 quickjs 库
-if (AGENTXX_BUILD_PLUGINS)
+# - 内置合并编译模式 (AGENTXX_ENABLE_PLUGIN_BUILTIN=ON) 下跳过本目标: 插件
+#   源文件由 agentxx_lib_repo (libagentxx) 直接合并编译, 无需插件动态库
+if (AGENTXX_BUILD_PLUGINS AND NOT AGENTXX_ENABLE_PLUGIN_BUILTIN)
   ExternalProject_Add(
     agentxx_plugins_repo
     DEPENDS 
@@ -979,8 +998,9 @@ if (AGENTXX_BUILD_TEST)
   if (AGENTXX_BUILD_CLIENT)
     add_dependencies(agentxx_test_repo agentxx_client_repo)
   endif()
-  if (AGENTXX_BUILD_PLUGINS)
-    # 测试运行时加载插件 (与测试可执行同目录输出), 需先于测试编译
+  if (AGENTXX_BUILD_PLUGINS AND NOT AGENTXX_ENABLE_PLUGIN_BUILTIN)
+    # 测试运行时加载插件 (与测试可执行同目录输出), 需先于测试编译;
+    # 内置合并编译模式下插件随 libagentxx 构建 (资源目录由 lib 构建产出)
     add_dependencies(agentxx_test_repo agentxx_plugins_repo)
   endif()
 endif()

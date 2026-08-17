@@ -220,6 +220,7 @@
 
 ### 插件化支持
 - ✅c++插件支持，可对 agent、client-ui 插件化修改
+- ✅可选外置编译插件为动态库，或是内嵌编译进 libagentxx
 - ✅`agentxx_javascript_engine`由 c++插件实现 js 扩展插件开发支持
 - ✅`agentxx_codegraph`
     - 分析代码符号、查找定位
