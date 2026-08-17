@@ -430,8 +430,11 @@ asio::awaitable<TestResult> run_plugin_tests() {
             slowSpec.name            = AGENTXX_SV("slow_timeout_tool");
             slowSpec.description     = AGENTXX_SV("slow tool for unload race test");
             slowSpec.parameters_json = AGENTXX_SV("{}");
-            slowSpec.execute
-                = +[](void*, AgentxxPluginStringView, AgentxxPluginStringView, AgentxxPluginStringView, char**) -> char* {
+            slowSpec.execute         = +[](void*,
+                                   AgentxxPluginStringView,
+                                   AgentxxPluginStringView,
+                                   AgentxxPluginStringView,
+                                   char**) -> char* {
                 std::this_thread::sleep_for(std::chrono::milliseconds(600));
                 char* p = static_cast<char*>(::malloc(3));
                 p[0]    = '{';
@@ -619,10 +622,8 @@ asio::awaitable<TestResult> run_plugin_tests() {
             // system 提示词写入 + 回滚 (set_prompt 直接调用路径)
             auto originalSystem = prompt.systemPrompt;
             XX_TEST_EXPECT_EQ(
-                ctx->pluginManager->setPromptJson(
-                    inst28.get(),
-                    R"({"systemPrompt":"modified by plugin"})"
-                ),
+                ctx->pluginManager
+                    ->setPromptJson(inst28.get(), R"({"systemPrompt":"modified by plugin"})"),
                 0
             );
             XX_TEST_EXPECT_EQ(prompt.systemPrompt, "modified by plugin");

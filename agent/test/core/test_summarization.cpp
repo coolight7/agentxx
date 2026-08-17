@@ -84,12 +84,12 @@ struct SummarizationTestEnv {
     /// @param in_defaultMaxToken 中间件默认模型上限 (模型配置未指定时使用)
     /// @param in_recentRatio     最近消息 token 预算比例 (测试用小值使切分点可控)
     SummarizationTestEnv(
-        size_t in_defaultMaxToken     = 2048,
-        double in_asciiCharsPerToken  = 4.0,
-        double in_unicodeCharsPerToken = 1.1,
-        double in_tokensPerImage      = 400.0,
+        size_t in_defaultMaxToken       = 2048,
+        double in_asciiCharsPerToken    = 4.0,
+        double in_unicodeCharsPerToken  = 1.1,
+        double in_tokensPerImage        = 400.0,
         double in_extraTokensPerMessage = 3.0,
-        double in_recentRatio         = 0.03
+        double in_recentRatio           = 0.03
     ) {
         ctx                          = std::make_shared<agentxx::agent::AgentContext>();
         ctx->agentConfig             = std::make_shared<agentxx::agent::AgentConfig>();
@@ -442,18 +442,18 @@ asio::awaitable<TestResult> run_summarization_tests() {
             std::vector<neograph::ChatMessage> msgs{
                 makeMsg("user", "u1"),
                 [&]() {
-                    auto m         = makeMsg("assistant", "[Please continue]");
-                    m.flags        = neograph::MessageFlag::AutoInserted;
+                    auto m  = makeMsg("assistant", "[Please continue]");
+                    m.flags = neograph::MessageFlag::AutoInserted;
                     return m;
                 }(),
                 [&]() {
-                    auto m         = makeMsg("assistant", "[Please continue]");
-                    m.flags        = neograph::MessageFlag::AutoInserted;
+                    auto m  = makeMsg("assistant", "[Please continue]");
+                    m.flags = neograph::MessageFlag::AutoInserted;
                     return m;
                 }(),
                 [&]() {
-                    auto m         = makeMsg("assistant", "[User cancelled]");
-                    m.flags        = neograph::MessageFlag::AutoInserted;
+                    auto m  = makeMsg("assistant", "[User cancelled]");
+                    m.flags = neograph::MessageFlag::AutoInserted;
                     return m;
                 }(),
                 makeMsg("user", "u2"),
@@ -470,14 +470,14 @@ asio::awaitable<TestResult> run_summarization_tests() {
         {
             std::vector<neograph::ChatMessage> msgs{
                 [&]() {
-                    auto m         = makeMsg("assistant", "[Please continue]");
-                    m.flags        = neograph::MessageFlag::AutoInserted;
+                    auto m  = makeMsg("assistant", "[Please continue]");
+                    m.flags = neograph::MessageFlag::AutoInserted;
                     return m;
                 }(),
                 makeMsg("user", "u1"),
                 [&]() {
-                    auto m         = makeMsg("assistant", "[Exception aborted]");
-                    m.flags        = neograph::MessageFlag::AutoInserted;
+                    auto m  = makeMsg("assistant", "[Exception aborted]");
+                    m.flags = neograph::MessageFlag::AutoInserted;
                     return m;
                 }(),
             };
@@ -505,7 +505,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
     {
         // --- A. 无 subagentManager → 返回空串 (降级为不压缩) ---
         {
-            auto env = std::make_shared<SummarizationTestEnv>();
+            auto env                         = std::make_shared<SummarizationTestEnv>();
             env->ctx->subagentManagerToolPtr = nullptr;
             std::vector<neograph::ChatMessage> msgs{makeMsg("user", "hi")};
             auto r = co_await env->handle->doSummarizeWithLLM(env->threadId, msgs);
@@ -514,14 +514,14 @@ asio::awaitable<TestResult> run_summarization_tests() {
 
         // --- B. 空消息 → 返回空串 ---
         {
-            auto  env = std::make_shared<SummarizationTestEnv>();
-            auto  r   = co_await env->handle->doSummarizeWithLLM(env->threadId, {});
+            auto env = std::make_shared<SummarizationTestEnv>();
+            auto r   = co_await env->handle->doSummarizeWithLLM(env->threadId, {});
             XX_TEST_EXPECT_EQ(r, std::string{""});
         }
 
         // --- C. 同上下文 subagent 请求构造 + 返回摘要 ---
         {
-            auto env = std::make_shared<SummarizationTestEnv>();
+            auto env               = std::make_shared<SummarizationTestEnv>();
             env->subagent->summary = "fake summary";
 
             std::vector<neograph::ChatMessage> msgs{
@@ -543,7 +543,10 @@ asio::awaitable<TestResult> run_summarization_tests() {
             // 工具策略: 仅 share_store (模型自主外置长内容)
             XX_TEST_EXPECT_TRUE(args["tools"].is_array());
             XX_TEST_EXPECT_EQ(args["tools"].size(), size_t{1});
-            XX_TEST_EXPECT_EQ(args["tools"][0].get<std::string>(), std::string{"agentxx_share_store"});
+            XX_TEST_EXPECT_EQ(
+                args["tools"][0].get<std::string>(),
+                std::string{"agentxx_share_store"}
+            );
             // 禁止二次压缩
             XX_TEST_EXPECT_TRUE(args["enable_summarization"].is_boolean());
             XX_TEST_EXPECT_FALSE(args["enable_summarization"].get<bool>());
@@ -570,7 +573,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
 
         // --- D. 压缩失败 (subagent 返回空串, 与真实失败路径一致) → 空串 ---
         {
-            auto env = std::make_shared<SummarizationTestEnv>();
+            auto env               = std::make_shared<SummarizationTestEnv>();
             env->subagent->summary = ""; // 模拟压缩失败 (子代理失败时 content 为空)
             std::vector<neograph::ChatMessage> msgs{makeMsg("user", "u1")};
             auto r = co_await env->handle->doSummarizeWithLLM(env->threadId, msgs);
@@ -584,8 +587,8 @@ asio::awaitable<TestResult> run_summarization_tests() {
             auto env = std::make_shared<SummarizationTestEnv>();
             env->session()->setModelName("small"); // max=1000, 裁剪阈值 950
             env->subagent->summary = "S";
-            auto big1 = makeMsg("user", makeLongContent(2500)); // ~625 token
-            auto big2 = makeMsg("user", makeLongContent(2500)); // ~625 token
+            auto big1              = makeMsg("user", makeLongContent(2500)); // ~625 token
+            auto big2              = makeMsg("user", makeLongContent(2500)); // ~625 token
             std::vector<neograph::ChatMessage> msgs{
                 makeMsg("system", "sys"),
                 big1,
@@ -608,16 +611,14 @@ asio::awaitable<TestResult> run_summarization_tests() {
 
         // --- F. AgentPrompt 定制压缩提示词生效: 模板可经 prompt 覆盖 ---
         {
-            auto env = std::make_shared<SummarizationTestEnv>();
+            auto env               = std::make_shared<SummarizationTestEnv>();
             env->subagent->summary = "S";
 
             // 默认模板非空且含关键内容
             const auto& p = env->ctx->agentConfig->prompt;
             XX_TEST_EXPECT_FALSE(p.summarizationPrompt.empty());
             XX_TEST_EXPECT_TRUE(p.summarizationPrompt.find("Summarize") != std::string::npos);
-            XX_TEST_EXPECT_TRUE(
-                p.summarizationPrompt.find("{omitted_note}") != std::string::npos
-            );
+            XX_TEST_EXPECT_TRUE(p.summarizationPrompt.find("{omitted_note}") != std::string::npos);
             XX_TEST_EXPECT_TRUE(p.summarizationPrompt.find("{max_words}") != std::string::npos);
 
             // 定制模板
@@ -650,10 +651,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
         {
             agentxx::agent::AgentPrompt p;
             const auto&                 j = p.toJson();
-            XX_TEST_EXPECT_EQ(
-                j["summarizationPrompt"].get<std::string>(),
-                p.summarizationPrompt
-            );
+            XX_TEST_EXPECT_EQ(j["summarizationPrompt"].get<std::string>(), p.summarizationPrompt);
             // 往返: 定制后序列化再合并, 字段一致
             agentxx::agent::AgentPrompt p2;
             p2.summarizationPrompt = "CUSTOM";
@@ -661,7 +659,9 @@ asio::awaitable<TestResult> run_summarization_tests() {
             p3.mergeFromJson(p2.toJson());
             XX_TEST_EXPECT_EQ(p3.summarizationPrompt, std::string{"CUSTOM"});
             // 缺失字段合并: 保持原值
-            neograph::json partial = neograph::json{{"systemPrompt", "SYS"}};
+            neograph::json partial = neograph::json{
+                {"systemPrompt", "SYS"}
+            };
             p3.mergeFromJson(partial);
             XX_TEST_EXPECT_EQ(p3.summarizationPrompt, std::string{"CUSTOM"});
             XX_TEST_EXPECT_EQ(p3.systemPrompt, std::string{"SYS"});
@@ -844,15 +844,9 @@ asio::awaitable<TestResult> run_summarization_tests() {
         {
             h->summarizationToolHandles["write_planning"] = makeConstantKeyHandle("planning:");
             std::vector<neograph::ChatMessage> msgs{
-                makeAssistantToolcall(
-                    "", {makeToolcall("p1", "write_planning", R"({"a":1})")}
-                ),
-                makeAssistantToolcall(
-                    "", {makeToolcall("p2", "write_planning", R"({"a":2})")}
-                ),
-                makeAssistantToolcall(
-                    "", {makeToolcall("p3", "write_planning", R"({"a":3})")}
-                ),
+                makeAssistantToolcall("", {makeToolcall("p1", "write_planning", R"({"a":1})")}),
+                makeAssistantToolcall("", {makeToolcall("p2", "write_planning", R"({"a":2})")}),
+                makeAssistantToolcall("", {makeToolcall("p3", "write_planning", R"({"a":3})")}),
             };
             h->doSummarizeToolcall(msgs);
             XX_TEST_EXPECT_EQ(msgs.size(), size_t{3});
@@ -1315,7 +1309,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
         auto env = std::make_shared<SummarizationTestEnv>();
         env->session()->setModelName("small"); // max=1000 → 阈值 650 / 850
         env->handle->summarizationToolHandles["read_file"] = makeReadFileHandle();
-        env->subagent->summary = "S1";
+        env->subagent->summary                             = "S1";
 
         auto                               longContent = makeLongContent(3000);
         std::vector<neograph::ChatMessage> msgs{
@@ -1380,7 +1374,10 @@ asio::awaitable<TestResult> run_summarization_tests() {
         XX_TEST_EXPECT_EQ(reqMsgs[0].value("content", std::string{}), std::string{"sys"});
         XX_TEST_EXPECT_EQ(reqMsgs[1].value("content", std::string{}), std::string{"u1"});
         // 旧 tool 结果已被去重截断 (先于 LLM 压缩执行)
-        XX_TEST_EXPECT_EQ(reqMsgs[3].value("content", std::string{}), std::string{"[Truncated Response]"});
+        XX_TEST_EXPECT_EQ(
+            reqMsgs[3].value("content", std::string{}),
+            std::string{"[Truncated Response]"}
+        );
         // 长内容原样保留在压缩请求中 (不 offload, 由模型自主决定是否外置)
         XX_TEST_EXPECT_EQ(reqMsgs[4].value("content", std::string{}), longContent);
 
@@ -1471,8 +1468,8 @@ asio::awaitable<TestResult> run_summarization_tests() {
     {
         auto env = std::make_shared<SummarizationTestEnv>();
         env->session()->setModelName("small");
-        env->subagent->summary = "S";
-        auto longSystem = makeLongContent(3000);
+        env->subagent->summary                        = "S";
+        auto                               longSystem = makeLongContent(3000);
         std::vector<neograph::ChatMessage> msgs{
             makeMsg("system", longSystem),
             makeMsg("user", "u1"),

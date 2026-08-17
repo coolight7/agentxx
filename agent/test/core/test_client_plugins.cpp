@@ -126,11 +126,9 @@ public:
         lastSent_ = text;
     }
 
-    bool sendPluginData(
-        const std::string& plugin,
-        const std::string& event,
-        const std::string& json
-    ) override {
+    bool
+        sendPluginData(const std::string& plugin, const std::string& event, const std::string& json)
+            override {
         std::lock_guard<std::mutex> lock(m_);
         ++dataUpCount_;
         lastDataPlugin_ = plugin;
@@ -144,58 +142,72 @@ public:
         std::lock_guard<std::mutex> lock(m_);
         return statusRegistered_;
     }
+
     int statusUpdated() const {
         std::lock_guard<std::mutex> lock(m_);
         return statusUpdated_;
     }
+
     int panelRegistered() const {
         std::lock_guard<std::mutex> lock(m_);
         return panelRegistered_;
     }
+
     int panelUpdated() const {
         std::lock_guard<std::mutex> lock(m_);
         return panelUpdated_;
     }
+
     int infoSectionRegistered() const {
         std::lock_guard<std::mutex> lock(m_);
         return infoSectionRegistered_;
     }
+
     int infoSectionUpdated() const {
         std::lock_guard<std::mutex> lock(m_);
         return infoSectionUpdated_;
     }
+
     int infoSectionRemoved() const {
         std::lock_guard<std::mutex> lock(m_);
         return infoSectionRemoved_;
     }
+
     int toastCount() const {
         std::lock_guard<std::mutex> lock(m_);
         return toastCount_;
     }
+
     int sendCount() const {
         std::lock_guard<std::mutex> lock(m_);
         return sendCount_;
     }
+
     int dataUpCount() const {
         std::lock_guard<std::mutex> lock(m_);
         return dataUpCount_;
     }
+
     std::string lastSent() const {
         std::lock_guard<std::mutex> lock(m_);
         return lastSent_;
     }
+
     std::string lastToast() const {
         std::lock_guard<std::mutex> lock(m_);
         return lastToast_;
     }
+
     int lastToastLvl() const {
         std::lock_guard<std::mutex> lock(m_);
         return lastToastLvl_;
     }
+
     std::string lastDataPlugin() const {
         std::lock_guard<std::mutex> lock(m_);
         return lastDataPlugin_;
     }
+
     std::string lastDataEvent() const {
         std::lock_guard<std::mutex> lock(m_);
         return lastDataEvent_;
@@ -204,19 +216,19 @@ public:
 private:
 
     mutable std::mutex m_;
-    int                statusRegistered_ = 0;
-    int                statusUpdated_    = 0;
-    int                statusRemoved_    = 0;
-    int                panelRegistered_  = 0;
-    int                panelUpdated_     = 0;
-    int                panelRemoved_     = 0;
+    int                statusRegistered_      = 0;
+    int                statusUpdated_         = 0;
+    int                statusRemoved_         = 0;
+    int                panelRegistered_       = 0;
+    int                panelUpdated_          = 0;
+    int                panelRemoved_          = 0;
     int                infoSectionRegistered_ = 0;
     int                infoSectionUpdated_    = 0;
     int                infoSectionRemoved_    = 0;
-    int                toastCount_       = 0;
-    int                sendCount_        = 0;
-    int                dataUpCount_      = 0;
-    int                lastToastLvl_     = 0;
+    int                toastCount_            = 0;
+    int                sendCount_             = 0;
+    int                dataUpCount_           = 0;
+    int                lastToastLvl_          = 0;
     std::string        lastStatusId_;
     std::string        lastPanelId_;
     std::string        lastInfoSectionId_;
@@ -327,9 +339,8 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             // Info 段落: TURN_END 时插件更新内容 (text "Turns: 1" + hint 说明)
             bool infoFound = false;
             for (const auto& s : reg->infoSections) {
-                if (s.id == "example_plugin.info" && s.items.is_array()
-                    && !s.items.empty()) {
-                    infoFound = true;
+                if (s.id == "example_plugin.info" && s.items.is_array() && !s.items.empty()) {
+                    infoFound        = true;
                     const auto first = s.items[0];
                     XX_TEST_EXPECT_EQ(first.value("kind", std::string{}), "text");
                     XX_TEST_EXPECT_EQ(first.value("text", std::string{}), "Turns: 1");
@@ -419,7 +430,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
 
     mgr->enable("example_plugin");
     {
-        auto reg = mgr->uiRegistrySnapshot();
+        auto reg    = mgr->uiRegistrySnapshot();
         bool hasCmd = false, hasStatus = false, hasInfo = false;
         if (reg) {
             for (const auto& c : reg->commands) {

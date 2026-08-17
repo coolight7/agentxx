@@ -27,7 +27,7 @@ static std::atomic<int> g_temp_project_counter{0};
 /// 定位 agentxx_codegraph 插件目录 (与测试可执行同目录的 plugins/ 下;
 /// 兼容从其他 cwd 运行: 回退可执行文件目录)
 static std::string findCodegraphPluginPath() {
-    std::error_code ec;
+    std::error_code       ec;
     std::vector<fs::path> candidates;
     candidates.push_back(fs::current_path(ec) / "plugins" / "agentxx_codegraph");
 #if !XX_IS_WIN_D
@@ -116,14 +116,14 @@ asio::awaitable<TestResult>
     g_cg_failed = 0;
 
     // ---- 1. 构造 AgentContext (临时 dataDir) ----
-    auto tmp_data_dir = fs::temp_directory_path() / "codegraph_plugin_data";
+    auto            tmp_data_dir = fs::temp_directory_path() / "codegraph_plugin_data";
     std::error_code ec;
     fs::remove_all(tmp_data_dir, ec);
     fs::create_directories(tmp_data_dir, ec);
 
-    auto ctx                     = std::make_shared<agentxx::agent::AgentContext>();
-    ctx->agentConfig             = std::make_shared<agentxx::agent::AgentConfig>();
-    ctx->agentConfig->dataDir    = tmp_data_dir.string();
+    auto ctx                  = std::make_shared<agentxx::agent::AgentContext>();
+    ctx->agentConfig          = std::make_shared<agentxx::agent::AgentConfig>();
+    ctx->agentConfig->dataDir = tmp_data_dir.string();
     // ---- 2. 加载 agentxx_codegraph 插件 ----
     auto path = findCodegraphPluginPath();
     XX_TEST_EXPECT_TRUE(path.find("agentxx_codegraph") != std::string::npos);
@@ -133,7 +133,10 @@ asio::awaitable<TestResult>
         agentxx::agent::PluginConfig pc;
         pc.path    = path;
         pc.enabled = true;
-        pc.args    = neograph::json{{"load_cwd", true}, {"use_gitignore", true}};
+        pc.args    = neograph::json{
+               {"load_cwd",      true},
+               {"use_gitignore", true}
+        };
         ctx->agentConfig->plugins.push_back(std::move(pc));
     }
     ctx->middlewareHandleContext = std::make_shared<agentxx::middleware::MiddlewareContext>();
@@ -168,8 +171,8 @@ asio::awaitable<TestResult>
         XX_TEST_EXPECT_TRUE(tool != nullptr);
         if (tool) {
             auto out = co_await tool->execute_async(neograph::json{
-                {"path", tmp_project},
-                {"incremental", false},
+                {"path",        tmp_project},
+                {"incremental", false      },
             });
             XX_TEST_EXPECT_TRUE(out.find("success: true") != std::string::npos);
         }
@@ -191,11 +194,15 @@ asio::awaitable<TestResult>
         auto tool = ctx->toolRegistry->find("agentxx_codegraph_search");
         XX_TEST_EXPECT_TRUE(tool != nullptr);
         if (tool) {
-            auto out = co_await tool->execute_async(neograph::json{{"query", "add"}});
+            auto out = co_await tool->execute_async(neograph::json{
+                {"query", "add"}
+            });
             XX_TEST_EXPECT_TRUE(out.find("Symbols (") != std::string::npos);
             XX_TEST_EXPECT_TRUE(out.find("add") != std::string::npos);
             // 空 query → error
-            auto err = co_await tool->execute_async(neograph::json{{"query", ""}});
+            auto err = co_await tool->execute_async(neograph::json{
+                {"query", ""}
+            });
             XX_TEST_EXPECT_TRUE(err.find("error:") != std::string::npos);
         }
     }
@@ -205,7 +212,9 @@ asio::awaitable<TestResult>
         auto tool = ctx->toolRegistry->find("agentxx_codegraph_context");
         XX_TEST_EXPECT_TRUE(tool != nullptr);
         if (tool) {
-            auto out = co_await tool->execute_async(neograph::json{{"symbol", "add"}});
+            auto out = co_await tool->execute_async(neograph::json{
+                {"symbol", "add"}
+            });
             XX_TEST_EXPECT_TRUE(
                 out.find("symbol:") != std::string::npos || out.find("error:") != std::string::npos
             );
@@ -217,23 +226,31 @@ asio::awaitable<TestResult>
         auto callers = ctx->toolRegistry->find("agentxx_codegraph_callers");
         XX_TEST_EXPECT_TRUE(callers != nullptr);
         if (callers) {
-            auto out = co_await callers->execute_async(neograph::json{{"symbol", "add"}});
+            auto out = co_await callers->execute_async(neograph::json{
+                {"symbol", "add"}
+            });
             XX_TEST_EXPECT_TRUE(
-                out.find("Callers (") != std::string::npos || out.find("error:") != std::string::npos
+                out.find("Callers (") != std::string::npos
+                || out.find("error:") != std::string::npos
             );
         }
         auto callees = ctx->toolRegistry->find("agentxx_codegraph_callees");
         XX_TEST_EXPECT_TRUE(callees != nullptr);
         if (callees) {
-            auto out = co_await callees->execute_async(neograph::json{{"symbol", "main"}});
+            auto out = co_await callees->execute_async(neograph::json{
+                {"symbol", "main"}
+            });
             XX_TEST_EXPECT_TRUE(
-                out.find("Callees (") != std::string::npos || out.find("error:") != std::string::npos
+                out.find("Callees (") != std::string::npos
+                || out.find("error:") != std::string::npos
             );
         }
         auto impact = ctx->toolRegistry->find("agentxx_codegraph_impact");
         XX_TEST_EXPECT_TRUE(impact != nullptr);
         if (impact) {
-            auto out = co_await impact->execute_async(neograph::json{{"symbol", "add"}});
+            auto out = co_await impact->execute_async(neograph::json{
+                {"symbol", "add"}
+            });
             XX_TEST_EXPECT_TRUE(
                 out.find("Impact (") != std::string::npos || out.find("error:") != std::string::npos
             );
@@ -242,7 +259,7 @@ asio::awaitable<TestResult>
         XX_TEST_EXPECT_TRUE(pathTool != nullptr);
         if (pathTool) {
             auto out = co_await pathTool->execute_async(neograph::json{
-                {"from", "main"},
+                {"from", "main"    },
                 {"to",   "multiply"},
             });
             XX_TEST_EXPECT_TRUE(

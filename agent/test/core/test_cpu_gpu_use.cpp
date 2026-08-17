@@ -21,7 +21,7 @@ namespace {
 
 /// 定位 agentxx_system_monitor 插件目录
 static std::string findSystemMonitorPluginPath() {
-    std::error_code ec;
+    std::error_code                    ec;
     std::vector<std::filesystem::path> candidates;
     candidates.push_back(std::filesystem::current_path(ec) / "plugins" / "agentxx_system_monitor");
 #if XX_IS_WIN_D
@@ -29,12 +29,26 @@ static std::string findSystemMonitorPluginPath() {
     DWORD   n = ::GetModuleFileNameW(nullptr, buf, 4096);
     if (n > 0 && n < 4096) {
         int len = ::WideCharToMultiByte(
-            CP_UTF8, 0, buf, static_cast<int>(n), nullptr, 0, nullptr, nullptr
+            CP_UTF8,
+            0,
+            buf,
+            static_cast<int>(n),
+            nullptr,
+            0,
+            nullptr,
+            nullptr
         );
         if (len > 0) {
             std::string exe(static_cast<size_t>(len), '\0');
             ::WideCharToMultiByte(
-                CP_UTF8, 0, buf, static_cast<int>(n), exe.data(), len, nullptr, nullptr
+                CP_UTF8,
+                0,
+                buf,
+                static_cast<int>(n),
+                exe.data(),
+                len,
+                nullptr,
+                nullptr
             );
             candidates.push_back(
                 std::filesystem::path(exe).parent_path() / "plugins" / "agentxx_system_monitor"
@@ -95,9 +109,8 @@ asio::awaitable<TestResult>
     {
         XX_TEST_EXPECT_TRUE(ctx->pluginManager->hasCapability("agentxx.system_usage"));
         char* err  = nullptr;
-        char* json = ctx->pluginManager->invokeCapability(
-            nullptr, "agentxx.system_usage", "query", "{}", &err
-        );
+        char* json = ctx->pluginManager
+                         ->invokeCapability(nullptr, "agentxx.system_usage", "query", "{}", &err);
         XX_TEST_EXPECT_TRUE(json != nullptr);
         if (json) {
             auto j = neograph::json::parse(json);
