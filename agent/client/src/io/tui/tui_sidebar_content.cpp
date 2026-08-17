@@ -49,23 +49,14 @@ ftxui::Element buildLogLine(const TUILogSink::Line& line, const TUITheme& theme)
 /// schema 见 client_plugin_api.h register_panel/register_info_section)
 /// - text 项支持 role 指定样式: "title"=高亮强调 / "normal"=普通文本(默认) /
 ///   "hint"=减淡提示
-/// - listStyle=true (Info 栏段落): 每行按 Append 段列表样式以 "|  " 前缀展示
-static void appendPluginItems(
-    const neograph::json& items,
-    const TUITheme&       theme,
-    ftxui::Elements&      out,
-    bool                  listStyle = false
-) {
+static void
+    appendPluginItems(const neograph::json& items, const TUITheme& theme, ftxui::Elements& out) {
     if (!items.is_array()) {
         return;
     }
     /// 行内元素 → 按列表样式加 "|  " 前缀后入列
     auto push = [&](ftxui::Element el) {
-        if (listStyle) {
-            out.push_back(hbox({text("|  "), std::move(el) | xflex}));
-        } else {
-            out.push_back(std::move(el));
-        }
+        out.push_back(std::move(el));
     };
     for (const auto& it : items) {
         if (!it.is_object()) {
@@ -261,7 +252,7 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
                     secEls.push_back(text(sec.title) | color(theme_.accentColor));
                 }
                 // Info 栏段落列表项按 Append 段样式 ("|  xxx") 展示
-                appendPluginItems(sec.items, theme_, secEls, /*listStyle=*/true);
+                appendPluginItems(sec.items, theme_, secEls);
                 if (!secEls.empty()) {
                     elements.push_back(vbox(std::move(secEls)));
                     elements.push_back(text(" "));
@@ -288,11 +279,9 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
                 }
                 ++count;
                 elems.push_back(
-                    (splitName ? hbox({text(fmt::format(
-                                     "|  {}·{}",
-                                     agentxx::util::getFileName(notif.name),
-                                     notif.name
-                                 ))})
+                    (splitName ? hbox({text(
+                         fmt::format("|  {}·{}", agentxx::util::getFileName(notif.name), notif.name)
+                     )})
                                : hbox({text("|  "), text(notif.name) | xflex_shrink}))
                     | color(notif.success ? theme_.hintColor : theme_.errorColor)
                 );
