@@ -11,7 +11,7 @@
 	url = https://github.com/coolight7/NeoGraph
 [submodule "agent/third_party/html2md"]
 	path = agent/third_party/html2md
-	url = https://github.com/tim-gromeyer/html2md
+	url = https://github.com/coolight7/html2md
 [submodule "agent/third_party/glob"]
 	path = agent/third_party/glob
 	url = https://github.com/coolight7/glob
