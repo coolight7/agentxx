@@ -591,10 +591,10 @@ typedef struct AgentxxClientPluginInfo {
 | example_plugin | `agent/plugins/example_plugin/` | 示例插件 (双端): 3 工具 (echo/caller 互调/sleep 慢工具) + agent_start 钩子 + 事件订阅 + 能力声明 + client 入口 (状态栏/面板/命令/事件/跨端) |
 | example_js | `agent/plugins/example_js/` | JS 示例插件 (C++ 壳 + plugin.js): 4 工具 (同步/async Promise/JS 内互调/宿主互调) + 钩子 + 事件订阅 + 互查 + 顶层异步初始化; depends: agentxx_javascript_engine |
 | agentxx_javascript_engine | `agent/plugins/agentxx_javascript_engine/` | QuickJS 引擎插件 (链接 libqjs.a): 注册能力 `interpreter.js` (方法 load/unload); 专用 JS 线程 + 任务队列 + agentxx 桥 + 沙箱 |
-| agentxx_codegraph | `agent/plugins/agentxx_codegraph/` | CodeGraph 代码分析: 8 工具 (search/context/callers/callees/impact/status/index/path); 索引进度/加载状态经 publish 事件 (topic `{插件名}.{事件名}`) 通知宿主, 由 SessionServerAgentIO 原样转发 WirePluginData 供 TUI 展示; 参数经 yaml plugins args (loadPaths/ignorePaths/loadCwd/useGitignore). 工具提示词默认值从 lib AgentPrompt 剥离迁移 (2026-08), entry 时经 `set_prompt` 写入宿主 toolPrompt (宿主已有条目则跳过, 尊重用户 yaml 覆盖) |
+| agentxx_codegraph | `agent/plugins/agentxx_codegraph/` | CodeGraph 代码分析: 8 工具 (search/context/callers/callees/impact/status/index/path); 索引进度/加载状态经 publish 事件 (topic `{插件名}.{事件名}`) 通知宿主, 由 SessionServerAgentIO 原样转发 WirePluginData; 插件 client 入口 (agentxx_client_entry) 订阅该事件并以侧边栏面板 (CodeGraph) 渲染索引进度/就绪状态 —— TUI 不再直接解析渲染插件载荷; 参数经 yaml plugins args (loadPaths/ignorePaths/loadCwd/useGitignore). 工具提示词默认值从 lib AgentPrompt 剥离迁移 (2026-08), entry 时经 `set_prompt` 写入宿主 toolPrompt (宿主已有条目则跳过, 尊重用户 yaml 覆盖) |
 | agentxx_screen_capture | `agent/plugins/agentxx_screen_capture/` | 屏幕捕获 (仅 Windows): 工具 `agentxx_screen_capture` (单帧/全部屏幕/鼠标屏/流式推帧事件 topic `agentxx_screen_capture.frame`) |
 | agentxx_computer_use | `agent/plugins/agentxx_computer_use/` | 键鼠控制 (仅 Windows): 工具 `agentxx_ui_control_keyboard_mouse`; plugin.yaml `depends: [agentxx_screen_capture]` (须同时配置加载) |
-| agentxx_system_monitor | `agent/plugins/agentxx_system_monitor/` | 系统资源监控 (从 lib `src/expand/get_cpu_gpu_use` 拆分): 工具 `agentxx_get_system_core_info` (原内置工具迁移, lib 不再内置) + 能力 `agentxx.system_usage` (方法 query); SessionServerAgentIO 处理 WireGetSystemUsage 时经能力调用采集 (卸载到 blockingPool), 载荷为插件定义 schema 的 JSON 字符串经 WireSystemUsage 原样透传, TUI System 侧边栏按约定字段渲染 —— 采集实现与数据类型完全隔离在插件内, lib wire 层不含任何系统资源 DTO |
+| agentxx_system_monitor | `agent/plugins/agentxx_system_monitor/` | 系统资源监控 (从 lib `src/expand/get_cpu_gpu_use` 拆分): 工具 `agentxx_get_system_core_info` (原内置工具迁移, lib 不再内置) + 能力 `agentxx.system_usage` (方法 query) + agent 侧周期采集线程 (每 5s 采样并 publish `agentxx_system_monitor.usage`, 定时/采集/发布完全位于插件内; 显示开关由 client `/sysinfo` 经跨端事件 `usage_enabled` 同步, 关闭期间跳过采集); 载荷为插件定义 schema 的 JSON 字符串, server 经 WirePluginData 原样转发; 插件 client 入口 (agentxx_client_entry) 订阅该事件以状态栏项渲染 CPU/RAM 占用 —— 采集实现与渲染完全隔离在插件内, lib wire 层不含任何系统资源 DTO |
 | agentxx_audio_stream | `agent/plugins/agentxx_audio_stream/` | 音频流捕获 (从 lib `src/expand/audio_stream` 拆分; 仅 Windows WASAPI): 系统输出/程序输出/麦克风; 工具 `agentxx_audio_stream` (start/stop/status); 帧经 publish 事件推送 (topic `agentxx_audio_stream.audio`, base64 PCM); 非 Windows no-op |
 | agentxx_text_selection_monitor | `agent/plugins/agentxx_text_selection_monitor/` | 系统级文本选择事件流 (从 lib `src/expand/text_selection_monitor` 拆分; 仅 Windows UIAutomation/WinEvent/CDP/剪贴板兜底): 工具 `agentxx_text_selection_monitor` (start/stop/status); 选中文本经 publish 事件推送 (topic `agentxx_text_selection_monitor.selection`); 非 Windows no-op |
 
@@ -754,16 +754,16 @@ plugins/
 | `agent/lib/include/agentxx/plugin/client_plugin_manager.h` + `src/plugins/client_plugin_manager.cpp` | ClientPluginManager + ClientPluginInstance + ClientUiRegistry + PluginUiAdapter + hostVtable |
 | `agent/lib/include/agentxx/agent/io/client_event_sink.h` | 端点 → 插件事件通道 (7 回调) |
 | `agent/lib/include/agentxx/agent/io/agent_io.h/.cpp` | `setEventSink` + `emitEventSink`; onServerReady 默认通知 ready |
-| `agent/lib/include/agentxx/agent/io/agent_io_transport.h` | `WirePluginDataUp` 变体; `WirePluginData`/`WireGetSystemUsage`/`WireSystemUsage` |
-| `agent/lib/include/agentxx/agent/io/wire_protocol.h` | `MsgType::PluginData` / `PluginDataUp` / `GetSystemUsage` / `SystemUsage` + make/fromJson |
+| `agent/lib/include/agentxx/agent/io/agent_io_transport.h` | `WirePluginDataUp` 变体; `WirePluginData` |
+| `agent/lib/include/agentxx/agent/io/wire_protocol.h` | `MsgType::PluginData` / `PluginDataUp` + make/fromJson |
 | `agent/lib/src/agent/io/ws_io_transport.cpp` | serialize/deserialize 支持各 wire 变体 |
-| `agent/lib/src/agent/io/session_server_agent_io.cpp` | onPeerMessage: WirePluginDataUp → 总线 publish `plugin.client.{插件名}.{事件名}` (环回跳过); WireGetSystemUsage → 能力 `agentxx.system_usage` query (卸载到 blockingPool) → WireSystemUsage; subscribePluginEvents 转发 `plugin.` 前缀事件 |
+| `agent/lib/src/agent/io/session_server_agent_io.cpp` | onPeerMessage: WirePluginDataUp → 总线 publish `plugin.client.{插件名}.{事件名}` (环回跳过); subscribePluginEvents 转发 `plugin.` 前缀事件 |
 | `agent/client/src/config_loader.cpp` | 解析 `plugins` 段 (path/enabled/sides/args) |
 | `agent/client/include/agentxx-client/io/plugin/plugin_ui_adapter.h` | UI 适配器接口 (uiCaps/注册/更新/toast/sendPluginMessage/sendPluginData) |
 | `agent/client/include/agentxx-client/io/tui/tui_plugin_adapter.h` + `io/stdio/cli_plugin_adapter.h` | TUI/CLI 适配器实现 |
-| `agent/client/src/io/tui/agent_tui.h/.cpp` | EventSink 通知点; 命令管线 (onSend 拦截 `/`); addPluginPanelTab/removePluginPanelTab/renderPluginPanel; sendPluginUserInput/sendPluginDataUp; uiToast |
+| `agent/client/src/io/tui/agent_tui.h/.cpp` | EventSink 通知点 (WirePluginData 原样转发); 命令管线 (onSend 拦截 `/`); addPluginPanelTab/removePluginPanelTab/renderPluginPanel; sendPluginUserInput/sendPluginDataUp; uiToast |
 | `agent/client/src/io/tui/components/status_bar.cpp` | 插件状态栏项渲染 (左/右分组, order 排序) |
-| `agent/client/src/io/tui/tui_sidebar_content.cpp` | codegraph 插件状态展示 (WirePluginData) |
+| `agent/client/src/io/tui/tui_sidebar_content.cpp` | Info 侧边栏 (Planning/Append 组件); 系统资源与 CodeGraph 渲染已剥离到插件 client 侧 |
 | `agent/client/src/mode_runners.cpp` + `main.cpp` | 4 个模式装配 ClientPluginManager + 适配器 (setupClientPlugins 模板); 命令拦截 (tryInvokePluginCommand) |
 | `agent/test/core/test_plugins.*` | agent 插件测试模块 `plugins` (118 项断言: 加载/工具执行/互调/钩子/事件/禁用启用/卸载/冲突/列表/JS 引擎/级联/拓扑/超时卸载竞态/shutdownAll) |
 | `agent/test/core/test_client_plugins.*` | client 插件测试模块 `client_plugins` (40 项断言: 加载/UI 注册表/事件分发/命令/跨端/禁用启用/卸载) |

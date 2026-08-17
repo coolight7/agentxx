@@ -351,9 +351,10 @@ Options:
     }
 
     // ======================== TUI 全局设置持久化 ========================
-    // 全局设置 (动画等级/showSystemInfo 等) 存于 {dataDir}/sqlite/global.db,
+    // 全局设置 (动画等级/日志等级等) 存于 {dataDir}/sqlite/global.db,
     // 绑定到 TUISettings 单例, 设置变更时同步落库, 重启后恢复
     // - dataDir 未配置 (为空) 时: 不绑定数据库, 设置仅存内存 (进程生命周期有效)
+    // - 注意: 系统资源显示开关已迁移到 agentxx_system_monitor 插件 (命令 /sysinfo)
     if (mode == "tui") {
         if (resolvedDataDir.empty()) {
             XX_LOGI("[Config] data_dir not set: TUI settings will NOT be persisted "

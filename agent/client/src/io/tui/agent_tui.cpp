@@ -410,7 +410,6 @@ void TUIClientAgentIO::start() {
     if (logSink_) {
         agentxx::util::LogDispatcher::instance().addSink(logSink_);
     }
-    startSystemMonitor();
 
     uiThread_ = std::thread([this]() {
         auto screen = std::make_shared<ScreenInteractive>(ScreenInteractive::Fullscreen());
@@ -425,11 +424,10 @@ void TUIClientAgentIO::start() {
         ctx_.postRedraw = [this] {
             postRedraw();
         };
-        ctx_.theme          = &theme_;
-        ctx_.threadId       = currentThreadId();
-        ctx_.remoteUrl      = remoteUrl_;
-        ctx_.showSystemInfo = &TUISettings::instance().showSystemInfoRef();
-        ctx_.pluginManager  = pluginManager_;
+        ctx_.theme         = &theme_;
+        ctx_.threadId      = currentThreadId();
+        ctx_.remoteUrl     = remoteUrl_;
+        ctx_.pluginManager = pluginManager_;
         // 注意: 不设置 ctx_.session —— TUI 不持有 Session (属于 agent-server 线程),
         // 上下文统计经 WireContextStats → onContextStats → sharedState_ 更新,
         // 状态栏等组件从 frameState 读取 (见 status_bar.cpp)
@@ -832,7 +830,6 @@ void TUIClientAgentIO::stop() {
     if (uiThread_.joinable()) {
         uiThread_.join();
     }
-    stopSystemMonitor();
     // 取消 toast 超时定时器: 避免退出后残留挂起等待触发 use-after-free
     // (回调捕获 this; cancel 后回调以 operation_aborted 返回, 不访问 this)
     if (toastTimer_) {
@@ -932,54 +929,6 @@ asio::awaitable<void> TUIClientAgentIO::waitRetry() {
         timer.expires_after(std::chrono::milliseconds(100));
         auto [ec] = co_await timer.async_wait(asio::as_tuple(asio::use_awaitable));
         (void)ec;
-    }
-}
-
-// ---------------------------------------------------------------------------
-// 系统资源监控 (每 kSystemInfoIntervalSec 秒经 Wire 请求 agent-server 采集)
-//
-// 采集已迁移到 agent-server: TUI 不再本地读取 CPU/内存 (TUI 与 agent-server
-// 可分属不同进程/主机, 远端模式下展示的是 server 主机的资源), 仅周期发送
-// WireGetSystemUsage 请求, 服务端读取后回传 WireSystemUsage (由 client 线程
-// onPeerMessage 写入 sharedState_.systemUsageJson)。采集周期由 client io_context
-// 上的协程 (steady_timer) 驱动, 不占用 UI 线程。
-// ---------------------------------------------------------------------------
-
-void TUIClientAgentIO::startSystemMonitor() {
-    if (sysMonitorRunning_.exchange(true, std::memory_order_acq_rel)) {
-        return;
-    }
-    sysMonitorTimer_ = std::make_shared<asio::steady_timer>(ex_);
-    asio::co_spawn(
-        ex_,
-        [this]() -> asio::awaitable<void> {
-            auto timer = sysMonitorTimer_;
-            for (;;) {
-                // 显示关闭时跳过请求 (仍保持周期唤醒, 以便随时重新开启)
-                if (TUISettings::instance().showSystemInfo() && transport_) {
-                    // 请求 agent-server 读取系统资源占用 (CPU/内存/GPU):
-                    // 服务端经 blockingPool 采集后回传 WireSystemUsage,
-                    // 由 onPeerMessage 更新 sharedState_.systemUsageJson 并重绘
-                    sendToPeer(agentxx::agent::WireGetSystemUsage{});
-                }
-                // 周期等待; stop() 时 cancel() 使本等待立即返回并退出循环
-                timer->expires_after(std::chrono::seconds(kSystemInfoIntervalSec));
-                auto [ec] = co_await timer->async_wait(asio::as_tuple(asio::use_awaitable));
-                if (ec || !sysMonitorRunning_.load(std::memory_order_acquire)) {
-                    break;
-                }
-            }
-        },
-        asio::detached
-    );
-}
-
-void TUIClientAgentIO::stopSystemMonitor() {
-    sysMonitorRunning_.store(false, std::memory_order_release);
-    // 取消挂起的周期定时器, 使监控协程尽快退出 (detached 协程无法 join,
-    // 依赖 timer cancel + 运行标志结束; 残留定时器会阻塞 client io_context 的 run())
-    if (sysMonitorTimer_) {
-        sysMonitorTimer_->cancel();
     }
 }
 
@@ -1275,26 +1224,12 @@ void TUIClientAgentIO::onPeerMessage(agentxx::agent::WireMessage msg) {
                     }
                 }
                 postRedraw();
-            } else if constexpr (std::is_same_v<T, agentxx::agent::WireSystemUsage>) {
-                // agent-server 侧采集的系统资源占用响应 (WireGetSystemUsage 的回复):
-                // 写入 sharedState_ (Info 侧边栏从 frameState 读取, 见
-                // renderInfoSidebar), 采集周期由 startSystemMonitor 的定时器驱动
-                // - 载荷为插件定义 schema 的 JSON 字符串, 宿主只透传
-                {
-                    std::lock_guard<std::mutex> lock(sharedState_.mutex());
-                    auto&                       st = sharedState_.mutableState();
-                    st.systemUsageJson = std::move(m.data);
-                }
-                postRedraw();
             } else if constexpr (std::is_same_v<T, agentxx::agent::WirePluginData>) {
-                // 插件事件转发 (WirePluginData): 按插件名存入 pluginData,
-                // 渲染侧判断插件可用性并展示 (如 agentxx_codegraph 索引状态)
-                {
-                    std::lock_guard<std::mutex> lock(sharedState_.mutex());
-                    auto&                       st = sharedState_.mutableState();
-                    st.pluginData[m.plugin]        = m;
-                }
-                // 通知事件接收器 (client 插件系统订阅跨端插件数据事件)
+                // 插件事件转发 (WirePluginData): 原样通知事件接收器 (client
+                // 插件系统订阅跨端插件数据事件)。渲染由各插件的 client 侧
+                // 入口完成 (如 agentxx_codegraph 经订阅更新侧边栏面板、
+                // agentxx_system_monitor 周期采集的 usage 事件更新状态栏项),
+                // TUI 不再解析/保存插件载荷
                 emitEventSink([&](agentxx::agent::ClientEventSink& sink) {
                     sink.onPluginData(m);
                 });
@@ -1576,10 +1511,7 @@ void TUIClientAgentIO::onSync(const agentxx::agent::SyncPayload& payload) {
             st->modelNames       = prev->modelNames;
             st->appendComponents = prev->appendComponents;
             st->pendingInputs    = prev->pendingInputs;
-            st->systemUsageJson  = prev->systemUsageJson;
             st->contextMessages  = prev->contextMessages;
-            // 插件数据不随 Sync 重置 (状态栏/Info 侧边栏持续展示)
-            st->pluginData = prev->pluginData;
             st->isStreaming       = false;
             // 连接状态不随 Sync 重置: 握手后服务端回推全量 Sync 时若被重置回
             // Connecting (默认值), banner 会错误地回到"启动中"

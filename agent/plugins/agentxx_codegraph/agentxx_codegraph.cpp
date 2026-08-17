@@ -8,6 +8,7 @@
 // - 依赖: codegraph_core + tree_sitter 系 + sqlite3 + simdjson + glob
 #include "codegraph_manager.h"
 #include "codegraph_plugin.h"
+#include "agentxx/plugin/client_plugin_api.h"
 #include "fmt/format.h"
 #include <atomic>
 #include <chrono>
@@ -953,4 +954,246 @@ extern "C" void agentxx_plugin_unload(void* plugin_ctx) {
     }
     pluginLog(2, "agentxx_codegraph unloaded");
     delete ctx;
+}
+
+/* =====================================================================
+ * client 侧入口 (agentxx_client_entry) —— CodeGraph 索引状态渲染
+ *
+ * TUI 的 CodeGraph 索引状态渲染已剥离到本插件:
+ * - agent 侧发布的事件 (agentxx_codegraph.status / agentxx_codegraph.progress)
+ *   经服务端原样转发为 WirePluginData, 宿主 (TUI) 再经事件接收器分发到
+ *   client 插件系统 (AGENTXX_CLIENT_EVT_PLUGIN_DATA, 见 TUI onPeerMessage)
+ * - 本入口订阅该事件, 过滤本插件事件后更新侧边栏面板
+ *   (id "agentxx_codegraph.status", title "CodeGraph"), 展示加载状态/
+ *   索引进度/当前文件
+ * - CLI 宿主 (无 PANEL 能力) 下 register_panel 返回 NULL, 插件降级
+ *   (仅保持数据接收, 不渲染)
+ * ===================================================================== */
+
+static const AgentxxClientHost* g_client_host  = nullptr;
+static AgentxxPanel*            g_panel        = nullptr;
+/// 索引状态缓存 (事件 handler 与面板刷新均在 client io 线程, 无跨线程竞争)
+static bool        g_loaded        = false;
+static bool        g_has_progress  = false;
+static int64_t     g_processed     = 0;
+static int64_t     g_total         = 0;
+static std::string g_current_file;
+
+/// 字符串 → JSON 字符串字面量 (经宿主 vtable json_escape; 结果含引号)
+static std::string clientJsonEscape(const std::string& s) {
+    if (!g_client_host || s.empty()) {
+        return "\"\"";
+    }
+    char* esc = g_client_host->vtable->json_escape(
+        g_client_host,
+        agentxx_plugin_sv(s.data(), s.size())
+    );
+    if (!esc) {
+        return "\"\"";
+    }
+    std::string out{esc};
+    g_client_host->vtable->free(esc);
+    return out;
+}
+
+/// 组装面板 items JSON (kind: text/kv/progress/badge; schema 见 client_plugin_api.h)
+static std::string buildPanelItemsJson() {
+    std::string out = R"({"items":[)";
+    bool        first = true;
+    auto        push  = [&](const std::string& itemJson) {
+        if (!first) {
+            out += ",";
+        }
+        first = false;
+        out += itemJson;
+    };
+
+    if (!g_loaded) {
+        // 插件未加载 (agent 侧未装配/已卸载)
+        push(R"({"kind":"text","text":)" + clientJsonEscape("CodeGraph: not loaded") + "}");
+        out += "]}";
+        return out;
+    }
+    push(R"({"kind":"badge","text":)" + clientJsonEscape("CodeGraph") + "}");
+
+    // 进度判定 (与迁移前 TUI 渲染逻辑一致):
+    // - total>0 且 processed>=total: 索引正常结束
+    // - processed==0 且 total==0: 无文件可索引, 同样视为结束
+    // - 其余视为进行中 (流式遍历 processed>0,total=0 / resolve 阶段)
+    const bool indexing = g_total > 0 ? !(g_processed >= g_total) : (g_processed > 0);
+    if (g_has_progress && indexing) {
+        if (g_total > 0) {
+            // 索引进行中: 45% (12/60)
+            const double pct = static_cast<double>(g_processed) / static_cast<double>(g_total);
+            push(R"({"kind":"kv","key":)" + clientJsonEscape("Index")
+                 + R"(,"value":)" + clientJsonEscape(fmt::format(
+                       "{:.0f}% ({}/{})",
+                       pct * 100.0,
+                       g_processed,
+                       g_total
+                   ))
+                 + "}");
+            push(fmt::format(R"({{"kind":"progress","value":{:.3f}}})", pct));
+        } else {
+            // 流式遍历/收集阶段 (文件总数未知): 显示已发现文件数
+            push(R"({"kind":"kv","key":)" + clientJsonEscape("Indexing")
+                 + R"(,"value":)" + clientJsonEscape(fmt::format("{} files", g_processed))
+                 + "}");
+        }
+        if (!g_current_file.empty()) {
+            // 仅显示文件名 (目录路径过长; 无 lib 工具, 简单按分隔符取尾段)
+            std::string fname = g_current_file;
+            const auto  pos   = fname.find_last_of("/\\");
+            if (pos != std::string::npos) {
+                fname = fname.substr(pos + 1);
+            }
+            if (fname.size() > 40) {
+                fname = fname.substr(0, 40) + "...";
+            }
+            push(R"({"kind":"text","text":)" + clientJsonEscape(fname) + "}");
+        }
+    } else if (g_has_progress && g_total > 0) {
+        // 索引完成
+        push(R"({"kind":"kv","key":)" + clientJsonEscape("Index")
+             + R"(,"value":)" + clientJsonEscape(fmt::format("available ({}/{})", g_processed, g_total))
+             + "}");
+    } else {
+        // 已加载但尚未开始索引
+        push(R"({"kind":"kv","key":)" + clientJsonEscape("Index")
+             + R"(,"value":)" + clientJsonEscape("ready") + "}");
+    }
+    out += "]}";
+    return out;
+}
+
+/// 用最新缓存刷新面板 (client io 线程调用)
+static void refreshPanel() {
+    if (!g_client_host || !g_panel) {
+        return;
+    }
+    const std::string json = buildPanelItemsJson();
+    g_client_host->vtable->update_panel(
+        g_client_host,
+        g_panel,
+        agentxx_plugin_sv(json.data(), json.size())
+    );
+}
+
+/// PLUGIN_DATA 事件: 过滤 agentxx_codegraph 的 status/progress 事件
+static void on_client_plugin_data(AgentxxPluginStringView payload_json, void* ud) {
+    (void)ud;
+    if (!g_client_host || !g_panel) {
+        return;
+    }
+    // payload: {"plugin","event","data"}
+    char* plugin = g_client_host->vtable->json_get_string(
+        g_client_host,
+        payload_json,
+        AGENTXX_SV("plugin")
+    );
+    char* event = g_client_host->vtable->json_get_string(
+        g_client_host,
+        payload_json,
+        AGENTXX_SV("event")
+    );
+    char* data = g_client_host->vtable->json_get_string(
+        g_client_host,
+        payload_json,
+        AGENTXX_SV("data")
+    );
+    if (plugin && event && data && std::strcmp(plugin, "agentxx_codegraph") == 0) {
+        SimpleJson j(std::string{data});
+        if (std::strcmp(event, "status") == 0) {
+            // 加载状态: {"loaded":bool}; loaded=false 时清空进度缓存
+            bool loaded = false;
+            if (j.ok() && jsonGetBool(j.doc().at_pointer("/loaded"), loaded)) {
+                g_loaded = loaded;
+                if (!loaded) {
+                    g_has_progress = false;
+                    g_processed    = 0;
+                    g_total        = 0;
+                    g_current_file.clear();
+                }
+                refreshPanel();
+            }
+        } else if (std::strcmp(event, "progress") == 0) {
+            // 索引进度: {"processed","total","current_file"}
+            if (j.ok()) {
+                int64_t     processed = 0, total = 0;
+                std::string cur;
+                jsonGetInt(j.doc().at_pointer("/processed"), processed);
+                jsonGetInt(j.doc().at_pointer("/total"), total);
+                jsonGetString(j.doc().at_pointer("/current_file"), cur);
+                g_processed     = processed;
+                g_total         = total;
+                g_current_file  = std::move(cur);
+                g_has_progress  = true;
+                g_loaded        = true;
+                refreshPanel();
+            }
+        }
+    }
+    if (plugin) {
+        g_client_host->vtable->free(plugin);
+    }
+    if (event) {
+        g_client_host->vtable->free(event);
+    }
+    if (data) {
+        g_client_host->vtable->free(data);
+    }
+}
+
+extern "C" const AgentxxClientPluginInfo* agentxx_client_get_info(void) {
+    static const AgentxxClientPluginInfo info{
+        AGENTXX_CLIENT_PLUGIN_API_VERSION,
+        AGENTXX_SV("agentxx_codegraph"),
+        AGENTXX_SV("1.0.0"),
+        AGENTXX_SV("CodeGraph index status panel (client side)"),
+        0, // min_ui_caps: 无最低要求 (CLI 无面板时注册失败降级)
+    };
+    return &info;
+}
+
+extern "C" int agentxx_client_entry(const AgentxxClientHost* host, void** plugin_ctx) {
+    g_client_host = host;
+    (void)plugin_ctx;
+
+    // 1. 侧边栏面板 (title "CodeGraph"; 内容由 refreshPanel 更新)
+    g_panel = host->vtable->register_panel(
+        host,
+        AGENTXX_SV("agentxx_codegraph.status"),
+        AGENTXX_SV(R"({"title":"CodeGraph"})")
+    );
+    // 宿主不支持面板 (如 CLI) 时返回 NULL, 插件降级 (不视为失败)
+    if (g_panel) {
+        refreshPanel(); // 初始占位 (等待 agent 侧 status 事件)
+    }
+
+    // 2. 事件订阅: agent 侧发布的 codegraph 事件 (服务端转发的 WirePluginData)
+    if (!host->vtable->subscribe(
+            host,
+            AGENTXX_CLIENT_EVT_PLUGIN_DATA,
+            on_client_plugin_data,
+            nullptr
+        )) {
+        return -1;
+    }
+
+    host->vtable->log(host, 2, AGENTXX_SV("agentxx_codegraph client loaded"));
+    return 0;
+}
+
+extern "C" void agentxx_client_unload(void* plugin_ctx) {
+    (void)plugin_ctx;
+    if (!g_client_host) {
+        return;
+    }
+    if (g_panel) {
+        g_client_host->vtable->unregister_panel(g_client_host, g_panel);
+        g_panel = nullptr;
+    }
+    g_current_file.clear();
+    g_client_host->vtable->log(g_client_host, 2, AGENTXX_SV("agentxx_codegraph client unloaded"));
+    g_client_host = nullptr;
 }

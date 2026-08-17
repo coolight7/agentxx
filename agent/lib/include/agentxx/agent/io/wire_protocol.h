@@ -31,9 +31,6 @@ struct MsgType {
     inline static constexpr std::string_view ListSessions = "list_sessions";
     /// 客户端请求切换当前连接的会话 (重新绑定 threadId 并回推历史)
     inline static constexpr std::string_view SwitchSession = "switch_session";
-    /// 客户端周期请求系统资源占用 (CPU/内存/GPU): 由 agent-server 侧采集后回传
-    /// (TUI 与 agent-server 可分属不同进程/主机, 采集迁移到 server 侧执行)
-    inline static constexpr std::string_view GetSystemUsage = "get_system_usage";
 
     // ===== Server -> Client =====
     inline static constexpr std::string_view HelloAck         = "hello_ack";
@@ -52,8 +49,6 @@ struct MsgType {
     inline static constexpr std::string_view ContextMessages     = "context_messages";
     /// 服务端持久化会话列表响应 (ListSessions 的结果)
     inline static constexpr std::string_view SessionList = "session_list";
-    /// 服务端系统资源占用响应 (GetSystemUsage 的结果)
-    inline static constexpr std::string_view SystemUsage = "system_usage";
     inline static constexpr std::string_view Pong        = "pong";
     /// 服务端插件事件转发 (WirePluginData: 插件名 + 事件名 + JSON 载荷)
     inline static constexpr std::string_view PluginData = "plugin_data";
@@ -638,31 +633,9 @@ inline WireSwitchSession switchSessionFromJson(const neograph::json& j) {
 }
 
 // ---------------------------------------------------------------------------
-// 系统资源占用 (TUI 周期请求, 由 agent-server 侧经插件能力采集后回传)
-// - 载荷为 JSON 字符串, schema 由采集插件定义 (agentxx_system_monitor 能力
-//   agentxx.system_usage 的返回格式); 宿主只透传不解析
+// 插件事件转发 (Server -> Client): 插件经事件总线发布的事件原样转发
+// - data 为 JSON 载荷字符串 (语义由插件定义); 频率由插件自身控制
 // ---------------------------------------------------------------------------
-
-/// 客户端请求系统资源占用 (Client -> Server): 无载荷
-inline neograph::json makeGetSystemUsage() {
-    return neograph::json{
-        {"type", MsgType::GetSystemUsage},
-    };
-}
-
-/// 服务端系统资源占用响应 (Server -> Client): 插件能力返回的使用率 JSON
-/// 原样放入 "usage" 字段 (空串 = 插件未加载/无数据)
-inline neograph::json makeSystemUsage(std::string usageJson) {
-    neograph::json j = neograph::json::object();
-    j["type"]        = MsgType::SystemUsage;
-    j["usage"]       = std::move(usageJson);
-    return j;
-}
-
-/// 从响应提取使用率 JSON 字符串 (未携带时返回空串)
-inline std::string systemUsageFromJson(const neograph::json& j) {
-    return j.value("usage", std::string{});
-}
 
 /// 插件事件转发 (Server -> Client): 插件经事件总线发布的事件原样转发
 /// - data 为 JSON 载荷字符串 (语义由插件定义); 频率由插件自身控制

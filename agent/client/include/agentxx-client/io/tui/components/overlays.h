@@ -85,7 +85,6 @@ private:
 
 /// 设置弹窗组件
 /// - 主题切换 (Dark/Light, 单行显示当前值, 点击/Enter 循环切换)
-/// - 系统资源占用显示开关 (Info 侧边栏; 默认开启)
 /// - 动画等级 (Disabled/Low/Medium/High/Ultra; 见 TUISettings)
 /// - 日志等级 (Trace/Debug/Info/Warn/Error/Out; 见 TUISettings)
 ///
@@ -127,16 +126,15 @@ private:
     void cycleLogLevel();
 
     TUICtx& ctx_;
-    /// 条目索引: 0 = 主题, 1 = 系统资源显示开关, 2 = 动画等级, 3 = 日志等级
+    /// 条目索引: 0 = 主题, 1 = 动画等级, 2 = 日志等级
     /// Enter/鼠标点击索引时循环切换对应设置
-    static constexpr int  kItemCount     = 4;
+    static constexpr int  kItemCount     = 3;
     int                   selectedIndex_ = 0;
     std::function<void()> onClose_;
     std::function<void()> onThemeChange_;
     std::function<void()> onLogLevelChange_;
 
     ftxui::Box themeBox_;     // 主题点击区域
-    ftxui::Box sysInfoBox_;   // 系统资源开关点击区域
     ftxui::Box animLevelBox_; // 动画等级点击区域
     ftxui::Box logLevelBox_;  // 日志等级点击区域
 };

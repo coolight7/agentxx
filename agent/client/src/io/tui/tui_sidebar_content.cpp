@@ -186,137 +186,17 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
 
     Elements elements;
 
-    // 系统资源占用 (CPU/内存): 由 client 线程收到 WireSystemUsage (agent-server
-    // 经 agentxx_system_monitor 插件能力采集后回传) 后周期刷新; 载荷为插件
-    // 定义 schema 的 JSON 字符串 (宿主只透传不解析, 此处按约定字段读取):
-    // {"cpu","mem_total_mb","mem_used_mb","mem_percent","gpus":[...]}
-    // 显示开关存储于全局设置单例
-    if (TUISettings::instance().showSystemInfo()) {
-        Elements sysEls;
-        sysEls.push_back(text("System") | color(theme_.accentColor));
-        bool rendered = false;
-        if (!st.systemUsageJson.empty()) {
-            try {
-                auto j = neograph::json::parse(st.systemUsageJson);
-                if (j.is_object() && j.contains("cpu")) {
-                    double cpu     = j.value("cpu", 0.0);
-                    double memPct  = j.value("mem_percent", 0.0);
-                    uint64_t memU  = j.value("mem_used_mb", uint64_t{0});
-                    uint64_t memT  = j.value("mem_total_mb", uint64_t{0});
-                    sysEls.push_back(
-                        text(fmt::format("|- CPU: {:.1f}%", cpu))
-                        | color(theme_.normalColor)
-                    );
-                    sysEls.push_back(
-                        text(fmt::format(
-                            "|- RAM: {:.1f}% {}/{}",
-                            memPct,
-                            agentxx::util::formatSize(memU * 1024 * 1024),
-                            agentxx::util::formatSize(memT * 1024 * 1024)
-                        ))
-                        | color(theme_.normalColor)
-                    );
-                    rendered = true;
-                }
-            } catch (const std::exception& e) {
-                // 载荷非约定 schema: 按无数据展示 (不崩溃)
-                XX_LOGW("renderInfoSidebar: system usage json parse failed: {}", e.what());
-            }
-        }
-        if (!rendered) {
-            sysEls.push_back(text("|- loading...") | color(theme_.hintColor));
-        }
-        elements.push_back(vbox(std::move(sysEls)));
-        elements.push_back(text(" "));
-    }
-
     if (auto planning = renderPlanningInfo()) {
         elements.push_back(std::move(*planning));
         elements.push_back(text(" "));
     }
 
-    // 插件数据: 解析 agentxx_codegraph 插件状态 (WirePluginData 事件:
-    // status {"loaded"} / progress {"processed","total","current_file"})
-    struct CodegraphView {
-        bool        available = false;
-        bool        indexing  = false;
-        int         processed = 0;
-        int         total     = 0;
-        std::string currentFile;
-    } cg;
-    if (auto it = st.pluginData.find("agentxx_codegraph"); it != st.pluginData.end()) {
-        cg.available = true;
-        if (it->second.event == "progress") {
-            try {
-                auto j = neograph::json::parse(it->second.data);
-                cg.processed = j.value("processed", 0);
-                cg.total     = j.value("total", 0);
-                cg.currentFile = j.value("current_file", std::string{});
-                // 完成信号 (插件约定):
-                // - total>0 且 processed>=total: 索引正常结束
-                // - processed==0 且 total==0: 无文件可索引, 同样视为结束
-                // 其余视为进行中 (流式遍历 processed>0,total=0 / resolve 阶段)
-                cg.indexing = cg.total > 0 ? !(cg.processed >= cg.total) : (cg.processed > 0);
-            } catch (const std::exception&) {
-                cg.available = false;
-            }
-        } else if (it->second.event == "status") {
-            // 插件卸载事件 (loaded=false) → 隐藏状态
-            try {
-                auto j = neograph::json::parse(it->second.data);
-                cg.available = j.value("loaded", true);
-            } catch (const std::exception&) {
-            }
-        }
-    }
-
-    // Append 段: 已加载组件 (Memory/Skill/MCP) + CodeGraph 索引状态
-    // - CodeGraph 状态在 appendComponents 为空时也需展示, 条件一并判断
-    if (!st.appendComponents.empty() || cg.available) {
+    // 已加载组件 (Memory/Skill/MCP) 展示:
+    // - CodeGraph 索引状态与系统资源占用已剥离到对应插件的 client 侧入口
+    //   (agentxx_codegraph 面板 / agentxx_system_monitor 状态栏项), TUI 不再渲染
+    if (!st.appendComponents.empty()) {
         Elements appendEls;
         appendEls.push_back(text("Append") | color(theme_.accentColor));
-
-        // CodeGraph 索引状态 (WirePluginData 转发; 频率由插件控制):
-        // 追加到 Append 段末尾, 展示索引进度/就绪状态
-        if (cg.available) {
-            std::string status;
-            if (cg.indexing && cg.total > 0) {
-                // 索引进行中: 45% (12/60)
-                status = fmt::format(
-                    "indexing {}%·{}/{}",
-                    static_cast<int>(
-                        100.0 * static_cast<double>(cg.processed) / static_cast<double>(cg.total)
-                    ),
-                    cg.processed,
-                    cg.total
-                );
-            } else if (cg.indexing && cg.processed > 0) {
-                // 索引进行中但文件总数未知 (流式遍历/收集阶段): 显示已发现文件数,
-                // 随遍历逐渐增长, 避免大目录首次扫描期间长时间无任何进度显示
-                status = fmt::format("indexing {}·{}", cg.processed, cg.currentFile);
-            } else if (cg.indexing) {
-                // 索引进行中且尚未发现文件
-                status = "indexing ...";
-            } else if (cg.total > 0) {
-                // 索引完成
-                status = fmt::format("available {}", cg.processed, cg.total);
-            } else {
-                // 可用但尚未开始索引
-                status = "ready";
-            }
-            appendEls.push_back(
-                hbox({
-                    text("|- "),
-                    text("CodeGraph: "),
-                })
-                | color(theme_.normalColor)
-            );
-            appendEls.push_back(hbox({
-                text("|  ") | color(theme_.hintColor),
-                text(std::move(status)) | color(cg.indexing ? theme_.accentColor : theme_.hintColor)
-                    | xflex_shrink,
-            }));
-        }
 
         auto appendGroup = [&](std::string_view                                  label,
                                agentxx::agent::AppendComponentNotification::Type type,

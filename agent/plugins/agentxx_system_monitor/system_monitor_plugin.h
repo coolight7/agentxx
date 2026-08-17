@@ -94,6 +94,16 @@ inline bool jsonGetString(
     return true;
 }
 
+inline bool jsonGetBool(
+    simdjson::simdjson_result<simdjson::ondemand::value> v,
+    bool&                                                out
+) {
+    if (v.error()) {
+        return false;
+    }
+    return !v.value().get_bool().get(out);
+}
+
 } // namespace agentxx_system_monitor_plugin
 
 #define XX_LOGT(...) ::agentxx_system_monitor_plugin::pluginLog(0, fmt::format(__VA_ARGS__))

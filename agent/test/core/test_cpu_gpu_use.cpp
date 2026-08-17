@@ -91,7 +91,7 @@ asio::awaitable<TestResult>
         }
     }
 
-    // ---- 4. 能力 agentxx.system_usage (TUI WireGetSystemUsage 链路) ----
+    // ---- 4. 能力 agentxx.system_usage (agent 侧周期采集 publish 的数据源) ----
     {
         XX_TEST_EXPECT_TRUE(ctx->pluginManager->hasCapability("agentxx.system_usage"));
         char* err  = nullptr;

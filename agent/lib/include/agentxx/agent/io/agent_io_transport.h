@@ -155,28 +155,11 @@ struct WireSetPermission {
     size_t index = 0;
 };
 
-/// 客户端请求系统资源占用 (Client -> Server): TUI 周期请求 CPU/内存/GPU 占用,
-/// 由 agent-server 侧读取后回传 —— 采集逻辑位于 agent-server 所在进程/主机
-/// (远端模式下展示的是 server 主机的资源; 本地一体模式由 server 端点进程读取)
-struct WireGetSystemUsage {};
-
-/// 服务端系统资源占用响应 (Server -> Client)
-/// - 载荷为 JSON 字符串, schema 由提供采集的插件定义 (宿主只透传, 不解析):
-///   当前 agentxx_system_monitor 插件 (能力 agentxx.system_usage) 返回:
-///   {"cpu": 12.3, "mem_total_mb": 16384, "mem_used_mb": 8192,
-///    "mem_percent": 50.0, "gpus": [{"name","dedicated_vram_mb",
-///    "dedicated_vram_used_mb","shared_vram_mb","shared_vram_used_mb",
-///    "usage_percent"}, ...]}
-/// - 宿主/客户端仅做透传与展示; 插件未加载时 data 为空串
-struct WireSystemUsage {
-    /// 插件能力返回的使用率 JSON (空串 = 无数据)
-    std::string data;
-};
-
 /// 插件事件转发 (Server -> Client)
 /// - 插件经事件总线发布 (topic 约定 `{插件名}.{事件名}`) 的事件原样转发,
 ///   宿主不解析载荷语义; 频率由插件自身控制
-/// - 客户端据此判断插件可用性并展示 (如 agentxx_codegraph 索引进度)
+/// - 客户端据此判断插件可用性并展示 (如 agentxx_codegraph 索引进度、
+///   agentxx_system_monitor 周期采集的 usage 事件)
 struct WirePluginData {
     /// 插件名 (如 "agentxx_codegraph")
     std::string plugin;
@@ -226,8 +209,6 @@ using WireMessage = std::variant<
     WireSessionList,
     WireSwitchSession,
     WireSetPermission,
-    WireGetSystemUsage,
-    WireSystemUsage,
     WirePluginData,
     WirePluginDataUp>;
 
