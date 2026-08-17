@@ -475,10 +475,7 @@ asio::awaitable<void> test_eventbridge_tps() {
     auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
     // 注入 summarization 中间件: estimateTokens 应复用其 token 计算口径
     agentContext->summarizationMiddleware
-        = std::make_shared<agentxx::middleware::SummarizationMiddlewareHandle>(
-            nullptr,
-            agentContext
-        );
+        = std::make_shared<agentxx::middleware::SummarizationMiddlewareHandle>(agentContext);
     auto session = std::make_shared<agentxx::agent::Session>();
     auto io      = std::make_shared<TestEbIO>();
 
@@ -545,10 +542,7 @@ asio::awaitable<void> test_eventbridge_tps() {
 asio::awaitable<void> test_eventbridge_turn_tps() {
     auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
     agentContext->summarizationMiddleware
-        = std::make_shared<agentxx::middleware::SummarizationMiddlewareHandle>(
-            nullptr,
-            agentContext
-        );
+        = std::make_shared<agentxx::middleware::SummarizationMiddlewareHandle>(agentContext);
     auto session = std::make_shared<agentxx::agent::Session>();
     auto io      = std::make_shared<TestEbIO>();
 

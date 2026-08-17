@@ -168,13 +168,15 @@ asio::awaitable<void> CodeAgent::setupMiddleware() {
         agentContext->middlewareHandleContext->handles.push_back(memoryFileMiddleware);
     }
     {
-        auto summarizationMiddleware
-            = std::make_shared<agentxx::middleware::SummarizationMiddlewareHandle>(
-                subagentManagerTool_.get(),
-                agentContext
-            );
-        agentContext->summarizationMiddleware = summarizationMiddleware;
-        agentContext->middlewareHandleContext->handles.push_back(summarizationMiddleware);
+        // 上下文压缩 (summarization) 中间件: 由 AgentConfig::enableSummarization 控制
+        // - 子代理默认继承父配置; summarization 发起的压缩子代理显式关闭,
+        //   避免对透传的上下文前缀二次压缩 (破坏 KV/prefix cache 一致性)
+        if (config->enableSummarization) {
+            auto summarizationMiddleware
+                = std::make_shared<agentxx::middleware::SummarizationMiddlewareHandle>(agentContext);
+            agentContext->summarizationMiddleware = summarizationMiddleware;
+            agentContext->middlewareHandleContext->handles.push_back(summarizationMiddleware);
+        }
     }
     {
         auto planningMiddleware
