@@ -146,8 +146,7 @@ Options:
         } else if (arg == "--ssl-key" && i + 1 < argn) {
             ++i;
             sslKeyFile = argv[i];
-        } else if (arg == "tui" || arg == "cli" || arg == "server" || arg == "acp"
-                   || arg == "train") {
+        } else if (arg == "tui" || arg == "cli" || arg == "server" || arg == "acp" || arg == "train") {
             mode = arg;
         } else {
             XX_LOGE("Unknown arg: `{}`", arg);
@@ -239,15 +238,12 @@ Options:
     );
     if (!yamlCfg.permissionAllowPaths.empty()) {
         XX_LOGI(
-            "[Config] permission.whitelist (始终放行): {} 条",
+            "[Config] permission.whitelist (始终放行): {}",
             yamlCfg.permissionAllowPaths.size()
         );
     }
     if (!yamlCfg.permissionDenyPaths.empty()) {
-        XX_LOGI(
-            "[Config] permission.blacklist (始终拒绝): {} 条",
-            yamlCfg.permissionDenyPaths.size()
-        );
+        XX_LOGI("[Config] permission.blacklist (始终拒绝): {}", yamlCfg.permissionDenyPaths.size());
     }
 
     // 解析路径：相对路径按程序工作目录解析为绝对路径
@@ -347,7 +343,7 @@ Options:
         config->plugins.push_back(std::move(pluginCfg));
     }
     if (!config->plugins.empty()) {
-        XX_LOGI("[Config] plugins: {} 条", config->plugins.size());
+        XX_LOGI("[Config] plugins: {}", config->plugins.size());
     }
 
     // ======================== TUI 全局设置持久化 ========================
