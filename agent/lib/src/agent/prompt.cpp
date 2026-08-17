@@ -34,6 +34,7 @@ neograph::json AgentPrompt::toJson() const {
     j["systemPrompt"]         = systemPrompt;
     j["systemPlanningPrompt"] = systemPlanningPrompt;
     j["systemSkillPrompt"]    = systemSkillPrompt;
+    j["summarizationPrompt"]  = summarizationPrompt;
     {
         neograph::json tools = neograph::json::object();
         for (const auto& kv : toolPrompt) {
@@ -65,6 +66,9 @@ void AgentPrompt::mergeFromJson(const neograph::json& j) {
     if (j.contains("systemSkillPrompt") && j["systemSkillPrompt"].is_string()) {
         systemSkillPrompt = j["systemSkillPrompt"].get<std::string>();
     }
+    if (j.contains("summarizationPrompt") && j["summarizationPrompt"].is_string()) {
+        summarizationPrompt = j["summarizationPrompt"].get<std::string>();
+    }
     if (j.contains("toolPrompt") && j["toolPrompt"].is_object()) {
         auto tools = j["toolPrompt"];
         for (const auto& item : tools.items()) {
@@ -90,6 +94,7 @@ size_t AgentPrompt::promptHash() const {
     size_t h  = std::hash<std::string>{}(systemPrompt);
     h        ^= std::hash<std::string>{}(systemPlanningPrompt) + 0x9e3779b9 + (h << 6) + (h >> 2);
     h        ^= std::hash<std::string>{}(systemSkillPrompt) + 0x9e3779b9 + (h << 6) + (h >> 2);
+    h        ^= std::hash<std::string>{}(summarizationPrompt) + 0x9e3779b9 + (h << 6) + (h >> 2);
     for (const auto& kv : toolPrompt) {
         h ^= std::hash<std::string>{}(kv.first) + 0x9e3779b9 + (h << 6) + (h >> 2);
         h ^= std::hash<std::string>{}(kv.second.depict) + 0x9e3779b9 + (h << 6) + (h >> 2);

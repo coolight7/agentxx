@@ -2,16 +2,19 @@
 //
 // 设计要点 (见 agent/lib/include/agentxx/middlewares/summarization.h):
 // - system prompt、最近的消息 不压缩
-// - 可压缩的长消息内容用 agentxx_share_store 暂存, 留下 id + depict
-// - 选择多条消息总结压缩合并为一条
-// - 两级触发: >= 65% 上限 时去重 toolcall + 暂存长内容; >= 85% 上限 时 LLM 总结压缩
-// - 每次 modelcall 前发布上下文统计 (contextTokens / maxContextTokens) 供 UI 显示
+// - 两级触发: >= 65% 上限 时确定性压缩 (toolcall 去重/探索折叠 + 噪音清理,
+//   不剥离 thinking, 不做 offload); >= 85% 上限 时 LLM 同上下文总结压缩
+// - LLM 压缩通过 subagent 完成 (同上下文模式, FakeSubAgentManagerTool 模拟):
+//   messages 结构化透传 (system + 压缩段 + 末尾 user 压缩指令), 指定父线程
+//   thread_id, 仅提供 agentxx_share_store 工具 (模型自主外置长内容为
+//   id + 极简摘要, 写入父会话 store), 禁用 enable_summarization (禁止二次压缩)
+// - 压缩结果覆盖回: [system] | [user 压缩指令] | [assistant 摘要] | 最近消息
+// - 压缩失败 >= 2 次 (同一轮内) 或 >= 95% 上限: 硬截断兜底
 //
-// 完整语义验证 (T11-T15):
-// - system 消息不能动: 不参与 tool 压缩 / 长内容暂存 / LLM 总结, 原样保留
-// - 按顺序先进行 tool 压缩, 再由 subagent 将整体上下文压缩成一段总结,
-//   重要信息 (文件路径 / 决策 / 长内容) 必须保留 (share_store 可恢复)
-// - 消息角色顺序正确: 调用 subagent 压缩后 = system | user(自动插入提示) |
+// 完整语义验证:
+// - system 消息不能动: 不参与 tool 压缩 / 噪音清理 / LLM 总结, 原样保留
+// - 按顺序先进行确定性压缩, 再由同上下文 subagent 压缩成一段总结
+// - 消息角色顺序正确: 压缩后 = system | user(自动插入提示) |
 //   assistant(压缩总结), 然后才是未压缩的最近消息 (保留原角色与顺序)
 
 #include "test_summarization.h"
@@ -39,15 +42,19 @@ int g_sum_failed = 0;
 namespace {
 
 // ---------------------------------------------------------------------------
-// 测试辅助: 伪造 subagent 管理器 (返回预设的总结文本, 不经过真实 LLM)
+// 测试辅助: 伪造 subagent 管理器 (返回预设摘要, 不经过真实 LLM/中断)
+// - 记录每次调用收到的参数 (用于断言同上下文压缩的请求构造)
 // ---------------------------------------------------------------------------
 
 class FakeSubAgentManagerTool : public agentxx::tools::SubAgentManagerTool {
 public:
 
+    /// 预设的摘要文本 (空串模拟压缩失败)
     std::string summary;
-    /// 记录每次调用收到的参数 (用于断言 subagent 实际收到的上下文内容)
+    /// 记录每次调用收到的参数
     std::vector<neograph::json> receivedArguments;
+    /// 是否返回错误 (true 时返回 error json, 模拟 subagent 执行失败)
+    bool failWithError = false;
 
     FakeSubAgentManagerTool(
         std::string_view                            in_nodeName,
@@ -57,12 +64,15 @@ public:
 
     asio::awaitable<std::string> execute_async(const neograph::json& arguments) override {
         receivedArguments.emplace_back(arguments);
+        if (failWithError) {
+            co_return R"({"error":"fake subagent failed"})";
+        }
         co_return summary;
     }
 };
 
 // ---------------------------------------------------------------------------
-// 测试环境: AgentContext + modelRegistry + 中间件实例 + 预创建会话
+// 测试环境: AgentContext + 伪造 subagent + 中间件实例 + 预创建会话
 // ---------------------------------------------------------------------------
 
 struct SummarizationTestEnv {
@@ -72,12 +82,14 @@ struct SummarizationTestEnv {
     std::string threadId = "sum_test_thread";
 
     /// @param in_defaultMaxToken 中间件默认模型上限 (模型配置未指定时使用)
+    /// @param in_recentRatio     最近消息 token 预算比例 (测试用小值使切分点可控)
     SummarizationTestEnv(
-        size_t in_defaultMaxToken       = 2048,
-        double in_asciiCharsPerToken    = 4.0,
-        double in_unicodeCharsPerToken  = 1.1,
-        double in_tokensPerImage        = 400.0,
-        double in_extraTokensPerMessage = 3.0
+        size_t in_defaultMaxToken     = 2048,
+        double in_asciiCharsPerToken  = 4.0,
+        double in_unicodeCharsPerToken = 1.1,
+        double in_tokensPerImage      = 400.0,
+        double in_extraTokensPerMessage = 3.0,
+        double in_recentRatio         = 0.03
     ) {
         ctx                          = std::make_shared<agentxx::agent::AgentContext>();
         ctx->agentConfig             = std::make_shared<agentxx::agent::AgentConfig>();
@@ -112,17 +124,18 @@ struct SummarizationTestEnv {
         // 默认模型名 = 首个注册的 "fallback"
         ctx->agentConfig->model.modelName = "fallback";
 
+        // 伪造 subagent 管理器 (压缩走 subagent 路径)
         subagent = std::make_shared<FakeSubAgentManagerTool>("fake_subagent", ctx);
         ctx->subagentManagerToolPtr = subagent.get();
 
         handle = std::make_shared<agentxx::middleware::SummarizationMiddlewareHandle>(
-            subagent.get(),
             ctx,
             in_defaultMaxToken,
             in_asciiCharsPerToken,
             in_unicodeCharsPerToken,
             in_tokensPerImage,
-            in_extraTokensPerMessage
+            in_extraTokensPerMessage,
+            in_recentRatio
         );
 
         // 预创建会话, 用于校验上下文统计发布
@@ -169,7 +182,7 @@ static neograph::ChatMessage
     return m;
 }
 
-/// 长消息: 单条内容超过 longContentByteThreshold (2000) 字节
+/// 长消息: 用于载荷裁剪等场景
 static std::string makeLongContent(size_t bytes = 2500) {
     return std::string(bytes, 'x');
 }
@@ -385,113 +398,311 @@ asio::awaitable<TestResult> run_summarization_tests() {
         );
     }
 
-    // ==================== doSummarizeWithLLM ====================
-
-    {
-        // subagentManager 为空 → 返回空串 (降级为不压缩)
-        auto env        = std::make_shared<SummarizationTestEnv>();
-        auto noSubagent = std::make_shared<agentxx::middleware::SummarizationMiddlewareHandle>(
-            nullptr,
-            env->ctx,
-            2048
-        );
-        std::vector<neograph::ChatMessage> msgs{makeMsg("user", "hi")};
-        auto                               r1 = co_await noSubagent->doSummarizeWithLLM(msgs);
-        XX_TEST_EXPECT_EQ(r1, std::string{""});
-        // 空消息 → 返回空串
-        auto r2 = co_await env->handle->doSummarizeWithLLM({});
-        XX_TEST_EXPECT_EQ(r2, std::string{""});
-        // 伪造 subagent 返回预设总结
-        env->subagent->summary = "fake summary";
-        auto r3                = co_await env->handle->doSummarizeWithLLM(msgs);
-        XX_TEST_EXPECT_EQ(r3, std::string{"fake summary"});
-    }
-
-    // ==================== offloadLongContentToTempStore ====================
+    // ==================== cleanNoiseMessages ====================
 
     {
         auto  env = std::make_shared<SummarizationTestEnv>();
         auto& h   = env->handle;
 
-        // 短内容 → 不处理, 不写入 share store
-        auto shortMsg = makeMsg("user", "abc");
-        h->offloadLongContentToTempStore(
-            shortMsg,
-            env->ctx->middlewareHandleContext,
-            env->threadId
-        );
-        XX_TEST_EXPECT_EQ(shortMsg.content, std::string{"abc"});
-        XX_TEST_EXPECT_FALSE(msgHasFlag(shortMsg, neograph::MessageFlag::ContentOffloaded));
-        auto it = env->ctx->middlewareHandleContext->shareStore.find(env->threadId);
-        XX_TEST_EXPECT_TRUE(it == env->ctx->middlewareHandleContext->shareStore.end());
+        // --- A. 空消息删除; thinking (reasoning_content) 保留 ---
+        {
+            std::vector<neograph::ChatMessage> msgs{
+                makeMsg("user", ""), // 空内容
+                makeMsg("assistant", ""),
+                [&]() {
+                    auto m              = makeMsg("assistant", "a1");
+                    m.reasoning_content = "think-1";
+                    return m;
+                }(),
+                makeMsg("user", "u2"),
+            };
+            h->cleanNoiseMessages(msgs);
+            XX_TEST_EXPECT_EQ(msgs.size(), size_t{2});
+            // thinking 保留 (不剥离)
+            XX_TEST_EXPECT_EQ(msgs[0].content, std::string{"a1"});
+            XX_TEST_EXPECT_EQ(msgs[0].reasoning_content, std::string{"think-1"});
+            XX_TEST_EXPECT_EQ(msgs[1].content, std::string{"u2"});
+        }
 
-        // 长内容 → 暂存 share store, content 替换为 id 引用
-        auto longMsg = makeMsg("user", makeLongContent());
-        h->offloadLongContentToTempStore(longMsg, env->ctx->middlewareHandleContext, env->threadId);
-        XX_TEST_EXPECT_TRUE(msgHasFlag(longMsg, neograph::MessageFlag::ContentOffloaded));
-        auto id = longMsg.extra.value<size_t>("offload_id", 0);
-        XX_TEST_EXPECT_TRUE(id > 0);
-        auto expected = fmt::format(
-            "[Content offloaded. Use the `agentxx_share_store` tool to fetch the full content by "
-            "ID {}]",
-            id
-        );
-        XX_TEST_EXPECT_EQ(longMsg.content, expected);
-        auto stored = env->ctx->middlewareHandleContext->getShareStoreItemValue(env->threadId, id);
-        XX_TEST_EXPECT_TRUE(stored.has_value());
-        XX_TEST_EXPECT_EQ(*stored, makeLongContent());
+        // --- B. 相邻完全相同的消息只保留最后一条 ---
+        {
+            std::vector<neograph::ChatMessage> msgs{
+                makeMsg("user", "dup"),
+                makeMsg("user", "dup"),
+                makeMsg("user", "other"),
+            };
+            h->cleanNoiseMessages(msgs);
+            XX_TEST_EXPECT_EQ(msgs.size(), size_t{2});
+            XX_TEST_EXPECT_EQ(msgs[0].content, std::string{"dup"});
+            XX_TEST_EXPECT_EQ(msgs[1].content, std::string{"other"});
+        }
 
-        // 已卸载过的消息 (内容已变短) → 不再重复卸载
-        auto before = longMsg.content;
-        h->offloadLongContentToTempStore(longMsg, env->ctx->middlewareHandleContext, env->threadId);
-        XX_TEST_EXPECT_EQ(longMsg.content, before);
+        // --- C. 连续 AutoInserted 噪音只保留最后一条 ---
+        {
+            std::vector<neograph::ChatMessage> msgs{
+                makeMsg("user", "u1"),
+                [&]() {
+                    auto m         = makeMsg("assistant", "[Please continue]");
+                    m.flags        = neograph::MessageFlag::AutoInserted;
+                    return m;
+                }(),
+                [&]() {
+                    auto m         = makeMsg("assistant", "[Please continue]");
+                    m.flags        = neograph::MessageFlag::AutoInserted;
+                    return m;
+                }(),
+                [&]() {
+                    auto m         = makeMsg("assistant", "[User cancelled]");
+                    m.flags        = neograph::MessageFlag::AutoInserted;
+                    return m;
+                }(),
+                makeMsg("user", "u2"),
+            };
+            h->cleanNoiseMessages(msgs);
+            XX_TEST_EXPECT_EQ(msgs.size(), size_t{3});
+            XX_TEST_EXPECT_EQ(msgs[0].content, std::string{"u1"});
+            // 连续噪音段折叠为最后一条
+            XX_TEST_EXPECT_EQ(msgs[1].content, std::string{"[User cancelled]"});
+            XX_TEST_EXPECT_EQ(msgs[2].content, std::string{"u2"});
+        }
 
-        // 多条长消息 → id 递增且互不覆盖
-        auto a = makeMsg("user", makeLongContent(3000));
-        auto b = makeMsg("user", makeLongContent(3000));
-        h->offloadLongContentToTempStore(a, env->ctx->middlewareHandleContext, env->threadId);
-        h->offloadLongContentToTempStore(b, env->ctx->middlewareHandleContext, env->threadId);
-        auto idA = a.extra.value<size_t>("offload_id", 0);
-        auto idB = b.extra.value<size_t>("offload_id", 0);
-        XX_TEST_EXPECT_TRUE(idA != idB);
-        XX_TEST_EXPECT_EQ(
-            *env->ctx->middlewareHandleContext->getShareStoreItemValue(env->threadId, idA),
-            makeLongContent(3000)
-        );
-        XX_TEST_EXPECT_EQ(
-            *env->ctx->middlewareHandleContext->getShareStoreItemValue(env->threadId, idB),
-            makeLongContent(3000)
-        );
+        // --- D. 非连续噪音 (被正常消息隔开) 各自保留 ---
+        {
+            std::vector<neograph::ChatMessage> msgs{
+                [&]() {
+                    auto m         = makeMsg("assistant", "[Please continue]");
+                    m.flags        = neograph::MessageFlag::AutoInserted;
+                    return m;
+                }(),
+                makeMsg("user", "u1"),
+                [&]() {
+                    auto m         = makeMsg("assistant", "[Exception aborted]");
+                    m.flags        = neograph::MessageFlag::AutoInserted;
+                    return m;
+                }(),
+            };
+            h->cleanNoiseMessages(msgs);
+            XX_TEST_EXPECT_EQ(msgs.size(), size_t{3});
+        }
+
+        // --- E. 非 AutoInserted 的相似内容不折叠; system 不受影响 ---
+        {
+            std::vector<neograph::ChatMessage> msgs{
+                makeMsg("system", "sys"),
+                makeMsg("user", "[Please continue]"), // 用户手动输入的同文案, 非 AutoInserted
+                makeMsg("user", "[Please continue]"),
+            };
+            h->cleanNoiseMessages(msgs);
+            // 相邻相同 user 消息仍按"重复保留最后一条"处理
+            XX_TEST_EXPECT_EQ(msgs.size(), size_t{2});
+            XX_TEST_EXPECT_EQ(msgs[0].content, std::string{"sys"});
+            XX_TEST_EXPECT_EQ(msgs[1].content, std::string{"[Please continue]"});
+        }
     }
 
-    // ==================== doSummarizeToolcall ====================
+    // ==================== doSummarizeWithLLM (同上下文压缩) ====================
+
+    {
+        // --- A. 无 subagentManager → 返回空串 (降级为不压缩) ---
+        {
+            auto env = std::make_shared<SummarizationTestEnv>();
+            env->ctx->subagentManagerToolPtr = nullptr;
+            std::vector<neograph::ChatMessage> msgs{makeMsg("user", "hi")};
+            auto r = co_await env->handle->doSummarizeWithLLM(env->threadId, msgs);
+            XX_TEST_EXPECT_EQ(r, std::string{""});
+        }
+
+        // --- B. 空消息 → 返回空串 ---
+        {
+            auto  env = std::make_shared<SummarizationTestEnv>();
+            auto  r   = co_await env->handle->doSummarizeWithLLM(env->threadId, {});
+            XX_TEST_EXPECT_EQ(r, std::string{""});
+        }
+
+        // --- C. 同上下文 subagent 请求构造 + 返回摘要 ---
+        {
+            auto env = std::make_shared<SummarizationTestEnv>();
+            env->subagent->summary = "fake summary";
+
+            std::vector<neograph::ChatMessage> msgs{
+                makeMsg("system", "sys"),
+                makeMsg("user", "u1"),
+                makeAssistantToolcall("", {makeToolcall("c1", "read_file", R"({"path":"A"})")}),
+                makeToolResult("c1", "read_file", "r1"),
+            };
+            auto r = co_await env->handle->doSummarizeWithLLM(env->threadId, msgs);
+            XX_TEST_EXPECT_EQ(r, std::string{"fake summary"});
+
+            // 仅调用一次 subagent
+            XX_TEST_EXPECT_EQ(env->subagent->receivedArguments.size(), size_t{1});
+            const auto& args = env->subagent->receivedArguments[0];
+            // 子代理名
+            XX_TEST_EXPECT_EQ(args.value("subagent", std::string{}), std::string{"subagent_task"});
+            // 同上下文: 指定父线程
+            XX_TEST_EXPECT_EQ(args.value("thread_id", std::string{}), env->threadId);
+            // 工具策略: 仅 share_store (模型自主外置长内容)
+            XX_TEST_EXPECT_TRUE(args["tools"].is_array());
+            XX_TEST_EXPECT_EQ(args["tools"].size(), size_t{1});
+            XX_TEST_EXPECT_EQ(args["tools"][0].get<std::string>(), std::string{"agentxx_share_store"});
+            // 禁止二次压缩
+            XX_TEST_EXPECT_TRUE(args["enable_summarization"].is_boolean());
+            XX_TEST_EXPECT_FALSE(args["enable_summarization"].get<bool>());
+
+            // 结构化消息透传: system + 原消息 + 末尾追加 user 压缩指令 (无文本转录)
+            const auto& reqMsgs = args["messages"];
+            XX_TEST_EXPECT_TRUE(reqMsgs.is_array());
+            XX_TEST_EXPECT_EQ(reqMsgs.size(), msgs.size() + 1);
+            for (size_t i = 0; i < msgs.size(); ++i) {
+                XX_TEST_EXPECT_EQ(reqMsgs[i].value("role", std::string{}), msgs[i].role);
+                XX_TEST_EXPECT_EQ(reqMsgs[i].value("content", std::string{}), msgs[i].content);
+            }
+            // 压缩指令: 最后一条 user 消息, 含 share_store 提示
+            const auto& promptMsg = reqMsgs.back();
+            XX_TEST_EXPECT_EQ(promptMsg.value("role", std::string{}), std::string{"user"});
+            XX_TEST_EXPECT_TRUE(
+                promptMsg.value("content", std::string{}).find("Summarize") != std::string::npos
+            );
+            XX_TEST_EXPECT_TRUE(
+                promptMsg.value("content", std::string{}).find("agentxx_share_store")
+                != std::string::npos
+            );
+        }
+
+        // --- D. 压缩失败 (subagent 返回空串, 与真实失败路径一致) → 空串 ---
+        {
+            auto env = std::make_shared<SummarizationTestEnv>();
+            env->subagent->summary = ""; // 模拟压缩失败 (子代理失败时 content 为空)
+            std::vector<neograph::ChatMessage> msgs{makeMsg("user", "u1")};
+            auto r = co_await env->handle->doSummarizeWithLLM(env->threadId, msgs);
+            XX_TEST_EXPECT_EQ(r, std::string{""});
+            // 仍发起了一次 subagent 调用
+            XX_TEST_EXPECT_EQ(env->subagent->receivedArguments.size(), size_t{1});
+        }
+
+        // --- E. 请求载荷裁剪: 压缩段超限时丢弃最旧消息 ---
+        {
+            auto env = std::make_shared<SummarizationTestEnv>();
+            env->session()->setModelName("small"); // max=1000, 裁剪阈值 950
+            env->subagent->summary = "S";
+            auto big1 = makeMsg("user", makeLongContent(2500)); // ~625 token
+            auto big2 = makeMsg("user", makeLongContent(2500)); // ~625 token
+            std::vector<neograph::ChatMessage> msgs{
+                makeMsg("system", "sys"),
+                big1,
+                big2,
+            };
+            auto r = co_await env->handle->doSummarizeWithLLM(env->threadId, msgs);
+            XX_TEST_EXPECT_EQ(r, std::string{"S"});
+            XX_TEST_EXPECT_EQ(env->subagent->receivedArguments.size(), size_t{1});
+            const auto& reqMsgs = env->subagent->receivedArguments[0]["messages"];
+            // 最旧的 big1 被丢弃, 仅保留 system + big2 + 指令
+            XX_TEST_EXPECT_EQ(reqMsgs.size(), size_t{3});
+            XX_TEST_EXPECT_EQ(reqMsgs[0].value("role", std::string{}), std::string{"system"});
+            XX_TEST_EXPECT_EQ(reqMsgs[1].value("content", std::string{}), big2.content);
+            // 指令中提示丢弃了最旧消息
+            XX_TEST_EXPECT_TRUE(
+                reqMsgs[2].value("content", std::string{}).find("oldest 1 message")
+                != std::string::npos
+            );
+        }
+
+        // --- F. AgentPrompt 定制压缩提示词生效: 模板可经 prompt 覆盖 ---
+        {
+            auto env = std::make_shared<SummarizationTestEnv>();
+            env->subagent->summary = "S";
+
+            // 默认模板非空且含关键内容
+            const auto& p = env->ctx->agentConfig->prompt;
+            XX_TEST_EXPECT_FALSE(p.summarizationPrompt.empty());
+            XX_TEST_EXPECT_TRUE(p.summarizationPrompt.find("Summarize") != std::string::npos);
+            XX_TEST_EXPECT_TRUE(
+                p.summarizationPrompt.find("{omitted_note}") != std::string::npos
+            );
+            XX_TEST_EXPECT_TRUE(p.summarizationPrompt.find("{max_words}") != std::string::npos);
+
+            // 定制模板
+            env->ctx->agentConfig->prompt.summarizationPrompt
+                = "CUSTOM SUMMARIZE PROMPT {omitted_note}max {max_words}";
+            std::vector<neograph::ChatMessage> msgs{makeMsg("user", "u1")};
+            auto r = co_await env->handle->doSummarizeWithLLM(env->threadId, msgs);
+            XX_TEST_EXPECT_EQ(r, std::string{"S"});
+            XX_TEST_EXPECT_EQ(env->subagent->receivedArguments.size(), size_t{1});
+            // 定制模板生效: 占位符被替换 (omitted_note 为空, max_words=2048/4=512)
+            const auto& reqMsgs = env->subagent->receivedArguments[0]["messages"];
+            XX_TEST_EXPECT_EQ(
+                reqMsgs.back().value("content", std::string{}),
+                std::string{"CUSTOM SUMMARIZE PROMPT max 512"}
+            );
+        }
+
+        // --- G. 空压缩模板 → 降级为不压缩 (返回空串, 不发起 subagent) ---
+        {
+            auto env = std::make_shared<SummarizationTestEnv>();
+            env->ctx->agentConfig->prompt.summarizationPrompt = "";
+            std::vector<neograph::ChatMessage> msgs{makeMsg("user", "u1")};
+            auto r = co_await env->handle->doSummarizeWithLLM(env->threadId, msgs);
+            XX_TEST_EXPECT_EQ(r, std::string{""});
+            XX_TEST_EXPECT_EQ(env->subagent->receivedArguments.size(), size_t{0});
+        }
+
+        // --- H. AgentPrompt 序列化往返: toJson → mergeFromJson 保留新字段,
+        //           缺失字段不影响既有字段 ---
+        {
+            agentxx::agent::AgentPrompt p;
+            const auto&                 j = p.toJson();
+            XX_TEST_EXPECT_EQ(
+                j["summarizationPrompt"].get<std::string>(),
+                p.summarizationPrompt
+            );
+            // 往返: 定制后序列化再合并, 字段一致
+            agentxx::agent::AgentPrompt p2;
+            p2.summarizationPrompt = "CUSTOM";
+            agentxx::agent::AgentPrompt p3;
+            p3.mergeFromJson(p2.toJson());
+            XX_TEST_EXPECT_EQ(p3.summarizationPrompt, std::string{"CUSTOM"});
+            // 缺失字段合并: 保持原值
+            neograph::json partial = neograph::json{{"systemPrompt", "SYS"}};
+            p3.mergeFromJson(partial);
+            XX_TEST_EXPECT_EQ(p3.summarizationPrompt, std::string{"CUSTOM"});
+            XX_TEST_EXPECT_EQ(p3.systemPrompt, std::string{"SYS"});
+            // promptHash 覆盖新字段 (定制后哈希变化)
+            agentxx::agent::AgentPrompt p4;
+            agentxx::agent::AgentPrompt p5;
+            p5.summarizationPrompt = "CUSTOM";
+            XX_TEST_EXPECT_FALSE(p4.promptHash() == p5.promptHash());
+        }
+    }
+
+    // ==================== doSummarizeToolcall / foldExploratoryToolcalls ====================
 
     {
         auto  env = std::make_shared<SummarizationTestEnv>();
         auto& h   = env->handle;
 
         // --- A. response 去重 (filesystem 风格): 旧 response 截断, 新 response 保留,
-        //       assistant request 不受影响 ---
+        //       assistant request 不受影响
+        //       (中间插入 user 消息打断探索折叠, 避免 3 组连续同工具被折叠误伤) ---
         {
             h->summarizationToolHandles["read_file"] = makeReadFileHandle();
             std::vector<neograph::ChatMessage> msgs{
                 makeAssistantToolcall("", {makeToolcall("c1", "read_file", R"({"path":"A"})")}),
                 makeToolResult("c1", "read_file", "r1"),
+                makeMsg("user", "pause"),
                 makeAssistantToolcall("", {makeToolcall("c2", "read_file", R"({"path":"B"})")}),
                 makeToolResult("c2", "read_file", "r2"),
                 makeAssistantToolcall("", {makeToolcall("c3", "read_file", R"({"path":"A"})")}),
                 makeToolResult("c3", "read_file", "r3"),
             };
             h->doSummarizeToolcall(msgs);
-            XX_TEST_EXPECT_EQ(msgs.size(), size_t{6});
-            // 旧 (path=A) 的 response 被截断
+            XX_TEST_EXPECT_EQ(msgs.size(), size_t{7});
+            // 旧 (path=A) 的 response 被截断 (c1 的 r1 被 c3 的 path A 覆盖)
             XX_TEST_EXPECT_EQ(msgs[1].content, std::string{"[Truncated Response]"});
             // path=B 与新 path=A 的 response 保留
-            XX_TEST_EXPECT_EQ(msgs[3].content, std::string{"r2"});
-            XX_TEST_EXPECT_EQ(msgs[5].content, std::string{"r3"});
+            XX_TEST_EXPECT_EQ(msgs[4].content, std::string{"r2"});
+            XX_TEST_EXPECT_EQ(msgs[6].content, std::string{"r3"});
             // assistant request 不被截断 (truncateRequest == nullptr)
             XX_TEST_EXPECT_EQ(msgs[0].tool_calls[0].name, std::string{"read_file"});
-            XX_TEST_EXPECT_EQ(msgs[4].tool_calls[0].arguments, std::string{R"({"path":"A"})"});
+            XX_TEST_EXPECT_EQ(msgs[5].tool_calls[0].arguments, std::string{R"({"path":"A"})"});
         }
 
         // --- B. request 去重 (planning 风格): 恒定 key, 仅保留最后一个 request ---
@@ -504,10 +715,9 @@ asio::awaitable<TestResult> run_summarization_tests() {
                 makeAssistantToolcall("", {makeToolcall("p3", "write_planning", R"({"a":3})")}),
             };
             h->doSummarizeToolcall(msgs);
-            // 索引 0 是 system 消息, 循环从 1 开始; 旧 request 全部截断
+            // 索引 0 是 system 消息; 旧 request 全部截断, 最后一个保留
             XX_TEST_EXPECT_EQ(msgs[1].tool_calls[0].arguments, std::string{"[Truncated Request]"});
             XX_TEST_EXPECT_EQ(msgs[2].tool_calls[0].arguments, std::string{"[Truncated Request]"});
-            // 最后一个 request 保留
             XX_TEST_EXPECT_EQ(msgs[3].tool_calls[0].arguments, std::string{R"({"a":3})"});
         }
 
@@ -527,9 +737,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
             XX_TEST_EXPECT_EQ(msgs[3].content, std::string{"r2"});
             // 去重 key 已由新 response 占用, 新 request 也被截断 (共享 lastWriteIndex)
             XX_TEST_EXPECT_EQ(msgs[2].tool_calls[0].arguments, std::string{"[Truncated Request]"});
-            // 索引 0 的 request 已随 0f9f920 纳入去重循环 (i >= 0): 与后面的重复
-            // request 一样被截断, 仅保留最后一组 (旧断言"索引 0 受循环边界保护"
-            // 与新循环语义矛盾, 已同步更新)
+            // 索引 0 的 request 同样被截断 (循环含索引 0, 仅保留最后一组)
             XX_TEST_EXPECT_EQ(msgs[0].tool_calls[0].arguments, std::string{"[Truncated Request]"});
         }
 
@@ -579,6 +787,215 @@ asio::awaitable<TestResult> run_summarization_tests() {
             XX_TEST_EXPECT_EQ(msgs[1].content, std::string{"r1"});
             XX_TEST_EXPECT_EQ(msgs[3].content, std::string{"r2"});
         }
+
+        // --- H. 探索折叠: 连续 3 组同工具 (读类) → 只保留最后一组 ---
+        {
+            h->summarizationToolHandles["read_file"] = makeReadFileHandle();
+            std::vector<neograph::ChatMessage> msgs{
+                makeMsg("user", "u0"),
+                makeAssistantToolcall("", {makeToolcall("c1", "read_file", R"({"path":"A"})")}),
+                makeToolResult("c1", "read_file", "rA"),
+                makeAssistantToolcall("", {makeToolcall("c2", "read_file", R"({"path":"B"})")}),
+                makeToolResult("c2", "read_file", "rB"),
+                makeAssistantToolcall("", {makeToolcall("c3", "read_file", R"({"path":"C"})")}),
+                makeToolResult("c3", "read_file", "rC"),
+                makeMsg("user", "u1"),
+            };
+            h->doSummarizeToolcall(msgs);
+            // u0 + 最后一组 (c3/rC) + u1 = 4 条
+            XX_TEST_EXPECT_EQ(msgs.size(), size_t{4});
+            XX_TEST_EXPECT_EQ(msgs[0].content, std::string{"u0"});
+            XX_TEST_EXPECT_EQ(msgs[1].tool_calls[0].arguments, std::string{R"({"path":"C"})"});
+            XX_TEST_EXPECT_EQ(msgs[2].content, std::string{"rC"});
+            XX_TEST_EXPECT_EQ(msgs[3].content, std::string{"u1"});
+        }
+
+        // --- I. 探索折叠: 2 组不折叠 ---
+        {
+            h->summarizationToolHandles["read_file"] = makeReadFileHandle();
+            std::vector<neograph::ChatMessage> msgs{
+                makeAssistantToolcall("", {makeToolcall("c1", "read_file", R"({"path":"A"})")}),
+                makeToolResult("c1", "read_file", "rA"),
+                makeAssistantToolcall("", {makeToolcall("c2", "read_file", R"({"path":"B"})")}),
+                makeToolResult("c2", "read_file", "rB"),
+            };
+            h->doSummarizeToolcall(msgs);
+            XX_TEST_EXPECT_EQ(msgs.size(), size_t{4});
+        }
+
+        // --- J. 探索折叠: user 消息打断连续段 → 不折叠 ---
+        {
+            h->summarizationToolHandles["read_file"] = makeReadFileHandle();
+            std::vector<neograph::ChatMessage> msgs{
+                makeAssistantToolcall("", {makeToolcall("c1", "read_file", R"({"path":"A"})")}),
+                makeToolResult("c1", "read_file", "rA"),
+                makeMsg("user", "interrupt"),
+                makeAssistantToolcall("", {makeToolcall("c2", "read_file", R"({"path":"B"})")}),
+                makeToolResult("c2", "read_file", "rB"),
+                makeAssistantToolcall("", {makeToolcall("c3", "read_file", R"({"path":"C"})")}),
+                makeToolResult("c3", "read_file", "rC"),
+            };
+            h->doSummarizeToolcall(msgs);
+            // user 打断: 前后各 2 组/3 组? 后面 c2,c3 连续 2 组 → 不折叠
+            XX_TEST_EXPECT_EQ(msgs.size(), size_t{7});
+        }
+
+        // --- K. 探索折叠: 写类工具 (仅 truncateRequest) 不折叠 ---
+        {
+            h->summarizationToolHandles["write_planning"] = makeConstantKeyHandle("planning:");
+            std::vector<neograph::ChatMessage> msgs{
+                makeAssistantToolcall(
+                    "", {makeToolcall("p1", "write_planning", R"({"a":1})")}
+                ),
+                makeAssistantToolcall(
+                    "", {makeToolcall("p2", "write_planning", R"({"a":2})")}
+                ),
+                makeAssistantToolcall(
+                    "", {makeToolcall("p3", "write_planning", R"({"a":3})")}
+                ),
+            };
+            h->doSummarizeToolcall(msgs);
+            XX_TEST_EXPECT_EQ(msgs.size(), size_t{3});
+        }
+
+        // --- L. 探索折叠: 多工具调用打断连续段 ---
+        {
+            h->summarizationToolHandles["read_file"] = makeReadFileHandle();
+            std::vector<neograph::ChatMessage> msgs{
+                makeAssistantToolcall("", {makeToolcall("c1", "read_file", R"({"path":"A"})")}),
+                makeToolResult("c1", "read_file", "rA"),
+                // 多工具调用 (read_file + glob) → 打断
+                makeAssistantToolcall(
+                    "",
+                    {
+                        makeToolcall("c2", "read_file", R"({"path":"B"})"),
+                        makeToolcall("g2", "glob", R"({"pattern":"*.cpp"})"),
+                    }
+                ),
+                makeToolResult("c2", "read_file", "rB"),
+                makeToolResult("g2", "glob", "[a.cpp, b.cpp]"),
+                makeAssistantToolcall("", {makeToolcall("c3", "read_file", R"({"path":"C"})")}),
+                makeToolResult("c3", "read_file", "rC"),
+            };
+            h->doSummarizeToolcall(msgs);
+            // 多工具调用后只有 c3 一组 → 不折叠
+            XX_TEST_EXPECT_EQ(msgs.size(), size_t{7});
+        }
+    }
+
+    // ==================== splitRecentByTokenBudget ====================
+
+    {
+        auto  env = std::make_shared<SummarizationTestEnv>();
+        auto& h   = env->handle;
+
+        // --- A. 预算充足 → 全部保留 (recent 起点 = system 之后) ---
+        {
+            std::vector<neograph::ChatMessage> msgs{
+                makeMsg("system", "sys"),
+                makeMsg("user", "u1"),
+                makeMsg("assistant", "a1"),
+            };
+            auto end = h->splitRecentByTokenBudget(msgs, 1, 100000);
+            XX_TEST_EXPECT_EQ(end, size_t{1});
+        }
+
+        // --- B. 预算有限 → 从后往前截断 (每条小消息 ~4-5 token) ---
+        {
+            std::vector<neograph::ChatMessage> msgs{
+                makeMsg("system", "sys"),
+                makeMsg("user", "u1"),
+                makeMsg("assistant", "a1"),
+                makeMsg("user", "u2"),
+                makeMsg("assistant", "a2"),
+                makeMsg("user", "u3"),
+                makeMsg("assistant", "a3"),
+            };
+            // budget=10: 从后往前收 a3(5) u3(4) 后剩 1, a2(5) 超 → end=5
+            auto end = h->splitRecentByTokenBudget(msgs, 1, 10);
+            XX_TEST_EXPECT_EQ(end, size_t{5});
+            // recent = [5,7) = u3, a3
+            XX_TEST_EXPECT_EQ(msgs[end].content, std::string{"u3"});
+        }
+
+        // --- C. recent 开头为 tool → 回退到发起组 (整组纳入 recent) ---
+        {
+            std::vector<neograph::ChatMessage> msgs{
+                makeMsg("system", "sys"),
+                makeMsg("user", "u1"),
+                makeAssistantToolcall("", {makeToolcall("c1", "read_file", R"({"path":"A"})")}),
+                makeToolResult("c1", "read_file", "rA"),
+                makeAssistantToolcall("", {makeToolcall("c2", "read_file", R"({"path":"B"})")}),
+                makeToolResult("c2", "read_file", "rB"),
+            };
+            // budget=6: 只收最后一条 rB(6)? rB: 3+1+0+0+2=6 → end=5; t? 再往前 tc2 超 → end=5
+            // recent=[5,6)=rB 是 tool → 回退到 tc2 → end=4
+            auto end = h->splitRecentByTokenBudget(msgs, 1, 6);
+            XX_TEST_EXPECT_EQ(end, size_t{4});
+            XX_TEST_EXPECT_EQ(msgs[end].role, std::string{"assistant"});
+            XX_TEST_EXPECT_EQ(msgs[end].tool_calls[0].arguments, std::string{R"({"path":"B"})"});
+        }
+
+        // --- D. 压缩段末尾 assistant(tool_calls) 的 tool 结果在 recent → 整组划入 recent ---
+        {
+            std::vector<neograph::ChatMessage> msgs{
+                makeMsg("system", "sys"),
+                makeMsg("user", "u1"),
+                makeMsg("assistant", "a1"),
+                makeAssistantToolcall("", {makeToolcall("c1", "read_file", R"({"path":"A"})")}),
+                makeToolResult("c1", "read_file", "rA"),
+                makeMsg("user", "u2"),
+                makeMsg("assistant", "a2"),
+            };
+            // budget=15: 从后往前 a2(5)→end=6 b=10; u2(4)→end=5 b=6; rA(6)→end=4 b=0;
+            // tc1(9) 超 0 → end=4 (recent=[4,7)=rA,u2,a2)
+            // 对齐: recent 开头 rA 是 tool → 回退到 tc1 → end=3
+            // 对齐 2: messages[2]=a1 无 tool_calls → 停
+            auto end = h->splitRecentByTokenBudget(msgs, 1, 15);
+            XX_TEST_EXPECT_EQ(end, size_t{3});
+            XX_TEST_EXPECT_EQ(msgs[end].role, std::string{"assistant"});
+            XX_TEST_EXPECT_EQ(msgs[end].tool_calls[0].name, std::string{"read_file"});
+        }
+
+        // --- E. 单条超预算 → recent 至少保留最后一条 ---
+        {
+            std::vector<neograph::ChatMessage> msgs{
+                makeMsg("system", "sys"),
+                makeMsg("user", "u1"),
+                makeMsg("user", makeLongContent(2000)), // ~500 token
+            };
+            auto end = h->splitRecentByTokenBudget(msgs, 1, 10);
+            // 最后一条超预算仍保留 (recent 至少 1 条)
+            XX_TEST_EXPECT_EQ(end, size_t{2});
+            XX_TEST_EXPECT_EQ(msgs[end].content.size(), size_t{2000});
+        }
+    }
+
+    // ==================== hardTruncate ====================
+
+    {
+        auto  env = std::make_shared<SummarizationTestEnv>();
+        auto& h   = env->handle;
+
+        std::vector<neograph::ChatMessage> msgs{
+            makeMsg("system", "sys"),
+            makeMsg("user", "u1"),
+            makeMsg("assistant", "a1"),
+            makeMsg("user", "u2"),
+            makeMsg("assistant", "a2"),
+        };
+        auto res = h->hardTruncate(msgs, 1, 1000);
+        // system + 截断说明 + recent (budget=300 足够收全部)
+        XX_TEST_EXPECT_EQ(res.size(), size_t{6});
+        XX_TEST_EXPECT_EQ(res[0].role, std::string{"system"});
+        XX_TEST_EXPECT_EQ(res[0].content, std::string{"sys"});
+        XX_TEST_EXPECT_EQ(res[1].role, std::string{"user"});
+        XX_TEST_EXPECT_TRUE(res[1].content.find("truncated") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(msgHasFlag(res[1], neograph::MessageFlag::AutoInserted));
+        XX_TEST_EXPECT_TRUE(msgHasFlag(res[1], neograph::MessageFlag::Summarized));
+        // recent 按原顺序
+        XX_TEST_EXPECT_EQ(res[2].content, std::string{"u1"});
+        XX_TEST_EXPECT_EQ(res[5].content, std::string{"a2"});
     }
 
     // ==================== onModelcallRunFunc ====================
@@ -622,12 +1039,13 @@ asio::awaitable<TestResult> run_summarization_tests() {
         XX_TEST_EXPECT_EQ(maxContextTokensOf(env->ctx, env->threadId), size_t{2048});
     }
 
-    // --- T4. 65% ~ 85% 之间: 只做 toolcall 去重 + 长内容暂存, 不做 LLM 总结 ---
+    // --- T4. 65% ~ 85% 之间: 只做 toolcall 去重 + 噪音清理, 不做 LLM 总结;
+    //          长内容原样保留 (程序侧不做 offload) ---
     {
         auto env = std::make_shared<SummarizationTestEnv>();
         env->session()->setModelName("small"); // max=1000, 阈值 650 / 850
         env->handle->summarizationToolHandles["read_file"] = makeReadFileHandle();
-        auto                               longContent     = makeLongContent();
+        auto                               longContent     = makeLongContent(3000);
         std::vector<neograph::ChatMessage> msgs{
             makeMsg("user", "u1"),
             makeAssistantToolcall("", {makeToolcall("c1", "read_file", R"({"path":"A"})")}),
@@ -642,20 +1060,14 @@ asio::awaitable<TestResult> run_summarization_tests() {
         // toolcall 去重: 旧 response 截断, 新 response 保留
         XX_TEST_EXPECT_EQ(res[2].content, std::string{"[Truncated Response]"});
         XX_TEST_EXPECT_EQ(res[4].content, std::string{"r2"});
-        // 长内容已暂存 share store
-        XX_TEST_EXPECT_TRUE(msgHasFlag(res[5], neograph::MessageFlag::ContentOffloaded));
-        auto offloadId = res[5].extra.value<size_t>("offload_id", 0);
-        XX_TEST_EXPECT_TRUE(offloadId > 0);
-        auto expected = fmt::format(
-            "[Content offloaded. Use the `agentxx_share_store` tool to fetch the full content by "
-            "ID {}]",
-            offloadId
+        // 长内容原样保留: 不 offload, 不标记
+        XX_TEST_EXPECT_EQ(res[5].content, longContent);
+        XX_TEST_EXPECT_FALSE(msgHasFlag(res[5], neograph::MessageFlag::ContentOffloaded));
+        // share store 未被写入
+        XX_TEST_EXPECT_TRUE(
+            env->ctx->middlewareHandleContext->shareStore.find(env->threadId)
+            == env->ctx->middlewareHandleContext->shareStore.end()
         );
-        XX_TEST_EXPECT_EQ(res[5].content, expected);
-        auto stored
-            = env->ctx->middlewareHandleContext->getShareStoreItemValue(env->threadId, offloadId);
-        XX_TEST_EXPECT_TRUE(stored.has_value());
-        XX_TEST_EXPECT_EQ(*stored, longContent);
         // 没有出现总结消息
         bool hasSummary = false;
         for (const auto& m : res) {
@@ -664,15 +1076,17 @@ asio::awaitable<TestResult> run_summarization_tests() {
             }
         }
         XX_TEST_EXPECT_FALSE(hasSummary);
+        // 未发起压缩 subagent
+        XX_TEST_EXPECT_EQ(env->subagent->receivedArguments.size(), size_t{0});
         // 统计发布
         XX_TEST_EXPECT_EQ(contextTokensOf(env->ctx, env->threadId), size_t{700});
         XX_TEST_EXPECT_EQ(maxContextTokensOf(env->ctx, env->threadId), size_t{1000});
     }
 
-    // --- T5. >= 85% 且 LLM 总结成功: system + 总结对 + 最近消息 ---
+    // --- T5. >= 85% 且 LLM 总结成功: system + 总结对 + 最近消息 (token 预算切分) ---
     {
         auto env = std::make_shared<SummarizationTestEnv>();
-        env->session()->setModelName("small"); // max=1000
+        env->session()->setModelName("small"); // max=1000, budget=30
         env->subagent->summary = "S1";
         std::vector<neograph::ChatMessage> msgs{
             makeMsg("system", "sys"),
@@ -686,8 +1100,9 @@ asio::awaitable<TestResult> run_summarization_tests() {
             makeMsg("assistant", "a4"),
         };
         auto res = co_await runModelcall(env->handle, env->ctx, env->threadId, msgs, 900);
-        // system(1) + 总结对(2) + 最近 4 条 = 7
-        XX_TEST_EXPECT_EQ(res.size(), size_t{7});
+        // system(1) + 总结对(2) + recent[u2,a2,u3,a3,u4,a4](6) = 9
+        // (budget=30: 从后往前 a4(5)u4(4)a3(5)u3(4)a2(5)u2(4)=27, a1(5) 超 → end=3)
+        XX_TEST_EXPECT_EQ(res.size(), size_t{9});
         // system 保留
         XX_TEST_EXPECT_EQ(res[0].role, std::string{"system"});
         XX_TEST_EXPECT_EQ(res[0].content, std::string{"sys"});
@@ -701,27 +1116,37 @@ asio::awaitable<TestResult> run_summarization_tests() {
         XX_TEST_EXPECT_EQ(res[2].content, std::string{"[Previous conversation summary]: \nS1"});
         XX_TEST_EXPECT_TRUE(msgHasFlag(res[2], neograph::MessageFlag::AutoInserted));
         XX_TEST_EXPECT_TRUE(msgHasFlag(res[2], neograph::MessageFlag::Summarized));
-        // 最近 4 条消息按原顺序保留
-        XX_TEST_EXPECT_EQ(res[3].content, std::string{"u3"});
-        XX_TEST_EXPECT_EQ(res[4].content, std::string{"a3"});
-        XX_TEST_EXPECT_EQ(res[5].content, std::string{"u4"});
-        XX_TEST_EXPECT_EQ(res[6].content, std::string{"a4"});
+        // 最近消息按原顺序保留
+        XX_TEST_EXPECT_EQ(res[3].content, std::string{"u2"});
+        XX_TEST_EXPECT_EQ(res[4].content, std::string{"a2"});
+        XX_TEST_EXPECT_EQ(res[5].content, std::string{"u3"});
+        XX_TEST_EXPECT_EQ(res[6].content, std::string{"a3"});
+        XX_TEST_EXPECT_EQ(res[7].content, std::string{"u4"});
+        XX_TEST_EXPECT_EQ(res[8].content, std::string{"a4"});
         // 被压缩的旧消息已消失
         bool hasOld = false;
         for (const auto& m : res) {
-            if (m.content == "u1" || m.content == "a1" || m.content == "u2" || m.content == "a2") {
+            if (m.content == "u1" || m.content == "a1") {
                 hasOld = true;
             }
         }
         XX_TEST_EXPECT_FALSE(hasOld);
+        // 压缩请求: 同上下文 subagent (system + 压缩段 + 指令)
+        XX_TEST_EXPECT_EQ(env->subagent->receivedArguments.size(), size_t{1});
+        const auto& reqMsgs = env->subagent->receivedArguments[0]["messages"];
+        XX_TEST_EXPECT_EQ(reqMsgs[0].value("role", std::string{}), std::string{"system"});
+        XX_TEST_EXPECT_EQ(reqMsgs[0].value("content", std::string{}), std::string{"sys"});
+        XX_TEST_EXPECT_EQ(reqMsgs[1].value("content", std::string{}), std::string{"u1"});
+        XX_TEST_EXPECT_EQ(reqMsgs[2].value("content", std::string{}), std::string{"a1"});
+        XX_TEST_EXPECT_EQ(reqMsgs.size(), size_t{4}); // sys + u1 + a1 + 指令
         XX_TEST_EXPECT_EQ(contextTokensOf(env->ctx, env->threadId), size_t{900});
     }
 
-    // --- T6. >= 85% 但 LLM 总结失败 (空串) → 原样保留全部消息 ---
+    // --- T6. >= 85% 但 LLM 总结失败 (空响应) → 保留原消息, 失败计数 +1 ---
     {
         auto env = std::make_shared<SummarizationTestEnv>();
         env->session()->setModelName("small");
-        env->subagent->summary = ""; // 模拟压缩失败
+        // responses 为空 → 压缩失败
         std::vector<neograph::ChatMessage> msgs{
             makeMsg("system", "sys"),
             makeMsg("user", "u1"),
@@ -739,24 +1164,44 @@ asio::awaitable<TestResult> run_summarization_tests() {
             XX_TEST_EXPECT_EQ(res[i].role, msgs[i].role);
             XX_TEST_EXPECT_EQ(res[i].content, msgs[i].content);
         }
+        // 失败计数 = 1 (未触发硬截断)
+        auto failCount = env->ctx->middlewareHandleContext->getGraphDataItemValue<size_t>(
+            env->threadId,
+            agentxx::middleware::MiddlewareContext::graphDataKey_summarizationFailCount
+        );
+        XX_TEST_EXPECT_EQ(failCount, size_t{1});
     }
 
-    // --- T7. 消息数 <= keepRecent + system → 不触发 LLM 总结 ---
+    // --- T7. 连续第 2 次失败 → 硬截断兜底 ---
     {
         auto env = std::make_shared<SummarizationTestEnv>();
         env->session()->setModelName("small");
-        env->subagent->summary = "S1";
         std::vector<neograph::ChatMessage> msgs{
             makeMsg("system", "sys"),
             makeMsg("user", "u1"),
             makeMsg("assistant", "a1"),
             makeMsg("user", "u2"),
             makeMsg("assistant", "a2"),
+            makeMsg("user", "u3"),
+            makeMsg("assistant", "a3"),
+            makeMsg("user", "u4"),
+            makeMsg("assistant", "a4"),
         };
-        auto res = co_await runModelcall(env->handle, env->ctx, env->threadId, msgs, 900);
-        XX_TEST_EXPECT_EQ(res.size(), size_t{5});
-        XX_TEST_EXPECT_EQ(res[1].content, std::string{"u1"});
-        XX_TEST_EXPECT_EQ(res[4].content, std::string{"a2"});
+        // 第一次失败
+        auto res1 = co_await runModelcall(env->handle, env->ctx, env->threadId, msgs, 900);
+        XX_TEST_EXPECT_EQ(res1.size(), size_t{9});
+        // 第二次失败 → 硬截断: system + 截断说明 + recent (budget=300 收全部 8 条)
+        auto res2 = co_await runModelcall(env->handle, env->ctx, env->threadId, msgs, 900);
+        XX_TEST_EXPECT_EQ(res2.size(), size_t{10});
+        XX_TEST_EXPECT_EQ(res2[0].role, std::string{"system"});
+        XX_TEST_EXPECT_EQ(res2[0].content, std::string{"sys"});
+        XX_TEST_EXPECT_EQ(res2[1].role, std::string{"user"});
+        XX_TEST_EXPECT_TRUE(res2[1].content.find("truncated") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(msgHasFlag(res2[1], neograph::MessageFlag::AutoInserted));
+        XX_TEST_EXPECT_TRUE(msgHasFlag(res2[1], neograph::MessageFlag::Summarized));
+        // recent 按原顺序 (budget 充足收全部)
+        XX_TEST_EXPECT_EQ(res2[2].content, std::string{"u1"});
+        XX_TEST_EXPECT_EQ(res2[9].content, std::string{"a4"});
     }
 
     // --- T8. 切割点落在 tool 消息上 → 回退到发起 tool 的 assistant, 整组保留 ---
@@ -775,19 +1220,26 @@ asio::awaitable<TestResult> run_summarization_tests() {
             makeToolResult("c5", "read_file", "t5"),
         };
         auto res = co_await runModelcall(env->handle, env->ctx, env->threadId, msgs, 900);
-        // 总结对(2) + recent[assistant tc2, tool t2..t5](5) = 7
-        XX_TEST_EXPECT_EQ(res.size(), size_t{7});
+        // 预算 30 (token: u1=4, tc1=10, t1=4, tc2=10, t2..t5=4):
+        // 从后往前收 t5,t4,t3,t2,tc2,t1 (4+4+4+4+10+4=30) → end=2
+        // recent 开头 t1 是 tool → 回退到发起组 tc1 → end=1
+        // 总结对(2) + recent[tc1, t1, tc2, t2..t5](7) = 9
+        XX_TEST_EXPECT_EQ(res.size(), size_t{9});
         XX_TEST_EXPECT_EQ(res[0].role, std::string{"user"});
         XX_TEST_EXPECT_EQ(res[0].content, std::string{"[Please compact context to save space]"});
         XX_TEST_EXPECT_EQ(res[1].role, std::string{"assistant"});
         // recent 以发起 tool 的 assistant 开头, 整组 tool 交换完整保留
         XX_TEST_EXPECT_EQ(res[2].role, std::string{"assistant"});
-        XX_TEST_EXPECT_EQ(res[2].content, std::string{"tc2"});
+        XX_TEST_EXPECT_EQ(res[2].content, std::string{"tc1"});
         XX_TEST_EXPECT_EQ(res[3].role, std::string{"tool"});
-        XX_TEST_EXPECT_EQ(res[3].content, std::string{"t2"});
-        XX_TEST_EXPECT_EQ(res[4].content, std::string{"t3"});
-        XX_TEST_EXPECT_EQ(res[5].content, std::string{"t4"});
-        XX_TEST_EXPECT_EQ(res[6].content, std::string{"t5"});
+        XX_TEST_EXPECT_EQ(res[3].content, std::string{"t1"});
+        XX_TEST_EXPECT_EQ(res[4].role, std::string{"assistant"});
+        XX_TEST_EXPECT_EQ(res[4].content, std::string{"tc2"});
+        XX_TEST_EXPECT_EQ(res[5].role, std::string{"tool"});
+        XX_TEST_EXPECT_EQ(res[5].content, std::string{"t2"});
+        XX_TEST_EXPECT_EQ(res[6].content, std::string{"t3"});
+        XX_TEST_EXPECT_EQ(res[7].content, std::string{"t4"});
+        XX_TEST_EXPECT_EQ(res[8].content, std::string{"t5"});
     }
 
     // --- T9. 模型配置 maxToken 生效: 会话切换模型 → 阈值随之变化 ---
@@ -812,7 +1264,8 @@ asio::awaitable<TestResult> run_summarization_tests() {
         env->session()->setModelName("small");
         env->subagent->summary = "S";
         auto res2 = co_await runModelcall(env->handle, env->ctx, env->threadId, msgs, 900);
-        XX_TEST_EXPECT_EQ(res2.size(), size_t{6}); // 总结对 + 最近 4 条
+        // budget=30: recent=[u2,a2,u3,a3,u4,a4](6) → 总结对 + 6 = 8
+        XX_TEST_EXPECT_EQ(res2.size(), size_t{8});
         XX_TEST_EXPECT_EQ(maxContextTokensOf(env->ctx, env->threadId), size_t{1000});
 
         // 切换 big (max=5000): 900 < 5000*0.65 → 不压缩
@@ -848,20 +1301,21 @@ asio::awaitable<TestResult> run_summarization_tests() {
 
     // ==================== 新增: 用户要求的完整语义验证 ====================
     // 预期效果:
-    //   1. system 消息不能动 (不参与 tool 压缩 / 长内容暂存 / LLM 总结)
-    //   2. 按顺序先进行 tool 压缩 (去重 + 长内容暂存), 再由 subagent 将整体上下文
-    //      压缩成一段总结, 重要信息 (文件路径 / 决策 / 长内容) 必须保留
-    //   3. 消息角色顺序正确: 调用了 subagent 压缩后, 应为
-    //      system | user(自动插入提示) | assistant(压缩总结) 三条, 紧接着是
-    //      未压缩的最近消息 (保留原角色与顺序)
+    //   1. system 消息不能动 (不参与 tool 压缩 / 噪音清理 / LLM 总结)
+    //   2. 按顺序先进行确定性压缩 (去重/折叠/噪音清理), 再由同上下文 LLM 将
+    //      整体上下文压缩成一段总结
+    //   3. 消息角色顺序正确: 压缩后 = system | user(自动插入提示) |
+    //      assistant(压缩总结), 紧接着是未压缩的最近消息 (保留原角色与顺序)
+    //   4. thinking 保留 (不剥离, 由 LLM 决定取舍)
 
-    // --- T11. 完整链路: 65% tool 压缩 (去重 + 长内容暂存) 先行, 85% subagent 压缩成一段总结;
-    //            system 不能动; 角色顺序 = system | user(自动提示) | assistant(总结) | 最近消息 ---
+    // --- T11. 完整链路: 65% 确定性压缩先行, 85% 同上下文压缩成一段总结;
+    //            system 不能动; 角色顺序 = system | user(自动提示) | assistant(总结) | 最近消息;
+    //            thinking 保留并传给压缩请求 ---
     {
         auto env = std::make_shared<SummarizationTestEnv>();
         env->session()->setModelName("small"); // max=1000 → 阈值 650 / 850
-        env->subagent->summary = "S1";         // 模拟 subagent 总结输出 (保留重要信息)
         env->handle->summarizationToolHandles["read_file"] = makeReadFileHandle();
+        env->subagent->summary = "S1";
 
         auto                               longContent = makeLongContent(3000);
         std::vector<neograph::ChatMessage> msgs{
@@ -869,11 +1323,14 @@ asio::awaitable<TestResult> run_summarization_tests() {
             makeMsg("user", "u1"),
             makeAssistantToolcall("", {makeToolcall("c1", "read_file", R"({"path":"A"})")}),
             makeToolResult("c1", "read_file", "r1"),
-            makeMsg("user", longContent), // 旧段: 长内容应先被暂存 share_store
+            makeMsg("user", longContent), // 长内容: 程序侧不 offload, 原样进入压缩请求
             makeAssistantToolcall("", {makeToolcall("c2", "read_file", R"({"path":"A"})")}),
             makeToolResult("c2", "read_file", "r2"),
-            makeMsg("user", "u3"),
-            makeMsg("assistant", "a3"),
+            [&]() {
+                auto m              = makeMsg("assistant", "a3");
+                m.reasoning_content = "think-3"; // thinking 保留
+                return m;
+            }(),
             makeMsg("user", "u4"),
             makeMsg("assistant", "a4"),
         };
@@ -884,8 +1341,18 @@ asio::awaitable<TestResult> run_summarization_tests() {
         XX_TEST_EXPECT_EQ(res[0].content, std::string{"sys"});
         XX_TEST_EXPECT_EQ(res[0].flags, neograph::MessageFlag::None);
 
-        // ② subagent 压缩成功 → (system | user 自动提示 | assistant 总结) + 未压缩的最近消息
-        XX_TEST_EXPECT_EQ(res.size(), size_t{7}); // system + 总结对 + 最近 4 条
+        // ② 压缩成功 → (system | user 自动提示 | assistant 总结) + 未压缩的最近消息
+        //    budget=30: 从后往前 a4(5)u4(4)a3(7: 含 think-3→3+2+0+1=6? 见下)...
+        //    实际: a4=5, u4=4, a3(带 think, countThinking=false 不计 thinking)=5,
+        //    u3? 无 u3; 消息序列: sys,u1,tc1,t1,longUser,tc2,t2,a3(think),u4,a4
+        //    a4(5)→b=25; u4(4)→b=21; a3(5)→b=16; t2(6)→b=10; tc2(9)→b=1;
+        //    longUser(750)→超 → end=6? 等等 longUser 是 messages[4]... 重新编号:
+        //    0=sys 1=u1 2=tc1 3=t1 4=longUser 5=tc2 6=t2 7=a3 8=u4 9=a4
+        //    a4(9)=5→end=9 b=25; u4(8)=4→end=8 b=21; a3(7)=5→end=7 b=16;
+        //    t2(6)=6→end=6 b=10; tc2(5)=9→end=5 b=1; longUser(4) 超 1 → break. end=5
+        //    对齐1: messages[5]=tc2 非 tool. 对齐2: messages[4]=longUser 非 assistant.
+        //    oldSeg=[1,5)=u1,tc1,t1,longUser; recent=[5,10)=tc2,t2,a3,u4,a4 (5 条)
+        XX_TEST_EXPECT_EQ(res.size(), size_t{8}); // sys + 总结对 + 5
         XX_TEST_EXPECT_EQ(res[1].role, std::string{"user"});
         XX_TEST_EXPECT_EQ(res[1].content, std::string{"[Please compact context to save space]"});
         XX_TEST_EXPECT_TRUE(msgHasFlag(res[1], neograph::MessageFlag::AutoInserted));
@@ -896,35 +1363,30 @@ asio::awaitable<TestResult> run_summarization_tests() {
         XX_TEST_EXPECT_TRUE(msgHasFlag(res[2], neograph::MessageFlag::Summarized));
 
         // ③ 未压缩的最近消息: 角色与顺序原样保留
-        XX_TEST_EXPECT_EQ(res[3].role, std::string{"user"});
-        XX_TEST_EXPECT_EQ(res[3].content, std::string{"u3"});
-        XX_TEST_EXPECT_EQ(res[4].role, std::string{"assistant"});
-        XX_TEST_EXPECT_EQ(res[4].content, std::string{"a3"});
-        XX_TEST_EXPECT_EQ(res[5].role, std::string{"user"});
-        XX_TEST_EXPECT_EQ(res[5].content, std::string{"u4"});
-        XX_TEST_EXPECT_EQ(res[6].role, std::string{"assistant"});
-        XX_TEST_EXPECT_EQ(res[6].content, std::string{"a4"});
+        XX_TEST_EXPECT_EQ(res[3].role, std::string{"assistant"});
+        XX_TEST_EXPECT_EQ(res[3].tool_calls[0].arguments, std::string{R"({"path":"A"})"});
+        XX_TEST_EXPECT_EQ(res[4].role, std::string{"tool"});
+        XX_TEST_EXPECT_EQ(res[4].content, std::string{"r2"});
+        XX_TEST_EXPECT_EQ(res[5].role, std::string{"assistant"});
+        XX_TEST_EXPECT_EQ(res[5].content, std::string{"a3"});
+        XX_TEST_EXPECT_EQ(res[6].content, std::string{"u4"});
+        XX_TEST_EXPECT_EQ(res[7].content, std::string{"a4"});
 
-        // ④ tool 压缩按顺序先行: subagent 收到的是已经去重 + 暂存后的旧消息
+        // ④ 确定性压缩先于 LLM 压缩: 传给 subagent 的是去重后的旧消息
         XX_TEST_EXPECT_EQ(env->subagent->receivedArguments.size(), size_t{1});
-        auto received = env->subagent->receivedArguments[0].value("message", std::string{});
-        // 旧 tool 结果已被去重截断 (先于 subagent 压缩执行)
-        XX_TEST_EXPECT_TRUE(received.find("[Truncated Response]") != std::string::npos);
-        // 长内容已先暂存: 传给 subagent 的是 offload 引用而非原始 3000 字节
-        XX_TEST_EXPECT_TRUE(received.find(std::string(100, 'x')) == std::string::npos);
-        XX_TEST_EXPECT_TRUE(received.find("[Content offloaded") != std::string::npos);
-        // 重要信息 (toolcall 参数, 如文件路径) 保留并传给 subagent
-        XX_TEST_EXPECT_TRUE(
-            received.find(R"(- [toolcall:read_file] {"path":"A"})") != std::string::npos
-        );
+        const auto& reqMsgs = env->subagent->receivedArguments[0]["messages"];
+        // system + u1 + tc1 + [Truncated Response] + longUser + 指令
+        XX_TEST_EXPECT_EQ(reqMsgs.size(), size_t{6});
+        XX_TEST_EXPECT_EQ(reqMsgs[0].value("content", std::string{}), std::string{"sys"});
+        XX_TEST_EXPECT_EQ(reqMsgs[1].value("content", std::string{}), std::string{"u1"});
+        // 旧 tool 结果已被去重截断 (先于 LLM 压缩执行)
+        XX_TEST_EXPECT_EQ(reqMsgs[3].value("content", std::string{}), std::string{"[Truncated Response]"});
+        // 长内容原样保留在压缩请求中 (不 offload, 由模型自主决定是否外置)
+        XX_TEST_EXPECT_EQ(reqMsgs[4].value("content", std::string{}), longContent);
 
-        // ⑤ 重要信息未丢失: 长内容经 share_store 可完整恢复
-        const auto& store = env->ctx->middlewareHandleContext->shareStore[env->threadId].store;
-        bool        found = false;
-        for (const auto& [id, value] : store) {
-            found = found || (value == longContent);
-        }
-        XX_TEST_EXPECT_TRUE(found);
+        // ⑤ thinking 保留: 压缩请求中含 thinking 的 assistant 消息不被剥离
+        //    (本测试中 a3 在 recent 段; 另验证 cleanNoiseMessages 不剥离 thinking)
+        XX_TEST_EXPECT_EQ(res[5].reasoning_content, std::string{"think-3"});
     }
 
     // --- T12. 无 system 时: 压缩后 = user(自动提示) | assistant(总结) | 最近消息 ---
@@ -943,8 +1405,10 @@ asio::awaitable<TestResult> run_summarization_tests() {
             makeMsg("assistant", "a4"),
         };
         auto res = co_await runModelcall(env->handle, env->ctx, env->threadId, msgs, 900);
-        // 总结对 + 最近 4 条 = 6
-        XX_TEST_EXPECT_EQ(res.size(), size_t{6});
+        // 总结对 + recent[u2,a2,u3,a3,u4,a4](6) = 8
+        // (budget=30: a4(5)u4(4)a3(5)u3(4)a2(5)u2(4)=27, a1(5) 超 → end=2.
+        //  recent=[2,8)=u2,a2,u3,a3,u4,a4)
+        XX_TEST_EXPECT_EQ(res.size(), size_t{8});
         XX_TEST_EXPECT_EQ(res[0].role, std::string{"user"});
         XX_TEST_EXPECT_EQ(res[0].content, std::string{"[Please compact context to save space]"});
         XX_TEST_EXPECT_TRUE(msgHasFlag(res[0], neograph::MessageFlag::AutoInserted));
@@ -952,14 +1416,16 @@ asio::awaitable<TestResult> run_summarization_tests() {
         XX_TEST_EXPECT_EQ(res[1].role, std::string{"assistant"});
         XX_TEST_EXPECT_EQ(res[1].content, std::string{"[Previous conversation summary]: \nS"});
         // 最近消息保留原顺序
-        XX_TEST_EXPECT_EQ(res[2].content, std::string{"u3"});
-        XX_TEST_EXPECT_EQ(res[3].content, std::string{"a3"});
-        XX_TEST_EXPECT_EQ(res[4].content, std::string{"u4"});
-        XX_TEST_EXPECT_EQ(res[5].content, std::string{"a4"});
+        XX_TEST_EXPECT_EQ(res[2].content, std::string{"u2"});
+        XX_TEST_EXPECT_EQ(res[3].content, std::string{"a2"});
+        XX_TEST_EXPECT_EQ(res[4].content, std::string{"u3"});
+        XX_TEST_EXPECT_EQ(res[5].content, std::string{"a3"});
+        XX_TEST_EXPECT_EQ(res[6].content, std::string{"u4"});
+        XX_TEST_EXPECT_EQ(res[7].content, std::string{"a4"});
     }
 
-    // --- T13. 整体上下文压缩为一段总结: 仅一条 assistant 总结消息 (多行也不拆),
-    //           仅 2 条 Summarized 标记 (user 提示 + assistant 总结), subagent 只调用一次 ---
+    // --- T13. 整体上下文压缩为一段总结: 仅一条 assistant 总结消息, 仅 2 条
+    //           Summarized 标记 (user 提示 + assistant 总结), 压缩调用只执行一次 ---
     {
         auto env = std::make_shared<SummarizationTestEnv>();
         env->session()->setModelName("small");
@@ -975,7 +1441,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
             makeMsg("assistant", "a4"),
         };
         auto res = co_await runModelcall(env->handle, env->ctx, env->threadId, msgs, 900);
-        XX_TEST_EXPECT_EQ(res.size(), size_t{6});
+        XX_TEST_EXPECT_EQ(res.size(), size_t{8});
         size_t      summaryCount    = 0;
         size_t      summarizedFlags = 0;
         std::string summaryContent;
@@ -1001,12 +1467,12 @@ asio::awaitable<TestResult> run_summarization_tests() {
         XX_TEST_EXPECT_EQ(env->subagent->receivedArguments.size(), size_t{1});
     }
 
-    // --- T14. system 消息不能被 offload / 压缩: 超长 system 原样保留 ---
+    // --- T14. 超长 system 原样保留: 不参与压缩/清理/总结 ---
     {
         auto env = std::make_shared<SummarizationTestEnv>();
         env->session()->setModelName("small");
         env->subagent->summary = "S";
-        auto longSystem        = makeLongContent(3000); // 超过 longContentByteThreshold (2000)
+        auto longSystem = makeLongContent(3000);
         std::vector<neograph::ChatMessage> msgs{
             makeMsg("system", longSystem),
             makeMsg("user", "u1"),
@@ -1019,20 +1485,18 @@ asio::awaitable<TestResult> run_summarization_tests() {
             makeMsg("assistant", "a4"),
         };
         auto res = co_await runModelcall(env->handle, env->ctx, env->threadId, msgs, 900);
-        // system 原样保留: 不被 offload 也不被标记
+        // system 原样保留: 不参与噪音清理, 不参与压缩
         XX_TEST_EXPECT_EQ(res[0].role, std::string{"system"});
         XX_TEST_EXPECT_EQ(res[0].content, longSystem);
         XX_TEST_EXPECT_FALSE(msgHasFlag(res[0], neograph::MessageFlag::ContentOffloaded));
         // 角色顺序: system | user(自动提示) | assistant(总结) | 最近消息
-        XX_TEST_EXPECT_EQ(res.size(), size_t{7});
+        XX_TEST_EXPECT_EQ(res.size(), size_t{9});
         XX_TEST_EXPECT_EQ(res[1].role, std::string{"user"});
         XX_TEST_EXPECT_EQ(res[1].content, std::string{"[Please compact context to save space]"});
         XX_TEST_EXPECT_EQ(res[2].role, std::string{"assistant"});
         XX_TEST_EXPECT_EQ(res[2].content, std::string{"[Previous conversation summary]: \nS"});
-        XX_TEST_EXPECT_EQ(res[3].content, std::string{"u3"});
-        XX_TEST_EXPECT_EQ(res[4].content, std::string{"a3"});
-        XX_TEST_EXPECT_EQ(res[5].content, std::string{"u4"});
-        XX_TEST_EXPECT_EQ(res[6].content, std::string{"a4"});
+        XX_TEST_EXPECT_EQ(res[3].content, std::string{"u2"});
+        XX_TEST_EXPECT_EQ(res[8].content, std::string{"a4"});
     }
 
     // --- T15. 最近消息含 tool 交换: system 保留, recent 整组 (assistant(tool_calls) + tool)
@@ -1052,7 +1516,12 @@ asio::awaitable<TestResult> run_summarization_tests() {
             makeToolResult("c1", "read_file", "t1"),
         };
         auto res = co_await runModelcall(env->handle, env->ctx, env->threadId, msgs, 900);
-        // system(1) + 总结对(2) + recent 5 条 (u2, a2, u3, assistant tc1, tool t1) = 8
+        // budget=30: t1(6)→b=24; tc1(9)→b=15; u3(4)→b=11; a2(5)→b=6; u2(4)→b=2;
+        // a1(5) 超 → end=4? 循环: end=8→t1(7): 6<=30→end=7 b=24; tc1(6): 9<=24→end=6 b=15;
+        // u3(5): 4<=15→end=5 b=11; a2(4): 5<=11→end=4 b=6; u2(3): 4<=6→end=3 b=2;
+        // a1(2): 5>2 → break. end=3
+        // 对齐1: messages[3]=u2 非 tool. 对齐2: messages[2]=a1 无 tool_calls.
+        // system(1) + 总结对(2) + recent 5 条 (u2, a2, u3, tc1, t1) = 8
         XX_TEST_EXPECT_EQ(res.size(), size_t{8});
         XX_TEST_EXPECT_EQ(res[0].role, std::string{"system"});
         XX_TEST_EXPECT_EQ(res[0].content, std::string{"sys"});
@@ -1079,6 +1548,34 @@ asio::awaitable<TestResult> run_summarization_tests() {
             }
         }
         XX_TEST_EXPECT_FALSE(hasOld);
+    }
+
+    // --- T16. 探索折叠在 onModelcallRunFunc 链路生效 (65% 分支) ---
+    {
+        auto env = std::make_shared<SummarizationTestEnv>();
+        env->session()->setModelName("small"); // max=1000
+        env->handle->summarizationToolHandles["read_file"] = makeReadFileHandle();
+        std::vector<neograph::ChatMessage> msgs{
+            makeMsg("system", "sys"),
+            makeMsg("user", "u1"),
+            makeAssistantToolcall("", {makeToolcall("c1", "read_file", R"({"path":"A"})")}),
+            makeToolResult("c1", "read_file", "rA"),
+            makeAssistantToolcall("", {makeToolcall("c2", "read_file", R"({"path":"B"})")}),
+            makeToolResult("c2", "read_file", "rB"),
+            makeAssistantToolcall("", {makeToolcall("c3", "read_file", R"({"path":"C"})")}),
+            makeToolResult("c3", "read_file", "rC"),
+            makeMsg("user", "u2"),
+            makeMsg("assistant", "a2"),
+        };
+        auto res = co_await runModelcall(env->handle, env->ctx, env->threadId, msgs, 700);
+        // 探索折叠: 3 组连续 read_file → 只保留最后一组 (C)
+        XX_TEST_EXPECT_EQ(res.size(), size_t{6}); // sys,u1,tcC,tC,u2,a2
+        XX_TEST_EXPECT_EQ(res[0].content, std::string{"sys"});
+        XX_TEST_EXPECT_EQ(res[1].content, std::string{"u1"});
+        XX_TEST_EXPECT_EQ(res[2].tool_calls[0].arguments, std::string{R"({"path":"C"})"});
+        XX_TEST_EXPECT_EQ(res[3].content, std::string{"rC"});
+        XX_TEST_EXPECT_EQ(res[4].content, std::string{"u2"});
+        XX_TEST_EXPECT_EQ(res[5].content, std::string{"a2"});
     }
 
     co_return TestResult{g_sum_passed, g_sum_failed};

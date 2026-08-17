@@ -217,7 +217,11 @@ void AgentHost::attachRoot(std::shared_ptr<BaseAgent> rootAgent) {
                 req.systemPrompt,
                 req.message,
                 req.parentThreadId,
-                req.cancelToken
+                req.cancelToken,
+                req.messages,
+                req.threadId,
+                req.tools,
+                req.enableSummarization
             );
         }
     );
@@ -304,7 +308,11 @@ asio::awaitable<events::RespSubagentResult> AgentHost::spawnSubagent(
     std::string_view                              systemPrompt,
     std::string_view                              message,
     std::string_view                              parentThreadId,
-    std::shared_ptr<neograph::graph::CancelToken> cancelToken
+    std::shared_ptr<neograph::graph::CancelToken> cancelToken,
+    std::optional<neograph::json>                 messages,
+    std::string_view                              threadId,
+    std::optional<neograph::json>                 tools,
+    std::optional<bool>                           enableSummarization
 ) {
     // ---- 宿主预算检查 (深度 / 并发) ----
     size_t parentDepth = 0;
@@ -352,7 +360,57 @@ asio::awaitable<events::RespSubagentResult> AgentHost::spawnSubagent(
             .errorMessage = "AgentHost: root agent not attached, cannot derive subagent config",
         };
     }
-    auto subagent = createAgentInstance(makeSubagentConfig(parentConfig));
+    auto subCfg = makeSubagentConfig(parentConfig);
+
+    // ---- 子代理工具策略 (无工具 / 继承父 / 自定义白名单) ----
+    if (tools.has_value()) {
+        if (tools->is_array()) {
+            subCfg->enableToolFiltering = true;
+            subCfg->toolWhitelist.clear();
+            if (tools->empty()) {
+                // []: 无工具 (纯文本回答)
+                XX_LOGD("spawnSubagent `{}`: tool policy = none", subagentName);
+            } else if (tools->size() == 1 && (*tools)[0].is_string()
+                       && (*tools)[0].get<std::string>() == "*") {
+                // ["*"]: 全量继承父 agent 工具 (解析为父工具名白名单;
+                // 子代理未创建的父工具名自然跳过, 不报错)
+                if (rootAgent_ && rootAgent_->getContext()) {
+                    subCfg->toolWhitelist = rootAgent_->getContext()->toolNames;
+                }
+                XX_LOGD(
+                    "spawnSubagent `{}`: tool policy = inherit parent ({} tools)",
+                    subagentName,
+                    subCfg->toolWhitelist.size()
+                );
+            } else {
+                // [name, ...]: 自定义白名单
+                for (const auto& item : *tools) {
+                    if (item.is_string()) {
+                        subCfg->toolWhitelist.push_back(item.get<std::string>());
+                    }
+                }
+                XX_LOGD(
+                    "spawnSubagent `{}`: tool policy = custom ({} tools)",
+                    subagentName,
+                    subCfg->toolWhitelist.size()
+                );
+            }
+        } else {
+            XX_LOGW("spawnSubagent `{}`: invalid `tools` (not array), ignored", subagentName);
+        }
+    }
+
+    // ---- 子代理上下文压缩开关 (缺省继承父 config 拷贝) ----
+    if (enableSummarization.has_value()) {
+        subCfg->enableSummarization = *enableSummarization;
+        XX_LOGD(
+            "spawnSubagent `{}`: enableSummarization = {}",
+            subagentName,
+            *enableSummarization
+        );
+    }
+
+    auto subagent = createAgentInstance(std::move(subCfg));
     if (!subagent) {
         co_return events::RespSubagentResult{
             .hasError     = true,
@@ -370,11 +428,23 @@ asio::awaitable<events::RespSubagentResult> AgentHost::spawnSubagent(
     subCtx->blockingPool = blockingPool_;
     subCtx->host         = weak_from_this();
 
+    // 同上下文模式: 子代理的 share_store 工具桥接到父会话的 store
+    // (id 空间一致: 子代理写入的长内容, 父会话按摘要中的 id 可直接读取)
+    const bool sameContext = !std::string_view{threadId}.empty();
+    if (sameContext && rootAgent_ && rootAgent_->getContext()
+        && rootAgent_->getContext()->middlewareHandleContext) {
+        subCtx->agentConfig->sharedShareStoreContext
+            = rootAgent_->getContext()->middlewareHandleContext;
+    }
+
     // 唯一运行 id 与 thread id
     const auto agentId  = nextAgentId();
     const auto parentId = std::string{parentThreadId};
+    // 同上下文模式: 子代理直接运行在指定 thread (与父会话同 thread),
+    // 共享上下文前缀; 默认模式使用独立 subagent 线程 id (上下文隔离)
     const auto subagentThreadId
-        = fmt::format("subagent_{}_{}_{}", subagentName, agentId, agentIdSeq_);
+        = sameContext ? std::string{threadId}
+                      : fmt::format("subagent_{}_{}_{}", subagentName, agentId, agentIdSeq_);
 
     // 注册节点 (平等成员; 父为根节点)
     auto node           = std::make_shared<AgentNode>();
@@ -386,14 +456,18 @@ asio::awaitable<events::RespSubagentResult> AgentHost::spawnSubagent(
     registry_.insert(node);
 
     runningSubagentCount_++;
-    threadDepth_[subagentThreadId] = depth;
+    if (!sameContext) {
+        // 同上下文模式共享父线程: 不覆盖父线程深度记录
+        threadDepth_[subagentThreadId] = depth;
+    }
 
     // 运行边界清理 (成功/错误/取消统一回收节点)
     struct SpawnCleanup {
         std::shared_ptr<AgentHost> host;
         std::string                agentId;
         std::string                subagentThreadId;
-        bool                       done = false;
+        bool                       sharedThread = false;
+        bool                       done         = false;
 
         void cleanup() {
             if (done) {
@@ -402,7 +476,9 @@ asio::awaitable<events::RespSubagentResult> AgentHost::spawnSubagent(
             done = true;
             if (host) {
                 host->destroyAgent(agentId);
-                host->threadDepth_.erase(subagentThreadId);
+                if (!sharedThread) {
+                    host->threadDepth_.erase(subagentThreadId);
+                }
                 if (host->runningSubagentCount_ > 0) {
                     host->runningSubagentCount_--;
                 }
@@ -412,15 +488,18 @@ asio::awaitable<events::RespSubagentResult> AgentHost::spawnSubagent(
         ~SpawnCleanup() {
             cleanup();
         }
-    } cleanup{shared_from_this(), agentId, subagentThreadId};
+    } cleanup{shared_from_this(), agentId, subagentThreadId, sameContext};
 
     // ---- 运行 (engine 直跑: 保留调用方 executor, 无锁交错) ----
     co_return co_await agentxx::util::catchErrorAsync<events::RespSubagentResult>(
         [&]() -> asio::awaitable<events::RespSubagentResult> {
             co_await subagent->init();
 
+            // 同上下文模式 + messages 透传: 初始上下文由调用方原样给出
+            // (须含 system, 或为空时由 llm 节点按父 system prompt 补齐),
+            // 不再插入子代理默认提示, 保证消息前缀与父会话一致
             std::string sysPrompt{systemPrompt};
-            if (sysPrompt.empty()) {
+            if (sysPrompt.empty() && !sameContext) {
                 sysPrompt = "你是一个专门处理用户请求的辅助助手.";
             }
 
@@ -433,20 +512,32 @@ asio::awaitable<events::RespSubagentResult> AgentHost::spawnSubagent(
                 if (parentSession) {
                     subSession->io  = parentSession->io;
                     subSession->bus = parentSession->bus;
+                    if (sameContext) {
+                        // 同上下文模式: 强制使用父会话当前模型 (忽略 subagentModel),
+                        // 与父会话相同模型 + 相同 thread + 相同上下文前缀,
+                        // 三条件共同保证命中 provider KV/prefix cache
+                        subSession->setModelName(parentSession->getModelName());
+                    }
                 }
             }
 
             XX_LOGD("    ## AgentHost spawned subagent `{}` (agentId={})", subagentName, agentId);
 
+            // 初始消息: messages 结构化透传优先 (可含 system, 原样透传);
+            // 否则回退 systemPrompt + message 文本 (默认独立行为)
+            neograph::json inputMessages;
+            if (messages.has_value()) {
+                inputMessages = *messages;
+            } else {
+                inputMessages = neograph::json::array({
+                    {{"role", "system"}, {"content", sysPrompt}},
+                    {{"role", "user"}, {"content", std::string{message}}},
+                });
+            }
+
             neograph::graph::RunConfig cfg{
                 .thread_id        = subagentThreadId,
-                .input            = {{
-                    "messages",
-                    neograph::json::array({
-                        {{"role", "system"}, {"content", sysPrompt}},
-                        {{"role", "user"}, {"content", std::string{message}}},
-                    }),
-                }},
+                .input            = {{"messages", std::move(inputMessages)}},
                 .cancel_token     = cancelToken,
                 .resume_if_exists = false,
             };

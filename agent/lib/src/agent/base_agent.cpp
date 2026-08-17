@@ -106,6 +106,29 @@ asio::awaitable<void> BaseAgent::init() {
 
     collectMiddlewareTools(tools);
 
+    // 工具白名单过滤 (子代理"无工具/自定义/继承父工具"场景):
+    // - 作用于 createTools + 中间件收集后的完整工具集
+    // - 仅按名称过滤; 白名单中不存在的名称自然跳过 (不报错)
+    if (agentContext->agentConfig->enableToolFiltering) {
+        const auto& whitelist = agentContext->agentConfig->toolWhitelist;
+        tools.erase(
+            std::remove_if(
+                tools.begin(),
+                tools.end(),
+                [&](const std::unique_ptr<agentxx::tools::XXToolBase>& tool) {
+                    return std::find(whitelist.begin(), whitelist.end(), tool->get_name())
+                           == whitelist.end();
+                }
+            ),
+            tools.end()
+        );
+        XX_LOGD(
+            "Tool whitelist filter: keep {} tools of whitelist {}",
+            tools.size(),
+            whitelist.size()
+        );
+    }
+
     notifyStartup("初始化上下文压缩 ...");
     setupSummarizationHandles(tools);
 
@@ -166,6 +189,12 @@ asio::awaitable<void> BaseAgent::init() {
                 staticNames.push_back(tool->get_name());
             }
             agentContext->toolRegistry->setStaticToolNames(std::move(staticNames));
+        }
+        // 记录本 agent 装配的工具名列表 (供子代理"全量继承父工具"使用)
+        agentContext->toolNames.clear();
+        agentContext->toolNames.reserve(tools.size());
+        for (auto& tool : tools) {
+            agentContext->toolNames.push_back(tool->get_name());
         }
 
         auto crudeTools = std::vector<std::unique_ptr<neograph::Tool>>{};
@@ -643,6 +672,32 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                                     .systemPrompt
                                     = subagentArg.value("system_prompt", std::string{}),
                                     .message  = subagentArg.value("message", std::string{}),
+                                    // 结构化消息透传 (同上下文模式):
+                                    // 原样透传消息前缀, 不做文本转录
+                                    .messages
+                                    = (subagentArg.contains("messages")
+                                       && subagentArg["messages"].is_array())
+                                          ? std::optional<neograph::json>{subagentArg["messages"]}
+                                          : std::nullopt,
+                                    // 指定运行 thread (同上下文模式):
+                                    // 与父会话相同 threadid + 相同模型,
+                                    // 命中 provider KV/prefix cache
+                                    .threadId = subagentArg.value("thread_id", std::string{}),
+                                    // 工具策略 (无工具/继承父/自定义):
+                                    // 缺省不设置 (子代理默认全量工具)
+                                    .tools
+                                    = (subagentArg.contains("tools")
+                                       && subagentArg["tools"].is_array())
+                                          ? std::optional<neograph::json>{subagentArg["tools"]}
+                                          : std::nullopt,
+                                    // 压缩中间件开关:
+                                    // summarization 发起的压缩子代理显式 false
+                                    .enableSummarization
+                                    = (subagentArg.contains("enable_summarization")
+                                       && subagentArg["enable_summarization"].is_boolean())
+                                          ? std::optional<bool>{subagentArg["enable_summarization"]
+                                                                     .get<bool>()}
+                                          : std::nullopt,
                                     .resultId = interruptArg.resultId,
                                     // 透传父会话取消令牌: 用户取消父轮次时级联中止子代理
                                     .cancelToken = session->getCancelToken(),

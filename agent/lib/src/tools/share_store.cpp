@@ -169,8 +169,20 @@ asio::awaitable<std::string> ThreadShareStoreTool::execute_async(const neograph:
     };
 
     auto agentContextPtr = agentContext.lock();
+    if (!agentContextPtr || !agentContextPtr->middlewareHandleContext) {
+        co_return R"({"error":"AgentContext not available"})";
+    }
+    // share store 桥接: 配置了 sharedShareStoreContext (同上下文子代理) 时,
+    // 读写父会话的 store, 保证 id 空间一致 (如压缩子代理写入的长内容,
+    // 父会话按摘要中的 id 可直接读取)
+    auto mctx = agentContextPtr->agentConfig
+                    ? agentContextPtr->agentConfig->sharedShareStoreContext
+                    : nullptr;
+    if (nullptr == mctx) {
+        mctx = agentContextPtr->middlewareHandleContext;
+    }
     if (text_opt == std::string_view{"insert"}) {
-        auto reId = agentContextPtr->middlewareHandleContext->addShareStoreItemValue(
+        auto reId = mctx->addShareStoreItemValue(
             thread_id,
             sliceByLine(std::move(text))
         );
@@ -182,8 +194,7 @@ asio::awaitable<std::string> ThreadShareStoreTool::execute_async(const neograph:
         if (text_id <= 0) {
             co_return R"({"error":"Arg `id` is empty"})";
         }
-        auto result
-            = agentContextPtr->middlewareHandleContext->getShareStoreItemValue(thread_id, text_id);
+        auto result = mctx->getShareStoreItemValue(thread_id, text_id);
         if (false == result.has_value()) {
             co_return R"({"error":"Not found"})";
         }
@@ -193,14 +204,13 @@ asio::awaitable<std::string> ThreadShareStoreTool::execute_async(const neograph:
         if (text_id <= 0) {
             co_return R"({"error":"Arg `id` is empty"})";
         }
-        agentContextPtr->middlewareHandleContext
-            ->setShareStoreItemValue(thread_id, text_id, sliceByLine(std::move(text)));
+        mctx->setShareStoreItemValue(thread_id, text_id, sliceByLine(std::move(text)));
         co_return "success";
     } else if (text_opt == std::string_view{"delete"}) {
         if (text_id <= 0) {
             co_return R"({"error":"Arg `id` is empty"})";
         }
-        agentContextPtr->middlewareHandleContext->removeShareStoreItemValue(thread_id, text_id);
+        mctx->removeShareStoreItemValue(thread_id, text_id);
         co_return "success";
     } else {
         co_return R"({"error":"Arg `opt` is invalid"})";
