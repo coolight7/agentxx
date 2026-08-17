@@ -1120,7 +1120,8 @@ JSValue JsEngine::bridgeCall(
             if (argc >= 2) {
                 JS_ToInt64(ctx, &id, argv[1]);
             }
-            char* resp = vt.get_share_store(host, agentxx_plugin_sv(threadId.data(), threadId.size()), id);
+            char* resp
+                = vt.get_share_store(host, agentxx_plugin_sv(threadId.data(), threadId.size()), id);
             if (!resp) {
                 return JS_NULL;
             }
@@ -1236,7 +1237,12 @@ JSValue JsEngine::bridgeCall(
             binding->engine     = engine;
             binding->plugin     = pctx->name;
             binding->point      = -1;
-            auto* sub = vt.subscribe(host, agentxx_plugin_sv(topic.data(), topic.size()), &JsEngine::eventFire, binding.get());
+            auto* sub           = vt.subscribe(
+                host,
+                agentxx_plugin_sv(topic.data(), topic.size()),
+                &JsEngine::eventFire,
+                binding.get()
+            );
             if (!sub) {
                 return throwJsError(ctx, "subscribe: host subscription failed: " + topic);
             }
@@ -1499,15 +1505,15 @@ extern "C" int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) 
 
     // 注册能力 "interpreter.js" (带方法回调): 脚本插件 (C++ 壳) 经
     // invoke_capability 把脚本代码交给本引擎执行 —— 插件间通信, 宿主不参与
-    int rc = host->vtable->register_capability_ex(
-        host, AGENTXX_SV("interpreter.js"), &jsInvoke, engine
-    );
+    int rc = host->vtable
+                 ->register_capability_ex(host, AGENTXX_SV("interpreter.js"), &jsInvoke, engine);
     if (rc != 0) {
         delete engine;
         return -1;
     }
     *plugin_ctx = engine;
-    host->vtable->log(host, 2, AGENTXX_SV("agentxx_javascript_engine loaded (QuickJS interpreter.js)"));
+    host->vtable
+        ->log(host, 2, AGENTXX_SV("agentxx_javascript_engine loaded (QuickJS interpreter.js)"));
     return 0;
 }
 

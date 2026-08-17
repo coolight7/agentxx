@@ -175,17 +175,13 @@ asio::awaitable<std::string> ThreadShareStoreTool::execute_async(const neograph:
     // share store 桥接: 配置了 sharedShareStoreContext (同上下文子代理) 时,
     // 读写父会话的 store, 保证 id 空间一致 (如压缩子代理写入的长内容,
     // 父会话按摘要中的 id 可直接读取)
-    auto mctx = agentContextPtr->agentConfig
-                    ? agentContextPtr->agentConfig->sharedShareStoreContext
-                    : nullptr;
+    auto mctx = agentContextPtr->agentConfig ? agentContextPtr->agentConfig->sharedShareStoreContext
+                                             : nullptr;
     if (nullptr == mctx) {
         mctx = agentContextPtr->middlewareHandleContext;
     }
     if (text_opt == std::string_view{"insert"}) {
-        auto reId = mctx->addShareStoreItemValue(
-            thread_id,
-            sliceByLine(std::move(text))
-        );
+        auto reId = mctx->addShareStoreItemValue(thread_id, sliceByLine(std::move(text)));
         co_return neograph::json{
             {"id", reId},
         }

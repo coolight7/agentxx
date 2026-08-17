@@ -57,7 +57,8 @@ extern "C" int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) 
     (void)plugin_ctx;
     g_host = host;
     if (!host->vtable->has_capability(host, AGENTXX_SV("interpreter.js"))) {
-        host->vtable->log(host, 4, AGENTXX_SV("example_js: interpreter.js capability not available"));
+        host->vtable
+            ->log(host, 4, AGENTXX_SV("example_js: interpreter.js capability not available"));
         return -1;
     }
 
@@ -69,7 +70,8 @@ extern "C" int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) 
         return -1;
     }
     auto field = [&](const char* key) -> std::string {
-        char* v = host->vtable->json_get_string(host, agentxx_plugin_sv_cstr(info), AGENTXX_SV(key));
+        char* v
+            = host->vtable->json_get_string(host, agentxx_plugin_sv_cstr(info), AGENTXX_SV(key));
         if (!v) {
             return {};
         }
@@ -95,28 +97,29 @@ extern "C" int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) 
         if (pos != std::string::npos) {
             std::string parent = g_dir.substr(0, pos);
             if (fileExists(parent + "/plugin.js")) {
-                g_dir       = parent;
-                scriptPath  = parent + "/plugin.js";
+                g_dir      = parent;
+                scriptPath = parent + "/plugin.js";
             }
         }
     }
 
     // 委派加载脚本 (经能力调用 → 引擎执行; 脚本内注册动作挂到本插件实例)
     // - args 经 json_escape 转义字段值, 防止路径含引号/反斜杠破坏 JSON
-    char*       escName    = host->vtable->json_escape(host, agentxx_plugin_sv(name.data(), name.size()));
-    char*       escPath    = host->vtable->json_escape(host, agentxx_plugin_sv(scriptPath.data(), scriptPath.size()));
-    std::string args       = "{\"name\":";
-    args                  += escName ? escName : "\"\"";
-    args                  += ",\"path\":";
-    args                  += escPath ? escPath : "\"\"";
-    args                  += "}";
+    char* escName = host->vtable->json_escape(host, agentxx_plugin_sv(name.data(), name.size()));
+    char* escPath
+        = host->vtable->json_escape(host, agentxx_plugin_sv(scriptPath.data(), scriptPath.size()));
+    std::string args  = "{\"name\":";
+    args             += escName ? escName : "\"\"";
+    args             += ",\"path\":";
+    args             += escPath ? escPath : "\"\"";
+    args             += "}";
     if (escName) {
         host->vtable->free(escName);
     }
     if (escPath) {
         host->vtable->free(escPath);
     }
-    char* err = nullptr;
+    char* err  = nullptr;
     char* resp = host->vtable->invoke_capability(
         host,
         AGENTXX_SV("interpreter.js"),
@@ -147,7 +150,7 @@ extern "C" void agentxx_plugin_unload(void* plugin_ctx) {
     // 通知引擎释放本插件的 JSContext (宿主已先 detachAll 摘除全部注册)
     std::string args = "{\"name\":\"" + g_name + "\"}";
     char*       err  = nullptr;
-    char* resp = g_host->vtable->invoke_capability(
+    char*       resp = g_host->vtable->invoke_capability(
         g_host,
         AGENTXX_SV("interpreter.js"),
         AGENTXX_SV("unload"),

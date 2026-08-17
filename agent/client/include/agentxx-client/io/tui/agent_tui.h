@@ -199,7 +199,11 @@ public:
 
     /// 跨端插件数据上行 (client io 线程): WirePluginDataUp → agent 侧插件
     /// 返回 true 表示已投递 (未连接等失败返回 false)
-    bool sendPluginDataUp(const std::string& plugin, const std::string& event, const std::string& json);
+    bool sendPluginDataUp(
+        const std::string& plugin,
+        const std::string& event,
+        const std::string& json
+    );
 
     /// 设置连接状态 (跨线程安全: 更新 sharedState 并触发重绘)
     /// 状态枚举 ConnState 定义于 tui_state.h (TUIRenderState::connState)

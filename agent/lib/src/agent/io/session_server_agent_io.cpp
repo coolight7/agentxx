@@ -249,23 +249,21 @@ void SessionServerAgentIO::onPeerMessage(WireMessage msg) {
                 // 回客户端 (见该处环回跳过逻辑)
                 auto agent = agent_.lock();
                 if (agent && agent->agentContext && agent->agentContext->bus) {
-                    auto bus = agent->agentContext->bus;
+                    auto bus   = agent->agentContext->bus;
                     auto topic = "plugin.client." + m.plugin + "." + m.event;
                     auto data  = m.data;
                     // EventBus::publish 为协程; 投递到总线 executor 执行
                     asio::co_spawn(
                         bus->executor(),
-                        [bus, topic = std::move(topic), data = std::move(data)]() -> asio::awaitable<void> {
+                        [bus, topic = std::move(topic), data = std::move(data)](
+                        ) -> asio::awaitable<void> {
                             co_await bus->publish(topic, data);
                             co_return;
                         },
                         asio::detached
                     );
                 } else {
-                    XX_LOGW(
-                        "[session_ctrl] WirePluginDataUp dropped (no agent bus): {}",
-                        m.plugin
-                    );
+                    XX_LOGW("[session_ctrl] WirePluginDataUp dropped (no agent bus): {}", m.plugin);
                 }
             }
         },
@@ -419,16 +417,15 @@ void SessionServerAgentIO::subscribePluginEvents() {
     if (!agent || !agent->agentContext || !agent->agentContext->bus) {
         return;
     }
-    auto bus = agent->agentContext->bus;
+    auto bus  = agent->agentContext->bus;
     auto self = shared_from_this();
     // 订阅全部插件事件 (topic `plugin.{插件名}.{事件名}`):
     // - 载荷均为 std::string (JSON); 类型不匹配跳过
     // - 原样转发为 WirePluginData, 宿主不解析语义; 频率由插件控制
     pluginSubId_ = bus->subscribePrefix(
         "plugin.",
-        [weakSelf = std::weak_ptr<SessionServerAgentIO>{self}](
-            std::string_view topic, const std::any& payload
-        ) {
+        [weakSelf = std::weak_ptr<SessionServerAgentIO>{self
+         }](std::string_view topic, const std::any& payload) {
             auto sp = weakSelf.lock();
             if (!sp) {
                 return;

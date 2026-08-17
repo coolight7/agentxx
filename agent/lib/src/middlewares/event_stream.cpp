@@ -141,7 +141,7 @@ void EventBridge::handleLLMToken(const neograph::graph::GraphEvent& event) {
         .durationMs
         = sendDuration ? static_cast<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
                                                   std::chrono::system_clock::now() - nodeStartTime_
-          )
+                         )
                                                   .count())
                        : 0,
     });

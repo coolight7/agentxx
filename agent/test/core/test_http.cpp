@@ -1163,9 +1163,7 @@ asio::awaitable<void> test_http_client_beast_server() {
         );
         XX_TEST_EXPECT_HAS_VALUE(result);
         if (result.has_value()) {
-            XX_TEST_EXPECT_TRUE(
-                result.value().find("段落内容") != std::string::npos
-            );
+            XX_TEST_EXPECT_TRUE(result.value().find("段落内容") != std::string::npos);
         }
     }
 

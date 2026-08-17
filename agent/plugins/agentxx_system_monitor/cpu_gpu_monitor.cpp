@@ -1,7 +1,7 @@
 #include "cpu_gpu_monitor.h"
-#include "system_monitor_plugin.h"
 #include "asio/steady_timer.hpp"
 #include "asio/use_awaitable.hpp"
+#include "system_monitor_plugin.h"
 #include <fmt/format.h>
 #include <string>
 #include <string_view>
@@ -467,7 +467,6 @@ asio::awaitable<CpuGpuUsage> CpuGpuMonitor::query() {
 
 #elif XX_IS_LINUX_D
 
-#include "system_monitor_plugin.h"
 #include "asio/random_access_file.hpp"
 #include "asio/read.hpp"
 #include "asio/read_at.hpp"
@@ -476,6 +475,7 @@ asio::awaitable<CpuGpuUsage> CpuGpuMonitor::query() {
 #include "asio/registered_buffer.hpp"
 #include "asio/stream_file.hpp"
 #include "asio/use_awaitable.hpp"
+#include "system_monitor_plugin.h"
 #include <boost/system/error_code.hpp>
 #include <chrono>
 #include <cstdio>
@@ -531,7 +531,8 @@ namespace expand {
     if (right < left) {
         return std::string{};
     }
-    return std::string{str.substr(static_cast<size_t>(left), static_cast<size_t>(right - left + 1))};
+    return std::string{str.substr(static_cast<size_t>(left), static_cast<size_t>(right - left + 1))
+    };
 }
 
 struct LinuxGpuCacheEntry {
@@ -611,8 +612,8 @@ protected:
     static asio::awaitable<std::string> readFileContent(std::string_view path) {
 #if ASIO_HAS_FILE || BOOST_ASIO_HAS_FILE
         {
-            auto                     executor = co_await asio::this_coro::executor;
-            asio::stream_file        stream{executor};
+            auto                      executor = co_await asio::this_coro::executor;
+            asio::stream_file         stream{executor};
             boost::system::error_code errCode;
             stream.open(std::string{path}, asio::stream_file::read_only, errCode);
             if (!stream.is_open()) {
@@ -803,16 +804,12 @@ protected:
                 if (line.rfind("Model:", 0) == 0) {
                     size_t pos = line.find(':');
                     if (pos != std::string::npos) {
-                        entry.name = removeBetweenSpace(
-                            std::string_view{line}.substr(pos + 1)
-                        );
+                        entry.name = removeBetweenSpace(std::string_view{line}.substr(pos + 1));
                     }
                 } else if (line.rfind("Video Memory:", 0) == 0) {
                     size_t pos = line.find(':');
                     if (pos != std::string::npos) {
-                        auto memStr = removeBetweenSpace(
-                            std::string_view{line}.substr(pos + 1)
-                        );
+                        auto memStr = removeBetweenSpace(std::string_view{line}.substr(pos + 1));
                         uint64_t totalMiB = 0;
                         std::sscanf(memStr.c_str(), "%lu MiB", &totalMiB);
                         entry.dedicatedVramMB = totalMiB;

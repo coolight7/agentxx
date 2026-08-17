@@ -50,9 +50,9 @@ public:
     void*                    dlHandle = nullptr; ///< dlopen/LoadLibrary 句柄 (内置插件为空)
     /// 内置插件卸载回调 (编译进 libagentxx 的插件; dlHandle 为空时使用,
     /// 无需 dlsym 查符号)
-    AgentxxPluginUnloadFn    builtinUnload = nullptr;
-    void*                    pluginCtx = nullptr; ///< entry 输出的插件私有上下文
-    bool                     enabled   = true; ///< 是否启用 (禁用: 工具摘除/钩子停用)
+    AgentxxPluginUnloadFn builtinUnload = nullptr;
+    void*                 pluginCtx     = nullptr; ///< entry 输出的插件私有上下文
+    bool                  enabled = true; ///< 是否启用 (禁用: 工具摘除/钩子停用)
     bool userDisabled = false; ///< 是否被用户显式禁用 (区别于级联禁用; enable 级联不复活)
     bool unloadRequested = false; ///< 已请求卸载 (防重复)
 
@@ -86,8 +86,7 @@ public:
         std::optional<std::string> systemPlanningPrompt;
         std::optional<std::string> systemSkillPrompt;
         /// 原本的 toolPrompt 条目 (name → 原值; nullopt = 原本不存在, 回滚时删除)
-        std::map<std::string, std::optional<agentxx::agent::ToolPrompt>, std::less<>>
-            toolPrompt;
+        std::map<std::string, std::optional<agentxx::agent::ToolPrompt>, std::less<>> toolPrompt;
         /// 已记录备份的工具名 (set_prompt 首次写入某条目前备份一次, 重复写入不覆盖备份)
         std::vector<std::string> backedUpTools;
         /// 是否已备份过 system 提示词 (首次写入前备份一次)
@@ -171,11 +170,11 @@ public:
 
 private:
 
-    std::string name_;             ///< 拷贝的 name (稳定地址)
-    std::string description_;      ///< 拷贝的 description (稳定地址)
-    std::string parametersJson_;   ///< 拷贝的 parameters_json (稳定地址)
-    AgentxxToolSpec spec_;         ///< 拷贝的 spec (字符串指针指向上面成员)
-    neograph::json  parameters_;   ///< 解析缓存的参数 schema (避免每轮重复 parse)
+    std::string     name_;           ///< 拷贝的 name (稳定地址)
+    std::string     description_;    ///< 拷贝的 description (稳定地址)
+    std::string     parametersJson_; ///< 拷贝的 parameters_json (稳定地址)
+    AgentxxToolSpec spec_;           ///< 拷贝的 spec (字符串指针指向上面成员)
+    neograph::json  parameters_;     ///< 解析缓存的参数 schema (避免每轮重复 parse)
     std::weak_ptr<PluginInstance> instance_;
 };
 
@@ -272,10 +271,10 @@ public:
     /// - entry 调用卸载到线程池执行 (与 loadNativeAsync 相同, 避免 io↔引擎
     ///   互等死锁); 返回插件实例; 失败返回 nullptr (错误记日志)
     asio::awaitable<std::shared_ptr<PluginInstance>> loadBuiltinAsync(
-        std::string                    name,
-        std::string                    path,
-        std::vector<std::string>       depends,
-        std::vector<std::string>       optionalDepends
+        std::string              name,
+        std::string              path,
+        std::vector<std::string> depends,
+        std::vector<std::string> optionalDepends
     );
 
     /// 卸载插件 (按名称; 等全部在途回调完成后才 dlclose)

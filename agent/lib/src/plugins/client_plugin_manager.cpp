@@ -37,22 +37,22 @@
 /// 另行定义)
 struct AgentxxStatusItem {
     agentxx::plugin::ClientPluginInstance* inst = nullptr;
-    std::string id;
-    std::string plugin;
+    std::string                            id;
+    std::string                            plugin;
 };
 
 /// 面板宿主句柄实现
 struct AgentxxPanel {
     agentxx::plugin::ClientPluginInstance* inst = nullptr;
-    std::string id;
-    std::string plugin;
+    std::string                            id;
+    std::string                            plugin;
 };
 
 /// Info 栏段落宿主句柄实现
 struct AgentxxInfoSection {
     agentxx::plugin::ClientPluginInstance* inst = nullptr;
-    std::string id;
-    std::string plugin;
+    std::string                            id;
+    std::string                            plugin;
 };
 
 namespace agentxx {
@@ -65,25 +65,25 @@ namespace {
 // ==================== 异常兜底宏 (同 plugin_manager.cpp) ====================
 
 #define XX_PLUGIN_CATCH_BEGIN try {
-#define XX_PLUGIN_CATCH_END(ret)                          \
-    }                                                     \
-    catch (const std::exception& e) {                     \
+#define XX_PLUGIN_CATCH_END(ret)                                 \
+    }                                                            \
+    catch (const std::exception& e) {                            \
         XX_LOGE("client plugin vtable exception: {}", e.what()); \
-        return (ret);                                     \
-    }                                                     \
-    catch (...) {                                         \
-        XX_LOGE("client plugin vtable unknown exception"); \
-        return (ret);                                     \
+        return (ret);                                            \
+    }                                                            \
+    catch (...) {                                                \
+        XX_LOGE("client plugin vtable unknown exception");       \
+        return (ret);                                            \
     }
-#define XX_PLUGIN_CATCH_END_VOID()                        \
-    }                                                     \
-    catch (const std::exception& e) {                     \
+#define XX_PLUGIN_CATCH_END_VOID()                               \
+    }                                                            \
+    catch (const std::exception& e) {                            \
         XX_LOGE("client plugin vtable exception: {}", e.what()); \
-        return;                                           \
-    }                                                     \
-    catch (...) {                                         \
-        XX_LOGE("client plugin vtable unknown exception"); \
-        return;                                           \
+        return;                                                  \
+    }                                                            \
+    catch (...) {                                                \
+        XX_LOGE("client plugin vtable unknown exception");       \
+        return;                                                  \
     }
 
 // ==================== 工具 ====================
@@ -150,7 +150,7 @@ bool parseClientManifest(
     std::vector<std::string>&    depends,
     std::vector<std::string>&    optionalDepends
 ) {
-    auto yamlPath = dir / "plugin.yaml";
+    auto            yamlPath = dir / "plugin.yaml";
     std::error_code ec;
     if (!std::filesystem::exists(yamlPath, ec)) {
         return false;
@@ -216,9 +216,8 @@ bool resolveClientPluginLibPath(
 #endif
     if (!std::filesystem::exists(entryPath, ec)) {
         for (const char* cfg : {"Debug", "Release", "RelWithDebInfo", "MinSizeRel"}) {
-            auto candidate = (std::filesystem::path(path) / cfg / manifestEntry)
-                                 .lexically_normal()
-                                 .string();
+            auto candidate
+                = (std::filesystem::path(path) / cfg / manifestEntry).lexically_normal().string();
 #if defined(_WIN32)
             if (candidate.ends_with(".so")) {
                 candidate.replace(candidate.size() - 3, 3, ".dll");
@@ -362,7 +361,10 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>>
             }
             name    = std::string{info->name.data ? info->name.data : "", info->name.size};
             version = std::string{info->version.data ? info->version.data : "", info->version.size};
-            desc    = std::string{info->description.data ? info->description.data : "", info->description.size};
+            desc    = std::string{
+                info->description.data ? info->description.data : "",
+                info->description.size
+            };
             minCaps = info->min_ui_caps;
         }
     }
@@ -428,12 +430,7 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>>
         NativeLoader::sym(handle, AGENTXX_CLIENT_SYMBOL_ENTRY, entryErr)
     );
     if (!entryFn) {
-        XX_LOGE(
-            "[client_plugin] `{}` missing {}: {}",
-            path,
-            AGENTXX_CLIENT_SYMBOL_ENTRY,
-            entryErr
-        );
+        XX_LOGE("[client_plugin] `{}` missing {}: {}", path, AGENTXX_CLIENT_SYMBOL_ENTRY, entryErr);
         NativeLoader::close(handle);
         co_return nullptr;
     }
@@ -641,15 +638,15 @@ void ClientPluginManager::enable(std::string_view name) {
     enableImpl(name, true);
 }
 
-asio::awaitable<void> ClientPluginManager::loadConfiguredClientPlugins(
-    const std::vector<PluginConfig>& plugins
-) {
+asio::awaitable<void>
+    ClientPluginManager::loadConfiguredClientPlugins(const std::vector<PluginConfig>& plugins) {
     // 预解析各配置项 sides 过滤 + 依赖 (目录插件读 plugin.yaml depends)
     struct Item {
         std::string              path;
         std::string              name; ///< 空 = 无法推导 (不影响排序)
         std::vector<std::string> depends;
     };
+
     std::vector<Item> items;
     for (const auto& pc : plugins) {
         if (pc.sides == agentxx::agent::PluginSide::Agent) {
@@ -658,7 +655,7 @@ asio::awaitable<void> ClientPluginManager::loadConfiguredClientPlugins(
         Item it;
         it.path = pc.path;
         if (std::filesystem::is_directory(std::filesystem::path(pc.path))) {
-            std::string name, entry;
+            std::string              name, entry;
             std::vector<std::string> depends, optionalDepends;
             if (parseClientManifest(
                     std::filesystem::path(pc.path),
@@ -835,7 +832,7 @@ void ClientPluginManager::postCommandInvocation(std::string name, std::string ar
 
 void ClientPluginManager::invokeCommand(const std::string& name, const std::string& argsJson) {
     // 查表 (io 线程)
-    const ClientCommand*               cmd = nullptr;
+    const ClientCommand*                  cmd = nullptr;
     std::shared_ptr<ClientPluginInstance> inst;
     {
         std::lock_guard<std::mutex> lock(uiMutex_);
@@ -853,19 +850,11 @@ void ClientPluginManager::invokeCommand(const std::string& name, const std::stri
     }
 
     ClientPluginInstance::InflightGuard guard(inst.get());
-    char*                              err = nullptr;
-    char*                              out = cmd->execute(
-        cmd->ud,
-        agentxx_plugin_sv(argsJson.data(), argsJson.size()),
-        &err
-    );
+    char*                               err = nullptr;
+    char* out = cmd->execute(cmd->ud, agentxx_plugin_sv(argsJson.data(), argsJson.size()), &err);
     std::string actionJson;
     if (!out) {
-        XX_LOGW(
-            "[client_plugin] command `{}` failed: {}",
-            name,
-            err ? err : "(no error message)"
-        );
+        XX_LOGW("[client_plugin] command `{}` failed: {}", name, err ? err : "(no error message)");
     } else {
         actionJson.assign(out);
     }
@@ -912,7 +901,7 @@ void ClientPluginManager::dispatchCommandAction(const std::string& actionJson) {
 // ==================== 会话上下文 ====================
 
 std::string ClientPluginManager::clientStateJson() const {
-    neograph::json j = neograph::json::object();
+    neograph::json j     = neograph::json::object();
     j["threadId"]        = threadId_;
     j["connState"]       = connState_;
     j["startupProgress"] = startupProgress_;
@@ -938,15 +927,15 @@ void ClientPluginManager::postToIo(std::function<void()> fn) const {
 
 void ClientPluginManager::onReady() {
     neograph::json j = neograph::json::object();
-    j["uiCaps"]   = uiAdapter_ ? static_cast<int>(uiAdapter_->uiCaps()) : 0;
-    j["threadId"] = threadId_;
+    j["uiCaps"]      = uiAdapter_ ? static_cast<int>(uiAdapter_->uiCaps()) : 0;
+    j["threadId"]    = threadId_;
     dispatchEvent(AGENTXX_CLIENT_EVT_READY, j.dump());
 }
 
 void ClientPluginManager::onConnStateChanged(std::string_view state, std::string_view progress) {
-    connState_       = std::string{state};
-    startupProgress_ = std::string{progress};
-    neograph::json j = neograph::json::object();
+    connState_           = std::string{state};
+    startupProgress_     = std::string{progress};
+    neograph::json j     = neograph::json::object();
     j["connState"]       = connState_;
     j["startupProgress"] = startupProgress_;
     dispatchEvent(AGENTXX_CLIENT_EVT_CONN_STATE, j.dump());
@@ -954,8 +943,8 @@ void ClientPluginManager::onConnStateChanged(std::string_view state, std::string
 
 void ClientPluginManager::onUserInput(std::string_view threadId, std::string_view text) {
     neograph::json j = neograph::json::object();
-    j["threadId"] = std::string{threadId};
-    j["text"]     = std::string{text};
+    j["threadId"]    = std::string{threadId};
+    j["text"]        = std::string{text};
     dispatchEvent(AGENTXX_CLIENT_EVT_USER_INPUT, j.dump());
 }
 
@@ -977,17 +966,17 @@ void ClientPluginManager::onTurnResult(const agentxx::agent::WireTurnResult& res
 }
 
 void ClientPluginManager::onSessionSwitched(std::string_view threadId) {
-    threadId_ = std::string{threadId};
+    threadId_        = std::string{threadId};
     neograph::json j = neograph::json::object();
-    j["threadId"] = threadId_;
+    j["threadId"]    = threadId_;
     dispatchEvent(AGENTXX_CLIENT_EVT_SESSION_SWITCH, j.dump());
 }
 
 void ClientPluginManager::onPluginData(const agentxx::agent::WirePluginData& data) {
     neograph::json j = neograph::json::object();
-    j["plugin"] = data.plugin;
-    j["event"]  = data.event;
-    j["data"]   = data.data;
+    j["plugin"]      = data.plugin;
+    j["event"]       = data.event;
+    j["data"]        = data.data;
     dispatchEvent(AGENTXX_CLIENT_EVT_PLUGIN_DATA, j.dump());
 }
 
@@ -1102,6 +1091,7 @@ void ClientPluginManager::dispatchEvent(int event, const std::string& payloadJso
         ClientPluginInstance*               inst;
         ClientPluginInstance::Subscription* sub;
     };
+
     std::vector<SubRef> refs;
     for (const auto& [name, inst] : plugins_) {
         (void)name;
@@ -1116,10 +1106,7 @@ void ClientPluginManager::dispatchEvent(int event, const std::string& payloadJso
     }
     for (const auto& ref : refs) {
         ClientPluginInstance::InflightGuard guard(ref.inst);
-        ref.sub->handler(
-            agentxx_plugin_sv(payloadJson.data(), payloadJson.size()),
-            ref.sub->ud
-        );
+        ref.sub->handler(agentxx_plugin_sv(payloadJson.data(), payloadJson.size()), ref.sub->ud);
     }
 }
 
@@ -1811,7 +1798,13 @@ void ClientPluginManager::unregisterStatusItem(ClientPluginInstance* inst, void*
     }
     auto& regs = inst->statusItemRegs;
     regs.erase(
-        std::remove_if(regs.begin(), regs.end(), [&](const auto& s) { return s.id == h->id; }),
+        std::remove_if(
+            regs.begin(),
+            regs.end(),
+            [&](const auto& s) {
+                return s.id == h->id;
+            }
+        ),
         regs.end()
     );
     if (uiAdapter_) {
@@ -1938,7 +1931,13 @@ void ClientPluginManager::unregisterPanel(ClientPluginInstance* inst, void* pane
     }
     auto& regs = inst->panelRegs;
     regs.erase(
-        std::remove_if(regs.begin(), regs.end(), [&](const auto& p) { return p.id == h->id; }),
+        std::remove_if(
+            regs.begin(),
+            regs.end(),
+            [&](const auto& p) {
+                return p.id == h->id;
+            }
+        ),
         regs.end()
     );
     if (uiAdapter_) {
@@ -2062,7 +2061,13 @@ void ClientPluginManager::unregisterInfoSection(ClientPluginInstance* inst, void
     }
     auto& regs = inst->infoSectionRegs;
     regs.erase(
-        std::remove_if(regs.begin(), regs.end(), [&](const auto& s) { return s.id == h->id; }),
+        std::remove_if(
+            regs.begin(),
+            regs.end(),
+            [&](const auto& s) {
+                return s.id == h->id;
+            }
+        ),
         regs.end()
     );
     if (uiAdapter_) {
@@ -2124,9 +2129,13 @@ int ClientPluginManager::unregisterCommand(ClientPluginInstance* inst, const cha
     }
     auto& regs = inst->commandRegs;
     regs.erase(
-        std::remove_if(regs.begin(), regs.end(), [&](const auto& c) {
-            return c.name == name && c.plugin == inst->name;
-        }),
+        std::remove_if(
+            regs.begin(),
+            regs.end(),
+            [&](const auto& c) {
+                return c.name == name && c.plugin == inst->name;
+            }
+        ),
         regs.end()
     );
     return 0;
@@ -2162,7 +2171,13 @@ void ClientPluginManager::unsubscribe(AgentxxSubscription* sub) {
     impl->sub->alive = false;
     auto& subs       = impl->inst->subscriptions;
     subs.erase(
-        std::remove_if(subs.begin(), subs.end(), [](const auto& s) { return !s.alive; }),
+        std::remove_if(
+            subs.begin(),
+            subs.end(),
+            [](const auto& s) {
+                return !s.alive;
+            }
+        ),
         subs.end()
     );
     impl->inst = nullptr;
@@ -2216,8 +2231,7 @@ int ClientPluginManager::sendPluginDataToPeer(
     if (!inst || !uiAdapter_) {
         return -1;
     }
-    return uiAdapter_->sendPluginData(inst->name, event ? event : "", json ? json : "{}") ? 0
-                                                                                          : -1;
+    return uiAdapter_->sendPluginData(inst->name, event ? event : "", json ? json : "{}") ? 0 : -1;
 }
 
 } // namespace plugin

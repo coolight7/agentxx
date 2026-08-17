@@ -18,10 +18,7 @@ std::string generateUniqueThreadId();
 /// 内完成; 传入空列表 = 不加载 client 插件)
 using ClientPluginConfigs = std::vector<agent::PluginConfig>;
 
-void runLocalCliUnified(
-    std::shared_ptr<agent::CodeAgent> agent,
-    ClientPluginConfigs               plugins = {}
-);
+void runLocalCliUnified(std::shared_ptr<agent::CodeAgent> agent, ClientPluginConfigs plugins = {});
 
 void runLocalTuiUnified(
     std::shared_ptr<agent::CodeAgent> agent,
@@ -30,10 +27,10 @@ void runLocalTuiUnified(
 );
 
 void runRemoteCli(
-    std::string_view      url,
-    std::string_view      token,
-    std::string_view      model,
-    ClientPluginConfigs   plugins = {}
+    std::string_view    url,
+    std::string_view    token,
+    std::string_view    model,
+    ClientPluginConfigs plugins = {}
 );
 
 void runRemoteTui(

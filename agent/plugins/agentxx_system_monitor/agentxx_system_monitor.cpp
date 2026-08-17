@@ -12,14 +12,14 @@
 //   以侧边栏 Info 栏段落渲染明细 (CPU/RAM/GPU); 显示开关命令 /sysinfo
 //   经跨端事件 (usage_enabled) 上行同步到 agent 侧, 关闭期间跳过采集
 // - 插件不链接 libagentxx: 日志经 vtable log, JSON 组装用 fmt + json_escape
-#include "system_monitor_plugin.h"
-#include "cpu_gpu_monitor.h"
 #include "agentxx/plugin/client_plugin_api.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/io_context.hpp"
+#include "cpu_gpu_monitor.h"
 #include "fmt/format.h"
 #include "fmt/ranges.h"
+#include "system_monitor_plugin.h"
 #include <atomic>
 #include <chrono>
 #include <cstring>
@@ -38,8 +38,8 @@ using namespace agentxx_system_monitor_plugin;
 // =====================================================================
 
 static agentxx::expand::CpuGpuUsage querySync() {
-    asio::io_context               io;
-    agentxx::expand::CpuGpuUsage   usage;
+    asio::io_context             io;
+    agentxx::expand::CpuGpuUsage usage;
     asio::co_spawn(
         io,
         [&usage]() -> asio::awaitable<void> {
@@ -131,8 +131,8 @@ static std::string readToolDepict(const std::string& toolName) {
 /// 注册无参工具 (schema/描述存储于插件侧静态区; spec 字符串字段以 string_view
 /// 传入, 宿主注册时拷贝); execute 由调用方提供 (静态 lambda, 无捕获)
 static void registerTool(
-    const char* name,
-    const char* defaultDepict,
+    const char*        name,
+    const char*        defaultDepict,
     const std::string& schema,
     char* (*execute)(
         void*                   user_data,
@@ -144,7 +144,7 @@ static void registerTool(
     int flags = 0
 ) {
     static std::vector<std::string> g_storage;
-    std::string depict = readToolDepict(name);
+    std::string                     depict = readToolDepict(name);
     if (depict.empty()) {
         depict = defaultDepict;
     }
@@ -152,9 +152,11 @@ static void registerTool(
     g_storage.push_back(schema);
 
     AgentxxToolSpec spec{};
-    spec.name = agentxx_plugin_sv(name, std::strlen(name));
-    spec.description
-        = agentxx_plugin_sv(g_storage[g_storage.size() - 2].data(), g_storage[g_storage.size() - 2].size());
+    spec.name        = agentxx_plugin_sv(name, std::strlen(name));
+    spec.description = agentxx_plugin_sv(
+        g_storage[g_storage.size() - 2].data(),
+        g_storage[g_storage.size() - 2].size()
+    );
     spec.parameters_json = agentxx_plugin_sv(g_storage.back().data(), g_storage.back().size());
     spec.user_data       = nullptr;
     spec.flags           = flags;
@@ -168,8 +170,7 @@ static void registerTool(
 /// - 用户 yaml 覆盖早于插件加载 → get_prompt 已含覆盖 → 跳过 (尊重用户配置)
 /// - 宿主未提供 get_prompt/set_prompt (旧宿主) → 跳过, registerTool 回退插件默认
 static void ensureToolPromptInHost() {
-    if (!g_host || !g_host->vtable || !g_host->vtable->get_prompt
-        || !g_host->vtable->set_prompt) {
+    if (!g_host || !g_host->vtable || !g_host->vtable->get_prompt || !g_host->vtable->set_prompt) {
         return;
     }
     char* json = g_host->vtable->get_prompt(g_host);
@@ -190,15 +191,12 @@ static void ensureToolPromptInHost() {
     // (与 registerTool 的默认描述一致, 从 lib AgentPrompt 剥离迁移)
     std::string payload
         = R"({"toolPrompt":{"agentxx_get_system_core_info":{"depict":")"
-        + std::string{
-              "Get system resource usage: CPU utilization, memory usage, GPU utilization, and "
-              "GPU memory usage."
-          }
-        + R"(","args":{}}}})";
-    if (g_host->vtable->set_prompt(
-            g_host,
-            agentxx_plugin_sv(payload.data(), payload.size())
-        ) != 0) {
+          + std::
+              string{"Get system resource usage: CPU utilization, memory usage, GPU utilization, and "
+                     "GPU memory usage."}
+          + R"(","args":{}}}})";
+    if (g_host->vtable->set_prompt(g_host, agentxx_plugin_sv(payload.data(), payload.size()))
+        != 0) {
         pluginLog(3, "agentxx_system_monitor: set_prompt failed");
     }
 }
@@ -216,7 +214,7 @@ static char* getSystemCoreInfoExecute(
     (void)thread_id;
     (void)tool_call_id;
     try {
-        auto usage = querySync();
+        auto              usage = querySync();
         std::stringstream ss;
         ss << fmt::format("CPU Usage: {:.1f}%\n", usage.cpuUsagePercent);
         ss << fmt::format(
@@ -376,10 +374,7 @@ static void usageCollectorLoop(PluginCtx* ctx) {
                 );
             }
         } catch (const std::exception& e) {
-            pluginLog(
-                3,
-                fmt::format("agentxx_system_monitor: usage collect failed: {}", e.what())
-            );
+            pluginLog(3, fmt::format("agentxx_system_monitor: usage collect failed: {}", e.what()));
         } catch (...) {
             pluginLog(3, "agentxx_system_monitor: usage collect failed (unknown)");
         }
@@ -426,7 +421,8 @@ extern "C" int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) 
             AGENTXX_SV("agentxx.system_usage"),
             systemUsageInvoke,
             nullptr
-        ) != 0) {
+        )
+        != 0) {
         pluginLog(3, "agentxx_system_monitor: register capability agentxx.system_usage failed");
     }
 
@@ -494,10 +490,8 @@ static std::string clientJsonEscape(const std::string& s) {
     if (!g_client_host || s.empty()) {
         return "\"\"";
     }
-    char* esc = g_client_host->vtable->json_escape(
-        g_client_host,
-        agentxx_plugin_sv(s.data(), s.size())
-    );
+    char* esc
+        = g_client_host->vtable->json_escape(g_client_host, agentxx_plugin_sv(s.data(), s.size()));
     if (!esc) {
         return "\"\"";
     }
@@ -540,16 +534,16 @@ static int64_t jsonGetInt64(SimpleJson& j, const char* pointer) {
 
 /// usage JSON 解析汇总 (Info 段落数据源)
 struct UsageStat {
-    double  cpu         = 0.0; ///< CPU 占用 %
-    double  memPct      = 0.0; ///< 内存占用 %
-    int64_t memUsedMb   = 0;   ///< 已用内存 MB
-    int64_t memTotalMb  = 0;   ///< 总内存 MB
-    size_t  gpuCount    = 0;   ///< 检测到的 GPU 数量
-    double  gpuPeakPct  = 0.0; ///< GPU 最高占用 %
+    double  cpu        = 0.0; ///< CPU 占用 %
+    double  memPct     = 0.0; ///< 内存占用 %
+    int64_t memUsedMb  = 0;   ///< 已用内存 MB
+    int64_t memTotalMb = 0;   ///< 总内存 MB
+    size_t  gpuCount   = 0;   ///< 检测到的 GPU 数量
+    double  gpuPeakPct = 0.0; ///< GPU 最高占用 %
 };
 
 static UsageStat parseUsage(const std::string& raw) {
-    UsageStat st;
+    UsageStat  st;
     SimpleJson j(raw);
     if (!j.ok()) {
         return st;
@@ -568,7 +562,7 @@ static UsageStat parseUsage(const std::string& raw) {
                     continue;
                 }
                 ++st.gpuCount;
-                double u = 0.0;
+                double u   = 0.0;
                 auto   obj = elem.get_object();
                 if (!obj.error()) {
                     auto usageField = obj["usage_percent"];
@@ -644,21 +638,12 @@ static void on_client_plugin_data(AgentxxPluginStringView payload_json, void* ud
         return;
     }
     // payload: {"plugin","event","data"}
-    char* plugin = g_client_host->vtable->json_get_string(
-        g_client_host,
-        payload_json,
-        AGENTXX_SV("plugin")
-    );
-    char* event = g_client_host->vtable->json_get_string(
-        g_client_host,
-        payload_json,
-        AGENTXX_SV("event")
-    );
-    char* data = g_client_host->vtable->json_get_string(
-        g_client_host,
-        payload_json,
-        AGENTXX_SV("data")
-    );
+    char* plugin
+        = g_client_host->vtable->json_get_string(g_client_host, payload_json, AGENTXX_SV("plugin"));
+    char* event
+        = g_client_host->vtable->json_get_string(g_client_host, payload_json, AGENTXX_SV("event"));
+    char* data
+        = g_client_host->vtable->json_get_string(g_client_host, payload_json, AGENTXX_SV("data"));
     const bool mine = plugin && event && std::strcmp(plugin, "agentxx_system_monitor") == 0
                       && std::strcmp(event, "usage") == 0 && data;
     if (mine) {
@@ -702,11 +687,9 @@ static char* sysinfo_cmd_execute(void* ud, AgentxxPluginStringView args_json, ch
             agentxx_plugin_sv(payload.data(), payload.size())
         );
     }
-    std::string text = next ? "System resource info: ON" : "System resource info: OFF";
-    const std::string out = fmt::format(
-        R"({{"action":"toast","text":{},"level":0}})",
-        clientJsonEscape(text)
-    );
+    std::string       text = next ? "System resource info: ON" : "System resource info: OFF";
+    const std::string out
+        = fmt::format(R"({{"action":"toast","text":{},"level":0}})", clientJsonEscape(text));
     return g_client_host->vtable->strdup(out.c_str());
 }
 
@@ -735,12 +718,8 @@ extern "C" int agentxx_client_entry(const AgentxxClientHost* host, void** plugin
     // 宿主不支持 Info 段落时返回 NULL, 插件降级 (不视为失败)
 
     // 2. 事件订阅: 宿主转发的系统资源事件 (WirePluginData agentxx_system_monitor.usage)
-    if (!host->vtable->subscribe(
-            host,
-            AGENTXX_CLIENT_EVT_PLUGIN_DATA,
-            on_client_plugin_data,
-            nullptr
-        )) {
+    if (!host->vtable
+             ->subscribe(host, AGENTXX_CLIENT_EVT_PLUGIN_DATA, on_client_plugin_data, nullptr)) {
         return -1;
     }
 
@@ -751,7 +730,8 @@ extern "C" int agentxx_client_entry(const AgentxxClientHost* host, void** plugin
             AGENTXX_SV("Toggle system resource info display (CPU/RAM/GPU Info section)"),
             sysinfo_cmd_execute,
             nullptr
-        ) != 0) {
+        )
+        != 0) {
         return -1;
     }
 
@@ -770,6 +750,7 @@ extern "C" void agentxx_client_unload(void* plugin_ctx) {
     }
     g_client_host->vtable->unregister_command(g_client_host, AGENTXX_SV("sysinfo"));
     g_last_usage_json.clear();
-    g_client_host->vtable->log(g_client_host, 2, AGENTXX_SV("agentxx_system_monitor client unloaded"));
+    g_client_host->vtable
+        ->log(g_client_host, 2, AGENTXX_SV("agentxx_system_monitor client unloaded"));
     g_client_host = nullptr;
 }

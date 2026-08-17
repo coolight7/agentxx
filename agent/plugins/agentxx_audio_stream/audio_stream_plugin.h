@@ -14,15 +14,15 @@
 #include <vector>
 
 #if defined(_WIN32)
-#define XX_IS_WIN_D 1
+#define XX_IS_WIN_D   1
 #define XX_IS_LINUX_D 0
 #define XX_IS_MACOS_D 0
 #elif defined(__APPLE__)
-#define XX_IS_WIN_D 0
+#define XX_IS_WIN_D   0
 #define XX_IS_LINUX_D 0
 #define XX_IS_MACOS_D 1
 #else
-#define XX_IS_WIN_D 0
+#define XX_IS_WIN_D   0
 #define XX_IS_LINUX_D 1
 #define XX_IS_MACOS_D 0
 #endif
@@ -81,10 +81,8 @@ private:
     bool                                     ok_ = false;
 };
 
-inline bool jsonGetString(
-    simdjson::simdjson_result<simdjson::ondemand::value> v,
-    std::string&                                         out
-) {
+inline bool
+    jsonGetString(simdjson::simdjson_result<simdjson::ondemand::value> v, std::string& out) {
     if (v.error()) {
         return false;
     }
@@ -96,10 +94,7 @@ inline bool jsonGetString(
     return true;
 }
 
-inline bool jsonGetInt(
-    simdjson::simdjson_result<simdjson::ondemand::value> v,
-    int64_t&                                             out
-) {
+inline bool jsonGetInt(simdjson::simdjson_result<simdjson::ondemand::value> v, int64_t& out) {
     if (v.error()) {
         return false;
     }

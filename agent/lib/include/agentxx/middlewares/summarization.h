@@ -82,7 +82,8 @@ public:
     ) const;
 
     std::string messagesToText(
-        const std::vector<neograph::ChatMessage>& msgs, bool includeSystem = false
+        const std::vector<neograph::ChatMessage>& msgs,
+        bool                                      includeSystem = false
     ) const;
 
     /// 确定性噪音清理 (保留 thinking, 不做 offload):
@@ -123,8 +124,10 @@ public:
     ///   最终纯文本输出即为摘要
     /// - 通过 NodeInterrupt 中断父轮次派生 subagent, resume 后返回结果;
     ///   无 subagentManager / 消息为空 / 压缩失败时返回空串 (调用方保留原消息)
-    asio::awaitable<std::string>
-        doSummarizeWithLLM(std::string_view thread_id, const std::vector<neograph::ChatMessage>& messages);
+    asio::awaitable<std::string> doSummarizeWithLLM(
+        std::string_view                          thread_id,
+        const std::vector<neograph::ChatMessage>& messages
+    );
 
     /// 硬截断兜底: 保留 system + 截断说明 + 最近消息 (30% 预算)
     std::vector<neograph::ChatMessage> hardTruncate(

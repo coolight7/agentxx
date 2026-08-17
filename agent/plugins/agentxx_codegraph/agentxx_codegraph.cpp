@@ -6,9 +6,9 @@
 //   字段语义); 索引进度经 publish 事件通知宿主 (topic 约定 `{插件名}.{事件名}`,
 //   宿主原样转发 WirePluginData, 客户端据此展示)
 // - 依赖: codegraph_core + tree_sitter 系 + sqlite3 + simdjson + glob
+#include "agentxx/plugin/client_plugin_api.h"
 #include "codegraph_manager.h"
 #include "codegraph_plugin.h"
-#include "agentxx/plugin/client_plugin_api.h"
 #include "fmt/format.h"
 #include "fmt/ranges.h"
 #include <atomic>
@@ -87,7 +87,8 @@ static ToolPrompt readToolPrompt(const std::string& toolName) {
         return out;
     }
     char* json = g_host->vtable->get_tool_prompt(
-        g_host, agentxx_plugin_sv(toolName.data(), toolName.size())
+        g_host,
+        agentxx_plugin_sv(toolName.data(), toolName.size())
     );
     if (!json) {
         return out;
@@ -117,65 +118,64 @@ static ToolPrompt readToolPrompt(const std::string& toolName) {
 static ToolPrompt defaultToolPrompt(const std::string& toolName) {
     ToolPrompt p;
     if (toolName == "agentxx_codegraph_search") {
-        p.depict =
-            "Search for code symbols (functions, classes, variables, etc.) by name using the "
-            "codegraph index.\n"
-            "Use this to quickly locate definitions across a large codebase.\n"
-            "Returns plain multi-line text: one block per symbol (\"[N] kind name\" plus "
-            "indented file:line and signature lines).";
+        p.depict
+            = "Search for code symbols (functions, classes, variables, etc.) by name using the "
+              "codegraph index.\n"
+              "Use this to quickly locate definitions across a large codebase.\n"
+              "Returns plain multi-line text: one block per symbol (\"[N] kind name\" plus "
+              "indented file:line and signature lines).";
         p.query = "Symbol name to search for. Supports partial matching.";
         p.limit = "Maximum number of results to return. Default: 20.";
     } else if (toolName == "agentxx_codegraph_context") {
-        p.depict =
-            "Get rich context for a code symbol: its definition, callers, callees, and methods "
-            "(for classes).\n"
-            "Useful for understanding how a function or class is used throughout the codebase.\n"
-            "Returns plain multi-line text with \"symbol:\", \"callers (N):\", \"callees (N):\", "
-            "\"methods (N):\" and \"edges (N):\" sections.";
+        p.depict
+            = "Get rich context for a code symbol: its definition, callers, callees, and methods "
+              "(for classes).\n"
+              "Useful for understanding how a function or class is used throughout the codebase.\n"
+              "Returns plain multi-line text with \"symbol:\", \"callers (N):\", \"callees (N):\", "
+              "\"methods (N):\" and \"edges (N):\" sections.";
         p.symbol   = "Fully qualified symbol name (e.g. `MyClass::myMethod`).";
         p.limit    = "Maximum results per category. Default: 10.";
         p.maxDepth = "Maximum call-graph traversal depth. Default: 3.";
     } else if (toolName == "agentxx_codegraph_callers") {
-        p.depict =
-            "Find all functions that call a given symbol (reverse call-graph traversal).\n"
-            "Use this to understand what depends on a function before modifying it.\n"
-            "Returns plain multi-line text: \"Callers (N):\" followed by one block per symbol.";
+        p.depict
+            = "Find all functions that call a given symbol (reverse call-graph traversal).\n"
+              "Use this to understand what depends on a function before modifying it.\n"
+              "Returns plain multi-line text: \"Callers (N):\" followed by one block per symbol.";
         p.symbol   = "Symbol name to find callers for.";
         p.maxDepth = "Maximum traversal depth. Default: 3.";
     } else if (toolName == "agentxx_codegraph_callees") {
-        p.depict =
-            "Find all functions that a given symbol calls (forward call-graph traversal).\n"
-            "Use this to understand a function's dependencies.\n"
-            "Returns plain multi-line text: \"Callees (N):\" followed by one block per symbol.";
+        p.depict
+            = "Find all functions that a given symbol calls (forward call-graph traversal).\n"
+              "Use this to understand a function's dependencies.\n"
+              "Returns plain multi-line text: \"Callees (N):\" followed by one block per symbol.";
         p.symbol   = "Symbol name to find callees for.";
         p.maxDepth = "Maximum traversal depth. Default: 3.";
     } else if (toolName == "agentxx_codegraph_impact") {
-        p.depict =
-            "Analyze the impact of modifying a symbol. Finds all downstream symbols that may be\n"
-            "affected (callers, references). Use this before refactoring to assess blast radius.\n"
-            "Returns plain multi-line text: \"Impact (N):\" followed by one block per symbol.";
+        p.depict
+            = "Analyze the impact of modifying a symbol. Finds all downstream symbols that may be\n"
+              "affected (callers, references). Use this before refactoring to assess blast radius.\n"
+              "Returns plain multi-line text: \"Impact (N):\" followed by one block per symbol.";
         p.symbol   = "Symbol name to analyze impact for.";
         p.maxDepth = "Maximum traversal depth. Default: 5.";
     } else if (toolName == "agentxx_codegraph_status") {
-        p.depict =
-            "Get codegraph index statistics: total nodes, edges, indexed files, and circular "
-            "dependency count.\n"
-            "Returns plain multi-line text, one \"label: value\" per line.";
+        p.depict
+            = "Get codegraph index statistics: total nodes, edges, indexed files, and circular "
+              "dependency count.\n"
+              "Returns plain multi-line text, one \"label: value\" per line.";
     } else if (toolName == "agentxx_codegraph_index") {
-        p.depict =
-            "Index a directory for code analysis. Parses source files and builds the symbol "
-            "database\n"
-            "used by search, context, callers, callees, and impact queries.\n"
-            "Returns plain multi-line text with \"success:\" and index statistics.";
-        p.path        = "Absolute path to the directory to index.";
+        p.depict = "Index a directory for code analysis. Parses source files and builds the symbol "
+                   "database\n"
+                   "used by search, context, callers, callees, and impact queries.\n"
+                   "Returns plain multi-line text with \"success:\" and index statistics.";
+        p.path   = "Absolute path to the directory to index.";
         p.incremental = "Default `true`. If `true`, only re-index changed files. If `false`, "
                         "full re-index.";
     } else if (toolName == "agentxx_codegraph_path") {
-        p.depict =
-            "Find the call-chain path between two symbols in the call graph.\n"
-            "Use this to trace how execution flows from one function to another.\n"
-            "Returns plain multi-line text: \"Path (N):\" followed by one block per symbol on "
-            "the path.";
+        p.depict
+            = "Find the call-chain path between two symbols in the call graph.\n"
+              "Use this to trace how execution flows from one function to another.\n"
+              "Returns plain multi-line text: \"Path (N):\" followed by one block per symbol on "
+              "the path.";
         p.from     = "Starting symbol name.";
         p.to       = "Target symbol name.";
         p.maxDepth = "Maximum search depth. Default: 10.";
@@ -187,8 +187,7 @@ static ToolPrompt defaultToolPrompt(const std::string& toolName) {
 /// - 用户 yaml 覆盖早于插件加载 → get_prompt 已含覆盖 → 跳过 (尊重用户配置)
 /// - 宿主未提供 get_prompt/set_prompt (旧宿主) → 跳过, registerTool 回退插件默认
 static void ensureToolPromptsInHost() {
-    if (!g_host || !g_host->vtable || !g_host->vtable->get_prompt
-        || !g_host->vtable->set_prompt) {
+    if (!g_host || !g_host->vtable || !g_host->vtable->get_prompt || !g_host->vtable->set_prompt) {
         return;
     }
     char* json = g_host->vtable->get_prompt(g_host);
@@ -252,7 +251,7 @@ static void ensureToolPromptsInHost() {
         if (!p.to.empty()) {
             args["to"] = p.to;
         }
-        tp["args"] = args;
+        tp["args"]  = args;
         tools[name] = tp;
         dirty       = true;
     }
@@ -261,10 +260,8 @@ static void ensureToolPromptsInHost() {
     }
     patch["toolPrompt"] = tools;
     std::string payload = patch.dump();
-    if (g_host->vtable->set_prompt(
-            g_host,
-            agentxx_plugin_sv(payload.data(), payload.size())
-        ) != 0) {
+    if (g_host->vtable->set_prompt(g_host, agentxx_plugin_sv(payload.data(), payload.size()))
+        != 0) {
         pluginLog(3, "agentxx_codegraph: set_prompt failed");
     }
 }
@@ -312,8 +309,8 @@ static std::string jsonEdgesToText(const codegraph::Json& arr) {
         return out;
     }
     for (size_t i = 0; i < arr.size(); ++i) {
-        const auto& e = arr[i];
-        out += fmt::format(
+        const auto& e  = arr[i];
+        out           += fmt::format(
             "\n[{}] {} -> {} ({})",
             i + 1,
             e.value("src", int64_t{0}),
@@ -327,8 +324,8 @@ static std::string jsonEdgesToText(const codegraph::Json& arr) {
 static std::string contextToText(const codegraph::Json& ctx, CodeGraphManager* m) {
     std::string out;
     if (ctx.contains("symbol")) {
-        const auto& s = ctx["symbol"];
-        out += fmt::format("symbol: {} {}", s.value("kind", ""), s.value("name", ""));
+        const auto& s  = ctx["symbol"];
+        out           += fmt::format("symbol: {} {}", s.value("kind", ""), s.value("name", ""));
         appendJsonNodeDetails(out, s);
     }
     if (ctx.contains("callers")) {
@@ -349,7 +346,8 @@ static std::string contextToText(const codegraph::Json& ctx, CodeGraphManager* m
     return out;
 }
 
-static std::string impactToText(std::string_view title, const codegraph::Json& impact, CodeGraphManager* m) {
+static std::string
+    impactToText(std::string_view title, const codegraph::Json& impact, CodeGraphManager* m) {
     std::string out;
     if (impact.contains("nodes")) {
         out = jsonNodesToText(title, impact["nodes"]);
@@ -372,15 +370,24 @@ struct SchemaBuilder {
     codegraph::Json props = codegraph::Json::object();
 
     void str(const std::string& name, const std::string& desc) {
-        props[name] = codegraph::Json({{"type", "string"}, {"description", desc}});
+        props[name] = codegraph::Json({
+            {"type",        "string"},
+            {"description", desc    }
+        });
     }
 
     void num(const std::string& name, const std::string& desc) {
-        props[name] = codegraph::Json({{"type", "number"}, {"description", desc}});
+        props[name] = codegraph::Json({
+            {"type",        "number"},
+            {"description", desc    }
+        });
     }
 
     void boolean(const std::string& name, const std::string& desc) {
-        props[name] = codegraph::Json({{"type", "boolean"}, {"description", desc}});
+        props[name] = codegraph::Json({
+            {"type",        "boolean"},
+            {"description", desc     }
+        });
     }
 
     std::string dump(const std::vector<std::string>& required) {
@@ -401,19 +408,19 @@ struct SchemaBuilder {
 ///   ToolEntry 存于静态区 (unique_ptr 保证地址稳定), 经 user_data 传递;
 ///   插件生命周期内有效, unload 后宿主不再调用
 struct ToolEntry {
-    CodeGraphManager* mgr = nullptr;
+    CodeGraphManager*                                          mgr = nullptr;
     std::function<std::string(CodeGraphManager*, SimpleJson&)> fn;
 };
 
 static void registerTool(
-    CodeGraphManager*                                                                   mgr,
-    const char*                                                                         name,
-    const char*                                                                         defaultDepict,
-    const std::function<std::string(const ToolPrompt&)>&                                schemaBuilder,
-    std::function<std::string(CodeGraphManager*, SimpleJson&)>                          fn,
-    int                                                                                 flags
+    CodeGraphManager*                                          mgr,
+    const char*                                                name,
+    const char*                                                defaultDepict,
+    const std::function<std::string(const ToolPrompt&)>&       schemaBuilder,
+    std::function<std::string(CodeGraphManager*, SimpleJson&)> fn,
+    int                                                        flags
 ) {
-    auto prompt        = readToolPrompt(name);
+    auto        prompt = readToolPrompt(name);
     std::string depict = prompt.depict.empty() ? std::string{defaultDepict} : prompt.depict;
     std::string schema = schemaBuilder(prompt);
 
@@ -423,20 +430,26 @@ static void registerTool(
     g_storage.push_back(std::move(schema));
 
     static std::vector<std::unique_ptr<ToolEntry>> g_entries;
-    auto entry = std::make_unique<ToolEntry>();
-    entry->mgr = mgr;
-    entry->fn  = std::move(fn);
-    auto* entryPtr = entry.get();
+    auto                                           entry = std::make_unique<ToolEntry>();
+    entry->mgr                                           = mgr;
+    entry->fn                                            = std::move(fn);
+    auto* entryPtr                                       = entry.get();
     g_entries.push_back(std::move(entry));
 
     AgentxxToolSpec spec{};
-    spec.name            = agentxx_plugin_sv(name, std::strlen(name));
-    spec.description     = agentxx_plugin_sv(g_storage[g_storage.size() - 2].data(), g_storage[g_storage.size() - 2].size());
+    spec.name        = agentxx_plugin_sv(name, std::strlen(name));
+    spec.description = agentxx_plugin_sv(
+        g_storage[g_storage.size() - 2].data(),
+        g_storage[g_storage.size() - 2].size()
+    );
     spec.parameters_json = agentxx_plugin_sv(g_storage.back().data(), g_storage.back().size());
     spec.user_data       = entryPtr;
     spec.flags           = flags;
-    spec.execute         = +[](void* ud, AgentxxPluginStringView args_json, AgentxxPluginStringView, AgentxxPluginStringView, char** err
-                           ) -> char* {
+    spec.execute         = +[](void*                   ud,
+                       AgentxxPluginStringView args_json,
+                       AgentxxPluginStringView,
+                       AgentxxPluginStringView,
+                       char** err) -> char* {
         auto* e = static_cast<ToolEntry*>(ud);
         try {
             std::string argsStr{args_json.data ? args_json.data : "{}", args_json.size};
@@ -479,9 +492,7 @@ static void registerAllTools(CodeGraphManager* mgr) {
             SchemaBuilder b;
             b.str(
                 "query",
-                p.query.empty()
-                    ? "Symbol name to search for. Supports partial matching."
-                    : p.query
+                p.query.empty() ? "Symbol name to search for. Supports partial matching." : p.query
             );
             b.num(
                 "limit",
@@ -497,8 +508,8 @@ static void registerAllTools(CodeGraphManager* mgr) {
             }
             int64_t lim64 = 20;
             jsonGetInt(a.doc().at_pointer("/limit"), lim64);
-            int limit = static_cast<int>(lim64);
-            auto r    = m->searchSymbols(query, limit);
+            int  limit = static_cast<int>(lim64);
+            auto r     = m->searchSymbols(query, limit);
             if (!r.success) {
                 return fmt::format("error: {}", r.error);
             }
@@ -557,9 +568,9 @@ static void registerAllTools(CodeGraphManager* mgr) {
             int64_t limit64 = 10, depth64 = 3;
             jsonGetInt(a.doc().at_pointer("/limit"), limit64);
             jsonGetInt(a.doc().at_pointer("/max_depth"), depth64);
-            int limit     = static_cast<int>(limit64);
-            int max_depth = static_cast<int>(depth64);
-            auto r        = m->getSymbolContext(symbol, limit, max_depth);
+            int  limit     = static_cast<int>(limit64);
+            int  max_depth = static_cast<int>(depth64);
+            auto r         = m->getSymbolContext(symbol, limit, max_depth);
             if (!r.success) {
                 return fmt::format("error: {}", r.error);
             }
@@ -590,8 +601,8 @@ static void registerAllTools(CodeGraphManager* mgr) {
             }
             int64_t depth64 = 3;
             jsonGetInt(a.doc().at_pointer("/max_depth"), depth64);
-            int max_depth = static_cast<int>(depth64);
-            auto r        = m->getCallers(symbol, max_depth);
+            int  max_depth = static_cast<int>(depth64);
+            auto r         = m->getCallers(symbol, max_depth);
             if (!r.success) {
                 return fmt::format("error: {}", r.error);
             }
@@ -622,8 +633,8 @@ static void registerAllTools(CodeGraphManager* mgr) {
             }
             int64_t depth64 = 3;
             jsonGetInt(a.doc().at_pointer("/max_depth"), depth64);
-            int max_depth = static_cast<int>(depth64);
-            auto r        = m->getCallees(symbol, max_depth);
+            int  max_depth = static_cast<int>(depth64);
+            auto r         = m->getCallees(symbol, max_depth);
             if (!r.success) {
                 return fmt::format("error: {}", r.error);
             }
@@ -654,8 +665,8 @@ static void registerAllTools(CodeGraphManager* mgr) {
             }
             int64_t depth64 = 5;
             jsonGetInt(a.doc().at_pointer("/max_depth"), depth64);
-            int max_depth = static_cast<int>(depth64);
-            auto r        = m->getImpact(symbol, max_depth);
+            int  max_depth = static_cast<int>(depth64);
+            auto r         = m->getImpact(symbol, max_depth);
             if (!r.success) {
                 return fmt::format("error: {}", r.error);
             }
@@ -717,8 +728,8 @@ static void registerAllTools(CodeGraphManager* mgr) {
             }
             bool incremental = true;
             jsonGetBool(a.doc().at_pointer("/incremental"), incremental);
-            bool ok          = m->indexDirectory(path, incremental);
-            auto status      = m->getStatus();
+            bool ok     = m->indexDirectory(path, incremental);
+            auto status = m->getStatus();
             if (ok) {
                 if (status.success) {
                     return fmt::format(
@@ -765,8 +776,8 @@ static void registerAllTools(CodeGraphManager* mgr) {
             }
             int64_t depth64 = 10;
             jsonGetInt(a.doc().at_pointer("/max_depth"), depth64);
-            int max_depth = static_cast<int>(depth64);
-            auto r        = m->findPath(from, to, max_depth);
+            int  max_depth = static_cast<int>(depth64);
+            auto r         = m->findPath(from, to, max_depth);
             if (!r.success) {
                 return fmt::format("error: {}", r.error);
             }
@@ -847,9 +858,9 @@ extern "C" int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) 
     cgConfig.useGitignore        = cfg.useGitignore;
     cgConfig.autoLoadProjectRoot = cfg.loadCwd;
 
-    auto ctx               = std::make_unique<PluginCtx>();
-    std::string sqliteDir  = (std::filesystem::path(cfg.dataDir) / "sqlite").string();
-    ctx->mgr               = std::make_shared<agentxx::expand::CodeGraphManager>(sqliteDir, cgConfig);
+    auto        ctx       = std::make_unique<PluginCtx>();
+    std::string sqliteDir = (std::filesystem::path(cfg.dataDir) / "sqlite").string();
+    ctx->mgr = std::make_shared<agentxx::expand::CodeGraphManager>(sqliteDir, cgConfig);
 
     // 索引进度回调 → publish("agentxx_codegraph.progress") 通知宿主
     // (topic 约定 `{插件名}.{事件名}`; 频率由 CodeGraphManager 内部节流)
@@ -857,10 +868,10 @@ extern "C" int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) 
         if (!g_host || !g_host->vtable || !g_host->vtable->publish) {
             return;
         }
-        codegraph::Json j = codegraph::Json::object();
-        j["processed"]    = processed;
-        j["total"]        = total;
-        j["current_file"] = std::string{currentFile};
+        codegraph::Json j   = codegraph::Json::object();
+        j["processed"]      = processed;
+        j["total"]          = total;
+        j["current_file"]   = std::string{currentFile};
         std::string payload = j.dump();
         g_host->vtable->publish(
             g_host,
@@ -917,7 +928,7 @@ extern "C" int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) 
 
     // 发布加载状态事件 (客户端据此显示插件可用)
     if (g_host && g_host->vtable && g_host->vtable->publish) {
-        codegraph::Json j = codegraph::Json::object();
+        codegraph::Json j   = codegraph::Json::object();
         j["loaded"]         = true;
         j["project_root"]   = projectRoot;
         std::string payload = j.dump();
@@ -937,7 +948,7 @@ extern "C" void agentxx_plugin_unload(void* plugin_ctx) {
     }
     // 发布卸载状态事件 (客户端据此隐藏插件状态)
     if (g_host && g_host->vtable && g_host->vtable->publish) {
-        codegraph::Json j = codegraph::Json::object();
+        codegraph::Json j   = codegraph::Json::object();
         j["loaded"]         = false;
         std::string payload = j.dump();
         g_host->vtable->publish(
@@ -974,10 +985,10 @@ extern "C" void agentxx_plugin_unload(void* plugin_ctx) {
 static const AgentxxClientHost* g_client_host = nullptr;
 static AgentxxInfoSection*      g_section     = nullptr;
 /// 索引状态缓存 (事件 handler 与面板刷新均在 client io 线程, 无跨线程竞争)
-static bool        g_loaded        = false;
-static bool        g_has_progress  = false;
-static int64_t     g_processed     = 0;
-static int64_t     g_total         = 0;
+static bool        g_loaded       = false;
+static bool        g_has_progress = false;
+static int64_t     g_processed    = 0;
+static int64_t     g_total        = 0;
 static std::string g_current_file;
 
 /// 字符串 → JSON 字符串字面量 (经宿主 vtable json_escape; 结果含引号)
@@ -985,10 +996,8 @@ static std::string clientJsonEscape(const std::string& s) {
     if (!g_client_host || s.empty()) {
         return "\"\"";
     }
-    char* esc = g_client_host->vtable->json_escape(
-        g_client_host,
-        agentxx_plugin_sv(s.data(), s.size())
-    );
+    char* esc
+        = g_client_host->vtable->json_escape(g_client_host, agentxx_plugin_sv(s.data(), s.size()));
     if (!esc) {
         return "\"\"";
     }
@@ -1076,21 +1085,12 @@ static void on_client_plugin_data(AgentxxPluginStringView payload_json, void* ud
         return;
     }
     // payload: {"plugin","event","data"}
-    char* plugin = g_client_host->vtable->json_get_string(
-        g_client_host,
-        payload_json,
-        AGENTXX_SV("plugin")
-    );
-    char* event = g_client_host->vtable->json_get_string(
-        g_client_host,
-        payload_json,
-        AGENTXX_SV("event")
-    );
-    char* data = g_client_host->vtable->json_get_string(
-        g_client_host,
-        payload_json,
-        AGENTXX_SV("data")
-    );
+    char* plugin
+        = g_client_host->vtable->json_get_string(g_client_host, payload_json, AGENTXX_SV("plugin"));
+    char* event
+        = g_client_host->vtable->json_get_string(g_client_host, payload_json, AGENTXX_SV("event"));
+    char* data
+        = g_client_host->vtable->json_get_string(g_client_host, payload_json, AGENTXX_SV("data"));
     if (plugin && event && data && std::strcmp(plugin, "agentxx_codegraph") == 0) {
         SimpleJson j(std::string{data});
         if (std::strcmp(event, "status") == 0) {
@@ -1114,11 +1114,11 @@ static void on_client_plugin_data(AgentxxPluginStringView payload_json, void* ud
                 jsonGetInt(j.doc().at_pointer("/processed"), processed);
                 jsonGetInt(j.doc().at_pointer("/total"), total);
                 jsonGetString(j.doc().at_pointer("/current_file"), cur);
-                g_processed     = processed;
-                g_total         = total;
-                g_current_file  = std::move(cur);
-                g_has_progress  = true;
-                g_loaded        = true;
+                g_processed    = processed;
+                g_total        = total;
+                g_current_file = std::move(cur);
+                g_has_progress = true;
+                g_loaded       = true;
                 refreshSection();
             }
         }
@@ -1161,12 +1161,8 @@ extern "C" int agentxx_client_entry(const AgentxxClientHost* host, void** plugin
     }
 
     // 2. 事件订阅: agent 侧发布的 codegraph 事件 (服务端转发的 WirePluginData)
-    if (!host->vtable->subscribe(
-            host,
-            AGENTXX_CLIENT_EVT_PLUGIN_DATA,
-            on_client_plugin_data,
-            nullptr
-        )) {
+    if (!host->vtable
+             ->subscribe(host, AGENTXX_CLIENT_EVT_PLUGIN_DATA, on_client_plugin_data, nullptr)) {
         return -1;
     }
 

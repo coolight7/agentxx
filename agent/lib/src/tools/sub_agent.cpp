@@ -256,7 +256,8 @@ asio::awaitable<std::string> SubAgentManagerTool::execute_async(const neograph::
     // summarization 发起的压缩子代理必须显式 false, 避免对透传的
     // 上下文前缀二次压缩 (破坏 KV/prefix cache 一致性)
     std::optional<bool> enableSummarization;
-    if (arguments.contains("enable_summarization") && arguments["enable_summarization"].is_boolean()) {
+    if (arguments.contains("enable_summarization")
+        && arguments["enable_summarization"].is_boolean()) {
         enableSummarization = arguments["enable_summarization"].get<bool>();
     }
 
@@ -290,9 +291,9 @@ asio::awaitable<std::string> SubAgentManagerTool::execute_async(const neograph::
         thread_id,
         [&]() {
             auto argJson = neograph::json{
-                {"subagent", subagentName},
+                {"subagent",      subagentName },
                 {"system_prompt", system_prompt},
-                {"message", message},
+                {"message",       message      },
             };
             // 结构化消息透传 (同上下文模式): 中断参数携带完整消息前缀
             if (messages.has_value()) {
@@ -311,8 +312,8 @@ asio::awaitable<std::string> SubAgentManagerTool::execute_async(const neograph::
                 argJson["enable_summarization"] = *enableSummarization;
             }
             return agentxx::middleware::InterruptHandleArg{
-                .name = "subagent",
-                .arg  = std::move(argJson),
+                .name     = "subagent",
+                .arg      = std::move(argJson),
                 .resultId = resultId,
             };
         },

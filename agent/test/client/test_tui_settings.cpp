@@ -271,7 +271,7 @@ void test_persist_to_db() {
         auto fresh = agentxx::util::SettingsDb(dbPath);
         XX_TEST_EXPECT_EQ(fresh.getInt64("tui.theme", -1), int64_t{TUISettings::kThemeLight});
         XX_TEST_EXPECT_EQ(fresh.getInt64("tui.animationLevel", -1), int64_t{1}); // Low
-        XX_TEST_EXPECT_EQ(fresh.getInt64("tui.logLevel", -1), int64_t{3}); // Warn
+        XX_TEST_EXPECT_EQ(fresh.getInt64("tui.logLevel", -1), int64_t{3});       // Warn
     }
 
     // 再次变更 → 库文件同步更新
@@ -282,7 +282,7 @@ void test_persist_to_db() {
         auto fresh = agentxx::util::SettingsDb(dbPath);
         XX_TEST_EXPECT_EQ(fresh.getInt64("tui.theme", -1), int64_t{TUISettings::kThemeDark});
         XX_TEST_EXPECT_EQ(fresh.getInt64("tui.animationLevel", -1), int64_t{4}); // Ultra
-        XX_TEST_EXPECT_EQ(fresh.getInt64("tui.logLevel", -1), int64_t{1}); // Debug
+        XX_TEST_EXPECT_EQ(fresh.getInt64("tui.logLevel", -1), int64_t{1});       // Debug
     }
 
     // 恢复默认, 避免影响其他用例

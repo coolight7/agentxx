@@ -3,10 +3,10 @@
 // - 注册工具: agentxx_screen_capture
 // - 流式帧经 publish 事件推送 (topic "agentxx_screen_capture.frame")
 // - 插件不链接 libagentxx: 描述经 get_tool_prompt 读取, 日志经 vtable log
-#include "screen_capture_plugin.h"
-#include "screen_capture.h"
 #include "codegraph/core/json.hpp"
 #include "fmt/format.h"
+#include "screen_capture.h"
+#include "screen_capture_plugin.h"
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
@@ -27,7 +27,10 @@ static std::string readToolDepict(const std::string& toolName) {
     if (!g_host || !g_host->vtable || !g_host->vtable->get_tool_prompt) {
         return {};
     }
-    char* json = g_host->vtable->get_tool_prompt(g_host, agentxx_plugin_sv(toolName.data(), toolName.size()));
+    char* json = g_host->vtable->get_tool_prompt(
+        g_host,
+        agentxx_plugin_sv(toolName.data(), toolName.size())
+    );
     if (!json) {
         return {};
     }
@@ -51,14 +54,14 @@ struct ToolEntry {
 };
 
 static void registerTool(
-    const char*                                   name,
-    const char*                                   defaultDepict,
-    const std::string&                            schema,
-    std::function<std::string(SimpleJson&)>       fn,
-    int                                           flags = 0
+    const char*                             name,
+    const char*                             defaultDepict,
+    const std::string&                      schema,
+    std::function<std::string(SimpleJson&)> fn,
+    int                                     flags = 0
 ) {
     static std::vector<std::string> g_storage;
-    std::string depict = readToolDepict(name);
+    std::string                     depict = readToolDepict(name);
     if (depict.empty()) {
         depict = defaultDepict;
     }
@@ -66,19 +69,25 @@ static void registerTool(
     g_storage.push_back(schema);
 
     static std::vector<std::unique_ptr<ToolEntry>> g_entries;
-    auto entry = std::make_unique<ToolEntry>();
-    entry->fn  = std::move(fn);
-    auto* entryPtr = entry.get();
+    auto                                           entry = std::make_unique<ToolEntry>();
+    entry->fn                                            = std::move(fn);
+    auto* entryPtr                                       = entry.get();
     g_entries.push_back(std::move(entry));
 
     AgentxxToolSpec spec{};
-    spec.name            = agentxx_plugin_sv(name, std::strlen(name));
-    spec.description     = agentxx_plugin_sv(g_storage[g_storage.size() - 2].data(), g_storage[g_storage.size() - 2].size());
+    spec.name        = agentxx_plugin_sv(name, std::strlen(name));
+    spec.description = agentxx_plugin_sv(
+        g_storage[g_storage.size() - 2].data(),
+        g_storage[g_storage.size() - 2].size()
+    );
     spec.parameters_json = agentxx_plugin_sv(g_storage.back().data(), g_storage.back().size());
     spec.user_data       = entryPtr;
     spec.flags           = flags;
-    spec.execute         = +[](void* ud, AgentxxPluginStringView args_json, AgentxxPluginStringView, AgentxxPluginStringView, char** err
-                           ) -> char* {
+    spec.execute         = +[](void*                   ud,
+                       AgentxxPluginStringView args_json,
+                       AgentxxPluginStringView,
+                       AgentxxPluginStringView,
+                       char** err) -> char* {
         auto* e = static_cast<ToolEntry*>(ud);
         try {
             std::string argsStr{args_json.data ? args_json.data : "{}", args_json.size};
@@ -120,8 +129,8 @@ static codegraph::Json frameToJson(const agentxx::expand::ScreenFrame& f, bool i
     j["is_primary"]   = f.isPrimary;
     j["pixel_bytes"]  = static_cast<int64_t>(f.pixelData.size());
     if (includePixels && !f.pixelData.empty()) {
-        static const char* kBase64 =
-            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        static const char* kBase64
+            = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
         std::string b64;
         b64.reserve(((f.pixelData.size() + 2) / 3) * 4);
         size_t i = 0;
@@ -152,10 +161,8 @@ static codegraph::Json frameToJson(const agentxx::expand::ScreenFrame& f, bool i
 }
 
 /// 帧数组 → JSON (空帧标记失败)
-static std::string framesResult(
-    const std::vector<agentxx::expand::ScreenFrame>& frames,
-    bool                                             includePixels
-) {
+static std::string
+    framesResult(const std::vector<agentxx::expand::ScreenFrame>& frames, bool includePixels) {
     if (frames.empty()) {
         return R"({"ok":false,"error":"capture failed"})";
     }
@@ -164,8 +171,8 @@ static std::string framesResult(
         arr.push_back(frameToJson(f, includePixels));
     }
     codegraph::Json j = codegraph::Json::object();
-    j["ok"]            = true;
-    j["frames"]        = arr;
+    j["ok"]           = true;
+    j["frames"]       = arr;
     return j.dump();
 }
 
@@ -212,23 +219,29 @@ struct ScreenCaptureHolder {
 static void registerScreenCaptureTool() {
     codegraph::Json cmd = codegraph::Json::object();
     cmd["type"]         = "string";
-    cmd["enum"]         = codegraph::Json::array({codegraph::Json("capture_all"),
-                                                  codegraph::Json("capture_mouse"),
-                                                  codegraph::Json("capture_screen"),
-                                                  codegraph::Json("get_screen_count"),
-                                                  codegraph::Json("start_streaming"),
-                                                  codegraph::Json("stop_streaming")});
-    codegraph::Json schema = codegraph::Json::object();
-    schema["type"]         = "object";
-    schema["properties"]   = codegraph::Json::object();
-    schema["properties"]["command"]        = cmd;
-    schema["properties"]["screen_index"]   = codegraph::Json({{"type", "number"}});
-    schema["properties"]["frame_rate"]     = codegraph::Json({{"type", "number"}});
-    schema["properties"]["include_pixels"] = codegraph::Json(
-        {{"type", "boolean"},
-         {"description", "Include base64 pixel data (large!). Default: false."}}
+    cmd["enum"]         = codegraph::Json::array(
+        {codegraph::Json("capture_all"),
+                 codegraph::Json("capture_mouse"),
+                 codegraph::Json("capture_screen"),
+                 codegraph::Json("get_screen_count"),
+                 codegraph::Json("start_streaming"),
+                 codegraph::Json("stop_streaming")}
     );
-    schema["required"] = codegraph::Json::array({codegraph::Json("command")});
+    codegraph::Json schema                 = codegraph::Json::object();
+    schema["type"]                         = "object";
+    schema["properties"]                   = codegraph::Json::object();
+    schema["properties"]["command"]        = cmd;
+    schema["properties"]["screen_index"]   = codegraph::Json({
+        {"type", "number"}
+    });
+    schema["properties"]["frame_rate"]     = codegraph::Json({
+        {"type", "number"}
+    });
+    schema["properties"]["include_pixels"] = codegraph::Json({
+        {"type",        "boolean"                                            },
+        {"description", "Include base64 pixel data (large!). Default: false."}
+    });
+    schema["required"]                     = codegraph::Json::array({codegraph::Json("command")});
 
     registerTool(
         "agentxx_screen_capture",
@@ -246,7 +259,7 @@ static void registerScreenCaptureTool() {
             }
             if (command == "capture_mouse") {
                 std::vector<agentxx::expand::ScreenFrame> frames;
-                auto f = capture.capture_.captureMouseScreen();
+                auto                                      f = capture.capture_.captureMouseScreen();
                 if (f.width > 0) {
                     frames.push_back(std::move(f));
                 }
@@ -264,15 +277,15 @@ static void registerScreenCaptureTool() {
             }
             if (command == "get_screen_count") {
                 codegraph::Json j = codegraph::Json::object();
-                j["ok"]            = true;
-                j["count"]         = capture.capture_.getScreenCount();
+                j["ok"]           = true;
+                j["count"]        = capture.capture_.getScreenCount();
                 return j.dump();
             }
             if (command == "start_streaming") {
                 int64_t rate = 5;
                 jsonGetInt(args.doc().at_pointer("/frame_rate"), rate);
-                bool ok = capture.startStreaming(static_cast<int>(rate));
-                codegraph::Json j = codegraph::Json::object();
+                bool            ok = capture.startStreaming(static_cast<int>(rate));
+                codegraph::Json j  = codegraph::Json::object();
                 j["ok"]            = ok;
                 j["rate"]          = rate;
                 return j.dump();

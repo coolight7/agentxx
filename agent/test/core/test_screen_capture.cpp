@@ -19,19 +19,33 @@ namespace {
 
 /// 定位 agentxx_screen_capture 插件目录
 static std::string findScreenCapturePluginPath() {
-    std::error_code ec;
+    std::error_code                    ec;
     std::vector<std::filesystem::path> candidates;
     candidates.push_back(std::filesystem::current_path(ec) / "plugins" / "agentxx_screen_capture");
     wchar_t buf[4096];
     DWORD   n = ::GetModuleFileNameW(nullptr, buf, 4096);
     if (n > 0 && n < 4096) {
         int len = ::WideCharToMultiByte(
-            CP_UTF8, 0, buf, static_cast<int>(n), nullptr, 0, nullptr, nullptr
+            CP_UTF8,
+            0,
+            buf,
+            static_cast<int>(n),
+            nullptr,
+            0,
+            nullptr,
+            nullptr
         );
         if (len > 0) {
             std::string exe(static_cast<size_t>(len), '\0');
             ::WideCharToMultiByte(
-                CP_UTF8, 0, buf, static_cast<int>(n), exe.data(), len, nullptr, nullptr
+                CP_UTF8,
+                0,
+                buf,
+                static_cast<int>(n),
+                exe.data(),
+                len,
+                nullptr,
+                nullptr
             );
             candidates.push_back(
                 std::filesystem::path(exe).parent_path() / "plugins" / "agentxx_screen_capture"
@@ -48,19 +62,33 @@ static std::string findScreenCapturePluginPath() {
 
 /// 定位 agentxx_computer_use 插件目录 (依赖 agentxx_screen_capture)
 static std::string findComputerUsePluginPath() {
-    std::error_code ec;
+    std::error_code                    ec;
     std::vector<std::filesystem::path> candidates;
     candidates.push_back(std::filesystem::current_path(ec) / "plugins" / "agentxx_computer_use");
     wchar_t buf[4096];
     DWORD   n = ::GetModuleFileNameW(nullptr, buf, 4096);
     if (n > 0 && n < 4096) {
         int len = ::WideCharToMultiByte(
-            CP_UTF8, 0, buf, static_cast<int>(n), nullptr, 0, nullptr, nullptr
+            CP_UTF8,
+            0,
+            buf,
+            static_cast<int>(n),
+            nullptr,
+            0,
+            nullptr,
+            nullptr
         );
         if (len > 0) {
             std::string exe(static_cast<size_t>(len), '\0');
             ::WideCharToMultiByte(
-                CP_UTF8, 0, buf, static_cast<int>(n), exe.data(), len, nullptr, nullptr
+                CP_UTF8,
+                0,
+                buf,
+                static_cast<int>(n),
+                exe.data(),
+                len,
+                nullptr,
+                nullptr
             );
             candidates.push_back(
                 std::filesystem::path(exe).parent_path() / "plugins" / "agentxx_computer_use"
@@ -111,7 +139,9 @@ asio::awaitable<agentxx::test::TestResult>
         auto tool = ctx->toolRegistry->find("agentxx_screen_capture");
         XX_TEST_EXPECT_TRUE(tool != nullptr);
         if (tool) {
-            auto out = co_await tool->execute_async(neograph::json{{"command", "get_screen_count"}});
+            auto out = co_await tool->execute_async(neograph::json{
+                {"command", "get_screen_count"}
+            });
             auto j   = neograph::json::parse(out);
             XX_TEST_EXPECT_EQ(j["ok"].get<bool>(), true);
             XX_TEST_EXPECT_TRUE(j["count"].get<int>() > 0);
@@ -123,8 +153,8 @@ asio::awaitable<agentxx::test::TestResult>
         auto tool = ctx->toolRegistry->find("agentxx_screen_capture");
         if (tool) {
             auto out = co_await tool->execute_async(neograph::json{
-                {"command", "capture_all"},
-                {"include_pixels", false},
+                {"command",        "capture_all"},
+                {"include_pixels", false        },
             });
             auto j   = neograph::json::parse(out);
             XX_TEST_EXPECT_EQ(j["ok"].get<bool>(), true);

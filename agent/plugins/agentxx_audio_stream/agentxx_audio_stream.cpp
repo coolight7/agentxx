@@ -5,8 +5,8 @@
 // - 捕获到的音频数据经 publish 事件推送 (topic "agentxx_audio_stream.audio",
 //   JSON: 元信息 + base64 PCM; 频率由捕获速率决定, 消费方自行订阅)
 // - 非 Windows 平台 AudioStream 为 no-op (start 返回失败), 工具仍可查询状态
-#include "audio_stream_plugin.h"
 #include "audio_stream.h"
+#include "audio_stream_plugin.h"
 #include "fmt/format.h"
 #include <atomic>
 #include <chrono>
@@ -44,14 +44,13 @@ agentxx::expand::AudioDataSource parseSource(const std::string& s) {
 
 /// PCM 字节 → base64 (捕获数据可能较大, 事件载荷为 JSON 字符串)
 std::string toBase64(const std::vector<uint8_t>& data) {
-    static const char* kBase64 =
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    std::string b64;
+    static const char* kBase64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string        b64;
     b64.reserve(((data.size() + 2) / 3) * 4);
     size_t i = 0;
     for (; i + 2 < data.size(); i += 3) {
-        uint32_t n = (uint32_t{data[i]} << 16) | (uint32_t{data[i + 1]} << 8)
-                     | uint32_t{data[i + 2]};
+        uint32_t n
+            = (uint32_t{data[i]} << 16) | (uint32_t{data[i + 1]} << 8) | uint32_t{data[i + 2]};
         b64.push_back(kBase64[(n >> 18) & 63]);
         b64.push_back(kBase64[(n >> 12) & 63]);
         b64.push_back(kBase64[(n >> 6) & 63]);
@@ -94,10 +93,7 @@ struct AudioStreamHolder {
         return holder;
     }
 
-    bool start(
-        agentxx::expand::AudioDataSource source,
-        uint32_t                         targetProcessId
-    ) {
+    bool start(agentxx::expand::AudioDataSource source, uint32_t targetProcessId) {
         if (stream_.isRunning()) {
             return false;
         }
@@ -106,8 +102,9 @@ struct AudioStreamHolder {
                 return;
             }
             auto tsMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-                data.timestamp.time_since_epoch()
-            ).count();
+                            data.timestamp.time_since_epoch()
+            )
+                            .count();
             std::string payload = fmt::format(
                 R"({{"sample_rate":{},"channels":{},"bits_per_sample":{},"source":{},"process_id":{},"process_name":{},"timestamp_ms":{},"data_base64":{}}})",
                 data.sampleRate,
@@ -165,9 +162,9 @@ char* audioStreamExecute(
             int64_t pid = 0;
             jsonGetInt(args.doc().at_pointer("/target_process_id"), pid);
 
-            auto  source = parseSource(sourceStr);
-            bool  ok     = holder.start(source, static_cast<uint32_t>(pid));
-            auto  result = fmt::format(
+            auto source = parseSource(sourceStr);
+            bool ok     = holder.start(source, static_cast<uint32_t>(pid));
+            auto result = fmt::format(
                 R"({{"ok":{},"running":true,"source":{}}})",
                 ok ? "true" : "false",
                 jsonEscape(sourceName(source))
@@ -212,10 +209,8 @@ extern "C" const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
         AGENTXX_PLUGIN_API_VERSION,
         AGENTXX_SV("agentxx_audio_stream"),
         AGENTXX_SV("1.0.0"),
-        AGENTXX_SV(
-            "Audio stream capture: system output / program output / microphone "
-            "(Windows WASAPI; other platforms no-op)"
-        ),
+        AGENTXX_SV("Audio stream capture: system output / program output / microphone "
+                   "(Windows WASAPI; other platforms no-op)"),
     };
     return &info;
 }
@@ -234,11 +229,10 @@ extern "C" int agentxx_plugin_entry(const AgentxxHost* host, void** /*plugin_ctx
     })";
 
     AgentxxToolSpec spec{};
-    spec.name            = AGENTXX_SV("agentxx_audio_stream");
-    spec.description     = AGENTXX_SV(
-        "Capture audio stream on Windows: start/stop/status. Captured PCM frames are "
-        "published as plugin events (agentxx_audio_stream.audio)."
-    );
+    spec.name = AGENTXX_SV("agentxx_audio_stream");
+    spec.description
+        = AGENTXX_SV("Capture audio stream on Windows: start/stop/status. Captured PCM frames are "
+                     "published as plugin events (agentxx_audio_stream.audio).");
     spec.parameters_json = agentxx_plugin_sv(kSchema.data(), kSchema.size());
     spec.execute         = audioStreamExecute;
     if (host->vtable->register_tool(host, &spec) != 0) {

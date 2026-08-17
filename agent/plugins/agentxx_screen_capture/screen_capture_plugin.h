@@ -14,15 +14,15 @@
 #include <vector>
 
 #if defined(_WIN32)
-#define XX_IS_WIN_D 1
+#define XX_IS_WIN_D   1
 #define XX_IS_LINUX_D 0
 #define XX_IS_MACOS_D 0
 #elif defined(__APPLE__)
-#define XX_IS_WIN_D 0
+#define XX_IS_WIN_D   0
 #define XX_IS_LINUX_D 0
 #define XX_IS_MACOS_D 1
 #else
-#define XX_IS_WIN_D 0
+#define XX_IS_WIN_D   0
 #define XX_IS_LINUX_D 1
 #define XX_IS_MACOS_D 0
 #endif
@@ -76,10 +76,8 @@ private:
 };
 
 /// 从值 (顶层字段或嵌套对象字段) 提取字符串
-inline bool jsonGetString(
-    simdjson::simdjson_result<simdjson::ondemand::value> v,
-    std::string&                                         out
-) {
+inline bool
+    jsonGetString(simdjson::simdjson_result<simdjson::ondemand::value> v, std::string& out) {
     if (v.error()) {
         return false;
     }
@@ -91,30 +89,21 @@ inline bool jsonGetString(
     return true;
 }
 
-inline bool jsonGetBool(
-    simdjson::simdjson_result<simdjson::ondemand::value> v,
-    bool&                                                out
-) {
+inline bool jsonGetBool(simdjson::simdjson_result<simdjson::ondemand::value> v, bool& out) {
     if (v.error()) {
         return false;
     }
     return !v.value().get_bool().get(out);
 }
 
-inline bool jsonGetInt(
-    simdjson::simdjson_result<simdjson::ondemand::value> v,
-    int64_t&                                             out
-) {
+inline bool jsonGetInt(simdjson::simdjson_result<simdjson::ondemand::value> v, int64_t& out) {
     if (v.error()) {
         return false;
     }
     return !v.value().get_int64().get(out);
 }
 
-inline bool jsonGetDouble(
-    simdjson::simdjson_result<simdjson::ondemand::value> v,
-    double&                                              out
-) {
+inline bool jsonGetDouble(simdjson::simdjson_result<simdjson::ondemand::value> v, double& out) {
     if (v.error()) {
         return false;
     }
