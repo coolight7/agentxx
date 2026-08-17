@@ -804,7 +804,11 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                 }
 
                 if (false == resumeValues.empty()) {
-                    // 中断处理完成，写回结果
+                    // 中断处理完成，清理参数，写回结果
+                    agentContext->middlewareHandleContext->removeGraphDataItem(
+                        threadId,
+                        agentxx::middleware::MiddlewareContext::graphDataKey_interruptArgs
+                    );
                     agentContext->middlewareHandleContext->setGraphDataItemValue<neograph::json>(
                         threadId,
                         agentxx::middleware::MiddlewareContext::graphDataKey_interruptResult,
