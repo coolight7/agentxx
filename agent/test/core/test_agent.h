@@ -7,6 +7,7 @@
 #include <neograph/json.h>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "test_framework.h"
 #undef XX_TEST_PASSED
@@ -27,6 +28,10 @@ extern std::string    g_da_sim_response_content;
 extern int            g_da_sim_prompt_tokens;
 extern int            g_da_sim_completion_tokens;
 extern neograph::json g_da_sim_tool_calls;
+/// 最后一次收到的 /chat/completions 请求体 (供测试断言模型名/消息前缀)
+extern neograph::json g_da_sim_last_request;
+/// 按到达顺序记录所有 /chat/completions 请求 (供测试断言多次请求)
+extern std::vector<neograph::json> g_da_sim_requests;
 /// 模拟 thinking 模型的推理文本: 非空时流式响应先推送一段
 /// [reasoning_content] delta (TYPE_THINKING), 并通过非流式的 message 字段返回,
 /// 用于验证 reasoning_content → Think 历史消息的持久化链路

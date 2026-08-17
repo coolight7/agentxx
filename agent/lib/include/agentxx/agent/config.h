@@ -10,6 +10,10 @@
 #include <vector>
 
 namespace agentxx {
+namespace middleware {
+class MiddlewareContext;
+} // namespace middleware
+
 namespace agent {
 
 /// 权限询问处理模式 (yaml `permission.mode` 指定; 默认 Ask)
@@ -113,6 +117,25 @@ public:
 
     std::string agentName     = "Agentxx";
     std::string agentNameView = "Agentxx";
+
+    /// share store 桥接 (运行时注入, 非配置项):
+    /// - 非空时, 本 agent 的 `agentxx_share_store` 工具读写该 MiddlewareContext
+    ///   的 share store (而非本 agent 自己的), 保证 id 空间一致
+    /// - 用途: 同上下文模式子代理 (如上下文压缩) 把长内容写入父会话的
+    ///   share store, 摘要中的 id 父会话可直接读取
+    std::shared_ptr<agentxx::middleware::MiddlewareContext> sharedShareStoreContext;
+
+    /// 工具白名单过滤开关 (默认 false = 不过滤, 创建全部工具)
+    /// - 子代理"无工具/自定义工具/继承父工具"场景由 AgentHost 按需开启
+    bool enableToolFiltering = false;
+    /// 工具白名单 (enableToolFiltering 时生效): 仅保留名称在列表中的工具;
+    /// 列表中的名称在子代理中不存在时自然跳过 (不报错)
+    std::vector<std::string> toolWhitelist;
+
+    /// 上下文压缩 (summarization) 中间件开关 (默认 true)
+    /// - 子代理默认继承父配置; summarization 发起的压缩子代理显式关闭,
+    ///   避免对透传的上下文前缀二次压缩 (破坏 KV/prefix cache 一致性)
+    bool enableSummarization = true;
 
     /// 主模型配置
     ModelConfig model;

@@ -4,6 +4,7 @@
 #include "neograph/graph/cancel.h"
 #include <chrono>
 #include <memory>
+#include <neograph/json.h>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -232,6 +233,25 @@ struct ReqSubagentStart {
     std::string systemPrompt;
     /// 派给 subagent 的任务消息 (user role)
     std::string message;
+    /// 结构化消息透传 (可选): 提供时作为子代理初始上下文 (可含 system),
+    /// 与 message 二选一 (messages 优先); 用于同上下文压缩等需要完整
+    /// 消息前缀的场景
+    std::optional<neograph::json> messages;
+    /// 指定子代理运行的 thread id (可选): 为空时使用独立 subagent 线程 id;
+    /// 指定时进入"同上下文模式": 运行在指定 thread + 使用父会话当前模型 +
+    /// 消息前缀原样透传, 三者共同保证与父会话命中 provider KV/prefix cache
+    std::string threadId;
+    /// 子代理工具策略 (可选 json 数组, 缺省 = 子代理默认全量工具):
+    /// - `[]`: 无工具
+    /// - `["*"]`: 全量继承父 agent 的工具 (AgentHost 解析为父工具名白名单)
+    /// - `["name1", ...]`: 仅保留列表中的工具
+    std::optional<neograph::json> tools;
+    /// 子代理上下文压缩 (summarization) 中间件开关 (可选):
+    /// - 缺省: 继承子代理 config 默认 (即父 config 拷贝)
+    /// - false: 显式禁用 (summarization 发起的压缩子代理必须禁用,
+    ///   避免对透传的上下文前缀二次压缩破坏 KV/prefix cache 一致性)
+    /// - true: 显式启用
+    std::optional<bool> enableSummarization;
     /// 回填到父 toolcall 的 tool_call_id
     std::string resultId;
     /// 父会话取消令牌 (可空): 子代理运行期间父会话被取消时, 令牌取消会

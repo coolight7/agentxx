@@ -176,6 +176,369 @@ asio::awaitable<void> test_host_spawn_e2e() {
     co_return;
 }
 
+/// 验证: 同上下文模式派生子代理 (messages 结构化透传 + threadId 指定)
+/// - messages 原样透传为子代理初始上下文 (含 system, 不做文本转录,
+///   不插入子代理默认提示)
+/// - 子代理运行在指定 thread, 强制使用父会话当前模型 (忽略子代理 config 默认)
+/// - 对照: 默认模式使用独立 subagent 线程 + config 默认模型 (不受父会话
+///   运行时选择影响), 消息回退为 systemPrompt + message 文本
+/// - 三者共同保证"相同上下文前缀 + 相同 threadid + 相同模型"命中 KV cache
+asio::awaitable<void> test_host_spawn_same_context() {
+    auto sim     = startDaSimServer();
+    auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
+    auto cfg     = makeSimConfig(baseUrl);
+
+    // 多模型: config 默认与父会话运行时选择区分开, 验证模型强制路径
+    auto makeModel = [&](std::string name) {
+        agentxx::agent::ModelConfig mc;
+        mc.baseUrl   = baseUrl;
+        mc.apiKey    = "EMPTY";
+        mc.modelName = name;
+        return mc;
+    };
+    cfg->availableModels["config-default-model"] = makeModel("config-default-model");
+    cfg->availableModels["parent-model"]         = makeModel("parent-model");
+    cfg->currentModelName                        = "config-default-model";
+    cfg->subagentModel                           = makeModel("sub-model");
+
+    g_da_sim_response_content = "same-context result";
+    g_da_sim_tool_calls       = neograph::json::array();
+    g_da_sim_delay_ms         = 0;
+    g_da_sim_last_request     = neograph::json::object();
+    g_da_sim_requests.clear();
+
+    auto io = std::make_shared<asio::io_context>();
+    agentxx::agent::AgentHost::Config hostCfg;
+    hostCfg.ioCtx = io;
+    auto host     = agentxx::agent::AgentHost::create(hostCfg);
+    std::expected<agentxx::events::RespSubagentResult, std::string> sameCtxResp;
+    std::expected<agentxx::events::RespSubagentResult, std::string> normalResp;
+    std::atomic<bool> finished{false};
+
+    // 透传的结构化消息前缀 (模拟压缩场景: 父 system + 历史消息)
+    const neograph::json prefix = neograph::json::array({
+        {{"role", "system"}, {"content", "PARENT SYSTEM PROMPT"}},
+        {{"role", "user"}, {"content", "user old msg"}},
+        {{"role", "assistant"}, {"content", "assistant old reply"}},
+    });
+
+    asio::co_spawn(
+        *io,
+        [&]() -> asio::awaitable<void> {
+            auto agent = std::make_shared<agentxx::agent::CodeAgent>(cfg);
+            co_await agent->init();
+            host->attachRoot(agent);
+            // 父会话: 显式选择模型 (模拟用户运行时切换, 与 config 默认不同) + 供子代理继承 bus
+            auto parentSession = agent->getContext()->getSession("parent-session");
+            parentSession->setModelName("parent-model");
+            parentSession->bus = std::make_shared<agentxx::middleware::EventBus>(
+                co_await asio::this_coro::executor
+            );
+
+            // [workaround] 聚合提取为具名变量, 绕过 g++ 16.1 ICE (gimplify.cc:8406)
+            agentxx::events::ReqSubagentStart sameCtxReq{
+                .parentAgentName = "root",
+                .parentThreadId  = "parent-session",
+                .subagentName    = "subagent_task",
+                .systemPrompt    = "",
+                .message         = "",
+                // 结构化消息透传 (可含 system, 原样透传)
+                .messages = prefix,
+                // 同上下文: 运行在父线程, 共享上下文前缀
+                .threadId = "parent-session",
+                .resultId = "call_same_ctx",
+                .cancelToken = nullptr,
+            };
+            sameCtxResp = co_await agent->getContext()->bus->request<
+                agentxx::events::ReqSubagentStart,
+                agentxx::events::RespSubagentResult>(
+                agentxx::events::Topic::Subagent,
+                sameCtxReq,
+                std::chrono::seconds(30)
+            );
+
+            // 对照: 默认模式 (无 messages/threadId) → 独立线程 + config 默认模型
+            agentxx::events::ReqSubagentStart normalReq{
+                .parentAgentName = "root",
+                .parentThreadId  = "parent-session",
+                .subagentName    = "subagent_task",
+                .systemPrompt    = "You are a worker.",
+                .message         = "plain task",
+                .messages        = std::nullopt,
+                .threadId        = "",
+                .resultId        = "call_normal",
+                .cancelToken     = nullptr,
+            };
+            normalResp = co_await agent->getContext()->bus->request<
+                agentxx::events::ReqSubagentStart,
+                agentxx::events::RespSubagentResult>(
+                agentxx::events::Topic::Subagent,
+                normalReq,
+                std::chrono::seconds(30)
+            );
+            finished = true;
+        },
+        asio::detached
+    );
+    pumpIoUntil(io, finished);
+
+    // ① 同上下文模式: 派生成功, 输出正常
+    XX_TEST_EXPECT_TRUE(sameCtxResp.has_value());
+    if (sameCtxResp.has_value()) {
+        XX_TEST_EXPECT_FALSE(sameCtxResp->hasError);
+        XX_TEST_EXPECT_EQ(sameCtxResp->content, std::string{"same-context result"});
+    }
+
+    // 两次请求按顺序记录: [0]=同上下文, [1]=默认对照
+    XX_TEST_EXPECT_EQ(g_da_sim_requests.size(), size_t{2});
+    const auto& sameCtxReqBody = g_da_sim_requests[0];
+    const auto& normalReqBody  = g_da_sim_requests[1];
+
+    // ② 模型强制: 同上下文请求使用父会话当前模型 (parent-model), 而非 config 默认
+    XX_TEST_EXPECT_EQ(
+        sameCtxReqBody.value("model", std::string{}),
+        std::string{"parent-model"}
+    );
+
+    // ③ 消息前缀: system 由引擎统一替换为 (子 config 拷贝自父的) systemPrompt,
+    //    与父会话请求前缀一致 (这正是 KV cache 前缀一致的关键);
+    //    其余消息原样透传 (无默认提示插入, 无文本转录);
+    //    透传段以 assistant 结尾时, 引擎按与父会话相同的 repairMessages 规则
+    //    补充 user "[Please continue]" (两边一致, 前缀仍命中)
+    {
+        const auto& reqMsgs = sameCtxReqBody["messages"];
+        XX_TEST_EXPECT_TRUE(reqMsgs.is_array());
+        XX_TEST_EXPECT_EQ(reqMsgs.size(), prefix.size() + 1);
+        // system: 统一为 config systemPrompt (+ 附加 system prompt, 与父会话同款)
+        XX_TEST_EXPECT_EQ(reqMsgs[0].value("role", std::string{}), std::string{"system"});
+        XX_TEST_EXPECT_TRUE(
+            reqMsgs[0].value("content", std::string{}).find("You are a helpful assistant.")
+            != std::string::npos
+        );
+        // 其余消息原样透传
+        for (size_t i = 1; i < prefix.size(); ++i) {
+            XX_TEST_EXPECT_EQ(
+                reqMsgs[i].value("role", std::string{}),
+                prefix[i].value("role", std::string{})
+            );
+            XX_TEST_EXPECT_EQ(
+                reqMsgs[i].value("content", std::string{}),
+                prefix[i].value("content", std::string{})
+            );
+        }
+        // 末尾: repairMessages 补齐的 user 提示 (与父会话同规则)
+        XX_TEST_EXPECT_EQ(
+            reqMsgs.back().value("role", std::string{}),
+            std::string{"user"}
+        );
+        XX_TEST_EXPECT_EQ(
+            reqMsgs.back().value("content", std::string{}),
+            std::string{"[Please continue]"}
+        );
+    }
+
+    // ④ 对照: 默认模式独立运行 — config 默认模型 + systemPrompt/message 文本
+    //    (system 同样被引擎替换为 config systemPrompt)
+    XX_TEST_EXPECT_TRUE(normalResp.has_value());
+    if (normalResp.has_value()) {
+        XX_TEST_EXPECT_FALSE(normalResp->hasError);
+    }
+    XX_TEST_EXPECT_EQ(
+        normalReqBody.value("model", std::string{}),
+        std::string{"config-default-model"}
+    );
+    {
+        const auto& reqMsgs = normalReqBody["messages"];
+        XX_TEST_EXPECT_TRUE(reqMsgs.is_array());
+        XX_TEST_EXPECT_EQ(reqMsgs.size(), size_t{2});
+        XX_TEST_EXPECT_TRUE(
+            reqMsgs[0].value("content", std::string{}).find("You are a helpful assistant.")
+            != std::string::npos
+        );
+        XX_TEST_EXPECT_EQ(reqMsgs[1].value("content", std::string{}), std::string{"plain task"});
+    }
+
+    // ⑤ 回收: 子代理节点已清理 (含同上下文共享父线程场景, 不残留深度记录)
+    XX_TEST_EXPECT_EQ(host->runningSubagents(), 0u);
+    XX_TEST_EXPECT_EQ(host->registry().size(), 1u);
+
+    co_return;
+}
+
+/// 验证: 子代理工具策略 (tools 参数)
+/// - [] = 无工具; ["agentxx_share_store"] = 自定义白名单;
+///   ["*"] = 全量继承父 agent 工具; 缺省 = 子代理默认全量
+asio::awaitable<void> test_host_spawn_tool_policy() {
+    auto sim     = startDaSimServer();
+    auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
+    auto cfg     = makeSimConfig(baseUrl);
+
+    g_da_sim_response_content = "tool policy result";
+    g_da_sim_tool_calls       = neograph::json::array();
+    g_da_sim_delay_ms         = 0;
+    g_da_sim_requests.clear();
+
+    auto io = std::make_shared<asio::io_context>();
+    agentxx::agent::AgentHost::Config hostCfg;
+    hostCfg.ioCtx = io;
+    auto host     = agentxx::agent::AgentHost::create(hostCfg);
+    std::atomic<bool> finished{false};
+
+    asio::co_spawn(
+        *io,
+        [&]() -> asio::awaitable<void> {
+            auto agent = std::make_shared<agentxx::agent::CodeAgent>(cfg);
+            co_await agent->init();
+            host->attachRoot(agent);
+
+            // 顺序派生 4 次 (不同工具策略), 请求体按到达顺序记录
+            auto spawnOne = [&](std::optional<neograph::json> tools, std::string tag)
+                -> asio::awaitable<void> {
+                // [workaround] 聚合提取为具名变量, 绕过 g++ 16.1 ICE
+                agentxx::events::ReqSubagentStart req{
+                    .parentAgentName = "root",
+                    .parentThreadId  = "parent-session",
+                    .subagentName    = "subagent_task",
+                    .systemPrompt    = "You are a worker.",
+                    .message         = "do " + tag,
+                    .messages        = std::nullopt,
+                    .threadId        = "",
+                    .tools           = tools,
+                    .enableSummarization = std::nullopt,
+                    .resultId        = "call_" + tag,
+                    .cancelToken     = nullptr,
+                };
+                auto resp = co_await agent->getContext()->bus->request<
+                    agentxx::events::ReqSubagentStart,
+                    agentxx::events::RespSubagentResult>(
+                    agentxx::events::Topic::Subagent,
+                    req,
+                    std::chrono::seconds(30)
+                );
+                if (resp.has_value() && resp->hasError) {
+                    XX_LOGE("spawn tool-policy `{}` failed: {}", tag, resp->errorMessage);
+                }
+            };
+
+            // ① 无工具
+            co_await spawnOne(neograph::json::array(), "none");
+            // ② 自定义白名单
+            co_await spawnOne(
+                neograph::json::array({"agentxx_share_store"}),
+                "custom"
+            );
+            // ③ 全量继承父工具
+            co_await spawnOne(neograph::json::array({"*"}), "inherit");
+            // ④ 缺省 (子代理默认全量)
+            co_await spawnOne(std::nullopt, "default");
+            finished = true;
+        },
+        asio::detached
+    );
+    pumpIoUntil(io, finished);
+
+    // 4 次请求按顺序记录
+    XX_TEST_EXPECT_EQ(g_da_sim_requests.size(), size_t{4});
+
+    // 父工具名集合 (继承断言基准)
+    std::vector<std::string> parentToolNames;
+    if (auto rootNode = host->registry().get("root")) {
+        if (rootNode->agent && rootNode->agent->getContext()) {
+            parentToolNames = rootNode->agent->getContext()->toolNames;
+        }
+    }
+    XX_TEST_EXPECT_FALSE(parentToolNames.empty());
+
+    auto toolsOf = [](const neograph::json& req) -> std::vector<std::string> {
+        std::vector<std::string> names;
+        if (req.contains("tools") && req["tools"].is_array()) {
+            for (const auto& t : req["tools"]) {
+                if (t.is_object() && t["function"].is_object()
+                    && t["function"]["name"].is_string()) {
+                    names.push_back(t["function"]["name"].get<std::string>());
+                }
+            }
+        }
+        return names;
+    };
+
+    // ① 无工具: tools 为空 (缺失或空数组)
+    {
+        const auto& names = toolsOf(g_da_sim_requests[0]);
+        XX_TEST_EXPECT_TRUE(names.empty());
+    }
+    // ② 自定义: 仅 agentxx_share_store
+    {
+        const auto& names = toolsOf(g_da_sim_requests[1]);
+        XX_TEST_EXPECT_EQ(names.size(), size_t{1});
+        XX_TEST_EXPECT_EQ(names[0], std::string{"agentxx_share_store"});
+    }
+    // ③ 继承: 工具集 == 父工具名集合
+    {
+        const auto& names = toolsOf(g_da_sim_requests[2]);
+        XX_TEST_EXPECT_TRUE(names.size() >= parentToolNames.size());
+        // 父工具全部保留
+        for (const auto& name : parentToolNames) {
+            XX_TEST_EXPECT_TRUE(
+                std::find(names.begin(), names.end(), name) != names.end()
+            );
+        }
+    }
+    // ④ 缺省: 与继承一致 (无 MCP/插件差异时等于父工具集)
+    {
+        const auto& names = toolsOf(g_da_sim_requests[3]);
+        XX_TEST_EXPECT_TRUE(names.size() >= parentToolNames.size());
+        for (const auto& name : parentToolNames) {
+            XX_TEST_EXPECT_TRUE(
+                std::find(names.begin(), names.end(), name) != names.end()
+            );
+        }
+    }
+
+    // 回收
+    XX_TEST_EXPECT_EQ(host->runningSubagents(), 0u);
+    XX_TEST_EXPECT_EQ(host->registry().size(), 1u);
+
+    co_return;
+}
+
+/// 验证: 子代理上下文压缩 (summarization) 开关
+/// - enableSummarization=false → init 后无 summarization 中间件
+/// - 缺省/true → 存在 (summarization 发起的压缩子代理必须显式 false)
+asio::awaitable<void> test_subagent_summarization_switch() {
+    auto sim     = startDaSimServer();
+    auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
+
+    g_da_sim_response_content = "ok";
+    g_da_sim_tool_calls       = neograph::json::array();
+
+    // ① enableSummarization = false → 无 summarization 中间件
+    {
+        auto cfg                 = makeSimConfig(baseUrl);
+        cfg->enableSummarization = false;
+        auto agent = std::make_shared<agentxx::agent::CodeAgent>(cfg);
+        co_await agent->init();
+        XX_TEST_EXPECT_TRUE(agent->getContext()->summarizationMiddleware == nullptr);
+    }
+    // ② 缺省 (true) → 存在
+    {
+        auto cfg    = makeSimConfig(baseUrl);
+        auto agent  = std::make_shared<agentxx::agent::CodeAgent>(cfg);
+        co_await agent->init();
+        XX_TEST_EXPECT_TRUE(agent->getContext()->summarizationMiddleware != nullptr);
+    }
+    // ③ 显式 true → 存在
+    {
+        auto cfg                 = makeSimConfig(baseUrl);
+        cfg->enableSummarization = true;
+        auto agent = std::make_shared<agentxx::agent::CodeAgent>(cfg);
+        co_await agent->init();
+        XX_TEST_EXPECT_TRUE(agent->getContext()->summarizationMiddleware != nullptr);
+    }
+
+    co_return;
+}
+
 /// 验证: 嵌套深度预算 (maxDepth=0 拒绝一切派生)
 asio::awaitable<void> test_host_spawn_depth_limit() {
     auto sim     = startDaSimServer();
@@ -332,29 +695,33 @@ asio::awaitable<void> test_host_spawn_batch() {
             co_await agent->init();
             host->attachRoot(agent);
 
+            // [workaround] 提取聚合为具名变量, 绕过 g++ 16.1 对
+            // request<Req,Resp>(topic, 复杂聚合字面量, timeout) 的 ICE
+            // (gimplify.cc:8406 internal compiler error)
+            agentxx::events::ReqSubagentBatch batchReq{
+                .parentAgentName = "root",
+                .parentThreadId  = "",
+                .cancelToken     = nullptr,
+                .tasks           = {
+                    agentxx::events::SubagentBatchItem{
+                        .subagentName = "subagent_task",
+                        .systemPrompt = "",
+                        .message      = "task 1",
+                        .resultId     = "r1",
+                    },
+                    agentxx::events::SubagentBatchItem{
+                        .subagentName = "subagent_task",
+                        .systemPrompt = "",
+                        .message      = "task 2",
+                        .resultId     = "r2",
+                    },
+                },
+            };
             resp = co_await agent->getContext()->bus->request<
                 agentxx::events::ReqSubagentBatch,
                 agentxx::events::RespSubagentBatch>(
                 agentxx::events::Topic::SubagentBatch,
-                agentxx::events::ReqSubagentBatch{
-                    .parentAgentName = "root",
-                    .parentThreadId  = "",
-                    .cancelToken     = nullptr,
-                    .tasks           = {
-                        agentxx::events::SubagentBatchItem{
-                            .subagentName = "subagent_task",
-                            .systemPrompt = "",
-                            .message      = "task 1",
-                            .resultId     = "r1",
-                        },
-                        agentxx::events::SubagentBatchItem{
-                            .subagentName = "subagent_task",
-                            .systemPrompt = "",
-                            .message      = "task 2",
-                            .resultId     = "r2",
-                        },
-                    },
-                },
+                batchReq,
                 std::chrono::seconds(30)
             );
             finished = true;
@@ -546,6 +913,9 @@ asio::awaitable<TestResult> run_agent_host_tests() {
     try {
         co_await test_host_registry();
         co_await test_host_spawn_e2e();
+        co_await test_host_spawn_same_context();
+        co_await test_host_spawn_tool_policy();
+        co_await test_subagent_summarization_switch();
         co_await test_host_spawn_depth_limit();
         co_await test_host_spawn_concurrent_limit();
         co_await test_host_spawn_batch();
