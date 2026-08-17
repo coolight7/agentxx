@@ -4,39 +4,39 @@ TUITheme TUITheme::darkTheme() {
     return TUITheme{
         .name                  = "Dark",
         .userColor             = ftxui::Color::RGB(102, 204, 255),
-        .assistantColor        = ftxui::Color::RGB(255, 255, 255), // #fff
-        .thinkingColor         = ftxui::Color::RGB(255, 175, 95),  // #ffaf5f
-        .toolColor             = ftxui::Color::RGB(117, 125, 138), // #757d8a
-        .systemColor           = ftxui::Color::RGB(117, 125, 138),
+        .assistantColor        = ftxui::Color::RGB(220, 220, 220), 
+        .thinkingColor         = ftxui::Color::RGB(245, 245, 52),  
+        .toolColor             = ftxui::Color::RGB(140, 140, 140), 
+        .systemColor           = ftxui::Color::RGB(140, 140, 140),
         .errorColor            = ftxui::Color::RGB(255, 85, 85),   // #ff5555
         .accentColor           = ftxui::Color::RGB(102, 204, 255), // #66ccff
-        .normalColor           = ftxui::Color::RGB(255, 255, 255),
-        .hintColor             = ftxui::Color::RGB(117, 125, 138),
+        .normalColor           = ftxui::Color::RGB(220, 220, 220),
+        .hintColor             = ftxui::Color::RGB(140, 140, 140),
         .backgroundColor       = ftxui::Color::RGB(0, 0, 0),       // #000
         .blockColor            = ftxui::Color::RGB(18, 18, 18),    // #121212
         .inputBgColor          = ftxui::Color::RGB(24, 26, 30),    //
-        .inputTextColor        = ftxui::Color::RGB(255, 255, 255), // #fff
+        .inputTextColor        = ftxui::Color::RGB(220, 220, 220), // #fff
         .buttonBgColor         = ftxui::Color::RGBA(102, 204, 255, 128),    // #66ccff
         .buttonTextColor       = ftxui::Color::RGB(0, 0, 0),       // #fff
         .buttonActiveBgColor   = ftxui::Color::RGB(102, 204, 255), // #66ccff
         .buttonActiveTextColor = ftxui::Color::RGB(0, 0, 0),       // #000
         .markdownTheme         = markdown::Theme{
             .name        = "Dark",
-            .syntax      = ftxui::color(ftxui::Color::RGB(255, 175, 95)),
-            .gutter      = ftxui::color(ftxui::Color::RGB(117, 125, 138)),
+            .syntax      = ftxui::color(ftxui::Color::RGB(245, 245, 52)),
+            .gutter      = ftxui::color(ftxui::Color::RGB(140, 140, 140)),
             .heading1    = ftxui::Decorator(ftxui::bold) | ftxui::underlined
                         | ftxui::color(ftxui::Color::RGB(102, 204, 255)),
             .heading2    = ftxui::color(ftxui::Color::RGB(102, 204, 255)) | ftxui::bold,
             .heading3    = ftxui::Decorator(ftxui::bold),
             .link        = ftxui::color(ftxui::Color::RGB(102, 204, 255)),
-            .code_inline = ftxui::color(ftxui::Color::RGB(255, 175, 95)),
+            .code_inline = ftxui::color(ftxui::Color::RGB(245, 245, 52)),
             .code_block  = ftxui::bgcolor(ftxui::Color::RGB(18, 18, 18)) // blockColor #121212
                         | ftxui::color(ftxui::Color::RGB(180, 180, 180)),
-            .blockquote  = ftxui::color(ftxui::Color::RGB(117, 125, 138)),
-            .table_header = ftxui::color(ftxui::Color::RGB(255, 255, 255)) | ftxui::bold,
-            .table_border = ftxui::color(ftxui::Color::RGB(255, 255, 255)),
-            .diagram_pending  = ftxui::Color::RGB(117, 125, 138), // hintColor
-            .diagram_running  = ftxui::Color::RGB(255, 175, 95),  // thinkingColor
+            .blockquote  = ftxui::color(ftxui::Color::RGB(140, 140, 140)),
+            .table_header = ftxui::color(ftxui::Color::RGB(220, 220, 220)) | ftxui::bold,
+            .table_border = ftxui::color(ftxui::Color::RGB(220, 220, 220)),
+            .diagram_pending  = ftxui::Color::RGB(140, 140, 140), // hintColor
+            .diagram_running  = ftxui::Color::RGB(245, 245, 52),  // thinkingColor
             .diagram_done     = ftxui::Color::RGB(102, 204, 255), // accentColor
             .diagram_failed   = ftxui::Color::RGB(255, 85, 85),   // errorColor
         },

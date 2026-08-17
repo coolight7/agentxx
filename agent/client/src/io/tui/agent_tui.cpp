@@ -315,7 +315,8 @@ std::vector<ScrollItem> TUIClientAgentIO::renderPluginPanel(const std::string& p
         return out;
     }
     const auto& theme = theme_;
-    // 面板内容: items JSON 数组 (kind: text/kv/progress/action/badge)
+    // 面板内容: items JSON 数组 (kind: text/progress/action/badge/separator;
+    // text 支持 role: title=高亮 / normal=普通(默认) / hint=减淡)
     if (panel->items.is_array()) {
         for (const auto& it : panel->items) {
             if (!it.is_object()) {
@@ -323,18 +324,15 @@ std::vector<ScrollItem> TUIClientAgentIO::renderPluginPanel(const std::string& p
             }
             const auto kind = it.value("kind", std::string{"text"});
             if (kind == "text") {
-                out.push_back(ScrollItem{
-                    text(it.value("text", std::string{})) | color(theme.toolColor)
-                });
-            } else if (kind == "kv") {
-                out.push_back(ScrollItem{
-                    hbox({
-                        text(it.value("key", std::string{}) + ": ")
-                            | color(theme.hintColor),
-                        text(it.value("value", std::string{})) | color(theme.toolColor)
-                            | xflex_shrink,
-                    })
-                });
+                const auto role = it.value("role", std::string{"normal"});
+                const auto txt  = text(it.value("text", std::string{}));
+                if (role == "title") {
+                    out.push_back(ScrollItem{txt | color(theme.accentColor) | bold});
+                } else if (role == "hint") {
+                    out.push_back(ScrollItem{txt | color(theme.hintColor)});
+                } else {
+                    out.push_back(ScrollItem{txt | color(theme.normalColor)});
+                }
             } else if (kind == "progress") {
                 const double v = it.value("value", 0.0);
                 const int    w = 10;

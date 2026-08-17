@@ -997,29 +997,25 @@ static std::string clientJsonEscape(const std::string& s) {
     return out;
 }
 
-/// 组装 Info 栏段落 items JSON (kind: text/kv/progress; schema 见
+/// 组装 Info 栏段落 items JSON (kind: text/progress; text 支持 role:
+/// title=高亮 / normal=普通(默认) / hint=减淡; schema 见
 /// client_plugin_api.h register_info_section; 段落标题 "CodeGraph" 已在注册
-/// 时指定, 不再重复输出 badge)
+/// 时指定, 不再重复输出 badge; 列表项由宿主按 Append 段样式 "|  xxx" 展示,
+/// 插件不拼接前缀)
 /// - 各条目用 fmt::format 构造, 最后 fmt::join 组装 (避免手工字符串拼接)
 static std::string buildInfoItemsJson() {
     std::vector<std::string> items;
-    auto kv = [&](const std::string& key, const std::string& value) {
+    auto textItem = [&](const std::string& text, const std::string& role = "normal") {
         items.push_back(fmt::format(
-            R"({{"kind":"kv","key":{},"value":{}}})",
-            clientJsonEscape(key),
-            clientJsonEscape(value)
-        ));
-    };
-    auto textItem = [&](const std::string& text) {
-        items.push_back(fmt::format(
-            R"({{"kind":"text","text":{}}})",
+            R"({{"kind":"text","role":{},"text":{}}})",
+            clientJsonEscape(role),
             clientJsonEscape(text)
         ));
     };
 
     if (!g_loaded) {
         // 插件未加载 (agent 侧未装配/已卸载)
-        textItem("CodeGraph: not loaded");
+        textItem("CodeGraph: not loaded", "hint");
         return fmt::format(R"({{"items":[{}]}})", fmt::join(items, ","));
     }
 
@@ -1032,11 +1028,11 @@ static std::string buildInfoItemsJson() {
         if (g_total > 0) {
             // 索引进行中: 45% (12/60)
             const double pct = static_cast<double>(g_processed) / static_cast<double>(g_total);
-            kv("Index", fmt::format("{:.0f}% ({}/{})", pct * 100.0, g_processed, g_total));
+            textItem(fmt::format("Index: {:.0f}% ({}/{})", pct * 100.0, g_processed, g_total));
             items.push_back(fmt::format(R"({{"kind":"progress","value":{:.3f}}})", pct));
         } else {
             // 流式遍历/收集阶段 (文件总数未知): 显示已发现文件数
-            kv("Indexing", fmt::format("{} files", g_processed));
+            textItem(fmt::format("Indexing: {} files", g_processed));
         }
         if (!g_current_file.empty()) {
             // 仅显示文件名 (目录路径过长; 无 lib 工具, 简单按分隔符取尾段)
@@ -1048,14 +1044,14 @@ static std::string buildInfoItemsJson() {
             if (fname.size() > 40) {
                 fname = fmt::format("{}...", fname.substr(0, 40));
             }
-            textItem(fname);
+            textItem(fname, "hint");
         }
     } else if (g_has_progress && g_total > 0) {
         // 索引完成
-        kv("Index", fmt::format("available ({}/{})", g_processed, g_total));
+        textItem(fmt::format("Index: available ({}/{})", g_processed, g_total));
     } else {
         // 已加载但尚未开始索引
-        kv("Index", "ready");
+        textItem("Index: ready", "hint");
     }
     return fmt::format(R"({{"items":[{}]}})", fmt::join(items, ","));
 }

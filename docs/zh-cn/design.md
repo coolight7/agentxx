@@ -249,8 +249,8 @@ TUI [F4] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
   - 屏幕上方 toast 提示
   - 自动滚动吸附底部 (Scrollable 组件)
   - 系统资源占用 (CPU/内存) 与 CodeGraph 索引状态: 渲染已迁移到对应插件的
-    client 侧 (agentxx_system_monitor 状态栏项 + 侧边栏 Info 栏段落 + 命令
-    /sysinfo / agentxx_codegraph Info 栏段落); 采集/定时亦在插件内
+    client 侧 (agentxx_system_monitor 侧边栏 Info 栏段落 + 命令 /sysinfo /
+    agentxx_codegraph Info 栏段落); 采集/定时亦在插件内
     (agentxx_system_monitor 在 agent 侧周期采集并 publish usage 事件, 经
     WirePluginData 通道回传 client 插件渲染), TUI 不发起资源请求、不解析/
     不渲染插件载荷

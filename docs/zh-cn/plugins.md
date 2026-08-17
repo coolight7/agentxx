@@ -465,7 +465,7 @@ agent 侧插件 (工具/钩子/事件/能力) 已完备, 但 client (CLI/TUI) �
 | 决策 | 结论 | 理由 |
 |------|------|------|
 | 插件能否直接操作 UI 组件树 | **不能**。扩展点是 UI 无关的"语义层" | 暴露 FTXUI 组件会把插件绑死在 TUI 框架上, GUI 无法复用, CLI 无从谈起 |
-| ABI 组织 | **独立头 `client_plugin_api.h` + 独立入口符号 `agentxx_client_entry` + 独立版本号 (v1)** | client 侧扩展点迭代频繁; 独立符号集使 agent 侧 `plugin_api.h` 零改动, 旧插件不受影响 |
+| ABI 组织 | **独立头 `client_plugin_api.h` + 独立入口符号 `agentxx_client_entry` + 独立版本号 (v3)** | client 侧扩展点迭代频繁; 独立符号集使 agent 侧 `plugin_api.h` 零改动, 旧插件不受影响 |
 | 双端插件 | **同一动态库可导出两套入口**, 两个 PluginManager 各自 dlopen/装配 | codegraph 这类插件天然需要 "agent 侧提供工具 + client 侧展示进度" 的成对能力; dlopen 引用计数支持同库双实例 |
 | 跨端通信 | **统一走 wire 协议**: 已有 `WirePluginData` (agent→client), 新增 `WirePluginDataUp` (client→agent) | 本地 Channel 模式与远程 WS 模式路径完全一致, 插件不感知部署形态 |
 | 代码归属 | **UI 无关宿主层放 `agent/lib` (plugin/ 目录), TUI/CLI 适配器放 `agent/client`** | 未来 GUI 只需实现一个 `PluginUiAdapter` 即可复用宿主层 |
@@ -474,7 +474,7 @@ agent 侧插件 (工具/钩子/事件/能力) 已完备, 但 client (CLI/TUI) �
 
 插件对 UI 的全部控制力收敛为三件事:
 
-1. **声明展示物**: 状态栏项 (id/text/align/order) / 侧边栏面板 (title + items: text/kv/progress/badge/action) / 侧边栏 Info 栏段落 (title + items, 同面板 items schema) —— 内容是宿主定义 schema 的 JSON, 不是组件;
+1. **声明展示物**: 状态栏项 (id/text/align/order) / 侧边栏面板 (title + items: text(role: title/normal/hint)/progress/badge/action) / 侧边栏 Info 栏段落 (title + items, 同面板 items schema; 列表项按 Append 段样式 "|  xxx" 展示) —— 内容是宿主定义 schema 的 JSON, 不是组件;
 2. **声明拦截点**: 斜杠命令 (如 `/usage`) —— 回调拿到参数, 返回动作 JSON;
 3. **调用交互原语**: toast / 代发消息 / 请求取消 —— 命令式调用。
 
@@ -531,7 +531,7 @@ client 插件 send_plugin_data("rebuild_request", {...})
 ### 7.5 client 入口 ABI 摘要
 
 ```c
-#define AGENTXX_CLIENT_PLUGIN_API_VERSION 2
+#define AGENTXX_CLIENT_PLUGIN_API_VERSION 3
 
 typedef struct AgentxxClientPluginInfo {
     int api_version;                /* == AGENTXX_CLIENT_PLUGIN_API_VERSION */

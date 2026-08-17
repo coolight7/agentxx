@@ -9,9 +9,8 @@
 //   采集并 publish "agentxx_system_monitor.usage" (server 原样转发
 //   WirePluginData) —— 定时/采集/发布完全位于插件内, TUI 不再参与
 // - client 侧入口 (agentxx_client_entry): 订阅宿主转发的 usage 插件事件,
-//   以状态栏项渲染 CPU/内存占用 (快速一览), 并以侧边栏 Info 栏段落渲染
-//   明细 (CPU/RAM/GPU); 显示开关命令 /sysinfo 经跨端事件
-//   (usage_enabled) 上行同步到 agent 侧, 关闭期间跳过采集
+//   以侧边栏 Info 栏段落渲染明细 (CPU/RAM/GPU); 显示开关命令 /sysinfo
+//   经跨端事件 (usage_enabled) 上行同步到 agent 侧, 关闭期间跳过采集
 // - 插件不链接 libagentxx: 日志经 vtable log, JSON 组装用 fmt + json_escape
 #include "system_monitor_plugin.h"
 #include "cpu_gpu_monitor.h"
@@ -57,7 +56,7 @@ static agentxx::expand::CpuGpuUsage querySync() {
 // JSON 组装 (能力返回的使用率 JSON schema, 由本插件定义:
 // {"cpu","mem_total_mb","mem_used_mb","mem_percent","gpus":[...]})
 // - 经 publish "agentxx_system_monitor.usage" 事件原样透传 (lib wire 层不含
-//   系统资源 DTO); client 侧入口按本 schema 渲染状态栏项
+//   系统资源 DTO); client 侧入口按本 schema 渲染 Info 段落
 // =====================================================================
 
 /// 转义字符串为 JSON 字面量 (经宿主 vtable json_escape)
@@ -330,7 +329,7 @@ extern "C" const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
 // 周期采集 (agent 侧; 定时/采集/发布完全位于插件内)
 // - 每 kUsageIntervalSec 秒执行一次 querySync() (阻塞 ~100ms 采样) 并
 //   publish "agentxx_system_monitor.usage"; server 的 subscribePluginEvents
-//   原样转发为 WirePluginData, client 侧插件订阅后渲染状态栏项
+//   原样转发为 WirePluginData, client 侧插件订阅后渲染 Info 段落
 // - publish 线程安全: 宿主内部 co_spawn 到总线 executor 异步投递
 //   (不等待 io 线程, 采集线程可安全调用; 与 codegraph 工作线程 publish 同模式)
 // - 显示开关由 client 侧 /sysinfo 命令经跨端事件 (usage_enabled) 同步,
@@ -474,17 +473,15 @@ extern "C" void agentxx_plugin_unload(void* plugin_ctx) {
  * - server 原样转发为 WirePluginData, 宿主 (TUI) 经事件接收器分发到
  *   client 插件系统 (AGENTXX_CLIENT_EVT_PLUGIN_DATA, 见 TUI onPeerMessage)
  * - 本入口订阅该事件, 过滤 usage 事件后解析 JSON (schema 由本插件定义),
- *   以状态栏项渲染 "CPU x% RAM y%" (快速一览), 同时以侧边栏 Info 栏段落
- *   渲染明细 (CPU/RAM/GPU 汇总)
- * - 显示开关: 命令 /sysinfo 切换 (插件内部状态; 状态栏项渲染与命令
+ *   以侧边栏 Info 栏段落渲染明细 (CPU/RAM/GPU 汇总)
+ * - 显示开关: 命令 /sysinfo 切换 (插件内部状态; Info 段落渲染与命令
  *   执行均在 client io 线程, 无跨线程竞争); 开关状态经跨端事件
  *   (usage_enabled) 上行同步, agent 侧据此跳过采集
- * - CLI 宿主 (无 STATUS_ITEM/INFO_SECTION 能力) 下 register_* 返回 NULL,
+ * - CLI 宿主 (无 INFO_SECTION 能力) 下 register_info_section 返回 NULL,
  *   插件降级 (仅保持数据接收, 不渲染)
  * ===================================================================== */
 
 static const AgentxxClientHost* g_client_host = nullptr;
-static AgentxxStatusItem*       g_usage_item  = nullptr;
 static AgentxxInfoSection*      g_section     = nullptr;
 /// 系统资源显示开关 (命令 /sysinfo 切换; 默认开启, 与旧 TUI 设置一致)
 static std::atomic<bool> g_usage_enabled{true};
@@ -588,58 +585,41 @@ static UsageStat parseUsage(const std::string& raw) {
     return st;
 }
 
-/// 组装 Info 栏段落 items JSON (明细: CPU/RAM/GPU)
+/// 组装 Info 栏段落 items JSON (明细: CPU/RAM/GPU; kind: text, role 指定
+/// 样式: title=高亮 / normal=普通(默认) / hint=减淡; 列表项由宿主按
+/// Append 段样式 "|  xxx" 展示, 插件不拼接前缀)
 /// - 各条目用 fmt::format 构造, 最后 fmt::join 组装 (避免手工字符串拼接)
 static std::string buildUsageInfoItemsJson(const UsageStat& st) {
     std::vector<std::string> items;
-    auto kv = [&](const std::string& key, const std::string& value) {
+    auto textItem = [&](const std::string& text, const std::string& role = "normal") {
         items.push_back(fmt::format(
-            R"({{"kind":"kv","key":{},"value":{}}})",
-            clientJsonEscape(key),
-            clientJsonEscape(value)
+            R"({{"kind":"text","role":{},"text":{}}})",
+            clientJsonEscape(role),
+            clientJsonEscape(text)
         ));
     };
 
-    kv("CPU", fmt::format("{:.0f}%", st.cpu));
+    textItem(fmt::format("CPU: {:.0f}%", st.cpu));
     // RAM: 45% (8192/18432 MB)
-    std::string ram = fmt::format("{:.0f}%", st.memPct);
+    std::string ram = fmt::format("RAM: {:.0f}%", st.memPct);
     if (st.memTotalMb > 0) {
         ram = fmt::format("{} ({} / {} MB)", ram, st.memUsedMb, st.memTotalMb);
     }
-    kv("RAM", ram);
+    textItem(ram);
     if (st.gpuCount == 0) {
-        kv("GPU", "none");
+        textItem("GPU: none", "hint");
     } else if (st.gpuCount == 1) {
-        kv("GPU", fmt::format("{:.0f}%", st.gpuPeakPct));
+        textItem(fmt::format("GPU: {:.0f}%", st.gpuPeakPct));
     } else {
-        kv("GPUs", fmt::format("{}x peak {:.0f}%", st.gpuCount, st.gpuPeakPct));
+        textItem(fmt::format("GPUs: {}x peak {:.0f}%", st.gpuCount, st.gpuPeakPct));
     }
     return fmt::format(R"({{"items":[{}]}})", fmt::join(items, ","));
 }
 
-/// 用最新数据刷新状态栏项 + Info 段落 (client io 线程调用; 开关关闭时
-/// Info 段落显示占位提示, 状态栏项保留上次文本)
+/// 用最新数据刷新 Info 段落 (client io 线程调用; 开关关闭时显示占位提示)
 static void refreshUsageDisplay() {
     if (!g_client_host) {
         return;
-    }
-    // 状态栏项: 开关开启且有数据时更新
-    if (g_usage_item && !g_last_usage_json.empty()
-        && g_usage_enabled.load(std::memory_order_relaxed)) {
-        SimpleJson j(g_last_usage_json);
-        if (j.ok()) {
-            const double cpu    = jsonGetDouble(j, "/cpu");
-            const double memPct = jsonGetDouble(j, "/mem_percent");
-            const std::string json = fmt::format(
-                R"({{"text":{}}})",
-                clientJsonEscape(fmt::format("CPU {:.0f}% RAM {:.0f}%", cpu, memPct))
-            );
-            g_client_host->vtable->update_status_item(
-                g_client_host,
-                g_usage_item,
-                agentxx_plugin_sv(json.data(), json.size())
-            );
-        }
     }
     // Info 段落: 明细 (开关关闭时显示占位)
     if (g_section && !g_last_usage_json.empty()) {
@@ -647,7 +627,7 @@ static void refreshUsageDisplay() {
         if (g_usage_enabled.load(std::memory_order_relaxed)) {
             json = buildUsageInfoItemsJson(parseUsage(g_last_usage_json));
         } else {
-            json = R"({"items":[{"kind":"text","text":"System info: OFF"}]})";
+            json = R"({"items":[{"kind":"text","role":"hint","text":"System info: OFF"}]})";
         }
         g_client_host->vtable->update_info_section(
             g_client_host,
@@ -660,7 +640,7 @@ static void refreshUsageDisplay() {
 /// PLUGIN_DATA 事件: 过滤宿主转发的系统资源占用事件 (agentxx_system_monitor.usage)
 static void on_client_plugin_data(AgentxxPluginStringView payload_json, void* ud) {
     (void)ud;
-    if (!g_client_host || (!g_usage_item && !g_section)) {
+    if (!g_client_host || !g_section) {
         return;
     }
     // payload: {"plugin","event","data"}
@@ -683,7 +663,7 @@ static void on_client_plugin_data(AgentxxPluginStringView payload_json, void* ud
                       && std::strcmp(event, "usage") == 0 && data;
     if (mine) {
         // 缓存原始数据; refreshUsageDisplay 内部按开关状态决定渲染
-        // (开启: 状态栏 + Info 明细; 关闭: Info 段落显示占位)
+        // (开启: Info 明细; 关闭: Info 段落显示占位)
         g_last_usage_json = data;
         refreshUsageDisplay();
     }
@@ -735,8 +715,8 @@ extern "C" const AgentxxClientPluginInfo* agentxx_client_get_info(void) {
         AGENTXX_CLIENT_PLUGIN_API_VERSION,
         AGENTXX_SV("agentxx_system_monitor"),
         AGENTXX_SV("1.0.0"),
-        AGENTXX_SV("System resource usage: status item (CPU/RAM) + Info section (CPU/RAM/GPU), /sysinfo toggle"),
-        0, // min_ui_caps: 无最低要求 (CLI 无状态栏时注册失败降级)
+        AGENTXX_SV("System resource usage: Info section (CPU/RAM/GPU), /sysinfo toggle"),
+        0, // min_ui_caps: 无最低要求 (CLI 无 Info 栏时注册失败降级)
     };
     return &info;
 }
@@ -745,17 +725,7 @@ extern "C" int agentxx_client_entry(const AgentxxClientHost* host, void** plugin
     g_client_host = host;
     (void)plugin_ctx;
 
-    // 1. 状态栏项 (左侧 align=0, order=20; 显示在模型信息之后)
-    g_usage_item = host->vtable->register_status_item(
-        host,
-        AGENTXX_SV("agentxx_system_monitor.usage"),
-        AGENTXX_SV(R"({"text":"CPU - RAM -"})"),
-        0,
-        20
-    );
-    // 宿主不支持状态栏 (如 CLI) 时返回 NULL, 插件降级 (不视为失败)
-
-    // 2. 侧边栏 Info 栏段落 (资源占用明细: CPU/RAM/GPU; 内容由
+    // 1. 侧边栏 Info 栏段落 (资源占用明细: CPU/RAM/GPU; 内容由
     //    refreshUsageDisplay 更新)
     g_section = host->vtable->register_info_section(
         host,
@@ -764,7 +734,7 @@ extern "C" int agentxx_client_entry(const AgentxxClientHost* host, void** plugin
     );
     // 宿主不支持 Info 段落时返回 NULL, 插件降级 (不视为失败)
 
-    // 3. 事件订阅: 宿主转发的系统资源事件 (WirePluginData agentxx_system_monitor.usage)
+    // 2. 事件订阅: 宿主转发的系统资源事件 (WirePluginData agentxx_system_monitor.usage)
     if (!host->vtable->subscribe(
             host,
             AGENTXX_CLIENT_EVT_PLUGIN_DATA,
@@ -774,11 +744,11 @@ extern "C" int agentxx_client_entry(const AgentxxClientHost* host, void** plugin
         return -1;
     }
 
-    // 4. 命令 /sysinfo: 切换显示
+    // 3. 命令 /sysinfo: 切换显示
     if (host->vtable->register_command(
             host,
             AGENTXX_SV("sysinfo"),
-            AGENTXX_SV("Toggle system resource info display (CPU/RAM status item and Info)"),
+            AGENTXX_SV("Toggle system resource info display (CPU/RAM/GPU Info section)"),
             sysinfo_cmd_execute,
             nullptr
         ) != 0) {
@@ -793,10 +763,6 @@ extern "C" void agentxx_client_unload(void* plugin_ctx) {
     (void)plugin_ctx;
     if (!g_client_host) {
         return;
-    }
-    if (g_usage_item) {
-        g_client_host->vtable->unregister_status_item(g_client_host, g_usage_item);
-        g_usage_item = nullptr;
     }
     if (g_section) {
         g_client_host->vtable->unregister_info_section(g_client_host, g_section);

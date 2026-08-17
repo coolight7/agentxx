@@ -453,10 +453,10 @@ static void on_client_turn_end(AgentxxPluginStringView payload_json, void* ud) {
         );
     }
     if (g_info_section) {
-        // Info 栏段落: {"items":[{"kind":"kv","key":"Turns","value":"N"},
-        // {"kind":"text","text":"Example Info section is live"}]}
+        // Info 栏段落: {"items":[{"kind":"text","text":"Turns: N"},
+        // {"kind":"text","role":"hint","text":"Example Info section is live"}]}
         const std::string json = fmt::format(
-            R"({{"items":[{{"kind":"kv","key":"Turns","value":{}}},{{"kind":"text","text":"Example Info section is live"}}]}})",
+            R"({{"items":[{{"kind":"text","text":"Turns: {}"}},{{"kind":"text","role":"hint","text":"Example Info section is live"}}]}})",
             clientJsonEscape(std::to_string(g_turn_count))
         );
         g_client_host->vtable->update_info_section(
