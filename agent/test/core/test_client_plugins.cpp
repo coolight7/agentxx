@@ -3,11 +3,11 @@
  *
  * 覆盖:
  * 1. 加载 example_plugin 的 client 入口 (agentxx_client_entry)
- * 2. UI 注册表: 状态栏项 / 面板 / 命令 (含快照读取)
+ * 2. UI 注册表: 状态栏项 / 面板 / Info 栏段落 / 命令 (含快照读取)
  * 3. 事件分发: READY / TURN_END / PLUGIN_DATA / USER_INPUT → 插件回调
  * 4. 命令执行: /example (send 动作) / example_toast (toast 动作)
  * 5. 跨端数据: send_plugin_data → adapter sendPluginData (WirePluginDataUp 路径)
- * 6. disable/enable 恢复与 unload 清理
+ * 6. disable/enable 恢复与 unload 清理 (含 Info 栏段落注册/摘除信号)
  */
 #include "test_client_plugins.h"
 
@@ -47,7 +47,8 @@ class MockPluginUiAdapter : public agentxx::plugin::PluginUiAdapter {
 public:
 
     uint32_t uiCaps() const override {
-        return AGENTXX_UI_CAP_STATUS_ITEM | AGENTXX_UI_CAP_PANEL | AGENTXX_UI_CAP_TOAST;
+        return AGENTXX_UI_CAP_STATUS_ITEM | AGENTXX_UI_CAP_PANEL | AGENTXX_UI_CAP_TOAST
+               | AGENTXX_UI_CAP_INFO_SECTION;
     }
 
     void onStatusItemRegistered(
@@ -89,6 +90,27 @@ public:
         std::lock_guard<std::mutex> lock(m_);
         ++panelRemoved_;
         lastPanelId_ = id;
+    }
+
+    void onInfoSectionRegistered(
+        const std::string& id,
+        const neograph::json& /*props*/
+    ) override {
+        std::lock_guard<std::mutex> lock(m_);
+        ++infoSectionRegistered_;
+        lastInfoSectionId_ = id;
+    }
+
+    void onInfoSectionUpdated(const std::string& id, const neograph::json& /*items*/) override {
+        std::lock_guard<std::mutex> lock(m_);
+        ++infoSectionUpdated_;
+        lastInfoSectionId_ = id;
+    }
+
+    void onInfoSectionRemoved(const std::string& id) override {
+        std::lock_guard<std::mutex> lock(m_);
+        ++infoSectionRemoved_;
+        lastInfoSectionId_ = id;
     }
 
     void onToast(const std::string& text, int level) override {
@@ -134,6 +156,18 @@ public:
         std::lock_guard<std::mutex> lock(m_);
         return panelUpdated_;
     }
+    int infoSectionRegistered() const {
+        std::lock_guard<std::mutex> lock(m_);
+        return infoSectionRegistered_;
+    }
+    int infoSectionUpdated() const {
+        std::lock_guard<std::mutex> lock(m_);
+        return infoSectionUpdated_;
+    }
+    int infoSectionRemoved() const {
+        std::lock_guard<std::mutex> lock(m_);
+        return infoSectionRemoved_;
+    }
     int toastCount() const {
         std::lock_guard<std::mutex> lock(m_);
         return toastCount_;
@@ -176,12 +210,16 @@ private:
     int                panelRegistered_  = 0;
     int                panelUpdated_     = 0;
     int                panelRemoved_     = 0;
+    int                infoSectionRegistered_ = 0;
+    int                infoSectionUpdated_    = 0;
+    int                infoSectionRemoved_    = 0;
     int                toastCount_       = 0;
     int                sendCount_        = 0;
     int                dataUpCount_      = 0;
     int                lastToastLvl_     = 0;
     std::string        lastStatusId_;
     std::string        lastPanelId_;
+    std::string        lastInfoSectionId_;
     std::string        lastToast_;
     std::string        lastSent_;
     std::string        lastDataPlugin_;
@@ -230,6 +268,14 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 }
             }
             XX_TEST_EXPECT_TRUE(hasPanel);
+            bool hasInfo = false;
+            for (const auto& s : reg->infoSections) {
+                if (s.id == "example_plugin.info") {
+                    hasInfo = true;
+                    XX_TEST_EXPECT_EQ(s.title, "Example Info");
+                }
+            }
+            XX_TEST_EXPECT_TRUE(hasInfo);
             bool hasCmd1 = false, hasCmd2 = false;
             for (const auto& c : reg->commands) {
                 if (c.name == "example") {
@@ -251,6 +297,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
     // 适配器应已收到注册信号
     XX_TEST_EXPECT_EQ(adapter->statusRegistered(), 1);
     XX_TEST_EXPECT_EQ(adapter->panelRegistered(), 1);
+    XX_TEST_EXPECT_EQ(adapter->infoSectionRegistered(), 1);
 
     // ---- 3. 事件分发 ----
     // READY: 插件回调更新状态栏 + 跨端 send_plugin_data("hello")
@@ -277,8 +324,21 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 }
             }
             XX_TEST_EXPECT_TRUE(found);
+            // Info 段落: TURN_END 时插件更新内容 (kv Turns=1 + text)
+            bool infoFound = false;
+            for (const auto& s : reg->infoSections) {
+                if (s.id == "example_plugin.info" && s.items.is_array()
+                    && !s.items.empty()) {
+                    infoFound = true;
+                    const auto first = s.items[0];
+                    XX_TEST_EXPECT_EQ(first.value("kind", std::string{}), "kv");
+                    XX_TEST_EXPECT_EQ(first.value("value", std::string{}), "1");
+                }
+            }
+            XX_TEST_EXPECT_TRUE(infoFound);
         }
     }
+    XX_TEST_EXPECT_TRUE(adapter->infoSectionUpdated() >= 1);
 
     // USER_INPUT: 通知事件 (payload 含 text)
     mgr->onUserInput("sess-test", "hello world");
@@ -338,6 +398,11 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     any = true;
                 }
             }
+            for (const auto& s : reg->infoSections) {
+                if (s.plugin == "example_plugin") {
+                    any = true;
+                }
+            }
             for (const auto& c : reg->commands) {
                 if (c.plugin == "example_plugin") {
                     any = true;
@@ -346,6 +411,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             XX_TEST_EXPECT_FALSE(any); // 全部摘除
         }
     }
+    XX_TEST_EXPECT_TRUE(adapter->infoSectionRemoved() >= 1);
     XX_TEST_EXPECT_FALSE(mgr->hasCommand("example"));
     // disable 期间命令不执行
     mgr->invokeCommand("example", R"({"text":"x"})");
@@ -354,7 +420,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
     mgr->enable("example_plugin");
     {
         auto reg = mgr->uiRegistrySnapshot();
-        bool hasCmd = false, hasStatus = false;
+        bool hasCmd = false, hasStatus = false, hasInfo = false;
         if (reg) {
             for (const auto& c : reg->commands) {
                 if (c.name == "example") {
@@ -366,9 +432,15 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     hasStatus = true;
                 }
             }
+            for (const auto& s : reg->infoSections) {
+                if (s.id == "example_plugin.info") {
+                    hasInfo = true;
+                }
+            }
         }
         XX_TEST_EXPECT_TRUE(hasCmd);
         XX_TEST_EXPECT_TRUE(hasStatus);
+        XX_TEST_EXPECT_TRUE(hasInfo);
     }
     XX_TEST_EXPECT_TRUE(mgr->hasCommand("example"));
 
@@ -389,6 +461,11 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     any = true;
                 }
             }
+            for (const auto& s : reg->infoSections) {
+                if (s.plugin == "example_plugin") {
+                    any = true;
+                }
+            }
             for (const auto& c : reg->commands) {
                 if (c.plugin == "example_plugin") {
                     any = true;
@@ -397,6 +474,8 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         }
         XX_TEST_EXPECT_FALSE(any);
     }
+    // 插件卸载时主动反注册 (unload 回调): adapter 信号计数增加
+    XX_TEST_EXPECT_TRUE(adapter->infoSectionRemoved() >= 2);
     XX_TEST_EXPECT_TRUE(mgr->find("example_plugin") == nullptr);
 
     co_return TestResult{g_client_plugin_passed, g_client_plugin_failed};

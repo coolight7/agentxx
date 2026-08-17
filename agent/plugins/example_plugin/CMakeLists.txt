@@ -25,7 +25,8 @@ if (AGENTXX_ENABLE_PLUGIN_BUILTIN)
     "agentxx_client_unload=agentxx_plugin_builtin_client_unload_${PLUGIN_NAME}"
   )
   target_include_directories(${_target} PRIVATE
-    "${AGENTXX_LIB_INCLUDE_DIR}"
+    "${AGENTXX_LIB_INCLUDE_DIR}"           # agentxx/plugin/plugin_api.h
+    "${AGENTXX_INSTALL_DIR}/include"       # fmt
   )
   set_target_properties(${_target} PROPERTIES
     POSITION_INDEPENDENT_CODE ON
@@ -66,7 +67,12 @@ set_target_properties(${PLUGIN_NAME} PROPERTIES
   WINDOWS_EXPORT_ALL_SYMBOLS ON
 )
 target_include_directories(${PLUGIN_NAME} PRIVATE
-  "${AGENTXX_LIB_INCLUDE_DIR}"
+  "${AGENTXX_LIB_INCLUDE_DIR}"           # agentxx/plugin/plugin_api.h
+  "${AGENTXX_INSTALL_DIR}/include"       # fmt
+)
+find_package(fmt REQUIRED)
+target_link_libraries(${PLUGIN_NAME} PRIVATE
+  fmt::fmt
 )
 set_target_properties(${PLUGIN_NAME} PROPERTIES
   PREFIX "lib"

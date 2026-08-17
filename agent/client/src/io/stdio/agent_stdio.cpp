@@ -21,6 +21,7 @@ static bool g_firstSessionDone = false;
 static int  g_mcpCount         = 0;
 static int  g_skillCount       = 0;
 static int  g_memoryCount      = 0;
+static int  g_pluginCount      = 0;
 
 StdIOClientAgentIO::StdIOClientAgentIO() :
     logSink_(std::make_shared<StderrLogSink>()) {
@@ -86,7 +87,7 @@ void StdIOClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
 
             // 首次会话结束时输出汇总信息
             if (!g_firstSessionDone) {
-                if (g_mcpCount > 0 || g_skillCount > 0 || g_memoryCount > 0) {
+                if (g_mcpCount > 0 || g_skillCount > 0 || g_memoryCount > 0 || g_pluginCount > 0) {
                     g_firstSessionDone = true;
                     std::cout << fmt::format(
                         R"_(
@@ -94,11 +95,13 @@ void StdIOClientAgentIO::onDelta(const agentxx::agent::Delta& delta) {
 ┣━ MCP Tools: {}
 ┣━ Skills: {}
 ┣━ Memory Files: {}
+┣━ Plugins: {}
 ┗━━━━━━ Session Startup ━━━━━━┛
 )_",
                         g_mcpCount,
                         g_skillCount,
-                        g_memoryCount
+                        g_memoryCount,
+                        g_pluginCount
                     ) << std::endl;
                 }
             }
@@ -134,13 +137,17 @@ void StdIOClientAgentIO::onPeerMessage(agentxx::agent::WireMessage msg) {
                 case Type::Memory:
                     ++g_memoryCount;
                     break;
+                case Type::Plugin:
+                    ++g_pluginCount;
+                    break;
             }
         }
         XX_LOGI(
-            "AppendComponentInfo: MCP={}, Skill={}, Memory={}",
+            "AppendComponentInfo: MCP={}, Skill={}, Memory={}, Plugins={}",
             g_mcpCount,
             g_skillCount,
-            g_memoryCount
+            g_memoryCount,
+            g_pluginCount
         );
         return;
     }

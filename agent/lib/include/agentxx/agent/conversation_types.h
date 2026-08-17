@@ -138,12 +138,13 @@ struct SessionInfo {
     int64_t     lastActiveMs = 0;
 };
 
-/// 加载组件通知：显示加载的 MCP/Skill/Memory 信息
+/// 加载组件通知：显示加载的插件/MCP/Skill/Memory 信息
 struct AppendComponentNotification {
     enum class Type : uint8_t {
         Mcp,    // MCP 工具
         Skill,  // Skill
         Memory, // Memory 文件
+        Plugin, // Agent 侧加载的插件
     };
 
     Type        type;

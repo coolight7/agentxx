@@ -44,7 +44,7 @@
 extern "C" {
 #endif
 
-#define AGENTXX_CLIENT_PLUGIN_API_VERSION 1
+#define AGENTXX_CLIENT_PLUGIN_API_VERSION 2
 
 /* ==================== UI 能力位 (宿主 ↔ 插件协商) ==================== */
 
@@ -55,6 +55,7 @@ extern "C" {
 #define AGENTXX_UI_CAP_KEYBIND     (1u << 3) ///< 自定义键位 (预留, 二期)
 #define AGENTXX_UI_CAP_PROMPT      (1u << 4) ///< 模态询问 (预留, 二期)
 #define AGENTXX_UI_CAP_MSG_DECOR   (1u << 5) ///< 消息装饰 (预留, 二期)
+#define AGENTXX_UI_CAP_INFO_SECTION (1u << 6) ///< 侧边栏 Info 栏段落扩展
 
 /* ==================== 插件元信息 ==================== */
 
@@ -82,8 +83,9 @@ typedef enum AgentxxClientEvent {
 
 /* ==================== 展示扩展句柄 (不透明) ==================== */
 
-typedef struct AgentxxStatusItem AgentxxStatusItem; ///< 状态栏项句柄
-typedef struct AgentxxPanel AgentxxPanel;           ///< 侧边栏面板句柄
+typedef struct AgentxxStatusItem AgentxxStatusItem;   ///< 状态栏项句柄
+typedef struct AgentxxPanel AgentxxPanel;             ///< 侧边栏面板句柄
+typedef struct AgentxxInfoSection AgentxxInfoSection; ///< 侧边栏 Info 栏段落句柄
 
 /* ==================== 宿主函数表 ==================== */
 
@@ -143,6 +145,25 @@ typedef struct AgentxxClientHostVtable {
     );
     /// 注销面板 (句柄随后失效)
     void (*unregister_panel)(const AgentxxClientHost* host, AgentxxPanel* panel);
+
+    /// 注册侧边栏 Info 栏段落; 返回句柄 (宿主持有; 卸载自动清理)
+    /// - id: 全局唯一, 建议 "{插件名}.{段名}"
+    /// - props_json: {"title": "..."} (title 可选; 空则无段落标题)
+    /// - 宿主不支持 (ui_caps 无 INFO_SECTION) 或 id 冲突时返回 NULL
+    AgentxxInfoSection* (*register_info_section)(
+        const AgentxxClientHost* host,
+        AgentxxPluginStringView  id,
+        AgentxxPluginStringView  props_json
+    );
+    /// 更新 Info 栏段落内容: items_json 同 update_panel 的 items schema
+    ///   ({"items":[{"kind":"text","text":"..."}, ...]})
+    int (*update_info_section)(
+        const AgentxxClientHost* host,
+        AgentxxInfoSection*      section,
+        AgentxxPluginStringView  items_json
+    );
+    /// 注销 Info 栏段落 (句柄随后失效)
+    void (*unregister_info_section)(const AgentxxClientHost* host, AgentxxInfoSection* section);
 
     /* ---- 输入扩展 (斜杠命令) ---- */
     /// 注册斜杠命令: 用户输入 "/{name}" 触发 (name 不含 '/' 与空格)

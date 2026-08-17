@@ -3,7 +3,7 @@
 > 待实现: Wire 远程热管理 / TUI 插件管理面板 / 签名校验
 > 关联: [design.md](design.md)
 > 目标: 原生 C++ 插件 + 脚本插件 (由 C++ 插件承载), 支持热插拔、强自定义
-> 本文以当前源码为准 (plugin_api.h v6 / client_plugin_api.h v1), 设计原稿与实现偏差见 [13. 实现状态与偏差](#13-实现状态与偏差)
+> 本文以当前源码为准 (plugin_api.h v6 / client_plugin_api.h v2), 设计原稿与实现偏差见 [13. 实现状态与偏差](#13-实现状态与偏差)
 
 ## 目录
 
@@ -79,7 +79,7 @@
 | 自定义节点类型 | ⚠️ 新会话/子图 | ❌ 运行中 | 高 | GraphRegistry 新类型仅影响之后编译的图 |
 | 主图拓扑 | ❌ | ❌ | 极高 | 不支持 |
 | 模型 Provider | ⚠️ 启动时 | ❌ 运行中 | 中 | 需加动态注册接口 |
-| client UI 扩展 (状态栏/面板/命令) | ✅ | ✅ | 中 | client 侧独立 ClientPluginManager + UI 注册表 COW 快照 |
+| client UI 扩展 (状态栏/面板/Info 段落/命令) | ✅ | ✅ | 中 | client 侧独立 ClientPluginManager + UI 注册表 COW 快照 |
 | 协议打包 (MCP/A2A) | ⚠️ 启动时 | ⚠️ | 中 | 复用现有 MCP client 装配 |
 
 **结论**: 工具 / 事件 / 钩子 / 能力 / client UI 可做到**真正运行期热插拔**, 覆盖 90% 用户扩展诉求; 节点/主图属编译期形态, 通过子图注入获得自定义流程。
@@ -115,7 +115,7 @@ libagentxx 核心 (只认识 C++ 插件; 不依赖任何脚本引擎)
 client 侧 (CLI/TUI, 独立宿主)
 ┌──────────────────────────────────────────────┐
 │ ClientPluginManager (client io 线程串行)       │
-│   ├─ UI 注册表: status items / panels / commands│
+│   ├─ UI 注册表: status items / panels / info sections / commands│
 │   ├─ ClientEventSink: 端点事件 → 插件订阅分发   │
 │   ├─ PluginUiAdapter: UI 无关语义层 → TUI/CLI  │
 │   └─ 跨端: WirePluginData / WirePluginDataUp   │
@@ -133,7 +133,7 @@ client 侧 (CLI/TUI, 独立宿主)
 | 组件 | 位置 | 说明 |
 |------|------|------|
 | `plugin_api.h` | `include/agentxx/plugin/` | 纯 C ABI 契约头 (v6, 唯一跨版本稳定接口) |
-| `client_plugin_api.h` | `include/agentxx/plugin/` | client 侧纯 C ABI 契约头 (v1, 独立符号集) |
+| `client_plugin_api.h` | `include/agentxx/plugin/` | client 侧纯 C ABI 契约头 (v2, 独立符号集) |
 | `PluginManager` | `src/plugins/plugin_manager.cpp` | agent 侧生命周期管理 (load/enable/disable/unload/shutdownAll + 依赖图) |
 | `ClientPluginManager` | `src/plugins/client_plugin_manager.cpp` | client 侧管理器 (UI 注册表 + 事件分发 + vtable 实现) |
 | `PluginInstance` | `include/agentxx/plugin/plugin_manager.h` | 已加载插件实例 (注册残留/inflight/依赖) |
@@ -455,7 +455,7 @@ agentxx.onHook(0, (info) => agentxx.log(2, "agent_start: " + JSON.stringify(info
 
 ## 7. client 侧插件系统
 
-> 状态: 已实现 (2026-08): C ABI 契约 + ClientPluginManager + UI 适配器 + TUI/CLI 介入 + 跨端数据通道 (WirePluginDataUp) + 示例双端插件 + 集成测试 (模块 `client_plugins`, 40 项断言)
+> 状态: 已实现 (2026-08): C ABI 契约 + ClientPluginManager + UI 适配器 + TUI/CLI 介入 + 跨端数据通道 (WirePluginDataUp) + 示例双端插件 + 集成测试 (模块 `client_plugins`, 50 项断言)
 > 目标: 插件可介入 client 的 CLI / TUI / 未来 GUI, 与 agent 侧插件体系并存、互通
 
 ### 7.1 背景与核心决策
@@ -474,22 +474,25 @@ agent 侧插件 (工具/钩子/事件/能力) 已完备, 但 client (CLI/TUI) �
 
 插件对 UI 的全部控制力收敛为三件事:
 
-1. **声明展示物**: 状态栏项 (id/text/align/order) / 侧边栏面板 (title + items: text/kv/progress/badge/action) —— 内容是宿主定义 schema 的 JSON, 不是组件;
+1. **声明展示物**: 状态栏项 (id/text/align/order) / 侧边栏面板 (title + items: text/kv/progress/badge/action) / 侧边栏 Info 栏段落 (title + items, 同面板 items schema) —— 内容是宿主定义 schema 的 JSON, 不是组件;
 2. **声明拦截点**: 斜杠命令 (如 `/usage`) —— 回调拿到参数, 返回动作 JSON;
 3. **调用交互原语**: toast / 代发消息 / 请求取消 —— 命令式调用。
 
 每个 UI 实现经 `ui_caps` 位图向插件声明自己支持什么, 不支持的注册项自动失败 (返回 NULL / 非 0), 插件自适应降级:
 
 ```c
-#define AGENTXX_UI_CAP_STATUS_ITEM (1u << 0) ///< 状态栏项
-#define AGENTXX_UI_CAP_PANEL       (1u << 1) ///< 侧边栏面板
-#define AGENTXX_UI_CAP_TOAST       (1u << 2) ///< toast 提示
-#define AGENTXX_UI_CAP_KEYBIND     (1u << 3) ///< 自定义键位 (预留)
-#define AGENTXX_UI_CAP_PROMPT      (1u << 4) ///< 模态询问 (预留)
-#define AGENTXX_UI_CAP_MSG_DECOR   (1u << 5) ///< 消息装饰 (预留)
+#define AGENTXX_UI_CAP_STATUS_ITEM  (1u << 0) ///< 状态栏项
+#define AGENTXX_UI_CAP_PANEL        (1u << 1) ///< 侧边栏面板
+#define AGENTXX_UI_CAP_TOAST        (1u << 2) ///< toast 提示
+#define AGENTXX_UI_CAP_KEYBIND      (1u << 3) ///< 自定义键位 (预留)
+#define AGENTXX_UI_CAP_PROMPT       (1u << 4) ///< 模态询问 (预留)
+#define AGENTXX_UI_CAP_MSG_DECOR    (1u << 5) ///< 消息装饰 (预留)
+#define AGENTXX_UI_CAP_INFO_SECTION (1u << 6) ///< 侧边栏 Info 栏段落扩展
 ```
 
-CLI 的 caps = `TOAST` (命令为输入管线一部分, 必然支持); TUI = `STATUS_ITEM | PANEL | TOAST`; 未来 GUI 自行声明。
+CLI 的 caps = `TOAST` (命令为输入管线一部分, 必然支持); TUI = `STATUS_ITEM | PANEL | TOAST | INFO_SECTION`; 未来 GUI 自行声明。
+
+Info 栏段落 (register_info_section): 插件向侧边栏内置 Info tab 注入段落 (id 唯一, props `{"title": "..."}` 可省略), 内容经 update_info_section 更新 (items schema 与面板一致); 渲染在 Info 栏 Append 组件列表之后, 由 TUI 每帧从 UI 注册表快照读取 —— 适合把摘要/状态信息 (如 codegraph 索引状态、系统资源占用) 直接放进常驻 Info 栏, 而无需占用独立 tab。
 
 **命令 execute 返回值 (动作 JSON, 宿主解释执行)**:
 ```json
@@ -528,7 +531,7 @@ client 插件 send_plugin_data("rebuild_request", {...})
 ### 7.5 client 入口 ABI 摘要
 
 ```c
-#define AGENTXX_CLIENT_PLUGIN_API_VERSION 1
+#define AGENTXX_CLIENT_PLUGIN_API_VERSION 2
 
 typedef struct AgentxxClientPluginInfo {
     int api_version;                /* == AGENTXX_CLIENT_PLUGIN_API_VERSION */
@@ -550,7 +553,7 @@ typedef struct AgentxxClientPluginInfo {
 |------|------|
 | 内存 | `alloc` / `free` / `strdup` |
 | 能力协商 | `ui_caps` |
-| 展示扩展 | `register_status_item` / `update_status_item` / `unregister_status_item`; `register_panel` / `update_panel` / `unregister_panel` (返回句柄, 卸载自动清理) |
+| 展示扩展 | `register_status_item` / `update_status_item` / `unregister_status_item`; `register_panel` / `update_panel` / `unregister_panel`; `register_info_section` / `update_info_section` / `unregister_info_section` (返回句柄, 卸载自动清理) |
 | 输入扩展 | `register_command` / `unregister_command` (execute 返回动作 JSON) |
 | 交互原语 | `show_toast` |
 | 事件订阅 | `subscribe` / `unsubscribe` (卸载自动退订) |
@@ -588,13 +591,13 @@ typedef struct AgentxxClientPluginInfo {
 
 | 插件 | 目录 | 说明 |
 |------|------|------|
-| example_plugin | `agent/plugins/example_plugin/` | 示例插件 (双端): 3 工具 (echo/caller 互调/sleep 慢工具) + agent_start 钩子 + 事件订阅 + 能力声明 + client 入口 (状态栏/面板/命令/事件/跨端) |
+| example_plugin | `agent/plugins/example_plugin/` | 示例插件 (双端): 3 工具 (echo/caller 互调/sleep 慢工具) + agent_start 钩子 + 事件订阅 + 能力声明 + client 入口 (状态栏/面板/Info 段落/命令/事件/跨端) |
 | example_js | `agent/plugins/example_js/` | JS 示例插件 (C++ 壳 + plugin.js): 4 工具 (同步/async Promise/JS 内互调/宿主互调) + 钩子 + 事件订阅 + 互查 + 顶层异步初始化; depends: agentxx_javascript_engine |
 | agentxx_javascript_engine | `agent/plugins/agentxx_javascript_engine/` | QuickJS 引擎插件 (链接 libqjs.a): 注册能力 `interpreter.js` (方法 load/unload); 专用 JS 线程 + 任务队列 + agentxx 桥 + 沙箱 |
-| agentxx_codegraph | `agent/plugins/agentxx_codegraph/` | CodeGraph 代码分析: 8 工具 (search/context/callers/callees/impact/status/index/path); 索引进度/加载状态经 publish 事件 (topic `{插件名}.{事件名}`) 通知宿主, 由 SessionServerAgentIO 原样转发 WirePluginData; 插件 client 入口 (agentxx_client_entry) 订阅该事件并以侧边栏面板 (CodeGraph) 渲染索引进度/就绪状态 —— TUI 不再直接解析渲染插件载荷; 参数经 yaml plugins args (loadPaths/ignorePaths/loadCwd/useGitignore). 工具提示词默认值从 lib AgentPrompt 剥离迁移 (2026-08), entry 时经 `set_prompt` 写入宿主 toolPrompt (宿主已有条目则跳过, 尊重用户 yaml 覆盖) |
+| agentxx_codegraph | `agent/plugins/agentxx_codegraph/` | CodeGraph 代码分析: 8 工具 (search/context/callers/callees/impact/status/index/path); 索引进度/加载状态经 publish 事件 (topic `{插件名}.{事件名}`) 通知宿主, 由 SessionServerAgentIO 原样转发 WirePluginData; 插件 client 入口 (agentxx_client_entry) 订阅该事件并以侧边栏 Info 栏段落 (CodeGraph) 渲染索引进度/就绪状态 —— TUI 不再直接解析渲染插件载荷; 参数经 yaml plugins args (loadPaths/ignorePaths/loadCwd/useGitignore). 工具提示词默认值从 lib AgentPrompt 剥离迁移 (2026-08), entry 时经 `set_prompt` 写入宿主 toolPrompt (宿主已有条目则跳过, 尊重用户 yaml 覆盖) |
 | agentxx_screen_capture | `agent/plugins/agentxx_screen_capture/` | 屏幕捕获 (仅 Windows): 工具 `agentxx_screen_capture` (单帧/全部屏幕/鼠标屏/流式推帧事件 topic `agentxx_screen_capture.frame`) |
 | agentxx_computer_use | `agent/plugins/agentxx_computer_use/` | 键鼠控制 (仅 Windows): 工具 `agentxx_ui_control_keyboard_mouse`; plugin.yaml `depends: [agentxx_screen_capture]` (须同时配置加载) |
-| agentxx_system_monitor | `agent/plugins/agentxx_system_monitor/` | 系统资源监控 (从 lib `src/expand/get_cpu_gpu_use` 拆分): 工具 `agentxx_get_system_core_info` (原内置工具迁移, lib 不再内置) + 能力 `agentxx.system_usage` (方法 query) + agent 侧周期采集线程 (每 5s 采样并 publish `agentxx_system_monitor.usage`, 定时/采集/发布完全位于插件内; 显示开关由 client `/sysinfo` 经跨端事件 `usage_enabled` 同步, 关闭期间跳过采集); 载荷为插件定义 schema 的 JSON 字符串, server 经 WirePluginData 原样转发; 插件 client 入口 (agentxx_client_entry) 订阅该事件以状态栏项渲染 CPU/RAM 占用 —— 采集实现与渲染完全隔离在插件内, lib wire 层不含任何系统资源 DTO |
+| agentxx_system_monitor | `agent/plugins/agentxx_system_monitor/` | 系统资源监控 (从 lib `src/expand/get_cpu_gpu_use` 拆分): 工具 `agentxx_get_system_core_info` (原内置工具迁移, lib 不再内置) + 能力 `agentxx.system_usage` (方法 query) + agent 侧周期采集线程 (每 5s 采样并 publish `agentxx_system_monitor.usage`, 定时/采集/发布完全位于插件内; 显示开关由 client `/sysinfo` 经跨端事件 `usage_enabled` 同步, 关闭期间跳过采集); 载荷为插件定义 schema 的 JSON 字符串, server 经 WirePluginData 原样转发; 插件 client 入口 (agentxx_client_entry) 订阅该事件以状态栏项渲染 CPU/RAM 占用 (快速一览) + 侧边栏 Info 栏段落渲染明细 (CPU/RAM/GPU) —— 采集实现与渲染完全隔离在插件内, lib wire 层不含任何系统资源 DTO |
 | agentxx_audio_stream | `agent/plugins/agentxx_audio_stream/` | 音频流捕获 (从 lib `src/expand/audio_stream` 拆分; 仅 Windows WASAPI): 系统输出/程序输出/麦克风; 工具 `agentxx_audio_stream` (start/stop/status); 帧经 publish 事件推送 (topic `agentxx_audio_stream.audio`, base64 PCM); 非 Windows no-op |
 | agentxx_text_selection_monitor | `agent/plugins/agentxx_text_selection_monitor/` | 系统级文本选择事件流 (从 lib `src/expand/text_selection_monitor` 拆分; 仅 Windows UIAutomation/WinEvent/CDP/剪贴板兜底): 工具 `agentxx_text_selection_monitor` (start/stop/status); 选中文本经 publish 事件推送 (topic `agentxx_text_selection_monitor.selection`); 非 Windows no-op |
 
@@ -715,7 +718,7 @@ plugins/
 
 ### 10.3 双端插件 (agent + client 入口共存)
 
-同一动态库导出 `agentxx_plugin_entry` (agent 侧工具/钩子) 与 `agentxx_client_entry` (client 侧状态栏/面板/命令/事件/跨端), 两个 PluginManager 各自 dlopen/装配, 实例状态独立, 互通一律走 wire。参考 `agent/plugins/example_plugin/example_plugin.cpp`。
+同一动态库导出 `agentxx_plugin_entry` (agent 侧工具/钩子) 与 `agentxx_client_entry` (client 侧状态栏/面板/Info 段落/命令/事件/跨端), 两个 PluginManager 各自 dlopen/装配, 实例状态独立, 互通一律走 wire。参考 `agent/plugins/example_plugin/example_plugin.cpp`。
 
 ---
 
@@ -763,7 +766,7 @@ plugins/
 | `agent/client/include/agentxx-client/io/tui/tui_plugin_adapter.h` + `io/stdio/cli_plugin_adapter.h` | TUI/CLI 适配器实现 |
 | `agent/client/src/io/tui/agent_tui.h/.cpp` | EventSink 通知点 (WirePluginData 原样转发); 命令管线 (onSend 拦截 `/`); addPluginPanelTab/removePluginPanelTab/renderPluginPanel; sendPluginUserInput/sendPluginDataUp; uiToast |
 | `agent/client/src/io/tui/components/status_bar.cpp` | 插件状态栏项渲染 (左/右分组, order 排序) |
-| `agent/client/src/io/tui/tui_sidebar_content.cpp` | Info 侧边栏 (Planning/Append 组件); 系统资源与 CodeGraph 渲染已剥离到插件 client 侧 |
+| `agent/client/src/io/tui/tui_sidebar_content.cpp` | Info 侧边栏 (Planning/Append 组件 + 插件 Info 段落); 系统资源与 CodeGraph 渲染已剥离到插件 client 侧 (经 register_info_section) |
 | `agent/client/src/mode_runners.cpp` + `main.cpp` | 4 个模式装配 ClientPluginManager + 适配器 (setupClientPlugins 模板); 命令拦截 (tryInvokePluginCommand) |
 | `agent/test/core/test_plugins.*` | agent 插件测试模块 `plugins` (118 项断言: 加载/工具执行/互调/钩子/事件/禁用启用/卸载/冲突/列表/JS 引擎/级联/拓扑/超时卸载竞态/shutdownAll) |
 | `agent/test/core/test_client_plugins.*` | client 插件测试模块 `client_plugins` (40 项断言: 加载/UI 注册表/事件分发/命令/跨端/禁用启用/卸载) |
@@ -780,7 +783,7 @@ plugins/
 | 二期 (JS 支持) | QuickJS 集成 / agentxx_javascript_engine (interpreter.js 能力) / JS 沙箱 + Promise 桥 / 示例 JS 插件 / 测试 | ✅ 已实现 |
 | 统一插件模型 (2026-08) | 所有插件统一为 C++ 插件 (壳 + 能力调用委派); 依赖图级联卸载/禁用; 互查 API; 拓扑排序加载 | ✅ 已实现 |
 | 内置插件化 (2026-08) | codegraph / screen_capture / computer_use / system_monitor / audio_stream / text_selection_monitor 从 lib 拆分独立 | ✅ 已实现 |
-| client 侧插件系统 | client_plugin_api v1 / ClientPluginManager / UI 适配器 / 双端插件 / WirePluginDataUp | ✅ 已实现 |
+| client 侧插件系统 | client_plugin_api v2 (状态栏/面板/Info 段落/命令/事件/跨端) / ClientPluginManager / UI 适配器 / 双端插件 / WirePluginDataUp | ✅ 已实现 |
 | 三期 (生态) | Wire 远程热管理 / TUI 插件管理面板 / 签名校验 | ⏳ 待实现 |
 
 ### 13.2 与设计原稿的偏差 (实现为准)

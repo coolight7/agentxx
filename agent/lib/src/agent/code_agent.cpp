@@ -478,6 +478,18 @@ void CodeAgent::collectAppendComponentInfo(std::vector<AppendComponentNotificati
             .errorMessage = "",
         });
     }
+
+    // Agent 侧加载的插件 (数量 + 列表; success 反映 enabled 状态)
+    if (agentContext->pluginManager) {
+        for (const auto& plugin : agentContext->pluginManager->list()) {
+            notifications.push_back(AppendComponentNotification{
+                .type         = AppendComponentNotification::Type::Plugin,
+                .name         = plugin.name,
+                .success      = plugin.enabled,
+                .errorMessage = "",
+            });
+        }
+    }
 }
 
 } // namespace agent
