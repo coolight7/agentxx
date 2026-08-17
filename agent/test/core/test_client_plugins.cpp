@@ -324,15 +324,15 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 }
             }
             XX_TEST_EXPECT_TRUE(found);
-            // Info 段落: TURN_END 时插件更新内容 (kv Turns=1 + text)
+            // Info 段落: TURN_END 时插件更新内容 (text "Turns: 1" + hint 说明)
             bool infoFound = false;
             for (const auto& s : reg->infoSections) {
                 if (s.id == "example_plugin.info" && s.items.is_array()
                     && !s.items.empty()) {
                     infoFound = true;
                     const auto first = s.items[0];
-                    XX_TEST_EXPECT_EQ(first.value("kind", std::string{}), "kv");
-                    XX_TEST_EXPECT_EQ(first.value("value", std::string{}), "1");
+                    XX_TEST_EXPECT_EQ(first.value("kind", std::string{}), "text");
+                    XX_TEST_EXPECT_EQ(first.value("text", std::string{}), "Turns: 1");
                 }
             }
             XX_TEST_EXPECT_TRUE(infoFound);

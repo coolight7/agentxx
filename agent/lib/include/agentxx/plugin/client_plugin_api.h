@@ -44,7 +44,7 @@
 extern "C" {
 #endif
 
-#define AGENTXX_CLIENT_PLUGIN_API_VERSION 2
+#define AGENTXX_CLIENT_PLUGIN_API_VERSION 3
 
 /* ==================== UI 能力位 (宿主 ↔ 插件协商) ==================== */
 
@@ -132,10 +132,11 @@ typedef struct AgentxxClientHostVtable {
         AgentxxPluginStringView  id,
         AgentxxPluginStringView  props_json
     );
-    /// 更新面板内容: items_json = {"items":[{"kind":"text","text":"..."},
-    ///   {"kind":"kv","key":"...","value":"..."},
+    /// 更新面板内容: items_json = {"items":[{"kind":"text","role":"normal","text":"..."},
     ///   {"kind":"progress","label":"...","value":0.5},
     ///   {"kind":"action","id":"rebuild","label":"Rebuild"}, ...]}
+    /// - text.role 指定文本样式: "title"=高亮强调 / "normal"=普通文本(默认) /
+    ///   "hint"=减淡提示 (缺省按 normal 渲染; 其余 role 值等同 normal)
     /// - action 项被用户点击时: 宿主 post 到 client io 线程回调面板注册时经
     ///   register_panel 关联的 on_action (见 entry 注册流程; 一期经回调参数注入)
     int (*update_panel)(
@@ -156,7 +157,8 @@ typedef struct AgentxxClientHostVtable {
         AgentxxPluginStringView  props_json
     );
     /// 更新 Info 栏段落内容: items_json 同 update_panel 的 items schema
-    ///   ({"items":[{"kind":"text","text":"..."}, ...]})
+    ///   ({"items":[{"kind":"text","role":"title|normal|hint","text":"..."}, ...]});
+    ///   列表项由宿主按侧边栏 Append 段样式以 "|  xxx" 前缀展示
     int (*update_info_section)(
         const AgentxxClientHost* host,
         AgentxxInfoSection*      section,
