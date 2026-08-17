@@ -593,7 +593,7 @@ static std::string buildUsageInfoItemsJson(const UsageStat& st) {
         ));
     };
 
-    textItem(fmt::format("CPU: {:.0f}%", st.cpu));
+    textItem(fmt::format("|- CPU {:.0f}%", st.cpu));
     // RAM: 45% (8192/18432 MB)
     std::string ram = fmt::format("RAM: {:.0f}%", st.memPct);
     if (st.memTotalMb > 0) {
@@ -601,11 +601,11 @@ static std::string buildUsageInfoItemsJson(const UsageStat& st) {
     }
     textItem(ram);
     if (st.gpuCount == 0) {
-        textItem("GPU: none", "hint");
+        textItem("|- GPU none", "hint");
     } else if (st.gpuCount == 1) {
-        textItem(fmt::format("GPU: {:.0f}%", st.gpuPeakPct));
+        textItem(fmt::format("|- GPU {:.0f}%", st.gpuPeakPct));
     } else {
-        textItem(fmt::format("GPUs: {}x peak {:.0f}%", st.gpuCount, st.gpuPeakPct));
+        textItem(fmt::format("|- GPU {}x · {:.0f}%", st.gpuCount, st.gpuPeakPct));
     }
     return fmt::format(R"({{"items":[{}]}})", fmt::join(items, ","));
 }

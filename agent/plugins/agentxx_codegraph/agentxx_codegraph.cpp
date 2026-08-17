@@ -1024,7 +1024,7 @@ static std::string buildInfoItemsJson() {
 
     if (!g_loaded) {
         // 插件未加载 (agent 侧未装配/已卸载)
-        textItem("CodeGraph: not loaded", "hint");
+        textItem("|- wait for load", "hint");
         return fmt::format(R"({{"items":[{}]}})", fmt::join(items, ","));
     }
 
@@ -1037,11 +1037,11 @@ static std::string buildInfoItemsJson() {
         if (g_total > 0) {
             // 索引进行中: 45% (12/60)
             const double pct = static_cast<double>(g_processed) / static_cast<double>(g_total);
-            textItem(fmt::format("Index: {:.0f}% ({}/{})", pct * 100.0, g_processed, g_total));
+            textItem(fmt::format("|- Indexing {:.0f}% ({}/{})", pct * 100.0, g_processed, g_total));
             items.push_back(fmt::format(R"({{"kind":"progress","value":{:.3f}}})", pct));
         } else {
             // 流式遍历/收集阶段 (文件总数未知): 显示已发现文件数
-            textItem(fmt::format("Indexing: {} files", g_processed));
+            textItem(fmt::format("|- Indexing {} files", g_processed));
         }
         if (!g_current_file.empty()) {
             // 仅显示文件名 (目录路径过长; 无 lib 工具, 简单按分隔符取尾段)
@@ -1050,17 +1050,14 @@ static std::string buildInfoItemsJson() {
             if (pos != std::string::npos) {
                 fname = fname.substr(pos + 1);
             }
-            if (fname.size() > 40) {
-                fname = fmt::format("{}...", fname.substr(0, 40));
-            }
-            textItem(fname, "hint");
+            textItem(fmt::format("|  {}", fname), "hint");
         }
     } else if (g_has_progress && g_total > 0) {
         // 索引完成
-        textItem(fmt::format("Index: available ({}/{})", g_processed, g_total));
+        textItem(fmt::format("|- Index available ({})", g_total));
     } else {
         // 已加载但尚未开始索引
-        textItem("Index: ready", "hint");
+        textItem("|- Index ready", "hint");
     }
     return fmt::format(R"({{"items":[{}]}})", fmt::join(items, ","));
 }
