@@ -1,9 +1,64 @@
 # agentxx_audio_stream —— 音频流捕获插件 (Windows WASAPI)
-# - 独立动态库 (MODULE), 仅依赖纯 C ABI 头 + fmt + simdjson
+# - 默认: 独立动态库 (MODULE), 仅依赖纯 C ABI 头 + fmt + simdjson
+# - 内置模式 (AGENTXX_ENABLE_PLUGIN_BUILTIN=ON): 源文件编译为 OBJECT 库合并进
+#   libagentxx; fmt/simdjson 为 libagentxx 既有依赖, 仅补链接平台库 (psapi)
 # - 从 libagentxx src/expand/audio_stream 拆分独立:
 #   - 工具 agentxx_audio_stream (start/stop/status)
 #   - 捕获帧经 publish 事件推送 (topic "agentxx_audio_stream.audio")
 set(PLUGIN_NAME agentxx_audio_stream)
+
+if (AGENTXX_ENABLE_PLUGIN_BUILTIN)
+  # ===== 内置合并编译分支 =====
+  set(_target abp_${PLUGIN_NAME})
+  add_library(${_target} OBJECT
+    ${CMAKE_CURRENT_SOURCE_DIR}/agentxx_audio_stream.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/audio_stream.cpp
+  )
+  target_compile_definitions(${_target} PRIVATE
+    "AGENTXX_PLUGIN_BUILTIN=1"
+    "agentxx_plugin_entry=agentxx_plugin_builtin_entry_${PLUGIN_NAME}"
+    "agentxx_plugin_get_info=agentxx_plugin_builtin_get_info_${PLUGIN_NAME}"
+    "agentxx_plugin_unload=agentxx_plugin_builtin_unload_${PLUGIN_NAME}"
+  )
+  target_include_directories(${_target} PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}"          # audio_stream.h / audio_stream_plugin.h
+    "${AGENTXX_LIB_INCLUDE_DIR}"           # agentxx/plugin/plugin_api.h
+    "${AGENTXX_INSTALL_DIR}/include"       # simdjson.h fmt
+  )
+  set_target_properties(${_target} PROPERTIES
+    POSITION_INDEPENDENT_CODE ON
+    CXX_STANDARD 26
+    CXX_STANDARD_REQUIRED OFF
+  )
+  set(AGENTXX_BUILTIN_MANIFEST_DECLS
+    "${AGENTXX_BUILTIN_MANIFEST_DECLS}
+extern \"C\" const AgentxxPluginInfo* agentxx_plugin_builtin_get_info_${PLUGIN_NAME}(void);
+extern \"C\" int agentxx_plugin_builtin_entry_${PLUGIN_NAME}(const AgentxxHost* host, void** plugin_ctx);
+extern \"C\" void agentxx_plugin_builtin_unload_${PLUGIN_NAME}(void* plugin_ctx);")
+  set(AGENTXX_BUILTIN_MANIFEST_ENTRIES
+    "${AGENTXX_BUILTIN_MANIFEST_ENTRIES}
+    {\"${PLUGIN_NAME}\", agentxx_plugin_builtin_get_info_${PLUGIN_NAME}, agentxx_plugin_builtin_entry_${PLUGIN_NAME}, agentxx_plugin_builtin_unload_${PLUGIN_NAME}},")
+  if (WIN32)
+    # audio_stream: WASAPI (mmdevapi) / COM (ole32) 已由 libagentxx 链接,
+    # 进程名查询 (psapi) 需补链接
+    set(AGENTXX_BUILTIN_PLUGIN_LINK_LIBS
+      "${AGENTXX_BUILTIN_PLUGIN_LINK_LIBS}" psapi PARENT_SCOPE)
+  endif()
+  set(AGENTXX_BUILTIN_PLUGIN_OBJECT_TARGETS "${AGENTXX_BUILTIN_PLUGIN_OBJECT_TARGETS}" "${_target}" PARENT_SCOPE)
+  set(AGENTXX_BUILTIN_MANIFEST_DECLS "${AGENTXX_BUILTIN_MANIFEST_DECLS}" PARENT_SCOPE)
+  set(AGENTXX_BUILTIN_MANIFEST_ENTRIES "${AGENTXX_BUILTIN_MANIFEST_ENTRIES}" PARENT_SCOPE)
+  # 资源: plugin.yaml (运行期目录配置推导 depends/入口)
+  set(_res "${AGENTXX_EXEC_INSTALL_PREFIX}/plugins/${PLUGIN_NAME}/plugin.yaml")
+  add_custom_command(OUTPUT "${_res}"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      "${CMAKE_CURRENT_SOURCE_DIR}/plugin.yaml" "${_res}"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/plugin.yaml"
+    COMMENT "Copy ${PLUGIN_NAME} plugin resource (builtin mode)")
+  set(AGENTXX_BUILTIN_RESOURCE_OUTPUTS "${AGENTXX_BUILTIN_RESOURCE_OUTPUTS}" "${_res}" PARENT_SCOPE)
+  return()
+endif()
+
+# ===== 独立动态库编译 (默认) =====
 add_library(${PLUGIN_NAME} SHARED
   agentxx_audio_stream.cpp
   audio_stream.cpp

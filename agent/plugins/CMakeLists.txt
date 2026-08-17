@@ -19,6 +19,9 @@ option(AGENTXX_ENABLE_PLUGIN_SCREEN_CAPTURE "Build agentxx_screen_capture plugin
 option(AGENTXX_ENABLE_PLUGIN_SYSTEM_MONITOR "Build agentxx_system_monitor plugin (CPU/GPU usage)." ON)
 option(AGENTXX_ENABLE_PLUGIN_AUDIO_STREAM "Build agentxx_audio_stream plugin (audio capture)." ON)
 option(AGENTXX_ENABLE_PLUGIN_TEXT_SELECTION "Build agentxx_text_selection_monitor plugin (text selection)." ON)
+# 内置合并编译模式: 启用的插件源文件直接编译进 libagentxx (运行期无需插件
+# 动态库, 无 dlopen); 仅经 libagentxx 构建生效 (见下方"内置合并编译模式")
+option(AGENTXX_ENABLE_PLUGIN_BUILTIN "Merge enabled plugins into libagentxx (built-in, no runtime plugin dlls)." OFF)
 
 # 嵌套构建时由顶层传入 (见 agent/CMakeLists.txt)；独立构建时取默认值:
 # - AGENTXX_INSTALL_DIR:      依赖库 (如 quickjs 的 libqjs.a / quickjs.h) 的 install 目录
@@ -65,7 +68,111 @@ if (NOT EXISTS "${AGENTXX_LIB_INCLUDE_DIR}")
   message(FATAL_ERROR "[agentxx_plugins] libagentxx include dir not found: ${AGENTXX_LIB_INCLUDE_DIR}")
 endif()
 
-# ===== 各插件子目录 =====
+# ===== 内置合并编译模式 (可选) =====
+# - AGENTXX_ENABLE_PLUGIN_BUILTIN=ON 时, 由 libagentxx 构建经
+#   add_subdirectory 引入本目录 (AGENTXX_IS_LIB_BUILTIN_SUBDIR=1):
+#   各插件子目录仅收集源文件/依赖库/入口符号, 不创建动态库目标;
+#   生成的清单 (builtin_plugins.cpp) 由 libagentxx 编译, 运行期经
+#   agentxx_get_builtin_plugins() 加载 (无 dlopen, 无插件动态库文件)
+# - 资源文件 (plugin.yaml, example_js 的 plugin.js) 仍拷贝到
+#   ${AGENTXX_EXEC_INSTALL_PREFIX}/plugins/<插件名>/ —— 运行期配置沿用
+#   插件目录形态, loadPluginAsync 在入口文件缺失时自动回退内置注册表
+#   (depends/级联卸载/拓扑排序全部复用现有机制)
+# - 独立构建本目录时不支持内置模式 (无 libagentxx 目标可合并)
+if (AGENTXX_ENABLE_PLUGIN_BUILTIN)
+  if (NOT AGENTXX_IS_LIB_BUILTIN_SUBDIR)
+    message(FATAL_ERROR
+      "[agentxx_plugins] AGENTXX_ENABLE_PLUGIN_BUILTIN=ON 须经 libagentxx 构建 "
+      "(在顶层 agent/CMakeLists.txt 配置时开启; 本目录独立构建时请关闭该选项)")
+  endif()
+
+  # MSVC: 插件 OBJECT 库多目标并行编译时 PDB 写 (MSPDBSRV) 偶发 C1041
+  # 竞态; 调试信息直接嵌入 .obj (/Z7, 不生成目标 PDB), 从根上消除
+  if (MSVC)
+    add_compile_options(/Z7)
+  endif()
+
+  # 收集变量 (各插件子目录在 AGENTXX_ENABLE_PLUGIN_BUILTIN 分支内创建
+  # OBJECT 库目标并追加, 经 PARENT_SCOPE 传播回本目录作用域; 汇总后
+  # 整体传回 libagentxx, 目标文件合并进共享/静态库)
+  set(AGENTXX_BUILTIN_PLUGIN_OBJECT_TARGETS "")
+  set(AGENTXX_BUILTIN_PLUGIN_LINK_LIBS "")
+  set(AGENTXX_BUILTIN_PLUGIN_NAMES "")
+  set(AGENTXX_BUILTIN_MANIFEST_DECLS "")
+  set(AGENTXX_BUILTIN_MANIFEST_ENTRIES "")
+  set(AGENTXX_BUILTIN_RESOURCE_OUTPUTS "")
+
+  # 启用条件与下方"各插件子目录"动态编译分支一致
+  if (AGENTXX_ENABLE_PLUGIN_EXAMPLE)
+    add_subdirectory(example_plugin)
+    list(APPEND AGENTXX_BUILTIN_PLUGIN_NAMES example_plugin)
+  endif()
+
+  if (AGENTXX_ENABLE_PLUGIN_JS)
+    add_subdirectory(agentxx_javascript_engine)
+    list(APPEND AGENTXX_BUILTIN_PLUGIN_NAMES agentxx_javascript_engine)
+    if (AGENTXX_ENABLE_PLUGIN_EXAMPLE)
+      add_subdirectory(example_js)
+      list(APPEND AGENTXX_BUILTIN_PLUGIN_NAMES example_js)
+    endif()
+  endif()
+
+  if (AGENTXX_ENABLE_PLUGIN_CODEGRAPH)
+    add_subdirectory(agentxx_codegraph)
+    list(APPEND AGENTXX_BUILTIN_PLUGIN_NAMES agentxx_codegraph)
+  endif()
+
+  if (AGENTXX_ENABLE_PLUGIN_SCREEN_CAPTURE)
+    add_subdirectory(agentxx_screen_capture)
+    list(APPEND AGENTXX_BUILTIN_PLUGIN_NAMES agentxx_screen_capture)
+  endif()
+
+  if (AGENTXX_ENABLE_PLUGIN_COMPUTER_USE)
+    add_subdirectory(agentxx_computer_use)
+    list(APPEND AGENTXX_BUILTIN_PLUGIN_NAMES agentxx_computer_use)
+  endif()
+
+  if (AGENTXX_ENABLE_PLUGIN_SYSTEM_MONITOR)
+    add_subdirectory(agentxx_system_monitor)
+    list(APPEND AGENTXX_BUILTIN_PLUGIN_NAMES agentxx_system_monitor)
+  endif()
+
+  if (AGENTXX_ENABLE_PLUGIN_AUDIO_STREAM)
+    add_subdirectory(agentxx_audio_stream)
+    list(APPEND AGENTXX_BUILTIN_PLUGIN_NAMES agentxx_audio_stream)
+  endif()
+
+  if (AGENTXX_ENABLE_PLUGIN_TEXT_SELECTION)
+    add_subdirectory(agentxx_text_selection_monitor)
+    list(APPEND AGENTXX_BUILTIN_PLUGIN_NAMES agentxx_text_selection_monitor)
+  endif()
+
+  # 生成内置插件清单 (编译进 libagentxx; 引用各插件改名后的入口符号)
+  list(LENGTH AGENTXX_BUILTIN_PLUGIN_NAMES AGENTXX_BUILTIN_PLUGIN_COUNT)
+  configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/builtin_plugins.cpp.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/builtin_plugins.cpp"
+    @ONLY
+  )
+
+  # 资源拷贝 (运行期目录配置需 plugin.yaml; example_js 另需 plugin.js)
+  # - 与动态编译分支的 POST_BUILD 拷贝同目标目录; ALL 保证随 libagentxx 构建执行
+  if (AGENTXX_BUILTIN_RESOURCE_OUTPUTS)
+    add_custom_target(agentxx_builtin_plugin_resources ALL
+      DEPENDS ${AGENTXX_BUILTIN_RESOURCE_OUTPUTS}
+    )
+  endif()
+
+  message("[agentxx_plugins] Builtin plugins (merged into libagentxx): ${AGENTXX_BUILTIN_PLUGIN_NAMES}")
+
+  # 收集结果传回 libagentxx (add_subdirectory 的父作用域)
+  set(AGENTXX_BUILTIN_PLUGIN_OBJECT_TARGETS "${AGENTXX_BUILTIN_PLUGIN_OBJECT_TARGETS}" PARENT_SCOPE)
+  set(AGENTXX_BUILTIN_PLUGIN_LINK_LIBS "${AGENTXX_BUILTIN_PLUGIN_LINK_LIBS}" PARENT_SCOPE)
+  set(AGENTXX_BUILTIN_MANIFEST_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/builtin_plugins.cpp" PARENT_SCOPE)
+  return()
+endif()
+
+# ===== 各插件子目录 (独立动态库编译, 默认) =====
 # - 每个插件子目录自带 CMakeLists.txt, 可独立编译
 # - 仅 AGENTXX_ENABLE_PLUGIN_JS 时编译 JS 相关插件 (依赖 quickjs 库)
 if (AGENTXX_ENABLE_PLUGIN_EXAMPLE)

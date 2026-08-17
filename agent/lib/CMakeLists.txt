@@ -14,6 +14,15 @@ include(GNUInstallDirs) # CMAKE_INSTALL_*DIR
 option(AGENTXX_ENABLE_ASAN "Enable AddressSanitizer for Debug builds." ON)
 option(AGENTXX_ENABLE_DEBUG_INFO "Enable debug info (-g) for Debug builds." ON)
 option(AGENTXX_ENABLE_PCH "Enable precompiled headers (GCC/Clang)." ON)
+# 可选内置合并编译: 启用的插件源文件直接编译进 libagentxx (运行期无需插件
+# 动态库, 无 dlopen); 源文件/依赖库经 plugins/CMakeLists.txt 内置分支收集
+# (add_subdirectory ../plugins), 入口清单 builtin_plugins.cpp 由 libagentxx 编译
+option(AGENTXX_ENABLE_PLUGIN_BUILTIN "Merge enabled plugins into libagentxx (built-in, no runtime plugin dlls)." OFF)
+# 内置合并模式下各插件的启用开关 (与 plugins/CMakeLists.txt 同名同默认值;
+# 由顶层 superbuild 统一传入; 仅 AGENTXX_ENABLE_PLUGIN_BUILTIN=ON 时生效)
+option(AGENTXX_ENABLE_PLUGIN_EXAMPLE "Merge example plugin into libagentxx (built-in)." ON)
+option(AGENTXX_ENABLE_PLUGIN_COMPUTER_USE "Merge agentxx_computer_use plugin into libagentxx (built-in)." ON)
+option(AGENTXX_ENABLE_PLUGIN_SCREEN_CAPTURE "Merge agentxx_screen_capture plugin into libagentxx (built-in)." ON)
 # 嵌套构建时由顶层传入；独立构建时自动查找
 find_program(CCACHE_PROGRAM ccache)
 
@@ -31,6 +40,23 @@ file(GLOB_RECURSE agentxx_SOURCES
   CONFIGURE_DEPENDS
  "src/*.cpp" "src/*.cc" "src/*.cxx"
 )
+
+# ===== 可选: 内置插件合并编译 (AGENTXX_ENABLE_PLUGIN_BUILTIN=ON) =====
+# - add_subdirectory(../plugins) 以内置模式收集启用的插件源文件/依赖库/
+#   入口符号 (见 plugins/CMakeLists.txt 内置分支; 不创建任何插件动态库目标)
+# - 生成的清单 builtin_plugins.cpp (改名后的入口符号静态表) 一并编译进
+#   libagentxx, PluginManager 经 agentxx_get_builtin_plugins() 查询加载
+if (AGENTXX_ENABLE_PLUGIN_BUILTIN)
+  set(AGENTXX_IS_LIB_BUILTIN_SUBDIR 1)
+  add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../plugins" agentxx_plugins_builtin)
+  list(APPEND agentxx_SOURCES ${AGENTXX_BUILTIN_MANIFEST_SOURCE})
+  # 生成的清单提供 agentxx_get_builtin_plugins 实现; 默认空注册表
+  # (src/plugins/builtin_plugin_registry.cpp) 经宏排除, 避免重复定义
+  set_source_files_properties(
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/builtin_plugin_registry.cpp"
+    PROPERTIES COMPILE_DEFINITIONS AGENTXX_USE_BUILTIN_PLUGIN_MANIFEST=1
+  )
+endif()
 
 # ===== 目标创建 =====
 # - GCC/Clang: 通过 OBJECT 库把 62 个源文件只编译一次，共享/静态库复用同一批 .o，
@@ -254,6 +280,34 @@ if (AGENTXX_ENABLE_BOOST_PROCESS)
   endforeach()
   target_link_libraries(agentxx_shared PUBLIC Boost::process)
   target_link_libraries(agentxx_static PUBLIC Boost::process)
+endif()
+# 内置插件合并编译: 依赖库 (quickjs/codegraph 系/平台库) 与 include 路径
+# - 收集自 plugins/CMakeLists.txt 内置分支 (各插件子目录追加 PARENT_SCOPE)
+# - 链接策略与 _AGENTXX_LINK_LIBS 一致 (obj PRIVATE 供编译; 共享/静态库
+#   PUBLIC 保证静态库消费者连带链接)
+if (AGENTXX_ENABLE_PLUGIN_BUILTIN)
+  # 内置插件 OBJECT 库目标文件合并进共享/静态库 (各插件 OBJECT 库自带
+  # per-plugin 编译定义/包含路径, 与 lib 自身源码互不影响)
+  foreach(_plugin_target ${AGENTXX_BUILTIN_PLUGIN_OBJECT_TARGETS})
+    target_sources(agentxx_shared PRIVATE $<TARGET_OBJECTS:${_plugin_target}>)
+    target_sources(agentxx_static PRIVATE $<TARGET_OBJECTS:${_plugin_target}>)
+  endforeach()
+  # 内置插件依赖库 (quickjs/codegraph 系/平台库; 收集自 plugins 内置分支,
+  # 与 _AGENTXX_LINK_LIBS 相同链接策略: obj PRIVATE 供编译; 共享/静态库
+  # PUBLIC 保证静态库消费者连带链接)
+  foreach(_agentxx_target ${_AGENTXX_OBJ_LINK_TARGETS})
+    target_link_libraries(${_agentxx_target} PRIVATE ${AGENTXX_BUILTIN_PLUGIN_LINK_LIBS})
+  endforeach()
+  target_link_libraries(agentxx_shared PUBLIC ${AGENTXX_BUILTIN_PLUGIN_LINK_LIBS})
+  target_link_libraries(agentxx_static PUBLIC ${AGENTXX_BUILTIN_PLUGIN_LINK_LIBS})
+  # 插件资源 (plugin.yaml 等) 先于 lib 目标产出 (运行期目录配置依赖)
+  if (TARGET agentxx_builtin_plugin_resources)
+    add_dependencies(agentxx_shared agentxx_builtin_plugin_resources)
+    add_dependencies(agentxx_static agentxx_builtin_plugin_resources)
+    if (TARGET agentxx_obj)
+      add_dependencies(agentxx_obj agentxx_builtin_plugin_resources)
+    endif()
+  endif()
 endif()
 unset(_AGENTXX_OBJ_LINK_TARGETS)
 if (XX_IS_WIN_D)

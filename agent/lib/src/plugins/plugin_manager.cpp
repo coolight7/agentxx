@@ -540,6 +540,7 @@ void PluginManager::shutdownPlugin(const std::shared_ptr<PluginInstance>& inst) 
     inst->tools.clear();
     eraseMiddleware(inst.get());
     // unload 回调 (业务清理, 如引擎 join 内部线程); 宿主已自动反注册全部残留
+    // - 内置插件无 dlHandle, 直接调用加载时保存的回调
     if (inst->dlHandle) {
         std::string err;
         auto        fn = reinterpret_cast<AgentxxPluginUnloadFn>(
@@ -548,6 +549,8 @@ void PluginManager::shutdownPlugin(const std::shared_ptr<PluginInstance>& inst) 
         if (fn) {
             fn(inst->pluginCtx);
         }
+    } else if (inst->builtinUnload) {
+        inst->builtinUnload(inst->pluginCtx);
     }
     // 实例随 plugins_.clear()/局部引用释放 → dlclose
     XX_LOGI("Plugin shutdown: {}", inst->name);
@@ -1693,6 +1696,23 @@ static std::string pluginNameFromPath(const std::string& path) {
     return base;
 }
 
+// =====================================================================
+// 内置插件注册表 (可选合并编译进 libagentxx, 见 builtin_plugin.h)
+// =====================================================================
+
+/// 查询内置插件 (编译进 libagentxx 的插件; 未内置返回 nullptr)
+/// - 跳过 name 为空的占位条目 (空表时 agentxx_get_builtin_plugins 返回占位)
+static const AgentxxBuiltinPluginInfo* findBuiltinPlugin(std::string_view name) {
+    size_t                        count = 0;
+    const AgentxxBuiltinPluginInfo* arr  = agentxx_get_builtin_plugins(&count);
+    for (size_t i = 0; i < count; ++i) {
+        if (arr[i].name && name == arr[i].name) {
+            return &arr[i];
+        }
+    }
+    return nullptr;
+}
+
 asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadNativeAsync(std::string path) {
     auto ctx = agentContext_.lock();
     if (!ctx || !ctx->blockingPool) {
@@ -1797,6 +1817,112 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadNativeAsync(
 
     XX_LOGI(
         "Plugin loaded: {} v{} ({} tools, {} hooks, {} capabilities)",
+        name,
+        inst->version,
+        inst->toolNames.size(),
+        inst->hookRegistrations.size(),
+        inst->capabilityRegistrations.size()
+    );
+
+    // 保存配置参数 (yaml `plugins` 条目 args): 宿主不解析字段语义,
+    // 插件经 vtable get_plugin_args 整体读取
+    if (auto ctxPtr = agentContext_.lock(); ctxPtr && ctxPtr->agentConfig) {
+        for (const auto& pc : ctxPtr->agentConfig->plugins) {
+            if (!pc.path.empty() && pluginNameFromPath(pc.path) == name) {
+                inst->args = pc.args;
+                break;
+            }
+        }
+    }
+
+    co_return inst;
+}
+
+asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadBuiltinAsync(
+    std::string                    name,
+    std::string                    path,
+    std::vector<std::string>       depends,
+    std::vector<std::string>       optionalDepends
+) {
+    auto ctx = agentContext_.lock();
+    if (!ctx || !ctx->blockingPool) {
+        XX_LOGE("PluginManager: agent context not ready");
+        co_return nullptr;
+    }
+
+    // 内置注册表查找 (编译进 libagentxx 的插件; 无 dlopen)
+    const AgentxxBuiltinPluginInfo* entry = findBuiltinPlugin(name);
+    if (!entry || !entry->entry) {
+        XX_LOGE(
+            "Builtin plugin `{}` not found (not merged into libagentxx; "
+            "rebuild with AGENTXX_ENABLE_PLUGIN_BUILTIN=ON and this plugin enabled)",
+            name
+        );
+        co_return nullptr;
+    }
+    if (plugins_.contains(name)) {
+        XX_LOGE("Plugin `{}` already loaded", name);
+        co_return nullptr;
+    }
+
+    // 元信息 (内置插件直接调用 get_info, 与 loadNativeAsync 的 dlsym 可选符号同语义)
+    std::string version;
+    std::string desc;
+    if (entry->get_info) {
+        auto info = entry->get_info();
+        if (info && info->api_version != AGENTXX_PLUGIN_API_VERSION) {
+            XX_LOGE(
+                "Plugin `{}` api_version {} mismatch (host expects {})",
+                name,
+                info->api_version,
+                AGENTXX_PLUGIN_API_VERSION
+            );
+            co_return nullptr;
+        }
+        if (info) {
+            version = std::string{info->version.data ? info->version.data : "", info->version.size};
+            desc    = std::string{
+                info->description.data ? info->description.data : "", info->description.size
+            };
+        }
+    }
+
+    auto inst         = std::make_shared<PluginInstance>(name);
+    inst->version     = std::move(version);
+    inst->description = std::move(desc);
+    // path 传 manifest 入口文件路径 (与动态加载同形态, 供插件 get_own_info
+    // 按"库路径所在目录"推导资源文件, 如 example_js 壳的同目录 plugin.js;
+    // 传配置目录会误推导到上一级, 见 loadPluginAsync 内置回退)
+    inst->path             = std::move(path);
+    inst->dlHandle         = nullptr; // 内置插件无动态库句柄
+    inst->builtinUnload    = entry->unload;
+    inst->depends          = std::move(depends);
+    inst->optionalDepends  = std::move(optionalDepends);
+    inst->self             = inst;
+    inst->manager          = shared_from_this();
+    inst->host.vtable      = &g_hostVtable;
+    inst->host.opaque      = inst.get();
+
+    plugins_[name] = inst;
+
+    // entry 调用卸载到线程池 (与 loadNativeAsync 相同: 注册动作经 vtable
+    // ioCallSync 回 io 线程; 脚本插件的 entry 会经 invoke_capability 同步
+    // 等待引擎线程, entry 在 io 线程执行会 io↔引擎互等死锁)
+    int rc = co_await agentxx::util::offloadAsync<int>(
+        *ctx->blockingPool,
+        [inst, entry]() -> asio::awaitable<int> {
+            co_return entry->entry(&inst->host, &inst->pluginCtx);
+        }
+    );
+    if (rc != 0) {
+        XX_LOGE("Plugin `{}` entry returned {}", name, rc);
+        detachAll(inst.get());
+        plugins_.erase(name);
+        co_return nullptr;
+    }
+
+    XX_LOGI(
+        "Builtin plugin loaded: {} v{} ({} tools, {} hooks, {} capabilities)",
         name,
         inst->version,
         inst->toolNames.size(),
@@ -1982,7 +2108,8 @@ asio::awaitable<bool> PluginManager::unloadAsync(std::string_view name) {
         pendingCleanup_.end()
     );
 
-    // 插件 unload 回调 (业务清理; 宿主已自动反注册全部残留; 脚本插件无 dlHandle)
+    // 插件 unload 回调 (业务清理; 宿主已自动反注册全部残留; 内置插件无
+    // dlHandle, 直接调用加载时保存的回调, 不 dlsym)
     if (inst->dlHandle) {
         std::string err;
         auto        fn = reinterpret_cast<AgentxxPluginUnloadFn>(
@@ -1991,6 +2118,8 @@ asio::awaitable<bool> PluginManager::unloadAsync(std::string_view name) {
         if (fn) {
             fn(inst->pluginCtx);
         }
+    } else if (inst->builtinUnload) {
+        inst->builtinUnload(inst->pluginCtx);
     }
     plugins_.erase(it); // 析构 → dlclose (inst 局部 shared_ptr 保活到函数结束)
     XX_LOGI("Plugin unloaded: {}", inst->name);
@@ -2240,6 +2369,20 @@ bool PluginManager::checkDependencies(
 
 asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadPluginAsync(std::string path) {
     namespace fs = std::filesystem;
+
+    // 显式内置路径 (builtin://<插件名>): 直接从内置注册表加载, 不解析文件
+    // - 常规内置用法仍推荐插件目录路径 (依赖 plugin.yaml 推导 depends/资源);
+    //   本形态适合无资源需求的插件或测试直连
+    constexpr std::string_view kBuiltinScheme = "builtin://";
+    if (path.starts_with(kBuiltinScheme)) {
+        auto name = path.substr(kBuiltinScheme.size());
+        if (name.empty()) {
+            XX_LOGE("Plugin path `{}`: empty builtin name", path);
+            co_return nullptr;
+        }
+        co_return co_await loadBuiltinAsync(std::string{name}, std::move(path), {}, {});
+    }
+
     std::error_code ec;
     if (fs::is_directory(path, ec)) {
         // ---- 插件目录: 按 plugin.yaml 清单分派 ----
@@ -2287,14 +2430,52 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadPluginAsync(
                 }
             }
         }
-        auto inst = co_await loadNativeAsync(std::move(entryPath));
-        if (inst) {
-            inst->depends         = std::move(depends);
-            inst->optionalDepends = std::move(optionalDepends);
+        if (fs::exists(entryPath, ec2)) {
+            auto inst = co_await loadNativeAsync(std::move(entryPath));
+            if (inst) {
+                inst->depends         = std::move(depends);
+                inst->optionalDepends = std::move(optionalDepends);
+            }
+            co_return inst;
         }
-        co_return inst;
+        // 入口文件缺失: 内置模式 (AGENTXX_ENABLE_PLUGIN_BUILTIN=ON) 下插件
+        // 编译进 libagentxx, 无动态库文件 → 回退内置注册表
+        // (depends/optionalDepends 已由 plugin.yaml 解析, 级联卸载/拓扑排序
+        // 与动态加载完全一致; inst->path 传 manifest 入口文件路径 (与动态加载
+        // 同形态) —— 插件侧按"库路径所在目录"推导资源 (如 example_js 壳的
+        // dirOf 取同目录 plugin.js), 传目录会误推导到上一级)
+        if (findBuiltinPlugin(name)) {
+            XX_LOGI(
+                "Plugin `{}` entry file not found, fallback to builtin "
+                "(merged into libagentxx)",
+                name
+            );
+            co_return co_await loadBuiltinAsync(
+                name,
+                std::move(entryPath),
+                std::move(depends),
+                std::move(optionalDepends)
+            );
+        }
+        // 非内置模式: 保持原行为 (loadNativeAsync 报告 dlopen 失败)
+        co_return co_await loadNativeAsync(std::move(entryPath));
     }
+
     // ---- 文件: 视为原生库路径 ----
+    // 文件不存在且同名插件已内置 → 回退内置注册表 (支持直接写库路径的配置形态;
+    // 文件存在但 dlopen 失败则保留原错误, 不回退, 避免掩盖真实故障)
+    std::error_code ec3;
+    if (!fs::exists(path, ec3)) {
+        auto builtinName = pluginNameFromPath(path);
+        if (findBuiltinPlugin(builtinName)) {
+            XX_LOGI(
+                "Plugin file `{}` not found, fallback to builtin `{}`",
+                path,
+                builtinName
+            );
+            co_return co_await loadBuiltinAsync(builtinName, std::move(path), {}, {});
+        }
+    }
     co_return co_await loadNativeAsync(std::move(path));
 }
 

@@ -2,6 +2,7 @@
 
 #include "agentxx/agent/context.h"
 #include "agentxx/middlewares/middleware.h"
+#include "agentxx/plugin/builtin_plugin.h"
 #include "agentxx/plugin/plugin_api.h"
 #include "agentxx/plugin/tool_registry.h"
 #include "agentxx/tools/tool.h"
@@ -46,7 +47,10 @@ public:
     std::vector<std::string> depends;
     /// 可选依赖 (插件名): 未安装仅警告, 不影响加载
     std::vector<std::string> optionalDepends;
-    void*                    dlHandle = nullptr; ///< dlopen/LoadLibrary 句柄 (脚本插件为空)
+    void*                    dlHandle = nullptr; ///< dlopen/LoadLibrary 句柄 (内置插件为空)
+    /// 内置插件卸载回调 (编译进 libagentxx 的插件; dlHandle 为空时使用,
+    /// 无需 dlsym 查符号)
+    AgentxxPluginUnloadFn    builtinUnload = nullptr;
     void*                    pluginCtx = nullptr; ///< entry 输出的插件私有上下文
     bool                     enabled   = true; ///< 是否启用 (禁用: 工具摘除/钩子停用)
     bool userDisabled = false; ///< 是否被用户显式禁用 (区别于级联禁用; enable 级联不复活)
@@ -259,6 +263,20 @@ public:
     /// 加载原生 C++ 插件动态库 (io 线程调用; dlopen 卸载到线程池执行)
     /// - 返回插件实例; 加载失败返回 nullptr (错误记日志)
     asio::awaitable<std::shared_ptr<PluginInstance>> loadNativeAsync(std::string path);
+
+    /// 加载内置插件 (编译进 libagentxx, 无动态库文件; io 线程调用)
+    /// - 仅当同名插件已内置 (agentxx_get_builtin_plugins 注册表) 时可用;
+    ///   name/path/depends 语义与 loadPluginAsync 目录分支一致 (path 为
+    ///   manifest 入口文件路径, 用于 get_own_info 的资源推导; depends 来自
+    ///   plugin.yaml 解析)
+    /// - entry 调用卸载到线程池执行 (与 loadNativeAsync 相同, 避免 io↔引擎
+    ///   互等死锁); 返回插件实例; 失败返回 nullptr (错误记日志)
+    asio::awaitable<std::shared_ptr<PluginInstance>> loadBuiltinAsync(
+        std::string                    name,
+        std::string                    path,
+        std::vector<std::string>       depends,
+        std::vector<std::string>       optionalDepends
+    );
 
     /// 卸载插件 (按名称; 等全部在途回调完成后才 dlclose)
     asio::awaitable<bool> unloadAsync(std::string_view name);

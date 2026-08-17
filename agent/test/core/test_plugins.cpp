@@ -238,9 +238,14 @@ asio::awaitable<TestResult> run_plugin_tests() {
             co_return TestResult{g_plugin_passed, g_plugin_failed};
         }
         XX_TEST_EXPECT_EQ(jsInst->name, "example_js");
-        // 统一模型: 所有插件都是 C++ 插件 (有 dlHandle), 无 type 概念;
-        // 脚本能力由壳经能力调用委派给引擎 (宿主不参与)
+        // 统一模型: 所有插件都是 C++ 插件, 无 type 概念; 脚本能力由壳经
+        // 能力调用委派给引擎 (宿主不参与)。内置合并编译模式下插件编译进
+        // libagentxx, 无动态库句柄 (dlHandle 为空)
+#ifdef AGENTXX_ENABLE_PLUGIN_BUILTIN
+        XX_TEST_EXPECT_TRUE(jsInst->dlHandle == nullptr);
+#else
         XX_TEST_EXPECT_TRUE(jsInst->dlHandle != nullptr);
+#endif
         XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("example_js") == jsInst);
         // 依赖声明 (manifest depends: [agentxx_javascript_engine])
         XX_TEST_EXPECT_EQ(jsInst->depends.size(), size_t{1});
