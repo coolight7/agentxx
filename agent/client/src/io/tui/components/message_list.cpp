@@ -98,9 +98,20 @@ std::string formatToolArgs(std::string_view argsText) {
 MessageListComponent::MessageListComponent(TUICtx& ctx) :
     ctx_(ctx) {
     LazyScrollable::CacheBudget budget;
-    budget.maxItems            = 256; // 条数预算: 最近 ~256 条消息的渲染缓存
-    budget.maxBytes            = 16 * 1024 * 1024; // 字节预算: 缓存源文本累计 16MiB
-    budget.byteExemptThreshold = 1024;             // 短消息不计入字节预算
+    // 渲染树内存放大: FTXUI text()/paragraph() 按 glyph/词拆对象, 实测渲染树
+    // 为源文本 30~70 倍 (memprof 实测: 1MB 英文 -> text() 30.7MB, markdown
+    // 全量渲染 173MB)。因此 sourceBytes 按"渲染树估算字节"(源 × 64 系数) 上报
+    // (见 buildMessageItem), 使 maxBytes 直接约束真实驻留内存 —— 旧实现按
+    // 源文本字节计 (16MiB 源 ≈ 0.5~1GB 渲染树), 预算形同虚设, 实测 100K/200K
+    // 上下文时消息列表渲染树缓存即占 10+ MB。
+    budget.maxItems = 64;               // 条数预算: 可见 ~30 条 + 少量滚动余量
+    budget.maxBytes = 4 * 1024 * 1024;  // 渲染树估算字节预算: 4MiB
+    // 字节预算豁免: sourceBytes ≤64KB (即源 ≤1KB 的短消息) 不计入字节预算,
+    // 只受 maxItems 条数约束 (64 条 × ~64KB ≈ 4MB 封顶) —— 短消息渲染树
+    // 重建成本低, 无需挤占长消息的字节预算; 若连条数预算都不设, 短消息会
+    // 无限堆叠 (旧 byteExemptThreshold=1024 按源字节计, 配合旧 sourceBytes
+    // 语义, 短消息不计预算但依然缓存, 最多 256 条 × 64KB ≈ 16MB 常驻)
+    budget.byteExemptThreshold = 64 * 1024;
     scrollable_                = std::make_shared<LazyScrollable>(
         [this] {
             return itemCount();
@@ -537,9 +548,14 @@ LazyBuiltItem MessageListComponent::buildMessageItem(const TUIMessage& msg, size
     auto block = buildMessageBlock(msg, index, maxWidth, builders);
 
     LazyBuiltItem out;
-    out.element     = vbox({std::move(block), text("")});
-    out.sourceBytes = msg.text.size() + (msg.tool ? msg.tool->toolResult.size() : 0)
-                      + (msg.tool ? msg.tool->toolName.size() : 0);
+    out.element = vbox({std::move(block), text("")});
+    const size_t srcBytes = msg.text.size() + (msg.tool ? msg.tool->toolResult.size() : 0)
+                            + (msg.tool ? msg.tool->toolName.size() : 0);
+    // 渲染树内存估算: FTXUI 渲染树为源文本 ~30-70 倍 (text() 按 glyph 拆
+    // std::string, paragraph() 按词拆元素), 按 64 系数折算上报, 使
+    // LazyScrollable 的字节预算 (maxBytes) 约束真实驻留内存而非源文本字节
+    // (见构造函数预算注释; 系数取实测范围上沿, 宁紧勿松)
+    out.sourceBytes = srcBytes * 64;
     // 中断消息不缓存: 每帧重建以刷新控件 reflect 命中区域 (interruptHits_),
     // 否则缓存命中时控件 Box 丢失, 点击无法命中; 中断消息数量少, 成本可忽略
     out.cacheable = (msg.role != TUIMessage::Role::Interrupt);
@@ -626,7 +642,9 @@ LazyBuiltItem MessageListComponent::buildStreamingStable(const TUIRenderState& s
             streamRenderer_->stableBlockElement(bi, theme.markdownTheme, maxWidth) | color(c),
             text(""), // 块间空行分隔 (与整篇解析一致)
         });
-        out.sourceBytes = streamRenderer_->stableBlockSource(bi).size();
+        // 渲染树估算 (×64, 同 buildMessageItem): 稳定块 Element 同样按 glyph
+        // 拆 std::string, 内存放大 ~30-70 倍
+        out.sourceBytes = streamRenderer_->stableBlockSource(bi).size() * 64;
     } else {
         out.element = text("");
     }
