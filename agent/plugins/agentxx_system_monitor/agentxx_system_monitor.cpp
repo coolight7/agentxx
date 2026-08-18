@@ -628,7 +628,7 @@ static UsageStat parseUsage(const std::string& raw) {
                 if (!obj.error()) {
                     auto usageField = obj["usage_percent"];
                     if (!usageField.error()) {
-                        usageField.get_double().get(u);
+                        [[maybe_unused]] usageField.get_double().get(u);
                     }
                 }
                 if (u > st.gpuPeakPct) {
