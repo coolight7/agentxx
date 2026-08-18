@@ -50,6 +50,9 @@ asio::awaitable<bool> PermissionMiddlewareHandle::defOnFilesystemHandle(
     // 支持相对路径: 非绝对路径基于当前工作目录拼接为绝对路径,
     // 与 filesystem 工具实际访问的路径保持一致, 使注册的绝对路径规则也能匹配相对路径访问
     path = normalizePermissionPath(path);
+    if (path.empty()) {
+        co_return true;
+    }
     std::string re_path;
     // 最长前缀匹配: 注册的文件夹规则 (如 /data/projects) 对其下任意子路径生效
     auto handle = filesystemPermission.get(path, static_cast<int>(index), re_path, true);
@@ -140,8 +143,7 @@ void PermissionMiddlewareHandle::registerFilesystemHandles() {
     };
     handles["agentxx_filesystem_edit"]
         = [this](const neograph::Tool& item, neograph::json& args) -> asio::awaitable<bool> {
-        co_return co_await defOnFilesystemHandle(item, args, FilesystemPermissionREAD)
-            && co_await defOnFilesystemHandle(item, args, FilesystemPermissionWRITE);
+        co_return co_await defOnFilesystemHandle(item, args, FilesystemPermissionWRITE);
     };
     // handles["agentxx_filesystem_glob"] = readHandle;
     // handles["agentxx_filesystem_grep"] = readHandle;
