@@ -1202,6 +1202,59 @@ static int xx_set_prompt(const AgentxxHost* host, AgentxxPluginStringView prompt
     XX_PLUGIN_CATCH_END(-1)
 }
 
+/// 周期定时器 (io 线程约束; 跨线程经 post 同步等待; 回调内快速返回约定)
+static void* xx_add_timer(
+    const AgentxxHost* host,
+    long               interval_ms,
+    void (*fn)(void* ud),
+    void* ud
+) {
+    XX_PLUGIN_CATCH_BEGIN
+    auto mgr  = mgrOf(host);
+    auto inst = instOf(host);
+    if (!mgr || !inst || interval_ms <= 0 || !fn) {
+        return nullptr;
+    }
+    auto        mgrPtr  = mgr;
+    auto        instPtr = inst;
+    return ioCallSync<void*>(mgrPtr, [mgrPtr, instPtr, interval_ms, fn, ud]() {
+        return mgrPtr->addTimer(instPtr, interval_ms, fn, ud);
+    });
+    XX_PLUGIN_CATCH_END(nullptr)
+}
+
+static void xx_cancel_timer(const AgentxxHost* host, void* timer) {
+    XX_PLUGIN_CATCH_BEGIN
+    auto mgr  = mgrOf(host);
+    auto inst = instOf(host);
+    if (!mgr || !inst || !timer) {
+        return;
+    }
+    auto mgrPtr  = mgr;
+    auto instPtr = inst;
+    ioCallSyncVoid(mgrPtr, [mgrPtr, instPtr, timer]() {
+        mgrPtr->cancelTimer(instPtr, timer);
+    });
+    XX_PLUGIN_CATCH_END_VOID()
+}
+
+/// 阻塞池卸载执行 (任意线程可调用; work/done 期间插件代码段保活)
+static void xx_offload(
+    const AgentxxHost* host,
+    void* (*work)(void* ud, char** error_out),
+    void (*done)(void* ud, void* result, char* error),
+    void* ud
+) {
+    XX_PLUGIN_CATCH_BEGIN
+    auto mgr  = mgrOf(host);
+    auto inst = instOf(host);
+    if (!mgr || !inst || !work) {
+        return;
+    }
+    mgr->offload(inst, work, done, ud);
+    XX_PLUGIN_CATCH_END_VOID()
+}
+
 static const AgentxxHostVtable g_hostVtable = {
     xx_alloc,
     xx_free,
@@ -1234,6 +1287,9 @@ static const AgentxxHostVtable g_hostVtable = {
     xx_get_tool_prompt,
     xx_get_prompt,
     xx_set_prompt,
+    xx_add_timer,
+    xx_cancel_timer,
+    xx_offload,
 };
 
 // ==================== 工具注册/注销 ====================
@@ -1608,6 +1664,121 @@ void PluginManager::emitMessageTip(
     session->io->sendToPeer(delta);
 }
 
+// ==================== 宿主任务调度 (vtable add_timer/cancel_timer/offload) ====================
+
+namespace {
+
+/// 周期定时器触发循环 (静态函数 + bind 自持有 state; 避免 std::function
+/// 自引用导致悬垂/循环引用):
+/// - async_wait 完成(超时) → 触发回调 → 重新 expires_after + async_wait
+/// - 取消/错误 → 不再重新排程 → handler 链终结, state 随之释放
+/// - 回调执行期间 InflightGuard 保活插件代码段 (unload 等计数归零后才 dlclose)
+void pluginTimerLoop(
+    const neograph_asio_error_code&        ec,
+    const std::shared_ptr<PluginTimer>&    state
+) {
+    if (ec || state->cancelled || !state->inst) {
+        return; // 取消 (operation_aborted) 或宿主销毁
+    }
+    PluginInstance* inst = state->inst;
+    {
+        PluginInstance::InflightGuard guard(inst);
+        if (state->fn && !state->cancelled) {
+            state->fn(state->ud); // io 线程; 快速返回约定
+        }
+    }
+    // 重新排程
+    state->timer->expires_after(std::chrono::milliseconds(state->intervalMs));
+    state->timer->async_wait(std::bind(&pluginTimerLoop, std::placeholders::_1, state));
+}
+
+} // namespace
+
+void* PluginManager::addTimer(
+    PluginInstance* inst,
+    long            intervalMs,
+    void (*fn)(void* ud),
+    void* ud
+) {
+    if (!inst || !fn || intervalMs <= 0) {
+        return nullptr;
+    }
+    if (!ioExecutor_) {
+        XX_LOGW("Plugin `{}` add_timer: no io executor", inst->name);
+        return nullptr;
+    }
+    auto state        = std::make_shared<PluginTimer>();
+    state->inst       = inst;
+    state->intervalMs = intervalMs;
+    state->fn         = fn;
+    state->ud         = ud;
+    state->timer      = std::make_shared<asio::steady_timer>(ioExecutor_);
+
+    state->timer->expires_after(std::chrono::milliseconds(intervalMs));
+    state->timer->async_wait(std::bind(&pluginTimerLoop, std::placeholders::_1, state));
+
+    inst->timers.push_back(state);
+    return state.get();
+}
+
+void PluginManager::cancelTimer(PluginInstance* inst, void* timer) {
+    if (!inst || !timer) {
+        return;
+    }
+    auto it = std::find_if(
+        inst->timers.begin(),
+        inst->timers.end(),
+        [timer](const std::shared_ptr<PluginTimer>& t) {
+            return t.get() == timer;
+        }
+    );
+    if (it == inst->timers.end()) {
+        XX_LOGW("Plugin `{}` cancel_timer: handle not owned", inst->name);
+        return;
+    }
+    (*it)->cancelled = true;
+    // 本 asio 版本 timer::cancel() 仅无参形式 (可能抛异常), 调用处非析构, 捕获吞掉
+    try {
+        (*it)->timer->cancel(); // 中断在途 async_wait (handler 以 aborted 到达退出)
+    } catch (...) {
+    }
+    inst->timers.erase(it);   // 释放一侧持有; 在途 handler 链自持有到终结
+}
+
+void PluginManager::offload(
+    PluginInstance* inst,
+    void* (*work)(void* ud, char** error_out),
+    void (*done)(void* ud, void* result, char* error),
+    void* ud
+) {
+    if (!inst || !work) {
+        return;
+    }
+    auto ctx = agentContext_.lock();
+    if (!ctx || !ctx->blockingPool) {
+        XX_LOGW("Plugin `{}` offload: blocking pool not ready", inst->name);
+        return;
+    }
+    // inflight 计数贯穿 work+done: 卸载流程等计数归零后才调 unload 回调,
+    // 保证 work/done 执行期间插件代码段存活 (与 PluginTool 线程池路径一致)
+    // - fetch_add 一次 (offload 入口), fetch_sub 一次 (done 执行完毕后),
+    //   done 执行期间计数保持 >0 保活代码段; 不得再用 RAII guard (重复递减)
+    inst->inflight.fetch_add(1, std::memory_order_acq_rel);
+    auto ex = ioExecutor_;
+    asio::post(*ctx->blockingPool, [inst, work, done, ud, ex]() {
+        // ---- 阻塞池线程: 执行 work ----
+        char* error = nullptr;
+        void* result = work(ud, &error);
+        // ---- 投递回 io 线程执行 done (快速返回约定) ----
+        asio::post(ex, [inst, done, ud, result, error]() {
+            if (done) {
+                done(ud, result, error);
+            }
+            inst->inflight.fetch_sub(1, std::memory_order_acq_rel);
+        });
+    });
+}
+
 // ==================== 生命周期 ====================
 
 // =====================================================================
@@ -1932,6 +2103,16 @@ void PluginManager::detachAll(PluginInstance* inst) {
     for (const auto& c : inst->capabilityRegistrations) {
         capabilities_->unregisterCapability(c.name, inst->name);
     }
+    // 定时器: 统一取消 (vtable add_timer 登记; 在途 async_wait 以 aborted 退出,
+    // 回调不再触发; 在途 offload 由 inflight 计数等待, 此处无需处理)
+    for (const auto& t : inst->timers) {
+        t->cancelled = true;
+        try {
+            t->timer->cancel(); // 本 asio 版本仅无参形式 (可能抛异常)
+        } catch (...) {
+        }
+    }
+    inst->timers.clear();
     // 提示词: 回滚插件加载期间经 set_prompt 写入的修改 (恢复加载前状态)
     // - detachAll 仅被卸载路径调用 (unloadAsync/shutdownPlugin/entry 失败清理),
     //   disable 不经过此路径 (禁用时提示词条目保留, enable 后仍可用)

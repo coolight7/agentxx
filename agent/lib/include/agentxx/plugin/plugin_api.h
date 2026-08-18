@@ -41,7 +41,7 @@
 extern "C" {
 #endif
 
-#define AGENTXX_PLUGIN_API_VERSION 6
+#define AGENTXX_PLUGIN_API_VERSION 7
 
 /* ==================== 字符串视图 (跨边界字符串参数统一形态) ==================== */
 
@@ -322,6 +322,35 @@ typedef struct AgentxxHostVtable {
     ///   继续经 yaml 覆盖 (覆盖发生在插件加载前, 插件写入前应先 get_prompt
     ///   检查条目是否已存在, 已存在则尊重用户配置不覆盖)
     int (*set_prompt)(const AgentxxHost* host, AgentxxPluginStringView prompt_json);
+
+    /* ---- 宿主任务调度 (v7 新增; 插件经此使用宿主阻塞线程池/定时器,
+            大部分场景无需自建线程 —— 线程数量可控、卸载安全由宿主统一保证) ---- */
+    /// 周期定时器 (io 线程触发; 回调必须快速返回, 不得阻塞 io 线程)
+    /// - interval_ms > 0; 返回句柄 (宿主持有); 插件卸载时宿主自动取消全部
+    ///   定时器, 回调不会在插件代码段卸载后触发
+    /// - 回调执行期间插件代码段由宿主保活 (inflight 计数); 回调内可调用
+    ///   publish / offload / log 等任意 API
+    void* (*add_timer)(
+        const AgentxxHost* host,
+        long               interval_ms,
+        void (*fn)(void* ud),
+        void* ud
+    );
+    /// 取消定时器 (句柄随后失效; 插件卸载后句柄自动失效, 不得再调用)
+    void (*cancel_timer)(const AgentxxHost* host, void* timer);
+    /// 在宿主阻塞线程池执行同步回调 (阻塞操作专用: 文件遍历/系统采样等;
+    /// 池线程数有限, 禁止长时间占用, 短时阻塞操作完成后应尽快返回)
+    /// - work: 在阻塞池线程执行; 返回结果与 error_out 须 host->alloc 分配
+    /// - done: work 返回后投递回 io 线程执行 (快速返回约定; result 为 work
+    ///   返回值, error 为 work 填充的错误; 两者均须在 done 内 host->free)
+    /// - work/done 执行期间插件代码段由宿主保活 (inflight 计数); 插件卸载
+    ///   时宿主等待在途 offload 完成后再调 unload 回调
+    void (*offload)(
+        const AgentxxHost* host,
+        void* (*work)(void* ud, char** error_out),
+        void (*done)(void* ud, void* result, char* error),
+        void* ud
+    );
 } AgentxxHostVtable;
 
 struct AgentxxHost {
