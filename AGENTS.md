@@ -93,6 +93,25 @@ path/to/agentxx_test string_util regex
 - 主程序和插件可以复用一些代码，比如一些工具函数，这部分复用代码需要静态链接进主程序和各自插件内，确保兼容不同版本的复用代码编译的主程序和插件可以加载运行
 - 在主程序和插件的接口中不能传递标准库结构体，也不能传递复用代码里的结构体，这些都只能各自内部使用，且插件编译时应当只导出接口符号，其他符号全部隐藏
 
+已实现的插件设计约束 (2026-08)：
+- 导出符号控制: 插件动态库仅导出宿主按名查找的入口符号
+  (`agentxx_plugin_get_info/entry/unload` + client 侧 `agentxx_client_*`),
+  由 `AGENTXX_PLUGIN_EXPORT` 宏标记入口函数 (见 `plugin_api.h`);
+  构建侧统一配置: ELF `-fvisibility=hidden` + version script 白名单
+  (隐藏第三方静态库符号), macOS `-exported_symbols_list`, MSVC 不自动导出
+  (仅 dllexport); 见 `agent/plugins/CMakeLists.txt` 与各插件 CMakeLists
+- 工具函数复用: 插件复用 `agent/lib/include/agentxx/util` 的全部工具函数经独立
+  静态库 `agentxx_util` (src/util/ 全部源文件: http_client/http_server/ws_client/
+  string_util/util/sqlite/settings_db/log/regex/http_header),
+  libagentxx 与插件各自静态链接一份 (符号经导出控制隐藏, 互不冲突);
+  插件 CMakeLists: `find_package(agentxx_util)` + `target_link_libraries(PRIVATE agentxx_util)`;
+  依赖全部 PUBLIC 传递 (fmt/sqlite3/uchardet/iconv + neograph 系/yyjson/OpenSSL/
+  hyperscan/uring 的链接与 include), 插件链接后直接可用全部 util;
+  定位为内置插件便捷库 (与主程序同一 superbuild 构建、依赖齐全),
+  第三方插件不需要它 (纯 C ABI 头即可, 甚至不用 C++);
+  未引用模块按目标文件提取自动裁剪 (9 插件 DT_NEEDED 仅系统库);
+  详见 `docs/agent/plugins.md` 4.5/4.6 节
+
 ## 编译
 - Linux:
     - 使用 shell 脚本编译: [linux_debug_build.sh](agent/script/linux_debug_build.sh) 或 [linux_release_build.sh](agent/script/linux_release_build.sh)
