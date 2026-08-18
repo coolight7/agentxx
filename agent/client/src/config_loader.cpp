@@ -59,8 +59,9 @@ std::map<std::string, std::string> loadDotEnv(std::string_view path) {
         if (!parseEnvLine(line, key, value)) {
             continue;
         }
-        const char* existing = std::getenv(key.c_str());
-        vars[key]            = existing ? std::string(existing) : value;
+        // .env 文件变量直接生效 (不查询系统环境变量):
+        // 查找顺序为 内置 > --env > .env > 系统环境变量, .env 优先于系统环境变量
+        vars[key] = value;
     }
     return vars;
 }
@@ -95,6 +96,45 @@ std::map<std::string, std::string> loadDotEnv(const std::vector<std::string>& pa
 }
 
 // ---------------------------------------------------------------------------
+// 程序内置环境变量 (main 启动时注入; yaml ${VAR} 展开时优先解析)
+// ---------------------------------------------------------------------------
+
+/// 内置环境变量存储 (值由 main 启动时经 setBuiltinEnvVar 注入)
+/// - 空值 = 未注入 (对应变量惰性解析, 如 AGENTXX_WORK_DIR 回退 current_path())
+static std::map<std::string, std::string> g_builtinEnvVars;
+
+void setBuiltinEnvVar(std::string_view name, std::string value) {
+    if (value.empty()) {
+        g_builtinEnvVars.erase(std::string{name});
+    } else {
+        g_builtinEnvVars[std::string{name}] = std::move(value);
+    }
+}
+
+/// 解析程序内置环境变量; 非内置变量返回 nullopt
+/// - AGENTXX_WORK_DIR: 程序启动后的工作目录
+///   (main 入口注入; 未注入时惰性回退 current_path())
+static std::optional<std::string> resolveBuiltinEnvVar(std::string_view varName) {
+    if (varName == kBuiltinWorkDirEnv) {
+        auto it = g_builtinEnvVars.find(std::string{varName});
+        if (it != g_builtinEnvVars.end()) {
+            return it->second;
+        }
+        // 未注入 (测试/嵌入场景): 惰性取当前工作目录
+        std::error_code ec;
+        auto            cwd = std::filesystem::current_path(ec);
+        if (ec) {
+            XX_LOGW("[Config] resolve ${} failed: {}", varName, ec.message());
+            return std::nullopt;
+        }
+        // 统一使用正斜杠 (generic_string): yaml 中 `${AGENTXX_WORK_DIR}/sub` 拼接
+        // 不产生反斜杠转义问题 (Windows 原生路径含 `\`, 双引号 yaml 字符串中会转义)
+        return cwd.generic_string();
+    }
+    return std::nullopt;
+}
+
+// ---------------------------------------------------------------------------
 // ${VAR} resolution
 // ---------------------------------------------------------------------------
 
@@ -124,21 +164,31 @@ std::string resolveEnvVars(
         std::string varName{input.substr(start + 2, close - start - 2)};
         pos = close + 1;
 
+        // 程序内置环境变量优先 (如 AGENTXX_WORK_DIR: 程序启动后的工作目录)
+        // - 内置变量由程序自身定义, 值恒定, 不应被环境变量/.env 覆盖
+        if (auto builtinVal = resolveBuiltinEnvVar(varName)) {
+            result.append(*builtinVal);
+            continue;
+        }
+        // --env 覆盖式文件变量 (命令行显式指定, 最高优先级)
         auto ovIt = overrideEnvVars.find(varName);
         if (ovIt != overrideEnvVars.end()) {
             result.append(ovIt->second);
             continue;
         }
-        const char* envVal = std::getenv(varName.c_str());
-        if (envVal != nullptr) {
-            result.append(envVal);
-            continue;
-        }
+        // .env 文件变量 (优先于系统环境变量)
         auto dotIt = dotEnvVars.find(varName);
         if (dotIt != dotEnvVars.end()) {
             result.append(dotIt->second);
             continue;
         }
+        // 系统环境变量
+        const char* envVal = std::getenv(varName.c_str());
+        if (envVal != nullptr) {
+            result.append(envVal);
+            continue;
+        }
+        // 均未找到: 保留 ${VAR} 原样
         XX_LOGW("[config] model.key with `${{}}` but not value in .env: {}", varName);
         result.append(input, start, close - start + 1);
     }
