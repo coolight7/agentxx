@@ -86,6 +86,17 @@ struct YamlAppConfig {
     std::vector<agent::PluginConfig> plugins;
 };
 
+/// 程序内置环境变量: 程序启动后的工作目录
+/// - yaml 配置中可经 `${AGENTXX_WORK_DIR}` 引用 (如 `data_dir: ${AGENTXX_WORK_DIR}/data`)
+/// - 值为程序启动 (main 入口) 时的工作目录; 查找顺序最优先 (先于 .env/系统环境变量)
+/// - 未注入时 (测试/嵌入场景) resolveEnvVars 惰性回退 current_path()
+inline constexpr std::string_view kBuiltinWorkDirEnv = "AGENTXX_WORK_DIR";
+
+/// 注入程序内置环境变量 (main 启动时尽早调用; 供 yaml `${VAR}` 展开使用)
+/// - 内置变量在 resolveEnvVars 中优先解析 (先于 override/env/.env)
+/// - 传入空值表示清除该变量 (回退惰性解析)
+void setBuiltinEnvVar(std::string_view name, std::string value);
+
 std::map<std::string, std::string> loadDotEnv(std::string_view path);
 std::map<std::string, std::string> loadDotEnv(const std::vector<std::string>& paths);
 std::map<std::string, std::string> loadOverrideEnv(std::string_view path);

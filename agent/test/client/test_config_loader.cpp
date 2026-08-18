@@ -2,6 +2,7 @@
 
 #include "agentxx-client/config_loader.h"
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <fmt/format.h>
 #include <fstream>
@@ -35,6 +36,71 @@ static agentxx::client::YamlAppConfig loadYaml(std::string_view content) {
     fs::remove(path, ec);
     return cfg;
 }
+
+/// 加载 yaml 并携带 .env 变量 (dotEnvVars)
+static agentxx::client::YamlAppConfig loadYamlWithDotEnv(
+    std::string_view                          content,
+    const std::map<std::string, std::string>& dotEnvVars
+) {
+    auto path = fs::temp_directory_path()
+                / fmt::format(
+                    "agentxx_config_loader_test_{}.yaml",
+                    std::chrono::steady_clock::now().time_since_epoch().count()
+                );
+    {
+        std::ofstream ofs(path);
+        ofs << content;
+    }
+    auto            cfg = agentxx::client::loadYamlConfig(path.string(), dotEnvVars, {});
+    std::error_code ec;
+    fs::remove(path, ec);
+    return cfg;
+}
+
+// ---------------------------------------------------------------------------
+// 系统环境变量读写辅助 (测试查找顺序用; 结束时恢复原值)
+// ---------------------------------------------------------------------------
+
+#if XX_IS_WIN_D
+static void setSystemEnvVar(const std::string& key, const std::string& value) {
+    _putenv_s(key.c_str(), value.c_str());
+}
+static void clearSystemEnvVar(const std::string& key) {
+    _putenv_s(key.c_str(), "");
+}
+#else
+static void setSystemEnvVar(const std::string& key, const std::string& value) {
+    setenv(key.c_str(), value.c_str(), 1);
+}
+static void clearSystemEnvVar(const std::string& key) {
+    unsetenv(key.c_str());
+}
+#endif
+
+/// RAII: 设置系统环境变量, 析构时恢复原值/删除
+class SystemEnvGuard {
+public:
+    SystemEnvGuard(const std::string& key, const std::string& value) : key_(key) {
+        const char* had   = std::getenv(key_.c_str());
+        existed_          = had != nullptr;
+        saved_            = had ? std::string{had} : std::string{};
+        setSystemEnvVar(key_, value);
+    }
+    ~SystemEnvGuard() {
+        if (existed_) {
+            setSystemEnvVar(key_, saved_);
+        } else {
+            clearSystemEnvVar(key_);
+        }
+    }
+    SystemEnvGuard(const SystemEnvGuard&)            = delete;
+    SystemEnvGuard& operator=(const SystemEnvGuard&) = delete;
+
+private:
+    std::string key_;
+    bool        existed_ = false;
+    std::string saved_;
+};
 
 // ---------------------------------------------------------------------------
 // permission.mode 解析 (yaml `permission` 块)
@@ -558,6 +624,156 @@ void test_plugin_args_env_expand() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// 程序内置环境变量 (yaml ${VAR} 展开: AGENTXX_WORK_DIR = 程序启动后的工作目录)
+// ---------------------------------------------------------------------------
+
+void test_builtin_work_dir_default() {
+    // 未注入时惰性回退当前工作目录 (正斜杠)
+    agentxx::client::setBuiltinEnvVar(agentxx::client::kBuiltinWorkDirEnv, "");
+    auto cfg = loadYaml("data_dir: ${AGENTXX_WORK_DIR}/agentxx-data\n");
+    auto expected
+        = (std::filesystem::current_path() / "agentxx-data").generic_string();
+    XX_TEST_EXPECT_EQ(cfg.dataDir, expected);
+}
+
+void test_builtin_work_dir_inject() {
+    // main 启动时注入的值生效
+    agentxx::client::setBuiltinEnvVar(agentxx::client::kBuiltinWorkDirEnv, "C:/custom/work");
+    auto cfg = loadYaml("data_dir: ${AGENTXX_WORK_DIR}/agentxx-data\n");
+    XX_TEST_EXPECT_EQ(cfg.dataDir, std::string("C:/custom/work/agentxx-data"));
+}
+
+void test_builtin_work_dir_priority() {
+    // 内置变量优先于 .env (dotEnvVars) / 系统环境变量: 同名 .env 值不生效
+    agentxx::client::setBuiltinEnvVar(agentxx::client::kBuiltinWorkDirEnv, "C:/builtin/work");
+    auto path = fs::temp_directory_path()
+                / fmt::format(
+                    "agentxx_config_loader_test_{}.yaml",
+                    std::chrono::steady_clock::now().time_since_epoch().count()
+                );
+    {
+        std::ofstream ofs(path);
+        ofs << "data_dir: ${AGENTXX_WORK_DIR}/data\n";
+    }
+    auto cfg = agentxx::client::loadYamlConfig(
+        path.string(),
+        {
+            {"AGENTXX_WORK_DIR", "C:/from/dotenv"}
+    },
+        {}
+    );
+    XX_TEST_EXPECT_EQ(cfg.dataDir, std::string("C:/builtin/work/data"));
+
+    // 清除注入 (空值) 后回退惰性解析: 内置变量仍优先于 .env (值 = 当前工作目录)
+    agentxx::client::setBuiltinEnvVar(agentxx::client::kBuiltinWorkDirEnv, "");
+    cfg = agentxx::client::loadYamlConfig(
+        path.string(),
+        {
+            {"AGENTXX_WORK_DIR", "C:/from/dotenv"}
+    },
+        {}
+    );
+    XX_TEST_EXPECT_EQ(
+        cfg.dataDir,
+        (std::filesystem::current_path() / "data").generic_string()
+    );
+
+    std::error_code ec;
+    fs::remove(path, ec);
+}
+
+// ---------------------------------------------------------------------------
+// 环境变量查找顺序: 程序内置变量 > --env 覆盖文件 > .env 文件 > 系统环境变量 > 保留 ${VAR} 原样
+// ---------------------------------------------------------------------------
+
+void test_env_order_dotenv_over_system() {
+    // .env 变量优先于系统环境变量 (同 key 时取 .env 值)
+    SystemEnvGuard guard{"AGENTXX_TEST_ENV_ORDER", "from-system"};
+    auto          cfg = loadYamlWithDotEnv(
+        "data_dir: ${AGENTXX_TEST_ENV_ORDER}/data\n",
+        {{"AGENTXX_TEST_ENV_ORDER", "from-dotenv"}}
+    );
+    XX_TEST_EXPECT_EQ(cfg.dataDir, std::string("from-dotenv/data"));
+}
+
+void test_env_order_system_fallback() {
+    // .env 未定义、系统环境变量有值: 取系统值
+    SystemEnvGuard guard{"AGENTXX_TEST_ENV_ORDER", "from-system"};
+    auto          cfg = loadYaml("data_dir: ${AGENTXX_TEST_ENV_ORDER}/data\n");
+    XX_TEST_EXPECT_EQ(cfg.dataDir, std::string("from-system/data"));
+}
+
+void test_env_order_override_highest() {
+    // --env 覆盖式文件 (overrideEnvVars) 优先于 .env 与系统环境变量
+    SystemEnvGuard guard{"AGENTXX_TEST_ENV_ORDER", "from-system"};
+    auto path = fs::temp_directory_path()
+                / fmt::format(
+                    "agentxx_config_loader_test_{}.yaml",
+                    std::chrono::steady_clock::now().time_since_epoch().count()
+                );
+    {
+        std::ofstream ofs(path);
+        ofs << "data_dir: ${AGENTXX_TEST_ENV_ORDER}/data\n";
+    }
+    auto cfg = agentxx::client::loadYamlConfig(
+        path.string(),
+        {
+            {"AGENTXX_TEST_ENV_ORDER", "from-dotenv"}
+    },
+        {
+            {"AGENTXX_TEST_ENV_ORDER", "from-override"}
+    }
+    );
+    std::error_code ec;
+    fs::remove(path, ec);
+    XX_TEST_EXPECT_EQ(cfg.dataDir, std::string("from-override/data"));
+}
+
+void test_env_order_unresolved_kept() {
+    // 内置/.env/系统均未定义: 保留 ${VAR} 原样
+    // 注: 部分平台 (Windows _putenv_s) 清除变量时可能置为空串而非删除,
+    // 空串同样视为"未定义"(展开为空串); 两种情况分别断言
+    const char* key = "AGENTXX_TEST_ENV_MISSING_9F3K2Q";
+    clearSystemEnvVar(key);
+    auto cfg = loadYaml("data_dir: ${AGENTXX_TEST_ENV_MISSING_9F3K2Q}/data\n");
+    const char* cur = std::getenv(key);
+    if (cur == nullptr) {
+        // 变量被真正删除: 保留 ${VAR} 原样
+        XX_TEST_EXPECT_TRUE(
+            cfg.dataDir.find("${AGENTXX_TEST_ENV_MISSING_9F3K2Q}") != std::string::npos
+        );
+    } else if (*cur == '\0') {
+        // 平台将变量置为空串: 展开结果为空串 (空串视为未定义)
+        XX_TEST_EXPECT_EQ(cfg.dataDir, std::string("/data"));
+    } else {
+        // 变量意外存在 (测试环境脏): 展开行为与真实环境一致
+        XX_TEST_EXPECT_EQ(cfg.dataDir, std::string(cur) + "/data");
+    }
+}
+
+void test_dotenv_file_over_system() {
+    // loadDotEnv 文件读取: .env 文件值直接生效, 不被系统环境变量覆盖
+    SystemEnvGuard guard{"AGENTXX_TEST_ENV_FILE", "from-system"};
+    auto path = fs::temp_directory_path()
+                / fmt::format(
+                    "agentxx_config_loader_test_{}.env",
+                    std::chrono::steady_clock::now().time_since_epoch().count()
+                );
+    {
+        std::ofstream ofs(path);
+        ofs << "AGENTXX_TEST_ENV_FILE=from-file\n";
+    }
+    auto vars = agentxx::client::loadDotEnv(path.string());
+    std::error_code ec;
+    fs::remove(path, ec);
+    auto it = vars.find("AGENTXX_TEST_ENV_FILE");
+    XX_TEST_EXPECT_TRUE(it != vars.end());
+    if (it != vars.end()) {
+        XX_TEST_EXPECT_EQ(it->second, std::string("from-file"));
+    }
+}
+
 TestResult testConfigLoader() {
     g_config_loader_passed = 0;
     g_config_loader_failed = 0;
@@ -570,6 +786,14 @@ TestResult testConfigLoader() {
     test_permission_mode_case_insensitive();
     test_permission_mode_invalid_fallback();
     test_permission_mode_env_expand();
+    test_builtin_work_dir_default();
+    test_builtin_work_dir_inject();
+    test_builtin_work_dir_priority();
+    test_env_order_dotenv_over_system();
+    test_env_order_system_fallback();
+    test_env_order_override_highest();
+    test_env_order_unresolved_kept();
+    test_dotenv_file_over_system();
     test_permission_lists_parse();
     test_permission_lists_absent();
     test_permission_lists_env_expand();
