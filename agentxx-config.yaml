@@ -2,7 +2,13 @@
 # 使用方式: agentxx_cli --config agentxx-config.yaml [train|acp]
 #
 # key 字段支持 ${VAR} 环境变量占位符，会在运行时被真实环境变量替换。
-# 查找顺序: 系统环境变量 > .env 文件变量 > 保留 ${VAR} 原样
+# 查找顺序: 程序内置变量 > --env 覆盖文件变量 > .env 文件变量 > 系统环境变量 > 保留 ${VAR} 原样
+#
+# 程序内置变量:
+#   - AGENTXX_WORK_DIR: 程序启动后的工作目录 (启动时所在目录, 正斜杠格式)
+#     例如: data_dir: ${AGENTXX_WORK_DIR}/.agentxx-data
+#   - AGENTXX_EXEC_DIR: agentxx_cli 可执行程序所在目录 (正斜杠格式)
+#     例如: 插件/数据相对 exe 目录: data_dir: ${AGENTXX_EXEC_DIR}/.agentxx-data
 #
 # 可选的 .env 文件（--env 指定文件/当前目录/配置文件同目录）:
 #   LLM_API_KEY=sk-your-key-here
@@ -115,6 +121,15 @@ models:
         effort: max
       stream: true
       preserve_thinking: true 
+  - name: scnet-GLM-5-Base
+    type: "openai"
+    base_url: "https://api.scnet.cn/api/llm/v1"
+    api_key: "sk-NzEwLTIxNDkyNDAzNTQ4LTE3ODY5ODMyNTgxMjU="
+    model_name: "GLM-5-Base"
+    model_context_max_token: 100000
+    send_thinking: false
+    extra_api_config:
+      stream: true
   - name: opencode-glm-5.2
     type: "openai"
     base_url: "https://opencode.ai/zen/go/v1"
@@ -235,25 +250,25 @@ memory:
 #   也可显式写 builtin://插件名 (无资源需求的插件/测试直连用)
 plugins:
   # --- 示例: 原生 C++ 插件 (直接库路径) ---
-  # - path: "${AGENTXX_PLUGINS_DIR}/example_plugin"
+  # - path: "${AGENTXX_EXEC_DIR}/plugins/example_plugin"
   #   enabled: true
   #   args: { foo: bar }
 
   # --- 示例: 禁用 (加载时跳过) ---
-  # - path: "${AGENTXX_PLUGINS_DIR}/example_plugin"
+  # - path: "${AGENTXX_EXEC_DIR}/plugins/example_plugin"
   #   enabled: false
 
   # --- 示例: JS 插件 (引擎 + 脚本插件; 顺序无关, 拓扑排序自动处理) ---
-  # - path: "${AGENTXX_PLUGINS_DIR}/agentxx_javascript_engine"
+  # - path: "${AGENTXX_EXEC_DIR}/plugins/agentxx_javascript_engine"
   #   enabled: true
-  # - path: "${AGENTXX_PLUGINS_DIR}/example_js"
+  # - path: "${AGENTXX_EXEC_DIR}/plugins/example_js"
   #   enabled: true
 
   # --- 示例: Windows 桌面控制 (screen_capture 捕获 + computer_use 控制;
   #   须同时配置, computer_use 的 plugin.yaml depends 声明依赖 screen_capture) ---
-  # - path: "${AGENTXX_PLUGINS_DIR}/agentxx_screen_capture"
+  # - path: "${AGENTXX_EXEC_DIR}/plugins/agentxx_screen_capture"
   #   enabled: true
-  # - path: "${AGENTXX_PLUGINS_DIR}/agentxx_computer_use"
+  # - path: "${AGENTXX_EXEC_DIR}/plugins/agentxx_computer_use"
   #   enabled: true
 
   # === CodeGraph 代码分析 (插件 agentxx_codegraph; 默认关闭)
@@ -264,7 +279,7 @@ plugins:
   #     load_cwd:       未配置 paths 时是否默认加载当前工作目录 (默认 true)
   #     use_gitignore:  是否默认忽略 .gitignore 规则与 .gitmodules 子模块目录 (默认 true)
   # - 索引数据库: {data_dir}/sqlite/codegraph/<折叠路径>/index.db
-  - path: ${AGENTXX_PLUGINS_DIR}/agentxx_codegraph/
+  - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_codegraph/
     enabled: true
     args:
       # paths:
@@ -282,19 +297,19 @@ plugins:
   # - 能力: agentxx.system_usage (方法 query) —— TUI 侧边栏 System 段
   #   (WireGetSystemUsage 周期请求) 经服务端调用本能力采集 CPU/内存/GPU;
   #   载荷 schema 由本插件定义, 宿主只透传 (lib wire 层无系统资源 DTO)
-  - path: ${AGENTXX_PLUGINS_DIR}/agentxx_system_monitor/
+  - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_system_monitor/
     enabled: true
 
   # === 音频流捕获 (插件 agentxx_audio_stream; 从 lib expand 拆分, 默认关闭)
   # - 工具: agentxx_audio_stream (start/stop/status; 仅 Windows 支持捕获,
   #   其他平台 start 返回失败)
   # - 捕获帧经事件推送 (topic agentxx_audio_stream.audio)
-  # - path: ${AGENTXX_PLUGINS_DIR}/agentxx_audio_stream/
+  # - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_audio_stream/
   #   enabled: true
 
   # === 系统级文本选择事件流 (插件 agentxx_text_selection_monitor;
   #   从 lib expand 拆分, 默认关闭; 仅 Windows 支持)
   # - 工具: agentxx_text_selection_monitor (start/stop/status)
   # - 选中文本经事件推送 (topic agentxx_text_selection_monitor.selection)
-  # - path: ${AGENTXX_PLUGINS_DIR}/agentxx_text_selection_monitor/
+  # - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_text_selection_monitor/
   #   enabled: true

@@ -683,6 +683,33 @@ void test_builtin_work_dir_priority() {
     fs::remove(path, ec);
 }
 
+void test_builtin_exec_dir_inject() {
+    // main 注入的可执行目录生效 (与 AGENTXX_WORK_DIR 独立)
+    agentxx::client::setBuiltinEnvVar(agentxx::client::kBuiltinExecDirEnv, "C:/tools/agentxx/bin");
+    auto cfg = loadYaml("data_dir: ${AGENTXX_EXEC_DIR}/data\n");
+    XX_TEST_EXPECT_EQ(cfg.dataDir, std::string("C:/tools/agentxx/bin/data"));
+    // 清理注入, 避免影响后续测试
+    agentxx::client::setBuiltinEnvVar(agentxx::client::kBuiltinExecDirEnv, "");
+}
+
+void test_builtin_exec_dir_uninjected_kept() {
+    // 未注入且无系统/.env 变量: 保留 ${AGENTXX_EXEC_DIR} 原样 (可执行目录无法惰性推导)
+    agentxx::client::setBuiltinEnvVar(agentxx::client::kBuiltinExecDirEnv, "");
+    clearSystemEnvVar("AGENTXX_EXEC_DIR");
+    auto cfg = loadYaml("data_dir: ${AGENTXX_EXEC_DIR}/data\n");
+    const char* cur = std::getenv("AGENTXX_EXEC_DIR");
+    if (cur == nullptr) {
+        // 变量被真正删除: 保留 ${VAR} 原样
+        XX_TEST_EXPECT_TRUE(cfg.dataDir.find("${AGENTXX_EXEC_DIR}") != std::string::npos);
+    } else if (*cur == '\0') {
+        // 平台将变量置为空串: 展开结果为空串 (空串视为未定义)
+        XX_TEST_EXPECT_EQ(cfg.dataDir, std::string("/data"));
+    } else {
+        // 变量意外存在 (测试环境脏): 展开行为与真实环境一致
+        XX_TEST_EXPECT_EQ(cfg.dataDir, std::string(cur) + "/data");
+    }
+}
+
 // ---------------------------------------------------------------------------
 // 环境变量查找顺序: 程序内置变量 > --env 覆盖文件 > .env 文件 > 系统环境变量 > 保留 ${VAR} 原样
 // ---------------------------------------------------------------------------
@@ -789,6 +816,8 @@ TestResult testConfigLoader() {
     test_builtin_work_dir_default();
     test_builtin_work_dir_inject();
     test_builtin_work_dir_priority();
+    test_builtin_exec_dir_inject();
+    test_builtin_exec_dir_uninjected_kept();
     test_env_order_dotenv_over_system();
     test_env_order_system_fallback();
     test_env_order_override_highest();
