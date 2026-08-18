@@ -15,7 +15,9 @@
 //   以侧边栏 Info 栏段落渲染明细 (CPU/RAM/GPU); 显示开关命令 /sysinfo
 //   经跨端事件 (usage_enabled) 上行同步到 agent 侧, 关闭期间跳过采集
 // - 插件不链接 libagentxx: 日志经 vtable log, JSON 组装用 fmt + json_escape
+// - RAM/VRAM 等容量展示复用 agentxx_util 的 formatSize (字节入参, 自动选单位)
 #include "agentxx/plugin/client_plugin_api.h"
+#include "agentxx/util/string_util.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/io_context.hpp"
@@ -219,11 +221,16 @@ static char* getSystemCoreInfoExecute(
         auto              usage = querySync();
         std::stringstream ss;
         ss << fmt::format("CPU Usage: {:.1f}%\n", usage.cpuUsagePercent);
+        // formatSize 入参为字节: memory.*MB 为 MB 值, 需先乘 1024*1024 转字节
+        // (直接传 MB 会得到错误的 "K" 级单位, 如 8192MB 显示 "8K")
+        const auto mbToBytes = [](uint64_t mb) {
+            return mb * 1024 * 1024;
+        };
         ss << fmt::format(
-            "Memory: {:.1f}% (Used: {}MB / Total: {}MB)\n",
+            "Memory: {:.1f}% (Used: {} / Total: {})\n",
             usage.memory.usagePercent,
-            usage.memory.usedPhysicalMB,
-            usage.memory.totalPhysicalMB
+            agentxx::util::formatSize(mbToBytes(usage.memory.usedPhysicalMB)),
+            agentxx::util::formatSize(mbToBytes(usage.memory.totalPhysicalMB))
         );
         for (size_t i = 0; i < usage.gpus.size(); ++i) {
             const auto& gpu = usage.gpus[i];
@@ -655,10 +662,20 @@ static std::string buildUsageInfoItemsJson(const UsageStat& st) {
     };
 
     textItem(fmt::format("|- CPU {:.0f}%", st.cpu));
-    // RAM: 45% (8192/18432 MB)
+    // RAM: 45% (8G/18G) —— agentxx::util::formatSize 按字节入参自动选单位
+    // (K/M/G/T); mem_* 为 MB 值需先乘 1024*1024 转字节, showFloat=false
+    // 取整展示 (Info 栏空间有限, 整数单位足够; 与状态栏上下文显示一致)
     std::string ram = fmt::format("|- RAM {:.0f}%", st.memPct);
     if (st.memTotalMb > 0) {
-        ram = fmt::format("{} ({}/{} M)", ram, st.memUsedMb, st.memTotalMb);
+        const auto mbToBytes = [](int64_t mb) {
+            return static_cast<uint64_t>(mb) * 1024 * 1024;
+        };
+        ram = fmt::format(
+            "{} ({}/{})",
+            ram,
+            agentxx::util::formatSize(mbToBytes(st.memUsedMb), 1024, false),
+            agentxx::util::formatSize(mbToBytes(st.memTotalMb), 1024, false)
+        );
     }
     textItem(ram);
     if (st.gpuCount == 0) {
