@@ -157,19 +157,6 @@ static ToolPrompt defaultToolPrompt(const std::string& toolName) {
               "Returns plain multi-line text: \"Impact (N):\" followed by one block per symbol.";
         p.symbol   = "Symbol name to analyze impact for.";
         p.maxDepth = "Maximum traversal depth. Default: 5.";
-    } else if (toolName == "agentxx_codegraph_status") {
-        p.depict
-            = "Get codegraph index statistics: total nodes, edges, indexed files, and circular "
-              "dependency count.\n"
-              "Returns plain multi-line text, one \"label: value\" per line.";
-    } else if (toolName == "agentxx_codegraph_index") {
-        p.depict = "Index a directory for code analysis. Parses source files and builds the symbol "
-                   "database\n"
-                   "used by search, context, callers, callees, and impact queries.\n"
-                   "Returns plain multi-line text with \"success:\" and index statistics.";
-        p.path   = "Absolute path to the directory to index.";
-        p.incremental = "Default `true`. If `true`, only re-index changed files. If `false`, "
-                        "full re-index.";
     } else if (toolName == "agentxx_codegraph_path") {
         p.depict
             = "Find the call-chain path between two symbols in the call graph.\n"
@@ -206,8 +193,6 @@ static void ensureToolPromptsInHost() {
         "agentxx_codegraph_callers",
         "agentxx_codegraph_callees",
         "agentxx_codegraph_impact",
-        "agentxx_codegraph_status",
-        "agentxx_codegraph_index",
         "agentxx_codegraph_path",
     };
     codegraph::Json patch = codegraph::Json::object();
@@ -673,83 +658,6 @@ static void registerAllTools(CodeGraphManager* mgr) {
             return impactToText("Impact", r.impact, m);
         },
         kAutoSummary
-    );
-
-    // agentxx_codegraph_status
-    registerTool(
-        mgr,
-        "agentxx_codegraph_status",
-        "Get codegraph index statistics: total nodes, edges, indexed files, circular dependencies.",
-        [](const ToolPrompt&) {
-            SchemaBuilder b;
-            return b.dump({});
-        },
-        [](CodeGraphManager* m, SimpleJson&) {
-            auto r = m->getStatus();
-            if (!r.success) {
-                return fmt::format("error: {}", r.error);
-            }
-            std::string out = fmt::format(
-                "total_nodes: {}\ntotal_edges: {}\ntotal_files: {}\ncircular_deps: {}",
-                r.total_nodes,
-                r.total_edges,
-                r.total_files,
-                r.circular_deps
-            );
-            if (m->isIndexing()) {
-                out += "\nwarning: CodeGraph is still indexing, results may be incomplete";
-            }
-            return out;
-        },
-        0
-    );
-
-    // agentxx_codegraph_index
-    registerTool(
-        mgr,
-        "agentxx_codegraph_index",
-        "Index a directory for code analysis. Parses source files and builds the symbol database.",
-        [](const ToolPrompt& p) {
-            SchemaBuilder b;
-            b.str("path", p.path.empty() ? "Absolute path to the directory to index." : p.path);
-            b.boolean(
-                "incremental",
-                p.incremental.empty()
-                    ? "If true, only re-index changed files. If false, full re-index. Default: true."
-                    : p.incremental
-            );
-            return b.dump({"path"});
-        },
-        [](CodeGraphManager* m, SimpleJson& a) {
-            std::string path;
-            jsonGetString(a.doc().at_pointer("/path"), path);
-            if (path.empty()) {
-                return std::string{"error: Arg `path` is empty"};
-            }
-            bool incremental = true;
-            jsonGetBool(a.doc().at_pointer("/incremental"), incremental);
-            bool ok     = m->indexDirectory(path, incremental);
-            auto status = m->getStatus();
-            if (ok) {
-                if (status.success) {
-                    return fmt::format(
-                        "success: true\ntotal_nodes: {}\ntotal_edges: {}\ntotal_files: {}",
-                        status.total_nodes,
-                        status.total_edges,
-                        status.total_files
-                    );
-                }
-                return fmt::format(
-                    "error: Indexing done, but status query failed: {}",
-                    status.error
-                );
-            }
-            if (!status.success && !status.error.empty()) {
-                return fmt::format("error: Indexing failed: {}", status.error);
-            }
-            return std::string{"error: Indexing failed"};
-        },
-        0
     );
 
     // agentxx_codegraph_path
