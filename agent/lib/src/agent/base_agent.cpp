@@ -135,6 +135,9 @@ asio::awaitable<void> BaseAgent::init() {
     // 检查 tools 的提示词
     for (const auto& item : tools) {
         assert(item->get_definition().name == item->get_name());
+        // - parameters 缺失/null 时兜底为空对象 schema (部分严格网关如 SCNet 会因 "parameters":
+        // null 返回 400 "Format Error")
+        assert(item->get_definition().parameters.is_object());
     }
 
     notifyStartup("构建执行图 ...");
@@ -660,8 +663,8 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                         if (interruptArg.name == "subagent") {
                             auto subagentArg = interruptArg.arg;
                             auto resp        = co_await agentContext->bus->request<
-                                       events::ReqSubagentStart,
-                                       events::RespSubagentResult>(
+                                events::ReqSubagentStart,
+                                events::RespSubagentResult>(
                                 events::Topic::Subagent,
                                 events::ReqSubagentStart{
                                     .parentAgentName = agentContext->agentConfig
