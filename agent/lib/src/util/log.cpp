@@ -83,6 +83,30 @@ ThreadedLogSink::ThreadedLogSink() :
     }) {}
 
 ThreadedLogSink::~ThreadedLogSink() {
+    // 兜底停止 (兼容未在最派生类析构调用 shutdownThread 的外部子类)。
+    // 注意: 进入本析构体时虚表指针已切换为 ThreadedLogSink 虚表, 若日志线程
+    // 此刻仍执行 onLog (纯虚) 虚调用会解析到纯虚函数 -> purecall -> abort。
+    // 项目内子类必须在自身析构中先调用 shutdownThread() (见 StderrLogSink),
+    // 保证虚表切换前线程已空闲, 此处 joinable() 已为 false 直接跳过。
+    if (thread_.joinable()) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        running_ = false;
+        cv_.notify_one();
+        // 直接 join: 线程可能在 wait 中 (检查 running_ 后退出), 或正在 onLog 函数体
+        // (虚调用已在切换前解析, 安全); 存在理论竞态窗口, 但兼容原行为
+    }
+    if (thread_.joinable()) {
+        thread_.join();
+    }
+}
+
+void ThreadedLogSink::shutdownThread() {
+    // 等待队列排空且线程空闲 (idle): 之后线程阻塞在 cv_.wait 中, 不再调用
+    // 虚函数 onLog。必须在最派生类析构中调用 (此时虚表仍为最派生类, 线程
+    // onLog 虚调用解析安全); 若延迟到基类析构 (虚表已切换为基类), 线程执行
+    // onLog (纯虚) 虚调用会 purecall -> abort 弹窗
+    // (经典竞态: 进程退出前日志刚入队, 如无配置文件启动立即 return 时最易命中)
+    flush();
     {
         std::lock_guard<std::mutex> lock(mutex_);
         running_ = false;

@@ -92,6 +92,13 @@ public:
 
 protected:
 
+    /// 停止后台线程: 等待队列排空且线程空闲后停止并 join
+    /// - 必须在最派生类析构中调用 (此时虚表仍为最派生类): 线程执行 onLog
+    ///   虚调用解析安全; 若延迟到基类析构 (虚表已切换为基类), 线程执行纯虚
+    ///   onLog 虚调用会 purecall -> abort (进程退出瞬间日志刚入队时最易触发)
+    /// - 基类析构会幂等兜底 (已 join 后 joinable() 为 false 直接跳过)
+    void shutdownThread();
+
     void onLog(const LogEntry& entry) override = 0;
 
 private:
