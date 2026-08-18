@@ -101,6 +101,25 @@ inline bool jsonGetBool(simdjson::simdjson_result<simdjson::ondemand::value> v, 
 
 } // namespace agentxx_system_monitor_plugin
 
+// 插件内日志统一经 vtable 转发到宿主 (见 pluginLog), 此处重定义 XX_LOG* 宏;
+// agentxx/util/log.h (经 string_util.h 间接引入) 也定义了同名宏, 先解除再定义,
+// 避免重定义警告 (保持本文件内插件日志宏始终生效)
+#ifdef XX_LOGT
+#undef XX_LOGT
+#endif
+#ifdef XX_LOGD
+#undef XX_LOGD
+#endif
+#ifdef XX_LOGI
+#undef XX_LOGI
+#endif
+#ifdef XX_LOGW
+#undef XX_LOGW
+#endif
+#ifdef XX_LOGE
+#undef XX_LOGE
+#endif
+
 #define XX_LOGT(...) ::agentxx_system_monitor_plugin::pluginLog(0, fmt::format(__VA_ARGS__))
 #define XX_LOGD(...) ::agentxx_system_monitor_plugin::pluginLog(1, fmt::format(__VA_ARGS__))
 #define XX_LOGI(...) ::agentxx_system_monitor_plugin::pluginLog(2, fmt::format(__VA_ARGS__))
