@@ -54,11 +54,9 @@ struct Topic {
     /// 权限询问: ReqPermission / RespPermission
     inline static constexpr std::string_view Permission{"service.permission"};
 
-    /// subagent 委派: ReqSubagentStart / RespSubagentResult
+    /// subagent 委派 (统一批量语义): ReqSubagentBatch / RespSubagentBatch
+    /// - 单任务与多任务统一为 tasks 数组 (单任务 = 1 个 task)
     inline static constexpr std::string_view Subagent{"service.subagent"};
-
-    /// subagent 批量委派: ReqSubagentBatch / RespSubagentBatch
-    inline static constexpr std::string_view SubagentBatch{"service.subagent.batch"};
 
     /// 跨 agent 查询: ReqCrossAgent / RespCrossAgent
     /// - 任一 agent (含 subagent) 可向指定 agentName 发起查询
@@ -219,14 +217,13 @@ struct RespPermission {
     std::string reason;
 };
 
-/// ===== 请求-响应: subagent 委派 =====
-/// - 父 agent 经 NodeInterrupt 触发 subagent 委派中断
-/// - Session 发出 ReqSubagentStart, AgentHost 应答
+/// ===== 请求-响应: subagent 委派 (统一批量) =====
+/// - 父 agent 经 NodeInterrupt 触发 subagent 委派中断 (中断名统一为 "subagent")
+/// - Session 发出 ReqSubagentBatch, AgentHost 应答
 /// - 响应到达后 Session resume 父 graph, 注入结果
 
-struct ReqSubagentStart {
-    std::string parentAgentName;
-    std::string parentThreadId;
+/// 单个子代理任务
+struct SubagentBatchItem {
     /// 目标 subagent 名 (SubAgentManagerTool.subAgentList key)
     std::string subagentName;
     /// subagent 系统提示 (空则用 subagent 默认)
@@ -252,20 +249,17 @@ struct ReqSubagentStart {
     ///   避免对透传的上下文前缀二次压缩破坏 KV/prefix cache 一致性)
     /// - true: 显式启用
     std::optional<bool> enableSummarization;
-    /// 回填到父 toolcall 的 tool_call_id
+    /// 任务结果标识: 回填到父 toolcall 的 tool_call_id 或自定义 id;
+    /// 为空时按任务序号 (1-based) 兜底编号
     std::string resultId;
-    /// 父会话取消令牌 (可空): 子代理运行期间父会话被取消时, 令牌取消会
-    /// 级联中止子代理的 graph run, 避免子代理继续消耗 LLM token
-    std::shared_ptr<neograph::graph::CancelToken> cancelToken;
 };
 
-struct RespSubagentResult {
-    /// subagent 最终输出内容
-    std::string content;
-    bool        hasError = false;
-    std::string errorMessage;
-    /// 宿主派生时的 agent 唯一 id (AgentHost 填充; 直接请求方为空)
-    std::string agentId;
+struct ReqSubagentBatch {
+    std::string parentAgentName;
+    std::string parentThreadId;
+    /// 父会话取消令牌 (可空): 取消时级联中止全部在跑子代理
+    std::shared_ptr<neograph::graph::CancelToken> cancelToken;
+    std::vector<SubagentBatchItem>                tasks;
 };
 
 /// ===== 请求-响应: 跨 agent 查询 =====
@@ -291,31 +285,17 @@ struct RespCrossAgent {
     std::string errorMessage;
 };
 
-/// ===== 批量 subagent 委派 =====
+/// ===== subagent 批量结果 =====
 /// - 单个 interrupt 携带 N 个子任务, AgentHost 并发运行
 /// - 用于一轮内派发多个独立 subagent (如并行研究 + 编码)
-
-struct SubagentBatchItem {
-    std::string subagentName;
-    std::string systemPrompt;
-    std::string message;
-    /// 回填到父 toolcall 的 tool_call_id
-    std::string resultId;
-};
-
-struct ReqSubagentBatch {
-    std::string parentAgentName;
-    std::string parentThreadId;
-    /// 父会话取消令牌 (可空): 取消时级联中止全部在跑子代理 (同 ReqSubagentStart)
-    std::shared_ptr<neograph::graph::CancelToken> cancelToken;
-    std::vector<SubagentBatchItem>                tasks;
-};
 
 struct RespSubagentBatchItem {
     std::string resultId;
     std::string content;
     bool        hasError = false;
     std::string errorMessage;
+    /// 宿主派生时的 agent 唯一 id (AgentHost 填充; 节点已回收, 仅用于日志/关联)
+    std::string agentId;
 };
 
 struct RespSubagentBatch {

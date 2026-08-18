@@ -17,7 +17,7 @@ namespace test {
 int g_sb_passed = 0;
 int g_sb_failed = 0;
 
-/// 验证: bus.request<ReqSubagentStart, RespSubagentResult> 请求-响应闭环
+/// 验证: bus.request<ReqSubagentBatch, RespSubagentBatch> 请求-响应闭环 (统一批量)
 /// - 注册一个模拟 server, 验证请求参数传递与响应回填
 asio::awaitable<void> test_subagent_bus_request_response() {
     auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
@@ -25,40 +25,54 @@ asio::awaitable<void> test_subagent_bus_request_response() {
         = std::make_shared<agentxx::middleware::EventBus>(co_await asio::this_coro::executor);
 
     // 注册模拟 server
-    auto& rr = agentContext->bus->getRR<events::ReqSubagentStart, events::RespSubagentResult>(
+    auto& rr = agentContext->bus->getRR<events::ReqSubagentBatch, events::RespSubagentBatch>(
         events::Topic::Subagent
     );
     rr.serve(
-        [](const events::ReqSubagentStart& req,
-           size_t                          corrId) -> asio::awaitable<events::RespSubagentResult> {
+        [](const events::ReqSubagentBatch& req,
+           size_t                          corrId) -> asio::awaitable<events::RespSubagentBatch> {
             XX_TEST_EXPECT_TRUE(corrId > 0);
-            XX_TEST_EXPECT_EQ(req.subagentName, std::string{"research"});
-            XX_TEST_EXPECT_EQ(req.message, std::string{"find foo"});
-            XX_TEST_EXPECT_EQ(req.resultId, std::string{"call_1"});
-            co_return events::RespSubagentResult{
-                .content = fmt::format("result_for_{}", req.subagentName),
+            XX_TEST_EXPECT_EQ(req.tasks.size(), size_t{1});
+            XX_TEST_EXPECT_EQ(req.tasks[0].subagentName, std::string{"research"});
+            XX_TEST_EXPECT_EQ(req.tasks[0].message, std::string{"find foo"});
+            XX_TEST_EXPECT_EQ(req.tasks[0].resultId, std::string{"call_1"});
+            co_return events::RespSubagentBatch{
+                .results = {
+                    events::RespSubagentBatchItem{
+                        .resultId = "call_1",
+                        .content  = fmt::format("result_for_{}", req.tasks[0].subagentName),
+                    },
+                },
             };
         }
     );
 
-    auto resp
-        = co_await agentContext->bus->request<events::ReqSubagentStart, events::RespSubagentResult>(
-            events::Topic::Subagent,
-            events::ReqSubagentStart{
-                .parentAgentName = "parent",
-                .parentThreadId  = "t1",
-                .subagentName    = "research",
-                .systemPrompt    = "",
-                .message         = "find foo",
-                .resultId        = "call_1",
+    // [workaround] 聚合提取为具名变量, 绕过 g++ 16.1 ICE (gimplify.cc:841)
+    events::ReqSubagentBatch req{
+        .parentAgentName = "parent",
+        .parentThreadId  = "t1",
+        .cancelToken     = nullptr,
+        .tasks           = {
+            events::SubagentBatchItem{
+                .subagentName = "research",
+                .systemPrompt = "",
+                .message      = "find foo",
+                .resultId     = "call_1",
             },
+        },
+    };
+    auto resp
+        = co_await agentContext->bus->request<events::ReqSubagentBatch, events::RespSubagentBatch>(
+            events::Topic::Subagent,
+            req,
             std::chrono::seconds(5)
         );
 
     XX_TEST_EXPECT_TRUE(resp.has_value());
     if (resp.has_value()) {
-        XX_TEST_EXPECT_EQ(resp->content, std::string{"result_for_research"});
-        XX_TEST_EXPECT_TRUE(!resp->hasError);
+        XX_TEST_EXPECT_EQ(resp->results.size(), size_t{1});
+        XX_TEST_EXPECT_EQ(resp->results[0].content, std::string{"result_for_research"});
+        XX_TEST_EXPECT_TRUE(!resp->results[0].hasError);
     }
 
     co_return;
@@ -118,29 +132,38 @@ asio::awaitable<void> test_subagent_bus_timeout() {
         = std::make_shared<agentxx::middleware::EventBus>(co_await asio::this_coro::executor);
 
     // 注册一个永不响应的 server
-    auto& rr = agentContext->bus->getRR<events::ReqSubagentStart, events::RespSubagentResult>(
+    auto& rr = agentContext->bus->getRR<events::ReqSubagentBatch, events::RespSubagentBatch>(
         events::Topic::Subagent
     );
     rr.serve(
-        [](const events::ReqSubagentStart&, size_t) -> asio::awaitable<events::RespSubagentResult> {
+        [](const events::ReqSubagentBatch&, size_t) -> asio::awaitable<events::RespSubagentBatch> {
             auto timer
                 = asio::steady_timer(co_await asio::this_coro::executor, std::chrono::seconds(1));
             co_await timer.async_wait(asio::use_awaitable);
-            co_return events::RespSubagentResult{.content = "too late"};
+            co_return events::RespSubagentBatch{
+                .results = {events::RespSubagentBatchItem{.content = "too late"}},
+            };
         }
     );
 
-    auto resp
-        = co_await agentContext->bus->request<events::ReqSubagentStart, events::RespSubagentResult>(
-            events::Topic::Subagent,
-            events::ReqSubagentStart{
-                .parentAgentName = "p",
-                .parentThreadId  = "t",
-                .subagentName    = "x",
-                .systemPrompt    = "",
-                .message         = "m",
-                .resultId        = "r",
+    // [workaround] 聚合提取为具名变量, 绕过 g++ 16.1 ICE (gimplify.cc:841)
+    events::ReqSubagentBatch req{
+        .parentAgentName = "p",
+        .parentThreadId  = "t",
+        .cancelToken     = nullptr,
+        .tasks           = {
+            events::SubagentBatchItem{
+                .subagentName = "x",
+                .systemPrompt = "",
+                .message      = "m",
+                .resultId     = "r",
             },
+        },
+    };
+    auto resp
+        = co_await agentContext->bus->request<events::ReqSubagentBatch, events::RespSubagentBatch>(
+            events::Topic::Subagent,
+            req,
             std::chrono::milliseconds(200)
         );
 

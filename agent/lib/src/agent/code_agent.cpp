@@ -5,7 +5,6 @@
 #include "agentxx/middlewares/permission.h"
 #include "agentxx/middlewares/planning.h"
 #include "agentxx/middlewares/skill.h"
-#include "agentxx/middlewares/subagent_supervisor.h"
 #include "agentxx/middlewares/summarization.h"
 #include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/protocol/mcp_client.h"
@@ -243,8 +242,7 @@ asio::awaitable<void> CodeAgent::setupMiddleware() {
 }
 
 asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAgent::createTools() {
-    auto        config           = agentContext->agentConfig;
-    const auto& subagentModelCfg = config->getSubagentModel();
+    auto config = agentContext->agentConfig;
 
     std::vector<std::unique_ptr<agentxx::tools::XXToolBase>> tools
         = co_await BaseAgent::createTools();
@@ -419,27 +417,17 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
 #endif
 
     /// Subagent
+    /// - 注册表仅承载名称/描述等静态元数据 (SubAgentTaskBase);
+    ///   实际执行由 AgentHost 派生独立 agent 完成 (中断委派, 不在此创建
+    ///   嵌套 subgraph / nodeContext)
     {
-        neograph::graph::NodeContext nodeContext{};
-        nodeContext.instructions = "";
-        nodeContext.provider     = ModelProviderRegistry::createProvider(subagentModelCfg);
-
-        std::vector<neograph::Tool*> toolPtrs;
-        toolPtrs.reserve(tools.size());
-        for (auto& t : tools) {
-            toolPtrs.push_back(t.get());
-        }
-        nodeContext.tools = std::move(toolPtrs);
-
         const auto nodeName = std::string{"subagent_task"};
 
         subagentManagerTool_->subAgentList.insert(std::make_pair(
             nodeName,
             std::make_shared<agentxx::tools::SubAgentNormalTask>(
                 nodeName,
-                R"(Create a isolation messages context sub agent to exec. (need system prompt))",
-                nodeContext,
-                graphRegistry
+                R"(Create a isolation messages context sub agent to exec. (need system prompt))"
             )
         ));
 
