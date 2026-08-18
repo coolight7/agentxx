@@ -1,14 +1,9 @@
 #include "agentxx/tools/sub_agent.h"
 
-#include "agentxx/agent/checkpoint_store.h"
-#include "agentxx/nodes/agentcall.h"
-#include "agentxx/nodes/modelcall.h"
-#include "agentxx/nodes/toolcall.h"
-#include "agentxx/nodes/wrap_handle.h"
 #include "fmt/format.h"
-#include <cassert>
 #include <map>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -26,104 +21,13 @@ SubAgentTaskBase::SubAgentTaskBase(
     depict(in_subAgentDepict),
     systemPrompt(in_systemPrompt) {}
 
-std::shared_ptr<neograph::graph::GraphEngine> SubAgentTaskBase::getSubgraph() const {
-    assert(nullptr != subgraph);
-    return subgraph;
-}
-
-asio::awaitable<void> SubAgentTaskBase::onSubagentEnd(std::string& result) {
-    co_return;
-}
-
 SubAgentTaskBase::~SubAgentTaskBase() {}
 
 SubAgentNormalTask::SubAgentNormalTask(
-    std::string_view                                      in_subAgentName,
-    std::string_view                                      in_subAgentDepict,
-    const neograph::graph::NodeContext&                   in_context,
-    std::shared_ptr<const neograph::graph::GraphRegistry> in_registry
+    std::string_view in_subAgentName,
+    std::string_view in_subAgentDepict
 ) :
-    SubAgentTaskBase(in_subAgentName, in_subAgentDepict, "") {
-    createSubgraph(in_context, std::move(in_registry));
-}
-
-void SubAgentNormalTask::createSubgraph(
-    const neograph::graph::NodeContext&                   context,
-    std::shared_ptr<const neograph::graph::GraphRegistry> registry
-) {
-    if (nullptr == subgraph) {
-        neograph::graph::EngineConfig config;
-        config.node_context = context;
-        // 与主引擎一致: 每 thread 仅保留最新 checkpoint, 防止子代理每次运行
-        // 在 subgraph 内累积 O(super-steps) 的 checkpoint (子代理为一次性
-        // 运行, 不使用 fork / 时间旅行)
-        config.checkpoint_store = std::make_shared<agentxx::agent::InMemorySingleCheckpointStore>();
-        neograph::graph::EngineResources resources;
-        resources.registry = std::move(registry);
-        auto inner         = neograph::graph::GraphEngine::build(
-            defCreateSubGraphDefine(),
-            std::move(config),
-            std::move(resources)
-        );
-        assert(nullptr != inner);
-        subgraph = std::shared_ptr<neograph::graph::GraphEngine>(inner.release());
-    }
-}
-
-neograph::json SubAgentNormalTask::defCreateSubGraphDefine() {
-    return neograph::json{
-        {"name", "xx_SubAgentTask"},
-        {
-         "channels", {
-                {"messages", {{"reducer", "append"}}},
-            }, },
-        {
-         "nodes", {
-                {
-                    "agent_start",
-                    {{
-                        "type",
-                        agentxx::nodes::AgentStartCallWrapNode::defNodeType,
-                    }},
-                },
-                {
-                    "agent_end",
-                    {{
-                        "type",
-                        agentxx::nodes::AgentEndCallWrapNode::defNodeType,
-                    }},
-                },
-                {
-                    "tools",
-                    {{
-                        "type",
-                        agentxx::nodes::ToolcallWrapNode::defNodeType,
-                    }},
-                },
-                {
-                    "llm",
-                    {{
-                        "type",
-                        agentxx::nodes::ModelCallWrapNode::defNodeType,
-                    }},
-                },
-            }, },
-        {
-         "edges", neograph::json::array({
-                {{"from", "__start__"}, {"to", "agent_start"}},
-                {{"from", "agent_start"}, {"to", "llm"}},
-                {
-                    {"from", "llm"},
-                    {"type", "conditional"},
-                    {"condition", "has_tool_calls"},
-                    {"routes", {{"true", "tools"}, {"false", "agent_end"}}},
-                },
-                {{"from", "tools"}, {"to", "llm"}},
-                {{"from", "agent_end"}, {"to", "__end__"}},
-            }),
-         },
-    };
-}
+    SubAgentTaskBase(in_subAgentName, in_subAgentDepict, "") {}
 
 SubAgentManagerTool::SubAgentManagerTool(
     std::string_view                            in_nodeName,
@@ -146,6 +50,87 @@ neograph::ChatTool SubAgentManagerTool::get_definition() const {
         subagentNameDepict << fmt::format("`{}`: {}\n", item.first, item.second->depict);
     }
 
+    // 任务项结构 (tasks 数组元素, 与顶层单任务字段一致)
+    const auto taskItemSchema = neograph::json{
+        {"type", "object"},
+        {
+         "properties",
+            {
+                {
+                    "subagent",
+                    {
+                        {"type", "string"},
+                        {"enum", neograph::json{subagentNameList}},
+                        {
+                            "description",
+                            fmt::format(
+                                "{}\n{}",
+                                prompt.getArg("subagent"),
+                                subagentNameDepict.str()
+                            ),
+                        },
+                    },
+                },
+                {
+                    "system_prompt",
+                    {
+                        {"type", "string"},
+                        {"description", prompt.getArg("system_prompt")},
+                    },
+                },
+                {
+                    "message",
+                    {
+                        {"type", "string"},
+                        {"description", prompt.getArg("message")},
+                    },
+                },
+                {
+                    "messages",
+                    {
+                        {"type", "array"},
+                        {"description", prompt.getArg("messages")},
+                    },
+                },
+                {
+                    "thread_id",
+                    {
+                        {"type", "string"},
+                        {"description", prompt.getArg("thread_id")},
+                    },
+                },
+                {
+                    "tools",
+                    {
+                        {"type", "array"},
+                        {"items", {{"type", "string"}}},
+                        {"description", prompt.getArg("tools")},
+                    },
+                },
+                {
+                    "enable_summarization",
+                    {
+                        {"type", "boolean"},
+                        {"description", prompt.getArg("enable_summarization")},
+                    },
+                },
+                {
+                    "result_id",
+                    {
+                        {"type", "string"},
+                        {
+                            "description",
+                            "Optional task result id (used to identify this task's result "
+                            "when multiple tasks are submitted in one call; empty = numbered "
+                            "by task order)",
+                        },
+                    },
+                },
+            },
+        },
+        {"required", neograph::json::array({"subagent", "message"})},
+    };
+
     return {
         "agentxx_subagent",
         prompt.depict,
@@ -154,6 +139,21 @@ neograph::ChatTool SubAgentManagerTool::get_definition() const {
                        {
                 "properties",
                 {
+                    {
+                        "tasks",
+                        {
+                            {"type", "array"},
+                            {
+                                "description",
+                                "Optional batch of subagent tasks, each an object of "
+                                "{subagent, system_prompt, message, messages, thread_id, "
+                                "tools, enable_summarization, result_id}. When provided "
+                                "(non-empty), the top-level single-task fields are ignored "
+                                "and all tasks run in parallel.",
+                            },
+                            {"items", taskItemSchema},
+                        },
+                    },
                     {
                         "subagent",
                         {
@@ -221,48 +221,55 @@ neograph::ChatTool SubAgentManagerTool::get_definition() const {
 }
 
 asio::awaitable<std::string> SubAgentManagerTool::execute_async(const neograph::json& arguments) {
-    // 不直接运行 subgraph, 而是通过 NodeInterrupt 暂停父 agent
-    // - 首次调用: 抛出 subagent 中断, 父 graph checkpoint 暂停
-    // - Session 捕获中断后经总线派发给 AgentHost 派生独立 agent 运行
-    // - 结果注入 interruptResult channel, 父 graph resume 后此函数返回结果
-    auto subagentName = arguments.value("subagent", std::string{});
-    if (subagentName.empty()) {
-        co_return R"({"error":"Arg `subagent` is empty"})";
-    }
-    auto message = arguments.value("message", std::string{});
-    // 结构化消息透传 (可选): 提供时优先于 message; 用于同上下文压缩等
-    // 需要完整消息前缀的场景 (原样透传, 无文本转录)
-    std::optional<neograph::json> messages;
-    if (arguments.contains("messages") && arguments["messages"].is_array()) {
-        messages = arguments["messages"];
-    }
-    if (message.empty() && !messages.has_value()) {
-        co_return R"({"error":"Arg `message` is empty"})";
-    }
-    auto system_prompt = arguments.value("system_prompt", std::string{});
-    // 指定子代理运行的 thread id (可选, 同上下文模式):
-    // - 为空: 子代理使用独立 subagent 线程 id (默认行为)
-    // - 非空: 子代理运行在指定 thread, 使用该 thread 父会话当前模型,
-    //   配合 messages 透传保证"相同上下文前缀 + 相同 threadid + 相同模型",
-    //   以命中 provider KV/prefix cache
-    auto thread_id = arguments.value("thread_id", std::string{});
-    // 子代理工具策略 (可选): 缺省 = 子代理默认全量工具;
-    // [] = 无工具; ["*"] = 全量继承父工具; [name...] = 自定义白名单
-    std::optional<neograph::json> tools;
-    if (arguments.contains("tools") && arguments["tools"].is_array()) {
-        tools = arguments["tools"];
-    }
-    // 子代理上下文压缩中间件开关 (可选, 缺省继承 config 默认):
-    // summarization 发起的压缩子代理必须显式 false, 避免对透传的
-    // 上下文前缀二次压缩 (破坏 KV/prefix cache 一致性)
-    std::optional<bool> enableSummarization;
-    if (arguments.contains("enable_summarization")
-        && arguments["enable_summarization"].is_boolean()) {
-        enableSummarization = arguments["enable_summarization"].get<bool>();
+    // 统一批量委派 (单发与批量合并):
+    // - `tasks` 数组非空: 批量模式 (每项一个子代理任务, 并行运行)
+    // - 无 `tasks`: 单任务模式 (顶层 subagent/message 字段; summarization
+    //   等直接调用路径兼容), 包装为 1 个 task
+    // 执行经 NodeInterrupt 暂停父 agent, 由 AgentHost 派生独立 agent 并发运行,
+    // 结果按 (tool_call_id + "_") + (result_id | 任务序号) 注入 interruptResult,
+    // 此处按相同规则提取并聚合返回
+
+    struct TaskArg {
+        std::string             subagent;
+        std::string             systemPrompt;
+        std::string             message;
+        std::optional<neograph::json> messages;
+        std::string             threadId;
+        std::optional<neograph::json> tools;
+        std::optional<bool>     enableSummarization;
+        std::string             resultId;
+    };
+    auto parseTask = [](const neograph::json& t) -> TaskArg {
+        TaskArg task;
+        task.subagent      = t.value("subagent", std::string{});
+        task.systemPrompt  = t.value("system_prompt", std::string{});
+        task.message       = t.value("message", std::string{});
+        task.threadId      = t.value("thread_id", std::string{});
+        task.resultId      = t.value("result_id", std::string{});
+        if (t.contains("messages") && t["messages"].is_array()) {
+            task.messages = t["messages"];
+        }
+        if (t.contains("tools") && t["tools"].is_array()) {
+            task.tools = t["tools"];
+        }
+        if (t.contains("enable_summarization") && t["enable_summarization"].is_boolean()) {
+            task.enableSummarization = t["enable_summarization"].get<bool>();
+        }
+        return task;
+    };
+
+    std::vector<TaskArg> tasks;
+    if (arguments.contains("tasks") && arguments["tasks"].is_array()
+        && !arguments["tasks"].empty()) {
+        for (const auto& t : arguments["tasks"]) {
+            tasks.push_back(parseTask(t));
+        }
+    } else {
+        tasks.push_back(parseTask(arguments));
     }
 
-    auto subagentIt = subAgentList.find(subagentName);
-    if (subagentIt == subAgentList.end() || nullptr == subagentIt->second) {
+    // 校验: 每个任务须有合法 subagent 名, 且 message / messages 至少其一
+    {
         std::ostringstream subagentNames;
         bool               isFirst = true;
         for (const auto& item : subAgentList) {
@@ -272,63 +279,103 @@ asio::awaitable<std::string> SubAgentManagerTool::execute_async(const neograph::
             subagentNames << item.first;
             isFirst = false;
         }
-        co_return fmt::format(
-            R"({{"error":"Arg `subagent` is not one of [{}]"}})",
-            subagentNames.str()
-        );
+        for (const auto& task : tasks) {
+            if (task.subagent.empty()) {
+                co_return R"({"error":"Arg `subagent` is empty"})";
+            }
+            if (task.message.empty() && !task.messages.has_value()) {
+                // 注意: raw string 内容不能含 `)"` 序列, 故括号提示移到引号外
+                co_return R"({"error":"Arg `message` is empty"})";
+            }
+            if (!subAgentList.contains(task.subagent) || nullptr == subAgentList[task.subagent]) {
+                co_return fmt::format(
+                    R"({{"error":"Arg `subagent` is not one of [{}]"}})",
+                    subagentNames.str()
+                );
+            }
+        }
     }
 
     auto agentCtxPtr = agentContext.lock();
     if (!agentCtxPtr || !agentCtxPtr->middlewareHandleContext) {
         co_return R"({"error":"AgentContext not available"})";
     }
+    // thread_id 由 toolcall 节点在执行前注入 arguments (见 toolcall.cpp)
+    auto threadId = arguments.value("thread_id", std::string{});
     auto resultId = arguments.value("tool_call_id", std::string{});
 
     // 通过 requestInterrupt 触发/恢复中断
-    // - 首次: 存储中断参数到 graphData, 抛出 NodeInterrupt
+    // - 首次: 存储中断参数 (tasks 数组) 到 graphData, 抛出 NodeInterrupt
     // - 恢复: 从 graphData 读取中断结果, 按 resultId 提取
     auto result = co_await agentCtxPtr->middlewareHandleContext->requestInterrupt(
-        thread_id,
+        threadId,
         [&]() {
-            auto argJson = neograph::json{
-                {"subagent",      subagentName },
-                {"system_prompt", system_prompt},
-                {"message",       message      },
-            };
-            // 结构化消息透传 (同上下文模式): 中断参数携带完整消息前缀
-            if (messages.has_value()) {
-                argJson["messages"] = *messages;
-            }
-            // 指定运行 thread (同上下文模式): 空时保持默认独立 subagent 线程
-            if (!thread_id.empty()) {
-                argJson["thread_id"] = thread_id;
-            }
-            // 工具策略 (无工具/继承父/自定义): 缺省不设置 (子代理默认全量)
-            if (tools.has_value()) {
-                argJson["tools"] = *tools;
-            }
-            // 压缩中间件开关: 缺省不设置 (继承 config 默认)
-            if (enableSummarization.has_value()) {
-                argJson["enable_summarization"] = *enableSummarization;
+            auto tasksJson = neograph::json::array();
+            for (const auto& task : tasks) {
+                auto t = neograph::json{
+                    {"subagent",      task.subagent     },
+                    {"system_prompt", task.systemPrompt },
+                    {"message",       task.message      },
+                };
+                // 结构化消息透传 (同上下文模式): 中断参数携带完整消息前缀
+                if (task.messages.has_value()) {
+                    t["messages"] = *task.messages;
+                }
+                // 指定运行 thread (同上下文模式): 空时保持默认独立 subagent 线程
+                if (!task.threadId.empty()) {
+                    t["thread_id"] = task.threadId;
+                }
+                // 工具策略 (无工具/继承父/自定义): 缺省不设置 (子代理默认全量)
+                if (task.tools.has_value()) {
+                    t["tools"] = *task.tools;
+                }
+                // 压缩中间件开关: 缺省不设置 (继承 config 默认)
+                if (task.enableSummarization.has_value()) {
+                    t["enable_summarization"] = *task.enableSummarization;
+                }
+                // 任务结果标识: 缺省按任务序号兜底
+                if (!task.resultId.empty()) {
+                    t["result_id"] = task.resultId;
+                }
+                tasksJson.push_back(std::move(t));
             }
             return agentxx::middleware::InterruptHandleArg{
                 .name     = "subagent",
-                .arg      = std::move(argJson),
+                .arg      = neograph::json{{"tasks", std::move(tasksJson)}},
                 .resultId = resultId,
             };
         },
         nullptr
     );
 
-    // interruptResult 存储的是 {resultId: value} map; 按自身 resultId 提取
-    if (result.is_object() && !resultId.empty() && result.contains(resultId)) {
-        auto val = result[resultId];
-        if (val.is_string()) {
-            co_return val.get<std::string>();
+    // 提取结果: key = (tool_call_id + "_") + (task.result_id | 任务序号)
+    // (与 BaseAgent/AgentHost 中断处理的 resumeValues key 规则一致;
+    //  前缀避免同一轮多个中断的序号 key 互相覆盖)
+    const auto prefix = resultId.empty() ? std::string{} : resultId + "_";
+    auto       outputs = neograph::json::array();
+    size_t     idx     = 0;
+    for (const auto& task : tasks) {
+        ++idx;
+        auto key = task.resultId.empty() ? std::to_string(idx) : task.resultId;
+        key      = prefix + key;
+        if (result.is_object() && result.contains(key)) {
+            const auto& val = result[key];
+            if (val.is_string()) {
+                outputs.push_back(val.get<std::string>());
+            } else {
+                outputs.push_back(val.dump());
+            }
         }
-        co_return val.dump();
     }
-    // 非 toolcall 路径直接调用 (如上下文压缩中间件): resultId 为空,
+    if (false == outputs.empty()) {
+        // 单任务: 返回纯文本 (与旧行为一致, LLM/压缩路径均期望文本)
+        if (outputs.size() == 1) {
+            co_return outputs[0].get<std::string>();
+        }
+        // 多任务: 返回 json 数组 (按任务顺序)
+        co_return outputs.dump();
+    }
+    // 兜底: 非 toolcall 路径直接调用 (如上下文压缩中间件): resultId 为空,
     // 单中断场景下取 map 中的第一个字符串值 (中断处理以 argIndex 兜底编号)
     if (result.is_object() && resultId.empty()) {
         for (const auto& [key, val] : result.items()) {

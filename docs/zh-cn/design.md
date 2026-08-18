@@ -171,32 +171,41 @@ TUI [F4] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
 #### Subagent 执行链路 (NodeInterrupt → 总线派发 → 宿主派生独立 agent)
 
 ```
-父 agent LLM 发起 agentxx_subagent
+父 agent LLM 发起 agentxx_subagent (单任务 = tasks 数组含 1 项, 批量 = 多任务)
   → SubAgentManagerTool::execute_async
-      → MiddlewareContext::requestInterrupt: 首次存储中断参数到 graphData,
-        抛出 NodeInterrupt → engine checkpoint 暂停父图
+      → 校验任务参数 (subagent 名合法 + message/messages 至少其一)
+      → MiddlewareContext::requestInterrupt: 首次存储中断参数 ({tasks: [...]})
+        到 graphData, 抛出 NodeInterrupt → engine checkpoint 暂停父图
   → BaseAgent::runConversationTurnAsync 中断处理循环:
       → 逐个解析 graphData 中的 interrupt args
-      → "subagent" 参数: 经全局总线 service.subagent 委派
-      → "subagent_batch": 经 service.subagent.batch 批量并发委派
-  → AgentHost::spawnSubagent (根 agent 总线由 attachRoot 挂接, serve 委派):
-      → 派生"独立 agent" (独立 AgentContext / engine / SessionStore / 中间件栈),
-        与主 agent 完全平等 (AgentNode); 配置为轻量子代理:
+      → "subagent" 中断 (统一批量语义): 组装 ReqSubagentBatch,
+        经全局总线 service.subagent 委派 (旧单发 ReqSubagentStart 已合并)
+  → AgentHost::spawnBatch → spawnOneTask (根 agent 总线由 attachRoot 挂接,
+    serve service.subagent):
+      → 每个任务派生"独立 agent" (独立 AgentContext / engine / SessionStore /
+        中间件栈), 与主 agent 完全平等 (AgentNode); 配置为轻量子代理:
         不建 MCP 连接 / 不加载插件 / RAG / CodeGraph, 不注入父级 Skill/Memory,
         不持久化, 默认使用配置的 subagent 模型
       → 宿主强制嵌套深度 (maxDepth) 与并发预算 (maxConcurrentSubagents)
       → HIL 冒泡: 子代理会话继承父会话的 io 与总线 (权限/中断询问直达用户)
+      → 子代理作用域中断循环 (与 BaseAgent 同构):
+        - "subagent" 中断 → 递归 spawnBatch 嵌套委派 (深度预算限制层数)
+        - 其他中断 (权限询问等) → 经子代理会话总线冒泡到父 IO
       → 取消令牌透传: 父取消级联中止子代理 (engine run 取消)
       → 进度经 hostBus agent.progress 发布, 结束经 agent.done 通知
       → 运行结束 (成功/错误/取消) 宿主立即回收 AgentNode: 会话与中间件状态
         随 AgentContext 析构整体释放, 无按 thread 累积泄漏
   → 结果经 interruptResult channel 写回 graphData
-  → engine->resume_async 恢复父图, execute_async 从 interruptResult 按
-    resultId 提取结果返回
+  → engine->resume_async 恢复父图, execute_async 按
+    (tool_call_id + "_") + (result_id | 任务序号) 提取结果返回
+    (单任务返回纯文本, 多任务返回 json 数组)
 ```
 
 - 子代理是独立 agent: 与根 agent 同构 (AgentNode), 消息上下文完全隔离
-- 中断结果按 resultId (默认取 tool_call_id) 关联, 支持同轮多个 subagent
+- 中断结果按 (tool_call_id + "_") + (result_id | 任务序号) 关联,
+  前缀避免同一轮多个中断的序号 key 互相覆盖, 支持同轮多任务并发
+- 中断处理完成后清理 graphData 中的 interrupt args (避免同轮再次中断时
+  重复处理已完成的任务)
 - 跨 agent 消息 (agent.message): 本地 mailbox 路由 (持久会话 agent 扩展点),
   或经 A2A 桥接转发远程 agent (registerRemoteAgent); 未注册目标返回明确的
   not-implemented 错误
@@ -875,8 +884,7 @@ auto resp = co_await rr.request(ReqPermission{.category = "filesystem_write"});
 | `agent.error` | EventError | 单向 | 错误通知 |
 | `service.interrupt` | ReqInterrupt / RespInterrupt | RR | 中断 HIL |
 | `service.permission` | ReqPermission / RespPermission | RR | 权限询问 |
-| `service.subagent` | ReqSubagentStart / RespSubagentResult | RR | Subagent 委派 |
-| `service.subagent.batch` | ReqSubagentBatch / RespSubagentBatch | RR | 批量 subagent |
+| `service.subagent` | ReqSubagentBatch / RespSubagentBatch | RR | Subagent 委派 (统一批量, 单任务 = 1 个 task) |
 | `service.crossagent` | ReqCrossAgent / RespCrossAgent | RR | 跨 agent 查询 |
 
 宿主总线 (HostBus, AgentHost 持有, 跨 agent 路由):
