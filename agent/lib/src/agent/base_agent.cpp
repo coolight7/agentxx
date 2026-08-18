@@ -53,15 +53,20 @@ BaseAgent::BaseAgent(std::shared_ptr<agentxx::agent::AgentConfig> in_config) {
 }
 
 /// 递归检查工具参数 JSON Schema 的合法性 (含 tool prompt 填充后的定义)
-/// - 背景: 严格网关 (SCNet / opencode Console Go 等) 会校验 tools schema,
-///   非法结构 (如 enum 嵌套数组 [[...]]) 直接在请求期返回 HTTP 400,
-///   且错误信息含糊 (invalid_prompt / Provider returned error), 难排查;
-///   故在启动装配工具时即校验, 尽早暴露问题
+/// - 背景: 严格网关 (SCNet / opencode Console Go / Gemini 等) 会校验 tools schema,
+///   非法结构 (如 enum 嵌套数组 [[...]]、array 缺 items、联合类型 + items)
+///   直接在请求期返回 HTTP 400, 且错误信息含糊 (invalid_prompt / INVALID_ARGUMENT
+///   / Provider returned error), 难排查; 故在启动装配工具时即校验, 尽早暴露问题
 /// - 检查点:
 ///   * enum 必须是数组, 且元素必须是标量 (string/number/boolean/null),
 ///     不能是数组/对象 —— 嵌套容器属于非法 enum schema;
 ///     (曾出现 neograph::json{vector} 列表初始化误选 initializer_list
 ///     构造函数产生 [["x"]] 嵌套数组的案例, 见 tools/sub_agent.cpp)
+///   * array 类型必须带 items 字段 (Gemini 缺 items 报 "missing field")
+///   * 带 items 时 type 必须为单一字符串 "array":
+///     - 联合类型数组 ["string","array"] 不被 Gemini protobuf Schema 支持,
+///       且带 items 而 type!=ARRAY 报 "field predicate failed: $type==Type.ARRAY"
+///     - 缺 type 或 type 非字符串也视为非法 (JSON Schema 要求 type 为字符串)
 ///   * 递归进入 properties.* 与 items 检查子 schema
 /// - 非对象/非数组节点直接跳过 (宽松), 不阻断工具注册
 static void checkToolSchemaValidity(
@@ -96,6 +101,30 @@ static void checkToolSchemaValidity(
                 );
             }
         }
+    }
+    if (schema.contains("items")) {
+        // 带 items 时必须声明单一 "array" 类型 (Gemini 谓词校验 $type==Type.ARRAY)
+        const bool typeIsArray = schema.contains("type") && schema["type"].is_string()
+                              && schema["type"].get<std::string>() == "array";
+        if (!typeIsArray) {
+            XX_LOGE(
+                "Tool `{}` schema `{}`: items present but type is not single \"array\" "
+                "(got {}); Gemini rejects with HTTP 400 INVALID_ARGUMENT "
+                "(\"field predicate failed: $type==Type.ARRAY\")",
+                toolName,
+                path,
+                schema.contains("type") ? schema["type"].dump() : "<missing>"
+            );
+        }
+    } else if (schema.contains("type") && schema["type"].is_string()
+               && schema["type"].get<std::string>() == "array") {
+        // array 类型必须带 items (Gemini 缺 items 报 "missing field")
+        XX_LOGE(
+            "Tool `{}` schema `{}`: type \"array\" must have an \"items\" field; "
+            "Gemini rejects with HTTP 400 INVALID_ARGUMENT (\"missing field\")",
+            toolName,
+            path
+        );
     }
     if (schema.contains("properties") && schema["properties"].is_object()) {
         for (const auto& [k, v] : schema["properties"].items()) {

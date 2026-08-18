@@ -41,6 +41,7 @@ permission:
   mode: ask
   whitelist:
     - "/tmp/"
+    - "${TEMP}"
   #   - "C:/work/trusted"
   #   - "/home/user/shared/**"
   # blacklist:

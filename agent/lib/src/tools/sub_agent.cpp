@@ -92,6 +92,9 @@ neograph::ChatTool SubAgentManagerTool::get_definition() const {
                     "messages",
                     {
                         {"type", "array"},
+                        // Gemini 网关要求 array 类型必须带 items 字段 (缺失报
+                        // INVALID_ARGUMENT 400 "missing field"), 元素为消息对象
+                        {"items", {{"type", "object"}}},
                         {"description", prompt.getArg("messages")},
                     },
                 },
@@ -193,6 +196,8 @@ neograph::ChatTool SubAgentManagerTool::get_definition() const {
                         "messages",
                         {
                             {"type", "array"},
+                            // 同 taskItemSchema: Gemini 要求 array 必须带 items
+                            {"items", {{"type", "object"}}},
                             {"description", prompt.getArg("messages")},
                         },
                     },
