@@ -7,6 +7,7 @@
 #include "agentxx/plugin/tool_registry.h"
 #include "agentxx/tools/tool.h"
 #include "asio/awaitable.hpp"
+#include "asio/steady_timer.hpp"
 #include <array>
 #include <atomic>
 #include <map>
@@ -23,6 +24,21 @@ class PluginManager;
 class CapabilityRegistry;
 class PluginMiddlewareHandle;
 class PluginTool;
+class PluginInstance; ///< 前向声明 (PluginTimer 引用其指针)
+
+/// 宿主定时器状态 (vtable add_timer 登记; detachAll 统一取消; 仅 io 线程)
+/// - inst 为裸指针: 生命周期由"实例析构前 handler 链必已终结"保证
+///   (detachAll 取消 + unload 等 inflight 归零后才 dlclose/析构)
+/// - handler 链自持有 state (shared_ptr), 取消/错误后不再重新排程 → 链终结
+///   释放 state (无自引用环)
+struct PluginTimer {
+    PluginInstance*                         inst       = nullptr;
+    std::shared_ptr<asio::steady_timer>     timer;
+    long                                    intervalMs = 0;
+    void (*fn)(void* ud)                              = nullptr;
+    void* ud                                          = nullptr;
+    bool  cancelled                                   = false;
+};
 
 /// 已加载插件实例 (宿主侧状态)
 /// - **所有插件统一为 C++ 插件**: 每个插件都有 dlHandle/entry; 脚本能力是
@@ -100,6 +116,8 @@ public:
     std::vector<HookRegistration> hookRegistrations; ///< 已注册钩子记录 (含函数指针)
     std::vector<std::shared_ptr<AgentxxSubscription>> subscriptions; ///< 已订阅事件句柄
     std::vector<CapabilityRegistration> capabilityRegistrations;     ///< 已声明能力记录
+    /// 宿主定时器句柄 (vtable add_timer 登记; detachAll 统一取消; 仅 io 线程)
+    std::vector<std::shared_ptr<PluginTimer>> timers;
     /// 提示词修改备份 (set_prompt 写入前记录; 卸载时回滚, 见 detachAll)
     PromptBackup promptBackup;
 
@@ -374,6 +392,27 @@ public:
     /// 读取会话级 share_store 条目 (io 线程)
     char* getShareStore(PluginInstance* inst, const char* thread_id, long long id);
     void  emitMessageTip(PluginInstance* inst, const char* thread_id, const char* text, int level);
+
+    /// 创建周期定时器 (vtable add_timer 实现入口; io 线程)
+    /// - 返回句柄 (PluginTimer shared_ptr 裸指针); 失败返回 nullptr
+    /// - 回调循环内自行重新 expires_after; cancelTimer 置 cancelled + cancel
+    void* addTimer(
+        PluginInstance* inst,
+        long            intervalMs,
+        void (*fn)(void* ud),
+        void* ud
+    );
+    /// 取消定时器 (io 线程; 从实例容器移除 + cancelled 标记)
+    void cancelTimer(PluginInstance* inst, void* timer);
+    /// 阻塞池卸载执行 (vtable offload 实现入口; 任意线程可调用)
+    /// - work 在 AgentContext::blockingPool 线程执行, done 投递回 io 线程
+    /// - 全程 inflight 计数保活插件代码段 (work/done 执行期间可安全卸载等待)
+    void offload(
+        PluginInstance* inst,
+        void* (*work)(void* ud, char** error_out),
+        void (*done)(void* ud, void* result, char* error),
+        void* ud
+    );
 
     /// 工具注册表 (供 ToolcallWrapNode/ModelCallWrapNode 查表)
     std::shared_ptr<ToolRegistry> registry() const {

@@ -5,9 +5,12 @@
 //   由本插件定义), 供测试与工具执行使用; 常规展示不再走请求-响应链路
 //   (WireGetSystemUsage/WireSystemUsage 已随插件化移除, lib wire 层不含
 //   系统资源 DTO)
-// - 周期采集: agent 侧入口启动定时线程, 每 kUsageIntervalSec 秒执行一次
-//   采集并 publish "agentxx_system_monitor.usage" (server 原样转发
-//   WirePluginData) —— 定时/采集/发布完全位于插件内, TUI 不再参与
+// - 周期采集: 宿主定时器 (v7 add_timer) 每 500ms tick (io 线程快速返回),
+//   到 kUsageIntervalSec 后经 host->offload 把阻塞采样 (CpuGpuMonitor::query,
+//   ~100ms) 卸载到宿主阻塞池, done 回 io 线程 publish
+//   "agentxx_system_monitor.usage" (server 原样转发 WirePluginData) ——
+//   定时/采集/发布完全位于插件内且不自建线程 (线程数量可控, 卸载安全由
+//   宿主统一保证), TUI 不再参与
 // - client 侧入口 (agentxx_client_entry): 订阅宿主转发的 usage 插件事件,
 //   以侧边栏 Info 栏段落渲染明细 (CPU/RAM/GPU); 显示开关命令 /sysinfo
 //   经跨端事件 (usage_enabled) 上行同步到 agent 侧, 关闭期间跳过采集
@@ -25,7 +28,6 @@
 #include <cstring>
 #include <sstream>
 #include <string>
-#include <thread>
 #include <vector>
 
 using namespace agentxx_system_monitor_plugin;
@@ -341,44 +343,91 @@ static constexpr int kUsageIntervalSec = 5;
 static constexpr int kUsageTickMs = 500;
 
 struct PluginCtx {
-    std::atomic<bool> stop{false};
     /// 采集/发布开关 (client /sysinfo 经 usage_enabled 事件同步)
     std::atomic<bool> usageEnabled{true};
-    /// 周期采集线程 (unload 时 stop + join)
-    std::thread usageThread;
+    /// 宿主周期定时器句柄 (v7 add_timer; unload 时 cancel_timer)
+    void* timer = nullptr;
+    /// 采集进行中标记 (io 线程独占: 定时器回调/offload done 均回 io 线程;
+    /// 防采集耗时 > tick 间隔导致重入)
+    bool collecting = false;
+    /// tick 计数 (io 线程独占; 每 kUsageIntervalSec 秒采一次)
+    int tick = 0;
 };
 
-/// 周期采集循环 (独立线程; publish 线程安全, 见上)
-static void usageCollectorLoop(PluginCtx* ctx) {
-    int tick = 0;
-    for (;;) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(kUsageTickMs));
-        if (ctx->stop.load(std::memory_order_acquire)) {
-            break;
-        }
-        if (++tick < kUsageIntervalSec * 1000 / kUsageTickMs) {
-            continue;
-        }
-        tick = 0;
-        if (!ctx->usageEnabled.load(std::memory_order_relaxed)) {
-            continue; // 显示关闭: 跳过采集 (仍保持唤醒)
-        }
-        try {
-            auto usage = querySync();
-            auto json  = usageToJson(usage);
-            if (g_host && g_host->vtable && g_host->vtable->publish) {
-                g_host->vtable->publish(
-                    g_host,
-                    AGENTXX_SV("agentxx_system_monitor.usage"),
-                    agentxx_plugin_sv(json.data(), json.size())
-                );
-            }
-        } catch (const std::exception& e) {
-            pluginLog(3, fmt::format("agentxx_system_monitor: usage collect failed: {}", e.what()));
-        } catch (...) {
-            pluginLog(3, "agentxx_system_monitor: usage collect failed (unknown)");
-        }
+/// 周期采集 work: 宿主阻塞池线程执行 (阻塞 ~100ms 采样)
+static void* usageCollectWork(void* ud, char** error_out) {
+    auto* ctx = static_cast<PluginCtx*>(ud);
+    if (!ctx || !g_host || !g_host->vtable) {
+        return nullptr;
     }
+    try {
+        auto usage = querySync();
+        auto json  = usageToJson(usage);
+        // 结果经宿主分配 (跨 CRT 堆边界)
+        char* p = static_cast<char*>(g_host->vtable->alloc(json.size() + 1));
+        if (p) {
+            std::memcpy(p, json.c_str(), json.size() + 1);
+        }
+        return p;
+    } catch (const std::exception& e) {
+        if (error_out) {
+            *error_out = g_host->vtable->strdup(e.what());
+        }
+        return nullptr;
+    } catch (...) {
+        if (error_out) {
+            *error_out = g_host->vtable->strdup("unknown error");
+        }
+        return nullptr;
+    }
+}
+
+/// 周期采集 done: io 线程执行 (快速返回; publish 异步投递)
+static void usageCollectDone(void* ud, void* result, char* error) {
+    auto* ctx = static_cast<PluginCtx*>(ud);
+    if (ctx) {
+        ctx->collecting = false;
+    }
+    if (error) {
+        pluginLog(3, fmt::format("agentxx_system_monitor: usage collect failed: {}", error));
+        if (g_host && g_host->vtable) {
+            g_host->vtable->free(error);
+        }
+        return;
+    }
+    if (result) {
+        if (g_host && g_host->vtable && g_host->vtable->publish) {
+            const char* s = static_cast<const char*>(result);
+            g_host->vtable->publish(
+                g_host,
+                AGENTXX_SV("agentxx_system_monitor.usage"),
+                agentxx_plugin_sv(s, std::strlen(s))
+            );
+        }
+        g_host->vtable->free(result);
+    }
+}
+
+/// 周期采集 tick (宿主定时器回调, io 线程; 必须快速返回):
+/// - 计数到 kUsageIntervalSec 后经 host->offload 把阻塞采样卸载到宿主阻塞池
+///   (work 在阻塞池, done 回 io 线程 publish) —— 不再自建采集线程
+static void onUsageTick(void* ud) {
+    auto* ctx = static_cast<PluginCtx*>(ud);
+    if (!ctx || !g_host || !g_host->vtable || !g_host->vtable->offload) {
+        return;
+    }
+    if (ctx->collecting) {
+        return; // 上次采集未完成 (阻塞池忙), 跳过本 tick
+    }
+    if (++ctx->tick < kUsageIntervalSec * 1000 / kUsageTickMs) {
+        return;
+    }
+    ctx->tick = 0;
+    if (!ctx->usageEnabled.load(std::memory_order_relaxed)) {
+        return; // 显示关闭: 跳过采集
+    }
+    ctx->collecting = true;
+    g_host->vtable->offload(g_host, usageCollectWork, usageCollectDone, ctx);
 }
 
 /// 跨端事件: client /sysinfo 开关同步 (WirePluginDataUp 上行后 server 发布到
@@ -426,7 +475,11 @@ extern "C" int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) 
         pluginLog(3, "agentxx_system_monitor: register capability agentxx.system_usage failed");
     }
 
-    // 3. 周期采集: 订阅 client /sysinfo 开关同步事件 + 启动采集线程
+    // 3. 周期采集: 订阅 client /sysinfo 开关同步事件 + 宿主定时器
+    //    (v7 add_timer): 每 kUsageTickMs 触发一次 tick (io 线程快速返回),
+    //    到 kUsageIntervalSec 后经 host->offload 把阻塞采样卸载到宿主阻塞池
+    //    (work 阻塞池 / done io 线程 publish) —— 不占 io 线程、不自建线程,
+    //    卸载安全由宿主统一保证 (定时器取消 + inflight 保活)
     auto ctx = std::make_unique<PluginCtx>();
     if (!host->vtable->subscribe(
             host,
@@ -436,8 +489,14 @@ extern "C" int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) 
         )) {
         pluginLog(3, "agentxx_system_monitor: subscribe usage_enabled failed");
     }
-    // 采集线程周期 querySync + publish usage 事件; 独立线程, 不阻塞 io 线程
-    ctx->usageThread = std::thread(usageCollectorLoop, ctx.get());
+    if (host->vtable->add_timer) {
+        ctx->timer = host->vtable->add_timer(host, kUsageTickMs, onUsageTick, ctx.get());
+        if (!ctx->timer) {
+            pluginLog(3, "agentxx_system_monitor: add_timer failed (collector disabled)");
+        }
+    } else {
+        pluginLog(3, "agentxx_system_monitor: host has no add_timer (collector disabled)");
+    }
 
     *plugin_ctx = ctx.release();
     pluginLog(2, "agentxx_system_monitor loaded (1 tool, 1 capability, periodic collector)");
@@ -447,11 +506,13 @@ extern "C" int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) 
 extern "C" void agentxx_plugin_unload(void* plugin_ctx) {
     auto* ctx = static_cast<PluginCtx*>(plugin_ctx);
     if (ctx) {
-        // 停止周期采集线程 (join 最坏 ~600ms: 500ms tick + 一次 ~100ms 采样)
-        ctx->stop.store(true, std::memory_order_release);
-        if (ctx->usageThread.joinable()) {
-            ctx->usageThread.join();
+        // 取消宿主定时器 (在途 tick/offload 由宿主 inflight 计数等待完成,
+        // 此处无任何在途引用后安全释放 ctx)
+        if (g_host && g_host->vtable && g_host->vtable->cancel_timer && ctx->timer) {
+            g_host->vtable->cancel_timer(g_host, ctx->timer);
+            ctx->timer = nullptr;
         }
+        delete ctx;
     }
     if (g_host && g_host->vtable) {
         g_host->vtable->unregister_tool(g_host, AGENTXX_SV("agentxx_get_system_core_info"));
@@ -595,9 +656,9 @@ static std::string buildUsageInfoItemsJson(const UsageStat& st) {
 
     textItem(fmt::format("|- CPU {:.0f}%", st.cpu));
     // RAM: 45% (8192/18432 MB)
-    std::string ram = fmt::format("RAM: {:.0f}%", st.memPct);
+    std::string ram = fmt::format("|- RAM {:.0f}%", st.memPct);
     if (st.memTotalMb > 0) {
-        ram = fmt::format("|- {} ({}/{} M)", ram, st.memUsedMb, st.memTotalMb);
+        ram = fmt::format("{} ({}/{} M)", ram, st.memUsedMb, st.memTotalMb);
     }
     textItem(ram);
     if (st.gpuCount == 0) {

@@ -571,6 +571,65 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         XX_TEST_EXPECT_TRUE(mgr->find("example_plugin") == nullptr);
     }
 
+    // ---- 9. loadConfiguredClientPlugins: sides 过滤 + args 传递 (client 侧对称) ----
+    // - sides=Agent 的配置项在 client 侧跳过 (属于 agent 侧)
+    // - sides=Auto: 加载 + args 随配置直接传入实例 (get_plugin_args 可读)
+    // - Auto 无 client 入口的纯 agent 插件静默跳过 (允许缺失, 不报错)
+    {
+        std::vector<agentxx::agent::PluginConfig> cfgs;
+        agentxx::agent::PluginConfig              pc;
+        pc.path    = path;
+        pc.enabled = true;
+        pc.args    = neograph::json{{"client_key", "client_val"}};
+
+        // 9.1 sides=Agent: client 侧跳过
+        pc.sides = agentxx::agent::PluginSide::Agent;
+        cfgs.push_back(pc);
+        co_await mgr->loadConfiguredClientPlugins(cfgs);
+        XX_TEST_EXPECT_TRUE(mgr->find("example_plugin") == nullptr);
+
+        // 9.2 sides=Auto: 加载 + args 传递
+        pc.sides = agentxx::agent::PluginSide::Auto;
+        cfgs.clear();
+        cfgs.push_back(pc);
+        co_await mgr->loadConfiguredClientPlugins(cfgs);
+        auto instCfg = mgr->find("example_plugin");
+        XX_TEST_EXPECT_TRUE(instCfg != nullptr);
+        if (instCfg) {
+            XX_TEST_EXPECT_EQ(
+                instCfg->args.value("client_key", std::string{}),
+                "client_val"
+            );
+            // vtable get_plugin_args 返回实例 args
+            char* json = instCfg->host.vtable->get_plugin_args(&instCfg->host);
+            XX_TEST_EXPECT_TRUE(json != nullptr);
+            if (json) {
+                try {
+                    auto j = neograph::json::parse(std::string{json});
+                    XX_TEST_EXPECT_EQ(j["client_key"].get<std::string>(), "client_val");
+                } catch (const std::exception& e) {
+                    XX_TEST_EXPECT_TRUE(false);
+                    XX_LOGE("[client_plugin] 9.2 args json parse failed: {}", e.what());
+                }
+                instCfg->host.vtable->free(json);
+            }
+            bool unloadedCfg = co_await mgr->unloadAsync("example_plugin");
+            XX_TEST_EXPECT_TRUE(unloadedCfg);
+            XX_TEST_EXPECT_TRUE(mgr->find("example_plugin") == nullptr);
+        }
+
+        // 9.3 sides=Client: 加载 (显式要求 client 入口, 缺失时须报错)
+        pc.sides = agentxx::agent::PluginSide::Client;
+        cfgs.clear();
+        cfgs.push_back(pc);
+        co_await mgr->loadConfiguredClientPlugins(cfgs);
+        auto instCfg2 = mgr->find("example_plugin");
+        XX_TEST_EXPECT_TRUE(instCfg2 != nullptr);
+        if (instCfg2) {
+            co_await mgr->unloadAsync("example_plugin");
+        }
+    }
+
     co_return TestResult{g_client_plugin_passed, g_client_plugin_failed};
 }
 
