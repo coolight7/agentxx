@@ -658,87 +658,99 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
                     std::optional<neograph::json> interruptResult;
                     {
                         if (interruptArg.name == "subagent") {
+                            // 统一批量委派 (单发与批量合并):
+                            // - 中断参数为 {tasks: [...]} 数组 (SubAgentManagerTool 构造);
+                            //   兼容旧单发参数格式: 直接含 subagent 字段时包装为 1 个 task
+                            // - 结果 key: (tool_call_id + "_") + (task.result_id | 任务序号),
+                            //   与工具侧提取规则一致; 前缀避免同一轮多个中断的序号 key 覆盖
                             auto subagentArg = interruptArg.arg;
-                            auto resp        = co_await agentContext->bus->request<
-                                       events::ReqSubagentStart,
-                                       events::RespSubagentResult>(
-                                events::Topic::Subagent,
-                                events::ReqSubagentStart{
-                                    .parentAgentName = agentContext->agentConfig
-                                                           ? agentContext->agentConfig->agentName
-                                                           : std::string{},
-                                    .parentThreadId  = std::string{threadId},
-                                    .subagentName    = subagentArg.value("subagent", std::string{}),
+                            auto batchReq    = events::ReqSubagentBatch{
+                                .parentAgentName = agentContext->agentConfig
+                                                       ? agentContext->agentConfig->agentName
+                                                       : std::string{},
+                                .parentThreadId  = std::string{threadId},
+                                // 透传父会话取消令牌: 用户取消父轮次时级联中止全部子代理
+                                .cancelToken = session->getCancelToken(),
+                            };
+                            if (subagentArg.contains("tasks") && subagentArg["tasks"].is_array()) {
+                                for (const auto& t : subagentArg["tasks"]) {
+                                    batchReq.tasks.push_back(events::SubagentBatchItem{
+                                        .subagentName = t.value("subagent", std::string{}),
+                                        .systemPrompt = t.value("system_prompt", std::string{}),
+                                        .message      = t.value("message", std::string{}),
+                                        // 结构化消息透传 (同上下文模式)
+                                        .messages
+                                        = (t.contains("messages") && t["messages"].is_array())
+                                              ? std::optional<neograph::json>{t["messages"]}
+                                              : std::nullopt,
+                                        // 指定运行 thread (同上下文模式)
+                                        .threadId = t.value("thread_id", std::string{}),
+                                        // 工具策略 (无工具/继承父/自定义)
+                                        .tools
+                                        = (t.contains("tools") && t["tools"].is_array())
+                                              ? std::optional<neograph::json>{t["tools"]}
+                                              : std::nullopt,
+                                        // 压缩中间件开关 (压缩子代理显式 false)
+                                        .enableSummarization
+                                        = (t.contains("enable_summarization")
+                                           && t["enable_summarization"].is_boolean())
+                                              ? std::optional<bool>{
+                                                    t["enable_summarization"].get<bool>()
+                                                }
+                                              : std::nullopt,
+                                        .resultId = t.value("result_id", std::string{}),
+                                    });
+                                }
+                            } else {
+                                // 旧单发参数格式兼容
+                                batchReq.tasks.push_back(events::SubagentBatchItem{
+                                    .subagentName
+                                    = subagentArg.value("subagent", std::string{}),
                                     .systemPrompt
                                     = subagentArg.value("system_prompt", std::string{}),
                                     .message = subagentArg.value("message", std::string{}),
-                                    // 结构化消息透传 (同上下文模式):
-                                    // 原样透传消息前缀, 不做文本转录
                                     .messages
                                     = (subagentArg.contains("messages")
                                        && subagentArg["messages"].is_array())
-                                          ? std::optional<neograph::json>{subagentArg["messages"]}
+                                          ? std::optional<neograph::json>{
+                                                subagentArg["messages"]
+                                            }
                                           : std::nullopt,
-                                    // 指定运行 thread (同上下文模式):
-                                    // 与父会话相同 threadid + 相同模型,
-                                    // 命中 provider KV/prefix cache
                                     .threadId = subagentArg.value("thread_id", std::string{}),
-                                    // 工具策略 (无工具/继承父/自定义):
-                                    // 缺省不设置 (子代理默认全量工具)
                                     .tools
                                     = (subagentArg.contains("tools")
                                        && subagentArg["tools"].is_array())
                                           ? std::optional<neograph::json>{subagentArg["tools"]}
                                           : std::nullopt,
-                                    // 压缩中间件开关:
-                                    // summarization 发起的压缩子代理显式 false
                                     .enableSummarization
                                     = (subagentArg.contains("enable_summarization")
                                        && subagentArg["enable_summarization"].is_boolean())
-                                          ? std::optional<bool>{subagentArg["enable_summarization"]
-                                                                    .get<bool>()}
+                                          ? std::optional<bool>{
+                                                subagentArg["enable_summarization"].get<bool>()
+                                            }
                                           : std::nullopt,
                                     .resultId = interruptArg.resultId,
-                                    // 透传父会话取消令牌: 用户取消父轮次时级联中止子代理
-                                    .cancelToken = session->getCancelToken(),
-                                }
-                            );
-                            if (resp.has_value()) {
-                                interruptResult = neograph::json{std::string{resp->content}};
-                            }
-                        } else if (interruptArg.name == "subagent_batch") {
-                            auto batchArg = interruptArg.arg;
-                            auto batchReq = events::ReqSubagentBatch{
-                                .parentAgentName = agentContext->agentConfig
-                                                       ? agentContext->agentConfig->agentName
-                                                       : std::string{},
-                                .parentThreadId  = std::string{threadId},
-                                // 透传父会话取消令牌: 用户取消父轮次时级联中止批量子代理
-                                .cancelToken = session->getCancelToken(),
-                            };
-                            if (batchArg.contains("tasks") && batchArg["tasks"].is_array()) {
-                                for (const auto& t : batchArg["tasks"]) {
-                                    batchReq.tasks.push_back(events::SubagentBatchItem{
-                                        .subagentName = t.value("subagent", std::string{}),
-                                        .systemPrompt = t.value("system_prompt", std::string{}),
-                                        .message      = t.value("message", std::string{}),
-                                        .resultId     = t.value("result_id", std::string{}),
-                                    });
-                                }
+                                });
                             }
                             auto batchResp = co_await agentContext->bus->request<
                                 events::ReqSubagentBatch,
                                 events::RespSubagentBatch>(
-                                events::Topic::SubagentBatch,
+                                events::Topic::Subagent,
                                 std::move(batchReq)
                             );
                             if (batchResp.has_value()) {
+                                // 结果 key 统一为: tool_call_id + "_" + (result_id | 序号)
+                                const auto prefix = interruptArg.resultId.empty()
+                                                        ? std::string{}
+                                                        : interruptArg.resultId + "_";
+                                size_t     idx    = 0;
                                 for (const auto& r : batchResp->results) {
+                                    ++idx;
                                     auto rid = r.resultId;
                                     if (rid.empty()) {
-                                        rid = interruptArg.resultId;
+                                        rid = std::to_string(idx);
                                     }
-                                    resumeValues[rid] =
+                                    resumeValues[prefix + rid] =
                     r.hasError ? neograph::json{{"error", std::string{r.errorMessage}}}
                                : neograph::json{std::string{r.content}};
                                 }

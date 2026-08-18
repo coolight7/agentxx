@@ -1,5 +1,8 @@
-#include "test_agent_host.h"
+// 注意: 必须先包含 test_agent.h (其会重定义 XX_TEST_PASSED/FAILED 为 g_da_*),
+// 再包含 test_agent_host.h (重定义为 g_host_*), 使本文件的断言计数到本模块
+// 计数器; 顺序相反时宏被覆盖, agent_host 模块会显示 passed=0 (预存问题修复)
 #include "test_agent.h"
+#include "test_agent_host.h"
 
 #include "agentxx/agent/agent_host.h"
 #include "agentxx/agent/code_agent.h"
@@ -106,7 +109,7 @@ asio::awaitable<void> test_host_spawn_e2e() {
     hostCfg.ioCtx                                   = io;
     auto                                       host = agentxx::agent::AgentHost::create(hostCfg);
     std::shared_ptr<agentxx::agent::CodeAgent> agent;
-    std::expected<agentxx::events::RespSubagentResult, std::string> resp;
+    std::expected<agentxx::events::RespSubagentBatch, std::string> resp;
     std::atomic<int>                                                progressCount{0};
     std::atomic<int>                                                doneCount{0};
     std::atomic<bool>                                               finished{false};
@@ -138,20 +141,26 @@ asio::awaitable<void> test_host_spawn_e2e() {
                 = std::make_shared<agentxx::middleware::EventBus>(co_await asio::this_coro::executor
                 );
 
+            // [workaround] 聚合提取为具名变量, 绕过 g++ 16.1 ICE (gimplify.cc:841)
+            agentxx::events::ReqSubagentBatch e2eReq{
+                .parentAgentName = "root",
+                .parentThreadId  = "parent-session",
+                .cancelToken     = nullptr,
+                .tasks           = {
+                    agentxx::events::SubagentBatchItem{
+                        .subagentName = "subagent_task",
+                        .systemPrompt = "You are a worker.",
+                        .message      = "do the thing",
+                        .resultId     = "call_1",
+                    },
+                },
+            };
             resp = co_await agent->getContext()
                        ->bus->request<
-                           agentxx::events::ReqSubagentStart,
-                           agentxx::events::RespSubagentResult>(
+                           agentxx::events::ReqSubagentBatch,
+                           agentxx::events::RespSubagentBatch>(
                            agentxx::events::Topic::Subagent,
-                           agentxx::events::ReqSubagentStart{
-                               .parentAgentName = "root",
-                               .parentThreadId  = "parent-session",
-                               .subagentName    = "subagent_task",
-                               .systemPrompt    = "You are a worker.",
-                               .message         = "do the thing",
-                               .resultId        = "call_1",
-                               .cancelToken     = nullptr,
-                           },
+                           e2eReq,
                            std::chrono::seconds(30)
                        );
             finished = true;
@@ -162,9 +171,10 @@ asio::awaitable<void> test_host_spawn_e2e() {
 
     XX_TEST_EXPECT_TRUE(resp.has_value());
     if (resp.has_value()) {
-        XX_TEST_EXPECT_FALSE(resp->hasError);
-        XX_TEST_EXPECT_EQ(resp->content, std::string{"Host spawn result"});
-        XX_TEST_EXPECT_TRUE(!resp->agentId.empty());
+        XX_TEST_EXPECT_EQ(resp->results.size(), size_t{1});
+        XX_TEST_EXPECT_FALSE(resp->results[0].hasError);
+        XX_TEST_EXPECT_EQ(resp->results[0].content, std::string{"Host spawn result"});
+        XX_TEST_EXPECT_TRUE(!resp->results[0].agentId.empty());
     }
     // 子代理节点已回收 (仅剩 root 节点)
     XX_TEST_EXPECT_EQ(host->registry().size(), 1u);
@@ -212,8 +222,8 @@ asio::awaitable<void> test_host_spawn_same_context() {
     agentxx::agent::AgentHost::Config hostCfg;
     hostCfg.ioCtx = io;
     auto host     = agentxx::agent::AgentHost::create(hostCfg);
-    std::expected<agentxx::events::RespSubagentResult, std::string> sameCtxResp;
-    std::expected<agentxx::events::RespSubagentResult, std::string> normalResp;
+    std::expected<agentxx::events::RespSubagentBatch, std::string> sameCtxResp;
+    std::expected<agentxx::events::RespSubagentBatch, std::string> normalResp;
     std::atomic<bool>                                               finished{false};
 
     // 透传的结构化消息前缀 (模拟压缩场景: 父 system + 历史消息)
@@ -237,44 +247,54 @@ asio::awaitable<void> test_host_spawn_same_context() {
                 );
 
             // [workaround] 聚合提取为具名变量, 绕过 g++ 16.1 ICE (gimplify.cc:8406)
-            agentxx::events::ReqSubagentStart sameCtxReq{
+            agentxx::events::ReqSubagentBatch sameCtxReq{
                 .parentAgentName = "root",
                 .parentThreadId  = "parent-session",
-                .subagentName    = "subagent_task",
-                .systemPrompt    = "",
-                .message         = "",
-                // 结构化消息透传 (可含 system, 原样透传)
-                .messages = prefix,
-                // 同上下文: 运行在父线程, 共享上下文前缀
-                .threadId    = "parent-session",
-                .resultId    = "call_same_ctx",
-                .cancelToken = nullptr,
+                .cancelToken     = nullptr,
+                .tasks           = {
+                    agentxx::events::SubagentBatchItem{
+                        .subagentName = "subagent_task",
+                        .systemPrompt = "",
+                        .message      = "",
+                        // 结构化消息透传 (可含 system, 原样透传)
+                        .messages = prefix,
+                        // 同上下文: 运行在父线程, 共享上下文前缀
+                        .threadId = "parent-session",
+                        .resultId = "call_same_ctx",
+                    },
+                },
             };
             sameCtxResp = co_await agent->getContext()
                               ->bus->request<
-                                  agentxx::events::ReqSubagentStart,
-                                  agentxx::events::RespSubagentResult>(
+                                  agentxx::events::ReqSubagentBatch,
+                                  agentxx::events::RespSubagentBatch>(
                                   agentxx::events::Topic::Subagent,
                                   sameCtxReq,
                                   std::chrono::seconds(30)
                               );
 
             // 对照: 默认模式 (无 messages/threadId) → 独立线程 + config 默认模型
-            agentxx::events::ReqSubagentStart normalReq{
+            agentxx::events::ReqSubagentBatch normalReq{
                 .parentAgentName = "root",
                 .parentThreadId  = "parent-session",
-                .subagentName    = "subagent_task",
-                .systemPrompt    = "You are a worker.",
-                .message         = "plain task",
-                .messages        = std::nullopt,
-                .threadId        = "",
-                .resultId        = "call_normal",
                 .cancelToken     = nullptr,
+                .tasks           = {
+                    agentxx::events::SubagentBatchItem{
+                        .subagentName        = "subagent_task",
+                        .systemPrompt        = "You are a worker.",
+                        .message             = "plain task",
+                        .messages            = std::nullopt,
+                        .threadId            = "",
+                        .tools               = std::nullopt,
+                        .enableSummarization = std::nullopt,
+                        .resultId            = "call_normal",
+                    },
+                },
             };
             normalResp = co_await agent->getContext()
                              ->bus->request<
-                                 agentxx::events::ReqSubagentStart,
-                                 agentxx::events::RespSubagentResult>(
+                                 agentxx::events::ReqSubagentBatch,
+                                 agentxx::events::RespSubagentBatch>(
                                  agentxx::events::Topic::Subagent,
                                  normalReq,
                                  std::chrono::seconds(30)
@@ -288,8 +308,9 @@ asio::awaitable<void> test_host_spawn_same_context() {
     // ① 同上下文模式: 派生成功, 输出正常
     XX_TEST_EXPECT_TRUE(sameCtxResp.has_value());
     if (sameCtxResp.has_value()) {
-        XX_TEST_EXPECT_FALSE(sameCtxResp->hasError);
-        XX_TEST_EXPECT_EQ(sameCtxResp->content, std::string{"same-context result"});
+        XX_TEST_EXPECT_EQ(sameCtxResp->results.size(), size_t{1});
+        XX_TEST_EXPECT_FALSE(sameCtxResp->results[0].hasError);
+        XX_TEST_EXPECT_EQ(sameCtxResp->results[0].content, std::string{"same-context result"});
     }
 
     // 两次请求按顺序记录: [0]=同上下文, [1]=默认对照
@@ -338,7 +359,8 @@ asio::awaitable<void> test_host_spawn_same_context() {
     //    (system 同样被引擎替换为 config systemPrompt)
     XX_TEST_EXPECT_TRUE(normalResp.has_value());
     if (normalResp.has_value()) {
-        XX_TEST_EXPECT_FALSE(normalResp->hasError);
+        XX_TEST_EXPECT_EQ(normalResp->results.size(), size_t{1});
+        XX_TEST_EXPECT_FALSE(normalResp->results[0].hasError);
     }
     XX_TEST_EXPECT_EQ(
         normalReqBody.value("model", std::string{}),
@@ -392,29 +414,33 @@ asio::awaitable<void> test_host_spawn_tool_policy() {
             auto spawnOne = [&](std::optional<neograph::json> tools,
                                 std::string                   tag) -> asio::awaitable<void> {
                 // [workaround] 聚合提取为具名变量, 绕过 g++ 16.1 ICE
-                agentxx::events::ReqSubagentStart req{
-                    .parentAgentName     = "root",
-                    .parentThreadId      = "parent-session",
-                    .subagentName        = "subagent_task",
-                    .systemPrompt        = "You are a worker.",
-                    .message             = "do " + tag,
-                    .messages            = std::nullopt,
-                    .threadId            = "",
-                    .tools               = tools,
-                    .enableSummarization = std::nullopt,
-                    .resultId            = "call_" + tag,
-                    .cancelToken         = nullptr,
+                agentxx::events::ReqSubagentBatch req{
+                    .parentAgentName = "root",
+                    .parentThreadId  = "parent-session",
+                    .cancelToken     = nullptr,
+                    .tasks           = {
+                        agentxx::events::SubagentBatchItem{
+                            .subagentName        = "subagent_task",
+                            .systemPrompt        = "You are a worker.",
+                            .message             = "do " + tag,
+                            .messages            = std::nullopt,
+                            .threadId            = "",
+                            .tools               = tools,
+                            .enableSummarization = std::nullopt,
+                            .resultId            = "call_" + tag,
+                        },
+                    },
                 };
                 auto resp = co_await agent->getContext()
                                 ->bus->request<
-                                    agentxx::events::ReqSubagentStart,
-                                    agentxx::events::RespSubagentResult>(
+                                    agentxx::events::ReqSubagentBatch,
+                                    agentxx::events::RespSubagentBatch>(
                                     agentxx::events::Topic::Subagent,
                                     req,
                                     std::chrono::seconds(30)
                                 );
-                if (resp.has_value() && resp->hasError) {
-                    XX_LOGE("spawn tool-policy `{}` failed: {}", tag, resp->errorMessage);
+                if (resp.has_value() && !resp->results.empty() && resp->results[0].hasError) {
+                    XX_LOGE("spawn tool-policy `{}` failed: {}", tag, resp->results[0].errorMessage);
                 }
             };
 
@@ -711,7 +737,7 @@ asio::awaitable<void> test_host_spawn_batch() {
                        ->bus->request<
                            agentxx::events::ReqSubagentBatch,
                            agentxx::events::RespSubagentBatch>(
-                           agentxx::events::Topic::SubagentBatch,
+                           agentxx::events::Topic::Subagent,
                            batchReq,
                            std::chrono::seconds(30)
                        );

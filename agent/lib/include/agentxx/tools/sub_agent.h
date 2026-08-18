@@ -3,20 +3,16 @@
 #include "agentxx/tools/tool.h"
 #include <map>
 #include <memory>
-#include <neograph/graph/engine.h>
-#include <neograph/graph/registry.h>
-#include <neograph/graph/types.h>
 #include <string>
 #include <string_view>
 
 namespace agentxx {
 namespace tools {
 
+/// subagent 注册项基类: 仅承载名称/描述/系统提示等静态元数据
+/// - 实际执行由 AgentHost 派生独立 agent 完成 (中断委派, 不再使用图内
+///   嵌套 subgraph; 旧的 getSubgraph/onSubagentEnd 已移除)
 class SubAgentTaskBase {
-protected:
-
-    std::shared_ptr<neograph::graph::GraphEngine> subgraph = nullptr;
-
 public:
 
     const std::string name;
@@ -29,29 +25,17 @@ public:
         std::string_view in_systemPrompt
     );
 
-    virtual std::shared_ptr<neograph::graph::GraphEngine> getSubgraph() const;
-
-    virtual asio::awaitable<void> onSubagentEnd(std::string& result);
-
     virtual ~SubAgentTaskBase();
 };
 
+/// 默认 subagent 任务 (普通委派: 隔离上下文独立运行)
 class SubAgentNormalTask : public SubAgentTaskBase {
 public:
 
     SubAgentNormalTask(
-        std::string_view                                      in_subAgentName,
-        std::string_view                                      in_subAgentDepict,
-        const neograph::graph::NodeContext&                   in_context,
-        std::shared_ptr<const neograph::graph::GraphRegistry> in_registry = nullptr
+        std::string_view in_subAgentName,
+        std::string_view in_subAgentDepict
     );
-
-    void createSubgraph(
-        const neograph::graph::NodeContext&                   context,
-        std::shared_ptr<const neograph::graph::GraphRegistry> registry = nullptr
-    );
-
-    inline static neograph::json defCreateSubGraphDefine();
 };
 
 class SubAgentManagerTool : public XXToolBase {

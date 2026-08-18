@@ -70,6 +70,7 @@ std::shared_ptr<AgentHost> AgentHost::create(Config cfg) {
     std::weak_ptr<AgentHost> self = host;
 
     // agent.spawn (RR): 任意调用方经宿主总线派生独立子代理
+    // (包装为单任务批量请求, 统一走 spawnBatch 路径)
     host->hostBus_
         ->getRR<events::ReqHostSpawn, events::RespHostSpawn>(events::HostTopic::AgentSpawn)
         .serve(
@@ -82,18 +83,31 @@ std::shared_ptr<AgentHost> AgentHost::create(Config cfg) {
                         .errorMessage = "AgentHost no longer available",
                     };
                 }
-                auto resp = co_await ptr->spawnSubagent(
-                    req.name,
-                    req.systemPrompt,
-                    req.message,
-                    /*parentThreadId=*/"",
-                    req.cancelToken
-                );
+                auto batchResp = co_await ptr->spawnBatch(events::ReqSubagentBatch{
+                    .parentAgentName = "",
+                    .parentThreadId  = req.parentAgentId,
+                    .cancelToken     = req.cancelToken,
+                    .tasks           = {
+                        events::SubagentBatchItem{
+                            .subagentName = req.name,
+                            .systemPrompt = req.systemPrompt,
+                            .message      = req.message,
+                            .resultId     = "",
+                        },
+                    },
+                });
+                if (batchResp.results.empty()) {
+                    co_return events::RespHostSpawn{
+                        .hasError     = true,
+                        .errorMessage = "AgentHost: spawn returned no result",
+                    };
+                }
+                const auto& item = batchResp.results[0];
                 co_return events::RespHostSpawn{
-                    .agentId      = resp.agentId,
-                    .content      = resp.content,
-                    .hasError     = resp.hasError,
-                    .errorMessage = resp.errorMessage,
+                    .agentId      = item.agentId,
+                    .content      = item.content,
+                    .hasError     = item.hasError,
+                    .errorMessage = item.errorMessage,
                 };
             }
         );
@@ -182,10 +196,11 @@ void AgentHost::attachRoot(std::shared_ptr<BaseAgent> rootAgent) {
         return;
     }
 
-    // 根 agent 全局总线上 serve 子代理委派 (中断路径):
+    // 根 agent 全局总线上 serve 子代理委派 (中断路径, 统一批量语义):
     // - SubAgentManagerTool 抛 NodeInterrupt → BaseAgent 中断循环 →
-    //   agentContext->bus->request(service.subagent) → 到达宿主
-    // - 宿主派生独立 agent 运行, 结果经 interruptResult channel 回填
+    //   agentContext->bus->request(service.subagent, ReqSubagentBatch) → 到达宿主
+    // - 宿主派生独立 agent 运行 (单任务 = 1 个 task), 结果经 interruptResult
+    //   channel 回填
     std::weak_ptr<AgentHost> self = weak_from_this();
 
     // 根 agent 也注册为节点 (平等成员; 由宿主持有, 不随 destroyAgent 回收)
@@ -199,37 +214,10 @@ void AgentHost::attachRoot(std::shared_ptr<BaseAgent> rootAgent) {
         registry_.insert(std::move(rootNode));
     }
 
-    auto& rr = ctx->bus->getRR<events::ReqSubagentStart, events::RespSubagentResult>(
+    auto& rr = ctx->bus->getRR<events::ReqSubagentBatch, events::RespSubagentBatch>(
         events::Topic::Subagent
     );
     subagentServerId_ = rr.serve(
-        [self](const events::ReqSubagentStart& req, size_t)
-            -> asio::awaitable<events::RespSubagentResult> {
-            auto ptr = self.lock();
-            if (!ptr) {
-                co_return events::RespSubagentResult{
-                    .hasError     = true,
-                    .errorMessage = "AgentHost no longer available",
-                };
-            }
-            co_return co_await ptr->spawnSubagent(
-                req.subagentName,
-                req.systemPrompt,
-                req.message,
-                req.parentThreadId,
-                req.cancelToken,
-                req.messages,
-                req.threadId,
-                req.tools,
-                req.enableSummarization
-            );
-        }
-    );
-
-    auto& batchRR = ctx->bus->getRR<events::ReqSubagentBatch, events::RespSubagentBatch>(
-        events::Topic::SubagentBatch
-    );
-    batchServerId_ = batchRR.serve(
         [self](const events::ReqSubagentBatch& req, size_t)
             -> asio::awaitable<events::RespSubagentBatch> {
             auto ptr = self.lock();
@@ -303,17 +291,12 @@ void AgentHost::publishProgress(
     );
 }
 
-asio::awaitable<events::RespSubagentResult> AgentHost::spawnSubagent(
-    std::string_view                              subagentName,
-    std::string_view                              systemPrompt,
-    std::string_view                              message,
+asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
+    const events::SubagentBatchItem&              task,
     std::string_view                              parentThreadId,
-    std::shared_ptr<neograph::graph::CancelToken> cancelToken,
-    std::optional<neograph::json>                 messages,
-    std::string_view                              threadId,
-    std::optional<neograph::json>                 tools,
-    std::optional<bool>                           enableSummarization
+    std::shared_ptr<neograph::graph::CancelToken> cancelToken
 ) {
+    const auto& subagentName = task.subagentName;
     // ---- 宿主预算检查 (深度 / 并发) ----
     size_t parentDepth = 0;
     if (auto it = threadDepth_.find(parentThreadId); it != threadDepth_.end()) {
@@ -322,12 +305,13 @@ asio::awaitable<events::RespSubagentResult> AgentHost::spawnSubagent(
     const size_t depth = parentDepth + 1;
     if (depth > cfg_.maxDepth) {
         XX_LOGW(
-            "AgentHost::spawnSubagent: `{}` rejected, depth {} exceeds maxDepth {}",
+            "AgentHost::spawnOneTask: `{}` rejected, depth {} exceeds maxDepth {}",
             subagentName,
             depth,
             cfg_.maxDepth
         );
-        co_return events::RespSubagentResult{
+        co_return events::RespSubagentBatchItem{
+            .resultId     = task.resultId,
             .hasError     = true,
             .errorMessage = fmt::format(
                 "Subagent `{}` rejected: max nesting depth ({}) exceeded",
@@ -338,11 +322,12 @@ asio::awaitable<events::RespSubagentResult> AgentHost::spawnSubagent(
     }
     if (runningSubagentCount_ >= cfg_.maxConcurrentSubagents) {
         XX_LOGW(
-            "AgentHost::spawnSubagent: `{}` rejected, concurrent limit {} reached",
+            "AgentHost::spawnOneTask: `{}` rejected, concurrent limit {} reached",
             subagentName,
             cfg_.maxConcurrentSubagents
         );
-        co_return events::RespSubagentResult{
+        co_return events::RespSubagentBatchItem{
+            .resultId     = task.resultId,
             .hasError     = true,
             .errorMessage = fmt::format(
                 "Subagent `{}` rejected: concurrent subagent limit ({}) reached",
@@ -355,7 +340,8 @@ asio::awaitable<events::RespSubagentResult> AgentHost::spawnSubagent(
     // ---- 独立 agent 构造 (与根 agent 平等) ----
     auto parentConfig = rootAgent_ ? rootAgent_->getContext()->agentConfig : nullptr;
     if (!parentConfig) {
-        co_return events::RespSubagentResult{
+        co_return events::RespSubagentBatchItem{
+            .resultId     = task.resultId,
             .hasError     = true,
             .errorMessage = "AgentHost: root agent not attached, cannot derive subagent config",
         };
@@ -363,59 +349,65 @@ asio::awaitable<events::RespSubagentResult> AgentHost::spawnSubagent(
     auto subCfg = makeSubagentConfig(parentConfig);
 
     // ---- 子代理工具策略 (无工具 / 继承父 / 自定义白名单) ----
-    if (tools.has_value()) {
-        if (tools->is_array()) {
+    if (task.tools.has_value()) {
+        if (task.tools->is_array()) {
             subCfg->enableToolFiltering = true;
             subCfg->toolWhitelist.clear();
-            if (tools->empty()) {
+            if (task.tools->empty()) {
                 // []: 无工具 (纯文本回答)
-                XX_LOGD("spawnSubagent `{}`: tool policy = none", subagentName);
-            } else if (tools->size() == 1 && (*tools)[0].is_string()
-                       && (*tools)[0].get<std::string>() == "*") {
+                XX_LOGD("spawnOneTask `{}`: tool policy = none", subagentName);
+            } else if (task.tools->size() == 1 && (*task.tools)[0].is_string()
+                       && (*task.tools)[0].get<std::string>() == "*") {
                 // ["*"]: 全量继承父 agent 工具 (解析为父工具名白名单;
                 // 子代理未创建的父工具名自然跳过, 不报错)
                 if (rootAgent_ && rootAgent_->getContext()) {
                     subCfg->toolWhitelist = rootAgent_->getContext()->toolNames;
                 }
                 XX_LOGD(
-                    "spawnSubagent `{}`: tool policy = inherit parent ({} tools)",
+                    "spawnOneTask `{}`: tool policy = inherit parent ({} tools)",
                     subagentName,
                     subCfg->toolWhitelist.size()
                 );
             } else {
                 // [name, ...]: 自定义白名单
-                for (const auto& item : *tools) {
+                for (const auto& item : *task.tools) {
                     if (item.is_string()) {
                         subCfg->toolWhitelist.push_back(item.get<std::string>());
                     }
                 }
                 XX_LOGD(
-                    "spawnSubagent `{}`: tool policy = custom ({} tools)",
+                    "spawnOneTask `{}`: tool policy = custom ({} tools)",
                     subagentName,
                     subCfg->toolWhitelist.size()
                 );
             }
         } else {
-            XX_LOGW("spawnSubagent `{}`: invalid `tools` (not array), ignored", subagentName);
+            XX_LOGW("spawnOneTask `{}`: invalid `tools` (not array), ignored", subagentName);
         }
     }
 
     // ---- 子代理上下文压缩开关 (缺省继承父 config 拷贝) ----
-    if (enableSummarization.has_value()) {
-        subCfg->enableSummarization = *enableSummarization;
-        XX_LOGD("spawnSubagent `{}`: enableSummarization = {}", subagentName, *enableSummarization);
+    if (task.enableSummarization.has_value()) {
+        subCfg->enableSummarization = *task.enableSummarization;
+        XX_LOGD(
+            "spawnOneTask `{}`: enableSummarization = {}",
+            subagentName,
+            *task.enableSummarization
+        );
     }
 
     auto subagent = createAgentInstance(std::move(subCfg));
     if (!subagent) {
-        co_return events::RespSubagentResult{
+        co_return events::RespSubagentBatchItem{
+            .resultId     = task.resultId,
             .hasError     = true,
             .errorMessage = "AgentHost: failed to create subagent instance",
         };
     }
     auto subCtx = subagent->getContext();
     if (!subCtx) {
-        co_return events::RespSubagentResult{
+        co_return events::RespSubagentBatchItem{
+            .resultId     = task.resultId,
             .hasError     = true,
             .errorMessage = "AgentHost: subagent context is null",
         };
@@ -426,7 +418,7 @@ asio::awaitable<events::RespSubagentResult> AgentHost::spawnSubagent(
 
     // 同上下文模式: 子代理的 share_store 工具桥接到父会话的 store
     // (id 空间一致: 子代理写入的长内容, 父会话按摘要中的 id 可直接读取)
-    const bool sameContext = !std::string_view{threadId}.empty();
+    const bool sameContext = !task.threadId.empty();
     if (sameContext && rootAgent_ && rootAgent_->getContext()
         && rootAgent_->getContext()->middlewareHandleContext) {
         subCtx->agentConfig->sharedShareStoreContext
@@ -439,7 +431,7 @@ asio::awaitable<events::RespSubagentResult> AgentHost::spawnSubagent(
     // 同上下文模式: 子代理直接运行在指定 thread (与父会话同 thread),
     // 共享上下文前缀; 默认模式使用独立 subagent 线程 id (上下文隔离)
     const auto subagentThreadId
-        = sameContext ? std::string{threadId}
+        = sameContext ? task.threadId
                       : fmt::format("subagent_{}_{}_{}", subagentName, agentId, agentIdSeq_);
 
     // 注册节点 (平等成员; 父为根节点)
@@ -487,14 +479,14 @@ asio::awaitable<events::RespSubagentResult> AgentHost::spawnSubagent(
     } cleanup{shared_from_this(), agentId, subagentThreadId, sameContext};
 
     // ---- 运行 (engine 直跑: 保留调用方 executor, 无锁交错) ----
-    co_return co_await agentxx::util::catchErrorAsync<events::RespSubagentResult>(
-        [&]() -> asio::awaitable<events::RespSubagentResult> {
+    co_return co_await agentxx::util::catchErrorAsync<events::RespSubagentBatchItem>(
+        [&]() -> asio::awaitable<events::RespSubagentBatchItem> {
             co_await subagent->init();
 
             // 同上下文模式 + messages 透传: 初始上下文由调用方原样给出
             // (须含 system, 或为空时由 llm 节点按父 system prompt 补齐),
             // 不再插入子代理默认提示, 保证消息前缀与父会话一致
-            std::string sysPrompt{systemPrompt};
+            std::string sysPrompt{task.systemPrompt};
             if (sysPrompt.empty() && !sameContext) {
                 sysPrompt = "你是一个专门处理用户请求的辅助助手.";
             }
@@ -522,12 +514,12 @@ asio::awaitable<events::RespSubagentResult> AgentHost::spawnSubagent(
             // 初始消息: messages 结构化透传优先 (可含 system, 原样透传);
             // 否则回退 systemPrompt + message 文本 (默认独立行为)
             neograph::json inputMessages;
-            if (messages.has_value()) {
-                inputMessages = *messages;
+            if (task.messages.has_value()) {
+                inputMessages = *task.messages;
             } else {
                 inputMessages = neograph::json::array({
-                    {{"role", "system"}, {"content", sysPrompt}           },
-                    {{"role", "user"},   {"content", std::string{message}}},
+                    {{"role", "system"}, {"content", sysPrompt}              },
+                    {{"role", "user"},   {"content", std::string{task.message}}},
                 });
             }
 
@@ -573,28 +565,190 @@ asio::awaitable<events::RespSubagentResult> AgentHost::spawnSubagent(
                 }
             );
 
-            events::RespSubagentResult resp;
+            // ---- 中断处理循环 (与 BaseAgent 中断循环同构) ----
+            // 子代理作用域内支持两类中断:
+            // - name == "subagent": 嵌套委派 (子代理再派生子代理), 递归经本宿主
+            //   spawnBatch 处理; 宿主深度预算 (threadDepth_) 限制嵌套层数
+            // - 其他 (权限询问等 HIL): 子代理会话继承父会话总线, 中断请求
+            //   冒泡到父 IO (弹窗/确认), 结果注入后 resume
+            while (runResult.interrupted) {
+                const auto& tid = subagentThreadId;
+                auto        resumeValues = neograph::json{};
+
+                const auto interruptArgs
+                    = agentxx::middleware::InterruptHandleArg::listFromJson(
+                        subCtx->middlewareHandleContext->getGraphDataItemValue<neograph::json>(
+                            tid,
+                            agentxx::middleware::MiddlewareContext::graphDataKey_interruptArgs
+                        )
+                    );
+                size_t argIndex = 0;
+                for (const auto& interruptArg : interruptArgs) {
+                    ++argIndex;
+
+                    if (interruptArg.name == "subagent") {
+                        // 嵌套委派: 参数格式与根级一致 ({tasks: [...]} 或旧单发)
+                        auto subagentArg = interruptArg.arg;
+                        auto batchReq    = events::ReqSubagentBatch{
+                            .parentAgentName = subCtx->agentConfig
+                                                   ? subCtx->agentConfig->agentName
+                                                   : std::string{},
+                            .parentThreadId  = std::string{tid},
+                            // 级联取消: 父取消令牌沿嵌套链透传
+                            .cancelToken = cancelToken,
+                        };
+                        if (subagentArg.contains("tasks") && subagentArg["tasks"].is_array()) {
+                            for (const auto& t : subagentArg["tasks"]) {
+                                batchReq.tasks.push_back(events::SubagentBatchItem{
+                                    .subagentName = t.value("subagent", std::string{}),
+                                    .systemPrompt = t.value("system_prompt", std::string{}),
+                                    .message      = t.value("message", std::string{}),
+                                    .messages
+                                    = (t.contains("messages") && t["messages"].is_array())
+                                          ? std::optional<neograph::json>{t["messages"]}
+                                          : std::nullopt,
+                                    .threadId = t.value("thread_id", std::string{}),
+                                    .tools
+                                    = (t.contains("tools") && t["tools"].is_array())
+                                          ? std::optional<neograph::json>{t["tools"]}
+                                          : std::nullopt,
+                                    .enableSummarization
+                                    = (t.contains("enable_summarization")
+                                       && t["enable_summarization"].is_boolean())
+                                          ? std::optional<bool>{
+                                                t["enable_summarization"].get<bool>()
+                                            }
+                                          : std::nullopt,
+                                    .resultId = t.value("result_id", std::string{}),
+                                });
+                            }
+                        } else {
+                            batchReq.tasks.push_back(events::SubagentBatchItem{
+                                .subagentName
+                                = subagentArg.value("subagent", std::string{}),
+                                .systemPrompt
+                                = subagentArg.value("system_prompt", std::string{}),
+                                .message = subagentArg.value("message", std::string{}),
+                                .messages
+                                = (subagentArg.contains("messages")
+                                   && subagentArg["messages"].is_array())
+                                      ? std::optional<neograph::json>{subagentArg["messages"]}
+                                      : std::nullopt,
+                                .threadId = subagentArg.value("thread_id", std::string{}),
+                                .tools
+                                = (subagentArg.contains("tools")
+                                   && subagentArg["tools"].is_array())
+                                      ? std::optional<neograph::json>{subagentArg["tools"]}
+                                      : std::nullopt,
+                                .enableSummarization
+                                = (subagentArg.contains("enable_summarization")
+                                   && subagentArg["enable_summarization"].is_boolean())
+                                      ? std::optional<bool>{
+                                            subagentArg["enable_summarization"].get<bool>()
+                                        }
+                                      : std::nullopt,
+                                .resultId = interruptArg.resultId,
+                            });
+                        }
+                        auto batchResp = co_await spawnBatch(batchReq);
+                        // 结果 key 统一: (tool_call_id + "_") + (result_id | 序号)
+                        const auto prefix = interruptArg.resultId.empty()
+                                                ? std::string{}
+                                                : interruptArg.resultId + "_";
+                        size_t     idx    = 0;
+                        for (const auto& r : batchResp.results) {
+                            ++idx;
+                            auto rid = r.resultId;
+                            if (rid.empty()) {
+                                rid = std::to_string(idx);
+                            }
+                            resumeValues[prefix + rid] =
+                r.hasError ? neograph::json{{"error", std::string{r.errorMessage}}}
+                           : neograph::json{std::string{r.content}};
+                        }
+                    } else {
+                        // HIL 冒泡: 经子代理会话总线 (继承父 IO 已注册的
+                        // interrupt/permission 处理器) 请求外部处理
+                        if (subSession && subSession->bus) {
+                            auto resp = co_await
+                                [&]() -> asio::awaitable<
+                                          std::expected<events::RespInterrupt, std::string>> {
+                                auto req = events::ReqInterrupt{
+                                    .agentName = subCtx->agentConfig
+                                                     ? subCtx->agentConfig->agentName
+                                                     : std::string{},
+                                    .threadId          = std::string{tid},
+                                    .interruptNode     = runResult.interrupt_node,
+                                    .interruptValue    = runResult.interrupt_value.dump(),
+                                    .handleName        = interruptArg.name,
+                                    .interruptArgsJson = interruptArg.toJson().dump(),
+                                    .resultId          = interruptArg.resultId,
+                                };
+                                co_return co_await subSession->bus
+                                    ->request<events::ReqInterrupt, events::RespInterrupt>(
+                                        events::Topic::Interrupt,
+                                        std::move(req),
+                                        std::chrono::milliseconds{0}
+                                    );
+                            }();
+                            if (resp.has_value() && resp->handled) {
+                                auto rid = interruptArg.resultId;
+                                if (rid.empty()) {
+                                    rid = std::to_string(argIndex);
+                                }
+                                resumeValues[rid] = neograph::json::parse(resp->resultJson);
+                            }
+                        }
+                    }
+                }
+
+                if (false == resumeValues.empty()) {
+                    // 中断处理完成, 清理参数并写回结果
+                    subCtx->middlewareHandleContext->removeGraphDataItem(
+                        tid,
+                        agentxx::middleware::MiddlewareContext::graphDataKey_interruptArgs
+                    );
+                    subCtx->middlewareHandleContext->setGraphDataItemValue<neograph::json>(
+                        tid,
+                        agentxx::middleware::MiddlewareContext::graphDataKey_interruptResult,
+                        resumeValues
+                    );
+                    runResult = co_await subagent->getEngine()->resume_async(tid);
+                } else {
+                    // 无任何可注入结果: 停止循环, 按"中断未完成"处理
+                    break;
+                }
+            }
+
+            events::RespSubagentBatchItem respItem;
             if (runResult.interrupted) {
-                // 子代理被中断未完成: 显式报错 (子代理作用域不处理中断恢复)
-                resp = events::RespSubagentResult{
+                // 中断仍未完成 (无处理者/未响应): 显式报错
+                respItem = events::RespSubagentBatchItem{
+                    .resultId     = task.resultId,
                     .hasError     = true,
                     .errorMessage = fmt::format(
                         "Sub-agent interrupted at node `{}` (interrupt not handled in subagent scope)",
                         runResult.interrupt_node
                     ),
+                    .agentId      = agentId,
                 };
             } else {
-                resp = events::RespSubagentResult{.content = oss.str()};
+                respItem = events::RespSubagentBatchItem{
+                    .resultId = task.resultId,
+                    .content  = oss.str(),
+                    .agentId  = agentId,
+                };
             }
-            resp.agentId = agentId;
             publishProgress(agentId, node->parentAgentId, "turn_end", "");
 
             // 结束事件 + 节点回收 (cleanup guard)
             if (hostBus_) {
                 asio::co_spawn(
                     hostBus_->executor(),
-                    [bus = hostBus_, agentId, hasError = resp.hasError, err = resp.errorMessage](
-                    ) -> asio::awaitable<void> {
+                    [bus        = hostBus_,
+                     agentId,
+                     hasError   = respItem.hasError,
+                     err        = respItem.errorMessage]() -> asio::awaitable<void> {
                         co_await bus->publish<events::EventHostDone>(
                             events::HostTopic::AgentDone,
                             events::EventHostDone{
@@ -608,19 +762,21 @@ asio::awaitable<events::RespSubagentResult> AgentHost::spawnSubagent(
                     asio::detached
                 );
             }
-            co_return resp;
+            co_return respItem;
         },
-        [&agentId](std::string errmsg) -> asio::awaitable<events::RespSubagentResult> {
+        [&agentId, &task](std::string errmsg) -> asio::awaitable<events::RespSubagentBatchItem> {
             // 节点回收由 SpawnCleanup guard 统一处理
-            co_return events::RespSubagentResult{
+            co_return events::RespSubagentBatchItem{
+                .resultId     = task.resultId,
                 .hasError     = true,
                 .errorMessage = fmt::format("Sub-agent failed: {}", errmsg),
                 .agentId      = agentId,
             };
         },
-        [&agentId](std::string& errmsg) -> std::optional<events::RespSubagentResult> {
+        [&agentId, &task](std::string& errmsg) -> std::optional<events::RespSubagentBatchItem> {
             // 取消类异常: 转为错误结果快速返回 (父轮次随后按取消语义中止)
-            return events::RespSubagentResult{
+            return events::RespSubagentBatchItem{
+                .resultId     = task.resultId,
                 .hasError     = true,
                 .errorMessage = fmt::format("Sub-agent cancelled: {}", errmsg),
                 .agentId      = agentId,
@@ -660,7 +816,7 @@ asio::awaitable<events::RespSubagentBatch> AgentHost::spawnBatch(const events::R
              doneChannel,
              parentThreadId = req.parentThreadId,
              cancelToken    = req.cancelToken]() -> asio::awaitable<void> {
-                // RAII 守卫: 无论 spawnSubagent 如何退出都保证发送完成信号
+                // RAII 守卫: 无论 spawnOneTask 如何退出都保证发送完成信号
                 struct BatchDoneGuard {
                     std::shared_ptr<
                         asio::experimental::channel<void(neograph_asio_error_code, size_t)>>
@@ -678,29 +834,19 @@ asio::awaitable<events::RespSubagentBatch> AgentHost::spawnBatch(const events::R
                     }
                 } guard{doneChannel, i};
 
-                auto r = co_await agentxx::util::catchErrorAsync<events::RespSubagentResult>(
-                    [&]() -> asio::awaitable<events::RespSubagentResult> {
-                        co_return co_await spawnSubagent(
-                            task.subagentName,
-                            task.systemPrompt,
-                            task.message,
-                            parentThreadId,
-                            cancelToken
-                        );
+                auto r = co_await agentxx::util::catchErrorAsync<events::RespSubagentBatchItem>(
+                    [&]() -> asio::awaitable<events::RespSubagentBatchItem> {
+                        co_return co_await spawnOneTask(task, parentThreadId, cancelToken);
                     },
-                    [](std::string errmsg) -> asio::awaitable<events::RespSubagentResult> {
-                        co_return events::RespSubagentResult{
+                    [&task](std::string errmsg) -> asio::awaitable<events::RespSubagentBatchItem> {
+                        co_return events::RespSubagentBatchItem{
+                            .resultId     = task.resultId,
                             .hasError     = true,
                             .errorMessage = fmt::format("Sub-agent failed: {}", std::move(errmsg)),
                         };
                     }
                 );
-                results[i] = ItemResult{
-                    .resultId     = task.resultId,
-                    .content      = r.content,
-                    .hasError     = r.hasError,
-                    .errorMessage = r.errorMessage,
-                };
+                results[i] = std::move(r);
             },
             asio::detached
         );

@@ -56,14 +56,16 @@ void test_events_structs_defaultconstruct() {
         XX_TEST_EXPECT_TRUE(resp.decision == RespPermission::Decision::Allow);
     }
     {
-        ReqSubagentStart r{};
-        r.subagentName = "research";
-        r.message      = "find foo";
-        r.resultId     = "call_2";
-        RespSubagentResult resp{};
-        resp.content  = "done";
-        resp.hasError = false;
-        XX_TEST_EXPECT_TRUE(resp.content == "done" && !resp.hasError);
+        ReqSubagentBatch r{};
+        r.tasks.push_back(SubagentBatchItem{});
+        r.tasks[0].subagentName = "research";
+        r.tasks[0].message      = "find foo";
+        r.tasks[0].resultId     = "call_2";
+        RespSubagentBatch resp{};
+        resp.results.push_back(RespSubagentBatchItem{});
+        resp.results[0].content  = "done";
+        resp.results[0].hasError = false;
+        XX_TEST_EXPECT_TRUE(resp.results[0].content == "done" && !resp.results[0].hasError);
     }
     {
         RespInterrupt resp{};

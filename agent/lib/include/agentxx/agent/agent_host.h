@@ -91,13 +91,14 @@ public:
 
     /// 注册根 agent (主 agent):
     /// - 注入共享 blockingPool 与宿主引用 (AgentContext::host)
-    /// - 在根 agent 全局总线上 serve service.subagent / service.subagent.batch
-    ///   (子代理委派的中断路径经根 agent 总线到达宿主, 由宿主派生独立 agent)
+    /// - 在根 agent 全局总线上 serve service.subagent (统一批量语义:
+    ///   ReqSubagentBatch / RespSubagentBatch, 单任务 = 1 个 task)
     /// - 仅支持单根 (进程级宿主)
     void attachRoot(std::shared_ptr<BaseAgent> rootAgent);
 
-    /// 派生一个子代理并等待其完成 (任意 agent 可调用; 宿主强制深度/并发预算)
-    /// - 子代理为独立 agent: 独立 AgentContext / engine / SessionStore
+    /// 批量派生子代理并等待全部完成 (结果顺序与输入一致; 任意 agent 可调用)
+    /// - 单个任务 (SubagentBatchItem) 派生一个独立 agent:
+    ///   独立 AgentContext / engine / SessionStore
     /// - HIL (权限/中断) 冒泡: 子代理会话继承父会话的 io 与总线
     /// - 取消令牌透传: 父取消级联中止子代理
     /// - 同上下文模式 (messages 或 threadId 非空):
@@ -112,19 +113,6 @@ public:
     ///   `["name", ...]` = 自定义白名单
     /// - enableSummarization (可选): 子代理上下文压缩中间件开关;
     ///   缺省继承 config (父拷贝); 压缩发起的子代理必须显式 false
-    asio::awaitable<events::RespSubagentResult> spawnSubagent(
-        std::string_view                              subagentName,
-        std::string_view                              systemPrompt,
-        std::string_view                              message,
-        std::string_view                              parentThreadId,
-        std::shared_ptr<neograph::graph::CancelToken> cancelToken         = nullptr,
-        std::optional<neograph::json>                 messages            = std::nullopt,
-        std::string_view                              threadId            = {},
-        std::optional<neograph::json>                 tools               = std::nullopt,
-        std::optional<bool>                           enableSummarization = std::nullopt
-    );
-
-    /// 批量派生并等待全部完成 (结果顺序与输入一致)
     asio::awaitable<events::RespSubagentBatch> spawnBatch(const events::ReqSubagentBatch& req);
 
     /// 跨 agent 消息 (hostBus agent.message RR)
@@ -165,6 +153,15 @@ private:
     /// 从父配置派生轻量子代理配置 (不重复建连/不持久化/独立模型)
     std::shared_ptr<AgentConfig> makeSubagentConfig(std::shared_ptr<AgentConfig> parentConfig
     ) const;
+    /// 派生单个子代理并等待其完成 (spawnBatch 内部按任务逐个调用)
+    /// - 深度/并发预算检查, 独立 agent 构造, 运行边界 RAII 回收
+    /// - 子代理作用域内再遇 subagent 委派中断: 递归经本宿主 spawnBatch 处理
+    ///   (嵌套委派), HIL 类中断 (权限询问等) 经子代理会话总线冒泡到父 IO
+    asio::awaitable<events::RespSubagentBatchItem> spawnOneTask(
+        const events::SubagentBatchItem&           task,
+        std::string_view                           parentThreadId,
+        std::shared_ptr<neograph::graph::CancelToken> cancelToken
+    );
     /// 经 A2A 协议向远程 agent 发送消息并等待终态 (轮询 GetTask)
     asio::awaitable<events::RespHostMessage> sendViaA2a(
         std::shared_ptr<agentxx::server::A2aClient> client,
@@ -187,9 +184,8 @@ private:
     std::map<std::string, Mailbox, std::less<>>    mailboxes_;
     /// 远程 agent (A2A 桥接): agentId -> A2A 客户端
     std::map<std::string, std::shared_ptr<agentxx::server::A2aClient>, std::less<>> remoteAgents_;
-    /// 根 agent 全局总线上的 subagent/batch server id (attachRoot 注册)
+    /// 根 agent 全局总线上的 subagent server id (attachRoot 注册)
     size_t subagentServerId_ = 0;
-    size_t batchServerId_    = 0;
     /// agent id 自增序号 (单线程协作式调度, 无需原子)
     uint64_t agentIdSeq_ = 0;
     /// 当前运行中的子代理数 (并发预算)
