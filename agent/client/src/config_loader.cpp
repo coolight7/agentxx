@@ -114,13 +114,16 @@ void setBuiltinEnvVar(std::string_view name, std::string value) {
 /// 解析程序内置环境变量; 非内置变量返回 nullopt
 /// - AGENTXX_WORK_DIR: 程序启动后的工作目录
 ///   (main 入口注入; 未注入时惰性回退 current_path())
+/// - AGENTXX_EXEC_DIR: 可执行程序所在目录
+///   (仅 main 入口注入; 未注入时无法惰性推导, 返回 nullopt 保留 ${VAR} 原样)
 static std::optional<std::string> resolveBuiltinEnvVar(std::string_view varName) {
+    // 已注入的内置变量: 直接取值
+    auto it = g_builtinEnvVars.find(std::string{varName});
+    if (it != g_builtinEnvVars.end()) {
+        return it->second;
+    }
+    // 未注入 (测试/嵌入场景): 各内置变量按自身语义惰性解析
     if (varName == kBuiltinWorkDirEnv) {
-        auto it = g_builtinEnvVars.find(std::string{varName});
-        if (it != g_builtinEnvVars.end()) {
-            return it->second;
-        }
-        // 未注入 (测试/嵌入场景): 惰性取当前工作目录
         std::error_code ec;
         auto            cwd = std::filesystem::current_path(ec);
         if (ec) {

@@ -20,6 +20,10 @@
 #include <iostream>
 #include <string>
 
+#if XX_IS_WIN_D
+#include <windows.h> // GetModuleFileNameW / MAX_PATH
+#endif
+
 using namespace agentxx::client;
 
 // ASan 默认选项 (仅在链接了 AddressSanitizer 时生效;  release/无 ASan 构建中为无害的弱符号)。
@@ -38,6 +42,39 @@ using namespace agentxx::client;
 // 注: 环境变量 ASAN_OPTIONS 会整体覆盖此默认值。
 extern "C" const char* __asan_default_options() {
     return "abort_on_error=1:log_path=agentxx_asan";
+}
+
+/// 获取当前可执行程序 (agentxx_cli) 所在目录
+/// - Windows: GetModuleFileNameW 获取 exe 全路径后取目录
+/// - Unix (Linux/Android): 读取 /proc/self/exe 符号链接后取目录
+/// - 统一返回正斜杠 (generic_string), 与 AGENTXX_WORK_DIR 一致 (yaml 拼接无转义问题)
+/// - 取不到时返回空串 (main 中注入空值 = 清除该内置变量)
+static std::string getExecutableDir() noexcept {
+#if XX_IS_WIN_D
+    std::wstring buf(MAX_PATH, L'\0');
+    for (;;) {
+        DWORD len = ::GetModuleFileNameW(nullptr, buf.data(), static_cast<DWORD>(buf.size()));
+        if (len == 0) {
+            XX_LOGW("GetModuleFileNameW failed");
+            return "";
+        }
+        if (len < buf.size()) {
+            buf.resize(len);
+            break;
+        }
+        // 缓冲不足 (长路径): 扩容重试
+        buf.resize(buf.size() * 2);
+    }
+    return std::filesystem::path(buf).parent_path().generic_string();
+#else
+    std::error_code ec;
+    auto            exe = std::filesystem::read_symlink("/proc/self/exe", ec);
+    if (ec) {
+        XX_LOGW("read_symlink(/proc/self/exe) failed: {}", ec.message());
+        return "";
+    }
+    return exe.parent_path().generic_string();
+#endif
 }
 
 static std::string extractTokenFromUrl(std::string& url) {
@@ -72,6 +109,27 @@ int main(int argn, char** argv) {
 #if XX_IS_DEBUG_D && (XX_IS_LINUX_D || XX_IS_WIN_D)
     agentxx::util::signalError(argv[0]);
 #endif
+
+    // 注入程序内置环境变量 (启动后立即捕获, 供 yaml 配置 ${VAR} 展开使用)
+    // - AGENTXX_WORK_DIR: 程序启动后的工作目录 (当前目录)
+    //   yaml 中可写 `data_dir: ${AGENTXX_WORK_DIR}/...` 等相对启动目录的路径
+    // - 统一使用正斜杠 (generic_string): yaml 字符串中 `\` 需转义, 正斜杠无此问题
+    setBuiltinEnvVar(
+        kBuiltinWorkDirEnv,
+        agentxx::util::catchError<std::string>(
+            []() -> std::string {
+                return std::filesystem::current_path().generic_string();
+            },
+            [](std::string errinfo) -> std::string {
+                XX_LOGW("[Config] failed to capture AGENTXX_WORK_DIR: {}", errinfo);
+                return "";
+            }
+        )
+    );
+
+    // - AGENTXX_EXEC_DIR: agentxx_cli 可执行程序所在目录
+    //   yaml 中可写模型/插件/数据等相对 exe 目录的路径 (如 `${AGENTXX_EXEC_DIR}/plugins`)
+    setBuiltinEnvVar(kBuiltinExecDirEnv, getExecutableDir());
 
     /// 默认启动 stdio 作为日志输出，对于 tui 等自己拦截日志的可以移除后添加自己的日志拦截器
     auto defaultLogSink = std::make_shared<StderrLogSink>();
@@ -169,16 +227,15 @@ Options:
         );
     }
 
-    // 加载 .env 文件（从当前目录和配置文件所在目录，优先级低于系统环境变量）
+    // 加载 .env 文件（从当前目录和配置文件所在目录，优先级高于系统环境变量）
+    // - 完整查找顺序: 程序内置变量 > --env 覆盖文件 > .env 文件 > 系统环境变量 > 保留 ${VAR} 原样
     std::map<std::string, std::string> dotEnvVars;
     {
         std::vector<std::string> envPaths;
         envPaths.push_back(".env");
-        if (!configPath.empty()) {
-            auto configDir = std::filesystem::path(configPath).parent_path();
-            if (!configDir.empty()) {
-                envPaths.push_back((configDir / ".env").string());
-            }
+        auto configDir = std::filesystem::path(configPath).parent_path();
+        if (!configDir.empty()) {
+            envPaths.push_back((configDir / ".env").string());
         }
         dotEnvVars = loadDotEnv(envPaths);
         if (!dotEnvVars.empty()) {
@@ -188,21 +245,24 @@ Options:
 
     // 加载 YAML 配置
     YamlAppConfig yamlCfg;
-    if (!configPath.empty() && std::filesystem::exists(configPath)) {
+    if (std::filesystem::exists(configPath)) {
         auto code = agentxx::util::catchError<int>(
             [&]() -> int {
                 yamlCfg = loadYamlConfig(configPath, dotEnvVars, overrideEnvVars);
                 XX_LOGI("[Config] Loaded config from: {}", configPath);
                 return 0;
             },
-            [](std::string errmsg) -> int {
-                XX_LOGE("[Config] Failed to load config: {}", errmsg);
+            [&](std::string errmsg) -> int {
+                XX_LOGE("[Config] Failed to load config: {}, {}", configPath, errmsg);
                 return 1;
             }
         );
         if (0 != code) {
             return code;
         }
+    } else {
+        XX_LOGE("[Config] Failed to load config: {}, file not exist.", configPath);
+        return 1;
     }
 
     // 统一数据根目录: 可在 yaml 配置 data_dir 指定
