@@ -1,11 +1,9 @@
 [submodule "agent/third_party/fmt"]
 	path = agent/third_party/fmt
 	url = https://github.com/fmtlib/fmt
-	branch = 12.1.0
 [submodule "agent/third_party/simdjson"]
 	path = agent/third_party/simdjson
 	url = https://github.com/simdjson/simdjson
-	branch = v4.6.4
 [submodule "agent/third_party/neograph"]
 	path = agent/third_party/neograph
 	url = https://github.com/coolight7/NeoGraph
@@ -21,11 +19,9 @@
 [submodule "agent/third_party/yaml-cpp"]
 	path = agent/third_party/yaml-cpp
 	url = https://github.com/jbeder/yaml-cpp
-	branch = yaml-cpp-0.9.0
 [submodule "agent/third_party/liburing"]
 	path = agent/third_party/liburing
 	url = https://github.com/axboe/liburing
-	branch = liburing-2.14
 [submodule "agent/third_party/codegraph-cpp"]
 	path = agent/third_party/codegraph-cpp
 	url = https://github.com/coolight7/codegraph-cpp
@@ -44,11 +40,9 @@
 [submodule "agent/third_party/zlib-ng"]
 	path = agent/third_party/zlib-ng
 	url = https://github.com/zlib-ng/zlib-ng
-	branch = 2.3.3
 [submodule "agent/third_party/ftxui"]
 	path = agent/third_party/ftxui
 	url = https://github.com/ArthurSonzogni/FTXUI
-	branch = v7.0.1
 [submodule "agent/third_party/markdown_ftxui"]
 	path = agent/third_party/markdown_ftxui
 	url = https://github.com/coolight7/MarkdownFTXUI
