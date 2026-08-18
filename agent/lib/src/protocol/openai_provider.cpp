@@ -177,6 +177,12 @@ static bool modelUsesMaxCompletionTokens(std::string_view model) {
     return model.starts_with("o1") || model.starts_with("o3") || model.starts_with("o4");
 }
 
+/// agentxx 内部配置字段 (无对应 API 语义), 透传 extra_config 时必须过滤:
+/// 原样发送给上游会触发部分模型 (如 gpt-5.6-luna) HTTP 400 报错
+static bool isInternalExtraConfigField(std::string_view key) {
+    return key == "preserve_thinking";
+}
+
 std::string OpenAIProvider::mapStopReason(std::string_view finishReason) {
     if (finishReason == "stop") {
         return "end_turn";
@@ -301,6 +307,10 @@ neograph::json OpenAIProvider::buildBody(const neograph::CompletionParams& param
     if (config_.extra_config.is_object()) {
         for (const auto& [key, val] : config_.extra_config.items()) {
             if (body.contains(key)) {
+                continue;
+            }
+            // 过滤 agentxx 内部字段, 避免透传给上游导致 400
+            if (isInternalExtraConfigField(key)) {
                 continue;
             }
             // 避免同时出现互斥的输出 token 上限字段
@@ -470,9 +480,14 @@ neograph::json OpenAIProvider::buildResponsesBody(const neograph::CompletionPara
 
     if (config_.extra_config.is_object()) {
         for (const auto& [key, val] : config_.extra_config.items()) {
-            if (!body.contains(key)) {
-                body[key] = val;
+            if (body.contains(key)) {
+                continue;
             }
+            // 过滤 agentxx 内部字段, 避免透传给上游导致 400
+            if (isInternalExtraConfigField(key)) {
+                continue;
+            }
+            body[key] = val;
         }
     }
 

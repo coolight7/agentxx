@@ -65,7 +65,9 @@ models:
     model_context_max_token: 262144 # 模型支持的最大上下文 token 数；不指定时上下文压缩使用默认值 256k
     extra_api_config:
       stream: true
-      preserve_thinking: true  # 请求时保留所有思考块，启用时应当同步指定 [send_thinking] = true
+      # 内部配置字段, 仅 agentxx 使用, 不会发送给上游 API
+      # (历史版本曾透传给上游, 部分模型如 gpt-5.6-luna 会因此报 HTTP 400)
+      preserve_thinking: true
 
   - name: openai_response_full_example
     type: "openai-responses" # 必选；模型类型，根据 api 类型选择 openai / openai-responses / anthropic
@@ -121,14 +123,18 @@ models:
         effort: max
       stream: true
       preserve_thinking: true 
-  - name: scnet-GLM-5-Base
-    type: "openai"
-    base_url: "https://api.scnet.cn/api/llm/v1"
-    api_key: "sk-NzEwLTIxNDkyNDAzNTQ4LTE3ODY5ODMyNTgxMjU="
-    model_name: "GLM-5-Base"
-    model_context_max_token: 100000
+  - name: opencode-gpt-5.6-luna
+    type: "openai-responses"
+    base_url: "https://opencode.ai/zen/go/v1"
+    api_key: "${OPENCODE_API_KEY}"
+    model_name: "gpt-5.6-luna"
+    # 注意: 该模型上游不支持 include:["reasoning.summary_text"],
+    # send_thinking 必须为 false (true 会触发 HTTP 400 invalid_prompt)
     send_thinking: false
+    model_context_max_token: 1000000
     extra_api_config:
+      reasoning:
+        effort: max
       stream: true
   - name: opencode-glm-5.2
     type: "openai"

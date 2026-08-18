@@ -54,13 +54,12 @@ neograph::ChatTool SubAgentManagerTool::get_definition() const {
     const auto taskItemSchema = neograph::json{
         {"type", "object"},
         {
-         "properties",
-            {
+         "properties", {
                 {
                     "subagent",
                     {
                         {"type", "string"},
-                        {"enum", neograph::json{subagentNameList}},
+                        {"enum", subagentNameList},
                         {
                             "description",
                             fmt::format(
@@ -126,8 +125,7 @@ neograph::ChatTool SubAgentManagerTool::get_definition() const {
                         },
                     },
                 },
-            },
-        },
+            }, },
         {"required", neograph::json::array({"subagent", "message"})},
     };
 
@@ -158,7 +156,11 @@ neograph::ChatTool SubAgentManagerTool::get_definition() const {
                         "subagent",
                         {
                             {"type", "string"},
-                            {"enum", neograph::json{subagentNameList}},
+                            // 注意: 必须用圆括号直接初始化 (而非 {} 列表初始化),
+                            // 否则重载决议会优先选择 initializer_list 构造函数,
+                            // 把 vector 包成单个元素产生 [[...]] 嵌套数组,
+                            // 生成非法 enum schema 导致严格校验的上游 (如 gpt-5.6-luna) HTTP 400
+                            {"enum", neograph::json(subagentNameList)},
                             {
                                 "description",
                                 fmt::format(
@@ -230,22 +232,23 @@ asio::awaitable<std::string> SubAgentManagerTool::execute_async(const neograph::
     // 此处按相同规则提取并聚合返回
 
     struct TaskArg {
-        std::string             subagent;
-        std::string             systemPrompt;
-        std::string             message;
+        std::string                   subagent;
+        std::string                   systemPrompt;
+        std::string                   message;
         std::optional<neograph::json> messages;
-        std::string             threadId;
+        std::string                   threadId;
         std::optional<neograph::json> tools;
-        std::optional<bool>     enableSummarization;
-        std::string             resultId;
+        std::optional<bool>           enableSummarization;
+        std::string                   resultId;
     };
+
     auto parseTask = [](const neograph::json& t) -> TaskArg {
         TaskArg task;
-        task.subagent      = t.value("subagent", std::string{});
-        task.systemPrompt  = t.value("system_prompt", std::string{});
-        task.message       = t.value("message", std::string{});
-        task.threadId      = t.value("thread_id", std::string{});
-        task.resultId      = t.value("result_id", std::string{});
+        task.subagent     = t.value("subagent", std::string{});
+        task.systemPrompt = t.value("system_prompt", std::string{});
+        task.message      = t.value("message", std::string{});
+        task.threadId     = t.value("thread_id", std::string{});
+        task.resultId     = t.value("result_id", std::string{});
         if (t.contains("messages") && t["messages"].is_array()) {
             task.messages = t["messages"];
         }
@@ -313,9 +316,9 @@ asio::awaitable<std::string> SubAgentManagerTool::execute_async(const neograph::
             auto tasksJson = neograph::json::array();
             for (const auto& task : tasks) {
                 auto t = neograph::json{
-                    {"subagent",      task.subagent     },
-                    {"system_prompt", task.systemPrompt },
-                    {"message",       task.message      },
+                    {"subagent",      task.subagent    },
+                    {"system_prompt", task.systemPrompt},
+                    {"message",       task.message     },
                 };
                 // 结构化消息透传 (同上下文模式): 中断参数携带完整消息前缀
                 if (task.messages.has_value()) {
@@ -351,7 +354,7 @@ asio::awaitable<std::string> SubAgentManagerTool::execute_async(const neograph::
     // 提取结果: key = (tool_call_id + "_") + (task.result_id | 任务序号)
     // (与 BaseAgent/AgentHost 中断处理的 resumeValues key 规则一致;
     //  前缀避免同一轮多个中断的序号 key 互相覆盖)
-    const auto prefix = resultId.empty() ? std::string{} : resultId + "_";
+    const auto prefix  = resultId.empty() ? std::string{} : resultId + "_";
     auto       outputs = neograph::json::array();
     size_t     idx     = 0;
     for (const auto& task : tasks) {
