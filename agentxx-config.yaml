@@ -139,7 +139,7 @@ models:
       stream: true
   - name: gemini-3.7-flash-high
     type: "openai"
-    base_url: "http://127.0.0.1:7861/antigravity/v1"
+    base_url: "http://172.29.48.1:7861/antigravity/v1"
     api_key: "${GEMINI_API_KEY}"
     model_name: "gemini-3.7-flash-high"
     model_context_max_token: 1000000

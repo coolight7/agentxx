@@ -47,7 +47,10 @@ if (AGENTXX_ENABLE_PLUGIN_BUILTIN)
     "${BOOST_ROOT}/include/"
     "${BOOST_ROOT}/include/boost/"
   )
-  set_target_properties(${_target} PROPERTIES
+  # 复用 agentxx_util 工具库 (libagentxx 已链接本库; 此处经 PRIVATE 链接仅
+  # 传递编译宏/头路径: util 头文件依赖 XX_IS_* 宏与 include 路径)
+  target_link_libraries(${_target} PRIVATE agentxx_util)
+set_target_properties(${_target} PROPERTIES
     POSITION_INDEPENDENT_CODE ON
     CXX_STANDARD 26
     CXX_STANDARD_REQUIRED OFF
@@ -92,8 +95,13 @@ target_include_directories(${PLUGIN_NAME} PRIVATE
   "${AGENTXX_LIB_INCLUDE_DIR}"           # agentxx/plugin/plugin_api.h
   "${AGENTXX_INSTALL_DIR}/include"       # simdjson.h fmt
 )
+# 复用 agentxx_util 工具库 (插件静态链接, 与宿主副本符号互不冲突;
+# find_package 经 AGENTXX_INSTALL_DIR 的 agentxx_util config 解析,
+# 依赖链 fmt/SQLite3/uchardet/Iconv 由 config 内 find_dependency 传递)
+find_package(agentxx_util REQUIRED)
 find_package(fmt REQUIRED)
 target_link_libraries(${PLUGIN_NAME} PRIVATE
+  agentxx_util
   simdjson
   fmt::fmt
 )

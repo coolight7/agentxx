@@ -314,7 +314,7 @@ static char* systemUsageInvoke(
 // 插件入口 (C ABI)
 // =====================================================================
 
-extern "C" const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
+extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
     static const AgentxxPluginInfo info{
         AGENTXX_PLUGIN_API_VERSION,
         AGENTXX_SV("agentxx_system_monitor"),
@@ -446,7 +446,7 @@ static void on_usage_enabled(AgentxxPluginStringView event_json, void* ud) {
     }
 }
 
-extern "C" int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) {
+extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) {
     g_host = host;
 
     // 默认提示词写入宿主 (从 lib AgentPrompt 剥离迁移; 用户 yaml 覆盖优先)
@@ -503,7 +503,7 @@ extern "C" int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) 
     return 0;
 }
 
-extern "C" void agentxx_plugin_unload(void* plugin_ctx) {
+extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_unload(void* plugin_ctx) {
     auto* ctx = static_cast<PluginCtx*>(plugin_ctx);
     if (ctx) {
         // 取消宿主定时器 (在途 tick/offload 由宿主 inflight 计数等待完成,
@@ -754,7 +754,7 @@ static char* sysinfo_cmd_execute(void* ud, AgentxxPluginStringView args_json, ch
     return g_client_host->vtable->strdup(out.c_str());
 }
 
-extern "C" const AgentxxClientPluginInfo* agentxx_client_get_info(void) {
+extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_client_get_info(void) {
     static const AgentxxClientPluginInfo info{
         AGENTXX_CLIENT_PLUGIN_API_VERSION,
         AGENTXX_SV("agentxx_system_monitor"),
@@ -765,7 +765,7 @@ extern "C" const AgentxxClientPluginInfo* agentxx_client_get_info(void) {
     return &info;
 }
 
-extern "C" int agentxx_client_entry(const AgentxxClientHost* host, void** plugin_ctx) {
+extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_client_entry(const AgentxxClientHost* host, void** plugin_ctx) {
     g_client_host = host;
     (void)plugin_ctx;
 
@@ -800,7 +800,7 @@ extern "C" int agentxx_client_entry(const AgentxxClientHost* host, void** plugin
     return 0;
 }
 
-extern "C" void agentxx_client_unload(void* plugin_ctx) {
+extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_client_unload(void* plugin_ctx) {
     (void)plugin_ctx;
     if (!g_client_host) {
         return;

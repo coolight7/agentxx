@@ -47,13 +47,78 @@ endif()
 set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_STANDARD_REQUIRED OFF)
 
-# Windows/MSVC: MODULE 动态库默认不导出任何符号, 插件入口 (agentxx_plugin_entry /
-# agentxx_plugin_get_info / agentxx_client_entry 等) 与跨翻译单元符号
-# (如 agentxx_computer_use 的 uiControlExecute) 将无法被宿主 dlsym/GetProcAddress
-# 找到。开启自动导出 (CMake 生成 .def 导出全部全局符号; 插件为独立进程内加载,
-# 导出面不影响行为)
-if (WIN32)
-  set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
+# 静态库优先 (与 lib/CMakeLists.txt 一致): pkg_check_modules 的 find_library
+# 默认先找系统动态库 (如 liburing.so), 会导致插件动态库产生动态依赖
+# (DT_NEEDED); 优先 .a 使 uring/hyperscan 等条件依赖全部静态链接
+if (XX_IS_MSVC_D)
+  list(PREPEND CMAKE_FIND_LIBRARY_SUFFIXES .lib .a)
+else()
+  list(PREPEND CMAKE_FIND_LIBRARY_SUFFIXES .a)
+endif()
+
+# agentxx_util 重依赖的 pkg-config 模块 (与 client/test 一致):
+# - agentxx_util 的 PUBLIC 链接接口带 $<LINK_ONLY:PkgConfig::hyperscan> /
+#   $<LINK_ONLY:PkgConfig::uring>, 链接本库的插件须定义同名 imported target
+#   (目录 scope 定义, 子插件目录可见; 未链接 agentxx_util 的插件不受影响);
+#   hs_runtime 裸库名经 agentxx_util 的 PUBLIC link_directories (install/lib)
+#   自动解析, 无需额外配置
+# - 未启用对应特性时 (AGENTXX_ENABLE_HYPERSCAN=0 / 无 io_uring) 插件不链接
+#   本库的对应条件依赖, 无需定义
+find_package(PkgConfig QUIET)
+if (AGENTXX_ENABLE_HYPERSCAN)
+  pkg_check_modules(hyperscan REQUIRED IMPORTED_TARGET libhs)
+endif()
+if (AGENTXX_LINUX_IO_URING_SUPPORTED)
+  pkg_check_modules(uring REQUIRED IMPORTED_TARGET liburing)
+endif()
+
+# ===== 插件动态库导出符号控制 =====
+# - 目标: 严格限制导出面, 仅宿主 dlsym/GetProcAddress 按名查找的入口符号
+#   (agentxx_plugin_get_info/entry/unload + agentxx_client_get_info/entry/unload,
+#   见 plugin_api.h AGENTXX_PLUGIN_EXPORT) 导出, 其余全部隐藏:
+#   - 插件自身 C++ 内部符号 (STL/异常/typeinfo 等)
+#   - 第三方静态库符号 (simdjson/tree_sitter/io_uring/uchardet 等), 避免
+#     污染宿主动态符号表、多插件同名符号冲突、以及宿主符号误绑定到插件副本
+# - Linux/Android (ELF): 编译期 -fvisibility=hidden + 链接期 version script
+#   (--version-script, global 白名单 + local: *); 两者都需, 前者隐藏插件
+#   自身符号, 后者兜底隐藏静态库中按默认可见性编译的符号
+# - macOS: -exported_symbols_list (符号带 _ 前缀)
+# - Windows/MSVC: 不自动导出 (CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS 默认 OFF),
+#   仅 AGENTXX_PLUGIN_EXPORT (__declspec(dllexport)) 标记的入口符号导出;
+#   静态库链接进 DLL 的符号默认不导出, 无需额外处理
+# - 内置合并编译模式 (AGENTXX_ENABLE_PLUGIN_BUILTIN) 下插件符号直接并入
+#   libagentxx, 本分支不生效 (见上)
+if (NOT WIN32)
+  add_compile_options(-fvisibility=hidden -fvisibility-inlines-hidden)
+  if (APPLE)
+    # macOS: -exported_symbols_list (符号表带 _ 前缀)
+    set(_AGENTXX_EXPORT_SYMS_FILE "${CMAKE_CURRENT_BINARY_DIR}/plugin_exported_symbols.txt")
+    file(WRITE "${_AGENTXX_EXPORT_SYMS_FILE}" "\n")
+    foreach(_sym agentxx_plugin_get_info agentxx_plugin_entry agentxx_plugin_unload
+                 agentxx_client_get_info agentxx_client_entry agentxx_client_unload)
+      file(APPEND "${_AGENTXX_EXPORT_SYMS_FILE}" "_${_sym}\n")
+    endforeach()
+    add_link_options("-Wl,-exported_symbols_list,${_AGENTXX_EXPORT_SYMS_FILE}")
+  else()
+    # ELF (Linux/Android): version script 白名单, local: * 隐藏其余全部符号
+    set(_AGENTXX_EXPORT_SYMS_FILE "${CMAKE_CURRENT_BINARY_DIR}/plugin_symbols.map")
+    file(WRITE "${_AGENTXX_EXPORT_SYMS_FILE}" "# agentxx 插件动态库导出符号白名单
+# 宿主仅经 dlsym/GetProcAddress 按名查找以下入口符号 (见 plugin_api.h)
+# AGENTXX_PLUGIN_EXPORT); local: * 隐藏其余全部符号 (含第三方静态库符号)
+{
+  global:
+    agentxx_plugin_get_info;
+    agentxx_plugin_entry;
+    agentxx_plugin_unload;
+    agentxx_client_get_info;
+    agentxx_client_entry;
+    agentxx_client_unload;
+  local: *;
+};
+")
+    add_link_options("-Wl,--version-script=${_AGENTXX_EXPORT_SYMS_FILE}")
+  endif()
+  unset(_AGENTXX_EXPORT_SYMS_FILE)
 endif()
 
 if(XX_IS_MSVC_D)

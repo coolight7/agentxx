@@ -204,7 +204,7 @@ char* audioStreamExecute(
 // 插件入口 (C ABI)
 // =====================================================================
 
-extern "C" const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
+extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
     static const AgentxxPluginInfo info{
         AGENTXX_PLUGIN_API_VERSION,
         AGENTXX_SV("agentxx_audio_stream"),
@@ -215,7 +215,7 @@ extern "C" const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
     return &info;
 }
 
-extern "C" int agentxx_plugin_entry(const AgentxxHost* host, void** /*plugin_ctx*/) {
+extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_entry(const AgentxxHost* host, void** /*plugin_ctx*/) {
     g_host = host;
 
     static const std::string kSchema = R"({
@@ -244,7 +244,7 @@ extern "C" int agentxx_plugin_entry(const AgentxxHost* host, void** /*plugin_ctx
     return 0;
 }
 
-extern "C" void agentxx_plugin_unload(void* /*plugin_ctx*/) {
+extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_unload(void* /*plugin_ctx*/) {
     AudioStreamHolder::instance().stop();
     if (g_host && g_host->vtable) {
         g_host->vtable->unregister_tool(g_host, AGENTXX_SV("agentxx_audio_stream"));

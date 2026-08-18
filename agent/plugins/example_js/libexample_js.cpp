@@ -43,7 +43,7 @@ static bool fileExists(const std::string& p) {
     return false;
 }
 
-extern "C" const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
+extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
     static const AgentxxPluginInfo info{
         AGENTXX_PLUGIN_API_VERSION,
         AGENTXX_SV("example_js"),
@@ -53,7 +53,7 @@ extern "C" const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
     return &info;
 }
 
-extern "C" int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) {
+extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) {
     (void)plugin_ctx;
     g_host = host;
     if (!host->vtable->has_capability(host, AGENTXX_SV("interpreter.js"))) {
@@ -142,7 +142,7 @@ extern "C" int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) 
     return 0;
 }
 
-extern "C" void agentxx_plugin_unload(void* plugin_ctx) {
+extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_unload(void* plugin_ctx) {
     (void)plugin_ctx;
     if (!g_host || g_name.empty()) {
         return;

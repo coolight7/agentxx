@@ -49,7 +49,7 @@ static std::string agentJsonEscape(AgentxxPluginStringView sv) {
 
 /* ---------------- get_info ---------------- */
 
-extern "C" const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
+extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
     static const AgentxxPluginInfo info{
         AGENTXX_PLUGIN_API_VERSION,
         AGENTXX_SV("example_plugin"),
@@ -198,7 +198,7 @@ static void on_client_hello(AgentxxPluginStringView event_json, void* ud) {
 
 /* ---------------- entry / unload ---------------- */
 
-extern "C" int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) {
+extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) {
     g_host = host;
     (void)plugin_ctx;
 
@@ -291,7 +291,7 @@ extern "C" int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) 
     return 0;
 }
 
-extern "C" void agentxx_plugin_unload(void* plugin_ctx) {
+extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_unload(void* plugin_ctx) {
     (void)plugin_ctx;
     if (!g_host) {
         return;
@@ -336,7 +336,7 @@ static std::string clientJsonEscape(const std::string& s) {
     return out;
 }
 
-extern "C" const AgentxxClientPluginInfo* agentxx_client_get_info(void) {
+extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_client_get_info(void) {
     static const AgentxxClientPluginInfo info{
         AGENTXX_CLIENT_PLUGIN_API_VERSION,
         AGENTXX_SV("example_plugin"),
@@ -482,7 +482,7 @@ static void on_client_plugin_data(AgentxxPluginStringView payload_json, void* ud
 
 /* ---------------- entry / unload ---------------- */
 
-extern "C" int agentxx_client_entry(const AgentxxClientHost* host, void** plugin_ctx) {
+extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_client_entry(const AgentxxClientHost* host, void** plugin_ctx) {
     g_client_host = host;
     (void)plugin_ctx;
 
@@ -548,7 +548,7 @@ extern "C" int agentxx_client_entry(const AgentxxClientHost* host, void** plugin
     return 0;
 }
 
-extern "C" void agentxx_client_unload(void* plugin_ctx) {
+extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_client_unload(void* plugin_ctx) {
     (void)plugin_ctx;
     if (!g_client_host) {
         return;

@@ -33,7 +33,10 @@ if (AGENTXX_ENABLE_PLUGIN_BUILTIN)
     "${AGENTXX_INSTALL_DIR}/include/Glob-1.0" # glob/glob.h
     "${AGENTXX_INSTALL_DIR}/include/uchardet"
   )
-  set_target_properties(${_target} PROPERTIES
+  # 复用 agentxx_util 工具库 (libagentxx 已链接本库; 此处经 PRIVATE 链接仅
+  # 传递编译宏/头路径: util 头文件依赖 XX_IS_* 宏与 include 路径)
+  target_link_libraries(${_target} PRIVATE agentxx_util)
+set_target_properties(${_target} PROPERTIES
     POSITION_INDEPENDENT_CODE ON
     CXX_STANDARD 26
     CXX_STANDARD_REQUIRED OFF
@@ -81,6 +84,10 @@ add_library(${PLUGIN_NAME} SHARED
   codegraph_manager.cpp
 )
 # 依赖 (与 lib/CMakeLists.txt 一致; fmt/Glob 经 find_package 提供目标)
+# 复用 agentxx_util 工具库 (插件静态链接, 与宿主副本符号互不冲突;
+# find_package 经 AGENTXX_INSTALL_DIR 的 agentxx_util config 解析,
+# 依赖链 fmt/SQLite3/uchardet/Iconv 由 config 内 find_dependency 传递)
+find_package(agentxx_util REQUIRED)
 find_package(fmt REQUIRED)
 find_package(Glob REQUIRED)
 
@@ -98,6 +105,7 @@ target_compile_definitions(${PLUGIN_NAME} PRIVATE
 # codegraph_core 为静态库, 需连带其传递依赖 (与 lib/CMakeLists.txt
 # _AGENTXX_CODEGRAPH_LIBS 一致 + sqlite3/simdjson/glob/uchardet/fmt)
 target_link_libraries(${PLUGIN_NAME} PRIVATE
+  agentxx_util
   codegraph_core
   tree_sitter
   ts_cpp ts_python ts_javascript ts_dart ts_typescript ts_tsx
