@@ -307,7 +307,7 @@ using namespace agentxx_screen_capture_plugin;
 // 插件入口 (C ABI)
 // =====================================================================
 
-extern "C" const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
+extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
     static const AgentxxPluginInfo info{
         AGENTXX_PLUGIN_API_VERSION,
         AGENTXX_SV("agentxx_screen_capture"),
@@ -319,14 +319,14 @@ extern "C" const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
     return &info;
 }
 
-extern "C" int agentxx_plugin_entry(const AgentxxHost* host, void** /*plugin_ctx*/) {
+extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_entry(const AgentxxHost* host, void** /*plugin_ctx*/) {
     g_host = host;
     registerScreenCaptureTool();
     pluginLog(2, "agentxx_screen_capture loaded (1 tool)");
     return 0;
 }
 
-extern "C" void agentxx_plugin_unload(void* /*plugin_ctx*/) {
+extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_unload(void* /*plugin_ctx*/) {
     ScreenCaptureHolder::instance().stopStreaming();
     pluginLog(2, "agentxx_screen_capture unloaded");
 }

@@ -299,7 +299,7 @@ using namespace agentxx_computer_use_plugin;
 // 插件入口 (C ABI)
 // =====================================================================
 
-extern "C" const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
+extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
     static const AgentxxPluginInfo info{
         AGENTXX_PLUGIN_API_VERSION,
         AGENTXX_SV("agentxx_computer_use"),
@@ -311,7 +311,7 @@ extern "C" const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
     return &info;
 }
 
-extern "C" int agentxx_plugin_entry(const AgentxxHost* host, void** /*plugin_ctx*/) {
+extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_entry(const AgentxxHost* host, void** /*plugin_ctx*/) {
     g_host = host;
     // 默认提示词写入宿主 (剥离自 lib AgentPrompt; 用户 yaml 覆盖优先)
     ensureToolPromptInHost();
@@ -320,6 +320,6 @@ extern "C" int agentxx_plugin_entry(const AgentxxHost* host, void** /*plugin_ctx
     return 0;
 }
 
-extern "C" void agentxx_plugin_unload(void* /*plugin_ctx*/) {
+extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_unload(void* /*plugin_ctx*/) {
     pluginLog(2, "agentxx_computer_use unloaded");
 }

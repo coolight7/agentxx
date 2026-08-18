@@ -28,7 +28,7 @@ if (AGENTXX_ENABLE_PLUGIN_BUILTIN)
     "${AGENTXX_LIB_INCLUDE_DIR}"           # agentxx/plugin/plugin_api.h
     "${AGENTXX_INSTALL_DIR}/include"       # fmt
   )
-  set_target_properties(${_target} PROPERTIES
+set_target_properties(${_target} PROPERTIES
     POSITION_INDEPENDENT_CODE ON
     CXX_STANDARD 26
     CXX_STANDARD_REQUIRED OFF
@@ -58,13 +58,11 @@ endif()
 
 # ===== 独立动态库编译 (默认) =====
 # - 输出到 ${AGENTXX_EXEC_INSTALL_PREFIX} (与 agentxx_test 同目录), 供 test_plugins 加载
+# - 导出符号限制: 仅 AGENTXX_PLUGIN_EXPORT 标记的入口符号导出
+#   (plugins/CMakeLists.txt 统一配置 version script / -fvisibility=hidden /
+#   MSVC 不自动导出; 此处不再设置 WINDOWS_EXPORT_ALL_SYMBOLS)
 add_library(${PLUGIN_NAME} SHARED
   example_plugin.cpp
-)
-# Windows/MSVC: 自动导出全部全局符号 (入口符号 agentxx_plugin_entry 等;
-# SHARED 库才受 WINDOWS_EXPORT_ALL_SYMBOLS 支持, MODULE 不生效)
-set_target_properties(${PLUGIN_NAME} PROPERTIES
-  WINDOWS_EXPORT_ALL_SYMBOLS ON
 )
 target_include_directories(${PLUGIN_NAME} PRIVATE
   "${AGENTXX_LIB_INCLUDE_DIR}"           # agentxx/plugin/plugin_api.h

@@ -1399,7 +1399,7 @@ JSValue JsEngine::bridgeCall(
 // 插件入口 (宿主 dlsym)
 // =====================================================================
 
-extern "C" const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
+extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_get_info(void) {
     static const AgentxxPluginInfo info{
         AGENTXX_PLUGIN_API_VERSION,
         AGENTXX_SV("agentxx_javascript_engine"),
@@ -1499,7 +1499,7 @@ static char* jsInvoke(
     return nullptr;
 }
 
-extern "C" int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) {
+extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) {
     auto* engine = new JsEngine();
     engine->setEngineHost(host);
 
@@ -1517,7 +1517,7 @@ extern "C" int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx) 
     return 0;
 }
 
-extern "C" void agentxx_plugin_unload(void* plugin_ctx) {
+extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_unload(void* plugin_ctx) {
     auto* engine = static_cast<JsEngine*>(plugin_ctx);
     if (engine) {
         delete engine; // 停止 JS 线程并释放 runtime
