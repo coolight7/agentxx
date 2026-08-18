@@ -1,5 +1,6 @@
 #include "agentxx/tools/sub_agent.h"
 
+#include "agentxx/tools/subagent_shared.h"
 #include "fmt/format.h"
 #include <map>
 #include <memory>
@@ -11,6 +12,67 @@
 
 namespace agentxx {
 namespace tools {
+
+events::ReqSubagentBatch parseSubagentBatchFromInterrupt(
+    const middleware::InterruptHandleArg&         interruptArg,
+    std::string_view                              agentName,
+    std::string_view                              threadId,
+    std::shared_ptr<neograph::graph::CancelToken> cancelToken
+) {
+    events::ReqSubagentBatch batchReq{
+        .parentAgentName = std::string{agentName},
+        .parentThreadId  = std::string{threadId},
+        .cancelToken     = std::move(cancelToken),
+    };
+    const auto& arg = interruptArg.arg;
+    if (arg.contains("tasks") && arg["tasks"].is_array()) {
+        // 统一批量语义: {tasks: [...]} 数组, 每项一个子代理任务 (并行运行)
+        for (const auto& t : arg["tasks"]) {
+            batchReq.tasks.push_back(events::SubagentBatchItem{
+                .subagentName = t.value("subagent", std::string{}),
+                .systemPrompt = t.value("system_prompt", std::string{}),
+                .message      = t.value("message", std::string{}),
+                // 结构化消息透传 (同上下文模式): 中断参数携带完整消息前缀
+                .messages = (t.contains("messages") && t["messages"].is_array())
+                                ? std::optional<neograph::json>{t["messages"]}
+                                : std::nullopt,
+                // 指定运行 thread (同上下文模式): 空时保持默认独立 subagent 线程
+                .threadId = t.value("thread_id", std::string{}),
+                // 工具策略 (无工具/继承父/自定义): 缺省不设置 (子代理默认全量)
+                .tools = (t.contains("tools") && t["tools"].is_array())
+                             ? std::optional<neograph::json>{t["tools"]}
+                             : std::nullopt,
+                // 压缩中间件开关: 缺省不设置 (继承 config 默认)
+                .enableSummarization
+                = (t.contains("enable_summarization") && t["enable_summarization"].is_boolean())
+                      ? std::optional<bool>{t["enable_summarization"].get<bool>()}
+                      : std::nullopt,
+                // 任务结果标识: 缺省按任务序号兜底
+                .resultId = t.value("result_id", std::string{}),
+            });
+        }
+    } else {
+        // 旧单发参数格式兼容: 直接含 subagent 字段时包装为 1 个 task
+        batchReq.tasks.push_back(events::SubagentBatchItem{
+            .subagentName = arg.value("subagent", std::string{}),
+            .systemPrompt = arg.value("system_prompt", std::string{}),
+            .message      = arg.value("message", std::string{}),
+            .messages     = (arg.contains("messages") && arg["messages"].is_array())
+                                ? std::optional<neograph::json>{arg["messages"]}
+                                : std::nullopt,
+            .threadId     = arg.value("thread_id", std::string{}),
+            .tools        = (arg.contains("tools") && arg["tools"].is_array())
+                                ? std::optional<neograph::json>{arg["tools"]}
+                                : std::nullopt,
+            .enableSummarization
+            = (arg.contains("enable_summarization") && arg["enable_summarization"].is_boolean())
+                  ? std::optional<bool>{arg["enable_summarization"].get<bool>()}
+                  : std::nullopt,
+            .resultId = interruptArg.resultId,
+        });
+    }
+    return batchReq;
+}
 
 SubAgentTaskBase::SubAgentTaskBase(
     std::string_view in_subAgentName,
@@ -361,15 +423,13 @@ asio::awaitable<std::string> SubAgentManagerTool::execute_async(const neograph::
     );
 
     // 提取结果: key = (tool_call_id + "_") + (task.result_id | 任务序号)
-    // (与 BaseAgent/AgentHost 中断处理的 resumeValues key 规则一致;
+    // (与中断处理循环 buildSubagentResumeValues 共用 makeSubagentResumeKey 规则;
     //  前缀避免同一轮多个中断的序号 key 互相覆盖)
-    const auto prefix  = resultId.empty() ? std::string{} : resultId + "_";
-    auto       outputs = neograph::json::array();
-    size_t     idx     = 0;
+    auto   outputs = neograph::json::array();
+    size_t idx     = 0;
     for (const auto& task : tasks) {
         ++idx;
-        auto key = task.resultId.empty() ? std::to_string(idx) : task.resultId;
-        key      = prefix + key;
+        auto key = makeSubagentResumeKey(resultId, task.resultId, idx);
         if (result.is_object() && result.contains(key)) {
             const auto& val = result[key];
             if (val.is_string()) {

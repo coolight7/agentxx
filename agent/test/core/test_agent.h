@@ -42,6 +42,8 @@ extern int g_da_sim_delay_ms;
 extern int g_da_sim_request_count;
 /// 剩余失败次数: >0 时接下来的请求直接返回 HTTP 500 并递减, 用于模拟 LLM API 持续失败
 extern int g_da_sim_fail_count;
+/// 前 N 次请求返回 tool_calls (之后返回纯文本); -1 = 不限制 (旧行为)
+extern int g_da_sim_tool_calls_remaining;
 
 /// 模拟器配置选项
 struct DaSimConfig {

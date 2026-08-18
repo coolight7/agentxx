@@ -169,6 +169,10 @@ std::vector<neograph::json> g_da_sim_requests;
 int g_da_sim_request_count = 0;
 /// 剩余失败次数: >0 时接下来的请求直接返回 HTTP 500 并递减, 用于模拟 LLM API 持续失败
 int g_da_sim_fail_count = 0;
+/// 前 N 次请求返回 tool_calls (之后返回纯文本); -1 = 不限制 (旧行为)
+/// - 供嵌套委派等"先工具后文本"的多请求序列测试; 由测试显式设置并在
+///   结束时恢复 -1 (响应 handler 消费递减, 不自动重置)
+int g_da_sim_tool_calls_remaining = -1;
 
 /// 默认模拟器配置
 static DaSimConfig g_defaultSimConfig;
@@ -254,7 +258,17 @@ DaSimServer startDaSimServer() {
 
                 auto j            = neograph::json::parse(req.body());
                 bool stream       = j.value("stream", false);
+                // tool_calls 次数控制: g_da_sim_tool_calls_remaining >= 0 时,
+                // 前 N 次请求返回 tool_calls, 之后返回纯文本 (供嵌套委派等
+                // 需要"先工具后文本"的多请求序列测试); 默认 -1 保持旧行为
                 bool hasToolCalls = !g_da_sim_tool_calls.empty();
+                if (g_da_sim_tool_calls_remaining >= 0) {
+                    if (g_da_sim_tool_calls_remaining <= 0) {
+                        hasToolCalls = false;
+                    } else {
+                        --g_da_sim_tool_calls_remaining;
+                    }
+                }
                 // 记录请求 (供测试断言模型名/消息前缀; 按到达顺序追加)
                 g_da_sim_last_request = j;
                 g_da_sim_requests.push_back(j);
