@@ -210,9 +210,9 @@ static std::shared_ptr<agent::SessionServerAgentIO> setupLocalUnifiedDirect(
             // 已先于 init 启动, 若此时 (init 前) 发送会立即得到空列表 (组件尚未加载),
             // 客户端将永远显示不出已加载的组件
             clientIO->requestAppendComponentInfo(threadId);
-            // 通知客户端: agent-server 就绪 (init/组件加载完成, 会话驱动循环即将
+            // 通知客户端: agent-io 就绪 (init/组件加载完成, 会话驱动循环即将
             // 启动并开始消费用户输入)。客户端 (TUI) 据此解除"启动中"输入限制,
-            // 刷新连接前排队输入 (此时发送的输入由 server 端 inputChannel 缓存,
+            // 刷新连接前排队输入 (此时发送的输入由 agent-io 端 inputChannel 缓存,
             // run() 启动后正常消费)
             clientIO->onServerReady();
             co_await serverIO->run();
@@ -305,7 +305,7 @@ static asio::awaitable<void> runLocalTuiUnifiedAsync(
     // 每次启动生成唯一会话 id, 避免多实例/多次启动共用 "session" 导致会话串扰
     const std::string threadId = generateUniqueThreadId();
 
-    // 注意: TUI 不持有 AgentContext/Session (属于 agent-server 线程), 所有
+    // 注意: TUI 不持有 AgentContext/Session (属于 agent-io 线程), 所有
     // agent 侧信息 (模型列表/上下文统计/LLM 上下文) 均经 Wire 消息由服务端获取
     auto tui
         = std::make_shared<TUIClientAgentIO>(clientEx, threadId, resolveTuiTheme(), permissionMode);
@@ -460,7 +460,7 @@ static asio::awaitable<void> runRemoteTuiAsync(
     // 每次启动生成唯一会话 id: 服务端按 threadId 区分会话,
     // 共用 "session" 会使多个客户端实例挂到同一会话上互相串扰
     const std::string threadId = generateUniqueThreadId();
-    // 注意: TUI 不持有 AgentContext/Session (属于 agent-server 线程),
+    // 注意: TUI 不持有 AgentContext/Session (属于 agent-io 线程),
     // 模型名/上下文统计等均经 Wire 消息由服务端获取
     auto io = std::make_shared<TUIClientAgentIO>(ex, threadId, resolveTuiTheme(), permissionMode);
     io->setRemoteUrl(url);
@@ -471,7 +471,7 @@ static asio::awaitable<void> runRemoteTuiAsync(
     io->start();
     co_await pluginMgr->loadConfiguredClientPlugins(plugins);
 
-    // TUI 立即启动: 初始 connState=Connecting, banner 显示"agent-server 正在
+    // TUI 立即启动: 初始 connState=Connecting, banner 显示"agent-io 正在
     // 启动中", 用户输入进入待发送队列 (不发送); 连接成败均不阻塞 TUI 界面
 
     // 连接流程 (失败可重试, 不退出 TUI):

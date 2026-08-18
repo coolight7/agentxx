@@ -290,7 +290,7 @@ private:
     /// 会话选择弹窗确认后的切换逻辑 (UI 线程):
     /// - 更新本地 threadId 绑定与重连握手 threadId (WS 模式)
     /// - 发送 WireSwitchSession, 服务端回推全量 Sync/模型/上下文统计 (WireModelInfo
-    ///   / WireContextStats) 恢复界面; TUI 不持有 Session (属于 agent-server 线程)
+    ///   / WireContextStats) 恢复界面; TUI 不持有 Session (属于 agent-io 线程)
     void switchToSession(std::string newThreadId);
 
     /// 当前会话 thread_id 的跨线程安全读写:

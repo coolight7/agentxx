@@ -117,7 +117,7 @@ TUIClientAgentIO::TUIClientAgentIO(
     permissionMode_(permissionMode),
     inputChannel_(std::make_shared<LineChannel>(ex, 64)),
     logSink_(std::make_shared<TUILogSink>()) {
-    // 注意: TUI 是纯 client 端点, 不持有 AgentContext/Session (属于 agent-server
+    // 注意: TUI 是纯 client 端点, 不持有 AgentContext/Session (属于 agent-io
     // 线程); 模型名/上下文统计等所有 agent 侧信息均经 Wire 消息 (WireModelInfo /
     // WireContextStats) 由服务端推送获取, cachedModelName 初始为空,
     // 收到 WireModelInfo 后更新 (调用方在连接建立后发送 WireGetModel 请求)
@@ -412,7 +412,7 @@ void TUIClientAgentIO::start() {
         ctx_.threadId      = currentThreadId();
         ctx_.remoteUrl     = remoteUrl_;
         ctx_.pluginManager = pluginManager_;
-        // 注意: 不设置 ctx_.session —— TUI 不持有 Session (属于 agent-server 线程),
+        // 注意: 不设置 ctx_.session —— TUI 不持有 Session (属于 agent-io 线程),
         // 上下文统计经 WireContextStats → onContextStats → sharedState_ 更新,
         // 状态栏等组件从 frameState 读取 (见 status_bar.cpp)
 
@@ -458,7 +458,7 @@ void TUIClientAgentIO::start() {
                     [](neograph_asio_error_code) {}
                 );
             } else if (st.connState != ConnState::Connected) {
-                // agent-server 未就绪 (启动中 Connecting / 连接失败 Failed):
+                // agent-io 未就绪 (启动中 Connecting / 连接失败 Failed):
                 // 输入进入待发送队列 (与流式输出期间排队语义一致, 经底部队列
                 // 提示展示), 不置 isStreaming; 连接建立后由 flushPendingInput
                 // 统一发送 — 若在未连接时直接调 sendUserInputLocked, 远程模式下
@@ -495,7 +495,7 @@ void TUIClientAgentIO::start() {
 
         // 侧边栏 footer 点击: 处理 "上下文" 按钮
         sidebar_->onFooterClick([this](const Mouse&) -> bool {
-            // LLM 上下文消息在 agent-server 侧 (Session::llmMessages), TUI 不持有,
+            // LLM 上下文消息在 agent-io 侧 (Session::llmMessages), TUI 不持有,
             // 经 WireGetContext 由服务端回推 (WireContextMessages → onPeerMessage
             // → sharedState_.contextMessages); 本地/远程模式均有 transport
             if (transport_) {
@@ -821,7 +821,7 @@ void TUIClientAgentIO::stop() {
 }
 
 // ---------------------------------------------------------------------------
-// agent-server 连接状态管理
+// agent-io 连接状态管理
 //
 // 覆盖场景:
 // - 本地一体模式: TUI 启动后 agent 线程仍在 init() (MCP 连接等可能耗时数秒),
@@ -920,10 +920,10 @@ asio::awaitable<void> TUIClientAgentIO::waitRetry() {
 // ---------------------------------------------------------------------------
 
 void TUIClientAgentIO::openModelSelector() {
-    // agent-server 未就绪时请求会被 transport 丢弃 (远程模式写队列未创建/
+    // agent-io 未就绪时请求会被 transport 丢弃 (远程模式写队列未创建/
     // 本地模式服务尚未启动), 弹窗将永远显示 loading; 提示用户等待连接完成
     if (ctx_.frameState && ctx_.frameState->connState != ConnState::Connected) {
-        showToast("agent-server 尚未就绪, 请稍后再试");
+        showToast("agent-io 尚未就绪, 请稍后再试");
         postRedraw();
         return;
     }
@@ -1017,10 +1017,10 @@ void TUIClientAgentIO::openSessionSelector() {
     if (!modal_ || modal_->hasModal()) {
         return;
     }
-    // agent-server 未就绪时 WireListSessions/WireSwitchSession 无法送达,
+    // agent-io 未就绪时 WireListSessions/WireSwitchSession 无法送达,
     // 会话列表将永远显示 loading; 提示用户等待连接完成
     if (ctx_.frameState && ctx_.frameState->connState != ConnState::Connected) {
-        showToast("agent-server 尚未就绪, 请稍后再试");
+        showToast("agent-io 尚未就绪, 请稍后再试");
         postRedraw();
         return;
     }
@@ -1066,7 +1066,7 @@ void TUIClientAgentIO::switchToSession(std::string newThreadId) {
     setCurrentThreadId(newThreadId);
     // 更新组件共享上下文: 状态栏/会话弹窗据此标记 current 会话
     ctx_.threadId = newThreadId;
-    // 注意: TUI 不持有 Session (属于 agent-server 线程), 切换后服务端回推
+    // 注意: TUI 不持有 Session (属于 agent-io 线程), 切换后服务端回推
     // 新会话的全量 Sync + WireModelInfo + WireContextStats (WireSwitchSession
     // 处理路径), 客户端界面 (消息历史/模型名/上下文统计) 随之整体更新
     // 清理上一会话遗留的消息列表吸附/中断 UI 状态;
@@ -1542,7 +1542,7 @@ void TUIClientAgentIO::onTurnResult(const agentxx::agent::WireTurnResult& /*resu
 
 void TUIClientAgentIO::onContextStats(const agentxx::agent::WireContextStats& stats) {
     // 上下文统计写入 sharedState_ (而非 Session::contextStats —— TUI 不持有
-    // Session, 属于 agent-server 线程); 状态栏等组件从 frameState 读取。
+    // Session, 属于 agent-io 线程); 状态栏等组件从 frameState 读取。
     // 会话切换后服务端推送新会话的 WireContextStats (#switchSession 路径),
     // 显示自动跟随新会话
     {

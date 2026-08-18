@@ -42,7 +42,7 @@ struct TUIPendingInput {
     bool        expanded = false;
 };
 
-/// agent-server 连接状态 (消息列表 banner 显示 + 输入发送限制)
+/// agent-io 连接状态 (消息列表 banner 显示 + 输入发送限制)
 /// - Connecting: 服务尚未就绪 (本地模式 init 中 / 远程模式连接握手前),
 ///   用户输入进入待发送队列 (st.pendingInputs), 连接完成后统一发送
 /// - Connected:  服务就绪, 输入直接发送
@@ -72,7 +72,7 @@ struct TUIRenderState {
     TUIMessage::Role                         currentTokenRole = TUIMessage::Role::Assistant;
     bool                                     isStreaming      = false;
 
-    /// agent-server 连接状态 (默认 Connecting: TUI 启动后、服务就绪前输入受限,
+    /// agent-io 连接状态 (默认 Connecting: TUI 启动后、服务就绪前输入受限,
     /// banner 显示"启动中"; 连接建立后由 mode_runners 置 Connected)
     ConnState connState = ConnState::Connecting;
 
@@ -115,7 +115,7 @@ struct TUIRenderState {
     std::vector<agentxx::agent::AppendComponentNotification> appendComponents;
 
     /// 上下文统计 (WireContextStats 响应填充; 状态栏显示用)
-    /// - TUI 不持有 agent-server 的 Session, 统计经 Wire 消息获取后存于此
+    /// - TUI 不持有 agent-io 的 Session, 统计经 Wire 消息获取后存于此
     /// - 0/0 表示尚未收到服务端推送
     size_t contextTokens    = 0;
     size_t maxContextTokens = 0;
