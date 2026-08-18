@@ -253,6 +253,127 @@ typedef int (*AgentxxHookFn)(void* user_data, AgentxxHookPoint point,
 - `agentxx/plugin/plugin_api.h`: 纯 C ABI 头 (**唯一跨版本契约**), 插件编译**无需链接 libagentxx**
 - 插件侧可直接按 C 头编写 (参考 `agent/plugins/example_plugin/`); 无额外 C++ 包装要求
 
+### 4.5 导出符号控制 (2026-08)
+
+> 目标: 严格限制插件动态库的导出面, 仅宿主 dlsym/GetProcAddress 按名查找的
+> 入口符号导出, 其余全部隐藏 (插件自身 C++ 内部符号 + 第三方静态库符号)。
+
+**背景**: 插件默认按全局可见性编译, 内部符号 (STL 实例化/typeinfo/第三方静态库
+如 simdjson/tree-sitter/io_uring 的符号) 全部进入动态符号表, 实测 `libagentxx_codegraph.so`
+导出 **12479** 个符号 / `libagentxx_system_monitor.so` 导出 **4394** 个。危害:
+污染宿主动态符号表、多插件同名符号冲突、宿主符号误绑定到插件副本、加载/重定位
+开销。
+
+**机制** (三层, 缺一不可):
+
+1. **源码标记**: `plugin_api.h` 定义 `AGENTXX_PLUGIN_EXPORT` 宏
+   - GCC/Clang: `__attribute__((visibility("default")))`
+   - MSVC: `__declspec(dllexport)`
+   - 内置合并编译模式 (`AGENTXX_PLUGIN_BUILTIN`): 展开为空 (符号直接并入
+     libagentxx, 无需导出)
+   - 插件定义入口函数时必须加宏前缀 (宏在 `extern "C"` **之后**):
+     ```c
+     extern "C" AGENTXX_PLUGIN_EXPORT int agentxx_plugin_entry(const AgentxxHost* host, void** plugin_ctx);
+     ```
+2. **编译期隐藏**: 插件项目统一 `-fvisibility=hidden -fvisibility-inlines-hidden`
+   (plugins/CMakeLists.txt `add_compile_options`, 作用于全部插件目标)
+3. **链接期兜底**: 隐藏第三方静态库中按默认可见性编译的符号
+   - Linux/Android (ELF): `-Wl,--version-script=<白名单.map>` —
+     `global:` 列出 6 个入口符号, `local: *` 隐藏其余全部
+   - macOS: `-Wl,-exported_symbols_list` (符号带 `_` 前缀)
+   - Windows/MSVC: 不做自动导出 (`CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS` 保持 OFF),
+     仅 `__declspec(dllexport)` 标记的入口符号导出; 静态库链入 DLL 的符号
+     默认不导出
+
+**效果** (实测): 9 个插件动态库导出符号数 = 入口符号数
+(双端插件 6 个: agent 入口 3 + client 入口 3; 单端插件 3 个); dlopen/dlsym
+全部正常, 插件内部符号不可见 (dlsym 查不到 simdjson/内部函数等)。
+
+### 4.6 工具函数复用 (agentxx_util 静态库, 2026-08)
+
+> 目标: 插件复用主程序 `agent/lib/include/agentxx/util` 的部分工具函数,
+> 同时保持 C ABI 契约的独立性 (插件不链接 libagentxx)。
+
+**约束** (AGENTS.md): 主程序与插件的复用代码必须**静态链接进各自**,
+确保不同版本编译的主程序/插件可互相加载运行; 复用代码的结构体不得跨边界传递。
+
+**方案选型**: 独立静态库 `agentxx_util` (而非插件直接编译 util cpp 或共享
+libagentxx):
+
+| 方案 | 结论 |
+|------|------|
+| 插件直接导入 util 头 + 编译其 cpp | 每个插件重复配置 include/宏/第三方依赖 (fmt/uchardet/iconv/sqlite3), 内置模式需同步维护, 编译时间浪费 |
+| 独立静态库 `agentxx_util` | **采用**: 编译一次; CMake 一行链接 + 依赖/宏传递; libagentxx 与插件各自静态链接一份, 符号经导出控制隐藏互不冲突 |
+| 链接 libagentxx | 违反 C ABI 契约 (STL/异常 ABI 耦合), 不可行 |
+
+**agentxx_util 组成** (lib/CMakeLists.txt, **src/util/ 全部源文件**):
+
+- 收录: `http_client` / `http_server` / `ws_client` / `string_util` / `util` /
+  `sqlite` / `settings_db` / `log` / `regex` / `http_header` 全部 10 个 cpp
+  + `include/agentxx/util/` 全部头文件 (`aho_corasick` / `async_mutex` /
+  `async_offload` / `diff_util` / `exception` / `http_client` / `http_header` /
+  `http_server` / `log` / `lru_cache` / `regex` / `router` / `settings_db` /
+  `sqlite` / `stream` / `string_util` / `util` / `ws_client`)
+- **定位**: 面向 agentxx 内置插件 (与主程序同一 superbuild 构建、依赖环境
+  齐全) 的便捷复用库; 第三方插件完全不需要它 (纯 C ABI 头即可, 甚至不用
+  C++), 不 find_package 本库即零影响
+
+**依赖: 全部 PUBLIC 链接 + include 传递** (内置插件链接本库后直接获得全部
+util 能力, 无需自行配置任何依赖):
+
+- **PUBLIC 链接接口** (随 INTERFACE 传播, 插件 `find_package(agentxx_util)`
+  后自动获得):
+  - 轻量 imported target: `fmt` / `SQLite3` / `uchardet` / `iconv` (config
+    `find_dependency` 链解析)
+  - 重依赖裸库名: neograph 系 (sqlite→acp→mcp→async→llm→core, 顺序敏感) +
+    `yyjson` (经 PUBLIC `link_directories` (install/lib) 解析)
+  - `OpenSSL::SSL` / `OpenSSL::Crypto` (find_dependency 链, include 随
+    INTERFACE 传递 — 插件 include http_client.h 时 beast ssl 无需自行配置)
+  - 条件 pkg-config 模块: `PkgConfig::hyperscan` (AGENTXX_ENABLE_HYPERSCAN) /
+    `PkgConfig::uring` (AGENTXX_LINUX_IO_URING_SUPPORTED) — 插件项目须定义
+    同名 target (plugins/CMakeLists.txt 已统一 pkg_check_modules, 与
+    client/test 一致); hs_runtime 裸库名经 link_directories 解析
+- **PUBLIC include**: install 头 / neograph deps (yyjson) / Boost 经
+  `_AGENTXX_USAGE_TARGETS` 循环随 INTERFACE 导出
+- **裁剪**: 静态库 (archive) 按目标文件提取 — 插件只链接实际引用的符号所属
+  的 `.cpp.o`, 未使用的模块 (如插件不调用 http_client) 整个目标文件不被
+  提取, 其重依赖符号不进入插件动态库 (9 个插件 DT_NEEDED 实测仅系统库)
+- 链接依赖须用 imported target (Iconv::iconv / fmt::fmt ...) 而非裸库名
+  (`charset` 裸名在插件项目无 link_directories 会链接失败); 裸库名仅用于
+  install/lib 内存在的库 (neograph 系/yyjson/hs_runtime, 经 PUBLIC
+  link_directories 解析); config 内 `find_dependency` 用小写包名 (`iconv`,
+  其 config 文件为 `iconvConfig.cmake` 只匹配小写)
+
+**插件接入** (每个插件 CMakeLists 动态分支):
+```cmake
+find_package(agentxx_util REQUIRED)   # 经 AGENTXX_INSTALL_DIR 的 config;
+                                       # 依赖链 find_dependency 传递解析
+target_link_libraries(${PLUGIN_NAME} PRIVATE agentxx_util)
+```
+内置合并编译分支: `target_link_libraries(${_target} PRIVATE agentxx_util)`
+(仅传递编译宏/头路径; libagentxx 自身已链接 agentxx_util)。
+
+**插件侧用法** (见 `agent/plugins/example_plugin/example_plugin.cpp`):
+```cpp
+#include "agentxx/util/string_util.h"  // util 头依赖 XX_IS_* 宏,
+                                       // 链接 agentxx_util 后经 INTERFACE 自动获得
+std::string b64 = agentxx::util::base64Encode(sv);  // 静态链入本插件副本
+```
+- `XX_IS_*` 平台/编译模式宏经 agentxx_util 的 PUBLIC 编译定义传播 (util 头
+  内部 `#if XX_IS_WIN_D` 等分支依赖)
+- 插件内 util 符号为本地隐藏符号 (实测 example_plugin 内 161 个 util 本地
+  符号, 动态导出表仍仅 6 个入口), 与宿主 libagentxx 内同名符号互不冲突,
+  版本可各自独立演进
+- libagentxx (共享库) 内嵌全部 util 目标文件 (实测 3707 个 util 导出符号),
+  与插件各自持有的副本互不可见
+
+**libagentxx 侧链接注意** (仅构建者关注):
+- `agentxx_static` 不链接 hyperscan/uring (静态库 PRIVATE 依赖导出为
+  LINK_ONLY 且排于 INTERFACE 开头、位于 agentxx_util 之前, GNU ld 单遍
+  扫描归档无法回溯解析 regex.cpp.o / asio io_uring 符号); 静态库消费者
+  (client/test/benchmark) 均已自行 PRIVATE 链接 hyperscan/uring
+- `agentxx_shared` 保留 PRIVATE 链接 (符号内嵌 .so, 运行时不依赖外部)
+
 ### 11.7.5 内置合并编译 (AGENTXX_ENABLE_PLUGIN_BUILTIN, 2026-08)
 
 > 目标: 可选把启用的插件源文件直接编译进 libagentxx, 运行期无需插件动态库
