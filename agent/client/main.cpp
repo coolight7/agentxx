@@ -77,6 +77,48 @@ static std::string getExecutableDir() noexcept {
 #endif
 }
 
+/// 检查配置中是否存在可用 LLM 模型; 无可用模型时输出启动引导并返回 false
+/// - 用于无 agentxx-config.yaml / 配置中未配置有效模型的启动场景:
+///   在构造 CodeAgent 之前拦截, 输出配置引导后退出,
+///   避免携带无效模型进入 BaseAgent 构造触发断言 abort 崩溃
+///   (base_agent.cpp: assert(in_config->model.isValid()))
+/// - configLoaded: 配置文件是否成功加载 (区分"文件缺失"与"文件内未配置"引导文案)
+static bool ensureModelConfigured(
+    const std::map<std::string, agentxx::agent::ModelConfig>& models,
+    std::string_view                                          useModelKey,
+    std::string_view                                          roleDesc,
+    std::string_view                                          configPath,
+    bool                                                      configLoaded
+) {
+    if (resolveModelConfig(models, useModelKey).isValid()) {
+        return true;
+    }
+    XX_LOGE("[Config] 未配置可用 LLM 模型: {} (use_model.{}), 启动终止。", roleDesc, useModelKey);
+    if (!configLoaded) {
+        XX_LOGE(
+            "[Config] 未找到配置文件 '{}'。请复制模板创建 (项目根目录 agentxx-config.yaml "
+            "或 README 使用说明), 并配置 models + use_model。",
+            configPath
+        );
+    } else {
+        XX_LOGE(
+            "[Config] 配置文件 '{}' 中未找到有效模型条目 (use_model.{} = '{}')。请在 "
+            "models 列表添加模型并指定默认模型, 例如:\n"
+            "  models:\n"
+            "    - name: my-model\n"
+            "      type: openai\n"
+            "      base_url: https://api.openai.com/v1\n"
+            "      api_key: ${{LLM_API_KEY}}\n"
+            "  use_model:\n"
+            "    default: my-model",
+            configPath,
+            useModelKey,
+            useModelKey
+        );
+    }
+    return false;
+}
+
 static std::string extractTokenFromUrl(std::string& url) {
     auto q = url.find('?');
     if (q == std::string::npos) {
@@ -136,6 +178,7 @@ int main(int argn, char** argv) {
     agentxx::util::LogDispatcher::instance().addSink(defaultLogSink);
 
     std::string configPath = "agentxx-config.yaml";
+    bool        configExplicit = false; ///< --config 是否被显式指定 (指定但文件不存在时报错)
     std::string overrideEnvPath;
     std::string mode = "tui";
     std::string agentUrl;
@@ -173,7 +216,8 @@ Options:
             return 0;
         } else if (arg == "--config" && i + 1 < argn) {
             ++i;
-            configPath = argv[i];
+            configPath     = argv[i];
+            configExplicit = true;
         } else if (arg == "--env" && i + 1 < argn) {
             ++i;
             overrideEnvPath = argv[i];
@@ -245,11 +289,13 @@ Options:
 
     // 加载 YAML 配置
     YamlAppConfig yamlCfg;
+    bool          configLoaded = false; ///< 配置文件是否成功加载 (用于模型缺失引导文案区分)
     if (std::filesystem::exists(configPath)) {
         auto code = agentxx::util::catchError<int>(
             [&]() -> int {
                 yamlCfg = loadYamlConfig(configPath, dotEnvVars, overrideEnvVars);
                 XX_LOGI("[Config] Loaded config from: {}", configPath);
+                configLoaded = true;
                 return 0;
             },
             [&](std::string errmsg) -> int {
@@ -260,10 +306,13 @@ Options:
         if (0 != code) {
             return code;
         }
-    } else {
-        XX_LOGE("[Config] Failed to load config: {}, file not exist.", configPath);
+    } else if (configExplicit) {
+        // 显式 --config 指定的文件不存在: 大概率是路径拼写错误, 直接报错
+        XX_LOGE("[Config] Config file not found: {}", configPath);
         return 1;
     }
+    // 默认路径不存在: 静默跳过加载, 由后续模型可用性检查 (ensureModelConfigured)
+    // 输出"未找到配置文件"引导后退出
 
     // 统一数据根目录: 可在 yaml 配置 data_dir 指定
     // - tui/cli 模式支持关键字 `default`: 使用当前系统数据目录 (平台惯例,
@@ -317,6 +366,32 @@ Options:
     };
 
     if (mode == "train") {
+        // 训练模式需要 训练/评分/优化 三个模型, 任一缺失即引导退出
+        // (避免无效模型进入 BaseAgent 构造断言 abort 崩溃)
+        if (!ensureModelConfigured(
+                yamlCfg.models,
+                yamlCfg.useModelTrain,
+                "训练模型",
+                configPath,
+                configLoaded
+            )
+            || !ensureModelConfigured(
+                yamlCfg.models,
+                yamlCfg.useModelTrainScorer,
+                "评分模型",
+                configPath,
+                configLoaded
+            )
+            || !ensureModelConfigured(
+                yamlCfg.models,
+                yamlCfg.useModelTrainOptimizer,
+                "优化模型",
+                configPath,
+                configLoaded
+            )) {
+            return 1;
+        }
+
         auto config                                    = buildDefaultConfig();
         config->dataDir                                = resolvedDataDir;
         config->logPrintToolcall                       = false;
@@ -346,6 +421,16 @@ Options:
     }
 
     if (mode == "acp") {
+        if (!ensureModelConfigured(
+                yamlCfg.models,
+                yamlCfg.useModelAcp,
+                "ACP 模型",
+                configPath,
+                configLoaded
+            )) {
+            return 1;
+        }
+
         auto config                                   = buildDefaultConfig();
         config->dataDir                               = resolvedDataDir;
         config->logPrintToolcall                      = false;
@@ -425,6 +510,16 @@ Options:
 
     // ======================== CodeAgent Websocket Server 服务模式 ========================
     if (mode == "server") {
+        if (!ensureModelConfigured(
+                yamlCfg.models,
+                yamlCfg.useModelDefault,
+                "主模型",
+                configPath,
+                configLoaded
+            )) {
+            return 1;
+        }
+
         config->logPrintToolcall                       = false;
         config->logPrintMessagesBeforeLLM              = false;
         config->logPrintMessagesBeforeLLMWithSystemMsg = false;
@@ -496,6 +591,17 @@ Options:
 
     // ======================== 同一进程内 client + agent 模式 ========================
     // client 和 agent 在同一个进程中，使用线程间数据交互
+    // (remote 模式已在上面 return, 此处为本地 tui/cli, 均需本地模型)
+    if (!ensureModelConfigured(
+            yamlCfg.models,
+            yamlCfg.useModelDefault,
+            "主模型",
+            configPath,
+            configLoaded
+        )) {
+        return 1;
+    }
+
     if (mode == "tui") {
         agentxx::util::LogDispatcher::instance().removeSink(defaultLogSink);
         config->logPrintToolcall                       = false;

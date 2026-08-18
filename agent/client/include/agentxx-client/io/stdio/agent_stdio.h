@@ -11,6 +11,13 @@
 class StderrLogSink : public agentxx::util::ThreadedLogSink {
 public:
 
+    ~StderrLogSink() override {
+        // 在虚表仍为本类时停止日志线程 (见 ThreadedLogSink::shutdownThread):
+        // 若延迟到基类析构, 线程执行纯虚 onLog 虚调用 -> purecall -> abort
+        // (进程退出瞬间日志刚入队时最易触发, 如无配置文件启动立即退出)
+        shutdownThread();
+    }
+
     void onLog(const agentxx::util::LogEntry& entry) override {
         std::cerr << entry.message << std::endl;
     }
