@@ -1058,8 +1058,11 @@ neograph::ChatTool FilesystemGlobTool::get_definition() const {
                     {
                         "type",
                         {
-                            {"type", {"string", "array"}},
-                            {"items", {{"type", "string"}}},
+                            // 注意: 必须声明单一类型。联合类型 ["string","array"] 会被
+                            // Gemini 网关拒绝 (其 protobuf Schema 不支持 type 数组, 且带
+                            // items 时必须 type==ARRAY, 否则 HTTP 400 INVALID_ARGUMENT);
+                            // 工具实现 collectTypeFilter 仍兼容 string/array 两种入参
+                            {"type", "string"},
                             {"description", prompt.getArg("type")},
                         },
                     },
