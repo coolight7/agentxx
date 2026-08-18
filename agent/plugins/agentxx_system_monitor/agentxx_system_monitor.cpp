@@ -662,7 +662,7 @@ static std::string buildUsageInfoItemsJson(const UsageStat& st) {
     }
     textItem(ram);
     if (st.gpuCount == 0) {
-        textItem("|- GPU none", "hint");
+        // 无gpu，不显示
     } else if (st.gpuCount == 1) {
         textItem(fmt::format("|- GPU {:.0f}%", st.gpuPeakPct));
     } else {
