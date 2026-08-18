@@ -614,8 +614,7 @@ asio::awaitable<void> test_host_spawn_depth_limit() {
 }
 
 /// 验证: 并发预算 (maxConcurrentSubagents=1, 第二个并发派生被拒绝)
-asio::awaitable<void> test_host_spawn_concurrent_limit() {
-    auto sim     = startDaSimServer();
+asio::awaitable<void> test_host_spawn_concurrent_limit() {    auto sim     = startDaSimServer();
     auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
     auto cfg     = makeSimConfig(baseUrl);
 
@@ -687,9 +686,105 @@ asio::awaitable<void> test_host_spawn_concurrent_limit() {
     co_return;
 }
 
-/// 验证: 批量派生 (spawnBatch, wait_for_all, 结果顺序一致)
-asio::awaitable<void> test_host_spawn_batch() {
+/// 验证: 嵌套委派 (子代理再派生子代理, P3 扁平化总线路径)
+/// - 根 agent 执行 agentxx_subagent tool → 中断 → 根总线委派 → 宿主派生 A
+/// - A 执行 agentxx_subagent tool → 中断 → A 自身总线 (service.subagent 由
+///   宿主 serve) 委派 → 宿主派生 B (与根委派完全同路径, 无宿主函数直调)
+/// - B 纯文本回复 → 结果沿 B → A → 根逐级 resume 回填
+/// - 深度/并发预算、级联取消经 req.parentThreadId / req.cancelToken 生效
+/// - 全部节点回收 (registry 仅剩 root, runningSubagents == 0)
+asio::awaitable<void> test_host_spawn_nested_delegation() {
     auto sim     = startDaSimServer();
+    auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
+    auto cfg     = makeSimConfig(baseUrl);
+
+    g_da_sim_response_content = "nested leaf result";
+    g_da_sim_requests.clear();
+    // 前 2 次请求 (根 + 子代理 A) 返回 subagent tool_calls, 第 3 次 (孙 B)
+    // 返回纯文本
+    g_da_sim_tool_calls_remaining = 2;
+    g_da_sim_tool_calls           = neograph::json::array({
+        neograph::json{
+            {"index", 0},
+            {"id", "call_nested_1"},
+            {"type", "function"},
+            {"function",
+             neograph::json{
+                 {"name", "agentxx_subagent"},
+                 {"arguments",
+                  R"({"tasks":[{"subagent":"subagent_task","message":"leaf task"}]})"},
+             }},
+        },
+    });
+
+    auto                              io = std::make_shared<asio::io_context>();
+    agentxx::agent::AgentHost::Config hostCfg;
+    hostCfg.ioCtx = io;
+    auto host     = agentxx::agent::AgentHost::create(hostCfg);
+    std::expected<agentxx::events::RespSubagentBatch, std::string> resp;
+    std::atomic<bool>                                              finished{false};
+
+    asio::co_spawn(
+        *io,
+        [&]() -> asio::awaitable<void> {
+            auto agent = std::make_shared<agentxx::agent::CodeAgent>(cfg);
+            co_await agent->init();
+            host->attachRoot(agent);
+            // 父会话: 供子代理继承 bus (HIL 冒泡路径; 本测试无 HIL 中断,
+            // 空总线即可)
+            auto parentSession = agent->getContext()->getSession("parent-session");
+            parentSession->bus
+                = std::make_shared<agentxx::middleware::EventBus>(co_await asio::this_coro::executor
+                );
+
+            // [workaround] 聚合提取为具名变量, 绕过 g++ 16.1 ICE (gimplify.cc:841)
+            agentxx::events::ReqSubagentBatch nestedReq{
+                .parentAgentName = "root",
+                .parentThreadId  = "parent-session",
+                .cancelToken     = nullptr,
+                .tasks           = {
+                    agentxx::events::SubagentBatchItem{
+                        .subagentName = "subagent_task",
+                        .systemPrompt = "You are a worker.",
+                        .message      = "root task",
+                        .resultId     = "call_root",
+                    },
+                },
+            };
+            resp = co_await agent->getContext()
+                       ->bus->request<
+                           agentxx::events::ReqSubagentBatch,
+                           agentxx::events::RespSubagentBatch>(
+                           agentxx::events::Topic::Subagent,
+                           nestedReq,
+                           std::chrono::seconds(30)
+                       );
+            finished = true;
+        },
+        asio::detached
+    );
+    pumpIoUntil(io, finished);
+
+    // ① 嵌套委派结果: 孙 B 的纯文本回复沿两级回填
+    XX_TEST_EXPECT_TRUE(resp.has_value());
+    if (resp.has_value()) {
+        XX_TEST_EXPECT_EQ(resp->results.size(), size_t{1});
+        XX_TEST_EXPECT_FALSE(resp->results[0].hasError);
+        XX_TEST_EXPECT_EQ(resp->results[0].content, std::string{"nested leaf result"});
+    }
+    // ② 请求序列: 根(1) + 子代理 A(2) + 孙 B(3)
+    XX_TEST_EXPECT_EQ(g_da_sim_requests.size(), size_t{3});
+    // ③ 节点回收: 嵌套的 A/B 均已随运行结束回收
+    XX_TEST_EXPECT_EQ(host->registry().size(), 1u);
+    XX_TEST_EXPECT_TRUE(host->registry().contains("root"));
+    XX_TEST_EXPECT_EQ(host->runningSubagents(), 0u);
+
+    g_da_sim_tool_calls_remaining = -1;
+    co_return;
+}
+
+/// 验证: 批量派生 (spawnBatch, wait_for_all, 结果顺序一致)
+asio::awaitable<void> test_host_spawn_batch() {    auto sim     = startDaSimServer();
     auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
     auto cfg     = makeSimConfig(baseUrl);
 
@@ -936,6 +1031,7 @@ asio::awaitable<TestResult> run_agent_host_tests() {
         co_await test_subagent_summarization_switch();
         co_await test_host_spawn_depth_limit();
         co_await test_host_spawn_concurrent_limit();
+        co_await test_host_spawn_nested_delegation();
         co_await test_host_spawn_batch();
         co_await test_host_mailbox_message();
         co_await test_host_remote_a2a();

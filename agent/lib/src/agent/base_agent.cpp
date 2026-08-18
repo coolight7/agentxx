@@ -1,11 +1,13 @@
 #include "agentxx/agent/base_agent.h"
 
+#include "agentxx/agent/agent_runner.h"
 #include "agentxx/agent/checkpoint_store.h"
 #include "agentxx/agent/config_static.h"
 #include "agentxx/agent/io/session_server_agent_io.h"
 #include "agentxx/agent/session_persistence.h"
 #include "agentxx/middlewares/summarization.h"
 #include "agentxx/plugin/plugin_manager.h"
+#include "agentxx/tools/subagent_shared.h"
 #include "agentxx/util/diff_util.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/string_util.h"
@@ -640,15 +642,8 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
     auto cancelToken = std::make_shared<neograph::graph::CancelToken>();
     session->setCancelToken(cancelToken);
 
-    // 中断等待超时: 优先取 IO 端点配置 (SessionServerAgentIO::interruptTimeout),
-    // 否则默认不限制 (<=0 表示不限制, 避免 HIL 弹窗被总线 30s 默认超时提前截断)
-    auto interruptTimeout = std::chrono::milliseconds{0}; // 0 = 不限制
-    if (session->io) {
-        if (auto* serverIo
-            = dynamic_cast<agentxx::agent::SessionServerAgentIO*>(session->io.get())) {
-            interruptTimeout = serverIo->interruptTimeout();
-        }
-    }
+    // 中断等待超时: 由 AgentRunner 内部统一解析 (取 IO 端点
+    // SessionServerAgentIO::interruptTimeout 配置, <=0 不限制)
 
     // llm callback: 由 EventBridge 统一处理 GraphEvent -> 会话增量 Delta/历史/总线发布
     auto eventCallback = eventBridge->makeCallback();
@@ -664,296 +659,86 @@ asio::awaitable<BaseAgent::ConversationTurnResult> BaseAgent::runConversationTur
 
     co_await agentxx::util::catchErrorAsync<bool>(
         [&]() -> asio::awaitable<bool> {
-            // - 存在值 [neograph::graph::RunResult], 声明 optional 类型用于后续赋值 [nullopt]
-            std::optional<neograph::graph::RunResult> result;
+            // 统一的 "运行 + 中断处理 + 恢复" 循环 (与子代理共用 AgentRunner):
+            // - 语义与旧内联循环完全一致 (checkpoint 持久化 / tempMessages 恢复 /
+            //   MessageTip / IO 端点 HIL 超时)
+            // - 委派经 ctx->bus 请求 service.subagent (宿主 serve), 不限制超时
+            //   (修复旧实现总线默认 30s 截断长任务子代理的问题)
+            std::optional<neograph::graph::RunResult> recovered;
             if (resumeInterrupt) {
-                // - 程序重启恢复中断: 跳过 [engine->run_stream_async], 从恢复的 graphData
-                // 重建中断结果, 直接进入中断处理循环, 重新处理可能未完成的中断并 resume
-                neograph::graph::RunResult recovered;
-                recovered.interrupted = true;
-                recovered.interrupt_node
+                // 程序重启恢复中断: 跳过首跑, 从恢复的 graphData 重建中断结果,
+                // 直接进入中断处理循环 (重新处理可能未完成的中断并 resume)
+                neograph::graph::RunResult r;
+                r.interrupted = true;
+                r.interrupt_node
                     = agentContext->middlewareHandleContext->getGraphDataItemValue<std::string>(
                         threadId,
                         agentxx::middleware::MiddlewareContext::graphDataKey_interruptNode
                     );
-                recovered.interrupt_value
+                r.interrupt_value
                     = agentContext->middlewareHandleContext->getGraphDataItemValue<neograph::json>(
                         threadId,
                         agentxx::middleware::MiddlewareContext::graphDataKey_interruptValue
                     );
-                result = std::move(recovered);
-                // - 中断、异常、取消执行会让 neograph::engine 丢弃本轮 session
-                // 已经产生的上下文，因此这里取 [graphDataKey_tempMessages] 而不是
-                // [result->channel_raw("messages")]
-                const auto& im
-                    = agentContext->middlewareHandleContext->getGraphDataItemValue<neograph::json>(
-                        threadId,
-                        agentxx::middleware::MiddlewareContext::graphDataKey_tempMessages
-                    );
-                if (im.is_array()) {
-                    session->llmMessages = im;
-                }
-            } else {
-                result = co_await engine->run_stream_async(cfg, eventCallback);
-
-                if (result->interrupted) {
-                    const auto& im
-                        = agentContext->middlewareHandleContext
-                              ->getGraphDataItemValue<neograph::json>(
-                                  threadId,
-                                  agentxx::middleware::MiddlewareContext::graphDataKey_tempMessages
-                              );
-                    if (im.is_array()) {
-                        session->llmMessages = im;
-                    }
-                } else {
-                    session->llmMessages = result->channel_raw("messages");
-                }
+                recovered = std::move(r);
             }
 
-            while (result.has_value() && result->interrupted) {
-                // 记录中断节点信息到 graphData, 供程序重启恢复中断时复用
-                agentContext->middlewareHandleContext->setGraphDataItemValue<std::string>(
-                    threadId,
-                    agentxx::middleware::MiddlewareContext::graphDataKey_interruptNode,
-                    result->interrupt_node
-                );
-                agentContext->middlewareHandleContext->setGraphDataItemValue<neograph::json>(
-                    threadId,
-                    agentxx::middleware::MiddlewareContext::graphDataKey_interruptValue,
-                    result->interrupt_value
-                );
-
-                engine->update_state(
-                    std::string{threadId},
-                    [&](neograph::graph::GraphState& state) {
-                        // - 本轮 graph 还没有执行完成，序列化 graphData 到 state checkpoint
-                        // 以防中断处理期间 程序 终止, 导致 graphData 丢失
-                        auto data = agentContext->middlewareHandleContext->getGraphDataToState(
-                            state,
-                            threadId
+            auto runnerOutcome = co_await AgentRunner{}.run(
+                agentContext,
+                engine.get(),
+                threadId,
+                std::move(cfg),
+                cancelToken,
+                AgentRunner::Hooks{
+                    .persistCheckpoint = true,
+                    .onInterruptTip = [&](std::string_view node,
+                                          std::string_view value,
+                                          std::string_view handle) {
+                        // 中断头消息: 由 agent 线程插入会话历史并通知 UI
+                        // (原由 client 端 handleInterrupt 构造); 后续中断
+                        // 输入项消息 (Role::Interrupt) 仍由 client 端插入
+                        std::string msg = fmt::format(
+                            "Interrupted at: {}\nValue: {}",
+                            node,
+                            value
                         );
-                        state.overwrite(
-                            agentxx::middleware::MiddlewareContext::channel_savedGraphData,
-                            data
-                        );
-                    }
-                );
-
-                auto crudeResult = std::move(result);
-                result           = std::nullopt;
-
-                turnResult.interrupted = true;
-                auto interruptNode     = crudeResult->interrupt_node;
-                auto interruptValue    = crudeResult->interrupt_value.dump();
-
-                auto resumeValues = neograph::json{};
-
-                // 从 [graphDataKey_interruptArgs] 提取中断参数
-                const auto interruptArgs = agentxx::middleware::InterruptHandleArg::listFromJson(
-                    agentContext->middlewareHandleContext->getGraphDataItemValue<neograph::json>(
-                        threadId,
-                        agentxx::middleware::MiddlewareContext::graphDataKey_interruptArgs
-                    )
-                );
-                size_t argIndex = 0;
-                for (const auto& interruptArg : interruptArgs) {
-                    ++argIndex;
-
-                    std::optional<neograph::json> interruptResult;
-                    {
-                        if (interruptArg.name == "subagent") {
-                            // 统一批量委派 (单发与批量合并):
-                            // - 中断参数为 {tasks: [...]} 数组 (SubAgentManagerTool 构造);
-                            //   兼容旧单发参数格式: 直接含 subagent 字段时包装为 1 个 task
-                            // - 结果 key: (tool_call_id + "_") + (task.result_id | 任务序号),
-                            //   与工具侧提取规则一致; 前缀避免同一轮多个中断的序号 key 覆盖
-                            auto subagentArg = interruptArg.arg;
-                            auto batchReq    = events::ReqSubagentBatch{
-                                   .parentAgentName = agentContext->agentConfig
-                                                          ? agentContext->agentConfig->agentName
-                                                          : std::string{},
-                                   .parentThreadId  = std::string{threadId},
-                                // 透传父会话取消令牌: 用户取消父轮次时级联中止全部子代理
-                                   .cancelToken = session->getCancelToken(),
-                            };
-                            if (subagentArg.contains("tasks") && subagentArg["tasks"].is_array()) {
-                                for (const auto& t : subagentArg["tasks"]) {
-                                    batchReq.tasks.push_back(events::SubagentBatchItem{
-                                        .subagentName = t.value("subagent", std::string{}),
-                                        .systemPrompt = t.value("system_prompt", std::string{}),
-                                        .message      = t.value("message", std::string{}),
-                                        // 结构化消息透传 (同上下文模式)
-                                        .messages
-                                        = (t.contains("messages") && t["messages"].is_array())
-                                              ? std::optional<neograph::json>{t["messages"]}
-                                              : std::nullopt,
-                                        // 指定运行 thread (同上下文模式)
-                                        .threadId = t.value("thread_id", std::string{}),
-                                        // 工具策略 (无工具/继承父/自定义)
-                                        .tools = (t.contains("tools") && t["tools"].is_array())
-                                                     ? std::optional<neograph::json>{t["tools"]}
-                                                     : std::nullopt,
-                                        // 压缩中间件开关 (压缩子代理显式 false)
-                                        .enableSummarization
-                                        = (t.contains("enable_summarization")
-                                           && t["enable_summarization"].is_boolean())
-                                              ? std::optional<bool>{t["enable_summarization"]
-                                                                        .get<bool>()}
-                                              : std::nullopt,
-                                        .resultId = t.value("result_id", std::string{}),
-                                    });
-                                }
-                            } else {
-                                // 旧单发参数格式兼容
-                                batchReq.tasks.push_back(events::SubagentBatchItem{
-                                    .subagentName = subagentArg.value("subagent", std::string{}),
-                                    .systemPrompt
-                                    = subagentArg.value("system_prompt", std::string{}),
-                                    .message = subagentArg.value("message", std::string{}),
-                                    .messages
-                                    = (subagentArg.contains("messages")
-                                       && subagentArg["messages"].is_array())
-                                          ? std::optional<neograph::json>{subagentArg["messages"]}
-                                          : std::nullopt,
-                                    .threadId = subagentArg.value("thread_id", std::string{}),
-                                    .tools
-                                    = (subagentArg.contains("tools")
-                                       && subagentArg["tools"].is_array())
-                                          ? std::optional<neograph::json>{subagentArg["tools"]}
-                                          : std::nullopt,
-                                    .enableSummarization
-                                    = (subagentArg.contains("enable_summarization")
-                                       && subagentArg["enable_summarization"].is_boolean())
-                                          ? std::optional<bool>{subagentArg["enable_summarization"]
-                                                                    .get<bool>()}
-                                          : std::nullopt,
-                                    .resultId = interruptArg.resultId,
-                                });
+                        if (!handle.empty()) {
+                            msg += fmt::format("\nHandle: {}", handle);
+                        }
+                        insertMessageTip(std::move(msg), ViewMessage::TipLevel::Info);
+                    },
+                    .eventCallback = eventCallback,
+                    .onBeforeResume = [&](std::string_view tid) -> asio::awaitable<void> {
+                        engine->update_state(
+                            std::string{tid},
+                            [&](neograph::graph::GraphState& state) {
+                                state.overwrite("messages", session->llmMessages);
                             }
-                            auto batchResp = co_await agentContext->bus->request<
-                                events::ReqSubagentBatch,
-                                events::RespSubagentBatch>(
-                                events::Topic::Subagent,
-                                std::move(batchReq)
-                            );
-                            if (batchResp.has_value()) {
-                                // 结果 key 统一为: tool_call_id + "_" + (result_id | 序号)
-                                const auto prefix = interruptArg.resultId.empty()
-                                                        ? std::string{}
-                                                        : interruptArg.resultId + "_";
-                                size_t     idx    = 0;
-                                for (const auto& r : batchResp->results) {
-                                    ++idx;
-                                    auto rid = r.resultId;
-                                    if (rid.empty()) {
-                                        rid = std::to_string(idx);
-                                    }
-                                    resumeValues[prefix + rid] =
-                    r.hasError ? neograph::json{{"error", std::string{r.errorMessage}}}
-                               : neograph::json{std::string{r.content}};
-                                }
+                        );
+                        co_return;
+                    },
+                    .onRunResult = [&](neograph::graph::RunResult& r, std::string_view tid) {
+                        if (r.interrupted) {
+                            // 中断时 [result] 内的 messages 是被 neograph::engine
+                            // 回滚的，本轮 session 的上下文已经被丢弃；应该取中断时
+                            // 保存的 messages
+                            const auto& im = agentContext->middlewareHandleContext
+                                                 ->getGraphDataItemValue<neograph::json>(
+                                                     tid,
+                                                     agentxx::middleware::MiddlewareContext::
+                                                         graphDataKey_tempMessages
+                                                 );
+                            if (im.is_array()) {
+                                session->llmMessages = im;
                             }
                         } else {
-                            // 中断头消息: 由 agent 线程插入会话历史并通知 UI
-                            // (原由 client 端 handleInterrupt 构造); 后续中断
-                            // 输入项消息 (Role::Interrupt) 仍由 client 端插入
-                            {
-                                std::string msg = fmt::format(
-                                    "Interrupted at: {}\nValue: {}",
-                                    interruptNode,
-                                    interruptValue
-                                );
-                                if (!interruptArg.name.empty()) {
-                                    msg += fmt::format("\nHandle: {}", interruptArg.name);
-                                }
-                                insertMessageTip(std::move(msg), ViewMessage::TipLevel::Info);
-                            }
-                            auto session = agentContext->sessions->get(threadId);
-                            if (session && session->bus) {
-                                // 显式传递中断等待超时: 与 IO 端点
-                                // interruptTimeout 配置一致, 避免被总线默认
-                                // 30s 超时截断 (用户长时间未响应中断弹窗时丢失中断);
-                                // <=0 表示不限制
-                                auto resp = co_await
-                                    [&]() -> asio::awaitable<
-                                              std::expected<events::RespInterrupt, std::string>> {
-                                    auto req = events::ReqInterrupt{
-                                        .agentName         = agentContext->agentConfig
-                                                                 ? agentContext->agentConfig->agentName
-                                                                 : std::string{},
-                                        .threadId          = std::string{threadId},
-                                        .interruptNode     = interruptNode,
-                                        .interruptValue    = interruptValue,
-                                        .handleName        = interruptArg.name,
-                                        .interruptArgsJson = interruptArg.toJson().dump(),
-                                        .resultId          = interruptArg.resultId,
-                                    };
-                                    co_return co_await session->bus
-                                        ->request<events::ReqInterrupt, events::RespInterrupt>(
-                                            events::Topic::Interrupt,
-                                            std::move(req),
-                                            interruptTimeout.count() > 0
-                                                ? interruptTimeout
-                                                : std::chrono::milliseconds{0}
-                                        );
-                                }();
-                                if (resp.has_value() && resp->handled) {
-                                    interruptResult = neograph::json::parse(resp->resultJson);
-                                }
-                            }
+                            session->llmMessages = r.channel_raw("messages");
                         }
-                    }
-
-                    if (interruptResult.has_value()) {
-                        auto resultId = interruptArg.resultId;
-                        if (resultId.empty()) {
-                            resultId = std::to_string(argIndex);
-                        }
-                        resumeValues[resultId] = interruptResult.value();
-                    }
-                }
-
-                if (false == resumeValues.empty()) {
-                    // 中断处理完成，清理参数，写回结果
-                    agentContext->middlewareHandleContext->removeGraphDataItem(
-                        threadId,
-                        agentxx::middleware::MiddlewareContext::graphDataKey_interruptArgs
-                    );
-                    agentContext->middlewareHandleContext->setGraphDataItemValue<neograph::json>(
-                        threadId,
-                        agentxx::middleware::MiddlewareContext::graphDataKey_interruptResult,
-                        resumeValues
-                    );
-
-                    engine->update_state(
-                        std::string{threadId},
-                        [&](neograph::graph::GraphState& state) {
-                            state.overwrite("messages", session->llmMessages);
-                        }
-                    );
-
-                    // 恢复执行中断点，直接回到触发中断的 Node
-                    result = co_await engine
-                                 ->resume_async(std::string{threadId}, nullptr, eventCallback);
-
-                    if (result->interrupted) {
-                        // 中断时 [result] 内的 messages 是被 neograph::engine
-                        // 回滚的，本轮 session 的上下文已经被丢弃；应该取中断时保存的 messages
-                        const auto& im
-                            = agentContext->middlewareHandleContext->getGraphDataItemValue<
-                                neograph::json>(
-                                threadId,
-                                agentxx::middleware::MiddlewareContext::graphDataKey_tempMessages
-                            );
-                        if (im.is_array()) {
-                            session->llmMessages = im;
-                        }
-                    } else {
-                        session->llmMessages = result->channel_raw("messages");
-                    }
-                }
-            }
+                    },
+                },
+                recovered
+            );
+            turnResult.interrupted = runnerOutcome.interrupted;
 
             co_return true;
         },
