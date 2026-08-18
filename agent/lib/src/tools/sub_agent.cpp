@@ -59,6 +59,10 @@ neograph::ChatTool SubAgentManagerTool::get_definition() const {
                     "subagent",
                     {
                         {"type", "string"},
+                        // 注意: 必须用圆括号直接初始化 (而非 {} 列表初始化),
+                        // 否则重载决议会优先选择 initializer_list 构造函数,
+                        // 把 vector 包成单个元素产生 [[...]] 嵌套数组,
+                        // 生成非法 enum schema 导致严格校验的上游 (如 gpt-5.6-luna) HTTP 400
                         {"enum", subagentNameList},
                         {
                             "description",

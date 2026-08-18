@@ -52,6 +52,61 @@ BaseAgent::BaseAgent(std::shared_ptr<agentxx::agent::AgentConfig> in_config) {
     }
 }
 
+/// 递归检查工具参数 JSON Schema 的合法性 (含 tool prompt 填充后的定义)
+/// - 背景: 严格网关 (SCNet / opencode Console Go 等) 会校验 tools schema,
+///   非法结构 (如 enum 嵌套数组 [[...]]) 直接在请求期返回 HTTP 400,
+///   且错误信息含糊 (invalid_prompt / Provider returned error), 难排查;
+///   故在启动装配工具时即校验, 尽早暴露问题
+/// - 检查点:
+///   * enum 必须是数组, 且元素必须是标量 (string/number/boolean/null),
+///     不能是数组/对象 —— 嵌套容器属于非法 enum schema;
+///     (曾出现 neograph::json{vector} 列表初始化误选 initializer_list
+///     构造函数产生 [["x"]] 嵌套数组的案例, 见 tools/sub_agent.cpp)
+///   * 递归进入 properties.* 与 items 检查子 schema
+/// - 非对象/非数组节点直接跳过 (宽松), 不阻断工具注册
+static void checkToolSchemaValidity(
+    const neograph::json& schema,
+    std::string_view      toolName,
+    std::string_view      path
+) {
+    if (!schema.is_object()) {
+        return;
+    }
+    if (schema.contains("enum")) {
+        const auto& e = schema["enum"];
+        if (!e.is_array()) {
+            XX_LOGE(
+                "Tool `{}` schema `{}`: enum must be an array, got {} (strict gateways "
+                "reject with HTTP 400)",
+                toolName,
+                path,
+                e.dump()
+            );
+            return;
+        }
+        for (const auto& v : e) {
+            if (v.is_array() || v.is_object()) {
+                XX_LOGE(
+                    "Tool `{}` schema `{}`: enum element must be a scalar "
+                    "(string/number/boolean), got nested {}; strict gateways reject with "
+                    "HTTP 400",
+                    toolName,
+                    path,
+                    v.dump()
+                );
+            }
+        }
+    }
+    if (schema.contains("properties") && schema["properties"].is_object()) {
+        for (const auto& [k, v] : schema["properties"].items()) {
+            checkToolSchemaValidity(v, toolName, fmt::format("{}.properties.{}", path, k));
+        }
+    }
+    if (schema.contains("items")) {
+        checkToolSchemaValidity(schema["items"], toolName, fmt::format("{}.items", path));
+    }
+}
+
 asio::awaitable<void> BaseAgent::init() {
     // dataDir 未配置 (为空) 时: 设置/会话/codegraph 等数据均不落盘, 仅存内存
     // - 警告提示用户: 重启后设置与历史会话无法恢复
@@ -132,12 +187,30 @@ asio::awaitable<void> BaseAgent::init() {
     notifyStartup("初始化上下文压缩 ...");
     setupSummarizationHandles(tools);
 
-    // 检查 tools 的提示词
+    // 检查 tools 的提示词 (tool prompt 经 AgentPrompt::toolPrompt 填充到工具
+    // 定义; 启动时校验, 避免请求期才暴露问题导致严格网关 HTTP 400)
     for (const auto& item : tools) {
-        assert(item->get_definition().name == item->get_name());
+        const auto& name = item->get_name();
+        const auto  def  = item->get_definition();
+        assert(def.name == name);
+
+        // - tool prompt 描述 (depict) 为空时, 定义 description 为空,
+        //   模型无法理解工具用途; 插件/MCP 工具可无 toolPrompt 条目,
+        //   故仅检查最终生成的 description 而非条目存在性
+        if (def.description.empty()) {
+            XX_LOGW(
+                "Tool `{}` definition description is empty (missing/empty toolPrompt "
+                "depict); add an entry to AgentPrompt::toolPrompt",
+                name
+            );
+        }
+
         // - parameters 缺失/null 时兜底为空对象 schema (部分严格网关如 SCNet 会因 "parameters":
         // null 返回 400 "Format Error")
-        assert(item->get_definition().parameters.is_object());
+        assert(def.parameters.is_object());
+        // - 递归校验 parameters JSON Schema (enum 扁平标量数组等),
+        //   非法 schema 会被严格网关 (如 opencode gpt-5.6-luna) 以 HTTP 400 拒绝
+        checkToolSchemaValidity(def.parameters, name, "parameters");
     }
 
     notifyStartup("构建执行图 ...");

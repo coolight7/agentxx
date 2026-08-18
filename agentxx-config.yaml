@@ -136,11 +136,11 @@ models:
       reasoning:
         effort: max
       stream: true
-  - name: opencode-glm-5.2
+  - name: gemini-3.7-flash-high
     type: "openai"
-    base_url: "https://opencode.ai/zen/go/v1"
-    api_key: "${OPENCODE_API_KEY}"
-    model_name: "glm-5.2"
+    base_url: "http://127.0.0.1:7861/antigravity/v1"
+    api_key: "${GEMINI_API_KEY}"
+    model_name: "gemini-3.7-flash-high"
     model_context_max_token: 1000000
     send_thinking: true
     extra_api_config:
