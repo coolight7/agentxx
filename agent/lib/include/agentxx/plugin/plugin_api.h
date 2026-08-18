@@ -41,6 +41,28 @@
 extern "C" {
 #endif
 
+/* ==================== 插件导出符号控制 ==================== */
+
+/// 插件动态库默认隐藏全部符号 (构建时 -fvisibility=hidden / 不自动导出),
+/// 仅入口符号经 AGENTXX_PLUGIN_EXPORT 显式导出 (宿主 dlsym/GetProcAddress
+/// 按名查找): agentxx_plugin_get_info / agentxx_plugin_entry /
+/// agentxx_plugin_unload / agentxx_client_get_info / agentxx_client_entry /
+/// agentxx_client_unload。插件源码定义入口函数时必须加该宏前缀, 例如:
+///   AGENTXX_PLUGIN_EXPORT extern "C" int agentxx_plugin_entry(...)
+/// 内置合并编译模式 (AGENTXX_PLUGIN_BUILTIN=1) 下入口符号直接并入 libagentxx
+/// (不经 dlopen), 无需导出, 宏展开为空。
+/// 除入口符号外的全部符号 (含插件内部 C++ 符号、第三方静态库符号) 均隐藏,
+/// 避免污染宿主动态符号表与多插件符号冲突。
+#if defined(AGENTXX_PLUGIN_BUILTIN)
+  #define AGENTXX_PLUGIN_EXPORT
+#elif defined(_WIN32)
+  #define AGENTXX_PLUGIN_EXPORT __declspec(dllexport)
+#elif defined(__GNUC__) || defined(__clang__)
+  #define AGENTXX_PLUGIN_EXPORT __attribute__((visibility("default")))
+#else
+  #define AGENTXX_PLUGIN_EXPORT
+#endif
+
 #define AGENTXX_PLUGIN_API_VERSION 7
 
 /* ==================== 字符串视图 (跨边界字符串参数统一形态) ==================== */
