@@ -19,10 +19,15 @@ neograph::ChatTool GetCurrentDateTimeTool::get_definition() const {
     auto        agentPtr = agentContext.lock();
     const auto& prompt   = agentPtr->agentConfig->prompt.toolPrompt[get_name()];
 
+    // 无参数工具也声明空对象 schema: parameters 为 null 会被部分严格网关
+    // (如 SCNet) 拒绝, 返回 400 "Format Error"
     return {
         get_name(),
         prompt.depict,
-        neograph::json{},
+        neograph::json{
+            {"type", "object"},
+            {"properties", neograph::json::object()},
+        },
     };
 }
 

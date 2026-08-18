@@ -769,7 +769,7 @@ plugins/
 | `agent/client/src/io/tui/tui_sidebar_content.cpp` | Info 侧边栏 (Planning/Append 组件 + 插件 Info 段落); 系统资源与 CodeGraph 渲染已剥离到插件 client 侧 (经 register_info_section) |
 | `agent/client/src/mode_runners.cpp` + `main.cpp` | 4 个模式装配 ClientPluginManager + 适配器 (setupClientPlugins 模板); 命令拦截 (tryInvokePluginCommand) |
 | `agent/test/core/test_plugins.*` | agent 插件测试模块 `plugins` (140 项断言: 加载/工具执行/互调/钩子/事件/禁用启用/卸载/冲突/列表/JS 引擎/级联/拓扑/超时卸载竞态/shutdownAll/sides 过滤/args 传递/publish 禁用) |
-| `agent/test/core/test_client_plugins.*` | client 插件测试模块 `client_plugins` (61 项断言: 加载/UI 注册表/事件分发/命令/跨端/禁用启用/卸载/订阅扩容与派发中动态订阅) |
+| `agent/test/core/test_client_plugins.*` | client 插件测试模块 `client_plugins` (69 项断言: 加载/UI 注册表/事件分发/命令/跨端/禁用启用/卸载/订阅扩容与派发中动态订阅/loadConfiguredClientPlugins sides 过滤与 args 传递) |
 
 ---
 
