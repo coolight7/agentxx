@@ -131,10 +131,12 @@ asio::awaitable<agentxx::test::TestResult>
     }
     XX_TEST_EXPECT_EQ(inst->name, "agentxx_screen_capture");
     XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("agentxx_screen_capture"));
+    XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("agentxx_get_screen_frames"));
     // 独立插件不注册 ui_control 工具 (已从 computer_use 拆分)
     XX_TEST_EXPECT_FALSE(ctx->toolRegistry->contains("agentxx_ui_control_keyboard_mouse"));
 
     // ---- 3. get_screen_count ----
+    int screenCount = 0;
     {
         auto tool = ctx->toolRegistry->find("agentxx_screen_capture");
         XX_TEST_EXPECT_TRUE(tool != nullptr);
@@ -144,7 +146,8 @@ asio::awaitable<agentxx::test::TestResult>
             });
             auto j   = neograph::json::parse(out);
             XX_TEST_EXPECT_EQ(j["ok"].get<bool>(), true);
-            XX_TEST_EXPECT_TRUE(j["count"].get<int>() > 0);
+            screenCount = j["count"].get<int>();
+            XX_TEST_EXPECT_TRUE(screenCount > 0);
         }
     }
 
@@ -165,7 +168,55 @@ asio::awaitable<agentxx::test::TestResult>
         }
     }
 
-    // ---- 5. agentxx_computer_use 依赖验证: 缺依赖时加载失败 ----
+    // ---- 5. agentxx_get_screen_frames (默认不指定返回所有屏幕) ----
+    {
+        auto tool = ctx->toolRegistry->find("agentxx_get_screen_frames");
+        XX_TEST_EXPECT_TRUE(tool != nullptr);
+        if (tool) {
+            auto out = co_await tool->execute_async(neograph::json::object());
+            auto j   = neograph::json::parse(out);
+            XX_TEST_EXPECT_EQ(j["ok"].get<bool>(), true);
+            XX_TEST_EXPECT_EQ(j["frames"].size(), static_cast<size_t>(screenCount));
+            for (size_t i = 0; i < j["frames"].size(); ++i) {
+                const auto& f = j["frames"][i];
+                XX_TEST_EXPECT_TRUE(f["width"].get<int>() > 0);
+                XX_TEST_EXPECT_TRUE(f["height"].get<int>() > 0);
+                XX_TEST_EXPECT_TRUE(f.contains("pixels_base64"));
+            }
+        }
+    }
+
+    // ---- 6. agentxx_get_screen_frames (指定屏幕下标 0) ----
+    {
+        auto tool = ctx->toolRegistry->find("agentxx_get_screen_frames");
+        if (tool) {
+            auto out = co_await tool->execute_async(neograph::json{
+                {"screen_index",   0    },
+                {"include_pixels", false},
+            });
+            auto j   = neograph::json::parse(out);
+            XX_TEST_EXPECT_EQ(j["ok"].get<bool>(), true);
+            XX_TEST_EXPECT_EQ(j["frames"].size(), 1u);
+            const auto& f0 = j["frames"][0];
+            XX_TEST_EXPECT_EQ(f0["screen_index"].get<int>(), 0);
+            XX_TEST_EXPECT_TRUE(f0["width"].get<int>() > 0);
+            XX_TEST_EXPECT_TRUE(f0["height"].get<int>() > 0);
+        }
+    }
+
+    // ---- 7. agentxx_get_screen_frames (越界屏幕下标) ----
+    {
+        auto tool = ctx->toolRegistry->find("agentxx_get_screen_frames");
+        if (tool) {
+            auto out = co_await tool->execute_async(neograph::json{
+                {"screen_index", 99999}
+            });
+            auto j   = neograph::json::parse(out);
+            XX_TEST_EXPECT_EQ(j["ok"].get<bool>(), false);
+        }
+    }
+
+    // ---- 8. agentxx_computer_use 依赖验证: 缺依赖时加载失败 ----
     {
         auto cuPath = findComputerUsePluginPath();
         XX_TEST_EXPECT_TRUE(cuPath.find("agentxx_computer_use") != std::string::npos);
@@ -179,6 +230,7 @@ asio::awaitable<agentxx::test::TestResult>
         // 卸载 screen_capture 时级联卸载依赖它的 computer_use (依赖方先卸载)
         co_await ctx->pluginManager->unloadAsync("agentxx_screen_capture");
         XX_TEST_EXPECT_FALSE(ctx->toolRegistry->contains("agentxx_screen_capture"));
+        XX_TEST_EXPECT_FALSE(ctx->toolRegistry->contains("agentxx_get_screen_frames"));
         XX_TEST_EXPECT_FALSE(ctx->toolRegistry->contains("agentxx_ui_control_keyboard_mouse"));
         XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("agentxx_screen_capture") == nullptr);
         XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("agentxx_computer_use") == nullptr);
