@@ -24,6 +24,7 @@
 #include "test_event_bridge.h"
 #include "test_event_stream.h"
 #include "test_events.h"
+#include "test_ffi_c_api.h"
 #include "test_filesystem_tools.h"
 #include "test_http.h"
 #include "test_interrupt_bus.h"
@@ -130,6 +131,7 @@ int main(int argn, char** argv) {
     runSync("util_misc", agentxx::test::testUtilMisc);
     runSync("settings_db", agentxx::test::testSettingsDb);
     runSync("toolcall_args", agentxx::test::testToolcallArgs);
+    runSync("ffi_c_api", agentxx::test::testFfiCApi);
 #ifdef AGENTXX_BUILD_CLIENT
     runSync("config_loader", agentxx::test::testConfigLoader);
     runSync("tui_settings", agentxx::test::testTuiSettings);
