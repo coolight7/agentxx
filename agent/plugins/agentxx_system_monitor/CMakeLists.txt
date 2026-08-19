@@ -146,7 +146,9 @@ if (WIN32)
 else()
   # asio 文件 I/O 在 -DASIO_HAS_IO_URING 下引用 io_uring 符号; 插件为 MODULE
   # 动态库, 不依赖宿主进程导出 (宿主为静态链接时符号可能不存在), 自链接
-  find_library(AGENTXX_URING_LIB uring HINTS "${AGENTXX_INSTALL_DIR}/lib")
+  # NO_DEFAULT_PATH: 只查找本项目 liburing 安装的库 (AGENTXX_INSTALL_DIR/lib),
+  # 避免 fallback 到系统 liburing
+  find_library(AGENTXX_URING_LIB uring PATHS "${AGENTXX_INSTALL_DIR}/lib" NO_DEFAULT_PATH)
   if (AGENTXX_URING_LIB)
     target_link_libraries(${PLUGIN_NAME} PRIVATE ${AGENTXX_URING_LIB})
   endif()

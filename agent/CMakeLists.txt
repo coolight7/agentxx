@@ -640,6 +640,10 @@ ExternalProject_Add(
 # curl
 ExternalProject_Add(
   curl_repo
+  # 先构建 zlib: curl configure 时 find_package(ZLIB) 才能命中本项目
+  # 安装的 zlib (AGENTXX_INSTALL_DIR), 避免 fallback 系统 zlib;
+  # openssl 为预构建目录 (third_party/OpenSSL-windows-build), 无构建顺序问题
+  DEPENDS zlib_repo
   SOURCE_DIR "${AGENTXX_THIRD_PARTY_DIR}/curl/"
   INSTALL_DIR "${AGENTXX_INSTALL_DIR}"
   CMAKE_ARGS
